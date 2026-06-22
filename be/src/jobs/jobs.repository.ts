@@ -56,4 +56,48 @@ export class JobsRepository {
       [jobId, JSON.stringify(error)],
     );
   }
+
+  async reapStale(
+    exec: Queryable,
+    staleMinutes: number,
+  ): Promise<{ requeued: number; failed: number }> {
+    const { rows } = await exec.query<{ requeued: string; failed: string }>(
+      `WITH stale AS (
+         SELECT id, type, meeting_id, attempts, max_attempts, stage
+         FROM job
+         WHERE status='running'
+           AND locked_at < now() - ($1 || ' minutes')::interval
+         FOR UPDATE SKIP LOCKED
+       ),
+       requeued AS (
+         UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL, updated_at=now()
+         WHERE id IN (SELECT id FROM stale WHERE attempts < max_attempts)
+         RETURNING id
+       ),
+       failed AS (
+         UPDATE job j SET status='failed', updated_at=now(),
+           error = jsonb_build_object('code','stale_worker',
+                                       'message','worker lock expired',
+                                       'stage', j.stage)
+         WHERE id IN (SELECT id FROM stale WHERE attempts >= max_attempts)
+         RETURNING id, type, meeting_id
+       ),
+       fail_meetings AS (
+         UPDATE meeting m SET status='failed',
+           error = jsonb_build_object('code','stale_worker','message','processing worker lost')
+         WHERE m.id IN (SELECT meeting_id FROM failed WHERE type='process_meeting')
+         RETURNING m.id
+       ),
+       fail_speakers AS (
+         UPDATE speaker s SET enrollment_status='failed',
+           enrollment_error = jsonb_build_object('code','stale_worker','message','enroll worker lost')
+         WHERE s.current_job_id IN (SELECT id FROM failed WHERE type='enroll_speaker')
+         RETURNING s.id
+       )
+       SELECT (SELECT count(*) FROM requeued) AS requeued,
+              (SELECT count(*) FROM failed)   AS failed`,
+      [String(staleMinutes)],
+    );
+    return { requeued: Number(rows[0].requeued), failed: Number(rows[0].failed) };
+  }
 }
