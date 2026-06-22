@@ -87,10 +87,15 @@ job                ★ Nest↔Python 계약
 ```sql
 -- 등록된 사람
 CREATE TABLE speaker (
-  id          uuid PRIMARY KEY,
-  name        text NOT NULL,
-  created_at  timestamptz NOT NULL DEFAULT now()
+  id                uuid PRIMARY KEY,
+  name              text NOT NULL,
+  enrollment_status text NOT NULL DEFAULT 'pending'
+                      CHECK (enrollment_status IN ('pending','ready','failed')),
+  current_job_id    uuid,                   -- enroll_speaker job 추적 (FK는 아래 ALTER)
+  enrollment_error  jsonb,
+  created_at        timestamptz NOT NULL DEFAULT now()
 );
+-- 'pending'=성문 추출 대기/진행, 'ready'=voiceprint 1개 이상, 'failed'=추출 실패
 
 -- 성문 벡터 (한 화자에 여러 샘플 누적 가능 → 식별 robust)
 CREATE TABLE voiceprint (
@@ -119,7 +124,7 @@ CREATE TABLE meeting (
   duration_ms        int,
   status             text NOT NULL DEFAULT 'uploaded'
                        CHECK (status IN ('uploaded','processing','done','failed')),
-  current_job_id     uuid,                   -- 상태 조회 단순화
+  current_job_id     uuid,                   -- 상태 조회 단순화 (FK는 아래 ALTER)
   processing_version int NOT NULL DEFAULT 0,
   error              jsonb,
   created_at         timestamptz NOT NULL DEFAULT now()
@@ -164,8 +169,13 @@ CREATE TABLE job (
   payload      jsonb NOT NULL,
   status       text NOT NULL DEFAULT 'queued'
                  CHECK (status IN ('queued','running','done','failed')),
-  stage        text CHECK (stage IN ('vad','diarize','identify','stt','align','persist')),
+  stage        text CHECK (stage IN
+                 -- process_meeting 흐름
+                 ('vad','diarize','identify','stt','align','persist',
+                 -- enroll_speaker 흐름
+                  'extract_embedding','enroll_persist')),
                  -- queued=NULL, running/done/failed=마지막 도달 stage
+                 -- type↔stage 유효 조합은 앱 계층(zod/pydantic)에서 검증
   progress     smallint NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
   attempts     int NOT NULL DEFAULT 0,
   max_attempts int NOT NULL DEFAULT 3,
@@ -176,14 +186,22 @@ CREATE TABLE job (
   updated_at   timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX ON job (status, created_at);
+
+-- 스탬프/상태 FK — meeting↔job 순환 참조라 테이블 생성 후 ALTER로 건다.
+-- 모두 nullable + ON DELETE SET NULL: job row가 정리돼도 본체 데이터는 보존.
+ALTER TABLE meeting        ADD FOREIGN KEY (current_job_id) REFERENCES job(id) ON DELETE SET NULL;
+ALTER TABLE speaker        ADD FOREIGN KEY (current_job_id) REFERENCES job(id) ON DELETE SET NULL;
+ALTER TABLE meeting_cluster ADD FOREIGN KEY (job_id)        REFERENCES job(id) ON DELETE SET NULL;
+ALTER TABLE utterance      ADD FOREIGN KEY (job_id)         REFERENCES job(id) ON DELETE SET NULL;
 ```
 
 ### 3.3 설계 포인트
 
 - **발언(utterance)이 화자·시점(start/end_ms)·원문(text)·맥락(order_index)에 모두 연결** — 개념 정의서 4장의 추적성이 데이터 레벨에서 보장된다.
 - **미식별 화자를 버리지 않는다.** `diar_label` + `meeting_cluster`로 보존했다가 나중에 사람으로 연결(점진적 식별). speaker_id를 억지로 생성하지 않는다.
-- **버전·job_id 스탬프**(`processing_version`, `job_id`)는 재처리 추적성의 토대이며, Phase 3의 비파괴 머지로 진화할 기반이다.
+- **버전·job_id 스탬프**(`processing_version`, `job_id`)는 *현재 row가 어느 job/버전 산출물인지*를 표시한다. **Phase 1은 현재 결과만 유지하고 과거 결과는 보존하지 않는다**(재처리 시 기존 row DELETE). 즉 이 스탬프는 과거 이력 추적용이 아니라, ① stale persist 가드(§6.3)와 ② Phase 3 비파괴 머지의 *토대*로만 쓴다. 진짜 이력 보존이 필요하면 Phase 3에서 `is_current`/`superseded_at` 또는 별도 snapshot 전략을 도입한다.
 - **enum은 Postgres 네이티브 enum 대신 text + CHECK** — 진화(값 추가)가 쉽다.
+- **스탬프 FK**(`current_job_id`, `job_id`)는 ON DELETE SET NULL로 건다 — 무결성은 지키되 job 정리가 본체 데이터를 지우지 않게 한다.
 
 ---
 
@@ -246,13 +264,15 @@ payload는 **양쪽 앱에서 스키마 검증**한다 — Nest=zod, Python=pyda
 
 ### 5.2 화자 등록(성문)
 
-`POST /speakers` (이름 + 샘플 오디오) → `job(enroll_speaker)` → Worker가 임베딩 추출 → `voiceprint` 저장.
+`POST /speakers` (이름 + 샘플 오디오) → `speaker(enrollment_status='pending')` 생성 + `job(enroll_speaker, queued)` + `speaker.current_job_id` 설정 → Worker가 `extract_embedding`→`enroll_persist`로 임베딩 추출·`voiceprint` 저장 후 `speaker.enrollment_status='ready'`. 실패 시 `'failed'` + `enrollment_error` 기록.
+
+> 비동기라 "이름은 있는데 성문 없음" 중간 상태가 존재한다. `enrollment_status`로 이를 명시적으로 드러내며, 식별(§5.1 식별 단계)은 `enrollment_status='ready'`인 화자의 voiceprint만 비교 대상으로 삼는다. `GET /speakers/:id`로 상태 폴링.
 
 ### 5.3 점진적 식별 (미식별 클러스터 → 사람)
 
-`POST /meetings/:id/clusters/:label/resolve {speaker_id | new_name}` = **단일 짧은 트랜잭션**:
-- cluster에 `resolved_speaker_id` 설정
-- 해당 meeting의 같은 `diar_label` utterance.speaker_id **일괄 UPDATE**
+`POST /meetings/:id/clusters/:clusterId/resolve {speaker_id | new_name}` = **단일 짧은 트랜잭션**. 경로 식별자는 `diar_label`이 아니라 **`meeting_cluster.id`(clusterId)** 를 쓴다 — 라벨 포맷 변화/특수문자로 인한 URL 인코딩·라우팅 문제를 피한다.
+- cluster(`:clusterId`)에 `resolved_speaker_id` 설정
+- 해당 meeting에서 그 cluster의 `diar_label`과 일치하는 utterance.speaker_id **일괄 UPDATE**
 - (옵션) 그 centroid를 새 `voiceprint`(source='cluster_resolve')로 등록 → **다음 회의부터 자동 식별 정확도 향상**
 
 ---
@@ -263,14 +283,16 @@ payload는 **양쪽 앱에서 스키마 검증**한다 — Nest=zod, Python=pyda
 
 **claim(queued→running) 시 `attempts = attempts + 1`.** 워커가 죽어도 1회 시도로 카운트되어 reaper의 무한 재시도를 막는다. claim은 한 쿼리로 status·locked_by·locked_at·attempts를 원자적으로 갱신한다.
 
+claim은 `stage`를 고정하지 않는다(type마다 첫 단계가 다름). 워커가 각 단계에 진입할 때 `stage`를 직접 갱신한다 — `process_meeting`은 `vad`부터, `enroll_speaker`는 `extract_embedding`부터.
+
 ```sql
 UPDATE job SET status='running', locked_by=$worker, locked_at=now(),
-               attempts = attempts + 1, stage='vad', updated_at=now()
+               attempts = attempts + 1, updated_at=now()
 WHERE id IN (
   SELECT id FROM job WHERE status='queued'
   ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
 )
-RETURNING *;
+RETURNING *;   -- 워커는 RETURNING된 type을 보고 첫 stage를 정한다
 ```
 
 ### 6.2 stale lock reaper (워커 장애 복구)
@@ -284,8 +306,17 @@ RETURNING *;
 ML 전체를 트랜잭션으로 감싸지 않는다(긴 처리 동안 DB 커넥션 점유 방지):
 - **API enqueue 시 (짧은 TX)**: `meeting.processing_version` bump + job 생성 + `current_job_id` 갱신.
 - **ML 파이프라인**: 트랜잭션 밖에서 실행.
-- **Worker `persist` 단계만 (짧은 TX)**: 해당 meeting의 기존 utterance·meeting_cluster DELETE + 새 버전 INSERT + `meeting.status=done` — **결과 반영만 원자화**.
-- **stale 방지**: persist는 자기 `processing_version`만 다룬다. 더 높은 버전 job이 이미 끝났으면(동시 reprocess 경합) 자기 결과를 폐기한다.
+- **Worker `persist` 단계만 (짧은 TX)**: 해당 meeting의 기존 utterance·meeting_cluster DELETE + 새 버전 INSERT + `meeting.status=done` — **결과 반영만 원자화**. (Phase 1은 과거 결과 미보존 — §3.3.)
+- **stale 가드 (강화)**: persist TX는 다음 조건을 만족할 때만 반영하고, 아니면 **결과를 폐기**한다 — 더 높은 버전 job이 `queued`/`running`인 동안 낮은 버전 job이 뒤늦게 덮어쓰는 경합을 막는다:
+
+  ```sql
+  -- persist 진입 시 가드 (이 UPDATE의 영향 row=0이면 자기 결과 폐기)
+  UPDATE meeting SET status='done', error=NULL
+  WHERE id = :meeting_id
+    AND processing_version = :payload_processing_version
+    AND current_job_id = :job_id;
+  ```
+  즉 `meeting.processing_version = payload.processing_version` **AND** `meeting.current_job_id = job.id`. 둘 중 하나라도 어긋나면(더 새 job이 enqueue됨) 이 job의 산출물은 버린다.
 - reprocess는 `meeting.status ∈ {done, failed}`에서만 허용.
 
 ### 6.4 meeting.status
@@ -299,6 +330,7 @@ ML 전체를 트랜잭션으로 감싸지 않는다(긴 처리 동안 DB 커넥�
 - **재시도**: 일시 오류(모델 로드 실패, OOM 추정, ffmpeg 일시 실패)는 `attempts < max_attempts`까지 backoff 재시도. 영구 오류(손상 파일, 미지원 포맷)는 즉시 `failed` + `error.code`로 구분.
 - **부분 실패**: STT가 특정 청크에서 실패해도 파이프라인을 중단하지 않는다. 해당 구간 utterance를 `status='transcribe_failed'`, `text=NULL`, `transcript_error={code,message}`로 남기고 계속한다(추적성 유지). 무음 구간은 `status='silence'`. **confidence 값 의미에 의존하지 않는다** — 상태는 `status` 컬럼으로 판별.
 - **입력 검증**: 업로드 시 MIME/확장자/크기 한도, ffmpeg probe로 실제 오디오 여부 확인 후 정규화. 실패 시 meeting 생성 거부(400).
+- **화자 등록 실패**: `enroll_speaker` job이 최종 실패하면 speaker row를 삭제하지 않고 `enrollment_status='failed'` + `enrollment_error`로 남긴다(재시도 가능). 식별은 `ready` 화자만 대상으로 하므로 실패한 화자는 식별에 영향 없음.
 - **상태 일관성**: §6.4. reprocess는 done/failed에서만 허용.
 
 ---
@@ -323,9 +355,10 @@ GET    /meetings/:id/status           진행률(stage/progress)
 GET    /meetings/:id/audio            Range 지원 스트리밍(발언 점프 재생)
 POST   /meetings/:id/reprocess        재처리 (§6.3)
 
-POST   /speakers                      화자 등록(이름+샘플)
+POST   /speakers                      화자 등록(이름+샘플) → enrollment_status='pending'
 GET    /speakers                      등록 화자 목록
-POST   /meetings/:id/clusters/:label/resolve   미식별→사람 연결
+GET    /speakers/:id                  화자 + enrollment_status(pending|ready|failed) 폴링
+POST   /meetings/:id/clusters/:clusterId/resolve   미식별→사람 연결 (clusterId 기반)
 
 GET    /health
 ```
@@ -347,7 +380,9 @@ GET    /health
   - job claim 동시성 (`SKIP LOCKED`로 두 워커가 같은 job을 안 집는지)
   - reaper 규칙 (stale lock 환원/실패 전이)
   - path traversal 거부
-  - reprocess 트랜잭션 (결과 반영 원자성 + stale 버전 폐기)
+  - reprocess 트랜잭션 (결과 반영 원자성 + stale 가드: 낮은 버전 job persist가 `processing_version`/`current_job_id` 불일치 시 폐기되는지)
+  - 화자 등록 상태 전이 (pending→ready / pending→failed) 및 식별이 `ready` 화자만 비교하는지
+  - cluster resolve가 clusterId 기반으로 동작하고 같은 diar_label utterance를 일괄 갱신하는지
 - **Python Worker**: 단계별 단위 테스트(작은 오디오 픽스처). 짧은 2화자 샘플(수 초)로 파이프라인 통합 테스트 — CI에선 tiny whisper로 속도 확보. 식별 임계치/미식별 경로 테스트.
 - **계약 테스트**: `jobs` payload/enum을 zod·pydantic 양쪽에서 같은 픽스처로 검증해 스키마 드리프트 차단.
 
