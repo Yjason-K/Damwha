@@ -5,8 +5,8 @@ __pycache__/
 .venv/
 venv/
 .env
-storage/
-models/
+/storage/
+/models/
 *.wav
 *.m4a
 *.mp3
