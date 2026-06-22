@@ -82,4 +82,16 @@ export class MeetingsService {
       return { meeting_id: id, processing_version: version, job_id: job.id };
     });
   }
+
+  async getAudioDescriptor(id: string): Promise<{ key: string; size: number }> {
+    const meeting = await this.meetings.findById(this.db.pool, id);
+    if (!meeting) throw new NotFoundException('meeting not found');
+    const key = meeting.normalized_key ?? meeting.audio_key;
+    const stat = await this.storage.stat(key);
+    return { key, size: stat.size };
+  }
+
+  audioStream(key: string, range?: { start: number; end: number }) {
+    return this.storage.createReadStream(key, range);
+  }
 }
