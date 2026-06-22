@@ -1,4 +1,6 @@
-import { Module } from '@nestjs/common';
+import { Global, Module } from '@nestjs/common';
+import { JobsRepository } from './jobs.repository';
 
-@Module({})
+@Global()
+@Module({ providers: [JobsRepository], exports: [JobsRepository] })
 export class JobsModule {}
