@@ -61,4 +61,34 @@ export class MeetingsRepository {
     );
     return rows[0].processing_version;
   }
+
+  async findClusterInMeeting(exec: Queryable, meetingId: string, clusterId: string) {
+    const { rows } = await exec.query(
+      `SELECT id, meeting_id, diar_label, (centroid IS NOT NULL) AS has_centroid
+       FROM meeting_cluster WHERE id=$1 AND meeting_id=$2`,
+      [clusterId, meetingId],
+    );
+    return rows[0] ?? null;
+  }
+  async setClusterResolved(exec: Queryable, clusterId: string, speakerId: string) {
+    await exec.query(`UPDATE meeting_cluster SET resolved_speaker_id=$2 WHERE id=$1`, [clusterId, speakerId]);
+  }
+  async bulkAssignSpeaker(exec: Queryable, meetingId: string, diarLabel: string, speakerId: string): Promise<number> {
+    const res = await exec.query(
+      `UPDATE utterance SET speaker_id=$3 WHERE meeting_id=$1 AND diar_label=$2`,
+      [meetingId, diarLabel, speakerId],
+    );
+    return res.rowCount ?? 0;
+  }
+  // copy the cluster centroid into a voiceprint (vector stays in SQL, no JS round-trip)
+  async voiceprintFromClusterCentroid(
+    exec: Queryable, clusterId: string, speakerId: string, model: string, dimension: number,
+  ): Promise<void> {
+    await exec.query(
+      `INSERT INTO voiceprint(speaker_id, embedding, model, dimension, source)
+       SELECT $2, centroid, $3, $4, 'cluster_resolve'
+       FROM meeting_cluster WHERE id=$1 AND centroid IS NOT NULL`,
+      [clusterId, speakerId, model, dimension],
+    );
+  }
 }

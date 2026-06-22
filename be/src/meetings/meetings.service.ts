@@ -4,6 +4,7 @@ import { StorageService } from '../storage/storage.service';
 import { JobsRepository } from '../jobs/jobs.repository';
 import { buildProcessMeetingPayload } from '../contracts/job-payload.schema';
 import { MeetingsRepository } from './meetings.repository';
+import { loadEnv } from '../config/env';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 
@@ -93,5 +94,42 @@ export class MeetingsService {
 
   audioStream(key: string, range?: { start: number; end: number }) {
     return this.storage.createReadStream(key, range);
+  }
+
+  async resolveCluster(
+    meetingId: string,
+    clusterId: string,
+    body: { speaker_id?: string; new_name?: string },
+  ): Promise<{ speaker_id: string; updated_utterances: number }> {
+    if (!body.speaker_id && !body.new_name) {
+      throw new BadRequestException('speaker_id or new_name required');
+    }
+    const env = loadEnv();
+    return this.db.withTransaction(async (c) => {
+      const cluster = await this.meetings.findClusterInMeeting(c, meetingId, clusterId);
+      if (!cluster) throw new NotFoundException('cluster not found in meeting');
+
+      let speakerId: string;
+      if (body.speaker_id) {
+        const exists = await c.query('SELECT 1 FROM speaker WHERE id=$1', [body.speaker_id]);
+        if (!exists.rowCount) throw new NotFoundException('speaker not found');
+        speakerId = body.speaker_id;
+      } else {
+        const created = await c.query(
+          `INSERT INTO speaker(name, enrollment_status) VALUES($1,'ready') RETURNING id`,
+          [body.new_name],
+        );
+        speakerId = created.rows[0].id;
+      }
+
+      await this.meetings.setClusterResolved(c, clusterId, speakerId);
+      const updated = await this.meetings.bulkAssignSpeaker(c, meetingId, cluster.diar_label, speakerId);
+      if (cluster.has_centroid) {
+        await this.meetings.voiceprintFromClusterCentroid(
+          c, clusterId, speakerId, env.EMBEDDING_MODEL, env.EMBEDDING_DIM,
+        );
+      }
+      return { speaker_id: speakerId, updated_utterances: updated };
+    });
   }
 }
