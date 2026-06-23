@@ -12,6 +12,23 @@ dependencies = [
     "psycopg[binary]>=3.1",
 ]
 
+# Real ML models — heavy + gated (pyannote). NOT needed for the deterministic
+# test suite (registry/adapters are imported only inside main()). Install for
+# the real worker with: `uv sync --extra models`. Platform markers pick the STT
+# backend: mlx-whisper on Apple Silicon, faster-whisper elsewhere.
+[project.optional-dependencies]
+models = [
+    "torch>=2.2",
+    "torchaudio>=2.2",
+    "silero-vad>=5.1",
+    "pyannote.audio>=3.1",
+    "speechbrain>=1.0",
+    "soundfile>=0.12",
+    "numpy>=1.26",
+    "mlx-whisper>=0.4 ; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "faster-whisper>=1.0 ; sys_platform != 'darwin' or platform_machine != 'arm64'",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
