@@ -34,6 +34,8 @@ def build_utterances(
     failed_spans: list[SpeechSpan] | None = None,
 ) -> list[Utterance]:
     failed_spans = failed_spans or []
+    if not segments:
+        return []
     # 1) word를 세그먼트에 귀속
     by_seg: dict[int, list[Word]] = {i: [] for i in range(len(segments))}
     seg_index = {id(s): i for i, s in enumerate(segments)}

@@ -42,3 +42,7 @@ def test_order_index_is_time_ordered():
     utts = build_utterances(words, segments)
     assert [u.order_index for u in utts] == [0, 1]
     assert utts[0].start_ms < utts[1].start_ms
+
+
+def test_empty_segments_returns_empty():
+    assert build_utterances([Word("hi", 0, 500, 0.9)], []) == []
