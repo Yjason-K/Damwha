@@ -1,6 +1,9 @@
+import logging
 import threading
 
 from . import db
+
+log = logging.getLogger("damwha_worker")
 
 
 class Heartbeat:
@@ -16,7 +19,14 @@ class Heartbeat:
         conn = db.connect(self._url)  # 별도 커넥션 (psycopg는 스레드 간 공유 불가)
         try:
             while not self._stop.wait(self._interval):
-                db.heartbeat(conn, self._job_id, self._worker_id)
+                try:
+                    db.heartbeat(conn, self._job_id, self._worker_id)
+                except Exception:  # noqa: BLE001 — a transient beat failure must not kill the heartbeat thread
+                    log.warning(
+                        "heartbeat failed for job %s (will retry next interval)",
+                        self._job_id,
+                        exc_info=True,
+                    )
         finally:
             conn.close()
 
