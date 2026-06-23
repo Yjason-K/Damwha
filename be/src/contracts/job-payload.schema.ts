@@ -14,6 +14,7 @@ export const ModelsSchema = z.object({
 });
 
 export const ProcessMeetingPayloadSchema = z.object({
+  schema_version: z.literal(1).default(1),
   meeting_id: z.string().uuid(),
   audio_key: z.string().min(1),
   processing_version: z.number().int().nonnegative(),
@@ -23,6 +24,7 @@ export const ProcessMeetingPayloadSchema = z.object({
 });
 
 export const EnrollSpeakerPayloadSchema = z.object({
+  schema_version: z.literal(1).default(1),
   speaker_id: z.string().uuid(),
   audio_key: z.string().min(1),
   embedding: z.object({ model: z.string(), dimension: z.number().int() }),
@@ -36,6 +38,7 @@ export function buildProcessMeetingPayload(args: {
 }): ProcessMeetingPayload {
   const env = loadEnv();
   return {
+    schema_version: 1,
     meeting_id: args.meetingId,
     audio_key: args.audioKey,
     processing_version: args.processingVersion,
@@ -56,6 +59,7 @@ export function buildEnrollSpeakerPayload(args: {
 }): EnrollSpeakerPayload {
   const env = loadEnv();
   return {
+    schema_version: 1,
     speaker_id: args.speakerId,
     audio_key: args.audioKey,
     embedding: { model: env.EMBEDDING_MODEL, dimension: env.EMBEDDING_DIM },

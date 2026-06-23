@@ -40,4 +40,38 @@ describe('job payload contract', () => {
     expect(() => EnrollSpeakerPayloadSchema.parse(p)).not.toThrow();
     expect(p.embedding.dimension).toBe(192);
   });
+
+  it('stamps schema_version=1 on process_meeting payload', () => {
+    const p = buildProcessMeetingPayload({
+      meetingId: '11111111-1111-1111-1111-111111111111',
+      audioKey: 'meetings/x/original.wav',
+      processingVersion: 2,
+      reprocess: true,
+    });
+    expect(p.schema_version).toBe(1);
+    expect(() => ProcessMeetingPayloadSchema.parse(p)).not.toThrow();
+  });
+
+  it('defaults missing schema_version to 1', () => {
+    const raw = {
+      meeting_id: '11111111-1111-1111-1111-111111111111',
+      audio_key: 'meetings/x/original.wav',
+      processing_version: 0, reprocess: false,
+      models: {
+        whisper_model: 'large-v3-turbo', device: 'mps', language: 'ko',
+        diarization: { model: 'd', min_speakers: null, max_speakers: null },
+        embedding: { model: 'e', dimension: 192 },
+      },
+      identify: { threshold: 0.7 },
+    };
+    expect(ProcessMeetingPayloadSchema.parse(raw).schema_version).toBe(1);
+  });
+
+  it('stamps schema_version=1 on enroll_speaker payload', () => {
+    const p = buildEnrollSpeakerPayload({
+      speakerId: '22222222-2222-2222-2222-222222222222',
+      audioKey: 'speakers/y/sample.wav',
+    });
+    expect(p.schema_version).toBe(1);
+  });
 });

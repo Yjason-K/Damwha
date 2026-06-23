@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "meeting_id": "11111111-1111-1111-1111-111111111111",
+  "audio_key": "meetings/11111111-1111-1111-1111-111111111111/original.m4a",
+  "processing_version": 2,
+  "reprocess": true,
+  "models": {
+    "whisper_model": "large-v3-turbo",
+    "device": "mps",
+    "language": "ko",
+    "diarization": { "model": "pyannote/speaker-diarization-3.1", "min_speakers": null, "max_speakers": null },
+    "embedding": { "model": "speechbrain/spkrec-ecapa-voxceleb", "dimension": 192 }
+  },
+  "identify": { "threshold": 0.7 }
+}
