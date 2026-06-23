@@ -63,3 +63,25 @@ def test_fail_process_meeting_lost_ownership(conn):
     assert db.fail_process_meeting(conn, jid, "OTHER", mid, {"code": "x", "message": "y"}) is False
     # job not failed by a non-owner
     assert conn.execute("SELECT status FROM job WHERE id=%s", (jid,)).fetchone()["status"] == "running"
+
+
+def test_fail_enroll_propagates(conn):
+    sid = seed_speaker(conn, enrollment_status="pending")
+    jid = seed_job(conn, type="enroll_speaker", meeting_id=None)
+    conn.execute("UPDATE speaker SET current_job_id=%s WHERE id=%s", (jid, sid))
+    db.claim(conn, "w1")
+    assert db.fail_enroll(conn, jid, "w1", sid, {"code": "model_load_failed", "message": "x"}) is True
+    assert conn.execute("SELECT status FROM job WHERE id=%s", (jid,)).fetchone()["status"] == "failed"
+    row = conn.execute("SELECT enrollment_status, enrollment_error FROM speaker WHERE id=%s", (sid,)).fetchone()
+    assert row["enrollment_status"] == "failed"
+    assert row["enrollment_error"] is not None
+
+
+def test_fail_enroll_lost_ownership(conn):
+    sid = seed_speaker(conn, enrollment_status="pending")
+    jid = seed_job(conn, type="enroll_speaker", meeting_id=None)
+    conn.execute("UPDATE speaker SET current_job_id=%s WHERE id=%s", (jid, sid))
+    db.claim(conn, "w1")
+    assert db.fail_enroll(conn, jid, "OTHER", sid, {"code": "x", "message": "y"}) is False
+    assert conn.execute("SELECT status FROM job WHERE id=%s", (jid,)).fetchone()["status"] == "running"
+    assert conn.execute("SELECT enrollment_status FROM speaker WHERE id=%s", (sid,)).fetchone()["enrollment_status"] == "pending"
