@@ -10,7 +10,9 @@ def _normalize(v: list[float]) -> list[float]:
     return [x / mag for x in v]
 
 
-def centroids_by_label(segments: list[DiarSegment], embeddings: list[list[float]]) -> dict[str, list[float]]:
+def centroids_by_label(
+    segments: list[DiarSegment], embeddings: list[list[float]]
+) -> dict[str, list[float]]:
     groups: dict[str, list[list[float]]] = {}
     for seg, emb in zip(segments, embeddings, strict=True):
         groups.setdefault(seg.diar_label, []).append(emb)

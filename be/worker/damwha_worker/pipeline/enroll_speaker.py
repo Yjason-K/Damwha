@@ -1,15 +1,20 @@
 import os
 from collections.abc import Callable
 
+from .. import db
 from ..contracts import EnrollSpeakerPayload
 from ..models.base import DiarSegment, Embedder
 from ..storage import Storage
 from . import ffmpeg
-from .. import db
 
 
 def run_enroll_speaker(
-    conn, job: dict, payload: EnrollSpeakerPayload, embedder: Embedder, storage: Storage, *,
+    conn,
+    job: dict,
+    payload: EnrollSpeakerPayload,
+    embedder: Embedder,
+    storage: Storage,
+    *,
     worker_id: str,
     normalize_fn: Callable[[str, str], None] | None = None,
     probe_fn: Callable[[str], ffmpeg.ProbeResult] | None = None,
@@ -34,7 +39,13 @@ def run_enroll_speaker(
 
     db.set_stage(conn, job_id, worker_id, "enroll_persist", 80)
     return db.persist_enroll(
-        conn, job_id=job_id, worker_id=worker_id, speaker_id=speaker_id,
-        embedding=embedding, model=payload.embedding.model, dimension=payload.embedding.dimension,
-        sample_duration_ms=duration_ms, quality_score=None,
+        conn,
+        job_id=job_id,
+        worker_id=worker_id,
+        speaker_id=speaker_id,
+        embedding=embedding,
+        model=payload.embedding.model,
+        dimension=payload.embedding.dimension,
+        sample_duration_ms=duration_ms,
+        quality_score=None,
     )

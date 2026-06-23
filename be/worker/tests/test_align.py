@@ -5,9 +5,9 @@ from damwha_worker.pipeline.align import build_utterances
 def test_assigns_words_by_midpoint_and_merges_consecutive():
     segments = [DiarSegment("S0", 0, 1000), DiarSegment("S1", 1000, 2000)]
     words = [
-        Word("안녕", 0, 400, 0.9),       # mid 200 → S0
-        Word("하세요", 400, 900, 0.8),   # mid 650 → S0
-        Word("반가워", 1100, 1500, 0.7), # mid 1300 → S1
+        Word("안녕", 0, 400, 0.9),  # mid 200 → S0
+        Word("하세요", 400, 900, 0.8),  # mid 650 → S0
+        Word("반가워", 1100, 1500, 0.7),  # mid 1300 → S1
     ]
     utts = build_utterances(words, segments)
     assert len(utts) == 2

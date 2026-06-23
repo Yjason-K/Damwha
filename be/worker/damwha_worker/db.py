@@ -112,8 +112,18 @@ def _vec(values):
     return "[" + ",".join(repr(float(x)) for x in values) + "]"
 
 
-def persist_process_meeting(conn, *, job_id, worker_id, meeting_id, processing_version,
-                            normalized_key, duration_ms, utterances, clusters) -> str:
+def persist_process_meeting(
+    conn,
+    *,
+    job_id,
+    worker_id,
+    meeting_id,
+    processing_version,
+    normalized_key,
+    duration_ms,
+    utterances,
+    clusters,
+) -> str:
     try:
         with conn.transaction():
             # (1) job ownership
@@ -136,9 +146,17 @@ def persist_process_meeting(conn, *, job_id, worker_id, meeting_id, processing_v
             if cur.rowcount == 0:
                 conn.execute(
                     "UPDATE job SET status='done', error=%s, updated_at=now() WHERE id=%s",
-                    (Jsonb({"code": "discarded_by_stale_guard",
-                            "message": "meeting superseded by newer processing_version/current_job_id",
-                            "stage": "persist", "kind": None}), job_id),
+                    (
+                        Jsonb(
+                            {
+                                "code": "discarded_by_stale_guard",
+                                "message": "meeting superseded by newer processing_version/current_job_id",
+                                "stage": "persist",
+                                "kind": None,
+                            }
+                        ),
+                        job_id,
+                    ),
                 )
                 return "discarded"
 
@@ -152,10 +170,20 @@ def persist_process_meeting(conn, *, job_id, worker_id, meeting_id, processing_v
                         text, confidence, status, transcript_error, order_index, processing_version, job_id)
                     VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     """,
-                    (meeting_id, u["speaker_id"], u["diar_label"], u["start_ms"], u["end_ms"],
-                     u["text"], u["confidence"], u["status"],
-                     Jsonb(u["transcript_error"]) if u["transcript_error"] is not None else None,
-                     u["order_index"], processing_version, job_id),
+                    (
+                        meeting_id,
+                        u["speaker_id"],
+                        u["diar_label"],
+                        u["start_ms"],
+                        u["end_ms"],
+                        u["text"],
+                        u["confidence"],
+                        u["status"],
+                        Jsonb(u["transcript_error"]) if u["transcript_error"] is not None else None,
+                        u["order_index"],
+                        processing_version,
+                        job_id,
+                    ),
                 )
             for c in clusters:
                 centroid = _vec(c["centroid"]) if c["centroid"] is not None else None
@@ -165,8 +193,14 @@ def persist_process_meeting(conn, *, job_id, worker_id, meeting_id, processing_v
                         processing_version, job_id)
                     VALUES (%s,%s,%s::vector,%s,%s,%s)
                     """,
-                    (meeting_id, c["diar_label"], centroid, c["resolved_speaker_id"],
-                     processing_version, job_id),
+                    (
+                        meeting_id,
+                        c["diar_label"],
+                        centroid,
+                        c["resolved_speaker_id"],
+                        processing_version,
+                        job_id,
+                    ),
                 )
             conn.execute(
                 "UPDATE job SET status='done', progress=100, updated_at=now() WHERE id=%s",
@@ -177,8 +211,18 @@ def persist_process_meeting(conn, *, job_id, worker_id, meeting_id, processing_v
         return "lost"
 
 
-def persist_enroll(conn, *, job_id, worker_id, speaker_id, embedding, model, dimension,
-                   sample_duration_ms, quality_score) -> str:
+def persist_enroll(
+    conn,
+    *,
+    job_id,
+    worker_id,
+    speaker_id,
+    embedding,
+    model,
+    dimension,
+    sample_duration_ms,
+    quality_score,
+) -> str:
     try:
         with conn.transaction():
             owned = conn.execute(

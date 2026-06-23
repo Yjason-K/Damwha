@@ -49,20 +49,34 @@ def build_utterances(
         if ws:
             # 같은 세그먼트(=같은 화자) word들을 하나의 발언으로 병합
             confs = [w.confidence for w in ws if w.confidence is not None]
-            raw.append(Utterance(
-                speaker_label=seg.diar_label, diar_label=seg.diar_label,
-                start_ms=ws[0].start_ms, end_ms=ws[-1].end_ms,
-                text=" ".join(w.text for w in ws),
-                confidence=(sum(confs) / len(confs)) if confs else None,
-                status="ok", order_index=-1,
-            ))
+            raw.append(
+                Utterance(
+                    speaker_label=seg.diar_label,
+                    diar_label=seg.diar_label,
+                    start_ms=ws[0].start_ms,
+                    end_ms=ws[-1].end_ms,
+                    text=" ".join(w.text for w in ws),
+                    confidence=(sum(confs) / len(confs)) if confs else None,
+                    status="ok",
+                    order_index=-1,
+                )
+            )
         else:
-            failed = any(_overlaps(seg.start_ms, seg.end_ms, f.start_ms, f.end_ms) for f in failed_spans)
-            raw.append(Utterance(
-                speaker_label=seg.diar_label, diar_label=seg.diar_label,
-                start_ms=seg.start_ms, end_ms=seg.end_ms, text=None, confidence=None,
-                status="transcribe_failed" if failed else "silence", order_index=-1,
-            ))
+            failed = any(
+                _overlaps(seg.start_ms, seg.end_ms, f.start_ms, f.end_ms) for f in failed_spans
+            )
+            raw.append(
+                Utterance(
+                    speaker_label=seg.diar_label,
+                    diar_label=seg.diar_label,
+                    start_ms=seg.start_ms,
+                    end_ms=seg.end_ms,
+                    text=None,
+                    confidence=None,
+                    status="transcribe_failed" if failed else "silence",
+                    order_index=-1,
+                )
+            )
 
     raw.sort(key=lambda u: u.start_ms)
     for idx, u in enumerate(raw):

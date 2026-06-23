@@ -26,7 +26,9 @@ def probe(path: str, runner: Runner = _run) -> ProbeResult:
         data = json.loads(proc.stdout or b"{}")
         duration = data["format"]["duration"]
     except (json.JSONDecodeError, KeyError, TypeError) as e:
-        raise WorkerError(UNSUPPORTED_FORMAT, f"no duration in probe output: {e}", ErrorKind.PERMANENT) from e
+        raise WorkerError(
+            UNSUPPORTED_FORMAT, f"no duration in probe output: {e}", ErrorKind.PERMANENT
+        ) from e
     if duration is None:
         raise WorkerError(UNSUPPORTED_FORMAT, "duration is null", ErrorKind.PERMANENT)
     return ProbeResult(duration_ms=int(float(duration) * 1000))
@@ -36,4 +38,6 @@ def normalize(src_path: str, dst_path: str, runner: Runner = _run) -> None:
     cmd = ["ffmpeg", "-y", "-i", src_path, "-ac", "1", "-ar", "16000", "-f", "wav", dst_path]
     proc = runner(cmd)
     if proc.returncode != 0:
-        raise WorkerError(CORRUPT_AUDIO, f"ffmpeg normalize failed: {proc.stderr!r}", ErrorKind.PERMANENT)
+        raise WorkerError(
+            CORRUPT_AUDIO, f"ffmpeg normalize failed: {proc.stderr!r}", ErrorKind.PERMANENT
+        )

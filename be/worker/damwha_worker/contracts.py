@@ -52,7 +52,9 @@ class EnrollSpeakerPayload(BaseModel):
 def parse_payload(job_type: str, data: dict):
     version = data.get("schema_version", 1)
     if version not in SUPPORTED_SCHEMA_VERSIONS:
-        raise UnsupportedPayloadVersion(f"schema_version {version} not in {sorted(SUPPORTED_SCHEMA_VERSIONS)}")
+        raise UnsupportedPayloadVersion(
+            f"schema_version {version} not in {sorted(SUPPORTED_SCHEMA_VERSIONS)}"
+        )
     if job_type == "process_meeting":
         return ProcessMeetingPayload.model_validate(data)
     if job_type == "enroll_speaker":

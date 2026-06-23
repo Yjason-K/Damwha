@@ -39,7 +39,9 @@ def conn(pg_url):
         c.close()
 
 
-def seed_meeting(conn, *, status="uploaded", processing_version=0, audio_key="k", current_job_id=None):
+def seed_meeting(
+    conn, *, status="uploaded", processing_version=0, audio_key="k", current_job_id=None
+):
     row = conn.execute(
         "INSERT INTO meeting(audio_key, status, processing_version, current_job_id) "
         "VALUES (%s,%s,%s,%s) RETURNING id",
@@ -48,14 +50,28 @@ def seed_meeting(conn, *, status="uploaded", processing_version=0, audio_key="k"
     return row["id"]
 
 
-def seed_job(conn, *, type="process_meeting", meeting_id=None, payload=None, status="queued",
-             locked_by=None, attempts=0, max_attempts=3, locked_minutes_ago=None):
-    locked_at = None if locked_minutes_ago is None else f"now() - interval '{locked_minutes_ago} minutes'"
+def seed_job(
+    conn,
+    *,
+    type="process_meeting",
+    meeting_id=None,
+    payload=None,
+    status="queued",
+    locked_by=None,
+    attempts=0,
+    max_attempts=3,
+    locked_minutes_ago=None,
+):
+    locked_at = (
+        None if locked_minutes_ago is None else f"now() - interval '{locked_minutes_ago} minutes'"
+    )
     sql = (
         "INSERT INTO job(type, meeting_id, payload, status, locked_by, attempts, max_attempts, locked_at) "
         f"VALUES (%s,%s,%s,%s,%s,%s,%s,{locked_at or 'NULL'}) RETURNING id"
     )
-    row = conn.execute(sql, (type, meeting_id, Jsonb(payload or {}), status, locked_by, attempts, max_attempts)).fetchone()
+    row = conn.execute(
+        sql, (type, meeting_id, Jsonb(payload or {}), status, locked_by, attempts, max_attempts)
+    ).fetchone()
     return row["id"]
 
 
@@ -67,7 +83,9 @@ def seed_speaker(conn, *, name="t", enrollment_status="ready", current_job_id=No
     return row["id"]
 
 
-def seed_voiceprint(conn, *, speaker_id, embedding, model="speechbrain/spkrec-ecapa-voxceleb", dimension=192):
+def seed_voiceprint(
+    conn, *, speaker_id, embedding, model="speechbrain/spkrec-ecapa-voxceleb", dimension=192
+):
     vec = "[" + ",".join(str(x) for x in embedding) + "]"
     conn.execute(
         "INSERT INTO voiceprint(speaker_id, embedding, model, dimension) VALUES (%s,%s::vector,%s,%s)",
