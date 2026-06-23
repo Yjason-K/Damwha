@@ -87,7 +87,8 @@ def test_persist_replaces_existing_rows(conn):
     # reprocess: bump pv, new job owns meeting
     jid2 = seed_job(conn, meeting_id=mid)
     conn.execute(
-        "UPDATE meeting SET processing_version=1, current_job_id=%s, status='processing' WHERE id=%s",
+        "UPDATE meeting SET processing_version=1, current_job_id=%s, "
+        "status='processing' WHERE id=%s",
         (jid2, mid),
     )
     conn.execute(
@@ -123,7 +124,8 @@ def test_persist_replaces_existing_rows(conn):
 
 def test_persist_discarded_when_meeting_superseded(conn):
     mid, jid = _claimed_pm_job(conn, pv=0)
-    # a newer reprocess bumped the meeting to pv=1 + a different current_job_id (must exist in job table due to FK)
+    # a newer reprocess bumped meeting to pv=1 + a different current_job_id
+    # (must exist in job table due to FK)
     newer_jid = seed_job(conn, meeting_id=mid)
     conn.execute(
         "UPDATE meeting SET processing_version=1, current_job_id=%s WHERE id=%s", (newer_jid, mid)

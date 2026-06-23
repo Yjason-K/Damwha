@@ -150,7 +150,10 @@ def persist_process_meeting(
                         Jsonb(
                             {
                                 "code": "discarded_by_stale_guard",
-                                "message": "meeting superseded by newer processing_version/current_job_id",
+                                "message": (
+                                    "meeting superseded by newer "
+                                    "processing_version/current_job_id"
+                                ),
                                 "stage": "persist",
                                 "kind": None,
                             }
@@ -166,8 +169,9 @@ def persist_process_meeting(
             for u in utterances:
                 conn.execute(
                     """
-                    INSERT INTO utterance(meeting_id, speaker_id, diar_label, start_ms, end_ms,
-                        text, confidence, status, transcript_error, order_index, processing_version, job_id)
+                    INSERT INTO utterance(meeting_id, speaker_id, diar_label,
+                        start_ms, end_ms, text, confidence, status,
+                        transcript_error, order_index, processing_version, job_id)
                     VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     """,
                     (
@@ -189,8 +193,8 @@ def persist_process_meeting(
                 centroid = _vec(c["centroid"]) if c["centroid"] is not None else None
                 conn.execute(
                     """
-                    INSERT INTO meeting_cluster(meeting_id, diar_label, centroid, resolved_speaker_id,
-                        processing_version, job_id)
+                    INSERT INTO meeting_cluster(meeting_id, diar_label, centroid,
+                        resolved_speaker_id, processing_version, job_id)
                     VALUES (%s,%s,%s::vector,%s,%s,%s)
                     """,
                     (

@@ -66,7 +66,8 @@ def seed_job(
         None if locked_minutes_ago is None else f"now() - interval '{locked_minutes_ago} minutes'"
     )
     sql = (
-        "INSERT INTO job(type, meeting_id, payload, status, locked_by, attempts, max_attempts, locked_at) "
+        "INSERT INTO job(type, meeting_id, payload, status, locked_by, "
+        "attempts, max_attempts, locked_at) "
         f"VALUES (%s,%s,%s,%s,%s,%s,%s,{locked_at or 'NULL'}) RETURNING id"
     )
     row = conn.execute(
@@ -77,7 +78,8 @@ def seed_job(
 
 def seed_speaker(conn, *, name="t", enrollment_status="ready", current_job_id=None):
     row = conn.execute(
-        "INSERT INTO speaker(name, enrollment_status, current_job_id) VALUES (%s,%s,%s) RETURNING id",
+        "INSERT INTO speaker(name, enrollment_status, current_job_id) "
+        "VALUES (%s,%s,%s) RETURNING id",
         (name, enrollment_status, current_job_id),
     ).fetchone()
     return row["id"]
@@ -88,6 +90,7 @@ def seed_voiceprint(
 ):
     vec = "[" + ",".join(str(x) for x in embedding) + "]"
     conn.execute(
-        "INSERT INTO voiceprint(speaker_id, embedding, model, dimension) VALUES (%s,%s::vector,%s,%s)",
+        "INSERT INTO voiceprint(speaker_id, embedding, model, dimension) "
+        "VALUES (%s,%s::vector,%s,%s)",
         (speaker_id, vec, model, dimension),
     )

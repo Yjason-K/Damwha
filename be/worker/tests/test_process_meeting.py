@@ -64,7 +64,8 @@ def test_full_pipeline_with_identification(conn, tmp_path):
     )
     assert out == "committed"
     utts = conn.execute(
-        "SELECT diar_label, speaker_id, text FROM utterance WHERE meeting_id=%s ORDER BY order_index",
+        "SELECT diar_label, speaker_id, text FROM utterance "
+        "WHERE meeting_id=%s ORDER BY order_index",
         (mid,),
     ).fetchall()
     assert utts[0]["diar_label"] == "SPEAKER_00" and utts[0]["speaker_id"] == sid
