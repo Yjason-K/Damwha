@@ -151,8 +151,7 @@ def persist_process_meeting(
                             {
                                 "code": "discarded_by_stale_guard",
                                 "message": (
-                                    "meeting superseded by newer "
-                                    "processing_version/current_job_id"
+                                    "meeting superseded by newer processing_version/current_job_id"
                                 ),
                                 "stage": "persist",
                                 "kind": None,

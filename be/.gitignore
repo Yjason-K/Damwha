@@ -10,3 +10,5 @@ venv/
 *.wav
 *.m4a
 *.mp3
+.DS_Store
+worker/record_examples/

@@ -22,7 +22,8 @@ class PyannoteDiarizer:
     def __init__(self, model: str, hf_token: str | None, device: str) -> None:
         from pyannote.audio import Pipeline
 
-        pipeline = Pipeline.from_pretrained(model, use_auth_token=hf_token)
+        # pyannote.audio 4.x renamed the auth param: use_auth_token → token
+        pipeline = Pipeline.from_pretrained(model, token=hf_token)
         if pipeline is None:
             # from_pretrained returns None when the license isn't accepted / token is bad
             raise RuntimeError(
@@ -32,7 +33,10 @@ class PyannoteDiarizer:
         self._pipeline = pipeline.to(_torch_device(device))
 
     def diarize(self, wav_path: str) -> list[DiarSegment]:
-        annotation = self._pipeline(wav_path)
+        output = self._pipeline(wav_path)
+        # pyannote 4.x returns a DiarizeOutput dataclass; .speaker_diarization is
+        # the Annotation. Older versions return the Annotation directly.
+        annotation = getattr(output, "speaker_diarization", output)
         segments: list[DiarSegment] = []
         for turn, _, label in annotation.itertracks(yield_label=True):
             segments.append(DiarSegment(str(label), int(turn.start * 1000), int(turn.end * 1000)))

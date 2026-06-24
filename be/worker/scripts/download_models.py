@@ -38,7 +38,7 @@ def main() -> None:
     else:
         from pyannote.audio import Pipeline
 
-        pipe = Pipeline.from_pretrained(DIAR, use_auth_token=s.hf_token)
+        pipe = Pipeline.from_pretrained(DIAR, token=s.hf_token)
         if pipe is None:
             print("  ! pyannote returned None — token invalid or license not accepted.")
         else:
