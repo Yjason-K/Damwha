@@ -41,6 +41,27 @@ Expect: `outcome: committed`, `meeting: status=done`, one utterance per
 diarized turn with text, and the diarized speakers listed as unidentified
 clusters (no speakers enrolled in a throwaway DB).
 
+### Enroll + identify smoke
+
+Verifies the enrollment and auto-identification paths with real models:
+
+```
+uv run python scripts/smoke_enroll_identify.py <enroll_audio> <meeting_audio>
+```
+
+It (1) enrolls a speaker from `enroll_audio` (real ECAPA → voiceprint, speaker
+`ready`), (2) processes `meeting_audio` and reports whether the enrolled speaker
+matched any diarized cluster (cross-recording — informational), and (3) does a
+deterministic check: registers a real diarized cluster centroid as a voiceprint
+and confirms `identify` matches it. Expect `[1] ENROLL: PASS` and
+`[3] DETERMINISTIC IDENTIFY: PASS`.
+
+> **Enrollment quality:** `enroll_speaker` embeds the *whole* sample as one
+> voiceprint. Enroll from a **clean single-speaker clip** (~10–30 s of one
+> person), not a full multi-speaker meeting — a multi-speaker clip yields a
+> muddy averaged embedding that won't identify reliably. (That's why the
+> cross-recording step can report "did not match" when enrolling from a meeting.)
+
 ## Option B — full stack via the Plan 1 API
 
 1. Run Postgres (pgvector) + apply migrations (`npm run migrate`).
