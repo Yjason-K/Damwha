@@ -10,7 +10,11 @@ Damwha는 "누가 언제 무슨 말을 했는지"를 화자 단위로 기록·�
 |---|---|---|
 | [concept.md](./concept.md) | 살아있는 문서 (현재 v0.6) | **서비스 개념 정의서.** 제품 정체성·목표·핵심 기능·화면 구조·핵심 설계 결정. 모든 스펙/플랜이 참조하는 뿌리. |
 | [superpowers/specs/2026-06-22-damwha-ingestion-backend-design.md](./superpowers/specs/2026-06-22-damwha-ingestion-backend-design.md) | 스냅샷 | **Phase 1 백엔드 설계 스펙.** 인제스션 백엔드(스키마·작업 큐·업로드·ML 워커 계약)의 확정 설계. |
-| [superpowers/plans/2026-06-22-damwha-ingestion-api.md](./superpowers/plans/2026-06-22-damwha-ingestion-api.md) | 스냅샷 | **Phase 1 실행 플랜.** 스펙을 작업 단위로 분해한 이 코드베이스(NestJS API)의 구현 계획. |
+| [superpowers/plans/2026-06-22-damwha-ingestion-api.md](./superpowers/plans/2026-06-22-damwha-ingestion-api.md) | 스냅샷 | **Phase 1 / Plan 1 실행 플랜.** 스펙을 작업 단위로 분해한 NestJS API(`src/`)의 구현 계획. |
+| [superpowers/specs/2026-06-23-damwha-ml-worker-design.md](./superpowers/specs/2026-06-23-damwha-ml-worker-design.md) | 스냅샷 | **Phase 1 / Plan 2 설계 스펙.** `job` 계약을 소비하는 Python ML 워커(VAD→화자식별→STT→정렬, ownership 가드)의 설계. |
+| [superpowers/plans/2026-06-23-damwha-ml-worker.md](./superpowers/plans/2026-06-23-damwha-ml-worker.md) | 스냅샷 | **Phase 1 / Plan 2 실행 플랜.** Python ML 워커(`worker/`)의 구현 계획. 실제 모델 검증 절차는 `../worker/SMOKE.md`. |
+
+> Phase 1 백엔드는 두 런타임으로 나뉜다: **Plan 1 = NestJS API(`src/`)**, **Plan 2 = Python 워커(`worker/`)**. 둘은 Postgres `job` 테이블로만 통신한다. 아키텍처·불변식·명령어는 리포 루트 `CLAUDE.md` 참조(살아있는 문서).
 
 ## 문서 종류
 

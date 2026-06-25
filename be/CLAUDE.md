@@ -6,20 +6,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Damwha is a personal, self-hosted meeting recording/search platform. The primary object is the **utterance** — every spoken line is attributed to a speaker, timestamped, and traceable back to the original audio. This repo is the **backend**.
 
-The full design and the executable plan live in `docs/superpowers/`:
-- Spec: `docs/superpowers/specs/2026-06-22-damwha-ingestion-backend-design.md`
-- Plan 1 (this codebase): `docs/superpowers/plans/2026-06-22-damwha-ingestion-api.md`
+The full design and the executable plans live in `docs/superpowers/`:
+- Spec (NestJS API): `docs/superpowers/specs/2026-06-22-damwha-ingestion-backend-design.md`
+- Plan 1 (`src/`, NestJS API): `docs/superpowers/plans/2026-06-22-damwha-ingestion-api.md`
+- Spec (Python worker): `docs/superpowers/specs/2026-06-23-damwha-ml-worker-design.md`
+- Plan 2 (`worker/`, Python ML worker): `docs/superpowers/plans/2026-06-23-damwha-ml-worker.md`
 
-Read the spec before changing data model / pipeline semantics — many decisions there are deliberate (privacy: local-only; non-goals).
+Read the spec before changing data model / pipeline semantics — many decisions there are deliberate (privacy: local-only; non-goals). Specs/plans are dated snapshots and are **not** edited after the fact; record implementation deltas in living docs (this file, `docs/README.md`, `worker/SMOKE.md`).
 
 ## Architecture: two runtimes joined by one table
 
 The system is a **polyglot** split that communicates **only through the Postgres `job` table** — never HTTP between them:
 
-- **NestJS API (this repo, TypeScript)** — HTTP only, knows nothing about ML. Stores audio, CRUDs metadata, enqueues jobs, serves status/results.
-- **Python ML worker (Plan 2, not yet in this repo)** — polls `job`, runs VAD → diarization → speaker ID → STT → align, writes `utterance`/`meeting_cluster` rows. No HTTP.
+- **NestJS API (`src/`, TypeScript)** — HTTP only, knows nothing about ML. Stores audio, CRUDs metadata, enqueues jobs, serves status/results.
+- **Python ML worker (`worker/`, Python)** — polls `job`, runs ffmpeg normalize+probe → VAD → diarization → speaker ID → STT → align, writes `utterance`/`meeting_cluster`/`voiceprint` rows. No HTTP. **Implemented** (Plan 2); see the worker section below.
 
-The `job` table is the contract. The TypeScript side validates job payloads with zod (`src/contracts/job-payload.schema.ts`); the future Python worker mirrors the same shape with pydantic. **Changing the payload shape or the `stage`/`status` enums means changing both sides** — treat `src/contracts/` and the `001_init.sql` CHECK constraints as the source of truth.
+The `job` table is the contract. The TypeScript side validates job payloads with zod (`src/contracts/job-payload.schema.ts`); the Python worker mirrors the same shape with pydantic (`worker/damwha_worker/contracts.py`), and the same JSON fixtures (`test/fixtures/job-payloads/`) are validated on both sides to block drift. The payload carries a top-level `schema_version` (currently `1`; both sides default missing → 1). **Changing the payload shape or the `stage`/`status` enums means changing both sides** — treat `src/contracts/`, `worker/damwha_worker/contracts.py`, and the `001_init.sql` CHECK constraints as the source of truth.
 
 There is **no ORM**. All DB access is raw SQL through `DatabaseService` (`pg.Pool` wrapper with `query` + `withTransaction`). This is intentional — `SELECT ... FOR UPDATE SKIP LOCKED` and pgvector types don't fit ORMs cleanly. Each domain has a thin `*.repository.ts` (SQL), a `*.service.ts` (transactions/orchestration), and a `*.controller.ts` (HTTP).
 
@@ -32,6 +34,16 @@ These cross-file rules are easy to break and are enforced by tests:
 - **Storage path safety (`src/storage/`)**: the DB stores only relative keys (`meetings/<uuid>/...`). Never trust client filenames or store absolute paths. All key→path resolution goes through `StorageService.resolve()`, which rejects traversal/absolute keys. Uploads use multer **diskStorage** (temp file) + `saveFromTemp` — never buffer large audio in memory.
 - **Speaker identification (`voiceprint`)**: pgvector columns are fixed-dimension (`vector(192)`). Identification must filter voiceprints by matching `model` + `dimension`, and only compare against speakers with `enrollment_status='ready'`. Unidentified speakers are preserved as `meeting_cluster` rows (raw `diar_label`), never force-created as `speaker`.
 - **Env loading**: `loadEnv()` parses the full schema and **requires `DATABASE_URL`** — only call it inside constructors/runtime, never in decorator/module metadata (it runs at import time before tests set env). Use the narrow `maxUploadBytes()` helper in decorators instead.
+
+## Python worker (`worker/`)
+
+Separate Python project under `worker/` (uv + ruff + pytest + pydantic v2 + psycopg3, no ORM — same raw-SQL reasons as the API). It consumes the `job` contract and never imports the NestJS side. Key realities (mostly learned during Plan 2 and the real-model smoke):
+
+- **Models are an optional extra.** Heavy/gated ML deps live in `[project.optional-dependencies] models` (platform-marked: `mlx-whisper` on Apple Silicon, `faster-whisper` elsewhere), **not** base deps. The deterministic test suite never imports them (registry/adapters are imported only inside `__main__.main()`), so plain `uv sync` stays light; the real worker runs `uv sync --extra models`.
+- **Ownership guards (the safety model).** Every worker write to shared state is guarded; 0 affected rows = lost ownership → discard local result. Two distinct guards, both needed: **job guard** (`locked_by = worker AND status='running'` — catches a same-job requeue+reclaim) and **meeting guard** (`processing_version = payload_pv AND current_job_id = job.id` — catches a newer reprocess). `persist` applies both in one short TX → returns `committed` / `discarded` (stale: job marked `done`+reason, meeting untouched) / `lost`.
+- **Failure classification.** `errors.ErrorKind` is PERMANENT vs TRANSIENT (uncategorized → TRANSIENT). PERMANENT → fail immediately; TRANSIENT → immediate requeue if attempts remain (no timed backoff — `job` has no `next_attempt_at`). Heartbeat runs on its own DB connection in a daemon thread and survives a transient DB error.
+- **pyannote.audio resolves to 4.x** (the spec named the 3.1 *model*; the *library* major bumped). 4.x renamed `use_auth_token` → `token` and the pipeline returns a `DiarizeOutput` (use `.speaker_diarization`). The diarization pipeline pulls a **3-model gated HF chain** — see `worker/SMOKE.md`. ECAPA runs on **CPU** even on Apple Silicon (SpeechBrain MPS support is unreliable; the model is tiny); pyannote and mlx-whisper use the GPU.
+- **Tests vs smoke.** All deterministic glue (db guards, align, identify, persist, poll loop) is tested with **fake models + real Postgres** (testcontainers) and runs in CI. The **real models are verified only by a local smoke** (`worker/SMOKE.md`, `scripts/smoke_process_meeting.py`) — gated/heavy, never in CI.
 
 ## Commands
 
@@ -51,6 +63,20 @@ npx jest test/jobs.repository.spec.ts -t "concurrent"   # one test by name
 npx tsc --noEmit -p tsconfig.build.json  # type-check src without emitting
 ```
 
+Python worker (`worker/`, Python 3.12 via uv):
+
+```bash
+cd worker
+uv sync                                  # deterministic deps only (CI/tests; no heavy models)
+uv run pytest -q                         # full worker suite (testcontainers Postgres + fake models)
+uv run ruff check . && uv run ruff format .
+
+uv sync --extra models                   # real ML models (mlx-whisper/pyannote/ECAPA/silero)
+uv run python scripts/download_models.py # pre-cache models (needs HF_TOKEN; see SMOKE.md)
+uv run python -m damwha_worker           # run the real worker (poll loop)
+uv run python scripts/smoke_process_meeting.py <audio>   # local end-to-end smoke
+```
+
 **Tests require Docker.** Integration/e2e tests use Testcontainers, which spins up a real `pgvector/pgvector:pg16` Postgres per suite (see `test/db.ts`). Run with `--runInBand` (already in `npm test`) — parallel containers are heavy. No mocking of the DB; tests exercise real SQL including `SKIP LOCKED`, the reaper CTE, and pgvector.
 
 ## Conventions
@@ -58,7 +84,7 @@ npx tsc --noEmit -p tsconfig.build.json  # type-check src without emitting
 - Follow the plan doc's task structure and the existing per-domain repository/service/controller split when adding features.
 - Migrations are plain SQL files in `src/database/migrations/` applied in filename order by `migrate.ts` (tracked in a `_migrations` table). Add new numbered files; don't edit applied ones.
 - Enums are `text` + `CHECK` (not native Postgres enums) so values can evolve; keep the zod/pydantic contracts and CHECK lists in sync.
-- This is the **API half**. The ML pipeline, ffmpeg audio-integrity validation, and worker-side status transitions are **Plan 2** (Python). Don't add ML or cloud calls here — privacy premise is local-only.
+- **Keep the API/worker split clean.** The ML pipeline, ffmpeg audio-integrity validation, and worker-side status transitions live in the Python worker (`worker/`), not the NestJS `src/`. Don't add ML or cloud calls to `src/`; both halves keep the privacy premise (local-only, no external network) intact.
 
 ---
 
