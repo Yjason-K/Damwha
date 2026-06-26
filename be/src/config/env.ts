@@ -15,6 +15,11 @@ const EnvSchema = z.object({
   IDENTIFY_THRESHOLD: z.coerce.number().default(0.7),
   SEARCH_EMBEDDING_MODEL: z.string().default('BAAI/bge-m3'),
   SEARCH_EMBEDDING_DIM: z.coerce.number().default(1024),
+  EMBED_SERVICE_URL: z.string().default('http://127.0.0.1:8100'),
+  EMBED_SERVICE_TIMEOUT_MS: z.coerce.number().default(800),
+  EMBED_SERVICE_ALLOW_NON_LOOPBACK: z.string().default('false'),
+  SEARCH_RRF_K: z.coerce.number().default(60),
+  SEARCH_CANDIDATE_K: z.coerce.number().default(100),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
