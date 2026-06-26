@@ -175,44 +175,7 @@ git commit -m "build: custom postgres image (pgvector + pg_bigm) + switch test h
 **Interfaces:**
 - Produces: `utterance_embedding(id, utterance_id, embedding vector(1024), model, dimension, processing_version, job_id, created_at)` + HNSW/`model,dimension` 인덱스; `utterance.text`의 `gin_bigm_ops` GIN 인덱스; `job.type`에 `index_meeting`, `job.stage`에 `embed` 허용.
 
-- [ ] **Step 1: 마이그레이션 SQL 작성**
-
-Create `src/database/migrations/002_search.sql`:
-
-```sql
-CREATE EXTENSION IF NOT EXISTS pg_bigm;
-
--- 의미검색 임베딩 (voiceprint 패턴 미러). 차원 고정 1024 (Phase 2).
-CREATE TABLE utterance_embedding (
-  id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  utterance_id       uuid NOT NULL REFERENCES utterance(id) ON DELETE CASCADE,
-  embedding          vector(1024) NOT NULL,
-  model              text NOT NULL,
-  dimension          int  NOT NULL,
-  processing_version int  NOT NULL,
-  job_id             uuid REFERENCES job(id) ON DELETE SET NULL,
-  created_at         timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (utterance_id, model)
-);
-CREATE INDEX utterance_embedding_model_dim_idx ON utterance_embedding (model, dimension);
-CREATE INDEX utterance_embedding_hnsw_idx ON utterance_embedding
-  USING hnsw (embedding vector_cosine_ops);
-
--- 키워드 검색 (pg_bigm bigram GIN; 색인·쿼리 대칭).
-CREATE INDEX utterance_text_bigm_idx ON utterance USING gin (text gin_bigm_ops);
-
--- job enum 확장: 새 type/stage 허용 (001의 익명 CHECK 이름은 Postgres 기본 규칙).
-ALTER TABLE job DROP CONSTRAINT job_type_check;
-ALTER TABLE job ADD CONSTRAINT job_type_check
-  CHECK (type IN ('process_meeting','enroll_speaker','index_meeting'));
-
-ALTER TABLE job DROP CONSTRAINT job_stage_check;
-ALTER TABLE job ADD CONSTRAINT job_stage_check
-  CHECK (stage IN ('vad','diarize','identify','stt','align','persist',
-                   'extract_embedding','enroll_persist','embed'));
-```
-
-- [ ] **Step 2: 마이그레이션 테스트 작성 (실패 확인용)**
+- [ ] **Step 1: 마이그레이션 테스트 작성 (실패 먼저)**
 
 In `test/migration.spec.ts`, add a test (mirror existing structure — uses `startTestDb`):
 
@@ -252,12 +215,49 @@ In `test/migration.spec.ts`, add a test (mirror existing structure — uses `sta
   });
 ```
 
-- [ ] **Step 3: 테스트 실행 — 실패 확인**
+- [ ] **Step 2: 실행 — 실패 확인**
 
 Run: `npx jest test/migration.spec.ts -t "002"`
-Expected: FAIL (002 마이그레이션이 아직 없어 `utterance_embedding` 없음).
+Expected: FAIL (002가 아직 없어 `utterance_embedding` 테이블/`utterance_text_bigm_idx`가 부재).
 
-- [ ] **Step 4: 마이그레이션이 적용되는지(파일 추가만으로) 재실행 — 통과 확인**
+- [ ] **Step 3: 마이그레이션 SQL 작성**
+
+Create `src/database/migrations/002_search.sql`:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_bigm;
+
+-- 의미검색 임베딩 (voiceprint 패턴 미러). 차원 고정 1024 (Phase 2).
+CREATE TABLE utterance_embedding (
+  id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  utterance_id       uuid NOT NULL REFERENCES utterance(id) ON DELETE CASCADE,
+  embedding          vector(1024) NOT NULL,
+  model              text NOT NULL,
+  dimension          int  NOT NULL,
+  processing_version int  NOT NULL,
+  job_id             uuid REFERENCES job(id) ON DELETE SET NULL,
+  created_at         timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (utterance_id, model)
+);
+CREATE INDEX utterance_embedding_model_dim_idx ON utterance_embedding (model, dimension);
+CREATE INDEX utterance_embedding_hnsw_idx ON utterance_embedding
+  USING hnsw (embedding vector_cosine_ops);
+
+-- 키워드 검색 (pg_bigm bigram GIN; 색인·쿼리 대칭).
+CREATE INDEX utterance_text_bigm_idx ON utterance USING gin (text gin_bigm_ops);
+
+-- job enum 확장: 새 type/stage 허용 (001의 익명 CHECK 이름은 Postgres 기본 규칙).
+ALTER TABLE job DROP CONSTRAINT job_type_check;
+ALTER TABLE job ADD CONSTRAINT job_type_check
+  CHECK (type IN ('process_meeting','enroll_speaker','index_meeting'));
+
+ALTER TABLE job DROP CONSTRAINT job_stage_check;
+ALTER TABLE job ADD CONSTRAINT job_stage_check
+  CHECK (stage IN ('vad','diarize','identify','stt','align','persist',
+                   'extract_embedding','enroll_persist','embed'));
+```
+
+- [ ] **Step 4: 재실행 — 통과 확인**
 
 `runMigrations`는 `src/database/migrations/*.sql`를 파일명 순서로 적용하므로 002 파일이 있으면 자동 적용된다.
 Run: `npx jest test/migration.spec.ts -t "002"`
@@ -1026,6 +1026,12 @@ In `worker/pyproject.toml`, `[project.optional-dependencies] models` 리스트�
     "uvicorn>=0.29",
 ```
 
+이어서 lockfile을 갱신한다 — 이 repo는 `worker/uv.lock`을 추적하므로 재현 가능한 설치를 위해 함께 커밋해야 한다:
+```bash
+cd worker && uv lock
+```
+(`uv lock`은 의존성 그래프만 재해석하고 무거운 휠을 내려받지 않는다. 변경된 `worker/uv.lock`을 Step 7 커밋에 포함.)
+
 - [ ] **Step 5: 결정성 테스트 스위트가 여전히 통과하는지 확인 (실모델 import 없음)**
 
 Run: `cd worker && uv run pytest -q`
@@ -1046,7 +1052,7 @@ Expected: `BAAI/bge-m3 1024 2 1024` (모델명, 차원, 벡터 2개, 각 1024d).
 - [ ] **Step 7: Commit**
 
 ```bash
-git add worker/damwha_worker/models/bge_embed.py worker/damwha_worker/models/registry.py worker/damwha_worker/embed_service.py worker/pyproject.toml
+git add worker/damwha_worker/models/bge_embed.py worker/damwha_worker/models/registry.py worker/damwha_worker/embed_service.py worker/pyproject.toml worker/uv.lock
 git commit -m "feat(worker): real bge-m3 TextEmbedder + embed service (models extra, smoke-only)"
 ```
 
@@ -1061,17 +1067,18 @@ git commit -m "feat(worker): real bge-m3 TextEmbedder + embed service (models ex
 
 **Interfaces:**
 - Consumes: `run_index_meeting` (Task 6), `db.fail_job` (Task 5), `build_text_embedder` (Task 8), `FakeTextEmbedder`.
-- Produces: `handle_job(conn, job, storage, worker_id, *, models=None, text_embedder=None, search_embedding=None)` — type별 dispatch. `index_meeting`은 `text_embedder`로 `run_index_meeting`, 실패 시 TRANSIENT→`requeue` 그 외→`db.fail_job`(meeting 미터치). `process_meeting`은 `search_embedding`(tuple `(model,dim)`)을 `run_process_meeting`에 전달. `run_once`도 새 시그니처(keyword `models=`)로 갱신.
+- Produces: `handle_job(conn, job, storage, worker_id, *, models=None, text_embedder=None, search_embedding=None)` — type별 dispatch. `index_meeting`은 `text_embedder`로 `run_index_meeting`, 실패 시 TRANSIENT→`requeue` 그 외→`db.fail_job`(meeting 미터치). `process_meeting`은 `search_embedding`(tuple `(model,dim)`)을 `run_process_meeting`에 전달. `run_once`는 type-agnostic 시그니처(`text_embedder=`/`search_embedding=` 추가)로 갱신 — index job도 처리.
 
 - [ ] **Step 1: 실패 테스트 — index 영구 실패는 job만 failed, meeting은 done 유지**
 
 Create `worker/tests/test_dispatch_index.py`:
 ```python
 from damwha_worker import db
-from damwha_worker.__main__ import handle_job
+from damwha_worker.__main__ import handle_job, run_once
 from damwha_worker.errors import ErrorKind, WorkerError
 from damwha_worker.storage import Storage
 from tests.conftest import seed_job, seed_meeting
+from tests.fakes import FakeTextEmbedder
 
 
 class RaisingTextEmbedder:
@@ -1121,6 +1128,20 @@ def test_index_transient_failure_requeues(conn, tmp_path):
     assert out == "requeued"
     assert conn.execute("SELECT status FROM job WHERE id=%s", (job["id"],)).fetchone()["status"] == "queued"
     assert conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()["status"] == "done"
+
+
+def test_run_once_handles_index_job(conn, tmp_path):
+    # run_once가 text_embedder를 받아 index_meeting을 정상 처리(None이면 깨짐)
+    mid = seed_meeting(conn, status="done", processing_version=0)
+    conn.execute(
+        "INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,text,status,order_index,processing_version) "
+        "VALUES (%s,'SPEAKER_00',0,1000,'안녕','ok',0,0)",
+        (mid,),
+    )
+    seed_job(conn, type="index_meeting", meeting_id=mid)
+    out = run_once(conn, "w1", None, Storage(str(tmp_path)), text_embedder=FakeTextEmbedder())
+    assert out == "committed"
+    assert conn.execute("SELECT count(*) c FROM utterance_embedding", ()).fetchone()["c"] == 1
 ```
 
 - [ ] **Step 2: 실행 — 실패 확인**
@@ -1184,11 +1205,21 @@ def handle_job(
 
 `handle_job` 시그니처가 `(conn, job, storage, worker_id, *, models=None, ...)`로 바뀌었으므로 구형 positional 호출을 keyword 형태로 고친다(보정 안 하면 이 커밋 직후 워커 테스트가 깨진다).
 
-In `worker/damwha_worker/__main__.py`, `run_once`의 마지막 줄을 교체:
+In `worker/damwha_worker/__main__.py`, `run_once`를 type-agnostic 시그니처로 교체(호출자가 job type에 맞는 모델 객체를 넘긴다 — index job엔 `text_embedder`):
 ```python
-    return handle_job(conn, job, storage, worker_id, models=models)
+def run_once(
+    conn, worker_id: str, models: Models | None, storage: Storage,
+    *, text_embedder=None, search_embedding=None,
+) -> str | None:
+    job = db.claim(conn, worker_id)
+    if job is None:
+        return None
+    return handle_job(
+        conn, job, storage, worker_id,
+        models=models, text_embedder=text_embedder, search_embedding=search_embedding,
+    )
 ```
-(기존: `return handle_job(conn, job, models, storage, worker_id)` — `__main__.py:56`)
+(기존: `handle_job(conn, job, models, storage, worker_id)` 구형 positional — `__main__.py:56`. process_meeting 테스트의 `run_once(conn, "w1", _models(), Storage(...))`는 그대로 동작.)
 
 In `worker/tests/test_worker_loop.py`, 두 곳(`test_transient_error_requeues_when_attempts_left:73`, `test_permanent_error_fails:86`)의
 `handle_job(conn, job, boom, Storage(str(tmp_path)), "w1")`를 교체:
