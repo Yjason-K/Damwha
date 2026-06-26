@@ -123,6 +123,8 @@ def persist_process_meeting(
     duration_ms,
     utterances,
     clusters,
+    index_search_model=None,
+    index_search_dim=None,
 ) -> str:
     try:
         with conn.transaction():
@@ -209,6 +211,19 @@ def persist_process_meeting(
                 "UPDATE job SET status='done', progress=100, updated_at=now() WHERE id=%s",
                 (job_id,),
             )
+            if index_search_model is not None and index_search_dim is not None:
+                conn.execute(
+                    "INSERT INTO job(type, meeting_id, payload) VALUES('index_meeting', %s, %s)",
+                    (
+                        meeting_id,
+                        Jsonb({
+                            "schema_version": 1,
+                            "meeting_id": str(meeting_id),
+                            "processing_version": processing_version,
+                            "search_embedding": {"model": index_search_model, "dimension": index_search_dim},
+                        }),
+                    ),
+                )
             return "committed"
     except _Abort:
         return "lost"

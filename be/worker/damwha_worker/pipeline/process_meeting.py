@@ -35,6 +35,8 @@ def run_process_meeting(
     storage: Storage,
     *,
     worker_id: str,
+    search_embedding_model: str | None = None,
+    search_embedding_dim: int | None = None,
     normalize_fn: Callable[[str, str], None] | None = None,
     probe_fn: Callable[[str], ffmpeg.ProbeResult] | None = None,
 ) -> str:
@@ -126,4 +128,6 @@ def run_process_meeting(
         duration_ms=duration_ms,
         utterances=utterance_rows,
         clusters=cluster_rows,
+        index_search_model=search_embedding_model,
+        index_search_dim=search_embedding_dim,
     )

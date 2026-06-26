@@ -231,3 +231,34 @@ def test_persist_enroll_lost_when_speaker_superseded(conn):
         ]
         == 0
     )
+
+
+def test_persist_enqueues_index_job_on_commit(conn):
+    mid, jid = _claimed_pm_job(conn, pv=0)
+    out = db.persist_process_meeting(
+        conn, job_id=jid, worker_id="w1", meeting_id=mid, processing_version=0,
+        normalized_key="k", duration_ms=1, utterances=[], clusters=[],
+        index_search_model="BAAI/bge-m3", index_search_dim=1024,
+    )
+    assert out == "committed"
+    row = conn.execute(
+        "SELECT type, meeting_id, payload FROM job WHERE type='index_meeting' AND meeting_id=%s", (mid,)
+    ).fetchone()
+    assert row is not None
+    assert row["payload"]["processing_version"] == 0
+    assert row["payload"]["search_embedding"] == {"model": "BAAI/bge-m3", "dimension": 1024}
+
+
+def test_persist_no_index_job_when_discarded(conn):
+    mid, jid = _claimed_pm_job(conn, pv=0)
+    newer = seed_job(conn, meeting_id=mid)
+    conn.execute("UPDATE meeting SET processing_version=1, current_job_id=%s WHERE id=%s", (newer, mid))
+    out = db.persist_process_meeting(
+        conn, job_id=jid, worker_id="w1", meeting_id=mid, processing_version=0,
+        normalized_key="k", duration_ms=1, utterances=[], clusters=[],
+        index_search_model="BAAI/bge-m3", index_search_dim=1024,
+    )
+    assert out == "discarded"
+    assert conn.execute(
+        "SELECT count(*) c FROM job WHERE type='index_meeting'", ()
+    ).fetchone()["c"] == 0
