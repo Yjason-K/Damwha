@@ -7,7 +7,8 @@ from tests.fakes import FakeTextEmbedder
 
 def _payload(mid, pv=0):
     return IndexMeetingPayload(
-        meeting_id=str(mid), processing_version=pv,
+        meeting_id=str(mid),
+        processing_version=pv,
         search_embedding={"model": "BAAI/bge-m3", "dimension": 1024},
     )
 
@@ -16,7 +17,8 @@ def _seed_utts(conn, mid, rows):
     # rows: list of (order_index, status, text)
     for oi, status, text in rows:
         conn.execute(
-            "INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,text,status,order_index,processing_version) "
+            "INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,text,status,"
+            "order_index,processing_version) "
             "VALUES (%s,'SPEAKER_00',0,1000,%s,%s,%s,0)",
             (mid, text, status, oi),
         )
@@ -46,7 +48,10 @@ def test_index_commits_zero_when_no_indexable(conn):
     out = run_index_meeting(conn, job, _payload(mid), FakeTextEmbedder(), worker_id="w1")
     assert out == "committed"  # 색인 대상 0개도 동일한 2-가드 TX를 타고 job done
     assert conn.execute("SELECT count(*) c FROM utterance_embedding", ()).fetchone()["c"] == 0
-    assert conn.execute("SELECT status FROM job WHERE id=%s", (job["id"],)).fetchone()["status"] == "done"
+    assert (
+        conn.execute("SELECT status FROM job WHERE id=%s", (job["id"],)).fetchone()["status"]
+        == "done"
+    )
 
 
 def test_index_discarded_on_stale_pv(conn):

@@ -216,12 +216,17 @@ def persist_process_meeting(
                     "INSERT INTO job(type, meeting_id, payload) VALUES('index_meeting', %s, %s)",
                     (
                         meeting_id,
-                        Jsonb({
-                            "schema_version": 1,
-                            "meeting_id": str(meeting_id),
-                            "processing_version": processing_version,
-                            "search_embedding": {"model": index_search_model, "dimension": index_search_dim},
-                        }),
+                        Jsonb(
+                            {
+                                "schema_version": 1,
+                                "meeting_id": str(meeting_id),
+                                "processing_version": processing_version,
+                                "search_embedding": {
+                                    "model": index_search_model,
+                                    "dimension": index_search_dim,
+                                },
+                            }
+                        ),
                     ),
                 )
             return "committed"
@@ -249,12 +254,14 @@ def persist_index_meeting(
                 conn.execute(
                     "UPDATE job SET status='done', error=%s, updated_at=now() WHERE id=%s",
                     (
-                        Jsonb({
-                            "code": "discarded_by_stale_guard",
-                            "message": "meeting superseded by newer processing_version",
-                            "stage": "embed",
-                            "kind": None,
-                        }),
+                        Jsonb(
+                            {
+                                "code": "discarded_by_stale_guard",
+                                "message": "meeting superseded by newer processing_version",
+                                "stage": "embed",
+                                "kind": None,
+                            }
+                        ),
                         job_id,
                     ),
                 )
@@ -271,7 +278,14 @@ def persist_index_meeting(
                         processing_version=EXCLUDED.processing_version, job_id=EXCLUDED.job_id,
                         created_at=now()
                     """,
-                    (e["utterance_id"], _vec(e["embedding"]), model, dimension, processing_version, job_id),
+                    (
+                        e["utterance_id"],
+                        _vec(e["embedding"]),
+                        model,
+                        dimension,
+                        processing_version,
+                        job_id,
+                    ),
                 )
             conn.execute(
                 "UPDATE job SET status='done', progress=100, updated_at=now() WHERE id=%s",

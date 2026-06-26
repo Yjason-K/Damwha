@@ -70,7 +70,7 @@ def test_transient_error_requeues_when_attempts_left(conn, tmp_path, monkeypatch
     job = db.claim(conn, "w1")  # attempts=1, max=3
     boom = _models()
     boom.diarizer = _RaisingDiarizer(WorkerError("io_error", "x", ErrorKind.TRANSIENT))
-    out = handle_job(conn, job, boom, Storage(str(tmp_path)), "w1")
+    out = handle_job(conn, job, Storage(str(tmp_path)), "w1", models=boom)
     assert out == "requeued"
     assert (
         conn.execute("SELECT status FROM job WHERE id=%s", (jid,)).fetchone()["status"] == "queued"
@@ -83,7 +83,7 @@ def test_permanent_error_fails(conn, tmp_path, monkeypatch):
     job = db.claim(conn, "w1")
     boom = _models()
     boom.diarizer = _RaisingDiarizer(WorkerError("corrupt_audio", "x", ErrorKind.PERMANENT))
-    out = handle_job(conn, job, boom, Storage(str(tmp_path)), "w1")
+    out = handle_job(conn, job, Storage(str(tmp_path)), "w1", models=boom)
     assert out == "failed"
     assert (
         conn.execute("SELECT status FROM job WHERE id=%s", (jid,)).fetchone()["status"] == "failed"

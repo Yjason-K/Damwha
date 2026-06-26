@@ -34,7 +34,9 @@ class FakeTranscriber:
 
 
 class FakeTextEmbedder:
-    def __init__(self, vectors_by_text: dict[str, list[float]] | None = None, dim: int = 1024) -> None:
+    def __init__(
+        self, vectors_by_text: dict[str, list[float]] | None = None, dim: int = 1024
+    ) -> None:
         self._by_text = vectors_by_text or {}
         self._dim = dim
 

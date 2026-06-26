@@ -24,7 +24,9 @@ def run_index_meeting(
     embeddings = []
     if rows:
         vectors = text_embedder.embed_texts([r["text"] for r in rows])
-        embeddings = [{"utterance_id": r["id"], "embedding": v} for r, v in zip(rows, vectors)]
+        embeddings = [
+            {"utterance_id": r["id"], "embedding": v} for r, v in zip(rows, vectors, strict=True)
+        ]
 
     return db.persist_index_meeting(
         conn,
