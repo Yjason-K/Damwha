@@ -679,7 +679,7 @@ git commit -m "feat(worker): persist_index_meeting (2-guard upsert) + fail_job (
 - Consumes: `db.persist_index_meeting` (Task 5), `db.set_stage`.
 - Produces (Python):
   - `TextEmbedder` Protocol: `embed_texts(self, texts: list[str]) -> list[list[float]]`.
-  - `run_index_meeting(conn, job, payload: IndexMeetingPayload, text_embedder: TextEmbedder, *, worker_id) -> str` — `"committed"`/`"discarded"`/`"lost"`/`"noop"`.
+  - `run_index_meeting(conn, job, payload: IndexMeetingPayload, text_embedder: TextEmbedder, *, worker_id) -> str` — `"committed"`/`"discarded"`/`"lost"`. (색인 대상 0개도 빈 임베딩으로 동일 2-가드 TX를 타고 `"committed"` — 별도 noop 분기 없음.)
 
 - [ ] **Step 1: TextEmbedder 프로토콜 추가**
 
@@ -734,12 +734,13 @@ def test_index_embeds_only_ok_text_utterances(conn):
     assert n == 1
 
 
-def test_index_noop_when_no_indexable_utterances(conn):
+def test_index_commits_zero_when_no_indexable(conn):
     mid = seed_meeting(conn, status="done", processing_version=0)
     _seed_utts(conn, mid, [(0, "silence", None)])
     job = _claim(conn, mid)
     out = run_index_meeting(conn, job, _payload(mid), FakeTextEmbedder(), worker_id="w1")
-    assert out == "noop"
+    assert out == "committed"  # 색인 대상 0개도 동일한 2-가드 TX를 타고 job done
+    assert conn.execute("SELECT count(*) c FROM utterance_embedding", ()).fetchone()["c"] == 0
     assert conn.execute("SELECT status FROM job WHERE id=%s", (job["id"],)).fetchone()["status"] == "done"
 
 
@@ -783,17 +784,12 @@ def run_index_meeting(
         (meeting_id, pv),
     ).fetchall()
 
-    if not rows:
-        # 색인 대상 0개 → job만 done (meeting은 그대로)
-        conn.execute(
-            "UPDATE job SET status='done', progress=100, updated_at=now() "
-            "WHERE id=%s AND locked_by=%s AND status='running'",
-            (job_id, worker_id),
-        )
-        return "noop"
-
-    vectors = text_embedder.embed_texts([r["text"] for r in rows])
-    embeddings = [{"utterance_id": r["id"], "embedding": v} for r, v in zip(rows, vectors)]
+    # 색인 대상이 0개여도 별도 분기를 두지 않는다 — 빈 임베딩으로 persist를 타서
+    # 동일한 2-가드(job 소유권 + meeting pv)를 거치게 한다(stale/lost를 noop으로 숨기지 않음).
+    embeddings = []
+    if rows:
+        vectors = text_embedder.embed_texts([r["text"] for r in rows])
+        embeddings = [{"utterance_id": r["id"], "embedding": v} for r, v in zip(rows, vectors)]
 
     return db.persist_index_meeting(
         conn,
@@ -936,15 +932,136 @@ git commit -m "feat(worker): atomically enqueue index_meeting in persist TX (com
 
 ---
 
-## Task 8: 워커 dispatch — type별 build 분기 + handle_job index 경로 + index 실패는 job만
+## Task 8: 실 bge-m3 어댑터 + build_text_embedder + embed 서비스 (models extra, smoke-only)
+
+> 이 태스크는 CI TDD 대상이 아니다 — bge-m3는 무겁다. 이미 테스트된 `TextEmbedder` 프로토콜 뒤에 실구현을 끼우고, 로컬 smoke로만 검증한다(Plan 2 Task 14와 동일 정책). **순서 주의**: 다음 Task 9(dispatch)의 `main()`이 `build_text_embedder`를 참조하므로 이 태스크가 먼저 와야 워커 런타임이 깨지지 않는다.
+
+**Files:**
+- Create: `worker/damwha_worker/models/bge_embed.py`
+- Modify: `worker/damwha_worker/models/registry.py`
+- Create: `worker/damwha_worker/embed_service.py`
+- Modify: `worker/pyproject.toml`
+
+**Interfaces:**
+- Produces: `BgeM3TextEmbedder(model_name)` implements `TextEmbedder`; `build_text_embedder(settings) -> TextEmbedder`; FastAPI app `embed_service:app` with `POST /embed` and `GET /health`.
+
+- [ ] **Step 1: bge-m3 어댑터**
+
+Create `worker/damwha_worker/models/bge_embed.py`:
+```python
+"""실 bge-m3 TextEmbedder. models extra에서만 import (테스트는 FakeTextEmbedder 사용)."""
+
+
+class BgeM3TextEmbedder:
+    def __init__(self, model_name: str = "BAAI/bge-m3") -> None:
+        from sentence_transformers import SentenceTransformer
+
+        self._model = SentenceTransformer(model_name)
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        vecs = self._model.encode(
+            texts, normalize_embeddings=True, convert_to_numpy=True, show_progress_bar=False
+        )
+        return [v.tolist() for v in vecs]
+```
+
+- [ ] **Step 2: build_text_embedder**
+
+In `worker/damwha_worker/models/registry.py`, append:
+```python
+def build_text_embedder(settings: Settings):
+    from .bge_embed import BgeM3TextEmbedder
+
+    return BgeM3TextEmbedder(settings.search_embedding_model)
+```
+
+- [ ] **Step 3: embed 서비스 (FastAPI)**
+
+Create `worker/damwha_worker/embed_service.py`:
+```python
+"""쿼리 임베딩 전용 로컬 서비스. API가 localhost로만 호출. ML은 src/ 밖 유지."""
+
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+from .config import load_settings
+from .models.registry import build_text_embedder
+
+app = FastAPI()
+_settings = load_settings()
+_embedder = build_text_embedder(_settings)
+
+
+class EmbedRequest(BaseModel):
+    texts: list[str]
+
+
+class EmbedResponse(BaseModel):
+    model: str
+    dimension: int
+    vectors: list[list[float]]
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.post("/embed", response_model=EmbedResponse)
+def embed(req: EmbedRequest):
+    vectors = _embedder.embed_texts(req.texts)
+    return EmbedResponse(
+        model=_settings.search_embedding_model,
+        dimension=_settings.search_embedding_dim,
+        vectors=vectors,
+    )
+```
+
+- [ ] **Step 4: 의존성 추가**
+
+In `worker/pyproject.toml`, `[project.optional-dependencies] models` 리스트에 추가:
+```toml
+    "sentence-transformers>=3.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+```
+
+- [ ] **Step 5: 결정성 테스트 스위트가 여전히 통과하는지 확인 (실모델 import 없음)**
+
+Run: `cd worker && uv run pytest -q`
+Expected: PASS — `bge_embed`/`embed_service`/`build_text_embedder`는 함수 안에서만 import하므로 기본 `uv sync`로도 영향 없음.
+
+- [ ] **Step 6: 로컬 smoke (수동, CI 아님)**
+
+```bash
+cd worker && uv sync --extra models
+uv run uvicorn damwha_worker.embed_service:app --host 127.0.0.1 --port 8100 &
+sleep 30   # 첫 모델 로드 대기
+curl -s localhost:8100/health
+curl -s -X POST localhost:8100/embed -H 'content-type: application/json' \
+  -d '{"texts":["UI 개선안","점심 메뉴"]}' | python -c "import sys,json; d=json.load(sys.stdin); print(d['model'], d['dimension'], len(d['vectors']), len(d['vectors'][0]))"
+```
+Expected: `BAAI/bge-m3 1024 2 1024` (모델명, 차원, 벡터 2개, 각 1024d).
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add worker/damwha_worker/models/bge_embed.py worker/damwha_worker/models/registry.py worker/damwha_worker/embed_service.py worker/pyproject.toml
+git commit -m "feat(worker): real bge-m3 TextEmbedder + embed service (models extra, smoke-only)"
+```
+
+---
+
+## Task 9: 워커 dispatch — type별 build 분기 + handle_job index 경로 + index 실패는 job만
 
 **Files:**
 - Modify: `worker/damwha_worker/__main__.py`
 - Create: `worker/tests/test_dispatch_index.py`
+- Modify: `worker/tests/test_worker_loop.py` (기존 handle_job 호출부 보정)
 
 **Interfaces:**
-- Consumes: `run_index_meeting` (Task 6), `db.fail_job` (Task 5), `FakeTextEmbedder`.
-- Produces: `handle_job(conn, job, storage, worker_id, *, models=None, text_embedder=None, search_embedding=None)` — type별 dispatch. `index_meeting`은 `text_embedder`로 `run_index_meeting`, 실패 시 TRANSIENT→`requeue` 그 외→`db.fail_job`(meeting 미터치). `process_meeting`은 `search_embedding`(tuple `(model,dim)`)을 `run_process_meeting`에 전달.
+- Consumes: `run_index_meeting` (Task 6), `db.fail_job` (Task 5), `build_text_embedder` (Task 8), `FakeTextEmbedder`.
+- Produces: `handle_job(conn, job, storage, worker_id, *, models=None, text_embedder=None, search_embedding=None)` — type별 dispatch. `index_meeting`은 `text_embedder`로 `run_index_meeting`, 실패 시 TRANSIENT→`requeue` 그 외→`db.fail_job`(meeting 미터치). `process_meeting`은 `search_embedding`(tuple `(model,dim)`)을 `run_process_meeting`에 전달. `run_once`도 새 시그니처(keyword `models=`)로 갱신.
 
 - [ ] **Step 1: 실패 테스트 — index 영구 실패는 job만 failed, meeting은 done 유지**
 
@@ -1063,7 +1180,23 @@ def handle_job(
         return "failed" if db.fail_process_meeting(conn, job["id"], worker_id, meeting_id, error_json) else "lost"
 ```
 
-- [ ] **Step 4: main() 폴 루프를 type별 build 분기로 수정**
+- [ ] **Step 4: run_once + 기존 test_worker_loop 호출부 보정 (새 handle_job 시그니처)**
+
+`handle_job` 시그니처가 `(conn, job, storage, worker_id, *, models=None, ...)`로 바뀌었으므로 구형 positional 호출을 keyword 형태로 고친다(보정 안 하면 이 커밋 직후 워커 테스트가 깨진다).
+
+In `worker/damwha_worker/__main__.py`, `run_once`의 마지막 줄을 교체:
+```python
+    return handle_job(conn, job, storage, worker_id, models=models)
+```
+(기존: `return handle_job(conn, job, models, storage, worker_id)` — `__main__.py:56`)
+
+In `worker/tests/test_worker_loop.py`, 두 곳(`test_transient_error_requeues_when_attempts_left:73`, `test_permanent_error_fails:86`)의
+`handle_job(conn, job, boom, Storage(str(tmp_path)), "w1")`를 교체:
+```python
+    out = handle_job(conn, job, Storage(str(tmp_path)), "w1", models=boom)
+```
+
+- [ ] **Step 5: main() 폴 루프를 type별 build 분기로 수정**
 
 In `worker/damwha_worker/__main__.py`, `main()`의 claim 이후 블록을 교체. Replace the body from `models = build_models(...)` through the heartbeat block with:
 ```python
@@ -1084,138 +1217,18 @@ In `worker/damwha_worker/__main__.py`, `main()`의 claim 이후 블록을 교체
         log.info("job %s → %s", job["id"], outcome)
         time.sleep(settings.poll_interval_seconds)
 ```
-(`build_text_embedder`는 Task 9에서 registry에 추가. main()은 `# pragma: no cover`라 CI 미실행이므로 import는 런타임에만 해석된다.)
+(`build_text_embedder`는 Task 8에서 registry에 추가됨. main()은 `# pragma: no cover`라 CI 미실행이므로 import는 런타임에만 해석된다.)
 
-- [ ] **Step 5: 실행 — 통과 확인**
+- [ ] **Step 6: 실행 — 통과 확인**
 
-Run: `cd worker && uv run pytest tests/test_dispatch_index.py tests/test_process_meeting.py -q`
-Expected: PASS. (test_process_meeting이 handle_job/run_process_meeting을 직접 호출한다면 새 시그니처에 맞춰 호출 인자 보정이 필요할 수 있음 — 직접 `run_process_meeting`만 호출하면 영향 없음.)
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add worker/damwha_worker/__main__.py worker/tests/test_dispatch_index.py
-git commit -m "feat(worker): dispatch branch by job type + index_meeting failure is job-only"
-```
-
----
-
-## Task 9: 실 bge-m3 어댑터 + build_text_embedder + embed 서비스 (models extra, smoke-only)
-
-> 이 태스크는 CI TDD 대상이 아니다 — bge-m3는 무겁다. 이미 테스트된 `TextEmbedder` 프로토콜 뒤에 실구현을 끼우고, 로컬 smoke로만 검증한다(Plan 2 Task 14와 동일 정책).
-
-**Files:**
-- Create: `worker/damwha_worker/models/bge_embed.py`
-- Modify: `worker/damwha_worker/models/registry.py`
-- Create: `worker/damwha_worker/embed_service.py`
-- Modify: `worker/pyproject.toml`
-
-**Interfaces:**
-- Produces: `BgeM3TextEmbedder(model_name)` implements `TextEmbedder`; `build_text_embedder(settings) -> TextEmbedder`; FastAPI app `embed_service:app` with `POST /embed` and `GET /health`.
-
-- [ ] **Step 1: bge-m3 어댑터**
-
-Create `worker/damwha_worker/models/bge_embed.py`:
-```python
-"""실 bge-m3 TextEmbedder. models extra에서만 import (테스트는 FakeTextEmbedder 사용)."""
-
-
-class BgeM3TextEmbedder:
-    def __init__(self, model_name: str = "BAAI/bge-m3") -> None:
-        from sentence_transformers import SentenceTransformer
-
-        self._model = SentenceTransformer(model_name)
-
-    def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        vecs = self._model.encode(
-            texts, normalize_embeddings=True, convert_to_numpy=True, show_progress_bar=False
-        )
-        return [v.tolist() for v in vecs]
-```
-
-- [ ] **Step 2: build_text_embedder**
-
-In `worker/damwha_worker/models/registry.py`, append:
-```python
-def build_text_embedder(settings: Settings):
-    from .bge_embed import BgeM3TextEmbedder
-
-    return BgeM3TextEmbedder(settings.search_embedding_model)
-```
-
-- [ ] **Step 3: embed 서비스 (FastAPI)**
-
-Create `worker/damwha_worker/embed_service.py`:
-```python
-"""쿼리 임베딩 전용 로컬 서비스. API가 localhost로만 호출. ML은 src/ 밖 유지."""
-
-from fastapi import FastAPI
-from pydantic import BaseModel
-
-from .config import load_settings
-from .models.registry import build_text_embedder
-
-app = FastAPI()
-_settings = load_settings()
-_embedder = build_text_embedder(_settings)
-
-
-class EmbedRequest(BaseModel):
-    texts: list[str]
-
-
-class EmbedResponse(BaseModel):
-    model: str
-    dimension: int
-    vectors: list[list[float]]
-
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-
-@app.post("/embed", response_model=EmbedResponse)
-def embed(req: EmbedRequest):
-    vectors = _embedder.embed_texts(req.texts)
-    return EmbedResponse(
-        model=_settings.search_embedding_model,
-        dimension=_settings.search_embedding_dim,
-        vectors=vectors,
-    )
-```
-
-- [ ] **Step 4: 의존성 추가**
-
-In `worker/pyproject.toml`, `[project.optional-dependencies] models` 리스트에 추가:
-```toml
-    "sentence-transformers>=3.0",
-    "fastapi>=0.110",
-    "uvicorn>=0.29",
-```
-
-- [ ] **Step 5: 결정성 테스트 스위트가 여전히 통과하는지 확인 (실모델 import 없음)**
-
-Run: `cd worker && uv run pytest -q`
-Expected: PASS — `bge_embed`/`embed_service`/`build_text_embedder`는 함수 안에서만 import하므로 기본 `uv sync`로도 영향 없음.
-
-- [ ] **Step 6: 로컬 smoke (수동, CI 아님)**
-
-```bash
-cd worker && uv sync --extra models
-uv run uvicorn damwha_worker.embed_service:app --host 127.0.0.1 --port 8100 &
-sleep 30   # 첫 모델 로드 대기
-curl -s localhost:8100/health
-curl -s -X POST localhost:8100/embed -H 'content-type: application/json' \
-  -d '{"texts":["UI 개선안","점심 메뉴"]}' | python -c "import sys,json; d=json.load(sys.stdin); print(d['model'], d['dimension'], len(d['vectors']), len(d['vectors'][0]))"
-```
-Expected: `BAAI/bge-m3 1024 2 1024` (모델명, 차원, 벡터 2개, 각 1024d).
+Run: `cd worker && uv run pytest tests/test_dispatch_index.py tests/test_worker_loop.py tests/test_process_meeting.py -q`
+Expected: PASS — 새 시그니처로 run_once/handle_job 호출이 모두 정합. (test_process_meeting은 `run_process_meeting`만 직접 호출하므로 영향 없음.)
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add worker/damwha_worker/models/bge_embed.py worker/damwha_worker/models/registry.py worker/damwha_worker/embed_service.py worker/pyproject.toml
-git commit -m "feat(worker): real bge-m3 TextEmbedder + embed service (models extra, smoke-only)"
+git add worker/damwha_worker/__main__.py worker/tests/test_dispatch_index.py worker/tests/test_worker_loop.py
+git commit -m "feat(worker): dispatch branch by job type + index failure job-only (fix run_once/test call sites)"
 ```
 
 ---
@@ -1655,7 +1668,7 @@ git commit -m "feat(api): hybrid search repository (pg_bigm + pgvector + RRF) + 
 
 **Interfaces:**
 - Consumes: `EmbedClient` (Task 10), `SearchRepository` (Task 11), `DatabaseService`.
-- Produces: `POST /search` body `{ q?: string; filters?: Partial<SearchFilters>; limit?: number }` → `{ mode, semantic, hasMore, results: SearchRow[] }`. `mode`: `'browse'`(q 빔) / `'keyword'`(embed degrade) / `'hybrid'`.
+- Produces: `POST /search` body `{ q?: string; filters?: Partial<SearchFilters>; limit?: number }` → `{ mode, semantic, hasMore, results: SearchResult[] }` (camelCase DTO, nested `speaker`, 스펙 §5.1). `mode`: `'browse'`(q 빔) / `'keyword'`(embed degrade) / `'hybrid'`.
 
 - [ ] **Step 1: 실패 e2e 테스트 작성**
 
@@ -1708,8 +1721,8 @@ describe('search', () => {
     expect(res.status).toBe(201);
     expect(res.body.mode).toBe('hybrid');
     expect(res.body.semantic).toBe(true);
-    expect(res.body.results[0].utterance_id).toBe(u);
-    expect(res.body.results[0].meeting_title).toBe('기획');
+    expect(res.body.results[0].utteranceId).toBe(u);
+    expect(res.body.results[0].meetingTitle).toBe('기획');
   });
 
   it('degrades to keyword when embed returns null', async () => {
@@ -1765,11 +1778,39 @@ export interface SearchQuery {
   filters?: Partial<SearchFilters>;
   limit?: number;
 }
+export interface SearchResult {
+  utteranceId: string;
+  meetingId: string;
+  meetingTitle: string | null;
+  recordedAt: Date | null;
+  speaker: { id: string; name: string } | null;
+  diarLabel: string;
+  startMs: number;
+  endMs: number;
+  text: string | null;
+  score: number;
+}
 export interface SearchResponse {
   mode: 'hybrid' | 'keyword' | 'browse';
   semantic: boolean;
   hasMore: boolean;
-  results: SearchRow[];
+  results: SearchResult[];
+}
+
+// DB row(snake_case) → API DTO(camelCase, nested speaker). 스펙 §5.1 계약.
+function toResult(r: SearchRow): SearchResult {
+  return {
+    utteranceId: r.utterance_id,
+    meetingId: r.meeting_id,
+    meetingTitle: r.meeting_title,
+    recordedAt: r.recorded_at,
+    speaker: r.speaker_id ? { id: r.speaker_id, name: r.speaker_name as string } : null,
+    diarLabel: r.diar_label,
+    startMs: r.start_ms,
+    endMs: r.end_ms,
+    text: r.text,
+    score: r.score,
+  };
 }
 
 @Injectable()
@@ -1813,7 +1854,7 @@ export class SearchService {
     mode: SearchResponse['mode'], semantic: boolean, rows: SearchRow[], limit: number,
   ): SearchResponse {
     const hasMore = rows.length > limit;
-    return { mode, semantic, hasMore, results: rows.slice(0, limit) };
+    return { mode, semantic, hasMore, results: rows.slice(0, limit).map(toResult) };
   }
 }
 ```
@@ -2055,6 +2096,6 @@ git commit -m "docs+config: search env examples, embed service smoke steps, livi
 
 ## Self-Review 결과 (작성자 점검)
 
-- **Spec 커버리지**: §2 스키마→T2 · §3 계약→T3/T4 · §4 인덱싱(원자 enqueue/2-가드/reconciler)→T5/T6/T7/T13 · §4.3 dispatch·실패 분기→T8 · §5 쿼리 SQL/RRF/browse→T11 · §5.4 top-K/hasMore→T11/T12 · §6 embed 서비스/degrade/loopback→T9/T10 · §10 커스텀 PG 이미지→T1. 누락 없음.
+- **Spec 커버리지**: §2 스키마→T2 · §3 계약→T3/T4 · §4 인덱싱(원자 enqueue/2-가드/reconciler)→T5/T6/T7/T13 · §4.3 dispatch·실패 분기→T9 · §5 쿼리 SQL/RRF/browse→T11 · §5.1 응답 DTO(camelCase/nested speaker)→T12 · §5.4 top-K/hasMore→T11/T12 · §6 embed 서비스→T8, degrade/loopback→T10 · §10 커스텀 PG 이미지→T1. 누락 없음.
 - **플레이스홀더**: 모든 코드 스텝에 실제 코드. pg_bigm 버전 태그는 ARG로 명시(릴리스 변동 시 교체 가능).
 - **타입 일관성**: `IndexMeetingPayload`/`search_embedding` shape이 zod(T3)·pydantic(T4)·persist enqueue(T7)·fixture에서 동일. `persist_index_meeting`/`fail_job`/`run_index_meeting`/`SearchRow`/`SearchFilters` 시그니처가 정의 태스크와 소비 태스크에서 일치.
