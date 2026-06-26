@@ -33,7 +33,7 @@ Phase 1이 닫은 "업로드 → 화자 귀속 발언 타임라인" 위에, **ut
 | 컴포넌트 | 런타임 | 역할 |
 |---|---|---|
 | **`index_meeting` job** | 워커 (`worker/`) | utterance → bge-m3 임베딩 → `utterance_embedding` 기록. 인덱싱 경로. |
-| **embed 서비스** | 워커 코드베이스 (별도 프로세스) | 최소 HTTP `POST /embed`(text[] → vector[]). 워커 model registry의 bge-m3 어댑터 재사용. localhost 전용. **쿼리 임베딩만** 담당. |
+| **embed 서비스** | 워커 코드베이스 (별도 프로세스) | 최소 HTTP `POST /embed`(text[] → vector[]). 신규 `TextEmbedder` 어댑터(bge-m3) 사용. localhost 전용. **쿼리 임베딩만** 담당. |
 | **search 모듈** | API (`src/search/`) | `POST /search` — 쿼리 임베딩(embed 서비스 호출) → 하이브리드 SQL → 결과 조립. controller/service/repository + `embed.client.ts`. |
 | **reindex 트리거 + reconciler** | API | `POST /meetings/:id/reindex` (수동·백필) + "done인데 미색인" 복구 로직. |
 
@@ -137,22 +137,25 @@ process_meeting persist TX:
 
 ### 4.2 reconciler / 백필 (안전망 + 기존 데이터)
 
-원자 enqueue로도 못 덮는 경우 — ① Phase 2 이전에 이미 `done`인 회의, ② index 잡이 영구 실패한 회의, ③ 모델 교체 후 재색인 — 를 위해 복구 경로를 둔다:
+원자 enqueue로도 못 덮는 경우 — ① Phase 2 이전에 이미 `done`인 회의, ② index 잡이 영구 실패한 회의, ③ 모델 교체 후 재색인, ④ **부분 색인**(일부 utterance만 임베딩된 상태) — 를 위해 복구 경로를 둔다. 후보 판정은 **회의 단위 all-or-nothing이 아니라 utterance 단위 갭**으로 해야 한다(부분 색인이 "완료"로 오인되어 영구 누락되는 것을 막음):
 
 ```sql
--- "done인데 현재 모델 임베딩 없고, in-flight index 잡도 없는" 회의
+-- "done이고, in-flight index 잡이 없고, 색인 가능한 utterance 중 현재 모델
+--  임베딩이 빠진 게 하나라도 있는" 회의
 SELECT m.id FROM meeting m
 WHERE m.status='done'
-  AND EXISTS (SELECT 1 FROM utterance u WHERE u.meeting_id=m.id AND u.status='ok')
   AND NOT EXISTS (SELECT 1 FROM job j
                   WHERE j.meeting_id=m.id AND j.type='index_meeting'
                     AND j.status IN ('queued','running'))
-  AND NOT EXISTS (
+  AND EXISTS (
     SELECT 1 FROM utterance u
-    JOIN utterance_embedding e
-      ON e.utterance_id=u.id AND e.model=:model AND e.dimension=:dim
-    WHERE u.meeting_id=m.id AND u.status='ok');
+    WHERE u.meeting_id=m.id AND u.status='ok' AND u.text IS NOT NULL  -- 색인 대상만
+      AND NOT EXISTS (
+        SELECT 1 FROM utterance_embedding e
+        WHERE e.utterance_id=u.id AND e.model=:model AND e.dimension=:dim));
 ```
+
+- `u.text IS NOT NULL`을 명시하므로, `ok`+text NULL utterance만 있는 회의(색인 대상 0개)는 후보가 되지 않아 **무한 재색인 루프를 피한다**.
 
 - `POST /meetings/:id/reindex` — 단건 수동 재색인(백필·강제 재임베딩).
 - 위 쿼리는 선택적 주기 작업으로도 돌릴 수 있다(Phase 2는 수동 엔드포인트 우선, 주기화는 향후).
@@ -263,7 +266,7 @@ ORDER BY f.score DESC, u.meeting_id, u.order_index
 LIMIT :limit + 1;          -- limit+1 페치 → hasMore 판정 (§5.4)
 ```
 
-- `:rrf_k` 기본 60(표준). `:cand_k`(암별 후보 수) = `max(SEARCH_CANDIDATE_K(기본 50), :limit + 1)` — 각 암이 최종 윈도우를 덮도록 보장(§5.4). env로 노출.
+- `:rrf_k` 기본 60(표준). `:cand_k`(암별 후보 수) = `max(SEARCH_CANDIDATE_K(기본 100), :limit*5)` — env로 노출. **bounded candidate approximation**: 각 암을 cand_k로 절단하므로 결과는 **정확 top-K가 아니라 근사**다. 양 암에서 모두 cand_k 바로 밖(cand_k+1등)인 문서가, 한쪽 암 상위 문서보다 융합 점수가 높을 수 있으나 후보에서 빠진다. 그래서 cand_k를 limit보다 **충분히 크게** 둔다(§5.4).
 - 필터는 **양 암에 동일 적용**(AND). 점수 정규화 불필요(RRF는 순위 기반).
 - 의미 암은 `status='ok'`만 임베딩되므로 자연 정합. 키워드 암은 `status='ok' AND text IS NOT NULL` 명시(P3).
 
@@ -276,7 +279,7 @@ LIMIT :limit + 1;          -- limit+1 페치 → hasMore 판정 (§5.4)
 
 하이브리드 RRF는 **후보 풀 크기에 따라 점수·순위가 흔들리므로** 안정적 deep offset이 불가능하다. 각 암이 `:cand_k`로 잘리는데, offset이 융합 풀(최대 ~2·cand_k)을 넘어서면 빈/불완전 페이지가 나온다(특히 키워드 degrade 모드). 따라서 **offset을 두지 않고 top-K만 제공**한다:
 
-- 요청은 `limit`만(기본 20, 최대 100). `cand_k = max(SEARCH_CANDIDATE_K, limit+1)`로 각 암이 윈도우를 덮게 한다.
+- 요청은 `limit`만(기본 20, 최대 100). `cand_k = max(SEARCH_CANDIDATE_K(기본 100), limit*5)` — limit보다 충분히 크게 두어 절단 근사 오차를 줄인다(정확 top-K 보장은 아님, §5.2).
 - 융합 후 `LIMIT :limit + 1`로 페치 → 앞 `limit`개만 반환, `hasMore = (페치 수 > limit)`. 정확한 마지막 페이지에서도 false positive 없음.
 - "더 보기"는 `limit` 상향(+ cand_k 동반 상승) 또는 **필터 좁히기**로 한다. 브라우즈 우선 셸(concept §6)과도 정합 — deep pagination 대신 필터로 좁힌다.
 
@@ -284,9 +287,17 @@ LIMIT :limit + 1;          -- limit+1 페치 → hasMore 판정 (§5.4)
 
 ## 6. embed 서비스 + degrade 계약 (P1a)
 
-### 6.1 서비스
+### 6.1 서비스 + 신규 TextEmbedder 프로토콜
 
-- 워커 코드베이스 내 별도 프로세스(예: `worker/damwha_worker/embed_service.py`, FastAPI). model registry의 bge-m3 어댑터 재사용.
+**TextEmbedder는 기존 `Embedder`와 별개다.** 현재 `Embedder` protocol은 `embed(wav_path, segments) -> list[list[float]]`(오디오+diar segment → voiceprint)이고(`models/base.py:34`), `build_models()`는 ECAPA/pyannote/whisper 묶음을 반환한다(`registry.py:18`). search embedder는 시그니처가 다르므로 **새 protocol + 빌더**를 둔다:
+
+```python
+class TextEmbedder(Protocol):
+    def embed_texts(self, texts: list[str]) -> list[list[float]]: ...
+```
+
+- bge-m3 어댑터는 이 `TextEmbedder`를 구현한다. **인덱싱(워커 폴 프로세스)과 embed 서비스 둘 다 이 어댑터를 쓴다** — 기존 `Embedder`/`build_models()` 경로에 끼워넣지 않는다(별도 빌더).
+- 서비스: 워커 코드베이스 내 별도 프로세스(예: `worker/damwha_worker/embed_service.py`, FastAPI).
 - `POST /embed` body `{ "texts": ["..."] }` → `{ "model": "...", "dimension": 1024, "vectors": [[...]] }`.
 - `GET /health` → 200(모델 로드 완료 시).
 - **쿼리 임베딩 전용**(API만 호출). 인덱싱 잡은 호출하지 않음(모델 직접 로드).
@@ -349,6 +360,7 @@ LIMIT :limit + 1;          -- limit+1 페치 → hasMore 판정 (§5.4)
 ## 11. 향후 / 미해결
 
 - 회의 제목 검색, 서버측 하이라이트(ts_headline on 'simple'), 정확 total/커서 페이지네이션 — 필요 시 후속.
+- 정확 hybrid top-K(현재는 bounded candidate approximation, §5.2) — 코퍼스가 커져 절단 오차가 체감되면 cand_k 상향 또는 정확 융합 전략 도입.
 - 차원 다른 임베딩 모델 마이그레이션(새 컬럼/테이블) — §2.3.
 - reconciler 주기 자동화(현재 수동 엔드포인트 우선).
 - 저장 검색·렌즈(Phase 3)가 이 검색 인프라를 재사용한다(concept §5.5).
