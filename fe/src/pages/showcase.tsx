@@ -31,6 +31,8 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { Toaster } from "@/shared/ui/toaster";
 import { toast } from "@/shared/ui/use-toast";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
+import { SidebarItem } from "@/shared/ui/sidebar-item";
 
 function Plus() {
   return (
@@ -45,6 +47,23 @@ function Gear() {
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
       <circle cx="8" cy="8" r="2.2" />
       <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function HomeIcon() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2.5 7L8 2.5 13.5 7M4 6v7.5h8V6" />
+    </svg>
+  );
+}
+
+function MicIcon() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="6" y="1.5" width="4" height="8" rx="2" />
+      <path d="M3.5 7.5a4.5 4.5 0 009 0M8 12v2.5" />
     </svg>
   );
 }
@@ -334,6 +353,63 @@ export function ShowcasePage() {
           >
             정보 토스트
           </Button>
+        </Section>
+
+        <Section title="Navigation (Tabs · SidebarItem)">
+          <div className="flex w-full flex-col gap-6">
+            <Tabs defaultValue="transcript">
+              <TabsList>
+                <TabsTrigger value="transcript">전문</TabsTrigger>
+                <TabsTrigger value="summary">
+                  요약
+                  <span className="rounded-xs bg-[var(--gray-3)] px-[5px] py-px font-mono text-2xs text-[color:var(--text-faint)]">
+                    3
+                  </span>
+                </TabsTrigger>
+                <TabsTrigger value="actions">액션 아이템</TabsTrigger>
+              </TabsList>
+              <TabsContent value="transcript">전문 탭 내용입니다.</TabsContent>
+              <TabsContent value="summary">요약 탭 내용입니다.</TabsContent>
+              <TabsContent value="actions">
+                액션 아이템 탭 내용입니다.
+              </TabsContent>
+            </Tabs>
+
+            <Tabs defaultValue="all">
+              <TabsList variant="pill">
+                <TabsTrigger value="all">전체</TabsTrigger>
+                <TabsTrigger value="mine">내 회의</TabsTrigger>
+                <TabsTrigger value="shared">공유됨</TabsTrigger>
+              </TabsList>
+            </Tabs>
+
+            <nav
+              aria-label="사이드바 예시"
+              className="w-64 rounded-md border border-border bg-sidebar p-2"
+            >
+              <ul className="flex flex-col gap-0.5">
+                <li>
+                  <SidebarItem
+                    icon={<HomeIcon />}
+                    label="대시보드"
+                    active
+                    count={4}
+                  />
+                </li>
+                <li>
+                  <SidebarItem
+                    icon={<MicIcon />}
+                    label="주간 회의"
+                    sub="오늘 14:00 · 8명"
+                    meta="2h"
+                  />
+                </li>
+                <li>
+                  <SidebarItem icon={<Gear />} label="설정" />
+                </li>
+              </ul>
+            </nav>
+          </div>
         </Section>
       </div>
       <Toaster />
