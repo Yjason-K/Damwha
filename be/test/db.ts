@@ -12,7 +12,7 @@ export interface StartedTestDb {
 let container: StartedPostgreSqlContainer;
 
 export async function startTestDb(): Promise<StartedTestDb> {
-  container = await new PostgreSqlContainer('pgvector/pgvector:pg16').start();
+  container = await new PostgreSqlContainer('damwha/postgres-bigm:pg16').start();
   const url = container.getConnectionUri();
   process.env.DATABASE_URL = url; // AppModule / DatabaseService read this
   const pool = new Pool({ connectionString: url });

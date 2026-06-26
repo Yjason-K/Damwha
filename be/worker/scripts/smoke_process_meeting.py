@@ -72,7 +72,7 @@ def main() -> int:
     storage_root = Path(tempfile.mkdtemp(prefix="dw-smoke-"))
     storage = Storage(str(storage_root))
 
-    with PostgresContainer("pgvector/pgvector:pg16") as pg:
+    with PostgresContainer("damwha/postgres-bigm:pg16") as pg:
         url = pg.get_connection_url().replace("postgresql+psycopg2", "postgresql")
         # apply Plan 1 schema
         with psycopg.connect(url, autocommit=True) as mig:

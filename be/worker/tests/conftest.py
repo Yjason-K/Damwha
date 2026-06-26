@@ -20,7 +20,7 @@ def _run_migrations(url: str) -> None:
 
 @pytest.fixture(scope="session")
 def pg_url():
-    with PostgresContainer("pgvector/pgvector:pg16") as pg:
+    with PostgresContainer("damwha/postgres-bigm:pg16") as pg:
         url = pg.get_connection_url().replace("postgresql+psycopg2", "postgresql")
         _run_migrations(url)
         yield url
