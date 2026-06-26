@@ -248,7 +248,7 @@ def persist_index_meeting(
                 raise _Abort
             # (2) meeting stale guard: 더 새 reprocess가 pv를 올렸으면 discard
             mrow = conn.execute(
-                "SELECT processing_version FROM meeting WHERE id=%s", (meeting_id,)
+                "SELECT processing_version FROM meeting WHERE id=%s FOR UPDATE", (meeting_id,)
             ).fetchone()
             if mrow is None or mrow["processing_version"] != processing_version:
                 conn.execute(
