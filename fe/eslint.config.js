@@ -22,12 +22,21 @@ export default defineConfig([
       globals: globals.browser,
     },
     rules: {
-      // buttonVariants (shadcn/ui CVA pattern) is a non-primitive constant that
-      // co-locates with Button. allowConstantExport only covers Literal/Unary/
-      // Template/Binary, not CallExpression, so we explicitly allow this name.
+      // *Variants (shadcn/ui CVA pattern) are non-primitive constants co-located
+      // with their component. allowConstantExport only covers Literal/Unary/
+      // Template/Binary, not CallExpression, so we list these names explicitly.
+      // Add new `<name>Variants` exports here as components are ported.
       "react-refresh/only-export-components": [
         "error",
-        { allowConstantExport: true, allowExportNames: ["buttonVariants"] },
+        {
+          allowConstantExport: true,
+          allowExportNames: [
+            "buttonVariants",
+            "badgeVariants",
+            "cardVariants",
+            "iconButtonVariants",
+          ],
+        },
       ],
     },
   },
