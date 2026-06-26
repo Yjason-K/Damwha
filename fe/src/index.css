@@ -262,3 +262,17 @@
     text-rendering: optimizeLegibility;
   }
 }
+
+/* Honor prefers-reduced-motion: neutralize transitions/animations for users
+ * who opt out (Web Interface Guidelines). Loading state is still conveyed via
+ * aria-busy, so a stopped spinner remains accessible. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
