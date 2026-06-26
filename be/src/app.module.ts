@@ -5,6 +5,7 @@ import { StorageModule } from './storage/storage.module';
 import { JobsModule } from './jobs/jobs.module';
 import { MeetingsModule } from './meetings/meetings.module';
 import { SpeakersModule } from './speakers/speakers.module';
+import { SearchModule } from './search/search.module';
 import { HealthController } from './health/health.controller';
 
 @Module({
@@ -15,6 +16,7 @@ import { HealthController } from './health/health.controller';
     JobsModule,
     MeetingsModule,
     SpeakersModule,
+    SearchModule,
   ],
   controllers: [HealthController],
 })
