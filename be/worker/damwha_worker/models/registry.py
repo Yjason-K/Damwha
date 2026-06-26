@@ -34,3 +34,9 @@ def build_models(payload: dict, settings: Settings) -> Models:
         embedder=EcapaEmbedder(m["embedding"]["model"], device),
         transcriber=transcriber,
     )
+
+
+def build_text_embedder(settings: Settings):
+    from .bge_embed import BgeM3TextEmbedder
+
+    return BgeM3TextEmbedder(settings.search_embedding_model)
