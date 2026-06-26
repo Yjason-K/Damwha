@@ -1293,8 +1293,9 @@ Create `test/embed.client.spec.ts`:
 import { EmbedClient } from '../src/search/embed.client';
 
 describe('EmbedClient', () => {
-  const OLD = process.env;
-  afterEach(() => { process.env = { ...OLD }; });
+  const OLD = { ...process.env };
+  const OLD_FETCH = global.fetch;
+  afterEach(() => { process.env = { ...OLD }; global.fetch = OLD_FETCH; });
 
   it('rejects a non-loopback embed URL at construction', () => {
     process.env.EMBED_SERVICE_URL = 'http://10.0.0.5:8100';
@@ -1945,7 +1946,7 @@ git commit -m "feat(api): POST /search (hybrid/keyword/browse) + module wiring"
 
 ---
 
-## Task 13: API reindex + reconciler — POST /meetings/:id/reindex
+## Task 13: API reindex(단건) + reindex-missing(백필/reconciler) — POST /meetings/:id/reindex, POST /meetings/reindex-missing
 
 **Files:**
 - Modify: `src/meetings/meetings.repository.ts`
@@ -1956,11 +1957,12 @@ git commit -m "feat(api): POST /search (hybrid/keyword/browse) + module wiring"
 **Interfaces:**
 - Consumes: `buildIndexMeetingPayload` (Task 3), `JobsRepository.enqueue`, `loadEnv`.
 - Produces:
-  - `MeetingsRepository.findReindexableMeetingIds(exec, model, dim): Promise<string[]>` — done이고 in-flight index 잡 없고 색인 가능 utterance 중 임베딩 누락이 있는 회의.
-  - `MeetingsService.reindex(id): Promise<{ meeting_id; processing_version; job_id }>` — 해당 회의에 index_meeting 잡 enqueue.
-  - `POST /meetings/:id/reindex` (202).
+  - `MeetingsRepository.findReindexableMeetingIds(exec, model, dim): Promise<{ id: string; processing_version: number }[]>` — done이고 in-flight index 잡 없고 색인 가능(ok+text) utterance 중 임베딩 누락이 있는 회의(부분 색인 포함). reconciler 쿼리(spec §4.2).
+  - `MeetingsService.reindex(id): Promise<{ meeting_id; processing_version; job_id }>` — 단건 강제 재색인.
+  - `MeetingsService.reindexMissing(): Promise<{ enqueued: number; job_ids: string[] }>` — reconciler가 찾은 모든 회의에 index 잡 enqueue(백필).
+  - `POST /meetings/:id/reindex` (202), `POST /meetings/reindex-missing` (202).
 
-- [ ] **Step 1: 실패 e2e 테스트 작성**
+- [ ] **Step 1: 실패 e2e 테스트 작성 (단건 + reconciler 탐지)**
 
 In `test/meetings.e2e-spec.ts`, add:
 ```typescript
@@ -1982,20 +1984,53 @@ In `test/meetings.e2e-spec.ts`, add:
     const res = await request(srv()).post('/meetings/99999999-9999-9999-9999-999999999999/reindex');
     expect(res.status).toBe(404);
   });
+
+  it('POST /meetings/reindex-missing enqueues only meetings with a missing-embedding indexable utterance', async () => {
+    const zeros = '[' + Array(1024).fill(0).join(',') + ']';
+    const mk = async () =>
+      (await db.pool.query(`INSERT INTO meeting(audio_key,status,processing_version) VALUES('k','done',0) RETURNING id`)).rows[0].id;
+    const utt = async (m: string, text: string | null, status: string) =>
+      (await db.pool.query(
+        `INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,text,status,order_index,processing_version)
+         VALUES($1,'S',0,1,$2,$3,0,0) RETURNING id`, [m, text, status],
+      )).rows[0].id;
+
+    // A: ok+text utterance, no embedding → MUST enqueue
+    const a = await mk(); await utt(a, '안녕', 'ok');
+    // B: ok+text utterance WITH current-model embedding → fully indexed, skip
+    const b = await mk(); const ub = await utt(b, 'hi', 'ok');
+    await db.pool.query(`INSERT INTO utterance_embedding(utterance_id,embedding,model,dimension,processing_version) VALUES($1,$2::vector,'BAAI/bge-m3',1024,0)`, [ub, zeros]);
+    // C: only silence/text-NULL utterance → no indexable target, skip (무한루프 방지)
+    const c = await mk(); await utt(c, null, 'silence');
+    // D: missing embedding BUT in-flight index job exists → skip
+    const d = await mk(); await utt(d, 'x', 'ok');
+    await db.pool.query(`INSERT INTO job(type,meeting_id,payload,status) VALUES('index_meeting',$1,'{}'::jsonb,'queued')`, [d]);
+
+    const res = await request(srv()).post('/meetings/reindex-missing');
+    expect(res.status).toBe(202);
+    expect(res.body.enqueued).toBe(1); // only A
+
+    const enq = (await db.pool.query(
+      `SELECT meeting_id FROM job WHERE type='index_meeting' AND meeting_id=ANY($1::uuid[])`, [[a, b, c]],
+    )).rows.map((r: any) => r.meeting_id);
+    expect(enq).toEqual([a]); // A enqueued; B/C not
+  });
 ```
 
 - [ ] **Step 2: 실행 — 실패 확인**
 
 Run: `npx jest test/meetings.e2e-spec.ts -t reindex`
-Expected: FAIL (라우트 없음 → 404 on the enqueue test).
+Expected: FAIL (라우트 없음 → 404).
 
-- [ ] **Step 3: repository에 reconciler 쿼리 추가**
+- [ ] **Step 3: repository에 reconciler 쿼리 추가 (id + processing_version 반환)**
 
 In `src/meetings/meetings.repository.ts`, add method:
 ```typescript
-  async findReindexableMeetingIds(exec: Queryable, model: string, dim: number): Promise<string[]> {
-    const { rows } = await exec.query<{ id: string }>(
-      `SELECT m.id FROM meeting m
+  async findReindexableMeetingIds(
+    exec: Queryable, model: string, dim: number,
+  ): Promise<{ id: string; processing_version: number }[]> {
+    const { rows } = await exec.query<{ id: string; processing_version: number }>(
+      `SELECT m.id, m.processing_version FROM meeting m
        WHERE m.status='done'
          AND NOT EXISTS (
            SELECT 1 FROM job j WHERE j.meeting_id=m.id AND j.type='index_meeting'
@@ -2008,18 +2043,19 @@ In `src/meetings/meetings.repository.ts`, add method:
                WHERE e.utterance_id=u.id AND e.model=$1 AND e.dimension=$2))`,
       [model, dim],
     );
-    return rows.map((r) => r.id);
+    return rows;
   }
 ```
 (`Queryable`는 파일 상단에서 이미 import; 없으면 `import { Queryable } from '../jobs/jobs.types';` 추가.)
 
-- [ ] **Step 4: service에 reindex 추가**
+- [ ] **Step 4: service에 reindex + reindexMissing 추가**
 
-In `src/meetings/meetings.service.ts`, add import + method. Import:
+In `src/meetings/meetings.service.ts`, add imports:
 ```typescript
 import { buildIndexMeetingPayload } from '../contracts/job-payload.schema';
+import { loadEnv } from '../config/env';
 ```
-Method:
+Methods:
 ```typescript
   async reindex(id: string) {
     const meeting = await this.meetings.findById(this.db.pool, id);
@@ -2032,12 +2068,32 @@ Method:
       return { meeting_id: id, processing_version: meeting.processing_version, job_id: job.id };
     });
   }
+
+  async reindexMissing() {
+    const env = loadEnv();
+    const targets = await this.meetings.findReindexableMeetingIds(
+      this.db.pool, env.SEARCH_EMBEDDING_MODEL, env.SEARCH_EMBEDDING_DIM,
+    );
+    return this.db.withTransaction(async (c) => {
+      const jobIds: string[] = [];
+      for (const t of targets) {
+        const payload = buildIndexMeetingPayload({ meetingId: t.id, processingVersion: t.processing_version });
+        const job = await this.jobs.enqueue(c, { type: 'index_meeting', meetingId: t.id, payload });
+        jobIds.push(job.id);
+      }
+      return { enqueued: jobIds.length, job_ids: jobIds };
+    });
+  }
 ```
 
 - [ ] **Step 5: controller에 라우트 추가**
 
-In `src/meetings/meetings.controller.ts`, add (after `reprocess`):
+In `src/meetings/meetings.controller.ts`, add (after `reprocess`). **리터럴 라우트를 파라미터 라우트보다 먼저** 선언한다:
 ```typescript
+  @Post('reindex-missing')
+  @HttpCode(202)
+  reindexMissing() { return this.service.reindexMissing(); }
+
   @Post(':id/reindex')
   @HttpCode(202)
   reindex(@Param('id', ParseUUIDPipe) id: string) { return this.service.reindex(id); }
@@ -2046,13 +2102,13 @@ In `src/meetings/meetings.controller.ts`, add (after `reprocess`):
 - [ ] **Step 6: 실행 — 통과 확인**
 
 Run: `npx jest test/meetings.e2e-spec.ts -t reindex`
-Expected: PASS (2 tests).
+Expected: PASS (3 tests — 단건 enqueue, 404, reconciler 탐지).
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add src/meetings/meetings.repository.ts src/meetings/meetings.service.ts src/meetings/meetings.controller.ts test/meetings.e2e-spec.ts
-git commit -m "feat(api): POST /meetings/:id/reindex + reconciler query"
+git commit -m "feat(api): reindex (single) + reindex-missing (reconciler backfill) + tests"
 ```
 
 ---
@@ -2092,7 +2148,7 @@ EMBED_SERVICE_PORT=8100
 
 - [ ] **Step 3: SMOKE.md에 embed 서비스 + 인덱싱 실행 순서 추가**
 
-In `worker/SMOKE.md`, add a section documenting: ① 커스텀 PG 이미지(`damwha/postgres-bigm:pg16`) 빌드, ② `uv sync --extra models`, ③ embed 서비스 기동(`uv run uvicorn damwha_worker.embed_service:app --host 127.0.0.1 --port 8100`), ④ 기동 순서(Postgres → embed 서비스 health → API → 워커), ⑤ bge-m3 첫 로드 지연. (Task 9 Step 6 명령 재사용.)
+In `worker/SMOKE.md`, add a section documenting: ① 커스텀 PG 이미지(`damwha/postgres-bigm:pg16`) 빌드, ② `uv sync --extra models`, ③ embed 서비스 기동(`uv run uvicorn damwha_worker.embed_service:app --host 127.0.0.1 --port 8100`), ④ 기동 순서(Postgres → embed 서비스 health → API → 워커), ⑤ bge-m3 첫 로드 지연. (Task 8 Step 6 명령 재사용.)
 
 - [ ] **Step 4: CLAUDE.md 워커 섹션 보강**
 
