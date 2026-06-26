@@ -18,6 +18,19 @@ import {
 } from "@/shared/ui/select";
 import { Switch } from "@/shared/ui/switch";
 import { Tag } from "@/shared/ui/tag";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/shared/ui/dialog";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
+import { Toaster } from "@/shared/ui/toaster";
+import { toast } from "@/shared/ui/use-toast";
 
 function Plus() {
   return (
@@ -251,7 +264,79 @@ export function ShowcasePage() {
             <Switch label="비활성" disabled />
           </div>
         </Section>
+
+        <Section title="Feedback (Dialog · Tooltip · Toast)">
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button variant="secondary">다이얼로그 열기</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>회의를 삭제할까요?</DialogTitle>
+                <DialogDescription>
+                  이 작업은 되돌릴 수 없습니다. 회의록과 인사이트가 영구
+                  삭제됩니다.
+                </DialogDescription>
+              </DialogHeader>
+              <p className="text-sm text-[color:var(--text-secondary)]">
+                삭제 전 내보내기를 권장합니다.
+              </p>
+              <DialogFooter>
+                <DialogClose asChild>
+                  <Button variant="ghost">취소</Button>
+                </DialogClose>
+                <Button variant="danger">삭제</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="secondary">호버 / 포커스</Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              명령 팔레트 열기
+              <span className="font-mono text-2xs text-[color:var(--gray-7)]">
+                ⌘K
+              </span>
+            </TooltipContent>
+          </Tooltip>
+
+          <Button
+            onClick={() =>
+              toast({
+                title: "저장되었습니다",
+                description: "변경사항이 반영되었습니다.",
+                variant: "success",
+              })
+            }
+          >
+            성공 토스트
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() =>
+              toast({
+                title: "업로드 실패",
+                description: "네트워크를 확인해주세요.",
+                variant: "error",
+                action: { label: "재시도", onClick: () => {} },
+              })
+            }
+          >
+            에러 토스트
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() =>
+              toast({ title: "새 회의가 시작되었습니다", variant: "info" })
+            }
+          >
+            정보 토스트
+          </Button>
+        </Section>
       </div>
+      <Toaster />
     </main>
   );
 }
