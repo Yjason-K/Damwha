@@ -1089,8 +1089,19 @@ class RaisingTextEmbedder:
         raise WorkerError("model_load_failed", "boom", self._kind, stage="embed")
 
 
+def _index_payload(mid):
+    # handle_job이 dispatch 전에 parse_payload로 검증하므로 유효 payload가 필수다
+    # (기본 {} → IndexMeetingPayload 검증 실패 → 의도한 경로 전에 TRANSIENT로 터짐).
+    return {
+        "schema_version": 1,
+        "meeting_id": str(mid),
+        "processing_version": 0,
+        "search_embedding": {"model": "BAAI/bge-m3", "dimension": 1024},
+    }
+
+
 def _claimed_index_job(conn, mid):
-    jid = seed_job(conn, type="index_meeting", meeting_id=mid)
+    jid = seed_job(conn, type="index_meeting", meeting_id=mid, payload=_index_payload(mid))
     db.claim(conn, "w1")
     return conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone()
 
@@ -1138,7 +1149,7 @@ def test_run_once_handles_index_job(conn, tmp_path):
         "VALUES (%s,'SPEAKER_00',0,1000,'안녕','ok',0,0)",
         (mid,),
     )
-    seed_job(conn, type="index_meeting", meeting_id=mid)
+    seed_job(conn, type="index_meeting", meeting_id=mid, payload=_index_payload(mid))
     out = run_once(conn, "w1", None, Storage(str(tmp_path)), text_embedder=FakeTextEmbedder())
     assert out == "committed"
     assert conn.execute("SELECT count(*) c FROM utterance_embedding", ()).fetchone()["c"] == 1
