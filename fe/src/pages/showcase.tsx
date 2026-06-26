@@ -33,6 +33,10 @@ import { Toaster } from "@/shared/ui/toaster";
 import { toast } from "@/shared/ui/use-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import { SidebarItem } from "@/shared/ui/sidebar-item";
+import { Utterance } from "@/shared/ui/utterance";
+import { SpeakerTrack } from "@/shared/ui/speaker-track";
+import { LensItem } from "@/shared/ui/lens-item";
+import { CommandBar, type CommandGroup } from "@/shared/ui/command-bar";
 
 function Plus() {
   return (
@@ -98,6 +102,49 @@ const SPEAKERS = [
 
 export function ShowcasePage() {
   const [removed, setRemoved] = React.useState<number[]>([]);
+  const [cmdOpen, setCmdOpen] = React.useState(false);
+  const [cmdQuery, setCmdQuery] = React.useState("");
+  const [head, setHead] = React.useState(0.42);
+  const [done1, setDone1] = React.useState(true);
+  const [done2, setDone2] = React.useState(false);
+
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setCmdOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const cmdGroups: CommandGroup[] = [
+    {
+      label: "회의",
+      items: [
+        { id: "m1", icon: <MicIcon />, title: "주간 동기화", meta: "오늘 14:00 · 8명", trail: "⏎" },
+        { id: "m2", icon: <MicIcon />, title: "스프린트 리뷰", meta: "어제 · 6명" },
+      ],
+    },
+    {
+      label: "바로가기",
+      items: [
+        { id: "s1", icon: <HomeIcon />, title: "대시보드로 이동" },
+        { id: "s2", icon: <Gear />, title: "설정 열기", trail: "⌘," },
+      ],
+    },
+  ];
+  const cmdFiltered = cmdQuery.trim()
+    ? cmdGroups
+        .map((g) => ({
+          ...g,
+          items: g.items.filter((it) =>
+            String(it.title).includes(cmdQuery.trim()),
+          ),
+        }))
+        .filter((g) => g.items.length > 0)
+    : cmdGroups;
 
   return (
     <main className="min-h-screen bg-background px-8 py-10 text-foreground">
@@ -411,7 +458,113 @@ export function ShowcasePage() {
             </nav>
           </div>
         </Section>
+
+        <Section title="Meeting (CommandBar · Utterance · SpeakerTrack · LensItem)">
+          <div className="flex w-full flex-col gap-6">
+            <Button
+              variant="secondary"
+              iconRight={<Kbd>⌘K</Kbd>}
+              onClick={() => setCmdOpen(true)}
+            >
+              명령 팔레트 열기
+            </Button>
+
+            <div className="flex flex-col rounded-md border border-border bg-card p-2">
+              <Utterance speaker={1} name="김지훈" time="04:12" onJump={() => {}}>
+                이번 스프린트 목표는 검색 품질 개선입니다.
+              </Utterance>
+              <Utterance
+                speaker={2}
+                name="이서연"
+                time="04:30"
+                active
+                onJump={() => {}}
+              >
+                인덱싱 파이프라인부터 정리하면 좋겠어요.
+              </Utterance>
+              <Utterance
+                speaker={3}
+                name="박도윤"
+                time="05:02"
+                quoted
+                onBookmark={() => {}}
+              >
+                예산은 다음 주에 다시 확인이 필요합니다.
+              </Utterance>
+            </div>
+
+            <div className="rounded-md border border-border bg-card p-3">
+              <SpeakerTrack
+                speaker={1}
+                name="김지훈"
+                duration="12:40"
+                playhead={head}
+                onSeek={setHead}
+                segments={[
+                  { start: 0, end: 0.18 },
+                  { start: 0.3, end: 0.52 },
+                  { start: 0.72, end: 0.8, soft: true },
+                ]}
+              />
+              <SpeakerTrack
+                speaker={2}
+                name="이서연"
+                duration="08:05"
+                playhead={head}
+                onSeek={setHead}
+                segments={[
+                  { start: 0.2, end: 0.32 },
+                  { start: 0.55, end: 0.7 },
+                ]}
+              />
+              <SpeakerTrack
+                speaker={3}
+                name="박도윤"
+                duration="03:22"
+                playhead={head}
+                onSeek={setHead}
+                segments={[{ start: 0.82, end: 0.95 }]}
+              />
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <LensItem source="ai" evidence="04:12" onJump={() => {}}>
+                다음 스프린트 범위를 금요일까지 확정한다.
+              </LensItem>
+              <LensItem
+                source="user"
+                checkable
+                done={done1}
+                onToggle={() => setDone1((v) => !v)}
+                assignee="이서연"
+                assigneeSpeaker={2}
+              >
+                회의록 공유하기
+              </LensItem>
+              <LensItem
+                source="hint"
+                checkable
+                done={done2}
+                onToggle={() => setDone2((v) => !v)}
+                assignee="박도윤"
+                assigneeSpeaker={3}
+                evidence="08:30"
+                onJump={() => {}}
+              >
+                예산 재확인 필요
+              </LensItem>
+            </div>
+          </div>
+        </Section>
       </div>
+      <CommandBar
+        open={cmdOpen}
+        onOpenChange={setCmdOpen}
+        query={cmdQuery}
+        onQueryChange={setCmdQuery}
+        groups={cmdFiltered}
+        onSelect={() => setCmdOpen(false)}
+      />
       <Toaster />
     </main>
   );
