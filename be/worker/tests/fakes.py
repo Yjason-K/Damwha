@@ -31,3 +31,12 @@ class FakeTranscriber:
 
     def transcribe(self, wav_path: str, language: str) -> list[Word]:
         return self._words
+
+
+class FakeTextEmbedder:
+    def __init__(self, vectors_by_text: dict[str, list[float]] | None = None, dim: int = 1024) -> None:
+        self._by_text = vectors_by_text or {}
+        self._dim = dim
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        return [self._by_text.get(t, [0.0] * self._dim) for t in texts]
