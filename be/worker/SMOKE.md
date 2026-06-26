@@ -72,3 +72,66 @@ and confirms `identify` matches it. Expect `[1] ENROLL: PASS` and
 6. Enrollment: `POST /speakers` with a sample → `uv run python -m damwha_worker`
    → `GET /speakers/:id` shows `enrollment_status=ready`. Re-process a meeting
    with that speaker present to see auto-identification.
+
+## Search indexing + embed service (Phase 2 addition)
+
+### One-time: build the custom Postgres image
+
+The search feature requires `pg_bigm` (Korean trigram FTS) alongside `pgvector`.
+Build the combined image once before running any integration tests or the full stack:
+
+```bash
+# from repo root
+docker build -t damwha/postgres-bigm:pg16 infra/postgres/
+```
+
+### Install search model deps
+
+bge-m3 is included in the `models` extra:
+
+```bash
+cd worker && uv sync --extra models
+```
+
+### Start the embed service
+
+The embed service exposes bge-m3 over HTTP (localhost RPC only):
+
+```bash
+cd worker
+uv run uvicorn damwha_worker.embed_service:app --host 127.0.0.1 --port 8100
+```
+
+First load downloads / warms the bge-m3 model — expect **30–90 s** on first
+start (subsequent starts use the local cache). Confirm it's ready:
+
+```bash
+curl -s http://127.0.0.1:8100/health | python3 -m json.tool
+```
+
+### Startup order (full stack)
+
+Start services in this order; each step must be healthy before the next:
+
+1. **Postgres** (`damwha/postgres-bigm:pg16`) + `npm run migrate`
+2. **Embed service** — wait for `/health` → `{"status":"ok"}`
+3. **NestJS API** — `npm run start:dev`
+4. **Python worker** — `uv run python -m damwha_worker`
+
+### Search smoke (Option B extended)
+
+After a meeting is processed (`status=done`), trigger search indexing:
+
+```bash
+# reindex all un-indexed meetings
+curl -s -X POST http://localhost:3000/meetings/reindex-missing | python3 -m json.tool
+
+# hybrid search (BM25 + dense RRF)
+curl -s 'http://localhost:3000/search' \
+  -H 'Content-Type: application/json' \
+  -d '{"q":"검색어","limit":10}' | python3 -m json.tool
+```
+
+`index_meeting` jobs are processed by the same worker poll loop. A failed index
+job marks only the job (not the meeting) as failed — the meeting remains `done`
+and searchable via BM25 alone until the dense index is rebuilt.
