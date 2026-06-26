@@ -37,3 +37,7 @@ class Embedder(Protocol):
 
 class Transcriber(Protocol):
     def transcribe(self, wav_path: str, language: str) -> list[Word]: ...
+
+
+class TextEmbedder(Protocol):
+    def embed_texts(self, texts: list[str]) -> list[list[float]]: ...
