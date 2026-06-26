@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     heartbeat_interval_seconds: float = 30.0
     stt_chunk_minutes: float = 25.0
     model_cache_dir: str | None = None
+    search_embedding_model: str = "BAAI/bge-m3"
+    search_embedding_dim: int = 1024
+    embed_service_host: str = "127.0.0.1"
+    embed_service_port: int = 8100
 
 
 def load_settings() -> Settings:

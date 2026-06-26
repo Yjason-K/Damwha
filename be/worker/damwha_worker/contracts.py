@@ -49,6 +49,18 @@ class EnrollSpeakerPayload(BaseModel):
     embedding: Embedding
 
 
+class SearchEmbedding(BaseModel):
+    model: str
+    dimension: int
+
+
+class IndexMeetingPayload(BaseModel):
+    schema_version: int = 1
+    meeting_id: str
+    processing_version: int
+    search_embedding: SearchEmbedding
+
+
 def parse_payload(job_type: str, data: dict):
     version = data.get("schema_version", 1)
     if version not in SUPPORTED_SCHEMA_VERSIONS:
@@ -59,4 +71,6 @@ def parse_payload(job_type: str, data: dict):
         return ProcessMeetingPayload.model_validate(data)
     if job_type == "enroll_speaker":
         return EnrollSpeakerPayload.model_validate(data)
+    if job_type == "index_meeting":
+        return IndexMeetingPayload.model_validate(data)
     raise ValueError(f"unknown job type {job_type}")
