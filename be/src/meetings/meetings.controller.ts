@@ -32,6 +32,14 @@ export class MeetingsController {
   @HttpCode(202)
   reprocess(@Param('id', ParseUUIDPipe) id: string) { return this.service.reprocess(id); }
 
+  @Post('reindex-missing')
+  @HttpCode(202)
+  reindexMissing() { return this.service.reindexMissing(); }
+
+  @Post(':id/reindex')
+  @HttpCode(202)
+  reindex(@Param('id', ParseUUIDPipe) id: string) { return this.service.reindex(id); }
+
   @Get(':id/audio')
   async audio(
     @Param('id', ParseUUIDPipe) id: string,

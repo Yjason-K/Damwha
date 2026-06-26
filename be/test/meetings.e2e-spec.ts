@@ -88,4 +88,54 @@ describe('meetings', () => {
     expect(job.rows[0].payload.processing_version).toBe(1);
     expect(job.rows[0].payload.reprocess).toBe(true);
   });
+
+  it('POST /meetings/:id/reindex enqueues an index_meeting job', async () => {
+    const created = await request(srv()).post('/meetings').attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+    const mid = created.body.id;
+    await db.pool.query(`UPDATE meeting SET status='done', processing_version=2 WHERE id=$1`, [mid]);
+    const res = await request(srv()).post(`/meetings/${mid}/reindex`);
+    expect(res.status).toBe(202);
+    const job = await db.pool.query(
+      `SELECT type, payload FROM job WHERE meeting_id=$1 AND type='index_meeting'`, [mid],
+    );
+    expect(job.rowCount).toBe(1);
+    expect(job.rows[0].payload.processing_version).toBe(2);
+    expect(job.rows[0].payload.search_embedding.model).toBe('BAAI/bge-m3');
+  });
+
+  it('POST /meetings/:id/reindex → 404 for unknown meeting', async () => {
+    const res = await request(srv()).post('/meetings/99999999-9999-9999-9999-999999999999/reindex');
+    expect(res.status).toBe(404);
+  });
+
+  it('POST /meetings/reindex-missing enqueues only meetings with a missing-embedding indexable utterance', async () => {
+    const zeros = '[' + Array(1024).fill(0).join(',') + ']';
+    const mk = async () =>
+      (await db.pool.query(`INSERT INTO meeting(audio_key,status,processing_version) VALUES('k','done',0) RETURNING id`)).rows[0].id;
+    const utt = async (m: string, text: string | null, status: string) =>
+      (await db.pool.query(
+        `INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,text,status,order_index,processing_version)
+         VALUES($1,'S',0,1,$2,$3,0,0) RETURNING id`, [m, text, status],
+      )).rows[0].id;
+
+    // A: ok+text utterance, no embedding → MUST enqueue
+    const a = await mk(); await utt(a, '안녕', 'ok');
+    // B: ok+text utterance WITH current-model embedding → fully indexed, skip
+    const b = await mk(); const ub = await utt(b, 'hi', 'ok');
+    await db.pool.query(`INSERT INTO utterance_embedding(utterance_id,embedding,model,dimension,processing_version) VALUES($1,$2::vector,'BAAI/bge-m3',1024,0)`, [ub, zeros]);
+    // C: only silence/text-NULL utterance → no indexable target, skip (무한루프 방지)
+    const c = await mk(); await utt(c, null, 'silence');
+    // D: missing embedding BUT in-flight index job exists → skip
+    const d = await mk(); await utt(d, 'x', 'ok');
+    await db.pool.query(`INSERT INTO job(type,meeting_id,payload,status) VALUES('index_meeting',$1,'{}'::jsonb,'queued')`, [d]);
+
+    const res = await request(srv()).post('/meetings/reindex-missing');
+    expect(res.status).toBe(202);
+    expect(res.body.enqueued).toBe(1); // only A
+
+    const enq = (await db.pool.query(
+      `SELECT meeting_id FROM job WHERE type='index_meeting' AND meeting_id=ANY($1::uuid[])`, [[a, b, c]],
+    )).rows.map((r: any) => r.meeting_id);
+    expect(enq).toEqual([a]); // A enqueued; B/C not
+  });
 });

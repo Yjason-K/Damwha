@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { DatabaseService } from '../database/database.service';
 import { StorageService } from '../storage/storage.service';
 import { JobsRepository } from '../jobs/jobs.repository';
-import { buildProcessMeetingPayload } from '../contracts/job-payload.schema';
+import { buildProcessMeetingPayload, buildIndexMeetingPayload } from '../contracts/job-payload.schema';
 import { MeetingsRepository } from './meetings.repository';
 import { loadEnv } from '../config/env';
 import * as crypto from 'crypto';
@@ -81,6 +81,34 @@ export class MeetingsService {
       const job = await this.jobs.enqueue(c, { type: 'process_meeting', meetingId: id, payload });
       await this.meetings.setCurrentJob(c, id, job.id);
       return { meeting_id: id, processing_version: version, job_id: job.id };
+    });
+  }
+
+  async reindex(id: string) {
+    const meeting = await this.meetings.findById(this.db.pool, id);
+    if (!meeting) throw new NotFoundException('meeting not found');
+    return this.db.withTransaction(async (c) => {
+      const payload = buildIndexMeetingPayload({
+        meetingId: id, processingVersion: meeting.processing_version,
+      });
+      const job = await this.jobs.enqueue(c, { type: 'index_meeting', meetingId: id, payload });
+      return { meeting_id: id, processing_version: meeting.processing_version, job_id: job.id };
+    });
+  }
+
+  async reindexMissing() {
+    const env = loadEnv();
+    const targets = await this.meetings.findReindexableMeetingIds(
+      this.db.pool, env.SEARCH_EMBEDDING_MODEL, env.SEARCH_EMBEDDING_DIM,
+    );
+    return this.db.withTransaction(async (c) => {
+      const jobIds: string[] = [];
+      for (const t of targets) {
+        const payload = buildIndexMeetingPayload({ meetingId: t.id, processingVersion: t.processing_version });
+        const job = await this.jobs.enqueue(c, { type: 'index_meeting', meetingId: t.id, payload });
+        jobIds.push(job.id);
+      }
+      return { enqueued: jobIds.length, job_ids: jobIds };
     });
   }
 

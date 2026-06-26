@@ -91,4 +91,24 @@ export class MeetingsRepository {
       [clusterId, speakerId, model, dimension],
     );
   }
+
+  async findReindexableMeetingIds(
+    exec: Queryable, model: string, dim: number,
+  ): Promise<{ id: string; processing_version: number }[]> {
+    const { rows } = await exec.query<{ id: string; processing_version: number }>(
+      `SELECT m.id, m.processing_version FROM meeting m
+       WHERE m.status='done'
+         AND NOT EXISTS (
+           SELECT 1 FROM job j WHERE j.meeting_id=m.id AND j.type='index_meeting'
+             AND j.status IN ('queued','running'))
+         AND EXISTS (
+           SELECT 1 FROM utterance u
+           WHERE u.meeting_id=m.id AND u.status='ok' AND u.text IS NOT NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM utterance_embedding e
+               WHERE e.utterance_id=u.id AND e.model=$1 AND e.dimension=$2))`,
+      [model, dim],
+    );
+    return rows;
+  }
 }
