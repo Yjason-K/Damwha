@@ -159,6 +159,8 @@ WHERE m.status='done'
 
 ### 4.3 인덱싱 실행 + 2-가드 (P2e)
 
+**dispatch 분기 (필수 변경)**: 현재 워커 `main()`은 claim한 **모든** 잡에 대해 `build_models(job["payload"], settings)`를 호출하고(`__main__.py:76`), `build_models`는 `payload["models"]`에서 whisper/pyannote/ECAPA를 빌드한다(`registry.py:19`). `index_meeting` payload엔 `models`가 없어 **핸들러 진입 전 `KeyError`**가 난다. 따라서 dispatch를 **`build_models()` 이전에 job type으로 분기**하고, `index_meeting`은 **bge-m3 search embedder만** 빌드해야 한다(Phase 1 모델을 불필요하게 로드하지 않음 → RAM 절약). 플랜에서 이 분기를 명시한다.
+
 워커가 `index_meeting`을 claim → 폴 프로세스가 bge-m3 직접 로드 → 대상 utterance 임베딩 → **한 짧은 TX에서 2-가드 적용** (persist의 2-가드 구조 미러):
 
 ```
@@ -197,15 +199,14 @@ COMMIT
     "speakerIds": ["<uuid>"],            // optional, utterance.speaker_id
     "meetingIds": ["<uuid>"]             // optional
   },
-  "limit": 20,                      // 기본 20, 최대 100
-  "offset": 0
+  "limit": 20                       // 기본 20, 최대 100. offset 없음(top-K) — §5.4
 }
 
 // 응답
 {
   "mode": "hybrid",                 // "hybrid" | "keyword"(의미 degrade) | "browse"
   "semantic": true,                 // embed 서비스 불가 시 false
-  "hasMore": true,                  // results.length == limit
+  "hasMore": true,                  // limit+1 페치 후 초과분 존재 여부 — §5.4
   "results": [{
     "utteranceId", "meetingId", "meetingTitle", "recordedAt",
     "speaker": { "id", "name" } | null,
@@ -215,7 +216,7 @@ COMMIT
 ```
 
 - 점프용 좌표(회의·타임스탬프)만 반환. **앞뒤 맥락**은 기존 `GET /meetings/:id` 상세에서 로드(검색 응답 경량 유지).
-- 정확 total은 비용상 v1 제외 — `hasMore`로 대체.
+- 정확 total은 비용상 v1 제외 — `hasMore`로 대체. 페이지네이션은 §5.4.
 
 ### 5.2 하이브리드 SQL (q 있을 때) — 2-arm + RRF
 
@@ -259,17 +260,25 @@ JOIN utterance u ON u.id = f.utterance_id
 JOIN meeting m ON m.id = u.meeting_id
 LEFT JOIN speaker s ON s.id = u.speaker_id
 ORDER BY f.score DESC, u.meeting_id, u.order_index
-LIMIT :limit OFFSET :offset;
+LIMIT :limit + 1;          -- limit+1 페치 → hasMore 판정 (§5.4)
 ```
 
-- `:rrf_k` 기본 60(표준), `:cand_k`(암별 후보 수) 기본 50 — env로 노출.
+- `:rrf_k` 기본 60(표준). `:cand_k`(암별 후보 수) = `max(SEARCH_CANDIDATE_K(기본 50), :limit + 1)` — 각 암이 최종 윈도우를 덮도록 보장(§5.4). env로 노출.
 - 필터는 **양 암에 동일 적용**(AND). 점수 정규화 불필요(RRF는 순위 기반).
 - 의미 암은 `status='ok'`만 임베딩되므로 자연 정합. 키워드 암은 `status='ok' AND text IS NOT NULL` 명시(P3).
 
 ### 5.3 browse / degrade 분기
 
-- **q 비었음(browse)**: kw/sem 생략. `utterance WHERE status='ok' AND text IS NOT NULL` + 필터, `ORDER BY recorded_at DESC, order_index`. `mode='browse'`.
+- **q 비었음(browse)**: kw/sem 생략. `utterance u JOIN meeting m` WHERE `u.status='ok' AND u.text IS NOT NULL` + 필터, `ORDER BY m.recorded_at DESC NULLS LAST, m.created_at DESC, u.order_index`. `mode='browse'`. (`meeting.recorded_at`는 nullable(`001_init.sql:33`)이라 `NULLS LAST`로 미상정 회의가 최신 위로 떠오르지 않게 한다.)
 - **embed 서비스 불가(degrade)**: sem 암 생략, kw 암만. `mode='keyword'`, `semantic=false`.
+
+### 5.4 페이지네이션 — top-K (offset 없음)
+
+하이브리드 RRF는 **후보 풀 크기에 따라 점수·순위가 흔들리므로** 안정적 deep offset이 불가능하다. 각 암이 `:cand_k`로 잘리는데, offset이 융합 풀(최대 ~2·cand_k)을 넘어서면 빈/불완전 페이지가 나온다(특히 키워드 degrade 모드). 따라서 **offset을 두지 않고 top-K만 제공**한다:
+
+- 요청은 `limit`만(기본 20, 최대 100). `cand_k = max(SEARCH_CANDIDATE_K, limit+1)`로 각 암이 윈도우를 덮게 한다.
+- 융합 후 `LIMIT :limit + 1`로 페치 → 앞 `limit`개만 반환, `hasMore = (페치 수 > limit)`. 정확한 마지막 페이지에서도 false positive 없음.
+- "더 보기"는 `limit` 상향(+ cand_k 동반 상승) 또는 **필터 좁히기**로 한다. 브라우즈 우선 셸(concept §6)과도 정합 — deep pagination 대신 필터로 좁힌다.
 
 ---
 
@@ -286,6 +295,7 @@ LIMIT :limit OFFSET :offset;
 ### 6.2 API 측 계약 (`embed.client.ts`)
 
 - env: `EMBED_SERVICE_URL`(기본 `http://127.0.0.1:<port>`), `EMBED_SERVICE_TIMEOUT_MS`(기본 800).
+- **loopback 강제(로컬 온리 보증)**: API 기동 시 `EMBED_SERVICE_URL` 호스트가 loopback(`127.0.0.1`/`::1`/`localhost`)인지 검증하고, 아니면 **기동 거부**한다. 의도적 비-loopback이 필요하면 명시적 override(`EMBED_SERVICE_ALLOW_NON_LOOPBACK=true`)를 요구한다. concept의 "외부 네트워크 호출 금지"(§0)를 문서가 아니라 코드로 강제.
 - **timeout/연결실패/non-200/미기동** → 예외를 삼키고 `null` 반환 → search.service가 **키워드 전용으로 degrade**(`mode='keyword'`, `semantic=false`) + 경고 로그. **검색 요청 자체는 실패시키지 않는다.**
 - 차원 불일치(응답 dimension ≠ `SEARCH_EMBEDDING_DIM`) → degrade + 에러 로그(설정 드리프트 신호).
 
