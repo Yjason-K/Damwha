@@ -30,8 +30,16 @@ export const EnrollSpeakerPayloadSchema = z.object({
   embedding: z.object({ model: z.string(), dimension: z.number().int() }),
 });
 
+export const IndexMeetingPayloadSchema = z.object({
+  schema_version: z.literal(1).default(1),
+  meeting_id: z.string().uuid(),
+  processing_version: z.number().int().nonnegative(),
+  search_embedding: z.object({ model: z.string(), dimension: z.number().int() }),
+});
+
 export type ProcessMeetingPayload = z.infer<typeof ProcessMeetingPayloadSchema>;
 export type EnrollSpeakerPayload = z.infer<typeof EnrollSpeakerPayloadSchema>;
+export type IndexMeetingPayload = z.infer<typeof IndexMeetingPayloadSchema>;
 
 export function buildProcessMeetingPayload(args: {
   meetingId: string; audioKey: string; processingVersion: number; reprocess: boolean;
@@ -63,5 +71,17 @@ export function buildEnrollSpeakerPayload(args: {
     speaker_id: args.speakerId,
     audio_key: args.audioKey,
     embedding: { model: env.EMBEDDING_MODEL, dimension: env.EMBEDDING_DIM },
+  };
+}
+
+export function buildIndexMeetingPayload(args: {
+  meetingId: string; processingVersion: number;
+}): IndexMeetingPayload {
+  const env = loadEnv();
+  return {
+    schema_version: 1,
+    meeting_id: args.meetingId,
+    processing_version: args.processingVersion,
+    search_embedding: { model: env.SEARCH_EMBEDDING_MODEL, dimension: env.SEARCH_EMBEDDING_DIM },
   };
 }

@@ -13,6 +13,8 @@ const EnvSchema = z.object({
   EMBEDDING_MODEL: z.string().default('speechbrain/spkrec-ecapa-voxceleb'),
   EMBEDDING_DIM: z.coerce.number().default(192),
   IDENTIFY_THRESHOLD: z.coerce.number().default(0.7),
+  SEARCH_EMBEDDING_MODEL: z.string().default('BAAI/bge-m3'),
+  SEARCH_EMBEDDING_DIM: z.coerce.number().default(1024),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

@@ -3,6 +3,7 @@ import * as path from 'path';
 import {
   ProcessMeetingPayloadSchema,
   EnrollSpeakerPayloadSchema,
+  IndexMeetingPayloadSchema,
 } from '../src/contracts/job-payload.schema';
 
 const dir = path.join(__dirname, 'fixtures', 'job-payloads');
@@ -17,5 +18,8 @@ describe('contract fixtures (shared with pydantic worker)', () => {
   });
   it('accepts process_meeting.no_version.json (defaults to 1)', () => {
     expect(ProcessMeetingPayloadSchema.parse(read('process_meeting.no_version.json')).schema_version).toBe(1);
+  });
+  it('validates index_meeting.valid.json', () => {
+    expect(() => IndexMeetingPayloadSchema.parse(read('index_meeting.valid.json'))).not.toThrow();
   });
 });

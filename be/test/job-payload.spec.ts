@@ -3,6 +3,8 @@ import {
   EnrollSpeakerPayloadSchema,
   buildProcessMeetingPayload,
   buildEnrollSpeakerPayload,
+  buildIndexMeetingPayload,
+  IndexMeetingPayloadSchema,
 } from '../src/contracts/job-payload.schema';
 
 describe('job payload contract', () => {
@@ -73,5 +75,18 @@ describe('job payload contract', () => {
       audioKey: 'speakers/y/sample.wav',
     });
     expect(p.schema_version).toBe(1);
+  });
+
+  it('builds + validates an index_meeting payload from ENV', () => {
+    process.env.SEARCH_EMBEDDING_MODEL = 'BAAI/bge-m3';
+    process.env.SEARCH_EMBEDDING_DIM = '1024';
+    const p = buildIndexMeetingPayload({
+      meetingId: '11111111-1111-1111-1111-111111111111',
+      processingVersion: 3,
+    });
+    expect(p.schema_version).toBe(1);
+    expect(p.processing_version).toBe(3);
+    expect(p.search_embedding).toEqual({ model: 'BAAI/bge-m3', dimension: 1024 });
+    expect(() => IndexMeetingPayloadSchema.parse(p)).not.toThrow();
   });
 });
