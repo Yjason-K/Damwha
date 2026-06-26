@@ -95,6 +95,7 @@ const DECISIONS = [
   { id: "d3", text: "데이터 보안: 로컬 보관, 내보내기 기본 비활성", ev: "12:47" },
 ];
 
+const TRACK_LABEL_W = 88;
 const TOTAL_SECONDS = 42 * 60;
 function fmt(fraction: number) {
   const s = Math.round(fraction * TOTAL_SECONDS);
@@ -342,7 +343,7 @@ export function MeetingPage() {
         >
           {playing ? <PauseIcon /> : <PlayIcon />}
         </IconButton>
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <div className="relative flex min-w-0 flex-1 flex-col gap-0.5">
           {TRACKS.map((tr) => (
             <SpeakerTrack
               key={tr.spk}
@@ -350,11 +351,29 @@ export function MeetingPage() {
               name={tr.name}
               duration={tr.dur}
               segments={tr.segments}
-              playhead={pos}
+              showPlayhead={false}
               onSeek={setPos}
-              labelWidth={88}
+              labelWidth={TRACK_LABEL_W}
             />
           ))}
+          {/* Single playhead spanning every lane. The wrapper is inset to the
+              lane column (label + 12px gap on the left, 44px duration + 12px
+              gap on the right) so it lines up with each track's segments. */}
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 z-10"
+            style={{
+              left: `calc(${TRACK_LABEL_W}px + 0.75rem)`,
+              right: "calc(44px + 0.75rem)",
+            }}
+          >
+            <div
+              className="absolute inset-y-0 w-0.5 -translate-x-1/2 rounded-[1px] bg-[var(--accent-solid)]"
+              style={{ left: `${pos * 100}%` }}
+            >
+              <span className="absolute -top-1 left-1/2 size-1.5 -translate-x-1/2 rounded-full bg-[var(--accent-solid)]" />
+            </div>
+          </div>
         </div>
         <span className="shrink-0 font-mono text-xs text-[color:var(--text-muted)]">
           {fmt(pos)} / {meeting.dur}

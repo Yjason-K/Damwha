@@ -25,6 +25,9 @@ type SpeakerTrackProps = Omit<React.ComponentProps<"div">, "onSeek"> & {
   segments?: Segment[];
   duration?: React.ReactNode;
   playhead?: number;
+  /** Draw this track's own playhead. Turn off when a parent renders a single
+   *  playhead across stacked tracks (e.g. a multi-speaker player bar). */
+  showPlayhead?: boolean;
   labelWidth?: number;
   onSeek?: (fraction: number) => void;
   onPlaySpeaker?: () => void;
@@ -37,6 +40,7 @@ function SpeakerTrack({
   segments = [],
   duration,
   playhead,
+  showPlayhead = true,
   labelWidth = 112,
   onSeek,
   onPlaySpeaker,
@@ -92,7 +96,7 @@ function SpeakerTrack({
             }}
           />
         ))}
-        {playhead != null && (
+        {showPlayhead && playhead != null && (
           <div
             className="absolute -top-1 -bottom-1 z-[2] w-0.5 rounded-[1px] bg-[var(--accent-solid)] before:absolute before:-top-[3px] before:-left-[2px] before:size-1.5 before:rounded-full before:bg-[var(--accent-solid)] before:content-['']"
             style={{ left: `${playhead * 100}%` }}
