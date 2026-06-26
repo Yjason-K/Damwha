@@ -9,7 +9,13 @@ import { IconButton } from "@/shared/ui/icon-button";
 import { Input } from "@/shared/ui/input";
 import { Kbd } from "@/shared/ui/kbd";
 import { SearchField } from "@/shared/ui/search-field";
-import { Select } from "@/shared/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/shared/ui/select";
 import { Switch } from "@/shared/ui/switch";
 import { Tag } from "@/shared/ui/tag";
 
@@ -209,20 +215,25 @@ export function ShowcasePage() {
             <div className="flex w-full flex-col gap-4">
               <SearchField />
               <SearchField asButton shortcut={<Kbd>⌘K</Kbd>} />
-              <Select
-                aria-label="회의 선택"
-                placeholder="회의 선택…"
-                options={["전체", "주간회의", "스프린트 리뷰"]}
-              />
-              <Select
-                aria-label="옵션 선택"
-                selectSize="sm"
-                defaultValue="b"
-                options={[
-                  { value: "a", label: "옵션 A" },
-                  { value: "b", label: "옵션 B" },
-                ]}
-              />
+              <Select>
+                <SelectTrigger aria-label="회의 선택">
+                  <SelectValue placeholder="회의 선택…" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="전체">전체</SelectItem>
+                  <SelectItem value="주간회의">주간회의</SelectItem>
+                  <SelectItem value="스프린트 리뷰">스프린트 리뷰</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select defaultValue="b">
+                <SelectTrigger size="sm" aria-label="옵션 선택">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="a">옵션 A</SelectItem>
+                  <SelectItem value="b">옵션 B</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </Section>
         </div>
