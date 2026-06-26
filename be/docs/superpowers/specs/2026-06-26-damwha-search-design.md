@@ -162,7 +162,14 @@ WHERE m.status='done'
 
 ### 4.3 인덱싱 실행 + 2-가드 (P2e)
 
-**dispatch 분기 (필수 변경)**: 현재 워커 `main()`은 claim한 **모든** 잡에 대해 `build_models(job["payload"], settings)`를 호출하고(`__main__.py:76`), `build_models`는 `payload["models"]`에서 whisper/pyannote/ECAPA를 빌드한다(`registry.py:19`). `index_meeting` payload엔 `models`가 없어 **핸들러 진입 전 `KeyError`**가 난다. 따라서 dispatch를 **`build_models()` 이전에 job type으로 분기**하고, `index_meeting`은 **bge-m3 search embedder만** 빌드해야 한다(Phase 1 모델을 불필요하게 로드하지 않음 → RAM 절약). 플랜에서 이 분기를 명시한다.
+**dispatch 분기 (필수 변경)**: 현재 워커 `main()`은 claim한 **모든** 잡에 대해 `build_models(job["payload"], settings)`를 호출하고(`__main__.py:76`), `build_models`는 `payload["models"]`에서 whisper/pyannote/ECAPA를 빌드한다(`registry.py:19`). `index_meeting` payload엔 `models`가 없어 **핸들러 진입 전 `KeyError`**가 난다. 따라서 dispatch를 **`build_models()` 이전에 job type으로 분기**하고, `index_meeting`은 **bge-m3 search embedder(TextEmbedder)만** 빌드해야 한다(Phase 1 모델을 불필요하게 로드하지 않음 → RAM 절약). 플랜에서 이 분기를 명시한다.
+
+**실패 경로 분기 (필수 변경)**: 현재 `handle_job` 예외 처리는 `enroll_speaker`가 아니면 **전부 `process_meeting` 분기로 폴스루**해 `fail_process_meeting(meeting_id, ...)` → `meeting.status='failed'`를 호출한다(`__main__.py:45-53`). `index_meeting`이 이 분기에 빠지면 **이미 `done`인 회의가 색인 실패로 오염**된다. 검색 색인 실패는 **job만** failed/requeued 되고 **meeting은 `done`으로 남아야** 한다. 따라서 `handle_job`에 `index_meeting` 전용 실패 분기를 추가한다:
+- TRANSIENT + 잔여 시도 → requeue(다른 타입과 공유).
+- 그 외(PERMANENT / 시도 소진) → **job만** failed (신규 `db.fail_job`: `job.status='failed'`+error). **meeting은 절대 건드리지 않는다.**
+- 영구 실패한 index 잡은 job error로 진단을 남기고, 임베딩 갭은 reconciler(§4.2)가 재enqueue로 복구한다(Phase 2는 수동).
+
+참고 — **크래시 경로(Nest reaper)는 이미 안전**하다: `reapStale`의 meeting 실패 전파는 `type='process_meeting'`, speaker는 `type='enroll_speaker'`로 스코프돼 있어(`jobs.repository.ts:88,94`) stale `index_meeting` 잡은 job-only로 fail되고 meeting을 건드리지 않는다. **reaper 변경 불필요.**
 
 워커가 `index_meeting`을 claim → 폴 프로세스가 bge-m3 직접 로드 → 대상 utterance 임베딩 → **한 짧은 TX에서 2-가드 적용** (persist의 2-가드 구조 미러):
 
@@ -323,7 +330,7 @@ class TextEmbedder(Protocol):
 | embed 서비스 timeout/다운 | 검색 = 키워드 전용 degrade, `semantic=false`, 경고 로그 (요청 성공) |
 | index_meeting 잡 가드 0 rows | lost ownership → 로컬 폐기 |
 | index_meeting meeting pv 불일치 | stale → 임베딩 안 씀, job done + reason='stale_pv' |
-| index_meeting 모델 로드/임베딩 실패 | ErrorKind 분류(PERMANENT/TRANSIENT), reaper/재시도 |
+| index_meeting 모델 로드/임베딩 실패 | ErrorKind 분류. TRANSIENT+잔여→requeue, 그 외→**job만 failed**(`db.fail_job`). **meeting은 `done` 유지**(`fail_process_meeting` 호출 금지). 복구는 reconciler 재enqueue. reaper는 type-scoped라 안전(§4.3) |
 | 'ok' utterance 0개 | no-op done |
 | reprocess로 utterance 교체 | 옛 임베딩 CASCADE 삭제 + 새 index 잡으로 재색인 |
 
@@ -333,7 +340,7 @@ class TextEmbedder(Protocol):
 
 - `src/search/` — controller(HTTP) / service(orchestration: embed 호출 → repo → 조립) / repository(하이브리드 SQL) / `embed.client.ts`(RPC + degrade). ML 없음.
 - `src/meetings/` — `POST /meetings/:id/reindex` 추가(reconciler 호출 + index 잡 enqueue).
-- `worker/` — `index_meeting` 핸들러(2-가드, persist 미러) + persist TX의 자동 enqueue + `embed_service.py`.
+- `worker/` — `index_meeting` 핸들러(2-가드, persist 미러) + persist TX의 자동 enqueue + `embed_service.py` + 신규 `TextEmbedder`/빌더 + `db.fail_job`(job-only 실패). `handle_job`은 dispatch·실패 경로를 type별로 분기(§4.3).
 - 검색 SQL·결과 소유권은 전부 API. bge-m3는 embed 서비스(쿼리)와 워커 폴 프로세스(인덱싱)에만 존재.
 
 ---
