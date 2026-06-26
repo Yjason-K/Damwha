@@ -82,7 +82,7 @@ Build the combined image once before running any integration tests or the full s
 
 ```bash
 # from repo root
-docker build -t damwha/postgres-bigm:pg16 infra/postgres/
+docker build -t damwha/postgres-bigm:pg16 docker/postgres-bigm/
 ```
 
 ### Install search model deps
