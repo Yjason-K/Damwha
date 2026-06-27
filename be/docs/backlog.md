@@ -19,3 +19,14 @@
 | S5 | P2 | L202 | `/search` 입력 검증 규칙 부재(예시·기본값만). 잘못된 날짜·UUID가 DB 오류로 전파 가능. | `limit` 정수 범위, ISO 날짜, UUID, 배열 최대 길이, `dateFrom < dateTo`, 검색어 최대 길이 검증 + 실패 시 400 명시. | 미확인 |
 
 다음 단계(이 백로그를 다룰 때): 먼저 `src/search/`(`search.repository.ts`, `search.service.ts`, `search.controller.ts`, `embed.client.ts`)와 `001`/`002` 마이그레이션을 읽어 각 항목의 실제 잔존 여부를 확정 → 유효 항목만 코드 수정 + 이 표 상태 갱신. 스펙 파일은 수정하지 않는다.
+
+---
+
+## 빌드 — 마이그레이션 복사 비멱등 (등록 2026-06-27)
+
+`package.json`의 `build`가 `cp -r src/database/migrations dist/database/migrations`를 쓰는데, `dist/`를 먼저 비우지 않아 **반복 빌드 시 비멱등**이다. `nest-cli.json`에 `compilerOptions.deleteOutDir`가 없어(`nest build` 기본 false) `dist/`가 청소되지 않는다.
+
+- **증상(로컬 증분 빌드):** 1차 빌드는 `dist/database/migrations/`에 정상 안착 → 새 마이그레이션 추가 후 청소 없이 재빌드하면 새 파일이 `dist/database/migrations/migrations/`(중첩)로 들어가고 최상위 사본은 stale → `npm start`의 migrate가 새 마이그레이션을 조용히 누락.
+- **영향 범위:** fresh-checkout CI/prod는 기존 `dist/`가 없어 무해. 영향은 특정 마이그레이션이 아니라 **모든 마이그레이션**(증분 로컬 빌드 한정).
+- **수정안:** `nest-cli.json`에 `"compilerOptions": { "deleteOutDir": true }` 추가, 또는 build 스크립트를 `rm -rf dist && nest build && cp -r ...`로. (즐겨찾기 003 작업에서 발견, 해당 기능과 무관한 선행 이슈 → 별도 처리.)
+- 상태: **미수정**
