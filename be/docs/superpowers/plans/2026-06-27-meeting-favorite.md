@@ -93,6 +93,12 @@ ALTER TABLE meeting ADD COLUMN is_favorite boolean NOT NULL DEFAULT false;
     expect((await request(srv()).put(`/meetings/${unknown}/favorite`)).status).toBe(404);
     expect((await request(srv()).delete(`/meetings/${unknown}/favorite`)).status).toBe(404);
   });
+
+  it('favorite PUT/DELETE → 400 for malformed UUID', async () => {
+    // spec §4 계약: ParseUUIDPipe → 잘못된 UUID 형식은 400
+    expect((await request(srv()).put('/meetings/not-a-uuid/favorite')).status).toBe(400);
+    expect((await request(srv()).delete('/meetings/not-a-uuid/favorite')).status).toBe(400);
+  });
 ```
 
 - [ ] **Step 3: 테스트 실행 → 실패 확인**
@@ -102,7 +108,7 @@ nvm use
 npx jest test/meetings.e2e-spec.ts -t "favorite"
 ```
 
-Expected: FAIL. PUT/DELETE 라우트가 없어 `put`/`del`이 `404`를 반환 → `expect(put.status).toBe(200)` 등에서 실패. (`created.body.is_favorite`는 마이그레이션 적용으로 이미 `false`라 통과하지만, PUT 단언에서 실패.)
+Expected: FAIL. PUT/DELETE 라우트가 없어 `put`/`del`이 `404`(route not found)를 반환 → `expect(put.status).toBe(200)` 등에서 실패. malformed-UUID 테스트도 라우트가 없어 `400`이 아닌 `404`를 받아 실패한다(라우트가 생겨야 ParseUUIDPipe가 동작). (`created.body.is_favorite`는 마이그레이션 적용으로 이미 `false`라 통과하지만, PUT 단언에서 실패.)
 
 - [ ] **Step 4: repository — `MeetingRow` 필드 + `setFavorite` 추가**
 
@@ -189,16 +195,20 @@ import {
 npx jest test/meetings.e2e-spec.ts -t "favorite"
 ```
 
-Expected: PASS (4개 테스트 모두 통과).
+Expected: PASS (즐겨찾기 테스트 5개 모두 통과).
 
-- [ ] **Step 8: 회귀 확인 — 전체 meetings 스위트 + 타입체크**
+- [ ] **Step 8: 회귀 + 배포 산출물 검증 — 전체 스위트 + 빌드**
 
 ```bash
-npx jest test/meetings.e2e-spec.ts
-npx tsc --noEmit -p tsconfig.build.json
+npm test           # 전체 스위트(--runInBand). 모든 마이그레이션을 적용하므로 003 적용 실패 시 여기서 드러남
+npm run build      # nest build(= tsconfig.build.json 컴파일) + 마이그레이션을 dist/database/migrations로 복사
 ```
 
-Expected: meetings 스위트 전부 PASS(기존 테스트는 `is_favorite` 추가에 영향 없음 — 특정 필드만 단언), 타입 에러 없음.
+Expected:
+- `npm test` 전부 PASS. 기존 테스트는 `is_favorite` 추가에 영향 없다 — 어떤 스위트도 meeting 행 전체를 `toEqual`/`toStrictEqual`로 단언하지 않고 필드/부분 일치(`toMatchObject`)만 쓰므로 컬럼 1개 추가는 회귀를 일으키지 않는다.
+- `npm run build` 무에러 종료. 이어서 `ls dist/database/migrations/003_meeting_favorite.sql`로 배포 산출물에 003이 복사됐는지 확인한다. `tsc --noEmit`만으로는 이 복사 단계를 검증할 수 없어 `npm run build`가 필요하다.
+
+> **커버리지 경계(명시):** 위 e2e는 *마이그레이션 적용 후 생성된* 회의의 `is_favorite` 기본값·노출·토글을 검증한다. *003 적용 이전부터 존재하던 행*의 backfill(`NOT NULL DEFAULT false`로 채워짐)은 별도 테스트하지 않는다 — 이는 Postgres가 보장하는 DDL 시맨틱이라 테스트하면 DB 엔진을 테스트하는 셈(YAGNI). 단순 DDL 한 줄이라 이 경계를 의도적으로 둔다.
 
 - [ ] **Step 9: 커밋**
 
