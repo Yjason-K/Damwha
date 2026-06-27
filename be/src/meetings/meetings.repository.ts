@@ -4,7 +4,7 @@ import { Queryable } from '../jobs/jobs.types';
 export interface MeetingRow {
   id: string; title: string | null; original_filename: string | null;
   audio_key: string; normalized_key: string | null; recorded_at: Date | null;
-  duration_ms: number | null; status: string; current_job_id: string | null;
+  duration_ms: number | null; status: string; is_favorite: boolean; current_job_id: string | null;
   processing_version: number; error: any; created_at: Date;
 }
 
@@ -20,6 +20,13 @@ export class MeetingsRepository {
       [args.title, args.originalFilename, args.audioKey, args.recordedAt],
     );
     return rows[0];
+  }
+  async setFavorite(exec: Queryable, id: string, value: boolean): Promise<MeetingRow | null> {
+    const { rows } = await exec.query<MeetingRow>(
+      `UPDATE meeting SET is_favorite=$2 WHERE id=$1 RETURNING *`,
+      [id, value],
+    );
+    return rows[0] ?? null;
   }
   async setCurrentJob(exec: Queryable, meetingId: string, jobId: string): Promise<MeetingRow> {
     const { rows } = await exec.query<MeetingRow>(

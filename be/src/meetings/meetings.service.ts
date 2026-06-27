@@ -3,7 +3,7 @@ import { DatabaseService } from '../database/database.service';
 import { StorageService } from '../storage/storage.service';
 import { JobsRepository } from '../jobs/jobs.repository';
 import { buildProcessMeetingPayload, buildIndexMeetingPayload } from '../contracts/job-payload.schema';
-import { MeetingsRepository } from './meetings.repository';
+import { MeetingsRepository, MeetingRow } from './meetings.repository';
 import { loadEnv } from '../config/env';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
@@ -50,6 +50,12 @@ export class MeetingsService {
       const updated = await this.meetings.setCurrentJob(c, meetingId, job.id);
       return updated;
     });
+  }
+
+  async setFavorite(id: string, value: boolean): Promise<MeetingRow> {
+    const updated = await this.meetings.setFavorite(this.db.pool, id, value);
+    if (!updated) throw new NotFoundException('meeting not found');
+    return updated;
   }
 
   async list() { return this.meetings.list(this.db.pool); }

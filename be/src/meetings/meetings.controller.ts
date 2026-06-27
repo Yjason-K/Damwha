@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Get, Headers, HttpCode, Param, ParseUUIDPipe, Post, Res, UploadedFile, UseInterceptors,
+  Body, Controller, Delete, Get, Headers, HttpCode, Param, ParseUUIDPipe, Post, Put, Res, UploadedFile, UseInterceptors,
 } from '@nestjs/common';
 import { ApiBody, ApiConsumes, ApiOperation, ApiParam, ApiProduces, ApiTags } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -45,6 +45,14 @@ export class MeetingsController {
   @Get(':id/status')
   @ApiOperation({ summary: '처리 상태 조회' })
   status(@Param('id', ParseUUIDPipe) id: string) { return this.service.getStatus(id); }
+
+  @Put(':id/favorite')
+  @ApiOperation({ summary: '즐겨찾기 설정' })
+  favorite(@Param('id', ParseUUIDPipe) id: string) { return this.service.setFavorite(id, true); }
+
+  @Delete(':id/favorite')
+  @ApiOperation({ summary: '즐겨찾기 해제' })
+  unfavorite(@Param('id', ParseUUIDPipe) id: string) { return this.service.setFavorite(id, false); }
 
   @Post(':id/reprocess')
   @ApiOperation({ summary: '재처리 (processing_version 증가 후 재큐잉)' })

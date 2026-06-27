@@ -108,6 +108,51 @@ describe('meetings', () => {
     expect(res.status).toBe(404);
   });
 
+  it('PUT /meetings/:id/favorite sets is_favorite, reflected in get + list', async () => {
+    const created = await request(srv()).post('/meetings').attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+    const mid = created.body.id;
+    expect(created.body.is_favorite).toBe(false); // 기본값 false
+
+    const put = await request(srv()).put(`/meetings/${mid}/favorite`);
+    expect(put.status).toBe(200);
+    expect(put.body.is_favorite).toBe(true);
+
+    expect((await request(srv()).get(`/meetings/${mid}`)).body.is_favorite).toBe(true);
+    const list = await request(srv()).get('/meetings');
+    expect(list.body.find((m: any) => m.id === mid).is_favorite).toBe(true);
+  });
+
+  it('DELETE /meetings/:id/favorite clears is_favorite', async () => {
+    const created = await request(srv()).post('/meetings').attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+    const mid = created.body.id;
+    await request(srv()).put(`/meetings/${mid}/favorite`);
+    const del = await request(srv()).delete(`/meetings/${mid}/favorite`);
+    expect(del.status).toBe(200);
+    expect(del.body.is_favorite).toBe(false);
+    expect((await request(srv()).get(`/meetings/${mid}`)).body.is_favorite).toBe(false);
+  });
+
+  it('favorite PUT/DELETE are idempotent', async () => {
+    const created = await request(srv()).post('/meetings').attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+    const mid = created.body.id;
+    expect((await request(srv()).put(`/meetings/${mid}/favorite`)).body.is_favorite).toBe(true);
+    expect((await request(srv()).put(`/meetings/${mid}/favorite`)).body.is_favorite).toBe(true); // PUT 2회
+    expect((await request(srv()).delete(`/meetings/${mid}/favorite`)).body.is_favorite).toBe(false);
+    expect((await request(srv()).delete(`/meetings/${mid}/favorite`)).body.is_favorite).toBe(false); // 미설정 DELETE
+  });
+
+  it('favorite PUT/DELETE → 404 for unknown meeting', async () => {
+    const unknown = '99999999-9999-9999-9999-999999999999';
+    expect((await request(srv()).put(`/meetings/${unknown}/favorite`)).status).toBe(404);
+    expect((await request(srv()).delete(`/meetings/${unknown}/favorite`)).status).toBe(404);
+  });
+
+  it('favorite PUT/DELETE → 400 for malformed UUID', async () => {
+    // spec §4 계약: ParseUUIDPipe → 잘못된 UUID 형식은 400
+    expect((await request(srv()).put('/meetings/not-a-uuid/favorite')).status).toBe(400);
+    expect((await request(srv()).delete('/meetings/not-a-uuid/favorite')).status).toBe(400);
+  });
+
   it('POST /meetings/reindex-missing enqueues only meetings with a missing-embedding indexable utterance', async () => {
     const zeros = '[' + Array(1024).fill(0).join(',') + ']';
     const mk = async () =>
