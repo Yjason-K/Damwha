@@ -1,0 +1,29 @@
+# Dev infra for Damwha backend. Brings up ONLY Postgres (pgvector + pg_bigm);
+# the API, ML worker, and embed service run on the host (see CLAUDE.md).
+# Migrations are NOT run here — apply them on the host with `npm run migrate`
+# so migrate.ts + the _migrations table stay the single source of truth.
+services:
+  postgres:
+    build:
+      context: ./docker/postgres-bigm
+    # Same tag test/db.ts (Testcontainers) and worker/SMOKE.md expect, so
+    # `docker compose build` doubles as the image build for those.
+    image: damwha/postgres-bigm:pg16
+    container_name: damwha-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: damwha
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d damwha"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:

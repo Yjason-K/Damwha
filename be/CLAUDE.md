@@ -54,8 +54,9 @@ Node **22** is required (`.nvmrc`, `engines`). Use `nvm use` first.
 npm install                              # once
 cp .env.example .env                     # configure DATABASE_URL, STORAGE_ROOT, model envs
 
+docker compose up -d                     # start Postgres (pgvector + pg_bigm); first run builds the image
 npm run migrate                          # apply SQL migrations (needs a running Postgres w/ pgvector)
-npm run start:dev                        # watch mode
+npm run start:dev                        # watch mode (Swagger UI at /docs, OpenAPI JSON at /docs-json)
 npm run build && npm start               # prod (build copies migrations into dist/)
 
 npm test                                 # full suite, serial

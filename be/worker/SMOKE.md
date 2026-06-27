@@ -85,6 +85,9 @@ Build the combined image once before running any integration tests or the full s
 docker build -t damwha/postgres-bigm:pg16 docker/postgres-bigm/
 ```
 
+Or just `docker compose up -d` from the repo root — the `postgres` service
+builds and tags the same `damwha/postgres-bigm:pg16` image and runs it.
+
 ### Install search model deps
 
 bge-m3 is included in the `models` extra:
