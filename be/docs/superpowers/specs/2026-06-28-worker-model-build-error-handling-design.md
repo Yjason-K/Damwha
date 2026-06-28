@@ -77,7 +77,7 @@ def handle_job(conn, job, storage, worker_id, *, build_models=None, build_text_e
 
 ### 2.2 `run_once` (`__main__.py`)
 
-빌더를 그대로 전달하도록 미러링 (positional `storage`는 현행 유지, keyword-only 인자만 `models`/`text_embedder` → `build_models`/`build_text_embedder`로 교체):
+`run_once`는 claim+처리를 한 번에 묶는 **테스트 편의 경로**다(heartbeat 없음). `main()`은 §2.3의 `dispatch_claimed_job`(heartbeat 포함)을 쓰므로 더 이상 `run_once`를 호출하지 않는다 — 다만 기존 테스트가 쓰므로 시그니처를 빌더 콜백에 맞춰 미러링한다 (positional `storage`는 현행 유지, keyword-only 인자만 `models`/`text_embedder` → `build_models`/`build_text_embedder`로 교체):
 ```python
 def run_once(conn, worker_id, storage, *, build_models=None, build_text_embedder=None, search_embedding=None) -> str | None:
     job = db.claim(conn, worker_id)
@@ -88,21 +88,51 @@ def run_once(conn, worker_id, storage, *, build_models=None, build_text_embedder
                       search_embedding=search_embedding)
 ```
 
-### 2.3 `main()` (`__main__.py`)
+### 2.3 `dispatch_claimed_job` 헬퍼 + `main()` (`__main__.py`)
 
-registry import는 지금처럼 `main()` 내부에 둬 heavy import를 테스트 스위트에서 격리한다(CLAUDE.md 불변식). if/else 분기를 합치고, 빌더를 람다로 감싸 `with Heartbeat(...)` **안에서** handle_job에 전달한다. 타입별로 해당 람다만 실제 호출되므로 불필요한 빌드는 일어나지 않는다.
+`main()`은 `# pragma: no cover`(실모델·무한루프)라 그 안의 **배선**(빌더를 미리 빌드하지 않고 콜백으로 넘기는가, 콜백이 heartbeat 진입 후 실행되는가)이 테스트되지 못한다. 그래서 "claim된 job 하나를 처리하는" 로직을 테스트 가능한 헬퍼 `dispatch_claimed_job`으로 분리하고, `main()`은 claim 루프만 남긴다.
 
 ```python
-from .heartbeat import Heartbeat
-from .models.registry import build_models as _build_models, build_text_embedder as _build_text_embedder
+def dispatch_claimed_job(conn, job, storage, settings, *,
+                         build_models_fn, build_text_embedder_fn, heartbeat_cm) -> str:
+    """claim된 job 1건: heartbeat 진입 → 콜백(지연 빌드)을 handle_job에 주입."""
+    with heartbeat_cm:
+        return handle_job(
+            conn, job, storage, settings.worker_id,
+            build_models=lambda: build_models_fn(job["payload"], settings),
+            build_text_embedder=lambda: build_text_embedder_fn(settings),
+            search_embedding=(settings.search_embedding_model, settings.search_embedding_dim),
+        )
+```
 
-with Heartbeat(*hb_args):
-    outcome = handle_job(
-        conn, job, storage, settings.worker_id,
-        build_models=lambda: _build_models(job["payload"], settings),
-        build_text_embedder=lambda: _build_text_embedder(settings),
-        search_embedding=(settings.search_embedding_model, settings.search_embedding_dim),
-    )
+- `build_models_fn`/`build_text_embedder_fn`은 registry 함수(실행 시 주입), `heartbeat_cm`은 `Heartbeat` 인스턴스(컨텍스트 매니저). 테스트는 fake 빌더 fn + spy CM을 주입해 **heavy import 없이** 배선을 검증한다(§4-5).
+- 람다로 감쌌으므로 빌드는 `handle_job`의 `try` 안에서, 그것도 타입에 맞는 콜백만 실제 호출된다 → 불필요 빌드 없음 + 빌드 예외는 guarded.
+
+**registry import 호이스팅 (P2 보강):** registry import는 `while` 루프/`claim` **이전**에 1회 수행한다(여전히 `main()` 내부이므로 "registry/adapters는 main()에서만 import" 불변식 유지 — 테스트 스위트는 `main()`을 호출하지 않음). 어댑터 모듈(ecapa/pyannote/silero)은 heavy 라이브러리 import를 생성자로 지연하므로 `import registry` 자체는 heavy-safe다. **claim 전에 import**하면, 만약 registry/모듈 import가 실패하더라도 *어떤 job도 claim하기 전에* 워커가 명확히 종료된다 — claim 후 import 실패로 job이 `running`에 갇히는 경로를 원천 차단.
+
+```python
+def main() -> None:  # pragma: no cover
+    logging.basicConfig(level=logging.INFO)
+    settings = load_settings()
+    storage = Storage(settings.storage_root)
+    conn = db.connect(settings.database_url)
+    from .heartbeat import Heartbeat
+    from .models.registry import build_models, build_text_embedder   # claim 이전, heavy-safe
+    log.info("worker %s started", settings.worker_id)
+    while True:
+        job = db.claim(conn, settings.worker_id)
+        if job is None:
+            time.sleep(settings.poll_interval_seconds)
+            continue
+        hb = Heartbeat(settings.database_url, job["id"], settings.worker_id,
+                       settings.heartbeat_interval_seconds)
+        outcome = dispatch_claimed_job(
+            conn, job, storage, settings,
+            build_models_fn=build_models, build_text_embedder_fn=build_text_embedder,
+            heartbeat_cm=hb,
+        )
+        log.info("job %s → %s", job["id"], outcome)
+        time.sleep(settings.poll_interval_seconds)
 ```
 
 부수효과(의도된 개선): 빌드가 heartbeat 범위 안으로 들어와, 긴 모델 다운로드 중에도 `locked_at`이 갱신되어 stale 오판을 막는다.
@@ -123,13 +153,19 @@ if isinstance(exc, (ModuleNotFoundError, ImportError)):
 
 근거: `ModuleNotFoundError`/`ImportError`는 의존성 미설치·환경 구성 오류로, 같은 환경에서 재시도해도 자명히 실패한다(`max_attempts=3`만큼 낭비). 즉시 fail로 운영자에게 1회에 노출하는 편이 정확하고 깔끔하다. 네트워크성 다운로드 실패는 재시도가 유효하므로 TRANSIENT 유지.
 
-## 4. 테스트 (`tests/test_worker_loop.py`, TDD)
+## 4. 테스트 (TDD)
 
 전부 fake 모델 + 실 Postgres(testcontainers). 빌더는 **콜백**이므로 "빌드가 실패하는 상황"을 heavy import 없이 그대로 재현할 수 있다(이번 수정의 핵심 효용).
 
-**기존 호출부 갱신(시그니처 변경 반영):**
-- `run_once(conn, "w1", _models(), Storage(...))` → 빌더 전달 형태로. `_models`는 무인자로 `Models`를 반환하므로 `build_models=_models` 로 그대로 넘긴다.
-- `handle_job(..., models=boom)` → `build_models=lambda: boom`.
+**기존 호출부 갱신 — 시그니처 변경의 직접 호출부 전부 (P1):** `handle_job`의 `models=`/`text_embedder=`와 `run_once`의 positional `models`가 바뀌므로, 아래 호출부를 빠짐없이 갱신해야 `uv run pytest -q`가 통과한다.
+- `tests/test_worker_loop.py`:
+  - `run_once(conn, "w1", _models(), Storage(...))` → `run_once(conn, "w1", Storage(...), build_models=_models)` (`_models`는 무인자로 `Models` 반환 → 그대로 콜백).
+  - `handle_job(..., models=boom)` → `build_models=lambda: boom`.
+- `tests/test_dispatch_index.py`:
+  - `handle_job(..., text_embedder=RaisingTextEmbedder(...))` ×2 → `build_text_embedder=lambda: RaisingTextEmbedder(...)`.
+  - `run_once(conn, "w1", None, Storage(...), text_embedder=FakeTextEmbedder())` → `run_once(conn, "w1", Storage(...), build_text_embedder=lambda: FakeTextEmbedder())`.
+- `scripts/smoke_process_meeting.py` (CI 아님, 실모델 로컬 smoke):
+  - `models = build_models(payload, settings)` (실모델 eager 빌드는 유지) 후 `run_once(conn, "smoke-worker", models, storage)` → `run_once(conn, "smoke-worker", storage, build_models=lambda: models)`.
 
 **신규 케이스:**
 1. `test_index_meeting_build_failure_marks_job_only`
@@ -144,14 +180,19 @@ if isinstance(exc, (ModuleNotFoundError, ImportError)):
 4. `test_enroll_build_failure_fails_speaker`
    - `enroll_speaker` job claim 후 `build_models=lambda: (_ for _ in ()).throw(ModuleNotFoundError(...))`
    - 기대: 반환 `"failed"`, job `failed`, **speaker `failed`**. (enroll 브랜치의 크래시-안전성 라우팅 고정. enroll 정상동작 자체는 backlog.)
+5. `test_dispatch_claimed_job_builds_lazily_within_heartbeat` (P2 배선 검증)
+   - `dispatch_claimed_job`에 **fake 빌더 fn**(호출 시 리스트에 기록 + `cm.entered and not cm.exited`를 단언해 heartbeat 진입 후·종료 전 실행임을 확인)과 **spy 컨텍스트매니저**(`__enter__`/`__exit__`에서 `entered`/`exited` 플래그), 그리고 needed 속성만 가진 settings stub(`SimpleNamespace`로 `worker_id`/`search_embedding_model`/`search_embedding_dim`)을 주입.
+   - process_meeting job 1건으로: 반환 `"committed"`, **빌더 fn이 정확히 1회 호출**(eager 빌드가 아니라 콜백 경유), `cm.entered and cm.exited` 단언. → main()이 "미리 빌드하지 않고 콜백 전달" + "heartbeat 안에서 실행"을 보장하는 핵심 배선을 heavy import 없이 커버.
 
 기존 `test_transient_error_requeues_when_attempts_left` / `test_permanent_error_fails`(파이프라인 단계 오류 경로)는 시그니처만 맞춰 유지 — 빌드 경로와 별개로 그대로 커버.
 
-## 5. 변경 파일 (3개)
+## 5. 변경 파일 (5개)
 
-1. `worker/damwha_worker/__main__.py` — `handle_job`/`run_once`/`main()`: 빌더 콜백 도입, 빌드를 guarded·heartbeat 범위로 이동
+1. `worker/damwha_worker/__main__.py` — `handle_job`/`run_once` 빌더 콜백화, `dispatch_claimed_job` 헬퍼 추출, `main()` claim 루프화 + registry import를 claim 이전으로 호이스팅
 2. `worker/damwha_worker/errors.py` — `classify()`에 import류 → PERMANENT 분기, 주석 보정
-3. `worker/tests/test_worker_loop.py` — 호출부 갱신 + 빌드 실패 신규 케이스 3종
+3. `worker/tests/test_worker_loop.py` — 호출부 갱신 + 빌드 실패 신규 케이스(1~4) + 배선 검증(5)
+4. `worker/tests/test_dispatch_index.py` — `text_embedder=`/`run_once` positional 호출부를 빌더 콜백 시그니처로 갱신 (P1)
+5. `worker/scripts/smoke_process_meeting.py` — `run_once` 호출을 빌더 콜백 시그니처로 갱신 (P1, CI 아님)
 
 ## 6. 검증 게이트
 
