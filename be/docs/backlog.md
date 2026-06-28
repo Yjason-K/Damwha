@@ -30,3 +30,14 @@
 - **영향 범위:** fresh-checkout CI/prod는 기존 `dist/`가 없어 무해. 영향은 특정 마이그레이션이 아니라 **모든 마이그레이션**(증분 로컬 빌드 한정).
 - **수정안:** `nest-cli.json`에 `"compilerOptions": { "deleteOutDir": true }` 추가, 또는 build 스크립트를 `rm -rf dist && nest build && cp -r ...`로. (즐겨찾기 003 작업에서 발견, 해당 기능과 무관한 선행 이슈 → 별도 처리.)
 - 상태: **미수정**
+
+---
+
+## 워커 — enroll_speaker 빌드 경로 KeyError (등록 2026-06-28)
+
+`enroll_speaker`는 실 워커(`__main__.main()`) 경로에서 **모델 빌드 단계 `KeyError`로 깨진다.** enqueue 측 `buildEnrollSpeakerPayload`(`src/contracts/job-payload.schema.ts`)가 만드는 payload는 `models` 키가 없는데(`speaker_id`/`audio_key`/`embedding`만), `main()`의 비-`index_meeting` 분기가 enroll도 `registry.build_models(payload, settings)`로 처리하고 `build_models`는 첫 줄에서 `m = payload["models"]`를 요구한다.
+
+- **증상:** 실제 enroll job이 워커 main 경로로 돌면 빌드 단계에서 `KeyError: 'models'`. 지금까지 enroll은 `run_enroll_speaker`를 직접 호출하는 유닛테스트(`test_enroll_speaker.py`)로만 검증돼 미발견.
+- **현재 완화(2026-06-28 모델-빌드 실패 처리 작업):** 빌드를 `handle_job`의 guarded try 안으로 옮긴 수정으로 이 `KeyError`는 **워커를 죽이지 않고 graceful-fail**(uncategorized→TRANSIENT→requeue 후 attempts 소진 시 `fail_enroll`, speaker `failed`)로 떨어진다. 즉 **크래시-안전성은 확보됐으나 enroll은 여전히 기능적으로 동작하지 않는다.**
+- **수정안:** enroll 전용 빌더(예: `registry.build_embedder(payload, settings)` = `EcapaEmbedder(payload["embedding"]["model"], settings.device)`)를 추가하고 `main()`이 enroll 타입엔 이 빌더를 주입. process_meeting은 payload의 device, enroll은 payload에 device가 없으므로 `settings.device` 사용(ECAPA는 내부적으로 CPU — CLAUDE.md 참고). **검증:** fake 모델로는 빌더 선택만 확인 가능하고, enroll이 실제로 voiceprint를 적재하는지는 실모델 smoke 필요.
+- 상태: **미수정** (graceful-fail까지만 적용됨)
