@@ -106,7 +106,7 @@ def main() -> int:
         from damwha_worker.__main__ import run_once
 
         print("running pipeline (real models) ...", flush=True)
-        outcome = run_once(conn, "smoke-worker", models, storage)
+        outcome = run_once(conn, "smoke-worker", storage, build_models=lambda: models)
         print(f"\noutcome: {outcome}")
 
         m = conn.execute(

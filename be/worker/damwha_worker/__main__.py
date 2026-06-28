@@ -7,7 +7,7 @@ from .contracts import parse_payload
 from .errors import ErrorKind, classify
 from .pipeline.enroll_speaker import run_enroll_speaker
 from .pipeline.index_meeting import run_index_meeting
-from .pipeline.process_meeting import Models, run_process_meeting
+from .pipeline.process_meeting import run_process_meeting
 from .storage import Storage
 
 log = logging.getLogger("damwha_worker")
@@ -19,14 +19,15 @@ def handle_job(
     storage: Storage,
     worker_id: str,
     *,
-    models: Models | None = None,
-    text_embedder=None,
+    build_models=None,
+    build_text_embedder=None,
     search_embedding=None,
 ) -> str:
     try:
         payload = parse_payload(job["type"], job["payload"])
         if job["type"] == "process_meeting":
             sm, sd = search_embedding or (None, None)
+            models = build_models()
             return run_process_meeting(
                 conn,
                 job,
@@ -38,10 +39,12 @@ def handle_job(
                 search_embedding_dim=sd,
             )
         if job["type"] == "enroll_speaker":
+            models = build_models()
             return run_enroll_speaker(
                 conn, job, payload, models.embedder, storage, worker_id=worker_id
             )
         if job["type"] == "index_meeting":
+            text_embedder = build_text_embedder()
             return run_index_meeting(conn, job, payload, text_embedder, worker_id=worker_id)
         raise ValueError(f"unknown job type {job['type']}")
     except Exception as exc:  # noqa: BLE001 — 분류해서 requeue/fail
@@ -81,10 +84,10 @@ def handle_job(
 def run_once(
     conn,
     worker_id: str,
-    models: Models | None,
     storage: Storage,
     *,
-    text_embedder=None,
+    build_models=None,
+    build_text_embedder=None,
     search_embedding=None,
 ) -> str | None:
     job = db.claim(conn, worker_id)
@@ -95,10 +98,33 @@ def run_once(
         job,
         storage,
         worker_id,
-        models=models,
-        text_embedder=text_embedder,
+        build_models=build_models,
+        build_text_embedder=build_text_embedder,
         search_embedding=search_embedding,
     )
+
+
+def dispatch_claimed_job(
+    conn,
+    job: dict,
+    storage: Storage,
+    settings,
+    *,
+    build_models_fn,
+    build_text_embedder_fn,
+    heartbeat_cm,
+) -> str:
+    """claim된 job 1건: heartbeat 진입 → 콜백(지연 빌드)을 handle_job에 주입."""
+    with heartbeat_cm:
+        return handle_job(
+            conn,
+            job,
+            storage,
+            settings.worker_id,
+            build_models=lambda: build_models_fn(job["payload"], settings),
+            build_text_embedder=lambda: build_text_embedder_fn(settings),
+            search_embedding=(settings.search_embedding_model, settings.search_embedding_dim),
+        )
 
 
 def main() -> None:  # pragma: no cover — 실모델 + 무한 루프 (로컬 실행)
@@ -106,41 +132,30 @@ def main() -> None:  # pragma: no cover — 실모델 + 무한 루프 (로컬 �
     settings = load_settings()
     storage = Storage(settings.storage_root)
     conn = db.connect(settings.database_url)
+    from .heartbeat import Heartbeat
+    from .models.registry import build_models, build_text_embedder
+
     log.info("worker %s started", settings.worker_id)
     while True:
         job = db.claim(conn, settings.worker_id)
         if job is None:
             time.sleep(settings.poll_interval_seconds)
             continue
-        from .heartbeat import Heartbeat
-        from .models.registry import build_models, build_text_embedder
-
-        hb_args = (
+        hb = Heartbeat(
             settings.database_url,
             job["id"],
             settings.worker_id,
             settings.heartbeat_interval_seconds,
         )
-        if job["type"] == "index_meeting":
-            text_embedder = build_text_embedder(settings)
-            with Heartbeat(*hb_args):
-                outcome = handle_job(
-                    conn, job, storage, settings.worker_id, text_embedder=text_embedder
-                )
-        else:
-            models = build_models(job["payload"], settings)
-            with Heartbeat(*hb_args):
-                outcome = handle_job(
-                    conn,
-                    job,
-                    storage,
-                    settings.worker_id,
-                    models=models,
-                    search_embedding=(
-                        settings.search_embedding_model,
-                        settings.search_embedding_dim,
-                    ),
-                )
+        outcome = dispatch_claimed_job(
+            conn,
+            job,
+            storage,
+            settings,
+            build_models_fn=build_models,
+            build_text_embedder_fn=build_text_embedder,
+            heartbeat_cm=hb,
+        )
         log.info("job %s → %s", job["id"], outcome)
         time.sleep(settings.poll_interval_seconds)
 

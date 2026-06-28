@@ -45,7 +45,7 @@ def test_index_permanent_failure_fails_job_only(conn, tmp_path):
         job,
         Storage(str(tmp_path)),
         "w1",
-        text_embedder=RaisingTextEmbedder(ErrorKind.PERMANENT),
+        build_text_embedder=lambda: RaisingTextEmbedder(ErrorKind.PERMANENT),
     )
     assert out == "failed"
     assert (
@@ -73,7 +73,7 @@ def test_index_transient_failure_requeues(conn, tmp_path):
         job,
         Storage(str(tmp_path)),
         "w1",
-        text_embedder=RaisingTextEmbedder(ErrorKind.TRANSIENT),
+        build_text_embedder=lambda: RaisingTextEmbedder(ErrorKind.TRANSIENT),
     )
     assert out == "requeued"
     assert (
@@ -96,6 +96,8 @@ def test_run_once_handles_index_job(conn, tmp_path):
         (mid,),
     )
     seed_job(conn, type="index_meeting", meeting_id=mid, payload=_index_payload(mid))
-    out = run_once(conn, "w1", None, Storage(str(tmp_path)), text_embedder=FakeTextEmbedder())
+    out = run_once(
+        conn, "w1", Storage(str(tmp_path)), build_text_embedder=lambda: FakeTextEmbedder()
+    )
     assert out == "committed"
     assert conn.execute("SELECT count(*) c FROM utterance_embedding", ()).fetchone()["c"] == 1
