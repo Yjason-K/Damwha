@@ -186,6 +186,9 @@ def test_process_build_transient_requeues_when_attempts_left(conn, tmp_path, mon
 
 
 def test_enroll_build_failure_fails_speaker(conn, tmp_path):
+    # 라우팅 목적지(enroll 빌드 실패 → speaker failed)를 고정한다. 실제 프로덕션의
+    # enroll 빌드 실패는 KeyError(payload에 'models' 없음 → uncategorized→TRANSIENT,
+    # backlog 참조)지만, 여기선 PERMANENT 예외로 즉시-fail 경로를 단정한다.
     sid = seed_speaker(conn, enrollment_status="pending")
     payload = {
         "schema_version": 1,
