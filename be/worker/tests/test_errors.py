@@ -31,3 +31,15 @@ def test_classify_unknown_defaults_transient():
     w = classify(RuntimeError("weird"))
     assert w.kind is ErrorKind.TRANSIENT
     assert w.code == "uncategorized"
+
+
+def test_classify_import_error_is_permanent():
+    w = classify(ModuleNotFoundError("No module named 'sentence_transformers'"))
+    assert w.kind is ErrorKind.PERMANENT
+    assert w.code == "model_load_failed"
+
+
+def test_classify_plain_import_error_is_permanent():
+    w = classify(ImportError("cannot import name 'X'"))
+    assert w.kind is ErrorKind.PERMANENT
+    assert w.code == "model_load_failed"

@@ -38,7 +38,7 @@ CORRUPT_AUDIO = "corrupt_audio"
 UNSUPPORTED_FORMAT = "unsupported_format"
 PROBE_FAILED = "probe_failed"
 UNSUPPORTED_PAYLOAD_VERSION = "unsupported_payload_version"
-# Transient codes
+# Mostly-transient codes (model_load_failed은 import류일 때 PERMANENT — classify 참조)
 MODEL_LOAD_FAILED = "model_load_failed"
 OOM = "oom"
 IO_ERROR = "io_error"
@@ -50,6 +50,8 @@ def classify(exc: Exception) -> WorkerError:
         return exc
     if isinstance(exc, UnsupportedPayloadVersion):
         return WorkerError(UNSUPPORTED_PAYLOAD_VERSION, str(exc), ErrorKind.PERMANENT)
+    if isinstance(exc, (ModuleNotFoundError, ImportError)):
+        return WorkerError(MODEL_LOAD_FAILED, str(exc), ErrorKind.PERMANENT)
     if isinstance(exc, MemoryError):
         return WorkerError(OOM, "out of memory", ErrorKind.TRANSIENT)
     log.warning("uncategorized exception treated as TRANSIENT: %r", exc)
