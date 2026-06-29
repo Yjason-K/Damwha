@@ -20,7 +20,6 @@ import math
 import shutil
 import sys
 import tempfile
-import uuid
 from pathlib import Path
 
 import psycopg
@@ -114,17 +113,16 @@ def main() -> int:
         conn = db.connect(url)
 
         print(f"building models (device={device}) ...", flush=True)
-        models = build_models(_process_payload(str(uuid.uuid4()), "x", device), settings)
+        models = build_models(_process_payload("mtg_1", "x", device), settings)
 
         # ---- 1. ENROLL (real ECAPA) ----------------------------------------
         print(f"\n[1] enrolling speaker from {enroll_audio.name} ...", flush=True)
-        spk_id = str(uuid.uuid4())
+        spk_id = conn.execute(
+            "INSERT INTO speaker(name, enrollment_status) "
+            "VALUES ('Enrolled-A','pending') RETURNING id"
+        ).fetchone()["id"]
         enroll_key = f"speakers/{spk_id}/sample{enroll_audio.suffix.lower()}"
         _copy_into(storage, enroll_key, enroll_audio)
-        conn.execute(
-            "INSERT INTO speaker(id, name, enrollment_status) VALUES (%s,'Enrolled-A','pending')",
-            (spk_id,),
-        )
         ep = _enroll_payload(spk_id, enroll_key)
         ejob = conn.execute(
             "INSERT INTO job(type, payload) VALUES ('enroll_speaker',%s) RETURNING id", (Jsonb(ep),)
@@ -167,14 +165,13 @@ def main() -> int:
 
         # ---- 2. PROCESS meeting (real pipeline) w/ enrolled speaker present --
         print(f"\n[2] processing {meeting_audio.name} (enrolled speaker present) ...", flush=True)
-        mid = str(uuid.uuid4())
+        mid = conn.execute(
+            "INSERT INTO meeting(audio_key, status, processing_version) "
+            "VALUES ('', 'uploaded', 0) RETURNING id"
+        ).fetchone()["id"]
         mkey = f"meetings/{mid}/original{meeting_audio.suffix.lower()}"
         _copy_into(storage, mkey, meeting_audio)
-        conn.execute(
-            "INSERT INTO meeting(id, audio_key, status, processing_version) "
-            "VALUES (%s,%s,'uploaded',0)",
-            (mid, mkey),
-        )
+        conn.execute("UPDATE meeting SET audio_key=%s WHERE id=%s", (mkey, mid))
         pp = _process_payload(mid, mkey, device)
         pjob = conn.execute(
             "INSERT INTO job(type, meeting_id, payload) "
@@ -210,8 +207,7 @@ def main() -> int:
         for r in ident:
             tag = f"speaker={r['speaker_id']}" if r["speaker_id"] else "UNIDENTIFIED"
             print(f"      {r['diar_label']}: {tag}")
-        # psycopg returns uuid columns as uuid.UUID; spk_id is str → compare via str()
-        cross_match = any(str(r["speaker_id"]) == spk_id for r in ident if r["speaker_id"])
+        cross_match = any(r["speaker_id"] == spk_id for r in ident if r["speaker_id"])
         if cross_match:
             print("    [2] cross-recording: enrolled speaker MATCHED a cluster")
         else:
@@ -227,11 +223,9 @@ def main() -> int:
         else:
             target = clusters[0]
             centroid = _parse_vec(target["centroid"])
-            alice = str(uuid.uuid4())
-            conn.execute(
-                "INSERT INTO speaker(id, name, enrollment_status) VALUES (%s,'Alice','ready')",
-                (alice,),
-            )
+            alice = conn.execute(
+                "INSERT INTO speaker(name, enrollment_status) VALUES ('Alice','ready') RETURNING id"
+            ).fetchone()["id"]
             conn.execute(
                 "INSERT INTO voiceprint(speaker_id, embedding, model, dimension, source) "
                 "VALUES (%s,%s::vector,%s,192,'enroll')",

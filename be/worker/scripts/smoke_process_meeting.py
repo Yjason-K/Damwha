@@ -15,7 +15,6 @@ This is NOT a CI test — it loads gated/heavy models and is run by hand.
 import shutil
 import sys
 import tempfile
-import uuid
 from pathlib import Path
 
 import psycopg
@@ -80,17 +79,16 @@ def main() -> int:
                 mig.execute(f.read_text())
 
         conn = db.connect(url)
-        meeting_id = str(uuid.uuid4())
+        # id는 DB가 채번 → RETURNING으로 받는다 (UUID 직접 삽입은 CHECK 위반). dict_row → ["id"].
+        meeting_id = conn.execute(
+            "INSERT INTO meeting(audio_key, status, processing_version) "
+            "VALUES ('', 'uploaded', 0) RETURNING id"
+        ).fetchone()["id"]
         audio_key = f"meetings/{meeting_id}/original{audio.suffix.lower()}"
         dst = Path(storage.resolve(audio_key))
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(audio, dst)
-
-        conn.execute(
-            "INSERT INTO meeting(id, audio_key, status, processing_version) "
-            "VALUES (%s,%s,'uploaded',0)",
-            (meeting_id, audio_key),
-        )
+        conn.execute("UPDATE meeting SET audio_key=%s WHERE id=%s", (audio_key, meeting_id))
         payload = _payload(meeting_id, audio_key, device)
         job = conn.execute(
             "INSERT INTO job(type, meeting_id, payload) "
