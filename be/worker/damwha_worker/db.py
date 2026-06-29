@@ -123,6 +123,9 @@ def persist_process_meeting(
     duration_ms,
     utterances,
     clusters,
+    embedding_model=None,
+    embedding_dim=None,
+    default_speaker_prefix="Speaker",
     index_search_model=None,
     index_search_dim=None,
 ) -> str:
@@ -167,7 +170,60 @@ def persist_process_meeting(
             # fresh: replace results
             conn.execute("DELETE FROM utterance WHERE meeting_id=%s", (meeting_id,))
             conn.execute("DELETE FROM meeting_cluster WHERE meeting_id=%s", (meeting_id,))
+
+            # 미식별 cluster → provisional speaker + voiceprint(provenance) 자동 생성
+            # (embedding_model이 없으면 voiceprint 삽입 불가 → 미해소 cluster만 보존)
+            label_to_new_speaker: dict[str, str] = {}
+            for c in clusters:
+                centroid = c["centroid"]
+                if centroid is None or embedding_model is None:
+                    # centroid 없거나 embedding model 미제공: speaker/voiceprint 없이 cluster만 보존
+                    conn.execute(
+                        """
+                        INSERT INTO meeting_cluster(meeting_id, diar_label, centroid,
+                            resolved_speaker_id, processing_version, job_id)
+                        VALUES (%s,%s,%s,%s,%s,%s)
+                        """,
+                        (
+                            meeting_id,
+                            c["diar_label"],
+                            _vec(centroid) if centroid is not None else None,
+                            c["resolved_speaker_id"],
+                            processing_version,
+                            job_id,
+                        ),
+                    )
+                    continue
+                sid = conn.execute(
+                    """
+                    INSERT INTO speaker(name, enrollment_status)
+                    VALUES (%s || '_' || lpad(nextval('speaker_default_seq')::text, 3, '0'),
+                            'provisional')
+                    RETURNING id
+                    """,
+                    (default_speaker_prefix,),
+                ).fetchone()["id"]
+                cid = conn.execute(
+                    """
+                    INSERT INTO meeting_cluster(meeting_id, diar_label, centroid,
+                        resolved_speaker_id, processing_version, job_id)
+                    VALUES (%s,%s,%s::vector,%s,%s,%s)
+                    RETURNING id
+                    """,
+                    (meeting_id, c["diar_label"], _vec(centroid), sid, processing_version, job_id),
+                ).fetchone()["id"]
+                conn.execute(
+                    """
+                    INSERT INTO voiceprint(speaker_id, embedding, model, dimension,
+                        source, source_cluster_id)
+                    VALUES (%s,%s::vector,%s,%s,'auto_cluster',%s)
+                    """,
+                    (sid, _vec(centroid), embedding_model, embedding_dim, cid),
+                )
+                label_to_new_speaker[c["diar_label"]] = sid
+
             for u in utterances:
+                speaker_id = u["speaker_id"] or label_to_new_speaker.get(u["diar_label"])
                 conn.execute(
                     """
                     INSERT INTO utterance(meeting_id, speaker_id, diar_label,
@@ -177,7 +233,7 @@ def persist_process_meeting(
                     """,
                     (
                         meeting_id,
-                        u["speaker_id"],
+                        speaker_id,
                         u["diar_label"],
                         u["start_ms"],
                         u["end_ms"],
@@ -186,23 +242,6 @@ def persist_process_meeting(
                         u["status"],
                         Jsonb(u["transcript_error"]) if u["transcript_error"] is not None else None,
                         u["order_index"],
-                        processing_version,
-                        job_id,
-                    ),
-                )
-            for c in clusters:
-                centroid = _vec(c["centroid"]) if c["centroid"] is not None else None
-                conn.execute(
-                    """
-                    INSERT INTO meeting_cluster(meeting_id, diar_label, centroid,
-                        resolved_speaker_id, processing_version, job_id)
-                    VALUES (%s,%s,%s::vector,%s,%s,%s)
-                    """,
-                    (
-                        meeting_id,
-                        c["diar_label"],
-                        centroid,
-                        c["resolved_speaker_id"],
                         processing_version,
                         job_id,
                     ),

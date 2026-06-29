@@ -36,6 +36,8 @@ def test_persist_commits_results(conn):
         clusters=[
             {"diar_label": "SPEAKER_00", "centroid": [0.1] * 192, "resolved_speaker_id": None}
         ],
+        embedding_model="speechbrain/spkrec-ecapa-voxceleb",
+        embedding_dim=192,
     )
     assert out == "committed"
     m = conn.execute(
@@ -53,6 +55,12 @@ def test_persist_commits_results(conn):
         == 1
     )
     assert conn.execute("SELECT status FROM job WHERE id=%s", (jid,)).fetchone()["status"] == "done"
+    assert (
+        conn.execute(
+            "SELECT count(*) c FROM speaker WHERE enrollment_status='provisional'", ()
+        ).fetchone()["c"]
+        == 1
+    )
 
 
 def test_persist_replaces_existing_rows(conn):
@@ -282,3 +290,117 @@ def test_persist_no_index_job_when_discarded(conn):
         conn.execute("SELECT count(*) c FROM job WHERE type='index_meeting'", ()).fetchone()["c"]
         == 0
     )
+
+
+def test_persist_auto_creates_provisional_for_unidentified(conn):
+    mid, jid = _claimed_pm_job(conn, pv=0)
+    out = db.persist_process_meeting(
+        conn,
+        job_id=jid,
+        worker_id="w1",
+        meeting_id=mid,
+        processing_version=0,
+        normalized_key="k",
+        duration_ms=1,
+        utterances=[
+            {
+                "speaker_id": None,
+                "diar_label": "SPEAKER_00",
+                "start_ms": 0,
+                "end_ms": 1,
+                "text": "a",
+                "confidence": None,
+                "status": "ok",
+                "transcript_error": None,
+                "order_index": 0,
+            }
+        ],
+        clusters=[
+            {"diar_label": "SPEAKER_00", "centroid": [0.1] * 192, "resolved_speaker_id": None}
+        ],
+        embedding_model="speechbrain/spkrec-ecapa-voxceleb",
+        embedding_dim=192,
+        default_speaker_prefix="Speaker",
+    )
+    assert out == "committed"
+    sp = conn.execute("SELECT id, name, enrollment_status FROM speaker", ()).fetchall()
+    assert len(sp) == 1
+    assert sp[0]["enrollment_status"] == "provisional"
+    assert sp[0]["name"].startswith("Speaker_")
+    sid = sp[0]["id"]
+    # cluster resolved to the new provisional speaker
+    cl = conn.execute(
+        "SELECT resolved_speaker_id FROM meeting_cluster WHERE meeting_id=%s", (mid,)
+    ).fetchone()
+    assert cl["resolved_speaker_id"] == sid
+    # voiceprint with provenance
+    vp = conn.execute(
+        "SELECT speaker_id, source, source_cluster_id FROM voiceprint WHERE speaker_id=%s", (sid,)
+    ).fetchone()
+    assert vp["source"] == "auto_cluster" and vp["source_cluster_id"] is not None
+    # utterance assigned to the provisional speaker
+    u = conn.execute("SELECT speaker_id FROM utterance WHERE meeting_id=%s", (mid,)).fetchone()
+    assert u["speaker_id"] == sid
+
+
+def test_persist_centroidless_cluster_makes_no_speaker(conn):
+    mid, jid = _claimed_pm_job(conn, pv=0)
+    out = db.persist_process_meeting(
+        conn,
+        job_id=jid,
+        worker_id="w1",
+        meeting_id=mid,
+        processing_version=0,
+        normalized_key="k",
+        duration_ms=1,
+        utterances=[
+            {
+                "speaker_id": None,
+                "diar_label": "SPEAKER_00",
+                "start_ms": 0,
+                "end_ms": 1,
+                "text": "a",
+                "confidence": None,
+                "status": "ok",
+                "transcript_error": None,
+                "order_index": 0,
+            }
+        ],
+        clusters=[{"diar_label": "SPEAKER_00", "centroid": None, "resolved_speaker_id": None}],
+        embedding_model="m",
+        embedding_dim=192,
+    )
+    assert out == "committed"
+    assert conn.execute("SELECT count(*) c FROM speaker", ()).fetchone()["c"] == 0
+    assert conn.execute("SELECT count(*) c FROM voiceprint", ()).fetchone()["c"] == 0
+    cl = conn.execute(
+        "SELECT resolved_speaker_id FROM meeting_cluster WHERE meeting_id=%s", (mid,)
+    ).fetchone()
+    assert cl["resolved_speaker_id"] is None  # unresolved cluster kept
+    u = conn.execute("SELECT speaker_id FROM utterance WHERE meeting_id=%s", (mid,)).fetchone()
+    assert u["speaker_id"] is None
+
+
+def test_persist_names_are_unique_across_two_meetings(conn):
+    names = []
+    for _ in range(2):
+        mid, jid = _claimed_pm_job(conn, pv=0)
+        db.persist_process_meeting(
+            conn,
+            job_id=jid,
+            worker_id="w1",
+            meeting_id=mid,
+            processing_version=0,
+            normalized_key="k",
+            duration_ms=1,
+            utterances=[],
+            clusters=[{"diar_label": "S0", "centroid": [0.1] * 192, "resolved_speaker_id": None}],
+            embedding_model="m",
+            embedding_dim=192,
+        )
+    rows = conn.execute("SELECT name FROM speaker ORDER BY name", ()).fetchall()
+    names = [r["name"] for r in rows]
+    assert len(names) == 2 and len(set(names)) == 2  # unique
+    import re
+
+    assert all(re.fullmatch(r"Speaker_\d{3,}", n) for n in names)

@@ -36,6 +36,7 @@ def conn(pg_url):
             "TRUNCATE job, utterance, meeting_cluster, voiceprint, meeting, speaker "
             "RESTART IDENTITY CASCADE"
         )
+        c.execute("ALTER SEQUENCE speaker_default_seq RESTART")
         c.close()
 
 
