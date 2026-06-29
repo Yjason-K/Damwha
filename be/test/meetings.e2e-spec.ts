@@ -36,6 +36,22 @@ describe('meetings', () => {
     expect(job.rows[0].payload.processing_version).toBe(0);
   });
 
+  it('POST /meetings preserves a Korean original filename (no mojibake)', async () => {
+    // Browsers send the filename as raw UTF-8 bytes in the Content-Disposition
+    // header; busboy then decodes them as latin1, producing mojibake. form-data
+    // writes the header as UTF-8, so passing the plain Korean name reproduces
+    // exactly the bytes a browser puts on the wire.
+    const koreanName = '회의록.m4a';
+    const res = await request(srv())
+      .post('/meetings')
+      .attach('audio', Buffer.from('fake-audio'), { filename: koreanName, contentType: 'audio/mp4' });
+    expect(res.status).toBe(201);
+    expect(res.body.original_filename).toBe(koreanName);
+
+    const row = await db.pool.query('SELECT original_filename FROM meeting WHERE id=$1', [res.body.id]);
+    expect(row.rows[0].original_filename).toBe(koreanName);
+  });
+
   it('POST /meetings rejects non-audio mime', async () => {
     const res = await request(srv())
       .post('/meetings')

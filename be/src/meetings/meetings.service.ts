@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
 import { StorageService } from '../storage/storage.service';
+import { decodeOriginalName } from '../storage/upload-options';
 import { JobsRepository } from '../jobs/jobs.repository';
 import { buildProcessMeetingPayload, buildIndexMeetingPayload } from '../contracts/job-payload.schema';
 import { MeetingsRepository, MeetingRow } from './meetings.repository';
@@ -34,14 +35,15 @@ export class MeetingsService {
     }
 
     const meetingId = crypto.randomUUID();
-    const audioKey = this.storage.meetingKey(meetingId, file.originalname);
+    const originalName = decodeOriginalName(file.originalname);
+    const audioKey = this.storage.meetingKey(meetingId, originalName);
     await this.storage.saveFromTemp(audioKey, file.path);
 
     return this.db.withTransaction(async (c) => {
       const meeting = await c.query(
         `INSERT INTO meeting(id, title, original_filename, audio_key, recorded_at, status)
          VALUES($1,$2,$3,$4,$5,'uploaded') RETURNING *`,
-        [meetingId, body.title ?? null, file.originalname, audioKey, body.recorded_at ?? null],
+        [meetingId, body.title ?? null, originalName, audioKey, body.recorded_at ?? null],
       );
       const payload = buildProcessMeetingPayload({
         meetingId, audioKey, processingVersion: 0, reprocess: false,
