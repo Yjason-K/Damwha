@@ -45,7 +45,9 @@ export class MeetingsRepository {
   }
   async findUtterances(exec: Queryable, meetingId: string) {
     const { rows } = await exec.query(
-      `SELECT * FROM utterance WHERE meeting_id=$1 ORDER BY order_index ASC`,
+      `SELECT u.*, s.name AS speaker_name, s.enrollment_status AS speaker_status
+       FROM utterance u LEFT JOIN speaker s ON s.id = u.speaker_id
+       WHERE u.meeting_id=$1 ORDER BY u.order_index ASC`,
       [meetingId],
     );
     return rows;
