@@ -168,7 +168,7 @@ describe('cluster resolve', () => {
 
   it('concurrent new_name resolve and PATCH-promote on the same provisional end consistently', async () => {
     const { mid, clusterId, provisionalId } = await seedProvisional();
-    const [, resolveRes] = await Promise.allSettled([
+    const [patchRes, resolveRes] = await Promise.allSettled([
       request(srv()).patch(`/speakers/${provisionalId}`).send({ name: 'PatchName' }),
       request(srv()).post(`/meetings/${mid}/clusters/${clusterId}/resolve`).send({ new_name: 'ResolveName' }),
     ]);
@@ -177,11 +177,17 @@ describe('cluster resolve', () => {
     expect(sp.rowCount).toBe(1);
     expect(sp.rows[0].enrollment_status).toBe('ready');
     expect(['PatchName', 'ResolveName']).toContain(sp.rows[0].name);
-    expect((await db.pool.query('SELECT count(*)::int c FROM speaker')).rows[0].c).toBe(1);
+    // exactly one race name won; no duplicate speaker created (scoped → isolation-independent)
+    const raceCount = await db.pool.query(
+      `SELECT count(*)::int c FROM speaker WHERE name IN ('PatchName','ResolveName')`,
+    );
+    expect(raceCount.rows[0].c).toBe(1);
     const cl = await db.pool.query('SELECT resolved_speaker_id FROM meeting_cluster WHERE id=$1', [clusterId]);
     expect(cl.rows[0].resolved_speaker_id).toBe(provisionalId);
-    // resolve either won (200) or 409'd (if PATCH promoted to ready first, new_name on a ready cluster → 409)
+    // PATCH always 200 (renames, never deletes); resolve won (200) or 409'd (PATCH promoted to ready first)
+    const patchStatus = patchRes.status === 'fulfilled' ? (patchRes.value as { status: number }).status : 0;
     const resolveStatus = resolveRes.status === 'fulfilled' ? (resolveRes.value as { status: number }).status : 0;
+    expect(patchStatus).toBe(200);
     expect([200, 409]).toContain(resolveStatus);
   });
 
