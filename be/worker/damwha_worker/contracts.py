@@ -1,8 +1,11 @@
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, StringConstraints
 
 SUPPORTED_SCHEMA_VERSIONS = frozenset({1})
+
+MeetingId = Annotated[str, StringConstraints(pattern=r"^mtg_[1-9][0-9]*$")]
+SpeakerId = Annotated[str, StringConstraints(pattern=r"^spk_[1-9][0-9]*$")]
 
 
 class UnsupportedPayloadVersion(ValueError):
@@ -34,7 +37,7 @@ class Identify(BaseModel):
 
 class ProcessMeetingPayload(BaseModel):
     schema_version: int = 1
-    meeting_id: str
+    meeting_id: MeetingId
     audio_key: str
     processing_version: int
     reprocess: bool
@@ -44,7 +47,7 @@ class ProcessMeetingPayload(BaseModel):
 
 class EnrollSpeakerPayload(BaseModel):
     schema_version: int = 1
-    speaker_id: str
+    speaker_id: SpeakerId
     audio_key: str
     embedding: Embedding
 
@@ -56,7 +59,7 @@ class SearchEmbedding(BaseModel):
 
 class IndexMeetingPayload(BaseModel):
     schema_version: int = 1
-    meeting_id: str
+    meeting_id: MeetingId
     processing_version: int
     search_embedding: SearchEmbedding
 

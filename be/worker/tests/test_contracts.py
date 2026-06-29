@@ -37,3 +37,27 @@ def test_rejects_future_schema_version():
     data = load("process_meeting.valid.json") | {"schema_version": 2}
     with pytest.raises(UnsupportedPayloadVersion):
         parse_payload("process_meeting", data)
+
+
+def test_rejects_uuid_meeting_id():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        parse_payload("process_meeting", load("process_meeting.invalid_id.json"))
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "ca8e8f66-6e2b-4c4f-8d0b-7d432a7a6aca",  # UUID
+        "mtg_0",  # zero
+        "mtg_001",  # leading zero
+        "mtg_1٢",  # unicode digit (\d 회귀 방지)
+    ],
+)
+def test_rejects_bad_meeting_ids(bad):
+    from pydantic import ValidationError
+
+    data = load("process_meeting.valid.json") | {"meeting_id": bad}
+    with pytest.raises(ValidationError):
+        parse_payload("process_meeting", data)
