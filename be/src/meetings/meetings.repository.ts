@@ -71,14 +71,43 @@ export class MeetingsRepository {
     return rows[0].processing_version;
   }
 
-  async findClusterInMeeting(exec: Queryable, meetingId: string, clusterId: string) {
+  async lockClusterInMeeting(exec: Queryable, meetingId: string, clusterId: string) {
     const { rows } = await exec.query(
-      `SELECT id, meeting_id, diar_label, (centroid IS NOT NULL) AS has_centroid
-       FROM meeting_cluster WHERE id=$1 AND meeting_id=$2`,
+      `SELECT id, meeting_id, diar_label, resolved_speaker_id, (centroid IS NOT NULL) AS has_centroid
+       FROM meeting_cluster WHERE id=$1 AND meeting_id=$2 FOR UPDATE`,
       [clusterId, meetingId],
     );
     return rows[0] ?? null;
   }
+
+  async lockSpeakers(
+    exec: Queryable,
+    ids: string[],
+  ): Promise<{ id: string; enrollment_status: string }[]> {
+    if (ids.length === 0) return [];
+    const { rows } = await exec.query<{ id: string; enrollment_status: string }>(
+      `SELECT id, enrollment_status FROM speaker WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE`,
+      [ids],
+    );
+    return rows;
+  }
+
+  async createReadySpeaker(exec: Queryable, name: string): Promise<string> {
+    const { rows } = await exec.query<{ id: string }>(
+      `INSERT INTO speaker(name, enrollment_status) VALUES($1,'ready') RETURNING id`,
+      [name],
+    );
+    return rows[0].id;
+  }
+
+  async promoteProvisional(exec: Queryable, id: string, name: string): Promise<void> {
+    await exec.query(
+      `UPDATE speaker SET name=$2, enrollment_status='ready'
+       WHERE id=$1 AND enrollment_status='provisional'`,
+      [id, name],
+    );
+  }
+
   async setClusterResolved(exec: Queryable, clusterId: string, speakerId: string) {
     await exec.query(`UPDATE meeting_cluster SET resolved_speaker_id=$2 WHERE id=$1`, [clusterId, speakerId]);
   }
@@ -89,16 +118,30 @@ export class MeetingsRepository {
     );
     return res.rowCount ?? 0;
   }
-  // copy the cluster centroid into a voiceprint (vector stays in SQL, no JS round-trip)
-  async voiceprintFromClusterCentroid(
+
+  // reattach (or insert) the single cluster-derived voiceprint to the final speaker (idempotent)
+  async upsertClusterVoiceprint(
     exec: Queryable, clusterId: string, speakerId: string, model: string, dimension: number,
   ): Promise<void> {
     await exec.query(
-      `INSERT INTO voiceprint(speaker_id, embedding, model, dimension, source)
-       SELECT $2, centroid, $3, $4, 'cluster_resolve'
-       FROM meeting_cluster WHERE id=$1 AND centroid IS NOT NULL`,
+      `INSERT INTO voiceprint(speaker_id, embedding, model, dimension, source, source_cluster_id)
+       SELECT $2, centroid, $3, $4, 'cluster_resolve', id
+       FROM meeting_cluster WHERE id=$1 AND centroid IS NOT NULL
+       ON CONFLICT (source_cluster_id) WHERE source_cluster_id IS NOT NULL
+       DO UPDATE SET speaker_id = EXCLUDED.speaker_id`,
       [clusterId, speakerId, model, dimension],
     );
+  }
+
+  async deleteOrphanProvisional(exec: Queryable, speakerId: string): Promise<boolean> {
+    const res = await exec.query(
+      `DELETE FROM speaker s
+       WHERE s.id=$1 AND s.enrollment_status='provisional'
+         AND NOT EXISTS (SELECT 1 FROM utterance WHERE speaker_id=s.id)
+         AND NOT EXISTS (SELECT 1 FROM meeting_cluster WHERE resolved_speaker_id=s.id)`,
+      [speakerId],
+    );
+    return (res.rowCount ?? 0) > 0;
   }
 
   async findReindexableMeetingIds(
