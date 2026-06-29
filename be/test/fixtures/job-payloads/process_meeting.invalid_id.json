@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "meeting_id": "mtg_1",
-  "audio_key": "meetings/mtg_1/original.m4a",
+  "meeting_id": "ca8e8f66-6e2b-4c4f-8d0b-7d432a7a6aca",
+  "audio_key": "meetings/ca8e8f66/original.m4a",
   "processing_version": 2,
   "reprocess": true,
   "models": {

@@ -89,4 +89,47 @@ describe('migration', () => {
     );
     expect(cnt.rows[0].c).toBe(1);
   });
+
+  it('generates prefixed ids by DEFAULT for all 7 tables', async () => {
+    const v192 = `[${Array(192).fill(0).join(',')}]`;
+    const v1024 = `[${Array(1024).fill(0).join(',')}]`;
+    const spk = (await db.pool.query(`INSERT INTO speaker(name) VALUES('n') RETURNING id`)).rows[0].id;
+    const mtg = (await db.pool.query(`INSERT INTO meeting(audio_key) VALUES('k') RETURNING id`)).rows[0].id;
+    const job = (await db.pool.query(`INSERT INTO job(type,payload) VALUES('process_meeting','{}'::jsonb) RETURNING id`)).rows[0].id;
+    const vp = (await db.pool.query(`INSERT INTO voiceprint(speaker_id,embedding,model,dimension) VALUES($1,$2::vector,'m',192) RETURNING id`, [spk, v192])).rows[0].id;
+    const clu = (await db.pool.query(`INSERT INTO meeting_cluster(meeting_id,diar_label,processing_version) VALUES($1,'S',0) RETURNING id`, [mtg])).rows[0].id;
+    const utt = (await db.pool.query(`INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,order_index,processing_version) VALUES($1,'S',0,1,0,0) RETURNING id`, [mtg])).rows[0].id;
+    const ue = (await db.pool.query(`INSERT INTO utterance_embedding(utterance_id,embedding,model,dimension,processing_version) VALUES($1,$2::vector,'m',1024,0) RETURNING id`, [utt, v1024])).rows[0].id;
+    expect(spk).toMatch(/^spk_[1-9][0-9]*$/);
+    expect(mtg).toMatch(/^mtg_[1-9][0-9]*$/);
+    expect(job).toMatch(/^job_[1-9][0-9]*$/);
+    expect(vp).toMatch(/^vp_[1-9][0-9]*$/);
+    expect(clu).toMatch(/^clu_[1-9][0-9]*$/);
+    expect(utt).toMatch(/^utt_[1-9][0-9]*$/);
+    expect(ue).toMatch(/^ue_[1-9][0-9]*$/);
+  });
+
+  it('rejects explicit non-conforming ids via CHECK (all 7 tables)', async () => {
+    const v192 = `[${Array(192).fill(0).join(',')}]`;
+    const v1024 = `[${Array(1024).fill(0).join(',')}]`;
+    const spk = (await db.pool.query(`INSERT INTO speaker(name) VALUES('n') RETURNING id`)).rows[0].id;
+    const mtg = (await db.pool.query(`INSERT INTO meeting(audio_key) VALUES('k') RETURNING id`)).rows[0].id;
+    const utt = (await db.pool.query(`INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,order_index,processing_version) VALUES($1,'S',0,1,0,0) RETURNING id`, [mtg])).rows[0].id;
+    const bad = 'ca8e8f66-6e2b-4c4f-8d0b-7d432a7a6aca';
+    const cases: [string, any[]][] = [
+      [`INSERT INTO speaker(id,name) VALUES($1,'n')`, [bad]],
+      [`INSERT INTO meeting(id,audio_key) VALUES($1,'k')`, [bad]],
+      [`INSERT INTO job(id,type,payload) VALUES($1,'process_meeting','{}'::jsonb)`, [bad]],
+      [`INSERT INTO voiceprint(id,speaker_id,embedding,model,dimension) VALUES($1,$2,$3::vector,'m',192)`, [bad, spk, v192]],
+      [`INSERT INTO meeting_cluster(id,meeting_id,diar_label,processing_version) VALUES($1,$2,'S',0)`, [bad, mtg]],
+      [`INSERT INTO utterance(id,meeting_id,diar_label,start_ms,end_ms,order_index,processing_version) VALUES($1,$2,'S',0,1,1,0)`, [bad, mtg]],
+      [`INSERT INTO utterance_embedding(id,utterance_id,embedding,model,dimension,processing_version) VALUES($1,$2,$3::vector,'m',1024,0)`, [bad, utt, v1024]],
+    ];
+    for (const [sql, params] of cases) {
+      await expect(db.pool.query(sql, params)).rejects.toThrow(/check constraint/);
+    }
+    // leading-zero / zero 도 거부
+    await expect(db.pool.query(`INSERT INTO meeting(id,audio_key) VALUES('mtg_0','k')`)).rejects.toThrow(/check constraint/);
+    await expect(db.pool.query(`INSERT INTO meeting(id,audio_key) VALUES('mtg_001','k')`)).rejects.toThrow(/check constraint/);
+  });
 });

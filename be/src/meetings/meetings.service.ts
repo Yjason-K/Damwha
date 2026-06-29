@@ -6,7 +6,7 @@ import { JobsRepository } from '../jobs/jobs.repository';
 import { buildProcessMeetingPayload, buildIndexMeetingPayload } from '../contracts/job-payload.schema';
 import { MeetingsRepository, MeetingRow } from './meetings.repository';
 import { loadEnv } from '../config/env';
-import * as crypto from 'crypto';
+import { nextId } from '../common/id';
 import * as fs from 'fs';
 
 const AUDIO_MIME = /^audio\//;
@@ -34,7 +34,7 @@ export class MeetingsService {
       throw new BadRequestException('file must be audio/*');
     }
 
-    const meetingId = crypto.randomUUID();
+    const meetingId = await nextId(this.db.pool, 'meeting');
     const originalName = decodeOriginalName(file.originalname);
     const audioKey = this.storage.meetingKey(meetingId, originalName);
     await this.storage.saveFromTemp(audioKey, file.path);

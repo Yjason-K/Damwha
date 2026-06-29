@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Delete, Get, Headers, HttpCode, Param, ParseUUIDPipe, Post, Put, Res, UploadedFile, UseInterceptors,
+  Body, Controller, Delete, Get, Headers, HttpCode, Param, Post, Put, Res, UploadedFile, UseInterceptors,
 } from '@nestjs/common';
 import { ApiBody, ApiConsumes, ApiOperation, ApiParam, ApiProduces, ApiTags } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -40,24 +40,24 @@ export class MeetingsController {
 
   @Get(':id')
   @ApiOperation({ summary: '회의 단건 (발화/클러스터 포함)' })
-  get(@Param('id', ParseUUIDPipe) id: string) { return this.service.get(id); }
+  get(@Param('id') id: string) { return this.service.get(id); }
 
   @Get(':id/status')
   @ApiOperation({ summary: '처리 상태 조회' })
-  status(@Param('id', ParseUUIDPipe) id: string) { return this.service.getStatus(id); }
+  status(@Param('id') id: string) { return this.service.getStatus(id); }
 
   @Put(':id/favorite')
   @ApiOperation({ summary: '즐겨찾기 설정' })
-  favorite(@Param('id', ParseUUIDPipe) id: string) { return this.service.setFavorite(id, true); }
+  favorite(@Param('id') id: string) { return this.service.setFavorite(id, true); }
 
   @Delete(':id/favorite')
   @ApiOperation({ summary: '즐겨찾기 해제' })
-  unfavorite(@Param('id', ParseUUIDPipe) id: string) { return this.service.setFavorite(id, false); }
+  unfavorite(@Param('id') id: string) { return this.service.setFavorite(id, false); }
 
   @Post(':id/reprocess')
   @ApiOperation({ summary: '재처리 (processing_version 증가 후 재큐잉)' })
   @HttpCode(202)
-  reprocess(@Param('id', ParseUUIDPipe) id: string) { return this.service.reprocess(id); }
+  reprocess(@Param('id') id: string) { return this.service.reprocess(id); }
 
   @Post('reindex-missing')
   @ApiOperation({ summary: '미색인 회의 일괄 재색인 (reconciler 백필)' })
@@ -67,14 +67,14 @@ export class MeetingsController {
   @Post(':id/reindex')
   @ApiOperation({ summary: '단건 검색 재색인' })
   @HttpCode(202)
-  reindex(@Param('id', ParseUUIDPipe) id: string) { return this.service.reindex(id); }
+  reindex(@Param('id') id: string) { return this.service.reindex(id); }
 
   @Get(':id/audio')
   @ApiOperation({ summary: '오디오 스트리밍 (HTTP Range 지원)' })
-  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiParam({ name: 'id' })
   @ApiProduces('application/octet-stream')
   async audio(
-    @Param('id', ParseUUIDPipe) id: string,
+    @Param('id') id: string,
     @Headers('range') range: string | undefined,
     @Res() res: Response,
   ) {

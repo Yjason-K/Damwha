@@ -26,8 +26,9 @@ describe('meetings', () => {
     expect(res.status).toBe(201);
     expect(res.body.status).toBe('uploaded');
     expect(res.body.title).toBe('기획회의');
-    expect(res.body.audio_key).toMatch(/^meetings\/.+\/original\.m4a$/);
-    expect(res.body.current_job_id).toBeTruthy();
+    expect(res.body.id).toMatch(/^mtg_[1-9][0-9]*$/);
+    expect(res.body.audio_key).toMatch(/^meetings\/mtg_[1-9][0-9]*\/original\.m4a$/);
+    expect(res.body.current_job_id).toMatch(/^job_[1-9][0-9]*$/);
 
     const job = await db.pool.query('SELECT * FROM job WHERE id=$1', [res.body.current_job_id]);
     expect(job.rows[0].type).toBe('process_meeting');
@@ -158,15 +159,15 @@ describe('meetings', () => {
   });
 
   it('favorite PUT/DELETE → 404 for unknown meeting', async () => {
-    const unknown = '99999999-9999-9999-9999-999999999999';
+    const unknown = 'mtg_999999';
     expect((await request(srv()).put(`/meetings/${unknown}/favorite`)).status).toBe(404);
     expect((await request(srv()).delete(`/meetings/${unknown}/favorite`)).status).toBe(404);
   });
 
-  it('favorite PUT/DELETE → 400 for malformed UUID', async () => {
-    // spec §4 계약: ParseUUIDPipe → 잘못된 UUID 형식은 400
-    expect((await request(srv()).put('/meetings/not-a-uuid/favorite')).status).toBe(400);
-    expect((await request(srv()).delete('/meetings/not-a-uuid/favorite')).status).toBe(400);
+  it('favorite PUT/DELETE → 404 for malformed id', async () => {
+    // ParseUUIDPipe 제거: 형식 검증 없음 → 존재하지 않는 id는 404 (400 아님)
+    expect((await request(srv()).put('/meetings/not-an-id/favorite')).status).toBe(404);
+    expect((await request(srv()).delete('/meetings/not-an-id/favorite')).status).toBe(404);
   });
 
   it('POST /meetings/reindex-missing enqueues only meetings with a missing-embedding indexable utterance', async () => {
@@ -195,7 +196,7 @@ describe('meetings', () => {
     expect(res.body.enqueued).toBe(1); // only A
 
     const enq = (await db.pool.query(
-      `SELECT meeting_id FROM job WHERE type='index_meeting' AND meeting_id=ANY($1::uuid[])`, [[a, b, c]],
+      `SELECT meeting_id FROM job WHERE type='index_meeting' AND meeting_id=ANY($1::text[])`, [[a, b, c]],
     )).rows.map((r: any) => r.meeting_id);
     expect(enq).toEqual([a]); // A enqueued; B/C not
   });

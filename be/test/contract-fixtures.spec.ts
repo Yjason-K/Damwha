@@ -22,4 +22,7 @@ describe('contract fixtures (shared with pydantic worker)', () => {
   it('validates index_meeting.valid.json', () => {
     expect(() => IndexMeetingPayloadSchema.parse(read('index_meeting.valid.json'))).not.toThrow();
   });
+  it('rejects process_meeting.invalid_id.json (UUID meeting_id)', () => {
+    expect(() => ProcessMeetingPayloadSchema.parse(read('process_meeting.invalid_id.json'))).toThrow();
+  });
 });

@@ -15,7 +15,7 @@ export const ModelsSchema = z.object({
 
 export const ProcessMeetingPayloadSchema = z.object({
   schema_version: z.literal(1).default(1),
-  meeting_id: z.string().uuid(),
+  meeting_id: z.string().regex(/^mtg_[1-9][0-9]*$/),
   audio_key: z.string().min(1),
   processing_version: z.number().int().nonnegative(),
   reprocess: z.boolean(),
@@ -25,14 +25,14 @@ export const ProcessMeetingPayloadSchema = z.object({
 
 export const EnrollSpeakerPayloadSchema = z.object({
   schema_version: z.literal(1).default(1),
-  speaker_id: z.string().uuid(),
+  speaker_id: z.string().regex(/^spk_[1-9][0-9]*$/),
   audio_key: z.string().min(1),
   embedding: z.object({ model: z.string(), dimension: z.number().int() }),
 });
 
 export const IndexMeetingPayloadSchema = z.object({
   schema_version: z.literal(1).default(1),
-  meeting_id: z.string().uuid(),
+  meeting_id: z.string().regex(/^mtg_[1-9][0-9]*$/),
   processing_version: z.number().int().nonnegative(),
   search_embedding: z.object({ model: z.string(), dimension: z.number().int() }),
 });

@@ -4,7 +4,7 @@ import { StorageService } from '../storage/storage.service';
 import { JobsRepository } from '../jobs/jobs.repository';
 import { buildEnrollSpeakerPayload } from '../contracts/job-payload.schema';
 import { SpeakersRepository } from './speakers.repository';
-import * as crypto from 'crypto';
+import { nextId } from '../common/id';
 import * as fs from 'fs';
 
 const AUDIO_MIME = /^audio\//;
@@ -32,7 +32,7 @@ export class SpeakersService {
       throw new BadRequestException('file must be audio/*');
     }
 
-    const speakerId = crypto.randomUUID();
+    const speakerId = await nextId(this.db.pool, 'speaker');
     const audioKey = this.storage.speakerKey(speakerId, file.originalname);
     await this.storage.saveFromTemp(audioKey, file.path);
 

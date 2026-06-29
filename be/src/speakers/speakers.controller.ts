@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Get, Param, ParseUUIDPipe, Post, UploadedFile, UseInterceptors,
+  Body, Controller, Get, Param, Post, UploadedFile, UseInterceptors,
 } from '@nestjs/common';
 import { ApiBody, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -35,5 +35,5 @@ export class SpeakersController {
 
   @Get(':id')
   @ApiOperation({ summary: '화자 단건' })
-  get(@Param('id', ParseUUIDPipe) id: string) { return this.service.get(id); }
+  get(@Param('id') id: string) { return this.service.get(id); }
 }

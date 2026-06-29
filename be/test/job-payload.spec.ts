@@ -19,7 +19,7 @@ describe('job payload contract', () => {
 
   it('builds + validates a process_meeting payload from ENV', () => {
     const p = buildProcessMeetingPayload({
-      meetingId: '11111111-1111-1111-1111-111111111111',
+      meetingId: 'mtg_1',
       audioKey: 'meetings/x/original.wav',
       processingVersion: 2,
       reprocess: true,
@@ -36,7 +36,7 @@ describe('job payload contract', () => {
 
   it('builds + validates an enroll_speaker payload', () => {
     const p = buildEnrollSpeakerPayload({
-      speakerId: '22222222-2222-2222-2222-222222222222',
+      speakerId: 'spk_1',
       audioKey: 'speakers/y/sample.wav',
     });
     expect(() => EnrollSpeakerPayloadSchema.parse(p)).not.toThrow();
@@ -45,7 +45,7 @@ describe('job payload contract', () => {
 
   it('stamps schema_version=1 on process_meeting payload', () => {
     const p = buildProcessMeetingPayload({
-      meetingId: '11111111-1111-1111-1111-111111111111',
+      meetingId: 'mtg_1',
       audioKey: 'meetings/x/original.wav',
       processingVersion: 2,
       reprocess: true,
@@ -56,7 +56,7 @@ describe('job payload contract', () => {
 
   it('defaults missing schema_version to 1', () => {
     const raw = {
-      meeting_id: '11111111-1111-1111-1111-111111111111',
+      meeting_id: 'mtg_1',
       audio_key: 'meetings/x/original.wav',
       processing_version: 0, reprocess: false,
       models: {
@@ -71,7 +71,7 @@ describe('job payload contract', () => {
 
   it('stamps schema_version=1 on enroll_speaker payload', () => {
     const p = buildEnrollSpeakerPayload({
-      speakerId: '22222222-2222-2222-2222-222222222222',
+      speakerId: 'spk_1',
       audioKey: 'speakers/y/sample.wav',
     });
     expect(p.schema_version).toBe(1);
@@ -81,12 +81,21 @@ describe('job payload contract', () => {
     process.env.SEARCH_EMBEDDING_MODEL = 'BAAI/bge-m3';
     process.env.SEARCH_EMBEDDING_DIM = '1024';
     const p = buildIndexMeetingPayload({
-      meetingId: '11111111-1111-1111-1111-111111111111',
+      meetingId: 'mtg_1',
       processingVersion: 3,
     });
     expect(p.schema_version).toBe(1);
     expect(p.processing_version).toBe(3);
     expect(p.search_embedding).toEqual({ model: 'BAAI/bge-m3', dimension: 1024 });
     expect(() => IndexMeetingPayloadSchema.parse(p)).not.toThrow();
+  });
+
+  it('rejects UUID, zero, and unicode-digit ids', () => {
+    const base = buildProcessMeetingPayload({
+      meetingId: 'mtg_1', audioKey: 'meetings/mtg_1/o.wav', processingVersion: 0, reprocess: false,
+    });
+    for (const bad of ['ca8e8f66-6e2b-4c4f-8d0b-7d432a7a6aca', 'mtg_0', 'mtg_1٢']) { // 마지막은 유니코드 숫자
+      expect(() => ProcessMeetingPayloadSchema.parse({ ...base, meeting_id: bad })).toThrow();
+    }
   });
 });

@@ -24,7 +24,8 @@ describe('speakers', () => {
     expect(res.status).toBe(201);
     expect(res.body.name).toBe('김영재');
     expect(res.body.enrollment_status).toBe('pending');
-    expect(res.body.current_job_id).toBeTruthy();
+    expect(res.body.id).toMatch(/^spk_[1-9][0-9]*$/);
+    expect(res.body.current_job_id).toMatch(/^job_[1-9][0-9]*$/);
     const job = await db.pool.query('SELECT * FROM job WHERE id=$1', [res.body.current_job_id]);
     expect(job.rows[0].type).toBe('enroll_speaker');
     expect(job.rows[0].payload.speaker_id).toBe(res.body.id);

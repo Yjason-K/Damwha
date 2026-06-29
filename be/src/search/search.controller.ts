@@ -24,8 +24,8 @@ export class SearchController {
           properties: {
             dateFrom: { type: 'string', format: 'date-time' },
             dateTo: { type: 'string', format: 'date-time' },
-            speakerIds: { type: 'array', items: { type: 'string', format: 'uuid' } },
-            meetingIds: { type: 'array', items: { type: 'string', format: 'uuid' } },
+            speakerIds: { type: 'array', items: { type: 'string' } },
+            meetingIds: { type: 'array', items: { type: 'string' } },
           },
         },
       },

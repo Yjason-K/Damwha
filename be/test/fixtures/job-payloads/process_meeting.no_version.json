@@ -1,6 +1,6 @@
 {
-  "meeting_id": "11111111-1111-1111-1111-111111111111",
-  "audio_key": "meetings/11111111-1111-1111-1111-111111111111/original.m4a",
+  "meeting_id": "mtg_1",
+  "audio_key": "meetings/mtg_1/original.m4a",
   "processing_version": 2,
   "reprocess": true,
   "models": {

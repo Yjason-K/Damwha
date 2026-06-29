@@ -1,17 +1,20 @@
 CREATE EXTENSION IF NOT EXISTS pg_bigm;
 
 -- 의미검색 임베딩 (voiceprint 패턴 미러). 차원 고정 1024 (Phase 2).
+CREATE SEQUENCE ue_id_seq;
 CREATE TABLE utterance_embedding (
-  id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  utterance_id       uuid NOT NULL REFERENCES utterance(id) ON DELETE CASCADE,
+  id                 text PRIMARY KEY DEFAULT 'ue_' || nextval('ue_id_seq')
+                       CHECK (id ~ '^ue_[1-9][0-9]*$'),
+  utterance_id       text NOT NULL REFERENCES utterance(id) ON DELETE CASCADE,
   embedding          vector(1024) NOT NULL,
   model              text NOT NULL,
   dimension          int  NOT NULL,
   processing_version int  NOT NULL,
-  job_id             uuid REFERENCES job(id) ON DELETE SET NULL,
+  job_id             text REFERENCES job(id) ON DELETE SET NULL,
   created_at         timestamptz NOT NULL DEFAULT now(),
   UNIQUE (utterance_id, model)
 );
+ALTER SEQUENCE ue_id_seq OWNED BY utterance_embedding.id;
 CREATE INDEX utterance_embedding_model_dim_idx ON utterance_embedding (model, dimension);
 CREATE INDEX utterance_embedding_hnsw_idx ON utterance_embedding
   USING hnsw (embedding vector_cosine_ops);

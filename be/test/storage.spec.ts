@@ -17,11 +17,9 @@ describe('StorageService', () => {
     svc = new StorageService();
   });
 
-  it('builds UUID-based keys, ignoring untrusted filename', () => {
-    expect(svc.meetingKey('11111111-1111-1111-1111-111111111111', '../../evil.MP3'))
-      .toBe('meetings/11111111-1111-1111-1111-111111111111/original.mp3');
-    expect(svc.speakerKey('22222222-2222-2222-2222-222222222222', 'no-ext'))
-      .toBe('speakers/22222222-2222-2222-2222-222222222222/sample');
+  it('builds id-based keys, ignoring untrusted filename', () => {
+    expect(svc.meetingKey('mtg_1', '../../evil.MP3')).toBe('meetings/mtg_1/original.mp3');
+    expect(svc.speakerKey('spk_1', 'no-ext')).toBe('speakers/spk_1/sample');
   });
 
   it('saves and resolves within root', async () => {

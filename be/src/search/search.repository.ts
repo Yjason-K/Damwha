@@ -23,13 +23,13 @@ export interface SearchRow {
 }
 
 // 모든 arm/browse가 공유하는 필터 WHERE. $base 이후 4개 파라미터를 소비.
-// f1=dateFrom f2=dateTo f3=speakerIds(uuid[]) f4=meetingIds(uuid[])
+// f1=dateFrom f2=dateTo f3=speakerIds(text[]) f4=meetingIds(text[])
 function filterSql(alias: string, f1: number, f2: number, f3: number, f4: number): string {
   return `
     AND ($${f1}::timestamptz IS NULL OR m.recorded_at >= $${f1}::timestamptz)
     AND ($${f2}::timestamptz IS NULL OR m.recorded_at <  $${f2}::timestamptz)
-    AND ($${f3}::uuid[] IS NULL OR ${alias}.speaker_id = ANY($${f3}::uuid[]))
-    AND ($${f4}::uuid[] IS NULL OR ${alias}.meeting_id = ANY($${f4}::uuid[]))`;
+    AND ($${f3}::text[] IS NULL OR ${alias}.speaker_id = ANY($${f3}::text[]))
+    AND ($${f4}::text[] IS NULL OR ${alias}.meeting_id = ANY($${f4}::text[]))`;
 }
 
 const SELECT_COLS = `

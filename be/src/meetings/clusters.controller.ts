@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, Param, ParseUUIDPipe, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, Param, Post } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { MeetingsService } from './meetings.service';
 
@@ -13,15 +13,15 @@ export class ClustersController {
     schema: {
       type: 'object',
       properties: {
-        speaker_id: { type: 'string', format: 'uuid', description: '연결할 기존 화자 ID' },
+        speaker_id: { type: 'string', description: '연결할 기존 화자 ID' },
         new_name: { type: 'string', description: '신규 화자 이름 (speaker_id 미지정 시)' },
       },
     },
   })
   @HttpCode(200)
   resolve(
-    @Param('id', ParseUUIDPipe) meetingId: string,
-    @Param('clusterId', ParseUUIDPipe) clusterId: string,
+    @Param('id') meetingId: string,
+    @Param('clusterId') clusterId: string,
     @Body() body: { speaker_id?: string; new_name?: string },
   ) {
     return this.service.resolveCluster(meetingId, clusterId, body);

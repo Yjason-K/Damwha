@@ -1,18 +1,23 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 
+CREATE SEQUENCE spk_id_seq;
 CREATE TABLE speaker (
-  id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  id                text PRIMARY KEY DEFAULT 'spk_' || nextval('spk_id_seq')
+                      CHECK (id ~ '^spk_[1-9][0-9]*$'),
   name              text NOT NULL,
   enrollment_status text NOT NULL DEFAULT 'pending'
                       CHECK (enrollment_status IN ('pending','ready','failed')),
-  current_job_id    uuid,
+  current_job_id    text,
   enrollment_error  jsonb,
   created_at        timestamptz NOT NULL DEFAULT now()
 );
+ALTER SEQUENCE spk_id_seq OWNED BY speaker.id;
 
+CREATE SEQUENCE vp_id_seq;
 CREATE TABLE voiceprint (
-  id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  speaker_id         uuid NOT NULL REFERENCES speaker(id) ON DELETE CASCADE,
+  id                 text PRIMARY KEY DEFAULT 'vp_' || nextval('vp_id_seq')
+                       CHECK (id ~ '^vp_[1-9][0-9]*$'),
+  speaker_id         text NOT NULL REFERENCES speaker(id) ON DELETE CASCADE,
   embedding          vector(192) NOT NULL,
   model              text NOT NULL,
   dimension          int NOT NULL,
@@ -21,11 +26,14 @@ CREATE TABLE voiceprint (
   source             text,
   created_at         timestamptz NOT NULL DEFAULT now()
 );
+ALTER SEQUENCE vp_id_seq OWNED BY voiceprint.id;
 CREATE INDEX voiceprint_model_dim_idx ON voiceprint (model, dimension);
 CREATE INDEX voiceprint_embedding_idx ON voiceprint USING hnsw (embedding vector_cosine_ops);
 
+CREATE SEQUENCE mtg_id_seq;
 CREATE TABLE meeting (
-  id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  id                 text PRIMARY KEY DEFAULT 'mtg_' || nextval('mtg_id_seq')
+                       CHECK (id ~ '^mtg_[1-9][0-9]*$'),
   title              text,
   original_filename  text,
   audio_key          text NOT NULL,
@@ -34,27 +42,33 @@ CREATE TABLE meeting (
   duration_ms        int,
   status             text NOT NULL DEFAULT 'uploaded'
                        CHECK (status IN ('uploaded','processing','done','failed')),
-  current_job_id     uuid,
+  current_job_id     text,
   processing_version int NOT NULL DEFAULT 0,
   error              jsonb,
   created_at         timestamptz NOT NULL DEFAULT now()
 );
+ALTER SEQUENCE mtg_id_seq OWNED BY meeting.id;
 
+CREATE SEQUENCE clu_id_seq;
 CREATE TABLE meeting_cluster (
-  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  meeting_id          uuid NOT NULL REFERENCES meeting(id) ON DELETE CASCADE,
+  id                  text PRIMARY KEY DEFAULT 'clu_' || nextval('clu_id_seq')
+                        CHECK (id ~ '^clu_[1-9][0-9]*$'),
+  meeting_id          text NOT NULL REFERENCES meeting(id) ON DELETE CASCADE,
   diar_label          text NOT NULL,
   centroid            vector(192),
-  resolved_speaker_id uuid REFERENCES speaker(id),
+  resolved_speaker_id text REFERENCES speaker(id),
   processing_version  int NOT NULL,
-  job_id              uuid,
+  job_id              text,
   UNIQUE (meeting_id, diar_label)
 );
+ALTER SEQUENCE clu_id_seq OWNED BY meeting_cluster.id;
 
+CREATE SEQUENCE utt_id_seq;
 CREATE TABLE utterance (
-  id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  meeting_id         uuid NOT NULL REFERENCES meeting(id) ON DELETE CASCADE,
-  speaker_id         uuid REFERENCES speaker(id),
+  id                 text PRIMARY KEY DEFAULT 'utt_' || nextval('utt_id_seq')
+                       CHECK (id ~ '^utt_[1-9][0-9]*$'),
+  meeting_id         text NOT NULL REFERENCES meeting(id) ON DELETE CASCADE,
+  speaker_id         text REFERENCES speaker(id),
   diar_label         text NOT NULL,
   start_ms           int NOT NULL,
   end_ms             int NOT NULL,
@@ -65,14 +79,17 @@ CREATE TABLE utterance (
   transcript_error   jsonb,
   order_index        int NOT NULL,
   processing_version int NOT NULL,
-  job_id             uuid,
+  job_id             text,
   UNIQUE (meeting_id, order_index)
 );
+ALTER SEQUENCE utt_id_seq OWNED BY utterance.id;
 
+CREATE SEQUENCE job_id_seq;
 CREATE TABLE job (
-  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  id           text PRIMARY KEY DEFAULT 'job_' || nextval('job_id_seq')
+                 CHECK (id ~ '^job_[1-9][0-9]*$'),
   type         text NOT NULL CHECK (type IN ('process_meeting','enroll_speaker')),
-  meeting_id   uuid REFERENCES meeting(id) ON DELETE CASCADE,
+  meeting_id   text REFERENCES meeting(id) ON DELETE CASCADE,
   payload      jsonb NOT NULL,
   status       text NOT NULL DEFAULT 'queued'
                  CHECK (status IN ('queued','running','done','failed')),
@@ -88,6 +105,7 @@ CREATE TABLE job (
   created_at   timestamptz NOT NULL DEFAULT now(),
   updated_at   timestamptz NOT NULL DEFAULT now()
 );
+ALTER SEQUENCE job_id_seq OWNED BY job.id;
 CREATE INDEX job_status_created_idx ON job (status, created_at);
 
 ALTER TABLE meeting         ADD FOREIGN KEY (current_job_id) REFERENCES job(id) ON DELETE SET NULL;
