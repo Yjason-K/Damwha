@@ -1,3 +1,5 @@
+import pydantic
+
 from damwha_worker.config import load_settings
 
 
@@ -23,5 +25,5 @@ def test_default_speaker_prefix_rejects_blank(monkeypatch):
 
     monkeypatch.setenv("DATABASE_URL", "postgres://u:p@localhost:5432/db")
     monkeypatch.setenv("DEFAULT_SPEAKER_PREFIX", "   ")
-    with pytest.raises(Exception):  # noqa: B017
+    with pytest.raises(pydantic.ValidationError):
         load_settings()

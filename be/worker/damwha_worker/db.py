@@ -182,7 +182,7 @@ def persist_process_meeting(
                         """
                         INSERT INTO meeting_cluster(meeting_id, diar_label, centroid,
                             resolved_speaker_id, processing_version, job_id)
-                        VALUES (%s,%s,%s,%s,%s,%s)
+                        VALUES (%s,%s,%s::vector,%s,%s,%s)
                         """,
                         (
                             meeting_id,

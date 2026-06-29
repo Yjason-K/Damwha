@@ -83,6 +83,12 @@ def test_full_pipeline_with_identification(conn, tmp_path):
     assert cl[0]["resolved_speaker_id"] == prov["id"]
     vp = conn.execute("SELECT source FROM voiceprint WHERE speaker_id=%s", (prov["id"],)).fetchone()
     assert vp["source"] == "auto_cluster"
+    assert (
+        conn.execute("SELECT duration_ms FROM meeting WHERE id=%s", (mid,)).fetchone()[
+            "duration_ms"
+        ]
+        == 2000
+    )
 
 
 def test_stage_logs_emitted_with_counts(conn, tmp_path, caplog):
