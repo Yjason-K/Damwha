@@ -25,6 +25,7 @@ export async function startTestDb(): Promise<StartedTestDb> {
       await pool.query(
         `TRUNCATE job, utterance, meeting_cluster, voiceprint, meeting, speaker RESTART IDENTITY CASCADE`,
       );
+      await pool.query(`ALTER SEQUENCE speaker_default_seq RESTART`);
     },
   };
 }

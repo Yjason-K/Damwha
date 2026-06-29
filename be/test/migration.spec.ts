@@ -51,6 +51,42 @@ describe('migration', () => {
     ).rejects.toThrow(/check constraint/i);
   });
 
+  it('004: accepts provisional, rejects bogus enrollment_status', async () => {
+    await expect(
+      db.pool.query(`INSERT INTO speaker(name, enrollment_status) VALUES('p','provisional')`),
+    ).resolves.toBeDefined();
+    await expect(
+      db.pool.query(`INSERT INTO speaker(name, enrollment_status) VALUES('b','bogus')`),
+    ).rejects.toThrow(/check constraint/i);
+  });
+
+  it('004: speaker_default_seq yields increasing values', async () => {
+    const a = await db.pool.query(`SELECT nextval('speaker_default_seq')::int AS n`);
+    const b = await db.pool.query(`SELECT nextval('speaker_default_seq')::int AS n`);
+    expect(b.rows[0].n).toBeGreaterThan(a.rows[0].n);
+  });
+
+  it('004: source_cluster_id is unique when non-null, many NULL allowed', async () => {
+    const m = await db.pool.query(`INSERT INTO meeting(audio_key) VALUES('k') RETURNING id`);
+    const sp = await db.pool.query(`INSERT INTO speaker(name) VALUES('s') RETURNING id`);
+    const c = await db.pool.query(
+      `INSERT INTO meeting_cluster(meeting_id,diar_label,processing_version)
+       VALUES($1,'S0',0) RETURNING id`,
+      [m.rows[0].id],
+    );
+    const vec = '[' + Array(192).fill(0.1).join(',') + ']';
+    const insVp = (clusterId: string | null) =>
+      db.pool.query(
+        `INSERT INTO voiceprint(speaker_id, embedding, model, dimension, source_cluster_id)
+         VALUES($1,$2::vector,'m',192,$3)`,
+        [sp.rows[0].id, vec, clusterId],
+      );
+    await insVp(null);
+    await expect(insVp(null)).resolves.toBeDefined(); // multiple NULL ok
+    await insVp(c.rows[0].id);
+    await expect(insVp(c.rows[0].id)).rejects.toThrow(/duplicate key|unique/i); // dup non-null
+  });
+
   it('002: utterance_embedding + bigm index + job index_meeting/embed allowed', async () => {
     // utterance_embedding 테이블과 인덱스 존재
     const tbl = await db.pool.query(
