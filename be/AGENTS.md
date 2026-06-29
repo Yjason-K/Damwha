@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## What this is
 
@@ -44,7 +44,6 @@ Separate Python project under `worker/` (uv + ruff + pytest + pydantic v2 + psyc
 - **Failure classification.** `errors.ErrorKind` is PERMANENT vs TRANSIENT (uncategorized → TRANSIENT). PERMANENT → fail immediately; TRANSIENT → immediate requeue if attempts remain (no timed backoff — `job` has no `next_attempt_at`). Heartbeat runs on its own DB connection in a daemon thread and survives a transient DB error.
 - **pyannote.audio resolves to 4.x** (the spec named the 3.1 *model*; the *library* major bumped). 4.x renamed `use_auth_token` → `token` and the pipeline returns a `DiarizeOutput` (use `.speaker_diarization`). The diarization pipeline pulls a **3-model gated HF chain** — see `worker/SMOKE.md`. ECAPA runs on **CPU** even on Apple Silicon (SpeechBrain MPS support is unreliable; the model is tiny); pyannote and mlx-whisper use the GPU.
 - **Tests vs smoke.** All deterministic glue (db guards, align, identify, persist, poll loop) is tested with **fake models + real Postgres** (testcontainers) and runs in CI. The **real models are verified only by a local smoke** (`worker/SMOKE.md`, `scripts/smoke_process_meeting.py`) — gated/heavy, never in CI.
-- **Search indexing.** `index_meeting` is a separate job type (dispatched by the API after persist completes). Failure marks the job only — the meeting stays `done` and BM25-searchable. Query embedding is the **single exception to the job-table-only invariant**: the API calls the embed service (localhost HTTP RPC, `POST /embed`) directly at query time; this never crosses a network boundary (`EMBED_SERVICE_ALLOW_NON_LOOPBACK=false`).
 
 ## Commands
 
@@ -54,9 +53,8 @@ Node **22** is required (`.nvmrc`, `engines`). Use `nvm use` first.
 npm install                              # once
 cp .env.example .env                     # configure DATABASE_URL, STORAGE_ROOT, model envs
 
-docker compose up -d                     # start Postgres (pgvector + pg_bigm); first run builds the image
 npm run migrate                          # apply SQL migrations (needs a running Postgres w/ pgvector)
-npm run start:dev                        # watch mode (Swagger UI at /docs, OpenAPI JSON at /docs-json)
+npm run start:dev                        # watch mode
 npm run build && npm start               # prod (build copies migrations into dist/)
 
 npm test                                 # full suite, serial
@@ -93,7 +91,7 @@ uv run python scripts/smoke_process_meeting.py <audio>   # local end-to-end smok
 ## Working guidelines (general)
 
 > Behavioral guidelines to reduce common LLM coding mistakes. Adapted from
-> [multica-ai/andrej-karpathy-skills](https://github.com/multica-ai/andrej-karpathy-skills/blob/main/CLAUDE.md).
+> [multica-ai/andrej-karpathy-skills](https://github.com/multica-ai/andrej-karpathy-skills/blob/main/AGENTS.md).
 > They bias toward caution over speed; for trivial tasks, use judgment.
 
 ### 1. Think before coding
