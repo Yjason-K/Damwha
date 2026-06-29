@@ -54,6 +54,22 @@ def test_index_commits_zero_when_no_indexable(conn):
     )
 
 
+def test_index_stage_logs_emitted(conn, caplog):
+    mid = seed_meeting(conn, status="done", processing_version=0)
+    _seed_utts(conn, mid, [(0, "ok", "안녕하세요"), (1, "silence", None)])
+    job = _claim(conn, mid)
+    with caplog.at_level("INFO", logger="damwha_worker"):
+        run_index_meeting(conn, job, _payload(mid), FakeTextEmbedder(), worker_id="w1")
+    msgs = [r.getMessage() for r in caplog.records]
+    text = "\n".join(msgs)
+    for stage in ("embed", "index_persist"):
+        assert any(f"stage={stage} done elapsed_ms=" in m for m in msgs), stage
+    assert "index_meeting start" in text
+    # counts only (not utterance text)
+    assert "utterances=1 embeddings=1" in text
+    assert "index_meeting done outcome=committed total_ms=" in text
+
+
 def test_index_discarded_on_stale_pv(conn):
     mid = seed_meeting(conn, status="done", processing_version=0)
     _seed_utts(conn, mid, [(0, "ok", "안녕")])

@@ -1,8 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { JobRow, JobType, Queryable } from './jobs.types';
 
 @Injectable()
 export class JobsRepository {
+  private readonly logger = new Logger(JobsRepository.name);
+
   async enqueue(
     exec: Queryable,
     args: { type: JobType; meetingId: string | null; payload: unknown },
@@ -12,6 +14,7 @@ export class JobsRepository {
        VALUES($1, $2, $3::jsonb) RETURNING *`,
       [args.type, args.meetingId, JSON.stringify(args.payload)],
     );
+    this.logger.log(`enqueued job ${rows[0].id} type=${args.type} meeting=${args.meetingId ?? '-'}`);
     return rows[0];
   }
 

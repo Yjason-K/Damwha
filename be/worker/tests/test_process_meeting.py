@@ -83,6 +83,33 @@ def test_full_pipeline_with_identification(conn, tmp_path):
     )
 
 
+def test_stage_logs_emitted_with_counts(conn, tmp_path, caplog):
+    mid = seed_meeting(conn, status="processing", audio_key="meetings/m/original.m4a")
+    jid = seed_job(conn, meeting_id=mid, payload={})
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    db.claim(conn, "w1")
+    with caplog.at_level("INFO", logger="damwha_worker"):
+        run_process_meeting(
+            conn,
+            conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
+            _payload(mid, "meetings/m/original.m4a"),
+            _models(),
+            Storage(str(tmp_path)),
+            worker_id="w1",
+            normalize_fn=lambda s, d: None,
+            probe_fn=lambda p: ProbeResult(2000),
+        )
+    msgs = [r.getMessage() for r in caplog.records]
+    text = "\n".join(msgs)
+    # every stage logs a timed "done" line with elapsed_ms
+    for stage in ("normalize", "vad", "diarize", "embed", "identify", "stt", "align", "persist"):
+        assert any(f"stage={stage} done elapsed_ms=" in m for m in msgs), stage
+    # counts (not content) are surfaced; start/total bracket the run
+    assert "process_meeting start" in text
+    assert "segments=2" in text and "words=2" in text and "utterances=2" in text
+    assert "process_meeting done outcome=committed total_ms=" in text
+
+
 def test_stage_progress_recorded(conn, tmp_path):
     mid = seed_meeting(conn, status="processing", audio_key="meetings/m/original.m4a")
     jid = seed_job(conn, meeting_id=mid, payload={})

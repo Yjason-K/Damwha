@@ -51,8 +51,9 @@ def handle_job(
         werr = classify(exc)
         error_json = werr.to_json(stage=job.get("stage"))
         log.warning(
-            "job %s failed: code=%s kind=%s attempt=%s/%s",
+            "job %s type=%s failed: code=%s kind=%s attempt=%s/%s",
             job["id"],
+            job["type"],
             werr.code,
             werr.kind.value,
             job["attempts"],
@@ -156,7 +157,7 @@ def main() -> None:  # pragma: no cover — 실모델 + 무한 루프 (로컬 �
             build_text_embedder_fn=build_text_embedder,
             heartbeat_cm=hb,
         )
-        log.info("job %s → %s", job["id"], outcome)
+        log.info("job %s type=%s → %s", job["id"], job["type"], outcome)
         time.sleep(settings.poll_interval_seconds)
 
 
