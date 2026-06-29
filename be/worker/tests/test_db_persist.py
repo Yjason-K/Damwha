@@ -381,6 +381,113 @@ def test_persist_centroidless_cluster_makes_no_speaker(conn):
     assert u["speaker_id"] is None
 
 
+def _utt(label, oi=0):
+    return {
+        "speaker_id": None,
+        "diar_label": label,
+        "start_ms": 0,
+        "end_ms": 1,
+        "text": "x",
+        "confidence": None,
+        "status": "ok",
+        "transcript_error": None,
+        "order_index": oi,
+    }
+
+
+def test_reprocess_gcs_unconfirmed_provisional_orphan(conn):
+    mid, jid1 = _claimed_pm_job(conn, pv=0)
+    db.persist_process_meeting(
+        conn,
+        job_id=jid1,
+        worker_id="w1",
+        meeting_id=mid,
+        processing_version=0,
+        normalized_key="k",
+        duration_ms=1,
+        utterances=[_utt("S0")],
+        clusters=[{"diar_label": "S0", "centroid": [0.1] * 192, "resolved_speaker_id": None}],
+        embedding_model="m",
+        embedding_dim=192,
+    )
+    prov1 = conn.execute("SELECT id FROM speaker").fetchone()["id"]
+    # reprocess: pv=1, new running job owns the meeting
+    jid2 = seed_job(conn, meeting_id=mid)
+    conn.execute(
+        "UPDATE meeting SET processing_version=1, current_job_id=%s, "
+        "status='processing' WHERE id=%s",
+        (jid2, mid),
+    )
+    conn.execute(
+        "UPDATE job SET status='running', locked_by='w1', locked_at=now(), attempts=1 WHERE id=%s",
+        (jid2,),
+    )
+    db.persist_process_meeting(
+        conn,
+        job_id=jid2,
+        worker_id="w1",
+        meeting_id=mid,
+        processing_version=1,
+        normalized_key="k",
+        duration_ms=1,
+        utterances=[_utt("S0")],
+        clusters=[{"diar_label": "S0", "centroid": [0.2] * 192, "resolved_speaker_id": None}],
+        embedding_model="m",
+        embedding_dim=192,
+    )
+    rows = conn.execute("SELECT id FROM speaker").fetchall()
+    assert len(rows) == 1 and rows[0]["id"] != prov1  # run-1 orphan GC'd
+    vp = conn.execute("SELECT count(*) c FROM voiceprint").fetchone()["c"]
+    assert vp == 1  # orphan voiceprint cascade-deleted
+
+
+def test_reprocess_keeps_confirmed_ready_speaker(conn):
+    mid, jid1 = _claimed_pm_job(conn, pv=0)
+    db.persist_process_meeting(
+        conn,
+        job_id=jid1,
+        worker_id="w1",
+        meeting_id=mid,
+        processing_version=0,
+        normalized_key="k",
+        duration_ms=1,
+        utterances=[_utt("S0")],
+        clusters=[{"diar_label": "S0", "centroid": [0.1] * 192, "resolved_speaker_id": None}],
+        embedding_model="m",
+        embedding_dim=192,
+    )
+    prov1 = conn.execute("SELECT id FROM speaker").fetchone()["id"]
+    conn.execute(
+        "UPDATE speaker SET enrollment_status='ready', name='김영재' WHERE id=%s", (prov1,)
+    )
+    # reprocess with a DIFFERENT label so prov1 ends unreferenced but is ready → must survive
+    jid2 = seed_job(conn, meeting_id=mid)
+    conn.execute(
+        "UPDATE meeting SET processing_version=1, current_job_id=%s, "
+        "status='processing' WHERE id=%s",
+        (jid2, mid),
+    )
+    conn.execute(
+        "UPDATE job SET status='running', locked_by='w1', locked_at=now(), attempts=1 WHERE id=%s",
+        (jid2,),
+    )
+    db.persist_process_meeting(
+        conn,
+        job_id=jid2,
+        worker_id="w1",
+        meeting_id=mid,
+        processing_version=1,
+        normalized_key="k",
+        duration_ms=1,
+        utterances=[_utt("S1")],
+        clusters=[{"diar_label": "S1", "centroid": [0.3] * 192, "resolved_speaker_id": None}],
+        embedding_model="m",
+        embedding_dim=192,
+    )
+    row = conn.execute("SELECT enrollment_status FROM speaker WHERE id=%s", (prov1,)).fetchone()
+    assert row is not None and row["enrollment_status"] == "ready"  # ready never GC'd
+
+
 def test_persist_names_are_unique_across_two_meetings(conn):
     names = []
     for _ in range(2):

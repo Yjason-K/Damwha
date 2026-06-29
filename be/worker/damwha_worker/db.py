@@ -246,6 +246,19 @@ def persist_process_meeting(
                         job_id,
                     ),
                 )
+            # GC provisional speakers orphaned by this (re)process: no utterance/cluster
+            # references them. auto_cluster voiceprints cascade-delete with the speaker.
+            # First run: no-op. Reprocess: removes the prior run's unconfirmed provisionals.
+            # 'ready' (confirmed) speakers are never deleted. Runs AFTER the new rows are
+            # inserted, so this run's just-created provisionals are referenced and kept.
+            conn.execute(
+                """
+                DELETE FROM speaker s
+                WHERE s.enrollment_status='provisional'
+                  AND NOT EXISTS (SELECT 1 FROM utterance WHERE speaker_id = s.id)
+                  AND NOT EXISTS (SELECT 1 FROM meeting_cluster WHERE resolved_speaker_id = s.id)
+                """
+            )
             conn.execute(
                 "UPDATE job SET status='done', progress=100, updated_at=now() WHERE id=%s",
                 (job_id,),
