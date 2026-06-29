@@ -96,13 +96,13 @@ async function nextId(q: Queryable, t: keyof typeof SEQ): Promise<string> {
 - `speakers/speakers.service.ts:35`: `crypto.randomUUID()` → `await nextId(this.db.pool, 'speaker')` (동일 패턴: id → 파일 저장 → 트랜잭션).
 - `crypto` import는 더 이상 안 쓰면 제거(단, `storage/upload-options.ts`의 `dw-upload-${randomUUID()}` 임시파일명은 **유지** — 엔티티 ID와 무관).
 - **`ParseUUIDPipe` 전부 제거** → 평범한 `@Param('id')` 문자열. 대상: `meetings.controller.ts`, `speakers.controller.ts`, `clusters.controller.ts`. 없는 id는 서비스가 이미 `NotFoundException`(404)으로 처리하므로 형식 검증 불필요. (트레이드오프: 잘못된 형식 id가 400 대신 404가 됨 — 수용.)
-- `contracts/job-payload.schema.ts`: `z.string().uuid()` → prefix별 정규식 (meeting_id ×2 → `z.string().regex(/^mtg_[1-9]\d*$/)`, speaker_id → `z.string().regex(/^spk_[1-9]\d*$/)`).
+- `contracts/job-payload.schema.ts`: `z.string().uuid()` → prefix별 정규식 (meeting_id ×2 → `z.string().regex(/^mtg_[1-9][0-9]*$/)`, speaker_id → `z.string().regex(/^spk_[1-9][0-9]*$/)`). `[0-9]` 명시(JS `\d`도 ASCII지만 세 경계 통일).
 - `search/search.repository.ts`: `::uuid[]` 캐스팅 → `::text[]` (speakerIds, meetingIds 필터).
 - Swagger `format: 'uuid'` 주석 제거(표시용, 기능 무관): `search.controller.ts`, `clusters.controller.ts`, `meetings.controller.ts`.
 
 ### 3. 워커 (Python `worker/`)
 
-- `contracts.py`: 현재 `meeting_id: str` / `speaker_id: str`. zod와 대칭으로 prefix 패턴 추가 — `Annotated[str, StringConstraints(pattern=r"^mtg_[1-9]\d*$")]` (speaker는 `^spk_[1-9]\d*$`). 동일 픽스처를 양쪽에서 검증하므로 drift 차단.
+- `contracts.py`: 현재 `meeting_id: str` / `speaker_id: str`. zod와 대칭으로 prefix 패턴 추가 — `Annotated[str, StringConstraints(pattern=r"^mtg_[1-9][0-9]*$")]` (speaker는 `^spk_[1-9][0-9]*$`). **`\d` 금지** — Python `re`의 `\d`는 유니코드 숫자(`mtg_1٢` 등)를 허용해 DB·zod와 어긋남. 반드시 `[0-9]`. 동일 픽스처를 양쪽에서 검증하므로 drift 차단.
 - 워커 런타임 코드(persist/identify/enroll 등)는 UUID를 생성/파싱하지 않음 — **변경 없음**.
 - **smoke 스크립트는 변경 필요** (UUID를 PK로 직접 INSERT → DB CHECK가 거부하므로 깨짐):
   - `scripts/smoke_process_meeting.py:83` — `meeting_id = str(uuid.uuid4())` → 새 형식 생성(예: `nextval` 사용 `SELECT 'mtg_' || nextval('mtg_id_seq')`, 또는 id 생략하고 `INSERT ... RETURNING id`로 DB DEFAULT 사용).
@@ -112,6 +112,7 @@ async function nextId(q: Queryable, t: keyof typeof SEQ): Promise<string> {
 ### 4. 테스트 & 픽스처
 
 - `test/fixtures/job-payloads/*.json`: UUID 리터럴 → 새 형식(`mtg_1`, `spk_1` 등) + `audio_key` 경로의 UUID도 동반 변경. zod/pydantic 양쪽에서 검증되므로 두 런타임 모두 통과해야 함.
+- **invalid 계약 픽스처 추가**: 유니코드 숫자 케이스(예: `mtg_1٢`)를 양쪽(zod/pydantic) 모두 거부하는지 검증 — `\d` 회귀 방지. UUID 형식·`mtg_0`도 거부 케이스에 포함.
 - UUID를 하드코딩하거나 `randomUUID()`로 생성하는 e2e·단위 테스트 갱신(`test/*.spec.ts`).
 - 워커 테스트(`worker/tests/`)에서 UUID 형식 id를 쓰는 픽스처가 있으면 새 형식으로 갱신(있을 경우).
 
