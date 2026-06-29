@@ -25,33 +25,46 @@
 
 - **숫자 패딩 없음**: `mtg_1`, `mtg_42`, `mtg_137`.
 - **축약 prefix (Stripe식)**.
-- 형식: `text` PK, `^[a-z]+_\d+$`.
+- 형식: `text` PK, prefix별 `^<prefix>_\d+$`.
+
+### 형식 강제 (UUID가 다시 못 들어오게)
+
+형식을 **정의만** 하면 UUID나 `"x"`도 계속 저장된다. "UUID 제거"를 보장하려면 양쪽 경계에서 강제한다:
+
+1. **DB CHECK** — 각 PK에 prefix별 `CHECK (id ~ '^mtg_\d+$')`. 인라인 DEFAULT는 항상 이를 만족하므로, CHECK는 수동/버그성 INSERT(예: smoke의 UUID 삽입)를 즉시 거부한다.
+2. **계약 검증** — job 페이로드의 id 필드를 prefix별 정규식으로 검증 (zod + pydantic). `meeting_id`→`^mtg_\d+$`, `speaker_id`→`^spk_\d+$`.
+
+라우트 파이프 생략(`ParseUUIDPipe` 제거)과 이 내부 강제는 **별개** — 파이프는 HTTP 입력 편의, CHECK/계약은 데이터·경계 무결성.
 
 ## ID 생성 메커니즘
 
-### 채번 SQL 함수 (단일 출처)
+### 테이블별 시퀀스 + 인라인 DEFAULT
 
-prefix→시퀀스 매핑을 한 곳에만 둔다. prefix 약어가 곧 시퀀스 이름 규칙(`mtg` → `mtg_id_seq`).
-
-```sql
-CREATE FUNCTION new_id(prefix text) RETURNS text
-LANGUAGE sql AS $$
-  SELECT prefix || '_' || nextval((prefix || '_id_seq')::regclass)::text;
-$$;
-```
-
-### 테이블별 시퀀스 + DEFAULT
+채번 함수를 두지 않고 각 테이블 DEFAULT에서 시퀀스를 **직접** 참조한다. prefix와 시퀀스가 테이블 정의 옆에 함께 있어, 오타(`mtgg_id_seq`)는 `CREATE TABLE` 시점(마이그레이션)에 즉시 실패한다 — 런타임이 아님.
 
 ```sql
 CREATE SEQUENCE mtg_id_seq;
 CREATE TABLE meeting (
-  id text PRIMARY KEY DEFAULT new_id('mtg'),
+  id text PRIMARY KEY DEFAULT 'mtg_' || nextval('mtg_id_seq')
+       CHECK (id ~ '^mtg_\d+$'),
   ...
 );
+ALTER SEQUENCE mtg_id_seq OWNED BY meeting.id;  -- 컬럼/테이블과 생명주기 연동
 ```
 
-- **워커가 INSERT하는 행**(utterance, meeting_cluster, voiceprint, utterance_embedding, job): DB DEFAULT가 자동 채번. `RETURNING id`로 id를 받는 현재 코드 그대로 → **워커·jobs 코드 변경 없음**.
-- **meeting, speaker**: API가 파일 저장 전에 id가 필요(스토리지 경로 때문). `crypto.randomUUID()`를 `SELECT new_id('mtg')` / `SELECT new_id('spk')` 호출로 교체. 나머지 흐름 동일.
+- `OWNED BY`로 시퀀스를 컬럼에 귀속 → 테이블 DROP 시 시퀀스도 함께 정리. 시퀀스·테이블은 기존 마이그레이션과 동일하게 `public` 스키마(별도 한정 없음).
+- **워커가 INSERT하는 행**(utterance, meeting_cluster, voiceprint, utterance_embedding, job): DB DEFAULT가 자동 채번. `RETURNING id`로 id를 받는 현재 코드 그대로 → **워커 런타임 코드·jobs 코드 변경 없음** (단, 워커 smoke 스크립트는 예외 — §3 참조).
+- **meeting, speaker**: API가 파일 저장 전에 id가 필요(스토리지 경로 때문). `crypto.randomUUID()`를 작은 TS 헬퍼로 교체:
+
+```ts
+// prefix↔시퀀스 매핑은 리터럴(사용자 입력 아님 → 인젝션 없음), 호출부는 유니온으로 제한
+const SEQ = { meeting: 'mtg', speaker: 'spk' } as const;
+async function nextId(c: ClientLike, t: keyof typeof SEQ): Promise<string> {
+  const p = SEQ[t];
+  const { rows } = await c.query(`SELECT '${p}_' || nextval('${p}_id_seq') AS id`);
+  return rows[0].id;
+}
+```
 
 ## 변경 범위
 
@@ -59,40 +72,50 @@ CREATE TABLE meeting (
 
 운영 데이터 없음 → 새 마이그레이션 대신 001을 직접 수정한다(히스토리 깔끔). 일반적으로 "적용된 마이그레이션 수정 금지" 규칙의 의도적 예외 — DB는 리셋된다.
 
-- `new_id()` 함수 생성.
-- 시퀀스 생성(001: `mtg_id_seq`, `spk_id_seq`, `utt_id_seq`, `clu_id_seq`, `vp_id_seq`, `job_id_seq`).
+- 시퀀스 생성(001: `mtg_id_seq`, `spk_id_seq`, `utt_id_seq`, `clu_id_seq`, `vp_id_seq`, `job_id_seq`) + 각 `ALTER SEQUENCE ... OWNED BY <table>.id`.
 - 001의 모든 `uuid` PK/FK 컬럼 → `text`.
-- 001의 모든 `DEFAULT gen_random_uuid()` → `DEFAULT new_id('<prefix>')`.
-- FK 관계, `ON DELETE CASCADE/SET NULL`, CHECK 제약, UNIQUE, 인덱스는 그대로.
+- 001의 모든 `DEFAULT gen_random_uuid()` → `DEFAULT '<prefix>_' || nextval('<prefix>_id_seq')`.
+- 각 PK에 prefix별 `CHECK (id ~ '^<prefix>_\d+$')` 추가.
+- 기존 FK 관계, `ON DELETE CASCADE/SET NULL`, status/stage 등 CHECK 제약, UNIQUE, 인덱스는 그대로.
 - `vector(192)` 등 pgvector 컬럼은 무관 — 그대로.
 
 **`002_search.sql`도 직접 수정** (마찬가지로 적용 전 리셋):
-- `ue_id_seq` 시퀀스 생성.
-- `utterance_embedding`: `id uuid ... gen_random_uuid()` → `id text ... new_id('ue')`; `utterance_id uuid` → `text`, `job_id uuid` → `text`.
+- `ue_id_seq` 시퀀스 생성 + `OWNED BY utterance_embedding.id`.
+- `utterance_embedding`: `id uuid ... gen_random_uuid()` → `id text ... 'ue_' || nextval('ue_id_seq')` + `CHECK (id ~ '^ue_\d+$')`; `utterance_id uuid` → `text`, `job_id uuid` → `text`.
 - `ALTER TABLE job DROP/ADD CONSTRAINT` 부분은 타입 무관 — 그대로.
 
 **`003_meeting_favorite.sql`**: `is_favorite boolean` 컬럼만 추가 — uuid 의존성 없음, 변경 없음.
 
 ### 2. API 코드 (`src/`)
 
-- `meetings/meetings.service.ts`: `crypto.randomUUID()` → `new_id('mtg')` 헬퍼 호출.
-- `speakers/speakers.service.ts`: `crypto.randomUUID()` → `new_id('spk')` 헬퍼 호출.
+- `nextId` 헬퍼 추가(위 §ID 생성 메커니즘). 위치: `database/` 또는 작은 `common/` 유틸.
+- `meetings/meetings.service.ts`: `crypto.randomUUID()` → `nextId(c, 'meeting')`.
+- `speakers/speakers.service.ts`: `crypto.randomUUID()` → `nextId(c, 'speaker')`.
 - `crypto` import는 더 이상 안 쓰면 제거(단, `storage/upload-options.ts`의 `dw-upload-${randomUUID()}` 임시파일명은 **유지** — 엔티티 ID와 무관).
 - **`ParseUUIDPipe` 전부 제거** → 평범한 `@Param('id')` 문자열. 대상: `meetings.controller.ts`, `speakers.controller.ts`, `clusters.controller.ts`. 없는 id는 서비스가 이미 `NotFoundException`(404)으로 처리하므로 형식 검증 불필요. (트레이드오프: 잘못된 형식 id가 400 대신 404가 됨 — 수용.)
-- `contracts/job-payload.schema.ts`: `z.string().uuid()` → `z.string().min(1)` (3곳: meeting_id ×2, speaker_id).
+- `contracts/job-payload.schema.ts`: `z.string().uuid()` → prefix별 정규식 (meeting_id ×2 → `z.string().regex(/^mtg_\d+$/)`, speaker_id → `z.string().regex(/^spk_\d+$/)`).
 - `search/search.repository.ts`: `::uuid[]` 캐스팅 → `::text[]` (speakerIds, meetingIds 필터).
 - Swagger `format: 'uuid'` 주석 제거(표시용, 기능 무관): `search.controller.ts`, `clusters.controller.ts`, `meetings.controller.ts`.
 
 ### 3. 워커 (Python `worker/`)
 
-- `contracts.py`는 이미 `meeting_id: str` / `speaker_id: str` — **변경 없음**.
-- 워커는 코드에서 UUID를 생성/파싱하지 않음 — **변경 없음**.
+- `contracts.py`: 현재 `meeting_id: str` / `speaker_id: str`. zod와 대칭으로 prefix 패턴 추가 — `Annotated[str, StringConstraints(pattern=r"^mtg_\d+$")]` (speaker는 `^spk_\d+$`). 동일 픽스처를 양쪽에서 검증하므로 drift 차단.
+- 워커 런타임 코드(persist/identify/enroll 등)는 UUID를 생성/파싱하지 않음 — **변경 없음**.
+- **smoke 스크립트는 변경 필요** (UUID를 PK로 직접 INSERT → DB CHECK가 거부하므로 깨짐):
+  - `scripts/smoke_process_meeting.py:83` — `meeting_id = str(uuid.uuid4())` → 새 형식 생성(예: `nextval` 사용 `SELECT 'mtg_' || nextval('mtg_id_seq')`, 또는 id 생략하고 `INSERT ... RETURNING id`로 DB DEFAULT 사용).
+  - `scripts/smoke_enroll_identify.py:121,170,230` — `spk_id`/`mid`/`alice`의 `uuid.uuid4()` 동일 처리. 117행 `_process_payload(str(uuid.uuid4()), ...)`은 모델 빌드용 더미 인자라 형식 무관하나 일관성 위해 `mtg_0` 등으로 정리.
+  - 213행 주석("psycopg returns uuid columns as uuid.UUID; compare via str()")은 id가 `text`가 되면 무의미 — 비교 로직 단순화 가능.
 
 ### 4. 테스트 & 픽스처
 
-- `test/fixtures/job-payloads/*.json`: UUID 리터럴 → 새 형식(`mtg_1`, `spk_1` 등). zod/pydantic 양쪽에서 검증되므로 두 런타임 모두 통과해야 함.
+- `test/fixtures/job-payloads/*.json`: UUID 리터럴 → 새 형식(`mtg_1`, `spk_1` 등) + `audio_key` 경로의 UUID도 동반 변경. zod/pydantic 양쪽에서 검증되므로 두 런타임 모두 통과해야 함.
 - UUID를 하드코딩하거나 `randomUUID()`로 생성하는 e2e·단위 테스트 갱신(`test/*.spec.ts`).
 - 워커 테스트(`worker/tests/`)에서 UUID 형식 id를 쓰는 픽스처가 있으면 새 형식으로 갱신(있을 경우).
+
+### 5. Living docs
+
+- `CLAUDE.md:34` — Storage path safety 불변식의 `meetings/<uuid>/...` → `meetings/<mtg_n>/...`(또는 `meetings/<meeting_id>/...`)로 갱신. 키는 여전히 슬래시 없는 단일 세그먼트라 `resolve()` 안전성 불변.
+- `docs/README.md`, `worker/SMOKE.md` — grep 결과 UUID 형식 언급 없음 → 구현 중 새 ID 예시가 추가되지 않는 한 변경 불필요(구현 시 재확인).
 
 ## 검증 (성공 기준)
 
@@ -100,7 +123,9 @@ CREATE TABLE meeting (
 - `npm test` 전체 통과 (e2e: 업로드→meeting 생성 시 id가 `mtg_<n>`, enroll 시 `spk_<n>`, job이 `job_<n>`).
 - `npx tsc --noEmit -p tsconfig.build.json` 통과.
 - 워커 `uv run pytest -q` 통과 (계약 픽스처 양쪽 검증).
+- **형식 강제 확인**: UUID/잘못된 형식을 PK로 INSERT 시 DB CHECK가 거부(테스트로 검증). 계약에 UUID 형식 id 전달 시 zod/pydantic이 거부.
 - 수동 확인: 업로드 후 `meeting`, `job`, 워커 처리 후 `utterance`/`meeting_cluster` 행의 id가 모두 새 형식.
+- (실모델 환경) `smoke_process_meeting.py` / `smoke_enroll_identify.py`가 새 형식으로 정상 동작.
 
 ## 짚어둘 점 / 트레이드오프
 
