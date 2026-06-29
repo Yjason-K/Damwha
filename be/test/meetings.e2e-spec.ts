@@ -213,4 +213,17 @@ describe('meetings', () => {
     expect(res.body.utterances[0].speaker_name).toBe('홍길동');
     expect(res.body.utterances[0].speaker_status).toBe('ready');
   });
+
+  it('GET /meetings/:id returns null speaker_name for unattributed utterances', async () => {
+    const m = await db.pool.query(`INSERT INTO meeting(audio_key,status) VALUES('k','done') RETURNING id`);
+    const mid = m.rows[0].id;
+    await db.pool.query(
+      `INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,text,status,order_index,processing_version)
+       VALUES($1,'S0',0,1000,'...','ok',0,0)`, [mid]); // no speaker_id → unattributed
+    const res = await request(srv()).get(`/meetings/${mid}`);
+    expect(res.status).toBe(200);
+    expect(res.body.utterances[0].speaker_id).toBeNull();
+    expect(res.body.utterances[0].speaker_name).toBeNull();
+    expect(res.body.utterances[0].speaker_status).toBeNull();
+  });
 });
