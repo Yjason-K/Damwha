@@ -29,7 +29,8 @@
 - **Modify** `src/meetings/meetings.controller.ts`, `src/speakers/speakers.controller.ts`, `src/meetings/clusters.controller.ts`, `src/search/search.controller.ts` — `ParseUUIDPipe` + Swagger uuid 주석 제거.
 - **Modify** `src/search/search.repository.ts` — `::uuid[]` → `::text[]`.
 - **Modify** `src/contracts/job-payload.schema.ts` — zod `.uuid()` → prefix 정규식.
-- **Create** `test/migration.spec.ts`, `test/id.spec.ts`.
+- **Create** `test/id.spec.ts`.
+- **Modify** `test/migration.spec.ts` — 기존 `describe('migration')`에 테스트 **추가**(기존 pgvector/UNIQUE/job CHECK/002 테스트 보존, 덮어쓰지 말 것).
 - **Modify** tests `test/job-payload.spec.ts`, `test/contract-fixtures.spec.ts`, `test/storage.spec.ts`, `test/meetings.e2e-spec.ts`, `test/speakers.e2e-spec.ts`.
 - **Modify/Create** fixtures `test/fixtures/job-payloads/*.json` (+ `process_meeting.invalid_id.json`).
 - **Modify** `worker/damwha_worker/contracts.py`, `worker/tests/test_contracts.py`.
@@ -52,29 +53,21 @@
 
 ### 1A. 스키마 (TDD: 마이그레이션 테스트 먼저)
 
-- [ ] **Step 1: `test/migration.spec.ts` 작성 (실패 테스트)**
+- [ ] **Step 1: `test/migration.spec.ts`에 테스트 두 개 추가 (실패 테스트)**
+
+> **기존 파일을 덮어쓰지 말 것.** `test/migration.spec.ts`에는 이미 `describe('migration', ...)` 안에 pgvector/UNIQUE/job CHECK/002 검색 테스트가 있다. 그 **기존 `describe` 블록 안, 마지막 `it(...)` 뒤에** 아래 두 `it()`를 **추가**한다. (기존 `db`/`beforeAll`/`afterAll` 재사용, `beforeEach` 추가 불필요 — 두 테스트는 자체 부모 행을 만들고 `[1-9][0-9]*`로 느슨히 검증하므로 행 누적과 무관.)
 
 ```ts
-import { Pool } from 'pg';
-import { startTestDb, StartedTestDb } from './db';
-
-describe('migration: readable id defaults + CHECK', () => {
-  let db: StartedTestDb; let pool: Pool;
-  beforeAll(async () => { db = await startTestDb(); pool = db.pool; });
-  afterAll(async () => { await db.stop(); });
-  beforeEach(async () => { await db.reset(); });
-
-  const v192 = `[${Array(192).fill(0).join(',')}]`;
-  const v1024 = `[${Array(1024).fill(0).join(',')}]`;
-
   it('generates prefixed ids by DEFAULT for all 7 tables', async () => {
-    const spk = (await pool.query(`INSERT INTO speaker(name) VALUES('n') RETURNING id`)).rows[0].id;
-    const mtg = (await pool.query(`INSERT INTO meeting(audio_key) VALUES('k') RETURNING id`)).rows[0].id;
-    const job = (await pool.query(`INSERT INTO job(type,payload) VALUES('process_meeting','{}'::jsonb) RETURNING id`)).rows[0].id;
-    const vp = (await pool.query(`INSERT INTO voiceprint(speaker_id,embedding,model,dimension) VALUES($1,$2::vector,'m',192) RETURNING id`, [spk, v192])).rows[0].id;
-    const clu = (await pool.query(`INSERT INTO meeting_cluster(meeting_id,diar_label,processing_version) VALUES($1,'S',0) RETURNING id`, [mtg])).rows[0].id;
-    const utt = (await pool.query(`INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,order_index,processing_version) VALUES($1,'S',0,1,0,0) RETURNING id`, [mtg])).rows[0].id;
-    const ue = (await pool.query(`INSERT INTO utterance_embedding(utterance_id,embedding,model,dimension,processing_version) VALUES($1,$2::vector,'m',1024,0) RETURNING id`, [utt, v1024])).rows[0].id;
+    const v192 = `[${Array(192).fill(0).join(',')}]`;
+    const v1024 = `[${Array(1024).fill(0).join(',')}]`;
+    const spk = (await db.pool.query(`INSERT INTO speaker(name) VALUES('n') RETURNING id`)).rows[0].id;
+    const mtg = (await db.pool.query(`INSERT INTO meeting(audio_key) VALUES('k') RETURNING id`)).rows[0].id;
+    const job = (await db.pool.query(`INSERT INTO job(type,payload) VALUES('process_meeting','{}'::jsonb) RETURNING id`)).rows[0].id;
+    const vp = (await db.pool.query(`INSERT INTO voiceprint(speaker_id,embedding,model,dimension) VALUES($1,$2::vector,'m',192) RETURNING id`, [spk, v192])).rows[0].id;
+    const clu = (await db.pool.query(`INSERT INTO meeting_cluster(meeting_id,diar_label,processing_version) VALUES($1,'S',0) RETURNING id`, [mtg])).rows[0].id;
+    const utt = (await db.pool.query(`INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,order_index,processing_version) VALUES($1,'S',0,1,0,0) RETURNING id`, [mtg])).rows[0].id;
+    const ue = (await db.pool.query(`INSERT INTO utterance_embedding(utterance_id,embedding,model,dimension,processing_version) VALUES($1,$2::vector,'m',1024,0) RETURNING id`, [utt, v1024])).rows[0].id;
     expect(spk).toMatch(/^spk_[1-9][0-9]*$/);
     expect(mtg).toMatch(/^mtg_[1-9][0-9]*$/);
     expect(job).toMatch(/^job_[1-9][0-9]*$/);
@@ -85,9 +78,11 @@ describe('migration: readable id defaults + CHECK', () => {
   });
 
   it('rejects explicit non-conforming ids via CHECK (all 7 tables)', async () => {
-    const spk = (await pool.query(`INSERT INTO speaker(name) VALUES('n') RETURNING id`)).rows[0].id;
-    const mtg = (await pool.query(`INSERT INTO meeting(audio_key) VALUES('k') RETURNING id`)).rows[0].id;
-    const utt = (await pool.query(`INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,order_index,processing_version) VALUES($1,'S',0,1,0,0) RETURNING id`, [mtg])).rows[0].id;
+    const v192 = `[${Array(192).fill(0).join(',')}]`;
+    const v1024 = `[${Array(1024).fill(0).join(',')}]`;
+    const spk = (await db.pool.query(`INSERT INTO speaker(name) VALUES('n') RETURNING id`)).rows[0].id;
+    const mtg = (await db.pool.query(`INSERT INTO meeting(audio_key) VALUES('k') RETURNING id`)).rows[0].id;
+    const utt = (await db.pool.query(`INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,order_index,processing_version) VALUES($1,'S',0,1,0,0) RETURNING id`, [mtg])).rows[0].id;
     const bad = 'ca8e8f66-6e2b-4c4f-8d0b-7d432a7a6aca';
     const cases: [string, any[]][] = [
       [`INSERT INTO speaker(id,name) VALUES($1,'n')`, [bad]],
@@ -99,11 +94,12 @@ describe('migration: readable id defaults + CHECK', () => {
       [`INSERT INTO utterance_embedding(id,utterance_id,embedding,model,dimension,processing_version) VALUES($1,$2,$3::vector,'m',1024,0)`, [bad, utt, v1024]],
     ];
     for (const [sql, params] of cases) {
-      await expect(pool.query(sql, params)).rejects.toThrow(/check constraint/);
+      await expect(db.pool.query(sql, params)).rejects.toThrow(/check constraint/);
     }
-    await expect(pool.query(`INSERT INTO meeting(id,audio_key) VALUES('mtg_0','k')`)).rejects.toThrow(/check constraint/);
+    // leading-zero / zero 도 거부
+    await expect(db.pool.query(`INSERT INTO meeting(id,audio_key) VALUES('mtg_0','k')`)).rejects.toThrow(/check constraint/);
+    await expect(db.pool.query(`INSERT INTO meeting(id,audio_key) VALUES('mtg_001','k')`)).rejects.toThrow(/check constraint/);
   });
-});
 ```
 
 - [ ] **Step 2: 실패 확인**
@@ -499,17 +495,26 @@ def test_rejects_uuid_meeting_id():
         parse_payload("process_meeting", load("process_meeting.invalid_id.json"))
 
 
-def test_rejects_unicode_digit_id():
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "ca8e8f66-6e2b-4c4f-8d0b-7d432a7a6aca",  # UUID
+        "mtg_0",                                  # zero
+        "mtg_001",                                # leading zero
+        "mtg_1٢",                                 # unicode digit (\d 회귀 방지)
+    ],
+)
+def test_rejects_bad_meeting_ids(bad):
     from pydantic import ValidationError
-    data = load("process_meeting.valid.json") | {"meeting_id": "mtg_1٢"}  # mtg_1٢
+    data = load("process_meeting.valid.json") | {"meeting_id": bad}
     with pytest.raises(ValidationError):
         parse_payload("process_meeting", data)
 ```
 
 - [ ] **Step 2: 실패 확인**
 
-Run: `cd worker && uv run pytest tests/test_contracts.py -k "uuid or unicode" -q`
-Expected: FAIL — 현재 `meeting_id: str`라 UUID·유니코드 숫자 모두 통과.
+Run: `cd worker && uv run pytest tests/test_contracts.py -k "bad_meeting_ids or uuid" -q`
+Expected: FAIL — 현재 `meeting_id: str`라 UUID·zero·leading-zero·유니코드 숫자 모두 통과.
 
 - [ ] **Step 3: pydantic 패턴 적용**
 
@@ -710,6 +715,13 @@ git commit -m "docs: reflect readable entity ids in living docs"
 ## Final Verification
 
 - [ ] `npm test` 전체 PASS (migration.spec: 7테이블 DEFAULT/CHECK, e2e: `mtg_`/`spk_`/`job_` prefix + 스토리지 키 검증 포함).
+- [ ] **CLI 마이그레이션** (설계 성공 기준): 깨끗한 DB에 `npm run migrate` 성공. testcontainers의 `runMigrations()`와 별개로 실제 CLI 경로를 확인:
+  ```bash
+  docker compose up -d
+  docker compose exec -T postgres psql -U postgres -d damwha -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+  npm run migrate
+  ```
+  Expected: `001`/`002`/`003` 에러 없이 적용(사용자명/DB는 `.env` 기준 조정).
 - [ ] `npx tsc --noEmit -p tsconfig.build.json` PASS.
 - [ ] `cd worker && uv run pytest -q` PASS, `uv run ruff check .` PASS.
 - [ ] 각 커밋이 그 시점에 green인지 확인(Task 1 단일 커밋 후 `npm test` green; Task 2 후 pytest green).
