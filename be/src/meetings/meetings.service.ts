@@ -10,6 +10,7 @@ import { nextId } from '../common/id';
 import * as fs from 'fs';
 
 const AUDIO_MIME = /^audio\//;
+const SPEAKER_ID_RE = /^spk_[1-9][0-9]*$/;
 
 async function unlinkQuietly(p?: string) {
   if (!p) return;
@@ -136,36 +137,68 @@ export class MeetingsService {
     meetingId: string,
     clusterId: string,
     body: { speaker_id?: string; new_name?: string },
-  ): Promise<{ speaker_id: string; updated_utterances: number }> {
-    if (!body.speaker_id && !body.new_name) {
-      throw new BadRequestException('speaker_id or new_name required');
+  ): Promise<{ speaker_id: string; updated_utterances: number; merged_speaker_deleted: boolean }> {
+    const hasId = body.speaker_id !== undefined && body.speaker_id !== null;
+    const hasName = body.new_name !== undefined && body.new_name !== null;
+    if (hasId === hasName) {
+      throw new BadRequestException('exactly one of speaker_id or new_name required');
     }
+    let newName: string | undefined;
+    if (hasName) {
+      if (typeof body.new_name !== 'string') throw new BadRequestException('new_name must be a string');
+      newName = body.new_name.trim();
+      if (!newName || newName.length > 100) throw new BadRequestException('new_name must be 1–100 chars');
+    }
+    if (hasId && !SPEAKER_ID_RE.test(String(body.speaker_id))) {
+      throw new BadRequestException('speaker_id must match ^spk_[1-9][0-9]*$');
+    }
+
     const env = loadEnv();
     return this.db.withTransaction(async (c) => {
-      const cluster = await this.meetings.findClusterInMeeting(c, meetingId, clusterId);
+      const cluster = await this.meetings.lockClusterInMeeting(c, meetingId, clusterId);
       if (!cluster) throw new NotFoundException('cluster not found in meeting');
+      const sPrev: string | null = cluster.resolved_speaker_id;
 
-      let speakerId: string;
-      if (body.speaker_id) {
-        const exists = await c.query('SELECT 1 FROM speaker WHERE id=$1', [body.speaker_id]);
-        if (!exists.rowCount) throw new NotFoundException('speaker not found');
-        speakerId = body.speaker_id;
+      // lock S_prev and T (ordered by id) to serialize with PATCH /speakers/:id
+      const lockIds = [sPrev, hasId ? (body.speaker_id as string) : null].filter(Boolean) as string[];
+      const locked = await this.meetings.lockSpeakers(c, lockIds);
+      const statusOf = (id: string | null) =>
+        id ? (locked.find((r) => r.id === id)?.enrollment_status ?? null) : null;
+
+      let finalSpeakerId: string;
+      if (hasId) {
+        const T = body.speaker_id as string;
+        if (!locked.some((r) => r.id === T)) throw new NotFoundException('speaker not found');
+        const tStatus = statusOf(T);
+        if (tStatus === 'pending' || tStatus === 'failed') {
+          throw new ConflictException('cannot merge into a pending/failed speaker');
+        }
+        finalSpeakerId = T;
       } else {
-        const created = await c.query(
-          `INSERT INTO speaker(name, enrollment_status) VALUES($1,'ready') RETURNING id`,
-          [body.new_name],
-        );
-        speakerId = created.rows[0].id;
+        const prevStatus = statusOf(sPrev);
+        if (sPrev && prevStatus === 'provisional') {
+          await this.meetings.promoteProvisional(c, sPrev, newName as string);
+          finalSpeakerId = sPrev;
+        } else if (sPrev === null) {
+          finalSpeakerId = await this.meetings.createReadySpeaker(c, newName as string);
+        } else {
+          throw new ConflictException(
+            'cluster already resolved; use PATCH /speakers/:id to rename or provide speaker_id to merge',
+          );
+        }
       }
 
-      await this.meetings.setClusterResolved(c, clusterId, speakerId);
-      const updated = await this.meetings.bulkAssignSpeaker(c, meetingId, cluster.diar_label, speakerId);
+      // unified bulk assign → updated_utterances = utterance count for this diar_label
+      const updated = await this.meetings.bulkAssignSpeaker(c, meetingId, cluster.diar_label, finalSpeakerId);
+      await this.meetings.setClusterResolved(c, clusterId, finalSpeakerId);
       if (cluster.has_centroid) {
-        await this.meetings.voiceprintFromClusterCentroid(
-          c, clusterId, speakerId, env.EMBEDDING_MODEL, env.EMBEDDING_DIM,
-        );
+        await this.meetings.upsertClusterVoiceprint(c, clusterId, finalSpeakerId, env.EMBEDDING_MODEL, env.EMBEDDING_DIM);
       }
-      return { speaker_id: speakerId, updated_utterances: updated };
+      let mergedDeleted = false;
+      if (sPrev && sPrev !== finalSpeakerId) {
+        mergedDeleted = await this.meetings.deleteOrphanProvisional(c, sPrev);
+      }
+      return { speaker_id: finalSpeakerId, updated_utterances: updated, merged_speaker_deleted: mergedDeleted };
     });
   }
 }

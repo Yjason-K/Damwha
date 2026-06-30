@@ -22,6 +22,7 @@ def handle_job(
     build_models=None,
     build_text_embedder=None,
     search_embedding=None,
+    default_speaker_prefix="Speaker",
 ) -> str:
     try:
         payload = parse_payload(job["type"], job["payload"])
@@ -37,6 +38,7 @@ def handle_job(
                 worker_id=worker_id,
                 search_embedding_model=sm,
                 search_embedding_dim=sd,
+                default_speaker_prefix=default_speaker_prefix,
             )
         if job["type"] == "enroll_speaker":
             models = build_models()
@@ -90,6 +92,7 @@ def run_once(
     build_models=None,
     build_text_embedder=None,
     search_embedding=None,
+    default_speaker_prefix="Speaker",
 ) -> str | None:
     job = db.claim(conn, worker_id)
     if job is None:
@@ -102,6 +105,7 @@ def run_once(
         build_models=build_models,
         build_text_embedder=build_text_embedder,
         search_embedding=search_embedding,
+        default_speaker_prefix=default_speaker_prefix,
     )
 
 
@@ -125,6 +129,7 @@ def dispatch_claimed_job(
             build_models=lambda: build_models_fn(job["payload"], settings),
             build_text_embedder=lambda: build_text_embedder_fn(settings),
             search_embedding=(settings.search_embedding_model, settings.search_embedding_dim),
+            default_speaker_prefix=settings.default_speaker_prefix,
         )
 
 

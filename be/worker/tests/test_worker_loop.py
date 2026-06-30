@@ -240,6 +240,7 @@ def _settings_stub():
         worker_id="w1",
         search_embedding_model="BAAI/bge-m3",
         search_embedding_dim=1024,
+        default_speaker_prefix="Speaker",
     )
 
 
@@ -309,3 +310,27 @@ def test_dispatch_index_builds_text_embedder_only_within_heartbeat(conn, tmp_pat
         conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()["status"]
         == "done"
     )
+
+
+def test_dispatch_passes_prefix_through_to_persist(conn, tmp_path, monkeypatch):
+    _stub_ffmpeg(monkeypatch)
+    mid, jid = _enqueue_pm(conn)  # no seeded voiceprint → S0 unidentified → provisional
+    job = db.claim(conn, "w1")
+    settings = SimpleNamespace(
+        worker_id="w1",
+        search_embedding_model="BAAI/bge-m3",
+        search_embedding_dim=1024,
+        default_speaker_prefix="Zz",
+    )
+    out = dispatch_claimed_job(
+        conn,
+        job,
+        Storage(str(tmp_path)),
+        settings,
+        build_models_fn=lambda payload, s: _models(),
+        build_text_embedder_fn=lambda s: None,
+        heartbeat_cm=_SpyCM(),
+    )
+    assert out == "committed"
+    names = [r["name"] for r in conn.execute("SELECT name FROM speaker", ()).fetchall()]
+    assert names and all(n.startswith("Zz_") for n in names)

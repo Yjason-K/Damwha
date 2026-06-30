@@ -69,12 +69,20 @@ def test_full_pipeline_with_identification(conn, tmp_path):
         (mid,),
     ).fetchall()
     assert utts[0]["diar_label"] == "SPEAKER_00" and utts[0]["speaker_id"] == sid
-    assert utts[1]["speaker_id"] is None  # SPEAKER_01 unidentified
-    # only the unidentified label is preserved as a cluster
-    clusters = conn.execute(
-        "SELECT diar_label FROM meeting_cluster WHERE meeting_id=%s", (mid,)
+    # SPEAKER_01 now gets an auto-created provisional speaker (not None)
+    prov = conn.execute(
+        "SELECT id, name, enrollment_status FROM speaker WHERE enrollment_status='provisional'", ()
+    ).fetchone()
+    assert prov is not None and prov["name"].startswith("Speaker_")
+    assert utts[1]["speaker_id"] == prov["id"]
+    # its cluster + auto_cluster voiceprint exist
+    cl = conn.execute(
+        "SELECT diar_label, resolved_speaker_id FROM meeting_cluster WHERE meeting_id=%s", (mid,)
     ).fetchall()
-    assert [c["diar_label"] for c in clusters] == ["SPEAKER_01"]
+    assert [c["diar_label"] for c in cl] == ["SPEAKER_01"]
+    assert cl[0]["resolved_speaker_id"] == prov["id"]
+    vp = conn.execute("SELECT source FROM voiceprint WHERE speaker_id=%s", (prov["id"],)).fetchone()
+    assert vp["source"] == "auto_cluster"
     assert (
         conn.execute("SELECT duration_ms FROM meeting WHERE id=%s", (mid,)).fetchone()[
             "duration_ms"
@@ -128,3 +136,25 @@ def test_stage_progress_recorded(conn, tmp_path):
     assert (
         conn.execute("SELECT stage FROM job WHERE id=%s", (jid,)).fetchone()["stage"] == "persist"
     )
+
+
+def test_run_process_meeting_uses_custom_prefix(conn, tmp_path):
+    mid = seed_meeting(
+        conn, status="processing", processing_version=0, audio_key="meetings/m/original.m4a"
+    )
+    jid = seed_job(conn, meeting_id=mid, payload={})
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    db.claim(conn, "w1")
+    run_process_meeting(
+        conn,
+        conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
+        _payload(mid, "meetings/m/original.m4a"),
+        _models(),
+        Storage(str(tmp_path)),
+        worker_id="w1",
+        normalize_fn=lambda s, d: None,
+        probe_fn=lambda p: ProbeResult(2000),
+        default_speaker_prefix="화자",
+    )
+    names = [r["name"] for r in conn.execute("SELECT name FROM speaker", ()).fetchall()]
+    assert names and all(n.startswith("화자_") for n in names)

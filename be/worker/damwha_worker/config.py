@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +20,15 @@ class Settings(BaseSettings):
     search_embedding_dim: int = 1024
     embed_service_host: str = "127.0.0.1"
     embed_service_port: int = 8100
+    default_speaker_prefix: str = "Speaker"
+
+    @field_validator("default_speaker_prefix")
+    @classmethod
+    def _non_empty_prefix(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("default_speaker_prefix must not be empty")
+        return v
 
 
 def load_settings() -> Settings:

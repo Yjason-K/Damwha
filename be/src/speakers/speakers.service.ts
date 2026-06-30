@@ -51,4 +51,13 @@ export class SpeakersService {
     if (!s) throw new NotFoundException('speaker not found');
     return s;
   }
+
+  async rename(id: string, body: { name?: unknown }) {
+    if (typeof body?.name !== 'string') throw new BadRequestException('name must be a string');
+    const name = body.name.trim();
+    if (!name || name.length > 100) throw new BadRequestException('name must be 1–100 chars');
+    const updated = await this.speakers.rename(this.db.pool, id, name);
+    if (!updated) throw new NotFoundException('speaker not found');
+    return updated;
+  }
 }

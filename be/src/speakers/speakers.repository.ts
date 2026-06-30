@@ -29,4 +29,15 @@ export class SpeakersRepository {
     const { rows } = await exec.query<SpeakerRow>(`SELECT * FROM speaker WHERE id=$1`, [id]);
     return rows[0] ?? null;
   }
+  async rename(exec: Queryable, id: string, name: string): Promise<SpeakerRow | null> {
+    const { rows } = await exec.query<SpeakerRow>(
+      `UPDATE speaker
+       SET name=$2,
+           enrollment_status = CASE WHEN enrollment_status='provisional' THEN 'ready'
+                                    ELSE enrollment_status END
+       WHERE id=$1 RETURNING *`,
+      [id, name],
+    );
+    return rows[0] ?? null;
+  }
 }

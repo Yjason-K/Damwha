@@ -49,3 +49,16 @@ def test_identify_ignores_non_ready_and_wrong_model(conn):
         threshold=0.5,
     )
     assert out["S0"] is None
+
+
+def test_identify_ignores_provisional_speaker(conn):
+    prov = seed_speaker(conn, enrollment_status="provisional")
+    seed_voiceprint(conn, speaker_id=prov, embedding=[1.0] + [0.0] * 191)
+    out = identify_clusters(
+        conn,
+        {"S0": [1.0] + [0.0] * 191},
+        model="speechbrain/spkrec-ecapa-voxceleb",
+        dimension=192,
+        threshold=0.5,
+    )
+    assert out["S0"] is None
