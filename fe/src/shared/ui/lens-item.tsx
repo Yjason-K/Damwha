@@ -12,7 +12,15 @@ import { Checkbox } from "@/shared/ui/checkbox";
 
 function JumpIcon() {
   return (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <path d="M6 3.5h6.5V10" />
       <path d="M12.5 3.5L4 12" />
     </svg>
@@ -81,7 +89,9 @@ function LensItem({
       {checkable && (
         <span className="mt-px">
           <Checkbox
-            aria-label="완료"
+            aria-label={
+              typeof children === "string" ? `완료: ${children}` : "완료"
+            }
             checked={done}
             onChange={onToggle ? () => onToggle() : undefined}
           />
@@ -111,7 +121,9 @@ function LensItem({
               className="inline-flex items-center gap-[5px] rounded-xs bg-[var(--_wbg,var(--gray-2))] px-1.5 py-0.5 text-2xs font-medium text-[color:var(--_wt,var(--text-secondary))]"
               style={whoStyle}
             >
-              {k && <span className="size-1.5 rounded-full bg-[var(--_wd,currentColor)]" />}
+              {k && (
+                <span className="size-1.5 rounded-full bg-[var(--_wd,currentColor)]" />
+              )}
               {assignee}
             </span>
           )}
