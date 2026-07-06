@@ -38,5 +38,11 @@ export const router = createBrowserRouter([
       import("@/pages/showcase").then((m) => ({ default: m.ShowcasePage })),
     ),
   },
+  {
+    path: "/speakers",
+    element: lazyRoute(() =>
+      import("@/pages/speakers").then((m) => ({ default: m.SpeakersPage })),
+    ),
+  },
   { path: "*", element: <NotFoundPage /> },
 ]);
