@@ -6,7 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import { Tag } from "@/shared/ui/tag";
 import { cn } from "@/shared/lib/utils";
 
-import { SPEAKERS, type LensKind, type Meeting } from "../model/data";
+import type { LensKind, Meeting } from "../model/types";
 import { Icon } from "./icons";
 
 /**
@@ -104,7 +104,7 @@ function Attendees({
       />
       <div className="grid grid-cols-2 gap-x-2 gap-y-[9px]">
         {meeting.attendees.map((a) => {
-          const s = SPEAKERS[a];
+          const s = meeting.speakers[a];
           return (
             <div key={a} className="flex min-w-0 items-center gap-[7px]">
               <Avatar
@@ -131,6 +131,11 @@ function Summary({ meeting }: { meeting: Meeting }) {
   return (
     <Section>
       <SecHead title="회의 요약" />
+      {meeting.summary.length === 0 ? (
+        <p className="text-sm text-[color:var(--text-faint)]">
+          아직 요약이 없어요.
+        </p>
+      ) : null}
       <ul className="flex flex-col gap-[9px]">
         {meeting.summary.map((s, i) => (
           <li
@@ -196,7 +201,7 @@ function Todos({
       <SecHead title="할 일" count={items.length} />
       <div className="flex flex-col gap-[11px]">
         {items.map((it) => {
-          const w = it.who ? SPEAKERS[it.who] : null;
+          const w = it.who ? meeting.speakers[it.who] : null;
           const k = w ? ((w.spk - 1) % 8) + 1 : null;
           return (
             <div key={it.id} className="flex items-start gap-[9px]">
@@ -253,13 +258,19 @@ function Topics({ meeting }: { meeting: Meeting }) {
   return (
     <Section last>
       <SecHead title="토픽" count={meeting.topics.length} />
-      <div className="flex flex-wrap gap-[7px]">
-        {meeting.topics.map((t, i) => (
-          <Tag key={i} speaker={t.spk}>
-            {t.label}
-          </Tag>
-        ))}
-      </div>
+      {meeting.topics.length === 0 ? (
+        <p className="text-sm text-[color:var(--text-faint)]">
+          추출된 토픽이 없어요.
+        </p>
+      ) : (
+        <div className="flex flex-wrap gap-[7px]">
+          {meeting.topics.map((t, i) => (
+            <Tag key={i} speaker={t.spk}>
+              {t.label}
+            </Tag>
+          ))}
+        </div>
+      )}
     </Section>
   );
 }

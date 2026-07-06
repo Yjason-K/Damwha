@@ -1,21 +1,16 @@
-import type * as React from "react";
+import * as React from "react";
+import { Link } from "react-router";
 
-import { Avatar } from "@/shared/ui/avatar";
-import { IconButton } from "@/shared/ui/icon-button";
+import { Badge } from "@/shared/ui/badge";
 import { Kbd } from "@/shared/ui/kbd";
 import { SearchField } from "@/shared/ui/search-field";
 import { SidebarItem } from "@/shared/ui/sidebar-item";
 import { cn } from "@/shared/lib/utils";
 
-import {
-  ME,
-  MEETING_ORDER,
-  MEETINGS,
-  meetingSub,
-  type LensKind,
-  type MeetingFilter,
-} from "../model/data";
+import { useMeetings } from "../api/meetings";
+import type { LensKind, MeetingFilter, MeetingStatus } from "../model/types";
 import { Icon } from "./icons";
+import { UploadDialog } from "./upload-dialog";
 
 /**
  * LeftNav — browse-first rail: logo, ⌘K search, new-meeting CTA, nav,
@@ -54,9 +49,25 @@ function NewMeetingItem({ onClick }: { onClick?: () => void }) {
 
 const FILTER_ITEMS: [MeetingFilter, string][] = [
   ["all", "전체"],
-  ["mine", "내 참여"],
   ["fav", "즐겨찾기"],
 ];
+
+/** 처리 중/실패 회의에 붙는 상태 뱃지 (done은 없음). */
+function statusBadge(status: MeetingStatus): React.ReactNode {
+  if (status === "failed")
+    return (
+      <Badge variant="danger" dot>
+        실패
+      </Badge>
+    );
+  if (status === "uploaded" || status === "processing")
+    return (
+      <Badge variant="warning" dot>
+        처리 중
+      </Badge>
+    );
+  return null;
+}
 
 function FilterPills({
   value,
@@ -90,28 +101,6 @@ function FilterPills({
   );
 }
 
-function ProfileCard() {
-  return (
-    <div className="mx-1.5 mt-2 mb-1 flex items-center gap-[9px] rounded-md border border-border bg-card px-2.5 py-2">
-      <Avatar name="김영재" speaker={1} size="md" />
-      <div className="min-w-0 flex-1 leading-tight">
-        <div className="text-2xs text-[color:var(--text-faint)]">나의 공간</div>
-        <div className="truncate text-sm font-semibold text-foreground">
-          김영재
-        </div>
-      </div>
-      <Icon
-        name="chevsUpDown"
-        size={15}
-        className="text-[color:var(--text-faint)]"
-      />
-      <IconButton label="설정" size="sm">
-        <Icon name="settings" size={16} />
-      </IconButton>
-    </div>
-  );
-}
-
 type LeftNavProps = {
   currentId: string;
   view: "meeting" | "lens";
@@ -131,11 +120,11 @@ export function LeftNav({
   onSelectLens,
   onOpenSearch,
 }: LeftNavProps) {
-  const meetings = MEETING_ORDER.map((mid) => MEETINGS[mid]).filter((m) => {
-    if (filter === "mine") return m.attendees.includes(ME);
-    if (filter === "fav") return !!m.fav;
-    return true;
-  });
+  const [uploadOpen, setUploadOpen] = React.useState(false);
+  const { data: meetings, isLoading, isError } = useMeetings();
+  const filtered = (meetings ?? []).filter((m) =>
+    filter === "fav" ? m.fav : true,
+  );
 
   return (
     <nav
@@ -175,14 +164,9 @@ export function LeftNav({
             shortcut={<Kbd keys={["⌘", "K"]} />}
           />
         </div>
-        <NewMeetingItem />
+        <NewMeetingItem onClick={() => setUploadOpen(true)} />
 
         <div className="mt-3.5 flex flex-col gap-0.5">
-          <SidebarItem
-            icon={<Icon name="inbox" size={16} />}
-            label="받은 회의"
-            count={2}
-          />
           <SidebarItem
             icon={<Icon name="bookmark" size={16} />}
             label="저장한 발언"
@@ -193,6 +177,13 @@ export function LeftNav({
             active={view === "lens"}
             onClick={() => onSelectLens("action")}
           />
+          <SidebarItem
+            icon={<Icon name="users" size={16} />}
+            label="화자 관리"
+            asChild
+          >
+            <Link to="/speakers" />
+          </SidebarItem>
         </div>
 
         <SectionLabel>필터</SectionLabel>
@@ -210,24 +201,55 @@ export function LeftNav({
         >
           회의 목록
         </SectionLabel>
-        <ul className="flex flex-col gap-0.5" aria-label="회의 목록">
-          {meetings.map((m) => (
-            <li key={m.id}>
-              <SidebarItem
-                label={m.title}
-                sub={meetingSub(m)}
-                meta={m.dur}
-                active={view === "meeting" && currentId === m.id}
-                onClick={() => onSelectMeeting(m.id)}
-              />
+        <ul
+          className="flex flex-col gap-0.5"
+          aria-label="회의 목록"
+          aria-busy={isLoading || undefined}
+        >
+          {isLoading ? (
+            <li
+              role="status"
+              className="px-2 py-2 text-xs text-[color:var(--text-faint)]"
+            >
+              회의를 불러오는 중…
             </li>
-          ))}
+          ) : isError ? (
+            <li className="px-2 py-2 text-xs text-[color:var(--red-text)]">
+              회의 목록을 불러오지 못했어요.
+            </li>
+          ) : filtered.length === 0 ? (
+            <li className="px-2 py-3 text-xs leading-relaxed text-[color:var(--text-faint)]">
+              {filter === "fav"
+                ? "즐겨찾기한 회의가 없어요."
+                : "아직 회의가 없어요. 오디오를 업로드해 시작하세요."}
+            </li>
+          ) : (
+            filtered.map((m) => (
+              <li key={m.id}>
+                <SidebarItem
+                  label={m.title}
+                  sub={m.sub}
+                  meta={statusBadge(m.status) ?? m.dur}
+                  active={view === "meeting" && currentId === m.id}
+                  onClick={() => onSelectMeeting(m.id)}
+                />
+              </li>
+            ))
+          )}
         </ul>
       </div>
 
-      <div className="border-t border-[color:var(--border-subtle)]">
-        <ProfileCard />
+      <div className="border-t border-[color:var(--border-subtle)] px-3.5 py-2.5">
+        <p className="text-2xs text-[color:var(--text-faint)]">
+          Damwha · 개인용 회의 기록
+        </p>
       </div>
+
+      <UploadDialog
+        open={uploadOpen}
+        onOpenChange={setUploadOpen}
+        onUploaded={onSelectMeeting}
+      />
     </nav>
   );
 }

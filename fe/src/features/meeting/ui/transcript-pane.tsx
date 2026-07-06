@@ -1,13 +1,30 @@
 import * as React from "react";
 
-import { Avatar } from "@/shared/ui/avatar";
+import { isApiError } from "@/shared/api/client";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/shared/ui/dialog";
 import { IconButton } from "@/shared/ui/icon-button";
+import { Input } from "@/shared/ui/input";
+import { toast } from "@/shared/ui/use-toast";
 import { Utterance } from "@/shared/ui/utterance";
 
-import { SPEAKERS, type Meeting } from "../model/data";
+import {
+  useDeleteMeeting,
+  useRenameMeeting,
+  useToggleFavorite,
+} from "../api/meetings";
+import type { Meeting } from "../model/types";
 import { Icon } from "./icons";
+import { ResolveDialog } from "./resolve-dialog";
 
 /**
  * TranscriptPane — center pane: meta header, attendee pills, speaker-verify
@@ -28,6 +45,22 @@ function MicMini() {
     >
       <rect x="6" y="2.5" width="4" height="7" rx="2" />
       <path d="M4.5 8a3.5 3.5 0 0 0 7 0M8 11.5v2" />
+    </svg>
+  );
+}
+
+function TrashMini() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m2 0v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V7M10 11v6M14 11v6" />
     </svg>
   );
 }
@@ -110,46 +143,164 @@ function AiBanner({
   );
 }
 
+/** 미해결 화자가 있으면 확인을 유도하는 배너 — 클릭 시 ResolveDialog를 연다. */
 function VerifyBanner({
-  pending,
-  onConfirm,
-  onReject,
+  count,
+  onResolve,
 }: {
-  pending: number[];
-  onConfirm: () => void;
-  onReject: () => void;
+  count: number;
+  onResolve: () => void;
 }) {
-  if (pending.length === 0) return null;
-  const sp = SPEAKERS[pending[0]];
-  const k = ((sp.spk - 1) % 8) + 1;
+  if (count === 0) return null;
   return (
-    <div
-      className="mb-3.5 flex items-center gap-3 rounded-md border border-dashed bg-[var(--gray-0)] px-3.5 py-[11px]"
-      style={{ borderColor: `var(--spk-${k}-solid)` }}
-    >
-      <Avatar name={sp.name} speaker={sp.spk} unconfirmed size="md" />
+    <div className="mb-3.5 flex items-center gap-3 rounded-md border border-dashed border-[color:var(--border-strong)] bg-[var(--gray-0)] px-3.5 py-[11px]">
+      <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-[var(--gray-2)] text-[color:var(--text-muted)]">
+        <Icon name="users" size={16} />
+      </span>
       <div className="min-w-0 flex-1">
         <div className="text-sm font-semibold text-foreground">
-          이 목소리,{" "}
-          <span style={{ color: `var(--spk-${k}-text)` }}>{sp.name}</span>{" "}
-          맞나요?
+          확인이 필요한 화자가 {count}명 있어요
         </div>
         <div className="mt-px text-xs text-[color:var(--text-secondary)]">
-          성문으로 자동 연결했어요 · 남은 확인 {pending.length}명
+          성문으로 자동 연결하지 못한 화자를 확인해 주세요.
         </div>
       </div>
-      <Button variant="ghost" size="sm" onClick={onReject}>
-        다른 사람
-      </Button>
       <Button
         variant="primary"
         size="sm"
         iconLeft={<Icon name="check" size={14} strokeWidth={2.4} />}
-        onClick={onConfirm}
+        onClick={onResolve}
       >
-        맞아요
+        화자 확인
       </Button>
     </div>
+  );
+}
+
+function RenameDialog({
+  meeting,
+  open,
+  onOpenChange,
+}: {
+  meeting: Meeting;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const rename = useRenameMeeting();
+  const [title, setTitle] = React.useState(meeting.title);
+
+  // Reset the field to the current title each time the dialog opens
+  // (adjust-state-on-prop-change during render — avoids a setState-in-effect).
+  const [wasOpen, setWasOpen] = React.useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setTitle(meeting.title);
+  }
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const next = title.trim();
+    if (!next) return;
+    rename.mutate(
+      { id: meeting.id, title: next },
+      {
+        onSuccess: () => {
+          toast({ variant: "success", title: "회의 이름을 변경했어요." });
+          onOpenChange(false);
+        },
+        onError: (err) =>
+          toast({
+            variant: "error",
+            title: "이름 변경에 실패했어요.",
+            description: isApiError(err) ? err.message : undefined,
+          }),
+      },
+    );
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>회의 이름 변경</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={submit} className="flex flex-col gap-4">
+          <Input
+            label="회의 이름"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            autoFocus
+          />
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="ghost">취소</Button>
+            </DialogClose>
+            <Button
+              type="submit"
+              loading={rename.isPending}
+              disabled={!title.trim()}
+            >
+              변경
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DeleteDialog({
+  meeting,
+  open,
+  onOpenChange,
+  onDeleted,
+}: {
+  meeting: Meeting;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onDeleted: () => void;
+}) {
+  const del = useDeleteMeeting();
+
+  const submit = () => {
+    del.mutate(
+      { id: meeting.id },
+      {
+        onSuccess: () => {
+          toast({ variant: "success", title: "회의를 삭제했어요." });
+          onOpenChange(false);
+          onDeleted();
+        },
+        onError: (err) =>
+          toast({
+            variant: "error",
+            title: "삭제에 실패했어요.",
+            description: isApiError(err) ? err.message : undefined,
+          }),
+      },
+    );
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>회의를 삭제할까요?</DialogTitle>
+          <DialogDescription>
+            “{meeting.title}” 회의와 전사·화자 연결이 모두 삭제돼요. 이 작업은
+            되돌릴 수 없어요.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="ghost">취소</Button>
+          </DialogClose>
+          <Button variant="danger" onClick={submit} loading={del.isPending}>
+            삭제
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -157,9 +308,7 @@ type TranscriptPaneProps = {
   meeting: Meeting;
   activeId: string;
   onJump: (uid: string) => void;
-  pending: number[];
-  onConfirm: () => void;
-  onReject: () => void;
+  onDeleted: () => void;
   aiAcked: boolean;
   onAckAi: () => void;
   onShowSummary: () => void;
@@ -170,15 +319,35 @@ export function TranscriptPane({
   meeting,
   activeId,
   onJump,
-  pending,
-  onConfirm,
-  onReject,
+  onDeleted,
   aiAcked,
   onAckAi,
   onShowSummary,
   onOpenSearch,
 }: TranscriptPaneProps) {
   const scrollRef = React.useRef<HTMLDivElement>(null);
+  const [renameOpen, setRenameOpen] = React.useState(false);
+  const [deleteOpen, setDeleteOpen] = React.useState(false);
+  const [resolveOpen, setResolveOpen] = React.useState(false);
+
+  const favorite = useToggleFavorite();
+  const fav = !!meeting.fav;
+  const toggleFav = () =>
+    favorite.mutate(
+      { id: meeting.id, fav: !fav },
+      {
+        onError: (err) =>
+          toast({
+            variant: "error",
+            title: "즐겨찾기 변경에 실패했어요.",
+            description: isApiError(err) ? err.message : undefined,
+          }),
+      },
+    );
+
+  const pendingCount = meeting.clusters.filter(
+    (c) => c.resolvedSpeakerId == null || c.speakerStatus === "provisional",
+  ).length;
 
   // Utterance-jump: reveal the active utterance when it changes. On a jump
   // within the same meeting (⌘K·원문 보기), also move focus to the target so
@@ -210,10 +379,29 @@ export function TranscriptPane({
       <div className="shrink-0 px-7 py-3.5">
         <div className="mb-[11px] flex items-center gap-2">
           <h1 className="min-w-0 truncate text-h1 font-semibold tracking-[-0.02em] text-foreground">
-            {meeting.subOverride ?? meeting.title}
+            {meeting.title}
           </h1>
-          <IconButton label="별표" size="sm" pressed={meeting.fav}>
+          <IconButton
+            label={fav ? "즐겨찾기 해제" : "즐겨찾기"}
+            size="sm"
+            pressed={fav}
+            onClick={toggleFav}
+          >
             <Icon name="star" size={17} />
+          </IconButton>
+          <IconButton
+            label="이름 변경"
+            size="sm"
+            onClick={() => setRenameOpen(true)}
+          >
+            <Icon name="pencil" size={16} />
+          </IconButton>
+          <IconButton
+            label="삭제"
+            size="sm"
+            onClick={() => setDeleteOpen(true)}
+          >
+            <TrashMini />
           </IconButton>
           <div className="flex-1" />
           <Button
@@ -239,8 +427,8 @@ export function TranscriptPane({
           {meeting.attendees.map((a) => (
             <AttendeePill
               key={a}
-              speaker={SPEAKERS[a].spk}
-              name={SPEAKERS[a].name}
+              speaker={meeting.speakers[a].spk}
+              name={meeting.speakers[a].name}
             />
           ))}
           <button
@@ -259,25 +447,24 @@ export function TranscriptPane({
         className="min-h-0 flex-1 overflow-y-auto px-7 pt-4 pb-6"
       >
         <VerifyBanner
-          pending={pending}
-          onConfirm={onConfirm}
-          onReject={onReject}
+          count={pendingCount}
+          onResolve={() => setResolveOpen(true)}
         />
-        {!aiAcked && (
+        {!aiAcked && meeting.aiCount > 0 ? (
           <AiBanner
             meeting={meeting}
             onDetail={onShowSummary}
             onAck={onAckAi}
           />
-        )}
+        ) : null}
         <div className="flex flex-col gap-px" role="log" aria-label="회의 전사">
           {meeting.utterances.map((u) => (
             <Utterance
               key={u.id}
               data-uid={u.id}
               tabIndex={-1}
-              speaker={SPEAKERS[u.spk].spk}
-              name={SPEAKERS[u.spk].name}
+              speaker={meeting.speakers[u.spk].spk}
+              name={meeting.speakers[u.spk].name}
               time={u.t}
               active={activeId === u.id}
               quoted={u.quoted}
@@ -308,6 +495,23 @@ export function TranscriptPane({
           전체 스크롤
         </Button>
       </div>
+
+      <RenameDialog
+        meeting={meeting}
+        open={renameOpen}
+        onOpenChange={setRenameOpen}
+      />
+      <DeleteDialog
+        meeting={meeting}
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        onDeleted={onDeleted}
+      />
+      <ResolveDialog
+        meeting={meeting}
+        open={resolveOpen}
+        onOpenChange={setResolveOpen}
+      />
     </main>
   );
 }
