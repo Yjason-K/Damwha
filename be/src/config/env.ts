@@ -14,7 +14,13 @@ const EnvSchema = z.object({
   EMBEDDING_DIM: z.coerce.number().default(192),
   IDENTIFY_THRESHOLD: z.coerce.number().default(0.7),
   SEARCH_EMBEDDING_MODEL: z.string().default('BAAI/bge-m3'),
-  SEARCH_EMBEDDING_DIM: z.coerce.number().default(1024),
+  // Phase 2는 임베딩 차원을 1024로 고정(utterance_embedding.embedding = vector(1024)).
+  // 오설정으로 색인 잡이 영구 실패하지 않도록 literal 1024만 허용.
+  SEARCH_EMBEDDING_DIM: z.coerce
+    .number()
+    .int()
+    .default(1024)
+    .refine((n) => n === 1024, 'SEARCH_EMBEDDING_DIM must be 1024 in Phase 2'),
   EMBED_SERVICE_URL: z.string().default('http://127.0.0.1:8100'),
   EMBED_SERVICE_TIMEOUT_MS: z.coerce.number().default(800),
   EMBED_SERVICE_ALLOW_NON_LOOPBACK: z.string().default('false'),

@@ -34,7 +34,7 @@ export const IndexMeetingPayloadSchema = z.object({
   schema_version: z.literal(1).default(1),
   meeting_id: z.string().regex(/^mtg_[1-9][0-9]*$/),
   processing_version: z.number().int().nonnegative(),
-  search_embedding: z.object({ model: z.string(), dimension: z.number().int() }),
+  search_embedding: z.object({ model: z.string(), dimension: z.literal(1024) }),
 });
 
 export type ProcessMeetingPayload = z.infer<typeof ProcessMeetingPayloadSchema>;

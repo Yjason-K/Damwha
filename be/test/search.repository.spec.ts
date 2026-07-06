@@ -67,13 +67,85 @@ describe('SearchRepository', () => {
   });
 
   it('semantic arm filters by model AND dimension', async () => {
+    // dimension 컬럼은 CHECK(=1024)로 고정 → 저장은 항상 정상(MODEL, 1024).
+    // SQL의 e.model=$4 / e.dimension=$5 술어를 쿼리 측 불일치로 검증.
     const m = await seedMeeting('m', null);
     const u = await seedUtterance(m, 0, '내용', 'ok', null);
-    await seedEmbedding(u, oneHot(0), 999); // dimension 컬럼만 다르게 (벡터는 1024차원)
-    const rows = await repo.hybrid(db.pool, {
-      q: 'zzz', qvec: oneHot(0), filters: noFilters, limit: 10, candK: 50, rrfK: 60, model: MODEL, dim: DIM,
+    await seedEmbedding(u, oneHot(0)); // 정상 저장 (model=MODEL, dimension=1024)
+    const byModel = await repo.hybrid(db.pool, {
+      q: 'zzz', qvec: oneHot(0), filters: noFilters, limit: 10, candK: 50, rrfK: 60, model: 'other-model', dim: DIM,
     });
-    expect(rows.length).toBe(0); // dim 불일치로 의미 arm 제외, 키워드도 미매치
+    expect(byModel.length).toBe(0); // 모델 불일치로 의미 arm 제외, 키워드도 미매치
+    const byDim = await repo.hybrid(db.pool, {
+      q: 'zzz', qvec: oneHot(0), filters: noFilters, limit: 10, candK: 50, rrfK: 60, model: MODEL, dim: 512,
+    });
+    expect(byDim.length).toBe(0); // 차원 불일치로 의미 arm 제외
+  });
+
+  it('S4: excludes non-done meetings and stale-version utterances', async () => {
+    // (a) 재처리 중(status='processing') 회의의 utterance는 검색에서 제외
+    const processing = (await db.pool.query(
+      `INSERT INTO meeting(title,audio_key,status,processing_version) VALUES('p','k','processing',1) RETURNING id`,
+    )).rows[0].id;
+    await db.pool.query(
+      `INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,text,status,order_index,processing_version)
+       VALUES($1,'SPEAKER_00',0,1000,'재처리 중 발언','ok',0,1)`,
+      [processing],
+    );
+    // (b) done이지만 utterance.processing_version < meeting.processing_version(구버전) → 제외
+    const bumped = (await db.pool.query(
+      `INSERT INTO meeting(title,audio_key,status,processing_version) VALUES('b','k','done',2) RETURNING id`,
+    )).rows[0].id;
+    await db.pool.query(
+      `INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,text,status,order_index,processing_version)
+       VALUES($1,'SPEAKER_00',0,1000,'구버전 발언','ok',0,1)`,
+      [bumped],
+    );
+    // (c) 정상(done, pv 일치)만 남음
+    const ok = await seedMeeting('ok', null); // status='done', processing_version=0
+    await seedUtterance(ok, 0, '확정 발언', 'ok', null); // processing_version=0
+
+    // 공유 filterSql이므로 keyword/browse 두 arm으로 확정본만 반환됨을 확인
+    const kw = await repo.keyword(db.pool, { q: '발언', filters: noFilters, limit: 10, candK: 50 });
+    expect(kw.map((r) => r.text)).toEqual(['확정 발언']);
+    const br = await repo.browse(db.pool, { filters: noFilters, limit: 10 });
+    expect(br.map((r) => r.text)).toEqual(['확정 발언']);
+  });
+
+  it('S1: hybrid returns filtered matches under tx-local hnsw GUCs', async () => {
+    // >40개 임베딩 + 선택적 meetingIds 필터. GUC(strict_order, ef_search>=candK)를
+    // 트랜잭션 로컬로 적용한 상태에서 필터에 걸린 발언이 굶지 않고 반환되는지(리콜) 확인.
+    const noise = await seedMeeting('noise', '2026-06-20T00:00:00Z');
+    const target = await seedMeeting('target', '2026-06-20T00:00:00Z');
+    for (let i = 0; i < 50; i++) {
+      const u = await seedUtterance(noise, i, `잡음 ${i}`, 'ok', null);
+      await seedEmbedding(u, oneHot(i + 1)); // oneHot(0)과 직교
+    }
+    const tu = await seedUtterance(target, 0, '대상 발언', 'ok', null);
+    await seedEmbedding(tu, oneHot(0)); // 쿼리 벡터와 동일(최근접)
+
+    const candK = 100;
+    const client = await db.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT set_config('hnsw.iterative_scan','strict_order',true)`);
+      await client.query(`SELECT set_config('hnsw.ef_search',$1,true)`, [String(candK)]);
+      // GUC가 트랜잭션 로컬로 실제 적용됐는지(= pgvector ≥ 0.8에서 strict_order 허용)
+      const ef = await client.query(`SELECT current_setting('hnsw.ef_search') AS v`);
+      const it = await client.query(`SELECT current_setting('hnsw.iterative_scan') AS v`);
+      expect(Number(ef.rows[0].v)).toBeGreaterThanOrEqual(candK);
+      expect(it.rows[0].v).toBe('strict_order');
+      const rows = await repo.hybrid(client, {
+        q: 'zzz', // 키워드 미매치 → 의미 arm만 기여
+        qvec: oneHot(0),
+        filters: { dateFrom: null, dateTo: null, speakerIds: null, meetingIds: [target] },
+        limit: 10, candK, rrfK: 60, model: MODEL, dim: DIM,
+      });
+      expect(rows.map((r) => r.utterance_id)).toEqual([tu]);
+      await client.query('COMMIT');
+    } finally {
+      client.release();
+    }
   });
 
   it('browse orders recorded_at DESC NULLS LAST and excludes non-ok', async () => {

@@ -1,3 +1,7 @@
+import * as fs from 'fs';
+import * as path from 'path';
+import { Pool } from 'pg';
+import { PostgreSqlContainer } from '@testcontainers/postgresql';
 import { startTestDb, StartedTestDb } from './db';
 
 describe('migration', () => {
@@ -124,6 +128,74 @@ describe('migration', () => {
       [u.rows[0].id],
     );
     expect(cnt.rows[0].c).toBe(1);
+  });
+
+  it('005: utterance_embedding.dimension CHECK enforces literal 1024', async () => {
+    const m = await db.pool.query(`INSERT INTO meeting(audio_key) VALUES('k') RETURNING id`);
+    const u = await db.pool.query(
+      `INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,text,status,order_index,processing_version)
+       VALUES($1,'SPEAKER_00',0,1000,'안녕','ok',0,0) RETURNING id`,
+      [m.rows[0].id],
+    );
+    const vec = '[' + Array(1024).fill(0.1).join(',') + ']';
+    // dimension=1024 → 허용
+    await expect(
+      db.pool.query(
+        `INSERT INTO utterance_embedding(utterance_id,embedding,model,dimension,processing_version)
+         VALUES($1,$2::vector,'BAAI/bge-m3',1024,0)`,
+        [u.rows[0].id, vec],
+      ),
+    ).resolves.toBeDefined();
+    // dimension=999 (벡터는 1024차원, 다른 model이라 UNIQUE 충돌 아님) → CHECK 위반 거부
+    await expect(
+      db.pool.query(
+        `INSERT INTO utterance_embedding(utterance_id,embedding,model,dimension,processing_version)
+         VALUES($1,$2::vector,'other',999,0)`,
+        [u.rows[0].id, vec],
+      ),
+    ).rejects.toThrow(/check constraint/i);
+  });
+
+  it('005: succeeds on a DB that already holds legacy non-1024 rows (cleans them first)', async () => {
+    // Fresh container migrated only through 004, so the pre-005 schema still
+    // allows a mis-dimensioned utterance_embedding row (as an old misconfig would).
+    const legacy = await new PostgreSqlContainer('damwha/postgres-bigm:pg16').start();
+    const pool = new Pool({ connectionString: legacy.getConnectionUri() });
+    try {
+      const dir = path.join(__dirname, '..', 'src', 'database', 'migrations');
+      const files = fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
+      for (const f of files.filter((f) => f < '005')) {
+        await pool.query(fs.readFileSync(path.join(dir, f), 'utf8'));
+      }
+      const m = (await pool.query(`INSERT INTO meeting(audio_key) VALUES('k') RETURNING id`)).rows[0].id;
+      const u = (await pool.query(
+        `INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,text,status,order_index,processing_version)
+         VALUES($1,'SPEAKER_00',0,1000,'안녕','ok',0,0) RETURNING id`, [m],
+      )).rows[0].id;
+      const vec = '[' + Array(1024).fill(0.1).join(',') + ']';
+      // vector column is fixed vector(1024); only the dimension META column is wrong (512)
+      await pool.query(
+        `INSERT INTO utterance_embedding(utterance_id,embedding,model,dimension,processing_version)
+         VALUES($1,$2::vector,'legacy',512,0)`, [u, vec],
+      );
+      expect((await pool.query(`SELECT 1 FROM utterance_embedding WHERE dimension<>1024`)).rowCount).toBe(1);
+
+      // migration 005 must succeed despite the legacy row, and remove it
+      const sql005 = fs.readFileSync(path.join(dir, '005_search_hardening.sql'), 'utf8');
+      await expect(pool.query(sql005)).resolves.toBeDefined();
+      expect((await pool.query(`SELECT 1 FROM utterance_embedding WHERE dimension<>1024`)).rowCount).toBe(0);
+
+      // and the CHECK is now enforced
+      await expect(
+        pool.query(
+          `INSERT INTO utterance_embedding(utterance_id,embedding,model,dimension,processing_version)
+           VALUES($1,$2::vector,'other',512,0)`, [u, vec],
+        ),
+      ).rejects.toThrow(/check constraint/i);
+    } finally {
+      await pool.end();
+      await legacy.stop();
+    }
   });
 
   it('generates prefixed ids by DEFAULT for all 7 tables', async () => {

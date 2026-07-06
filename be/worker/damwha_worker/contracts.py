@@ -54,7 +54,10 @@ class EnrollSpeakerPayload(BaseModel):
 
 class SearchEmbedding(BaseModel):
     model: str
-    dimension: int
+    # Mirrors the zod contract (IndexMeetingPayloadSchema) and the 005 DB CHECK:
+    # reject a mis-dimensioned index job at the contract boundary (categorized
+    # PERMANENT failure) rather than letting it die on the DB constraint.
+    dimension: Literal[1024]
 
 
 class IndexMeetingPayload(BaseModel):
