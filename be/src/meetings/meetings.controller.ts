@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Delete, Get, Headers, HttpCode, Param, Post, Put, Res, UploadedFile, UseInterceptors,
+  Body, Controller, Delete, Get, Headers, HttpCode, Param, Patch, Post, Put, Res, UploadedFile, UseInterceptors,
 } from '@nestjs/common';
 import { ApiBody, ApiConsumes, ApiOperation, ApiParam, ApiProduces, ApiTags } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -45,6 +45,29 @@ export class MeetingsController {
   @Get(':id/status')
   @ApiOperation({ summary: '처리 상태 조회' })
   status(@Param('id') id: string) { return this.service.getStatus(id); }
+
+  @Patch(':id')
+  @ApiOperation({ summary: '회의 정보 수정 (제목/녹음 시각)' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', nullable: true, description: '회의 제목 (null이면 해제)' },
+        recorded_at: {
+          type: 'string', format: 'date-time', nullable: true,
+          description: '녹음 시각 ISO8601 (null이면 해제)',
+        },
+      },
+    },
+  })
+  update(@Param('id') id: string, @Body() body: { title?: string | null; recorded_at?: string | null }) {
+    return this.service.update(id, body);
+  }
+
+  @Delete(':id')
+  @ApiOperation({ summary: '회의 삭제 (연관 데이터 및 저장 파일 정리)' })
+  @HttpCode(204)
+  remove(@Param('id') id: string) { return this.service.remove(id); }
 
   @Put(':id/favorite')
   @ApiOperation({ summary: '즐겨찾기 설정' })

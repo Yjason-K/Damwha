@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Get, Param, Patch, Post, UploadedFile, UseInterceptors,
+  Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, UploadedFile, UseInterceptors,
 } from '@nestjs/common';
 import { ApiBody, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -39,7 +39,20 @@ export class SpeakersController {
 
   @Patch(':id')
   @ApiOperation({ summary: '화자 이름 변경 (provisional이면 ready로 확정)' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: '변경할 화자 이름' },
+      },
+    },
+  })
   rename(@Param('id') id: string, @Body() body: { name?: string }) {
     return this.service.rename(id, body);
   }
+
+  @Delete(':id')
+  @ApiOperation({ summary: '화자 삭제 (발화/클러스터 참조 해제 후 삭제)' })
+  @HttpCode(204)
+  remove(@Param('id') id: string) { return this.service.remove(id); }
 }

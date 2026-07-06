@@ -7,6 +7,7 @@ import { buildProcessMeetingPayload, buildIndexMeetingPayload } from '../contrac
 import { MeetingsRepository, MeetingRow } from './meetings.repository';
 import { loadEnv } from '../config/env';
 import { nextId } from '../common/id';
+import { isIso8601 } from '../common/iso8601';
 import * as fs from 'fs';
 
 const AUDIO_MIME = /^audio\//;
@@ -61,13 +62,47 @@ export class MeetingsService {
     return updated;
   }
 
+  // Manual validation (no global ValidationPipe): title must be string|null,
+  // recorded_at must be an ISO-8601 datetime or null.
+  async update(id: string, body: { title?: unknown; recorded_at?: unknown }): Promise<MeetingRow> {
+    const patch: { title?: string | null; recorded_at?: string | null } = {};
+    if ('title' in body) {
+      if (body.title !== null && typeof body.title !== 'string') {
+        throw new BadRequestException('title must be a string or null');
+      }
+      patch.title = body.title as string | null;
+    }
+    if ('recorded_at' in body) {
+      if (body.recorded_at === null) {
+        patch.recorded_at = null;
+      } else if (typeof body.recorded_at !== 'string' || !isIso8601(body.recorded_at)) {
+        throw new BadRequestException('recorded_at must be an ISO-8601 datetime or null');
+      } else {
+        patch.recorded_at = body.recorded_at;
+      }
+    }
+    const updated = await this.meetings.update(this.db.pool, id, patch);
+    if (!updated) throw new NotFoundException('meeting not found');
+    return updated;
+  }
+
+  // Cascade removes clusters/utterances/embeddings/jobs; then drop on-disk files.
+  // An in-flight worker holding this meeting's job is tolerated: its ownership
+  // guards discard when the job/meeting rows disappear (see db-schema notes).
+  async remove(id: string): Promise<void> {
+    const deleted = await this.db.withTransaction((c) => this.meetings.deleteById(c, id));
+    if (!deleted) throw new NotFoundException('meeting not found');
+    await this.storage.deleteDir(this.storage.meetingDir(id));
+  }
+
   async list() { return this.meetings.list(this.db.pool); }
 
   async get(id: string) {
     const meeting = await this.meetings.findById(this.db.pool, id);
     if (!meeting) throw new NotFoundException('meeting not found');
     const utterances = await this.meetings.findUtterances(this.db.pool, id);
-    return { ...meeting, utterances };
+    const clusters = await this.meetings.findClusters(this.db.pool, id);
+    return { ...meeting, utterances, clusters };
   }
 
   async getStatus(id: string) {

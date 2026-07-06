@@ -24,6 +24,12 @@ export class StorageService {
   speakerKey(speakerId: string, filename: string): string {
     return `speakers/${speakerId}/sample${this.sanitizeExt(filename)}`;
   }
+  meetingDir(meetingId: string): string {
+    return `meetings/${meetingId}`;
+  }
+  speakerDir(speakerId: string): string {
+    return `speakers/${speakerId}`;
+  }
 
   resolve(key: string): string {
     const full = path.resolve(this.root, key);
@@ -56,6 +62,12 @@ export class StorageService {
   }
   stat(key: string): Promise<fs.Stats> {
     return fs.promises.stat(this.resolve(key));
+  }
+  // Recursively remove a directory subtree addressed by a relative key prefix.
+  // Routes through resolve() so the traversal guard applies; no-op if missing.
+  async deleteDir(keyPrefix: string): Promise<void> {
+    const full = this.resolve(keyPrefix);
+    await fs.promises.rm(full, { recursive: true, force: true });
   }
   createReadStream(key: string, opts?: { start: number; end: number }): fs.ReadStream {
     return fs.createReadStream(this.resolve(key), opts);

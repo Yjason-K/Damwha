@@ -8,6 +8,11 @@ export interface MeetingRow {
   processing_version: number; error: any; created_at: Date;
 }
 
+export interface ClusterRow {
+  id: string; diar_label: string; resolved_speaker_id: string | null;
+  speaker_name: string | null; speaker_status: string | null;
+}
+
 @Injectable()
 export class MeetingsRepository {
   async create(
@@ -27,6 +32,38 @@ export class MeetingsRepository {
       [id, value],
     );
     return rows[0] ?? null;
+  }
+  // Partial update of title/recorded_at. Only keys present in `patch` are written;
+  // an empty patch falls back to a plain SELECT (so 404 detection still works).
+  async update(
+    exec: Queryable,
+    id: string,
+    patch: { title?: string | null; recorded_at?: string | null },
+  ): Promise<MeetingRow | null> {
+    const sets: string[] = [];
+    const params: unknown[] = [id];
+    if ('title' in patch) {
+      params.push(patch.title);
+      sets.push(`title=$${params.length}`);
+    }
+    if ('recorded_at' in patch) {
+      params.push(patch.recorded_at);
+      sets.push(`recorded_at=$${params.length}`);
+    }
+    if (sets.length === 0) {
+      const { rows } = await exec.query<MeetingRow>(`SELECT * FROM meeting WHERE id=$1`, [id]);
+      return rows[0] ?? null;
+    }
+    const { rows } = await exec.query<MeetingRow>(
+      `UPDATE meeting SET ${sets.join(', ')} WHERE id=$1 RETURNING *`,
+      params,
+    );
+    return rows[0] ?? null;
+  }
+  // Cascade (001/002/003 schema) removes clusters/utterances/embeddings/jobs.
+  async deleteById(exec: Queryable, id: string): Promise<boolean> {
+    const res = await exec.query(`DELETE FROM meeting WHERE id=$1`, [id]);
+    return (res.rowCount ?? 0) > 0;
   }
   async setCurrentJob(exec: Queryable, meetingId: string, jobId: string): Promise<MeetingRow> {
     const { rows } = await exec.query<MeetingRow>(
@@ -48,6 +85,22 @@ export class MeetingsRepository {
       `SELECT u.*, s.name AS speaker_name, s.enrollment_status AS speaker_status
        FROM utterance u LEFT JOIN speaker s ON s.id = u.speaker_id
        WHERE u.meeting_id=$1 ORDER BY u.order_index ASC`,
+      [meetingId],
+    );
+    return rows;
+  }
+  // Clusters for the meeting at its CURRENT processing_version (older reprocess
+  // rounds are hidden). LEFT JOIN speaker so unresolved clusters yield null
+  // speaker fields. These carry the clu_<n> ids the resolve endpoint needs.
+  async findClusters(exec: Queryable, meetingId: string): Promise<ClusterRow[]> {
+    const { rows } = await exec.query<ClusterRow>(
+      `SELECT c.id, c.diar_label, c.resolved_speaker_id,
+              s.name AS speaker_name, s.enrollment_status AS speaker_status
+       FROM meeting_cluster c
+       JOIN meeting m ON m.id = c.meeting_id
+       LEFT JOIN speaker s ON s.id = c.resolved_speaker_id
+       WHERE c.meeting_id=$1 AND c.processing_version = m.processing_version
+       ORDER BY c.diar_label ASC`,
       [meetingId],
     );
     return rows;

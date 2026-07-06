@@ -215,6 +215,30 @@ describe('meetings', () => {
     expect(res.body.utterances[0].speaker_status).toBe('ready');
   });
 
+  it('GET /meetings/:id returns clusters (resolved + unresolved) at the current version, ordered by diar_label', async () => {
+    const m = await db.pool.query(`INSERT INTO meeting(audio_key,status,processing_version) VALUES('k','done',2) RETURNING id`);
+    const mid = m.rows[0].id;
+    const sp = await db.pool.query(`INSERT INTO speaker(name,enrollment_status) VALUES('홍길동','ready') RETURNING id`);
+    const sid = sp.rows[0].id;
+    // resolved cluster (S1) + unresolved cluster (S0) at the current version
+    const resolved = await db.pool.query(
+      `INSERT INTO meeting_cluster(meeting_id,diar_label,resolved_speaker_id,processing_version)
+       VALUES($1,'SPEAKER_01',$2,2) RETURNING id`, [mid, sid]);
+    const unresolved = await db.pool.query(
+      `INSERT INTO meeting_cluster(meeting_id,diar_label,processing_version)
+       VALUES($1,'SPEAKER_00',2) RETURNING id`, [mid]);
+    // stale-version cluster must be excluded
+    await db.pool.query(
+      `INSERT INTO meeting_cluster(meeting_id,diar_label,processing_version) VALUES($1,'SPEAKER_09',1)`, [mid]);
+
+    const res = await request(srv()).get(`/meetings/${mid}`);
+    expect(res.status).toBe(200);
+    expect(res.body.clusters).toEqual([
+      { id: unresolved.rows[0].id, diar_label: 'SPEAKER_00', resolved_speaker_id: null, speaker_name: null, speaker_status: null },
+      { id: resolved.rows[0].id, diar_label: 'SPEAKER_01', resolved_speaker_id: sid, speaker_name: '홍길동', speaker_status: 'ready' },
+    ]);
+  });
+
   it('GET /meetings/:id returns null speaker_name for unattributed utterances', async () => {
     const m = await db.pool.query(`INSERT INTO meeting(audio_key,status) VALUES('k','done') RETURNING id`);
     const mid = m.rows[0].id;

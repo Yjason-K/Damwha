@@ -9,6 +9,7 @@ import { loadEnv } from './config/env';
 async function bootstrap() {
   const env = loadEnv();
   const app = await NestFactory.create(AppModule);
+  app.enableCors(); // 개인용 셀프호스팅 전제 (제한 없는 기본형)
 
   const config = new DocumentBuilder()
     .setTitle('Damwha API')
