@@ -9,6 +9,7 @@ Damwha는 "누가 언제 무슨 말을 했는지"를 화자 단위로 기록·�
 | 문서 | 성격 | 설명 |
 |---|---|---|
 | [concept.md](./concept.md) | 살아있는 문서 (현재 v0.6) | **서비스 개념 정의서.** 제품 정체성·목표·핵심 기능·화면 구조·핵심 설계 결정. 모든 스펙/플랜이 참조하는 뿌리. |
+| [worker-architecture.md](./worker-architecture.md) | 살아있는 문서 | **Python worker 아키텍처.** 전체 구성, 3개 job 처리 흐름, 검색 embed service, 상태·재시도·ownership guard, 운영 방법. |
 | [superpowers/specs/2026-06-22-damwha-ingestion-backend-design.md](./superpowers/specs/2026-06-22-damwha-ingestion-backend-design.md) | 스냅샷 | **Phase 1 백엔드 설계 스펙.** 인제스션 백엔드(스키마·작업 큐·업로드·ML 워커 계약)의 확정 설계. |
 | [superpowers/plans/2026-06-22-damwha-ingestion-api.md](./superpowers/plans/2026-06-22-damwha-ingestion-api.md) | 스냅샷 | **Phase 1 / Plan 1 실행 플랜.** 스펙을 작업 단위로 분해한 NestJS API(`src/`)의 구현 계획. |
 | [superpowers/specs/2026-06-23-damwha-ml-worker-design.md](./superpowers/specs/2026-06-23-damwha-ml-worker-design.md) | 스냅샷 | **Phase 1 / Plan 2 설계 스펙.** `job` 계약을 소비하는 Python ML 워커(VAD→화자식별→STT→정렬, ownership 가드)의 설계. |
@@ -18,7 +19,7 @@ Damwha는 "누가 언제 무슨 말을 했는지"를 화자 단위로 기록·�
 
 ## 문서 종류
 
-- **살아있는 문서 (`concept.md`, `backlog.md`)** — 계속 개정된다. 경로는 고정하고, 버전·작성일은 문서 헤더와 git 히스토리로 추적한다. 다른 문서는 이 경로를 참조한다. [`backlog.md`](./backlog.md)는 출하 후 발견된 후속 이슈를 모은다.
+- **살아있는 문서 (`concept.md`, `worker-architecture.md`, `backlog.md`)** — 계속 개정된다. 경로는 고정하고, 버전·작성일은 문서 헤더와 git 히스토리로 추적한다. 다른 문서는 이 경로를 참조한다. [`backlog.md`](./backlog.md)는 출하 후 발견된 후속 이슈를 모은다.
 - **스냅샷 (`superpowers/specs`, `superpowers/plans`)** — 특정 시점의 합의를 기록한 산출물이라 파일명에 날짜(`YYYY-MM-DD-`)를 박는다. superpowers 워크플로(브레인스토밍→스펙→플랜)의 출력물 네임스페이스다. 적용된 스펙/플랜은 수정하지 않고 새 문서를 추가한다.
 
 ## 페이즈 개요
