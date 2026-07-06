@@ -20,6 +20,7 @@ def handle_job(
     worker_id: str,
     *,
     build_models=None,
+    build_embedder=None,
     build_text_embedder=None,
     search_embedding=None,
     default_speaker_prefix="Speaker",
@@ -41,10 +42,8 @@ def handle_job(
                 default_speaker_prefix=default_speaker_prefix,
             )
         if job["type"] == "enroll_speaker":
-            models = build_models()
-            return run_enroll_speaker(
-                conn, job, payload, models.embedder, storage, worker_id=worker_id
-            )
+            embedder = build_embedder()
+            return run_enroll_speaker(conn, job, payload, embedder, storage, worker_id=worker_id)
         if job["type"] == "index_meeting":
             text_embedder = build_text_embedder()
             return run_index_meeting(conn, job, payload, text_embedder, worker_id=worker_id)
@@ -90,6 +89,7 @@ def run_once(
     storage: Storage,
     *,
     build_models=None,
+    build_embedder=None,
     build_text_embedder=None,
     search_embedding=None,
     default_speaker_prefix="Speaker",
@@ -103,6 +103,7 @@ def run_once(
         storage,
         worker_id,
         build_models=build_models,
+        build_embedder=build_embedder,
         build_text_embedder=build_text_embedder,
         search_embedding=search_embedding,
         default_speaker_prefix=default_speaker_prefix,
@@ -116,6 +117,7 @@ def dispatch_claimed_job(
     settings,
     *,
     build_models_fn,
+    build_embedder_fn,
     build_text_embedder_fn,
     heartbeat_cm,
 ) -> str:
@@ -127,6 +129,7 @@ def dispatch_claimed_job(
             storage,
             settings.worker_id,
             build_models=lambda: build_models_fn(job["payload"], settings),
+            build_embedder=lambda: build_embedder_fn(job["payload"], settings),
             build_text_embedder=lambda: build_text_embedder_fn(settings),
             search_embedding=(settings.search_embedding_model, settings.search_embedding_dim),
             default_speaker_prefix=settings.default_speaker_prefix,
@@ -139,7 +142,7 @@ def main() -> None:  # pragma: no cover — 실모델 + 무한 루프 (로컬 �
     storage = Storage(settings.storage_root)
     conn = db.connect(settings.database_url)
     from .heartbeat import Heartbeat
-    from .models.registry import build_models, build_text_embedder
+    from .models.registry import build_embedder, build_models, build_text_embedder
 
     log.info("worker %s started", settings.worker_id)
     while True:
@@ -159,6 +162,7 @@ def main() -> None:  # pragma: no cover — 실모델 + 무한 루프 (로컬 �
             storage,
             settings,
             build_models_fn=build_models,
+            build_embedder_fn=build_embedder,
             build_text_embedder_fn=build_text_embedder,
             heartbeat_cm=hb,
         )

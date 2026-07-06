@@ -36,6 +36,13 @@ def build_models(payload: dict, settings: Settings) -> Models:
     )
 
 
+def build_embedder(payload: dict, settings: Settings) -> EcapaEmbedder:
+    # enroll은 ECAPA 임베더 하나만 필요 — VAD/diarizer/whisper를 만들지 않는다.
+    # device는 payload가 아니라 settings에서 온다(enroll payload엔 models 블록이 없다);
+    # ECAPA는 device=="mps"여도 CPU로 강제된다(ecapa_embed.py 참조).
+    return EcapaEmbedder(payload["embedding"]["model"], settings.device)
+
+
 def build_text_embedder(settings: Settings):
     from .bge_embed import BgeM3TextEmbedder
 

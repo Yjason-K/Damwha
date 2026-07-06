@@ -186,9 +186,8 @@ def test_process_build_transient_requeues_when_attempts_left(conn, tmp_path, mon
 
 
 def test_enroll_build_failure_fails_speaker(conn, tmp_path):
-    # 라우팅 목적지(enroll 빌드 실패 → speaker failed)를 고정한다. 실제 프로덕션의
-    # enroll 빌드 실패는 KeyError(payload에 'models' 없음 → uncategorized→TRANSIENT,
-    # backlog 참조)지만, 여기선 PERMANENT 예외로 즉시-fail 경로를 단정한다.
+    # 라우팅 목적지(enroll 빌드 실패 → speaker failed)를 고정한다. enroll은 전용
+    # 빌더(build_embedder)로 라우팅되며, 그 빌드가 PERMANENT 예외면 즉시-fail 한다.
     sid = seed_speaker(conn, enrollment_status="pending")
     payload = {
         "schema_version": 1,
@@ -204,7 +203,7 @@ def test_enroll_build_failure_fails_speaker(conn, tmp_path):
         job,
         Storage(str(tmp_path)),
         "w1",
-        build_models=_boom(ModuleNotFoundError("speechbrain missing")),
+        build_embedder=_boom(ModuleNotFoundError("speechbrain missing")),
     )
     assert out == "failed"
     assert (
@@ -215,6 +214,51 @@ def test_enroll_build_failure_fails_speaker(conn, tmp_path):
             "enrollment_status"
         ]
         == "failed"
+    )
+
+
+# --- NEW: enroll routing tests (enroll 전용 빌더) ---
+
+
+def _stub_enroll_ffmpeg(monkeypatch):
+    import damwha_worker.pipeline.enroll_speaker as es
+
+    monkeypatch.setattr(es.ffmpeg, "normalize", lambda s, d: None)
+    monkeypatch.setattr(es.ffmpeg, "probe", lambda p: ProbeResult(3000))
+
+
+def _enqueue_enroll(conn):
+    sid = seed_speaker(conn, enrollment_status="pending")
+    payload = {
+        "schema_version": 1,
+        "speaker_id": str(sid),
+        "audio_key": "speakers/s/original.m4a",
+        "embedding": {"model": "speechbrain/spkrec-ecapa-voxceleb", "dimension": 192},
+    }
+    jid = seed_job(conn, type="enroll_speaker", meeting_id=None, payload=payload)
+    conn.execute("UPDATE speaker SET current_job_id=%s WHERE id=%s", (jid, sid))
+    return sid, jid
+
+
+def test_enroll_routes_to_build_embedder(conn, tmp_path, monkeypatch):
+    # enroll은 build_models가 아닌 enroll 전용 빌더(build_embedder)로 라우팅된다.
+    _stub_enroll_ffmpeg(monkeypatch)
+    sid, jid = _enqueue_enroll(conn)
+    job = db.claim(conn, "w1")
+    emb_calls = []
+
+    def _build_embedder():
+        emb_calls.append("emb")
+        return FakeEmbedder([[0.3] * 192])
+
+    out = handle_job(conn, job, Storage(str(tmp_path)), "w1", build_embedder=_build_embedder)
+    assert out == "committed"
+    assert emb_calls == ["emb"]  # enroll 빌더가 콜백 경유로 정확히 1회
+    assert (
+        conn.execute("SELECT enrollment_status FROM speaker WHERE id=%s", (sid,)).fetchone()[
+            "enrollment_status"
+        ]
+        == "ready"
     )
 
 
@@ -266,6 +310,7 @@ def test_dispatch_process_builds_models_only_within_heartbeat(conn, tmp_path, mo
         Storage(str(tmp_path)),
         _settings_stub(),
         build_models_fn=fake_build_models_fn,
+        build_embedder_fn=lambda payload, s: None,
         build_text_embedder_fn=fake_build_text_embedder_fn,
         heartbeat_cm=cm,
     )
@@ -296,6 +341,7 @@ def test_dispatch_index_builds_text_embedder_only_within_heartbeat(conn, tmp_pat
         Storage(str(tmp_path)),
         _settings_stub(),
         build_models_fn=fake_build_models_fn,
+        build_embedder_fn=lambda payload, s: None,
         build_text_embedder_fn=fake_build_text_embedder_fn,
         heartbeat_cm=cm,
     )
@@ -328,9 +374,49 @@ def test_dispatch_passes_prefix_through_to_persist(conn, tmp_path, monkeypatch):
         Storage(str(tmp_path)),
         settings,
         build_models_fn=lambda payload, s: _models(),
+        build_embedder_fn=lambda payload, s: None,
         build_text_embedder_fn=lambda s: None,
         heartbeat_cm=_SpyCM(),
     )
     assert out == "committed"
     names = [r["name"] for r in conn.execute("SELECT name FROM speaker", ()).fetchall()]
     assert names and all(n.startswith("Zz_") for n in names)
+
+
+def test_dispatch_enroll_builds_embedder_not_models(conn, tmp_path, monkeypatch):
+    # 회귀 방지: enroll은 build_models(payload["models"]) 경로를 절대 타지 않는다.
+    # 과거엔 enroll이 build_models로 라우팅돼 payload에 없는 'models' 키를 읽어
+    # KeyError → uncategorized → TRANSIENT → 재큐가 반복됐다(worker-bug.md 참조).
+    _stub_enroll_ffmpeg(monkeypatch)
+    sid, jid = _enqueue_enroll(conn)
+    job = db.claim(conn, "w1")
+    pm_calls, emb_calls = [], []
+
+    def real_like_build_models_fn(payload, settings):
+        pm_calls.append("pm")
+        payload["models"]  # 실제 registry.build_models와 동일 — enroll payload엔 없음
+        return _models()
+
+    def build_embedder_fn(payload, settings):
+        emb_calls.append(payload["embedding"]["model"])
+        return FakeEmbedder([[0.3] * 192])
+
+    out = dispatch_claimed_job(
+        conn,
+        job,
+        Storage(str(tmp_path)),
+        _settings_stub(),
+        build_models_fn=real_like_build_models_fn,
+        build_text_embedder_fn=lambda s: None,
+        build_embedder_fn=build_embedder_fn,
+        heartbeat_cm=_SpyCM(),
+    )
+    assert out == "committed"
+    assert pm_calls == []  # KeyError를 유발하던 모델 빌더는 호출되지 않는다
+    assert emb_calls == ["speechbrain/spkrec-ecapa-voxceleb"]  # enroll 빌더가 1회
+    assert (
+        conn.execute("SELECT enrollment_status FROM speaker WHERE id=%s", (sid,)).fetchone()[
+            "enrollment_status"
+        ]
+        == "ready"
+    )

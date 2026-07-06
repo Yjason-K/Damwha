@@ -28,7 +28,7 @@ from testcontainers.postgres import PostgresContainer
 
 from damwha_worker import db
 from damwha_worker.config import load_settings
-from damwha_worker.models.registry import build_models
+from damwha_worker.models.registry import build_embedder, build_models
 from damwha_worker.pipeline.enroll_speaker import run_enroll_speaker
 from damwha_worker.pipeline.identify import identify_clusters
 from damwha_worker.pipeline.process_meeting import run_process_meeting
@@ -131,11 +131,12 @@ def main() -> int:
         db.claim(conn, "smoke")
         from damwha_worker.contracts import EnrollSpeakerPayload
 
+        # enroll 전용 빌더로 임베더를 만든다 — 실제 워커의 enroll 라우팅과 동일 경로.
         e_out = run_enroll_speaker(
             conn,
             conn.execute("SELECT * FROM job WHERE id=%s", (ejob["id"],)).fetchone(),
             EnrollSpeakerPayload.model_validate(ep),
-            models.embedder,
+            build_embedder(ep, settings),
             storage,
             worker_id="smoke",
         )
