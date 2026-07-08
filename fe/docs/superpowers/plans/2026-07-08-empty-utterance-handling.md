@@ -20,6 +20,11 @@
 - 플레이스홀더 문구(정확히 이 문자열): `전사하지 못한 구간입니다`
 - 마무리 전 `pnpm format` 실행(Prettier: double quotes, trailing comma all).
 
+**범위 제외 (스펙 결정 사항 — 구현하지 말 것):**
+
+- 전체가 silence인 회의는 트랜스크립트 로그 영역이 빈 채로 남는다. 별도 빈 상태 UI를 추가하지 않는다(YAGNI, 스펙 결정).
+- 검색(⌘K) 경로는 변경하지 않는다. BE 검색이 모든 경로에서 `u.status='ok' AND u.text IS NOT NULL`을 이미 필터한다(`be/src/search/search.repository.ts:57,104,124`) — 빈 히트는 발생하지 않는다.
+
 ---
 
 ### Task 1: 매퍼 — silence 필터링 + status 보존
@@ -65,6 +70,10 @@
 ```ts
   it("silence 발화는 utterances와 tracks에서 제거된다", () => {
     expect(detail.utterances.map((u) => u.id)).not.toContain("utt_5");
+    // utt_5(SPEAKER_01, 1초)가 lane2의 막대·발화시간에 잡히지 않는다.
+    const lane2 = detail.tracks.find((l) => l.spk === 2)!;
+    expect(lane2.dur).toBe("01:00");
+    expect(lane2.segments).toHaveLength(1);
   });
 
   it("transcribe_failed 발화는 status를 보존한 채 통과하고 타임라인에도 포함된다", () => {
