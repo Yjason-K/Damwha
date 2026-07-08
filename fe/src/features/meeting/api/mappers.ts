@@ -82,6 +82,18 @@ export function toMeetingSummary(wire: WireMeeting): MeetingSummary {
 const identityKey = (u: WireUtterance) => u.speaker_id ?? u.diar_label;
 
 /**
+ * 트랜스크립트·타임라인에 표시할 발화인가 — silence 제외, ok인데 text가
+ * 빈(whitespace-only 포함) 행도 제외. transcribe_failed는 플레이스홀더로
+ * 표시하므로 통과시킨다. 화자/참석자/클러스터 파생은 전체 발화 기준.
+ */
+const isVisible = (u: WireUtterance) => {
+  if (u.status === "silence") return false;
+  if (u.status === "ok" && (u.text == null || u.text.trim() === ""))
+    return false;
+  return true;
+};
+
+/**
  * GET /meetings/:id(발화 + 클러스터 포함) → 상세 화면용 회의.
  *
  * spk 틴트 번호는 발화 등장 순의 distinct 화자 식별(speaker_id, null이면
@@ -89,20 +101,21 @@ const identityKey = (u: WireUtterance) => u.speaker_id ?? u.diar_label;
  * clusters/unverified는 서버가 준 meeting_cluster 행(diar_label 순)에서 파생한다.
  */
 export function toMeetingDetail(wire: WireMeetingDetail): Meeting {
-  const utterances = [...wire.utterances].sort(
+  const allUtterances = [...wire.utterances].sort(
     (a, b) => a.order_index - b.order_index,
   );
+  const visibleUtterances = allUtterances.filter(isVisible);
 
   // 1. 식별 키 → spk 번호 (등장 순).
   const spkOf = new Map<string, number>();
-  for (const u of utterances) {
+  for (const u of allUtterances) {
     const key = identityKey(u);
     if (!spkOf.has(key)) spkOf.set(key, spkOf.size + 1);
   }
 
   // 2. spk → 대표 발화(화자 메타 조회용).
   const sampleBySpk = new Map<number, WireUtterance>();
-  for (const u of utterances) {
+  for (const u of allUtterances) {
     const spk = spkOf.get(identityKey(u))!;
     if (!sampleBySpk.has(spk)) sampleBySpk.set(spk, u);
   }
@@ -120,12 +133,13 @@ export function toMeetingDetail(wire: WireMeetingDetail): Meeting {
 
   const attendees = [...sampleBySpk.keys()].sort((a, b) => a - b);
 
-  // 5. utterances(발화 카드).
-  const utteranceEntries: UtteranceEntry[] = utterances.map((u) => ({
+  // 5. utterances(발화 카드) — 표시 대상만. silence는 여기서 걸러진다.
+  const utteranceEntries: UtteranceEntry[] = visibleUtterances.map((u) => ({
     id: u.id,
     spk: spkOf.get(identityKey(u))!,
     t: formatClock(u.start_ms),
     text: u.text ?? "",
+    status: u.status === "transcribe_failed" ? "transcribe_failed" : "ok",
   }));
 
   // 6. tracks — 화자별 발화 구간을 duration_ms로 나눈 0–1 비율.
@@ -134,7 +148,7 @@ export function toMeetingDetail(wire: WireMeetingDetail): Meeting {
     duration == null || duration <= 0
       ? []
       : attendees.map((spk) => {
-          const own = utterances.filter(
+          const own = visibleUtterances.filter(
             (u) => spkOf.get(identityKey(u)) === spk,
           );
           const spokenMs = own.reduce(
@@ -157,7 +171,7 @@ export function toMeetingDetail(wire: WireMeetingDetail): Meeting {
   //    번호를 쓰고, 발화가 없는 클러스터는 등장 순으로 이어지는 안정적 대체
   //    번호를 부여한다.
   const spkByDiar = new Map<string, number>();
-  for (const u of utterances) {
+  for (const u of allUtterances) {
     if (!spkByDiar.has(u.diar_label)) {
       spkByDiar.set(u.diar_label, spkOf.get(identityKey(u))!);
     }

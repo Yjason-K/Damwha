@@ -28,12 +28,16 @@ export type SpeakerLane = {
   segments: TrackSegment[];
 };
 
-/** 발화 카드 — `id`는 와이어 utterance id, `t`는 "MM:SS" 표시 문자열. */
+/**
+ * 발화 카드 — `id`는 와이어 utterance id, `t`는 "MM:SS" 표시 문자열.
+ * silence는 매퍼에서 걸러지므로 status는 ok/transcribe_failed만 온다.
+ */
 export type UtteranceEntry = {
   id: string;
   spk: number;
   t: string;
   text: string;
+  status: "ok" | "transcribe_failed";
   quoted?: boolean;
 };
 
