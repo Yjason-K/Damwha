@@ -133,14 +133,30 @@ export function toMeetingDetail(wire: WireMeetingDetail): Meeting {
 
   const attendees = [...sampleBySpk.keys()].sort((a, b) => a - b);
 
-  // 5. utterances(발화 카드) — 표시 대상만. silence는 여기서 걸러진다.
-  const utteranceEntries: UtteranceEntry[] = visibleUtterances.map((u) => ({
-    id: u.id,
-    spk: spkOf.get(identityKey(u))!,
-    t: formatClock(u.start_ms),
-    text: u.text ?? "",
-    status: u.status === "transcribe_failed" ? "transcribe_failed" : "ok",
-  }));
+  // 5. utterances(발화 카드) — 연속된 같은 화자의 ok 발화를 한 블록으로 병합.
+  //    transcribe_failed는 병합하지 않고 경계로 작동한다. sources가 구성 발화의
+  //    id·start_ms를 보존해 발화 단위 점프(검색 히트)의 정밀도를 지킨다.
+  const utteranceEntries: UtteranceEntry[] = [];
+  for (const u of visibleUtterances) {
+    const spk = spkOf.get(identityKey(u))!;
+    const status =
+      u.status === "transcribe_failed" ? "transcribe_failed" : "ok";
+    const text = (u.text ?? "").trim();
+    const last = utteranceEntries[utteranceEntries.length - 1];
+    if (last && status === "ok" && last.status === "ok" && last.spk === spk) {
+      last.text = `${last.text} ${text}`;
+      last.sources.push({ id: u.id, startMs: u.start_ms });
+      continue;
+    }
+    utteranceEntries.push({
+      id: u.id,
+      spk,
+      t: formatClock(u.start_ms),
+      text,
+      status,
+      sources: [{ id: u.id, startMs: u.start_ms }],
+    });
+  }
 
   // 6. tracks — 화자별 발화 구간을 duration_ms로 나눈 0–1 비율.
   const duration = wire.duration_ms;

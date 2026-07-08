@@ -239,10 +239,38 @@ describe("toMeetingDetail", () => {
 
   it("발화를 order_index 순으로 정렬하고 id/시각/텍스트를 매핑한다", () => {
     expect(detail.utterances).toEqual([
-      { id: "utt_1", spk: 1, t: "00:00", text: "안녕하세요", status: "ok" },
-      { id: "utt_2", spk: 2, t: "01:00", text: "네 반갑습니다", status: "ok" },
-      { id: "utt_3", spk: 3, t: "02:00", text: "시작하죠", status: "ok" },
-      { id: "utt_4", spk: 1, t: "1:00:00", text: "정리합니다", status: "ok" },
+      {
+        id: "utt_1",
+        spk: 1,
+        t: "00:00",
+        text: "안녕하세요",
+        status: "ok",
+        sources: [{ id: "utt_1", startMs: 0 }],
+      },
+      {
+        id: "utt_2",
+        spk: 2,
+        t: "01:00",
+        text: "네 반갑습니다",
+        status: "ok",
+        sources: [{ id: "utt_2", startMs: 60_000 }],
+      },
+      {
+        id: "utt_3",
+        spk: 3,
+        t: "02:00",
+        text: "시작하죠",
+        status: "ok",
+        sources: [{ id: "utt_3", startMs: 120_000 }],
+      },
+      {
+        id: "utt_4",
+        spk: 1,
+        t: "1:00:00",
+        text: "정리합니다",
+        status: "ok",
+        sources: [{ id: "utt_4", startMs: 3_600_000 }],
+      },
     ]);
   });
 
@@ -434,5 +462,193 @@ describe("toMeetingDetail", () => {
     expect(lane2.segments).toEqual([]);
     // 트랜스크립트에는 나오지 않는다.
     expect(d.utterances.map((u) => u.id)).toEqual(["a1"]);
+  });
+
+  it("연속된 같은 화자의 ok 발화를 하나로 병합한다", () => {
+    const wire = makeDetail();
+    wire.utterances = [
+      makeUtt({
+        id: "b1",
+        speaker_id: "spk_1",
+        speaker_name: "김영재",
+        speaker_status: "ready",
+        diar_label: "SPEAKER_00",
+        start_ms: 0,
+        end_ms: 60_000,
+        text: "안녕하세요",
+        order_index: 0,
+      }),
+      makeUtt({
+        id: "b2",
+        speaker_id: "spk_1",
+        speaker_name: "김영재",
+        speaker_status: "ready",
+        diar_label: "SPEAKER_00",
+        start_ms: 60_000,
+        end_ms: 120_000,
+        text: "반갑습니다",
+        order_index: 1,
+      }),
+      makeUtt({
+        id: "b3",
+        speaker_id: null,
+        speaker_name: null,
+        speaker_status: null,
+        diar_label: "SPEAKER_01",
+        start_ms: 120_000,
+        end_ms: 180_000,
+        text: "네",
+        order_index: 2,
+      }),
+    ];
+    const d = toMeetingDetail(wire);
+    expect(d.utterances).toEqual([
+      {
+        id: "b1",
+        spk: 1,
+        t: "00:00",
+        text: "안녕하세요 반갑습니다",
+        status: "ok",
+        sources: [
+          { id: "b1", startMs: 0 },
+          { id: "b2", startMs: 60_000 },
+        ],
+      },
+      {
+        id: "b3",
+        spk: 2,
+        t: "02:00",
+        text: "네",
+        status: "ok",
+        sources: [{ id: "b3", startMs: 120_000 }],
+      },
+    ]);
+  });
+
+  it("transcribe_failed는 병합되지 않고 블록 경계로 작동한다", () => {
+    const wire = makeDetail();
+    wire.utterances = [
+      makeUtt({
+        id: "c1",
+        speaker_id: "spk_1",
+        speaker_name: "김영재",
+        speaker_status: "ready",
+        diar_label: "SPEAKER_00",
+        start_ms: 0,
+        end_ms: 10_000,
+        text: "앞",
+        order_index: 0,
+      }),
+      makeUtt({
+        id: "c2",
+        speaker_id: "spk_1",
+        speaker_name: "김영재",
+        speaker_status: "ready",
+        diar_label: "SPEAKER_00",
+        start_ms: 10_000,
+        end_ms: 20_000,
+        text: null,
+        status: "transcribe_failed",
+        order_index: 1,
+      }),
+      makeUtt({
+        id: "c3",
+        speaker_id: "spk_1",
+        speaker_name: "김영재",
+        speaker_status: "ready",
+        diar_label: "SPEAKER_00",
+        start_ms: 20_000,
+        end_ms: 30_000,
+        text: "뒤",
+        order_index: 2,
+      }),
+    ];
+    const d = toMeetingDetail(wire);
+    expect(
+      d.utterances.map((u) => ({ id: u.id, text: u.text, status: u.status })),
+    ).toEqual([
+      { id: "c1", text: "앞", status: "ok" },
+      { id: "c2", text: "", status: "transcribe_failed" },
+      { id: "c3", text: "뒤", status: "ok" },
+    ]);
+    expect(d.utterances[1].sources).toEqual([{ id: "c2", startMs: 10_000 }]);
+  });
+
+  it("silence를 사이에 두고 떨어진 같은 화자 발화도 병합된다", () => {
+    const wire = makeDetail();
+    wire.utterances = [
+      makeUtt({
+        id: "d1",
+        speaker_id: "spk_1",
+        speaker_name: "김영재",
+        speaker_status: "ready",
+        diar_label: "SPEAKER_00",
+        start_ms: 0,
+        end_ms: 10_000,
+        text: "앞",
+        order_index: 0,
+      }),
+      makeUtt({
+        id: "d2",
+        speaker_id: "spk_1",
+        speaker_name: "김영재",
+        speaker_status: "ready",
+        diar_label: "SPEAKER_00",
+        start_ms: 10_000,
+        end_ms: 20_000,
+        text: null,
+        status: "silence",
+        order_index: 1,
+      }),
+      makeUtt({
+        id: "d3",
+        speaker_id: "spk_1",
+        speaker_name: "김영재",
+        speaker_status: "ready",
+        diar_label: "SPEAKER_00",
+        start_ms: 20_000,
+        end_ms: 30_000,
+        text: "뒤",
+        order_index: 2,
+      }),
+    ];
+    const d = toMeetingDetail(wire);
+    expect(d.utterances).toHaveLength(1);
+    expect(d.utterances[0].text).toBe("앞 뒤");
+    expect(d.utterances[0].sources.map((s) => s.id)).toEqual(["d1", "d3"]);
+  });
+
+  it("tracks 막대와 spokenMs는 병합과 무관하게 발화 단위 그대로다", () => {
+    const wire = makeDetail();
+    wire.utterances = [
+      makeUtt({
+        id: "b1",
+        speaker_id: "spk_1",
+        speaker_name: "김영재",
+        speaker_status: "ready",
+        diar_label: "SPEAKER_00",
+        start_ms: 0,
+        end_ms: 60_000,
+        text: "안녕하세요",
+        order_index: 0,
+      }),
+      makeUtt({
+        id: "b2",
+        speaker_id: "spk_1",
+        speaker_name: "김영재",
+        speaker_status: "ready",
+        diar_label: "SPEAKER_00",
+        start_ms: 60_000,
+        end_ms: 120_000,
+        text: "반갑습니다",
+        order_index: 1,
+      }),
+    ];
+    const d = toMeetingDetail(wire);
+    // 목록은 1개 블록으로 병합되지만 타임라인 막대는 발화 2개 그대로.
+    expect(d.utterances).toHaveLength(1);
+    const lane1 = d.tracks.find((l) => l.spk === 1)!;
+    expect(lane1.segments).toHaveLength(2);
+    expect(lane1.dur).toBe("02:00");
   });
 });

@@ -28,9 +28,15 @@ export type SpeakerLane = {
   segments: TrackSegment[];
 };
 
+/** 병합 블록을 구성하는 원본 발화 참조 — seek은 ms 정밀도의 startMs로 한다. */
+export type UtteranceSource = { id: string; startMs: number };
+
 /**
- * 발화 카드 — `id`는 와이어 utterance id, `t`는 "MM:SS" 표시 문자열.
- * silence는 매퍼에서 걸러지므로 status는 ok/transcribe_failed만 온다.
+ * 발화 카드 — 연속된 같은 화자의 ok 발화가 하나의 블록으로 병합된 표시 단위.
+ * `sources`는 구성 발화의 id·start_ms(병합 순서대로). 불변식:
+ * `id === sources[0].id`, `t === formatClock(sources[0].startMs)`.
+ * silence는 매퍼에서 걸러지므로 status는 ok/transcribe_failed만 오고,
+ * transcribe_failed는 병합되지 않는다(sources 1개).
  */
 export type UtteranceEntry = {
   id: string;
@@ -38,6 +44,7 @@ export type UtteranceEntry = {
   t: string;
   text: string;
   status: "ok" | "transcribe_failed";
+  sources: UtteranceSource[];
   quoted?: boolean;
 };
 
