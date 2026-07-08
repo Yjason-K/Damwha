@@ -16,7 +16,10 @@ utterance가 생성되고 FE가 연속 병합 없이 전부 개별 행으로 렌
   (시각적 그룹핑이 아니라 텍스트 자체를 합침).
 - **병합 위치는 FE 매퍼** (`toMeetingDetail`): 원본 데이터·검색 인덱스·화자 resolve는
   발화 단위를 유지하고 표시만 병합한다. silence 필터와 같은 레이어.
-- **시간 간격 무관**: 연속이기만 하면 간격과 상관없이 병합한다 (임계값 없음).
+- **시간 간격 무관**: 연속이기만 하면 간격과 상관없이 병합한다 (임계값 없음 —
+  브레인스토밍에서 시간 임계값 병합안을 검토 후 명시적으로 배제한 확정 결정.
+  장시간 단일 화자 회의에서 문단이 과도하게 길어지는 문제가 실사용에서 확인되면
+  표시 단위 제한을 후속 검토한다).
 - **추적성 보존**: 병합 entry는 구성 발화의 id·시각 목록(`sources`)을 보존한다.
   utterance-jump(발화 → 원본 오디오 시점)가 제품 시그니처이므로, 검색 히트가 블록
   중간 발화를 가리켜도 그 발화의 정확한 시점으로 seek해야 한다. 블록 시작으로
@@ -38,12 +41,15 @@ utterance가 생성되고 FE가 연속 병합 없이 전부 개별 행으로 렌
 `UtteranceEntry`(`fe/src/features/meeting/model/types.ts`)에 추가:
 
 ```ts
-sources: { id: string; t: string }[];
+sources: { id: string; startMs: number }[];
 ```
 
-- 구성 발화의 id와 "MM:SS" 시각, 병합 순서대로. 병합되지 않은 entry(단독 발화,
+- 구성 발화의 id와 원본 `start_ms`, 병합 순서대로. 병합되지 않은 entry(단독 발화,
   transcribe_failed)는 원소 1개.
-- `id`는 `sources[0].id`, `t`는 `sources[0].t`와 항상 일치한다(불변식).
+- `startMs`를 보존하는 이유: 표시 문자열 `t`는 `formatClock`이 초 단위로 floor해
+  ms 정밀도가 사라진다. seek은 `startMs` 기준으로 해야 "정확한 시점 seek" 계약을
+  지킨다.
+- 불변식: `id === sources[0].id`, `t === formatClock(sources[0].startMs)`.
 - `status`는 기존 유지 — 병합 entry는 항상 `"ok"`(failed는 병합 안 되므로).
 
 ## 소비처 변경
@@ -51,8 +57,10 @@ sources: { id: string; t: string }[];
 ### `fe/src/pages/meeting.tsx`
 
 - `jumpTo`: `meeting.utterances.find((x) => x.id === uid)` → sources 검색으로 변경.
-  매칭된 **source의 `t`** 로 seek한다(블록의 `t`가 아니라).
-- `pendingSeek` 처리(onLoadedMetadata 경로)도 동일하게 sources 검색 + source `t` seek.
+  매칭된 **source의 `startMs`** 로 seek한다(`startMs / 1000 / totalSeconds` 비율).
+  블록의 `t`가 아니다.
+- `pendingSeek` 처리(onLoadedMetadata 경로)도 동일하게 sources 검색 + source
+  `startMs` seek.
 - `setActiveId(uid)`는 그대로 원본 발화 id를 저장한다.
 
 ### `fe/src/features/meeting/ui/transcript-pane.tsx`
@@ -60,7 +68,10 @@ sources: { id: string; t: string }[];
 - active 판정: `activeId === u.id` → `u.sources.some((s) => s.id === activeId)`.
 - 스크롤 타깃: `data-uid`는 블록 id(`u.id`) 유지. activeId(원본 발화 id)로 스크롤할
   때는 activeId를 포함하는 블록의 id로 해석한 뒤 해당 `data-uid` 요소로 스크롤한다.
-- "원문 보기" 버튼: 블록의 `id`(첫 발화)로 점프 — 기존 동작과 동일.
+- "원문 보기" 버튼: 블록의 `id`(첫 발화)로 점프. **의도된 UX** — 이 버튼은 "표시된
+  행(블록)의 원본 듣기"이므로 블록 시작이 올바른 대상이다. 검색 히트처럼 블록 중간
+  발화를 가리키는 정밀 점프는 검색 경로(sources 매핑)가 담당한다. active source가
+  블록 내부에 있어도 버튼은 블록 시작으로 점프한다.
 
 ### 변경하지 않는 것
 
@@ -94,4 +105,7 @@ sources: { id: string; t: string }[];
 페이지 테스트 (`meeting.test.tsx`):
 
 - 연속 같은 화자 발화가 한 블록으로 렌더된다(스피커 칩 1개, 텍스트 이어짐).
-- 블록 중간 발화 id로 검색 점프 시 해당 발화 시점으로 seek되고 블록이 하이라이트된다.
+- 블록 중간 발화 id로 검색 점프 시 해당 발화의 `startMs` 시점으로 seek되고 블록이
+  하이라이트된다.
+- **다른 회의**의 병합 블록 중간 발화 검색 결과 클릭 시(pendingSeek 경로), 대상
+  회의 로딩 후 해당 source의 `startMs` 시점으로 seek된다.
