@@ -458,21 +458,25 @@ export function TranscriptPane({
           />
         ) : null}
         <div className="flex flex-col gap-px" role="log" aria-label="회의 전사">
-          {meeting.utterances.map((u) => (
-            <Utterance
-              key={u.id}
-              data-uid={u.id}
-              tabIndex={-1}
-              speaker={meeting.speakers[u.spk].spk}
-              name={meeting.speakers[u.spk].name}
-              time={u.t}
-              active={activeId === u.id}
-              quoted={u.quoted}
-              onJump={() => onJump(u.id)}
-            >
-              {u.text}
-            </Utterance>
-          ))}
+          {meeting.utterances.map((u) => {
+            const failed = u.status === "transcribe_failed";
+            return (
+              <Utterance
+                key={u.id}
+                data-uid={u.id}
+                tabIndex={-1}
+                speaker={meeting.speakers[u.spk].spk}
+                name={meeting.speakers[u.spk].name}
+                time={u.t}
+                active={activeId === u.id}
+                quoted={u.quoted}
+                placeholder={failed}
+                onJump={() => onJump(u.id)}
+              >
+                {failed ? "전사하지 못한 구간입니다" : u.text}
+              </Utterance>
+            );
+          })}
         </div>
       </div>
 

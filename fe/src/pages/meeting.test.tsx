@@ -137,6 +137,30 @@ const fx = vi.hoisted(() => {
         order_index: 2,
         text: "검색 인덱싱이 먼저 붙어야 합니다. 이번 스프린트에 넣죠.",
       }),
+      utt({
+        id: "u4",
+        speaker_id: "sp_1",
+        speaker_name: "김영재",
+        speaker_status: "ready",
+        diar_label: "SPEAKER_00",
+        start_ms: 22_000,
+        end_ms: 24_000,
+        order_index: 3,
+        text: null,
+        status: "silence",
+      }),
+      utt({
+        id: "u5",
+        speaker_id: "sp_2",
+        speaker_name: "이수민",
+        speaker_status: "ready",
+        diar_label: "SPEAKER_01",
+        start_ms: 24_000,
+        end_ms: 27_000,
+        order_index: 4,
+        text: null,
+        status: "transcribe_failed",
+      }),
     ],
     clusters: [
       {
@@ -351,6 +375,23 @@ test("회의 셸은 전사·인사이트·플레이어를 렌더한다", async (
   expect(screen.getByRole("log", { name: "회의 전사" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "재생" })).toBeInTheDocument();
   expect(screen.getByText(/오늘은 홈 구조부터 정하죠/)).toBeInTheDocument();
+});
+
+test("silence 발화는 숨기고 transcribe_failed는 플레이스홀더로 렌더한다", async () => {
+  renderShell();
+  await screen.findByRole("heading", {
+    level: 1,
+    name: "기획회의 — UI 개선안",
+  });
+  const log = screen.getByRole("log", { name: "회의 전사" });
+  // silence 행은 렌더되지 않는다.
+  expect(log.querySelector('[data-uid="u4"]')).toBeNull();
+  // transcribe_failed 행은 플레이스홀더 문구와 함께 렌더된다.
+  const failedRow = log.querySelector('[data-uid="u5"]');
+  expect(failedRow).not.toBeNull();
+  expect(failedRow).toHaveTextContent("전사하지 못한 구간입니다");
+  // 플레이스홀더는 이탤릭(회색) 스타일로 구분된다.
+  expect(failedRow!.querySelector("span.italic")).not.toBeNull();
 });
 
 test("미해결 클러스터가 있으면 화자 확인 배너와 다이얼로그가 뜬다", async () => {

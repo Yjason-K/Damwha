@@ -84,6 +84,7 @@ type UtteranceProps = Omit<React.ComponentProps<"div">, "children"> & {
   time?: React.ReactNode;
   active?: boolean;
   quoted?: boolean;
+  placeholder?: boolean;
   badge?: React.ReactNode;
   onJump?: () => void;
   onBookmark?: () => void;
@@ -97,6 +98,7 @@ function Utterance({
   time,
   active = false,
   quoted = false,
+  placeholder = false,
   badge = "인용",
   onJump,
   onBookmark,
@@ -155,7 +157,16 @@ function Utterance({
       {timeEl}
       <div className="min-w-0">
         <SpeakerPill speaker={speaker} name={name} />
-        <span className="text-read text-pretty text-foreground">{children}</span>
+        <span
+          className={cn(
+            "text-read text-pretty",
+            placeholder
+              ? "italic text-[color:var(--text-muted)]"
+              : "text-foreground",
+          )}
+        >
+          {children}
+        </span>
       </div>
       {onJump && (
         <button
