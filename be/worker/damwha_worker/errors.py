@@ -38,6 +38,7 @@ CORRUPT_AUDIO = "corrupt_audio"
 UNSUPPORTED_FORMAT = "unsupported_format"
 PROBE_FAILED = "probe_failed"
 UNSUPPORTED_PAYLOAD_VERSION = "unsupported_payload_version"
+SAMPLE_TOO_SHORT = "sample_too_short"
 # Mostly-transient codes (model_load_failed은 import류일 때 PERMANENT — classify 참조)
 MODEL_LOAD_FAILED = "model_load_failed"
 OOM = "oom"

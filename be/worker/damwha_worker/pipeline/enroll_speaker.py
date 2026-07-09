@@ -5,6 +5,7 @@ from collections.abc import Callable
 
 from .. import db
 from ..contracts import EnrollSpeakerPayload
+from ..errors import SAMPLE_TOO_SHORT, ErrorKind, WorkerError
 from ..models.base import DiarSegment, Embedder
 from ..storage import Storage
 from . import ffmpeg
@@ -47,6 +48,13 @@ def run_enroll_speaker(
         duration_ms = probe_fn(norm_path).duration_ms
         segment = DiarSegment("FULL", 0, duration_ms)
         embedding = embedder.embed(norm_path, [segment])[0]
+        if embedding is None:
+            raise WorkerError(
+                SAMPLE_TOO_SHORT,
+                f"enrollment sample too short to embed ({duration_ms}ms)",
+                ErrorKind.PERMANENT,
+                stage="extract_embedding",
+            )
         t["detail"] = f"reused={reused} duration_ms={duration_ms} dim={len(embedding)}"
 
     db.set_stage(conn, job_id, worker_id, "enroll_persist", 80)
