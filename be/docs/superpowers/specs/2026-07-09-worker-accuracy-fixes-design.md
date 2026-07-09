@@ -8,7 +8,7 @@
 
 ## 0. 이 문서의 범위
 
-워커 내부 정확도 결함 2건을 고친다. **job payload 계약(zod/pydantic), DB 스키마, NestJS `src/`는 변경하지 않는다** — 워커 내부 + 워커 테스트만 수정한다.
+워커 내부 정확도 결함 2건을 고친다. **job payload 계약(zod/pydantic), DB 스키마, NestJS `src/` 코드는 변경하지 않는다** — 워커 내부 + 워커 테스트 + 기존 오염 데이터 정리용 마이그레이션 1건(§1.4)만 추가한다.
 
 1. **Zero-vector 임베딩이 centroid를 오염** — 100ms 미만 diar 세그먼트에 대해 ECAPA 어댑터가 `[0.0]*192` sentinel을 반환하고, 이 값이 centroid 평균·voiceprint 저장·enroll 경로에 그대로 흘러든다.
 2. **`transcribe_failed` vs `silence` 오분류** — STT가 word를 하나라도 반환하면 word 없는 세그먼트가 전부 `silence`로 기록된다(부분 STT 실패가 침묵으로 위장됨).
@@ -31,7 +31,7 @@ sentinel을 제거하고 임베딩 부재를 타입으로 표현한다: **너무
 
 - **`models/base.py`** — `Embedder` 프로토콜 시그니처 변경:
   `embed(wav_path, segments) -> list[list[float] | None]` (`None` = 세그먼트가 짧아 임베딩 신뢰 불가). 반환 리스트 길이는 여전히 `segments`와 1:1.
-- **`models/ecapa_embed.py`** — 100ms 미만 클립에 `None` 반환(zero sentinel 삭제). 100ms 기준값 자체는 유지.
+- **`models/ecapa_embed.py`** — 100ms 미만 클립에 `None` 반환(zero sentinel 삭제). 100ms 기준값 자체는 유지. "너무 짧음" 판정은 모듈 수준 순수 헬퍼로 분리한다(예: `too_short_for_embedding(n_samples, sr)`) — `ecapa_embed.py`의 top-level import는 `.base`뿐이라 이 헬퍼는 `models` extra 없이 CI에서 직접 테스트 가능하다. 실모델 `embed` 경로는 헬퍼를 호출하고, 어댑터 전체는 기존대로 SMOKE에서 검증한다.
 - **`pipeline/identify.py` `centroids_by_label`** — `None`을 제외하고 평균. 유효 임베딩이 0개인 라벨은 **dict에 남기되 값을 `None`으로** 둔다(라벨 → cluster row 보존 경로 유지). 반환 타입: `dict[str, list[float] | None]`.
 - **`pipeline/identify.py` `identify_clusters`** — centroid가 `None`인 라벨은 DB 조회 없이 미식별(`None`) 처리.
 - **persist (`db.py`) — 변경 없음.** centroid `None`인 cluster는 이미 speaker/voiceprint 생성 없이 cluster row만 보존한다(기존 분기).
@@ -43,6 +43,21 @@ sentinel을 제거하고 임베딩 부재를 타입으로 표현한다: **너무
 - 짧은 세그먼트가 섞인 라벨: 유효 임베딩만으로 centroid 계산 → 식별 정확도 개선.
 - 전부 짧은 라벨: centroid `None` → 미식별 cluster row(voiceprint·provisional speaker 없음)로 보존, utterance는 `diar_label`만 갖고 speaker `NULL`.
 - 100ms 미만 enroll 샘플: PERMANENT 실패, speaker `enrollment_status='failed'` + `sample_too_short`.
+
+### 1.4 기존 오염 데이터 정리 (마이그레이션)
+
+이 설계는 미래 쓰기만 차단한다 — 현재 워커를 이미 실행한 DB에는 zero-vector voiceprint(`auto_cluster`/`enroll` source 모두 가능)가 남아 identify 쿼리에 계속 NaN을 유입시킨다. `voiceprint.embedding`은 `vector(192) NOT NULL`일 뿐 non-zero 가드가 없다(`001_init.sql`).
+
+일회성 데이터 정리 마이그레이션을 추가한다(스키마 변경 아님, 리포 관례인 numbered SQL):
+
+```sql
+-- 00X_delete_zero_voiceprints.sql
+DELETE FROM voiceprint WHERE vector_norm(embedding) = 0;
+```
+
+- `auto_cluster` zero voiceprint 삭제 → provisional speaker는 cluster 참조가 남아 유지(persist GC 조건과 정합).
+- `enroll` zero voiceprint 삭제 → `ready` speaker는 voiceprint 없이 남음 — identify에 매칭되지 않을 뿐이며, 재등록으로 복구.
+- CHECK 제약(`vector_norm > 0`) 추가는 기각: 워커가 이제 zero를 쓰지 않으므로 YAGNI.
 
 ---
 
@@ -84,8 +99,13 @@ utts = build_utterances(words, segments, failed_spans=speech_spans)
   - centroid `None` cluster가 provisional speaker/voiceprint 없이 cluster row로 보존되는 end-to-end 경로.
 - **enroll** (`tests/test_enroll_speaker.py`):
   - fake embedder가 `None` 반환 → job `failed`(PERMANENT, `sample_too_short`) + speaker `enrollment_status='failed'`.
-- **align/호출부** (`tests/test_align.py` 또는 `test_process_meeting.py`):
-  - 부분 STT 실패: 일부 세그먼트에 word 존재 + word 없는 세그먼트가 speech span과 overlap → `transcribe_failed`; overlap 없음 → `silence`.
+- **결함 2 회귀 테스트는 호출부 레벨이 필수** (`tests/test_process_meeting.py`):
+  - `align.py`는 이미 per-segment 판정을 지원하므로 align 단독 테스트는 수정 전 코드에서도 통과한다 — 버그는 `process_meeting.py`의 호출부 조건이다. 따라서 **`run_process_meeting`을 통과하는 테스트**로 검증한다: fake STT가 word를 일부 반환(비어있지 않음) + word 없는 세그먼트가 VAD speech span과 overlap → 해당 utterance가 `transcribe_failed`로 persist됨(수정 전 코드에서는 `silence`로 기록되어 실패해야 하는 테스트). overlap 없는 빈 세그먼트 → `silence`.
+  - `test_align.py`에 세그먼트별 케이스를 보강하는 것은 부차 — 호출부 테스트를 대체할 수 없다.
+- **ECAPA "너무 짧음" 헬퍼** (`tests/test_ecapa_helpers.py` 또는 기존 파일):
+  - `too_short_for_embedding` 순수 헬퍼를 CI에서 직접 테스트(경계값: 100ms 미만 true / 이상 false). fake 갱신만으로는 실어댑터 분기가 검증되지 않는 갭을 좁힌다. 실어댑터 end-to-end는 SMOKE 소관.
+- **마이그레이션** (API 측 기존 패턴, 예: `test/db.ts` 기반 suite):
+  - zero-vector voiceprint 삽입 후 마이그레이션 적용 → 삭제 확인, non-zero는 보존.
 
 ---
 
@@ -94,11 +114,12 @@ utts = build_utterances(words, segments, failed_spans=speech_spans)
 | 파일 | 변경 |
 |---|---|
 | `worker/damwha_worker/models/base.py` | `Embedder.embed` 반환 타입 `list[list[float] \| None]` |
-| `worker/damwha_worker/models/ecapa_embed.py` | zero sentinel → `None` |
+| `worker/damwha_worker/models/ecapa_embed.py` | zero sentinel → `None`, 순수 헬퍼 `too_short_for_embedding` 분리 |
 | `worker/damwha_worker/pipeline/identify.py` | `None` 필터 centroid, `None` centroid 미식별 처리 |
 | `worker/damwha_worker/pipeline/enroll_speaker.py` | `None` 임베딩 → PERMANENT `sample_too_short` |
 | `worker/damwha_worker/errors.py` | `SAMPLE_TOO_SHORT` 코드 상수 추가 |
 | `worker/damwha_worker/pipeline/process_meeting.py` | `failed_spans=speech_spans` 무조건 전달 |
-| `worker/tests/fakes.py` + 관련 테스트 | fake/케이스 갱신 |
+| `worker/tests/fakes.py` + 관련 테스트 | fake/케이스 갱신 (결함 2는 `run_process_meeting` 호출부 테스트 필수) |
+| `src/database/migrations/00X_delete_zero_voiceprints.sql` | 기존 zero-vector voiceprint 일회성 삭제 (§1.4) |
 
-계약(`src/contracts/`, `contracts.py`), 마이그레이션, API — 변경 없음.
+계약(`src/contracts/`, `contracts.py`), API 코드 — 변경 없음.
