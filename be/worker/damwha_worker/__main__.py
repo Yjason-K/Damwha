@@ -211,7 +211,7 @@ def run_single_job(
             heartbeat_cm=hb,
             shutdown_event=shutdown,
         )
-        # 구 run_loop의 job-level 로그 유지
+        # job-level outcome 로그 유지
         log.info("job %s type=%s → %s", job["id"], job["type"], outcome)
         return 0
     finally:

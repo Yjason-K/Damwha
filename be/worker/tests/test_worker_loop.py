@@ -2,7 +2,7 @@ import threading
 from types import SimpleNamespace
 
 from damwha_worker import db
-from damwha_worker.__main__ import _reconnect, dispatch_claimed_job, handle_job, run_loop, run_once
+from damwha_worker.__main__ import _reconnect, dispatch_claimed_job, handle_job, run_once
 from damwha_worker.errors import ErrorKind, WorkerError
 from damwha_worker.models.base import DiarSegment, Word
 from damwha_worker.pipeline.ffmpeg import ProbeResult
@@ -460,110 +460,6 @@ def test_shutdown_with_lost_ownership_returns_lost(conn, tmp_path):
     assert out == "lost"
 
 
-class _BrokenConn:
-    """execute 시 죽은 커넥션. run_loop에 fixture conn을 직접 주지 않기 위한 대역."""
-
-    def execute(self, *a, **k):
-        raise OSError("dead connection")
-
-    def close(self):
-        pass
-
-
-def test_run_loop_exits_immediately_when_shutdown_set():
-    # run_loop는 종료 시 자기 conn을 close하므로 fixture conn을 주면 안 된다
-    shutdown = threading.Event()
-    shutdown.set()
-    run_loop(
-        _BrokenConn(),
-        SimpleNamespace(worker_id="w1", poll_interval_seconds=0.01),
-        shutdown,
-        connect_fn=lambda: (_ for _ in ()).throw(AssertionError("must not connect")),
-        dispatch_fn=lambda c, j: (_ for _ in ()).throw(AssertionError("must not dispatch")),
-    )  # 반환하면 성공 (execute 미호출 — while 조건에서 즉시 탈출)
-
-
-def test_run_loop_reconnects_and_requeues_inflight_on_dispatch_error(conn, pg_url):
-    # dispatch 1회차 예외 → 재접속 + in-flight requeue → 2회차에 같은 job을 다시 claim.
-    # 2회차 claim이 성공한다는 것 자체가 requeue가 동작했다는 증거다.
-    mid, jid = _enqueue_pm(conn)
-    shutdown = threading.Event()
-    connects, calls = [], []
-
-    def connect_fn():
-        connects.append(1)
-        return db.connect(pg_url)
-
-    def dispatch_fn(c, job):
-        calls.append(job["id"])
-        if len(calls) == 1:
-            raise OSError("db died mid-job")
-        shutdown.set()
-        return "committed"
-
-    loop_conn = db.connect(pg_url)  # run_loop이 close하므로 fixture conn과 분리
-    run_loop(
-        loop_conn,
-        SimpleNamespace(worker_id="w1", poll_interval_seconds=0.01),
-        shutdown,
-        connect_fn=connect_fn,
-        dispatch_fn=dispatch_fn,
-    )
-    assert calls == [jid, jid]  # 같은 job이 requeue 후 재claim됨
-    assert connects == [1]  # 재접속 1회
-
-
-def test_run_loop_leaves_exhausted_job_for_reaper(conn, pg_url):
-    # attempts 소진된 job은 dispatch 예외 후 requeue하지 않는다 — running으로 남겨
-    # reaper가 fail+전파. requeue했다면 결정적 오류를 무한 재claim했을 것이다.
-    mid, jid = _enqueue_pm(conn)
-    conn.execute("UPDATE job SET attempts=2, max_attempts=3 WHERE id=%s", (jid,))
-    shutdown = threading.Event()
-    calls = []
-
-    def dispatch_fn(c, job):
-        calls.append(job["id"])
-        raise OSError("deterministic failure")
-
-    threading.Timer(0.5, shutdown.set).start()  # requeue-생략 확인 후 루프 종료
-    run_loop(
-        db.connect(pg_url),
-        SimpleNamespace(worker_id="w1", poll_interval_seconds=0.01),
-        shutdown,
-        connect_fn=lambda: db.connect(pg_url),
-        dispatch_fn=dispatch_fn,
-    )
-    assert calls == [jid]  # 재claim 없음 (claim 시 attempts 2→3 == max)
-    row = conn.execute("SELECT status, locked_by FROM job WHERE id=%s", (jid,)).fetchone()
-    assert row["status"] == "running" and row["locked_by"] == "w1"  # reaper 몫
-
-
-def test_run_loop_survives_claim_error(conn, pg_url):
-    # claim 시점에 커넥션이 죽어 있어도 재접속 후 계속
-    mid, jid = _enqueue_pm(conn)
-    shutdown = threading.Event()
-    connects, calls = [], []
-
-    def connect_fn():
-        connects.append(1)
-        return db.connect(pg_url)
-
-    def dispatch_fn(c, job):
-        calls.append(job["id"])
-        shutdown.set()
-        return "committed"
-
-    run_loop(
-        _BrokenConn(),
-        SimpleNamespace(worker_id="w1", poll_interval_seconds=0.01),
-        shutdown,
-        connect_fn=connect_fn,
-        dispatch_fn=dispatch_fn,
-    )
-    assert connects == [1]
-    assert calls == [jid]  # 새 커넥션으로 claim + dispatch 성공
-
-
 def test_reconnect_returns_connection_on_success():
     shutdown = threading.Event()
     sentinel = object()
@@ -590,16 +486,12 @@ def test_reconnect_backoff_doubles_and_stops_on_shutdown(monkeypatch):
     assert waits == [1.0, 2.0, 4.0, 8.0]
 
 
-def test_main_wires_initial_connection_through_reconnect():
-    # main()은 pragma: no cover — 초기 연결이 _reconnect 경유라는 배선(스펙 §2.1의 High
-    # 리뷰 결함 수정)을 런타임으로 못 잡으므로 정적으로 고정한다.
+def test_supervisor_connects_through_reconnect():
     import inspect
 
-    from damwha_worker.__main__ import main
+    from damwha_worker import __main__ as m
 
-    src = inspect.getsource(main)
-    assert "_reconnect(lambda: db.connect" in src
-    # 초기 연결용 direct 호출 금지: db.connect는 _reconnect/connect_fn 람다 안에만 존재
-    for line in src.splitlines():
-        if "db.connect" in line:
-            assert "lambda" in line, f"main()에 직접 db.connect 호출: {line.strip()}"
+    src = inspect.getsource(m.run_supervisor)
+    assert "_reconnect(connect_fn" in src
+    src2 = inspect.getsource(m.run_supervisor_main)
+    assert "connect_fn=lambda: db.connect" in src2
