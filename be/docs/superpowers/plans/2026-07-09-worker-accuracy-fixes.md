@@ -34,7 +34,7 @@
 | `worker/tests/test_identify.py` | `None` 필터/유지 테스트 추가 |
 | `worker/tests/test_process_meeting.py` | all-short cluster e2e + 부분 STT 실패 caller-level 회귀 테스트 |
 | `worker/tests/test_enroll_speaker.py` | `sample_too_short` PERMANENT + speaker `failed` 테스트 |
-| `src/database/migrations/006_delete_zero_voiceprints.sql` (신규) | 기존 zero-vector voiceprint 일회성 삭제 |
+| `src/database/migrations/006_delete_zero_voiceprints.sql` (신규) | zero-vector voiceprint 일회성 삭제 + 고아 ready speaker `failed` 전이 |
 | `test/migration.spec.ts` | 006 테스트 추가 |
 
 ---
@@ -570,46 +570,73 @@ git commit -m "fix(worker): pass VAD spans to align unconditionally so partial S
 
 ---
 
-### Task 5: 마이그레이션 006 — 기존 zero-vector voiceprint 삭제
+### Task 5: 마이그레이션 006 — zero-vector voiceprint 삭제 + 고아 ready speaker `failed` 전이
 
 **Files:**
 - Create: `src/database/migrations/006_delete_zero_voiceprints.sql`
 - Test: `test/migration.spec.ts` (추가)
 
 **Interfaces:**
-- Consumes: pgvector `vector_norm(vector) -> float8` (0.8.3에서 동작 확인됨), `voiceprint` 테이블(001).
+- Consumes: pgvector `vector_norm(vector) -> float8` (0.5+; 002의 HNSW 인덱스가 이미 같은 하한 요구), `voiceprint`/`speaker` 테이블(001), `speaker.enrollment_error` jsonb.
 - Produces: 없음 (일회성 데이터 정리, 멱등).
 
 - [ ] **Step 1: 실패하는 테스트 작성**
 
-`test/migration.spec.ts`의 describe 블록 안에 추가 (`fs`/`path`는 파일 상단에 이미 import됨):
+`test/migration.spec.ts`의 describe 블록 안에 추가. **005의 legacy-container 패턴을 따른다** — fresh 컨테이너에 `< '006'`까지만 적용해 실제 업그레이드 경로(legacy 데이터 존재 상태에서 006 적용)를 검증한다. `fs`/`path`/`PostgreSqlContainer`/`Pool`은 파일 상단에 이미 import됨:
 
 ```typescript
-  it('006: removes zero-vector voiceprints, keeps non-zero ones (idempotent)', async () => {
-    const sp = await db.pool.query(`INSERT INTO speaker(name) VALUES('z') RETURNING id`);
-    const zero = '[' + Array(192).fill(0).join(',') + ']';
-    const ok = '[' + Array(192).fill(0.1).join(',') + ']';
-    const ins = (vec: string, model: string) =>
-      db.pool.query(
-        `INSERT INTO voiceprint(speaker_id, embedding, model, dimension)
-         VALUES($1, $2::vector, $3, 192)`,
-        [sp.rows[0].id, vec, model],
-      );
-    await ins(zero, 'zero-m');
-    await ins(ok, 'ok-m');
+  it('006: deletes zero-vector voiceprints and fails ready speakers left without any voiceprint', async () => {
+    const legacy = await new PostgreSqlContainer('damwha/postgres-bigm:pg16').start();
+    const pool = new Pool({ connectionString: legacy.getConnectionUri() });
+    try {
+      const dir = path.join(__dirname, '..', 'src', 'database', 'migrations');
+      const files = fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
+      for (const f of files.filter((f) => f < '006')) {
+        await pool.query(fs.readFileSync(path.join(dir, f), 'utf8'));
+      }
+      const zero = '[' + Array(192).fill(0).join(',') + ']';
+      const ok = '[' + Array(192).fill(0.1).join(',') + ']';
+      const seedSpeaker = async (name: string, vec: string) => {
+        const sp = await pool.query(
+          `INSERT INTO speaker(name, enrollment_status) VALUES($1,'ready') RETURNING id`,
+          [name],
+        );
+        await pool.query(
+          `INSERT INTO voiceprint(speaker_id, embedding, model, dimension)
+           VALUES($1, $2::vector, 'm', 192)`,
+          [sp.rows[0].id, vec],
+        );
+        return sp.rows[0].id;
+      };
+      // zero voiceprint만 가진 ready speaker → 006 후 voiceprint 삭제 + failed 전이
+      const broken = await seedSpeaker('broken', zero);
+      // non-zero voiceprint를 가진 ready speaker → 그대로 유지
+      const healthy = await seedSpeaker('healthy', ok);
 
-    // 이미 적용된 DB에 재실행 — 멱등해야 한다
-    const sql006 = fs.readFileSync(
-      path.join(__dirname, '..', 'src', 'database', 'migrations', '006_delete_zero_voiceprints.sql'),
-      'utf8',
-    );
-    await expect(db.pool.query(sql006)).resolves.toBeDefined();
+      const sql006 = fs.readFileSync(path.join(dir, '006_delete_zero_voiceprints.sql'), 'utf8');
+      await pool.query(sql006);
+      await expect(pool.query(sql006)).resolves.toBeDefined(); // 재실행 멱등
 
-    const rows = await db.pool.query(
-      `SELECT model FROM voiceprint WHERE speaker_id=$1 ORDER BY model`,
-      [sp.rows[0].id],
-    );
-    expect(rows.rows.map((r) => r.model)).toEqual(['ok-m']);
+      expect(
+        (await pool.query(`SELECT 1 FROM voiceprint WHERE speaker_id=$1`, [broken])).rowCount,
+      ).toBe(0);
+      const b = (
+        await pool.query(`SELECT enrollment_status, enrollment_error FROM speaker WHERE id=$1`, [broken])
+      ).rows[0];
+      expect(b.enrollment_status).toBe('failed');
+      expect(b.enrollment_error.code).toBe('sample_too_short');
+
+      expect(
+        (await pool.query(`SELECT 1 FROM voiceprint WHERE speaker_id=$1`, [healthy])).rowCount,
+      ).toBe(1);
+      expect(
+        (await pool.query(`SELECT enrollment_status FROM speaker WHERE id=$1`, [healthy])).rows[0]
+          .enrollment_status,
+      ).toBe('ready');
+    } finally {
+      await pool.end();
+      await legacy.stop();
+    }
   });
 ```
 
@@ -623,24 +650,37 @@ Expected: FAIL — `ENOENT ... 006_delete_zero_voiceprints.sql` (파일 없음)
 `src/database/migrations/006_delete_zero_voiceprints.sql` 생성:
 
 ```sql
--- 006: 기존 zero-vector voiceprint 일회성 정리.
+-- 006: 기존 zero-vector voiceprint 일회성 정리 (데이터만, 스키마 변경 없음).
 --
 -- 과거 워커는 100ms 미만 클립에 [0,...,0] sentinel 임베딩을 저장할 수 있었다
 -- (auto_cluster/enroll source 모두). zero vector는 pgvector cosine 연산에 NaN을
 -- 유입시켜 화자 식별을 오염시킨다. 워커는 이제 임베딩 불가 클립에 voiceprint를
--- 만들지 않으므로(None 계약), 남은 행만 지우면 된다. 멱등.
+-- 만들지 않으므로(None 계약), 남은 행만 정리하면 된다. 두 문장 모두 멱등.
 --
--- - auto_cluster zero voiceprint: 삭제해도 provisional speaker는 meeting_cluster
---   참조가 남아 유지된다 (persist GC 조건과 정합).
--- - enroll zero voiceprint: ready speaker가 voiceprint 없이 남는다 — 식별에
---   매칭되지 않을 뿐이며 재등록으로 복구 가능.
+-- vector_norm은 pgvector 0.5+ 필요 — 002의 HNSW 인덱스가 이미 같은 하한을
+-- 요구하므로 새 제약이 아니다.
+--
+-- auto_cluster zero voiceprint: 삭제해도 provisional speaker는 meeting_cluster
+-- 참조가 남아 유지된다 (persist GC 조건과 정합).
 DELETE FROM voiceprint WHERE vector_norm(embedding) = 0;
+
+-- 삭제로 voiceprint가 하나도 남지 않은 ready speaker는 "등록된 것처럼 보이지만
+-- 영원히 매칭 불가" 상태가 된다 — failed로 전이해 재등록을 유도한다.
+-- (ready + voiceprint 0개는 다른 경로로는 생기지 않는 비정상 상태.)
+UPDATE speaker s
+SET enrollment_status = 'failed',
+    enrollment_error = jsonb_build_object(
+      'code', 'sample_too_short',
+      'message', 'legacy zero-vector voiceprint removed by migration 006; re-enroll this speaker'
+    )
+WHERE s.enrollment_status = 'ready'
+  AND NOT EXISTS (SELECT 1 FROM voiceprint v WHERE v.speaker_id = s.id);
 ```
 
 - [ ] **Step 4: 테스트 통과 확인**
 
 Run (리포 루트): `npx jest test/migration.spec.ts`
-Expected: 전체 PASS (신규 006 테스트 포함 — testcontainers가 006까지 적용 후, 테스트가 zero/non-zero 행을 넣고 006을 재실행해 zero만 삭제됨을 확인)
+Expected: 전체 PASS (신규 006 테스트 포함 — legacy 컨테이너에서 005 상태 → 006 적용 경로 검증)
 
 Run (in `worker/`): `uv run pytest tests/test_identify.py tests/test_process_meeting.py -q`
 Expected: PASS — worker conftest도 전체 마이그레이션(006 포함)을 적용하므로 워커 스위트가 여전히 통과하는지 확인.
@@ -649,7 +689,7 @@ Expected: PASS — worker conftest도 전체 마이그레이션(006 포함)을 �
 
 ```bash
 git add src/database/migrations/006_delete_zero_voiceprints.sql test/migration.spec.ts
-git commit -m "fix(db): delete legacy zero-vector voiceprints that poison speaker identification"
+git commit -m "fix(db): delete legacy zero-vector voiceprints and fail speakers left without any"
 ```
 
 ---

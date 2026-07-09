@@ -53,10 +53,20 @@ sentinel을 제거하고 임베딩 부재를 타입으로 표현한다: **너무
 ```sql
 -- 00X_delete_zero_voiceprints.sql
 DELETE FROM voiceprint WHERE vector_norm(embedding) = 0;
+
+UPDATE speaker s
+SET enrollment_status = 'failed',
+    enrollment_error = jsonb_build_object(
+      'code', 'sample_too_short',
+      'message', 'legacy zero-vector voiceprint removed by migration; re-enroll this speaker'
+    )
+WHERE s.enrollment_status = 'ready'
+  AND NOT EXISTS (SELECT 1 FROM voiceprint v WHERE v.speaker_id = s.id);
 ```
 
 - `auto_cluster` zero voiceprint 삭제 → provisional speaker는 cluster 참조가 남아 유지(persist GC 조건과 정합).
-- `enroll` zero voiceprint 삭제 → `ready` speaker는 voiceprint 없이 남음 — identify에 매칭되지 않을 뿐이며, 재등록으로 복구.
+- `enroll` zero voiceprint 삭제로 **voiceprint가 하나도 남지 않은 `ready` speaker는 `failed`로 전이**한다(`enrollment_error.code = 'sample_too_short'`). `ready`인데 voiceprint 0개인 상태는 "등록된 것처럼 보이지만 영원히 매칭 불가"라는 오해를 낳는다 — `failed`가 재등록을 유도하는 정직한 상태다. (ready+voiceprint 0개는 다른 경로로는 생기지 않는 비정상 상태이므로 blanket 조건으로 충분하다.) 두 문장 모두 멱등.
+- `vector_norm`은 pgvector 0.5+ 필요 — 002 마이그레이션의 HNSW 인덱스가 이미 같은 하한을 요구하므로 새 제약이 아니다(마이그레이션 주석으로 명시).
 - CHECK 제약(`vector_norm > 0`) 추가는 기각: 워커가 이제 zero를 쓰지 않으므로 YAGNI.
 
 ---
@@ -104,8 +114,8 @@ utts = build_utterances(words, segments, failed_spans=speech_spans)
   - `test_align.py`에 세그먼트별 케이스를 보강하는 것은 부차 — 호출부 테스트를 대체할 수 없다.
 - **ECAPA "너무 짧음" 헬퍼** (`tests/test_ecapa_helpers.py` 또는 기존 파일):
   - `too_short_for_embedding` 순수 헬퍼를 CI에서 직접 테스트(경계값: 100ms 미만 true / 이상 false). fake 갱신만으로는 실어댑터 분기가 검증되지 않는 갭을 좁힌다. 실어댑터 end-to-end는 SMOKE 소관.
-- **마이그레이션** (API 측 기존 패턴, 예: `test/db.ts` 기반 suite):
-  - zero-vector voiceprint 삽입 후 마이그레이션 적용 → 삭제 확인, non-zero는 보존.
+- **마이그레이션** (`test/migration.spec.ts`, 005의 legacy-container 패턴을 따른다):
+  - fresh 컨테이너에 `< '006'` 마이그레이션만 적용 → zero/non-zero voiceprint + ready speaker 시드 → 006 적용: zero 삭제·non-zero 보존, voiceprint를 전부 잃은 ready speaker는 `failed` + `sample_too_short`, non-zero 보유 speaker는 `ready` 유지, 재실행 멱등.
 
 ---
 
