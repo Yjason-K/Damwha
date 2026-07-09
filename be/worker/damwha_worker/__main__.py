@@ -165,6 +165,56 @@ def dispatch_claimed_job(
         )
 
 
+def run_single_job(
+    settings,
+    storage: Storage,
+    shutdown: threading.Event,
+    *,
+    connect_fn,
+    build_models_fn,
+    build_embedder_fn,
+    build_text_embedder_fn,
+) -> int:
+    """자식 진입점: job 1건 처리 후 exit code 반환.
+
+    0 = 처리 완료(성공/정상 fail/requeue/shutdown requeue), 3 = no job.
+    자식은 재접속하지 않는다(spec §8) — connect 실패·미포착 예외는 전파해
+    nonzero로 exit하고, 부모가 backoff/reaper로 복구한다.
+    """
+    conn = connect_fn()  # 실패 시 예외 전파 → nonzero exit → 부모 backoff (자식 재접속 없음)
+    try:
+        job = db.claim(conn, settings.worker_id)
+        if job is None:
+            return 3
+        from .heartbeat import Heartbeat
+
+        hb = Heartbeat(
+            settings.database_url,
+            job["id"],
+            settings.worker_id,
+            settings.heartbeat_interval_seconds,
+        )
+        outcome = dispatch_claimed_job(
+            conn,
+            job,
+            storage,
+            settings,
+            build_models_fn=build_models_fn,
+            build_embedder_fn=build_embedder_fn,
+            build_text_embedder_fn=build_text_embedder_fn,
+            heartbeat_cm=hb,
+            shutdown_event=shutdown,
+        )
+        # 구 run_loop의 job-level 로그 유지
+        log.info("job %s type=%s → %s", job["id"], job["type"], outcome)
+        return 0
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _reconnect(connect_fn, shutdown, *, initial_delay: float = 1.0, max_delay: float = 30.0):
     """capped 지수 backoff로 재접속. shutdown이 set되면 None."""
     delay = initial_delay
