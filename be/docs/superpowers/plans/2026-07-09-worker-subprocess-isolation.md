@@ -110,23 +110,28 @@ git commit -m "feat(worker): add db.peek_queued for supervisor queue check"
 - Test: `worker/tests/test_supervisor.py` (신규 파일)
 
 **Interfaces:**
-- Consumes: `db.claim`, `db.connect`, `_reconnect`, `dispatch_claimed_job`, `Heartbeat`.
-- Produces: `run_single_job(settings, storage, shutdown, *, connect_fn, build_models_fn, build_embedder_fn, build_text_embedder_fn) -> int` — job 1건 처리, exit code(`0`=처리, `3`=no job) 반환. 미포착 예외는 전파(부모가 nonzero 크래시로 관측). connect 전 shutdown이면 `0`(job 미접촉).
+- Consumes: `db.claim`, `dispatch_claimed_job`, `Heartbeat`.
+- Produces: `run_single_job(settings, storage, shutdown, *, connect_fn, build_models_fn, build_embedder_fn, build_text_embedder_fn) -> int` — job 1건 처리, exit code(`0`=처리, `3`=no job) 반환. **자식은 재접속하지 않는다**(spec §8): `connect_fn()`을 직접 호출하고 connect 실패·미포착 예외는 전파 → 부모가 nonzero 크래시로 관측 → backoff/reaper.
 
 - [ ] **Step 1: Write the failing test**
 
-`worker/tests/test_supervisor.py` 신규 생성. 상단 import 및 헬퍼는 `test_worker_loop.py`의 `_models`/`_enqueue_pm` 패턴을 복제(엔지니어가 태스크를 순서 없이 읽을 수 있으므로 그대로 적는다):
+`worker/tests/test_supervisor.py` 신규 생성. import·헬퍼는 `test_worker_loop.py` 패턴을 따르고, **DB seed는 conftest 헬퍼**(FK/NOT NULL 회피)를 쓴다. `FakeTextEmbedder`는 `tests/fakes.py:36`에 존재하므로 import에 포함한다:
 
 ```python
 import threading
 
-import pytest
-
 from damwha_worker import db
 from damwha_worker.__main__ import run_single_job
 from damwha_worker.storage import Storage
-from tests.fakes import FakeDiarizer, FakeEmbedder, FakeTranscriber, FakeVAD  # 존재 확인 필요
 from damwha_worker.pipeline.process_meeting import Models
+from tests.conftest import seed_job, seed_meeting
+from tests.fakes import (
+    FakeDiarizer,
+    FakeEmbedder,
+    FakeTextEmbedder,
+    FakeTranscriber,
+    FakeVAD,
+)
 
 
 def _models():
@@ -144,18 +149,15 @@ def _settings_stub(pg_url):
     return S()
 
 
-def _enqueue_index(conn, pv=0):
-    conn.execute(
-        "INSERT INTO meeting(id, title, status, processing_version) "
-        "VALUES('mtg_c', 't', 'done', %s)",
-        (pv,),
-    )
-    conn.execute(
-        "INSERT INTO job(id, type, meeting_id, status, payload) "
-        "VALUES('job_c', 'index_meeting', 'mtg_c', 'queued', %s)",
-        ('{"schema_version": 1, "meeting_id": "mtg_c", "processing_version": 0, '
-         '"search_embedding": {"model": "fake-model", "dimension": 3}}',),
-    )
+def _enqueue_index(conn):
+    mid = seed_meeting(conn, status="done", processing_version=0)
+    payload = {
+        "schema_version": 1,
+        "meeting_id": mid,
+        "processing_version": 0,
+        "search_embedding": {"model": "fake-model", "dimension": 3},
+    }
+    return seed_job(conn, type="index_meeting", meeting_id=mid, payload=payload)
 
 
 def test_run_single_job_no_job_returns_3(conn, pg_url, tmp_path):
@@ -171,7 +173,7 @@ def test_run_single_job_no_job_returns_3(conn, pg_url, tmp_path):
 
 
 def test_run_single_job_processes_and_returns_0(conn, pg_url, tmp_path):
-    _enqueue_index(conn)
+    jid = _enqueue_index(conn)
     shutdown = threading.Event()
     code = run_single_job(
         _settings_stub(pg_url), Storage(str(tmp_path)), shutdown,
@@ -181,11 +183,11 @@ def test_run_single_job_processes_and_returns_0(conn, pg_url, tmp_path):
         build_text_embedder_fn=lambda settings: FakeTextEmbedder(),
     )
     assert code == 0
-    row = conn.execute("SELECT status FROM job WHERE id='job_c'").fetchone()
+    row = conn.execute("SELECT status FROM job WHERE id=%s", (jid,)).fetchone()
     assert row["status"] == "done"
 ```
 
-> 구현 전 확인: `tests/fakes.py`에 `FakeTextEmbedder`가 있는지 (`test_dispatch_index.py`/`test_index_meeting.py`가 쓰는 것) — 없으면 그 파일들이 쓰는 이름으로 맞춘다. `pg_url`/`conn` fixture는 `conftest.py` 제공(기존 테스트가 사용).
+> `pg_url`/`conn` fixture는 `conftest.py` 제공. `index_meeting` persist 가드는 pv-only(`current_job_id` 미검사)라 `seed_meeting`이 `current_job_id`를 안 채워도 committed 경로를 탄다 → job `done`.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -210,11 +212,10 @@ def run_single_job(
     """자식 진입점: job 1건 처리 후 exit code 반환.
 
     0 = 처리 완료(성공/정상 fail/requeue/shutdown requeue), 3 = no job.
-    미포착 예외는 전파 → 부모가 nonzero 크래시로 관측.
+    자식은 재접속하지 않는다(spec §8) — connect 실패·미포착 예외는 전파해
+    nonzero로 exit하고, 부모가 backoff/reaper로 복구한다.
     """
-    conn = _reconnect(connect_fn, shutdown)
-    if conn is None:
-        return 0  # connect 전 shutdown — job 미접촉
+    conn = connect_fn()  # 실패 시 예외 전파 → nonzero exit → 부모 backoff (자식 재접속 없음)
     try:
         job = db.claim(conn, settings.worker_id)
         if job is None:
@@ -227,7 +228,7 @@ def run_single_job(
             settings.worker_id,
             settings.heartbeat_interval_seconds,
         )
-        dispatch_claimed_job(
+        outcome = dispatch_claimed_job(
             conn,
             job,
             storage,
@@ -238,6 +239,7 @@ def run_single_job(
             heartbeat_cm=hb,
             shutdown_event=shutdown,
         )
+        log.info("job %s type=%s → %s", job["id"], job["type"], outcome)  # 구 run_loop의 job-level 로그 유지
         return 0
     finally:
         try:
@@ -246,7 +248,7 @@ def run_single_job(
             pass
 ```
 
-`Heartbeat` import를 함수 안에 두는 이유: 기존 `main()`이 그렇게 lazy import함(테스트가 실 heartbeat 없이 dispatch를 stub할 수 있게).
+`Heartbeat` import를 함수 안에 두는 이유: 기존 `main()`이 그렇게 lazy import함(테스트가 실 heartbeat 없이 dispatch를 stub할 수 있게). `connect_fn`은 `_reconnect`가 아니라 직접 호출 — 자식 fail-fast가 supervisor backoff 모델과 정합.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -388,9 +390,10 @@ _MAX_BACKOFF_SECONDS = 60.0
 `run_single_job` 아래에 추가:
 
 ```python
-def _wait_child(proc, shutdown) -> int:
-    """자식 종료까지 대기. shutdown이 걸리면 부모 시그널 핸들러가 child_holder로
-    terminate/kill을 이미 보냈으므로, 여기서는 폴링하며 returncode만 회수한다."""
+def _wait_child(proc) -> int:
+    """자식 종료까지 대기하며 returncode를 회수한다. shutdown 시 terminate/kill은
+    부모 시그널 핸들러가 child_holder로 직접 보내므로, 여기서는 폴링만 한다.
+    (0.5초 폴링이라 시그널 후 자식 종료를 곧 회수한다.)"""
     while True:
         try:
             return proc.wait(timeout=0.5)
@@ -427,8 +430,11 @@ def run_supervisor(settings, shutdown, *, connect_fn, spawn_fn, child_holder) ->
             continue
 
         proc = spawn_fn()
+        # spawn과 holder 할당 사이 시그널이 오면 자식에 SIGTERM이 전달되지 않아
+        # 자식이 stage-boundary 없이 job을 끝까지 실행한다(부모는 대기). 창은
+        # 바이트코드 몇 개 수준이고 결과도 graceful(정상 완료)이라 수용한다.
         child_holder["proc"] = proc
-        code = _wait_child(proc, shutdown)
+        code = _wait_child(proc)
         child_holder["proc"] = None
 
         if shutdown.is_set():
