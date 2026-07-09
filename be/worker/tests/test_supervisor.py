@@ -1,5 +1,7 @@
+import inspect
 import threading
 
+from damwha_worker import __main__ as m
 from damwha_worker import db
 from damwha_worker.__main__ import run_single_job, run_supervisor
 from damwha_worker.pipeline.process_meeting import Models
@@ -170,3 +172,21 @@ def test_supervisor_backoff_on_crash(conn, pg_url, monkeypatch):
         child_holder={"proc": None, "count": 0},
     )
     assert waits and waits[0] >= 0.01  # 크래시 후 backoff sleep 발생
+
+
+def test_main_dispatches_once_flag_to_child():
+    src = inspect.getsource(m.main)
+    assert '"--once"' in src and "sys.argv" in src
+    # argparse 금지(exit 2 흡수 계약)
+    assert "argparse" not in src
+
+
+def test_child_spawn_uses_sys_executable_and_new_session():
+    src = inspect.getsource(m.run_supervisor_main)
+    assert "sys.executable" in src
+    assert "start_new_session=True" in src
+    assert '"python"' not in src  # 리터럴 python 금지
+
+
+def test_run_loop_removed():
+    assert not hasattr(m, "run_loop")

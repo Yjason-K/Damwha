@@ -1,6 +1,8 @@
 import logging
+import os
 import signal
 import subprocess
+import sys
 import threading
 
 from . import db
@@ -310,106 +312,75 @@ def _reconnect(connect_fn, shutdown, *, initial_delay: float = 1.0, max_delay: f
     return None
 
 
-def run_loop(conn, settings, shutdown, *, connect_fn, dispatch_fn) -> None:
-    """폴 루프: claim → dispatch. 어떤 예외에도 죽지 않는다 — 재접속 후 계속.
+def run_child(settings, shutdown: threading.Event) -> int:
+    """--once 자식: 시그널 핸들러 설치 후 job 1건 처리."""
 
-    conn의 수명은 이 함수가 책임진다 — 정상 종료 시에도 close하고 반환한다.
-    """
-    job = None  # 현재 in-flight job (예외 시 requeue 대상)
-    while not shutdown.is_set():
-        try:
-            job = db.claim(conn, settings.worker_id)
-            if job is None:
-                shutdown.wait(settings.poll_interval_seconds)
-                continue
-            outcome = dispatch_fn(conn, job)
-            log.info("job %s type=%s → %s", job["id"], job["type"], outcome)
-            job = None  # 정상 완료 — 큐에 남은 job 즉시 재claim
-        except Exception:  # noqa: BLE001 — 루프는 죽지 않는다
-            log.exception("worker loop error — reconnecting")
-            try:
-                conn.close()
-            except Exception:  # noqa: BLE001
-                pass
-            conn = _reconnect(connect_fn, shutdown)
-            if conn is None:
-                return  # 재접속 중 shutdown (conn 없음 — close 불요)
-            if job is not None:
-                # in-flight job을 reaper 대기 없이 즉시 반환 시도 — 단, attempts가
-                # 남았을 때만. claim은 attempts를 필터하지 않으므로, 소진된 job을
-                # requeue하면 결정적 오류를 무한 재claim한다. 소진 시 running으로
-                # 남겨 reaper가 fail + meeting/speaker 전파를 수행한다.
-                if job["attempts"] < job["max_attempts"]:
-                    try:
-                        db.requeue(conn, job["id"], settings.worker_id)
-                    except Exception:  # noqa: BLE001
-                        log.warning(
-                            "in-flight requeue failed — reaper will recover job %s", job["id"]
-                        )
-                else:
-                    log.warning("job %s attempts exhausted — leaving for reaper", job["id"])
-                job = None
-            # 반복 오류 hot-loop 방지: 어떤 outer 예외든 다음 시도 전 poll 간격만큼 쉰다
-            if shutdown.wait(settings.poll_interval_seconds):
-                break
-    try:
-        conn.close()
-    except Exception:  # noqa: BLE001
-        pass
+    def _on_signal(signum, frame):
+        log.info("signal %s received — stop at next stage boundary (send again to force)", signum)
+        shutdown.set()
+        signal.signal(signum, signal.SIG_DFL)  # 2차 = 즉시 종료
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, _on_signal)
+
+    storage = Storage(settings.storage_root)
+    from .models.registry import build_embedder, build_models, build_text_embedder
+
+    return run_single_job(
+        settings,
+        storage,
+        shutdown,
+        connect_fn=lambda: db.connect(settings.database_url),
+        build_models_fn=build_models,
+        build_embedder_fn=build_embedder,
+        build_text_embedder_fn=build_text_embedder,
+    )
+
+
+def run_supervisor_main(settings, shutdown: threading.Event) -> None:
+    """부모: 2단계 시그널 핸들러 설치 후 supervisor 루프."""
+    child_holder = {"proc": None, "count": 0}
+
+    def _on_signal(signum, frame):
+        child_holder["count"] += 1
+        shutdown.set()
+        proc = child_holder["proc"]
+        if proc is not None:
+            if child_holder["count"] == 1:
+                log.info("signal %s — forwarding SIGTERM to child (send again to kill)", signum)
+                proc.terminate()
+            else:
+                log.info("signal %s again — killing child and exiting", signum)
+                proc.kill()
+                os._exit(1)
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, _on_signal)
+
+    def _spawn():
+        return subprocess.Popen(
+            [sys.executable, "-m", "damwha_worker", "--once"],
+            start_new_session=True,
+        )
+
+    log.info("supervisor %s started", settings.worker_id)
+    run_supervisor(
+        settings,
+        shutdown,
+        connect_fn=lambda: db.connect(settings.database_url),
+        spawn_fn=_spawn,
+        child_holder=child_holder,
+    )
+    log.info("supervisor %s stopped", settings.worker_id)
 
 
 def main() -> None:  # pragma: no cover — 실모델 + 시그널 배선 (로컬 실행)
     logging.basicConfig(level=logging.INFO)
     settings = load_settings()
-    storage = Storage(settings.storage_root)
     shutdown = threading.Event()
-
-    def _on_signal(signum, frame):
-        log.info(
-            "signal %s received — will stop at next stage boundary (send again to force)", signum
-        )
-        shutdown.set()
-        signal.signal(signum, signal.SIG_DFL)  # 2차 시그널 = 기본 동작(즉시 종료)
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(sig, _on_signal)
-
-    from .heartbeat import Heartbeat
-    from .models.registry import build_embedder, build_models, build_text_embedder
-
-    conn = _reconnect(lambda: db.connect(settings.database_url), shutdown)
-    if conn is None:
-        log.info("shutdown before initial DB connection")
-        return
-    log.info("worker %s started", settings.worker_id)
-
-    def _dispatch(c, job):
-        hb = Heartbeat(
-            settings.database_url,
-            job["id"],
-            settings.worker_id,
-            settings.heartbeat_interval_seconds,
-        )
-        return dispatch_claimed_job(
-            c,
-            job,
-            storage,
-            settings,
-            build_models_fn=build_models,
-            build_embedder_fn=build_embedder,
-            build_text_embedder_fn=build_text_embedder,
-            heartbeat_cm=hb,
-            shutdown_event=shutdown,
-        )
-
-    run_loop(
-        conn,
-        settings,
-        shutdown,
-        connect_fn=lambda: db.connect(settings.database_url),
-        dispatch_fn=_dispatch,
-    )
-    log.info("worker %s stopped", settings.worker_id)
+    if "--once" in sys.argv[1:]:
+        sys.exit(run_child(settings, shutdown))
+    run_supervisor_main(settings, shutdown)
 
 
 if __name__ == "__main__":  # pragma: no cover
