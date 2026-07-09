@@ -8,7 +8,7 @@
 
 Damwha의 워커 영역에는 서로 다른 두 실행 프로세스가 있다.
 
-1. **ML worker poller** — `python -m damwha_worker`로 실행한다. HTTP 요청을 받지 않고 Postgres `job` 테이블에서 작업을 가져와 회의 처리, 화자 등록, 검색 색인을 수행한다.
+1. **ML worker poller** — `python -m damwha_worker`로 실행한다. HTTP 요청을 받지 않고 Postgres `job` 테이블에서 작업을 가져와 회의 처리, 화자 등록, 검색 색인을 수행한다. 내부적으로 `python -m damwha_worker`는 **supervisor 부모**를 띄운다. 부모는 torch/pyannote를 import하지 않고 `job` 큐를 peek만 하며, 처리 대기 job이 있으면 자식 `python -m damwha_worker --once`를 spawn(`start_new_session=True`)하고 종료를 기다린다. 자식은 job 1건을 claim→heartbeat→dispatch로 처리한 뒤 exit하고, OS가 자식의 GPU 메모리(MLX·torch)를 전부 회수한다 — 이것이 job 간 MPS 메모리 누적으로 인한 OOM을 막는 핵심이다. 자식 exit code(0=처리, 3=no job, 그 외=크래시)로 부모가 분기하며, claim 전 결정적 실패로 인한 무한 spawn은 capped backoff로 스로틀한다. 자식 내부의 heartbeat 스레드는 기존과 동일하게 별도 DB 연결로 `locked_at`을 갱신하며 연결 실패에서도 회복된다. graceful shutdown은 부모가 자식에 SIGTERM을 전달해 자식의 stage-boundary 종료 로직을 태우고, 2차 시그널은 자식을 SIGKILL한다.
 2. **Query embed service** — `uvicorn damwha_worker.embed_service:app`으로 실행한다. NestJS 검색 API의 질의 텍스트를 BGE-M3 벡터로 변환하는 loopback 전용 HTTP 서비스다.
 
 NestJS API와 ML worker poller 사이에는 HTTP 호출이 없다. 둘의 비동기 계약은 Postgres `job` 행과 payload이며, 오디오 파일은 같은 `STORAGE_ROOT`를 통해 공유한다.
@@ -99,9 +99,11 @@ flowchart LR
 
 ## 4. 공통 job 처리 흐름
 
+다음은 supervisor 자식 프로세스(`python -m damwha_worker --once`)의 처리 흐름이다. supervisor 부모는 이 자식을 한 번 spawn하고 종료를 기다렸다가 exit code에 따라 분기한다 (0=성공, 3=no job, 그 외=재시도).
+
 ```mermaid
 flowchart TD
-    start["Worker process starts"] --> load["Load settings, install SIGINT/SIGTERM handlers"]
+    start["Child process starts"] --> load["Load settings, install SIGINT/SIGTERM handlers"]
     load --> connect["Connect DB with capped backoff (_reconnect)"]
     connect --> connOk{"Connected before shutdown?"}
     connOk -->|"No"| exit["Exit cleanly"]
@@ -166,7 +168,7 @@ flowchart TD
 
 ### 복원력과 우아한 종료
 
-poll loop는 어떤 예외에도 죽지 않고, 시그널을 받으면 stage 경계에서 우아하게 멈춘다.
+자식 프로세스의 poll loop는 어떤 예외에도 죽지 않고, 시그널을 받으면 stage 경계에서 우아하게 멈춘다. supervisor 부모는 자식의 exit code를 보고 결정적 오류(예: 손상 음원)를 감지해 capped backoff로 무한 재spawn을 방지한다.
 
 ```mermaid
 flowchart TD
@@ -184,9 +186,10 @@ flowchart TD
 
 - **초기 연결**: 시작 시 DB 연결은 `_reconnect`로 capped 지수 backoff(1→30초)를 재시도한다. 연결 전에 종료 시그널을 받으면 job을 잡지 않고 즉시 종료한다.
 - **루프 예외 복구**: claim/dispatch 중 예외가 나면 연결을 닫고 `_reconnect`로 재접속한 뒤, in-flight job은 `attempts < max_attempts`일 때만 즉시 requeue한다. attempts가 소진된 job은 `running`으로 남겨 reaper가 fail + meeting/speaker 전파를 담당한다(claim은 attempts를 필터하지 않으므로 소진된 결정적 오류 job을 requeue하면 무한 재claim이 된다). 재접속/오류 뒤에는 poll 간격만큼 쉬어 반복 오류의 hot-loop를 막는다.
-- **우아한 종료**: SIGINT/SIGTERM은 shutdown Event를 set한다. 각 pipeline은 stage 경계마다(`enter_stage`, `process_meeting`은 mark_processing/normalize 이전에도) 이를 확인해 `ShutdownRequested`를 던지고, `db.requeue_for_shutdown`으로 job을 `queued`로 되돌린다. 이때 attempts를 1 줄여(outcome `requeued_shutdown`) 우아한 정지가 시도를 소비하지 않게 한다. 2차 시그널은 `SIG_DFL`로 강제 종료하며 이후는 reaper가 복구한다. 대기(idle) 중 종료는 즉시 빠져나간다.
+- **우아한 종료**: SIGINT/SIGTERM은 shutdown Event를 set한다. 각 pipeline은 stage 경계마다(`enter_stage`, `process_meeting`은 mark_processing/normalize 이전에도) 이를 확인해 `ShutdownRequested`를 던지고, `db.requeue_for_shutdown`으로 job을 `queued`로 되돌린다. 이때 attempts를 1 줄여(outcome `requeued_shutdown`) 우아한 정지가 시도를 소비하지 않게 한다. 자식은 exit(2)로 정상 종료하고 부모는 이를 보고 graceful로 인지한다. 2차 시그널은 부모가 자식을 SIGKILL한 뒤 자신도 `SIG_DFL`로 강제 종료하며 이후는 reaper가 복구한다. 대기(idle) 중 종료는 즉시 빠져나간다.
 - **stage 경계 소유권 guard**: `enter_stage`는 `process_meeting`뿐 아니라 `enroll_speaker`/`index_meeting`에도 job 소유권을 확인시킨다. 소유권을 잃으면 `lost_ownership`(TRANSIENT)로 처리된다.
 - **attempts 회계 요약**: crash/transient 오류 = 시도 1회 소비, 우아한 종료 = 소비하지 않음(attempts − 1로 복원), 소진된 in-flight = reaper에게 위임.
+- **Heartbeat 재접속**: 자식 내부의 heartbeat 스레드는 별도 DB 연결을 유지하며, 연결/beat 실패 후에도 재접속을 시도해 살아있다. 이는 부모의 재spawn 정책과 독립적으로 in-flight job의 `locked_at`을 계속 갱신한다.
 
 ## 5. Job 타입별 계약
 
