@@ -1,5 +1,6 @@
 import logging
-import time
+import signal
+import threading
 
 from . import db
 from .config import load_settings
@@ -164,28 +165,102 @@ def dispatch_claimed_job(
         )
 
 
-def main() -> None:  # pragma: no cover — 실모델 + 무한 루프 (로컬 실행)
+def _reconnect(connect_fn, shutdown, *, initial_delay: float = 1.0, max_delay: float = 30.0):
+    """capped 지수 backoff로 재접속. shutdown이 set되면 None."""
+    delay = initial_delay
+    while not shutdown.is_set():
+        try:
+            return connect_fn()
+        except Exception:  # noqa: BLE001 — 어떤 연결 실패든 재시도
+            log.warning("reconnect failed — retry in %.0fs", delay, exc_info=True)
+            if shutdown.wait(delay):
+                break
+            delay = min(delay * 2, max_delay)
+    return None
+
+
+def run_loop(conn, settings, shutdown, *, connect_fn, dispatch_fn) -> None:
+    """폴 루프: claim → dispatch. 어떤 예외에도 죽지 않는다 — 재접속 후 계속.
+
+    conn의 수명은 이 함수가 책임진다 — 정상 종료 시에도 close하고 반환한다.
+    """
+    job = None  # 현재 in-flight job (예외 시 requeue 대상)
+    while not shutdown.is_set():
+        try:
+            job = db.claim(conn, settings.worker_id)
+            if job is None:
+                shutdown.wait(settings.poll_interval_seconds)
+                continue
+            outcome = dispatch_fn(conn, job)
+            log.info("job %s type=%s → %s", job["id"], job["type"], outcome)
+            job = None  # 정상 완료 — 큐에 남은 job 즉시 재claim
+        except Exception:  # noqa: BLE001 — 루프는 죽지 않는다
+            log.exception("worker loop error — reconnecting")
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+            conn = _reconnect(connect_fn, shutdown)
+            if conn is None:
+                return  # 재접속 중 shutdown (conn 없음 — close 불요)
+            if job is not None:
+                # in-flight job을 reaper 대기 없이 즉시 반환 시도 — 단, attempts가
+                # 남았을 때만. claim은 attempts를 필터하지 않으므로, 소진된 job을
+                # requeue하면 결정적 오류를 무한 재claim한다. 소진 시 running으로
+                # 남겨 reaper가 fail + meeting/speaker 전파를 수행한다.
+                if job["attempts"] < job["max_attempts"]:
+                    try:
+                        db.requeue(conn, job["id"], settings.worker_id)
+                    except Exception:  # noqa: BLE001
+                        log.warning(
+                            "in-flight requeue failed — reaper will recover job %s", job["id"]
+                        )
+                else:
+                    log.warning("job %s attempts exhausted — leaving for reaper", job["id"])
+                job = None
+            # 반복 오류 hot-loop 방지: 어떤 outer 예외든 다음 시도 전 poll 간격만큼 쉰다
+            if shutdown.wait(settings.poll_interval_seconds):
+                break
+    try:
+        conn.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def main() -> None:  # pragma: no cover — 실모델 + 시그널 배선 (로컬 실행)
     logging.basicConfig(level=logging.INFO)
     settings = load_settings()
     storage = Storage(settings.storage_root)
-    conn = db.connect(settings.database_url)
+    shutdown = threading.Event()
+
+    def _on_signal(signum, frame):
+        log.info(
+            "signal %s received — will stop at next stage boundary (send again to force)", signum
+        )
+        shutdown.set()
+        signal.signal(signum, signal.SIG_DFL)  # 2차 시그널 = 기본 동작(즉시 종료)
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, _on_signal)
+
     from .heartbeat import Heartbeat
     from .models.registry import build_embedder, build_models, build_text_embedder
 
+    conn = _reconnect(lambda: db.connect(settings.database_url), shutdown)
+    if conn is None:
+        log.info("shutdown before initial DB connection")
+        return
     log.info("worker %s started", settings.worker_id)
-    while True:
-        job = db.claim(conn, settings.worker_id)
-        if job is None:
-            time.sleep(settings.poll_interval_seconds)
-            continue
+
+    def _dispatch(c, job):
         hb = Heartbeat(
             settings.database_url,
             job["id"],
             settings.worker_id,
             settings.heartbeat_interval_seconds,
         )
-        outcome = dispatch_claimed_job(
-            conn,
+        return dispatch_claimed_job(
+            c,
             job,
             storage,
             settings,
@@ -193,9 +268,17 @@ def main() -> None:  # pragma: no cover — 실모델 + 무한 루프 (로컬 �
             build_embedder_fn=build_embedder,
             build_text_embedder_fn=build_text_embedder,
             heartbeat_cm=hb,
+            shutdown_event=shutdown,
         )
-        log.info("job %s type=%s → %s", job["id"], job["type"], outcome)
-        time.sleep(settings.poll_interval_seconds)
+
+    run_loop(
+        conn,
+        settings,
+        shutdown,
+        connect_fn=lambda: db.connect(settings.database_url),
+        dispatch_fn=_dispatch,
+    )
+    log.info("worker %s stopped", settings.worker_id)
 
 
 if __name__ == "__main__":  # pragma: no cover
