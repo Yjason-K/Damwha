@@ -54,6 +54,16 @@ def _locked_at(conn, jid):
     return conn.execute("SELECT locked_at FROM job WHERE id=%s", (jid,)).fetchone()["locked_at"]
 
 
+def _wait_until(pred, timeout=10.0, tick=0.02):
+    # 고정 sleep 대신 deadline poll — 느린 CI에서도 flake 없이, 빠른 환경에선 즉시 통과
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if pred():
+            return True
+        time.sleep(tick)
+    return False
+
+
 def test_heartbeat_survives_initial_connect_failure(conn, pg_url, monkeypatch):
     # 최초 connect가 2회 실패해도 스레드는 죽지 않고 재시도 후 beat를 기록한다
     mid = seed_meeting(conn)
@@ -72,9 +82,8 @@ def test_heartbeat_survives_initial_connect_failure(conn, pg_url, monkeypatch):
 
     monkeypatch.setattr(db, "connect", flaky_connect)
     with Heartbeat(pg_url, jid, "w1", interval=0.05):
-        time.sleep(0.6)
-    assert len(calls) >= 3  # 실패 2회 + 성공
-    assert _locked_at(conn, jid) > before  # 이후 beat가 실제 기록됨
+        assert _wait_until(lambda: len(calls) >= 3 and _locked_at(conn, jid) > before)
+    # 실패 2회 + 성공 후 beat가 실제 기록됨
 
 
 def test_heartbeat_reconnects_after_beat_failure(conn, pg_url, monkeypatch):
@@ -101,10 +110,10 @@ def test_heartbeat_reconnects_after_beat_failure(conn, pg_url, monkeypatch):
     monkeypatch.setattr(db, "connect", counting_connect)
     monkeypatch.setattr(db, "heartbeat", flaky_beat)
     with Heartbeat(pg_url, jid, "w1", interval=0.05):
-        time.sleep(0.6)
-    assert len(connects) >= 2  # 초기 접속 + beat 실패 후 재접속
-    assert len(beats) >= 2
-    assert _locked_at(conn, jid) > before
+        assert _wait_until(
+            lambda: len(connects) >= 2 and len(beats) >= 2 and _locked_at(conn, jid) > before
+        )
+    # 초기 접속 + beat 실패 후 재접속, beat 재개
 ```
 
 주의: `heartbeat.py`는 `from . import db` 후 `db.connect(...)`를 호출하므로, 테스트 파일이 import한 동일 모듈 객체 `db`에 monkeypatch하면 스레드에도 반영된다.
@@ -622,7 +631,7 @@ git commit -m "feat(worker): stage-boundary graceful shutdown and unified owners
 **Interfaces:**
 - Consumes (Task 2·3): `db.claim`, `db.requeue`, `dispatch_claimed_job(..., shutdown_event=...)`.
 - Produces:
-  - `run_loop(conn, settings, shutdown, *, connect_fn, dispatch_fn) -> None` — settings는 `worker_id`/`poll_interval_seconds`만 사용. dispatch_fn: `(conn, job) -> str`. 어떤 예외에도 재접속 후 계속.
+  - `run_loop(conn, settings, shutdown, *, connect_fn, dispatch_fn) -> None` — settings는 `worker_id`/`poll_interval_seconds`만 사용. dispatch_fn: `(conn, job) -> str`. 어떤 예외에도 재접속 후 계속. in-flight requeue는 `attempts < max_attempts`일 때만(소진 시 reaper 몫), outer 예외마다 poll 간격 대기(hot-loop 방지), 종료 시 자기 conn을 close.
   - `_reconnect(connect_fn, shutdown, *, initial_delay=1.0, max_delay=30.0) -> Connection | None` — capped 지수 backoff, shutdown 시 `None`.
   - spec의 `run_loop(conn, settings, storage, shutdown, ...)` 스케치에서 **storage 파라미터는 제거**(내부 미사용 — dispatch_fn 클로저가 보유. 의도된 단순화).
 
@@ -631,16 +640,27 @@ git commit -m "feat(worker): stage-boundary graceful shutdown and unified owners
 `worker/tests/test_worker_loop.py`에 추가 (`threading`은 Task 3에서 import됨; `run_loop`, `_reconnect`를 import 라인에 추가: `from damwha_worker.__main__ import _reconnect, dispatch_claimed_job, handle_job, run_loop, run_once`):
 
 ```python
-def test_run_loop_exits_immediately_when_shutdown_set(conn):
+class _BrokenConn:
+    """execute 시 죽은 커넥션. run_loop에 fixture conn을 직접 주지 않기 위한 대역."""
+
+    def execute(self, *a, **k):
+        raise OSError("dead connection")
+
+    def close(self):
+        pass
+
+
+def test_run_loop_exits_immediately_when_shutdown_set():
+    # run_loop는 종료 시 자기 conn을 close하므로 fixture conn을 주면 안 된다
     shutdown = threading.Event()
     shutdown.set()
     run_loop(
-        conn,
+        _BrokenConn(),
         SimpleNamespace(worker_id="w1", poll_interval_seconds=0.01),
         shutdown,
         connect_fn=lambda: (_ for _ in ()).throw(AssertionError("must not connect")),
         dispatch_fn=lambda c, j: (_ for _ in ()).throw(AssertionError("must not dispatch")),
-    )  # 반환하면 성공
+    )  # 반환하면 성공 (execute 미호출 — while 조건에서 즉시 탈출)
 
 
 def test_run_loop_reconnects_and_requeues_inflight_on_dispatch_error(conn, pg_url):
@@ -661,7 +681,7 @@ def test_run_loop_reconnects_and_requeues_inflight_on_dispatch_error(conn, pg_ur
         shutdown.set()
         return "committed"
 
-    loop_conn = db.connect(pg_url)  # run_loop이 close할 수 있으므로 fixture conn과 분리
+    loop_conn = db.connect(pg_url)  # run_loop이 close하므로 fixture conn과 분리
     run_loop(
         loop_conn,
         SimpleNamespace(worker_id="w1", poll_interval_seconds=0.01),
@@ -673,18 +693,36 @@ def test_run_loop_reconnects_and_requeues_inflight_on_dispatch_error(conn, pg_ur
     assert connects == [1]  # 재접속 1회
 
 
+def test_run_loop_leaves_exhausted_job_for_reaper(conn, pg_url):
+    # attempts 소진된 job은 dispatch 예외 후 requeue하지 않는다 — running으로 남겨
+    # reaper가 fail+전파. requeue했다면 결정적 오류를 무한 재claim했을 것이다.
+    mid, jid = _enqueue_pm(conn)
+    conn.execute("UPDATE job SET attempts=2, max_attempts=3 WHERE id=%s", (jid,))
+    shutdown = threading.Event()
+    calls = []
+
+    def dispatch_fn(c, job):
+        calls.append(job["id"])
+        raise OSError("deterministic failure")
+
+    threading.Timer(0.5, shutdown.set).start()  # requeue-생략 확인 후 루프 종료
+    run_loop(
+        db.connect(pg_url),
+        SimpleNamespace(worker_id="w1", poll_interval_seconds=0.01),
+        shutdown,
+        connect_fn=lambda: db.connect(pg_url),
+        dispatch_fn=dispatch_fn,
+    )
+    assert calls == [jid]  # 재claim 없음 (claim 시 attempts 2→3 == max)
+    row = conn.execute("SELECT status, locked_by FROM job WHERE id=%s", (jid,)).fetchone()
+    assert row["status"] == "running" and row["locked_by"] == "w1"  # reaper 몫
+
+
 def test_run_loop_survives_claim_error(conn, pg_url):
     # claim 시점에 커넥션이 죽어 있어도 재접속 후 계속
     mid, jid = _enqueue_pm(conn)
     shutdown = threading.Event()
     connects, calls = [], []
-
-    class BrokenConn:
-        def execute(self, *a, **k):
-            raise OSError("dead connection")
-
-        def close(self):
-            pass
 
     def connect_fn():
         connects.append(1)
@@ -696,7 +734,7 @@ def test_run_loop_survives_claim_error(conn, pg_url):
         return "committed"
 
     run_loop(
-        BrokenConn(),
+        _BrokenConn(),
         SimpleNamespace(worker_id="w1", poll_interval_seconds=0.01),
         shutdown,
         connect_fn=connect_fn,
@@ -730,6 +768,21 @@ def test_reconnect_backoff_doubles_and_stops_on_shutdown(monkeypatch):
 
     assert _reconnect(failing, shutdown, initial_delay=1.0, max_delay=30.0) is None
     assert waits == [1.0, 2.0, 4.0, 8.0]
+
+
+def test_main_wires_initial_connection_through_reconnect():
+    # main()은 pragma: no cover — 초기 연결이 _reconnect 경유라는 배선(스펙 §2.1의 High
+    # 리뷰 결함 수정)을 런타임으로 못 잡으므로 정적으로 고정한다.
+    import inspect
+
+    from damwha_worker.__main__ import main
+
+    src = inspect.getsource(main)
+    assert "_reconnect(lambda: db.connect" in src
+    # 초기 연결용 direct 호출 금지: db.connect는 _reconnect/connect_fn 람다 안에만 존재
+    for line in src.splitlines():
+        if "db.connect" in line:
+            assert "lambda" in line, f"main()에 직접 db.connect 호출: {line.strip()}"
 ```
 
 - [ ] **Step 2: 실패 확인**
@@ -757,7 +810,10 @@ def _reconnect(connect_fn, shutdown, *, initial_delay: float = 1.0, max_delay: f
 
 
 def run_loop(conn, settings, shutdown, *, connect_fn, dispatch_fn) -> None:
-    """폴 루프: claim → dispatch. 어떤 예외에도 죽지 않는다 — 재접속 후 계속."""
+    """폴 루프: claim → dispatch. 어떤 예외에도 죽지 않는다 — 재접속 후 계속.
+
+    conn의 수명은 이 함수가 책임진다 — 정상 종료 시에도 close하고 반환한다.
+    """
     job = None  # 현재 in-flight job (예외 시 requeue 대상)
     while not shutdown.is_set():
         try:
@@ -776,15 +832,29 @@ def run_loop(conn, settings, shutdown, *, connect_fn, dispatch_fn) -> None:
                 pass
             conn = _reconnect(connect_fn, shutdown)
             if conn is None:
-                break  # 재접속 중 shutdown
+                return  # 재접속 중 shutdown (conn 없음 — close 불요)
             if job is not None:
-                # in-flight job을 reaper 대기 없이 즉시 반환 시도.
-                # 소유권 가드라 0-row(이미 회수됨)여도 무해.
-                try:
-                    db.requeue(conn, job["id"], settings.worker_id)
-                except Exception:  # noqa: BLE001
-                    log.warning("in-flight requeue failed — reaper will recover job %s", job["id"])
+                # in-flight job을 reaper 대기 없이 즉시 반환 시도 — 단, attempts가
+                # 남았을 때만. claim은 attempts를 필터하지 않으므로, 소진된 job을
+                # requeue하면 결정적 오류를 무한 재claim한다. 소진 시 running으로
+                # 남겨 reaper가 fail + meeting/speaker 전파를 수행한다.
+                if job["attempts"] < job["max_attempts"]:
+                    try:
+                        db.requeue(conn, job["id"], settings.worker_id)
+                    except Exception:  # noqa: BLE001
+                        log.warning(
+                            "in-flight requeue failed — reaper will recover job %s", job["id"]
+                        )
+                else:
+                    log.warning("job %s attempts exhausted — leaving for reaper", job["id"])
                 job = None
+            # 반복 오류 hot-loop 방지: 어떤 outer 예외든 다음 시도 전 poll 간격만큼 쉰다
+            if shutdown.wait(settings.poll_interval_seconds):
+                break
+    try:
+        conn.close()
+    except Exception:  # noqa: BLE001
+        pass
 ```
 
 `main()` 전체 교체:
@@ -886,9 +956,9 @@ Expected: 전체 PASS (API 코드/마이그레이션 무변경 — 회귀 없음
 
 Run (리포 루트):
 ```bash
-git diff --stat HEAD~4 -- src/ worker/damwha_worker/contracts.py
+git diff --name-only "$(git merge-base main HEAD)" -- src/ worker/damwha_worker/contracts.py
 ```
-Expected: 출력 없음.
+Expected: 출력 없음 (커밋 수와 무관하게 브랜치 분기점 기준).
 
 - [ ] **Step 4: 수동 스모크 (선택, 로컬)**
 

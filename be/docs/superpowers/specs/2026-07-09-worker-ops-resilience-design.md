@@ -112,13 +112,21 @@ def run_loop(conn, settings, storage, shutdown, *, connect_fn, dispatch_fn) -> N
             if conn is None:
                 break  # 재접속 중 shutdown
             if job is not None:
-                # in-flight job을 reaper 5분 대기 없이 즉시 반환 시도.
-                # 소유권 가드(locked_by+running)라 0-row(이미 회수됨)면 무해.
-                try:
-                    db.requeue(conn, job["id"], settings.worker_id)
-                except Exception:
-                    log.warning("in-flight requeue failed — reaper will recover job %s", job["id"])
+                # in-flight job을 reaper 대기 없이 즉시 반환 시도 — 단, attempts가
+                # 남아 있을 때만. 소진된 job을 requeue하면 claim이 attempts를 필터하지
+                # 않으므로 결정적 오류를 무한 재claim하게 된다. 소진 시 running으로
+                # 남겨 reaper가 fail + meeting/speaker 전파를 수행하게 한다(기존 로직 재사용).
+                if job["attempts"] < job["max_attempts"]:
+                    try:
+                        db.requeue(conn, job["id"], settings.worker_id)
+                    except Exception:
+                        log.warning("in-flight requeue failed — reaper will recover job %s", job["id"])
+                else:
+                    log.warning("job %s attempts exhausted — leaving for reaper", job["id"])
                 job = None
+            # 반복 오류 hot-loop 방지: 어떤 outer 예외든 다음 시도 전 poll 간격만큼 쉰다
+            if shutdown.wait(settings.poll_interval_seconds):
+                break
 
 
 def _reconnect(connect_fn, shutdown) -> "Connection | None":
@@ -136,6 +144,7 @@ def _reconnect(connect_fn, shutdown) -> "Connection | None":
 ```
 
 - `handle_job` 내부는 불변 — 거기서 새어 나온 DB 예외(예: 실패 처리 중 커넥션 사망)도 이 외곽 except가 잡는다.
+- **커넥션 소유권**: `run_loop`가 자기 커넥션의 수명을 책임진다 — 정상 종료(shutdown) 시에도 마지막 커넥션을 close하고 반환한다.
 - backoff는 `_reconnect` 호출마다 1초부터 다시 시작(재접속 성공 = 리셋).
 - 유휴 대기·backoff 대기 모두 `shutdown.wait(...)` — 시그널에 즉시 반응.
 
@@ -200,7 +209,7 @@ claim(+1) → shutdown requeue(−1) → 재claim(+1): 순 소모 0. 소유권 �
 | 상황 | 동작 |
 |---|---|
 | DB 장애(유휴 중) | 루프가 backoff 재접속 후 계속. 프로세스 생존. |
-| DB 장애(job 처리 중) | 예외 → 재접속 → 새 커넥션에서 in-flight job requeue 1회 시도(실패해도 reaper가 회수) → 계속. |
+| DB 장애(job 처리 중) | 예외 → 재접속 → attempts 남았으면 in-flight job requeue 1회 시도(실패해도 reaper가 회수), 소진이면 running으로 남겨 reaper가 fail+전파 → poll 간격 대기 → 계속(반복 오류도 rate-bound). |
 | heartbeat connect/beat 실패 | 스레드 생존, interval마다 재접속·재시도. |
 | SIGINT/SIGTERM(유휴) | `shutdown.wait` 즉시 탈출 → 루프 종료. |
 | SIGINT/SIGTERM(job 처리 중) | 다음 stage 진입 시 `ShutdownRequested` → `requeue_for_shutdown`(attempts 미소모) → 루프 종료. 최대 대기 = 현재 stage 길이. |
@@ -215,11 +224,14 @@ claim(+1) → shutdown requeue(−1) → 재claim(+1): 순 소모 0. 소유권 �
 - **heartbeat** (`tests/test_heartbeat.py`):
   - `db.connect`가 처음 N회 실패 후 성공(monkeypatch) → 스레드 생존, 이후 beat가 실제 기록됨(`locked_at` 갱신 확인).
   - beat 실패(커넥션 강제 close 등) 후 다음 interval에 재접속해 beat 재개.
+  - 고정 sleep 대신 deadline까지 조건을 poll(CI flake 방지).
 - **run_loop** (`tests/test_worker_loop.py`):
   - dispatch 중 예외 → `connect_fn` 호출됨 + in-flight job이 `queued`로 복귀 + 루프 계속(다음 iteration에서 정상 처리).
+  - **attempts 소진된 job은 requeue하지 않음** — dispatch 예외 시 job이 `running`으로 남고 재claim되지 않음(reaper 몫).
   - claim 자체가 예외 → 재접속 후 계속.
   - shutdown set → 유휴 상태에서 즉시 반환.
   - `_reconnect`: 실패 반복 시 backoff 증가(1→2→4), shutdown set 시 None.
+  - **초기 연결 배선 정적 체크**: `main()`은 `# pragma: no cover`라 배선 회귀를 런타임 테스트로 못 잡는다 — `inspect.getsource(main)`에 초기 연결이 `_reconnect(lambda: db.connect...)` 경유로만 존재함을 단언하는 정적 테스트로 고정한다.
 - **shutdown 경로**:
   - `run_process_meeting(shutdown_event=set된 Event)` → 첫 stage 진입에서 `ShutdownRequested`.
   - `handle_job` 경유: outcome `"requeued_shutdown"`, job `status='queued'`, `attempts`가 claim 이전 값으로 복귀(미소모), meeting `processing` 유지.
