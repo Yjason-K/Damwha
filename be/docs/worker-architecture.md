@@ -1,7 +1,7 @@
 # Damwha Worker 아키텍처와 처리 흐름
 
 > 문서 성격: 현재 구현을 설명하는 살아있는 문서
-> 기준일: 2026-07-06
+> 기준일: 2026-07-09
 > 범위: `be/worker`, 워커와 직접 연결되는 NestJS job enqueue/reaper, Postgres, 공유 스토리지
 
 ## 1. 한눈에 보기
@@ -101,11 +101,16 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    start["Worker process starts"] --> load["Load settings and open DB connection"]
-    load --> claim["Claim oldest queued job with SKIP LOCKED"]
+    start["Worker process starts"] --> load["Load settings, install SIGINT/SIGTERM handlers"]
+    load --> connect["Connect DB with capped backoff (_reconnect)"]
+    connect --> connOk{"Connected before shutdown?"}
+    connOk -->|"No"| exit["Exit cleanly"]
+    connOk -->|"Yes"| claim["Claim oldest queued job with SKIP LOCKED"]
     claim --> found{"Job found?"}
-    found -->|"No"| sleep["Sleep for poll interval"]
-    sleep --> claim
+    found -->|"No"| idle["Wait one poll interval (interruptible)"]
+    idle --> shutIdle{"Shutdown requested?"}
+    shutIdle -->|"Yes"| exit
+    shutIdle -->|"No"| claim
     found -->|"Yes"| beat["Start heartbeat on a separate DB connection"]
     beat --> validate["Validate schema version and payload"]
     validate --> route{"Job type"}
@@ -121,6 +126,7 @@ flowchart TD
     outcome -->|"Committed"| done["Job done, progress 100"]
     outcome -->|"Stale"| discarded["Job done with discard reason"]
     outcome -->|"Ownership lost"| lost["Stop without writing shared state"]
+    outcome -->|"Shutdown requested"| shutReq["Requeue for shutdown (attempts − 1)"]
 
     validate -.->|"Exception"| classify["Classify error"]
     process -.->|"Exception"| classify
@@ -133,10 +139,15 @@ flowchart TD
     done --> stopBeat["Stop heartbeat"]
     discarded --> stopBeat
     lost --> stopBeat
+    shutReq --> stopBeat
     requeue --> stopBeat
     failed --> stopBeat
-    stopBeat --> sleep
+    stopBeat --> shutAfter{"Shutdown requested?"}
+    shutAfter -->|"Yes"| exit
+    shutAfter -->|"No"| claim
 ```
+
+정상 처리(또는 handle_job 내부 requeue/fail)를 끝낸 뒤에는 poll 간격 대기 없이 즉시 다음 job을 재claim한다. poll 간격 대기는 큐가 비었을 때만 적용한다. 루프 자체를 죽이는 예외(주로 DB 연결 상실)와 우아한 종료는 아래 "복원력과 우아한 종료"에서 다룬다.
 
 ### Claim과 순서
 
@@ -149,8 +160,33 @@ flowchart TD
 
 - 모델 추론이 메인 thread를 오래 점유하므로 heartbeat는 daemon thread와 별도 psycopg 연결을 사용한다.
 - heartbeat는 `job.id + locked_by + running` 조건을 만족할 때만 `locked_at`을 갱신한다.
+- heartbeat thread는 connect/beat 실패에 죽지 않는다. 실패하면 연결을 닫고 다음 interval에 재접속을 시도하며, 수명은 해당 job 처리 범위에 한정된다.
 - NestJS reaper가 5분마다 오래된 `running` job을 찾는다.
 - 시도 횟수가 남으면 `queued`로 되돌리고, 소진되면 `failed`로 바꾼다. `process_meeting`은 meeting, `enroll_speaker`는 speaker에도 실패를 전파한다. `index_meeting` 실패는 meeting을 실패시키지 않는다.
+
+### 복원력과 우아한 종료
+
+poll loop는 어떤 예외에도 죽지 않고, 시그널을 받으면 stage 경계에서 우아하게 멈춘다.
+
+```mermaid
+flowchart TD
+    body["claim → dispatch"] -->|"정상 완료"| body
+    body -.->|"루프 예외 (예: DB 연결 상실)"| reconnect["conn.close → _reconnect (capped backoff 1→30s)"]
+    reconnect --> shut{"재접속 중 shutdown?"}
+    shut -->|"Yes"| stop["루프 종료"]
+    shut -->|"No"| inflight{"in-flight job attempts 남음?"}
+    inflight -->|"Yes"| rq["즉시 requeue"]
+    inflight -->|"No"| leave["running 유지 → reaper 위임"]
+    rq --> wait["poll 간격 대기 후 재개"]
+    leave --> wait
+    wait --> body
+```
+
+- **초기 연결**: 시작 시 DB 연결은 `_reconnect`로 capped 지수 backoff(1→30초)를 재시도한다. 연결 전에 종료 시그널을 받으면 job을 잡지 않고 즉시 종료한다.
+- **루프 예외 복구**: claim/dispatch 중 예외가 나면 연결을 닫고 `_reconnect`로 재접속한 뒤, in-flight job은 `attempts < max_attempts`일 때만 즉시 requeue한다. attempts가 소진된 job은 `running`으로 남겨 reaper가 fail + meeting/speaker 전파를 담당한다(claim은 attempts를 필터하지 않으므로 소진된 결정적 오류 job을 requeue하면 무한 재claim이 된다). 재접속/오류 뒤에는 poll 간격만큼 쉬어 반복 오류의 hot-loop를 막는다.
+- **우아한 종료**: SIGINT/SIGTERM은 shutdown Event를 set한다. 각 pipeline은 stage 경계마다(`enter_stage`, `process_meeting`은 mark_processing/normalize 이전에도) 이를 확인해 `ShutdownRequested`를 던지고, `db.requeue_for_shutdown`으로 job을 `queued`로 되돌린다. 이때 attempts를 1 줄여(outcome `requeued_shutdown`) 우아한 정지가 시도를 소비하지 않게 한다. 2차 시그널은 `SIG_DFL`로 강제 종료하며 이후는 reaper가 복구한다. 대기(idle) 중 종료는 즉시 빠져나간다.
+- **stage 경계 소유권 guard**: `enter_stage`는 `process_meeting`뿐 아니라 `enroll_speaker`/`index_meeting`에도 job 소유권을 확인시킨다. 소유권을 잃으면 `lost_ownership`(TRANSIENT)로 처리된다.
+- **attempts 회계 요약**: crash/transient 오류 = 시도 1회 소비, 우아한 종료 = 소비하지 않음(attempts − 1로 복원), 소진된 in-flight = reaper에게 위임.
 
 ## 5. Job 타입별 계약
 
@@ -283,6 +319,7 @@ stateDiagram-v2
     running --> done: guarded commit
     running --> done: stale result discarded
     running --> queued: transient error and attempts remain
+    running --> queued: graceful shutdown (attempt restored)
     running --> failed: permanent error
     running --> failed: transient error and attempts exhausted
     running --> queued: reaper recovers stale lock
@@ -291,7 +328,7 @@ stateDiagram-v2
     failed --> [*]
 ```
 
-`lost`는 DB status가 아니라 worker 함수의 outcome이다. 이미 job ownership을 잃었으므로 현재 worker는 상태 전이를 하지 않고 중단하며, 새 소유자나 reaper가 DB 상태를 책임진다.
+`lost`와 `requeued_shutdown`은 DB status가 아니라 worker 함수의 outcome이다. `lost`는 이미 job ownership을 잃었으므로 현재 worker는 상태 전이를 하지 않고 중단하며, 새 소유자나 reaper가 DB 상태를 책임진다.
 
 ### 오류 분류
 
@@ -300,7 +337,7 @@ stateDiagram-v2
 | Permanent | 손상 음원, 지원하지 않는 형식, ffprobe 실패, 지원하지 않는 payload version, 모델 package import 실패 | 즉시 fail |
 | Transient | OOM, 분류되지 않은 runtime 오류, 기타 일시 장애 | attempts가 남으면 즉시 requeue, 아니면 fail |
 
-현재 queue schema에는 `next_attempt_at`이 없어 exponential backoff가 없다. requeue 뒤 공통 poll interval만 적용된다.
+현재 queue schema에는 `next_attempt_at`이 없어 job별 timed backoff가 없다. transient requeue는 handle_job이 처리한 정상 outcome이라 loop가 대기 없이 다음 job을 재claim한다(같은 worker가 즉시 다시 잡을 수도 있다). poll 간격 대기는 큐가 비었을 때, 그리고 루프 예외 후 재접속 시에만 적용된다.
 
 ## 10. 일관성 모델과 안전장치
 
@@ -329,6 +366,7 @@ guard 결과에 따른 의미는 다음과 같다.
 | job ownership 없음 | `lost` | transaction rollback, 현재 worker는 아무 상태도 쓰지 않음 |
 | job은 소유하지만 meeting version이 stale | `discarded` | meeting/result 무변경, job은 `done`과 discard reason 기록 |
 | 모든 guard 통과 | `committed` | entity 결과와 job 완료를 같은 transaction에서 반영 |
+| stage 경계에서 종료 시그널 감지 | `requeued_shutdown` | entity 무변경, job은 `queued`로 복귀하고 attempts를 1 되돌림 |
 
 ## 11. 저장 데이터와 파일
 
