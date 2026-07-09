@@ -198,6 +198,60 @@ describe('migration', () => {
     }
   });
 
+  it('006: deletes zero-vector voiceprints and fails ready speakers left without any voiceprint', async () => {
+    const legacy = await new PostgreSqlContainer('damwha/postgres-bigm:pg16').start();
+    const pool = new Pool({ connectionString: legacy.getConnectionUri() });
+    try {
+      const dir = path.join(__dirname, '..', 'src', 'database', 'migrations');
+      const files = fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
+      for (const f of files.filter((f) => f < '006')) {
+        await pool.query(fs.readFileSync(path.join(dir, f), 'utf8'));
+      }
+      const zero = '[' + Array(192).fill(0).join(',') + ']';
+      const ok = '[' + Array(192).fill(0.1).join(',') + ']';
+      const seedSpeaker = async (name: string, vec: string) => {
+        const sp = await pool.query(
+          `INSERT INTO speaker(name, enrollment_status) VALUES($1,'ready') RETURNING id`,
+          [name],
+        );
+        await pool.query(
+          `INSERT INTO voiceprint(speaker_id, embedding, model, dimension)
+           VALUES($1, $2::vector, 'm', 192)`,
+          [sp.rows[0].id, vec],
+        );
+        return sp.rows[0].id;
+      };
+      // zero voiceprint만 가진 ready speaker → 006 후 voiceprint 삭제 + failed 전이
+      const broken = await seedSpeaker('broken', zero);
+      // non-zero voiceprint를 가진 ready speaker → 그대로 유지
+      const healthy = await seedSpeaker('healthy', ok);
+
+      const sql006 = fs.readFileSync(path.join(dir, '006_delete_zero_voiceprints.sql'), 'utf8');
+      await pool.query(sql006);
+      await expect(pool.query(sql006)).resolves.toBeDefined(); // 재실행 멱등
+
+      expect(
+        (await pool.query(`SELECT 1 FROM voiceprint WHERE speaker_id=$1`, [broken])).rowCount,
+      ).toBe(0);
+      const b = (
+        await pool.query(`SELECT enrollment_status, enrollment_error FROM speaker WHERE id=$1`, [broken])
+      ).rows[0];
+      expect(b.enrollment_status).toBe('failed');
+      expect(b.enrollment_error.code).toBe('sample_too_short');
+
+      expect(
+        (await pool.query(`SELECT 1 FROM voiceprint WHERE speaker_id=$1`, [healthy])).rowCount,
+      ).toBe(1);
+      expect(
+        (await pool.query(`SELECT enrollment_status FROM speaker WHERE id=$1`, [healthy])).rows[0]
+          .enrollment_status,
+      ).toBe('ready');
+    } finally {
+      await pool.end();
+      await legacy.stop();
+    }
+  });
+
   it('generates prefixed ids by DEFAULT for all 7 tables', async () => {
     const v192 = `[${Array(192).fill(0).join(',')}]`;
     const v1024 = `[${Array(1024).fill(0).join(',')}]`;
