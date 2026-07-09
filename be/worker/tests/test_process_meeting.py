@@ -138,6 +138,45 @@ def test_stage_progress_recorded(conn, tmp_path):
     )
 
 
+def test_all_short_cluster_preserved_without_provisional_speaker(conn, tmp_path):
+    # 전부 100ms 미만인 클러스터: cluster row는 centroid 없이 보존되고,
+    # provisional speaker / zero voiceprint는 생성되지 않는다
+    mid = seed_meeting(
+        conn, status="processing", processing_version=0, audio_key="meetings/m/original.m4a"
+    )
+    jid = seed_job(conn, meeting_id=mid, payload={})
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    db.claim(conn, "w1")
+    models = Models(
+        vad=FakeVAD([]),
+        diarizer=FakeDiarizer([DiarSegment("SPEAKER_00", 0, 50)]),
+        embedder=FakeEmbedder([None]),  # <100ms → 임베딩 없음
+        transcriber=FakeTranscriber([Word("짧다", 0, 40, 0.9)]),
+    )
+    out = run_process_meeting(
+        conn,
+        conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
+        _payload(mid, "meetings/m/original.m4a"),
+        models,
+        Storage(str(tmp_path)),
+        worker_id="w1",
+        normalize_fn=lambda s, d: None,
+        probe_fn=lambda p: ProbeResult(50),
+    )
+    assert out == "committed"
+    cl = conn.execute(
+        "SELECT centroid, resolved_speaker_id FROM meeting_cluster WHERE meeting_id=%s", (mid,)
+    ).fetchall()
+    assert len(cl) == 1
+    assert cl[0]["centroid"] is None and cl[0]["resolved_speaker_id"] is None
+    assert conn.execute("SELECT count(*) AS c FROM speaker", ()).fetchone()["c"] == 0
+    assert conn.execute("SELECT count(*) AS c FROM voiceprint", ()).fetchone()["c"] == 0
+    utt = conn.execute(
+        "SELECT speaker_id, text FROM utterance WHERE meeting_id=%s", (mid,)
+    ).fetchone()
+    assert utt["speaker_id"] is None and utt["text"] == "짧다"
+
+
 def test_run_process_meeting_uses_custom_prefix(conn, tmp_path):
     mid = seed_meeting(
         conn, status="processing", processing_version=0, audio_key="meetings/m/original.m4a"

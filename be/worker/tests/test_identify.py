@@ -14,6 +14,39 @@ def test_centroids_l2_normalized_mean():
     assert abs(math.sqrt(sum(x * x for x in c["S0"])) - 1.0) < 1e-6
 
 
+def test_centroids_skip_none_embeddings():
+    # None(너무 짧은 클립)은 평균을 희석하지 않는다
+    segs = [DiarSegment("S0", 0, 1), DiarSegment("S0", 1, 2)]
+    embs = [[1.0, 0.0] + [0.0] * 190, None]
+    c = centroids_by_label(segs, embs)
+    assert c["S0"] == [1.0, 0.0] + [0.0] * 190
+
+
+def test_centroids_all_none_label_kept_with_none_centroid():
+    # 전부 짧은 라벨도 dict에 남는다 (cluster row 보존 경로) — 값만 None
+    segs = [DiarSegment("S0", 0, 1), DiarSegment("S1", 1, 2)]
+    embs = [None, [1.0] + [0.0] * 191]
+    c = centroids_by_label(segs, embs)
+    assert set(c) == {"S0", "S1"}
+    assert c["S0"] is None
+    assert c["S1"] is not None
+
+
+def test_identify_none_centroid_is_unidentified_without_db_query(conn):
+    # threshold=0.0이면 어떤 voiceprint든 매칭되므로, None이 나오는 것 자체가
+    # DB 조회를 타지 않았다는 증거다
+    sid = seed_speaker(conn, enrollment_status="ready")
+    seed_voiceprint(conn, speaker_id=sid, embedding=[1.0] + [0.0] * 191)
+    out = identify_clusters(
+        conn,
+        {"S0": None},
+        model="speechbrain/spkrec-ecapa-voxceleb",
+        dimension=192,
+        threshold=0.0,
+    )
+    assert out["S0"] is None
+
+
 def test_identify_matches_ready_speaker_above_threshold(conn):
     sid = seed_speaker(conn, enrollment_status="ready")
     seed_voiceprint(conn, speaker_id=sid, embedding=[1.0] + [0.0] * 191)
