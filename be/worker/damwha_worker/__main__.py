@@ -1,5 +1,6 @@
 import logging
 import signal
+import subprocess
 import threading
 
 from . import db
@@ -12,6 +13,9 @@ from .pipeline.process_meeting import run_process_meeting
 from .storage import Storage
 
 log = logging.getLogger("damwha_worker")
+
+_MAX_BACKOFF_SECONDS = 60.0
+_TIMEOUT_EXC = subprocess.TimeoutExpired
 
 
 def handle_job(
@@ -213,6 +217,83 @@ def run_single_job(
             conn.close()
         except Exception:  # noqa: BLE001
             pass
+
+
+def _wait_child(proc) -> int:
+    """자식 종료까지 대기하며 returncode를 회수한다. shutdown 시 terminate/kill은
+    부모 시그널 핸들러가 child_holder로 직접 보내므로, 여기서는 폴링만 한다.
+    (0.5초 폴링이라 시그널 후 자식 종료를 곧 회수한다.)"""
+    while True:
+        try:
+            return proc.wait(timeout=0.5)
+        except _TIMEOUT_EXC:
+            continue
+
+
+def run_supervisor(settings, shutdown, *, connect_fn, spawn_fn, child_holder) -> None:
+    """부모: peek → job 있으면 자식 spawn → 종료 대기 → exit code 분기.
+
+    자식 exit code: 0=처리 완료(즉시 재peek), 3=no job(poll sleep),
+    그 외(2 포함)=크래시(capped backoff + WARNING).
+    """
+    conn = _reconnect(connect_fn, shutdown)
+    if conn is None:
+        return
+    consecutive_failures = 0
+    while not shutdown.is_set():
+        try:
+            has_job = db.peek_queued(conn)
+        except Exception:  # noqa: BLE001 — DB 장애: 재접속 후 계속
+            log.exception("supervisor peek error — reconnecting")
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+            conn = _reconnect(connect_fn, shutdown)
+            if conn is None:
+                return
+            continue
+        if not has_job:
+            if shutdown.wait(settings.poll_interval_seconds):
+                break
+            continue
+
+        proc = spawn_fn()
+        # spawn과 holder 할당 사이 시그널이 오면 자식에 SIGTERM이 전달되지 않아
+        # 자식이 stage-boundary 없이 job을 끝까지 실행한다(부모는 대기). 창은
+        # 바이트코드 몇 개 수준이고 결과도 graceful(정상 완료)이라 수용한다.
+        child_holder["proc"] = proc
+        code = _wait_child(proc)
+        child_holder["proc"] = None
+
+        if shutdown.is_set():
+            # shutdown 중 자식 종료는 크래시로 분류하지 않는다(핸들러 설치 전
+            # 자식이 -SIGTERM으로 죽어 nonzero여도 정상 종료 경로).
+            break
+        if code == 0:
+            consecutive_failures = 0
+        elif code == 3:
+            consecutive_failures = 0
+            if shutdown.wait(settings.poll_interval_seconds):
+                break
+        else:
+            consecutive_failures += 1
+            delay = min(
+                settings.poll_interval_seconds * (2 ** (consecutive_failures - 1)),
+                _MAX_BACKOFF_SECONDS,
+            )
+            log.warning(
+                "child crashed (exit=%s, consecutive=%d) — backoff %.1fs",
+                code,
+                consecutive_failures,
+                delay,
+            )
+            if shutdown.wait(delay):
+                break
+    try:
+        conn.close()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _reconnect(connect_fn, shutdown, *, initial_delay: float = 1.0, max_delay: float = 30.0):
