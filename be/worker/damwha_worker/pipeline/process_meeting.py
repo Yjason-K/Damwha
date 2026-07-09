@@ -115,7 +115,7 @@ def run_process_meeting(
     # 7) align
     _stage(conn, job_id, worker_id, "align", 90)
     with timed_stage("align", ctx) as t:
-        utts = build_utterances(words, segments, failed_spans=speech_spans if not words else None)
+        utts = build_utterances(words, segments, failed_spans=speech_spans)
         t["detail"] = f"utterances={len(utts)}"
 
     utterance_rows = [

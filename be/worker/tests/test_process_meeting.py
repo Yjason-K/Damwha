@@ -1,6 +1,6 @@
 from damwha_worker import db
 from damwha_worker.contracts import ProcessMeetingPayload
-from damwha_worker.models.base import DiarSegment, Word
+from damwha_worker.models.base import DiarSegment, SpeechSpan, Word
 from damwha_worker.pipeline.ffmpeg import ProbeResult
 from damwha_worker.pipeline.process_meeting import Models, run_process_meeting
 from damwha_worker.storage import Storage
@@ -197,3 +197,52 @@ def test_run_process_meeting_uses_custom_prefix(conn, tmp_path):
     )
     names = [r["name"] for r in conn.execute("SELECT name FROM speaker", ()).fetchall()]
     assert names and all(n.startswith("화자_") for n in names)
+
+
+def test_partial_stt_failure_marks_transcribe_failed_per_segment(conn, tmp_path):
+    # words가 비어있지 않아도(부분 STT 실패) VAD speech와 겹치는 무발화 세그먼트는
+    # silence가 아니라 transcribe_failed여야 한다. 수정 전 코드는 words가 있으면
+    # failed_spans를 아예 전달하지 않아 SPEAKER_01이 silence로 위장된다.
+    mid = seed_meeting(
+        conn, status="processing", processing_version=0, audio_key="meetings/m/original.m4a"
+    )
+    jid = seed_job(conn, meeting_id=mid, payload={})
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    db.claim(conn, "w1")
+    models = Models(
+        vad=FakeVAD([SpeechSpan(1100, 1900)]),  # SPEAKER_01 구간에서 speech 감지
+        diarizer=FakeDiarizer(
+            [
+                DiarSegment("SPEAKER_00", 0, 1000),
+                DiarSegment("SPEAKER_01", 1000, 2000),
+                DiarSegment("SPEAKER_02", 2000, 3000),
+            ]
+        ),
+        embedder=FakeEmbedder(
+            [
+                [1.0] + [0.0] * 191,
+                [0.0, 1.0] + [0.0] * 190,
+                [0.0, 0.0, 1.0] + [0.0] * 189,
+            ]
+        ),
+        transcriber=FakeTranscriber([Word("안녕", 0, 500, 0.9)]),  # words 비어있지 않음
+    )
+    out = run_process_meeting(
+        conn,
+        conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
+        _payload(mid, "meetings/m/original.m4a"),
+        models,
+        Storage(str(tmp_path)),
+        worker_id="w1",
+        normalize_fn=lambda s, d: None,
+        probe_fn=lambda p: ProbeResult(3000),
+    )
+    assert out == "committed"
+    rows = conn.execute(
+        "SELECT diar_label, status FROM utterance WHERE meeting_id=%s ORDER BY order_index",
+        (mid,),
+    ).fetchall()
+    by_label = {r["diar_label"]: r["status"] for r in rows}
+    assert by_label["SPEAKER_00"] == "ok"
+    assert by_label["SPEAKER_01"] == "transcribe_failed"  # 수정 전: "silence"
+    assert by_label["SPEAKER_02"] == "silence"
