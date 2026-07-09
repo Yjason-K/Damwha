@@ -142,3 +142,21 @@ def test_fail_enroll_lost_ownership(conn):
         ]
         == "pending"
     )
+
+
+def test_peek_queued_true_when_queued_job_exists(conn):
+    mid = seed_meeting(conn)
+    seed_job(conn, meeting_id=mid)
+    assert db.peek_queued(conn) is True
+
+
+def test_peek_queued_false_when_empty(conn):
+    assert db.peek_queued(conn) is False
+
+
+def test_peek_queued_does_not_claim(conn):
+    mid = seed_meeting(conn)
+    seed_job(conn, meeting_id=mid)
+    db.peek_queued(conn)
+    row = conn.execute("SELECT status FROM job WHERE meeting_id=%s", (mid,)).fetchone()
+    assert row["status"] == "queued"

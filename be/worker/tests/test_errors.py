@@ -1,5 +1,5 @@
 from damwha_worker.contracts import UnsupportedPayloadVersion
-from damwha_worker.errors import ErrorKind, WorkerError, classify
+from damwha_worker.errors import OOM, ErrorKind, WorkerError, classify
 
 
 def test_workererror_to_json():
@@ -25,6 +25,13 @@ def test_classify_memoryerror_is_oom():
     w = classify(MemoryError())
     assert w.kind is ErrorKind.TRANSIENT
     assert w.code == "oom"
+
+
+def test_mps_oom_runtimeerror_classified_as_oom():
+    exc = RuntimeError("MPS backend out of memory (MPS allocated: 4.01 GiB, ...)")
+    werr = classify(exc)
+    assert werr.code == OOM
+    assert werr.kind is ErrorKind.TRANSIENT
 
 
 def test_classify_unknown_defaults_transient():

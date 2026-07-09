@@ -121,6 +121,8 @@ Start services in this order; each step must be healthy before the next:
 3. **NestJS API** — `npm run start:dev`
 4. **Python worker** — `uv run python -m damwha_worker`
 
+The `uv run python -m damwha_worker` command launches a **supervisor parent process** that does not import heavy ML libraries. When a job is available, the parent spawns a child subprocess (`python -m damwha_worker --once`) to process a single job, waits for it to complete, and reclaims the next job. The child exits after processing, allowing the OS to fully reclaim its GPU memory (MLX, torch). This is the core mechanism to prevent OOM from GPU memory accumulation across jobs. When confirming smoke with BGE-M3 CPU embedder or MLX memory caps, verify that both the `index_meeting` (embedding) and `process_meeting` (speech models) paths complete OOM-free.
+
 ### Search smoke (Option B extended)
 
 After a meeting is processed (`status=done`), trigger search indexing:

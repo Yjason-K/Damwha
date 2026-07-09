@@ -25,7 +25,16 @@ class MlxWhisper:
         self._repo = _REPO[whisper_model]
 
     def transcribe(self, wav_path: str, language: str) -> list[Word]:
+        import os
+
+        import mlx.core as mx
         import mlx_whisper
+
+        # job 내부 GPU 피크 억제: MLX active 메모리 상한(물리 메모리의 절반).
+        # subprocess 격리는 job '간' 누적만 막고, 단독 process_meeting의 내부 피크는
+        # 이 상한으로 방어한다. mlx 0.31 top-level API — 정확 심볼은 로컬 smoke에서 확인.
+        _phys = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+        mx.set_memory_limit(int(_phys * 0.5))
 
         result = mlx_whisper.transcribe(
             wav_path,

@@ -59,5 +59,7 @@ def classify(exc: Exception) -> WorkerError:
         return WorkerError(MODEL_LOAD_FAILED, str(exc), ErrorKind.PERMANENT)
     if isinstance(exc, MemoryError):
         return WorkerError(OOM, "out of memory", ErrorKind.TRANSIENT)
+    if isinstance(exc, RuntimeError) and "out of memory" in str(exc).lower():
+        return WorkerError(OOM, str(exc), ErrorKind.TRANSIENT)
     log.warning("uncategorized exception treated as TRANSIENT: %r", exc)
     return WorkerError("uncategorized", str(exc), ErrorKind.TRANSIENT)

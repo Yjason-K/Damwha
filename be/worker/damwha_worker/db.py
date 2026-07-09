@@ -414,3 +414,8 @@ def persist_enroll(
             return "committed"
     except _Abort:
         return "lost"
+
+
+def peek_queued(conn) -> bool:
+    """큐에 처리 대기 job이 있는지 읽기 전용 확인. 어떤 행도 claim하지 않는다."""
+    return conn.execute("SELECT 1 FROM job WHERE status='queued' LIMIT 1").fetchone() is not None
