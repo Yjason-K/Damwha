@@ -18,10 +18,10 @@ class FakeDiarizer:
 
 
 class FakeEmbedder:
-    def __init__(self, vectors: list[list[float]]) -> None:
+    def __init__(self, vectors: list[list[float] | None]) -> None:
         self._vectors = vectors
 
-    def embed(self, wav_path: str, segments) -> list[list[float]]:
+    def embed(self, wav_path: str, segments) -> list[list[float] | None]:
         return self._vectors
 
 

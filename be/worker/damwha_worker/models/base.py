@@ -32,7 +32,7 @@ class Diarizer(Protocol):
 
 
 class Embedder(Protocol):
-    def embed(self, wav_path: str, segments: list[DiarSegment]) -> list[list[float]]: ...
+    def embed(self, wav_path: str, segments: list[DiarSegment]) -> list[list[float] | None]: ...
 
 
 class Transcriber(Protocol):
