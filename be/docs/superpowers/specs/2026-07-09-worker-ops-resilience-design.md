@@ -12,7 +12,7 @@
 
 1. **메인 루프가 DB 장애 한 번에 죽음** — `__main__.py` `while True`에 예외 처리 없음. DB 재시작/커넥션 drop 시 `db.claim`이 raise → 프로세스 종료. job 실패 후 `db.requeue`/`fail_*` 호출이 죽은 커넥션에서 raise해도 동일. 커넥션은 시작 시 1회 생성, 재접속 없음.
 2. **heartbeat 스레드: connect 실패 시 조용히 사망** — `heartbeat.py` `_run`의 `db.connect`가 try 밖. 연결 실패 → 데몬 스레드 즉사 → beat 0회 → 살아있는 job이 reaper에 회수됨(정합성은 소유권 가드가 지키지만 ML 연산 통째로 낭비).
-3. **graceful shutdown 없음** — SIGTERM/Ctrl-C 시 job이 `running` 방치 → reaper `REAPER_STALE_MINUTES`(5분) 대기.
+3. **graceful shutdown 없음** — SIGTERM/Ctrl-C 시 job이 `running` 방치 → reaper 회수까지 대기(stale window 기본 30분 `REAPER_STALE_MINUTES` + 최대 5분 cron tick).
 
 **범위 밖:** 모델 캐싱, 배치 INSERT, timed backoff(`next_attempt_at`), 프로세스 supervisor(launchd/systemd) 연동.
 
@@ -79,6 +79,8 @@ for sig in (signal.SIGINT, signal.SIGTERM):
     signal.signal(sig, _on_signal)
 ```
 
+**초기 연결도 `_reconnect` 경유** — 워커 시작 시점에 Postgres가 잠깐 내려가 있어도 죽지 않는다. `main()` 배선 순서: 시그널 핸들러 설치 → `conn = _reconnect(lambda: db.connect(settings.database_url), shutdown)` → `conn is None`(연결 전 shutdown)이면 즉시 종료 → `run_loop(...)`. `main()`에서 `db.connect`를 직접 호출하는 코드는 남기지 않는다.
+
 ### 2.2 루프 추출 — `run_loop`
 
 `main()`의 `while True`를 테스트 가능한 함수로 추출한다. `main()`은 실제 의존성만 배선한다.
@@ -140,8 +142,24 @@ def _reconnect(connect_fn, shutdown) -> "Connection | None":
 ### 2.3 stage 경계 shutdown 개입
 
 - **신규 예외** `errors.ShutdownRequested(Exception)` — `WorkerError`와 무관한 제어 흐름 예외(분류 대상 아님).
-- `run_process_meeting`/`run_enroll_speaker`/`run_index_meeting`에 `shutdown_event: threading.Event | None = None` 키워드 파라미터 추가. **각 stage 진입 지점(`_stage`/`set_stage` 호출 직전)에서** set이면 `ShutdownRequested` raise.
-  - process_meeting: vad/diarize/identify/stt/align/persist 진입 지점 6곳(normalize는 stage enum에 없고 빠름 — 개입 없음, 첫 확인은 vad 진입).
+- **공용 stage 헬퍼** `pipeline/stage.py` 신설:
+
+```python
+def enter_stage(conn, job_id, worker_id, stage, progress, shutdown_event=None) -> None:
+    """shutdown 확인 + guarded set_stage. 세 파이프라인 공통 진입점.
+
+    - shutdown_event가 set이면 ShutdownRequested.
+    - set_stage 0-row(소유권 상실)면 WorkerError('lost_ownership', ..., TRANSIENT).
+    """
+    if shutdown_event is not None and shutdown_event.is_set():
+        raise ShutdownRequested(f"shutdown requested before stage {stage}")
+    if db.set_stage(conn, job_id, worker_id, stage, progress) == 0:
+        raise WorkerError("lost_ownership", f"lock lost at {stage}", ErrorKind.TRANSIENT, stage=stage)
+```
+
+  기존 `process_meeting._stage`는 이 헬퍼로 대체한다. **enroll/index도 동일 헬퍼 사용** — 현재 둘은 `db.set_stage` 반환값을 무시해 소유권을 잃어도 persist까지 헛연산하는 비일관이 있었는데(검토 항목 7), 이 기회에 세 파이프라인 모두 "shutdown 확인 + 소유권 가드"로 통일한다(정합성은 여전히 persist 가드가 최종 방어).
+- `run_process_meeting`/`run_enroll_speaker`/`run_index_meeting`에 `shutdown_event: threading.Event | None = None` 키워드 파라미터 추가. 확인 지점:
+  - process_meeting: **normalize 진입 전 1곳**(stage enum에 normalize가 없어 `enter_stage` 대신 shutdown 확인만 — ffmpeg가 긴 파일에서 수 분 걸릴 수 있으므로 제외 불가) + vad/diarize/identify/stt/align/persist 진입 6곳(`enter_stage`). normalize 직후는 vad 진입 확인이 커버.
   - enroll: extract_embedding/enroll_persist 진입 2곳.
   - index: embed 진입 1곳(이후는 짧은 persist뿐).
   - persist 트랜잭션 자체에는 개입하지 않는다(짧은 TX).
@@ -207,7 +225,10 @@ claim(+1) → shutdown requeue(−1) → 재claim(+1): 순 소모 0. 소유권 �
   - `handle_job` 경유: outcome `"requeued_shutdown"`, job `status='queued'`, `attempts`가 claim 이전 값으로 복귀(미소모), meeting `processing` 유지.
   - `requeue_for_shutdown` 소유권 상실 시 0-row → `"lost"`.
   - attempts=1에서 shutdown requeue → `greatest(0,...)`로 0 (음수 방지).
-- **회귀**: 기존 전체 스위트 통과(파이프라인 `shutdown_event` 기본값 `None` — 기존 호출부 무변경 동작).
+- **enter_stage 소유권 가드** (enroll/index 신규 의미):
+  - enroll/index 실행 중 소유권 상실(reaper 회수 등) → `enter_stage`가 `lost_ownership` TRANSIENT raise → handle_job 경로에서 `"lost"` (기존: persist까지 헛연산).
+- **초기 연결**: `_reconnect`가 최초 연결에도 쓰임 — connect_fn 처음 N회 실패 후 성공 → 정상 기동.
+- **회귀**: 기존 전체 스위트 통과(파이프라인 `shutdown_event` 기본값 `None` — 기존 호출부 무변경 동작. 단 enroll/index의 lost-ownership 의미 변화는 신규 테스트로 고정).
 
 ---
 
@@ -219,8 +240,9 @@ claim(+1) → shutdown requeue(−1) → 재claim(+1): 순 소모 0. 소유권 �
 | `worker/damwha_worker/__main__.py` | `run_loop`/`_reconnect` 추출, 시그널 핸들러, `ShutdownRequested` 처리, shutdown_event 배선 |
 | `worker/damwha_worker/errors.py` | `ShutdownRequested` 예외 추가 |
 | `worker/damwha_worker/db.py` | `requeue_for_shutdown` 추가 |
-| `worker/damwha_worker/pipeline/process_meeting.py` | `shutdown_event` 파라미터 + stage 진입 확인 |
-| `worker/damwha_worker/pipeline/enroll_speaker.py` | 〃 |
+| `worker/damwha_worker/pipeline/stage.py` (신규) | `enter_stage` 공용 헬퍼 (shutdown 확인 + 소유권 가드) |
+| `worker/damwha_worker/pipeline/process_meeting.py` | `_stage` → `enter_stage`, normalize 전 shutdown 확인, `shutdown_event` 파라미터 |
+| `worker/damwha_worker/pipeline/enroll_speaker.py` | `enter_stage` 사용(소유권 가드 신규), `shutdown_event` 파라미터 |
 | `worker/damwha_worker/pipeline/index_meeting.py` | 〃 |
 | `worker/tests/test_heartbeat.py`, `test_worker_loop.py`, `test_process_meeting.py` 등 | 테스트 추가 |
 
