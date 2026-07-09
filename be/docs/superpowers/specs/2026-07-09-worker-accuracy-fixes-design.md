@@ -54,6 +54,8 @@ sentinel을 제거하고 임베딩 부재를 타입으로 표현한다: **너무
 -- 00X_delete_zero_voiceprints.sql
 DELETE FROM voiceprint WHERE vector_norm(embedding) = 0;
 
+UPDATE meeting_cluster SET centroid = NULL WHERE vector_norm(centroid) = 0;
+
 UPDATE speaker s
 SET enrollment_status = 'failed',
     enrollment_error = jsonb_build_object(
@@ -65,6 +67,7 @@ WHERE s.enrollment_status = 'ready'
 ```
 
 - `auto_cluster` zero voiceprint 삭제 → provisional speaker는 cluster 참조가 남아 유지(persist GC 조건과 정합).
+- 레거시 all-short 클러스터의 zero `meeting_cluster.centroid`는 NULL로 비운다 — API의 `has_centroid`/resolve(`upsertClusterVoiceprint`)가 non-NULL centroid를 그대로 voiceprint로 재생성해 재오염시키는 경로를 차단한다.
 - `enroll` zero voiceprint 삭제로 **voiceprint가 하나도 남지 않은 `ready` speaker는 `failed`로 전이**한다(`enrollment_error.code = 'sample_too_short'`). `ready`인데 voiceprint 0개인 상태는 "등록된 것처럼 보이지만 영원히 매칭 불가"라는 오해를 낳는다 — `failed`가 재등록을 유도하는 정직한 상태다. (ready+voiceprint 0개는 다른 경로로는 생기지 않는 비정상 상태이므로 blanket 조건으로 충분하다.) 두 문장 모두 멱등.
 - `vector_norm`은 pgvector 0.5+ 필요 — 002 마이그레이션의 HNSW 인덱스가 이미 같은 하한을 요구하므로 새 제약이 아니다(마이그레이션 주석으로 명시).
 - CHECK 제약(`vector_norm > 0`) 추가는 기각: 워커가 이제 zero를 쓰지 않으므로 YAGNI.

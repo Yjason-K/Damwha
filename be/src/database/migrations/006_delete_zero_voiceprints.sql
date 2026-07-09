@@ -12,6 +12,11 @@
 -- 참조가 남아 유지된다 (persist GC 조건과 정합).
 DELETE FROM voiceprint WHERE vector_norm(embedding) = 0;
 
+-- 레거시 all-short 클러스터가 zero centroid를 저장했다. API의 has_centroid /
+-- resolve(upsertClusterVoiceprint)는 non-NULL centroid를 그대로 voiceprint로
+-- 재생성하므로, zero centroid는 NULL로 비워 재오염을 차단한다. 멱등.
+UPDATE meeting_cluster SET centroid = NULL WHERE vector_norm(centroid) = 0;
+
 -- 삭제로 voiceprint가 하나도 남지 않은 ready speaker는 "등록된 것처럼 보이지만
 -- 영원히 매칭 불가" 상태가 된다 — failed로 전이해 재등록을 유도한다.
 -- (ready + voiceprint 0개는 다른 경로로는 생기지 않는 비정상 상태.)

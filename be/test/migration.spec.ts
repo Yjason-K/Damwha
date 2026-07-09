@@ -226,6 +226,32 @@ describe('migration', () => {
       // non-zero voiceprint를 가진 ready speaker → 그대로 유지
       const healthy = await seedSpeaker('healthy', ok);
 
+      // 레거시 all-short 클러스터: zero centroid + provisional speaker + auto_cluster zero voiceprint
+      const mtg = (await pool.query(`INSERT INTO meeting(audio_key) VALUES('k') RETURNING id`)).rows[0].id;
+      const prov = (
+        await pool.query(`INSERT INTO speaker(name, enrollment_status) VALUES('prov','provisional') RETURNING id`)
+      ).rows[0].id;
+      const zeroClu = (
+        await pool.query(
+          `INSERT INTO meeting_cluster(meeting_id, diar_label, centroid, resolved_speaker_id, processing_version)
+           VALUES($1,'S0',$2::vector,$3,0) RETURNING id`,
+          [mtg, zero, prov],
+        )
+      ).rows[0].id;
+      await pool.query(
+        `INSERT INTO voiceprint(speaker_id, embedding, model, dimension, source, source_cluster_id)
+         VALUES($1, $2::vector, 'm', 192, 'auto_cluster', $3)`,
+        [prov, zero, zeroClu],
+      );
+      // non-zero centroid 클러스터 → 006이 건드리면 안 됨
+      const okClu = (
+        await pool.query(
+          `INSERT INTO meeting_cluster(meeting_id, diar_label, centroid, processing_version)
+           VALUES($1,'S1',$2::vector,0) RETURNING id`,
+          [mtg, ok],
+        )
+      ).rows[0].id;
+
       const sql006 = fs.readFileSync(path.join(dir, '006_delete_zero_voiceprints.sql'), 'utf8');
       await pool.query(sql006);
       await expect(pool.query(sql006)).resolves.toBeDefined(); // 재실행 멱등
@@ -246,6 +272,26 @@ describe('migration', () => {
         (await pool.query(`SELECT enrollment_status FROM speaker WHERE id=$1`, [healthy])).rows[0]
           .enrollment_status,
       ).toBe('ready');
+
+      // provisional speaker: zero voiceprint는 삭제, speaker 행은 유지
+      // (failed 전이 UPDATE는 ready만 대상이므로 provisional은 그대로)
+      expect(
+        (await pool.query(`SELECT 1 FROM voiceprint WHERE speaker_id=$1`, [prov])).rowCount,
+      ).toBe(0);
+      expect(
+        (await pool.query(`SELECT enrollment_status FROM speaker WHERE id=$1`, [prov])).rows[0]
+          .enrollment_status,
+      ).toBe('provisional');
+
+      // zero centroid는 NULL로 비워지되 행은 유지 — 위의 재실행 멱등 체크가
+      // vector_norm(NULL) IS NULL → WHERE 자동 제외 가정도 함께 검증한다
+      const zc = await pool.query(`SELECT centroid FROM meeting_cluster WHERE id=$1`, [zeroClu]);
+      expect(zc.rowCount).toBe(1);
+      expect(zc.rows[0].centroid).toBeNull();
+      // non-zero centroid는 보존
+      expect(
+        (await pool.query(`SELECT centroid FROM meeting_cluster WHERE id=$1`, [okClu])).rows[0].centroid,
+      ).not.toBeNull();
     } finally {
       await pool.end();
       await legacy.stop();
