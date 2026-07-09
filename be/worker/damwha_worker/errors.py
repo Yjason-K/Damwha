@@ -33,6 +33,10 @@ class WorkerError(Exception):
         return out
 
 
+class ShutdownRequested(Exception):
+    """Graceful shutdown 제어 흐름 예외 — 실패 분류(classify) 대상이 아니다."""
+
+
 # Permanent codes
 CORRUPT_AUDIO = "corrupt_audio"
 UNSUPPORTED_FORMAT = "unsupported_format"

@@ -50,6 +50,38 @@ def test_requeue_clears_lock(conn):
     assert row["status"] == "queued" and row["locked_by"] is None and row["locked_at"] is None
 
 
+def test_requeue_for_shutdown_restores_attempts(conn):
+    mid = seed_meeting(conn)
+    jid = seed_job(conn, meeting_id=mid)  # attempts=0
+    db.claim(conn, "w1")  # attempts 0→1
+    assert db.requeue_for_shutdown(conn, jid, "w1") == 1
+    row = conn.execute(
+        "SELECT status, locked_by, locked_at, attempts FROM job WHERE id=%s", (jid,)
+    ).fetchone()
+    assert row["status"] == "queued"
+    assert row["locked_by"] is None and row["locked_at"] is None
+    assert row["attempts"] == 0  # claim의 +1이 되돌려짐 — 순 소모 0
+
+
+def test_requeue_for_shutdown_attempts_never_negative(conn):
+    mid = seed_meeting(conn)
+    jid = seed_job(conn, meeting_id=mid)
+    db.claim(conn, "w1")
+    conn.execute("UPDATE job SET attempts=0 WHERE id=%s", (jid,))  # 인위적 0
+    assert db.requeue_for_shutdown(conn, jid, "w1") == 1
+    assert conn.execute("SELECT attempts FROM job WHERE id=%s", (jid,)).fetchone()["attempts"] == 0
+
+
+def test_requeue_for_shutdown_guarded_by_ownership(conn):
+    mid = seed_meeting(conn)
+    jid = seed_job(conn, meeting_id=mid)
+    db.claim(conn, "w1")
+    assert db.requeue_for_shutdown(conn, jid, "w2") == 0  # 소유자 아님 — no-op
+    assert (
+        conn.execute("SELECT status FROM job WHERE id=%s", (jid,)).fetchone()["status"] == "running"
+    )
+
+
 def test_fail_process_meeting_propagates(conn):
     mid = seed_meeting(conn, processing_version=0)
     jid = seed_job(conn, meeting_id=mid)

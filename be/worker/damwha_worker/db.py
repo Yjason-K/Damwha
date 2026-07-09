@@ -65,6 +65,19 @@ def requeue(conn, job_id: str, worker_id: str) -> int:
     return cur.rowcount
 
 
+def requeue_for_shutdown(conn, job_id: str, worker_id: str) -> int:
+    # graceful shutdown은 job의 잘못이 아니다 — claim이 올린 attempts를 되돌린다.
+    cur = conn.execute(
+        """
+        UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL,
+               attempts = greatest(attempts - 1, 0), updated_at=now()
+        WHERE id=%s AND locked_by=%s AND status='running'
+        """,
+        (job_id, worker_id),
+    )
+    return cur.rowcount
+
+
 def fail_process_meeting(conn, job_id: str, worker_id: str, meeting_id: str, error: dict) -> bool:
     try:
         with conn.transaction():
