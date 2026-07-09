@@ -4,25 +4,9 @@ import threading
 from damwha_worker import __main__ as m
 from damwha_worker import db
 from damwha_worker.__main__ import run_single_job, run_supervisor
-from damwha_worker.pipeline.process_meeting import Models
 from damwha_worker.storage import Storage
 from tests.conftest import seed_job, seed_meeting
-from tests.fakes import (
-    FakeDiarizer,
-    FakeEmbedder,
-    FakeTextEmbedder,
-    FakeTranscriber,
-    FakeVAD,
-)
-
-
-def _models():
-    return Models(
-        vad=FakeVAD(),
-        diarizer=FakeDiarizer(),
-        embedder=FakeEmbedder(),
-        transcriber=FakeTranscriber(),
-    )
+from tests.fakes import FakeEmbedder, FakeTextEmbedder
 
 
 def _settings_stub(pg_url):
@@ -55,7 +39,8 @@ def test_run_single_job_no_job_returns_3(conn, pg_url, tmp_path):
         Storage(str(tmp_path)),
         shutdown,
         connect_fn=lambda: db.connect(pg_url),
-        build_models_fn=lambda payload, settings: _models(),
+        # index_meeting never builds models
+        build_models_fn=lambda payload, settings: None,
         build_embedder_fn=lambda payload, settings: FakeEmbedder(),
         build_text_embedder_fn=lambda settings: FakeTextEmbedder(),
     )
@@ -70,7 +55,8 @@ def test_run_single_job_processes_and_returns_0(conn, pg_url, tmp_path):
         Storage(str(tmp_path)),
         shutdown,
         connect_fn=lambda: db.connect(pg_url),
-        build_models_fn=lambda payload, settings: _models(),
+        # index_meeting never builds models
+        build_models_fn=lambda payload, settings: None,
         build_embedder_fn=lambda payload, settings: FakeEmbedder(),
         build_text_embedder_fn=lambda settings: FakeTextEmbedder(),
     )
@@ -172,6 +158,43 @@ def test_supervisor_backoff_on_crash(conn, pg_url, monkeypatch):
         child_holder={"proc": None, "count": 0},
     )
     assert waits and waits[0] >= 0.01  # 크래시 후 backoff sleep 발생
+
+
+def test_supervisor_reconnects_on_peek_exception(conn, pg_url, monkeypatch):
+    # 1회 peek 예외 → 재접속 → 다음 peek은 정상(빈 큐) → shutdown으로 정상 종료.
+    peek_calls = {"count": 0}
+    real_peek = db.peek_queued
+
+    def _flaky_peek(c):
+        peek_calls["count"] += 1
+        if peek_calls["count"] == 1:
+            raise RuntimeError("simulated db blip")
+        return real_peek(c)
+
+    monkeypatch.setattr(db, "peek_queued", _flaky_peek)
+
+    connects = []
+
+    def _connect_fn():
+        c = db.connect(pg_url)
+        connects.append(c)
+        return c
+
+    shutdown = threading.Event()
+    monkeypatch.setattr(shutdown, "wait", lambda t: (shutdown.set(), True)[1])
+
+    spawned = []
+    run_supervisor(
+        _peek_settings(),
+        shutdown,
+        connect_fn=_connect_fn,
+        spawn_fn=lambda: spawned.append(1) or _StubProc(0),
+        child_holder={"proc": None, "count": 0},
+    )
+
+    assert peek_calls["count"] == 2  # 예외 1회 + 재접속 후 정상 1회
+    assert len(connects) == 2  # 최초 접속 + peek 예외 후 재접속
+    assert spawned == []  # 크래시가 아니라 정상 종료: spawn 없음
 
 
 def test_main_dispatches_once_flag_to_child():

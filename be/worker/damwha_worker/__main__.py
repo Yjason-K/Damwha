@@ -254,6 +254,7 @@ def run_supervisor(settings, shutdown, *, connect_fn, spawn_fn, child_holder) ->
             conn = _reconnect(connect_fn, shutdown)
             if conn is None:
                 return
+            consecutive_failures = 0  # DB 재접속은 자식 크래시가 아니다
             continue
         if not has_job:
             if shutdown.wait(settings.poll_interval_seconds):
