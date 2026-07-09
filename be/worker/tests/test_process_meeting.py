@@ -1,5 +1,10 @@
+import threading
+
+import pytest
+
 from damwha_worker import db
 from damwha_worker.contracts import ProcessMeetingPayload
+from damwha_worker.errors import ShutdownRequested
 from damwha_worker.models.base import DiarSegment, SpeechSpan, Word
 from damwha_worker.pipeline.ffmpeg import ProbeResult
 from damwha_worker.pipeline.process_meeting import Models, run_process_meeting
@@ -246,3 +251,33 @@ def test_partial_stt_failure_marks_transcribe_failed_per_segment(conn, tmp_path)
     assert by_label["SPEAKER_00"] == "ok"
     assert by_label["SPEAKER_01"] == "transcribe_failed"  # 수정 전: "silence"
     assert by_label["SPEAKER_02"] == "silence"
+
+
+def test_shutdown_before_normalize_raises_without_side_effects(conn, tmp_path):
+    # shutdown 확인은 mark_processing/normalize보다 먼저 — 아무 부작용 없이 반납된다
+    mid = seed_meeting(
+        conn, status="uploaded", processing_version=0, audio_key="meetings/m/original.m4a"
+    )
+    jid = seed_job(conn, meeting_id=mid, payload={})
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    db.claim(conn, "w1")
+    ev = threading.Event()
+    ev.set()
+    normalize_calls = []
+    with pytest.raises(ShutdownRequested):
+        run_process_meeting(
+            conn,
+            conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
+            _payload(mid, "meetings/m/original.m4a"),
+            _models(),
+            Storage(str(tmp_path)),
+            worker_id="w1",
+            normalize_fn=lambda s, d: normalize_calls.append(1),
+            probe_fn=lambda p: ProbeResult(2000),
+            shutdown_event=ev,
+        )
+    assert normalize_calls == []  # ffmpeg 미실행
+    assert (
+        conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()["status"]
+        == "uploaded"  # mark_processing 미도달
+    )

@@ -1,5 +1,8 @@
+import pytest
+
 from damwha_worker import db
 from damwha_worker.contracts import IndexMeetingPayload
+from damwha_worker.errors import ErrorKind, WorkerError
 from damwha_worker.pipeline.index_meeting import run_index_meeting
 from tests.conftest import seed_job, seed_meeting
 from tests.fakes import FakeTextEmbedder
@@ -78,3 +81,13 @@ def test_index_discarded_on_stale_pv(conn):
     out = run_index_meeting(conn, job, _payload(mid, pv=0), FakeTextEmbedder(), worker_id="w1")
     assert out == "discarded"
     assert conn.execute("SELECT count(*) c FROM utterance_embedding", ()).fetchone()["c"] == 0
+
+
+def test_index_lost_ownership_raises_transient(conn):
+    mid = seed_meeting(conn, status="done", processing_version=0)
+    _seed_utts(conn, mid, [(0, "ok", "안녕하세요")])
+    job = _claim(conn, mid)  # w1 소유
+    with pytest.raises(WorkerError) as ei:
+        run_index_meeting(conn, job, _payload(mid), FakeTextEmbedder(), worker_id="w2")
+    assert ei.value.code == "lost_ownership"
+    assert ei.value.kind is ErrorKind.TRANSIENT

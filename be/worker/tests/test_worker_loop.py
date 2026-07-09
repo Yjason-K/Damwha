@@ -1,3 +1,4 @@
+import threading
 from types import SimpleNamespace
 
 from damwha_worker import db
@@ -420,3 +421,40 @@ def test_dispatch_enroll_builds_embedder_not_models(conn, tmp_path, monkeypatch)
         ]
         == "ready"
     )
+
+
+def test_shutdown_requeues_without_consuming_attempts(conn, tmp_path):
+    # dispatch 직전 시그널: 모델 빌드조차 하지 않고 attempts 소모 없이 반납
+    mid, jid = _enqueue_pm(conn)
+    job = db.claim(conn, "w1")  # attempts 0→1
+    ev = threading.Event()
+    ev.set()
+
+    def _boom_models():
+        raise AssertionError("must not build models during shutdown")
+
+    out = handle_job(
+        conn, job, Storage(str(tmp_path)), "w1", build_models=_boom_models, shutdown_event=ev
+    )
+    assert out == "requeued_shutdown"
+    row = conn.execute("SELECT status, attempts, locked_by FROM job WHERE id=%s", (jid,)).fetchone()
+    assert row["status"] == "queued"
+    assert row["attempts"] == 0  # 미소모
+    assert row["locked_by"] is None
+    assert (
+        conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()["status"]
+        == "uploaded"  # 아무 것도 건드리지 않음
+    )
+
+
+def test_shutdown_with_lost_ownership_returns_lost(conn, tmp_path):
+    # shutdown 반납 시점에 이미 소유권을 잃었으면(reaper 회수 등) "lost"
+    mid, jid = _enqueue_pm(conn)
+    job = db.claim(conn, "w1")
+    conn.execute("UPDATE job SET locked_by='other' WHERE id=%s", (jid,))  # 소유권 상실 시뮬레이션
+    ev = threading.Event()
+    ev.set()
+    out = handle_job(
+        conn, job, Storage(str(tmp_path)), "w1", build_models=_models, shutdown_event=ev
+    )
+    assert out == "lost"

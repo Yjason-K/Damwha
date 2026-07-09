@@ -1,16 +1,24 @@
 import logging
+import threading
 import time
 
 from .. import db
 from ..contracts import IndexMeetingPayload
 from ..models.base import TextEmbedder
+from .stage import enter_stage
 from .timing import timed_stage
 
 log = logging.getLogger("damwha_worker")
 
 
 def run_index_meeting(
-    conn, job: dict, payload: IndexMeetingPayload, text_embedder: TextEmbedder, *, worker_id: str
+    conn,
+    job: dict,
+    payload: IndexMeetingPayload,
+    text_embedder: TextEmbedder,
+    *,
+    worker_id: str,
+    shutdown_event: threading.Event | None = None,
 ) -> str:
     job_id = job["id"]
     meeting_id = payload.meeting_id
@@ -19,7 +27,7 @@ def run_index_meeting(
     total_t0 = time.perf_counter()
     log.info("%s index_meeting start", ctx)
 
-    db.set_stage(conn, job_id, worker_id, "embed", 20)
+    enter_stage(conn, job_id, worker_id, "embed", 20, shutdown_event)
 
     with timed_stage("embed", ctx) as t:
         rows = conn.execute(

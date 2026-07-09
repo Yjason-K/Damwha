@@ -124,3 +124,24 @@ def test_enroll_too_short_fails_job_and_speaker(conn, tmp_path, monkeypatch):
         ]
         == "failed"
     )
+
+
+def test_enroll_lost_ownership_raises_transient(conn, tmp_path):
+    # enter_stage 도입으로 enroll도 소유권 상실 시 헛연산 없이 즉시 중단된다
+    sid = seed_speaker(conn, enrollment_status="pending")
+    jid = seed_job(conn, type="enroll_speaker", payload={})
+    conn.execute("UPDATE speaker SET current_job_id=%s WHERE id=%s", (jid, sid))
+    db.claim(conn, "w1")  # w1 소유
+    with pytest.raises(WorkerError) as ei:
+        run_enroll_speaker(
+            conn,
+            conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
+            _payload(sid, "speakers/s/sample.wav"),
+            FakeEmbedder([[0.3] * 192]),
+            Storage(str(tmp_path)),
+            worker_id="w2",  # 소유자 아님
+            normalize_fn=lambda s, d: None,
+            probe_fn=lambda p: ProbeResult(3000),
+        )
+    assert ei.value.code == "lost_ownership"
+    assert ei.value.kind is ErrorKind.TRANSIENT
