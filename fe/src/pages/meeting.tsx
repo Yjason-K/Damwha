@@ -75,11 +75,6 @@ function highlight(text: string, q: string): React.ReactNode {
   );
 }
 
-/** "MM:SS" | "H:MM:SS" → 초. */
-function clockToSeconds(t: string): number {
-  return t.split(":").reduce((acc, part) => acc * 60 + Number(part), 0);
-}
-
 function CenterState({
   busy,
   children,
@@ -260,9 +255,11 @@ export function MeetingPage() {
     openMeeting(mid);
     setActiveId(uid);
     if (meeting && meeting.id === mid) {
-      const u = meeting.utterances.find((x) => x.id === uid);
-      if (u && totalSeconds > 0) {
-        seek(Math.min(1, clockToSeconds(u.t) / totalSeconds));
+      const source = meeting.utterances
+        .flatMap((x) => x.sources)
+        .find((s) => s.id === uid);
+      if (source && totalSeconds > 0) {
+        seek(Math.min(1, source.startMs / 1000 / totalSeconds));
       }
     } else {
       // 다른 회의로의 점프: 대상 회의 오디오가 준비되면(onLoadedMetadata) 적용한다.
@@ -314,7 +311,8 @@ export function MeetingPage() {
       title,
     });
   };
-  for (const h of hits) pushMeeting(h.meetingId, h.meetingTitle ?? "제목 없는 회의");
+  for (const h of hits)
+    pushMeeting(h.meetingId, h.meetingTitle ?? "제목 없는 회의");
   if (q) {
     for (const m of meetings ?? []) {
       if (m.title.includes(q)) pushMeeting(m.id, m.title);
@@ -462,7 +460,9 @@ export function MeetingPage() {
           playing={playing}
           pos={pos}
           totalSeconds={totalSeconds}
-          durLabel={mappedTotal > 0 ? meeting.dur : formatClock(totalSeconds * 1000)}
+          durLabel={
+            mappedTotal > 0 ? meeting.dur : formatClock(totalSeconds * 1000)
+          }
           speed={speed}
           onSpeed={setSpeed}
           onToggle={() => setPlaying((p) => !p)}
@@ -484,16 +484,12 @@ export function MeetingPage() {
             if (hasReal) setAudioDuration(d);
             // 대기 중인 cross-meeting seek을 오디오가 준비된 지금 적용한다.
             const total = hasReal ? d : totalSeconds;
-            if (
-              pendingSeek &&
-              meeting.id === pendingSeek.mid &&
-              total > 0
-            ) {
-              const u = meeting.utterances.find(
-                (x) => x.id === pendingSeek.uid,
-              );
-              if (u) {
-                const fraction = Math.min(1, clockToSeconds(u.t) / total);
+            if (pendingSeek && meeting.id === pendingSeek.mid && total > 0) {
+              const source = meeting.utterances
+                .flatMap((x) => x.sources)
+                .find((s) => s.id === pendingSeek.uid);
+              if (source) {
+                const fraction = Math.min(1, source.startMs / 1000 / total);
                 el.currentTime = fraction * total;
                 setPos(fraction);
               }

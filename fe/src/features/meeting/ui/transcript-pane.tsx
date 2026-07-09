@@ -349,6 +349,13 @@ export function TranscriptPane({
     (c) => c.resolvedSpeakerId == null || c.speakerStatus === "provisional",
   ).length;
 
+  // activeId는 원본 발화 id일 수 있다(검색 히트가 병합 블록 중간을 가리킴).
+  // 포함하는 블록의 id로 해석해 하이라이트·스크롤 대상을 정한다.
+  const activeBlockId = activeId
+    ? (meeting.utterances.find((u) => u.sources.some((s) => s.id === activeId))
+        ?.id ?? "")
+    : "";
+
   // Utterance-jump: reveal the active utterance when it changes. On a jump
   // within the same meeting (⌘K·원문 보기), also move focus to the target so
   // keyboard/SR users land where the jump went — skipped on first render and
@@ -356,7 +363,7 @@ export function TranscriptPane({
   const prevRef = React.useRef<{ mid: string; uid: string } | null>(null);
   React.useEffect(() => {
     const el = scrollRef.current?.querySelector<HTMLElement>(
-      `[data-uid="${activeId}"]`,
+      `[data-uid="${activeBlockId}"]`,
     );
     const prev = prevRef.current;
     prevRef.current = { mid: meeting.id, uid: activeId };
@@ -366,7 +373,7 @@ export function TranscriptPane({
       const t = window.setTimeout(() => el.focus({ preventScroll: true }), 0);
       return () => window.clearTimeout(t);
     }
-  }, [activeId, meeting.id]);
+  }, [activeId, activeBlockId, meeting.id]);
 
   const scrollToEnd = () => {
     const el = scrollRef.current;
@@ -468,7 +475,7 @@ export function TranscriptPane({
                 speaker={meeting.speakers[u.spk].spk}
                 name={meeting.speakers[u.spk].name}
                 time={u.t}
-                active={activeId === u.id}
+                active={activeBlockId === u.id}
                 quoted={u.quoted}
                 placeholder={failed}
                 onJump={() => onJump(u.id)}

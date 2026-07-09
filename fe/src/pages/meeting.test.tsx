@@ -214,6 +214,18 @@ const fx = vi.hoisted(() => {
         order_index: 1,
         text: "리뷰 사이클이 짧아진 게 컸어요.",
       }),
+      utt({
+        id: "v3",
+        meeting_id: "m2",
+        speaker_id: "sp_5",
+        speaker_name: "한서연",
+        speaker_status: "ready",
+        diar_label: "SPEAKER_01",
+        start_ms: 12_000,
+        end_ms: 20_000,
+        order_index: 2,
+        text: "다음 스프린트도 이어가죠",
+      }),
     ],
     clusters: [
       {
@@ -283,6 +295,18 @@ const fx = vi.hoisted(() => {
         endMs: 8_000,
         text: "오늘은 홈 구조부터 정하죠.",
         score: 0.9,
+      },
+      {
+        utteranceId: "v3",
+        meetingId: "m2",
+        meetingTitle: "스프린트 회고",
+        recordedAt: "2026-06-18T14:00:00.000Z",
+        speaker: { id: "sp_5", name: "한서연" },
+        diarLabel: "SPEAKER_01",
+        startMs: 12_000,
+        endMs: 20_000,
+        text: "다음 스프린트도 이어가죠",
+        score: 0.8,
       },
     ],
   };
@@ -532,5 +556,46 @@ test("resolve는 diar_label이 아니라 실제 clu_* id로 호출한다", async
       "/meetings/m1/clusters/clu_3/resolve",
       { speaker_id: "sp_1" },
     ),
+  );
+});
+
+test("연속된 같은 화자 발화는 한 블록으로 병합 렌더된다", async () => {
+  renderShell();
+  await screen.findByRole("heading", {
+    level: 1,
+    name: "기획회의 — UI 개선안",
+  });
+  fireEvent.click(screen.getByRole("button", { name: /스프린트 회고/ }));
+  await screen.findByRole("heading", { level: 1, name: "스프린트 회고" });
+  const log = screen.getByRole("log", { name: "회의 전사" });
+  // v2+v3가 한 블록(id는 첫 발화 v2)으로 병합, v3 행은 따로 없다.
+  const block = log.querySelector('[data-uid="v2"]');
+  expect(block).toHaveTextContent(
+    "리뷰 사이클이 짧아진 게 컸어요. 다음 스프린트도 이어가죠",
+  );
+  expect(log.querySelector('[data-uid="v3"]')).toBeNull();
+});
+
+test("다른 회의의 병합 블록 중간 발화로 검색 점프하면 해당 시점으로 seek되고 블록이 하이라이트된다", async () => {
+  const { container } = renderShell();
+  await screen.findByRole("heading", {
+    level: 1,
+    name: "기획회의 — UI 개선안",
+  });
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+  const option = await screen.findByRole("option", {
+    name: /다음 스프린트도 이어가죠/,
+  });
+  fireEvent.click(option);
+  await screen.findByRole("heading", { level: 1, name: "스프린트 회고" });
+  // cross-meeting pendingSeek: 오디오 메타데이터 로드 시점에 적용된다.
+  const audio = container.querySelector("audio")!;
+  fireEvent.loadedMetadata(audio);
+  // v3.start_ms = 12_000 → 12초 지점 (jsdom은 duration NaN → totalSeconds 사용).
+  expect(audio.currentTime).toBeCloseTo(12, 3);
+  // 하이라이트는 v3를 포함하는 블록(v2)에 걸린다.
+  const log = screen.getByRole("log", { name: "회의 전사" });
+  expect(log.querySelector('[data-uid="v2"]')).toHaveClass(
+    "bg-[var(--accent-1)]",
   );
 });
