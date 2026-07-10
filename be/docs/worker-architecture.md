@@ -1,7 +1,7 @@
 # Damwha Worker 아키텍처와 처리 흐름
 
 > 문서 성격: 현재 구현을 설명하는 살아있는 문서
-> 기준일: 2026-07-09
+> 기준일: 2026-07-10
 > 범위: `be/worker`, 워커와 직접 연결되는 NestJS job enqueue/reaper, Postgres, 공유 스토리지
 
 ## 1. 한눈에 보기
@@ -21,7 +21,7 @@ NestJS API와 ML worker poller 사이에는 HTTP 호출이 없다. 둘의 비동
 | 등록 화자 성문 생성 | `enroll_speaker` | ECAPA 192차원 `voiceprint`, 화자 상태 `ready` |
 | 발언 의미검색 색인 | `index_meeting` | BGE-M3 1024차원 `utterance_embedding` |
 | 검색 질의 임베딩 | `POST /embed` | 검색어의 BGE-M3 1024차원 벡터 |
-| 작업 생명주기 | 공통 worker loop | 원자적 claim, stage/progress, heartbeat, retry/fail, stale 결과 폐기 |
+| 작업 생명주기 | supervisor 부모 + job당 자식 | 원자적 claim, stage/progress, heartbeat, retry/fail, stale 결과 폐기 |
 
 ## 2. 시스템 컨텍스트
 
@@ -82,7 +82,7 @@ flowchart LR
 
 | 영역 | 파일 | 책임 |
 |---|---|---|
-| 프로세스 진입점/dispatcher | [`worker/damwha_worker/__main__.py`](../worker/damwha_worker/__main__.py) | poll loop, job type 분기, 필요한 모델의 지연 생성, heartbeat 범위, 공통 오류 처리 |
+| 프로세스 진입점/dispatcher | [`worker/damwha_worker/__main__.py`](../worker/damwha_worker/__main__.py) | supervisor 부모(`run_supervisor`)의 peek/spawn/backoff, 자식(`run_single_job`, `--once`)의 claim→dispatch, job type 분기, 필요한 모델의 지연 생성, heartbeat 범위, 2단계 시그널, 공통 오류 처리 |
 | payload 계약 | [`worker/damwha_worker/contracts.py`](../worker/damwha_worker/contracts.py) | Pydantic 검증, `schema_version=1`, readable ID 형식 검증 |
 | DB adapter | [`worker/damwha_worker/db.py`](../worker/damwha_worker/db.py) | raw SQL claim/heartbeat/stage/requeue/fail/persist, ownership/stale guard |
 | heartbeat | [`worker/damwha_worker/heartbeat.py`](../worker/damwha_worker/heartbeat.py) | 별도 DB 연결과 daemon thread로 `locked_at` 갱신 |
@@ -99,20 +99,15 @@ flowchart LR
 
 ## 4. 공통 job 처리 흐름
 
-다음은 supervisor 자식 프로세스(`python -m damwha_worker --once`)의 처리 흐름이다. supervisor 부모는 이 자식을 한 번 spawn하고 종료를 기다렸다가 exit code에 따라 분기한다 (0=성공, 3=no job, 그 외=재시도).
+처리 단위는 **supervisor 자식 프로세스**(`python -m damwha_worker --once`)이며, 자식은 job을 **정확히 1건** 처리하고 exit한다. 부모는 자식을 한 번 spawn하고 종료를 기다렸다가 exit code에 따라 분기한다(0=처리 완료, 3=no job, 그 외=크래시→capped backoff). 큐 polling(대기 후 재시도)은 자식이 아니라 **부모의 peek 루프**가 담당한다(아래 "복원력과 우아한 종료" 참고).
 
 ```mermaid
 flowchart TD
-    start["Child process starts"] --> load["Load settings, install SIGINT/SIGTERM handlers"]
-    load --> connect["Connect DB with capped backoff (_reconnect)"]
-    connect --> connOk{"Connected before shutdown?"}
-    connOk -->|"No"| exit["Exit cleanly"]
-    connOk -->|"Yes"| claim["Claim oldest queued job with SKIP LOCKED"]
+    start["Child process (--once) starts"] --> load["Load settings, install SIGINT/SIGTERM handlers"]
+    load --> connect["Connect DB (connect_fn, fail-fast — 자식은 재접속 안 함)"]
+    connect --> claim["Claim oldest queued job with SKIP LOCKED"]
     claim --> found{"Job found?"}
-    found -->|"No"| idle["Wait one poll interval (interruptible)"]
-    idle --> shutIdle{"Shutdown requested?"}
-    shutIdle -->|"Yes"| exit
-    shutIdle -->|"No"| claim
+    found -->|"No"| exit3["Exit 3 (no job) — 부모가 poll 간격 대기"]
     found -->|"Yes"| beat["Start heartbeat on a separate DB connection"]
     beat --> validate["Validate schema version and payload"]
     validate --> route{"Job type"}
@@ -138,25 +133,24 @@ flowchart TD
     retry -->|"Yes"| requeue["Return job to queued"]
     retry -->|"No"| failed["Fail job and related entity when applicable"]
 
-    done --> stopBeat["Stop heartbeat"]
-    discarded --> stopBeat
-    lost --> stopBeat
-    shutReq --> stopBeat
-    requeue --> stopBeat
-    failed --> stopBeat
-    stopBeat --> shutAfter{"Shutdown requested?"}
-    shutAfter -->|"Yes"| exit
-    shutAfter -->|"No"| claim
+    done --> exit0["Stop heartbeat → exit 0"]
+    discarded --> exit0
+    lost --> exit0
+    shutReq --> exit0
+    requeue --> exit0
+    failed --> exit0
+
+    connect -.->|"connect 실패 / 미포착 예외"| crash["전파 → nonzero exit (부모 backoff / reaper)"]
 ```
 
-정상 처리(또는 handle_job 내부 requeue/fail)를 끝낸 뒤에는 poll 간격 대기 없이 즉시 다음 job을 재claim한다. poll 간격 대기는 큐가 비었을 때만 적용한다. 루프 자체를 죽이는 예외(주로 DB 연결 상실)와 우아한 종료는 아래 "복원력과 우아한 종료"에서 다룬다.
+자식은 job 1건을 처리(또는 handle_job 내부 requeue/fail)한 뒤 `exit 0`으로 종료하며, 부모는 대기 없이 즉시 다음 job을 peek→spawn한다. 자식은 재접속하지 않는다 — connect 실패나 미포착 예외는 nonzero로 전파해 부모의 크래시 분기(backoff)나 reaper가 복구한다. 부모의 큐 polling·재접속·우아한 종료는 아래 "복원력과 우아한 종료"에서 다룬다.
 
 ### Claim과 순서
 
-- `SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1`을 포함한 단일 `UPDATE ... RETURNING`으로 가장 오래된 `queued` job을 claim한다.
+- `SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1`을 포함한 단일 `UPDATE ... RETURNING`으로 가장 오래된 `queued` job을 claim한다. claim은 부모가 아니라 자식이 수행한다(락 소유권이 프로세스 경계를 넘지 못하므로 부모는 가벼운 `peek`만 하고 claim은 자식에게 맡긴다).
 - claim 시 `status='running'`, `locked_by`, `locked_at`을 기록하고 `attempts`를 1 증가시킨다.
 - type별 priority는 없다. 모든 type이 `created_at` 순서로 같은 queue를 사용한다.
-- poller 한 프로세스는 job을 한 번에 하나씩 동기 처리한다.
+- 자식 프로세스는 job을 정확히 1건만 처리한다. 부모는 자식 하나를 spawn하고 종료를 기다린 뒤에야 다음을 peek하므로, 동시 실행 없이 항상 직렬 1건이다.
 
 ### Heartbeat와 reaper
 
@@ -168,24 +162,30 @@ flowchart TD
 
 ### 복원력과 우아한 종료
 
-자식 프로세스의 poll loop는 어떤 예외에도 죽지 않고, 시그널을 받으면 stage 경계에서 우아하게 멈춘다. supervisor 부모는 자식의 exit code를 보고 결정적 오류(예: 손상 음원)를 감지해 capped backoff로 무한 재spawn을 방지한다.
+부모의 peek 루프는 어떤 예외에도 죽지 않고(peek 실패는 재접속으로 회복), 자식의 exit code를 보고 결정적 오류(예: 손상 음원, import/config 실패)를 감지해 capped backoff로 무한 재spawn을 방지한다. 자식은 시그널을 받으면 stage 경계에서 우아하게 멈춘다.
 
 ```mermaid
 flowchart TD
-    body["claim → dispatch"] -->|"정상 완료"| body
-    body -.->|"루프 예외 (예: DB 연결 상실)"| reconnect["conn.close → _reconnect (capped backoff 1→30s)"]
-    reconnect --> shut{"재접속 중 shutdown?"}
-    shut -->|"Yes"| stop["루프 종료"]
-    shut -->|"No"| inflight{"in-flight job attempts 남음?"}
-    inflight -->|"Yes"| rq["즉시 requeue"]
-    inflight -->|"No"| leave["running 유지 → reaper 위임"]
-    rq --> wait["poll 간격 대기 후 재개"]
-    leave --> wait
-    wait --> body
+    connect["부모 시작: connect (_reconnect capped backoff 1→30s)"] --> peek{"peek: queued job 있음?"}
+    peek -->|"No"| pwait["poll 간격 대기 (interruptible)"]
+    pwait --> pshut{"shutdown?"}
+    pshut -->|"Yes"| stop["부모 종료"]
+    pshut -->|"No"| peek
+    peek -->|"Yes"| spawn["자식 spawn (--once, start_new_session)"]
+    spawn --> waitc["자식 종료 대기 (_wait_child)"]
+    waitc --> sh{"shutdown?"}
+    sh -->|"Yes"| stop
+    sh -->|"No"| code{"자식 exit code"}
+    code -->|"0 (처리)"| peek
+    code -->|"3 (no job)"| pwait
+    code -->|"그 외 (크래시)"| backoff["consecutive++ → capped backoff (max 60s)"]
+    backoff --> peek
+    peek -.->|"peek 예외 (DB 연결 상실)"| recon["conn.close → _reconnect → consecutive 리셋 → peek 재개"]
+    recon --> peek
 ```
 
-- **초기 연결**: 시작 시 DB 연결은 `_reconnect`로 capped 지수 backoff(1→30초)를 재시도한다. 연결 전에 종료 시그널을 받으면 job을 잡지 않고 즉시 종료한다.
-- **루프 예외 복구**: claim/dispatch 중 예외가 나면 연결을 닫고 `_reconnect`로 재접속한 뒤, in-flight job은 `attempts < max_attempts`일 때만 즉시 requeue한다. attempts가 소진된 job은 `running`으로 남겨 reaper가 fail + meeting/speaker 전파를 담당한다(claim은 attempts를 필터하지 않으므로 소진된 결정적 오류 job을 requeue하면 무한 재claim이 된다). 재접속/오류 뒤에는 poll 간격만큼 쉬어 반복 오류의 hot-loop를 막는다.
+- **초기 연결**: 부모의 DB 연결은 `_reconnect`로 capped 지수 backoff(1→30초)를 재시도한다. 연결 전에 종료 시그널을 받으면 job을 잡지 않고 즉시 종료한다. 자식은 이와 달리 `connect_fn()`을 직접 호출하는 fail-fast로, connect 실패를 nonzero exit로 전파한다.
+- **자식 크래시와 backoff**: 자식이 nonzero로 종료하면(connect 실패, import/config 오류, 미포착 예외) 부모는 크래시로 보고 poll 간격부터 capped exponential backoff(max 60초)로 재spawn을 스로틀한다. claim **후** 크래시면 `attempts`가 올라가 있어 reaper가 소진 시 fail + meeting/speaker 전파를 담당하고, claim **전** 크래시(결정적 오류)면 job이 `queued`로 남아 backoff가 무한 spawn을 막는다. **자식은 재접속하지 않는다** — 옛 poll-loop의 in-flight requeue는 제거됐고, DB 연결 상실은 자식 크래시→reaper와 부모 peek 예외→`_reconnect`로 나뉘어 처리된다.
 - **우아한 종료**: SIGINT/SIGTERM은 shutdown Event를 set한다. 각 pipeline은 stage 경계마다(`enter_stage`, `process_meeting`은 mark_processing/normalize 이전에도) 이를 확인해 `ShutdownRequested`를 던지고, `db.requeue_for_shutdown`으로 job을 `queued`로 되돌린다. 이때 attempts를 1 줄여(outcome `requeued_shutdown`) 우아한 정지가 시도를 소비하지 않게 한다. 우아한 정지로 job을 `queued`로 되돌린 자식은 정상 처리 경로를 거쳐 `exit 0`으로 종료하고(§1의 exit code 분류와 일치), 부모는 다음 peek로 넘어간다. 2차 시그널은 부모가 자식을 SIGKILL한 뒤 `os._exit(1)`로 종료하며, 미처 되돌리지 못한 job은 reaper가 복구한다. 대기(idle) 중 종료는 즉시 빠져나간다.
 - **stage 경계 소유권 guard**: `enter_stage`는 `process_meeting`뿐 아니라 `enroll_speaker`/`index_meeting`에도 job 소유권을 확인시킨다. 소유권을 잃으면 `lost_ownership`(TRANSIENT)로 처리된다.
 - **attempts 회계 요약**: crash/transient 오류 = 시도 1회 소비, 우아한 종료 = 소비하지 않음(attempts − 1로 복원), 소진된 in-flight = reaper에게 위임.
@@ -340,7 +340,7 @@ stateDiagram-v2
 | Permanent | 손상 음원, 지원하지 않는 형식, ffprobe 실패, 지원하지 않는 payload version, 모델 package import 실패 | 즉시 fail |
 | Transient | OOM, 분류되지 않은 runtime 오류, 기타 일시 장애 | attempts가 남으면 즉시 requeue, 아니면 fail |
 
-현재 queue schema에는 `next_attempt_at`이 없어 job별 timed backoff가 없다. transient requeue는 handle_job이 처리한 정상 outcome이라 loop가 대기 없이 다음 job을 재claim한다(같은 worker가 즉시 다시 잡을 수도 있다). poll 간격 대기는 큐가 비었을 때, 그리고 루프 예외 후 재접속 시에만 적용된다.
+현재 queue schema에는 `next_attempt_at`이 없어 job별 timed backoff가 없다. transient requeue는 자식의 handle_job이 처리한 정상 outcome이라 자식은 `exit 0`으로 종료하고, 부모가 대기 없이 즉시 다음 job을 peek→spawn한다(같은 job을 다음 자식이 곧바로 다시 잡을 수도 있다). 부모의 poll 간격 대기는 큐가 비었을 때(자식 exit 3)와 자식 크래시 backoff 시에만 적용된다.
 
 ## 10. 일관성 모델과 안전장치
 
@@ -414,17 +414,18 @@ uv run uvicorn damwha_worker.embed_service:app --host 127.0.0.1 --port 8100
 cd ..
 npm run start:dev
 
-# 4. ML worker poller
+# 4. ML worker (supervisor 부모 — job마다 자식을 spawn)
 cd worker
 uv run python -m damwha_worker
 ```
 
-`docker compose`는 Postgres만 실행한다. API, worker poller, embed service는 현재 host 프로세스로 별도 실행한다.
+`docker compose`는 Postgres만 실행한다. API, worker, embed service는 현재 host 프로세스로 별도 실행한다.
 
 ## 14. 현재 구현 특성 및 운영 시 주의점
 
-- worker poller는 동기 직렬 처리다. 한 프로세스에서 동시에 여러 job을 실행하지 않는다.
-- 각 job을 claim한 뒤 필요한 모델 adapter를 생성한다. 장시간 실행 시 모델 warm-up 비용과 memory 사용을 관찰해야 한다.
+- worker는 동기 직렬 처리다. supervisor 부모가 자식 하나를 spawn하고 종료를 기다린 뒤에야 다음을 처리하므로, 한 번에 여러 job이 동시 실행되지 않는다.
+- 각 job은 별도 자식 프로세스에서 모델 adapter를 새로 생성해 처리하고, 자식이 exit하면 OS가 그 프로세스의 GPU 메모리(MLX·torch)를 전부 회수한다. 이 격리가 job 간 GPU 메모리 누적으로 인한 OOM(특히 16GB Apple Silicon)을 막는 핵심이다. 대신 job마다 모델 warm-up(파이썬·모델 로드) 비용이 다시 든다 — process_meeting은 분 단위라 무시할 만하고, 초 단위인 index_meeting은 상대 비용이 크다.
+- job 내부 GPU 피크 억제를 위해 mlx-whisper는 active 메모리 상한(`mx.set_memory_limit`, 물리 메모리의 절반)을 두고, 텍스트 임베더(BGE-M3)는 파이프라인 GPU 모델과 경쟁하지 않도록 CPU에 올린다.
 - `process_meeting`의 정규화 파일은 존재하면 재사용한다. 원본 변경 여부를 hash로 검증하지는 않는다.
 - `STT_CHUNK_MINUTES` 설정은 존재하지만 현재 adapter가 수동 chunk 분할에 사용하지 않는다. MLX/faster-whisper 내부 처리를 따른다.
 - poller 자체 HTTP health endpoint는 없다. `embed_service`만 `/health`를 제공한다. poller 상태는 heartbeat와 job 진행률로 판단한다.
