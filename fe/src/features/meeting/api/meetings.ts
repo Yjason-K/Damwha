@@ -5,6 +5,7 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 import { apiClient } from "@/shared/api/client";
+import type { ProcessingOverride } from "@/features/settings/api/types";
 import type { Meeting, MeetingStatus, MeetingSummary } from "../model/types";
 import { toMeetingDetail, toMeetingSummary } from "./mappers";
 import type {
@@ -78,11 +79,14 @@ export function useUploadMeeting() {
       file: File;
       title?: string;
       recordedAt?: string;
+      processing?: ProcessingOverride;
     }) => {
       const form = new FormData();
       form.append("audio", vars.file);
       if (vars.title) form.append("title", vars.title);
       if (vars.recordedAt) form.append("recorded_at", vars.recordedAt);
+      if (vars.processing)
+        form.append("processing", JSON.stringify(vars.processing));
       const { data } = await apiClient.post<WireMeeting>("/meetings", form, {
         headers: { "Content-Type": "multipart/form-data" },
       });

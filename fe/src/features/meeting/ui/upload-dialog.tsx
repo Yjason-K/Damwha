@@ -13,6 +13,8 @@ import {
 } from "@/shared/ui/dialog";
 import { Input } from "@/shared/ui/input";
 import { toast } from "@/shared/ui/use-toast";
+import type { ProcessingOverride } from "@/features/settings/api/types";
+import { OverrideSection } from "@/features/settings/ui/override-section";
 
 import { useUploadMeeting } from "../api/meetings";
 import { Icon } from "./icons";
@@ -47,12 +49,16 @@ export function UploadDialog({
   const [file, setFile] = React.useState<File | null>(null);
   const [title, setTitle] = React.useState("");
   const [recordedAt, setRecordedAt] = React.useState("");
+  const [processing, setProcessing] = React.useState<
+    ProcessingOverride | undefined
+  >(undefined);
   const upload = useUploadMeeting();
 
   const resetForm = () => {
     setFile(null);
     setTitle("");
     setRecordedAt("");
+    setProcessing(undefined);
   };
 
   const handleOpenChange = (next: boolean) => {
@@ -70,6 +76,7 @@ export function UploadDialog({
         file,
         title: title.trim() || undefined,
         recordedAt: recordedAt ? new Date(recordedAt).toISOString() : undefined,
+        processing,
       },
       {
         onSuccess: (summary) => {
@@ -148,6 +155,8 @@ export function UploadDialog({
             value={recordedAt}
             onChange={(e) => setRecordedAt(e.target.value)}
           />
+
+          <OverrideSection value={processing} onChange={setProcessing} />
 
           <DialogFooter className="mt-1">
             <DialogClose asChild>
