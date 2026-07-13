@@ -10,7 +10,15 @@ import { cn } from "@/shared/lib/utils";
 
 function MicIcon() {
   return (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <rect x="6" y="2.5" width="4" height="7" rx="2" />
       <path d="M4.5 8a3.5 3.5 0 0 0 7 0M8 11.5v2" />
     </svg>
@@ -19,7 +27,15 @@ function MicIcon() {
 
 function JumpIcon() {
   return (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <path d="M6 3.5h6.5V10" />
       <path d="M12.5 3.5L4 12" />
     </svg>
@@ -156,6 +172,10 @@ function Utterance({
     <div className={root} {...rest}>
       {timeEl}
       <div className="min-w-0">
+        {/* 활성 블록은 원문 보기 버튼(absolute)이 항상 떠 있으므로 첫 줄에 자리 확보 */}
+        {onJump && active && (
+          <span aria-hidden className="float-right h-6 w-[84px]" />
+        )}
         <SpeakerPill speaker={speaker} name={name} />
         <span
           className={cn(
