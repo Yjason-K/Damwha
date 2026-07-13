@@ -10,8 +10,6 @@ class Settings(BaseSettings):
     storage_root: str = "../storage"
     worker_id: str = "worker-1"
     hf_token: str | None = None
-    whisper_backend: str = "mlx"
-    device: str = "mps"
     poll_interval_seconds: float = 2.0
     heartbeat_interval_seconds: float = 30.0
     stt_chunk_minutes: float = 25.0

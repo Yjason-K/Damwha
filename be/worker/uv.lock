@@ -362,7 +362,7 @@ dependencies = [
 [package.optional-dependencies]
 models = [
     { name = "fastapi" },
-    { name = "faster-whisper", marker = "platform_machine != 'arm64' or sys_platform != 'darwin'" },
+    { name = "faster-whisper" },
     { name = "mlx-whisper", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
     { name = "numpy" },
     { name = "pyannote-audio" },
@@ -385,7 +385,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", marker = "extra == 'models'", specifier = ">=0.110" },
-    { name = "faster-whisper", marker = "(platform_machine != 'arm64' and extra == 'models') or (sys_platform != 'darwin' and extra == 'models')", specifier = ">=1.0" },
+    { name = "faster-whisper", marker = "extra == 'models'", specifier = ">=1.0" },
     { name = "mlx-whisper", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'models'", specifier = ">=0.4" },
     { name = "numpy", marker = "extra == 'models'", specifier = ">=1.26" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },

@@ -24,8 +24,8 @@ Not a CI test. Loads gated/heavy models; run by hand on a machine with the
    uv run python scripts/download_models.py
    ```
 
-Apple Silicon uses `mlx-whisper` (default `WHISPER_BACKEND=mlx`); CUDA/CPU hosts
-set `WHISPER_BACKEND=faster` to use `faster-whisper`.
+The STT backend follows the job payload's `devices.stt`: `gpu` runs `mlx-whisper`
+(Apple Silicon), `cpu` runs `faster-whisper`.
 
 ## Option A — scripted end-to-end (recommended)
 

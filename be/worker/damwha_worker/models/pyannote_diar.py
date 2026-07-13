@@ -7,19 +7,9 @@ model — requires an accepted license + HF token (passed as `use_auth_token`).
 from .base import DiarSegment
 
 
-def _torch_device(device: str):
-    import torch
-
-    # pyannote/speechbrain run on torch; mlx (whisper) is separate.
-    if device == "cuda" and torch.cuda.is_available():
-        return torch.device("cuda")
-    if device == "mps" and torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
-
-
 class PyannoteDiarizer:
     def __init__(self, model: str, hf_token: str | None, device: str) -> None:
+        import torch
         from pyannote.audio import Pipeline
 
         # pyannote.audio 4.x renamed the auth param: use_auth_token → token
@@ -30,7 +20,8 @@ class PyannoteDiarizer:
                 f"failed to load gated diarization model {model!r} — "
                 "check HF_TOKEN and that the model license is accepted on HuggingFace"
             )
-        self._pipeline = pipeline.to(_torch_device(device))
+        # device는 registry의 torch_device()가 이미 검증한 'mps'|'cpu' — 폴백 없음 (spec §6)
+        self._pipeline = pipeline.to(torch.device(device))
 
     def diarize(self, wav_path: str) -> list[DiarSegment]:
         output = self._pipeline(wav_path)

@@ -1,12 +1,17 @@
 """faster-whisper transcription adapter (CUDA / CPU, non-Apple-Silicon).
 
-Implements the `Transcriber` protocol. Selected when `WHISPER_BACKEND=faster`.
-Not exercised on Apple Silicon (which uses mlx-whisper), kept for portability.
+Implements the `Transcriber` protocol. Selected when the payload's `devices.stt`
+is `cpu` (mlx-whisper handles `gpu`). Runs on CPU on Apple Silicon so the light
+preset's cpu STT stays available there; kept for CUDA portability too.
 """
 
 from .base import Word
 
 _MODEL = {
+    "tiny": "tiny",
+    "base": "base",
+    "small": "small",
+    "medium": "medium",
     "large-v3-turbo": "large-v3-turbo",
     "large-v3": "large-v3",
 }

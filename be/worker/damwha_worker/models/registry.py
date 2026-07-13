@@ -4,43 +4,44 @@
 by the test suite — so the heavy/gated model imports stay out of CI.
 
 Model selection is the PAYLOAD's responsibility (reproducibility): the diarization
-model, embedding model, whisper model, and device all come from `payload["models"]`.
-Settings provide only infra: the HF token and the STT backend choice.
+model, embedding model, whisper model, and per-stage devices all come from the
+payload (normalized via `parse_models`). The STT backend follows `devices.stt`
+(gpu → mlx-whisper, cpu → faster-whisper). Settings provide only infra: the HF token.
 """
 
 from ..config import Settings
+from ..contracts import parse_models
 from ..pipeline.process_meeting import Models
+from .device import torch_device
 from .ecapa_embed import EcapaEmbedder
 from .pyannote_diar import PyannoteDiarizer
 from .silero_vad import SileroVAD
 
 
 def build_models(payload: dict, settings: Settings) -> Models:
-    m = payload["models"]
-    device = m["device"]
+    m = parse_models(payload)  # v1/v2 정규화 (contracts)
 
-    if settings.whisper_backend == "mlx":
-        from .whisper_mlx import MlxWhisper
+    if m.devices.stt == "gpu":
+        from .whisper_mlx import MlxWhisper  # ImportError → classify가 PERMANENT
 
-        transcriber = MlxWhisper(m["whisper_model"])
+        transcriber = MlxWhisper(m.whisper_model)
     else:
         from .whisper_faster import FasterWhisper
 
-        transcriber = FasterWhisper(m["whisper_model"], device=device)
+        transcriber = FasterWhisper(m.whisper_model, device="cpu")
 
+    diar_device = torch_device(m.devices.diarization)
     return Models(
         vad=SileroVAD(),
-        diarizer=PyannoteDiarizer(m["diarization"]["model"], settings.hf_token, device),
-        embedder=EcapaEmbedder(m["embedding"]["model"], device),
+        diarizer=PyannoteDiarizer(m.diarization.model, settings.hf_token, diar_device),
+        embedder=EcapaEmbedder(m.embedding.model, "cpu"),  # ECAPA는 CPU 고정 (기존 사유 유지)
         transcriber=transcriber,
     )
 
 
 def build_embedder(payload: dict, settings: Settings) -> EcapaEmbedder:
-    # enroll은 ECAPA 임베더 하나만 필요 — VAD/diarizer/whisper를 만들지 않는다.
-    # device는 payload가 아니라 settings에서 온다(enroll payload엔 models 블록이 없다);
-    # ECAPA는 device=="mps"여도 CPU로 강제된다(ecapa_embed.py 참조).
-    return EcapaEmbedder(payload["embedding"]["model"], settings.device)
+    # enroll payload엔 models 블록 없음; ECAPA는 CPU 고정
+    return EcapaEmbedder(payload["embedding"]["model"], "cpu")
 
 
 def build_text_embedder(settings: Settings):
