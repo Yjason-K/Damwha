@@ -140,3 +140,33 @@ curl -s 'http://localhost:3000/search' \
 `index_meeting` jobs are processed by the same worker poll loop. A failed index
 job marks only the job (not the meeting) as failed — the meeting remains `done`
 and searchable via BM25 alone until the dense index is rebuilt.
+
+## 프리셋별 스모크 (spec 2026-07-13 processing-settings)
+
+Payload v2가 단계별 디바이스(`devices.{diarization,stt}`)와 whisper 모델을 실어
+나른다. STT 백엔드는 payload에서 파생된다: `devices.stt: gpu` → `mlx-whisper`,
+`cpu` → `faster-whisper` (int8). 프리셋 정의는 `src/settings/presets.ts`
+(`PRESET_REVISION='2026-07-13.1'`).
+
+각 프리셋에 대해: `PUT /settings/processing`으로 프리셋 설정 → 짧은 오디오 업로드
+→ job 완료(`status=done`) 확인. (또는 업로드 시 multipart `processing`
+JSON-string 필드 / reprocess JSON body로 job별 오버라이드.)
+
+- **light**: whisper `small` + STT `cpu`(faster-whisper) — **ARM Mac에서
+  faster-whisper CPU 경로가 실제로 도는지 확인** (이전엔 플랫폼 마커로 설치 자체가
+  안 됐음; 지금은 전 플랫폼 설치).
+- **standard**: `large-v3-turbo` + STT `gpu`(mlx).
+- **quality**: `large-v3` + STT `gpu`(mlx).
+- v2 payload의 `models.devices`/`preset`이 job 행에 그대로 박혔는지 psql로 확인:
+  ```sql
+  SELECT payload->'models'->'devices', payload->'models'->>'preset'
+    FROM job WHERE type='process_meeting' ORDER BY created_at DESC LIMIT 1;
+  ```
+- (선택) `devices.diarization: cpu` custom으로 pyannote CPU 경로 1회. 어떤 개별
+  필드든(language만 바꿔도) preset은 `custom`으로 전환된다.
+- tiny/base/small/medium 신규 모델은 여기서 처음 다운로드·추론된다 — repo 이름은
+  `whisper_mlx.py::_REPO`에 실재 확인됨(HF 200); 여기서는 다운로드/추론 자체를 검증.
+  미리 캐시하려면 `WHISPER_MLX_REPOS=...` 로 `download_models.py` 실행.
+
+> **GPU 미가용 시**: payload가 `gpu`를 요청했는데 MPS가 없으면 job은
+> `gpu_unavailable`로 **PERMANENT 실패**한다 — CPU 폴백 없음(재현성 보존).

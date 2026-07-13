@@ -3,6 +3,15 @@
 Run: `uv run python scripts/download_models.py`
 pyannote is gated — set HF_TOKEN in worker/.env and accept the model license at
 https://huggingface.co/pyannote/speaker-diarization-3.1 first.
+
+Whisper: `WHISPER_MLX_REPOS` is a comma-separated list of MLX repos to cache
+(defaults to the standard preset's model only). To pre-cache several presets in
+one pass, e.g. light (small) + standard (large-v3-turbo):
+
+    WHISPER_MLX_REPOS=mlx-community/whisper-small-mlx,mlx-community/whisper-large-v3-turbo \\
+        uv run python scripts/download_models.py
+
+Repo names mirror `damwha_worker/models/whisper_mlx.py::_REPO`.
 """
 
 import os
@@ -11,7 +20,10 @@ from damwha_worker.config import load_settings
 
 DIAR = os.environ.get("DIARIZATION_MODEL", "pyannote/speaker-diarization-3.1")
 ECAPA = os.environ.get("EMBEDDING_MODEL", "speechbrain/spkrec-ecapa-voxceleb")
-WHISPER_REPO = os.environ.get("WHISPER_MLX_REPO", "mlx-community/whisper-large-v3-turbo")
+WHISPER_REPOS = os.environ.get(
+    "WHISPER_MLX_REPOS",
+    "mlx-community/whisper-large-v3-turbo",  # 기본은 standard 프리셋 모델만
+).split(",")
 
 
 def main() -> None:
@@ -27,10 +39,12 @@ def main() -> None:
 
     EncoderClassifier.from_hparams(source=ECAPA)
 
-    print(f"[3/4] whisper mlx ({WHISPER_REPO}) ...", flush=True)
+    print(f"[3/4] whisper mlx ({', '.join(WHISPER_REPOS)}) ...", flush=True)
     from huggingface_hub import snapshot_download
 
-    snapshot_download(WHISPER_REPO)
+    for repo in WHISPER_REPOS:
+        print(f"  - {repo}", flush=True)
+        snapshot_download(repo.strip())
 
     print(f"[4/4] pyannote gated ({DIAR}) ...", flush=True)
     if not s.hf_token:
