@@ -151,6 +151,32 @@ export function useDeleteMeeting() {
   });
 }
 
+/** 재처리 (POST /meetings/:id/reprocess). done/failed에서만 허용(그 외 409). */
+export function useReprocessMeeting() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: {
+      id: string;
+      processing?: ProcessingOverride;
+    }) => {
+      const { data } = await apiClient.post<{
+        meeting_id: string;
+        processing_version: number;
+        job_id: string;
+      }>(
+        `/meetings/${vars.id}/reprocess`,
+        vars.processing ? { processing: vars.processing } : {},
+      );
+      return data;
+    },
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["meeting", vars.id] });
+      queryClient.invalidateQueries({ queryKey: ["meetings"] });
+      queryClient.invalidateQueries({ queryKey: ["meeting-status", vars.id] });
+    },
+  });
+}
+
 /** 클러스터를 화자에 연결/병합 (resolve). body는 be-contracts.md 계약 그대로. */
 export function useResolveCluster() {
   const queryClient = useQueryClient();

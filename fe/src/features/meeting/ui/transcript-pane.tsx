@@ -24,6 +24,7 @@ import {
 } from "../api/meetings";
 import type { Meeting } from "../model/types";
 import { Icon } from "./icons";
+import { ReprocessDialog } from "./reprocess-dialog";
 import { ResolveDialog } from "./resolve-dialog";
 
 /**
@@ -329,6 +330,7 @@ export function TranscriptPane({
   const [renameOpen, setRenameOpen] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [resolveOpen, setResolveOpen] = React.useState(false);
+  const [reprocessOpen, setReprocessOpen] = React.useState(false);
 
   const favorite = useToggleFavorite();
   const fav = !!meeting.fav;
@@ -410,6 +412,15 @@ export function TranscriptPane({
           >
             <TrashMini />
           </IconButton>
+          {(meeting.status === "done" || meeting.status === "failed") && (
+            <IconButton
+              label="회의 재처리"
+              size="sm"
+              onClick={() => setReprocessOpen(true)}
+            >
+              <Icon name="rotateCcw" size={16} />
+            </IconButton>
+          )}
           <div className="flex-1" />
           <Button
             variant="secondary"
@@ -522,6 +533,11 @@ export function TranscriptPane({
         meeting={meeting}
         open={resolveOpen}
         onOpenChange={setResolveOpen}
+      />
+      <ReprocessDialog
+        open={reprocessOpen}
+        onOpenChange={setReprocessOpen}
+        meeting={{ id: meeting.id, title: meeting.title }}
       />
     </main>
   );
