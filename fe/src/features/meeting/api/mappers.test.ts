@@ -651,4 +651,92 @@ describe("toMeetingDetail", () => {
     expect(lane1.segments).toHaveLength(2);
     expect(lane1.dur).toBe("02:00");
   });
+
+  it("병합 블록이 400자 상한을 넘으면 발화 경계에서 분할된다", () => {
+    const long = (ch: string) => ch.repeat(300);
+    const wire = makeDetail();
+    wire.utterances = [
+      makeUtt({
+        id: "e1",
+        speaker_id: "spk_1",
+        speaker_name: "김영재",
+        speaker_status: "ready",
+        diar_label: "SPEAKER_00",
+        start_ms: 0,
+        end_ms: 60_000,
+        text: long("가"),
+        order_index: 0,
+      }),
+      makeUtt({
+        id: "e2",
+        speaker_id: "spk_1",
+        speaker_name: "김영재",
+        speaker_status: "ready",
+        diar_label: "SPEAKER_00",
+        start_ms: 60_000,
+        end_ms: 120_000,
+        text: long("나"),
+        order_index: 1,
+      }),
+      makeUtt({
+        id: "e3",
+        speaker_id: "spk_1",
+        speaker_name: "김영재",
+        speaker_status: "ready",
+        diar_label: "SPEAKER_00",
+        start_ms: 120_000,
+        end_ms: 180_000,
+        text: long("다"),
+        order_index: 2,
+      }),
+    ];
+    const d = toMeetingDetail(wire);
+    // e1(300자)에 e2를 붙일 때는 상한(400) 미만이라 병합(601자),
+    // e3을 붙일 때는 601 >= 400이라 새 블록.
+    expect(d.utterances).toHaveLength(2);
+    expect(d.utterances[0].text).toBe(`${long("가")} ${long("나")}`);
+    expect(d.utterances[0].sources.map((s) => s.id)).toEqual(["e1", "e2"]);
+    // 분할된 블록도 불변식을 지킨다: id는 첫 source, t는 첫 source의 시각.
+    expect(d.utterances[1]).toEqual({
+      id: "e3",
+      spk: 1,
+      t: "02:00",
+      text: long("다"),
+      status: "ok",
+      sources: [{ id: "e3", startMs: 120_000 }],
+    });
+  });
+
+  it("400자를 넘는 단일 발화는 쪼개지지 않고 한 블록으로 유지된다", () => {
+    const wire = makeDetail();
+    wire.utterances = [
+      makeUtt({
+        id: "f1",
+        speaker_id: "spk_1",
+        speaker_name: "김영재",
+        speaker_status: "ready",
+        diar_label: "SPEAKER_00",
+        start_ms: 0,
+        end_ms: 60_000,
+        text: "가".repeat(500),
+        order_index: 0,
+      }),
+      makeUtt({
+        id: "f2",
+        speaker_id: "spk_1",
+        speaker_name: "김영재",
+        speaker_status: "ready",
+        diar_label: "SPEAKER_00",
+        start_ms: 60_000,
+        end_ms: 120_000,
+        text: "뒤",
+        order_index: 1,
+      }),
+    ];
+    const d = toMeetingDetail(wire);
+    // f1은 단독으로 이미 상한 초과 → f2는 병합되지 않고 새 블록.
+    expect(d.utterances.map((u) => u.text)).toEqual(["가".repeat(500), "뒤"]);
+    expect(d.utterances[0].sources).toEqual([{ id: "f1", startMs: 0 }]);
+    expect(d.utterances[1].sources).toEqual([{ id: "f2", startMs: 60_000 }]);
+  });
 });

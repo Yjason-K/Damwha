@@ -11,6 +11,11 @@ import type { WireMeeting, WireMeetingDetail, WireUtterance } from "./types";
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"] as const;
 
+// 병합 블록 표시 상한 — 이 길이를 넘으면 발화 경계에서 새 블록을 시작한다.
+// 전폭 기준 약 3~4줄(문단 크기). 스펙:
+// docs/superpowers/specs/2026-07-13-merge-block-display-cap-design.md
+const MERGE_MAX_CHARS = 400;
+
 const pad2 = (n: number) => String(n).padStart(2, "0");
 
 /** ms → "MM:SS" (1시간 미만) / "H:MM:SS" (1시간 이상). */
@@ -143,7 +148,13 @@ export function toMeetingDetail(wire: WireMeetingDetail): Meeting {
       u.status === "transcribe_failed" ? "transcribe_failed" : "ok";
     const text = (u.text ?? "").trim();
     const last = utteranceEntries[utteranceEntries.length - 1];
-    if (last && status === "ok" && last.status === "ok" && last.spk === spk) {
+    if (
+      last &&
+      status === "ok" &&
+      last.status === "ok" &&
+      last.spk === spk &&
+      last.text.length < MERGE_MAX_CHARS
+    ) {
       last.text = `${last.text} ${text}`;
       last.sources.push({ id: u.id, startMs: u.start_ms });
       continue;
