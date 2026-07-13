@@ -19,5 +19,11 @@ const PRESETS: Record<PresetName, Pick<ProcessingConfig, 'whisper_model' | 'devi
 };
 
 export function resolvePreset(name: PresetName, language: string): ProcessingConfig {
-  return { preset: name, preset_revision: PRESET_REVISION, language, ...PRESETS[name] };
+  return {
+    preset: name,
+    preset_revision: PRESET_REVISION,
+    language,
+    whisper_model: PRESETS[name].whisper_model,
+    devices: { ...PRESETS[name].devices },
+  };
 }

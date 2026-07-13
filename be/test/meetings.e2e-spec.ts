@@ -3,13 +3,20 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { startTestDb, StartedTestDb } from './db';
 import { AppModule } from '../src/app.module';
+import { CAPABILITIES } from '../src/system/capabilities';
 
 describe('meetings', () => {
   let db: StartedTestDb;
   let app: INestApplication;
   beforeAll(async () => {
     db = await startTestDb();
-    const mod = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const mod = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(CAPABILITIES)
+      .useValue({
+        platform: 'darwin', arch: 'arm64', chip: 'test', memory_gb: 32,
+        gpu_eligible: true, recommended_preset: 'standard',
+      })
+      .compile();
     app = mod.createNestApplication();
     await app.init();
   });
