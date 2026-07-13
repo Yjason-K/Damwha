@@ -8,6 +8,7 @@ import { MeetingsModule } from './meetings/meetings.module';
 import { SpeakersModule } from './speakers/speakers.module';
 import { SearchModule } from './search/search.module';
 import { SettingsModule } from './settings/settings.module';
+import { SystemModule } from './system/system.module';
 import { HealthController } from './health/health.controller';
 import { HttpLoggingInterceptor } from './common/http-logging.interceptor';
 
@@ -21,6 +22,7 @@ import { HttpLoggingInterceptor } from './common/http-logging.interceptor';
     SpeakersModule,
     SearchModule,
     SettingsModule,
+    SystemModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_INTERCEPTOR, useClass: HttpLoggingInterceptor }],
