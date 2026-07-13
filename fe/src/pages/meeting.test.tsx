@@ -448,6 +448,22 @@ test("사이드바에서 다른 회의로 이동할 수 있다", async () => {
   ).toBeInTheDocument();
 });
 
+test("회의를 전환해도 플레이바는 하나만 남는다", async () => {
+  renderShell();
+  await screen.findByRole("heading", {
+    level: 1,
+    name: "기획회의 — UI 개선안",
+  });
+  // 트랜스포트 재생 버튼(정확히 "재생")은 플레이바당 1개다.
+  expect(screen.getAllByRole("button", { name: "재생" })).toHaveLength(1);
+
+  fireEvent.click(screen.getByRole("button", { name: /스프린트 회고/ }));
+  await screen.findByRole("heading", { level: 1, name: "스프린트 회고" });
+
+  // 이전 회의의 플레이바가 남아 쌓이면 안 된다.
+  expect(screen.getAllByRole("button", { name: "재생" })).toHaveLength(1);
+});
+
 test("모든 회의(전역 렌즈)로 전환하면 준비 중 빈 상태와 렌즈 탭이 보인다", async () => {
   renderShell();
   await screen.findByRole("heading", {

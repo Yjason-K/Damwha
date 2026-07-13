@@ -456,7 +456,7 @@ export function MeetingPage() {
 
       {view === "meeting" && meeting && totalSeconds > 0 ? (
         <PlayerBar
-          key={meeting.id}
+          key={`playbar-${meeting.id}`}
           tracks={meeting.tracks}
           playing={playing}
           pos={pos}
