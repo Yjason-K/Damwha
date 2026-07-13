@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Note on names: the directory is `daewha/fe` but the package is `damwha-fe` (mirrors `damwha-be`). The service is always "Damwha" in user-facing text. "Timbre" is the internal codename for the design system only — never surface it to users.
 
-As of the initial scaffold, the API layer (Axios + TanStack Query) is **wired but not called** — no real backend requests are made yet. Future features connect against `damwha-be`.
+The API layer (Axios + TanStack Query) makes real requests against `damwha-be` — meetings/speakers/search and the `settings` feature (processing settings + spec detection) all call live endpoints.
 
 ## Product concept
 
@@ -20,7 +20,7 @@ Full spec: [`docs/product-concept.md`](docs/product-concept.md) (개념 정의�
 - **Lenses** = optional filtered views over utterances (not the main screen). v1 priority: action-items > topics/keywords > decisions > promises. Generated two ways — AI auto-extraction (action-items/decisions/promises) and saved-search (topics + user-defined). Scoped per-meeting (right panel) or global (left-nav view). Extraction is **non-blocking + post-editable**: auto-filled with no gate, each item carries a source (AI / user-added / user-edited), confidence is only a non-blocking hint, and re-extraction is non-destructive (human-touched items are preserved/merged).
 - **Pipeline:** `audio → VAD → diarization → identification (vector DB / cosine similarity) → STT (Whisper) → structured JSON → search indexing (+ optional type extraction) → store`. Speaker identity comes from one-time voiceprint enrollment.
 - **Privacy stance:** personal/self-hosted; all voiceprints stored locally only, no recording notice. The boundary is **export/share** — keep it disabled by default with intentional friction (confirm/warn).
-- **Non-goals (initial):** team collaboration/wiki, per-member analytics dashboards (surveillance-flavored), meeting knowledge graph. The product is a *personal* meeting memory, not a team monitoring tool.
+- **Non-goals (initial):** team collaboration/wiki, per-member analytics dashboards (surveillance-flavored), meeting knowledge graph. The product is a _personal_ meeting memory, not a team monitoring tool.
 
 ## Commands
 
@@ -43,6 +43,8 @@ pnpm vitest run -t "홈 페이지"
 
 `pnpm build` runs the typecheck and the bundle separately — `tsc -b` is the source of truth for type errors (Vite does not typecheck). Run it (or `pnpm build`) to verify types.
 
+`vitest.setup.ts` polyfills the Pointer Capture / `scrollIntoView` APIs jsdom lacks so Radix (Select etc.) works under test. Radix `Select` doesn't open on a jsdom click — in tests, focus the trigger then fire `keyDown` `ArrowDown` to open it, and click the option.
+
 ## Architecture
 
 Vite 8 + React 19 SPA, **feature-based-lite** layout. Path alias `@/*` → `src/*` (configured in both `vite.config.ts` and `tsconfig.app.json` — keep them in sync).
@@ -50,7 +52,7 @@ Vite 8 + React 19 SPA, **feature-based-lite** layout. Path alias `@/*` → `src/
 - `src/main.tsx` — mount point, renders `<AppProviders/>` in StrictMode.
 - `src/app/` — composition root.
   - `providers.tsx` assembles `QueryClientProvider` + `RouterProvider`. The QueryClient is created once via `useState(createQueryClient)`.
-  - `router.tsx` — `createBrowserRouter`. `/` (home) and `*` (not-found) are **eager**; heavier routes (`/app` meeting shell, `/showcase`) are **code-split** via `lazyRoute()` to keep the landing bundle small. Add new heavy routes through `lazyRoute`.
+  - `router.tsx` — `createBrowserRouter`. `/` (home) and `*` (not-found) are **eager**; heavier routes (`/app` meeting shell, `/speakers`, `/settings` processing settings, `/showcase`) are **code-split** via `lazyRoute()` to keep the landing bundle small. Add new heavy routes through `lazyRoute`.
 - `src/pages/` — one component per route.
 - `src/shared/` — cross-cutting building blocks:
   - `api/client.ts` — single Axios instance (baseURL from env).
@@ -63,12 +65,18 @@ Future features go under `src/features/<feature>/`, each owning its own `api`/`u
 
 The `/app` route (`pages/meeting.tsx`) is the product's **three-pane browse shell**: nav rail `<nav>` + content `<main>` + insight `<aside>`, sized by the `--rail-nav` / `--rail-insight` / `--topbar-h` layout variables. It currently runs on mock data.
 
+`src/features/settings/` (처리 설정) owns the processing-config surface: `api` (`useProcessingSettings` / `useUpdateProcessingSettings` / `useCapabilities`), `lib` (`PRESET_META` + `PRESET_META_REVISION` — **keep synced with the BE preset definitions**; a `preset_revision` mismatch surfaces a drift notice), and `ui` (`ProcessingSettingsForm`, `OverrideSection`). Reached via LeftNav "처리 설정" → the `/settings` route.
+
+- **Override UI exposes preset selection only.** `OverrideSection` (used by upload + reprocess dialogs) lets the user pick a per-job preset; the server contract still accepts individual field overrides, but the UI is intentionally scoped down (approved product-scope reduction) to avoid the confusion of per-knob edits resolving to "custom".
+- **Reprocess UI:** the `TranscriptPane` header shows a `rotateCcw` button **only for `done`/`failed` meetings** → opens `ReprocessDialog` → `useReprocessMeeting` (in `features/meeting`).
+- **GPU is conservative by default:** GPU is allowed only when `caps?.gpu_eligible === true` (unknown/loading/failed ⇒ disallowed). Because every preset uses GPU diarization, preset cards are disabled when not eligible. The GPU switch is asymmetric — turning **on** (cpu→gpu) is blocked when ineligible, but turning **off** (gpu→cpu) is always allowed (recovery path for a migrated DB).
+
 ## Styling & design system
 
 **Tailwind v4 via `@tailwindcss/vite` — there is no `tailwind.config`.** All theming is CSS-first in `src/index.css`:
 
 - `:root` holds the Damwha (Timbre) design tokens: raw scales (`--gray-*`, `--accent-*`, speaker palette `--spk-N-*`) and **semantic aliases** (`--surface-*`, `--text-*`, `--border-*`). Reference the semantic aliases in components, not raw scales.
-- The **shadcn token contract** (`--background`, `--primary`, `--sidebar-*`, …) is mapped *onto* those Timbre semantics at the bottom of the `:root` block, so shadcn components render on-brand automatically. Caveat: shadcn's `--accent` means "hover/subtle surface", and the brand blue is `--primary` (not `--accent`).
+- The **shadcn token contract** (`--background`, `--primary`, `--sidebar-*`, …) is mapped _onto_ those Timbre semantics at the bottom of the `:root` block, so shadcn components render on-brand automatically. Caveat: shadcn's `--accent` means "hover/subtle surface", and the brand blue is `--primary` (not `--accent`).
 - `@theme inline` / `@theme` blocks expose these as Tailwind utilities (`bg-primary`, `text-spk-1-text`, `rounded-md`, dense `text-*` scale, Geist fonts).
 
 shadcn config (`components.json`): **new-york** style, `lucide` icons, aliases pointing at `@/shared/*`. Components follow the CVA pattern — variants defined with `class-variance-authority`, co-located with the component, e.g. `buttonVariants` exported alongside `Button`.
@@ -95,6 +103,7 @@ Guidelines to reduce common LLM coding mistakes. **Tradeoff:** these bias toward
 **Don't assume. Don't hide confusion. Surface tradeoffs.**
 
 Before implementing:
+
 - State your assumptions explicitly. If uncertain, ask.
 - If multiple interpretations exist, present them — don't pick silently.
 - If a simpler approach exists, say so. Push back when warranted.
@@ -117,12 +126,14 @@ Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, sim
 **Touch only what you must. Clean up only your own mess.**
 
 When editing existing code:
+
 - Don't "improve" adjacent code, comments, or formatting.
 - Don't refactor things that aren't broken.
 - Match existing style, even if you'd do it differently.
 - If you notice unrelated dead code, mention it — don't delete it.
 
 When your changes create orphans:
+
 - Remove imports/variables/functions that YOUR changes made unused.
 - Don't remove pre-existing dead code unless asked.
 
@@ -133,11 +144,13 @@ The test: Every changed line should trace directly to the user's request.
 **Define success criteria. Loop until verified.**
 
 Transform tasks into verifiable goals:
+
 - "Add validation" → "Write tests for invalid inputs, then make them pass"
 - "Fix the bug" → "Write a test that reproduces it, then make it pass"
 - "Refactor X" → "Ensure tests pass before and after"
 
 For multi-step tasks, state a brief plan:
+
 ```
 1. [Step] → verify: [check]
 2. [Step] → verify: [check]
