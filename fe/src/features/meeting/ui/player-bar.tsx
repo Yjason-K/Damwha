@@ -1,3 +1,5 @@
+import * as React from "react";
+
 import { IconButton } from "@/shared/ui/icon-button";
 import { SpeakerTimeline } from "@/shared/ui/speaker-timeline";
 
@@ -95,6 +97,8 @@ export function PlayerBar({
   onToggle,
   onSeek,
 }: PlayerBarProps) {
+  // 드래그 미리보기 시각 — SpeakerTimeline 드래그 중에만 non-null.
+  const [scrub, setScrub] = React.useState<number | null>(null);
   const step = 10 / totalSeconds;
   const cycleSpeed = () => {
     const i = SPEEDS.indexOf(speed as (typeof SPEEDS)[number]);
@@ -124,7 +128,7 @@ export function PlayerBar({
           <Replay dir="fwd" onClick={() => onSeek(Math.min(1, pos + step))} />
         </div>
         <div className="font-mono text-xs tracking-[-0.01em] text-[color:var(--text-secondary)]">
-          {fmt(pos, totalSeconds)}{" "}
+          {fmt(scrub ?? pos, totalSeconds)}{" "}
           <span className="text-[color:var(--text-faint)]">/ {durLabel}</span>
         </div>
       </div>
@@ -141,6 +145,7 @@ export function PlayerBar({
           playhead={pos}
           labelWidth={LABEL_W}
           onSeek={onSeek}
+          onScrub={setScrub}
         />
       </div>
 
