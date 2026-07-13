@@ -3,7 +3,7 @@ import threading
 import pytest
 
 from damwha_worker import db
-from damwha_worker.contracts import ProcessMeetingPayload
+from damwha_worker.contracts import parse_payload
 from damwha_worker.errors import ShutdownRequested
 from damwha_worker.models.base import DiarSegment, SpeechSpan, Word
 from damwha_worker.pipeline.ffmpeg import ProbeResult
@@ -14,7 +14,8 @@ from tests.fakes import FakeDiarizer, FakeEmbedder, FakeTranscriber, FakeVAD
 
 
 def _payload(meeting_id, audio_key, pv=0, threshold=0.7):
-    return ProcessMeetingPayload.model_validate(
+    return parse_payload(
+        "process_meeting",
         {
             "schema_version": 1,
             "meeting_id": str(meeting_id),
@@ -29,7 +30,7 @@ def _payload(meeting_id, audio_key, pv=0, threshold=0.7):
                 "embedding": {"model": "speechbrain/spkrec-ecapa-voxceleb", "dimension": 192},
             },
             "identify": {"threshold": threshold},
-        }
+        },
     )
 
 
