@@ -5,6 +5,13 @@ import { decodeOriginalName } from '../storage/upload-options';
 import { JobsRepository } from '../jobs/jobs.repository';
 import { buildProcessMeetingPayload, buildIndexMeetingPayload } from '../contracts/job-payload.schema';
 import { MeetingsRepository, MeetingRow } from './meetings.repository';
+import { SettingsService } from '../settings/settings.service';
+import { ProcessingConfig } from '../settings/presets';
+import {
+  ProcessingOverride, ProcessingOverrideSchema, resolveProcessingConfig,
+} from '../settings/resolve-processing';
+import { CAPABILITIES, Capabilities } from '../system/capabilities';
+import { Inject } from '@nestjs/common';
 import { loadEnv } from '../config/env';
 import { nextId } from '../common/id';
 import { isIso8601 } from '../common/iso8601';
@@ -25,15 +32,31 @@ export class MeetingsService {
     private readonly storage: StorageService,
     private readonly jobs: JobsRepository,
     private readonly meetings: MeetingsRepository,
+    private readonly settings: SettingsService,
+    @Inject(CAPABILITIES) private readonly caps: Capabilities,
   ) {}
 
   // Validation scope (Plan 1): MIME + extension + size only. Deep audio-integrity
   // validation (ffmpeg probe) happens in the Plan 2 worker normalize stage.
-  async upload(file: Express.Multer.File | undefined, body: { title?: string; recorded_at?: string }) {
+  async upload(
+    file: Express.Multer.File | undefined,
+    body: { title?: string; recorded_at?: string; processing?: string },
+  ) {
     if (!file) throw new BadRequestException('audio file required');
     if (!AUDIO_MIME.test(file.mimetype)) {
       await unlinkQuietly(file.path); // remove the temp file multer already wrote
       throw new BadRequestException('file must be audio/*');
+    }
+    // parse/검증/resolve를 saveFromTemp 전에 수행 (spec §5) — 실패 시 temp 파일 unlink로
+    // 고아 파일 금지. storage 저장/DB INSERT는 설정이 유효할 때만.
+    let processing: ProcessingConfig;
+    try {
+      const override = this.parseOverrideString(body.processing); // JSON.parse + zod, 오류는 BadRequest
+      const global_ = await this.settings.getProcessingConfig();
+      processing = resolveProcessingConfig(global_, override, this.caps.gpu_eligible);
+    } catch (e) {
+      await unlinkQuietly(file.path); // 검증 실패 → 고아 파일 금지 (spec §5)
+      throw e;
     }
 
     const meetingId = await nextId(this.db.pool, 'meeting');
@@ -48,12 +71,21 @@ export class MeetingsService {
         [meetingId, body.title ?? null, originalName, audioKey, body.recorded_at ?? null],
       );
       const payload = buildProcessMeetingPayload({
-        meetingId, audioKey, processingVersion: 0, reprocess: false,
+        meetingId, audioKey, processingVersion: 0, reprocess: false, processing,
       });
       const job = await this.jobs.enqueue(c, { type: 'process_meeting', meetingId, payload });
       const updated = await this.meetings.setCurrentJob(c, meetingId, job.id);
       return updated;
     });
+  }
+
+  private parseOverrideString(s: string | undefined): ProcessingOverride | undefined {
+    if (s === undefined) return undefined;
+    let raw: unknown;
+    try { raw = JSON.parse(s); } catch { throw new BadRequestException('processing must be a valid JSON string'); }
+    const r = ProcessingOverrideSchema.safeParse(raw);
+    if (!r.success) throw new BadRequestException(r.error.issues.map((i) => i.message).join('; '));
+    return r.data;
   }
 
   async setFavorite(id: string, value: boolean): Promise<MeetingRow> {
@@ -111,16 +143,25 @@ export class MeetingsService {
     return status;
   }
 
-  async reprocess(id: string) {
+  async reprocess(id: string, body?: { processing?: unknown }) {
     const meeting = await this.meetings.findById(this.db.pool, id);
     if (!meeting) throw new NotFoundException('meeting not found');
     if (meeting.status !== 'done' && meeting.status !== 'failed') {
       throw new ConflictException('reprocess allowed only when status is done or failed');
     }
+    // 설정 로드/resolve는 트랜잭션 진입 전에 (spec §5). JSON body라 객체 그대로 검증.
+    let override: ProcessingOverride | undefined;
+    if (body?.processing !== undefined) {
+      const r = ProcessingOverrideSchema.safeParse(body.processing);
+      if (!r.success) throw new BadRequestException(r.error.issues.map((i) => i.message).join('; '));
+      override = r.data;
+    }
+    const global_ = await this.settings.getProcessingConfig();
+    const processing = resolveProcessingConfig(global_, override, this.caps.gpu_eligible);
     return this.db.withTransaction(async (c) => {
       const version = await this.meetings.bumpVersionForReprocess(c, id);
       const payload = buildProcessMeetingPayload({
-        meetingId: id, audioKey: meeting.audio_key, processingVersion: version, reprocess: true,
+        meetingId: id, audioKey: meeting.audio_key, processingVersion: version, reprocess: true, processing,
       });
       const job = await this.jobs.enqueue(c, { type: 'process_meeting', meetingId: id, payload });
       await this.meetings.setCurrentJob(c, id, job.id);

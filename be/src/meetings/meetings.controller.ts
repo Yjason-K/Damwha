@@ -23,13 +23,20 @@ export class MeetingsController {
         audio: { type: 'string', format: 'binary', description: '오디오 파일' },
         title: { type: 'string', description: '회의 제목 (선택)' },
         recorded_at: { type: 'string', format: 'date-time', description: '녹음 시각 ISO8601 (선택)' },
+        processing: {
+          type: 'string',
+          description:
+            '이번 작업 한정 처리 설정 오버라이드 (JSON 문자열). preset과 개별 필드 혼합 가능 — ' +
+            '개별 필드(whisper_model/devices/language)가 하나라도 있으면 결과 preset은 custom이 된다 ' +
+            '(language만 지정해도 custom).',
+        },
       },
     },
   })
   @UseInterceptors(FileInterceptor('audio', uploadInterceptorOptions))
   upload(
     @UploadedFile() file: Express.Multer.File,
-    @Body() body: { title?: string; recorded_at?: string },
+    @Body() body: { title?: string; recorded_at?: string; processing?: string },
   ) {
     return this.service.upload(file, body);
   }
@@ -79,8 +86,25 @@ export class MeetingsController {
 
   @Post(':id/reprocess')
   @ApiOperation({ summary: '재처리 (processing_version 증가 후 재큐잉)' })
+  @ApiBody({
+    required: false,
+    schema: {
+      type: 'object',
+      properties: {
+        processing: {
+          type: 'object',
+          description:
+            '이번 재처리 한정 처리 설정 오버라이드 (JSON 객체). preset과 개별 필드 혼합 가능 — ' +
+            '개별 필드(whisper_model/devices/language)가 하나라도 있으면 결과 preset은 custom이 된다 ' +
+            '(language만 지정해도 custom).',
+        },
+      },
+    },
+  })
   @HttpCode(202)
-  reprocess(@Param('id') id: string) { return this.service.reprocess(id); }
+  reprocess(@Param('id') id: string, @Body() body: { processing?: unknown }) {
+    return this.service.reprocess(id, body);
+  }
 
   @Post('reindex-missing')
   @ApiOperation({ summary: '미색인 회의 일괄 재색인 (reconciler 백필)' })

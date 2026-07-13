@@ -106,6 +106,48 @@ describe('meetings', () => {
     expect(job.rows[0].payload.reprocess).toBe(true);
   });
 
+  it('POST /meetings — payload가 v2이고 전역 설정(프리셋)을 따른다', async () => {
+    await request(srv()).put('/settings/processing').send({ preset: 'light', language: 'ko' });
+    const res = await request(srv()).post('/meetings')
+      .attach('audio', Buffer.from('a'), { filename: 'a.m4a', contentType: 'audio/mp4' });
+    const job = await db.pool.query('SELECT payload FROM job WHERE id=$1', [res.body.current_job_id]);
+    expect(job.rows[0].payload.schema_version).toBe(2);
+    expect(job.rows[0].payload.models.whisper_model).toBe('small');
+    expect(job.rows[0].payload.models.preset).toBe('light');
+  });
+
+  it('POST /meetings — processing 오버라이드(JSON 문자열)가 payload에 반영 + custom 전환', async () => {
+    const res = await request(srv()).post('/meetings')
+      .field('processing', JSON.stringify({ devices: { stt: 'cpu' } }))
+      .attach('audio', Buffer.from('a'), { filename: 'a.m4a', contentType: 'audio/mp4' });
+    expect(res.status).toBe(201);
+    const job = await db.pool.query('SELECT payload FROM job WHERE id=$1', [res.body.current_job_id]);
+    expect(job.rows[0].payload.models.devices.stt).toBe('cpu');
+    expect(job.rows[0].payload.models.preset).toBe('custom');
+  });
+
+  it('POST /meetings — 잘못된 processing → 400 + storage에 파일 미저장 (spec §5)', async () => {
+    const res = await request(srv()).post('/meetings')
+      .field('processing', '{"nope":1}')
+      .attach('audio', Buffer.from('a'), { filename: 'a.m4a', contentType: 'audio/mp4' });
+    expect(res.status).toBe(400);
+    const meetings = await db.pool.query('SELECT count(*)::int AS n FROM meeting');
+    expect(meetings.rows[0].n).toBe(0);
+  });
+
+  it('POST /meetings/:id/reprocess — body.processing 반영', async () => {
+    const created = await request(srv()).post('/meetings')
+      .attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+    const mid = created.body.id;
+    await db.pool.query(`UPDATE meeting SET status='done' WHERE id=$1`, [mid]);
+    const res = await request(srv()).post(`/meetings/${mid}/reprocess`)
+      .send({ processing: { preset: 'quality' } });
+    expect(res.status).toBe(202);
+    const job = await db.pool.query('SELECT payload FROM job WHERE id=$1', [res.body.job_id]);
+    expect(job.rows[0].payload.models.whisper_model).toBe('large-v3');
+    expect(job.rows[0].payload.models.preset).toBe('quality');
+  });
+
   it('POST /meetings/:id/reindex enqueues an index_meeting job', async () => {
     const created = await request(srv()).post('/meetings').attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
     const mid = created.body.id;

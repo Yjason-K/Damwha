@@ -1,5 +1,8 @@
 import { z } from 'zod';
 import { loadEnv } from '../config/env';
+// 타입 전용 import — 런타임 배출 없음(에러 소거). presets.ts는 WHISPER_MODELS(값)를
+// 이 파일에서 import하므로, 값 import로 되받으면 런타임 순환이 생긴다. type-only로 차단.
+import type { ProcessingConfig } from '../settings/presets';
 
 export const WHISPER_MODELS = ['tiny', 'base', 'small', 'medium', 'large-v3', 'large-v3-turbo'] as const;
 export const DeviceSchema = z.enum(['cpu', 'gpu']);
@@ -79,18 +82,22 @@ export type IndexMeetingPayload = z.infer<typeof IndexMeetingPayloadSchema>;
 
 export function buildProcessMeetingPayload(args: {
   meetingId: string; audioKey: string; processingVersion: number; reprocess: boolean;
-}): ProcessMeetingPayloadV1 {
+  processing: ProcessingConfig;
+}): ProcessMeetingPayloadV2 {
   const env = loadEnv();
+  const p = args.processing;
   return {
-    schema_version: 1,
+    schema_version: 2,
     meeting_id: args.meetingId,
     audio_key: args.audioKey,
     processing_version: args.processingVersion,
     reprocess: args.reprocess,
     models: {
-      whisper_model: env.WHISPER_MODEL,
-      device: env.WHISPER_DEVICE,
-      language: env.STT_LANGUAGE,
+      whisper_model: p.whisper_model,
+      language: p.language,
+      devices: p.devices,
+      preset: p.preset,
+      preset_revision: p.preset_revision,
       diarization: { model: env.DIARIZATION_MODEL, min_speakers: null, max_speakers: null },
       embedding: { model: env.EMBEDDING_MODEL, dimension: env.EMBEDDING_DIM },
     },
