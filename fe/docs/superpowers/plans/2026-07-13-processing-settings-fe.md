@@ -8,7 +8,7 @@
 
 **Tech Stack:** Vite 8 + React 19, TanStack Query + Axios(`apiClient`), Tailwind v4 + Timbre 토큰, vitest(jsdom) + testing-library.
 
-**BE 계약 (구현 완료, `../be`):**
+**BE 계약 (구현 완료 — `../be` main `470ad76..871f45f`에 머지·push됨: settings/system 도메인, payload v2, 오버라이드 수용 전부 포함. FE 통합 시 be main 기준으로 서버 기동):**
 - `GET /settings/processing` → `{ preset, preset_revision, language, whisper_model, devices: {diarization, stt} }` (resolved 뷰)
 - `PUT /settings/processing` — named `{preset, language}` 또는 custom `{preset:'custom', language, whisper_model, devices}` (혼합 400, gpu 비적격 400)
 - `GET /system/capabilities` → `{ platform, arch, chip, memory_gb, gpu_eligible, recommended_preset }`
@@ -317,6 +317,13 @@ export const PRESET_META: Record<
 
 export const PRESET_ORDER: PresetName[] = ["light", "standard", "quality"];
 
+/**
+ * PRESET_META가 반영한 BE 프리셋 정의 revision. GET 응답의 preset_revision과
+ * 다르면 서버 프리셋이 갱신된 것 — 카드 요약이 실제와 다를 수 있음을 UI에
+ * 알린다 (드리프트 감지; 리뷰 #6).
+ */
+export const PRESET_META_REVISION = "2026-07-13.1";
+
 export const WHISPER_MODEL_OPTIONS: { value: WhisperModel; label: string }[] = [
   { value: "tiny", label: "tiny — 가장 빠름, 낮은 정확도" },
   { value: "base", label: "base" },
@@ -438,20 +445,47 @@ test("이름 프리셋 저장은 이름+언어만 보낸다", async () => {
   );
 });
 
-test("gpu_eligible=false면 GPU 스위치 비활성 + 미지원 경고", async () => {
-  mockApi(CONFIG, {
-    ...CAPS,
-    platform: "linux",
-    arch: "x64",
-    gpu_eligible: false,
-    recommended_preset: null,
+test("gpu_eligible=false: 프리셋 카드 비활성 + 경고, gpu→cpu 끄기는 허용", async () => {
+  // 현재 값이 gpu/gpu인 custom 설정 — 비지원 환경에서도 CPU로 끌 수 있어야 함
+  mockApi(
+    { ...CONFIG, preset: "custom", preset_revision: null },
+    {
+      ...CAPS,
+      platform: "linux",
+      arch: "x64",
+      gpu_eligible: false,
+      recommended_preset: null,
+    },
+  );
+  renderForm();
+  const standard = await screen.findByRole("radio", { name: /표준/ });
+  // 모든 프리셋 카드 비활성 (전 프리셋이 diar gpu 포함 → 저장 시 400 예방)
+  expect((standard as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByText(/지원하지 않는 환경/)).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: /고급 설정/ }));
+  const sttSwitch = screen.getByRole("switch", {
+    name: /전사.*GPU/,
+  }) as HTMLInputElement;
+  // 현재 gpu → 끄기 허용 (비대칭 규칙)
+  expect(sttSwitch.disabled).toBe(false);
+  fireEvent.click(sttSwitch);
+  // cpu가 된 뒤에는 다시 켜기 차단
+  expect(
+    (screen.getByRole("switch", { name: /전사.*GPU/ }) as HTMLInputElement)
+      .disabled,
+  ).toBe(true);
+});
+
+test("capabilities 로딩 전에는 프리셋 카드가 비활성이다 (보수적 기본값)", async () => {
+  // capabilities만 pending으로 유지
+  vi.spyOn(apiClient, "get").mockImplementation(async (url) => {
+    if (url === "/settings/processing") return { data: CONFIG } as never;
+    return new Promise(() => {}) as never; // capabilities 영구 pending
   });
   renderForm();
-  await screen.findByRole("radio", { name: /표준/ });
-  fireEvent.click(screen.getByRole("button", { name: /고급 설정/ }));
-  const sttSwitch = screen.getByRole("switch", { name: /전사.*GPU/ });
-  expect((sttSwitch as HTMLInputElement).disabled).toBe(true);
-  expect(screen.getByText(/지원하지 않는 환경/)).toBeTruthy();
+  const standard = await screen.findByRole("radio", { name: /표준/ });
+  expect((standard as HTMLButtonElement).disabled).toBe(true);
 });
 ```
 
@@ -524,11 +558,13 @@ function PresetRadio({
   name,
   checked,
   recommended,
+  disabled,
   onSelect,
 }: {
   name: PresetName;
   checked: boolean;
   recommended: boolean;
+  disabled: boolean;
   onSelect: () => void;
 }) {
   const meta = PRESET_META[name];
@@ -537,9 +573,18 @@ function PresetRadio({
       type="button"
       role="radio"
       aria-checked={checked}
+      disabled={disabled}
+      title={
+        disabled
+          ? "모든 프리셋은 GPU를 사용해요 — 이 머신에서는 선택할 수 없어요"
+          : undefined
+      }
       onClick={onSelect}
       className={cn(
-        "flex flex-1 cursor-pointer flex-col gap-1 rounded-md border p-3 text-left outline-none transition-colors duration-[80ms] focus-visible:[box-shadow:var(--focus-ring)]",
+        "flex flex-1 flex-col gap-1 rounded-md border p-3 text-left outline-none transition-colors duration-[80ms] focus-visible:[box-shadow:var(--focus-ring)]",
+        disabled
+          ? "cursor-not-allowed opacity-50"
+          : "cursor-pointer",
         checked
           ? "border-[color:var(--accent-6)] bg-[var(--accent-1)]"
           : "border-border hover:bg-[var(--surface-hover)]",
@@ -589,15 +634,29 @@ export function ProcessingSettingsForm() {
   }
 
   const caps = capabilities.data;
-  const gpuEligible = caps?.gpu_eligible ?? true;
+  // 보수적 기본값(리뷰 #3): 조회 전/실패 시 GPU 불허 — 로딩 중엔 GPU 관련
+  // 컨트롤(프리셋 카드 + GPU 스위치)을 잠시 비활성화한다.
+  const capsReady = capabilities.isSuccess;
+  const gpuEligible = caps?.gpu_eligible === true;
+  const presetsDisabled = !capsReady || !gpuEligible; // 모든 프리셋이 diar gpu 포함
+  // GPU 스위치 비대칭 규칙(리뷰 #4): 켜기(cpu→gpu)는 비적격 시 차단하되,
+  // 이미 gpu인 기존 값을 cpu로 끄는 것은 항상 허용 (옮겨온 DB 등 복구 경로).
+  const gpuSwitchDisabled = (current: Device) =>
+    !capsReady || (!gpuEligible && current === "cpu");
 
   const selectPreset = (name: PresetName) => {
-    const meta = PRESET_META[name];
+    // 현재 서버 preset과 같은 카드를 고르면 서버 resolved 값을 시작값으로
+    // 사용(진실원 우선), 다른 카드는 FE 표시 상수 사용 (리뷰 #6 최소 대응).
+    const server = settings.data;
+    const source =
+      server && server.preset === name
+        ? { whisper_model: server.whisper_model, devices: server.devices }
+        : PRESET_META[name];
     setForm({
       preset: name,
       language: form.language,
-      whisper_model: meta.whisper_model,
-      devices: { ...meta.devices },
+      whisper_model: source.whisper_model,
+      devices: { ...source.devices },
     });
   };
 
@@ -632,12 +691,22 @@ export function ProcessingSettingsForm() {
 
   return (
     <div className="flex flex-col gap-5">
-      {caps && !caps.gpu_eligible && (
+      {capsReady && !gpuEligible && (
         <p className="rounded-md border border-[color:var(--border-subtle)] bg-[var(--surface-hover)] px-3 py-2 text-sm text-[color:var(--text-secondary)]">
-          Damwha가 지원하지 않는 환경이에요 (Apple Silicon Mac 전용). GPU
-          옵션과 프리셋 추천을 사용할 수 없어요.
+          Damwha가 지원하지 않는 환경이에요 (Apple Silicon Mac 전용). 모든
+          프리셋은 GPU를 사용하므로 선택할 수 없고, custom CPU 설정만 편집할
+          수 있어요.
         </p>
       )}
+      {settings.data &&
+        settings.data.preset !== "custom" &&
+        settings.data.preset_revision !== null &&
+        settings.data.preset_revision !== PRESET_META_REVISION && (
+          <p className="text-xs text-[color:var(--text-muted)]">
+            서버 프리셋 정의가 업데이트됐어요 — 카드 요약이 실제 값과 다를 수
+            있어요. 저장은 항상 서버 기준으로 적용돼요.
+          </p>
+        )}
 
       <div role="radiogroup" aria-label="처리 프리셋" className="flex gap-2.5">
         {PRESET_ORDER.map((name) => (
@@ -646,6 +715,7 @@ export function ProcessingSettingsForm() {
             name={name}
             checked={form.preset === name}
             recommended={caps?.recommended_preset === name}
+            disabled={presetsDisabled}
             onSelect={() => selectPreset(name)}
           />
         ))}
@@ -695,8 +765,10 @@ export function ProcessingSettingsForm() {
             <Switch
               label="화자 분리 GPU 사용"
               checked={form.devices.diarization === "gpu"}
-              disabled={!gpuEligible}
-              title={gpuEligible ? undefined : "이 머신에서는 GPU를 쓸 수 없어요"}
+              disabled={gpuSwitchDisabled(form.devices.diarization)}
+              title={
+                gpuEligible ? undefined : "이 머신에서는 GPU를 켤 수 없어요"
+              }
               onChange={(e) =>
                 setKnob({
                   devices: {
@@ -709,8 +781,10 @@ export function ProcessingSettingsForm() {
             <Switch
               label="전사 GPU 사용"
               checked={form.devices.stt === "gpu"}
-              disabled={!gpuEligible}
-              title={gpuEligible ? undefined : "이 머신에서는 GPU를 쓸 수 없어요"}
+              disabled={gpuSwitchDisabled(form.devices.stt)}
+              title={
+                gpuEligible ? undefined : "이 머신에서는 GPU를 켤 수 없어요"
+              }
               onChange={(e) =>
                 setKnob({
                   devices: {
@@ -1106,7 +1180,36 @@ export function OverrideSection({ value, onChange }: OverrideSectionProps) {
 }
 ```
 
-설계 결정(스펙 대비 축소, 의도적): 오버라이드 UI는 **프리셋 선택만** 노출. 서버 계약은 개별 필드 혼합을 허용하지만, 개별 필드는 결과를 custom으로 바꿔 "light에 언어만" 류 혼동(스펙 §5 경고)이 생김 — Phase 1 UI는 프리셋 단위로 단순화하고 계약은 그대로 둔다. (리뷰어: 이 축소는 컨트롤러가 승인한 계획 결정이다.)
+설계 결정 — **사용자가 승인한 제품 범위 변경 (2026-07-13)**: 오버라이드 UI는 **프리셋 선택만** 노출한다 (스펙 §7 원문 "프리셋 + 고급"의 의도적 축소). 서버 계약은 개별 필드 혼합을 그대로 지원하지만(고급 사용자는 API 직접 호출 가능), 개별 필드는 결과를 custom으로 바꿔 "light에 언어만" 류 혼동(스펙 §5 경고)이 생김. FE CLAUDE.md 델타(Task 6)에 이 결정을 기록한다. (리뷰어: 이 축소는 사용자가 명시 승인한 결정이다 — 스펙 §7 대비 축소를 결함으로 보고하지 말 것.)
+
+**OverrideSection open 상태 동기화(리뷰 #5):** 부모가 `value`를 `undefined`로 리셋하면 섹션도 닫혀야 한다. 구현에 아래 effect 포함 (Radix DialogContent가 close 시 unmount되는 것과 무관하게 안전):
+
+```tsx
+  // 부모 reset(value → undefined) 시 섹션 닫힘 동기화. 사용자가 섹션만 열고
+  // 아직 선택 전인 상태(open && value undefined)는 value 변화가 없어 영향 없음.
+  React.useEffect(() => {
+    if (value === undefined) setOpen(false);
+  }, [value]);
+```
+
+`override-section.test.tsx`에 케이스 추가:
+
+```tsx
+test("부모가 value를 리셋하면 섹션이 닫힌다", () => {
+  const { rerender } = renderSection({ preset: "quality" }, () => {});
+  expect(screen.getByLabelText("이번 작업 프리셋")).toBeTruthy();
+  rerender(
+    <QueryClientProvider
+      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+    >
+      <OverrideSection value={undefined} onChange={() => {}} />
+    </QueryClientProvider>,
+  );
+  expect(screen.queryByLabelText("이번 작업 프리셋")).toBeNull();
+});
+```
+
+(renderSection이 rerender를 지원하도록 helper 반환값 활용 — wrapper 구조는 구현 시 맞춤.)
 
 - [ ] **Step 4: 업로드 연결**
 
@@ -1526,10 +1629,15 @@ git commit -m "docs: 처리 설정 FE 델타 — settings feature, /settings 라
 
 ---
 
-## Self-Review 체크 결과 (계획 작성 시 수행)
+## Self-Review 체크 결과 (계획 작성 시 수행 + 리뷰 반영)
 
 - **Spec §7 coverage:** 감지 카드+추천 배지→Task 3, 프리셋 라디오+요약+권장→Task 2, 고급 펼침+custom 전환→Task 2, gpu 비적격(비활성+툴팁+경고 배너)→Task 2, 저장 mutation+invalidate→Task 1·2, 다운로드 안내→Task 2, 업로드 오버라이드(접힘, multipart JSON 문자열)→Task 4, 재처리 dialog 오버라이드→Task 5(사용자 승인으로 재처리 UI 신설 포함).
-- **의도된 축소 1건:** 오버라이드 섹션은 프리셋 선택만 노출(개별 노브 미노출) — 서버 계약은 그대로, UI 혼동 방지 목적. Task 4에 근거 명시.
+- **의도된 축소 1건 (사용자 승인, 리뷰 #1):** 오버라이드 섹션은 프리셋 선택만 노출(개별 노브 미노출) — 서버 계약은 그대로, UI 혼동 방지 목적. Task 4에 근거 명시, Task 6에서 CLAUDE.md 기록.
+- **gpu 비적격 정합 (리뷰 #2·#4):** 프리셋 카드 자체를 disabled (모든 프리셋이 diar gpu → 저장 400 예방). GPU 스위치는 비대칭 — 켜기(cpu→gpu) 차단, 끄기(gpu→cpu) 허용 (옮겨온 DB 복구 경로). 테스트 포함.
+- **보수적 기본값 (리뷰 #3):** `gpu_eligible`는 `caps?.gpu_eligible === true`만 참 — 조회 전/실패 시 GPU 불허, 로딩 중 프리셋/스위치 비활성. 테스트 포함.
+- **OverrideSection reset 동기화 (리뷰 #5):** `value → undefined` 전환 시 섹션 닫힘 effect + rerender 테스트.
+- **프리셋 메타 드리프트 (리뷰 #6, 최소 대응):** `PRESET_META_REVISION` vs GET `preset_revision` 불일치 시 안내 문구; 현재 서버 preset과 같은 카드 선택 시 서버 resolved 값을 시작값으로 사용. 별도 definitions endpoint는 non-goal(BE 변경 불요).
+- **BE 전제 (리뷰 #7 정정):** BE는 구현 완료 — `be` main `470ad76..871f45f` 머지·push됨. 계획 서두에 커밋 범위 명시.
 - **타입 일관성:** `ProcessingOverride`/`ProcessingConfig`/`PRESET_META`/`OverrideSection(value, onChange)`/`useReprocessMeeting({id, processing?})` — 태스크 간 시그니처 일치 확인함.
 - **컴포넌트 API 확인 필요 지점 명시:** `Badge` variant, `Card` 구조, `IconButton` props, speakers 페이지 셸 — 각 태스크에 "인접 코드 확인 후 맞춤" 지시 포함 (실 코드 없이 추정 커밋 금지).
 - **Radix Select jsdom 규약(mousedown)** 테스트에 반영.
