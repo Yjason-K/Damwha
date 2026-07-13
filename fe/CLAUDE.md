@@ -63,7 +63,7 @@ Vite 8 + React 19 SPA, **feature-based-lite** layout. Path alias `@/*` → `src/
 
 Future features go under `src/features/<feature>/`, each owning its own `api`/`ui`/`model`. Don't create empty placeholder folders.
 
-The `/app` route (`pages/meeting.tsx`) is the product's **three-pane browse shell**: nav rail `<nav>` + content `<main>` + insight `<aside>`, sized by the `--rail-nav` / `--rail-insight` / `--topbar-h` layout variables. It currently runs on mock data.
+The `/app` route (`pages/meeting.tsx`) is the product's **three-pane browse shell**: nav rail `<nav>` + content `<main>` + insight `<aside>`, sized by the `--rail-nav` / `--rail-insight` / `--topbar-h` layout variables. It runs on live meeting data via TanStack Query hooks.
 
 `src/features/settings/` (처리 설정) owns the processing-config surface: `api` (`useProcessingSettings` / `useUpdateProcessingSettings` / `useCapabilities`), `lib` (`PRESET_META` + `PRESET_META_REVISION` — **keep synced with the BE preset definitions**; a `preset_revision` mismatch surfaces a drift notice), and `ui` (`ProcessingSettingsForm`, `OverrideSection`). Reached via LeftNav "처리 설정" → the `/settings` route.
 
