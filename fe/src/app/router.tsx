@@ -44,5 +44,11 @@ export const router = createBrowserRouter([
       import("@/pages/speakers").then((m) => ({ default: m.SpeakersPage })),
     ),
   },
+  {
+    path: "/settings",
+    element: lazyRoute(() =>
+      import("@/pages/settings").then((m) => ({ default: m.SettingsPage })),
+    ),
+  },
   { path: "*", element: <NotFoundPage /> },
 ]);

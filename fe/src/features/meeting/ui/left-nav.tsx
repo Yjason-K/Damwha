@@ -184,6 +184,13 @@ export function LeftNav({
           >
             <Link to="/speakers" />
           </SidebarItem>
+          <SidebarItem
+            icon={<Icon name="settings" size={16} />}
+            label="처리 설정"
+            asChild
+          >
+            <Link to="/settings" />
+          </SidebarItem>
         </div>
 
         <SectionLabel>필터</SectionLabel>
