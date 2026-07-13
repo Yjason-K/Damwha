@@ -25,4 +25,21 @@ describe('contract fixtures (shared with pydantic worker)', () => {
   it('rejects process_meeting.invalid_id.json (UUID meeting_id)', () => {
     expect(() => ProcessMeetingPayloadSchema.parse(read('process_meeting.invalid_id.json'))).toThrow();
   });
+  it('validates process_meeting.v2.valid.json', () => {
+    const p = ProcessMeetingPayloadSchema.parse(read('process_meeting.v2.valid.json'));
+    expect(p.schema_version).toBe(2);
+    if (p.schema_version === 2) {
+      expect(p.models.devices).toEqual({ diarization: 'gpu', stt: 'cpu' });
+      expect(p.models.preset).toBe('light');
+    }
+  });
+  it('still accepts v1 fixture and missing-version fixture as v1', () => {
+    expect(ProcessMeetingPayloadSchema.parse(read('process_meeting.valid.json')).schema_version).toBe(1);
+    expect(ProcessMeetingPayloadSchema.parse(read('process_meeting.no_version.json')).schema_version).toBe(1);
+  });
+  it('rejects v2 payload with legacy device field', () => {
+    const v2 = read('process_meeting.v2.valid.json');
+    v2.models.device = 'mps';
+    expect(() => ProcessMeetingPayloadSchema.parse(v2)).toThrow();
+  });
 });
