@@ -154,6 +154,7 @@ CREATE TABLE app_setting (
 5. 결과를 payload에 고정.
 
 - override는 **저장하지 않음** — 해당 job 한정.
+- **`{preset, language}` override도 custom이 된다** — language는 개별 필드이므로 병합 규칙 3이 적용됨. "light에 언어만 지정"으로 오해할 수 있으니 Swagger description과 FE UI에서 명시한다.
 - **override 요청 스키마는 PUT 스키마와 별개다 (의도된 비대칭):** PUT은 이름 프리셋 + 개별 노브 혼합을 400으로 거부하지만(§3), job override는 `{preset?, whisper_model?, devices?, language?}` 전 필드 optional에 혼합 허용 — 혼합 결과는 `custom`. "저장되는 의도"는 단순하게, "일회성 실행"은 유연하게. 두 zod 스키마를 별도 정의하고 공유하지 않는다.
 - **업로드는 multipart** (`POST /meetings`, `meetings.controller.ts`): nested JSON body 불가 → `processing`을 **multipart의 JSON 문자열 필드**로 받고 서버에서 `JSON.parse` + zod 검증. 재처리(`POST /meetings/:id/reprocess`)는 JSON body라 그대로 nested 객체.
 - **업로드 경로 실행 순서:** `processing` JSON parse → override zod 검증 → 전역 설정 load/resolve → 병합 → gpu 적격성 검증까지 **전부 `saveFromTemp()` 이전에** 수행. 검증 400이 파일 저장 후에 나면 storage에 고아 파일이 남는다 (`meetings.service.ts:39` 현행 순서는 저장이 먼저).

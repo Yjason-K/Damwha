@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-13-processing-settings-design.md` (모든 태스크는 이 스펙을 따른다. FE는 별도 계획.)
 
+**배포 안전 순서:** ① v2 fixture + 워커가 v1·v2 모두 파싱(Task 1) → ② TS parser v1/v2 union(Task 2) → ③ API가 v2 생성(Task 6). API의 v2 생성은 워커가 v2를 읽게 된 뒤에만 온다 — 어느 시점에 어떤 워커가 떠 있어도 계약 창 없음.
+
 ## Global Constraints
 
 - Node 22 (`nvm use`), 워커는 Python 3.12 + uv. TS 테스트는 Docker(Testcontainers) 필요, `npm test`는 serial.
@@ -17,27 +19,26 @@
 - payload 계약 변경은 **양쪽 동시**: `src/contracts/job-payload.schema.ts` + `worker/damwha_worker/contracts.py` + `test/fixtures/job-payloads/` 공유 fixture.
 - whisper 모델 enum: `tiny | base | small | medium | large-v3 | large-v3-turbo`. 디바이스 enum: `cpu | gpu` (gpu = Apple Metal/MPS). cuda는 non-goal.
 - 프리셋: `light`(small, diar gpu, stt cpu) / `standard`(large-v3-turbo, diar gpu, stt gpu) / `quality`(large-v3, diar gpu, stt gpu). `PRESET_REVISION = "2026-07-13.1"`.
-- VAD/ECAPA는 CPU 고정(스키마 미노출). 임베딩 모델 교체 없음.
+- VAD/ECAPA는 CPU 고정(스키마 미노출). 임베딩 모델 교체 없음. enroll/index payload는 **v1 불변**.
 - loadEnv()는 decorator/module metadata에서 호출 금지 (기존 불변식).
 - 커밋은 태스크당 1회 이상, conventional commit 형식.
 
 ---
 
-### Task 1: TS 계약 v2 — discriminated union + fixtures
+### Task 1: v2 fixture + Python 계약 v2 — 워커가 먼저 v1·v2를 읽는다
 
 **Files:**
-- Modify: `src/contracts/job-payload.schema.ts`
 - Create: `test/fixtures/job-payloads/process_meeting.v2.valid.json`
-- Modify: `test/contract-fixtures.spec.ts`
+- Modify: `worker/damwha_worker/contracts.py`
+- Modify: `worker/tests/test_contracts.py`
 
 **Interfaces:**
 - Consumes: 없음 (첫 태스크)
 - Produces:
-  - `WHISPER_MODELS: readonly ['tiny','base','small','medium','large-v3','large-v3-turbo']`
-  - `DeviceSchema = z.enum(['cpu','gpu'])`, `type Device = 'cpu'|'gpu'`
-  - `ModelsSchemaV2`, `ProcessMeetingPayloadSchema` (preprocess + v1/v2 union)
-  - `type ProcessMeetingPayloadV2` — Task 6의 builder 반환 타입
-  - `buildProcessMeetingPayload`는 이 태스크에서 **일단 v2를 env로 채워 반환하도록 수정** (Task 6에서 설정 주입으로 재작성). 시그니처 유지.
+  - `ModelsV2` (fields: `whisper_model`, `language`, `devices: Devices(diarization, stt)`, `preset: str | None`, `preset_revision: str | None`, `diarization`, `embedding`)
+  - `parse_models(payload: dict) -> ModelsV2` — Task 7의 registry가 사용
+  - `parse_payload("process_meeting", data)` → 항상 내부 v2 표현(`ProcessMeetingPayload`, `models: ModelsV2`) 반환. 파이프라인이 쓰는 경로(`payload.models.embedding.model`, `payload.models.language`)는 이름 불변.
+  - `SUPPORTED_SCHEMA_VERSIONS: dict[str, frozenset[int]]` — **job type별** 허용 버전 (enroll/index는 {1} 고정)
 
 - [ ] **Step 1: v2 fixture 작성**
 
@@ -63,157 +64,7 @@
 }
 ```
 
-- [ ] **Step 2: 실패 테스트 추가** — `test/contract-fixtures.spec.ts`에:
-
-```ts
-  it('validates process_meeting.v2.valid.json', () => {
-    const p = ProcessMeetingPayloadSchema.parse(read('process_meeting.v2.valid.json'));
-    expect(p.schema_version).toBe(2);
-    if (p.schema_version === 2) {
-      expect(p.models.devices).toEqual({ diarization: 'gpu', stt: 'cpu' });
-      expect(p.models.preset).toBe('light');
-    }
-  });
-  it('still accepts v1 fixture and missing-version fixture as v1', () => {
-    expect(ProcessMeetingPayloadSchema.parse(read('process_meeting.valid.json')).schema_version).toBe(1);
-    expect(ProcessMeetingPayloadSchema.parse(read('process_meeting.no_version.json')).schema_version).toBe(1);
-  });
-  it('rejects v2 payload with legacy device field', () => {
-    const v2 = read('process_meeting.v2.valid.json');
-    v2.models.device = 'mps';
-    expect(() => ProcessMeetingPayloadSchema.parse(v2)).toThrow();
-  });
-```
-
-- [ ] **Step 3: 실패 확인**
-
-Run: `npx jest test/contract-fixtures.spec.ts`
-Expected: FAIL (v2 fixture가 기존 단일 v1 스키마에 안 맞음)
-
-- [ ] **Step 4: 스키마 구현** — `src/contracts/job-payload.schema.ts`:
-
-```ts
-export const WHISPER_MODELS = ['tiny', 'base', 'small', 'medium', 'large-v3', 'large-v3-turbo'] as const;
-export const DeviceSchema = z.enum(['cpu', 'gpu']);
-export type Device = z.infer<typeof DeviceSchema>;
-
-const DiarizationSchema = z.object({
-  model: z.string(),
-  min_speakers: z.number().int().nullable(),
-  max_speakers: z.number().int().nullable(),
-});
-const EmbeddingSchema = z.object({ model: z.string(), dimension: z.number().int() });
-
-// v1 — 큐 잔존 job / 기존 fixture 호환용. 신규 enqueue는 v2만.
-export const ModelsSchemaV1 = z.object({
-  whisper_model: z.enum(['large-v3-turbo', 'large-v3']),
-  device: z.enum(['mps', 'cpu', 'cuda']),
-  language: z.string(),
-  diarization: DiarizationSchema,
-  embedding: EmbeddingSchema,
-});
-
-export const ModelsSchemaV2 = z
-  .object({
-    whisper_model: z.enum(WHISPER_MODELS),
-    language: z.string(),
-    devices: z.object({ diarization: DeviceSchema, stt: DeviceSchema }),
-    preset: z.enum(['light', 'standard', 'quality', 'custom']),
-    preset_revision: z.string().nullable(),
-    diarization: DiarizationSchema,
-    embedding: EmbeddingSchema,
-  })
-  .strict(); // legacy `device` 혼입 차단
-
-const processMeetingCommon = {
-  meeting_id: z.string().regex(/^mtg_[1-9][0-9]*$/),
-  audio_key: z.string().min(1),
-  processing_version: z.number().int().nonnegative(),
-  reprocess: z.boolean(),
-  identify: z.object({ threshold: z.number() }),
-};
-const ProcessMeetingPayloadV1Schema = z.object({
-  schema_version: z.literal(1), ...processMeetingCommon, models: ModelsSchemaV1,
-});
-const ProcessMeetingPayloadV2Schema = z.object({
-  schema_version: z.literal(2), ...processMeetingCommon, models: ModelsSchemaV2,
-});
-
-// zod discriminatedUnion은 child의 .default()를 discriminator 선택 전에 적용하지
-// 않으므로, version 누락 payload는 preprocess로 v1에 귀속시킨다 (spec §4).
-export const ProcessMeetingPayloadSchema = z.preprocess(
-  (v) =>
-    v !== null && typeof v === 'object' && (v as Record<string, unknown>).schema_version === undefined
-      ? { ...(v as object), schema_version: 1 }
-      : v,
-  z.discriminatedUnion('schema_version', [ProcessMeetingPayloadV1Schema, ProcessMeetingPayloadV2Schema]),
-);
-
-export type ProcessMeetingPayloadV2 = z.infer<typeof ProcessMeetingPayloadV2Schema>;
-export type ProcessMeetingPayload = z.infer<typeof ProcessMeetingPayloadSchema>;
-```
-
-`buildProcessMeetingPayload`는 이 태스크에서는 **기존 env 값으로 v2 payload를 만들도록만** 수정 (시그니처 불변, Task 6에서 설정 주입으로 재작성):
-
-```ts
-export function buildProcessMeetingPayload(args: {
-  meetingId: string; audioKey: string; processingVersion: number; reprocess: boolean;
-}): ProcessMeetingPayloadV2 {
-  const env = loadEnv();
-  const dev: Device = env.WHISPER_DEVICE === 'mps' ? 'gpu' : 'cpu'; // cuda→cpu (spec §1)
-  return {
-    schema_version: 2,
-    meeting_id: args.meetingId,
-    audio_key: args.audioKey,
-    processing_version: args.processingVersion,
-    reprocess: args.reprocess,
-    models: {
-      whisper_model: env.WHISPER_MODEL,
-      language: env.STT_LANGUAGE,
-      devices: { diarization: dev, stt: dev },
-      preset: 'custom',
-      preset_revision: null,
-      diarization: { model: env.DIARIZATION_MODEL, min_speakers: null, max_speakers: null },
-      embedding: { model: env.EMBEDDING_MODEL, dimension: env.EMBEDDING_DIM },
-    },
-    identify: { threshold: env.IDENTIFY_THRESHOLD },
-  };
-}
-```
-
-`EnrollSpeakerPayloadSchema`/`IndexMeetingPayloadSchema`/그 builder는 불변.
-
-- [ ] **Step 5: 통과 확인 + 파급 확인**
-
-Run: `npx jest test/contract-fixtures.spec.ts && npx tsc --noEmit -p tsconfig.build.json`
-Expected: fixture 스위트 PASS. 타입 에러가 나면 `ProcessMeetingPayload`를 union으로 소비하는 곳(jobs enqueue 등)을 확인 — enqueue는 payload를 jsonb로 저장할 뿐이므로 타입 주석만 조정.
-
-Run: `npm test`
-Expected: 전체 PASS — 워커가 아직 v2를 모르지만 TS 테스트는 통과해야 함. **주의: 이 시점부터 Task 2 완료 전까지 실제 워커를 돌리지 말 것** (신규 enqueue가 v2인데 워커는 v1만 파싱). 커밋은 하되 순서대로 Task 2를 바로 진행.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add src/contracts/job-payload.schema.ts test/fixtures/job-payloads/process_meeting.v2.valid.json test/contract-fixtures.spec.ts
-git commit -m "feat(contracts): process_meeting payload v2 — per-stage devices, whisper enum 확장, v1/v2 union"
-```
-
----
-
-### Task 2: Python 계약 v2 — v1 즉시 변환 + registry 정규화 진입점
-
-**Files:**
-- Modify: `worker/damwha_worker/contracts.py`
-- Modify: `worker/tests/test_contracts.py`
-
-**Interfaces:**
-- Consumes: Task 1의 v2 fixture.
-- Produces:
-  - `ModelsV2` (fields: `whisper_model`, `language`, `devices: Devices(diarization, stt)`, `preset: str | None`, `preset_revision: str | None`, `diarization`, `embedding`)
-  - `parse_models(payload: dict) -> ModelsV2` — Task 7의 registry가 사용
-  - `parse_payload("process_meeting", data)` → 항상 내부 v2 표현(`ProcessMeetingPayload`, `models: ModelsV2`) 반환. 파이프라인이 쓰는 경로(`payload.models.embedding.model`, `payload.models.language`)는 이름 불변.
-
-- [ ] **Step 1: 실패 테스트 추가** — `worker/tests/test_contracts.py`에:
+- [ ] **Step 2: 실패 테스트 추가** — `worker/tests/test_contracts.py`에:
 
 ```python
 def test_parses_v2_fixture():
@@ -252,23 +103,39 @@ def test_parse_models_from_raw_dict():
     assert m.whisper_model == "small"
     m1 = parse_models(load("process_meeting.valid.json"))
     assert m1.devices.stt == "gpu"  # v1 mps
+
+
+@pytest.mark.parametrize(
+    ("job_type", "fixture"),
+    [("enroll_speaker", "enroll_speaker.valid.json"), ("index_meeting", "index_meeting.valid.json")],
+)
+def test_enroll_index_reject_v2(job_type, fixture):
+    # enroll/index는 v1 불변 (spec §4) — 전역 버전 집합이면 v2가 새어 들어간다
+    data = load(fixture) | {"schema_version": 2}
+    with pytest.raises(UnsupportedPayloadVersion):
+        parse_payload(job_type, data)
 ```
 
-기존 `test_rejects_future_schema_version`은 **v2 수용으로 의미가 바뀜** — `{"schema_version": 3}`으로 수정.
+기존 `test_rejects_future_schema_version`은 v2 수용으로 의미가 바뀜 — `{"schema_version": 3}`으로 수정.
 
-- [ ] **Step 2: 실패 확인**
+- [ ] **Step 3: 실패 확인**
 
 Run: `cd worker && uv run pytest tests/test_contracts.py -q`
 Expected: FAIL (`devices` 속성 없음 / version 2 거부)
 
-- [ ] **Step 3: 구현** — `worker/damwha_worker/contracts.py`:
+- [ ] **Step 4: 구현** — `worker/damwha_worker/contracts.py`:
 
 ```python
 import logging
 
 log = logging.getLogger("damwha_worker")
 
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2})
+# job type별 허용 버전 — enroll/index는 v1 불변 (spec §4)
+SUPPORTED_SCHEMA_VERSIONS: dict[str, frozenset[int]] = {
+    "process_meeting": frozenset({1, 2}),
+    "enroll_speaker": frozenset({1}),
+    "index_meeting": frozenset({1}),
+}
 
 WhisperModel = Literal["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
 Device = Literal["cpu", "gpu"]
@@ -315,7 +182,9 @@ def _v1_models_to_v2(m: ModelsV1) -> ModelsV2:
 
 
 class ProcessMeetingPayloadV1(BaseModel):
-    schema_version: int = 1
+    """v1 wire 형태 — schema_version은 정확히 1 (누락 시 1)."""
+
+    schema_version: Literal[1] = 1
     meeting_id: MeetingId
     audio_key: str
     processing_version: int
@@ -325,7 +194,11 @@ class ProcessMeetingPayloadV1(BaseModel):
 
 
 class ProcessMeetingPayload(BaseModel):
-    """내부 표현 — 항상 v2 models. v1은 parse에서 즉시 변환된다."""
+    """내부 표현 — 항상 v2 models. v1은 parse에서 즉시 변환되고 원본 버전을 보존한다.
+
+    schema_version의 입력 검증 제약은 이 필드가 아니라 parse_payload의
+    job type별 dispatch(SUPPORTED_SCHEMA_VERSIONS)가 담당한다.
+    """
 
     schema_version: int = 2
     meeting_id: MeetingId
@@ -354,20 +227,161 @@ def _parse_process_meeting(data: dict) -> ProcessMeetingPayload:
 def parse_models(payload: dict) -> ModelsV2:
     """registry용: process_meeting payload dict → 정규화된 ModelsV2."""
     return _parse_process_meeting(payload).models
+
+
+def parse_payload(job_type: str, data: dict):
+    allowed = SUPPORTED_SCHEMA_VERSIONS.get(job_type)
+    if allowed is None:
+        raise ValueError(f"unknown job type {job_type}")
+    version = data.get("schema_version", 1)
+    if version not in allowed:
+        raise UnsupportedPayloadVersion(
+            f"{job_type}: schema_version {version} not in {sorted(allowed)}"
+        )
+    if job_type == "process_meeting":
+        return _parse_process_meeting(data)
+    if job_type == "enroll_speaker":
+        return EnrollSpeakerPayload.model_validate(data)
+    return IndexMeetingPayload.model_validate(data)
 ```
 
-`parse_payload`의 `process_meeting` 분기를 `_parse_process_meeting(data)` 호출로 교체. enroll/index 분기는 불변 (`SUPPORTED_SCHEMA_VERSIONS` 검사에서 enroll/index payload는 여전히 version 1만 오지만, 집합 검사만 하므로 그대로 동작).
+`EnrollSpeakerPayload`/`IndexMeetingPayload` 모델 자체는 불변.
 
-- [ ] **Step 4: 통과 확인**
+- [ ] **Step 5: 통과 확인**
 
 Run: `cd worker && uv run pytest -q && uv run ruff check .`
-Expected: 전체 PASS. `test_process_meeting.py` 등이 `Models`를 직접 import했다면 이름 변경 파급 — `grep -rn "from damwha_worker.contracts import" worker/tests worker/damwha_worker`로 확인해 `ModelsV1`/`ModelsV2`로 정리.
+Expected: 전체 PASS. `Models`를 직접 import한 곳 확인: `grep -rn "from damwha_worker.contracts import" worker/tests worker/damwha_worker` → `ModelsV1`/`ModelsV2`로 정리.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add test/fixtures/job-payloads/process_meeting.v2.valid.json worker/damwha_worker/contracts.py worker/tests/test_contracts.py
+git commit -m "feat(worker): payload v2 계약 — v1 즉시 내부 v2 변환, job type별 버전 제한"
+```
+
+---
+
+### Task 2: TS 계약 v2 — parser union만 (builder는 v1 유지, 전환은 Task 6)
+
+**Files:**
+- Modify: `src/contracts/job-payload.schema.ts`
+- Modify: `test/contract-fixtures.spec.ts`
+
+**Interfaces:**
+- Consumes: Task 1의 v2 fixture.
+- Produces:
+  - `WHISPER_MODELS: readonly ['tiny','base','small','medium','large-v3','large-v3-turbo']`
+  - `DeviceSchema = z.enum(['cpu','gpu'])`, `type Device = 'cpu'|'gpu'`
+  - `ModelsSchemaV2`, `ProcessMeetingPayloadSchema` (preprocess + v1/v2 discriminated union)
+  - `type ProcessMeetingPayloadV2` — Task 6의 builder 반환 타입
+  - **`buildProcessMeetingPayload`는 이 태스크에서 변경하지 않는다** (여전히 v1 생성 — 반환 타입만 `ProcessMeetingPayloadV1`로 명시). v2 생성 전환은 Task 6. `test/job-payload.spec.ts`의 `schema_version=1` 단언도 Task 6까지 유효.
+
+- [ ] **Step 1: 실패 테스트 추가** — `test/contract-fixtures.spec.ts`에:
+
+```ts
+  it('validates process_meeting.v2.valid.json', () => {
+    const p = ProcessMeetingPayloadSchema.parse(read('process_meeting.v2.valid.json'));
+    expect(p.schema_version).toBe(2);
+    if (p.schema_version === 2) {
+      expect(p.models.devices).toEqual({ diarization: 'gpu', stt: 'cpu' });
+      expect(p.models.preset).toBe('light');
+    }
+  });
+  it('still accepts v1 fixture and missing-version fixture as v1', () => {
+    expect(ProcessMeetingPayloadSchema.parse(read('process_meeting.valid.json')).schema_version).toBe(1);
+    expect(ProcessMeetingPayloadSchema.parse(read('process_meeting.no_version.json')).schema_version).toBe(1);
+  });
+  it('rejects v2 payload with legacy device field', () => {
+    const v2 = read('process_meeting.v2.valid.json');
+    v2.models.device = 'mps';
+    expect(() => ProcessMeetingPayloadSchema.parse(v2)).toThrow();
+  });
+```
+
+- [ ] **Step 2: 실패 확인**
+
+Run: `npx jest test/contract-fixtures.spec.ts`
+Expected: FAIL (v2 fixture가 기존 단일 v1 스키마에 안 맞음)
+
+- [ ] **Step 3: 스키마 구현** — `src/contracts/job-payload.schema.ts`:
+
+```ts
+export const WHISPER_MODELS = ['tiny', 'base', 'small', 'medium', 'large-v3', 'large-v3-turbo'] as const;
+export const DeviceSchema = z.enum(['cpu', 'gpu']);
+export type Device = z.infer<typeof DeviceSchema>;
+
+const DiarizationSchema = z.object({
+  model: z.string(),
+  min_speakers: z.number().int().nullable(),
+  max_speakers: z.number().int().nullable(),
+});
+const EmbeddingSchema = z.object({ model: z.string(), dimension: z.number().int() });
+
+// v1 — 큐 잔존 job / 기존 fixture 호환용. Task 6 전까지는 신규 enqueue도 v1.
+export const ModelsSchemaV1 = z.object({
+  whisper_model: z.enum(['large-v3-turbo', 'large-v3']),
+  device: z.enum(['mps', 'cpu', 'cuda']),
+  language: z.string(),
+  diarization: DiarizationSchema,
+  embedding: EmbeddingSchema,
+});
+
+export const ModelsSchemaV2 = z
+  .object({
+    whisper_model: z.enum(WHISPER_MODELS),
+    language: z.string(),
+    devices: z.object({ diarization: DeviceSchema, stt: DeviceSchema }),
+    preset: z.enum(['light', 'standard', 'quality', 'custom']),
+    preset_revision: z.string().nullable(),
+    diarization: DiarizationSchema,
+    embedding: EmbeddingSchema,
+  })
+  .strict(); // legacy `device` 혼입 차단
+
+const processMeetingCommon = {
+  meeting_id: z.string().regex(/^mtg_[1-9][0-9]*$/),
+  audio_key: z.string().min(1),
+  processing_version: z.number().int().nonnegative(),
+  reprocess: z.boolean(),
+  identify: z.object({ threshold: z.number() }),
+};
+const ProcessMeetingPayloadV1Schema = z.object({
+  schema_version: z.literal(1), ...processMeetingCommon, models: ModelsSchemaV1,
+});
+const ProcessMeetingPayloadV2Schema = z.object({
+  schema_version: z.literal(2), ...processMeetingCommon, models: ModelsSchemaV2,
+});
+
+// zod discriminatedUnion은 child의 .default()를 discriminator 선택 전에 적용하지
+// 않으므로, version 누락 payload는 preprocess로 v1에 귀속시킨다 (spec §4).
+export const ProcessMeetingPayloadSchema = z.preprocess(
+  (v) =>
+    v !== null && typeof v === 'object' && (v as Record<string, unknown>).schema_version === undefined
+      ? { ...(v as object), schema_version: 1 }
+      : v,
+  z.discriminatedUnion('schema_version', [ProcessMeetingPayloadV1Schema, ProcessMeetingPayloadV2Schema]),
+);
+
+export type ProcessMeetingPayloadV1 = z.infer<typeof ProcessMeetingPayloadV1Schema>;
+export type ProcessMeetingPayloadV2 = z.infer<typeof ProcessMeetingPayloadV2Schema>;
+export type ProcessMeetingPayload = z.infer<typeof ProcessMeetingPayloadSchema>;
+```
+
+`buildProcessMeetingPayload`는 **본문 불변** — 반환 타입 주석만 `ProcessMeetingPayloadV1`로 명시 (기존 `schema_version: 1` 리터럴이 Literal 타입에 맞는지 확인; `as const` 필요하면 추가). `EnrollSpeakerPayloadSchema`/`IndexMeetingPayloadSchema`와 그 builder는 불변.
+
+- [ ] **Step 4: 통과 확인 + 파급 확인**
+
+Run: `npx jest test/contract-fixtures.spec.ts test/job-payload.spec.ts && npx tsc --noEmit -p tsconfig.build.json`
+Expected: 전부 PASS — builder가 여전히 v1을 생성하므로 `test/job-payload.spec.ts`의 `stamps schema_version=1` 단언(46행)도 그대로 통과. 타입 에러가 나면 `ProcessMeetingPayload` union을 소비하는 곳(jobs enqueue 등) 타입 주석 조정.
+
+Run: `npm test`
+Expected: 전체 PASS. 이 시점에 API는 v1 생성 / 워커는 v1+v2 파싱 — 실워커가 떠 있어도 안전.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add worker/damwha_worker/contracts.py worker/tests/test_contracts.py
-git commit -m "feat(worker): payload v2 계약 — v1 파싱 즉시 내부 v2 변환, cuda→cpu 경고"
+git add src/contracts/job-payload.schema.ts test/contract-fixtures.spec.ts
+git commit -m "feat(contracts): process_meeting v1/v2 discriminated union — 생성은 아직 v1"
 ```
 
 ---
@@ -384,11 +398,12 @@ git commit -m "feat(worker): payload v2 계약 — v1 파싱 즉시 내부 v2 �
 - Test: `test/settings.service.spec.ts`
 
 **Interfaces:**
-- Consumes: Task 1의 `WHISPER_MODELS`, `DeviceSchema`, `Device`.
+- Consumes: Task 2의 `WHISPER_MODELS`, `DeviceSchema`, `Device`.
 - Produces:
   - `interface ProcessingConfig { preset: 'light'|'standard'|'quality'|'custom'; preset_revision: string | null; language: string; whisper_model: (typeof WHISPER_MODELS)[number]; devices: { diarization: Device; stt: Device } }`
   - `PRESET_REVISION = '2026-07-13.1'`, `resolvePreset(name, language): ProcessingConfig`
   - `envFallbackProcessingConfig(): ProcessingConfig`
+  - `resolveStoredValue(value: StoredProcessingValue): ProcessingConfig` — Task 5의 PUT GPU 검증도 이걸로 완전 해석 후 검사
   - `SettingsService.getProcessingConfig(): Promise<ProcessingConfig>` — Task 5/6이 사용
   - `SettingsService.putProcessing(value: StoredProcessingValue): Promise<ProcessingConfig>`
   - `StoredProcessingValueSchema` (named: `{preset, language}` strict / custom: 전 필드 strict)
@@ -633,14 +648,14 @@ git commit -m "feat(settings): app_setting 테이블 + 프리셋 상수 + Proces
 - Create: `src/system/capabilities.ts`
 - Create: `src/system/system.controller.ts`
 - Create: `src/system/system.module.ts`
-- Test: `test/system.e2e-spec.ts` + `src/system/capabilities.spec.ts`(unit은 `test/`에 두는 기존 관례 확인 — jest testMatch가 `test/`만이면 `test/capabilities.spec.ts`)
+- Test: `test/capabilities.spec.ts`, `test/system.e2e-spec.ts`
 
 **Interfaces:**
 - Consumes: 없음.
 - Produces:
   - `interface Capabilities { platform: string; arch: string; chip: string | null; memory_gb: number; gpu_eligible: boolean; recommended_preset: 'light'|'standard'|'quality'|null }`
   - `buildCapabilities(input: { platform: string; arch: string; totalmemBytes: number; chip: string | null }): Capabilities` — 순수 함수 (unit 테스트 대상)
-  - `detectCapabilities(): Promise<Capabilities>` — 감지 + 1회 캐시. Task 5/6이 gpu_eligible 검증에 사용.
+  - `detectCapabilities(): Promise<Capabilities>` + `CAPABILITIES` DI 토큰 (Task 5/6이 gpu_eligible 검증에 사용, 테스트에서 override 가능)
 
 - [ ] **Step 1: 실패 unit 테스트** — `test/capabilities.spec.ts`:
 
@@ -726,25 +741,45 @@ export async function detectCapabilities(): Promise<Capabilities> {
 }
 ```
 
+`src/system/system.module.ts` — DI 토큰까지 이 태스크에서:
+
+```ts
+import { Module } from '@nestjs/common';
+import { SystemController } from './system.controller';
+import { detectCapabilities } from './capabilities';
+
+export const CAPABILITIES = 'CAPABILITIES';
+
+@Module({
+  controllers: [SystemController],
+  providers: [{ provide: CAPABILITIES, useFactory: detectCapabilities }],
+  exports: [CAPABILITIES],
+})
+export class SystemModule {}
+```
+
 `src/system/system.controller.ts`:
 
 ```ts
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Inject } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { detectCapabilities } from './capabilities';
+import { Capabilities } from './capabilities';
+import { CAPABILITIES } from './system.module';
 
 @ApiTags('system')
 @Controller('system')
 export class SystemController {
+  constructor(@Inject(CAPABILITIES) private readonly caps: Capabilities) {}
+
   @Get('capabilities')
   @ApiOperation({ summary: '머신 스펙 감지 + 추천 프리셋 (gpu_eligible = 하드웨어 적합성만)' })
-  capabilities() {
-    return detectCapabilities();
-  }
+  capabilities() { return this.caps; }
 }
 ```
 
-`src/system/system.module.ts` + `app.module.ts` 등록. e2e 한 줄 (`test/system.e2e-spec.ts`): `GET /system/capabilities` 200 + `gpu_eligible` boolean + `memory_gb` number 확인 (CI 머신 스펙에 의존하는 값 단언 금지).
+(circular import 주의: `CAPABILITIES` 토큰을 `system.module.ts`에 두면 controller↔module 순환 — 실제 배치는 `capabilities.ts`에 토큰 상수를 두는 쪽이 안전. 구현 시 조정.)
+
+`app.module.ts`에 `SystemModule` 등록. e2e (`test/system.e2e-spec.ts`): `GET /system/capabilities` 200 + `gpu_eligible` boolean + `memory_gb` number 확인 (CI 머신 스펙에 의존하는 값 단언 금지).
 
 - [ ] **Step 4: 통과 확인**
 
@@ -764,11 +799,11 @@ git commit -m "feat(system): GET /system/capabilities — 스펙 감지 + RAM �
 
 **Files:**
 - Create: `src/settings/settings.controller.ts`
-- Modify: `src/settings/settings.module.ts` (controller 등록)
+- Modify: `src/settings/settings.module.ts` (controller 등록, SystemModule import)
 - Test: `test/settings.e2e-spec.ts`
 
 **Interfaces:**
-- Consumes: Task 3 `SettingsService`, `StoredProcessingValueSchema`; Task 4 `detectCapabilities`.
+- Consumes: Task 3 `SettingsService`, `StoredProcessingValueSchema`, `resolveStoredValue`; Task 4 `CAPABILITIES`.
 - Produces: HTTP API — GET/PUT 응답 형태 `{ preset, preset_revision, language, whisper_model, devices }` (resolved 뷰).
 
 - [ ] **Step 1: 실패 e2e** — `test/settings.e2e-spec.ts` (harness는 Task 3 테스트와 동일 패턴):
@@ -805,15 +840,20 @@ git commit -m "feat(system): GET /system/capabilities — 스펙 감지 + RAM �
   });
 ```
 
-**gpu 400 케이스는 환경 의존** (CI가 ARM Mac이 아니면 gpu_eligible=false): controller가 `detectCapabilities`를 DI 가능한 형태로 받아야 테스트 가능. 아래 구현처럼 `SystemModule`이 `CAPABILITIES` provider(`useFactory: detectCapabilities`)를 export하고, 테스트에서 `overrideProvider(CAPABILITIES).useValue({ ...caps, gpu_eligible: false })`로 고정:
+gpu 400 케이스는 환경 의존 → 별도 describe에서 `overrideProvider(CAPABILITIES).useValue({ ...caps, gpu_eligible: false })`로 앱 재생성 (`srvNoGpu()`). **named 프리셋도 resolve 후 검사되므로 두 케이스 다**:
 
 ```ts
   it('gpu_eligible=false면 gpu 포함 custom PUT → 400', async () => {
-    // 별도 describe: TestingModule에서 CAPABILITIES override 후 앱 재생성
     const res = await request(srvNoGpu()).put('/settings/processing').send({
       preset: 'custom', language: 'ko', whisper_model: 'small',
       devices: { diarization: 'gpu', stt: 'cpu' },
     });
+    expect(res.status).toBe(400);
+  });
+
+  it('gpu_eligible=false면 이름 프리셋 PUT도 400 — light도 diarization gpu 포함 (spec §3)', async () => {
+    const res = await request(srvNoGpu()).put('/settings/processing')
+      .send({ preset: 'light', language: 'ko' });
     expect(res.status).toBe(400);
   });
 ```
@@ -823,24 +863,14 @@ git commit -m "feat(system): GET /system/capabilities — 스펙 감지 + RAM �
 Run: `npx jest test/settings.e2e-spec.ts`
 Expected: FAIL (라우트 없음 404)
 
-- [ ] **Step 3: 구현**
-
-`src/system/system.module.ts`에 provider 추가 (Task 4 산출물 수정):
-
-```ts
-export const CAPABILITIES = 'CAPABILITIES';
-// providers: [{ provide: CAPABILITIES, useFactory: detectCapabilities }], exports: [CAPABILITIES]
-```
-
-`src/settings/settings.controller.ts`:
+- [ ] **Step 3: 구현** — `src/settings/settings.controller.ts`:
 
 ```ts
 import { BadRequestException, Body, Controller, Get, Inject, Put } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { SettingsService } from './settings.service';
-import { StoredProcessingValueSchema } from './processing-config';
-import { Capabilities } from '../system/capabilities';
-import { CAPABILITIES } from '../system/system.module';
+import { StoredProcessingValueSchema, resolveStoredValue } from './processing-config';
+import { Capabilities, CAPABILITIES } from '../system/capabilities';
 
 @ApiTags('settings')
 @Controller('settings')
@@ -860,8 +890,10 @@ export class SettingsController {
     const parsed = StoredProcessingValueSchema.safeParse(body);
     if (!parsed.success) throw new BadRequestException(parsed.error.issues.map((i) => i.message).join('; '));
     const v = parsed.data;
-    if (v.preset === 'custom' && !this.caps.gpu_eligible &&
-        (v.devices.diarization === 'gpu' || v.devices.stt === 'gpu')) {
+    // 이름 프리셋도 gpu를 품는다(light: diar gpu) — 반드시 완전 해석 후 검사 (spec §3)
+    const resolved = resolveStoredValue(v);
+    if (!this.caps.gpu_eligible &&
+        (resolved.devices.diarization === 'gpu' || resolved.devices.stt === 'gpu')) {
       throw new BadRequestException('gpu is not available on this machine (gpu_eligible=false)');
     }
     return this.service.putProcessing(v);
@@ -879,26 +911,27 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/settings/ src/system/system.module.ts test/settings.e2e-spec.ts
-git commit -m "feat(settings): GET/PUT /settings/processing — 혼합 400, gpu 비적격 400"
+git add src/settings/ test/settings.e2e-spec.ts
+git commit -m "feat(settings): GET/PUT /settings/processing — resolve 후 gpu 검증, 혼합 400"
 ```
 
 ---
 
-### Task 6: enqueue — 병합 함수 + builder 순수화 + upload/reprocess 오버라이드
+### Task 6: enqueue — 병합 함수 + builder v2 전환 + upload/reprocess 오버라이드
 
 **Files:**
-- Modify: `src/contracts/job-payload.schema.ts` (builder 시그니처)
+- Modify: `src/contracts/job-payload.schema.ts` (builder v2 전환 — Task 2에서 미룬 것)
 - Create: `src/settings/resolve-processing.ts`
 - Modify: `src/meetings/meetings.service.ts` / `src/meetings/meetings.controller.ts` / `src/meetings/meetings.module.ts`
+- Modify: `test/job-payload.spec.ts` (builder v1 단언 → v2)
 - Test: `test/resolve-processing.spec.ts`, `test/meetings.e2e-spec.ts` (추가 케이스)
 
 **Interfaces:**
-- Consumes: Task 1 `ProcessMeetingPayloadV2`, Task 3 `ProcessingConfig`/`SettingsService`, Task 4 `CAPABILITIES`.
+- Consumes: Task 2 `ProcessMeetingPayloadV2`, Task 3 `ProcessingConfig`/`SettingsService`, Task 4 `CAPABILITIES`.
 - Produces:
-  - `ProcessingOverrideSchema` — `{ preset?, whisper_model?, devices?: {diarization?, stt?}, language? }` 전 필드 optional, `.strict()`. **PUT 스키마와 별개 — 혼합 허용이 의도된 비대칭 (spec §5)**
+  - `ProcessingOverrideSchema` — `{ preset?, whisper_model?, devices?: {diarization?, stt?}, language? }` 전 필드 optional, `.strict()`, devices는 비어 있으면 거부. **PUT 스키마와 별개 — 혼합 허용이 의도된 비대칭 (spec §5)**
   - `resolveProcessingConfig(global: ProcessingConfig, override: ProcessingOverride | undefined, gpuEligible: boolean): ProcessingConfig` — gpu 비적격이면 `BadRequestException`
-  - `buildProcessMeetingPayload(args: { meetingId; audioKey; processingVersion; reprocess; processing: ProcessingConfig }): ProcessMeetingPayloadV2`
+  - `buildProcessMeetingPayload(args: { meetingId; audioKey; processingVersion; reprocess; processing: ProcessingConfig }): ProcessMeetingPayloadV2` — **이 시점부터 API가 v2를 생성** (워커는 Task 1부터 v2를 읽음)
 
 - [ ] **Step 1: 실패 unit 테스트** — `test/resolve-processing.spec.ts`:
 
@@ -936,6 +969,9 @@ describe('resolveProcessingConfig', () => {
   it('스키마: 알 수 없는 필드 거부', () => {
     expect(ProcessingOverrideSchema.safeParse({ nope: 1 }).success).toBe(false);
   });
+  it('스키마: 빈 devices 객체 거부 — 값 없이 custom 전환만 일으키는 입력 차단', () => {
+    expect(ProcessingOverrideSchema.safeParse({ devices: {} }).success).toBe(false);
+  });
 });
 ```
 
@@ -956,7 +992,11 @@ import { ProcessingConfig, resolvePreset } from './presets';
 export const ProcessingOverrideSchema = z.object({
   preset: z.enum(['light', 'standard', 'quality']).optional(),
   whisper_model: z.enum(WHISPER_MODELS).optional(),
-  devices: z.object({ diarization: DeviceSchema.optional(), stt: DeviceSchema.optional() }).strict().optional(),
+  devices: z.object({ diarization: DeviceSchema.optional(), stt: DeviceSchema.optional() })
+    .strict()
+    .refine((d) => d.diarization !== undefined || d.stt !== undefined,
+            'devices must set diarization or stt')
+    .optional(),
   language: z.string().trim().min(1).optional(),
 }).strict();
 export type ProcessingOverride = z.infer<typeof ProcessingOverrideSchema>;
@@ -987,9 +1027,9 @@ export function resolveProcessingConfig(
 }
 ```
 
-주의: `preset + language`만 있는 override는 `individual`에 걸려 custom이 된다 — spec §5 "개별 필드(whisper_model, devices.*, language)" 그대로. preset만 단독이면 이름 유지.
+주의: `{preset, language}` override는 `individual`에 걸려 **custom이 된다** — spec §5의 "개별 필드(whisper_model, devices.*, language)" 그대로. 의도된 동작이며 사용자 혼동 여지가 있으므로 **Swagger description과 FE(별도 계획)에서 명시**해야 한다 (아래 controller `@ApiBody` description 참조).
 
-`buildProcessMeetingPayload` 재작성 (`job-payload.schema.ts`) — 선택 노브는 인자, 비선택 인프라(diarization 모델, embedding, identify threshold)만 env:
+`buildProcessMeetingPayload` v2 전환 (`job-payload.schema.ts`) — 선택 노브는 인자, 비선택 인프라(diarization 모델, embedding, identify threshold)만 env:
 
 ```ts
 export function buildProcessMeetingPayload(args: {
@@ -1064,9 +1104,50 @@ export function buildProcessMeetingPayload(args: {
   }
 ```
 
-`reprocess(id, body?: { processing?: unknown })` — JSON body라 객체 그대로 `ProcessingOverrideSchema.safeParse`; 설정 로드/resolve는 `withTransaction` 진입 **전에**. constructor에 `SettingsService`, `@Inject(CAPABILITIES) caps` 추가, `meetings.module.ts`에 `SettingsModule`/`SystemModule` import. controller: upload `@Body()`에 `processing?: string` 추가 + `@ApiBody` properties에 `processing: { type: 'string', description: '이번 작업 한정 처리 설정 오버라이드 (JSON 문자열)' }`; reprocess에 `@Body() body: { processing?: unknown }` + `@ApiBody` 추가.
+`reprocess(id, body?: { processing?: unknown })` — JSON body라 객체 그대로 `ProcessingOverrideSchema.safeParse`; 설정 로드/resolve는 `withTransaction` 진입 **전에**. constructor에 `SettingsService`, `@Inject(CAPABILITIES) caps` 추가, `meetings.module.ts`에 `SettingsModule`/`SystemModule` import.
 
-- [ ] **Step 4: e2e 추가** — `test/meetings.e2e-spec.ts`:
+controller: upload `@Body()`에 `processing?: string` 추가 + `@ApiBody` properties에:
+
+```ts
+        processing: {
+          type: 'string',
+          description:
+            '이번 작업 한정 처리 설정 오버라이드 (JSON 문자열). preset과 개별 필드 혼합 가능 — ' +
+            '개별 필드(whisper_model/devices/language)가 하나라도 있으면 결과 preset은 custom이 된다 ' +
+            '(language만 지정해도 custom).',
+        },
+```
+
+reprocess에 `@Body() body: { processing?: unknown }` + 동일 취지 `@ApiBody` 추가.
+
+- [ ] **Step 4: 기존 builder 테스트 갱신** — `test/job-payload.spec.ts`:
+
+builder 시그니처에 `processing` 인자가 생겼고 산출물이 v2가 됐다. 갱신:
+
+```ts
+import { resolvePreset } from '../src/settings/presets';
+
+  it('builds + validates a process_meeting payload (v2, 설정 주입)', () => {
+    const p = buildProcessMeetingPayload({
+      meetingId: 'mtg_1', audioKey: 'meetings/x/original.wav',
+      processingVersion: 2, reprocess: true,
+      processing: resolvePreset('standard', 'ko'),
+    });
+    expect(p.schema_version).toBe(2);
+    expect(p.models.whisper_model).toBe('large-v3-turbo');
+    expect(p.models.devices).toEqual({ diarization: 'gpu', stt: 'gpu' });
+    expect(p.models.preset).toBe('standard');
+    expect(p.models.embedding.dimension).toBe(192);
+    expect(() => ProcessMeetingPayloadSchema.parse(p)).not.toThrow();
+  });
+```
+
+- 기존 `stamps schema_version=1 on process_meeting payload` 테스트 → `stamps schema_version=2`로 교체 (위 테스트에 흡수 가능).
+- `defaults missing schema_version to 1` (raw v1 dict 검증, 69행) — **유지** (v1 하위호환 검증).
+- `rejects UUID...` 테스트의 `buildProcessMeetingPayload` 호출에도 `processing: resolvePreset('standard', 'ko')` 인자 추가.
+- enroll/index builder 테스트 불변.
+
+- [ ] **Step 5: e2e 추가** — `test/meetings.e2e-spec.ts`:
 
 ```ts
   it('POST /meetings — payload가 v2이고 전역 설정(프리셋)을 따른다', async () => {
@@ -1110,14 +1191,14 @@ export function buildProcessMeetingPayload(args: {
   });
 ```
 
-기존 `POST /meetings` 단언 중 `payload.processing_version` 등은 유지되는지 확인 — v2로 바뀌어도 최상위 필드는 동일.
+기존 `POST /meetings` 단언 중 `payload.processing_version` 등 최상위 필드 단언은 v2에서도 동일하게 유지.
 
-- [ ] **Step 5: 통과 확인**
+- [ ] **Step 6: 통과 확인**
 
-Run: `npx jest test/resolve-processing.spec.ts test/meetings.e2e-spec.ts && npm test`
+Run: `npx jest test/resolve-processing.spec.ts test/job-payload.spec.ts test/meetings.e2e-spec.ts && npm test`
 Expected: 전체 PASS
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add src/settings/resolve-processing.ts src/contracts/job-payload.schema.ts src/meetings/ test/
@@ -1134,18 +1215,31 @@ git commit -m "feat(meetings): enqueue가 전역 설정+job 오버라이드를 v
 - Modify: `worker/damwha_worker/models/registry.py`
 - Modify: `worker/damwha_worker/models/pyannote_diar.py` (_torch_device 조용한 폴백 제거)
 - Modify: `worker/damwha_worker/models/whisper_mlx.py` (_REPO 확장)
+- Modify: `worker/damwha_worker/models/whisper_faster.py` (_MODEL 명시 확장)
 - Modify: `worker/damwha_worker/config.py` (whisper_backend/device 제거)
 - Modify: `worker/pyproject.toml` (faster-whisper marker 제거)
 - Test: `worker/tests/test_device.py`, `worker/tests/test_config.py` 수정
 
 **Interfaces:**
-- Consumes: Task 2 `parse_models`, `ModelsV2`.
+- Consumes: Task 1 `parse_models`, `ModelsV2`.
 - Produces:
   - `device.torch_device(device: str) -> str` — `"cpu"→"cpu"`, `"gpu"→"mps"`; MPS 미가용이면 `WorkerError(GPU_UNAVAILABLE, PERMANENT)` (spec §6 폴백 금지)
   - `registry.build_models(payload, settings)` — 시그니처 불변, 내부가 v2 기반
   - `errors.GPU_UNAVAILABLE = "gpu_unavailable"`
 
-- [ ] **Step 1: 실패 테스트** — `worker/tests/test_device.py`:
+- [ ] **Step 1: MLX repo 이름 사전 검증** — 기능 코드 커밋 전에 실재 확인 (추정 이름 커밋 금지):
+
+```bash
+for r in whisper-tiny whisper-base-mlx whisper-small-mlx whisper-medium-mlx \
+         whisper-large-v3-turbo whisper-large-v3-mlx; do
+  printf '%s: ' "$r"
+  curl -s -o /dev/null -w '%{http_code}\n' "https://huggingface.co/api/models/mlx-community/$r"
+done
+```
+
+Expected: 전부 `200`. 404가 나오면 `https://huggingface.co/mlx-community?search=whisper`에서 실제 repo 이름을 찾아 아래 `_REPO` 맵을 **확정한 뒤** 구현 진행. (Task 8 스모크는 다운로드·추론 검증이지 이름 찾기가 아니다.)
+
+- [ ] **Step 2: 실패 테스트** — `worker/tests/test_device.py`:
 
 ```python
 import pytest
@@ -1181,12 +1275,12 @@ def test_gpu_unavailable_is_permanent(monkeypatch):
     assert e.value.code == "gpu_unavailable"
 ```
 
-- [ ] **Step 2: 실패 확인**
+- [ ] **Step 3: 실패 확인**
 
 Run: `cd worker && uv run pytest tests/test_device.py -q`
 Expected: FAIL (모듈 없음)
 
-- [ ] **Step 3: 구현**
+- [ ] **Step 4: 구현**
 
 `errors.py` PERMANENT 코드 블록에 추가:
 
@@ -1276,9 +1370,9 @@ class PyannoteDiarizer:
         self._pipeline = pipeline.to(torch.device(device))
 ```
 
-(`_torch_device` 함수 삭제. `mx MlxWhisper`는 변경 없음 — mlx는 torch와 무관.)
+(`_torch_device` 함수 삭제. `MlxWhisper`는 변경 없음 — mlx는 torch와 무관.)
 
-`whisper_mlx.py` `_REPO` 확장 (repo 이름은 Task 8 스모크에서 실검증 — 다운로드 실패 시 그 시점에 수정):
+`whisper_mlx.py` `_REPO` 확장 — **Step 1에서 확정한 실제 repo 이름 사용** (아래는 Step 1 검증 대상 후보):
 
 ```python
 _REPO = {
@@ -1314,19 +1408,17 @@ _MODEL = {
 
 (marker 제거 — ARM Mac에서 mlx-whisper와 공존해야 light 프리셋의 STT cpu가 실행 가능; spec §6)
 
-- [ ] **Step 4: 통과 확인**
+- [ ] **Step 5: 통과 확인**
 
-Run: `cd worker && uv run pytest -q && uv run ruff check . && uv run ruff format --check .`
+Run: `cd worker && uv lock && uv run pytest -q && uv run ruff check . && uv run ruff format --check .`
 Expected: 전체 PASS. registry는 heavy import를 함수 내부로 유지했는지 확인 (테스트 스위트가 registry를 import하지 않는 기존 원칙 — `parse_models`/`torch_device`는 경량이라 무관).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add worker/damwha_worker/ worker/tests/ worker/pyproject.toml worker/uv.lock
 git commit -m "feat(worker): 단계별 디바이스 실행 — gpu 미가용 PERMANENT, faster-whisper 전 플랫폼 설치"
 ```
-
-(`uv.lock`은 `uv sync --extra models` 후 갱신분 포함. CI/로컬에서 `uv lock` 실행.)
 
 ---
 
@@ -1365,8 +1457,8 @@ WHISPER_REPOS = os.environ.get(
 - quality: large-v3 + STT gpu(mlx)
 - v2 payload의 `models.devices`/`preset`이 job 행에 그대로 박혔는지 psql로 확인
 - (선택) `devices.diarization: cpu` custom으로 pyannote CPU 경로 1회
-- mlx repo 이름 실검증: tiny/base/small/medium 신규 맵 항목은 여기서 처음 다운로드된다 —
-  404가 나면 `whisper_mlx.py의 _REPO`를 실제 mlx-community repo 이름으로 수정
+- tiny/base/small/medium 신규 모델은 여기서 처음 다운로드·추론된다 — Task 7 Step 1에서
+  repo 이름은 이미 실재 확인됨; 여기서는 다운로드/추론 자체를 검증
 ```
 
 - [ ] **Step 3: CLAUDE.md 델타 기록**
@@ -1374,7 +1466,7 @@ WHISPER_REPOS = os.environ.get(
 "Python worker" 섹션의 관련 문장 갱신:
 - `whisper_backend` settings 제거 — STT 백엔드는 payload `devices.stt`에서 파생 (gpu→mlx, cpu→faster-whisper int8)
 - faster-whisper는 이제 전 플랫폼 설치 (models extra)
-- payload v2: 단계별 devices, v1은 파싱 즉시 내부 v2 변환
+- payload v2: 단계별 devices, v1은 파싱 즉시 내부 v2 변환, enroll/index는 v1 불변
 - 새 도메인: `src/settings/`(app_setting + 프리셋), `src/system/`(capabilities)
 - GPU 미가용 시 PERMANENT (`gpu_unavailable`) — 폴백 금지
 
@@ -1392,9 +1484,15 @@ git commit -m "docs: 처리 설정 구현 델타 — 프리셋 스모크 절차,
 
 ---
 
-## Self-Review 체크 결과 (계획 작성 시 수행)
+## Self-Review 체크 결과 (계획 작성 시 수행 + 리뷰 반영)
 
 - **Spec coverage:** §1→Task 3, §2→Task 3, §3→Task 4·5, §4→Task 1·2, §5→Task 6, §6→Task 7, §8·§9→각 태스크 테스트 + Task 8. FE(§7)는 별도 계획(사용자 결정).
-- **v1/v2 공존 창:** Task 1 완료~Task 2 완료 사이에 실워커 실행 금지 명시(Task 1 Step 5). Task 1·2는 연속 실행.
-- **타입 일관성:** `ProcessingConfig`(snake_case 필드), `resolveProcessingConfig(global, override, gpuEligible)`, `parse_models(payload) -> ModelsV2`, `torch_device(device) -> str` — 태스크 간 시그니처 일치 확인함.
+- **배포 안전 순서 (리뷰 반영):** 워커 v1+v2 파싱(Task 1) → TS parser(Task 2) → API v2 생성(Task 6). "실워커 실행 금지" 같은 운영 규율에 의존하는 창 자체가 없다.
+- **기존 테스트 파급 (리뷰 반영):** `test/job-payload.spec.ts`의 builder v1 단언은 Task 6에서 builder 전환과 함께 갱신 — Task 2까지는 그대로 통과.
+- **named preset GPU 우회 (리뷰 반영):** PUT은 `resolveStoredValue`로 완전 해석 후 devices 검사 — light(diar gpu)도 비적격 머신에서 400. e2e 케이스 포함.
+- **job type별 버전 (리뷰 반영):** `SUPPORTED_SCHEMA_VERSIONS`가 dict — enroll/index는 {1}. v1 wire 모델은 `Literal[1]`, 내부 모델의 `schema_version: int`는 검증 제약이 아님을 docstring으로 명시 (검증은 dispatch가 담당).
+- **빈 devices (리뷰 반영):** override 스키마 refine으로 거부 — 값 없이 custom 전환만 일으키는 입력 차단.
+- **preset+language→custom (리뷰 반영):** 의도된 동작으로 유지, Swagger description에 명시 + FE 계획에서 UI 고지 필요.
+- **MLX repo 이름 (리뷰 반영):** Task 7 Step 1에서 구현 전 HF API로 실재 확인 — 추정 이름이 기능 코드로 커밋되지 않음.
+- **타입 일관성:** `ProcessingConfig`(snake_case 필드), `resolveProcessingConfig(global, override, gpuEligible)`, `resolveStoredValue(value)`, `parse_models(payload) -> ModelsV2`, `torch_device(device) -> str` — 태스크 간 시그니처 일치 확인함.
 - **환경 의존 테스트:** capabilities/gpu 400은 순수 함수 분리 + `CAPABILITIES` provider override로 CI 머신 스펙 비의존.
