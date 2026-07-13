@@ -111,6 +111,28 @@ test("범위 밖으로 끌면 0..1로 클램프된다", () => {
   expect(onSeek).toHaveBeenCalledWith(1);
 });
 
+test("오버레이가 있어도 화자 재생 버튼은 클릭 가능하다", () => {
+  const onPlaySpeaker = vi.fn();
+  const { container, getByRole } = render(
+    <SpeakerTimeline
+      tracks={TRACKS}
+      playhead={0.1}
+      onSeek={vi.fn()}
+      onPlaySpeaker={onPlaySpeaker}
+    />,
+  );
+  // jsdom은 히트 테스트를 하지 않으므로 pointer-events 분리를 클래스로 고정:
+  // 오버레이 컨테이너는 none, 레인 셀만 auto — 빈 라벨/duration 셀이
+  // 아래 재생 버튼의 포인터를 가로채지 않는다.
+  const cell = container.querySelector('[data-slot="timeline-scrub"]')!;
+  expect(cell.classList.contains("pointer-events-auto")).toBe(true);
+  expect(cell.parentElement!.classList.contains("pointer-events-none")).toBe(
+    true,
+  );
+  fireEvent.click(getByRole("button", { name: "김영재 구간 재생" }));
+  expect(onPlaySpeaker).toHaveBeenCalledTimes(1);
+});
+
 test("onSeek이 없으면 오버레이를 렌더하지 않는다", () => {
   const { container } = render(
     <SpeakerTimeline tracks={TRACKS} playhead={0.1} />,

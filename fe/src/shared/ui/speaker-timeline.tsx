@@ -82,17 +82,19 @@ function SpeakerTimeline({
 
       {/* 드래그/클릭 seek 오버레이 — 레인 컬럼 전체를 덮는다. 누른 지점부터
           미리보기(핀·onScrub), 놓는 순간 onSeek 1회. 호환 click 중복을 피해
-          pointer 이벤트만 쓴다. 캡처는 pointerup/cancel 후 암묵 해제(표준). */}
+          pointer 이벤트만 쓴다. 캡처는 pointerup/cancel 후 암묵 해제(표준).
+          컨테이너는 pointer-events-none — 빈 라벨/duration 셀이 아래
+          화자 재생 버튼의 포인터를 가로채지 않게 레인 셀만 auto로 연다. */}
       {onSeek && (
         <div
           aria-hidden="true"
-          className="absolute inset-0 z-[2] grid gap-3"
+          className="pointer-events-none absolute inset-0 z-[2] grid gap-3"
           style={{ gridTemplateColumns: cols }}
         >
           <div />
           <div
             data-slot="timeline-scrub"
-            className="cursor-pointer [touch-action:none]"
+            className="pointer-events-auto cursor-pointer [touch-action:none]"
             onPointerDown={(e) => {
               e.currentTarget.setPointerCapture?.(e.pointerId);
               const f = fractionAt(e);
