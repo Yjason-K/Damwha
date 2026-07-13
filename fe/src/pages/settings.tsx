@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 import { useCapabilities } from "@/features/settings/api/settings";
+import { PRESET_META } from "@/features/settings/lib/presets";
 import { ProcessingSettingsForm } from "@/features/settings/ui/processing-settings-form";
 
 function BackIcon() {
@@ -55,7 +56,7 @@ export function SettingsPage() {
               <span className="text-sm text-[color:var(--text-muted)]">
                 메모리 {caps.memory_gb} GB
                 {caps.recommended_preset
-                  ? ` · 추천 프리셋: ${caps.recommended_preset}`
+                  ? ` · 추천 프리셋: ${PRESET_META[caps.recommended_preset].label}`
                   : ""}
               </span>
             </>
