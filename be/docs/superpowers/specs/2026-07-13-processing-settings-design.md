@@ -59,6 +59,8 @@ CREATE TABLE app_setting (
 
 **행 없음/손상 폴백:** 행이 없거나 jsonb가 zod 검증에 실패하면 env 기반 기본값(`WHISPER_MODEL` 등, 현행 유지)으로 동작 + 경고 로그. 이 폴백은 **GET과 enqueue 양쪽에 동일하게** 적용 (동일한 `loadProcessingSettings()` 한 함수를 공유).
 
+**env 폴백 → v2 config 변환 규칙:** env는 v1 형태(`WHISPER_DEVICE: mps|cpu|cuda` 단일 값)이므로 v1과 동일한 매핑을 적용한다 — `mps` → `devices: {diarization: gpu, stt: gpu}`, `cpu` → 전 단계 cpu, `cuda` → 전 단계 cpu + 경고 로그. 결과 config의 `preset`은 `"custom"`, `preset_revision`은 `null`.
+
 ## 2. 프리셋 정의 — API 코드 상수 (`src/settings/presets.ts`)
 
 워커는 프리셋 개념을 모른다. payload에는 resolved 값만 간다. 진실 공급원은 API 한 곳.
@@ -69,7 +71,7 @@ CREATE TABLE app_setting (
 | `standard` | `large-v3-turbo` | gpu | gpu | 16–32GB |
 | `quality` | `large-v3` | gpu | gpu | 64GB+ |
 
-- `PRESET_REVISION: number` 상수 — 프리셋 정의를 바꿀 때마다 증가. payload에 기록되어(§4) "이 job이 어느 정의로 실행됐나" 표시/디버그용. 실행 재현성은 payload의 구체 값이 이미 보장하므로 revision은 참조 정보일 뿐.
+- `PRESET_REVISION: string` 상수 — `"2026-07-13.1"` 형식(정의 변경 날짜 + 동일 날짜 내 순번), 프리셋 정의를 바꿀 때마다 갱신. payload에 기록되어(§4) "이 job이 어느 정의로 실행됐나" 표시/디버그·릴리스 대조용. 실행 재현성은 payload의 구체 값이 이미 보장하므로 revision은 참조 정보일 뿐.
 - VAD는 모든 프리셋에서 CPU 고정(스키마 미노출).
 
 ## 3. 설정 API + 스펙 감지
@@ -116,7 +118,7 @@ CREATE TABLE app_setting (
     "language": "ko",
     "devices": { "diarization": "gpu", "stt": "gpu" },   // cpu|gpu
     "preset": "standard",                // 참조 정보 (custom 포함)
-    "preset_revision": 1,                // 참조 정보
+    "preset_revision": "2026-07-13.1",   // 참조 정보 (string, custom이면 null)
     "diarization": { "model": "...", "min_speakers": null, "max_speakers": null },
     "embedding": { "model": "...", "dimension": 192 }
   }
@@ -129,12 +131,12 @@ CREATE TABLE app_setting (
 
 ### v1/v2 명시적 parser 분리 (단순 enum 교체로 불가 — v1은 `models.device` 필수)
 
-- **TS** (`src/contracts/job-payload.schema.ts`): `schema_version` 기준 discriminated union. v1 스키마(현행 `device: mps|cpu|cuda`) 보존 + v2 스키마 신설. **API가 새로 enqueue하는 것은 v2만.**
+- **TS** (`src/contracts/job-payload.schema.ts`): `schema_version` 기준 discriminated union — 단, **zod `discriminatedUnion`은 child의 `.default(1)`을 discriminator 선택 전에 적용하지 않으므로**, union 앞에 `z.preprocess`로 `schema_version ??= 1`을 주입해 version 누락 payload를 v1 branch로 보낸다. v1 스키마(현행 `device: mps|cpu|cuda`) 보존 + v2 스키마 신설. **API가 새로 enqueue하는 것은 v2만.**
 - **Python** (`worker/damwha_worker/contracts.py`): v1/v2 pydantic 모델 분리. **v1은 파싱 즉시 내부 v2 표현으로 변환** — 파이프라인/registry는 v2 표현만 다룬다.
   - v1 `device: "mps"` → `devices: {diarization: gpu, stt: gpu}`
   - v1 `device: "cpu"` → 전 단계 cpu
   - v1 `device: "cuda"` → **전 단계 cpu 변환 + 경고 로그** (cuda→gpu는 Metal 의미와 달라 오변환; ARM Mac 전용 서비스라 cuda job은 실존하지 않으나 계약상 방어)
-  - v1엔 `preset` 없음 → `preset: null`.
+  - v1엔 `preset` 없음 → 내부 표현에 `preset: null`, `preset_revision: null`. (워커 내부 v2 표현의 두 필드는 nullable — API가 새로 만드는 v2 payload에서는 항상 채워지지만 v1 변환·custom에서는 null.)
 - fixture: `test/fixtures/job-payloads/`에 v2 추가, v1 유지. 양쪽 동시 검증 메커니즘 현행 그대로.
 
 ## 5. enqueue — 설정 로드 + 오버라이드 병합
@@ -152,7 +154,9 @@ CREATE TABLE app_setting (
 5. 결과를 payload에 고정.
 
 - override는 **저장하지 않음** — 해당 job 한정.
+- **override 요청 스키마는 PUT 스키마와 별개다 (의도된 비대칭):** PUT은 이름 프리셋 + 개별 노브 혼합을 400으로 거부하지만(§3), job override는 `{preset?, whisper_model?, devices?, language?}` 전 필드 optional에 혼합 허용 — 혼합 결과는 `custom`. "저장되는 의도"는 단순하게, "일회성 실행"은 유연하게. 두 zod 스키마를 별도 정의하고 공유하지 않는다.
 - **업로드는 multipart** (`POST /meetings`, `meetings.controller.ts`): nested JSON body 불가 → `processing`을 **multipart의 JSON 문자열 필드**로 받고 서버에서 `JSON.parse` + zod 검증. 재처리(`POST /meetings/:id/reprocess`)는 JSON body라 그대로 nested 객체.
+- **업로드 경로 실행 순서:** `processing` JSON parse → override zod 검증 → 전역 설정 load/resolve → 병합 → gpu 적격성 검증까지 **전부 `saveFromTemp()` 이전에** 수행. 검증 400이 파일 저장 후에 나면 storage에 고아 파일이 남는다 (`meetings.service.ts:39` 현행 순서는 저장이 먼저).
 
 ## 6. 워커 변경
 
@@ -160,6 +164,7 @@ CREATE TABLE app_setting (
 
 - `config.py`에서 `whisper_backend`, `device` 제거 — 둘 다 payload 파생으로 이동. (enroll의 ECAPA는 CPU 강제라 `settings.device` 의존 제거 무해 — `build_embedder` 시그니처에서 device 소스만 정리.)
 - STT: `devices.stt == "gpu"` → `MlxWhisper`, `"cpu"` → `FasterWhisper(device="cpu", compute_type="int8")`. 백엔드 선택이 워커 로컬 설정에서 payload로 이동 — 재현성 강화.
+- **의존성 (`worker/pyproject.toml`)**: 현재 `faster-whisper`는 `sys_platform != 'darwin' or platform_machine != 'arm64'` marker로 **ARM Mac에서 설치 제외** — 이대로면 `light` 프리셋(STT cpu)이 ARM Mac에서 실행 불가. marker를 제거해 **모든 플랫폼에서 설치**; ARM Mac은 mlx-whisper + faster-whisper 둘 다 설치되어야 GPU/CPU STT 선택이 실제 작동한다.
 - diarization: `devices.diarization` → pyannote에 `mps`/`cpu` 전달.
 - `gpu` → torch 계열 `mps` 번역은 한 곳(`models/device.py`).
 - VAD: 변경 없음(CPU 고정). ECAPA: 변경 없음(CPU 강제 유지).
@@ -167,6 +172,8 @@ CREATE TABLE app_setting (
 ### 폴백 금지 — 명확한 영구 오류
 
 payload가 gpu인데 실제 실행 환경이 불가(MLX import 실패, `torch.backends.mps.is_available()` false 등)이면 **PERMANENT 설정 오류로 fail** (`errors.ErrorKind.PERMANENT`). CPU로 조용히 폴백하지 않는다 — payload와 실제 실행이 달라지면 재현성이 깨지고, 느려진 원인도 숨는다. API 측 방어(§3, §5)가 정상 경로에서 이 상황을 막고, 워커 오류는 최후 방어선.
+
+**capability 오류와 다운로드 오류는 분리한다:** MLX/torch 의존성 누락·MPS 미지원 = PERMANENT (재시도해도 같음). lazy HF 모델 다운로드의 네트워크 실패 = TRANSIENT (기존 분류 규칙 그대로 — 미분류 예외는 TRANSIENT → 재시도 유지). 다운로드 실패를 PERMANENT로 묶으면 일시 네트워크 문제에 재시도 기회를 잃는다.
 
 ### Whisper 모델 확장 — 한 변경 단위로 묶음
 
@@ -200,13 +207,15 @@ enum만 늘리면 런타임 오류(`whisper_mlx.py`의 `_REPO` 맵이 2개만 �
 | 이름 프리셋 PUT에 개별 노브 혼합 | 400 |
 | `!gpu_eligible` 머신에서 gpu 저장/enqueue | 400 |
 | 워커에서 MLX/MPS 실제 미가용 | PERMANENT fail (폴백 금지) |
+| HF 모델 다운로드 네트워크 실패 | TRANSIENT — 재시도 유지 |
+| 업로드에서 override 검증 실패 | 파일 저장 전 400 — 고아 파일 없음 |
 | 큐 잔존 v1 job | v1 parser → 내부 v2 변환, 정상 처리 |
 | v1 `cuda` payload | cpu 변환 + 경고 로그 |
 | 새 모델 첫 job HF 다운로드 지연 | 수용 + FE 안내 + 문서화 |
 
 ## 9. 테스트
 
-- **API e2e**: settings CRUD(프리셋 resolve, custom, 혼합 400, gpu 400, 폴백), capabilities(os/execFile mock, 캐시), enqueue 병합(전역만/preset override/개별 override/multipart 문자열 파싱), v2 payload fixture 검증.
-- **계약**: v2 fixture 추가 + v1 유지, TS/Python 양측 동시 검증(기존 메커니즘).
-- **워커**: v1→v2 변환 unit(mps/cpu/cuda 각각), device 번역 unit, STT 백엔드 선택 unit(fake), gpu 미가용 PERMANENT 오류 unit. 실모델은 SMOKE.md 프리셋별 시나리오(로컬 전용, CI 밖).
+- **API e2e**: settings CRUD(프리셋 resolve, custom, 혼합 400, gpu 400, 폴백), capabilities(os/execFile mock, 캐시), enqueue 병합(전역만/preset override/개별 override/multipart 문자열 파싱), v2 payload fixture 검증, **업로드 override 검증 실패 시 storage에 파일 미저장 확인**.
+- **계약**: v2 fixture 추가 + v1 유지(**`schema_version` 누락 v1 fixture 포함** — preprocess 경로 검증), TS/Python 양측 동시 검증(기존 메커니즘).
+- **워커**: v1→v2 변환 unit(mps/cpu/cuda + version 누락 각각), device 번역 unit, STT 백엔드 선택 unit(fake), gpu 미가용 PERMANENT vs 다운로드 실패 TRANSIENT 분류 unit. 실모델은 SMOKE.md 프리셋별 시나리오(로컬 전용, CI 밖) — **ARM Mac에서 faster-whisper CPU 경로 포함**.
 - **FE**: 설정 화면 vitest — 추천 배지, custom 전환, gpu_eligible=false 비활성, 오버라이드 섹션 기본 접힘.
