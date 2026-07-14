@@ -1,7 +1,7 @@
 import { Pool } from 'pg';
 
 export type Queryable = Pick<Pool, 'query'>;
-export type JobType = 'process_meeting' | 'enroll_speaker' | 'index_meeting';
+export type JobType = 'process_meeting' | 'enroll_speaker' | 'index_meeting' | 'extract_lenses';
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed';
 
 export interface JobRow {

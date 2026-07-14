@@ -74,11 +74,20 @@ export const IndexMeetingPayloadSchema = z.object({
   search_embedding: z.object({ model: z.string(), dimension: z.literal(1024) }),
 });
 
+export const ExtractLensesPayloadSchema = z.object({
+  schema_version: z.literal(1),
+  meeting_id: z.string().regex(/^mtg_[1-9][0-9]*$/),
+  processing_version: z.number().int().nonnegative(),
+  extraction_run_id: z.string().regex(/^ler_[1-9][0-9]*$/),
+  model: z.string().min(1),
+});
+
 export type ProcessMeetingPayloadV1 = z.infer<typeof ProcessMeetingPayloadV1Schema>;
 export type ProcessMeetingPayloadV2 = z.infer<typeof ProcessMeetingPayloadV2Schema>;
 export type ProcessMeetingPayload = z.infer<typeof ProcessMeetingPayloadSchema>;
 export type EnrollSpeakerPayload = z.infer<typeof EnrollSpeakerPayloadSchema>;
 export type IndexMeetingPayload = z.infer<typeof IndexMeetingPayloadSchema>;
+export type ExtractLensesPayload = z.infer<typeof ExtractLensesPayloadSchema>;
 
 export function buildProcessMeetingPayload(args: {
   meetingId: string; audioKey: string; processingVersion: number; reprocess: boolean;
@@ -126,5 +135,17 @@ export function buildIndexMeetingPayload(args: {
     meeting_id: args.meetingId,
     processing_version: args.processingVersion,
     search_embedding: { model: env.SEARCH_EMBEDDING_MODEL, dimension: env.SEARCH_EMBEDDING_DIM },
+  };
+}
+
+export function buildExtractLensesPayload(args: {
+  meetingId: string; processingVersion: number; extractionRunId: string; model: string;
+}): ExtractLensesPayload {
+  return {
+    schema_version: 1,
+    meeting_id: args.meetingId,
+    processing_version: args.processingVersion,
+    extraction_run_id: args.extractionRunId,
+    model: args.model,
   };
 }

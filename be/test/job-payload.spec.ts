@@ -5,7 +5,10 @@ import {
   buildEnrollSpeakerPayload,
   buildIndexMeetingPayload,
   IndexMeetingPayloadSchema,
+  ExtractLensesPayloadSchema,
+  buildExtractLensesPayload,
 } from '../src/contracts/job-payload.schema';
+import { loadEnv } from '../src/config/env';
 import { resolvePreset } from '../src/settings/presets';
 
 describe('job payload contract', () => {
@@ -91,6 +94,42 @@ describe('job payload contract', () => {
     expect(p.processing_version).toBe(3);
     expect(p.search_embedding).toEqual({ model: 'BAAI/bge-m3', dimension: 1024 });
     expect(() => IndexMeetingPayloadSchema.parse(p)).not.toThrow();
+  });
+
+  it('accepts only extract_lenses v1 payloads', () => {
+    const payload = {
+      schema_version: 1,
+      meeting_id: 'mtg_1',
+      processing_version: 0,
+      extraction_run_id: 'ler_1',
+      model: 'qwen2.5:14b-instruct',
+    };
+    expect(ExtractLensesPayloadSchema.parse(payload).extraction_run_id).toBe('ler_1');
+    expect(() => ExtractLensesPayloadSchema.parse({ schema_version: 2 })).toThrow();
+  });
+
+  it('builds an extract_lenses payload with the provided execution context', () => {
+    const payload = buildExtractLensesPayload({
+      meetingId: 'mtg_1',
+      processingVersion: 0,
+      extractionRunId: 'ler_1',
+      model: 'qwen2.5:14b-instruct',
+    });
+    expect(payload).toEqual({
+      schema_version: 1,
+      meeting_id: 'mtg_1',
+      processing_version: 0,
+      extraction_run_id: 'ler_1',
+      model: 'qwen2.5:14b-instruct',
+    });
+  });
+
+  it('defaults LENS_LLM_MODEL to the extraction model', () => {
+    const old = process.env.LENS_LLM_MODEL;
+    delete process.env.LENS_LLM_MODEL;
+    expect(loadEnv().LENS_LLM_MODEL).toBe('qwen2.5:14b-instruct');
+    if (old === undefined) delete process.env.LENS_LLM_MODEL;
+    else process.env.LENS_LLM_MODEL = old;
   });
 
   it('rejects UUID, zero, and unicode-digit ids', () => {
