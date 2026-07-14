@@ -88,7 +88,10 @@ export class LensesRepository {
   async findEvidence(exec: Exec, itemIds: string[]): Promise<EvidenceRow[]> {
     if (itemIds.length === 0) return [];
     const { rows } = await exec.query<EvidenceRow>(
-      `SELECT le.lens_item_id, le.relation, row_to_json(u) AS utterance
+      `SELECT le.lens_item_id, le.relation,
+         json_build_object(
+           'id', u.id, 'start_ms', u.start_ms, 'text', u.text, 'speaker_id', u.speaker_id
+         ) AS utterance
        FROM lens_evidence le JOIN utterance u ON u.id = le.utterance_id
        WHERE le.lens_item_id = ANY($1::text[])
        ORDER BY le.lens_item_id, (le.relation <> 'primary'), u.start_ms, u.id`,
@@ -142,18 +145,25 @@ export class LensesRepository {
     await exec.query(`UPDATE lens_item SET lifecycle_status='archived', updated_at=now() WHERE id=$1`, [id]);
   }
 
-  // Partial content edit. Always stamps source='edited', user_modified=true.
-  // Returns false when the item does not exist.
+  // Partial content edit. Stamps source='edited', user_modified=true when an
+  // editable field is present. A no-op patch (no editable field) leaves the row —
+  // including provenance and updated_at — untouched. Returns false when the item
+  // does not exist.
   async update(
     exec: Exec,
     id: string,
     patch: { text?: string; kind?: string; assignee_speaker_id?: string | null; due_at?: string | null },
   ): Promise<boolean> {
-    const sets = [`source='edited'`, `user_modified=true`, `updated_at=now()`];
+    const sets: string[] = [];
     const params: unknown[] = [id];
     for (const key of ['text', 'kind', 'assignee_speaker_id', 'due_at'] as const) {
       if (key in patch) { params.push(patch[key]); sets.push(`${key}=$${params.length}`); }
     }
+    if (sets.length === 0) {
+      const res = await exec.query(`SELECT 1 FROM lens_item WHERE id=$1`, [id]);
+      return (res.rowCount ?? 0) > 0;
+    }
+    sets.unshift(`source='edited'`, `user_modified=true`, `updated_at=now()`);
     const res = await exec.query(`UPDATE lens_item SET ${sets.join(', ')} WHERE id=$1`, params);
     return (res.rowCount ?? 0) > 0;
   }

@@ -163,6 +163,10 @@ export class LensesService {
     return this.db.withTransaction(async (c) => {
       const item = await this.repo.findById(c, id);
       if (!item) throw new NotFoundException('lens item not found');
+      // No-op PATCH (no editable field): return the item unchanged rather than
+      // stamping source='edited'/user_modified/updated_at — an empty PATCH must
+      // not silently drop an AI item from merge eligibility.
+      if (Object.keys(patch).length === 0) return this.hydrate(c, id);
       if (patch.assignee_speaker_id) {
         await this.assertAssigneeMembership(c, item.meeting_id, patch.assignee_speaker_id);
       }
@@ -196,11 +200,20 @@ export class LensesService {
       if (!(await this.repo.utteranceInMeeting(c, item.meeting_id, body.utterance_id as string))) {
         throw new BadRequestException('utterance does not belong to this item’s meeting');
       }
+      const existingPrimary = await this.repo.findPrimaryEvidenceUtteranceId(c, id);
       if (relation === 'primary') {
-        const existingPrimary = await this.repo.findPrimaryEvidenceUtteranceId(c, id);
         if (existingPrimary && existingPrimary !== body.utterance_id) {
           throw new ConflictException('item already has a primary evidence');
         }
+      } else if (
+        // Demoting the item's current primary to supporting would leave an active
+        // AI item with zero primary evidence (the upsert's DO UPDATE overwrites the
+        // relation). The partial-unique index cannot catch zero-primary, so reject
+        // here. Manual items (user/edited) may lose their primary freely.
+        existingPrimary === body.utterance_id &&
+        item.source === 'ai' && item.lifecycle_status === 'active'
+      ) {
+        throw new ConflictException('cannot demote the primary evidence of an active AI item');
       }
       await this.repo.upsertEvidence(c, id, body.utterance_id as string, relation);
       await this.repo.touch(c, id);
@@ -236,6 +249,10 @@ export class LensesService {
           }
         }
       }
+      // Note: unlike the manual command paths (create/update), the merge path does
+      // NOT enforce assignee meeting-membership (assertAssigneeMembership) — the
+      // worker/candidate contract is trusted; a nonexistent speaker is still caught
+      // by the assignee_speaker_id FK.
       // 2. Classify against the meeting's current items.
       const existing = await this.repo.listForMerge(c, meetingId);
       const decisions = classifyAiMerge(existing, candidates);

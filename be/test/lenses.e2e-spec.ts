@@ -327,6 +327,77 @@ describe('lenses api', () => {
     expect(supporting.body.evidence.map((e: any) => e.relation)).toEqual(['primary', 'supporting']);
   });
 
+  it('refuses to demote the sole primary of an active AI item to supporting (409) and keeps it primary', async () => {
+    const mid = await mkMeeting();
+    const primaryUtt = await mkUtt(mid, 0, 0);
+    const aiItem = await mkLens(mid, { source: 'ai' });
+    await mkEvidence(aiItem, primaryUtt, 'primary');
+
+    const res = await request(srv()).post(`/lenses/${aiItem}/evidence`)
+      .send({ utterance_id: primaryUtt, relation: 'supporting' });
+    expect(res.status).toBe(409);
+    // rolled back: the utterance is still the item's primary evidence
+    expect((await db.pool.query(
+      `SELECT relation FROM lens_evidence WHERE lens_item_id=$1 AND utterance_id=$2`, [aiItem, primaryUtt],
+    )).rows[0].relation).toBe('primary');
+  });
+
+  it('allows demoting the primary of a user item to supporting', async () => {
+    const mid = await mkMeeting();
+    const primaryUtt = await mkUtt(mid, 0, 0);
+    const userItem = await mkLens(mid, { source: 'user' });
+    await mkEvidence(userItem, primaryUtt, 'primary');
+
+    const res = await request(srv()).post(`/lenses/${userItem}/evidence`)
+      .send({ utterance_id: primaryUtt, relation: 'supporting' });
+    expect(res.status).toBe(201);
+    expect((await db.pool.query(
+      `SELECT relation FROM lens_evidence WHERE lens_item_id=$1 AND utterance_id=$2`, [userItem, primaryUtt],
+    )).rows[0].relation).toBe('supporting');
+  });
+
+  it('allows adding a non-primary utterance as supporting on an active AI item', async () => {
+    const mid = await mkMeeting();
+    const primaryUtt = await mkUtt(mid, 0, 0);
+    const supportingUtt = await mkUtt(mid, 1, 100);
+    const aiItem = await mkLens(mid, { source: 'ai' });
+    await mkEvidence(aiItem, primaryUtt, 'primary');
+
+    const res = await request(srv()).post(`/lenses/${aiItem}/evidence`)
+      .send({ utterance_id: supportingUtt, relation: 'supporting' });
+    expect(res.status).toBe(201);
+    expect(res.body.evidence.map((e: any) => e.relation)).toEqual(['primary', 'supporting']);
+  });
+
+  it('leaves provenance untouched on an empty PATCH of an AI item', async () => {
+    const mid = await mkMeeting();
+    const aiItem = await mkLens(mid, { source: 'ai' });
+
+    const res = await request(srv()).patch(`/lenses/${aiItem}`).send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ source: 'ai', user_modified: false });
+    const { rows: [row] } = await db.pool.query(
+      `SELECT source, user_modified FROM lens_item WHERE id=$1`, [aiItem],
+    );
+    expect(row).toMatchObject({ source: 'ai', user_modified: false });
+  });
+
+  it('projects only public utterance fields on evidence, not worker-internal columns', async () => {
+    const mid = await mkMeeting();
+    const spk = await mkSpeaker();
+    const utt = await mkUtt(mid, 0, 500, spk);
+    const lens = await mkLens(mid, { source: 'ai' });
+    await mkEvidence(lens, utt, 'primary');
+
+    const res = await request(srv()).get('/lenses');
+    const utterance = res.body.items[0].evidence[0].utterance;
+    expect(utterance).toEqual({ id: utt, start_ms: 500, text: 't', speaker_id: spk });
+    for (const col of ['status', 'order_index', 'processing_version', 'job_id',
+      'transcript_error', 'diar_label', 'confidence', 'end_ms', 'meeting_id']) {
+      expect(utterance).not.toHaveProperty(col);
+    }
+  });
+
   // --- AI merge -------------------------------------------------------------
   const candidate = (over: Partial<AiLensCandidate> = {}): AiLensCandidate => ({
     kind: 'action', text: 't', assignee_speaker_id: null, due_at: null,
