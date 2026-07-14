@@ -285,4 +285,41 @@ describe('lenses api', () => {
     await mkEvidence(userItem, utt, 'primary');
     expect((await request(srv()).delete(`/lenses/${userItem}/evidence/${utt}`)).status).toBe(200);
   });
+
+  it('rejects adding a second primary evidence on a different utterance (409) and leaves the original primary intact', async () => {
+    const mid = await mkMeeting();
+    const primaryUtt = await mkUtt(mid, 0, 0);
+    const otherUtt = await mkUtt(mid, 1, 100);
+    const item = await mkLens(mid, { source: 'user' });
+    await mkEvidence(item, primaryUtt, 'primary');
+
+    const res = await request(srv()).post(`/lenses/${item}/evidence`)
+      .send({ utterance_id: otherUtt, relation: 'primary' });
+    expect(res.status).toBe(409);
+
+    // rolled back: original primary unchanged, no evidence row for the other utterance
+    expect((await db.pool.query(
+      `SELECT relation FROM lens_evidence WHERE lens_item_id=$1 AND utterance_id=$2`, [item, primaryUtt],
+    )).rows[0].relation).toBe('primary');
+    expect((await db.pool.query(
+      `SELECT 1 FROM lens_evidence WHERE lens_item_id=$1 AND utterance_id=$2`, [item, otherUtt],
+    )).rowCount).toBe(0);
+  });
+
+  it('allows re-posting the existing primary utterance as primary (idempotent) and adding supporting evidence', async () => {
+    const mid = await mkMeeting();
+    const primaryUtt = await mkUtt(mid, 0, 0);
+    const supportingUtt = await mkUtt(mid, 1, 100);
+    const item = await mkLens(mid, { source: 'user' });
+    await mkEvidence(item, primaryUtt, 'primary');
+
+    const same = await request(srv()).post(`/lenses/${item}/evidence`)
+      .send({ utterance_id: primaryUtt, relation: 'primary' });
+    expect(same.status).toBe(201);
+
+    const supporting = await request(srv()).post(`/lenses/${item}/evidence`)
+      .send({ utterance_id: supportingUtt, relation: 'supporting' });
+    expect(supporting.status).toBe(201);
+    expect(supporting.body.evidence.map((e: any) => e.relation)).toEqual(['primary', 'supporting']);
+  });
 });

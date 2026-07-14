@@ -148,6 +148,12 @@ export class LensesService {
       if (!(await this.repo.utteranceInMeeting(c, item.meeting_id, body.utterance_id as string))) {
         throw new BadRequestException('utterance does not belong to this item’s meeting');
       }
+      if (relation === 'primary') {
+        const existingPrimary = await this.repo.findPrimaryEvidenceUtteranceId(c, id);
+        if (existingPrimary && existingPrimary !== body.utterance_id) {
+          throw new ConflictException('item already has a primary evidence');
+        }
+      }
       await this.repo.upsertEvidence(c, id, body.utterance_id as string, relation);
       await this.repo.touch(c, id);
       return this.hydrate(c, id);

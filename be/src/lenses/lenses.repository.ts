@@ -129,6 +129,15 @@ export class LensesRepository {
     await exec.query(`UPDATE lens_item SET user_modified=true, updated_at=now() WHERE id=$1`, [id]);
   }
 
+  // The utterance_id currently holding the item's primary evidence slot, or null if none.
+  async findPrimaryEvidenceUtteranceId(exec: Exec, lensId: string): Promise<string | null> {
+    const { rows } = await exec.query<{ utterance_id: string }>(
+      `SELECT utterance_id FROM lens_evidence WHERE lens_item_id=$1 AND relation='primary'`,
+      [lensId],
+    );
+    return rows[0]?.utterance_id ?? null;
+  }
+
   async upsertEvidence(exec: Exec, lensId: string, utteranceId: string, relation: EvidenceRelation): Promise<void> {
     await exec.query(
       `INSERT INTO lens_evidence(lens_item_id, utterance_id, relation) VALUES($1,$2,$3)
