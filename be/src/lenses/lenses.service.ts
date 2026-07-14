@@ -37,7 +37,12 @@ function encodeCursor(row: LensItemRow): string {
 function decodeCursor(raw: string): LensCursor {
   try {
     const parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
-    if (typeof parsed?.updated_at !== 'string' || typeof parsed?.id !== 'string') throw new Error('shape');
+    if (
+      typeof parsed?.updated_at !== 'string' ||
+      Number.isNaN(Date.parse(parsed.updated_at)) ||
+      typeof parsed?.id !== 'string' ||
+      !/^lens_[1-9][0-9]*$/.test(parsed.id)
+    ) throw new Error('shape');
     return { updated_at: parsed.updated_at, id: parsed.id };
   } catch {
     throw new BadRequestException('cursor is invalid');
@@ -182,8 +187,8 @@ export class LensesService {
     });
   }
 
-  async archive(id: string): Promise<void> {
-    const ok = await this.db.withTransaction((c) => this.repo.archive(c, id));
+  async remove(id: string): Promise<void> {
+    const ok = await this.db.withTransaction((c) => this.repo.deleteById(c, id));
     if (!ok) throw new NotFoundException('lens item not found');
   }
 
@@ -248,11 +253,8 @@ export class LensesService {
             throw new Error(`utterance ${uttId} does not belong to meeting ${meetingId}`);
           }
         }
+        await this.assertAssigneeMembership(c, meetingId, candidate.assignee_speaker_id);
       }
-      // Note: unlike the manual command paths (create/update), the merge path does
-      // NOT enforce assignee meeting-membership (assertAssigneeMembership) — the
-      // worker/candidate contract is trusted; a nonexistent speaker is still caught
-      // by the assignee_speaker_id FK.
       // 2. Classify against the meeting's current items.
       const existing = await this.repo.listForMerge(c, meetingId);
       const decisions = classifyAiMerge(existing, candidates);

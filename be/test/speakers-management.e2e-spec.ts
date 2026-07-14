@@ -65,6 +65,11 @@ describe('speakers management (DELETE)', () => {
       `INSERT INTO voiceprint(speaker_id,embedding,model,dimension) VALUES($1,$2::vector,'m',192)`,
       [sid, vp],
     );
+    const lens = await db.pool.query(
+      `INSERT INTO lens_item(meeting_id,kind,text,source,user_modified,assignee_speaker_id)
+       VALUES($1,'action','문서 작성','user',true,$2) RETURNING id`,
+      [mid, sid],
+    );
 
     const res = await request(srv()).delete(`/speakers/${sid}`);
     expect(res.status).toBe(204);
@@ -80,6 +85,9 @@ describe('speakers management (DELETE)', () => {
     const cRow = await db.pool.query('SELECT resolved_speaker_id FROM meeting_cluster WHERE id=$1', [cluster.rows[0].id]);
     expect(cRow.rowCount).toBe(1);
     expect(cRow.rows[0].resolved_speaker_id).toBeNull();
+    const lensRow = await db.pool.query('SELECT assignee_speaker_id FROM lens_item WHERE id=$1', [lens.rows[0].id]);
+    expect(lensRow.rowCount).toBe(1);
+    expect(lensRow.rows[0].assignee_speaker_id).toBeNull();
     // on-disk directory removed
     expect(fs.existsSync(speakerDir(sid))).toBe(false);
   });

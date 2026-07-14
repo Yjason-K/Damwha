@@ -45,10 +45,10 @@ export class LensesController {
   }
 
   @Delete('lenses/:id')
-  @ApiOperation({ summary: '렌즈 항목 보관(archive)' })
+  @ApiOperation({ summary: '렌즈 항목 삭제' })
   @HttpCode(204)
   remove(@Param('id') id: string) {
-    return this.service.archive(id);
+    return this.service.remove(id);
   }
 
   @Post('lenses/:id/evidence')

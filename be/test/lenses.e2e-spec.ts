@@ -170,6 +170,13 @@ describe('lenses api', () => {
     expect(res.body.message).toBe('cursor is invalid');
   });
 
+  it('rejects a structurally valid cursor with invalid timestamp or id', async () => {
+    const badTime = Buffer.from(JSON.stringify({ updated_at: 'not-a-time', id: 'lens_1' })).toString('base64url');
+    const badId = Buffer.from(JSON.stringify({ updated_at: '2026-07-14T00:00:00.000Z', id: 'wrong' })).toString('base64url');
+    expect((await request(srv()).get(`/lenses?cursor=${badTime}`)).status).toBe(400);
+    expect((await request(srv()).get(`/lenses?cursor=${badId}`)).status).toBe(400);
+  });
+
   it('lists a meeting’s active items after 404-checking the meeting', async () => {
     const mid = await mkMeeting();
     const active = await mkLens(mid, { lifecycle: 'active' });
@@ -227,12 +234,15 @@ describe('lenses api', () => {
       .toMatchObject({ completion_status: 'open', user_modified: true });
   });
 
-  it('archives an item on DELETE, removing it from the active list', async () => {
+  it('deletes a manual item and its evidence on DELETE', async () => {
     const mid = await mkMeeting();
+    const utt = await mkUtt(mid, 0, 0);
     const item = await mkLens(mid, { source: 'user' });
+    await mkEvidence(item, utt, 'primary');
     expect((await request(srv()).delete(`/lenses/${item}`)).status).toBe(204);
     expect((await request(srv()).get('/lenses')).body.items.length).toBe(0);
-    expect((await request(srv()).get('/lenses?lifecycle_status=archived')).body.items.map((i: any) => i.id)).toEqual([item]);
+    expect((await db.pool.query(`SELECT 1 FROM lens_item WHERE id=$1`, [item])).rowCount).toBe(0);
+    expect((await db.pool.query(`SELECT 1 FROM lens_evidence WHERE lens_item_id=$1`, [item])).rowCount).toBe(0);
   });
 
   it('returns 404 for mutations on unknown items', async () => {
@@ -499,5 +509,16 @@ describe('lenses api', () => {
     expect((await db.pool.query(`SELECT count(*)::int n FROM lens_item WHERE meeting_id=$1`, [mid])).rows[0].n).toBe(before);
     expect(await itemRow(existing)).toMatchObject({ text: '기존', lifecycle_status: 'active' });
     expect(await evidenceOf(existing)).toEqual([{ utterance_id: u1, relation: 'primary' }]);
+  });
+
+  it('rejects an AI candidate assigned to a speaker without a meeting utterance', async () => {
+    const mid = await mkMeeting();
+    const utt = await mkUtt(mid, 0, 0);
+    const foreignSpeaker = await mkSpeaker();
+
+    await expect(service.mergeAiExtraction(mid, [
+      candidate({ primary_utterance_id: utt, assignee_speaker_id: foreignSpeaker }),
+    ])).rejects.toThrow('assignee_speaker_id has no utterance in this meeting');
+    expect((await db.pool.query(`SELECT 1 FROM lens_item WHERE meeting_id=$1`, [mid])).rowCount).toBe(0);
   });
 });

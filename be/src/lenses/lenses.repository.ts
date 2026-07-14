@@ -176,11 +176,8 @@ export class LensesRepository {
     return (res.rowCount ?? 0) > 0;
   }
 
-  async archive(exec: Exec, id: string): Promise<boolean> {
-    const res = await exec.query(
-      `UPDATE lens_item SET lifecycle_status='archived', user_modified=true, updated_at=now() WHERE id=$1`,
-      [id],
-    );
+  async deleteById(exec: Exec, id: string): Promise<boolean> {
+    const res = await exec.query(`DELETE FROM lens_item WHERE id=$1`, [id]);
     return (res.rowCount ?? 0) > 0;
   }
 
