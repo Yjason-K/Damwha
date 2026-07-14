@@ -578,18 +578,36 @@ def persist_lens_extraction(
         return "lost"
 
 
-def fail_lens_extraction(conn, job_id: str, worker_id: str, run_id: str, error: dict) -> bool:
-    """Final extraction failures affect only their job/run, never the meeting."""
+def fail_lens_extraction(
+    conn, job_id: str, worker_id: str, run_id: str, processing_version: int, error: dict
+) -> str:
+    """Finish an extraction failure, discarding it when its meeting version is stale."""
     try:
         with conn.transaction():
             row = conn.execute(
-                """SELECT 1 FROM job j JOIN lens_extraction_run r ON r.job_id=j.id
-                   WHERE j.id=%s AND j.locked_by=%s AND j.status='running' AND r.id=%s
-                   FOR UPDATE OF j, r""",
-                (job_id, worker_id, run_id),
+                """SELECT m.processing_version
+                   FROM job j
+                   JOIN lens_extraction_run r ON r.job_id=j.id
+                   JOIN meeting m ON m.id=r.meeting_id
+                   WHERE j.id=%s AND j.locked_by=%s AND j.status='running'
+                     AND r.id=%s AND r.processing_version=%s
+                   FOR UPDATE OF j, r, m""",
+                (job_id, worker_id, run_id, processing_version),
             ).fetchone()
             if row is None:
                 raise _Abort
+            if row["processing_version"] != processing_version:
+                stale_error = _lens_stale_error()
+                conn.execute(
+                    "UPDATE job SET status='done', error=%s, updated_at=now() WHERE id=%s",
+                    (Jsonb(stale_error), job_id),
+                )
+                conn.execute(
+                    """UPDATE lens_extraction_run
+                       SET status='done', error=%s, finished_at=now() WHERE id=%s""",
+                    (Jsonb(stale_error), run_id),
+                )
+                return "discarded"
             conn.execute(
                 "UPDATE job SET status='failed', error=%s, updated_at=now() WHERE id=%s",
                 (Jsonb(error), job_id),
@@ -599,9 +617,9 @@ def fail_lens_extraction(conn, job_id: str, worker_id: str, run_id: str, error: 
                    WHERE id=%s""",
                 (Jsonb(error), run_id),
             )
-        return True
+        return "failed"
     except _Abort:
-        return False
+        return "lost"
 
 
 def persist_enroll(

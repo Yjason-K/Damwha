@@ -317,6 +317,49 @@ def test_extract_routes_to_lens_client_only(conn, tmp_path):
     assert [row["id"] for row in calls[0]] == [utt]
 
 
+def test_extract_terminal_llm_failure_after_version_advance_is_discarded(conn, tmp_path):
+    mid = seed_meeting(conn, status="done", processing_version=0)
+    conn.execute(
+        """INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,text,status,
+                                  order_index,processing_version)
+           VALUES (%s,'S0',0,1000,'extract this','ok',0,0)""",
+        (mid,),
+    )
+    run_id = conn.execute(
+        """INSERT INTO lens_extraction_run(meeting_id,processing_version,status,model)
+           VALUES (%s,0,'queued','model') RETURNING id""",
+        (mid,),
+    ).fetchone()["id"]
+    payload = {
+        "schema_version": 1,
+        "meeting_id": mid,
+        "processing_version": 0,
+        "extraction_run_id": run_id,
+        "model": "model",
+    }
+    jid = seed_job(conn, type="extract_lenses", meeting_id=mid, payload=payload, max_attempts=1)
+    conn.execute("UPDATE lens_extraction_run SET job_id=%s WHERE id=%s", (jid, run_id))
+    job = db.claim(conn, "w1")
+
+    class Client:
+        def extract(self, *, utterances):
+            conn.execute("UPDATE meeting SET processing_version=1 WHERE id=%s", (mid,))
+            raise WorkerError("llm_invalid_response", "invalid", ErrorKind.PERMANENT)
+
+    assert (
+        handle_job(
+            conn, job, Storage(str(tmp_path)), "w1", build_lens_client=lambda: Client()
+        )
+        == "discarded"
+    )
+    job_row = conn.execute("SELECT status, error FROM job WHERE id=%s", (jid,)).fetchone()
+    run_row = conn.execute(
+        "SELECT status, error FROM lens_extraction_run WHERE id=%s", (run_id,)
+    ).fetchone()
+    assert job_row["status"] == run_row["status"] == "done"
+    assert job_row["error"]["code"] == run_row["error"]["code"] == "discarded_by_stale_guard"
+
+
 # --- NEW: dispatch_claimed_job wiring tests ---
 
 

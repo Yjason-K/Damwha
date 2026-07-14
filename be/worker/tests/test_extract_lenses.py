@@ -177,7 +177,7 @@ def test_mark_running_and_transient_requeue_leaves_run_running(conn, extraction_
 def test_final_failure_marks_run_but_keeps_meeting_done(conn, extraction_job):
     job, ids = extraction_job
     error = WorkerError("bad_response", "invalid", ErrorKind.PERMANENT).to_json(stage="extract")
-    assert db.fail_lens_extraction(conn, job["id"], "w", ids["run_id"], error)
+    assert db.fail_lens_extraction(conn, job["id"], "w", ids["run_id"], 0, error) == "failed"
     assert (
         _one(conn, "SELECT status FROM lens_extraction_run WHERE id=%s", (ids["run_id"],))["status"]
         == "failed"

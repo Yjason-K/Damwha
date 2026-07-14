@@ -112,12 +112,11 @@ def handle_job(
             return "failed" if db.fail_job(conn, job["id"], worker_id, error_json) else "lost"
         if job["type"] == "extract_lenses":
             run_id = (job["payload"] or {}).get("extraction_run_id")
+            processing_version = (job["payload"] or {}).get("processing_version")
             if transient_retry:
                 return "requeued" if db.requeue(conn, job["id"], worker_id) else "lost"
-            return (
-                "failed"
-                if db.fail_lens_extraction(conn, job["id"], worker_id, run_id, error_json)
-                else "lost"
+            return db.fail_lens_extraction(
+                conn, job["id"], worker_id, run_id, processing_version, error_json
             )
         # process_meeting
         meeting_id = job["meeting_id"]
