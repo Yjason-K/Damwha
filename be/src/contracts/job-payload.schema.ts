@@ -80,7 +80,7 @@ export const ExtractLensesPayloadSchema = z.object({
   processing_version: z.number().int().nonnegative(),
   extraction_run_id: z.string().regex(/^ler_[1-9][0-9]*$/),
   model: z.string().min(1),
-});
+}).strict();
 
 export type ProcessMeetingPayloadV1 = z.infer<typeof ProcessMeetingPayloadV1Schema>;
 export type ProcessMeetingPayloadV2 = z.infer<typeof ProcessMeetingPayloadV2Schema>;

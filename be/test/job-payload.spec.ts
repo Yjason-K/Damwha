@@ -108,6 +108,17 @@ describe('job payload contract', () => {
     expect(() => ExtractLensesPayloadSchema.parse({ schema_version: 2 })).toThrow();
   });
 
+  it('rejects unknown keys in an extract_lenses payload', () => {
+    expect(() => ExtractLensesPayloadSchema.parse({
+      schema_version: 1,
+      meeting_id: 'mtg_1',
+      processing_version: 0,
+      extraction_run_id: 'ler_1',
+      model: 'qwen2.5:14b-instruct',
+      unexpected: true,
+    })).toThrow();
+  });
+
   it('builds an extract_lenses payload with the provided execution context', () => {
     const payload = buildExtractLensesPayload({
       meetingId: 'mtg_1',
