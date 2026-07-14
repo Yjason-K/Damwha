@@ -1,7 +1,8 @@
 import logging
+from datetime import date
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 log = logging.getLogger("damwha_worker")
 
@@ -10,10 +11,17 @@ SUPPORTED_SCHEMA_VERSIONS: dict[str, frozenset[int]] = {
     "process_meeting": frozenset({1, 2}),
     "enroll_speaker": frozenset({1}),
     "index_meeting": frozenset({1}),
+    "extract_lenses": frozenset({1}),
 }
 
 MeetingId = Annotated[str, StringConstraints(pattern=r"^mtg_[1-9][0-9]*$")]
 SpeakerId = Annotated[str, StringConstraints(pattern=r"^spk_[1-9][0-9]*$")]
+ExtractionRunId = Annotated[str, StringConstraints(pattern=r"^ler_[1-9][0-9]*$")]
+UtteranceId = Annotated[str, StringConstraints(pattern=r"^utt_[1-9][0-9]*$")]
+NonEmptyText = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)
+]
+NonEmptyString = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 WhisperModel = Literal["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
 Device = Literal["cpu", "gpu"]
@@ -128,6 +136,33 @@ class IndexMeetingPayload(BaseModel):
     search_embedding: SearchEmbedding
 
 
+class ExtractLensesPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1]
+    meeting_id: MeetingId
+    processing_version: int = Field(ge=0)
+    extraction_run_id: ExtractionRunId
+    model: NonEmptyString
+
+
+class LensCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["action", "decision", "promise"]
+    text: NonEmptyText
+    assignee_speaker_id: SpeakerId | None
+    due_at: date | None
+    primary_utterance_id: UtteranceId
+    supporting_utterance_ids: list[UtteranceId]
+
+
+class LensExtractionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[LensCandidate]
+
+
 def _parse_process_meeting(data: dict) -> ProcessMeetingPayload:
     if data.get("schema_version", 1) == 1:
         v1 = ProcessMeetingPayloadV1.model_validate(data)
@@ -161,4 +196,6 @@ def parse_payload(job_type: str, data: dict):
         return _parse_process_meeting(data)
     if job_type == "enroll_speaker":
         return EnrollSpeakerPayload.model_validate(data)
-    return IndexMeetingPayload.model_validate(data)
+    if job_type == "index_meeting":
+        return IndexMeetingPayload.model_validate(data)
+    return ExtractLensesPayload.model_validate(data)

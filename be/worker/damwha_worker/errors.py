@@ -49,6 +49,8 @@ MODEL_LOAD_FAILED = "model_load_failed"
 OOM = "oom"
 IO_ERROR = "io_error"
 DB_ERROR = "db_error"
+LLM_REQUEST_FAILED = "llm_request_failed"
+LLM_INVALID_RESPONSE = "llm_invalid_response"
 
 
 def classify(exc: Exception) -> WorkerError:

@@ -7,6 +7,7 @@ name = "damwha-worker"
 version = "0.1.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "httpx>=0.27",
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
     "psycopg[binary]>=3.1",
@@ -35,6 +36,7 @@ models = [
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "pytest-httpx>=0.35",
     "testcontainers[postgres]>=4.0",
     "ruff>=0.4",
 ]
