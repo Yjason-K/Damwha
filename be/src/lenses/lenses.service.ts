@@ -3,8 +3,8 @@ import { Pool, PoolClient } from 'pg';
 import { DatabaseService } from '../database/database.service';
 import { LensesRepository } from './lenses.repository';
 import {
-  EvidenceRelation, EvidenceRow, LENS_KINDS, LensCompletionStatus, LensCursor,
-  LensItemRow, LensKind, LensLifecycleStatus,
+  AiLensCandidate, AiMergeDecision, EvidenceRelation, EvidenceRow, ExistingLensForMerge,
+  LENS_KINDS, LensCompletionStatus, LensCursor, LensItemRow, LensKind, LensLifecycleStatus,
 } from './lens.types';
 
 type Exec = Pool | PoolClient;
@@ -42,6 +42,54 @@ function decodeCursor(raw: string): LensCursor {
   } catch {
     throw new BadRequestException('cursor is invalid');
   }
+}
+
+// Pure, deterministic merge policy. Emits decisions in a fixed order: each
+// candidate (in order) becomes an 'update' when it matches an eligible existing
+// item by (kind, primary utterance), else a 'create'; then every eligible item
+// no candidate matched is appended as an 'archive'. Ineligible items — user,
+// edited, user_modified, completed, or archived — are invisible here: never
+// matched, never archived.
+export function classifyAiMerge(
+  existing: ExistingLensForMerge[],
+  candidates: AiLensCandidate[],
+): AiMergeDecision[] {
+  const eligible = existing.filter((item) =>
+    item.source === 'ai' && !item.user_modified &&
+    item.lifecycle_status === 'active' && item.completion_status === 'open',
+  );
+  const key = (kind: LensKind, utteranceId: string | null) => `${kind}:${utteranceId}`;
+  const byKey = new Map<string, ExistingLensForMerge>();
+  for (const item of eligible) byKey.set(key(item.kind, item.primary_utterance_id), item);
+
+  const decisions: AiMergeDecision[] = [];
+  const matched = new Set<string>();
+  for (const candidate of candidates) {
+    const item = byKey.get(key(candidate.kind, candidate.primary_utterance_id));
+    if (item && !matched.has(item.id)) {
+      matched.add(item.id);
+      decisions.push({ type: 'update', lens_id: item.id, candidate });
+    } else {
+      decisions.push({ type: 'create', candidate });
+    }
+  }
+  for (const item of eligible) {
+    if (!matched.has(item.id)) decisions.push({ type: 'archive', lens_id: item.id });
+  }
+  return decisions;
+}
+
+// The distinct evidence utterances a candidate references (primary + supporting).
+function candidateUtterances(candidate: AiLensCandidate): Set<string> {
+  return new Set<string>([candidate.primary_utterance_id, ...candidate.supporting_utterance_ids]);
+}
+
+// The item content fields the extractor owns on a created/updated AI item.
+function aiFields(candidate: AiLensCandidate) {
+  return {
+    kind: candidate.kind, text: candidate.text,
+    assigneeSpeakerId: candidate.assignee_speaker_id, dueAt: candidate.due_at,
+  };
 }
 
 @Injectable()
@@ -173,6 +221,51 @@ export class LensesService {
       await this.repo.touch(c, id);
       return this.hydrate(c, id);
     });
+  }
+
+  // Worker-facing boundary: apply an AI extraction run against a meeting's lens
+  // items in one transaction. Not an HTTP path — a bad payload (e.g. a foreign
+  // utterance) is a worker contract violation, so we throw and roll everything back.
+  async mergeAiExtraction(meetingId: string, candidates: AiLensCandidate[]): Promise<void> {
+    await this.db.withTransaction(async (c) => {
+      // 1. Every distinct evidence utterance must belong to this meeting.
+      for (const candidate of candidates) {
+        for (const uttId of candidateUtterances(candidate)) {
+          if (!(await this.repo.utteranceInMeeting(c, meetingId, uttId))) {
+            throw new Error(`utterance ${uttId} does not belong to meeting ${meetingId}`);
+          }
+        }
+      }
+      // 2. Classify against the meeting's current items.
+      const existing = await this.repo.listForMerge(c, meetingId);
+      const decisions = classifyAiMerge(existing, candidates);
+      // 3. Apply in order.
+      for (const decision of decisions) {
+        if (decision.type === 'update') {
+          await this.repo.updateAiFields(c, decision.lens_id, aiFields(decision.candidate));
+          await this.repo.deleteAllEvidence(c, decision.lens_id);
+          await this.writeCandidateEvidence(c, decision.lens_id, decision.candidate);
+        } else if (decision.type === 'create') {
+          const id = await this.repo.insertAi(c, { meetingId, ...aiFields(decision.candidate) });
+          await this.writeCandidateEvidence(c, id, decision.candidate);
+        } else {
+          await this.repo.archiveAi(c, decision.lens_id);
+        }
+      }
+    });
+  }
+
+  // Write a candidate's evidence: the primary anchors the item, supporting adds
+  // context. Dedupe so the primary utterance is never also stored as supporting,
+  // guaranteeing exactly one primary evidence row.
+  private async writeCandidateEvidence(exec: Exec, lensId: string, candidate: AiLensCandidate): Promise<void> {
+    await this.repo.upsertEvidence(exec, lensId, candidate.primary_utterance_id, 'primary');
+    const seen = new Set<string>([candidate.primary_utterance_id]);
+    for (const uttId of candidate.supporting_utterance_ids) {
+      if (seen.has(uttId)) continue;
+      seen.add(uttId);
+      await this.repo.upsertEvidence(exec, lensId, uttId, 'supporting');
+    }
   }
 
   // --- helpers --------------------------------------------------------------

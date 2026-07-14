@@ -46,3 +46,32 @@ export interface LensCursor {
   updated_at: string;
   id: string;
 }
+
+// One lens candidate emitted by the AI extractor for a meeting. Evidence is
+// referenced by utterance id; the primary anchors the item, supporting adds context.
+export type AiLensCandidate = {
+  kind: LensKind;
+  text: string;
+  assignee_speaker_id: string | null;
+  due_at: string | null;
+  primary_utterance_id: string;
+  supporting_utterance_ids: string[];
+};
+
+// The minimal existing-item shape classifyAiMerge reasons over: identity, the
+// eligibility fields, and the utterance currently in the primary evidence slot.
+export interface ExistingLensForMerge {
+  id: string;
+  kind: LensKind;
+  source: LensSource;
+  user_modified: boolean;
+  lifecycle_status: LensLifecycleStatus;
+  completion_status: LensCompletionStatus;
+  primary_utterance_id: string | null;
+}
+
+// Ordered merge decisions: updates/creates in candidate order, then archives.
+export type AiMergeDecision =
+  | { type: 'update'; lens_id: string; candidate: AiLensCandidate }
+  | { type: 'create'; candidate: AiLensCandidate }
+  | { type: 'archive'; lens_id: string };

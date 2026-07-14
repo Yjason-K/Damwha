@@ -4,6 +4,8 @@ import request from 'supertest';
 import { startTestDb, StartedTestDb } from './db';
 import { AppModule } from '../src/app.module';
 import { CAPABILITIES } from '../src/system/capabilities';
+import { LensesService } from '../src/lenses/lenses.service';
+import { AiLensCandidate } from '../src/lenses/lens.types';
 
 describe('lenses schema', () => {
   let db: StartedTestDb;
@@ -33,6 +35,7 @@ describe('lenses schema', () => {
 describe('lenses api', () => {
   let db: StartedTestDb;
   let app: INestApplication;
+  let service: LensesService;
   beforeAll(async () => {
     db = await startTestDb();
     const mod = await Test.createTestingModule({ imports: [AppModule] })
@@ -44,6 +47,7 @@ describe('lenses api', () => {
       .compile();
     app = mod.createNestApplication();
     await app.init();
+    service = app.get(LensesService);
   });
   afterEach(async () => { await db.reset(); });
   afterAll(async () => { await app?.close(); await db?.stop(); });
@@ -321,5 +325,108 @@ describe('lenses api', () => {
       .send({ utterance_id: supportingUtt, relation: 'supporting' });
     expect(supporting.status).toBe(201);
     expect(supporting.body.evidence.map((e: any) => e.relation)).toEqual(['primary', 'supporting']);
+  });
+
+  // --- AI merge -------------------------------------------------------------
+  const candidate = (over: Partial<AiLensCandidate> = {}): AiLensCandidate => ({
+    kind: 'action', text: 't', assignee_speaker_id: null, due_at: null,
+    primary_utterance_id: 'utt_0', supporting_utterance_ids: [], ...over,
+  });
+  const itemRow = async (id: string) =>
+    (await db.pool.query(
+      `SELECT kind, text, source, user_modified, completion_status, lifecycle_status FROM lens_item WHERE id=$1`, [id],
+    )).rows[0];
+  const evidenceOf = async (id: string) =>
+    (await db.pool.query(
+      `SELECT utterance_id, relation FROM lens_evidence WHERE lens_item_id=$1 ORDER BY relation, utterance_id`, [id],
+    )).rows;
+
+  it('merge updates/archives only untouched active AI and leaves user, edited, and completed items unchanged', async () => {
+    const mid = await mkMeeting();
+    const u1 = await mkUtt(mid, 0, 0);
+    const u2 = await mkUtt(mid, 1, 100);
+    const u3 = await mkUtt(mid, 2, 200);
+
+    const aiMatch = await mkLens(mid, { kind: 'action', source: 'ai', text: '기존 AI' });
+    await mkEvidence(aiMatch, u1, 'primary');
+    const aiArchive = await mkLens(mid, { kind: 'decision', source: 'ai' });
+    await mkEvidence(aiArchive, u2, 'primary');
+    const userItem = await mkLens(mid, { kind: 'action', source: 'user' });
+    await mkEvidence(userItem, u1, 'primary'); // same key as aiMatch, must stay invisible
+    const editedItem = await mkLens(mid, { kind: 'action', source: 'edited' });
+    const completedItem = await mkLens(mid, { kind: 'action', source: 'ai', completion: 'done' });
+
+    const candidates = [
+      candidate({ kind: 'action', primary_utterance_id: u1, text: '업데이트됨', supporting_utterance_ids: [u3] }),
+      candidate({ kind: 'promise', primary_utterance_id: u3, text: '신규' }),
+    ];
+    await service.mergeAiExtraction(mid, candidates);
+
+    // matched AI item: updated fields, still active/open AI, evidence replaced
+    expect(await itemRow(aiMatch)).toMatchObject({
+      kind: 'action', text: '업데이트됨', source: 'ai', user_modified: false,
+      completion_status: 'open', lifecycle_status: 'active',
+    });
+    expect(await evidenceOf(aiMatch)).toEqual([
+      { utterance_id: u1, relation: 'primary' },
+      { utterance_id: u3, relation: 'supporting' },
+    ]);
+
+    // unmatched eligible AI item: archived, evidence untouched
+    expect(await itemRow(aiArchive)).toMatchObject({ lifecycle_status: 'archived', source: 'ai', user_modified: false });
+    expect(await evidenceOf(aiArchive)).toEqual([{ utterance_id: u2, relation: 'primary' }]);
+
+    // ineligible items untouched
+    expect(await itemRow(userItem)).toMatchObject({ source: 'user', user_modified: false, lifecycle_status: 'active' });
+    expect(await itemRow(editedItem)).toMatchObject({ source: 'edited', lifecycle_status: 'active' });
+    expect(await itemRow(completedItem)).toMatchObject({ source: 'ai', completion_status: 'done', lifecycle_status: 'active' });
+
+    // new candidate created as active unmodified AI with exactly one primary evidence
+    const created = (await db.pool.query(
+      `SELECT id FROM lens_item WHERE meeting_id=$1 AND text='신규'`, [mid],
+    )).rows[0].id;
+    expect(await itemRow(created)).toMatchObject({
+      kind: 'promise', source: 'ai', user_modified: false, completion_status: 'open', lifecycle_status: 'active',
+    });
+    expect(await evidenceOf(created)).toEqual([{ utterance_id: u3, relation: 'primary' }]);
+  });
+
+  it('merge dedupes a utterance listed as both primary and supporting to a single primary', async () => {
+    const mid = await mkMeeting();
+    const u1 = await mkUtt(mid, 0, 0);
+    const u2 = await mkUtt(mid, 1, 100);
+
+    await service.mergeAiExtraction(mid, [
+      candidate({ kind: 'action', primary_utterance_id: u1, text: '중복', supporting_utterance_ids: [u1, u2] }),
+    ]);
+
+    const created = (await db.pool.query(
+      `SELECT id FROM lens_item WHERE meeting_id=$1 AND text='중복'`, [mid],
+    )).rows[0].id;
+    expect(await evidenceOf(created)).toEqual([
+      { utterance_id: u1, relation: 'primary' },
+      { utterance_id: u2, relation: 'supporting' },
+    ]);
+  });
+
+  it('merge with a foreign-meeting utterance aborts the whole merge, writing nothing', async () => {
+    const mid = await mkMeeting();
+    const other = await mkMeeting();
+    const u1 = await mkUtt(mid, 0, 0);
+    const foreign = await mkUtt(other, 0, 0);
+
+    const existing = await mkLens(mid, { kind: 'action', source: 'ai', text: '기존' });
+    await mkEvidence(existing, u1, 'primary');
+    const before = (await db.pool.query(`SELECT count(*)::int n FROM lens_item WHERE meeting_id=$1`, [mid])).rows[0].n;
+
+    await expect(service.mergeAiExtraction(mid, [
+      candidate({ kind: 'promise', primary_utterance_id: u1, text: '유효' }),
+      candidate({ kind: 'action', primary_utterance_id: foreign, text: '외부' }),
+    ])).rejects.toThrow();
+
+    // rolled back: no new item, existing item still active with original text and evidence
+    expect((await db.pool.query(`SELECT count(*)::int n FROM lens_item WHERE meeting_id=$1`, [mid])).rows[0].n).toBe(before);
+    expect(await itemRow(existing)).toMatchObject({ text: '기존', lifecycle_status: 'active' });
+    expect(await evidenceOf(existing)).toEqual([{ utterance_id: u1, relation: 'primary' }]);
   });
 });
