@@ -206,11 +206,7 @@ function Calendar({ value, onChange, disabled }: CalendarProps) {
           const isToday = isSameDay(d, today);
           const focusable = isSameDay(d, focusDate);
           return (
-            <div
-              role="gridcell"
-              key={dayKey(d)}
-              aria-selected={selected}
-            >
+            <div role="gridcell" key={dayKey(d)} aria-selected={selected}>
               <button
                 type="button"
                 data-day={dayKey(d)}
