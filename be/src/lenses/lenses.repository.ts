@@ -1,0 +1,168 @@
+import { Injectable } from '@nestjs/common';
+import { PoolClient, Pool } from 'pg';
+import { EvidenceRelation, EvidenceRow, LensCursor, LensItemRow, LensListFilters } from './lens.types';
+
+type Exec = Pool | PoolClient;
+
+const ITEM_COLUMNS = `
+  li.id, li.meeting_id, li.kind, li.text, li.assignee_speaker_id,
+  li.due_at::text AS due_at, li.completion_status, li.source,
+  li.user_modified, li.lifecycle_status, li.created_at, li.updated_at,
+  m.title AS meeting_title`;
+
+@Injectable()
+export class LensesRepository {
+  async findById(exec: Exec, id: string): Promise<LensItemRow | null> {
+    const { rows } = await exec.query<LensItemRow>(
+      `SELECT ${ITEM_COLUMNS}
+       FROM lens_item li JOIN meeting m ON m.id = li.meeting_id
+       WHERE li.id = $1`,
+      [id],
+    );
+    return rows[0] ?? null;
+  }
+
+  // Keyset-paginated list. `filters` are already validated/defaulted by the
+  // service; `cursor` (if present) is the decoded { updated_at, id } tuple.
+  // Fetches limit+1 so the caller can tell whether a next page exists.
+  async list(
+    exec: Exec,
+    filters: Required<Pick<LensListFilters, 'completion_status' | 'lifecycle_status' | 'limit'>> &
+      Pick<LensListFilters, 'kind' | 'meeting_id' | 'speaker_id' | 'date_from' | 'date_to'>,
+    cursor: LensCursor | null,
+  ): Promise<LensItemRow[]> {
+    const params: unknown[] = [filters.lifecycle_status, filters.completion_status];
+    const where: string[] = ['li.lifecycle_status = $1', 'li.completion_status = $2'];
+    if (filters.kind) { params.push(filters.kind); where.push(`li.kind = $${params.length}`); }
+    if (filters.meeting_id) { params.push(filters.meeting_id); where.push(`li.meeting_id = $${params.length}`); }
+    if (filters.speaker_id) { params.push(filters.speaker_id); where.push(`li.assignee_speaker_id = $${params.length}`); }
+    if (filters.date_from) { params.push(filters.date_from); where.push(`li.due_at >= $${params.length}::date`); }
+    if (filters.date_to) { params.push(filters.date_to); where.push(`li.due_at <= $${params.length}::date`); }
+    if (cursor) {
+      params.push(cursor.updated_at);
+      const u = params.length;
+      params.push(cursor.id);
+      const i = params.length;
+      where.push(`(li.updated_at, li.id) < ($${u}::timestamptz, $${i}::text)`);
+    }
+    params.push(filters.limit + 1);
+    const { rows } = await exec.query<LensItemRow>(
+      `SELECT ${ITEM_COLUMNS}
+       FROM lens_item li JOIN meeting m ON m.id = li.meeting_id
+       WHERE ${where.join(' AND ')}
+       ORDER BY li.updated_at DESC, li.id DESC
+       LIMIT $${params.length}`,
+      params,
+    );
+    return rows;
+  }
+
+  async listActiveForMeeting(exec: Exec, meetingId: string): Promise<LensItemRow[]> {
+    const { rows } = await exec.query<LensItemRow>(
+      `SELECT ${ITEM_COLUMNS}
+       FROM lens_item li JOIN meeting m ON m.id = li.meeting_id
+       WHERE li.meeting_id = $1 AND li.lifecycle_status = 'active'
+       ORDER BY li.updated_at DESC, li.id DESC`,
+      [meetingId],
+    );
+    return rows;
+  }
+
+  // Evidence for the given items, primary first then by utterance start.
+  async findEvidence(exec: Exec, itemIds: string[]): Promise<EvidenceRow[]> {
+    if (itemIds.length === 0) return [];
+    const { rows } = await exec.query<EvidenceRow>(
+      `SELECT le.lens_item_id, le.relation, row_to_json(u) AS utterance
+       FROM lens_evidence le JOIN utterance u ON u.id = le.utterance_id
+       WHERE le.lens_item_id = ANY($1::text[])
+       ORDER BY le.lens_item_id, (le.relation <> 'primary'), u.start_ms, u.id`,
+      [itemIds],
+    );
+    return rows;
+  }
+
+  async insert(
+    exec: Exec,
+    args: { meetingId: string; kind: string; text: string; assigneeSpeakerId: string | null; dueAt: string | null },
+  ): Promise<string> {
+    const { rows } = await exec.query<{ id: string }>(
+      `INSERT INTO lens_item(meeting_id, kind, text, source, user_modified, assignee_speaker_id, due_at)
+       VALUES($1,$2,$3,'user',true,$4,$5) RETURNING id`,
+      [args.meetingId, args.kind, args.text, args.assigneeSpeakerId, args.dueAt],
+    );
+    return rows[0].id;
+  }
+
+  // Partial content edit. Always stamps source='edited', user_modified=true.
+  // Returns false when the item does not exist.
+  async update(
+    exec: Exec,
+    id: string,
+    patch: { text?: string; kind?: string; assignee_speaker_id?: string | null; due_at?: string | null },
+  ): Promise<boolean> {
+    const sets = [`source='edited'`, `user_modified=true`, `updated_at=now()`];
+    const params: unknown[] = [id];
+    for (const key of ['text', 'kind', 'assignee_speaker_id', 'due_at'] as const) {
+      if (key in patch) { params.push(patch[key]); sets.push(`${key}=$${params.length}`); }
+    }
+    const res = await exec.query(`UPDATE lens_item SET ${sets.join(', ')} WHERE id=$1`, params);
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  async setCompletion(exec: Exec, id: string, status: string): Promise<boolean> {
+    const res = await exec.query(
+      `UPDATE lens_item SET completion_status=$2, user_modified=true, updated_at=now() WHERE id=$1`,
+      [id, status],
+    );
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  async archive(exec: Exec, id: string): Promise<boolean> {
+    const res = await exec.query(
+      `UPDATE lens_item SET lifecycle_status='archived', user_modified=true, updated_at=now() WHERE id=$1`,
+      [id],
+    );
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  async touch(exec: Exec, id: string): Promise<void> {
+    await exec.query(`UPDATE lens_item SET user_modified=true, updated_at=now() WHERE id=$1`, [id]);
+  }
+
+  async upsertEvidence(exec: Exec, lensId: string, utteranceId: string, relation: EvidenceRelation): Promise<void> {
+    await exec.query(
+      `INSERT INTO lens_evidence(lens_item_id, utterance_id, relation) VALUES($1,$2,$3)
+       ON CONFLICT (lens_item_id, utterance_id) DO UPDATE SET relation = EXCLUDED.relation`,
+      [lensId, utteranceId, relation],
+    );
+  }
+
+  async deleteEvidence(exec: Exec, lensId: string, utteranceId: string): Promise<EvidenceRelation | null> {
+    const { rows } = await exec.query<{ relation: EvidenceRelation }>(
+      `DELETE FROM lens_evidence WHERE lens_item_id=$1 AND utterance_id=$2 RETURNING relation`,
+      [lensId, utteranceId],
+    );
+    return rows[0]?.relation ?? null;
+  }
+
+  async meetingExists(exec: Exec, meetingId: string): Promise<boolean> {
+    const { rowCount } = await exec.query(`SELECT 1 FROM meeting WHERE id=$1`, [meetingId]);
+    return (rowCount ?? 0) > 0;
+  }
+
+  async speakerHasUtteranceInMeeting(exec: Exec, meetingId: string, speakerId: string): Promise<boolean> {
+    const { rowCount } = await exec.query(
+      `SELECT 1 FROM utterance WHERE meeting_id=$1 AND speaker_id=$2 LIMIT 1`,
+      [meetingId, speakerId],
+    );
+    return (rowCount ?? 0) > 0;
+  }
+
+  async utteranceInMeeting(exec: Exec, meetingId: string, utteranceId: string): Promise<boolean> {
+    const { rowCount } = await exec.query(
+      `SELECT 1 FROM utterance WHERE id=$1 AND meeting_id=$2`,
+      [utteranceId, meetingId],
+    );
+    return (rowCount ?? 0) > 0;
+  }
+}

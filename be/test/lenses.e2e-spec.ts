@@ -1,4 +1,9 @@
+import { Test } from '@nestjs/testing';
+import { INestApplication } from '@nestjs/common';
+import request from 'supertest';
 import { startTestDb, StartedTestDb } from './db';
+import { AppModule } from '../src/app.module';
+import { CAPABILITIES } from '../src/system/capabilities';
 
 describe('lenses schema', () => {
   let db: StartedTestDb;
@@ -22,5 +27,262 @@ describe('lenses schema', () => {
     )).rejects.toThrow();
     await db.pool.query(`DELETE FROM meeting WHERE id=$1`, [meeting.id]);
     expect((await db.pool.query(`SELECT 1 FROM lens_item WHERE id=$1`, [item.id])).rowCount).toBe(0);
+  });
+});
+
+describe('lenses api', () => {
+  let db: StartedTestDb;
+  let app: INestApplication;
+  beforeAll(async () => {
+    db = await startTestDb();
+    const mod = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(CAPABILITIES)
+      .useValue({
+        platform: 'darwin', arch: 'arm64', chip: 'test', memory_gb: 32,
+        gpu_eligible: true, recommended_preset: 'standard',
+      })
+      .compile();
+    app = mod.createNestApplication();
+    await app.init();
+  });
+  afterEach(async () => { await db.reset(); });
+  afterAll(async () => { await app?.close(); await db?.stop(); });
+
+  const srv = () => app.getHttpServer();
+
+  // --- seed helpers ---------------------------------------------------------
+  const mkMeeting = async (title = '회의') =>
+    (await db.pool.query(
+      `INSERT INTO meeting(audio_key,status,title) VALUES('k','done',$1) RETURNING id`, [title],
+    )).rows[0].id;
+  const mkSpeaker = async (name = '홍길동') =>
+    (await db.pool.query(
+      `INSERT INTO speaker(name,enrollment_status) VALUES($1,'ready') RETURNING id`, [name],
+    )).rows[0].id;
+  const mkUtt = async (mid: string, order: number, start: number, speaker: string | null = null) =>
+    (await db.pool.query(
+      `INSERT INTO utterance(meeting_id,speaker_id,diar_label,start_ms,end_ms,text,status,order_index,processing_version)
+       VALUES($1,$2,'S',$3,$4,'t','ok',$5,0) RETURNING id`, [mid, speaker, start, start + 100, order],
+    )).rows[0].id;
+  const mkLens = async (
+    mid: string,
+    opts: {
+      kind?: string; source?: string; completion?: string; lifecycle?: string;
+      text?: string; assignee?: string | null; due?: string | null; updated?: string;
+    } = {},
+  ) => {
+    const o = {
+      kind: 'action', source: 'ai', completion: 'open', lifecycle: 'active',
+      text: '문서 작성', assignee: null, due: null, ...opts,
+    };
+    const updatedSql = o.updated ? `'${o.updated}'::timestamptz` : 'now()';
+    return (await db.pool.query(
+      `INSERT INTO lens_item(meeting_id,kind,text,source,user_modified,completion_status,lifecycle_status,assignee_speaker_id,due_at,updated_at)
+       VALUES($1,$2,$3,$4,false,$5,$6,$7,$8,${updatedSql}) RETURNING id`,
+      [mid, o.kind, o.text, o.source, o.completion, o.lifecycle, o.assignee, o.due],
+    )).rows[0].id;
+  };
+  const mkEvidence = async (lensId: string, uttId: string, relation = 'primary') =>
+    db.pool.query(
+      `INSERT INTO lens_evidence(lens_item_id,utterance_id,relation) VALUES($1,$2,$3)`,
+      [lensId, uttId, relation],
+    );
+
+  // --- reads ----------------------------------------------------------------
+  it('lists active open items newest-first with meeting metadata and evidence', async () => {
+    const mid = await mkMeeting();
+    const utt = await mkUtt(mid, 0, 0);
+    const lens = await mkLens(mid, { kind: 'action', source: 'ai' });
+    await mkEvidence(lens, utt, 'primary');
+
+    const res = await request(srv()).get('/lenses');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ items: expect.any(Array), next_cursor: null });
+    expect(res.body.items[0]).toMatchObject({
+      id: expect.stringMatching(/^lens_/), kind: 'action', lifecycle_status: 'active',
+      meeting: { id: expect.stringMatching(/^mtg_/), title: expect.anything() },
+      evidence: [{ relation: 'primary', utterance: { id: expect.stringMatching(/^utt_/), start_ms: 0 } }],
+    });
+  });
+
+  it('orders evidence primary-first regardless of insert order', async () => {
+    const mid = await mkMeeting();
+    const u0 = await mkUtt(mid, 0, 0);
+    const u1 = await mkUtt(mid, 1, 1000);
+    const lens = await mkLens(mid);
+    await mkEvidence(lens, u0, 'supporting');
+    await mkEvidence(lens, u1, 'primary');
+
+    const res = await request(srv()).get('/lenses');
+    const ev = res.body.items[0].evidence;
+    expect(ev.map((e: any) => e.relation)).toEqual(['primary', 'supporting']);
+    expect(ev[0].utterance.id).toBe(u1);
+  });
+
+  it('defaults to open + active, excluding done and archived items', async () => {
+    const mid = await mkMeeting();
+    const open = await mkLens(mid, { completion: 'open', lifecycle: 'active' });
+    await mkLens(mid, { completion: 'done', lifecycle: 'active' });
+    await mkLens(mid, { completion: 'open', lifecycle: 'archived' });
+
+    const res = await request(srv()).get('/lenses');
+    expect(res.body.items.map((i: any) => i.id)).toEqual([open]);
+  });
+
+  it('filters by kind, meeting_id, speaker, date range, and status', async () => {
+    const m1 = await mkMeeting('A');
+    const m2 = await mkMeeting('B');
+    const spk = await mkSpeaker();
+    await mkUtt(m1, 0, 0, spk);
+    const decision = await mkLens(m1, { kind: 'decision' });
+    const withAssignee = await mkLens(m1, { assignee: spk, due: '2026-07-10' });
+    await mkLens(m2, { kind: 'action' });
+    const done = await mkLens(m1, { completion: 'done' });
+
+    expect((await request(srv()).get('/lenses?kind=decision')).body.items.map((i: any) => i.id)).toEqual([decision]);
+    expect((await request(srv()).get(`/lenses?meeting_id=${m2}`)).body.items.length).toBe(1);
+    expect((await request(srv()).get(`/lenses?speaker_id=${spk}`)).body.items.map((i: any) => i.id)).toEqual([withAssignee]);
+    expect((await request(srv()).get('/lenses?date_from=2026-07-01&date_to=2026-07-15')).body.items.map((i: any) => i.id)).toEqual([withAssignee]);
+    expect((await request(srv()).get('/lenses?completion_status=done')).body.items.map((i: any) => i.id)).toEqual([done]);
+  });
+
+  it('paginates via keyset cursor (limit=1 continuation)', async () => {
+    const mid = await mkMeeting();
+    const older = await mkLens(mid, { updated: '2026-07-01T00:00:00Z' });
+    const newer = await mkLens(mid, { updated: '2026-07-02T00:00:00Z' });
+
+    const p1 = await request(srv()).get('/lenses?limit=1');
+    expect(p1.body.items.map((i: any) => i.id)).toEqual([newer]);
+    expect(p1.body.next_cursor).toEqual(expect.any(String));
+
+    const p2 = await request(srv()).get(`/lenses?limit=1&cursor=${encodeURIComponent(p1.body.next_cursor)}`);
+    expect(p2.body.items.map((i: any) => i.id)).toEqual([older]);
+    expect(p2.body.next_cursor).toBeNull();
+  });
+
+  it('rejects a malformed cursor with 400', async () => {
+    const res = await request(srv()).get('/lenses?cursor=%%%not-base64%%%');
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe('cursor is invalid');
+  });
+
+  it('lists a meeting’s active items after 404-checking the meeting', async () => {
+    const mid = await mkMeeting();
+    const active = await mkLens(mid, { lifecycle: 'active' });
+    await mkLens(mid, { lifecycle: 'archived' });
+    const res = await request(srv()).get(`/meetings/${mid}/lenses`);
+    expect(res.status).toBe(200);
+    expect(res.body.items.map((i: any) => i.id)).toEqual([active]);
+
+    expect((await request(srv()).get('/meetings/mtg_999999/lenses')).status).toBe(404);
+  });
+
+  // --- create ---------------------------------------------------------------
+  it('creates a user item with trimmed text', async () => {
+    const mid = await mkMeeting();
+    const res = await request(srv()).post('/lenses').send({ meeting_id: mid, kind: 'action', text: '  문서 작성  ' });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ source: 'user', user_modified: true, completion_status: 'open', text: '문서 작성' });
+  });
+
+  it('rejects invalid kind, date, and text on create', async () => {
+    const mid = await mkMeeting();
+    expect((await request(srv()).post('/lenses').send({ meeting_id: mid, kind: 'topic', text: 'x' })).status).toBe(400);
+    expect((await request(srv()).post('/lenses').send({ meeting_id: mid, kind: 'action', text: 'x', due_at: '2026-13-40' })).status).toBe(400);
+    expect((await request(srv()).post('/lenses').send({ meeting_id: mid, kind: 'action', text: '   ' })).status).toBe(400);
+    expect((await request(srv()).post('/lenses').send({ meeting_id: mid, kind: 'action', text: 'a'.repeat(1001) })).status).toBe(400);
+    expect((await request(srv()).post('/lenses').send({ meeting_id: 'bad', kind: 'action', text: 'x' })).status).toBe(400);
+  });
+
+  it('returns 404 creating against an unknown meeting', async () => {
+    const res = await request(srv()).post('/lenses').send({ meeting_id: 'mtg_999999', kind: 'action', text: 'x' });
+    expect(res.status).toBe(404);
+  });
+
+  it('rejects an assignee without an utterance in the meeting (400)', async () => {
+    const mid = await mkMeeting();
+    const spk = await mkSpeaker(); // speaker exists but has no utterance in this meeting
+    const res = await request(srv()).post('/lenses').send({ meeting_id: mid, kind: 'action', text: 'x', assignee_speaker_id: spk });
+    expect(res.status).toBe(400);
+  });
+
+  // --- edit / complete / reopen --------------------------------------------
+  it('patches text, flipping source to edited', async () => {
+    const mid = await mkMeeting();
+    const userItem = await mkLens(mid, { source: 'user' });
+    const res = await request(srv()).patch(`/lenses/${userItem}`).send({ text: '수정된 문서' });
+    expect(res.body).toMatchObject({ source: 'edited', user_modified: true, text: '수정된 문서' });
+  });
+
+  it('completes and reopens an item', async () => {
+    const mid = await mkMeeting();
+    const userItem = await mkLens(mid, { source: 'user' });
+    expect((await request(srv()).post(`/lenses/${userItem}/complete`)).body)
+      .toMatchObject({ completion_status: 'done', user_modified: true });
+    expect((await request(srv()).post(`/lenses/${userItem}/reopen`)).body)
+      .toMatchObject({ completion_status: 'open', user_modified: true });
+  });
+
+  it('archives an item on DELETE, removing it from the active list', async () => {
+    const mid = await mkMeeting();
+    const item = await mkLens(mid, { source: 'user' });
+    expect((await request(srv()).delete(`/lenses/${item}`)).status).toBe(204);
+    expect((await request(srv()).get('/lenses')).body.items.length).toBe(0);
+    expect((await request(srv()).get('/lenses?lifecycle_status=archived')).body.items.map((i: any) => i.id)).toEqual([item]);
+  });
+
+  it('returns 404 for mutations on unknown items', async () => {
+    expect((await request(srv()).post('/lenses/lens_999999/complete')).status).toBe(404);
+    expect((await request(srv()).patch('/lenses/lens_999999').send({ text: 'x' })).status).toBe(404);
+    expect((await request(srv()).delete('/lenses/lens_999999')).status).toBe(404);
+  });
+
+  // --- evidence -------------------------------------------------------------
+  it('adds and removes evidence, flagging the item user_modified', async () => {
+    const mid = await mkMeeting();
+    const utt = await mkUtt(mid, 0, 0);
+    const item = await mkLens(mid, { source: 'user' });
+    const added = await request(srv()).post(`/lenses/${item}/evidence`).send({ utterance_id: utt, relation: 'primary' });
+    expect(added.status).toBe(201);
+    expect(added.body.user_modified).toBe(true);
+    expect(added.body.evidence.map((e: any) => e.utterance.id)).toEqual([utt]);
+
+    const removed = await request(srv()).delete(`/lenses/${item}/evidence/${utt}`);
+    expect(removed.status).toBe(200);
+    expect(removed.body.evidence).toEqual([]);
+  });
+
+  it('rejects evidence whose utterance is foreign to the item’s meeting (400)', async () => {
+    const m1 = await mkMeeting();
+    const m2 = await mkMeeting();
+    const foreignUtt = await mkUtt(m2, 0, 0);
+    const aiItem = await mkLens(m1, { source: 'ai' });
+    const res = await request(srv()).post(`/lenses/${aiItem}/evidence`).send({ utterance_id: foreignUtt, relation: 'primary' });
+    expect(res.status).toBe(400);
+    // nothing was written
+    expect((await db.pool.query(`SELECT count(*)::int n FROM lens_evidence WHERE lens_item_id=$1`, [aiItem])).rows[0].n).toBe(0);
+    expect((await db.pool.query(`SELECT user_modified FROM lens_item WHERE id=$1`, [aiItem])).rows[0].user_modified).toBe(false);
+  });
+
+  it('refuses to delete the only primary evidence of an active AI item and rolls back (409)', async () => {
+    const mid = await mkMeeting();
+    const primaryUtt = await mkUtt(mid, 0, 0);
+    const aiItem = await mkLens(mid, { source: 'ai' });
+    await mkEvidence(aiItem, primaryUtt, 'primary');
+
+    const res = await request(srv()).delete(`/lenses/${aiItem}/evidence/${primaryUtt}`);
+    expect(res.status).toBe(409);
+    // rolled back: the primary evidence still exists
+    expect((await db.pool.query(
+      `SELECT relation FROM lens_evidence WHERE lens_item_id=$1 AND utterance_id=$2`, [aiItem, primaryUtt],
+    )).rows[0].relation).toBe('primary');
+  });
+
+  it('allows deleting the primary evidence of a user item', async () => {
+    const mid = await mkMeeting();
+    const utt = await mkUtt(mid, 0, 0);
+    const userItem = await mkLens(mid, { source: 'user' });
+    await mkEvidence(userItem, utt, 'primary');
+    expect((await request(srv()).delete(`/lenses/${userItem}/evidence/${utt}`)).status).toBe(200);
   });
 });
