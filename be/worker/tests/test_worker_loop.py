@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from damwha_worker import db
 from damwha_worker.__main__ import _reconnect, dispatch_claimed_job, handle_job, run_once
+from damwha_worker.contracts import LensCandidate
 from damwha_worker.errors import ErrorKind, WorkerError
 from damwha_worker.models.base import DiarSegment, Word
 from damwha_worker.pipeline.ffmpeg import ProbeResult
@@ -261,6 +262,59 @@ def test_enroll_routes_to_build_embedder(conn, tmp_path, monkeypatch):
         ]
         == "ready"
     )
+
+
+def test_extract_routes_to_lens_client_only(conn, tmp_path):
+    mid = seed_meeting(conn, status="done", processing_version=0)
+    utt = conn.execute(
+        """INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,text,status,
+                                  order_index,processing_version)
+           VALUES (%s,'S0',0,1000,'extract this','ok',0,0) RETURNING id""",
+        (mid,),
+    ).fetchone()["id"]
+    run_id = conn.execute(
+        """INSERT INTO lens_extraction_run(meeting_id,processing_version,status,model)
+           VALUES (%s,0,'queued','model') RETURNING id""",
+        (mid,),
+    ).fetchone()["id"]
+    payload = {
+        "schema_version": 1,
+        "meeting_id": mid,
+        "processing_version": 0,
+        "extraction_run_id": run_id,
+        "model": "model",
+    }
+    jid = seed_job(conn, type="extract_lenses", meeting_id=mid, payload=payload)
+    conn.execute("UPDATE lens_extraction_run SET job_id=%s WHERE id=%s", (jid, run_id))
+    job = db.claim(conn, "w1")
+    calls = []
+
+    class Client:
+        def extract(self, *, utterances):
+            calls.append(utterances)
+            return [
+                LensCandidate(
+                    kind="action",
+                    text="do it",
+                    assignee_speaker_id=None,
+                    due_at=None,
+                    primary_utterance_id=utt,
+                    supporting_utterance_ids=[],
+                )
+            ]
+
+    assert (
+        handle_job(
+            conn,
+            job,
+            Storage(str(tmp_path)),
+            "w1",
+            build_lens_client=lambda: Client(),
+            build_models=lambda: (_ for _ in ()).throw(AssertionError("must not build models")),
+        )
+        == "committed"
+    )
+    assert [row["id"] for row in calls[0]] == [utt]
 
 
 # --- NEW: dispatch_claimed_job wiring tests ---

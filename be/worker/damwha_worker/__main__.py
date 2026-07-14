@@ -10,6 +10,7 @@ from .config import load_settings
 from .contracts import parse_payload
 from .errors import ErrorKind, ShutdownRequested, classify
 from .pipeline.enroll_speaker import run_enroll_speaker
+from .pipeline.extract_lenses import run_extract_lenses
 from .pipeline.index_meeting import run_index_meeting
 from .pipeline.process_meeting import run_process_meeting
 from .storage import Storage
@@ -29,6 +30,7 @@ def handle_job(
     build_models=None,
     build_embedder=None,
     build_text_embedder=None,
+    build_lens_client=None,
     search_embedding=None,
     default_speaker_prefix="Speaker",
     shutdown_event=None,
@@ -74,6 +76,11 @@ def handle_job(
                 worker_id=worker_id,
                 shutdown_event=shutdown_event,
             )
+        if job["type"] == "extract_lenses":
+            client = build_lens_client()
+            return run_extract_lenses(
+                conn, job, payload, client, worker_id=worker_id, shutdown_event=shutdown_event
+            )
         raise ValueError(f"unknown job type {job['type']}")
     except ShutdownRequested:
         log.info("job %s type=%s → shutdown requeue", job["id"], job["type"])
@@ -103,6 +110,15 @@ def handle_job(
             if transient_retry:
                 return "requeued" if db.requeue(conn, job["id"], worker_id) else "lost"
             return "failed" if db.fail_job(conn, job["id"], worker_id, error_json) else "lost"
+        if job["type"] == "extract_lenses":
+            run_id = (job["payload"] or {}).get("extraction_run_id")
+            if transient_retry:
+                return "requeued" if db.requeue(conn, job["id"], worker_id) else "lost"
+            return (
+                "failed"
+                if db.fail_lens_extraction(conn, job["id"], worker_id, run_id, error_json)
+                else "lost"
+            )
         # process_meeting
         meeting_id = job["meeting_id"]
         if transient_retry:
@@ -122,6 +138,7 @@ def run_once(
     build_models=None,
     build_embedder=None,
     build_text_embedder=None,
+    build_lens_client=None,
     search_embedding=None,
     default_speaker_prefix="Speaker",
     shutdown_event=None,
@@ -137,6 +154,7 @@ def run_once(
         build_models=build_models,
         build_embedder=build_embedder,
         build_text_embedder=build_text_embedder,
+        build_lens_client=build_lens_client,
         search_embedding=search_embedding,
         default_speaker_prefix=default_speaker_prefix,
         shutdown_event=shutdown_event,
@@ -153,6 +171,7 @@ def dispatch_claimed_job(
     build_embedder_fn,
     build_text_embedder_fn,
     heartbeat_cm,
+    build_lens_client_fn=None,
     shutdown_event=None,
 ) -> str:
     """claim된 job 1건: heartbeat 진입 → 콜백(지연 빌드)을 handle_job에 주입."""
@@ -165,6 +184,9 @@ def dispatch_claimed_job(
             build_models=lambda: build_models_fn(job["payload"], settings),
             build_embedder=lambda: build_embedder_fn(job["payload"], settings),
             build_text_embedder=lambda: build_text_embedder_fn(settings),
+            build_lens_client=(
+                (lambda: build_lens_client_fn(settings)) if build_lens_client_fn else None
+            ),
             search_embedding=(settings.search_embedding_model, settings.search_embedding_dim),
             default_speaker_prefix=settings.default_speaker_prefix,
             shutdown_event=shutdown_event,
@@ -180,6 +202,7 @@ def run_single_job(
     build_models_fn,
     build_embedder_fn,
     build_text_embedder_fn,
+    build_lens_client_fn=None,
 ) -> int:
     """자식 진입점: job 1건 처리 후 exit code 반환.
 
@@ -208,6 +231,7 @@ def run_single_job(
             build_models_fn=build_models_fn,
             build_embedder_fn=build_embedder_fn,
             build_text_embedder_fn=build_text_embedder_fn,
+            build_lens_client_fn=build_lens_client_fn,
             heartbeat_cm=hb,
             shutdown_event=shutdown,
         )
@@ -325,6 +349,7 @@ def run_child(settings, shutdown: threading.Event) -> int:
         signal.signal(sig, _on_signal)
 
     storage = Storage(settings.storage_root)
+    from .lens_client import LensClient
     from .models.registry import build_embedder, build_models, build_text_embedder
 
     return run_single_job(
@@ -335,6 +360,12 @@ def run_child(settings, shutdown: threading.Event) -> int:
         build_models_fn=build_models,
         build_embedder_fn=build_embedder,
         build_text_embedder_fn=build_text_embedder,
+        build_lens_client_fn=lambda s: LensClient(
+            s.lens_llm_base_url,
+            s.lens_llm_model,
+            s.lens_llm_api_key,
+            s.lens_llm_timeout_seconds,
+        ),
     )
 
 
