@@ -107,8 +107,22 @@ export class MeetingsRepository {
   }
   async findStatus(exec: Queryable, id: string) {
     const { rows } = await exec.query(
-      `SELECT m.status, j.stage, j.progress, m.error
-       FROM meeting m LEFT JOIN job j ON j.id = m.current_job_id
+      `SELECT m.status, j.stage, j.progress, m.error,
+              CASE WHEN ler.id IS NULL THEN NULL ELSE jsonb_build_object(
+                'status', ler.status,
+                'model', ler.model,
+                'error', ler.error,
+                'finished_at', ler.finished_at
+              ) END AS lens_extraction
+       FROM meeting m
+       LEFT JOIN job j ON j.id = m.current_job_id
+       LEFT JOIN LATERAL (
+         SELECT id, status, model, error, finished_at
+         FROM lens_extraction_run
+         WHERE meeting_id=m.id
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1
+       ) ler ON true
        WHERE m.id=$1`,
       [id],
     );

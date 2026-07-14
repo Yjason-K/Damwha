@@ -15,6 +15,7 @@ import { Inject } from '@nestjs/common';
 import { loadEnv } from '../config/env';
 import { nextId } from '../common/id';
 import { isIso8601 } from '../common/iso8601';
+import { LensExtractionService } from '../lenses/lens-extraction.service';
 import * as fs from 'fs';
 
 const AUDIO_MIME = /^audio\//;
@@ -33,6 +34,7 @@ export class MeetingsService {
     private readonly jobs: JobsRepository,
     private readonly meetings: MeetingsRepository,
     private readonly settings: SettingsService,
+    private readonly lensExtraction: LensExtractionService,
     @Inject(CAPABILITIES) private readonly caps: Capabilities,
   ) {}
 
@@ -141,6 +143,10 @@ export class MeetingsService {
     const status = await this.meetings.findStatus(this.db.pool, id);
     if (!status) throw new NotFoundException('meeting not found');
     return status;
+  }
+
+  async extractLenses(id: string) {
+    return this.lensExtraction.request(id);
   }
 
   async reprocess(id: string, body?: { processing?: unknown }) {

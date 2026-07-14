@@ -53,6 +53,11 @@ export class MeetingsController {
   @ApiOperation({ summary: '처리 상태 조회' })
   status(@Param('id') id: string) { return this.service.getStatus(id); }
 
+  @Post(':id/lenses/extract')
+  @ApiOperation({ summary: '회의 렌즈 수동 재추출' })
+  @HttpCode(202)
+  extract(@Param('id') id: string) { return this.service.extractLenses(id); }
+
   @Patch(':id')
   @ApiOperation({ summary: '회의 정보 수정 (제목/녹음 시각)' })
   @ApiBody({
