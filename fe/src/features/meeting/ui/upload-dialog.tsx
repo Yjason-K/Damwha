@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
+import { DatePicker } from "@/shared/ui/date-picker";
 import { Input } from "@/shared/ui/input";
 import { toast } from "@/shared/ui/use-toast";
 import type { ProcessingOverride } from "@/features/settings/api/types";
@@ -33,6 +34,18 @@ function formatBytes(bytes: number): string {
   return `${(kb / 1024).toFixed(1)} MB`;
 }
 
+/** 날짜 + "HH:MM"(비면 자정)을 로컬 시각 기준 ISO 문자열로 합친다. */
+function combineToISO(date: Date, time: string): string {
+  const [h, m] = time ? time.split(":").map(Number) : [0, 0];
+  return new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+    h || 0,
+    m || 0,
+  ).toISOString();
+}
+
 type UploadDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -48,7 +61,8 @@ export function UploadDialog({
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [file, setFile] = React.useState<File | null>(null);
   const [title, setTitle] = React.useState("");
-  const [recordedAt, setRecordedAt] = React.useState("");
+  const [recordedDate, setRecordedDate] = React.useState<Date | null>(null);
+  const [recordedTime, setRecordedTime] = React.useState("");
   const [processing, setProcessing] = React.useState<
     ProcessingOverride | undefined
   >(undefined);
@@ -57,7 +71,8 @@ export function UploadDialog({
   const resetForm = () => {
     setFile(null);
     setTitle("");
-    setRecordedAt("");
+    setRecordedDate(null);
+    setRecordedTime("");
     setProcessing(undefined);
   };
 
@@ -75,7 +90,9 @@ export function UploadDialog({
       {
         file,
         title: title.trim() || undefined,
-        recordedAt: recordedAt ? new Date(recordedAt).toISOString() : undefined,
+        recordedAt: recordedDate
+          ? combineToISO(recordedDate, recordedTime)
+          : undefined,
         processing,
       },
       {
@@ -149,12 +166,23 @@ export function UploadDialog({
             onChange={(e) => setTitle(e.target.value)}
           />
 
-          <Input
-            type="datetime-local"
-            label="녹음 일시 (선택)"
-            value={recordedAt}
-            onChange={(e) => setRecordedAt(e.target.value)}
-          />
+          <div className="flex flex-col gap-1.5">
+            <span className="text-sm font-medium text-[color:var(--text-secondary)]">
+              녹음 일시 (선택)
+            </span>
+            <div className="flex items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <DatePicker value={recordedDate} onChange={setRecordedDate} />
+              </div>
+              <Input
+                type="time"
+                value={recordedTime}
+                onChange={(e) => setRecordedTime(e.target.value)}
+                containerClassName="w-[116px] shrink-0"
+                aria-label="녹음 시각"
+              />
+            </div>
+          </div>
 
           <OverrideSection value={processing} onChange={setProcessing} />
 
