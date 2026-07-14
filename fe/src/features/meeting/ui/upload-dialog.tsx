@@ -59,6 +59,7 @@ export function UploadDialog({
   onUploaded,
 }: UploadDialogProps) {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const recordedLabelId = React.useId();
   const [file, setFile] = React.useState<File | null>(null);
   const [title, setTitle] = React.useState("");
   const [recordedDate, setRecordedDate] = React.useState<Date | null>(null);
@@ -167,10 +168,17 @@ export function UploadDialog({
           />
 
           <div className="flex flex-col gap-1.5">
-            <span className="text-sm font-medium text-[color:var(--text-secondary)]">
+            <span
+              id={recordedLabelId}
+              className="text-sm font-medium text-[color:var(--text-secondary)]"
+            >
               녹음 일시 (선택)
             </span>
-            <div className="flex items-center gap-2">
+            <div
+              role="group"
+              aria-labelledby={recordedLabelId}
+              className="flex items-center gap-2"
+            >
               <div className="min-w-0 flex-1">
                 <DatePicker value={recordedDate} onChange={setRecordedDate} />
               </div>

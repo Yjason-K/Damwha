@@ -82,7 +82,7 @@ function DatePicker({
             type="button"
             id={inputId}
             disabled={disabled}
-            aria-haspopup="dialog"
+            aria-haspopup="true"
             className={cn(
               "box-border flex h-8 w-full items-center gap-2 rounded-sm border bg-card pr-8 pl-2.5 text-base outline-none transition-[color,background-color,border-color,box-shadow] duration-[80ms] ease-[cubic-bezier(0.4,0,0.2,1)]",
               "border-border hover:border-[color:var(--border-strong)] focus-visible:border-[color:var(--border-focus)] focus-visible:[box-shadow:0_0_0_3px_var(--accent-2)]",
