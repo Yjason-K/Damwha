@@ -23,7 +23,7 @@ export async function startTestDb(): Promise<StartedTestDb> {
     stop: async () => { await pool.end(); await container.stop(); },
     reset: async () => {
       await pool.query(
-        `TRUNCATE job, utterance, meeting_cluster, voiceprint, meeting, speaker, app_setting RESTART IDENTITY CASCADE`,
+        `TRUNCATE job, lens_evidence, lens_item, lens_extraction_run, utterance, meeting_cluster, voiceprint, meeting, speaker, app_setting RESTART IDENTITY CASCADE`,
       );
       await pool.query(`ALTER SEQUENCE speaker_default_seq RESTART`);
     },
