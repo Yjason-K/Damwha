@@ -13,9 +13,12 @@ def _utterance(conn, meeting_id, *, version=0, text="spoken"):
         """
         INSERT INTO utterance(meeting_id, diar_label, start_ms, end_ms, text, status,
                               order_index, processing_version)
-        VALUES (%s, 'S0', 0, 1000, %s, 'ok', 0, %s) RETURNING id
+        VALUES (%s, 'S0', 0, 1000, %s, 'ok',
+                (SELECT coalesce(max(order_index) + 1, 0)
+                 FROM utterance WHERE meeting_id=%s),
+                %s) RETURNING id
         """,
-        (meeting_id, text, version),
+        (meeting_id, text, meeting_id, version),
     ).fetchone()["id"]
 
 
@@ -76,6 +79,16 @@ def _payload(job):
 
 def _one(conn, sql, params=()):
     return conn.execute(sql, params).fetchone()
+
+
+def test_extract_lenses_stage_is_permitted_by_job_constraint(conn):
+    definition = _one(
+        conn,
+        """SELECT pg_get_constraintdef(oid) AS definition
+           FROM pg_constraint WHERE conname='job_stage_check'""",
+    )["definition"]
+    assert "extract_lenses" in definition
+    assert "persist_lenses" in definition
 
 
 def test_extract_persists_ai_item_and_primary_evidence(conn, extraction_job, fake_client):
