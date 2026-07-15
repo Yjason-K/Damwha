@@ -42,6 +42,39 @@ describe('reapStale', () => {
     expect(mt.rows[0].status).toBe('failed');
   });
 
+  it('fails the linked lens extraction run when an exhausted extract job is stale', async () => {
+    const m = await db.pool.query(
+      `INSERT INTO meeting(audio_key, status) VALUES('lens-stale','done') RETURNING id`,
+    );
+    const meetingId = m.rows[0].id as string;
+    const job = await db.pool.query(
+      `INSERT INTO job(type, meeting_id, payload, status, locked_by, locked_at, attempts, max_attempts)
+       VALUES('extract_lenses',$1,'{}','running','w', now() - interval '45 minutes', 3, 3)
+       RETURNING id`,
+      [meetingId],
+    );
+    const jobId = job.rows[0].id as string;
+    const run = await db.pool.query(
+      `INSERT INTO lens_extraction_run(meeting_id, processing_version, status, model, job_id)
+       VALUES($1, 1, 'running', 'test-model', $2) RETURNING id`,
+      [meetingId, jobId],
+    );
+
+    const res = await repo.reapStale(db.pool, 30);
+
+    expect(res.failed).toBe(1);
+    const staleJob = await db.pool.query('SELECT error FROM job WHERE id=$1', [jobId]);
+    const extractionRun = await db.pool.query(
+      'SELECT status, error, finished_at FROM lens_extraction_run WHERE id=$1',
+      [run.rows[0].id],
+    );
+    expect(extractionRun.rows[0]).toMatchObject({
+      status: 'failed',
+      error: staleJob.rows[0].error,
+    });
+    expect(extractionRun.rows[0].finished_at).not.toBeNull();
+  });
+
   it('leaves fresh running jobs alone', async () => {
     await runningJob({ minutesAgo: 5, attempts: 1, maxAttempts: 3 });
     const res = await repo.reapStale(db.pool, 30);

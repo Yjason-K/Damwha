@@ -83,7 +83,13 @@ export class JobsRepository {
                                        'message','worker lock expired',
                                        'stage', j.stage)
          WHERE id IN (SELECT id FROM stale WHERE attempts >= max_attempts)
-         RETURNING id, type, meeting_id
+         RETURNING id, type, meeting_id, error
+       ),
+       fail_lens_extraction_runs AS (
+         UPDATE lens_extraction_run r SET status='failed', error=f.error, finished_at=now()
+         FROM failed f
+         WHERE r.job_id=f.id AND f.type='extract_lenses'
+         RETURNING r.id
        ),
        fail_meetings AS (
          UPDATE meeting m SET status='failed',
