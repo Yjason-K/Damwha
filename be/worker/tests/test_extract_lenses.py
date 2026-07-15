@@ -104,6 +104,42 @@ def test_extract_persists_ai_item_and_primary_evidence(conn, extraction_job, fak
     )
 
 
+def test_extract_uses_payload_model_and_speaker_display_name(conn, extraction_job, fake_client):
+    job, ids = extraction_job
+    speaker_id = conn.execute(
+        "INSERT INTO speaker(name) VALUES ('Ada Lovelace') RETURNING id"
+    ).fetchone()["id"]
+    conn.execute("UPDATE utterance SET speaker_id=%s WHERE id=%s", (speaker_id, ids["utt_1"]))
+    captured = {}
+
+    def extract(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    fake_client.extract = extract
+
+    assert run_extract_lenses(conn, job, _payload(job), fake_client, worker_id="w") == "committed"
+    assert captured["model"] == "model"
+    assert captured["utterances"] == [
+        {
+            "id": ids["utt_1"],
+            "speaker_id": speaker_id,
+            "speaker_name": "Ada Lovelace",
+            "text": "spoken",
+            "start_ms": 0,
+            "end_ms": 1000,
+        },
+        {
+            "id": ids["utt_2"],
+            "speaker_id": None,
+            "speaker_name": None,
+            "text": "support",
+            "start_ms": 0,
+            "end_ms": 1000,
+        },
+    ]
+
+
 def test_foreign_candidate_rolls_back_every_candidate(conn, extraction_job, fake_client):
     job, ids = extraction_job
     fake_client.extract = lambda **_kwargs: [

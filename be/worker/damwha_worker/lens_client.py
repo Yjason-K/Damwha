@@ -12,29 +12,34 @@ from .errors import (
     WorkerError,
 )
 
+_EXTRACTION_SYSTEM_PROMPT = (
+    "Return a JSON object with only an items array. Each item must be an action, "
+    "decision, or promise and have exactly these fields: kind, text, "
+    "assignee_speaker_id (nullable), due_at (nullable), primary_utterance_id, "
+    "supporting_utterance_ids. Choose the exact primary utterance. Every utterance "
+    "ID and assignee_speaker_id must originate in the supplied utterances. Do not "
+    "speculate or return duplicates."
+)
+
 
 class LensClient:
     """Small synchronous adapter for OpenAI-compatible chat-completion APIs."""
 
     def __init__(
-        self, base_url: str, model: str, api_key: str | None, timeout_seconds: float
+        self, base_url: str, api_key: str | None, timeout_seconds: float
     ) -> None:
         self._base_url = base_url.rstrip("/")
-        self._model = model
         self._api_key = api_key
         self._timeout_seconds = timeout_seconds
 
-    def extract(self, *, utterances: list[dict[str, Any]]) -> list[LensCandidate]:
+    def extract(self, *, model: str, utterances: list[dict[str, Any]]) -> list[LensCandidate]:
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         payload = {
-            "model": self._model,
+            "model": model,
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "Extract action items, decisions, and promises from the supplied "
-                        "utterances. Return a JSON object with an items array only."
-                    ),
+                    "content": _EXTRACTION_SYSTEM_PROMPT,
                 },
                 {"role": "user", "content": json.dumps({"utterances": utterances})},
             ],

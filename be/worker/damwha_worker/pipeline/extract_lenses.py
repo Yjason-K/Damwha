@@ -26,12 +26,15 @@ def run_extract_lenses(
         return outcome
     enter_stage(conn, job["id"], worker_id, "extract_lenses", 30, shutdown_event)
     rows = conn.execute(
-        """SELECT id, speaker_id, text, start_ms, end_ms FROM utterance
-           WHERE meeting_id=%s AND processing_version=%s AND status='ok' AND text IS NOT NULL
-           ORDER BY order_index, id""",
+        """SELECT u.id, u.speaker_id, s.name AS speaker_name, u.text, u.start_ms, u.end_ms
+           FROM utterance u
+           LEFT JOIN speaker s ON s.id = u.speaker_id
+           WHERE u.meeting_id=%s AND u.processing_version=%s
+             AND u.status='ok' AND u.text IS NOT NULL
+           ORDER BY u.order_index, u.id""",
         (payload.meeting_id, payload.processing_version),
     ).fetchall()
-    candidates = client.extract(utterances=[dict(row) for row in rows])
+    candidates = client.extract(model=payload.model, utterances=[dict(row) for row in rows])
     enter_stage(conn, job["id"], worker_id, "persist_lenses", 80, shutdown_event)
     return db.persist_lens_extraction(
         conn,

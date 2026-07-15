@@ -290,7 +290,7 @@ def test_extract_routes_to_lens_client_only(conn, tmp_path):
     calls = []
 
     class Client:
-        def extract(self, *, utterances):
+        def extract(self, *, model, utterances):
             calls.append(utterances)
             return [
                 LensCandidate(
@@ -342,7 +342,7 @@ def test_extract_terminal_llm_failure_after_version_advance_is_discarded(conn, t
     job = db.claim(conn, "w1")
 
     class Client:
-        def extract(self, *, utterances):
+        def extract(self, *, model, utterances):
             conn.execute("UPDATE meeting SET processing_version=1 WHERE id=%s", (mid,))
             raise WorkerError("llm_invalid_response", "invalid", ErrorKind.PERMANENT)
 

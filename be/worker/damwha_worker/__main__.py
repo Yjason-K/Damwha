@@ -366,7 +366,6 @@ def run_child(settings, shutdown: threading.Event) -> int:
         build_text_embedder_fn=build_text_embedder,
         build_lens_client_fn=lambda s: LensClient(
             s.lens_llm_base_url,
-            s.lens_llm_model,
             s.lens_llm_api_key,
             s.lens_llm_timeout_seconds,
         ),
