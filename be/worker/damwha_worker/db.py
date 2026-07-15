@@ -181,8 +181,8 @@ def persist_process_meeting(
                 )
                 return "discarded"
 
-            # fresh: replace results
-            conn.execute("DELETE FROM utterance WHERE meeting_id=%s", (meeting_id,))
+            # Fresh results are versioned.  Keep prior utterances intact: lens evidence
+            # may point to them and the API/search paths select only the current version.
             conn.execute("DELETE FROM meeting_cluster WHERE meeting_id=%s", (meeting_id,))
 
             # 미식별 cluster → provisional speaker + voiceprint(provenance) 자동 생성

@@ -63,8 +63,9 @@ def test_persist_commits_results(conn):
     )
 
 
-def test_persist_replaces_existing_rows(conn):
-    # Use two separate jobs simulating reprocess: first persists "a", second persists "b"
+def test_persist_reprocess_retains_prior_utterance_and_lens_evidence(conn):
+    # Use two separate jobs simulating reprocess: first persists "a", second persists "b".
+    # Historical utterances must remain because lens evidence can reference them.
     mid = seed_meeting(conn, processing_version=0, status="processing")
     jid1 = seed_job(conn, meeting_id=mid)
     conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid1, mid))
@@ -92,6 +93,19 @@ def test_persist_replaces_existing_rows(conn):
         ],
         clusters=[],
     )
+    old_utterance = conn.execute(
+        "SELECT id FROM utterance WHERE meeting_id=%s AND processing_version=0", (mid,)
+    ).fetchone()["id"]
+    lens_id = conn.execute(
+        """INSERT INTO lens_item(meeting_id, kind, text, source, user_modified)
+           VALUES (%s, 'action', 'keep this evidence', 'user', true) RETURNING id""",
+        (mid,),
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT INTO lens_evidence(lens_item_id, utterance_id, relation) VALUES (%s, %s, 'primary')",
+        (lens_id, old_utterance),
+    )
+
     # reprocess: bump pv, new job owns meeting
     jid2 = seed_job(conn, meeting_id=mid)
     conn.execute(
@@ -126,8 +140,17 @@ def test_persist_replaces_existing_rows(conn):
         ],
         clusters=[],
     )
-    rows = conn.execute("SELECT text FROM utterance WHERE meeting_id=%s", (mid,)).fetchall()
-    assert [r["text"] for r in rows] == ["b"]
+    rows = conn.execute(
+        "SELECT text, processing_version FROM utterance WHERE meeting_id=%s ORDER BY processing_version",
+        (mid,),
+    ).fetchall()
+    assert [(r["text"], r["processing_version"]) for r in rows] == [("a", 0), ("b", 1)]
+    assert (
+        conn.execute(
+            "SELECT utterance_id FROM lens_evidence WHERE lens_item_id=%s", (lens_id,)
+        ).fetchone()["utterance_id"]
+        == old_utterance
+    )
 
 
 def test_persist_discarded_when_meeting_superseded(conn):
@@ -464,7 +487,7 @@ def _utt(label, oi=0):
     }
 
 
-def test_reprocess_gcs_unconfirmed_provisional_orphan(conn):
+def test_reprocess_keeps_provisionals_referenced_by_historical_utterances(conn):
     mid, jid1 = _claimed_pm_job(conn, pv=0)
     db.persist_process_meeting(
         conn,
@@ -504,10 +527,11 @@ def test_reprocess_gcs_unconfirmed_provisional_orphan(conn):
         embedding_model="m",
         embedding_dim=192,
     )
-    rows = conn.execute("SELECT id FROM speaker").fetchall()
-    assert len(rows) == 1 and rows[0]["id"] != prov1  # run-1 orphan GC'd
+    rows = conn.execute("SELECT id FROM speaker ORDER BY id").fetchall()
+    # The first provisional remains referenced by the historical utterance.
+    assert [row["id"] for row in rows] == [prov1, "spk_2"]
     vp = conn.execute("SELECT count(*) c FROM voiceprint").fetchone()["c"]
-    assert vp == 1  # orphan voiceprint cascade-deleted
+    assert vp == 2  # both provisional speakers remain referenced by their versions
 
 
 def test_reprocess_keeps_confirmed_ready_speaker(conn):

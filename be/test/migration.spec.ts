@@ -34,19 +34,37 @@ describe('migration', () => {
     ).resolves.toBeDefined();
   });
 
-  it('enforces utterance UNIQUE(meeting_id, order_index)', async () => {
+  it('enforces utterance UNIQUE(meeting_id, processing_version, order_index)', async () => {
     const m = await db.pool.query(
       `INSERT INTO meeting(audio_key) VALUES('k') RETURNING id`,
     );
     const mid = m.rows[0].id;
-    const ins = (i: number) =>
+    const ins = (i: number, version: number) =>
       db.pool.query(
         `INSERT INTO utterance(meeting_id, diar_label, start_ms, end_ms, order_index, processing_version)
-         VALUES($1,'SPEAKER_00',0,1,$2,0)`,
-        [mid, i],
+         VALUES($1,'SPEAKER_00',0,1,$2,$3)`,
+        [mid, i, version],
       );
-    await ins(0);
-    await expect(ins(0)).rejects.toThrow(/duplicate key|unique/i);
+    await ins(0, 0);
+    await expect(ins(0, 0)).rejects.toThrow(/duplicate key|unique/i);
+    await expect(ins(0, 1)).resolves.toBeDefined();
+  });
+
+  it('requires lens evidence to reference an utterance from the item’s meeting', async () => {
+    const a = (await db.pool.query(`INSERT INTO meeting(audio_key) VALUES('a') RETURNING id`)).rows[0].id;
+    const b = (await db.pool.query(`INSERT INTO meeting(audio_key) VALUES('b') RETURNING id`)).rows[0].id;
+    const item = (await db.pool.query(
+      `INSERT INTO lens_item(meeting_id,kind,text,source,user_modified)
+       VALUES($1,'action','x','user',true) RETURNING id`, [a],
+    )).rows[0].id;
+    const utterance = (await db.pool.query(
+      `INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,order_index,processing_version)
+       VALUES($1,'S',0,1,0,0) RETURNING id`, [b],
+    )).rows[0].id;
+    await expect(db.pool.query(
+      `INSERT INTO lens_evidence(lens_item_id,utterance_id,relation) VALUES($1,$2,'primary')`,
+      [item, utterance],
+    )).rejects.toThrow(/lens evidence utterance must belong/i);
   });
 
   it('rejects invalid job.status via CHECK', async () => {

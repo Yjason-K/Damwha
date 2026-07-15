@@ -81,6 +81,22 @@ describe('meetings', () => {
     expect(res.body.utterances.map((u: any) => u.text)).toEqual(['첫번째', '두번째']);
   });
 
+  it('GET /meetings/:id returns only utterances from the current processing version', async () => {
+    const created = await request(srv()).post('/meetings').attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+    const mid = created.body.id;
+    await db.pool.query(`UPDATE meeting SET processing_version=1 WHERE id=$1`, [mid]);
+    await db.pool.query(
+      `INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,text,status,order_index,processing_version)
+       VALUES ($1,'SPEAKER_00',0,900,'이전 결과','ok',0,0),
+              ($1,'SPEAKER_00',0,900,'새 결과','ok',0,1)`,
+      [mid],
+    );
+
+    const res = await request(srv()).get(`/meetings/${mid}`);
+    expect(res.status).toBe(200);
+    expect(res.body.utterances.map((u: any) => u.text)).toEqual(['새 결과']);
+  });
+
   it('GET /meetings/:id → 404 for unknown id', async () => {
     const res = await request(srv()).get('/meetings/99999999-9999-9999-9999-999999999999');
     expect(res.status).toBe(404);
