@@ -141,6 +141,7 @@ def persist_process_meeting(
     default_speaker_prefix="Speaker",
     index_search_model=None,
     index_search_dim=None,
+    lens_llm_model=None,
 ) -> str:
     try:
         with conn.transaction():
@@ -293,6 +294,38 @@ def persist_process_meeting(
                             }
                         ),
                     ),
+                )
+            if lens_llm_model is not None:
+                run_id = conn.execute(
+                    """
+                    INSERT INTO lens_extraction_run(meeting_id, processing_version, status, model)
+                    VALUES (%s, %s, 'queued', %s)
+                    RETURNING id
+                    """,
+                    (meeting_id, processing_version, lens_llm_model),
+                ).fetchone()["id"]
+                extraction_job_id = conn.execute(
+                    """
+                    INSERT INTO job(type, meeting_id, payload)
+                    VALUES ('extract_lenses', %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        meeting_id,
+                        Jsonb(
+                            {
+                                "schema_version": 1,
+                                "meeting_id": str(meeting_id),
+                                "processing_version": processing_version,
+                                "extraction_run_id": str(run_id),
+                                "model": lens_llm_model,
+                            }
+                        ),
+                    ),
+                ).fetchone()["id"]
+                conn.execute(
+                    "UPDATE lens_extraction_run SET job_id=%s WHERE id=%s",
+                    (extraction_job_id, run_id),
                 )
             return "committed"
     except _Abort:

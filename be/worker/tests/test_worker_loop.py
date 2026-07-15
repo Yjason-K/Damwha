@@ -347,9 +347,7 @@ def test_extract_terminal_llm_failure_after_version_advance_is_discarded(conn, t
             raise WorkerError("llm_invalid_response", "invalid", ErrorKind.PERMANENT)
 
     assert (
-        handle_job(
-            conn, job, Storage(str(tmp_path)), "w1", build_lens_client=lambda: Client()
-        )
+        handle_job(conn, job, Storage(str(tmp_path)), "w1", build_lens_client=lambda: Client())
         == "discarded"
     )
     job_row = conn.execute("SELECT status, error FROM job WHERE id=%s", (jid,)).fetchone()
@@ -383,6 +381,7 @@ def _settings_stub():
         search_embedding_model="BAAI/bge-m3",
         search_embedding_dim=1024,
         default_speaker_prefix="Speaker",
+        lens_llm_model="qwen2.5:14b-instruct",
     )
 
 
@@ -465,6 +464,7 @@ def test_dispatch_passes_prefix_through_to_persist(conn, tmp_path, monkeypatch):
         search_embedding_model="BAAI/bge-m3",
         search_embedding_dim=1024,
         default_speaker_prefix="Zz",
+        lens_llm_model="qwen-dispatch",
     )
     out = dispatch_claimed_job(
         conn,
@@ -479,6 +479,11 @@ def test_dispatch_passes_prefix_through_to_persist(conn, tmp_path, monkeypatch):
     assert out == "committed"
     names = [r["name"] for r in conn.execute("SELECT name FROM speaker", ()).fetchall()]
     assert names and all(n.startswith("Zz_") for n in names)
+    run = conn.execute(
+        "SELECT model, job_id FROM lens_extraction_run WHERE meeting_id=%s", (mid,)
+    ).fetchone()
+    assert run["model"] == "qwen-dispatch"
+    assert run["job_id"] is not None
 
 
 def test_dispatch_enroll_builds_embedder_not_models(conn, tmp_path, monkeypatch):

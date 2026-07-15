@@ -40,6 +40,7 @@ def run_process_meeting(
     normalize_fn: Callable[[str, str], None] | None = None,
     probe_fn: Callable[[str], ffmpeg.ProbeResult] | None = None,
     default_speaker_prefix: str = "Speaker",
+    lens_llm_model: str | None = None,
     shutdown_event: threading.Event | None = None,
 ) -> str:
     # 기본값은 호출 시점에 해석한다 — def-time에 모듈 속성을 캡처하지 않으므로
@@ -162,6 +163,7 @@ def run_process_meeting(
             default_speaker_prefix=default_speaker_prefix,
             index_search_model=search_embedding_model,
             index_search_dim=search_embedding_dim,
+            lens_llm_model=lens_llm_model,
         )
         t["detail"] = (
             f"utterances={len(utterance_rows)} clusters={len(cluster_rows)} outcome={outcome}"

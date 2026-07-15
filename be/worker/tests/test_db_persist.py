@@ -266,6 +266,45 @@ def test_persist_enqueues_index_job_on_commit(conn):
     assert row["payload"]["search_embedding"] == {"model": "BAAI/bge-m3", "dimension": 1024}
 
 
+def test_persist_enqueues_index_and_linked_lens_extraction_run_on_commit(conn):
+    mid, jid = _claimed_pm_job(conn, pv=0)
+    out = db.persist_process_meeting(
+        conn,
+        job_id=jid,
+        worker_id="w1",
+        meeting_id=mid,
+        processing_version=0,
+        normalized_key="k",
+        duration_ms=1,
+        utterances=[],
+        clusters=[],
+        index_search_model="BAAI/bge-m3",
+        index_search_dim=1024,
+        lens_llm_model="qwen",
+    )
+    assert out == "committed"
+    jobs = conn.execute(
+        "SELECT id, type, payload FROM job WHERE meeting_id=%s AND type IN "
+        "('index_meeting', 'extract_lenses') ORDER BY type",
+        (mid,),
+    ).fetchall()
+    assert {row["type"] for row in jobs} == {"index_meeting", "extract_lenses"}
+    extraction_job = next(row for row in jobs if row["type"] == "extract_lenses")
+    run = conn.execute(
+        "SELECT id, status, model, job_id FROM lens_extraction_run WHERE meeting_id=%s", (mid,)
+    ).fetchone()
+    assert run["status"] == "queued"
+    assert run["model"] == "qwen"
+    assert run["job_id"] == extraction_job["id"]
+    assert extraction_job["payload"] == {
+        "schema_version": 1,
+        "meeting_id": str(mid),
+        "processing_version": 0,
+        "extraction_run_id": run["id"],
+        "model": "qwen",
+    }
+
+
 def test_persist_no_index_job_when_discarded(conn):
     mid, jid = _claimed_pm_job(conn, pv=0)
     newer = seed_job(conn, meeting_id=mid)
@@ -290,6 +329,36 @@ def test_persist_no_index_job_when_discarded(conn):
         conn.execute("SELECT count(*) c FROM job WHERE type='index_meeting'", ()).fetchone()["c"]
         == 0
     )
+
+
+def test_persist_discarded_enqueues_no_index_or_lens_extraction_run(conn):
+    mid, jid = _claimed_pm_job(conn, pv=0)
+    newer = seed_job(conn, meeting_id=mid)
+    conn.execute(
+        "UPDATE meeting SET processing_version=1, current_job_id=%s WHERE id=%s", (newer, mid)
+    )
+    out = db.persist_process_meeting(
+        conn,
+        job_id=jid,
+        worker_id="w1",
+        meeting_id=mid,
+        processing_version=0,
+        normalized_key="k",
+        duration_ms=1,
+        utterances=[],
+        clusters=[],
+        index_search_model="BAAI/bge-m3",
+        index_search_dim=1024,
+        lens_llm_model="qwen",
+    )
+    assert out == "discarded"
+    assert (
+        conn.execute(
+            "SELECT count(*) c FROM job WHERE type IN ('index_meeting', 'extract_lenses')", ()
+        ).fetchone()["c"]
+        == 0
+    )
+    assert conn.execute("SELECT count(*) c FROM lens_extraction_run", ()).fetchone()["c"] == 0
 
 
 def test_persist_auto_creates_provisional_for_unidentified(conn):

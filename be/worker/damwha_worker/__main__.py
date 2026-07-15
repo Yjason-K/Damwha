@@ -33,6 +33,7 @@ def handle_job(
     build_lens_client=None,
     search_embedding=None,
     default_speaker_prefix="Speaker",
+    lens_llm_model=None,
     shutdown_event=None,
 ) -> str:
     try:
@@ -53,6 +54,7 @@ def handle_job(
                 search_embedding_model=sm,
                 search_embedding_dim=sd,
                 default_speaker_prefix=default_speaker_prefix,
+                lens_llm_model=lens_llm_model,
                 shutdown_event=shutdown_event,
             )
         if job["type"] == "enroll_speaker":
@@ -140,6 +142,7 @@ def run_once(
     build_lens_client=None,
     search_embedding=None,
     default_speaker_prefix="Speaker",
+    lens_llm_model=None,
     shutdown_event=None,
 ) -> str | None:
     job = db.claim(conn, worker_id)
@@ -156,6 +159,7 @@ def run_once(
         build_lens_client=build_lens_client,
         search_embedding=search_embedding,
         default_speaker_prefix=default_speaker_prefix,
+        lens_llm_model=lens_llm_model,
         shutdown_event=shutdown_event,
     )
 
@@ -188,6 +192,7 @@ def dispatch_claimed_job(
             ),
             search_embedding=(settings.search_embedding_model, settings.search_embedding_dim),
             default_speaker_prefix=settings.default_speaker_prefix,
+            lens_llm_model=settings.lens_llm_model,
             shutdown_event=shutdown_event,
         )
 
