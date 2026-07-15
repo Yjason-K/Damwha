@@ -73,6 +73,7 @@ describe('lenses api', () => {
     opts: {
       kind?: string; source?: string; completion?: string; lifecycle?: string;
       text?: string; assignee?: string | null; due?: string | null; updated?: string;
+      primaryUtteranceId?: string;
     } = {},
   ) => {
     const o = {
@@ -80,11 +81,28 @@ describe('lenses api', () => {
       text: '문서 작성', assignee: null, due: null, ...opts,
     };
     const updatedSql = o.updated ? `'${o.updated}'::timestamptz` : 'now()';
-    return (await db.pool.query(
-      `INSERT INTO lens_item(meeting_id,kind,text,source,user_modified,completion_status,lifecycle_status,assignee_speaker_id,due_at,updated_at)
-       VALUES($1,$2,$3,$4,false,$5,$6,$7,$8,${updatedSql}) RETURNING id`,
-      [mid, o.kind, o.text, o.source, o.completion, o.lifecycle, o.assignee, o.due],
-    )).rows[0].id;
+    const client = await db.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const id = (await client.query(
+        `INSERT INTO lens_item(meeting_id,kind,text,source,user_modified,completion_status,lifecycle_status,assignee_speaker_id,due_at,updated_at)
+         VALUES($1,$2,$3,$4,false,$5,$6,$7,$8,${updatedSql}) RETURNING id`,
+        [mid, o.kind, o.text, o.source, o.completion, o.lifecycle, o.assignee, o.due],
+      )).rows[0].id;
+      if (o.source === 'ai' && o.lifecycle === 'active' && o.primaryUtteranceId) {
+        await client.query(
+          `INSERT INTO lens_evidence(lens_item_id,utterance_id,relation) VALUES($1,$2,'primary')`,
+          [id, o.primaryUtteranceId],
+        );
+      }
+      await client.query('COMMIT');
+      return id;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   };
   const mkEvidence = async (lensId: string, uttId: string, relation = 'primary') =>
     db.pool.query(
@@ -96,8 +114,7 @@ describe('lenses api', () => {
   it('lists active open items newest-first with meeting metadata and evidence', async () => {
     const mid = await mkMeeting();
     const utt = await mkUtt(mid, 0, 0);
-    const lens = await mkLens(mid, { kind: 'action', source: 'ai' });
-    await mkEvidence(lens, utt, 'primary');
+    const lens = await mkLens(mid, { kind: 'action', source: 'ai', primaryUtteranceId: utt });
 
     const res = await request(srv()).get('/lenses');
     expect(res.status).toBe(200);
@@ -113,7 +130,7 @@ describe('lenses api', () => {
     const mid = await mkMeeting();
     const u0 = await mkUtt(mid, 0, 0);
     const u1 = await mkUtt(mid, 1, 1000);
-    const lens = await mkLens(mid);
+    const lens = await mkLens(mid, { source: 'user' });
     await mkEvidence(lens, u0, 'supporting');
     await mkEvidence(lens, u1, 'primary');
 
@@ -125,9 +142,9 @@ describe('lenses api', () => {
 
   it('defaults to open + active, excluding done and archived items', async () => {
     const mid = await mkMeeting();
-    const open = await mkLens(mid, { completion: 'open', lifecycle: 'active' });
-    await mkLens(mid, { completion: 'done', lifecycle: 'active' });
-    await mkLens(mid, { completion: 'open', lifecycle: 'archived' });
+    const open = await mkLens(mid, { source: 'user', completion: 'open', lifecycle: 'active' });
+    await mkLens(mid, { source: 'user', completion: 'done', lifecycle: 'active' });
+    await mkLens(mid, { source: 'user', completion: 'open', lifecycle: 'archived' });
 
     const res = await request(srv()).get('/lenses');
     expect(res.body.items.map((i: any) => i.id)).toEqual([open]);
@@ -138,10 +155,10 @@ describe('lenses api', () => {
     const m2 = await mkMeeting('B');
     const spk = await mkSpeaker();
     await mkUtt(m1, 0, 0, spk);
-    const decision = await mkLens(m1, { kind: 'decision' });
-    const withAssignee = await mkLens(m1, { assignee: spk, due: '2026-07-10' });
-    await mkLens(m2, { kind: 'action' });
-    const done = await mkLens(m1, { completion: 'done' });
+    const decision = await mkLens(m1, { source: 'user', kind: 'decision' });
+    const withAssignee = await mkLens(m1, { source: 'user', assignee: spk, due: '2026-07-10' });
+    await mkLens(m2, { source: 'user', kind: 'action' });
+    const done = await mkLens(m1, { source: 'user', completion: 'done' });
 
     expect((await request(srv()).get('/lenses?kind=decision')).body.items.map((i: any) => i.id)).toEqual([decision]);
     expect((await request(srv()).get(`/lenses?meeting_id=${m2}`)).body.items.length).toBe(1);
@@ -152,8 +169,8 @@ describe('lenses api', () => {
 
   it('paginates via keyset cursor (limit=1 continuation)', async () => {
     const mid = await mkMeeting();
-    const older = await mkLens(mid, { updated: '2026-07-01T00:00:00Z' });
-    const newer = await mkLens(mid, { updated: '2026-07-02T00:00:00Z' });
+    const older = await mkLens(mid, { source: 'user', updated: '2026-07-01T00:00:00Z' });
+    const newer = await mkLens(mid, { source: 'user', updated: '2026-07-02T00:00:00Z' });
 
     const p1 = await request(srv()).get('/lenses?limit=1');
     expect(p1.body.items.map((i: any) => i.id)).toEqual([newer]);
@@ -179,8 +196,8 @@ describe('lenses api', () => {
 
   it('lists a meeting’s active items after 404-checking the meeting', async () => {
     const mid = await mkMeeting();
-    const active = await mkLens(mid, { lifecycle: 'active' });
-    await mkLens(mid, { lifecycle: 'archived' });
+    const active = await mkLens(mid, { source: 'user', lifecycle: 'active' });
+    await mkLens(mid, { source: 'user', lifecycle: 'archived' });
     const res = await request(srv()).get(`/meetings/${mid}/lenses`);
     expect(res.status).toBe(200);
     expect(res.body.items.map((i: any) => i.id)).toEqual([active]);
@@ -269,20 +286,20 @@ describe('lenses api', () => {
   it('rejects evidence whose utterance is foreign to the item’s meeting (400)', async () => {
     const m1 = await mkMeeting();
     const m2 = await mkMeeting();
+    const localUtt = await mkUtt(m1, 0, 0);
     const foreignUtt = await mkUtt(m2, 0, 0);
-    const aiItem = await mkLens(m1, { source: 'ai' });
+    const aiItem = await mkLens(m1, { source: 'ai', primaryUtteranceId: localUtt });
     const res = await request(srv()).post(`/lenses/${aiItem}/evidence`).send({ utterance_id: foreignUtt, relation: 'primary' });
     expect(res.status).toBe(400);
     // nothing was written
-    expect((await db.pool.query(`SELECT count(*)::int n FROM lens_evidence WHERE lens_item_id=$1`, [aiItem])).rows[0].n).toBe(0);
+    expect((await db.pool.query(`SELECT count(*)::int n FROM lens_evidence WHERE lens_item_id=$1`, [aiItem])).rows[0].n).toBe(1);
     expect((await db.pool.query(`SELECT user_modified FROM lens_item WHERE id=$1`, [aiItem])).rows[0].user_modified).toBe(false);
   });
 
   it('refuses to delete the only primary evidence of an active AI item and rolls back (409)', async () => {
     const mid = await mkMeeting();
     const primaryUtt = await mkUtt(mid, 0, 0);
-    const aiItem = await mkLens(mid, { source: 'ai' });
-    await mkEvidence(aiItem, primaryUtt, 'primary');
+    const aiItem = await mkLens(mid, { source: 'ai', primaryUtteranceId: primaryUtt });
 
     const res = await request(srv()).delete(`/lenses/${aiItem}/evidence/${primaryUtt}`);
     expect(res.status).toBe(409);
@@ -340,8 +357,7 @@ describe('lenses api', () => {
   it('refuses to demote the sole primary of an active AI item to supporting (409) and keeps it primary', async () => {
     const mid = await mkMeeting();
     const primaryUtt = await mkUtt(mid, 0, 0);
-    const aiItem = await mkLens(mid, { source: 'ai' });
-    await mkEvidence(aiItem, primaryUtt, 'primary');
+    const aiItem = await mkLens(mid, { source: 'ai', primaryUtteranceId: primaryUtt });
 
     const res = await request(srv()).post(`/lenses/${aiItem}/evidence`)
       .send({ utterance_id: primaryUtt, relation: 'supporting' });
@@ -370,8 +386,7 @@ describe('lenses api', () => {
     const mid = await mkMeeting();
     const primaryUtt = await mkUtt(mid, 0, 0);
     const supportingUtt = await mkUtt(mid, 1, 100);
-    const aiItem = await mkLens(mid, { source: 'ai' });
-    await mkEvidence(aiItem, primaryUtt, 'primary');
+    const aiItem = await mkLens(mid, { source: 'ai', primaryUtteranceId: primaryUtt });
 
     const res = await request(srv()).post(`/lenses/${aiItem}/evidence`)
       .send({ utterance_id: supportingUtt, relation: 'supporting' });
@@ -381,7 +396,8 @@ describe('lenses api', () => {
 
   it('leaves provenance untouched on an empty PATCH of an AI item', async () => {
     const mid = await mkMeeting();
-    const aiItem = await mkLens(mid, { source: 'ai' });
+    const utt = await mkUtt(mid, 0, 0);
+    const aiItem = await mkLens(mid, { source: 'ai', primaryUtteranceId: utt });
 
     const res = await request(srv()).patch(`/lenses/${aiItem}`).send({});
     expect(res.status).toBe(200);
@@ -396,8 +412,7 @@ describe('lenses api', () => {
     const mid = await mkMeeting();
     const spk = await mkSpeaker();
     const utt = await mkUtt(mid, 0, 500, spk);
-    const lens = await mkLens(mid, { source: 'ai' });
-    await mkEvidence(lens, utt, 'primary');
+    const lens = await mkLens(mid, { source: 'ai', primaryUtteranceId: utt });
 
     const res = await request(srv()).get('/lenses');
     const utterance = res.body.items[0].evidence[0].utterance;
@@ -428,14 +443,12 @@ describe('lenses api', () => {
     const u2 = await mkUtt(mid, 1, 100);
     const u3 = await mkUtt(mid, 2, 200);
 
-    const aiMatch = await mkLens(mid, { kind: 'action', source: 'ai', text: '기존 AI' });
-    await mkEvidence(aiMatch, u1, 'primary');
-    const aiArchive = await mkLens(mid, { kind: 'decision', source: 'ai' });
-    await mkEvidence(aiArchive, u2, 'primary');
+    const aiMatch = await mkLens(mid, { kind: 'action', source: 'ai', text: '기존 AI', primaryUtteranceId: u1 });
+    const aiArchive = await mkLens(mid, { kind: 'decision', source: 'ai', primaryUtteranceId: u2 });
     const userItem = await mkLens(mid, { kind: 'action', source: 'user' });
     await mkEvidence(userItem, u1, 'primary'); // same key as aiMatch, must stay invisible
     const editedItem = await mkLens(mid, { kind: 'action', source: 'edited' });
-    const completedItem = await mkLens(mid, { kind: 'action', source: 'ai', completion: 'done' });
+    const completedItem = await mkLens(mid, { kind: 'action', source: 'ai', completion: 'done', primaryUtteranceId: u3 });
 
     const candidates = [
       candidate({ kind: 'action', primary_utterance_id: u1, text: '업데이트됨', supporting_utterance_ids: [u3] }),
@@ -496,8 +509,7 @@ describe('lenses api', () => {
     const u1 = await mkUtt(mid, 0, 0);
     const foreign = await mkUtt(other, 0, 0);
 
-    const existing = await mkLens(mid, { kind: 'action', source: 'ai', text: '기존' });
-    await mkEvidence(existing, u1, 'primary');
+    const existing = await mkLens(mid, { kind: 'action', source: 'ai', text: '기존', primaryUtteranceId: u1 });
     const before = (await db.pool.query(`SELECT count(*)::int n FROM lens_item WHERE meeting_id=$1`, [mid])).rows[0].n;
 
     await expect(service.mergeAiExtraction(mid, [

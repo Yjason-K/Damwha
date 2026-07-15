@@ -153,12 +153,26 @@ def test_foreign_candidate_rolls_back_every_candidate(conn, extraction_job, fake
 
 def test_merge_preserves_user_modified_and_completed_items(conn, extraction_job, fake_client):
     job, ids = extraction_job
-    conn.execute(
-        """INSERT INTO lens_item(meeting_id, kind, text, source, user_modified, completion_status)
-           VALUES (%s, 'action', 'hands off', 'ai', true, 'open'),
-                  (%s, 'decision', 'done item', 'ai', false, 'done')""",
-        (ids["meeting_id"], ids["meeting_id"]),
-    )
+    with conn.transaction():
+        hands_off = conn.execute(
+            """INSERT INTO lens_item(
+                   meeting_id, kind, text, source, user_modified, completion_status
+               )
+               VALUES (%s, 'action', 'hands off', 'ai', true, 'open') RETURNING id""",
+            (ids["meeting_id"],),
+        ).fetchone()["id"]
+        done_item = conn.execute(
+            """INSERT INTO lens_item(
+                   meeting_id, kind, text, source, user_modified, completion_status
+               )
+               VALUES (%s, 'decision', 'done item', 'ai', false, 'done') RETURNING id""",
+            (ids["meeting_id"],),
+        ).fetchone()["id"]
+        conn.execute(
+            """INSERT INTO lens_evidence(lens_item_id, utterance_id, relation)
+               VALUES (%s, %s, 'primary'), (%s, %s, 'primary')""",
+            (hands_off, ids["utt_1"], done_item, ids["utt_2"]),
+        )
     fake_client.extract = lambda **_kwargs: [_candidate("action", ids["utt_1"])]
     assert run_extract_lenses(conn, job, _payload(job), fake_client, worker_id="w") == "committed"
     rows = conn.execute("SELECT text, lifecycle_status FROM lens_item ORDER BY text").fetchall()
@@ -171,16 +185,17 @@ def test_merge_preserves_user_modified_and_completed_items(conn, extraction_job,
 
 def test_merge_archives_unmatched_eligible_ai_item(conn, extraction_job, fake_client):
     job, ids = extraction_job
-    old_id = conn.execute(
-        """INSERT INTO lens_item(meeting_id, kind, text, source)
-           VALUES (%s, 'action', 'old', 'ai') RETURNING id""",
-        (ids["meeting_id"],),
-    ).fetchone()["id"]
-    conn.execute(
-        """INSERT INTO lens_evidence(lens_item_id, utterance_id, relation)
-           VALUES (%s, %s, 'primary')""",
-        (old_id, ids["utt_2"]),
-    )
+    with conn.transaction():
+        old_id = conn.execute(
+            """INSERT INTO lens_item(meeting_id, kind, text, source)
+               VALUES (%s, 'action', 'old', 'ai') RETURNING id""",
+            (ids["meeting_id"],),
+        ).fetchone()["id"]
+        conn.execute(
+            """INSERT INTO lens_evidence(lens_item_id, utterance_id, relation)
+               VALUES (%s, %s, 'primary')""",
+            (old_id, ids["utt_2"]),
+        )
     fake_client.extract = lambda **_kwargs: [_candidate("decision", ids["utt_1"])]
     assert run_extract_lenses(conn, job, _payload(job), fake_client, worker_id="w") == "committed"
     assert (
