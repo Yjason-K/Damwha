@@ -67,6 +67,116 @@ describe('migration', () => {
     )).rejects.toThrow(/lens evidence utterance must belong/i);
   });
 
+  it('rejects commit of active AI lens without primary evidence', async () => {
+    const meetingId = (await db.pool.query(
+      `INSERT INTO meeting(audio_key) VALUES('primary-required') RETURNING id`,
+    )).rows[0].id;
+    const client = await db.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `INSERT INTO lens_item(meeting_id,kind,text,source,user_modified)
+         VALUES($1,'action','x','ai',false)`,
+        [meetingId],
+      );
+      await expect(client.query('SET CONSTRAINTS ALL IMMEDIATE')).rejects.toThrow(/primary evidence/i);
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
+  });
+
+  it('allows creating an active AI lens item and its primary evidence in one transaction', async () => {
+    const meetingId = (await db.pool.query(
+      `INSERT INTO meeting(audio_key) VALUES('primary-create') RETURNING id`,
+    )).rows[0].id;
+    const utteranceId = (await db.pool.query(
+      `INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,order_index,processing_version)
+       VALUES($1,'S',0,1,0,0) RETURNING id`,
+      [meetingId],
+    )).rows[0].id;
+    const client = await db.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const itemId = (await client.query(
+        `INSERT INTO lens_item(meeting_id,kind,text,source,user_modified)
+         VALUES($1,'action','x','ai',false) RETURNING id`,
+        [meetingId],
+      )).rows[0].id;
+      await client.query(
+        `INSERT INTO lens_evidence(lens_item_id,utterance_id,relation) VALUES($1,$2,'primary')`,
+        [itemId, utteranceId],
+      );
+      await expect(client.query('SET CONSTRAINTS ALL IMMEDIATE')).resolves.toBeDefined();
+      await client.query('COMMIT');
+    } finally {
+      client.release();
+    }
+  });
+
+  it('allows replacing an active AI lens item primary evidence in one transaction', async () => {
+    const meetingId = (await db.pool.query(
+      `INSERT INTO meeting(audio_key) VALUES('primary-replace') RETURNING id`,
+    )).rows[0].id;
+    const utteranceIds: string[] = [];
+    for (const orderIndex of [0, 1]) {
+      utteranceIds.push((await db.pool.query(
+        `INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,order_index,processing_version)
+         VALUES($1,'S',0,1,$2,0) RETURNING id`,
+        [meetingId, orderIndex],
+      )).rows[0].id);
+    }
+    const client = await db.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const itemId = (await client.query(
+        `INSERT INTO lens_item(meeting_id,kind,text,source,user_modified)
+         VALUES($1,'action','x','ai',false) RETURNING id`,
+        [meetingId],
+      )).rows[0].id;
+      await client.query(
+        `INSERT INTO lens_evidence(lens_item_id,utterance_id,relation) VALUES($1,$2,'primary')`,
+        [itemId, utteranceIds[0]],
+      );
+      await client.query('SET CONSTRAINTS ALL IMMEDIATE');
+      await client.query('SET CONSTRAINTS ALL DEFERRED');
+      await client.query(
+        `DELETE FROM lens_evidence WHERE lens_item_id=$1 AND utterance_id=$2`,
+        [itemId, utteranceIds[0]],
+      );
+      await client.query(
+        `INSERT INTO lens_evidence(lens_item_id,utterance_id,relation) VALUES($1,$2,'primary')`,
+        [itemId, utteranceIds[1]],
+      );
+      await expect(client.query('SET CONSTRAINTS ALL IMMEDIATE')).resolves.toBeDefined();
+      await client.query('COMMIT');
+    } finally {
+      await client.query('ROLLBACK').catch(() => undefined);
+      client.release();
+    }
+  });
+
+  it('allows user, edited, and archived AI lens items without primary evidence', async () => {
+    const meetingId = (await db.pool.query(
+      `INSERT INTO meeting(audio_key) VALUES('primary-exempt') RETURNING id`,
+    )).rows[0].id;
+    const client = await db.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `INSERT INTO lens_item(meeting_id,kind,text,source,user_modified,lifecycle_status)
+         VALUES($1,'action','user','user',true,'active'),
+               ($1,'action','edited','edited',true,'active'),
+               ($1,'action','archived','ai',false,'archived')`,
+        [meetingId],
+      );
+      await expect(client.query('SET CONSTRAINTS ALL IMMEDIATE')).resolves.toBeDefined();
+      await client.query('COMMIT');
+    } finally {
+      client.release();
+    }
+  });
+
   it('rejects invalid job.status via CHECK', async () => {
     await expect(
       db.pool.query(`INSERT INTO job(type, payload, status) VALUES('process_meeting','{}','bogus')`),
