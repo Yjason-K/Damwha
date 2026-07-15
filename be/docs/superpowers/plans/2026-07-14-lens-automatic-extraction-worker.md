@@ -41,7 +41,7 @@
 - Produces `ExtractLensesPayloadSchema`, `ExtractLensesPayload`, `buildExtractLensesPayload(args)`.
 - Produces `JobType` member `'extract_lenses'` and `LENS_LLM_MODEL`.
 
-- [ ] **Step 1: Write failing payload and migration tests**
+- [x] **Step 1: Write failing payload and migration tests**
 
 ```ts
 it('accepts only extract_lenses v1 payloads', () => {
@@ -55,13 +55,13 @@ it('accepts only extract_lenses v1 payloads', () => {
 
 Add an E2E SQL assertion: duplicate queued run violates the partial unique index, but a done run is allowed.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npm test -- --runInBand test/job-payload.spec.ts`
 
 Expected: FAIL because the schema is not exported.
 
-- [ ] **Step 3: Implement the migration and contract**
+- [x] **Step 3: Implement the migration and contract**
 
 ```sql
 ALTER TABLE lens_extraction_run
@@ -92,13 +92,13 @@ export function buildExtractLensesPayload(args: {
 
 Append `'extract_lenses'` to `JobType` and add `LENS_LLM_MODEL` (default `qwen2.5:14b-instruct`) to `EnvSchema`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npm test -- --runInBand test/job-payload.spec.ts && npm run build`
 
 Expected: PASS and build exits 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/database/migrations/010_lens_extraction_jobs.sql src/contracts/job-payload.schema.ts src/jobs/jobs.types.ts src/config/env.ts test/job-payload.spec.ts test/lens-extraction.e2e-spec.ts
@@ -118,7 +118,7 @@ git commit -m "feat: add lens extraction job contract"
 - Produces `LensExtractionService.request(meetingId)`.
 - Produces `findLatestExtractionRun(exec, meetingId)` for the status response.
 
-- [ ] **Step 1: Write failing E2E tests**
+- [x] **Step 1: Write failing E2E tests**
 
 ```ts
 it('reuses the active run for duplicate requests', async () => {
@@ -133,13 +133,13 @@ it('rejects a non-done meeting', () =>
 
 Also assert `GET /meetings/:id/status` includes latest run `status`, `model`, `error`, and `finished_at`.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npm run test:e2e -- --runInBand test/lens-extraction.e2e-spec.ts`
 
 Expected: FAIL with route 404.
 
-- [ ] **Step 3: Implement one transaction and the route**
+- [x] **Step 3: Implement one transaction and the route**
 
 Lock the meeting; return 404 if absent and 409 unless it is done. Lock/query the active run; return it unchanged if present. Otherwise insert queued run, enqueue the Task 1 payload, update run `job_id`, and return `{run_id, job_id, status, processing_version}`.
 
@@ -156,13 +156,13 @@ extract(@Param('id') id: string) { return this.service.extractLenses(id); }
 
 Make `MeetingsService` delegate to the extraction service. Extend `findStatus` with a lateral latest-run query nested as `lens_extraction`, without renaming existing status fields.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npm run test:e2e -- --runInBand test/lens-extraction.e2e-spec.ts`
 
 Expected: PASS and exactly one active run/job exists after duplicate requests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/lenses/lens-extraction.repository.ts src/lenses/lens-extraction.service.ts src/lenses/lenses.module.ts src/meetings/meetings.service.ts src/meetings/meetings.controller.ts src/meetings/meetings.repository.ts test/lens-extraction.e2e-spec.ts
@@ -179,7 +179,7 @@ git commit -m "feat: add manual lens extraction requests"
 - Produces `ExtractLensesPayload`, `LensCandidate`, `LensExtractionResponse`.
 - Produces `LensClient.extract(*, utterances) -> list[LensCandidate]`.
 
-- [ ] **Step 1: Write failing strict-contract and HTTP tests**
+- [x] **Step 1: Write failing strict-contract and HTTP tests**
 
 ```python
 def test_extract_payload_requires_run_and_model():
@@ -193,25 +193,25 @@ def test_client_posts_openai_chat_completion_with_bearer(httpx_mock):
     assert httpx_mock.get_request().headers["Authorization"] == "Bearer secret"
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd worker && uv run pytest tests/test_contracts_lenses.py tests/test_lens_client.py -q`
 
 Expected: FAIL due to missing models and client.
 
-- [ ] **Step 3: Implement strict models and HTTP mapping**
+- [x] **Step 3: Implement strict models and HTTP mapping**
 
 Add `httpx>=0.27`. Restrict candidate kind to `action|decision|promise`, trimmed text to 1–1000 characters, IDs to DB formats, and due date to Pydantic `date`. Add `extract_lenses: frozenset({1})` to worker payload dispatch.
 
 Use `httpx.Client(timeout=timeout_seconds)`, POST `{base_url}/chat/completions`, add `response_format: {type: 'json_object'}`, and validate `choices[0].message.content` through `model_validate_json`. Map timeout/transport/408/429/5xx to transient `WorkerError`; map other 4xx, malformed JSON, and schema errors to permanent errors. Add LLM base URL, model, optional API key, and timeout to `Settings`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd worker && uv run pytest tests/test_contracts_lenses.py tests/test_lens_client.py -q && uv run ruff check damwha_worker tests`
 
 Expected: PASS and no Ruff findings.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add worker/pyproject.toml worker/uv.lock worker/damwha_worker/contracts.py worker/damwha_worker/config.py worker/damwha_worker/errors.py worker/damwha_worker/lens_client.py worker/tests/test_contracts_lenses.py worker/tests/test_lens_client.py
@@ -228,7 +228,7 @@ git commit -m "feat: add lens extraction LLM client"
 - Produces `run_extract_lenses(conn, job, payload, client, *, worker_id, shutdown_event) -> str`.
 - Produces `mark_lens_run_running`, `persist_lens_extraction`, `fail_lens_extraction`.
 
-- [ ] **Step 1: Write failing lifecycle and merge tests**
+- [x] **Step 1: Write failing lifecycle and merge tests**
 
 ```python
 def test_extract_persists_ai_item_and_primary_evidence(conn, extraction_job, fake_client):
@@ -245,25 +245,25 @@ def test_foreign_candidate_rolls_back_every_candidate(conn, extraction_job, fake
 
 Add test cases for user-modified preservation, unmatched AI archival, transient requeue with run still running, terminal run failure while meeting stays done, and stale version discard.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd worker && uv run pytest tests/test_extract_lenses.py tests/test_worker_loop.py -q`
 
 Expected: FAIL because pipeline/lifecycle functions do not exist.
 
-- [ ] **Step 3: Implement guarded pipeline and persistence**
+- [x] **Step 3: Implement guarded pipeline and persistence**
 
 Read ordered `status='ok'` utterances at the payload version, include only those IDs in the prompt, and validate all evidence/assignees against the same meeting/version before mutation. In one transaction lock `job JOIN lens_extraction_run`, verify job lock owner, running status, run ID, and meeting version. Apply task 1's `(kind, primary_utterance_id)` merge policy, then mark run/job done only after all evidence writes succeed.
 
 Stale version or lost ownership must make job/run done with `discarded_by_stale_guard` and write no lenses. Add `extract_lenses` dispatch to `handle_job`; it requeues transient errors and uses `fail_lens_extraction` for final errors, never `fail_process_meeting`. Construct `LensClient` only when dispatching this job type.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd worker && uv run pytest tests/test_extract_lenses.py tests/test_worker_loop.py -q && uv run ruff check damwha_worker tests`
 
 Expected: PASS; no partial lens writes and meeting remains done.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add worker/damwha_worker/pipeline/extract_lenses.py worker/damwha_worker/db.py worker/damwha_worker/__main__.py worker/tests/test_extract_lenses.py worker/tests/test_worker_loop.py
