@@ -25,9 +25,7 @@ _EXTRACTION_SYSTEM_PROMPT = (
 class LensClient:
     """Small synchronous adapter for OpenAI-compatible chat-completion APIs."""
 
-    def __init__(
-        self, base_url: str, api_key: str | None, timeout_seconds: float
-    ) -> None:
+    def __init__(self, base_url: str, api_key: str | None, timeout_seconds: float) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._timeout_seconds = timeout_seconds

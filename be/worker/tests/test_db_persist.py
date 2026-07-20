@@ -102,7 +102,8 @@ def test_persist_reprocess_retains_prior_utterance_and_lens_evidence(conn):
         (mid,),
     ).fetchone()["id"]
     conn.execute(
-        "INSERT INTO lens_evidence(lens_item_id, utterance_id, relation) VALUES (%s, %s, 'primary')",
+        "INSERT INTO lens_evidence(lens_item_id, utterance_id, relation) "
+        "VALUES (%s, %s, 'primary')",
         (lens_id, old_utterance),
     )
 
@@ -141,7 +142,8 @@ def test_persist_reprocess_retains_prior_utterance_and_lens_evidence(conn):
         clusters=[],
     )
     rows = conn.execute(
-        "SELECT text, processing_version FROM utterance WHERE meeting_id=%s ORDER BY processing_version",
+        "SELECT text, processing_version FROM utterance "
+        "WHERE meeting_id=%s ORDER BY processing_version",
         (mid,),
     ).fetchall()
     assert [(r["text"], r["processing_version"]) for r in rows] == [("a", 0), ("b", 1)]
