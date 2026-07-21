@@ -280,7 +280,7 @@ git commit -m "feat: run automatic lens extraction jobs"
 - Consumes Tasks 1–4.
 - Produces automatic queued run/job creation in successful `persist_process_meeting`.
 
-- [ ] **Step 1: Write failing persistence tests**
+- [x] **Step 1: Write failing persistence tests**
 
 ```python
 def test_process_persist_enqueues_index_and_lens_extract_atomically(conn):
@@ -294,17 +294,17 @@ def test_stale_process_persist_enqueues_no_run(conn):
     assert count("SELECT * FROM lens_extraction_run") == 0
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd worker && uv run pytest tests/test_db_persist.py tests/test_db_lifecycle.py -q`
 
 Expected: FAIL because process persistence has no extraction model/run enqueue.
 
-- [ ] **Step 3: Implement automatic enqueue**
+- [x] **Step 3: Implement automatic enqueue**
 
 Pass `settings.lens_llm_model` through `run_process_meeting` to `persist_process_meeting`. In its fresh transaction branch insert the queued run, insert its Task 1 payload job, then update `job_id`. Do not enqueue in stale/discard branch.
 
-- [ ] **Step 4: Run full verification**
+- [x] **Step 4: Run full verification**
 
 Run:
 
@@ -319,7 +319,7 @@ git diff --check
 
 Expected: every command exits 0. If testcontainers requires Docker, record that prerequisite and do not claim it passed without Docker.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add worker/damwha_worker/db.py worker/damwha_worker/pipeline/process_meeting.py worker/damwha_worker/__main__.py worker/damwha_worker/config.py worker/tests/test_db_persist.py worker/tests/test_db_lifecycle.py
@@ -332,11 +332,11 @@ git commit -m "feat: enqueue lens extraction after meeting processing"
 - Modify: `docs/superpowers/specs/2026-07-14-lens-automatic-extraction-worker-design.md`
 - Modify: `docs/superpowers/specs/2026-07-14-lens-platform-roadmap-design.md`
 
-- [ ] **Step 1: Record completion after Task 5 passes**
+- [x] **Step 1: Record completion after Task 5 passes**
 
 Set task 2 spec to `상태: 완료됨` with completion date. Change only roadmap task 2 heading to `완료 (2026-07-14)` and record the actual commit range. Keep roadmap overall open because tasks 3 and 4 remain.
 
-- [ ] **Step 2: Verify and commit docs**
+- [x] **Step 2: Verify and commit docs**
 
 Run: `git diff --check && git diff -- docs/superpowers/specs`
 
