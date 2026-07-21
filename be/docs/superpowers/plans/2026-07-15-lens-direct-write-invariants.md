@@ -28,7 +28,7 @@
 - Produces `active_ai_lens_has_primary()` deferred trigger function.
 - Produces triggers for `lens_item` and `lens_evidence`.
 
-- [ ] **Step 1: Write failing migration tests**
+- [x] **Step 1: Write failing migration tests**
 
 Add direct SQL tests that force transaction commit with `SET CONSTRAINTS ALL IMMEDIATE`.
 
@@ -46,13 +46,13 @@ it('rejects commit of active AI lens without primary evidence', async () => {
 
 Add success cases: create AI item + primary in one transaction; replace primary in one transaction; user, edited, archived AI without primary.
 
-- [ ] **Step 2: Run test to verify RED**
+- [x] **Step 2: Run test to verify RED**
 
 Run: `npm test -- --runInBand test/migration.spec.ts`
 
 Expected: the no-primary commit test fails because no trigger exists.
 
-- [ ] **Step 3: Implement migration**
+- [x] **Step 3: Implement migration**
 
 ```sql
 CREATE FUNCTION active_ai_lens_has_primary() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -76,13 +76,13 @@ $$;
 
 Create deferred constraint triggers for lens item INSERT/UPDATE OF source,lifecycle_status and lens evidence INSERT/UPDATE OF lens_item_id,relation/DELETE. Use trigger-specific functions or separate functions where OLD/NEW shape requires it; never reference a nonexistent record field.
 
-- [ ] **Step 4: Run GREEN tests**
+- [x] **Step 4: Run GREEN tests**
 
 Run: `npm test -- --runInBand test/migration.spec.ts`
 
 Expected: all migration tests pass; invalid direct writes fail only at constraint check/commit.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/database/migrations/014_active_ai_lens_primary_evidence.sql test/migration.spec.ts
@@ -99,17 +99,17 @@ git commit -m "feat: enforce active AI lens primary evidence"
 - Consumes Task 1 deferred DB constraint.
 - Preserves existing API and worker transaction boundaries.
 
-- [ ] **Step 1: Run existing writer regression tests**
+- [x] **Step 1: Run existing writer regression tests**
 
 Run: `npm run test:e2e -- --runInBand test/lenses.e2e-spec.ts && cd worker && uv run pytest tests/test_extract_lenses.py -q`
 
 Expected: any failure identifies an existing transaction that commits active AI item before its primary evidence.
 
-- [ ] **Step 2: Make only the minimal transaction-boundary fix if RED**
+- [x] **Step 2: Make only the minimal transaction-boundary fix if RED**
 
 If a writer fails, put its AI item insert/update and primary evidence write in the same existing transaction. Do not weaken or defer the DB constraint.
 
-- [ ] **Step 3: Verify full required suite**
+- [x] **Step 3: Verify full required suite**
 
 Run:
 
@@ -124,7 +124,7 @@ git diff --check
 
 Expected: every command exits 0.
 
-- [ ] **Step 4: Commit compatibility changes only when needed**
+- [x] **Step 4: Commit compatibility changes only when needed**
 
 ```bash
 git add src/lenses/lenses.repository.ts worker/damwha_worker/db.py test/lenses.e2e-spec.ts worker/tests/test_extract_lenses.py
@@ -136,4 +136,3 @@ git commit -m "fix: keep lens writers compatible with DB invariant"
 - Spec coverage: Task 1 creates and directly tests the deferred invariant; Task 2 verifies API/worker writers and all required suites.
 - Placeholder scan: no deferred implementation markers remain.
 - Type consistency: all SQL uses `lens_item_id` only on evidence records and `id` only on lens items.
-
