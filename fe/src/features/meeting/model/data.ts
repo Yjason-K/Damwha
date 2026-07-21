@@ -2,7 +2,7 @@ import type { IconName } from "../ui/icons";
 import type { LensKind } from "./types";
 
 /**
- * 렌즈 메타데이터 — 전역 렌즈 뷰(`../ui/lens-view.tsx`)의 탭 라벨·아이콘 출처.
+ * 렌즈 메타데이터 — 전역 렌즈 대시보드(`@/features/lens`)의 탭 라벨·아이콘 출처.
  *
  * 회의 mock 코퍼스(`MEETINGS`/`SPEAKERS`/`MEETING_ORDER`/`ME` 등)는 셸이 실
  * 백엔드(TanStack Query)에 연결되면서 참조가 사라져 제거했다. 도메인 타입은

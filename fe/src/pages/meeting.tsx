@@ -191,6 +191,7 @@ export function MeetingPage() {
   const {
     data: meeting,
     isError: meetingError,
+    isFetching: meetingFetching,
     refetch: refetchMeeting,
   } = useMeeting(currentId);
 
@@ -288,11 +289,13 @@ export function MeetingPage() {
   // historical 가드: 재처리 등으로 대상 회의가 로드된 뒤에도 activeId가 가리키는
   // 발언(원본 발화 id 포함)을 찾을 수 없으면 안내 토스트를 띄우고 activeId를
   // 비운다. 같은 회의 내 검색 점프(jumpTo)는 항상 유효한 발언만 넘기므로 영향
-  // 없다. 외부 데이터(meeting)와 activeId의 조합을 동기화하는 의도된 effect라
+  // 없다. 캐시된 meeting이 stale한 채 백그라운드 재조회가 진행 중일 때 false
+  // negative(아직 갱신 전 데이터로 오판)를 막기 위해 isFetching이 꺼졌을 때만
+  // 판정한다. 외부 데이터(meeting)와 activeId의 조합을 동기화하는 의도된 effect라
   // set-state-in-effect 규칙을 해제한다(activeId가 ""로 바뀌면 조건이 즉시
   // false가 되어 cascading되지 않음).
   React.useEffect(() => {
-    if (!activeId || !meeting) return;
+    if (!activeId || !meeting || meetingFetching) return;
     const found = meeting.utterances.some(
       (u) => u.id === activeId || u.sources.some((s) => s.id === activeId),
     );
@@ -303,7 +306,7 @@ export function MeetingPage() {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setActiveId("");
     }
-  }, [activeId, meeting, toast]);
+  }, [activeId, meeting, meetingFetching, toast]);
 
   const toggleDone = (id: string) => setDone((d) => ({ ...d, [id]: !d[id] }));
 

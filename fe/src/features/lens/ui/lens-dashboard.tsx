@@ -102,12 +102,19 @@ export function LensDashboard({ lens, onLens, onJumpEvidence }: Props) {
         <div className="mx-auto flex max-w-[760px] flex-col gap-3">
           <LensExtractionBanner />
           {list.isLoading && (
-            <p className="py-8 text-center text-sm text-[color:var(--text-muted)]">
+            <p
+              role="status"
+              aria-busy="true"
+              className="py-8 text-center text-sm text-[color:var(--text-muted)]"
+            >
               불러오는 중…
             </p>
           )}
           {list.isError && (
-            <div className="py-8 text-center text-sm text-[color:var(--text-muted)]">
+            <div
+              role="alert"
+              className="py-8 text-center text-sm text-[color:var(--text-muted)]"
+            >
               목록을 불러오지 못했어요.
               <button
                 type="button"
@@ -123,7 +130,7 @@ export function LensDashboard({ lens, onLens, onJumpEvidence }: Props) {
               조건에 맞는 {meta.label} 항목이 없어요.
             </p>
           )}
-          {!isEmpty && (
+          {list.isSuccess && !isEmpty && (
             <LensList
               pages={pages}
               hasNextPage={!!list.hasNextPage}

@@ -66,7 +66,11 @@ export function LensList({
       })}
       <div ref={sentinel} aria-hidden className="h-px" />
       {isFetchingNextPage && (
-        <p className="py-2 text-center text-sm text-[color:var(--text-muted)]">
+        <p
+          role="status"
+          aria-busy="true"
+          className="py-2 text-center text-sm text-[color:var(--text-muted)]"
+        >
           더 불러오는 중…
         </p>
       )}

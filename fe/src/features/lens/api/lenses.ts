@@ -5,6 +5,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { apiClient } from "@/shared/api/client";
+import { toast } from "@/shared/ui/use-toast";
 import type {
   ExtractionStatus,
   LensFilters,
@@ -86,6 +87,10 @@ export function useSetLensCompletion() {
     },
     onError: (_e, _v, ctx) => {
       ctx?.prev?.forEach(([key, data]) => qc.setQueryData(key, data));
+      toast({
+        variant: "error",
+        title: "완료 상태를 바꾸지 못했어요.",
+      });
     },
     onSettled: () => qc.invalidateQueries({ queryKey: ["lenses"] }),
   });
