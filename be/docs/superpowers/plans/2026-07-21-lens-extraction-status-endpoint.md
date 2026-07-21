@@ -33,7 +33,7 @@
   - `LensesService.extractionStatus(): Promise<{ running: number; failed: { meeting_id: string; title: string | null }[] }>`
   - HTTP `GET /lenses/extraction-status` → `{ running: number, failed: [{ meeting_id, title }] }`
 
-- [ ] **Step 1: Write the failing e2e test**
+- [x] **Step 1: Write the failing e2e test**
 
 Create `test/lens-extraction-status.e2e-spec.ts`:
 
@@ -96,12 +96,12 @@ describe('GET /lenses/extraction-status', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx jest test/lens-extraction-status.e2e-spec.ts --runInBand`
 Expected: FAIL — route `GET /lenses/extraction-status`가 없어 404(또는 `extractionStatus` 미정의).
 
-- [ ] **Step 3: Add the aggregate repository method**
+- [x] **Step 3: Add the aggregate repository method**
 
 In `src/lenses/lens-extraction.repository.ts`, add a method to the `LensExtractionRepository` class:
 
@@ -135,7 +135,7 @@ In `src/lenses/lens-extraction.repository.ts`, add a method to the `LensExtracti
   }
 ```
 
-- [ ] **Step 4: Add the service method**
+- [x] **Step 4: Add the service method**
 
 In `src/lenses/lenses.service.ts`, the constructor already injects the repositories. Confirm `LensExtractionRepository` is injected (it is a provider in `LensesModule`); if the service does not yet reference it, add it to the constructor:
 
@@ -157,7 +157,7 @@ Then add:
 
 Import `LensExtractionRepository` at the top if not already imported.
 
-- [ ] **Step 5: Add the controller route**
+- [x] **Step 5: Add the controller route**
 
 In `src/lenses/lenses.controller.ts`, add a route to `LensesController` (place it above the `Post('lenses')` handler; it does not conflict with the parameterless `Get('lenses')`):
 
@@ -169,12 +169,12 @@ In `src/lenses/lenses.controller.ts`, add a route to `LensesController` (place i
   }
 ```
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 Run: `npx jest test/lens-extraction-status.e2e-spec.ts --runInBand`
 Expected: PASS (both cases).
 
-- [ ] **Step 7: Full verification**
+- [x] **Step 7: Full verification**
 
 Run:
 
@@ -187,7 +187,7 @@ git diff --check
 
 Expected: 모두 exit 0, 렌즈 기존 스위트 회귀 없음.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/lenses/lens-extraction.repository.ts src/lenses/lenses.service.ts \
