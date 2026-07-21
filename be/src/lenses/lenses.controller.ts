@@ -20,6 +20,12 @@ export class LensesController {
     return this.service.listForMeeting(id);
   }
 
+  @Get('lenses/extraction-status')
+  @ApiOperation({ summary: '전역 렌즈 추출 상태 집계 (진행중 수 + 실패 회의)' })
+  extractionStatus() {
+    return this.service.extractionStatus();
+  }
+
   @Post('lenses')
   @ApiOperation({ summary: '렌즈 항목 수동 생성 (source=user)' })
   create(@Body() body: { meeting_id?: string; kind?: string; text?: string; assignee_speaker_id?: string; due_at?: string }) {

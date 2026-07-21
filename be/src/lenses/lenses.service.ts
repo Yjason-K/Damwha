@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
 import { DatabaseService } from '../database/database.service';
+import { LensExtractionRepository } from './lens-extraction.repository';
 import { LensesRepository } from './lenses.repository';
 import {
   AiLensCandidate, AiMergeDecision, EvidenceRelation, EvidenceRow, ExistingLensForMerge,
@@ -99,7 +100,15 @@ function aiFields(candidate: AiLensCandidate) {
 
 @Injectable()
 export class LensesService {
-  constructor(private readonly db: DatabaseService, private readonly repo: LensesRepository) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly repo: LensesRepository,
+    private readonly extraction: LensExtractionRepository,
+  ) {}
+
+  extractionStatus() {
+    return this.extraction.aggregateStatus(this.db.pool);
+  }
 
   async list(query: Record<string, string | undefined>) {
     const filters = {

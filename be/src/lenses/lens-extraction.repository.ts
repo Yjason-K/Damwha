@@ -70,4 +70,32 @@ export class LensExtractionRepository {
     );
     return rows[0];
   }
+
+  async aggregateStatus(exec: Queryable): Promise<{
+    running: number;
+    failed: { meeting_id: string; title: string | null }[];
+  }> {
+    const { rows } = await exec.query<{ running: number; failed: unknown }>(
+      `WITH latest AS (
+         SELECT DISTINCT ON (meeting_id) meeting_id, status
+         FROM lens_extraction_run
+         ORDER BY meeting_id, created_at DESC, id DESC
+       )
+       SELECT
+         (SELECT count(*)::int FROM lens_extraction_run
+           WHERE status IN ('queued','running')) AS running,
+         COALESCE(
+           json_agg(json_build_object('meeting_id', l.meeting_id, 'title', m.title)
+                    ORDER BY l.meeting_id)
+             FILTER (WHERE l.status = 'failed'),
+           '[]'
+         ) AS failed
+       FROM latest l JOIN meeting m ON m.id = l.meeting_id`,
+    );
+    const row = rows[0];
+    return {
+      running: row?.running ?? 0,
+      failed: (row?.failed as { meeting_id: string; title: string | null }[]) ?? [],
+    };
+  }
 }
