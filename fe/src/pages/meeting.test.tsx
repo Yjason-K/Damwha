@@ -4,12 +4,14 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { apiClient } from "@/shared/api/client";
+import { Toaster } from "@/shared/ui/toaster";
 import { toMeetingDetail } from "@/features/meeting/api/mappers";
 import { useResolveCluster } from "@/features/meeting/api/meetings";
 import type {
@@ -20,6 +22,7 @@ import type {
   WireSpeaker,
   WireUtterance,
 } from "@/features/meeting/api/types";
+import type { LensWireItem } from "@/features/lens/model/types";
 
 /**
  * 회의 셸(/app) 통합 테스트 — mock 코퍼스 제거 후 HTTP 레이어(`apiClient`)를
@@ -311,9 +314,74 @@ const fx = vi.hoisted(() => {
     ],
   };
 
+  // 전역 렌즈 대시보드용 액션아이템 픽스처 — 근거 점프(정상/historical) 검증에 쓴다.
+  const lensItem = (o: Partial<LensWireItem>): LensWireItem => ({
+    id: "lens_1",
+    kind: "action",
+    text: "",
+    source: "ai",
+    user_modified: false,
+    completion_status: "open",
+    lifecycle_status: "active",
+    meeting_id: "m1",
+    assignee_speaker_id: null,
+    due_at: null,
+    created_at: "2026-06-21T09:00:00.000Z",
+    updated_at: "2026-06-21T09:00:00.000Z",
+    meeting: { id: "m1", title: null },
+    evidence: [],
+    ...o,
+  });
+
+  // 정상 점프 대상: m2의 실제 발화 v3(병합 블록 v2에 속함).
+  const lensJumpItem = lensItem({
+    id: "lens_jump",
+    meeting_id: "m2",
+    meeting: { id: "m2", title: "스프린트 회고" },
+    text: "다음 스프린트 자료 공유하기",
+    evidence: [
+      {
+        relation: "primary",
+        utterance: {
+          id: "v3",
+          start_ms: 12_000,
+          text: "다음 스프린트도 이어가죠",
+          speaker_id: "sp_5",
+        },
+      },
+    ],
+  });
+  // historical 대상: m1에 존재하지 않는 발화 id를 가리켜, 재처리로 근거가
+  // 사라진 상황을 재현한다.
+  const lensGhostItem = lensItem({
+    id: "lens_ghost",
+    meeting_id: "m1",
+    meeting: { id: "m1", title: "기획회의 — UI 개선안" },
+    text: "지난 회의 후속 조치 확인하기",
+    evidence: [
+      {
+        relation: "primary",
+        utterance: {
+          id: "u_ghost",
+          start_ms: 3_000,
+          text: "존재하지 않는 발언",
+          speaker_id: null,
+        },
+      },
+    ],
+  });
+  const lensActionItems = [lensJumpItem, lensGhostItem];
+
   function getResponse(url: string) {
     if (url === "/meetings") return Promise.resolve({ data: meetingsList });
     if (url === "/speakers") return Promise.resolve({ data: speakers });
+    if (url === "/lenses/extraction-status")
+      return Promise.resolve({ data: { running: 0, failed: [] } });
+    if (url.startsWith("/lenses?")) {
+      const qs = new URLSearchParams(url.slice("/lenses?".length));
+      const items = qs.get("kind") === "action" ? lensActionItems : [];
+      return Promise.resolve({ data: { items, next_cursor: null } });
+    }
     if (url.endsWith("/status")) return Promise.resolve({ data: status });
     const m = url.match(/^\/meetings\/([^/]+)$/);
     if (m) {
@@ -383,6 +451,7 @@ function renderShell() {
     <QueryClientProvider client={client}>
       <MemoryRouter>
         <MeetingPage />
+        <Toaster />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -464,7 +533,7 @@ test("회의를 전환해도 플레이바는 하나만 남는다", async () => {
   expect(screen.getAllByRole("button", { name: "재생" })).toHaveLength(1);
 });
 
-test("모든 회의(전역 렌즈)로 전환하면 준비 중 빈 상태와 렌즈 탭이 보인다", async () => {
+test("모든 회의(전역 렌즈)로 전환하면 렌즈 대시보드와 탭이 보인다", async () => {
   renderShell();
   await screen.findByRole("heading", {
     level: 1,
@@ -474,11 +543,69 @@ test("모든 회의(전역 렌즈)로 전환하면 준비 중 빈 상태와 렌�
   expect(
     await screen.findByRole("heading", { level: 1, name: "내 액션아이템" }),
   ).toBeInTheDocument();
-  expect(screen.getByText("렌즈 추출은 준비 중입니다")).toBeInTheDocument();
+  expect(
+    await screen.findByText("다음 스프린트 자료 공유하기"),
+  ).toBeInTheDocument();
   // Radix Tabs는 mousedown으로 탭을 활성화한다
   fireEvent.mouseDown(screen.getByRole("tab", { name: "결정사항" }));
   expect(
     await screen.findByRole("heading", { level: 1, name: "내 결정사항" }),
+  ).toBeInTheDocument();
+  expect(
+    await screen.findByText("조건에 맞는 결정사항 항목이 없어요."),
+  ).toBeInTheDocument();
+});
+
+test("전역 렌즈 대시보드에서 근거 점프하면 회의뷰로 전환되고 발언이 하이라이트되지만 오디오는 seek되지 않는다", async () => {
+  const { container } = renderShell();
+  await screen.findByRole("heading", {
+    level: 1,
+    name: "기획회의 — UI 개선안",
+  });
+  fireEvent.click(screen.getByRole("button", { name: "모든 회의" }));
+  await screen.findByRole("heading", { level: 1, name: "내 액션아이템" });
+
+  const jumpCard = (
+    await screen.findByText("다음 스프린트 자료 공유하기")
+  ).closest(".rounded-sm") as HTMLElement;
+  fireEvent.click(within(jumpCard).getByRole("button", { name: /원문 보기/ }));
+
+  // m2("스프린트 회고")로 전환되고, v3를 포함하는 병합 블록(v2)이 하이라이트된다.
+  expect(
+    await screen.findByRole("heading", { level: 1, name: "스프린트 회고" }),
+  ).toBeInTheDocument();
+  const log = screen.getByRole("log", { name: "회의 전사" });
+  expect(log.querySelector('[data-uid="v2"]')).toHaveClass(
+    "bg-[var(--accent-1)]",
+  );
+
+  // jumpTo(검색 점프)와 달리 근거 점프는 pendingSeek을 걸지 않으므로, 오디오
+  // 메타데이터가 로드돼도 currentTime이 그대로다(0에서 변화 없음).
+  const audio = container.querySelector("audio")!;
+  fireEvent.loadedMetadata(audio);
+  expect(audio.currentTime).toBe(0);
+});
+
+test("근거 점프 대상 발언이 재처리로 사라졌으면 토스트를 띄우고 activeId를 비운다", async () => {
+  renderShell();
+  await screen.findByRole("heading", {
+    level: 1,
+    name: "기획회의 — UI 개선안",
+  });
+  fireEvent.click(screen.getByRole("button", { name: "모든 회의" }));
+  await screen.findByRole("heading", { level: 1, name: "내 액션아이템" });
+
+  const ghostCard = (
+    await screen.findByText("지난 회의 후속 조치 확인하기")
+  ).closest(".rounded-sm") as HTMLElement;
+  fireEvent.click(within(ghostCard).getByRole("button", { name: /원문 보기/ }));
+
+  // 대상 회의(m1)는 이미 로드돼 있으므로 뷰만 회의뷰로 전환된다.
+  await screen.findByRole("log", { name: "회의 전사" });
+  expect(
+    await screen.findByText(
+      "재처리로 근거 발언을 현재 버전에서 찾을 수 없어요.",
+    ),
   ).toBeInTheDocument();
 });
 

@@ -7,7 +7,10 @@ import {
   type CommandItem,
 } from "@/shared/ui/command-bar";
 import { Tag } from "@/shared/ui/tag";
+import { useToast } from "@/shared/ui/use-toast";
 
+import { LensDashboard } from "@/features/lens/ui/lens-dashboard";
+import type { LensKind } from "@/features/lens/model/types";
 import { formatClock } from "@/features/meeting/api/mappers";
 import {
   useMeeting,
@@ -17,14 +20,13 @@ import {
 import { useSearch } from "@/features/meeting/api/search";
 import type { MeetingStatusResponse } from "@/features/meeting/api/types";
 import type {
-  LensKind,
+  LensKind as MeetingLensKind,
   Meeting,
   MeetingFilter,
 } from "@/features/meeting/model/types";
 import { Icon } from "@/features/meeting/ui/icons";
 import { InsightPane } from "@/features/meeting/ui/insight-pane";
 import { LeftNav } from "@/features/meeting/ui/left-nav";
-import { LensView } from "@/features/meeting/ui/lens-view";
 import { PlayerBar } from "@/features/meeting/ui/player-bar";
 import { TranscriptPane } from "@/features/meeting/ui/transcript-pane";
 
@@ -199,6 +201,8 @@ export function MeetingPage() {
 
   const { data: hits = [] } = useSearch(cmdQuery);
 
+  const { toast } = useToast();
+
   const audioRef = React.useRef<HTMLAudioElement>(null);
 
   React.useEffect(() => {
@@ -267,10 +271,39 @@ export function MeetingPage() {
     }
   };
 
-  const openLens = (k: LensKind) => {
+  const openLens = (k: MeetingLensKind) => {
     setView("lens");
-    setLens(k);
+    // 전역 대시보드는 3종(action/decision/promise)만 다룬다 — "topic"은 회의
+    // 상세(InsightPane) 전용이라 여기선 호출되지 않는다.
+    if (k !== "topic") setLens(k);
   };
+
+  // 전역 렌즈 대시보드에서의 근거 점프 — 오디오 seek는 하지 않고 뷰 전환 +
+  // 하이라이트/스크롤만 수행한다.
+  const jumpToEvidence = (mid: string, uid: string) => {
+    openMeeting(mid);
+    setActiveId(uid);
+  };
+
+  // historical 가드: 재처리 등으로 대상 회의가 로드된 뒤에도 activeId가 가리키는
+  // 발언(원본 발화 id 포함)을 찾을 수 없으면 안내 토스트를 띄우고 activeId를
+  // 비운다. 같은 회의 내 검색 점프(jumpTo)는 항상 유효한 발언만 넘기므로 영향
+  // 없다. 외부 데이터(meeting)와 activeId의 조합을 동기화하는 의도된 effect라
+  // set-state-in-effect 규칙을 해제한다(activeId가 ""로 바뀌면 조건이 즉시
+  // false가 되어 cascading되지 않음).
+  React.useEffect(() => {
+    if (!activeId || !meeting) return;
+    const found = meeting.utterances.some(
+      (u) => u.id === activeId || u.sources.some((s) => s.id === activeId),
+    );
+    if (!found) {
+      toast({
+        description: "재처리로 근거 발언을 현재 버전에서 찾을 수 없어요.",
+      });
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setActiveId("");
+    }
+  }, [activeId, meeting, toast]);
 
   const toggleDone = (id: string) => setDone((d) => ({ ...d, [id]: !d[id] }));
 
@@ -444,12 +477,10 @@ export function MeetingPage() {
             <div className="flex min-h-0 flex-1">{renderCenter()}</div>
           </div>
         ) : (
-          <LensView
+          <LensDashboard
             lens={lens}
             onLens={setLens}
-            done={done}
-            onToggle={toggleDone}
-            onJump={openMeeting}
+            onJumpEvidence={jumpToEvidence}
           />
         )}
       </div>
