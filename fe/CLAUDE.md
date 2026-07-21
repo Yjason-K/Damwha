@@ -71,6 +71,12 @@ The `/app` route (`pages/meeting.tsx`) is the product's **three-pane browse shel
 - **Reprocess UI:** the `TranscriptPane` header shows a `rotateCcw` button **only for `done`/`failed` meetings** → opens `ReprocessDialog` → `useReprocessMeeting` (in `features/meeting`).
 - **GPU is conservative by default:** GPU is allowed only when `caps?.gpu_eligible === true` (unknown/loading/failed ⇒ disallowed). Because every preset uses GPU diarization, preset cards are disabled when not eligible. The GPU switch is asymmetric — turning **on** (cpu→gpu) is blocked when ineligible, but turning **off** (gpu→cpu) is always allowed (recovery path for a migrated DB).
 
+`src/features/lens/` (전역 렌즈 대시보드) owns the "모든 회의" view — `api` (`useLensList` infinite query, `useLensExtractionStatus` polling every 10s, `useSetLensCompletion`, `useRetryExtraction`), `lib/map-item.ts` (wire → view mapping incl. primary evidence), `model` (`LENS_META` = **action/decision/promise only**), and `ui` (`LensDashboard`, `LensList`, `LensFilterBar`, `LensExtractionBanner`). Design: `../be/docs/superpowers/specs/2026-07-21-lens-global-dashboard-design.md`.
+
+- **`topic` is not a dashboard kind.** Topics are saved searches (roadmap 작업 4), so the lens domain here carries three kinds; don't reuse the meeting-domain `LensKind`.
+- **Completion filter is a single-value segment** (`열림|완료`) because BE `completion_status` takes one value — there is no combined view. Toggling completion optimistically removes the row from the current list.
+- **Evidence jump switches to the meeting view and highlights the utterance — no audio seek** (deliberate, spec 비범위). Historical items whose utterance no longer exists after reprocess surface a toast instead of a silent no-op.
+
 ## Styling & design system
 
 **Tailwind v4 via `@tailwindcss/vite` — there is no `tailwind.config`.** All theming is CSS-first in `src/index.css`:
