@@ -53,14 +53,30 @@
   --red-text: #a02d2d;
 
   /* --- Speaker palette (8 hues): -solid / -bg / -text --- */
-  --spk-1-solid: #5570e8;  --spk-1-bg: #ebeefc;  --spk-1-text: #3a4cbf;
-  --spk-2-solid: #1fa579;  --spk-2-bg: #e3f3ec;  --spk-2-text: #137a57;
-  --spk-3-solid: #dda12c;  --spk-3-bg: #f8f0db;  --spk-3-text: #8a6212;
-  --spk-4-solid: #e26b97;  --spk-4-bg: #fbe9f0;  --spk-4-text: #b23e6a;
-  --spk-5-solid: #9166d6;  --spk-5-bg: #f0eafb;  --spk-5-text: #6a40a8;
-  --spk-6-solid: #5ca24c;  --spk-6-bg: #eaf3e6;  --spk-6-text: #3d7030;
-  --spk-7-solid: #2e97bc;  --spk-7-bg: #e5f2f7;  --spk-7-text: #1f6f8c;
-  --spk-8-solid: #c77a42;  --spk-8-bg: #f7ece2;  --spk-8-text: #8f5526;
+  --spk-1-solid: #5570e8;
+  --spk-1-bg: #ebeefc;
+  --spk-1-text: #3a4cbf;
+  --spk-2-solid: #1fa579;
+  --spk-2-bg: #e3f3ec;
+  --spk-2-text: #137a57;
+  --spk-3-solid: #dda12c;
+  --spk-3-bg: #f8f0db;
+  --spk-3-text: #8a6212;
+  --spk-4-solid: #e26b97;
+  --spk-4-bg: #fbe9f0;
+  --spk-4-text: #b23e6a;
+  --spk-5-solid: #9166d6;
+  --spk-5-bg: #f0eafb;
+  --spk-5-text: #6a40a8;
+  --spk-6-solid: #5ca24c;
+  --spk-6-bg: #eaf3e6;
+  --spk-6-text: #3d7030;
+  --spk-7-solid: #2e97bc;
+  --spk-7-bg: #e5f2f7;
+  --spk-7-text: #1f6f8c;
+  --spk-8-solid: #c77a42;
+  --spk-8-bg: #f7ece2;
+  --spk-8-text: #8f5526;
 
   /* --- Semantic aliases (reference these in components, not raw scales) --- */
   --surface-app: var(--gray-2);
@@ -108,10 +124,13 @@
   /* --- Elevation (borders do most of the work; shadows for overlays) --- */
   --shadow-none: none;
   --shadow-xs: 0 1px 1px rgba(20, 23, 28, 0.04);
-  --shadow-sm: 0 1px 2px rgba(20, 23, 28, 0.05), 0 1px 1px rgba(20, 23, 28, 0.03);
-  --shadow-md: 0 6px 16px rgba(20, 23, 28, 0.08), 0 2px 5px rgba(20, 23, 28, 0.04),
+  --shadow-sm:
+    0 1px 2px rgba(20, 23, 28, 0.05), 0 1px 1px rgba(20, 23, 28, 0.03);
+  --shadow-md:
+    0 6px 16px rgba(20, 23, 28, 0.08), 0 2px 5px rgba(20, 23, 28, 0.04),
     0 0 0 1px rgba(20, 23, 28, 0.04);
-  --shadow-lg: 0 16px 40px rgba(20, 23, 28, 0.14), 0 6px 14px rgba(20, 23, 28, 0.07),
+  --shadow-lg:
+    0 16px 40px rgba(20, 23, 28, 0.14), 0 6px 14px rgba(20, 23, 28, 0.07),
     0 0 0 1px rgba(20, 23, 28, 0.05);
   --shadow-inset: inset 0 1px 2px rgba(20, 23, 28, 0.05);
 
@@ -123,7 +142,8 @@
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-in: cubic-bezier(0.4, 0, 1, 1);
-  --transition-colors: color var(--dur-instant) var(--ease-standard),
+  --transition-colors:
+    color var(--dur-instant) var(--ease-standard),
     background-color var(--dur-instant) var(--ease-standard),
     border-color var(--dur-instant) var(--ease-standard);
   --transition-transform: transform var(--dur-fast) var(--ease-out);
@@ -212,14 +232,30 @@
   --color-danger-text: var(--red-text);
 
   /* Speaker palette → bg-spk-1 / text-spk-1-text / bg-spk-1-bg … (×8) */
-  --color-spk-1: var(--spk-1-solid);  --color-spk-1-bg: var(--spk-1-bg);  --color-spk-1-text: var(--spk-1-text);
-  --color-spk-2: var(--spk-2-solid);  --color-spk-2-bg: var(--spk-2-bg);  --color-spk-2-text: var(--spk-2-text);
-  --color-spk-3: var(--spk-3-solid);  --color-spk-3-bg: var(--spk-3-bg);  --color-spk-3-text: var(--spk-3-text);
-  --color-spk-4: var(--spk-4-solid);  --color-spk-4-bg: var(--spk-4-bg);  --color-spk-4-text: var(--spk-4-text);
-  --color-spk-5: var(--spk-5-solid);  --color-spk-5-bg: var(--spk-5-bg);  --color-spk-5-text: var(--spk-5-text);
-  --color-spk-6: var(--spk-6-solid);  --color-spk-6-bg: var(--spk-6-bg);  --color-spk-6-text: var(--spk-6-text);
-  --color-spk-7: var(--spk-7-solid);  --color-spk-7-bg: var(--spk-7-bg);  --color-spk-7-text: var(--spk-7-text);
-  --color-spk-8: var(--spk-8-solid);  --color-spk-8-bg: var(--spk-8-bg);  --color-spk-8-text: var(--spk-8-text);
+  --color-spk-1: var(--spk-1-solid);
+  --color-spk-1-bg: var(--spk-1-bg);
+  --color-spk-1-text: var(--spk-1-text);
+  --color-spk-2: var(--spk-2-solid);
+  --color-spk-2-bg: var(--spk-2-bg);
+  --color-spk-2-text: var(--spk-2-text);
+  --color-spk-3: var(--spk-3-solid);
+  --color-spk-3-bg: var(--spk-3-bg);
+  --color-spk-3-text: var(--spk-3-text);
+  --color-spk-4: var(--spk-4-solid);
+  --color-spk-4-bg: var(--spk-4-bg);
+  --color-spk-4-text: var(--spk-4-text);
+  --color-spk-5: var(--spk-5-solid);
+  --color-spk-5-bg: var(--spk-5-bg);
+  --color-spk-5-text: var(--spk-5-text);
+  --color-spk-6: var(--spk-6-solid);
+  --color-spk-6-bg: var(--spk-6-bg);
+  --color-spk-6-text: var(--spk-6-text);
+  --color-spk-7: var(--spk-7-solid);
+  --color-spk-7-bg: var(--spk-7-bg);
+  --color-spk-7-text: var(--spk-7-text);
+  --color-spk-8: var(--spk-8-solid);
+  --color-spk-8-bg: var(--spk-8-bg);
+  --color-spk-8-text: var(--spk-8-text);
 }
 
 /* Static design primitives -> utilities (radius, fonts, dense type scale).
@@ -233,7 +269,9 @@
   --radius-xl: 12px;
   --radius-full: 999px;
 
-  --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-sans:
+    "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+    sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "SF Mono", "Menlo", monospace;
 
   /* Dense UI scale (14px base, Linear/Geist style) */

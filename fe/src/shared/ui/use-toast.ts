@@ -52,6 +52,10 @@ export function dismissToast(id: string) {
 }
 
 export function useToast() {
-  const toasts = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const toasts = React.useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    getSnapshot,
+  );
   return { toasts, toast, dismiss: dismissToast };
 }

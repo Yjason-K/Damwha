@@ -11,7 +11,14 @@ import { cn } from "@/shared/lib/utils";
 
 function XIcon() {
   return (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
       <path d="M4 4l8 8M12 4l-8 8" />
     </svg>
   );
@@ -33,7 +40,9 @@ function DialogPortal(
   return <DialogPrimitive.Portal data-slot="dialog-portal" {...props} />;
 }
 
-function DialogClose(props: React.ComponentProps<typeof DialogPrimitive.Close>) {
+function DialogClose(
+  props: React.ComponentProps<typeof DialogPrimitive.Close>,
+) {
   return <DialogPrimitive.Close data-slot="dialog-close" {...props} />;
 }
 
@@ -129,7 +138,10 @@ function DialogDescription({
   return (
     <DialogPrimitive.Description
       data-slot="dialog-description"
-      className={cn("text-sm leading-normal text-[color:var(--text-secondary)]", className)}
+      className={cn(
+        "text-sm leading-normal text-[color:var(--text-secondary)]",
+        className,
+      )}
       {...props}
     />
   );

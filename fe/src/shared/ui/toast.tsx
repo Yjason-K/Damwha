@@ -68,7 +68,10 @@ function ToastDescription({
   return (
     <ToastPrimitive.Description
       data-slot="toast-description"
-      className={cn("mt-0.5 text-xs leading-[1.45] text-[color:var(--gray-7)]", className)}
+      className={cn(
+        "mt-0.5 text-xs leading-[1.45] text-[color:var(--gray-7)]",
+        className,
+      )}
       {...props}
     />
   );

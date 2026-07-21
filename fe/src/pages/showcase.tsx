@@ -40,7 +40,14 @@ import { CommandBar, type CommandGroup } from "@/shared/ui/command-bar";
 
 function Plus() {
   return (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
       <path d="M8 3v10M3 8h10" />
     </svg>
   );
@@ -48,16 +55,33 @@ function Plus() {
 
 function Gear() {
   return (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      aria-hidden="true"
+    >
       <circle cx="8" cy="8" r="2.2" />
-      <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4" strokeLinecap="round" />
+      <path
+        d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }
 
 function HomeIcon() {
   return (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <path d="M2.5 7L8 2.5 13.5 7M4 6v7.5h8V6" />
     </svg>
   );
@@ -65,7 +89,15 @@ function HomeIcon() {
 
 function MicIcon() {
   return (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <rect x="6" y="1.5" width="4" height="8" rx="2" />
       <path d="M3.5 7.5a4.5 4.5 0 009 0M8 12v2.5" />
     </svg>
@@ -123,8 +155,19 @@ export function ShowcasePage() {
     {
       label: "회의",
       items: [
-        { id: "m1", icon: <MicIcon />, title: "주간 동기화", meta: "오늘 14:00 · 8명", trail: "⏎" },
-        { id: "m2", icon: <MicIcon />, title: "스프린트 리뷰", meta: "어제 · 6명" },
+        {
+          id: "m1",
+          icon: <MicIcon />,
+          title: "주간 동기화",
+          meta: "오늘 14:00 · 8명",
+          trail: "⏎",
+        },
+        {
+          id: "m2",
+          icon: <MicIcon />,
+          title: "스프린트 리뷰",
+          meta: "어제 · 6명",
+        },
       ],
     },
     {
@@ -470,7 +513,12 @@ export function ShowcasePage() {
             </Button>
 
             <div className="flex flex-col rounded-md border border-border bg-card p-2">
-              <Utterance speaker={1} name="김지훈" time="04:12" onJump={() => {}}>
+              <Utterance
+                speaker={1}
+                name="김지훈"
+                time="04:12"
+                onJump={() => {}}
+              >
                 이번 스프린트 목표는 검색 품질 개선입니다.
               </Utterance>
               <Utterance

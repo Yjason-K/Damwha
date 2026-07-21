@@ -15,9 +15,14 @@ function wrapper({ children }: { children: ReactNode }) {
 
 test("실패 회의에 재시도 버튼을 렌더하고 클릭 시 extract를 호출한다", async () => {
   vi.spyOn(apiClient, "get").mockResolvedValue({
-    data: { running: 0, failed: [{ meeting_id: "mtg_7", title: "주간 스크럼" }] },
+    data: {
+      running: 0,
+      failed: [{ meeting_id: "mtg_7", title: "주간 스크럼" }],
+    },
   } as never);
-  const post = vi.spyOn(apiClient, "post").mockResolvedValue({ data: {} } as never);
+  const post = vi
+    .spyOn(apiClient, "post")
+    .mockResolvedValue({ data: {} } as never);
 
   render(<LensExtractionBanner />, { wrapper });
   const btn = await screen.findByRole("button", { name: /재시도/ });
