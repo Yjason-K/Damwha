@@ -126,8 +126,11 @@ features/lens/
 - **useLensList**: `useInfiniteQuery`, `queryKey=['lenses', filters]`(kind 포함).
   `getNextPageParam` = 응답 `next_cursor`. `IntersectionObserver` 센티넬이 뷰포트
   진입 시 `fetchNextPage`.
-- **useLensExtractionStatus**: `useQuery`, `refetchInterval` = 진행 중일 때만 10초,
-  아니면 비활성. 재시도/완료 후 `['lenses']` 무효화로 목록 갱신.
+- **useLensExtractionStatus**: `useQuery`, 대시보드가 열려 있는 동안 **항상 10초
+  `refetchInterval`**. `running>0`일 때만 폴링하면 idle/실패 상태에서 다른 경로(회의 처리
+  완료 시 자동 enqueue, 작업 2)로 새 추출이 생겨도 재조회하지 않아 진행 배너가 뜨지 않는다.
+  v1은 상시 10초 폴링으로 단순·안전하게 처리한다. 재시도/완료 후 `['lenses']` 무효화로
+  목록 갱신.
 - **완료 토글**: `LensItem` 체크박스 → complete/reopen mutation. **낙관적 업데이트**로
   즉시 반영, 실패 시 롤백 + 토스트(`use-toast`).
 
@@ -197,6 +200,8 @@ v1은 이를 명시적으로 처리한다:
 
 ## 9. 완료 기준
 - 액션·결정·약속 항목을 전역에서 조회·필터·완료 처리할 수 있다.
-- 각 항목의 근거 발언이 속한 회의로 이동해 해당 발언을 확인할 수 있다.
+- 각 항목의 근거 발언이 속한 회의로 이동할 수 있다. **현재 처리 버전의 근거**는
+  transcript에서 스크롤·하이라이트로 확인하고, **재처리 전(historical) 근거**는 회의로
+  이동한 뒤 현재 버전에 없음을 안내(토스트)한다.
 - 진행 중·실패 추출이 배너로 보이고, 실패 회의를 재시도할 수 있다.
 - BE·FE 필수 검증 스위트가 모두 통과한다.
