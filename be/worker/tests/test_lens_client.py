@@ -95,3 +95,74 @@ def test_client_sends_the_lens_extraction_contract_prompt_and_utterances(httpx_m
         },
         {"role": "user", "content": json.dumps({"utterances": utterances})},
     ]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '```json\n{"items": []}\n```',
+        '```\n{"items": []}\n```',
+        '  ```json\n{"items": []}\n```  ',
+    ],
+)
+def test_client_parses_a_response_wrapped_in_a_markdown_code_fence(httpx_mock, content):
+    httpx_mock.add_response(json={"choices": [{"message": {"content": content}}]})
+
+    assert (
+        LensClient("http://localhost:11434/v1", None, 12.0).extract(
+            model="job-model", utterances=[]
+        )
+        == []
+    )
+
+
+def test_client_disables_model_reasoning(httpx_mock):
+    httpx_mock.add_response(json={"choices": [{"message": {"content": '{"items": []}'}}]})
+
+    LensClient("http://localhost:11434/v1", None, 12.0).extract(model="job-model", utterances=[])
+
+    assert json.loads(httpx_mock.get_request().content)["reasoning_effort"] == "none"
+
+
+def test_client_sends_non_ascii_utterance_text_unescaped(httpx_mock):
+    httpx_mock.add_response(json={"choices": [{"message": {"content": '{"items": []}'}}]})
+    utterances = [
+        {
+            "id": "utt_1",
+            "speaker_id": "spk_1",
+            "speaker_name": "김영재",
+            "text": "내일까지 보고서 보내겠습니다",
+            "start_ms": 0,
+            "end_ms": 1000,
+        }
+    ]
+
+    LensClient("http://localhost:11434/v1", None, 12.0).extract(
+        model="job-model", utterances=utterances
+    )
+
+    user_message = json.loads(httpx_mock.get_request().content)["messages"][1]["content"]
+    assert "내일까지 보고서 보내겠습니다" in user_message
+    assert "\\u" not in user_message
+
+
+def test_client_accepts_a_bare_items_array(httpx_mock):
+    content = json.dumps(
+        [
+            {
+                "kind": "action",
+                "text": "send the report",
+                "assignee_speaker_id": "spk_1",
+                "due_at": None,
+                "primary_utterance_id": "utt_1",
+                "supporting_utterance_ids": [],
+            }
+        ]
+    )
+    httpx_mock.add_response(json={"choices": [{"message": {"content": content}}]})
+
+    items = LensClient("http://localhost:11434/v1", None, 12.0).extract(
+        model="job-model", utterances=[]
+    )
+
+    assert [item.primary_utterance_id for item in items] == ["utt_1"]

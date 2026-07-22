@@ -22,6 +22,16 @@ _EXTRACTION_SYSTEM_PROMPT = (
 )
 
 
+def _strip_code_fence(content: str) -> str:
+    """Unwrap a ```json ... ``` block. Models wrap JSON despite response_format."""
+    text = content.strip()
+    if not text.startswith("```"):
+        return text
+    body = text[3:].removesuffix("```")
+    head, sep, rest = body.partition("\n")
+    return rest if sep and not head.strip().startswith("{") else body
+
+
 class LensClient:
     """Small synchronous adapter for OpenAI-compatible chat-completion APIs."""
 
@@ -39,9 +49,17 @@ class LensClient:
                     "role": "system",
                     "content": _EXTRACTION_SYSTEM_PROMPT,
                 },
-                {"role": "user", "content": json.dumps({"utterances": utterances})},
+                # Escaped non-ASCII (\uXXXX) is unreadable to the model and inflates
+                # the prompt several-fold, so the transcript goes over as-is.
+                {
+                    "role": "user",
+                    "content": json.dumps({"utterances": utterances}, ensure_ascii=False),
+                },
             ],
             "response_format": {"type": "json_object"},
+            # Reasoning models spend minutes thinking before emitting the items
+            # array. Extraction needs the answer, not the deliberation.
+            "reasoning_effort": "none",
         }
         try:
             with httpx.Client(timeout=self._timeout_seconds) as client:
@@ -60,6 +78,11 @@ class LensClient:
 
         try:
             content = response.json()["choices"][0]["message"]["content"]
-            return LensExtractionResponse.model_validate_json(content).items
+            parsed = json.loads(_strip_code_fence(content))
+            # response_format is advisory for local runtimes, so a model may emit the
+            # items array on its own instead of the wrapper object.
+            if isinstance(parsed, list):
+                parsed = {"items": parsed}
+            return LensExtractionResponse.model_validate(parsed).items
         except (IndexError, KeyError, TypeError, json.JSONDecodeError, ValidationError) as exc:
             raise WorkerError(LLM_INVALID_RESPONSE, str(exc), ErrorKind.PERMANENT) from exc

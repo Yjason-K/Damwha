@@ -20,9 +20,9 @@ class Settings(BaseSettings):
     embed_service_port: int = 8100
     default_speaker_prefix: str = "Speaker"
     lens_llm_base_url: str = "http://127.0.0.1:11434/v1"
-    lens_llm_model: str = "qwen2.5:14b-instruct"
+    lens_llm_model: str = "qwen3.5:4b-mlx"
     lens_llm_api_key: str | None = None
-    lens_llm_timeout_seconds: float = 30.0
+    lens_llm_timeout_seconds: float = 300.0
 
     @field_validator("default_speaker_prefix")
     @classmethod
