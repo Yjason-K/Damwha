@@ -41,3 +41,20 @@
 - **현재 완화(2026-06-28 모델-빌드 실패 처리 작업):** 빌드를 `handle_job`의 guarded try 안으로 옮긴 수정으로 이 `KeyError`는 **워커를 죽이지 않고 graceful-fail**(uncategorized→TRANSIENT→requeue 후 attempts 소진 시 `fail_enroll`, speaker `failed`)로 떨어진다. 즉 **크래시-안전성은 확보됐으나 enroll은 여전히 기능적으로 동작하지 않는다.**
 - **수정안:** enroll 전용 빌더(예: `registry.build_embedder(payload, settings)` = `EcapaEmbedder(payload["embedding"]["model"], settings.device)`)를 추가하고 `main()`이 enroll 타입엔 이 빌더를 주입. process_meeting은 payload의 device, enroll은 payload에 device가 없으므로 `settings.device` 사용(ECAPA는 내부적으로 CPU — CLAUDE.md 참고). **검증:** fake 모델로는 빌더 선택만 확인 가능하고, enroll이 실제로 voiceprint를 적재하는지는 실모델 smoke 필요.
 - 상태: **미수정** (graceful-fail까지만 적용됨)
+
+---
+
+## 렌즈 추출 — 긴 회의가 LLM 컨텍스트를 넘김 (등록 2026-07-22)
+
+`run_extract_lenses`(`worker/damwha_worker/pipeline/extract_lenses.py`)는 회의의 **모든 발화를 한 요청에 담아** LLM에 보낸다. 분할·요약·윈도잉이 없어서 긴 회의는 모델 컨텍스트를 넘겨 실패한다.
+
+- **증상(실측, 2026-07-22):** 997발화·111,030자인 `mtg_3`의 추출 job이 HTTP 400 `input length (420309 tokens) exceeds the model's maximum context`로 실패. 4xx라 PERMANENT로 분류되어 재시도 없이 1회 실패(`lens_client.py`의 상태코드 분기). 분류 자체는 의도대로 동작한 것이며, 실패 지점은 페이로드 크기다.
+- **부분 완화(같은 날 `13dd6ae`):** 발화 직렬화를 `ensure_ascii=False`로 바꿔 한글이 `\uXXXX`로 나가지 않게 했다. 이스케이프만으로 토큰이 몇 배 불어 있었으므로 위 420k라는 숫자는 **수정 전 값**이다. 266발화인 `mtg_4`는 이 수정 이후 1회 시도로 성공했다.
+- **미확인:** 완화 이후 `mtg_3`가 통과하는지 **측정하지 않았다.** 다음 작업의 첫 단계는 재측정이어야 한다 — 통과하면 이 항목은 "발화 수가 더 많은 회의"로 범위가 좁혀지고, 여전히 실패하면 아래 분할 설계가 필요하다.
+- **수정안 후보:**
+  - 발화 페이로드 축소: 현재 `id`/`speaker_id`/`speaker_name`/`text`/`start_ms`/`end_ms`를 모두 싣는다. 추출에 불필요한 필드를 빼면 토큰이 줄어든다.
+  - 발화를 배치로 나눠 여러 번 호출하고 후보를 병합. **주의:** 배치 경계를 넘는 맥락(앞 발화에서 정해진 담당자 등)이 끊기고, 배치마다 같은 항목이 중복 추출될 수 있다. 병합 규칙(`classifyAiMerge`)은 `(kind, primary utterance)`로 매칭하므로 서로 다른 primary를 가리키는 중복은 걸러지지 않는다.
+  - 컨텍스트 초과를 호출 전에 감지해 명시적 오류(또는 자동 분할)로 처리. 지금은 LLM의 400 응답에 의존한다.
+- **연관:** 활성 AI 항목은 primary 근거를 반드시 유지해야 하므로(마이그레이션 `014`), 분할 추출을 도입하면 부분 결과 병합이 이 불변식을 깨지 않는지 확인해야 한다.
+- **범위:** 로드맵 `superpowers/specs/2026-07-14-lens-platform-roadmap-design.md`의 작업 2(자동 추출 워커) 스펙에 없는 **설계 추가**다. 코드 수정 전에 브레인스토밍→스펙이 필요하다.
+- 상태: **미수정**
