@@ -53,7 +53,7 @@ describe('manual lens extraction', () => {
     expect(job).toMatchObject({ type: 'extract_lenses', meeting_id: meetingId, status: 'queued' });
     expect(job.payload).toMatchObject({
       schema_version: 1, meeting_id: meetingId, processing_version: 0,
-      extraction_run_id: first.body.run_id, model: 'qwen2.5:14b-instruct',
+      extraction_run_id: first.body.run_id, model: 'qwen3.5:4b-mlx',
     });
   });
 
@@ -76,7 +76,7 @@ describe('manual lens extraction', () => {
     const status = await request(app.getHttpServer()).get(`/meetings/${meetingId}/status`).expect(200);
     expect(status.body).toMatchObject({
       status: 'done', lens_extraction: {
-        status: 'failed', model: 'qwen2.5:14b-instruct', error: { code: 'model_error' },
+        status: 'failed', model: 'qwen3.5:4b-mlx', error: { code: 'model_error' },
         finished_at: expect.any(String),
       },
     });

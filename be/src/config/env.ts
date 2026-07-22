@@ -26,7 +26,7 @@ const EnvSchema = z.object({
   EMBED_SERVICE_ALLOW_NON_LOOPBACK: z.string().default('false'),
   SEARCH_RRF_K: z.coerce.number().default(60),
   SEARCH_CANDIDATE_K: z.coerce.number().default(100),
-  LENS_LLM_MODEL: z.string().default('qwen2.5:14b-instruct'),
+  LENS_LLM_MODEL: z.string().default('qwen3.5:4b-mlx'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

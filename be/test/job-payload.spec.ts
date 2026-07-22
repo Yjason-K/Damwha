@@ -138,7 +138,7 @@ describe('job payload contract', () => {
   it('defaults LENS_LLM_MODEL to the extraction model', () => {
     const old = process.env.LENS_LLM_MODEL;
     delete process.env.LENS_LLM_MODEL;
-    expect(loadEnv().LENS_LLM_MODEL).toBe('qwen2.5:14b-instruct');
+    expect(loadEnv().LENS_LLM_MODEL).toBe('qwen3.5:4b-mlx');
     if (old === undefined) delete process.env.LENS_LLM_MODEL;
     else process.env.LENS_LLM_MODEL = old;
   });
