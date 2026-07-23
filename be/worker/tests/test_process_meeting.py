@@ -36,7 +36,7 @@ def _payload(meeting_id, audio_key, pv=0, threshold=0.7):
 
 def _models():
     return Models(
-        vad=FakeVAD([]),
+        vad=FakeVAD([SpeechSpan(0, 2000)]),
         diarizer=FakeDiarizer(
             [DiarSegment("SPEAKER_00", 0, 1000), DiarSegment("SPEAKER_01", 1000, 2000)]
         ),
@@ -121,6 +121,8 @@ def test_stage_logs_emitted_with_counts(conn, tmp_path, caplog):
     # counts (not content) are surfaced; start/total bracket the run
     assert "process_meeting start" in text
     assert "segments=2" in text and "words=2" in text and "utterances=2" in text
+    # 신규 STT 관측 지표 — FakeVAD (0,2000) → pad/clamp 후 (0,2000) 1개
+    assert "words=2 spans=1 clipped_ms=2000 duration_ms=2000" in text
     assert "process_meeting done outcome=committed total_ms=" in text
 
 
@@ -154,7 +156,7 @@ def test_all_short_cluster_preserved_without_provisional_speaker(conn, tmp_path)
     conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
     db.claim(conn, "w1")
     models = Models(
-        vad=FakeVAD([]),
+        vad=FakeVAD([SpeechSpan(0, 40)]),
         diarizer=FakeDiarizer([DiarSegment("SPEAKER_00", 0, 50)]),
         embedder=FakeEmbedder([None]),  # <100ms → 임베딩 없음
         transcriber=FakeTranscriber([Word("짧다", 0, 40, 0.9)]),
@@ -282,3 +284,69 @@ def test_shutdown_before_normalize_raises_without_side_effects(conn, tmp_path):
         conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()["status"]
         == "uploaded"  # mark_processing 미도달
     )
+
+
+def test_stt_receives_prepared_spans(conn, tmp_path):
+    # VAD (100,900),(1000,1600) → pad 200 → (0,1100),(800,1800) → 병합 (0,1800)
+    mid = seed_meeting(
+        conn, status="processing", processing_version=0, audio_key="meetings/m/original.m4a"
+    )
+    jid = seed_job(conn, meeting_id=mid, payload={})
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    db.claim(conn, "w1")
+    models = Models(
+        vad=FakeVAD([SpeechSpan(100, 900), SpeechSpan(1000, 1600)]),
+        diarizer=FakeDiarizer(
+            [DiarSegment("SPEAKER_00", 0, 1000), DiarSegment("SPEAKER_01", 1000, 2000)]
+        ),
+        embedder=FakeEmbedder([[1.0] + [0.0] * 191, [0.0, 1.0] + [0.0] * 190]),
+        transcriber=FakeTranscriber([Word("안녕", 0, 500, 0.9), Word("반가워", 1100, 1500, 0.8)]),
+    )
+    out = run_process_meeting(
+        conn,
+        conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
+        _payload(mid, "meetings/m/original.m4a"),
+        models,
+        Storage(str(tmp_path)),
+        worker_id="w1",
+        normalize_fn=lambda s, d: None,
+        probe_fn=lambda p: ProbeResult(2000),
+    )
+    assert out == "committed"
+    assert models.transcriber.calls == 1
+    assert models.transcriber.received_spans == [SpeechSpan(0, 1800)]
+
+
+def test_empty_vad_skips_stt_and_yields_silence(conn, tmp_path):
+    # VAD 0개 → transcriber 호출 생략, failed_spans=[]이므로 전 세그먼트 silence
+    mid = seed_meeting(
+        conn, status="processing", processing_version=0, audio_key="meetings/m/original.m4a"
+    )
+    jid = seed_job(conn, meeting_id=mid, payload={})
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    db.claim(conn, "w1")
+    models = Models(
+        vad=FakeVAD([]),
+        diarizer=FakeDiarizer(
+            [DiarSegment("SPEAKER_00", 0, 1000), DiarSegment("SPEAKER_01", 1000, 2000)]
+        ),
+        embedder=FakeEmbedder([[1.0] + [0.0] * 191, [0.0, 1.0] + [0.0] * 190]),
+        transcriber=FakeTranscriber([Word("환각", 0, 500, 0.9)]),  # 호출되면 안 됨
+    )
+    out = run_process_meeting(
+        conn,
+        conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
+        _payload(mid, "meetings/m/original.m4a"),
+        models,
+        Storage(str(tmp_path)),
+        worker_id="w1",
+        normalize_fn=lambda s, d: None,
+        probe_fn=lambda p: ProbeResult(2000),
+    )
+    assert out == "committed"
+    assert models.transcriber.calls == 0
+    rows = conn.execute(
+        "SELECT status, text FROM utterance WHERE meeting_id=%s ORDER BY order_index", (mid,)
+    ).fetchall()
+    assert len(rows) == 2
+    assert all(r["status"] == "silence" and r["text"] is None for r in rows)

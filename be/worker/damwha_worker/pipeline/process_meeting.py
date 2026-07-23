@@ -14,6 +14,7 @@ from . import ffmpeg
 from .align import build_utterances
 from .identify import centroids_by_label, identify_clusters
 from .stage import enter_stage
+from .stt_spans import prepare_stt_spans
 from .timing import timed_stage
 
 log = logging.getLogger("damwha_worker")
@@ -107,11 +108,20 @@ def run_process_meeting(
         identified = sum(1 for sid in label_to_speaker.values() if sid is not None)
         t["detail"] = f"identified={identified}/{len(label_to_speaker)}"
 
-    # 6) STT
+    # 6) STT — VAD 발화 구간만 디코딩(무음 환각 방지). 빈 VAD면 호출 자체를 생략
+    #    (clip_timestamps=[]는 라이브러리가 '전체 오디오'로 해석할 수 있다).
     enter_stage(conn, job_id, worker_id, "stt", 75, shutdown_event)
     with timed_stage("stt", ctx) as t:
-        words = models.transcriber.transcribe(norm_path, payload.models.language)
-        t["detail"] = f"words={len(words)}"
+        prepared = prepare_stt_spans(speech_spans, duration_ms)
+        if prepared:
+            words = models.transcriber.transcribe(norm_path, payload.models.language, prepared)
+        else:
+            words = []
+        clipped_ms = sum(s.end_ms - s.start_ms for s in prepared)
+        t["detail"] = (
+            f"words={len(words)} spans={len(prepared)} "
+            f"clipped_ms={clipped_ms} duration_ms={duration_ms}"
+        )
 
     # 7) align
     enter_stage(conn, job_id, worker_id, "align", 90, shutdown_event)

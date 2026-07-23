@@ -28,8 +28,14 @@ class FakeEmbedder:
 class FakeTranscriber:
     def __init__(self, words: list[Word]) -> None:
         self._words = words
+        self.received_spans: list[SpeechSpan] | None = None
+        self.calls = 0
 
-    def transcribe(self, wav_path: str, language: str) -> list[Word]:
+    def transcribe(
+        self, wav_path: str, language: str, speech_spans: list[SpeechSpan] | None = None
+    ) -> list[Word]:
+        self.calls += 1
+        self.received_spans = speech_spans
         return self._words
 
 
