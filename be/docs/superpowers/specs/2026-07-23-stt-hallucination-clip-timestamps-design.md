@@ -134,6 +134,9 @@ pure 함수. 순서대로:
 공통:
 - 시그니처를 protocol에 맞춰 확장.
 - `speech_spans`가 비-None이면 `clip_timestamps=[s.start_ms/1000, s.end_ms/1000 반복 flat]` 전달.
+- **빈 리스트 방어**: `speech_spans=[]`(비-None)이면 라이브러리 호출 없이 `[]` 반환.
+  `clip_timestamps=[]`가 "전체 오디오"로 해석되는 것을 어댑터 레벨에서도 차단 —
+  **None만** 전체 파일 전사를 의미한다. (파이프라인의 빈 VAD 가드 §2.4와 이중 방어.)
 - `condition_on_previous_text=False`, `hallucination_silence_threshold=2.0` 상수 전달.
 
 mlx: `mlx_whisper.transcribe(..., clip_timestamps=..., condition_on_previous_text=False, hallucination_silence_threshold=2.0)`.
@@ -206,6 +209,7 @@ stage=stt done elapsed_ms=... words=N spans=M clipped_ms=X duration_ms=Y
 
 ### 5.3 어댑터 계약 (라이브러리 mock 수준)
 - `speech_spans=None` → `clip_timestamps` 미전달(전체 파일 동작)
+- `speech_spans=[]` → 라이브러리 호출 없이 `[]` 반환 (빈 리스트 방어)
 - span 제공 → 올바른 flat 초 리스트(`[0.5, 3.2, 4.0, 9.9]` 형태)로 변환되는지
 - 환각 방어 상수 2종이 호출 kwargs에 포함되는지
 

@@ -18,6 +18,7 @@
 - span 전처리 기본 padding: `PAD_MS = 200`.
 - `build_utterances`의 `failed_spans`에는 **전처리 전 원본 VAD span** 유지.
 - 빈 VAD(전처리 후 span 0개) → transcriber 호출 생략 (`clip_timestamps=[]`는 "전체 오디오"로 해석될 수 있음).
+- 어댑터 방어 계약: `speech_spans=[]`(비-None 빈 리스트)면 라이브러리 호출 없이 `[]` 반환 — **None만** 전체 파일 전사를 의미.
 - 모든 명령은 `be/worker/`에서 실행: `uv run pytest ...`, `uv run ruff check .`.
 - 로그 detail에 카운트/길이만 — 텍스트·PII 금지 (`timing.py` 규칙).
 
@@ -253,12 +254,31 @@ def test_faster_none_spans_omits_clip(monkeypatch):
     FasterWhisper("large-v3-turbo", device="cpu").transcribe("a.wav", "ko")
     (kwargs,) = calls
     assert "clip_timestamps" not in kwargs
+
+
+def test_mlx_empty_spans_skips_library_and_returns_empty(monkeypatch):
+    # 빈 리스트 = '발화 없음' — clip_timestamps=[]가 전체 오디오로 해석되는 것을 방어
+    calls = []
+    _install_fake_mlx(monkeypatch, calls)
+    from damwha_worker.models.whisper_mlx import MlxWhisper
+
+    assert MlxWhisper("large-v3-turbo").transcribe("a.wav", "ko", []) == []
+    assert calls == []
+
+
+def test_faster_empty_spans_skips_library_and_returns_empty(monkeypatch):
+    calls = []
+    _install_fake_faster(monkeypatch, calls)
+    from damwha_worker.models.whisper_faster import FasterWhisper
+
+    assert FasterWhisper("large-v3-turbo", device="cpu").transcribe("a.wav", "ko", []) == []
+    assert calls == []
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cd worker && uv run pytest tests/test_whisper_adapters.py -v`
-Expected: FAIL — `TypeError: transcribe() takes 3 positional arguments but 4 were given` (clip/가드 kwargs 미전달 assert 실패 포함)
+Expected: 6 FAIL — `TypeError: transcribe() takes 3 positional arguments but 4 were given` (clip/가드 kwargs 미전달, 빈 리스트 방어 부재 포함)
 
 - [ ] **Step 3: Update protocol**
 
@@ -290,6 +310,11 @@ _HALLUCINATION_SILENCE_S = 2.0
     def transcribe(
         self, wav_path: str, language: str, speech_spans: list[SpeechSpan] | None = None
     ) -> list[Word]:
+        if speech_spans is not None and not speech_spans:
+            # 빈 리스트 = '발화 없음' — clip_timestamps=[]가 '전체 오디오'로 해석되는
+            # 것을 방어. None만 전체 파일 전사를 의미한다.
+            return []
+
         import os
 
         import mlx.core as mx
@@ -349,6 +374,10 @@ _HALLUCINATION_SILENCE_S = 2.0
     def transcribe(
         self, wav_path: str, language: str, speech_spans: list[SpeechSpan] | None = None
     ) -> list[Word]:
+        if speech_spans is not None and not speech_spans:
+            # 빈 리스트 = '발화 없음' — whisper_mlx.py와 동일 방어. None만 전체 파일 전사.
+            return []
+
         extra: dict = {}
         if speech_spans:
             extra["clip_timestamps"] = [
@@ -382,7 +411,7 @@ _HALLUCINATION_SILENCE_S = 2.0
 - [ ] **Step 6: Run tests to verify they pass**
 
 Run: `cd worker && uv run pytest tests/test_whisper_adapters.py -v`
-Expected: 4 PASS
+Expected: 6 PASS
 
 - [ ] **Step 7: Lint + commit**
 
@@ -548,12 +577,20 @@ align 호출(`failed_spans=speech_spans`)은 **변경하지 않는다** — 원�
 
 `test_partial_stt_failure_marks_transcribe_failed_per_segment`(219행)는 이미 비어있지 않은 VAD — 무변경.
 
+`test_stage_logs_emitted_with_counts`(123행)의 counts assert 직후에 새 관측 지표 검증을 추가:
+
+```python
+    assert "segments=2" in text and "words=2" in text and "utterances=2" in text
+    # 신규 STT 관측 지표 — FakeVAD (0,2000) → pad/clamp 후 (0,2000) 1개
+    assert "words=2 spans=1 clipped_ms=2000 duration_ms=2000" in text
+```
+
 - [ ] **Step 6: Run full worker suite**
 
 Run: `cd worker && uv run pytest -q`
 Expected: 전체 PASS (기존 + 신규 2개 + Task 1·2 테스트 포함, Docker 필요)
 
-`test_stage_logs_emitted_with_counts`의 `words=2` assert는 새 detail 형식(`words=2 spans=1 clipped_ms=... duration_ms=2000`)에서도 부분 문자열로 통과한다. 실패 시 detail 형식 오타 확인.
+`test_stage_logs_emitted_with_counts`는 Step 5에서 추가한 관측 지표 assert로 새 detail 형식을 정확히 검증한다. 실패 시 detail 형식 오타 확인.
 
 - [ ] **Step 7: Lint + commit**
 
