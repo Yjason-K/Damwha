@@ -100,7 +100,10 @@ class Transcriber(Protocol):
     ) -> list[Word]: ...
 ```
 
-- `speech_spans=None` → 기존 동작(전체 파일 디코딩). 기존 fake 모델/테스트 하위호환.
+- `speech_spans=None` → 기존 동작(전체 파일 디코딩). 기본값이 있어
+  `transcribe(wav, language)`로 직접 호출하는 기존 호출자는 호환된다. 단, 변경된
+  `process_meeting`은 항상 세 번째 인자를 전달하므로 위치 인자 2개만 받는 기존
+  fake transcriber는 시그니처 갱신이 필요하다(§5.2).
 - `speech_spans`가 주어지면 해당 구간만 디코딩.
 - 호출부는 `process_meeting`뿐(enroll/index는 transcriber 미사용).
 
@@ -139,7 +142,7 @@ faster-whisper: `self._model.transcribe(..., clip_timestamps=..., condition_on_p
 ### 2.4 파이프라인 변경 (`process_meeting.py` stt stage)
 
 ```python
-prepared = prepare_stt_spans(speech_spans, probe.duration_ms)
+prepared = prepare_stt_spans(speech_spans, duration_ms)  # duration_ms = probe_fn(...) 보관값
 if prepared:
     words = models.transcriber.transcribe(norm_path, payload.models.language, prepared)
 else:
@@ -148,8 +151,9 @@ else:
 
 - **빈 VAD 가드는 필수** — `clip_timestamps=[]`는 두 라이브러리 모두 "전체 오디오"로
   해석될 수 있어, 빈 리스트를 어댑터로 넘기면 안 된다. 호출 자체를 생략한다.
-- `words=[]`이면 이후 흐름은 기존과 동일: 모든 diar 세그먼트가 `silence` 또는
-  `transcribe_failed`로 분류된다(§2.5).
+- `words=[]`이면 이후 흐름은 기존과 동일하며, 빈 VAD에서는 `failed_spans`(=원본 VAD
+  span)도 빈 리스트이므로 word 없는 diar 세그먼트는 **전부 `silence`**로 분류된다.
+  `transcribe_failed`는 VAD 양성 span과 겹치는데 word가 없는 경우에만 나온다(§2.5).
 
 ### 2.5 align/실패 분류 — 무변경
 
