@@ -226,6 +226,7 @@ flowchart TD
     matched -->|"No"| unknown["Keep unidentified cluster"]
 
     probe --> stt["Whisper: word timestamps"]
+    vad --> stt
     diar --> align["Assign words by midpoint"]
     stt --> align
     align --> utterance["Build ordered utterances"]
@@ -247,10 +248,10 @@ flowchart TD
 
 1. **처리 시작 guard** — meeting의 `current_job_id`와 `processing_version`이 payload와 일치할 때만 `processing`으로 바꾼다.
 2. **정규화/검증** — 원본을 16 kHz mono WAV로 만든다. 이미 정규화 파일이 있으면 재사용하며, ffprobe는 항상 duration을 읽는다. 손상 음원과 probe 실패는 영구 오류다.
-3. **VAD** — 음성이 존재하는 구간을 구한다. 현재 구현에서 이 결과는 주로 STT 결과가 비었을 때 `transcribe_failed`와 `silence`를 구분하는 데 사용한다.
+3. **VAD** — 음성이 존재하는 구간을 구한다. 이 span은 (a) `prepare_stt_spans`(pad ±200ms → clamp → merge)를 거쳐 STT의 `clip_timestamps` 입력이 되고, (b) 원본 그대로 align 단계에서 `transcribe_failed`와 `silence`를 구분하는 데 사용된다.
 4. **Diarization** — pyannote가 시간 구간별 `diar_label`을 만든다.
 5. **Speaker embedding/identification** — ECAPA가 각 구간을 192차원으로 바꾸고 label별 centroid를 만든다. 같은 model/dimension이면서 `speaker.enrollment_status='ready'`인 voiceprint만 cosine 비교한다.
-6. **STT** — payload의 Whisper 모델과 language로 word timestamp를 생성한다. backend는 설정이 아니라 payload의 `devices.stt`가 결정한다: `gpu`면 MLX(`whisper_mlx.py`), `cpu`면 faster-whisper(int8). `gpu` 요청인데 MPS가 없으면 CPU 폴백 없이 **영구 오류 `gpu_unavailable`**로 실패한다(payload 재현성).
+6. **STT** — payload의 Whisper 모델과 language로 word timestamp를 생성한다. VAD 발화 구간만 디코딩하며(`clip_timestamps`, 무음 환각 방지), VAD가 비면 STT 호출을 생략한다. 두 어댑터 모두 `condition_on_previous_text=False`, `hallucination_silence_threshold=2.0`을 고정한다. Apple Silicon은 MLX, 그 외 환경은 faster-whisper adapter를 선택할 수 있다. stage 로그에 `words/spans/clipped_ms/duration_ms`를 남긴다 — `clipped_ms/duration_ms` 비율이 비정상적으로 낮으면 VAD false negative 의심 신호.
 7. **Align** — word midpoint가 속한 diarization segment에 word를 귀속하고 segment 단위 발언을 만든다. text가 없는 구간도 `silence` 또는 `transcribe_failed` row로 남긴다.
 8. **Persist** — ML 계산은 transaction 밖에서 수행하고, 최종 결과 교체만 짧은 transaction에서 원자적으로 처리한다. 같은 transaction에서 후속 `index_meeting` job을 enqueue하고, worker에 `lens_llm_model`이 설정돼 있으면 `lens_extraction_run`과 `extract_lenses` job도 함께 enqueue한다(설정이 없으면 렌즈 추출을 건너뛴다).
 
