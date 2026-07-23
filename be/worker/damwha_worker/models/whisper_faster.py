@@ -5,7 +5,11 @@ is `cpu` (mlx-whisper handles `gpu`). Runs on CPU on Apple Silicon so the light
 preset's cpu STT stays available there; kept for CUDA portability too.
 """
 
-from .base import Word
+from .base import SpeechSpan, Word
+
+# 환각 방어(스펙 §1.3) — whisper_mlx.py와 동일 값 유지 (백엔드 간 동작 일치)
+_CONDITION_ON_PREVIOUS_TEXT = False
+_HALLUCINATION_SILENCE_S = 2.0
 
 _MODEL = {
     "tiny": "tiny",
@@ -27,8 +31,26 @@ class FasterWhisper:
             size, device="cuda" if device == "cuda" else "cpu", compute_type=compute_type
         )
 
-    def transcribe(self, wav_path: str, language: str) -> list[Word]:
-        segments, _info = self._model.transcribe(wav_path, language=language, word_timestamps=True)
+    def transcribe(
+        self, wav_path: str, language: str, speech_spans: list[SpeechSpan] | None = None
+    ) -> list[Word]:
+        if speech_spans is not None and not speech_spans:
+            # 빈 리스트 = '발화 없음' — whisper_mlx.py와 동일 방어. None만 전체 파일 전사.
+            return []
+
+        extra: dict = {}
+        if speech_spans:
+            extra["clip_timestamps"] = [
+                t for s in speech_spans for t in (s.start_ms / 1000, s.end_ms / 1000)
+            ]
+        segments, _info = self._model.transcribe(
+            wav_path,
+            language=language,
+            word_timestamps=True,
+            condition_on_previous_text=_CONDITION_ON_PREVIOUS_TEXT,
+            hallucination_silence_threshold=_HALLUCINATION_SILENCE_S,
+            **extra,
+        )
         words: list[Word] = []
         for segment in segments:  # generator
             for w in segment.words or []:
