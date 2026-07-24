@@ -16,3 +16,4 @@ worker/record_examples/
 
 # superpowers SDD scratch (task briefs, reports, review diffs, progress ledger)
 .superpowers/
+.worktrees/
