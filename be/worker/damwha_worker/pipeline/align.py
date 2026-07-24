@@ -2,6 +2,11 @@ from dataclasses import dataclass
 
 from ..models.base import DiarSegment, SpeechSpan, Word
 
+# 무단어 diar 세그먼트가 이 길이 미만이면 row를 만들지 않는다. 화자 겹침에서 나오는
+# sub-second 파편은 전사 불가능한 diarization 아티팩트라 transcribe_failed/silence
+# 노이즈 row만 쌓는다. 단어가 붙은 세그먼트는 길이와 무관하게 항상 유지된다.
+MIN_WORDLESS_SEGMENT_MS = 1000
+
 
 @dataclass
 class Utterance:
@@ -62,6 +67,8 @@ def build_utterances(
                 )
             )
         else:
+            if seg.end_ms - seg.start_ms < MIN_WORDLESS_SEGMENT_MS:
+                continue
             failed = any(
                 _overlaps(seg.start_ms, seg.end_ms, f.start_ms, f.end_ms) for f in failed_spans
             )

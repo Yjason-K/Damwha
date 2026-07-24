@@ -46,3 +46,28 @@ def test_order_index_is_time_ordered():
 
 def test_empty_segments_returns_empty():
     assert build_utterances([Word("hi", 0, 500, 0.9)], []) == []
+
+
+def test_wordless_sliver_segment_dropped():
+    # 1초 미만 무단어 diar 세그먼트(화자 겹침 파편)는 row를 만들지 않는다 —
+    # 전사 불가능한 파편이 transcribe_failed/silence 노이즈 row로 쌓이는 것 방지
+    segments = [DiarSegment("S0", 0, 5000), DiarSegment("S1", 2000, 2400)]
+    words = [Word("안녕", 100, 600, 0.9)]
+    utts = build_utterances(words, segments, failed_spans=[SpeechSpan(0, 5000)])
+    assert [u.diar_label for u in utts] == ["S0"]
+    assert utts[0].order_index == 0
+
+
+def test_wordless_segment_at_1s_threshold_kept():
+    segments = [DiarSegment("S0", 0, 1000), DiarSegment("S1", 1000, 2000)]
+    words = [Word("안녕", 100, 600, 0.9)]
+    utts = build_utterances(words, segments, failed_spans=[])
+    assert [u.status for u in utts] == ["ok", "silence"]
+
+
+def test_short_segment_with_words_is_kept():
+    # 짧아도 단어가 있으면 유지 (drop은 무단어에만 적용)
+    segments = [DiarSegment("S0", 0, 400)]
+    words = [Word("응", 100, 300, 0.9)]
+    utts = build_utterances(words, segments, failed_spans=[])
+    assert len(utts) == 1 and utts[0].status == "ok"
