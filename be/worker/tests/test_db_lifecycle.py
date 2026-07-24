@@ -17,6 +17,14 @@ def test_claim_empty_returns_none(conn):
     assert db.claim(conn, "w1") is None
 
 
+def test_claim_skips_future_retry_until_eligible(conn):
+    delayed = seed_job(conn, type="index_meeting")
+    conn.execute("UPDATE job SET next_attempt_at=now() + interval '1 hour' WHERE id=%s", (delayed,))
+    ready = seed_job(conn, type="index_meeting")
+
+    assert db.claim(conn, "w1")["id"] == ready
+
+
 def test_set_stage_guarded_by_ownership(conn):
     mid = seed_meeting(conn)
     seed_job(conn, meeting_id=mid)
@@ -48,6 +56,18 @@ def test_requeue_clears_lock(conn):
         "SELECT status, locked_by, locked_at FROM job WHERE id=%s", (j["id"],)
     ).fetchone()
     assert row["status"] == "queued" and row["locked_by"] is None and row["locked_at"] is None
+
+
+def test_requeue_sets_delay_from_claimed_attempt(conn):
+    mid = seed_meeting(conn)
+    jid = seed_job(conn, meeting_id=mid)
+    db.claim(conn, "w1")
+
+    assert db.requeue(conn, jid, "w1") == 1
+    row = conn.execute(
+        "SELECT next_attempt_at - now() AS delay FROM job WHERE id=%s", (jid,)
+    ).fetchone()
+    assert 0.5 <= row["delay"].total_seconds() <= 1.5
 
 
 def test_requeue_for_shutdown_restores_attempts(conn):

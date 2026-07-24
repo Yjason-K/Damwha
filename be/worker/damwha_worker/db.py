@@ -11,10 +11,13 @@ def claim(conn, worker_id: str) -> dict | None:
     return conn.execute(
         """
         UPDATE job SET status='running', locked_by=%s, locked_at=now(),
-               attempts = attempts + 1, updated_at=now()
+               attempts = attempts + 1, next_attempt_at=NULL, updated_at=now()
         WHERE id IN (
-          SELECT id FROM job WHERE status='queued'
-          ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
+          SELECT id FROM job
+          WHERE status='queued'
+            AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+          ORDER BY next_attempt_at NULLS FIRST, created_at
+          FOR UPDATE SKIP LOCKED LIMIT 1
         ) RETURNING *
         """,
         (worker_id,),
@@ -57,7 +60,9 @@ def heartbeat(conn, job_id: str, worker_id: str) -> int:
 def requeue(conn, job_id: str, worker_id: str) -> int:
     cur = conn.execute(
         """
-        UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL, updated_at=now()
+        UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL,
+               next_attempt_at=now() + least(power(2, attempts - 1), 60) * interval '1 second',
+               updated_at=now()
         WHERE id=%s AND locked_by=%s AND status='running'
         """,
         (job_id, worker_id),
@@ -70,7 +75,7 @@ def requeue_for_shutdown(conn, job_id: str, worker_id: str) -> int:
     cur = conn.execute(
         """
         UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL,
-               attempts = greatest(attempts - 1, 0), updated_at=now()
+               attempts = greatest(attempts - 1, 0), next_attempt_at=NULL, updated_at=now()
         WHERE id=%s AND locked_by=%s AND status='running'
         """,
         (job_id, worker_id),

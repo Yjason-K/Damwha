@@ -353,22 +353,40 @@ def run_child(settings, shutdown: threading.Event) -> int:
         signal.signal(sig, _on_signal)
 
     storage = Storage(settings.storage_root)
-    from .lens_client import LensClient
-    from .models.registry import build_embedder, build_models, build_text_embedder
+
+    def _build_models(payload, worker_settings):
+        from .models.registry import build_models
+
+        return build_models(payload, worker_settings)
+
+    def _build_embedder(payload, worker_settings):
+        from .models.registry import build_embedder
+
+        return build_embedder(payload, worker_settings)
+
+    def _build_text_embedder(worker_settings):
+        from .models.registry import build_text_embedder
+
+        return build_text_embedder(worker_settings)
+
+    def _build_lens_client(worker_settings):
+        from .lens_client import LensClient
+
+        return LensClient(
+            worker_settings.lens_llm_base_url,
+            worker_settings.lens_llm_api_key,
+            worker_settings.lens_llm_timeout_seconds,
+        )
 
     return run_single_job(
         settings,
         storage,
         shutdown,
         connect_fn=lambda: db.connect(settings.database_url),
-        build_models_fn=build_models,
-        build_embedder_fn=build_embedder,
-        build_text_embedder_fn=build_text_embedder,
-        build_lens_client_fn=lambda s: LensClient(
-            s.lens_llm_base_url,
-            s.lens_llm_api_key,
-            s.lens_llm_timeout_seconds,
-        ),
+        build_models_fn=_build_models,
+        build_embedder_fn=_build_embedder,
+        build_text_embedder_fn=_build_text_embedder,
+        build_lens_client_fn=_build_lens_client,
     )
 
 
