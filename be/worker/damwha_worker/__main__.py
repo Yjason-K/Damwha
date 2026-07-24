@@ -13,6 +13,7 @@ from .pipeline.enroll_speaker import run_enroll_speaker
 from .pipeline.extract_lenses import run_extract_lenses
 from .pipeline.index_meeting import run_index_meeting
 from .pipeline.process_meeting import run_process_meeting
+from .reaper import run_reaper_loop
 from .storage import Storage
 
 log = logging.getLogger("damwha_worker")
@@ -416,14 +417,29 @@ def run_supervisor_main(settings, shutdown: threading.Event) -> None:
             start_new_session=True,
         )
 
-    log.info("supervisor %s started", settings.worker_id)
-    run_supervisor(
-        settings,
-        shutdown,
-        connect_fn=lambda: db.connect(settings.database_url),
-        spawn_fn=_spawn,
-        child_holder=child_holder,
+    reaper_thread = threading.Thread(
+        target=run_reaper_loop,
+        args=(
+            settings.database_url,
+            settings.reaper_stale_minutes,
+            settings.reaper_interval_seconds,
+            shutdown,
+        ),
+        daemon=True,
     )
+    reaper_thread.start()
+    log.info("supervisor %s started", settings.worker_id)
+    try:
+        run_supervisor(
+            settings,
+            shutdown,
+            connect_fn=lambda: db.connect(settings.database_url),
+            spawn_fn=_spawn,
+            child_holder=child_holder,
+        )
+    finally:
+        shutdown.set()
+        reaper_thread.join(timeout=5)
     log.info("supervisor %s stopped", settings.worker_id)
 
 

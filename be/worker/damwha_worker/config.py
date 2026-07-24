@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     hf_token: str | None = None
     poll_interval_seconds: float = 2.0
     heartbeat_interval_seconds: float = 30.0
+    reaper_stale_minutes: float = 30.0
+    reaper_interval_seconds: float = 300.0
     stt_chunk_minutes: float = 25.0
     model_cache_dir: str | None = None
     search_embedding_model: str = "BAAI/bge-m3"

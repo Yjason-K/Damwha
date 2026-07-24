@@ -102,6 +102,45 @@ def test_requeue_for_shutdown_guarded_by_ownership(conn):
     )
 
 
+def test_reap_stale_fails_exhausted_process_meeting_and_entity(conn):
+    mid = seed_meeting(conn, status="processing")
+    jid = seed_job(
+        conn,
+        meeting_id=mid,
+        status="running",
+        locked_by="dead-worker",
+        attempts=3,
+        max_attempts=3,
+        locked_minutes_ago=31,
+    )
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+
+    assert db.reap_stale(conn, 30) == (0, 1)
+    job = conn.execute("SELECT status FROM job WHERE id=%s", (jid,)).fetchone()
+    meeting = conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()
+    assert job["status"] == "failed"
+    assert meeting["status"] == "failed"
+
+
+def test_reap_stale_makes_retried_job_immediately_eligible(conn):
+    mid = seed_meeting(conn, status="processing")
+    jid = seed_job(
+        conn,
+        meeting_id=mid,
+        status="running",
+        locked_by="dead-worker",
+        attempts=1,
+        max_attempts=3,
+        locked_minutes_ago=31,
+    )
+    conn.execute("UPDATE job SET next_attempt_at=now() + interval '1 hour' WHERE id=%s", (jid,))
+
+    assert db.reap_stale(conn, 30) == (1, 0)
+    row = conn.execute("SELECT status, next_attempt_at FROM job WHERE id=%s", (jid,)).fetchone()
+    assert row["status"] == "queued"
+    assert row["next_attempt_at"] is None
+
+
 def test_fail_process_meeting_propagates(conn):
     mid = seed_meeting(conn, processing_version=0)
     jid = seed_job(conn, meeting_id=mid)

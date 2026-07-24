@@ -83,6 +83,58 @@ def requeue_for_shutdown(conn, job_id: str, worker_id: str) -> int:
     return cur.rowcount
 
 
+def reap_stale(conn, stale_minutes: float) -> tuple[int, int]:
+    row = conn.execute(
+        """
+        WITH stale AS (
+          SELECT id, type, meeting_id, attempts, max_attempts, stage
+          FROM job
+          WHERE status='running'
+            AND locked_at < now() - (%s || ' minutes')::interval
+          FOR UPDATE SKIP LOCKED
+        ),
+        requeued AS (
+          UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL,
+                 next_attempt_at=NULL, updated_at=now()
+          WHERE id IN (SELECT id FROM stale WHERE attempts < max_attempts)
+          RETURNING id
+        ),
+        failed AS (
+          UPDATE job j SET status='failed', updated_at=now(),
+            error = jsonb_build_object('code','stale_worker',
+                                       'message','worker lock expired',
+                                       'stage', j.stage)
+          WHERE id IN (SELECT id FROM stale WHERE attempts >= max_attempts)
+          RETURNING id, type, meeting_id, error
+        ),
+        fail_lens_extraction_runs AS (
+          UPDATE lens_extraction_run r SET status='failed', error=f.error, finished_at=now()
+          FROM failed f
+          WHERE r.job_id=f.id AND f.type='extract_lenses'
+          RETURNING r.id
+        ),
+        fail_meetings AS (
+          UPDATE meeting m SET status='failed',
+            error = jsonb_build_object('code','stale_worker','message','processing worker lost')
+          WHERE m.id IN (SELECT meeting_id FROM failed WHERE type='process_meeting')
+          RETURNING m.id
+        ),
+        fail_speakers AS (
+          UPDATE speaker s SET enrollment_status='failed',
+            enrollment_error = jsonb_build_object(
+              'code','stale_worker','message','enroll worker lost'
+            )
+          WHERE s.current_job_id IN (SELECT id FROM failed WHERE type='enroll_speaker')
+          RETURNING s.id
+        )
+        SELECT (SELECT count(*) FROM requeued) AS requeued,
+               (SELECT count(*) FROM failed) AS failed
+        """,
+        (str(stale_minutes),),
+    ).fetchone()
+    return int(row["requeued"]), int(row["failed"])
+
+
 def fail_process_meeting(conn, job_id: str, worker_id: str, meeting_id: str, error: dict) -> bool:
     try:
         with conn.transaction():
