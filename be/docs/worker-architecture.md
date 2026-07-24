@@ -8,7 +8,7 @@
 
 Damwha의 워커 영역에는 서로 다른 두 실행 프로세스가 있다.
 
-1. **ML worker poller** — `python -m damwha_worker`로 실행한다. HTTP 요청을 받지 않고 Postgres `job` 테이블에서 작업을 가져와 회의 처리, 화자 등록, 검색 색인, 렌즈(action/decision/promise) 추출을 수행한다. 내부적으로 `python -m damwha_worker`는 **supervisor 부모**를 띄운다. 부모는 torch/pyannote를 import하지 않고 `job` 큐를 peek만 하며, 처리 대기 job이 있으면 자식 `python -m damwha_worker --once`를 spawn(`start_new_session=True`)하고 종료를 기다린다. 자식은 job 1건을 claim→heartbeat→dispatch로 처리한 뒤 exit하고, OS가 자식의 GPU 메모리(MLX·torch)를 전부 회수한다 — 이것이 job 간 MPS 메모리 누적으로 인한 OOM을 막는 핵심이다. 자식 exit code(0=처리, 3=no job, 그 외=크래시)로 부모가 분기하며, claim 전 결정적 실패로 인한 무한 spawn은 capped backoff로 스로틀한다. 자식 내부의 heartbeat 스레드는 기존과 동일하게 별도 DB 연결로 `locked_at`을 갱신하며 연결 실패에서도 회복된다. graceful shutdown은 부모가 자식에 SIGTERM을 전달해 자식의 stage-boundary 종료 로직을 태우고, 2차 시그널은 자식을 SIGKILL한다.
+1. **ML worker poller** — `python -m damwha_worker`로 실행한다. HTTP 요청을 받지 않고 Postgres `job` 테이블에서 작업을 가져와 회의 처리, 화자 등록, 검색 색인, 렌즈(action/decision/promise) 추출을 수행한다. 내부적으로 `python -m damwha_worker`는 **supervisor 부모**를 띄운다. 부모는 torch/pyannote를 import하지 않고 `job` 큐를 peek만 하며, 처리 대기 job이 있으면 자식 `python -m damwha_worker --once`를 spawn(`start_new_session=True`)하고 종료를 기다린다. 자식은 job 1건을 claim→heartbeat→dispatch로 처리한 뒤 exit하고, OS가 자식의 GPU 메모리(MLX·torch)를 전부 회수한다 — 이것이 job 간 MPS 메모리 누적으로 인한 OOM을 막는 핵심이다. 모델 adapter import도 claim 뒤 dispatch 시점에 일어나므로 의존성 누락은 해당 job의 영구 실패로 기록된다. 자식 exit code(0=처리, 3=no job, 그 외=크래시)로 부모가 분기하며, process-level 크래시는 capped backoff로 스로틀한다. 자식 내부의 heartbeat 스레드는 기존과 동일하게 별도 DB 연결로 `locked_at`을 갱신하며 연결 실패에서도 회복된다. graceful shutdown은 부모가 자식에 SIGTERM을 전달해 자식의 stage-boundary 종료 로직을 태우고, 2차 시그널은 자식을 SIGKILL한다.
 2. **Query embed service** — `uvicorn damwha_worker.embed_service:app`으로 실행한다. NestJS 검색 API의 질의 텍스트를 BGE-M3 벡터로 변환하는 loopback 전용 HTTP 서비스다.
 
 NestJS API와 ML worker poller 사이에는 HTTP 호출이 없다. 둘의 비동기 계약은 Postgres `job` 행과 payload이며, 오디오 파일은 같은 `STORAGE_ROOT`를 통해 공유한다.
@@ -39,6 +39,7 @@ flowchart LR
 
     subgraph worker ["Python worker runtimes"]
         poller["ML worker poller"]
+        workerReaper["Stale job reaper"]
         embedApi["Query embed service"]
     end
 
@@ -58,6 +59,7 @@ flowchart LR
     nest -->|"Enqueue and read status"| jobTable
     nest -->|"Save and stream audio"| storage
     reaper -->|"Recover stale running jobs"| jobTable
+    workerReaper -->|"Recover stale running jobs"| jobTable
 
     jobTable -->|"Claim queued job"| poller
     poller -->|"Stage, heartbeat, result"| jobTable
@@ -74,7 +76,7 @@ flowchart LR
 핵심 경계는 다음과 같다.
 
 - **API의 책임**: 업로드, metadata CRUD, job enqueue, 상태/결과 조회, stale job reaper.
-- **worker poller의 책임**: job claim 이후 모델 실행, stage/progress, 결과 저장, 정상/오류 상태 전이.
+- **worker poller의 책임**: job claim 이후 모델 실행, stage/progress, 결과 저장, 정상/오류 상태 전이, API와 중복 안전한 stale job reaper.
 - **Postgres의 책임**: queue와 결과 저장소를 동시에 담당한다. 별도 Kafka, Redis, RabbitMQ는 없다.
 - **공유 파일시스템의 책임**: API가 저장한 원본 오디오를 worker가 읽고 정규화 WAV를 같은 root에 기록한다.
 - **embed service의 책임**: 검색 시점의 질의 벡터만 제공한다. job을 claim하거나 회의 상태를 변경하지 않는다.
@@ -86,6 +88,7 @@ flowchart LR
 | 프로세스 진입점/dispatcher | [`worker/damwha_worker/__main__.py`](../worker/damwha_worker/__main__.py) | supervisor 부모(`run_supervisor`)의 peek/spawn/backoff, 자식(`run_single_job`, `--once`)의 claim→dispatch, job type 분기, 필요한 모델의 지연 생성, heartbeat 범위, 2단계 시그널, 공통 오류 처리 |
 | payload 계약 | [`worker/damwha_worker/contracts.py`](../worker/damwha_worker/contracts.py) | Pydantic 검증, `schema_version=1`, readable ID 형식 검증 |
 | DB adapter | [`worker/damwha_worker/db.py`](../worker/damwha_worker/db.py) | raw SQL claim/heartbeat/stage/requeue/fail/persist, ownership/stale guard |
+| stale reaper | [`worker/damwha_worker/reaper.py`](../worker/damwha_worker/reaper.py) | 별도 DB 연결으로 stale recovery를 주기 실행; API reaper와 `SKIP LOCKED`로 공존 |
 | heartbeat | [`worker/damwha_worker/heartbeat.py`](../worker/damwha_worker/heartbeat.py) | 별도 DB 연결과 daemon thread로 `locked_at` 갱신 |
 | storage | [`worker/damwha_worker/storage.py`](../worker/damwha_worker/storage.py) | 상대 key를 root 내부 경로로 안전하게 변환, traversal 차단 |
 | 오류 정책 | [`worker/damwha_worker/errors.py`](../worker/damwha_worker/errors.py) | 영구/일시 오류 분류와 `job.error` JSON 생성 |
@@ -153,9 +156,9 @@ flowchart TD
 
 ### Claim과 순서
 
-- `SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1`을 포함한 단일 `UPDATE ... RETURNING`으로 가장 오래된 `queued` job을 claim한다. claim은 부모가 아니라 자식이 수행한다(락 소유권이 프로세스 경계를 넘지 못하므로 부모는 가벼운 `peek`만 하고 claim은 자식에게 맡긴다).
+- `SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1`을 포함한 단일 `UPDATE ... RETURNING`으로 실행 가능(`next_attempt_at IS NULL OR <= now()`)한 `queued` job을 claim한다. claim은 부모가 아니라 자식이 수행한다(락 소유권이 프로세스 경계를 넘지 못하므로 부모는 가벼운 `peek`만 하고 claim은 자식에게 맡긴다).
 - claim 시 `status='running'`, `locked_by`, `locked_at`을 기록하고 `attempts`를 1 증가시킨다.
-- type별 priority는 없다. 모든 type이 `created_at` 순서로 같은 queue를 사용한다.
+- type별 priority는 없다. 실행 가능한 job은 `next_attempt_at NULLS FIRST, created_at` 순서로 같은 queue를 사용한다.
 - 자식 프로세스는 job을 정확히 1건만 처리한다. 부모는 자식 하나를 spawn하고 종료를 기다린 뒤에야 다음을 peek하므로, 동시 실행 없이 항상 직렬 1건이다.
 
 ### Heartbeat와 reaper
@@ -163,8 +166,8 @@ flowchart TD
 - 모델 추론이 메인 thread를 오래 점유하므로 heartbeat는 daemon thread와 별도 psycopg 연결을 사용한다.
 - heartbeat는 `job.id + locked_by + running` 조건을 만족할 때만 `locked_at`을 갱신한다.
 - heartbeat thread는 connect/beat 실패에 죽지 않는다. 실패하면 연결을 닫고 다음 interval에 재접속을 시도하며, 수명은 해당 job 처리 범위에 한정된다.
-- NestJS reaper가 5분마다 오래된 `running` job을 찾는다.
-- 시도 횟수가 남으면 `queued`로 되돌리고, 소진되면 `failed`로 바꾼다. `process_meeting`은 meeting, `enroll_speaker`는 speaker에도 실패를 전파한다. `index_meeting`·`extract_lenses` 실패는 meeting을 실패시키지 않는다(`extract_lenses`는 `lens_extraction_run`만 실패로 표시).
+- NestJS reaper와 worker supervisor reaper가 모두 5분마다 오래된 `running` job을 찾는다. 둘은 `FOR UPDATE SKIP LOCKED`를 사용하므로 같은 job을 중복 전이시키지 않는다.
+- 시도 횟수가 남으면 `queued`와 `next_attempt_at=NULL`으로 되돌리고, 소진되면 `failed`로 바꾼다. `process_meeting`은 meeting, `enroll_speaker`는 speaker에도 실패를 전파한다. `index_meeting`·`extract_lenses` 실패는 meeting을 실패시키지 않는다(`extract_lenses`는 `lens_extraction_run`만 실패로 표시).
 
 ### 복원력과 우아한 종료
 
@@ -247,7 +250,7 @@ flowchart TD
 ### 단계별 의미
 
 1. **처리 시작 guard** — meeting의 `current_job_id`와 `processing_version`이 payload와 일치할 때만 `processing`으로 바꾼다.
-2. **정규화/검증** — 원본을 16 kHz mono WAV로 만든다. 이미 정규화 파일이 있으면 재사용하며, ffprobe는 항상 duration을 읽는다. 손상 음원과 probe 실패는 영구 오류다.
+2. **정규화/검증** — 원본을 임시 sibling path의 16 kHz mono WAV로 만든 뒤 ffprobe가 성공하면 `os.replace()`로 원자적으로 publish한다. 이미 publish된 정규화 파일이 있으면 재사용하며, ffprobe는 항상 duration을 읽는다. 손상 음원과 probe 실패는 영구 오류다.
 3. **VAD** — 음성이 존재하는 구간을 구한다. 이 span은 (a) `prepare_stt_spans`(pad ±200ms → clamp → merge)를 거쳐 STT의 `clip_timestamps` 입력이 되고, (b) 원본 그대로 align 단계에서 `transcribe_failed`와 `silence`를 구분하는 데 사용된다.
 4. **Diarization** — pyannote가 시간 구간별 `diar_label`을 만든다.
 5. **Speaker embedding/identification** — ECAPA가 각 구간을 192차원으로 바꾸고 label별 centroid를 만든다. 같은 model/dimension이면서 `speaker.enrollment_status='ready'`인 voiceprint만 cosine 비교한다.
@@ -377,9 +380,9 @@ stateDiagram-v2
 | 분류 | 대표 사례 | 처리 |
 |---|---|---|
 | Permanent | 손상 음원, 지원하지 않는 형식, ffprobe 실패, 지원하지 않는 payload version, 모델 package import 실패, `gpu_unavailable`(MPS 없음), LLM 4xx·잘못된 응답(`llm_invalid_response`), 검증 실패 lens 후보(`invalid_lens_candidate`) | 즉시 fail |
-| Transient | OOM, 분류되지 않은 runtime 오류, LLM 연결 실패·timeout·5xx·408/429(`llm_request_failed`), 기타 일시 장애 | attempts가 남으면 즉시 requeue, 아니면 fail |
+| Transient | OOM, 분류되지 않은 runtime 오류, LLM 연결 실패·timeout·5xx·408/429(`llm_request_failed`), 기타 일시 장애 | attempts가 남으면 delayed requeue, 아니면 fail |
 
-현재 queue schema에는 `next_attempt_at`이 없어 job별 timed backoff가 없다. transient requeue는 자식의 handle_job이 처리한 정상 outcome이라 자식은 `exit 0`으로 종료하고, 부모가 대기 없이 즉시 다음 job을 peek→spawn한다(같은 job을 다음 자식이 곧바로 다시 잡을 수도 있다). 부모의 poll 간격 대기는 큐가 비었을 때(자식 exit 3)와 자식 크래시 backoff 시에만 적용된다.
+`job.next_attempt_at`은 transient retry를 지연한다. claim 후 attempt 수에 따라 `min(2^(attempts-1), 60)`초 뒤로 설정되며, claim은 그 시각이 지난 job만 선택한다. 따라서 poison job이 즉시 재claim되어 FIFO 전체를 막지 않는다. transient requeue는 자식의 정상 outcome이라 자식은 `exit 0`으로 종료하고, 부모는 다음 실행 가능한 job을 peek→spawn한다. graceful shutdown과 stale reaper recovery는 `next_attempt_at=NULL`으로 즉시 실행 가능하게 만든다.
 
 ## 11. 일관성 모델과 안전장치
 
@@ -469,7 +472,8 @@ uv run python -m damwha_worker
 - worker는 동기 직렬 처리다. supervisor 부모가 자식 하나를 spawn하고 종료를 기다린 뒤에야 다음을 처리하므로, 한 번에 여러 job이 동시 실행되지 않는다.
 - 각 job은 별도 자식 프로세스에서 모델 adapter를 새로 생성해 처리하고, 자식이 exit하면 OS가 그 프로세스의 GPU 메모리(MLX·torch)를 전부 회수한다. 이 격리가 job 간 GPU 메모리 누적으로 인한 OOM(특히 16GB Apple Silicon)을 막는 핵심이다. 대신 job마다 모델 warm-up(파이썬·모델 로드) 비용이 다시 든다 — process_meeting은 분 단위라 무시할 만하고, 초 단위인 index_meeting은 상대 비용이 크다.
 - job 내부 GPU 피크 억제를 위해 mlx-whisper는 active 메모리 상한(`mx.set_memory_limit`, 물리 메모리의 절반)을 두고, 텍스트 임베더(BGE-M3)는 파이프라인 GPU 모델과 경쟁하지 않도록 CPU에 올린다.
-- `process_meeting`의 정규화 파일은 존재하면 재사용한다. 원본 변경 여부를 hash로 검증하지는 않는다.
+- `process_meeting`의 정규화 파일은 존재하면 재사용한다. 새 파일은 임시 경로에서 probe 성공 후 atomic replace로만 publish되므로 중단된 ffmpeg의 부분 파일은 재사용되지 않는다. 원본 변경 여부를 hash로 검증하지는 않는다.
+- GPU `process_meeting`, CPU 색인/등록, LLM 렌즈 추출은 여전히 하나의 직렬 queue를 공유한다. 짧은 CPU/LLM job이 회의 처리 뒤에서 대기해 명시한 latency SLO를 위반하거나 backlog가 지속될 때 type-filtered supervisor로 분리한다.
 - `STT_CHUNK_MINUTES` 설정은 존재하지만 현재 adapter가 수동 chunk 분할에 사용하지 않는다. MLX/faster-whisper 내부 처리를 따른다.
 - poller 자체 HTTP health endpoint는 없다. `embed_service`만 `/health`를 제공한다. poller 상태는 heartbeat와 job 진행률로 판단한다.
 - stage 성능 로그에는 job/entity ID와 count만 기록하고 transcript, 화자 PII, absolute path는 기록하지 않는다.

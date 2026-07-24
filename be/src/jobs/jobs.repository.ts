@@ -76,7 +76,8 @@ export class JobsRepository {
          FOR UPDATE SKIP LOCKED
        ),
        requeued AS (
-         UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL, updated_at=now()
+         UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL,
+           next_attempt_at=NULL, updated_at=now()
          WHERE id IN (SELECT id FROM stale WHERE attempts < max_attempts)
          RETURNING id
        ),

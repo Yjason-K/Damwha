@@ -31,6 +31,16 @@ describe('reapStale', () => {
     expect(rows[0].locked_by).toBeNull();
   });
 
+  it('makes a reaped stale retry immediately eligible', async () => {
+    const { jobId } = await runningJob({ minutesAgo: 45, attempts: 1, maxAttempts: 3 });
+    await db.pool.query(`UPDATE job SET next_attempt_at=now() + interval '1 hour' WHERE id=$1`, [jobId]);
+
+    await repo.reapStale(db.pool, 30);
+
+    const { rows } = await db.pool.query('SELECT status, next_attempt_at FROM job WHERE id=$1', [jobId]);
+    expect(rows[0]).toMatchObject({ status: 'queued', next_attempt_at: null });
+  });
+
   it('fails a stale job out of attempts and marks the meeting failed', async () => {
     const { jobId, meetingId } = await runningJob({ minutesAgo: 45, attempts: 3, maxAttempts: 3 });
     const res = await repo.reapStale(db.pool, 30);
