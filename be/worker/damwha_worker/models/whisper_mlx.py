@@ -52,33 +52,41 @@ class MlxWhisper:
         _phys = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
         mx.set_memory_limit(int(_phys * 0.5))
 
-        extra: dict = {}
+        def _run(**extra) -> dict:
+            return mlx_whisper.transcribe(
+                wav_path,
+                path_or_hf_repo=self._repo,
+                language=language,
+                word_timestamps=True,
+                condition_on_previous_text=_CONDITION_ON_PREVIOUS_TEXT,
+                hallucination_silence_threshold=_HALLUCINATION_SILENCE_S,
+                **extra,
+            )
+
         if speech_spans:
-            # 발화 구간만 디코딩 — [start_s, end_s, ...] flat 초 리스트
-            extra["clip_timestamps"] = [
-                t for s in speech_spans for t in (s.start_ms / 1000, s.end_ms / 1000)
+            # 발화 구간만 디코딩하되 clip마다 개별 호출한다. 다수 clip을 한 번에 넘기면
+            # mlx-whisper의 seek 루프가 일부 clip 출력을 드랍한다(로컬 재현: 73-clip
+            # 호출에서 특정 clip 무출력, 동일 clip 단독 호출은 정상). 모델 가중치는
+            # mlx_whisper 내부 캐시라 호출당 재로드 비용은 없다.
+            results = [
+                _run(clip_timestamps=[s.start_ms / 1000, s.end_ms / 1000]) for s in speech_spans
             ]
-        result = mlx_whisper.transcribe(
-            wav_path,
-            path_or_hf_repo=self._repo,
-            language=language,
-            word_timestamps=True,
-            condition_on_previous_text=_CONDITION_ON_PREVIOUS_TEXT,
-            hallucination_silence_threshold=_HALLUCINATION_SILENCE_S,
-            **extra,
-        )
+        else:
+            results = [_run()]
+
         words: list[Word] = []
-        for segment in result.get("segments", []):
-            for w in segment.get("words", []):
-                text = w["word"].strip()
-                if not text:
-                    continue
-                words.append(
-                    Word(
-                        text=text,
-                        start_ms=int(w["start"] * 1000),
-                        end_ms=int(w["end"] * 1000),
-                        confidence=w.get("probability"),
+        for result in results:
+            for segment in result.get("segments", []):
+                for w in segment.get("words", []):
+                    text = w["word"].strip()
+                    if not text:
+                        continue
+                    words.append(
+                        Word(
+                            text=text,
+                            start_ms=int(w["start"] * 1000),
+                            end_ms=int(w["end"] * 1000),
+                            confidence=w.get("probability"),
+                        )
                     )
-                )
         return words

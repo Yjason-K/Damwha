@@ -47,18 +47,21 @@ def _install_fake_faster(monkeypatch, calls):
     monkeypatch.setitem(sys.modules, "faster_whisper", fake_fw)
 
 
-def test_mlx_passes_guards_and_clip(monkeypatch):
+def test_mlx_calls_once_per_clip_with_guards(monkeypatch):
+    # mlx-whisper의 다중 clip seek 루프는 일부 clip 출력을 드랍한다(로컬 재현).
+    # clip마다 개별 호출해야 하며, 매 호출에 가드 kwargs가 포함되어야 한다.
     calls = []
     _install_fake_mlx(monkeypatch, calls)
     from damwha_worker.models.whisper_mlx import MlxWhisper
 
     words = MlxWhisper("large-v3-turbo").transcribe("a.wav", "ko", SPANS)
-    (kwargs,) = calls
-    assert kwargs["clip_timestamps"] == FLAT_S
-    assert kwargs["condition_on_previous_text"] is False
-    assert kwargs["hallucination_silence_threshold"] == 2.0
-    assert kwargs["word_timestamps"] is True
-    assert [w.text for w in words] == ["안녕"]
+    assert [c["clip_timestamps"] for c in calls] == [[0.5, 3.2], [4.0, 9.9]]
+    for kwargs in calls:
+        assert kwargs["condition_on_previous_text"] is False
+        assert kwargs["hallucination_silence_threshold"] == 2.0
+        assert kwargs["word_timestamps"] is True
+    # 호출 결과는 clip 순서대로 이어붙인다 (fake는 호출당 단어 1개 반환)
+    assert [w.text for w in words] == ["안녕", "안녕"]
 
 
 def test_mlx_none_spans_omits_clip(monkeypatch):
