@@ -157,6 +157,7 @@ flowchart TD
 ### Claim과 순서
 
 - `SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1`을 포함한 단일 `UPDATE ... RETURNING`으로 실행 가능(`next_attempt_at IS NULL OR <= now()`)한 `queued` job을 claim한다. claim은 부모가 아니라 자식이 수행한다(락 소유권이 프로세스 경계를 넘지 못하므로 부모는 가벼운 `peek`만 하고 claim은 자식에게 맡긴다).
+- 부모의 `peek_queued`는 `status='queued'` 존재만 확인하고 **`next_attempt_at`은 보지 않는다**(claim만 필터). 그래서 delayed transient-retry job만 남아 있으면 부모는 poll 간격마다 자식을 spawn하지만, 자식 claim이 아직 `next_attempt_at`이 안 지난 job을 건너뛰어 no-job(exit 3)으로 종료하므로 poll 간격으로 자연히 스로틀된다.
 - claim 시 `status='running'`, `locked_by`, `locked_at`을 기록하고 `attempts`를 1 증가시킨다.
 - type별 priority는 없다. 실행 가능한 job은 `next_attempt_at NULLS FIRST, created_at` 순서로 같은 queue를 사용한다.
 - 자식 프로세스는 job을 정확히 1건만 처리한다. 부모는 자식 하나를 spawn하고 종료를 기다린 뒤에야 다음을 peek하므로, 동시 실행 없이 항상 직렬 1건이다.
@@ -379,7 +380,7 @@ stateDiagram-v2
 
 | 분류 | 대표 사례 | 처리 |
 |---|---|---|
-| Permanent | 손상 음원, 지원하지 않는 형식, ffprobe 실패, 지원하지 않는 payload version, 모델 package import 실패, `gpu_unavailable`(MPS 없음), LLM 4xx·잘못된 응답(`llm_invalid_response`), 검증 실패 lens 후보(`invalid_lens_candidate`) | 즉시 fail |
+| Permanent | 손상 음원, 지원하지 않는 형식, ffprobe 실패, 지원하지 않는 payload version, 모델 package import 실패, `gpu_unavailable`(MPS 없음), 임베딩 불가할 만큼 짧은 등록 샘플(`sample_too_short`), LLM 4xx·잘못된 응답(`llm_invalid_response`), 검증 실패 lens 후보(`invalid_lens_candidate`) | 즉시 fail |
 | Transient | OOM, 분류되지 않은 runtime 오류, LLM 연결 실패·timeout·5xx·408/429(`llm_request_failed`), 기타 일시 장애 | attempts가 남으면 delayed requeue, 아니면 fail |
 
 `job.next_attempt_at`은 transient retry를 지연한다. claim 후 attempt 수에 따라 `min(2^(attempts-1), 60)`초 뒤로 설정되며, claim은 그 시각이 지난 job만 선택한다. 따라서 poison job이 즉시 재claim되어 FIFO 전체를 막지 않는다. transient requeue는 자식의 정상 outcome이라 자식은 `exit 0`으로 종료하고, 부모는 다음 실행 가능한 job을 peek→spawn한다. graceful shutdown과 stale reaper recovery는 `next_attempt_at=NULL`으로 즉시 실행 가능하게 만든다.
