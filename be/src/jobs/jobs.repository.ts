@@ -21,10 +21,13 @@ export class JobsRepository {
   async claim(exec: Queryable, workerId: string): Promise<JobRow | null> {
     const { rows } = await exec.query<JobRow>(
       `UPDATE job SET status='running', locked_by=$1, locked_at=now(),
-                      attempts = attempts + 1, updated_at=now()
+                      attempts = attempts + 1, next_attempt_at=NULL, updated_at=now()
        WHERE id IN (
-         SELECT id FROM job WHERE status='queued'
-         ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
+         SELECT id FROM job
+         WHERE status='queued'
+           AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+         ORDER BY next_attempt_at NULLS FIRST, created_at
+         FOR UPDATE SKIP LOCKED LIMIT 1
        ) RETURNING *`,
       [workerId],
     );

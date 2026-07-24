@@ -47,6 +47,24 @@ describe('JobsRepository', () => {
     expect(await repo.claim(db.pool, 'w')).toBeNull();
   });
 
+  it('does not claim a queued job scheduled for the future', async () => {
+    const mid = await seedMeeting();
+    const job = await repo.enqueue(db.pool, { type: 'process_meeting', meetingId: mid, payload: {} });
+    await db.pool.query(`UPDATE job SET next_attempt_at=now() + interval '1 hour' WHERE id=$1`, [job.id]);
+
+    expect(await repo.claim(db.pool, 'worker-1')).toBeNull();
+  });
+
+  it('claims an immediately eligible job ahead of an older delayed job', async () => {
+    const delayedMeeting = await seedMeeting();
+    const delayed = await repo.enqueue(db.pool, { type: 'process_meeting', meetingId: delayedMeeting, payload: {} });
+    await db.pool.query(`UPDATE job SET next_attempt_at=now() + interval '1 hour' WHERE id=$1`, [delayed.id]);
+    const readyMeeting = await seedMeeting();
+    const ready = await repo.enqueue(db.pool, { type: 'process_meeting', meetingId: readyMeeting, payload: {} });
+
+    expect((await repo.claim(db.pool, 'worker-1'))!.id).toBe(ready.id);
+  });
+
   it('setStage, complete, fail update fields', async () => {
     const mid = await seedMeeting();
     const job = await repo.enqueue(db.pool, { type: 'process_meeting', meetingId: mid, payload: {} });
