@@ -1,7 +1,7 @@
 # Damwha Worker 아키텍처와 처리 흐름
 
 > 문서 성격: 현재 구현을 설명하는 살아있는 문서
-> 기준일: 2026-07-23
+> 기준일: 2026-07-24
 > 범위: `be/worker`, 워커와 직접 연결되는 NestJS job enqueue/reaper, Postgres, 공유 스토리지
 
 ## 1. 한눈에 보기
@@ -252,7 +252,7 @@ flowchart TD
 4. **Diarization** — pyannote가 시간 구간별 `diar_label`을 만든다.
 5. **Speaker embedding/identification** — ECAPA가 각 구간을 192차원으로 바꾸고 label별 centroid를 만든다. 같은 model/dimension이면서 `speaker.enrollment_status='ready'`인 voiceprint만 cosine 비교한다.
 6. **STT** — payload의 Whisper 모델과 language로 word timestamp를 생성한다. VAD 발화 구간만 디코딩하며(`clip_timestamps`, 무음 환각 방지), VAD가 비면 STT 호출을 생략한다. 두 어댑터 모두 `condition_on_previous_text=False`, `hallucination_silence_threshold=2.0`을 고정한다. **MLX 어댑터는 clip마다 `mlx_whisper.transcribe`를 개별 호출한다** — 다수 clip을 한 번에 넘기면 mlx-whisper의 seek 루프가 일부 clip 출력을 드랍하기 때문(mtg_1 재현·격리 실험으로 확인, 2026-07-24). faster-whisper는 flat 리스트 한 번 호출. Apple Silicon은 MLX, 그 외 환경은 faster-whisper adapter를 선택할 수 있다. stage 로그에 `words/spans/clipped_ms/duration_ms`를 남긴다 — `clipped_ms/duration_ms` 비율이 비정상적으로 낮으면 VAD false negative 의심 신호.
-7. **Align** — word midpoint가 속한 diarization segment에 word를 귀속하고 segment 단위 발언을 만든다. text가 없는 구간도 `silence` 또는 `transcribe_failed` row로 남긴다.
+7. **Align** — word midpoint가 속한 diarization segment에 word를 귀속하고 segment 단위 발언을 만든다. text가 없는 구간도 `silence` 또는 `transcribe_failed` row로 남긴다. 단, **1초 미만 무단어 세그먼트는 row를 만들지 않는다**(`MIN_WORDLESS_SEGMENT_MS=1000`, `align.py`) — 화자 겹침에서 나오는 sub-second diarization 파편이 노이즈 row로 쌓이는 것을 막는다(mtg_1 검증: non-ok row 19→2, 2026-07-24). 단어가 붙은 세그먼트는 길이와 무관하게 유지된다.
 8. **Persist** — ML 계산은 transaction 밖에서 수행하고, 최종 결과 교체만 짧은 transaction에서 원자적으로 처리한다. 같은 transaction에서 후속 `index_meeting` job을 enqueue하고, worker에 `lens_llm_model`이 설정돼 있으면 `lens_extraction_run`과 `extract_lenses` job도 함께 enqueue한다(설정이 없으면 렌즈 추출을 건너뛴다).
 
 ### 미확인 화자 자동 생성
@@ -474,6 +474,8 @@ uv run python -m damwha_worker
 - poller 자체 HTTP health endpoint는 없다. `embed_service`만 `/health`를 제공한다. poller 상태는 heartbeat와 job 진행률로 판단한다.
 - stage 성능 로그에는 job/entity ID와 count만 기록하고 transcript, 화자 PII, absolute path는 기록하지 않는다.
 - 검색 embedding 실패는 keyword-only로 degrade하지만, 회의 음성 처리의 모델 실패는 job retry/fail 정책을 따른다.
+- **짧은 백채널("네", "응", "아 네")은 전사되지 않을 수 있다.** Whisper가 앞뒤 본 발화와 같은 clip 안에 있어도 sub-second 백채널을 출력하지 않는 모델 특성이며(격리 실험으로 파라미터 무관 확인, 2026-07-24), 백채널만 단독 clip으로 잘라내면 오히려 오전사("아 네"→"아비.")가 유입돼 회수를 시도하지 않는다. 해당 구간은 sliver drop 규칙에 따라 row 없이 사라지거나 1초 이상이면 `transcribe_failed`로 남는다.
+- **Keyword boosting은 미도입(보류).** 클로바노트 벤치마크의 최대 갭(`docs/reference/clova-note.md` §5)이지만 payload 계약 확장(zod+pydantic)과 사용자 단어 등록 표면이 필요해 별도 spec 라운드 대상이다. 도입 시 Whisper `initial_prompt`(양쪽)/`hotwords`(faster-whisper)로 근사한다.
 
 ## 16. 테스트와 검증 경계
 
@@ -490,6 +492,8 @@ uv run ruff check .
 
 ## 17. 관련 문서
 
+- [`docs/reference/clova-note.md`](./reference/clova-note.md) — 클로바노트 음성 파이프라인 벤치마크와 Damwha 매핑 (STT 개선 근거)
+- [`docs/superpowers/specs/2026-07-23-stt-hallucination-clip-timestamps-design.md`](./superpowers/specs/2026-07-23-stt-hallucination-clip-timestamps-design.md) — STT 환각 방어 + clip_timestamps 설계 스냅샷
 - [`worker/SMOKE.md`](../worker/SMOKE.md) — 실제 모델과 full-stack smoke 절차
 - [`docs/superpowers/specs/2026-06-23-damwha-ml-worker-design.md`](./superpowers/specs/2026-06-23-damwha-ml-worker-design.md) — 초기 worker 설계 스냅샷
 - [`docs/superpowers/specs/2026-06-26-damwha-search-design.md`](./superpowers/specs/2026-06-26-damwha-search-design.md) — 검색/index/embed service 설계 스냅샷
