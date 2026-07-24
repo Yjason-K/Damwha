@@ -1,5 +1,7 @@
 import json
+import os
 import subprocess
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -35,9 +37,24 @@ def probe(path: str, runner: Runner = _run) -> ProbeResult:
 
 
 def normalize(src_path: str, dst_path: str, runner: Runner = _run) -> None:
-    cmd = ["ffmpeg", "-y", "-i", src_path, "-ac", "1", "-ar", "16000", "-f", "wav", dst_path]
-    proc = runner(cmd)
-    if proc.returncode != 0:
-        raise WorkerError(
-            CORRUPT_AUDIO, f"ffmpeg normalize failed: {proc.stderr!r}", ErrorKind.PERMANENT
-        )
+    fd, temp_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(dst_path)}.",
+        suffix=".tmp",
+        dir=os.path.dirname(dst_path) or ".",
+    )
+    os.close(fd)
+    try:
+        cmd = ["ffmpeg", "-y", "-i", src_path, "-ac", "1", "-ar", "16000", "-f", "wav", temp_path]
+        proc = runner(cmd)
+        if proc.returncode != 0:
+            raise WorkerError(
+                CORRUPT_AUDIO, f"ffmpeg normalize failed: {proc.stderr!r}", ErrorKind.PERMANENT
+            )
+        probe(temp_path)
+        os.replace(temp_path, dst_path)
+    except BaseException:
+        try:
+            os.unlink(temp_path)
+        except FileNotFoundError:
+            pass
+        raise
