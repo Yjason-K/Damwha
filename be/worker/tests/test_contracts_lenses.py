@@ -60,3 +60,21 @@ def test_lens_candidate_trims_text_and_validates_dates_and_ids():
                 "supporting_utterance_ids": [],
             }
         )
+
+
+def test_lens_candidate_treats_omitted_nullable_fields_as_null():
+    """Local runtimes don't enforce the schema — models drop the nullable fields.
+
+    An omitted `assignee_speaker_id`/`due_at` is semantically identical to an
+    explicit null, so it must not fail the whole extraction run.
+    """
+    candidate = LensCandidate.model_validate(
+        {
+            "kind": "action",
+            "text": "Send the notes",
+            "primary_utterance_id": "utt_1",
+            "supporting_utterance_ids": ["utt_2"],
+        }
+    )
+    assert candidate.assignee_speaker_id is None
+    assert candidate.due_at is None

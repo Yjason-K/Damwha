@@ -151,8 +151,12 @@ class LensCandidate(BaseModel):
 
     kind: Literal["action", "decision", "promise"]
     text: NonEmptyText
-    assignee_speaker_id: SpeakerId | None
-    due_at: date | None
+    # 프롬프트가 nullable로 명시한 두 필드는 기본값 None — 로컬 런타임에서
+    # response_format은 권고사항이라 모델이 null 필드를 통째로 생략한다. 생략은
+    # 명시적 null과 의미가 같으므로 추출 run 전체를 실패시키지 않는다.
+    # (extra="forbid"는 그대로라 없는 필드를 지어내는 것은 여전히 막힌다.)
+    assignee_speaker_id: SpeakerId | None = None
+    due_at: date | None = None
     primary_utterance_id: UtteranceId
     supporting_utterance_ids: list[UtteranceId]
 

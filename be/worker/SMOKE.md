@@ -118,8 +118,9 @@ Start services in this order; each step must be healthy before the next:
 
 1. **Postgres** (`damwha/postgres-bigm:pg16`) + `npm run migrate`
 2. **Embed service** — wait for `/health` → `{"status":"ok"}`
-3. **NestJS API** — `npm run start:dev`
-4. **Python worker** — `uv run python -m damwha_worker`
+3. **Lens LLM 서버** (렌즈 추출을 쓸 때만) — 아래 "렌즈 추출 LLM" 참고
+4. **NestJS API** — `npm run start:dev`
+5. **Python worker** — `uv run python -m damwha_worker`
 
 The `uv run python -m damwha_worker` command launches a **supervisor parent process** that does not import heavy ML libraries. When a job is available, the parent spawns a child subprocess (`python -m damwha_worker --once`) to process a single job, waits for it to complete, and reclaims the next job. The child exits after processing, allowing the OS to fully reclaim its GPU memory (MLX, torch). This is the core mechanism to prevent OOM from GPU memory accumulation across jobs. When confirming smoke with BGE-M3 CPU embedder or MLX memory caps, verify that both the `index_meeting` (embedding) and `process_meeting` (speech models) paths complete OOM-free.
 
@@ -170,6 +171,48 @@ JSON-string 필드 / reprocess JSON body로 job별 오버라이드.)
 
 > **GPU 미가용 시**: payload가 `gpu`를 요청했는데 MPS가 없으면 job은
 > `gpu_unavailable`로 **PERMANENT 실패**한다 — CPU 폴백 없음(재현성 보존).
+
+## 렌즈 추출 LLM (`extract_lenses`)
+
+`lens_client.py`는 **OpenAI 호환 chat-completions 서버**면 무엇이든 붙는 범용
+어댑터다. Ollama 의존성은 없다 — 기본값이 Ollama 포트(11434)와 태그 표기
+모델명일 뿐이다. Ollama 없이 HF repo를 직접 쓰려면 `mlx_lm.server`를 띄운다.
+
+```bash
+uv tool install mlx-lm      # 워커 venv 밖에 설치 — 워커는 mlx_lm을 import하지 않는다
+mlx_lm.server --model mlx-community/Qwen3-4B-Instruct-2507-8bit \
+  --host 127.0.0.1 --port 8000
+```
+
+```
+# worker/.env
+LENS_LLM_BASE_URL=http://127.0.0.1:8000/v1
+LENS_LLM_MODEL=mlx-community/Qwen3-4B-Instruct-2507-8bit
+
+# 루트 .env (API) — 값이 job payload에 각인되므로 워커와 반드시 같아야 한다
+LENS_LLM_MODEL=mlx-community/Qwen3-4B-Instruct-2507-8bit
+```
+
+확인:
+
+```bash
+curl -s -X POST http://localhost:3000/meetings/<id>/lenses/extract   # status=done인 회의
+# run/job이 done이 되고 lens_item + lens_evidence가 생기는지 확인
+```
+
+함정 셋:
+
+- **`mlx_lm.server`는 요청의 `model` 필드를 무시하지 않는다.** HF repo id로 검증하므로
+  Ollama 태그 표기(`qwen3.5:4b-mlx`)를 보내면 `Repo id must use alphanumeric chars…`로
+  거부당한다. 유효한 repo명이거나 `default`여야 한다.
+- **API는 `.env`를 부팅 시 1회만 읽는다**(`src/main.ts`의 `import 'dotenv/config'`).
+  `nest start --watch`는 소스 변경에만 반응하므로 `.env`를 고쳤으면 **실제로 재시작**해야
+  한다(`touch`는 tsc incremental이 건너뛴다). 안 하면 API가 옛 `LENS_LLM_MODEL`을
+  payload에 계속 각인한다.
+- **`response_format`은 로컬 런타임에서 권고사항이다.** 모델이 nullable 필드를 통째로
+  생략하므로 `LensCandidate`의 `assignee_speaker_id`/`due_at`은 기본값 `None`을 갖는다
+  (생략 = 명시적 null). `extra="forbid"`는 유지되므로 없는 필드를 지어내는 것은 여전히
+  거부된다. `reasoning_effort` 같은 미지원 키는 서버가 조용히 무시한다.
 
 ## STT 품질 측정 (`scripts/eval_stt.py`)
 
