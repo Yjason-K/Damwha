@@ -170,3 +170,61 @@ JSON-string 필드 / reprocess JSON body로 job별 오버라이드.)
 
 > **GPU 미가용 시**: payload가 `gpu`를 요청했는데 MPS가 없으면 job은
 > `gpu_unavailable`로 **PERMANENT 실패**한다 — CPU 폴백 없음(재현성 보존).
+
+## STT 품질 측정 (`scripts/eval_stt.py`)
+
+전사 백엔드/모델/가드 조합을 하나의 wav에 대해 돌리고 참조 스크립트와 CER/WER을
+비교한다. 파이프라인 밖에서 STT만 격리해 재는 용도 — 프로덕션 수치는 항상 DB의
+`utterance`로 확인한다(아래 "실측" 참고).
+
+```bash
+# 오디오 + 참조 자막 준비 (수동 자막이 있는 영상이면 --write-subs 사용)
+yt-dlp -x --audio-format wav -o "audio.%(ext)s" --write-auto-subs \
+  --sub-langs ko --sub-format json3 <URL>
+ffmpeg -y -i audio.wav -ac 1 -ar 16000 -f wav audio16k.wav
+
+cd worker
+uv run --with jiwer python scripts/eval_stt.py \
+  --wav /path/audio16k.wav --json3 /path/ref.ko.json3 --outdir /path/out \
+  --runs turbo,large,faster,pipeline        # 기본값: 넷 다
+```
+
+- 기본 동작은 프로덕션 경로와 같다 — Silero VAD → `prepare_stt_spans` → 그 구간만
+  디코딩. `--full-file`을 주면 VAD를 건너뛰고 전체 파일을 전사하므로
+  **clip_timestamps 가드만 분리**해서 잴 수 있다(디코딩 파라미터 가드는 어댑터
+  모듈 상수라 항상 켜져 있다).
+- 한국어는 띄어쓰기 차이가 WER을 지배한다 — **CER을 주 지표로** 본다.
+- **유튜브 자동 자막은 ground truth가 아니다**(구글 ASR 출력). 절대 정확도가 아니라
+  런 사이 *상대* 비교로만 쓴다. 실제로 아래 실측에서 참조 쪽이 "크리스토퍼 놀란"을
+  "논란"으로 적었다.
+- `jiwer`는 dev 의존성이 아니라 `--with jiwer`로 넘긴다(이 스크립트 전용).
+
+### 실측 (2026-08-09, 한국어 강연 17분, 단일 화자)
+
+| 조건 | 모델 | CER | 비고 |
+|---|---|---|---|
+| 가드 없음, 전체 파일 | turbo | 3.98% | 깨끗한 오디오 최저 |
+| 가드 없음, 전체 파일 | large-v3 | 8.18% | |
+| 가드 없음, 파이프라인 | large-v3 | **21.27%** | `ithmion` 반복 루프 발생 |
+| 가드, VAD clip | turbo | 5.07% | |
+| 가드, VAD clip | large-v3 | 8.21% | |
+| 가드, 전체 파일 | turbo | 7.68% | decode 파라미터만 |
+| 가드, 파이프라인(DB) | turbo | 5.22% | |
+| 가드, 파이프라인(DB) | large-v3 | 5.53% | |
+
+세 가지가 확인됐다:
+
+1. **한국어에서 `large-v3`가 `large-v3-turbo`보다 낫지 않다.** 평균이 비슷할 뿐
+   아니라 런 간 분산이 크다(large-v3 5.53↔8.21 vs turbo 5.07↔5.22). 무가드
+   large-v3가 같은 오디오에서 8.18%↔21.27%로 널뛴 것은 temperature fallback의
+   비결정성 때문이다. 전역 기본 프리셋을 `standard`(turbo)로 둔 근거.
+2. **환각 가드는 세트로만 의미가 있다.** turbo에 decode 파라미터만 걸면 3.98% →
+   7.68%로 오히려 나빠진다(`condition_on_previous_text=False`의 문맥 손실).
+   VAD clip이 이를 되돌려 5.07%가 된다. 하나만 떼지 말 것.
+3. **가드는 공짜가 아니다.** 깨끗한 오디오에서는 무가드가 여전히 1.2%p 낮다.
+   회의 녹음(BGM·잡음·다화자)의 참사 리스크와 맞바꾼 값이다.
+
+남은 알려진 한계: 발화 없는 BGM 구간(예: 아웃트로)에서 유령 발화가 붙을 수 있다.
+`hallucination_silence_threshold`는 무음 기준이라 음악에는 걸리지 않는다. 실측에서
+해당 utterance의 confidence는 0.18–0.46으로 본편(0.92–0.98)과 뚜렷이 갈렸다 —
+다만 conf가 만능은 아니다. 위 21.27% 케이스의 반복 루프는 conf 0.95였다.

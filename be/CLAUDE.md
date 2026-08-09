@@ -83,6 +83,8 @@ uv sync --extra models                   # real ML models (mlx-whisper/pyannote/
 uv run python scripts/download_models.py # pre-cache models (needs HF_TOKEN; see SMOKE.md)
 uv run python -m damwha_worker           # run the real worker (supervisor; spawns a --once child per job)
 uv run python scripts/smoke_process_meeting.py <audio>   # local end-to-end smoke
+uv run --with jiwer python scripts/eval_stt.py --wav <16k.wav> --json3 <ref> --outdir <dir>
+                                         # STT CER/WER A/B (backends, models, guards); see SMOKE.md
 ```
 
 **Tests require Docker.** Integration/e2e tests use Testcontainers, which spins up a real `pgvector/pgvector:pg16` Postgres per suite (see `test/db.ts`). Run with `--runInBand` (already in `npm test`) — parallel containers are heavy. No mocking of the DB; tests exercise real SQL including `SKIP LOCKED`, the reaper CTE, and pgvector.
