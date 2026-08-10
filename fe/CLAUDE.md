@@ -63,7 +63,7 @@ Vite 8 + React 19 SPA, **feature-based-lite** layout. Path alias `@/*` → `src/
 
 Future features go under `src/features/<feature>/`, each owning its own `api`/`ui`/`model`. Don't create empty placeholder folders.
 
-The `/app` route (`pages/meeting.tsx`) is the product's **three-pane browse shell**: nav rail `<nav>` + content `<main>` + insight `<aside>`, sized by the `--rail-nav` / `--rail-insight` / `--topbar-h` layout variables. It runs on live meeting data via TanStack Query hooks.
+The `/app` route (`pages/meeting.tsx`) is the product's **three-pane browse shell**: nav rail `<nav>` + content `<main>` + insight `<aside>`, the rails sized by the `--rail-nav` / `--rail-insight` layout variables. It runs on live meeting data via TanStack Query hooks. (`--topbar-h` and `--content-max` are declared in `index.css` but currently unused — check them before inventing a new value.)
 
 `src/features/settings/` (처리 설정) owns the processing-config surface: `api` (`useProcessingSettings` / `useUpdateProcessingSettings` / `useCapabilities`), `lib` (`PRESET_META` + `PRESET_META_REVISION` — **keep synced with the BE preset definitions**; a `preset_revision` mismatch surfaces a drift notice), and `ui` (`ProcessingSettingsForm`, `OverrideSection`). Reached via LeftNav "처리 설정" → the `/settings` route.
 
@@ -78,6 +78,10 @@ The `/app` route (`pages/meeting.tsx`) is the product's **three-pane browse shel
 - **Evidence jump switches to the meeting view and highlights the utterance — no audio seek** (deliberate, spec 비범위). Historical items whose utterance no longer exists after reprocess surface a toast instead of a silent no-op.
 
 ## Styling & design system
+
+**Read [`DESIGN.md`](DESIGN.md) before creating or modifying any UI.** It holds the design intent, the "situation → token" index, interaction-state requirements, and the hard Don'ts (light-only, no raw hex, no shadows on flat cards, no ad-hoc tokens). Don't re-derive visual decisions per screen — DESIGN.md is what keeps them consistent.
+
+Division of labor: `DESIGN.md` = how it should look and why · `src/index.css` = the actual values (single SoT) · `src/shared/ui/` = the implementation. **Never copy token values into `DESIGN.md`** — it names tokens only, so the two can't drift.
 
 **Tailwind v4 via `@tailwindcss/vite` — there is no `tailwind.config`.** All theming is CSS-first in `src/index.css`:
 
@@ -98,7 +102,11 @@ shadcn config (`components.json`): **new-york** style, `lucide` icons, aliases p
 
 ## Docs
 
-`docs/superpowers/specs/` and `docs/superpowers/plans/` are **dated snapshots** (e.g. the scaffold design/plan) and are not edited after the fact. Record ongoing/changed decisions in living docs (this `CLAUDE.md`) instead.
+`docs/superpowers/specs/` and `docs/superpowers/plans/` are **dated snapshots** (e.g. the scaffold design/plan) and are not edited after the fact. Record ongoing/changed decisions in the **living docs** instead:
+
+- `CLAUDE.md` (this file) — how to work in this repo
+- `DESIGN.md` — how the UI should look; keep its token index in sync when `src/index.css` tokens change
+- `docs/product-concept.md` — what the product is (개념 정의서)
 
 ## Behavioral guidelines
 

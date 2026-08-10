@@ -1,0 +1,250 @@
+# DESIGN.md
+
+담화(Damwha) 웹 프런트엔드의 **디자인 언어**. UI를 만들거나 고치기 전에 읽는다.
+
+## 0. 이 문서의 역할과 경계
+
+이 문서는 "어떻게 보여야 하는가"와 "무엇을 하지 말아야 하는가"만 다룬다.
+실제 값은 다른 곳에 있다.
+
+| 무엇                                     | 어디                                          |
+| ---------------------------------------- | --------------------------------------------- |
+| 디자인 의도 · 토큰 선택 규칙 · 금지 사항 | **이 문서**                                   |
+| 색·radius·타입스케일·모션의 **실제 값**  | `src/index.css` (유일한 SoT)                  |
+| 구현 (CVA variants)                      | `src/shared/ui/`                              |
+| 살아있는 예시                            | `/showcase` 라우트 (`src/pages/showcase.tsx`) |
+
+**이 문서에 hex나 px을 적지 말 것.** 값을 여기 복사하는 순간 `index.css`와
+두 벌이 되고, 둘 중 어느 쪽이 진짜인지 아무도 모르게 된다. 값이 궁금하면
+`index.css`를 열어라. 여기서는 **토큰 이름**으로만 말한다.
+
+이 문서는 `docs/superpowers/specs/`와 달리 **날짜 스냅샷이 아니라 살아있는
+문서**다. 토큰을 추가·변경하면 아래 3장 인덱스도 같이 고친다.
+
+## 1. 제품 디자인 철학
+
+담화는 **개인용 회의 기억 장치**다. 팀 협업 도구도, 구성원 분석 대시보드도
+아니다 (`docs/product-concept.md`의 비목표).
+
+기본 객체는 **발화(utterance)** — 화자·시각·원본 오디오·앞뒤 맥락에 묶인
+한 덩어리의 말이다. 그래서 이 UI는 본질적으로 **읽기 도구**다. 사용자는
+자기가 이미 겪은 회의를 다시 훑으며 "그때 누가 뭐라고 했지"를 찾는다.
+
+우선순위는 이 순서로 고정한다.
+
+1. **본문 가독성** — 발화 텍스트가 화면에서 가장 읽기 편해야 한다
+2. **화자 구분** — 누가 말했는지 훑어보기만 해도 잡혀야 한다
+3. **정보 밀도** — 회의는 길다. 한 화면에 많이 들어가야 스크롤이 준다
+4. **예측 가능한 조작** — 놀라움 없는 인터랙션
+
+밀도와 가독성이 부딪히면 **가독성이 이긴다** (발화 본문 한정). 그 외
+모든 UI 표면에서는 밀도가 이긴다.
+
+참조 계열은 Linear · GitHub · Geist다. Notion · Airbnb 같은 소비자 앱
+미학이 아니다. 장식은 정보를 밀어내지 않는 선까지만 허용된다.
+
+## 2. 시각 방향
+
+- **라이트 전용.** 다크 모드는 구현되어 있지 않다 (9장 참조)
+- **위계는 border로 만든다.** 그림자는 실제로 떠 있는 레이어에만
+- **강조색은 하나.** 절제된 인디고블루(`--accent-solid`) 하나로 상호작용
+  가능한 것과 선택된 것을 표시한다
+- **화자 팔레트가 유일한 다색 요소다.** 8개 색상(`--spk-1..8`)은 화자
+  식별에만 쓴다. 다른 용도로 끌어다 쓰면 "이 색이 화자를 뜻한다"는
+  화면 전체의 약속이 깨진다
+- **평면적.** 그라디언트, 글래스모피즘, 큰 둥근 카드, 카드 안의 카드 없음
+
+## 3. 토큰 인덱스 (상황 → 토큰)
+
+값은 `src/index.css`에 있다. 여기서는 **언제 무엇을 고르는지**만 정한다.
+Tailwind 유틸리티가 있으면 그것을 쓰고(`bg-card`), 없으면 CSS 변수를
+감싼다(`bg-[var(--surface-panel)]`).
+
+### 표면 (surface)
+
+| 상황                          | 토큰                | Tailwind                 |
+| ----------------------------- | ------------------- | ------------------------ |
+| 앱 바탕                       | `--surface-app`     | `bg-background`          |
+| 좌측 nav · 우측 insight 패널  | `--surface-panel`   | —                        |
+| 카드 · 팝오버 · 다이얼로그    | `--surface-card`    | `bg-card` / `bg-popover` |
+| 눌린 듯한 영역 (입력 트랙 등) | `--surface-sunken`  | —                        |
+| hover 시 얹히는 면            | `--surface-hover`   | `bg-accent`              |
+| 선택된 항목의 면              | `--surface-active`  | `bg-sidebar-accent`      |
+| 모달 뒤 스크림                | `--surface-overlay` | —                        |
+
+> **주의:** shadcn 계약에서 `--accent`는 **hover용 옅은 면**을 뜻하지
+> 브랜드색이 아니다. 브랜드 블루는 `--primary`다. `bg-accent`를 강조색
+> 버튼에 쓰면 회색 버튼이 나온다.
+
+### 텍스트
+
+| 상황                     | 토큰               | Tailwind                  |
+| ------------------------ | ------------------ | ------------------------- |
+| 본문 · 제목              | `--text-primary`   | `text-foreground`         |
+| 부가 설명 · 메타         | `--text-secondary` | `text-muted-foreground`   |
+| 더 약한 라벨             | `--text-muted`     | —                         |
+| 거의 안 보여도 되는 힌트 | `--text-faint`     | —                         |
+| 강조색 면 위의 글자      | `--text-on-accent` | `text-primary-foreground` |
+| 링크                     | `--text-link`      | —                         |
+
+### 경계선
+
+| 상황                  | 토큰                        | Tailwind        |
+| --------------------- | --------------------------- | --------------- |
+| 기본 (카드·패널 경계) | `--border-default`          | `border-border` |
+| 더 옅게 (내부 구분선) | `--border-subtle`           | —               |
+| hover 시 또렷해질 때  | `--border-strong`           | —               |
+| 포커스 링             | `--focus-ring` (box-shadow) | —               |
+
+### 강조 · 상태
+
+| 상황                          | 토큰                   | Tailwind                            |
+| ----------------------------- | ---------------------- | ----------------------------------- |
+| 주 버튼 면                    | `--accent-solid`       | `bg-primary`                        |
+| 주 버튼 hover                 | `--accent-solid-hover` | —                                   |
+| 강조색 글자                   | `--accent-text`        | —                                   |
+| 옅은 강조 배경 (선택·토글 on) | `--accent-bg`          | —                                   |
+| 성공                          | —                      | `bg-success-bg` `text-success-text` |
+| 경고                          | —                      | `bg-warning-bg` `text-warning-text` |
+| 위험·오류                     | —                      | `bg-danger-bg` `text-danger-text`   |
+| 위험 버튼 면                  | `--red-9`              | `bg-destructive`                    |
+
+### 화자 (1..8)
+
+| 용도                                | Tailwind          |
+| ----------------------------------- | ----------------- |
+| 아바타·타임라인 트랙 같은 솔리드 면 | `bg-spk-N`        |
+| 옅은 배경 (발화 블록 등)            | `bg-spk-N-bg`     |
+| 그 배경 위의 글자                   | `text-spk-N-text` |
+
+## 4. 타이포그래피
+
+Geist / Geist Mono. **브라우저 기본값보다 한 단계 조밀한 스케일**이다
+(`--text-base`가 기준점). 웹 기본 크기를 가정하고 눈대중으로 고르지 말고,
+아래 표에서 용도로 고를 것.
+
+| 스케일                            | 어디에                                                                                  |
+| --------------------------------- | --------------------------------------------------------------------------------------- |
+| `text-read`                       | **발화 본문 전용.** 유일하게 읽기 편함을 위해 키운 크기다. 다른 데 쓰면 밀도가 무너진다 |
+| `text-base`                       | 기본 UI 텍스트 (버튼 라벨, 목록 항목, 입력값)                                           |
+| `text-sm`                         | 부가 설명, 메타 정보, 작은 버튼                                                         |
+| `text-xs` / `text-2xs`            | 배지, 타임스탬프, 표 헤더 라벨                                                          |
+| `text-h3` / `text-h2` / `text-h1` | 카드 제목 → 섹션 제목 → 페이지 제목                                                     |
+| `text-display`                    | 랜딩 히어로. 앱 셸 안에서는 쓰지 않는다                                                 |
+
+굵기는 `--weight-regular` / `-medium` / `-semibold`로 충분하다. 제목에
+`-bold`까지 가는 경우는 거의 없다.
+
+자간은 큰 글자에서만 좁힌다(`--tracking-tight` / `-snug`). 본문에 자간을
+손대지 말 것.
+
+## 5. 레이아웃
+
+`/app`은 **browse-first 3분할 셸**이다. 검색이 아니라 회의 목록이 먼저
+보인다 — 회상(recall)이 아니라 인지(recognition)로 접근하게 하려는
+의도적 선택이다.
+
+```
+┌────────────┬───────────────────────┬──────────────┐
+│  <nav>     │  <main>               │  <aside>     │
+│  회의·폴더 │  발화 타임라인        │  렌즈(인사이트)│
+│  --rail-nav│  (가변 폭)            │--rail-insight│
+└────────────┴───────────────────────┴──────────────┘
+   surface-panel      surface-app        surface-panel
+     border-r                              border-l
+```
+
+양쪽 레일은 `--surface-panel` + 안쪽 경계선, 가운데는 앱 바탕색. 레일 폭은
+고정 변수이므로 픽셀을 직접 쓰지 말고 `w-[var(--rail-nav)]`처럼 참조한다.
+
+**데스크톱 전용이다.** 제품 화면에는 반응형 분기가 없다(현재 `md:` 등의
+접두사는 `showcase.tsx`에만 존재). 요청받지 않은 breakpoint를 새로
+뿌리지 말 것 — 3분할 셸은 좁은 폭에서 성립하지 않으므로, 모바일 대응은
+브레이크포인트 몇 개가 아니라 별도 설계가 필요한 사안이다.
+
+> `--topbar-h`와 `--content-max`는 `index.css`에 선언되어 있으나 현재
+> 어디에서도 사용되지 않는다. 새 값을 만들기 전에 이 둘이 원하던 것과
+> 같은 것인지 먼저 확인할 것.
+
+## 6. 컴포넌트 규칙
+
+**먼저 `src/shared/ui/`를 뒤진다.** 이미 있는 것:
+
+`avatar` `badge` `button` `calendar` `card` `checkbox` `command-bar`
+`date-picker` `dialog` `icon-button` `input` `kbd` `lens-item` `popover`
+`search-field` `select` `sidebar-item` `speaker-timeline` `speaker-track`
+`switch` `tabs` `tag` `toast` `toaster` `tooltip` `utterance`
+
+기능 전용 컴포넌트는 `src/features/<feature>/ui/`에 둔다. 두 기능이 같은
+것을 원하면 그때 `shared/ui`로 올린다 — 미리 올리지 않는다.
+
+패턴은 **CVA**로 통일한다. variants를 컴포넌트와 같은 파일에 정의하고
+`xxxVariants`를 함께 export한다. Radix 위에 얹을 때는 원 컴포넌트의
+동작을 그대로 두고 스타일만 입힌다.
+
+> **새 `*Variants` export를 추가하면 `eslint.config.js`의
+> `react-refresh/only-export-components` → `allowExportNames`에 이름을
+> 등록해야 한다.** 안 하면 lint가 깨진다.
+> (현재: `buttonVariants` `badgeVariants` `cardVariants` `iconButtonVariants`)
+
+## 7. 인터랙션 상태
+
+모든 상호작용 요소는 아래 상태를 갖춘다. 하나라도 빠뜨리지 말 것.
+
+| 상태                  | 표현                                                                |
+| --------------------- | ------------------------------------------------------------------- |
+| hover                 | 면이나 경계선이 한 단계 또렷해진다. 크기·위치는 변하지 않는다       |
+| focus                 | `focus-visible:[box-shadow:var(--focus-ring)]`. **예외 없음**       |
+| active                | `active:translate-y-[0.5px]` — 눌린 느낌만, 그 이상 움직이지 않는다 |
+| selected / toggled on | `--accent-bg` 면 + `--accent-text` 글자, `aria-pressed`와 함께      |
+| disabled              | 투명도를 낮추고 `pointer-events-none` + `cursor-not-allowed`        |
+| loading               | 스피너 **그리고** `aria-busy`. 8장 참조                             |
+
+전환은 짧다. **색 변화는 `--dur-instant` + `--ease-standard`**, 이동·크기는
+`--dur-fast` + `--ease-out`. 뜨고 지는 레이어만 `--dur-base` 이상을 쓴다.
+transition 대상을 `all`로 두지 말고 바뀌는 속성만 나열한다.
+
+## 8. 접근성
+
+- **포커스 링은 협상 대상이 아니다.** `outline: none`을 걸었다면 반드시
+  `--focus-ring`으로 되돌려 놓는다
+- **아이콘만 있는 버튼은 `IconButton`을 쓴다.** `label` prop이 필수이며
+  접근 가능한 이름이 된다. 맨 `<button>`에 아이콘만 넣지 말 것
+- **클릭 가능한 div에는 키보드 경로를 준다.** `Card`의 `interactive`
+  variant가 `role="button"` + `tabIndex` + Enter/Space를 이미 처리한다
+- **모션만으로 상태를 전달하지 않는다.** `prefers-reduced-motion`은
+  `index.css`에서 전역으로 꺼지므로, 멈춘 스피너만 남아도 뜻이 통하도록
+  `aria-busy` / `role="status"`를 함께 건다
+- 색만으로 정보를 전달하지 않는다. 화자 색에는 항상 이름이 따라붙는다
+
+## 9. Do / Don't
+
+### Do
+
+- 위계는 **경계선**으로 만든다
+- 이미 있는 `shared/ui` 컴포넌트를 먼저 쓴다
+- 색은 **시맨틱 별칭**(`--surface-*` / `--text-*` / `--border-*`)으로
+  고른다. 원시 스케일(`--gray-7`, `--accent-3`)은 별칭이 없을 때만
+- 표에서는 인라인 액션을 쓴다 (행마다 메뉴를 열게 하지 않는다)
+- 강조는 화면당 하나로 아낀다. 다 강조하면 아무것도 강조되지 않는다
+
+### Don't
+
+- **다크 모드 대응을 추가하지 말 것.** 현재 라이트 전용이며 `.dark`
+  토큰 블록이 존재하지 않는다. `@custom-variant dark`는 선언만 되어
+  있어서 `dark:` 접두사는 지금 아무 효과가 없다 — 붙이면 "대응했다"는
+  착각만 남는다. 다크 모드는 토큰 세트를 통째로 정의하는 별도 작업이다.
+- **raw hex나 임의 색값을 쓰지 말 것.** `bg-[#4F46E5]` ✗.
+  토큰을 감싼 `bg-[var(--accent-solid)]`는 관례이므로 허용한다.
+  (기존 예외 3곳: `button.tsx`의 danger hover, `toaster.tsx`의 아이콘
+  두 색. 토스트는 어두운 면 위에 얹히는데 어두운 면용 시맨틱 토큰이
+  아직 없어서 생긴 구멍이다. 늘리지 말 것.)
+- **평면 카드에 그림자를 쓰지 말 것.** 위계는 border로 만든다.
+  `--shadow-md` / `--shadow-lg`는 실제로 떠 있는 레이어 — dialog,
+  popover, select, tooltip, toast, command-bar — 전용이다.
+- **새 색·radius·간격 값을 임의로 만들지 말 것.** 기존 토큰으로 안 되면
+  `index.css`에 토큰을 먼저 추가하고 그 이름으로 쓴다. 컴포넌트 안에
+  일회용 값을 심지 않는다.
+- 그라디언트, 글래스모피즘, 큰 둥근 카드, 카드 중첩 없음
+- 장식용 아이콘을 넣지 않는다. 아이콘은 뜻이 있을 때만
+- 화자 팔레트를 화자 아닌 것에 쓰지 않는다
