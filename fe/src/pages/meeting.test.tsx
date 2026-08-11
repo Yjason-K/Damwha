@@ -476,8 +476,27 @@ const fx = vi.hoisted(() => {
   const meetingLensesOf = (id: string): LensWireItem[] =>
     id === "m4" ? [m4ActionItem, m4DecisionItem] : [];
 
+  // 삭제된 회의 id — DELETE /meetings/:id가 채우고, 목록/상세 응답이 이를 반영해
+  // 실제 서버처럼 굴게 한다. 삭제 후 리다이렉트 검증에 필요하다(낡은 목록을 읽으면
+  // 목이 여전히 그 회의를 돌려줘 테스트가 엉뚱한 이유로 통과해 버린다).
+  const deletedIds = new Set<string>();
+
+  // 목록 재조회를 붙잡아 두는 게이트. 목이 즉시 resolve하면 무효화 재조회가
+  // IndexRoute 렌더보다 먼저 끝나 "낡은 목록을 읽는" 창 자체가 사라진다 —
+  // 실제 네트워크에서는 열리는 창이므로, 테스트가 회귀를 잡으려면 재현해야 한다.
+  let listBlocked = false;
+  let pendingList: Array<() => void> = [];
+
+  function listResponse() {
+    const data = meetingsList.filter((m) => !deletedIds.has(m.id));
+    if (!listBlocked) return Promise.resolve({ data });
+    return new Promise<{ data: WireMeeting[] }>((resolve) => {
+      pendingList.push(() => resolve({ data }));
+    });
+  }
+
   function getResponse(url: string) {
-    if (url === "/meetings") return Promise.resolve({ data: meetingsList });
+    if (url === "/meetings") return listResponse();
     if (url === "/speakers") return Promise.resolve({ data: speakers });
     if (url === "/lenses/extraction-status")
       return Promise.resolve({ data: { running: 0, failed: [] } });
@@ -493,12 +512,33 @@ const fx = vi.hoisted(() => {
     if (url.endsWith("/status")) return Promise.resolve({ data: status });
     const m = url.match(/^\/meetings\/([^/]+)$/);
     if (m) {
-      if (m[1] === "m_err")
+      if (m[1] === "m_err" || deletedIds.has(m[1]))
         return Promise.reject(new Error(`detail fetch failed: ${m[1]}`));
       return Promise.resolve({ data: detailOf(m[1]) });
     }
     return Promise.reject(new Error(`unhandled GET ${url}`));
   }
+
+  /** DELETE — 회의 삭제만 상태로 남기고, 즐겨찾기 해제 등은 기존대로 빈 응답. */
+  function deleteResponse(url: string) {
+    const m = url.match(/^\/meetings\/([^/]+)$/);
+    if (m) deletedIds.add(m[1]);
+    return Promise.resolve({ data: {} });
+  }
+
+  const blockListFetches = () => {
+    listBlocked = true;
+  };
+  const releaseListFetches = () => {
+    listBlocked = false;
+    pendingList.forEach((f) => f());
+    pendingList = [];
+  };
+
+  const reset = () => {
+    deletedIds.clear();
+    releaseListFetches();
+  };
 
   function postResponse(url: string) {
     if (url === "/search") return Promise.resolve({ data: search });
@@ -526,7 +566,15 @@ const fx = vi.hoisted(() => {
     return Promise.reject(new Error(`unhandled POST ${url}`));
   }
 
-  return { getResponse, postResponse, detailOf };
+  return {
+    getResponse,
+    postResponse,
+    deleteResponse,
+    detailOf,
+    reset,
+    blockListFetches,
+    releaseListFetches,
+  };
 });
 
 vi.mock("@/shared/api/client", async () => {
@@ -540,13 +588,15 @@ vi.mock("@/shared/api/client", async () => {
       post: vi.fn((url: string) => fx.postResponse(url)),
       put: vi.fn(() => Promise.resolve({ data: fx.detailOf("m1") })),
       patch: vi.fn(() => Promise.resolve({ data: fx.detailOf("m1") })),
-      delete: vi.fn(() => Promise.resolve({ data: {} })),
+      delete: vi.fn((url: string) => fx.deleteResponse(url)),
     },
   };
 });
 
 // vitest는 globals 없이 돌므로 RTL 자동 cleanup이 걸리지 않는다 — 명시 등록.
 afterEach(cleanup);
+// 삭제 상태는 목에 남으므로 테스트 간 누출을 막는다.
+afterEach(() => fx.reset());
 
 // 실제 라우트 트리(routes)를 메모리 라우터로 돌려 셸+뷰 조합을 그대로 검증한다.
 // 반환값에 router를 얹어, 테스트가 현재 URL(location.search 등)을 단언할 수 있게 한다.
@@ -723,7 +773,9 @@ test("근거 점프 대상 발언이 재처리로 사라졌으면 토스트를 �
   ).toBeInTheDocument();
 
   // u는 히스토리에 남지 않아야 한다 — 남으면 뒤로가기로 되살아나 토스트가 반복된다.
+  // search만 보면 push로 지워도 통과하므로 historyAction까지 못 박는다.
   await waitFor(() => expect(router.state.location.search).toBe(""));
+  expect(router.state.historyAction).toBe("REPLACE");
 });
 
 test("이미 열린 회의에서 ?u=만 바뀌어도 재생 위치가 옮겨진다", async () => {
@@ -744,6 +796,39 @@ test("이미 열린 회의에서 ?u=만 바뀌어도 재생 위치가 옮겨진�
   // 같은 회의라 오디오는 재로드되지 않는다. loadedMetadata를 다시 쏘지 않아도
   // seek되어야 한다 — v3.start_ms = 12_000 → 12초.
   await waitFor(() => expect(audio.currentTime).toBeCloseTo(12, 3));
+});
+
+test("목록 첫 회의를 삭제하면 삭제된 회의로 되돌아가지 않는다", async () => {
+  const { router } = renderShell("/meetings/m1");
+  await screen.findByRole("heading", {
+    level: 1,
+    name: "기획회의 — UI 개선안",
+  });
+
+  // 거쳐 간 경로를 모두 기록한다. 최종 위치만 보면, 목록 재조회가 끝난 뒤
+  // 뒤늦게 교정되는 경우까지 통과해 버려 회귀를 못 잡는다.
+  const seen: string[] = [];
+  const unsubscribe = router.subscribe((s) => seen.push(s.location.pathname));
+
+  // 무효화 재조회를 붙잡아, IndexRoute가 캐시된 목록만 보고 판단하게 만든다.
+  fx.blockListFetches();
+
+  fireEvent.click(screen.getByRole("button", { name: "삭제" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "삭제" }));
+
+  // 삭제 성공 → `/`로 replace → IndexRoute가 남은 회의 중 첫 회의로 보낸다.
+  expect(await screen.findByText("회의를 삭제했어요.")).toBeInTheDocument();
+  expect(
+    await screen.findByRole("heading", { level: 1, name: "스프린트 회고" }),
+  ).toBeInTheDocument();
+  unsubscribe();
+
+  // 방금 삭제한 회의로는 단 한 번도 돌아가지 않아야 한다(404 막다른 길).
+  expect(seen).not.toContain("/meetings/m1");
+  expect(router.state.location.pathname).toBe("/meetings/m2");
+
+  fx.releaseListFetches();
 });
 
 test("없는 회의 id로 진입하면 상세 오류 상태를 렌더하고 레일은 살아 있다", async () => {
