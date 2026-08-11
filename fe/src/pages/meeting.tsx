@@ -28,6 +28,7 @@ import type {
   Meeting,
   MeetingFilter,
 } from "@/features/meeting/model/types";
+import { CenterState, Spinner } from "@/features/meeting/ui/center-state";
 import { Icon } from "@/features/meeting/ui/icons";
 import { InsightPane } from "@/features/meeting/ui/insight-pane";
 import { LeftNav } from "@/features/meeting/ui/left-nav";
@@ -78,33 +79,6 @@ function highlight(text: string, q: string): React.ReactNode {
       </mark>
       {slice.slice(j + q.length, j + q.length + 28)}…
     </>
-  );
-}
-
-function CenterState({
-  busy,
-  children,
-}: {
-  busy?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      role={busy ? "status" : undefined}
-      aria-busy={busy || undefined}
-      className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3 bg-[var(--surface-card)] px-8 text-center"
-    >
-      {children}
-    </div>
-  );
-}
-
-function Spinner() {
-  return (
-    <span
-      aria-hidden="true"
-      className="size-6 shrink-0 animate-spin rounded-full border-2 border-[color:var(--accent-solid)] border-r-transparent"
-    />
   );
 }
 
