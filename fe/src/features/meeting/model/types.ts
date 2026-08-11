@@ -50,7 +50,7 @@ export type UtteranceEntry = {
   quoted?: boolean;
 };
 
-export type LensKind = "action" | "topic" | "decision" | "promise";
+export type LensKind = "action" | "decision" | "promise";
 
 export type LensSource = "ai" | "user" | "edited" | "hint";
 
