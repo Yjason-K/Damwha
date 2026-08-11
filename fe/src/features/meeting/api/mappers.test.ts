@@ -356,9 +356,7 @@ describe("toMeetingDetail", () => {
   it("파생 불가 필드는 빈 기본값, 파일/오디오/상태는 그대로 매핑한다", () => {
     expect(detail.aiCount).toBe(0);
     expect(detail.aiHeadline).toBe("");
-    expect(detail.summary).toEqual([]);
     expect(detail.topics).toEqual([]);
-    expect(detail.lenses).toEqual({});
     expect(detail.files).toEqual([{ name: "회의녹음.m4a", size: "" }]);
     expect(detail.audioUrl).toBe(`${env.apiBaseUrl}/meetings/mtg_1/audio`);
     expect(detail.totalSeconds).toBe(3_720);
@@ -738,5 +736,64 @@ describe("toMeetingDetail", () => {
     expect(d.utterances.map((u) => u.text)).toEqual(["가".repeat(500), "뒤"]);
     expect(d.utterances[0].sources).toEqual([{ id: "f1", startMs: 0 }]);
     expect(d.utterances[1].sources).toEqual([{ id: "f2", startMs: 60_000 }]);
+  });
+});
+
+describe("toMeetingDetail — 요약", () => {
+  it("summary가 없으면 빈 주제/단락과 null 상태로 매핑한다", () => {
+    const detail = toMeetingDetail({
+      ...makeMeeting(),
+      utterances: [],
+      clusters: [],
+    });
+    expect(detail.topics).toEqual([]);
+    expect(detail.segments).toEqual([]);
+    expect(detail.summaryStatus).toBeNull();
+  });
+
+  it("주제를 문자열 배열 그대로 옮긴다", () => {
+    const detail = toMeetingDetail({
+      ...makeMeeting(),
+      utterances: [],
+      clusters: [],
+      summary: {
+        status: "done",
+        topics: ["파이프라인 실행 순서"],
+        segments: [],
+      },
+    });
+    expect(detail.topics).toEqual(["파이프라인 실행 순서"]);
+    expect(detail.summaryStatus).toBe("done");
+  });
+
+  it("단락을 시각 표기와 함께 뷰 형태로 옮긴다", () => {
+    const detail = toMeetingDetail({
+      ...makeMeeting(),
+      utterances: [],
+      clusters: [],
+      summary: {
+        status: "done",
+        topics: [],
+        segments: [
+          {
+            start_utterance_id: "utt_1",
+            end_utterance_id: "utt_9",
+            start_ms: 67_000,
+            end_ms: 130_000,
+            title: "티켓 등록 수정",
+            bullets: ["공유를 해드릴 것임"],
+          },
+        ],
+      },
+    });
+    expect(detail.segments).toEqual([
+      {
+        id: "utt_1",
+        startUtteranceId: "utt_1",
+        t: "01:07",
+        title: "티켓 등록 수정",
+        bullets: ["공유를 해드릴 것임"],
+      },
+    ]);
   });
 });

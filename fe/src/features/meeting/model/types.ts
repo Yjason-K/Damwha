@@ -8,6 +8,8 @@
  * 이 파일은 W1–W4가 코드를 작성하는 고정 계약이다 — 시그니처를 바꾸지 말 것.
  */
 
+import type { SummaryStatus } from "../api/types";
+
 export type MeetingStatus = "uploaded" | "processing" | "done" | "failed";
 
 /** 회의별 등장 화자. `spk`는 등장 순으로 부여된 틴트 번호(1..n). */
@@ -61,7 +63,14 @@ export type LensEntry = {
   due?: string;
 };
 
-export type TopicChip = { label: string; spk: number };
+/** 단락별 요약 1개 — `t`는 시작 시각 표기, `id`는 점프 대상 발화 id. */
+export type SummarySegmentView = {
+  id: string;
+  startUtteranceId: string;
+  t: string;
+  title: string;
+  bullets: string[];
+};
 
 export type FileEntry = { name: string; size: string };
 
@@ -103,11 +112,11 @@ export type Meeting = {
   attendees: number[];
   unverified?: number[];
   fav?: boolean;
-  summary: string[];
   tracks: SpeakerLane[];
   utterances: UtteranceEntry[];
-  topics: TopicChip[];
-  lenses: Partial<Record<LensKind, LensEntry[]>>;
+  topics: string[];
+  segments: SummarySegmentView[];
+  summaryStatus: SummaryStatus | null;
   status: MeetingStatus;
   audioUrl: string;
   totalSeconds: number;
