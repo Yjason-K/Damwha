@@ -1,0 +1,419 @@
+# 라우팅 구조 개편 설계
+
+_2026-08-11 · 루트 랜딩 제거, URL 기반 셸 레이아웃으로 전환_
+
+## 배경
+
+현재 라우터(`src/app/router.tsx`)는 여섯 개의 평면 라우트다.
+
+| 경로 | 컴포넌트 | 성격 |
+|------|----------|------|
+| `/` | `HomePage` | "Damwha" 제목 + 시작하기 버튼 → `/app` |
+| `/app` | `MeetingPage` | 3분할 browse 셸 |
+| `/speakers` | `SpeakersPage` | 셸 밖 독립 전체 페이지 |
+| `/settings` | `SettingsPage` | 셸 밖 독립 전체 페이지 |
+| `/showcase` | `ShowcasePage` | 디자인 시스템 데모 |
+| `*` | `NotFoundPage` | 404 |
+
+두 가지 문제가 있다.
+
+**첫째, `/` 랜딩은 개념 정의서와 어긋난다.** `docs/product-concept.md`는
+"browse-first shell, search always present — 검색 전용 홈은 두지 않는다"를
+명시한다. 지금의 `/`는 내용이 없는 클릭 한 번짜리 관문이다.
+
+**둘째, 셸의 화면 상태가 전부 React state라 주소에 남지 않는다.**
+`MeetingPage`(604줄)는 선택된 회의(`selectedId`), 뷰 전환(`view`), 렌즈
+종류(`lens`), 하이라이트된 발언(`activeId`)을 모두 컴포넌트 state로 들고
+있다(`pages/meeting.tsx:167-184`). 그 결과:
+
+- 새로고침하면 항상 목록 첫 회의로 리셋된다.
+- 브라우저 뒤로가기가 회의 전환을 되돌리지 못한다.
+- 특정 회의나 발언을 북마크·공유할 수 없다. 개념 정의서가 제품의 시그니처
+  기능으로 규정한 **utterance-jump**의 결과가 주소에 남지 않는다.
+
+랜딩 제거는 파일 두 개를 지우는 일이지만, 그 김에 두 번째 문제를 함께
+푸는 것이 이 설계의 실질이다.
+
+## 목표 / 비목표
+
+**목표**
+
+- `/` 랜딩 제거. 루트가 곧 browse 셸이 된다.
+- 회의 선택과 발언 하이라이트를 URL로 표현해 새로고침·뒤로가기·북마크가
+  정상 동작하게 한다.
+- 화자 관리·처리 설정을 셸 안으로 들여 회의 목록 레일이 끊기지 않게 한다.
+- 위 변경으로 불필요해지는 수동 상태 동기화 코드를 걷어낸다.
+
+**비목표**
+
+- 인사이트 탭·회의 목록 필터의 URL 반영. 개인용 도구에 URL이 지저분해지고
+  히스토리가 쌓이는 대가가 이득보다 크다.
+- 오디오 재생 위치의 URL 반영.
+- 화면 전환을 가로지르는 재생 지속(아래 "결정 사항" 참조).
+- `/showcase` 정리. 제품 표면이 아니고 이번 요청과 무관하다.
+- 반응형 대응. `DESIGN.md` 5장대로 데스크톱 전용을 유지한다.
+
+## 결정 사항
+
+| 항목 | 결정 | 근거 |
+|------|------|------|
+| 회의 선택 | `/meetings/:meetingId` 경로 파라미터 | 딥링크·뒤로가기 |
+| 발언 하이라이트 | `?u=<utteranceId>` 쿼리 | 점프 결과 복원 |
+| `?u=`의 의미 | 하이라이트 **+ seek** 통일 | 아래 참조 |
+| 렌즈 대시보드 | `/lenses/:kind` | `view` state 대체 |
+| 루트 `/` | 목록 첫 회의로 `replace` 리다이렉트 | browse-first |
+| 화자·설정 | 셸 레이아웃 안 | 맥락 유지 |
+| 오디오 소유 | 회의 뷰 (레이아웃 아님) | 아래 참조 |
+| 셸 레이아웃 | flex 중첩 → CSS Grid 2열 2행 | 아래 참조 |
+| 탭·필터 | state 유지 | YAGNI |
+
+### 오디오를 레이아웃이 아니라 회의 뷰가 소유한다
+
+레이아웃이 오디오를 소유하면 설정·화자 화면에서도 재생이 이어지지만,
+레이아웃이 "현재 회의"를 알아야 하고 회의 뷰와 상태를 나눠 갖게 되어
+context가 하나 더 생긴다. 개인용 도구에서 "설정을 만지며 녹음을 듣는"
+시나리오는 실재하지 않는다고 판단해 회의 뷰가 소유한다. 결과적으로
+`PlayerBar`와 `<audio>`는 `/meetings/:meetingId`에서만 마운트된다.
+
+### `?u=`는 하이라이트와 seek을 함께 의미한다
+
+지금은 출처에 따라 동작이 갈린다. 검색·전사 점프(`jumpTo`)는 seek하고, 렌즈
+근거 점프(`jumpToEvidence`)는 하이라이트만 한다 — 후자는 렌즈 대시보드 설계
+당시 의도적으로 범위에서 뺀 것이다(`CLAUDE.md:82`).
+
+`?u=`로 통일하면 이 구분을 URL로 표현할 수 없다. 파라미터를 하나 더
+두거나(`?seek=1`) seek을 URL 밖 일회성 신호로 빼는 선택지가 있었지만, 둘 다
+비용이 이득보다 크다고 판단했다. 특히 후자는 검색 점프 링크를 새로고침하면
+재생 위치가 사라져 "URL이 화면 상태를 복원한다"는 이번 개편의 전제와
+어긋난다.
+
+따라서 **`?u=`는 어디서 왔든 하이라이트 + seek을 뜻한다.** 렌즈 근거 점프의
+동작이 바뀌므로 `CLAUDE.md:82`를 갱신한다.
+
+### 셸을 CSS Grid로 재구성한다
+
+`PlayerBar`의 트랜스포트 블록은 `w-[calc(var(--rail-nav)-20px)]`
+(`player-bar.tsx:112`)로 **재생 버튼이 LeftNav 레일 아래에 정렬**되도록
+설계돼 있다. 즉 PlayerBar는 LeftNav 옆이 아니라 아래를 가로지르는 전체 폭
+행이다. 그런데 회의 뷰는 LeftNav *옆* 칸에 들어가므로, "뷰가 소유하되 전체
+폭"을 flex 중첩으로는 표현할 수 없다.
+
+`<Outlet/>`은 래퍼 DOM 없이 매칭된 라우트 엘리먼트를 그대로 렌더하므로,
+셸을 그리드로 두고 회의 뷰가 Fragment로 두 조각을 반환하면 **둘 다 그리드의
+직계 자식**이 되어 각자 셀을 차지한다. portal이나 context 없이 순수 CSS로
+해결되고 레일 정렬도 보존된다.
+
+```
+grid-cols-[var(--rail-nav)_minmax(0,1fr)]
+grid-rows-[minmax(0,1fr)_auto]
+
+┌──────────┬──────────────────────┐
+│ LeftNav  │ <Outlet/>            │  row 1
+├──────────┴──────────────────────┤
+│ PlayerBar (col-span-2)          │  row 2 — 회의 뷰만 렌더
+└─────────────────────────────────┘
+```
+
+row 2는 `auto`이므로 PlayerBar를 렌더하지 않는 화면에서는 높이 0으로 접힌다.
+
+## 라우트 트리
+
+```
+/                        AppShell (eager)
+├─ index                 → <Navigate to={`/meetings/${첫 회의}`} replace/>
+├─ meetings/:meetingId   → MeetingView   (?u=<utteranceId>)
+├─ lenses/:kind          → LensView      (kind: action|decision|promise)
+├─ speakers              → SpeakersView
+├─ settings              → SettingsView
+└─ *                     → NotFoundView  (레일 유지, 중앙만 404)
+
+/showcase                ShowcasePage — 레이아웃 밖, 현행 유지
+```
+
+`AppShell`은 eager다. 랜딩이 사라진 이상 "첫 화면 번들을 작게" 유지할 이유가
+없고, LeftNav와 회의 목록 조회는 어차피 모든 화면에서 필요하다. 나머지 뷰는
+`lazyRoute()`를 유지한다.
+
+**`lazyRoute` fallback 수정 필요.** 현재 fallback은
+`flex min-h-screen items-center justify-center`(`router.tsx:13`)인데, 그리드
+직계 자식이 되면 col 1 / row 1에 놓여 LeftNav와 겹친다. `col-start-2 h-full`로
+바꾼다.
+
+### 인덱스 라우트
+
+`useMeetings()` 결과의 **첫 항목**으로 `replace` 리다이렉트한다. BE의
+`list()`가 `ORDER BY created_at DESC`이므로(`be/src/meetings/
+meetings.repository.ts:76`) 첫 항목이 곧 최신 회의다. `replace`이므로
+뒤로가기 루프는 생기지 않는다.
+
+리다이렉트하지 않는 세 경우 모두 `/`에 머무르며 중앙 칸에 상태를 렌더한다.
+세 마크업 전부 `pages/meeting.tsx`의 `renderCenter()`에 이미 있으므로 옮겨
+쓴다.
+
+| 조건 | 중앙 칸 | 출처 |
+|------|---------|------|
+| `isLoading` | "회의를 불러오는 중…" + 스피너 | `meeting.tsx:386-393` |
+| `isError` | "회의를 불러오지 못했어요" + 다시 시도 | `meeting.tsx:395-408` |
+| 0건 | "아직 회의가 없어요" | `meeting.tsx:409-425` |
+
+`isError` 상태에는 목록 조회를 다시 태우는 재시도 버튼을 둔다. 현재
+`renderCenter()`의 목록 오류 분기에는 재시도 버튼이 없고 상세 오류 분기에만
+있는데(`meeting.tsx:440-446`), 인덱스에서는 이게 유일한 복구 수단이므로
+`refetch`를 붙인다.
+
+### 잘못된 `:meetingId`
+
+없는 회의 id로 들어오면 상세 조회가 404를 반환한다. 이때는 현재의 회의 상세
+에러 상태("회의를 불러오지 못했어요" + 다시 시도)를 그대로 쓴다. 목록 레일은
+살아 있으므로 사용자가 다른 회의를 고를 수 있다.
+
+## 컴포넌트 구성
+
+### `src/app/app-shell.tsx` (신규)
+
+레이아웃 라우트 엘리먼트. 그리드 컨테이너 + `LeftNav` + `<Outlet/>` +
+`CommandBar`를 렌더하고, ⌘K 키다운 리스너를 소유한다.
+
+소유 state: `filter`(회의 목록 필터), `cmdOpen`, `cmdQuery`, `facets`.
+⌘K 검색 결과 선택 시 `navigate()`로 이동한다.
+
+**팔레트 열기는 `Outlet` context로 내려준다.** `TranscriptPane`의
+`onOpenSearch`(하단 툴바 "발언 검색")는 필수 prop인데, `cmdOpen`이 `AppShell`로
+올라가면서 `MeetingView`에 소스가 없어진다. `AppShell`이
+`export type ShellOutletContext = { openSearch: () => void }`를 내보내고
+`<Outlet context>`로 전달하면, `LeftNav`의 검색 진입점과 같은 콜백 하나를
+공유하게 된다. 이 콜백은 `setCmdOpen(true)`로 **열기만** 한다 — 토글은 ⌘K
+키다운 핸들러에만 남는다. 컨텍스트 필드는 `openSearch` 하나로 제한한다.
+
+### `src/pages/meeting.tsx` → `MeetingView`
+
+`useParams().meetingId`와 `useSearchParams().get("u")`를 읽어 전사·인사이트·
+오디오·플레이어만 담당한다. 반환값은 Fragment:
+
+```jsx
+<>
+  <div className="col-start-2 flex min-w-0 flex-col">
+    {처리 배너}
+    {전사 + 인사이트}
+  </div>
+  {totalSeconds > 0 ? <PlayerBar className="col-span-2" … /> : null}
+  <audio … />
+</>
+```
+
+**`PlayerBar`에 `className` prop을 추가한다.** 현재 `PlayerBarProps`
+(`player-bar.tsx:77-87`)에는 `className`이 없어 위 예시는 타입 오류다.
+prop을 받아 루트 `<div>`에 `cn()`으로 병합한다. 래퍼 `<div>`로 감싸는 대안도
+되지만, 의미 없는 DOM 노드가 하나 늘고 이 저장소는 `SidebarItem`·`Card` 등
+대부분의 컴포넌트가 `className`을 받는 패턴이라 prop 추가가 일관적이다.
+
+### `MeetingRoute` (신규, `src/pages/meeting.tsx` 내)
+
+`createBrowserRouter`의 `element`는 정적 JSX라 `key={meetingId}`를 직접 줄 수
+없다. `useParams()`로 id를 읽어 `<MeetingView key={meetingId} …/>`를 반환하는
+얇은 래퍼를 라우트 엘리먼트로 둔다. `MeetingView`는 id를 prop으로 받는다.
+
+```jsx
+function MeetingRoute() {
+  const { meetingId } = useParams();
+  return <MeetingView key={meetingId} meetingId={meetingId!} />;
+}
+```
+
+**`aiAck`은 이 래퍼가 소유한다.** AI 안내 배너의 확인 여부는 회의별
+`Record<string, boolean>`인데(`meeting.tsx:176`, `transcript-pane.tsx:471`),
+`MeetingView`에 두면 `key` 리마운트마다 초기화되어 회의를 오갈 때마다 배너가
+되살아난다. `MeetingRoute`는 파라미터가 바뀌어도 리마운트되지 않는 안정된
+부모이므로 여기서 Record를 유지하고 `aiAcked`/`onAckAi`를 내려준다. context나
+`Outlet` context는 필요 없다.
+
+### `?u=` seek — 이벤트가 아니라 준비 상태로 판정한다
+
+`?u=`는 **하이라이트 + 해당 지점으로 seek**을 함께 의미한다. 검색·전사·렌즈
+어디서 왔든 동일하다.
+
+`onLoadedMetadata`에서 seek하면 **이미 열린 회의에서 `?u=`만 바뀌는 경우를
+놓친다.** 오디오가 다시 로드되지 않아 이벤트가 발생하지 않는데, 이건 검색
+결과나 전사 클릭으로 같은 회의 안에서 점프하는 가장 흔한 경로다(현재는
+`meeting.tsx:286-292`에서 즉시 seek한다).
+
+따라서 `onLoadedMetadata`는 **메타데이터 준비 여부만 기록**하고, seek은
+`u` · `meeting` · 준비 상태를 함께 보는 effect가 수행한다.
+
+**의존성은 `meeting` 객체가 아니라 거기서 파생한 숫자여야 한다.**
+`useMeeting`은 처리 중인 회의를 2.5초 간격으로 폴링하고 매번 새 객체를
+돌려주므로, `meeting`을 그대로 의존성에 두면 사용자가 스크럽할 때마다 effect가
+재실행되어 재생 위치를 되돌려 놓는다.
+
+```jsx
+// onLoadedMetadata: setAudioDuration(d) + setMetaReady(true) 만.
+
+const targetStartMs = React.useMemo(() => {
+  if (!u || !meeting) return null;
+  const source = meeting.utterances
+    .flatMap((x) => x.sources)
+    .find((s) => s.id === u);
+  return source ? source.startMs : null;   // 부재는 historical 가드가 처리
+}, [u, meeting]);
+
+React.useEffect(() => {
+  if (targetStartMs == null || !metaReady || totalSeconds <= 0) return;
+  const fraction = Math.min(1, targetStartMs / 1000 / totalSeconds);
+  ...
+}, [targetStartMs, metaReady, totalSeconds]);
+```
+
+두 경로가 한 effect로 덮인다 — 다른 회의로 점프하면 `metaReady`가 false→true로
+뒤집히며 발동하고, 같은 회의에서 `?u=`만 바뀌면 `metaReady`가 이미 true인 채
+`u`가 바뀌며 발동한다. `pendingSeek`은 이걸로 완전히 대체된다.
+
+`setPos`를 effect 안에서 호출하므로 `react-hooks/set-state-in-effect`
+비활성화 주석이 필요하다. 저장소에 같은 패턴의 선례가 있다(`meeting.tsx:328`).
+
+### `src/pages/lens.tsx` (신규)
+
+`useParams().kind`를 검증해 `LensDashboard`에 넘기는 얇은 래퍼. 렌즈 전환은
+`/lenses/:kind`로, 근거 점프는 `/meetings/:mid?u=:uid`로 `navigate`한다.
+알 수 없는 `kind`면 `action`으로 `replace` 정규화한다.
+
+### `SpeakersView` / `SettingsView`
+
+내용은 그대로 두고 셸 안에 맞춘다.
+
+- "회의로 돌아가기" 버튼과 **두 파일에 각각 중복 정의된** `BackIcon` 제거
+  (`pages/speakers.tsx:11-25`, `pages/settings.tsx:9-23`)
+- 루트 요소 `min-h-screen` → `col-start-2 h-full overflow-y-auto`
+  (`max-w-2xl` 중앙 정렬은 유지)
+
+### `NotFoundView`
+
+"홈으로" 링크 제거 — 셸 안이라 레일이 그 역할을 한다. `col-start-2` 적용.
+
+### `LeftNav`
+
+props 네 개(`currentId`, `view`, `onSelectMeeting`, `onSelectLens`)를 잃는다.
+활성 표시는 `useParams`/`useMatch`로 직접 판단하고, 회의 항목과 "모든 회의"는
+`<Link>`가 된다. `filter`/`onFilter`/`onOpenSearch`만 `AppShell`에서 계속
+받는다.
+
+`SidebarItem`은 `asChild`로 `<Link>`를 받아도 `label`/`sub`/`meta`/`active`를
+그대로 유지하므로(`sidebar-item.tsx:100-114`) 회의 목록 항목 변환에 걸리는
+게 없다.
+
+**업로드 완료 후 이동은 `LeftNav`가 직접 한다.** `UploadDialog`의
+`onUploaded`는 지금 부모의 회의 선택 핸들러를 호출하는데
+(`left-nav.tsx:258`), 그 핸들러가 props에서 사라지므로 `LeftNav` 안에서
+`useNavigate()`로 `/meetings/:id`로 이동한다. prop을 새로 만들어 `AppShell`을
+경유시키지 않는다 — 이동 자체가 라우팅 관심사라 중간 단계가 불필요하다.
+
+폭 클래스 `w-[var(--rail-nav)] shrink-0`은 유지한다. 그리드 트랙과 클래스가
+같은 변수를 참조하므로 어긋날 수 없다.
+
+## 상태 이전
+
+| 현재 (`MeetingPage` state) | 이후 |
+|---|---|
+| `selectedId` | `useParams().meetingId` |
+| `view` (`meeting`/`lens`) | 라우트 매칭 |
+| `lens` | `useParams().kind` |
+| `activeId` | `useSearchParams().get("u")` |
+| `pendingSeek` | **제거** → `metaReady` + seek effect |
+| `pos`·`playing`·`audioDuration` 수동 리셋 | **제거** |
+| `tab` | `MeetingView` state 유지 (회의마다 리셋되는 게 자연스러움) |
+| `aiAck` | **`MeetingRoute`** state로 유지 (아래 참조) |
+| `filter`, `cmdOpen`, `cmdQuery`, `facets` | `AppShell`로 이동 |
+
+아래 두 줄이 이 작업의 실제 이득이다.
+
+**`key={meetingId}` 리마운트가 수동 초기화를 대체한다.** `openMeeting`이 손으로
+되돌리던 다섯 개 상태(`meeting.tsx:272-281`)와 `handleDeleted`의 같은
+초기화(`meeting.tsx:333-343`)가 전부 불필요해진다.
+
+**`pendingSeek`이 사라진다.** 이 state는 "다른 회의로 점프할 때 대상 오디오
+로드를 기다려야 한다"는 문제(`meeting.tsx:283-297`, `546-557`)를 풀려고
+있었다. 위 "`?u=` seek" 절의 effect가 같은 회의/다른 회의를 구분 없이 덮으므로
+분기 자체가 없어지고, 남는 건 boolean 하나(`metaReady`)다.
+
+`openMeeting`·`jumpTo`·`jumpToEvidence`·`handleDeleted`는 각각 `navigate()`
+호출로 접힌다. 삭제 후에는 `navigate("/", { replace: true })`로 인덱스에
+다시 위임한다.
+
+**삭제 시 목록 캐시를 낙관적으로 갱신해야 한다.** 위 위임만으로는 부족하다 —
+`useDeleteMeeting`은 `["meetings"]`를 무효화만 하므로, 재조회가 끝나기 전에
+`IndexRoute`가 렌더되면 캐시된 데이터가 있어 `isLoading`이 `false`이고,
+**방금 삭제한 회의가 남아 있는 낡은 목록**의 첫 항목으로 리다이렉트한다.
+BE가 `created_at DESC`로 주므로 사용자가 보다가 삭제하는 회의가 대개 그
+첫 항목이라, 삭제 → 삭제된 회의 → 404 막다른 길이 된다. `onSuccess`에서
+무효화 **전에** `setQueryData(["meetings"], (old) => old?.filter(...))`로
+빼낸다. 기존 코드가 `remaining.filter(...)`로 막고 있던 것과 같은 사고다.
+
+**유지되는 것:** 재처리로 발언이 사라졌을 때의 historical 가드
+(`meeting.tsx:319-331`)는 그대로 필요하다. `activeId`가 `?u=`로 바뀌는 만큼
+"찾을 수 없으면 토스트 + 비우기"는 `setSearchParams`로 `u`를 제거하는 형태가
+되는데, 이때 **`{ replace: true }`가 필수다.** 히스토리에 남기면 뒤로가기로
+무효한 `u`가 되살아나 가드가 다시 돌고 토스트가 반복된다.
+
+## URL 계약
+
+| URL | 의미 |
+|-----|------|
+| `/` | 목록 첫 회의로 리다이렉트 (회의 0건이면 빈 상태) |
+| `/meetings/m_123` | 해당 회의의 전사 + 인사이트 |
+| `/meetings/m_123?u=u_456` | 위 + `u_456` 하이라이트·스크롤 + 그 지점으로 seek |
+| `/lenses/action` | 전역 렌즈 대시보드 (할 일) |
+| `/speakers` | 화자 관리 |
+| `/settings` | 처리 설정 |
+
+## 동작 변경
+
+1. **렌즈 대시보드로 전환하면 재생이 멈춘다.** 현재 `<audio>`는 `view`와
+   무관하게 마운트돼 있어(`meeting.tsx:533`) 대시보드로 넘어가도 소리는 계속
+   나고 `PlayerBar`만 사라진다 — 정지시킬 컨트롤이 없는 상태다. 개편 후에는
+   회의 뷰를 벗어나면 오디오가 언마운트되어 멈춘다. 의도된 수정이다.
+2. **렌즈 근거 점프가 재생 위치도 옮긴다.** 현재는 하이라이트만 하고 재생
+   위치를 건드리지 않는다(`meeting.tsx:306-309`, `CLAUDE.md:82`). `?u=`로
+   통일한 결과다. 목록을 훑던 흐름이 끊길 수 있다는 대가를 알고 택했다.
+3. **화자·설정이 셸 안에서 열린다.** 회의 목록 레일이 유지되고 "회의로
+   돌아가기" 버튼이 사라진다.
+4. **404가 셸 안에서 렌더된다.** 레일로 곧장 복귀할 수 있다.
+5. **회의 전환이 히스토리에 쌓인다.** 뒤로가기로 이전 회의로 돌아간다.
+
+## 삭제 대상
+
+- `src/pages/home.tsx`, `src/pages/home.test.tsx`
+- `pages/speakers.tsx`·`pages/settings.tsx`의 `BackIcon` 및 뒤로가기 버튼
+- `pages/not-found.tsx`의 "홈으로" 링크
+- `router.tsx`의 "landing bundle" 주석 — 랜딩이 없어지므로 서술을 갱신한다
+
+## 테스트 영향
+
+- `pages/home.test.tsx` — 삭제.
+- `pages/meeting.test.tsx`(889줄) — 라우터 결합은 `renderShell()` 헬퍼 한
+  곳(553행)에만 있다. `MemoryRouter initialEntries={["/meetings/m1"]}` +
+  `<Routes>` 형태로 바꾸면 개별 테스트 20여 개의 본문은 그대로다. 801행의
+  render는 별도 `Harness`를 쓰므로 영향 없다.
+- `pages/speakers.test.tsx`·`pages/settings.test.tsx` — 뒤로가기 링크에 대한
+  단언이 없어 무변경. 이미 `MemoryRouter`로 감싸져 있다.
+
+**추가할 테스트**
+
+- 인덱스 라우트가 최신 회의로 리다이렉트한다.
+- 회의가 0건이면 리다이렉트하지 않고 빈 상태를 렌더한다.
+- 목록 조회가 실패하면 오류 상태와 재시도 버튼을 렌더한다.
+- `?u=`가 붙은 주소로 진입하면 해당 발언이 하이라이트되고 재생 위치가 옮겨진다.
+- **이미 열린 회의에서 `?u=`만 바뀌어도 재생 위치가 옮겨진다** — `onLoadedMetadata`
+  기반 구현이었다면 놓쳤을 회귀 지점이다.
+- 렌즈 대시보드에서 근거를 누르면 `/meetings/:id?u=:uid`로 이동한다.
+- 없는 `:meetingId`로 진입하면 상세 에러 상태를 렌더하고 레일은 살아 있다.
+- 재처리로 사라진 발언을 `?u=`로 가리키면 토스트가 뜨고 `u`가 `replace`로
+  제거되어, 뒤로가기해도 토스트가 반복되지 않는다.
+- 업로드 완료 후 새 회의 경로로 이동한다.
+
+## 문서 갱신
+
+- `CLAUDE.md` 아키텍처 절의 라우터 서술(`/` eager, `/app` 셸)을 새 트리로
+  교체한다. `/app`을 가리키는 다른 문장들도 함께 정정한다.
+- `CLAUDE.md:82`의 "Evidence jump … **no audio seek** (deliberate, spec
+  비범위)"를 갱신한다. `?u=` 통일로 근거 점프도 seek하게 된다.
+- `DESIGN.md` 5장은 `/app`을 3분할 셸로 지칭한다 — 경로 표기를 `/`로 고친다.
+  레이아웃 다이어그램 자체는 유효하다.

@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { cn } from "@/shared/lib/utils";
 import { IconButton } from "@/shared/ui/icon-button";
 import { SpeakerTimeline } from "@/shared/ui/speaker-timeline";
 
@@ -84,6 +85,7 @@ type PlayerBarProps = {
   onSpeed: (speed: number) => void;
   onToggle: () => void;
   onSeek: (fraction: number) => void;
+  className?: string;
 };
 
 export function PlayerBar({
@@ -96,6 +98,7 @@ export function PlayerBar({
   onSpeed,
   onToggle,
   onSeek,
+  className,
 }: PlayerBarProps) {
   // 드래그 미리보기 시각 — SpeakerTimeline 드래그 중에만 non-null.
   const [scrub, setScrub] = React.useState<number | null>(null);
@@ -107,7 +110,12 @@ export function PlayerBar({
 
   return (
     // 랜드마크가 아니라 셸의 트랜스포트 줄 — footer(contentinfo)로 두면 오분류
-    <div className="flex shrink-0 items-center border-t border-border bg-[var(--surface-card)] px-5 pt-2.5 pb-3">
+    <div
+      className={cn(
+        "flex shrink-0 items-center border-t border-border bg-[var(--surface-card)] px-5 pt-2.5 pb-3",
+        className,
+      )}
+    >
       {/* transport (rail-aligned) */}
       <div className="flex w-[calc(var(--rail-nav)-20px)] shrink-0 flex-col items-center gap-[3px]">
         <div className="flex items-center gap-2">

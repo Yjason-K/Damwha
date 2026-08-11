@@ -1,54 +1,36 @@
 import * as React from "react";
+import {
+  useNavigate,
+  useOutletContext,
+  useParams,
+  useSearchParams,
+} from "react-router";
 
 import { Button } from "@/shared/ui/button";
-import {
-  CommandBar,
-  type CommandGroup,
-  type CommandItem,
-} from "@/shared/ui/command-bar";
-import { Tag } from "@/shared/ui/tag";
 import { useToast } from "@/shared/ui/use-toast";
 
+import type { ShellOutletContext } from "@/app/app-shell";
 import { useSetLensCompletion } from "@/features/lens/api/lenses";
-import { LensDashboard } from "@/features/lens/ui/lens-dashboard";
-import type { LensKind } from "@/features/lens/model/types";
 import { useMeetingLenses } from "@/features/meeting/api/lenses";
 import { formatClock, mapMeetingLenses } from "@/features/meeting/api/mappers";
 import {
   useGenerateSummary,
   useMeeting,
   useMeetingStatus,
-  useMeetings,
   useSyncSummaryStatus,
 } from "@/features/meeting/api/meetings";
-import { useSearch } from "@/features/meeting/api/search";
 import type { MeetingStatusResponse } from "@/features/meeting/api/types";
-import type {
-  LensKind as MeetingLensKind,
-  Meeting,
-  MeetingFilter,
-} from "@/features/meeting/model/types";
+import type { Meeting } from "@/features/meeting/model/types";
+import { CenterState, Spinner } from "@/features/meeting/ui/center-state";
 import { Icon } from "@/features/meeting/ui/icons";
 import { InsightPane } from "@/features/meeting/ui/insight-pane";
-import { LeftNav } from "@/features/meeting/ui/left-nav";
 import { PlayerBar } from "@/features/meeting/ui/player-bar";
 import { TranscriptPane } from "@/features/meeting/ui/transcript-pane";
 
 /**
- * /app — Damwha's browse-first meeting shell. LeftNav + (transcript + insight |
- * global lens) + real-audio player, with the ⌘K structured-search palette and
- * the speaker-resolve flow. Wired to the live backend via TanStack Query.
+ * `/meetings/:meetingId` — 셸(AppShell) 안의 회의 뷰. 전사 + 인사이트 + 실제
+ * 오디오 플레이어를 그리고, 하이라이트할 발언은 `?u=` 쿼리로 받는다.
  */
-
-type ShellView = "meeting" | "lens";
-
-type Facet = { id: string; label: string; speaker?: number };
-
-const INITIAL_FACETS: Facet[] = [
-  { id: "f1", label: "김영재", speaker: 1 },
-  { id: "f2", label: "지난주" },
-  { id: "f3", label: "기획회의" },
-];
 
 /** 처리 단계(stage) → 한국어 표기. */
 const STAGE_LABELS: Record<string, string> = {
@@ -60,53 +42,6 @@ const STAGE_LABELS: Record<string, string> = {
   persist: "저장",
   embed: "색인",
 };
-
-/** Clip around the first match and wrap it in a highlighted <mark>. */
-function highlight(text: string, q: string): React.ReactNode {
-  const clip = (s: string) => (s.length > 52 ? `${s.slice(0, 52)}…` : s);
-  if (!q) return clip(text);
-  const i = text.indexOf(q);
-  if (i < 0) return clip(text);
-  const start = Math.max(0, i - 16);
-  const slice = (start ? "…" : "") + text.slice(start);
-  const j = slice.indexOf(q);
-  return (
-    <>
-      {slice.slice(0, j)}
-      <mark className="rounded-[2px] bg-[var(--accent-2)] text-[color:var(--accent-text)]">
-        {q}
-      </mark>
-      {slice.slice(j + q.length, j + q.length + 28)}…
-    </>
-  );
-}
-
-function CenterState({
-  busy,
-  children,
-}: {
-  busy?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      role={busy ? "status" : undefined}
-      aria-busy={busy || undefined}
-      className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3 bg-[var(--surface-card)] px-8 text-center"
-    >
-      {children}
-    </div>
-  );
-}
-
-function Spinner() {
-  return (
-    <span
-      aria-hidden="true"
-      className="size-6 shrink-0 animate-spin rounded-full border-2 border-[color:var(--accent-solid)] border-r-transparent"
-    />
-  );
-}
 
 function ProcessingBanner({
   meeting,
@@ -163,42 +98,65 @@ function ProcessingBanner({
   );
 }
 
-export function MeetingPage() {
-  const [view, setView] = React.useState<ShellView>("meeting");
-  const [selectedId, setSelectedId] = React.useState<string | null>(null);
-  const [lens, setLens] = React.useState<LensKind>("action");
+/**
+ * 회의 뷰의 라우트 엘리먼트. `MeetingView`는 회의마다 리마운트되므로(key),
+ * 리마운트를 건너 살아 있어야 하는 상태는 이 부모가 소유한다 — 회의를 오갈 때
+ * 되살아나면 안 되는 것(AI 안내 배너 확인)과, 반대로 회의를 바꿔도 이어져야
+ * 하는 것(재생 배속: 전사를 훑는 동안 유지되는 작업 모드다) 둘 다.
+ */
+export function MeetingRoute() {
+  const { meetingId = "" } = useParams();
+  const [aiAck, setAiAck] = React.useState<Record<string, boolean>>({});
+  const [speed, setSpeed] = React.useState(1);
+
+  return (
+    <MeetingView
+      key={meetingId}
+      meetingId={meetingId}
+      aiAcked={!!aiAck[meetingId]}
+      onAckAi={() => setAiAck((a) => ({ ...a, [meetingId]: true }))}
+      speed={speed}
+      onSpeed={setSpeed}
+    />
+  );
+}
+
+type MeetingViewProps = {
+  meetingId: string;
+  aiAcked: boolean;
+  onAckAi: () => void;
+  speed: number;
+  onSpeed: (speed: number) => void;
+};
+
+function MeetingView({
+  meetingId,
+  aiAcked,
+  onAckAi,
+  speed,
+  onSpeed,
+}: MeetingViewProps) {
+  const navigate = useNavigate();
+  const { openSearch } = useOutletContext<ShellOutletContext>();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeId = searchParams.get("u") ?? "";
+
   const [tab, setTab] = React.useState("summary");
-  const [filter, setFilter] = React.useState<MeetingFilter>("all");
-  const [activeId, setActiveId] = React.useState("");
   const [playing, setPlaying] = React.useState(false);
   const [pos, setPos] = React.useState(0);
-  const [speed, setSpeed] = React.useState(1);
-  const [aiAck, setAiAck] = React.useState<Record<string, boolean>>({});
-  const [cmdOpen, setCmdOpen] = React.useState(false);
-  const [cmdQuery, setCmdQuery] = React.useState("");
-  const [facets, setFacets] = React.useState<Facet[]>(INITIAL_FACETS);
   const [audioDuration, setAudioDuration] = React.useState(0);
-  const [pendingSeek, setPendingSeek] = React.useState<{
-    mid: string;
-    uid: string;
-  } | null>(null);
+  const [metaReady, setMetaReady] = React.useState(false);
 
-  const {
-    data: meetings,
-    isLoading: meetingsLoading,
-    isError: meetingsError,
-  } = useMeetings();
-
-  const currentId = selectedId ?? meetings?.[0]?.id;
+  const audioRef = React.useRef<HTMLAudioElement>(null);
 
   const {
     data: meeting,
     isError: meetingError,
     isFetching: meetingFetching,
     refetch: refetchMeeting,
-  } = useMeeting(currentId);
+  } = useMeeting(meetingId);
 
-  const { data: lensItems = [] } = useMeetingLenses(currentId);
+  const { data: lensItems = [] } = useMeetingLenses(meetingId);
   const setLensCompletion = useSetLensCompletion();
   const generateSummary = useGenerateSummary();
   const meetingLenses = React.useMemo(
@@ -216,36 +174,26 @@ export function MeetingPage() {
     (meeting.status === "uploaded" ||
       meeting.status === "processing" ||
       summaryPending);
-  const { data: procStatus } = useMeetingStatus(currentId, statusEnabled);
+  const { data: procStatus } = useMeetingStatus(meetingId, statusEnabled);
 
   useSyncSummaryStatus(
-    currentId,
+    meetingId,
     meeting?.summaryStatus,
     procStatus?.summary_status,
   );
 
-  const { data: hits = [] } = useSearch(cmdQuery);
-
   const { toast } = useToast();
 
-  const audioRef = React.useRef<HTMLAudioElement>(null);
-
-  React.useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setCmdOpen((o) => !o);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
   // Real audio transport: keep the element in sync with speed / play state.
+  // metaReady를 deps에 두는 이유: 첫 렌더에는 meeting이 없어 <audio>도 없고,
+  // 배속은 회의를 건너 유지되므로(부모 소유) 1×가 아닌 값으로 새 회의에 들어올
+  // 수 있다. speed만 보면 값이 그대로라 effect가 다시 돌지 않아 새 엘리먼트에
+  // 반영되지 않는다 — 엘리먼트가 준비되는 시점을 뜻하는 metaReady가 뒤집힐 때
+  // 한 번 더 돌게 한다.
   React.useEffect(() => {
     const a = audioRef.current;
     if (a) a.playbackRate = speed;
-  }, [speed, currentId]);
+  }, [speed, metaReady]);
 
   React.useEffect(() => {
     const a = audioRef.current;
@@ -269,53 +217,35 @@ export function MeetingPage() {
     setPos(fraction);
   };
 
-  const openMeeting = (mid: string) => {
-    setView("meeting");
-    if (mid !== currentId) {
-      setSelectedId(mid);
-      setActiveId("");
-      setPos(0);
-      setPlaying(false);
-      setAudioDuration(0);
-    }
-  };
+  // 하이라이트 대상 발언의 시작 시각. 폴링 재조회로 meeting 객체가 새로 와도
+  // 값이 같으면 identity가 유지되어 아래 effect가 헛돌지 않는다.
+  const targetStartMs = React.useMemo(() => {
+    if (!activeId || !meeting) return null;
+    const source = meeting.utterances
+      .flatMap((x) => x.sources)
+      .find((s) => s.id === activeId);
+    return source ? source.startMs : null;
+  }, [activeId, meeting]);
 
-  const jumpTo = (mid: string, uid: string) => {
-    openMeeting(mid);
-    setActiveId(uid);
-    if (meeting && meeting.id === mid) {
-      const source = meeting.utterances
-        .flatMap((x) => x.sources)
-        .find((s) => s.id === uid);
-      if (source && totalSeconds > 0) {
-        seek(Math.min(1, source.startMs / 1000 / totalSeconds));
-      }
-    } else {
-      // 다른 회의로의 점프: 대상 회의 오디오가 준비되면(onLoadedMetadata) 적용한다.
-      setPendingSeek({ mid, uid });
-    }
-  };
+  // seek은 오디오 준비 여부와 대상 시각이 모두 갖춰졌을 때 판정한다. 이미 열린
+  // 회의에서 `?u=`만 바뀌는 경로(검색·전사 클릭)는 오디오가 재로드되지 않으므로
+  // onLoadedMetadata만으로는 놓친다.
+  React.useEffect(() => {
+    if (targetStartMs == null || !metaReady || totalSeconds <= 0) return;
+    const fraction = Math.min(1, targetStartMs / 1000 / totalSeconds);
+    const a = audioRef.current;
+    if (a) a.currentTime = fraction * totalSeconds;
+    // 외부 신호(?u=)를 재생 위치에 반영하는 의도된 effect다.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPos(fraction);
+  }, [targetStartMs, metaReady, totalSeconds]);
 
-  const openLens = (k: MeetingLensKind) => {
-    setView("lens");
-    setLens(k);
-  };
-
-  // 전역 렌즈 대시보드에서의 근거 점프 — 오디오 seek는 하지 않고 뷰 전환 +
-  // 하이라이트/스크롤만 수행한다.
-  const jumpToEvidence = (mid: string, uid: string) => {
-    openMeeting(mid);
-    setActiveId(uid);
-  };
-
-  // historical 가드: 재처리 등으로 대상 회의가 로드된 뒤에도 activeId가 가리키는
-  // 발언(원본 발화 id 포함)을 찾을 수 없으면 안내 토스트를 띄우고 activeId를
-  // 비운다. 같은 회의 내 검색 점프(jumpTo)는 항상 유효한 발언만 넘기므로 영향
-  // 없다. 캐시된 meeting이 stale한 채 백그라운드 재조회가 진행 중일 때 false
+  // historical 가드: 재처리 등으로 회의가 로드된 뒤에도 `?u=`가 가리키는
+  // 발언(원본 발화 id 포함)을 찾을 수 없으면 안내 토스트를 띄우고 u를 없앤다.
+  // 캐시된 meeting이 stale한 채 백그라운드 재조회가 진행 중일 때 false
   // negative(아직 갱신 전 데이터로 오판)를 막기 위해 isFetching이 꺼졌을 때만
-  // 판정한다. 외부 데이터(meeting)와 activeId의 조합을 동기화하는 의도된 effect라
-  // set-state-in-effect 규칙을 해제한다(activeId가 ""로 바뀌면 조건이 즉시
-  // false가 되어 cascading되지 않음).
+  // 판정한다. 히스토리에 남기면 뒤로가기로 무효한 u가 되살아나 토스트가
+  // 반복되므로 replace로 지운다.
   React.useEffect(() => {
     if (!activeId || !meeting || meetingFetching) return;
     const found = meeting.utterances.some(
@@ -325,104 +255,31 @@ export function MeetingPage() {
       toast({
         description: "재처리로 근거 발언을 현재 버전에서 찾을 수 없어요.",
       });
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setActiveId("");
+      setSearchParams({}, { replace: true });
     }
-  }, [activeId, meeting, meetingFetching, toast]);
+  }, [activeId, meeting, meetingFetching, toast, setSearchParams]);
 
-  const handleDeleted = (deletedId: string) => {
-    // 여전히 stale일 수 있는 목록에서 삭제된 id를 명시적으로 제외해 다음 선택을
-    // 정한다. 남는 회의가 없으면 null → 빈 상태로 떨어진다.
-    const remaining = (meetings ?? []).filter((m) => m.id !== deletedId);
-    setSelectedId(remaining[0]?.id ?? null);
-    setView("meeting");
-    setActiveId("");
-    setPos(0);
-    setPlaying(false);
-    setAudioDuration(0);
+  // 회의 안에서의 발언 점프. 두 가지를 함께 처리한다.
+  // 1) 이미 활성인 발언을 다시 누르면 `?u=`가 그대로라 위 seek effect의 deps가
+  //    바뀌지 않아 아무 일도 일어나지 않는다. "여기서 다시 듣기"가 죽지 않도록
+  //    이 경우만 재생 위치를 직접 옮긴다(리렌더 없이 오디오만 건드린다).
+  // 2) 새 발언으로의 이동은 replace다. 하이라이트는 회의 안의 일시적 상태라
+  //    히스토리 단위가 아니고, push하면 점프 횟수만큼 뒤로가기를 눌러야 회의를
+  //    벗어난다(같은 URL이 쌓여 뒤로가기가 고장 난 것처럼 보인다).
+  const jumpTo = (uid: string) => {
+    if (uid === activeId) {
+      if (targetStartMs != null && totalSeconds > 0)
+        seek(Math.min(1, targetStartMs / 1000 / totalSeconds));
+      return;
+    }
+    setSearchParams({ u: uid }, { replace: true });
   };
 
-  /* ── ⌘K structured search backed by the /search endpoint ─────────── */
-  const q = cmdQuery.trim();
-  const utteranceItems: CommandItem[] = hits.slice(0, 6).map((h) => ({
-    id: `u:${h.meetingId}:${h.utteranceId}`,
-    icon: <Icon name="quote" size={15} />,
-    title: highlight(h.text, q),
-    meta: [h.meetingTitle ?? "제목 없는 회의", h.speakerName]
-      .filter(Boolean)
-      .join(" · "),
-    trail: formatClock(h.startMs),
-  }));
-
-  // '회의' 그룹은 발화 히트가 가리키는 회의 + 제목이 질의에 매칭되는 회의를
-  // 합친다(중복 제거). 제목만 매칭되는 회의(발화 히트 없음)도 노출된다.
-  const meetingItems: CommandItem[] = [];
-  const seenMeetings = new Set<string>();
-  const pushMeeting = (id: string, title: string) => {
-    if (seenMeetings.has(id)) return;
-    seenMeetings.add(id);
-    meetingItems.push({
-      id: `m:${id}`,
-      icon: <Icon name="file" size={15} />,
-      title,
-    });
+  const handleDeleted = () => {
+    navigate("/", { replace: true });
   };
-  for (const h of hits)
-    pushMeeting(h.meetingId, h.meetingTitle ?? "제목 없는 회의");
-  if (q) {
-    for (const m of meetings ?? []) {
-      if (m.title.includes(q)) pushMeeting(m.id, m.title);
-    }
-  }
-  const cappedMeetingItems = meetingItems.slice(0, 5);
-
-  const cmdGroups: CommandGroup[] = [
-    { label: "발언", items: utteranceItems },
-    { label: "회의", items: cappedMeetingItems },
-  ].filter((g) => g.items.length > 0);
 
   const renderCenter = () => {
-    if (meetingsLoading) {
-      return (
-        <CenterState busy>
-          <Spinner />
-          <p className="text-sm text-[color:var(--text-muted)]">
-            회의를 불러오는 중…
-          </p>
-        </CenterState>
-      );
-    }
-    if (meetingsError) {
-      return (
-        <CenterState>
-          <Icon
-            name="inbox"
-            size={22}
-            className="text-[color:var(--text-faint)]"
-          />
-          <p className="text-sm text-[color:var(--text-muted)]">
-            회의를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.
-          </p>
-        </CenterState>
-      );
-    }
-    if ((meetings ?? []).length === 0) {
-      return (
-        <CenterState>
-          <Icon
-            name="mic"
-            size={24}
-            className="text-[color:var(--text-faint)]"
-          />
-          <p className="text-base font-semibold text-foreground">
-            아직 회의가 없어요
-          </p>
-          <p className="text-sm text-[color:var(--text-muted)]">
-            왼쪽의 “새 회의 기록하기”로 첫 회의를 만들어 보세요.
-          </p>
-        </CenterState>
-      );
-    }
     // 렌더 가능한 상세가 있으면 최우선으로 그린다 — 배경 재조회 실패가 렌더 가능한
     // 전사를 에러 화면으로 덮지 않도록. 그 다음이 에러, 마지막이 로딩.
     if (!meeting) {
@@ -461,12 +318,12 @@ export function MeetingPage() {
         <TranscriptPane
           meeting={meeting}
           activeId={activeId}
-          onJump={(uid) => jumpTo(meeting.id, uid)}
-          onDeleted={() => handleDeleted(meeting.id)}
-          aiAcked={!!aiAck[meeting.id]}
-          onAckAi={() => setAiAck((a) => ({ ...a, [meeting.id]: true }))}
+          onJump={jumpTo}
+          onDeleted={handleDeleted}
+          aiAcked={aiAcked}
+          onAckAi={onAckAi}
           onShowSummary={() => setTab("summary")}
-          onOpenSearch={() => setCmdOpen(true)}
+          onOpenSearch={openSearch}
         />
         <InsightPane
           meeting={meeting}
@@ -476,8 +333,8 @@ export function MeetingPage() {
           onToggle={(id, doneVal) =>
             setLensCompletion.mutate({ id, done: doneVal })
           }
-          onOpenLens={openLens}
-          onJumpSegment={(uid) => jumpToEvidence(meeting.id, uid)}
+          onOpenLens={(k) => navigate(`/lenses/${k}`)}
+          onJumpSegment={jumpTo}
           onRegenerateSummary={() => generateSummary.mutate({ id: meeting.id })}
           regenerating={generateSummary.isPending}
         />
@@ -486,36 +343,17 @@ export function MeetingPage() {
   };
 
   return (
-    <div className="flex h-screen min-w-[1160px] flex-col bg-[var(--surface-app)] text-foreground">
-      <div className="flex min-h-0 flex-1">
-        <LeftNav
-          currentId={currentId ?? ""}
-          view={view}
-          filter={filter}
-          onFilter={setFilter}
-          onSelectMeeting={openMeeting}
-          onSelectLens={openLens}
-          onOpenSearch={() => setCmdOpen(true)}
-        />
-        {view === "meeting" ? (
-          <div className="flex min-w-0 flex-1 flex-col">
-            {meeting && meeting.status !== "done" ? (
-              <ProcessingBanner meeting={meeting} status={procStatus} />
-            ) : null}
-            <div className="flex min-h-0 flex-1">{renderCenter()}</div>
-          </div>
-        ) : (
-          <LensDashboard
-            lens={lens}
-            onLens={setLens}
-            onJumpEvidence={jumpToEvidence}
-          />
-        )}
+    <>
+      <div className="col-start-2 flex min-w-0 flex-col">
+        {meeting && meeting.status !== "done" ? (
+          <ProcessingBanner meeting={meeting} status={procStatus} />
+        ) : null}
+        <div className="flex min-h-0 flex-1">{renderCenter()}</div>
       </div>
 
-      {view === "meeting" && meeting && totalSeconds > 0 ? (
+      {meeting && totalSeconds > 0 ? (
         <PlayerBar
-          key={`playbar-${meeting.id}`}
+          className="col-span-2"
           tracks={meeting.tracks}
           playing={playing}
           pos={pos}
@@ -524,7 +362,7 @@ export function MeetingPage() {
             mappedTotal > 0 ? meeting.dur : formatClock(totalSeconds * 1000)
           }
           speed={speed}
-          onSpeed={setSpeed}
+          onSpeed={onSpeed}
           onToggle={() => setPlaying((p) => !p)}
           onSeek={seek}
         />
@@ -532,29 +370,14 @@ export function MeetingPage() {
 
       {meeting ? (
         <audio
-          key={meeting.id}
           ref={audioRef}
           src={meeting.audioUrl}
           preload="metadata"
           className="hidden"
           onLoadedMetadata={(e) => {
-            const el = e.currentTarget;
-            const d = el.duration;
-            const hasReal = Number.isFinite(d) && d > 0;
-            if (hasReal) setAudioDuration(d);
-            // 대기 중인 cross-meeting seek을 오디오가 준비된 지금 적용한다.
-            const total = hasReal ? d : totalSeconds;
-            if (pendingSeek && meeting.id === pendingSeek.mid && total > 0) {
-              const source = meeting.utterances
-                .flatMap((x) => x.sources)
-                .find((s) => s.id === pendingSeek.uid);
-              if (source) {
-                const fraction = Math.min(1, source.startMs / 1000 / total);
-                el.currentTime = fraction * total;
-                setPos(fraction);
-              }
-              setPendingSeek(null);
-            }
+            const d = e.currentTarget.duration;
+            if (Number.isFinite(d) && d > 0) setAudioDuration(d);
+            setMetaReady(true);
           }}
           onTimeUpdate={(e) => {
             const a = e.currentTarget;
@@ -567,38 +390,6 @@ export function MeetingPage() {
           onEnded={() => setPlaying(false)}
         />
       ) : null}
-
-      <CommandBar
-        open={cmdOpen}
-        onOpenChange={setCmdOpen}
-        query={cmdQuery}
-        onQueryChange={setCmdQuery}
-        facets={
-          facets.length > 0 ? (
-            <>
-              {facets.map((f) => (
-                <Tag
-                  key={f.id}
-                  speaker={f.speaker}
-                  onRemove={() =>
-                    setFacets((fs) => fs.filter((x) => x.id !== f.id))
-                  }
-                >
-                  {f.label}
-                </Tag>
-              ))}
-            </>
-          ) : undefined
-        }
-        groups={cmdGroups}
-        onSelect={(item) => {
-          if (!item.id) return;
-          setCmdOpen(false);
-          const [kind, mid, uid] = item.id.split(":");
-          if (kind === "u") jumpTo(mid, uid);
-          else if (kind === "m") openMeeting(mid);
-        }}
-      />
-    </div>
+    </>
   );
 }

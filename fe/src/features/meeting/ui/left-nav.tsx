@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Link } from "react-router";
+import { Link, useMatch, useNavigate, useParams } from "react-router";
 
 import { Badge } from "@/shared/ui/badge";
 import { Kbd } from "@/shared/ui/kbd";
@@ -8,7 +8,7 @@ import { SidebarItem } from "@/shared/ui/sidebar-item";
 import { cn } from "@/shared/lib/utils";
 
 import { useMeetings } from "../api/meetings";
-import type { LensKind, MeetingFilter, MeetingStatus } from "../model/types";
+import type { MeetingFilter, MeetingStatus } from "../model/types";
 import { Icon } from "./icons";
 import { UploadDialog } from "./upload-dialog";
 
@@ -102,24 +102,17 @@ function FilterPills({
 }
 
 type LeftNavProps = {
-  currentId: string;
-  view: "meeting" | "lens";
   filter: MeetingFilter;
   onFilter: (f: MeetingFilter) => void;
-  onSelectMeeting: (id: string) => void;
-  onSelectLens: (lens: LensKind) => void;
   onOpenSearch: () => void;
 };
 
-export function LeftNav({
-  currentId,
-  view,
-  filter,
-  onFilter,
-  onSelectMeeting,
-  onSelectLens,
-  onOpenSearch,
-}: LeftNavProps) {
+export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
+  const navigate = useNavigate();
+  const { meetingId } = useParams();
+  const lensMatch = useMatch("/lenses/:kind");
+  const speakersMatch = useMatch("/speakers");
+  const settingsMatch = useMatch("/settings");
   const [uploadOpen, setUploadOpen] = React.useState(false);
   const { data: meetings, isLoading, isError } = useMeetings();
   const filtered = (meetings ?? []).filter((m) =>
@@ -174,12 +167,15 @@ export function LeftNav({
           <SidebarItem
             icon={<Icon name="listChecks" size={16} />}
             label="모든 회의"
-            active={view === "lens"}
-            onClick={() => onSelectLens("action")}
-          />
+            active={!!lensMatch}
+            asChild
+          >
+            <Link to="/lenses/action" />
+          </SidebarItem>
           <SidebarItem
             icon={<Icon name="users" size={16} />}
             label="화자 관리"
+            active={!!speakersMatch}
             asChild
           >
             <Link to="/speakers" />
@@ -187,6 +183,7 @@ export function LeftNav({
           <SidebarItem
             icon={<Icon name="settings" size={16} />}
             label="처리 설정"
+            active={!!settingsMatch}
             asChild
           >
             <Link to="/settings" />
@@ -237,9 +234,11 @@ export function LeftNav({
                   label={m.title}
                   sub={m.sub}
                   meta={statusBadge(m.status) ?? m.dur}
-                  active={view === "meeting" && currentId === m.id}
-                  onClick={() => onSelectMeeting(m.id)}
-                />
+                  active={meetingId === m.id}
+                  asChild
+                >
+                  <Link to={`/meetings/${m.id}`} />
+                </SidebarItem>
               </li>
             ))
           )}
@@ -255,7 +254,7 @@ export function LeftNav({
       <UploadDialog
         open={uploadOpen}
         onOpenChange={setUploadOpen}
-        onUploaded={onSelectMeeting}
+        onUploaded={(id) => navigate(`/meetings/${id}`)}
       />
     </nav>
   );

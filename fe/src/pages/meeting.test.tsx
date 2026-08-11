@@ -7,9 +7,10 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter } from "react-router";
+import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, expect, test, vi } from "vitest";
 
+import { routes } from "@/app/router";
 import { apiClient } from "@/shared/api/client";
 import { Toaster } from "@/shared/ui/toaster";
 import { toMeetingDetail } from "@/features/meeting/api/mappers";
@@ -25,7 +26,7 @@ import type {
 import type { LensWireItem } from "@/features/lens/model/types";
 
 /**
- * 회의 셸(/app) 통합 테스트 — mock 코퍼스 제거 후 HTTP 레이어(`apiClient`)를
+ * 회의 셸(/meetings/:id) 통합 테스트 — mock 코퍼스 제거 후 HTTP 레이어(`apiClient`)를
  * 와이어 형태 픽스처로 목킹해 TanStack Query 경유 렌더를 검증한다. 기존 시맨틱
  * 단언(전사 렌더·사이드바 이동·전역 렌즈 빈 상태)을 유지하고, 실데이터 연결에서
  * 새로 생긴 흐름(화자 확인 다이얼로그·업로드 다이얼로그·처리 중 뱃지)을 더한다.
@@ -475,9 +476,50 @@ const fx = vi.hoisted(() => {
   const meetingLensesOf = (id: string): LensWireItem[] =>
     id === "m4" ? [m4ActionItem, m4DecisionItem] : [];
 
+  // 삭제된 회의 id — DELETE /meetings/:id가 채우고, 목록/상세 응답이 이를 반영해
+  // 실제 서버처럼 굴게 한다. 삭제 후 리다이렉트 검증에 필요하다(낡은 목록을 읽으면
+  // 목이 여전히 그 회의를 돌려줘 테스트가 엉뚱한 이유로 통과해 버린다).
+  const deletedIds = new Set<string>();
+
+  // 목록 재조회를 붙잡아 두는 게이트. 목이 즉시 resolve하면 무효화 재조회가
+  // IndexRoute 렌더보다 먼저 끝나 "낡은 목록을 읽는" 창 자체가 사라진다 —
+  // 실제 네트워크에서는 열리는 창이므로, 테스트가 회귀를 잡으려면 재현해야 한다.
+  let listBlocked = false;
+  let pendingList: Array<() => void> = [];
+
+  function listResponse() {
+    const data = meetingsList.filter((m) => !deletedIds.has(m.id));
+    if (!listBlocked) return Promise.resolve({ data });
+    return new Promise<{ data: WireMeeting[] }>((resolve) => {
+      pendingList.push(() => resolve({ data }));
+    });
+  }
+
   function getResponse(url: string) {
-    if (url === "/meetings") return Promise.resolve({ data: meetingsList });
+    if (url === "/meetings") return listResponse();
     if (url === "/speakers") return Promise.resolve({ data: speakers });
+    // 셸 안에서 열리는 /settings 라우트가 부르는 두 엔드포인트.
+    if (url === "/system/capabilities")
+      return Promise.resolve({
+        data: {
+          platform: "darwin",
+          arch: "arm64",
+          chip: "Apple M2 Pro",
+          memory_gb: 32,
+          gpu_eligible: true,
+          recommended_preset: "standard",
+        },
+      });
+    if (url === "/settings/processing")
+      return Promise.resolve({
+        data: {
+          preset: "standard",
+          preset_revision: "2026-07-13.1",
+          language: "ko",
+          whisper_model: "large-v3-turbo",
+          devices: { diarization: "gpu", stt: "gpu" },
+        },
+      });
     if (url === "/lenses/extraction-status")
       return Promise.resolve({ data: { running: 0, failed: [] } });
     const ml = url.match(/^\/meetings\/([^/]+)\/lenses$/);
@@ -492,12 +534,33 @@ const fx = vi.hoisted(() => {
     if (url.endsWith("/status")) return Promise.resolve({ data: status });
     const m = url.match(/^\/meetings\/([^/]+)$/);
     if (m) {
-      if (m[1] === "m_err")
+      if (m[1] === "m_err" || deletedIds.has(m[1]))
         return Promise.reject(new Error(`detail fetch failed: ${m[1]}`));
       return Promise.resolve({ data: detailOf(m[1]) });
     }
     return Promise.reject(new Error(`unhandled GET ${url}`));
   }
+
+  /** DELETE — 회의 삭제만 상태로 남기고, 즐겨찾기 해제 등은 기존대로 빈 응답. */
+  function deleteResponse(url: string) {
+    const m = url.match(/^\/meetings\/([^/]+)$/);
+    if (m) deletedIds.add(m[1]);
+    return Promise.resolve({ data: {} });
+  }
+
+  const blockListFetches = () => {
+    listBlocked = true;
+  };
+  const releaseListFetches = () => {
+    listBlocked = false;
+    pendingList.forEach((f) => f());
+    pendingList = [];
+  };
+
+  const reset = () => {
+    deletedIds.clear();
+    releaseListFetches();
+  };
 
   function postResponse(url: string) {
     if (url === "/search") return Promise.resolve({ data: search });
@@ -525,7 +588,15 @@ const fx = vi.hoisted(() => {
     return Promise.reject(new Error(`unhandled POST ${url}`));
   }
 
-  return { getResponse, postResponse, detailOf };
+  return {
+    getResponse,
+    postResponse,
+    deleteResponse,
+    detailOf,
+    reset,
+    blockListFetches,
+    releaseListFetches,
+  };
 });
 
 vi.mock("@/shared/api/client", async () => {
@@ -539,32 +610,33 @@ vi.mock("@/shared/api/client", async () => {
       post: vi.fn((url: string) => fx.postResponse(url)),
       put: vi.fn(() => Promise.resolve({ data: fx.detailOf("m1") })),
       patch: vi.fn(() => Promise.resolve({ data: fx.detailOf("m1") })),
-      delete: vi.fn(() => Promise.resolve({ data: {} })),
+      delete: vi.fn((url: string) => fx.deleteResponse(url)),
     },
   };
 });
 
-// mock을 등록한 뒤 import해야 페이지가 목킹된 apiClient를 소비한다.
-const { MeetingPage } = await import("@/pages/meeting");
-
 // vitest는 globals 없이 돌므로 RTL 자동 cleanup이 걸리지 않는다 — 명시 등록.
 afterEach(cleanup);
+// 삭제 상태는 목에 남으므로 테스트 간 누출을 막는다.
+afterEach(() => fx.reset());
 
-function renderShell() {
+// 실제 라우트 트리(routes)를 메모리 라우터로 돌려 셸+뷰 조합을 그대로 검증한다.
+// 반환값에 router를 얹어, 테스트가 현재 URL(location.search 등)을 단언할 수 있게 한다.
+function renderShell(initialEntry = "/meetings/m1") {
   const client = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false },
     },
   });
-  return render(
+  const router = createMemoryRouter(routes, { initialEntries: [initialEntry] });
+  const utils = render(
     <QueryClientProvider client={client}>
-      <MemoryRouter>
-        <MeetingPage />
-        <Toaster />
-      </MemoryRouter>
+      <RouterProvider router={router} />
+      <Toaster />
     </QueryClientProvider>,
   );
+  return { ...utils, router };
 }
 
 test("회의 셸은 전사·인사이트·플레이어를 렌더한다", async () => {
@@ -621,10 +693,15 @@ test("사이드바에서 다른 회의로 이동할 수 있다", async () => {
     level: 1,
     name: "기획회의 — UI 개선안",
   });
-  fireEvent.click(screen.getByRole("button", { name: /스프린트 회고/ }));
+  fireEvent.click(screen.getByRole("link", { name: /스프린트 회고/ }));
   expect(
     await screen.findByRole("heading", { level: 1, name: "스프린트 회고" }),
   ).toBeInTheDocument();
+  // 레일의 활성 표시는 URL(:meetingId)에서 나온다.
+  expect(screen.getByRole("link", { name: /스프린트 회고/ })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
 });
 
 test("회의를 전환해도 플레이바는 하나만 남는다", async () => {
@@ -636,11 +713,35 @@ test("회의를 전환해도 플레이바는 하나만 남는다", async () => {
   // 트랜스포트 재생 버튼(정확히 "재생")은 플레이바당 1개다.
   expect(screen.getAllByRole("button", { name: "재생" })).toHaveLength(1);
 
-  fireEvent.click(screen.getByRole("button", { name: /스프린트 회고/ }));
+  fireEvent.click(screen.getByRole("link", { name: /스프린트 회고/ }));
   await screen.findByRole("heading", { level: 1, name: "스프린트 회고" });
 
   // 이전 회의의 플레이바가 남아 쌓이면 안 된다.
   expect(screen.getAllByRole("button", { name: "재생" })).toHaveLength(1);
+});
+
+test("회의를 전환해도 재생 배속이 유지된다", async () => {
+  const { container } = renderShell();
+  await screen.findByRole("heading", {
+    level: 1,
+    name: "기획회의 — UI 개선안",
+  });
+  fireEvent.loadedMetadata(container.querySelector("audio")!);
+  // 1x → 1.2x (SPEEDS 순환).
+  fireEvent.click(screen.getByRole("button", { name: "재생 속도 (현재 1x)" }));
+  expect(container.querySelector("audio")!.playbackRate).toBe(1.2);
+
+  fireEvent.click(screen.getByRole("link", { name: /스프린트 회고/ }));
+  await screen.findByRole("heading", { level: 1, name: "스프린트 회고" });
+
+  // 회의 뷰는 회의마다 리마운트되지만 배속은 살아남아야 하고(전사를 훑는 동안
+  // 유지되는 작업 모드다), 새 <audio>에도 다시 적용돼야 한다.
+  expect(
+    screen.getByRole("button", { name: "재생 속도 (현재 1.2x)" }),
+  ).toBeInTheDocument();
+  const next = container.querySelector("audio")!;
+  fireEvent.loadedMetadata(next);
+  expect(next.playbackRate).toBe(1.2);
 });
 
 test("모든 회의(전역 렌즈)로 전환하면 렌즈 대시보드와 탭이 보인다", async () => {
@@ -649,7 +750,7 @@ test("모든 회의(전역 렌즈)로 전환하면 렌즈 대시보드와 탭이
     level: 1,
     name: "기획회의 — UI 개선안",
   });
-  fireEvent.click(screen.getByRole("button", { name: "모든 회의" }));
+  fireEvent.click(screen.getByRole("link", { name: "모든 회의" }));
   expect(
     await screen.findByRole("heading", { level: 1, name: "내 액션아이템" }),
   ).toBeInTheDocument();
@@ -666,13 +767,13 @@ test("모든 회의(전역 렌즈)로 전환하면 렌즈 대시보드와 탭이
   ).toBeInTheDocument();
 });
 
-test("전역 렌즈 대시보드에서 근거 점프하면 회의뷰로 전환되고 발언이 하이라이트되지만 오디오는 seek되지 않는다", async () => {
+test("전역 렌즈 대시보드에서 근거 점프하면 회의뷰로 전환되고 발언 하이라이트와 seek이 함께 일어난다", async () => {
   const { container } = renderShell();
   await screen.findByRole("heading", {
     level: 1,
     name: "기획회의 — UI 개선안",
   });
-  fireEvent.click(screen.getByRole("button", { name: "모든 회의" }));
+  fireEvent.click(screen.getByRole("link", { name: "모든 회의" }));
   await screen.findByRole("heading", { level: 1, name: "내 액션아이템" });
 
   const jumpCard = (
@@ -689,20 +790,19 @@ test("전역 렌즈 대시보드에서 근거 점프하면 회의뷰로 전환�
     "bg-[var(--accent-1)]",
   );
 
-  // jumpTo(검색 점프)와 달리 근거 점프는 pendingSeek을 걸지 않으므로, 오디오
-  // 메타데이터가 로드돼도 currentTime이 그대로다(0에서 변화 없음).
+  // ?u=는 하이라이트와 seek을 함께 뜻한다 — v3.start_ms = 12_000 → 12초.
   const audio = container.querySelector("audio")!;
   fireEvent.loadedMetadata(audio);
-  expect(audio.currentTime).toBe(0);
+  expect(audio.currentTime).toBeCloseTo(12, 3);
 });
 
 test("근거 점프 대상 발언이 재처리로 사라졌으면 토스트를 띄우고 activeId를 비운다", async () => {
-  renderShell();
+  const { router } = renderShell();
   await screen.findByRole("heading", {
     level: 1,
     name: "기획회의 — UI 개선안",
   });
-  fireEvent.click(screen.getByRole("button", { name: "모든 회의" }));
+  fireEvent.click(screen.getByRole("link", { name: "모든 회의" }));
   await screen.findByRole("heading", { level: 1, name: "내 액션아이템" });
 
   const ghostCard = (
@@ -717,6 +817,120 @@ test("근거 점프 대상 발언이 재처리로 사라졌으면 토스트를 �
       "재처리로 근거 발언을 현재 버전에서 찾을 수 없어요.",
     ),
   ).toBeInTheDocument();
+
+  // u는 히스토리에 남지 않아야 한다 — 남으면 뒤로가기로 되살아나 토스트가 반복된다.
+  // search만 보면 push로 지워도 통과하므로 historyAction까지 못 박는다.
+  await waitFor(() => expect(router.state.location.search).toBe(""));
+  expect(router.state.historyAction).toBe("REPLACE");
+});
+
+test("이미 열린 회의에서 ?u=만 바뀌어도 재생 위치가 옮겨진다", async () => {
+  const { container } = renderShell("/meetings/m2");
+  await screen.findByRole("heading", { level: 1, name: "스프린트 회고" });
+
+  // 메타데이터를 먼저 준비시킨다 — 이 시점엔 아직 u가 없다.
+  const audio = container.querySelector("audio")!;
+  fireEvent.loadedMetadata(audio);
+  expect(audio.currentTime).toBe(0);
+
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+  const option = await screen.findByRole("option", {
+    name: /다음 스프린트도 이어가죠/,
+  });
+  fireEvent.click(option);
+
+  // 같은 회의라 오디오는 재로드되지 않는다. loadedMetadata를 다시 쏘지 않아도
+  // seek되어야 한다 — v3.start_ms = 12_000 → 12초.
+  await waitFor(() => expect(audio.currentTime).toBeCloseTo(12, 3));
+});
+
+test("이미 활성인 발언을 다시 눌러도 그 지점으로 다시 seek되고 히스토리는 쌓이지 않는다", async () => {
+  const { container, router } = renderShell("/meetings/m2");
+  await screen.findByRole("heading", { level: 1, name: "스프린트 회고" });
+  const audio = container.querySelector("audio")!;
+  fireEvent.loadedMetadata(audio);
+
+  const log = screen.getByRole("log", { name: "회의 전사" });
+  const block = log.querySelector('[data-uid="v2"]') as HTMLElement;
+  const jump = within(block).getByRole("button", { name: /원문 보기/ });
+
+  // 거쳐 간 히스토리 동작을 기록한다 — 점프마다 PUSH가 쌓이면 회의를 벗어나는
+  // 데 점프 횟수만큼 뒤로가기가 필요해진다.
+  const actions: string[] = [];
+  const unsubscribe = router.subscribe((s) => actions.push(s.historyAction));
+
+  fireEvent.click(jump);
+  // v2.start_ms = 5_000 → 5초.
+  await waitFor(() => expect(audio.currentTime).toBeCloseTo(5, 3));
+
+  // 계속 듣다가 같은 발언을 다시 누르는 상황("여기서 다시 듣기").
+  audio.currentTime = 120;
+  fireEvent.click(jump);
+  expect(audio.currentTime).toBeCloseTo(5, 3);
+
+  unsubscribe();
+  expect(actions).not.toContain("PUSH");
+  expect(router.state.location.search).toBe("?u=v2");
+});
+
+test("목록 첫 회의를 삭제하면 삭제된 회의로 되돌아가지 않는다", async () => {
+  const { router } = renderShell("/meetings/m1");
+  await screen.findByRole("heading", {
+    level: 1,
+    name: "기획회의 — UI 개선안",
+  });
+
+  // 거쳐 간 경로를 모두 기록한다. 최종 위치만 보면, 목록 재조회가 끝난 뒤
+  // 뒤늦게 교정되는 경우까지 통과해 버려 회귀를 못 잡는다.
+  const seen: string[] = [];
+  const unsubscribe = router.subscribe((s) => seen.push(s.location.pathname));
+
+  // 무효화 재조회를 붙잡아, IndexRoute가 캐시된 목록만 보고 판단하게 만든다.
+  fx.blockListFetches();
+
+  fireEvent.click(screen.getByRole("button", { name: "삭제" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "삭제" }));
+
+  // 삭제 성공 → `/`로 replace → IndexRoute가 남은 회의 중 첫 회의로 보낸다.
+  expect(await screen.findByText("회의를 삭제했어요.")).toBeInTheDocument();
+  expect(
+    await screen.findByRole("heading", { level: 1, name: "스프린트 회고" }),
+  ).toBeInTheDocument();
+  unsubscribe();
+
+  // 방금 삭제한 회의로는 단 한 번도 돌아가지 않아야 한다(404 막다른 길).
+  expect(seen).not.toContain("/meetings/m1");
+  expect(router.state.location.pathname).toBe("/meetings/m2");
+
+  fx.releaseListFetches();
+});
+
+test("없는 회의 id로 진입하면 상세 오류 상태를 렌더하고 레일은 살아 있다", async () => {
+  renderShell("/meetings/m_err");
+  expect(
+    await screen.findByText(
+      "회의를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
+    ),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("navigation", { name: "주 탐색" }),
+  ).toBeInTheDocument();
+});
+
+test("처리 설정 라우트도 셸 안에서 열리고 레일에 활성 표시가 남는다", async () => {
+  renderShell("/settings");
+  expect(
+    await screen.findByRole("heading", { level: 1, name: "처리 설정" }),
+  ).toBeInTheDocument();
+  // 회의 밖 화면에서도 셸 크롬(회의 목록 레일)이 끊기지 않는다.
+  expect(
+    screen.getByRole("navigation", { name: "주 탐색" }),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "처리 설정" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
 });
 
 test("새 회의 기록하기로 업로드 다이얼로그를 연다", async () => {
@@ -747,7 +961,7 @@ test("상세 조회에 실패하면 무한 스피너 대신 에러 상태와 재
     level: 1,
     name: "기획회의 — UI 개선안",
   });
-  fireEvent.click(screen.getByRole("button", { name: /불러오기 실패 회의/ }));
+  fireEvent.click(screen.getByRole("link", { name: /불러오기 실패 회의/ }));
   expect(
     await screen.findByText(/회의를 불러오지 못했어요/),
   ).toBeInTheDocument();
@@ -818,7 +1032,7 @@ test("연속된 같은 화자 발화는 한 블록으로 병합 렌더된다", a
     level: 1,
     name: "기획회의 — UI 개선안",
   });
-  fireEvent.click(screen.getByRole("button", { name: /스프린트 회고/ }));
+  fireEvent.click(screen.getByRole("link", { name: /스프린트 회고/ }));
   await screen.findByRole("heading", { level: 1, name: "스프린트 회고" });
   const log = screen.getByRole("log", { name: "회의 전사" });
   // v2+v3가 한 블록(id는 첫 발화 v2)으로 병합, v3 행은 따로 없다.
@@ -841,7 +1055,7 @@ test("다른 회의의 병합 블록 중간 발화로 검색 점프하면 해당
   });
   fireEvent.click(option);
   await screen.findByRole("heading", { level: 1, name: "스프린트 회고" });
-  // cross-meeting pendingSeek: 오디오 메타데이터 로드 시점에 적용된다.
+  // 다른 회의로의 점프: 새 오디오가 준비된(loadedMetadata) 뒤 seek이 적용된다.
   const audio = container.querySelector("audio")!;
   fireEvent.loadedMetadata(audio);
   // v3.start_ms = 12_000 → 12초 지점 (jsdom은 duration NaN → totalSeconds 사용).
@@ -859,7 +1073,7 @@ test("summary가 done인 회의는 요약 탭이 실제 데이터로 채워지�
     level: 1,
     name: "기획회의 — UI 개선안",
   });
-  fireEvent.click(screen.getByRole("button", { name: /요약이 준비된 회의/ }));
+  fireEvent.click(screen.getByRole("link", { name: /요약이 준비된 회의/ }));
   await screen.findByRole("heading", {
     level: 1,
     name: "요약이 준비된 회의",

@@ -145,6 +145,14 @@ export function useDeleteMeeting() {
       await apiClient.delete(`/meetings/${vars.id}`);
     },
     onSuccess: (_data, vars) => {
+      // 목록 캐시에서 삭제된 회의를 즉시 빼낸다. 무효화만 하면 재조회가 끝나기
+      // 전까지 낡은 목록이 그대로 읽히는데(캐시가 있으니 isLoading도 false),
+      // 삭제 후 `/`로 보내는 경로에서 IndexRoute가 그 낡은 목록의 [0] —
+      // 즉 방금 삭제한 회의 — 로 되돌려 404 막다른 길을 만든다. 레일에서 삭제된
+      // 행이 잠깐 남는 깜빡임도 함께 사라진다.
+      queryClient.setQueryData<MeetingSummary[]>(["meetings"], (old) =>
+        old?.filter((m) => m.id !== vars.id),
+      );
       // 삭제된 회의의 상세/상태/렌즈 캐시를 제거해 렌더 잔존과 404 폴링 루프를
       // 막고, 목록은 무효화해 다시 가져온다.
       queryClient.removeQueries({ queryKey: ["meeting", vars.id] });
