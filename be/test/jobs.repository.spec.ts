@@ -77,4 +77,20 @@ describe('JobsRepository', () => {
     expect(rows[0].status).toBe('failed');
     expect(rows[0].error).toEqual({ code: 'x', message: 'boom' });
   });
+
+  it('summarize_meeting 잡을 큐잉하고 다시 읽어온다', async () => {
+    const mid = await seedMeeting();
+    const job = await repo.enqueue(db.pool, {
+      type: 'summarize_meeting',
+      meetingId: mid,
+      payload: {
+        schema_version: 1,
+        meeting_id: mid,
+        processing_version: 0,
+        model: 'model',
+      },
+    });
+    const { rows } = await db.pool.query(`SELECT type FROM job WHERE id = $1`, [job.id]);
+    expect(rows[0].type).toBe('summarize_meeting');
+  });
 });
