@@ -1498,7 +1498,8 @@ export interface SummaryRow {
 
 ```ts
 import { Injectable } from '@nestjs/common';
-import { DatabaseService, Exec } from '../database/database.service';
+import { DatabaseService } from '../database/database.service';
+import { Queryable } from '../jobs/jobs.types';
 import { SummaryRow } from './summary.types';
 
 @Injectable()
@@ -1518,7 +1519,7 @@ export class SummaryRepository {
     return rows[0] ?? null;
   }
 
-  async lockMeeting(exec: Exec, meetingId: string) {
+  async lockMeeting(exec: Queryable, meetingId: string) {
     const { rows } = await exec.query<{ id: string; status: string; processing_version: number }>(
       `SELECT id, status, processing_version FROM meeting WHERE id = $1 FOR UPDATE`,
       [meetingId],
@@ -1526,7 +1527,7 @@ export class SummaryRepository {
     return rows[0] ?? null;
   }
 
-  async findActive(exec: Exec, meetingId: string, processingVersion: number) {
+  async findActive(exec: Queryable, meetingId: string, processingVersion: number) {
     const { rows } = await exec.query<{ status: string; job_id: string | null }>(
       `SELECT status, job_id FROM meeting_summary
         WHERE meeting_id = $1 AND processing_version = $2
@@ -1538,7 +1539,7 @@ export class SummaryRepository {
 
   /** 재생성 — 이전 결과를 지우고 queued로 되돌린다(읽기 전용이라 머지가 없다). */
   async upsertQueued(
-    exec: Exec,
+    exec: Queryable,
     args: { meetingId: string; processingVersion: number; jobId: string; model: string },
   ) {
     await exec.query(
