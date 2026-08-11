@@ -212,6 +212,13 @@ function MeetingRoute() {
 }
 ```
 
+**`aiAck`은 이 래퍼가 소유한다.** AI 안내 배너의 확인 여부는 회의별
+`Record<string, boolean>`인데(`meeting.tsx:176`, `transcript-pane.tsx:471`),
+`MeetingView`에 두면 `key` 리마운트마다 초기화되어 회의를 오갈 때마다 배너가
+되살아난다. `MeetingRoute`는 파라미터가 바뀌어도 리마운트되지 않는 안정된
+부모이므로 여기서 Record를 유지하고 `aiAcked`/`onAckAi`를 내려준다. context나
+`Outlet` context는 필요 없다.
+
 ### `?u=` seek — 이벤트가 아니라 준비 상태로 판정한다
 
 `?u=`는 **하이라이트 + 해당 지점으로 seek**을 함께 의미한다. 검색·전사·렌즈
@@ -225,18 +232,27 @@ function MeetingRoute() {
 따라서 `onLoadedMetadata`는 **메타데이터 준비 여부만 기록**하고, seek은
 `u` · `meeting` · 준비 상태를 함께 보는 effect가 수행한다.
 
+**의존성은 `meeting` 객체가 아니라 거기서 파생한 숫자여야 한다.**
+`useMeeting`은 처리 중인 회의를 2.5초 간격으로 폴링하고 매번 새 객체를
+돌려주므로, `meeting`을 그대로 의존성에 두면 사용자가 스크럽할 때마다 effect가
+재실행되어 재생 위치를 되돌려 놓는다.
+
 ```jsx
 // onLoadedMetadata: setAudioDuration(d) + setMetaReady(true) 만.
 
-React.useEffect(() => {
-  if (!u || !meeting || !metaReady || totalSeconds <= 0) return;
+const targetStartMs = React.useMemo(() => {
+  if (!u || !meeting) return null;
   const source = meeting.utterances
     .flatMap((x) => x.sources)
     .find((s) => s.id === u);
-  if (!source) return;           // 부재는 historical 가드가 처리
-  const fraction = Math.min(1, source.startMs / 1000 / totalSeconds);
+  return source ? source.startMs : null;   // 부재는 historical 가드가 처리
+}, [u, meeting]);
+
+React.useEffect(() => {
+  if (targetStartMs == null || !metaReady || totalSeconds <= 0) return;
+  const fraction = Math.min(1, targetStartMs / 1000 / totalSeconds);
   ...
-}, [u, meeting, metaReady, totalSeconds]);
+}, [targetStartMs, metaReady, totalSeconds]);
 ```
 
 두 경로가 한 effect로 덮인다 — 다른 회의로 점프하면 `metaReady`가 false→true로
@@ -295,7 +311,8 @@ props 네 개(`currentId`, `view`, `onSelectMeeting`, `onSelectLens`)를 잃는�
 | `activeId` | `useSearchParams().get("u")` |
 | `pendingSeek` | **제거** → `metaReady` + seek effect |
 | `pos`·`playing`·`audioDuration` 수동 리셋 | **제거** |
-| `tab`, `aiAck` | `MeetingView` state 유지 |
+| `tab` | `MeetingView` state 유지 (회의마다 리셋되는 게 자연스러움) |
+| `aiAck` | **`MeetingRoute`** state로 유지 (아래 참조) |
 | `filter`, `cmdOpen`, `cmdQuery`, `facets` | `AppShell`로 이동 |
 
 아래 두 줄이 이 작업의 실제 이득이다.
