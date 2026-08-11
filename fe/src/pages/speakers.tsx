@@ -1,5 +1,4 @@
 import * as React from "react";
-import { Link } from "react-router";
 
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
@@ -7,22 +6,6 @@ import { useSpeakers } from "@/features/speaker/api/speakers";
 import { SpeakerRow } from "@/features/speaker/ui/speaker-row";
 import { EnrollSpeakerDialog } from "@/features/speaker/ui/enroll-speaker-dialog";
 import { toErrorMessage } from "@/features/speaker/ui/error";
-
-function BackIcon() {
-  return (
-    <svg
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M9.5 3.5L5 8l4.5 4.5" />
-    </svg>
-  );
-}
 
 function PlusIcon() {
   return (
@@ -128,26 +111,18 @@ export function SpeakersPage() {
   const speakers = useSpeakers();
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
+    <main className="col-start-2 h-full overflow-y-auto bg-background text-foreground">
       <div className="mx-auto flex max-w-3xl flex-col gap-6 px-6 py-10">
-        <header className="flex flex-col gap-4">
-          <Button asChild variant="ghost" size="sm" className="self-start">
-            <Link to="/app">
-              <BackIcon />
-              <span>회의로 돌아가기</span>
-            </Link>
-          </Button>
-          <div className="flex items-end justify-between gap-4">
-            <div className="flex flex-col gap-1">
-              <h1 className="text-display font-bold">화자 관리</h1>
-              <p className="text-base text-[color:var(--text-muted)]">
-                등록된 화자의 성문을 관리하고 새 화자를 추가할 수 있어요.
-              </p>
-            </div>
-            <Button iconLeft={<PlusIcon />} onClick={() => setEnrollOpen(true)}>
-              화자 등록
-            </Button>
+        <header className="flex items-end justify-between gap-4">
+          <div className="flex flex-col gap-1">
+            <h1 className="text-display font-bold">화자 관리</h1>
+            <p className="text-base text-[color:var(--text-muted)]">
+              등록된 화자의 성문을 관리하고 새 화자를 추가할 수 있어요.
+            </p>
           </div>
+          <Button iconLeft={<PlusIcon />} onClick={() => setEnrollOpen(true)}>
+            화자 등록
+          </Button>
         </header>
 
         {speakers.isPending ? (
