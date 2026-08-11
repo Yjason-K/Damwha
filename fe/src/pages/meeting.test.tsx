@@ -26,7 +26,7 @@ import type {
 import type { LensWireItem } from "@/features/lens/model/types";
 
 /**
- * 회의 셸(/app) 통합 테스트 — mock 코퍼스 제거 후 HTTP 레이어(`apiClient`)를
+ * 회의 셸(/meetings/:id) 통합 테스트 — mock 코퍼스 제거 후 HTTP 레이어(`apiClient`)를
  * 와이어 형태 픽스처로 목킹해 TanStack Query 경유 렌더를 검증한다. 기존 시맨틱
  * 단언(전사 렌더·사이드바 이동·전역 렌즈 빈 상태)을 유지하고, 실데이터 연결에서
  * 새로 생긴 흐름(화자 확인 다이얼로그·업로드 다이얼로그·처리 중 뱃지)을 더한다.

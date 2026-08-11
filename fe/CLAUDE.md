@@ -18,7 +18,7 @@ Full spec: [`docs/product-concept.md`](docs/product-concept.md) (개념 정의�
 
 - **Primary object = utterance.** Every utterance ties to a **speaker · timestamp · source audio · surrounding context**. Search, organize, and review all build on this traceability. The signature capability is **utterance-jump**: from anywhere, jump to the exact moment and inspect original text + audio + adjacent turns.
 - **Three jobs (priority order):** 기록 (record as structured speaker-attributed utterances) → 정리 (organize per-speaker/per-conversation; topics + paragraph summary is the **base layer** that applies to every recording, with typed extraction — action items/decisions/promises — as an **extension layer** on top, see Lenses below) → 검색 (compound search over date + topic + attendee + content). 추적 (tracing) is a by-product of traceability, **not** the product's center.
-- **Browse-first shell, search always present.** Opening the app shows the meeting list (recognition over recall), not an empty search box. Search is a global ⌘K / top-bar action reachable from any screen — never a dedicated home. This is why `/app` is a three-pane shell: left = meetings/folders, center = transcript (speaker timeline + utterances), right = insight panel (summary + lenses).
+- **Browse-first shell, search always present.** Opening the app shows the meeting list (recognition over recall), not an empty search box. Search is a global ⌘K / top-bar action reachable from any screen — never a dedicated home. This is why `/meetings/:meetingId` is a three-pane shell: left = meetings/folders, center = transcript (speaker timeline + utterances), right = insight panel (summary + lenses).
 - **Lenses** = an extension layer over utterances, not an optional toggled-on view — it simply yields nothing when a conversation isn't meeting-shaped (0 extracted items ⇒ the section disappears on its own; no conversation-type field was introduced to gate it). v1 kinds: FE `LensKind` is `action | decision | promise` — `topic` was removed from the lens domain; topics now live in the summary base layer, not as a lens. Generated via AI auto-extraction. Scoped per-meeting (right panel) or global (left-nav view). Extraction is **non-blocking + post-editable**: auto-filled with no gate, each item carries a source (AI / user-added / user-edited), confidence is only a non-blocking hint, and re-extraction is non-destructive (human-touched items are preserved/merged).
 - **Pipeline:** `audio → VAD → diarization → identification (vector DB / cosine similarity) → STT (Whisper) → structured JSON → search indexing (+ optional type extraction) → store`. Speaker identity comes from one-time voiceprint enrollment.
 - **Privacy stance:** personal/self-hosted; all voiceprints stored locally only, no recording notice. The boundary is **export/share** — keep it disabled by default with intentional friction (confirm/warn).
@@ -39,8 +39,8 @@ pnpm test             # vitest run (jsdom)
 pnpm test:watch       # vitest watch mode
 
 # single test file / by name
-pnpm vitest run src/pages/home.test.tsx
-pnpm vitest run -t "홈 페이지"
+pnpm vitest run src/pages/index-route.test.tsx
+pnpm vitest run -t "회의가 있으면 첫 회의로 리다이렉트한다"
 ```
 
 `pnpm build` runs the typecheck and the bundle separately — `tsc -b` is the source of truth for type errors (Vite does not typecheck). Run it (or `pnpm build`) to verify types.
@@ -54,7 +54,7 @@ Vite 8 + React 19 SPA, **feature-based-lite** layout. Path alias `@/*` → `src/
 - `src/main.tsx` — mount point, renders `<AppProviders/>` in StrictMode.
 - `src/app/` — composition root.
   - `providers.tsx` assembles `QueryClientProvider` + `RouterProvider`. The QueryClient is created once via `useState(createQueryClient)`.
-  - `router.tsx` — `createBrowserRouter`. `/` (home) and `*` (not-found) are **eager**; heavier routes (`/app` meeting shell, `/speakers`, `/settings` processing settings, `/showcase`) are **code-split** via `lazyRoute()` to keep the landing bundle small. Add new heavy routes through `lazyRoute`.
+  - `router.tsx` — `createBrowserRouter`. `AppShell` (`app/app-shell.tsx`) is a layout route owning the grid, `LeftNav`, and the ⌘K command palette; nested under it: `index` (redirects to the newest meeting), `meetings/:meetingId`, `lenses/:kind`, `speakers`, `settings`, `*` (not-found). `/showcase` sits outside the shell. The shell and the index route are **eager**; the rest are **code-split** via `lazyRoute()` to keep the landing bundle small. Add new heavy routes through `lazyRoute`. `routes` is also exported separately so tests build the same tree via `createMemoryRouter(routes, { initialEntries })`.
 - `src/pages/` — one component per route.
 - `src/shared/` — cross-cutting building blocks:
   - `api/client.ts` — single Axios instance (baseURL from env).
@@ -65,9 +65,9 @@ Vite 8 + React 19 SPA, **feature-based-lite** layout. Path alias `@/*` → `src/
 
 Future features go under `src/features/<feature>/`, each owning its own `api`/`ui`/`model`. Don't create empty placeholder folders.
 
-The `/app` route (`pages/meeting.tsx`) is the product's **three-pane browse shell**: nav rail `<nav>` + content `<main>` + insight `<aside>`, the rails sized by the `--rail-nav` / `--rail-insight` layout variables. It runs on live meeting data via TanStack Query hooks. (`--topbar-h` and `--content-max` are declared in `index.css` but currently unused — check them before inventing a new value.)
+The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by `--rail-nav`) and the ⌘K palette; `pages/meeting.tsx`'s `/meetings/:meetingId` view is the product's **three-pane browse shell** made concrete — content `<main>` (transcript) + insight `<aside>` (sized by `--rail-insight`) render inside the shell's `<Outlet/>`. It runs on live meeting data via TanStack Query hooks. (`--topbar-h` and `--content-max` are declared in `index.css` but currently unused — check them before inventing a new value.)
 
-`src/features/meeting/` owns the `/app` shell's data layer. `api/mappers.ts`'s `toMeetingDetail` maps `summary` — embedded in the `GET /meetings/:id` response — into `topics`/`segments`/`summaryStatus` on the `Meeting` domain type; `api/meetings.ts` adds `useGenerateSummary` (regenerate) and `useSyncSummaryStatus` (reconciles the polled `/status` summary state into the detail cache). Per-meeting lenses are a separate fetch: `api/lenses.ts`'s `useMeetingLenses` calls its own `GET /meetings/:id/lenses` endpoint, mapped via `mapMeetingLenses`. `ui/insight-pane.tsx` is the right rail — tabs are `요약 / 파일 / 메모` (참석자 is no longer its own tab); the 요약 tab stacks 참석자 → 주요 주제 → 다음 할 일 → 핵심 결정 → 단락별 요약.
+`src/features/meeting/` owns the `/meetings/:meetingId` view's data layer. `api/mappers.ts`'s `toMeetingDetail` maps `summary` — embedded in the `GET /meetings/:id` response — into `topics`/`segments`/`summaryStatus` on the `Meeting` domain type; `api/meetings.ts` adds `useGenerateSummary` (regenerate) and `useSyncSummaryStatus` (reconciles the polled `/status` summary state into the detail cache). Per-meeting lenses are a separate fetch: `api/lenses.ts`'s `useMeetingLenses` calls its own `GET /meetings/:id/lenses` endpoint, mapped via `mapMeetingLenses`. `ui/insight-pane.tsx` is the right rail — tabs are `요약 / 파일 / 메모` (참석자 is no longer its own tab); the 요약 tab stacks 참석자 → 주요 주제 → 다음 할 일 → 핵심 결정 → 단락별 요약.
 
 `src/features/settings/` (처리 설정) owns the processing-config surface: `api` (`useProcessingSettings` / `useUpdateProcessingSettings` / `useCapabilities`), `lib` (`PRESET_META` + `PRESET_META_REVISION` — **keep synced with the BE preset definitions**; a `preset_revision` mismatch surfaces a drift notice), and `ui` (`ProcessingSettingsForm`, `OverrideSection`). Reached via LeftNav "처리 설정" → the `/settings` route.
 
@@ -79,7 +79,9 @@ The `/app` route (`pages/meeting.tsx`) is the product's **three-pane browse shel
 
 - **`topic` is not a dashboard kind.** Topics are saved searches (roadmap 작업 4), so the lens domain here carries three kinds; don't reuse the meeting-domain `LensKind`.
 - **Completion filter is a single-value segment** (`열림|완료`) because BE `completion_status` takes one value — there is no combined view. Toggling completion optimistically removes the row from the current list.
-- **Evidence jump switches to the meeting view and highlights the utterance — no audio seek** (deliberate, spec 비범위). Historical items whose utterance no longer exists after reprocess surface a toast instead of a silent no-op.
+- **Evidence jump navigates to `/meetings/:id?u=<utteranceId>`** — the URL carries both the highlight and the audio seek, so search jumps and lens evidence jumps now behave identically (the earlier "no audio seek" carve-out is gone). Historical items whose utterance no longer exists after reprocess surface a toast and drop `?u=` with `replace: true`.
+
+**URL contract:** `/` → replace-redirects to the newest meeting in the list · `/meetings/:id` meeting detail · `/meetings/:id?u=<utteranceId>` highlights that utterance and seeks the audio to it · `/lenses/:kind` global lens dashboard · `/speakers` · `/settings`. The insight-pane tab and the meeting-list filter are intentionally not carried in the URL.
 
 ## Styling & design system
 
