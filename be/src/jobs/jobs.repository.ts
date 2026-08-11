@@ -95,6 +95,12 @@ export class JobsRepository {
          WHERE r.job_id=f.id AND f.type='extract_lenses'
          RETURNING r.id
        ),
+       fail_summaries AS (
+         UPDATE meeting_summary s SET status='failed', error=f.error, updated_at=now()
+         FROM failed f
+         WHERE s.job_id=f.id AND f.type='summarize_meeting'
+         RETURNING s.meeting_id
+       ),
        fail_meetings AS (
          UPDATE meeting m SET status='failed',
            error = jsonb_build_object('code','stale_worker','message','processing worker lost')

@@ -7,6 +7,8 @@ import {
   IndexMeetingPayloadSchema,
   ExtractLensesPayloadSchema,
   buildExtractLensesPayload,
+  SummarizeMeetingPayloadSchema,
+  buildSummarizeMeetingPayload,
 } from '../src/contracts/job-payload.schema';
 import { loadEnv } from '../src/config/env';
 import { resolvePreset } from '../src/settings/presets';
@@ -133,6 +135,31 @@ describe('job payload contract', () => {
       extraction_run_id: 'ler_1',
       model: 'qwen2.5:14b-instruct',
     });
+  });
+
+  it('builds + validates a summarize_meeting payload (extraction_run_id 없음)', () => {
+    const payload = buildSummarizeMeetingPayload({
+      meetingId: 'mtg_1',
+      processingVersion: 0,
+      model: 'qwen3.5:4b-mlx',
+    });
+    expect(payload).toEqual({
+      schema_version: 1,
+      meeting_id: 'mtg_1',
+      processing_version: 0,
+      model: 'qwen3.5:4b-mlx',
+    });
+    expect(() => SummarizeMeetingPayloadSchema.parse(payload)).not.toThrow();
+  });
+
+  it('rejects unknown keys in a summarize_meeting payload', () => {
+    expect(() => SummarizeMeetingPayloadSchema.parse({
+      schema_version: 1,
+      meeting_id: 'mtg_1',
+      processing_version: 0,
+      model: 'qwen3.5:4b-mlx',
+      extraction_run_id: 'ler_1',
+    })).toThrow();
   });
 
   it('defaults LENS_LLM_MODEL to the extraction model', () => {

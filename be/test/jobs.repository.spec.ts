@@ -77,4 +77,44 @@ describe('JobsRepository', () => {
     expect(rows[0].status).toBe('failed');
     expect(rows[0].error).toEqual({ code: 'x', message: 'boom' });
   });
+
+  it('summarize_meeting 잡을 큐잉하고 다시 읽어온다', async () => {
+    const mid = await seedMeeting();
+    const job = await repo.enqueue(db.pool, {
+      type: 'summarize_meeting',
+      meetingId: mid,
+      payload: {
+        schema_version: 1,
+        meeting_id: mid,
+        processing_version: 0,
+        model: 'model',
+      },
+    });
+    const { rows } = await db.pool.query(`SELECT type FROM job WHERE id = $1`, [job.id]);
+    expect(rows[0].type).toBe('summarize_meeting');
+  });
+
+  it('reapStale이 요약 잡 실패 시 요약 행도 failed로 넘긴다', async () => {
+    const meetingId = await seedMeeting();
+    const { rows: jobRows } = await db.pool.query<{ id: string }>(
+      `INSERT INTO job(type, meeting_id, payload, status, locked_by, locked_at,
+                       attempts, max_attempts)
+       VALUES ('summarize_meeting', $1, '{}'::jsonb, 'running', 'w',
+               now() - interval '30 minutes', 3, 3)
+       RETURNING id`,
+      [meetingId],
+    );
+    await db.pool.query(
+      `INSERT INTO meeting_summary(meeting_id, processing_version, job_id, model, status)
+       VALUES ($1, 0, $2, 'model', 'running')`,
+      [meetingId, jobRows[0].id],
+    );
+
+    await repo.reapStale(db.pool, 5);
+
+    const { rows } = await db.pool.query(
+      `SELECT status FROM meeting_summary WHERE meeting_id = $1`, [meetingId],
+    );
+    expect(rows[0].status).toBe('failed');
+  });
 });

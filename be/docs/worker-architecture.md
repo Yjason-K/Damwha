@@ -21,6 +21,7 @@ NestJS API와 ML worker poller 사이에는 HTTP 호출이 없다. 둘의 비동
 | 등록 화자 성문 생성 | `enroll_speaker` | ECAPA 192차원 `voiceprint`, 화자 상태 `ready` |
 | 발언 의미검색 색인 | `index_meeting` | BGE-M3 1024차원 `utterance_embedding` |
 | 렌즈 항목 추출 | `extract_lenses` | 로컬 LLM으로 action/decision/promise `lens_item`과 `lens_evidence` |
+| 회의 요약 생성 | `summarize_meeting` | 로컬 LLM으로 회의 전체 요약 `meeting_summary`(topics/segments) |
 | 검색 질의 임베딩 | `POST /embed` | 검색어의 BGE-M3 1024차원 벡터 |
 | 작업 생명주기 | supervisor 부모 + job당 자식 | 원자적 claim, stage/progress, heartbeat, retry/fail, stale 결과 폐기 |
 
@@ -99,6 +100,8 @@ flowchart LR
 | 검색 색인 | [`worker/damwha_worker/pipeline/index_meeting.py`](../worker/damwha_worker/pipeline/index_meeting.py) | 정상 발언 텍스트 임베딩과 upsert |
 | 렌즈 추출 | [`worker/damwha_worker/pipeline/extract_lenses.py`](../worker/damwha_worker/pipeline/extract_lenses.py) | `ok` 발언 조회 → LLM 후보 추출 → run/version guard로 persist |
 | 렌즈 LLM adapter | [`worker/damwha_worker/lens_client.py`](../worker/damwha_worker/lens_client.py) | 로컬 OpenAI-호환 chat completion 호출, 응답 검증/분류 |
+| 회의 요약 | [`worker/damwha_worker/pipeline/summarize_meeting.py`](../worker/damwha_worker/pipeline/summarize_meeting.py) | `ok` 발언 조회 → LLM 요약 → 경계 utterance id를 DB 시간으로 검증(`_resolve_segments`) → 통째 persist |
+| 요약 LLM adapter | [`worker/damwha_worker/summary_client.py`](../worker/damwha_worker/summary_client.py) | 로컬 OpenAI-호환 chat completion 호출, 응답 검증/분류(렌즈 adapter와 동일 패턴) |
 | 검색 질의 서비스 | [`worker/damwha_worker/embed_service.py`](../worker/damwha_worker/embed_service.py) | `/health`, `/embed` FastAPI endpoint |
 
 모델은 protocol 뒤에 격리되어 있다. 그래서 pipeline과 DB glue 테스트는 fake 모델로 결정적으로 실행하고, 무겁거나 gated인 실제 모델은 로컬 smoke에서만 검증한다.
@@ -168,7 +171,7 @@ flowchart TD
 - heartbeat는 `job.id + locked_by + running` 조건을 만족할 때만 `locked_at`을 갱신한다.
 - heartbeat thread는 connect/beat 실패에 죽지 않는다. 실패하면 연결을 닫고 다음 interval에 재접속을 시도하며, 수명은 해당 job 처리 범위에 한정된다.
 - NestJS reaper와 worker supervisor reaper가 모두 5분마다 오래된 `running` job을 찾는다. 둘은 `FOR UPDATE SKIP LOCKED`를 사용하므로 같은 job을 중복 전이시키지 않는다.
-- 시도 횟수가 남으면 `queued`와 `next_attempt_at=NULL`으로 되돌리고, 소진되면 `failed`로 바꾼다. `process_meeting`은 meeting, `enroll_speaker`는 speaker에도 실패를 전파한다. `index_meeting`·`extract_lenses` 실패는 meeting을 실패시키지 않는다(`extract_lenses`는 `lens_extraction_run`만 실패로 표시).
+- 시도 횟수가 남으면 `queued`와 `next_attempt_at=NULL`으로 되돌리고, 소진되면 `failed`로 바꾼다. `process_meeting`은 meeting, `enroll_speaker`는 speaker에도 실패를 전파한다. `index_meeting`·`extract_lenses`·`summarize_meeting` 실패는 meeting을 실패시키지 않는다(`extract_lenses`는 `lens_extraction_run`만, `summarize_meeting`은 `meeting_summary`만 실패로 표시) — 두 reaper 구현(`db.reap_stale`, `jobs.repository.ts`의 `reapStale`) 모두 `fail_lens_extraction_runs`와 `fail_summaries` CTE를 갖고 있어야 하며, 한쪽만 고치면 그 job type의 reap 경로가 어긋난다.
 
 ### 복원력과 우아한 종료
 
@@ -209,8 +212,9 @@ flowchart TD
 | `enroll_speaker` | speaker/audio key, embedding model/dimension | `extract_embedding` 30 → `enroll_persist` 80 → done 100 | `voiceprint` 생성, speaker `ready` |
 | `index_meeting` | meeting, processing version, search model/dimension | `embed` 20 → done 100 | 발언별 `utterance_embedding` upsert |
 | `extract_lenses` | meeting, processing version, `extraction_run_id`, LLM model | `extract_lenses` 30 → `persist_lenses` 80 → done 100 | LLM 후보를 검증·병합한 `lens_item`/`lens_evidence` |
+| `summarize_meeting` | meeting, processing version, 요약 LLM model | `summarize_meeting` 30 → `persist_summary` 80 → done 100 | 회의당 1행 `meeting_summary`(topics/segments)를 통째로 교체 |
 
-공통 payload는 `schema_version`을 갖고, 허용 버전은 **job type별**로 다르다(`SUPPORTED_SCHEMA_VERSIONS`, `contracts.py`). `process_meeting`은 **v1과 v2**를, `enroll_speaker`/`index_meeting`/`extract_lenses`는 **v1**만 받는다. v2 `process_meeting`은 stage별 device(`models.devices.{diarization,stt}` = `cpu`|`gpu`)와 `preset`/`preset_revision` 참조 정보를 추가한다. worker는 v1 payload를 내부에서 v2로 변환하므로(`_v1_models_to_v2`: `device=mps→gpu`, `cpu→cpu`, `cuda→cpu`+경고) downstream은 항상 하나의 shape(ModelsV2)만 본다. API의 Zod 계약과 worker의 Pydantic 계약이 같은 fixture를 검증해 drift를 차단한다.
+공통 payload는 `schema_version`을 갖고, 허용 버전은 **job type별**로 다르다(`SUPPORTED_SCHEMA_VERSIONS`, `contracts.py`). `process_meeting`은 **v1과 v2**를, `enroll_speaker`/`index_meeting`/`extract_lenses`/`summarize_meeting`은 **v1**만 받는다. v2 `process_meeting`은 stage별 device(`models.devices.{diarization,stt}` = `cpu`|`gpu`)와 `preset`/`preset_revision` 참조 정보를 추가한다. worker는 v1 payload를 내부에서 v2로 변환하므로(`_v1_models_to_v2`: `device=mps→gpu`, `cpu→cpu`, `cuda→cpu`+경고) downstream은 항상 하나의 shape(ModelsV2)만 본다. API의 Zod 계약과 worker의 Pydantic 계약이 같은 fixture를 검증해 drift를 차단한다.
 
 ## 6. `process_meeting` 상세 흐름
 
@@ -245,7 +249,7 @@ flowchart TD
     meetingGuard -->|"Yes"| replace["Replace utterances and meeting clusters"]
     replace --> provisional["Create provisional speakers for unknown clusters"]
     provisional --> complete["Meeting done and job done"]
-    complete --> enqueueIndex["Enqueue index_meeting (+ extract_lenses when LLM configured)"]
+    complete --> enqueueIndex["Enqueue index_meeting (+ extract_lenses, summarize_meeting when their LLM is configured)"]
 ```
 
 ### 단계별 의미
@@ -257,7 +261,7 @@ flowchart TD
 5. **Speaker embedding/identification** — ECAPA가 각 구간을 192차원으로 바꾸고 label별 centroid를 만든다. 같은 model/dimension이면서 `speaker.enrollment_status='ready'`인 voiceprint만 cosine 비교한다.
 6. **STT** — payload의 Whisper 모델과 language로 word timestamp를 생성한다. VAD 발화 구간만 디코딩하며(`clip_timestamps`, 무음 환각 방지), VAD가 비면 STT 호출을 생략한다. 두 어댑터 모두 `condition_on_previous_text=False`, `hallucination_silence_threshold=2.0`을 고정한다. **MLX 어댑터는 clip마다 `mlx_whisper.transcribe`를 개별 호출한다** — 다수 clip을 한 번에 넘기면 mlx-whisper의 seek 루프가 일부 clip 출력을 드랍하기 때문(mtg_1 재현·격리 실험으로 확인, 2026-07-24). faster-whisper는 flat 리스트 한 번 호출. Apple Silicon은 MLX, 그 외 환경은 faster-whisper adapter를 선택할 수 있다. stage 로그에 `words/spans/clipped_ms/duration_ms`를 남긴다 — `clipped_ms/duration_ms` 비율이 비정상적으로 낮으면 VAD false negative 의심 신호. **두 가드는 세트로만 유효하다** — 한국어 실측(`worker/SMOKE.md` "STT 품질 측정")에서 `clip_timestamps` 없이 decode 파라미터만 걸면 CER이 3.98% → 7.68%로 악화됐고, clip을 되살려야 5.07%가 됐다. 같은 실측에서 `large-v3`는 `large-v3-turbo` 대비 이점이 없고 런 간 분산만 컸다(무가드에서 8.18%↔21.27%) — 전역 기본 프리셋을 `standard`로 두는 근거.
 7. **Align** — word midpoint가 속한 diarization segment에 word를 귀속하고 segment 단위 발언을 만든다. text가 없는 구간도 `silence` 또는 `transcribe_failed` row로 남긴다. 단, **1초 미만 무단어 세그먼트는 row를 만들지 않는다**(`MIN_WORDLESS_SEGMENT_MS=1000`, `align.py`) — 화자 겹침에서 나오는 sub-second diarization 파편이 노이즈 row로 쌓이는 것을 막는다(mtg_1 검증: non-ok row 19→2, 2026-07-24). 단어가 붙은 세그먼트는 길이와 무관하게 유지된다.
-8. **Persist** — ML 계산은 transaction 밖에서 수행하고, 최종 결과 교체만 짧은 transaction에서 원자적으로 처리한다. 같은 transaction에서 후속 `index_meeting` job을 enqueue하고, worker에 `lens_llm_model`이 설정돼 있으면 `lens_extraction_run`과 `extract_lenses` job도 함께 enqueue한다(설정이 없으면 렌즈 추출을 건너뛴다).
+8. **Persist** — ML 계산은 transaction 밖에서 수행하고, 최종 결과 교체만 짧은 transaction에서 원자적으로 처리한다. 같은 transaction에서 후속 `index_meeting` job을 enqueue하고, worker에 `lens_llm_model`이 설정돼 있으면 `lens_extraction_run`과 `extract_lenses` job을, `summary_llm_model`이 설정돼 있으면 `summarize_meeting` job을 함께 enqueue한다(각각 설정이 없으면 해당 후속 job을 건너뛴다). `index_meeting`·`extract_lenses`·`summarize_meeting` 세 후속 job은 서로 독립적으로 실행·재시도·실패한다 — 예를 들어 요약이 실패해도 렌즈 항목이나 색인은 영향받지 않고, 그 반대도 마찬가지다.
 
 ### 미확인 화자 자동 생성
 
@@ -405,6 +409,7 @@ WHERE job.id = :job_id
 - 검색 색인: `meeting.processing_version`이 payload와 일치해야 한다.
 - 화자 등록: `speaker.current_job_id`가 현재 job과 일치해야 한다.
 - 렌즈 추출: `lens_extraction_run`이 job에 연결돼 있고 run의 `processing_version`이 `meeting.processing_version`과 일치해야 한다.
+- 회의 요약: `meeting.processing_version`이 payload와 일치해야 한다(`mark_summary_running`/`persist_summary`). 불일치 시 다른 job type과 달리 job뿐 아니라 `meeting_summary` 행도 함께 `failed`로 닫는다 — 주인 잃은 `running` 행은 reaper의 `fail_summaries` CTE가 *reap된 job*에만 join하므로 구제되지 않고, API의 재생성 조회(`findActive`)는 `status IN ('queued','running')`을 "진행 중"으로 보기 때문에 열어 두면 재생성이 영구히 막힌다.
 
 guard 결과에 따른 의미는 다음과 같다.
 
@@ -414,6 +419,8 @@ guard 결과에 따른 의미는 다음과 같다.
 | job은 소유하지만 meeting version이 stale | `discarded` | meeting/result 무변경, job은 `done`과 discard reason 기록 |
 | 모든 guard 통과 | `committed` | entity 결과와 job 완료를 같은 transaction에서 반영 |
 | stage 경계에서 종료 시그널 감지 | `requeued_shutdown` | entity 무변경, job은 `queued`로 복귀하고 attempts를 1 되돌림 |
+
+`extract_lenses`와 `summarize_meeting`은 `discarded` 행에서 예외다 — 둘 다 job을 닫을 때 자신의 결과 행도 함께 갱신하지만 목표 상태는 다르다. `extract_lenses`는 `lens_extraction_run.status`를 `done`으로 갱신하고(`mark_lens_run_running` `db.py:670-679`, `persist_lens_extraction` `db.py:710-719`), `summarize_meeting`은 `meeting_summary.status`를 `failed`로 갱신한다(바로 위 "회의 요약" guard 설명 참고) — 재생성이 영구히 막히지 않으려면 `failed`로 명시해야 하기 때문이다. `process_meeting`·`index_meeting`은 표대로 entity를 건드리지 않는다.
 
 ## 12. 저장 데이터와 파일
 
@@ -428,6 +435,7 @@ guard 결과에 따른 의미는 다음과 같다.
 | `utterance_embedding` | 검색용 dense vector | BGE-M3 1024차원 vector와 version/job stamp |
 | `lens_extraction_run` | run 상태/버전/job 연결 | run running/done/failed, `job_id`, finished_at, error |
 | `lens_item` / `lens_evidence` | 병합 대상 기존 AI 항목 | action/decision/promise 항목과 발언 근거(primary/supporting) |
+| `meeting_summary` | 요약 대상 `ok` 발언 | 회의당 1행, topics/segments jsonb, status/job_id/error를 통째로 교체 |
 | `STORAGE_ROOT` | 원본 회의/화자 음원 | `meetings/<id>/normalized.wav`, `speakers/<id>/normalized.wav` |
 
 DB에는 상대 storage key만 저장한다. `Storage.resolve()`는 root 밖으로 나가는 absolute path와 `..` traversal을 거부한다.
@@ -443,6 +451,7 @@ DB에는 상대 storage key만 저장한다. `Storage.resolve()`는 root 밖으�
 | 음성 인식 | mlx-whisper 또는 faster-whisper | payload `devices.stt`가 선택: `gpu`→MLX(MPS), `cpu`→faster-whisper(int8). `gpu` 요청+MPS 없음은 영구 실패(폴백 없음) |
 | 텍스트 임베딩 | BAAI/bge-m3 | 1024차원, index worker와 embed service에서 사용 |
 | 렌즈 추출 LLM | 로컬 OpenAI-호환 (기본 `qwen3.5:4b-mlx`) | loopback endpoint(`127.0.0.1:11434/v1`), `extract_lenses`에서만 사용. 런타임 무관 — Ollama / `mlx_lm.server` 등 무엇이든 가능 |
+| 회의 요약 LLM | 로컬 OpenAI-호환 (기본 `qwen3.5:4b-mlx`) | 같은 loopback endpoint, `summarize_meeting`에서만 사용. `lens_llm_model`과는 별개의 설정 필드(`summary_llm_model`)다 |
 
 필수 환경은 Python 3.12, `uv`, Postgres 16과 pgvector/pg_bigm, 공유 storage, ffmpeg/ffprobe다. 실제 모델 실행에는 `uv sync --extra models`가 필요하다.
 

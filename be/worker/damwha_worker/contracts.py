@@ -12,6 +12,7 @@ SUPPORTED_SCHEMA_VERSIONS: dict[str, frozenset[int]] = {
     "enroll_speaker": frozenset({1}),
     "index_meeting": frozenset({1}),
     "extract_lenses": frozenset({1}),
+    "summarize_meeting": frozenset({1}),
 }
 
 MeetingId = Annotated[str, StringConstraints(pattern=r"^mtg_[1-9][0-9]*$")]
@@ -167,6 +168,37 @@ class LensExtractionResponse(BaseModel):
     items: list[LensCandidate]
 
 
+class SummarizeMeetingPayload(BaseModel):
+    """렌즈와 달리 extraction_run_id가 없다 — meeting_summary는 회의당 1행이라
+    meeting_id가 곧 키이고 별도 run 엔티티가 필요 없다."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1]
+    meeting_id: MeetingId
+    processing_version: int = Field(ge=0)
+    model: NonEmptyString
+
+
+class SummarySegmentCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start_utterance_id: UtteranceId
+    end_utterance_id: UtteranceId
+    title: NonEmptyText
+    bullets: list[NonEmptyText]
+
+
+class SummaryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # response_format은 로컬 런타임에서 권고사항이라 모델이 두 키 중 하나를 통째로
+    # 생략하기도 한다(LensCandidate와 같은 이유). 생략은 빈 결과와 의미가 같으므로
+    # 기본값을 둬 요약 전체를 실패시키지 않는다.
+    topics: list[NonEmptyText] = []
+    segments: list[SummarySegmentCandidate] = []
+
+
 def _parse_process_meeting(data: dict) -> ProcessMeetingPayload:
     if data.get("schema_version", 1) == 1:
         v1 = ProcessMeetingPayloadV1.model_validate(data)
@@ -202,4 +234,6 @@ def parse_payload(job_type: str, data: dict):
         return EnrollSpeakerPayload.model_validate(data)
     if job_type == "index_meeting":
         return IndexMeetingPayload.model_validate(data)
+    if job_type == "summarize_meeting":
+        return SummarizeMeetingPayload.model_validate(data)
     return ExtractLensesPayload.model_validate(data)

@@ -82,12 +82,22 @@ export const ExtractLensesPayloadSchema = z.object({
   model: z.string().min(1),
 }).strict();
 
+// 렌즈와 달리 extraction_run_id가 없다 — meeting_summary는 회의당 1행이라
+// meeting_id가 곧 키이고 별도 run 엔티티가 필요 없다.
+export const SummarizeMeetingPayloadSchema = z.object({
+  schema_version: z.literal(1),
+  meeting_id: z.string().regex(/^mtg_[1-9][0-9]*$/),
+  processing_version: z.number().int().nonnegative(),
+  model: z.string().min(1),
+}).strict();
+
 export type ProcessMeetingPayloadV1 = z.infer<typeof ProcessMeetingPayloadV1Schema>;
 export type ProcessMeetingPayloadV2 = z.infer<typeof ProcessMeetingPayloadV2Schema>;
 export type ProcessMeetingPayload = z.infer<typeof ProcessMeetingPayloadSchema>;
 export type EnrollSpeakerPayload = z.infer<typeof EnrollSpeakerPayloadSchema>;
 export type IndexMeetingPayload = z.infer<typeof IndexMeetingPayloadSchema>;
 export type ExtractLensesPayload = z.infer<typeof ExtractLensesPayloadSchema>;
+export type SummarizeMeetingPayload = z.infer<typeof SummarizeMeetingPayloadSchema>;
 
 export function buildProcessMeetingPayload(args: {
   meetingId: string; audioKey: string; processingVersion: number; reprocess: boolean;
@@ -146,6 +156,17 @@ export function buildExtractLensesPayload(args: {
     meeting_id: args.meetingId,
     processing_version: args.processingVersion,
     extraction_run_id: args.extractionRunId,
+    model: args.model,
+  };
+}
+
+export function buildSummarizeMeetingPayload(args: {
+  meetingId: string; processingVersion: number; model: string;
+}): SummarizeMeetingPayload {
+  return {
+    schema_version: 1,
+    meeting_id: args.meetingId,
+    processing_version: args.processingVersion,
     model: args.model,
   };
 }

@@ -13,6 +13,7 @@ from .pipeline.enroll_speaker import run_enroll_speaker
 from .pipeline.extract_lenses import run_extract_lenses
 from .pipeline.index_meeting import run_index_meeting
 from .pipeline.process_meeting import run_process_meeting
+from .pipeline.summarize_meeting import run_summarize_meeting
 from .reaper import run_reaper_loop
 from .storage import Storage
 
@@ -32,9 +33,11 @@ def handle_job(
     build_embedder=None,
     build_text_embedder=None,
     build_lens_client=None,
+    build_summary_client=None,
     search_embedding=None,
     default_speaker_prefix="Speaker",
     lens_llm_model=None,
+    summary_llm_model=None,
     shutdown_event=None,
 ) -> str:
     try:
@@ -56,6 +59,7 @@ def handle_job(
                 search_embedding_dim=sd,
                 default_speaker_prefix=default_speaker_prefix,
                 lens_llm_model=lens_llm_model,
+                summary_llm_model=summary_llm_model,
                 shutdown_event=shutdown_event,
             )
         if job["type"] == "enroll_speaker":
@@ -83,6 +87,16 @@ def handle_job(
             client = build_lens_client()
             return run_extract_lenses(
                 conn, job, payload, client, worker_id=worker_id, shutdown_event=shutdown_event
+            )
+        if job["type"] == "summarize_meeting":
+            summary_client = build_summary_client()
+            return run_summarize_meeting(
+                conn,
+                job,
+                payload,
+                summary_client,
+                worker_id=worker_id,
+                shutdown_event=shutdown_event,
             )
         raise ValueError(f"unknown job type {job['type']}")
     except ShutdownRequested:
@@ -121,6 +135,10 @@ def handle_job(
             return db.fail_lens_extraction(
                 conn, job["id"], worker_id, run_id, processing_version, error_json
             )
+        if job["type"] == "summarize_meeting":
+            if transient_retry:
+                return "requeued" if db.requeue(conn, job["id"], worker_id) else "lost"
+            return db.fail_summary(conn, job["id"], worker_id, error_json)
         # process_meeting
         meeting_id = job["meeting_id"]
         if transient_retry:
@@ -141,9 +159,11 @@ def run_once(
     build_embedder=None,
     build_text_embedder=None,
     build_lens_client=None,
+    build_summary_client=None,
     search_embedding=None,
     default_speaker_prefix="Speaker",
     lens_llm_model=None,
+    summary_llm_model=None,
     shutdown_event=None,
 ) -> str | None:
     job = db.claim(conn, worker_id)
@@ -158,9 +178,11 @@ def run_once(
         build_embedder=build_embedder,
         build_text_embedder=build_text_embedder,
         build_lens_client=build_lens_client,
+        build_summary_client=build_summary_client,
         search_embedding=search_embedding,
         default_speaker_prefix=default_speaker_prefix,
         lens_llm_model=lens_llm_model,
+        summary_llm_model=summary_llm_model,
         shutdown_event=shutdown_event,
     )
 
@@ -176,6 +198,7 @@ def dispatch_claimed_job(
     build_text_embedder_fn,
     heartbeat_cm,
     build_lens_client_fn=None,
+    build_summary_client_fn=None,
     shutdown_event=None,
 ) -> str:
     """claim된 job 1건: heartbeat 진입 → 콜백(지연 빌드)을 handle_job에 주입."""
@@ -191,9 +214,13 @@ def dispatch_claimed_job(
             build_lens_client=(
                 (lambda: build_lens_client_fn(settings)) if build_lens_client_fn else None
             ),
+            build_summary_client=(
+                (lambda: build_summary_client_fn(settings)) if build_summary_client_fn else None
+            ),
             search_embedding=(settings.search_embedding_model, settings.search_embedding_dim),
             default_speaker_prefix=settings.default_speaker_prefix,
             lens_llm_model=settings.lens_llm_model,
+            summary_llm_model=settings.summary_llm_model,
             shutdown_event=shutdown_event,
         )
 
@@ -208,6 +235,7 @@ def run_single_job(
     build_embedder_fn,
     build_text_embedder_fn,
     build_lens_client_fn=None,
+    build_summary_client_fn=None,
 ) -> int:
     """자식 진입점: job 1건 처리 후 exit code 반환.
 
@@ -237,6 +265,7 @@ def run_single_job(
             build_embedder_fn=build_embedder_fn,
             build_text_embedder_fn=build_text_embedder_fn,
             build_lens_client_fn=build_lens_client_fn,
+            build_summary_client_fn=build_summary_client_fn,
             heartbeat_cm=hb,
             shutdown_event=shutdown,
         )
@@ -379,6 +408,15 @@ def run_child(settings, shutdown: threading.Event) -> int:
             worker_settings.lens_llm_timeout_seconds,
         )
 
+    def _build_summary_client(worker_settings):
+        from .summary_client import SummaryClient
+
+        return SummaryClient(
+            worker_settings.lens_llm_base_url,
+            worker_settings.lens_llm_api_key,
+            worker_settings.lens_llm_timeout_seconds,
+        )
+
     return run_single_job(
         settings,
         storage,
@@ -388,6 +426,7 @@ def run_child(settings, shutdown: threading.Event) -> int:
         build_embedder_fn=_build_embedder,
         build_text_embedder_fn=_build_text_embedder,
         build_lens_client_fn=_build_lens_client,
+        build_summary_client_fn=_build_summary_client,
     )
 
 
