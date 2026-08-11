@@ -504,15 +504,17 @@ def test_summarize_maps_5xx_to_transient(monkeypatch):
     _mount(monkeypatch, lambda url, kw: _ok("{}", status=503))
     with pytest.raises(WorkerError) as exc:
         SummaryClient("http://x", None, 5.0).summarize(model="m", utterances=[])
-    assert exc.value.kind.value == "transient"
+    assert exc.value.kind is ErrorKind.TRANSIENT
 
 
 def test_summarize_maps_invalid_json_to_permanent(monkeypatch):
     _mount(monkeypatch, lambda url, kw: _ok("not json at all"))
     with pytest.raises(WorkerError) as exc:
         SummaryClient("http://x", None, 5.0).summarize(model="m", utterances=[])
-    assert exc.value.kind.value == "permanent"
+    assert exc.value.kind is ErrorKind.PERMANENT
 ```
+
+`ErrorKind`는 `from damwha_worker.errors import ErrorKind, WorkerError`로 가져온다. **enum 멤버로 비교하고 `.value` 문자열을 비교하지 않는다** — `ErrorKind`의 값은 `WorkerError.to_json()`(`errors.py:27`)을 통해 `job.error` jsonb에 저장되는 진단 데이터라, 테스트를 맞추려고 그 값을 바꾸면 저장된 데이터 형식이 업그레이드 경계에서 갈린다.
 
 - [ ] **Step 2: 실패를 확인한다**
 
