@@ -897,18 +897,22 @@ function SummaryState({
 
 ```tsx
 {tab === "summary" && settled && (
-  <button
-    type="button"
-    aria-label="요약 다시 만들기"
+  <IconButton
+    label="요약 다시 만들기"
+    size="sm"
+    className="ml-auto"
     onClick={onRegenerateSummary}
-    className="ml-auto cursor-pointer rounded-xs p-1 text-[color:var(--text-muted)] outline-none hover:bg-[var(--surface-hover)] hover:text-foreground focus-visible:[box-shadow:var(--focus-ring)]"
   >
     <Icon name="rotateCcw" size={14} />
-  </button>
+  </IconButton>
 )}
 ```
 
-`rotateCcw` 아이콘은 `TranscriptPane`의 재처리 버튼이 이미 쓰는 이름이다 — `icons.tsx`에 있다.
+**맨 `<button>`에 아이콘만 넣지 않는다** — `DESIGN.md` §8이 아이콘 전용 버튼은 `IconButton`(`@/shared/ui/icon-button`)을 쓰도록 명시한다. `label`이 필수 프롭이라 접근 가능한 이름이 빠질 수 없고, hover·focus-visible·`active:translate-y-[0.5px]` 눌림 상태가 컴포넌트에 이미 들어 있다. 같은 `rotateCcw` 아이콘을 쓰는 `TranscriptPane`의 재처리 버튼(`transcript-pane.tsx:416-422`)이 그 선례다.
+
+`rotateCcw` 아이콘 이름은 `icons.tsx`에 이미 있다.
+
+**텍스트 버튼에는 눌림 상태를 직접 붙인다.** `DESIGN.md` §7은 모든 상호작용 요소에 `active:translate-y-[0.5px]`를 요구한다. `IconButton`은 자체적으로 갖고 있지만, 위 `SummarySegments`의 두 버튼과 `SummaryState`의 재생성 텍스트 버튼처럼 직접 만든 요소에는 클래스에 넣어 준다.
 
 - [ ] **Step 4: 페이지를 배선한다**
 
