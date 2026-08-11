@@ -420,7 +420,7 @@ guard 결과에 따른 의미는 다음과 같다.
 | 모든 guard 통과 | `committed` | entity 결과와 job 완료를 같은 transaction에서 반영 |
 | stage 경계에서 종료 시그널 감지 | `requeued_shutdown` | entity 무변경, job은 `queued`로 복귀하고 attempts를 1 되돌림 |
 
-`summarize_meeting`은 `discarded` 행에서 예외다 — `meeting_summary.status`도 `failed`로 함께 갱신한다(바로 위 "회의 요약" guard 설명 참고). 나머지 job type은 표대로 entity를 건드리지 않는다.
+`extract_lenses`와 `summarize_meeting`은 `discarded` 행에서 예외다 — 둘 다 job을 닫을 때 자신의 결과 행도 함께 갱신하지만 목표 상태는 다르다. `extract_lenses`는 `lens_extraction_run.status`를 `done`으로 갱신하고(`mark_lens_run_running` `db.py:670-679`, `persist_lens_extraction` `db.py:710-719`), `summarize_meeting`은 `meeting_summary.status`를 `failed`로 갱신한다(바로 위 "회의 요약" guard 설명 참고) — 재생성이 영구히 막히지 않으려면 `failed`로 명시해야 하기 때문이다. `process_meeting`·`index_meeting`은 표대로 entity를 건드리지 않는다.
 
 ## 12. 저장 데이터와 파일
 
