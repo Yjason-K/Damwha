@@ -16,6 +16,7 @@ import { loadEnv } from '../config/env';
 import { nextId } from '../common/id';
 import { isIso8601 } from '../common/iso8601';
 import { LensExtractionService } from '../lenses/lens-extraction.service';
+import { SummaryService } from '../summary/summary.service';
 import * as fs from 'fs';
 
 const AUDIO_MIME = /^audio\//;
@@ -35,6 +36,7 @@ export class MeetingsService {
     private readonly meetings: MeetingsRepository,
     private readonly settings: SettingsService,
     private readonly lensExtraction: LensExtractionService,
+    private readonly summary: SummaryService,
     @Inject(CAPABILITIES) private readonly caps: Capabilities,
   ) {}
 
@@ -136,13 +138,15 @@ export class MeetingsService {
     if (!meeting) throw new NotFoundException('meeting not found');
     const utterances = await this.meetings.findUtterances(this.db.pool, id);
     const clusters = await this.meetings.findClusters(this.db.pool, id);
-    return { ...meeting, utterances, clusters };
+    const summary = await this.summary.get(id);
+    return { ...meeting, utterances, clusters, summary };
   }
 
   async getStatus(id: string) {
     const status = await this.meetings.findStatus(this.db.pool, id);
     if (!status) throw new NotFoundException('meeting not found');
-    return status;
+    const summary = await this.summary.get(id);
+    return { ...status, summary_status: summary?.status ?? null };
   }
 
   async extractLenses(id: string) {

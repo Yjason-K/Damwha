@@ -6,11 +6,15 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
 import { MeetingsService } from './meetings.service';
 import { uploadInterceptorOptions } from '../storage/upload-options';
+import { SummaryService } from '../summary/summary.service';
 
 @ApiTags('meetings')
 @Controller('meetings')
 export class MeetingsController {
-  constructor(private readonly service: MeetingsService) {}
+  constructor(
+    private readonly service: MeetingsService,
+    private readonly summary: SummaryService,
+  ) {}
 
   @Post()
   @ApiOperation({ summary: '회의 오디오 업로드 → 처리 작업 큐잉' })
@@ -57,6 +61,10 @@ export class MeetingsController {
   @ApiOperation({ summary: '회의 렌즈 수동 재추출' })
   @HttpCode(202)
   extract(@Param('id') id: string) { return this.service.extractLenses(id); }
+
+  @Post(':id/summary/generate')
+  @ApiOperation({ summary: '대화 요약 생성/재생성' })
+  generateSummary(@Param('id') id: string) { return this.summary.request(id); }
 
   @Patch(':id')
   @ApiOperation({ summary: '회의 정보 수정 (제목/녹음 시각)' })

@@ -27,6 +27,7 @@ const EnvSchema = z.object({
   SEARCH_RRF_K: z.coerce.number().default(60),
   SEARCH_CANDIDATE_K: z.coerce.number().default(100),
   LENS_LLM_MODEL: z.string().default('qwen3.5:4b-mlx'),
+  SUMMARY_LLM_MODEL: z.string().default('qwen3.5:4b-mlx'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
