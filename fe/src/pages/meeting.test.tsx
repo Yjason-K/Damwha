@@ -106,6 +106,7 @@ const fx = vi.hoisted(() => {
 
   const m1Detail: WireMeetingDetail = {
     ...m1,
+    summary: null,
     utterances: [
       utt({
         id: "u1",
@@ -192,6 +193,7 @@ const fx = vi.hoisted(() => {
 
   const m2Detail: WireMeetingDetail = {
     ...m2,
+    summary: null,
     utterances: [
       utt({
         id: "v1",
@@ -248,7 +250,12 @@ const fx = vi.hoisted(() => {
     ],
   };
 
-  const m3Detail: WireMeetingDetail = { ...m3, utterances: [], clusters: [] };
+  const m3Detail: WireMeetingDetail = {
+    ...m3,
+    summary: null,
+    utterances: [],
+    clusters: [],
+  };
 
   const detailOf = (id: string): WireMeetingDetail => {
     if (id === "m2") return m2Detail;
@@ -261,6 +268,7 @@ const fx = vi.hoisted(() => {
     stage: "stt",
     progress: 0.5,
     error: null,
+    summary_status: null,
   };
 
   const speakers: WireSpeaker[] = [

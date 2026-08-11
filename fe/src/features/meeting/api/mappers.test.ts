@@ -75,6 +75,7 @@ function makeUtt(overrides: Partial<WireUtterance> = {}): WireUtterance {
 function makeDetail(): WireMeetingDetail {
   return {
     ...makeMeeting(),
+    summary: null,
     utterances: [
       makeUtt({
         id: "utt_2",
@@ -745,6 +746,7 @@ describe("toMeetingDetail — 요약", () => {
       ...makeMeeting(),
       utterances: [],
       clusters: [],
+      summary: null,
     });
     expect(detail.topics).toEqual([]);
     expect(detail.segments).toEqual([]);
