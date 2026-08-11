@@ -1633,7 +1633,7 @@ export class SummaryModule {}
 
 컨트롤러 생성자에 `private readonly summary: SummaryService`를 추가한다.
 
-`src/meetings/meetings.service.ts` — 생성자에 `private readonly summary: SummaryService`를 추가하고, 상세 조회 메서드(발화·클러스터를 합쳐 돌려주는 곳)의 반환 객체에 `summary`를 얹는다.
+`src/meetings/meetings.service.ts` — 생성자에 `private readonly summary: SummaryService`를 추가하고, 상세 조회 메서드 `get(id)`(`:134-140`, 현재 `return { ...meeting, utterances, clusters }`)의 반환 객체에 `summary`를 얹는다.
 
 ```ts
     const summary = await this.summary.get(id);
@@ -1653,7 +1653,15 @@ export class SummaryModule {}
 
 `MeetingsModule`의 imports에 `SummaryModule`을 추가한다.
 
-`src/config/env.ts`의 스키마에 `SUMMARY_LLM_MODEL`을 추가한다(기본값은 `LENS_LLM_MODEL`과 같은 값). `.env.example`에도 같은 줄을 추가한다.
+`src/config/env.ts`의 스키마에 `SUMMARY_LLM_MODEL`을 추가한다 — `:29`의 `LENS_LLM_MODEL: z.string().default('qwen3.5:4b-mlx')` 바로 아래에 같은 형태로:
+
+```ts
+  SUMMARY_LLM_MODEL: z.string().default('qwen3.5:4b-mlx'),
+```
+
+`.env.example`에도 같은 줄을 추가한다.
+
+`src/meetings/meetings.module.ts`의 `imports` 배열은 현재 `[SettingsModule, SystemModule, LensesModule]`이다 — 여기에 `SummaryModule`을 같은 방식으로 추가한다.
 
 - [ ] **Step 5: 통과를 확인한다**
 
