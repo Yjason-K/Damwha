@@ -1,6 +1,9 @@
 import { env } from "@/shared/config/env";
+import type { LensWireItem } from "@/features/lens/model/types";
 import type {
   ClusterInfo,
+  LensEntry,
+  LensKind,
   Meeting,
   MeetingSummary,
   SpeakerLane,
@@ -246,15 +249,55 @@ export function toMeetingDetail(wire: WireMeetingDetail): Meeting {
     attendees,
     unverified,
     fav: wire.is_favorite,
-    summary: [],
     tracks,
     utterances: utteranceEntries,
-    topics: [],
-    lenses: {},
+    topics: wire.summary?.topics ?? [],
+    segments: (wire.summary?.segments ?? []).map((s) => ({
+      id: s.start_utterance_id,
+      startUtteranceId: s.start_utterance_id,
+      t: formatClock(s.start_ms),
+      title: s.title,
+      bullets: s.bullets,
+    })),
+    summaryStatus: wire.summary?.status ?? null,
     status: wire.status,
     audioUrl: meetingAudioUrl(wire.id),
     totalSeconds: duration == null ? 0 : Math.floor(duration / 1000),
     speakers,
     clusters,
   };
+}
+
+/**
+ * 회의별 렌즈 항목(GET /meetings/:id/lenses)을 인사이트 패널이 쓰는 형태로 바꾼다.
+ * 담당 화자는 서버가 speaker id로 주고 UI는 틴트 번호(spk)를 쓰므로 여기서 역인덱싱한다.
+ * 근거가 사라진 AI 항목은 전역 대시보드와 같은 규칙으로 "확인 필요"(hint)로 낮춘다.
+ */
+export function mapMeetingLenses(
+  items: LensWireItem[],
+  speakers: Record<number, SpeakerRef>,
+): Partial<Record<LensKind, LensEntry[]>> {
+  const spkBySpeakerId = new Map<string, number>();
+  for (const ref of Object.values(speakers)) {
+    if (ref.id) spkBySpeakerId.set(ref.id, ref.spk);
+  }
+
+  const grouped: Partial<Record<LensKind, LensEntry[]>> = {};
+  for (const item of items) {
+    const primary = item.evidence.find((e) => e.relation === "primary") ?? null;
+    const who = item.assignee_speaker_id
+      ? spkBySpeakerId.get(item.assignee_speaker_id)
+      : undefined;
+    const entry: LensEntry = {
+      id: item.id,
+      text: item.text,
+      source: item.source === "ai" && !primary ? "hint" : item.source,
+      who,
+      ev: primary?.utterance.id ?? "",
+      due: item.due_at ?? undefined,
+      done: item.completion_status === "done",
+    };
+    (grouped[item.kind] ??= []).push(entry);
+  }
+  return grouped;
 }

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { env } from "@/shared/config/env";
+import type { LensWireItem } from "@/features/lens/model/types";
 import {
   formatClock,
+  mapMeetingLenses,
   meetingAudioUrl,
   toMeetingDetail,
   toMeetingSummary,
@@ -75,6 +77,7 @@ function makeUtt(overrides: Partial<WireUtterance> = {}): WireUtterance {
 function makeDetail(): WireMeetingDetail {
   return {
     ...makeMeeting(),
+    summary: null,
     utterances: [
       makeUtt({
         id: "utt_2",
@@ -356,9 +359,7 @@ describe("toMeetingDetail", () => {
   it("파생 불가 필드는 빈 기본값, 파일/오디오/상태는 그대로 매핑한다", () => {
     expect(detail.aiCount).toBe(0);
     expect(detail.aiHeadline).toBe("");
-    expect(detail.summary).toEqual([]);
     expect(detail.topics).toEqual([]);
-    expect(detail.lenses).toEqual({});
     expect(detail.files).toEqual([{ name: "회의녹음.m4a", size: "" }]);
     expect(detail.audioUrl).toBe(`${env.apiBaseUrl}/meetings/mtg_1/audio`);
     expect(detail.totalSeconds).toBe(3_720);
@@ -738,5 +739,146 @@ describe("toMeetingDetail", () => {
     expect(d.utterances.map((u) => u.text)).toEqual(["가".repeat(500), "뒤"]);
     expect(d.utterances[0].sources).toEqual([{ id: "f1", startMs: 0 }]);
     expect(d.utterances[1].sources).toEqual([{ id: "f2", startMs: 60_000 }]);
+  });
+});
+
+describe("toMeetingDetail — 요약", () => {
+  it("summary가 없으면 빈 주제/단락과 null 상태로 매핑한다", () => {
+    const detail = toMeetingDetail({
+      ...makeMeeting(),
+      utterances: [],
+      clusters: [],
+      summary: null,
+    });
+    expect(detail.topics).toEqual([]);
+    expect(detail.segments).toEqual([]);
+    expect(detail.summaryStatus).toBeNull();
+  });
+
+  it("주제를 문자열 배열 그대로 옮긴다", () => {
+    const detail = toMeetingDetail({
+      ...makeMeeting(),
+      utterances: [],
+      clusters: [],
+      summary: {
+        status: "done",
+        topics: ["파이프라인 실행 순서"],
+        segments: [],
+      },
+    });
+    expect(detail.topics).toEqual(["파이프라인 실행 순서"]);
+    expect(detail.summaryStatus).toBe("done");
+  });
+
+  it("단락을 시각 표기와 함께 뷰 형태로 옮긴다", () => {
+    const detail = toMeetingDetail({
+      ...makeMeeting(),
+      utterances: [],
+      clusters: [],
+      summary: {
+        status: "done",
+        topics: [],
+        segments: [
+          {
+            start_utterance_id: "utt_1",
+            end_utterance_id: "utt_9",
+            start_ms: 67_000,
+            end_ms: 130_000,
+            title: "티켓 등록 수정",
+            bullets: ["공유를 해드릴 것임"],
+          },
+        ],
+      },
+    });
+    expect(detail.segments).toEqual([
+      {
+        id: "utt_1",
+        startUtteranceId: "utt_1",
+        t: "01:07",
+        title: "티켓 등록 수정",
+        bullets: ["공유를 해드릴 것임"],
+      },
+    ]);
+  });
+});
+
+describe("mapMeetingLenses", () => {
+  const SPEAKERS = {
+    1: { id: "spk_1", name: "김영재", role: "", spk: 1 },
+    2: { id: "spk_2", name: "박민수", role: "", spk: 2 },
+  };
+
+  function wireItem(over: Partial<LensWireItem> = {}): LensWireItem {
+    return {
+      id: "lns_1",
+      meeting_id: "mtg_1",
+      kind: "action",
+      text: "실행 로그 작성",
+      source: "ai",
+      assignee_speaker_id: null,
+      due_at: null,
+      evidence: [
+        {
+          relation: "primary",
+          utterance: { id: "utt_1", start_ms: 0, text: "", speaker_name: null },
+        },
+      ],
+      ...over,
+    } as LensWireItem;
+  }
+
+  it("kind별로 묶는다", () => {
+    const result = mapMeetingLenses(
+      [
+        wireItem(),
+        wireItem({ id: "lns_2", kind: "decision", text: "v2로 한정" }),
+      ],
+      SPEAKERS,
+    );
+    expect(result.action?.map((i) => i.text)).toEqual(["실행 로그 작성"]);
+    expect(result.decision?.map((i) => i.text)).toEqual(["v2로 한정"]);
+  });
+
+  it("담당 화자 id를 화자 틴트 번호로 바꾼다", () => {
+    const result = mapMeetingLenses(
+      [wireItem({ assignee_speaker_id: "spk_2" })],
+      SPEAKERS,
+    );
+    expect(result.action?.[0].who).toBe(2);
+  });
+
+  it("모르는 담당 화자는 who를 비운다", () => {
+    const result = mapMeetingLenses(
+      [wireItem({ assignee_speaker_id: "spk_99" })],
+      SPEAKERS,
+    );
+    expect(result.action?.[0].who).toBeUndefined();
+  });
+
+  it("primary 근거의 발화 id를 ev에 담는다", () => {
+    const result = mapMeetingLenses([wireItem()], SPEAKERS);
+    expect(result.action?.[0].ev).toBe("utt_1");
+  });
+
+  it("근거가 사라진 AI 항목은 source를 hint로 낮춘다", () => {
+    const result = mapMeetingLenses([wireItem({ evidence: [] })], SPEAKERS);
+    expect(result.action?.[0].source).toBe("hint");
+    expect(result.action?.[0].ev).toBe("");
+  });
+
+  it("completion_status가 done이면 done을 true로 이어받는다", () => {
+    const result = mapMeetingLenses(
+      [wireItem({ completion_status: "done" })],
+      SPEAKERS,
+    );
+    expect(result.action?.[0].done).toBe(true);
+  });
+
+  it("completion_status가 open이면 done을 false로 이어받는다", () => {
+    const result = mapMeetingLenses(
+      [wireItem({ completion_status: "open" })],
+      SPEAKERS,
+    );
+    expect(result.action?.[0].done).toBe(false);
   });
 });

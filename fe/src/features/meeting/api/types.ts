@@ -71,10 +71,29 @@ export type WireCluster = {
   speaker_status: SpeakerStatus | null;
 };
 
+export type SummaryStatus = "queued" | "running" | "done" | "failed";
+
+/** GET /meetings/:id 응답의 요약 — 현재 processing_version이 아니면 서버가 null을 준다. */
+export type WireSummarySegment = {
+  start_utterance_id: string;
+  end_utterance_id: string;
+  start_ms: number;
+  end_ms: number;
+  title: string;
+  bullets: string[];
+};
+
+export type WireSummary = {
+  status: SummaryStatus;
+  topics: string[];
+  segments: WireSummarySegment[];
+};
+
 /** GET /meetings/:id — meeting row + utterances + clusters. */
 export type WireMeetingDetail = WireMeeting & {
   utterances: WireUtterance[];
   clusters: WireCluster[];
+  summary: WireSummary | null;
 };
 
 /** speaker row (SELECT * FROM speaker). enroll, list, get, rename 응답. */
@@ -93,6 +112,7 @@ export type MeetingStatusResponse = {
   stage: string | null;
   progress: number | null;
   error: JsonError | null;
+  summary_status: SummaryStatus | null;
 };
 
 /** POST /meetings/:id/clusters/:clusterId/resolve 요청 — 정확히 하나만. */

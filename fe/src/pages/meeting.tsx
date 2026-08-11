@@ -9,13 +9,17 @@ import {
 import { Tag } from "@/shared/ui/tag";
 import { useToast } from "@/shared/ui/use-toast";
 
+import { useSetLensCompletion } from "@/features/lens/api/lenses";
 import { LensDashboard } from "@/features/lens/ui/lens-dashboard";
 import type { LensKind } from "@/features/lens/model/types";
-import { formatClock } from "@/features/meeting/api/mappers";
+import { useMeetingLenses } from "@/features/meeting/api/lenses";
+import { formatClock, mapMeetingLenses } from "@/features/meeting/api/mappers";
 import {
+  useGenerateSummary,
   useMeeting,
   useMeetingStatus,
   useMeetings,
+  useSyncSummaryStatus,
 } from "@/features/meeting/api/meetings";
 import { useSearch } from "@/features/meeting/api/search";
 import type { MeetingStatusResponse } from "@/features/meeting/api/types";
@@ -169,7 +173,6 @@ export function MeetingPage() {
   const [playing, setPlaying] = React.useState(false);
   const [pos, setPos] = React.useState(0);
   const [speed, setSpeed] = React.useState(1);
-  const [done, setDone] = React.useState<Record<string, boolean>>({});
   const [aiAck, setAiAck] = React.useState<Record<string, boolean>>({});
   const [cmdOpen, setCmdOpen] = React.useState(false);
   const [cmdQuery, setCmdQuery] = React.useState("");
@@ -195,10 +198,31 @@ export function MeetingPage() {
     refetch: refetchMeeting,
   } = useMeeting(currentId);
 
+  const { data: lensItems = [] } = useMeetingLenses(currentId);
+  const setLensCompletion = useSetLensCompletion();
+  const generateSummary = useGenerateSummary();
+  const meetingLenses = React.useMemo(
+    () => (meeting ? mapMeetingLenses(lensItems, meeting.speakers) : {}),
+    [lensItems, meeting],
+  );
+
+  const summaryPending =
+    meeting?.summaryStatus === "queued" ||
+    meeting?.summaryStatus === "running" ||
+    generateSummary.isPending;
+
   const statusEnabled =
     !!meeting &&
-    (meeting.status === "uploaded" || meeting.status === "processing");
+    (meeting.status === "uploaded" ||
+      meeting.status === "processing" ||
+      summaryPending);
   const { data: procStatus } = useMeetingStatus(currentId, statusEnabled);
+
+  useSyncSummaryStatus(
+    currentId,
+    meeting?.summaryStatus,
+    procStatus?.summary_status,
+  );
 
   const { data: hits = [] } = useSearch(cmdQuery);
 
@@ -274,9 +298,7 @@ export function MeetingPage() {
 
   const openLens = (k: MeetingLensKind) => {
     setView("lens");
-    // 전역 대시보드는 3종(action/decision/promise)만 다룬다 — "topic"은 회의
-    // 상세(InsightPane) 전용이라 여기선 호출되지 않는다.
-    if (k !== "topic") setLens(k);
+    setLens(k);
   };
 
   // 전역 렌즈 대시보드에서의 근거 점프 — 오디오 seek는 하지 않고 뷰 전환 +
@@ -307,8 +329,6 @@ export function MeetingPage() {
       setActiveId("");
     }
   }, [activeId, meeting, meetingFetching, toast]);
-
-  const toggleDone = (id: string) => setDone((d) => ({ ...d, [id]: !d[id] }));
 
   const handleDeleted = (deletedId: string) => {
     // 여전히 stale일 수 있는 목록에서 삭제된 id를 명시적으로 제외해 다음 선택을
@@ -450,11 +470,16 @@ export function MeetingPage() {
         />
         <InsightPane
           meeting={meeting}
+          lenses={meetingLenses}
           tab={tab}
           onTab={setTab}
-          done={done}
-          onToggle={toggleDone}
+          onToggle={(id, doneVal) =>
+            setLensCompletion.mutate({ id, done: doneVal })
+          }
           onOpenLens={openLens}
+          onJumpSegment={(uid) => jumpToEvidence(meeting.id, uid)}
+          onRegenerateSummary={() => generateSummary.mutate({ id: meeting.id })}
+          regenerating={generateSummary.isPending}
         />
       </>
     );

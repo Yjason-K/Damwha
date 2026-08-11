@@ -92,7 +92,13 @@ export function useSetLensCompletion() {
         title: "완료 상태를 바꾸지 못했어요.",
       });
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: ["lenses"] }),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["lenses"] });
+      // 완료 상태는 회의별 인사이트 패널(할 일 블록)에도 반영돼야 한다 — 그
+      // 캐시(["meeting-lenses", id])를 여기서 무효화하지 않으면 대시보드에서
+      // 완료 처리해도 패널은 계속 열림 상태로 보인다.
+      qc.invalidateQueries({ queryKey: ["meeting-lenses"] });
+    },
   });
 }
 

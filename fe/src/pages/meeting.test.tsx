@@ -101,11 +101,22 @@ const fx = vi.hoisted(() => {
     title: "불러오기 실패 회의",
     status: "done",
   });
+  // 요약(summary)이 done으로 채워진 회의 — useMeetingLenses → mapMeetingLenses
+  // → InsightPane으로 이어지는 전체 배선을 settled === true 경로에서 검증하기
+  // 위한 것. 다른 픽스처는 전부 summary: null이라 이 경로가 비어 있었다.
+  const m4 = meeting({
+    id: "m4",
+    title: "요약이 준비된 회의",
+    recorded_at: "2026-06-25T09:00:00.000Z",
+    duration_ms: 60_000,
+    status: "done",
+  });
 
-  const meetingsList: WireMeeting[] = [m1, m2, m3, mErr];
+  const meetingsList: WireMeeting[] = [m1, m2, m3, mErr, m4];
 
   const m1Detail: WireMeetingDetail = {
     ...m1,
+    summary: null,
     utterances: [
       utt({
         id: "u1",
@@ -192,6 +203,7 @@ const fx = vi.hoisted(() => {
 
   const m2Detail: WireMeetingDetail = {
     ...m2,
+    summary: null,
     utterances: [
       utt({
         id: "v1",
@@ -248,11 +260,58 @@ const fx = vi.hoisted(() => {
     ],
   };
 
-  const m3Detail: WireMeetingDetail = { ...m3, utterances: [], clusters: [] };
+  const m3Detail: WireMeetingDetail = {
+    ...m3,
+    summary: null,
+    utterances: [],
+    clusters: [],
+  };
+
+  const m4Detail: WireMeetingDetail = {
+    ...m4,
+    summary: {
+      status: "done",
+      topics: ["로드맵 정리", "예산 검토"],
+      segments: [
+        {
+          start_utterance_id: "w1",
+          end_utterance_id: "w1",
+          start_ms: 0,
+          end_ms: 5_000,
+          title: "회의 도입부",
+          bullets: ["3분기 우선순위 확정"],
+        },
+      ],
+    },
+    utterances: [
+      utt({
+        id: "w1",
+        meeting_id: "m4",
+        speaker_id: "sp_1",
+        speaker_name: "김영재",
+        speaker_status: "ready",
+        diar_label: "SPEAKER_00",
+        start_ms: 0,
+        end_ms: 5_000,
+        order_index: 0,
+        text: "로드맵부터 정리하죠.",
+      }),
+    ],
+    clusters: [
+      {
+        id: "clu_4",
+        diar_label: "SPEAKER_00",
+        resolved_speaker_id: "sp_1",
+        speaker_name: "김영재",
+        speaker_status: "ready",
+      },
+    ],
+  };
 
   const detailOf = (id: string): WireMeetingDetail => {
     if (id === "m2") return m2Detail;
     if (id === "m3") return m3Detail;
+    if (id === "m4") return m4Detail;
     return m1Detail;
   };
 
@@ -261,6 +320,7 @@ const fx = vi.hoisted(() => {
     stage: "stt",
     progress: 0.5,
     error: null,
+    summary_status: null,
   };
 
   const speakers: WireSpeaker[] = [
@@ -372,11 +432,58 @@ const fx = vi.hoisted(() => {
   });
   const lensActionItems = [lensJumpItem, lensGhostItem];
 
+  // 회의별 렌즈(GET /meetings/:id/lenses) 픽스처 — m4에만 채워, settled 요약과
+  // 함께 Todos/Decisions 블록이 실제 데이터로 채워지는지 검증한다.
+  const m4ActionItem = lensItem({
+    id: "lens_m4_action",
+    kind: "action",
+    meeting_id: "m4",
+    meeting: { id: "m4", title: "요약이 준비된 회의" },
+    text: "예산안 다시 검토하기",
+    completion_status: "open",
+    evidence: [
+      {
+        relation: "primary",
+        utterance: {
+          id: "w1",
+          start_ms: 0,
+          text: "로드맵부터 정리하죠.",
+          speaker_id: "sp_1",
+        },
+      },
+    ],
+  });
+  const m4DecisionItem = lensItem({
+    id: "lens_m4_decision",
+    kind: "decision",
+    meeting_id: "m4",
+    meeting: { id: "m4", title: "요약이 준비된 회의" },
+    text: "3분기까지 v2로 한정",
+    completion_status: "done",
+    evidence: [
+      {
+        relation: "primary",
+        utterance: {
+          id: "w1",
+          start_ms: 0,
+          text: "로드맵부터 정리하죠.",
+          speaker_id: "sp_1",
+        },
+      },
+    ],
+  });
+  const meetingLensesOf = (id: string): LensWireItem[] =>
+    id === "m4" ? [m4ActionItem, m4DecisionItem] : [];
+
   function getResponse(url: string) {
     if (url === "/meetings") return Promise.resolve({ data: meetingsList });
     if (url === "/speakers") return Promise.resolve({ data: speakers });
     if (url === "/lenses/extraction-status")
       return Promise.resolve({ data: { running: 0, failed: [] } });
+    const ml = url.match(/^\/meetings\/([^/]+)\/lenses$/);
+    if (ml) {
+      return Promise.resolve({ data: { items: meetingLensesOf(ml[1]) } });
+    }
     if (url.startsWith("/lenses?")) {
       const qs = new URLSearchParams(url.slice("/lenses?".length));
       const items = qs.get("kind") === "action" ? lensActionItems : [];
@@ -411,6 +518,9 @@ const fx = vi.hoisted(() => {
           merged_speaker_deleted: false,
         },
       });
+    }
+    if (/^\/lenses\/[^/]+\/(complete|reopen)$/.test(url)) {
+      return Promise.resolve({ data: {} });
     }
     return Promise.reject(new Error(`unhandled POST ${url}`));
   }
@@ -740,5 +850,40 @@ test("다른 회의의 병합 블록 중간 발화로 검색 점프하면 해당
   const log = screen.getByRole("log", { name: "회의 전사" });
   expect(log.querySelector('[data-uid="v2"]')).toHaveClass(
     "bg-[var(--accent-1)]",
+  );
+});
+
+test("summary가 done인 회의는 요약 탭이 실제 데이터로 채워지고, 체크박스는 완료 상태를 서버에 반영한다", async () => {
+  renderShell();
+  await screen.findByRole("heading", {
+    level: 1,
+    name: "기획회의 — UI 개선안",
+  });
+  fireEvent.click(screen.getByRole("button", { name: /요약이 준비된 회의/ }));
+  await screen.findByRole("heading", {
+    level: 1,
+    name: "요약이 준비된 회의",
+  });
+
+  // 주요 주제 — WireSummary → toMeetingDetail → settled 경로.
+  expect(await screen.findByText("로드맵 정리")).toBeInTheDocument();
+  expect(screen.getByText("예산 검토")).toBeInTheDocument();
+
+  // 단락별 요약.
+  expect(screen.getByText("회의 도입부")).toBeInTheDocument();
+
+  // 회의별 렌즈(GET /meetings/:id/lenses) → mapMeetingLenses → Todos/Decisions.
+  const actionCheckbox = (await screen.findByRole("checkbox", {
+    name: "완료: 예산안 다시 검토하기",
+  })) as HTMLInputElement;
+  expect(actionCheckbox.checked).toBe(false);
+  expect(screen.getByText("3분기까지 v2로 한정")).toBeInTheDocument();
+
+  // 체크박스를 누르면 로컬 상태만 바뀌는 게 아니라 실제 완료 API를 호출한다.
+  fireEvent.click(actionCheckbox);
+  await waitFor(() =>
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/lenses/lens_m4_action/complete",
+    ),
   );
 });

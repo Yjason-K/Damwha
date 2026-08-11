@@ -14,7 +14,6 @@ export type { SpeakerLane } from "./types";
 
 export const LENS_META: Record<LensKind, { label: string; icon: IconName }> = {
   action: { label: "액션아이템", icon: "listChecks" },
-  topic: { label: "주제·키워드", icon: "hash" },
   decision: { label: "결정사항", icon: "scale" },
   promise: { label: "약속·책임", icon: "handshake" },
 };
