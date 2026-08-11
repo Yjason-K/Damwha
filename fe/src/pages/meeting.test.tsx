@@ -7,9 +7,10 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter } from "react-router";
+import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, expect, test, vi } from "vitest";
 
+import { routes } from "@/app/router";
 import { apiClient } from "@/shared/api/client";
 import { Toaster } from "@/shared/ui/toaster";
 import { toMeetingDetail } from "@/features/meeting/api/mappers";
@@ -544,27 +545,26 @@ vi.mock("@/shared/api/client", async () => {
   };
 });
 
-// mock을 등록한 뒤 import해야 페이지가 목킹된 apiClient를 소비한다.
-const { MeetingPage } = await import("@/pages/meeting");
-
 // vitest는 globals 없이 돌므로 RTL 자동 cleanup이 걸리지 않는다 — 명시 등록.
 afterEach(cleanup);
 
-function renderShell() {
+// 실제 라우트 트리(routes)를 메모리 라우터로 돌려 셸+뷰 조합을 그대로 검증한다.
+// 반환값에 router를 얹어, 테스트가 현재 URL(location.search 등)을 단언할 수 있게 한다.
+function renderShell(initialEntry = "/meetings/m1") {
   const client = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false },
     },
   });
-  return render(
+  const router = createMemoryRouter(routes, { initialEntries: [initialEntry] });
+  const utils = render(
     <QueryClientProvider client={client}>
-      <MemoryRouter>
-        <MeetingPage />
-        <Toaster />
-      </MemoryRouter>
+      <RouterProvider router={router} />
+      <Toaster />
     </QueryClientProvider>,
   );
+  return { ...utils, router };
 }
 
 test("회의 셸은 전사·인사이트·플레이어를 렌더한다", async () => {
@@ -621,10 +621,15 @@ test("사이드바에서 다른 회의로 이동할 수 있다", async () => {
     level: 1,
     name: "기획회의 — UI 개선안",
   });
-  fireEvent.click(screen.getByRole("button", { name: /스프린트 회고/ }));
+  fireEvent.click(screen.getByRole("link", { name: /스프린트 회고/ }));
   expect(
     await screen.findByRole("heading", { level: 1, name: "스프린트 회고" }),
   ).toBeInTheDocument();
+  // 레일의 활성 표시는 URL(:meetingId)에서 나온다.
+  expect(screen.getByRole("link", { name: /스프린트 회고/ })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
 });
 
 test("회의를 전환해도 플레이바는 하나만 남는다", async () => {
@@ -636,7 +641,7 @@ test("회의를 전환해도 플레이바는 하나만 남는다", async () => {
   // 트랜스포트 재생 버튼(정확히 "재생")은 플레이바당 1개다.
   expect(screen.getAllByRole("button", { name: "재생" })).toHaveLength(1);
 
-  fireEvent.click(screen.getByRole("button", { name: /스프린트 회고/ }));
+  fireEvent.click(screen.getByRole("link", { name: /스프린트 회고/ }));
   await screen.findByRole("heading", { level: 1, name: "스프린트 회고" });
 
   // 이전 회의의 플레이바가 남아 쌓이면 안 된다.
@@ -649,7 +654,7 @@ test("모든 회의(전역 렌즈)로 전환하면 렌즈 대시보드와 탭이
     level: 1,
     name: "기획회의 — UI 개선안",
   });
-  fireEvent.click(screen.getByRole("button", { name: "모든 회의" }));
+  fireEvent.click(screen.getByRole("link", { name: "모든 회의" }));
   expect(
     await screen.findByRole("heading", { level: 1, name: "내 액션아이템" }),
   ).toBeInTheDocument();
@@ -666,13 +671,13 @@ test("모든 회의(전역 렌즈)로 전환하면 렌즈 대시보드와 탭이
   ).toBeInTheDocument();
 });
 
-test("전역 렌즈 대시보드에서 근거 점프하면 회의뷰로 전환되고 발언이 하이라이트되지만 오디오는 seek되지 않는다", async () => {
+test("전역 렌즈 대시보드에서 근거 점프하면 회의뷰로 전환되고 발언 하이라이트와 seek이 함께 일어난다", async () => {
   const { container } = renderShell();
   await screen.findByRole("heading", {
     level: 1,
     name: "기획회의 — UI 개선안",
   });
-  fireEvent.click(screen.getByRole("button", { name: "모든 회의" }));
+  fireEvent.click(screen.getByRole("link", { name: "모든 회의" }));
   await screen.findByRole("heading", { level: 1, name: "내 액션아이템" });
 
   const jumpCard = (
@@ -689,20 +694,19 @@ test("전역 렌즈 대시보드에서 근거 점프하면 회의뷰로 전환�
     "bg-[var(--accent-1)]",
   );
 
-  // jumpTo(검색 점프)와 달리 근거 점프는 pendingSeek을 걸지 않으므로, 오디오
-  // 메타데이터가 로드돼도 currentTime이 그대로다(0에서 변화 없음).
+  // ?u=는 하이라이트와 seek을 함께 뜻한다 — v3.start_ms = 12_000 → 12초.
   const audio = container.querySelector("audio")!;
   fireEvent.loadedMetadata(audio);
-  expect(audio.currentTime).toBe(0);
+  expect(audio.currentTime).toBeCloseTo(12, 3);
 });
 
 test("근거 점프 대상 발언이 재처리로 사라졌으면 토스트를 띄우고 activeId를 비운다", async () => {
-  renderShell();
+  const { router } = renderShell();
   await screen.findByRole("heading", {
     level: 1,
     name: "기획회의 — UI 개선안",
   });
-  fireEvent.click(screen.getByRole("button", { name: "모든 회의" }));
+  fireEvent.click(screen.getByRole("link", { name: "모든 회의" }));
   await screen.findByRole("heading", { level: 1, name: "내 액션아이템" });
 
   const ghostCard = (
@@ -716,6 +720,41 @@ test("근거 점프 대상 발언이 재처리로 사라졌으면 토스트를 �
     await screen.findByText(
       "재처리로 근거 발언을 현재 버전에서 찾을 수 없어요.",
     ),
+  ).toBeInTheDocument();
+
+  // u는 히스토리에 남지 않아야 한다 — 남으면 뒤로가기로 되살아나 토스트가 반복된다.
+  await waitFor(() => expect(router.state.location.search).toBe(""));
+});
+
+test("이미 열린 회의에서 ?u=만 바뀌어도 재생 위치가 옮겨진다", async () => {
+  const { container } = renderShell("/meetings/m2");
+  await screen.findByRole("heading", { level: 1, name: "스프린트 회고" });
+
+  // 메타데이터를 먼저 준비시킨다 — 이 시점엔 아직 u가 없다.
+  const audio = container.querySelector("audio")!;
+  fireEvent.loadedMetadata(audio);
+  expect(audio.currentTime).toBe(0);
+
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+  const option = await screen.findByRole("option", {
+    name: /다음 스프린트도 이어가죠/,
+  });
+  fireEvent.click(option);
+
+  // 같은 회의라 오디오는 재로드되지 않는다. loadedMetadata를 다시 쏘지 않아도
+  // seek되어야 한다 — v3.start_ms = 12_000 → 12초.
+  await waitFor(() => expect(audio.currentTime).toBeCloseTo(12, 3));
+});
+
+test("없는 회의 id로 진입하면 상세 오류 상태를 렌더하고 레일은 살아 있다", async () => {
+  renderShell("/meetings/m_err");
+  expect(
+    await screen.findByText(
+      "회의를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
+    ),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("navigation", { name: "주 탐색" }),
   ).toBeInTheDocument();
 });
 
@@ -747,7 +786,7 @@ test("상세 조회에 실패하면 무한 스피너 대신 에러 상태와 재
     level: 1,
     name: "기획회의 — UI 개선안",
   });
-  fireEvent.click(screen.getByRole("button", { name: /불러오기 실패 회의/ }));
+  fireEvent.click(screen.getByRole("link", { name: /불러오기 실패 회의/ }));
   expect(
     await screen.findByText(/회의를 불러오지 못했어요/),
   ).toBeInTheDocument();
@@ -818,7 +857,7 @@ test("연속된 같은 화자 발화는 한 블록으로 병합 렌더된다", a
     level: 1,
     name: "기획회의 — UI 개선안",
   });
-  fireEvent.click(screen.getByRole("button", { name: /스프린트 회고/ }));
+  fireEvent.click(screen.getByRole("link", { name: /스프린트 회고/ }));
   await screen.findByRole("heading", { level: 1, name: "스프린트 회고" });
   const log = screen.getByRole("log", { name: "회의 전사" });
   // v2+v3가 한 블록(id는 첫 발화 v2)으로 병합, v3 행은 따로 없다.
@@ -841,7 +880,7 @@ test("다른 회의의 병합 블록 중간 발화로 검색 점프하면 해당
   });
   fireEvent.click(option);
   await screen.findByRole("heading", { level: 1, name: "스프린트 회고" });
-  // cross-meeting pendingSeek: 오디오 메타데이터 로드 시점에 적용된다.
+  // 다른 회의로의 점프: 새 오디오가 준비된(loadedMetadata) 뒤 seek이 적용된다.
   const audio = container.querySelector("audio")!;
   fireEvent.loadedMetadata(audio);
   // v3.start_ms = 12_000 → 12초 지점 (jsdom은 duration NaN → totalSeconds 사용).
@@ -859,7 +898,7 @@ test("summary가 done인 회의는 요약 탭이 실제 데이터로 채워지�
     level: 1,
     name: "기획회의 — UI 개선안",
   });
-  fireEvent.click(screen.getByRole("button", { name: /요약이 준비된 회의/ }));
+  fireEvent.click(screen.getByRole("link", { name: /요약이 준비된 회의/ }));
   await screen.findByRole("heading", {
     level: 1,
     name: "요약이 준비된 회의",
