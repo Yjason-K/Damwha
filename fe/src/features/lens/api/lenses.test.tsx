@@ -112,3 +112,23 @@ test("useSetLensCompletion이 실패하면 캐시를 롤백하고 토스트를 �
     expect.objectContaining({ variant: "error" }),
   );
 });
+
+test("useSetLensCompletion이 성공하면 회의별 렌즈 캐시도 무효화한다 — 대시보드에서 완료해도 회의 패널이 갱신되도록", async () => {
+  vi.spyOn(apiClient, "post").mockResolvedValue({ data: {} } as never);
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const invalidate = vi.spyOn(qc, "invalidateQueries");
+  const w = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+  );
+
+  const { result } = renderHook(() => useSetLensCompletion(), { wrapper: w });
+
+  act(() => {
+    result.current.mutate({ id: "lens_1", done: true });
+  });
+
+  await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+  expect(invalidate).toHaveBeenCalledWith({ queryKey: ["lenses"] });
+  expect(invalidate).toHaveBeenCalledWith({ queryKey: ["meeting-lenses"] });
+});

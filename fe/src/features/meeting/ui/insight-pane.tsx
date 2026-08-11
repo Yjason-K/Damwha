@@ -156,19 +156,17 @@ function Decisions({
 function Todos({
   lenses,
   meeting,
-  done,
   onToggle,
 }: {
   lenses: Partial<Record<LensKind, LensEntry[]>>;
   meeting: Meeting;
-  done: Record<string, boolean>;
-  onToggle: (id: string) => void;
+  onToggle: (id: string, done: boolean) => void;
 }) {
   const items = lenses.action ?? [];
   if (items.length === 0) return null;
   return (
     <Section>
-      <SecHead title="할 일" count={items.length} />
+      <SecHead title="다음 할 일" count={items.length} />
       <div className="flex flex-col gap-[11px]">
         {items.map((it) => {
           const w = it.who ? meeting.speakers[it.who] : null;
@@ -178,14 +176,14 @@ function Todos({
               <span className="mt-px">
                 <Checkbox
                   aria-label={`완료: ${it.text}`}
-                  checked={!!done[it.id]}
-                  onChange={() => onToggle(it.id)}
+                  checked={it.done}
+                  onChange={() => onToggle(it.id, !it.done)}
                 />
               </span>
               <span
                 className={cn(
                   "min-w-0 flex-1 text-sm leading-snug text-pretty",
-                  done[it.id]
+                  it.done
                     ? "text-[color:var(--text-muted)] line-through"
                     : "text-foreground",
                 )}
@@ -234,9 +232,9 @@ function TopicList({ topics }: { topics: string[] }) {
         </p>
       ) : (
         <ul className="flex flex-col gap-[9px]">
-          {topics.map((t) => (
+          {topics.map((t, i) => (
             <li
-              key={t}
+              key={i}
               className="flex gap-[9px] text-sm leading-normal text-[color:var(--text-secondary)]"
             >
               <span
@@ -312,10 +310,12 @@ function SummarySegments({
 }
 
 function SummaryState({
+  meetingStatus,
   status,
   onRegenerate,
   regenerating,
 }: {
+  meetingStatus: Meeting["status"];
   status: Meeting["summaryStatus"];
   onRegenerate: () => void;
   regenerating: boolean;
@@ -328,6 +328,17 @@ function SummaryState({
             요약을 만들고 있어요
           </p>
         </div>
+      </Section>
+    );
+  }
+  // 회의 처리가 끝나지 않은 동안은 요약 생성 요청이 서버에서 항상 거부된다
+  // (409). 만들기/다시 만들기 버튼 대신 안내만 보여준다.
+  if (meetingStatus !== "done") {
+    return (
+      <Section>
+        <p className="text-sm text-[color:var(--text-faint)]">
+          대화 처리가 끝나야 요약을 만들 수 있어요.
+        </p>
       </Section>
     );
   }
@@ -434,8 +445,7 @@ type InsightPaneProps = {
   lenses: Partial<Record<LensKind, LensEntry[]>>;
   tab: string;
   onTab: (tab: string) => void;
-  done: Record<string, boolean>;
-  onToggle: (id: string) => void;
+  onToggle: (id: string, done: boolean) => void;
   onOpenLens: (lens: LensKind) => void;
   onJumpSegment: (utteranceId: string) => void;
   onRegenerateSummary: () => void;
@@ -447,7 +457,6 @@ export function InsightPane({
   lenses,
   tab,
   onTab,
-  done,
   onToggle,
   onOpenLens,
   onJumpSegment,
@@ -496,17 +505,13 @@ export function InsightPane({
               <TopicList topics={meeting.topics} />
             ) : (
               <SummaryState
+                meetingStatus={meeting.status}
                 status={meeting.summaryStatus}
                 onRegenerate={onRegenerateSummary}
                 regenerating={regenerating}
               />
             )}
-            <Todos
-              lenses={lenses}
-              meeting={meeting}
-              done={done}
-              onToggle={onToggle}
-            />
+            <Todos lenses={lenses} meeting={meeting} onToggle={onToggle} />
             <Decisions lenses={lenses} onMore={() => onOpenLens("decision")} />
             {settled && (
               <SummarySegments

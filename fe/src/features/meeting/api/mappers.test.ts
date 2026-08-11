@@ -865,4 +865,20 @@ describe("mapMeetingLenses", () => {
     expect(result.action?.[0].source).toBe("hint");
     expect(result.action?.[0].ev).toBe("");
   });
+
+  it("completion_status가 done이면 done을 true로 이어받는다", () => {
+    const result = mapMeetingLenses(
+      [wireItem({ completion_status: "done" })],
+      SPEAKERS,
+    );
+    expect(result.action?.[0].done).toBe(true);
+  });
+
+  it("completion_status가 open이면 done을 false로 이어받는다", () => {
+    const result = mapMeetingLenses(
+      [wireItem({ completion_status: "open" })],
+      SPEAKERS,
+    );
+    expect(result.action?.[0].done).toBe(false);
+  });
 });

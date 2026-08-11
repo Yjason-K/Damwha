@@ -41,6 +41,16 @@ describe("useSyncSummaryStatus", () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["meeting", "mtg_1"] });
   });
 
+  it("상태가 바뀌면 회의별 렌즈 캐시도 함께 무효화한다 — 같은 처리-후 작업 묶음의 산출물이라 별도 신호가 없다", () => {
+    const { wrapper, invalidate } = setup();
+    renderHook(() => useSyncSummaryStatus("mtg_1", "queued", "done"), {
+      wrapper,
+    });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["meeting-lenses", "mtg_1"],
+    });
+  });
+
   it("요약이 없다가 생기면(null → queued) 상세를 무효화한다", () => {
     const { wrapper, invalidate } = setup();
     renderHook(() => useSyncSummaryStatus("mtg_1", null, "queued"), {

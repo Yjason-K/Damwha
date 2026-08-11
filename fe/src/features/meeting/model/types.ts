@@ -61,6 +61,7 @@ export type LensEntry = {
   who?: number;
   ev: string;
   due?: string;
+  done: boolean;
 };
 
 /** 단락별 요약 1개 — `t`는 시작 시각 표기, `id`는 점프 대상 발화 id. */

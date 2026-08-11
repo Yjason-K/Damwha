@@ -295,6 +295,7 @@ export function mapMeetingLenses(
       who,
       ev: primary?.utterance.id ?? "",
       due: item.due_at ?? undefined,
+      done: item.completion_status === "done",
     };
     (grouped[item.kind] ??= []).push(entry);
   }

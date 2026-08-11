@@ -9,6 +9,7 @@ import {
 import { Tag } from "@/shared/ui/tag";
 import { useToast } from "@/shared/ui/use-toast";
 
+import { useSetLensCompletion } from "@/features/lens/api/lenses";
 import { LensDashboard } from "@/features/lens/ui/lens-dashboard";
 import type { LensKind } from "@/features/lens/model/types";
 import { useMeetingLenses } from "@/features/meeting/api/lenses";
@@ -172,7 +173,6 @@ export function MeetingPage() {
   const [playing, setPlaying] = React.useState(false);
   const [pos, setPos] = React.useState(0);
   const [speed, setSpeed] = React.useState(1);
-  const [done, setDone] = React.useState<Record<string, boolean>>({});
   const [aiAck, setAiAck] = React.useState<Record<string, boolean>>({});
   const [cmdOpen, setCmdOpen] = React.useState(false);
   const [cmdQuery, setCmdQuery] = React.useState("");
@@ -199,6 +199,7 @@ export function MeetingPage() {
   } = useMeeting(currentId);
 
   const { data: lensItems = [] } = useMeetingLenses(currentId);
+  const setLensCompletion = useSetLensCompletion();
   const generateSummary = useGenerateSummary();
   const meetingLenses = React.useMemo(
     () => (meeting ? mapMeetingLenses(lensItems, meeting.speakers) : {}),
@@ -328,8 +329,6 @@ export function MeetingPage() {
       setActiveId("");
     }
   }, [activeId, meeting, meetingFetching, toast]);
-
-  const toggleDone = (id: string) => setDone((d) => ({ ...d, [id]: !d[id] }));
 
   const handleDeleted = (deletedId: string) => {
     // 여전히 stale일 수 있는 목록에서 삭제된 id를 명시적으로 제외해 다음 선택을
@@ -474,8 +473,9 @@ export function MeetingPage() {
           lenses={meetingLenses}
           tab={tab}
           onTab={setTab}
-          done={done}
-          onToggle={toggleDone}
+          onToggle={(id, doneVal) =>
+            setLensCompletion.mutate({ id, done: doneVal })
+          }
           onOpenLens={openLens}
           onJumpSegment={(uid) => jumpToEvidence(meeting.id, uid)}
           onRegenerateSummary={() => generateSummary.mutate({ id: meeting.id })}

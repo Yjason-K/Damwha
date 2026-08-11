@@ -91,9 +91,23 @@ describe("InsightPane", () => {
     renderPane({
       lenses: {
         action: [
-          { id: "l1", text: "실행 로그 작성", source: "ai", ev: "utt_1" },
+          {
+            id: "l1",
+            text: "실행 로그 작성",
+            source: "ai",
+            ev: "utt_1",
+            done: false,
+          },
         ],
-        decision: [{ id: "l2", text: "v2로 한정", source: "ai", ev: "utt_2" }],
+        decision: [
+          {
+            id: "l2",
+            text: "v2로 한정",
+            source: "ai",
+            ev: "utt_2",
+            done: false,
+          },
+        ],
       },
     });
     expect(screen.getByText("실행 로그 작성")).toBeInTheDocument();
@@ -160,12 +174,83 @@ describe("InsightPane", () => {
     expect(props.onRegenerateSummary).toHaveBeenCalled();
   });
 
+  it("회의 처리가 끝나지 않았으면 요약 만들기 버튼 대신 안내만 보여준다", () => {
+    renderPane({
+      meeting: meeting({ status: "processing", summaryStatus: null }),
+    });
+    expect(
+      screen.getByText("대화 처리가 끝나야 요약을 만들 수 있어요."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "요약 만들기" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("회의 처리가 끝나지 않았으면 이전에 실패한 요약이 있어도 다시 만들기 버튼을 주지 않는다", () => {
+    renderPane({
+      meeting: meeting({ status: "uploaded", summaryStatus: "failed" }),
+    });
+    expect(
+      screen.queryByRole("button", { name: "요약 다시 만들기" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("할 일 체크박스는 서버 완료 상태로 시작하고, 누르면 반대 값으로 토글을 요청한다", () => {
+    const props = renderPane({
+      lenses: {
+        action: [
+          {
+            id: "l1",
+            text: "실행 로그 작성",
+            source: "ai",
+            ev: "utt_1",
+            done: false,
+          },
+        ],
+      },
+    });
+    const checkbox = screen.getByRole("checkbox", {
+      name: "완료: 실행 로그 작성",
+    }) as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+    fireEvent.click(checkbox);
+    expect(props.onToggle).toHaveBeenCalledWith("l1", true);
+  });
+
+  it("완료된 할 일은 체크된 채로 시작하고, 누르면 열림으로 되돌리도록 요청한다", () => {
+    const props = renderPane({
+      lenses: {
+        action: [
+          {
+            id: "l1",
+            text: "실행 로그 작성",
+            source: "ai",
+            ev: "utt_1",
+            done: true,
+          },
+        ],
+      },
+    });
+    const checkbox = screen.getByRole("checkbox", {
+      name: "완료: 실행 로그 작성",
+    }) as HTMLInputElement;
+    expect(checkbox.checked).toBe(true);
+    fireEvent.click(checkbox);
+    expect(props.onToggle).toHaveBeenCalledWith("l1", false);
+  });
+
   it("요약 생성 중에는 할 일 블록이 그대로 남는다", () => {
     renderPane({
       meeting: meeting({ summaryStatus: "running" }),
       lenses: {
         action: [
-          { id: "l1", text: "실행 로그 작성", source: "ai", ev: "utt_1" },
+          {
+            id: "l1",
+            text: "실행 로그 작성",
+            source: "ai",
+            ev: "utt_1",
+            done: false,
+          },
         ],
       },
     });
