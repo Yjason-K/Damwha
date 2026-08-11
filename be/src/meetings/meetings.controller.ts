@@ -64,6 +64,7 @@ export class MeetingsController {
 
   @Post(':id/summary/generate')
   @ApiOperation({ summary: '대화 요약 생성/재생성' })
+  @HttpCode(202)
   generateSummary(@Param('id') id: string) { return this.summary.request(id); }
 
   @Patch(':id')

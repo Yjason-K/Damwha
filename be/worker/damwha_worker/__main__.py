@@ -136,13 +136,9 @@ def handle_job(
                 conn, job["id"], worker_id, run_id, processing_version, error_json
             )
         if job["type"] == "summarize_meeting":
-            meeting_id = job["meeting_id"]
-            processing_version = (job["payload"] or {}).get("processing_version")
             if transient_retry:
                 return "requeued" if db.requeue(conn, job["id"], worker_id) else "lost"
-            return db.fail_summary(
-                conn, job["id"], worker_id, meeting_id, processing_version, error_json
-            )
+            return db.fail_summary(conn, job["id"], worker_id, error_json)
         # process_meeting
         meeting_id = job["meeting_id"]
         if transient_retry:

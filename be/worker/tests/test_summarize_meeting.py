@@ -188,12 +188,41 @@ def test_mark_summary_running_discards_and_closes_row_on_stale_version(conn, sum
 def test_fail_summary_marks_row_but_keeps_meeting_done(conn, summary_job):
     job, ids = summary_job
     error = WorkerError("bad_response", "invalid", ErrorKind.PERMANENT).to_json(stage="summarize")
-    assert db.fail_summary(conn, job["id"], "w", ids["meeting_id"], 0, error) == "failed"
+    assert db.fail_summary(conn, job["id"], "w", error) == "failed"
     assert _one(conn, "SELECT status FROM meeting_summary")["status"] == "failed"
     assert (
         _one(conn, "SELECT status FROM meeting WHERE id=%s", (ids["meeting_id"],))["status"]
         == "done"
     )
+
+
+def test_fail_summary_closes_row_when_payload_lacks_processing_version(conn, tmp_path):
+    # processing_version이 빠진 payload는 parse_payload 자체가 실패한다 — 이게
+    # 유일하게 타는 경로다. job_id가 아니라 (meeting_id, processing_version)으로
+    # meeting_summary를 찾던 옛 코드는 processing_version=None이라 행을 못 찾고
+    # queued에 영원히 발이 묶였다.
+    from damwha_worker.__main__ import handle_job
+    from damwha_worker.storage import Storage
+
+    meeting_id = seed_meeting(conn, status="done", processing_version=0)
+    job_id = seed_job(
+        conn,
+        type="summarize_meeting",
+        meeting_id=meeting_id,
+        attempts=2,
+        max_attempts=3,
+        payload={"schema_version": 1, "meeting_id": meeting_id, "model": "model"},
+    )
+    conn.execute(
+        """INSERT INTO meeting_summary(meeting_id, processing_version, job_id, model, status)
+           VALUES (%s, 0, %s, 'model', 'queued')""",
+        (meeting_id, job_id),
+    )
+    job = db.claim(conn, "w")
+    out = handle_job(conn, job, Storage(str(tmp_path)), "w")
+    assert out == "failed"
+    assert _one(conn, "SELECT status FROM job WHERE id=%s", (job_id,))["status"] == "failed"
+    assert _one(conn, "SELECT status FROM meeting_summary")["status"] == "failed"
 
 
 def test_reaper_fails_summary_row_when_worker_lock_expires(conn):

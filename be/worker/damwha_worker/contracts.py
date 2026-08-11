@@ -192,8 +192,11 @@ class SummarySegmentCandidate(BaseModel):
 class SummaryResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    topics: list[NonEmptyText]
-    segments: list[SummarySegmentCandidate]
+    # response_format은 로컬 런타임에서 권고사항이라 모델이 두 키 중 하나를 통째로
+    # 생략하기도 한다(LensCandidate와 같은 이유). 생략은 빈 결과와 의미가 같으므로
+    # 기본값을 둬 요약 전체를 실패시키지 않는다.
+    topics: list[NonEmptyText] = []
+    segments: list[SummarySegmentCandidate] = []
 
 
 def _parse_process_meeting(data: dict) -> ProcessMeetingPayload:

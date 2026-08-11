@@ -63,6 +63,15 @@ def test_summarize_sends_transcript_unescaped(monkeypatch):
     assert "한글" in user_message  # \uXXXX 이스케이프가 아니라 원문 그대로
 
 
+def test_summarize_defaults_missing_key_to_empty_list(monkeypatch):
+    # 로컬 런타임에서는 response_format이 권고사항이라 모델이 topics/segments 중
+    # 하나를 통째로 생략하기도 한다 — 그래도 파싱은 되어야 한다.
+    _mount(monkeypatch, lambda url, kw: _ok(json.dumps({"segments": BODY["segments"]})))
+    result = SummaryClient("http://x", None, 5.0).summarize(model="m", utterances=[])
+    assert result.topics == []
+    assert result.segments[0].end_utterance_id == "utt_2"
+
+
 def test_summarize_maps_5xx_to_transient(monkeypatch):
     _mount(monkeypatch, lambda url, kw: _ok("{}", status=503))
     with pytest.raises(WorkerError) as exc:

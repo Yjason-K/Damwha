@@ -84,7 +84,7 @@ describe('요약 API', () => {
     const meetingId = await seedMeeting({ status: 'done', processingVersion: 0 });
     const res = await request(app.getHttpServer())
       .post(`/meetings/${meetingId}/summary/generate`)
-      .expect(201);
+      .expect(202);
     expect(res.body.status).toBe('queued');
     const jobs = await db.pool.query(
       `SELECT type FROM job WHERE meeting_id=$1 AND type='summarize_meeting'`, [meetingId],
@@ -92,10 +92,47 @@ describe('요약 API', () => {
     expect(jobs.rows).toHaveLength(1);
   });
 
+  it('실패한 요약을 재생성하면 이전 결과를 지우고 queued로 되돌린다', async () => {
+    const meetingId = await seedMeeting({ status: 'done', processingVersion: 0 });
+    await seedSummary(meetingId, {
+      processingVersion: 0,
+      status: 'failed',
+      topics: ['옛 주제'],
+      segments: [{
+        start_utterance_id: 'utt_1', end_utterance_id: 'utt_2',
+        start_ms: 0, end_ms: 3000, title: '옛 제목', bullets: ['옛 불릿'],
+      }],
+    });
+    await db.pool.query(
+      `UPDATE meeting_summary SET error=$1::jsonb WHERE meeting_id=$2`,
+      [JSON.stringify({ code: 'llm_invalid_response', message: '이전 실패' }), meetingId],
+    );
+
+    const res = await request(app.getHttpServer())
+      .post(`/meetings/${meetingId}/summary/generate`)
+      .expect(202);
+    expect(res.body.status).toBe('queued');
+
+    const jobs = await db.pool.query(
+      `SELECT id FROM job WHERE meeting_id=$1 AND type='summarize_meeting'`, [meetingId],
+    );
+    expect(jobs.rows).toHaveLength(1);
+
+    const row = (await db.pool.query(
+      `SELECT status, topics, segments, error, job_id FROM meeting_summary WHERE meeting_id=$1`,
+      [meetingId],
+    )).rows[0];
+    expect(row.status).toBe('queued');
+    expect(row.topics).toEqual([]);
+    expect(row.segments).toEqual([]);
+    expect(row.error).toBeNull();
+    expect(row.job_id).toBe(jobs.rows[0].id);
+  });
+
   it('이미 진행 중이면 잡을 중복 큐잉하지 않는다', async () => {
     const meetingId = await seedMeeting({ status: 'done', processingVersion: 0 });
-    await request(app.getHttpServer()).post(`/meetings/${meetingId}/summary/generate`).expect(201);
-    await request(app.getHttpServer()).post(`/meetings/${meetingId}/summary/generate`).expect(201);
+    await request(app.getHttpServer()).post(`/meetings/${meetingId}/summary/generate`).expect(202);
+    await request(app.getHttpServer()).post(`/meetings/${meetingId}/summary/generate`).expect(202);
     const jobs = await db.pool.query(
       `SELECT id FROM job WHERE meeting_id=$1 AND type='summarize_meeting'`, [meetingId],
     );

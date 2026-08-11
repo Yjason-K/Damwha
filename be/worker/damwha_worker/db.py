@@ -293,10 +293,15 @@ def persist_summary(
         return "lost"
 
 
-def fail_summary(
-    conn, job_id: str, worker_id: str, meeting_id: str, processing_version: int, error: dict
-) -> str:
-    """요약 실패는 요약 행과 잡만 건드린다 — meeting은 done을 유지한다."""
+def fail_summary(conn, job_id: str, worker_id: str, error: dict) -> str:
+    """요약 실패는 요약 행과 잡만 건드린다 — meeting은 done을 유지한다.
+
+    meeting_summary는 job_id로 키를 잡는다(reap_stale의 fail_summaries, BE의
+    jobs.repository와 동일한 키) — processing_version은 파싱되지 않은 원본
+    payload에서 나올 수 있어(예: parse_payload 자체가 실패한 잡) None일 수
+    있고, 그러면 (meeting_id, processing_version) 키는 행을 하나도 못 찾아
+    요약 행이 queued에 영원히 발이 묶인다.
+    """
     try:
         with conn.transaction():
             cur = conn.execute(
@@ -306,11 +311,13 @@ def fail_summary(
             )
             if cur.rowcount == 0:
                 raise _Abort
-            conn.execute(
+            cur = conn.execute(
                 "UPDATE meeting_summary SET status='failed', error=%s, updated_at=now() "
-                "WHERE meeting_id=%s AND processing_version=%s",
-                (Jsonb(error), meeting_id, processing_version),
+                "WHERE job_id=%s",
+                (Jsonb(error), job_id),
             )
+            if cur.rowcount == 0:
+                raise _Abort
         return "failed"
     except _Abort:
         return "lost"
