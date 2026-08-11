@@ -113,3 +113,55 @@ def test_rejects_bad_meeting_ids(bad):
     data = load("process_meeting.valid.json") | {"meeting_id": bad}
     with pytest.raises(ValidationError):
         parse_payload("process_meeting", data)
+
+
+def test_parse_summarize_meeting_payload():
+    from damwha_worker.contracts import SummarizeMeetingPayload
+
+    payload = parse_payload("summarize_meeting", load("summarize-meeting-v1.json"))
+    assert isinstance(payload, SummarizeMeetingPayload)
+    assert payload.model == "qwen3.5:4b-mlx"
+
+
+def test_summarize_meeting_payload_rejects_extra_field():
+    from pydantic import ValidationError
+
+    data = load("summarize-meeting-v1.json") | {"extraction_run_id": "ler_1"}
+    with pytest.raises(ValidationError):
+        parse_payload("summarize_meeting", data)
+
+
+def test_summary_response_requires_known_utterance_id_shape():
+    from pydantic import ValidationError
+
+    from damwha_worker.contracts import SummaryResponse
+
+    parsed = SummaryResponse.model_validate(
+        {
+            "topics": ["파이프라인 실행 순서"],
+            "segments": [
+                {
+                    "start_utterance_id": "utt_1",
+                    "end_utterance_id": "utt_2",
+                    "title": "티켓 등록 수정",
+                    "bullets": ["공유를 해드릴 것임"],
+                }
+            ],
+        }
+    )
+    assert parsed.segments[0].title == "티켓 등록 수정"
+
+    with pytest.raises(ValidationError):
+        SummaryResponse.model_validate(
+            {
+                "topics": [],
+                "segments": [
+                    {
+                        "start_utterance_id": "nope",
+                        "end_utterance_id": "utt_2",
+                        "title": "t",
+                        "bullets": [],
+                    }
+                ],
+            }
+        )

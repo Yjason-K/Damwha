@@ -4,6 +4,7 @@ import {
   ProcessMeetingPayloadSchema,
   EnrollSpeakerPayloadSchema,
   IndexMeetingPayloadSchema,
+  SummarizeMeetingPayloadSchema,
 } from '../src/contracts/job-payload.schema';
 
 const dir = path.join(__dirname, 'fixtures', 'job-payloads');
@@ -41,5 +42,12 @@ describe('contract fixtures (shared with pydantic worker)', () => {
     const v2 = read('process_meeting.v2.valid.json');
     v2.models.device = 'mps';
     expect(() => ProcessMeetingPayloadSchema.parse(v2)).toThrow();
+  });
+  it('validates summarize-meeting-v1.json', () => {
+    expect(() => SummarizeMeetingPayloadSchema.parse(read('summarize-meeting-v1.json'))).not.toThrow();
+  });
+  it('rejects summarize-meeting-v1.json with an unknown extraction_run_id field', () => {
+    const withExtraField = { ...read('summarize-meeting-v1.json'), extraction_run_id: 'ler_1' };
+    expect(() => SummarizeMeetingPayloadSchema.parse(withExtraField)).toThrow();
   });
 });
