@@ -22,7 +22,7 @@ Full spec: [`docs/product-concept.md`](docs/product-concept.md) (개념 정의�
 - **Lenses** = an extension layer over utterances, not an optional toggled-on view — it simply yields nothing when a conversation isn't meeting-shaped (0 extracted items ⇒ the section disappears on its own; no conversation-type field was introduced to gate it). v1 kinds: FE `LensKind` is `action | decision | promise` — `topic` was removed from the lens domain; topics now live in the summary base layer, not as a lens. Generated via AI auto-extraction. Scoped per-meeting (right panel) or global (left-nav view). Extraction is **non-blocking + post-editable**: auto-filled with no gate, each item carries a source (AI / user-added / user-edited), confidence is only a non-blocking hint, and re-extraction is non-destructive (human-touched items are preserved/merged).
 - **Pipeline:** `audio → VAD → diarization → identification (vector DB / cosine similarity) → STT (Whisper) → structured JSON → search indexing (+ optional type extraction) → store`. Speaker identity comes from one-time voiceprint enrollment.
 - **Privacy stance:** personal/self-hosted; all voiceprints stored locally only, no recording notice. The boundary is **export/share** — keep it disabled by default with intentional friction (confirm/warn).
-- **Non-goals (initial):** team collaboration/wiki, per-member analytics dashboards (surveillance-flavored), meeting knowledge graph. The product is a _personal_ meeting memory, not a team monitoring tool.
+- **Non-goals (initial):** team collaboration/wiki, per-member analytics dashboards (surveillance-flavored), meeting knowledge graph. The product is a _personal_ conversation memory, not a team monitoring tool.
 
 ## Commands
 
