@@ -230,7 +230,9 @@ git commit -m "feat: 요약 와이어 타입과 상세 매핑 추가"
 >
 > 상세를 폴링하지 않는 이유: `GET /meetings/:id` 응답에는 발화 배열이 통째로 들어 있어 1시간짜리 대화면 매우 무겁다. 대신 가벼운 `GET /meetings/:id/status`를 폴링하고, 거기 실린 `summary_status`가 상세 캐시의 값과 달라진 순간에만 상세를 한 번 무효화한다. 무효화 후 상세가 다시 오면 두 값이 같아지므로 루프가 돌지 않는다.
 
-> 백엔드 `GET /meetings/:id/lenses`(`lenses.controller.ts:17`)는 이미 있는데 FE가 호출한 적이 없다. 그래서 지금 인사이트 패널의 할 일·결정 블록은 요약과 똑같이 항상 비어 있다. 응답은 `{ items: LensWireItem[] }`이고 `LensWireItem`은 `src/features/lens/model/types.ts`에 이미 정의되어 있으므로 재사용한다.
+> 백엔드 `GET /meetings/:id/lenses`(`lenses.controller.ts:17`)는 이미 있는데 FE가 호출한 적이 없다. 그래서 지금 인사이트 패널의 할 일·결정 블록은 요약과 똑같이 항상 비어 있다. 응답은 `{ items: LensWireItem[] }`이고 `LensWireItem`은 `src/features/lens/model/types.ts:18-33`에 이미 정의되어 있으므로 재사용한다.
+>
+> **테스트 헬퍼의 `as LensWireItem` 캐스트는 의도적이다.** 실제 `LensWireItem`은 아래 테스트가 만들지 않는 필드도 요구한다 — `user_modified`, `completion_status`, `lifecycle_status`, `meeting_id`, `created_at`, `updated_at`, `meeting: { id, title }`. `mapMeetingLenses`는 그중 어느 것도 읽지 않으므로 캐스트로 생략한다. 캐스트를 지우려면 그 7개를 전부 채워야 하고, 테스트가 검증하려는 것과 무관한 잡음만 늘어난다.
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
@@ -540,8 +542,7 @@ type InsightPaneProps = {
 `src/features/meeting/ui/insight-pane.test.tsx`:
 
 ```tsx
-import { render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { InsightPane } from "./insight-pane";
@@ -626,8 +627,7 @@ describe("InsightPane", () => {
     expect(screen.getByText("v2로 한정")).toBeInTheDocument();
   });
 
-  it("단락은 접힌 채로 시작하고 행을 누르면 불릿이 펼쳐진다", async () => {
-    const user = userEvent.setup();
+  it("단락은 접힌 채로 시작하고 행을 누르면 불릿이 펼쳐진다", () => {
     renderPane({
       meeting: meeting({
         segments: [
@@ -642,12 +642,11 @@ describe("InsightPane", () => {
       }),
     });
     expect(screen.queryByText("공유를 해드릴 것임")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /티켓 등록 수정/ }));
+    fireEvent.click(screen.getByRole("button", { name: /티켓 등록 수정/ }));
     expect(screen.getByText("공유를 해드릴 것임")).toBeInTheDocument();
   });
 
-  it("단락의 시각을 누르면 펼치지 않고 점프한다", async () => {
-    const user = userEvent.setup();
+  it("단락의 시각을 누르면 펼치지 않고 점프한다", () => {
     const props = renderPane({
       meeting: meeting({
         segments: [
@@ -661,7 +660,7 @@ describe("InsightPane", () => {
         ],
       }),
     });
-    await user.click(screen.getByRole("button", { name: "01:07로 이동" }));
+    fireEvent.click(screen.getByRole("button", { name: "01:07로 이동" }));
     expect(props.onJumpSegment).toHaveBeenCalledWith("utt_1");
     expect(screen.queryByText("공유를 해드릴 것임")).not.toBeInTheDocument();
   });
@@ -672,17 +671,15 @@ describe("InsightPane", () => {
     expect(within(status).getByText("요약을 만들고 있어요")).toBeInTheDocument();
   });
 
-  it("요약이 실패하면 재생성 버튼을 누를 수 있다", async () => {
-    const user = userEvent.setup();
+  it("요약이 실패하면 재생성 버튼을 누를 수 있다", () => {
     const props = renderPane({ meeting: meeting({ summaryStatus: "failed" }) });
-    await user.click(screen.getByRole("button", { name: "요약 다시 만들기" }));
+    fireEvent.click(screen.getByRole("button", { name: "요약 다시 만들기" }));
     expect(props.onRegenerateSummary).toHaveBeenCalled();
   });
 
-  it("요약이 한 번도 없던 회의는 만들기 버튼을 준다", async () => {
-    const user = userEvent.setup();
+  it("요약이 한 번도 없던 회의는 만들기 버튼을 준다", () => {
     const props = renderPane({ meeting: meeting({ summaryStatus: null }) });
-    await user.click(screen.getByRole("button", { name: "요약 만들기" }));
+    fireEvent.click(screen.getByRole("button", { name: "요약 만들기" }));
     expect(props.onRegenerateSummary).toHaveBeenCalled();
   });
 
