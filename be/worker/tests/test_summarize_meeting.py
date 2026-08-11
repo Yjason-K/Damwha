@@ -155,7 +155,29 @@ def test_persist_summary_discards_on_stale_version(conn, summary_job):
         )
         == "discarded"
     )
-    assert _one(conn, "SELECT topics FROM meeting_summary")["topics"] == []
+    row = _one(conn, "SELECT status, topics, error FROM meeting_summary")
+    assert row["topics"] == []
+    assert row["status"] == "failed"
+    assert row["error"]["code"] == "discarded_by_stale_guard"
+    assert _one(conn, "SELECT status FROM job WHERE id=%s", (job["id"],))["status"] == "done"
+
+
+def test_mark_summary_running_discards_and_closes_row_on_stale_version(conn, summary_job):
+    job, ids = summary_job
+    conn.execute("UPDATE meeting SET processing_version=1 WHERE id=%s", (ids["meeting_id"],))
+    assert (
+        db.mark_summary_running(
+            conn,
+            job_id=job["id"],
+            worker_id="w",
+            meeting_id=ids["meeting_id"],
+            processing_version=0,
+        )
+        == "discarded"
+    )
+    row = _one(conn, "SELECT status, error FROM meeting_summary")
+    assert row["status"] == "failed"
+    assert row["error"]["code"] == "discarded_by_stale_guard"
     assert _one(conn, "SELECT status FROM job WHERE id=%s", (job["id"],))["status"] == "done"
 
 

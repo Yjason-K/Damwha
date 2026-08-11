@@ -196,19 +196,24 @@ def mark_summary_running(
                 "SELECT processing_version FROM meeting WHERE id=%s FOR UPDATE", (meeting_id,)
             ).fetchone()
             if mrow is None or mrow["processing_version"] != processing_version:
+                stale = Jsonb(
+                    {
+                        "code": "discarded_by_stale_guard",
+                        "message": "meeting superseded by newer processing_version",
+                        "stage": "summarize_meeting",
+                        "kind": None,
+                    }
+                )
                 conn.execute(
                     "UPDATE job SET status='done', error=%s, updated_at=now() WHERE id=%s",
-                    (
-                        Jsonb(
-                            {
-                                "code": "discarded_by_stale_guard",
-                                "message": "meeting superseded by newer processing_version",
-                                "stage": "summarize_meeting",
-                                "kind": None,
-                            }
-                        ),
-                        job_id,
-                    ),
+                    (stale, job_id),
+                )
+                # 주인 잃은 running 행은 reap_stale이 구제하지 못한다(reap된 job에만
+                # join) — 여기서 닫지 않으면 재생성이 영구히 막힌다.
+                conn.execute(
+                    "UPDATE meeting_summary SET status='failed', error=%s, updated_at=now() "
+                    "WHERE meeting_id=%s AND processing_version=%s",
+                    (stale, meeting_id, processing_version),
                 )
                 return "discarded"
             conn.execute(
@@ -231,7 +236,11 @@ def persist_summary(
     topics: list,
     segments: list,
 ) -> str:
-    """검증이 끝난 요약을 UPSERT한다 — 통째 교체라 머지 로직이 없다."""
+    """검증이 끝난 요약으로 기존 행을 덮어쓴다 — 통째 교체라 머지 로직이 없다.
+
+    UPSERT가 아니라 평범한 UPDATE다. 행은 잡을 큐잉한 트랜잭션에서 이미
+    queued로 만들어져 있으므로 INSERT 경로가 필요 없다.
+    """
     try:
         with conn.transaction():
             owned = conn.execute(
@@ -244,19 +253,24 @@ def persist_summary(
                 "SELECT processing_version FROM meeting WHERE id=%s FOR UPDATE", (meeting_id,)
             ).fetchone()
             if mrow is None or mrow["processing_version"] != processing_version:
+                stale = Jsonb(
+                    {
+                        "code": "discarded_by_stale_guard",
+                        "message": "meeting superseded by newer processing_version",
+                        "stage": "persist_summary",
+                        "kind": None,
+                    }
+                )
                 conn.execute(
                     "UPDATE job SET status='done', error=%s, updated_at=now() WHERE id=%s",
-                    (
-                        Jsonb(
-                            {
-                                "code": "discarded_by_stale_guard",
-                                "message": "meeting superseded by newer processing_version",
-                                "stage": "persist_summary",
-                                "kind": None,
-                            }
-                        ),
-                        job_id,
-                    ),
+                    (stale, job_id),
+                )
+                # 주인 잃은 running 행은 reap_stale이 구제하지 못한다(reap된 job에만
+                # join) — 여기서 닫지 않으면 재생성이 영구히 막힌다.
+                conn.execute(
+                    "UPDATE meeting_summary SET status='failed', error=%s, updated_at=now() "
+                    "WHERE meeting_id=%s AND processing_version=%s",
+                    (stale, meeting_id, processing_version),
                 )
                 return "discarded"
             # 요약 행은 큐잉 시점에 이미 만들어져 있다(queued). 여기서는 결과만

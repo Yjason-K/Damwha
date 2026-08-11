@@ -1,3 +1,5 @@
+from psycopg.types.json import Jsonb
+
 from damwha_worker import db
 from tests.conftest import seed_job, seed_meeting, seed_speaker
 
@@ -384,6 +386,129 @@ def test_persist_discarded_enqueues_no_index_or_lens_extraction_run(conn):
         == 0
     )
     assert conn.execute("SELECT count(*) c FROM lens_extraction_run", ()).fetchone()["c"] == 0
+
+
+def test_persist_enqueues_summarize_job_and_queued_row_on_commit(conn):
+    mid, jid = _claimed_pm_job(conn, pv=0)
+    out = db.persist_process_meeting(
+        conn,
+        job_id=jid,
+        worker_id="w1",
+        meeting_id=mid,
+        processing_version=0,
+        normalized_key="k",
+        duration_ms=1,
+        utterances=[],
+        clusters=[],
+        summary_llm_model="model",
+    )
+    assert out == "committed"
+    jobs = conn.execute(
+        "SELECT id, payload FROM job WHERE type='summarize_meeting' AND meeting_id=%s", (mid,)
+    ).fetchall()
+    assert len(jobs) == 1
+    assert jobs[0]["payload"] == {
+        "schema_version": 1,
+        "meeting_id": str(mid),
+        "processing_version": 0,
+        "model": "model",
+    }
+    row = conn.execute(
+        "SELECT status, job_id FROM meeting_summary WHERE meeting_id=%s", (mid,)
+    ).fetchone()
+    assert row["status"] == "queued"
+    assert row["job_id"] == jobs[0]["id"]
+
+
+def test_persist_no_summarize_job_or_row_when_model_not_configured(conn):
+    mid, jid = _claimed_pm_job(conn, pv=0)
+    out = db.persist_process_meeting(
+        conn,
+        job_id=jid,
+        worker_id="w1",
+        meeting_id=mid,
+        processing_version=0,
+        normalized_key="k",
+        duration_ms=1,
+        utterances=[],
+        clusters=[],
+    )
+    assert out == "committed"
+    assert (
+        conn.execute("SELECT count(*) c FROM job WHERE type='summarize_meeting'", ()).fetchone()[
+            "c"
+        ]
+        == 0
+    )
+    assert conn.execute("SELECT count(*) c FROM meeting_summary", ()).fetchone()["c"] == 0
+
+
+def test_persist_reprocess_resets_summary_row_via_on_conflict(conn):
+    # 재처리 시 ON CONFLICT가 이전 요약 결과(topics/segments/error)를 지우고
+    # 새 잡/버전으로 큐잉 상태를 되돌리는지 확인한다.
+    mid = seed_meeting(conn, processing_version=0, status="processing")
+    jid1 = seed_job(conn, meeting_id=mid)
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid1, mid))
+    db.claim(conn, "w1")
+    db.persist_process_meeting(
+        conn,
+        job_id=jid1,
+        worker_id="w1",
+        meeting_id=mid,
+        processing_version=0,
+        normalized_key="k",
+        duration_ms=1,
+        utterances=[],
+        clusters=[],
+        summary_llm_model="model",
+    )
+    first_job_id = conn.execute(
+        "SELECT id FROM job WHERE type='summarize_meeting' AND meeting_id=%s", (mid,)
+    ).fetchone()["id"]
+    # 첫 요약 잡이 이미 완료되어 결과를 채운 상태를 흉내낸다.
+    conn.execute(
+        "UPDATE meeting_summary SET status='done', topics=%s, segments=%s WHERE meeting_id=%s",
+        (Jsonb(["old topic"]), Jsonb([{"title": "old"}]), mid),
+    )
+
+    jid2 = seed_job(conn, meeting_id=mid)
+    conn.execute(
+        "UPDATE meeting SET processing_version=1, current_job_id=%s, "
+        "status='processing' WHERE id=%s",
+        (jid2, mid),
+    )
+    conn.execute(
+        "UPDATE job SET status='running', locked_by='w1', locked_at=now(), attempts=1 WHERE id=%s",
+        (jid2,),
+    )
+    out = db.persist_process_meeting(
+        conn,
+        job_id=jid2,
+        worker_id="w1",
+        meeting_id=mid,
+        processing_version=1,
+        normalized_key="k",
+        duration_ms=1,
+        utterances=[],
+        clusters=[],
+        summary_llm_model="model",
+    )
+    assert out == "committed"
+    second_job_id = conn.execute(
+        "SELECT id FROM job WHERE type='summarize_meeting' AND meeting_id=%s AND id != %s",
+        (mid, first_job_id),
+    ).fetchone()["id"]
+    row = conn.execute(
+        "SELECT status, processing_version, job_id, topics, segments, error "
+        "FROM meeting_summary WHERE meeting_id=%s",
+        (mid,),
+    ).fetchone()
+    assert row["status"] == "queued"
+    assert row["processing_version"] == 1
+    assert row["job_id"] == second_job_id
+    assert row["topics"] == []
+    assert row["segments"] == []
+    assert row["error"] is None
 
 
 def test_persist_auto_creates_provisional_for_unidentified(conn):
