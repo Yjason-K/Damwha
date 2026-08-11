@@ -177,6 +177,14 @@ meetings.repository.ts:76`) 첫 항목이 곧 최신 회의다. `replace`이므�
 소유 state: `filter`(회의 목록 필터), `cmdOpen`, `cmdQuery`, `facets`.
 ⌘K 검색 결과 선택 시 `navigate()`로 이동한다.
 
+**팔레트 열기는 `Outlet` context로 내려준다.** `TranscriptPane`의
+`onOpenSearch`(하단 툴바 "발언 검색")는 필수 prop인데, `cmdOpen`이 `AppShell`로
+올라가면서 `MeetingView`에 소스가 없어진다. `AppShell`이
+`export type ShellOutletContext = { openSearch: () => void }`를 내보내고
+`<Outlet context>`로 전달하면, `LeftNav`의 검색 진입점과 같은 콜백 하나를
+공유하게 된다. 이 콜백은 `setCmdOpen(true)`로 **열기만** 한다 — 토글은 ⌘K
+키다운 핸들러에만 남는다. 컨텍스트 필드는 `openSearch` 하나로 제한한다.
+
 ### `src/pages/meeting.tsx` → `MeetingView`
 
 `useParams().meetingId`와 `useSearchParams().get("u")`를 읽어 전사·인사이트·
@@ -329,6 +337,15 @@ props 네 개(`currentId`, `view`, `onSelectMeeting`, `onSelectLens`)를 잃는�
 `openMeeting`·`jumpTo`·`jumpToEvidence`·`handleDeleted`는 각각 `navigate()`
 호출로 접힌다. 삭제 후에는 `navigate("/", { replace: true })`로 인덱스에
 다시 위임한다.
+
+**삭제 시 목록 캐시를 낙관적으로 갱신해야 한다.** 위 위임만으로는 부족하다 —
+`useDeleteMeeting`은 `["meetings"]`를 무효화만 하므로, 재조회가 끝나기 전에
+`IndexRoute`가 렌더되면 캐시된 데이터가 있어 `isLoading`이 `false`이고,
+**방금 삭제한 회의가 남아 있는 낡은 목록**의 첫 항목으로 리다이렉트한다.
+BE가 `created_at DESC`로 주므로 사용자가 보다가 삭제하는 회의가 대개 그
+첫 항목이라, 삭제 → 삭제된 회의 → 404 막다른 길이 된다. `onSuccess`에서
+무효화 **전에** `setQueryData(["meetings"], (old) => old?.filter(...))`로
+빼낸다. 기존 코드가 `remaining.filter(...)`로 막고 있던 것과 같은 사고다.
 
 **유지되는 것:** 재처리로 발언이 사라졌을 때의 historical 가드
 (`meeting.tsx:319-331`)는 그대로 필요하다. `activeId`가 `?u=`로 바뀌는 만큼
