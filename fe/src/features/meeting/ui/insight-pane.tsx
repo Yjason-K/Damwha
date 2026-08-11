@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { Avatar } from "@/shared/ui/avatar";
 import { Checkbox } from "@/shared/ui/checkbox";
+import { IconButton } from "@/shared/ui/icon-button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import { cn } from "@/shared/lib/utils";
 
@@ -273,7 +274,7 @@ function SummarySegments({
                   type="button"
                   aria-label={`${s.t}로 이동`}
                   onClick={() => onJump(s.startUtteranceId)}
-                  className="mt-px shrink-0 cursor-pointer rounded-xs font-mono text-2xs text-[color:var(--text-link)] outline-none hover:underline focus-visible:[box-shadow:var(--focus-ring)]"
+                  className="mt-px shrink-0 cursor-pointer rounded-xs font-mono text-2xs text-[color:var(--text-link)] outline-none hover:underline active:translate-y-[0.5px] focus-visible:[box-shadow:var(--focus-ring)]"
                 >
                   {s.t}
                 </button>
@@ -281,7 +282,7 @@ function SummarySegments({
                   type="button"
                   aria-expanded={expanded}
                   onClick={() => setOpen((o) => ({ ...o, [s.id]: !o[s.id] }))}
-                  className="min-w-0 flex-1 cursor-pointer rounded-xs py-1 text-left text-sm leading-snug text-pretty text-foreground outline-none hover:bg-[var(--surface-hover)] focus-visible:[box-shadow:var(--focus-ring)]"
+                  className="min-w-0 flex-1 cursor-pointer rounded-xs py-1 text-left text-sm leading-snug text-pretty text-foreground outline-none hover:bg-[var(--surface-hover)] active:translate-y-[0.5px] focus-visible:[box-shadow:var(--focus-ring)]"
                 >
                   {s.title}
                 </button>
@@ -340,7 +341,7 @@ function SummaryState({
           <button
             type="button"
             onClick={onRegenerate}
-            className="cursor-pointer rounded-xs text-xs font-medium text-[color:var(--text-link)] outline-none hover:underline focus-visible:[box-shadow:var(--focus-ring)]"
+            className="cursor-pointer rounded-xs text-xs font-medium text-[color:var(--text-link)] outline-none hover:underline active:translate-y-[0.5px] focus-visible:[box-shadow:var(--focus-ring)]"
           >
             요약 다시 만들기
           </button>
@@ -359,7 +360,7 @@ function SummaryState({
         <button
           type="button"
           onClick={onRegenerate}
-          className="cursor-pointer rounded-xs text-xs font-medium text-[color:var(--text-link)] outline-none hover:underline focus-visible:[box-shadow:var(--focus-ring)]"
+          className="cursor-pointer rounded-xs text-xs font-medium text-[color:var(--text-link)] outline-none hover:underline active:translate-y-[0.5px] focus-visible:[box-shadow:var(--focus-ring)]"
         >
           요약 만들기
         </button>
@@ -478,14 +479,14 @@ export function InsightPane({
             <TabsTrigger value="notes">메모</TabsTrigger>
           </TabsList>
           {tab === "summary" && settled && (
-            <button
-              type="button"
-              aria-label="요약 다시 만들기"
+            <IconButton
+              label="요약 다시 만들기"
+              size="sm"
+              className="ml-auto"
               onClick={onRegenerateSummary}
-              className="ml-auto cursor-pointer rounded-xs p-1 text-[color:var(--text-muted)] outline-none hover:bg-[var(--surface-hover)] hover:text-foreground focus-visible:[box-shadow:var(--focus-ring)]"
             >
               <Icon name="rotateCcw" size={14} />
-            </button>
+            </IconButton>
           )}
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
