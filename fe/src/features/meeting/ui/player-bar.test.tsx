@@ -60,3 +60,23 @@ test("드래그 중 시간 라벨이 미리보기를 따라가고 놓으면 복�
   expect(onSeek).toHaveBeenCalledWith(0.5);
   expect(screen.getByText("01:00")).toBeTruthy();
 });
+
+test("className이 루트에 병합되고 기존 클래스도 유지된다", () => {
+  const { container } = render(
+    <PlayerBar
+      tracks={TRACKS}
+      playing={false}
+      pos={0}
+      totalSeconds={600}
+      durLabel="10:00"
+      speed={1}
+      onSpeed={() => {}}
+      onToggle={() => {}}
+      onSeek={() => {}}
+      className="col-span-2"
+    />,
+  );
+  const root = container.firstElementChild!;
+  expect(root).toHaveClass("col-span-2");
+  expect(root).toHaveClass("border-t");
+});
