@@ -10,9 +10,9 @@ import { LensExtractionBanner } from "./lens-extraction-banner";
 import { LensList } from "./lens-list";
 
 /**
- * LensDashboard — 전역 렌즈 대시보드 셸. kind는 상위(meeting.tsx)가 소유하고
- * 내려주며, 그 외 필터(완료 상태/기한/화자/회의)는 이 컴포넌트가 소유한다.
- * 화자 tint는 화자 목록 순번(1..n)으로 매핑한다.
+ * LensDashboard — 전역 렌즈 대시보드 셸. kind는 URL(`/lenses/:kind`)에서 오며
+ * 상위(pages/lens.tsx)가 읽어 내려준다. 그 외 필터(완료 상태/기한/화자/회의)는
+ * 이 컴포넌트가 소유한다. 화자 tint는 화자 목록 순번(1..n)으로 매핑한다.
  */
 
 type Props = {
@@ -65,7 +65,7 @@ export function LensDashboard({ lens, onLens, onJumpEvidence }: Props) {
   const isEmpty = list.isSuccess && pages.every((p) => p.items.length === 0);
 
   return (
-    <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[var(--surface-app)]">
+    <main className="col-start-2 flex min-w-0 flex-col overflow-hidden bg-[var(--surface-app)]">
       <div className="shrink-0 border-b border-[color:var(--border-subtle)] bg-[var(--surface-card)] px-7 pt-[18px] pb-3.5">
         <div className="flex items-center gap-[9px]">
           <span className="inline-flex text-[color:var(--text-secondary)]">

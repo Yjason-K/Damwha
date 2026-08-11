@@ -100,12 +100,14 @@ function ProcessingBanner({
 
 /**
  * 회의 뷰의 라우트 엘리먼트. `MeetingView`는 회의마다 리마운트되므로(key),
- * 회의를 오갈 때 되살아나면 안 되는 상태(AI 안내 배너 확인)는 리마운트되지 않는
- * 이 부모가 소유한다.
+ * 리마운트를 건너 살아 있어야 하는 상태는 이 부모가 소유한다 — 회의를 오갈 때
+ * 되살아나면 안 되는 것(AI 안내 배너 확인)과, 반대로 회의를 바꿔도 이어져야
+ * 하는 것(재생 배속: 전사를 훑는 동안 유지되는 작업 모드다) 둘 다.
  */
 export function MeetingRoute() {
   const { meetingId = "" } = useParams();
   const [aiAck, setAiAck] = React.useState<Record<string, boolean>>({});
+  const [speed, setSpeed] = React.useState(1);
 
   return (
     <MeetingView
@@ -113,6 +115,8 @@ export function MeetingRoute() {
       meetingId={meetingId}
       aiAcked={!!aiAck[meetingId]}
       onAckAi={() => setAiAck((a) => ({ ...a, [meetingId]: true }))}
+      speed={speed}
+      onSpeed={setSpeed}
     />
   );
 }
@@ -121,9 +125,17 @@ type MeetingViewProps = {
   meetingId: string;
   aiAcked: boolean;
   onAckAi: () => void;
+  speed: number;
+  onSpeed: (speed: number) => void;
 };
 
-function MeetingView({ meetingId, aiAcked, onAckAi }: MeetingViewProps) {
+function MeetingView({
+  meetingId,
+  aiAcked,
+  onAckAi,
+  speed,
+  onSpeed,
+}: MeetingViewProps) {
   const navigate = useNavigate();
   const { openSearch } = useOutletContext<ShellOutletContext>();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -132,7 +144,6 @@ function MeetingView({ meetingId, aiAcked, onAckAi }: MeetingViewProps) {
   const [tab, setTab] = React.useState("summary");
   const [playing, setPlaying] = React.useState(false);
   const [pos, setPos] = React.useState(0);
-  const [speed, setSpeed] = React.useState(1);
   const [audioDuration, setAudioDuration] = React.useState(0);
   const [metaReady, setMetaReady] = React.useState(false);
 
@@ -174,10 +185,15 @@ function MeetingView({ meetingId, aiAcked, onAckAi }: MeetingViewProps) {
   const { toast } = useToast();
 
   // Real audio transport: keep the element in sync with speed / play state.
+  // metaReady를 deps에 두는 이유: 첫 렌더에는 meeting이 없어 <audio>도 없고,
+  // 배속은 회의를 건너 유지되므로(부모 소유) 1×가 아닌 값으로 새 회의에 들어올
+  // 수 있다. speed만 보면 값이 그대로라 effect가 다시 돌지 않아 새 엘리먼트에
+  // 반영되지 않는다 — 엘리먼트가 준비되는 시점을 뜻하는 metaReady가 뒤집힐 때
+  // 한 번 더 돌게 한다.
   React.useEffect(() => {
     const a = audioRef.current;
     if (a) a.playbackRate = speed;
-  }, [speed]);
+  }, [speed, metaReady]);
 
   React.useEffect(() => {
     const a = audioRef.current;
@@ -243,8 +259,20 @@ function MeetingView({ meetingId, aiAcked, onAckAi }: MeetingViewProps) {
     }
   }, [activeId, meeting, meetingFetching, toast, setSearchParams]);
 
+  // 회의 안에서의 발언 점프. 두 가지를 함께 처리한다.
+  // 1) 이미 활성인 발언을 다시 누르면 `?u=`가 그대로라 위 seek effect의 deps가
+  //    바뀌지 않아 아무 일도 일어나지 않는다. "여기서 다시 듣기"가 죽지 않도록
+  //    이 경우만 재생 위치를 직접 옮긴다(리렌더 없이 오디오만 건드린다).
+  // 2) 새 발언으로의 이동은 replace다. 하이라이트는 회의 안의 일시적 상태라
+  //    히스토리 단위가 아니고, push하면 점프 횟수만큼 뒤로가기를 눌러야 회의를
+  //    벗어난다(같은 URL이 쌓여 뒤로가기가 고장 난 것처럼 보인다).
   const jumpTo = (uid: string) => {
-    setSearchParams({ u: uid });
+    if (uid === activeId) {
+      if (targetStartMs != null && totalSeconds > 0)
+        seek(Math.min(1, targetStartMs / 1000 / totalSeconds));
+      return;
+    }
+    setSearchParams({ u: uid }, { replace: true });
   };
 
   const handleDeleted = () => {
@@ -334,7 +362,7 @@ function MeetingView({ meetingId, aiAcked, onAckAi }: MeetingViewProps) {
             mappedTotal > 0 ? meeting.dur : formatClock(totalSeconds * 1000)
           }
           speed={speed}
-          onSpeed={setSpeed}
+          onSpeed={onSpeed}
           onToggle={() => setPlaying((p) => !p)}
           onSeek={seek}
         />

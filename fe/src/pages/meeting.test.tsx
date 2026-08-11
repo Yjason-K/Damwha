@@ -498,6 +498,28 @@ const fx = vi.hoisted(() => {
   function getResponse(url: string) {
     if (url === "/meetings") return listResponse();
     if (url === "/speakers") return Promise.resolve({ data: speakers });
+    // 셸 안에서 열리는 /settings 라우트가 부르는 두 엔드포인트.
+    if (url === "/system/capabilities")
+      return Promise.resolve({
+        data: {
+          platform: "darwin",
+          arch: "arm64",
+          chip: "Apple M2 Pro",
+          memory_gb: 32,
+          gpu_eligible: true,
+          recommended_preset: "standard",
+        },
+      });
+    if (url === "/settings/processing")
+      return Promise.resolve({
+        data: {
+          preset: "standard",
+          preset_revision: "2026-07-13.1",
+          language: "ko",
+          whisper_model: "large-v3-turbo",
+          devices: { diarization: "gpu", stt: "gpu" },
+        },
+      });
     if (url === "/lenses/extraction-status")
       return Promise.resolve({ data: { running: 0, failed: [] } });
     const ml = url.match(/^\/meetings\/([^/]+)\/lenses$/);
@@ -698,6 +720,30 @@ test("회의를 전환해도 플레이바는 하나만 남는다", async () => {
   expect(screen.getAllByRole("button", { name: "재생" })).toHaveLength(1);
 });
 
+test("회의를 전환해도 재생 배속이 유지된다", async () => {
+  const { container } = renderShell();
+  await screen.findByRole("heading", {
+    level: 1,
+    name: "기획회의 — UI 개선안",
+  });
+  fireEvent.loadedMetadata(container.querySelector("audio")!);
+  // 1x → 1.2x (SPEEDS 순환).
+  fireEvent.click(screen.getByRole("button", { name: "재생 속도 (현재 1x)" }));
+  expect(container.querySelector("audio")!.playbackRate).toBe(1.2);
+
+  fireEvent.click(screen.getByRole("link", { name: /스프린트 회고/ }));
+  await screen.findByRole("heading", { level: 1, name: "스프린트 회고" });
+
+  // 회의 뷰는 회의마다 리마운트되지만 배속은 살아남아야 하고(전사를 훑는 동안
+  // 유지되는 작업 모드다), 새 <audio>에도 다시 적용돼야 한다.
+  expect(
+    screen.getByRole("button", { name: "재생 속도 (현재 1.2x)" }),
+  ).toBeInTheDocument();
+  const next = container.querySelector("audio")!;
+  fireEvent.loadedMetadata(next);
+  expect(next.playbackRate).toBe(1.2);
+});
+
 test("모든 회의(전역 렌즈)로 전환하면 렌즈 대시보드와 탭이 보인다", async () => {
   renderShell();
   await screen.findByRole("heading", {
@@ -798,6 +844,35 @@ test("이미 열린 회의에서 ?u=만 바뀌어도 재생 위치가 옮겨진�
   await waitFor(() => expect(audio.currentTime).toBeCloseTo(12, 3));
 });
 
+test("이미 활성인 발언을 다시 눌러도 그 지점으로 다시 seek되고 히스토리는 쌓이지 않는다", async () => {
+  const { container, router } = renderShell("/meetings/m2");
+  await screen.findByRole("heading", { level: 1, name: "스프린트 회고" });
+  const audio = container.querySelector("audio")!;
+  fireEvent.loadedMetadata(audio);
+
+  const log = screen.getByRole("log", { name: "회의 전사" });
+  const block = log.querySelector('[data-uid="v2"]') as HTMLElement;
+  const jump = within(block).getByRole("button", { name: /원문 보기/ });
+
+  // 거쳐 간 히스토리 동작을 기록한다 — 점프마다 PUSH가 쌓이면 회의를 벗어나는
+  // 데 점프 횟수만큼 뒤로가기가 필요해진다.
+  const actions: string[] = [];
+  const unsubscribe = router.subscribe((s) => actions.push(s.historyAction));
+
+  fireEvent.click(jump);
+  // v2.start_ms = 5_000 → 5초.
+  await waitFor(() => expect(audio.currentTime).toBeCloseTo(5, 3));
+
+  // 계속 듣다가 같은 발언을 다시 누르는 상황("여기서 다시 듣기").
+  audio.currentTime = 120;
+  fireEvent.click(jump);
+  expect(audio.currentTime).toBeCloseTo(5, 3);
+
+  unsubscribe();
+  expect(actions).not.toContain("PUSH");
+  expect(router.state.location.search).toBe("?u=v2");
+});
+
 test("목록 첫 회의를 삭제하면 삭제된 회의로 되돌아가지 않는다", async () => {
   const { router } = renderShell("/meetings/m1");
   await screen.findByRole("heading", {
@@ -841,6 +916,21 @@ test("없는 회의 id로 진입하면 상세 오류 상태를 렌더하고 레�
   expect(
     screen.getByRole("navigation", { name: "주 탐색" }),
   ).toBeInTheDocument();
+});
+
+test("처리 설정 라우트도 셸 안에서 열리고 레일에 활성 표시가 남는다", async () => {
+  renderShell("/settings");
+  expect(
+    await screen.findByRole("heading", { level: 1, name: "처리 설정" }),
+  ).toBeInTheDocument();
+  // 회의 밖 화면에서도 셸 크롬(회의 목록 레일)이 끊기지 않는다.
+  expect(
+    screen.getByRole("navigation", { name: "주 탐색" }),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "처리 설정" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
 });
 
 test("새 회의 기록하기로 업로드 다이얼로그를 연다", async () => {
