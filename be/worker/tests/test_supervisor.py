@@ -20,6 +20,7 @@ def _settings_stub(pg_url):
         search_embedding_dim = 1024
         default_speaker_prefix = "Speaker"
         lens_llm_model = "qwen2.5:14b-instruct"
+        summary_llm_model = "qwen2.5:14b-instruct"
 
     return S()
 

@@ -382,6 +382,7 @@ def _settings_stub():
         search_embedding_dim=1024,
         default_speaker_prefix="Speaker",
         lens_llm_model="qwen2.5:14b-instruct",
+        summary_llm_model="qwen2.5:14b-instruct",
     )
 
 
@@ -465,6 +466,7 @@ def test_dispatch_passes_prefix_through_to_persist(conn, tmp_path, monkeypatch):
         search_embedding_dim=1024,
         default_speaker_prefix="Zz",
         lens_llm_model="qwen-dispatch",
+        summary_llm_model="qwen-dispatch",
     )
     out = dispatch_claimed_job(
         conn,

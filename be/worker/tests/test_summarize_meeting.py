@@ -1,7 +1,11 @@
+from types import SimpleNamespace
+
 import pytest
 
 from damwha_worker import db
+from damwha_worker.contracts import SummaryResponse, SummarySegmentCandidate
 from damwha_worker.errors import ErrorKind, WorkerError
+from damwha_worker.pipeline.summarize_meeting import run_summarize_meeting
 from tests.conftest import seed_job, seed_meeting
 
 
@@ -217,3 +221,110 @@ def test_reaper_fails_summary_row_when_worker_lock_expires(conn):
     )
     db.reap_stale(conn, 5)
     assert _one(conn, "SELECT status FROM meeting_summary")["status"] == "failed"
+
+
+def _payload(job):
+    from damwha_worker.contracts import parse_payload
+
+    return parse_payload(job["type"], job["payload"])
+
+
+def _response(segments, topics=("주제",)):
+    return SummaryResponse(topics=list(topics), segments=segments)
+
+
+def _segment(start, end, title="제목", bullets=("불릿",)):
+    return SummarySegmentCandidate(
+        start_utterance_id=start,
+        end_utterance_id=end,
+        title=title,
+        bullets=list(bullets),
+    )
+
+
+def test_pipeline_fills_timestamps_from_database(conn, summary_job):
+    job, ids = summary_job
+    client = SimpleNamespace(
+        summarize=lambda **_kw: _response([_segment(ids["utt_1"], ids["utt_2"])])
+    )
+    assert run_summarize_meeting(conn, job, _payload(job), client, worker_id="w") == "committed"
+    segment = _one(conn, "SELECT segments FROM meeting_summary")["segments"][0]
+    assert segment["start_ms"] == 0
+    assert segment["end_ms"] == 3000
+    assert segment["title"] == "제목"
+
+
+def test_pipeline_sends_payload_model_and_utterance_rows(conn, summary_job):
+    job, ids = summary_job
+    captured = {}
+
+    def summarize(**kwargs):
+        captured.update(kwargs)
+        return _response([])
+
+    assert (
+        run_summarize_meeting(
+            conn, job, _payload(job), SimpleNamespace(summarize=summarize), worker_id="w"
+        )
+        == "committed"
+    )
+    assert captured["model"] == "model"
+    assert [u["id"] for u in captured["utterances"]] == [ids["utt_1"], ids["utt_2"]]
+
+
+def test_pipeline_rejects_segment_with_unknown_utterance(conn, summary_job):
+    job, _ids = summary_job
+    client = SimpleNamespace(summarize=lambda **_kw: _response([_segment("utt_999", "utt_998")]))
+    with pytest.raises(WorkerError):
+        run_summarize_meeting(conn, job, _payload(job), client, worker_id="w")
+    assert _one(conn, "SELECT segments FROM meeting_summary")["segments"] == []
+
+
+def test_pipeline_rejects_segment_with_reversed_boundaries(conn, summary_job):
+    job, ids = summary_job
+    client = SimpleNamespace(
+        summarize=lambda **_kw: _response([_segment(ids["utt_2"], ids["utt_1"])])
+    )
+    with pytest.raises(WorkerError):
+        run_summarize_meeting(conn, job, _payload(job), client, worker_id="w")
+    assert _one(conn, "SELECT segments FROM meeting_summary")["segments"] == []
+
+
+def test_pipeline_rejects_out_of_order_segments(conn, summary_job):
+    job, ids = summary_job
+    client = SimpleNamespace(
+        summarize=lambda **_kw: _response(
+            [
+                _segment(ids["utt_2"], ids["utt_2"], title="뒤"),
+                _segment(ids["utt_1"], ids["utt_1"], title="앞"),
+            ]
+        )
+    )
+    with pytest.raises(WorkerError):
+        run_summarize_meeting(conn, job, _payload(job), client, worker_id="w")
+
+
+def test_pipeline_stores_empty_summary_for_meeting_without_utterances(conn):
+    meeting_id = seed_meeting(conn, status="done", processing_version=0)
+    job_id = seed_job(
+        conn,
+        type="summarize_meeting",
+        meeting_id=meeting_id,
+        payload={
+            "schema_version": 1,
+            "meeting_id": meeting_id,
+            "processing_version": 0,
+            "model": "model",
+        },
+    )
+    conn.execute(
+        """INSERT INTO meeting_summary(meeting_id, processing_version, job_id, model, status)
+           VALUES (%s, 0, %s, 'model', 'queued')""",
+        (meeting_id, job_id),
+    )
+    job = db.claim(conn, "w")
+    client = SimpleNamespace(summarize=lambda **_kw: _response([], topics=()))
+    assert run_summarize_meeting(conn, job, _payload(job), client, worker_id="w") == "committed"
+    row = _one(conn, "SELECT status, topics FROM meeting_summary")
+    assert row["status"] == "done"
+    assert row["topics"] == []
