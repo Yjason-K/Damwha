@@ -406,6 +406,7 @@ def run_child(settings, shutdown: threading.Event) -> int:
             worker_settings.lens_llm_base_url,
             worker_settings.lens_llm_api_key,
             worker_settings.lens_llm_timeout_seconds,
+            worker_settings.lens_llm_max_tokens,
         )
 
     def _build_summary_client(worker_settings):
@@ -415,6 +416,7 @@ def run_child(settings, shutdown: threading.Event) -> int:
             worker_settings.lens_llm_base_url,
             worker_settings.lens_llm_api_key,
             worker_settings.lens_llm_timeout_seconds,
+            worker_settings.lens_llm_max_tokens,
         )
 
     return run_single_job(

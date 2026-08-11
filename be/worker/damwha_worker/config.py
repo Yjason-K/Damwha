@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     summary_llm_model: str = "qwen3.5:4b-mlx"
     lens_llm_api_key: str | None = None
     lens_llm_timeout_seconds: float = 300.0
+    # 응답이 잘리면 JSON 파싱이 깨져 PERMANENT 실패가 되므로 상한은 넉넉하게 잡는다
+    # (mlx_lm.server 기본값 512는 회의 하나 분량의 요약도 못 담는다). 상한은 예약이
+    # 아니라 한도라, 크게 잡아도 모델이 stop에서 멈추면 그만큼만 생성한다.
+    lens_llm_max_tokens: int = 8192
 
     @field_validator("default_speaker_prefix")
     @classmethod

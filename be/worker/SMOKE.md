@@ -200,8 +200,13 @@ curl -s -X POST http://localhost:3000/meetings/<id>/lenses/extract   # status=do
 # run/job이 done이 되고 lens_item + lens_evidence가 생기는지 확인
 ```
 
-함정 셋:
+함정 넷:
 
+- **생성 길이 상한은 클라이언트가 바디로 보낸다**(`LENS_LLM_MAX_TOKENS`, 기본 8192).
+  `mlx_lm.server`의 `--max-tokens` 기본값은 **512**라 서버 기본값에 맡기면 회의 하나
+  분량의 JSON도 못 담고 배열 중간에서 잘린다 — `finish_reason=length`로 끝나고
+  `llm_invalid_response`(`Unterminated string…`) PERMANENT 실패가 된다. 바디 값이
+  서버 CLI 기본값을 덮으므로 서버를 어떻게 띄웠는지와 무관하게 동작한다.
 - **`mlx_lm.server`는 요청의 `model` 필드를 무시하지 않는다.** HF repo id로 검증하므로
   Ollama 태그 표기(`qwen3.5:4b-mlx`)를 보내면 `Repo id must use alphanumeric chars…`로
   거부당한다. 유효한 repo명이거나 `default`여야 한다.

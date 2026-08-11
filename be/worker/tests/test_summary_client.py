@@ -35,7 +35,7 @@ BODY = {
 
 def test_summarize_parses_valid_response(monkeypatch):
     _mount(monkeypatch, lambda url, kw: _ok(json.dumps(BODY, ensure_ascii=False)))
-    client = SummaryClient("http://x", None, 5.0)
+    client = SummaryClient("http://x", None, 5.0, 8192)
     result = client.summarize(model="m", utterances=[{"id": "utt_1"}])
     assert result.topics == ["파이프라인 실행 순서"]
     assert result.segments[0].end_utterance_id == "utt_2"
@@ -44,7 +44,7 @@ def test_summarize_parses_valid_response(monkeypatch):
 def test_summarize_unwraps_code_fence(monkeypatch):
     fenced = "```json\n" + json.dumps(BODY, ensure_ascii=False) + "\n```"
     _mount(monkeypatch, lambda url, kw: _ok(fenced))
-    client = SummaryClient("http://x", None, 5.0)
+    client = SummaryClient("http://x", None, 5.0, 8192)
     assert client.summarize(model="m", utterances=[]).topics == ["파이프라인 실행 순서"]
 
 
@@ -56,18 +56,33 @@ def test_summarize_sends_transcript_unescaped(monkeypatch):
         return _ok(json.dumps(BODY, ensure_ascii=False))
 
     _mount(monkeypatch, handler)
-    SummaryClient("http://x", None, 5.0).summarize(
+    SummaryClient("http://x", None, 5.0, 8192).summarize(
         model="m", utterances=[{"id": "utt_1", "text": "한글"}]
     )
     user_message = captured["json"]["messages"][1]["content"]
     assert "한글" in user_message  # \uXXXX 이스케이프가 아니라 원문 그대로
 
 
+def test_summarize_caps_generation_with_max_tokens(monkeypatch):
+    # 서버 기본 상한(mlx_lm.server는 512)에 걸리면 JSON이 중간에서 잘려
+    # llm_invalid_response로 실패한다 — 상한을 요청 바디에서 명시한다.
+    captured = {}
+
+    def handler(url, kw):
+        captured.update(kw)
+        return _ok(json.dumps(BODY, ensure_ascii=False))
+
+    _mount(monkeypatch, handler)
+    SummaryClient("http://x", None, 5.0, 8192).summarize(model="m", utterances=[])
+
+    assert captured["json"]["max_tokens"] == 8192
+
+
 def test_summarize_defaults_missing_key_to_empty_list(monkeypatch):
     # 로컬 런타임에서는 response_format이 권고사항이라 모델이 topics/segments 중
     # 하나를 통째로 생략하기도 한다 — 그래도 파싱은 되어야 한다.
     _mount(monkeypatch, lambda url, kw: _ok(json.dumps({"segments": BODY["segments"]})))
-    result = SummaryClient("http://x", None, 5.0).summarize(model="m", utterances=[])
+    result = SummaryClient("http://x", None, 5.0, 8192).summarize(model="m", utterances=[])
     assert result.topics == []
     assert result.segments[0].end_utterance_id == "utt_2"
 
@@ -75,12 +90,12 @@ def test_summarize_defaults_missing_key_to_empty_list(monkeypatch):
 def test_summarize_maps_5xx_to_transient(monkeypatch):
     _mount(monkeypatch, lambda url, kw: _ok("{}", status=503))
     with pytest.raises(WorkerError) as exc:
-        SummaryClient("http://x", None, 5.0).summarize(model="m", utterances=[])
+        SummaryClient("http://x", None, 5.0, 8192).summarize(model="m", utterances=[])
     assert exc.value.kind is ErrorKind.TRANSIENT
 
 
 def test_summarize_maps_invalid_json_to_permanent(monkeypatch):
     _mount(monkeypatch, lambda url, kw: _ok("not json at all"))
     with pytest.raises(WorkerError) as exc:
-        SummaryClient("http://x", None, 5.0).summarize(model="m", utterances=[])
+        SummaryClient("http://x", None, 5.0, 8192).summarize(model="m", utterances=[])
     assert exc.value.kind is ErrorKind.PERMANENT
