@@ -1,3 +1,4 @@
+import * as React from "react";
 import {
   useMutation,
   useQuery,
@@ -12,6 +13,7 @@ import type {
   MeetingStatusResponse,
   ResolveClusterRequest,
   ResolveClusterResponse,
+  SummaryStatus,
   WireMeeting,
   WireMeetingDetail,
 } from "./types";
@@ -197,4 +199,42 @@ export function useResolveCluster() {
       queryClient.invalidateQueries({ queryKey: ["speakers"] });
     },
   });
+}
+
+/** 대화 요약 생성/재생성 (POST /meetings/:id/summary/generate). done에서만 허용(그 외 409). */
+export function useGenerateSummary() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: { id: string }) => {
+      const { data } = await apiClient.post<{
+        status: string;
+        job_id: string | null;
+        processing_version: number;
+      }>(`/meetings/${vars.id}/summary/generate`);
+      return data;
+    },
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["meeting", vars.id] });
+      queryClient.invalidateQueries({ queryKey: ["meeting-status", vars.id] });
+    },
+  });
+}
+
+/**
+ * 요약 상태 동기화 — 상세 응답은 회의가 done이면 더 폴링되지 않는데, 요약 잡은
+ * 그 뒤에 돈다. 가벼운 상태 엔드포인트가 알려준 summary_status가 상세 캐시의
+ * 값과 어긋나면 상세를 한 번만 다시 가져온다. 갱신 후 두 값이 같아지므로
+ * 반복 무효화로 이어지지 않는다.
+ */
+export function useSyncSummaryStatus(
+  meetingId: string | undefined,
+  detailStatus: SummaryStatus | null | undefined,
+  polledStatus: SummaryStatus | null | undefined,
+) {
+  const queryClient = useQueryClient();
+  React.useEffect(() => {
+    if (!meetingId || polledStatus === undefined) return;
+    if (polledStatus === detailStatus) return;
+    queryClient.invalidateQueries({ queryKey: ["meeting", meetingId] });
+  }, [meetingId, detailStatus, polledStatus, queryClient]);
 }

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { env } from "@/shared/config/env";
+import type { LensWireItem } from "@/features/lens/model/types";
 import {
   formatClock,
+  mapMeetingLenses,
   meetingAudioUrl,
   toMeetingDetail,
   toMeetingSummary,
@@ -797,5 +799,70 @@ describe("toMeetingDetail — 요약", () => {
         bullets: ["공유를 해드릴 것임"],
       },
     ]);
+  });
+});
+
+describe("mapMeetingLenses", () => {
+  const SPEAKERS = {
+    1: { id: "spk_1", name: "김영재", role: "", spk: 1 },
+    2: { id: "spk_2", name: "박민수", role: "", spk: 2 },
+  };
+
+  function wireItem(over: Partial<LensWireItem> = {}): LensWireItem {
+    return {
+      id: "lns_1",
+      meeting_id: "mtg_1",
+      kind: "action",
+      text: "실행 로그 작성",
+      source: "ai",
+      assignee_speaker_id: null,
+      due_at: null,
+      evidence: [
+        {
+          relation: "primary",
+          utterance: { id: "utt_1", start_ms: 0, text: "", speaker_name: null },
+        },
+      ],
+      ...over,
+    } as LensWireItem;
+  }
+
+  it("kind별로 묶는다", () => {
+    const result = mapMeetingLenses(
+      [
+        wireItem(),
+        wireItem({ id: "lns_2", kind: "decision", text: "v2로 한정" }),
+      ],
+      SPEAKERS,
+    );
+    expect(result.action?.map((i) => i.text)).toEqual(["실행 로그 작성"]);
+    expect(result.decision?.map((i) => i.text)).toEqual(["v2로 한정"]);
+  });
+
+  it("담당 화자 id를 화자 틴트 번호로 바꾼다", () => {
+    const result = mapMeetingLenses(
+      [wireItem({ assignee_speaker_id: "spk_2" })],
+      SPEAKERS,
+    );
+    expect(result.action?.[0].who).toBe(2);
+  });
+
+  it("모르는 담당 화자는 who를 비운다", () => {
+    const result = mapMeetingLenses(
+      [wireItem({ assignee_speaker_id: "spk_99" })],
+      SPEAKERS,
+    );
+    expect(result.action?.[0].who).toBeUndefined();
+  });
+
+  it("primary 근거의 발화 id를 ev에 담는다", () => {
+    const result = mapMeetingLenses([wireItem()], SPEAKERS);
+    expect(result.action?.[0].ev).toBe("utt_1");
+  });
+
+  it("근거가 사라진 AI 항목은 source를 hint로 낮춘다", () => {
+    const result = mapMeetingLenses([wireItem({ evidence: [] })], SPEAKERS);
+    expect(result.action?.[0].source).toBe("hint");
+    expect(result.action?.[0].ev).toBe("");
   });
 });
