@@ -51,6 +51,16 @@ describe('요약 API', () => {
       ],
     );
 
+  const seedSummaryWithModel = async (
+    meetingId: string,
+    opts: { processingVersion: number; status: SummaryStatus; model: string },
+  ) =>
+    db.pool.query(
+      `INSERT INTO meeting_summary(meeting_id, processing_version, model, status, topics, segments)
+       VALUES($1, $2, $3, $4, '[]'::jsonb, '[]'::jsonb)`,
+      [meetingId, opts.processingVersion, opts.model, opts.status],
+    );
+
   it('처리되지 않은 회의는 summary가 null이다', async () => {
     const meetingId = await seedMeeting({ status: 'done', processingVersion: 0 });
     const res = await request(app.getHttpServer()).get(`/meetings/${meetingId}`).expect(200);
@@ -153,5 +163,78 @@ describe('요약 API', () => {
       .get(`/meetings/${meetingId}/status`)
       .expect(200);
     expect(res.body.summary_status).toBe('running');
+  });
+
+  it('body 없음 → 전역 설정의 summary_model로 큐잉된다', async () => {
+    const meetingId = await seedMeeting({ status: 'done', processingVersion: 0 });
+    await request(app.getHttpServer())
+      .put('/settings/processing').send({ preset: 'quality', language: 'ko' }).expect(200);
+
+    await request(app.getHttpServer())
+      .post(`/meetings/${meetingId}/summary/generate`).expect(202);
+
+    const row = await db.pool.query(
+      `SELECT model FROM meeting_summary WHERE meeting_id=$1`, [meetingId],
+    );
+    expect(row.rows[0].model).toBe('qwen3.5:14b-mlx');
+    const job = await db.pool.query(
+      `SELECT payload FROM job WHERE meeting_id=$1 AND type='summarize_meeting'`, [meetingId],
+    );
+    expect(job.rows[0].payload.model).toBe('qwen3.5:14b-mlx');
+  });
+
+  it('body override → 그 모델로 큐잉되고 전역 설정은 바뀌지 않는다', async () => {
+    const meetingId = await seedMeeting({ status: 'done', processingVersion: 0 });
+    await request(app.getHttpServer())
+      .put('/settings/processing').send({ preset: 'light', language: 'ko' }).expect(200);
+
+    await request(app.getHttpServer())
+      .post(`/meetings/${meetingId}/summary/generate`)
+      .send({ summary_model: 'qwen3.5:14b-mlx' })
+      .expect(202);
+
+    const row = await db.pool.query(
+      `SELECT model FROM meeting_summary WHERE meeting_id=$1`, [meetingId],
+    );
+    expect(row.rows[0].model).toBe('qwen3.5:14b-mlx');
+    const settings = await request(app.getHttpServer()).get('/settings/processing').expect(200);
+    expect(settings.body.summary_model).toBe('qwen3.5:4b-mlx'); // 저장되지 않는다
+  });
+
+  it('목록 밖 모델 → 400', async () => {
+    const meetingId = await seedMeeting({ status: 'done', processingVersion: 0 });
+    await request(app.getHttpServer())
+      .post(`/meetings/${meetingId}/summary/generate`)
+      .send({ summary_model: 'gpt-9' })
+      .expect(400);
+  });
+
+  it('진행 중 요약과 다른 모델로 재요청 → 409', async () => {
+    const meetingId = await seedMeeting({ status: 'done', processingVersion: 0 });
+    await seedSummaryWithModel(meetingId, {
+      processingVersion: 0, status: 'running', model: 'qwen3.5:4b-mlx',
+    });
+    const res = await request(app.getHttpServer())
+      .post(`/meetings/${meetingId}/summary/generate`)
+      .send({ summary_model: 'qwen3.5:14b-mlx' });
+    expect(res.status).toBe(409);
+    expect(res.body.message).toContain('qwen3.5:4b-mlx');
+  });
+
+  it('진행 중 요약과 같은 모델로 재요청 → 기존 상태 반환 (멱등)', async () => {
+    const meetingId = await seedMeeting({ status: 'done', processingVersion: 0 });
+    await seedSummaryWithModel(meetingId, {
+      processingVersion: 0, status: 'running', model: 'qwen3.5:14b-mlx',
+    });
+    const res = await request(app.getHttpServer())
+      .post(`/meetings/${meetingId}/summary/generate`)
+      .send({ summary_model: 'qwen3.5:14b-mlx' })
+      .expect(202);
+    expect(res.body.status).toBe('running');
+    const jobs = await db.pool.query(
+      `SELECT count(*)::int AS n FROM job WHERE meeting_id=$1 AND type='summarize_meeting'`,
+      [meetingId],
+    );
+    expect(jobs.rows[0].n).toBe(0); // 재큐잉 없음
   });
 });

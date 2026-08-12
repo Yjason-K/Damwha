@@ -29,8 +29,8 @@ export class SummaryRepository {
   }
 
   async findActive(exec: Queryable, meetingId: string, processingVersion: number) {
-    const { rows } = await exec.query<{ status: string; job_id: string | null }>(
-      `SELECT status, job_id FROM meeting_summary
+    const { rows } = await exec.query<{ status: string; job_id: string | null; model: string }>(
+      `SELECT status, job_id, model FROM meeting_summary
         WHERE meeting_id = $1 AND processing_version = $2
           AND status IN ('queued','running')`,
       [meetingId, processingVersion],

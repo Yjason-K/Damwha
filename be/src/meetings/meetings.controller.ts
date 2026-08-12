@@ -64,8 +64,24 @@ export class MeetingsController {
 
   @Post(':id/summary/generate')
   @ApiOperation({ summary: '대화 요약 생성/재생성' })
+  @ApiBody({
+    required: false,
+    schema: {
+      type: 'object',
+      properties: {
+        summary_model: {
+          type: 'string',
+          description:
+            '이번 요약 한정 모델 오버라이드. 생략하면 전역 처리 설정의 summary_model을 쓴다. ' +
+            '저장되지 않으며, 진행 중인 요약과 모델이 다르면 409.',
+        },
+      },
+    },
+  })
   @HttpCode(202)
-  generateSummary(@Param('id') id: string) { return this.summary.request(id); }
+  generateSummary(@Param('id') id: string, @Body() body: { summary_model?: unknown }) {
+    return this.summary.request(id, body);
+  }
 
   @Patch(':id')
   @ApiOperation({ summary: '회의 정보 수정 (제목/녹음 시각)' })
