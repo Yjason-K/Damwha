@@ -56,6 +56,8 @@ function renderPane(
     onOpenLens: vi.fn(),
     onJumpSegment: vi.fn(),
     onRegenerateSummary: vi.fn(),
+    summaryModel: undefined,
+    onSummaryModelChange: vi.fn(),
     regenerating: false,
     ...props,
   };
@@ -237,6 +239,22 @@ describe("InsightPane", () => {
     expect(checkbox.checked).toBe(true);
     fireEvent.click(checkbox);
     expect(props.onToggle).toHaveBeenCalledWith("l1", false);
+  });
+
+  it("요약 탭에서 모델을 고르면 콜백이 불린다", async () => {
+    const onSummaryModelChange = vi.fn();
+    renderPane({
+      tab: "summary",
+      summaryModel: "qwen3.5:8b-mlx",
+      onSummaryModelChange,
+    });
+    // Radix Select는 jsdom에서 pointer 이벤트를 못 받아 mousedown으로 열리지
+    // 않는다. 트리거에 포커스 후 ArrowDown(키보드)으로 열고 옵션을 클릭한다.
+    const trigger = screen.getByLabelText("요약 모델");
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name: /14B/ }));
+    expect(onSummaryModelChange).toHaveBeenCalledWith("qwen3.5:14b-mlx");
   });
 
   it("요약 생성 중에는 할 일 블록이 그대로 남는다", () => {

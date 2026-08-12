@@ -26,6 +26,8 @@ import { Icon } from "@/features/meeting/ui/icons";
 import { InsightPane } from "@/features/meeting/ui/insight-pane";
 import { PlayerBar } from "@/features/meeting/ui/player-bar";
 import { TranscriptPane } from "@/features/meeting/ui/transcript-pane";
+import { useProcessingSettings } from "@/features/settings/api/settings";
+import type { SummaryModel } from "@/features/settings/api/types";
 
 /**
  * `/meetings/:meetingId` — 셸(AppShell) 안의 회의 뷰. 전사 + 인사이트 + 실제
@@ -159,6 +161,13 @@ function MeetingView({
   const { data: lensItems = [] } = useMeetingLenses(meetingId);
   const setLensCompletion = useSetLensCompletion();
   const generateSummary = useGenerateSummary();
+  const processingSettings = useProcessingSettings();
+  const [summaryModel, setSummaryModel] = React.useState<
+    SummaryModel | undefined
+  >(undefined);
+  // 선택 전 기본값은 전역 설정값 — 서버도 body가 없으면 같은 값을 쓴다.
+  const effectiveSummaryModel =
+    summaryModel ?? processingSettings.data?.summary_model;
   const meetingLenses = React.useMemo(
     () => (meeting ? mapMeetingLenses(lensItems, meeting.speakers) : {}),
     [lensItems, meeting],
@@ -335,7 +344,14 @@ function MeetingView({
           }
           onOpenLens={(k) => navigate(`/lenses/${k}`)}
           onJumpSegment={jumpTo}
-          onRegenerateSummary={() => generateSummary.mutate({ id: meeting.id })}
+          onRegenerateSummary={() =>
+            generateSummary.mutate({
+              id: meeting.id,
+              summary_model: effectiveSummaryModel,
+            })
+          }
+          summaryModel={effectiveSummaryModel}
+          onSummaryModelChange={setSummaryModel}
           regenerating={generateSummary.isPending}
         />
       </>
