@@ -28,10 +28,11 @@ test("설정 페이지가 감지 스펙 카드와 처리 설정 폼을 렌더한
       return {
         data: {
           preset: "standard",
-          preset_revision: "2026-07-13.1",
+          preset_revision: "2026-08-12.1",
           language: "ko",
           whisper_model: "large-v3-turbo",
           devices: { diarization: "gpu", stt: "gpu" },
+          summary_model: "qwen3.5:8b-mlx",
         },
       } as never;
     throw new Error(`unexpected GET ${url}`);

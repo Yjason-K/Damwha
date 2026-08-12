@@ -13,6 +13,12 @@ export type WhisperModel =
   | "large-v3"
   | "large-v3-turbo";
 
+/** BE `src/contracts/model-catalog.ts`의 SUMMARY_MODELS 미러 — 함께 갱신할 것. */
+export type SummaryModel =
+  | "qwen3.5:4b-mlx"
+  | "qwen3.5:8b-mlx"
+  | "qwen3.5:14b-mlx";
+
 /** GET /settings/processing — 항상 resolved 뷰. */
 export type ProcessingConfig = {
   preset: PresetName | "custom";
@@ -20,6 +26,7 @@ export type ProcessingConfig = {
   language: string;
   whisper_model: WhisperModel;
   devices: { diarization: Device; stt: Device };
+  summary_model: SummaryModel;
 };
 
 /** PUT /settings/processing — 이름 프리셋은 이름+언어만, custom은 전 필드. */
@@ -42,6 +49,7 @@ export type ProcessingOverride = {
   whisper_model?: WhisperModel;
   devices?: { diarization?: Device; stt?: Device };
   language?: string;
+  summary_model?: SummaryModel;
 };
 
 /** GET /system/capabilities — gpu_eligible은 하드웨어 적합성만 의미. */

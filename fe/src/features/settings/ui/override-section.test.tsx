@@ -18,10 +18,11 @@ function renderSection(
   vi.spyOn(apiClient, "get").mockResolvedValue({
     data: {
       preset: "standard",
-      preset_revision: "2026-07-13.1",
+      preset_revision: "2026-08-12.1",
       language: "ko",
       whisper_model: "large-v3-turbo",
       devices: { diarization: "gpu", stt: "gpu" },
+      summary_model: "qwen3.5:8b-mlx",
     },
   } as never);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
