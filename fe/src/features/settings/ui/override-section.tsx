@@ -58,6 +58,13 @@ export function OverrideSection({ value, onChange }: OverrideSectionProps) {
     if (!next) onChange(undefined);
   };
 
+  // 서버는 override.preset을 먼저 resolve한 뒤 개별 필드를 덮어쓴다(요약 모델을
+  // 비워두면 프리셋의 기본값이 적용됨) — 플레이스홀더가 그 실제 기본값을
+  // 가리키게 한다. 프리셋 미선택 시에만 전역 설정이 기본값이다.
+  const summaryModelPlaceholder = value?.preset
+    ? `요약 모델 (기본: ${PRESET_META[value.preset].summary_model})`
+    : "요약 모델 (기본: 전역 설정)";
+
   return (
     <div className="flex flex-col gap-2">
       <button
@@ -101,7 +108,7 @@ export function OverrideSection({ value, onChange }: OverrideSectionProps) {
             }
           >
             <SelectTrigger aria-label="이번 작업 요약 모델">
-              <SelectValue placeholder="요약 모델 (기본: 전역 설정)" />
+              <SelectValue placeholder={summaryModelPlaceholder} />
             </SelectTrigger>
             <SelectContent>
               {SUMMARY_MODEL_OPTIONS.map((o) => (

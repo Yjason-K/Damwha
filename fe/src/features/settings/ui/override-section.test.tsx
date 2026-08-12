@@ -92,6 +92,19 @@ test("프리셋 선택 뒤 요약 모델을 바꾸면 두 값이 함께 유지�
   });
 });
 
+test("요약 모델이 이미 선택된 상태에서 프리셋을 고르면 두 값이 함께 담긴다", async () => {
+  const onChange = vi.fn();
+  renderSection({ summary_model: "qwen3.5:14b-mlx" }, onChange);
+  const trigger = screen.getByLabelText("이번 작업 프리셋");
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("option", { name: /고품질/ }));
+  expect(onChange).toHaveBeenCalledWith({
+    summary_model: "qwen3.5:14b-mlx",
+    preset: "quality",
+  });
+});
+
 test("부모가 value를 리셋하면 섹션이 닫힌다", () => {
   const { rerender } = renderSection({ preset: "quality" }, () => {});
   expect(screen.getByLabelText("이번 작업 프리셋")).toBeTruthy();
