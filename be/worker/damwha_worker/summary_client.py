@@ -99,6 +99,9 @@ class SummaryClient:
             "messages": messages,
             "response_format": {"type": "json_object"},
             "reasoning_effort": "none",
+            # The server's own default (512 on mlx_lm.server) truncates the segments
+            # array mid-string, which surfaces as an unparseable-JSON PERMANENT
+            # failure — so the cap is stated here instead of inherited.
             "max_tokens": self._max_tokens,
         }
         try:

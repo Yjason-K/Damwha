@@ -35,10 +35,17 @@ def _strip_code_fence(content: str) -> str:
 class LensClient:
     """Small synchronous adapter for OpenAI-compatible chat-completion APIs."""
 
-    def __init__(self, base_url: str, api_key: str | None, timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str | None,
+        timeout_seconds: float,
+        max_tokens: int,
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._timeout_seconds = timeout_seconds
+        self._max_tokens = max_tokens
 
     def extract(self, *, model: str, utterances: list[dict[str, Any]]) -> list[LensCandidate]:
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
@@ -60,6 +67,10 @@ class LensClient:
             # Reasoning models spend minutes thinking before emitting the items
             # array. Extraction needs the answer, not the deliberation.
             "reasoning_effort": "none",
+            # The server's own default (512 on mlx_lm.server) truncates the items
+            # array mid-string, which surfaces as an unparseable-JSON PERMANENT
+            # failure — so the cap is stated here instead of inherited.
+            "max_tokens": self._max_tokens,
         }
         try:
             with httpx.Client(timeout=self._timeout_seconds) as client:
