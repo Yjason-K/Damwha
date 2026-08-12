@@ -37,6 +37,7 @@ export type ProcessingSettingsUpdate =
       language: string;
       whisper_model: WhisperModel;
       devices: { diarization: Device; stt: Device };
+      summary_model: SummaryModel;
     };
 
 /**
