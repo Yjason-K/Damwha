@@ -9,15 +9,26 @@ import {
 } from "@/shared/ui/select";
 
 import { useProcessingSettings } from "../api/settings";
-import type { PresetName, ProcessingOverride } from "../api/types";
-import { deviceSummary, PRESET_META, PRESET_ORDER } from "../lib/presets";
+import type {
+  PresetName,
+  ProcessingOverride,
+  SummaryModel,
+} from "../api/types";
+import {
+  deviceSummary,
+  PRESET_META,
+  PRESET_ORDER,
+  SUMMARY_MODEL_OPTIONS,
+} from "../lib/presets";
 
 /**
  * OverrideSection — "이번 작업만 다른 설정" 접힌 섹션. 업로드/재처리
  * dialog 공용. 열림 + 프리셋 선택 → onChange(override); 닫으면
- * onChange(undefined) (전역 설정 사용). Phase 1은 프리셋 단위 오버라이드만
- * 노출한다 — 개별 노브 오버라이드는 서버 계약상 가능하지만 UI는 프리셋
- * 선택으로 단순화(개별 필드는 결과를 custom으로 만들어 혼동 여지가 큼).
+ * onChange(undefined) (전역 설정 사용). 노출 범위는 프리셋 + 요약 모델
+ * 두 노브다. 나머지 개별 노브(whisper/devices/language)는 서버 계약상
+ * 가능하지만 UI에 두지 않는다 — 결과를 custom으로 만들어 혼동 여지가
+ * 크다. 요약 모델은 예외로, "이번만 큰 모델로" 요구가 명확해 노출한다
+ * (서버는 이 경우에도 결과를 custom으로 기록한다).
  * 프리셋 목록은 의도적으로 gpu_eligible로 게이팅하지 않는다 — 제품이 Apple
  * Silicon 전용이라 비적격 환경은 미지원이며, 그 경우 서버 400을 토스트로
  * 그레이스풀 처리한다(전역 설정 폼의 보수적 게이팅이 1차 방어).
@@ -63,12 +74,14 @@ export function OverrideSection({ value, onChange }: OverrideSectionProps) {
           <span className="text-xs text-[color:var(--text-muted)]">
             현재 전역:{" "}
             {global
-              ? `${global.whisper_model} · ${deviceSummary(global.devices)}`
+              ? `${global.whisper_model} · ${deviceSummary(global.devices)} · 요약 ${global.summary_model}`
               : "불러오는 중…"}
           </span>
           <Select
             value={value?.preset}
-            onValueChange={(v) => onChange({ preset: v as PresetName })}
+            onValueChange={(v) =>
+              onChange({ ...value, preset: v as PresetName })
+            }
           >
             <SelectTrigger aria-label="이번 작업 프리셋">
               <SelectValue placeholder="프리셋 선택" />
@@ -77,6 +90,23 @@ export function OverrideSection({ value, onChange }: OverrideSectionProps) {
               {PRESET_ORDER.map((name) => (
                 <SelectItem key={name} value={name}>
                   {PRESET_META[name].label} — {PRESET_META[name].whisper_model}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={value?.summary_model}
+            onValueChange={(v) =>
+              onChange({ ...value, summary_model: v as SummaryModel })
+            }
+          >
+            <SelectTrigger aria-label="이번 작업 요약 모델">
+              <SelectValue placeholder="요약 모델 (기본: 전역 설정)" />
+            </SelectTrigger>
+            <SelectContent>
+              {SUMMARY_MODEL_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
                 </SelectItem>
               ))}
             </SelectContent>

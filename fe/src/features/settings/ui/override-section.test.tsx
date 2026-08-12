@@ -66,6 +66,32 @@ test("섹션을 닫으면 override가 해제된다", () => {
   expect(onChange).toHaveBeenCalledWith(undefined);
 });
 
+test("요약 모델만 고르면 그 값만 담긴 override를 올려보낸다", async () => {
+  const onChange = vi.fn();
+  renderSection(undefined, onChange);
+  fireEvent.click(
+    screen.getByRole("button", { name: /이번 작업만 다른 설정/ }),
+  );
+  const trigger = screen.getByLabelText("이번 작업 요약 모델");
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("option", { name: /14B/ }));
+  expect(onChange).toHaveBeenCalledWith({ summary_model: "qwen3.5:14b-mlx" });
+});
+
+test("프리셋 선택 뒤 요약 모델을 바꾸면 두 값이 함께 유지된다", async () => {
+  const onChange = vi.fn();
+  renderSection({ preset: "light" }, onChange);
+  const trigger = screen.getByLabelText("이번 작업 요약 모델");
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("option", { name: /14B/ }));
+  expect(onChange).toHaveBeenCalledWith({
+    preset: "light",
+    summary_model: "qwen3.5:14b-mlx",
+  });
+});
+
 test("부모가 value를 리셋하면 섹션이 닫힌다", () => {
   const { rerender } = renderSection({ preset: "quality" }, () => {});
   expect(screen.getByLabelText("이번 작업 프리셋")).toBeTruthy();
