@@ -144,10 +144,10 @@ and searchable via BM25 alone until the dense index is rebuilt.
 
 ## 프리셋별 스모크 (spec 2026-07-13 processing-settings)
 
-Payload v2가 단계별 디바이스(`devices.{diarization,stt}`)와 whisper 모델을 실어
-나른다. STT 백엔드는 payload에서 파생된다: `devices.stt: gpu` → `mlx-whisper`,
-`cpu` → `faster-whisper` (int8). 프리셋 정의는 `src/settings/presets.ts`
-(`PRESET_REVISION='2026-07-13.1'`).
+Payload v3가 단계별 디바이스(`devices.{diarization,stt}`), whisper 모델, 요약
+LLM(`summary_model`)을 실어 나른다. STT 백엔드는 payload에서 파생된다:
+`devices.stt: gpu` → `mlx-whisper`, `cpu` → `faster-whisper` (int8). 프리셋
+정의는 `src/settings/presets.ts` (`PRESET_REVISION='2026-08-12.1'`).
 
 각 프리셋에 대해: `PUT /settings/processing`으로 프리셋 설정 → 짧은 오디오 업로드
 → job 완료(`status=done`) 확인. (또는 업로드 시 multipart `processing`
@@ -158,11 +158,17 @@ JSON-string 필드 / reprocess JSON body로 job별 오버라이드.)
   안 됐음; 지금은 전 플랫폼 설치).
 - **standard**: `large-v3-turbo` + STT `gpu`(mlx).
 - **quality**: `large-v3` + STT `gpu`(mlx).
-- v2 payload의 `models.devices`/`preset`이 job 행에 그대로 박혔는지 psql로 확인:
+- v3 payload의 `models.devices`/`preset`이 job 행에 그대로 박혔는지 psql로 확인:
   ```sql
   SELECT payload->'models'->'devices', payload->'models'->>'preset'
     FROM job WHERE type='process_meeting' ORDER BY created_at DESC LIMIT 1;
   ```
+- 프리셋별 요약 모델이 실제로 서빙되는지 먼저 확인한다:
+  `curl -s http://127.0.0.1:11434/v1/models | jq -r '.data[].id'`
+  light → qwen3.5:4b-mlx / standard → qwen3.5:8b-mlx / quality → qwen3.5:14b-mlx
+  목록에 없으면 해당 프리셋의 첫 요약 job이 PERMANENT로 실패한다.
+- 요약 완료 후 기록된 모델을 확인한다:
+  `psql "$DATABASE_URL" -c "SELECT model, status FROM meeting_summary ORDER BY updated_at DESC LIMIT 1"`
 - (선택) `devices.diarization: cpu` custom으로 pyannote CPU 경로 1회. 어떤 개별
   필드든(language만 바꿔도) preset은 `custom`으로 전환된다.
 - tiny/base/small/medium 신규 모델은 여기서 처음 다운로드·추론된다 — repo 이름은
