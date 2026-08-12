@@ -89,12 +89,12 @@ test("요약 모델을 지정하면 summary_model을 바디에 담아 posts한�
   const { result } = renderHook(() => useGenerateSummary(), { wrapper });
 
   act(() => {
-    result.current.mutate({ id: "m1", summary_model: "qwen3.5:14b-mlx" });
+    result.current.mutate({ id: "m1", summary_model: "qwen3.5:27b-mlx" });
   });
 
   await waitFor(() => expect(result.current.isSuccess).toBe(true));
   expect(post).toHaveBeenCalledWith("/meetings/m1/summary/generate", {
-    summary_model: "qwen3.5:14b-mlx",
+    summary_model: "qwen3.5:27b-mlx",
   });
 });
 

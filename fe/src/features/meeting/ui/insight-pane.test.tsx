@@ -245,7 +245,7 @@ describe("InsightPane", () => {
     const onSummaryModelChange = vi.fn();
     renderPane({
       tab: "summary",
-      summaryModel: "qwen3.5:8b-mlx",
+      summaryModel: "qwen3.5:9b-mlx",
       onSummaryModelChange,
     });
     // Radix Select는 jsdom에서 pointer 이벤트를 못 받아 mousedown으로 열리지
@@ -253,8 +253,8 @@ describe("InsightPane", () => {
     const trigger = screen.getByLabelText("요약 모델");
     trigger.focus();
     fireEvent.keyDown(trigger, { key: "ArrowDown" });
-    fireEvent.click(await screen.findByRole("option", { name: /14B/ }));
-    expect(onSummaryModelChange).toHaveBeenCalledWith("qwen3.5:14b-mlx");
+    fireEvent.click(await screen.findByRole("option", { name: /27B/ }));
+    expect(onSummaryModelChange).toHaveBeenCalledWith("qwen3.5:27b-mlx");
   });
 
   it("요약 생성 중에는 할 일 블록이 그대로 남는다", () => {

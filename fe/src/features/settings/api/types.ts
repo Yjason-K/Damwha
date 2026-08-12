@@ -16,8 +16,8 @@ export type WhisperModel =
 /** BE `src/contracts/model-catalog.ts`의 SUMMARY_MODELS 미러 — 함께 갱신할 것. */
 export type SummaryModel =
   | "qwen3.5:4b-mlx"
-  | "qwen3.5:8b-mlx"
-  | "qwen3.5:14b-mlx";
+  | "qwen3.5:9b-mlx"
+  | "qwen3.5:27b-mlx";
 
 /** GET /settings/processing — 항상 resolved 뷰. */
 export type ProcessingConfig = {
