@@ -1,7 +1,7 @@
 import { Device, WHISPER_MODELS } from '../contracts/job-payload.schema';
 import { SummaryModel } from '../contracts/model-catalog';
 
-export const PRESET_REVISION = '2026-08-12.2'; // 프리셋 정의 변경 시 갱신 (spec §2)
+export const PRESET_REVISION = '2026-08-12.3'; // 프리셋 정의 변경 시 갱신 (spec §2)
 export type PresetName = 'light' | 'standard' | 'quality';
 export type WhisperModel = (typeof WHISPER_MODELS)[number];
 
@@ -21,17 +21,17 @@ const PRESETS: Record<
   light: {
     whisper_model: 'small',
     devices: { diarization: 'gpu', stt: 'cpu' },
-    summary_model: 'qwen3.5:4b-mlx',
+    summary_model: 'mlx-community/Qwen3.5-4B-8bit',
   },
   standard: {
     whisper_model: 'large-v3-turbo',
     devices: { diarization: 'gpu', stt: 'gpu' },
-    summary_model: 'qwen3.5:9b-mlx',
+    summary_model: 'mlx-community/Qwen3.5-9B-8bit',
   },
   quality: {
     whisper_model: 'large-v3',
     devices: { diarization: 'gpu', stt: 'gpu' },
-    summary_model: 'qwen3.5:27b-mlx',
+    summary_model: 'mlx-community/Qwen3.5-27B-8bit',
   },
 };
 

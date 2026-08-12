@@ -65,8 +65,13 @@ class LensClient:
             ],
             "response_format": {"type": "json_object"},
             # Reasoning models spend minutes thinking before emitting the items
-            # array. Extraction needs the answer, not the deliberation.
+            # array. Extraction needs the answer, not the deliberation. Two keys
+            # because runtimes disagree on which one they read: Ollama honors
+            # reasoning_effort, mlx_lm.server ignores it and only merges
+            # chat_template_kwargs over its --chat-template-args default.
+            # An unread key is silently dropped, so sending both is safe.
             "reasoning_effort": "none",
+            "chat_template_kwargs": {"enable_thinking": False},
             # The server's own default (512 on mlx_lm.server) truncates the items
             # array mid-string, which surfaces as an unparseable-JSON PERMANENT
             # failure — so the cap is stated here instead of inherited.

@@ -387,7 +387,7 @@ def test_v3_payload_summary_model_wins_over_worker_env(conn, tmp_path):
     out = run_process_meeting(
         conn,
         conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
-        _payload_v3(mid, "meetings/m/original.m4a", "qwen3.5:14b-mlx"),
+        _payload_v3(mid, "meetings/m/original.m4a", "mlx-community/Qwen3.5-27B-8bit"),
         _models(),
         Storage(str(tmp_path)),
         worker_id="w1",
@@ -397,7 +397,7 @@ def test_v3_payload_summary_model_wins_over_worker_env(conn, tmp_path):
     )
     assert out == "committed"
     row = conn.execute("SELECT model FROM meeting_summary WHERE meeting_id=%s", (mid,)).fetchone()
-    assert row["model"] == "qwen3.5:14b-mlx"
+    assert row["model"] == "mlx-community/Qwen3.5-27B-8bit"
 
 
 def test_v1_payload_falls_back_to_worker_env_summary_model(conn, tmp_path):

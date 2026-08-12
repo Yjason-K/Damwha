@@ -2,5 +2,5 @@
   "schema_version": 1,
   "meeting_id": "mtg_1",
   "processing_version": 0,
-  "model": "qwen3.5:4b-mlx"
+  "model": "mlx-community/Qwen3.5-4B-8bit"
 }

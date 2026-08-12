@@ -352,7 +352,7 @@ flowchart LR
 - **enqueue** — API가 아니라 `persist_process_meeting` transaction이 `lens_extraction_run`(키: `meeting + processing_version`)과 `extract_lenses` job을 함께 만든다. worker에 `lens_llm_model`이 없으면 생략한다. `POST /meetings/:id/lenses/extract` 등 API 측 수동 enqueue도 활성 run을 재사용한다(idempotent).
 - **run guard** — `mark_lens_run_running`은 job 소유권(`locked_by`+`running`), run↔job 연결, `meeting.processing_version`이 payload와 일치할 때만 run을 `running`으로 바꾼다. 버전이 stale하면 job/run을 `done`으로 닫고 `discarded`, 소유권을 잃었으면 `lost`.
 - **select** — 현재 `processing_version`의 `status='ok'`이고 text가 있는 발언만 order 순으로 읽어 화자 이름과 함께 LLM에 넘긴다.
-- **LLM 호출** — `lens_client.py`가 `reasoning_effort=none`, `response_format=json_object`로 chat completion을 호출한다. 기본 endpoint는 `http://127.0.0.1:11434/v1`, 모델 `qwen3.5:4b-mlx`. **어댑터는 런타임 비의존적이다** — Ollama 의존성은 없고 기본값만 Ollama 모양이다. `mlx_lm.server`로 HF repo를 직접 서빙할 수 있다(설정과 함정은 `worker/SMOKE.md`). code fence로 감싼 응답이나 wrapper 없는 배열도 관대하게 파싱한 뒤 Pydantic으로 검증한다. 로컬 런타임에서 `response_format`은 권고사항이라 모델이 nullable 필드를 생략한다 — `LensCandidate.assignee_speaker_id`/`due_at`은 기본값 `None`이고(생략 = 명시적 null), `extra="forbid"`가 없는 필드 생성은 계속 막는다.
+- **LLM 호출** — `lens_client.py`가 `reasoning_effort=none`, `response_format=json_object`로 chat completion을 호출한다. 기본 endpoint는 `http://127.0.0.1:8000/v1`, 모델 `mlx-community/Qwen3.5-4B-8bit`. **어댑터는 런타임 비의존적이다** — Ollama 의존성은 없고, 로컬 런타임은 `mlx_lm.server`가 HF repo를 직접 서빙한다(설정과 함정은 `worker/SMOKE.md`). code fence로 감싼 응답이나 wrapper 없는 배열도 관대하게 파싱한 뒤 Pydantic으로 검증한다. 로컬 런타임에서 `response_format`은 권고사항이라 모델이 nullable 필드를 생략한다 — `LensCandidate.assignee_speaker_id`/`due_at`은 기본값 `None`이고(생략 = 명시적 null), `extra="forbid"`가 없는 필드 생성은 계속 막는다.
 - **persist/재검증** — `persist_lens_extraction`이 동일 guard를 다시 적용하고, 모든 후보의 `primary`/`supporting` utterance id와 `assignee_speaker_id`가 그 meeting·version에 실제 존재하는지 서버 측에서 재확인한다. 하나라도 어긋나면 후보 전체를 커밋하지 않고 영구 오류(`invalid_lens_candidate`)로 실패한다.
 
 ### 실패와 격리
@@ -450,8 +450,8 @@ DB에는 상대 storage key만 저장한다. `Storage.resolve()`는 root 밖으�
 | 화자 임베딩 | SpeechBrain ECAPA | 192차원, MPS 설정에서도 안정성을 위해 CPU 사용 |
 | 음성 인식 | mlx-whisper 또는 faster-whisper | payload `devices.stt`가 선택: `gpu`→MLX(MPS), `cpu`→faster-whisper(int8). `gpu` 요청+MPS 없음은 영구 실패(폴백 없음) |
 | 텍스트 임베딩 | BAAI/bge-m3 | 1024차원, index worker와 embed service에서 사용 |
-| 렌즈 추출 LLM | 로컬 OpenAI-호환 (기본 `qwen3.5:4b-mlx`) | loopback endpoint(`127.0.0.1:11434/v1`), `extract_lenses`에서만 사용. 런타임 무관 — Ollama / `mlx_lm.server` 등 무엇이든 가능 |
-| 회의 요약 LLM | 로컬 OpenAI-호환 (기본 `qwen3.5:4b-mlx`) | 같은 loopback endpoint, `summarize_meeting`에서만 사용. `lens_llm_model`과는 별개의 설정 필드(`summary_llm_model`)다 |
+| 렌즈 추출 LLM | 로컬 OpenAI-호환 (기본 `mlx-community/Qwen3.5-4B-8bit`) | loopback endpoint(`127.0.0.1:8000/v1`), `extract_lenses`에서만 사용. 런타임 무관 — `mlx_lm.server` / Ollama 등 무엇이든 가능하나, 요약 모델 카탈로그가 HF repo id라 `mlx_lm.server`가 기본이다 |
+| 회의 요약 LLM | 로컬 OpenAI-호환 (기본 `mlx-community/Qwen3.5-4B-8bit`) | 같은 loopback endpoint, `summarize_meeting`에서만 사용. `lens_llm_model`과는 별개의 설정 필드(`summary_llm_model`)다 |
 
 필수 환경은 Python 3.12, `uv`, Postgres 16과 pgvector/pg_bigm, 공유 storage, ffmpeg/ffprobe다. 실제 모델 실행에는 `uv sync --extra models`가 필요하다.
 

@@ -21,9 +21,12 @@ class Settings(BaseSettings):
     embed_service_host: str = "127.0.0.1"
     embed_service_port: int = 8100
     default_speaker_prefix: str = "Speaker"
-    lens_llm_base_url: str = "http://127.0.0.1:11434/v1"
-    lens_llm_model: str = "qwen3.5:4b-mlx"
-    summary_llm_model: str = "qwen3.5:4b-mlx"
+    # 필수 — 기본값을 두지 않는다. LLM 서버(mlx_lm.server)는 워커가 띄우지 않는
+    # 별도 프로세스라, 기본값이 있으면 "주소를 안 넣었다"와 "그 주소에 서버가 없다"가
+    # 구별되지 않는다. 설정 누락은 기동 시점에 ValidationError로 드러나는 편이 낫다.
+    lens_llm_base_url: str
+    lens_llm_model: str = "mlx-community/Qwen3.5-4B-8bit"
+    summary_llm_model: str = "mlx-community/Qwen3.5-4B-8bit"
     lens_llm_api_key: str | None = None
     lens_llm_timeout_seconds: float = 300.0
     # 응답이 잘리면 JSON 파싱이 깨져 PERMANENT 실패가 되므로 상한은 넉넉하게 잡는다

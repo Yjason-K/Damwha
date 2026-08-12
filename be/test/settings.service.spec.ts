@@ -33,7 +33,7 @@ describe('SettingsService.getProcessingConfig', () => {
     expect(cfg).toEqual({
       preset: 'light', preset_revision: PRESET_REVISION, language: 'ko',
       whisper_model: 'small', devices: { diarization: 'gpu', stt: 'cpu' },
-      summary_model: 'qwen3.5:4b-mlx',
+      summary_model: 'mlx-community/Qwen3.5-4B-8bit',
     });
     const row = await db.pool.query(`SELECT value FROM app_setting WHERE key='processing_defaults'`);
     expect(row.rows[0].value).toEqual({ preset: 'light', language: 'ko' }); // 이름만 저장 — 개별 값 스냅샷 없음
@@ -69,7 +69,7 @@ describe('SettingsService.getProcessingConfig', () => {
     const cfg = await service.getProcessingConfig();
     expect(cfg.whisper_model).toBe('medium');            // env 폴백으로 날아가지 않는다
     expect(cfg.devices).toEqual({ diarization: 'gpu', stt: 'cpu' });
-    expect(cfg.summary_model).toBe('qwen3.5:4b-mlx');    // env 기본값
+    expect(cfg.summary_model).toBe('mlx-community/Qwen3.5-4B-8bit');    // env 기본값
   });
 
   it('레거시 행에 PUT하면 summary_model이 명시 값으로 저장된다', async () => {
@@ -82,18 +82,18 @@ describe('SettingsService.getProcessingConfig', () => {
     );
     await service.putProcessing({
       preset: 'custom', language: 'ko', whisper_model: 'medium',
-      devices: { diarization: 'gpu', stt: 'cpu' }, summary_model: 'qwen3.5:27b-mlx',
+      devices: { diarization: 'gpu', stt: 'cpu' }, summary_model: 'mlx-community/Qwen3.5-27B-8bit',
     });
     const row = await db.pool.query(`SELECT value FROM app_setting WHERE key='processing_defaults'`);
-    expect(row.rows[0].value.summary_model).toBe('qwen3.5:27b-mlx');
+    expect(row.rows[0].value.summary_model).toBe('mlx-community/Qwen3.5-27B-8bit');
   });
 
   it('custom 저장값의 summary_model이 진실이다', async () => {
     await service.putProcessing({
       preset: 'custom', language: 'ko', whisper_model: 'small',
-      devices: { diarization: 'gpu', stt: 'cpu' }, summary_model: 'qwen3.5:9b-mlx',
+      devices: { diarization: 'gpu', stt: 'cpu' }, summary_model: 'mlx-community/Qwen3.5-9B-8bit',
     });
     const cfg = await service.getProcessingConfig();
-    expect(cfg.summary_model).toBe('qwen3.5:9b-mlx');
+    expect(cfg.summary_model).toBe('mlx-community/Qwen3.5-9B-8bit');
   });
 });

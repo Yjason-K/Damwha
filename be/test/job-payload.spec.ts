@@ -34,7 +34,7 @@ describe('job payload contract', () => {
     expect(p.models.devices).toEqual({ diarization: 'gpu', stt: 'gpu' });
     expect(p.models.preset).toBe('standard');
     expect(p.models.embedding.dimension).toBe(192);
-    expect(p.models.summary_model).toBe('qwen3.5:9b-mlx');
+    expect(p.models.summary_model).toBe('mlx-community/Qwen3.5-9B-8bit');
     expect(() => ProcessMeetingPayloadSchema.parse(p)).not.toThrow();
   });
 
@@ -142,13 +142,13 @@ describe('job payload contract', () => {
     const payload = buildSummarizeMeetingPayload({
       meetingId: 'mtg_1',
       processingVersion: 0,
-      model: 'qwen3.5:4b-mlx',
+      model: 'mlx-community/Qwen3.5-4B-8bit',
     });
     expect(payload).toEqual({
       schema_version: 1,
       meeting_id: 'mtg_1',
       processing_version: 0,
-      model: 'qwen3.5:4b-mlx',
+      model: 'mlx-community/Qwen3.5-4B-8bit',
     });
     expect(() => SummarizeMeetingPayloadSchema.parse(payload)).not.toThrow();
   });
@@ -158,7 +158,7 @@ describe('job payload contract', () => {
       schema_version: 1,
       meeting_id: 'mtg_1',
       processing_version: 0,
-      model: 'qwen3.5:4b-mlx',
+      model: 'mlx-community/Qwen3.5-4B-8bit',
       extraction_run_id: 'ler_1',
     })).toThrow();
   });
@@ -166,7 +166,7 @@ describe('job payload contract', () => {
   it('defaults LENS_LLM_MODEL to the extraction model', () => {
     const old = process.env.LENS_LLM_MODEL;
     delete process.env.LENS_LLM_MODEL;
-    expect(loadEnv().LENS_LLM_MODEL).toBe('qwen3.5:4b-mlx');
+    expect(loadEnv().LENS_LLM_MODEL).toBe('mlx-community/Qwen3.5-4B-8bit');
     if (old === undefined) delete process.env.LENS_LLM_MODEL;
     else process.env.LENS_LLM_MODEL = old;
   });

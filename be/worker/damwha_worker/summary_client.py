@@ -98,7 +98,11 @@ class SummaryClient:
             "model": model,
             "messages": messages,
             "response_format": {"type": "json_object"},
+            # 런타임마다 읽는 키가 다르다: Ollama는 reasoning_effort를, mlx_lm.server는
+            # chat_template_kwargs만 본다(CLI --chat-template-args 위에 덮어쓴다).
+            # 안 읽는 키는 조용히 무시되므로 둘 다 보낸다. lens_client.py와 동일.
             "reasoning_effort": "none",
+            "chat_template_kwargs": {"enable_thinking": False},
             # The server's own default (512 on mlx_lm.server) truncates the segments
             # array mid-string, which surfaces as an unparseable-JSON PERMANENT
             # failure — so the cap is stated here instead of inherited.

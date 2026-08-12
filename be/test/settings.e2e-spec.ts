@@ -92,7 +92,7 @@ describe('settings', () => {
 
   it('PUT 이름 프리셋에 summary_model 혼입 → 400', async () => {
     const res = await request(srv()).put('/settings/processing').send({
-      preset: 'light', language: 'ko', summary_model: 'qwen3.5:4b-mlx',
+      preset: 'light', language: 'ko', summary_model: 'mlx-community/Qwen3.5-4B-8bit',
     });
     expect(res.status).toBe(400);
   });

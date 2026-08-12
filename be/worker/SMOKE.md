@@ -118,7 +118,8 @@ Start services in this order; each step must be healthy before the next:
 
 1. **Postgres** (`damwha/postgres-bigm:pg16`) + `npm run migrate`
 2. **Embed service** — wait for `/health` → `{"status":"ok"}`
-3. **Lens LLM 서버** (렌즈 추출을 쓸 때만) — 아래 "렌즈 추출 LLM" 참고
+3. **Lens LLM 서버** (렌즈 추출 / 요약이 쓴다 — 둘이 같은 서버) — 아래 "렌즈 추출 LLM" 참고.
+   워커보다 먼저 띄우면 슈퍼바이저 기동 로그에 서빙 중인 모델이 찍힌다.
 4. **NestJS API** — `npm run start:dev`
 5. **Python worker** — `uv run python -m damwha_worker`
 
@@ -147,7 +148,7 @@ and searchable via BM25 alone until the dense index is rebuilt.
 Payload v3가 단계별 디바이스(`devices.{diarization,stt}`), whisper 모델, 요약
 LLM(`summary_model`)을 실어 나른다. STT 백엔드는 payload에서 파생된다:
 `devices.stt: gpu` → `mlx-whisper`, `cpu` → `faster-whisper` (int8). 프리셋
-정의는 `src/settings/presets.ts` (`PRESET_REVISION='2026-08-12.1'`).
+정의는 `src/settings/presets.ts` (`PRESET_REVISION='2026-08-12.3'`).
 
 각 프리셋에 대해: `PUT /settings/processing`으로 프리셋 설정 → 짧은 오디오 업로드
 → job 완료(`status=done`) 확인. (또는 업로드 시 multipart `processing`
@@ -163,10 +164,11 @@ JSON-string 필드 / reprocess JSON body로 job별 오버라이드.)
   SELECT payload->'models'->'devices', payload->'models'->>'preset'
     FROM job WHERE type='process_meeting' ORDER BY created_at DESC LIMIT 1;
   ```
-- 프리셋별 요약 모델이 실제로 서빙되는지 먼저 확인한다:
-  `curl -s http://127.0.0.1:11434/v1/models | jq -r '.data[].id'`
-  light → qwen3.5:4b-mlx / standard → qwen3.5:8b-mlx / quality → qwen3.5:14b-mlx
-  목록에 없으면 해당 프리셋의 첫 요약 job이 PERMANENT로 실패한다.
+- 프리셋별 요약 모델 — light → `mlx-community/Qwen3.5-4B-8bit` /
+  standard → `-9B-8bit` / quality → `-27B-8bit`. `mlx_lm.server`는 `--model`로
+  띄운 것 외의 repo도 요청 시 HF에서 받아 로드하므로 미리 받아둘 필요는 없지만,
+  **첫 요약 job이 다운로드 시간만큼 길어지고 모델 스왑이 일어난다.** repo명이
+  틀리면 그 프리셋의 요약 job은 PERMANENT로 실패한다.
 - 요약 완료 후 기록된 모델을 확인한다:
   `psql "$DATABASE_URL" -c "SELECT model, status FROM meeting_summary ORDER BY updated_at DESC LIMIT 1"`
 - (선택) `devices.diarization: cpu` custom으로 pyannote CPU 경로 1회. 어떤 개별
@@ -180,42 +182,79 @@ JSON-string 필드 / reprocess JSON body로 job별 오버라이드.)
 
 ## 렌즈 추출 LLM (`extract_lenses`)
 
-`lens_client.py`는 **OpenAI 호환 chat-completions 서버**면 무엇이든 붙는 범용
-어댑터다. Ollama 의존성은 없다 — 기본값이 Ollama 포트(11434)와 태그 표기
-모델명일 뿐이다. Ollama 없이 HF repo를 직접 쓰려면 `mlx_lm.server`를 띄운다.
+`lens_client.py`와 `summary_client.py`는 **OpenAI 호환 chat-completions 서버**면
+무엇이든 붙는 범용 어댑터이고, 둘은 `LENS_LLM_BASE_URL` **하나를 공유**한다
+(모델명만 각자 갖는다). Ollama 의존성은 없다 — 서버는 `mlx_lm.server` 하나만 띄운다.
+요약 모델명은 카탈로그(`src/contracts/model-catalog.ts`)로 고정돼 있고, 그 값이
+`mlx_lm.server`가 그대로 받는 **HF repo id**다.
 
 ```bash
 uv tool install mlx-lm      # 워커 venv 밖에 설치 — 워커는 mlx_lm을 import하지 않는다
-mlx_lm.server --model mlx-community/Qwen3-4B-Instruct-2507-8bit \
+mlx_lm.server --model mlx-community/Qwen3.5-4B-8bit \
+  --chat-template-args '{"enable_thinking":false}' \
   --host 127.0.0.1 --port 8000
 ```
 
+`--chat-template-args`로 서버 기본값도 추론 off로 맞춘다. 클라이언트가 요청마다
+같은 값을 보내므로(아래 함정) 이 플래그 없이도 동작하지만, 서버를 직접 찔러 볼 때
+기본값이 일치해 있는 편이 헷갈리지 않는다.
+
 ```
-# worker/.env
+# worker/.env — LENS_LLM_BASE_URL은 필수다(기본값 없음). 나머지는 config.py 기본값과 같다.
 LENS_LLM_BASE_URL=http://127.0.0.1:8000/v1
-LENS_LLM_MODEL=mlx-community/Qwen3-4B-Instruct-2507-8bit
+LENS_LLM_MODEL=mlx-community/Qwen3.5-4B-8bit
+SUMMARY_LLM_MODEL=mlx-community/Qwen3.5-4B-8bit
 
 # 루트 .env (API) — 값이 job payload에 각인되므로 워커와 반드시 같아야 한다
-LENS_LLM_MODEL=mlx-community/Qwen3-4B-Instruct-2507-8bit
+LENS_LLM_MODEL=mlx-community/Qwen3.5-4B-8bit
+SUMMARY_LLM_MODEL=mlx-community/Qwen3.5-4B-8bit   # 카탈로그 밖 값이면 API가 아예 부팅하지 않는다
 ```
+
+**`--model`로 띄운 것과 다른 repo를 요청하면** `mlx_lm.server`가 그 자리에서 HF에서
+받아 로드하고 기존 모델을 내린다. 동작은 하지만 요청마다 스왑이 일어나므로, 렌즈와
+요약(= light 프리셋)은 같은 repo로 맞춰 두는 게 좋다. standard/quality 프리셋으로
+요약하면 9B/27B를 그때 받는다.
 
 확인:
 
 ```bash
+# 1) 워커 기동 로그 — 슈퍼바이저가 GET {LENS_LLM_BASE_URL}/models를 1회 확인한다
+#    떠 있으면:  lens/summary LLM at http://127.0.0.1:8000/v1 serving: mlx-community/...
+#    안 떠 있으면: WARNING ... is unreachable — extract_lenses/summarize_meeting jobs will retry...
+#    경고가 떠도 워커는 정상 기동한다 (process_meeting은 LLM을 쓰지 않는다).
+uv run python -m damwha_worker
+
+# 2) 실제 추출
 curl -s -X POST http://localhost:3000/meetings/<id>/lenses/extract   # status=done인 회의
 # run/job이 done이 되고 lens_item + lens_evidence가 생기는지 확인
 ```
 
-함정 넷:
+서버가 없을 때의 실패 경로: `httpx.RequestError` → `llm_request_failed`(TRANSIENT) →
+지수 백오프로 requeue → `max_attempts`(기본 3) 소진 후 job `failed`. 회의는 `done`을
+유지한다.
 
+함정 다섯:
+
+- **추론(thinking)을 끄는 키는 런타임마다 다르다 — 그래서 둘 다 보낸다.** Ollama는
+  `reasoning_effort`를 읽지만 `mlx_lm.server`는 그 키를 **조용히 무시**하고
+  `chat_template_kwargs`만 본다(`server.py`가 CLI `--chat-template-args` 위에
+  `.update`로 덮는다). Qwen3.5의 chat template은 `enable_thinking`이 정의되지 않으면
+  `<think>`를 열어 사고를 시작하므로, 두 클라이언트 모두
+  `chat_template_kwargs={"enable_thinking": false}`를 함께 보낸다 — 안 읽는 키는
+  무시되니 어느 런타임에 붙어도 안전하다. 이게 빠지면 커밋 `13dd6ae`가 Ollama에서
+  겪은 증상 — 사고에만 수 분(398초), 사고 토큰이 `max_tokens` 예산을 잠식해 JSON이
+  잘림 — 이 그대로 재현된다.
 - **생성 길이 상한은 클라이언트가 바디로 보낸다**(`LENS_LLM_MAX_TOKENS`, 기본 8192).
   `mlx_lm.server`의 `--max-tokens` 기본값은 **512**라 서버 기본값에 맡기면 회의 하나
   분량의 JSON도 못 담고 배열 중간에서 잘린다 — `finish_reason=length`로 끝나고
   `llm_invalid_response`(`Unterminated string…`) PERMANENT 실패가 된다. 바디 값이
   서버 CLI 기본값을 덮으므로 서버를 어떻게 띄웠는지와 무관하게 동작한다.
-- **`mlx_lm.server`는 요청의 `model` 필드를 무시하지 않는다.** HF repo id로 검증하므로
-  Ollama 태그 표기(`qwen3.5:4b-mlx`)를 보내면 `Repo id must use alphanumeric chars…`로
-  거부당한다. 유효한 repo명이거나 `default`여야 한다.
+- **`mlx_lm.server`는 요청의 `model` 필드를 무시하지 않으며, 별칭을 걸 방법이 없다.**
+  받은 이름을 그대로 repo id/로컬 경로로 해석하므로 Ollama 태그 표기(`qwen3.5:4b-mlx`)를
+  보내면 `Repo id must use alphanumeric chars…`로 거부당한다. 유효한 repo명이거나
+  `default_model`(요청에서 `model`을 아예 생략했을 때의 기본값 — `--model`로 띄운
+  모델에 매핑된다)이어야 한다. `server.py`의 `_model_map`에는 그 한 항목뿐이라 CLI로
+  별칭을 추가할 수 없다 — **요약 모델 카탈로그를 HF repo id로 적는 이유가 이것이다.**
 - **API는 `.env`를 부팅 시 1회만 읽는다**(`src/main.ts`의 `import 'dotenv/config'`).
   `nest start --watch`는 소스 변경에만 반응하므로 `.env`를 고쳤으면 **실제로 재시작**해야
   한다(`touch`는 tsc incremental이 건너뛴다). 안 하면 API가 옛 `LENS_LLM_MODEL`을

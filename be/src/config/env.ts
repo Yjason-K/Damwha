@@ -27,10 +27,10 @@ const EnvSchema = z.object({
   EMBED_SERVICE_ALLOW_NON_LOOPBACK: z.string().default('false'),
   SEARCH_RRF_K: z.coerce.number().default(60),
   SEARCH_CANDIDATE_K: z.coerce.number().default(100),
-  LENS_LLM_MODEL: z.string().default('qwen3.5:4b-mlx'),
+  LENS_LLM_MODEL: z.string().default('mlx-community/Qwen3.5-4B-8bit'),
   // 목록 밖 값이면 API가 시작에 실패한다 — 의도된 breaking change (spec §2).
   // 조용히 목록 안 값으로 강등하면 "고른 적 없는 모델로 요약"이 된다.
-  SUMMARY_LLM_MODEL: z.enum(SUMMARY_MODELS).default('qwen3.5:4b-mlx'),
+  SUMMARY_LLM_MODEL: z.enum(SUMMARY_MODELS).default('mlx-community/Qwen3.5-4B-8bit'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

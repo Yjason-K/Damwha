@@ -71,7 +71,7 @@ def test_v1_missing_version_converts():
 def test_parses_v3_fixture():
     p = parse_payload("process_meeting", load("process_meeting.v3.valid.json"))
     assert p.schema_version == 3
-    assert p.models.summary_model == "qwen3.5:4b-mlx"
+    assert p.models.summary_model == "mlx-community/Qwen3.5-4B-8bit"
     assert p.models.preset == "light"
     assert p.models.devices.stt == "cpu"
 
@@ -87,7 +87,7 @@ def test_v2_rejects_summary_model_extra_field():
     from pydantic import ValidationError
 
     data = load("process_meeting.v2.valid.json")
-    data["models"]["summary_model"] = "qwen3.5:4b-mlx"
+    data["models"]["summary_model"] = "mlx-community/Qwen3.5-4B-8bit"
     with pytest.raises(ValidationError):
         parse_payload("process_meeting", data)
 
@@ -150,7 +150,7 @@ def test_parse_summarize_meeting_payload():
 
     payload = parse_payload("summarize_meeting", load("summarize-meeting-v1.json"))
     assert isinstance(payload, SummarizeMeetingPayload)
-    assert payload.model == "qwen3.5:4b-mlx"
+    assert payload.model == "mlx-community/Qwen3.5-4B-8bit"
 
 
 def test_summarize_meeting_payload_rejects_extra_field():

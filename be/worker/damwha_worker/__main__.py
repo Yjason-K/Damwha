@@ -5,6 +5,8 @@ import subprocess
 import sys
 import threading
 
+import httpx
+
 from . import db
 from .config import load_settings
 from .contracts import parse_payload
@@ -432,6 +434,36 @@ def run_child(settings, shutdown: threading.Event) -> int:
     )
 
 
+def check_lens_llm(base_url: str, timeout_seconds: float = 5.0) -> list[str] | None:
+    """LLM 서버 도달성을 1회 확인하고 서빙 중인 모델 id를 돌려준다. 실패하면 None.
+
+    서버(`mlx_lm.server`)는 워커가 띄우지 않는 별도 프로세스다. 이 확인이 없으면
+    "서버를 안 띄웠다"는 사실이 첫 렌즈/요약 job이 3회 재시도로 죽고 나서야 드러난다.
+    """
+    try:
+        with httpx.Client(timeout=timeout_seconds) as client:
+            response = client.get(f"{base_url.rstrip('/')}/models")
+        response.raise_for_status()
+        return [m["id"] for m in response.json()["data"]]
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        return None
+
+
+def log_lens_llm_health(base_url: str) -> None:
+    """기동 시 1회 호출. 실패해도 워커는 뜬다 — process_meeting은 LLM을 쓰지 않으므로
+    LLM 서버가 없다고 오디오 처리까지 막을 이유가 없다. 대신 크게 경고한다."""
+    models = check_lens_llm(base_url)
+    if models is None:
+        log.warning(
+            "lens/summary LLM at %s is unreachable — extract_lenses/summarize_meeting jobs "
+            "will retry and then fail (process_meeting is unaffected). Start it with: "
+            "mlx_lm.server --model <repo> --chat-template-args '{\"enable_thinking\":false}'",
+            base_url,
+        )
+    else:
+        log.info("lens/summary LLM at %s serving: %s", base_url, ", ".join(models) or "(none)")
+
+
 def run_supervisor_main(settings, shutdown: threading.Event) -> None:
     """부모: 2단계 시그널 핸들러 설치 후 supervisor 루프."""
     child_holder = {"proc": None, "count": 0}
@@ -469,6 +501,7 @@ def run_supervisor_main(settings, shutdown: threading.Event) -> None:
         daemon=True,
     )
     reaper_thread.start()
+    log_lens_llm_health(settings.lens_llm_base_url)
     log.info("supervisor %s started", settings.worker_id)
     try:
         run_supervisor(
