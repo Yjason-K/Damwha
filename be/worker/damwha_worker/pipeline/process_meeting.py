@@ -159,6 +159,9 @@ def run_process_meeting(
     # 8) persist
     enter_stage(conn, job_id, worker_id, "persist", 95, shutdown_event)
     with timed_stage("persist", ctx) as t:
+        # v3 payload는 API가 해석한 값을 싣고 온다. v1/v2 유래는 None이라 워커
+        # env로 폴백한다 (spec §4).
+        summary_model = payload.models.summary_model or summary_llm_model
         outcome = db.persist_process_meeting(
             conn,
             job_id=job_id,
@@ -175,7 +178,7 @@ def run_process_meeting(
             index_search_model=search_embedding_model,
             index_search_dim=search_embedding_dim,
             lens_llm_model=lens_llm_model,
-            summary_llm_model=summary_llm_model,
+            summary_llm_model=summary_model,
         )
         t["detail"] = (
             f"utterances={len(utterance_rows)} clusters={len(cluster_rows)} outcome={outcome}"

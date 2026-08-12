@@ -23,17 +23,18 @@ describe('job payload contract', () => {
     process.env.IDENTIFY_THRESHOLD = '0.7';
   });
 
-  it('builds + validates a process_meeting payload (v2, 설정 주입)', () => {
+  it('builds + validates a process_meeting payload (설정 주입)', () => {
     const p = buildProcessMeetingPayload({
       meetingId: 'mtg_1', audioKey: 'meetings/x/original.wav',
       processingVersion: 2, reprocess: true,
       processing: resolvePreset('standard', 'ko'),
     });
-    expect(p.schema_version).toBe(2);
+    expect(p.schema_version).toBe(3);
     expect(p.models.whisper_model).toBe('large-v3-turbo');
     expect(p.models.devices).toEqual({ diarization: 'gpu', stt: 'gpu' });
     expect(p.models.preset).toBe('standard');
     expect(p.models.embedding.dimension).toBe(192);
+    expect(p.models.summary_model).toBe('qwen3.5:9b-mlx');
     expect(() => ProcessMeetingPayloadSchema.parse(p)).not.toThrow();
   });
 
@@ -50,7 +51,7 @@ describe('job payload contract', () => {
     expect(p.embedding.dimension).toBe(192);
   });
 
-  it('stamps schema_version=2 on process_meeting payload', () => {
+  it('stamps schema_version=3 on process_meeting payload', () => {
     const p = buildProcessMeetingPayload({
       meetingId: 'mtg_1',
       audioKey: 'meetings/x/original.wav',
@@ -58,7 +59,7 @@ describe('job payload contract', () => {
       reprocess: true,
       processing: resolvePreset('standard', 'ko'),
     });
-    expect(p.schema_version).toBe(2);
+    expect(p.schema_version).toBe(3);
     expect(() => ProcessMeetingPayloadSchema.parse(p)).not.toThrow();
   });
 

@@ -8,7 +8,7 @@ log = logging.getLogger("damwha_worker")
 
 # job type별 허용 버전 — enroll/index는 v1 불변 (spec §4)
 SUPPORTED_SCHEMA_VERSIONS: dict[str, frozenset[int]] = {
-    "process_meeting": frozenset({1, 2}),
+    "process_meeting": frozenset({1, 2, 3}),
     "enroll_speaker": frozenset({1}),
     "index_meeting": frozenset({1}),
     "extract_lenses": frozenset({1}),
@@ -57,30 +57,79 @@ class ModelsV1(BaseModel):  # 기존 Models 이름 변경
 
 
 class ModelsV2(BaseModel):
+    """wire v2 전용. TS ModelsSchemaV2가 .strict()이므로 여기도 extra를 막는다."""
+
+    model_config = ConfigDict(extra="forbid")
+
     whisper_model: WhisperModel
     language: str
     devices: Devices
-    # v1 변환·env 폴백 유래 payload는 null (spec §4)
     preset: str | None = None
     preset_revision: str | None = None
     diarization: Diarization
     embedding: Embedding
 
 
-def _v1_models_to_v2(m: ModelsV1) -> ModelsV2:
+class ModelsWireV3(BaseModel):
+    """wire v3. summary_model은 필수 — v3는 완전 해석된 계약이라 워커가 env로
+    폴백할 여지를 남기지 않는다 (spec §3)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    whisper_model: WhisperModel
+    language: str
+    devices: Devices
+    preset: str | None = None
+    preset_revision: str | None = None
+    summary_model: NonEmptyString
+    diarization: Diarization
+    embedding: Embedding
+
+
+class ModelsConfig(BaseModel):
+    """내부 정규 표현 — 파이프라인/registry는 이 모양만 다룬다.
+
+    이름이 Models가 아닌 이유: pipeline/process_meeting.py의 Models는 로드된 ML
+    어댑터(VAD/Diarizer/Embedder/Transcriber) 묶음이고 registry.py가 그걸 import한다.
+
+    summary_model이 nullable인 이유는 preset/preset_revision과 같다: v1/v2에서
+    변환된 payload에는 값이 없다. v3 유래는 항상 채워진다. Literal이 아니라 str인
+    이유는 워커가 API의 큐레이션 목록을 알 필요가 없기 때문 — 목록 검증은 API 경계
+    (그리고 워커 env 폴백 값은 목록 밖일 수 있다)."""
+
+    whisper_model: WhisperModel
+    language: str
+    devices: Devices
+    preset: str | None = None
+    preset_revision: str | None = None
+    summary_model: str | None = None
+    diarization: Diarization
+    embedding: Embedding
+
+
+def _v1_models_to_internal(m: ModelsV1) -> ModelsConfig:
     if m.device == "cuda":
         # cuda→gpu는 Metal 의미와 다른 오변환 — cpu로 내리고 경고 (spec §4)
         log.warning("v1 payload device=cuda — converting to cpu (cuda is a non-goal)")
     dev: Device = "gpu" if m.device == "mps" else "cpu"
-    return ModelsV2(
+    return ModelsConfig(
         whisper_model=m.whisper_model,
         language=m.language,
         devices=Devices(diarization=dev, stt=dev),
         preset=None,
         preset_revision=None,
+        summary_model=None,
         diarization=m.diarization,
         embedding=m.embedding,
     )
+
+
+def _v2_models_to_internal(m: ModelsV2) -> ModelsConfig:
+    return ModelsConfig(**m.model_dump(), summary_model=None)
+
+
+def _v3_models_to_internal(m: ModelsWireV3) -> ModelsConfig:
+    return ModelsConfig(**m.model_dump())
 
 
 class Identify(BaseModel):
@@ -99,19 +148,42 @@ class ProcessMeetingPayloadV1(BaseModel):
     identify: Identify
 
 
-class ProcessMeetingPayload(BaseModel):
-    """내부 표현 — 항상 v2 models. v1은 parse에서 즉시 변환되고 원본 버전을 보존한다.
-
-    schema_version의 입력 검증 제약은 이 필드가 아니라 parse_payload의
-    job type별 dispatch(SUPPORTED_SCHEMA_VERSIONS)가 담당한다.
-    """
-
-    schema_version: int = 2
+class ProcessMeetingPayloadWireV2(BaseModel):
+    schema_version: Literal[2]
     meeting_id: MeetingId
     audio_key: str
     processing_version: int
     reprocess: bool
     models: ModelsV2
+    identify: Identify
+
+
+class ProcessMeetingPayloadWireV3(BaseModel):
+    schema_version: Literal[3]
+    meeting_id: MeetingId
+    audio_key: str
+    processing_version: int
+    reprocess: bool
+    models: ModelsWireV3
+    identify: Identify
+
+
+class ProcessMeetingPayload(BaseModel):
+    """내부 표현 — 항상 정규화된 ModelsConfig. v1/v2/v3는 parse에서 즉시 변환되고
+    원본 버전을 보존한다.
+
+    schema_version의 입력 검증 제약은 이 필드가 아니라 parse_payload의
+    job type별 dispatch(SUPPORTED_SCHEMA_VERSIONS)가 담당한다.
+    """
+
+    # 기본값 2는 죽은 값이다 — parse 경로(v1/v2/v3)가 항상 실제 버전을 명시적으로
+    # 채우므로 이 기본값이 쓰이는 일은 없다. v2가 내부 표준이라는 뜻은 아니다.
+    schema_version: int = 2
+    meeting_id: MeetingId
+    audio_key: str
+    processing_version: int
+    reprocess: bool
+    models: ModelsConfig
     identify: Identify
 
 
@@ -200,7 +272,8 @@ class SummaryResponse(BaseModel):
 
 
 def _parse_process_meeting(data: dict) -> ProcessMeetingPayload:
-    if data.get("schema_version", 1) == 1:
+    version = data.get("schema_version", 1)
+    if version == 1:
         v1 = ProcessMeetingPayloadV1.model_validate(data)
         return ProcessMeetingPayload(
             schema_version=1,
@@ -208,14 +281,34 @@ def _parse_process_meeting(data: dict) -> ProcessMeetingPayload:
             audio_key=v1.audio_key,
             processing_version=v1.processing_version,
             reprocess=v1.reprocess,
-            models=_v1_models_to_v2(v1.models),
+            models=_v1_models_to_internal(v1.models),
             identify=v1.identify,
         )
-    return ProcessMeetingPayload.model_validate(data)
+    if version == 2:
+        v2 = ProcessMeetingPayloadWireV2.model_validate(data)
+        return ProcessMeetingPayload(
+            schema_version=2,
+            meeting_id=v2.meeting_id,
+            audio_key=v2.audio_key,
+            processing_version=v2.processing_version,
+            reprocess=v2.reprocess,
+            models=_v2_models_to_internal(v2.models),
+            identify=v2.identify,
+        )
+    v3 = ProcessMeetingPayloadWireV3.model_validate(data)
+    return ProcessMeetingPayload(
+        schema_version=3,
+        meeting_id=v3.meeting_id,
+        audio_key=v3.audio_key,
+        processing_version=v3.processing_version,
+        reprocess=v3.reprocess,
+        models=_v3_models_to_internal(v3.models),
+        identify=v3.identify,
+    )
 
 
-def parse_models(payload: dict) -> ModelsV2:
-    """registry용: process_meeting payload dict → 정규화된 ModelsV2."""
+def parse_models(payload: dict) -> ModelsConfig:
+    """registry용: process_meeting payload dict → 정규화된 내부 ModelsConfig."""
     return _parse_process_meeting(payload).models
 
 

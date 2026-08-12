@@ -34,7 +34,7 @@ def test_missing_schema_version_defaults_to_1():
 
 
 def test_rejects_future_schema_version():
-    data = load("process_meeting.valid.json") | {"schema_version": 3}
+    data = load("process_meeting.valid.json") | {"schema_version": 4}
     with pytest.raises(UnsupportedPayloadVersion):
         parse_payload("process_meeting", data)
 
@@ -66,6 +66,36 @@ def test_v1_missing_version_converts():
     p = parse_payload("process_meeting", load("process_meeting.no_version.json"))
     assert p.schema_version == 1
     assert p.models.devices.stt in ("cpu", "gpu")
+
+
+def test_parses_v3_fixture():
+    p = parse_payload("process_meeting", load("process_meeting.v3.valid.json"))
+    assert p.schema_version == 3
+    assert p.models.summary_model == "qwen3.5:4b-mlx"
+    assert p.models.preset == "light"
+    assert p.models.devices.stt == "cpu"
+
+
+def test_v3_requires_summary_model():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        parse_payload("process_meeting", load("process_meeting.v3.missing_summary_model.json"))
+
+
+def test_v2_rejects_summary_model_extra_field():
+    from pydantic import ValidationError
+
+    data = load("process_meeting.v2.valid.json")
+    data["models"]["summary_model"] = "qwen3.5:4b-mlx"
+    with pytest.raises(ValidationError):
+        parse_payload("process_meeting", data)
+
+
+@pytest.mark.parametrize("fixture", ["process_meeting.valid.json", "process_meeting.v2.valid.json"])
+def test_v1_v2_have_no_summary_model(fixture):
+    p = parse_payload("process_meeting", load(fixture))
+    assert p.models.summary_model is None
 
 
 def test_parse_models_from_raw_dict():

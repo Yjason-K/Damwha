@@ -34,4 +34,29 @@ describe('resolveProcessingConfig', () => {
   it('스키마: 빈 devices 객체 거부 — 값 없이 custom 전환만 일으키는 입력 차단', () => {
     expect(ProcessingOverrideSchema.safeParse({ devices: {} }).success).toBe(false);
   });
+
+  it('summary_model만 override → 병합 + preset custom (spec §5)', () => {
+    const r = resolveProcessingConfig(global_, { summary_model: 'qwen3.5:27b-mlx' }, true);
+    expect(r.summary_model).toBe('qwen3.5:27b-mlx');
+    expect(r.whisper_model).toBe('large-v3-turbo'); // 전역 유지
+    expect(r.preset).toBe('custom');
+    expect(r.preset_revision).toBeNull();
+  });
+
+  it('preset override는 그 프리셋의 요약 모델을 통째로 가져온다', () => {
+    const r = resolveProcessingConfig(global_, { preset: 'quality' }, true);
+    expect(r.summary_model).toBe('qwen3.5:27b-mlx');
+    expect(r.preset).toBe('quality');
+  });
+
+  it('preset + summary_model 혼합 → 프리셋 resolve 후 요약 모델만 덮어씀, 결과 custom', () => {
+    const r = resolveProcessingConfig(global_, { preset: 'light', summary_model: 'qwen3.5:27b-mlx' }, true);
+    expect(r.whisper_model).toBe('small');              // light 유래
+    expect(r.summary_model).toBe('qwen3.5:27b-mlx');    // 개별 override
+    expect(r.preset).toBe('custom');
+  });
+
+  it('스키마: 목록 밖 summary_model 거부', () => {
+    expect(ProcessingOverrideSchema.safeParse({ summary_model: 'gpt-9' }).success).toBe(false);
+  });
 });

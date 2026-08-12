@@ -214,7 +214,7 @@ flowchart TD
 | `extract_lenses` | meeting, processing version, `extraction_run_id`, LLM model | `extract_lenses` 30 → `persist_lenses` 80 → done 100 | LLM 후보를 검증·병합한 `lens_item`/`lens_evidence` |
 | `summarize_meeting` | meeting, processing version, 요약 LLM model | `summarize_meeting` 30 → `persist_summary` 80 → done 100 | 회의당 1행 `meeting_summary`(topics/segments)를 통째로 교체 |
 
-공통 payload는 `schema_version`을 갖고, 허용 버전은 **job type별**로 다르다(`SUPPORTED_SCHEMA_VERSIONS`, `contracts.py`). `process_meeting`은 **v1과 v2**를, `enroll_speaker`/`index_meeting`/`extract_lenses`/`summarize_meeting`은 **v1**만 받는다. v2 `process_meeting`은 stage별 device(`models.devices.{diarization,stt}` = `cpu`|`gpu`)와 `preset`/`preset_revision` 참조 정보를 추가한다. worker는 v1 payload를 내부에서 v2로 변환하므로(`_v1_models_to_v2`: `device=mps→gpu`, `cpu→cpu`, `cuda→cpu`+경고) downstream은 항상 하나의 shape(ModelsV2)만 본다. API의 Zod 계약과 worker의 Pydantic 계약이 같은 fixture를 검증해 drift를 차단한다.
+공통 payload는 `schema_version`을 갖고, 허용 버전은 **job type별**로 다르다(`SUPPORTED_SCHEMA_VERSIONS`, `contracts.py`). `process_meeting`은 **v1, v2, v3**를, `enroll_speaker`/`index_meeting`/`extract_lenses`/`summarize_meeting`은 **v1**만 받는다. v2 `process_meeting`은 stage별 device(`models.devices.{diarization,stt}` = `cpu`|`gpu`)와 `preset`/`preset_revision` 참조 정보를 추가하고, **v3**는 여기에 처리 프리셋이 고른 요약 LLM `models.summary_model`을 더한다(wire v3에서는 필수). worker는 v1/v2/v3 payload를 각각 `_v1_models_to_internal`(`device=mps→gpu`, `cpu→cpu`, `cuda→cpu`+경고)/`_v2_models_to_internal`/`_v3_models_to_internal`로 정규화된 내부 shape `ModelsConfig`로 변환하므로 downstream은 항상 하나의 shape만 본다 — v1/v2 유래 payload는 `summary_model=None`이 되고 워커가 env(`summary_llm_model`)로 폴백한다. API의 Zod 계약과 worker의 Pydantic 계약이 같은 fixture를 검증해 drift를 차단한다.
 
 ## 6. `process_meeting` 상세 흐름
 

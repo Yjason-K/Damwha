@@ -43,6 +43,22 @@ describe('contract fixtures (shared with pydantic worker)', () => {
     v2.models.device = 'mps';
     expect(() => ProcessMeetingPayloadSchema.parse(v2)).toThrow();
   });
+  it('validates process_meeting.v3.valid.json', () => {
+    const p = ProcessMeetingPayloadSchema.parse(read('process_meeting.v3.valid.json'));
+    expect(p.schema_version).toBe(3);
+    if (p.schema_version === 3) {
+      expect(p.models.summary_model).toBe('qwen3.5:4b-mlx');
+      expect(p.models.preset).toBe('light');
+    }
+  });
+  it('rejects v3 payload missing summary_model (env 폴백 금지)', () => {
+    expect(() => ProcessMeetingPayloadSchema.parse(read('process_meeting.v3.missing_summary_model.json'))).toThrow();
+  });
+  it('rejects v2 payload carrying summary_model (v2는 그 필드를 모른다)', () => {
+    const v2 = read('process_meeting.v2.valid.json');
+    v2.models.summary_model = 'qwen3.5:4b-mlx';
+    expect(() => ProcessMeetingPayloadSchema.parse(v2)).toThrow();
+  });
   it('validates summarize-meeting-v1.json', () => {
     expect(() => SummarizeMeetingPayloadSchema.parse(read('summarize-meeting-v1.json'))).not.toThrow();
   });
