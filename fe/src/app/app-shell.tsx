@@ -6,7 +6,6 @@ import {
   type CommandGroup,
   type CommandItem,
 } from "@/shared/ui/command-bar";
-import { Tag } from "@/shared/ui/tag";
 
 import { formatClock } from "@/features/meeting/api/mappers";
 import { useMeetings } from "@/features/meeting/api/meetings";
@@ -24,14 +23,6 @@ import { LeftNav } from "@/features/meeting/ui/left-nav";
 
 /** 셸이 자식 라우트에 내려주는 것 — ⌘K 팔레트는 셸이 소유한다. */
 export type ShellOutletContext = { openSearch: () => void };
-
-type Facet = { id: string; label: string; speaker?: number };
-
-const INITIAL_FACETS: Facet[] = [
-  { id: "f1", label: "김영재", speaker: 1 },
-  { id: "f2", label: "지난주" },
-  { id: "f3", label: "기획회의" },
-];
 
 /** Clip around the first match and wrap it in a highlighted <mark>. */
 function highlight(text: string, q: string): React.ReactNode {
@@ -58,10 +49,9 @@ export function AppShell() {
   const [filter, setFilter] = React.useState<MeetingFilter>("all");
   const [cmdOpen, setCmdOpen] = React.useState(false);
   const [cmdQuery, setCmdQuery] = React.useState("");
-  const [facets, setFacets] = React.useState<Facet[]>(INITIAL_FACETS);
 
   const { data: meetings } = useMeetings();
-  const { data: hits = [] } = useSearch(cmdQuery);
+  const { data: hits = [] } = useSearch(cmdQuery, cmdOpen);
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -130,23 +120,6 @@ export function AppShell() {
         onOpenChange={setCmdOpen}
         query={cmdQuery}
         onQueryChange={setCmdQuery}
-        facets={
-          facets.length > 0 ? (
-            <>
-              {facets.map((f) => (
-                <Tag
-                  key={f.id}
-                  speaker={f.speaker}
-                  onRemove={() =>
-                    setFacets((fs) => fs.filter((x) => x.id !== f.id))
-                  }
-                >
-                  {f.label}
-                </Tag>
-              ))}
-            </>
-          ) : undefined
-        }
         groups={cmdGroups}
         onSelect={(item) => {
           if (!item.id) return;
