@@ -45,6 +45,30 @@ def _models():
     )
 
 
+def _payload_v3(meeting_id, audio_key, summary_model, pv=0, threshold=0.7):
+    return parse_payload(
+        "process_meeting",
+        {
+            "schema_version": 3,
+            "meeting_id": str(meeting_id),
+            "audio_key": audio_key,
+            "processing_version": pv,
+            "reprocess": pv > 0,
+            "models": {
+                "whisper_model": "large-v3-turbo",
+                "language": "ko",
+                "devices": {"diarization": "cpu", "stt": "cpu"},
+                "preset": "standard",
+                "preset_revision": "2026-08-12.1",
+                "summary_model": summary_model,
+                "diarization": {"model": "d", "min_speakers": None, "max_speakers": None},
+                "embedding": {"model": "speechbrain/spkrec-ecapa-voxceleb", "dimension": 192},
+            },
+            "identify": {"threshold": threshold},
+        },
+    )
+
+
 def test_full_pipeline_with_identification(conn, tmp_path):
     # known speaker matches SPEAKER_00's centroid direction
     sid = seed_speaker(conn, enrollment_status="ready")
@@ -350,3 +374,51 @@ def test_empty_vad_skips_stt_and_yields_silence(conn, tmp_path):
     ).fetchall()
     assert len(rows) == 2
     assert all(r["status"] == "silence" and r["text"] is None for r in rows)
+
+
+def test_v3_payload_summary_model_wins_over_worker_env(conn, tmp_path):
+    mid = seed_meeting(
+        conn, status="processing", processing_version=0, audio_key="meetings/m/original.m4a"
+    )
+    jid = seed_job(conn, meeting_id=mid, payload={})
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    db.claim(conn, "w1")
+
+    out = run_process_meeting(
+        conn,
+        conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
+        _payload_v3(mid, "meetings/m/original.m4a", "qwen3.5:14b-mlx"),
+        _models(),
+        Storage(str(tmp_path)),
+        worker_id="w1",
+        normalize_fn=lambda s, d: None,
+        probe_fn=lambda p: ProbeResult(2000),
+        summary_llm_model="worker-env-model",
+    )
+    assert out == "committed"
+    row = conn.execute("SELECT model FROM meeting_summary WHERE meeting_id=%s", (mid,)).fetchone()
+    assert row["model"] == "qwen3.5:14b-mlx"
+
+
+def test_v1_payload_falls_back_to_worker_env_summary_model(conn, tmp_path):
+    mid = seed_meeting(
+        conn, status="processing", processing_version=0, audio_key="meetings/m/original.m4a"
+    )
+    jid = seed_job(conn, meeting_id=mid, payload={})
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    db.claim(conn, "w1")
+
+    out = run_process_meeting(
+        conn,
+        conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
+        _payload(mid, "meetings/m/original.m4a"),  # v1 — summary_model 없음
+        _models(),
+        Storage(str(tmp_path)),
+        worker_id="w1",
+        normalize_fn=lambda s, d: None,
+        probe_fn=lambda p: ProbeResult(2000),
+        summary_llm_model="worker-env-model",
+    )
+    assert out == "committed"
+    row = conn.execute("SELECT model FROM meeting_summary WHERE meeting_id=%s", (mid,)).fetchone()
+    assert row["model"] == "worker-env-model"
