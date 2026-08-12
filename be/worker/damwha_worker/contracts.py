@@ -176,6 +176,8 @@ class ProcessMeetingPayload(BaseModel):
     job type별 dispatch(SUPPORTED_SCHEMA_VERSIONS)가 담당한다.
     """
 
+    # 기본값 2는 죽은 값이다 — parse 경로(v1/v2/v3)가 항상 실제 버전을 명시적으로
+    # 채우므로 이 기본값이 쓰이는 일은 없다. v2가 내부 표준이라는 뜻은 아니다.
     schema_version: int = 2
     meeting_id: MeetingId
     audio_key: str
