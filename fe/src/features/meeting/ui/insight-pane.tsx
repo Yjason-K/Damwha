@@ -523,7 +523,7 @@ export function InsightPane({
                 value={summaryModel}
                 onValueChange={(v) => onSummaryModelChange(v as SummaryModel)}
               >
-                <SelectTrigger aria-label="요약 모델" className="h-7 text-xs">
+                <SelectTrigger aria-label="요약 모델" size="sm">
                   <SelectValue placeholder="전역 설정" />
                 </SelectTrigger>
                 <SelectContent>
