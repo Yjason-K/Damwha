@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     summary_llm_model: str = "qwen3.5:4b-mlx"
     lens_llm_api_key: str | None = None
     lens_llm_timeout_seconds: float = 300.0
+    # 서버 기본 출력 한도(mlx_lm.server는 512)로는 긴 회의 요약 JSON이 중간에 잘린다.
+    lens_llm_max_tokens: int = 8192
 
     @field_validator("default_speaker_prefix")
     @classmethod

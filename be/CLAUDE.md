@@ -62,7 +62,13 @@ Separate Python project under `worker/` (uv + ruff + pytest + pydantic v2 + psyc
   reversed boundaries, or out-of-order segments raise a PERMANENT
   `WorkerError` and nothing is stored. The summary is **read-only** — there is
   no per-item edit path, no `source` column, and no merge; regeneration
-  replaces the row wholesale.
+  replaces the row wholesale. `summary_client.py` sends an explicit
+  `max_tokens` (`lens_llm_max_tokens`, default 8192) because the server default
+  (512 on `mlx_lm.server`) truncates a long meeting's JSON mid-object, and
+  retries **once** on a JSON/schema failure by feeding the rejected reply plus
+  the validation error back as extra turns — a bare re-ask returns the same
+  bytes at `temperature=0`. A `finish_reason='length'` reply is **not** retried
+  (same budget, same truncation); it fails PERMANENT naming the budget.
 - **Search indexing.** `index_meeting` is a separate job type (dispatched by the API after persist completes). Failure marks the job only — the meeting stays `done` and BM25-searchable. Query embedding is the **single exception to the job-table-only invariant**: the API calls the embed service (localhost HTTP RPC, `POST /embed`) directly at query time; this never crosses a network boundary (`EMBED_SERVICE_ALLOW_NON_LOOPBACK=false`).
 
 ## Commands
