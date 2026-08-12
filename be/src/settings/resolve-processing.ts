@@ -33,6 +33,7 @@ export function resolveProcessingConfig(
         diarization: override.devices?.diarization ?? cfg.devices.diarization,
         stt: override.devices?.stt ?? cfg.devices.stt,
       },
+      summary_model: cfg.summary_model,
     };
   }
   if (!gpuEligible && (cfg.devices.diarization === 'gpu' || cfg.devices.stt === 'gpu')) {
