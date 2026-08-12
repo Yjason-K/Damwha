@@ -82,18 +82,18 @@ describe('SettingsService.getProcessingConfig', () => {
     );
     await service.putProcessing({
       preset: 'custom', language: 'ko', whisper_model: 'medium',
-      devices: { diarization: 'gpu', stt: 'cpu' }, summary_model: 'qwen3.5:14b-mlx',
+      devices: { diarization: 'gpu', stt: 'cpu' }, summary_model: 'qwen3.5:27b-mlx',
     });
     const row = await db.pool.query(`SELECT value FROM app_setting WHERE key='processing_defaults'`);
-    expect(row.rows[0].value.summary_model).toBe('qwen3.5:14b-mlx');
+    expect(row.rows[0].value.summary_model).toBe('qwen3.5:27b-mlx');
   });
 
   it('custom 저장값의 summary_model이 진실이다', async () => {
     await service.putProcessing({
       preset: 'custom', language: 'ko', whisper_model: 'small',
-      devices: { diarization: 'gpu', stt: 'cpu' }, summary_model: 'qwen3.5:8b-mlx',
+      devices: { diarization: 'gpu', stt: 'cpu' }, summary_model: 'qwen3.5:9b-mlx',
     });
     const cfg = await service.getProcessingConfig();
-    expect(cfg.summary_model).toBe('qwen3.5:8b-mlx');
+    expect(cfg.summary_model).toBe('qwen3.5:9b-mlx');
   });
 });

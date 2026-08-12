@@ -34,7 +34,7 @@ describe('job payload contract', () => {
     expect(p.models.devices).toEqual({ diarization: 'gpu', stt: 'gpu' });
     expect(p.models.preset).toBe('standard');
     expect(p.models.embedding.dimension).toBe(192);
-    expect(p.models.summary_model).toBe('qwen3.5:8b-mlx');
+    expect(p.models.summary_model).toBe('qwen3.5:9b-mlx');
     expect(() => ProcessMeetingPayloadSchema.parse(p)).not.toThrow();
   });
 

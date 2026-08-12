@@ -176,11 +176,11 @@ describe('요약 API', () => {
     const row = await db.pool.query(
       `SELECT model FROM meeting_summary WHERE meeting_id=$1`, [meetingId],
     );
-    expect(row.rows[0].model).toBe('qwen3.5:14b-mlx');
+    expect(row.rows[0].model).toBe('qwen3.5:27b-mlx');
     const job = await db.pool.query(
       `SELECT payload FROM job WHERE meeting_id=$1 AND type='summarize_meeting'`, [meetingId],
     );
-    expect(job.rows[0].payload.model).toBe('qwen3.5:14b-mlx');
+    expect(job.rows[0].payload.model).toBe('qwen3.5:27b-mlx');
   });
 
   it('body override → 그 모델로 큐잉되고 전역 설정은 바뀌지 않는다', async () => {
@@ -190,13 +190,13 @@ describe('요약 API', () => {
 
     await request(app.getHttpServer())
       .post(`/meetings/${meetingId}/summary/generate`)
-      .send({ summary_model: 'qwen3.5:14b-mlx' })
+      .send({ summary_model: 'qwen3.5:27b-mlx' })
       .expect(202);
 
     const row = await db.pool.query(
       `SELECT model FROM meeting_summary WHERE meeting_id=$1`, [meetingId],
     );
-    expect(row.rows[0].model).toBe('qwen3.5:14b-mlx');
+    expect(row.rows[0].model).toBe('qwen3.5:27b-mlx');
     const settings = await request(app.getHttpServer()).get('/settings/processing').expect(200);
     expect(settings.body.summary_model).toBe('qwen3.5:4b-mlx'); // 저장되지 않는다
   });
@@ -216,7 +216,7 @@ describe('요약 API', () => {
     });
     const res = await request(app.getHttpServer())
       .post(`/meetings/${meetingId}/summary/generate`)
-      .send({ summary_model: 'qwen3.5:14b-mlx' });
+      .send({ summary_model: 'qwen3.5:27b-mlx' });
     expect(res.status).toBe(409);
     expect(res.body.message).toContain('qwen3.5:4b-mlx');
   });
@@ -224,11 +224,11 @@ describe('요약 API', () => {
   it('진행 중 요약과 같은 모델로 재요청 → 기존 상태 반환 (멱등)', async () => {
     const meetingId = await seedMeeting({ status: 'done', processingVersion: 0 });
     await seedSummaryWithModel(meetingId, {
-      processingVersion: 0, status: 'running', model: 'qwen3.5:14b-mlx',
+      processingVersion: 0, status: 'running', model: 'qwen3.5:27b-mlx',
     });
     const res = await request(app.getHttpServer())
       .post(`/meetings/${meetingId}/summary/generate`)
-      .send({ summary_model: 'qwen3.5:14b-mlx' })
+      .send({ summary_model: 'qwen3.5:27b-mlx' })
       .expect(202);
     expect(res.body.status).toBe('running');
     const jobs = await db.pool.query(
