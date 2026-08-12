@@ -267,12 +267,14 @@ function SummarySegments({
           const expanded = !!open[s.id];
           return (
             <li key={s.id} className="flex flex-col">
-              <div className="flex items-start gap-[7px]">
+              {/* 시각(11px mono)과 제목(13px)은 크기도 세로 패딩도 달라
+                  items-start로는 글자가 어긋난다 — 베이스라인으로 맞춘다. */}
+              <div className="flex items-baseline gap-[7px]">
                 <button
                   type="button"
                   aria-label={`${s.t}로 이동`}
                   onClick={() => onJump(s.startUtteranceId)}
-                  className="mt-px shrink-0 cursor-pointer rounded-xs font-mono text-2xs text-[color:var(--text-link)] outline-none hover:underline active:translate-y-[0.5px] focus-visible:[box-shadow:var(--focus-ring)]"
+                  className="shrink-0 cursor-pointer rounded-xs py-1 font-mono text-2xs text-[color:var(--text-link)] outline-none hover:underline active:translate-y-[0.5px] focus-visible:[box-shadow:var(--focus-ring)]"
                 >
                   {s.t}
                 </button>
