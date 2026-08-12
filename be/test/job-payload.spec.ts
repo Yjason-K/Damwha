@@ -29,7 +29,7 @@ describe('job payload contract', () => {
       processingVersion: 2, reprocess: true,
       processing: resolvePreset('standard', 'ko'),
     });
-    expect(p.schema_version).toBe(2);
+    expect(p.schema_version).toBe(3);
     expect(p.models.whisper_model).toBe('large-v3-turbo');
     expect(p.models.devices).toEqual({ diarization: 'gpu', stt: 'gpu' });
     expect(p.models.preset).toBe('standard');
@@ -58,7 +58,7 @@ describe('job payload contract', () => {
       reprocess: true,
       processing: resolvePreset('standard', 'ko'),
     });
-    expect(p.schema_version).toBe(2);
+    expect(p.schema_version).toBe(3);
     expect(() => ProcessMeetingPayloadSchema.parse(p)).not.toThrow();
   });
 

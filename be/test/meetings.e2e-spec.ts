@@ -134,7 +134,7 @@ describe('meetings', () => {
     const res = await request(srv()).post('/meetings')
       .attach('audio', Buffer.from('a'), { filename: 'a.m4a', contentType: 'audio/mp4' });
     const job = await db.pool.query('SELECT payload FROM job WHERE id=$1', [res.body.current_job_id]);
-    expect(job.rows[0].payload.schema_version).toBe(2);
+    expect(job.rows[0].payload.schema_version).toBe(3);
     expect(job.rows[0].payload.models.whisper_model).toBe('small');
     expect(job.rows[0].payload.models.preset).toBe('light');
   });

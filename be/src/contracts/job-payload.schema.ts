@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { loadEnv } from '../config/env';
+import { SUMMARY_MODELS } from './model-catalog';
 // 타입 전용 import — 런타임 배출 없음(에러 소거). presets.ts는 WHISPER_MODELS(값)를
 // 이 파일에서 import하므로, 값 import로 되받으면 런타임 순환이 생긴다. type-only로 차단.
 import type { ProcessingConfig } from '../settings/presets';
@@ -36,6 +37,19 @@ export const ModelsSchemaV2 = z
   })
   .strict(); // legacy `device` 혼입 차단
 
+export const ModelsSchemaV3 = z
+  .object({
+    whisper_model: z.enum(WHISPER_MODELS),
+    language: z.string(),
+    devices: z.object({ diarization: DeviceSchema, stt: DeviceSchema }),
+    preset: z.enum(['light', 'standard', 'quality', 'custom']),
+    preset_revision: z.string().nullable(),
+    summary_model: z.enum(SUMMARY_MODELS),
+    diarization: DiarizationSchema,
+    embedding: EmbeddingSchema,
+  })
+  .strict();
+
 const processMeetingCommon = {
   meeting_id: z.string().regex(/^mtg_[1-9][0-9]*$/),
   audio_key: z.string().min(1),
@@ -49,6 +63,9 @@ const ProcessMeetingPayloadV1Schema = z.object({
 const ProcessMeetingPayloadV2Schema = z.object({
   schema_version: z.literal(2), ...processMeetingCommon, models: ModelsSchemaV2,
 });
+const ProcessMeetingPayloadV3Schema = z.object({
+  schema_version: z.literal(3), ...processMeetingCommon, models: ModelsSchemaV3,
+});
 
 // zod discriminatedUnion은 child의 .default()를 discriminator 선택 전에 적용하지
 // 않으므로, version 누락 payload는 preprocess로 v1에 귀속시킨다 (spec §4).
@@ -57,7 +74,11 @@ export const ProcessMeetingPayloadSchema = z.preprocess(
     v !== null && typeof v === 'object' && (v as Record<string, unknown>).schema_version === undefined
       ? { ...(v as object), schema_version: 1 }
       : v,
-  z.discriminatedUnion('schema_version', [ProcessMeetingPayloadV1Schema, ProcessMeetingPayloadV2Schema]),
+  z.discriminatedUnion('schema_version', [
+    ProcessMeetingPayloadV1Schema,
+    ProcessMeetingPayloadV2Schema,
+    ProcessMeetingPayloadV3Schema,
+  ]),
 );
 
 export const EnrollSpeakerPayloadSchema = z.object({
@@ -93,6 +114,7 @@ export const SummarizeMeetingPayloadSchema = z.object({
 
 export type ProcessMeetingPayloadV1 = z.infer<typeof ProcessMeetingPayloadV1Schema>;
 export type ProcessMeetingPayloadV2 = z.infer<typeof ProcessMeetingPayloadV2Schema>;
+export type ProcessMeetingPayloadV3 = z.infer<typeof ProcessMeetingPayloadV3Schema>;
 export type ProcessMeetingPayload = z.infer<typeof ProcessMeetingPayloadSchema>;
 export type EnrollSpeakerPayload = z.infer<typeof EnrollSpeakerPayloadSchema>;
 export type IndexMeetingPayload = z.infer<typeof IndexMeetingPayloadSchema>;
@@ -102,11 +124,11 @@ export type SummarizeMeetingPayload = z.infer<typeof SummarizeMeetingPayloadSche
 export function buildProcessMeetingPayload(args: {
   meetingId: string; audioKey: string; processingVersion: number; reprocess: boolean;
   processing: ProcessingConfig;
-}): ProcessMeetingPayloadV2 {
+}): ProcessMeetingPayloadV3 {
   const env = loadEnv();
   const p = args.processing;
   return {
-    schema_version: 2,
+    schema_version: 3,
     meeting_id: args.meetingId,
     audio_key: args.audioKey,
     processing_version: args.processingVersion,
@@ -117,6 +139,7 @@ export function buildProcessMeetingPayload(args: {
       devices: p.devices,
       preset: p.preset,
       preset_revision: p.preset_revision,
+      summary_model: p.summary_model,
       diarization: { model: env.DIARIZATION_MODEL, min_speakers: null, max_speakers: null },
       embedding: { model: env.EMBEDDING_MODEL, dimension: env.EMBEDDING_DIM },
     },
