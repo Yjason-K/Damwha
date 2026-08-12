@@ -19,10 +19,11 @@ afterEach(() => {
 
 const CONFIG: ProcessingConfig = {
   preset: "standard",
-  preset_revision: "2026-07-13.1",
+  preset_revision: "2026-08-12.2",
   language: "ko",
   whisper_model: "large-v3-turbo",
   devices: { diarization: "gpu", stt: "gpu" },
+  summary_model: "qwen3.5:9b-mlx",
 };
 
 const CAPS: Capabilities = {
@@ -78,6 +79,7 @@ test("고급에서 모델을 바꾸면 custom으로 전환되고 저장 시 전 
     language: "ko",
     whisper_model: "large-v3-turbo",
     devices: { diarization: "gpu", stt: "cpu" },
+    summary_model: "qwen3.5:9b-mlx",
   });
 });
 
@@ -138,4 +140,24 @@ test("capabilities 로딩 전에는 프리셋 카드가 비활성이다 (보수�
   renderForm();
   const standard = await screen.findByRole("radio", { name: /표준/ });
   expect((standard as HTMLButtonElement).disabled).toBe(true);
+});
+
+test("프리셋 카드에 요약 모델을 보여준다", async () => {
+  mockApi();
+  renderForm();
+  expect(await screen.findByText(/qwen3.5:9b-mlx/)).toBeTruthy();
+});
+
+test("고급에서 요약 모델을 바꾸면 custom으로 전환된다", async () => {
+  mockApi();
+  renderForm();
+  await screen.findByRole("radio", { name: /표준/ });
+  fireEvent.click(screen.getByRole("button", { name: /고급 설정/ }));
+  // Radix Select는 jsdom에서 pointer 이벤트를 못 받아 mousedown으로 열리지
+  // 않는다. 트리거에 포커스 후 ArrowDown(키보드)으로 열고 옵션을 클릭한다.
+  const trigger = screen.getByLabelText("요약 모델");
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("option", { name: /27B/ }));
+  expect(screen.getByText(/사용자 지정 설정을 쓰고 있어요/)).toBeTruthy();
 });

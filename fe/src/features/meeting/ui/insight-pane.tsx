@@ -3,9 +3,18 @@ import * as React from "react";
 import { Avatar } from "@/shared/ui/avatar";
 import { Checkbox } from "@/shared/ui/checkbox";
 import { IconButton } from "@/shared/ui/icon-button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/shared/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import { cn } from "@/shared/lib/utils";
 
+import type { SummaryModel } from "@/features/settings/api/types";
+import { SUMMARY_MODEL_OPTIONS } from "@/features/settings/lib/presets";
 import type {
   LensEntry,
   LensKind,
@@ -15,9 +24,9 @@ import type {
 import { Icon } from "./icons";
 
 /**
- * InsightPane — right rail: 요약/파일/메모 tabs. The 요약 tab stacks 참석자 →
- * 주요 주제 → 다음 할 일 → 핵심 결정 → 단락별 요약; the other tabs show their
- * focused slice. Ported from `timbre_app/InsightPane.jsx`.
+ * InsightPane — right rail: 요약/파일/메모 tabs. The 요약 tab stacks 요약 모델
+ * 선택 → 참석자 → 주요 주제 → 다음 할 일 → 핵심 결정 → 단락별 요약; the other
+ * tabs show their focused slice. Ported from `timbre_app/InsightPane.jsx`.
  */
 
 function CheckCircle() {
@@ -451,6 +460,8 @@ type InsightPaneProps = {
   onOpenLens: (lens: LensKind) => void;
   onJumpSegment: (utteranceId: string) => void;
   onRegenerateSummary: () => void;
+  summaryModel: SummaryModel | undefined;
+  onSummaryModelChange: (model: SummaryModel) => void;
   regenerating: boolean;
 };
 
@@ -463,6 +474,8 @@ export function InsightPane({
   onOpenLens,
   onJumpSegment,
   onRegenerateSummary,
+  summaryModel,
+  onSummaryModelChange,
   regenerating,
 }: InsightPaneProps) {
   const settled = meeting.summaryStatus === "done" && !regenerating;
@@ -502,6 +515,28 @@ export function InsightPane({
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
           <TabsContent value="summary" className="mt-0">
+            {meeting.status === "done" && (
+              <div className="flex items-center gap-2 border-b border-[color:var(--border-subtle)] px-3 py-2">
+                <span className="text-xs text-[color:var(--text-muted)]">
+                  재생성 모델
+                </span>
+                <Select
+                  value={summaryModel}
+                  onValueChange={(v) => onSummaryModelChange(v as SummaryModel)}
+                >
+                  <SelectTrigger aria-label="요약 모델" size="sm">
+                    <SelectValue placeholder="전역 설정" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SUMMARY_MODEL_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <Attendees meeting={meeting} />
             {settled ? (
               <TopicList topics={meeting.topics} />

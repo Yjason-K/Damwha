@@ -514,10 +514,11 @@ const fx = vi.hoisted(() => {
       return Promise.resolve({
         data: {
           preset: "standard",
-          preset_revision: "2026-07-13.1",
+          preset_revision: "2026-08-12.2",
           language: "ko",
           whisper_model: "large-v3-turbo",
           devices: { diarization: "gpu", stt: "gpu" },
+          summary_model: "qwen3.5:9b-mlx",
         },
       });
     if (url === "/lenses/extraction-status")

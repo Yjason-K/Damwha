@@ -5,9 +5,12 @@ import {
   useQueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import { apiClient } from "@/shared/api/client";
+import { apiClient, isApiError } from "@/shared/api/client";
 import { toast } from "@/shared/ui/use-toast";
-import type { ProcessingOverride } from "@/features/settings/api/types";
+import type {
+  ProcessingOverride,
+  SummaryModel,
+} from "@/features/settings/api/types";
 import type { Meeting, MeetingStatus, MeetingSummary } from "../model/types";
 import { toMeetingDetail, toMeetingSummary } from "./mappers";
 import type {
@@ -220,22 +223,30 @@ export function useResolveCluster() {
 export function useGenerateSummary() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (vars: { id: string }) => {
+    mutationFn: async (vars: { id: string; summary_model?: SummaryModel }) => {
       const { data } = await apiClient.post<{
         status: string;
         job_id: string | null;
         processing_version: number;
-      }>(`/meetings/${vars.id}/summary/generate`);
+      }>(
+        `/meetings/${vars.id}/summary/generate`,
+        vars.summary_model ? { summary_model: vars.summary_model } : {},
+      );
       return data;
     },
     onSuccess: (_data, vars) => {
       queryClient.invalidateQueries({ queryKey: ["meeting", vars.id] });
       queryClient.invalidateQueries({ queryKey: ["meeting-status", vars.id] });
     },
-    onError: () => {
+    onError: (error) => {
+      // 409 = 다른 모델로 이미 진행 중. 서버 문구가 진행 중 모델명을 담는다.
       toast({
         variant: "error",
-        title: "요약을 만들지 못했어요.",
+        title:
+          isApiError(error) && error.statusCode === 409
+            ? "다른 모델로 요약이 진행 중이에요."
+            : "요약을 만들지 못했어요.",
+        description: isApiError(error) ? error.message : undefined,
       });
     },
   });

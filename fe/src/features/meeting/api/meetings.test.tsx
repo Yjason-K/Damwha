@@ -66,6 +66,38 @@ test("삭제에 성공하면 회의별 렌즈 캐시를 제거한다", async () 
   });
 });
 
+test("요약 모델 없이 요청하면 빈 바디로 posts한다", async () => {
+  const post = vi.spyOn(apiClient, "post").mockResolvedValue({
+    data: { status: "queued", job_id: "job_1", processing_version: 1 },
+  } as never);
+  const { wrapper } = setup();
+  const { result } = renderHook(() => useGenerateSummary(), { wrapper });
+
+  act(() => {
+    result.current.mutate({ id: "m1" });
+  });
+
+  await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  expect(post).toHaveBeenCalledWith("/meetings/m1/summary/generate", {});
+});
+
+test("요약 모델을 지정하면 summary_model을 바디에 담아 posts한다", async () => {
+  const post = vi.spyOn(apiClient, "post").mockResolvedValue({
+    data: { status: "queued", job_id: "job_1", processing_version: 1 },
+  } as never);
+  const { wrapper } = setup();
+  const { result } = renderHook(() => useGenerateSummary(), { wrapper });
+
+  act(() => {
+    result.current.mutate({ id: "m1", summary_model: "qwen3.5:27b-mlx" });
+  });
+
+  await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  expect(post).toHaveBeenCalledWith("/meetings/m1/summary/generate", {
+    summary_model: "qwen3.5:27b-mlx",
+  });
+});
+
 test("요약 생성이 실패하면(회의가 아직 done이 아닐 때의 409 등) 에러 토스트를 띄운다", async () => {
   vi.spyOn(apiClient, "post").mockRejectedValue(new Error("409"));
   const { wrapper } = setup();

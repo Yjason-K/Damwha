@@ -24,6 +24,7 @@ import type {
   Device,
   PresetName,
   ProcessingConfig,
+  SummaryModel,
   WhisperModel,
 } from "../api/types";
 import {
@@ -31,6 +32,7 @@ import {
   PRESET_META,
   PRESET_META_REVISION,
   PRESET_ORDER,
+  SUMMARY_MODEL_OPTIONS,
   WHISPER_MODEL_OPTIONS,
 } from "../lib/presets";
 
@@ -45,6 +47,7 @@ type FormState = {
   language: string;
   whisper_model: WhisperModel;
   devices: { diarization: Device; stt: Device };
+  summary_model: SummaryModel;
 };
 
 function fromConfig(c: ProcessingConfig): FormState {
@@ -53,6 +56,7 @@ function fromConfig(c: ProcessingConfig): FormState {
     language: c.language,
     whisper_model: c.whisper_model,
     devices: { ...c.devices },
+    summary_model: c.summary_model,
   };
 }
 
@@ -99,6 +103,9 @@ function PresetRadio({
       </span>
       <span className="text-xs text-[color:var(--text-secondary)]">
         {meta.whisper_model} · {deviceSummary(meta.devices)}
+      </span>
+      <span className="text-xs text-[color:var(--text-muted)]">
+        요약 {meta.summary_model}
       </span>
     </button>
   );
@@ -150,13 +157,18 @@ export function ProcessingSettingsForm() {
     const server = settings.data;
     const source =
       server && server.preset === name
-        ? { whisper_model: server.whisper_model, devices: server.devices }
+        ? {
+            whisper_model: server.whisper_model,
+            devices: server.devices,
+            summary_model: server.summary_model,
+          }
         : PRESET_META[name];
     setForm({
       preset: name,
       language: form.language,
       whisper_model: source.whisper_model,
       devices: { ...source.devices },
+      summary_model: source.summary_model,
     });
   };
 
@@ -172,6 +184,7 @@ export function ProcessingSettingsForm() {
             language: form.language.trim(),
             whisper_model: form.whisper_model,
             devices: form.devices,
+            summary_model: form.summary_model,
           }
         : { preset: form.preset, language: form.language.trim() };
     update.mutate(body, {
@@ -254,6 +267,29 @@ export function ProcessingSettingsForm() {
                 </SelectTrigger>
                 <SelectContent>
                   {WHISPER_MODEL_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <span className="text-sm font-medium text-[color:var(--text-secondary)]">
+                요약(LLM) 모델
+              </span>
+              <Select
+                value={form.summary_model}
+                onValueChange={(v) =>
+                  setKnob({ summary_model: v as SummaryModel })
+                }
+              >
+                <SelectTrigger aria-label="요약 모델">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {SUMMARY_MODEL_OPTIONS.map((o) => (
                     <SelectItem key={o.value} value={o.value}>
                       {o.label}
                     </SelectItem>
