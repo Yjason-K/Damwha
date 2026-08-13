@@ -599,3 +599,128 @@ def test_supervisor_connects_through_reconnect():
     assert "_reconnect(connect_fn" in src
     src2 = inspect.getsource(m.run_supervisor_main)
     assert "connect_fn=lambda: db.connect" in src2
+
+
+# --- LLM 서버 수명 배선 테스트 ---
+
+
+class _SpyLlmServer:
+    """llm_server(model) 팩토리 대역 — 어떤 모델로 몇 번 진입했는지 기록."""
+
+    def __init__(self):
+        self.models = []
+        self.entered = 0
+        self.exited = 0
+
+    def __call__(self, model):
+        self.models.append(model)
+        return self
+
+    def __enter__(self):
+        self.entered += 1
+        return None
+
+    def __exit__(self, *exc):
+        self.exited += 1
+        return False
+
+
+def test_extract_lenses_runs_inside_llm_server_for_the_payload_model(conn, tmp_path):
+    mid = seed_meeting(conn, status="done", processing_version=0)
+    conn.execute(
+        """INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,text,status,
+                                  order_index,processing_version)
+           VALUES (%s,'S0',0,1000,'extract this','ok',0,0)""",
+        (mid,),
+    )
+    run_id = conn.execute(
+        """INSERT INTO lens_extraction_run(meeting_id,processing_version,status,model)
+           VALUES (%s,0,'queued','repo/lens-a') RETURNING id""",
+        (mid,),
+    ).fetchone()["id"]
+    payload = {
+        "schema_version": 1,
+        "meeting_id": mid,
+        "processing_version": 0,
+        "extraction_run_id": run_id,
+        "model": "repo/lens-a",
+    }
+    jid = seed_job(conn, type="extract_lenses", meeting_id=mid, payload=payload)
+    conn.execute("UPDATE lens_extraction_run SET job_id=%s WHERE id=%s", (jid, run_id))
+    job = db.claim(conn, "w1")
+    spy = _SpyLlmServer()
+
+    class Client:
+        def extract(self, *, model, utterances):
+            assert spy.entered == 1 and spy.exited == 0  # LLM 호출 시점엔 서버가 살아 있다
+            return []
+
+    handle_job(
+        conn,
+        job,
+        Storage(str(tmp_path)),
+        "w1",
+        build_lens_client=lambda: Client(),
+        llm_server=spy,
+    )
+    assert spy.models == ["repo/lens-a"]
+    assert spy.entered == spy.exited == 1
+
+
+def test_summarize_meeting_runs_inside_llm_server_for_the_payload_model(conn, tmp_path):
+    from damwha_worker.contracts import SummaryResponse
+
+    mid = seed_meeting(conn, status="done", processing_version=0)
+    conn.execute(
+        """INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,text,status,
+                                  order_index,processing_version)
+           VALUES (%s,'S0',0,1000,'summarize this','ok',0,0)""",
+        (mid,),
+    )
+    payload = {
+        "schema_version": 1,
+        "meeting_id": mid,
+        "processing_version": 0,
+        "model": "repo/summary-b",
+    }
+    jid = seed_job(conn, type="summarize_meeting", meeting_id=mid, payload=payload)
+    conn.execute(
+        """INSERT INTO meeting_summary(meeting_id, processing_version, job_id, model, status)
+           VALUES (%s, 0, %s, 'repo/summary-b', 'queued')""",
+        (mid, jid),
+    )
+    job = db.claim(conn, "w1")
+    spy = _SpyLlmServer()
+
+    class Client:
+        def summarize(self, *, model, utterances):
+            assert spy.entered == 1 and spy.exited == 0
+            return SummaryResponse()
+
+    handle_job(
+        conn,
+        job,
+        Storage(str(tmp_path)),
+        "w1",
+        build_summary_client=lambda: Client(),
+        llm_server=spy,
+    )
+    assert spy.models == ["repo/summary-b"]
+    assert spy.entered == spy.exited == 1
+
+
+def test_process_meeting_never_starts_the_llm_server(conn, tmp_path, monkeypatch):
+    _stub_ffmpeg(monkeypatch)
+    _enqueue_pm(conn)
+    job = db.claim(conn, "w1")
+    spy = _SpyLlmServer()
+
+    handle_job(
+        conn,
+        job,
+        Storage(str(tmp_path)),
+        "w1",
+        build_models=lambda: _models(),
+        llm_server=spy,
+    )
+    assert spy.models == []

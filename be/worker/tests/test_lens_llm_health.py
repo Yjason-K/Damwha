@@ -62,3 +62,14 @@ def test_reachable_server_logs_served_models(httpx_mock, caplog):
 
     assert "mlx-community/Qwen3.5-4B-8bit" in caplog.text
     assert "unreachable" not in caplog.text
+
+
+def test_managed_server_absence_is_not_a_warning(httpx_mock, caplog):
+    # 워커가 서버를 소유하면 '지금 안 떠 있음'이 정상 상태다 — job 직전에 띄운다.
+    httpx_mock.add_exception(httpx.ConnectError("connection refused"))
+
+    with caplog.at_level(logging.INFO, logger="damwha_worker"):
+        log_lens_llm_health("http://localhost:8000/v1", managed=True)
+
+    assert "unreachable" not in caplog.text
+    assert "worker-managed" in caplog.text

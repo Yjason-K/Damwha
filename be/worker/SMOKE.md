@@ -190,6 +190,19 @@ JSON-string 필드 / reprocess JSON body로 job별 오버라이드.)
 
 ```bash
 uv tool install mlx-lm      # 워커 venv 밖에 설치 — 워커는 mlx_lm을 import하지 않는다
+```
+
+**기본값(`LENS_LLM_MANAGED=true`)에서는 서버를 직접 띄울 필요가 없다.** 렌즈/요약
+자식이 job 직전에 payload의 모델로 아래 명령과 같은 프로세스를 띄우고, job이 끝나면
+SIGTERM으로 내린다(`llm_server.py`). 큐가 빈 동안 모델이 메모리를 쥐고 있지 않게 하는
+것이 목적이다 — 8bit 27B는 ~28GB고, 상시 띄워두면 무관한 `process_meeting`이 도는
+동안에도 whisper와 나란히 그 메모리를 잡고 있다. 대가는 job당 모델 로드 1회다(렌즈와
+요약은 `persist`가 같이 큐잉하므로 한 쌍이면 2회).
+
+서버를 직접 띄워 찔러 보고 싶으면 그렇게 해도 된다 — **이미 떠 있는 서버를 발견하면
+워커는 그걸 남의 것으로 보고 재사용만 하고 죽이지 않는다.**
+
+```bash
 mlx_lm.server --model mlx-community/Qwen3.5-4B-8bit \
   --chat-template-args '{"enable_thinking":false}' \
   --host 127.0.0.1 --port 8000
@@ -197,11 +210,13 @@ mlx_lm.server --model mlx-community/Qwen3.5-4B-8bit \
 
 `--chat-template-args`로 서버 기본값도 추론 off로 맞춘다. 클라이언트가 요청마다
 같은 값을 보내므로(아래 함정) 이 플래그 없이도 동작하지만, 서버를 직접 찔러 볼 때
-기본값이 일치해 있는 편이 헷갈리지 않는다.
+기본값이 일치해 있는 편이 헷갈리지 않는다. 워커가 띄울 때도 같은 플래그를 붙인다.
 
 ```
 # worker/.env — LENS_LLM_BASE_URL은 필수다(기본값 없음). 나머지는 config.py 기본값과 같다.
+# 워커가 이 URL의 host:port로 서버를 띄우므로 포트가 명시돼 있어야 한다.
 LENS_LLM_BASE_URL=http://127.0.0.1:8000/v1
+LENS_LLM_MANAGED=true      # false면 예전처럼 사람이 띄운 서버를 그대로 쓴다
 LENS_LLM_MODEL=mlx-community/Qwen3.5-4B-8bit
 SUMMARY_LLM_MODEL=mlx-community/Qwen3.5-4B-8bit
 
@@ -211,27 +226,34 @@ SUMMARY_LLM_MODEL=mlx-community/Qwen3.5-4B-8bit   # 카탈로그 밖 값이면 A
 ```
 
 **`--model`로 띄운 것과 다른 repo를 요청하면** `mlx_lm.server`가 그 자리에서 HF에서
-받아 로드하고 기존 모델을 내린다. 동작은 하지만 요청마다 스왑이 일어나므로, 렌즈와
-요약(= light 프리셋)은 같은 repo로 맞춰 두는 게 좋다. standard/quality 프리셋으로
+받아 로드하고 기존 모델을 내린다. 워커가 띄울 때는 payload의 모델을 그대로 `--model`로
+주므로 스왑이 나지 않는다. **수동으로 띄운 서버를 재사용하는 경우엔** 렌즈와
+요약(= light 프리셋)을 같은 repo로 맞춰 두는 게 좋다. standard/quality 프리셋으로
 요약하면 9B/27B를 그때 받는다.
 
 확인:
 
 ```bash
 # 1) 워커 기동 로그 — 슈퍼바이저가 GET {LENS_LLM_BASE_URL}/models를 1회 확인한다
-#    떠 있으면:  lens/summary LLM at http://127.0.0.1:8000/v1 serving: mlx-community/...
-#    안 떠 있으면: WARNING ... is unreachable — extract_lenses/summarize_meeting jobs will retry...
-#    경고가 떠도 워커는 정상 기동한다 (process_meeting은 LLM을 쓰지 않는다).
+#    managed(기본): INFO ... is worker-managed — started per lens/summary job
+#    managed=false + 떠 있음:  lens/summary LLM at ... serving: mlx-community/...
+#    managed=false + 안 떠 있음: WARNING ... is unreachable — ... jobs will retry...
+#    어느 쪽이든 워커는 정상 기동한다 (process_meeting은 LLM을 쓰지 않는다).
 uv run python -m damwha_worker
 
 # 2) 실제 추출
 curl -s -X POST http://localhost:3000/meetings/<id>/lenses/extract   # status=done인 회의
 # run/job이 done이 되고 lens_item + lens_evidence가 생기는지 확인
+
+# 3) managed 경로 확인 — job 도는 동안에만 프로세스가 보이고, 끝나면 사라진다
+watch -n1 'pgrep -fl mlx_lm.server'
 ```
 
-서버가 없을 때의 실패 경로: `httpx.RequestError` → `llm_request_failed`(TRANSIENT) →
-지수 백오프로 requeue → `max_attempts`(기본 3) 소진 후 job `failed`. 회의는 `done`을
-유지한다.
+managed=false에서 서버가 없을 때의 실패 경로: `httpx.RequestError` →
+`llm_request_failed`(TRANSIENT) → 지수 백오프로 requeue → `max_attempts`(기본 3)
+소진 후 job `failed`. 회의는 `done`을 유지한다. managed=true에서 서버를 못 띄우면
+`llm_server_start_failed` — 바이너리가 PATH에 없거나 base URL에 포트가 없으면
+PERMANENT(즉시 실패), 기동 타임아웃·조기 종료면 TRANSIENT(재시도)다.
 
 함정 다섯:
 

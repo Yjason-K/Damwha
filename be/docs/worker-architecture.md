@@ -352,6 +352,7 @@ flowchart LR
 - **enqueue** — API가 아니라 `persist_process_meeting` transaction이 `lens_extraction_run`(키: `meeting + processing_version`)과 `extract_lenses` job을 함께 만든다. worker에 `lens_llm_model`이 없으면 생략한다. `POST /meetings/:id/lenses/extract` 등 API 측 수동 enqueue도 활성 run을 재사용한다(idempotent).
 - **run guard** — `mark_lens_run_running`은 job 소유권(`locked_by`+`running`), run↔job 연결, `meeting.processing_version`이 payload와 일치할 때만 run을 `running`으로 바꾼다. 버전이 stale하면 job/run을 `done`으로 닫고 `discarded`, 소유권을 잃었으면 `lost`.
 - **select** — 현재 `processing_version`의 `status='ok'`이고 text가 있는 발언만 order 순으로 읽어 화자 이름과 함께 LLM에 넘긴다.
+- **LLM 서버 기동** — `LENS_LLM_MANAGED=true`(기본)면 자식이 `llm_server.py::managed_llm_server`로 `mlx_lm.server`를 payload의 모델로 띄우고, job이 끝나면 `finally`에서 SIGTERM(무시하면 SIGKILL)으로 내린다. 큐가 빈 동안 모델(8bit 27B ~28GB)이 메모리를 쥐고 있지 않게 하는 것이 목적이고, 대가는 job당 로드 1회다. 이미 떠 있는 서버는 사람이 띄운 것으로 보고 재사용만 하며 죽이지 않는다. 실패는 `llm_server_start_failed`(바이너리 없음·포트 없는 base URL = PERMANENT, 기동 타임아웃·조기 종료 = TRANSIENT).
 - **LLM 호출** — `lens_client.py`가 `reasoning_effort=none`, `response_format=json_object`로 chat completion을 호출한다. 기본 endpoint는 `http://127.0.0.1:8000/v1`, 모델 `mlx-community/Qwen3.5-4B-8bit`. **어댑터는 런타임 비의존적이다** — Ollama 의존성은 없고, 로컬 런타임은 `mlx_lm.server`가 HF repo를 직접 서빙한다(설정과 함정은 `worker/SMOKE.md`). code fence로 감싼 응답이나 wrapper 없는 배열도 관대하게 파싱한 뒤 Pydantic으로 검증한다. 로컬 런타임에서 `response_format`은 권고사항이라 모델이 nullable 필드를 생략한다 — `LensCandidate.assignee_speaker_id`/`due_at`은 기본값 `None`이고(생략 = 명시적 null), `extra="forbid"`가 없는 필드 생성은 계속 막는다.
 - **persist/재검증** — `persist_lens_extraction`이 동일 guard를 다시 적용하고, 모든 후보의 `primary`/`supporting` utterance id와 `assignee_speaker_id`가 그 meeting·version에 실제 존재하는지 서버 측에서 재확인한다. 하나라도 어긋나면 후보 전체를 커밋하지 않고 영구 오류(`invalid_lens_candidate`)로 실패한다.
 
@@ -450,7 +451,7 @@ DB에는 상대 storage key만 저장한다. `Storage.resolve()`는 root 밖으�
 | 화자 임베딩 | SpeechBrain ECAPA | 192차원, MPS 설정에서도 안정성을 위해 CPU 사용 |
 | 음성 인식 | mlx-whisper 또는 faster-whisper | payload `devices.stt`가 선택: `gpu`→MLX(MPS), `cpu`→faster-whisper(int8). `gpu` 요청+MPS 없음은 영구 실패(폴백 없음) |
 | 텍스트 임베딩 | BAAI/bge-m3 | 1024차원, index worker와 embed service에서 사용 |
-| 렌즈 추출 LLM | 로컬 OpenAI-호환 (기본 `mlx-community/Qwen3.5-4B-8bit`) | loopback endpoint(`127.0.0.1:8000/v1`), `extract_lenses`에서만 사용. 런타임 무관 — `mlx_lm.server` / Ollama 등 무엇이든 가능하나, 요약 모델 카탈로그가 HF repo id라 `mlx_lm.server`가 기본이다 |
+| 렌즈 추출 LLM | 로컬 OpenAI-호환 (기본 `mlx-community/Qwen3.5-4B-8bit`) | loopback endpoint(`127.0.0.1:8000/v1`), `extract_lenses`에서만 사용. 런타임 무관 — `mlx_lm.server` / Ollama 등 무엇이든 가능하나, 요약 모델 카탈로그가 HF repo id라 `mlx_lm.server`가 기본이다. 기본 설정에서 **서버 프로세스는 job 단위로 워커가 띄우고 내린다**(`llm_server.py`) |
 | 회의 요약 LLM | 로컬 OpenAI-호환 (기본 `mlx-community/Qwen3.5-4B-8bit`) | 같은 loopback endpoint, `summarize_meeting`에서만 사용. `lens_llm_model`과는 별개의 설정 필드(`summary_llm_model`)다 |
 
 필수 환경은 Python 3.12, `uv`, Postgres 16과 pgvector/pg_bigm, 공유 storage, ffmpeg/ffprobe다. 실제 모델 실행에는 `uv sync --extra models`가 필요하다.
@@ -487,6 +488,7 @@ uv run python -m damwha_worker
 - `STT_CHUNK_MINUTES` 설정은 존재하지만 현재 adapter가 수동 chunk 분할에 사용하지 않는다. MLX/faster-whisper 내부 처리를 따른다.
 - poller 자체 HTTP health endpoint는 없다. `embed_service`만 `/health`를 제공한다. poller 상태는 heartbeat와 job 진행률로 판단한다.
 - stage 성능 로그에는 job/entity ID와 count만 기록하고 transcript, 화자 PII, absolute path는 기록하지 않는다.
+- **긴 stage는 진행 중에도 로그를 남긴다.** `timed_stage`가 15초마다 `stage=<name> running elapsed_ms=...` tick을 찍어(daemon thread) STT·diarize·LLM 대기 중 콘솔이 무음이 되지 않게 한다. `summarize_meeting`/`extract_lenses`의 LLM 호출도 같은 래퍼를 쓴다. STT는 추가로 clip 단위 실진행을 보고한다 — 어댑터가 `on_progress(done_ms, total_ms)`를 호출하고 `SttProgressReporter`가 `units=i/N pct= rate= eta_s=` 로그와 `job.progress`(stt 75 → align 90 구간 선형보간)를 갱신한다. 로그·DB 쓰기는 최소 2초 간격으로 throttle하며 첫 호출과 마지막 unit은 항상 보고한다. 진행 보고 실패는 WARNING만 남기고 전사를 죽이지 않는다.
 - 검색 embedding 실패는 keyword-only로 degrade하지만, 회의 음성 처리의 모델 실패는 job retry/fail 정책을 따른다.
 - **짧은 백채널("네", "응", "아 네")은 전사되지 않을 수 있다.** Whisper가 앞뒤 본 발화와 같은 clip 안에 있어도 sub-second 백채널을 출력하지 않는 모델 특성이며(격리 실험으로 파라미터 무관 확인, 2026-07-24), 백채널만 단독 clip으로 잘라내면 오히려 오전사("아 네"→"아비.")가 유입돼 회수를 시도하지 않는다. 해당 구간은 sliver drop 규칙에 따라 row 없이 사라지거나 1초 이상이면 `transcribe_failed`로 남는다.
 - **Keyword boosting은 미도입(보류).** 클로바노트 벤치마크의 최대 갭(`docs/reference/clova-note.md` §5)이지만 payload 계약 확장(zod+pydantic)과 사용자 단어 등록 표면이 필요해 별도 spec 라운드 대상이다. 도입 시 Whisper `initial_prompt`(양쪽)/`hotwords`(faster-whisper)로 근사한다.
