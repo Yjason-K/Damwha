@@ -17,3 +17,6 @@ worker/record_examples/
 # superpowers SDD scratch (task briefs, reports, review diffs, progress ledger)
 .superpowers/
 .worktrees/
+
+# playwright MCP 스크린샷/트레이스 스크래치
+.playwright-mcp/
