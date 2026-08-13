@@ -76,7 +76,10 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-[100] grid max-h-[calc(100vh-2rem)] w-[calc(100%-2rem)] max-w-[440px] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-lg border border-border bg-card p-5 text-foreground outline-none [box-shadow:var(--shadow-lg)] data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
+          // grid-cols-[minmax(0,1fr)]: 암시 컬럼 트랙은 auto라 자식의 min-content
+          // (긴 파일명 등 nowrap 텍스트)에 밀려 다이얼로그 폭을 넘긴다. 0을 하한으로
+          // 고정해 자식이 항상 컨테이너 안에서 줄어들도록(truncate) 한다.
+          "fixed top-1/2 left-1/2 z-[100] grid max-h-[calc(100vh-2rem)] w-[calc(100%-2rem)] max-w-[440px] grid-cols-[minmax(0,1fr)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-lg border border-border bg-card p-5 text-foreground outline-none [box-shadow:var(--shadow-lg)] data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
           className,
         )}
         {...props}
