@@ -7,6 +7,7 @@ manual chunking is needed for typical meeting lengths; `stt_chunk_minutes` is a
 reserved knob for splitting very long files in a future pass.
 """
 
+from ..pipeline.stt_repetition import drop_repetition_loops
 from .base import ProgressFn, SpeechSpan, Word
 
 # 환각 방어(스펙 §1.3): 창 간 오류 전파(반복 루프) 차단 + 2초+ 무음 구간의 환각 의심
@@ -99,4 +100,5 @@ class MlxWhisper:
                             confidence=w.get("probability"),
                         )
                     )
-        return words
+        # 디코더 축퇴 출력은 decode 파라미터로 못 막는다 — stt_repetition 모듈 주석 참고
+        return drop_repetition_loops(words)

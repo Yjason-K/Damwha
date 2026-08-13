@@ -5,6 +5,7 @@ is `cpu` (mlx-whisper handles `gpu`). Runs on CPU on Apple Silicon so the light
 preset's cpu STT stays available there; kept for CUDA portability too.
 """
 
+from ..pipeline.stt_repetition import drop_repetition_loops
 from .base import ProgressFn, SpeechSpan, Word
 
 # 환각 방어(스펙 §1.3) — whisper_mlx.py와 동일 값 유지 (백엔드 간 동작 일치)
@@ -91,4 +92,5 @@ class FasterWhisper:
                         confidence=w.probability,
                     )
                 )
-        return words
+        # faster-whisper도 같은 upstream 로직을 물려받는다 — stt_repetition 모듈 주석 참고
+        return drop_repetition_loops(words)
