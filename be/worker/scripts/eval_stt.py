@@ -1,20 +1,27 @@
 """STT quality eval: compare transcriber backends against a reference transcript.
 
-Runs up to four configurations on one (already 16k-mono-normalized) wav and
+Runs up to six configurations on one (already 16k-mono-normalized) wav and
 reports WER/CER against a YouTube json3 caption reference:
 
   turbo     mlx-whisper large-v3-turbo   (current `standard` preset)
   large     mlx-whisper large-v3         (current `quality` preset)
   faster    faster-whisper large-v3 int8 (cpu path / backend isolation)
+  qwen17    Qwen3-ASR-1.7B-bf16 via mlx-audio  (whole file only — see below)
+  qwen06    Qwen3-ASR-0.6B-bf16 via mlx-audio  (whole file only)
   pipeline  diarize + build_utterances over the `turbo` words
             (measures text loss/reorder introduced by the pipeline, not STT)
 
-By default the transcribe runs mirror the production path in
+By default the whisper runs mirror the production path in
 `pipeline/process_meeting.py`: Silero VAD → `prepare_stt_spans` → decode only
 those spans. `--full-file` skips the VAD step and decodes the whole file
 instead, which is what isolates the clip_timestamps guard from the decode-param
 guards (`condition_on_previous_text` / `hallucination_silence_threshold`, which
 are module constants in the adapters and therefore always on).
+
+The `qwen*` runs ignore both — Qwen3-ASR has no clip_timestamps equivalent, so
+they always decode the whole file and report `full_file: true`. Compare them
+against a `--full-file` turbo run for a like-for-like read, and against the
+default turbo run for "would swapping it in help in production".
 
 Usage:
     uv run --with jiwer python scripts/eval_stt.py \
@@ -25,7 +32,8 @@ Usage:
 Caveat: YouTube auto-captions are themselves ASR output (Google) — treat the
 numbers as *relative* signal between runs, not absolute accuracy.
 Requires models extra (`uv sync --extra models`); `pipeline` additionally needs
-HF_TOKEN in worker/.env (pyannote gated).
+HF_TOKEN in worker/.env (pyannote gated), and the `qwen*` runs need
+`--with mlx-audio` (not a worker dependency — this script only).
 
 NOT a CI test — heavy/gated models, run by hand like smoke_process_meeting.py.
 """
@@ -85,6 +93,33 @@ def words_to_jsonable(words) -> list[dict]:
         {"text": w.text, "start_ms": w.start_ms, "end_ms": w.end_ms, "confidence": w.confidence}
         for w in words
     ]
+
+
+_QWEN = {
+    "qwen17": "mlx-community/Qwen3-ASR-1.7B-bf16",
+    "qwen06": "mlx-community/Qwen3-ASR-0.6B-bf16",
+}
+# mlx-audio takes a language *name*, not an ISO code.
+_QWEN_LANG = {"ko": "Korean", "en": "English"}
+
+
+def qwen_transcribe(repo: str, wav_path: str, language: str) -> tuple[str, float]:
+    """Transcribe the whole file with a Qwen3-ASR MLX model; return (text, seconds).
+
+    Deliberately NOT a `Transcriber` implementation. Qwen3-ASR emits no word
+    timings — mlx-audio's `STTOutput.segments` are chunk boundaries
+    (`chunk_duration` defaults to 1200s), so a 17-minute file yields one
+    segment spanning the file. Faking `Word(start_ms=0, ...)` to satisfy the
+    protocol would make align/diarization silently wrong, so this eval path
+    returns text only. Word timings need `Qwen3-ForcedAligner-0.6B` as a second
+    stage; that is the open question this eval is meant to inform, not answer.
+    """
+    from mlx_audio.stt import load
+
+    model = load(repo)
+    t0 = time.perf_counter()
+    out = model.generate(wav_path, language=_QWEN_LANG.get(language, language))
+    return out.text, time.perf_counter() - t0
 
 
 def main() -> int:
@@ -169,6 +204,12 @@ def main() -> int:
             time.perf_counter() - t0,
             {"words": len(words)},
         )
+
+    for name in ("qwen17", "qwen06"):
+        if name in runs:
+            # spans는 무시된다 — results.json만 보고 조건을 착각하지 않도록 표시한다.
+            text, el = qwen_transcribe(_QWEN[name], args.wav, args.language)
+            report(name, text, el, {"full_file": True})
 
     if "pipeline" in runs:
         token = hf_token()
