@@ -19,11 +19,11 @@ afterEach(() => {
 
 const CONFIG: ProcessingConfig = {
   preset: "standard",
-  preset_revision: "2026-08-12.2",
+  preset_revision: "2026-08-12.3",
   language: "ko",
   whisper_model: "large-v3-turbo",
   devices: { diarization: "gpu", stt: "gpu" },
-  summary_model: "qwen3.5:9b-mlx",
+  summary_model: "mlx-community/Qwen3.5-9B-8bit",
 };
 
 const CAPS: Capabilities = {
@@ -79,7 +79,7 @@ test("고급에서 모델을 바꾸면 custom으로 전환되고 저장 시 전 
     language: "ko",
     whisper_model: "large-v3-turbo",
     devices: { diarization: "gpu", stt: "cpu" },
-    summary_model: "qwen3.5:9b-mlx",
+    summary_model: "mlx-community/Qwen3.5-9B-8bit",
   });
 });
 
@@ -145,7 +145,9 @@ test("capabilities 로딩 전에는 프리셋 카드가 비활성이다 (보수�
 test("프리셋 카드에 요약 모델을 보여준다", async () => {
   mockApi();
   renderForm();
-  expect(await screen.findByText(/qwen3.5:9b-mlx/)).toBeTruthy();
+  expect(
+    await screen.findByText(/mlx-community\/Qwen3\.5-9B-8bit/),
+  ).toBeTruthy();
 });
 
 test("고급에서 요약 모델을 바꾸면 custom으로 전환된다", async () => {

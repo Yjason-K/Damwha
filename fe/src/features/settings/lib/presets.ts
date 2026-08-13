@@ -7,7 +7,7 @@ import type {
 
 /**
  * 프리셋 카드 표시용 메타 — 값의 진실원은 BE(`be/src/settings/presets.ts`,
- * PRESET_REVISION 2026-08-12.2). 여기 값은 카드 요약 표시 전용이며, 저장 시엔
+ * PRESET_REVISION 2026-08-12.3). 여기 값은 카드 요약 표시 전용이며, 저장 시엔
  * 프리셋 이름만 보내고 서버가 resolve한다. BE 프리셋 변경 시 함께 갱신할 것.
  */
 export const PRESET_META: Record<
@@ -25,21 +25,21 @@ export const PRESET_META: Record<
     desc: "8GB 램에 알맞아요",
     whisper_model: "small",
     devices: { diarization: "gpu", stt: "cpu" },
-    summary_model: "qwen3.5:4b-mlx",
+    summary_model: "mlx-community/Qwen3.5-4B-8bit",
   },
   standard: {
     label: "표준",
     desc: "16–32GB 램에 알맞아요",
     whisper_model: "large-v3-turbo",
     devices: { diarization: "gpu", stt: "gpu" },
-    summary_model: "qwen3.5:9b-mlx",
+    summary_model: "mlx-community/Qwen3.5-9B-8bit",
   },
   quality: {
     label: "고품질",
     desc: "64GB+ 램에 알맞아요",
     whisper_model: "large-v3",
     devices: { diarization: "gpu", stt: "gpu" },
-    summary_model: "qwen3.5:27b-mlx",
+    summary_model: "mlx-community/Qwen3.5-27B-8bit",
   },
 };
 
@@ -50,7 +50,7 @@ export const PRESET_ORDER: PresetName[] = ["light", "standard", "quality"];
  * 다르면 서버 프리셋이 갱신된 것 — 카드 요약이 실제와 다를 수 있음을 UI에
  * 알린다 (드리프트 감지; 리뷰 #6).
  */
-export const PRESET_META_REVISION = "2026-08-12.2";
+export const PRESET_META_REVISION = "2026-08-12.3";
 
 export const WHISPER_MODEL_OPTIONS: { value: WhisperModel; label: string }[] = [
   { value: "tiny", label: "tiny — 가장 빠름, 낮은 정확도" },
@@ -62,9 +62,18 @@ export const WHISPER_MODEL_OPTIONS: { value: WhisperModel; label: string }[] = [
 ];
 
 export const SUMMARY_MODEL_OPTIONS: { value: SummaryModel; label: string }[] = [
-  { value: "qwen3.5:4b-mlx", label: "qwen3.5 4B — 가장 빠름, 8GB 램" },
-  { value: "qwen3.5:9b-mlx", label: "qwen3.5 9B — 균형, 16–32GB 램" },
-  { value: "qwen3.5:27b-mlx", label: "qwen3.5 27B — 가장 정확, 64GB+ 램" },
+  {
+    value: "mlx-community/Qwen3.5-4B-8bit",
+    label: "qwen3.5 4B — 가장 빠름, 8GB 램",
+  },
+  {
+    value: "mlx-community/Qwen3.5-9B-8bit",
+    label: "qwen3.5 9B — 균형, 16–32GB 램",
+  },
+  {
+    value: "mlx-community/Qwen3.5-27B-8bit",
+    label: "qwen3.5 27B — 가장 정확, 64GB+ 램",
+  },
 ];
 
 /** 디바이스 요약 문자열 — 카드/고급 요약에 사용. */

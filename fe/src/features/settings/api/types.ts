@@ -13,11 +13,14 @@ export type WhisperModel =
   | "large-v3"
   | "large-v3-turbo";
 
-/** BE `src/contracts/model-catalog.ts`의 SUMMARY_MODELS 미러 — 함께 갱신할 것. */
+/**
+ * BE `src/contracts/model-catalog.ts`의 SUMMARY_MODELS 미러 — 함께 갱신할 것.
+ * 값은 mlx_lm.server가 그대로 받는 HF repo id다(별칭 불가).
+ */
 export type SummaryModel =
-  | "qwen3.5:4b-mlx"
-  | "qwen3.5:9b-mlx"
-  | "qwen3.5:27b-mlx";
+  | "mlx-community/Qwen3.5-4B-8bit"
+  | "mlx-community/Qwen3.5-9B-8bit"
+  | "mlx-community/Qwen3.5-27B-8bit";
 
 /** GET /settings/processing — 항상 resolved 뷰. */
 export type ProcessingConfig = {

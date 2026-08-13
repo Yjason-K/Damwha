@@ -18,11 +18,11 @@ function renderSection(
   vi.spyOn(apiClient, "get").mockResolvedValue({
     data: {
       preset: "standard",
-      preset_revision: "2026-08-12.2",
+      preset_revision: "2026-08-12.3",
       language: "ko",
       whisper_model: "large-v3-turbo",
       devices: { diarization: "gpu", stt: "gpu" },
-      summary_model: "qwen3.5:9b-mlx",
+      summary_model: "mlx-community/Qwen3.5-9B-8bit",
     },
   } as never);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -76,7 +76,9 @@ test("요약 모델만 고르면 그 값만 담긴 override를 올려보낸다",
   trigger.focus();
   fireEvent.keyDown(trigger, { key: "ArrowDown" });
   fireEvent.click(await screen.findByRole("option", { name: /27B/ }));
-  expect(onChange).toHaveBeenCalledWith({ summary_model: "qwen3.5:27b-mlx" });
+  expect(onChange).toHaveBeenCalledWith({
+    summary_model: "mlx-community/Qwen3.5-27B-8bit",
+  });
 });
 
 test("프리셋 선택 뒤 요약 모델을 바꾸면 두 값이 함께 유지된다", async () => {
@@ -88,19 +90,19 @@ test("프리셋 선택 뒤 요약 모델을 바꾸면 두 값이 함께 유지�
   fireEvent.click(await screen.findByRole("option", { name: /27B/ }));
   expect(onChange).toHaveBeenCalledWith({
     preset: "light",
-    summary_model: "qwen3.5:27b-mlx",
+    summary_model: "mlx-community/Qwen3.5-27B-8bit",
   });
 });
 
 test("요약 모델이 이미 선택된 상태에서 프리셋을 고르면 두 값이 함께 담긴다", async () => {
   const onChange = vi.fn();
-  renderSection({ summary_model: "qwen3.5:27b-mlx" }, onChange);
+  renderSection({ summary_model: "mlx-community/Qwen3.5-27B-8bit" }, onChange);
   const trigger = screen.getByLabelText("이번 작업 프리셋");
   trigger.focus();
   fireEvent.keyDown(trigger, { key: "ArrowDown" });
   fireEvent.click(await screen.findByRole("option", { name: /고품질/ }));
   expect(onChange).toHaveBeenCalledWith({
-    summary_model: "qwen3.5:27b-mlx",
+    summary_model: "mlx-community/Qwen3.5-27B-8bit",
     preset: "quality",
   });
 });
