@@ -31,7 +31,7 @@ def _install_fake_mlx(monkeypatch, calls):
     monkeypatch.setitem(sys.modules, "mlx_whisper", fake_whisper)
 
 
-def _install_fake_faster(monkeypatch, calls):
+def _install_fake_faster(monkeypatch, calls, segment_ends=(0.9,)):
     fake_fw = types.ModuleType("faster_whisper")
 
     class WhisperModel:
@@ -40,8 +40,19 @@ def _install_fake_faster(monkeypatch, calls):
 
         def transcribe(self, wav_path, **kwargs):
             calls.append(kwargs)
-            word = types.SimpleNamespace(word=" 안녕", start=0.5, end=0.9, probability=0.9)
-            return iter([types.SimpleNamespace(words=[word])]), None
+            segments = [
+                types.SimpleNamespace(
+                    start=end - 0.4,
+                    end=end,
+                    words=[
+                        types.SimpleNamespace(
+                            word=" 안녕", start=end - 0.4, end=end, probability=0.9
+                        )
+                    ],
+                )
+                for end in segment_ends
+            ]
+            return iter(segments), None
 
     fake_fw.WhisperModel = WhisperModel
     monkeypatch.setitem(sys.modules, "faster_whisper", fake_fw)
@@ -115,3 +126,71 @@ def test_faster_empty_spans_skips_library_and_returns_empty(monkeypatch):
 
     assert FasterWhisper("large-v3-turbo", device="cpu").transcribe("a.wav", "ko", []) == []
     assert calls == []
+
+
+# --- 진행 보고: clip/segment 하나가 끝날 때마다 (처리된 오디오 ms, 총 오디오 ms) ---
+# SPANS 길이: 2700ms + 5900ms = 8600ms
+
+
+def test_mlx_reports_progress_after_each_clip(monkeypatch):
+    calls = []
+    _install_fake_mlx(monkeypatch, calls)
+    from damwha_worker.models.whisper_mlx import MlxWhisper
+
+    seen = []
+    MlxWhisper("large-v3-turbo").transcribe(
+        "a.wav", "ko", SPANS, on_progress=lambda done, total: seen.append((done, total))
+    )
+    assert seen == [(2_700, 8_600), (8_600, 8_600)]
+
+
+def test_mlx_whole_file_reports_no_progress(monkeypatch):
+    # spans=None(전체 파일)은 진행 단위를 모른다 — 지어내지 않는다
+    calls = []
+    _install_fake_mlx(monkeypatch, calls)
+    from damwha_worker.models.whisper_mlx import MlxWhisper
+
+    seen = []
+    MlxWhisper("large-v3-turbo").transcribe(
+        "a.wav", "ko", on_progress=lambda done, total: seen.append((done, total))
+    )
+    assert seen == []
+
+
+def test_faster_reports_progress_as_segments_stream(monkeypatch):
+    # faster-whisper는 clip을 한 번에 받고 segment 제너레이터를 흘린다 —
+    # segment 끝 위치(절대 오디오 시각)를 clip 누적 ms로 환산해 보고한다.
+    calls = []
+    _install_fake_faster(monkeypatch, calls, segment_ends=(3.2, 9.9))
+    from damwha_worker.models.whisper_faster import FasterWhisper
+
+    seen = []
+    FasterWhisper("large-v3-turbo", device="cpu").transcribe(
+        "a.wav", "ko", SPANS, on_progress=lambda done, total: seen.append((done, total))
+    )
+    assert seen == [(2_700, 8_600), (8_600, 8_600)]
+
+
+def test_faster_progress_inside_a_clip_counts_partial(monkeypatch):
+    # 첫 clip(500~3200) 중간 1500ms 지점 → 1000ms 처리
+    calls = []
+    _install_fake_faster(monkeypatch, calls, segment_ends=(1.5,))
+    from damwha_worker.models.whisper_faster import FasterWhisper
+
+    seen = []
+    FasterWhisper("large-v3-turbo", device="cpu").transcribe(
+        "a.wav", "ko", SPANS, on_progress=lambda done, total: seen.append((done, total))
+    )
+    assert seen == [(1_000, 8_600)]
+
+
+def test_faster_whole_file_reports_no_progress(monkeypatch):
+    calls = []
+    _install_fake_faster(monkeypatch, calls)
+    from damwha_worker.models.whisper_faster import FasterWhisper
+
+    seen = []
+    FasterWhisper("large-v3-turbo", device="cpu").transcribe(
+        "a.wav", "ko", on_progress=lambda done, total: seen.append((done, total))
+    )
+    assert seen == []

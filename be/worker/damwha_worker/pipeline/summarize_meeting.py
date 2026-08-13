@@ -4,6 +4,7 @@ from .. import db
 from ..contracts import SummarizeMeetingPayload
 from ..errors import LLM_INVALID_RESPONSE, ErrorKind, WorkerError
 from .stage import enter_stage
+from .timing import timed_stage
 
 
 def _resolve_segments(segments, rows) -> list[dict]:
@@ -80,8 +81,11 @@ def run_summarize_meeting(
            ORDER BY u.order_index, u.id""",
         (payload.meeting_id, payload.processing_version),
     ).fetchall()
-    response = client.summarize(model=payload.model, utterances=[dict(row) for row in rows])
-    segments = _resolve_segments(response.segments, [dict(row) for row in rows])
+    # LLM 호출은 긴 회의에서 수 분 — timed_stage가 진행 중 tick과 완료 시간을 남긴다
+    with timed_stage("summarize_meeting", f"job={job['id']} meeting={payload.meeting_id}") as t:
+        response = client.summarize(model=payload.model, utterances=[dict(row) for row in rows])
+        segments = _resolve_segments(response.segments, [dict(row) for row in rows])
+        t["detail"] = f"utterances={len(rows)} segments={len(segments)}"
     enter_stage(conn, job["id"], worker_id, "persist_summary", 80, shutdown_event)
     return db.persist_summary(
         conn,

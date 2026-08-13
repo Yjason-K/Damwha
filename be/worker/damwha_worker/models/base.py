@@ -1,5 +1,10 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
+
+# 전사 진행 보고: (처리된 오디오 ms, 처리할 총 오디오 ms). clip/segment 하나가 끝날
+# 때마다 호출된다. speech_spans 없이(전체 파일) 호출되면 총량을 모르므로 보고하지 않는다.
+ProgressFn = Callable[[int, int], None]
 
 
 @dataclass
@@ -37,7 +42,12 @@ class Embedder(Protocol):
 
 class Transcriber(Protocol):
     def transcribe(
-        self, wav_path: str, language: str, speech_spans: list[SpeechSpan] | None = None
+        self,
+        wav_path: str,
+        language: str,
+        speech_spans: list[SpeechSpan] | None = None,
+        *,
+        on_progress: ProgressFn | None = None,
     ) -> list[Word]: ...
 
 

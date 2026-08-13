@@ -7,7 +7,7 @@ manual chunking is needed for typical meeting lengths; `stt_chunk_minutes` is a
 reserved knob for splitting very long files in a future pass.
 """
 
-from .base import SpeechSpan, Word
+from .base import ProgressFn, SpeechSpan, Word
 
 # 환각 방어(스펙 §1.3): 창 간 오류 전파(반복 루프) 차단 + 2초+ 무음 구간의 환각 의심
 # 단어 제거. word_timestamps=True가 전제. 값 변경 = 코드 변경(payload 재현성).
@@ -34,7 +34,12 @@ class MlxWhisper:
         self._repo = _REPO[whisper_model]
 
     def transcribe(
-        self, wav_path: str, language: str, speech_spans: list[SpeechSpan] | None = None
+        self,
+        wav_path: str,
+        language: str,
+        speech_spans: list[SpeechSpan] | None = None,
+        *,
+        on_progress: ProgressFn | None = None,
     ) -> list[Word]:
         if speech_spans is not None and not speech_spans:
             # 빈 리스트 = '발화 없음' — clip_timestamps=[]가 '전체 오디오'로 해석되는
@@ -68,9 +73,14 @@ class MlxWhisper:
             # mlx-whisper의 seek 루프가 일부 clip 출력을 드랍한다(로컬 재현: 73-clip
             # 호출에서 특정 clip 무출력, 동일 clip 단독 호출은 정상). 모델 가중치는
             # mlx_whisper 내부 캐시라 호출당 재로드 비용은 없다.
-            results = [
-                _run(clip_timestamps=[s.start_ms / 1000, s.end_ms / 1000]) for s in speech_spans
-            ]
+            total_ms = sum(s.end_ms - s.start_ms for s in speech_spans)
+            done_ms = 0
+            results = []
+            for span in speech_spans:
+                results.append(_run(clip_timestamps=[span.start_ms / 1000, span.end_ms / 1000]))
+                done_ms += span.end_ms - span.start_ms
+                if on_progress is not None:
+                    on_progress(done_ms, total_ms)
         else:
             results = [_run()]
 

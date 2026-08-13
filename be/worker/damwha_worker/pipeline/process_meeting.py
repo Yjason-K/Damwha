@@ -5,7 +5,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .. import db
+from .. import console, db
 from ..contracts import ProcessMeetingPayload
 from ..errors import ShutdownRequested
 from ..models.base import VAD, Diarizer, Embedder, Transcriber
@@ -13,6 +13,7 @@ from ..storage import Storage
 from . import ffmpeg
 from .align import build_utterances
 from .identify import centroids_by_label, identify_clusters
+from .progress import SttProgressReporter
 from .stage import enter_stage
 from .stt_spans import prepare_stt_spans
 from .timing import timed_stage
@@ -115,7 +116,22 @@ def run_process_meeting(
     with timed_stage("stt", ctx) as t:
         prepared = prepare_stt_spans(speech_spans, duration_ms)
         if prepared:
-            words = models.transcriber.transcribe(norm_path, payload.models.language, prepared)
+            # 전사는 이 파이프라인에서 가장 긴 단계다 — clip 단위 진행을 TTY 진행 바와
+            # 콘솔 로그, job.progress(stt 75 → align 90 구간)에 흘린다.
+            with console.progress_bar("stt") as bar:
+                report = SttProgressReporter(
+                    ctx,
+                    total_units=len(prepared),
+                    set_progress=lambda progress: db.set_stage(
+                        conn, job_id, worker_id, "stt", progress
+                    ),
+                    bar=bar,
+                    progress_from=75,
+                    progress_to=90,
+                )
+                words = models.transcriber.transcribe(
+                    norm_path, payload.models.language, prepared, on_progress=report
+                )
         else:
             words = []
         clipped_ms = sum(s.end_ms - s.start_ms for s in prepared)

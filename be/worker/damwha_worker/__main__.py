@@ -6,7 +6,7 @@ import sys
 import threading
 from contextlib import nullcontext
 
-from . import db
+from . import console, db
 from .config import load_settings
 from .contracts import parse_payload
 from .errors import ErrorKind, ShutdownRequested, classify
@@ -529,7 +529,8 @@ def run_supervisor_main(settings, shutdown: threading.Event) -> None:
 
 
 def main() -> None:  # pragma: no cover — 실모델 + 시그널 배선 (로컬 실행)
-    logging.basicConfig(level=logging.INFO)
+    # 진행 바와 로그가 같은 stderr를 쓴다 — 핸들러가 바를 지웠다 다시 그려야 섞이지 않는다
+    console.install_logging(level=logging.INFO)
     settings = load_settings()
     shutdown = threading.Event()
     if "--once" in sys.argv[1:]:

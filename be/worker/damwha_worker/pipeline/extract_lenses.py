@@ -3,6 +3,7 @@ import threading
 from .. import db
 from ..contracts import ExtractLensesPayload
 from .stage import enter_stage
+from .timing import timed_stage
 
 
 def run_extract_lenses(
@@ -34,7 +35,10 @@ def run_extract_lenses(
            ORDER BY u.order_index, u.id""",
         (payload.meeting_id, payload.processing_version),
     ).fetchall()
-    candidates = client.extract(model=payload.model, utterances=[dict(row) for row in rows])
+    # LLM 호출은 긴 회의에서 수 분 — timed_stage가 진행 중 tick과 완료 시간을 남긴다
+    with timed_stage("extract_lenses", f"job={job['id']} meeting={payload.meeting_id}") as t:
+        candidates = client.extract(model=payload.model, utterances=[dict(row) for row in rows])
+        t["detail"] = f"utterances={len(rows)} candidates={len(candidates)}"
     enter_stage(conn, job["id"], worker_id, "persist_lenses", 80, shutdown_event)
     return db.persist_lens_extraction(
         conn,

@@ -357,3 +357,16 @@ def test_pipeline_stores_empty_summary_for_meeting_without_utterances(conn):
     row = _one(conn, "SELECT status, topics FROM meeting_summary")
     assert row["status"] == "done"
     assert row["topics"] == []
+
+
+def test_llm_call_is_timed_and_logged(conn, summary_job, caplog):
+    # 요약 LLM 호출은 수 분 걸린다 — timed_stage로 감싸야 tick/완료 로그가 콘솔에 남는다
+    job, ids = summary_job
+    client = SimpleNamespace(
+        summarize=lambda **_kw: _response([_segment(ids["utt_1"], ids["utt_2"])])
+    )
+    with caplog.at_level("INFO", logger="damwha_worker"):
+        assert run_summarize_meeting(conn, job, _payload(job), client, worker_id="w") == "committed"
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert f"job={job['id']} meeting={ids['meeting_id']} stage=summarize_meeting done" in text
+    assert "utterances=2 segments=1" in text

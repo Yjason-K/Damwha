@@ -26,16 +26,27 @@ class FakeEmbedder:
 
 
 class FakeTranscriber:
-    def __init__(self, words: list[Word]) -> None:
+    def __init__(
+        self, words: list[Word], progress_steps: list[tuple[int, int]] | None = None
+    ) -> None:
         self._words = words
+        self._progress_steps = progress_steps or []
         self.received_spans: list[SpeechSpan] | None = None
         self.calls = 0
 
     def transcribe(
-        self, wav_path: str, language: str, speech_spans: list[SpeechSpan] | None = None
+        self,
+        wav_path: str,
+        language: str,
+        speech_spans: list[SpeechSpan] | None = None,
+        *,
+        on_progress=None,
     ) -> list[Word]:
         self.calls += 1
         self.received_spans = speech_spans
+        for done_ms, total_ms in self._progress_steps:
+            if on_progress is not None:
+                on_progress(done_ms, total_ms)
         return self._words
 
 

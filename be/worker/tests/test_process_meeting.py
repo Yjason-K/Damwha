@@ -422,3 +422,86 @@ def test_v1_payload_falls_back_to_worker_env_summary_model(conn, tmp_path):
     assert out == "committed"
     row = conn.execute("SELECT model FROM meeting_summary WHERE meeting_id=%s", (mid,)).fetchone()
     assert row["model"] == "worker-env-model"
+
+
+def test_stt_progress_logged_and_written_between_stage_bounds(conn, tmp_path, caplog, monkeypatch):
+    # 전사 중간 보고가 콘솔 로그 + job.progress(75→90 구간) 양쪽에 나타나야 한다
+    mid = seed_meeting(conn, status="processing", audio_key="meetings/m/original.m4a")
+    jid = seed_job(conn, meeting_id=mid, payload={})
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    db.claim(conn, "w1")
+
+    stage_writes: list[tuple[str, int]] = []
+    real_set_stage = db.set_stage
+
+    def spy(conn_, job_id, worker_id, stage, progress):
+        stage_writes.append((stage, progress))
+        return real_set_stage(conn_, job_id, worker_id, stage, progress)
+
+    monkeypatch.setattr(db, "set_stage", spy)
+
+    models = _models()
+    models.transcriber = FakeTranscriber(
+        [Word("안녕", 0, 500, 0.9), Word("반가워", 1100, 1500, 0.8)],
+        progress_steps=[(1_000, 2_000), (2_000, 2_000)],
+    )
+    with caplog.at_level("INFO", logger="damwha_worker"):
+        run_process_meeting(
+            conn,
+            conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
+            _payload(mid, "meetings/m/original.m4a"),
+            models,
+            Storage(str(tmp_path)),
+            worker_id="w1",
+            normalize_fn=lambda s, d: None,
+            probe_fn=lambda p: ProbeResult(2000),
+        )
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "stage=stt running units=1/1 audio_ms=1000/2000 pct=50" in text
+    # stt 진입(75) 이후 중간 갱신이 75~90 사이로 기록된다
+    assert ("stt", 82) in stage_writes
+    assert ("stt", 90) in stage_writes
+    assert stage_writes.index(("stt", 75)) < stage_writes.index(("stt", 82))
+
+
+def test_stt_drives_a_console_progress_bar(conn, tmp_path, monkeypatch):
+    # 전사 stage는 TTY 진행 바를 열고 clip마다 갱신한다(비TTY면 바 자체가 no-op)
+    from contextlib import contextmanager
+
+    from damwha_worker.pipeline import process_meeting as pm
+
+    mid = seed_meeting(conn, status="processing", audio_key="meetings/m/original.m4a")
+    jid = seed_job(conn, meeting_id=mid, payload={})
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    db.claim(conn, "w1")
+
+    opened: list[str] = []
+    updates: list[tuple[float, str]] = []
+
+    class RecordingBar:
+        def update(self, fraction, text=""):
+            updates.append((fraction, text))
+
+    @contextmanager
+    def fake_progress_bar(label, **_kwargs):
+        opened.append(label)
+        yield RecordingBar()
+
+    monkeypatch.setattr(pm.console, "progress_bar", fake_progress_bar)
+
+    models = _models()
+    models.transcriber = FakeTranscriber(
+        [Word("안녕", 0, 500, 0.9)], progress_steps=[(1_000, 2_000), (2_000, 2_000)]
+    )
+    run_process_meeting(
+        conn,
+        conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
+        _payload(mid, "meetings/m/original.m4a"),
+        models,
+        Storage(str(tmp_path)),
+        worker_id="w1",
+        normalize_fn=lambda s, d: None,
+        probe_fn=lambda p: ProbeResult(2000),
+    )
+    assert opened == ["stt"]
+    assert [f for f, _ in updates] == [0.5, 1.0]
