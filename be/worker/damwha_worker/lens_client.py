@@ -18,7 +18,7 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "assignee_speaker_id (nullable), due_at (nullable), primary_utterance_id, "
     "supporting_utterance_ids. Choose the exact primary utterance. Every utterance "
     "ID and assignee_speaker_id must originate in the supplied utterances. Do not "
-    "speculate or return duplicates."
+    "speculate or return duplicates. Write text in the language of the transcript."
 )
 
 
