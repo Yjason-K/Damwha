@@ -421,20 +421,6 @@ export function TranscriptPane({
               <Icon name="rotateCcw" size={16} />
             </IconButton>
           )}
-          <div className="flex-1" />
-          <Button
-            variant="secondary"
-            size="sm"
-            iconLeft={<Icon name="jump" size={14} />}
-          >
-            공유
-          </Button>
-          <IconButton label="더보기" size="sm">
-            <Icon name="more" size={16} />
-          </IconButton>
-          <IconButton label="저장" size="sm">
-            <Icon name="bookmark" size={16} />
-          </IconButton>
         </div>
         <div className="flex items-center gap-3.5 text-xs text-[color:var(--text-muted)]">
           <MetaItem icon="calendar">{meeting.timeRange}</MetaItem>
