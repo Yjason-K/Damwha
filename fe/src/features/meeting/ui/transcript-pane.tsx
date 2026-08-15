@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { isApiError } from "@/shared/api/client";
+import { cn } from "@/shared/lib/utils";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import {
@@ -14,6 +15,7 @@ import {
 } from "@/shared/ui/dialog";
 import { IconButton } from "@/shared/ui/icon-button";
 import { Input } from "@/shared/ui/input";
+import { SearchField } from "@/shared/ui/search-field";
 import { toast } from "@/shared/ui/use-toast";
 import { Utterance } from "@/shared/ui/utterance";
 
@@ -22,6 +24,7 @@ import {
   useRenameMeeting,
   useToggleFavorite,
 } from "../api/meetings";
+import { findMatches, type FindMatch } from "../lib/find-matches";
 import type { Meeting } from "../model/types";
 import { Icon } from "./icons";
 import { ReprocessDialog } from "./reprocess-dialog";
@@ -29,7 +32,7 @@ import { ResolveDialog } from "./resolve-dialog";
 
 /**
  * TranscriptPane — center pane: meta header, attendee pills, speaker-verify
- * banner, AI-suggestion banner, utterances, bottom toolbar. Ported from the
+ * banner, AI-suggestion banner, utterances, 찾기 바. Ported from the
  * Damwha Design System UI kit (`timbre_app/TranscriptPane.jsx`).
  */
 
@@ -64,6 +67,42 @@ function TrashMini() {
       <path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m2 0v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V7M10 11v6M14 11v6" />
     </svg>
   );
+}
+
+/**
+ * 발화 텍스트를 매칭 경계로 쪼개 <mark>로 감싼다. 매칭이 없으면 문자열을
+ * 그대로 돌려준다(대부분의 발화가 이 경로).
+ */
+function renderFindText(
+  text: string,
+  matches: FindMatch[],
+  current: FindMatch | null,
+): React.ReactNode {
+  if (matches.length === 0) return text;
+  const out: React.ReactNode[] = [];
+  let at = 0;
+  matches.forEach((m, i) => {
+    if (m.start > at) out.push(text.slice(at, m.start));
+    const isCurrent =
+      current != null && current.uid === m.uid && current.start === m.start;
+    out.push(
+      <mark
+        key={i}
+        {...(isCurrent ? { "data-find-current": "" } : {})}
+        className={cn(
+          "rounded-[2px]",
+          isCurrent
+            ? "bg-[var(--accent-solid)] text-white"
+            : "bg-[var(--accent-2)] text-[color:var(--accent-text)]",
+        )}
+      >
+        {text.slice(m.start, m.end)}
+      </mark>,
+    );
+    at = m.end;
+  });
+  if (at < text.length) out.push(text.slice(at));
+  return out;
 }
 
 function AttendeePill({ speaker, name }: { speaker: number; name: string }) {
@@ -330,6 +369,49 @@ export function TranscriptPane({
   const [resolveOpen, setResolveOpen] = React.useState(false);
   const [reprocessOpen, setReprocessOpen] = React.useState(false);
 
+  const [query, setQuery] = React.useState("");
+  // 현재 매칭을 인덱스가 아니라 값으로 들고 인덱스를 파생시킨다. matches는
+  // meeting.utterances에서 파생되는데 전사는 같은 회의가 마운트된 채로도
+  // 바뀐다(화자 확정·재처리·요약 재생성이 ["meeting", id]를 무효화한다).
+  // 인덱스를 state로 들면 매칭이 줄었을 때 카운터가 "6/2"가 되고 현재
+  // 하이라이트는 아무 데도 붙지 않는다.
+  const [anchor, setAnchor] = React.useState<FindMatch | null>(null);
+  const findInputRef = React.useRef<HTMLInputElement>(null);
+
+  const matches = React.useMemo(
+    () => findMatches(meeting.utterances, query),
+    [meeting.utterances, query],
+  );
+
+  const cursor = React.useMemo(() => {
+    if (!anchor) return 0;
+    const i = matches.findIndex(
+      (m) =>
+        m.uid === anchor.uid &&
+        m.start === anchor.start &&
+        m.end === anchor.end,
+    );
+    return i >= 0 ? i : 0; // 앵커가 사라졌으면 첫 매칭으로
+  }, [matches, anchor]);
+
+  const current = matches[cursor] ?? null;
+
+  const matchesByUid = React.useMemo(() => {
+    const map = new Map<string, FindMatch[]>();
+    for (const m of matches) {
+      const list = map.get(m.uid);
+      if (list) list.push(m);
+      else map.set(m.uid, [m]);
+    }
+    return map;
+  }, [matches]);
+
+  const clearFind = () => {
+    setQuery("");
+    setAnchor(null);
+    findInputRef.current?.focus();
+  };
+
   const favorite = useToggleFavorite();
   const fav = !!meeting.fav;
   const toggleFav = () =>
@@ -470,11 +552,56 @@ export function TranscriptPane({
                 placeholder={failed}
                 onJump={() => onJump(u.id)}
               >
-                {failed ? "전사하지 못한 구간입니다" : u.text}
+                {failed
+                  ? "전사하지 못한 구간입니다"
+                  : renderFindText(
+                      u.text,
+                      matchesByUid.get(u.id) ?? [],
+                      current,
+                    )}
               </Utterance>
             );
           })}
         </div>
+      </div>
+
+      {/* 찾기 바 — 회의 내 인라인 검색(브라우저 Ctrl+F 위치·조작감) */}
+      <div className="flex shrink-0 items-center gap-1.5 bg-[var(--surface-card)] px-7 py-2">
+        <SearchField
+          ref={findInputRef}
+          className="max-w-[320px] flex-1"
+          placeholder="이 회의에서 찾기"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        {query.trim() ? (
+          <>
+            <span
+              role="status"
+              aria-live="polite"
+              className="px-1 text-xs whitespace-nowrap text-[color:var(--text-muted)] tabular-nums"
+            >
+              {matches.length ? `${cursor + 1}/${matches.length}` : "결과 없음"}
+            </span>
+            <IconButton
+              label="이전 결과"
+              size="sm"
+              disabled={matches.length === 0}
+            >
+              <Icon name="chevUp" size={16} />
+            </IconButton>
+            <IconButton
+              label="다음 결과"
+              size="sm"
+              disabled={matches.length === 0}
+            >
+              <Icon name="chevDown" size={16} />
+            </IconButton>
+            <IconButton label="찾기 지우기" size="sm" onClick={clearFind}>
+              <Icon name="x" size={16} />
+            </IconButton>
+          </>
+        ) : null}
       </div>
 
       <RenameDialog

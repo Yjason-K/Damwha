@@ -18,7 +18,7 @@ function SearchIcon() {
 }
 
 const base =
-  "box-border flex h-8 w-full items-center gap-2 rounded-sm border border-border bg-[var(--gray-1)] pl-2.5 pr-2 text-[color:var(--text-muted)] transition-[color,background-color,border-color,box-shadow] duration-[80ms] ease-[cubic-bezier(0.4,0,0.2,1)] hover:border-[color:var(--border-strong)] hover:bg-card [&_svg]:size-[15px] [&_svg]:shrink-0";
+  "box-border flex h-8 w-full items-center gap-2 rounded-sm border border-border bg-[var(--gray-1)] pl-2.5 pr-2 text-[color:var(--text-muted)] transition-[color,background-color,border-color,box-shadow] duration-[80ms] ease-[cubic-bezier(0.4,0,0.2,1)] hover:border-[color:var(--border-strong)] hover:bg-card [&_svg]:size-[15px] [&_svg]:shrink-0 [&_input::-webkit-search-cancel-button]:appearance-none";
 
 type SearchFieldProps = Omit<React.ComponentProps<"input">, "type"> & {
   /** Render as a ⌘K trigger button instead of a live input. */

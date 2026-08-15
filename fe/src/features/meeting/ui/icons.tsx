@@ -52,6 +52,8 @@ const PATHS = {
     "M8 4H5a1 1 0 0 0-1 1v3M16 4h3a1 1 0 0 1 1 1v3M8 20H5a1 1 0 0 1-1-1v-3M16 20h3a1 1 0 0 0 1-1v-3",
   rotateCcw: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5",
   rotateCw: "M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8M21 3v5h-5",
+  chevUp: "M6 15l6-6 6 6",
+  x: "M6 6l12 12M18 6L6 18",
 } as const;
 
 export type IconName = keyof typeof PATHS;
