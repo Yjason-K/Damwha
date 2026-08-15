@@ -286,6 +286,34 @@ PERMANENT(즉시 실패), 기동 타임아웃·조기 종료면 TRANSIENT(재시
   (생략 = 명시적 null). `extra="forbid"`는 유지되므로 없는 필드를 지어내는 것은 여전히
   거부된다. `reasoning_effort` 같은 미지원 키는 서버가 조용히 무시한다.
 
+## 화자 식별 품질 측정 (`scripts/eval_speaker_id.py`)
+
+**`IDENTIFY_THRESHOLD`/`IDENTIFY_SUGGEST_THRESHOLD`는 이 도구로 정한다 — 감으로 바꾸지 말 것.**
+DB만 읽는 읽기 전용 도구다(SELECT만 발행). `meeting_cluster.centroid`가 이미 저장돼 있으므로
+모델도 오디오도 없이 식별 정책 전체를 오프라인 리플레이할 수 있다.
+
+```bash
+cd worker
+# 기본: health(위생) + scoring(EER) + policy(F1 리플레이)
+uv run python scripts/eval_speaker_id.py --labels scripts/eval_speaker_labels.json
+
+# 임계값 실측: 각 클러스터 발화를 교대로 반씩 갈라 재임베딩 → 라벨 없이
+# 동일화자/다른화자 분포를 얻는다. 모델 extra + 회의 normalized.wav 필요.
+uv sync --extra models
+uv run python scripts/eval_speaker_id.py --halves --thresholds 0.5,0.6,0.7,0.8
+```
+
+- **정답 라벨**은 `scripts/eval_speaker_labels.json` — `"<meeting_id>/<diar_label>": "<사람>"`.
+  일부만 채워도 되고, 없는 클러스터는 scoring/policy에서 빠진다(health에는 남는다).
+  `_`로 시작하는 키는 파일 자체 메모로 취급돼 무시된다.
+- **`--halves`의 동일화자 점수는 낙관적이다.** 두 반쪽이 같은 녹음을 공유하므로 실제
+  회의 간 매칭보다 높게 나온다. **다른화자 최댓값을 자동 연결의 하한**으로 읽고,
+  동일화자 최솟값은 상한으로만 쓴다.
+- **policy 표의 F1은 `threshold`만 움직인다.** 제안 밴드에 든 클러스터도 자기 화자를
+  새로 만들기 때문에 파티션이 바뀌지 않는다. 밴드는 사용자에게 무엇을 보여줄지만 정한다.
+- 미해결 이슈(구버전 잔존 화자·회의 내 병합·발화 0건 클러스터)와 centering을 기각한
+  근거는 `docs/backlog.md`의 "화자 식별 — RC3/RC4/RC5 후속" 항목에 있다.
+
 ## STT 품질 측정 (`scripts/eval_stt.py`)
 
 전사 백엔드/모델/가드 조합을 하나의 wav에 대해 돌리고 참조 스크립트와 CER/WER을
