@@ -117,9 +117,11 @@ test("찾기 입력이 항상 보인다", () => {
   ).toBeInTheDocument();
 });
 
-test("질의가 비어 있으면 카운터와 이동 버튼이 없다", () => {
+test("질의가 비어 있으면 이동 버튼이 없고 카운터 내용이 비어 있다", () => {
   renderPane({ utterances: LOTUS });
   expect(screen.queryByRole("button", { name: "다음 결과" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "이전 결과" })).toBeNull();
+  expect(screen.getByRole("status")).toHaveTextContent("");
 });
 
 test("입력하면 모든 매칭을 표시하고 카운터가 1/n을 보여준다", () => {
@@ -175,6 +177,18 @@ test("✕를 누르면 질의와 하이라이트가 사라진다", () => {
   typeQuery("로터스");
   fireEvent.click(screen.getByRole("button", { name: "찾기 지우기" }));
   expect(container.querySelectorAll("mark")).toHaveLength(0);
+});
+
+test("질의를 백스페이스로 비웠다가 같은 질의를 다시 넣으면 1/n부터 시작한다", () => {
+  renderPane({ utterances: LOTUS });
+  typeQuery("로터스");
+  fireEvent.click(screen.getByRole("button", { name: "다음 결과" }));
+  expect(screen.getByText("2/3")).toBeInTheDocument();
+
+  typeQuery(""); // 백스페이스로 질의를 완전히 비운 상황
+  typeQuery("로터스"); // 같은 질의를 다시 입력
+
+  expect(screen.getByText("1/3")).toBeInTheDocument();
 });
 
 /** renderPane과 달리 meeting을 교체해 다시 그릴 수 있다(전사 갱신 재현용). */
@@ -290,6 +304,21 @@ test("Enter로 다음, Shift+Enter로 이전 매칭으로 간다", () => {
   expect(screen.getByText("2/3")).toBeInTheDocument();
   fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
   expect(screen.getByText("1/3")).toBeInTheDocument();
+});
+
+test("IME 조합 중인 Enter는 매칭을 이동시키지 않는다", () => {
+  renderPane({ utterances: LOTUS });
+  const input = typeQuery("로터스");
+  expect(screen.getByText("1/3")).toBeInTheDocument();
+
+  // 한글 음절 확정처럼 조합 중에 Enter가 눌린 상황 — isComposing: true를
+  // fireEvent의 이벤트 init으로 실어 e.nativeEvent.isComposing까지 전달한다.
+  fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+  expect(screen.getByText("1/3")).toBeInTheDocument();
+
+  // 조합이 끝난 뒤의 Enter는 평소처럼 다음 매칭으로 이동한다.
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(screen.getByText("2/3")).toBeInTheDocument();
 });
 
 test("↓↑ 키로도 이동한다", () => {

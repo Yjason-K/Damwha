@@ -419,6 +419,9 @@ export function TranscriptPane({
   };
 
   const onFindKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // IME 조합 중(한글 음절 등)인 키 입력은 후보 확정/선택이지 매칭 이동이
+    // 아니다 — 조합 중이면 아무 것도 하지 않고 IME에 그대로 맡긴다.
+    if (e.nativeEvent.isComposing) return;
     if (e.key === "Enter") {
       e.preventDefault();
       go(e.shiftKey ? -1 : 1);
@@ -583,7 +586,15 @@ export function TranscriptPane({
             onAck={onAckAi}
           />
         ) : null}
-        <div className="flex flex-col gap-px" role="log" aria-label="회의 전사">
+        {/* role="log"는 암묵적으로 aria-live="polite"라 <mark>가 매 키 입력마다
+        들고 나면 스크린리더가 타이핑 중 매칭 본문을 계속 읽는다 — 찾기용
+        하이라이트는 아래 role="status" 카운터로 따로 안내하므로 여기는 끈다. */}
+        <div
+          className="flex flex-col gap-px"
+          role="log"
+          aria-label="회의 전사"
+          aria-live="off"
+        >
           {meeting.utterances.map((u) => {
             const failed = u.status === "transcribe_failed";
             return (
@@ -619,18 +630,32 @@ export function TranscriptPane({
           className="max-w-[320px] flex-1"
           placeholder="이 회의에서 찾기"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            const next = e.target.value;
+            setQuery(next);
+            // 질의를 백스페이스로 다 지웠을 때도 앵커를 초기화한다 — 안 하면
+            // 같은 단어를 다시 쳤을 때 1/n이 아니라 이전 위치에서 재개된다.
+            if (!next.trim()) setAnchor(null);
+          }}
           onKeyDown={onFindKeyDown}
         />
+        {/* 첫 값("1/3"·"결과 없음")도 스크린리더에 안내되려면 span 자체는
+        질의 유무와 무관하게 항상 마운트돼 있어야 한다 — 그래야 내용 채움이
+        "삽입"이 아니라 "변경"으로 잡혀 안정적으로 읽힌다. 이동 버튼은 질의가
+        있을 때만 의미가 있으므로 지금처럼 조건부로 둔다. */}
+        <span
+          role="status"
+          aria-live="polite"
+          className="px-1 text-xs whitespace-nowrap text-[color:var(--text-muted)] tabular-nums"
+        >
+          {query.trim()
+            ? matches.length
+              ? `${cursor + 1}/${matches.length}`
+              : "결과 없음"
+            : ""}
+        </span>
         {query.trim() ? (
           <>
-            <span
-              role="status"
-              aria-live="polite"
-              className="px-1 text-xs whitespace-nowrap text-[color:var(--text-muted)] tabular-nums"
-            >
-              {matches.length ? `${cursor + 1}/${matches.length}` : "결과 없음"}
-            </span>
             <IconButton
               label="이전 결과"
               size="sm"
