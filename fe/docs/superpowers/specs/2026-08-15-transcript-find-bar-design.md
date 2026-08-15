@@ -2,7 +2,8 @@
 
 날짜: 2026-08-15
 범위: FE 전용 — `transcript-pane.tsx`, `icons.tsx`, `search-field.tsx`,
-`pages/meeting.tsx`, `app/app-shell.tsx` + 컴포넌트 테스트. BE 변경 없음.
+`pages/meeting.tsx`, `app/app-shell.tsx`, 신규 `features/meeting/lib/find-matches.ts`
++ 테스트. BE 변경 없음.
 
 ## 문제
 
@@ -71,6 +72,77 @@
 prop이고, `SearchFieldProps`가 `React.ComponentProps<"input">`를 확장하는데
 `ref`를 구조분해하지 않으므로 `{...props}`를 타고 `<input>`에 그대로 붙는다.
 
+### `src/features/meeting/lib/find-matches.ts` (신규)
+
+매칭 로직은 순수 함수라 컴포넌트 밖에 둔다. `transcript-pane.tsx`가 이미 16KB
+라는 점, 그리고 `foldCase`를 단위 테스트하려면 export가 필요한데 컴포넌트
+파일에서 export하면 `react-refresh/only-export-components` 린트에 걸린다는 점
+둘 다 이걸로 해결된다. `features/lens/lib`·`features/settings/lib`과 같은
+배치다.
+
+```ts
+export type FindMatch = { uid: string; start: number; end: number };
+export function foldCase(s: string): string;
+export function findMatches(utterances: Utterance[], query: string): FindMatch[];
+```
+
+#### 매칭 인덱스
+
+`meeting.utterances`와 질의로부터 계산한다 (컴포넌트에서 `React.useMemo`로 감쌈).
+
+- 질의는 `trim()` 후 빈 문자열이면 빈 배열.
+- 대소문자 무시 — **길이 보존 케이스 폴딩** 후 `indexOf` 루프 (아래 참조).
+- **전사 실패 발화(`u.status === "transcribe_failed"`)는 건너뛴다.** 화면에
+  그려지는 건 `u.text`가 아니라 `"전사하지 못한 구간입니다"`라는 UI 문구다.
+  포함시키면 카운트도 틀리고 오프셋이 렌더되지 않는 텍스트를 가리킨다.
+- 검색 대상은 발화 텍스트뿐 — 화자 이름·타임스탬프는 제외.
+- 순서는 `meeting.utterances` 순서 → 발화 내 오프셋 순. 즉 화면에 보이는 순서.
+
+병합 블록에 대해 별도 처리는 없다. `MERGE_MAX_CHARS`는 병합을 제한할 뿐 표시를
+자르지 않으므로 `u.text` 전체가 화면에 있고, 오프셋은 항상 보이는 문자를 가리킨다.
+
+#### 길이 보존 케이스 폴딩
+
+설계 전체가 "폴딩된 문자열의 인덱스 == 원문의 인덱스"라는 불변식 위에 서 있다.
+`toLowerCase()`/`toLocaleLowerCase()`를 문자열 전체에 그냥 걸면 이 불변식이
+깨진다 — 실측:
+
+- `"İstanbul".length === 8`이지만 `"İstanbul".toLowerCase().length === 9`
+  (U+0130 → `i` + U+0307 결합 문자). 오프셋이 뒤로 밀려 `<mark>` 분할 위치가
+  틀어지고, 발화 끝에서는 렌더 범위를 벗어난다.
+- `toLocaleLowerCase()`를 인자 없이 부르면 **호스트 로케일**을 따른다.
+  터키 로케일에서 `"I".toLocaleLowerCase()`는 `"i"`가 아니라 `"ı"`라, 같은
+  질의가 기기마다 다르게 매칭된다.
+
+따라서 코드 포인트 단위로 접되 **길이가 변하는 문자는 접지 않는다**:
+
+```ts
+/** 인덱스 보존 케이스 폴딩 — 결과의 각 인덱스가 원문의 같은 인덱스에 대응한다. */
+function foldCase(s: string): string {
+  let out = "";
+  for (const ch of s) {          // 코드 포인트 순회 — 서로게이트 페어 안전
+    const low = ch.toLowerCase(); // locale 무관 (toLocaleLowerCase 아님)
+    out += low.length === ch.length ? low : ch;
+  }
+  return out;
+}
+```
+
+`foldCase(s).length === s.length`가 항상 성립한다 (이모지 등 서로게이트 페어
+포함 확인). 매칭은 `foldCase(u.text).indexOf(foldCase(query))`로 하고, 얻은
+오프셋을 **원문** `u.text`에 그대로 적용한다.
+
+**보장 범위와 한계** — 한국어(케이스 없음)와 ASCII 영문은 완전 지원이며, 이게
+Whisper 전사 내용의 사실상 전부다. 그 밖의 유니코드에서는 두 가지 한계가 있다:
+
+- 폴딩이 길이를 바꾸는 문자(`İ` 등)는 원문 그대로 남으므로 대소문자 구분 없이는
+  매칭되지 않는다.
+- 그리스어 어말 시그마는 코드 포인트 단위로 접으면 `ς`가 아니라 `σ`가 되어
+  전체 문자열 폴딩과 결과가 다르다 (`"ΟΔΥΣΣΕΥΣ"` → 마지막 글자만 상이).
+
+두 경우 모두 **실패 모드가 "매칭 안 됨"이지 "엉뚱한 곳 강조"가 아니다.** 인덱스
+불변식은 어떤 입력에서도 깨지지 않으며, 이게 이 방식을 고른 이유다.
+
 ### `src/features/meeting/ui/transcript-pane.tsx`
 
 #### 제거
@@ -94,35 +166,39 @@ prop이고, `SearchFieldProps`가 `React.ComponentProps<"input">`를 확장하�
 - `icons.tsx`의 `bookmark`는 `left-nav.tsx:164`가 쓰므로 유지. `more` 등
   사용처가 없어지는 아이콘 정의는 건드리지 않는다 (기존 dead code는 범위 밖).
 
-#### 매칭 인덱스
-
-```ts
-type FindMatch = { uid: string; start: number; end: number };
-```
-
-`meeting.utterances`와 질의로부터 `React.useMemo`로 계산한다.
-
-- 질의는 `trim()` 후 빈 문자열이면 빈 배열.
-- 대소문자 무시 — 양쪽 `toLocaleLowerCase()` 후 `indexOf` 루프. 오프셋은 원본
-  문자열 기준이므로 인덱스가 그대로 유효하다.
-- **전사 실패 발화(`u.status === "transcribe_failed"`)는 건너뛴다.** 화면에
-  그려지는 건 `u.text`가 아니라 `"전사하지 못한 구간입니다"`라는 UI 문구다.
-  포함시키면 카운트도 틀리고 오프셋이 렌더되지 않는 텍스트를 가리킨다.
-- 검색 대상은 발화 텍스트뿐 — 화자 이름·타임스탬프는 제외.
-- 순서는 `meeting.utterances` 순서 → 발화 내 오프셋 순. 즉 화면에 보이는 순서.
-
-병합 블록에 대해 별도 처리는 없다. `MERGE_MAX_CHARS`는 병합을 제한할 뿐 표시를
-자르지 않으므로 `u.text` 전체가 화면에 있고, 오프셋은 항상 보이는 문자를 가리킨다.
-
 #### 상태
 
 `TranscriptPane` 로컬. 기존 `activeId` 하이라이트와 완전히 독립이다.
 
 - `query: string`
-- `cursor: number` — `matches` 내 인덱스. 질의가 바뀌면 0으로 리셋한다
-  (렌더 중 prop/state 변화 감지 패턴 — 파일 내 `RenameDialog`의 `wasOpen`과
-  동일한 방식으로, effect 안 setState를 피한다).
-- `cursor`는 `matches.length`로 감싼다(wrap-around): 마지막에서 다음 → 첫 번째.
+- `anchor: FindMatch | null` — 현재 매칭을 **인덱스가 아니라 값으로** 들고
+  있는다. `cursor`는 여기서 파생한다:
+
+```ts
+const cursor = React.useMemo(() => {
+  if (!anchor) return 0;
+  const i = matches.findIndex(
+    (m) => m.uid === anchor.uid && m.start === anchor.start && m.end === anchor.end,
+  );
+  return i >= 0 ? i : 0;   // 앵커가 사라졌으면 첫 매칭으로
+}, [matches, anchor]);
+```
+
+이동은 `setAnchor(matches[(cursor ± 1 + len) % len])` — wrap-around는 여기서
+처리한다.
+
+인덱스를 state로 들지 않는 이유: `matches`는 `meeting.utterances`에서 파생되고,
+**전사는 같은 회의가 마운트된 채로도 바뀐다.** `["meeting", id]` 무효화 경로가
+재처리(`meetings.ts:188`), 화자 확정(`:216`), 요약 재생성(`:238`), 상태
+동기화(`:273`)로 여럿이고, 특히 화자 확정은 `TranscriptPane` 안의
+`ResolveDialog`가 직접 트리거한다. 인덱스를 들고 있으면 `matches`가 7개에서
+2개로 줄었을 때 `cursor=5`가 그대로 남아 카운터는 `6/2`를 표시하고
+`data-find-current`는 아무 데도 붙지 않는다.
+
+값 기반 앵커는 이 경우를 규칙 하나로 전부 덮는다. 질의 변경 → 앵커 소실 → 0.
+전사 갱신 후에도 같은 매칭이 살아 있으면 → 위치 유지 (재조회가 동일한 데이터를
+돌려주는 흔한 경우가 여기 해당). 매칭이 사라졌으면 → 0. `cursor`는 구성상
+항상 범위 안이다.
 
 #### 하이라이트 렌더
 
@@ -207,13 +283,14 @@ renderText(text, matchesForThisUtterance, currentMatch) → React.ReactNode
 
 - **질의가 매칭 0건** → 카운터 `결과 없음`, ↑↓ 비활성, 하이라이트 없음,
   스크롤 없음.
-- **입력 중 매칭 수가 줄어듦** (`로터` → `로터스가`) → `cursor`가 질의 변화로
-  0으로 리셋되므로 범위를 벗어날 수 없다.
-- **회의 전환** — `TranscriptPane`은 `meeting` prop만 바뀌고 리마운트되지
-  않을 수 있다. `query`가 남으면 이전 회의의 검색어가 새 전사에 적용된 채로
-  보인다. `<TranscriptPane key={meeting.id}>`로 키잉해 상태를 초기화한다
-  (`meeting.tsx`의 `<PlayerBar key={meeting.id}>`·`<audio key={meeting.id}>`와
-  같은 기존 패턴).
+- **입력 중 매칭 수가 줄어듦** (`로터` → `로터스가`) → 앵커가 새 `matches`에
+  없으므로 `cursor`가 0으로 파생된다.
+- **같은 회의의 전사가 갱신됨** (화자 확정·재처리·요약 재생성·상태 동기화가
+  `["meeting", id]`를 무효화) → 앵커가 살아 있으면 위치 유지, 사라졌으면 0.
+  `cursor`가 `matches` 범위를 벗어나는 상태 자체가 표현 불가능하다.
+- **회의 전환** → 추가 조치 불필요. `MeetingRoute`가 이미
+  `<MeetingView key={meetingId}>`(`meeting.tsx:115`)로 키잉해 `TranscriptPane`
+  까지 리마운트되므로 `query`·`anchor`가 함께 초기화된다.
 - **전사 실패 발화만 있는 회의** → 매칭 대상이 없어 항상 `결과 없음`. 정상.
 - **질의에 정규식 메타문자 포함** (`.`, `*`, `(`) → `indexOf` 기반이라 무해.
   정규식을 쓰지 않는 이유이기도 하다.
@@ -242,12 +319,29 @@ renderText(text, matchesForThisUtterance, currentMatch) → React.ReactNode
 - 마지막 매칭에서 ↓ → `1/n`로 순환한다.
 - `Shift+Enter`로 이전 매칭, 첫 매칭에서 누르면 `n/n`으로 순환한다.
 - 매칭 없는 질의 → `결과 없음`, ↑↓가 `disabled`, `<mark>` 없음.
-- 대소문자를 무시하고 매칭한다.
+- 대소문자를 무시하고 매칭한다 (`Odysseus` 질의가 `odysseus` 본문에 매칭).
 - `transcribe_failed` 발화의 `"전사하지 못한 구간입니다"`는 매칭되지 않는다
   (`구간`으로 검색해도 `결과 없음`).
 - `Escape` → 질의가 비워지고 하이라이트가 사라진다.
 - 찾기 이동은 `onJump`을 호출하지 않는다 (오디오·URL 불변).
 - ✕ → 질의가 비워진다.
+
+`src/features/meeting/lib/find-matches.test.ts` 신규 — 인덱스 불변식:
+
+- 한글·ASCII 영문 혼합 문자열에서 `foldCase(s).length === s.length`.
+- `"İstanbul"`처럼 폴딩이 길이를 바꾸는 문자를 포함해도
+  `foldCase(s).length === s.length` (해당 문자는 접히지 않고 원문 유지).
+- 서로게이트 페어(이모지)를 포함해도 길이가 보존된다.
+- 컴포넌트 레벨: 발화 텍스트에 `İ`가 섞여 있어도 그 뒤 매칭의 `<mark>` 경계가
+  질의 문자열과 정확히 일치한다 (오프셋 밀림 회귀 방지).
+
+전사 갱신 (`cursor` 정규화):
+
+- 매칭 3개 중 2번째로 이동한 뒤 `meeting` prop이 같은 매칭을 포함한 새 배열로
+  교체되면 카운터가 `2/3`을 유지한다.
+- 같은 상태에서 2번째 매칭이 사라진 전사로 교체되면 카운터가 `1/2`로
+  떨어지고 `data-find-current`가 첫 매칭에 붙는다 — 카운터와 하이라이트가
+  어긋나지 않는다.
 
 기존 테스트(`meeting.test.tsx` 등)는 그대로 통과해야 한다 — 제거 대상 버튼을
 참조하는 테스트는 없음을 확인했다.
