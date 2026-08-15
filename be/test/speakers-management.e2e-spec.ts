@@ -92,6 +92,36 @@ describe('speakers management (DELETE)', () => {
     expect(fs.existsSync(speakerDir(sid))).toBe(false);
   });
 
+  it('DELETE /speakers/:id clears a pending merge suggestion pointing at it, score and all', async () => {
+    // The FK is ON DELETE SET NULL, which would blank the id and strand the score.
+    // The delete path must clear both so no scoreless half-suggestion survives.
+    const created = await enroll('제안대상');
+    const sid = created.body.id;
+    await db.pool.query(`UPDATE job SET status='done' WHERE id=$1`, [created.body.current_job_id]);
+    await db.pool.query(`UPDATE speaker SET enrollment_status='ready' WHERE id=$1`, [sid]);
+
+    const m = await db.pool.query(`INSERT INTO meeting(audio_key,status) VALUES('k','done') RETURNING id`);
+    const own = await db.pool.query(
+      `INSERT INTO speaker(name,enrollment_status) VALUES('Speaker_901','provisional') RETURNING id`);
+    const cluster = await db.pool.query(
+      `INSERT INTO meeting_cluster(meeting_id,diar_label,resolved_speaker_id,
+         suggested_speaker_id,suggested_similarity,processing_version)
+       VALUES($1,'S0',$2,$3,0.66,0) RETURNING id`,
+      [m.rows[0].id, own.rows[0].id, sid],
+    );
+
+    expect((await request(srv()).delete(`/speakers/${sid}`)).status).toBe(204);
+
+    const row = await db.pool.query(
+      'SELECT resolved_speaker_id, suggested_speaker_id, suggested_similarity FROM meeting_cluster WHERE id=$1',
+      [cluster.rows[0].id],
+    );
+    expect(row.rows[0].suggested_speaker_id).toBeNull();
+    expect(row.rows[0].suggested_similarity).toBeNull();
+    // The cluster and its own speaker are untouched — a suggestion is only a hint.
+    expect(row.rows[0].resolved_speaker_id).toBe(own.rows[0].id);
+  });
+
   it('DELETE /speakers/:id → 409 (Korean message) while an enroll job is queued/running', async () => {
     const created = await enroll('진행중화자');
     const sid = created.body.id;

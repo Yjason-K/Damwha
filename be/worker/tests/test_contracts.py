@@ -34,7 +34,7 @@ def test_missing_schema_version_defaults_to_1():
 
 
 def test_rejects_future_schema_version():
-    data = load("process_meeting.valid.json") | {"schema_version": 4}
+    data = load("process_meeting.valid.json") | {"schema_version": 5}
     with pytest.raises(UnsupportedPayloadVersion):
         parse_payload("process_meeting", data)
 
@@ -74,6 +74,46 @@ def test_parses_v3_fixture():
     assert p.models.summary_model == "mlx-community/Qwen3.5-4B-8bit"
     assert p.models.preset == "light"
     assert p.models.devices.stt == "cpu"
+
+
+def test_parses_v4_fixture():
+    p = parse_payload("process_meeting", load("process_meeting.v4.valid.json"))
+    assert p.schema_version == 4
+    assert p.identify.threshold == 0.8
+    assert p.identify.suggest_threshold == 0.6
+    assert p.models.summary_model == "mlx-community/Qwen3.5-4B-8bit"
+
+
+@pytest.mark.parametrize(
+    "fixture",
+    [
+        "process_meeting.valid.json",
+        "process_meeting.v2.valid.json",
+        "process_meeting.v3.valid.json",
+    ],
+)
+def test_pre_v4_payloads_have_no_suggestion_band(fixture):
+    # An older queued job must keep behaving as it did: bind or nothing, never suggest.
+    p = parse_payload("process_meeting", load(fixture))
+    assert p.identify.suggest_threshold is None
+
+
+def test_v4_requires_suggest_threshold():
+    from pydantic import ValidationError
+
+    data = load("process_meeting.v4.valid.json")
+    del data["identify"]["suggest_threshold"]
+    with pytest.raises(ValidationError):
+        parse_payload("process_meeting", data)
+
+
+def test_v4_rejects_band_above_threshold():
+    # suggest_threshold > threshold makes the band unreachable — a binding match is
+    # tested first — so it is a config error, not a quietly-ignored setting.
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        parse_payload("process_meeting", load("process_meeting.v4.inverted_band.json"))
 
 
 def test_v3_requires_summary_model():

@@ -100,15 +100,17 @@ def run_process_meeting(
 
     # 5) identify
     with timed_stage("identify", ctx) as t:
-        label_to_speaker = identify_clusters(
+        matches = identify_clusters(
             conn,
             centroids,
             model=payload.models.embedding.model,
             dimension=payload.models.embedding.dimension,
             threshold=payload.identify.threshold,
+            suggest_threshold=payload.identify.suggest_threshold,
         )
-        identified = sum(1 for sid in label_to_speaker.values() if sid is not None)
-        t["detail"] = f"identified={identified}/{len(label_to_speaker)}"
+        identified = sum(1 for m in matches.values() if m.speaker_id is not None)
+        suggested = sum(1 for m in matches.values() if m.suggested_speaker_id is not None)
+        t["detail"] = f"identified={identified}/{len(matches)} suggested={suggested}"
 
     # 6) STT — VAD 발화 구간만 디코딩(무음 환각 방지). 빈 VAD면 호출 자체를 생략
     #    (clip_timestamps=[]는 라이브러리가 '전체 오디오'로 해석할 수 있다).
@@ -148,7 +150,7 @@ def run_process_meeting(
 
     utterance_rows = [
         {
-            "speaker_id": label_to_speaker.get(u.diar_label),
+            "speaker_id": matches[u.diar_label].speaker_id if u.diar_label in matches else None,
             "diar_label": u.diar_label,
             "start_ms": u.start_ms,
             "end_ms": u.end_ms,
@@ -161,15 +163,18 @@ def run_process_meeting(
         for u in utts
     ]
 
-    # 미식별 라벨만 cluster로 보존 (centroid 포함)
+    # 모든 라벨을 cluster로 보존한다. 자동 연결된 라벨도 행을 남기는 이유: 이 표가
+    # 회의별 diar_label→speaker 기록이고, 자동 연결을 사용자가 되돌리는(resolve)
+    # 진입점이며, 애매한 후보(suggested_*)를 실을 자리이기 때문이다.
     cluster_rows = [
         {
             "diar_label": label,
             "centroid": centroids.get(label),
-            "resolved_speaker_id": None,
+            "resolved_speaker_id": m.speaker_id,
+            "suggested_speaker_id": m.suggested_speaker_id,
+            "suggested_similarity": m.similarity if m.suggested_speaker_id else None,
         }
-        for label, sid in label_to_speaker.items()
-        if sid is None
+        for label, m in matches.items()
     ]
 
     # 8) persist

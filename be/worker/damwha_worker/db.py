@@ -392,24 +392,35 @@ def persist_process_meeting(
             # may point to them and the API/search paths select only the current version.
             conn.execute("DELETE FROM meeting_cluster WHERE meeting_id=%s", (meeting_id,))
 
-            # 미식별 cluster → provisional speaker + voiceprint(provenance) 자동 생성
-            # (embedding_model이 없으면 voiceprint 삽입 불가 → 미해소 cluster만 보존)
+            # Every diarization label gets a cluster row — it is the meeting's
+            # diar_label→speaker record, the entry point for a user correction, and
+            # where a near-miss suggestion is parked. A label identify already bound
+            # keeps that speaker; an unbound one mints a provisional speaker plus a
+            # voiceprint carrying its provenance. Without an embedding model there is
+            # no voiceprint to insert, so such a label stays unresolved.
             label_to_new_speaker: dict[str, str] = {}
             for c in clusters:
                 centroid = c["centroid"]
-                if centroid is None or embedding_model is None:
-                    # centroid 없거나 embedding model 미제공: speaker/voiceprint 없이 cluster만 보존
+                bound = c["resolved_speaker_id"]
+                suggested = c.get("suggested_speaker_id")
+                similarity = c.get("suggested_similarity")
+                if bound is not None or centroid is None or embedding_model is None:
+                    # Bound outright, or not comparable at all — either way nothing is
+                    # minted here, and a binding leaves no near-miss to record.
                     conn.execute(
                         """
                         INSERT INTO meeting_cluster(meeting_id, diar_label, centroid,
-                            resolved_speaker_id, processing_version, job_id)
-                        VALUES (%s,%s,%s::vector,%s,%s,%s)
+                            resolved_speaker_id, suggested_speaker_id, suggested_similarity,
+                            processing_version, job_id)
+                        VALUES (%s,%s,%s::vector,%s,%s,%s,%s,%s)
                         """,
                         (
                             meeting_id,
                             c["diar_label"],
                             _vec(centroid) if centroid is not None else None,
-                            c["resolved_speaker_id"],
+                            bound,
+                            None if bound is not None else suggested,
+                            None if bound is not None else similarity,
                             processing_version,
                             job_id,
                         ),
@@ -427,11 +438,21 @@ def persist_process_meeting(
                 cid = conn.execute(
                     """
                     INSERT INTO meeting_cluster(meeting_id, diar_label, centroid,
-                        resolved_speaker_id, processing_version, job_id)
-                    VALUES (%s,%s,%s::vector,%s,%s,%s)
+                        resolved_speaker_id, suggested_speaker_id, suggested_similarity,
+                        processing_version, job_id)
+                    VALUES (%s,%s,%s::vector,%s,%s,%s,%s,%s)
                     RETURNING id
                     """,
-                    (meeting_id, c["diar_label"], _vec(centroid), sid, processing_version, job_id),
+                    (
+                        meeting_id,
+                        c["diar_label"],
+                        _vec(centroid),
+                        sid,
+                        suggested,
+                        similarity,
+                        processing_version,
+                        job_id,
+                    ),
                 ).fetchone()["id"]
                 conn.execute(
                     """
@@ -472,12 +493,16 @@ def persist_process_meeting(
             # First run: no-op. Reprocess: removes the prior run's unconfirmed provisionals.
             # 'ready' (confirmed) speakers are never deleted. Runs AFTER the new rows are
             # inserted, so this run's just-created provisionals are referenced and kept.
+            # A pending suggestion counts as a reference: deleting its target would
+            # silently void a merge the user has not answered yet (and the FK's
+            # ON DELETE SET NULL would strand the score behind a null id).
             conn.execute(
                 """
                 DELETE FROM speaker s
                 WHERE s.enrollment_status='provisional'
                   AND NOT EXISTS (SELECT 1 FROM utterance WHERE speaker_id = s.id)
                   AND NOT EXISTS (SELECT 1 FROM meeting_cluster WHERE resolved_speaker_id = s.id)
+                  AND NOT EXISTS (SELECT 1 FROM meeting_cluster WHERE suggested_speaker_id = s.id)
                 """
             )
             conn.execute(

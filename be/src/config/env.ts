@@ -13,7 +13,15 @@ const EnvSchema = z.object({
   DIARIZATION_MODEL: z.string().default('pyannote/speaker-diarization-3.1'),
   EMBEDDING_MODEL: z.string().default('speechbrain/spkrec-ecapa-voxceleb'),
   EMBEDDING_DIM: z.coerce.number().default(192),
-  IDENTIFY_THRESHOLD: z.coerce.number().default(0.7),
+  // Two-tier identification. At/above IDENTIFY_THRESHOLD a cluster binds to the
+  // matched speaker; down to IDENTIFY_SUGGEST_THRESHOLD it only records the
+  // candidate for the user to confirm. Defaults are set from the local eval
+  // (`worker/scripts/eval_speaker_id.py --halves`): different-speaker centroid
+  // pairs topped out at 0.71 and same-speaker half-splits floored at 0.97, so 0.80
+  // binds with margin over every observed negative while 0.60 keeps the ambiguous
+  // band visible instead of silently merging it. Retune with the eval, not by feel.
+  IDENTIFY_THRESHOLD: z.coerce.number().default(0.8),
+  IDENTIFY_SUGGEST_THRESHOLD: z.coerce.number().default(0.6),
   SEARCH_EMBEDDING_MODEL: z.string().default('BAAI/bge-m3'),
   // Phase 2는 임베딩 차원을 1024로 고정(utterance_embedding.embedding = vector(1024)).
   // 오설정으로 색인 잡이 영구 실패하지 않도록 literal 1024만 허용.

@@ -80,6 +80,7 @@ export class SpeakersService {
       }
       await this.speakers.unreferenceUtterances(c, id);
       await this.speakers.unreferenceClusters(c, id);
+      await this.speakers.unreferenceSuggestions(c, id);
       await this.speakers.deleteById(c, id);
       return true;
     });

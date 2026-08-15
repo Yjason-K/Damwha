@@ -55,16 +55,33 @@ const processMeetingCommon = {
   audio_key: z.string().min(1),
   processing_version: z.number().int().nonnegative(),
   reprocess: z.boolean(),
-  identify: z.object({ threshold: z.number() }),
 };
+// v1–v3: one threshold, which binds. v4 adds the floor of the suggestion band —
+// required on the wire (like v3's summary_model) because the thresholds ARE the
+// identification behaviour, so a recorded job must not re-run against a different
+// worker default. suggest_threshold above threshold would be an unreachable band.
+const IdentifySchemaV1 = z.object({ threshold: z.number() });
+const IdentifySchemaV4 = z
+  .object({ threshold: z.number(), suggest_threshold: z.number() })
+  .strict()
+  .refine((i) => i.suggest_threshold <= i.threshold, {
+    message: 'suggest_threshold must not exceed threshold',
+  });
 const ProcessMeetingPayloadV1Schema = z.object({
-  schema_version: z.literal(1), ...processMeetingCommon, models: ModelsSchemaV1,
+  schema_version: z.literal(1), ...processMeetingCommon,
+  models: ModelsSchemaV1, identify: IdentifySchemaV1,
 });
 const ProcessMeetingPayloadV2Schema = z.object({
-  schema_version: z.literal(2), ...processMeetingCommon, models: ModelsSchemaV2,
+  schema_version: z.literal(2), ...processMeetingCommon,
+  models: ModelsSchemaV2, identify: IdentifySchemaV1,
 });
 const ProcessMeetingPayloadV3Schema = z.object({
-  schema_version: z.literal(3), ...processMeetingCommon, models: ModelsSchemaV3,
+  schema_version: z.literal(3), ...processMeetingCommon,
+  models: ModelsSchemaV3, identify: IdentifySchemaV1,
+});
+const ProcessMeetingPayloadV4Schema = z.object({
+  schema_version: z.literal(4), ...processMeetingCommon,
+  models: ModelsSchemaV3, identify: IdentifySchemaV4,
 });
 
 // zod discriminatedUnion은 child의 .default()를 discriminator 선택 전에 적용하지
@@ -78,6 +95,7 @@ export const ProcessMeetingPayloadSchema = z.preprocess(
     ProcessMeetingPayloadV1Schema,
     ProcessMeetingPayloadV2Schema,
     ProcessMeetingPayloadV3Schema,
+    ProcessMeetingPayloadV4Schema,
   ]),
 );
 
@@ -115,6 +133,7 @@ export const SummarizeMeetingPayloadSchema = z.object({
 export type ProcessMeetingPayloadV1 = z.infer<typeof ProcessMeetingPayloadV1Schema>;
 export type ProcessMeetingPayloadV2 = z.infer<typeof ProcessMeetingPayloadV2Schema>;
 export type ProcessMeetingPayloadV3 = z.infer<typeof ProcessMeetingPayloadV3Schema>;
+export type ProcessMeetingPayloadV4 = z.infer<typeof ProcessMeetingPayloadV4Schema>;
 export type ProcessMeetingPayload = z.infer<typeof ProcessMeetingPayloadSchema>;
 export type EnrollSpeakerPayload = z.infer<typeof EnrollSpeakerPayloadSchema>;
 export type IndexMeetingPayload = z.infer<typeof IndexMeetingPayloadSchema>;
@@ -124,11 +143,11 @@ export type SummarizeMeetingPayload = z.infer<typeof SummarizeMeetingPayloadSche
 export function buildProcessMeetingPayload(args: {
   meetingId: string; audioKey: string; processingVersion: number; reprocess: boolean;
   processing: ProcessingConfig;
-}): ProcessMeetingPayloadV3 {
+}): ProcessMeetingPayloadV4 {
   const env = loadEnv();
   const p = args.processing;
   return {
-    schema_version: 3,
+    schema_version: 4,
     meeting_id: args.meetingId,
     audio_key: args.audioKey,
     processing_version: args.processingVersion,
@@ -143,7 +162,10 @@ export function buildProcessMeetingPayload(args: {
       diarization: { model: env.DIARIZATION_MODEL, min_speakers: null, max_speakers: null },
       embedding: { model: env.EMBEDDING_MODEL, dimension: env.EMBEDDING_DIM },
     },
-    identify: { threshold: env.IDENTIFY_THRESHOLD },
+    identify: {
+      threshold: env.IDENTIFY_THRESHOLD,
+      suggest_threshold: env.IDENTIFY_SUGGEST_THRESHOLD,
+    },
   };
 }
 

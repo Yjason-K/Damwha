@@ -11,6 +11,11 @@ export interface MeetingRow {
 export interface ClusterRow {
   id: string; diar_label: string; resolved_speaker_id: string | null;
   speaker_name: string | null; speaker_status: string | null;
+  // Set when identification scored a known speaker inside the too-close-to-call
+  // band: the cluster still has its own speaker, and this is the merge the user
+  // is being offered. Null once resolved.
+  suggested_speaker_id: string | null; suggested_speaker_name: string | null;
+  suggested_similarity: number | null;
 }
 
 @Injectable()
@@ -98,10 +103,13 @@ export class MeetingsRepository {
   async findClusters(exec: Queryable, meetingId: string): Promise<ClusterRow[]> {
     const { rows } = await exec.query<ClusterRow>(
       `SELECT c.id, c.diar_label, c.resolved_speaker_id,
-              s.name AS speaker_name, s.enrollment_status AS speaker_status
+              s.name AS speaker_name, s.enrollment_status AS speaker_status,
+              c.suggested_speaker_id, c.suggested_similarity,
+              sg.name AS suggested_speaker_name
        FROM meeting_cluster c
        JOIN meeting m ON m.id = c.meeting_id
        LEFT JOIN speaker s ON s.id = c.resolved_speaker_id
+       LEFT JOIN speaker sg ON sg.id = c.suggested_speaker_id
        WHERE c.meeting_id=$1 AND c.processing_version = m.processing_version
        ORDER BY c.diar_label ASC`,
       [meetingId],
@@ -178,8 +186,15 @@ export class MeetingsRepository {
     );
   }
 
+  // Resolving answers whatever the suggestion was asking, so it clears with the
+  // binding — leaving it would re-offer a merge the user has just decided.
   async setClusterResolved(exec: Queryable, clusterId: string, speakerId: string) {
-    await exec.query(`UPDATE meeting_cluster SET resolved_speaker_id=$2 WHERE id=$1`, [clusterId, speakerId]);
+    await exec.query(
+      `UPDATE meeting_cluster
+       SET resolved_speaker_id=$2, suggested_speaker_id=NULL, suggested_similarity=NULL
+       WHERE id=$1`,
+      [clusterId, speakerId],
+    );
   }
   async bulkAssignSpeaker(exec: Queryable, meetingId: string, diarLabel: string, speakerId: string): Promise<number> {
     const res = await exec.query(
@@ -208,7 +223,8 @@ export class MeetingsRepository {
       `DELETE FROM speaker s
        WHERE s.id=$1 AND s.enrollment_status='provisional'
          AND NOT EXISTS (SELECT 1 FROM utterance WHERE speaker_id=s.id)
-         AND NOT EXISTS (SELECT 1 FROM meeting_cluster WHERE resolved_speaker_id=s.id)`,
+         AND NOT EXISTS (SELECT 1 FROM meeting_cluster WHERE resolved_speaker_id=s.id)
+         AND NOT EXISTS (SELECT 1 FROM meeting_cluster WHERE suggested_speaker_id=s.id)`,
       [speakerId],
     );
     return (res.rowCount ?? 0) > 0;

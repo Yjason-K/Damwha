@@ -20,7 +20,8 @@ describe('job payload contract', () => {
     process.env.DATABASE_URL ??= 'postgres://localhost/test';
     process.env.WHISPER_MODEL = 'large-v3-turbo';
     process.env.EMBEDDING_DIM = '192';
-    process.env.IDENTIFY_THRESHOLD = '0.7';
+    process.env.IDENTIFY_THRESHOLD = '0.8';
+    process.env.IDENTIFY_SUGGEST_THRESHOLD = '0.6';
   });
 
   it('builds + validates a process_meeting payload (설정 주입)', () => {
@@ -29,7 +30,8 @@ describe('job payload contract', () => {
       processingVersion: 2, reprocess: true,
       processing: resolvePreset('standard', 'ko'),
     });
-    expect(p.schema_version).toBe(3);
+    expect(p.schema_version).toBe(4);
+    expect(p.identify).toEqual({ threshold: 0.8, suggest_threshold: 0.6 });
     expect(p.models.whisper_model).toBe('large-v3-turbo');
     expect(p.models.devices).toEqual({ diarization: 'gpu', stt: 'gpu' });
     expect(p.models.preset).toBe('standard');
@@ -51,7 +53,7 @@ describe('job payload contract', () => {
     expect(p.embedding.dimension).toBe(192);
   });
 
-  it('stamps schema_version=3 on process_meeting payload', () => {
+  it('stamps schema_version=4 on process_meeting payload', () => {
     const p = buildProcessMeetingPayload({
       meetingId: 'mtg_1',
       audioKey: 'meetings/x/original.wav',
@@ -59,7 +61,7 @@ describe('job payload contract', () => {
       reprocess: true,
       processing: resolvePreset('standard', 'ko'),
     });
-    expect(p.schema_version).toBe(3);
+    expect(p.schema_version).toBe(4);
     expect(() => ProcessMeetingPayloadSchema.parse(p)).not.toThrow();
   });
 

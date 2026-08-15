@@ -2,13 +2,13 @@ import logging
 from datetime import date
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 log = logging.getLogger("damwha_worker")
 
 # job type별 허용 버전 — enroll/index는 v1 불변 (spec §4)
 SUPPORTED_SCHEMA_VERSIONS: dict[str, frozenset[int]] = {
-    "process_meeting": frozenset({1, 2, 3}),
+    "process_meeting": frozenset({1, 2, 3, 4}),
     "enroll_speaker": frozenset({1}),
     "index_meeting": frozenset({1}),
     "extract_lenses": frozenset({1}),
@@ -133,7 +133,41 @@ def _v3_models_to_internal(m: ModelsWireV3) -> ModelsConfig:
 
 
 class Identify(BaseModel):
+    """v1–v3 wire shape — one threshold, which binds a cluster to a speaker."""
+
     threshold: float
+
+
+class IdentifyWireV4(BaseModel):
+    """v4 adds the floor of the suggestion band.
+
+    Required on the wire for the same reason v3 made summary_model required: the
+    thresholds *are* the identification behaviour, so re-running a recorded job
+    must not silently pick up a different worker default. `suggest_threshold` must
+    not exceed `threshold` — above it the band is unreachable, since a binding
+    match is checked first.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    threshold: float
+    suggest_threshold: float
+
+    @model_validator(mode="after")
+    def _band_is_reachable(self):
+        if self.suggest_threshold > self.threshold:
+            raise ValueError(
+                f"suggest_threshold {self.suggest_threshold} exceeds threshold {self.threshold}"
+            )
+        return self
+
+
+class IdentifyConfig(BaseModel):
+    """내부 정규 표현. suggest_threshold가 nullable인 이유는 summary_model과 같다:
+    v1/v2/v3에서 변환된 payload에는 값이 없고, 그때는 제안 없이 예전처럼 동작한다."""
+
+    threshold: float
+    suggest_threshold: float | None = None
 
 
 class ProcessMeetingPayloadV1(BaseModel):
@@ -168,6 +202,18 @@ class ProcessMeetingPayloadWireV3(BaseModel):
     identify: Identify
 
 
+class ProcessMeetingPayloadWireV4(BaseModel):
+    """wire v4 = v3 models + the two-tier identify band."""
+
+    schema_version: Literal[4]
+    meeting_id: MeetingId
+    audio_key: str
+    processing_version: int
+    reprocess: bool
+    models: ModelsWireV3
+    identify: IdentifyWireV4
+
+
 class ProcessMeetingPayload(BaseModel):
     """내부 표현 — 항상 정규화된 ModelsConfig. v1/v2/v3는 parse에서 즉시 변환되고
     원본 버전을 보존한다.
@@ -184,7 +230,7 @@ class ProcessMeetingPayload(BaseModel):
     processing_version: int
     reprocess: bool
     models: ModelsConfig
-    identify: Identify
+    identify: IdentifyConfig
 
 
 class EnrollSpeakerPayload(BaseModel):
@@ -282,7 +328,7 @@ def _parse_process_meeting(data: dict) -> ProcessMeetingPayload:
             processing_version=v1.processing_version,
             reprocess=v1.reprocess,
             models=_v1_models_to_internal(v1.models),
-            identify=v1.identify,
+            identify=IdentifyConfig(threshold=v1.identify.threshold),
         )
     if version == 2:
         v2 = ProcessMeetingPayloadWireV2.model_validate(data)
@@ -293,17 +339,31 @@ def _parse_process_meeting(data: dict) -> ProcessMeetingPayload:
             processing_version=v2.processing_version,
             reprocess=v2.reprocess,
             models=_v2_models_to_internal(v2.models),
-            identify=v2.identify,
+            identify=IdentifyConfig(threshold=v2.identify.threshold),
         )
-    v3 = ProcessMeetingPayloadWireV3.model_validate(data)
+    if version == 3:
+        v3 = ProcessMeetingPayloadWireV3.model_validate(data)
+        return ProcessMeetingPayload(
+            schema_version=3,
+            meeting_id=v3.meeting_id,
+            audio_key=v3.audio_key,
+            processing_version=v3.processing_version,
+            reprocess=v3.reprocess,
+            models=_v3_models_to_internal(v3.models),
+            identify=IdentifyConfig(threshold=v3.identify.threshold),
+        )
+    v4 = ProcessMeetingPayloadWireV4.model_validate(data)
     return ProcessMeetingPayload(
-        schema_version=3,
-        meeting_id=v3.meeting_id,
-        audio_key=v3.audio_key,
-        processing_version=v3.processing_version,
-        reprocess=v3.reprocess,
-        models=_v3_models_to_internal(v3.models),
-        identify=v3.identify,
+        schema_version=4,
+        meeting_id=v4.meeting_id,
+        audio_key=v4.audio_key,
+        processing_version=v4.processing_version,
+        reprocess=v4.reprocess,
+        models=_v3_models_to_internal(v4.models),
+        identify=IdentifyConfig(
+            threshold=v4.identify.threshold,
+            suggest_threshold=v4.identify.suggest_threshold,
+        ),
     )
 
 

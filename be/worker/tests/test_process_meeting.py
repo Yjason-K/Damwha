@@ -105,20 +105,126 @@ def test_full_pipeline_with_identification(conn, tmp_path):
     ).fetchone()
     assert prov is not None and prov["name"].startswith("Speaker_")
     assert utts[1]["speaker_id"] == prov["id"]
-    # its cluster + auto_cluster voiceprint exist
-    cl = conn.execute(
-        "SELECT diar_label, resolved_speaker_id FROM meeting_cluster WHERE meeting_id=%s", (mid,)
+    # EVERY label gets a cluster row — including the one identify bound outright.
+    # The table is the meeting's diar_label→speaker record and the entry point for
+    # a user correction, so an auto-linked label must not be invisible in it.
+    cl = {
+        c["diar_label"]: c
+        for c in conn.execute(
+            "SELECT diar_label, resolved_speaker_id, suggested_speaker_id "
+            "FROM meeting_cluster WHERE meeting_id=%s",
+            (mid,),
+        ).fetchall()
+    }
+    assert sorted(cl) == ["SPEAKER_00", "SPEAKER_01"]
+    assert cl["SPEAKER_00"]["resolved_speaker_id"] == sid
+    assert cl["SPEAKER_01"]["resolved_speaker_id"] == prov["id"]
+    # A bound cluster has nothing pending, and only minted speakers get a voiceprint.
+    assert cl["SPEAKER_00"]["suggested_speaker_id"] is None
+    vps = conn.execute(
+        "SELECT speaker_id, source FROM voiceprint WHERE source='auto_cluster'"
     ).fetchall()
-    assert [c["diar_label"] for c in cl] == ["SPEAKER_01"]
-    assert cl[0]["resolved_speaker_id"] == prov["id"]
-    vp = conn.execute("SELECT source FROM voiceprint WHERE speaker_id=%s", (prov["id"],)).fetchone()
-    assert vp["source"] == "auto_cluster"
+    assert [v["speaker_id"] for v in vps] == [prov["id"]]
     assert (
         conn.execute("SELECT duration_ms FROM meeting WHERE id=%s", (mid,)).fetchone()[
             "duration_ms"
         ]
         == 2000
     )
+
+
+def _payload_v4(meeting_id, audio_key, *, threshold, suggest_threshold, pv=0):
+    return parse_payload(
+        "process_meeting",
+        {
+            "schema_version": 4,
+            "meeting_id": str(meeting_id),
+            "audio_key": audio_key,
+            "processing_version": pv,
+            "reprocess": pv > 0,
+            "models": {
+                "whisper_model": "large-v3-turbo",
+                "language": "ko",
+                "devices": {"diarization": "cpu", "stt": "cpu"},
+                "preset": "standard",
+                "preset_revision": "2026-08-12.1",
+                "summary_model": "mlx-community/Qwen3.5-4B-8bit",
+                "diarization": {"model": "d", "min_speakers": None, "max_speakers": None},
+                "embedding": {"model": "speechbrain/spkrec-ecapa-voxceleb", "dimension": 192},
+            },
+            "identify": {"threshold": threshold, "suggest_threshold": suggest_threshold},
+        },
+    )
+
+
+def test_band_match_mints_its_own_speaker_and_records_the_candidate(conn, tmp_path):
+    # SPEAKER_00's centroid sits at cos≈0.707 from the known speaker: too close to
+    # call. It must still get its own provisional speaker (so its utterances are
+    # attributed) while the near-miss is parked for the user to confirm.
+    known = seed_speaker(conn, enrollment_status="provisional")
+    seed_voiceprint(conn, speaker_id=known, embedding=[1.0, 1.0] + [0.0] * 190)
+
+    mid = seed_meeting(
+        conn, status="processing", processing_version=0, audio_key="meetings/m/original.m4a"
+    )
+    jid = seed_job(conn, meeting_id=mid, payload={})
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    db.claim(conn, "w1")
+
+    out = run_process_meeting(
+        conn,
+        conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
+        _payload_v4(mid, "meetings/m/original.m4a", threshold=0.9, suggest_threshold=0.5),
+        _models(),
+        Storage(str(tmp_path)),
+        worker_id="w1",
+        normalize_fn=lambda s, d: None,
+        probe_fn=lambda p: ProbeResult(2000),
+    )
+    assert out == "committed"
+
+    cl = {
+        c["diar_label"]: c
+        for c in conn.execute(
+            "SELECT diar_label, resolved_speaker_id, suggested_speaker_id, suggested_similarity "
+            "FROM meeting_cluster WHERE meeting_id=%s",
+            (mid,),
+        ).fetchall()
+    }
+    row = cl["SPEAKER_00"]
+    assert row["suggested_speaker_id"] == known
+    assert row["suggested_similarity"] == pytest.approx(0.7071, abs=1e-3)
+    # Its own speaker, not the suggested one — a suggestion never binds.
+    assert row["resolved_speaker_id"] not in (None, known)
+
+
+def test_pre_v4_payload_records_no_suggestion(conn, tmp_path):
+    known = seed_speaker(conn, enrollment_status="provisional")
+    seed_voiceprint(conn, speaker_id=known, embedding=[1.0, 1.0] + [0.0] * 190)
+
+    mid = seed_meeting(
+        conn, status="processing", processing_version=0, audio_key="meetings/m/original.m4a"
+    )
+    jid = seed_job(conn, meeting_id=mid, payload={})
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    db.claim(conn, "w1")
+
+    run_process_meeting(
+        conn,
+        conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
+        _payload(mid, "meetings/m/original.m4a", threshold=0.9),  # v1 — no band
+        _models(),
+        Storage(str(tmp_path)),
+        worker_id="w1",
+        normalize_fn=lambda s, d: None,
+        probe_fn=lambda p: ProbeResult(2000),
+    )
+    suggested = conn.execute(
+        "SELECT count(*) AS n FROM meeting_cluster "
+        "WHERE meeting_id=%s AND suggested_speaker_id IS NOT NULL",
+        (mid,),
+    ).fetchone()["n"]
+    assert suggested == 0
 
 
 def test_stage_logs_emitted_with_counts(conn, tmp_path, caplog):

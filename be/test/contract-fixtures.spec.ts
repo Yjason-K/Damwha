@@ -59,6 +59,29 @@ describe('contract fixtures (shared with pydantic worker)', () => {
     v2.models.summary_model = 'mlx-community/Qwen3.5-4B-8bit';
     expect(() => ProcessMeetingPayloadSchema.parse(v2)).toThrow();
   });
+  it('validates process_meeting.v4.valid.json', () => {
+    const p = ProcessMeetingPayloadSchema.parse(read('process_meeting.v4.valid.json'));
+    expect(p.schema_version).toBe(4);
+    if (p.schema_version === 4) {
+      expect(p.identify).toEqual({ threshold: 0.8, suggest_threshold: 0.6 });
+    }
+  });
+  it('rejects v4 payload whose suggest_threshold exceeds threshold (unreachable band)', () => {
+    expect(() => ProcessMeetingPayloadSchema.parse(read('process_meeting.v4.inverted_band.json'))).toThrow();
+  });
+  it('rejects v4 payload missing suggest_threshold (worker 기본값 폴백 금지)', () => {
+    const v4 = read('process_meeting.v4.valid.json');
+    delete v4.identify.suggest_threshold;
+    expect(() => ProcessMeetingPayloadSchema.parse(v4)).toThrow();
+  });
+  it('rejects v3 payload carrying suggest_threshold (v3는 그 필드를 모른다)', () => {
+    const v3 = read('process_meeting.v3.valid.json');
+    v3.identify.suggest_threshold = 0.6;
+    // v1–v3 identify is non-strict, so the field is stripped rather than rejected —
+    // what matters is that it never reaches the worker as a real band.
+    const parsed = ProcessMeetingPayloadSchema.parse(v3);
+    expect((parsed.identify as Record<string, unknown>).suggest_threshold).toBeUndefined();
+  });
   it('validates summarize-meeting-v1.json', () => {
     expect(() => SummarizeMeetingPayloadSchema.parse(read('summarize-meeting-v1.json'))).not.toThrow();
   });
