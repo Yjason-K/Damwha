@@ -1,15 +1,9 @@
 import * as React from "react";
-import {
-  useNavigate,
-  useOutletContext,
-  useParams,
-  useSearchParams,
-} from "react-router";
+import { useNavigate, useParams, useSearchParams } from "react-router";
 
 import { Button } from "@/shared/ui/button";
 import { useToast } from "@/shared/ui/use-toast";
 
-import type { ShellOutletContext } from "@/app/app-shell";
 import { useSetLensCompletion } from "@/features/lens/api/lenses";
 import { useMeetingLenses } from "@/features/meeting/api/lenses";
 import { formatClock, mapMeetingLenses } from "@/features/meeting/api/mappers";
@@ -139,7 +133,6 @@ function MeetingView({
   onSpeed,
 }: MeetingViewProps) {
   const navigate = useNavigate();
-  const { openSearch } = useOutletContext<ShellOutletContext>();
   const [searchParams, setSearchParams] = useSearchParams();
   const activeId = searchParams.get("u") ?? "";
 
@@ -332,7 +325,6 @@ function MeetingView({
           aiAcked={aiAcked}
           onAckAi={onAckAi}
           onShowSummary={() => setTab("summary")}
-          onOpenSearch={openSearch}
         />
         <InsightPane
           meeting={meeting}

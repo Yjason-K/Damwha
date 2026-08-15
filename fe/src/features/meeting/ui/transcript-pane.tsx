@@ -313,7 +313,6 @@ type TranscriptPaneProps = {
   aiAcked: boolean;
   onAckAi: () => void;
   onShowSummary: () => void;
-  onOpenSearch: () => void;
 };
 
 export function TranscriptPane({
@@ -324,7 +323,6 @@ export function TranscriptPane({
   aiAcked,
   onAckAi,
   onShowSummary,
-  onOpenSearch,
 }: TranscriptPaneProps) {
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const [renameOpen, setRenameOpen] = React.useState(false);
@@ -376,11 +374,6 @@ export function TranscriptPane({
       return () => window.clearTimeout(t);
     }
   }, [activeId, activeBlockId, meeting.id]);
-
-  const scrollToEnd = () => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  };
 
   return (
     <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[var(--surface-card)]">
@@ -482,26 +475,6 @@ export function TranscriptPane({
             );
           })}
         </div>
-      </div>
-
-      {/* bottom toolbar */}
-      <div className="flex shrink-0 items-center justify-between bg-[var(--surface-card)] px-7 py-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          iconLeft={<Icon name="search" size={14} />}
-          onClick={onOpenSearch}
-        >
-          발언 검색
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          iconRight={<Icon name="chevDown" size={14} />}
-          onClick={scrollToEnd}
-        >
-          전체 스크롤
-        </Button>
       </div>
 
       <RenameDialog

@@ -62,7 +62,6 @@ function renderPane(over: Partial<Meeting> = {}) {
         aiAcked
         onAckAi={vi.fn()}
         onShowSummary={vi.fn()}
-        onOpenSearch={vi.fn()}
       />
     </QueryClientProvider>,
   );
@@ -80,4 +79,10 @@ test("동작하는 헤더 버튼은 남아 있다", () => {
   expect(screen.getByRole("button", { name: "즐겨찾기" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "이름 변경" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "삭제" })).toBeInTheDocument();
+});
+
+test("하단 툴바의 중복·오작동 버튼을 렌더하지 않는다", () => {
+  renderPane();
+  expect(screen.queryByRole("button", { name: "발언 검색" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "전체 스크롤" })).toBeNull();
 });

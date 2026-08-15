@@ -21,9 +21,6 @@ import { LeftNav } from "@/features/meeting/ui/left-nav";
  * CommandBar는 Radix Dialog Portal이라 그리드 항목이 되지 않는다.
  */
 
-/** 셸이 자식 라우트에 내려주는 것 — ⌘K 팔레트는 셸이 소유한다. */
-export type ShellOutletContext = { openSearch: () => void };
-
 /** Clip around the first match and wrap it in a highlighted <mark>. */
 function highlight(text: string, q: string): React.ReactNode {
   const clip = (s: string) => (s.length > 52 ? `${s.slice(0, 52)}…` : s);
@@ -64,14 +61,9 @@ export function AppShell() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // 팔레트 열기 진입점은 레일의 검색 필드와 자식 라우트(전사 하단 "발언 검색")
-  // 둘인데, 둘 다 이 콜백 하나를 공유한다. 여는 것만 노출해(토글 아님) 열림/닫힘
-  // 소유권은 셸에 남긴다.
-  const openSearch = React.useCallback(() => setCmdOpen(true), []);
-  const outletContext = React.useMemo<ShellOutletContext>(
-    () => ({ openSearch }),
-    [openSearch],
-  );
+  // 팔레트 열기 진입점은 레일의 검색 필드 하나다. 여는 것만 노출해(토글 아님)
+  // 열림/닫힘 소유권은 셸에 남긴다.
+  const openSearch = () => setCmdOpen(true);
 
   const q = cmdQuery.trim();
   const utteranceItems: CommandItem[] = hits.slice(0, 6).map((h) => ({
@@ -113,7 +105,7 @@ export function AppShell() {
   return (
     <div className="grid h-screen min-w-[1160px] grid-cols-[var(--rail-nav)_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] bg-[var(--surface-app)] text-foreground">
       <LeftNav filter={filter} onFilter={setFilter} onOpenSearch={openSearch} />
-      <Outlet context={outletContext} />
+      <Outlet />
 
       <CommandBar
         open={cmdOpen}
