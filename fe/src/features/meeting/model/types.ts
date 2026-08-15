@@ -85,6 +85,11 @@ export type ClusterInfo = {
   resolvedSpeakerId: string | null;
   speakerName: string | null;
   speakerStatus: "pending" | "ready" | "provisional" | "failed" | null;
+  /** 성문이 "같은 사람일 수 있다"고 본 후보 — 확정이 아니라 사용자가 고를 재료. */
+  suggestedSpeakerId: string | null;
+  suggestedSpeakerName: string | null;
+  /** 코사인 유사도 원값(0~1). 제안이 없으면 null. */
+  suggestedSimilarity: number | null;
 };
 
 /** 목록(좌측 네비) 카드용 요약 — GET /meetings 응답(발화 없음)에서 매핑. */

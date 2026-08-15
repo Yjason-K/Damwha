@@ -184,6 +184,9 @@ const fx = vi.hoisted(() => {
         resolved_speaker_id: "sp_1",
         speaker_name: "김영재",
         speaker_status: "ready",
+        suggested_speaker_id: null,
+        suggested_speaker_name: null,
+        suggested_similarity: null,
       },
       {
         id: "clu_2",
@@ -191,6 +194,9 @@ const fx = vi.hoisted(() => {
         resolved_speaker_id: "sp_2",
         speaker_name: "이수민",
         speaker_status: "ready",
+        suggested_speaker_id: null,
+        suggested_speaker_name: null,
+        suggested_similarity: null,
       },
       {
         id: "clu_3",
@@ -198,6 +204,9 @@ const fx = vi.hoisted(() => {
         resolved_speaker_id: null,
         speaker_name: null,
         speaker_status: null,
+        suggested_speaker_id: null,
+        suggested_speaker_name: null,
+        suggested_similarity: null,
       },
     ],
   };
@@ -250,6 +259,9 @@ const fx = vi.hoisted(() => {
         resolved_speaker_id: "sp_1",
         speaker_name: "김영재",
         speaker_status: "ready",
+        suggested_speaker_id: null,
+        suggested_speaker_name: null,
+        suggested_similarity: null,
       },
       {
         id: "clu_2",
@@ -257,6 +269,9 @@ const fx = vi.hoisted(() => {
         resolved_speaker_id: "sp_5",
         speaker_name: "한서연",
         speaker_status: "ready",
+        suggested_speaker_id: null,
+        suggested_speaker_name: null,
+        suggested_similarity: null,
       },
     ],
   };
@@ -305,6 +320,9 @@ const fx = vi.hoisted(() => {
         resolved_speaker_id: "sp_1",
         speaker_name: "김영재",
         speaker_status: "ready",
+        suggested_speaker_id: null,
+        suggested_speaker_name: null,
+        suggested_similarity: null,
       },
     ],
   };

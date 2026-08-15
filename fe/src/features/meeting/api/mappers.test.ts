@@ -143,6 +143,9 @@ function makeDetail(): WireMeetingDetail {
         resolved_speaker_id: "spk_1",
         speaker_name: "김영재",
         speaker_status: "ready",
+        suggested_speaker_id: null,
+        suggested_speaker_name: null,
+        suggested_similarity: null,
       },
       {
         id: "clu_2",
@@ -150,6 +153,9 @@ function makeDetail(): WireMeetingDetail {
         resolved_speaker_id: null,
         speaker_name: null,
         speaker_status: null,
+        suggested_speaker_id: null,
+        suggested_speaker_name: null,
+        suggested_similarity: null,
       },
       {
         id: "clu_3",
@@ -157,6 +163,9 @@ function makeDetail(): WireMeetingDetail {
         resolved_speaker_id: "spk_2",
         speaker_name: "Speaker_001",
         speaker_status: "provisional",
+        suggested_speaker_id: null,
+        suggested_speaker_name: null,
+        suggested_similarity: null,
       },
     ],
   };
@@ -315,6 +324,9 @@ describe("toMeetingDetail", () => {
         resolvedSpeakerId: "spk_1",
         speakerName: "김영재",
         speakerStatus: "ready",
+        suggestedSpeakerId: null,
+        suggestedSpeakerName: null,
+        suggestedSimilarity: null,
       },
       {
         id: "clu_2",
@@ -323,6 +335,9 @@ describe("toMeetingDetail", () => {
         resolvedSpeakerId: null,
         speakerName: null,
         speakerStatus: null,
+        suggestedSpeakerId: null,
+        suggestedSpeakerName: null,
+        suggestedSimilarity: null,
       },
       {
         id: "clu_3",
@@ -331,8 +346,33 @@ describe("toMeetingDetail", () => {
         resolvedSpeakerId: "spk_2",
         speakerName: "Speaker_001",
         speakerStatus: "provisional",
+        suggestedSpeakerId: null,
+        suggestedSpeakerName: null,
+        suggestedSimilarity: null,
       },
     ]);
+  });
+
+  it("제안 구간에 걸린 클러스터는 후보와 유사도를 함께 실어 나른다", () => {
+    // 자기 화자(spk_2)를 유지한 채 후보(spk_9)를 달고 온다 — 둘은 공존한다.
+    const wire = makeDetail();
+    wire.clusters = wire.clusters.map((c) =>
+      c.id === "clu_3"
+        ? {
+            ...c,
+            suggested_speaker_id: "spk_9",
+            suggested_speaker_name: "이수민",
+            suggested_similarity: 0.71,
+          }
+        : c,
+    );
+    const banded = toMeetingDetail(wire).clusters.find(
+      (c) => c.id === "clu_3",
+    )!;
+    expect(banded.resolvedSpeakerId).toBe("spk_2");
+    expect(banded.suggestedSpeakerId).toBe("spk_9");
+    expect(banded.suggestedSpeakerName).toBe("이수민");
+    expect(banded.suggestedSimilarity).toBeCloseTo(0.71, 2);
   });
 
   it("발화가 없는 클러스터는 안정적 대체 spk를 받는다", () => {
@@ -345,6 +385,9 @@ describe("toMeetingDetail", () => {
         resolved_speaker_id: null,
         speaker_name: null,
         speaker_status: null,
+        suggested_speaker_id: null,
+        suggested_speaker_name: null,
+        suggested_similarity: null,
       },
     ];
     const withOrphan = toMeetingDetail(wire);

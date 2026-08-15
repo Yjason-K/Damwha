@@ -220,6 +220,9 @@ export function toMeetingDetail(wire: WireMeetingDetail): Meeting {
       resolvedSpeakerId: c.resolved_speaker_id,
       speakerName: c.speaker_name,
       speakerStatus: c.speaker_status,
+      suggestedSpeakerId: c.suggested_speaker_id ?? null,
+      suggestedSpeakerName: c.suggested_speaker_name ?? null,
+      suggestedSimilarity: c.suggested_similarity ?? null,
     };
   });
 

@@ -69,6 +69,15 @@ export type WireCluster = {
   resolved_speaker_id: string | null;
   speaker_name: string | null;
   speaker_status: SpeakerStatus | null;
+  /**
+   * 성문 점수가 자동 연결 문턱(IDENTIFY_THRESHOLD)에는 못 미치지만 제안 문턱
+   * (IDENTIFY_SUGGEST_THRESHOLD)은 넘은 후보. 이 클러스터는 자기 화자를 그대로
+   * 갖고 있고, 이 값은 "같은 사람일 수 있다"는 제안일 뿐이다. resolve하면 서버가
+   * 지운다. 세 필드는 함께 채워지거나 함께 null이다.
+   */
+  suggested_speaker_id: string | null;
+  suggested_speaker_name: string | null;
+  suggested_similarity: number | null;
 };
 
 export type SummaryStatus = "queued" | "running" | "done" | "failed";
