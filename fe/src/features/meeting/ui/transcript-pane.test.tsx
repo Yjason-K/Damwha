@@ -282,3 +282,54 @@ test("현재 매칭이 사라진 전사로 갱신되면 카운터와 하이라�
   expect(container.querySelectorAll("[data-find-current]")).toHaveLength(1);
   expect(currentMarkText(container)).toBe("로터스");
 });
+
+test("Enter로 다음, Shift+Enter로 이전 매칭으로 간다", () => {
+  renderPane({ utterances: LOTUS });
+  const input = typeQuery("로터스");
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(screen.getByText("2/3")).toBeInTheDocument();
+  fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+  expect(screen.getByText("1/3")).toBeInTheDocument();
+});
+
+test("↓↑ 키로도 이동한다", () => {
+  renderPane({ utterances: LOTUS });
+  const input = typeQuery("로터스");
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  expect(screen.getByText("2/3")).toBeInTheDocument();
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  expect(screen.getByText("1/3")).toBeInTheDocument();
+});
+
+test("Esc는 질의를 비운다", () => {
+  const { container } = renderPane({ utterances: LOTUS });
+  const input = typeQuery("로터스");
+  fireEvent.keyDown(input, { key: "Escape" });
+  expect((input as HTMLInputElement).value).toBe("");
+  expect(container.querySelectorAll("mark")).toHaveLength(0);
+});
+
+test("⌘F가 찾기 입력을 선택한다", () => {
+  renderPane({ utterances: LOTUS });
+  const input = screen.getByRole("searchbox", { name: "이 회의에서 찾기" });
+  const select = vi.spyOn(input as HTMLInputElement, "select");
+  fireEvent.keyDown(window, { key: "f", metaKey: true });
+  expect(select).toHaveBeenCalled();
+});
+
+test("모달이 열려 있으면 ⌘F를 가로채지 않는다", () => {
+  renderPane({ utterances: LOTUS });
+  const input = screen.getByRole("searchbox", { name: "이 회의에서 찾기" });
+  const select = vi.spyOn(input as HTMLInputElement, "select");
+
+  // Radix 다이얼로그가 열린 상태를 흉내 낸다 — 포커스 트랩과 싸우면 안 된다.
+  const modal = document.createElement("div");
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("data-state", "open");
+  document.body.appendChild(modal);
+
+  fireEvent.keyDown(window, { key: "f", metaKey: true });
+  expect(select).not.toHaveBeenCalled();
+
+  modal.remove();
+});

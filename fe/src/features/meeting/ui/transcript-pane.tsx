@@ -418,6 +418,26 @@ export function TranscriptPane({
     setAnchor(matches[(cursor + delta + matches.length) % matches.length]);
   };
 
+  const onFindKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      go(e.shiftKey ? -1 : 1);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      go(1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      go(-1);
+    } else if (e.key === "Escape") {
+      if (query) {
+        setQuery("");
+        setAnchor(null);
+      } else {
+        e.currentTarget.blur();
+      }
+    }
+  };
+
   const favorite = useToggleFavorite();
   const fav = !!meeting.fav;
   const toggleFav = () =>
@@ -468,6 +488,21 @@ export function TranscriptPane({
       ?.querySelector<HTMLElement>("[data-find-current]")
       ?.scrollIntoView({ block: "center" });
   }, [cursor, matches]);
+
+  // ⌘F/Ctrl+F로 찾기 입력에 진입한다. 회의 화면에서만 마운트되므로 다른
+  // 라우트에는 영향이 없다. 모달이 열려 있으면 가로채지 않는다 — Radix
+  // 포커스 트랩이 focus()를 되뺏어가며 싸우므로, 그땐 브라우저 기본 찾기에
+  // 양보한다. role="dialog" + data-state는 Radix가 항상 세우는 공개 계약이다.
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "f") return;
+      if (document.querySelector('[role="dialog"][data-state="open"]')) return;
+      e.preventDefault();
+      findInputRef.current?.select();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   return (
     <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[var(--surface-card)]">
@@ -585,6 +620,7 @@ export function TranscriptPane({
           placeholder="이 회의에서 찾기"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={onFindKeyDown}
         />
         {query.trim() ? (
           <>
