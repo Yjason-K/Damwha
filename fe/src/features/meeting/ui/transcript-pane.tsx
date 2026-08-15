@@ -412,6 +412,12 @@ export function TranscriptPane({
     findInputRef.current?.focus();
   };
 
+  /** 매칭 간 순환 이동. 오디오·URL은 건드리지 않는다(Ctrl+F 의미론). */
+  const go = (delta: number) => {
+    if (matches.length === 0) return;
+    setAnchor(matches[(cursor + delta + matches.length) % matches.length]);
+  };
+
   const favorite = useToggleFavorite();
   const fav = !!meeting.fav;
   const toggleFav = () =>
@@ -456,6 +462,12 @@ export function TranscriptPane({
       return () => window.clearTimeout(t);
     }
   }, [activeId, activeBlockId, meeting.id]);
+
+  React.useEffect(() => {
+    scrollRef.current
+      ?.querySelector<HTMLElement>("[data-find-current]")
+      ?.scrollIntoView({ block: "center" });
+  }, [cursor, matches]);
 
   return (
     <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[var(--surface-card)]">
@@ -587,6 +599,7 @@ export function TranscriptPane({
               label="이전 결과"
               size="sm"
               disabled={matches.length === 0}
+              onClick={() => go(-1)}
             >
               <Icon name="chevUp" size={16} />
             </IconButton>
@@ -594,6 +607,7 @@ export function TranscriptPane({
               label="다음 결과"
               size="sm"
               disabled={matches.length === 0}
+              onClick={() => go(1)}
             >
               <Icon name="chevDown" size={16} />
             </IconButton>
