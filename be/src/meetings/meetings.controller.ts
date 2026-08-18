@@ -7,6 +7,7 @@ import { Response } from 'express';
 import { MeetingsService } from './meetings.service';
 import { uploadInterceptorOptions } from '../storage/upload-options';
 import { SummaryService } from '../summary/summary.service';
+import { audioContentType } from '../storage/content-type';
 
 @ApiTags('meetings')
 @Controller('meetings')
@@ -172,7 +173,7 @@ export class MeetingsController {
   ) {
     const { key, size } = await this.service.getAudioDescriptor(id);
     res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Type', audioContentType(key));
 
     if (range) {
       const m = /^bytes=(\d*)-(\d*)$/.exec(range);
