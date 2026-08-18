@@ -102,6 +102,11 @@ export function useSetLensCompletion() {
   });
 }
 
+/**
+ * 렌즈 추출 요청 (POST /meetings/:id/lenses/extract). 실패한 회의의 재시도이자,
+ * 업로드에서 미뤄둔 회의의 최초 실행이기도 하다 — 서버는 두 경우를 같은
+ * 엔드포인트로 처리하고, 이미 도는 run이 있으면 그 run을 그대로 돌려준다.
+ */
 export function useRetryExtraction() {
   const qc = useQueryClient();
   return useMutation({
@@ -110,6 +115,9 @@ export function useRetryExtraction() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["lens-extraction-status"] });
       qc.invalidateQueries({ queryKey: ["lenses"] });
+      // 회의 패널이 추출 상태(queued)를 바로 집어 폴링을 시작하게 한다 — 이게
+      // 없으면 눌러도 화면이 그대로라 아무 일도 안 난 것처럼 보인다.
+      qc.invalidateQueries({ queryKey: ["meeting-lenses"] });
     },
   });
 }

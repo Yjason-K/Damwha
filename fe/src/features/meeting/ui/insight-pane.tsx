@@ -13,6 +13,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import { cn } from "@/shared/lib/utils";
 
+import type { LensExtractionStatus } from "../api/lenses";
 import type { SummaryModel } from "@/features/settings/api/types";
 import { SUMMARY_MODEL_OPTIONS } from "@/features/settings/lib/presets";
 import type {
@@ -320,6 +321,61 @@ function SummarySegments({
   );
 }
 
+/**
+ * 렌즈 섹션이 비어 있는 이유를 설명하고 실행 길을 준다. `extractionStatus`가
+ * null이면 이 처리 버전에서 추출을 돌린 적이 없다는 뜻 — 업로드에서 미뤘거나
+ * 워커에 렌즈 모델이 없다. 'done'이면 돌렸는데 뽑을 게 없었던 것이라 아무것도
+ * 그리지 않는다(0건이면 섹션이 스스로 사라진다는 제품 원칙 유지).
+ */
+function LensState({
+  meetingStatus,
+  status,
+  onExtract,
+  extracting,
+}: {
+  meetingStatus: Meeting["status"];
+  status: LensExtractionStatus | null;
+  onExtract: () => void;
+  extracting: boolean;
+}) {
+  if (status === "done") return null;
+  if (status === "queued" || status === "running" || extracting) {
+    return (
+      <Section>
+        <div role="status" aria-busy="true">
+          <p className="text-sm text-[color:var(--text-muted)]">
+            할 일과 결정을 찾고 있어요
+          </p>
+        </div>
+      </Section>
+    );
+  }
+  // 처리가 끝나기 전에는 서버가 추출 요청을 409로 막는다. 같은 안내를 요약
+  // 블록이 이미 하고 있어 여기서는 아무것도 더 얹지 않는다.
+  if (meetingStatus !== "done") return null;
+  return (
+    <Section>
+      <div
+        className="flex flex-col items-start gap-2"
+        {...(status === "failed" ? { role: "alert" } : {})}
+      >
+        <p className="text-sm text-[color:var(--text-faint)]">
+          {status === "failed"
+            ? "할 일과 결정을 찾지 못했어요."
+            : "아직 할 일과 결정을 찾지 않았어요."}
+        </p>
+        <button
+          type="button"
+          onClick={onExtract}
+          className="cursor-pointer rounded-xs text-xs font-medium text-[color:var(--text-link)] outline-none hover:underline active:translate-y-[0.5px] focus-visible:[box-shadow:var(--focus-ring)]"
+        >
+          {status === "failed" ? "다시 찾기" : "지금 찾기"}
+        </button>
+      </div>
+    </Section>
+  );
+}
+
 function SummaryState({
   meetingStatus,
   status,
@@ -463,6 +519,10 @@ type InsightPaneProps = {
   summaryModel: SummaryModel | undefined;
   onSummaryModelChange: (model: SummaryModel) => void;
   regenerating: boolean;
+  /** 현재 처리 버전의 렌즈 추출 상태. null = 이 버전에서 돌린 적 없음. */
+  lensExtractionStatus: LensExtractionStatus | null;
+  onExtractLenses: () => void;
+  extracting: boolean;
 };
 
 export function InsightPane({
@@ -477,6 +537,9 @@ export function InsightPane({
   summaryModel,
   onSummaryModelChange,
   regenerating,
+  lensExtractionStatus,
+  onExtractLenses,
+  extracting,
 }: InsightPaneProps) {
   const settled = meeting.summaryStatus === "done" && !regenerating;
   return (
@@ -550,6 +613,12 @@ export function InsightPane({
             )}
             <Todos lenses={lenses} meeting={meeting} onToggle={onToggle} />
             <Decisions lenses={lenses} onMore={() => onOpenLens("decision")} />
+            <LensState
+              meetingStatus={meeting.status}
+              status={lensExtractionStatus}
+              onExtract={onExtractLenses}
+              extracting={extracting}
+            />
             {settled && (
               <SummarySegments
                 segments={meeting.segments}

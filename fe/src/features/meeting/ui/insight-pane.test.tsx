@@ -59,6 +59,11 @@ function renderPane(
     summaryModel: undefined,
     onSummaryModelChange: vi.fn(),
     regenerating: false,
+    // 기본은 "이 버전에서 추출을 이미 돌렸고 끝났다" — 대부분의 케이스가
+    // 렌즈 실행 안내와 무관하므로 그 블록이 끼어들지 않게 한다.
+    lensExtractionStatus: "done" as const,
+    onExtractLenses: vi.fn(),
+    extracting: false,
     ...props,
   };
   render(<InsightPane {...merged} />);
@@ -194,6 +199,58 @@ describe("InsightPane", () => {
     });
     expect(
       screen.queryByRole("button", { name: "요약 다시 만들기" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("추출을 미뤄둔 회의(status null)는 지금 찾기 버튼을 준다", () => {
+    const props = renderPane({ lensExtractionStatus: null });
+    expect(
+      screen.getByText("아직 할 일과 결정을 찾지 않았어요."),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "지금 찾기" }));
+    expect(props.onExtractLenses).toHaveBeenCalled();
+  });
+
+  it("추출이 실패하면 다시 찾기 버튼을 준다", () => {
+    const props = renderPane({ lensExtractionStatus: "failed" });
+    fireEvent.click(screen.getByRole("button", { name: "다시 찾기" }));
+    expect(props.onExtractLenses).toHaveBeenCalled();
+  });
+
+  it("추출이 도는 동안에는 버튼 대신 진행 상태만 보여준다", () => {
+    renderPane({ lensExtractionStatus: "queued" });
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "할 일과 결정을 찾고 있어요",
+    );
+    expect(
+      screen.queryByRole("button", { name: "지금 찾기" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("눌러서 요청이 날아가는 동안에도 진행 상태로 바뀐다 (응답 전 중복 클릭 방지)", () => {
+    renderPane({ lensExtractionStatus: null, extracting: true });
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "할 일과 결정을 찾고 있어요",
+    );
+  });
+
+  it("추출이 끝난 회의는 0건이어도 렌즈 안내를 띄우지 않는다", () => {
+    renderPane({ lensExtractionStatus: "done" });
+    expect(
+      screen.queryByText("아직 할 일과 결정을 찾지 않았어요."),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "지금 찾기" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("회의 처리가 끝나지 않았으면 렌즈 실행 버튼도 주지 않는다", () => {
+    renderPane({
+      meeting: meeting({ status: "processing" }),
+      lensExtractionStatus: null,
+    });
+    expect(
+      screen.queryByRole("button", { name: "지금 찾기" }),
     ).not.toBeInTheDocument();
   });
 

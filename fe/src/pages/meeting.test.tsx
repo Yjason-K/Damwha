@@ -543,7 +543,14 @@ const fx = vi.hoisted(() => {
       return Promise.resolve({ data: { running: 0, failed: [] } });
     const ml = url.match(/^\/meetings\/([^/]+)\/lenses$/);
     if (ml) {
-      return Promise.resolve({ data: { items: meetingLensesOf(ml[1]) } });
+      // m4는 추출이 끝난 회의, 나머지는 이 버전에서 아직 안 돌린 회의(null) —
+      // 업로드에서 렌즈를 미뤘을 때의 서버 응답 모양이다.
+      return Promise.resolve({
+        data: {
+          items: meetingLensesOf(ml[1]),
+          extraction_status: ml[1] === "m4" ? "done" : null,
+        },
+      });
     }
     if (url.startsWith("/lenses?")) {
       const qs = new URLSearchParams(url.slice("/lenses?".length));
@@ -603,6 +610,11 @@ const fx = vi.hoisted(() => {
     }
     if (/^\/lenses\/[^/]+\/(complete|reopen)$/.test(url)) {
       return Promise.resolve({ data: {} });
+    }
+    if (/^\/meetings\/[^/]+\/lenses\/extract$/.test(url)) {
+      return Promise.resolve({
+        data: { run_id: "ler_1", job_id: "job_1", status: "queued", processing_version: 0 },
+      });
     }
     return Promise.reject(new Error(`unhandled POST ${url}`));
   }
@@ -1118,5 +1130,16 @@ test("summary가 done인 회의는 요약 탭이 실제 데이터로 채워지�
     expect(apiClient.post).toHaveBeenCalledWith(
       "/lenses/lens_m4_action/complete",
     ),
+  );
+});
+
+test("렌즈를 미뤄둔 회의는 지금 찾기 버튼으로 추출을 걸 수 있다", async () => {
+  // m4가 아닌 회의 = extraction_status null (업로드에서 defer_lens로 미룬 모습).
+  renderShell("/meetings/m1");
+  await screen.findByRole("heading", { level: 1, name: "기획회의 — UI 개선안" });
+
+  fireEvent.click(await screen.findByRole("button", { name: "지금 찾기" }));
+  await waitFor(() =>
+    expect(apiClient.post).toHaveBeenCalledWith("/meetings/m1/lenses/extract"),
   );
 });

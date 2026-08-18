@@ -4,7 +4,10 @@ import { useNavigate, useParams, useSearchParams } from "react-router";
 import { Button } from "@/shared/ui/button";
 import { useToast } from "@/shared/ui/use-toast";
 
-import { useSetLensCompletion } from "@/features/lens/api/lenses";
+import {
+  useRetryExtraction,
+  useSetLensCompletion,
+} from "@/features/lens/api/lenses";
 import { useMeetingLenses } from "@/features/meeting/api/lenses";
 import { formatClock, mapMeetingLenses } from "@/features/meeting/api/mappers";
 import {
@@ -151,8 +154,9 @@ function MeetingView({
     refetch: refetchMeeting,
   } = useMeeting(meetingId);
 
-  const { data: lensItems = [] } = useMeetingLenses(meetingId);
+  const { data: meetingLensData } = useMeetingLenses(meetingId);
   const setLensCompletion = useSetLensCompletion();
+  const extractLenses = useRetryExtraction();
   const generateSummary = useGenerateSummary();
   const processingSettings = useProcessingSettings();
   const [summaryModel, setSummaryModel] = React.useState<
@@ -162,8 +166,11 @@ function MeetingView({
   const effectiveSummaryModel =
     summaryModel ?? processingSettings.data?.summary_model;
   const meetingLenses = React.useMemo(
-    () => (meeting ? mapMeetingLenses(lensItems, meeting.speakers) : {}),
-    [lensItems, meeting],
+    () =>
+      meeting
+        ? mapMeetingLenses(meetingLensData?.items ?? [], meeting.speakers)
+        : {},
+    [meetingLensData, meeting],
   );
 
   const summaryPending =
@@ -345,6 +352,9 @@ function MeetingView({
           summaryModel={effectiveSummaryModel}
           onSummaryModelChange={setSummaryModel}
           regenerating={generateSummary.isPending}
+          lensExtractionStatus={meetingLensData?.extractionStatus ?? null}
+          onExtractLenses={() => extractLenses.mutate(meeting.id)}
+          extracting={extractLenses.isPending}
         />
       </>
     );

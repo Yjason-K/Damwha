@@ -77,7 +77,11 @@ export function useMeetingStatus(
   });
 }
 
-/** 오디오 업로드 → 처리 큐 등록. multipart 필드명 audio/title/recorded_at. */
+/**
+ * 오디오 업로드 → 처리 큐 등록. multipart 필드명 audio/title/recorded_at.
+ * deferLens/deferSummary는 true일 때만 보낸다 — 서버 기본값이 "미루지 않음"이라
+ * false를 실어봐야 같은 뜻이다.
+ */
 export function useUploadMeeting() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -86,6 +90,8 @@ export function useUploadMeeting() {
       title?: string;
       recordedAt?: string;
       processing?: ProcessingOverride;
+      deferLens?: boolean;
+      deferSummary?: boolean;
     }) => {
       const form = new FormData();
       form.append("audio", vars.file);
@@ -93,6 +99,8 @@ export function useUploadMeeting() {
       if (vars.recordedAt) form.append("recorded_at", vars.recordedAt);
       if (vars.processing)
         form.append("processing", JSON.stringify(vars.processing));
+      if (vars.deferLens) form.append("defer_lens", "true");
+      if (vars.deferSummary) form.append("defer_summary", "true");
       const { data } = await apiClient.post<WireMeeting>("/meetings", form, {
         headers: { "Content-Type": "multipart/form-data" },
       });

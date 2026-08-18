@@ -32,6 +32,26 @@ const WIRE_MEETING = {
   created_at: new Date().toISOString(),
 };
 
+/** 파일 하나 고른 상태의 다이얼로그를 띄우고 post 스파이를 돌려준다. */
+function renderWithFile() {
+  const post = vi
+    .spyOn(apiClient, "post")
+    .mockResolvedValue({ data: WIRE_MEETING } as never);
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <UploadDialog open onOpenChange={() => {}} onUploaded={() => {}} />
+    </QueryClientProvider>,
+  );
+  const fileInput = document.querySelector(
+    'input[type="file"]',
+  ) as HTMLInputElement;
+  fireEvent.change(fileInput, {
+    target: { files: [new File(["a"], "a.m4a", { type: "audio/mp4" })] },
+  });
+  return post;
+}
+
 test("오버라이드 프리셋 선택 시 multipart에 processing JSON이 실린다", async () => {
   vi.spyOn(apiClient, "get").mockResolvedValue({
     data: {
@@ -73,4 +93,23 @@ test("오버라이드 프리셋 선택 시 multipart에 processing JSON이 실�
   await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
   const form = post.mock.calls[0][1] as FormData;
   expect(form.get("processing")).toBe(JSON.stringify({ preset: "light" }));
+});
+
+test("후속 처리 스위치는 기본이 꺼짐 — defer 필드가 실리지 않는다", async () => {
+  const post = renderWithFile();
+  fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  const form = post.mock.calls[0][1] as FormData;
+  expect(form.get("defer_lens")).toBeNull();
+  expect(form.get("defer_summary")).toBeNull();
+});
+
+test("스위치를 켜면 해당 후속만 defer로 실린다", async () => {
+  const post = renderWithFile();
+  fireEvent.click(screen.getByRole("switch", { name: "요약은 나중에" }));
+  fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  const form = post.mock.calls[0][1] as FormData;
+  expect(form.get("defer_summary")).toBe("true");
+  expect(form.get("defer_lens")).toBeNull();
 });
