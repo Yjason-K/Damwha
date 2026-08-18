@@ -10,7 +10,12 @@ const EnvSchema = z.object({
   WHISPER_MODEL: z.enum(['large-v3-turbo', 'large-v3']).default('large-v3-turbo'),
   WHISPER_DEVICE: z.enum(['mps', 'cpu', 'cuda']).default('mps'),
   STT_LANGUAGE: z.string().default('ko'),
-  DIARIZATION_MODEL: z.string().default('pyannote/speaker-diarization-3.1'),
+  // speaker-diarization-3.1 is broken under the installed pyannote.audio 4.x:
+  // segmentation is fine but clustering collapses every speaker into one label
+  // (measured on mtg_5 — 105 utterances on one label vs 3 on the other for a
+  // two-person interview; same turn boundaries, correct 2-way split under
+  // community-1). community-1 is pyannote 4.x's own diarization pipeline.
+  DIARIZATION_MODEL: z.string().default('pyannote/speaker-diarization-community-1'),
   EMBEDDING_MODEL: z.string().default('speechbrain/spkrec-ecapa-voxceleb'),
   EMBEDDING_DIM: z.coerce.number().default(192),
   // Two-tier identification. At/above IDENTIFY_THRESHOLD a cluster binds to the

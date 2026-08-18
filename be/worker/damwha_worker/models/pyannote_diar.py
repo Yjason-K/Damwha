@@ -1,6 +1,6 @@
 """pyannote.audio 3.1 diarization adapter.
 
-Implements the `Diarizer` protocol. pyannote/speaker-diarization-3.1 is a GATED
+Implements the `Diarizer` protocol. pyannote/speaker-diarization-community-1 is a GATED
 model — requires an accepted license + HF token (passed as `use_auth_token`).
 """
 
