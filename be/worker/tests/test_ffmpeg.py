@@ -54,6 +54,8 @@ def test_normalize_builds_16k_mono_flac_command(monkeypatch, tmp_path):
     # -f 명시는 필수다 — 임시 파일이 .tmp 접미사라 확장자 추론이 안 된다
     assert cmd[cmd.index("-f") + 1] == "flac"
     assert cmd[cmd.index("-c:a") + 1] == "flac"
+    # s16 명시가 없으면 FLAC 인코더가 24비트를 골라 s16 WAV 대비 1%밖에 안 줄어든다
+    assert cmd[cmd.index("-sample_fmt") + 1] == "s16"
     assert cmd[-1] != str(tmp_path / "n.flac")
 
 
