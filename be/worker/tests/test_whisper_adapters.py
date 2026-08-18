@@ -9,16 +9,26 @@ SPANS = [SpeechSpan(500, 3_200), SpeechSpan(4_000, 9_900)]
 FLAT_S = [0.5, 3.2, 4.0, 9.9]
 
 
-def _install_fake_mlx(monkeypatch, calls):
+def _install_fake_mlx(monkeypatch, calls, loads=None):
     fake_core = types.ModuleType("mlx.core")
     fake_core.set_memory_limit = lambda n: None
+    fake_core.array = lambda a: ("mx", a)
     fake_mlx = types.ModuleType("mlx")
     fake_mlx.core = fake_core
 
+    fake_audio = types.ModuleType("mlx_whisper.audio")
+
+    def load_audio(file, sr=16000):
+        if loads is not None:
+            loads.append((file, sr))
+        return ["pcm", file]
+
+    fake_audio.load_audio = load_audio
+
     fake_whisper = types.ModuleType("mlx_whisper")
 
-    def transcribe(wav_path, **kwargs):
-        calls.append(kwargs)
+    def transcribe(audio, **kwargs):
+        calls.append({"audio": audio, **kwargs})
         return {
             "segments": [
                 {"words": [{"word": " 안녕", "start": 0.5, "end": 0.9, "probability": 0.9}]}
@@ -26,9 +36,11 @@ def _install_fake_mlx(monkeypatch, calls):
         }
 
     fake_whisper.transcribe = transcribe
+    fake_whisper.audio = fake_audio
     monkeypatch.setitem(sys.modules, "mlx", fake_mlx)
     monkeypatch.setitem(sys.modules, "mlx.core", fake_core)
     monkeypatch.setitem(sys.modules, "mlx_whisper", fake_whisper)
+    monkeypatch.setitem(sys.modules, "mlx_whisper.audio", fake_audio)
 
 
 def _install_fake_faster(monkeypatch, calls, segment_ends=(0.9,)):
@@ -194,3 +206,27 @@ def test_faster_whole_file_reports_no_progress(monkeypatch):
         "a.wav", "ko", on_progress=lambda done, total: seen.append((done, total))
     )
     assert seen == []
+
+
+def test_mlx_loads_audio_once_regardless_of_clip_count(monkeypatch):
+    # clip마다 경로를 넘기면 mlx_whisper가 호출마다 파일 전체를 ffmpeg로 재디코드한다.
+    # 디코드는 1회여야 하고, 이후 호출은 그 배열을 재사용해야 한다.
+    calls, loads = [], []
+    _install_fake_mlx(monkeypatch, calls, loads)
+    from damwha_worker.models.whisper_mlx import MlxWhisper
+
+    MlxWhisper("large-v3-turbo").transcribe("a.flac", "ko", SPANS)
+    assert loads == [("a.flac", 16000)]
+    assert len(calls) == 2
+
+
+def test_mlx_passes_decoded_array_not_path(monkeypatch):
+    # 경로 문자열을 그대로 넘기면 라이브러리가 다시 디코드한다 — mx.array를 넘겨
+    # 라이브러리 내부의 str 분기와 numpy→mx 변환을 둘 다 건너뛴다.
+    calls, loads = [], []
+    _install_fake_mlx(monkeypatch, calls, loads)
+    from damwha_worker.models.whisper_mlx import MlxWhisper
+
+    MlxWhisper("large-v3-turbo").transcribe("a.flac", "ko", SPANS)
+    for kwargs in calls:
+        assert kwargs["audio"] == ("mx", ["pcm", "a.flac"])

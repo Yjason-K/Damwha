@@ -51,6 +51,7 @@ class MlxWhisper:
 
         import mlx.core as mx
         import mlx_whisper
+        from mlx_whisper.audio import load_audio
 
         # job 내부 GPU 피크 억제: MLX active 메모리 상한(물리 메모리의 절반).
         # subprocess 격리는 job '간' 누적만 막고, 단독 process_meeting의 내부 피크는
@@ -58,9 +59,16 @@ class MlxWhisper:
         _phys = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
         mx.set_memory_limit(int(_phys * 0.5))
 
+        # 오디오는 한 번만 디코드한다. 아래 clip 루프는 span당 transcribe()를 개별
+        # 호출하는데, 경로를 넘기면 mlx_whisper가 호출마다 파일 전체를 ffmpeg로 다시
+        # 디코드한다(WAV는 I/O 비용뿐이지만 FLAC은 디코드 CPU가 clip 수만큼 곱해진다).
+        # mx.array까지 미리 만들어 호출당 numpy→mx 복사도 없앤다. clip_timestamps는
+        # 배열 입력에서도 같은 '초 단위 절대 시각'으로 해석된다.
+        audio = mx.array(load_audio(wav_path))
+
         def _run(**extra) -> dict:
             return mlx_whisper.transcribe(
-                wav_path,
+                audio,
                 path_or_hf_repo=self._repo,
                 language=language,
                 word_timestamps=True,
