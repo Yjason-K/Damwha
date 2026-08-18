@@ -8,7 +8,7 @@ log = logging.getLogger("damwha_worker")
 
 # job type별 허용 버전 — enroll/index는 v1 불변 (spec §4)
 SUPPORTED_SCHEMA_VERSIONS: dict[str, frozenset[int]] = {
-    "process_meeting": frozenset({1, 2, 3, 4}),
+    "process_meeting": frozenset({1, 2, 3, 4, 5}),
     "enroll_speaker": frozenset({1}),
     "index_meeting": frozenset({1}),
     "extract_lenses": frozenset({1}),
@@ -214,6 +214,39 @@ class ProcessMeetingPayloadWireV4(BaseModel):
     identify: IdentifyWireV4
 
 
+class FollowupsWireV5(BaseModel):
+    """어떤 후속 job을 persist 트랜잭션에서 같이 큐잉할지.
+
+    True가 v1~v4의 동작(항상 큐잉)이라 변환 시 둘 다 True로 채운다. wire에서
+    필수인 이유는 summary_model/suggest_threshold와 같다 — 후속을 돌렸는지는 그 run이
+    기록한 내용의 일부이지 워커 기본값이 아니다."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    lens: bool
+    summary: bool
+
+
+class FollowupsConfig(BaseModel):
+    """내부 정규 표현. v1~v4 유래는 둘 다 True로 채워진다."""
+
+    lens: bool = True
+    summary: bool = True
+
+
+class ProcessMeetingPayloadWireV5(BaseModel):
+    """wire v5 = v4 + 후속 job(렌즈/요약) 스위치."""
+
+    schema_version: Literal[5]
+    meeting_id: MeetingId
+    audio_key: str
+    processing_version: int
+    reprocess: bool
+    models: ModelsWireV3
+    identify: IdentifyWireV4
+    followups: FollowupsWireV5
+
+
 class ProcessMeetingPayload(BaseModel):
     """내부 표현 — 항상 정규화된 ModelsConfig. v1/v2/v3는 parse에서 즉시 변환되고
     원본 버전을 보존한다.
@@ -231,6 +264,7 @@ class ProcessMeetingPayload(BaseModel):
     reprocess: bool
     models: ModelsConfig
     identify: IdentifyConfig
+    followups: FollowupsConfig = FollowupsConfig()
 
 
 class EnrollSpeakerPayload(BaseModel):
@@ -352,18 +386,33 @@ def _parse_process_meeting(data: dict) -> ProcessMeetingPayload:
             models=_v3_models_to_internal(v3.models),
             identify=IdentifyConfig(threshold=v3.identify.threshold),
         )
-    v4 = ProcessMeetingPayloadWireV4.model_validate(data)
+    if version == 4:
+        v4 = ProcessMeetingPayloadWireV4.model_validate(data)
+        return ProcessMeetingPayload(
+            schema_version=4,
+            meeting_id=v4.meeting_id,
+            audio_key=v4.audio_key,
+            processing_version=v4.processing_version,
+            reprocess=v4.reprocess,
+            models=_v3_models_to_internal(v4.models),
+            identify=IdentifyConfig(
+                threshold=v4.identify.threshold,
+                suggest_threshold=v4.identify.suggest_threshold,
+            ),
+        )
+    v5 = ProcessMeetingPayloadWireV5.model_validate(data)
     return ProcessMeetingPayload(
-        schema_version=4,
-        meeting_id=v4.meeting_id,
-        audio_key=v4.audio_key,
-        processing_version=v4.processing_version,
-        reprocess=v4.reprocess,
-        models=_v3_models_to_internal(v4.models),
+        schema_version=5,
+        meeting_id=v5.meeting_id,
+        audio_key=v5.audio_key,
+        processing_version=v5.processing_version,
+        reprocess=v5.reprocess,
+        models=_v3_models_to_internal(v5.models),
         identify=IdentifyConfig(
-            threshold=v4.identify.threshold,
-            suggest_threshold=v4.identify.suggest_threshold,
+            threshold=v5.identify.threshold,
+            suggest_threshold=v5.identify.suggest_threshold,
         ),
+        followups=FollowupsConfig(lens=v5.followups.lens, summary=v5.followups.summary),
     )
 
 

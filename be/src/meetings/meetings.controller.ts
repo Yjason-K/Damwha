@@ -34,13 +34,28 @@ export class MeetingsController {
             '개별 필드(whisper_model/devices/language)가 하나라도 있으면 결과 preset은 custom이 된다 ' +
             '(language만 지정해도 custom).',
         },
+        defer_lens: {
+          type: 'string', enum: ['true', 'false'],
+          description:
+            '"true"면 처리 완료 후 렌즈 추출을 자동으로 걸지 않는다 (기본 "false"). ' +
+            '나중에 POST /meetings/:id/lenses/extract로 직접 실행.',
+        },
+        defer_summary: {
+          type: 'string', enum: ['true', 'false'],
+          description:
+            '"true"면 처리 완료 후 요약 생성을 자동으로 걸지 않는다 (기본 "false"). ' +
+            '나중에 POST /meetings/:id/summary/generate로 직접 실행.',
+        },
       },
     },
   })
   @UseInterceptors(FileInterceptor('audio', uploadInterceptorOptions))
   upload(
     @UploadedFile() file: Express.Multer.File,
-    @Body() body: { title?: string; recorded_at?: string; processing?: string },
+    @Body() body: {
+      title?: string; recorded_at?: string; processing?: string;
+      defer_lens?: string; defer_summary?: string;
+    },
   ) {
     return this.service.upload(file, body);
   }

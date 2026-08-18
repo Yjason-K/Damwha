@@ -3,7 +3,9 @@ import { DatabaseService } from '../database/database.service';
 import { StorageService } from '../storage/storage.service';
 import { decodeOriginalName } from '../storage/upload-options';
 import { JobsRepository } from '../jobs/jobs.repository';
-import { buildProcessMeetingPayload, buildIndexMeetingPayload } from '../contracts/job-payload.schema';
+import {
+  buildProcessMeetingPayload, buildIndexMeetingPayload, Followups,
+} from '../contracts/job-payload.schema';
 import { MeetingsRepository, MeetingRow } from './meetings.repository';
 import { SettingsService } from '../settings/settings.service';
 import { ProcessingConfig } from '../settings/presets';
@@ -44,7 +46,10 @@ export class MeetingsService {
   // validation (ffmpeg probe) happens in the Plan 2 worker normalize stage.
   async upload(
     file: Express.Multer.File | undefined,
-    body: { title?: string; recorded_at?: string; processing?: string },
+    body: {
+      title?: string; recorded_at?: string; processing?: string;
+      defer_lens?: string; defer_summary?: string;
+    },
   ) {
     if (!file) throw new BadRequestException('audio file required');
     if (!AUDIO_MIME.test(file.mimetype)) {
@@ -54,10 +59,15 @@ export class MeetingsService {
     // parse/검증/resolve를 saveFromTemp 전에 수행 (spec §5) — 실패 시 temp 파일 unlink로
     // 고아 파일 금지. storage 저장/DB INSERT는 설정이 유효할 때만.
     let processing: ProcessingConfig;
+    let followups: Followups;
     try {
       const override = this.parseOverrideString(body.processing); // JSON.parse + zod, 오류는 BadRequest
       const global_ = await this.settings.getProcessingConfig();
       processing = resolveProcessingConfig(global_, override, this.caps.gpu_eligible);
+      followups = {
+        lens: !this.parseDeferFlag(body.defer_lens, 'defer_lens'),
+        summary: !this.parseDeferFlag(body.defer_summary, 'defer_summary'),
+      };
     } catch (e) {
       await unlinkQuietly(file.path); // 검증 실패 → 고아 파일 금지 (spec §5)
       throw e;
@@ -75,12 +85,22 @@ export class MeetingsService {
         [meetingId, body.title ?? null, originalName, audioKey, body.recorded_at ?? null],
       );
       const payload = buildProcessMeetingPayload({
-        meetingId, audioKey, processingVersion: 0, reprocess: false, processing,
+        meetingId, audioKey, processingVersion: 0, reprocess: false, processing, followups,
       });
       const job = await this.jobs.enqueue(c, { type: 'process_meeting', meetingId, payload });
       const updated = await this.meetings.setCurrentJob(c, meetingId, job.id);
       return updated;
     });
+  }
+
+  // multipart 필드는 전부 문자열이라 zod boolean을 쓸 수 없다. 생략은 false(=미루지
+  // 않음)로, 그 외 오타는 조용히 false로 흘리지 않고 BadRequest — 미룰 의도가 오타
+  // 하나로 사라지면 사용자는 오래 걸리는 렌즈/요약을 그대로 맞게 된다.
+  private parseDeferFlag(s: string | undefined, field: string): boolean {
+    if (s === undefined || s === '') return false;
+    if (s === 'true') return true;
+    if (s === 'false') return false;
+    throw new BadRequestException(`${field} must be "true" or "false"`);
   }
 
   private parseOverrideString(s: string | undefined): ProcessingOverride | undefined {
@@ -172,6 +192,9 @@ export class MeetingsService {
       const version = await this.meetings.bumpVersionForReprocess(c, id);
       const payload = buildProcessMeetingPayload({
         meetingId: id, audioKey: meeting.audio_key, processingVersion: version, reprocess: true, processing,
+        // 재처리는 업로드와 달리 미루기 옵션을 노출하지 않는다 — 이미 있는 결과를
+        // 새 processing_version으로 갈아끼우는 흐름이라 후속도 같이 따라가야 한다.
+        followups: { lens: true, summary: true },
       });
       const job = await this.jobs.enqueue(c, { type: 'process_meeting', meetingId: id, payload });
       await this.meetings.setCurrentJob(c, id, job.id);

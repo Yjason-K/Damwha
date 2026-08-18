@@ -139,7 +139,16 @@ export class LensesService {
       throw new NotFoundException('meeting not found');
     }
     const rows = await this.repo.listActiveForMeeting(this.db.pool, meetingId);
-    return { items: await this.hydrateMany(this.db.pool, rows) };
+    // extraction_status는 항목 0건의 이유를 가른다: null이면 이 버전에서 추출을
+    // 돌린 적이 없다는 뜻(업로드에서 미뤘거나 워커에 렌즈 모델이 없음)이라 UI가
+    // 실행 버튼을 줄 수 있고, 'done'이면 돌렸는데 뽑을 게 없었던 것이라 섹션이
+    // 그냥 사라진다.
+    const extractionStatus =
+      await this.extraction.findLatestRunStatusForCurrentVersion(this.db.pool, meetingId);
+    return {
+      items: await this.hydrateMany(this.db.pool, rows),
+      extraction_status: extractionStatus,
+    };
   }
 
   async create(body: {

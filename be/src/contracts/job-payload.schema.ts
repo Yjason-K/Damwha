@@ -83,6 +83,15 @@ const ProcessMeetingPayloadV4Schema = z.object({
   schema_version: z.literal(4), ...processMeetingCommon,
   models: ModelsSchemaV3, identify: IdentifySchemaV4,
 });
+// v5 adds the follow-up switches. `true` means the worker enqueues that job when
+// process_meeting commits — exactly what v1–v4 always did, so those convert to
+// both-true. Required on the wire (like v3's summary_model): whether a run
+// produced lenses/summary is part of what the job recorded, not a worker default.
+const FollowupsSchemaV5 = z.object({ lens: z.boolean(), summary: z.boolean() }).strict();
+const ProcessMeetingPayloadV5Schema = z.object({
+  schema_version: z.literal(5), ...processMeetingCommon,
+  models: ModelsSchemaV3, identify: IdentifySchemaV4, followups: FollowupsSchemaV5,
+});
 
 // zod discriminatedUnion은 child의 .default()를 discriminator 선택 전에 적용하지
 // 않으므로, version 누락 payload는 preprocess로 v1에 귀속시킨다 (spec §4).
@@ -96,6 +105,7 @@ export const ProcessMeetingPayloadSchema = z.preprocess(
     ProcessMeetingPayloadV2Schema,
     ProcessMeetingPayloadV3Schema,
     ProcessMeetingPayloadV4Schema,
+    ProcessMeetingPayloadV5Schema,
   ]),
 );
 
@@ -134,6 +144,8 @@ export type ProcessMeetingPayloadV1 = z.infer<typeof ProcessMeetingPayloadV1Sche
 export type ProcessMeetingPayloadV2 = z.infer<typeof ProcessMeetingPayloadV2Schema>;
 export type ProcessMeetingPayloadV3 = z.infer<typeof ProcessMeetingPayloadV3Schema>;
 export type ProcessMeetingPayloadV4 = z.infer<typeof ProcessMeetingPayloadV4Schema>;
+export type ProcessMeetingPayloadV5 = z.infer<typeof ProcessMeetingPayloadV5Schema>;
+export type Followups = z.infer<typeof FollowupsSchemaV5>;
 export type ProcessMeetingPayload = z.infer<typeof ProcessMeetingPayloadSchema>;
 export type EnrollSpeakerPayload = z.infer<typeof EnrollSpeakerPayloadSchema>;
 export type IndexMeetingPayload = z.infer<typeof IndexMeetingPayloadSchema>;
@@ -142,12 +154,12 @@ export type SummarizeMeetingPayload = z.infer<typeof SummarizeMeetingPayloadSche
 
 export function buildProcessMeetingPayload(args: {
   meetingId: string; audioKey: string; processingVersion: number; reprocess: boolean;
-  processing: ProcessingConfig;
-}): ProcessMeetingPayloadV4 {
+  processing: ProcessingConfig; followups: Followups;
+}): ProcessMeetingPayloadV5 {
   const env = loadEnv();
   const p = args.processing;
   return {
-    schema_version: 4,
+    schema_version: 5,
     meeting_id: args.meetingId,
     audio_key: args.audioKey,
     processing_version: args.processingVersion,
@@ -166,6 +178,7 @@ export function buildProcessMeetingPayload(args: {
       threshold: env.IDENTIFY_THRESHOLD,
       suggest_threshold: env.IDENTIFY_SUGGEST_THRESHOLD,
     },
+    followups: { lens: args.followups.lens, summary: args.followups.summary },
   };
 }
 

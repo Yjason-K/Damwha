@@ -69,6 +69,31 @@ def _payload_v3(meeting_id, audio_key, summary_model, pv=0, threshold=0.7):
     )
 
 
+def _payload_v5(meeting_id, audio_key, *, lens, summary, pv=0):
+    return parse_payload(
+        "process_meeting",
+        {
+            "schema_version": 5,
+            "meeting_id": str(meeting_id),
+            "audio_key": audio_key,
+            "processing_version": pv,
+            "reprocess": pv > 0,
+            "models": {
+                "whisper_model": "large-v3-turbo",
+                "language": "ko",
+                "devices": {"diarization": "cpu", "stt": "cpu"},
+                "preset": "standard",
+                "preset_revision": "2026-08-12.1",
+                "summary_model": "mlx-community/Qwen3.5-27B-8bit",
+                "diarization": {"model": "d", "min_speakers": None, "max_speakers": None},
+                "embedding": {"model": "speechbrain/spkrec-ecapa-voxceleb", "dimension": 192},
+            },
+            "identify": {"threshold": 0.7, "suggest_threshold": 0.5},
+            "followups": {"lens": lens, "summary": summary},
+        },
+    )
+
+
 def test_full_pipeline_with_identification(conn, tmp_path):
     # known speaker matches SPEAKER_00's centroid direction
     sid = seed_speaker(conn, enrollment_status="ready")
@@ -528,6 +553,50 @@ def test_v1_payload_falls_back_to_worker_env_summary_model(conn, tmp_path):
     assert out == "committed"
     row = conn.execute("SELECT model FROM meeting_summary WHERE meeting_id=%s", (mid,)).fetchone()
     assert row["model"] == "worker-env-model"
+
+
+@pytest.mark.parametrize(
+    ("lens", "summary"),
+    [(False, False), (False, True), (True, False)],
+)
+def test_v5_deferred_followups_are_not_queued(conn, tmp_path, lens, summary):
+    # 미룬 쪽은 job도 상태 행도 만들지 않는다 — 사용자가 나중에 API로 직접 건다.
+    mid = seed_meeting(
+        conn, status="processing", processing_version=0, audio_key="meetings/m/original.m4a"
+    )
+    jid = seed_job(conn, meeting_id=mid, payload={})
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    db.claim(conn, "w1")
+
+    out = run_process_meeting(
+        conn,
+        conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
+        _payload_v5(mid, "meetings/m/original.m4a", lens=lens, summary=summary),
+        _models(),
+        Storage(str(tmp_path)),
+        worker_id="w1",
+        normalize_fn=lambda s, d: None,
+        probe_fn=lambda p: ProbeResult(2000),
+        lens_llm_model="worker-env-model",
+        summary_llm_model="worker-env-model",
+    )
+    assert out == "committed"
+
+    lens_jobs = conn.execute(
+        "SELECT count(*) AS n FROM job WHERE type='extract_lenses' AND meeting_id=%s", (mid,)
+    ).fetchone()["n"]
+    lens_runs = conn.execute(
+        "SELECT count(*) AS n FROM lens_extraction_run WHERE meeting_id=%s", (mid,)
+    ).fetchone()["n"]
+    summary_jobs = conn.execute(
+        "SELECT count(*) AS n FROM job WHERE type='summarize_meeting' AND meeting_id=%s", (mid,)
+    ).fetchone()["n"]
+    summary_rows = conn.execute(
+        "SELECT count(*) AS n FROM meeting_summary WHERE meeting_id=%s", (mid,)
+    ).fetchone()["n"]
+
+    assert (lens_jobs, lens_runs) == ((1, 1) if lens else (0, 0))
+    assert (summary_jobs, summary_rows) == ((1, 1) if summary else (0, 0))
 
 
 def test_stt_progress_logged_and_written_between_stage_bounds(conn, tmp_path, caplog, monkeypatch):

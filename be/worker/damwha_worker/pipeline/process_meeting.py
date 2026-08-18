@@ -182,7 +182,15 @@ def run_process_meeting(
     with timed_stage("persist", ctx) as t:
         # v3 payload는 API가 해석한 값을 싣고 온다. v1/v2 유래는 None이라 워커
         # env로 폴백한다 (spec §4).
-        summary_model = payload.models.summary_model or summary_llm_model
+        # followups는 v5부터 — 꺼진 쪽은 모델을 None으로 내려 persist가 후속 job을
+        # 큐잉하지 않게 한다. 사용자는 나중에 API로 직접 실행한다. v1~v4 유래는
+        # 둘 다 True라 동작이 그대로다.
+        lens_model = lens_llm_model if payload.followups.lens else None
+        summary_model = (
+            (payload.models.summary_model or summary_llm_model)
+            if payload.followups.summary
+            else None
+        )
         outcome = db.persist_process_meeting(
             conn,
             job_id=job_id,
@@ -198,7 +206,7 @@ def run_process_meeting(
             default_speaker_prefix=default_speaker_prefix,
             index_search_model=search_embedding_model,
             index_search_dim=search_embedding_dim,
-            lens_llm_model=lens_llm_model,
+            lens_llm_model=lens_model,
             summary_llm_model=summary_model,
         )
         t["detail"] = (

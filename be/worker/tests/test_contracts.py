@@ -34,7 +34,7 @@ def test_missing_schema_version_defaults_to_1():
 
 
 def test_rejects_future_schema_version():
-    data = load("process_meeting.valid.json") | {"schema_version": 5}
+    data = load("process_meeting.valid.json") | {"schema_version": 6}
     with pytest.raises(UnsupportedPayloadVersion):
         parse_payload("process_meeting", data)
 
@@ -82,6 +82,41 @@ def test_parses_v4_fixture():
     assert p.identify.threshold == 0.8
     assert p.identify.suggest_threshold == 0.6
     assert p.models.summary_model == "mlx-community/Qwen3.5-4B-8bit"
+
+
+def test_parses_v5_fixture():
+    p = parse_payload("process_meeting", load("process_meeting.v5.valid.json"))
+    assert p.schema_version == 5
+    assert p.followups.lens is False
+    assert p.followups.summary is False
+    # v5는 v4가 실어오던 것을 그대로 유지한다 — 후속 스위치만 추가된 계약이다.
+    assert p.identify.suggest_threshold == 0.6
+    assert p.models.summary_model == "mlx-community/Qwen3.5-4B-8bit"
+
+
+@pytest.mark.parametrize(
+    "fixture",
+    [
+        "process_meeting.valid.json",
+        "process_meeting.v2.valid.json",
+        "process_meeting.v3.valid.json",
+        "process_meeting.v4.valid.json",
+    ],
+)
+def test_pre_v5_payloads_run_both_followups(fixture):
+    # 큐에 남아 있던 예전 job은 예전처럼 렌즈/요약을 이어서 큐잉해야 한다.
+    p = parse_payload("process_meeting", load(fixture))
+    assert p.followups.lens is True
+    assert p.followups.summary is True
+
+
+def test_v5_requires_followups():
+    from pydantic import ValidationError
+
+    data = load("process_meeting.v5.valid.json")
+    del data["followups"]
+    with pytest.raises(ValidationError):
+        parse_payload("process_meeting", data)
 
 
 @pytest.mark.parametrize(

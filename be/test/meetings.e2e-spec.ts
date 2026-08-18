@@ -129,12 +129,12 @@ describe('meetings', () => {
     expect(job.rows[0].payload.reprocess).toBe(true);
   });
 
-  it('POST /meetings — payload가 v4이고 전역 설정(프리셋)을 따른다', async () => {
+  it('POST /meetings — payload가 v5이고 전역 설정(프리셋)을 따른다', async () => {
     await request(srv()).put('/settings/processing').send({ preset: 'light', language: 'ko' });
     const res = await request(srv()).post('/meetings')
       .attach('audio', Buffer.from('a'), { filename: 'a.m4a', contentType: 'audio/mp4' });
     const job = await db.pool.query('SELECT payload FROM job WHERE id=$1', [res.body.current_job_id]);
-    expect(job.rows[0].payload.schema_version).toBe(4);
+    expect(job.rows[0].payload.schema_version).toBe(5);
     expect(job.rows[0].payload.models.whisper_model).toBe('small');
     expect(job.rows[0].payload.models.preset).toBe('light');
     expect(job.rows[0].payload.models.summary_model).toBe('mlx-community/Qwen3.5-4B-8bit');
@@ -143,6 +143,52 @@ describe('meetings', () => {
     expect(job.rows[0].payload.identify.threshold).toBeGreaterThan(
       job.rows[0].payload.identify.suggest_threshold,
     );
+  });
+
+  it('POST /meetings — followups 기본값은 둘 다 실행(=미루지 않음)', async () => {
+    const res = await request(srv()).post('/meetings')
+      .attach('audio', Buffer.from('a'), { filename: 'a.m4a', contentType: 'audio/mp4' });
+    const job = await db.pool.query('SELECT payload FROM job WHERE id=$1', [res.body.current_job_id]);
+    expect(job.rows[0].payload.followups).toEqual({ lens: true, summary: true });
+  });
+
+  it('POST /meetings — defer_lens/defer_summary가 followups를 끈다', async () => {
+    const res = await request(srv()).post('/meetings')
+      .field('defer_lens', 'true')
+      .field('defer_summary', 'true')
+      .attach('audio', Buffer.from('a'), { filename: 'a.m4a', contentType: 'audio/mp4' });
+    expect(res.status).toBe(201);
+    const job = await db.pool.query('SELECT payload FROM job WHERE id=$1', [res.body.current_job_id]);
+    expect(job.rows[0].payload.followups).toEqual({ lens: false, summary: false });
+  });
+
+  it('POST /meetings — 한쪽만 미루면 나머지는 그대로 실행된다', async () => {
+    const res = await request(srv()).post('/meetings')
+      .field('defer_summary', 'true')
+      .attach('audio', Buffer.from('a'), { filename: 'a.m4a', contentType: 'audio/mp4' });
+    const job = await db.pool.query('SELECT payload FROM job WHERE id=$1', [res.body.current_job_id]);
+    expect(job.rows[0].payload.followups).toEqual({ lens: true, summary: false });
+  });
+
+  it('POST /meetings — defer_lens가 boolean 문자열이 아니면 400 + 회의 미생성', async () => {
+    const res = await request(srv()).post('/meetings')
+      .field('defer_lens', 'yes')
+      .attach('audio', Buffer.from('a'), { filename: 'a.m4a', contentType: 'audio/mp4' });
+    expect(res.status).toBe(400);
+    const meetings = await db.pool.query('SELECT count(*)::int AS n FROM meeting');
+    expect(meetings.rows[0].n).toBe(0);
+  });
+
+  it('POST /meetings/:id/reprocess — 후속은 항상 실행된다 (미루기 옵션 없음)', async () => {
+    const created = await request(srv()).post('/meetings')
+      .field('defer_lens', 'true')
+      .field('defer_summary', 'true')
+      .attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+    const mid = created.body.id;
+    await db.pool.query(`UPDATE meeting SET status='done' WHERE id=$1`, [mid]);
+    const res = await request(srv()).post(`/meetings/${mid}/reprocess`).send({});
+    const job = await db.pool.query('SELECT payload FROM job WHERE id=$1', [res.body.job_id]);
+    expect(job.rows[0].payload.followups).toEqual({ lens: true, summary: true });
   });
 
   it('POST /meetings — processing 오버라이드(JSON 문자열)가 payload에 반영 + custom 전환', async () => {

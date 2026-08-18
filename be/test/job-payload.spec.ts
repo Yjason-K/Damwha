@@ -29,9 +29,11 @@ describe('job payload contract', () => {
       meetingId: 'mtg_1', audioKey: 'meetings/x/original.wav',
       processingVersion: 2, reprocess: true,
       processing: resolvePreset('standard', 'ko'),
+      followups: { lens: true, summary: true },
     });
-    expect(p.schema_version).toBe(4);
+    expect(p.schema_version).toBe(5);
     expect(p.identify).toEqual({ threshold: 0.8, suggest_threshold: 0.6 });
+    expect(p.followups).toEqual({ lens: true, summary: true });
     expect(p.models.whisper_model).toBe('large-v3-turbo');
     expect(p.models.devices).toEqual({ diarization: 'gpu', stt: 'gpu' });
     expect(p.models.preset).toBe('standard');
@@ -53,15 +55,29 @@ describe('job payload contract', () => {
     expect(p.embedding.dimension).toBe(192);
   });
 
-  it('stamps schema_version=4 on process_meeting payload', () => {
+  it('stamps schema_version=5 on process_meeting payload', () => {
     const p = buildProcessMeetingPayload({
       meetingId: 'mtg_1',
       audioKey: 'meetings/x/original.wav',
       processingVersion: 2,
       reprocess: true,
       processing: resolvePreset('standard', 'ko'),
+      followups: { lens: true, summary: true },
     });
-    expect(p.schema_version).toBe(4);
+    expect(p.schema_version).toBe(5);
+    expect(() => ProcessMeetingPayloadSchema.parse(p)).not.toThrow();
+  });
+
+  it('carries deferred follow-ups through to the payload', () => {
+    const p = buildProcessMeetingPayload({
+      meetingId: 'mtg_1',
+      audioKey: 'meetings/x/original.wav',
+      processingVersion: 0,
+      reprocess: false,
+      processing: resolvePreset('standard', 'ko'),
+      followups: { lens: false, summary: false },
+    });
+    expect(p.followups).toEqual({ lens: false, summary: false });
     expect(() => ProcessMeetingPayloadSchema.parse(p)).not.toThrow();
   });
 
@@ -177,6 +193,7 @@ describe('job payload contract', () => {
     const base = buildProcessMeetingPayload({
       meetingId: 'mtg_1', audioKey: 'meetings/mtg_1/o.wav', processingVersion: 0, reprocess: false,
       processing: resolvePreset('standard', 'ko'),
+      followups: { lens: true, summary: true },
     });
     for (const bad of ['ca8e8f66-6e2b-4c4f-8d0b-7d432a7a6aca', 'mtg_0', 'mtg_1٢']) { // 마지막은 유니코드 숫자
       expect(() => ProcessMeetingPayloadSchema.parse({ ...base, meeting_id: bad })).toThrow();

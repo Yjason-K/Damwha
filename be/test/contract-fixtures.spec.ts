@@ -82,6 +82,26 @@ describe('contract fixtures (shared with pydantic worker)', () => {
     const parsed = ProcessMeetingPayloadSchema.parse(v3);
     expect((parsed.identify as Record<string, unknown>).suggest_threshold).toBeUndefined();
   });
+  it('validates process_meeting.v5.valid.json', () => {
+    const p = ProcessMeetingPayloadSchema.parse(read('process_meeting.v5.valid.json'));
+    expect(p.schema_version).toBe(5);
+    if (p.schema_version === 5) {
+      expect(p.followups).toEqual({ lens: false, summary: false });
+    }
+  });
+  it('rejects v5 payload missing followups (워커 기본값 폴백 금지)', () => {
+    const v5 = read('process_meeting.v5.valid.json');
+    delete v5.followups;
+    expect(() => ProcessMeetingPayloadSchema.parse(v5)).toThrow();
+  });
+  it('rejects v4 payload carrying followups (v4는 그 필드를 모른다)', () => {
+    const v4 = read('process_meeting.v4.valid.json');
+    v4.followups = { lens: false, summary: false };
+    // v4 스키마는 non-strict라 필드가 떨어져 나간다 — 중요한 건 워커에 스위치로
+    // 도달하지 않는 것이고, 그쪽에서는 v4가 항상 둘 다 켠 것으로 변환된다.
+    const parsed = ProcessMeetingPayloadSchema.parse(v4);
+    expect((parsed as Record<string, unknown>).followups).toBeUndefined();
+  });
   it('validates summarize-meeting-v1.json', () => {
     expect(() => SummarizeMeetingPayloadSchema.parse(read('summarize-meeting-v1.json'))).not.toThrow();
   });
