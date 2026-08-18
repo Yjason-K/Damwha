@@ -39,7 +39,7 @@ def run_enroll_speaker(
 
     enter_stage(conn, job_id, worker_id, "extract_embedding", 30, shutdown_event)
     src = storage.resolve(payload.audio_key)
-    norm_key = f"speakers/{speaker_id}/normalized.wav"
+    norm_key = f"speakers/{speaker_id}/normalized.flac"
     norm_path = storage.resolve(norm_key)
     with timed_stage("extract_embedding", ctx) as t:
         if not storage.exists(norm_key):

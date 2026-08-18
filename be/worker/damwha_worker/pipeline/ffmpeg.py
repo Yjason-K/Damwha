@@ -44,7 +44,26 @@ def normalize(src_path: str, dst_path: str, runner: Runner = _run) -> None:
     )
     os.close(fd)
     try:
-        cmd = ["ffmpeg", "-y", "-i", src_path, "-ac", "1", "-ar", "16000", "-f", "wav", temp_path]
+        # FLAC 16 kHz mono: 무손실이라 PCM은 WAV와 동일하고 디스크는 약 45% 줄어든다.
+        # libsndfile 네이티브 지원이라 ecapa_embed의 soundfile.read()가 그대로 동작한다.
+        # -f 명시 필수 — temp_path가 .tmp 접미사라 확장자 추론이 안 된다.
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            src_path,
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-c:a",
+            "flac",
+            "-compression_level",
+            "5",
+            "-f",
+            "flac",
+            temp_path,
+        ]
         proc = runner(cmd)
         if proc.returncode != 0:
             raise WorkerError(

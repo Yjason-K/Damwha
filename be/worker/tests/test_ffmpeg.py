@@ -39,7 +39,7 @@ def test_probe_missing_duration_is_permanent():
         ffmpeg.probe("/x/a", runner=runner)
 
 
-def test_normalize_builds_16k_mono_wav_command(monkeypatch, tmp_path):
+def test_normalize_builds_16k_mono_flac_command(monkeypatch, tmp_path):
     captured = {}
 
     def runner(cmd):
@@ -48,10 +48,13 @@ def test_normalize_builds_16k_mono_wav_command(monkeypatch, tmp_path):
 
     monkeypatch.setattr(ffmpeg, "probe", lambda path: ffmpeg.ProbeResult(1))
 
-    ffmpeg.normalize("/in/a.m4a", str(tmp_path / "n.wav"), runner=runner)
+    ffmpeg.normalize("/in/a.m4a", str(tmp_path / "n.flac"), runner=runner)
     cmd = captured["cmd"]
     assert "-ar" in cmd and "16000" in cmd and "-ac" in cmd and "1" in cmd
-    assert cmd[-1] != str(tmp_path / "n.wav")
+    # -f 명시는 필수다 — 임시 파일이 .tmp 접미사라 확장자 추론이 안 된다
+    assert cmd[cmd.index("-f") + 1] == "flac"
+    assert cmd[cmd.index("-c:a") + 1] == "flac"
+    assert cmd[-1] != str(tmp_path / "n.flac")
 
 
 def test_normalize_probes_temp_file_then_atomically_replaces_destination(monkeypatch, tmp_path):
