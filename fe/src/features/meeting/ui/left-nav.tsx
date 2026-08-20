@@ -245,12 +245,6 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
         </ul>
       </div>
 
-      <div className="border-t border-[color:var(--border-subtle)] px-3.5 py-2.5">
-        <p className="text-2xs text-[color:var(--text-faint)]">
-          Damwha · 개인용 회의 기록
-        </p>
-      </div>
-
       <UploadDialog
         open={uploadOpen}
         onOpenChange={setUploadOpen}
