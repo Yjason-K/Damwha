@@ -29,12 +29,11 @@ class EcapaEmbedder:
         )
 
     def embed(self, wav_path: str, segments: list[DiarSegment]) -> list[list[float] | None]:
-        import soundfile as sf
         import torch
 
-        audio, sr = sf.read(wav_path, dtype="float32")
-        if audio.ndim > 1:  # safety: collapse to mono
-            audio = audio.mean(axis=1)
+        from .audio_io import load_mono
+
+        audio, sr = load_mono(wav_path)
 
         out: list[list[float] | None] = []
         for seg in segments:

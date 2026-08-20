@@ -24,7 +24,13 @@ class PyannoteDiarizer:
         self._pipeline = pipeline.to(torch.device(device))
 
     def diarize(self, wav_path: str) -> list[DiarSegment]:
-        output = self._pipeline(wav_path)
+        from .audio_io import load_mono_tensor
+
+        # pyannote의 경로 입력은 내부 Audio가 torchaudio.load() → torchcodec를 탄다
+        # (ffmpeg 9에서 dlopen 실패). in-memory 파형 dict은 그 디코더를 건너뛴다 —
+        # pyannote가 경고문에서 직접 안내하는 우회로다. 파형은 (channel, time).
+        wav, sr = load_mono_tensor(wav_path)
+        output = self._pipeline({"waveform": wav.unsqueeze(0), "sample_rate": sr})
         # pyannote 4.x returns a DiarizeOutput dataclass; .speaker_diarization is
         # the Annotation. Older versions return the Annotation directly.
         annotation = getattr(output, "speaker_diarization", output)
