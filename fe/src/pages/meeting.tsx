@@ -369,7 +369,11 @@ function MeetingView({
         <div className="flex min-h-0 flex-1">{renderCenter()}</div>
       </div>
 
-      {meeting && totalSeconds > 0 ? (
+      {/* 타임라인에 그릴 화자 레인이 없으면(업로드/처리 중, 전사 없는 실패)
+          플레이바를 숨긴다 — 점프할 대상이 없는 빈 눈금자만 남기 때문이다.
+          status가 아니라 tracks로 판정해야 재처리 실패로 status는 failed지만
+          이전 전사가 남아 있는 회의에서 재생이 사라지지 않는다. */}
+      {meeting && meeting.tracks.length > 0 && totalSeconds > 0 ? (
         <PlayerBar
           className="col-span-2"
           tracks={meeting.tracks}

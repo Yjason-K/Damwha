@@ -92,7 +92,9 @@ const fx = vi.hoisted(() => {
     id: "m3",
     title: "검색 인덱싱 설계",
     recorded_at: null,
-    duration_ms: null,
+    // 처리 중이라도 길이는 업로드 시점에 이미 알 수 있다 — 플레이바가
+    // 길이가 아니라 화자 레인 유무로 숨는지 검증하기 위해 채워 둔다.
+    duration_ms: 900_000,
     status: "processing",
     current_job_id: "job_1",
   });
@@ -613,7 +615,12 @@ const fx = vi.hoisted(() => {
     }
     if (/^\/meetings\/[^/]+\/lenses\/extract$/.test(url)) {
       return Promise.resolve({
-        data: { run_id: "ler_1", job_id: "job_1", status: "queued", processing_version: 0 },
+        data: {
+          run_id: "ler_1",
+          job_id: "job_1",
+          status: "queued",
+          processing_version: 0,
+        },
       });
     }
     return Promise.reject(new Error(`unhandled POST ${url}`));
@@ -986,6 +993,12 @@ test("처리 중인 회의는 목록에 처리 중 뱃지를 보여준다", asyn
   expect(screen.getByText("처리 중")).toBeInTheDocument();
 });
 
+test("전사가 아직 없는 처리 중 회의에서는 플레이바를 그리지 않는다", async () => {
+  renderShell("/meetings/m3");
+  expect(await screen.findByText(/회의를 처리하고 있어요/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "재생" })).toBeNull();
+});
+
 test("상세 조회에 실패하면 무한 스피너 대신 에러 상태와 재시도를 보여준다", async () => {
   renderShell();
   await screen.findByRole("heading", {
@@ -1136,7 +1149,10 @@ test("summary가 done인 회의는 요약 탭이 실제 데이터로 채워지�
 test("렌즈를 미뤄둔 회의는 지금 찾기 버튼으로 추출을 걸 수 있다", async () => {
   // m4가 아닌 회의 = extraction_status null (업로드에서 defer_lens로 미룬 모습).
   renderShell("/meetings/m1");
-  await screen.findByRole("heading", { level: 1, name: "기획회의 — UI 개선안" });
+  await screen.findByRole("heading", {
+    level: 1,
+    name: "기획회의 — UI 개선안",
+  });
 
   fireEvent.click(await screen.findByRole("button", { name: "지금 찾기" }));
   await waitFor(() =>
