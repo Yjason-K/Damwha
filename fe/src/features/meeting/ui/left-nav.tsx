@@ -2,6 +2,7 @@ import * as React from "react";
 import { Link, useMatch, useNavigate, useParams } from "react-router";
 
 import { Badge } from "@/shared/ui/badge";
+import { BrandMark } from "@/shared/ui/brand-mark";
 import { Kbd } from "@/shared/ui/kbd";
 import { SearchField } from "@/shared/ui/search-field";
 import { SidebarItem } from "@/shared/ui/sidebar-item";
@@ -125,24 +126,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
       className="flex w-[var(--rail-nav)] shrink-0 flex-col overflow-hidden border-r border-border bg-[var(--surface-panel)]"
     >
       <div className="flex shrink-0 items-center gap-2 px-4 pt-3.5 pb-2.5">
-        <svg
-          width="22"
-          height="22"
-          viewBox="0 0 24 24"
-          fill="none"
-          aria-hidden="true"
-          className="block"
-        >
-          <path
-            d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
-            stroke="var(--text-primary)"
-            strokeWidth="2"
-            strokeLinejoin="round"
-          />
-          <circle cx="8.5" cy="10" r="1.25" fill="var(--text-primary)" />
-          <circle cx="12" cy="10" r="1.25" fill="var(--text-primary)" />
-          <circle cx="15.5" cy="10" r="1.25" fill="var(--text-primary)" />
-        </svg>
+        <BrandMark size={24} className="block shrink-0" />
         <span className="text-h2 font-semibold tracking-[-0.03em] text-foreground">
           Damwha
         </span>
