@@ -13,6 +13,10 @@ MIN_WORDLESS_SEGMENT_MS = 1000
 # 겹침 없는 짧은 발언(진짜 턴 교대)은 대상이 아니다.
 BACKCHANNEL_MAX_RUN_MS = 2000
 
+# 임베딩 판정자(arbitrate)가 있으면 후보 폭을 이 길이까지 넓힌다 — 시간 휴리스틱과
+# 달리 오디오가 실제 누구 목소리인지 확인하므로, 더 긴 오귀속 run도 안전하게 다룬다.
+ARBITRATE_MAX_RUN_MS = 5000
+
 
 @dataclass
 class Utterance:
@@ -54,8 +58,15 @@ def _label_runs(assignment: list[tuple[Word, DiarSegment]]) -> list[tuple[str, l
 
 def _smooth_backchannels(
     assignment: list[tuple[Word, DiarSegment]],
+    arbitrate=None,
 ) -> list[tuple[Word, DiarSegment]]:
-    """겹침 백채널 세그먼트에 탈취된 짧은 word run을 주변 화자로 재귀속한다."""
+    """겹침 백채널 세그먼트에 탈취된 짧은 word run을 주변 화자로 재귀속한다.
+
+    arbitrate(start_ms, end_ms, own_label, neighbor_label) -> bool | None이 주어지면
+    임베딩 판정이 흡수/보존을 결정하고(후보 폭도 ARBITRATE_MAX_RUN_MS로 확대),
+    None(판정 불가)일 때만 기존 겹침 휴리스틱으로 폴백한다.
+    """
+    max_run_ms = ARBITRATE_MAX_RUN_MS if arbitrate is not None else BACKCHANNEL_MAX_RUN_MS
     changed = True
     while changed:
         changed = False
@@ -67,16 +78,25 @@ def _smooth_backchannels(
             if prev_label != next_label or prev_label == label:
                 continue
             run_words = [assignment[i][0] for i in idxs]
-            if run_words[-1].end_ms - run_words[0].start_ms >= BACKCHANNEL_MAX_RUN_MS:
+            run_start = run_words[0].start_ms
+            run_end = run_words[-1].end_ms
+            if run_end - run_start >= max_run_ms:
                 continue
             neighbor_prev = assignment[prev_idxs[-1]][1]
             neighbor_next = assignment[next_idxs[0]][1]
-            run_segs = {id(assignment[i][1]): assignment[i][1] for i in idxs}
-            if not any(
-                _overlaps(s.start_ms, s.end_ms, n.start_ms, n.end_ms)
-                for s in run_segs.values()
-                for n in (neighbor_prev, neighbor_next)
-            ):
+
+            verdict = None
+            if arbitrate is not None:
+                verdict = arbitrate(run_start, run_end, label, prev_label)
+            if verdict is None:
+                # 겹침 휴리스틱: 2초 미만 + 이웃 세그먼트와 시간 겹침일 때만 흡수
+                run_segs = {id(assignment[i][1]): assignment[i][1] for i in idxs}
+                verdict = run_end - run_start < BACKCHANNEL_MAX_RUN_MS and any(
+                    _overlaps(s.start_ms, s.end_ms, n.start_ms, n.end_ms)
+                    for s in run_segs.values()
+                    for n in (neighbor_prev, neighbor_next)
+                )
+            if not verdict:
                 continue
             for i in idxs:
                 assignment[i] = (assignment[i][0], neighbor_prev)
@@ -89,6 +109,7 @@ def build_utterances(
     words: list[Word],
     segments: list[DiarSegment],
     failed_spans: list[SpeechSpan] | None = None,
+    arbitrate=None,
 ) -> list[Utterance]:
     failed_spans = failed_spans or []
     if not segments:
@@ -98,7 +119,7 @@ def build_utterances(
     assignment = [(w, _segment_for(w, segments)) for w in ordered]
     seg_index = {id(s): i for i, s in enumerate(segments)}
     had_words = {seg_index[id(seg)] for _, seg in assignment}
-    assignment = _smooth_backchannels(assignment)
+    assignment = _smooth_backchannels(assignment, arbitrate)
 
     by_seg: dict[int, list[Word]] = {i: [] for i in range(len(segments))}
     for w, seg in assignment:

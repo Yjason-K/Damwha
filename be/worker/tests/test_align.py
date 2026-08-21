@@ -141,3 +141,115 @@ def test_long_overlapping_run_not_reabsorbed():
     utts = build_utterances(words, segments)
     ok = [u for u in utts if u.status == "ok"]
     assert [u.diar_label for u in ok] == ["A", "B", "A"]
+
+
+def _sandwich_fixture():
+    # A(0-4000), B(4000-4800), A(4800-9000): 겹침 없는 0.4초 B run ("말고" 패턴)
+    segments = [
+        DiarSegment("A", 0, 4000),
+        DiarSegment("B", 4000, 4800),
+        DiarSegment("A", 4800, 9000),
+    ]
+    words = [
+        Word("집에", 1000, 1500, 0.9),
+        Word("가지", 2000, 2500, 0.9),
+        Word("말고", 4200, 4600, 0.9),
+        Word("일하자", 5000, 5500, 0.9),
+    ]
+    return segments, words
+
+
+def test_arbitrate_true_absorbs_nonoverlapping_run():
+    # 임베딩 판정자가 True면 겹침 없는 micro-run도 흡수된다
+    segments, words = _sandwich_fixture()
+    calls = []
+
+    def arbitrate(start_ms, end_ms, own, neighbor):
+        calls.append((start_ms, end_ms, own, neighbor))
+        return True
+
+    utts = build_utterances(words, segments, arbitrate=arbitrate)
+    ok = [u for u in utts if u.status == "ok"]
+    assert [u.diar_label for u in ok] == ["A", "A"]
+    assert ok[0].text == "집에 가지 말고"
+    assert calls == [(4200, 4600, "B", "A")]
+
+
+def test_arbitrate_false_preserves_overlapping_short_run():
+    # 판정자가 False면 겹침+짧음이라도 보존 (진짜 끼어든 질문 보호)
+    segments = [
+        DiarSegment("A", 0, 4000),
+        DiarSegment("B", 3900, 5100),
+        DiarSegment("A", 5000, 9000),
+    ]
+    words = [
+        Word("나라가", 1000, 1500, 0.9),
+        Word("진짜", 4300, 4700, 0.9),
+        Word("질문", 4700, 5000, 0.9),
+        Word("거하고", 5500, 6000, 0.9),
+    ]
+    utts = build_utterances(words, segments, arbitrate=lambda *a: False)
+    ok = [u for u in utts if u.status == "ok"]
+    assert [u.diar_label for u in ok] == ["A", "B", "A"]
+
+
+def test_arbitrate_widens_run_cap_to_5s():
+    # 판정자가 있으면 2초 이상~5초 미만 run도 후보가 된다 (09:45 케이스)
+    segments = [
+        DiarSegment("A", 0, 4000),
+        DiarSegment("B", 4000, 8500),
+        DiarSegment("A", 8500, 12000),
+    ]
+    words = [
+        Word("앞", 1000, 1500, 0.9),
+        Word("잘", 4200, 4700, 0.9),
+        Word("사는", 5500, 6000, 0.9),
+        Word("거하고", 7500, 8200, 0.9),  # B run 4200-8200 = 4000ms
+        Word("뒤", 9000, 9500, 0.9),
+    ]
+    utts = build_utterances(words, segments, arbitrate=lambda *a: True)
+    ok = [u for u in utts if u.status == "ok"]
+    assert [u.diar_label for u in ok] == ["A", "A"]
+
+
+def test_arbitrate_run_over_5s_not_candidate():
+    segments = [
+        DiarSegment("A", 0, 4000),
+        DiarSegment("B", 4000, 10500),
+        DiarSegment("A", 10500, 14000),
+    ]
+    words = [
+        Word("앞", 1000, 1500, 0.9),
+        Word("긴", 4200, 4700, 0.9),
+        Word("발언", 9500, 10200, 0.9),  # B run 4200-10200 = 6000ms
+        Word("뒤", 11000, 11500, 0.9),
+    ]
+    calls = []
+    utts = build_utterances(
+        words, segments, arbitrate=lambda *a: calls.append(a) or True
+    )
+    ok = [u for u in utts if u.status == "ok"]
+    assert [u.diar_label for u in ok] == ["A", "B", "A"]
+    assert calls == []
+
+
+def test_arbitrate_none_falls_back_to_overlap_heuristic():
+    # 판정 불가(None)면 기존 휴리스틱: 겹침+2초 미만만 흡수
+    overlap_segments = [
+        DiarSegment("A", 0, 4000),
+        DiarSegment("B", 3900, 5100),
+        DiarSegment("A", 5000, 9000),
+    ]
+    overlap_words = [
+        Word("앞", 1000, 1500, 0.9),
+        Word("탈취", 4300, 4700, 0.9),
+        Word("뒤", 5500, 6000, 0.9),
+    ]
+    utts = build_utterances(overlap_words, overlap_segments, arbitrate=lambda *a: None)
+    ok = [u for u in utts if u.status == "ok"]
+    assert [u.diar_label for u in ok] == ["A", "A"]
+
+    nonoverlap_segments, nonoverlap_words = _sandwich_fixture()
+    utts = build_utterances(nonoverlap_words, nonoverlap_segments, arbitrate=lambda *a: None)
+    ok = [u for u in utts if u.status == "ok"]
+    assert [u.diar_label for u in ok] == ["A", "B", "A"]

@@ -680,3 +680,57 @@ def test_stt_drives_a_console_progress_bar(conn, tmp_path, monkeypatch):
     )
     assert opened == ["stt"]
     assert [f for f, _ in updates] == [0.5, 1.0]
+
+
+def test_backchannel_word_run_reabsorbed_via_embedding(conn, tmp_path):
+    # 겹침 없는 0.4초 B run("말고")이 앞뒤 A 사이에 끼어 있고, 그 구간의 임베딩이
+    # A centroid에 가까우면 흡수된다 — 시간 휴리스틱(겹침 필요)만으로는 못 잡는 케이스
+    mid = seed_meeting(
+        conn, status="processing", processing_version=0, audio_key="meetings/m/original.m4a"
+    )
+    jid = seed_job(conn, meeting_id=mid, payload={})
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    db.claim(conn, "w1")
+
+    v_a = [1.0] + [0.0] * 191
+    v_b = [0.0, 1.0] + [0.0] * 190
+    models = Models(
+        vad=FakeVAD([SpeechSpan(0, 9000)]),
+        diarizer=FakeDiarizer(
+            [
+                DiarSegment("SPEAKER_00", 0, 4000),
+                DiarSegment("SPEAKER_01", 4000, 4800),
+                DiarSegment("SPEAKER_00", 4800, 9000),
+            ]
+        ),
+        # FakeEmbedder는 호출마다 같은 리스트를 돌려준다 — centroid 계산은 세그먼트
+        # 순서대로 [A, B, A]를 쓰고, arbiter의 단일 스팬 호출은 [0](=A 방향)을 받는다
+        embedder=FakeEmbedder([v_a, v_b, v_a]),
+        transcriber=FakeTranscriber(
+            [
+                Word("집에", 1000, 1500, 0.9),
+                Word("가지", 2000, 2500, 0.9),
+                Word("말고", 4200, 4600, 0.9),
+                Word("일하자", 5000, 5500, 0.9),
+            ]
+        ),
+    )
+    out = run_process_meeting(
+        conn,
+        conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
+        _payload(mid, "meetings/m/original.m4a"),
+        models,
+        Storage(str(tmp_path)),
+        worker_id="w1",
+        normalize_fn=lambda s, d: None,
+        probe_fn=lambda p: ProbeResult(9000),
+    )
+    assert out == "committed"
+    utts = conn.execute(
+        "SELECT diar_label, text, status FROM utterance "
+        "WHERE meeting_id=%s AND status='ok' ORDER BY order_index",
+        (mid,),
+    ).fetchall()
+    assert [u["diar_label"] for u in utts] == ["SPEAKER_00", "SPEAKER_00"]
+    assert utts[0]["text"] == "집에 가지 말고"
+    assert utts[1]["text"] == "일하자"

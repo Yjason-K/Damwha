@@ -14,6 +14,7 @@ from . import ffmpeg
 from .align import build_utterances
 from .identify import centroids_by_label, identify_clusters
 from .progress import SttProgressReporter
+from .speaker_arbiter import make_embedding_arbiter
 from .stage import enter_stage
 from .stt_spans import prepare_stt_spans
 from .timing import timed_stage
@@ -145,7 +146,9 @@ def run_process_meeting(
     # 7) align
     enter_stage(conn, job_id, worker_id, "align", 90, shutdown_event)
     with timed_stage("align", ctx) as t:
-        utts = build_utterances(words, segments, failed_spans=speech_spans)
+        # 임베딩 판정자: 백채널 스무딩의 흡수/보존을 run 구간의 실제 목소리로 판정
+        arbiter = make_embedding_arbiter(norm_path, models.embedder, centroids)
+        utts = build_utterances(words, segments, failed_spans=speech_spans, arbitrate=arbiter)
         t["detail"] = f"utterances={len(utts)}"
 
     utterance_rows = [

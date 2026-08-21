@@ -27,13 +27,21 @@ class EcapaEmbedder:
         self._encoder = EncoderClassifier.from_hparams(
             source=model, run_opts={"device": run_device}
         )
+        # 마지막으로 로드한 파형 캐시. align의 임베딩 판정자가 짧은 스팬마다 embed를
+        # 부르는데, 매번 전체 파일을 디코딩하지 않기 위함 — 한 job은 한 파일만 다루고
+        # 자식 프로세스는 job 종료와 함께 죽으므로 1개 캐시로 충분하다.
+        self._audio_cache: tuple[str, object, int] | None = None
 
     def embed(self, wav_path: str, segments: list[DiarSegment]) -> list[list[float] | None]:
         import torch
 
         from .audio_io import load_mono
 
-        audio, sr = load_mono(wav_path)
+        if self._audio_cache is not None and self._audio_cache[0] == wav_path:
+            _, audio, sr = self._audio_cache
+        else:
+            audio, sr = load_mono(wav_path)
+            self._audio_cache = (wav_path, audio, sr)
 
         out: list[list[float] | None] = []
         for seg in segments:
