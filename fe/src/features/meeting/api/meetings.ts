@@ -73,7 +73,20 @@ export function useMeetingStatus(
       return data;
     },
     enabled: enabled && !!id,
-    refetchInterval: 2000,
+    // 처리/요약/색인 중 하나라도 진행 중일 때만 폴링 — done 회의에서도 색인
+    // 실패를 한 번은 조회해야 하므로 enabled는 열어 두고 여기서 멈춘다.
+    refetchInterval: (query) => {
+      const d = query.state.data;
+      if (!d) return 2000;
+      const active =
+        d.status === "uploaded" ||
+        d.status === "processing" ||
+        d.summary_status === "queued" ||
+        d.summary_status === "running" ||
+        d.search_index?.status === "queued" ||
+        d.search_index?.status === "running";
+      return active ? 2000 : false;
+    },
   });
 }
 
@@ -201,6 +214,24 @@ export function useReprocessMeeting() {
       queryClient.invalidateQueries({
         queryKey: ["meeting-lenses", vars.id],
       });
+    },
+  });
+}
+
+/** 검색 재색인 (POST /meetings/:id/reindex). 202, 새 index_meeting job enqueue. */
+export function useReindexMeeting() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { data } = await apiClient.post<{
+        meeting_id: string;
+        processing_version: number;
+        job_id: string;
+      }>(`/meetings/${id}/reindex`);
+      return data;
+    },
+    onSuccess: (_data, id) => {
+      queryClient.invalidateQueries({ queryKey: ["meeting-status", id] });
     },
   });
 }

@@ -116,12 +116,20 @@ export type WireSpeaker = {
 };
 
 /** GET /meetings/:id/status 응답. */
+/** GET /meetings/:id/status의 search_index — 해당 회의 최신 index_meeting job 요약. */
+export type SearchIndexStatus = {
+  status: "queued" | "running" | "done" | "failed";
+  error: JsonError | null;
+  updated_at: string;
+};
+
 export type MeetingStatusResponse = {
   status: MeetingStatus;
   stage: string | null;
   progress: number | null;
   error: JsonError | null;
   summary_status: SummaryStatus | null;
+  search_index: SearchIndexStatus | null;
 };
 
 /** POST /meetings/:id/clusters/:clusterId/resolve 요청 — 정확히 하나만. */

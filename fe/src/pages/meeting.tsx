@@ -14,9 +14,13 @@ import {
   useGenerateSummary,
   useMeeting,
   useMeetingStatus,
+  useReindexMeeting,
   useSyncSummaryStatus,
 } from "@/features/meeting/api/meetings";
-import type { MeetingStatusResponse } from "@/features/meeting/api/types";
+import type {
+  MeetingStatusResponse,
+  SearchIndexStatus,
+} from "@/features/meeting/api/types";
 import type { Meeting } from "@/features/meeting/model/types";
 import { CenterState, Spinner } from "@/features/meeting/ui/center-state";
 import { Icon } from "@/features/meeting/ui/icons";
@@ -93,6 +97,53 @@ function ProcessingBanner({
         {stageLabel}
         {pct != null ? ` · ${pct}%` : ""}
       </span>
+    </div>
+  );
+}
+
+/**
+ * 색인 실패 배너 — 회의 처리(done)는 끝났지만 검색 색인 job이 실패한 상태.
+ * 회의 열람은 문제없고 검색에서만 빠지므로 ProcessingBanner와 분리해 그린다.
+ * 원본 에러는 워커 로그 덤프라 길다 — 본문에는 안내 문구만 쓰고 message는
+ * title(hover)로만 노출한다.
+ */
+function IndexFailedBanner({
+  meetingId,
+  searchIndex,
+}: {
+  meetingId: string;
+  searchIndex: SearchIndexStatus;
+}) {
+  const reindex = useReindexMeeting();
+  return (
+    <div
+      role="alert"
+      className="flex items-center gap-2.5 border-b border-[color:var(--red-6)] bg-[var(--red-bg)] px-7 py-2.5 text-sm"
+    >
+      <Icon
+        name="search"
+        size={15}
+        className="shrink-0 text-[color:var(--red-text)]"
+      />
+      <span className="font-semibold text-[color:var(--red-text)]">
+        검색 색인에 실패했어요
+      </span>
+      <span
+        className="min-w-0 truncate text-[color:var(--text-secondary)]"
+        title={searchIndex.error?.message}
+      >
+        이 회의가 검색 결과에 나오지 않을 수 있어요.
+        {searchIndex.error?.code ? ` (${searchIndex.error.code})` : ""}
+      </span>
+      <Button
+        variant="secondary"
+        size="sm"
+        className="ml-auto shrink-0"
+        disabled={reindex.isPending}
+        onClick={() => reindex.mutate(meetingId)}
+      >
+        다시 색인
+      </Button>
     </div>
   );
 }
@@ -178,11 +229,9 @@ function MeetingView({
     meeting?.summaryStatus === "running" ||
     generateSummary.isPending;
 
-  const statusEnabled =
-    !!meeting &&
-    (meeting.status === "uploaded" ||
-      meeting.status === "processing" ||
-      summaryPending);
+  // done 회의도 색인 실패를 봐야 하므로 meeting이 있으면 조회한다 —
+  // 폴링 지속 여부는 useMeetingStatus의 refetchInterval이 상태를 보고 결정.
+  const statusEnabled = !!meeting || summaryPending;
   const { data: procStatus } = useMeetingStatus(meetingId, statusEnabled);
 
   useSyncSummaryStatus(
@@ -365,6 +414,14 @@ function MeetingView({
       <div className="col-start-2 flex min-w-0 flex-col">
         {meeting && meeting.status !== "done" ? (
           <ProcessingBanner meeting={meeting} status={procStatus} />
+        ) : null}
+        {meeting &&
+        meeting.status === "done" &&
+        procStatus?.search_index?.status === "failed" ? (
+          <IndexFailedBanner
+            meetingId={meeting.id}
+            searchIndex={procStatus.search_index}
+          />
         ) : null}
         <div className="flex min-h-0 flex-1">{renderCenter()}</div>
       </div>

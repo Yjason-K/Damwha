@@ -342,6 +342,13 @@ const fx = vi.hoisted(() => {
     progress: 0.5,
     error: null,
     summary_status: null,
+    search_index: null,
+  };
+
+  // 색인(search_index) 상태는 테스트별로 덮어쓴다 — reset()이 원복.
+  let searchIndex: MeetingStatusResponse["search_index"] = null;
+  const setSearchIndex = (v: MeetingStatusResponse["search_index"]) => {
+    searchIndex = v;
   };
 
   const speakers: WireSpeaker[] = [
@@ -559,7 +566,8 @@ const fx = vi.hoisted(() => {
       const items = qs.get("kind") === "action" ? lensActionItems : [];
       return Promise.resolve({ data: { items, next_cursor: null } });
     }
-    if (url.endsWith("/status")) return Promise.resolve({ data: status });
+    if (url.endsWith("/status"))
+      return Promise.resolve({ data: { ...status, search_index: searchIndex } });
     const m = url.match(/^\/meetings\/([^/]+)$/);
     if (m) {
       if (m[1] === "m_err" || deletedIds.has(m[1]))
@@ -587,6 +595,7 @@ const fx = vi.hoisted(() => {
 
   const reset = () => {
     deletedIds.clear();
+    searchIndex = null;
     releaseListFetches();
   };
 
@@ -613,6 +622,11 @@ const fx = vi.hoisted(() => {
     if (/^\/lenses\/[^/]+\/(complete|reopen)$/.test(url)) {
       return Promise.resolve({ data: {} });
     }
+    if (/^\/meetings\/[^/]+\/reindex$/.test(url)) {
+      return Promise.resolve({
+        data: { meeting_id: "m1", processing_version: 1, job_id: "job_9" },
+      });
+    }
     if (/^\/meetings\/[^/]+\/lenses\/extract$/.test(url)) {
       return Promise.resolve({
         data: {
@@ -632,6 +646,7 @@ const fx = vi.hoisted(() => {
     deleteResponse,
     detailOf,
     reset,
+    setSearchIndex,
     blockListFetches,
     releaseListFetches,
   };
@@ -991,6 +1006,30 @@ test("처리 중인 회의는 목록에 처리 중 뱃지를 보여준다", asyn
     name: "기획회의 — UI 개선안",
   });
   expect(screen.getByText("처리 중")).toBeInTheDocument();
+});
+
+test("색인 실패한 회의는 색인 실패 배너와 다시 색인 버튼을 보여준다", async () => {
+  fx.setSearchIndex({
+    status: "failed",
+    error: { code: "uncategorized", message: "boom" },
+    updated_at: "2026-08-21T06:16:35.000Z",
+  });
+  renderShell();
+  expect(await screen.findByText(/검색 색인에 실패했어요/)).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "다시 색인" }));
+  await waitFor(() =>
+    expect(apiClient.post).toHaveBeenCalledWith("/meetings/m1/reindex"),
+  );
+});
+
+test("색인이 정상이면 done 회의에 색인 배너를 그리지 않는다", async () => {
+  renderShell();
+  await screen.findByRole("heading", {
+    level: 1,
+    name: "기획회의 — UI 개선안",
+  });
+  expect(screen.queryByText(/검색 색인에 실패했어요/)).toBeNull();
 });
 
 test("전사가 아직 없는 처리 중 회의에서는 플레이바를 그리지 않는다", async () => {
