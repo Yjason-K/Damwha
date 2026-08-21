@@ -139,6 +139,39 @@ describe('요약 API', () => {
     expect(row.job_id).toBe(jobs.rows[0].id);
   });
 
+  it('취소는 진행 중 요약 잡과 요약 행을 failed(cancelled)로 바꾼다', async () => {
+    const meetingId = await seedMeeting({ status: 'done', processingVersion: 0 });
+    const gen = await request(app.getHttpServer())
+      .post(`/meetings/${meetingId}/summary/generate`).expect(202);
+
+    const res = await request(app.getHttpServer())
+      .post(`/meetings/${meetingId}/summary/cancel`).expect(200);
+    expect(res.body).toEqual({ job_id: gen.body.job_id, status: 'failed' });
+
+    const job = (await db.pool.query(`SELECT status, error FROM job WHERE id=$1`, [gen.body.job_id])).rows[0];
+    expect(job.status).toBe('failed');
+    expect(job.error).toMatchObject({ code: 'cancelled', message: 'cancelled by operator' });
+
+    const row = (await db.pool.query(
+      `SELECT status, error FROM meeting_summary WHERE meeting_id=$1`, [meetingId],
+    )).rows[0];
+    expect(row.status).toBe('failed');
+    expect(row.error).toMatchObject({ code: 'cancelled' });
+
+    // 취소 뒤 재생성은 새 잡을 큐잉한다
+    const again = await request(app.getHttpServer())
+      .post(`/meetings/${meetingId}/summary/generate`).expect(202);
+    expect(again.body.status).toBe('queued');
+    expect(again.body.job_id).not.toBe(gen.body.job_id);
+  });
+
+  it('취소할 활성 요약이 없으면 409, 회의가 없으면 404', async () => {
+    const meetingId = await seedMeeting({ status: 'done', processingVersion: 0 });
+    await request(app.getHttpServer()).post(`/meetings/${meetingId}/summary/cancel`).expect(409);
+    await request(app.getHttpServer())
+      .post(`/meetings/mtg_404404/summary/cancel`).expect(404);
+  });
+
   it('이미 진행 중이면 잡을 중복 큐잉하지 않는다', async () => {
     const meetingId = await seedMeeting({ status: 'done', processingVersion: 0 });
     await request(app.getHttpServer()).post(`/meetings/${meetingId}/summary/generate`).expect(202);

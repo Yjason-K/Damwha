@@ -173,6 +173,10 @@ export class MeetingsService {
     return this.lensExtraction.request(id);
   }
 
+  async cancelLensExtraction(id: string) {
+    return this.lensExtraction.cancel(id);
+  }
+
   async reprocess(id: string, body?: { processing?: unknown }) {
     const meeting = await this.meetings.findById(this.db.pool, id);
     if (!meeting) throw new NotFoundException('meeting not found');

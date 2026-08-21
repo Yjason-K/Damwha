@@ -57,6 +57,39 @@ describe('manual lens extraction', () => {
     });
   });
 
+  it('cancel fails the active run and its job with a cancelled error', async () => {
+    const meetingId = await createMeeting();
+    const first = await request(app.getHttpServer())
+      .post(`/meetings/${meetingId}/lenses/extract`).expect(202);
+
+    const res = await request(app.getHttpServer())
+      .post(`/meetings/${meetingId}/lenses/cancel`).expect(200);
+    expect(res.body).toEqual({ job_id: first.body.job_id, status: 'failed' });
+
+    const { rows: [job] } = await db.pool.query('SELECT status, error FROM job WHERE id=$1', [first.body.job_id]);
+    expect(job.status).toBe('failed');
+    expect(job.error).toMatchObject({ code: 'cancelled', message: 'cancelled by operator' });
+
+    const { rows: [run] } = await db.pool.query(
+      'SELECT status, error, finished_at FROM lens_extraction_run WHERE id=$1', [first.body.run_id],
+    );
+    expect(run.status).toBe('failed');
+    expect(run.error).toMatchObject({ code: 'cancelled' });
+    expect(run.finished_at).not.toBeNull();
+    expect(await activeRunCount(meetingId, 0)).toBe(0);
+
+    // a new extract request after cancel starts a fresh run
+    const again = await request(app.getHttpServer())
+      .post(`/meetings/${meetingId}/lenses/extract`).expect(202);
+    expect(again.body.run_id).not.toBe(first.body.run_id);
+  });
+
+  it('cancel returns 409 without an active run and 404 for an unknown meeting', async () => {
+    const meetingId = await createMeeting();
+    await request(app.getHttpServer()).post(`/meetings/${meetingId}/lenses/cancel`).expect(409);
+    await request(app.getHttpServer()).post('/meetings/mtg_404404/lenses/cancel').expect(404);
+  });
+
   it('rejects a non-done meeting', async () => {
     const meetingId = await createMeeting('processing');
     await request(app.getHttpServer()).post(`/meetings/${meetingId}/lenses/extract`).expect(409);

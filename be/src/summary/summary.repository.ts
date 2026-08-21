@@ -38,6 +38,16 @@ export class SummaryRepository {
     return rows[0] ?? null;
   }
 
+  /** 취소 — 진행 중(queued/running) 요약 행만 failed로. 끝난 행은 건드리지 않는다. */
+  async markCancelled(exec: Queryable, meetingId: string, error: object): Promise<boolean> {
+    const { rowCount } = await exec.query(
+      `UPDATE meeting_summary SET status='failed', error=$2::jsonb, updated_at=now()
+        WHERE meeting_id = $1 AND status IN ('queued','running')`,
+      [meetingId, JSON.stringify(error)],
+    );
+    return (rowCount ?? 0) > 0;
+  }
+
   /** 재생성 — 이전 결과를 지우고 queued로 되돌린다(읽기 전용이라 머지가 없다). */
   async upsertQueued(
     exec: Queryable,

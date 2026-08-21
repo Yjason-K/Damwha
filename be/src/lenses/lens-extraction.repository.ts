@@ -74,6 +74,16 @@ export class LensExtractionRepository {
     return rows[0] ?? null;
   }
 
+  /** 취소 — 진행 중(queued/running) run만 failed로 닫는다. */
+  async markRunCancelled(exec: Queryable, runId: string, error: object): Promise<boolean> {
+    const { rowCount } = await exec.query(
+      `UPDATE lens_extraction_run SET status='failed', error=$2::jsonb, finished_at=now()
+       WHERE id=$1 AND status IN ('queued','running')`,
+      [runId, JSON.stringify(error)],
+    );
+    return (rowCount ?? 0) > 0;
+  }
+
   async createQueuedRun(
     exec: Queryable, args: { meetingId: string; processingVersion: number; model: string },
   ): Promise<LensExtractionRunRow> {

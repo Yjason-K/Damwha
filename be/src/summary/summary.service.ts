@@ -82,4 +82,23 @@ export class SummaryService {
       return { status: 'queued', job_id: job.id, processing_version: meeting.processing_version };
     });
   }
+
+  /**
+   * 운영자 취소 (POST /meetings/:id/summary/cancel). 화면에는 노출하지 않는다 —
+   * 메모리 부족 등으로 LLM 요약이 계속 실패할 때 직접 호출해 끊는 용도.
+   * 현재 processing_version의 진행 중 요약이 없으면 409.
+   */
+  async cancel(meetingId: string): Promise<{ job_id: string; status: 'failed' }> {
+    return this.db.withTransaction(async (exec) => {
+      const meeting = await this.summaries.lockMeeting(exec, meetingId);
+      if (!meeting) throw new NotFoundException('meeting not found');
+      const active = await this.summaries.findActive(exec, meeting.id, meeting.processing_version);
+      if (!active?.job_id) throw new ConflictException('no summary in progress to cancel');
+
+      const error = JobsRepository.cancelledError('summarize_meeting');
+      await this.jobs.cancel(exec, active.job_id, error);
+      await this.summaries.markCancelled(exec, meeting.id, error);
+      return { job_id: active.job_id, status: 'failed' };
+    });
+  }
 }

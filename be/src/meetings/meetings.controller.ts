@@ -78,6 +78,26 @@ export class MeetingsController {
   @HttpCode(202)
   extract(@Param('id') id: string) { return this.service.extractLenses(id); }
 
+  @Post(':id/lenses/cancel')
+  @ApiOperation({
+    summary: '렌즈 추출 취소 (운영용)',
+    description:
+      '현재 processing_version의 진행 중(queued/running) 렌즈 추출 잡과 run을 failed(cancelled)로 닫는다. ' +
+      '워커는 heartbeat에서 소유권 상실을 감지해 자신이 띄운 LLM 서버를 내린다. 진행 중인 것이 없으면 409.',
+  })
+  @HttpCode(200)
+  cancelLenses(@Param('id') id: string) { return this.service.cancelLensExtraction(id); }
+
+  @Post(':id/summary/cancel')
+  @ApiOperation({
+    summary: '대화 요약 취소 (운영용)',
+    description:
+      '현재 processing_version의 진행 중(queued/running) 요약 잡과 요약 행을 failed(cancelled)로 닫는다. ' +
+      '워커는 heartbeat에서 소유권 상실을 감지해 자신이 띄운 LLM 서버를 내린다. 진행 중인 것이 없으면 409.',
+  })
+  @HttpCode(200)
+  cancelSummary(@Param('id') id: string) { return this.summary.cancel(id); }
+
   @Post(':id/summary/generate')
   @ApiOperation({ summary: '대화 요약 생성/재생성' })
   @ApiBody({
