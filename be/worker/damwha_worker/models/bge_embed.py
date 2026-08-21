@@ -3,6 +3,16 @@
 
 class BgeM3TextEmbedder:
     def __init__(self, model_name: str = "BAAI/bge-m3") -> None:
+        import sys
+
+        # sentence-transformers 5.x는 import 시 torchcodec를 당긴다
+        # (base/modality_types.py). torchcodec dylib는 FFmpeg 4~8에만 링크돼
+        # Homebrew ffmpeg 9에서 RuntimeError로 죽는데, st의 except는
+        # (ImportError, OSError)만 잡는다. sys.modules에 None을 심으면
+        # ImportError로 바뀌어 st가 정상 흡수한다(AudioDecoder=None).
+        # 텍스트 임베딩은 torchcodec 불필요 — audio_io.py 우회와 같은 뿌리.
+        sys.modules.setdefault("torchcodec", None)
+
         from sentence_transformers import SentenceTransformer
 
         # 텍스트 임베더는 MPS를 쓰지 않는다 — 파이프라인 GPU 모델과의 메모리 경쟁
