@@ -1,10 +1,11 @@
 import json
+from collections.abc import Callable
 from typing import Any
 
 import httpx
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
-from .contracts import SummaryResponse
+from .contracts import NonEmptyText, SummaryResponse, SummarySegmentCandidate
 from .errors import (
     LLM_INVALID_RESPONSE,
     LLM_REQUEST_FAILED,
@@ -12,16 +13,61 @@ from .errors import (
     WorkerError,
 )
 
+# 모델은 utterance id가 아니라 1-based index로 경계를 지목한다. 4B급 로컬 모델은
+# "utt_5626" 같은 id 수백 개를 그대로 복사하다 프롬프트에 없는 id를 지어내곤 한다
+# (숫자 보간) — 작은 정수는 그 실패 모드가 없고 프롬프트도 짧아진다. 실제 id로의
+# 역매핑은 이 클라이언트가 한다.
 _SUMMARY_SYSTEM_PROMPT = (
     "Return a JSON object with exactly two keys: topics and segments. topics is an "
     "array of short phrases naming what was discussed. segments splits the "
     "conversation into consecutive chunks; each segment has exactly these fields: "
-    "start_utterance_id, end_utterance_id, title, bullets. start_utterance_id and "
-    "end_utterance_id must be IDs from the supplied utterances, in the order given. "
+    "start_index, end_index, title, bullets. start_index and end_index must be "
+    "index values from the supplied utterances, in the order given. "
     "bullets are short sentences restating what was said in that segment. Do not "
     "output timestamps. Do not speculate. Write topics, title, and bullets in the "
     "language of the transcript."
 )
+
+
+class _LlmSegment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start_index: int
+    end_index: int
+    title: NonEmptyText
+    bullets: list[NonEmptyText]
+
+
+class _LlmSummaryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # topics/segments 생략 허용 — contracts.SummaryResponse와 같은 이유
+    topics: list[NonEmptyText] = []
+    segments: list[_LlmSegment] = []
+
+
+class _InvalidIndex(ValueError):
+    """모델이 공급된 범위 밖 인덱스를 인용했다 — 되먹임 재시도 대상."""
+
+
+def _map_indexes(parsed: _LlmSummaryResponse, ids: list[str]) -> SummaryResponse:
+    segments: list[SummarySegmentCandidate] = []
+    for seg in parsed.segments:
+        for index in (seg.start_index, seg.end_index):
+            if not 1 <= index <= len(ids):
+                raise _InvalidIndex(
+                    f"segment cites index {index}, but valid indexes are 1..{len(ids)}"
+                )
+        segments.append(
+            SummarySegmentCandidate(
+                start_utterance_id=ids[seg.start_index - 1],
+                end_utterance_id=ids[seg.end_index - 1],
+                title=seg.title,
+                bullets=list(seg.bullets),
+            )
+        )
+    return SummaryResponse(topics=list(parsed.topics), segments=segments)
+
 
 # 로컬 4B급 모델은 세그먼트 하나에서 필드를 빠뜨리는 식으로 자주 어긋난다.
 # 같은 프롬프트를 다시 보내면 temperature=0 서버에서 같은 답이 돌아오므로,
@@ -31,7 +77,7 @@ _MAX_ATTEMPTS = 2
 _RETRY_INSTRUCTION = (
     "Your previous reply was rejected: {error}\n"
     "Reply again with the corrected JSON object only. Every segment must have all "
-    "of start_utterance_id, end_utterance_id, title, and bullets."
+    "of start_index, end_index, title, and bullets."
 )
 
 
@@ -60,14 +106,25 @@ class SummaryClient:
         self._timeout_seconds = timeout_seconds
         self._max_tokens = max_tokens
 
-    def summarize(self, *, model: str, utterances: list[dict[str, Any]]) -> SummaryResponse:
+    def summarize(
+        self,
+        *,
+        model: str,
+        utterances: list[dict[str, Any]],
+        validate: Callable[[SummaryResponse], None] | None = None,
+    ) -> SummaryResponse:
+        ids = [u["id"] for u in utterances]
+        prompt_utterances = [
+            {"index": i, **{k: v for k, v in u.items() if k != "id"}}
+            for i, u in enumerate(utterances, start=1)
+        ]
         messages: list[dict[str, str]] = [
             {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
             # Escaped non-ASCII (\uXXXX) is unreadable to the model and inflates
             # the prompt several-fold, so the transcript goes over as-is.
             {
                 "role": "user",
-                "content": json.dumps({"utterances": utterances}, ensure_ascii=False),
+                "content": json.dumps({"utterances": prompt_utterances}, ensure_ascii=False),
             },
         ]
         for attempt in range(1, _MAX_ATTEMPTS + 1):
@@ -81,9 +138,16 @@ class SummaryClient:
                     ErrorKind.PERMANENT,
                 )
             try:
-                return SummaryResponse.model_validate(json.loads(_strip_code_fence(content)))
-            except (json.JSONDecodeError, ValidationError) as exc:
+                parsed = _LlmSummaryResponse.model_validate(json.loads(_strip_code_fence(content)))
+                response = _map_indexes(parsed, ids)
+                if validate is not None:
+                    # 도메인 검증(경계 순서 등)도 스키마 실패와 똑같이 되먹여 재시도한다
+                    validate(response)
+                return response
+            except (json.JSONDecodeError, ValidationError, _InvalidIndex, WorkerError) as exc:
                 if attempt == _MAX_ATTEMPTS:
+                    if isinstance(exc, WorkerError):
+                        raise
                     raise WorkerError(LLM_INVALID_RESPONSE, str(exc), ErrorKind.PERMANENT) from exc
                 messages = [
                     *messages,

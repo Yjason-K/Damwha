@@ -225,9 +225,7 @@ def test_arbitrate_run_over_5s_not_candidate():
         Word("뒤", 11000, 11500, 0.9),
     ]
     calls = []
-    utts = build_utterances(
-        words, segments, arbitrate=lambda *a: calls.append(a) or True
-    )
+    utts = build_utterances(words, segments, arbitrate=lambda *a: calls.append(a) or True)
     ok = [u for u in utts if u.status == "ok"]
     assert [u.diar_label for u in ok] == ["A", "B", "A"]
     assert calls == []

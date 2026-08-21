@@ -83,8 +83,15 @@ def run_summarize_meeting(
     ).fetchall()
     # LLM 호출은 긴 회의에서 수 분 — timed_stage가 진행 중 tick과 완료 시간을 남긴다
     with timed_stage("summarize_meeting", f"job={job['id']} meeting={payload.meeting_id}") as t:
-        response = client.summarize(model=payload.model, utterances=[dict(row) for row in rows])
-        segments = _resolve_segments(response.segments, [dict(row) for row in rows])
+        row_dicts = [dict(row) for row in rows]
+        # 경계 검증을 클라이언트의 되먹임 재시도 루프 안으로 넘긴다 — 지어낸/역순
+        # 경계도 스키마 실패처럼 거절 사유를 되먹여 한 번 고쳐 쓸 기회를 얻는다
+        response = client.summarize(
+            model=payload.model,
+            utterances=row_dicts,
+            validate=lambda r: _resolve_segments(r.segments, row_dicts),
+        )
+        segments = _resolve_segments(response.segments, row_dicts)
         t["detail"] = f"utterances={len(rows)} segments={len(segments)}"
     enter_stage(conn, job["id"], worker_id, "persist_summary", 80, shutdown_event)
     return db.persist_summary(
