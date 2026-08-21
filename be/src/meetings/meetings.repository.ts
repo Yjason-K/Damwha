@@ -124,7 +124,12 @@ export class MeetingsRepository {
                 'model', ler.model,
                 'error', ler.error,
                 'finished_at', ler.finished_at
-              ) END AS lens_extraction
+              ) END AS lens_extraction,
+              CASE WHEN ij.id IS NULL THEN NULL ELSE jsonb_build_object(
+                'status', ij.status,
+                'error', ij.error,
+                'updated_at', ij.updated_at
+              ) END AS search_index
        FROM meeting m
        LEFT JOIN job j ON j.id = m.current_job_id
        LEFT JOIN LATERAL (
@@ -134,6 +139,13 @@ export class MeetingsRepository {
          ORDER BY created_at DESC, id DESC
          LIMIT 1
        ) ler ON true
+       LEFT JOIN LATERAL (
+         SELECT id, status, error, updated_at
+         FROM job
+         WHERE meeting_id=m.id AND type='index_meeting'
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1
+       ) ij ON true
        WHERE m.id=$1`,
       [id],
     );

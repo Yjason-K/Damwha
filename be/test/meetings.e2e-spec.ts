@@ -113,6 +113,38 @@ describe('meetings', () => {
     expect(res.body).toMatchObject({ status: 'uploaded', stage: 'stt', progress: 60 });
   });
 
+  it('GET /meetings/:id/status exposes latest index_meeting job as search_index', async () => {
+    const created = await request(srv()).post('/meetings').attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+    const mid = created.body.id;
+    await db.pool.query(`UPDATE meeting SET status='done' WHERE id=$1`, [mid]);
+
+    // 색인 job이 아직 없으면 null
+    let res = await request(srv()).get(`/meetings/${mid}/status`);
+    expect(res.body.search_index).toBeNull();
+
+    // 실패한 색인 job → status/error 노출
+    await db.pool.query(
+      `INSERT INTO job(type, meeting_id, payload, status, error)
+       VALUES('index_meeting', $1, '{}', 'failed', '{"code":"uncategorized","message":"boom"}')`,
+      [mid],
+    );
+    res = await request(srv()).get(`/meetings/${mid}/status`);
+    expect(res.body.search_index).toMatchObject({
+      status: 'failed',
+      error: { message: 'boom' },
+    });
+
+    // 재색인으로 더 새로운 job이 생기면 최신 것이 이긴다
+    await db.pool.query(
+      `INSERT INTO job(type, meeting_id, payload, status, created_at)
+       VALUES('index_meeting', $1, '{}', 'queued', now() + interval '1 second')`,
+      [mid],
+    );
+    res = await request(srv()).get(`/meetings/${mid}/status`);
+    expect(res.body.search_index).toMatchObject({ status: 'queued' });
+    expect(res.body.search_index.error ?? null).toBeNull();
+  });
+
   it('POST /meetings/:id/reprocess bumps version + enqueues new job (done only)', async () => {
     const created = await request(srv()).post('/meetings').attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
     const mid = created.body.id;
