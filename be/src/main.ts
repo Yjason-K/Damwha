@@ -22,4 +22,8 @@ async function bootstrap() {
   await app.listen(env.PORT);
   Logger.log(`Damwha API listening on :${env.PORT} (docs at /docs)`, 'Bootstrap');
 }
-bootstrap();
+bootstrap().catch((e: unknown) => {
+  // DatabaseService.onModuleInit의 DB 프로브 실패 등 — 스택 대신 원인 한 줄로 끝낸다
+  Logger.error(`startup failed: ${e instanceof Error ? e.message : String(e)}`, 'Bootstrap');
+  process.exit(1);
+});
