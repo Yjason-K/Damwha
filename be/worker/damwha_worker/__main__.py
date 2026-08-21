@@ -4,7 +4,7 @@ import signal
 import subprocess
 import sys
 import threading
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 
 from . import console, db
 from .config import load_settings
@@ -31,6 +31,25 @@ def _no_llm_server(_model):
     return nullcontext()
 
 
+@contextmanager
+def _llm_abort_hook(register_abort, proc):
+    """워커가 직접 띄운 LLM 서버(proc)가 있을 때만 소유권 상실 훅을 건다.
+
+    운영자 취소로 heartbeat가 소유권을 잃으면 proc에 SIGTERM — 진행 중 HTTP 요청이
+    즉시 실패해 파이프라인이 에러 경로로 빠지고, managed_llm_server의 finally가
+    wait/kill 에스컬레이션을 마무리한다. 외부 서버 재사용(proc None)이면 죽일 게
+    없으니 걸지 않는다. 본문이 끝나면 훅을 해제해 정상 완료 직후 beat 경합을 막는다.
+    """
+    if register_abort is None or proc is None:
+        yield
+        return
+    register_abort(proc.terminate)
+    try:
+        yield
+    finally:
+        register_abort(None)
+
+
 def handle_job(
     conn,
     job: dict,
@@ -48,6 +67,7 @@ def handle_job(
     summary_llm_model=None,
     llm_server=None,
     shutdown_event=None,
+    register_abort=None,
 ) -> str:
     llm_server = llm_server or _no_llm_server
     try:
@@ -94,13 +114,13 @@ def handle_job(
                 shutdown_event=shutdown_event,
             )
         if job["type"] == "extract_lenses":
-            with llm_server(payload.model):
+            with llm_server(payload.model) as proc, _llm_abort_hook(register_abort, proc):
                 client = build_lens_client()
                 return run_extract_lenses(
                     conn, job, payload, client, worker_id=worker_id, shutdown_event=shutdown_event
                 )
         if job["type"] == "summarize_meeting":
-            with llm_server(payload.model):
+            with llm_server(payload.model) as proc, _llm_abort_hook(register_abort, proc):
                 summary_client = build_summary_client()
                 return run_summarize_meeting(
                     conn,
@@ -238,6 +258,8 @@ def dispatch_claimed_job(
             summary_llm_model=settings.summary_llm_model,
             llm_server=llm_server_fn,
             shutdown_event=shutdown_event,
+            # heartbeat가 소유권 상실(운영자 취소/reaper)을 감지하면 LLM 서버를 내린다
+            register_abort=getattr(heartbeat_cm, "set_on_lost", None),
         )
 
 
