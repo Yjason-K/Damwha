@@ -71,3 +71,73 @@ def test_short_segment_with_words_is_kept():
     words = [Word("응", 100, 300, 0.9)]
     utts = build_utterances(words, segments, failed_spans=[])
     assert len(utts) == 1 and utts[0].status == "ok"
+
+
+def test_midpoint_in_overlapping_segments_prefers_longer():
+    # 겹침 구간에서 word 중점이 두 세그먼트 모두에 들어가면 지배적(더 긴) 세그먼트 선택.
+    # 백채널 B(500-3000)가 본 화자 A(1000-10000)보다 먼저 시작해도 A가 이겨야 한다.
+    segments = [DiarSegment("B", 500, 3000), DiarSegment("A", 1000, 10000)]
+    words = [Word("본문", 1200, 1800, 0.9)]  # mid 1500 → B와 A 모두 포함
+    utts = build_utterances(words, segments)
+    ok = [u for u in utts if u.status == "ok"]
+    assert len(ok) == 1 and ok[0].diar_label == "A"
+
+
+def test_short_overlapping_backchannel_run_reabsorbed():
+    # A 발화 도중 백채널 B 세그먼트(A1/A2와 시간 겹침)가 word를 탈취한 경우,
+    # 짧은 B run은 주변 화자 A로 재귀속되고 빈 B 세그먼트는 row를 만들지 않는다.
+    segments = [
+        DiarSegment("A", 0, 4000),
+        DiarSegment("B", 3900, 5100),
+        DiarSegment("A", 5000, 9000),
+    ]
+    words = [
+        Word("나라가", 1000, 1500, 0.9),
+        Word("잘", 2000, 2500, 0.9),
+        Word("사는", 4300, 4700, 0.9),  # mid 4500 → B에만 포함 (탈취)
+        Word("거하고", 5500, 6000, 0.9),
+        Word("체감", 6500, 7000, 0.9),
+    ]
+    utts = build_utterances(words, segments)
+    ok = [u for u in utts if u.status == "ok"]
+    assert [u.diar_label for u in ok] == ["A", "A"]
+    assert ok[0].text == "나라가 잘 사는"
+    assert ok[1].text == "거하고 체감"
+    assert all(u.diar_label != "B" for u in utts)
+
+
+def test_short_nonoverlapping_turn_is_preserved():
+    # 겹침 없는 진짜 짧은 발언("말고")은 스무딩 대상 아님 — 그대로 유지
+    segments = [
+        DiarSegment("A", 0, 4000),
+        DiarSegment("B", 4000, 4800),
+        DiarSegment("A", 4800, 9000),
+    ]
+    words = [
+        Word("집에", 1000, 1500, 0.9),
+        Word("가지", 2000, 2500, 0.9),
+        Word("말고", 4200, 4600, 0.9),
+        Word("일하자", 5000, 5500, 0.9),
+    ]
+    utts = build_utterances(words, segments)
+    ok = [u for u in utts if u.status == "ok"]
+    assert [u.diar_label for u in ok] == ["A", "B", "A"]
+
+
+def test_long_overlapping_run_not_reabsorbed():
+    # 겹쳐도 run이 충분히 길면(>=2초) 진짜 발언일 수 있으므로 재귀속하지 않는다
+    segments = [
+        DiarSegment("A", 0, 4000),
+        DiarSegment("B", 3900, 8100),
+        DiarSegment("A", 8000, 12000),
+    ]
+    words = [
+        Word("앞", 1000, 1500, 0.9),
+        Word("긴", 4300, 4800, 0.9),
+        Word("발언", 5500, 6000, 0.9),
+        Word("이다", 7000, 7600, 0.9),  # B run: 4300-7600 = 3300ms
+        Word("뒤", 8500, 9000, 0.9),
+    ]
+    utts = build_utterances(words, segments)
+    ok = [u for u in utts if u.status == "ok"]
+    assert [u.diar_label for u in ok] == ["A", "B", "A"]
