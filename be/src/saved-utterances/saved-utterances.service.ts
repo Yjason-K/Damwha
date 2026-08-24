@@ -39,8 +39,12 @@ export class SavedUtterancesService {
     return { items: page.map(map), next_cursor: rows.length > rawLimit ? cursorEncode(page[page.length - 1]) : null };
   }
 
-  async ids(raw: string | undefined) {
-    const ids = [...new Set((raw ?? '').split(',').filter(Boolean))];
+  async ids(raw: unknown) {
+    const values = raw == null ? [] : Array.isArray(raw) ? raw : [raw];
+    if (values.some((value) => typeof value !== 'string')) {
+      throw new BadRequestException('utterance_ids are invalid');
+    }
+    const ids = [...new Set((values as string[]).flatMap((value) => value.split(',')).filter(Boolean))];
     if (ids.length > MAX_LIMIT || ids.some((id) => !UTTERANCE_ID_RE.test(id))) throw new BadRequestException('utterance_ids are invalid');
     return { utterance_ids: await this.repo.savedIds(this.db.pool, ids) };
   }

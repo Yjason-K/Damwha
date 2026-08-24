@@ -79,6 +79,21 @@ describe('saved utterances api', () => {
     expect((await db.pool.query('SELECT * FROM saved_utterance')).rowCount).toBe(1);
   });
 
+  it('accepts repeated utterance_ids query values', async () => {
+    const meetingId = await mkMeeting();
+    const firstId = await mkUtterance(meetingId, 0, 0);
+    const secondId = await mkUtterance(meetingId, 1, 1000);
+    await request(srv()).put(`/saved-utterances/${firstId}`).send({ text_snapshot: '첫 문장' });
+    await request(srv()).put(`/saved-utterances/${secondId}`).send({ text_snapshot: '두 문장' });
+
+    const result = await request(srv())
+      .get('/saved-utterances/ids')
+      .query({ utterance_ids: [firstId, secondId] });
+
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({ utterance_ids: [firstId, secondId] });
+  });
+
   it('keeps a historical snapshot but removes it with its meeting', async () => {
     const meetingId = await mkMeeting();
     const utteranceId = await mkUtterance(meetingId, 0, 0);
