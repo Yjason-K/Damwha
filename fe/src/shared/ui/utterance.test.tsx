@@ -13,4 +13,7 @@ test("saved transcript utterance exposes a persistent saved marker", () => {
   expect(screen.getByText("저장됨")).toBeVisible();
   expect(container.firstElementChild).toHaveAttribute("data-saved", "true");
   expect(screen.getByRole("button", { name: "저장 해제" })).toBeVisible();
+  expect(container.firstElementChild?.className).not.toContain(
+    "bg-[var(--accent-1)]",
+  );
 });

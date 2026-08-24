@@ -131,9 +131,7 @@ function Utterance({
     "group/utt relative grid grid-cols-[52px_1fr] gap-3 rounded-sm py-[7px] pr-3 pl-1.5 transition-colors duration-[80ms]",
     active
       ? "bg-[var(--accent-1)] [box-shadow:inset_2px_0_0_var(--accent-solid)]"
-      : saved
-        ? "bg-[var(--accent-1)] [box-shadow:inset_2px_0_0_var(--accent-6)] hover:bg-[var(--accent-1)]"
-        : "hover:bg-[var(--gray-1)]",
+      : "hover:bg-[var(--gray-1)]",
     className,
   );
   const timeEl = (
