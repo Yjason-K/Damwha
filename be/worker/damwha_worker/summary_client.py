@@ -1,5 +1,4 @@
 import json
-from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -18,6 +17,8 @@ from .errors import (
 # (숫자 보간) — 작은 정수는 그 실패 모드가 없고 프롬프트도 짧아진다. 실제 id로의
 # 역매핑은 이 클라이언트가 한다.
 _SUMMARY_SYSTEM_PROMPT = (
+    "You are given a meeting transcript. Each line is one utterance, formatted as "
+    "`<index> <speaker>: <text>`, in chronological order. "
     "Return a JSON object with exactly two keys: topics and segments. topics is an "
     "array of short phrases naming what was discussed. segments splits the "
     "conversation into consecutive chunks; each segment has exactly these fields: "
@@ -47,7 +48,7 @@ class _LlmSummaryResponse(BaseModel):
 
 
 class _InvalidIndex(ValueError):
-    """모델이 공급된 범위 밖 인덱스를 인용했다 — 되먹임 재시도 대상."""
+    """모델이 공급된 범위 밖 인덱스를 인용했다."""
 
 
 def _map_indexes(parsed: _LlmSummaryResponse, ids: list[str]) -> SummaryResponse:
@@ -69,18 +70,6 @@ def _map_indexes(parsed: _LlmSummaryResponse, ids: list[str]) -> SummaryResponse
     return SummaryResponse(topics=list(parsed.topics), segments=segments)
 
 
-# 로컬 4B급 모델은 세그먼트 하나에서 필드를 빠뜨리는 식으로 자주 어긋난다.
-# 같은 프롬프트를 다시 보내면 temperature=0 서버에서 같은 답이 돌아오므로,
-# 거절 사유를 되먹여 한 번만 고쳐 쓸 기회를 준다.
-_MAX_ATTEMPTS = 2
-
-_RETRY_INSTRUCTION = (
-    "Your previous reply was rejected: {error}\n"
-    "Reply again with the corrected JSON object only. Every segment must have all "
-    "of start_index, end_index, title, and bullets."
-)
-
-
 def _strip_code_fence(content: str) -> str:
     """Unwrap a ```json ... ``` block. Models wrap JSON despite response_format."""
     text = content.strip()
@@ -89,6 +78,30 @@ def _strip_code_fence(content: str) -> str:
     body = text[3:].removesuffix("```")
     head, sep, rest = body.partition("\n")
     return rest if sep and not head.strip().startswith("{") else body
+
+
+# 프롬프트에 싣는 것은 화자와 발화문뿐이다. mtg_22(624 utterance) 실측: 발화
+# 텍스트 자체는 16,485자인데 직렬화된 프롬프트는 87,577자(44,863토큰)였다 — 81%가
+# 스캐폴딩이라 4B 모델로도 prefill에만 285초가 걸렸고, 900초 HTTP 타임아웃을 생성
+# 도중에 맞았다. 사라진 몫은 전부 모델이 쓸 일 없는 필드였다:
+#   * start_ms/end_ms — 시스템 프롬프트가 타임스탬프 출력을 금지하고 있고, 실제
+#     시간은 _resolve_segments가 DB 행에서 파생시킨다.
+#   * speaker_id — 1-based 인덱스로 대체된 지 오래고 speaker_name과 중복이다.
+# 남은 두 필드를 JSON 객체 배열 대신 한 줄 텍스트로 싣는다(45,081자 → 22,617자).
+# 회의록은 원래 `화자: 발화` 꼴이라 모델에게도 JSON 배열보다 자연스러운 형태다.
+_SPEAKER_KEYS = ("speaker_name", "speaker_id")
+
+
+def _render_transcript(utterances: list[dict[str, Any]]) -> str:
+    """`<index> <speaker>: <text>` 한 줄씩. 인덱스는 1-based."""
+    lines: list[str] = []
+    for index, utterance in enumerate(utterances, start=1):
+        # 발화문 안의 개행은 접는다 — 한 utterance가 여러 줄이 되면 인덱스와 줄이
+        # 어긋나 모델이 없는 경계를 지목한다
+        text = " ".join(str(utterance.get("text") or "").split())
+        speaker = next((utterance[k] for k in _SPEAKER_KEYS if utterance.get(k)), None)
+        lines.append(f"{index} {speaker}: {text}" if speaker else f"{index}: {text}")
+    return "\n".join(lines)
 
 
 class SummaryClient:
@@ -106,55 +119,26 @@ class SummaryClient:
         self._timeout_seconds = timeout_seconds
         self._max_tokens = max_tokens
 
-    def summarize(
-        self,
-        *,
-        model: str,
-        utterances: list[dict[str, Any]],
-        validate: Callable[[SummaryResponse], None] | None = None,
-    ) -> SummaryResponse:
+    def summarize(self, *, model: str, utterances: list[dict[str, Any]]) -> SummaryResponse:
         ids = [u["id"] for u in utterances]
-        prompt_utterances = [
-            {"index": i, **{k: v for k, v in u.items() if k != "id"}}
-            for i, u in enumerate(utterances, start=1)
-        ]
         messages: list[dict[str, str]] = [
             {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
-            # Escaped non-ASCII (\uXXXX) is unreadable to the model and inflates
-            # the prompt several-fold, so the transcript goes over as-is.
-            {
-                "role": "user",
-                "content": json.dumps({"utterances": prompt_utterances}, ensure_ascii=False),
-            },
+            {"role": "user", "content": _render_transcript(utterances)},
         ]
-        for attempt in range(1, _MAX_ATTEMPTS + 1):
-            content, finish_reason = self._request(model=model, messages=messages)
-            if finish_reason == "length":
-                # 예산 부족은 모델을 다시 불러도 같은 자리에서 잘린다.
-                raise WorkerError(
-                    LLM_INVALID_RESPONSE,
-                    f"response hit the {self._max_tokens}-token max_tokens budget "
-                    f"before the JSON closed",
-                    ErrorKind.PERMANENT,
-                )
-            try:
-                parsed = _LlmSummaryResponse.model_validate(json.loads(_strip_code_fence(content)))
-                response = _map_indexes(parsed, ids)
-                if validate is not None:
-                    # 도메인 검증(경계 순서 등)도 스키마 실패와 똑같이 되먹여 재시도한다
-                    validate(response)
-                return response
-            except (json.JSONDecodeError, ValidationError, _InvalidIndex, WorkerError) as exc:
-                if attempt == _MAX_ATTEMPTS:
-                    if isinstance(exc, WorkerError):
-                        raise
-                    raise WorkerError(LLM_INVALID_RESPONSE, str(exc), ErrorKind.PERMANENT) from exc
-                messages = [
-                    *messages,
-                    {"role": "assistant", "content": content},
-                    {"role": "user", "content": _RETRY_INSTRUCTION.format(error=exc)},
-                ]
-        raise AssertionError("unreachable")  # pragma: no cover
+        content, finish_reason = self._request(model=model, messages=messages)
+        if finish_reason == "length":
+            # 예산 부족은 모델을 다시 불러도 같은 자리에서 잘린다.
+            raise WorkerError(
+                LLM_INVALID_RESPONSE,
+                f"response hit the {self._max_tokens}-token max_tokens budget "
+                f"before the JSON closed",
+                ErrorKind.PERMANENT,
+            )
+        try:
+            parsed = _LlmSummaryResponse.model_validate(json.loads(_strip_code_fence(content)))
+            return _map_indexes(parsed, ids)
+        except (json.JSONDecodeError, ValidationError, _InvalidIndex) as exc:
+            raise WorkerError(LLM_INVALID_RESPONSE, str(exc), ErrorKind.PERMANENT) from exc
 
     def _request(self, *, model: str, messages: list[dict[str, str]]) -> tuple[str, str | None]:
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
@@ -178,8 +162,13 @@ class SummaryClient:
                     f"{self._base_url}/chat/completions", headers=headers, json=payload
                 )
         except httpx.TimeoutException as exc:
-            raise WorkerError(LLM_REQUEST_FAILED, str(exc), ErrorKind.TRANSIENT) from exc
+            # 타임아웃은 TRANSIENT가 아니다. 프롬프트도 모델도 temperature=0도 그대로라
+            # 다음 시도는 같은 자리에서 같은 시간을 쓰고 죽는다 — 게다가 관리형 서버는
+            # job마다 내려가서 prompt cache까지 비어 있으므로 prefill을 통째로 다시
+            # 태운다. mtg_22가 15분짜리 실패를 세 번 반복하고 45분 뒤에 실패했다.
+            raise WorkerError(LLM_REQUEST_FAILED, str(exc), ErrorKind.PERMANENT) from exc
         except httpx.RequestError as exc:
+            # 연결 실패는 다르다 — 서버가 아직 안 떴거나 재기동 중일 수 있다.
             raise WorkerError(LLM_REQUEST_FAILED, str(exc), ErrorKind.TRANSIENT) from exc
 
         if response.status_code in {408, 429} or response.status_code >= 500:
