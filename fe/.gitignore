@@ -21,3 +21,10 @@ pnpm-debug.log*
 
 # typescript
 *.tsbuildinfo
+
+# playwright / local screenshots
+.playwright-mcp/
+showcase-full.png
+
+# superpowers SDD scratch
+.superpowers/

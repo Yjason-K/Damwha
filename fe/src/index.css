@@ -1,72 +1,195 @@
+/* Geist + Geist Mono — synced from "Damwha Design System" tokens/fonts.css.
+ * Kept first so the @import precedes Tailwind's emitted rules. */
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap");
 @import "tailwindcss";
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
 
+/* ============================================================
+ * Damwha Design System (codename "Timbre")
+ * Synced from claude.ai/design · light-first reading UI.
+ *
+ * Raw scales + semantic aliases live in :root (a faithful mirror of
+ * the design system's tokens/*.css). shadcn's token contract is mapped
+ * onto those Timbre semantics at the bottom of this block, so existing
+ * and future shadcn components render on-brand automatically.
+ * ============================================================ */
 :root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  /* --- Neutral scale (cool gray, 0 = white → 12 = near-black) --- */
+  --gray-0: #ffffff;
+  --gray-1: #fcfcfd;
+  --gray-2: #f7f8fa;
+  --gray-3: #eef0f3;
+  --gray-4: #e4e7ec;
+  --gray-5: #d7dbe2;
+  --gray-6: #c3c9d2;
+  --gray-7: #a4abb6;
+  --gray-8: #848d99;
+  --gray-9: #5d6673;
+  --gray-10: #3c4350;
+  --gray-11: #262b33;
+  --gray-12: #14171c;
+
+  /* --- Accent: restrained indigo-blue --- */
+  --accent-1: #f5f7ff;
+  --accent-2: #eaeefe;
+  --accent-3: #d8e0fd;
+  --accent-6: #b3c1f7;
+  --accent-9: #3b5bdb;
+  --accent-10: #3350c4;
+  --accent-11: #2f49b8;
+  --accent-12: #1c2a66;
+
+  /* --- Semantic: success / warning / danger --- */
+  --green-bg: #e9f4ee;
+  --green-9: #1f8a5b;
+  --green-text: #156348;
+  --amber-bg: #f8f0df;
+  --amber-9: #b5821f;
+  --amber-text: #875f12;
+  --red-bg: #fbecec;
+  --red-9: #cf3f3f;
+  --red-text: #a02d2d;
+
+  /* --- Speaker palette (8 hues): -solid / -bg / -text --- */
+  --spk-1-solid: #5570e8;
+  --spk-1-bg: #ebeefc;
+  --spk-1-text: #3a4cbf;
+  --spk-2-solid: #1fa579;
+  --spk-2-bg: #e3f3ec;
+  --spk-2-text: #137a57;
+  --spk-3-solid: #dda12c;
+  --spk-3-bg: #f8f0db;
+  --spk-3-text: #8a6212;
+  --spk-4-solid: #e26b97;
+  --spk-4-bg: #fbe9f0;
+  --spk-4-text: #b23e6a;
+  --spk-5-solid: #9166d6;
+  --spk-5-bg: #f0eafb;
+  --spk-5-text: #6a40a8;
+  --spk-6-solid: #5ca24c;
+  --spk-6-bg: #eaf3e6;
+  --spk-6-text: #3d7030;
+  --spk-7-solid: #2e97bc;
+  --spk-7-bg: #e5f2f7;
+  --spk-7-text: #1f6f8c;
+  --spk-8-solid: #c77a42;
+  --spk-8-bg: #f7ece2;
+  --spk-8-text: #8f5526;
+
+  /* --- Semantic aliases (reference these in components, not raw scales) --- */
+  --surface-app: var(--gray-2);
+  --surface-panel: var(--gray-1);
+  --surface-card: var(--gray-0);
+  --surface-sunken: var(--gray-2);
+  --surface-hover: var(--gray-3);
+  --surface-active: var(--accent-2);
+  --surface-overlay: rgba(20, 23, 28, 0.45);
+
+  --text-primary: var(--gray-12);
+  --text-secondary: var(--gray-9);
+  --text-muted: var(--gray-8);
+  --text-faint: var(--gray-7);
+  --text-on-accent: #ffffff;
+  --text-link: var(--accent-11);
+
+  --border-subtle: var(--gray-3);
+  --border-default: var(--gray-4);
+  --border-strong: var(--gray-5);
+  --border-focus: var(--accent-9);
+
+  --accent-solid: var(--accent-9);
+  --accent-solid-hover: var(--accent-10);
+  --accent-text: var(--accent-11);
+  --accent-bg: var(--accent-2);
+  --accent-bg-hover: var(--accent-3);
+  --focus-ring: 0 0 0 2px var(--gray-0), 0 0 0 4px var(--accent-6);
+
+  /* --- Typography helpers (font sizes live in the @theme block below) --- */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --leading-tight: 1.2;
+  --leading-snug: 1.35;
+  --leading-normal: 1.5;
+  --leading-read: 1.62;
+  --tracking-tight: -0.018em;
+  --tracking-snug: -0.008em;
+  --tracking-normal: 0em;
+  --tracking-wide: 0.04em;
+  --tracking-mono: -0.01em;
+
+  /* --- Elevation (borders do most of the work; shadows for overlays) --- */
+  --shadow-none: none;
+  --shadow-xs: 0 1px 1px rgba(20, 23, 28, 0.04);
+  --shadow-sm:
+    0 1px 2px rgba(20, 23, 28, 0.05), 0 1px 1px rgba(20, 23, 28, 0.03);
+  --shadow-md:
+    0 6px 16px rgba(20, 23, 28, 0.08), 0 2px 5px rgba(20, 23, 28, 0.04),
+    0 0 0 1px rgba(20, 23, 28, 0.04);
+  --shadow-lg:
+    0 16px 40px rgba(20, 23, 28, 0.14), 0 6px 14px rgba(20, 23, 28, 0.07),
+    0 0 0 1px rgba(20, 23, 28, 0.05);
+  --shadow-inset: inset 0 1px 2px rgba(20, 23, 28, 0.05);
+
+  /* --- Motion --- */
+  --dur-instant: 80ms;
+  --dur-fast: 120ms;
+  --dur-base: 160ms;
+  --dur-slow: 220ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --transition-colors:
+    color var(--dur-instant) var(--ease-standard),
+    background-color var(--dur-instant) var(--ease-standard),
+    border-color var(--dur-instant) var(--ease-standard);
+  --transition-transform: transform var(--dur-fast) var(--ease-out);
+
+  /* --- Layout rails (the browse-first three-pane shell) --- */
+  --rail-nav: 264px;
+  --rail-insight: 320px;
+  --topbar-h: 48px;
+  --content-max: 720px;
+
+  /* ============================================================
+   * shadcn token contract → mapped onto the Timbre semantics above.
+   * NOTE: shadcn's `--accent` means "hover/subtle surface", NOT the
+   * Timbre brand blue. The brand blue maps to `--primary`.
+   * ============================================================ */
+  --radius: 7px;
+  --background: var(--surface-app);
+  --foreground: var(--text-primary);
+  --card: var(--surface-card);
+  --card-foreground: var(--text-primary);
+  --popover: var(--surface-card);
+  --popover-foreground: var(--text-primary);
+  --primary: var(--accent-solid);
+  --primary-foreground: var(--text-on-accent);
+  --secondary: var(--gray-3);
+  --secondary-foreground: var(--text-primary);
+  --muted: var(--gray-3);
+  --muted-foreground: var(--text-secondary);
+  --accent: var(--surface-hover);
+  --accent-foreground: var(--text-primary);
+  --destructive: var(--red-9);
+  --border: var(--border-default);
+  --input: var(--border-default);
+  --ring: var(--accent-9);
+  --sidebar: var(--surface-panel);
+  --sidebar-foreground: var(--text-primary);
+  --sidebar-primary: var(--accent-solid);
+  --sidebar-primary-foreground: var(--text-on-accent);
+  --sidebar-accent: var(--surface-active);
+  --sidebar-accent-foreground: var(--accent-text);
+  --sidebar-border: var(--border-subtle);
+  --sidebar-ring: var(--accent-9);
 }
 
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
-}
-
+/* shadcn color contract + Timbre extras → Tailwind utilities (theming-aware) */
 @theme inline {
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -93,6 +216,77 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Timbre extras not covered by the shadcn contract */
+  --color-brand: var(--accent-9);
+  --color-brand-foreground: var(--text-on-accent);
+
+  --color-success: var(--green-9);
+  --color-success-bg: var(--green-bg);
+  --color-success-text: var(--green-text);
+  --color-warning: var(--amber-9);
+  --color-warning-bg: var(--amber-bg);
+  --color-warning-text: var(--amber-text);
+  --color-danger: var(--red-9);
+  --color-danger-bg: var(--red-bg);
+  --color-danger-text: var(--red-text);
+
+  /* Speaker palette → bg-spk-1 / text-spk-1-text / bg-spk-1-bg … (×8) */
+  --color-spk-1: var(--spk-1-solid);
+  --color-spk-1-bg: var(--spk-1-bg);
+  --color-spk-1-text: var(--spk-1-text);
+  --color-spk-2: var(--spk-2-solid);
+  --color-spk-2-bg: var(--spk-2-bg);
+  --color-spk-2-text: var(--spk-2-text);
+  --color-spk-3: var(--spk-3-solid);
+  --color-spk-3-bg: var(--spk-3-bg);
+  --color-spk-3-text: var(--spk-3-text);
+  --color-spk-4: var(--spk-4-solid);
+  --color-spk-4-bg: var(--spk-4-bg);
+  --color-spk-4-text: var(--spk-4-text);
+  --color-spk-5: var(--spk-5-solid);
+  --color-spk-5-bg: var(--spk-5-bg);
+  --color-spk-5-text: var(--spk-5-text);
+  --color-spk-6: var(--spk-6-solid);
+  --color-spk-6-bg: var(--spk-6-bg);
+  --color-spk-6-text: var(--spk-6-text);
+  --color-spk-7: var(--spk-7-solid);
+  --color-spk-7-bg: var(--spk-7-bg);
+  --color-spk-7-text: var(--spk-7-text);
+  --color-spk-8: var(--spk-8-solid);
+  --color-spk-8-bg: var(--spk-8-bg);
+  --color-spk-8-text: var(--spk-8-text);
+}
+
+/* Static design primitives -> utilities (radius, fonts, dense type scale).
+ * These emit CSS vars to :root, so component CSS can read var(--text-base)
+ * etc. while Tailwind generates the rounded / text / font utilities. */
+@theme {
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-full: 999px;
+
+  --font-sans:
+    "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+    sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", "Menlo", monospace;
+
+  /* Dense UI scale (14px base, Linear/Geist style) */
+  --text-2xs: 0.6875rem;
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-read: 0.9375rem;
+  --text-read--line-height: 1.62;
+  --text-h3: 0.9375rem;
+  --text-h2: 1.125rem;
+  --text-h1: 1.375rem;
+  --text-display: 1.75rem;
+  --text-display--line-height: 1.2;
+  --text-display--letter-spacing: -0.018em;
 }
 
 @layer base {
@@ -101,5 +295,22 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+}
+
+/* Honor prefers-reduced-motion: neutralize transitions/animations for users
+ * who opt out (Web Interface Guidelines). Loading state is still conveyed via
+ * aria-busy, so a stopped spinner remains accessible. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
