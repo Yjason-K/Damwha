@@ -44,6 +44,12 @@ export const routes: RouteObject[] = [
         ),
       },
       {
+        path: "saved-utterances",
+        element: lazyRoute(() =>
+          import("@/pages/saved-utterances").then((m) => ({ default: m.SavedUtterancesPage })),
+        ),
+      },
+      {
         path: "speakers",
         element: lazyRoute(() =>
           import("@/pages/speakers").then((m) => ({ default: m.SpeakersPage })),

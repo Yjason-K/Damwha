@@ -18,6 +18,7 @@ import { Input } from "@/shared/ui/input";
 import { SearchField } from "@/shared/ui/search-field";
 import { toast } from "@/shared/ui/use-toast";
 import { Utterance } from "@/shared/ui/utterance";
+import { useRemoveSavedUtterance, useSavedUtteranceIds, useSaveUtterance } from "@/features/saved-utterance/api/saved-utterances";
 
 import {
   useDeleteMeeting,
@@ -368,6 +369,10 @@ export function TranscriptPane({
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [resolveOpen, setResolveOpen] = React.useState(false);
   const [reprocessOpen, setReprocessOpen] = React.useState(false);
+  const sourceIds = React.useMemo(() => meeting.utterances.map((u) => u.sources[0]?.id).filter((id): id is string => !!id), [meeting.utterances]);
+  const savedIds = useSavedUtteranceIds(sourceIds);
+  const saveUtterance = useSaveUtterance();
+  const removeSavedUtterance = useRemoveSavedUtterance();
 
   const [query, setQuery] = React.useState("");
   // 현재 매칭을 인덱스가 아니라 값으로 들고 인덱스를 파생시킨다. matches는
@@ -609,6 +614,15 @@ export function TranscriptPane({
                 quoted={u.quoted}
                 placeholder={failed}
                 onJump={() => onJump(u.id)}
+                saved={savedIds.data?.has(u.sources[0]?.id ?? "")}
+                savePending={saveUtterance.isPending || removeSavedUtterance.isPending}
+                onSaveToggle={() => {
+                  const utteranceId = u.sources[0]?.id;
+                  if (!utteranceId) return;
+                  const mutation = savedIds.data?.has(utteranceId) ? removeSavedUtterance : saveUtterance;
+                  const value = savedIds.data?.has(utteranceId) ? utteranceId : { utteranceId, text: u.text };
+                  mutation.mutate(value as never, { onError: () => toast({ variant: "error", title: "저장한 발언을 바꾸지 못했어요." }) });
+                }}
               >
                 {failed
                   ? "전사하지 못한 구간입니다"

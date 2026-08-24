@@ -112,6 +112,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
   const navigate = useNavigate();
   const { meetingId } = useParams();
   const lensMatch = useMatch("/lenses/:kind");
+  const savedMatch = useMatch("/saved-utterances");
   const speakersMatch = useMatch("/speakers");
   const settingsMatch = useMatch("/settings");
   const [uploadOpen, setUploadOpen] = React.useState(false);
@@ -147,7 +148,9 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
           <SidebarItem
             icon={<Icon name="bookmark" size={16} />}
             label="저장한 발언"
-          />
+            active={!!savedMatch}
+            asChild
+          ><Link to="/saved-utterances" /></SidebarItem>
           <SidebarItem
             icon={<Icon name="listChecks" size={16} />}
             label="모든 회의"

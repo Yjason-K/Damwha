@@ -103,6 +103,9 @@ type UtteranceProps = Omit<React.ComponentProps<"div">, "children"> & {
   placeholder?: boolean;
   badge?: React.ReactNode;
   onJump?: () => void;
+  saved?: boolean;
+  onSaveToggle?: () => void;
+  savePending?: boolean;
   onBookmark?: () => void;
   children?: React.ReactNode;
 };
@@ -117,6 +120,9 @@ function Utterance({
   placeholder = false,
   badge = "인용",
   onJump,
+  saved = false,
+  onSaveToggle,
+  savePending = false,
   onBookmark,
   children,
   ...rest
@@ -174,7 +180,7 @@ function Utterance({
       <div className="min-w-0">
         {/* 활성 블록은 원문 보기 버튼(absolute)이 항상 떠 있으므로 첫 줄에 자리 확보 */}
         {onJump && active && (
-          <span aria-hidden className="float-right h-6 w-[84px]" />
+          <span aria-hidden className="float-right h-6 w-[120px]" />
         )}
         <SpeakerPill speaker={speaker} name={name} />
         <span
@@ -189,17 +195,15 @@ function Utterance({
         </span>
       </div>
       {onJump && (
-        <button
-          type="button"
-          onClick={onJump}
-          className={cn(
-            "absolute top-1.5 right-2 inline-flex items-center gap-[5px] rounded-xs border border-border bg-card px-[7px] py-[3px] text-xs font-medium text-[color:var(--text-link)] outline-none transition-opacity duration-[120ms] hover:border-[color:var(--accent-6)] hover:bg-[var(--accent-1)] focus-visible:opacity-100 focus-visible:[box-shadow:var(--focus-ring)] group-hover/utt:opacity-100 [&_svg]:size-3",
-            active ? "opacity-100" : "opacity-0",
-          )}
-        >
-          <JumpIcon />
-          <span>원문 보기</span>
-        </button>
+        <div className={cn("absolute top-1.5 right-2 flex items-center gap-1 transition-opacity duration-[120ms] focus-within:opacity-100 group-hover/utt:opacity-100", active ? "opacity-100" : "opacity-0")}>
+          <button type="button" aria-label={saved ? "저장 해제" : "발언 저장"} onClick={onSaveToggle} disabled={savePending} className="inline-flex size-6 items-center justify-center rounded-xs border border-border bg-card text-[color:var(--accent-text)] outline-none hover:border-[color:var(--accent-6)] hover:bg-[var(--accent-1)] disabled:cursor-wait disabled:opacity-60 focus-visible:[box-shadow:var(--focus-ring)] [&_svg]:size-[14px]">
+            <BookmarkIcon />
+          </button>
+          <button type="button" onClick={onJump} className="inline-flex items-center gap-[5px] rounded-xs border border-border bg-card px-[7px] py-[3px] text-xs font-medium text-[color:var(--text-link)] outline-none hover:border-[color:var(--accent-6)] hover:bg-[var(--accent-1)] focus-visible:[box-shadow:var(--focus-ring)] [&_svg]:size-3">
+            <JumpIcon />
+            <span>원문 보기</span>
+          </button>
+        </div>
       )}
     </div>
   );

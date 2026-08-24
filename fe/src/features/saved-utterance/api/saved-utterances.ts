@@ -25,7 +25,7 @@ export function useSavedUtteranceIds(ids: string[]) {
       const { data } = await apiClient.get<{ utterance_ids: string[] }>("/saved-utterances/ids", {
         params: { utterance_ids: canonicalIds.join(",") },
       });
-      return new Set(data.utterance_ids);
+      return new Set(data.utterance_ids ?? []);
     },
   });
 }
