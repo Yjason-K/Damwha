@@ -131,7 +131,9 @@ function Utterance({
     "group/utt relative grid grid-cols-[52px_1fr] gap-3 rounded-sm py-[7px] pr-3 pl-1.5 transition-colors duration-[80ms]",
     active
       ? "bg-[var(--accent-1)] [box-shadow:inset_2px_0_0_var(--accent-solid)]"
-      : "hover:bg-[var(--gray-1)]",
+      : saved
+        ? "bg-[var(--accent-1)] [box-shadow:inset_2px_0_0_var(--accent-6)] hover:bg-[var(--accent-1)]"
+        : "hover:bg-[var(--gray-1)]",
     className,
   );
   const timeEl = (
@@ -175,7 +177,7 @@ function Utterance({
   }
 
   return (
-    <div className={root} {...rest}>
+    <div className={root} data-saved={saved || undefined} {...rest}>
       {timeEl}
       <div className="min-w-0">
         {/* 활성 블록은 원문 보기 버튼(absolute)이 항상 떠 있으므로 첫 줄에 자리 확보 */}
@@ -183,6 +185,11 @@ function Utterance({
           <span aria-hidden className="float-right h-6 w-[120px]" />
         )}
         <SpeakerPill speaker={speaker} name={name} />
+        {saved && (
+          <span className="relative -top-px mr-2 inline-flex items-center rounded-full border border-[color:var(--accent-6)] bg-[var(--accent-1)] px-1.5 py-px text-2xs font-semibold text-[color:var(--accent-text)]">
+            저장됨
+          </span>
+        )}
         <span
           className={cn(
             "text-read text-pretty",
@@ -195,8 +202,8 @@ function Utterance({
         </span>
       </div>
       {onJump && (
-        <div className={cn("absolute top-1.5 right-2 flex items-center gap-1 transition-opacity duration-[120ms] focus-within:opacity-100 group-hover/utt:opacity-100", active ? "opacity-100" : "opacity-0")}>
-          <button type="button" aria-label={saved ? "저장 해제" : "발언 저장"} onClick={onSaveToggle} disabled={savePending} className="inline-flex size-6 items-center justify-center rounded-xs border border-border bg-card text-[color:var(--accent-text)] outline-none hover:border-[color:var(--accent-6)] hover:bg-[var(--accent-1)] disabled:cursor-wait disabled:opacity-60 focus-visible:[box-shadow:var(--focus-ring)] [&_svg]:size-[14px]">
+        <div className={cn("absolute top-1.5 right-2 flex items-center gap-1 transition-opacity duration-[120ms] focus-within:opacity-100 group-hover/utt:opacity-100", active || saved ? "opacity-100" : "opacity-0")}>
+          <button type="button" aria-label={saved ? "저장 해제" : "발언 저장"} onClick={onSaveToggle} disabled={savePending} className={cn("inline-flex size-6 items-center justify-center rounded-xs border outline-none disabled:cursor-wait disabled:opacity-60 focus-visible:[box-shadow:var(--focus-ring)] [&_svg]:size-[14px]", saved ? "border-[color:var(--accent-solid)] bg-[var(--accent-solid)] text-white hover:bg-[color:var(--accent-text)]" : "border-border bg-card text-[color:var(--accent-text)] hover:border-[color:var(--accent-6)] hover:bg-[var(--accent-1)]")}>
             <BookmarkIcon />
           </button>
           <button type="button" onClick={onJump} className="inline-flex items-center gap-[5px] rounded-xs border border-border bg-card px-[7px] py-[3px] text-xs font-medium text-[color:var(--text-link)] outline-none hover:border-[color:var(--accent-6)] hover:bg-[var(--accent-1)] focus-visible:[box-shadow:var(--focus-ring)] [&_svg]:size-3">
