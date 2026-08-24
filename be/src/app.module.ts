@@ -11,6 +11,7 @@ import { SettingsModule } from './settings/settings.module';
 import { SystemModule } from './system/system.module';
 import { LensesModule } from './lenses/lenses.module';
 import { SummaryModule } from './summary/summary.module';
+import { SavedUtterancesModule } from './saved-utterances/saved-utterances.module';
 import { HealthController } from './health/health.controller';
 import { HttpLoggingInterceptor } from './common/http-logging.interceptor';
 
@@ -27,6 +28,7 @@ import { HttpLoggingInterceptor } from './common/http-logging.interceptor';
     SystemModule,
     LensesModule,
     SummaryModule,
+    SavedUtterancesModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_INTERCEPTOR, useClass: HttpLoggingInterceptor }],
