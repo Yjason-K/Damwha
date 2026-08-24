@@ -2,16 +2,17 @@ import logging
 from datetime import date
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 log = logging.getLogger("damwha_worker")
 
 # job type별 허용 버전 — enroll/index는 v1 불변 (spec §4)
 SUPPORTED_SCHEMA_VERSIONS: dict[str, frozenset[int]] = {
-    "process_meeting": frozenset({1, 2}),
+    "process_meeting": frozenset({1, 2, 3, 4, 5}),
     "enroll_speaker": frozenset({1}),
     "index_meeting": frozenset({1}),
     "extract_lenses": frozenset({1}),
+    "summarize_meeting": frozenset({1}),
 }
 
 MeetingId = Annotated[str, StringConstraints(pattern=r"^mtg_[1-9][0-9]*$")]
@@ -56,34 +57,117 @@ class ModelsV1(BaseModel):  # 기존 Models 이름 변경
 
 
 class ModelsV2(BaseModel):
+    """wire v2 전용. TS ModelsSchemaV2가 .strict()이므로 여기도 extra를 막는다."""
+
+    model_config = ConfigDict(extra="forbid")
+
     whisper_model: WhisperModel
     language: str
     devices: Devices
-    # v1 변환·env 폴백 유래 payload는 null (spec §4)
     preset: str | None = None
     preset_revision: str | None = None
     diarization: Diarization
     embedding: Embedding
 
 
-def _v1_models_to_v2(m: ModelsV1) -> ModelsV2:
+class ModelsWireV3(BaseModel):
+    """wire v3. summary_model은 필수 — v3는 완전 해석된 계약이라 워커가 env로
+    폴백할 여지를 남기지 않는다 (spec §3)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    whisper_model: WhisperModel
+    language: str
+    devices: Devices
+    preset: str | None = None
+    preset_revision: str | None = None
+    summary_model: NonEmptyString
+    diarization: Diarization
+    embedding: Embedding
+
+
+class ModelsConfig(BaseModel):
+    """내부 정규 표현 — 파이프라인/registry는 이 모양만 다룬다.
+
+    이름이 Models가 아닌 이유: pipeline/process_meeting.py의 Models는 로드된 ML
+    어댑터(VAD/Diarizer/Embedder/Transcriber) 묶음이고 registry.py가 그걸 import한다.
+
+    summary_model이 nullable인 이유는 preset/preset_revision과 같다: v1/v2에서
+    변환된 payload에는 값이 없다. v3 유래는 항상 채워진다. Literal이 아니라 str인
+    이유는 워커가 API의 큐레이션 목록을 알 필요가 없기 때문 — 목록 검증은 API 경계
+    (그리고 워커 env 폴백 값은 목록 밖일 수 있다)."""
+
+    whisper_model: WhisperModel
+    language: str
+    devices: Devices
+    preset: str | None = None
+    preset_revision: str | None = None
+    summary_model: str | None = None
+    diarization: Diarization
+    embedding: Embedding
+
+
+def _v1_models_to_internal(m: ModelsV1) -> ModelsConfig:
     if m.device == "cuda":
         # cuda→gpu는 Metal 의미와 다른 오변환 — cpu로 내리고 경고 (spec §4)
         log.warning("v1 payload device=cuda — converting to cpu (cuda is a non-goal)")
     dev: Device = "gpu" if m.device == "mps" else "cpu"
-    return ModelsV2(
+    return ModelsConfig(
         whisper_model=m.whisper_model,
         language=m.language,
         devices=Devices(diarization=dev, stt=dev),
         preset=None,
         preset_revision=None,
+        summary_model=None,
         diarization=m.diarization,
         embedding=m.embedding,
     )
 
 
+def _v2_models_to_internal(m: ModelsV2) -> ModelsConfig:
+    return ModelsConfig(**m.model_dump(), summary_model=None)
+
+
+def _v3_models_to_internal(m: ModelsWireV3) -> ModelsConfig:
+    return ModelsConfig(**m.model_dump())
+
+
 class Identify(BaseModel):
+    """v1–v3 wire shape — one threshold, which binds a cluster to a speaker."""
+
     threshold: float
+
+
+class IdentifyWireV4(BaseModel):
+    """v4 adds the floor of the suggestion band.
+
+    Required on the wire for the same reason v3 made summary_model required: the
+    thresholds *are* the identification behaviour, so re-running a recorded job
+    must not silently pick up a different worker default. `suggest_threshold` must
+    not exceed `threshold` — above it the band is unreachable, since a binding
+    match is checked first.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    threshold: float
+    suggest_threshold: float
+
+    @model_validator(mode="after")
+    def _band_is_reachable(self):
+        if self.suggest_threshold > self.threshold:
+            raise ValueError(
+                f"suggest_threshold {self.suggest_threshold} exceeds threshold {self.threshold}"
+            )
+        return self
+
+
+class IdentifyConfig(BaseModel):
+    """내부 정규 표현. suggest_threshold가 nullable인 이유는 summary_model과 같다:
+    v1/v2/v3에서 변환된 payload에는 값이 없고, 그때는 제안 없이 예전처럼 동작한다."""
+
+    threshold: float
+    suggest_threshold: float | None = None
 
 
 class ProcessMeetingPayloadV1(BaseModel):
@@ -98,20 +182,89 @@ class ProcessMeetingPayloadV1(BaseModel):
     identify: Identify
 
 
-class ProcessMeetingPayload(BaseModel):
-    """내부 표현 — 항상 v2 models. v1은 parse에서 즉시 변환되고 원본 버전을 보존한다.
-
-    schema_version의 입력 검증 제약은 이 필드가 아니라 parse_payload의
-    job type별 dispatch(SUPPORTED_SCHEMA_VERSIONS)가 담당한다.
-    """
-
-    schema_version: int = 2
+class ProcessMeetingPayloadWireV2(BaseModel):
+    schema_version: Literal[2]
     meeting_id: MeetingId
     audio_key: str
     processing_version: int
     reprocess: bool
     models: ModelsV2
     identify: Identify
+
+
+class ProcessMeetingPayloadWireV3(BaseModel):
+    schema_version: Literal[3]
+    meeting_id: MeetingId
+    audio_key: str
+    processing_version: int
+    reprocess: bool
+    models: ModelsWireV3
+    identify: Identify
+
+
+class ProcessMeetingPayloadWireV4(BaseModel):
+    """wire v4 = v3 models + the two-tier identify band."""
+
+    schema_version: Literal[4]
+    meeting_id: MeetingId
+    audio_key: str
+    processing_version: int
+    reprocess: bool
+    models: ModelsWireV3
+    identify: IdentifyWireV4
+
+
+class FollowupsWireV5(BaseModel):
+    """어떤 후속 job을 persist 트랜잭션에서 같이 큐잉할지.
+
+    True가 v1~v4의 동작(항상 큐잉)이라 변환 시 둘 다 True로 채운다. wire에서
+    필수인 이유는 summary_model/suggest_threshold와 같다 — 후속을 돌렸는지는 그 run이
+    기록한 내용의 일부이지 워커 기본값이 아니다."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    lens: bool
+    summary: bool
+
+
+class FollowupsConfig(BaseModel):
+    """내부 정규 표현. v1~v4 유래는 둘 다 True로 채워진다."""
+
+    lens: bool = True
+    summary: bool = True
+
+
+class ProcessMeetingPayloadWireV5(BaseModel):
+    """wire v5 = v4 + 후속 job(렌즈/요약) 스위치."""
+
+    schema_version: Literal[5]
+    meeting_id: MeetingId
+    audio_key: str
+    processing_version: int
+    reprocess: bool
+    models: ModelsWireV3
+    identify: IdentifyWireV4
+    followups: FollowupsWireV5
+
+
+class ProcessMeetingPayload(BaseModel):
+    """내부 표현 — 항상 정규화된 ModelsConfig. v1/v2/v3는 parse에서 즉시 변환되고
+    원본 버전을 보존한다.
+
+    schema_version의 입력 검증 제약은 이 필드가 아니라 parse_payload의
+    job type별 dispatch(SUPPORTED_SCHEMA_VERSIONS)가 담당한다.
+    """
+
+    # 기본값 2는 죽은 값이다 — parse 경로(v1/v2/v3)가 항상 실제 버전을 명시적으로
+    # 채우므로 이 기본값이 쓰이는 일은 없다. v2가 내부 표준이라는 뜻은 아니다.
+    schema_version: int = 2
+    meeting_id: MeetingId
+    audio_key: str
+    processing_version: int
+    reprocess: bool
+    models: ModelsConfig
+    identify: IdentifyConfig
+    followups: FollowupsConfig = FollowupsConfig()
 
 
 class EnrollSpeakerPayload(BaseModel):
@@ -151,8 +304,12 @@ class LensCandidate(BaseModel):
 
     kind: Literal["action", "decision", "promise"]
     text: NonEmptyText
-    assignee_speaker_id: SpeakerId | None
-    due_at: date | None
+    # 프롬프트가 nullable로 명시한 두 필드는 기본값 None — 로컬 런타임에서
+    # response_format은 권고사항이라 모델이 null 필드를 통째로 생략한다. 생략은
+    # 명시적 null과 의미가 같으므로 추출 run 전체를 실패시키지 않는다.
+    # (extra="forbid"는 그대로라 없는 필드를 지어내는 것은 여전히 막힌다.)
+    assignee_speaker_id: SpeakerId | None = None
+    due_at: date | None = None
     primary_utterance_id: UtteranceId
     supporting_utterance_ids: list[UtteranceId]
 
@@ -163,8 +320,40 @@ class LensExtractionResponse(BaseModel):
     items: list[LensCandidate]
 
 
+class SummarizeMeetingPayload(BaseModel):
+    """렌즈와 달리 extraction_run_id가 없다 — meeting_summary는 회의당 1행이라
+    meeting_id가 곧 키이고 별도 run 엔티티가 필요 없다."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1]
+    meeting_id: MeetingId
+    processing_version: int = Field(ge=0)
+    model: NonEmptyString
+
+
+class SummarySegmentCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start_utterance_id: UtteranceId
+    end_utterance_id: UtteranceId
+    title: NonEmptyText
+    bullets: list[NonEmptyText]
+
+
+class SummaryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # response_format은 로컬 런타임에서 권고사항이라 모델이 두 키 중 하나를 통째로
+    # 생략하기도 한다(LensCandidate와 같은 이유). 생략은 빈 결과와 의미가 같으므로
+    # 기본값을 둬 요약 전체를 실패시키지 않는다.
+    topics: list[NonEmptyText] = []
+    segments: list[SummarySegmentCandidate] = []
+
+
 def _parse_process_meeting(data: dict) -> ProcessMeetingPayload:
-    if data.get("schema_version", 1) == 1:
+    version = data.get("schema_version", 1)
+    if version == 1:
         v1 = ProcessMeetingPayloadV1.model_validate(data)
         return ProcessMeetingPayload(
             schema_version=1,
@@ -172,14 +361,63 @@ def _parse_process_meeting(data: dict) -> ProcessMeetingPayload:
             audio_key=v1.audio_key,
             processing_version=v1.processing_version,
             reprocess=v1.reprocess,
-            models=_v1_models_to_v2(v1.models),
-            identify=v1.identify,
+            models=_v1_models_to_internal(v1.models),
+            identify=IdentifyConfig(threshold=v1.identify.threshold),
         )
-    return ProcessMeetingPayload.model_validate(data)
+    if version == 2:
+        v2 = ProcessMeetingPayloadWireV2.model_validate(data)
+        return ProcessMeetingPayload(
+            schema_version=2,
+            meeting_id=v2.meeting_id,
+            audio_key=v2.audio_key,
+            processing_version=v2.processing_version,
+            reprocess=v2.reprocess,
+            models=_v2_models_to_internal(v2.models),
+            identify=IdentifyConfig(threshold=v2.identify.threshold),
+        )
+    if version == 3:
+        v3 = ProcessMeetingPayloadWireV3.model_validate(data)
+        return ProcessMeetingPayload(
+            schema_version=3,
+            meeting_id=v3.meeting_id,
+            audio_key=v3.audio_key,
+            processing_version=v3.processing_version,
+            reprocess=v3.reprocess,
+            models=_v3_models_to_internal(v3.models),
+            identify=IdentifyConfig(threshold=v3.identify.threshold),
+        )
+    if version == 4:
+        v4 = ProcessMeetingPayloadWireV4.model_validate(data)
+        return ProcessMeetingPayload(
+            schema_version=4,
+            meeting_id=v4.meeting_id,
+            audio_key=v4.audio_key,
+            processing_version=v4.processing_version,
+            reprocess=v4.reprocess,
+            models=_v3_models_to_internal(v4.models),
+            identify=IdentifyConfig(
+                threshold=v4.identify.threshold,
+                suggest_threshold=v4.identify.suggest_threshold,
+            ),
+        )
+    v5 = ProcessMeetingPayloadWireV5.model_validate(data)
+    return ProcessMeetingPayload(
+        schema_version=5,
+        meeting_id=v5.meeting_id,
+        audio_key=v5.audio_key,
+        processing_version=v5.processing_version,
+        reprocess=v5.reprocess,
+        models=_v3_models_to_internal(v5.models),
+        identify=IdentifyConfig(
+            threshold=v5.identify.threshold,
+            suggest_threshold=v5.identify.suggest_threshold,
+        ),
+        followups=FollowupsConfig(lens=v5.followups.lens, summary=v5.followups.summary),
+    )
 
 
-def parse_models(payload: dict) -> ModelsV2:
-    """registry용: process_meeting payload dict → 정규화된 ModelsV2."""
+def parse_models(payload: dict) -> ModelsConfig:
+    """registry용: process_meeting payload dict → 정규화된 내부 ModelsConfig."""
     return _parse_process_meeting(payload).models
 
 
@@ -198,4 +436,6 @@ def parse_payload(job_type: str, data: dict):
         return EnrollSpeakerPayload.model_validate(data)
     if job_type == "index_meeting":
         return IndexMeetingPayload.model_validate(data)
+    if job_type == "summarize_meeting":
+        return SummarizeMeetingPayload.model_validate(data)
     return ExtractLensesPayload.model_validate(data)

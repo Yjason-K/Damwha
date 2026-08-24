@@ -10,6 +10,7 @@ import { SearchModule } from './search/search.module';
 import { SettingsModule } from './settings/settings.module';
 import { SystemModule } from './system/system.module';
 import { LensesModule } from './lenses/lenses.module';
+import { SummaryModule } from './summary/summary.module';
 import { HealthController } from './health/health.controller';
 import { HttpLoggingInterceptor } from './common/http-logging.interceptor';
 
@@ -25,6 +26,7 @@ import { HttpLoggingInterceptor } from './common/http-logging.interceptor';
     SettingsModule,
     SystemModule,
     LensesModule,
+    SummaryModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_INTERCEPTOR, useClass: HttpLoggingInterceptor }],

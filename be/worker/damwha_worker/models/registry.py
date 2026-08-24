@@ -19,7 +19,7 @@ from .silero_vad import SileroVAD
 
 
 def build_models(payload: dict, settings: Settings) -> Models:
-    m = parse_models(payload)  # v1/v2 정규화 (contracts)
+    m = parse_models(payload)  # v1/v2/v3 정규화 (contracts)
 
     if m.devices.stt == "gpu":
         from .whisper_mlx import MlxWhisper  # ImportError → classify가 PERMANENT

@@ -250,3 +250,14 @@ def test_final_failure_marks_run_but_keeps_meeting_done(conn, extraction_job):
         _one(conn, "SELECT status FROM meeting WHERE id=%s", (ids["meeting_id"],))["status"]
         == "done"
     )
+
+
+def test_llm_call_is_timed_and_logged(conn, extraction_job, caplog):
+    # 렌즈 추출 LLM 호출도 긴 작업 — timed_stage로 감싸 콘솔에 진행이 남아야 한다
+    job, ids = extraction_job
+    client = SimpleNamespace(extract=lambda **_kwargs: [_candidate("action", ids["utt_1"])])
+    with caplog.at_level("INFO", logger="damwha_worker"):
+        run_extract_lenses(conn, job, _payload(job), client, worker_id="w")
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert f"job={job['id']} meeting={ids['meeting_id']} stage=extract_lenses done" in text
+    assert "utterances=2 candidates=1" in text

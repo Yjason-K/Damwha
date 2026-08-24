@@ -81,4 +81,19 @@ describe('settings', () => {
       .send({ preset: 'light', language: 'ko' });
     expect(res.status).toBe(400);
   });
+
+  it('PUT custom에 summary_model 누락 → 400', async () => {
+    const res = await request(srv()).put('/settings/processing').send({
+      preset: 'custom', language: 'ko', whisper_model: 'small',
+      devices: { diarization: 'gpu', stt: 'cpu' },
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('PUT 이름 프리셋에 summary_model 혼입 → 400', async () => {
+    const res = await request(srv()).put('/settings/processing').send({
+      preset: 'light', language: 'ko', summary_model: 'mlx-community/Qwen3.5-4B-8bit',
+    });
+    expect(res.status).toBe(400);
+  });
 });

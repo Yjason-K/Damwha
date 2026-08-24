@@ -47,6 +47,24 @@ describe('JobsRepository', () => {
     expect(await repo.claim(db.pool, 'w')).toBeNull();
   });
 
+  it('does not claim a queued job scheduled for the future', async () => {
+    const mid = await seedMeeting();
+    const job = await repo.enqueue(db.pool, { type: 'process_meeting', meetingId: mid, payload: {} });
+    await db.pool.query(`UPDATE job SET next_attempt_at=now() + interval '1 hour' WHERE id=$1`, [job.id]);
+
+    expect(await repo.claim(db.pool, 'worker-1')).toBeNull();
+  });
+
+  it('claims an immediately eligible job ahead of an older delayed job', async () => {
+    const delayedMeeting = await seedMeeting();
+    const delayed = await repo.enqueue(db.pool, { type: 'process_meeting', meetingId: delayedMeeting, payload: {} });
+    await db.pool.query(`UPDATE job SET next_attempt_at=now() + interval '1 hour' WHERE id=$1`, [delayed.id]);
+    const readyMeeting = await seedMeeting();
+    const ready = await repo.enqueue(db.pool, { type: 'process_meeting', meetingId: readyMeeting, payload: {} });
+
+    expect((await repo.claim(db.pool, 'worker-1'))!.id).toBe(ready.id);
+  });
+
   it('setStage, complete, fail update fields', async () => {
     const mid = await seedMeeting();
     const job = await repo.enqueue(db.pool, { type: 'process_meeting', meetingId: mid, payload: {} });
@@ -58,5 +76,45 @@ describe('JobsRepository', () => {
     expect(rows[0].progress).toBe(40);
     expect(rows[0].status).toBe('failed');
     expect(rows[0].error).toEqual({ code: 'x', message: 'boom' });
+  });
+
+  it('summarize_meeting 잡을 큐잉하고 다시 읽어온다', async () => {
+    const mid = await seedMeeting();
+    const job = await repo.enqueue(db.pool, {
+      type: 'summarize_meeting',
+      meetingId: mid,
+      payload: {
+        schema_version: 1,
+        meeting_id: mid,
+        processing_version: 0,
+        model: 'model',
+      },
+    });
+    const { rows } = await db.pool.query(`SELECT type FROM job WHERE id = $1`, [job.id]);
+    expect(rows[0].type).toBe('summarize_meeting');
+  });
+
+  it('reapStale이 요약 잡 실패 시 요약 행도 failed로 넘긴다', async () => {
+    const meetingId = await seedMeeting();
+    const { rows: jobRows } = await db.pool.query<{ id: string }>(
+      `INSERT INTO job(type, meeting_id, payload, status, locked_by, locked_at,
+                       attempts, max_attempts)
+       VALUES ('summarize_meeting', $1, '{}'::jsonb, 'running', 'w',
+               now() - interval '30 minutes', 3, 3)
+       RETURNING id`,
+      [meetingId],
+    );
+    await db.pool.query(
+      `INSERT INTO meeting_summary(meeting_id, processing_version, job_id, model, status)
+       VALUES ($1, 0, $2, 'model', 'running')`,
+      [meetingId, jobRows[0].id],
+    );
+
+    await repo.reapStale(db.pool, 5);
+
+    const { rows } = await db.pool.query(
+      `SELECT status FROM meeting_summary WHERE meeting_id = $1`, [meetingId],
+    );
+    expect(rows[0].status).toBe('failed');
   });
 });

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { BadRequestException } from '@nestjs/common';
 import { DeviceSchema, WHISPER_MODELS } from '../contracts/job-payload.schema';
+import { SUMMARY_MODELS } from '../contracts/model-catalog';
 import { ProcessingConfig, resolvePreset } from './presets';
 
 // job 오버라이드 — PUT 스키마와 별개(혼합 허용, 의도된 비대칭; spec §5)
@@ -13,6 +14,7 @@ export const ProcessingOverrideSchema = z.object({
             'devices must set diarization or stt')
     .optional(),
   language: z.string().trim().min(1).optional(),
+  summary_model: z.enum(SUMMARY_MODELS).optional(),
 }).strict();
 export type ProcessingOverride = z.infer<typeof ProcessingOverrideSchema>;
 
@@ -22,7 +24,8 @@ export function resolveProcessingConfig(
   let cfg = global;
   if (override?.preset) cfg = resolvePreset(override.preset, override.language ?? global.language);
   const individual = override && (override.whisper_model !== undefined ||
-    override.devices !== undefined || override.language !== undefined);
+    override.devices !== undefined || override.language !== undefined ||
+    override.summary_model !== undefined);
   if (override && individual) {
     cfg = {
       preset: 'custom',
@@ -33,6 +36,7 @@ export function resolveProcessingConfig(
         diarization: override.devices?.diarization ?? cfg.devices.diarization,
         stt: override.devices?.stt ?? cfg.devices.stt,
       },
+      summary_model: override.summary_model ?? cfg.summary_model,
     };
   }
   if (!gpuEligible && (cfg.devices.diarization === 'gpu' || cfg.devices.stt === 'gpu')) {

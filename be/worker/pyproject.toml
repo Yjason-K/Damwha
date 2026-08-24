@@ -7,11 +7,16 @@ name = "damwha-worker"
 version = "0.1.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "httpx>=0.27",
-    "pydantic>=2.6",
-    "pydantic-settings>=2.2",
-    "psycopg[binary]>=3.1",
+    "httpx==0.28.1",
+    "pydantic==2.13.4",
+    "pydantic-settings==2.14.2",
+    "psycopg[binary]==3.3.4",
 ]
+
+# 모든 직접 의존성은 `==`로 고정한다(2026-08-20 기준 최신). 하한만 두면 venv를
+# 다시 만들 때마다 다른 스택이 깔린다 — 실제로 torchaudio가 2.9에서 자체 디코더를
+# 버리고 torchcodec에 위임하면서 파이프라인이 통째로 죽었다. 올릴 땐 이 파일을
+# 고쳐서 `uv lock` → SMOKE 재실행까지 한 묶음으로 한다.
 
 # Real ML models — heavy + gated (pyannote). NOT needed for the deterministic
 # test suite (registry/adapters are imported only inside main()). Install for
@@ -19,26 +24,26 @@ dependencies = [
 # backend: mlx-whisper on Apple Silicon, faster-whisper elsewhere.
 [project.optional-dependencies]
 models = [
-    "torch>=2.2",
-    "torchaudio>=2.2",
-    "silero-vad>=5.1",
-    "pyannote.audio>=3.1",
-    "speechbrain>=1.0",
-    "soundfile>=0.12",
-    "numpy>=1.26",
-    "mlx-whisper>=0.4 ; sys_platform == 'darwin' and platform_machine == 'arm64'",
-    "faster-whisper>=1.0",
-    "sentence-transformers>=3.0",
-    "fastapi>=0.110",
-    "uvicorn>=0.29",
+    "torch==2.12.1",
+    "torchaudio==2.11.0",
+    "silero-vad==6.2.1",
+    "pyannote.audio==4.0.5",
+    "speechbrain==1.1.0",
+    "soundfile==0.14.0",
+    "numpy==2.4.6",
+    "mlx-whisper==0.4.3 ; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "faster-whisper==1.2.1",
+    "sentence-transformers==5.6.0",
+    "fastapi==0.138.1",
+    "uvicorn==0.49.0",
 ]
 
 [dependency-groups]
 dev = [
-    "pytest>=8.0",
-    "pytest-httpx>=0.35",
-    "testcontainers[postgres]>=4.0",
-    "ruff>=0.4",
+    "pytest==9.1.1",
+    "pytest-httpx==0.36.2",
+    "testcontainers[postgres]==4.14.2",
+    "ruff==0.15.18",
 ]
 
 [tool.pytest.ini_options]

@@ -20,7 +20,7 @@ def test_rejects_traversal_and_absolute(tmp_path):
 
 def test_normalized_key():
     s = Storage("/tmp/x")
-    assert s.normalized_key("abc") == "meetings/abc/normalized.wav"
+    assert s.normalized_key("abc") == "meetings/abc/normalized.flac"
 
 
 def test_exists(tmp_path):

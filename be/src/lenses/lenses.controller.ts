@@ -15,7 +15,13 @@ export class LensesController {
   }
 
   @Get('meetings/:id/lenses')
-  @ApiOperation({ summary: '회의의 활성 렌즈 항목 목록' })
+  @ApiOperation({
+    summary: '회의의 활성 렌즈 항목 목록 + 현재 버전의 추출 상태',
+    description:
+      'extraction_status는 이 회의의 현재 processing_version에서 마지막 추출 run의 상태다. ' +
+      'null이면 그 버전에서 추출을 돌린 적이 없다는 뜻(업로드에서 defer_lens로 미뤘거나 ' +
+      '워커에 렌즈 모델이 없음)이고, 항목 0건이 "추출했는데 없음"인지 "아직 안 함"인지를 가른다.',
+  })
   listForMeeting(@Param('id') id: string) {
     return this.service.listForMeeting(id);
   }

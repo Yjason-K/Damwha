@@ -2,7 +2,7 @@
 
 Run: `uv run python scripts/download_models.py`
 pyannote is gated — set HF_TOKEN in worker/.env and accept the model license at
-https://huggingface.co/pyannote/speaker-diarization-3.1 first.
+https://huggingface.co/pyannote/speaker-diarization-community-1 first.
 
 Whisper: `WHISPER_MLX_REPOS` is a comma-separated list of MLX repos to cache
 (defaults to the standard preset's model only). To pre-cache several presets in
@@ -18,7 +18,7 @@ import os
 
 from damwha_worker.config import load_settings
 
-DIAR = os.environ.get("DIARIZATION_MODEL", "pyannote/speaker-diarization-3.1")
+DIAR = os.environ.get("DIARIZATION_MODEL", "pyannote/speaker-diarization-community-1")
 ECAPA = os.environ.get("EMBEDDING_MODEL", "speechbrain/spkrec-ecapa-voxceleb")
 WHISPER_REPOS = os.environ.get(
     "WHISPER_MLX_REPOS",

@@ -49,6 +49,24 @@ export class LensExtractionService {
     });
   }
 
+  /**
+   * 운영자 취소 (POST /meetings/:id/lenses/cancel). 화면 미노출 — 진행 중 run이
+   * 없으면 409. 잡과 run을 함께 failed(cancelled)로 닫는다.
+   */
+  async cancel(meetingId: string): Promise<{ job_id: string; status: 'failed' }> {
+    return this.db.withTransaction(async (exec) => {
+      const meeting = await this.extractions.lockMeeting(exec, meetingId);
+      if (!meeting) throw new NotFoundException('meeting not found');
+      const active = await this.extractions.findActiveRun(exec, meeting.id, meeting.processing_version);
+      if (!active?.job_id) throw new ConflictException('no lens extraction in progress to cancel');
+
+      const error = JobsRepository.cancelledError('extract_lenses');
+      await this.jobs.cancel(exec, active.job_id, error);
+      await this.extractions.markRunCancelled(exec, active.id, error);
+      return { job_id: active.job_id, status: 'failed' };
+    });
+  }
+
   private response(run: LensExtractionRunRow): LensExtractionRequest {
     return {
       run_id: run.id,

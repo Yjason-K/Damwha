@@ -1,0 +1,18 @@
+{
+  "schema_version": 3,
+  "meeting_id": "mtg_1",
+  "audio_key": "meetings/mtg_1/original.m4a",
+  "processing_version": 2,
+  "reprocess": true,
+  "models": {
+    "whisper_model": "small",
+    "language": "ko",
+    "devices": { "diarization": "gpu", "stt": "cpu" },
+    "preset": "light",
+    "preset_revision": "2026-08-12.1",
+    "summary_model": "mlx-community/Qwen3.5-4B-8bit",
+    "diarization": { "model": "pyannote/speaker-diarization-3.1", "min_speakers": null, "max_speakers": null },
+    "embedding": { "model": "speechbrain/spkrec-ecapa-voxceleb", "dimension": 192 }
+  },
+  "identify": { "threshold": 0.7 }
+}

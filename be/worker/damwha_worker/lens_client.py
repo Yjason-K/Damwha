@@ -18,7 +18,7 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "assignee_speaker_id (nullable), due_at (nullable), primary_utterance_id, "
     "supporting_utterance_ids. Choose the exact primary utterance. Every utterance "
     "ID and assignee_speaker_id must originate in the supplied utterances. Do not "
-    "speculate or return duplicates."
+    "speculate or return duplicates. Write text in the language of the transcript."
 )
 
 
@@ -35,10 +35,17 @@ def _strip_code_fence(content: str) -> str:
 class LensClient:
     """Small synchronous adapter for OpenAI-compatible chat-completion APIs."""
 
-    def __init__(self, base_url: str, api_key: str | None, timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str | None,
+        timeout_seconds: float,
+        max_tokens: int,
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._timeout_seconds = timeout_seconds
+        self._max_tokens = max_tokens
 
     def extract(self, *, model: str, utterances: list[dict[str, Any]]) -> list[LensCandidate]:
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
@@ -58,8 +65,17 @@ class LensClient:
             ],
             "response_format": {"type": "json_object"},
             # Reasoning models spend minutes thinking before emitting the items
-            # array. Extraction needs the answer, not the deliberation.
+            # array. Extraction needs the answer, not the deliberation. Two keys
+            # because runtimes disagree on which one they read: Ollama honors
+            # reasoning_effort, mlx_lm.server ignores it and only merges
+            # chat_template_kwargs over its --chat-template-args default.
+            # An unread key is silently dropped, so sending both is safe.
             "reasoning_effort": "none",
+            "chat_template_kwargs": {"enable_thinking": False},
+            # The server's own default (512 on mlx_lm.server) truncates the items
+            # array mid-string, which surfaces as an unparseable-JSON PERMANENT
+            # failure — so the cap is stated here instead of inherited.
+            "max_tokens": self._max_tokens,
         }
         try:
             with httpx.Client(timeout=self._timeout_seconds) as client:

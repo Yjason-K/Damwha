@@ -1,7 +1,7 @@
 import { BadRequestException, Body, Controller, Get, Inject, Put } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { SettingsService } from './settings.service';
-import { StoredProcessingValueSchema, resolveStoredValue } from './processing-config';
+import { PutProcessingValueSchema, resolveStoredValue } from './processing-config';
 import { Capabilities, CAPABILITIES } from '../system/capabilities';
 
 @ApiTags('settings')
@@ -21,7 +21,7 @@ export class SettingsController {
   @Put('processing')
   @ApiOperation({ summary: '처리 기본 설정 변경 — 이름 프리셋은 이름만, custom은 전 필드' })
   async put(@Body() body: unknown) {
-    const parsed = StoredProcessingValueSchema.safeParse(body);
+    const parsed = PutProcessingValueSchema.safeParse(body);
     if (!parsed.success) throw new BadRequestException(parsed.error.issues.map((i) => i.message).join('; '));
     const v = parsed.data;
     // 이름 프리셋도 gpu를 품는다(light: diar gpu) — 반드시 완전 해석 후 검사 (spec §3)

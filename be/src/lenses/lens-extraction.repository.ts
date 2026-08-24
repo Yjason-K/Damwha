@@ -40,6 +40,28 @@ export class LensExtractionRepository {
     return rows[0] ?? null;
   }
 
+  // 이 회의의 **현재** processing_version에서 마지막으로 만들어진 run의 상태.
+  // 행이 아예 없으면 null — "추출한 적 없음"과 "추출했는데 0건"을 구분하는 값이라
+  // 상태 없음을 실패로 뭉뚱그리지 않는다. 재처리로 버전이 올라가면 그 버전의 run이
+  // 생기기 전까지 다시 null이 된다.
+  async findLatestRunStatusForCurrentVersion(
+    exec: Queryable, meetingId: string,
+  ): Promise<LensExtractionRunRow['status'] | null> {
+    const { rows } = await exec.query<{ status: LensExtractionRunRow['status'] | null }>(
+      `SELECT r.status
+         FROM meeting m
+         LEFT JOIN LATERAL (
+           SELECT status FROM lens_extraction_run
+            WHERE meeting_id = m.id AND processing_version = m.processing_version
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+         ) r ON true
+        WHERE m.id = $1`,
+      [meetingId],
+    );
+    return rows[0]?.status ?? null;
+  }
+
   async findActiveRun(
     exec: Queryable, meetingId: string, processingVersion: number,
   ): Promise<LensExtractionRunRow | null> {
@@ -50,6 +72,16 @@ export class LensExtractionRepository {
       [meetingId, processingVersion],
     );
     return rows[0] ?? null;
+  }
+
+  /** 취소 — 진행 중(queued/running) run만 failed로 닫는다. */
+  async markRunCancelled(exec: Queryable, runId: string, error: object): Promise<boolean> {
+    const { rowCount } = await exec.query(
+      `UPDATE lens_extraction_run SET status='failed', error=$2::jsonb, finished_at=now()
+       WHERE id=$1 AND status IN ('queued','running')`,
+      [runId, JSON.stringify(error)],
+    );
+    return (rowCount ?? 0) > 0;
   }
 
   async createQueuedRun(

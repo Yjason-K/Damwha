@@ -63,6 +63,49 @@ describe('cluster resolve', () => {
     expect(res.body.updated_utterances).toBe(2);
   });
 
+  it('confirming a suggested merge binds the candidate and clears the suggestion', async () => {
+    // This is the whole point of the band: identify parks a candidate, the user
+    // accepts it through the normal resolve endpoint, and the question is settled
+    // so the next page load does not re-offer a merge already answered.
+    const { mid, clusterId } = await seed();
+    const cand = await db.pool.query(
+      `INSERT INTO speaker(name,enrollment_status) VALUES('이수민','ready') RETURNING id`);
+    await db.pool.query(
+      `UPDATE meeting_cluster SET suggested_speaker_id=$2, suggested_similarity=0.72 WHERE id=$1`,
+      [clusterId, cand.rows[0].id]);
+
+    const res = await request(srv())
+      .post(`/meetings/${mid}/clusters/${clusterId}/resolve`).send({ speaker_id: cand.rows[0].id });
+    expect(res.status).toBe(200);
+    expect(res.body.speaker_id).toBe(cand.rows[0].id);
+
+    const row = await db.pool.query(
+      'SELECT resolved_speaker_id, suggested_speaker_id, suggested_similarity FROM meeting_cluster WHERE id=$1',
+      [clusterId]);
+    expect(row.rows[0].resolved_speaker_id).toBe(cand.rows[0].id);
+    expect(row.rows[0].suggested_speaker_id).toBeNull();
+    expect(row.rows[0].suggested_similarity).toBeNull();
+  });
+
+  it('rejecting a suggestion by resolving elsewhere also clears it', async () => {
+    const { mid, clusterId } = await seed();
+    const cand = await db.pool.query(
+      `INSERT INTO speaker(name,enrollment_status) VALUES('오답','ready') RETURNING id`);
+    await db.pool.query(
+      `UPDATE meeting_cluster SET suggested_speaker_id=$2, suggested_similarity=0.61 WHERE id=$1`,
+      [clusterId, cand.rows[0].id]);
+
+    const res = await request(srv())
+      .post(`/meetings/${mid}/clusters/${clusterId}/resolve`).send({ new_name: '정답' });
+    expect(res.status).toBe(200);
+    expect(res.body.speaker_id).not.toBe(cand.rows[0].id);
+
+    const row = await db.pool.query(
+      'SELECT suggested_speaker_id, suggested_similarity FROM meeting_cluster WHERE id=$1', [clusterId]);
+    expect(row.rows[0].suggested_speaker_id).toBeNull();
+    expect(row.rows[0].suggested_similarity).toBeNull();
+  });
+
   it('404 when cluster does not belong to meeting', async () => {
     const { clusterId } = await seed();
     const other = await db.pool.query(`INSERT INTO meeting(audio_key,status) VALUES('k2','done') RETURNING id`);

@@ -386,31 +386,31 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastapi", marker = "extra == 'models'", specifier = ">=0.110" },
-    { name = "faster-whisper", marker = "extra == 'models'", specifier = ">=1.0" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "mlx-whisper", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'models'", specifier = ">=0.4" },
-    { name = "numpy", marker = "extra == 'models'", specifier = ">=1.26" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
-    { name = "pyannote-audio", marker = "extra == 'models'", specifier = ">=3.1" },
-    { name = "pydantic", specifier = ">=2.6" },
-    { name = "pydantic-settings", specifier = ">=2.2" },
-    { name = "sentence-transformers", marker = "extra == 'models'", specifier = ">=3.0" },
-    { name = "silero-vad", marker = "extra == 'models'", specifier = ">=5.1" },
-    { name = "soundfile", marker = "extra == 'models'", specifier = ">=0.12" },
-    { name = "speechbrain", marker = "extra == 'models'", specifier = ">=1.0" },
-    { name = "torch", marker = "extra == 'models'", specifier = ">=2.2" },
-    { name = "torchaudio", marker = "extra == 'models'", specifier = ">=2.2" },
-    { name = "uvicorn", marker = "extra == 'models'", specifier = ">=0.29" },
+    { name = "fastapi", marker = "extra == 'models'", specifier = "==0.138.1" },
+    { name = "faster-whisper", marker = "extra == 'models'", specifier = "==1.2.1" },
+    { name = "httpx", specifier = "==0.28.1" },
+    { name = "mlx-whisper", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'models'", specifier = "==0.4.3" },
+    { name = "numpy", marker = "extra == 'models'", specifier = "==2.4.6" },
+    { name = "psycopg", extras = ["binary"], specifier = "==3.3.4" },
+    { name = "pyannote-audio", marker = "extra == 'models'", specifier = "==4.0.5" },
+    { name = "pydantic", specifier = "==2.13.4" },
+    { name = "pydantic-settings", specifier = "==2.14.2" },
+    { name = "sentence-transformers", marker = "extra == 'models'", specifier = "==5.6.0" },
+    { name = "silero-vad", marker = "extra == 'models'", specifier = "==6.2.1" },
+    { name = "soundfile", marker = "extra == 'models'", specifier = "==0.14.0" },
+    { name = "speechbrain", marker = "extra == 'models'", specifier = "==1.1.0" },
+    { name = "torch", marker = "extra == 'models'", specifier = "==2.12.1" },
+    { name = "torchaudio", marker = "extra == 'models'", specifier = "==2.11.0" },
+    { name = "uvicorn", marker = "extra == 'models'", specifier = "==0.49.0" },
 ]
 provides-extras = ["models"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "pytest-httpx", specifier = ">=0.35" },
-    { name = "ruff", specifier = ">=0.4" },
-    { name = "testcontainers", extras = ["postgres"], specifier = ">=4.0" },
+    { name = "pytest", specifier = "==9.1.1" },
+    { name = "pytest-httpx", specifier = "==0.36.2" },
+    { name = "ruff", specifier = "==0.15.18" },
+    { name = "testcontainers", extras = ["postgres"], specifier = "==4.14.2" },
 ]
 
 [[package]]

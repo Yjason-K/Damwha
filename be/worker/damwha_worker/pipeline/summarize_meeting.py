@@ -1,0 +1,105 @@
+import threading
+
+from .. import db
+from ..contracts import SummarizeMeetingPayload
+from ..errors import LLM_INVALID_RESPONSE, ErrorKind, WorkerError
+from .stage import enter_stage
+from .timing import timed_stage
+
+
+def _resolve_segments(segments, rows) -> list[dict]:
+    """LLM이 지목한 경계 utterance를 DB 행에 맞춰 검증하고 시간을 채운다.
+
+    LLM은 id만 신뢰 대상이다 — start_ms/end_ms는 여기서 DB 값으로 파생시켜
+    모델이 타임스탬프를 지어내는 실패 모드를 원천 차단한다.
+    """
+    order = {row["id"]: index for index, row in enumerate(rows)}
+    by_id = {row["id"]: row for row in rows}
+    resolved: list[dict] = []
+    previous_end = -1
+    for segment in segments:
+        start = by_id.get(segment.start_utterance_id)
+        end = by_id.get(segment.end_utterance_id)
+        if start is None or end is None:
+            raise WorkerError(
+                LLM_INVALID_RESPONSE,
+                f"segment cites an utterance outside the meeting: "
+                f"{segment.start_utterance_id}..{segment.end_utterance_id}",
+                ErrorKind.PERMANENT,
+            )
+        if order[start["id"]] > order[end["id"]]:
+            raise WorkerError(
+                LLM_INVALID_RESPONSE,
+                f"segment boundaries are reversed: {start['id']}..{end['id']}",
+                ErrorKind.PERMANENT,
+            )
+        if order[start["id"]] <= previous_end:
+            raise WorkerError(
+                LLM_INVALID_RESPONSE,
+                f"segments are not in transcript order at {start['id']}",
+                ErrorKind.PERMANENT,
+            )
+        previous_end = order[end["id"]]
+        resolved.append(
+            {
+                "start_utterance_id": start["id"],
+                "end_utterance_id": end["id"],
+                "start_ms": start["start_ms"],
+                "end_ms": end["end_ms"],
+                "title": segment.title,
+                "bullets": list(segment.bullets),
+            }
+        )
+    return resolved
+
+
+def run_summarize_meeting(
+    conn,
+    job: dict,
+    payload: SummarizeMeetingPayload,
+    client,
+    *,
+    worker_id: str,
+    shutdown_event: threading.Event | None = None,
+) -> str:
+    outcome = db.mark_summary_running(
+        conn,
+        job_id=job["id"],
+        worker_id=worker_id,
+        meeting_id=payload.meeting_id,
+        processing_version=payload.processing_version,
+    )
+    if outcome != "running":
+        return outcome
+    enter_stage(conn, job["id"], worker_id, "summarize_meeting", 30, shutdown_event)
+    rows = conn.execute(
+        """SELECT u.id, u.speaker_id, s.name AS speaker_name, u.text, u.start_ms, u.end_ms
+           FROM utterance u
+           LEFT JOIN speaker s ON s.id = u.speaker_id
+           WHERE u.meeting_id=%s AND u.processing_version=%s
+             AND u.status='ok' AND u.text IS NOT NULL
+           ORDER BY u.order_index, u.id""",
+        (payload.meeting_id, payload.processing_version),
+    ).fetchall()
+    # LLM 호출은 긴 회의에서 수 분 — timed_stage가 진행 중 tick과 완료 시간을 남긴다
+    with timed_stage("summarize_meeting", f"job={job['id']} meeting={payload.meeting_id}") as t:
+        row_dicts = [dict(row) for row in rows]
+        # 경계 검증을 클라이언트의 되먹임 재시도 루프 안으로 넘긴다 — 지어낸/역순
+        # 경계도 스키마 실패처럼 거절 사유를 되먹여 한 번 고쳐 쓸 기회를 얻는다
+        response = client.summarize(
+            model=payload.model,
+            utterances=row_dicts,
+            validate=lambda r: _resolve_segments(r.segments, row_dicts),
+        )
+        segments = _resolve_segments(response.segments, row_dicts)
+        t["detail"] = f"utterances={len(rows)} segments={len(segments)}"
+    enter_stage(conn, job["id"], worker_id, "persist_summary", 80, shutdown_event)
+    return db.persist_summary(
+        conn,
+        job_id=job["id"],
+        worker_id=worker_id,
+        meeting_id=payload.meeting_id,
+        processing_version=payload.processing_version,
+        topics=list(response.topics),
+        segments=segments,
+    )

@@ -30,16 +30,29 @@ MIGRATIONS = Path(__file__).resolve().parents[2] / "src" / "database" / "migrati
 
 
 def _payload(meeting_id: str, audio_key: str, device: str) -> dict:
+    """v4 — the shape the API actually enqueues.
+
+    Kept in step with production on purpose: this smoke is the only place the real
+    models meet the identify path, so pinning it to an older wire version would
+    leave the two-tier suggestion band unexercised against real embeddings. The
+    thresholds mirror be/.env defaults (set from scripts/eval_speaker_id.py).
+    """
+    # The --device flag speaks v1's torch vocabulary (mps|cpu); v2+ payloads carry
+    # the per-stage abstract device instead.
+    dev = "gpu" if device == "mps" else device
     return {
-        "schema_version": 1,
+        "schema_version": 4,
         "meeting_id": meeting_id,
         "audio_key": audio_key,
         "processing_version": 0,
         "reprocess": False,
         "models": {
             "whisper_model": "large-v3-turbo",
-            "device": device,
             "language": "ko",
+            "devices": {"diarization": dev, "stt": dev},
+            "preset": "standard",
+            "preset_revision": None,
+            "summary_model": "mlx-community/Qwen3.5-4B-8bit",
             "diarization": {
                 "model": "pyannote/speaker-diarization-3.1",
                 "min_speakers": None,
@@ -47,7 +60,7 @@ def _payload(meeting_id: str, audio_key: str, device: str) -> dict:
             },
             "embedding": {"model": "speechbrain/spkrec-ecapa-voxceleb", "dimension": 192},
         },
-        "identify": {"threshold": 0.5},
+        "identify": {"threshold": 0.8, "suggest_threshold": 0.6},
     }
 
 

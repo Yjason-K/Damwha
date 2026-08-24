@@ -1,5 +1,7 @@
 import inspect
+import sys
 import threading
+from types import SimpleNamespace
 
 from damwha_worker import __main__ as m
 from damwha_worker import db
@@ -18,6 +20,7 @@ def _settings_stub(pg_url):
         search_embedding_dim = 1024
         default_speaker_prefix = "Speaker"
         lens_llm_model = "qwen2.5:14b-instruct"
+        summary_llm_model = "qwen2.5:14b-instruct"
 
     return S()
 
@@ -203,6 +206,28 @@ def test_main_dispatches_once_flag_to_child():
     assert '"--once"' in src and "sys.argv" in src
     # argparse 금지(exit 2 흡수 계약)
     assert "argparse" not in src
+
+
+def test_run_child_defers_model_registry_import_until_after_claim(monkeypatch, tmp_path):
+    real_import = __import__
+    sys.modules.pop("damwha_worker.models.registry", None)
+
+    def _import(name, *args, **kwargs):
+        if name.endswith("models.registry"):
+            raise ModuleNotFoundError("missing models")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", _import)
+    monkeypatch.setattr(m, "run_single_job", lambda *args, **kwargs: 3)
+    settings = SimpleNamespace(
+        storage_root=str(tmp_path),
+        database_url="postgresql://unused",
+        lens_llm_base_url="http://127.0.0.1:11434/v1",
+        lens_llm_api_key=None,
+        lens_llm_timeout_seconds=1,
+    )
+
+    assert m.run_child(settings, threading.Event()) == 3
 
 
 def test_child_spawn_uses_sys_executable_and_new_session():

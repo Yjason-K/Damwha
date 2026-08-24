@@ -239,8 +239,8 @@ def main() -> int:
                 dimension=192,
                 threshold=THRESHOLD,
             )
-            matched = result.get(target["diar_label"])
-            det_ok = matched is not None and str(matched) == alice
+            matched = result[target["diar_label"]]
+            det_ok = matched.speaker_id == alice
             print(
                 f"    cluster {target['diar_label']} centroid → identify returned "
                 f"{'Alice ✓' if det_ok else matched}"

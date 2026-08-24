@@ -21,10 +21,13 @@ export class JobsRepository {
   async claim(exec: Queryable, workerId: string): Promise<JobRow | null> {
     const { rows } = await exec.query<JobRow>(
       `UPDATE job SET status='running', locked_by=$1, locked_at=now(),
-                      attempts = attempts + 1, updated_at=now()
+                      attempts = attempts + 1, next_attempt_at=NULL, updated_at=now()
        WHERE id IN (
-         SELECT id FROM job WHERE status='queued'
-         ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
+         SELECT id FROM job
+         WHERE status='queued'
+           AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+         ORDER BY next_attempt_at NULLS FIRST, created_at
+         FOR UPDATE SKIP LOCKED LIMIT 1
        ) RETURNING *`,
       [workerId],
     );
@@ -53,6 +56,27 @@ export class JobsRepository {
     );
   }
 
+  /** 운영자 취소 에러 본문 — 워커의 WorkerError JSON과 같은 모양(code/message/stage). */
+  static cancelledError(stage: string) {
+    return { code: 'cancelled', kind: 'PERMANENT', stage, message: 'cancelled by operator' };
+  }
+
+  /**
+   * 운영자 취소 — 아직 끝나지 않은(queued/running) 잡만 failed로 돌린다.
+   * 워커 쪽 persist/requeue/fail은 전부 `status='running'` 소유권 가드를 타므로
+   * 여기서 상태를 바꾸면 진행 중이던 결과는 `lost`로 버려지고, heartbeat는
+   * rowcount 0을 보고 LLM 서버를 내린다. 이미 끝난 잡이면 null.
+   */
+  async cancel(exec: Queryable, jobId: string, error: object): Promise<JobRow | null> {
+    const { rows } = await exec.query<JobRow>(
+      `UPDATE job SET status='failed', error=$2::jsonb, updated_at=now()
+       WHERE id=$1 AND status IN ('queued','running')
+       RETURNING *`,
+      [jobId, JSON.stringify(error)],
+    );
+    return rows[0] ?? null;
+  }
+
   async fail(exec: Queryable, jobId: string, error: object): Promise<void> {
     await exec.query(
       `UPDATE job SET status='failed', error=$2::jsonb, updated_at=now() WHERE id=$1`,
@@ -73,7 +97,8 @@ export class JobsRepository {
          FOR UPDATE SKIP LOCKED
        ),
        requeued AS (
-         UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL, updated_at=now()
+         UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL,
+           next_attempt_at=NULL, updated_at=now()
          WHERE id IN (SELECT id FROM stale WHERE attempts < max_attempts)
          RETURNING id
        ),
@@ -90,6 +115,12 @@ export class JobsRepository {
          FROM failed f
          WHERE r.job_id=f.id AND f.type='extract_lenses'
          RETURNING r.id
+       ),
+       fail_summaries AS (
+         UPDATE meeting_summary s SET status='failed', error=f.error, updated_at=now()
+         FROM failed f
+         WHERE s.job_id=f.id AND f.type='summarize_meeting'
+         RETURNING s.meeting_id
        ),
        fail_meetings AS (
          UPDATE meeting m SET status='failed',

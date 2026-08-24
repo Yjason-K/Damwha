@@ -4,21 +4,50 @@ import signal
 import subprocess
 import sys
 import threading
+from contextlib import contextmanager, nullcontext
 
-from . import db
+from . import console, db
 from .config import load_settings
 from .contracts import parse_payload
 from .errors import ErrorKind, ShutdownRequested, classify
+from .llm_server import managed_llm_server
+from .llm_server import probe_models as check_lens_llm
 from .pipeline.enroll_speaker import run_enroll_speaker
 from .pipeline.extract_lenses import run_extract_lenses
 from .pipeline.index_meeting import run_index_meeting
 from .pipeline.process_meeting import run_process_meeting
+from .pipeline.summarize_meeting import run_summarize_meeting
+from .reaper import run_reaper_loop
 from .storage import Storage
 
 log = logging.getLogger("damwha_worker")
 
 _MAX_BACKOFF_SECONDS = 60.0
 _TIMEOUT_EXC = subprocess.TimeoutExpired
+
+
+def _no_llm_server(_model):
+    """LLM 서버를 워커가 관리하지 않을 때의 기본값 — 아무것도 띄우지 않는다."""
+    return nullcontext()
+
+
+@contextmanager
+def _llm_abort_hook(register_abort, proc):
+    """워커가 직접 띄운 LLM 서버(proc)가 있을 때만 소유권 상실 훅을 건다.
+
+    운영자 취소로 heartbeat가 소유권을 잃으면 proc에 SIGTERM — 진행 중 HTTP 요청이
+    즉시 실패해 파이프라인이 에러 경로로 빠지고, managed_llm_server의 finally가
+    wait/kill 에스컬레이션을 마무리한다. 외부 서버 재사용(proc None)이면 죽일 게
+    없으니 걸지 않는다. 본문이 끝나면 훅을 해제해 정상 완료 직후 beat 경합을 막는다.
+    """
+    if register_abort is None or proc is None:
+        yield
+        return
+    register_abort(proc.terminate)
+    try:
+        yield
+    finally:
+        register_abort(None)
 
 
 def handle_job(
@@ -31,11 +60,16 @@ def handle_job(
     build_embedder=None,
     build_text_embedder=None,
     build_lens_client=None,
+    build_summary_client=None,
     search_embedding=None,
     default_speaker_prefix="Speaker",
     lens_llm_model=None,
+    summary_llm_model=None,
+    llm_server=None,
     shutdown_event=None,
+    register_abort=None,
 ) -> str:
+    llm_server = llm_server or _no_llm_server
     try:
         if shutdown_event is not None and shutdown_event.is_set():
             # claim과 dispatch 사이에 시그널 — 모델 빌드 전에 반납
@@ -55,6 +89,7 @@ def handle_job(
                 search_embedding_dim=sd,
                 default_speaker_prefix=default_speaker_prefix,
                 lens_llm_model=lens_llm_model,
+                summary_llm_model=summary_llm_model,
                 shutdown_event=shutdown_event,
             )
         if job["type"] == "enroll_speaker":
@@ -79,10 +114,22 @@ def handle_job(
                 shutdown_event=shutdown_event,
             )
         if job["type"] == "extract_lenses":
-            client = build_lens_client()
-            return run_extract_lenses(
-                conn, job, payload, client, worker_id=worker_id, shutdown_event=shutdown_event
-            )
+            with llm_server(payload.model) as proc, _llm_abort_hook(register_abort, proc):
+                client = build_lens_client()
+                return run_extract_lenses(
+                    conn, job, payload, client, worker_id=worker_id, shutdown_event=shutdown_event
+                )
+        if job["type"] == "summarize_meeting":
+            with llm_server(payload.model) as proc, _llm_abort_hook(register_abort, proc):
+                summary_client = build_summary_client()
+                return run_summarize_meeting(
+                    conn,
+                    job,
+                    payload,
+                    summary_client,
+                    worker_id=worker_id,
+                    shutdown_event=shutdown_event,
+                )
         raise ValueError(f"unknown job type {job['type']}")
     except ShutdownRequested:
         log.info("job %s type=%s → shutdown requeue", job["id"], job["type"])
@@ -120,6 +167,10 @@ def handle_job(
             return db.fail_lens_extraction(
                 conn, job["id"], worker_id, run_id, processing_version, error_json
             )
+        if job["type"] == "summarize_meeting":
+            if transient_retry:
+                return "requeued" if db.requeue(conn, job["id"], worker_id) else "lost"
+            return db.fail_summary(conn, job["id"], worker_id, error_json)
         # process_meeting
         meeting_id = job["meeting_id"]
         if transient_retry:
@@ -140,9 +191,12 @@ def run_once(
     build_embedder=None,
     build_text_embedder=None,
     build_lens_client=None,
+    build_summary_client=None,
     search_embedding=None,
     default_speaker_prefix="Speaker",
     lens_llm_model=None,
+    summary_llm_model=None,
+    llm_server=None,
     shutdown_event=None,
 ) -> str | None:
     job = db.claim(conn, worker_id)
@@ -157,9 +211,12 @@ def run_once(
         build_embedder=build_embedder,
         build_text_embedder=build_text_embedder,
         build_lens_client=build_lens_client,
+        build_summary_client=build_summary_client,
         search_embedding=search_embedding,
         default_speaker_prefix=default_speaker_prefix,
         lens_llm_model=lens_llm_model,
+        summary_llm_model=summary_llm_model,
+        llm_server=llm_server,
         shutdown_event=shutdown_event,
     )
 
@@ -175,6 +232,8 @@ def dispatch_claimed_job(
     build_text_embedder_fn,
     heartbeat_cm,
     build_lens_client_fn=None,
+    build_summary_client_fn=None,
+    llm_server_fn=None,
     shutdown_event=None,
 ) -> str:
     """claim된 job 1건: heartbeat 진입 → 콜백(지연 빌드)을 handle_job에 주입."""
@@ -190,10 +249,17 @@ def dispatch_claimed_job(
             build_lens_client=(
                 (lambda: build_lens_client_fn(settings)) if build_lens_client_fn else None
             ),
+            build_summary_client=(
+                (lambda: build_summary_client_fn(settings)) if build_summary_client_fn else None
+            ),
             search_embedding=(settings.search_embedding_model, settings.search_embedding_dim),
             default_speaker_prefix=settings.default_speaker_prefix,
             lens_llm_model=settings.lens_llm_model,
+            summary_llm_model=settings.summary_llm_model,
+            llm_server=llm_server_fn,
             shutdown_event=shutdown_event,
+            # heartbeat가 소유권 상실(운영자 취소/reaper)을 감지하면 LLM 서버를 내린다
+            register_abort=getattr(heartbeat_cm, "set_on_lost", None),
         )
 
 
@@ -207,6 +273,8 @@ def run_single_job(
     build_embedder_fn,
     build_text_embedder_fn,
     build_lens_client_fn=None,
+    build_summary_client_fn=None,
+    llm_server_fn=None,
 ) -> int:
     """자식 진입점: job 1건 처리 후 exit code 반환.
 
@@ -236,6 +304,8 @@ def run_single_job(
             build_embedder_fn=build_embedder_fn,
             build_text_embedder_fn=build_text_embedder_fn,
             build_lens_client_fn=build_lens_client_fn,
+            build_summary_client_fn=build_summary_client_fn,
+            llm_server_fn=llm_server_fn,
             heartbeat_cm=hb,
             shutdown_event=shutdown,
         )
@@ -353,23 +423,78 @@ def run_child(settings, shutdown: threading.Event) -> int:
         signal.signal(sig, _on_signal)
 
     storage = Storage(settings.storage_root)
-    from .lens_client import LensClient
-    from .models.registry import build_embedder, build_models, build_text_embedder
+
+    def _build_models(payload, worker_settings):
+        from .models.registry import build_models
+
+        return build_models(payload, worker_settings)
+
+    def _build_embedder(payload, worker_settings):
+        from .models.registry import build_embedder
+
+        return build_embedder(payload, worker_settings)
+
+    def _build_text_embedder(worker_settings):
+        from .models.registry import build_text_embedder
+
+        return build_text_embedder(worker_settings)
+
+    def _build_lens_client(worker_settings):
+        from .lens_client import LensClient
+
+        return LensClient(
+            worker_settings.lens_llm_base_url,
+            worker_settings.lens_llm_api_key,
+            worker_settings.lens_llm_timeout_seconds,
+            worker_settings.lens_llm_max_tokens,
+        )
+
+    def _build_summary_client(worker_settings):
+        from .summary_client import SummaryClient
+
+        return SummaryClient(
+            worker_settings.lens_llm_base_url,
+            worker_settings.lens_llm_api_key,
+            worker_settings.lens_llm_timeout_seconds,
+            worker_settings.lens_llm_max_tokens,
+        )
 
     return run_single_job(
         settings,
         storage,
         shutdown,
         connect_fn=lambda: db.connect(settings.database_url),
-        build_models_fn=build_models,
-        build_embedder_fn=build_embedder,
-        build_text_embedder_fn=build_text_embedder,
-        build_lens_client_fn=lambda s: LensClient(
-            s.lens_llm_base_url,
-            s.lens_llm_api_key,
-            s.lens_llm_timeout_seconds,
-        ),
+        build_models_fn=_build_models,
+        build_embedder_fn=_build_embedder,
+        build_text_embedder_fn=_build_text_embedder,
+        build_lens_client_fn=_build_lens_client,
+        build_summary_client_fn=_build_summary_client,
+        llm_server_fn=lambda model: managed_llm_server(model, settings),
     )
+
+
+def log_lens_llm_health(base_url: str, *, managed: bool = False) -> None:
+    """기동 시 1회 호출. 실패해도 워커는 뜬다 — process_meeting은 LLM을 쓰지 않으므로
+    LLM 서버가 없다고 오디오 처리까지 막을 이유가 없다. 대신 크게 경고한다.
+
+    `managed`면 서버가 아직 안 떠 있는 게 정상이다(렌즈/요약 자식이 job 직전에 띄운다)
+    — 경고하지 않는다."""
+    models = check_lens_llm(base_url)
+    if managed:
+        log.info(
+            "lens/summary LLM at %s is worker-managed — started per lens/summary job%s",
+            base_url,
+            "" if models is None else f" (one already running, serving: {', '.join(models)})",
+        )
+    elif models is None:
+        log.warning(
+            "lens/summary LLM at %s is unreachable — extract_lenses/summarize_meeting jobs "
+            "will retry and then fail (process_meeting is unaffected). Start it with: "
+            "mlx_lm.server --model <repo> --chat-template-args '{\"enable_thinking\":false}'",
+            base_url,
+        )
+    else:
+        log.info("lens/summary LLM at %s serving: %s", base_url, ", ".join(models) or "(none)")
 
 
 def run_supervisor_main(settings, shutdown: threading.Event) -> None:
@@ -398,19 +523,36 @@ def run_supervisor_main(settings, shutdown: threading.Event) -> None:
             start_new_session=True,
         )
 
-    log.info("supervisor %s started", settings.worker_id)
-    run_supervisor(
-        settings,
-        shutdown,
-        connect_fn=lambda: db.connect(settings.database_url),
-        spawn_fn=_spawn,
-        child_holder=child_holder,
+    reaper_thread = threading.Thread(
+        target=run_reaper_loop,
+        args=(
+            settings.database_url,
+            settings.reaper_stale_minutes,
+            settings.reaper_interval_seconds,
+            shutdown,
+        ),
+        daemon=True,
     )
+    reaper_thread.start()
+    log_lens_llm_health(settings.lens_llm_base_url, managed=settings.lens_llm_managed)
+    log.info("supervisor %s started", settings.worker_id)
+    try:
+        run_supervisor(
+            settings,
+            shutdown,
+            connect_fn=lambda: db.connect(settings.database_url),
+            spawn_fn=_spawn,
+            child_holder=child_holder,
+        )
+    finally:
+        shutdown.set()
+        reaper_thread.join(timeout=5)
     log.info("supervisor %s stopped", settings.worker_id)
 
 
 def main() -> None:  # pragma: no cover — 실모델 + 시그널 배선 (로컬 실행)
-    logging.basicConfig(level=logging.INFO)
+    # 진행 바와 로그가 같은 stderr를 쓴다 — 핸들러가 바를 지웠다 다시 그려야 섞이지 않는다
+    console.install_logging(level=logging.INFO)
     settings = load_settings()
     shutdown = threading.Event()
     if "--once" in sys.argv[1:]:

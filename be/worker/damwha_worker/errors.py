@@ -51,6 +51,9 @@ IO_ERROR = "io_error"
 DB_ERROR = "db_error"
 LLM_REQUEST_FAILED = "llm_request_failed"
 LLM_INVALID_RESPONSE = "llm_invalid_response"
+# 워커가 소유한 LLM 서버를 못 띄웠다. 설정/설치 문제면 PERMANENT, 기동 실패면 TRANSIENT
+# (llm_server.py가 직접 kind를 정한다).
+LLM_SERVER_START_FAILED = "llm_server_start_failed"
 
 
 def classify(exc: Exception) -> WorkerError:

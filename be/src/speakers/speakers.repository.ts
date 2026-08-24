@@ -73,6 +73,16 @@ export class SpeakersRepository {
   async unreferenceClusters(exec: Queryable, id: string): Promise<void> {
     await exec.query(`UPDATE meeting_cluster SET resolved_speaker_id=NULL WHERE resolved_speaker_id=$1`, [id]);
   }
+  // The FK on suggested_speaker_id is ON DELETE SET NULL, which would clear the id
+  // and leave the score dangling. Clear both so no half-suggestion survives the
+  // speaker it pointed at.
+  async unreferenceSuggestions(exec: Queryable, id: string): Promise<void> {
+    await exec.query(
+      `UPDATE meeting_cluster SET suggested_speaker_id=NULL, suggested_similarity=NULL
+       WHERE suggested_speaker_id=$1`,
+      [id],
+    );
+  }
   async deleteById(exec: Queryable, id: string): Promise<boolean> {
     const res = await exec.query(`DELETE FROM speaker WHERE id=$1`, [id]);
     return (res.rowCount ?? 0) > 0;

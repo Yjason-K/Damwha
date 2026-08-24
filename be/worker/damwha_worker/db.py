@@ -11,10 +11,13 @@ def claim(conn, worker_id: str) -> dict | None:
     return conn.execute(
         """
         UPDATE job SET status='running', locked_by=%s, locked_at=now(),
-               attempts = attempts + 1, updated_at=now()
+               attempts = attempts + 1, next_attempt_at=NULL, updated_at=now()
         WHERE id IN (
-          SELECT id FROM job WHERE status='queued'
-          ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
+          SELECT id FROM job
+          WHERE status='queued'
+            AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+          ORDER BY next_attempt_at NULLS FIRST, created_at
+          FOR UPDATE SKIP LOCKED LIMIT 1
         ) RETURNING *
         """,
         (worker_id,),
@@ -57,7 +60,9 @@ def heartbeat(conn, job_id: str, worker_id: str) -> int:
 def requeue(conn, job_id: str, worker_id: str) -> int:
     cur = conn.execute(
         """
-        UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL, updated_at=now()
+        UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL,
+               next_attempt_at=now() + least(power(2, attempts - 1), 60) * interval '1 second',
+               updated_at=now()
         WHERE id=%s AND locked_by=%s AND status='running'
         """,
         (job_id, worker_id),
@@ -70,12 +75,70 @@ def requeue_for_shutdown(conn, job_id: str, worker_id: str) -> int:
     cur = conn.execute(
         """
         UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL,
-               attempts = greatest(attempts - 1, 0), updated_at=now()
+               attempts = greatest(attempts - 1, 0), next_attempt_at=NULL, updated_at=now()
         WHERE id=%s AND locked_by=%s AND status='running'
         """,
         (job_id, worker_id),
     )
     return cur.rowcount
+
+
+def reap_stale(conn, stale_minutes: float) -> tuple[int, int]:
+    row = conn.execute(
+        """
+        WITH stale AS (
+          SELECT id, type, meeting_id, attempts, max_attempts, stage
+          FROM job
+          WHERE status='running'
+            AND locked_at < now() - (%s || ' minutes')::interval
+          FOR UPDATE SKIP LOCKED
+        ),
+        requeued AS (
+          UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL,
+                 next_attempt_at=NULL, updated_at=now()
+          WHERE id IN (SELECT id FROM stale WHERE attempts < max_attempts)
+          RETURNING id
+        ),
+        failed AS (
+          UPDATE job j SET status='failed', updated_at=now(),
+            error = jsonb_build_object('code','stale_worker',
+                                       'message','worker lock expired',
+                                       'stage', j.stage)
+          WHERE id IN (SELECT id FROM stale WHERE attempts >= max_attempts)
+          RETURNING id, type, meeting_id, error
+        ),
+        fail_lens_extraction_runs AS (
+          UPDATE lens_extraction_run r SET status='failed', error=f.error, finished_at=now()
+          FROM failed f
+          WHERE r.job_id=f.id AND f.type='extract_lenses'
+          RETURNING r.id
+        ),
+        fail_summaries AS (
+          UPDATE meeting_summary s SET status='failed', error=f.error, updated_at=now()
+          FROM failed f
+          WHERE s.job_id=f.id AND f.type='summarize_meeting'
+          RETURNING s.meeting_id
+        ),
+        fail_meetings AS (
+          UPDATE meeting m SET status='failed',
+            error = jsonb_build_object('code','stale_worker','message','processing worker lost')
+          WHERE m.id IN (SELECT meeting_id FROM failed WHERE type='process_meeting')
+          RETURNING m.id
+        ),
+        fail_speakers AS (
+          UPDATE speaker s SET enrollment_status='failed',
+            enrollment_error = jsonb_build_object(
+              'code','stale_worker','message','enroll worker lost'
+            )
+          WHERE s.current_job_id IN (SELECT id FROM failed WHERE type='enroll_speaker')
+          RETURNING s.id
+        )
+        SELECT (SELECT count(*) FROM requeued) AS requeued,
+               (SELECT count(*) FROM failed) AS failed
+        """,
+        (str(stale_minutes),),
+    ).fetchone()
+    return int(row["requeued"]), int(row["failed"])
 
 
 def fail_process_meeting(conn, job_id: str, worker_id: str, meeting_id: str, error: dict) -> bool:
@@ -117,6 +180,149 @@ def fail_enroll(conn, job_id: str, worker_id: str, speaker_id: str, error: dict)
         return False
 
 
+def mark_summary_running(
+    conn, *, job_id: str, worker_id: str, meeting_id: str, processing_version: int
+) -> str:
+    """요약 행을 running으로 넘긴다. 잡 가드 + 회의 가드 둘 다 통과해야 한다."""
+    try:
+        with conn.transaction():
+            owned = conn.execute(
+                "SELECT 1 FROM job WHERE id=%s AND locked_by=%s AND status='running' FOR UPDATE",
+                (job_id, worker_id),
+            ).fetchone()
+            if owned is None:
+                raise _Abort
+            mrow = conn.execute(
+                "SELECT processing_version FROM meeting WHERE id=%s FOR UPDATE", (meeting_id,)
+            ).fetchone()
+            if mrow is None or mrow["processing_version"] != processing_version:
+                stale = Jsonb(
+                    {
+                        "code": "discarded_by_stale_guard",
+                        "message": "meeting superseded by newer processing_version",
+                        "stage": "summarize_meeting",
+                        "kind": None,
+                    }
+                )
+                conn.execute(
+                    "UPDATE job SET status='done', error=%s, updated_at=now() WHERE id=%s",
+                    (stale, job_id),
+                )
+                # 주인 잃은 running 행은 reap_stale이 구제하지 못한다(reap된 job에만
+                # join) — 여기서 닫지 않으면 재생성이 영구히 막힌다.
+                conn.execute(
+                    "UPDATE meeting_summary SET status='failed', error=%s, updated_at=now() "
+                    "WHERE meeting_id=%s AND processing_version=%s",
+                    (stale, meeting_id, processing_version),
+                )
+                return "discarded"
+            conn.execute(
+                "UPDATE meeting_summary SET status='running', updated_at=now() "
+                "WHERE meeting_id=%s AND processing_version=%s",
+                (meeting_id, processing_version),
+            )
+            return "running"
+    except _Abort:
+        return "lost"
+
+
+def persist_summary(
+    conn,
+    *,
+    job_id: str,
+    worker_id: str,
+    meeting_id: str,
+    processing_version: int,
+    topics: list,
+    segments: list,
+) -> str:
+    """검증이 끝난 요약으로 기존 행을 덮어쓴다 — 통째 교체라 머지 로직이 없다.
+
+    UPSERT가 아니라 평범한 UPDATE다. 행은 잡을 큐잉한 트랜잭션에서 이미
+    queued로 만들어져 있으므로 INSERT 경로가 필요 없다.
+    """
+    try:
+        with conn.transaction():
+            owned = conn.execute(
+                "SELECT 1 FROM job WHERE id=%s AND locked_by=%s AND status='running' FOR UPDATE",
+                (job_id, worker_id),
+            ).fetchone()
+            if owned is None:
+                raise _Abort
+            mrow = conn.execute(
+                "SELECT processing_version FROM meeting WHERE id=%s FOR UPDATE", (meeting_id,)
+            ).fetchone()
+            if mrow is None or mrow["processing_version"] != processing_version:
+                stale = Jsonb(
+                    {
+                        "code": "discarded_by_stale_guard",
+                        "message": "meeting superseded by newer processing_version",
+                        "stage": "persist_summary",
+                        "kind": None,
+                    }
+                )
+                conn.execute(
+                    "UPDATE job SET status='done', error=%s, updated_at=now() WHERE id=%s",
+                    (stale, job_id),
+                )
+                # 주인 잃은 running 행은 reap_stale이 구제하지 못한다(reap된 job에만
+                # join) — 여기서 닫지 않으면 재생성이 영구히 막힌다.
+                conn.execute(
+                    "UPDATE meeting_summary SET status='failed', error=%s, updated_at=now() "
+                    "WHERE meeting_id=%s AND processing_version=%s",
+                    (stale, meeting_id, processing_version),
+                )
+                return "discarded"
+            # 요약 행은 큐잉 시점에 이미 만들어져 있다(queued). 여기서는 결과만
+            # 덮어쓴다 — 읽기 전용이라 머지할 사람 손댄 값이 없다.
+            conn.execute(
+                """
+                UPDATE meeting_summary
+                   SET status='done', job_id=%s, topics=%s, segments=%s,
+                       error=NULL, updated_at=now()
+                 WHERE meeting_id=%s AND processing_version=%s
+                """,
+                (job_id, Jsonb(topics), Jsonb(segments), meeting_id, processing_version),
+            )
+            conn.execute(
+                "UPDATE job SET status='done', progress=100, updated_at=now() WHERE id=%s",
+                (job_id,),
+            )
+            return "committed"
+    except _Abort:
+        return "lost"
+
+
+def fail_summary(conn, job_id: str, worker_id: str, error: dict) -> str:
+    """요약 실패는 요약 행과 잡만 건드린다 — meeting은 done을 유지한다.
+
+    meeting_summary는 job_id로 키를 잡는다(reap_stale의 fail_summaries, BE의
+    jobs.repository와 동일한 키) — processing_version은 파싱되지 않은 원본
+    payload에서 나올 수 있어(예: parse_payload 자체가 실패한 잡) None일 수
+    있고, 그러면 (meeting_id, processing_version) 키는 행을 하나도 못 찾아
+    요약 행이 queued에 영원히 발이 묶인다.
+    """
+    try:
+        with conn.transaction():
+            cur = conn.execute(
+                "UPDATE job SET status='failed', error=%s, updated_at=now() "
+                "WHERE id=%s AND locked_by=%s AND status='running'",
+                (Jsonb(error), job_id, worker_id),
+            )
+            if cur.rowcount == 0:
+                raise _Abort
+            cur = conn.execute(
+                "UPDATE meeting_summary SET status='failed', error=%s, updated_at=now() "
+                "WHERE job_id=%s",
+                (Jsonb(error), job_id),
+            )
+            if cur.rowcount == 0:
+                raise _Abort
+        return "failed"
+    except _Abort:
+        return "lost"
+
+
 class _Abort(Exception):
     """Internal: rollback a guarded transaction when ownership is lost."""
 
@@ -142,6 +348,7 @@ def persist_process_meeting(
     index_search_model=None,
     index_search_dim=None,
     lens_llm_model=None,
+    summary_llm_model=None,
 ) -> str:
     try:
         with conn.transaction():
@@ -185,24 +392,35 @@ def persist_process_meeting(
             # may point to them and the API/search paths select only the current version.
             conn.execute("DELETE FROM meeting_cluster WHERE meeting_id=%s", (meeting_id,))
 
-            # 미식별 cluster → provisional speaker + voiceprint(provenance) 자동 생성
-            # (embedding_model이 없으면 voiceprint 삽입 불가 → 미해소 cluster만 보존)
+            # Every diarization label gets a cluster row — it is the meeting's
+            # diar_label→speaker record, the entry point for a user correction, and
+            # where a near-miss suggestion is parked. A label identify already bound
+            # keeps that speaker; an unbound one mints a provisional speaker plus a
+            # voiceprint carrying its provenance. Without an embedding model there is
+            # no voiceprint to insert, so such a label stays unresolved.
             label_to_new_speaker: dict[str, str] = {}
             for c in clusters:
                 centroid = c["centroid"]
-                if centroid is None or embedding_model is None:
-                    # centroid 없거나 embedding model 미제공: speaker/voiceprint 없이 cluster만 보존
+                bound = c["resolved_speaker_id"]
+                suggested = c.get("suggested_speaker_id")
+                similarity = c.get("suggested_similarity")
+                if bound is not None or centroid is None or embedding_model is None:
+                    # Bound outright, or not comparable at all — either way nothing is
+                    # minted here, and a binding leaves no near-miss to record.
                     conn.execute(
                         """
                         INSERT INTO meeting_cluster(meeting_id, diar_label, centroid,
-                            resolved_speaker_id, processing_version, job_id)
-                        VALUES (%s,%s,%s::vector,%s,%s,%s)
+                            resolved_speaker_id, suggested_speaker_id, suggested_similarity,
+                            processing_version, job_id)
+                        VALUES (%s,%s,%s::vector,%s,%s,%s,%s,%s)
                         """,
                         (
                             meeting_id,
                             c["diar_label"],
                             _vec(centroid) if centroid is not None else None,
-                            c["resolved_speaker_id"],
+                            bound,
+                            None if bound is not None else suggested,
+                            None if bound is not None else similarity,
                             processing_version,
                             job_id,
                         ),
@@ -220,11 +438,21 @@ def persist_process_meeting(
                 cid = conn.execute(
                     """
                     INSERT INTO meeting_cluster(meeting_id, diar_label, centroid,
-                        resolved_speaker_id, processing_version, job_id)
-                    VALUES (%s,%s,%s::vector,%s,%s,%s)
+                        resolved_speaker_id, suggested_speaker_id, suggested_similarity,
+                        processing_version, job_id)
+                    VALUES (%s,%s,%s::vector,%s,%s,%s,%s,%s)
                     RETURNING id
                     """,
-                    (meeting_id, c["diar_label"], _vec(centroid), sid, processing_version, job_id),
+                    (
+                        meeting_id,
+                        c["diar_label"],
+                        _vec(centroid),
+                        sid,
+                        suggested,
+                        similarity,
+                        processing_version,
+                        job_id,
+                    ),
                 ).fetchone()["id"]
                 conn.execute(
                     """
@@ -265,12 +493,16 @@ def persist_process_meeting(
             # First run: no-op. Reprocess: removes the prior run's unconfirmed provisionals.
             # 'ready' (confirmed) speakers are never deleted. Runs AFTER the new rows are
             # inserted, so this run's just-created provisionals are referenced and kept.
+            # A pending suggestion counts as a reference: deleting its target would
+            # silently void a merge the user has not answered yet (and the FK's
+            # ON DELETE SET NULL would strand the score behind a null id).
             conn.execute(
                 """
                 DELETE FROM speaker s
                 WHERE s.enrollment_status='provisional'
                   AND NOT EXISTS (SELECT 1 FROM utterance WHERE speaker_id = s.id)
                   AND NOT EXISTS (SELECT 1 FROM meeting_cluster WHERE resolved_speaker_id = s.id)
+                  AND NOT EXISTS (SELECT 1 FROM meeting_cluster WHERE suggested_speaker_id = s.id)
                 """
             )
             conn.execute(
@@ -326,6 +558,38 @@ def persist_process_meeting(
                 conn.execute(
                     "UPDATE lens_extraction_run SET job_id=%s WHERE id=%s",
                     (extraction_job_id, run_id),
+                )
+            if summary_llm_model is not None:
+                summary_job_id = conn.execute(
+                    """
+                    INSERT INTO job(type, meeting_id, payload)
+                    VALUES ('summarize_meeting', %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        meeting_id,
+                        Jsonb(
+                            {
+                                "schema_version": 1,
+                                "meeting_id": str(meeting_id),
+                                "processing_version": processing_version,
+                                "model": summary_llm_model,
+                            }
+                        ),
+                    ),
+                ).fetchone()["id"]
+                conn.execute(
+                    """
+                    INSERT INTO meeting_summary(meeting_id, processing_version, job_id,
+                                                model, status)
+                    VALUES (%s, %s, %s, %s, 'queued')
+                    ON CONFLICT (meeting_id) DO UPDATE
+                    SET processing_version=EXCLUDED.processing_version,
+                        job_id=EXCLUDED.job_id, model=EXCLUDED.model, status='queued',
+                        topics='[]'::jsonb, segments='[]'::jsonb, error=NULL,
+                        updated_at=now()
+                    """,
+                    (meeting_id, processing_version, summary_job_id, summary_llm_model),
                 )
             return "committed"
     except _Abort:

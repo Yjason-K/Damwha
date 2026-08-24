@@ -1,0 +1,7 @@
+{
+  "_comment": "Ground truth for eval_speaker_id.py: '<meeting_id>/<diar_label>' -> person. Keys starting with '_' are ignored by nothing — remove them if the eval ever complains. mtg_2 and mtg_3 are the SAME uploaded audio file (identical duration_ms, centroid cosine 1.0000), so their labels are certain. mtg_1 is unlabelled — add its 7 clusters by listening to know whether SPEAKER_00/01 (0.94 similar, 23s/35s of one-word fragments) are really one person.",
+  "mtg_2/SPEAKER_00": "odyssey_narrator",
+  "mtg_2/SPEAKER_01": "odyssey_other",
+  "mtg_3/SPEAKER_00": "odyssey_narrator",
+  "mtg_3/SPEAKER_01": "odyssey_other"
+}

@@ -6,11 +6,16 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
 import { MeetingsService } from './meetings.service';
 import { uploadInterceptorOptions } from '../storage/upload-options';
+import { SummaryService } from '../summary/summary.service';
+import { audioContentType } from '../storage/content-type';
 
 @ApiTags('meetings')
 @Controller('meetings')
 export class MeetingsController {
-  constructor(private readonly service: MeetingsService) {}
+  constructor(
+    private readonly service: MeetingsService,
+    private readonly summary: SummaryService,
+  ) {}
 
   @Post()
   @ApiOperation({ summary: '회의 오디오 업로드 → 처리 작업 큐잉' })
@@ -30,13 +35,28 @@ export class MeetingsController {
             '개별 필드(whisper_model/devices/language)가 하나라도 있으면 결과 preset은 custom이 된다 ' +
             '(language만 지정해도 custom).',
         },
+        defer_lens: {
+          type: 'string', enum: ['true', 'false'],
+          description:
+            '"true"면 처리 완료 후 렌즈 추출을 자동으로 걸지 않는다 (기본 "false"). ' +
+            '나중에 POST /meetings/:id/lenses/extract로 직접 실행.',
+        },
+        defer_summary: {
+          type: 'string', enum: ['true', 'false'],
+          description:
+            '"true"면 처리 완료 후 요약 생성을 자동으로 걸지 않는다 (기본 "false"). ' +
+            '나중에 POST /meetings/:id/summary/generate로 직접 실행.',
+        },
       },
     },
   })
   @UseInterceptors(FileInterceptor('audio', uploadInterceptorOptions))
   upload(
     @UploadedFile() file: Express.Multer.File,
-    @Body() body: { title?: string; recorded_at?: string; processing?: string },
+    @Body() body: {
+      title?: string; recorded_at?: string; processing?: string;
+      defer_lens?: string; defer_summary?: string;
+    },
   ) {
     return this.service.upload(file, body);
   }
@@ -57,6 +77,47 @@ export class MeetingsController {
   @ApiOperation({ summary: '회의 렌즈 수동 재추출' })
   @HttpCode(202)
   extract(@Param('id') id: string) { return this.service.extractLenses(id); }
+
+  @Post(':id/lenses/cancel')
+  @ApiOperation({
+    summary: '렌즈 추출 취소 (운영용)',
+    description:
+      '현재 processing_version의 진행 중(queued/running) 렌즈 추출 잡과 run을 failed(cancelled)로 닫는다. ' +
+      '워커는 heartbeat에서 소유권 상실을 감지해 자신이 띄운 LLM 서버를 내린다. 진행 중인 것이 없으면 409.',
+  })
+  @HttpCode(200)
+  cancelLenses(@Param('id') id: string) { return this.service.cancelLensExtraction(id); }
+
+  @Post(':id/summary/cancel')
+  @ApiOperation({
+    summary: '대화 요약 취소 (운영용)',
+    description:
+      '현재 processing_version의 진행 중(queued/running) 요약 잡과 요약 행을 failed(cancelled)로 닫는다. ' +
+      '워커는 heartbeat에서 소유권 상실을 감지해 자신이 띄운 LLM 서버를 내린다. 진행 중인 것이 없으면 409.',
+  })
+  @HttpCode(200)
+  cancelSummary(@Param('id') id: string) { return this.summary.cancel(id); }
+
+  @Post(':id/summary/generate')
+  @ApiOperation({ summary: '대화 요약 생성/재생성' })
+  @ApiBody({
+    required: false,
+    schema: {
+      type: 'object',
+      properties: {
+        summary_model: {
+          type: 'string',
+          description:
+            '이번 요약 한정 모델 오버라이드. 생략하면 전역 처리 설정의 summary_model을 쓴다. ' +
+            '저장되지 않으며, 진행 중인 요약과 모델이 다르면 409.',
+        },
+      },
+    },
+  })
+  @HttpCode(202)
+  generateSummary(@Param('id') id: string, @Body() body: { summary_model?: unknown }) {
+    return this.summary.request(id, body);
+  }
 
   @Patch(':id')
   @ApiOperation({ summary: '회의 정보 수정 (제목/녹음 시각)' })
@@ -132,7 +193,7 @@ export class MeetingsController {
   ) {
     const { key, size } = await this.service.getAudioDescriptor(id);
     res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Type', audioContentType(key));
 
     if (range) {
       const m = /^bytes=(\d*)-(\d*)$/.exec(range);

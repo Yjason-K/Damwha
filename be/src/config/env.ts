@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SUMMARY_MODELS } from '../contracts/model-catalog';
 
 const EnvSchema = z.object({
   PORT: z.coerce.number().default(3000),
@@ -9,10 +10,23 @@ const EnvSchema = z.object({
   WHISPER_MODEL: z.enum(['large-v3-turbo', 'large-v3']).default('large-v3-turbo'),
   WHISPER_DEVICE: z.enum(['mps', 'cpu', 'cuda']).default('mps'),
   STT_LANGUAGE: z.string().default('ko'),
-  DIARIZATION_MODEL: z.string().default('pyannote/speaker-diarization-3.1'),
+  // speaker-diarization-3.1 is broken under the installed pyannote.audio 4.x:
+  // segmentation is fine but clustering collapses every speaker into one label
+  // (measured on mtg_5 — 105 utterances on one label vs 3 on the other for a
+  // two-person interview; same turn boundaries, correct 2-way split under
+  // community-1). community-1 is pyannote 4.x's own diarization pipeline.
+  DIARIZATION_MODEL: z.string().default('pyannote/speaker-diarization-community-1'),
   EMBEDDING_MODEL: z.string().default('speechbrain/spkrec-ecapa-voxceleb'),
   EMBEDDING_DIM: z.coerce.number().default(192),
-  IDENTIFY_THRESHOLD: z.coerce.number().default(0.7),
+  // Two-tier identification. At/above IDENTIFY_THRESHOLD a cluster binds to the
+  // matched speaker; down to IDENTIFY_SUGGEST_THRESHOLD it only records the
+  // candidate for the user to confirm. Defaults are set from the local eval
+  // (`worker/scripts/eval_speaker_id.py --halves`): different-speaker centroid
+  // pairs topped out at 0.71 and same-speaker half-splits floored at 0.97, so 0.80
+  // binds with margin over every observed negative while 0.60 keeps the ambiguous
+  // band visible instead of silently merging it. Retune with the eval, not by feel.
+  IDENTIFY_THRESHOLD: z.coerce.number().default(0.8),
+  IDENTIFY_SUGGEST_THRESHOLD: z.coerce.number().default(0.6),
   SEARCH_EMBEDDING_MODEL: z.string().default('BAAI/bge-m3'),
   // Phase 2는 임베딩 차원을 1024로 고정(utterance_embedding.embedding = vector(1024)).
   // 오설정으로 색인 잡이 영구 실패하지 않도록 literal 1024만 허용.
@@ -26,7 +40,10 @@ const EnvSchema = z.object({
   EMBED_SERVICE_ALLOW_NON_LOOPBACK: z.string().default('false'),
   SEARCH_RRF_K: z.coerce.number().default(60),
   SEARCH_CANDIDATE_K: z.coerce.number().default(100),
-  LENS_LLM_MODEL: z.string().default('qwen3.5:4b-mlx'),
+  LENS_LLM_MODEL: z.string().default('mlx-community/Qwen3.5-4B-8bit'),
+  // 목록 밖 값이면 API가 시작에 실패한다 — 의도된 breaking change (spec §2).
+  // 조용히 목록 안 값으로 강등하면 "고른 적 없는 모델로 요약"이 된다.
+  SUMMARY_LLM_MODEL: z.enum(SUMMARY_MODELS).default('mlx-community/Qwen3.5-4B-8bit'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

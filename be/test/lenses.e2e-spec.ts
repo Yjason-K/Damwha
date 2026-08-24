@@ -205,6 +205,45 @@ describe('lenses api', () => {
     expect((await request(srv()).get('/meetings/mtg_999999/lenses')).status).toBe(404);
   });
 
+  it('reports extraction_status=null when this version never ran an extraction', async () => {
+    // 업로드에서 렌즈를 미룬 회의의 모습 — run 행이 없다. 0건의 이유가 "아직 안 함"
+    // 이라는 걸 UI가 알아야 실행 버튼을 줄 수 있다.
+    const mid = await mkMeeting();
+    const res = await request(srv()).get(`/meetings/${mid}/lenses`);
+    expect(res.status).toBe(200);
+    expect(res.body.items).toEqual([]);
+    expect(res.body.extraction_status).toBeNull();
+  });
+
+  it('reports the latest run status of the current processing_version', async () => {
+    const mid = await mkMeeting();
+    await db.pool.query(
+      `INSERT INTO lens_extraction_run(meeting_id, processing_version, status, model)
+       VALUES($1, 0, 'failed', 'm')`, [mid],
+    );
+    let res = await request(srv()).get(`/meetings/${mid}/lenses`);
+    expect(res.body.extraction_status).toBe('failed');
+
+    // 같은 버전에서 다시 돌리면 최신 run이 답이 된다.
+    await db.pool.query(
+      `INSERT INTO lens_extraction_run(meeting_id, processing_version, status, model)
+       VALUES($1, 0, 'queued', 'm')`, [mid],
+    );
+    res = await request(srv()).get(`/meetings/${mid}/lenses`);
+    expect(res.body.extraction_status).toBe('queued');
+  });
+
+  it('falls back to null after a reprocess bumps past the run’s version', async () => {
+    const mid = await mkMeeting();
+    await db.pool.query(
+      `INSERT INTO lens_extraction_run(meeting_id, processing_version, status, model)
+       VALUES($1, 0, 'done', 'm')`, [mid],
+    );
+    await db.pool.query(`UPDATE meeting SET processing_version=1 WHERE id=$1`, [mid]);
+    const res = await request(srv()).get(`/meetings/${mid}/lenses`);
+    expect(res.body.extraction_status).toBeNull();
+  });
+
   // --- create ---------------------------------------------------------------
   it('creates a user item with trimmed text', async () => {
     const mid = await mkMeeting();

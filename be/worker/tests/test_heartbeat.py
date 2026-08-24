@@ -80,3 +80,35 @@ def test_heartbeat_reconnects_after_beat_failure(conn, pg_url, monkeypatch):
             lambda: len(connects) >= 2 and len(beats) >= 2 and _locked_at(conn, jid) > before
         )
     # 초기 접속 + beat 실패 후 재접속, beat 재개
+
+
+def test_heartbeat_fires_on_lost_once_when_ownership_is_lost(conn, pg_url):
+    # 운영자 취소(BE가 job을 failed로) → beat의 rowcount 0 → on_lost 정확히 1회
+    mid = seed_meeting(conn)
+    jid = seed_job(conn, meeting_id=mid)
+    db.claim(conn, "w1")
+    calls = []
+    hb = Heartbeat(pg_url, jid, "w1", interval=0.05)
+    hb.set_on_lost(lambda: calls.append(1))
+    with hb:
+        time.sleep(0.2)
+        assert calls == []  # 소유 중엔 부르지 않는다
+        conn.execute("UPDATE job SET status='failed' WHERE id=%s", (jid,))
+        assert _wait_until(lambda: len(calls) == 1)
+        time.sleep(0.2)
+    assert calls == [1]
+
+
+def test_heartbeat_on_lost_can_be_cleared(conn, pg_url):
+    # 훅을 None으로 되돌리면 소유권을 잃어도 아무것도 부르지 않는다(정상 완료 직후 경합 방지)
+    mid = seed_meeting(conn)
+    jid = seed_job(conn, meeting_id=mid)
+    db.claim(conn, "w1")
+    calls = []
+    hb = Heartbeat(pg_url, jid, "w1", interval=0.05)
+    hb.set_on_lost(lambda: calls.append(1))
+    hb.set_on_lost(None)
+    with hb:
+        conn.execute("UPDATE job SET status='done' WHERE id=%s", (jid,))
+        time.sleep(0.3)
+    assert calls == []

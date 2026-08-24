@@ -13,7 +13,7 @@ class Storage:
         return full
 
     def normalized_key(self, meeting_id: str) -> str:
-        return f"meetings/{meeting_id}/normalized.wav"
+        return f"meetings/{meeting_id}/normalized.flac"
 
     def exists(self, key: str) -> bool:
         return os.path.isfile(self.resolve(key))
