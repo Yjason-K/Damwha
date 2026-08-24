@@ -459,21 +459,19 @@ DB에는 상대 storage key만 저장한다. `Storage.resolve()`는 root 밖으�
 ## 14. 실행 순서
 
 ```bash
+# 모두 모노레포 루트에서 실행한다.
 # 1. Postgres
-docker compose up -d
-npm run migrate
+pnpm db:up
+pnpm be:migrate
 
 # 2. 검색 질의 embed service
-cd worker
-uv run uvicorn damwha_worker.embed_service:app --host 127.0.0.1 --port 8100
+uv run --directory be/worker uvicorn damwha_worker.embed_service:app --host 127.0.0.1 --port 8100
 
 # 3. NestJS API
-cd ..
-npm run start:dev
+pnpm be:dev
 
 # 4. ML worker (supervisor 부모 — job마다 자식을 spawn)
-cd worker
-uv run python -m damwha_worker
+pnpm worker
 ```
 
 `docker compose`는 Postgres만 실행한다. API, worker, embed service는 현재 host 프로세스로 별도 실행한다.

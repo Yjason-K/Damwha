@@ -29,7 +29,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   /**
    * fail-fast: 서버가 listen하기 전에 DB에 실제로 닿는지 확인한다. 실패하면 예외를
    * 던져 부팅을 멈춘다 — 떠 있는데 모든 요청이 500인 상태보다 낫다. 미적용
-   * 마이그레이션은 경고만 — 적용은 `npm run migrate`의 몫.
+   * 마이그레이션은 경고만 — 적용은 `pnpm be:migrate`의 몫.
    */
   async onModuleInit(): Promise<void> {
     const url = maskUrl(loadEnv().DATABASE_URL);
@@ -45,7 +45,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const pending = await listPendingMigrations(this.pool);
       if (pending.length > 0) {
         this.logger.warn(
-          `${pending.length} pending migration(s): ${pending.join(', ')} — run \`npm run migrate\``,
+          `${pending.length} pending migration(s): ${pending.join(', ')} — run \`pnpm be:migrate\``,
         );
       }
     } catch (e) {

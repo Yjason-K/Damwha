@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`damwha-fe` is the web frontend for **Damwha** (담화, "conversation") — a personal/self-hosted conversation recording + search platform. A recording may be a meeting, an interview, a call, or just a conversation; nothing in the pipeline assumes "meeting". The backend (`damwha-be`, NestJS) is a **separate sibling git repo** (`../be`) serving meetings/speakers/jobs over REST. The core domain object is an **utterance** (speaker-attributed, timestamped, traceable to source audio).
+`damwha-fe` is the web frontend for **Damwha** (담화, "conversation") — a personal/self-hosted conversation recording + search platform. A recording may be a meeting, an interview, a call, or just a conversation; nothing in the pipeline assumes "meeting". The backend (`damwha-be`, NestJS) lives in the **same repo** at `be/` — a pnpm workspace sibling — serving meetings/speakers/jobs over REST. The core domain object is an **utterance** (speaker-attributed, timestamped, traceable to source audio).
 
 `meeting` stays the term in code, DB, and API paths — that's an intentional scope decision (see below), not an oversight. Only UI copy and docs use "대화"/conversation.
 
-Note on names: the directory is `daewha/fe` but the package is `damwha-fe` (mirrors `damwha-be`). The service is always "Damwha" in user-facing text. "Timbre" is the internal codename for the design system only — never surface it to users.
+Note on names: the directory is `fe/` but the package is `damwha-fe` (mirrors `damwha-be`) — that package name is what `pnpm --filter damwha-fe` takes. The service is always "Damwha" in user-facing text. "Timbre" is the internal codename for the design system only — never surface it to users.
 
 The API layer (Axios + TanStack Query) makes real requests against `damwha-be` — meetings/speakers/search and the `settings` feature (processing settings + spec detection) all call live endpoints.
 

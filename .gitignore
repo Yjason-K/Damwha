@@ -1,0 +1,78 @@
+# Damwha monorepo — root ignore rules.
+#
+# be/.gitignore and fe/.gitignore stay in place and keep owning their own
+# package internals; their leading-slash patterns (/storage/, /models/) anchor
+# to their own directory, so they must NOT be hoisted here. This file owns the
+# repo root plus the workspace-wide safety nets.
+
+# --- dependencies / build output ---
+node_modules/
+.pnpm-store/
+dist/
+dist-ssr/
+*.tsbuildinfo
+
+# --- secrets & local env (keep the checked-in examples) ---
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# --- Python worker (be/worker) ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- runtime data owned by the backend, never committed (belt and braces:
+#     be/.gitignore already covers these relative to be/) ---
+/be/storage/
+/be/models/
+
+# --- logs ---
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# --- agent / tooling scratch ---
+.superpowers/
+.worktrees/
+.playwright-mcp/
+.claude/settings.local.json
+.claude/workflows/
+.claude/*.bak
+.claude/settings.json.graphify-bak
+
+# --- graphify knowledge graph: 36 MB, regenerated locally with
+#     `graphify update .` (AST-only, no API cost), and it indexes personal
+#     scratch under _workspace/ and downloads/. Never committed. ---
+/graphify-out/
+
+# --- root-level scratch: skill output and scraped media ---
+/_workspace/
+/downloads/
+
+# --- one-off media & screenshots dropped at the repo root. Anchored with a
+#     leading slash so fe/public/*.png and friends stay tracked. ---
+/*.png
+/*.jpg
+/*.jpeg
+/*.gif
+/*.webp
+/*.mp3
+/*.m4a
+/*.wav
+/*.flac
+/*.mp4
+/*.webm
+/*.info.json

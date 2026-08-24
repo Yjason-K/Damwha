@@ -1,7 +1,7 @@
 /* Geist + Geist Mono — synced from "Damwha Design System" tokens/fonts.css.
  * Kept first so the @import precedes Tailwind's emitted rules. */
 @import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap");
-@import "tailwindcss";
+@import "tailwindcss" source("../");
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));

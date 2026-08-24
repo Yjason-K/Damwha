@@ -64,8 +64,8 @@ and confirms `identify` matches it. Expect `[1] ENROLL: PASS` and
 
 ## Option B — full stack via the Plan 1 API
 
-1. Run Postgres (pgvector) + apply migrations (`npm run migrate`).
-2. `npm run start:dev` (NestJS API).
+1. Run Postgres (pgvector) + apply migrations (`pnpm be:migrate`).
+2. `pnpm be:dev` (NestJS API).
 3. `POST /meetings` with a 2-speaker audio file → creates a queued job.
 4. `uv run python -m damwha_worker` (the real worker) → claims + processes.
 5. `GET /meetings/:id` → speaker-attributed utterance timeline; `status=done`.
@@ -81,11 +81,11 @@ The search feature requires `pg_bigm` (Korean trigram FTS) alongside `pgvector`.
 Build the combined image once before running any integration tests or the full stack:
 
 ```bash
-# from repo root
+# from be/ (the damwha-be package root)
 docker build -t damwha/postgres-bigm:pg16 docker/postgres-bigm/
 ```
 
-Or just `docker compose up -d` from the repo root — the `postgres` service
+Or just `pnpm db:up` from the monorepo root (or `docker compose up -d` from `be/`) — the `postgres` service
 builds and tags the same `damwha/postgres-bigm:pg16` image and runs it.
 
 ### Install search model deps
@@ -116,11 +116,11 @@ curl -s http://127.0.0.1:8100/health | python3 -m json.tool
 
 Start services in this order; each step must be healthy before the next:
 
-1. **Postgres** (`damwha/postgres-bigm:pg16`) + `npm run migrate`
+1. **Postgres** (`damwha/postgres-bigm:pg16`) + `pnpm be:migrate`
 2. **Embed service** — wait for `/health` → `{"status":"ok"}`
 3. **Lens LLM 서버** (렌즈 추출 / 요약이 쓴다 — 둘이 같은 서버) — 아래 "렌즈 추출 LLM" 참고.
    워커보다 먼저 띄우면 슈퍼바이저 기동 로그에 서빙 중인 모델이 찍힌다.
-4. **NestJS API** — `npm run start:dev`
+4. **NestJS API** — `pnpm be:dev`
 5. **Python worker** — `uv run python -m damwha_worker`
 
 The `uv run python -m damwha_worker` command launches a **supervisor parent process** that does not import heavy ML libraries. When a job is available, the parent spawns a child subprocess (`python -m damwha_worker --once`) to process a single job, waits for it to complete, and reclaims the next job. The child exits after processing, allowing the OS to fully reclaim its GPU memory (MLX, torch). This is the core mechanism to prevent OOM from GPU memory accumulation across jobs. When confirming smoke with BGE-M3 CPU embedder or MLX memory caps, verify that both the `index_meeting` (embedding) and `process_meeting` (speech models) paths complete OOM-free.
@@ -220,7 +220,7 @@ LENS_LLM_MANAGED=true      # false면 예전처럼 사람이 띄운 서버를 �
 LENS_LLM_MODEL=mlx-community/Qwen3.5-4B-8bit
 SUMMARY_LLM_MODEL=mlx-community/Qwen3.5-4B-8bit
 
-# 루트 .env (API) — 값이 job payload에 각인되므로 워커와 반드시 같아야 한다
+# be/.env (API) — 값이 job payload에 각인되므로 워커와 반드시 같아야 한다
 LENS_LLM_MODEL=mlx-community/Qwen3.5-4B-8bit
 SUMMARY_LLM_MODEL=mlx-community/Qwen3.5-4B-8bit   # 카탈로그 밖 값이면 API가 아예 부팅하지 않는다
 ```

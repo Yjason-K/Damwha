@@ -8,6 +8,7 @@
   "scripts": {
     "build": "nest build && cp -r src/database/migrations dist/database/migrations",
     "start": "node dist/main.js",
+    "dev": "nest start --watch",
     "start:dev": "nest start --watch",
     "migrate": "ts-node src/database/migrate.ts",
     "test": "jest --runInBand",
@@ -20,6 +21,8 @@
     "@nestjs/schedule": "^4.0.0",
     "@nestjs/swagger": "^7.4.2",
     "dotenv": "^17.4.2",
+    "express": "4.22.1",
+    "multer": "2.0.2",
     "pg": "^8.11.3",
     "reflect-metadata": "^0.2.1",
     "rxjs": "^7.8.1",

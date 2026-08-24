@@ -1,0 +1,44 @@
+{
+  "name": "damwha",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Damwha (담화) — personal, self-hosted conversation recording & search. Monorepo: damwha-be (NestJS API + Python ML worker) and damwha-fe (React SPA).",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "packageManager": "pnpm@10.26.0",
+  "scripts": {
+    "dev": "pnpm --parallel --recursive run dev",
+    "build": "pnpm --recursive run build",
+    "test": "pnpm --recursive run test",
+    "lint": "pnpm --recursive run lint",
+    "be": "pnpm --filter damwha-be run",
+    "be:dev": "pnpm --filter damwha-be run start:dev",
+    "be:build": "pnpm --filter damwha-be run build",
+    "be:start": "pnpm --filter damwha-be run start",
+    "be:migrate": "pnpm --filter damwha-be run migrate",
+    "be:test": "pnpm --filter damwha-be run test",
+    "be:test:e2e": "pnpm --filter damwha-be run test:e2e",
+    "fe": "pnpm --filter damwha-fe run",
+    "fe:dev": "pnpm --filter damwha-fe run dev",
+    "fe:build": "pnpm --filter damwha-fe run build",
+    "fe:preview": "pnpm --filter damwha-fe run preview",
+    "fe:lint": "pnpm --filter damwha-fe run lint",
+    "fe:format": "pnpm --filter damwha-fe run format",
+    "fe:test": "pnpm --filter damwha-fe run test",
+    "worker": "uv run --directory be/worker python -m damwha_worker",
+    "worker:sync": "uv sync --directory be/worker",
+    "worker:test": "uv run --directory be/worker pytest -q",
+    "db:up": "docker compose -f be/docker-compose.yml up -d",
+    "db:down": "docker compose -f be/docker-compose.yml down",
+    "db:logs": "docker compose -f be/docker-compose.yml logs -f postgres"
+  },
+  "pnpm": {
+    "ignoredBuiltDependencies": [
+      "@nestjs/core",
+      "cpu-features",
+      "protobufjs",
+      "ssh2"
+    ]
+  }
+}

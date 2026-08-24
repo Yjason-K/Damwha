@@ -1,6 +1,9 @@
 # AGENTS.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in `be/`,
+the `damwha-be` package of the Damwha monorepo. The frontend lives at `fe/` in the
+same repo; see `fe/CLAUDE.md`. Codex reads `AGENTS.md` from the repo root, so this
+file is reached from the root `AGENTS.md` pointer.
 
 ## What this is
 
@@ -47,20 +50,23 @@ Separate Python project under `worker/` (uv + ruff + pytest + pydantic v2 + psyc
 
 ## Commands
 
-Node **22** is required (`.nvmrc`, `engines`). Use `nvm use` first.
+`be/` is the `damwha-be` package of the Damwha monorepo. Node **22** is required
+(`.nvmrc`, `engines`); `pnpm` is pinned to 10.26.0 by the root `package.json`.
+**Never run `npm install` here** — it recreates a `package-lock.json` and a hoisted
+`node_modules` that the workspace no longer uses.
 
 ```bash
-npm install                              # once
+pnpm install                             # FROM THE MONOREPO ROOT — installs be + fe
 cp .env.example .env                     # configure DATABASE_URL, STORAGE_ROOT, model envs
 
-npm run migrate                          # apply SQL migrations (needs a running Postgres w/ pgvector)
-npm run start:dev                        # watch mode
-npm run build && npm start               # prod (build copies migrations into dist/)
+pnpm migrate                             # apply SQL migrations (needs a running Postgres w/ pgvector)
+pnpm start:dev                           # watch mode
+pnpm build && pnpm start                 # prod (build copies migrations into dist/)
 
-npm test                                 # full suite, serial
-npx jest test/meetings.e2e-spec.ts       # one suite
-npx jest test/jobs.repository.spec.ts -t "concurrent"   # one test by name
-npx tsc --noEmit -p tsconfig.build.json  # type-check src without emitting
+pnpm test                                # full suite, serial
+pnpm exec jest test/meetings.e2e-spec.ts # one suite
+pnpm exec jest test/jobs.repository.spec.ts -t "concurrent"   # one test by name
+pnpm exec tsc --noEmit -p tsconfig.build.json                 # type-check src without emitting
 ```
 
 Python worker (`worker/`, Python 3.12 via uv):
@@ -77,7 +83,7 @@ uv run python -m damwha_worker           # run the real worker (poll loop)
 uv run python scripts/smoke_process_meeting.py <audio>   # local end-to-end smoke
 ```
 
-**Tests require Docker.** Integration/e2e tests use Testcontainers, which spins up a real `pgvector/pgvector:pg16` Postgres per suite (see `test/db.ts`). Run with `--runInBand` (already in `npm test`) — parallel containers are heavy. No mocking of the DB; tests exercise real SQL including `SKIP LOCKED`, the reaper CTE, and pgvector.
+**Tests require Docker.** Integration/e2e tests use Testcontainers, which spins up a real `damwha/postgres-bigm:pg16` Postgres per suite (see `test/db.ts`). Run with `--runInBand` (already in `pnpm test`) — parallel containers are heavy. No mocking of the DB; tests exercise real SQL including `SKIP LOCKED`, the reaper CTE, and pgvector.
 
 ## Conventions
 

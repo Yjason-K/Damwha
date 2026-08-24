@@ -1,0 +1,11 @@
+# Damwha pnpm workspace.
+#
+# Only the two Node packages are members. be/worker is a Python 3.12 project
+# managed by uv (be/worker/pyproject.toml + uv.lock) and has no package.json —
+# the explicit negation is a guard so pnpm never links it even if some tool
+# drops a package.json in there. Reach the worker with `pnpm worker:*`, which
+# shells out to `uv run --directory be/worker`.
+packages:
+  - be
+  - fe
+  - "!be/worker/**"

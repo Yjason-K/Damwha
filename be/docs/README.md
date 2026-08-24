@@ -16,7 +16,7 @@ Damwha는 "누가 언제 무슨 말을 했는지"를 화자 단위로 기록·�
 | [superpowers/plans/2026-06-23-damwha-ml-worker.md](./superpowers/plans/2026-06-23-damwha-ml-worker.md) | 스냅샷 | **Phase 1 / Plan 2 실행 플랜.** Python ML 워커(`worker/`)의 구현 계획. 실제 모델 검증 절차는 `../worker/SMOKE.md`. |
 | [superpowers/specs/2026-07-14-lens-platform-roadmap-design.md](./superpowers/specs/2026-07-14-lens-platform-roadmap-design.md) | 스냅샷(진행 상태 갱신) | **Phase 3 렌즈 플랫폼 작업 분할.** 작업 1(기반 서비스)·2(추출 워커)·3(전역 대시보드)은 완료, 작업 4(주제·키워드 저장 렌즈)가 남았다. 각 작업의 완료 결과·커밋·설계 문서 링크가 여기 모인다. |
 
-> Phase 1 백엔드는 두 런타임으로 나뉜다: **Plan 1 = NestJS API(`src/`)**, **Plan 2 = Python 워커(`worker/`)**. 둘은 Postgres `job` 테이블로만 통신한다. 아키텍처·불변식·명령어는 리포 루트 `CLAUDE.md` 참조(살아있는 문서).
+> Phase 1 백엔드는 두 런타임으로 나뉜다: **Plan 1 = NestJS API(`src/`)**, **Plan 2 = Python 워커(`worker/`)**. 둘은 Postgres `job` 테이블로만 통신한다. 아키텍처·불변식·명령어는 `be/CLAUDE.md` 참조(살아있는 문서). 모노레포 전체 지도는 리포 루트 `CLAUDE.md`.
 
 ## 문서 종류
 

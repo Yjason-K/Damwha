@@ -1,7 +1,13 @@
 # Dev infra for Damwha backend. Brings up ONLY Postgres (pgvector + pg_bigm);
-# the API, ML worker, and embed service run on the host (see CLAUDE.md).
-# Migrations are NOT run here — apply them on the host with `npm run migrate`
+# the API, ML worker, and embed service run on the host (see be/CLAUDE.md).
+# Migrations are NOT run here — apply them on the host with `pnpm be:migrate`
 # so migrate.ts + the _migrations table stay the single source of truth.
+#
+# This file deliberately stays in be/ rather than at the monorepo root: Compose
+# derives its project name from the compose file's directory, so moving it would
+# rename the project be -> daewha and orphan the live be_pgdata volume. From the
+# root use `pnpm db:up` / `pnpm db:down` (they pass -f be/docker-compose.yml,
+# which keeps the project name `be`).
 services:
   postgres:
     build:
