@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "speaker_id": "spk_1",
+  "audio_key": "speakers/spk_1/sample.wav",
+  "embedding": { "model": "speechbrain/spkrec-ecapa-voxceleb", "dimension": 192 }
+}

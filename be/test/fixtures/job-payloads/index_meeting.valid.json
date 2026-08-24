@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "meeting_id": "mtg_1",
+  "processing_version": 0,
+  "search_embedding": { "model": "BAAI/bge-m3", "dimension": 1024 }
+}

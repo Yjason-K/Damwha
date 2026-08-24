@@ -1,0 +1,18 @@
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+/storage/
+/models/
+*.wav
+*.m4a
+*.mp3
+.DS_Store
+worker/record_examples/
+.claude/workflows/
+
+# superpowers SDD scratch (task briefs, reports, review diffs, progress ledger)
+.superpowers/
