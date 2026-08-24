@@ -4,11 +4,24 @@ import { SavedCursor, SavedUtteranceRow } from './saved-utterances.types';
 
 type Exec = Pool | PoolClient;
 
+// Both keys are truncated to milliseconds because that is all a JS Date — and
+// so an encoded cursor — can carry. Comparing an untruncated column against a
+// millisecond cursor rounds past rows and silently drops a page of results.
+const MEETING_KEY = `date_trunc('milliseconds', COALESCE(m.recorded_at, m.created_at))`;
+const ITEM_KEY = `date_trunc('milliseconds', su.created_at)`;
+
+// Meetings run newest-recorded first and saves sort within their meeting. All
+// four keys descend, so the keyset predicate is a single row-wise comparison
+// over the same tuple the ORDER BY uses.
+const LIST_KEYSET = `(${MEETING_KEY}, su.meeting_id, ${ITEM_KEY}, su.id)`;
+const LIST_ORDER = `${MEETING_KEY} DESC, su.meeting_id DESC, ${ITEM_KEY} DESC, su.id DESC`;
+
 const COLUMNS = `
   su.id, su.utterance_id, su.text_snapshot AS text,
-  COALESCE(s.name, su.speaker_name_snapshot) AS speaker_name,
+  u.speaker_id, COALESCE(s.name, su.speaker_name_snapshot) AS speaker_name,
   COALESCE(u.start_ms, su.start_ms_snapshot) AS start_ms,
-  su.created_at, m.id AS meeting_id, m.title AS meeting_title, m.recorded_at`;
+  su.created_at, m.id AS meeting_id, m.title AS meeting_title, m.recorded_at,
+  ${MEETING_KEY} AS meeting_sort_at`;
 
 @Injectable()
 export class SavedUtterancesRepository {
@@ -45,14 +58,16 @@ export class SavedUtterancesRepository {
 
   async list(exec: Exec, limit: number, cursor: SavedCursor | null): Promise<SavedUtteranceRow[]> {
     const params: unknown[] = [];
-    const where = cursor
-      ? (() => { params.push(cursor.created_at, cursor.id); return `WHERE (su.created_at,su.id) < ($1::timestamptz,$2::text)`; })()
-      : '';
+    let where = '';
+    if (cursor) {
+      params.push(cursor.meeting_at, cursor.meeting_id, cursor.created_at, cursor.id);
+      where = `WHERE ${LIST_KEYSET} < ($1::timestamptz,$2::text,$3::timestamptz,$4::text)`;
+    }
     params.push(limit + 1);
     const { rows } = await exec.query<SavedUtteranceRow>(
       `SELECT ${COLUMNS} FROM saved_utterance su JOIN meeting m ON m.id=su.meeting_id
        LEFT JOIN utterance u ON u.id=su.utterance_id LEFT JOIN speaker s ON s.id=u.speaker_id
-       ${where} ORDER BY su.created_at DESC, su.id DESC LIMIT $${params.length}`,
+       ${where} ORDER BY ${LIST_ORDER} LIMIT $${params.length}`,
       params,
     );
     return rows;

@@ -4,24 +4,45 @@ import { SavedUtterancesRepository } from './saved-utterances.repository';
 import { SavedCursor, SavedUtteranceRow } from './saved-utterances.types';
 
 const UTTERANCE_ID_RE = /^utt_[1-9][0-9]*$/;
+const MEETING_ID_RE = /^mtg_[1-9][0-9]*$/;
+const SAVED_ID_RE = /^sav_[1-9][0-9]*$/;
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
 
 function cursorEncode(row: SavedUtteranceRow) {
-  return Buffer.from(JSON.stringify({ created_at: row.created_at.toISOString(), id: row.id })).toString('base64url');
+  const payload: SavedCursor = {
+    meeting_at: row.meeting_sort_at.toISOString(),
+    meeting_id: row.meeting_id,
+    created_at: row.created_at.toISOString(),
+    id: row.id,
+  };
+  return Buffer.from(JSON.stringify(payload)).toString('base64url');
+}
+
+function isTimestamp(value: unknown): value is string {
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value));
 }
 
 function cursorDecode(raw: string): SavedCursor {
   try {
     const value = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
-    if (typeof value?.created_at !== 'string' || Number.isNaN(Date.parse(value.created_at)) || typeof value?.id !== 'string' || !/^sav_[1-9][0-9]*$/.test(value.id)) throw new Error();
-    return value;
+    if (
+      !isTimestamp(value?.meeting_at)
+      || typeof value?.meeting_id !== 'string' || !MEETING_ID_RE.test(value.meeting_id)
+      || !isTimestamp(value?.created_at)
+      || typeof value?.id !== 'string' || !SAVED_ID_RE.test(value.id)
+    ) throw new Error();
+    return {
+      meeting_at: value.meeting_at, meeting_id: value.meeting_id,
+      created_at: value.created_at, id: value.id,
+    };
   } catch { throw new BadRequestException('cursor is invalid'); }
 }
 
 function map(row: SavedUtteranceRow) {
   return {
-    id: row.id, utterance_id: row.utterance_id, text: row.text, speaker_name: row.speaker_name,
+    id: row.id, utterance_id: row.utterance_id, text: row.text,
+    speaker_id: row.speaker_id, speaker_name: row.speaker_name,
     start_ms: row.start_ms, created_at: row.created_at,
     meeting: { id: row.meeting_id, title: row.meeting_title, recorded_at: row.recorded_at },
   };

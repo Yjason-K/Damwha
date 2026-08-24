@@ -31,20 +31,36 @@ function trimText(value: unknown): string {
 }
 
 function encodeCursor(row: LensItemRow): string {
-  const payload: LensCursor = { updated_at: row.updated_at.toISOString(), id: row.id };
+  const payload: LensCursor = {
+    meeting_at: row.meeting_sort_at.toISOString(),
+    meeting_id: row.meeting_id,
+    updated_at: row.updated_at.toISOString(),
+    id: row.id,
+  };
   return Buffer.from(JSON.stringify(payload)).toString('base64url');
+}
+
+function isTimestamp(value: unknown): value is string {
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value));
 }
 
 function decodeCursor(raw: string): LensCursor {
   try {
     const parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
     if (
-      typeof parsed?.updated_at !== 'string' ||
-      Number.isNaN(Date.parse(parsed.updated_at)) ||
+      !isTimestamp(parsed?.meeting_at) ||
+      typeof parsed?.meeting_id !== 'string' ||
+      !MEETING_ID_RE.test(parsed.meeting_id) ||
+      !isTimestamp(parsed?.updated_at) ||
       typeof parsed?.id !== 'string' ||
       !/^lens_[1-9][0-9]*$/.test(parsed.id)
     ) throw new Error('shape');
-    return { updated_at: parsed.updated_at, id: parsed.id };
+    return {
+      meeting_at: parsed.meeting_at,
+      meeting_id: parsed.meeting_id,
+      updated_at: parsed.updated_at,
+      id: parsed.id,
+    };
   } catch {
     throw new BadRequestException('cursor is invalid');
   }
@@ -386,7 +402,7 @@ function toItem(row: LensItemRow, evidence: EvidenceRow[]) {
     due_at: row.due_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
-    meeting: { id: row.meeting_id, title: row.meeting_title },
+    meeting: { id: row.meeting_id, title: row.meeting_title, recorded_at: row.meeting_recorded_at },
     evidence: evidence.map((e) => ({ relation: e.relation, utterance: e.utterance })),
   };
 }

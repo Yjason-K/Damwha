@@ -1,5 +1,6 @@
 import * as React from "react";
 import { LensItem } from "@/shared/ui/lens-item";
+import { MeetingGroupHeader } from "@/shared/ui/meeting-group-header";
 import type { LensListPage } from "../model/types";
 import { mapItemView } from "../lib/map-item";
 
@@ -39,29 +40,43 @@ export function LensList({
 
   return (
     <div className="flex flex-col gap-2">
-      {items.map((item) => {
+      {items.map((item, index) => {
         const v = mapItemView(item);
         const name = speakerName(item.assignee_speaker_id);
+        // 목록은 회의 우선으로 정렬되어 오므로 연속 구간이 곧 회의 그룹이다.
+        // 구간이 페이지 경계에 걸려도 헤더가 다시 나오지 않는다.
+        const startsMeeting = items[index - 1]?.meeting_id !== item.meeting_id;
         return (
-          <LensItem
-            key={item.id}
-            source={v.source}
-            checkable
-            done={item.completion_status === "done"}
-            onToggle={() =>
-              onToggle(item.id, item.completion_status !== "done")
-            }
-            assignee={name ?? undefined}
-            assigneeSpeaker={speakerTint(item.assignee_speaker_id)}
-            evidence={v.timecode ?? undefined}
-            onJump={
-              v.primary
-                ? () => onJumpEvidence(item.meeting_id, v.primary!.utteranceId)
-                : undefined
-            }
-          >
-            {item.text}
-          </LensItem>
+          <React.Fragment key={item.id}>
+            {startsMeeting && (
+              <MeetingGroupHeader
+                meetingId={item.meeting.id}
+                title={item.meeting.title}
+                recordedAt={item.meeting.recorded_at}
+                className={index > 0 ? "mt-3" : undefined}
+              />
+            )}
+            <LensItem
+              className="scroll-mt-14"
+              source={v.source}
+              checkable
+              done={item.completion_status === "done"}
+              onToggle={() =>
+                onToggle(item.id, item.completion_status !== "done")
+              }
+              assignee={name ?? undefined}
+              assigneeSpeaker={speakerTint(item.assignee_speaker_id)}
+              evidence={v.timecode ?? undefined}
+              onJump={
+                v.primary
+                  ? () =>
+                      onJumpEvidence(item.meeting_id, v.primary!.utteranceId)
+                  : undefined
+              }
+            >
+              {item.text}
+            </LensItem>
+          </React.Fragment>
         );
       })}
       <div ref={sentinel} aria-hidden className="h-px" />

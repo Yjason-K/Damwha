@@ -416,7 +416,7 @@ const fx = vi.hoisted(() => {
     due_at: null,
     created_at: "2026-06-21T09:00:00.000Z",
     updated_at: "2026-06-21T09:00:00.000Z",
-    meeting: { id: "m1", title: null },
+    meeting: { id: "m1", title: null, recorded_at: null },
     evidence: [],
     ...o,
   });
@@ -425,7 +425,7 @@ const fx = vi.hoisted(() => {
   const lensJumpItem = lensItem({
     id: "lens_jump",
     meeting_id: "m2",
-    meeting: { id: "m2", title: "스프린트 회고" },
+    meeting: { id: "m2", title: "스프린트 회고", recorded_at: null },
     text: "다음 스프린트 자료 공유하기",
     evidence: [
       {
@@ -444,7 +444,7 @@ const fx = vi.hoisted(() => {
   const lensGhostItem = lensItem({
     id: "lens_ghost",
     meeting_id: "m1",
-    meeting: { id: "m1", title: "기획회의 — UI 개선안" },
+    meeting: { id: "m1", title: "기획회의 — UI 개선안", recorded_at: null },
     text: "지난 회의 후속 조치 확인하기",
     evidence: [
       {
@@ -466,7 +466,7 @@ const fx = vi.hoisted(() => {
     id: "lens_m4_action",
     kind: "action",
     meeting_id: "m4",
-    meeting: { id: "m4", title: "요약이 준비된 회의" },
+    meeting: { id: "m4", title: "요약이 준비된 회의", recorded_at: null },
     text: "예산안 다시 검토하기",
     completion_status: "open",
     evidence: [
@@ -485,7 +485,7 @@ const fx = vi.hoisted(() => {
     id: "lens_m4_decision",
     kind: "decision",
     meeting_id: "m4",
-    meeting: { id: "m4", title: "요약이 준비된 회의" },
+    meeting: { id: "m4", title: "요약이 준비된 회의", recorded_at: null },
     text: "3분기까지 v2로 한정",
     completion_status: "done",
     evidence: [
@@ -567,7 +567,9 @@ const fx = vi.hoisted(() => {
       return Promise.resolve({ data: { items, next_cursor: null } });
     }
     if (url.endsWith("/status"))
-      return Promise.resolve({ data: { ...status, search_index: searchIndex } });
+      return Promise.resolve({
+        data: { ...status, search_index: searchIndex },
+      });
     const m = url.match(/^\/meetings\/([^/]+)$/);
     if (m) {
       if (m[1] === "m_err" || deletedIds.has(m[1]))

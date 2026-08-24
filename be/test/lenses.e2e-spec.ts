@@ -55,9 +55,10 @@ describe('lenses api', () => {
   const srv = () => app.getHttpServer();
 
   // --- seed helpers ---------------------------------------------------------
-  const mkMeeting = async (title = '회의') =>
+  const mkMeeting = async (title = '회의', recordedAt: string | null = null) =>
     (await db.pool.query(
-      `INSERT INTO meeting(audio_key,status,title) VALUES('k','done',$1) RETURNING id`, [title],
+      `INSERT INTO meeting(audio_key,status,title,recorded_at) VALUES('k','done',$1,$2::timestamptz) RETURNING id`,
+      [title, recordedAt],
     )).rows[0].id;
   const mkSpeaker = async (name = '홍길동') =>
     (await db.pool.query(
@@ -126,6 +127,59 @@ describe('lenses api', () => {
     });
   });
 
+  it('groups items by meeting, newest meeting first', async () => {
+    const older = await mkMeeting('예전 회의', '2026-07-01T00:00:00Z');
+    const newer = await mkMeeting('최근 회의', '2026-07-10T00:00:00Z');
+    // updated_at is interleaved across the two meetings, so a flat updated_at
+    // ordering would alternate between them.
+    const olderMid = await mkLens(older, { source: 'user', updated: '2026-08-04T00:00:00Z' });
+    const newerOld = await mkLens(newer, { source: 'user', updated: '2026-08-03T00:00:00Z' });
+    const olderOld = await mkLens(older, { source: 'user', updated: '2026-08-02T00:00:00Z' });
+    const newerNew = await mkLens(newer, { source: 'user', updated: '2026-08-05T00:00:00Z' });
+
+    const res = await request(srv()).get('/lenses');
+    expect(res.body.items.map((i: any) => i.id)).toEqual([newerNew, newerOld, olderMid, olderOld]);
+  });
+
+  it('keeps a meeting together across a keyset page boundary', async () => {
+    const older = await mkMeeting('예전 회의', '2026-07-01T00:00:00Z');
+    const newer = await mkMeeting('최근 회의', '2026-07-10T00:00:00Z');
+    const olderMid = await mkLens(older, { source: 'user', updated: '2026-08-04T00:00:00Z' });
+    const newerOld = await mkLens(newer, { source: 'user', updated: '2026-08-03T00:00:00Z' });
+    const olderOld = await mkLens(older, { source: 'user', updated: '2026-08-02T00:00:00Z' });
+    const newerNew = await mkLens(newer, { source: 'user', updated: '2026-08-05T00:00:00Z' });
+
+    // limit=3 splits the older meeting's run across the boundary.
+    const p1 = await request(srv()).get('/lenses?limit=3');
+    expect(p1.body.items.map((i: any) => i.id)).toEqual([newerNew, newerOld, olderMid]);
+
+    const p2 = await request(srv()).get(`/lenses?limit=3&cursor=${encodeURIComponent(p1.body.next_cursor)}`);
+    expect(p2.body.items.map((i: any) => i.id)).toEqual([olderOld]);
+    expect(p2.body.next_cursor).toBeNull();
+  });
+
+  it('sorts a meeting with no recorded_at by when the meeting was created', async () => {
+    const dated = await mkMeeting('오래된 녹음', '2020-01-01T00:00:00Z');
+    const undated = await mkMeeting('녹음 날짜 없음');
+    // The dated meeting's item is the more recently touched one, so a flat
+    // updated_at ordering would put it first.
+    const datedItem = await mkLens(dated, { source: 'user', updated: '2026-08-05T00:00:00Z' });
+    const undatedItem = await mkLens(undated, { source: 'user', updated: '2026-08-01T00:00:00Z' });
+
+    const res = await request(srv()).get('/lenses');
+    expect(res.body.items.map((i: any) => i.id)).toEqual([undatedItem, datedItem]);
+  });
+
+  it('exposes the meeting recorded_at on each item', async () => {
+    const mid = await mkMeeting('로드맵 회의', '2026-07-10T00:00:00Z');
+    await mkLens(mid, { source: 'user' });
+
+    const res = await request(srv()).get('/lenses');
+    expect(res.body.items[0].meeting).toEqual({
+      id: mid, title: '로드맵 회의', recorded_at: '2026-07-10T00:00:00.000Z',
+    });
+  });
+
   it('orders evidence primary-first regardless of insert order', async () => {
     const mid = await mkMeeting();
     const u0 = await mkUtt(mid, 0, 0);
@@ -179,6 +233,26 @@ describe('lenses api', () => {
     const p2 = await request(srv()).get(`/lenses?limit=1&cursor=${encodeURIComponent(p1.body.next_cursor)}`);
     expect(p2.body.items.map((i: any) => i.id)).toEqual([older]);
     expect(p2.body.next_cursor).toBeNull();
+  });
+
+  it('drops no rows when timestamps carry sub-millisecond precision', async () => {
+    // Postgres timestamps hold microseconds; a JS Date (and so an encoded
+    // cursor) only holds milliseconds. The keyset must not round past a row.
+    const mid = await mkMeeting();
+    const first = await mkLens(mid, { source: 'user', updated: '2026-07-02T00:00:00.000123Z' });
+    const second = await mkLens(mid, { source: 'user', updated: '2026-07-02T00:00:00.000456Z' });
+
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 5; page += 1) {
+      const query = cursor ? `?limit=1&cursor=${encodeURIComponent(cursor)}` : '?limit=1';
+      const res = await request(srv()).get(`/lenses${query}`);
+      seen.push(...res.body.items.map((i: any) => i.id));
+      cursor = res.body.next_cursor;
+      if (!cursor) break;
+    }
+
+    expect(seen.slice().sort()).toEqual([first, second].sort());
   });
 
   it('rejects a malformed cursor with 400', async () => {

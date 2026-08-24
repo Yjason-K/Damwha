@@ -2,6 +2,7 @@ export type SavedUtterance = {
   id: string;
   utteranceId: string | null;
   text: string;
+  speakerId: string | null;
   speakerName: string | null;
   startMs: number;
   createdAt: string;
@@ -17,6 +18,7 @@ export type SavedUtteranceWire = {
   id: string;
   utterance_id: string | null;
   text: string;
+  speaker_id: string | null;
   speaker_name: string | null;
   start_ms: number;
   created_at: string;

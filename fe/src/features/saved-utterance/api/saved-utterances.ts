@@ -9,6 +9,7 @@ function mapSaved(value: SavedUtteranceWire): SavedUtterance {
     id: value.id,
     utteranceId: value.utterance_id,
     text: value.text,
+    speakerId: value.speaker_id,
     speakerName: value.speaker_name,
     startMs: value.start_ms,
     createdAt: value.created_at,
