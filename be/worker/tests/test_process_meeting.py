@@ -13,7 +13,7 @@ from tests.conftest import seed_job, seed_meeting, seed_speaker, seed_voiceprint
 from tests.fakes import FakeDiarizer, FakeEmbedder, FakeTranscriber, FakeVAD
 
 
-def _payload(meeting_id, audio_key, pv=0, threshold=0.7):
+def _payload(meeting_id, audio_key, pv=0, threshold=0.7, min_speakers=None, max_speakers=None):
     return parse_payload(
         "process_meeting",
         {
@@ -26,7 +26,11 @@ def _payload(meeting_id, audio_key, pv=0, threshold=0.7):
                 "whisper_model": "large-v3-turbo",
                 "device": "cpu",
                 "language": "ko",
-                "diarization": {"model": "d", "min_speakers": None, "max_speakers": None},
+                "diarization": {
+                    "model": "d",
+                    "min_speakers": min_speakers,
+                    "max_speakers": max_speakers,
+                },
                 "embedding": {"model": "speechbrain/spkrec-ecapa-voxceleb", "dimension": 192},
             },
             "identify": {"threshold": threshold},
@@ -338,6 +342,86 @@ def test_all_short_cluster_preserved_without_provisional_speaker(conn, tmp_path)
         "SELECT speaker_id, text FROM utterance WHERE meeting_id=%s", (mid,)
     ).fetchone()
     assert utt["speaker_id"] is None and utt["text"] == "짧다"
+
+
+def test_speaker_bounds_reach_diarizer(conn, tmp_path):
+    mid = seed_meeting(
+        conn, status="processing", processing_version=0, audio_key="meetings/m/original.m4a"
+    )
+    jid = seed_job(conn, meeting_id=mid, payload={})
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    db.claim(conn, "w1")
+    payload = _payload(mid, "meetings/m/original.m4a", min_speakers=2, max_speakers=3)
+    diarizer = FakeDiarizer([DiarSegment("SPEAKER_00", 0, 1000)])
+    models = Models(
+        vad=FakeVAD([SpeechSpan(0, 1000)]),
+        diarizer=diarizer,
+        embedder=FakeEmbedder([None]),
+        transcriber=FakeTranscriber([Word("a", 0, 500, 0.9)]),
+    )
+    out = run_process_meeting(
+        conn,
+        conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
+        payload,
+        models,
+        Storage(str(tmp_path)),
+        worker_id="w1",
+        normalize_fn=lambda s, d: None,
+        probe_fn=lambda p: ProbeResult(1000),
+    )
+    assert out == "committed"
+    assert diarizer.last_bounds == (2, 3)
+
+
+def test_near_duplicate_clusters_merged_before_persist(conn, tmp_path):
+    mid = seed_meeting(
+        conn, status="processing", processing_version=0, audio_key="meetings/m/original.m4a"
+    )
+    jid = seed_job(conn, meeting_id=mid, payload={})
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    db.claim(conn, "w1")
+    same = [1.0] + [0.0] * 191
+    near = [1.0, 0.05] + [0.0] * 190  # cos ≈ 0.999
+    other = [0.0, 1.0] + [0.0] * 190
+    models = Models(
+        vad=FakeVAD([SpeechSpan(0, 30000)]),
+        diarizer=FakeDiarizer(
+            [
+                DiarSegment("SPEAKER_00", 0, 10000),
+                DiarSegment("SPEAKER_01", 10000, 20000),
+                DiarSegment("SPEAKER_02", 20000, 30000),
+            ]
+        ),
+        embedder=FakeEmbedder([same, near, other]),
+        transcriber=FakeTranscriber(
+            [Word("a", 1000, 2000, 0.9), Word("b", 11000, 12000, 0.9), Word("c", 21000, 22000, 0.9)]
+        ),
+    )
+    out = run_process_meeting(
+        conn,
+        conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
+        _payload(mid, "meetings/m/original.m4a"),
+        models,
+        Storage(str(tmp_path)),
+        worker_id="w1",
+        normalize_fn=lambda s, d: None,
+        probe_fn=lambda p: ProbeResult(30000),
+    )
+    assert out == "committed"
+    labels = {
+        r["diar_label"]
+        for r in conn.execute(
+            "SELECT diar_label FROM meeting_cluster WHERE meeting_id=%s", (mid,)
+        ).fetchall()
+    }
+    assert labels == {"SPEAKER_00", "SPEAKER_02"}
+    utt_labels = [
+        r["diar_label"]
+        for r in conn.execute(
+            "SELECT diar_label FROM utterance WHERE meeting_id=%s ORDER BY order_index", (mid,)
+        ).fetchall()
+    ]
+    assert utt_labels == ["SPEAKER_00", "SPEAKER_00", "SPEAKER_02"]
 
 
 def test_run_process_meeting_uses_custom_prefix(conn, tmp_path):
@@ -731,6 +815,6 @@ def test_backchannel_word_run_reabsorbed_via_embedding(conn, tmp_path):
         "WHERE meeting_id=%s AND status='ok' ORDER BY order_index",
         (mid,),
     ).fetchall()
-    assert [u["diar_label"] for u in utts] == ["SPEAKER_00", "SPEAKER_00"]
-    assert utts[0]["text"] == "집에 가지 말고"
-    assert utts[1]["text"] == "일하자"
+    # 회수된 뒤 SPEAKER_00의 두 세그먼트(간격 400ms)는 한 발언으로 합쳐진다
+    assert [u["diar_label"] for u in utts] == ["SPEAKER_00"]
+    assert utts[0]["text"] == "집에 가지 말고 일하자"

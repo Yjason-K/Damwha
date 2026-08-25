@@ -102,7 +102,7 @@ class _RaisingDiarizer:
     def __init__(self, exc):
         self._exc = exc
 
-    def diarize(self, wav_path):
+    def diarize(self, wav_path, min_speakers=None, max_speakers=None):
         raise self._exc
 
 

@@ -20,3 +20,6 @@ worker/record_examples/
 
 # playwright MCP 스크린샷/트레이스 스크래치
 .playwright-mcp/
+
+# hand-labelled diarization references (personal meeting audio) — scripts/eval_diarization.py
+/worker/refs/

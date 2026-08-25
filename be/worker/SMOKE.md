@@ -314,6 +314,32 @@ uv run python scripts/eval_speaker_id.py --halves --thresholds 0.5,0.6,0.7,0.8
 - 미해결 이슈(구버전 잔존 화자·회의 내 병합·발화 0건 클러스터)와 centering을 기각한
   근거는 `docs/backlog.md`의 "화자 식별 — RC3/RC4/RC5 후속" 항목에 있다.
 
+## 화자 분할 품질 측정 (`scripts/eval_diarization.py`)
+
+과분할(한 사람이 여러 라벨) / 과소분할(여러 사람이 한 라벨)은 위 두 도구로는 안 보인다 —
+`eval_speaker_id.py`는 회의 **간** 동일성, `eval_stt.py`는 텍스트만 본다. 이 도구는 직접
+들으며 만든 정답 RTTM과 대조해 DER에 더해 **purity/coverage**를 낸다:
+
+- **purity ↓ = 사람이 합쳐짐(과소분할)**, **coverage ↓ = 사람이 쪼개짐(과분할)**.
+  DER 하나로는 둘 다 confusion으로 뭉뚱그려진다.
+- `ref/hyp speakers` 수 차이가 가장 빠른 감.
+
+```bash
+cd worker
+# 사용자가 실제 보는 결과(diarize + 클러스터 병합 + align) 채점 — DB 읽기 전용
+uv run python scripts/eval_diarization.py --ref refs/mtg_10.rttm --meeting mtg_10 --from 600 --to 2400
+# 파이프라인 후처리 없이 모델만 채점 — pyannote 출력을 RTTM으로 덤프해서
+uv run python scripts/eval_diarization.py --ref refs/mtg_10.rttm --hyp raw_mtg_10.rttm
+```
+
+- 정답은 회의 전체 말고 **20~30분 창**만 라벨하고 `--from/--to`(초)로 자른다. 창 밖은 양쪽 다 무시.
+- RTTM 한 줄 = 한 턴: `SPEAKER <mtg> 1 <start_s> <dur_s> <NA> <NA> <사람> <NA> <NA>`.
+  Audacity 라벨 트랙(start\tend\tlabel TSV)은
+  `awk -F'\t' '{printf "SPEAKER m 1 %.2f %.2f <NA> <NA> %s <NA> <NA>\n",$1,$2-$1,$3}'`로 변환.
+- 정답 파일은 `worker/refs/`에 두고 gitignore — 회의 음성 자체가 개인 데이터다.
+- 파이프라인의 과분할 보정 상수(`pipeline/cluster_merge.py`의 cosine 0.85 / 발화 5초 / 바닥 0.5,
+  `pipeline/align.py`의 `MERGE_GAP_MS` 1.5초)는 이 도구의 coverage/purity로 조정한다 — 감으로 바꾸지 말 것.
+
 ## STT 품질 측정 (`scripts/eval_stt.py`)
 
 전사 백엔드/모델/가드 조합을 하나의 wav에 대해 돌리고 참조 스크립트와 CER/WER을
