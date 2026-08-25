@@ -718,7 +718,7 @@ test("회의 셸은 전사·인사이트·플레이어를 렌더한다", async (
   expect(screen.getByText(/오늘은 홈 구조부터 정하죠/)).toBeInTheDocument();
 });
 
-test("silence 발화는 숨기고 transcribe_failed는 플레이스홀더로 렌더한다", async () => {
+test("silence와 transcribe_failed 발화는 전사에 렌더하지 않는다", async () => {
   renderShell();
   await screen.findByRole("heading", {
     level: 1,
@@ -727,12 +727,9 @@ test("silence 발화는 숨기고 transcribe_failed는 플레이스홀더로 렌
   const log = screen.getByRole("log", { name: "회의 전사" });
   // silence 행은 렌더되지 않는다.
   expect(log.querySelector('[data-uid="u4"]')).toBeNull();
-  // transcribe_failed 행은 플레이스홀더 문구와 함께 렌더된다.
-  const failedRow = log.querySelector('[data-uid="u5"]');
-  expect(failedRow).not.toBeNull();
-  expect(failedRow).toHaveTextContent("전사하지 못한 구간입니다");
-  // 플레이스홀더는 이탤릭(회색) 스타일로 구분된다.
-  expect(failedRow!.querySelector("span.italic")).not.toBeNull();
+  // transcribe_failed 행도 렌더되지 않는다 — 안내 문구가 전사를 끊는다.
+  expect(log.querySelector('[data-uid="u5"]')).toBeNull();
+  expect(log).not.toHaveTextContent("전사하지 못한 구간입니다");
 });
 
 test("미해결 클러스터가 있으면 화자 확인 배너와 다이얼로그가 뜬다", async () => {
