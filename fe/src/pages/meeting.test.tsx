@@ -330,7 +330,15 @@ const fx = vi.hoisted(() => {
     ],
   };
 
+  // 테스트별 상세 덮어쓰기 — 처리 중 회의가 done으로 바뀌는 전이를 재현한다.
+  const detailOverrides = new Map<string, WireMeetingDetail>();
+  const setDetailOverride = (id: string, d: WireMeetingDetail) => {
+    detailOverrides.set(id, d);
+  };
+
   const detailOf = (id: string): WireMeetingDetail => {
+    const o = detailOverrides.get(id);
+    if (o) return o;
     if (id === "m2") return m2Detail;
     if (id === "m3") return m3Detail;
     if (id === "m4") return m4Detail;
@@ -598,6 +606,7 @@ const fx = vi.hoisted(() => {
 
   const reset = () => {
     deletedIds.clear();
+    detailOverrides.clear();
     searchIndex = null;
     releaseListFetches();
   };
@@ -649,6 +658,7 @@ const fx = vi.hoisted(() => {
     deleteResponse,
     detailOf,
     reset,
+    setDetailOverride,
     setSearchIndex,
     blockListFetches,
     releaseListFetches,
@@ -692,7 +702,7 @@ function renderShell(initialEntry = "/meetings/m1") {
       <Toaster />
     </QueryClientProvider>,
   );
-  return { ...utils, router };
+  return { ...utils, router, client };
 }
 
 test("회의 셸은 전사·인사이트·플레이어를 렌더한다", async () => {
@@ -1039,6 +1049,28 @@ test("전사가 아직 없는 처리 중 회의에서는 플레이바를 그리�
   renderShell("/meetings/m3");
   expect(await screen.findByText(/회의를 처리하고 있어요/)).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "재생" })).toBeNull();
+});
+
+test("처리 중이던 회의가 done이 되면 <audio>를 다시 로드한다", async () => {
+  const { container, client } = renderShell("/meetings/m3");
+  await screen.findByText(/회의를 처리하고 있어요/);
+  const before = container.querySelector("audio")!;
+  expect(before).not.toBeNull();
+
+  // 워커가 normalized.flac을 쓰고 나면 같은 /audio URL이 다른 파일을 내려준다.
+  // src가 그대로면 브라우저는 재로드하지 않고 원본 기준의 낡은 상태에 머문다.
+  fx.setDetailOverride("m3", {
+    ...fx.detailOf("m3"),
+    status: "done",
+    current_job_id: null,
+    utterances: fx.detailOf("m1").utterances,
+    clusters: fx.detailOf("m1").clusters,
+  });
+  await client.invalidateQueries({ queryKey: ["meeting", "m3"] });
+  await screen.findByRole("button", { name: "재생" });
+
+  const after = container.querySelector("audio")!;
+  expect(after).not.toBe(before);
 });
 
 test("상세 조회에 실패하면 무한 스피너 대신 에러 상태와 재시도를 보여준다", async () => {

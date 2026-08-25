@@ -205,6 +205,17 @@ function MeetingView({
     refetch: refetchMeeting,
   } = useMeeting(meetingId);
 
+  // <audio>는 status를 key로 리마운트된다(아래 JSX 참고). 새 엘리먼트는 아직
+  // 메타데이터가 없으므로 준비 상태도 함께 되돌려, 배속·seek effect가 새
+  // 엘리먼트의 loadedmetadata 뒤에 다시 돌게 한다.
+  const meetingStatus = meeting?.status;
+  React.useEffect(() => {
+    // 리마운트에 맞춰 준비 상태를 초기화하는 의도된 effect다.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMetaReady(false);
+    setPlaying(false);
+  }, [meetingStatus]);
+
   const { data: meetingLensData } = useMeetingLenses(meetingId);
   const setLensCompletion = useSetLensCompletion();
   const extractLenses = useRetryExtraction();
@@ -448,7 +459,13 @@ function MeetingView({
       ) : null}
 
       {meeting ? (
+        // key에 status를 두는 이유: /audio URL은 회의 내내 같지만, 워커가
+        // normalized.flac을 쓰고 나면 그 URL이 다른 파일(크기·타입 모두)을
+        // 내려준다. 업로드 직후 원본 기준으로 붙은 <audio>는 src가 그대로라
+        // 재로드하지 않아 완료 후 재생이 안 되고, 새로고침해야만 살아났다.
+        // 상태 전이마다 엘리먼트를 새로 만들어 강제로 다시 로드한다.
         <audio
+          key={meeting.status}
           ref={audioRef}
           src={meeting.audioUrl}
           preload="metadata"
