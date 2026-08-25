@@ -101,21 +101,24 @@ def test_client_sends_the_lens_extraction_contract_prompt_and_utterances(httpx_m
             "content": (
                 "You are given a meeting transcript. The Speakers section lists one speaker per "
                 "line as `<speaker_id> <name>`. After it, each transcript line is one utterance, "
-                "formatted as `<utterance_id> <speaker name>: <text>`, in chronological order. "
+                "formatted as `<index> <speaker name>: <text>`, in chronological order. "
                 "Return a JSON object with only an items array. Each item must be an action, "
                 "decision, or promise and have exactly these fields: kind, text, "
-                "assignee_speaker_id (nullable), due_at (nullable), primary_utterance_id, "
-                "supporting_utterance_ids. Choose the exact primary utterance. Every utterance "
-                "ID must originate in the transcript, and assignee_speaker_id must be a "
-                "speaker_id from the Speakers section (not a name) or null. Do not "
+                "assignee_speaker_id (nullable), due_at (nullable), primary_index, "
+                "supporting_indexes. Choose the exact primary utterance. primary_index and "
+                "every supporting index must be index values from the transcript, and "
+                "assignee_speaker_id must be a speaker_id from the Speakers section (not a "
+                "name) or null. Do not "
                 "speculate or return duplicates. Write text in the language of the transcript."
             ),
         },
         # 진짜 spk id는 Speakers 명단에 한 번씩 — assignee_speaker_id가 SpeakerId
-        # 패턴을 요구해서, 본문에서 뺀 id를 모델이 지목할 곳이 있어야 한다
+        # 패턴을 요구해서, 본문에서 뺀 id를 모델이 지목할 곳이 있어야 한다.
+        # utterance는 인덱스로만 — 진짜 utt id를 실으면 모델이 숫자 보간으로
+        # 프롬프트에 없는 id를 지어낸다 (mtg_1의 utt_2658)
         {
             "role": "user",
-            "content": "Speakers:\nspk_1 Ada\n\nutt_1 Ada: I will send it Friday.",
+            "content": "Speakers:\nspk_1 Ada\n\n1 Ada: I will send it Friday.",
         },
     ]
 
@@ -144,7 +147,7 @@ def test_client_prompt_omits_ids_and_timestamps_the_model_cannot_use(httpx_mock)
     # 이름 없는 화자는 명단에 id만 실리고 본문에서도 id가 화자 자리를 대신한다
     assert roster.splitlines() == ["Speakers:", "spk_1 Ada", "spk_2"]
     # 발화 내부 개행은 접는다 — 한 utterance는 한 줄
-    assert transcript.splitlines() == ["utt_1 Ada: 다음 주까지 정리할게요", "utt_2 spk_2: 네"]
+    assert transcript.splitlines() == ["1 Ada: 다음 주까지 정리할게요", "2 spk_2: 네"]
     assert "1234567" not in sent and "start_ms" not in sent
     # spk id는 명단에만 — 본문에 발화마다 반복되지 않는다
     assert "spk_1" not in transcript
@@ -176,7 +179,7 @@ def test_client_omits_the_speakers_section_when_no_utterance_has_a_speaker(httpx
     )
 
     sent = json.loads(httpx_mock.get_request().content)["messages"][1]["content"]
-    assert sent == "utt_1: 가"
+    assert sent == "1: 가"
 
 
 def test_client_treats_a_timeout_as_permanent(httpx_mock):
@@ -276,15 +279,61 @@ def test_client_accepts_a_bare_items_array(httpx_mock):
                 "text": "send the report",
                 "assignee_speaker_id": "spk_1",
                 "due_at": None,
-                "primary_utterance_id": "utt_1",
-                "supporting_utterance_ids": [],
+                "primary_index": 1,
+                "supporting_indexes": [],
             }
         ]
     )
     httpx_mock.add_response(json={"choices": [{"message": {"content": content}}]})
 
     items = LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-        model="job-model", utterances=[]
+        model="job-model", utterances=[{"id": "utt_1", "text": "가"}]
     )
 
     assert [item.primary_utterance_id for item in items] == ["utt_1"]
+
+
+def test_client_maps_indexes_back_to_real_utterance_ids(httpx_mock):
+    # 모델은 인덱스만 알고, 저장 계약(LensCandidate)은 진짜 id를 든다
+    content = json.dumps(
+        {
+            "items": [
+                {
+                    "kind": "promise",
+                    "text": "내일까지 보고서",
+                    "primary_index": 2,
+                    "supporting_indexes": [1, 3],
+                }
+            ]
+        }
+    )
+    httpx_mock.add_response(json={"choices": [{"message": {"content": content}}]})
+    utterances = [
+        {"id": "utt_7", "text": "가"},
+        {"id": "utt_9", "text": "나"},
+        {"id": "utt_12", "text": "다"},
+    ]
+
+    items = LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
+        model="job-model", utterances=utterances
+    )
+
+    assert items[0].primary_utterance_id == "utt_9"
+    assert items[0].supporting_utterance_ids == ["utt_7", "utt_12"]
+    # nullable 생략 허용은 그대로다
+    assert items[0].assignee_speaker_id is None and items[0].due_at is None
+
+
+def test_client_rejects_an_out_of_range_index_as_permanent(httpx_mock):
+    # 인덱스 방식에서 "지어낸 utterance"는 범위 밖 정수로 나타난다 — 즉시 PERMANENT
+    content = json.dumps(
+        {"items": [{"kind": "action", "text": "t", "primary_index": 99, "supporting_indexes": []}]}
+    )
+    httpx_mock.add_response(json={"choices": [{"message": {"content": content}}]})
+
+    with pytest.raises(WorkerError) as exc:
+        LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
+            model="job-model", utterances=[{"id": "utt_1", "text": "가"}]
+        )
+    assert exc.value.kind is ErrorKind.PERMANENT
+    assert "99" in exc.value.message and "1..1" in exc.value.message

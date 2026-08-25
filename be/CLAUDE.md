@@ -65,13 +65,17 @@ Separate Python project under `worker/` (uv + ruff + pytest + pydantic v2 + psyc
   made mtg_10 (778 utterances) a 119,563-character prompt and
   mtg_3 (997) a 236,484-character one; both died on the LLM timeout, and every
   run over ~250 utterances failed. The line format is 39,238 and 133,215
-  characters. Unlike `summary_client`, the utterance **id stays in the prompt** —
-  the lens response contract cites real ids, so replacing them with indexes
-  would mean changing the response schema too. That is still the open weakness:
-  a 4B model copying hundreds of `utt_5626`-shaped ids invents ones that were
-  never supplied (`invalid_lens_candidate: utterance utt_1894 is not an ok
-  utterance for this meeting version`), which is exactly the failure the summary
-  client's index scheme was built to eliminate.
+  characters. Like `summary_client`, transcript lines cite utterances by
+  **1-based index**, and `lens_client` maps the reply's `primary_index`/
+  `supporting_indexes` back to real ids before returning `LensCandidate`s (the
+  LLM-side shape is a private `_LlmLensItem`; the persist-side contract is
+  unchanged). Real ids in the prompt were tried first and failed measurably:
+  the model interpolated between `utt_2657`/`utt_2659` and cited `utt_2658` —
+  a `transcribe_failed` row excluded from the prompt — so mtg_1's whole
+  extraction died as `invalid_lens_candidate`, permanently, since
+  `temperature=0` replays the same reply. Consecutive integers land on a real
+  utterance even when interpolated. An out-of-range index is rejected in the
+  client as PERMANENT `llm_invalid_response` naming the valid range.
 - **Conversation summary is a fourth job type.** `summarize_meeting`
   (`pipeline/summarize_meeting.py`) reads the same `status='ok'` utterances as
   `extract_lenses` and calls the same local LLM through `summary_client.py`,
