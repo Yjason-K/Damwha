@@ -30,11 +30,17 @@ class FakeEmbedder:
 
 class FakeTranscriber:
     def __init__(
-        self, words: list[Word], progress_steps: list[tuple[int, int]] | None = None
+        self,
+        words: list[Word],
+        progress_steps: list[tuple[int, int]] | None = None,
+        later_words: list[list[Word]] | None = None,
     ) -> None:
         self._words = words
+        # 두 번째 호출부터 순서대로 돌려줄 단어 목록 (겹침 재전사 단계용). 소진되면 [].
+        self._later_words = list(later_words or [])
         self._progress_steps = progress_steps or []
         self.received_spans: list[SpeechSpan] | None = None
+        self.spans_history: list[list[SpeechSpan] | None] = []
         self.calls = 0
 
     def transcribe(
@@ -47,10 +53,13 @@ class FakeTranscriber:
     ) -> list[Word]:
         self.calls += 1
         self.received_spans = speech_spans
+        self.spans_history.append(speech_spans)
         for done_ms, total_ms in self._progress_steps:
             if on_progress is not None:
                 on_progress(done_ms, total_ms)
-        return self._words
+        if self.calls == 1:
+            return self._words
+        return self._later_words.pop(0) if self._later_words else []
 
 
 class FakeTextEmbedder:

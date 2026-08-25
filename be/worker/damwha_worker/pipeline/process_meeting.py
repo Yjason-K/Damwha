@@ -14,6 +14,7 @@ from . import ffmpeg
 from .align import build_utterances
 from .cluster_merge import merge_clusters
 from .identify import identify_clusters
+from .overlap_stt import apply_overlap_words, select_overlap_targets, spans_for
 from .progress import SttProgressReporter
 from .speaker_arbiter import make_embedding_arbiter
 from .stage import enter_stage
@@ -160,6 +161,21 @@ def run_process_meeting(
         arbiter = make_embedding_arbiter(norm_path, models.embedder, centroids)
         utts = build_utterances(words, segments, failed_spans=speech_spans, arbitrate=arbiter)
         t["detail"] = f"utterances={len(utts)}"
+
+    # 8) 겹침 구간 2차 전사 — 1차에서 단어를 못 받은 failed 행(≥1초)만 clip으로 다시
+    #    돌린다. 중복(지배 화자 재전사)은 걸러지고 새 텍스트만 ok로 승격된다.
+    enter_stage(conn, job_id, worker_id, "stt_overlap", 92, shutdown_event)
+    with timed_stage("stt_overlap", ctx) as t:
+        targets = select_overlap_targets(utts)
+        recovered = 0
+        if targets:
+            before = sum(1 for u in utts if u.status == "ok")
+            overlap_words = models.transcriber.transcribe(
+                norm_path, payload.models.language, spans_for(targets)
+            )
+            apply_overlap_words(utts, targets, overlap_words)
+            recovered = sum(1 for u in utts if u.status == "ok") - before
+        t["detail"] = f"targets={len(targets)} recovered={recovered}"
 
     utterance_rows = [
         {

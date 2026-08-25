@@ -46,6 +46,7 @@ const STAGE_LABELS: Record<string, string> = {
   identify: "화자 식별",
   stt: "받아쓰기",
   align: "정렬",
+  stt_overlap: "겹침 구간 받아쓰기",
   persist: "저장",
   embed: "색인",
 };
