@@ -263,6 +263,7 @@ export function toMeetingDetail(wire: WireMeetingDetail): Meeting {
       bullets: s.bullets,
     })),
     summaryStatus: wire.summary?.status ?? null,
+    summaryError: wire.summary?.error ?? null,
     status: wire.status,
     audioUrl: meetingAudioUrl(wire.id),
     totalSeconds: duration == null ? 0 : Math.floor(duration / 1000),

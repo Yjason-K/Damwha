@@ -39,6 +39,7 @@ function meeting(over: Partial<Meeting> = {}): Meeting {
     topics: [],
     segments: [],
     summaryStatus: "done",
+    summaryError: null,
     status: "done",
     audioUrl: "",
     totalSeconds: 600,

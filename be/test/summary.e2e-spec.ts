@@ -195,7 +195,38 @@ describe('요약 API', () => {
     const res = await request(app.getHttpServer())
       .get(`/meetings/${meetingId}/status`)
       .expect(200);
-    expect(res.body.summary_status).toBe('running');
+    expect(res.body.summary).toEqual({
+      status: 'running',
+      model: 'test-model',
+      error: null,
+    });
+  });
+
+  it('요약이 없는 회의는 상태 엔드포인트에서 summary가 null이다', async () => {
+    const meetingId = await seedMeeting({ status: 'done', processingVersion: 0 });
+    const res = await request(app.getHttpServer())
+      .get(`/meetings/${meetingId}/status`)
+      .expect(200);
+    expect(res.body.summary).toBeNull();
+  });
+
+  it('실패한 요약은 상태 엔드포인트가 사유까지 싣는다', async () => {
+    // flat string이던 시절에는 UI가 "실패"만 알고 이유를 알 수 없었다 —
+    // 형제 필드 lens_extraction / search_index와 같은 모양으로 맞춘다.
+    const meetingId = await seedMeeting({ status: 'done', processingVersion: 0 });
+    await seedSummary(meetingId, { processingVersion: 0, status: 'failed', topics: [] });
+    await db.pool.query(
+      `UPDATE meeting_summary SET error=$2::jsonb WHERE meeting_id=$1`,
+      [meetingId, JSON.stringify({ code: 'llm_request_failed', message: 'timed out' })],
+    );
+    const res = await request(app.getHttpServer())
+      .get(`/meetings/${meetingId}/status`)
+      .expect(200);
+    expect(res.body.summary.status).toBe('failed');
+    expect(res.body.summary.error).toEqual({
+      code: 'llm_request_failed',
+      message: 'timed out',
+    });
   });
 
   it('body 없음 → 전역 설정의 summary_model로 큐잉된다', async () => {

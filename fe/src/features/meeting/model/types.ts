@@ -8,7 +8,7 @@
  * 이 파일은 W1–W4가 코드를 작성하는 고정 계약이다 — 시그니처를 바꾸지 말 것.
  */
 
-import type { SummaryStatus } from "../api/types";
+import type { JsonError, SummaryStatus } from "../api/types";
 
 export type MeetingStatus = "uploaded" | "processing" | "done" | "failed";
 
@@ -123,6 +123,8 @@ export type Meeting = {
   topics: string[];
   segments: SummarySegmentView[];
   summaryStatus: SummaryStatus | null;
+  /** summaryStatus가 failed일 때의 사유. 없으면 null. */
+  summaryError: JsonError | null;
   status: MeetingStatus;
   audioUrl: string;
   totalSeconds: number;

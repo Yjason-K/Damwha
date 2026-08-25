@@ -32,6 +32,7 @@ function meeting(over: Partial<Meeting> = {}): Meeting {
     topics: [],
     segments: [],
     summaryStatus: "done",
+    summaryError: null,
     status: "done",
     audioUrl: "",
     totalSeconds: 600,
@@ -173,6 +174,22 @@ describe("InsightPane", () => {
     const props = renderPane({ meeting: meeting({ summaryStatus: "failed" }) });
     fireEvent.click(screen.getByRole("button", { name: "요약 다시 만들기" }));
     expect(props.onRegenerateSummary).toHaveBeenCalled();
+  });
+
+  it("요약 실패 사유가 있으면 함께 보여준다", () => {
+    // 상태 엔드포인트가 flat string이던 시절엔 실을 자리가 없던 값이다
+    renderPane({
+      meeting: meeting({
+        summaryStatus: "failed",
+        summaryError: { code: "llm_request_failed", message: "timed out" },
+      }),
+    });
+    expect(screen.getByText("timed out")).toBeInTheDocument();
+  });
+
+  it("사유 없는 요약 실패는 실패 문구만 보여준다", () => {
+    renderPane({ meeting: meeting({ summaryStatus: "failed" }) });
+    expect(screen.getByText("요약을 만들지 못했어요.")).toBeInTheDocument();
   });
 
   it("요약이 한 번도 없던 회의는 만들기 버튼을 준다", () => {

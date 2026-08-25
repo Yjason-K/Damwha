@@ -379,11 +379,13 @@ function LensState({
 function SummaryState({
   meetingStatus,
   status,
+  error,
   onRegenerate,
   regenerating,
 }: {
   meetingStatus: Meeting["status"];
   status: Meeting["summaryStatus"];
+  error: Meeting["summaryError"];
   onRegenerate: () => void;
   regenerating: boolean;
 }) {
@@ -416,6 +418,13 @@ function SummaryState({
           <p className="text-sm text-[color:var(--text-muted)]">
             요약을 만들지 못했어요.
           </p>
+          {/* 사유가 없으면 아무것도 그리지 않는다 — 예전 상태 엔드포인트는
+              flat string이라 "실패"만 알고 이유를 실을 자리가 없었다. */}
+          {(error?.message || error?.code) && (
+            <p className="text-xs text-[color:var(--text-faint)]">
+              {error.message ?? error.code}
+            </p>
+          )}
           <button
             type="button"
             onClick={onRegenerate}
@@ -607,6 +616,7 @@ export function InsightPane({
               <SummaryState
                 meetingStatus={meeting.status}
                 status={meeting.summaryStatus}
+                error={meeting.summaryError}
                 onRegenerate={onRegenerateSummary}
                 regenerating={regenerating}
               />

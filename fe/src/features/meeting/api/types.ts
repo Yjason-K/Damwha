@@ -96,6 +96,8 @@ export type WireSummary = {
   status: SummaryStatus;
   topics: string[];
   segments: WireSummarySegment[];
+  /** status가 failed일 때의 사유. 워커 WorkerError.to_json() 모양. */
+  error: JsonError | null;
 };
 
 /** GET /meetings/:id — meeting row + utterances + clusters. */
@@ -123,12 +125,22 @@ export type SearchIndexStatus = {
   updated_at: string;
 };
 
+/**
+ * 상태 엔드포인트가 싣는 요약 "생성 상태" — 형제 search_index와 같은 모양.
+ * GET /meetings/:id 의 `summary`(topics + segments 전체)와는 다른 것이다.
+ */
+export type SummaryGenerationStatus = {
+  status: SummaryStatus;
+  model: string | null;
+  error: JsonError | null;
+};
+
 export type MeetingStatusResponse = {
   status: MeetingStatus;
   stage: string | null;
   progress: number | null;
   error: JsonError | null;
-  summary_status: SummaryStatus | null;
+  summary: SummaryGenerationStatus | null;
   search_index: SearchIndexStatus | null;
 };
 

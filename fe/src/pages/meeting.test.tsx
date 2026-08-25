@@ -300,6 +300,7 @@ const fx = vi.hoisted(() => {
           bullets: ["3분기 우선순위 확정"],
         },
       ],
+      error: null,
     },
     utterances: [
       utt({
@@ -341,7 +342,7 @@ const fx = vi.hoisted(() => {
     stage: "stt",
     progress: 0.5,
     error: null,
-    summary_status: null,
+    summary: null,
     search_index: null,
   };
 

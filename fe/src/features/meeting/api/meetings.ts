@@ -81,8 +81,8 @@ export function useMeetingStatus(
       const active =
         d.status === "uploaded" ||
         d.status === "processing" ||
-        d.summary_status === "queued" ||
-        d.summary_status === "running" ||
+        d.summary?.status === "queued" ||
+        d.summary?.status === "running" ||
         d.search_index?.status === "queued" ||
         d.search_index?.status === "running";
       return active ? 2000 : false;
@@ -293,7 +293,7 @@ export function useGenerateSummary() {
 
 /**
  * 요약 상태 동기화 — 상세 응답은 회의가 done이면 더 폴링되지 않는데, 요약 잡은
- * 그 뒤에 돈다. 가벼운 상태 엔드포인트가 알려준 summary_status가 상세 캐시의
+ * 그 뒤에 돈다. 가벼운 상태 엔드포인트가 알려준 summary.status가 상세 캐시의
  * 값과 어긋나면 상세를 한 번만 다시 가져온다. 갱신 후 두 값이 같아지므로
  * 반복 무효화로 이어지지 않는다.
  *

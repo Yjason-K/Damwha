@@ -21,8 +21,22 @@ export class SpeakersRepository {
     );
     return rows[0];
   }
+  // Provisional speakers survive only while something still points at them. The
+  // predicate mirrors the worker's persist-time GC (db.py) exactly, so the list
+  // hides precisely the rows that GC would delete — a provisional speaker whose
+  // meeting was reprocessed keeps its old utterances but loses its cluster, and
+  // until the next persist runs it lingers as a speaker who never said anything.
+  // 'ready'/'pending'/'failed' are never filtered: an enrolled speaker is built
+  // from a voice sample and legitimately has no cluster.
   async list(exec: Queryable): Promise<SpeakerRow[]> {
-    const { rows } = await exec.query<SpeakerRow>(`SELECT * FROM speaker ORDER BY created_at DESC`);
+    const { rows } = await exec.query<SpeakerRow>(
+      `SELECT * FROM speaker s
+        WHERE s.enrollment_status <> 'provisional'
+           OR EXISTS (SELECT 1 FROM utterance WHERE speaker_id = s.id)
+           OR EXISTS (SELECT 1 FROM meeting_cluster WHERE resolved_speaker_id = s.id)
+           OR EXISTS (SELECT 1 FROM meeting_cluster WHERE suggested_speaker_id = s.id)
+        ORDER BY s.created_at DESC`,
+    );
     return rows;
   }
   async findById(exec: Queryable, id: string): Promise<SpeakerRow | null> {

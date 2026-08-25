@@ -165,8 +165,19 @@ export class MeetingsService {
   async getStatus(id: string) {
     const status = await this.meetings.findStatus(this.db.pool, id);
     if (!status) throw new NotFoundException('meeting not found');
+    // Structured like its siblings lens_extraction / search_index (findStatus).
+    // It used to be a bare `summary_status` string, which meant a failed summary
+    // reached the UI as "failed" with no reason attached — the row's error jsonb
+    // was already selected here and then dropped on the floor.
+    // NOTE: GET /meetings/:id also returns a `summary`, and that one is the whole
+    // summary (topics + segments). This one is only the generation state.
     const summary = await this.summary.get(id);
-    return { ...status, summary_status: summary?.status ?? null };
+    return {
+      ...status,
+      summary: summary
+        ? { status: summary.status, model: summary.model, error: summary.error }
+        : null,
+    };
   }
 
   async extractLenses(id: string) {

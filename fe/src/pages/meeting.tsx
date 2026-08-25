@@ -237,7 +237,7 @@ function MeetingView({
   useSyncSummaryStatus(
     meetingId,
     meeting?.summaryStatus,
-    procStatus?.summary_status,
+    procStatus?.summary?.status,
   );
 
   const { toast } = useToast();

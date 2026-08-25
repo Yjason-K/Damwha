@@ -3,24 +3,19 @@
  * `GET /system/capabilities` 계약 (2026-07-13 processing-settings spec).
  */
 
-export type PresetName = "light" | "standard" | "quality";
-export type Device = "cpu" | "gpu";
-export type WhisperModel =
-  | "tiny"
-  | "base"
-  | "small"
-  | "medium"
-  | "large-v3"
-  | "large-v3-turbo";
-
 /**
- * BE `src/contracts/model-catalog.ts`의 SUMMARY_MODELS 미러 — 함께 갱신할 것.
- * 값은 mlx_lm.server가 그대로 받는 HF repo id다(별칭 불가).
+ * 네 enum은 BE와 값이 정확히 같아야 하는 것들이라 `@damwha/contracts`가 갖는다.
+ * 예전에는 여기에 손으로 베껴 뒀고, 2026-08-12 요약 카탈로그가 Ollama 태그에서
+ * HF repo id로 바뀌었을 때 FE만 옛 값을 계속 보내 `PUT /settings/processing`이
+ * `Invalid input` 400만 뱉었다. 이제 어긋나면 컴파일이 깨진다.
  */
-export type SummaryModel =
-  | "mlx-community/Qwen3.5-4B-8bit"
-  | "mlx-community/Qwen3.5-9B-8bit"
-  | "mlx-community/Qwen3.5-27B-8bit";
+export type {
+  PresetName,
+  Device,
+  WhisperModel,
+  SummaryModel,
+} from "@damwha/contracts";
+import type { PresetName, Device, WhisperModel, SummaryModel } from "@damwha/contracts";
 
 /** GET /settings/processing — 항상 resolved 뷰. */
 export type ProcessingConfig = {

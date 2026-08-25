@@ -807,6 +807,7 @@ describe("toMeetingDetail — 요약", () => {
         status: "done",
         topics: ["파이프라인 실행 순서"],
         segments: [],
+        error: null,
       },
     });
     expect(detail.topics).toEqual(["파이프라인 실행 순서"]);
@@ -831,6 +832,7 @@ describe("toMeetingDetail — 요약", () => {
             bullets: ["공유를 해드릴 것임"],
           },
         ],
+        error: null,
       },
     });
     expect(detail.segments).toEqual([
