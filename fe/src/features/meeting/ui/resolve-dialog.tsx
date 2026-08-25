@@ -23,8 +23,12 @@ import {
 import { toast } from "@/shared/ui/use-toast";
 import { useSpeakers, type SpeakerItem } from "@/features/speaker/api/speakers";
 
+import { formatClock } from "../api/mappers";
 import { useResolveCluster } from "../api/meetings";
+import { cn } from "@/shared/lib/utils";
+import { pickSample, type Sample } from "../model/sample";
 import type { ClusterInfo, Meeting } from "../model/types";
+import { Icon } from "./icons";
 
 /**
  * ResolveDialog — 성문으로 자동 연결하지 못한 화자(미해결 클러스터)를 확인한다.
@@ -37,6 +41,131 @@ import type { ClusterInfo, Meeting } from "../model/types";
  */
 
 const NEW_SPEAKER = "__new__";
+
+/** 미디어 프래그먼트 — 브라우저가 start에서 시작해 end에서 스스로 멈춘다. */
+function sampleSrc(audioUrl: string, s: Sample): string {
+  return `${audioUrl}#t=${s.start},${s.end}`;
+}
+
+/**
+ * 다이얼로그 안 공용 <audio> 하나로 미리듣기를 돌린다. 한 번에 한 행만 재생되고,
+ * 메인 플레이어와는 별개라 본 재생 위치를 건드리지 않는다.
+ */
+function useSamplePlayer(audioUrl: string) {
+  const audioRef = React.useRef<HTMLAudioElement>(null);
+  const [playingId, setPlayingId] = React.useState<string | null>(null);
+  /** 재생 중인 샘플의 시작점 — timeupdate에서 경과 시간을 계산할 기준. */
+  const startRef = React.useRef(0);
+  const [elapsed, setElapsed] = React.useState(0);
+
+  const stop = React.useCallback(() => {
+    audioRef.current?.pause();
+    setPlayingId(null);
+  }, []);
+
+  const toggle = React.useCallback(
+    (id: string, sample: Sample) => {
+      const a = audioRef.current;
+      if (!a) return;
+      if (playingId === id) {
+        stop();
+        return;
+      }
+      a.pause();
+      a.setAttribute("src", sampleSrc(audioUrl, sample));
+      startRef.current = sample.start;
+      setElapsed(0);
+      setPlayingId(id);
+      void a.play().catch(() => setPlayingId(null));
+    },
+    [audioUrl, playingId, stop],
+  );
+
+  const element = (
+    <audio
+      ref={audioRef}
+      preload="none"
+      onTimeUpdate={(e) =>
+        setElapsed(Math.max(0, e.currentTarget.currentTime - startRef.current))
+      }
+      onPause={() => setPlayingId(null)}
+      onEnded={() => setPlayingId(null)}
+    />
+  );
+
+  return { element, playingId, elapsed, toggle, stop };
+}
+
+/**
+ * SampleRow — 카드 안의 독립된 "듣기" 단계. row 전체가 버튼이라 클릭 영역이 넓고,
+ * 라벨·길이·진행 상태를 같이 보여 "무엇을 재생하는지"를 설명한다.
+ */
+function SampleRow({
+  sample,
+  playing,
+  elapsed,
+  spk,
+  onToggle,
+}: {
+  sample: Sample;
+  playing: boolean;
+  elapsed: number;
+  spk: number;
+  onToggle: () => void;
+}) {
+  const k = ((spk - 1) % 8) + 1;
+  const length = sample.end - sample.start;
+  const clamped = Math.min(elapsed, length);
+  const pct = length > 0 ? Math.round((clamped / length) * 100) : 0;
+  const total = formatClock(length * 1000);
+
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={playing}
+      className={cn(
+        "group flex w-full cursor-pointer flex-col gap-1.5 rounded-sm border px-2 py-1.5 text-left outline-none transition-[background-color,border-color,box-shadow] duration-[80ms] focus-visible:[box-shadow:var(--focus-ring)]",
+        playing
+          ? "border-[color:var(--border-strong)] bg-[var(--gray-2)]"
+          : "border-transparent hover:border-border hover:bg-[var(--gray-2)]",
+      )}
+    >
+      <span className="flex items-center gap-2 text-sm">
+        <span
+          className="inline-flex size-6 shrink-0 items-center justify-center rounded-full"
+          style={{
+            background: `var(--spk-${k}-bg)`,
+            color: `var(--spk-${k}-text)`,
+          }}
+        >
+          <Icon name={playing ? "pause" : "play"} size={13} />
+        </span>
+        <span className="flex-1 font-medium">
+          {playing ? "재생 중…" : "샘플 듣기"}
+        </span>
+        <span className="tabular-nums text-xs text-[color:var(--text-secondary)]">
+          {playing ? `${formatClock(clamped * 1000)} / ${total}` : total}
+        </span>
+      </span>
+      {playing ? (
+        <span
+          role="progressbar"
+          aria-label="샘플 재생 진행"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={pct}
+          className="block h-1 w-full overflow-hidden rounded-full bg-[var(--gray-4)]"
+        >
+          <span
+            className="block h-full rounded-full transition-[width] duration-150"
+            style={{ width: `${pct}%`, background: `var(--spk-${k}-text)` }}
+          />
+        </span>
+      ) : null}
+    </button>
+  );
+}
 
 /** resolvedSpeakerId가 없거나 provisional인 클러스터만 확인 대상. */
 function unresolvedClusters(meeting: Meeting): ClusterInfo[] {
@@ -55,11 +184,19 @@ function ResolveRow({
   cluster,
   named,
   auto,
+  sample,
+  playing,
+  elapsed,
+  onToggleSample,
 }: {
   meetingId: string;
   cluster: ClusterInfo;
   named: SpeakerItem[];
   auto: SpeakerItem[];
+  sample: Sample | null;
+  playing: boolean;
+  elapsed: number;
+  onToggleSample: (sample: Sample) => void;
 }) {
   const resolve = useResolveCluster();
   // 제안이 있으면 그 화자를 미리 골라둔다 — 확인이 한 번의 클릭으로 끝나게.
@@ -92,71 +229,94 @@ function ResolveRow({
   };
 
   return (
-    <div className="flex items-center gap-2.5 rounded-md border border-border bg-card px-3 py-2.5">
-      <Avatar name={label} speaker={cluster.spk} unconfirmed size="md" />
-      <div className="min-w-0 flex-1">
+    <div
+      className={cn(
+        "flex flex-col gap-2 rounded-md border bg-card px-3 py-2.5 transition-colors duration-[80ms]",
+        playing ? "border-[color:var(--border-strong)]" : "border-border",
+      )}
+    >
+      <div className="flex items-center gap-2.5">
+        <Avatar name={label} speaker={cluster.spk} unconfirmed size="md" />
         <div
-          className="truncate text-sm font-semibold"
+          className="min-w-0 flex-1 truncate text-sm font-semibold"
           style={{ color: `var(--spk-${k}-text)` }}
         >
           {label}
         </div>
-        <div className="mt-1.5 flex items-center gap-2">
-          <Select value={choice} onValueChange={setChoice}>
-            <SelectTrigger
-              size="sm"
-              className="w-[148px] shrink-0"
-              aria-describedby={hasHint ? hintId : undefined}
-            >
-              <SelectValue placeholder="화자 선택" />
-            </SelectTrigger>
-            <SelectContent>
-              {named.map((s) => (
-                <SelectItem key={s.id} value={s.id}>
-                  {s.name}
-                </SelectItem>
-              ))}
-              {named.length > 0 && auto.length > 0 ? <SelectSeparator /> : null}
-              {auto.map((s) => (
-                <SelectItem key={s.id} value={s.id}>
-                  {s.name}
-                </SelectItem>
-              ))}
-              {named.length + auto.length > 0 ? <SelectSeparator /> : null}
-              <SelectItem value={NEW_SPEAKER}>+ 새 화자로 등록</SelectItem>
-            </SelectContent>
-          </Select>
-          {isNew ? (
-            <Input
-              inputSize="sm"
-              aria-label="새 화자 이름"
-              placeholder="이름 입력"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              containerClassName="min-w-0 flex-1"
-            />
-          ) : null}
-        </div>
-        {hasHint ? (
-          <p
-            id={hintId}
-            className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-[color:var(--text-secondary)]"
-          >
-            <Badge variant="accent">추천</Badge>
-            목소리가 비슷해요 · 유사도{" "}
-            {formatSimilarity(cluster.suggestedSimilarity)}
-          </p>
-        ) : null}
       </div>
-      <Button
-        size="sm"
-        onClick={submit}
-        loading={resolve.isPending}
-        disabled={!canSubmit}
-        className="shrink-0"
-      >
-        연결
-      </Button>
+
+      {sample ? (
+        <SampleRow
+          sample={sample}
+          playing={playing}
+          elapsed={elapsed}
+          spk={cluster.spk}
+          onToggle={() => onToggleSample(sample)}
+        />
+      ) : null}
+
+      {hasHint ? (
+        <p
+          id={hintId}
+          className="flex flex-wrap items-center gap-1.5 px-0.5 text-xs text-[color:var(--text-secondary)]"
+        >
+          <Badge variant="accent">추천</Badge>
+          {cluster.suggestedSpeakerName ? (
+            <span className="font-medium text-foreground">
+              {cluster.suggestedSpeakerName}
+            </span>
+          ) : null}
+          목소리가 비슷해요 · 유사도 {formatSimilarity(cluster.suggestedSimilarity)}
+        </p>
+      ) : null}
+
+      <div className="flex items-center gap-2">
+        <Select value={choice} onValueChange={setChoice}>
+          <SelectTrigger
+            size="sm"
+            className="w-[168px] shrink-0"
+            aria-describedby={hasHint ? hintId : undefined}
+          >
+            <SelectValue placeholder="화자 선택" />
+          </SelectTrigger>
+          <SelectContent>
+            {named.map((s) => (
+              <SelectItem key={s.id} value={s.id}>
+                {s.name}
+              </SelectItem>
+            ))}
+            {named.length > 0 && auto.length > 0 ? <SelectSeparator /> : null}
+            {auto.map((s) => (
+              <SelectItem key={s.id} value={s.id}>
+                {s.name}
+              </SelectItem>
+            ))}
+            {named.length + auto.length > 0 ? <SelectSeparator /> : null}
+            <SelectItem value={NEW_SPEAKER}>+ 새 화자로 등록</SelectItem>
+          </SelectContent>
+        </Select>
+        {isNew ? (
+          <Input
+            inputSize="sm"
+            aria-label="새 화자 이름"
+            placeholder="이름 입력"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            containerClassName="min-w-0 flex-1"
+          />
+        ) : (
+          <span className="flex-1" />
+        )}
+        <Button
+          size="sm"
+          onClick={submit}
+          loading={resolve.isPending}
+          disabled={!canSubmit}
+          className="shrink-0"
+        >
+          연결
+        </Button>
+      </div>
     </div>
   );
 }
@@ -183,9 +343,15 @@ export function ResolveDialog({
   const named = settled.filter((s) => s.status === "ready");
   const auto = settled.filter((s) => s.status === "provisional");
   const clusters = unresolvedClusters(meeting);
+  const player = useSamplePlayer(meeting.audioUrl);
+
+  const handleOpenChange = (next: boolean) => {
+    if (!next) player.stop();
+    onOpenChange(next);
+  };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-[520px]">
         <DialogHeader>
           <DialogTitle>화자 확인</DialogTitle>
@@ -194,6 +360,7 @@ export function ResolveDialog({
             이름을 입력해 연결하세요.
           </DialogDescription>
         </DialogHeader>
+        {player.element}
         {clusters.length === 0 ? (
           <p className="py-6 text-center text-sm text-[color:var(--text-muted)]">
             확인이 필요한 화자가 없어요.
@@ -208,6 +375,10 @@ export function ResolveDialog({
                   // 자기 자신으로의 연결은 아무 일도 하지 않으므로 목록에서 뺀다.
                   named={named.filter((s) => s.id !== c.resolvedSpeakerId)}
                   auto={auto.filter((s) => s.id !== c.resolvedSpeakerId)}
+                  sample={pickSample(meeting, c.spk)}
+                  playing={player.playingId === c.id}
+                  elapsed={player.elapsed}
+                  onToggleSample={(s) => player.toggle(c.id, s)}
                 />
               </li>
             ))}

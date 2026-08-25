@@ -153,3 +153,83 @@ test("제안이 없으면 아무것도 미리 고르지 않아 연결 버튼이 
   expect(screen.queryByText("추천")).not.toBeInTheDocument();
   expect(await screen.findByRole("button", { name: "연결" })).toBeDisabled();
 });
+
+// ── 오디오 샘플 미리듣기 ──────────────────────────────────────────────
+
+import { pickSample } from "../model/sample";
+
+function meetingWithTracks(over: Partial<Meeting> = {}): Meeting {
+  return {
+    id: "mtg_1",
+    clusters: [cluster()],
+    totalSeconds: 100,
+    audioUrl: "/api/meetings/mtg_1/audio",
+    tracks: [
+      {
+        spk: 1,
+        name: "화자 1",
+        dur: "0:30",
+        segments: [
+          { start: 0.1, end: 0.12 }, // 2s
+          { start: 0.5, end: 0.7 }, // 20s — longest
+        ],
+      },
+    ],
+    ...over,
+  } as Meeting;
+}
+
+test("pickSample은 화자의 가장 긴 구간을 고르고 8초로 자른다", () => {
+  expect(pickSample(meetingWithTracks(), 1)).toEqual({ start: 50, end: 58 });
+});
+
+test("pickSample은 구간이 없으면 null", () => {
+  expect(pickSample(meetingWithTracks(), 2)).toBeNull();
+  expect(pickSample(meetingWithTracks({ totalSeconds: 0 }), 1)).toBeNull();
+});
+
+function setupWithMeeting(meeting: Meeting) {
+  vi.spyOn(apiClient, "get").mockResolvedValue({ data: [] } as never);
+  const play = vi
+    .spyOn(HTMLMediaElement.prototype, "play")
+    .mockResolvedValue(undefined);
+  const pause = vi
+    .spyOn(HTMLMediaElement.prototype, "pause")
+    .mockImplementation(() => {});
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const { container } = render(
+    <QueryClientProvider client={qc}>
+      <ResolveDialog open onOpenChange={() => {}} meeting={meeting} />
+    </QueryClientProvider>,
+  );
+  return { play, pause, container };
+}
+
+test("샘플 row를 누르면 해당 구간을 재생하고, 다시 누르면 멈춘다", async () => {
+  const { play, pause } = setupWithMeeting(meetingWithTracks());
+  const btn = await screen.findByRole("button", { name: /샘플 듣기/ });
+  // 길이 표시 — "짧게 확인만 하면 되는구나"를 바로 알게.
+  expect(btn).toHaveTextContent("00:08");
+  fireEvent.click(btn);
+  const audio = document.querySelector("audio") as HTMLAudioElement;
+  expect(audio.getAttribute("src")).toBe("/api/meetings/mtg_1/audio#t=50,58");
+  await waitFor(() => expect(play).toHaveBeenCalled());
+  const playing = screen.getByRole("button", { name: /재생 중/ });
+  expect(playing).toHaveAttribute("aria-pressed", "true");
+  expect(playing).toHaveTextContent("00:00 / 00:08");
+  // 진행 — 53초 지점이면 3초 재생.
+  Object.defineProperty(audio, "currentTime", { value: 53, configurable: true });
+  fireEvent.timeUpdate(audio);
+  expect(playing).toHaveTextContent("00:03 / 00:08");
+  const bar = screen.getByRole("progressbar");
+  expect(bar).toHaveAttribute("aria-valuenow", "38");
+  fireEvent.click(playing);
+  expect(pause).toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: /샘플 듣기/ })).toBeInTheDocument();
+});
+
+test("구간이 없는 화자는 샘플 row가 없다", async () => {
+  setupWithMeeting(meetingWithTracks({ tracks: [] }));
+  await screen.findByText("Speaker_050");
+  expect(screen.queryByRole("button", { name: /샘플 듣기/ })).toBeNull();
+});
