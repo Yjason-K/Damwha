@@ -18,7 +18,11 @@ import { Input } from "@/shared/ui/input";
 import { SearchField } from "@/shared/ui/search-field";
 import { toast } from "@/shared/ui/use-toast";
 import { Utterance } from "@/shared/ui/utterance";
-import { useRemoveSavedUtterance, useSavedUtteranceIds, useSaveUtterance } from "@/features/saved-utterance/api/saved-utterances";
+import {
+  useRemoveSavedUtterance,
+  useSavedUtteranceIds,
+  useSaveUtterance,
+} from "@/features/saved-utterance/api/saved-utterances";
 
 import {
   useDeleteMeeting,
@@ -345,9 +349,15 @@ function DeleteDialog({
   );
 }
 
+/** 사용자가 직접 스크롤한 뒤 재생 따라가기를 쉬는 시간. */
+const FOLLOW_GRACE_MS = 4_000;
+
 type TranscriptPaneProps = {
   meeting: Meeting;
   activeId: string;
+  /** 지금 재생 중인 블록 id — 좌측 bar 표시 + 재생 중이면 따라 스크롤. */
+  playingId?: string | null;
+  playing?: boolean;
   onJump: (uid: string) => void;
   onDeleted: () => void;
   aiAcked: boolean;
@@ -358,6 +368,8 @@ type TranscriptPaneProps = {
 export function TranscriptPane({
   meeting,
   activeId,
+  playingId = null,
+  playing = false,
   onJump,
   onDeleted,
   aiAcked,
@@ -369,7 +381,13 @@ export function TranscriptPane({
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [resolveOpen, setResolveOpen] = React.useState(false);
   const [reprocessOpen, setReprocessOpen] = React.useState(false);
-  const sourceIds = React.useMemo(() => meeting.utterances.map((u) => u.sources[0]?.id).filter((id): id is string => !!id), [meeting.utterances]);
+  const sourceIds = React.useMemo(
+    () =>
+      meeting.utterances
+        .map((u) => u.sources[0]?.id)
+        .filter((id): id is string => !!id),
+    [meeting.utterances],
+  );
   const savedIds = useSavedUtteranceIds(sourceIds);
   const saveUtterance = useSaveUtterance();
   const removeSavedUtterance = useRemoveSavedUtterance();
@@ -491,6 +509,22 @@ export function TranscriptPane({
     }
   }, [activeId, activeBlockId, meeting.id]);
 
+  // 재생 따라가기: 재생 중에 현재 블록이 바뀌면 그 블록을 드러낸다. 사용자가
+  // 방금 직접 스크롤했다면(다른 곳을 읽는 중) FOLLOW_GRACE_MS 동안 쉰다 —
+  // 프로그램 스크롤은 wheel/touch/키 입력을 내지 않으므로 그것들만 사용자
+  // 조작으로 본다.
+  const userScrollAtRef = React.useRef(-Infinity);
+  const markUserScroll = () => {
+    userScrollAtRef.current = Date.now();
+  };
+  React.useEffect(() => {
+    if (!playing || !playingId) return;
+    if (Date.now() - userScrollAtRef.current < FOLLOW_GRACE_MS) return;
+    scrollRef.current
+      ?.querySelector<HTMLElement>(`[data-uid="${playingId}"]`)
+      ?.scrollIntoView?.({ block: "nearest" });
+  }, [playing, playingId]);
+
   React.useEffect(() => {
     scrollRef.current
       ?.querySelector<HTMLElement>("[data-find-current]")
@@ -578,6 +612,10 @@ export function TranscriptPane({
       {/* scroll body */}
       <div
         ref={scrollRef}
+        data-slot="transcript-scroll"
+        onWheel={markUserScroll}
+        onTouchMove={markUserScroll}
+        onKeyDown={markUserScroll}
         className="min-h-0 flex-1 overflow-y-auto px-7 pt-4 pb-6"
       >
         <VerifyBanner
@@ -611,17 +649,30 @@ export function TranscriptPane({
                 name={meeting.speakers[u.spk].name}
                 time={u.t}
                 active={activeBlockId === u.id}
+                playing={playingId === u.id}
                 quoted={u.quoted}
                 placeholder={failed}
                 onJump={() => onJump(u.id)}
                 saved={savedIds.data?.has(u.sources[0]?.id ?? "")}
-                savePending={saveUtterance.isPending || removeSavedUtterance.isPending}
+                savePending={
+                  saveUtterance.isPending || removeSavedUtterance.isPending
+                }
                 onSaveToggle={() => {
                   const utteranceId = u.sources[0]?.id;
                   if (!utteranceId) return;
-                  const mutation = savedIds.data?.has(utteranceId) ? removeSavedUtterance : saveUtterance;
-                  const value = savedIds.data?.has(utteranceId) ? utteranceId : { utteranceId, text: u.text };
-                  mutation.mutate(value as never, { onError: () => toast({ variant: "error", title: "저장한 발언을 바꾸지 못했어요." }) });
+                  const mutation = savedIds.data?.has(utteranceId)
+                    ? removeSavedUtterance
+                    : saveUtterance;
+                  const value = savedIds.data?.has(utteranceId)
+                    ? utteranceId
+                    : { utteranceId, text: u.text };
+                  mutation.mutate(value as never, {
+                    onError: () =>
+                      toast({
+                        variant: "error",
+                        title: "저장한 발언을 바꾸지 못했어요.",
+                      }),
+                  });
                 }}
               >
                 {failed

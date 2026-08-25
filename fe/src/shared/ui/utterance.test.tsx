@@ -85,3 +85,41 @@ test("savedBadge를 끄면 저장됨 배지 없이 저장 상태만 남는다", 
   expect(screen.queryByText("저장됨")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "저장 해제" })).toBeInTheDocument();
 });
+
+const BAR = "[box-shadow:inset_2px_0_0_var(--accent-solid)]";
+const TINT = "bg-[var(--accent-1)]";
+
+test("playing 블록은 좌측 accent bar와 aria-current를 가진다", () => {
+  const { container } = render(
+    <Utterance time="00:01" speaker={1} name="민지" playing>
+      본문
+    </Utterance>,
+  );
+  const root = container.firstElementChild!;
+  expect(root.className).toContain(BAR);
+  expect(root.className).not.toContain(TINT);
+  expect(root).toHaveAttribute("aria-current", "true");
+});
+
+test("active(선택) 블록은 배경 틴트만 갖고 bar는 없다", () => {
+  const { container } = render(
+    <Utterance time="00:01" speaker={1} name="민지" active>
+      본문
+    </Utterance>,
+  );
+  const root = container.firstElementChild!;
+  expect(root.className).toContain(TINT);
+  expect(root.className).not.toContain(BAR);
+  expect(root).not.toHaveAttribute("aria-current");
+});
+
+test("playing이면서 active면 bar와 틴트를 모두 가진다", () => {
+  const { container } = render(
+    <Utterance time="00:01" speaker={1} name="민지" active playing>
+      본문
+    </Utterance>,
+  );
+  const root = container.firstElementChild!;
+  expect(root.className).toContain(TINT);
+  expect(root.className).toContain(BAR);
+});

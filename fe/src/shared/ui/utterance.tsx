@@ -106,7 +106,10 @@ type UtteranceProps = Omit<React.ComponentProps<"div">, "children"> & {
   speaker?: number;
   name?: React.ReactNode;
   time?: React.ReactNode;
+  /** 사용자가 점프/선택한 발언 — 배경 틴트 + 액션 버튼 상시 노출. */
   active?: boolean;
+  /** 지금 재생 중인 발언 — 좌측 accent bar, 재생을 따라 이동한다. */
+  playing?: boolean;
   quoted?: boolean;
   placeholder?: boolean;
   badge?: React.ReactNode;
@@ -127,6 +130,7 @@ function Utterance({
   name,
   time,
   active = false,
+  playing = false,
   quoted = false,
   placeholder = false,
   badge = "인용",
@@ -142,9 +146,8 @@ function Utterance({
 }: UtteranceProps) {
   const root = cn(
     "group/utt relative grid grid-cols-[52px_1fr] gap-3 rounded-sm py-[7px] pr-3 pl-1.5 transition-colors duration-[80ms]",
-    active
-      ? "bg-[var(--accent-1)] [box-shadow:inset_2px_0_0_var(--accent-solid)]"
-      : "hover:bg-[var(--gray-1)]",
+    active ? "bg-[var(--accent-1)]" : "hover:bg-[var(--gray-1)]",
+    playing && "[box-shadow:inset_2px_0_0_var(--accent-solid)]",
     className,
   );
   const textTone = placeholder
@@ -159,7 +162,7 @@ function Utterance({
 
   if (quoted) {
     return (
-      <div className={root} {...rest}>
+      <div className={root} aria-current={playing || undefined} {...rest}>
         {timeEl}
         <div className="flex items-start gap-2.5 rounded-md border border-border bg-card px-3 py-[11px] [box-shadow:var(--shadow-xs)]">
           <span className="mt-px shrink-0 text-[color:var(--gray-5)] [&_svg]:size-4">
@@ -192,7 +195,12 @@ function Utterance({
   }
 
   return (
-    <div className={root} data-saved={saved || undefined} {...rest}>
+    <div
+      className={root}
+      data-saved={saved || undefined}
+      aria-current={playing || undefined}
+      {...rest}
+    >
       {timeEl}
       <div className="min-w-0">
         {/* 활성 블록은 원문 보기 버튼(absolute)이 항상 떠 있으므로 첫 줄에 자리 확보 */}

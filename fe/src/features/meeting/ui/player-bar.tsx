@@ -1,7 +1,13 @@
 import * as React from "react";
 
 import { cn } from "@/shared/lib/utils";
-import { IconButton } from "@/shared/ui/icon-button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/shared/ui/select";
 import { SpeakerTimeline } from "@/shared/ui/speaker-timeline";
 
 import type { SpeakerLane } from "../model/data";
@@ -9,8 +15,11 @@ import { Icon } from "./icons";
 
 /**
  * PlayerBar — full-width bottom bar: transport + time (aligned under the
- * nav rail), time ruler + speaker lanes, speed + view controls. Ported from
+ * nav rail), time ruler + speaker lanes, speed select. Ported from
  * `timbre_app/PlayerBar.jsx`.
+ *
+ * 이전/다음 발언은 콜백이 null이면(이동할 발언 없음) 비활성, undefined면
+ * (호출자가 발언 이동을 지원하지 않음) 역시 비활성으로 그린다.
  */
 
 const LABEL_W = 112;
@@ -50,6 +59,26 @@ function Replay({
   );
 }
 
+function Skip({
+  dir,
+  onClick,
+}: {
+  dir: "prev" | "next";
+  onClick: (() => void) | null | undefined;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick ?? undefined}
+      disabled={!onClick}
+      aria-label={dir === "prev" ? "이전 발언" : "다음 발언"}
+      className="inline-flex size-8 cursor-pointer items-center justify-center rounded-sm text-[color:var(--text-secondary)] outline-none transition-colors hover:text-foreground focus-visible:[box-shadow:var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-[color:var(--text-secondary)]"
+    >
+      <Icon name={dir === "prev" ? "skipBack" : "skipForward"} size={18} />
+    </button>
+  );
+}
+
 function Ruler({ totalSeconds }: { totalSeconds: number }) {
   const marks: number[] = [];
   for (let m = 0; m * 600 <= totalSeconds; m += 1) marks.push(m * 10);
@@ -85,6 +114,9 @@ type PlayerBarProps = {
   onSpeed: (speed: number) => void;
   onToggle: () => void;
   onSeek: (fraction: number) => void;
+  /** null = 이동할 발언 없음(비활성). */
+  onPrevUtterance?: (() => void) | null;
+  onNextUtterance?: (() => void) | null;
   className?: string;
 };
 
@@ -98,15 +130,13 @@ export function PlayerBar({
   onSpeed,
   onToggle,
   onSeek,
+  onPrevUtterance,
+  onNextUtterance,
   className,
 }: PlayerBarProps) {
   // 드래그 미리보기 시각 — SpeakerTimeline 드래그 중에만 non-null.
   const [scrub, setScrub] = React.useState<number | null>(null);
   const step = 10 / totalSeconds;
-  const cycleSpeed = () => {
-    const i = SPEEDS.indexOf(speed as (typeof SPEEDS)[number]);
-    onSpeed(SPEEDS[(i + 1) % SPEEDS.length]);
-  };
 
   return (
     // 랜드마크가 아니라 셸의 트랜스포트 줄 — footer(contentinfo)로 두면 오분류
@@ -118,7 +148,8 @@ export function PlayerBar({
     >
       {/* transport (rail-aligned) */}
       <div className="flex w-[calc(var(--rail-nav)-20px)] shrink-0 flex-col items-center gap-[3px]">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
+          <Skip dir="prev" onClick={onPrevUtterance} />
           <Replay dir="back" onClick={() => onSeek(Math.max(0, pos - step))} />
           <button
             type="button"
@@ -134,6 +165,7 @@ export function PlayerBar({
             />
           </button>
           <Replay dir="fwd" onClick={() => onSeek(Math.min(1, pos + step))} />
+          <Skip dir="next" onClick={onNextUtterance} />
         </div>
         <div className="font-mono text-xs tracking-[-0.01em] text-[color:var(--text-secondary)]">
           {fmt(scrub ?? pos, totalSeconds)}{" "}
@@ -158,23 +190,19 @@ export function PlayerBar({
       </div>
 
       {/* right controls */}
-      <div className="flex shrink-0 flex-col items-end gap-2 pl-2">
-        <button
-          type="button"
-          onClick={cycleSpeed}
-          aria-label={`재생 속도 (현재 ${speed}x)`}
-          className="inline-flex cursor-pointer items-center gap-1 rounded-sm border border-border bg-[var(--gray-0)] px-2 py-1 text-xs font-medium text-[color:var(--text-secondary)] outline-none transition-colors hover:border-[color:var(--border-strong)] hover:text-foreground focus-visible:[box-shadow:var(--focus-ring)]"
-        >
-          {speed}x <Icon name="chevDown" size={13} />
-        </button>
-        <div className="flex gap-0.5">
-          <IconButton label="파형" size="sm">
-            <Icon name="waveform" size={16} />
-          </IconButton>
-          <IconButton label="전체화면" size="sm">
-            <Icon name="expand" size={16} />
-          </IconButton>
-        </div>
+      <div className="flex shrink-0 items-center pl-2">
+        <Select value={String(speed)} onValueChange={(v) => onSpeed(Number(v))}>
+          <SelectTrigger size="sm" className="w-[76px]" aria-label="재생 속도">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {SPEEDS.map((s) => (
+              <SelectItem key={s} value={String(s)}>
+                {s}x
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
     </div>
   );

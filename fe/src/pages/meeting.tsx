@@ -25,6 +25,10 @@ import type { Meeting } from "@/features/meeting/model/types";
 import { CenterState, Spinner } from "@/features/meeting/ui/center-state";
 import { Icon } from "@/features/meeting/ui/icons";
 import { InsightPane } from "@/features/meeting/ui/insight-pane";
+import {
+  adjacentUtterance,
+  currentUtterance,
+} from "@/features/meeting/model/navigate";
 import { PlayerBar } from "@/features/meeting/ui/player-bar";
 import { TranscriptPane } from "@/features/meeting/ui/transcript-pane";
 import { useProcessingSettings } from "@/features/settings/api/settings";
@@ -193,6 +197,9 @@ function MeetingView({
   const [tab, setTab] = React.useState("summary");
   const [playing, setPlaying] = React.useState(false);
   const [pos, setPos] = React.useState(0);
+  // 재생 시각(ms). pos는 <audio>.duration 기준 비율이라 매핑된 totalSeconds로
+  // 되돌리면 소수점 차이만큼 밀린다 — 발언 블록 판정은 이 값으로만 한다.
+  const [timeMs, setTimeMs] = React.useState(0);
   const [audioDuration, setAudioDuration] = React.useState(0);
   const [metaReady, setMetaReady] = React.useState(false);
 
@@ -284,6 +291,7 @@ function MeetingView({
         : totalSeconds;
     if (a && total > 0) a.currentTime = fraction * total;
     setPos(fraction);
+    setTimeMs(fraction * total * 1000);
   };
 
   // 하이라이트 대상 발언의 시작 시각. 폴링 재조회로 meeting 객체가 새로 와도
@@ -307,6 +315,7 @@ function MeetingView({
     // 외부 신호(?u=)를 재생 위치에 반영하는 의도된 effect다.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setPos(fraction);
+    setTimeMs(targetStartMs);
   }, [targetStartMs, metaReady, totalSeconds]);
 
   // historical 가드: 재처리 등으로 회의가 로드된 뒤에도 `?u=`가 가리키는
@@ -343,6 +352,19 @@ function MeetingView({
     }
     setSearchParams({ u: uid }, { replace: true });
   };
+
+  // 플레이바의 이전/다음 발언. 현재 재생 시각 기준으로 블록을 고르고 jumpTo로
+  // 넘겨 하이라이트·seek·히스토리(replace)를 한 경로로 처리한다. 대상이 없으면
+  // null → 버튼 비활성.
+  const playingId = meeting
+    ? currentUtterance(meeting.utterances, timeMs)
+    : null;
+  const prevUid = meeting
+    ? adjacentUtterance(meeting.utterances, timeMs, "prev")
+    : null;
+  const nextUid = meeting
+    ? adjacentUtterance(meeting.utterances, timeMs, "next")
+    : null;
 
   const handleDeleted = () => {
     navigate("/", { replace: true });
@@ -387,6 +409,8 @@ function MeetingView({
         <TranscriptPane
           meeting={meeting}
           activeId={activeId}
+          playingId={playingId}
+          playing={playing}
           onJump={jumpTo}
           onDeleted={handleDeleted}
           aiAcked={aiAcked}
@@ -455,6 +479,8 @@ function MeetingView({
           onSpeed={onSpeed}
           onToggle={() => setPlaying((p) => !p)}
           onSeek={seek}
+          onPrevUtterance={prevUid ? () => jumpTo(prevUid) : null}
+          onNextUtterance={nextUid ? () => jumpTo(nextUid) : null}
         />
       ) : null}
 
@@ -482,6 +508,7 @@ function MeetingView({
                 ? a.duration
                 : totalSeconds;
             if (total > 0) setPos(Math.min(1, a.currentTime / total));
+            setTimeMs(a.currentTime * 1000);
           }}
           onEnded={() => setPlaying(false)}
         />
