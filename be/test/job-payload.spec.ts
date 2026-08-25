@@ -42,6 +42,31 @@ describe('job payload contract', () => {
     expect(() => ProcessMeetingPayloadSchema.parse(p)).not.toThrow();
   });
 
+  it('forwards speaker bounds into diarization.min/max_speakers', () => {
+    const p = buildProcessMeetingPayload({
+      meetingId: 'mtg_1', audioKey: 'meetings/x/original.wav',
+      processingVersion: 0, reprocess: false,
+      processing: resolvePreset('standard', 'ko'),
+      followups: { lens: true, summary: true },
+      speakers: { min: 2, max: 5 },
+    });
+    expect(p.models.diarization).toMatchObject({ min_speakers: 2, max_speakers: 5 });
+    expect(() => ProcessMeetingPayloadSchema.parse(p)).not.toThrow();
+  });
+
+  it('leaves speaker bounds null when not given or half-given', () => {
+    const base = {
+      meetingId: 'mtg_1', audioKey: 'meetings/x/original.wav',
+      processingVersion: 0, reprocess: false,
+      processing: resolvePreset('standard', 'ko'),
+      followups: { lens: true, summary: true },
+    };
+    expect(buildProcessMeetingPayload(base).models.diarization)
+      .toMatchObject({ min_speakers: null, max_speakers: null });
+    expect(buildProcessMeetingPayload({ ...base, speakers: { max: 4 } }).models.diarization)
+      .toMatchObject({ min_speakers: null, max_speakers: 4 });
+  });
+
   it('rejects a process_meeting payload missing audio_key', () => {
     expect(() => ProcessMeetingPayloadSchema.parse({ meeting_id: 'x' })).toThrow();
   });

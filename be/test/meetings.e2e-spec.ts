@@ -145,6 +145,37 @@ describe('meetings', () => {
     expect(res.body.search_index.error ?? null).toBeNull();
   });
 
+  it('POST /meetings forwards speakers bounds into the job payload', async () => {
+    const created = await request(srv()).post('/meetings')
+      .field('speakers', JSON.stringify({ min: 2, max: 4 }))
+      .attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+    expect(created.status).toBe(201);
+    const job = await db.pool.query('SELECT payload FROM job WHERE meeting_id=$1', [created.body.id]);
+    expect(job.rows[0].payload.models.diarization).toMatchObject({ min_speakers: 2, max_speakers: 4 });
+  });
+
+  it('POST /meetings rejects malformed speakers without creating a meeting', async () => {
+    const before = (await db.pool.query('SELECT count(*)::int AS c FROM meeting')).rows[0].c;
+    for (const bad of ['not-json', JSON.stringify({ min: 5, max: 2 }), JSON.stringify({})]) {
+      const res = await request(srv()).post('/meetings')
+        .field('speakers', bad)
+        .attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+      expect(res.status).toBe(400);
+    }
+    expect((await db.pool.query('SELECT count(*)::int AS c FROM meeting')).rows[0].c).toBe(before);
+  });
+
+  it('POST /meetings/:id/reprocess forwards speakers bounds and rejects bad ones', async () => {
+    const created = await request(srv()).post('/meetings').attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+    const mid = created.body.id;
+    await db.pool.query("UPDATE meeting SET status='done' WHERE id=$1", [mid]);
+    expect((await request(srv()).post(`/meetings/${mid}/reprocess`).send({ speakers: { min: 0 } })).status).toBe(400);
+    const res = await request(srv()).post(`/meetings/${mid}/reprocess`).send({ speakers: { max: 3 } });
+    expect(res.status).toBe(202);
+    const job = await db.pool.query('SELECT payload FROM job WHERE id=$1', [res.body.job_id]);
+    expect(job.rows[0].payload.models.diarization).toMatchObject({ min_speakers: null, max_speakers: 3 });
+  });
+
   it('POST /meetings/:id/reprocess bumps version + enqueues new job (done only)', async () => {
     const created = await request(srv()).post('/meetings').attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
     const mid = created.body.id;

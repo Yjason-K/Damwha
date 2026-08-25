@@ -266,7 +266,8 @@ function ResolveRow({
               {cluster.suggestedSpeakerName}
             </span>
           ) : null}
-          목소리가 비슷해요 · 유사도 {formatSimilarity(cluster.suggestedSimilarity)}
+          목소리가 비슷해요 · 유사도{" "}
+          {formatSimilarity(cluster.suggestedSimilarity)}
         </p>
       ) : null}
 

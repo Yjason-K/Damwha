@@ -19,7 +19,10 @@ import type { ProcessingOverride } from "@/features/settings/api/types";
 import { OverrideSection } from "@/features/settings/ui/override-section";
 
 import { useUploadMeeting } from "../api/meetings";
+import type { SpeakerBounds } from "../api/types";
 import { Icon } from "./icons";
+import { isSpeakerBoundsValid } from "../lib/speaker-bounds";
+import { SpeakerCountField } from "./speaker-count-field";
 
 /**
  * UploadDialog — 오디오 파일을 올려 새 회의를 생성한다. 파일(필수) + 제목/녹음
@@ -71,6 +74,9 @@ export function UploadDialog({
   const [processing, setProcessing] = React.useState<
     ProcessingOverride | undefined
   >(undefined);
+  const [speakers, setSpeakers] = React.useState<SpeakerBounds | undefined>(
+    undefined,
+  );
   // 기본은 둘 다 자동 실행(=미루지 않음). 렌즈/요약은 LLM을 돌려 환경에 따라
   // 오래 걸리므로, 급할 때만 켜서 전사까지만 받고 나중에 회의 화면에서 실행한다.
   const [deferLens, setDeferLens] = React.useState(false);
@@ -83,6 +89,7 @@ export function UploadDialog({
     setRecordedDate(null);
     setRecordedTime("");
     setProcessing(undefined);
+    setSpeakers(undefined);
     setDeferLens(false);
     setDeferSummary(false);
   };
@@ -96,7 +103,7 @@ export function UploadDialog({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!file || upload.isPending) return;
+    if (!file || upload.isPending || !isSpeakerBoundsValid(speakers)) return;
     upload.mutate(
       {
         file,
@@ -105,6 +112,7 @@ export function UploadDialog({
           ? combineToISO(recordedDate, recordedTime)
           : undefined,
         processing,
+        speakers,
         deferLens,
         deferSummary,
       },
@@ -204,6 +212,8 @@ export function UploadDialog({
             </div>
           </div>
 
+          <SpeakerCountField value={speakers} onChange={setSpeakers} />
+
           <div className="flex flex-col gap-1.5">
             <span
               id={followupsLabelId}
@@ -254,7 +264,9 @@ export function UploadDialog({
             <Button
               type="submit"
               loading={upload.isPending}
-              disabled={!file || upload.isPending}
+              disabled={
+                !file || upload.isPending || !isSpeakerBoundsValid(speakers)
+              }
             >
               업로드
             </Button>

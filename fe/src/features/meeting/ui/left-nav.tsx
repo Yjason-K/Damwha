@@ -133,7 +133,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
         </span>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pt-0.5 pb-2">
+      <div className="flex min-h-0 flex-1 flex-col px-2 pt-0.5 pb-2">
         <div className="mb-3 px-0.5">
           <SearchField
             asButton
@@ -150,7 +150,9 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
             label="저장한 발언"
             active={!!savedMatch}
             asChild
-          ><Link to="/saved-utterances" /></SidebarItem>
+          >
+            <Link to="/saved-utterances" />
+          </SidebarItem>
           <SidebarItem
             icon={<Icon name="listChecks" size={16} />}
             label="모든 회의"
@@ -193,7 +195,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
           회의 목록
         </SectionLabel>
         <ul
-          className="flex flex-col gap-0.5"
+          className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto overscroll-contain"
           aria-label="회의 목록"
           aria-busy={isLoading || undefined}
         >

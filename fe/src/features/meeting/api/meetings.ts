@@ -17,6 +17,7 @@ import type {
   MeetingStatusResponse,
   ResolveClusterRequest,
   ResolveClusterResponse,
+  SpeakerBounds,
   SummaryStatus,
   WireMeeting,
   WireMeetingDetail,
@@ -103,6 +104,7 @@ export function useUploadMeeting() {
       title?: string;
       recordedAt?: string;
       processing?: ProcessingOverride;
+      speakers?: SpeakerBounds;
       deferLens?: boolean;
       deferSummary?: boolean;
     }) => {
@@ -112,6 +114,7 @@ export function useUploadMeeting() {
       if (vars.recordedAt) form.append("recorded_at", vars.recordedAt);
       if (vars.processing)
         form.append("processing", JSON.stringify(vars.processing));
+      if (vars.speakers) form.append("speakers", JSON.stringify(vars.speakers));
       if (vars.deferLens) form.append("defer_lens", "true");
       if (vars.deferSummary) form.append("defer_summary", "true");
       const { data } = await apiClient.post<WireMeeting>("/meetings", form, {
@@ -194,15 +197,16 @@ export function useReprocessMeeting() {
     mutationFn: async (vars: {
       id: string;
       processing?: ProcessingOverride;
+      speakers?: SpeakerBounds;
     }) => {
       const { data } = await apiClient.post<{
         meeting_id: string;
         processing_version: number;
         job_id: string;
-      }>(
-        `/meetings/${vars.id}/reprocess`,
-        vars.processing ? { processing: vars.processing } : {},
-      );
+      }>(`/meetings/${vars.id}/reprocess`, {
+        ...(vars.processing ? { processing: vars.processing } : {}),
+        ...(vars.speakers ? { speakers: vars.speakers } : {}),
+      });
       return data;
     },
     onSuccess: (_data, vars) => {

@@ -218,7 +218,10 @@ test("샘플 row를 누르면 해당 구간을 재생하고, 다시 누르면 �
   expect(playing).toHaveAttribute("aria-pressed", "true");
   expect(playing).toHaveTextContent("00:00 / 00:08");
   // 진행 — 53초 지점이면 3초 재생.
-  Object.defineProperty(audio, "currentTime", { value: 53, configurable: true });
+  Object.defineProperty(audio, "currentTime", {
+    value: 53,
+    configurable: true,
+  });
   fireEvent.timeUpdate(audio);
   expect(playing).toHaveTextContent("00:03 / 00:08");
   const bar = screen.getByRole("progressbar");

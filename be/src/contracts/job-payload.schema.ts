@@ -157,6 +157,7 @@ export type SummarizeMeetingPayload = z.infer<typeof SummarizeMeetingPayloadSche
 export function buildProcessMeetingPayload(args: {
   meetingId: string; audioKey: string; processingVersion: number; reprocess: boolean;
   processing: ProcessingConfig; followups: Followups;
+  speakers?: { min?: number; max?: number };
 }): ProcessMeetingPayloadV5 {
   const env = loadEnv();
   const p = args.processing;
@@ -173,7 +174,11 @@ export function buildProcessMeetingPayload(args: {
       preset: p.preset,
       preset_revision: p.preset_revision,
       summary_model: p.summary_model,
-      diarization: { model: env.DIARIZATION_MODEL, min_speakers: null, max_speakers: null },
+      diarization: {
+        model: env.DIARIZATION_MODEL,
+        min_speakers: args.speakers?.min ?? null,
+        max_speakers: args.speakers?.max ?? null,
+      },
       embedding: { model: env.EMBEDDING_MODEL, dimension: env.EMBEDDING_DIM },
     },
     identify: {

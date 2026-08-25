@@ -11,6 +11,12 @@ export { ApiError, isApiError } from "@/shared/api/client";
 
 export type MeetingStatus = "uploaded" | "processing" | "done" | "failed";
 
+/**
+ * 회의별 화자 수 힌트 — 업로드 multipart `speakers`(JSON 문자열) / 재처리 body.
+ * 서버가 pyannote min/max_speakers로 넘긴다. 둘 중 하나만 줘도 되고 min ≤ max.
+ */
+export type SpeakerBounds = { min?: number; max?: number };
+
 export type SpeakerStatus = "pending" | "ready" | "provisional" | "failed";
 
 export type UtteranceStatus = "ok" | "silence" | "transcribe_failed";

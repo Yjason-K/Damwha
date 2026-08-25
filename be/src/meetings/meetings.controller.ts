@@ -35,6 +35,12 @@ export class MeetingsController {
             '개별 필드(whisper_model/devices/language)가 하나라도 있으면 결과 preset은 custom이 된다 ' +
             '(language만 지정해도 custom).',
         },
+        speakers: {
+          type: 'string',
+          description:
+            '화자 수 힌트 (JSON 문자열) — {"min":2,"max":5}. 둘 중 하나만 줘도 된다. 정확히 알면 같은 값. ' +
+            '화자 분리의 클러스터 수 추정을 이 범위로 제한한다 (과분할/과소분할 억제). 처리 설정 오버라이드와 무관.',
+        },
         defer_lens: {
           type: 'string', enum: ['true', 'false'],
           description:
@@ -54,7 +60,7 @@ export class MeetingsController {
   upload(
     @UploadedFile() file: Express.Multer.File,
     @Body() body: {
-      title?: string; recorded_at?: string; processing?: string;
+      title?: string; recorded_at?: string; processing?: string; speakers?: string;
       defer_lens?: string; defer_summary?: string;
     },
   ) {
@@ -164,11 +170,15 @@ export class MeetingsController {
             '개별 필드(whisper_model/devices/language)가 하나라도 있으면 결과 preset은 custom이 된다 ' +
             '(language만 지정해도 custom).',
         },
+        speakers: {
+          type: 'object',
+          description: '화자 수 힌트 {"min":2,"max":5} — 업로드의 speakers와 동일. 이번 재처리에만 적용.',
+        },
       },
     },
   })
   @HttpCode(202)
-  reprocess(@Param('id') id: string, @Body() body: { processing?: unknown }) {
+  reprocess(@Param('id') id: string, @Body() body: { processing?: unknown; speakers?: unknown }) {
     return this.service.reprocess(id, body);
   }
 
