@@ -116,13 +116,23 @@ three licenses before the first run.
 
 ### Embed service
 
-Search's dense arm runs bge-m3 behind a loopback HTTP service. It has no pnpm script —
-start it from the worker package:
+A **separate process from the worker** — the worker neither starts it nor calls it.
+It serves bge-m3 over loopback HTTP for one caller: the **API**, embedding the search
+*query*, because the API is TypeScript and can't run the model in-process. The worker
+embeds utterances during `index_meeting` with its own in-process embedder. It has no
+pnpm script — start it from the worker package:
 
 ```bash
 uv run --directory be/worker uvicorn damwha_worker.embed_service:app --host 127.0.0.1 --port 8100
 curl -s http://127.0.0.1:8100/health        # first start warms the model: 30–90 s
 ```
+
+Nothing crashes when it's down: recording and indexing are unaffected, and the API
+falls back to keyword-only search (BM25 / pg_bigm) — quietly, so a search box that
+still returns results is not proof the service is up. Keep `SEARCH_EMBEDDING_MODEL`
+and `SEARCH_EMBEDDING_DIM` identical in `be/.env` and `be/worker/.env`: the API
+rejects a response whose model name doesn't match and degrades the same way, since
+1024 dimensions from a different model is a different vector space.
 
 ### Lens / summary LLM
 
@@ -148,13 +158,15 @@ If the binary isn't on `PATH`, lens/summary jobs fail `llm_server_start_failed`
 
 ## Running the full stack
 
-Each step healthy before the next:
+Postgres is the only hard ordering constraint — everything else talks to it, not to
+each other, so the rest can start in any order (and later, without a restart):
 
-1. `pnpm db:up` → `pnpm be:migrate`
-2. Embed service — wait for `/health` → `{"status":"ok"}`
-3. *(optional)* lens/summary LLM, if you'd rather run it yourself than let the worker manage it
-4. `pnpm be:dev` (API :3000, Swagger at `/docs`) — or `pnpm dev` for API + SPA
-5. `pnpm worker`
+1. `pnpm db:up` → `pnpm be:migrate` — **required first**
+2. `pnpm be:dev` (API :3000, Swagger at `/docs`) — or `pnpm dev` for API + SPA
+3. `pnpm worker`
+4. Embed service — only the API's search queries use it; start it whenever, and check
+   `/health` → `{"status":"ok"}` before judging search quality
+5. *(optional)* lens/summary LLM, if you'd rather run it yourself than let the worker manage it
 
 Then upload a recording in the UI (or `POST /meetings`), and watch the meeting go
 `queued → done` with a speaker-attributed timeline. End-to-end smoke scripts, per-preset
