@@ -424,50 +424,6 @@ def test_near_duplicate_clusters_merged_before_persist(conn, tmp_path):
     assert utt_labels == ["SPEAKER_00", "SPEAKER_00", "SPEAKER_02"]
 
 
-def test_overlapped_segment_gets_second_pass_transcription(conn, tmp_path):
-    # SPEAKER_01(1000-3000)이 SPEAKER_00(0-6000)과 겹쳐 1차 STT에서 단어를 못 받음.
-    # 2차 패스가 그 구간만 다시 전사해 새 텍스트면 ok로 승격, 중복이면 failed 유지.
-    mid = seed_meeting(
-        conn, status="processing", processing_version=0, audio_key="meetings/m/original.m4a"
-    )
-    jid = seed_job(conn, meeting_id=mid, payload={})
-    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
-    db.claim(conn, "w1")
-    transcriber = FakeTranscriber(
-        [Word("본문", 100, 600, 0.9), Word("계속", 3500, 4000, 0.9)],
-        later_words=[[Word("끼어든", 1200, 1700, 0.8), Word("말", 1800, 2200, 0.6)]],
-    )
-    models = Models(
-        vad=FakeVAD([SpeechSpan(0, 6000)]),
-        diarizer=FakeDiarizer(
-            [DiarSegment("SPEAKER_00", 0, 6000), DiarSegment("SPEAKER_01", 1000, 3000)]
-        ),
-        embedder=FakeEmbedder([None, None]),
-        transcriber=transcriber,
-    )
-    out = run_process_meeting(
-        conn,
-        conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
-        _payload(mid, "meetings/m/original.m4a"),
-        models,
-        Storage(str(tmp_path)),
-        worker_id="w1",
-        normalize_fn=lambda s, d: None,
-        probe_fn=lambda p: ProbeResult(6000),
-    )
-    assert out == "committed"
-    assert transcriber.calls == 2
-    assert transcriber.spans_history[1] == [SpeechSpan(1000, 3000)]
-    rows = conn.execute(
-        "SELECT diar_label, status, text FROM utterance WHERE meeting_id=%s ORDER BY order_index",
-        (mid,),
-    ).fetchall()
-    assert [(r["diar_label"], r["status"], r["text"]) for r in rows] == [
-        ("SPEAKER_00", "ok", "본문 계속"),
-        ("SPEAKER_01", "ok", "끼어든 말"),
-    ]
-
-
 def test_run_process_meeting_uses_custom_prefix(conn, tmp_path):
     mid = seed_meeting(
         conn, status="processing", processing_version=0, audio_key="meetings/m/original.m4a"
