@@ -26,20 +26,20 @@ test("saving marks the representative utterance ID", async () => {
   const get = vi.spyOn(apiClient, "get").mockResolvedValue({ data: { utterance_ids: [] } } as never);
   vi.spyOn(apiClient, "put").mockResolvedValue({ data: wire } as never);
   const { wrapper } = setup();
-  const { result } = renderHook(() => ({ ids: useSavedUtteranceIds(["utt_2"]), save: useSaveUtterance() }), { wrapper });
+  const { result } = renderHook(() => ({ ids: useSavedUtteranceIds("mtg_1"), save: useSaveUtterance() }), { wrapper });
   await waitFor(() => expect(result.current.ids.isSuccess).toBe(true));
 
   await act(() => result.current.save.mutateAsync({ utteranceId: "utt_2", text: "두 문장" }));
 
   await waitFor(() => expect(result.current.ids.data?.has("utt_2")).toBe(true));
-  expect(get).toHaveBeenCalledWith("/saved-utterances/ids", { params: { utterance_ids: "utt_2" } });
+  expect(get).toHaveBeenCalledWith("/saved-utterances/ids", { params: { meeting_id: "mtg_1" } });
 });
 
 test("removing a saved utterance clears its representative ID", async () => {
   vi.spyOn(apiClient, "get").mockResolvedValue({ data: { utterance_ids: ["utt_2"] } } as never);
   vi.spyOn(apiClient, "delete").mockResolvedValue({ data: undefined } as never);
   const { wrapper } = setup();
-  const { result } = renderHook(() => ({ ids: useSavedUtteranceIds(["utt_2"]), remove: useRemoveSavedUtterance() }), { wrapper });
+  const { result } = renderHook(() => ({ ids: useSavedUtteranceIds("mtg_1"), remove: useRemoveSavedUtterance() }), { wrapper });
   await waitFor(() => expect(result.current.ids.data?.has("utt_2")).toBe(true));
 
   await act(() => result.current.remove.mutateAsync("utt_2"));

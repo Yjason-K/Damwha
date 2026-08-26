@@ -13,7 +13,7 @@ export class SavedUtterancesController {
 
   @Get('ids')
   @ApiOperation({ summary: '발언 저장 여부 조회' })
-  ids(@Query('utterance_ids') ids: unknown) { return this.service.ids(ids); }
+  ids(@Query('meeting_id') meetingId: unknown) { return this.service.ids(meetingId); }
 
   @Put(':utteranceId')
   @ApiOperation({ summary: '발언 저장' })

@@ -73,10 +73,12 @@ export class SavedUtterancesRepository {
     return rows;
   }
 
-  async savedIds(exec: Exec, ids: string[]) {
-    if (ids.length === 0) return [];
+  // Keyed by meeting, not by an id list: a transcript can hold thousands of
+  // utterances, and asking "which of these are saved?" one id at a time put
+  // every one of them in the query string.
+  async savedIdsByMeeting(exec: Exec, meetingId: string) {
     const { rows } = await exec.query<{ utterance_id: string }>(
-      `SELECT utterance_id FROM saved_utterance WHERE utterance_id=ANY($1::text[])`, [ids],
+      `SELECT utterance_id FROM saved_utterance WHERE meeting_id=$1`, [meetingId],
     );
     return rows.map((row) => row.utterance_id);
   }

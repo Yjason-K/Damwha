@@ -381,14 +381,7 @@ export function TranscriptPane({
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [resolveOpen, setResolveOpen] = React.useState(false);
   const [reprocessOpen, setReprocessOpen] = React.useState(false);
-  const sourceIds = React.useMemo(
-    () =>
-      meeting.utterances
-        .map((u) => u.sources[0]?.id)
-        .filter((id): id is string => !!id),
-    [meeting.utterances],
-  );
-  const savedIds = useSavedUtteranceIds(sourceIds);
+  const savedIds = useSavedUtteranceIds(meeting.id);
   const saveUtterance = useSaveUtterance();
   const removeSavedUtterance = useRemoveSavedUtterance();
 

@@ -138,7 +138,7 @@ describe('saved utterances api', () => {
       meeting: { id: meetingId, title: '로드맵 회의' },
     });
     expect(
-      (await request(srv()).get(`/saved-utterances/ids?utterance_ids=${utteranceId}`)).body,
+      (await request(srv()).get(`/saved-utterances/ids?meeting_id=${meetingId}`)).body,
     ).toEqual({ utterance_ids: [utteranceId] });
   });
 
@@ -179,19 +179,55 @@ describe('saved utterances api', () => {
     expect((await db.pool.query('SELECT * FROM saved_utterance')).rowCount).toBe(1);
   });
 
-  it('accepts repeated utterance_ids query values', async () => {
+  it('reports every saved ID of a meeting, however long its transcript is', async () => {
     const meetingId = await mkMeeting();
+    const otherMeetingId = await mkMeeting('다른 회의');
     const firstId = await mkUtterance(meetingId, 0, 0);
     const secondId = await mkUtterance(meetingId, 1, 1000);
+    await mkUtterance(meetingId, 2, 2000);
+    const otherId = await mkUtterance(otherMeetingId, 0, 0);
     await request(srv()).put(`/saved-utterances/${firstId}`).send({ text_snapshot: '첫 문장' });
     await request(srv()).put(`/saved-utterances/${secondId}`).send({ text_snapshot: '두 문장' });
+    await request(srv()).put(`/saved-utterances/${otherId}`).send({ text_snapshot: '남의 문장' });
 
-    const result = await request(srv())
-      .get('/saved-utterances/ids')
-      .query({ utterance_ids: [firstId, secondId] });
+    const result = await request(srv()).get('/saved-utterances/ids').query({ meeting_id: meetingId });
 
     expect(result.status).toBe(200);
-    expect(result.body).toEqual({ utterance_ids: [firstId, secondId] });
+    expect(result.body.utterance_ids.slice().sort()).toEqual([firstId, secondId].sort());
+  });
+
+  // The transcript pane asks this on every meeting it opens, and real meetings
+  // run to thousands of utterances. Answering per meeting keeps the request a
+  // single bounded parameter; the id-list form used to 400 past 100 ids.
+  it('answers for a meeting whose transcript is far past any id-list cap', async () => {
+    const meetingId = await mkMeeting();
+    const ids: string[] = [];
+    for (let index = 0; index < 150; index += 1) {
+      ids.push(await mkUtterance(meetingId, index, index * 1000));
+    }
+    for (const id of ids) {
+      await request(srv()).put(`/saved-utterances/${id}`).send({ text_snapshot: '저장한 문장' });
+    }
+
+    const result = await request(srv()).get('/saved-utterances/ids').query({ meeting_id: meetingId });
+
+    expect(result.status).toBe(200);
+    expect(result.body.utterance_ids.slice().sort()).toEqual(ids.slice().sort());
+  });
+
+  it('rejects a missing or malformed meeting_id', async () => {
+    expect((await request(srv()).get('/saved-utterances/ids')).status).toBe(400);
+    expect((await request(srv()).get('/saved-utterances/ids').query({ meeting_id: 'utt_1' })).status).toBe(400);
+  });
+
+  it('reports no saved IDs for a meeting that has none', async () => {
+    const meetingId = await mkMeeting();
+    await mkUtterance(meetingId, 0, 0);
+
+    const result = await request(srv()).get('/saved-utterances/ids').query({ meeting_id: meetingId });
+
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({ utterance_ids: [] });
   });
 
   it('keeps a historical snapshot but removes it with its meeting', async () => {

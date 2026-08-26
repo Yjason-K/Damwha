@@ -17,14 +17,15 @@ function mapSaved(value: SavedUtteranceWire): SavedUtterance {
   };
 }
 
-export function useSavedUtteranceIds(ids: string[]) {
-  const canonicalIds = [...new Set(ids)].sort();
+// 회의 단위로 묻는다. 발화 id를 나열해 묻던 방식은 전사가 100개를 넘는 순간
+// 서버가 400을 돌려줬고(실제 회의는 수백~수천 발화다) 애초에 id 수천 개가
+// 쿼리 스트링에 들어갔다.
+export function useSavedUtteranceIds(meetingId: string) {
   return useQuery({
-    queryKey: ["saved-utterance-ids", canonicalIds],
-    enabled: canonicalIds.length > 0,
+    queryKey: ["saved-utterance-ids", meetingId],
     queryFn: async () => {
       const { data } = await apiClient.get<{ utterance_ids: string[] }>("/saved-utterances/ids", {
-        params: { utterance_ids: canonicalIds.join(",") },
+        params: { meeting_id: meetingId },
       });
       return new Set(data.utterance_ids ?? []);
     },

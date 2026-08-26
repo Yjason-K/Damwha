@@ -61,13 +61,8 @@ export class SavedUtterancesService {
   }
 
   async ids(raw: unknown) {
-    const values = raw == null ? [] : Array.isArray(raw) ? raw : [raw];
-    if (values.some((value) => typeof value !== 'string')) {
-      throw new BadRequestException('utterance_ids are invalid');
-    }
-    const ids = [...new Set((values as string[]).flatMap((value) => value.split(',')).filter(Boolean))];
-    if (ids.length > MAX_LIMIT || ids.some((id) => !UTTERANCE_ID_RE.test(id))) throw new BadRequestException('utterance_ids are invalid');
-    return { utterance_ids: await this.repo.savedIds(this.db.pool, ids) };
+    if (typeof raw !== 'string' || !MEETING_ID_RE.test(raw)) throw new BadRequestException('meeting_id is invalid');
+    return { utterance_ids: await this.repo.savedIdsByMeeting(this.db.pool, raw) };
   }
 
   async save(utteranceId: string, body: { text_snapshot?: unknown }) {
