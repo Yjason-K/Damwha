@@ -24,7 +24,8 @@
   "enabledPlugins": {
     "caveman@caveman": true,
     "notion@claude-plugins-official": true,
-    "humanize-korean@im-not-ai": true
+    "humanize-korean@im-not-ai": true,
+    "eli5@claude-community": true
   },
   "extraKnownMarketplaces": {
     "im-not-ai": {
@@ -37,6 +38,12 @@
       "source": {
         "source": "github",
         "repo": "JuliusBrussee/caveman"
+      }
+    },
+    "claude-community": {
+      "source": {
+        "source": "github",
+        "repo": "anthropics/claude-plugins-community"
       }
     }
   }
