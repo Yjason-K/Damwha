@@ -89,11 +89,18 @@ What actually needs your attention:
 ## Python ML worker
 
 ```bash
-pnpm worker:sync                              # deterministic deps only (tests, no models)
-pnpm worker:test                              # pytest — needs Docker (testcontainers)
-uv sync --directory be/worker --extra models  # real ML models (mlx-whisper/pyannote/ECAPA/bge-m3)
-pnpm worker                                   # run the supervisor
+pnpm worker:sync       # real ML models (mlx-whisper/pyannote/ECAPA/bge-m3) — what `pnpm worker` needs
+pnpm worker:sync:test  # deterministic deps only (tests, no models)
+pnpm worker:test       # pytest — needs Docker (testcontainers)
+pnpm worker            # run the supervisor
 ```
+
+`uv sync` builds an *exact* environment, so the two sync scripts overwrite each other:
+`worker:sync:test` uninstalls torch and friends. Running the real worker against that venv
+fails every job with `model_load_failed` / `PERMANENT` (`No module named 'torch'`) — the
+models are an optional extra (`[project.optional-dependencies] models`) and the ML imports
+are lazy, so nothing complains until a job actually claims one. Re-run `pnpm worker:sync`
+after any test-only sync.
 
 `pnpm worker` starts a **supervisor** parent that imports no ML libraries; per job it
 spawns a `--once` child that exits when the job is done, so the OS reclaims MLX/torch
