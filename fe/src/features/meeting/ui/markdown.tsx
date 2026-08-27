@@ -68,7 +68,10 @@ export function Markdown({ body }: { body: string }) {
           // 외부 URL로 요청이 나가 로컬 전용 제품 전제를 깬다 — alt 텍스트만
           // 남기고 태그 자체를 없앤다.
           img: ({ alt }) => (
-            <span className="text-[color:var(--text-faint)]">
+            <span
+              className="text-[color:var(--text-faint)]"
+              title="메모에서는 이미지가 보이지 않아요."
+            >
               {alt && alt.trim().length > 0 ? alt : "[이미지]"}
             </span>
           ),
@@ -77,8 +80,13 @@ export function Markdown({ body }: { body: string }) {
               {children}
             </blockquote>
           ),
+          // react-markdown v10은 인라인 코드와 펜스 블록을 구분하는 `inline` prop을
+          // 더 이상 넘기지 않는다(언어 지정이 없는 펜스 블록은 className도 없어
+          // node만으로도 구분 불가) — 실제 DOM에서 블록 코드는 항상 `pre` 안에
+          // 있으므로 CSS로 가른다. `pre` 자손일 때만 배경·패딩을 지워 pre가 만드는
+          // 박스 안에 박스가 겹치지 않게 한다.
           code: ({ children }) => (
-            <code className="rounded-sm bg-[var(--surface-hover)] px-1 py-0.5 font-mono text-2xs">
+            <code className="rounded-sm bg-[var(--surface-hover)] px-1 py-0.5 font-mono text-2xs [pre_&]:rounded-none [pre_&]:bg-transparent [pre_&]:px-0 [pre_&]:py-0">
               {children}
             </code>
           ),

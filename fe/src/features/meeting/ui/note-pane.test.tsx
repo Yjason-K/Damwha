@@ -71,6 +71,19 @@ test("마크다운 이미지는 <img> 없이 alt 텍스트로 나온다", async 
   expect(container.querySelector("img")).toBeNull();
 });
 
+test("메모 조회가 실패하면 에러 메시지와 다시 시도 버튼만 보여 주고 편집을 허용하지 않는다", async () => {
+  vi.spyOn(apiClient, "get").mockRejectedValue(new Error("boom"));
+  renderPane();
+  expect(
+    await screen.findByText("메모를 불러오지 못했어요."),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "다시 시도" })).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "메모 쓰기" }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+});
+
 test("'편집'을 누르면 textarea가 열린다", async () => {
   const user = userEvent.setup();
   vi.spyOn(apiClient, "get").mockResolvedValue({

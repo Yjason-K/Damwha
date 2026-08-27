@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Param, Put, Res } from '@nestjs/common';
+import { Body, Controller, Get, Param, Put, Res } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { NotesService } from './notes.service';

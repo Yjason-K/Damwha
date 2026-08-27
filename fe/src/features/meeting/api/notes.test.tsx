@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { apiClient } from "@/shared/api/client";
-import { useAutosaveNote, useMeetingNote } from "./notes";
+import { noteQueryKey, useAutosaveNote, useMeetingNote } from "./notes";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -146,4 +146,36 @@ test("저장이 실패하면 state가 error이고 retry가 다시 보낸다", as
 
   act(() => result.current.retry());
   await waitFor(() => expect(put).toHaveBeenCalledTimes(2));
+});
+
+test("저장이 실패하면 캐시를 실패 전 값으로 되돌린다", async () => {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  function localWrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+  }
+  vi.spyOn(apiClient, "get").mockResolvedValue({
+    data: {
+      note: { body_md: "원래 메모", updated_at: "2026-08-27T00:00:00.000Z" },
+    },
+  } as never);
+  vi.spyOn(apiClient, "put").mockRejectedValue(new Error("boom"));
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+
+  const { result } = renderHook(() => useAutosaveNote("mtg_1"), {
+    wrapper: localWrapper,
+  });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+  act(() => result.current.change("실패할 새 메모"));
+  await act(async () => {
+    vi.advanceTimersByTime(800);
+  });
+  await waitFor(() => expect(result.current.state).toBe("error"));
+
+  expect(qc.getQueryData(noteQueryKey("mtg_1"))).toEqual({
+    body_md: "원래 메모",
+    updated_at: "2026-08-27T00:00:00.000Z",
+  });
 });

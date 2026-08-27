@@ -13,6 +13,7 @@ import type {
 } from "@/features/settings/api/types";
 import type { Meeting, MeetingStatus, MeetingSummary } from "../model/types";
 import { toMeetingDetail, toMeetingSummary } from "./mappers";
+import { noteQueryKey } from "./notes";
 import type {
   MeetingStatusResponse,
   ResolveClusterRequest,
@@ -185,7 +186,7 @@ export function useDeleteMeeting() {
       queryClient.removeQueries({ queryKey: ["meeting", vars.id] });
       queryClient.removeQueries({ queryKey: ["meeting-status", vars.id] });
       queryClient.removeQueries({ queryKey: ["meeting-lenses", vars.id] });
-      queryClient.removeQueries({ queryKey: ["meeting-note", vars.id] });
+      queryClient.removeQueries({ queryKey: noteQueryKey(vars.id) });
       queryClient.invalidateQueries({ queryKey: ["meetings"] });
     },
   });

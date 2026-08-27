@@ -3,7 +3,7 @@ import * as React from "react";
 import { Button } from "@/shared/ui/button";
 import { IconButton } from "@/shared/ui/icon-button";
 
-import { useAutosaveNote } from "../api/notes";
+import { type SaveState, useAutosaveNote } from "../api/notes";
 import {
   insertLink,
   toggleLinePrefix,
@@ -33,7 +33,7 @@ const COMMANDS: Command[] = [
   { label: "코드", icon: "code", run: (s) => toggleWrap(s, "`") },
 ];
 
-const SAVE_LABEL: Record<string, string> = {
+const SAVE_LABEL: Record<SaveState, string> = {
   idle: "",
   saving: "저장 중",
   saved: "저장됨",
@@ -46,7 +46,7 @@ const SAVE_LABEL: Record<string, string> = {
  * 섞인다.
  */
 export function NotePane({ meetingId }: { meetingId: string }) {
-  const { body, isLoading, state, change, flush, retry } =
+  const { body, isLoading, isError, refetch, state, change, flush, retry } =
     useAutosaveNote(meetingId);
   const [editing, setEditing] = React.useState(false);
   const boxRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -113,6 +113,23 @@ export function NotePane({ meetingId }: { meetingId: string }) {
         <p className="text-sm text-[color:var(--text-muted)]">
           메모를 불러오는 중…
         </p>
+      </div>
+    );
+  }
+
+  // 조회 자체가 실패했을 때는 편집을 열지 않는다 — 여기서 편집을 허용하면
+  // 사용자가 진짜 메모 위에 빈 화면을 덧쓰고, 저장이 그 진짜 메모를
+  // 지워 버린다. "메모 없음"과 "불러오기 실패"는 반드시 다른 화면이어야 한다.
+  if (isError) {
+    return (
+      <div className="flex flex-col items-center gap-2 px-4 py-10 text-center">
+        <Icon name="x" size={20} className="text-[color:var(--text-faint)]" />
+        <p className="text-sm text-[color:var(--text-muted)]">
+          메모를 불러오지 못했어요.
+        </p>
+        <Button variant="secondary" size="sm" onClick={() => refetch()}>
+          다시 시도
+        </Button>
       </div>
     );
   }

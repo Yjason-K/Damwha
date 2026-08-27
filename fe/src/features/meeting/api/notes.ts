@@ -65,12 +65,26 @@ export function useSaveMeetingNote() {
       return typeof data === "string" || !data ? null : data.note;
     },
     onMutate: ({ meetingId, bodyMd }: SaveNoteVars) => {
+      const key = noteQueryKey(meetingId);
+      // 실패 시 되돌릴 수 있도록 낙관적 갱신 전 값을 남겨 둔다.
+      const previous = queryClient.getQueryData<MeetingNote | null>(key);
       // 공백 본문은 서버가 행을 지우고 204로 답하므로 캐시도 null로 맞춘다.
       const note: MeetingNote | null =
         bodyMd.trim() === ""
           ? null
           : { body_md: bodyMd, updated_at: new Date().toISOString() };
-      queryClient.setQueryData(noteQueryKey(meetingId), note);
+      queryClient.setQueryData(key, note);
+      return { previous, meetingId };
+    },
+    onError: (_err, _vars, context) => {
+      // PUT이 실패하면 캐시에 남은 낙관적 값을 되돌린다 — 그대로 두면 저장되지
+      // 않은 본문이 저장된 것처럼 보이고, staleTime 동안 재조회도 그 값을 그대로
+      // 돌려준다.
+      if (!context) return;
+      queryClient.setQueryData(
+        noteQueryKey(context.meetingId),
+        context.previous,
+      );
     },
   });
 }
@@ -120,10 +134,17 @@ export function useAutosaveNote(meetingId: string | undefined) {
   );
 
   const retry = React.useCallback(() => {
+    // 대기 중인 debounce 타이머가 있으면 지운다 — 그대로 두면 이 재전송과
+    // 타이머의 flush가 같은 본문을 두 번 PUT한다.
+    if (timer.current !== null) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
     // 저장 실패 후 사용자가 다시 입력했다면 pending(더 최신)을 우선한다.
     // 그대로 lastSent만 재전송하면 실패 이후 편집분이 사라진다.
     const value = pending.current ?? lastSent.current;
     const targetMeetingId = pendingMeetingId.current ?? meetingId;
+    pending.current = null;
     if (value === null || targetMeetingId === undefined) return;
     lastSent.current = value;
     mutate({ meetingId: targetMeetingId, bodyMd: value });
@@ -162,6 +183,8 @@ export function useAutosaveNote(meetingId: string | undefined) {
   return {
     body: draft ?? query.data?.body_md ?? "",
     isLoading: query.isPending,
+    isError: query.isError,
+    refetch: query.refetch,
     state,
     change,
     flush,
