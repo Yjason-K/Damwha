@@ -152,6 +152,19 @@ export class MeetingsRepository {
     return rows[0] ?? null;
   }
   // reprocess: bump version + reset status, return new version (single short tx via caller)
+  async lockById(exec: Queryable, id: string): Promise<MeetingRow | null> {
+    const { rows } = await exec.query<MeetingRow>(`SELECT * FROM meeting WHERE id=$1 FOR UPDATE`, [id]);
+    return rows[0] ?? null;
+  }
+
+  /** 운영자 취소 — 워커의 fail 경로는 job 소유권 가드에 막혀 회의 상태를 못 바꾸므로 API가 직접 닫는다. */
+  async markCancelled(exec: Queryable, id: string, error: object): Promise<void> {
+    await exec.query(
+      `UPDATE meeting SET status='failed', error=$2::jsonb WHERE id=$1`,
+      [id, JSON.stringify(error)],
+    );
+  }
+
   async bumpVersionForReprocess(exec: Queryable, id: string): Promise<number> {
     const { rows } = await exec.query<{ processing_version: number }>(
       `UPDATE meeting SET processing_version = processing_version + 1, status='uploaded', error=NULL

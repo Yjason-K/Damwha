@@ -33,6 +33,10 @@ export interface LensItemRow {
   created_at: Date;
   updated_at: Date;
   meeting_title: string | null;
+  meeting_recorded_at: Date | null;
+  // COALESCE(recorded_at, created_at) — the meeting's sort key. recorded_at is
+  // nullable, so the fallback keeps the keyset tuple free of NULLs.
+  meeting_sort_at: Date;
 }
 
 export interface EvidenceRow {
@@ -41,8 +45,12 @@ export interface EvidenceRow {
   utterance: Record<string, unknown>;
 }
 
-// A decoded keyset cursor: { updated_at, id } base64url-encoded as JSON.
+// A decoded keyset cursor, base64url-encoded as JSON. The list is grouped by
+// meeting, so the tuple leads with the meeting's sort key and id and only then
+// breaks ties within the meeting.
 export interface LensCursor {
+  meeting_at: string;
+  meeting_id: string;
   updated_at: string;
   id: string;
 }

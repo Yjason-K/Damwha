@@ -5,12 +5,10 @@
  * job-payload.schema.ts는 env.ts의 loadEnv를 import하므로, 목록을 그쪽에 두면
  * env.ts → job-payload.schema.ts → env.ts 순환이 생긴다. 그래서 별도 파일이다.
  * (env.ts:9의 WHISPER_MODEL enum 중복도 같은 제약의 흔적 — 그쪽은 건드리지 않는다.)
+ *
+ * 값 자체는 이제 `@damwha/contracts`가 갖는다 — FE가 같은 목록을 손으로
+ * 미러링하다 2026-08-12에 어긋난 적이 있어서, 모노레포 통합 후 공유 패키지로
+ * 옮겼다. 이 파일은 기존 import 경로를 지키는 재수출층이다.
  */
-// 값은 LLM 서버가 그대로 받는 이름이다. mlx_lm.server는 요청의 model을 HF repo id로
-// 해석하므로(별칭을 걸 방법이 없다 — SMOKE.md) 카탈로그도 repo id로 적는다.
-export const SUMMARY_MODELS = [
-  'mlx-community/Qwen3.5-4B-8bit',
-  'mlx-community/Qwen3.5-9B-8bit',
-  'mlx-community/Qwen3.5-27B-8bit',
-] as const;
-export type SummaryModel = (typeof SUMMARY_MODELS)[number];
+export { SUMMARY_MODELS } from '@damwha/contracts';
+export type { SummaryModel } from '@damwha/contracts';

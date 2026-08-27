@@ -174,6 +174,69 @@ describe('speakers management (DELETE)', () => {
     expect((await request(srv()).delete(`/speakers/${sid}`)).status).toBe(204);
   });
 
+  it('GET /speakers hides a provisional speaker nothing references any more', async () => {
+    // 재처리는 meeting_cluster를 통째로 갈아끼우지만 utterance는 보존한다(013).
+    // 그 사이 아무것도 안 가리키게 된 provisional은 워커의 persist GC가 지울
+    // 대상인데, 다음 persist까지는 남아 "말한 적 없는 화자"로 목록에 떴다.
+    const orphan = await db.pool.query(
+      `INSERT INTO speaker(name, enrollment_status) VALUES('Speaker_099','provisional') RETURNING id`,
+    );
+    const res = await request(srv()).get('/speakers').expect(200);
+    expect(res.body.map((s: { id: string }) => s.id)).not.toContain(orphan.rows[0].id);
+  });
+
+  it('GET /speakers keeps a provisional speaker that still has utterances or a cluster', async () => {
+    const m = await db.pool.query(
+      `INSERT INTO meeting(audio_key,status) VALUES('k','done') RETURNING id`,
+    );
+    const mid = m.rows[0].id;
+    const withUtterance = await db.pool.query(
+      `INSERT INTO speaker(name, enrollment_status) VALUES('Speaker_001','provisional') RETURNING id`,
+    );
+    await db.pool.query(
+      `INSERT INTO utterance(meeting_id,speaker_id,diar_label,start_ms,end_ms,text,status,order_index,processing_version)
+       VALUES($1,$2,'S0',0,1000,'안녕','ok',0,0)`,
+      [mid, withUtterance.rows[0].id],
+    );
+    const withCluster = await db.pool.query(
+      `INSERT INTO speaker(name, enrollment_status) VALUES('Speaker_002','provisional') RETURNING id`,
+    );
+    await db.pool.query(
+      `INSERT INTO meeting_cluster(meeting_id,diar_label,resolved_speaker_id,processing_version)
+       VALUES($1,'S1',$2,0)`,
+      [mid, withCluster.rows[0].id],
+    );
+    const suggested = await db.pool.query(
+      `INSERT INTO speaker(name, enrollment_status) VALUES('Speaker_003','provisional') RETURNING id`,
+    );
+    // 미응답 제안도 참조로 친다 — 워커 GC와 같은 규칙
+    await db.pool.query(
+      `INSERT INTO meeting_cluster(meeting_id,diar_label,suggested_speaker_id,suggested_similarity,processing_version)
+       VALUES($1,'S2',$2,0.7,0)`,
+      [mid, suggested.rows[0].id],
+    );
+
+    const res = await request(srv()).get('/speakers').expect(200);
+    const ids = res.body.map((s: { id: string }) => s.id);
+    expect(ids).toContain(withUtterance.rows[0].id);
+    expect(ids).toContain(withCluster.rows[0].id);
+    expect(ids).toContain(suggested.rows[0].id);
+  });
+
+  it('GET /speakers keeps an enrolled speaker even with no cluster at all', async () => {
+    // 등록 화자는 음성 샘플로 만들어져 클러스터가 없는 게 정상이다
+    const ready = await db.pool.query(
+      `INSERT INTO speaker(name, enrollment_status) VALUES('김영재','ready') RETURNING id`,
+    );
+    const pending = await db.pool.query(
+      `INSERT INTO speaker(name, enrollment_status) VALUES('대기','pending') RETURNING id`,
+    );
+    const res = await request(srv()).get('/speakers').expect(200);
+    const ids = res.body.map((s: { id: string }) => s.id);
+    expect(ids).toContain(ready.rows[0].id);
+    expect(ids).toContain(pending.rows[0].id);
+  });
+
   it('DELETE /speakers/:id → 404 for unknown id', async () => {
     const res = await request(srv()).delete('/speakers/spk_999999');
     expect(res.status).toBe(404);

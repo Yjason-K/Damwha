@@ -17,6 +17,7 @@ import type {
   MeetingStatusResponse,
   ResolveClusterRequest,
   ResolveClusterResponse,
+  SpeakerBounds,
   SummaryStatus,
   WireMeeting,
   WireMeetingDetail,
@@ -81,8 +82,8 @@ export function useMeetingStatus(
       const active =
         d.status === "uploaded" ||
         d.status === "processing" ||
-        d.summary_status === "queued" ||
-        d.summary_status === "running" ||
+        d.summary?.status === "queued" ||
+        d.summary?.status === "running" ||
         d.search_index?.status === "queued" ||
         d.search_index?.status === "running";
       return active ? 2000 : false;
@@ -103,6 +104,7 @@ export function useUploadMeeting() {
       title?: string;
       recordedAt?: string;
       processing?: ProcessingOverride;
+      speakers?: SpeakerBounds;
       deferLens?: boolean;
       deferSummary?: boolean;
     }) => {
@@ -112,6 +114,7 @@ export function useUploadMeeting() {
       if (vars.recordedAt) form.append("recorded_at", vars.recordedAt);
       if (vars.processing)
         form.append("processing", JSON.stringify(vars.processing));
+      if (vars.speakers) form.append("speakers", JSON.stringify(vars.speakers));
       if (vars.deferLens) form.append("defer_lens", "true");
       if (vars.deferSummary) form.append("defer_summary", "true");
       const { data } = await apiClient.post<WireMeeting>("/meetings", form, {
@@ -194,15 +197,16 @@ export function useReprocessMeeting() {
     mutationFn: async (vars: {
       id: string;
       processing?: ProcessingOverride;
+      speakers?: SpeakerBounds;
     }) => {
       const { data } = await apiClient.post<{
         meeting_id: string;
         processing_version: number;
         job_id: string;
-      }>(
-        `/meetings/${vars.id}/reprocess`,
-        vars.processing ? { processing: vars.processing } : {},
-      );
+      }>(`/meetings/${vars.id}/reprocess`, {
+        ...(vars.processing ? { processing: vars.processing } : {}),
+        ...(vars.speakers ? { speakers: vars.speakers } : {}),
+      });
       return data;
     },
     onSuccess: (_data, vars) => {
@@ -219,6 +223,26 @@ export function useReprocessMeeting() {
 }
 
 /** 검색 재색인 (POST /meetings/:id/reindex). 202, 새 index_meeting job enqueue. */
+/** 처리 취소 — 회의는 failed(cancelled)가 되고 reprocess로 다시 돌릴 수 있다. */
+export function useCancelProcessing() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { data } = await apiClient.post<{
+        meeting_id: string;
+        job_id: string;
+        status: "failed";
+      }>(`/meetings/${id}/cancel`);
+      return data;
+    },
+    onSuccess: (_data, id) => {
+      queryClient.invalidateQueries({ queryKey: ["meeting", id] });
+      queryClient.invalidateQueries({ queryKey: ["meeting-status", id] });
+      queryClient.invalidateQueries({ queryKey: ["meetings"] });
+    },
+  });
+}
+
 export function useReindexMeeting() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -258,6 +282,24 @@ export function useResolveCluster() {
   });
 }
 
+/** 요약 생성 취소 (POST /meetings/:id/summary/cancel). 진행 중(queued/running)이 없으면 409. */
+export function useCancelSummary() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { data } = await apiClient.post<{
+        job_id: string;
+        status: "failed";
+      }>(`/meetings/${id}/summary/cancel`);
+      return data;
+    },
+    onSuccess: (_data, id) => {
+      queryClient.invalidateQueries({ queryKey: ["meeting", id] });
+      queryClient.invalidateQueries({ queryKey: ["meeting-status", id] });
+    },
+  });
+}
+
 /** 대화 요약 생성/재생성 (POST /meetings/:id/summary/generate). done에서만 허용(그 외 409). */
 export function useGenerateSummary() {
   const queryClient = useQueryClient();
@@ -293,7 +335,7 @@ export function useGenerateSummary() {
 
 /**
  * 요약 상태 동기화 — 상세 응답은 회의가 done이면 더 폴링되지 않는데, 요약 잡은
- * 그 뒤에 돈다. 가벼운 상태 엔드포인트가 알려준 summary_status가 상세 캐시의
+ * 그 뒤에 돈다. 가벼운 상태 엔드포인트가 알려준 summary.status가 상세 캐시의
  * 값과 어긋나면 상세를 한 번만 다시 가져온다. 갱신 후 두 값이 같아지므로
  * 반복 무효화로 이어지지 않는다.
  *

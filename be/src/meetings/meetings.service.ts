@@ -13,6 +13,7 @@ import {
   ProcessingOverride, ProcessingOverrideSchema, resolveProcessingConfig,
 } from '../settings/resolve-processing';
 import { CAPABILITIES, Capabilities } from '../system/capabilities';
+import { SpeakerBounds, SpeakerBoundsSchema } from './speaker-bounds';
 import { Inject } from '@nestjs/common';
 import { loadEnv } from '../config/env';
 import { nextId } from '../common/id';
@@ -47,7 +48,7 @@ export class MeetingsService {
   async upload(
     file: Express.Multer.File | undefined,
     body: {
-      title?: string; recorded_at?: string; processing?: string;
+      title?: string; recorded_at?: string; processing?: string; speakers?: string;
       defer_lens?: string; defer_summary?: string;
     },
   ) {
@@ -60,8 +61,10 @@ export class MeetingsService {
     // 고아 파일 금지. storage 저장/DB INSERT는 설정이 유효할 때만.
     let processing: ProcessingConfig;
     let followups: Followups;
+    let speakers: SpeakerBounds | undefined;
     try {
       const override = this.parseOverrideString(body.processing); // JSON.parse + zod, 오류는 BadRequest
+      speakers = this.parseSpeakersString(body.speakers);
       const global_ = await this.settings.getProcessingConfig();
       processing = resolveProcessingConfig(global_, override, this.caps.gpu_eligible);
       followups = {
@@ -85,7 +88,7 @@ export class MeetingsService {
         [meetingId, body.title ?? null, originalName, audioKey, body.recorded_at ?? null],
       );
       const payload = buildProcessMeetingPayload({
-        meetingId, audioKey, processingVersion: 0, reprocess: false, processing, followups,
+        meetingId, audioKey, processingVersion: 0, reprocess: false, processing, followups, speakers,
       });
       const job = await this.jobs.enqueue(c, { type: 'process_meeting', meetingId, payload });
       const updated = await this.meetings.setCurrentJob(c, meetingId, job.id);
@@ -101,6 +104,20 @@ export class MeetingsService {
     if (s === 'true') return true;
     if (s === 'false') return false;
     throw new BadRequestException(`${field} must be "true" or "false"`);
+  }
+
+  private parseSpeakersString(s: string | undefined): SpeakerBounds | undefined {
+    if (s === undefined || s === '') return undefined;
+    let raw: unknown;
+    try { raw = JSON.parse(s); } catch { throw new BadRequestException('speakers must be a valid JSON string'); }
+    return this.parseSpeakers(raw);
+  }
+
+  private parseSpeakers(raw: unknown): SpeakerBounds | undefined {
+    if (raw === undefined) return undefined;
+    const r = SpeakerBoundsSchema.safeParse(raw);
+    if (!r.success) throw new BadRequestException(r.error.issues.map((i) => i.message).join('; '));
+    return r.data;
   }
 
   private parseOverrideString(s: string | undefined): ProcessingOverride | undefined {
@@ -165,8 +182,19 @@ export class MeetingsService {
   async getStatus(id: string) {
     const status = await this.meetings.findStatus(this.db.pool, id);
     if (!status) throw new NotFoundException('meeting not found');
+    // Structured like its siblings lens_extraction / search_index (findStatus).
+    // It used to be a bare `summary_status` string, which meant a failed summary
+    // reached the UI as "failed" with no reason attached — the row's error jsonb
+    // was already selected here and then dropped on the floor.
+    // NOTE: GET /meetings/:id also returns a `summary`, and that one is the whole
+    // summary (topics + segments). This one is only the generation state.
     const summary = await this.summary.get(id);
-    return { ...status, summary_status: summary?.status ?? null };
+    return {
+      ...status,
+      summary: summary
+        ? { status: summary.status, model: summary.model, error: summary.error }
+        : null,
+    };
   }
 
   async extractLenses(id: string) {
@@ -177,7 +205,7 @@ export class MeetingsService {
     return this.lensExtraction.cancel(id);
   }
 
-  async reprocess(id: string, body?: { processing?: unknown }) {
+  async reprocess(id: string, body?: { processing?: unknown; speakers?: unknown }) {
     const meeting = await this.meetings.findById(this.db.pool, id);
     if (!meeting) throw new NotFoundException('meeting not found');
     if (meeting.status !== 'done' && meeting.status !== 'failed') {
@@ -190,12 +218,13 @@ export class MeetingsService {
       if (!r.success) throw new BadRequestException(r.error.issues.map((i) => i.message).join('; '));
       override = r.data;
     }
+    const speakers = this.parseSpeakers(body?.speakers);
     const global_ = await this.settings.getProcessingConfig();
     const processing = resolveProcessingConfig(global_, override, this.caps.gpu_eligible);
     return this.db.withTransaction(async (c) => {
       const version = await this.meetings.bumpVersionForReprocess(c, id);
       const payload = buildProcessMeetingPayload({
-        meetingId: id, audioKey: meeting.audio_key, processingVersion: version, reprocess: true, processing,
+        meetingId: id, audioKey: meeting.audio_key, processingVersion: version, reprocess: true, processing, speakers,
         // 재처리는 업로드와 달리 미루기 옵션을 노출하지 않는다 — 이미 있는 결과를
         // 새 processing_version으로 갈아끼우는 흐름이라 후속도 같이 따라가야 한다.
         followups: { lens: true, summary: true },
@@ -203,6 +232,27 @@ export class MeetingsService {
       const job = await this.jobs.enqueue(c, { type: 'process_meeting', meetingId: id, payload });
       await this.meetings.setCurrentJob(c, id, job.id);
       return { meeting_id: id, processing_version: version, job_id: job.id };
+    });
+  }
+
+  /**
+   * 처리 취소 (POST /meetings/:id/cancel). 현재 job이 queued/running이면 failed(cancelled)로
+   * 닫고 회의도 failed(cancelled)로 — 그러면 reprocess 가드(done|failed)를 그대로 통과해
+   * 다시 돌릴 수 있다. 워커는 다음 stage 경계 또는 heartbeat에서 소유권 상실을 보고 멈춘다.
+   */
+  async cancel(id: string): Promise<{ meeting_id: string; job_id: string; status: 'failed' }> {
+    return this.db.withTransaction(async (c) => {
+      const meeting = await this.meetings.lockById(c, id);
+      if (!meeting) throw new NotFoundException('meeting not found');
+      const jobId = meeting.current_job_id;
+      const job = jobId ? await this.jobs.findById(c, jobId) : null;
+      if (!job || (job.status !== 'queued' && job.status !== 'running')) {
+        throw new ConflictException('no processing in progress to cancel');
+      }
+      const error = JobsRepository.cancelledError(job.stage);
+      await this.jobs.cancel(c, job.id, error);
+      await this.meetings.markCancelled(c, id, error);
+      return { meeting_id: id, job_id: job.id, status: 'failed' };
     });
   }
 

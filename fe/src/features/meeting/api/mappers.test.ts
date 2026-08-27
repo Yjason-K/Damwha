@@ -426,7 +426,7 @@ describe("toMeetingDetail", () => {
     expect(lane2.segments).toHaveLength(1);
   });
 
-  it("transcribe_failed 발화는 status를 보존한 채 통과하고 타임라인에도 포함된다", () => {
+  it("transcribe_failed 발화는 카드에서 빠지지만 타임라인에는 포함된다", () => {
     const wire = makeDetail();
     wire.utterances.push(
       makeUtt({
@@ -443,10 +443,8 @@ describe("toMeetingDetail", () => {
       }),
     );
     const d = toMeetingDetail(wire);
-    const failed = d.utterances.find((u) => u.id === "utt_6")!;
-    expect(failed.status).toBe("transcribe_failed");
-    expect(failed.text).toBe("");
-    // 실제 발화였으므로 타임라인 막대·발화시간에 포함된다.
+    expect(d.utterances.find((u) => u.id === "utt_6")).toBeUndefined();
+    // 실제 발화였으므로 타임라인 막대·발화시간에는 포함된다.
     const lane3 = d.tracks.find((l) => l.spk === 3)!;
     expect(lane3.dur).toBe("01:10");
     expect(lane3.segments).toHaveLength(2);
@@ -569,7 +567,7 @@ describe("toMeetingDetail", () => {
     ]);
   });
 
-  it("transcribe_failed는 병합되지 않고 블록 경계로 작동한다", () => {
+  it("transcribe_failed를 사이에 두고 떨어진 같은 화자 발화는 병합된다", () => {
     const wire = makeDetail();
     wire.utterances = [
       makeUtt({
@@ -610,12 +608,11 @@ describe("toMeetingDetail", () => {
     const d = toMeetingDetail(wire);
     expect(
       d.utterances.map((u) => ({ id: u.id, text: u.text, status: u.status })),
-    ).toEqual([
-      { id: "c1", text: "앞", status: "ok" },
-      { id: "c2", text: "", status: "transcribe_failed" },
-      { id: "c3", text: "뒤", status: "ok" },
+    ).toEqual([{ id: "c1", text: "앞 뒤", status: "ok" }]);
+    expect(d.utterances[0].sources).toEqual([
+      { id: "c1", startMs: 0 },
+      { id: "c3", startMs: 20_000 },
     ]);
-    expect(d.utterances[1].sources).toEqual([{ id: "c2", startMs: 10_000 }]);
   });
 
   it("silence를 사이에 두고 떨어진 같은 화자 발화도 병합된다", () => {
@@ -807,6 +804,7 @@ describe("toMeetingDetail — 요약", () => {
         status: "done",
         topics: ["파이프라인 실행 순서"],
         segments: [],
+        error: null,
       },
     });
     expect(detail.topics).toEqual(["파이프라인 실행 순서"]);
@@ -831,6 +829,7 @@ describe("toMeetingDetail — 요약", () => {
             bullets: ["공유를 해드릴 것임"],
           },
         ],
+        error: null,
       },
     });
     expect(detail.segments).toEqual([

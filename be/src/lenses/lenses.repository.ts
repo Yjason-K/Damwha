@@ -6,11 +6,24 @@ import {
 
 type Exec = Pool | PoolClient;
 
+// Both keys are truncated to milliseconds because that is all a JS Date — and
+// so an encoded cursor — can carry. Comparing an untruncated column against a
+// millisecond cursor rounds past rows and silently drops a page of results.
+const MEETING_KEY = `date_trunc('milliseconds', COALESCE(m.recorded_at, m.created_at))`;
+const ITEM_KEY = `date_trunc('milliseconds', li.updated_at)`;
+
 const ITEM_COLUMNS = `
   li.id, li.meeting_id, li.kind, li.text, li.assignee_speaker_id,
   li.due_at::text AS due_at, li.completion_status, li.source,
   li.user_modified, li.lifecycle_status, li.created_at, li.updated_at,
-  m.title AS meeting_title`;
+  m.title AS meeting_title, m.recorded_at AS meeting_recorded_at,
+  ${MEETING_KEY} AS meeting_sort_at`;
+
+// The list is grouped by meeting: meetings run newest-recorded first, and items
+// sort within their meeting. All four keys descend, so the keyset predicate is a
+// single row-wise comparison over the same tuple the ORDER BY uses.
+const LIST_KEYSET = `(${MEETING_KEY}, li.meeting_id, ${ITEM_KEY}, li.id)`;
+const LIST_ORDER = `${MEETING_KEY} DESC, li.meeting_id DESC, ${ITEM_KEY} DESC, li.id DESC`;
 
 @Injectable()
 export class LensesRepository {
@@ -25,7 +38,8 @@ export class LensesRepository {
   }
 
   // Keyset-paginated list. `filters` are already validated/defaulted by the
-  // service; `cursor` (if present) is the decoded { updated_at, id } tuple.
+  // service; `cursor` (if present) is the decoded
+  // { meeting_at, meeting_id, updated_at, id } tuple.
   // Fetches limit+1 so the caller can tell whether a next page exists.
   async list(
     exec: Exec,
@@ -41,18 +55,18 @@ export class LensesRepository {
     if (filters.date_from) { params.push(filters.date_from); where.push(`li.due_at >= $${params.length}::date`); }
     if (filters.date_to) { params.push(filters.date_to); where.push(`li.due_at <= $${params.length}::date`); }
     if (cursor) {
-      params.push(cursor.updated_at);
-      const u = params.length;
-      params.push(cursor.id);
-      const i = params.length;
-      where.push(`(li.updated_at, li.id) < ($${u}::timestamptz, $${i}::text)`);
+      params.push(cursor.meeting_at, cursor.meeting_id, cursor.updated_at, cursor.id);
+      const m = params.length - 3;
+      where.push(
+        `${LIST_KEYSET} < ($${m}::timestamptz, $${m + 1}::text, $${m + 2}::timestamptz, $${m + 3}::text)`,
+      );
     }
     params.push(filters.limit + 1);
     const { rows } = await exec.query<LensItemRow>(
       `SELECT ${ITEM_COLUMNS}
        FROM lens_item li JOIN meeting m ON m.id = li.meeting_id
        WHERE ${where.join(' AND ')}
-       ORDER BY li.updated_at DESC, li.id DESC
+       ORDER BY ${LIST_ORDER}
        LIMIT $${params.length}`,
       params,
     );

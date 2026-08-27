@@ -34,6 +34,11 @@ export class JobsRepository {
     return rows[0] ?? null;
   }
 
+  async findById(exec: Queryable, jobId: string): Promise<JobRow | null> {
+    const { rows } = await exec.query<JobRow>(`SELECT * FROM job WHERE id=$1`, [jobId]);
+    return rows[0] ?? null;
+  }
+
   async heartbeat(exec: Queryable, jobId: string, workerId: string): Promise<void> {
     await exec.query(
       `UPDATE job SET locked_at=now(), updated_at=now()
@@ -57,7 +62,7 @@ export class JobsRepository {
   }
 
   /** 운영자 취소 에러 본문 — 워커의 WorkerError JSON과 같은 모양(code/message/stage). */
-  static cancelledError(stage: string) {
+  static cancelledError(stage: string | null) {
     return { code: 'cancelled', kind: 'PERMANENT', stage, message: 'cancelled by operator' };
   }
 

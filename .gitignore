@@ -76,3 +76,7 @@ Thumbs.db
 /*.mp4
 /*.webm
 /*.info.json
+
+# deploy/ is the team-trial run dir when used in place
+/deploy/.env
+/deploy/storage/

@@ -8,4 +8,5 @@
 packages:
   - be
   - fe
+  - packages/*
   - "!be/worker/**"

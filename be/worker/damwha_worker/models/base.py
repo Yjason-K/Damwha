@@ -33,7 +33,9 @@ class VAD(Protocol):
 
 
 class Diarizer(Protocol):
-    def diarize(self, wav_path: str) -> list[DiarSegment]: ...
+    def diarize(
+        self, wav_path: str, min_speakers: int | None = None, max_speakers: int | None = None
+    ) -> list[DiarSegment]: ...
 
 
 class Embedder(Protocol):

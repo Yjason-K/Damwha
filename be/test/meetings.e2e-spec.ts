@@ -145,6 +145,37 @@ describe('meetings', () => {
     expect(res.body.search_index.error ?? null).toBeNull();
   });
 
+  it('POST /meetings forwards speakers bounds into the job payload', async () => {
+    const created = await request(srv()).post('/meetings')
+      .field('speakers', JSON.stringify({ min: 2, max: 4 }))
+      .attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+    expect(created.status).toBe(201);
+    const job = await db.pool.query('SELECT payload FROM job WHERE meeting_id=$1', [created.body.id]);
+    expect(job.rows[0].payload.models.diarization).toMatchObject({ min_speakers: 2, max_speakers: 4 });
+  });
+
+  it('POST /meetings rejects malformed speakers without creating a meeting', async () => {
+    const before = (await db.pool.query('SELECT count(*)::int AS c FROM meeting')).rows[0].c;
+    for (const bad of ['not-json', JSON.stringify({ min: 5, max: 2 }), JSON.stringify({})]) {
+      const res = await request(srv()).post('/meetings')
+        .field('speakers', bad)
+        .attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+      expect(res.status).toBe(400);
+    }
+    expect((await db.pool.query('SELECT count(*)::int AS c FROM meeting')).rows[0].c).toBe(before);
+  });
+
+  it('POST /meetings/:id/reprocess forwards speakers bounds and rejects bad ones', async () => {
+    const created = await request(srv()).post('/meetings').attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+    const mid = created.body.id;
+    await db.pool.query("UPDATE meeting SET status='done' WHERE id=$1", [mid]);
+    expect((await request(srv()).post(`/meetings/${mid}/reprocess`).send({ speakers: { min: 0 } })).status).toBe(400);
+    const res = await request(srv()).post(`/meetings/${mid}/reprocess`).send({ speakers: { max: 3 } });
+    expect(res.status).toBe(202);
+    const job = await db.pool.query('SELECT payload FROM job WHERE id=$1', [res.body.job_id]);
+    expect(job.rows[0].payload.models.diarization).toMatchObject({ min_speakers: null, max_speakers: 3 });
+  });
+
   it('POST /meetings/:id/reprocess bumps version + enqueues new job (done only)', async () => {
     const created = await request(srv()).post('/meetings').attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
     const mid = created.body.id;
@@ -159,6 +190,48 @@ describe('meetings', () => {
     const job = await db.pool.query('SELECT payload, status FROM job WHERE id=$1', [mt.rows[0].current_job_id]);
     expect(job.rows[0].payload.processing_version).toBe(1);
     expect(job.rows[0].payload.reprocess).toBe(true);
+  });
+
+  it('POST /meetings/:id/cancel fails the running job and marks the meeting failed(cancelled)', async () => {
+    const created = await request(srv()).post('/meetings').attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+    const mid = created.body.id;
+    const jid = created.body.current_job_id;
+    // simulate a worker mid-flight
+    await db.pool.query(`UPDATE job SET status='running', locked_by='w1', locked_at=now(), stage='stt', progress=75 WHERE id=$1`, [jid]);
+    await db.pool.query(`UPDATE meeting SET status='processing' WHERE id=$1`, [mid]);
+
+    const res = await request(srv()).post(`/meetings/${mid}/cancel`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ meeting_id: mid, job_id: jid, status: 'failed' });
+
+    const job = await db.pool.query('SELECT status, error FROM job WHERE id=$1', [jid]);
+    expect(job.rows[0].status).toBe('failed');
+    expect(job.rows[0].error.code).toBe('cancelled');
+    expect(job.rows[0].error.stage).toBe('stt');
+    const mt = await db.pool.query('SELECT status, error FROM meeting WHERE id=$1', [mid]);
+    expect(mt.rows[0].status).toBe('failed');
+    expect(mt.rows[0].error.code).toBe('cancelled');
+    // a cancelled meeting can be reprocessed like any failed one
+    expect((await request(srv()).post(`/meetings/${mid}/reprocess`)).status).toBe(202);
+  });
+
+  it('POST /meetings/:id/cancel also cancels a still-queued job', async () => {
+    const created = await request(srv()).post('/meetings').attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+    const res = await request(srv()).post(`/meetings/${created.body.id}/cancel`);
+    expect(res.status).toBe(200);
+    const job = await db.pool.query('SELECT status, error FROM job WHERE id=$1', [created.body.current_job_id]);
+    expect(job.rows[0].status).toBe('failed');
+    expect(job.rows[0].error.code).toBe('cancelled');
+    expect(job.rows[0].error.stage).toBeNull();
+  });
+
+  it('POST /meetings/:id/cancel is 409 when nothing is in flight, 404 when unknown', async () => {
+    const created = await request(srv()).post('/meetings').attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+    const mid = created.body.id;
+    await db.pool.query(`UPDATE job SET status='done' WHERE id=$1`, [created.body.current_job_id]);
+    await db.pool.query(`UPDATE meeting SET status='done' WHERE id=$1`, [mid]);
+    expect((await request(srv()).post(`/meetings/${mid}/cancel`)).status).toBe(409);
+    expect((await request(srv()).post(`/meetings/mtg_999/cancel`)).status).toBe(404);
   });
 
   it('POST /meetings — payload가 v5이고 전역 설정(프리셋)을 따른다', async () => {

@@ -13,7 +13,10 @@ class FakeDiarizer:
     def __init__(self, segments: list[DiarSegment]) -> None:
         self._segments = segments
 
-    def diarize(self, wav_path: str) -> list[DiarSegment]:
+    def diarize(
+        self, wav_path: str, min_speakers: int | None = None, max_speakers: int | None = None
+    ) -> list[DiarSegment]:
+        self.last_bounds = (min_speakers, max_speakers)
         return self._segments
 
 

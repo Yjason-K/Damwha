@@ -95,7 +95,35 @@ test("오버라이드 프리셋 선택 시 multipart에 processing JSON이 실�
   expect(form.get("processing")).toBe(JSON.stringify({ preset: "light" }));
 });
 
-test("후속 처리 스위치는 기본이 꺼짐 — defer 필드가 실리지 않는다", async () => {
+test("화자 수를 입력하면 multipart에 speakers JSON이 실린다", async () => {
+  const post = renderWithFile();
+  fireEvent.change(screen.getByLabelText("최소 화자 수"), {
+    target: { value: "2" },
+  });
+  fireEvent.change(screen.getByLabelText("최대 화자 수"), {
+    target: { value: "4" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  const form = post.mock.calls[0][1] as FormData;
+  expect(form.get("speakers")).toBe(JSON.stringify({ min: 2, max: 4 }));
+});
+
+test("화자 수 범위가 뒤집히면 업로드 버튼이 막힌다", () => {
+  renderWithFile();
+  fireEvent.change(screen.getByLabelText("최소 화자 수"), {
+    target: { value: "5" },
+  });
+  fireEvent.change(screen.getByLabelText("최대 화자 수"), {
+    target: { value: "2" },
+  });
+  expect(
+    (screen.getByRole("button", { name: "업로드" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+});
+
+test("후속 처리는 기본이 자동 실행 — defer 필드가 실리지 않는다", async () => {
   const post = renderWithFile();
   fireEvent.click(screen.getByRole("button", { name: "업로드" }));
   await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
@@ -104,9 +132,9 @@ test("후속 처리 스위치는 기본이 꺼짐 — defer 필드가 실리지 
   expect(form.get("defer_summary")).toBeNull();
 });
 
-test("스위치를 켜면 해당 후속만 defer로 실린다", async () => {
+test("나중에 실행을 고르면 해당 후속만 defer로 실린다", async () => {
   const post = renderWithFile();
-  fireEvent.click(screen.getByRole("switch", { name: "요약은 나중에" }));
+  fireEvent.click(screen.getByRole("radio", { name: "요약 나중에 실행" }));
   fireEvent.click(screen.getByRole("button", { name: "업로드" }));
   await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
   const form = post.mock.calls[0][1] as FormData;

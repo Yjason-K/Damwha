@@ -90,9 +90,10 @@ export function toMeetingSummary(wire: WireMeeting): MeetingSummary {
 const identityKey = (u: WireUtterance) => u.speaker_id ?? u.diar_label;
 
 /**
- * 트랜스크립트·타임라인에 표시할 발화인가 — silence 제외, ok인데 text가
- * 빈(whitespace-only 포함) 행도 제외. transcribe_failed는 플레이스홀더로
- * 표시하므로 통과시킨다. 화자/참석자/클러스터 파생은 전체 발화 기준.
+ * 타임라인·발화시간에 넣을 발화인가 — silence 제외, ok인데 text가
+ * 빈(whitespace-only 포함) 행도 제외. transcribe_failed는 실제 발화였으므로
+ * 여기서는 통과시키고, 전사 카드에서만 뺀다(아래 5번). 화자/참석자/클러스터
+ * 파생은 전체 발화 기준.
  */
 const isVisible = (u: WireUtterance) => {
   if (u.status === "silence") return false;
@@ -142,22 +143,16 @@ export function toMeetingDetail(wire: WireMeetingDetail): Meeting {
   const attendees = [...sampleBySpk.keys()].sort((a, b) => a - b);
 
   // 5. utterances(발화 카드) — 연속된 같은 화자의 ok 발화를 한 블록으로 병합.
-  //    transcribe_failed는 병합하지 않고 경계로 작동한다. sources가 구성 발화의
-  //    id·start_ms를 보존해 발화 단위 점프(검색 히트)의 정밀도를 지킨다.
+  //    transcribe_failed는 카드로 그리지 않는다(안내 문구가 전사 흐름을 끊는다).
+  //    silence처럼 건너뛰므로 양옆 같은 화자 발화는 병합된다. sources가 구성
+  //    발화의 id·start_ms를 보존해 발화 단위 점프(검색 히트)의 정밀도를 지킨다.
   const utteranceEntries: UtteranceEntry[] = [];
   for (const u of visibleUtterances) {
+    if (u.status === "transcribe_failed") continue;
     const spk = spkOf.get(identityKey(u))!;
-    const status =
-      u.status === "transcribe_failed" ? "transcribe_failed" : "ok";
     const text = (u.text ?? "").trim();
     const last = utteranceEntries[utteranceEntries.length - 1];
-    if (
-      last &&
-      status === "ok" &&
-      last.status === "ok" &&
-      last.spk === spk &&
-      last.text.length < MERGE_MAX_CHARS
-    ) {
+    if (last && last.spk === spk && last.text.length < MERGE_MAX_CHARS) {
       last.text = `${last.text} ${text}`;
       last.sources.push({ id: u.id, startMs: u.start_ms });
       continue;
@@ -167,7 +162,7 @@ export function toMeetingDetail(wire: WireMeetingDetail): Meeting {
       spk,
       t: formatClock(u.start_ms),
       text,
-      status,
+      status: "ok",
       sources: [{ id: u.id, startMs: u.start_ms }],
     });
   }
@@ -263,7 +258,9 @@ export function toMeetingDetail(wire: WireMeetingDetail): Meeting {
       bullets: s.bullets,
     })),
     summaryStatus: wire.summary?.status ?? null,
+    summaryError: wire.summary?.error ?? null,
     status: wire.status,
+    error: wire.error ?? null,
     audioUrl: meetingAudioUrl(wire.id),
     totalSeconds: duration == null ? 0 : Math.floor(duration / 1000),
     speakers,

@@ -121,3 +121,16 @@ export function useRetryExtraction() {
     },
   });
 }
+
+/** 렌즈 추출 취소 (POST /meetings/:id/lenses/cancel). 진행 중 run이 없으면 409. */
+export function useCancelExtraction() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (meetingId: string) =>
+      apiClient.post(`/meetings/${meetingId}/lenses/cancel`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["lens-extraction-status"] });
+      qc.invalidateQueries({ queryKey: ["meeting-lenses"] });
+    },
+  });
+}

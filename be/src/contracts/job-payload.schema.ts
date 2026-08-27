@@ -1,11 +1,13 @@
 import { z } from 'zod';
+import { WHISPER_MODELS } from '@damwha/contracts';
 import { loadEnv } from '../config/env';
 import { SUMMARY_MODELS } from './model-catalog';
 // 타입 전용 import — 런타임 배출 없음(에러 소거). presets.ts는 WHISPER_MODELS(값)를
 // 이 파일에서 import하므로, 값 import로 되받으면 런타임 순환이 생긴다. type-only로 차단.
 import type { ProcessingConfig } from '../settings/presets';
 
-export const WHISPER_MODELS = ['tiny', 'base', 'small', 'medium', 'large-v3', 'large-v3-turbo'] as const;
+// 값의 진실원은 @damwha/contracts — FE도 같은 목록을 import한다.
+export { WHISPER_MODELS };
 export const DeviceSchema = z.enum(['cpu', 'gpu']);
 export type Device = z.infer<typeof DeviceSchema>;
 
@@ -155,6 +157,7 @@ export type SummarizeMeetingPayload = z.infer<typeof SummarizeMeetingPayloadSche
 export function buildProcessMeetingPayload(args: {
   meetingId: string; audioKey: string; processingVersion: number; reprocess: boolean;
   processing: ProcessingConfig; followups: Followups;
+  speakers?: { min?: number; max?: number };
 }): ProcessMeetingPayloadV5 {
   const env = loadEnv();
   const p = args.processing;
@@ -171,7 +174,11 @@ export function buildProcessMeetingPayload(args: {
       preset: p.preset,
       preset_revision: p.preset_revision,
       summary_model: p.summary_model,
-      diarization: { model: env.DIARIZATION_MODEL, min_speakers: null, max_speakers: null },
+      diarization: {
+        model: env.DIARIZATION_MODEL,
+        min_speakers: args.speakers?.min ?? null,
+        max_speakers: args.speakers?.max ?? null,
+      },
       embedding: { model: env.EMBEDDING_MODEL, dimension: env.EMBEDDING_DIM },
     },
     identify: {

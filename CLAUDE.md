@@ -10,9 +10,23 @@ per-package — read the one for the subtree you are editing before changing cod
 | `be/` | `damwha-be` | NestJS 10 API over Postgres (pgvector + pg_bigm), raw SQL, no ORM. Read [`be/CLAUDE.md`](be/CLAUDE.md). |
 | `be/worker/` | *(uv project)* | Python 3.12 ML worker. **Not** a pnpm workspace member — it has no `package.json` and is driven by uv. |
 | `fe/` | `damwha-fe` | React 19 + Vite 8 + Tailwind 4 SPA. Read [`fe/CLAUDE.md`](fe/CLAUDE.md) and [`fe/DESIGN.md`](fe/DESIGN.md). |
+| `packages/contracts/` | `@damwha/contracts` | Wire enums both Node packages must agree on (`SUMMARY_MODELS`, `WHISPER_MODELS`, `PRESET_NAMES`, `DEVICES`). Dependency-free, value-only. |
 
 The API and the worker communicate **only** through the Postgres `job` table
 (zod on the TypeScript side, pydantic on the Python side) — never over HTTP.
+
+`@damwha/contracts` exists because `be` and `fe` were separate repos until the
+2026-08 merge, so any list both sides had to agree on was kept twice by hand.
+That drifted for real: when the summary catalog moved from Ollama tags to HF
+repo ids (2026-08-12), the frontend kept sending the old strings and
+`PUT /settings/processing` answered with a bare zod union failure —
+`Invalid input`, naming neither the field nor the allowed values. The package
+**ships both CJS and ESM** (`dist/cjs` for the NestJS `require()` build,
+`dist/esm` for Vite) — a CJS-only build passes `vite build` and vitest, which
+pre-bundle it, and then fails only in `vite dev`, which serves a linked
+workspace package as ESM and finds no named exports. `pnpm install` builds it
+through the package's `prepare` script; `pnpm build` from the root covers it
+too, since pnpm orders workspace builds by dependency.
 
 ## Commands
 
@@ -26,6 +40,8 @@ pnpm be <script>              # any damwha-be script  (= pnpm --filter damwha-be
 pnpm fe <script>              # any damwha-fe script
 pnpm db:up / db:down          # Postgres via be/docker-compose.yml
 pnpm worker / worker:test     # uv run --directory be/worker ...
+pnpm worker:sync              # uv sync --extra models — the real worker's venv
+pnpm worker:sync:test         # same venv, models stripped (tests only)
 ```
 
 Hard rules:

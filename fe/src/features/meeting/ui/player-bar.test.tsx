@@ -1,3 +1,4 @@
+import type * as React from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -79,4 +80,57 @@ test("className이 루트에 병합되고 기존 클래스도 유지된다", () 
   const root = container.firstElementChild!;
   expect(root).toHaveClass("col-span-2");
   expect(root).toHaveClass("border-t");
+});
+
+function renderBar(
+  extra: Partial<React.ComponentProps<typeof PlayerBar>> = {},
+) {
+  return render(
+    <PlayerBar
+      tracks={TRACKS}
+      playing={false}
+      pos={0}
+      totalSeconds={600}
+      durLabel="10:00"
+      speed={1}
+      onSpeed={() => {}}
+      onToggle={() => {}}
+      onSeek={() => {}}
+      {...extra}
+    />,
+  );
+}
+
+test("이전/다음 발언 버튼이 콜백을 호출한다", () => {
+  const onPrev = vi.fn();
+  const onNext = vi.fn();
+  renderBar({ onPrevUtterance: onPrev, onNextUtterance: onNext });
+  fireEvent.click(screen.getByRole("button", { name: "이전 발언" }));
+  fireEvent.click(screen.getByRole("button", { name: "다음 발언" }));
+  expect(onPrev).toHaveBeenCalledTimes(1);
+  expect(onNext).toHaveBeenCalledTimes(1);
+});
+
+test("이동할 발언이 없으면 버튼이 비활성화된다", () => {
+  renderBar({ onPrevUtterance: null, onNextUtterance: null });
+  expect(screen.getByRole("button", { name: "이전 발언" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "다음 발언" })).toBeDisabled();
+});
+
+test("배속은 Select에서 고른다", async () => {
+  const onSpeed = vi.fn();
+  renderBar({ onSpeed });
+  // Radix Select는 jsdom에서 pointer 이벤트를 못 받아 키보드로 연다.
+  const trigger = screen.getByRole("combobox", { name: "재생 속도" });
+  expect(trigger).toHaveTextContent("1x");
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("option", { name: "1.5x" }));
+  expect(onSpeed).toHaveBeenCalledWith(1.5);
+});
+
+test("기능 없는 파형·전체화면 버튼은 없다", () => {
+  renderBar();
+  expect(screen.queryByRole("button", { name: "파형" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "전체화면" })).toBeNull();
 });

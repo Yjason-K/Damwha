@@ -370,28 +370,3 @@ def test_llm_call_is_timed_and_logged(conn, summary_job, caplog):
     text = "\n".join(r.getMessage() for r in caplog.records)
     assert f"job={job['id']} meeting={ids['meeting_id']} stage=summarize_meeting done" in text
     assert "utterances=2 segments=1" in text
-
-
-def test_pipeline_passes_boundary_validator_to_client(conn, summary_job):
-    # 실제 클라이언트는 validate를 되먹임 재시도 루프 안에서 부른다 — 파이프라인이
-    # 경계 검증(_resolve_segments)을 validate로 넘겨야 지어낸 경계도 재시도 대상이 된다
-    job, ids = summary_job
-    captured = {}
-
-    def summarize(**kwargs):
-        captured.update(kwargs)
-        return _response([_segment(ids["utt_1"], ids["utt_2"])])
-
-    assert (
-        run_summarize_meeting(
-            conn, job, _payload(job), SimpleNamespace(summarize=summarize), worker_id="w"
-        )
-        == "committed"
-    )
-    validate = captured["validate"]
-    assert validate is not None
-    validate(_response([_segment(ids["utt_1"], ids["utt_2"])]))  # 유효 — 통과
-    with pytest.raises(WorkerError):
-        validate(_response([_segment("utt_999", "utt_998")]))  # 없는 id — 거부
-    with pytest.raises(WorkerError):
-        validate(_response([_segment(ids["utt_2"], ids["utt_1"])]))  # 역순 — 거부

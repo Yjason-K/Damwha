@@ -77,7 +77,7 @@ test("useSetLensCompletion이 실패하면 캐시를 롤백하고 토스트를 �
     due_at: null,
     created_at: "2026-06-21T09:00:00.000Z",
     updated_at: "2026-06-21T09:00:00.000Z",
-    meeting: { id: "m1", title: null },
+    meeting: { id: "m1", title: null, recorded_at: null },
     evidence: [],
   };
   const page: LensListPage = { items: [item], next_cursor: null };

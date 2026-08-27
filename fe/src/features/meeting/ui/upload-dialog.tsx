@@ -13,20 +13,76 @@ import {
 } from "@/shared/ui/dialog";
 import { DatePicker } from "@/shared/ui/date-picker";
 import { Input } from "@/shared/ui/input";
-import { Switch } from "@/shared/ui/switch";
+import { SegmentedControl } from "@/shared/ui/segmented-control";
 import { toast } from "@/shared/ui/use-toast";
 import type { ProcessingOverride } from "@/features/settings/api/types";
 import { OverrideSection } from "@/features/settings/ui/override-section";
 
 import { useUploadMeeting } from "../api/meetings";
+import type { SpeakerBounds } from "../api/types";
 import { Icon } from "./icons";
+import { isSpeakerBoundsValid } from "../lib/speaker-bounds";
+import { SpeakerCountField } from "./speaker-count-field";
 
 /**
  * UploadDialog — 오디오 파일을 올려 새 회의를 생성한다. 파일(필수) + 제목/녹음
  * 일시(선택)를 받아 `useUploadMeeting`으로 multipart 전송하고, 성공 시 새 회의를
- * 선택해 처리 배너를 띄운다. 렌즈/요약은 "나중에" 스위치로 미룰 수 있다 — 미루면
- * process_meeting payload의 followups가 꺼져 워커가 후속 job을 큐잉하지 않는다.
+ * 선택해 처리 배너를 띄운다. 렌즈/요약은 실행 시점(자동/나중에)을 고를 수 있고,
+ * "나중에"를 고르면 process_meeting payload의 followups가 꺼져 워커가 후속 job을
+ * 큐잉하지 않는다.
  */
+
+/** 후속 처리 실행 시점 — defer 플래그의 UI 표현. */
+type FollowupTiming = "auto" | "later";
+
+function timingOptions(task: string) {
+  return [
+    {
+      value: "auto" as const,
+      label: "자동 실행",
+      ariaLabel: `${task} 자동 실행`,
+    },
+    {
+      value: "later" as const,
+      label: "나중에 실행",
+      ariaLabel: `${task} 나중에 실행`,
+    },
+  ];
+}
+
+/** 후속 작업 한 줄 — 이름·설명과 실행 시점 세그먼트. */
+function FollowupRow({
+  task,
+  description,
+  deferred,
+  onDeferredChange,
+}: {
+  task: string;
+  description: string;
+  deferred: boolean;
+  onDeferredChange: (deferred: boolean) => void;
+}) {
+  const taskLabelId = React.useId();
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <div className="flex min-w-0 flex-col">
+        <span id={taskLabelId} className="text-sm font-medium text-foreground">
+          {task}
+        </span>
+        <span className="truncate text-xs text-[color:var(--text-muted)]">
+          {description}
+        </span>
+      </div>
+      <SegmentedControl<FollowupTiming>
+        className="shrink-0"
+        aria-labelledby={taskLabelId}
+        options={timingOptions(task)}
+        value={deferred ? "later" : "auto"}
+        onChange={(timing) => onDeferredChange(timing === "later")}
+      />
+    </div>
+  );
+}
 
 /** 바이트 → "12.3 MB" 표시 문자열. */
 function formatBytes(bytes: number): string {
@@ -71,8 +127,11 @@ export function UploadDialog({
   const [processing, setProcessing] = React.useState<
     ProcessingOverride | undefined
   >(undefined);
+  const [speakers, setSpeakers] = React.useState<SpeakerBounds | undefined>(
+    undefined,
+  );
   // 기본은 둘 다 자동 실행(=미루지 않음). 렌즈/요약은 LLM을 돌려 환경에 따라
-  // 오래 걸리므로, 급할 때만 켜서 전사까지만 받고 나중에 회의 화면에서 실행한다.
+  // 오래 걸리므로, 급할 때만 "나중에 실행"으로 돌려 전사까지만 받는다.
   const [deferLens, setDeferLens] = React.useState(false);
   const [deferSummary, setDeferSummary] = React.useState(false);
   const upload = useUploadMeeting();
@@ -83,6 +142,7 @@ export function UploadDialog({
     setRecordedDate(null);
     setRecordedTime("");
     setProcessing(undefined);
+    setSpeakers(undefined);
     setDeferLens(false);
     setDeferSummary(false);
   };
@@ -96,7 +156,7 @@ export function UploadDialog({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!file || upload.isPending) return;
+    if (!file || upload.isPending || !isSpeakerBoundsValid(speakers)) return;
     upload.mutate(
       {
         file,
@@ -105,6 +165,7 @@ export function UploadDialog({
           ? combineToISO(recordedDate, recordedTime)
           : undefined,
         processing,
+        speakers,
         deferLens,
         deferSummary,
       },
@@ -204,6 +265,8 @@ export function UploadDialog({
             </div>
           </div>
 
+          <SpeakerCountField value={speakers} onChange={setSpeakers} />
+
           <div className="flex flex-col gap-1.5">
             <span
               id={followupsLabelId}
@@ -215,26 +278,26 @@ export function UploadDialog({
               id={followupsHintId}
               className="text-sm text-[color:var(--text-muted)]"
             >
-              끄면 전사 직후 자동으로 실행돼요. 켜면 전사까지만 진행하고, 회의
-              화면에서 직접 실행할 수 있어요.
+              전사가 끝난 뒤 실행할 추가 작업이에요. 자동으로 실행하거나, 나중에
+              회의 화면에서 직접 실행할 수 있어요.
             </p>
             <div
               role="group"
               aria-labelledby={followupsLabelId}
               aria-describedby={followupsHintId}
-              className="flex flex-col gap-2"
+              className="mt-0.5 flex flex-col gap-3"
             >
-              <Switch
-                className="text-sm"
-                label="렌즈 추출은 나중에"
-                checked={deferLens}
-                onChange={(e) => setDeferLens(e.target.checked)}
+              <FollowupRow
+                task="렌즈 추출"
+                description="할 일·결정·약속을 뽑아내요."
+                deferred={deferLens}
+                onDeferredChange={setDeferLens}
               />
-              <Switch
-                className="text-sm"
-                label="요약은 나중에"
-                checked={deferSummary}
-                onChange={(e) => setDeferSummary(e.target.checked)}
+              <FollowupRow
+                task="요약"
+                description="주요 주제와 단락별 요약을 만들어요."
+                deferred={deferSummary}
+                onDeferredChange={setDeferSummary}
               />
             </div>
           </div>
@@ -254,7 +317,9 @@ export function UploadDialog({
             <Button
               type="submit"
               loading={upload.isPending}
-              disabled={!file || upload.isPending}
+              disabled={
+                !file || upload.isPending || !isSpeakerBoundsValid(speakers)
+              }
             >
               업로드
             </Button>

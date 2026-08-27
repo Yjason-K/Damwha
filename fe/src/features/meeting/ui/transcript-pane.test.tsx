@@ -39,6 +39,8 @@ function meeting(over: Partial<Meeting> = {}): Meeting {
     topics: [],
     segments: [],
     summaryStatus: "done",
+    summaryError: null,
+    error: null,
     status: "done",
     audioUrl: "",
     totalSeconds: 600,
@@ -361,4 +363,89 @@ test("모달이 열려 있으면 ⌘F를 가로채지 않는다", () => {
   expect(select).not.toHaveBeenCalled();
 
   modal.remove();
+});
+
+// ── 재생 따라가기 ────────────────────────────────────────────────
+
+const TIMED = [
+  utt("p1", "첫 발언", { sources: [{ id: "p1", startMs: 0 }] }),
+  utt("p2", "둘째 발언", { sources: [{ id: "p2", startMs: 5_000 }] }),
+  utt("p3", "셋째 발언", { sources: [{ id: "p3", startMs: 12_000 }] }),
+];
+
+function renderPlayback(playingId: string, playing: boolean) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const ui = (pid: string, isPlaying: boolean) => (
+    <QueryClientProvider client={client}>
+      <TranscriptPane
+        meeting={meeting({ utterances: TIMED })}
+        activeId=""
+        playingId={pid}
+        playing={isPlaying}
+        onJump={vi.fn()}
+        onDeleted={vi.fn()}
+        aiAcked
+        onAckAi={vi.fn()}
+        onShowSummary={vi.fn()}
+      />
+    </QueryClientProvider>
+  );
+  const result = render(ui(playingId, playing));
+  return {
+    ...result,
+    update: (pid: string, isPlaying: boolean) =>
+      result.rerender(ui(pid, isPlaying)),
+  };
+}
+
+test("playingId 블록에만 aria-current가 붙는다", () => {
+  const { container } = renderPlayback("p2", true);
+  const current = container.querySelectorAll('[aria-current="true"]');
+  expect(current).toHaveLength(1);
+  expect(current[0]).toHaveAttribute("data-uid", "p2");
+});
+
+test("재생 중 블록이 바뀌면 그 블록으로 스크롤한다", () => {
+  const spy = vi.spyOn(Element.prototype, "scrollIntoView");
+  const { container, update } = renderPlayback("p1", true);
+  spy.mockClear();
+  update("p2", true);
+  expect(spy).toHaveBeenCalledTimes(1);
+  expect(spy.mock.instances[0]).toBe(
+    container.querySelector('[data-uid="p2"]'),
+  );
+  spy.mockRestore();
+});
+
+test("일시정지 상태에서는 블록이 바뀌어도 스크롤하지 않는다", () => {
+  const spy = vi.spyOn(Element.prototype, "scrollIntoView");
+  const { update } = renderPlayback("p1", false);
+  spy.mockClear();
+  update("p2", false);
+  expect(spy).not.toHaveBeenCalled();
+  spy.mockRestore();
+});
+
+test("사용자가 최근에 스크롤했으면 따라가지 않다가 유예가 지나면 다시 따라간다", () => {
+  vi.useFakeTimers();
+  const spy = vi.spyOn(Element.prototype, "scrollIntoView");
+  const { container, update } = renderPlayback("p1", true);
+  const body = container.querySelector('[data-slot="transcript-scroll"]')!;
+  spy.mockClear();
+
+  fireEvent.wheel(body, { deltaY: 120 });
+  update("p2", true);
+  expect(spy).not.toHaveBeenCalled();
+
+  vi.advanceTimersByTime(5_000);
+  update("p3", true);
+  expect(spy).toHaveBeenCalledTimes(1);
+  expect(spy.mock.instances[0]).toBe(
+    container.querySelector('[data-uid="p3"]'),
+  );
+
+  spy.mockRestore();
+  vi.useRealTimers();
 });

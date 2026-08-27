@@ -1,3 +1,4 @@
+import { SUMMARY_MODELS, WHISPER_MODELS } from "@damwha/contracts";
 import type {
   Device,
   PresetName,
@@ -52,29 +53,31 @@ export const PRESET_ORDER: PresetName[] = ["light", "standard", "quality"];
  */
 export const PRESET_META_REVISION = "2026-08-12.3";
 
-export const WHISPER_MODEL_OPTIONS: { value: WhisperModel; label: string }[] = [
-  { value: "tiny", label: "tiny — 가장 빠름, 낮은 정확도" },
-  { value: "base", label: "base" },
-  { value: "small", label: "small" },
-  { value: "medium", label: "medium" },
-  { value: "large-v3-turbo", label: "large-v3-turbo — 권장 균형" },
-  { value: "large-v3", label: "large-v3 — 가장 정확, 느림" },
-];
+/**
+ * 라벨은 Record로 둔다 — `@damwha/contracts`에 모델이 하나 늘면 여기서 컴파일이
+ * 깨진다. 배열이던 시절에는 목록만 늘고 셀렉트에는 안 나타나도 조용했다.
+ * 표시 순서는 카탈로그 순서를 그대로 따른다.
+ */
+const WHISPER_MODEL_LABELS: Record<WhisperModel, string> = {
+  tiny: "tiny — 가장 빠름, 낮은 정확도",
+  base: "base",
+  small: "small",
+  medium: "medium",
+  "large-v3": "large-v3 — 가장 정확, 느림",
+  "large-v3-turbo": "large-v3-turbo — 권장 균형",
+};
 
-export const SUMMARY_MODEL_OPTIONS: { value: SummaryModel; label: string }[] = [
-  {
-    value: "mlx-community/Qwen3.5-4B-8bit",
-    label: "qwen3.5 4B — 가장 빠름, 8GB 램",
-  },
-  {
-    value: "mlx-community/Qwen3.5-9B-8bit",
-    label: "qwen3.5 9B — 균형, 16–32GB 램",
-  },
-  {
-    value: "mlx-community/Qwen3.5-27B-8bit",
-    label: "qwen3.5 27B — 가장 정확, 64GB+ 램",
-  },
-];
+export const WHISPER_MODEL_OPTIONS: { value: WhisperModel; label: string }[] =
+  WHISPER_MODELS.map((value) => ({ value, label: WHISPER_MODEL_LABELS[value] }));
+
+const SUMMARY_MODEL_LABELS: Record<SummaryModel, string> = {
+  "mlx-community/Qwen3.5-4B-8bit": "qwen3.5 4B — 가장 빠름, 8GB 램",
+  "mlx-community/Qwen3.5-9B-8bit": "qwen3.5 9B — 균형, 16–32GB 램",
+  "mlx-community/Qwen3.5-27B-8bit": "qwen3.5 27B — 가장 정확, 64GB+ 램",
+};
+
+export const SUMMARY_MODEL_OPTIONS: { value: SummaryModel; label: string }[] =
+  SUMMARY_MODELS.map((value) => ({ value, label: SUMMARY_MODEL_LABELS[value] }));
 
 /** 디바이스 요약 문자열 — 카드/고급 요약에 사용. */
 export function deviceSummary(devices: {

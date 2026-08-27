@@ -1,0 +1,11 @@
+# deploy/api.Dockerfile builds with the repo root as context — keep the
+# context to sources. be/worker is a uv project and never enters the image.
+.git
+**/node_modules
+**/dist
+# uploaded audio, not be/src/storage
+storage
+be/storage
+be/worker
+graphify-out
+**/.env

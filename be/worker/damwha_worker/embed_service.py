@@ -34,3 +34,9 @@ def embed(req: EmbedRequest):
         dimension=_settings.search_embedding_dim,
         vectors=vectors,
     )
+
+
+def main() -> None:  # pragma: no cover — `damwha-embed` 콘솔 스크립트
+    import uvicorn
+
+    uvicorn.run(app, host=_settings.embed_service_host, port=_settings.embed_service_port)

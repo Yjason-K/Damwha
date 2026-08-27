@@ -15,7 +15,7 @@ const base: LensWireItem = {
   due_at: null,
   created_at: "",
   updated_at: "",
-  meeting: { id: "mtg_1", title: "회의" },
+  meeting: { id: "mtg_1", title: "회의", recorded_at: null },
   evidence: [],
 };
 

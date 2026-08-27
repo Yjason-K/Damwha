@@ -332,20 +332,36 @@ function LensState({
   status,
   onExtract,
   extracting,
+  onCancel,
 }: {
   meetingStatus: Meeting["status"];
   status: LensExtractionStatus | null;
   onExtract: () => void;
   extracting: boolean;
+  onCancel: () => void;
 }) {
   if (status === "done") return null;
   if (status === "queued" || status === "running" || extracting) {
     return (
       <Section>
-        <div role="status" aria-busy="true">
+        <div
+          role="status"
+          aria-busy="true"
+          className="flex items-baseline gap-3"
+        >
           <p className="text-sm text-[color:var(--text-muted)]">
             할 일과 결정을 찾고 있어요
           </p>
+          {/* extracting만 true면(응답 전) 아직 잡이 없어 취소가 409다 — 서버 상태에서만 */}
+          {(status === "queued" || status === "running") && (
+            <button
+              type="button"
+              onClick={onCancel}
+              className="cursor-pointer rounded-xs text-xs font-medium text-[color:var(--text-link)] outline-none hover:underline active:translate-y-[0.5px] focus-visible:[box-shadow:var(--focus-ring)]"
+            >
+              취소
+            </button>
+          )}
         </div>
       </Section>
     );
@@ -379,21 +395,39 @@ function LensState({
 function SummaryState({
   meetingStatus,
   status,
+  error,
   onRegenerate,
   regenerating,
+  onCancel,
 }: {
   meetingStatus: Meeting["status"];
   status: Meeting["summaryStatus"];
+  error: Meeting["summaryError"];
   onRegenerate: () => void;
   regenerating: boolean;
+  onCancel: () => void;
 }) {
   if (status === "queued" || status === "running" || regenerating) {
     return (
       <Section>
-        <div role="status" aria-busy="true">
+        <div
+          role="status"
+          aria-busy="true"
+          className="flex items-baseline gap-3"
+        >
           <p className="text-sm text-[color:var(--text-muted)]">
             요약을 만들고 있어요
           </p>
+          {/* regenerating만 true면(응답 전) 아직 잡이 없어 취소가 409다 — 서버 상태에서만 */}
+          {(status === "queued" || status === "running") && (
+            <button
+              type="button"
+              onClick={onCancel}
+              className="cursor-pointer rounded-xs text-xs font-medium text-[color:var(--text-link)] outline-none hover:underline active:translate-y-[0.5px] focus-visible:[box-shadow:var(--focus-ring)]"
+            >
+              취소
+            </button>
+          )}
         </div>
       </Section>
     );
@@ -414,8 +448,17 @@ function SummaryState({
       <Section>
         <div role="alert" className="flex flex-col items-start gap-2">
           <p className="text-sm text-[color:var(--text-muted)]">
-            요약을 만들지 못했어요.
+            {error?.code === "cancelled"
+              ? "요약을 취소했어요."
+              : "요약을 만들지 못했어요."}
           </p>
+          {/* 사유가 없으면 아무것도 그리지 않는다 — 예전 상태 엔드포인트는
+              flat string이라 "실패"만 알고 이유를 실을 자리가 없었다. */}
+          {(error?.message || error?.code) && (
+            <p className="text-xs text-[color:var(--text-faint)]">
+              {error.message ?? error.code}
+            </p>
+          )}
           <button
             type="button"
             onClick={onRegenerate}
@@ -523,6 +566,8 @@ type InsightPaneProps = {
   lensExtractionStatus: LensExtractionStatus | null;
   onExtractLenses: () => void;
   extracting: boolean;
+  onCancelSummary: () => void;
+  onCancelLenses: () => void;
 };
 
 export function InsightPane({
@@ -540,6 +585,8 @@ export function InsightPane({
   lensExtractionStatus,
   onExtractLenses,
   extracting,
+  onCancelSummary,
+  onCancelLenses,
 }: InsightPaneProps) {
   const settled = meeting.summaryStatus === "done" && !regenerating;
   return (
@@ -607,8 +654,10 @@ export function InsightPane({
               <SummaryState
                 meetingStatus={meeting.status}
                 status={meeting.summaryStatus}
+                error={meeting.summaryError}
                 onRegenerate={onRegenerateSummary}
                 regenerating={regenerating}
+                onCancel={onCancelSummary}
               />
             )}
             <Todos lenses={lenses} meeting={meeting} onToggle={onToggle} />
@@ -618,6 +667,7 @@ export function InsightPane({
               status={lensExtractionStatus}
               onExtract={onExtractLenses}
               extracting={extracting}
+              onCancel={onCancelLenses}
             />
             {settled && (
               <SummarySegments

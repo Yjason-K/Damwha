@@ -12,7 +12,8 @@ from ..models.base import VAD, Diarizer, Embedder, Transcriber
 from ..storage import Storage
 from . import ffmpeg
 from .align import build_utterances
-from .identify import centroids_by_label, identify_clusters
+from .cluster_merge import merge_clusters
+from .identify import identify_clusters
 from .progress import SttProgressReporter
 from .speaker_arbiter import make_embedding_arbiter
 from .stage import enter_stage
@@ -89,15 +90,24 @@ def run_process_meeting(
     # 3) diarize
     enter_stage(conn, job_id, worker_id, "diarize", 35, shutdown_event)
     with timed_stage("diarize", ctx) as t:
-        segments = models.diarizer.diarize(norm_path)
-        t["detail"] = f"segments={len(segments)}"
+        diar_cfg = payload.models.diarization
+        segments = models.diarizer.diarize(
+            norm_path, min_speakers=diar_cfg.min_speakers, max_speakers=diar_cfg.max_speakers
+        )
+        t["detail"] = (
+            f"segments={len(segments)} bounds={diar_cfg.min_speakers}-{diar_cfg.max_speakers}"
+        )
 
     # 4) embed → centroids
     enter_stage(conn, job_id, worker_id, "identify", 50, shutdown_event)
     with timed_stage("embed", ctx) as t:
         embeddings = models.embedder.embed(norm_path, segments)
-        centroids = centroids_by_label(segments, embeddings)
-        t["detail"] = f"clusters={len(centroids)}"
+        raw_labels = len({s.diar_label for s in segments})
+        # 과분할 보정: 거의 같은 목소리(centroid cosine ≥ 0.85)와 유령 클러스터(발화
+        # < 5초)를 identify 전에 접는다. 이후 단계(identify·align·persist)는 병합된
+        # segments/centroids만 본다.
+        segments, centroids = merge_clusters(segments, embeddings)
+        t["detail"] = f"clusters={len(centroids)} raw_labels={raw_labels}"
 
     # 5) identify
     with timed_stage("identify", ctx) as t:
@@ -131,6 +141,7 @@ def run_process_meeting(
                     bar=bar,
                     progress_from=75,
                     progress_to=90,
+                    abort_event=shutdown_event,
                 )
                 words = models.transcriber.transcribe(
                     norm_path, payload.models.language, prepared, on_progress=report

@@ -73,3 +73,20 @@ test("오버라이드 선택 시 body에 processing이 실린다", async () => {
     }),
   );
 });
+
+test("화자 수를 입력하면 body에 speakers가 실린다", async () => {
+  const post = setup(
+    vi.fn().mockResolvedValue({
+      data: { meeting_id: "m1", processing_version: 1, job_id: "job_2" },
+    }),
+  );
+  fireEvent.change(screen.getByLabelText("최대 화자 수"), {
+    target: { value: "3" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "재처리 시작" }));
+  await waitFor(() =>
+    expect(post).toHaveBeenCalledWith("/meetings/m1/reprocess", {
+      speakers: { max: 3 },
+    }),
+  );
+});

@@ -100,9 +100,9 @@ def test_short_overlapping_backchannel_run_reabsorbed():
     ]
     utts = build_utterances(words, segments)
     ok = [u for u in utts if u.status == "ok"]
-    assert [u.diar_label for u in ok] == ["A", "A"]
-    assert ok[0].text == "나라가 잘 사는"
-    assert ok[1].text == "거하고 체감"
+    # 회수 후 A의 두 세그먼트는 같은 화자·짧은 간격이라 한 발언으로 합쳐진다
+    assert [u.diar_label for u in ok] == ["A"]
+    assert ok[0].text == "나라가 잘 사는 거하고 체감"
     assert all(u.diar_label != "B" for u in utts)
 
 
@@ -170,8 +170,8 @@ def test_arbitrate_true_absorbs_nonoverlapping_run():
 
     utts = build_utterances(words, segments, arbitrate=arbitrate)
     ok = [u for u in utts if u.status == "ok"]
-    assert [u.diar_label for u in ok] == ["A", "A"]
-    assert ok[0].text == "집에 가지 말고"
+    assert [u.diar_label for u in ok] == ["A"]
+    assert ok[0].text.startswith("집에 가지 말고")
     assert calls == [(4200, 4600, "B", "A")]
 
 
@@ -209,7 +209,7 @@ def test_arbitrate_widens_run_cap_to_5s():
     ]
     utts = build_utterances(words, segments, arbitrate=lambda *a: True)
     ok = [u for u in utts if u.status == "ok"]
-    assert [u.diar_label for u in ok] == ["A", "A"]
+    assert {u.diar_label for u in ok} == {"A"}
 
 
 def test_arbitrate_run_over_5s_not_candidate():
@@ -245,9 +245,47 @@ def test_arbitrate_none_falls_back_to_overlap_heuristic():
     ]
     utts = build_utterances(overlap_words, overlap_segments, arbitrate=lambda *a: None)
     ok = [u for u in utts if u.status == "ok"]
-    assert [u.diar_label for u in ok] == ["A", "A"]
+    assert {u.diar_label for u in ok} == {"A"}
 
     nonoverlap_segments, nonoverlap_words = _sandwich_fixture()
     utts = build_utterances(nonoverlap_words, nonoverlap_segments, arbitrate=lambda *a: None)
     ok = [u for u in utts if u.status == "ok"]
     assert [u.diar_label for u in ok] == ["A", "B", "A"]
+
+
+def test_consecutive_same_speaker_segments_with_short_gap_merge():
+    # pyannote splits one speaker's turn at every pause; a 600ms gap is the same utterance
+    segments = [DiarSegment("S0", 0, 1000), DiarSegment("S0", 1600, 3000)]
+    words = [Word("하나", 100, 900, 0.8), Word("둘", 1700, 2900, 0.6)]
+    utts = build_utterances(words, segments)
+    assert len(utts) == 1
+    assert utts[0].text == "하나 둘"
+    assert (utts[0].start_ms, utts[0].end_ms) == (100, 2900)
+    assert abs(utts[0].confidence - 0.7) < 1e-6
+    assert utts[0].order_index == 0
+
+
+def test_consecutive_same_speaker_segments_with_long_gap_stay_split():
+    segments = [DiarSegment("S0", 0, 1000), DiarSegment("S0", 3000, 4000)]
+    words = [Word("하나", 100, 900, None), Word("둘", 3100, 3900, None)]
+    utts = build_utterances(words, segments)
+    assert [u.text for u in utts] == ["하나", "둘"]
+
+
+def test_other_speaker_between_prevents_merge():
+    segments = [
+        DiarSegment("S0", 0, 1000),
+        DiarSegment("S1", 1000, 2000),
+        DiarSegment("S0", 2000, 3000),
+    ]
+    words = [Word("a", 100, 900, None), Word("b", 1100, 1900, None), Word("c", 2100, 2900, None)]
+    utts = build_utterances(words, segments)
+    assert [u.diar_label for u in utts] == ["S0", "S1", "S0"]
+
+
+def test_non_ok_rows_are_not_merged():
+    # silence row + ok row of the same speaker stay separate — merging would fabricate text span
+    segments = [DiarSegment("S0", 0, 1500), DiarSegment("S0", 1600, 3000)]
+    words = [Word("둘", 1700, 2900, None)]
+    utts = build_utterances(words, segments)
+    assert [u.status for u in utts] == ["silence", "ok"]

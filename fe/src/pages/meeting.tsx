@@ -5,15 +5,18 @@ import { Button } from "@/shared/ui/button";
 import { useToast } from "@/shared/ui/use-toast";
 
 import {
+  useCancelExtraction,
   useRetryExtraction,
   useSetLensCompletion,
 } from "@/features/lens/api/lenses";
 import { useMeetingLenses } from "@/features/meeting/api/lenses";
 import { formatClock, mapMeetingLenses } from "@/features/meeting/api/mappers";
 import {
+  useCancelSummary,
   useGenerateSummary,
   useMeeting,
   useMeetingStatus,
+  useCancelProcessing,
   useReindexMeeting,
   useSyncSummaryStatus,
 } from "@/features/meeting/api/meetings";
@@ -25,6 +28,10 @@ import type { Meeting } from "@/features/meeting/model/types";
 import { CenterState, Spinner } from "@/features/meeting/ui/center-state";
 import { Icon } from "@/features/meeting/ui/icons";
 import { InsightPane } from "@/features/meeting/ui/insight-pane";
+import {
+  adjacentUtterance,
+  currentUtterance,
+} from "@/features/meeting/model/navigate";
 import { PlayerBar } from "@/features/meeting/ui/player-bar";
 import { TranscriptPane } from "@/features/meeting/ui/transcript-pane";
 import { useProcessingSettings } from "@/features/settings/api/settings";
@@ -53,7 +60,11 @@ function ProcessingBanner({
   meeting: Meeting;
   status: MeetingStatusResponse | undefined;
 }) {
+  const cancel = useCancelProcessing();
+
   if (meeting.status === "failed") {
+    // 운영자 취소도 failed로 저장된다(reprocess 가드를 그대로 타기 위해) — 문구만 가른다.
+    const cancelled = meeting.error?.code === "cancelled";
     return (
       <div
         role="alert"
@@ -65,10 +76,12 @@ function ProcessingBanner({
           className="shrink-0 text-[color:var(--red-text)]"
         />
         <span className="font-semibold text-[color:var(--red-text)]">
-          처리에 실패했어요
+          {cancelled ? "처리를 취소했어요" : "처리에 실패했어요"}
         </span>
         <span className="text-[color:var(--text-secondary)]">
-          다시 업로드하거나 잠시 후 시도해 주세요.
+          {cancelled
+            ? "재처리로 다시 시작할 수 있어요."
+            : "다시 업로드하거나 잠시 후 시도해 주세요."}
         </span>
       </div>
     );
@@ -97,6 +110,15 @@ function ProcessingBanner({
         {stageLabel}
         {pct != null ? ` · ${pct}%` : ""}
       </span>
+      <Button
+        variant="secondary"
+        size="sm"
+        className="ml-auto shrink-0"
+        disabled={cancel.isPending}
+        onClick={() => cancel.mutate(meeting.id)}
+      >
+        취소
+      </Button>
     </div>
   );
 }
@@ -193,6 +215,9 @@ function MeetingView({
   const [tab, setTab] = React.useState("summary");
   const [playing, setPlaying] = React.useState(false);
   const [pos, setPos] = React.useState(0);
+  // 재생 시각(ms). pos는 <audio>.duration 기준 비율이라 매핑된 totalSeconds로
+  // 되돌리면 소수점 차이만큼 밀린다 — 발언 블록 판정은 이 값으로만 한다.
+  const [timeMs, setTimeMs] = React.useState(0);
   const [audioDuration, setAudioDuration] = React.useState(0);
   const [metaReady, setMetaReady] = React.useState(false);
 
@@ -205,9 +230,22 @@ function MeetingView({
     refetch: refetchMeeting,
   } = useMeeting(meetingId);
 
+  // <audio>는 status를 key로 리마운트된다(아래 JSX 참고). 새 엘리먼트는 아직
+  // 메타데이터가 없으므로 준비 상태도 함께 되돌려, 배속·seek effect가 새
+  // 엘리먼트의 loadedmetadata 뒤에 다시 돌게 한다.
+  const meetingStatus = meeting?.status;
+  React.useEffect(() => {
+    // 리마운트에 맞춰 준비 상태를 초기화하는 의도된 effect다.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMetaReady(false);
+    setPlaying(false);
+  }, [meetingStatus]);
+
   const { data: meetingLensData } = useMeetingLenses(meetingId);
   const setLensCompletion = useSetLensCompletion();
   const extractLenses = useRetryExtraction();
+  const cancelExtraction = useCancelExtraction();
+  const cancelSummary = useCancelSummary();
   const generateSummary = useGenerateSummary();
   const processingSettings = useProcessingSettings();
   const [summaryModel, setSummaryModel] = React.useState<
@@ -237,7 +275,7 @@ function MeetingView({
   useSyncSummaryStatus(
     meetingId,
     meeting?.summaryStatus,
-    procStatus?.summary_status,
+    procStatus?.summary?.status,
   );
 
   const { toast } = useToast();
@@ -273,6 +311,7 @@ function MeetingView({
         : totalSeconds;
     if (a && total > 0) a.currentTime = fraction * total;
     setPos(fraction);
+    setTimeMs(fraction * total * 1000);
   };
 
   // 하이라이트 대상 발언의 시작 시각. 폴링 재조회로 meeting 객체가 새로 와도
@@ -296,6 +335,7 @@ function MeetingView({
     // 외부 신호(?u=)를 재생 위치에 반영하는 의도된 effect다.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setPos(fraction);
+    setTimeMs(targetStartMs);
   }, [targetStartMs, metaReady, totalSeconds]);
 
   // historical 가드: 재처리 등으로 회의가 로드된 뒤에도 `?u=`가 가리키는
@@ -332,6 +372,19 @@ function MeetingView({
     }
     setSearchParams({ u: uid }, { replace: true });
   };
+
+  // 플레이바의 이전/다음 발언. 현재 재생 시각 기준으로 블록을 고르고 jumpTo로
+  // 넘겨 하이라이트·seek·히스토리(replace)를 한 경로로 처리한다. 대상이 없으면
+  // null → 버튼 비활성.
+  const playingId = meeting
+    ? currentUtterance(meeting.utterances, timeMs)
+    : null;
+  const prevUid = meeting
+    ? adjacentUtterance(meeting.utterances, timeMs, "prev")
+    : null;
+  const nextUid = meeting
+    ? adjacentUtterance(meeting.utterances, timeMs, "next")
+    : null;
 
   const handleDeleted = () => {
     navigate("/", { replace: true });
@@ -376,6 +429,8 @@ function MeetingView({
         <TranscriptPane
           meeting={meeting}
           activeId={activeId}
+          playingId={playingId}
+          playing={playing}
           onJump={jumpTo}
           onDeleted={handleDeleted}
           aiAcked={aiAcked}
@@ -404,6 +459,8 @@ function MeetingView({
           lensExtractionStatus={meetingLensData?.extractionStatus ?? null}
           onExtractLenses={() => extractLenses.mutate(meeting.id)}
           extracting={extractLenses.isPending}
+          onCancelSummary={() => cancelSummary.mutate(meeting.id)}
+          onCancelLenses={() => cancelExtraction.mutate(meeting.id)}
         />
       </>
     );
@@ -444,11 +501,19 @@ function MeetingView({
           onSpeed={onSpeed}
           onToggle={() => setPlaying((p) => !p)}
           onSeek={seek}
+          onPrevUtterance={prevUid ? () => jumpTo(prevUid) : null}
+          onNextUtterance={nextUid ? () => jumpTo(nextUid) : null}
         />
       ) : null}
 
       {meeting ? (
+        // key에 status를 두는 이유: /audio URL은 회의 내내 같지만, 워커가
+        // normalized.flac을 쓰고 나면 그 URL이 다른 파일(크기·타입 모두)을
+        // 내려준다. 업로드 직후 원본 기준으로 붙은 <audio>는 src가 그대로라
+        // 재로드하지 않아 완료 후 재생이 안 되고, 새로고침해야만 살아났다.
+        // 상태 전이마다 엘리먼트를 새로 만들어 강제로 다시 로드한다.
         <audio
+          key={meeting.status}
           ref={audioRef}
           src={meeting.audioUrl}
           preload="metadata"
@@ -465,6 +530,7 @@ function MeetingView({
                 ? a.duration
                 : totalSeconds;
             if (total > 0) setPos(Math.min(1, a.currentTime / total));
+            setTimeMs(a.currentTime * 1000);
           }}
           onEnded={() => setPlaying(false)}
         />

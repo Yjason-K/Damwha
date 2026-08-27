@@ -300,6 +300,7 @@ const fx = vi.hoisted(() => {
           bullets: ["3분기 우선순위 확정"],
         },
       ],
+      error: null,
     },
     utterances: [
       utt({
@@ -329,7 +330,15 @@ const fx = vi.hoisted(() => {
     ],
   };
 
+  // 테스트별 상세 덮어쓰기 — 처리 중 회의가 done으로 바뀌는 전이를 재현한다.
+  const detailOverrides = new Map<string, WireMeetingDetail>();
+  const setDetailOverride = (id: string, d: WireMeetingDetail) => {
+    detailOverrides.set(id, d);
+  };
+
   const detailOf = (id: string): WireMeetingDetail => {
+    const o = detailOverrides.get(id);
+    if (o) return o;
     if (id === "m2") return m2Detail;
     if (id === "m3") return m3Detail;
     if (id === "m4") return m4Detail;
@@ -341,7 +350,7 @@ const fx = vi.hoisted(() => {
     stage: "stt",
     progress: 0.5,
     error: null,
-    summary_status: null,
+    summary: null,
     search_index: null,
   };
 
@@ -416,7 +425,7 @@ const fx = vi.hoisted(() => {
     due_at: null,
     created_at: "2026-06-21T09:00:00.000Z",
     updated_at: "2026-06-21T09:00:00.000Z",
-    meeting: { id: "m1", title: null },
+    meeting: { id: "m1", title: null, recorded_at: null },
     evidence: [],
     ...o,
   });
@@ -425,7 +434,7 @@ const fx = vi.hoisted(() => {
   const lensJumpItem = lensItem({
     id: "lens_jump",
     meeting_id: "m2",
-    meeting: { id: "m2", title: "스프린트 회고" },
+    meeting: { id: "m2", title: "스프린트 회고", recorded_at: null },
     text: "다음 스프린트 자료 공유하기",
     evidence: [
       {
@@ -444,7 +453,7 @@ const fx = vi.hoisted(() => {
   const lensGhostItem = lensItem({
     id: "lens_ghost",
     meeting_id: "m1",
-    meeting: { id: "m1", title: "기획회의 — UI 개선안" },
+    meeting: { id: "m1", title: "기획회의 — UI 개선안", recorded_at: null },
     text: "지난 회의 후속 조치 확인하기",
     evidence: [
       {
@@ -466,7 +475,7 @@ const fx = vi.hoisted(() => {
     id: "lens_m4_action",
     kind: "action",
     meeting_id: "m4",
-    meeting: { id: "m4", title: "요약이 준비된 회의" },
+    meeting: { id: "m4", title: "요약이 준비된 회의", recorded_at: null },
     text: "예산안 다시 검토하기",
     completion_status: "open",
     evidence: [
@@ -485,7 +494,7 @@ const fx = vi.hoisted(() => {
     id: "lens_m4_decision",
     kind: "decision",
     meeting_id: "m4",
-    meeting: { id: "m4", title: "요약이 준비된 회의" },
+    meeting: { id: "m4", title: "요약이 준비된 회의", recorded_at: null },
     text: "3분기까지 v2로 한정",
     completion_status: "done",
     evidence: [
@@ -567,7 +576,9 @@ const fx = vi.hoisted(() => {
       return Promise.resolve({ data: { items, next_cursor: null } });
     }
     if (url.endsWith("/status"))
-      return Promise.resolve({ data: { ...status, search_index: searchIndex } });
+      return Promise.resolve({
+        data: { ...status, search_index: searchIndex },
+      });
     const m = url.match(/^\/meetings\/([^/]+)$/);
     if (m) {
       if (m[1] === "m_err" || deletedIds.has(m[1]))
@@ -595,6 +606,7 @@ const fx = vi.hoisted(() => {
 
   const reset = () => {
     deletedIds.clear();
+    detailOverrides.clear();
     searchIndex = null;
     releaseListFetches();
   };
@@ -627,6 +639,14 @@ const fx = vi.hoisted(() => {
         data: { meeting_id: "m1", processing_version: 1, job_id: "job_9" },
       });
     }
+    if (/^\/meetings\/[^/]+\/(summary|lenses)\/cancel$/.test(url)) {
+      return Promise.resolve({ data: { job_id: "job_5", status: "failed" } });
+    }
+    if (/^\/meetings\/[^/]+\/cancel$/.test(url)) {
+      return Promise.resolve({
+        data: { meeting_id: "m3", job_id: "job_3", status: "failed" },
+      });
+    }
     if (/^\/meetings\/[^/]+\/lenses\/extract$/.test(url)) {
       return Promise.resolve({
         data: {
@@ -646,6 +666,7 @@ const fx = vi.hoisted(() => {
     deleteResponse,
     detailOf,
     reset,
+    setDetailOverride,
     setSearchIndex,
     blockListFetches,
     releaseListFetches,
@@ -689,7 +710,7 @@ function renderShell(initialEntry = "/meetings/m1") {
       <Toaster />
     </QueryClientProvider>,
   );
-  return { ...utils, router };
+  return { ...utils, router, client };
 }
 
 test("회의 셸은 전사·인사이트·플레이어를 렌더한다", async () => {
@@ -705,7 +726,7 @@ test("회의 셸은 전사·인사이트·플레이어를 렌더한다", async (
   expect(screen.getByText(/오늘은 홈 구조부터 정하죠/)).toBeInTheDocument();
 });
 
-test("silence 발화는 숨기고 transcribe_failed는 플레이스홀더로 렌더한다", async () => {
+test("silence와 transcribe_failed 발화는 전사에 렌더하지 않는다", async () => {
   renderShell();
   await screen.findByRole("heading", {
     level: 1,
@@ -714,12 +735,9 @@ test("silence 발화는 숨기고 transcribe_failed는 플레이스홀더로 렌
   const log = screen.getByRole("log", { name: "회의 전사" });
   // silence 행은 렌더되지 않는다.
   expect(log.querySelector('[data-uid="u4"]')).toBeNull();
-  // transcribe_failed 행은 플레이스홀더 문구와 함께 렌더된다.
-  const failedRow = log.querySelector('[data-uid="u5"]');
-  expect(failedRow).not.toBeNull();
-  expect(failedRow).toHaveTextContent("전사하지 못한 구간입니다");
-  // 플레이스홀더는 이탤릭(회색) 스타일로 구분된다.
-  expect(failedRow!.querySelector("span.italic")).not.toBeNull();
+  // transcribe_failed 행도 렌더되지 않는다 — 안내 문구가 전사를 끊는다.
+  expect(log.querySelector('[data-uid="u5"]')).toBeNull();
+  expect(log).not.toHaveTextContent("전사하지 못한 구간입니다");
 });
 
 test("미해결 클러스터가 있으면 화자 확인 배너와 다이얼로그가 뜬다", async () => {
@@ -780,8 +798,11 @@ test("회의를 전환해도 재생 배속이 유지된다", async () => {
     name: "기획회의 — UI 개선안",
   });
   fireEvent.loadedMetadata(container.querySelector("audio")!);
-  // 1x → 1.2x (SPEEDS 순환).
-  fireEvent.click(screen.getByRole("button", { name: "재생 속도 (현재 1x)" }));
+  // 1x → 1.2x. Radix Select는 jsdom에서 pointer 이벤트를 못 받아 키보드로 연다.
+  const trigger = screen.getByRole("combobox", { name: "재생 속도" });
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("option", { name: "1.2x" }));
   expect(container.querySelector("audio")!.playbackRate).toBe(1.2);
 
   fireEvent.click(screen.getByRole("link", { name: /스프린트 회고/ }));
@@ -789,9 +810,9 @@ test("회의를 전환해도 재생 배속이 유지된다", async () => {
 
   // 회의 뷰는 회의마다 리마운트되지만 배속은 살아남아야 하고(전사를 훑는 동안
   // 유지되는 작업 모드다), 새 <audio>에도 다시 적용돼야 한다.
-  expect(
-    screen.getByRole("button", { name: "재생 속도 (현재 1.2x)" }),
-  ).toBeInTheDocument();
+  expect(screen.getByRole("combobox", { name: "재생 속도" })).toHaveTextContent(
+    "1.2x",
+  );
   const next = container.querySelector("audio")!;
   fireEvent.loadedMetadata(next);
   expect(next.playbackRate).toBe(1.2);
@@ -1038,6 +1059,53 @@ test("전사가 아직 없는 처리 중 회의에서는 플레이바를 그리�
   expect(screen.queryByRole("button", { name: "재생" })).toBeNull();
 });
 
+test("처리 중 배너의 취소 버튼은 POST /meetings/:id/cancel을 부른다", async () => {
+  renderShell("/meetings/m3");
+  await screen.findByText(/회의를 처리하고 있어요/);
+  fireEvent.click(screen.getByRole("button", { name: "취소" }));
+  await waitFor(() =>
+    expect(apiClient.post).toHaveBeenCalledWith("/meetings/m3/cancel"),
+  );
+});
+
+test("취소된 회의는 실패가 아니라 취소 안내를 보여준다", async () => {
+  fx.setDetailOverride("m3", {
+    ...fx.detailOf("m3"),
+    status: "failed",
+    current_job_id: null,
+    error: {
+      code: "cancelled",
+      stage: "stt",
+      message: "cancelled by operator",
+    },
+  });
+  renderShell("/meetings/m3");
+  expect(await screen.findByText(/처리를 취소했어요/)).toBeInTheDocument();
+  expect(screen.queryByText(/처리에 실패했어요/)).toBeNull();
+});
+
+test("처리 중이던 회의가 done이 되면 <audio>를 다시 로드한다", async () => {
+  const { container, client } = renderShell("/meetings/m3");
+  await screen.findByText(/회의를 처리하고 있어요/);
+  const before = container.querySelector("audio")!;
+  expect(before).not.toBeNull();
+
+  // 워커가 normalized.flac을 쓰고 나면 같은 /audio URL이 다른 파일을 내려준다.
+  // src가 그대로면 브라우저는 재로드하지 않고 원본 기준의 낡은 상태에 머문다.
+  fx.setDetailOverride("m3", {
+    ...fx.detailOf("m3"),
+    status: "done",
+    current_job_id: null,
+    utterances: fx.detailOf("m1").utterances,
+    clusters: fx.detailOf("m1").clusters,
+  });
+  await client.invalidateQueries({ queryKey: ["meeting", "m3"] });
+  await screen.findByRole("button", { name: "재생" });
+
+  const after = container.querySelector("audio")!;
+  expect(after).not.toBe(before);
+});
+
 test("상세 조회에 실패하면 무한 스피너 대신 에러 상태와 재시도를 보여준다", async () => {
   renderShell();
   await screen.findByRole("heading", {
@@ -1185,6 +1253,21 @@ test("summary가 done인 회의는 요약 탭이 실제 데이터로 채워지�
   );
 });
 
+test("요약 생성 중인 회의는 취소 버튼으로 POST /summary/cancel을 부른다", async () => {
+  fx.setDetailOverride("m1", {
+    ...fx.detailOf("m1"),
+    summary: { status: "running", topics: [], segments: [], error: null },
+  });
+  renderShell("/meetings/m1");
+  const busy = (await screen.findByText("요약을 만들고 있어요")).closest(
+    "[role=status]",
+  ) as HTMLElement;
+  fireEvent.click(within(busy).getByRole("button", { name: "취소" }));
+  await waitFor(() =>
+    expect(apiClient.post).toHaveBeenCalledWith("/meetings/m1/summary/cancel"),
+  );
+});
+
 test("렌즈를 미뤄둔 회의는 지금 찾기 버튼으로 추출을 걸 수 있다", async () => {
   // m4가 아닌 회의 = extraction_status null (업로드에서 defer_lens로 미룬 모습).
   renderShell("/meetings/m1");
@@ -1197,4 +1280,72 @@ test("렌즈를 미뤄둔 회의는 지금 찾기 버튼으로 추출을 걸 수
   await waitFor(() =>
     expect(apiClient.post).toHaveBeenCalledWith("/meetings/m1/lenses/extract"),
   );
+});
+
+test("플레이바의 다음 발언 버튼은 다음 블록으로 seek하고 하이라이트한다", async () => {
+  const { container, router } = renderShell("/meetings/m2");
+  await screen.findByRole("heading", { level: 1, name: "스프린트 회고" });
+  const audio = container.querySelector("audio")!;
+  fireEvent.loadedMetadata(audio);
+
+  // 시작 위치(0s = v1 블록)에서 다음 → v2 블록(5초).
+  fireEvent.click(screen.getByRole("button", { name: "다음 발언" }));
+  await waitFor(() => expect(audio.currentTime).toBeCloseTo(5, 3));
+  expect(router.state.location.search).toBe("?u=v2");
+
+  // 마지막 블록에서는 다음 발언이 비활성.
+  expect(screen.getByRole("button", { name: "다음 발언" })).toBeDisabled();
+
+  // 5초 직후 이전 → v1(0초)로 돌아간다.
+  fireEvent.click(screen.getByRole("button", { name: "이전 발언" }));
+  await waitFor(() => expect(router.state.location.search).toBe("?u=v1"));
+});
+
+test("재생 위치가 속한 블록에 aria-current가 붙는다", async () => {
+  const { container } = renderShell("/meetings/m2");
+  await screen.findByRole("heading", { level: 1, name: "스프린트 회고" });
+  const audio = container.querySelector("audio")!;
+  fireEvent.loadedMetadata(audio);
+  const log = screen.getByRole("log", { name: "회의 전사" });
+
+  // 0초 → v1 블록.
+  expect(log.querySelector('[aria-current="true"]')).toHaveAttribute(
+    "data-uid",
+    "v1",
+  );
+
+  // 6초 → v2 블록(5초 시작, v3 병합).
+  audio.currentTime = 6;
+  fireEvent.timeUpdate(audio);
+  await waitFor(() =>
+    expect(log.querySelector('[aria-current="true"]')).toHaveAttribute(
+      "data-uid",
+      "v2",
+    ),
+  );
+});
+
+test("audio.duration이 매핑된 길이와 미세하게 달라도 재생 블록이 밀리지 않는다", async () => {
+  const { container } = renderShell("/meetings/m2");
+  await screen.findByRole("heading", { level: 1, name: "스프린트 회고" });
+  const audio = container.querySelector("audio")!;
+  // 실제 브라우저는 duration_ms를 초로 내린 값과 소수점 아래가 다르다.
+  Object.defineProperty(audio, "duration", {
+    value: 3497.4,
+    configurable: true,
+  });
+  fireEvent.loadedMetadata(audio);
+  const log = screen.getByRole("log", { name: "회의 전사" });
+
+  // 정확히 v2 시작(5초)에 서 있다 → v2가 재생 블록이어야 한다.
+  audio.currentTime = 5;
+  fireEvent.timeUpdate(audio);
+  await waitFor(() =>
+    expect(log.querySelector('[aria-current="true"]')).toHaveAttribute(
+      "data-uid",
+      "v2",
+    ),
+  );
+  // 다음 발언도 v2에 머물지 않고 실제 다음으로 간다 — m2는 v2가 마지막 블록.
+  expect(screen.getByRole("button", { name: "다음 발언" })).toBeDisabled();
 });

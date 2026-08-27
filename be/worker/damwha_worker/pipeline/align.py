@@ -17,6 +17,11 @@ BACKCHANNEL_MAX_RUN_MS = 2000
 # 달리 오디오가 실제 누구 목소리인지 확인하므로, 더 긴 오귀속 run도 안전하게 다룬다.
 ARBITRATE_MAX_RUN_MS = 5000
 
+# 같은 화자의 연속 ok 발언 사이 무음이 이 길이 미만이면 하나로 합친다. pyannote는
+# 숨 고르는 pause마다 세그먼트를 끊어 한 턴이 utt 십수 개로 쪼개진다(실측: 턴당
+# 21개). 사이에 다른 화자 row나 non-ok row가 끼면 합치지 않는다.
+MERGE_GAP_MS = 1500
+
 
 @dataclass
 class Utterance:
@@ -166,6 +171,35 @@ def build_utterances(
             )
 
     raw.sort(key=lambda u: u.start_ms)
-    for idx, u in enumerate(raw):
+    merged = _merge_adjacent_same_speaker(raw)
+    for idx, u in enumerate(merged):
         u.order_index = idx
-    return raw
+    return merged
+
+
+def _merge_adjacent_same_speaker(utts: list[Utterance]) -> list[Utterance]:
+    """시간순 utts에서 같은 diar_label의 인접 ok 발언을 MERGE_GAP_MS 미만 간격이면 병합."""
+    out: list[Utterance] = []
+    counts: list[int] = []  # confidence 재평균용: 각 out 항목이 흡수한 conf 보유 utt 수
+    for u in utts:
+        prev = out[-1] if out else None
+        if (
+            prev is not None
+            and prev.status == "ok"
+            and u.status == "ok"
+            and prev.diar_label == u.diar_label
+            and u.start_ms - prev.end_ms < MERGE_GAP_MS
+        ):
+            prev.end_ms = max(prev.end_ms, u.end_ms)
+            prev.text = f"{prev.text} {u.text}"
+            if u.confidence is not None:
+                if prev.confidence is None:
+                    prev.confidence, counts[-1] = u.confidence, 1
+                else:
+                    n = counts[-1]
+                    prev.confidence = (prev.confidence * n + u.confidence) / (n + 1)
+                    counts[-1] = n + 1
+            continue
+        out.append(u)
+        counts.append(1 if u.confidence is not None else 0)
+    return out

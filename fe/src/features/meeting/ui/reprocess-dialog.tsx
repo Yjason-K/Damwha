@@ -16,6 +16,9 @@ import { OverrideSection } from "@/features/settings/ui/override-section";
 import type { ProcessingOverride } from "@/features/settings/api/types";
 
 import { useReprocessMeeting } from "../api/meetings";
+import type { SpeakerBounds } from "../api/types";
+import { isSpeakerBoundsValid } from "../lib/speaker-bounds";
+import { SpeakerCountField } from "./speaker-count-field";
 
 /**
  * ReprocessDialog — 회의 재처리 확인. 기존 전사/화자 결과를 새 결과로
@@ -36,18 +39,24 @@ export function ReprocessDialog({
   const [processing, setProcessing] = React.useState<
     ProcessingOverride | undefined
   >(undefined);
+  const [speakers, setSpeakers] = React.useState<SpeakerBounds | undefined>(
+    undefined,
+  );
   const reprocess = useReprocessMeeting();
 
   const handleOpenChange = (next: boolean) => {
     if (!next && reprocess.isPending) return;
-    if (!next) setProcessing(undefined);
+    if (!next) {
+      setProcessing(undefined);
+      setSpeakers(undefined);
+    }
     onOpenChange(next);
   };
 
   const handleConfirm = () => {
-    if (reprocess.isPending) return;
+    if (reprocess.isPending || !isSpeakerBoundsValid(speakers)) return;
     reprocess.mutate(
-      { id: meeting.id, processing },
+      { id: meeting.id, processing, speakers },
       {
         onSuccess: () => {
           toast({
@@ -56,6 +65,7 @@ export function ReprocessDialog({
             description: "완료되면 새 결과로 바뀌어요.",
           });
           setProcessing(undefined);
+          setSpeakers(undefined);
           onOpenChange(false);
         },
         onError: (error) => {
@@ -80,6 +90,8 @@ export function ReprocessDialog({
           </DialogDescription>
         </DialogHeader>
 
+        <SpeakerCountField value={speakers} onChange={setSpeakers} />
+
         <OverrideSection value={processing} onChange={setProcessing} />
 
         <DialogFooter>
@@ -95,7 +107,7 @@ export function ReprocessDialog({
           <Button
             type="button"
             loading={reprocess.isPending}
-            disabled={reprocess.isPending}
+            disabled={reprocess.isPending || !isSpeakerBoundsValid(speakers)}
             onClick={handleConfirm}
           >
             재처리 시작

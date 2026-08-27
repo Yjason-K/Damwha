@@ -28,7 +28,7 @@ export type LensWireItem = {
   due_at: string | null;
   created_at: string;
   updated_at: string;
-  meeting: { id: string; title: string | null };
+  meeting: { id: string; title: string | null; recorded_at: string | null };
   evidence: WireEvidence[];
 };
 
