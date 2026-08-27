@@ -51,6 +51,15 @@ export function NotePane({ meetingId }: { meetingId: string }) {
   const [editing, setEditing] = React.useState(false);
   const boxRef = React.useRef<HTMLTextAreaElement | null>(null);
 
+  // 회의가 바뀌면 이전 회의에서 편집 중이었어도 새 회의는 읽기모드로 보여야
+  // 한다. setState는 effect가 아니라 렌더 중에 조정한다 — `notes.ts`의
+  // draft 리셋과 같은 패턴이라 react-hooks/set-state-in-effect에 걸리지 않는다.
+  const [prevMeetingId, setPrevMeetingId] = React.useState(meetingId);
+  if (prevMeetingId !== meetingId) {
+    setPrevMeetingId(meetingId);
+    setEditing(false);
+  }
+
   const done = React.useCallback(() => {
     flush();
     setEditing(false);

@@ -57,6 +57,20 @@ test("raw HTML은 태그가 아니라 텍스트로 나온다", async () => {
   expect(container.querySelector("img")).toBeNull();
 });
 
+test("마크다운 이미지는 <img> 없이 alt 텍스트로 나온다", async () => {
+  vi.spyOn(apiClient, "get").mockResolvedValue({
+    data: {
+      note: {
+        body_md: "![beacon](http://evil.tracker.example/pixel.gif)",
+        updated_at: "2026-08-27T00:00:00.000Z",
+      },
+    },
+  } as never);
+  const { container } = renderPane();
+  await screen.findByText("beacon");
+  expect(container.querySelector("img")).toBeNull();
+});
+
 test("'편집'을 누르면 textarea가 열린다", async () => {
   const user = userEvent.setup();
   vi.spyOn(apiClient, "get").mockResolvedValue({
@@ -103,6 +117,37 @@ test("'완료'를 누르면 읽기모드로 돌아온다", async () => {
   renderPane();
   await user.click(await screen.findByRole("button", { name: "편집" }));
   await user.click(screen.getByRole("button", { name: "완료" }));
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("textbox", { name: "메모 본문" }),
+    ).not.toBeInTheDocument(),
+  );
+});
+
+test("회의가 바뀌면 편집 중이었어도 읽기모드로 돌아온다", async () => {
+  const user = userEvent.setup();
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  vi.spyOn(apiClient, "get").mockResolvedValue({
+    data: { note: { body_md: "본문", updated_at: "2026-08-27T00:00:00.000Z" } },
+  } as never);
+  const { rerender } = render(
+    <QueryClientProvider client={qc}>
+      <NotePane meetingId="mtg_1" />
+    </QueryClientProvider>,
+  );
+  await user.click(await screen.findByRole("button", { name: "편집" }));
+  expect(
+    screen.getByRole("textbox", { name: "메모 본문" }),
+  ).toBeInTheDocument();
+
+  rerender(
+    <QueryClientProvider client={qc}>
+      <NotePane meetingId="mtg_2" />
+    </QueryClientProvider>,
+  );
+
   await waitFor(() =>
     expect(
       screen.queryByRole("textbox", { name: "메모 본문" }),

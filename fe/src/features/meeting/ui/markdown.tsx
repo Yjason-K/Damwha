@@ -64,6 +64,14 @@ export function Markdown({ body }: { body: string }) {
           ),
           li: ({ children }) => <li className="text-sm">{children}</li>,
           a: SafeLink,
+          // 이미지 첨부는 스펙 비목표다. <img>를 그대로 그리면 뷰어가 열 때마다
+          // 외부 URL로 요청이 나가 로컬 전용 제품 전제를 깬다 — alt 텍스트만
+          // 남기고 태그 자체를 없앤다.
+          img: ({ alt }) => (
+            <span className="text-[color:var(--text-faint)]">
+              {alt && alt.trim().length > 0 ? alt : "[이미지]"}
+            </span>
+          ),
           blockquote: ({ children }) => (
             <blockquote className="border-l-2 border-border pl-3 text-[color:var(--text-muted)]">
               {children}
