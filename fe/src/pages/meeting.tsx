@@ -5,12 +5,14 @@ import { Button } from "@/shared/ui/button";
 import { useToast } from "@/shared/ui/use-toast";
 
 import {
+  useCancelExtraction,
   useRetryExtraction,
   useSetLensCompletion,
 } from "@/features/lens/api/lenses";
 import { useMeetingLenses } from "@/features/meeting/api/lenses";
 import { formatClock, mapMeetingLenses } from "@/features/meeting/api/mappers";
 import {
+  useCancelSummary,
   useGenerateSummary,
   useMeeting,
   useMeetingStatus,
@@ -242,6 +244,8 @@ function MeetingView({
   const { data: meetingLensData } = useMeetingLenses(meetingId);
   const setLensCompletion = useSetLensCompletion();
   const extractLenses = useRetryExtraction();
+  const cancelExtraction = useCancelExtraction();
+  const cancelSummary = useCancelSummary();
   const generateSummary = useGenerateSummary();
   const processingSettings = useProcessingSettings();
   const [summaryModel, setSummaryModel] = React.useState<
@@ -455,6 +459,8 @@ function MeetingView({
           lensExtractionStatus={meetingLensData?.extractionStatus ?? null}
           onExtractLenses={() => extractLenses.mutate(meeting.id)}
           extracting={extractLenses.isPending}
+          onCancelSummary={() => cancelSummary.mutate(meeting.id)}
+          onCancelLenses={() => cancelExtraction.mutate(meeting.id)}
         />
       </>
     );

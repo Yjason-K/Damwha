@@ -66,6 +66,8 @@ function renderPane(
     lensExtractionStatus: "done" as const,
     onExtractLenses: vi.fn(),
     extracting: false,
+    onCancelSummary: vi.fn(),
+    onCancelLenses: vi.fn(),
     ...props,
   };
   render(<InsightPane {...merged} />);
@@ -171,6 +173,41 @@ describe("InsightPane", () => {
     ).toBeInTheDocument();
   });
 
+  it("요약 생성 중이면 취소할 수 있다", () => {
+    const props = renderPane({
+      meeting: meeting({ summaryStatus: "running", topics: [], segments: [] }),
+    });
+    fireEvent.click(
+      within(screen.getByRole("status")).getByRole("button", { name: "취소" }),
+    );
+    expect(props.onCancelSummary).toHaveBeenCalled();
+  });
+
+  it("요청 응답 전(regenerating)에는 취소 버튼이 없다 — 아직 잡이 없어 409다", () => {
+    renderPane({
+      meeting: meeting({ summaryStatus: "done", topics: [], segments: [] }),
+      regenerating: true,
+    });
+    expect(
+      within(screen.getByRole("status")).queryByRole("button", {
+        name: "취소",
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("요약을 취소했으면 실패가 아니라 취소 문구를 보여준다", () => {
+    renderPane({
+      meeting: meeting({
+        summaryStatus: "failed",
+        summaryError: { code: "cancelled", message: "cancelled by operator" },
+      }),
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("요약을 취소했어요");
+    expect(
+      screen.getByRole("button", { name: "요약 다시 만들기" }),
+    ).toBeInTheDocument();
+  });
+
   it("요약이 실패하면 재생성 버튼을 누를 수 있다", () => {
     const props = renderPane({ meeting: meeting({ summaryStatus: "failed" }) });
     fireEvent.click(screen.getByRole("button", { name: "요약 다시 만들기" }));
@@ -243,6 +280,14 @@ describe("InsightPane", () => {
     expect(
       screen.queryByRole("button", { name: "지금 찾기" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("추출이 도는 동안 취소할 수 있다", () => {
+    const props = renderPane({ lensExtractionStatus: "running" });
+    fireEvent.click(
+      within(screen.getByRole("status")).getByRole("button", { name: "취소" }),
+    );
+    expect(props.onCancelLenses).toHaveBeenCalled();
   });
 
   it("눌러서 요청이 날아가는 동안에도 진행 상태로 바뀐다 (응답 전 중복 클릭 방지)", () => {

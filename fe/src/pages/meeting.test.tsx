@@ -639,6 +639,9 @@ const fx = vi.hoisted(() => {
         data: { meeting_id: "m1", processing_version: 1, job_id: "job_9" },
       });
     }
+    if (/^\/meetings\/[^/]+\/(summary|lenses)\/cancel$/.test(url)) {
+      return Promise.resolve({ data: { job_id: "job_5", status: "failed" } });
+    }
     if (/^\/meetings\/[^/]+\/cancel$/.test(url)) {
       return Promise.resolve({
         data: { meeting_id: "m3", job_id: "job_3", status: "failed" },
@@ -1247,6 +1250,21 @@ test("summary가 done인 회의는 요약 탭이 실제 데이터로 채워지�
     expect(apiClient.post).toHaveBeenCalledWith(
       "/lenses/lens_m4_action/complete",
     ),
+  );
+});
+
+test("요약 생성 중인 회의는 취소 버튼으로 POST /summary/cancel을 부른다", async () => {
+  fx.setDetailOverride("m1", {
+    ...fx.detailOf("m1"),
+    summary: { status: "running", topics: [], segments: [], error: null },
+  });
+  renderShell("/meetings/m1");
+  const busy = (await screen.findByText("요약을 만들고 있어요")).closest(
+    "[role=status]",
+  ) as HTMLElement;
+  fireEvent.click(within(busy).getByRole("button", { name: "취소" }));
+  await waitFor(() =>
+    expect(apiClient.post).toHaveBeenCalledWith("/meetings/m1/summary/cancel"),
   );
 });
 

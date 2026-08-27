@@ -282,6 +282,24 @@ export function useResolveCluster() {
   });
 }
 
+/** 요약 생성 취소 (POST /meetings/:id/summary/cancel). 진행 중(queued/running)이 없으면 409. */
+export function useCancelSummary() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { data } = await apiClient.post<{
+        job_id: string;
+        status: "failed";
+      }>(`/meetings/${id}/summary/cancel`);
+      return data;
+    },
+    onSuccess: (_data, id) => {
+      queryClient.invalidateQueries({ queryKey: ["meeting", id] });
+      queryClient.invalidateQueries({ queryKey: ["meeting-status", id] });
+    },
+  });
+}
+
 /** 대화 요약 생성/재생성 (POST /meetings/:id/summary/generate). done에서만 허용(그 외 409). */
 export function useGenerateSummary() {
   const queryClient = useQueryClient();
