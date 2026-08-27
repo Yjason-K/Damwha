@@ -27,10 +27,7 @@ tar -xzf damwha-deploy-$VER.tar.gz && cd damwha
 cp .env.example .env     # HF_TOKEN 채우기, DAMWHA_VERSION이 $VER과 같은지 확인
 ```
 
-이미지는 GHCR에 있다. private이면 한 번 로그인:
-```bash
-gh auth token | docker login ghcr.io -u "$(gh api user -q .login)" --password-stdin
-```
+이미지는 GHCR에 공개돼 있어 `docker login` 없이 받아진다.
 
 ## 2. 띄우기
 
