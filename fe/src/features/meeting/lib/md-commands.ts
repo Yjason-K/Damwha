@@ -33,7 +33,7 @@ export function toggleWrap(sel: Selection, marker: string): Selection {
  */
 export function toggleLinePrefix(sel: Selection, prefix: string): Selection {
   const { text, start, end } = sel;
-  const lineStart = text.lastIndexOf("\n", start - 1) + 1;
+  const lineStart = start === 0 ? 0 : text.lastIndexOf("\n", start - 1) + 1;
   const nextBreak = text.indexOf("\n", end);
   const lineEnd = nextBreak === -1 ? text.length : nextBreak;
 

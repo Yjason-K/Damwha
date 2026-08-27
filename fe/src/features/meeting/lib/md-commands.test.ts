@@ -57,6 +57,13 @@ describe("toggleLinePrefix", () => {
     const out = toggleLinePrefix({ text: "가\n\n나", start: 0, end: 4 }, "- ");
     expect(out.text).toBe("- 가\n\n- 나");
   });
+
+  it("문서 첫 줄이 빈 줄이면 커서가 0이어도 건드리지 않는다", () => {
+    const out = toggleLinePrefix({ text: "\n둘째", start: 0, end: 0 }, "- ");
+    expect(out.text).toBe("\n둘째");
+    expect(out.start).toBe(0);
+    expect(out.end).toBe(0);
+  });
 });
 
 describe("insertLink", () => {
