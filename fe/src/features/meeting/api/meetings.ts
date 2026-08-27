@@ -185,6 +185,7 @@ export function useDeleteMeeting() {
       queryClient.removeQueries({ queryKey: ["meeting", vars.id] });
       queryClient.removeQueries({ queryKey: ["meeting-status", vars.id] });
       queryClient.removeQueries({ queryKey: ["meeting-lenses", vars.id] });
+      queryClient.removeQueries({ queryKey: ["meeting-note", vars.id] });
       queryClient.invalidateQueries({ queryKey: ["meetings"] });
     },
   });
