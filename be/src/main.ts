@@ -13,6 +13,9 @@ import { loadEnv } from './config/env';
 async function bootstrap() {
   const env = loadEnv();
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // 회의 메모(meeting_note) 상한이 100,000자 — UTF-8로 한글은 글자당 3바이트라
+  // 약 300KB. Express 기본 100kb 제한으로는 스펙의 상한 자체에 도달할 수 없다.
+  app.useBodyParser('json', { limit: '1mb' });
   app.enableCors(); // 개인용 셀프호스팅 전제 (제한 없는 기본형)
   // 모든 API는 /api 아래. SPA 라우트(/meetings/:id)와 API(GET /meetings/:id)가 같은
   // 경로라 한 origin에서 같이 서빙하려면 한쪽에 prefix가 있어야 한다. Swagger는 /docs 그대로.
