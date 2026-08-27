@@ -34,7 +34,9 @@ function SafeLink({
 
 export function Markdown({ body }: { body: string }) {
   return (
-    <div className="flex flex-col gap-3 text-sm leading-relaxed text-foreground">
+    // break-words가 없으면 붙여넣은 긴 URL 한 줄이 좁은 인사이트 레일을
+    // 가로로 밀어낸다 — 표와 코드 블록만 각자 overflow-x-auto를 갖고 있다.
+    <div className="flex flex-col gap-3 break-words text-sm leading-relaxed text-foreground">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{

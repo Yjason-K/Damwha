@@ -1,220 +1,30 @@
-import * as React from "react";
-
-import { Button } from "@/shared/ui/button";
-import { IconButton } from "@/shared/ui/icon-button";
-
-import { type SaveState, useAutosaveNote } from "../api/notes";
-import {
-  insertLink,
-  toggleLinePrefix,
-  toggleWrap,
-  type Selection,
-} from "../lib/md-commands";
-import { Icon, type IconName } from "./icons";
-import { Markdown } from "./markdown";
-
-type Command = {
-  label: string;
-  icon: IconName;
-  run: (sel: Selection) => Selection;
-};
-
-const COMMANDS: Command[] = [
-  { label: "굵게", icon: "bold", run: (s) => toggleWrap(s, "**") },
-  { label: "기울임", icon: "italic", run: (s) => toggleWrap(s, "*") },
-  { label: "제목", icon: "heading", run: (s) => toggleLinePrefix(s, "## ") },
-  { label: "목록", icon: "bulletList", run: (s) => toggleLinePrefix(s, "- ") },
-  {
-    label: "체크박스",
-    icon: "checkSquare",
-    run: (s) => toggleLinePrefix(s, "- [ ] "),
-  },
-  { label: "링크", icon: "link", run: insertLink },
-  { label: "코드", icon: "code", run: (s) => toggleWrap(s, "`") },
-];
-
-const SAVE_LABEL: Record<SaveState, string> = {
-  idle: "",
-  saving: "저장 중",
-  saved: "저장됨",
-  error: "저장 실패",
-};
+import { useAutosaveNote } from "../api/notes";
+import { NoteEditor } from "./note-editor";
 
 /**
- * 인사이트 레일의 메모 탭. 읽기모드와 편집모드를 오간다 — 렌더된 문서를
- * 클릭하는 것만으로 편집이 시작되면 문서 안의 링크·체크박스와 편집 진입이
- * 섞인다.
+ * 인사이트 레일의 메모 탭 — `useAutosaveNote`를 `NoteEditor`에 이어 붙이는
+ * 컨테이너. 화면은 전부 `NoteEditor`가 그린다.
+ *
+ * `key={meetingId}`로 회의가 바뀌면 편집기를 새로 마운트한다. 이전 회의에서
+ * 편집 중이었더라도 새 회의는 읽기모드로 시작해야 하기 때문이다. 대기 중인
+ * 입력은 이 리마운트와 무관하게 안전하다 — flush는 `useAutosaveNote`가
+ * 소유하고, 그 훅은 여기(부모)에 있어 리마운트되지 않는다.
  */
 export function NotePane({ meetingId }: { meetingId: string }) {
   const { body, isLoading, isError, refetch, state, change, flush, retry } =
     useAutosaveNote(meetingId);
-  const [editing, setEditing] = React.useState(false);
-  const boxRef = React.useRef<HTMLTextAreaElement | null>(null);
-
-  // 회의가 바뀌면 이전 회의에서 편집 중이었어도 새 회의는 읽기모드로 보여야
-  // 한다. setState는 effect가 아니라 렌더 중에 조정한다 — `notes.ts`의
-  // draft 리셋과 같은 패턴이라 react-hooks/set-state-in-effect에 걸리지 않는다.
-  const [prevMeetingId, setPrevMeetingId] = React.useState(meetingId);
-  if (prevMeetingId !== meetingId) {
-    setPrevMeetingId(meetingId);
-    setEditing(false);
-  }
-
-  const done = React.useCallback(() => {
-    flush();
-    setEditing(false);
-  }, [flush]);
-
-  const apply = React.useCallback(
-    (command: Command) => {
-      const box = boxRef.current;
-      if (!box) return;
-      const next = command.run({
-        text: box.value,
-        start: box.selectionStart,
-        end: box.selectionEnd,
-      });
-      change(next.text);
-      // 값이 리렌더로 반영된 뒤에 선택을 복원해야 커서가 끝으로 튀지 않는다.
-      requestAnimationFrame(() => {
-        box.focus();
-        box.setSelectionRange(next.start, next.end);
-      });
-    },
-    [change],
-  );
-
-  const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      done();
-      return;
-    }
-    if (!(event.metaKey || event.ctrlKey)) return;
-    if (event.key === "Enter") {
-      event.preventDefault();
-      done();
-      return;
-    }
-    const key = event.key.toLowerCase();
-    if (key === "b") {
-      event.preventDefault();
-      apply(COMMANDS[0]);
-    }
-    if (key === "i") {
-      event.preventDefault();
-      apply(COMMANDS[1]);
-    }
-  };
-
-  if (isLoading) {
-    return (
-      <div className="px-4 py-10 text-center" role="status" aria-busy="true">
-        <p className="text-sm text-[color:var(--text-muted)]">
-          메모를 불러오는 중…
-        </p>
-      </div>
-    );
-  }
-
-  // 조회 자체가 실패했을 때는 편집을 열지 않는다 — 여기서 편집을 허용하면
-  // 사용자가 진짜 메모 위에 빈 화면을 덧쓰고, 저장이 그 진짜 메모를
-  // 지워 버린다. "메모 없음"과 "불러오기 실패"는 반드시 다른 화면이어야 한다.
-  if (isError) {
-    return (
-      <div className="flex flex-col items-center gap-2 px-4 py-10 text-center">
-        <Icon name="x" size={20} className="text-[color:var(--text-faint)]" />
-        <p className="text-sm text-[color:var(--text-muted)]">
-          메모를 불러오지 못했어요.
-        </p>
-        <Button variant="secondary" size="sm" onClick={() => refetch()}>
-          다시 시도
-        </Button>
-      </div>
-    );
-  }
-
-  if (!editing) {
-    if (body.trim().length === 0) {
-      return (
-        <div className="flex flex-col items-center gap-2 px-4 py-10 text-center">
-          <Icon
-            name="pencil"
-            size={20}
-            className="text-[color:var(--text-faint)]"
-          />
-          <p className="text-sm text-[color:var(--text-muted)]">
-            아직 메모가 없어요.
-          </p>
-          <p className="text-xs text-[color:var(--text-faint)]">
-            회의 중 남긴 메모가 여기에 모여요.
-          </p>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => setEditing(true)}
-          >
-            메모 쓰기
-          </Button>
-        </div>
-      );
-    }
-    return (
-      <div className="flex flex-col gap-3 px-4 py-3">
-        <div className="flex items-center justify-end">
-          <Button variant="ghost" size="sm" onClick={() => setEditing(true)}>
-            편집
-          </Button>
-        </div>
-        <Markdown body={body} />
-      </div>
-    );
-  }
 
   return (
-    <div className="flex flex-col gap-2 px-4 py-3">
-      <div className="flex flex-wrap items-center gap-0.5 border-b border-border pb-2">
-        {COMMANDS.map((command) => (
-          <IconButton
-            key={command.label}
-            size="sm"
-            label={command.label}
-            onClick={() => apply(command)}
-          >
-            <Icon name={command.icon} size={15} />
-          </IconButton>
-        ))}
-      </div>
-
-      <textarea
-        ref={boxRef}
-        aria-label="메모 본문"
-        value={body}
-        onChange={(event) => change(event.target.value)}
-        onKeyDown={onKeyDown}
-        autoFocus
-        className="min-h-64 w-full resize-y rounded-sm border border-border bg-[var(--surface-app)] p-2 font-mono text-sm leading-relaxed text-foreground outline-none focus-visible:border-primary"
-      />
-
-      <div className="flex items-center justify-between gap-2">
-        <span
-          className="text-2xs text-[color:var(--text-faint)]"
-          role="status"
-          aria-live="polite"
-        >
-          {SAVE_LABEL[state]}
-        </span>
-        <div className="flex items-center gap-1">
-          {state === "error" ? (
-            <Button variant="secondary" size="sm" onClick={retry}>
-              다시 시도
-            </Button>
-          ) : null}
-          <Button variant="ghost" size="sm" onClick={done}>
-            완료
-          </Button>
-        </div>
-      </div>
-    </div>
+    <NoteEditor
+      key={meetingId}
+      body={body}
+      onChange={change}
+      isLoading={isLoading}
+      isError={isError}
+      saveState={state}
+      onDone={flush}
+      onRetrySave={retry}
+      onReload={() => refetch()}
+    />
   );
 }
