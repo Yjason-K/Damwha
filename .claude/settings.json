@@ -25,7 +25,8 @@
     "caveman@caveman": true,
     "notion@claude-plugins-official": true,
     "humanize-korean@im-not-ai": true,
-    "eli5@claude-community": true
+    "eli5@claude-community": true,
+    "ponytail@ponytail": true
   },
   "extraKnownMarketplaces": {
     "im-not-ai": {
