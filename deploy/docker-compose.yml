@@ -1,0 +1,55 @@
+# Damwha team trial — Postgres + API/SPA in Docker, ML worker on the host.
+# Both this file and the host worker read the `.env` next to it (compose for
+# ${...} substitution, the worker via pydantic-settings). See README.md.
+services:
+  postgres:
+    image: ghcr.io/yjason-k/damwha-postgres:${DAMWHA_VERSION}
+    container_name: damwha-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: damwha
+    ports:
+      - "5432:5432"        # the host worker connects here (DATABASE_URL in .env)
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d damwha"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    image: ghcr.io/yjason-k/damwha-api:${DAMWHA_VERSION}
+    container_name: damwha-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"        # UI + API + Swagger (/docs)
+    environment:
+      # Inside the compose network Postgres is `postgres`, not localhost —
+      # this deliberately differs from the DATABASE_URL the host worker reads.
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/damwha
+      STORAGE_ROOT: ./storage
+      # The embed service runs on the host (needs the ML venv), so from the
+      # container it is not loopback — opt in explicitly.
+      EMBED_SERVICE_URL: http://host.docker.internal:8100
+      EMBED_SERVICE_ALLOW_NON_LOOPBACK: "true"
+      # GPU eligibility belongs to the host the worker runs on, not this Linux
+      # container — without these the API refuses every gpu preset.
+      CAPABILITIES_PLATFORM: darwin
+      CAPABILITIES_ARCH: arm64
+      # Stamped into every job payload; must equal what the worker's .env says.
+      LENS_LLM_MODEL: ${LENS_LLM_MODEL}
+      SUMMARY_LLM_MODEL: ${SUMMARY_LLM_MODEL}
+    volumes:
+      # Same directory the host worker uses as STORAGE_ROOT=./storage
+      - ./storage:/repo/be/storage
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  pgdata:

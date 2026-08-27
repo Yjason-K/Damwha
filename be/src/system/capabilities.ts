@@ -49,10 +49,15 @@ function sysctlChip(): Promise<string | null> {
 let cached: Capabilities | null = null;
 export async function detectCapabilities(): Promise<Capabilities> {
   if (cached) return cached;
+  // GPU 적격성은 워커가 도는 머신의 것이지 API가 도는 머신의 것이 아니다. 배포 이미지
+  // (deploy/)에서는 API가 Linux 컨테이너 안이고 워커는 호스트 Mac이라, compose가
+  // 호스트 플랫폼을 이 두 env로 알려준다. 개발에선 비어 있고 프로세스 값을 쓴다.
+  const platform = process.env.CAPABILITIES_PLATFORM || process.platform;
+  const arch = process.env.CAPABILITIES_ARCH || process.arch;
   const chip = process.platform === 'darwin' ? await sysctlChip() : null;
   cached = buildCapabilities({
-    platform: process.platform,
-    arch: process.arch,
+    platform,
+    arch,
     totalmemBytes: os.totalmem(),
     chip,
   });

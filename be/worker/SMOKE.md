@@ -131,10 +131,10 @@ After a meeting is processed (`status=done`), trigger search indexing:
 
 ```bash
 # reindex all un-indexed meetings
-curl -s -X POST http://localhost:3000/meetings/reindex-missing | python3 -m json.tool
+curl -s -X POST http://localhost:3000/api/meetings/reindex-missing | python3 -m json.tool
 
 # hybrid search (BM25 + dense RRF)
-curl -s 'http://localhost:3000/search' \
+curl -s 'http://localhost:3000/api/search' \
   -H 'Content-Type: application/json' \
   -d '{"q":"검색어","limit":10}' | python3 -m json.tool
 ```
@@ -242,7 +242,7 @@ SUMMARY_LLM_MODEL=mlx-community/Qwen3.5-4B-8bit   # 카탈로그 밖 값이면 A
 uv run python -m damwha_worker
 
 # 2) 실제 추출
-curl -s -X POST http://localhost:3000/meetings/<id>/lenses/extract   # status=done인 회의
+curl -s -X POST http://localhost:3000/api/meetings/<id>/lenses/extract   # status=done인 회의
 # run/job이 done이 되고 lens_item + lens_evidence가 생기는지 확인
 
 # 3) managed 경로 확인 — job 도는 동안에만 프로세스가 보이고, 끝나면 사라진다

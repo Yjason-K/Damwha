@@ -47,7 +47,7 @@ cp fe/.env.example fe/.env                # VITE_API_BASE_URL
 
 pnpm db:up                 # Postgres (pgvector + pg_bigm); first run builds the image
 pnpm be:migrate            # apply SQL migrations
-pnpm dev                   # API :3000 (Swagger /docs) + Vite :5173, in parallel
+pnpm dev                   # API :3000 (routes under /api, Swagger /docs) + Vite :5173, in parallel
 ```
 
 That gets you the API and the UI. Uploading a recording additionally needs the
@@ -178,6 +178,15 @@ each other, so the rest can start in any order (and later, without a restart):
 Then upload a recording in the UI (or `POST /meetings`), and watch the meeting go
 `queued → done` with a speaker-attributed timeline. End-to-end smoke scripts, per-preset
 checks, and the quality-measurement tooling live in [`be/worker/SMOKE.md`](be/worker/SMOKE.md).
+
+## Sharing a build with teammates
+
+`deploy/` packages the API + SPA as one Docker image and the worker as a wheel so a
+teammate needs no source checkout: `deploy/release.sh <version>` pushes the two
+arm64 images to GHCR and attaches the wheel plus a tarball of the run folder to a
+GitHub Release. The teammate-facing instructions are [`deploy/README.md`](deploy/README.md).
+The worker still runs on the host — MLX needs Apple Silicon, which Docker's Linux VM
+can't provide.
 
 ## Common tasks
 
