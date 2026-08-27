@@ -1,6 +1,7 @@
-/* Geist + Geist Mono — synced from "Damwha Design System" tokens/fonts.css.
- * Kept first so the @import precedes Tailwind's emitted rules. */
-@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap");
+/* Inter + JetBrains Mono — the Cursor-tone type pair. Inter is the documented
+ * open-source stand-in for the licensed CursorGothic; JetBrains Mono carries
+ * every code/numeric surface. Kept first so the @import precedes Tailwind. */
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
 @import "tailwindcss" source("../");
 @import "tw-animate-css";
 
@@ -8,7 +9,8 @@
 
 /* ============================================================
  * Damwha Design System (codename "Timbre")
- * Synced from claude.ai/design · light-first reading UI.
+ * Light-first reading UI, toned to the Cursor design language: warm cream
+ * canvas, warm near-black ink, a single scarce orange voltage.
  *
  * Raw scales + semantic aliases live in :root (a faithful mirror of
  * the design system's tokens/*.css). shadcn's token contract is mapped
@@ -16,67 +18,70 @@
  * and future shadcn components render on-brand automatically.
  * ============================================================ */
 :root {
-  /* --- Neutral scale (cool gray, 0 = white → 12 = near-black) --- */
+  /* --- Neutral scale (WARM gray, 0 = white → 12 = warm near-black) --- */
   --gray-0: #ffffff;
-  --gray-1: #fcfcfd;
-  --gray-2: #f7f8fa;
-  --gray-3: #eef0f3;
-  --gray-4: #e4e7ec;
-  --gray-5: #d7dbe2;
-  --gray-6: #c3c9d2;
-  --gray-7: #a4abb6;
-  --gray-8: #848d99;
-  --gray-9: #5d6673;
-  --gray-10: #3c4350;
-  --gray-11: #262b33;
-  --gray-12: #14171c;
+  --gray-1: #fafaf7;
+  --gray-2: #f7f7f4;
+  --gray-3: #efeee8;
+  --gray-4: #e6e5e0;
+  --gray-5: #cfcdc4;
+  --gray-6: #bcb9ae;
+  --gray-7: #a09c92;
+  --gray-8: #807d72;
+  --gray-9: #5a5852;
+  --gray-10: #45443e;
+  --gray-11: #33322c;
+  --gray-12: #26251e;
 
-  /* --- Accent: restrained indigo-blue --- */
-  --accent-1: #f5f7ff;
-  --accent-2: #eaeefe;
-  --accent-3: #d8e0fd;
-  --accent-6: #b3c1f7;
-  --accent-9: #3b5bdb;
-  --accent-10: #3350c4;
-  --accent-11: #2f49b8;
-  --accent-12: #1c2a66;
+  /* --- Accent: Cursor Orange. One voltage, spent sparingly. --- */
+  --accent-1: #fef7f3;
+  --accent-2: #fdeade;
+  --accent-3: #fbd5c1;
+  --accent-6: #f7a67c;
+  --accent-9: #f54e00;
+  --accent-10: #d04200;
+  --accent-11: #a83600;
+  --accent-12: #5c1e00;
 
   /* --- Semantic: success / warning / danger --- */
-  --green-bg: #e9f4ee;
-  --green-9: #1f8a5b;
-  --green-text: #156348;
-  --amber-bg: #f8f0df;
+  --green-bg: #e7f2ec;
+  --green-9: #1f8a65;
+  --green-text: #14654a;
+  --amber-bg: #f7efdc;
   --amber-9: #b5821f;
-  --amber-text: #875f12;
-  --red-bg: #fbecec;
-  --red-9: #cf3f3f;
-  --red-text: #a02d2d;
+  --amber-text: #7d5a10;
+  --red-bg: #fbe9ee;
+  --red-9: #cf2d56;
+  --red-text: #a11f42;
 
-  /* --- Speaker palette (8 hues): -solid / -bg / -text --- */
-  --spk-1-solid: #5570e8;
-  --spk-1-bg: #ebeefc;
-  --spk-1-text: #3a4cbf;
-  --spk-2-solid: #1fa579;
-  --spk-2-bg: #e3f3ec;
-  --spk-2-text: #137a57;
-  --spk-3-solid: #dda12c;
-  --spk-3-bg: #f8f0db;
-  --spk-3-text: #8a6212;
-  --spk-4-solid: #e26b97;
-  --spk-4-bg: #fbe9f0;
-  --spk-4-text: #b23e6a;
-  --spk-5-solid: #9166d6;
-  --spk-5-bg: #f0eafb;
-  --spk-5-text: #6a40a8;
-  --spk-6-solid: #5ca24c;
-  --spk-6-bg: #eaf3e6;
-  --spk-6-text: #3d7030;
-  --spk-7-solid: #2e97bc;
-  --spk-7-bg: #e5f2f7;
-  --spk-7-text: #1f6f8c;
-  --spk-8-solid: #c77a42;
-  --spk-8-bg: #f7ece2;
-  --spk-8-text: #8f5526;
+  /* --- Speaker palette (8 hues): -solid / -bg / -text.
+   * Toned to the Cursor timeline pastels (blue · mint · peach · lavender ·
+   * gold) and extended by three; -solid is deepened so white initials on an
+   * avatar stay legible, while -bg keeps the pastel lightness. --- */
+  --spk-1-solid: #4a7bb5;
+  --spk-1-bg: #e9eff7;
+  --spk-1-text: #2e5580;
+  --spk-2-solid: #4f9457;
+  --spk-2-bg: #e9f3ea;
+  --spk-2-text: #326839;
+  --spk-3-solid: #c2694a;
+  --spk-3-bg: #f8ebe5;
+  --spk-3-text: #8d452a;
+  --spk-4-solid: #7d5fb0;
+  --spk-4-bg: #efeaf7;
+  --spk-4-text: #573f81;
+  --spk-5-solid: #b07d2c;
+  --spk-5-bg: #f6efdd;
+  --spk-5-text: #77551a;
+  --spk-6-solid: #c05270;
+  --spk-6-bg: #f9eaee;
+  --spk-6-text: #8c3450;
+  --spk-7-solid: #3d8f8c;
+  --spk-7-bg: #e6f1f0;
+  --spk-7-text: #276260;
+  --spk-8-solid: #7d8a3f;
+  --spk-8-bg: #f0f2e2;
+  --spk-8-text: #545e26;
 
   /* --- Semantic aliases (reference these in components, not raw scales) --- */
   --surface-app: var(--gray-2);
@@ -85,7 +90,7 @@
   --surface-sunken: var(--gray-2);
   --surface-hover: var(--gray-3);
   --surface-active: var(--accent-2);
-  --surface-overlay: rgba(20, 23, 28, 0.45);
+  --surface-overlay: rgba(38, 37, 30, 0.5);
 
   --text-primary: var(--gray-12);
   --text-secondary: var(--gray-9);
@@ -123,16 +128,16 @@
 
   /* --- Elevation (borders do most of the work; shadows for overlays) --- */
   --shadow-none: none;
-  --shadow-xs: 0 1px 1px rgba(20, 23, 28, 0.04);
+  --shadow-xs: 0 1px 1px rgba(38, 37, 30, 0.04);
   --shadow-sm:
-    0 1px 2px rgba(20, 23, 28, 0.05), 0 1px 1px rgba(20, 23, 28, 0.03);
+    0 1px 2px rgba(38, 37, 30, 0.05), 0 1px 1px rgba(38, 37, 30, 0.03);
   --shadow-md:
-    0 6px 16px rgba(20, 23, 28, 0.08), 0 2px 5px rgba(20, 23, 28, 0.04),
-    0 0 0 1px rgba(20, 23, 28, 0.04);
+    0 6px 16px rgba(38, 37, 30, 0.08), 0 2px 5px rgba(38, 37, 30, 0.04),
+    0 0 0 1px rgba(38, 37, 30, 0.04);
   --shadow-lg:
-    0 16px 40px rgba(20, 23, 28, 0.14), 0 6px 14px rgba(20, 23, 28, 0.07),
-    0 0 0 1px rgba(20, 23, 28, 0.05);
-  --shadow-inset: inset 0 1px 2px rgba(20, 23, 28, 0.05);
+    0 16px 40px rgba(38, 37, 30, 0.14), 0 6px 14px rgba(38, 37, 30, 0.07),
+    0 0 0 1px rgba(38, 37, 30, 0.05);
+  --shadow-inset: inset 0 1px 2px rgba(38, 37, 30, 0.05);
 
   /* --- Motion --- */
   --dur-instant: 80ms;
@@ -157,9 +162,9 @@
   /* ============================================================
    * shadcn token contract → mapped onto the Timbre semantics above.
    * NOTE: shadcn's `--accent` means "hover/subtle surface", NOT the
-   * Timbre brand blue. The brand blue maps to `--primary`.
+   * Cursor Orange voltage. The brand orange maps to `--primary`.
    * ============================================================ */
-  --radius: 7px;
+  --radius: 8px;
   --background: var(--surface-app);
   --foreground: var(--text-primary);
   --card: var(--surface-card);
@@ -262,19 +267,20 @@
  * These emit CSS vars to :root, so component CSS can read var(--text-base)
  * etc. while Tailwind generates the rounded / text / font utilities. */
 @theme {
-  --radius-xs: 3px;
-  --radius-sm: 5px;
-  --radius-md: 7px;
-  --radius-lg: 10px;
-  --radius-xl: 12px;
-  --radius-full: 999px;
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
 
   --font-sans:
-    "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
     sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, "SF Mono", "Menlo", monospace;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Menlo", monospace;
 
-  /* Dense UI scale (14px base, Linear/Geist style) */
+  /* Dense UI scale (14px base) — density is deliberately NOT Cursor's
+   * editorial 16px rhythm; this is a three-pane reading shell. */
   --text-2xs: 0.6875rem;
   --text-xs: 0.75rem;
   --text-sm: 0.8125rem;

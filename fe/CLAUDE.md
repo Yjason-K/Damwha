@@ -95,8 +95,10 @@ Division of labor: `DESIGN.md` = how it should look and why · `src/index.css` =
 **Tailwind v4 via `@tailwindcss/vite` — there is no `tailwind.config`.** All theming is CSS-first in `src/index.css`:
 
 - `:root` holds the Damwha (Timbre) design tokens: raw scales (`--gray-*`, `--accent-*`, speaker palette `--spk-N-*`) and **semantic aliases** (`--surface-*`, `--text-*`, `--border-*`). Reference the semantic aliases in components, not raw scales.
-- The **shadcn token contract** (`--background`, `--primary`, `--sidebar-*`, …) is mapped _onto_ those Timbre semantics at the bottom of the `:root` block, so shadcn components render on-brand automatically. Caveat: shadcn's `--accent` means "hover/subtle surface", and the brand blue is `--primary` (not `--accent`).
-- `@theme inline` / `@theme` blocks expose these as Tailwind utilities (`bg-primary`, `text-spk-1-text`, `rounded-md`, dense `text-*` scale, Geist fonts).
+- The **shadcn token contract** (`--background`, `--primary`, `--sidebar-*`, …) is mapped _onto_ those Timbre semantics at the bottom of the `:root` block, so shadcn components render on-brand automatically. Caveat: shadcn's `--accent` means "hover/subtle surface", and the brand orange is `--primary` (not `--accent`).
+- `@theme inline` / `@theme` blocks expose these as Tailwind utilities (`bg-primary`, `text-spk-1-text`, `rounded-md`, dense `text-*` scale, Inter / JetBrains Mono fonts).
+
+The palette is toned to the **Cursor** design language (warm cream canvas, warm ink, one scarce orange voltage, hairline depth). Only color / type family / radius were retoned — the dense `--text-*` scale and the `--rail-*` widths stay put, because Cursor's editorial 16px-body rhythm doesn't fit a three-pane reading shell. See `DESIGN.md` §1–2.
 
 shadcn config (`components.json`): **new-york** style, `lucide` icons, aliases pointing at `@/shared/*`. Components follow the CVA pattern — variants defined with `class-variance-authority`, co-located with the component, e.g. `buttonVariants` exported alongside `Button`.
 
