@@ -83,6 +83,19 @@ test("동작하는 헤더 버튼은 남아 있다", () => {
   expect(screen.getByRole("button", { name: "삭제" })).toBeInTheDocument();
 });
 
+test("내보내기 버튼은 done 회의에만 뜨고 누르면 다이얼로그가 열린다", () => {
+  renderPane({ utterances: LOTUS });
+  fireEvent.click(screen.getByRole("button", { name: "내보내기" }));
+  expect(
+    screen.getByRole("dialog", { name: "회의 내용 내보내기" }),
+  ).toBeInTheDocument();
+});
+
+test("처리 중인 회의에는 내보내기 버튼이 없다", () => {
+  renderPane({ status: "processing" });
+  expect(screen.queryByRole("button", { name: "내보내기" })).toBeNull();
+});
+
 test("하단 툴바의 중복·오작동 버튼을 렌더하지 않는다", () => {
   renderPane();
   expect(screen.queryByRole("button", { name: "발언 검색" })).toBeNull();
@@ -96,7 +109,7 @@ function utt(id: string, text: string, over: Partial<UtteranceEntry> = {}) {
     t: "00:00",
     text,
     status: "ok" as const,
-    sources: [{ id, startMs: 0 }],
+    sources: [{ id, startMs: 0, endMs: 1_000, text }],
     ...over,
   };
 }
@@ -368,9 +381,15 @@ test("모달이 열려 있으면 ⌘F를 가로채지 않는다", () => {
 // ── 재생 따라가기 ────────────────────────────────────────────────
 
 const TIMED = [
-  utt("p1", "첫 발언", { sources: [{ id: "p1", startMs: 0 }] }),
-  utt("p2", "둘째 발언", { sources: [{ id: "p2", startMs: 5_000 }] }),
-  utt("p3", "셋째 발언", { sources: [{ id: "p3", startMs: 12_000 }] }),
+  utt("p1", "첫 발언", {
+    sources: [{ id: "p1", startMs: 0, endMs: 4_000, text: "첫 발언" }],
+  }),
+  utt("p2", "둘째 발언", {
+    sources: [{ id: "p2", startMs: 5_000, endMs: 11_000, text: "둘째 발언" }],
+  }),
+  utt("p3", "셋째 발언", {
+    sources: [{ id: "p3", startMs: 12_000, endMs: 18_000, text: "셋째 발언" }],
+  }),
 ];
 
 function renderPlayback(playingId: string, playing: boolean) {

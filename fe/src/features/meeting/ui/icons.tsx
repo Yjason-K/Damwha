@@ -55,6 +55,7 @@ const PATHS = {
   chevUp: "M6 15l6-6 6 6",
   skipBack: "M19 5v14L9 12zM5 5v14",
   skipForward: "M5 5v14l10-7zM19 5v14",
+  download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
   x: "M6 6l12 12M18 6L6 18",
 } as const;
 

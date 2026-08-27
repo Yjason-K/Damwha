@@ -30,8 +30,17 @@ export type SpeakerLane = {
   segments: TrackSegment[];
 };
 
-/** 병합 블록을 구성하는 원본 발화 참조 — seek은 ms 정밀도의 startMs로 한다. */
-export type UtteranceSource = { id: string; startMs: number };
+/**
+ * 병합 블록을 구성하는 원본 발화 참조 — seek은 ms 정밀도의 startMs로 한다.
+ * endMs·text는 병합 이전의 발화 경계를 되찾기 위한 것으로, srt 내보내기가
+ * 블록이 아닌 원본 발화 단위로 자막 큐를 만들 때 쓴다.
+ */
+export type UtteranceSource = {
+  id: string;
+  startMs: number;
+  endMs: number;
+  text: string;
+};
 
 /**
  * 발화 카드 — 연속된 같은 화자의 ok 발화가 하나의 블록으로 병합된 표시 단위.
