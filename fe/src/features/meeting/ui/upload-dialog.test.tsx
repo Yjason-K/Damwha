@@ -123,7 +123,7 @@ test("화자 수 범위가 뒤집히면 업로드 버튼이 막힌다", () => {
   ).toBe(true);
 });
 
-test("후속 처리 스위치는 기본이 꺼짐 — defer 필드가 실리지 않는다", async () => {
+test("후속 처리는 기본이 자동 실행 — defer 필드가 실리지 않는다", async () => {
   const post = renderWithFile();
   fireEvent.click(screen.getByRole("button", { name: "업로드" }));
   await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
@@ -132,9 +132,9 @@ test("후속 처리 스위치는 기본이 꺼짐 — defer 필드가 실리지 
   expect(form.get("defer_summary")).toBeNull();
 });
 
-test("스위치를 켜면 해당 후속만 defer로 실린다", async () => {
+test("나중에 실행을 고르면 해당 후속만 defer로 실린다", async () => {
   const post = renderWithFile();
-  fireEvent.click(screen.getByRole("switch", { name: "요약은 나중에" }));
+  fireEvent.click(screen.getByRole("radio", { name: "요약 나중에 실행" }));
   fireEvent.click(screen.getByRole("button", { name: "업로드" }));
   await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
   const form = post.mock.calls[0][1] as FormData;
