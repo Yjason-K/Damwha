@@ -35,7 +35,7 @@ WHEEL="$(ls "$OUT"/damwha_worker-*.whl)"
 echo "== tarball"
 TAR="$OUT/damwha-deploy-$VERSION.tar.gz"
 mkdir "$OUT/damwha"
-cp deploy/docker-compose.yml deploy/.env.example deploy/README.md "$OUT/damwha/"
+cp deploy/docker-compose.yml deploy/.env.example deploy/README.md deploy/HUGGINGFACE.md "$OUT/damwha/"
 tar -czf "$TAR" -C "$OUT" damwha
 
 echo "== release v$VERSION"

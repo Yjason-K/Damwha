@@ -12,16 +12,16 @@
 | [uv](https://docs.astral.sh/uv/) | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | ffmpeg | `brew install ffmpeg` |
 | gh CLI (릴리스 다운로드용) | `brew install gh` → `gh auth login` |
-| Hugging Face 계정 | 화자 분리 모델(pyannote)이 gated. 아래 3개 라이선스 **모두** 수락 후 https://huggingface.co/settings/tokens 에서 read 토큰 발급 |
+| Hugging Face 계정 + read 토큰 | 화자 분리 모델(pyannote)이 gated → **[HUGGINGFACE.md](HUGGINGFACE.md)** 대로 5분. 라이선스 3개 수락 + 토큰 발급 |
 
-라이선스: [speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) · [segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) · [speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
+라이선스(전부 수락해야 한다): [speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) · [segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) · [speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
 
 메모리: 기본 설정(Qwen3.5 4B + whisper large-v3-turbo) 기준 16GB면 된다. 설정에서 `quality` 프리셋을 고르면 27B(≈28GB)를 받는다.
 
 ## 1. 받기
 
 ```bash
-VER=0.1.1    # 릴리스 태그
+VER=0.1.2    # 릴리스 태그
 gh release download "v$VER" -R Yjason-K/Damwha -p '*.tar.gz' -p '*.whl'
 tar -xzf damwha-deploy-$VER.tar.gz && cd damwha
 cp .env.example .env     # HF_TOKEN 채우기, DAMWHA_VERSION이 $VER과 같은지 확인
@@ -67,7 +67,7 @@ damwha-embed     # 터미널 2 — 검색용 임베딩. 첫 실행 30–90초 �
 | 업로드가 `queued`에서 안 움직임 | `damwha-worker` 안 떠 있음 |
 | 업로드가 `gpu is not available on this machine` 400 | compose 파일의 `CAPABILITIES_PLATFORM/ARCH`가 지워짐 — 원본 그대로 써야 한다 |
 | job이 `gpu_unavailable`로 실패 | Apple Silicon이 아니거나 Rosetta python. `uv python list`로 arm64인지 확인 |
-| 화자 분리 실패 / 401 | `HF_TOKEN` 비었거나 라이선스 3개 중 하나 미수락 |
+| 화자 분리 실패 / 401 | `HF_TOKEN` 비었거나 라이선스 3개 중 하나 미수락 → [HUGGINGFACE.md](HUGGINGFACE.md) |
 | 렌즈/요약이 `llm_server_start_failed` | `mlx_lm.server`가 PATH에 없음 → `uv tool install mlx-lm` |
 | 워커가 `DATABASE_URL` / `LENS_LLM_BASE_URL` 없다고 죽음 | `.env` 없는 폴더에서 실행함 |
 
