@@ -129,13 +129,21 @@ export function useAutosaveNote(meetingId: string | undefined) {
     mutate({ meetingId: targetMeetingId, bodyMd: value });
   }, [mutate, meetingId]);
 
+  // 회의가 바뀌면 이전 회의의 draft가 새 회의로 새어 들어가면 안 된다.
+  // setState는 effect가 아니라 렌더 중에 조정한다 — React가 권장하는 형태이고
+  // (react-hooks/set-state-in-effect), 아래 effect의 flush는 ref만 읽으므로
+  // 이 조정에 영향받지 않는다.
+  const [prevMeetingId, setPrevMeetingId] = React.useState(meetingId);
+  if (prevMeetingId !== meetingId) {
+    setPrevMeetingId(meetingId);
+    setDraft(null);
+  }
+
   // 회의가 바뀌면 이전 회의의 대기 중인 입력을 먼저 flush한다(그래야
   // pendingMeetingId가 아직 이전 회의를 가리키는 시점에 보내진다). 그 다음
-  // draft/ref를 새 회의 기준으로 초기화해, 이전 회의의 draft가 새 회의로
-  // 새어 들어가지 않게 한다.
+  // ref를 새 회의 기준으로 초기화한다.
   React.useEffect(() => {
     flush();
-    setDraft(null);
     pending.current = null;
     pendingMeetingId.current = undefined;
     lastSent.current = null;
