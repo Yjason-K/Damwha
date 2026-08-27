@@ -81,9 +81,50 @@ test("언마운트 시 대기 중인 입력을 flush한다", async () => {
   act(() => result.current.change("날리면 안 됨"));
   unmount();
 
-  await waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+  // waitFor를 그냥 쓰면 shouldAdvanceTime이 실시간과 함께 fake clock을
+  // 흘려보내다가 800ms debounce가 "저절로" 끝나 버려, 언마운트 flush가
+  // 삭제돼도 테스트가 우연히 통과할 수 있다(실제로 리뷰어가 확인함).
+  // advanceTimersByTimeAsync(0)으로 실제 시간을 흘리지 않고 마이크로태스크
+  // 큐만 비워서, 언마운트가 직접 flush를 부른 경우에만 통과하게 만든다.
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(put).toHaveBeenCalledTimes(1);
   expect(put).toHaveBeenCalledWith("/meetings/mtg_1/note", {
     body_md: "날리면 안 됨",
+  });
+});
+
+test("회의가 바뀌면 이전 회의의 대기 중인 입력을 flush한다", async () => {
+  vi.spyOn(apiClient, "get").mockResolvedValue({
+    data: { note: null },
+  } as never);
+  const put = vi.spyOn(apiClient, "put").mockResolvedValue({
+    data: {
+      note: {
+        body_md: "이전 회의 메모",
+        updated_at: "2026-08-27T00:00:00.000Z",
+      },
+    },
+  } as never);
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+
+  const { result, rerender } = renderHook(
+    ({ meetingId }: { meetingId: string }) => useAutosaveNote(meetingId),
+    { wrapper, initialProps: { meetingId: "mtg_1" } },
+  );
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+  act(() => result.current.change("이전 회의 메모"));
+  rerender({ meetingId: "mtg_2" });
+
+  // 위 언마운트 테스트와 같은 이유로 실시간 800ms가 흐르게 두지 않는다.
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(put).toHaveBeenCalledTimes(1);
+  expect(put).toHaveBeenCalledWith("/meetings/mtg_1/note", {
+    body_md: "이전 회의 메모",
   });
 });
 
