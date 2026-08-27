@@ -1,0 +1,104 @@
+import type * as React from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+
+/**
+ * 메모 본문 렌더러. `rehype-raw`를 붙이지 않으므로 raw HTML은 살아나지 않고
+ * 텍스트로 남는다 — 별도 sanitizer도 dangerouslySetInnerHTML도 쓰지 않는
+ * 이유가 이것이다.
+ *
+ * @tailwindcss/typography 대신 컴포넌트 매핑으로 Timbre semantic 토큰을 직접
+ * 적용한다. 플러그인의 자체 색·간격 스케일이 토큰과 경쟁하는 상황을 피한다.
+ */
+function SafeLink({
+  href,
+  children,
+}: {
+  href?: string;
+  children?: React.ReactNode;
+}) {
+  // javascript: 같은 스킴을 링크로 만들지 않는다. 통과한 것만 새 탭으로.
+  const safe = href && /^https?:\/\//i.test(href);
+  if (!safe) return <span>{children}</span>;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-primary underline underline-offset-2 hover:no-underline"
+    >
+      {children}
+    </a>
+  );
+}
+
+export function Markdown({ body }: { body: string }) {
+  return (
+    <div className="flex flex-col gap-3 text-sm leading-relaxed text-foreground">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          h1: ({ children }) => (
+            <h1 className="text-base font-semibold text-foreground">
+              {children}
+            </h1>
+          ),
+          h2: ({ children }) => (
+            <h2 className="text-sm font-semibold text-foreground">
+              {children}
+            </h2>
+          ),
+          h3: ({ children }) => (
+            <h3 className="text-sm font-medium text-[color:var(--text-muted)]">
+              {children}
+            </h3>
+          ),
+          p: ({ children }) => <p className="text-sm">{children}</p>,
+          ul: ({ children }) => (
+            <ul className="flex list-disc flex-col gap-1 pl-5">{children}</ul>
+          ),
+          ol: ({ children }) => (
+            <ol className="flex list-decimal flex-col gap-1 pl-5">
+              {children}
+            </ol>
+          ),
+          li: ({ children }) => <li className="text-sm">{children}</li>,
+          a: SafeLink,
+          blockquote: ({ children }) => (
+            <blockquote className="border-l-2 border-border pl-3 text-[color:var(--text-muted)]">
+              {children}
+            </blockquote>
+          ),
+          code: ({ children }) => (
+            <code className="rounded-sm bg-[var(--surface-hover)] px-1 py-0.5 font-mono text-2xs">
+              {children}
+            </code>
+          ),
+          pre: ({ children }) => (
+            <pre className="overflow-x-auto rounded-sm bg-[var(--surface-hover)] p-2 font-mono text-2xs">
+              {children}
+            </pre>
+          ),
+          hr: () => <hr className="border-border" />,
+          table: ({ children }) => (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-2xs">
+                {children}
+              </table>
+            </div>
+          ),
+          th: ({ children }) => (
+            <th className="border border-border px-2 py-1 text-left font-medium">
+              {children}
+            </th>
+          ),
+          td: ({ children }) => (
+            <td className="border border-border px-2 py-1">{children}</td>
+          ),
+        }}
+      >
+        {body}
+      </ReactMarkdown>
+    </div>
+  );
+}

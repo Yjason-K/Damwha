@@ -23,6 +23,7 @@ import type {
   SummarySegmentView,
 } from "../model/types";
 import { Icon } from "./icons";
+import { NotePane } from "./note-pane";
 
 /**
  * InsightPane — right rail: 요약/파일/메모 tabs. The 요약 tab stacks 요약 모델
@@ -532,24 +533,6 @@ function Files({ meeting }: { meeting: Meeting }) {
   );
 }
 
-function Notes() {
-  return (
-    <div className="flex flex-col items-center gap-2 px-4 py-10 text-center">
-      <Icon
-        name="pencil"
-        size={20}
-        className="text-[color:var(--text-faint)]"
-      />
-      <p className="text-sm text-[color:var(--text-muted)]">
-        아직 메모가 없어요.
-      </p>
-      <p className="text-xs text-[color:var(--text-faint)]">
-        회의 중 남긴 메모가 여기에 모여요.
-      </p>
-    </div>
-  );
-}
-
 type InsightPaneProps = {
   meeting: Meeting;
   lenses: Partial<Record<LensKind, LensEntry[]>>;
@@ -680,7 +663,7 @@ export function InsightPane({
             <Files meeting={meeting} />
           </TabsContent>
           <TabsContent value="notes" className="mt-0">
-            <Notes />
+            <NotePane meetingId={meeting.id} />
           </TabsContent>
         </div>
       </Tabs>
