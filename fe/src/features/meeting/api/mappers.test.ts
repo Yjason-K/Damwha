@@ -257,7 +257,9 @@ describe("toMeetingDetail", () => {
         t: "00:00",
         text: "안녕하세요",
         status: "ok",
-        sources: [{ id: "utt_1", startMs: 0 }],
+        sources: [
+          { id: "utt_1", startMs: 0, endMs: 60_000, text: "안녕하세요" },
+        ],
       },
       {
         id: "utt_2",
@@ -265,7 +267,14 @@ describe("toMeetingDetail", () => {
         t: "01:00",
         text: "네 반갑습니다",
         status: "ok",
-        sources: [{ id: "utt_2", startMs: 60_000 }],
+        sources: [
+          {
+            id: "utt_2",
+            startMs: 60_000,
+            endMs: 120_000,
+            text: "네 반갑습니다",
+          },
+        ],
       },
       {
         id: "utt_3",
@@ -273,7 +282,14 @@ describe("toMeetingDetail", () => {
         t: "02:00",
         text: "시작하죠",
         status: "ok",
-        sources: [{ id: "utt_3", startMs: 120_000 }],
+        sources: [
+          {
+            id: "utt_3",
+            startMs: 120_000,
+            endMs: 180_000,
+            text: "시작하죠",
+          },
+        ],
       },
       {
         id: "utt_4",
@@ -281,7 +297,14 @@ describe("toMeetingDetail", () => {
         t: "1:00:00",
         text: "정리합니다",
         status: "ok",
-        sources: [{ id: "utt_4", startMs: 3_600_000 }],
+        sources: [
+          {
+            id: "utt_4",
+            startMs: 3_600_000,
+            endMs: 3_720_000,
+            text: "정리합니다",
+          },
+        ],
       },
     ]);
   });
@@ -552,8 +575,8 @@ describe("toMeetingDetail", () => {
         text: "안녕하세요 반갑습니다",
         status: "ok",
         sources: [
-          { id: "b1", startMs: 0 },
-          { id: "b2", startMs: 60_000 },
+          { id: "b1", startMs: 0, endMs: 60_000, text: "안녕하세요" },
+          { id: "b2", startMs: 60_000, endMs: 120_000, text: "반갑습니다" },
         ],
       },
       {
@@ -562,7 +585,7 @@ describe("toMeetingDetail", () => {
         t: "02:00",
         text: "네",
         status: "ok",
-        sources: [{ id: "b3", startMs: 120_000 }],
+        sources: [{ id: "b3", startMs: 120_000, endMs: 180_000, text: "네" }],
       },
     ]);
   });
@@ -610,8 +633,8 @@ describe("toMeetingDetail", () => {
       d.utterances.map((u) => ({ id: u.id, text: u.text, status: u.status })),
     ).toEqual([{ id: "c1", text: "앞 뒤", status: "ok" }]);
     expect(d.utterances[0].sources).toEqual([
-      { id: "c1", startMs: 0 },
-      { id: "c3", startMs: 20_000 },
+      { id: "c1", startMs: 0, endMs: 10_000, text: "앞" },
+      { id: "c3", startMs: 20_000, endMs: 30_000, text: "뒤" },
     ]);
   });
 
@@ -744,7 +767,9 @@ describe("toMeetingDetail", () => {
       t: "02:00",
       text: long("다"),
       status: "ok",
-      sources: [{ id: "e3", startMs: 120_000 }],
+      sources: [
+        { id: "e3", startMs: 120_000, endMs: 180_000, text: long("다") },
+      ],
     });
   });
 
@@ -777,8 +802,12 @@ describe("toMeetingDetail", () => {
     const d = toMeetingDetail(wire);
     // f1은 단독으로 이미 상한 초과 → f2는 병합되지 않고 새 블록.
     expect(d.utterances.map((u) => u.text)).toEqual(["가".repeat(500), "뒤"]);
-    expect(d.utterances[0].sources).toEqual([{ id: "f1", startMs: 0 }]);
-    expect(d.utterances[1].sources).toEqual([{ id: "f2", startMs: 60_000 }]);
+    expect(d.utterances[0].sources).toEqual([
+      { id: "f1", startMs: 0, endMs: 60_000, text: "가".repeat(500) },
+    ]);
+    expect(d.utterances[1].sources).toEqual([
+      { id: "f2", startMs: 60_000, endMs: 120_000, text: "뒤" },
+    ]);
   });
 });
 

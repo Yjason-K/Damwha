@@ -32,6 +32,7 @@ import {
 import { findMatches, type FindMatch } from "../lib/find-matches";
 import type { Meeting } from "../model/types";
 import { Icon } from "./icons";
+import { ExportDialog } from "./export-dialog";
 import { ReprocessDialog } from "./reprocess-dialog";
 import { ResolveDialog } from "./resolve-dialog";
 
@@ -381,6 +382,7 @@ export function TranscriptPane({
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [resolveOpen, setResolveOpen] = React.useState(false);
   const [reprocessOpen, setReprocessOpen] = React.useState(false);
+  const [exportOpen, setExportOpen] = React.useState(false);
   const savedIds = useSavedUtteranceIds(meeting.id);
   const saveUtterance = useSaveUtterance();
   const removeSavedUtterance = useRemoveSavedUtterance();
@@ -569,6 +571,15 @@ export function TranscriptPane({
           >
             <TrashMini />
           </IconButton>
+          {meeting.status === "done" && (
+            <IconButton
+              label="내보내기"
+              size="sm"
+              onClick={() => setExportOpen(true)}
+            >
+              <Icon name="download" size={16} />
+            </IconButton>
+          )}
           {(meeting.status === "done" || meeting.status === "failed") && (
             <IconButton
               label="회의 재처리"
@@ -757,6 +768,11 @@ export function TranscriptPane({
         open={reprocessOpen}
         onOpenChange={setReprocessOpen}
         meeting={{ id: meeting.id, title: meeting.title }}
+      />
+      <ExportDialog
+        open={exportOpen}
+        onOpenChange={setExportOpen}
+        meeting={meeting}
       />
     </main>
   );
