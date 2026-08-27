@@ -39,6 +39,8 @@ cp deploy/docker-compose.yml deploy/.env.example deploy/README.md deploy/HUGGING
 tar -czf "$TAR" -C "$OUT" damwha
 
 echo "== release v$VERSION"
-gh release create "v$VERSION" "$WHEEL" "$TAR" \
+# --target: without it gh tags the default branch (main), not the commit the
+# artifacts were built from.
+gh release create "v$VERSION" "$WHEEL" "$TAR" --target "$(git rev-parse HEAD)" \
   --title "v$VERSION" --notes "Team trial. Setup: deploy/README.md inside the tarball."
 echo "done: $(gh release view "v$VERSION" --json url -q .url)"
