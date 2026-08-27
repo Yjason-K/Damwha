@@ -37,6 +37,7 @@ import { Utterance } from "@/shared/ui/utterance";
 import { SpeakerTrack } from "@/shared/ui/speaker-track";
 import { LensItem } from "@/shared/ui/lens-item";
 import { CommandBar, type CommandGroup } from "@/shared/ui/command-bar";
+import { NoteEditor } from "@/features/meeting/ui/note-editor";
 
 function Plus() {
   return (
@@ -121,6 +122,46 @@ function Section({
   );
 }
 
+/** 메모 편집기 데모용 한 칸 — 레일 실제 폭에 맞춰 액자에 넣는다. */
+function NoteFrame({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex w-[var(--rail-insight)] flex-col gap-1.5">
+      <span className="text-2xs text-[color:var(--text-faint)]">{label}</span>
+      <div className="overflow-hidden rounded-md border border-border bg-[var(--surface-panel)]">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// 마크다운 렌더러가 실제로 다루는 것들을 한 번에 보여 준다 — 제목·목록·
+// 체크박스·표·인라인/블록 코드·링크, 그리고 메모에서 이미지가 비활성으로
+// 처리되는 것까지.
+const SAMPLE_NOTE = `## 결정사항
+
+- [x] 배포 브랜치는 \`dev\`로 통일
+- [ ] 스키마 v6는 다음 스프린트로
+
+주간 회의에서 나온 내용. 자세한 건 [설계 문서](https://example.com)에.
+
+| 항목 | 담당 | 기한 |
+| --- | --- | --- |
+| 마이그레이션 | 지훈 | 화요일 |
+| 릴리스 노트 | 서연 | 목요일 |
+
+\`\`\`ts
+await repo.upsert(pool, meetingId, bodyMd);
+\`\`\`
+
+![아키텍처 다이어그램](https://example.com/diagram.png)
+`;
+
 const SPEAKERS = [
   { n: 1, name: "김지훈" },
   { n: 2, name: "이서연" },
@@ -139,6 +180,8 @@ export function ShowcasePage() {
   const [head, setHead] = React.useState(0.42);
   const [done1, setDone1] = React.useState(true);
   const [done2, setDone2] = React.useState(false);
+  const [note, setNote] = React.useState(SAMPLE_NOTE);
+  const [emptyNote, setEmptyNote] = React.useState("");
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -602,6 +645,36 @@ export function ShowcasePage() {
                 예산 재확인 필요
               </LensItem>
             </div>
+          </div>
+        </Section>
+
+        <Section title="NoteEditor (마크다운 메모)">
+          <div className="flex flex-wrap items-start gap-4">
+            <NoteFrame label="읽기 · 편집 (직접 눌러 볼 수 있어요)">
+              <NoteEditor
+                body={note}
+                onChange={setNote}
+                saveState="saved"
+                onRetrySave={() => toast({ title: "다시 저장했어요" })}
+              />
+            </NoteFrame>
+
+            <NoteFrame label="빈 상태">
+              <NoteEditor body={emptyNote} onChange={setEmptyNote} />
+            </NoteFrame>
+
+            <NoteFrame label="불러오는 중">
+              <NoteEditor body="" onChange={() => {}} isLoading />
+            </NoteFrame>
+
+            <NoteFrame label="불러오기 실패">
+              <NoteEditor
+                body=""
+                onChange={() => {}}
+                isError
+                onReload={() => toast({ title: "다시 불러왔어요" })}
+              />
+            </NoteFrame>
           </div>
         </Section>
       </div>

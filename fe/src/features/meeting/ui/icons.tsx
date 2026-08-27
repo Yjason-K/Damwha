@@ -55,6 +55,14 @@ const PATHS = {
   chevUp: "M6 15l6-6 6 6",
   skipBack: "M19 5v14L9 12zM5 5v14",
   skipForward: "M5 5v14l10-7zM19 5v14",
+  bold: "M7 5h6a3.5 3.5 0 0 1 0 7H7zM7 12h7a3.5 3.5 0 0 1 0 7H7z",
+  italic: "M15 4h-6M15 20H9M14 4L10 20",
+  heading: "M6 4v16M18 4v16M6 12h12",
+  bulletList: "M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01",
+  checkSquare:
+    "M9 11l2 2 4-4M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z",
+  link: "M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5",
+  code: "M9 18l-6-6 6-6M15 6l6 6-6 6",
   download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
   x: "M6 6l12 12M18 6L6 18",
 } as const;
