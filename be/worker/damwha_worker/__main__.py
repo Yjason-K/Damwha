@@ -32,22 +32,37 @@ def _no_llm_server(_model):
 
 
 @contextmanager
-def _llm_abort_hook(register_abort, proc):
-    """워커가 직접 띄운 LLM 서버(proc)가 있을 때만 소유권 상실 훅을 건다.
+def _abort_hook(register_abort, on_lost):
+    """heartbeat가 소유권 상실(운영자 취소/reaper)을 감지했을 때 부를 훅을 본문 동안 건다.
 
-    운영자 취소로 heartbeat가 소유권을 잃으면 proc에 SIGTERM — 진행 중 HTTP 요청이
-    즉시 실패해 파이프라인이 에러 경로로 빠지고, managed_llm_server의 finally가
-    wait/kill 에스컬레이션을 마무리한다. 외부 서버 재사용(proc None)이면 죽일 게
-    없으니 걸지 않는다. 본문이 끝나면 훅을 해제해 정상 완료 직후 beat 경합을 막는다.
+    본문이 끝나면 훅을 해제해 정상 완료 직후 beat 경합을 막는다. on_lost가 None이면
+    걸 게 없다.
     """
-    if register_abort is None or proc is None:
+    if register_abort is None or on_lost is None:
         yield
         return
-    register_abort(proc.terminate)
+    register_abort(on_lost)
     try:
         yield
     finally:
         register_abort(None)
+
+
+def _llm_abort_hook(register_abort, proc):
+    """워커가 직접 띄운 LLM 서버(proc)가 있을 때만 — 소유권을 잃으면 proc에 SIGTERM.
+
+    진행 중 HTTP 요청이 즉시 실패해 파이프라인이 에러 경로로 빠지고, managed_llm_server의
+    finally가 wait/kill 에스컬레이션을 마무리한다. 외부 서버 재사용(proc None)이면 죽일 게
+    없으니 걸지 않는다.
+    """
+    return _abort_hook(register_abort, proc.terminate if proc is not None else None)
+
+
+def _shutdown_abort_hook(register_abort, shutdown_event):
+    """process_meeting — 소유권을 잃으면 shutdown_event를 set해 다음 stage 경계
+    (enter_stage) 또는 STT clip(SttProgressReporter)에서 멈춘다. 결과는 어차피 소유권
+    가드에 막혀 버려지니, 취소된 회의에 GPU 시간을 더 쓰지 않는 것이 목적이다."""
+    return _abort_hook(register_abort, shutdown_event.set if shutdown_event is not None else None)
 
 
 def handle_job(
@@ -77,21 +92,22 @@ def handle_job(
         payload = parse_payload(job["type"], job["payload"])
         if job["type"] == "process_meeting":
             sm, sd = search_embedding or (None, None)
-            models = build_models()
-            return run_process_meeting(
-                conn,
-                job,
-                payload,
-                models,
-                storage,
-                worker_id=worker_id,
-                search_embedding_model=sm,
-                search_embedding_dim=sd,
-                default_speaker_prefix=default_speaker_prefix,
-                lens_llm_model=lens_llm_model,
-                summary_llm_model=summary_llm_model,
-                shutdown_event=shutdown_event,
-            )
+            with _shutdown_abort_hook(register_abort, shutdown_event):
+                models = build_models()
+                return run_process_meeting(
+                    conn,
+                    job,
+                    payload,
+                    models,
+                    storage,
+                    worker_id=worker_id,
+                    search_embedding_model=sm,
+                    search_embedding_dim=sd,
+                    default_speaker_prefix=default_speaker_prefix,
+                    lens_llm_model=lens_llm_model,
+                    summary_llm_model=summary_llm_model,
+                    shutdown_event=shutdown_event,
+                )
         if job["type"] == "enroll_speaker":
             embedder = build_embedder()
             return run_enroll_speaker(

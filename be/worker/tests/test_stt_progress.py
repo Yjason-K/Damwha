@@ -169,3 +169,21 @@ def test_bar_text_omits_rate_before_first_measurement():
     report = SttProgressReporter(CTX, total_units=5, bar=bar, clock=FakeClock(), min_interval_s=0.0)
     report(0, 100_000)  # 경과 0초 — 속도를 지어내지 않는다
     assert bar.updates[-1][1] == "1/5 clips"
+
+
+def test_abort_event_raises_before_reporting():
+    # 운영자 취소: heartbeat가 소유권 상실을 보고 event를 set하면 다음 clip에서 STT를 끊는다
+    import threading
+
+    from damwha_worker.errors import ShutdownRequested
+
+    ev = threading.Event()
+    writes: list[int] = []
+    report = SttProgressReporter(
+        CTX, total_units=2, set_progress=writes.append, clock=FakeClock(), abort_event=ev
+    )
+    report(4_300, 8_600)
+    ev.set()
+    with pytest.raises(ShutdownRequested):
+        report(8_600, 8_600)
+    assert writes == [82]  # set 이후엔 아무 것도 보고하지 않는다

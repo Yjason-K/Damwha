@@ -639,6 +639,11 @@ const fx = vi.hoisted(() => {
         data: { meeting_id: "m1", processing_version: 1, job_id: "job_9" },
       });
     }
+    if (/^\/meetings\/[^/]+\/cancel$/.test(url)) {
+      return Promise.resolve({
+        data: { meeting_id: "m3", job_id: "job_3", status: "failed" },
+      });
+    }
     if (/^\/meetings\/[^/]+\/lenses\/extract$/.test(url)) {
       return Promise.resolve({
         data: {
@@ -1049,6 +1054,31 @@ test("전사가 아직 없는 처리 중 회의에서는 플레이바를 그리�
   renderShell("/meetings/m3");
   expect(await screen.findByText(/회의를 처리하고 있어요/)).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "재생" })).toBeNull();
+});
+
+test("처리 중 배너의 취소 버튼은 POST /meetings/:id/cancel을 부른다", async () => {
+  renderShell("/meetings/m3");
+  await screen.findByText(/회의를 처리하고 있어요/);
+  fireEvent.click(screen.getByRole("button", { name: "취소" }));
+  await waitFor(() =>
+    expect(apiClient.post).toHaveBeenCalledWith("/meetings/m3/cancel"),
+  );
+});
+
+test("취소된 회의는 실패가 아니라 취소 안내를 보여준다", async () => {
+  fx.setDetailOverride("m3", {
+    ...fx.detailOf("m3"),
+    status: "failed",
+    current_job_id: null,
+    error: {
+      code: "cancelled",
+      stage: "stt",
+      message: "cancelled by operator",
+    },
+  });
+  renderShell("/meetings/m3");
+  expect(await screen.findByText(/처리를 취소했어요/)).toBeInTheDocument();
+  expect(screen.queryByText(/처리에 실패했어요/)).toBeNull();
 });
 
 test("처리 중이던 회의가 done이 되면 <audio>를 다시 로드한다", async () => {

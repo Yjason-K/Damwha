@@ -235,6 +235,27 @@ export class MeetingsService {
     });
   }
 
+  /**
+   * 처리 취소 (POST /meetings/:id/cancel). 현재 job이 queued/running이면 failed(cancelled)로
+   * 닫고 회의도 failed(cancelled)로 — 그러면 reprocess 가드(done|failed)를 그대로 통과해
+   * 다시 돌릴 수 있다. 워커는 다음 stage 경계 또는 heartbeat에서 소유권 상실을 보고 멈춘다.
+   */
+  async cancel(id: string): Promise<{ meeting_id: string; job_id: string; status: 'failed' }> {
+    return this.db.withTransaction(async (c) => {
+      const meeting = await this.meetings.lockById(c, id);
+      if (!meeting) throw new NotFoundException('meeting not found');
+      const jobId = meeting.current_job_id;
+      const job = jobId ? await this.jobs.findById(c, jobId) : null;
+      if (!job || (job.status !== 'queued' && job.status !== 'running')) {
+        throw new ConflictException('no processing in progress to cancel');
+      }
+      const error = JobsRepository.cancelledError(job.stage);
+      await this.jobs.cancel(c, job.id, error);
+      await this.meetings.markCancelled(c, id, error);
+      return { meeting_id: id, job_id: job.id, status: 'failed' };
+    });
+  }
+
   async reindex(id: string) {
     const meeting = await this.meetings.findById(this.db.pool, id);
     if (!meeting) throw new NotFoundException('meeting not found');

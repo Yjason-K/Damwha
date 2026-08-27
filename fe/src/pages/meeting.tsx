@@ -14,6 +14,7 @@ import {
   useGenerateSummary,
   useMeeting,
   useMeetingStatus,
+  useCancelProcessing,
   useReindexMeeting,
   useSyncSummaryStatus,
 } from "@/features/meeting/api/meetings";
@@ -57,7 +58,11 @@ function ProcessingBanner({
   meeting: Meeting;
   status: MeetingStatusResponse | undefined;
 }) {
+  const cancel = useCancelProcessing();
+
   if (meeting.status === "failed") {
+    // 운영자 취소도 failed로 저장된다(reprocess 가드를 그대로 타기 위해) — 문구만 가른다.
+    const cancelled = meeting.error?.code === "cancelled";
     return (
       <div
         role="alert"
@@ -69,10 +74,12 @@ function ProcessingBanner({
           className="shrink-0 text-[color:var(--red-text)]"
         />
         <span className="font-semibold text-[color:var(--red-text)]">
-          처리에 실패했어요
+          {cancelled ? "처리를 취소했어요" : "처리에 실패했어요"}
         </span>
         <span className="text-[color:var(--text-secondary)]">
-          다시 업로드하거나 잠시 후 시도해 주세요.
+          {cancelled
+            ? "재처리로 다시 시작할 수 있어요."
+            : "다시 업로드하거나 잠시 후 시도해 주세요."}
         </span>
       </div>
     );
@@ -101,6 +108,15 @@ function ProcessingBanner({
         {stageLabel}
         {pct != null ? ` · ${pct}%` : ""}
       </span>
+      <Button
+        variant="secondary"
+        size="sm"
+        className="ml-auto shrink-0"
+        disabled={cancel.isPending}
+        onClick={() => cancel.mutate(meeting.id)}
+      >
+        취소
+      </Button>
     </div>
   );
 }

@@ -853,3 +853,29 @@ def test_dispatch_wires_heartbeat_on_lost_to_llm_abort(conn, tmp_path):
     )
     assert out == "committed"
     assert cm.hooks[-1] is None
+
+
+def test_process_meeting_wires_lost_ownership_to_shutdown_event(conn, tmp_path, monkeypatch):
+    # 운영자 취소(BE가 job을 failed로) → heartbeat on_lost → shutdown_event.set →
+    # 파이프라인이 다음 stage 경계(enter_stage) 또는 STT clip에서 멈춘다.
+    import damwha_worker.pipeline.process_meeting as pm
+
+    monkeypatch.setattr(pm.ffmpeg, "normalize", lambda s, d: None)
+    monkeypatch.setattr(pm.ffmpeg, "probe", lambda p: ProbeResult(1000))
+    mid, jid = _enqueue_pm(conn)
+    job = db.claim(conn, "w1")
+    ev = threading.Event()
+    hooks = []
+    handle_job(
+        conn,
+        job,
+        Storage(str(tmp_path)),
+        "w1",
+        build_models=_models,
+        shutdown_event=ev,
+        register_abort=hooks.append,
+    )
+    assert hooks and hooks[-1] is None  # 끝나면 해제
+    assert not ev.is_set()
+    hooks[0]()
+    assert ev.is_set()

@@ -141,6 +141,7 @@ def run_process_meeting(
                     bar=bar,
                     progress_from=75,
                     progress_to=90,
+                    abort_event=shutdown_event,
                 )
                 words = models.transcriber.transcribe(
                     norm_path, payload.models.language, prepared, on_progress=report

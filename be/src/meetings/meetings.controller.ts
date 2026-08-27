@@ -156,6 +156,17 @@ export class MeetingsController {
   @ApiOperation({ summary: '즐겨찾기 해제' })
   unfavorite(@Param('id') id: string) { return this.service.setFavorite(id, false); }
 
+  @Post(':id/cancel')
+  @ApiOperation({
+    summary: '처리 취소',
+    description:
+      '현재 process_meeting 잡(queued/running)과 회의를 failed(cancelled)로 닫는다. ' +
+      '워커는 다음 stage 경계 또는 heartbeat에서 소유권 상실을 감지해 멈춘다. 진행 중인 것이 없으면 409. ' +
+      '취소된 회의는 failed와 같이 reprocess로 다시 돌릴 수 있다.',
+  })
+  @HttpCode(200)
+  cancel(@Param('id') id: string) { return this.service.cancel(id); }
+
   @Post(':id/reprocess')
   @ApiOperation({ summary: '재처리 (processing_version 증가 후 재큐잉)' })
   @ApiBody({

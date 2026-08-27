@@ -192,6 +192,48 @@ describe('meetings', () => {
     expect(job.rows[0].payload.reprocess).toBe(true);
   });
 
+  it('POST /meetings/:id/cancel fails the running job and marks the meeting failed(cancelled)', async () => {
+    const created = await request(srv()).post('/meetings').attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+    const mid = created.body.id;
+    const jid = created.body.current_job_id;
+    // simulate a worker mid-flight
+    await db.pool.query(`UPDATE job SET status='running', locked_by='w1', locked_at=now(), stage='stt', progress=75 WHERE id=$1`, [jid]);
+    await db.pool.query(`UPDATE meeting SET status='processing' WHERE id=$1`, [mid]);
+
+    const res = await request(srv()).post(`/meetings/${mid}/cancel`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ meeting_id: mid, job_id: jid, status: 'failed' });
+
+    const job = await db.pool.query('SELECT status, error FROM job WHERE id=$1', [jid]);
+    expect(job.rows[0].status).toBe('failed');
+    expect(job.rows[0].error.code).toBe('cancelled');
+    expect(job.rows[0].error.stage).toBe('stt');
+    const mt = await db.pool.query('SELECT status, error FROM meeting WHERE id=$1', [mid]);
+    expect(mt.rows[0].status).toBe('failed');
+    expect(mt.rows[0].error.code).toBe('cancelled');
+    // a cancelled meeting can be reprocessed like any failed one
+    expect((await request(srv()).post(`/meetings/${mid}/reprocess`)).status).toBe(202);
+  });
+
+  it('POST /meetings/:id/cancel also cancels a still-queued job', async () => {
+    const created = await request(srv()).post('/meetings').attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+    const res = await request(srv()).post(`/meetings/${created.body.id}/cancel`);
+    expect(res.status).toBe(200);
+    const job = await db.pool.query('SELECT status, error FROM job WHERE id=$1', [created.body.current_job_id]);
+    expect(job.rows[0].status).toBe('failed');
+    expect(job.rows[0].error.code).toBe('cancelled');
+    expect(job.rows[0].error.stage).toBeNull();
+  });
+
+  it('POST /meetings/:id/cancel is 409 when nothing is in flight, 404 when unknown', async () => {
+    const created = await request(srv()).post('/meetings').attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+    const mid = created.body.id;
+    await db.pool.query(`UPDATE job SET status='done' WHERE id=$1`, [created.body.current_job_id]);
+    await db.pool.query(`UPDATE meeting SET status='done' WHERE id=$1`, [mid]);
+    expect((await request(srv()).post(`/meetings/${mid}/cancel`)).status).toBe(409);
+    expect((await request(srv()).post(`/meetings/mtg_999/cancel`)).status).toBe(404);
+  });
+
   it('POST /meetings — payload가 v5이고 전역 설정(프리셋)을 따른다', async () => {
     await request(srv()).put('/settings/processing').send({ preset: 'light', language: 'ko' });
     const res = await request(srv()).post('/meetings')

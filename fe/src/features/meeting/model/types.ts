@@ -126,6 +126,8 @@ export type Meeting = {
   /** summaryStatus가 failed일 때의 사유. 없으면 null. */
   summaryError: JsonError | null;
   status: MeetingStatus;
+  /** status가 failed일 때의 사유. 운영자 취소는 code === "cancelled". 없으면 null. */
+  error: JsonError | null;
   audioUrl: string;
   totalSeconds: number;
   speakers: Record<number, SpeakerRef>;

@@ -6,10 +6,12 @@ Transcriber는 clip(또는 segment)을 하나 끝낼 때마다 `(done_ms, total_
 """
 
 import logging
+import threading
 import time
 from collections.abc import Callable
 
 from ..console import ProgressBar
+from ..errors import ShutdownRequested
 
 log = logging.getLogger("damwha_worker")
 
@@ -30,8 +32,10 @@ class SttProgressReporter:
         progress_to: int = 90,
         min_interval_s: float = _MIN_INTERVAL_SECONDS,
         clock: Callable[[], float] = time.monotonic,
+        abort_event: threading.Event | None = None,
     ) -> None:
         self._ctx = ctx
+        self._abort_event = abort_event
         self._total_units = total_units
         self._set_progress = set_progress
         self._bar = bar
@@ -44,6 +48,10 @@ class SttProgressReporter:
         self._last_emit: float | None = None
 
     def __call__(self, done_ms: int, total_ms: int) -> None:
+        # STT는 가장 긴 stage라 stage 경계(enter_stage)만으로는 취소가 늦다 — clip마다
+        # 확인해 시그널/운영자 취소(heartbeat on_lost)를 여기서도 받는다.
+        if self._abort_event is not None and self._abort_event.is_set():
+            raise ShutdownRequested("shutdown requested during stt")
         self._units += 1
         now = self._clock()
         fraction = min(max(done_ms / total_ms, 0.0), 1.0) if total_ms > 0 else 0.0

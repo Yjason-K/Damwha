@@ -223,6 +223,26 @@ export function useReprocessMeeting() {
 }
 
 /** 검색 재색인 (POST /meetings/:id/reindex). 202, 새 index_meeting job enqueue. */
+/** 처리 취소 — 회의는 failed(cancelled)가 되고 reprocess로 다시 돌릴 수 있다. */
+export function useCancelProcessing() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { data } = await apiClient.post<{
+        meeting_id: string;
+        job_id: string;
+        status: "failed";
+      }>(`/meetings/${id}/cancel`);
+      return data;
+    },
+    onSuccess: (_data, id) => {
+      queryClient.invalidateQueries({ queryKey: ["meeting", id] });
+      queryClient.invalidateQueries({ queryKey: ["meeting-status", id] });
+      queryClient.invalidateQueries({ queryKey: ["meetings"] });
+    },
+  });
+}
+
 export function useReindexMeeting() {
   const queryClient = useQueryClient();
   return useMutation({
