@@ -92,11 +92,17 @@ The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by 
 
 Division of labor: `DESIGN.md` = how it should look and why · `src/index.css` = the actual values (single SoT) · `src/shared/ui/` = the implementation. **Never copy token values into `DESIGN.md`** — it names tokens only, so the two can't drift.
 
+**The visual tone is Cal.com** (reference spec: `DESIGN-cal.md` at the repo root). What that retone actually moved: the neutral ramp, the accent ramp, the semantic + speaker palettes, the radius scale, and the fonts — nothing else. Two consequences worth internalising before you touch a component:
+
+- **The action layer is achromatic.** `--primary` / `--accent-solid` is ink black, and so is the focused-input border (`--border-focus`). Blue survives only as the "where am I" signal — `--accent-bg` / `--accent-text` / `--text-link` / `--focus-ring`. Splitting the axis is what keeps a selected row distinguishable from a hovered one, since hover is a neutral gray face. Don't "fix" the black button back to a blue one.
+- **Density and the brand mark were out of scope.** The dense `--text-*` scale, `--rail-nav` / `--rail-insight`, spacing and layout, and `BrandMark` / `favicon.svg` / the `theme-color` meta are all unchanged, deliberately. Cal is a marketing surface with generous whitespace and a page-closing dark footer; the three-pane shell has neither and can't absorb them.
+
 **Tailwind v4 via `@tailwindcss/vite` — there is no `tailwind.config`.** All theming is CSS-first in `src/index.css`:
 
 - `:root` holds the Damwha (Timbre) design tokens: raw scales (`--gray-*`, `--accent-*`, speaker palette `--spk-N-*`) and **semantic aliases** (`--surface-*`, `--text-*`, `--border-*`). Reference the semantic aliases in components, not raw scales.
-- The **shadcn token contract** (`--background`, `--primary`, `--sidebar-*`, …) is mapped _onto_ those Timbre semantics at the bottom of the `:root` block, so shadcn components render on-brand automatically. Caveat: shadcn's `--accent` means "hover/subtle surface", and the brand blue is `--primary` (not `--accent`).
-- `@theme inline` / `@theme` blocks expose these as Tailwind utilities (`bg-primary`, `text-spk-1-text`, `rounded-md`, dense `text-*` scale, Geist fonts).
+- The **shadcn token contract** (`--background`, `--primary`, `--sidebar-*`, …) is mapped _onto_ those Timbre semantics at the bottom of the `:root` block, so shadcn components render on-brand automatically. Caveat: shadcn's `--accent` means "hover/subtle surface", and the primary action colour is `--primary` (not `--accent`) — post-retone that colour is ink black, so don't call it "the brand blue".
+- `--accent-*` is deliberately not a single hue: `9`/`10` are the black action steps, `1`/`2`/`3`/`6`/`11`/`12` stay on Cal's brand-accent blue. The `index.css` comment explains why; don't "normalise" the ramp.
+- `@theme inline` / `@theme` blocks expose these as Tailwind utilities (`bg-primary`, `text-spk-1-text`, `rounded-md`, dense `text-*` scale, Inter / JetBrains Mono).
 
 shadcn config (`components.json`): **new-york** style, `lucide` icons, aliases pointing at `@/shared/*`. Components follow the CVA pattern — variants defined with `class-variance-authority`, co-located with the component, e.g. `buttonVariants` exported alongside `Button`.
 
