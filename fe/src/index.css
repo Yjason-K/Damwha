@@ -1,6 +1,8 @@
-/* Geist + Geist Mono — synced from "Damwha Design System" tokens/fonts.css.
- * Kept first so the @import precedes Tailwind's emitted rules. */
-@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap");
+/* Sofia Sans + DM Mono — the open-source stand-in for MarkForMC (proprietary),
+ * named by the Mastercard reference itself as the closest match and already in
+ * its declared fallback stack. Kept first so the @import precedes Tailwind's
+ * emitted rules. */
+@import url("https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Sofia+Sans:wght@400..700&display=swap");
 @import "tailwindcss" source("../");
 @import "tw-animate-css";
 
@@ -8,7 +10,9 @@
 
 /* ============================================================
  * Damwha Design System (codename "Timbre")
- * Synced from claude.ai/design · light-first reading UI.
+ * Light-first reading UI. Colour, type and radius are retoned after the
+ * Mastercard reference (repo root `DESIGN-mastercard.md`); density, rail
+ * widths, spacing and the brand mark are not.
  *
  * Raw scales + semantic aliases live in :root (a faithful mirror of
  * the design system's tokens/*.css). shadcn's token contract is mapped
@@ -16,67 +20,79 @@
  * and future shadcn components render on-brand automatically.
  * ============================================================ */
 :root {
-  /* --- Neutral scale (cool gray, 0 = white → 12 = near-black) --- */
+  /* --- Neutral scale (warm putty-cream, 0 = white → 12 = warm ink) ---
+   * 0 = white (cards), 1 = lifted cream (rails), 2 = canvas cream (app bg),
+   * 12 = warm ink. Every step carries the same warm hue so no surface reads
+   * sterile — the retone's single biggest mood shift. */
   --gray-0: #ffffff;
-  --gray-1: #fcfcfd;
-  --gray-2: #f7f8fa;
-  --gray-3: #eef0f3;
-  --gray-4: #e4e7ec;
-  --gray-5: #d7dbe2;
-  --gray-6: #c3c9d2;
-  --gray-7: #a4abb6;
-  --gray-8: #848d99;
-  --gray-9: #5d6673;
-  --gray-10: #3c4350;
-  --gray-11: #262b33;
-  --gray-12: #14171c;
+  --gray-1: #fcfbfa;
+  --gray-2: #f3f0ee;
+  --gray-3: #eae5e1;
+  --gray-4: #dfd9d3;
+  --gray-5: #d1cdc7;
+  --gray-6: #bab3ab;
+  --gray-7: #9c948b;
+  --gray-8: #837b72;
+  --gray-9: #6b645c;
+  --gray-10: #4a443e;
+  --gray-11: #2b2826;
+  --gray-12: #141413;
 
-  /* --- Accent: restrained indigo-blue --- */
-  --accent-1: #f5f7ff;
-  --accent-2: #eaeefe;
-  --accent-3: #d8e0fd;
-  --accent-6: #b3c1f7;
-  --accent-9: #3b5bdb;
-  --accent-10: #3350c4;
-  --accent-11: #2f49b8;
-  --accent-12: #1c2a66;
+  /* --- Accent: signal orange (the reference's single aggressive color) ---
+   * The reference brand's red/yellow are logo-only and never enter the UI, so
+   * the whole interactive ramp is built on signal orange. 11 is the darkest
+   * readable step: it carries links and selected-item text. */
+  --accent-1: #fdf3ee;
+  --accent-2: #fae5da;
+  --accent-3: #f5d2c0;
+  --accent-6: #f37338;
+  --accent-9: #cf4500;
+  --accent-10: #b33b00;
+  --accent-11: #9a3a0a;
+  --accent-12: #5c2206;
 
-  /* --- Semantic: success / warning / danger --- */
-  --green-bg: #e9f4ee;
-  --green-9: #1f8a5b;
-  --green-text: #156348;
-  --amber-bg: #f8f0df;
-  --amber-9: #b5821f;
-  --amber-text: #875f12;
-  --red-bg: #fbecec;
-  --red-9: #cf3f3f;
-  --red-text: #a02d2d;
+  /* --- Semantic: success / warning / danger ---
+   * All three are pulled toward the warm canvas, and warning/danger are held
+   * away from the accent's hue (amber runs gold, danger runs crimson) so
+   * neither can be mistaken for the signal orange. */
+  --green-bg: #e6efe4;
+  --green-9: #3f7a45;
+  --green-text: #2c5a32;
+  --amber-bg: #f7eeda;
+  --amber-9: #a57a16;
+  --amber-text: #7a5910;
+  --red-bg: #f8e5e6;
+  --red-9: #be2f3a;
+  --red-text: #93222b;
 
-  /* --- Speaker palette (8 hues): -solid / -bg / -text --- */
-  --spk-1-solid: #5570e8;
-  --spk-1-bg: #ebeefc;
-  --spk-1-text: #3a4cbf;
-  --spk-2-solid: #1fa579;
-  --spk-2-bg: #e3f3ec;
-  --spk-2-text: #137a57;
-  --spk-3-solid: #dda12c;
-  --spk-3-bg: #f8f0db;
-  --spk-3-text: #8a6212;
-  --spk-4-solid: #e26b97;
-  --spk-4-bg: #fbe9f0;
-  --spk-4-text: #b23e6a;
-  --spk-5-solid: #9166d6;
-  --spk-5-bg: #f0eafb;
-  --spk-5-text: #6a40a8;
-  --spk-6-solid: #5ca24c;
-  --spk-6-bg: #eaf3e6;
-  --spk-6-text: #3d7030;
-  --spk-7-solid: #2e97bc;
-  --spk-7-bg: #e5f2f7;
-  --spk-7-text: #1f6f8c;
-  --spk-8-solid: #c77a42;
-  --spk-8-bg: #f7ece2;
-  --spk-8-text: #8f5526;
+  /* --- Speaker palette (8 hues): -solid / -bg / -text ---
+   * Muted to sit on cream rather than on white. -solid carries white initials
+   * (≥3.5:1), -text sits on its own -bg (≥4.5:1). Slot 8 is deliberately
+   * browner and flatter than the accent so a speaker never reads as a CTA. */
+  --spk-1-solid: #4c5fc7;
+  --spk-1-bg: #ecebf6;
+  --spk-1-text: #3b4ca8;
+  --spk-2-solid: #1b7f63;
+  --spk-2-bg: #e2efe8;
+  --spk-2-text: #16624c;
+  --spk-3-solid: #9a7016;
+  --spk-3-bg: #f5ecd7;
+  --spk-3-text: #77560f;
+  --spk-4-solid: #c0447a;
+  --spk-4-bg: #f8e5ea;
+  --spk-4-text: #97325f;
+  --spk-5-solid: #7b52be;
+  --spk-5-bg: #f0e9f7;
+  --spk-5-text: #5f3f96;
+  --spk-6-solid: #4a7a38;
+  --spk-6-bg: #e8efe1;
+  --spk-6-text: #3a5f2c;
+  --spk-7-solid: #2a7091;
+  --spk-7-bg: #e4edf2;
+  --spk-7-text: #205870;
+  --spk-8-solid: #a8623f;
+  --spk-8-bg: #f5e8df;
+  --spk-8-text: #874c2f;
 
   /* --- Semantic aliases (reference these in components, not raw scales) --- */
   --surface-app: var(--gray-2);
@@ -85,7 +101,7 @@
   --surface-sunken: var(--gray-2);
   --surface-hover: var(--gray-3);
   --surface-active: var(--accent-2);
-  --surface-overlay: rgba(20, 23, 28, 0.45);
+  --surface-overlay: rgba(20, 20, 19, 0.45);
 
   --text-primary: var(--gray-12);
   --text-secondary: var(--gray-9);
@@ -121,18 +137,20 @@
   --tracking-wide: 0.04em;
   --tracking-mono: -0.01em;
 
-  /* --- Elevation (borders do most of the work; shadows for overlays) --- */
+  /* --- Elevation (borders do most of the work; shadows for overlays) ---
+   * Geometry and opacity are untouched; only the tint moved to a warm ink, so
+   * a shadow on cream no longer reads as a cold gray smudge. */
   --shadow-none: none;
-  --shadow-xs: 0 1px 1px rgba(20, 23, 28, 0.04);
+  --shadow-xs: 0 1px 1px rgba(38, 30, 24, 0.04);
   --shadow-sm:
-    0 1px 2px rgba(20, 23, 28, 0.05), 0 1px 1px rgba(20, 23, 28, 0.03);
+    0 1px 2px rgba(38, 30, 24, 0.05), 0 1px 1px rgba(38, 30, 24, 0.03);
   --shadow-md:
-    0 6px 16px rgba(20, 23, 28, 0.08), 0 2px 5px rgba(20, 23, 28, 0.04),
-    0 0 0 1px rgba(20, 23, 28, 0.04);
+    0 6px 16px rgba(38, 30, 24, 0.08), 0 2px 5px rgba(38, 30, 24, 0.04),
+    0 0 0 1px rgba(38, 30, 24, 0.04);
   --shadow-lg:
-    0 16px 40px rgba(20, 23, 28, 0.14), 0 6px 14px rgba(20, 23, 28, 0.07),
-    0 0 0 1px rgba(20, 23, 28, 0.05);
-  --shadow-inset: inset 0 1px 2px rgba(20, 23, 28, 0.05);
+    0 16px 40px rgba(38, 30, 24, 0.14), 0 6px 14px rgba(38, 30, 24, 0.07),
+    0 0 0 1px rgba(38, 30, 24, 0.05);
+  --shadow-inset: inset 0 1px 2px rgba(38, 30, 24, 0.05);
 
   /* --- Motion --- */
   --dur-instant: 80ms;
@@ -157,9 +175,9 @@
   /* ============================================================
    * shadcn token contract → mapped onto the Timbre semantics above.
    * NOTE: shadcn's `--accent` means "hover/subtle surface", NOT the
-   * Timbre brand blue. The brand blue maps to `--primary`.
+   * Timbre signal orange. The signal orange maps to `--primary`.
    * ============================================================ */
-  --radius: 7px;
+  --radius: 12px;
   --background: var(--surface-app);
   --foreground: var(--text-primary);
   --card: var(--surface-card);
@@ -262,19 +280,25 @@
  * These emit CSS vars to :root, so component CSS can read var(--text-base)
  * etc. while Tailwind generates the rounded / text / font utilities. */
 @theme {
-  --radius-xs: 3px;
-  --radius-sm: 5px;
-  --radius-md: 7px;
-  --radius-lg: 10px;
-  --radius-xl: 12px;
+  /* Radius ladder, softened for the retone but capped by the three-pane shell.
+   * The reference commits to ≤6 / 20–40 / 99+ and skips the middle; a rail is
+   * only ~260–420px wide, so its list rows, chips and 28px-tall buttons would
+   * fuse into blobs at 20px+. Every step was raised, none to the reference's
+   * large band. `full` is untouched — pills (avatar, dots, toggles) are the one
+   * place the reference's extreme radius fits a dense UI as-is. */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
   --radius-full: 999px;
 
   --font-sans:
-    "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+    "Sofia Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
     sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, "SF Mono", "Menlo", monospace;
+  --font-mono: "DM Mono", ui-monospace, "SF Mono", "Menlo", monospace;
 
-  /* Dense UI scale (14px base, Linear/Geist style) */
+  /* Dense UI scale (14px base) — density is not part of the retone */
   --text-2xs: 0.6875rem;
   --text-xs: 0.75rem;
   --text-sm: 0.8125rem;
