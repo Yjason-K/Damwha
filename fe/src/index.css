@@ -1,6 +1,7 @@
-/* Geist + Geist Mono — synced from "Damwha Design System" tokens/fonts.css.
+/* IBM Plex Sans + IBM Plex Mono — Carbon's typeface, loaded at the same
+ * weights the Damwha scale already used (no display weight 300; see DESIGN.md 4).
  * Kept first so the @import precedes Tailwind's emitted rules. */
-@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap");
 @import "tailwindcss" source("../");
 @import "tw-animate-css";
 
@@ -8,7 +9,11 @@
 
 /* ============================================================
  * Damwha Design System (codename "Timbre")
- * Synced from claude.ai/design · light-first reading UI.
+ * Retoned onto IBM Carbon · light-first reading UI.
+ *
+ * Palette source: Carbon Gray / Blue / Teal / Green / Purple / Magenta /
+ * Cyan / Red / Orange / Yellow ramps. Density (type scale, rail widths,
+ * spacing) and the brand mark were deliberately left out of the retone.
  *
  * Raw scales + semantic aliases live in :root (a faithful mirror of
  * the design system's tokens/*.css). shadcn's token contract is mapped
@@ -16,67 +21,78 @@
  * and future shadcn components render on-brand automatically.
  * ============================================================ */
 :root {
-  /* --- Neutral scale (cool gray, 0 = white → 12 = near-black) --- */
+  /* --- Neutral scale (Carbon Gray, 0 = white → 12 = near-black).
+   * 2..12 are Carbon Gray 10/20/30/40/50/60/70/80/90/100 verbatim;
+   * 1 and 3 are half-steps this 13-stop ramp needs and Carbon has no
+   * token for (panel lift, hover fill). --- */
   --gray-0: #ffffff;
-  --gray-1: #fcfcfd;
-  --gray-2: #f7f8fa;
-  --gray-3: #eef0f3;
-  --gray-4: #e4e7ec;
-  --gray-5: #d7dbe2;
-  --gray-6: #c3c9d2;
-  --gray-7: #a4abb6;
-  --gray-8: #848d99;
-  --gray-9: #5d6673;
-  --gray-10: #3c4350;
-  --gray-11: #262b33;
-  --gray-12: #14171c;
+  --gray-1: #fafafa;
+  --gray-2: #f4f4f4;
+  --gray-3: #e8e8e8;
+  --gray-4: #e0e0e0;
+  --gray-5: #c6c6c6;
+  --gray-6: #a8a8a8;
+  --gray-7: #8d8d8d;
+  --gray-8: #6f6f6f;
+  --gray-9: #525252;
+  --gray-10: #393939;
+  --gray-11: #262626;
+  --gray-12: #161616;
 
-  /* --- Accent: restrained indigo-blue --- */
-  --accent-1: #f5f7ff;
-  --accent-2: #eaeefe;
-  --accent-3: #d8e0fd;
-  --accent-6: #b3c1f7;
-  --accent-9: #3b5bdb;
-  --accent-10: #3350c4;
-  --accent-11: #2f49b8;
-  --accent-12: #1c2a66;
+  /* --- Accent: IBM Blue (Carbon Blue 10/20/30/50/60/70/80).
+   * -9 is #0f62fe itself; -11 carries link + selected-item text and clears
+   * 4.5:1 on --surface-app (7.09:1). --- */
+  --accent-1: #edf5ff;
+  --accent-2: #d0e2ff;
+  --accent-3: #a6c8ff;
+  --accent-6: #4589ff;
+  --accent-9: #0f62fe;
+  --accent-10: #0050e6;
+  --accent-11: #0043ce;
+  --accent-12: #002d9c;
 
-  /* --- Semantic: success / warning / danger --- */
-  --green-bg: #e9f4ee;
-  --green-9: #1f8a5b;
-  --green-text: #156348;
-  --amber-bg: #f8f0df;
-  --amber-9: #b5821f;
-  --amber-text: #875f12;
-  --red-bg: #fbecec;
-  --red-9: #cf3f3f;
-  --red-text: #a02d2d;
+  /* --- Semantic: success / warning / danger (Carbon support tokens:
+   * green-50, yellow-30, red-60; 10 for the tint, 70 for the text) --- */
+  --green-bg: #defbe6;
+  --green-9: #24a148;
+  --green-text: #0e6027;
+  --amber-bg: #fcf4d6;
+  --amber-9: #f1c21b;
+  --amber-text: #684e00;
+  --red-bg: #fff1f1;
+  --red-9: #da1e28;
+  --red-text: #a2191f;
 
-  /* --- Speaker palette (8 hues): -solid / -bg / -text --- */
-  --spk-1-solid: #5570e8;
-  --spk-1-bg: #ebeefc;
-  --spk-1-text: #3a4cbf;
-  --spk-2-solid: #1fa579;
-  --spk-2-bg: #e3f3ec;
-  --spk-2-text: #137a57;
-  --spk-3-solid: #dda12c;
-  --spk-3-bg: #f8f0db;
-  --spk-3-text: #8a6212;
-  --spk-4-solid: #e26b97;
-  --spk-4-bg: #fbe9f0;
-  --spk-4-text: #b23e6a;
-  --spk-5-solid: #9166d6;
-  --spk-5-bg: #f0eafb;
-  --spk-5-text: #6a40a8;
-  --spk-6-solid: #5ca24c;
-  --spk-6-bg: #eaf3e6;
-  --spk-6-text: #3d7030;
-  --spk-7-solid: #2e97bc;
-  --spk-7-bg: #e5f2f7;
-  --spk-7-text: #1f6f8c;
-  --spk-8-solid: #c77a42;
-  --spk-8-bg: #f7ece2;
-  --spk-8-text: #8f5526;
+  /* --- Speaker palette (8 hues): -solid / -bg / -text.
+   * One Carbon family per speaker, always at 10 (bg) / 60 (solid) / 70
+   * (text). Carbon's 60 step sits at ~5:1 against white, so every -solid
+   * clears the 3.5:1 floor the white avatar initials need. Blue is left
+   * out on purpose: it is the app's single accent, and its tints are
+   * already spoken for by --accent-1/-2. --- */
+  --spk-1-solid: #0072c3; /* cyan */
+  --spk-1-bg: #e5f6ff;
+  --spk-1-text: #00539a;
+  --spk-2-solid: #198038; /* green */
+  --spk-2-bg: #defbe6;
+  --spk-2-text: #0e6027;
+  --spk-3-solid: #ba4e00; /* orange */
+  --spk-3-bg: #fff2e8;
+  --spk-3-text: #8a3800;
+  --spk-4-solid: #d02670; /* magenta */
+  --spk-4-bg: #fff0f7;
+  --spk-4-text: #9f1853;
+  --spk-5-solid: #8a3ffc; /* purple */
+  --spk-5-bg: #f6f2ff;
+  --spk-5-text: #6929c4;
+  --spk-6-solid: #007d79; /* teal */
+  --spk-6-bg: #d9fbfb;
+  --spk-6-text: #005d5d;
+  --spk-7-solid: #da1e28; /* red */
+  --spk-7-bg: #fff1f1;
+  --spk-7-text: #a2191f;
+  --spk-8-solid: #8e6a00; /* yellow */
+  --spk-8-bg: #fcf4d6;
+  --spk-8-text: #684e00;
 
   /* --- Semantic aliases (reference these in components, not raw scales) --- */
   --surface-app: var(--gray-2);
@@ -85,7 +101,7 @@
   --surface-sunken: var(--gray-2);
   --surface-hover: var(--gray-3);
   --surface-active: var(--accent-2);
-  --surface-overlay: rgba(20, 23, 28, 0.45);
+  --surface-overlay: rgba(22, 22, 22, 0.45);
 
   --text-primary: var(--gray-12);
   --text-secondary: var(--gray-9);
@@ -123,16 +139,16 @@
 
   /* --- Elevation (borders do most of the work; shadows for overlays) --- */
   --shadow-none: none;
-  --shadow-xs: 0 1px 1px rgba(20, 23, 28, 0.04);
+  --shadow-xs: 0 1px 1px rgba(22, 22, 22, 0.04);
   --shadow-sm:
-    0 1px 2px rgba(20, 23, 28, 0.05), 0 1px 1px rgba(20, 23, 28, 0.03);
+    0 1px 2px rgba(22, 22, 22, 0.05), 0 1px 1px rgba(22, 22, 22, 0.03);
   --shadow-md:
-    0 6px 16px rgba(20, 23, 28, 0.08), 0 2px 5px rgba(20, 23, 28, 0.04),
-    0 0 0 1px rgba(20, 23, 28, 0.04);
+    0 6px 16px rgba(22, 22, 22, 0.08), 0 2px 5px rgba(22, 22, 22, 0.04),
+    0 0 0 1px rgba(22, 22, 22, 0.04);
   --shadow-lg:
-    0 16px 40px rgba(20, 23, 28, 0.14), 0 6px 14px rgba(20, 23, 28, 0.07),
-    0 0 0 1px rgba(20, 23, 28, 0.05);
-  --shadow-inset: inset 0 1px 2px rgba(20, 23, 28, 0.05);
+    0 16px 40px rgba(22, 22, 22, 0.14), 0 6px 14px rgba(22, 22, 22, 0.07),
+    0 0 0 1px rgba(22, 22, 22, 0.05);
+  --shadow-inset: inset 0 1px 2px rgba(22, 22, 22, 0.05);
 
   /* --- Motion --- */
   --dur-instant: 80ms;
@@ -157,9 +173,9 @@
   /* ============================================================
    * shadcn token contract → mapped onto the Timbre semantics above.
    * NOTE: shadcn's `--accent` means "hover/subtle surface", NOT the
-   * Timbre brand blue. The brand blue maps to `--primary`.
+   * IBM Blue accent. The accent blue maps to `--primary`.
    * ============================================================ */
-  --radius: 7px;
+  --radius: 2px;
   --background: var(--surface-app);
   --foreground: var(--text-primary);
   --card: var(--surface-card);
@@ -262,19 +278,22 @@
  * These emit CSS vars to :root, so component CSS can read var(--text-base)
  * etc. while Tailwind generates the rounded / text / font utilities. */
 @theme {
-  --radius-xs: 3px;
-  --radius-sm: 5px;
-  --radius-md: 7px;
-  --radius-lg: 10px;
-  --radius-xl: 12px;
+  /* Carbon keeps corners at 0–4px, so the whole ramp collapses into that
+   * band and several stops share a value on purpose — the range itself
+   * shrank. --radius-full stays a pill so avatars stay circular. */
+  --radius-xs: 0px;
+  --radius-sm: 0px;
+  --radius-md: 2px;
+  --radius-lg: 2px;
+  --radius-xl: 4px;
   --radius-full: 999px;
 
   --font-sans:
-    "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+    "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial,
     sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, "SF Mono", "Menlo", monospace;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", "Menlo", monospace;
 
-  /* Dense UI scale (14px base, Linear/Geist style) */
+  /* Dense UI scale (14px base) — density was out of scope for the retone */
   --text-2xs: 0.6875rem;
   --text-xs: 0.75rem;
   --text-sm: 0.8125rem;

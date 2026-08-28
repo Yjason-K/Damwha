@@ -88,15 +88,17 @@ The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by 
 
 ## Styling & design system
 
-**Read [`DESIGN.md`](DESIGN.md) before creating or modifying any UI.** It holds the design intent, the "situation → token" index, interaction-state requirements, and the hard Don'ts (light-only, no raw hex, no shadows on flat cards, no ad-hoc tokens). Don't re-derive visual decisions per screen — DESIGN.md is what keeps them consistent.
+**Read [`DESIGN.md`](DESIGN.md) before creating or modifying any UI.** It holds the design intent, the "situation → token" index, interaction-state requirements, and the hard Don'ts (light-only, no raw hex, no shadows on flat cards, no ad-hoc tokens, square corners). Don't re-derive visual decisions per screen — DESIGN.md is what keeps them consistent.
+
+The visual tone is **IBM Carbon**: Carbon Gray neutrals, IBM Blue as the single accent, Carbon support colors for success/warning/error, one Carbon hue family per speaker, IBM Plex Sans/Mono, and a radius ramp collapsed into Carbon's near-square band (`--radius-full` stays a pill so avatars stay circular). The retone covered **color, type family, and radius only** — the dense type scale, the rail widths (`--rail-nav` / `--rail-insight`), spacing, component structure, and the brand mark (`shared/ui/brand-mark.tsx`, `public/favicon.svg`, `index.html`'s `theme-color`) were deliberately left alone. Carbon's marketing-page whitespace and its weight-300 display treatment are **not** part of this tone — see DESIGN.md 4.
 
 Division of labor: `DESIGN.md` = how it should look and why · `src/index.css` = the actual values (single SoT) · `src/shared/ui/` = the implementation. **Never copy token values into `DESIGN.md`** — it names tokens only, so the two can't drift.
 
 **Tailwind v4 via `@tailwindcss/vite` — there is no `tailwind.config`.** All theming is CSS-first in `src/index.css`:
 
 - `:root` holds the Damwha (Timbre) design tokens: raw scales (`--gray-*`, `--accent-*`, speaker palette `--spk-N-*`) and **semantic aliases** (`--surface-*`, `--text-*`, `--border-*`). Reference the semantic aliases in components, not raw scales.
-- The **shadcn token contract** (`--background`, `--primary`, `--sidebar-*`, …) is mapped _onto_ those Timbre semantics at the bottom of the `:root` block, so shadcn components render on-brand automatically. Caveat: shadcn's `--accent` means "hover/subtle surface", and the brand blue is `--primary` (not `--accent`).
-- `@theme inline` / `@theme` blocks expose these as Tailwind utilities (`bg-primary`, `text-spk-1-text`, `rounded-md`, dense `text-*` scale, Geist fonts).
+- The **shadcn token contract** (`--background`, `--primary`, `--sidebar-*`, …) is mapped _onto_ those Timbre semantics at the bottom of the `:root` block, so shadcn components render on-brand automatically. Caveat: shadcn's `--accent` means "hover/subtle surface", and the IBM Blue accent is `--primary` (not `--accent`).
+- `@theme inline` / `@theme` blocks expose these as Tailwind utilities (`bg-primary`, `text-spk-1-text`, `rounded-md`, dense `text-*` scale, IBM Plex Sans / IBM Plex Mono).
 
 shadcn config (`components.json`): **new-york** style, `lucide` icons, aliases pointing at `@/shared/*`. Components follow the CVA pattern — variants defined with `class-variance-authority`, co-located with the component, e.g. `buttonVariants` exported alongside `Button`.
 
