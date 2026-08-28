@@ -3,11 +3,13 @@
  * Same geometry as `public/favicon.svg`; keep the two in sync.
  *
  * Brand-fixed colors, not design tokens: the mark must read identically
- * wherever it is placed, so it does not follow surface/text semantics.
- * The hues are the Mintlify-tone family (deep forest -> mint), but they are
- * written out here on purpose — a token change must not silently repaint
- * the app icon.
+ * wherever it is placed, so it does not follow surface/text semantics —
+ * a token change must not silently repaint the app icon. Flat fills, no
+ * gradients: the mark has to survive being drawn at 16px.
  */
+const INK = "#0F161E";
+const MINT = "#1DDCA5";
+
 export function BrandMark({
   size = 24,
   className,
@@ -23,36 +25,19 @@ export function BrandMark({
       aria-hidden="true"
       className={className}
     >
-      <defs>
-        <linearGradient id="brand-mark-bg" x1="0" y1="0" x2="0.294" y2="1.176">
-          <stop offset="0" stopColor="#052620" />
-          <stop offset="1" stopColor="#0A6E56" />
-        </linearGradient>
-        <linearGradient
-          id="brand-mark-bar"
-          gradientUnits="userSpaceOnUse"
-          x1="0"
-          y1="27"
-          x2="0"
-          y2="89"
-        >
-          <stop offset="0" stopColor="#064A3A" />
-          <stop offset="1" stopColor="#0A6E56" />
-        </linearGradient>
-      </defs>
-      <rect width="128" height="128" rx="28" fill="url(#brand-mark-bg)" />
-      <g fill="#7CEBCB">
-        <rect x="52" y="46" width="43" height="44" rx="12" />
-        <path d="M95 73v30L52 90z" />
+      <rect width="128" height="128" rx="30" fill={INK} />
+      <g fill={MINT}>
+        <rect x="52" y="46" width="51" height="48" rx="12" />
+        <path d="M103 75v33L58 94z" />
       </g>
       <g fill="#fff">
-        <rect x="23" y="27" width="64" height="62" rx="14" />
-        <path d="M23 72v30l23-13z" />
+        <rect x="27" y="26" width="65" height="68" rx="14" />
+        <path d="M27 80v30L52 95z" />
       </g>
-      <g fill="url(#brand-mark-bar)">
-        <rect x="36" y="40.5" width="36" height="7" rx="3.5" />
-        <rect x="36" y="54.5" width="36" height="7" rx="3.5" />
-        <rect x="36" y="68.5" width="22" height="7" rx="3.5" />
+      <g fill={INK}>
+        <rect x="40" y="43" width="37" height="6.5" rx="3.25" />
+        <rect x="40" y="56.5" width="37" height="6.5" rx="3.25" />
+        <rect x="40" y="70" width="23" height="6.5" rx="3.25" />
       </g>
     </svg>
   );
