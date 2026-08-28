@@ -95,8 +95,12 @@ Division of labor: `DESIGN.md` = how it should look and why · `src/index.css` =
 **Tailwind v4 via `@tailwindcss/vite` — there is no `tailwind.config`.** All theming is CSS-first in `src/index.css`:
 
 - `:root` holds the Damwha (Timbre) design tokens: raw scales (`--gray-*`, `--accent-*`, speaker palette `--spk-N-*`) and **semantic aliases** (`--surface-*`, `--text-*`, `--border-*`). Reference the semantic aliases in components, not raw scales.
-- The **shadcn token contract** (`--background`, `--primary`, `--sidebar-*`, …) is mapped _onto_ those Timbre semantics at the bottom of the `:root` block, so shadcn components render on-brand automatically. Caveat: shadcn's `--accent` means "hover/subtle surface", and the brand blue is `--primary` (not `--accent`).
-- `@theme inline` / `@theme` blocks expose these as Tailwind utilities (`bg-primary`, `text-spk-1-text`, `rounded-md`, dense `text-*` scale, Geist fonts).
+- The **shadcn token contract** (`--background`, `--primary`, `--sidebar-*`, …) is mapped _onto_ those Timbre semantics at the bottom of the `:root` block, so shadcn components render on-brand automatically. Caveat: shadcn's `--accent` means "hover/subtle surface", and the primary button's ink is `--primary` (not `--accent`).
+- **The accent scale is split by role, on purpose.** `--accent-9/10` are the neutral ink pair behind `--accent-solid` (primary button surface); `--accent-1/2/3/6/11/12` are the mint ramp behind `--accent-bg` / `--accent-text` / `--focus-ring` (selection, links, focus). Making the whole scale neutral would collapse "selected row" into "hovered row" — both grey. `--accent-11` doubles as `--text-link`, so it has to clear 4.5:1 on `--surface-app`.
+- `@theme inline` / `@theme` blocks expose these as Tailwind utilities (`bg-primary`, `text-spk-1-text`, `rounded-md`, dense `text-*` scale, Inter + Geist Mono).
+- **Speaker `-solid` values carry white initials** (`shared/ui/avatar.tsx`), so any new `--spk-N-solid` must clear 3.5:1 against white. `-bg` is the pale utterance surface and `-text` the ink on it.
+
+The 2026-08 retone moved the reference tone to Mintlify's **documentation** surfaces. It changed **colour, typeface, and radius only** — the dense `--text-*` scale, `--rail-nav`/`--rail-insight`, spacing, component structure, and the brand mark (`shared/ui/brand-mark.tsx`, `public/favicon.svg`, `index.html`'s `theme-color`) were deliberately left alone. Don't widen the body or the section rhythm to "match the reference": that is Mintlify's marketing rhythm, and this app is a three-pane dense reading shell.
 
 shadcn config (`components.json`): **new-york** style, `lucide` icons, aliases pointing at `@/shared/*`. Components follow the CVA pattern — variants defined with `class-variance-authority`, co-located with the component, e.g. `buttonVariants` exported alongside `Button`.
 

@@ -19,7 +19,7 @@ const buttonVariants = cva(
           "border border-border bg-card text-foreground hover:border-[color:var(--border-strong)] hover:bg-[var(--gray-2)]",
         ghost:
           "text-[color:var(--text-secondary)] hover:bg-accent hover:text-accent-foreground",
-        danger: "bg-[var(--red-9)] text-white hover:bg-[#b8302f]",
+        danger: "bg-[var(--red-9)] text-white hover:bg-[#b03d3d]",
       },
       size: {
         sm: "h-7 px-2.5 text-sm",
