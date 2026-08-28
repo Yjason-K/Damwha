@@ -68,7 +68,7 @@ function ProcessingBanner({
     return (
       <div
         role="alert"
-        className="flex items-center gap-2.5 border-b border-[color:var(--red-6)] bg-[var(--red-bg)] px-7 py-2.5 text-sm"
+        className="flex items-center gap-2.5 border-b border-[color:var(--red-9)] bg-[var(--red-bg)] px-7 py-2.5 text-sm"
       >
         <Icon
           name="clock"
@@ -140,7 +140,7 @@ function IndexFailedBanner({
   return (
     <div
       role="alert"
-      className="flex items-center gap-2.5 border-b border-[color:var(--red-6)] bg-[var(--red-bg)] px-7 py-2.5 text-sm"
+      className="flex items-center gap-2.5 border-b border-[color:var(--red-9)] bg-[var(--red-bg)] px-7 py-2.5 text-sm"
     >
       <Icon
         name="search"
