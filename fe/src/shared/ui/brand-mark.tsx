@@ -4,6 +4,9 @@
  *
  * Brand-fixed colors, not design tokens: the mark must read identically
  * wherever it is placed, so it does not follow surface/text semantics.
+ * The hues are the Mintlify-tone family (deep forest -> mint), but they are
+ * written out here on purpose — a token change must not silently repaint
+ * the app icon.
  */
 export function BrandMark({
   size = 24,
@@ -22,8 +25,8 @@ export function BrandMark({
     >
       <defs>
         <linearGradient id="brand-mark-bg" x1="0" y1="0" x2="0.294" y2="1.176">
-          <stop offset="0" stopColor="#0B0E42" />
-          <stop offset="1" stopColor="#3B45B4" />
+          <stop offset="0" stopColor="#052620" />
+          <stop offset="1" stopColor="#0A6E56" />
         </linearGradient>
         <linearGradient
           id="brand-mark-bar"
@@ -33,12 +36,12 @@ export function BrandMark({
           x2="0"
           y2="89"
         >
-          <stop offset="0" stopColor="#232782" />
-          <stop offset="1" stopColor="#333BA6" />
+          <stop offset="0" stopColor="#064A3A" />
+          <stop offset="1" stopColor="#0A6E56" />
         </linearGradient>
       </defs>
       <rect width="128" height="128" rx="28" fill="url(#brand-mark-bg)" />
-      <g fill="#9097E8">
+      <g fill="#7CEBCB">
         <rect x="52" y="46" width="43" height="44" rx="12" />
         <path d="M95 73v30L52 90z" />
       </g>
