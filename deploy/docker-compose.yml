@@ -37,10 +37,15 @@ services:
       # container it is not loopback — opt in explicitly.
       EMBED_SERVICE_URL: http://host.docker.internal:8100
       EMBED_SERVICE_ALLOW_NON_LOOPBACK: "true"
-      # GPU eligibility belongs to the host the worker runs on, not this Linux
-      # container — without these the API refuses every gpu preset.
+      # The machine spec shown in the UI belongs to the host the worker runs on,
+      # not this Linux container. Without the first two the API refuses every gpu
+      # preset; without the other two `os.totalmem()` reports Docker Desktop's VM
+      # allocation and `sysctl` is absent, so the spec card shows the container.
+      # The `:-` fallbacks keep compose quiet when .env has not been filled in.
       CAPABILITIES_PLATFORM: darwin
       CAPABILITIES_ARCH: arm64
+      CAPABILITIES_MEMORY_GB: ${CAPABILITIES_MEMORY_GB:-}
+      CAPABILITIES_CHIP: ${CAPABILITIES_CHIP:-}
       # Stamped into every job payload; must equal what the worker's .env says.
       LENS_LLM_MODEL: ${LENS_LLM_MODEL}
       SUMMARY_LLM_MODEL: ${SUMMARY_LLM_MODEL}

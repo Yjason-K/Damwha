@@ -6,7 +6,7 @@ import sys
 import threading
 from contextlib import contextmanager, nullcontext
 
-from . import console, db
+from . import capabilities, console, db
 from .config import load_settings
 from .contracts import parse_payload
 from .errors import ErrorKind, ShutdownRequested, classify
@@ -513,6 +513,29 @@ def log_lens_llm_health(base_url: str, *, managed: bool = False) -> None:
         log.info("lens/summary LLM at %s serving: %s", base_url, ", ".join(models) or "(none)")
 
 
+def report_host_capabilities(settings) -> None:
+    """호스트 스펙을 app_setting에 적어, API가 컨테이너 대신 이 머신을 보고하게 한다.
+
+    실패해도 워커는 그대로 돈다 — API는 자기 env 추정으로 폴백할 뿐이다. MPS 프로브가
+    자식 프로세스에서 torch를 import하느라 수십 초 걸릴 수 있어 데몬 스레드에서 돈다;
+    기동을 여기서 붙잡으면 큐가 그만큼 늦게 소비된다.
+    """
+    try:
+        caps = capabilities.detect(settings.worker_id)
+        conn = db.connect(settings.database_url)
+        try:
+            db.upsert_worker_capabilities(conn, caps)
+        finally:
+            conn.close()
+        log.info("host capabilities reported: %s", caps)
+    except Exception:
+        log.warning(
+            "could not report host capabilities — the API falls back to its own "
+            "CAPABILITIES_* env guess",
+            exc_info=True,
+        )
+
+
 def run_supervisor_main(settings, shutdown: threading.Event) -> None:
     """부모: 2단계 시그널 핸들러 설치 후 supervisor 루프."""
     child_holder = {"proc": None, "count": 0}
@@ -550,6 +573,7 @@ def run_supervisor_main(settings, shutdown: threading.Event) -> None:
         daemon=True,
     )
     reaper_thread.start()
+    threading.Thread(target=report_host_capabilities, args=(settings,), daemon=True).start()
     log_lens_llm_health(settings.lens_llm_base_url, managed=settings.lens_llm_managed)
     log.info("supervisor %s started", settings.worker_id)
     try:

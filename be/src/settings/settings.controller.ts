@@ -1,15 +1,15 @@
-import { BadRequestException, Body, Controller, Get, Inject, Put } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Put } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { SettingsService } from './settings.service';
 import { PutProcessingValueSchema, resolveStoredValue } from './processing-config';
-import { Capabilities, CAPABILITIES } from '../system/capabilities';
+import { CapabilitiesService } from '../system/capabilities.service';
 
 @ApiTags('settings')
 @Controller('settings')
 export class SettingsController {
   constructor(
     private readonly service: SettingsService,
-    @Inject(CAPABILITIES) private readonly caps: Capabilities,
+    private readonly caps: CapabilitiesService,
   ) {}
 
   @Get('processing')
@@ -26,7 +26,8 @@ export class SettingsController {
     const v = parsed.data;
     // 이름 프리셋도 gpu를 품는다(light: diar gpu) — 반드시 완전 해석 후 검사 (spec §3)
     const resolved = resolveStoredValue(v);
-    if (!this.caps.gpu_eligible &&
+    const caps = await this.caps.get();
+    if (!caps.gpu_eligible &&
         (resolved.devices.diarization === 'gpu' || resolved.devices.stt === 'gpu')) {
       throw new BadRequestException('gpu is not available on this machine (gpu_eligible=false)');
     }

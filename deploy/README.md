@@ -25,6 +25,12 @@ VER=0.1.2    # 릴리스 태그
 gh release download "v$VER" -R Yjason-K/Damwha -p '*.tar.gz' -p '*.whl'
 tar -xzf damwha-deploy-$VER.tar.gz && cd damwha
 cp .env.example .env     # HF_TOKEN 채우기, DAMWHA_VERSION이 $VER과 같은지 확인
+
+# 워커가 뜨기 전까지 쓸 이 Mac의 스펙 — api는 컨테이너 안이라 직접 못 본다.
+# 워커가 한 번 뜨면 자기가 잰 값으로 덮으므로, 건너뛰어도 결국 맞춰진다.
+printf 'CAPABILITIES_MEMORY_GB=%d\nCAPABILITIES_CHIP=%s\n' \
+  "$(( $(sysctl -n hw.memsize) / 1073741824 ))" \
+  "$(sysctl -n machdep.cpu.brand_string)" >> .env
 ```
 
 이미지는 GHCR에 공개돼 있어 `docker login` 없이 받아진다.
@@ -63,12 +69,16 @@ damwha-embed     # 터미널 2 — 검색용 임베딩. 첫 실행 30–90초 �
 |---|---|
 | 업로드가 `queued`에서 안 움직임 | `damwha-worker` 안 떠 있음 |
 | 업로드가 `gpu is not available on this machine` 400 | compose 파일의 `CAPABILITIES_PLATFORM/ARCH`가 지워짐 — 원본 그대로 써야 한다 |
+| 처리 설정의 "내 머신"이 실제 Mac보다 메모리가 작고 칩이 안 뜸 | 워커가 아직 안 떴고 `.env`의 `CAPABILITIES_MEMORY_GB/CHIP`도 빔 — 워커를 띄우거나(30초 안에 반영) 1번의 `printf` 줄 후 `docker compose up -d` 다시. 컨테이너가 보는 건 Docker VM 할당량이다 |
+| GPU 프리셋이 전부 잠김 | 워커가 MPS를 못 찾았다고 보고했다. 이유는 `docker compose exec postgres psql -U postgres damwha -c "select value from app_setting where key='worker_capabilities'"` 의 `gpu_probe`. `mps_unavailable`이면 Rosetta python이 유력 → `uv python list`로 arm64 확인 |
 | job이 `gpu_unavailable`로 실패 | Apple Silicon이 아니거나 Rosetta python. `uv python list`로 arm64인지 확인 |
 | 화자 분리 실패 / 401 | `HF_TOKEN` 비었거나 라이선스 3개 중 하나 미수락 → [HUGGINGFACE.md](HUGGINGFACE.md) |
 | 렌즈/요약이 `llm_server_start_failed` | `mlx_lm.server`가 PATH에 없음 → `uv tool install mlx-lm` |
 | 워커가 `DATABASE_URL` / `LENS_LLM_BASE_URL` 없다고 죽음 | `.env` 없는 폴더에서 실행함 |
 
-로그: `docker compose logs -f api`, 워커는 stderr.
+로그: `docker compose logs -f api`, 워커는 stderr. 워커는 기동 직후 자기 머신 스펙을 재서
+`host capabilities reported: {...}` 한 줄을 남기고 DB에 올린다 — 처리 설정 화면의 "내 머신"과
+GPU 프리셋 개폐가 그 값을 따른다.
 
 ## 정리
 
