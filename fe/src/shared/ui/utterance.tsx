@@ -170,7 +170,7 @@ function Utterance({
           </span>
           <div className="min-w-0 flex-1">
             <SpeakerPill speaker={speaker} name={name} />
-            <span className="text-read text-pretty text-foreground">
+            <span className="text-read font-serif text-pretty text-foreground">
               {children}
             </span>
           </div>
@@ -217,7 +217,7 @@ function Utterance({
           <Link
             to={to}
             className={cn(
-              "text-read text-pretty no-underline outline-none",
+              "text-read font-serif text-pretty no-underline outline-none",
               // 행 전체를 덮는 오버레이 — 어디를 눌러도 원문으로 간다.
               "after:absolute after:inset-0 after:rounded-sm",
               "focus-visible:after:[box-shadow:var(--focus-ring)]",
@@ -227,7 +227,7 @@ function Utterance({
             {children}
           </Link>
         ) : (
-          <span className={cn("text-read text-pretty", textTone)}>
+          <span className={cn("text-read font-serif text-pretty", textTone)}>
             {children}
           </span>
         )}

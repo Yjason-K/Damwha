@@ -1,6 +1,7 @@
-/* Geist + Geist Mono — synced from "Damwha Design System" tokens/fonts.css.
+/* Inter + Source Serif 4 (+ Noto Serif KR for Hangul) + Source Code Pro —
+ * open-source stand-ins for the WIRED type system (Apercu / BreveText).
  * Kept first so the @import precedes Tailwind's emitted rules. */
-@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=Source+Code+Pro:wght@400;500;600&family=Noto+Serif+KR:wght@400;600&display=swap");
 @import "tailwindcss" source("../");
 @import "tw-animate-css";
 
@@ -8,75 +9,85 @@
 
 /* ============================================================
  * Damwha Design System (codename "Timbre")
- * Synced from claude.ai/design · light-first reading UI.
+ * Retoned to a WIRED-style editorial palette (see DESIGN-wired.md)
+ * · light-first reading UI · newsprint ink on paper.
  *
- * Raw scales + semantic aliases live in :root (a faithful mirror of
- * the design system's tokens/*.css). shadcn's token contract is mapped
- * onto those Timbre semantics at the bottom of this block, so existing
- * and future shadcn components render on-brand automatically.
+ * Raw scales + semantic aliases live in :root. shadcn's token contract
+ * is mapped onto those Timbre semantics at the bottom of this block, so
+ * existing and future shadcn components render on-brand automatically.
+ *
+ * The retone moved colour, type and radius ONLY. The dense type scale,
+ * the rail widths, spacing and the brand mark were deliberately left
+ * alone — density and the mark were not part of this tone change.
  * ============================================================ */
 :root {
-  /* --- Neutral scale (cool gray, 0 = white → 12 = near-black) --- */
+  /* --- Neutral scale (newsprint: pure neutral, 0 = paper → 12 = ink) --- */
   --gray-0: #ffffff;
-  --gray-1: #fcfcfd;
-  --gray-2: #f7f8fa;
-  --gray-3: #eef0f3;
-  --gray-4: #e4e7ec;
-  --gray-5: #d7dbe2;
-  --gray-6: #c3c9d2;
-  --gray-7: #a4abb6;
-  --gray-8: #848d99;
-  --gray-9: #5d6673;
-  --gray-10: #3c4350;
-  --gray-11: #262b33;
-  --gray-12: #14171c;
+  --gray-1: #fafafa;
+  --gray-2: #f5f5f5;
+  --gray-3: #ededed;
+  --gray-4: #e0e0e0;
+  --gray-5: #cccccc;
+  --gray-6: #b0b0b0;
+  --gray-7: #949494;
+  --gray-8: #808080;
+  --gray-9: #6e6e6e;
+  --gray-10: #4a4a4a;
+  --gray-11: #1a1a1a;
+  --gray-12: #000000;
 
-  /* --- Accent: restrained indigo-blue --- */
-  --accent-1: #f5f7ff;
-  --accent-2: #eaeefe;
-  --accent-3: #d8e0fd;
-  --accent-6: #b3c1f7;
-  --accent-9: #3b5bdb;
-  --accent-10: #3350c4;
-  --accent-11: #2f49b8;
-  --accent-12: #1c2a66;
+  /* --- Accent: a two-tone ramp, on purpose ---
+   * 9/10 are ink black — the press-black CTA face (WIRED's button-primary).
+   * 1/2/3/6/11/12 are ink blue — every "selected / interactive / link"
+   * signal. Filling the whole ramp with black would collapse the selected
+   * state into hover (both neutral); the blue keeps them separable. */
+  --accent-1: #f2f8fc;
+  --accent-2: #e2f0f8;
+  --accent-3: #d5e8f5;
+  --accent-6: #3f95c3;
+  --accent-9: #000000;
+  --accent-10: #1a1a1a;
+  --accent-11: #06699e;
+  --accent-12: #073f5e;
 
-  /* --- Semantic: success / warning / danger --- */
-  --green-bg: #e9f4ee;
-  --green-9: #1f8a5b;
-  --green-text: #156348;
-  --amber-bg: #f8f0df;
-  --amber-9: #b5821f;
-  --amber-text: #875f12;
-  --red-bg: #fbecec;
-  --red-9: #cf3f3f;
-  --red-text: #a02d2d;
+  /* --- Semantic: success / warning / danger (press inks, not pastels) --- */
+  --green-bg: #e6f2ea;
+  --green-9: #14713f;
+  --green-text: #0f5730;
+  --amber-bg: #f6efdc;
+  --amber-9: #9c7112;
+  --amber-text: #75540d;
+  --red-bg: #faeaec;
+  --red-9: #c8102e;
+  --red-text: #9c1226;
 
-  /* --- Speaker palette (8 hues): -solid / -bg / -text --- */
-  --spk-1-solid: #5570e8;
-  --spk-1-bg: #ebeefc;
-  --spk-1-text: #3a4cbf;
-  --spk-2-solid: #1fa579;
-  --spk-2-bg: #e3f3ec;
-  --spk-2-text: #137a57;
-  --spk-3-solid: #dda12c;
-  --spk-3-bg: #f8f0db;
-  --spk-3-text: #8a6212;
-  --spk-4-solid: #e26b97;
-  --spk-4-bg: #fbe9f0;
-  --spk-4-text: #b23e6a;
-  --spk-5-solid: #9166d6;
-  --spk-5-bg: #f0eafb;
-  --spk-5-text: #6a40a8;
-  --spk-6-solid: #5ca24c;
-  --spk-6-bg: #eaf3e6;
-  --spk-6-text: #3d7030;
-  --spk-7-solid: #2e97bc;
-  --spk-7-bg: #e5f2f7;
-  --spk-7-text: #1f6f8c;
-  --spk-8-solid: #c77a42;
-  --spk-8-bg: #f7ece2;
-  --spk-8-text: #8f5526;
+  /* --- Speaker palette (8 press inks): -solid / -bg / -text ---
+   * Hues sit ~45° apart around the wheel so eight speakers stay tellable;
+   * every -solid is dark enough to carry white initials. */
+  --spk-1-solid: #0d6d9e;
+  --spk-1-bg: #e6f1f7;
+  --spk-1-text: #0a5478;
+  --spk-2-solid: #4a3f9e;
+  --spk-2-bg: #ecebf7;
+  --spk-2-text: #3a3180;
+  --spk-3-solid: #8b3597;
+  --spk-3-bg: #f4eaf6;
+  --spk-3-text: #6e2878;
+  --spk-4-solid: #be1958;
+  --spk-4-bg: #fbe8ee;
+  --spk-4-text: #971243;
+  --spk-5-solid: #a55323;
+  --spk-5-bg: #f7ece4;
+  --spk-5-text: #82411b;
+  --spk-6-solid: #6c7814;
+  --spk-6-bg: #f0f2e0;
+  --spk-6-text: #545e10;
+  --spk-7-solid: #237319;
+  --spk-7-bg: #eaf3e4;
+  --spk-7-text: #1b5a13;
+  --spk-8-solid: #0f764f;
+  --spk-8-bg: #e0f2ec;
+  --spk-8-text: #0b5a3c;
 
   /* --- Semantic aliases (reference these in components, not raw scales) --- */
   --surface-app: var(--gray-2);
@@ -85,7 +96,7 @@
   --surface-sunken: var(--gray-2);
   --surface-hover: var(--gray-3);
   --surface-active: var(--accent-2);
-  --surface-overlay: rgba(20, 23, 28, 0.45);
+  --surface-overlay: rgba(0, 0, 0, 0.45);
 
   --text-primary: var(--gray-12);
   --text-secondary: var(--gray-9);
@@ -121,18 +132,17 @@
   --tracking-wide: 0.04em;
   --tracking-mono: -0.01em;
 
-  /* --- Elevation (borders do most of the work; shadows for overlays) --- */
+  /* --- Elevation (hairlines do the work; shadows for floating layers) --- */
   --shadow-none: none;
-  --shadow-xs: 0 1px 1px rgba(20, 23, 28, 0.04);
-  --shadow-sm:
-    0 1px 2px rgba(20, 23, 28, 0.05), 0 1px 1px rgba(20, 23, 28, 0.03);
+  --shadow-xs: 0 1px 1px rgba(0, 0, 0, 0.04);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05), 0 1px 1px rgba(0, 0, 0, 0.03);
   --shadow-md:
-    0 6px 16px rgba(20, 23, 28, 0.08), 0 2px 5px rgba(20, 23, 28, 0.04),
-    0 0 0 1px rgba(20, 23, 28, 0.04);
+    0 6px 16px rgba(0, 0, 0, 0.08), 0 2px 5px rgba(0, 0, 0, 0.04),
+    0 0 0 1px rgba(0, 0, 0, 0.04);
   --shadow-lg:
-    0 16px 40px rgba(20, 23, 28, 0.14), 0 6px 14px rgba(20, 23, 28, 0.07),
-    0 0 0 1px rgba(20, 23, 28, 0.05);
-  --shadow-inset: inset 0 1px 2px rgba(20, 23, 28, 0.05);
+    0 16px 40px rgba(0, 0, 0, 0.14), 0 6px 14px rgba(0, 0, 0, 0.07),
+    0 0 0 1px rgba(0, 0, 0, 0.05);
+  --shadow-inset: inset 0 1px 2px rgba(0, 0, 0, 0.05);
 
   /* --- Motion --- */
   --dur-instant: 80ms;
@@ -157,9 +167,9 @@
   /* ============================================================
    * shadcn token contract → mapped onto the Timbre semantics above.
    * NOTE: shadcn's `--accent` means "hover/subtle surface", NOT the
-   * Timbre brand blue. The brand blue maps to `--primary`.
+   * brand colour. The press-black CTA face maps to `--primary`.
    * ============================================================ */
-  --radius: 7px;
+  --radius: 0px;
   --background: var(--surface-app);
   --foreground: var(--text-primary);
   --card: var(--surface-card);
@@ -260,21 +270,27 @@
 
 /* Static design primitives -> utilities (radius, fonts, dense type scale).
  * These emit CSS vars to :root, so component CSS can read var(--text-base)
- * etc. while Tailwind generates the rounded / text / font utilities. */
+ * etc. while Tailwind generates the rounded / text / font utilities.
+ *
+ * Radius is square across the board — the press-sheet geometry. The scale
+ * keeps its step names so components need no edit; --radius-full stays
+ * round for the genuinely circular shapes (avatars, icon buttons). */
 @theme {
-  --radius-xs: 3px;
-  --radius-sm: 5px;
-  --radius-md: 7px;
-  --radius-lg: 10px;
-  --radius-xl: 12px;
+  --radius-xs: 0px;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
   --radius-full: 999px;
 
   --font-sans:
-    "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
     sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, "SF Mono", "Menlo", monospace;
+  --font-serif:
+    "Source Serif 4", "Noto Serif KR", Georgia, "Times New Roman", serif;
+  --font-mono: "Source Code Pro", ui-monospace, "SF Mono", "Menlo", monospace;
 
-  /* Dense UI scale (14px base, Linear/Geist style) */
+  /* Dense UI scale (14px base) — density was NOT part of the retone. */
   --text-2xs: 0.6875rem;
   --text-xs: 0.75rem;
   --text-sm: 0.8125rem;

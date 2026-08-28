@@ -95,8 +95,16 @@ Division of labor: `DESIGN.md` = how it should look and why · `src/index.css` =
 **Tailwind v4 via `@tailwindcss/vite` — there is no `tailwind.config`.** All theming is CSS-first in `src/index.css`:
 
 - `:root` holds the Damwha (Timbre) design tokens: raw scales (`--gray-*`, `--accent-*`, speaker palette `--spk-N-*`) and **semantic aliases** (`--surface-*`, `--text-*`, `--border-*`). Reference the semantic aliases in components, not raw scales.
-- The **shadcn token contract** (`--background`, `--primary`, `--sidebar-*`, …) is mapped _onto_ those Timbre semantics at the bottom of the `:root` block, so shadcn components render on-brand automatically. Caveat: shadcn's `--accent` means "hover/subtle surface", and the brand blue is `--primary` (not `--accent`).
-- `@theme inline` / `@theme` blocks expose these as Tailwind utilities (`bg-primary`, `text-spk-1-text`, `rounded-md`, dense `text-*` scale, Geist fonts).
+- The **shadcn token contract** (`--background`, `--primary`, `--sidebar-*`, …) is mapped _onto_ those Timbre semantics at the bottom of the `:root` block, so shadcn components render on-brand automatically. Caveat: shadcn's `--accent` means "hover/subtle surface", and the ink-black CTA face is `--primary` (not `--accent`).
+- `@theme inline` / `@theme` blocks expose these as Tailwind utilities (`bg-primary`, `text-spk-1-text`, `rounded-md`, dense `text-*` scale, the three font families).
+
+**The palette is a WIRED-style editorial tone** (reference spec: `DESIGN-wired.md` at the repo root) — newsprint ink on paper. Three things about it will bite you if you skim:
+
+- **`--accent-*` is not one ramp.** Steps 9/10 are ink black (the primary button face + its hover); steps 1/2/3/6/11/12 are ink blue (selected surface, hairline, link/selected text). Painting the whole ramp black would collapse "selected" into "hover" — both would be neutral. Pick through the semantic aliases (`--accent-solid` vs `--accent-bg` / `--accent-text`), never by eyeballing a ramp step.
+- **Radius is square.** `--radius-xs..xl` are all flat; only `--radius-full` stays round, for genuinely circular shapes. Don't reintroduce a rounded corner with an ad-hoc value.
+- **Three faces, three roles.** `--font-sans` (Inter) is the default; `--font-mono` (Source Code Pro) is for timestamps and keycaps; `--font-serif` (Source Serif 4 + a Hangul serif fallback) is applied in exactly **one** place — the utterance body in `shared/ui/utterance.tsx`, via `font-serif` next to `text-read`. The rationale, including why the Hangul fallback is load-bearing, is in DESIGN.md ch. 4. Don't widen serif to other surfaces.
+
+**Density and the brand mark were not part of the retone.** The tone change moved colour, type and radius only — the dense `--text-*` scale, `--rail-*` widths, spacing, component structure (CVA variants, JSX, interaction states) and the brand mark (`shared/ui/brand-mark.tsx`, `public/favicon.svg`, the `theme-color` meta) are all untouched by it.
 
 shadcn config (`components.json`): **new-york** style, `lucide` icons, aliases pointing at `@/shared/*`. Components follow the CVA pattern — variants defined with `class-variance-authority`, co-located with the component, e.g. `buttonVariants` exported alongside `Button`.
 
