@@ -62,9 +62,11 @@ Hard rules:
 - **`.env` files stay per-package.** `be/.env`, `be/worker/.env`, `fe/.env` — the
   same key `STORAGE_ROOT` intentionally holds different values in the first two.
   There is no root `.env` and there must not be one.
-- **`be/docker-compose.yml` stays in `be/`.** Compose derives its project name
-  from the compose file's directory; moving it to the root would rename the
-  project `be` → `daewha` and orphan the `be_pgdata` volume.
+- **`be/docker-compose.yml` pins `name: damwha`.** The project used to be called
+  `be` — the directory-derived default — so it renamed itself with the compose
+  file. It is now explicit, and the live volume is `damwha_pgdata`; changing the
+  `name:` orphans it. (The old, now-unused `be_pgdata` still holds the pre-rename
+  copy of the data.)
 
 ## History
 
