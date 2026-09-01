@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "description": "Wire enums shared by damwha-be and damwha-fe. The single source of truth for values both sides must agree on.",
+  "license": "MIT",
   "type": "commonjs",
   "main": "dist/cjs/index.js",
   "module": "dist/esm/index.js",

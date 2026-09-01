@@ -210,3 +210,13 @@ contract, ownership guards, measured speaker-ID thresholds), and
 [`fe/CLAUDE.md`](fe/CLAUDE.md) + [`fe/DESIGN.md`](fe/DESIGN.md) before touching the
 UI. Those are the living docs; [`CLAUDE.md`](CLAUDE.md) at the root only carries
 the monorepo map.
+
+## License
+
+[MIT](LICENSE) © 2026 Youngjae Kim.
+
+The license covers this repository's source only. The ML models the worker runs
+are downloaded at setup time under **their own** terms and are neither vendored
+nor redistributed here — pyannote diarization is a gated Hugging Face model that
+each user accepts separately (see [`deploy/HUGGINGFACE.md`](deploy/HUGGINGFACE.md)),
+and `ffmpeg` is invoked as an external binary you install yourself.
