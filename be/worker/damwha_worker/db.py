@@ -7,6 +7,24 @@ def connect(url: str) -> psycopg.Connection:
     return psycopg.connect(url, row_factory=dict_row, autocommit=True)
 
 
+WORKER_CAPABILITIES_KEY = "worker_capabilities"
+
+
+def upsert_worker_capabilities(conn, value: dict) -> None:
+    """워커가 관측한 자기 머신 스펙을 API가 읽을 자리에 남긴다 (capabilities.py 참고).
+
+    job 테이블 계약과 달리 단방향이라 소유권 가드가 없다 — 워커가 하나뿐인 배포에서는
+    last-writer-wins가 곧 정답이고, 여러 대라면 마지막에 뜬 워커의 스펙이 실린다.
+    """
+    conn.execute(
+        """
+        INSERT INTO app_setting(key, value) VALUES(%s, %s)
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+        """,
+        (WORKER_CAPABILITIES_KEY, Jsonb(value)),
+    )
+
+
 def claim(conn, worker_id: str) -> dict | None:
     return conn.execute(
         """

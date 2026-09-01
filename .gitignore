@@ -80,3 +80,5 @@ Thumbs.db
 # deploy/ is the team-trial run dir when used in place
 /deploy/.env
 /deploy/storage/
+# release.sh drops the worker wheel here on every run; uv build regenerates it
+/deploy/*.whl

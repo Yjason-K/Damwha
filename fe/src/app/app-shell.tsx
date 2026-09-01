@@ -103,7 +103,7 @@ export function AppShell() {
   ].filter((g) => g.items.length > 0);
 
   return (
-    <div className="grid h-screen min-w-[1160px] grid-cols-[var(--rail-nav)_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] bg-[var(--surface-app)] text-foreground">
+    <div className="grid h-screen min-w-[1260px] grid-cols-[var(--rail-nav)_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] bg-[var(--surface-app)] text-foreground">
       <LeftNav filter={filter} onFilter={setFilter} onOpenSearch={openSearch} />
       <Outlet />
 

@@ -12,9 +12,8 @@ import { ProcessingConfig } from '../settings/presets';
 import {
   ProcessingOverride, ProcessingOverrideSchema, resolveProcessingConfig,
 } from '../settings/resolve-processing';
-import { CAPABILITIES, Capabilities } from '../system/capabilities';
+import { CapabilitiesService } from '../system/capabilities.service';
 import { SpeakerBounds, SpeakerBoundsSchema } from './speaker-bounds';
-import { Inject } from '@nestjs/common';
 import { loadEnv } from '../config/env';
 import { nextId } from '../common/id';
 import { isIso8601 } from '../common/iso8601';
@@ -40,7 +39,7 @@ export class MeetingsService {
     private readonly settings: SettingsService,
     private readonly lensExtraction: LensExtractionService,
     private readonly summary: SummaryService,
-    @Inject(CAPABILITIES) private readonly caps: Capabilities,
+    private readonly caps: CapabilitiesService,
   ) {}
 
   // Validation scope (Plan 1): MIME + extension + size only. Deep audio-integrity
@@ -66,7 +65,7 @@ export class MeetingsService {
       const override = this.parseOverrideString(body.processing); // JSON.parse + zod, 오류는 BadRequest
       speakers = this.parseSpeakersString(body.speakers);
       const global_ = await this.settings.getProcessingConfig();
-      processing = resolveProcessingConfig(global_, override, this.caps.gpu_eligible);
+      processing = resolveProcessingConfig(global_, override, (await this.caps.get()).gpu_eligible);
       followups = {
         lens: !this.parseDeferFlag(body.defer_lens, 'defer_lens'),
         summary: !this.parseDeferFlag(body.defer_summary, 'defer_summary'),
@@ -220,7 +219,7 @@ export class MeetingsService {
     }
     const speakers = this.parseSpeakers(body?.speakers);
     const global_ = await this.settings.getProcessingConfig();
-    const processing = resolveProcessingConfig(global_, override, this.caps.gpu_eligible);
+    const processing = resolveProcessingConfig(global_, override, (await this.caps.get()).gpu_eligible);
     return this.db.withTransaction(async (c) => {
       const version = await this.meetings.bumpVersionForReprocess(c, id);
       const payload = buildProcessMeetingPayload({

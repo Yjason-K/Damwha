@@ -20,8 +20,13 @@ function entry(
     text: id,
     status: "ok",
     sources: [
-      { id, startMs },
-      ...more.map((ms, i) => ({ id: `${id}_${i}`, startMs: ms })),
+      { id, startMs, endMs: startMs + 1_000, text: id },
+      ...more.map((ms, i) => ({
+        id: `${id}_${i}`,
+        startMs: ms,
+        endMs: ms + 1_000,
+        text: id,
+      })),
     ],
   };
 }

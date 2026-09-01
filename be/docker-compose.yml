@@ -3,11 +3,13 @@
 # Migrations are NOT run here — apply them on the host with `pnpm be:migrate`
 # so migrate.ts + the _migrations table stay the single source of truth.
 #
-# This file deliberately stays in be/ rather than at the monorepo root: Compose
-# derives its project name from the compose file's directory, so moving it would
-# rename the project be -> daewha and orphan the live be_pgdata volume. From the
-# root use `pnpm db:up` / `pnpm db:down` (they pass -f be/docker-compose.yml,
-# which keeps the project name `be`).
+# The project name is pinned below with `name:` instead of being derived from
+# this file's directory, so `pnpm db:up` and a bare `docker compose up` inside
+# be/ land on the same project (`damwha`) and the same `damwha_pgdata` volume.
+# Renaming it again orphans that volume — on 2026-08-29 the data was copied by
+# hand out of the old `be` project, whose `be_pgdata` still holds that snapshot.
+name: damwha
+
 services:
   postgres:
     build:

@@ -1,15 +1,15 @@
-import { Controller, Get, Inject } from '@nestjs/common';
+import { Controller, Get } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { Capabilities, CAPABILITIES } from './capabilities';
+import { CapabilitiesService } from './capabilities.service';
 
 @ApiTags('system')
 @Controller('system')
 export class SystemController {
-  constructor(@Inject(CAPABILITIES) private readonly caps: Capabilities) {}
+  constructor(private readonly caps: CapabilitiesService) {}
 
   @Get('capabilities')
-  @ApiOperation({ summary: '머신 스펙 감지 + 추천 프리셋 (gpu_eligible = 하드웨어 적합성만)' })
+  @ApiOperation({ summary: '머신 스펙 (워커 실측 우선) + 추천 프리셋' })
   capabilities() {
-    return this.caps;
+    return this.caps.get();
   }
 }

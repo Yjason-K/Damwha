@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "damwha-worker"
 version = "0.1.2"
 requires-python = ">=3.12,<3.13"
+license = "MIT"
 dependencies = [
     "httpx==0.28.1",
     "pydantic==2.13.4",

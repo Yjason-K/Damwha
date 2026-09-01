@@ -12,8 +12,12 @@ per-package — read the one for the subtree you are editing before changing cod
 | `fe/` | `damwha-fe` | React 19 + Vite 8 + Tailwind 4 SPA. Read [`fe/CLAUDE.md`](fe/CLAUDE.md) and [`fe/DESIGN.md`](fe/DESIGN.md). |
 | `packages/contracts/` | `@damwha/contracts` | Wire enums both Node packages must agree on (`SUMMARY_MODELS`, `WHISPER_MODELS`, `PRESET_NAMES`, `DEVICES`). Dependency-free, value-only. |
 
-The API and the worker communicate **only** through the Postgres `job` table
-(zod on the TypeScript side, pydantic on the Python side) — never over HTTP.
+The API and the worker communicate **only** through Postgres — never over HTTP.
+The `job` table is the contract in both directions (zod on the TypeScript side,
+pydantic on the Python side); the one other shared row is
+`app_setting.worker_capabilities`, written by the worker and read-only for the
+API, which is how the API reports the host Mac's spec instead of its own
+container's.
 
 `@damwha/contracts` exists because `be` and `fe` were separate repos until the
 2026-08 merge, so any list both sides had to agree on was kept twice by hand.
@@ -58,9 +62,11 @@ Hard rules:
 - **`.env` files stay per-package.** `be/.env`, `be/worker/.env`, `fe/.env` — the
   same key `STORAGE_ROOT` intentionally holds different values in the first two.
   There is no root `.env` and there must not be one.
-- **`be/docker-compose.yml` stays in `be/`.** Compose derives its project name
-  from the compose file's directory; moving it to the root would rename the
-  project `be` → `daewha` and orphan the `be_pgdata` volume.
+- **`be/docker-compose.yml` pins `name: damwha`.** The project used to be called
+  `be` — the directory-derived default — so it renamed itself with the compose
+  file. It is now explicit, and the live volume is `damwha_pgdata`; changing the
+  `name:` orphans it. (The old, now-unused `be_pgdata` still holds the pre-rename
+  copy of the data.)
 
 ## History
 

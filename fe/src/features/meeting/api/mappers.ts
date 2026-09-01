@@ -145,7 +145,8 @@ export function toMeetingDetail(wire: WireMeetingDetail): Meeting {
   // 5. utterances(발화 카드) — 연속된 같은 화자의 ok 발화를 한 블록으로 병합.
   //    transcribe_failed는 카드로 그리지 않는다(안내 문구가 전사 흐름을 끊는다).
   //    silence처럼 건너뛰므로 양옆 같은 화자 발화는 병합된다. sources가 구성
-  //    발화의 id·start_ms를 보존해 발화 단위 점프(검색 히트)의 정밀도를 지킨다.
+  //    발화의 id·start_ms를 보존해 발화 단위 점프(검색 히트)의 정밀도를 지키고,
+  //    end_ms·text까지 함께 남겨 srt 내보내기가 병합 이전 경계를 되찾게 한다.
   const utteranceEntries: UtteranceEntry[] = [];
   for (const u of visibleUtterances) {
     if (u.status === "transcribe_failed") continue;
@@ -154,7 +155,12 @@ export function toMeetingDetail(wire: WireMeetingDetail): Meeting {
     const last = utteranceEntries[utteranceEntries.length - 1];
     if (last && last.spk === spk && last.text.length < MERGE_MAX_CHARS) {
       last.text = `${last.text} ${text}`;
-      last.sources.push({ id: u.id, startMs: u.start_ms });
+      last.sources.push({
+        id: u.id,
+        startMs: u.start_ms,
+        endMs: u.end_ms,
+        text,
+      });
       continue;
     }
     utteranceEntries.push({
@@ -163,7 +169,7 @@ export function toMeetingDetail(wire: WireMeetingDetail): Meeting {
       t: formatClock(u.start_ms),
       text,
       status: "ok",
-      sources: [{ id: u.id, startMs: u.start_ms }],
+      sources: [{ id: u.id, startMs: u.start_ms, endMs: u.end_ms, text }],
     });
   }
 

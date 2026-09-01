@@ -11,7 +11,7 @@ function utt(over: Partial<UtteranceEntry> = {}): UtteranceEntry {
     t: "00:00",
     text: "",
     status: "ok",
-    sources: [{ id, startMs: 0 }],
+    sources: [{ id, startMs: 0, endMs: 1_000, text: over.text ?? "" }],
     ...over,
   };
 }

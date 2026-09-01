@@ -219,3 +219,12 @@ def test_peek_queued_does_not_claim(conn):
     db.peek_queued(conn)
     row = conn.execute("SELECT status FROM job WHERE meeting_id=%s", (mid,)).fetchone()
     assert row["status"] == "queued"
+
+
+def test_worker_capabilities_upsert_overwrites(conn):
+    db.upsert_worker_capabilities(conn, {"worker_id": "w1", "gpu_eligible": True})
+    db.upsert_worker_capabilities(conn, {"worker_id": "w2", "gpu_eligible": False})
+    row = conn.execute(
+        "SELECT value FROM app_setting WHERE key=%s", (db.WORKER_CAPABILITIES_KEY,)
+    ).fetchone()
+    assert row["value"] == {"worker_id": "w2", "gpu_eligible": False}
