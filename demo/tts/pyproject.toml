@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "damwha-demo-tts"
+version = "0.1.0"
+description = "demo/scripts 대본을 TTS 4목소리로 읽혀 회의 오디오로 렌더한다"
+requires-python = ">=3.12,<3.13"
+license = "MIT"
+dependencies = [
+    "httpx==0.28.1",
+    "numpy==2.4.6",
+    "soundfile==0.14.0",
+]
+
+[project.scripts]
+render = "damwha_demo_tts.render:main"
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
