@@ -44,6 +44,27 @@ describe('meetings', () => {
     expect(job.rows[0].payload.processing_version).toBe(0);
   });
 
+  it('POST /meetings without recorded_at records the upload time', async () => {
+    const before = Date.now();
+    const res = await request(srv())
+      .post('/meetings')
+      .attach('audio', Buffer.from('fake-audio'), { filename: 'rec.m4a', contentType: 'audio/mp4' });
+    expect(res.status).toBe(201);
+    expect(res.body.recorded_at).not.toBeNull();
+    const recorded = new Date(res.body.recorded_at).getTime();
+    expect(recorded).toBeGreaterThanOrEqual(before - 1000);
+    expect(recorded).toBeLessThanOrEqual(Date.now() + 1000);
+  });
+
+  it('POST /meetings keeps an explicit recorded_at', async () => {
+    const res = await request(srv())
+      .post('/meetings')
+      .field('recorded_at', '2026-07-03T09:00:00Z')
+      .attach('audio', Buffer.from('fake-audio'), { filename: 'rec.m4a', contentType: 'audio/mp4' });
+    expect(res.status).toBe(201);
+    expect(new Date(res.body.recorded_at).toISOString()).toBe('2026-07-03T09:00:00.000Z');
+  });
+
   it('POST /meetings preserves a Korean original filename (no mojibake)', async () => {
     // Browsers send the filename as raw UTF-8 bytes in the Content-Disposition
     // header; busboy then decodes them as latin1, producing mojibake. form-data

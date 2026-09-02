@@ -53,18 +53,24 @@ describe('meetings management (PATCH / DELETE)', () => {
     expect(row.rows[0].recorded_at).not.toBeNull();
   });
 
-  it('PATCH /meetings/:id accepts a date-only recorded_at and null clears', async () => {
+  it('PATCH /meetings/:id accepts a date-only recorded_at', async () => {
     const mid = (await upload()).body.id;
     const dateOnly = await request(srv()).patch(`/meetings/${mid}`).send({ recorded_at: '2026-07-03' });
     expect(dateOnly.status).toBe(200);
     expect(dateOnly.body.recorded_at).not.toBeNull();
 
-    const cleared = await request(srv())
-      .patch(`/meetings/${mid}`)
-      .send({ title: null, recorded_at: null });
+    const cleared = await request(srv()).patch(`/meetings/${mid}`).send({ title: null });
     expect(cleared.status).toBe(200);
     expect(cleared.body.title).toBeNull();
-    expect(cleared.body.recorded_at).toBeNull();
+  });
+
+  it('PATCH /meetings/:id → 400 when recorded_at is null', async () => {
+    // 모든 회의는 기준일시를 갖는다 — 해제할 수단을 남기면 NOT NULL이 뚫린다.
+    const mid = (await upload()).body.id;
+    const res = await request(srv()).patch(`/meetings/${mid}`).send({ recorded_at: null });
+    expect(res.status).toBe(400);
+    const row = await db.pool.query('SELECT recorded_at FROM meeting WHERE id=$1', [mid]);
+    expect(row.rows[0].recorded_at).not.toBeNull();
   });
 
   it('PATCH /meetings/:id → 400 for invalid recorded_at / title', async () => {

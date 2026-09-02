@@ -26,7 +26,7 @@ export class MeetingsRepository {
   ): Promise<MeetingRow> {
     const { rows } = await exec.query<MeetingRow>(
       `INSERT INTO meeting(title, original_filename, audio_key, recorded_at, status)
-       VALUES($1,$2,$3,$4,'uploaded') RETURNING *`,
+       VALUES($1,$2,$3,COALESCE($4::timestamptz, now()),'uploaded') RETURNING *`,
       [args.title, args.originalFilename, args.audioKey, args.recordedAt],
     );
     return rows[0];
@@ -43,7 +43,7 @@ export class MeetingsRepository {
   async update(
     exec: Queryable,
     id: string,
-    patch: { title?: string | null; recorded_at?: string | null },
+    patch: { title?: string | null; recorded_at?: string },
   ): Promise<MeetingRow | null> {
     const sets: string[] = [];
     const params: unknown[] = [id];
