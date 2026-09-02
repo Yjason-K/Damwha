@@ -110,7 +110,7 @@ def test_client_sends_the_lens_extraction_contract_prompt_and_utterances(httpx_m
                 "every supporting index must be index values from the transcript, and "
                 "assignee_speaker_id must be a speaker_id from the Speakers section (not a "
                 "name) or null. Write due_at as a YYYY-MM-DD calendar date. When an utterance "
-                "states a relative deadline (\"today\", \"next Thursday\"), resolve it against "
+                'states a relative deadline ("today", "next Thursday"), resolve it against '
                 "the Meeting date line at the top of the transcript; if it cannot be resolved, "
                 "use null. Do not "
                 "speculate or return duplicates. Write text in the language of the transcript."

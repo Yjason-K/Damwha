@@ -39,11 +39,15 @@ def run_extract_lenses(
     ).fetchall()
     # payload가 아니라 DB에서 읽는다 — recorded_at은 enqueue 시점의 결정이 아니라
     # 사실이고, 사용자가 PATCH로 고친 뒤 재추출하면 고친 값이 반영돼야 한다.
-    # 021 이후 NOT NULL이라 None 분기가 없다.
-    recorded_at = conn.execute(
+    row = conn.execute(
         "SELECT recorded_at FROM meeting WHERE id=%s", (payload.meeting_id,)
-    ).fetchone()["recorded_at"]
-    meeting_date = recorded_at.astimezone(ZoneInfo(meeting_timezone)).date()
+    ).fetchone()
+    if row is None:
+        # 가드와 이 읽기 사이에 회의가 삭제됐다 (job.meeting_id는 ON DELETE CASCADE).
+        # 결과를 쓸 곳이 사라졌으니 조용히 반납한다 — TypeError로 터지면 설정 오류처럼
+        # 보이는 uncategorized TRANSIENT 경고가 로그에 남는다.
+        return "lost"
+    meeting_date = row["recorded_at"].astimezone(ZoneInfo(meeting_timezone)).date()
     # LLM 호출은 긴 회의에서 수 분 — timed_stage가 진행 중 tick과 완료 시간을 남긴다
     with timed_stage("extract_lenses", f"job={job['id']} meeting={payload.meeting_id}") as t:
         candidates = client.extract(

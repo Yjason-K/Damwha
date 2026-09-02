@@ -118,6 +118,7 @@ export function UploadDialog({
 }: UploadDialogProps) {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const recordedLabelId = React.useId();
+  const recordedHintId = React.useId();
   const followupsLabelId = React.useId();
   const followupsHintId = React.useId();
   const [file, setFile] = React.useState<File | null>(null);
@@ -250,6 +251,7 @@ export function UploadDialog({
             <div
               role="group"
               aria-labelledby={recordedLabelId}
+              aria-describedby={recordedHintId}
               className="flex items-center gap-2"
             >
               <div className="min-w-0 flex-1">
@@ -263,7 +265,10 @@ export function UploadDialog({
                 aria-label="녹음 시각"
               />
             </div>
-            <p className="text-sm text-[color:var(--text-muted)]">
+            <p
+              id={recordedHintId}
+              className="text-sm text-[color:var(--text-muted)]"
+            >
               비우면 업로드 시각으로 기록됩니다.
             </p>
           </div>
