@@ -31,8 +31,6 @@
     "worker:sync": "uv sync --directory be/worker --extra models",
     "worker:sync:test": "uv sync --directory be/worker",
     "worker:test": "uv run --directory be/worker pytest -q",
-    "demo:tts": "uv run --directory demo/tts render",
-    "demo:tts:test": "uv run --directory demo/tts pytest -q",
     "db:up": "docker compose -f be/docker-compose.yml up -d",
     "db:down": "docker compose -f be/docker-compose.yml down",
     "db:logs": "docker compose -f be/docker-compose.yml logs -f postgres"

@@ -86,10 +86,5 @@ Thumbs.db
 # codex CLI 세션 id — 머신 로컬 상태
 .context/
 
-# demo/tts 발화별 TTS 캐시와 중간 wav — 최종 m4a/timeline.json만 커밋한다
-/demo/audio/.cache/
-/demo/audio/*.wav
-/demo/tts/.venv/
-
 # DB 덤프 — 로컬 백업, 커밋하지 않는다
 /be/backups/
