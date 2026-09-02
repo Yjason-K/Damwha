@@ -65,6 +65,26 @@ describe('meetings', () => {
     expect(new Date(res.body.recorded_at).toISOString()).toBe('2026-07-03T09:00:00.000Z');
   });
 
+  it('POST /meetings → 400 for a non-ISO recorded_at and stores nothing', async () => {
+    const res = await request(srv())
+      .post('/meetings')
+      .field('recorded_at', 'not-a-date')
+      .attach('audio', Buffer.from('fake-audio'), { filename: 'rec.m4a', contentType: 'audio/mp4' });
+    expect(res.status).toBe(400);
+    const rows = await db.pool.query('SELECT count(*)::int AS n FROM meeting');
+    expect(rows.rows[0].n).toBe(0);
+  });
+
+  it('POST /meetings treats an empty recorded_at as unset', async () => {
+    // multipart 필드는 비워도 ''로 도착한다 — 정규화하지 않으면 ''::timestamptz가 500이다.
+    const res = await request(srv())
+      .post('/meetings')
+      .field('recorded_at', '')
+      .attach('audio', Buffer.from('fake-audio'), { filename: 'rec.m4a', contentType: 'audio/mp4' });
+    expect(res.status).toBe(201);
+    expect(res.body.recorded_at).not.toBeNull();
+  });
+
   it('POST /meetings preserves a Korean original filename (no mojibake)', async () => {
     // Browsers send the filename as raw UTF-8 bytes in the Content-Disposition
     // header; busboy then decodes them as latin1, producing mojibake. form-data

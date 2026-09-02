@@ -61,7 +61,9 @@ export class MeetingsService {
     let processing: ProcessingConfig;
     let followups: Followups;
     let speakers: SpeakerBounds | undefined;
+    let recordedAt: string | undefined;
     try {
+      recordedAt = this.parseRecordedAt(body.recorded_at);
       const override = this.parseOverrideString(body.processing); // JSON.parse + zod, 오류는 BadRequest
       speakers = this.parseSpeakersString(body.speakers);
       const global_ = await this.settings.getProcessingConfig();
@@ -87,7 +89,7 @@ export class MeetingsService {
         // 파라미터 번호가 갈라진다).
         `INSERT INTO meeting(id, title, original_filename, audio_key, recorded_at, status)
          VALUES($1,$2,$3,$4,COALESCE($5::timestamptz, now()),'uploaded') RETURNING *`,
-        [meetingId, body.title ?? null, originalName, audioKey, body.recorded_at ?? null],
+        [meetingId, body.title ?? null, originalName, audioKey, recordedAt ?? null],
       );
       const payload = buildProcessMeetingPayload({
         meetingId, audioKey, processingVersion: 0, reprocess: false, processing, followups, speakers,
@@ -106,6 +108,15 @@ export class MeetingsService {
     if (s === 'true') return true;
     if (s === 'false') return false;
     throw new BadRequestException(`${field} must be "true" or "false"`);
+  }
+
+  // 생략과 빈 문자열은 둘 다 "미지정"이다 — INSERT의 COALESCE가 등록 시각으로
+  // 채운다. multipart 필드는 비워도 ''로 도착하므로 정규화하지 않으면
+  // ''::timestamptz가 캐스트 에러(500)를 낸다.
+  private parseRecordedAt(s: string | undefined): string | undefined {
+    if (s === undefined || s === '') return undefined;
+    if (!isIso8601(s)) throw new BadRequestException('recorded_at must be an ISO-8601 datetime');
+    return s;
   }
 
   private parseSpeakersString(s: string | undefined): SpeakerBounds | undefined {
