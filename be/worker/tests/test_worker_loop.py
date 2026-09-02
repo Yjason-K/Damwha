@@ -290,7 +290,7 @@ def test_extract_routes_to_lens_client_only(conn, tmp_path):
     calls = []
 
     class Client:
-        def extract(self, *, model, utterances):
+        def extract(self, *, model, utterances, meeting_date=None):
             calls.append(utterances)
             return [
                 LensCandidate(
@@ -342,7 +342,7 @@ def test_extract_terminal_llm_failure_after_version_advance_is_discarded(conn, t
     job = db.claim(conn, "w1")
 
     class Client:
-        def extract(self, *, model, utterances):
+        def extract(self, *, model, utterances, meeting_date=None):
             conn.execute("UPDATE meeting SET processing_version=1 WHERE id=%s", (mid,))
             raise WorkerError("llm_invalid_response", "invalid", ErrorKind.PERMANENT)
 
@@ -383,6 +383,7 @@ def _settings_stub():
         default_speaker_prefix="Speaker",
         lens_llm_model="qwen2.5:14b-instruct",
         summary_llm_model="qwen2.5:14b-instruct",
+        meeting_timezone="Asia/Seoul",
     )
 
 
@@ -467,6 +468,7 @@ def test_dispatch_passes_prefix_through_to_persist(conn, tmp_path, monkeypatch):
         default_speaker_prefix="Zz",
         lens_llm_model="qwen-dispatch",
         summary_llm_model="qwen-dispatch",
+        meeting_timezone="Asia/Seoul",
     )
     out = dispatch_claimed_job(
         conn,

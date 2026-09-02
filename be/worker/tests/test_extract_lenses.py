@@ -1,3 +1,4 @@
+from datetime import date
 from types import SimpleNamespace
 
 import pytest
@@ -261,3 +262,28 @@ def test_llm_call_is_timed_and_logged(conn, extraction_job, caplog):
     text = "\n".join(r.getMessage() for r in caplog.records)
     assert f"job={job['id']} meeting={ids['meeting_id']} stage=extract_lenses done" in text
     assert "utterances=2 candidates=1" in text
+
+
+def test_extract_passes_the_meeting_date_in_the_configured_timezone(conn, extraction_job):
+    job, ids = extraction_job
+    conn.execute(
+        "UPDATE meeting SET recorded_at='2026-09-02T23:30:00+00:00' WHERE id=%s",
+        (ids["meeting_id"],),
+    )
+    seen: dict = {}
+
+    def _extract(**kwargs):
+        seen.update(kwargs)
+        return []
+
+    run_extract_lenses(
+        conn,
+        job,
+        _payload(job),
+        SimpleNamespace(extract=_extract),
+        worker_id="w",
+        meeting_timezone="Asia/Seoul",
+    )
+
+    # 23:30 UTC == 다음날 08:30 KST. 존을 고정하지 않으면 하루 어긋난다.
+    assert seen["meeting_date"] == date(2026, 9, 3)
