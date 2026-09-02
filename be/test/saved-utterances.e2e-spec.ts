@@ -27,9 +27,11 @@ describe('saved utterances api', () => {
   afterAll(async () => { await app?.close(); await db?.stop(); });
 
   const srv = () => app.getHttpServer();
+  // recorded_at은 NOT NULL(마이그레이션 021) — null은 "미지정"이고 등록 시각이 채워진다.
   const mkMeeting = async (title = '회의', recordedAt: string | null = null) =>
     (await db.pool.query(
-      `INSERT INTO meeting(audio_key,status,title,recorded_at) VALUES('audio','done',$1,$2::timestamptz) RETURNING id`,
+      `INSERT INTO meeting(audio_key,status,title,recorded_at)
+       VALUES('audio','done',$1,COALESCE($2::timestamptz, now())) RETURNING id`,
       [title, recordedAt],
     )).rows[0].id as string;
   const mkUtterance = async (
@@ -90,7 +92,7 @@ describe('saved utterances api', () => {
     expect(p2.body.next_cursor).toBeNull();
   });
 
-  it('sorts a meeting with no recorded_at by when the meeting was created', async () => {
+  it('sorts a meeting with an unset recorded_at by its registration time', async () => {
     const dated = await mkMeeting('오래된 녹음', '2020-01-01T00:00:00Z');
     const undated = await mkMeeting('녹음 날짜 없음');
     // The dated meeting's save is the more recent one, so a flat created_at

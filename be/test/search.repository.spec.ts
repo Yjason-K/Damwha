@@ -12,9 +12,11 @@ describe('SearchRepository', () => {
   afterEach(async () => { await db.reset(); });
   afterAll(async () => { await db.stop(); });
 
+  // recorded_at은 NOT NULL(마이그레이션 021) — null은 "미지정"이고 등록 시각이 채워진다.
   async function seedMeeting(title: string, recordedAt: string | null) {
     const r = await db.pool.query(
-      `INSERT INTO meeting(title, audio_key, recorded_at, status) VALUES($1,'k',$2,'done') RETURNING id`,
+      `INSERT INTO meeting(title, audio_key, recorded_at, status)
+       VALUES($1,'k',COALESCE($2::timestamptz, now()),'done') RETURNING id`,
       [title, recordedAt],
     );
     return r.rows[0].id as string;
@@ -148,9 +150,9 @@ describe('SearchRepository', () => {
     }
   });
 
-  it('browse orders recorded_at DESC NULLS LAST and excludes non-ok', async () => {
+  it('browse orders recorded_at DESC and excludes non-ok', async () => {
     const m1 = await seedMeeting('dated', '2026-06-20T00:00:00Z');
-    const m2 = await seedMeeting('undated', null);
+    const m2 = await seedMeeting('older', '2020-01-01T00:00:00Z');
     await seedUtterance(m2, 0, '미상정', 'ok', null);
     await seedUtterance(m1, 0, '최신', 'ok', null);
     await seedUtterance(m1, 1, null, 'silence', null);

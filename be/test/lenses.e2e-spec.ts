@@ -55,9 +55,12 @@ describe('lenses api', () => {
   const srv = () => app.getHttpServer();
 
   // --- seed helpers ---------------------------------------------------------
+  // recorded_at은 NOT NULL(마이그레이션 021)이다. null을 넘기는 것은 "미지정"이라는
+  // 뜻이고, 컬럼 기본값과 같은 규칙으로 등록 시각이 채워진다.
   const mkMeeting = async (title = '회의', recordedAt: string | null = null) =>
     (await db.pool.query(
-      `INSERT INTO meeting(audio_key,status,title,recorded_at) VALUES('k','done',$1,$2::timestamptz) RETURNING id`,
+      `INSERT INTO meeting(audio_key,status,title,recorded_at)
+       VALUES('k','done',$1,COALESCE($2::timestamptz, now())) RETURNING id`,
       [title, recordedAt],
     )).rows[0].id;
   const mkSpeaker = async (name = '홍길동') =>
@@ -158,7 +161,7 @@ describe('lenses api', () => {
     expect(p2.body.next_cursor).toBeNull();
   });
 
-  it('sorts a meeting with no recorded_at by when the meeting was created', async () => {
+  it('sorts a meeting with an unset recorded_at by its registration time', async () => {
     const dated = await mkMeeting('오래된 녹음', '2020-01-01T00:00:00Z');
     const undated = await mkMeeting('녹음 날짜 없음');
     // The dated meeting's item is the more recently touched one, so a flat
