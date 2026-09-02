@@ -42,3 +42,14 @@ def test_lens_llm_base_url_is_required(monkeypatch):
     monkeypatch.delenv("LENS_LLM_BASE_URL", raising=False)
     with pytest.raises(pydantic.ValidationError, match="lens_llm_base_url"):
         Settings(_env_file=None)
+
+
+def test_meeting_timezone_defaults_to_seoul():
+    assert load_settings().meeting_timezone == "Asia/Seoul"
+
+
+def test_unknown_meeting_timezone_fails_at_startup(monkeypatch):
+    # 오타를 렌즈 job claim 이후에 터뜨리면 설정 오류가 job 실패로 분류돼 나타난다.
+    monkeypatch.setenv("MEETING_TIMEZONE", "Asia/Seuol")
+    with pytest.raises(pydantic.ValidationError):
+        load_settings()

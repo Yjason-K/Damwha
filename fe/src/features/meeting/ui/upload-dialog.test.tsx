@@ -141,3 +141,10 @@ test("나중에 실행을 고르면 해당 후속만 defer로 실린다", async 
   expect(form.get("defer_summary")).toBe("true");
   expect(form.get("defer_lens")).toBeNull();
 });
+
+test("녹음 일시를 비웠을 때 어떻게 되는지 알려준다", () => {
+  renderWithFile();
+  expect(
+    screen.getByText("비우면 업로드 시각으로 기록됩니다."),
+  ).toBeInTheDocument();
+});
