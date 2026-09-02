@@ -109,7 +109,10 @@ def test_client_sends_the_lens_extraction_contract_prompt_and_utterances(httpx_m
                 "supporting_indexes. Choose the exact primary utterance. primary_index and "
                 "every supporting index must be index values from the transcript, and "
                 "assignee_speaker_id must be a speaker_id from the Speakers section (not a "
-                "name) or null. Do not "
+                "name) or null. Write due_at as a YYYY-MM-DD calendar date. When an utterance "
+                "states a relative deadline (\"today\", \"next Thursday\"), resolve it against "
+                "the Meeting date line at the top of the transcript; if it cannot be resolved, "
+                "use null. Do not "
                 "speculate or return duplicates. Write text in the language of the transcript."
             ),
         },
@@ -408,3 +411,28 @@ def test_client_drops_an_unparseable_due_at_but_keeps_the_item(httpx_mock):
         "자정 마감",
         "UTC 타임스탬프",
     ]
+
+
+def test_client_puts_the_meeting_date_at_the_top_of_the_prompt(httpx_mock):
+    httpx_mock.add_response(json={"choices": [{"message": {"content": '{"items": []}'}}]})
+    utterances = [
+        {"id": "utt_1", "speaker_id": "spk_1", "speaker_name": "Ada", "text": "오늘까지 보낼게요."}
+    ]
+
+    LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
+        model="job-model", utterances=utterances, meeting_date=date(2026, 9, 2)
+    )
+
+    user = json.loads(httpx_mock.get_request().content)["messages"][1]["content"]
+    assert user == "Meeting date: 2026-09-02\n\nSpeakers:\nspk_1 Ada\n\n1 Ada: 오늘까지 보낼게요."
+
+
+def test_client_omits_the_meeting_date_line_when_it_is_unknown(httpx_mock):
+    httpx_mock.add_response(json={"choices": [{"message": {"content": '{"items": []}'}}]})
+
+    LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
+        model="job-model", utterances=[{"id": "utt_1", "text": "hi"}]
+    )
+
+    user = json.loads(httpx_mock.get_request().content)["messages"][1]["content"]
+    assert "Meeting date" not in user

@@ -23,7 +23,10 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "supporting_indexes. Choose the exact primary utterance. primary_index and "
     "every supporting index must be index values from the transcript, and "
     "assignee_speaker_id must be a speaker_id from the Speakers section (not a "
-    "name) or null. Do not "
+    "name) or null. Write due_at as a YYYY-MM-DD calendar date. When an utterance "
+    "states a relative deadline (\"today\", \"next Thursday\"), resolve it against "
+    "the Meeting date line at the top of the transcript; if it cannot be resolved, "
+    "use null. Do not "
     "speculate or return duplicates. Write text in the language of the transcript."
 )
 
@@ -145,12 +148,14 @@ def _render_transcript(utterances: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def _render_prompt(utterances: list[dict[str, Any]]) -> str:
+def _render_prompt(utterances: list[dict[str, Any]], meeting_date: date | None) -> str:
     transcript = _render_transcript(utterances)
     speakers = _render_speakers(utterances)
-    if not speakers:
-        return transcript
-    return f"Speakers:\n{speakers}\n\n{transcript}"
+    body = f"Speakers:\n{speakers}\n\n{transcript}" if speakers else transcript
+    if meeting_date is None:
+        return body
+    # 존 이름은 싣지 않는다 — 날짜는 이미 meeting_timezone으로 환산돼서 온다.
+    return f"Meeting date: {meeting_date.isoformat()}\n\n{body}"
 
 
 def _strip_code_fence(content: str) -> str:
@@ -178,7 +183,13 @@ class LensClient:
         self._timeout_seconds = timeout_seconds
         self._max_tokens = max_tokens
 
-    def extract(self, *, model: str, utterances: list[dict[str, Any]]) -> list[LensCandidate]:
+    def extract(
+        self,
+        *,
+        model: str,
+        utterances: list[dict[str, Any]],
+        meeting_date: date | None = None,
+    ) -> list[LensCandidate]:
         ids = [u["id"] for u in utterances]
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         payload = {
@@ -188,7 +199,7 @@ class LensClient:
                     "role": "system",
                     "content": _EXTRACTION_SYSTEM_PROMPT,
                 },
-                {"role": "user", "content": _render_prompt(utterances)},
+                {"role": "user", "content": _render_prompt(utterances, meeting_date)},
             ],
             "response_format": {"type": "json_object"},
             # Reasoning models spend minutes thinking before emitting the items
