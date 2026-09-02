@@ -263,6 +263,9 @@ export function UploadDialog({
                 aria-label="녹음 시각"
               />
             </div>
+            <p className="text-sm text-[color:var(--text-muted)]">
+              비우면 업로드 시각으로 기록됩니다.
+            </p>
           </div>
 
           <SpeakerCountField value={speakers} onChange={setSpeakers} />
