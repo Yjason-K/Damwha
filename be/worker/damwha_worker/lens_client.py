@@ -1,5 +1,5 @@
 import json
-from datetime import date
+from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
 import httpx
@@ -63,8 +63,17 @@ def _due_at_or_none(v: Any) -> Any:
     if v is None or isinstance(v, date):
         return v
     if isinstance(v, str):
+        s = v.strip()
         try:
-            return date.fromisoformat(v.strip())
+            return date.fromisoformat(s)
+        except ValueError:
+            pass
+        try:
+            # 모델이 날짜 대신 ISO datetime을 내는 일이 잦다. date.fromisoformat은
+            # 그걸 받지 않으므로(3.12에서 ValueError) 여기서 한 번 더 시도한다 —
+            # 관대화는 파싱 안 되는 값을 흡수하라는 것이지, 파싱되는 값을 버리라는
+            # 것이 아니다.
+            return datetime.fromisoformat(s).date()
         except ValueError:
             return None
     return None

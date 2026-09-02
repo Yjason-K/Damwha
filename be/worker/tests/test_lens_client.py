@@ -366,6 +366,20 @@ def test_client_drops_an_unparseable_due_at_but_keeps_the_item(httpx_mock):
                                         "primary_index": 1,
                                         "supporting_indexes": [],
                                     },
+                                    {
+                                        "kind": "action",
+                                        "text": "자정 마감",
+                                        "due_at": "2026-09-22T00:00:00",
+                                        "primary_index": 1,
+                                        "supporting_indexes": [],
+                                    },
+                                    {
+                                        "kind": "action",
+                                        "text": "UTC 타임스탬프",
+                                        "due_at": "2026-09-22T10:00:00Z",
+                                        "primary_index": 1,
+                                        "supporting_indexes": [],
+                                    },
                                 ]
                             }
                         )
@@ -379,5 +393,18 @@ def test_client_drops_an_unparseable_due_at_but_keeps_the_item(httpx_mock):
         model="job-model", utterances=[{"id": "utt_1", "text": "오늘까지 보내주세요."}]
     )
 
-    assert [i.due_at for i in items] == [None, date(2026, 9, 22)]
-    assert [i.text for i in items] == ["보고서 보내기", "회의록 정리"]
+    # 모델은 날짜 대신 ISO datetime을 내는 일이 잦다 — date.fromisoformat이
+    # 거부해도 datetime.fromisoformat으로 한 번 더 받아야 파싱 가능한 값을
+    # 버리지 않는다.
+    assert [i.due_at for i in items] == [
+        None,
+        date(2026, 9, 22),
+        date(2026, 9, 22),
+        date(2026, 9, 22),
+    ]
+    assert [i.text for i in items] == [
+        "보고서 보내기",
+        "회의록 정리",
+        "자정 마감",
+        "UTC 타임스탬프",
+    ]
