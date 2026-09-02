@@ -1,9 +1,9 @@
 import json
 from datetime import date
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, BeforeValidator, ConfigDict, ValidationError
 
 from .contracts import LensCandidate, NonEmptyText, SpeakerId
 from .errors import (
@@ -50,6 +50,26 @@ _EXTRACTION_SYSTEM_PROMPT = (
 _SPEAKER_KEYS = ("speaker_name", "speaker_id")
 
 
+def _due_at_or_none(v: Any) -> Any:
+    """파싱되지 않는 마감일은 그 항목만 마감일 없음으로 떨군다.
+
+    모델은 "오늘"·"목요일"·"22 일" 같은 상대 표현을 그대로 낸다. 예전에는 이 한
+    필드가 _LlmLensResponse 전체 검증을 깨서 추출 run이 통째로
+    llm_invalid_response(PERMANENT)로 죽었다.
+
+    관대화는 due_at에만 준다. kind·text·primary_index가 틀린 항목은 애초에 의미가
+    없고, 인덱스 조작은 없는 발화를 근거로 지목하는 문제라 조용히 넘기면 안 된다.
+    """
+    if v is None or isinstance(v, date):
+        return v
+    if isinstance(v, str):
+        try:
+            return date.fromisoformat(v.strip())
+        except ValueError:
+            return None
+    return None
+
+
 class _LlmLensItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -58,7 +78,7 @@ class _LlmLensItem(BaseModel):
     # nullable 두 필드는 기본값 None — response_format이 로컬 런타임에서 권고사항이라
     # 모델이 null 필드를 통째로 생략한다(contracts.LensCandidate와 같은 이유).
     assignee_speaker_id: SpeakerId | None = None
-    due_at: date | None = None
+    due_at: Annotated[date | None, BeforeValidator(_due_at_or_none)] = None
     primary_index: int
     supporting_indexes: list[int] = []
 

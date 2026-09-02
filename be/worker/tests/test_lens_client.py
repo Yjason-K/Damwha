@@ -1,4 +1,5 @@
 import json
+from datetime import date
 
 import httpx
 import pytest
@@ -337,3 +338,46 @@ def test_client_rejects_an_out_of_range_index_as_permanent(httpx_mock):
         )
     assert exc.value.kind is ErrorKind.PERMANENT
     assert "99" in exc.value.message and "1..1" in exc.value.message
+
+
+def test_client_drops_an_unparseable_due_at_but_keeps_the_item(httpx_mock):
+    # 모델은 "오늘"·"22 일" 같은 상대 표현을 그대로 낸다. 예전에는 pydantic 검증이
+    # all-or-nothing이라 날짜 하나가 추출 run 전체를 llm_invalid_response로 죽였다
+    # (mtg_1의 job_3: 날짜 6개가 항목 10건을 날렸다).
+    httpx_mock.add_response(
+        json={
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "items": [
+                                    {
+                                        "kind": "action",
+                                        "text": "보고서 보내기",
+                                        "due_at": "오늘",
+                                        "primary_index": 1,
+                                        "supporting_indexes": [],
+                                    },
+                                    {
+                                        "kind": "action",
+                                        "text": "회의록 정리",
+                                        "due_at": "2026-09-22",
+                                        "primary_index": 1,
+                                        "supporting_indexes": [],
+                                    },
+                                ]
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+    )
+
+    items = LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
+        model="job-model", utterances=[{"id": "utt_1", "text": "오늘까지 보내주세요."}]
+    )
+
+    assert [i.due_at for i in items] == [None, date(2026, 9, 22)]
+    assert [i.text for i in items] == ["보고서 보내기", "회의록 정리"]
