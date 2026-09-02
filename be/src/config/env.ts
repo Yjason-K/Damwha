@@ -44,6 +44,8 @@ const EnvSchema = z.object({
   // 목록 밖 값이면 API가 시작에 실패한다 — 의도된 breaking change (spec §2).
   // 조용히 목록 안 값으로 강등하면 "고른 적 없는 모델로 요약"이 된다.
   SUMMARY_LLM_MODEL: z.enum(SUMMARY_MODELS).default('mlx-community/Qwen3.5-4B-8bit'),
+  // 공개 데모 읽기 전용 스위치(설계 §3.6). 가드는 process.env를 직접 읽는다 — 여기는 문서화용.
+  DEMO_READ_ONLY: z.enum(['true', 'false']).default('false'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

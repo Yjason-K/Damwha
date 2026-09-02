@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { isDemoBlocked } from "@/shared/api/demo-read-only";
 import { isApiError } from "@/shared/api/client";
 import { Button } from "@/shared/ui/button";
 import {
@@ -182,6 +183,7 @@ export function UploadDialog({
           onUploaded(summary.id);
         },
         onError: (error) => {
+          if (isDemoBlocked(error)) return;
           toast({
             variant: "error",
             title: "업로드 실패",

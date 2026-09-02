@@ -5,6 +5,7 @@ import {
   useQueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
+import { isDemoBlocked } from "@/shared/api/demo-read-only";
 import { apiClient, isApiError } from "@/shared/api/client";
 import { toast } from "@/shared/ui/use-toast";
 import type {
@@ -323,6 +324,7 @@ export function useGenerateSummary() {
     },
     onError: (error) => {
       // 409 = 다른 모델로 이미 진행 중. 서버 문구가 진행 중 모델명을 담는다.
+      if (isDemoBlocked(error)) return;
       toast({
         variant: "error",
         title:

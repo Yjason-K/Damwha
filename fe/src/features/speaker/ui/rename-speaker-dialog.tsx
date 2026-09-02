@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { isDemoBlocked } from "@/shared/api/demo-read-only";
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -63,6 +64,7 @@ function RenameForm({
           onDone();
         },
         onError: (error) => {
+          if (isDemoBlocked(error)) return;
           toast({
             title: "이름 변경 실패",
             description: toErrorMessage(error),

@@ -60,6 +60,7 @@ Vite 8 + React 19 SPA, **feature-based-lite** layout. Path alias `@/*` → `src/
   - `api/client.ts` — single Axios instance (baseURL from env).
   - `api/query-client.ts` — `createQueryClient()` factory (staleTime 60s, retry 1).
   - `config/env.ts` — typed access to `import.meta.env` (`VITE_API_BASE_URL`). Read env **only** through this module.
+  - `api/demo-read-only.ts` — `VITE_DEMO_MODE=true` builds install a request interceptor on `apiClient` that rejects every non-GET request (except `POST /search`) with `ApiError(403, …, "DEMO_READ_ONLY")` before it reaches the server and shows one throttled toast. Mutations that already toast their own failure skip it via `isDemoBlocked(error)` — add that guard to any new `onError` toast. `features/demo/ui/demo-notice-dialog.tsx` is the first-visit notice, lazy-loaded from `providers.tsx` only in demo mode. The real protection is the API's `DemoReadOnlyGuard`; this layer just prevents optimistic-update flicker (design §3.6).
   - `lib/utils.ts` — `cn()` (clsx + tailwind-merge).
   - `ui/` — shadcn/Radix components (the `@/shared/ui` alias).
 
