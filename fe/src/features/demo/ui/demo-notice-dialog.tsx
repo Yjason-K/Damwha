@@ -30,7 +30,7 @@ function markSeen() {
 
 /**
  * 공개 데모 첫 방문 안내(설계 §3.6). 데모 빌드에서만 providers가 lazy로 붙인다.
- * 내용은 §1의 정직성 항목 — 읽기 전용 / 대본 기반 TTS 재연 샘플 / 업로드가 없는 이유.
+ * 내용은 §1의 정직성 항목 — 읽기 전용 / NotebookLM 생성 샘플 / 업로드가 없는 이유.
  */
 export function DemoNoticeDialog() {
   const [open, setOpen] = useState(() => !alreadySeen());
@@ -51,8 +51,8 @@ export function DemoNoticeDialog() {
         </DialogHeader>
         <ul className="flex flex-col gap-2 text-sm leading-normal text-[color:var(--text-secondary)]">
           <li>
-            회의 오디오는 가상의 팀 대본을 TTS 목소리 4개로 읽힌{" "}
-            <strong className="font-medium text-foreground">대본 기반 재연 샘플</strong>이에요.
+            회의 오디오는 Google NotebookLM이 주제를 받아 생성한{" "}
+            <strong className="font-medium text-foreground">AI 대화 샘플</strong>이에요.
             실제 인물의 음성이 아닙니다.
           </li>
           <li>

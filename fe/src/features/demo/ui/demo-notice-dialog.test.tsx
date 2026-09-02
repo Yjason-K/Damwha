@@ -15,6 +15,7 @@ test("첫 방문이면 데모 안내 모달이 열린다", () => {
   expect(screen.getByRole("dialog")).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: /데모/ })).toBeInTheDocument();
   expect(screen.getByText(/읽기 전용|결과.*확인/)).toBeInTheDocument();
+  expect(screen.getByText(/NotebookLM/)).toBeInTheDocument();
   expect(screen.getByText(/실제 인물의 음성이 아닙니다/)).toBeInTheDocument();
 });
 
