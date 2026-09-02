@@ -1,3 +1,5 @@
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -21,6 +23,9 @@ class Settings(BaseSettings):
     embed_service_host: str = "127.0.0.1"
     embed_service_port: int = 8100
     default_speaker_prefix: str = "Speaker"
+    # 렌즈 프롬프트의 "Meeting date"를 렌더하는 존. recorded_at은 timestamptz라
+    # 존을 고정하지 않으면 오전 이른 회의가 UTC로 전날이 되어 due_at이 하루씩 밀린다.
+    meeting_timezone: str = "Asia/Seoul"
     # 필수 — 기본값을 두지 않는다. 기본값이 있으면 "주소를 안 넣었다"와 "그 주소에
     # 서버가 없다"가 구별되지 않고, lens_llm_managed 경로는 이 URL의 host:port에
     # 서버를 bind하므로 포트가 명시돼 있어야 한다. 설정 누락은 기동 시점에
@@ -49,6 +54,17 @@ class Settings(BaseSettings):
         v = v.strip()
         if not v:
             raise ValueError("default_speaker_prefix must not be empty")
+        return v
+
+    @field_validator("meeting_timezone")
+    @classmethod
+    def _known_timezone(cls, v: str) -> str:
+        # 기동 시점에 막는다. 폴백은 두지 않는다 — 잘못된 존으로 조용히 UTC를 쓰면
+        # 하루 어긋난 due_at이 저장되고, 그건 기동 실패보다 훨씬 늦게 발견된다.
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"unknown IANA timezone {v!r}") from exc
         return v
 
 
