@@ -1,0 +1,1058 @@
+[
+ {
+  "speaker": "박준영",
+  "start": 0.0,
+  "end": 3.9029,
+  "overlap": false,
+  "text": "시작하겠습니다. 오늘은 서연님 스키마 설계안 보는 자리고요.",
+  "line": 14
+ },
+ {
+  "speaker": "박준영",
+  "start": 4.1183,
+  "end": 8.9806,
+  "overlap": false,
+  "text": "민지님 와이어프레임은 금요일에 올려주셔서 다들 보셨을 거고요.",
+  "line": 15
+ },
+ {
+  "speaker": "최민지",
+  "start": 9.5597,
+  "end": 14.4226,
+  "overlap": false,
+  "text": "세 안 중에 이 안으로 정리했어요. 코멘트 주셔서 감사합니다.",
+  "line": 16
+ },
+ {
+  "speaker": "이도현",
+  "start": 15.3111,
+  "end": 17.2816,
+  "overlap": false,
+  "text": "저는 이 안이 제일 나은 것 같아요.",
+  "line": 17
+ },
+ {
+  "speaker": "박준영",
+  "start": 17.7367,
+  "end": 22.4582,
+  "overlap": false,
+  "text": "네 저도요. 그건 나중에 짧게 보고, 먼저 서연님부터 하시죠.",
+  "line": 18
+ },
+ {
+  "speaker": "김서연",
+  "start": 23.2183,
+  "end": 23.4818,
+  "overlap": false,
+  "text": "네.",
+  "line": 19
+ },
+ {
+  "speaker": "김서연",
+  "start": 25.8139,
+  "end": 32.1408,
+  "overlap": false,
+  "text": "결론부터 말씀드리면 규칙만 저장하고 조회할 때 전개하는 방식으로 제안드립니다.",
+  "line": 21
+ },
+ {
+  "speaker": "이도현",
+  "start": 32.6535,
+  "end": 34.0144,
+  "overlap": false,
+  "text": "아 전개를 안 하고요?",
+  "line": 22
+ },
+ {
+  "speaker": "김서연",
+  "start": 34.4475,
+  "end": 36.3601,
+  "overlap": false,
+  "text": "저장할 때는 안 합니다.",
+  "line": 23
+ },
+ {
+  "speaker": "김서연",
+  "start": 36.5788,
+  "end": 44.2577,
+  "overlap": false,
+  "text": "일정 테이블에 반복 규칙 문자열 하나를 넣고요, 예를 들면 매주 월요일이면 그 규칙 한 줄이에요.",
+  "line": 24
+ },
+ {
+  "speaker": "김서연",
+  "start": 44.5721,
+  "end": 50.8422,
+  "overlap": false,
+  "text": "그리고 사용자가 유월 달력을 보면 그때 유월치를 계산해서 내려줍니다.",
+  "line": 25
+ },
+ {
+  "speaker": "이도현",
+  "start": 50.2611,
+  "end": 51.0919,
+  "overlap": true,
+  "text": "음.",
+  "line": 26
+ },
+ {
+  "speaker": "김서연",
+  "start": 51.5819,
+  "end": 59.1111,
+  "overlap": false,
+  "text": "지난주에 말씀드린 표준 포맷 그대로고요, 그걸 쓰면 나중에 매월 반복 얹어도 스키마가 안 바뀝니다.",
+  "line": 27
+ },
+ {
+  "speaker": "이도현",
+  "start": 61.7707,
+  "end": 63.4248,
+  "overlap": false,
+  "text": "저는 그게 좀 걸리는데요.",
+  "line": 29
+ },
+ {
+  "speaker": "김서연",
+  "start": 64.2264,
+  "end": 65.6749,
+  "overlap": false,
+  "text": "네 말씀하세요.",
+  "line": 30
+ },
+ {
+  "speaker": "이도현",
+  "start": 66.3286,
+  "end": 69.7922,
+  "overlap": false,
+  "text": "그러면 프론트에서 일정 하나를 특정할 수가 없어요.",
+  "line": 31
+ },
+ {
+  "speaker": "김서연",
+  "start": 70.5721,
+  "end": 71.9115,
+  "overlap": false,
+  "text": "어떤 상황에서요.",
+  "line": 32
+ },
+ {
+  "speaker": "이도현",
+  "start": 72.892,
+  "end": 77.6043,
+  "overlap": false,
+  "text": "예를 들어 칠월 육일 스크럼을 클릭했다고 치면, 그게 아이디가 뭐예요?",
+  "line": 33
+ },
+ {
+  "speaker": "김서연",
+  "start": 78.4141,
+  "end": 80.9794,
+  "overlap": false,
+  "text": "반복 일정의 아이디랑 날짜 조합이요.",
+  "line": 34
+ },
+ {
+  "speaker": "이도현",
+  "start": 81.6144,
+  "end": 84.6622,
+  "overlap": false,
+  "text": "그럼 지금 있는 화면 전부 고쳐야 되는데요.",
+  "line": 35
+ },
+ {
+  "speaker": "이도현",
+  "start": 84.859,
+  "end": 91.1983,
+  "overlap": false,
+  "text": "지금은 다 일정 아이디 하나로 돌아가거든요. 상세 열 때도 그렇고 수정할 때도 그렇고.",
+  "line": 36
+ },
+ {
+  "speaker": "김서연",
+  "start": 90.7253,
+  "end": 91.1804,
+  "overlap": true,
+  "text": "아.",
+  "line": 37
+ },
+ {
+  "speaker": "이도현",
+  "start": 91.9049,
+  "end": 95.7871,
+  "overlap": false,
+  "text": "그래서 저는 그냥 만들 때 전개해서 저장하는 게 낫다고 봐요.",
+  "line": 38
+ },
+ {
+  "speaker": "이도현",
+  "start": 96.1599,
+  "end": 100.6115,
+  "overlap": false,
+  "text": "매주 반복이면 일 년치 오십이 개 행 만들어놓고, 각각 아이디 주고요.",
+  "line": 39
+ },
+ {
+  "speaker": "이도현",
+  "start": 100.9554,
+  "end": 103.6107,
+  "overlap": false,
+  "text": "그러면 기존 코드가 하나도 안 바뀝니다.",
+  "line": 40
+ },
+ {
+  "speaker": "김서연",
+  "start": 107.2016,
+  "end": 110.3035,
+  "overlap": false,
+  "text": "그건 되는데, 다만 몇 가지가 걸립니다.",
+  "line": 42
+ },
+ {
+  "speaker": "이도현",
+  "start": 109.5414,
+  "end": 109.8556,
+  "overlap": true,
+  "text": "네.",
+  "line": 43
+ },
+ {
+  "speaker": "김서연",
+  "start": 110.986,
+  "end": 117.9682,
+  "overlap": false,
+  "text": "첫째로 규칙을 바꿀 때요. 매주 월요일을 매주 화요일로 바꾸면 오십이 개를 다 고쳐야 돼요.",
+  "line": 44
+ },
+ {
+  "speaker": "이도현",
+  "start": 118.7845,
+  "end": 121.2899,
+  "overlap": false,
+  "text": "그건 뭐 한 번에 업데이트하면 되잖아요.",
+  "line": 45
+ },
+ {
+  "speaker": "김서연",
+  "start": 121.7542,
+  "end": 126.4371,
+  "overlap": false,
+  "text": "그중에 이미 지나간 것도 있고, 개별로 수정된 것도 있어요.",
+  "line": 46
+ },
+ {
+  "speaker": "김서연",
+  "start": 126.6132,
+  "end": 132.905,
+  "overlap": false,
+  "text": "지난주 스크럼만 시간을 옮겼다고 하면, 그건 규칙 바꿀 때 같이 바꾸면 안 되죠.",
+  "line": 47
+ },
+ {
+  "speaker": "이도현",
+  "start": 132.504,
+  "end": 132.9375,
+  "overlap": true,
+  "text": "아.",
+  "line": 48
+ },
+ {
+  "speaker": "김서연",
+  "start": 133.8682,
+  "end": 140.5553,
+  "overlap": false,
+  "text": "그걸 구분하려면 결국 \"이건 규칙에서 나온 거고 이건 사람이 손댄 거다\"를 표시해야 되는데요.",
+  "line": 49
+ },
+ {
+  "speaker": "김서연",
+  "start": 140.8753,
+  "end": 144.6367,
+  "overlap": false,
+  "text": "그러면 규칙 저장하는 거랑 복잡도가 같아집니다.",
+  "line": 50
+ },
+ {
+  "speaker": "김서연",
+  "start": 146.999,
+  "end": 154.2859,
+  "overlap": false,
+  "text": "둘째로 끝이 없는 반복이요. 종료 날짜 없이 계속 반복이면 몇 개를 만들어야 되나요.",
+  "line": 52
+ },
+ {
+  "speaker": "이도현",
+  "start": 155.0726,
+  "end": 156.8693,
+  "overlap": false,
+  "text": "어... 일 년치요?",
+  "line": 53
+ },
+ {
+  "speaker": "김서연",
+  "start": 157.5132,
+  "end": 162.7478,
+  "overlap": false,
+  "text": "그럼 내년 유월에 사용자가 달력을 보면 아무것도 없습니다.",
+  "line": 54
+ },
+ {
+  "speaker": "이도현",
+  "start": 163.4577,
+  "end": 164.8034,
+  "overlap": false,
+  "text": "아 그러네요.",
+  "line": 55
+ },
+ {
+  "speaker": "김서연",
+  "start": 165.5595,
+  "end": 171.6778,
+  "overlap": false,
+  "text": "그럼 배치를 돌려서 계속 채워야 되는데, 그 배치가 또 하나의 시스템이 됩니다.",
+  "line": 56
+ },
+ {
+  "speaker": "이도현",
+  "start": 174.5951,
+  "end": 175.4259,
+  "overlap": false,
+  "text": "음.",
+  "line": 58
+ },
+ {
+  "speaker": "박준영",
+  "start": 176.0888,
+  "end": 178.9984,
+  "overlap": false,
+  "text": "도현님, 아이디 문제는 다른 방법이 없나요.",
+  "line": 59
+ },
+ {
+  "speaker": "이도현",
+  "start": 179.9337,
+  "end": 183.2727,
+  "overlap": false,
+  "text": "어... 아이디를 합쳐서 만들면 되긴 해요.",
+  "line": 60
+ },
+ {
+  "speaker": "이도현",
+  "start": 183.5761,
+  "end": 187.232,
+  "overlap": false,
+  "text": "반복 아이디랑 날짜를 붙여서 하나의 문자열로요.",
+  "line": 61
+ },
+ {
+  "speaker": "김서연",
+  "start": 188.1296,
+  "end": 192.2858,
+  "overlap": false,
+  "text": "그렇게 하면 됩니다. 그게 표준적인 방식이기도 하고요.",
+  "line": 62
+ },
+ {
+  "speaker": "이도현",
+  "start": 192.9846,
+  "end": 197.0236,
+  "overlap": false,
+  "text": "근데 그러면 그거 파싱하는 게 프론트 여기저기 들어가는데요.",
+  "line": 63
+ },
+ {
+  "speaker": "김서연",
+  "start": 197.8391,
+  "end": 203.6908,
+  "overlap": false,
+  "text": "한 군데로 모으면 되지 않나요. 아이디 만들고 푸는 함수 하나로요.",
+  "line": 64
+ },
+ {
+  "speaker": "이도현",
+  "start": 204.2942,
+  "end": 205.1577,
+  "overlap": false,
+  "text": "그건 그렇죠.",
+  "line": 65
+ },
+ {
+  "speaker": "최민지",
+  "start": 207.8714,
+  "end": 209.5374,
+  "overlap": false,
+  "text": "하나 여쭤봐도 될까요.",
+  "line": 67
+ },
+ {
+  "speaker": "박준영",
+  "start": 210.0671,
+  "end": 211.6742,
+  "overlap": false,
+  "text": "네 말씀하세요.",
+  "line": 68
+ },
+ {
+  "speaker": "최민지",
+  "start": 212.1346,
+  "end": 218.388,
+  "overlap": false,
+  "text": "사용자가 반복 일정 하나를 수정할 때요. 이번 것만 바꿀지 전체를 바꿀지 물어보잖아요.",
+  "line": 69
+ },
+ {
+  "speaker": "김서연",
+  "start": 218.8112,
+  "end": 221.0334,
+  "overlap": false,
+  "text": "네 그게 예외 처리입니다.",
+  "line": 70
+ },
+ {
+  "speaker": "최민지",
+  "start": 221.8546,
+  "end": 224.4778,
+  "overlap": false,
+  "text": "그게 어느 쪽으로 가든 다 필요한 거죠?",
+  "line": 71
+ },
+ {
+  "speaker": "김서연",
+  "start": 225.1517,
+  "end": 226.7289,
+  "overlap": false,
+  "text": "네 둘 다 필요해요.",
+  "line": 72
+ },
+ {
+  "speaker": "최민지",
+  "start": 227.6675,
+  "end": 230.9451,
+  "overlap": false,
+  "text": "그러면 그 부분은 어차피 새로 만들어야 되는 거네요.",
+  "line": 73
+ },
+ {
+  "speaker": "이도현",
+  "start": 230.2275,
+  "end": 230.736,
+  "overlap": true,
+  "text": "그렇죠.",
+  "line": 74
+ },
+ {
+  "speaker": "최민지",
+  "start": 231.5762,
+  "end": 235.4823,
+  "overlap": false,
+  "text": "그러면 기존 코드가 안 바뀐다는 게 완전히는 아닌 거네요.",
+  "line": 75
+ },
+ {
+  "speaker": "이도현",
+  "start": 236.4665,
+  "end": 238.5299,
+  "overlap": false,
+  "text": "어... 네 그건 맞아요.",
+  "line": 76
+ },
+ {
+  "speaker": "박준영",
+  "start": 242.2851,
+  "end": 245.9968,
+  "overlap": false,
+  "text": "서연님, 조회할 때 전개하면 느려지지 않나요.",
+  "line": 78
+ },
+ {
+  "speaker": "김서연",
+  "start": 246.8563,
+  "end": 248.8442,
+  "overlap": false,
+  "text": "그게 제일 큰 리스크예요.",
+  "line": 79
+ },
+ {
+  "speaker": "김서연",
+  "start": 249.096,
+  "end": 255.4235,
+  "overlap": false,
+  "text": "달력 한 달치를 볼 때 반복 일정이 백 개 있으면 백 개를 다 계산해야 되니까요.",
+  "line": 80
+ },
+ {
+  "speaker": "박준영",
+  "start": 255.9412,
+  "end": 258.0539,
+  "overlap": false,
+  "text": "그게 얼마나 걸리는데요.",
+  "line": 81
+ },
+ {
+  "speaker": "김서연",
+  "start": 258.557,
+  "end": 260.5235,
+  "overlap": false,
+  "text": "그걸 아직 안 재봤습니다.",
+  "line": 82
+ },
+ {
+  "speaker": "박준영",
+  "start": 260.1329,
+  "end": 261.0755,
+  "overlap": true,
+  "text": "음.",
+  "line": 83
+ },
+ {
+  "speaker": "김서연",
+  "start": 261.8378,
+  "end": 266.0227,
+  "overlap": false,
+  "text": "이번 주에 재보겠습니다. 실제 데이터 크기로요.",
+  "line": 84
+ },
+ {
+  "speaker": "박준영",
+  "start": 266.4903,
+  "end": 267.9233,
+  "overlap": false,
+  "text": "언제까지 가능하세요.",
+  "line": 85
+ },
+ {
+  "speaker": "김서연",
+  "start": 268.3352,
+  "end": 271.2797,
+  "overlap": false,
+  "text": "금요일까지 벤치마크 결과 올릴게요.",
+  "line": 86
+ },
+ {
+  "speaker": "박준영",
+  "start": 272.1795,
+  "end": 273.2433,
+  "overlap": false,
+  "text": "이십육일이요.",
+  "line": 87
+ },
+ {
+  "speaker": "김서연",
+  "start": 273.7029,
+  "end": 275.1103,
+  "overlap": false,
+  "text": "네 이십육일.",
+  "line": 88
+ },
+ {
+  "speaker": "박준영",
+  "start": 275.7807,
+  "end": 277.3714,
+  "overlap": false,
+  "text": "만약에 너무 느리면요?",
+  "line": 89
+ },
+ {
+  "speaker": "김서연",
+  "start": 278.0645,
+  "end": 282.9747,
+  "overlap": false,
+  "text": "그러면 조회 결과를 캐시하는 걸로 갑니다. 그건 나중에 얹을 수 있어요.",
+  "line": 90
+ },
+ {
+  "speaker": "김서연",
+  "start": 283.2798,
+  "end": 286.2084,
+  "overlap": false,
+  "text": "저장 방식을 바꾸는 것보다 훨씬 싸요.",
+  "line": 91
+ },
+ {
+  "speaker": "박준영",
+  "start": 286.9108,
+  "end": 287.6134,
+  "overlap": false,
+  "text": "알겠습니다.",
+  "line": 92
+ },
+ {
+  "speaker": "박준영",
+  "start": 289.9977,
+  "end": 291.2877,
+  "overlap": false,
+  "text": "그럼 정리하겠습니다.",
+  "line": 94
+ },
+ {
+  "speaker": "박준영",
+  "start": 291.6253,
+  "end": 296.0659,
+  "overlap": false,
+  "text": "규칙만 저장하고 조회할 때 전개한다. 예외는 별도 테이블에 둔다.",
+  "line": 95
+ },
+ {
+  "speaker": "박준영",
+  "start": 296.3595,
+  "end": 300.5013,
+  "overlap": false,
+  "text": "아이디는 반복 아이디랑 날짜를 합친 형태로 한다.",
+  "line": 96
+ },
+ {
+  "speaker": "김서연",
+  "start": 299.8927,
+  "end": 300.1562,
+  "overlap": true,
+  "text": "네.",
+  "line": 97
+ },
+ {
+  "speaker": "박준영",
+  "start": 301.2052,
+  "end": 302.4989,
+  "overlap": false,
+  "text": "도현님 괜찮으세요.",
+  "line": 98
+ },
+ {
+  "speaker": "이도현",
+  "start": 303.4778,
+  "end": 307.6057,
+  "overlap": false,
+  "text": "네 아이디 함수 한 군데로 모으면 할 만할 것 같아요.",
+  "line": 99
+ },
+ {
+  "speaker": "박준영",
+  "start": 308.1417,
+  "end": 311.7577,
+  "overlap": false,
+  "text": "성능은 금요일에 확인하고, 문제 있으면 캐시로 푼다.",
+  "line": 100
+ },
+ {
+  "speaker": "김서연",
+  "start": 312.5711,
+  "end": 314.4568,
+  "overlap": false,
+  "text": "네 그렇게 하겠습니다.",
+  "line": 101
+ },
+ {
+  "speaker": "박준영",
+  "start": 318.1899,
+  "end": 321.5643,
+  "overlap": false,
+  "text": "그리고 지난주에 넘긴 알림 얘기가 있었죠.",
+  "line": 103
+ },
+ {
+  "speaker": "김서연",
+  "start": 321.2433,
+  "end": 322.7006,
+  "overlap": true,
+  "text": "아 네.",
+  "line": 104
+ },
+ {
+  "speaker": "박준영",
+  "start": 323.2783,
+  "end": 326.3738,
+  "overlap": false,
+  "text": "시간이 십 분쯤 남았는데 짧게 볼까요.",
+  "line": 105
+ },
+ {
+  "speaker": "김서연",
+  "start": 327.3301,
+  "end": 327.5936,
+  "overlap": false,
+  "text": "네.",
+  "line": 106
+ },
+ {
+  "speaker": "김서연",
+  "start": 327.9397,
+  "end": 332.4307,
+  "overlap": false,
+  "text": "지금 알림은 일정 하나에 알림 하나가 붙는 구조예요.",
+  "line": 107
+ },
+ {
+  "speaker": "김서연",
+  "start": 332.5839,
+  "end": 337.6517,
+  "overlap": false,
+  "text": "근데 반복 일정은 일정이 하나인데 회차가 여러 개거든요.",
+  "line": 108
+ },
+ {
+  "speaker": "이도현",
+  "start": 338.2297,
+  "end": 340.4595,
+  "overlap": false,
+  "text": "그럼 알림도 회차마다 나가야죠.",
+  "line": 109
+ },
+ {
+  "speaker": "김서연",
+  "start": 340.8654,
+  "end": 345.7608,
+  "overlap": false,
+  "text": "네 그건 맞는데, 그걸 누가 언제 등록하느냐가 문제예요.",
+  "line": 110
+ },
+ {
+  "speaker": "김서연",
+  "start": 346.1177,
+  "end": 350.5846,
+  "overlap": false,
+  "text": "조회할 때 전개하니까 회차는 조회 시점에만 존재하잖아요.",
+  "line": 111
+ },
+ {
+  "speaker": "이도현",
+  "start": 350.2294,
+  "end": 350.6628,
+  "overlap": true,
+  "text": "아.",
+  "line": 112
+ },
+ {
+  "speaker": "김서연",
+  "start": 351.0973,
+  "end": 356.8806,
+  "overlap": false,
+  "text": "알림 스케줄러는 미리 등록된 걸 보고 쏘는데, 미리 등록된 게 없는 거죠.",
+  "line": 113
+ },
+ {
+  "speaker": "이도현",
+  "start": 359.8697,
+  "end": 365.0559,
+  "overlap": false,
+  "text": "그럼 스케줄러가 매일 돌면서 다음 날치를 전개하면 되지 않아요?",
+  "line": 115
+ },
+ {
+  "speaker": "김서연",
+  "start": 365.7234,
+  "end": 367.7046,
+  "overlap": false,
+  "text": "그렇게 하면 되긴 하는데요.",
+  "line": 116
+ },
+ {
+  "speaker": "김서연",
+  "start": 367.9342,
+  "end": 372.4141,
+  "overlap": false,
+  "text": "그게 하루에 여러 번 돌면 같은 회차를 여러 번 등록할 수 있어요.",
+  "line": 117
+ },
+ {
+  "speaker": "이도현",
+  "start": 372.8435,
+  "end": 373.9639,
+  "overlap": false,
+  "text": "아 중복이요?",
+  "line": 118
+ },
+ {
+  "speaker": "김서연",
+  "start": 373.4691,
+  "end": 373.7326,
+  "overlap": true,
+  "text": "네.",
+  "line": 119
+ },
+ {
+  "speaker": "이도현",
+  "start": 374.5835,
+  "end": 378.3526,
+  "overlap": false,
+  "text": "그건 뭐 등록할 때 이미 있나 확인하면 되죠.",
+  "line": 120
+ },
+ {
+  "speaker": "김서연",
+  "start": 379.0667,
+  "end": 383.7936,
+  "overlap": false,
+  "text": "음, 그게 동시에 여러 개가 돌면 확인해도 지나갈 수 있어요.",
+  "line": 121
+ },
+ {
+  "speaker": "이도현",
+  "start": 384.1977,
+  "end": 385.429,
+  "overlap": false,
+  "text": "아 그런가요.",
+  "line": 122
+ },
+ {
+  "speaker": "박준영",
+  "start": 387.9178,
+  "end": 389.5943,
+  "overlap": false,
+  "text": "시간이 거의 다 됐는데요.",
+  "line": 124
+ },
+ {
+  "speaker": "김서연",
+  "start": 389.1894,
+  "end": 389.4529,
+  "overlap": true,
+  "text": "네.",
+  "line": 125
+ },
+ {
+  "speaker": "박준영",
+  "start": 390.2586,
+  "end": 392.643,
+  "overlap": false,
+  "text": "이거 오늘 결론 내기는 어려울 것 같은데요.",
+  "line": 126
+ },
+ {
+  "speaker": "김서연",
+  "start": 393.2244,
+  "end": 394.5298,
+  "overlap": false,
+  "text": "그럴 것 같습니다.",
+  "line": 127
+ },
+ {
+  "speaker": "박준영",
+  "start": 395.2978,
+  "end": 400.0231,
+  "overlap": false,
+  "text": "일단 지금 알림 로직 그대로 두고 회차별 등록만 붙이는 걸로 가고요.",
+  "line": 128
+ },
+ {
+  "speaker": "박준영",
+  "start": 400.2445,
+  "end": 402.5348,
+  "overlap": false,
+  "text": "중복 문제는 붙여보고 다시 보죠.",
+  "line": 129
+ },
+ {
+  "speaker": "김서연",
+  "start": 403.4806,
+  "end": 404.7315,
+  "overlap": false,
+  "text": "어... 네.",
+  "line": 130
+ },
+ {
+  "speaker": "김서연",
+  "start": 405.122,
+  "end": 408.1431,
+  "overlap": false,
+  "text": "저는 그 중복이 좀 걸리긴 하는데요.",
+  "line": 131
+ },
+ {
+  "speaker": "박준영",
+  "start": 408.5788,
+  "end": 412.3528,
+  "overlap": false,
+  "text": "실제로 나면 그때 잡죠. 지금은 일정이 빠듯해서요.",
+  "line": 132
+ },
+ {
+  "speaker": "김서연",
+  "start": 412.8782,
+  "end": 414.198,
+  "overlap": false,
+  "text": "네 알겠습니다.",
+  "line": 133
+ },
+ {
+  "speaker": "이도현",
+  "start": 414.9358,
+  "end": 416.438,
+  "overlap": false,
+  "text": "저는 괜찮을 것 같아요.",
+  "line": 134
+ },
+ {
+  "speaker": "박준영",
+  "start": 420.3004,
+  "end": 422.3034,
+  "overlap": false,
+  "text": "그럼 할 일 정리하겠습니다.",
+  "line": 136
+ },
+ {
+  "speaker": "박준영",
+  "start": 422.4694,
+  "end": 425.1473,
+  "overlap": false,
+  "text": "서연님 마이그레이션 초안이랑 벤치마크요.",
+  "line": 137
+ },
+ {
+  "speaker": "김서연",
+  "start": 425.6582,
+  "end": 430.6838,
+  "overlap": false,
+  "text": "네 마이그레이션은 수요일에 올리고 벤치마크는 금요일에 올리겠습니다.",
+  "line": 138
+ },
+ {
+  "speaker": "박준영",
+  "start": 431.3578,
+  "end": 436.1694,
+  "overlap": false,
+  "text": "도현님은 API 스펙 정리해주세요. 아이디 형식이랑 조회 파라미터요.",
+  "line": 139
+ },
+ {
+  "speaker": "이도현",
+  "start": 436.9706,
+  "end": 438.7012,
+  "overlap": false,
+  "text": "네 그거 언제까지요.",
+  "line": 140
+ },
+ {
+  "speaker": "박준영",
+  "start": 439.6432,
+  "end": 444.3267,
+  "overlap": false,
+  "text": "서연님 마이그레이션 보고 하시면 되니까 금요일까지 하시죠.",
+  "line": 141
+ },
+ {
+  "speaker": "이도현",
+  "start": 445.2469,
+  "end": 446.6748,
+  "overlap": false,
+  "text": "네 금요일까지요.",
+  "line": 142
+ },
+ {
+  "speaker": "박준영",
+  "start": 449.5511,
+  "end": 452.0668,
+  "overlap": false,
+  "text": "민지님은 예외 처리 화면이요.",
+  "line": 144
+ },
+ {
+  "speaker": "최민지",
+  "start": 452.4984,
+  "end": 456.0575,
+  "overlap": false,
+  "text": "이번 것만 바꿀지 전체 바꿀지 묻는 화면이요?",
+  "line": 145
+ },
+ {
+  "speaker": "박준영",
+  "start": 457.0435,
+  "end": 461.7098,
+  "overlap": false,
+  "text": "네 그거요. 그리고 접근성도 한 번 봐주시면 좋겠어요.",
+  "line": 146
+ },
+ {
+  "speaker": "최민지",
+  "start": 462.4786,
+  "end": 463.8391,
+  "overlap": false,
+  "text": "요일 선택 같은 거요?",
+  "line": 147
+ },
+ {
+  "speaker": "박준영",
+  "start": 464.2908,
+  "end": 470.4971,
+  "overlap": false,
+  "text": "네. 키보드로만 쓰는 분들이 요일 일곱 개를 어떻게 고를지가 좀 걱정돼서요.",
+  "line": 148
+ },
+ {
+  "speaker": "최민지",
+  "start": 471.0501,
+  "end": 473.9449,
+  "overlap": false,
+  "text": "아 맞아요 그거 확인해볼게요.",
+  "line": 149
+ },
+ {
+  "speaker": "박준영",
+  "start": 474.7174,
+  "end": 475.9321,
+  "overlap": false,
+  "text": "언제까지 될까요.",
+  "line": 150
+ },
+ {
+  "speaker": "최민지",
+  "start": 476.5635,
+  "end": 479.1249,
+  "overlap": false,
+  "text": "다음 주 수요일까지요. 칠월 일일이요.",
+  "line": 151
+ },
+ {
+  "speaker": "박준영",
+  "start": 479.7929,
+  "end": 480.7534,
+  "overlap": false,
+  "text": "네 좋습니다.",
+  "line": 152
+ },
+ {
+  "speaker": "박준영",
+  "start": 483.1045,
+  "end": 485.3519,
+  "overlap": false,
+  "text": "그럼 오늘은 여기까지 하겠습니다.",
+  "line": 154
+ },
+ {
+  "speaker": "박준영",
+  "start": 485.7079,
+  "end": 488.414,
+  "overlap": false,
+  "text": "다음 회의는 스프린트 끝나고 잡을게요.",
+  "line": 155
+ },
+ {
+  "speaker": "김서연",
+  "start": 489.1421,
+  "end": 489.4056,
+  "overlap": false,
+  "text": "네.",
+  "line": 156
+ },
+ {
+  "speaker": "최민지",
+  "start": 490.2811,
+  "end": 491.1557,
+  "overlap": false,
+  "text": "수고하셨습니다.",
+  "line": 157
+ },
+ {
+  "speaker": "이도현",
+  "start": 490.6527,
+  "end": 491.6812,
+  "overlap": true,
+  "text": "수고하셨습니다.",
+  "line": 158
+ },
+ {
+  "speaker": "김서연",
+  "start": 492.6659,
+  "end": 493.706,
+  "overlap": false,
+  "text": "수고하셨어요.",
+  "line": 159
+ }
+]
