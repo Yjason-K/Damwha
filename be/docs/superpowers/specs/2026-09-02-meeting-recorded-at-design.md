@@ -147,12 +147,16 @@ payload에 박아뒀다면 낡은 값이 재시도마다 되살아났을 것이�
 `_render_prompt`가 맨 앞에 한 줄을 붙인다.
 
 ```
-Meeting date: 2026-09-02 (Asia/Seoul)
+Meeting date: 2026-09-02
 
 Speakers:
 spk_1 김영재
 ...
 ```
+
+존 이름은 프롬프트에 싣지 않는다. 날짜는 이미 `meeting_timezone`으로 환산해서
+넘기므로 모델이 쓸 곳이 없고, 존 문자열을 출력만 하려고 클라이언트에 인자를 하나 더
+두게 된다. 환산은 파이프라인이, 렌더는 클라이언트가 한다.
 
 `_EXTRACTION_SYSTEM_PROMPT`에 `due_at` 규칙을 추가한다: `YYYY-MM-DD` 절대 날짜로
 쓰고, 발언이 "오늘"·"다음 주 목요일" 같은 상대 표현이면 회의 날짜를 기준으로
