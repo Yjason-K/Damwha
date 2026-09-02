@@ -61,7 +61,9 @@ export class MeetingsService {
     let processing: ProcessingConfig;
     let followups: Followups;
     let speakers: SpeakerBounds | undefined;
+    let recordedAt: string | undefined;
     try {
+      recordedAt = this.parseRecordedAt(body.recorded_at);
       const override = this.parseOverrideString(body.processing); // JSON.parse + zod, 오류는 BadRequest
       speakers = this.parseSpeakersString(body.speakers);
       const global_ = await this.settings.getProcessingConfig();
@@ -82,9 +84,12 @@ export class MeetingsService {
 
     return this.db.withTransaction(async (c) => {
       const meeting = await c.query(
+        // DEFAULT는 컬럼을 생략했을 때만 걸린다. 값 바인딩을 유지하려면 COALESCE로
+        // "미지정 = 등록 시각" 규칙을 SQL 한 곳에 둔다 (문장을 두 벌로 나누면
+        // 파라미터 번호가 갈라진다).
         `INSERT INTO meeting(id, title, original_filename, audio_key, recorded_at, status)
-         VALUES($1,$2,$3,$4,$5,'uploaded') RETURNING *`,
-        [meetingId, body.title ?? null, originalName, audioKey, body.recorded_at ?? null],
+         VALUES($1,$2,$3,$4,COALESCE($5::timestamptz, now()),'uploaded') RETURNING *`,
+        [meetingId, body.title ?? null, originalName, audioKey, recordedAt ?? null],
       );
       const payload = buildProcessMeetingPayload({
         meetingId, audioKey, processingVersion: 0, reprocess: false, processing, followups, speakers,
@@ -103,6 +108,15 @@ export class MeetingsService {
     if (s === 'true') return true;
     if (s === 'false') return false;
     throw new BadRequestException(`${field} must be "true" or "false"`);
+  }
+
+  // 생략과 빈 문자열은 둘 다 "미지정"이다 — INSERT의 COALESCE가 등록 시각으로
+  // 채운다. multipart 필드는 비워도 ''로 도착하므로 정규화하지 않으면
+  // ''::timestamptz가 캐스트 에러(500)를 낸다.
+  private parseRecordedAt(s: string | undefined): string | undefined {
+    if (s === undefined || s === '') return undefined;
+    if (!isIso8601(s)) throw new BadRequestException('recorded_at must be an ISO-8601 datetime');
+    return s;
   }
 
   private parseSpeakersString(s: string | undefined): SpeakerBounds | undefined {
@@ -135,9 +149,10 @@ export class MeetingsService {
   }
 
   // Manual validation (no global ValidationPipe): title must be string|null,
-  // recorded_at must be an ISO-8601 datetime or null.
+  // recorded_at must be an ISO-8601 datetime. null is rejected — the column is
+  // NOT NULL since migration 021 and every meeting keeps a reference time.
   async update(id: string, body: { title?: unknown; recorded_at?: unknown }): Promise<MeetingRow> {
-    const patch: { title?: string | null; recorded_at?: string | null } = {};
+    const patch: { title?: string | null; recorded_at?: string } = {};
     if ('title' in body) {
       if (body.title !== null && typeof body.title !== 'string') {
         throw new BadRequestException('title must be a string or null');
@@ -145,13 +160,12 @@ export class MeetingsService {
       patch.title = body.title as string | null;
     }
     if ('recorded_at' in body) {
-      if (body.recorded_at === null) {
-        patch.recorded_at = null;
-      } else if (typeof body.recorded_at !== 'string' || !isIso8601(body.recorded_at)) {
-        throw new BadRequestException('recorded_at must be an ISO-8601 datetime or null');
-      } else {
-        patch.recorded_at = body.recorded_at;
+      if (typeof body.recorded_at !== 'string' || !isIso8601(body.recorded_at)) {
+        throw new BadRequestException(
+          'recorded_at must be an ISO-8601 datetime (null is not accepted — every meeting has a reference time)',
+        );
       }
+      patch.recorded_at = body.recorded_at;
     }
     const updated = await this.meetings.update(this.db.pool, id, patch);
     if (!updated) throw new NotFoundException('meeting not found');

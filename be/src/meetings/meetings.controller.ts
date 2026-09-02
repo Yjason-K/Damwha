@@ -27,7 +27,10 @@ export class MeetingsController {
       properties: {
         audio: { type: 'string', format: 'binary', description: '오디오 파일' },
         title: { type: 'string', description: '회의 제목 (선택)' },
-        recorded_at: { type: 'string', format: 'date-time', description: '녹음 시각 ISO8601 (선택)' },
+        recorded_at: {
+          type: 'string', format: 'date-time',
+          description: '녹음 시각 ISO8601 (선택). 생략하면 업로드 시각으로 기록된다.',
+        },
         processing: {
           type: 'string',
           description:
@@ -133,8 +136,8 @@ export class MeetingsController {
       properties: {
         title: { type: 'string', nullable: true, description: '회의 제목 (null이면 해제)' },
         recorded_at: {
-          type: 'string', format: 'date-time', nullable: true,
-          description: '녹음 시각 ISO8601 (null이면 해제)',
+          type: 'string', format: 'date-time',
+          description: '녹음 시각 ISO8601. null은 받지 않는다 — 모든 회의가 기준일시를 갖는다.',
         },
       },
     },

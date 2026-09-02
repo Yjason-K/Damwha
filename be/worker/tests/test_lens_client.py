@@ -1,4 +1,5 @@
 import json
+from datetime import date
 
 import httpx
 import pytest
@@ -108,7 +109,10 @@ def test_client_sends_the_lens_extraction_contract_prompt_and_utterances(httpx_m
                 "supporting_indexes. Choose the exact primary utterance. primary_index and "
                 "every supporting index must be index values from the transcript, and "
                 "assignee_speaker_id must be a speaker_id from the Speakers section (not a "
-                "name) or null. Do not "
+                "name) or null. Write due_at as a YYYY-MM-DD calendar date. When an utterance "
+                'states a relative deadline ("today", "next Thursday"), resolve it against '
+                "the Meeting date line at the top of the transcript; if it cannot be resolved, "
+                "use null. Do not "
                 "speculate or return duplicates. Write text in the language of the transcript."
             ),
         },
@@ -337,3 +341,98 @@ def test_client_rejects_an_out_of_range_index_as_permanent(httpx_mock):
         )
     assert exc.value.kind is ErrorKind.PERMANENT
     assert "99" in exc.value.message and "1..1" in exc.value.message
+
+
+def test_client_drops_an_unparseable_due_at_but_keeps_the_item(httpx_mock):
+    # 모델은 "오늘"·"22 일" 같은 상대 표현을 그대로 낸다. 예전에는 pydantic 검증이
+    # all-or-nothing이라 날짜 하나가 추출 run 전체를 llm_invalid_response로 죽였다
+    # (mtg_1의 job_3: 날짜 6개가 항목 10건을 날렸다).
+    httpx_mock.add_response(
+        json={
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "items": [
+                                    {
+                                        "kind": "action",
+                                        "text": "보고서 보내기",
+                                        "due_at": "오늘",
+                                        "primary_index": 1,
+                                        "supporting_indexes": [],
+                                    },
+                                    {
+                                        "kind": "action",
+                                        "text": "회의록 정리",
+                                        "due_at": "2026-09-22",
+                                        "primary_index": 1,
+                                        "supporting_indexes": [],
+                                    },
+                                    {
+                                        "kind": "action",
+                                        "text": "자정 마감",
+                                        "due_at": "2026-09-22T00:00:00",
+                                        "primary_index": 1,
+                                        "supporting_indexes": [],
+                                    },
+                                    {
+                                        "kind": "action",
+                                        "text": "UTC 타임스탬프",
+                                        "due_at": "2026-09-22T10:00:00Z",
+                                        "primary_index": 1,
+                                        "supporting_indexes": [],
+                                    },
+                                ]
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+    )
+
+    items = LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
+        model="job-model", utterances=[{"id": "utt_1", "text": "오늘까지 보내주세요."}]
+    )
+
+    # 모델은 날짜 대신 ISO datetime을 내는 일이 잦다 — date.fromisoformat이
+    # 거부해도 datetime.fromisoformat으로 한 번 더 받아야 파싱 가능한 값을
+    # 버리지 않는다.
+    assert [i.due_at for i in items] == [
+        None,
+        date(2026, 9, 22),
+        date(2026, 9, 22),
+        date(2026, 9, 22),
+    ]
+    assert [i.text for i in items] == [
+        "보고서 보내기",
+        "회의록 정리",
+        "자정 마감",
+        "UTC 타임스탬프",
+    ]
+
+
+def test_client_puts_the_meeting_date_at_the_top_of_the_prompt(httpx_mock):
+    httpx_mock.add_response(json={"choices": [{"message": {"content": '{"items": []}'}}]})
+    utterances = [
+        {"id": "utt_1", "speaker_id": "spk_1", "speaker_name": "Ada", "text": "오늘까지 보낼게요."}
+    ]
+
+    LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
+        model="job-model", utterances=utterances, meeting_date=date(2026, 9, 2)
+    )
+
+    user = json.loads(httpx_mock.get_request().content)["messages"][1]["content"]
+    assert user == "Meeting date: 2026-09-02\n\nSpeakers:\nspk_1 Ada\n\n1 Ada: 오늘까지 보낼게요."
+
+
+def test_client_omits_the_meeting_date_line_when_it_is_unknown(httpx_mock):
+    httpx_mock.add_response(json={"choices": [{"message": {"content": '{"items": []}'}}]})
+
+    LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
+        model="job-model", utterances=[{"id": "utt_1", "text": "hi"}]
+    )
+
+    user = json.loads(httpx_mock.get_request().content)["messages"][1]["content"]
+    assert "Meeting date" not in user

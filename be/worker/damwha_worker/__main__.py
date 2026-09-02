@@ -80,6 +80,7 @@ def handle_job(
     default_speaker_prefix="Speaker",
     lens_llm_model=None,
     summary_llm_model=None,
+    meeting_timezone="Asia/Seoul",
     llm_server=None,
     shutdown_event=None,
     register_abort=None,
@@ -133,7 +134,13 @@ def handle_job(
             with llm_server(payload.model) as proc, _llm_abort_hook(register_abort, proc):
                 client = build_lens_client()
                 return run_extract_lenses(
-                    conn, job, payload, client, worker_id=worker_id, shutdown_event=shutdown_event
+                    conn,
+                    job,
+                    payload,
+                    client,
+                    worker_id=worker_id,
+                    shutdown_event=shutdown_event,
+                    meeting_timezone=meeting_timezone,
                 )
         if job["type"] == "summarize_meeting":
             with llm_server(payload.model) as proc, _llm_abort_hook(register_abort, proc):
@@ -212,6 +219,7 @@ def run_once(
     default_speaker_prefix="Speaker",
     lens_llm_model=None,
     summary_llm_model=None,
+    meeting_timezone="Asia/Seoul",
     llm_server=None,
     shutdown_event=None,
 ) -> str | None:
@@ -232,6 +240,7 @@ def run_once(
         default_speaker_prefix=default_speaker_prefix,
         lens_llm_model=lens_llm_model,
         summary_llm_model=summary_llm_model,
+        meeting_timezone=meeting_timezone,
         llm_server=llm_server,
         shutdown_event=shutdown_event,
     )
@@ -272,6 +281,7 @@ def dispatch_claimed_job(
             default_speaker_prefix=settings.default_speaker_prefix,
             lens_llm_model=settings.lens_llm_model,
             summary_llm_model=settings.summary_llm_model,
+            meeting_timezone=settings.meeting_timezone,
             llm_server=llm_server_fn,
             shutdown_event=shutdown_event,
             # heartbeat가 소유권 상실(운영자 취소/reaper)을 감지하면 LLM 서버를 내린다

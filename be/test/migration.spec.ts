@@ -468,4 +468,33 @@ describe('migration', () => {
     await expect(db.pool.query(`INSERT INTO meeting(id,audio_key) VALUES('mtg_0','k')`)).rejects.toThrow(/check constraint/);
     await expect(db.pool.query(`INSERT INTO meeting(id,audio_key) VALUES('mtg_001','k')`)).rejects.toThrow(/check constraint/);
   });
+
+  it('021 backfills a null recorded_at from created_at and makes the column NOT NULL', async () => {
+    // startTestDb()는 항상 모든 마이그레이션을 적용한 DB를 준다. 021 이전 상태를
+    // 재현하려면 제약을 잠깐 풀어야 한다 — 021을 다시 실행하면 복구된다.
+    await db.pool.query(`ALTER TABLE meeting ALTER COLUMN recorded_at DROP NOT NULL`);
+    const seeded = await db.pool.query(
+      `INSERT INTO meeting(audio_key, status, recorded_at, created_at)
+       VALUES('k','uploaded', NULL, '2026-01-02T03:04:05Z') RETURNING id`,
+    );
+    const id = seeded.rows[0].id;
+
+    const sql = fs.readFileSync(
+      path.join(__dirname, '../src/database/migrations/021_meeting_recorded_at_not_null.sql'),
+      'utf8',
+    );
+    await db.pool.query(sql);
+
+    const row = await db.pool.query(
+      `SELECT recorded_at, created_at FROM meeting WHERE id=$1`,
+      [id],
+    );
+    expect(row.rows[0].recorded_at.toISOString()).toBe(row.rows[0].created_at.toISOString());
+
+    const col = await db.pool.query(
+      `SELECT is_nullable FROM information_schema.columns
+       WHERE table_name='meeting' AND column_name='recorded_at'`,
+    );
+    expect(col.rows[0].is_nullable).toBe('NO');
+  });
 });
