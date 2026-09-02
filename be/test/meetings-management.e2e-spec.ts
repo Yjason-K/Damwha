@@ -2,7 +2,6 @@ import { Test } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { startTestDb, StartedTestDb } from './db';
 import { AppModule } from '../src/app.module';
@@ -13,11 +12,8 @@ describe('meetings management (PATCH / DELETE)', () => {
   let storageRoot: string;
 
   beforeAll(async () => {
-    // StorageService canonicalizes STORAGE_ROOT in its constructor, so set it
-    // BEFORE the app is built. A fresh temp dir keeps disk assertions isolated.
-    storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dw-mtg-mgmt-'));
-    process.env.STORAGE_ROOT = storageRoot;
     db = await startTestDb();
+    storageRoot = db.storageRoot; // startTestDb가 잡은 스위트 전용 임시 디렉터리
     const mod = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = mod.createNestApplication();
     await app.init();
