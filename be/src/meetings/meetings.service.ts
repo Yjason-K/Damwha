@@ -297,12 +297,21 @@ export class MeetingsService {
     });
   }
 
+  // 재생은 원본을 우선한다 — normalized는 STT용 16 kHz mono라 귀로 듣기엔 나쁘다.
+  // ffmpeg.normalize()는 리샘플·리먹싱만 하고 잘라내지 않아 두 파일의 길이가 같으므로,
+  // 어느 쪽을 흘려보내든 발화 타임스탬프는 그대로 맞는다. 원본이 없으면 normalized로
+  // 물러선다 — 처리 뒤 원본만 지운 회의도 재생은 되게.
   async getAudioDescriptor(id: string): Promise<{ key: string; size: number }> {
     const meeting = await this.meetings.findById(this.db.pool, id);
     if (!meeting) throw new NotFoundException('meeting not found');
-    const key = meeting.normalized_key ?? meeting.audio_key;
-    const stat = await this.storage.stat(key);
-    return { key, size: stat.size };
+    for (const key of [meeting.audio_key, meeting.normalized_key]) {
+      if (!key) continue;
+      const stat = await this.storage.statOrNull(key);
+      if (stat) return { key, size: stat.size };
+    }
+    // 회의 행은 있는데 파일이 하나도 없다 — 스토리지만 지워진 회의. stat의 ENOENT를
+    // 그대로 올리면 Nest 기본 핸들러가 500으로 매핑하는데, 부재는 404가 맞다.
+    throw new NotFoundException('audio file not found');
   }
 
   audioStream(key: string, range?: { start: number; end: number }) {

@@ -63,6 +63,17 @@ export class StorageService {
   stat(key: string): Promise<fs.Stats> {
     return fs.promises.stat(this.resolve(key));
   }
+  // stat() that answers null for a missing file instead of rejecting. Callers
+  // choosing between candidate keys need "is it there?" without an ENOENT
+  // escaping as a 500; every other error (EACCES, EIO) still throws.
+  async statOrNull(key: string): Promise<fs.Stats | null> {
+    try {
+      return await fs.promises.stat(this.resolve(key));
+    } catch (e: any) {
+      if (e?.code === 'ENOENT') return null;
+      throw e;
+    }
+  }
   // Recursively remove a directory subtree addressed by a relative key prefix.
   // Routes through resolve() so the traversal guard applies; no-op if missing.
   async deleteDir(keyPrefix: string): Promise<void> {

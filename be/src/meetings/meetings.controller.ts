@@ -4,6 +4,7 @@ import {
 import { ApiBody, ApiConsumes, ApiOperation, ApiParam, ApiProduces, ApiTags } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
+import type { ReadStream } from 'fs';
 import { MeetingsService } from './meetings.service';
 import { uploadInterceptorOptions } from '../storage/upload-options';
 import { SummaryService } from '../summary/summary.service';
@@ -230,10 +231,22 @@ export class MeetingsController {
       res.status(206);
       res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
       res.setHeader('Content-Length', String(end - start + 1));
-      return this.service.audioStream(key, { start, end }).pipe(res);
+      return this.pipeAudio(this.service.audioStream(key, { start, end }), res);
     }
     res.status(200);
     res.setHeader('Content-Length', String(size));
-    return this.service.audioStream(key).pipe(res);
+    return this.pipeAudio(this.service.audioStream(key), res);
+  }
+
+  // pipe()는 소스의 error를 목적지로 전달하지 않는다. 리스너가 없으면 스트리밍
+  // 도중 파일이 사라졌을 때(워커 재처리의 os.replace 등) unhandled 'error'가
+  // uncaughtException으로 올라가 프로세스가 죽는다. 헤더는 이미 나간 뒤라 상태
+  // 코드는 못 바꾸고, 소켓을 끊어 클라이언트에 중단을 알리는 게 최선이다.
+  // 반대 방향도 함께 건다 — 플레이어의 탐색은 앞선 range 요청을 계속 버리므로,
+  // 끊긴 응답의 읽기 스트림을 닫지 않으면 fd가 샌다.
+  private pipeAudio(stream: ReadStream, res: Response) {
+    stream.on('error', (err) => res.destroy(err));
+    res.on('close', () => stream.destroy());
+    return stream.pipe(res);
   }
 }
