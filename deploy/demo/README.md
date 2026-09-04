@@ -43,6 +43,19 @@ docker compose pull && docker compose down -v && docker compose up -d
 새 덤프가 무시된다. 로컬 스모크는 `PUSH=0 deploy/demo/release.sh smoke` 뒤
 `DAMWHA_DEMO_TAG=smoke DAMWHA_DEMO_PORT=3100 docker compose up -d`.
 
+## 둘러보기(투어) 회의
+
+`demo/seed/tour.json`이 투어의 "테스트 오디오 업로드" 결과로 드러낼 회의를 정한다
+(투어 설계 `docs/superpowers/specs/2026-09-04-demo-guided-tour-design.md`).
+
+- `meeting_id` — `manifest.json`에 있는 id. release.sh가 없으면 실패한다.
+- `file_label` — 업로드 모달에 보일 "파일명 · 크기".
+- `search_query` — 검색 단계에서 넣을 예시어. 그 회의 전사에 확실히 있는 단어.
+
+시드를 새로 구울 때 체크리스트: 투어 회의는 렌즈가 1건 이상, 요약 done, `demo/audio/`에
+원본 m4a 존재(`find-original.py`가 확인). 로컬에서 보려면 `fe/.env.local`에
+`VITE_DEMO_MODE=true`와 위 세 값을 `VITE_DEMO_TOUR_*`로 넣고 `pnpm fe dev`.
+
 ## 데모에서 꺼진 것
 
 - 쓰기 전부 — API `DEMO_READ_ONLY=true`가 GET/HEAD/OPTIONS와 `POST /search` 외 요청을 403으로

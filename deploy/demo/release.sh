@@ -13,7 +13,7 @@ PLATFORM=linux/arm64
 PUSH="${PUSH:-1}"
 cd "$ROOT"
 
-for f in demo/seed/damwha-demo.dump demo/seed/manifest.json; do
+for f in demo/seed/damwha-demo.dump demo/seed/manifest.json demo/seed/tour.json; do
   [ -f "$f" ] || { echo "missing $f — run demo/seed/build.sh first" >&2; exit 1; }
 done
 
@@ -32,9 +32,18 @@ docker buildx build --platform "$PLATFORM" --load -t damwha/postgres-bigm:pg16 b
 echo "== demo postgres"
 docker buildx build --platform "$PLATFORM" "${OUT[@]}" -f deploy/demo/postgres.Dockerfile .
 
+TOUR_ID=$(python3 -c "import json;print(json.load(open('demo/seed/tour.json'))['meeting_id'])")
+TOUR_LABEL=$(python3 -c "import json;print(json.load(open('demo/seed/tour.json'))['file_label'])")
+TOUR_QUERY=$(python3 -c "import json;print(json.load(open('demo/seed/tour.json'))['search_query'])")
+# 시드 덤프에 그 회의가 실제로 있는지 — 없으면 투어의 업로드 결과가 404다
+python3 -c "import json,sys; ids=[m['id'] for m in json.load(open('demo/seed/manifest.json'))]; sys.exit(0 if '$TOUR_ID' in ids else 'tour.json meeting_id not in manifest.json')"
+
 echo "== demo api"
 docker buildx build --platform "$PLATFORM" "${OUT_API[@]}" \
   --build-arg VITE_DEMO_MODE=true --build-arg DEMO_SEED=true \
+  --build-arg "VITE_DEMO_TOUR_MEETING_ID=$TOUR_ID" \
+  --build-arg "VITE_DEMO_TOUR_FILE_LABEL=$TOUR_LABEL" \
+  --build-arg "VITE_DEMO_TOUR_SEARCH_QUERY=$TOUR_QUERY" \
   -f deploy/api.Dockerfile .
 
 echo "done: $REGISTRY/damwha-demo-{postgres,api}:$TAG (+latest), push=$PUSH"

@@ -132,6 +132,7 @@ features/demo/
 | `insight-tab-summary` / `insight-tab-note` | InsightPane 탭 트리거 |
 | `lens-section` | InsightPane 요약 탭의 렌즈 섹션(다음 할 일·핵심 결정) |
 | `search-trigger` | AppShell 상단 검색 버튼(⌘K) |
+| `search-palette` | CommandBar DialogPrimitive.Content (명령 팔레트) |
 | `tour-launch` | LeftNav 둘러보기 버튼 |
 
 의존성 추가: `driver.js` 하나.
@@ -227,7 +228,7 @@ blocker를 우회한다.
 | 6 | `player-bar` | — | 화자별 구간·배속·발화 이동 |
 | 7 | `insight-tab-summary` | 탭 click | 참석자·주요 주제·단락 요약 |
 | 8 | `lens-section` | scrollIntoView | 액션·결정·약속을 자동 추출. 사람이 고칠 수 있다 |
-| 9 | `search-trigger` | 팔레트 열기 + `searchQuery` 주입 | 모든 대화를 가로질러 발화를 찾는다 |
+| 9 | `search-palette` | `search-trigger` click → 팔레트 대기 + `searchQuery` 주입 | 모든 대화를 가로질러 발화를 찾는다 |
 | 10 | `insight-tab-note` | 팔레트 닫기 → 탭 click | 마크다운 메모. 마무리: 읽기 전용 데모, NotebookLM 샘플, 네비 버튼으로 다시 볼 수 있음 |
 
 - 단계 4의 `description`은 시뮬레이션 구독으로 tick마다 `driver.refresh()`.

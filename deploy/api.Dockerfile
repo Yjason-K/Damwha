@@ -9,6 +9,9 @@
 # is unchanged.
 ARG VITE_DEMO_MODE=false
 ARG DEMO_SEED=false
+ARG VITE_DEMO_TOUR_MEETING_ID=
+ARG VITE_DEMO_TOUR_FILE_LABEL=
+ARG VITE_DEMO_TOUR_SEARCH_QUERY=
 
 FROM node:22-alpine AS build
 RUN corepack enable
@@ -24,7 +27,14 @@ COPY fe ./fe
 RUN pnpm --filter damwha-be build
 # Same origin as the API: the SPA calls /api relative to itself.
 ARG VITE_DEMO_MODE
-RUN VITE_API_BASE_URL=/api VITE_DEMO_MODE=$VITE_DEMO_MODE pnpm --filter damwha-fe build
+ARG VITE_DEMO_TOUR_MEETING_ID
+ARG VITE_DEMO_TOUR_FILE_LABEL
+ARG VITE_DEMO_TOUR_SEARCH_QUERY
+RUN VITE_API_BASE_URL=/api VITE_DEMO_MODE=$VITE_DEMO_MODE \
+    VITE_DEMO_TOUR_MEETING_ID=$VITE_DEMO_TOUR_MEETING_ID \
+    VITE_DEMO_TOUR_FILE_LABEL="$VITE_DEMO_TOUR_FILE_LABEL" \
+    VITE_DEMO_TOUR_SEARCH_QUERY="$VITE_DEMO_TOUR_SEARCH_QUERY" \
+    pnpm --filter damwha-fe build
 
 # Demo seed storage (empty dir unless DEMO_SEED=true). Kept in its own stage so
 # the demo/ tree never lands in the runtime image.
