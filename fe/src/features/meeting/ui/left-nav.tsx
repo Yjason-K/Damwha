@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Suspense, lazy } from "react";
 import { Link, useMatch, useNavigate, useParams } from "react-router";
 
 import { Badge } from "@/shared/ui/badge";
@@ -7,11 +8,18 @@ import { Kbd } from "@/shared/ui/kbd";
 import { SearchField } from "@/shared/ui/search-field";
 import { SidebarItem } from "@/shared/ui/sidebar-item";
 import { cn } from "@/shared/lib/utils";
+import { env } from "@/shared/config/env";
 
 import { useMeetings } from "../api/meetings";
 import type { MeetingFilter, MeetingStatus } from "../model/types";
 import { Icon } from "./icons";
 import { UploadDialog } from "./upload-dialog";
+
+const TourLaunchButton = lazy(() =>
+  import("@/features/demo/ui/tour-launch-button").then((m) => ({
+    default: m.TourLaunchButton,
+  })),
+);
 
 /**
  * LeftNav — browse-first rail: logo, ⌘K search, new-meeting CTA, nav,
@@ -235,6 +243,12 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
           )}
         </ul>
       </div>
+
+      {env.demoMode ? (
+        <Suspense fallback={null}>
+          <TourLaunchButton />
+        </Suspense>
+      ) : null}
 
       <UploadDialog
         open={uploadOpen}
