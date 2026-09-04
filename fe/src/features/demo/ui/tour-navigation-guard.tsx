@@ -6,14 +6,16 @@ import { TourExitDialog } from "./tour-exit-dialog";
 
 /**
  * 투어 중 라우트 이동(네비 클릭·뒤로가기)과 driver의 종료 요청(ESC·오버레이·X)을 한 모달로
- * 받는다(투어 설계 §4.6). 투어 자신의 이동은 isNavigating()으로 통과시킨다.
+ * 받는다(투어 설계 §4.6). 투어 자신의 이동은 isNavigating()으로 통과시키되, 브라우저
+ * 뒤로·앞으로(POP)는 예외다 — 투어는 push/replace만 쓰므로 prepare가 도는 동안 들어온
+ * POP은 언제나 사용자의 것이고, 그 창을 열어 두면 긴 prepare 중 확인 없이 빠져나간다.
  */
 export function TourNavigationGuard() {
   const blocker = useBlocker(
-    ({ currentLocation, nextLocation }) =>
+    ({ currentLocation, nextLocation, historyAction }) =>
       tourRunner.isActive() &&
-      !tourRunner.isNavigating() &&
-      currentLocation.pathname !== nextLocation.pathname,
+      currentLocation.pathname !== nextLocation.pathname &&
+      (historyAction === "POP" || !tourRunner.isNavigating()),
   );
   const [exitAsked, setExitAsked] = React.useState(false);
 

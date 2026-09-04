@@ -28,6 +28,7 @@ const blocker = vi.hoisted(() => ({
     | ((a: {
         currentLocation: { pathname: string };
         nextLocation: { pathname: string };
+        historyAction: "POP" | "PUSH" | "REPLACE";
       }) => boolean),
 }));
 vi.mock("react-router", () => ({
@@ -53,6 +54,7 @@ test("투어가 비활성이면 라우트 이동을 막지 않는다", () => {
     blocker.shouldBlock!({
       currentLocation: { pathname: "/" },
       nextLocation: { pathname: "/settings" },
+      historyAction: "PUSH",
     }),
   ).toBe(false);
 });
@@ -64,6 +66,7 @@ test("투어 활성 중 사용자의 라우트 이동은 막고, 투어 자신�
     blocker.shouldBlock!({
       currentLocation: { pathname: "/" },
       nextLocation: { pathname: "/settings" },
+      historyAction: "PUSH",
     }),
   ).toBe(true);
   runner.navigating = true;
@@ -71,6 +74,35 @@ test("투어 활성 중 사용자의 라우트 이동은 막고, 투어 자신�
     blocker.shouldBlock!({
       currentLocation: { pathname: "/" },
       nextLocation: { pathname: "/meetings/mtg_7" },
+      historyAction: "PUSH",
+    }),
+  ).toBe(false);
+  expect(
+    blocker.shouldBlock!({
+      currentLocation: { pathname: "/" },
+      nextLocation: { pathname: "/meetings/mtg_7" },
+      historyAction: "REPLACE",
+    }),
+  ).toBe(false);
+});
+
+test("투어가 이동 중이어도 브라우저 뒤로·앞으로(POP)는 막는다", () => {
+  render(<TourNavigationGuard />);
+  runner.active = true;
+  runner.navigating = true;
+  expect(
+    blocker.shouldBlock!({
+      currentLocation: { pathname: "/meetings/mtg_7" },
+      nextLocation: { pathname: "/settings" },
+      historyAction: "POP",
+    }),
+  ).toBe(true);
+  // 경로가 같은 POP(해시·쿼리만 바뀜)은 이전처럼 통과한다.
+  expect(
+    blocker.shouldBlock!({
+      currentLocation: { pathname: "/meetings/mtg_7" },
+      nextLocation: { pathname: "/meetings/mtg_7" },
+      historyAction: "POP",
     }),
   ).toBe(false);
 });
