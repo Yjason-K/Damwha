@@ -34,11 +34,14 @@ let suppressExit = false;
 let liveCleanup: (() => void) | null = null;
 const exitListeners = new Set<() => void>();
 
+/**
+ * navigating 플래그는 **건드리지 않는다**. router.navigate는 `/`가 커밋되는 즉시 settle하는데
+ * IndexRoute의 <Navigate replace>는 그 뒤에 온다 — 여기서 플래그를 되돌리면 prepare가 아직
+ * 도는 중에 창이 닫혀 그 리다이렉트가 종료 가드에 걸린다. 소유권은 resolveFrom의 try/finally
+ * 하나뿐이고, 그게 prepare 구간 전체를 덮는다.
+ */
 function navigate(to: string) {
-  navigating = true;
-  void router.navigate(to).finally(() => {
-    navigating = false;
-  });
+  void router.navigate(to);
 }
 
 function currentStage(): SimStage {
