@@ -22,6 +22,20 @@ export function TourNavigationGuard() {
   const blocked = blocker.state === "blocked";
   const open = blocked || exitAsked;
 
+  /**
+   * 모달이 떠 있는 동안 driver의 키보드 조작을 잠근다(투어 설계 §2.6). driver는 window의
+   * keyup에 붙어 있어서 Radix 다이얼로그 안에서 누른 키도 그대로 받는다 — ArrowRight면
+   * 모달 뒤에서 투어가 한 단계 넘어가고, Escape면 Radix가 keydown으로 닫은 모달을 driver의
+   * keyup(requestExit)이 곧바로 다시 연다. driver 설정을 갈아끼우는 대신 캡처 단계에서
+   * 전파를 끊어, 모달이 닫히면 원래대로 돌아오게 한다.
+   */
+  React.useEffect(() => {
+    if (!open) return;
+    const swallow = (e: KeyboardEvent) => e.stopPropagation();
+    window.addEventListener("keyup", swallow, true);
+    return () => window.removeEventListener("keyup", swallow, true);
+  }, [open]);
+
   const onContinue = () => {
     setExitAsked(false);
     if (blocked) blocker.reset();

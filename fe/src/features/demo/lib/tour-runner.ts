@@ -51,6 +51,7 @@ function currentStage(): SimStage {
 function toDriveStep(step: TourStep, index: number): DriveStep {
   return {
     element: tourSelector(step.target),
+    disableActiveInteraction: step.disableActiveInteraction,
     popover: {
       title: step.title,
       description: step.description,
@@ -178,7 +179,8 @@ export const tourRunner = {
     });
     active = d;
     void resolveFrom(0).then((idx) => {
-      if (!active) return;
+      // advance()와 같은 규칙 — 준비 중에 start()가 다시 불렸으면 이 d는 이미 낡았다.
+      if (active !== d) return;
       if (idx < 0) tourRunner.stop();
       else d.drive(idx);
     });

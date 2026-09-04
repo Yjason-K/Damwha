@@ -17,6 +17,13 @@ for f in demo/seed/damwha-demo.dump demo/seed/manifest.json demo/seed/tour.json;
   [ -f "$f" ] || { echo "missing $f — run demo/seed/build.sh first" >&2; exit 1; }
 done
 
+TOUR_ID=$(python3 -c "import json;print(json.load(open('demo/seed/tour.json'))['meeting_id'])")
+TOUR_LABEL=$(python3 -c "import json;print(json.load(open('demo/seed/tour.json'))['file_label'])")
+TOUR_QUERY=$(python3 -c "import json;print(json.load(open('demo/seed/tour.json'))['search_query'])")
+# 시드 덤프에 그 회의가 실제로 있는지 — 없으면 투어의 업로드 결과가 404다.
+# 이미지를 하나라도 밀기 전에 본다: 여기서 걸리면 레지스트리에 깨진 태그가 남지 않는다.
+python3 -c "import json,sys; ids=[m['id'] for m in json.load(open('demo/seed/manifest.json'))]; sys.exit(0 if sys.argv[1] in ids else 'tour.json meeting_id not in manifest.json')" "$TOUR_ID"
+
 if [ "$PUSH" = "1" ]; then
   gh auth token | docker login ghcr.io -u "$(gh api user -q .login)" --password-stdin
   OUT=(--push -t "$REGISTRY/damwha-demo-postgres:$TAG" -t "$REGISTRY/damwha-demo-postgres:latest")
@@ -31,12 +38,6 @@ docker buildx build --platform "$PLATFORM" --load -t damwha/postgres-bigm:pg16 b
 
 echo "== demo postgres"
 docker buildx build --platform "$PLATFORM" "${OUT[@]}" -f deploy/demo/postgres.Dockerfile .
-
-TOUR_ID=$(python3 -c "import json;print(json.load(open('demo/seed/tour.json'))['meeting_id'])")
-TOUR_LABEL=$(python3 -c "import json;print(json.load(open('demo/seed/tour.json'))['file_label'])")
-TOUR_QUERY=$(python3 -c "import json;print(json.load(open('demo/seed/tour.json'))['search_query'])")
-# 시드 덤프에 그 회의가 실제로 있는지 — 없으면 투어의 업로드 결과가 404다
-python3 -c "import json,sys; ids=[m['id'] for m in json.load(open('demo/seed/manifest.json'))]; sys.exit(0 if '$TOUR_ID' in ids else 'tour.json meeting_id not in manifest.json')"
 
 echo "== demo api"
 docker buildx build --platform "$PLATFORM" "${OUT_API[@]}" \

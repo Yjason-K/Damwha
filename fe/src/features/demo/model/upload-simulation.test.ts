@@ -48,7 +48,7 @@ test("stage는 시간에 따라 순서대로 전진하고 progress는 stage 안�
   expect(simulationView()?.stage).toBe("embed");
 });
 
-test("전환마다 구독자와 세 쿼리 키를 알리고, 12초에 done이 된다", () => {
+test("전환마다 구독자와 네 쿼리 키를 알리고, 12초에 done이 된다", () => {
   const { client, invalidate } = qc();
   const cb = vi.fn();
   subscribeSimulation(cb);
@@ -63,6 +63,8 @@ test("전환마다 구독자와 세 쿼리 키를 알리고, 12초에 done이 �
   const keys = invalidate.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
   expect(keys).toContain(JSON.stringify(["meeting-status", "mtg_7"]));
   expect(keys).toContain(JSON.stringify(["meeting", "mtg_7"]));
+  // done 전엔 인터셉터가 렌즈를 빈 queued로 덮으므로, 끝날 때 다시 읽어야 진짜 렌즈가 뜬다
+  expect(keys).toContain(JSON.stringify(["meeting-lenses", "mtg_7"]));
   expect(keys).toContain(JSON.stringify(["meetings"]));
 });
 

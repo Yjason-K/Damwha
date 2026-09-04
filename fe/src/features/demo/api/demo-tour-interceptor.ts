@@ -59,7 +59,12 @@ export function installDemoTour(client: AxiosInstance, opts: Opts): void {
     if (path === "/meetings" && Array.isArray(data)) {
       res.data = data.map((m) => (isRecord(m) && isTour(m.id) ? { ...m, status: "processing" } : m));
     } else if (path === `/meetings/${tour}` && isRecord(data)) {
-      res.data = { ...data, status: "processing" };
+      // 상세는 status만 덮으면 안 된다 — MeetingPage는 meeting이 있으면 전사·인사이트를
+      // 그대로 그리므로, 완성된 발화·클러스터·요약이 "처리 중" 배너 뒤에 비친다.
+      res.data = { ...data, status: "processing", utterances: [], clusters: [], summary: null };
+    } else if (path === `/meetings/${tour}/lenses` && isRecord(data)) {
+      // 같은 이유로 렌즈도 비운다. queued면 LensState가 "찾고 있어요"로 그린다.
+      res.data = { ...data, items: [], extraction_status: "queued" };
     } else if (path === `/meetings/${tour}/status`) {
       res.data = {
         status: "processing",

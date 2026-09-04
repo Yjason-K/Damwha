@@ -20,6 +20,8 @@ export type TourStep = {
   prepare?: () => Promise<void>;
   /** 시뮬레이션 진행을 description에 반영하고 done 전엔 "다음"을 막는다. */
   live?: boolean;
+  /** 스포트라이트 안쪽 클릭까지 막는다(가짜 진행을 사용자가 건드리지 못하게). */
+  disableActiveInteraction?: boolean;
 };
 
 const NARRATION: Record<SimStage, string> = {
@@ -88,6 +90,9 @@ export function buildTourSteps(ctx: Ctx): TourStep[] {
           description: NARRATION.queued,
           side: "bottom",
           live: true,
+          // 배너의 "취소"가 스포트라이트 안에 있다 — 누르면 진짜 POST가 나가고 읽기 전용
+          // 토스트가 뜬다. 이 단계에서만 하이라이트 안쪽 클릭을 막는다.
+          disableActiveInteraction: true,
           prepare: async () => {
             clickTour("upload-submit");
             await waitFor(tourSelector("processing-banner"), 5000);

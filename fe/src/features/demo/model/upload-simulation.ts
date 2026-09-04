@@ -79,6 +79,7 @@ function notify() {
 function invalidate(qc: QueryClient, meetingId: string) {
   void qc.invalidateQueries({ queryKey: ["meeting-status", meetingId] });
   void qc.invalidateQueries({ queryKey: ["meeting", meetingId] });
+  void qc.invalidateQueries({ queryKey: ["meeting-lenses", meetingId] });
   void qc.invalidateQueries({ queryKey: ["meetings"] });
 }
 

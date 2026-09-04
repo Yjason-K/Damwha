@@ -61,7 +61,7 @@ test("업로드 후·시뮬레이션 없음: 응답을 그대로 흘린다", asy
   expect((await c.get("/meetings")).data).toEqual([{ id: TOUR, status: "done" }]);
 });
 
-test("시뮬레이션 중: 목록·상세의 status와 /status 응답을 덮어쓴다", async () => {
+test("시뮬레이션 중: 목록의 status와 /status 응답을 덮어쓴다", async () => {
   const view: SimView = { meetingId: TOUR, stage: "stt", progress: 0.25 };
   const list = client([{ id: TOUR, status: "done" }, { id: "mtg_5", status: "done" }]);
   install(list, { uploaded: true, view });
@@ -69,14 +69,6 @@ test("시뮬레이션 중: 목록·상세의 status와 /status 응답을 덮어�
     { id: TOUR, status: "processing" },
     { id: "mtg_5", status: "done" },
   ]);
-
-  const detail = client({ id: TOUR, status: "done", utterances: [1] });
-  install(detail, { uploaded: true, view });
-  expect((await detail.get(`/meetings/${TOUR}`)).data).toEqual({
-    id: TOUR,
-    status: "processing",
-    utterances: [1],
-  });
 
   const status = client({ status: "done", stage: null, progress: null, error: null, summary: { status: "done" }, search_index: { status: "done" } });
   install(status, { uploaded: true, view });
@@ -87,6 +79,54 @@ test("시뮬레이션 중: 목록·상세의 status와 /status 응답을 덮어�
     error: null,
     summary: { status: "queued", model: null, error: null },
     search_index: { status: "queued", error: null, updated_at: expect.any(String) },
+  });
+});
+
+test("시뮬레이션 중: 상세에서 완성된 전사·클러스터·요약을 비운다", async () => {
+  const view: SimView = { meetingId: TOUR, stage: "stt", progress: 0.25 };
+  const detail = client({
+    id: TOUR,
+    title: "투어 회의",
+    status: "done",
+    utterances: [{ id: "u1" }],
+    clusters: [{ id: "c1" }],
+    summary: { status: "done", body: "요약" },
+  });
+  install(detail, { uploaded: true, view });
+  expect((await detail.get(`/meetings/${TOUR}`)).data).toEqual({
+    id: TOUR,
+    title: "투어 회의",
+    status: "processing",
+    utterances: [],
+    clusters: [],
+    summary: null,
+  });
+});
+
+test("시뮬레이션 중: /meetings/:id/lenses를 빈 queued로 덮어쓴다", async () => {
+  const view: SimView = { meetingId: TOUR, stage: "embed", progress: 0.5 };
+  const c = client({ items: [{ id: "l1" }], extraction_status: "done" });
+  install(c, { uploaded: true, view });
+  expect((await c.get(`/meetings/${TOUR}/lenses`)).data).toEqual({
+    items: [],
+    extraction_status: "queued",
+  });
+});
+
+test("시뮬레이션이 끝나면 상세·렌즈가 다시 진짜 응답이다", async () => {
+  const detail = client({ id: TOUR, status: "done", utterances: [{ id: "u1" }] });
+  install(detail, { uploaded: true });
+  expect((await detail.get(`/meetings/${TOUR}`)).data).toEqual({
+    id: TOUR,
+    status: "done",
+    utterances: [{ id: "u1" }],
+  });
+
+  const lenses = client({ items: [{ id: "l1" }], extraction_status: "done" });
+  install(lenses, { uploaded: true });
+  expect((await lenses.get(`/meetings/${TOUR}/lenses`)).data).toEqual({
+    items: [{ id: "l1" }],
+    extraction_status: "done",
   });
 });
 

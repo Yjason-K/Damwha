@@ -103,6 +103,27 @@ test("차단되면 기본 포커스가 계속 둘러보기 버튼에 놓인다",
   );
 });
 
+test("모달이 떠 있는 동안 window로 올라가는 keyup을 막는다(driver 키보드 잠금)", async () => {
+  const onKeyUp = vi.fn();
+  window.addEventListener("keyup", onKeyUp); // driver.js가 붙는 자리와 같은 버블 단계
+  try {
+    blocker.state = "blocked";
+    const { unmount } = render(<TourNavigationGuard />);
+    document.body.dispatchEvent(
+      new KeyboardEvent("keyup", { key: "ArrowRight", bubbles: true }),
+    );
+    expect(onKeyUp).not.toHaveBeenCalled();
+
+    unmount();
+    document.body.dispatchEvent(
+      new KeyboardEvent("keyup", { key: "ArrowRight", bubbles: true }),
+    );
+    expect(onKeyUp).toHaveBeenCalled();
+  } finally {
+    window.removeEventListener("keyup", onKeyUp);
+  }
+});
+
 test("ESC 등 종료 요청이 오면 모달이 뜨고, 그만두면 stop만 부른다", async () => {
   const user = userEvent.setup();
   render(<TourNavigationGuard />);

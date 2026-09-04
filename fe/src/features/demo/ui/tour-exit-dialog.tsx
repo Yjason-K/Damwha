@@ -29,6 +29,10 @@ export function TourExitDialog({ open, onContinue, onQuit }: Props) {
           e.preventDefault();
           continueRef.current?.focus();
         }}
+        // Escape로는 닫지 않는다 — driver도 Escape를 듣고 있어서, Radix가 keydown으로 닫으면
+        // 뒤이은 keyup이 종료 요청으로 이 모달을 다시 연다. 나가는 길은 두 버튼뿐이고
+        // 포커스는 이미 "계속 둘러보기"에 있다.
+        onEscapeKeyDown={(e) => e.preventDefault()}
       >
         <DialogHeader>
           <DialogTitle>둘러보기를 그만둘까요?</DialogTitle>

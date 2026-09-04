@@ -1,5 +1,4 @@
 import * as React from "react";
-import { Suspense, lazy } from "react";
 import { Link, useMatch, useNavigate, useParams } from "react-router";
 
 import { Badge } from "@/shared/ui/badge";
@@ -15,7 +14,7 @@ import type { MeetingFilter, MeetingStatus } from "../model/types";
 import { Icon } from "./icons";
 import { UploadDialog } from "./upload-dialog";
 
-const TourLaunchButton = lazy(() =>
+const TourLaunchButton = React.lazy(() =>
   import("@/features/demo/ui/tour-launch-button").then((m) => ({
     default: m.TourLaunchButton,
   })),
@@ -245,9 +244,9 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
       </div>
 
       {env.demoMode ? (
-        <Suspense fallback={null}>
+        <React.Suspense fallback={null}>
           <TourLaunchButton />
-        </Suspense>
+        </React.Suspense>
       ) : null}
 
       <UploadDialog
