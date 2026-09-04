@@ -6,6 +6,7 @@ import {
   type CommandGroup,
   type CommandItem,
 } from "@/shared/ui/command-bar";
+import { env } from "@/shared/config/env";
 
 import { formatClock } from "@/features/meeting/api/mappers";
 import { useMeetings } from "@/features/meeting/api/meetings";
@@ -13,6 +14,12 @@ import { useSearch } from "@/features/meeting/api/search";
 import type { MeetingFilter } from "@/features/meeting/model/types";
 import { Icon } from "@/features/meeting/ui/icons";
 import { LeftNav } from "@/features/meeting/ui/left-nav";
+
+const TourNavigationGuard = React.lazy(() =>
+  import("@/features/demo/ui/tour-navigation-guard").then((m) => ({
+    default: m.TourNavigationGuard,
+  })),
+);
 
 /**
  * AppShell — 모든 제품 화면의 레이아웃 라우트. 2열 2행 그리드로,
@@ -121,6 +128,12 @@ export function AppShell() {
           else if (kind === "m") navigate(`/meetings/${mid}`);
         }}
       />
+
+      {env.demoMode ? (
+        <React.Suspense fallback={null}>
+          <TourNavigationGuard />
+        </React.Suspense>
+      ) : null}
     </div>
   );
 }
