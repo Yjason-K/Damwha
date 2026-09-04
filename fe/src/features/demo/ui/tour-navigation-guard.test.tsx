@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -91,6 +91,16 @@ test("차단되면 모달이 뜨고, 계속하면 reset, 그만두면 stop + pro
   await user.click(screen.getByRole("button", { name: "그만두기" }));
   expect(runner.stop).toHaveBeenCalled();
   expect(blocker.proceed).toHaveBeenCalled();
+});
+
+test("차단되면 기본 포커스가 계속 둘러보기 버튼에 놓인다", async () => {
+  blocker.state = "blocked";
+  render(<TourNavigationGuard />);
+  await waitFor(() =>
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "계속 둘러보기" }),
+    ),
+  );
 });
 
 test("ESC 등 종료 요청이 오면 모달이 뜨고, 그만두면 stop만 부른다", async () => {

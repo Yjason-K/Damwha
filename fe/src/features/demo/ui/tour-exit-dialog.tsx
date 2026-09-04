@@ -1,3 +1,5 @@
+import * as React from "react";
+
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -12,6 +14,8 @@ type Props = { open: boolean; onContinue: () => void; onQuit: () => void };
 
 /** 둘러보기 종료 확인(투어 설계 §2.6). driver 오버레이(z-index 10000) 위에 떠야 한다. */
 export function TourExitDialog({ open, onContinue, onQuit }: Props) {
+  const continueRef = React.useRef<HTMLButtonElement>(null);
+
   return (
     <Dialog
       open={open}
@@ -21,6 +25,10 @@ export function TourExitDialog({ open, onContinue, onQuit }: Props) {
         showCloseButton={false}
         className="z-[10050]"
         overlayClassName="z-[10050]"
+        onOpenAutoFocus={(e) => {
+          e.preventDefault();
+          continueRef.current?.focus();
+        }}
       >
         <DialogHeader>
           <DialogTitle>둘러보기를 그만둘까요?</DialogTitle>
@@ -33,7 +41,7 @@ export function TourExitDialog({ open, onContinue, onQuit }: Props) {
           <Button variant="secondary" onClick={onQuit}>
             그만두기
           </Button>
-          <Button autoFocus onClick={onContinue}>
+          <Button ref={continueRef} onClick={onContinue}>
             계속 둘러보기
           </Button>
         </DialogFooter>
