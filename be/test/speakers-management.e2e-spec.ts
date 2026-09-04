@@ -2,7 +2,6 @@ import { Test } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { startTestDb, StartedTestDb } from './db';
 import { AppModule } from '../src/app.module';
@@ -13,9 +12,8 @@ describe('speakers management (DELETE)', () => {
   let storageRoot: string;
 
   beforeAll(async () => {
-    storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dw-spk-mgmt-'));
-    process.env.STORAGE_ROOT = storageRoot;
     db = await startTestDb();
+    storageRoot = db.storageRoot;
     const mod = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = mod.createNestApplication();
     await app.init();

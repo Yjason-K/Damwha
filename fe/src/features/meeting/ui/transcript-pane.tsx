@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { isDemoBlocked } from "@/shared/api/demo-read-only";
 import { isApiError } from "@/shared/api/client";
 import { cn } from "@/shared/lib/utils";
 import { Badge } from "@/shared/ui/badge";
@@ -254,12 +255,14 @@ function RenameDialog({
           toast({ variant: "success", title: "회의 이름을 변경했어요." });
           onOpenChange(false);
         },
-        onError: (err) =>
+        onError: (err) => {
+          if (isDemoBlocked(err)) return;
           toast({
             variant: "error",
             title: "이름 변경에 실패했어요.",
             description: isApiError(err) ? err.message : undefined,
-          }),
+          });
+        },
       },
     );
   };
@@ -317,12 +320,14 @@ function DeleteDialog({
           onOpenChange(false);
           onDeleted();
         },
-        onError: (err) =>
+        onError: (err) => {
+          if (isDemoBlocked(err)) return;
           toast({
             variant: "error",
             title: "삭제에 실패했어요.",
             description: isApiError(err) ? err.message : undefined,
-          }),
+          });
+        },
       },
     );
   };
@@ -465,12 +470,14 @@ export function TranscriptPane({
     favorite.mutate(
       { id: meeting.id, fav: !fav },
       {
-        onError: (err) =>
+        onError: (err) => {
+          if (isDemoBlocked(err)) return;
           toast({
             variant: "error",
             title: "즐겨찾기 변경에 실패했어요.",
             description: isApiError(err) ? err.message : undefined,
-          }),
+          });
+        },
       },
     );
 
@@ -642,12 +649,13 @@ export function TranscriptPane({
           aria-label="회의 전사"
           aria-live="off"
         >
-          {meeting.utterances.map((u) => {
+          {meeting.utterances.map((u, i) => {
             const failed = u.status === "transcribe_failed";
             return (
               <Utterance
                 key={u.id}
                 data-uid={u.id}
+                {...(i === 0 ? { "data-tour": "utterance" } : {})}
                 tabIndex={-1}
                 speaker={meeting.speakers[u.spk].spk}
                 name={meeting.speakers[u.spk].name}
@@ -671,11 +679,13 @@ export function TranscriptPane({
                     ? utteranceId
                     : { utteranceId, text: u.text };
                   mutation.mutate(value as never, {
-                    onError: () =>
+                    onError: (err) => {
+                      if (isDemoBlocked(err)) return;
                       toast({
                         variant: "error",
                         title: "저장한 발언을 바꾸지 못했어요.",
-                      }),
+                      });
+                    },
                   });
                 }}
               >

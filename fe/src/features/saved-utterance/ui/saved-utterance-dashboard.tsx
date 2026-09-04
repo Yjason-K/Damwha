@@ -60,7 +60,10 @@ export function SavedUtteranceDashboard() {
   }, [list.fetchNextPage, list.hasNextPage, list.isFetchingNextPage]);
 
   return (
-    <main className="col-start-2 flex min-w-0 flex-col overflow-hidden bg-[var(--surface-app)]">
+    <main
+      data-tour="saved-page"
+      className="col-start-2 flex min-w-0 flex-col overflow-hidden bg-[var(--surface-app)]"
+    >
       <header className="shrink-0 border-b border-[color:var(--border-subtle)] bg-[var(--surface-card)] px-7 pt-[18px] pb-3.5">
         <div className="flex items-center gap-[9px] text-[color:var(--text-secondary)]">
           <Icon name="bookmark" size={19} />

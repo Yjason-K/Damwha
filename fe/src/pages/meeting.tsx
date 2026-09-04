@@ -97,6 +97,7 @@ function ProcessingBanner({
     <div
       role="status"
       aria-busy="true"
+      data-tour="processing-banner"
       className="flex items-center gap-2.5 border-b border-[color:var(--accent-6)] bg-[var(--accent-1)] px-7 py-2.5 text-sm"
     >
       <span

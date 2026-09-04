@@ -8,6 +8,31 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#0F161E" />
     <title>Damwha</title>
+    <meta
+      name="description"
+      content="대화 녹음을 화자별 발화·요약·할 일로 정리하는 개인용 회의 기록기. 업로드부터 검색까지 1분 둘러보기."
+    />
+    <!-- 링크 미리보기(Open Graph / Twitter). og:image는 절대 URL이어야 하므로
+         VITE_PUBLIC_URL(데모 빌드에서 release.sh가 주입)을 앞에 붙인다. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Damwha" />
+    <meta property="og:title" content="Damwha — 대화를 화자별 발화·요약·할 일로" />
+    <meta
+      property="og:description"
+      content="녹음을 올리면 화자 분리·전사·요약·할 일 추출까지. 공개 데모에서 1분 둘러보기로 확인해 보세요."
+    />
+    <meta property="og:url" content="%VITE_PUBLIC_URL%/" />
+    <meta property="og:image" content="%VITE_PUBLIC_URL%/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:locale" content="ko_KR" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Damwha — 대화를 화자별 발화·요약·할 일로" />
+    <meta
+      name="twitter:description"
+      content="녹음을 올리면 화자 분리·전사·요약·할 일 추출까지. 공개 데모에서 1분 둘러보기로 확인해 보세요."
+    />
+    <meta name="twitter:image" content="%VITE_PUBLIC_URL%/og.png" />
   </head>
   <body>
     <div id="root"></div>

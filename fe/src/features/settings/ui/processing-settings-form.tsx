@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { isDemoBlocked } from "@/shared/api/demo-read-only";
 import { isApiError } from "@/shared/api/client";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
@@ -193,6 +194,7 @@ export function ProcessingSettingsForm() {
         toast({ variant: "success", title: "처리 설정을 저장했어요." });
       },
       onError: (error) => {
+        if (isDemoBlocked(error)) return;
         toast({
           variant: "error",
           title: "저장에 실패했어요.",

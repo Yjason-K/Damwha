@@ -1,0 +1,171 @@
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, expect, test, vi } from "vitest";
+
+const runner = vi.hoisted(() => {
+  const listeners = new Set<() => void>();
+  return {
+    active: false,
+    navigating: false,
+    stop: vi.fn(),
+    isActive: () => runner.active,
+    isNavigating: () => runner.navigating,
+    onExitRequest: (cb: () => void) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    emitExit: () => listeners.forEach((cb) => cb()),
+  };
+});
+vi.mock("@/features/demo/lib/tour-runner", () => ({ tourRunner: runner }));
+
+const blocker = vi.hoisted(() => ({
+  state: "unblocked" as "unblocked" | "blocked",
+  proceed: vi.fn(),
+  reset: vi.fn(),
+  shouldBlock: null as
+    | null
+    | ((a: {
+        currentLocation: { pathname: string };
+        nextLocation: { pathname: string };
+        historyAction: "POP" | "PUSH" | "REPLACE";
+      }) => boolean),
+}));
+vi.mock("react-router", () => ({
+  useBlocker: (fn: typeof blocker.shouldBlock) => {
+    blocker.shouldBlock = fn;
+    return blocker;
+  },
+}));
+
+import { TourNavigationGuard } from "./tour-navigation-guard";
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+  runner.active = false;
+  runner.navigating = false;
+  blocker.state = "unblocked";
+});
+
+test("투어가 비활성이면 라우트 이동을 막지 않는다", () => {
+  render(<TourNavigationGuard />);
+  expect(
+    blocker.shouldBlock!({
+      currentLocation: { pathname: "/" },
+      nextLocation: { pathname: "/settings" },
+      historyAction: "PUSH",
+    }),
+  ).toBe(false);
+});
+
+test("투어 활성 중 사용자의 라우트 이동은 막고, 투어 자신의 이동은 통과시킨다", () => {
+  render(<TourNavigationGuard />);
+  runner.active = true;
+  expect(
+    blocker.shouldBlock!({
+      currentLocation: { pathname: "/" },
+      nextLocation: { pathname: "/settings" },
+      historyAction: "PUSH",
+    }),
+  ).toBe(true);
+  runner.navigating = true;
+  expect(
+    blocker.shouldBlock!({
+      currentLocation: { pathname: "/" },
+      nextLocation: { pathname: "/meetings/mtg_7" },
+      historyAction: "PUSH",
+    }),
+  ).toBe(false);
+  expect(
+    blocker.shouldBlock!({
+      currentLocation: { pathname: "/" },
+      nextLocation: { pathname: "/meetings/mtg_7" },
+      historyAction: "REPLACE",
+    }),
+  ).toBe(false);
+});
+
+test("투어가 이동 중이어도 브라우저 뒤로·앞으로(POP)는 막는다", () => {
+  render(<TourNavigationGuard />);
+  runner.active = true;
+  runner.navigating = true;
+  expect(
+    blocker.shouldBlock!({
+      currentLocation: { pathname: "/meetings/mtg_7" },
+      nextLocation: { pathname: "/settings" },
+      historyAction: "POP",
+    }),
+  ).toBe(true);
+  // 경로가 같은 POP(해시·쿼리만 바뀜)은 이전처럼 통과한다.
+  expect(
+    blocker.shouldBlock!({
+      currentLocation: { pathname: "/meetings/mtg_7" },
+      nextLocation: { pathname: "/meetings/mtg_7" },
+      historyAction: "POP",
+    }),
+  ).toBe(false);
+});
+
+test("차단되면 모달이 뜨고, 계속하면 reset, 그만두면 stop + proceed", async () => {
+  const user = userEvent.setup();
+  blocker.state = "blocked";
+  render(<TourNavigationGuard />);
+  expect(
+    screen.getByRole("dialog", { name: /그만둘까요/ }),
+  ).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "계속 둘러보기" }));
+  expect(blocker.reset).toHaveBeenCalled();
+
+  blocker.state = "blocked";
+  cleanup();
+  render(<TourNavigationGuard />);
+  await user.click(screen.getByRole("button", { name: "그만두기" }));
+  expect(runner.stop).toHaveBeenCalled();
+  expect(blocker.proceed).toHaveBeenCalled();
+});
+
+test("차단되면 기본 포커스가 계속 둘러보기 버튼에 놓인다", async () => {
+  blocker.state = "blocked";
+  render(<TourNavigationGuard />);
+  await waitFor(() =>
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "계속 둘러보기" }),
+    ),
+    { timeout: 3000 }
+  );
+});
+
+test("모달이 떠 있는 동안 window로 올라가는 keyup을 막는다(driver 키보드 잠금)", async () => {
+  const onKeyUp = vi.fn();
+  window.addEventListener("keyup", onKeyUp); // driver.js가 붙는 자리와 같은 버블 단계
+  try {
+    blocker.state = "blocked";
+    const { unmount } = render(<TourNavigationGuard />);
+    document.body.dispatchEvent(
+      new KeyboardEvent("keyup", { key: "ArrowRight", bubbles: true }),
+    );
+    expect(onKeyUp).not.toHaveBeenCalled();
+
+    unmount();
+    document.body.dispatchEvent(
+      new KeyboardEvent("keyup", { key: "ArrowRight", bubbles: true }),
+    );
+    expect(onKeyUp).toHaveBeenCalled();
+  } finally {
+    window.removeEventListener("keyup", onKeyUp);
+  }
+});
+
+test("ESC 등 종료 요청이 오면 모달이 뜨고, 그만두면 stop만 부른다", async () => {
+  const user = userEvent.setup();
+  render(<TourNavigationGuard />);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  runner.emitExit();
+  expect(
+    await screen.findByRole("dialog", { name: /그만둘까요/ }),
+  ).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "그만두기" }));
+  expect(runner.stop).toHaveBeenCalled();
+  expect(blocker.proceed).not.toHaveBeenCalled();
+});

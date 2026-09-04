@@ -82,3 +82,9 @@ Thumbs.db
 /deploy/storage/
 # release.sh drops the worker wheel here on every run; uv build regenerates it
 /deploy/*.whl
+
+# codex CLI 세션 id — 머신 로컬 상태
+.context/
+
+# DB 덤프 — 로컬 백업, 커밋하지 않는다
+/be/backups/
