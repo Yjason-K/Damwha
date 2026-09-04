@@ -45,3 +45,11 @@
 .driver-popover.damwha-tour .driver-popover-arrow-side-right.driver-popover-arrow { border-right-color: var(--surface-card); }
 .driver-popover.damwha-tour .driver-popover-arrow-side-top.driver-popover-arrow { border-top-color: var(--surface-card); }
 .driver-popover.damwha-tour .driver-popover-arrow-side-bottom.driver-popover-arrow { border-bottom-color: var(--surface-card); }
+
+/* driver.css는 투어 중 `.driver-active *`의 pointer-events를 전부 끄고 팝오버·하이라이트
+   요소만 되살린다. 종료 확인 모달은 body에 포털되므로 마우스 클릭이 통째로 막힌다 —
+   모달과 오버레이를 같은 방식으로 되살린다. */
+.driver-active .damwha-tour-exit,
+.driver-active .damwha-tour-exit * {
+  pointer-events: auto;
+}

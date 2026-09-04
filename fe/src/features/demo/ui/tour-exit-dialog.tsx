@@ -23,8 +23,10 @@ export function TourExitDialog({ open, onContinue, onQuit }: Props) {
     >
       <DialogContent
         showCloseButton={false}
-        className="z-[10050]"
-        overlayClassName="z-[10050]"
+        // z-index는 driver 오버레이(10000) 위, damwha-tour-exit는 driver.css의
+        // `.driver-active * { pointer-events: none }`에서 이 모달을 빼는 훅(tour.css).
+        className="damwha-tour-exit z-[10050]"
+        overlayClassName="damwha-tour-exit z-[10050]"
         onOpenAutoFocus={(e) => {
           e.preventDefault();
           continueRef.current?.focus();
