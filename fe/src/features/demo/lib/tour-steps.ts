@@ -128,6 +128,18 @@ export function buildTourSteps(ctx: Ctx): TourStep[] {
           (b) => b.textContent?.includes("원문 보기"),
         );
         jump?.click();
+        // jumpTo는 하이라이트와 seek만 하고 재생은 하지 않는다(제품 설계). 데모는 소리가
+        // 나야 설득되니 재생 토글을 대신 눌러준다 — audio.play()를 직접 부르면 PlayerBar의
+        // playing 상태가 어긋나므로 실제 버튼을 눌러 React의 setPlaying을 거친다.
+        // "다음" 클릭의 사용자 활성화 창 안이라 autoplay 정책에 걸리지 않는다.
+        await sleep(150);
+        if (document.querySelector("audio")?.paused !== false) {
+          document
+            .querySelector<HTMLButtonElement>(
+              '[data-tour="player-bar"] button[aria-label="재생"]',
+            )
+            ?.click();
+        }
       },
     },
     {
