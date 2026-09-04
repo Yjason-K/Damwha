@@ -25,8 +25,8 @@ driver.js 1.8, vitest + Testing Library (jsdom).
 - 비데모 빌드에 투어 UI 컴포넌트가 로드되면 안 된다 — React 컴포넌트는 `lazy()`. 모델·인터셉터
   모듈(React 없음, 수 KB)은 정적 import 허용.
 - 서버 응답을 위조하는 범위는 스펙 §4.2·§4.3 표에 적힌 것뿐. 404 위조 없음.
-- 사용자 대면 문구는 합쇼체("~해요"가 아니라 "~합니다")가 아니라 **기존 UI와 같은 해요체**.
-  기존 데모 모달만 합쇼체였고(커밋 `9234d76`), 이번에 투어 문구와 함께 해요체로 맞춘다.
+- 사용자 대면 문구: 첫 방문 안내 모달은 **합쇼체 유지**(커밋 `9234d76` — 고지문이라 의도적).
+  투어 말풍선·종료 확인 모달·업로드 힌트는 앱 UI와 같은 **해요체**.
 - 투어 회의 상수(시드 확정): `meeting_id = "mtg_7"`, `file_label = "AI가_내_머릿속_미지를_사냥하게_하라.m4a · 42.0 MB"`,
   `search_query = "프롬프트"`. 코드에는 박지 않고 env로 주입한다(§6).
 - 커밋 메시지는 기존 규칙: `type(scope): 한국어 서술문` + 끝에
@@ -1636,7 +1636,7 @@ async function advance(from: number) {
 
 export const tourRunner = {
   start(queryClient: QueryClient): void {
-    if (active) active.destroy();
+    tourRunner.stop(); // destroy()를 직접 부르면 onDestroyStarted가 종료 확인 모달을 띄운다
     // 재시작: 투어 회의를 다시 숨긴다(§4.5).
     writeTourState({ uploaded: false });
     void queryClient.invalidateQueries({ queryKey: ["meetings"] });
@@ -2119,20 +2119,20 @@ export function DemoNoticeDialog() {
     <Dialog open={open} onOpenChange={(next) => (next ? setOpen(true) : close())}>
       <DialogContent showCloseButton={false}>
         <DialogHeader>
-          <DialogTitle>Damwha 공개 데모예요</DialogTitle>
+          <DialogTitle>Damwha 공개 데모</DialogTitle>
           <DialogDescription>
-            대화 녹음을 올리면 화자별 발화·요약·할 일로 정리해 주는 서비스예요. 둘러보기가
-            업로드부터 검색까지 1분 남짓에 보여드려요.
+            대화 녹음을 올리면 화자별 발화·요약·할 일로 정리해 주는 서비스입니다. 둘러보기가
+            업로드부터 검색까지 1분 남짓에 보여드립니다.
           </DialogDescription>
         </DialogHeader>
         <ul className="flex flex-col gap-2 text-sm leading-normal text-[color:var(--text-secondary)]">
           <li>
             회의 오디오는 Google NotebookLM이 생성한{" "}
-            <strong className="font-medium text-foreground">AI 대화 샘플</strong>이에요. 실제
-            인물의 음성이 아니에요.
+            <strong className="font-medium text-foreground">AI 대화 샘플</strong>입니다. 실제
+            인물의 음성이 아닙니다.
           </li>
-          <li>결과는 이 샘플을 실제 파이프라인으로 처리한 그대로예요.</li>
-          <li>읽기 전용 데모라 편집·저장은 막혀 있어요.</li>
+          <li>결과는 이 샘플을 실제 파이프라인으로 처리한 그대로입니다.</li>
+          <li>읽기 전용 데모라 편집·저장은 제한됩니다.</li>
         </ul>
         <DialogFooter>
           <Button variant="secondary" onClick={close}>
