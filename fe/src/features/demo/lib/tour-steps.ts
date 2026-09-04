@@ -201,15 +201,63 @@ export function buildTourSteps(ctx: Ctx): TourStep[] {
     {
       id: "note",
       target: "insight-tab-note",
-      title: "메모, 그리고 끝",
+      title: "메모",
       description:
-        '대화를 들으며 마크다운 메모를 남길 수 있어요. 여기까지가 둘러보기예요 — 이 데모는 읽기 전용이고, 오디오는 NotebookLM이 생성한 샘플이에요. 왼쪽 아래 "둘러보기"로 언제든 다시 볼 수 있어요.',
+        "대화를 들으며 마크다운 메모를 남길 수 있어요. 재처리해도 메모는 그대로 남아요. 이제 왼쪽 메뉴의 다른 화면들을 돌아볼게요.",
       side: "left",
       prepare: async () => {
         ctx.suppressExit(() => pressEscape());
         await sleep(200);
         clickTour("insight-tab-note");
         await sleep(150);
+      },
+    },
+    {
+      id: "saved",
+      target: "saved-page",
+      title: "저장한 발언",
+      description:
+        "전사에서 저장해 둔 발언이 회의별로 모여요. 나중에 근거로 다시 찾아볼 문장을 여기 쌓아 두고, 누르면 그 순간으로 점프해요.",
+      side: "right",
+      prepare: async () => {
+        ctx.navigate("/saved-utterances");
+        await waitFor(tourSelector("saved-page"));
+      },
+    },
+    {
+      id: "lenses",
+      target: "lens-page",
+      title: "모든 회의 — 렌즈 한눈에",
+      description:
+        "회의를 가로질러 할 일·결정·약속을 한 화면에서 봐요. 담당자와 완료 여부로 걸러서 밀린 일을 찾기 좋아요.",
+      side: "right",
+      prepare: async () => {
+        ctx.navigate("/lenses/action");
+        await waitFor(tourSelector("lens-page"));
+      },
+    },
+    {
+      id: "speakers",
+      target: "speakers-page",
+      title: "화자 관리",
+      description:
+        "등록된 화자와 성문(voiceprint)이에요. 한 번 등록해 두면 다음 회의에서 같은 사람을 자동으로 알아봐요. 성문은 이 서버 밖으로 나가지 않아요.",
+      side: "right",
+      prepare: async () => {
+        ctx.navigate("/speakers");
+        await waitFor(tourSelector("speakers-page"));
+      },
+    },
+    {
+      id: "settings",
+      target: "settings-page",
+      title: "처리 설정, 그리고 끝",
+      description:
+        '전사·화자 분리·요약에 쓸 모델과 프리셋, GPU 사용 여부를 고르는 곳이에요. 여기까지가 둘러보기예요 — 이 데모는 읽기 전용이고, 오디오는 NotebookLM이 생성한 샘플이에요. 왼쪽 아래 "둘러보기"로 언제든 다시 볼 수 있어요.',
+      side: "right",
+      prepare: async () => {
+        ctx.navigate("/settings");
+        await waitFor(tourSelector("settings-page"));
       },
     },
   ];

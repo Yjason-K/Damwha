@@ -218,6 +218,8 @@ blocker를 우회한다.
 
 ## 5. 투어 단계
 
+(2026-09-04 추가: 11~14단계 — 왼쪽 메뉴의 나머지 화면 4개를 실제로 이동해 보여준다.)
+
 | # | 타깃 | 진입 시 동작 | 말풍선 요지 |
 |---|---|---|---|
 | 1 | `meeting-list` | `/` 이동 | 처리된 대화가 여기 쌓인다. 지금은 샘플 2건 |
@@ -229,7 +231,11 @@ blocker를 우회한다.
 | 7 | `insight-tab-summary` | 탭 click | 참석자·주요 주제·단락 요약 |
 | 8 | `lens-section` | scrollIntoView | 액션·결정·약속을 자동 추출. 사람이 고칠 수 있다 |
 | 9 | `search-palette` | `search-trigger` click → 팔레트 대기 + `searchQuery` 주입 | 모든 대화를 가로질러 발화를 찾는다 |
-| 10 | `insight-tab-note` | 팔레트 닫기 → 탭 click | 마크다운 메모. 마무리: 읽기 전용 데모, NotebookLM 샘플, 네비 버튼으로 다시 볼 수 있음 |
+| 10 | `insight-tab-note` | 팔레트 닫기 → 탭 click | 마크다운 메모. 재처리해도 남음. "이제 왼쪽 메뉴의 다른 화면들을" |
+| 11 | `saved-page` | `/saved-utterances` 이동 | 저장한 발언이 회의별로 모임, 누르면 점프 |
+| 12 | `lens-page` | `/lenses/action` 이동 | 회의를 가로질러 할 일·결정·약속, 담당자·완료 여부 필터 |
+| 13 | `speakers-page` | `/speakers` 이동 | 등록 화자·성문, 다음 회의에서 자동 식별, 성문은 서버 밖으로 안 나감 |
+| 14 | `settings-page` | `/settings` 이동 | 모델·프리셋·GPU 설정. 마무리: 읽기 전용 데모, NotebookLM 샘플, 네비 버튼으로 재시작. "끝내기"는 첫 회의로 복귀 |
 
 - 단계 4의 `description`은 시뮬레이션 구독으로 tick마다 `driver.refresh()`.
 - `waitFor(selector, 3000)` 실패 시 그 단계를 건너뛰고 콘솔 `warn`. 투어는 죽지 않는다.

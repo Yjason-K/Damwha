@@ -166,7 +166,10 @@ export const tourRunner = {
         if (steps[i]?.live && simulationPhase() === "running") return;
         void advance(i);
       },
-      onDoneClick: () => tourRunner.stop(),
+      onDoneClick: () => {
+        tourRunner.stop();
+        navigate("/"); // 마지막 단계가 처리 설정 화면이라, 끝내면 첫 회의로 돌려놓는다
+      },
       onCloseClick: () => tourRunner.requestExit(),
       onDestroyStarted: () => {
         if (suppressExit) return;

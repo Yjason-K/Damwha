@@ -111,7 +111,10 @@ export function SpeakersPage() {
   const speakers = useSpeakers();
 
   return (
-    <main className="col-start-2 h-full overflow-y-auto bg-background text-foreground">
+    <main
+      data-tour="speakers-page"
+      className="col-start-2 h-full overflow-y-auto bg-background text-foreground"
+    >
       <div className="mx-auto flex max-w-3xl flex-col gap-6 px-6 py-10">
         <header className="flex items-end justify-between gap-4">
           <div className="flex flex-col gap-1">

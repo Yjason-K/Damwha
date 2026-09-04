@@ -70,6 +70,10 @@ test("업로드 회의가 없으면 업로드 관련 단계가 빠지고 순서�
     "lens",
     "search",
     "note",
+    "saved",
+    "lenses",
+    "speakers",
+    "settings",
   ]);
   expect(without).toEqual([
     "list",
@@ -79,6 +83,10 @@ test("업로드 회의가 없으면 업로드 관련 단계가 빠지고 순서�
     "lens",
     "search",
     "note",
+    "saved",
+    "lenses",
+    "speakers",
+    "settings",
   ]);
 });
 

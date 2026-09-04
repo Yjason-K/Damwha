@@ -8,7 +8,10 @@ export function SettingsPage() {
   const { data: caps } = useCapabilities();
 
   return (
-    <main className="col-start-2 h-full overflow-y-auto bg-background text-foreground">
+    <main
+      data-tour="settings-page"
+      className="col-start-2 h-full overflow-y-auto bg-background text-foreground"
+    >
       <div className="mx-auto flex max-w-2xl flex-col gap-6 px-6 py-10">
         <header className="flex flex-col gap-1">
           <h1 className="text-display font-bold">처리 설정</h1>
