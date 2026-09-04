@@ -48,11 +48,12 @@ type Ctx = {
   pathname: () => string;
   searchQuery: string;
   hasUpload: boolean;
-  /** 프로그램적 Escape 동안 러너의 종료 훅을 무시한다(tourRunner.withExitSuppressed). */
-  suppressExit: <T>(fn: () => T) => T;
 };
 
-/** Escape를 document에 보내 Radix 다이얼로그를 닫는다. 러너가 이 동안 자기 종료 훅을 무시한다. */
+/**
+ * Escape keydown을 document에 보내 Radix 다이얼로그(검색 팔레트)를 닫는다. driver는 window의
+ * keyup만 듣고 keydown은 Tab 포커스 순환에만 쓰므로, 이 이벤트가 투어 종료로 번지지 않는다.
+ */
 function pressEscape() {
   document.dispatchEvent(
     new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
@@ -206,7 +207,7 @@ export function buildTourSteps(ctx: Ctx): TourStep[] {
         "대화를 들으며 마크다운 메모를 남길 수 있어요. 재처리해도 메모는 그대로 남아요. 이제 왼쪽 메뉴의 다른 화면들을 돌아볼게요.",
       side: "left",
       prepare: async () => {
-        ctx.suppressExit(() => pressEscape());
+        pressEscape();
         await sleep(200);
         clickTour("insight-tab-note");
         await sleep(150);

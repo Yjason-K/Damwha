@@ -30,7 +30,6 @@ let active: Driver | null = null;
 let steps: TourStep[] = [];
 let navigating = false;
 let advancing = false;
-let suppressExit = false;
 let liveCleanup: (() => void) | null = null;
 const exitListeners = new Set<() => void>();
 
@@ -130,7 +129,7 @@ async function advance(from: number) {
 
 export const tourRunner = {
   start(queryClient: QueryClient): void {
-    tourRunner.stop(); // destroy()를 직접 부르면 onDestroyStarted가 종료 확인 모달을 띄운다
+    tourRunner.stop();
     // 재시작: 투어 회의를 다시 숨긴다(§4.5).
     writeTourState({ uploaded: false });
     void queryClient.invalidateQueries({ queryKey: ["meetings"] });
@@ -143,7 +142,6 @@ export const tourRunner = {
       pathname: () => router.state.location.pathname,
       searchQuery: env.demoTour?.searchQuery ?? "",
       hasUpload: env.demoTour != null,
-      suppressExit: tourRunner.withExitSuppressed,
     });
 
     const d = driver({
@@ -171,10 +169,9 @@ export const tourRunner = {
         navigate("/"); // 마지막 단계가 처리 설정 화면이라, 끝내면 첫 회의로 돌려놓는다
       },
       onCloseClick: () => tourRunner.requestExit(),
-      onDestroyStarted: () => {
-        if (suppressExit) return;
-        tourRunner.requestExit();
-      },
+      // ESC·오버레이 클릭·마지막 단계 넘김이 여기로 온다. driver.destroy()는 이 훅을 타지 않으므로
+      // stop()의 프로그램적 종료는 걸리지 않는다.
+      onDestroyStarted: () => tourRunner.requestExit(),
       onDestroyed: () => {
         liveCleanup?.();
         active = null;
@@ -193,12 +190,7 @@ export const tourRunner = {
     if (!active) return;
     const d = active;
     active = null;
-    suppressExit = true;
-    try {
-      d.destroy();
-    } finally {
-      suppressExit = false;
-    }
+    d.destroy();
   },
 
   isActive: () => active !== null,
@@ -212,15 +204,5 @@ export const tourRunner = {
     return () => {
       exitListeners.delete(cb);
     };
-  },
-
-  /** 단계 prepare가 프로그램적으로 Escape를 보낼 때 driver의 종료 훅을 잠시 무시한다. */
-  withExitSuppressed<T>(fn: () => T): T {
-    suppressExit = true;
-    try {
-      return fn();
-    } finally {
-      suppressExit = false;
-    }
   },
 };
