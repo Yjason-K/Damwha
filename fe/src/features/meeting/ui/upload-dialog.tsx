@@ -1,7 +1,12 @@
 import * as React from "react";
 
+import { useQueryClient } from "@tanstack/react-query";
+
 import { isDemoBlocked } from "@/shared/api/demo-read-only";
 import { isApiError } from "@/shared/api/client";
+import { env } from "@/shared/config/env";
+import { DemoUploadSource } from "@/features/demo/ui/demo-upload-source";
+import { startUploadSimulation } from "@/features/demo/model/upload-simulation";
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -137,6 +142,8 @@ export function UploadDialog({
   const [deferLens, setDeferLens] = React.useState(false);
   const [deferSummary, setDeferSummary] = React.useState(false);
   const upload = useUploadMeeting();
+  const queryClient = useQueryClient();
+  const demoTour = env.demoTour; // null이면 실제 업로드 경로
 
   const resetForm = () => {
     setFile(null);
@@ -158,6 +165,19 @@ export function UploadDialog({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (demoTour) {
+      if (!isSpeakerBoundsValid(speakers)) return;
+      startUploadSimulation(demoTour.meetingId, queryClient);
+      toast({
+        variant: "success",
+        title: "업로드 완료",
+        description: "회의 처리를 시작했어요.",
+      });
+      resetForm();
+      onOpenChange(false);
+      onUploaded(demoTour.meetingId);
+      return;
+    }
     if (!file || upload.isPending || !isSpeakerBoundsValid(speakers)) return;
     upload.mutate(
       {
@@ -207,34 +227,38 @@ export function UploadDialog({
         </DialogHeader>
 
         <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
-          <div className="flex flex-col gap-1.5">
-            <span className="text-sm font-medium text-[color:var(--text-secondary)]">
-              오디오 파일
-            </span>
-            <div className="flex items-center gap-2.5">
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                iconLeft={<Icon name="mic" size={15} />}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                파일 선택
-              </Button>
-              <span className="min-w-0 flex-1 truncate text-sm text-[color:var(--text-muted)]">
-                {file
-                  ? `${file.name} · ${formatBytes(file.size)}`
-                  : "선택된 파일이 없어요"}
+          {demoTour ? (
+            <DemoUploadSource fileLabel={demoTour.fileLabel} />
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-sm font-medium text-[color:var(--text-secondary)]">
+                오디오 파일
               </span>
+              <div className="flex items-center gap-2.5">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  iconLeft={<Icon name="mic" size={15} />}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  파일 선택
+                </Button>
+                <span className="min-w-0 flex-1 truncate text-sm text-[color:var(--text-muted)]">
+                  {file
+                    ? `${file.name} · ${formatBytes(file.size)}`
+                    : "선택된 파일이 없어요"}
+                </span>
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="audio/*"
+                className="hidden"
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              />
             </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="audio/*"
-              className="hidden"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-            />
-          </div>
+          )}
 
           <Input
             label="제목 (선택)"
@@ -329,7 +353,9 @@ export function UploadDialog({
               data-tour="upload-submit"
               loading={upload.isPending}
               disabled={
-                !file || upload.isPending || !isSpeakerBoundsValid(speakers)
+                (!demoTour && !file) ||
+                upload.isPending ||
+                !isSpeakerBoundsValid(speakers)
               }
             >
               업로드
