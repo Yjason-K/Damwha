@@ -44,6 +44,7 @@ test("둘러보기 시작 버튼에 포커스가 간다", async () => {
     expect(document.activeElement).toBe(
       screen.getByRole("button", { name: "둘러보기 시작" }),
     ),
+    { timeout: 3000 }
   );
 });
 

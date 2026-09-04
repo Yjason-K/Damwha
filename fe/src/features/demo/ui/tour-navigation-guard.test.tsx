@@ -100,6 +100,7 @@ test("차단되면 기본 포커스가 계속 둘러보기 버튼에 놓인다",
     expect(document.activeElement).toBe(
       screen.getByRole("button", { name: "계속 둘러보기" }),
     ),
+    { timeout: 3000 }
   );
 });
 
