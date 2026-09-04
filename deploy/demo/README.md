@@ -56,6 +56,18 @@ docker compose pull && docker compose down -v && docker compose up -d
 원본 m4a 존재(`find-original.py`가 확인). 로컬에서 보려면 `fe/.env.local`에
 `VITE_DEMO_MODE=true`와 위 세 값을 `VITE_DEMO_TOUR_*`로 넣고 `pnpm fe dev`. vitest도 `.env.local`을 읽으므로 그 상태로 `pnpm fe test`를 돌리면 upload-dialog 테스트 6개가 실패한다 — 테스트 전에 파일을 지우거나 이름을 바꾼다.
 
+## 링크 미리보기
+
+`fe/index.html`의 Open Graph 태그가 `og:image`로 `/og.png`(1200×630, `fe/public/og.png`)를 가리킨다.
+크롤러는 절대 URL만 받으므로 릴리스 때 공개 주소를 넘긴다:
+
+```bash
+DEMO_PUBLIC_URL=https://<데모 도메인> deploy/demo/release.sh
+```
+
+비우면 상대 경로로 남아 카카오·슬랙 등의 미리보기에 이미지가 안 뜬다. 바뀐 미리보기가
+안 보이면 각 서비스의 캐시(카카오 링크 디버거, 슬랙은 재공유) 때문이다.
+
 ## 데모에서 꺼진 것
 
 - 쓰기 전부 — API `DEMO_READ_ONLY=true`가 GET/HEAD/OPTIONS와 `POST /search` 외 요청을 403으로

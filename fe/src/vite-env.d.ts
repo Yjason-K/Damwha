@@ -9,4 +9,6 @@ interface ImportMetaEnv {
   readonly VITE_DEMO_TOUR_FILE_LABEL?: string;
   /** 검색 단계에서 팔레트에 넣을 예시 검색어. */
   readonly VITE_DEMO_TOUR_SEARCH_QUERY?: string;
+  /** 링크 미리보기(og:image·og:url)에 붙일 공개 URL. index.html에서 %VITE_PUBLIC_URL%로 치환. */
+  readonly VITE_PUBLIC_URL?: string;
 }

@@ -11,6 +11,8 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 REGISTRY=ghcr.io/yjason-k
 PLATFORM=linux/arm64
 PUSH="${PUSH:-1}"
+# 링크 미리보기(og:image)의 절대 URL. 예: DEMO_PUBLIC_URL=https://demo.example.com
+DEMO_PUBLIC_URL="${DEMO_PUBLIC_URL:-}"
 cd "$ROOT"
 
 for f in demo/seed/damwha-demo.dump demo/seed/manifest.json demo/seed/tour.json; do
@@ -45,6 +47,7 @@ docker buildx build --platform "$PLATFORM" "${OUT_API[@]}" \
   --build-arg "VITE_DEMO_TOUR_MEETING_ID=$TOUR_ID" \
   --build-arg "VITE_DEMO_TOUR_FILE_LABEL=$TOUR_LABEL" \
   --build-arg "VITE_DEMO_TOUR_SEARCH_QUERY=$TOUR_QUERY" \
+  --build-arg "VITE_PUBLIC_URL=${DEMO_PUBLIC_URL%/}" \
   -f deploy/api.Dockerfile .
 
 echo "done: $REGISTRY/damwha-demo-{postgres,api}:$TAG (+latest), push=$PUSH"
