@@ -27,7 +27,13 @@ function sources(dir: string, out: string[] = []): string[] {
 const SRC = sources(join(__dirname, "../../../"));
 
 test("모든 단계의 data-tour 타깃이 소스에 실제로 존재한다", () => {
-  const steps = buildTourSteps({ navigate: () => {}, searchQuery: "x", hasUpload: true, suppressExit: (fn) => fn() });
+  const steps = buildTourSteps({
+    navigate: () => {},
+    pathname: () => "/meetings/x",
+    searchQuery: "x",
+    hasUpload: true,
+    suppressExit: (fn) => fn(),
+  });
   for (const s of steps) {
     const needle = `data-tour="${s.target}"`;
     const dynamic = `"data-tour": "${s.target}"`;
@@ -39,12 +45,41 @@ test("모든 단계의 data-tour 타깃이 소스에 실제로 존재한다", ()
 });
 
 test("업로드 회의가 없으면 업로드 관련 단계가 빠지고 순서는 유지된다", () => {
-  const withUpload = buildTourSteps({ navigate: () => {}, searchQuery: "", hasUpload: true, suppressExit: (fn) => fn() }).map((s) => s.id);
-  const without = buildTourSteps({ navigate: () => {}, searchQuery: "", hasUpload: false, suppressExit: (fn) => fn() }).map((s) => s.id);
+  const withUpload = buildTourSteps({
+    navigate: () => {},
+    pathname: () => "/meetings/x",
+    searchQuery: "",
+    hasUpload: true,
+    suppressExit: (fn) => fn(),
+  }).map((s) => s.id);
+  const without = buildTourSteps({
+    navigate: () => {},
+    pathname: () => "/meetings/x",
+    searchQuery: "",
+    hasUpload: false,
+    suppressExit: (fn) => fn(),
+  }).map((s) => s.id);
   expect(withUpload).toEqual([
-    "list", "new", "upload", "processing", "utterance", "player", "summary", "lens", "search", "note",
+    "list",
+    "new",
+    "upload",
+    "processing",
+    "utterance",
+    "player",
+    "summary",
+    "lens",
+    "search",
+    "note",
   ]);
-  expect(without).toEqual(["list", "utterance", "player", "summary", "lens", "search", "note"]);
+  expect(without).toEqual([
+    "list",
+    "utterance",
+    "player",
+    "summary",
+    "lens",
+    "search",
+    "note",
+  ]);
 });
 
 test("모든 시뮬레이션 stage에 서술 문구가 있다", () => {

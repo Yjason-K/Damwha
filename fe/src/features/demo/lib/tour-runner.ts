@@ -86,10 +86,15 @@ function toDriveStep(step: TourStep, index: number): DriveStep {
 async function resolveFrom(i: number): Promise<number> {
   for (let idx = i; idx < steps.length; idx++) {
     const step = steps[idx];
+    // prepare가 도는 동안 전부가 "투어 자신의 이동"이다. router.navigate 프라미스만 덮으면
+    // IndexRoute의 <Navigate replace>나 clickTour가 촉발한 뒤이은 이동이 종료 가드에 걸린다.
+    navigating = true;
     try {
       await step.prepare?.();
     } catch (e) {
       console.warn(`[tour] prepare failed: ${step.id}`, e);
+    } finally {
+      navigating = false;
     }
     if (document.querySelector(tourSelector(step.target))) return idx;
     console.warn(`[tour] target missing, skipping: ${step.id}`);
@@ -131,6 +136,7 @@ export const tourRunner = {
     advancing = false; // 이전 투어의 in-flight prepare가 새 투어를 잠그지 않게
     steps = buildTourSteps({
       navigate,
+      pathname: () => router.state.location.pathname,
       searchQuery: env.demoTour?.searchQuery ?? "",
       hasUpload: env.demoTour != null,
       suppressExit: tourRunner.withExitSuppressed,
