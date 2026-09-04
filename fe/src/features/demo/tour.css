@@ -53,3 +53,7 @@
 .driver-active .damwha-tour-exit * {
   pointer-events: auto;
 }
+/* driver 팝오버는 z-index 1000000000이라 Tailwind z-[10050]로는 그 뒤에 깔린다. */
+.driver-active .damwha-tour-exit {
+  z-index: 1000000001;
+}
