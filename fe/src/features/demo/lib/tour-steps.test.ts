@@ -5,11 +5,21 @@ import { expect, test } from "vitest";
 import { buildTourSteps, stageNarration } from "./tour-steps";
 import { STAGE_TIMELINE } from "../model/upload-simulation";
 
+/**
+ * 투어 정의가 사는 이 디렉터리는 스캔에서 뺀다. tour-steps.ts가 검색 단계에서
+ * `[data-tour="search-palette"] input[...]` 셀렉터를 문자열로 들고 있어, 넣어두면
+ * 그 단계가 자기 needle을 자기가 만족시킨다 — 화면 쪽에서 속성이 사라져도 통과한다.
+ */
+const SELF_DIR = __dirname;
+
 function sources(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
-    if (statSync(p).isDirectory()) sources(p, out);
-    else if (/\.tsx?$/.test(name) && !name.includes(".test.")) out.push(readFileSync(p, "utf8"));
+    if (statSync(p).isDirectory()) {
+      if (p !== SELF_DIR) sources(p, out);
+    } else if (/\.tsx?$/.test(name) && !name.includes(".test.")) {
+      out.push(readFileSync(p, "utf8"));
+    }
   }
   return out;
 }

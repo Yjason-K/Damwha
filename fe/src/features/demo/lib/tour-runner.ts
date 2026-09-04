@@ -29,6 +29,7 @@ import { tourSelector } from "./wait-for";
 let active: Driver | null = null;
 let steps: TourStep[] = [];
 let navigating = false;
+let advancing = false;
 let suppressExit = false;
 let liveCleanup: (() => void) | null = null;
 const exitListeners = new Set<() => void>();
@@ -96,15 +97,26 @@ async function resolveFrom(i: number): Promise<number> {
   return -1;
 }
 
+/**
+ * driver는 prepare가 도는 동안 "다음"을 잠그지 않는다 — 두 번 누르면 같은 from으로 두 번
+ * 들어와 prepare(업로드 제출 등)가 중복 실행된다. 재진입을 플래그로 막고, 준비 중에 투어가
+ * 끝나거나 다시 시작됐으면 그 사이에 만들어진 새 driver를 건드리지 않는다.
+ */
 async function advance(from: number) {
-  if (!active) return;
-  const idx = await resolveFrom(from + 1);
-  if (!active) return; // 준비 중에 종료됨
-  if (idx < 0) {
-    tourRunner.stop();
-    return;
+  const d = active;
+  if (!d || advancing) return;
+  advancing = true;
+  try {
+    const idx = await resolveFrom(from + 1);
+    if (active !== d) return; // 준비 중에 종료·재시작됨
+    if (idx < 0) {
+      tourRunner.stop();
+      return;
+    }
+    d.drive(idx);
+  } finally {
+    advancing = false;
   }
-  active.drive(idx);
 }
 
 export const tourRunner = {
@@ -116,6 +128,7 @@ export const tourRunner = {
     void queryClient.invalidateQueries({ queryKey: ["lenses"] });
     void queryClient.invalidateQueries({ queryKey: ["saved-utterances"] });
 
+    advancing = false; // 이전 투어의 in-flight prepare가 새 투어를 잠그지 않게
     steps = buildTourSteps({
       navigate,
       searchQuery: env.demoTour?.searchQuery ?? "",
@@ -128,7 +141,6 @@ export const tourRunner = {
       showProgress: true,
       progressText: "{{current}} / {{total}}",
       nextBtnText: "다음",
-      prevBtnText: "이전",
       doneBtnText: "끝내기",
       showButtons: ["next", "close"],
       popoverClass: "damwha-tour",
@@ -139,6 +151,9 @@ export const tourRunner = {
       steps: steps.map(toDriveStep),
       onNextClick: (_el, step) => {
         const i = (step.data as { index: number }).index;
+        // ArrowRight는 nextButton.disabled를 우회해 이 훅으로 곧장 온다 — live 단계의 잠금을
+        // 버튼뿐 아니라 여기서도 건다.
+        if (steps[i]?.live && simulationPhase() === "running") return;
         void advance(i);
       },
       onDoneClick: () => tourRunner.stop(),
