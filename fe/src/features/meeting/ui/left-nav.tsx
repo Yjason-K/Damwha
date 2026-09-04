@@ -38,6 +38,7 @@ function NewMeetingItem({ onClick }: { onClick?: () => void }) {
   return (
     <button
       type="button"
+      data-tour="new-meeting"
       onClick={onClick}
       className="flex w-full cursor-pointer items-center gap-[9px] rounded-sm border border-[color:var(--accent-6)] bg-[var(--accent-1)] px-2.5 py-2 text-left text-sm font-semibold text-[color:var(--accent-text)] outline-none transition-colors duration-[80ms] hover:bg-[var(--accent-2)] focus-visible:[box-shadow:var(--focus-ring)]"
     >
@@ -134,7 +135,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col px-2 pt-0.5 pb-2">
-        <div className="mb-3 px-0.5">
+        <div className="mb-3 px-0.5" data-tour="search-trigger">
           <SearchField
             asButton
             aria-label="검색 (명령 팔레트 열기)"
@@ -195,6 +196,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
           회의 목록
         </SectionLabel>
         <ul
+          data-tour="meeting-list"
           className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto overscroll-contain"
           aria-label="회의 목록"
           aria-busy={isLoading || undefined}

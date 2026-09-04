@@ -326,6 +326,7 @@ export function UploadDialog({
             </DialogClose>
             <Button
               type="submit"
+              data-tour="upload-submit"
               loading={upload.isPending}
               disabled={
                 !file || upload.isPending || !isSpeakerBoundsValid(speakers)

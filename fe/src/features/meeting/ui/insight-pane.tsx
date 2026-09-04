@@ -584,7 +584,7 @@ export function InsightPane({
       >
         <div className="flex shrink-0 items-center border-b border-[color:var(--border-subtle)] bg-[var(--surface-card)] px-3 pt-1">
           <TabsList className="border-b-0">
-            <TabsTrigger value="summary">요약</TabsTrigger>
+            <TabsTrigger value="summary" data-tour="insight-tab-summary">요약</TabsTrigger>
             <TabsTrigger value="files">
               파일
               {meeting.files.length > 0 && (
@@ -593,7 +593,7 @@ export function InsightPane({
                 </span>
               )}
             </TabsTrigger>
-            <TabsTrigger value="notes">메모</TabsTrigger>
+            <TabsTrigger value="notes" data-tour="insight-tab-note">메모</TabsTrigger>
           </TabsList>
           {tab === "summary" && settled && (
             <IconButton
@@ -643,15 +643,17 @@ export function InsightPane({
                 onCancel={onCancelSummary}
               />
             )}
-            <Todos lenses={lenses} meeting={meeting} onToggle={onToggle} />
-            <Decisions lenses={lenses} onMore={() => onOpenLens("decision")} />
-            <LensState
-              meetingStatus={meeting.status}
-              status={lensExtractionStatus}
-              onExtract={onExtractLenses}
-              extracting={extracting}
-              onCancel={onCancelLenses}
-            />
+            <div data-tour="lens-section">
+              <Todos lenses={lenses} meeting={meeting} onToggle={onToggle} />
+              <Decisions lenses={lenses} onMore={() => onOpenLens("decision")} />
+              <LensState
+                meetingStatus={meeting.status}
+                status={lensExtractionStatus}
+                onExtract={onExtractLenses}
+                extracting={extracting}
+                onCancel={onCancelLenses}
+              />
+            </div>
             {settled && (
               <SummarySegments
                 segments={meeting.segments}

@@ -649,12 +649,13 @@ export function TranscriptPane({
           aria-label="회의 전사"
           aria-live="off"
         >
-          {meeting.utterances.map((u) => {
+          {meeting.utterances.map((u, i) => {
             const failed = u.status === "transcribe_failed";
             return (
               <Utterance
                 key={u.id}
                 data-uid={u.id}
+                {...(i === 0 ? { "data-tour": "utterance" } : {})}
                 tabIndex={-1}
                 speaker={meeting.speakers[u.spk].spk}
                 name={meeting.speakers[u.spk].name}
