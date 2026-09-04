@@ -12,7 +12,7 @@ REGISTRY=ghcr.io/yjason-k
 PLATFORM=linux/arm64
 PUSH="${PUSH:-1}"
 # 링크 미리보기(og:image)의 절대 URL. 예: DEMO_PUBLIC_URL=https://demo.example.com
-DEMO_PUBLIC_URL="${DEMO_PUBLIC_URL:-}"
+DEMO_PUBLIC_URL="${DEMO_PUBLIC_URL:-https://damwha-demo.0kimjae.dev}"
 cd "$ROOT"
 
 for f in demo/seed/damwha-demo.dump demo/seed/manifest.json demo/seed/tour.json; do

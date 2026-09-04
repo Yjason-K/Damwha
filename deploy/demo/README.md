@@ -62,7 +62,7 @@ docker compose pull && docker compose down -v && docker compose up -d
 크롤러는 절대 URL만 받으므로 릴리스 때 공개 주소를 넘긴다:
 
 ```bash
-DEMO_PUBLIC_URL=https://<데모 도메인> deploy/demo/release.sh
+DEMO_PUBLIC_URL=https://damwha-demo.0kimjae.dev deploy/demo/release.sh
 ```
 
 비우면 상대 경로로 남아 카카오·슬랙 등의 미리보기에 이미지가 안 뜬다. 바뀐 미리보기가
