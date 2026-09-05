@@ -5,6 +5,7 @@ import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from ..audio.wav_writer import repair_streaming_header
 from ..errors import CORRUPT_AUDIO, PROBE_FAILED, UNSUPPORTED_FORMAT, ErrorKind, WorkerError
 
 Runner = Callable[[list[str]], subprocess.CompletedProcess]
@@ -37,6 +38,10 @@ def probe(path: str, runner: Runner = _run) -> ProbeResult:
 
 
 def normalize(src_path: str, dst_path: str, runner: Runner = _run) -> None:
+    # 라이브 녹음이 크래시로 남긴 스트리밍 헤더(0xFFFFFFFF)를 실제 길이로 고친다.
+    # ffmpeg는 그 값도 EOF까지 읽지만, 원본을 그대로 재생하는 API와 다른 리더까지 정확한
+    # 헤더를 보게 한다. 다른 파일에는 no-op.
+    repair_streaming_header(src_path)
     fd, temp_path = tempfile.mkstemp(
         prefix=f".{os.path.basename(dst_path)}.",
         suffix=".tmp",
