@@ -275,6 +275,47 @@ describe('meetings', () => {
     expect((await request(srv()).post(`/meetings/mtg_999/cancel`)).status).toBe(404);
   });
 
+  it('cancel locks the job before the meeting (job → meeting order)', async () => {
+    const created = await request(srv()).post('/meetings').attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+    const mid = created.body.id;
+    const jid = created.body.current_job_id;
+    // simulate a worker mid-flight
+    await db.pool.query(`UPDATE job SET status='running', locked_by='w1', locked_at=now(), stage='stt', progress=75 WHERE id=$1`, [jid]);
+    await db.pool.query(`UPDATE meeting SET status='processing' WHERE id=$1`, [mid]);
+
+    // 다른 커넥션이 job 행을 먼저 잠근 채 붙들고 있으면, cancel은 meeting이 아니라
+    // job에서 막혀야 한다. meeting을 먼저 잠그는 구현이면 cancel이 meeting 락을 쥔 채
+    // job을 기다려 교차 deadlock의 재료가 된다.
+    const holder = await db.pool.connect();
+    try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT 1 FROM job WHERE id=$1 FOR UPDATE', [jid]);
+
+      // supertest doesn't send the request until .end()/.then() is invoked, so
+      // fire it explicitly here (via a wrapped promise we await later) instead
+      // of leaving the request unsent until the trailing await — that would run
+      // the whole request AFTER the ROLLBACK below and test nothing.
+      const cancelDone = new Promise<{ err: unknown; res: request.Response }>((resolve) => {
+        request(srv()).post(`/meetings/${mid}/cancel`).send()
+          .end((err, res) => resolve({ err, res }));
+      });
+      // give the in-flight request real wall-clock time to reach its lock
+      // attempt before we probe.
+      await new Promise((r) => setTimeout(r, 200));
+
+      // cancel이 job에서 막혀 있는 동안 meeting 행은 여전히 잠기지 않아야 한다.
+      const probe = await db.pool.query(
+        `SELECT 1 FROM meeting WHERE id=$1 FOR UPDATE NOWAIT`, [mid],
+      ).then(() => 'free').catch(() => 'locked');
+      expect(probe).toBe('free');
+
+      await holder.query('ROLLBACK');
+      const { err, res } = await cancelDone;
+      if (err) throw err;
+      expect(res.status).toBe(200);
+    } finally { holder.release(); }
+  });
+
   it('POST /meetings — payload가 v5이고 전역 설정(프리셋)을 따른다', async () => {
     await request(srv()).put('/settings/processing').send({ preset: 'light', language: 'ko' });
     const res = await request(srv()).post('/meetings')
