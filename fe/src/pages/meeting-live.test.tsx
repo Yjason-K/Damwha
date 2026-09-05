@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -120,14 +121,19 @@ beforeEach(() => {
     items: [],
   };
   currentUtterances = [];
-  vi.spyOn(apiClient, "get").mockImplementation(
-    (url: string) => getResponse(url) as never,
-  );
+  getSpy = vi
+    .spyOn(apiClient, "get")
+    .mockImplementation((url: string) => getResponse(url) as never);
 });
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
+
+let getSpy: { mock: { calls: unknown[][] } };
+const statusCalls = () =>
+  getSpy.mock.calls.filter((c) => c[0] === "/meetings/m1/status").length;
 
 function renderAt(path: string) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -275,4 +281,47 @@ test("실제 전사가 남아 있는 실패는 라이브 미리보기 대신 전
   renderAt("/meetings/m1");
   expect(await screen.findByText("이전 버전의 실제 전사")).toBeInTheDocument();
   expect(screen.queryByText("이번 실패의 라이브 미리보기")).toBeNull();
+});
+
+// 리뷰 회귀 3 (I2): useMeetingStatus는 폴링 지속 여부를 자기 마지막 응답으로 정하는데,
+// 녹음 중 그 응답은 늘 recording이다. 그 상태가 active 집합에서 빠져 있으면 폴링이
+// 거기서 멈추고 아무도 다시 깨우지 않아, 종료 뒤 배치 패스 내내 배너가 "처리 중 · 0%"에
+// 박힌다. 상태 하나를 고정해 간격만 보는 테스트로는 잡히지 않는다 — 전이를 태워야 한다.
+test("녹음에서 처리로 넘어가도 상태 폴링이 이어진다", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  renderAt("/meetings/m1");
+  expect(
+    await screen.findByRole("status", { name: "녹음 상태" }),
+  ).toHaveTextContent("녹음 중");
+  await waitFor(() => expect(statusCalls()).toBeGreaterThan(0));
+  const before = statusCalls();
+
+  // 워커가 finalize했다 — 회의는 uploaded를 지나 배치 패스로 들어간다.
+  current = meeting({ status: "processing" });
+  live = { ...live, status: "processing", stage: "stt" };
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(6000);
+  });
+
+  expect(statusCalls()).toBeGreaterThan(before);
+  // 낡은 capture 응답이 아니라 방금 받은 배치 stage를 그린다.
+  expect(screen.getByText("받아쓰기 · 0%")).toBeInTheDocument();
+});
+
+// 리뷰 회귀 4 (I4): 워커가 죽은 상태에서 stop은 job에 플래그만 찍는다 — 읽을 워커가
+// 없으니 회의는 reaper의 stale 창(30분)까지 recording으로 남고, 그동안
+// meeting_single_recording_idx가 새 녹음을 막는다. cancel만이 즉시 풀어준다.
+test("워커 신호가 끊긴 배너의 버튼은 cancel을 호출한다", async () => {
+  live = {
+    ...live,
+    heartbeat_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+  };
+  const post = vi.spyOn(apiClient, "post").mockResolvedValue({
+    data: { meeting_id: "m1", job_id: "job_1", status: "failed" },
+  } as never);
+  renderAt("/meetings/m1");
+  const btn = await screen.findByRole("button", { name: "녹음 취소" });
+  btn.click();
+  await waitFor(() => expect(post).toHaveBeenCalledWith("/meetings/m1/cancel"));
+  expect(post).not.toHaveBeenCalledWith("/meetings/m1/live/stop");
 });

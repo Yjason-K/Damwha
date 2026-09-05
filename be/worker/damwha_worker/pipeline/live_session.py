@@ -223,6 +223,13 @@ def run_live_session(
             now = clock()
             if now - last_poll >= stop_poll_seconds:
                 last_poll = now
+                if writer_thread.error is not None or capture.error is not None:
+                    # 쓰기 경로가 죽어도 미리보기는 멀쩡히 돈다 — 프레임은 아무도 읽지
+                    # 않는 writer 큐에 쌓이고, 줄은 계속 뜨고, heartbeat도 계속 뛴다.
+                    # 여기서 보지 않으면 디스크가 5분에 차도 사용자는 60분 뒤 종료를
+                    # 누를 때에야 안다. stop·소유권 상실과 같은 주기에서 같이 본다.
+                    stop_reason = "io_error"
+                    break
                 try:
                     signal = db.get_stop_requested(conn, job_id, worker_id)
                 except Exception:  # noqa: BLE001 — DB가 잠깐 죽어도 녹음은 계속
@@ -247,7 +254,11 @@ def run_live_session(
         source.stop()
         capture.join(timeout=10)
         writer_thread.join(timeout=60)
-        writer.close()
+        # 오류 판정이 close()보다 먼저다. 디스크가 찬 상태의 close()는 남은 버퍼를
+        # flush하다 같은 ENOSPC를 다시 던지고, 그러면 진짜 원인(writer의 OSError)이
+        # 가려져 회의가 IO_ERROR가 아니라 uncategorized로 닫힌다. 실패 경로의 파일
+        # 닫기는 아래 finally가 조용히 맡는다(헤더가 스트리밍 값으로 남아도 재처리의
+        # repair_streaming_header가 고친다).
         if capture.error is not None:
             raise capture.error
         if writer_thread.error is not None:
@@ -260,6 +271,8 @@ def run_live_session(
                 ErrorKind.PERMANENT,
                 stage="capture",
             ) from writer_thread.error
+        # 파일이 닫힌(=헤더가 확정된) 뒤에야 최종 job이 큐에 들어간다 (설계 §4).
+        writer.close()
         log.info(
             "%s live_session capture end reason=%s duration_ms=%d rows=%d dropped=%d",
             ctx,
@@ -303,7 +316,13 @@ def run_live_session(
         capture.join(timeout=10)
         writer_q.put(None)
         writer_thread.join(timeout=60)
-        writer.close()
+        # finally의 close()는 삼킨다. 여기서 던지면 지금 올라가던 예외를 대체해
+        # 디스크 풀이 IO_ERROR가 아니라 close의 OSError로 보고된다. 정상 경로에서는
+        # 위에서 이미 닫혔으므로 이 호출은 여분이다.
+        try:
+            writer.close()
+        except Exception:  # noqa: BLE001 — 원인 오류를 가리지 않는다
+            log.warning("%s wav writer close failed", ctx, exc_info=True)
         if writer.frames_written == 0:
             # 마이크를 못 열었거나 프레임이 하나도 없었다 — 헤더만 남은 파일은
             # "파일 없음"이 맞다 (§8).

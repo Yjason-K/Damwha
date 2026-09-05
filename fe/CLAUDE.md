@@ -74,7 +74,9 @@ The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by 
   `POST /meetings/live`, `POST /meetings/:id/live/stop`, `GET /meetings/:id/live?after=<seq>`를 쓴다.
   라이브 발화는 상세 캐시와 분리된 `["live-utterances", id]` 키에 **커서 append**로 쌓고, 폴링은
   `recording` 1초 / `uploaded`·`processing` 3초 / `failed` 1회 / `done` 없음. 화면은 `ui/live-banner.tsx`
-  (경과 시간, heartbeat 30초 초과 시 "신호 끊김"), `ui/live-transcript.tsx`(자동 따라가기), 시작은
+  (경과 시간, heartbeat가 워커 박동 주기의 3배=90초를 넘으면 "신호 끊김" + 그 상태의 버튼은
+  `stop`이 아니라 `cancel` — 읽어 줄 워커가 없는 플래그 대신 회의를 그 자리에서 닫는다),
+  `ui/live-transcript.tsx`(자동 따라가기), 시작은
   `ui/live-start-dialog.tsx`(업로드 모달에서 파일·일시를 뺀 것, 기본 제목은 브라우저 시각). 실패한
   회의에 라이브 행이 남아 있으면 `TranscriptPane`의 `livePreview`로 읽기 전용 미리보기를 그리고,
   `audio_device_failed`는 재처리 버튼을 숨긴다(파일이 없다). 데모 빌드는 녹음 버튼을 숨긴다.

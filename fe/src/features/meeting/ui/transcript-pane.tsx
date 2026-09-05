@@ -370,7 +370,10 @@ type TranscriptPaneProps = {
   aiAcked: boolean;
   onAckAi: () => void;
   onShowSummary: () => void;
-  /** 실패한 회의에 남은 라이브 미리보기 — 전사가 없을 때만 그린다 (설계 §7.2). */
+  /**
+   * 라이브 미리보기 — 실제 전사가 아직(uploaded/processing) 또는 끝내(failed) 없을 때
+   * 그 자리를 채운다. 전사가 있으면 전사가 이긴다 (설계 §7.2).
+   */
   livePreview?: LiveUtterance[];
 };
 

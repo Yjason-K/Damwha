@@ -420,3 +420,49 @@ def test_capture_bounds_the_preview_queue_but_never_the_writer_queue(tmp_path):
     assert writer_q.qsize() == 101  # 100 프레임 + None
     assert preview_q.qsize() == 11  # 10 프레임 + None
     assert cap.dropped == 90
+
+
+def test_writer_death_ends_the_session_promptly_not_only_at_stop(conn, tmp_path, monkeypatch):
+    """디스크가 차면 그 자리에서 세션이 끝나야 한다 — 종료를 누를 때가 아니라.
+
+    writer 스레드만 죽고 캡처·미리보기·heartbeat는 그대로 도는 상태라, 루프의 1초 폴링이
+    보지 않으면 5분에 찬 디스크를 60분짜리 회의의 끝에서야 보고한다. 그래서 소스는 실패
+    뒤에도 계속 프레임을 내는 SilenceSource이고, 상한 시간(2초)은 회귀했을 때 테스트가
+    멈추지 않게 하는 안전망일 뿐이다 — 그 상한까지 가면 emitted가 한참 커져 깨진다.
+
+    close()도 같이 던지는 것이 진짜 ENOSPC다(남은 버퍼를 flush하다 같은 오류가 난다).
+    오류 판정이 close()보다 뒤로 가면 그 close가 원인을 가려 IO_ERROR가 아니라
+    uncategorized로 닫힌다.
+    """
+
+    class FullDisk(WavWriter):
+        def append(self, pcm: bytes) -> None:
+            if self.frames_written >= 10 * 512:
+                raise OSError(28, "No space left on device")
+            super().append(pcm)
+
+        def close(self) -> None:
+            raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(live_session, "WavWriter", FullDisk)
+    mid, job = _claimed(conn)
+    src = SilenceSource()
+    with pytest.raises(WorkerError) as ei:
+        _run(
+            conn,
+            tmp_path,
+            job,
+            _payload(mid),
+            _models(vad=FakeStreamingVAD()),
+            src,
+            max_minutes=2.0 / 60,
+        )
+    assert ei.value.code == IO_ERROR and ei.value.kind is ErrorKind.PERMANENT
+    assert "No space left on device" in repr(ei.value.__cause__)
+    # 아무도 종료를 누르지 않았다 — 루프가 스스로 끝냈다.
+    row = conn.execute("SELECT stop_requested_at FROM job WHERE id=%s", (job["id"],)).fetchone()
+    assert row["stop_requested_at"] is None
+    # 실패(10프레임) 직후 몇 프레임 안에 끝난다. 상한까지 갔다면 400프레임쯤 나온다.
+    assert src.emitted < 100
+    m = conn.execute("SELECT status, duration_ms FROM meeting WHERE id=%s", (mid,)).fetchone()
+    assert m["status"] == "recording" and m["duration_ms"] is None

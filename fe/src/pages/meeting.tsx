@@ -286,6 +286,8 @@ function MeetingView({
   // 라이브 미리보기 — recording에서는 1초, 처리 중엔 3초, failed는 한 번, done은 안 본다.
   const { data: liveState } = useLiveUtterances(meetingId, meeting?.status);
   const stopLive = useStopLive();
+  // 워커 신호가 끊긴 배너의 탈출구 — ProcessingBanner의 취소와 같은 엔드포인트다.
+  const cancelLive = useCancelProcessing();
   const liveItems = liveState?.items ?? [];
 
   useSyncSummaryStatus(
@@ -519,7 +521,9 @@ function MeetingView({
                 },
               })
             }
+            onCancel={() => cancelLive.mutate(meeting.id)}
             stopping={stopLive.isPending}
+            cancelling={cancelLive.isPending}
           />
         ) : meeting && meeting.status !== "done" ? (
           <ProcessingBanner meeting={meeting} status={procStatus} />

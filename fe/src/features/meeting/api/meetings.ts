@@ -78,10 +78,15 @@ export function useMeetingStatus(
     enabled: enabled && !!id,
     // 처리/요약/색인 중 하나라도 진행 중일 때만 폴링 — done 회의에서도 색인
     // 실패를 한 번은 조회해야 하므로 enabled는 열어 두고 여기서 멈춘다.
+    // recording이 빠지면 안 된다: 판정을 이 쿼리 자신의 마지막 응답으로 하는데,
+    // 녹음 중에는 그 응답이 늘 recording이라 폴링이 그 자리에서 멈추고 아무도
+    // 다시 깨우지 않는다. 종료 뒤 배치 패스 내내 "처리 중 · 0%"가 박히고 요약은
+    // 계속 생성 중으로 남는다. 위 isActive와 같은 집합이어야 한다.
     refetchInterval: (query) => {
       const d = query.state.data;
       if (!d) return 2000;
       const active =
+        d.status === "recording" ||
         d.status === "uploaded" ||
         d.status === "processing" ||
         d.summary?.status === "queued" ||
