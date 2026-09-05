@@ -229,6 +229,14 @@ flowchart TD
 v5 `process_meeting` 큐잉). 재시도 없음, 1차 SIGTERM은 finalize. 상세:
 `docs/superpowers/specs/2026-09-05-live-recording-design.md`.
 
+**세그먼트 끝 → 미리보기 노출 지연은 설계 예상(1~2초)보다 훨씬 크다.** `smoke_live_session.py`
+실측(중앙값 5.1초, 최대 7.4초, `worker/SMOKE.md` "라이브 세션" 실측 참고)이 large-v3-turbo(mlx,
+GPU)로 15초 세그먼트 하나를 처리하는 실제 시간을 보여준다. 이 격차는 설계 §2.7이 SSE를 뺀
+근거(폴링 오버헤드는 전사 시간 옆에서 작다)를 **약화시키지 않는다** — 전사가 예상보다 느릴수록
+1초 폴링이 얹는 평균 0.5초의 비중은 오히려 더 작아지므로(1.5초 기준 1/3 → 5초 기준 1/10),
+전송 방식을 바꿀 이유는 더 줄었다. 표본이 4개뿐이고 세션 안에서 지연이 단조 증가했다는 점은
+`SMOKE.md`에 남겨 뒀다 — 재측정 전까지 정착된 값으로 보지 않는다.
+
 ## 5. Job 타입별 계약
 
 | job type | 주요 payload | DB stage와 progress | 성공 결과 |
