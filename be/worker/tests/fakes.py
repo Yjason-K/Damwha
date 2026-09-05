@@ -78,3 +78,37 @@ class FakeStreamingVAD:
 
     def reset(self) -> None:
         self.frames_seen = 0
+
+
+class SilenceSource:
+    """stop()이 올 때까지 무음 프레임을 낸다 — stop 플래그·상한 시간 테스트용."""
+
+    def __init__(self, interval_seconds: float = 0.005) -> None:
+        import threading
+
+        self._stop = threading.Event()
+        self._interval = interval_seconds
+        self.emitted = 0
+
+    def frames(self):
+        import time
+
+        while not self._stop.is_set():
+            self.emitted += 1
+            yield b"\x00" * 1024
+            time.sleep(self._interval)
+
+    def stop(self) -> None:
+        self._stop.set()
+
+
+class RaisingSource:
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    def frames(self):
+        raise self._exc
+        yield  # noqa: RET503 — 제너레이터로 만들기 위한 도달 불가 yield
+
+    def stop(self) -> None:
+        pass
