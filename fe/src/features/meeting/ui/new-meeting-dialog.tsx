@@ -24,19 +24,28 @@ import { toast } from "@/shared/ui/use-toast";
 import type { ProcessingOverride } from "@/features/settings/api/types";
 import { OverrideSection } from "@/features/settings/ui/override-section";
 
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/shared/ui/tabs";
+import { useStartLive } from "../api/live";
+import { defaultLiveTitle } from "../lib/default-live-title";
+
 import { useUploadMeeting } from "../api/meetings";
 import type { SpeakerBounds } from "../api/types";
 import { Icon } from "./icons";
 import { isSpeakerBoundsValid } from "../lib/speaker-bounds";
 import { SpeakerCountField } from "./speaker-count-field";
 
-/**
- * UploadDialog — 오디오 파일을 올려 새 회의를 생성한다. 파일(필수) + 제목/녹음
- * 일시(선택)를 받아 `useUploadMeeting`으로 multipart 전송하고, 성공 시 새 회의를
- * 선택해 처리 배너를 띄운다. 렌즈/요약은 실행 시점(자동/나중에)을 고를 수 있고,
- * "나중에"를 고르면 process_meeting payload의 followups가 꺼져 워커가 후속 job을
- * 큐잉하지 않는다.
- */
+/** 파일 업로드와 실시간 녹음이 공통 설정을 공유하는 회의 생성 모달. */
+type MeetingSource = "file" | "live";
+const SOURCE_KEY = "damwha:new-meeting-source";
+
+function readSource(): MeetingSource {
+  if (env.demoMode) return "file";
+  try {
+    return localStorage.getItem(SOURCE_KEY) === "live" ? "live" : "file";
+  } catch {
+    return "file";
+  }
+}
 
 /** 후속 처리 실행 시점 — defer 플래그의 UI 표현. */
 type FollowupTiming = "auto" | "later";
@@ -110,18 +119,19 @@ function combineToISO(date: Date, time: string): string {
   ).toISOString();
 }
 
-type UploadDialogProps = {
+type NewMeetingDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** 업로드 성공 시 새 회의 id — 셸이 해당 회의를 선택해 처리 배너를 띄운다. */
-  onUploaded: (id: string) => void;
+  /** 업로드 또는 녹음 시작 성공 시 새 회의로 이동한다. */
+  onCreated: (id: string) => void;
 };
 
-export function UploadDialog({
+export function NewMeetingDialog({
   open,
   onOpenChange,
-  onUploaded,
-}: UploadDialogProps) {
+  onCreated,
+}: NewMeetingDialogProps) {
+  const [source, setSource] = React.useState<MeetingSource>(readSource);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const recordedLabelId = React.useId();
   const recordedHintId = React.useId();
@@ -142,6 +152,19 @@ export function UploadDialog({
   const [deferLens, setDeferLens] = React.useState(false);
   const [deferSummary, setDeferSummary] = React.useState(false);
   const upload = useUploadMeeting();
+  const start = useStartLive();
+  const pending = upload.isPending || start.isPending;
+
+  const changeSource = (value: string) => {
+    if (pending || env.demoMode) return;
+    const next = value === "live" ? "live" : "file";
+    setSource(next);
+    try {
+      localStorage.setItem(SOURCE_KEY, next);
+    } catch {
+      // 저장소를 사용할 수 없어도 현재 모달의 선택은 유지한다.
+    }
+  };
   const queryClient = useQueryClient();
   const demoTour = env.demoTour; // null이면 실제 업로드 경로
 
@@ -157,16 +180,55 @@ export function UploadDialog({
   };
 
   const handleOpenChange = (next: boolean) => {
-    // 업로드 중에는 닫히지 않도록 막는다.
-    if (!next && upload.isPending) return;
+    // 업로드 또는 녹음 시작 요청 중에는 닫히지 않도록 막는다.
+    if (!next && pending) return;
     if (!next) resetForm();
     onOpenChange(next);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (pending || !isSpeakerBoundsValid(speakers)) return;
+    if (source === "live" && !env.demoMode) {
+      start.mutate(
+        {
+          title: title.trim() || defaultLiveTitle(),
+          processing,
+          speakers,
+          defer_lens: deferLens || undefined,
+          defer_summary: deferSummary || undefined,
+        },
+        {
+          onSuccess: (summary) => {
+            toast({
+              variant: "success",
+              title: "녹음 시작",
+              description: "마이크가 준비되면 발화가 실시간으로 표시돼요.",
+            });
+            resetForm();
+            onOpenChange(false);
+            onCreated(summary.id);
+          },
+          onError: (error) => {
+            if (isDemoBlocked(error)) return;
+            const conflict = isApiError(error) && error.statusCode === 409;
+            toast({
+              variant: "error",
+              title: conflict
+                ? "이미 녹음 중이에요"
+                : "녹음을 시작하지 못했어요",
+              description: conflict
+                ? "진행 중인 녹음을 먼저 종료해 주세요."
+                : isApiError(error)
+                  ? error.message
+                  : "잠시 후 다시 시도해 주세요.",
+            });
+          },
+        },
+      );
+      return;
+    }
     if (demoTour) {
-      if (!isSpeakerBoundsValid(speakers)) return;
       startUploadSimulation(demoTour.meetingId, queryClient);
       toast({
         variant: "success",
@@ -175,10 +237,10 @@ export function UploadDialog({
       });
       resetForm();
       onOpenChange(false);
-      onUploaded(demoTour.meetingId);
+      onCreated(demoTour.meetingId);
       return;
     }
-    if (!file || upload.isPending || !isSpeakerBoundsValid(speakers)) return;
+    if (!file) return;
     upload.mutate(
       {
         file,
@@ -200,7 +262,7 @@ export function UploadDialog({
           });
           resetForm();
           onOpenChange(false);
-          onUploaded(summary.id);
+          onCreated(summary.id);
         },
         onError: (error) => {
           if (isDemoBlocked(error)) return;
@@ -220,84 +282,117 @@ export function UploadDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>새 회의 업로드</DialogTitle>
+          <DialogTitle>새 회의 기록하기</DialogTitle>
           <DialogDescription>
-            오디오 파일을 올리면 화자 분리와 전사가 자동으로 진행돼요.
+            오디오 파일을 올리거나 실시간으로 녹음해 회의를 기록해요.
           </DialogDescription>
         </DialogHeader>
 
         <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
-          {demoTour ? (
-            <DemoUploadSource fileLabel={demoTour.fileLabel} />
-          ) : (
-            <div className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium text-[color:var(--text-secondary)]">
+          <Tabs value={source} onValueChange={changeSource}>
+            <TabsList variant="choice" aria-label="회의 기록 방식">
+              <TabsTrigger value="file" disabled={pending} className="flex-1">
                 오디오 파일
-              </span>
-              <div className="flex items-center gap-2.5">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  iconLeft={<Icon name="mic" size={15} />}
-                  onClick={() => fileInputRef.current?.click()}
+              </TabsTrigger>
+              {!env.demoMode && (
+                <TabsTrigger value="live" disabled={pending} className="flex-1">
+                  실시간 녹음
+                </TabsTrigger>
+              )}
+            </TabsList>
+            <TabsContent value="file" className="flex flex-col gap-4">
+              {demoTour ? (
+                <DemoUploadSource fileLabel={demoTour.fileLabel} />
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-sm font-medium text-[color:var(--text-secondary)]">
+                    오디오 파일
+                  </span>
+                  <div className="flex items-center gap-2.5">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      iconLeft={<Icon name="mic" size={15} />}
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      파일 선택
+                    </Button>
+                    <span className="min-w-0 flex-1 truncate text-sm text-[color:var(--text-muted)]">
+                      {file
+                        ? `${file.name} · ${formatBytes(file.size)}`
+                        : "선택된 파일이 없어요"}
+                    </span>
+                  </div>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="audio/*"
+                    className="hidden"
+                    onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                  />
+                </div>
+              )}
+
+              <div className="flex flex-col gap-1.5">
+                <span
+                  id={recordedLabelId}
+                  className="text-sm font-medium text-[color:var(--text-secondary)]"
                 >
-                  파일 선택
-                </Button>
-                <span className="min-w-0 flex-1 truncate text-sm text-[color:var(--text-muted)]">
-                  {file
-                    ? `${file.name} · ${formatBytes(file.size)}`
-                    : "선택된 파일이 없어요"}
+                  녹음 일시 (선택)
                 </span>
+                <div
+                  role="group"
+                  aria-labelledby={recordedLabelId}
+                  aria-describedby={recordedHintId}
+                  className="flex items-center gap-2"
+                >
+                  <div className="min-w-0 flex-1">
+                    <DatePicker
+                      value={recordedDate}
+                      onChange={setRecordedDate}
+                    />
+                  </div>
+                  <Input
+                    type="time"
+                    value={recordedTime}
+                    onChange={(e) => setRecordedTime(e.target.value)}
+                    containerClassName="w-[116px] shrink-0"
+                    aria-label="녹음 시각"
+                  />
+                </div>
+                <p
+                  id={recordedHintId}
+                  className="text-sm text-[color:var(--text-muted)]"
+                >
+                  비우면 업로드 시각으로 기록됩니다.
+                </p>
               </div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="audio/*"
-                className="hidden"
-                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              />
-            </div>
-          )}
+            </TabsContent>
+            {!env.demoMode && (
+              <TabsContent value="live">
+                <p className="text-sm text-[color:var(--text-secondary)]">
+                  서버로 사용하는 Mac의 마이크로 녹음해요. 접속한 기기의
+                  마이크가 아닐 수 있어요.
+                </p>
+                <p className="mt-2 text-sm text-[color:var(--text-muted)]">
+                  녹음 시작을 누르면 발화가 실시간으로 표시되고, 종료 후 화자
+                  분리와 전사가 진행돼요.
+                </p>
+              </TabsContent>
+            )}
+          </Tabs>
 
           <Input
             label="제목 (선택)"
-            placeholder="회의 제목"
+            placeholder={
+              source === "live"
+                ? "비우면 녹음 날짜와 시간으로 저장돼요"
+                : "회의 제목"
+            }
             value={title}
             onChange={(e) => setTitle(e.target.value)}
           />
-
-          <div className="flex flex-col gap-1.5">
-            <span
-              id={recordedLabelId}
-              className="text-sm font-medium text-[color:var(--text-secondary)]"
-            >
-              녹음 일시 (선택)
-            </span>
-            <div
-              role="group"
-              aria-labelledby={recordedLabelId}
-              aria-describedby={recordedHintId}
-              className="flex items-center gap-2"
-            >
-              <div className="min-w-0 flex-1">
-                <DatePicker value={recordedDate} onChange={setRecordedDate} />
-              </div>
-              <Input
-                type="time"
-                value={recordedTime}
-                onChange={(e) => setRecordedTime(e.target.value)}
-                containerClassName="w-[116px] shrink-0"
-                aria-label="녹음 시각"
-              />
-            </div>
-            <p
-              id={recordedHintId}
-              className="text-sm text-[color:var(--text-muted)]"
-            >
-              비우면 업로드 시각으로 기록됩니다.
-            </p>
-          </div>
 
           <SpeakerCountField value={speakers} onChange={setSpeakers} />
 
@@ -340,25 +435,21 @@ export function UploadDialog({
 
           <DialogFooter className="mt-1">
             <DialogClose asChild>
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={upload.isPending}
-              >
+              <Button type="button" variant="secondary" disabled={pending}>
                 취소
               </Button>
             </DialogClose>
             <Button
               type="submit"
               data-tour="upload-submit"
-              loading={upload.isPending}
+              loading={pending}
               disabled={
-                (!demoTour && !file) ||
-                upload.isPending ||
+                (source === "file" && !demoTour && !file) ||
+                pending ||
                 !isSpeakerBoundsValid(speakers)
               }
             >
-              업로드
+              {source === "live" ? "녹음 시작" : "업로드 시작"}
             </Button>
           </DialogFooter>
         </form>

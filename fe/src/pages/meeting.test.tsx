@@ -1015,9 +1015,11 @@ test("새 회의 기록하기로 업로드 다이얼로그를 연다", async () 
   });
   fireEvent.click(screen.getByRole("button", { name: /새 회의 기록하기/ }));
   expect(
-    await screen.findByRole("heading", { name: "새 회의 업로드" }),
+    await screen.findByRole("heading", { name: "새 회의 기록하기" }),
   ).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "업로드" })).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "업로드 시작" }),
+  ).toBeInTheDocument();
 });
 
 test("처리 중인 회의는 목록에 처리 중 뱃지를 보여준다", async () => {

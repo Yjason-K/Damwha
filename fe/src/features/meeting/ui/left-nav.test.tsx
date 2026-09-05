@@ -5,33 +5,30 @@ import { afterEach, expect, test, vi } from "vitest";
 
 /**
  * LeftNav가 스스로 하는 이동(업로드 완료 → 새 회의 경로)만 좁게 검증한다.
- * 업로드 자체는 UploadDialog 목으로 대체해 흉내 낸다.
+ * 업로드 자체는 NewMeetingDialog 목으로 대체해 흉내 낸다.
  */
 
 vi.mock("@/shared/api/client", () => ({
   apiClient: { get: vi.fn().mockResolvedValue({ data: [] }), post: vi.fn() },
 }));
 
-vi.mock("@/features/meeting/ui/upload-dialog", () => ({
-  UploadDialog: ({ onUploaded }: { onUploaded: (id: string) => void }) => (
-    <button type="button" onClick={() => onUploaded("m9")}>
-      업로드 완료 흉내
-    </button>
-  ),
-}));
-
-vi.mock("@/features/meeting/ui/live-start-dialog", () => ({
-  LiveStartDialog: ({
+vi.mock("@/features/meeting/ui/new-meeting-dialog", () => ({
+  NewMeetingDialog: ({
     open,
-    onStarted,
+    onCreated,
   }: {
     open: boolean;
-    onStarted: (id: string) => void;
+    onCreated: (id: string) => void;
   }) =>
     open ? (
-      <button type="button" onClick={() => onStarted("m8")}>
-        녹음 시작 흉내
-      </button>
+      <>
+        <button type="button" onClick={() => onCreated("m9")}>
+          업로드 완료 흉내
+        </button>
+        <button type="button" onClick={() => onCreated("m8")}>
+          녹음 시작 흉내
+        </button>
+      </>
     ) : null,
 }));
 
@@ -66,11 +63,12 @@ test("업로드가 끝나면 새 회의 경로로 이동한다", async () => {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  fireEvent.click(screen.getByRole("button", { name: /새 회의 기록하기/ }));
   fireEvent.click(screen.getByRole("button", { name: "업로드 완료 흉내" }));
   expect(await screen.findByText("경로: /meetings/m9")).toBeInTheDocument();
 });
 
-test("녹음 시작 버튼이 다이얼로그를 열고, 시작되면 새 회의 경로로 이동한다", async () => {
+test("통합 다이얼로그에서 녹음을 시작하면 새 회의 경로로 이동한다", async () => {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -93,7 +91,10 @@ test("녹음 시작 버튼이 다이얼로그를 열고, 시작되면 새 회의
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  fireEvent.click(screen.getByRole("button", { name: "녹음 시작" }));
+  expect(
+    screen.queryByRole("button", { name: "녹음 시작" }),
+  ).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /새 회의 기록하기/ }));
   fireEvent.click(
     await screen.findByRole("button", { name: "녹음 시작 흉내" }),
   );

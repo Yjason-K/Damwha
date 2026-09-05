@@ -12,8 +12,7 @@ import { env } from "@/shared/config/env";
 import { useMeetings } from "../api/meetings";
 import type { MeetingFilter, MeetingStatus } from "../model/types";
 import { Icon } from "./icons";
-import { LiveStartDialog } from "./live-start-dialog";
-import { UploadDialog } from "./upload-dialog";
+import { NewMeetingDialog } from "./new-meeting-dialog";
 
 const TourLaunchButton = React.lazy(() =>
   import("@/features/demo/ui/tour-launch-button").then((m) => ({
@@ -53,19 +52,6 @@ function NewMeetingItem({ onClick }: { onClick?: () => void }) {
       <Icon name="plus" size={16} />
       <span className="flex-1">새 회의 기록하기</span>
       <Kbd>N</Kbd>
-    </button>
-  );
-}
-
-function RecordItem({ onClick }: { onClick?: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="mt-1.5 flex w-full cursor-pointer items-center gap-[9px] rounded-sm border border-border bg-card px-2.5 py-2 text-left text-sm font-medium text-foreground outline-none transition-colors duration-[80ms] hover:bg-[var(--gray-2)] focus-visible:[box-shadow:var(--focus-ring)]"
-    >
-      <Icon name="mic" size={16} />
-      <span className="flex-1">녹음 시작</span>
     </button>
   );
 }
@@ -143,8 +129,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
   const savedMatch = useMatch("/saved-utterances");
   const speakersMatch = useMatch("/speakers");
   const settingsMatch = useMatch("/settings");
-  const [uploadOpen, setUploadOpen] = React.useState(false);
-  const [liveOpen, setLiveOpen] = React.useState(false);
+  const [newMeetingOpen, setNewMeetingOpen] = React.useState(false);
   const { data: meetings, isLoading, isError } = useMeetings();
   const filtered = (meetings ?? []).filter((m) =>
     filter === "fav" ? m.fav : true,
@@ -171,8 +156,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
             shortcut={<Kbd keys={["⌘", "K"]} />}
           />
         </div>
-        <NewMeetingItem onClick={() => setUploadOpen(true)} />
-        {env.demoMode ? null : <RecordItem onClick={() => setLiveOpen(true)} />}
+        <NewMeetingItem onClick={() => setNewMeetingOpen(true)} />
 
         <div className="mt-3.5 flex flex-col gap-0.5">
           <SidebarItem
@@ -271,15 +255,10 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
         </React.Suspense>
       ) : null}
 
-      <UploadDialog
-        open={uploadOpen}
-        onOpenChange={setUploadOpen}
-        onUploaded={(id) => navigate(`/meetings/${id}`)}
-      />
-      <LiveStartDialog
-        open={liveOpen}
-        onOpenChange={setLiveOpen}
-        onStarted={(id) => navigate(`/meetings/${id}`)}
+      <NewMeetingDialog
+        open={newMeetingOpen}
+        onOpenChange={setNewMeetingOpen}
+        onCreated={(id) => navigate(`/meetings/${id}`)}
       />
     </nav>
   );

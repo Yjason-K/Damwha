@@ -26,8 +26,6 @@ export default defineConfig([
       // with their component. allowConstantExport only covers Literal/Unary/
       // Template/Binary, not CallExpression, so we list these names explicitly.
       // Add new `<name>Variants` exports here as components are ported.
-      // defaultLiveTitle is a plain function export co-located with
-      // LiveStartDialog (unit-tested directly, same reasoning as *Variants).
       "react-refresh/only-export-components": [
         "error",
         {
@@ -37,7 +35,6 @@ export default defineConfig([
             "badgeVariants",
             "cardVariants",
             "iconButtonVariants",
-            "defaultLiveTitle",
             "isHeartbeatStale",
           ],
         },

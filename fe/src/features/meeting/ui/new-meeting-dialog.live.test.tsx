@@ -9,10 +9,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { ApiError, apiClient } from "@/shared/api/client";
-import { LiveStartDialog, defaultLiveTitle } from "./live-start-dialog";
+import { NewMeetingDialog } from "./new-meeting-dialog";
+import { defaultLiveTitle } from "../lib/default-live-title";
 
 afterEach(() => {
   cleanup();
+  localStorage.clear();
   vi.restoreAllMocks();
 });
 
@@ -48,9 +50,13 @@ function renderDialog(onStarted = vi.fn()) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
-      <LiveStartDialog open onOpenChange={() => {}} onStarted={onStarted} />
+      <NewMeetingDialog open onOpenChange={() => {}} onCreated={onStarted} />
     </QueryClientProvider>,
   );
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "실시간 녹음" }), {
+    button: 0,
+    ctrlKey: false,
+  });
   return { post, onStarted };
 }
 
@@ -63,7 +69,7 @@ test("기본 제목은 '녹음 YYYY-MM-DD HH:mm'이다", () => {
 test("제목·미루기 선택이 JSON body로 실리고 성공하면 onStarted를 부른다", async () => {
   const { post, onStarted } = renderDialog();
   const title = screen.getByLabelText("제목 (선택)") as HTMLInputElement;
-  expect(title.value).toMatch(/^녹음 \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  expect(title.value).toBe("");
   fireEvent.change(title, { target: { value: "주간 회의" } });
   fireEvent.click(screen.getByRole("radio", { name: "요약 나중에 실행" }));
   fireEvent.click(screen.getByRole("button", { name: "녹음 시작" }));

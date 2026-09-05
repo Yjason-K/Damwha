@@ -6,8 +6,8 @@ import { expect, test, vi } from "vitest";
 /**
  * 데모 빌드에서는 "녹음 시작" 버튼이 보이지 않아야 한다 — 데모는 읽기 전용이라
  * 엔드포인트가 늘 거절하므로, 항상 실패하는 버튼을 보여주는 것보다 숨기는 쪽을
- * 택했다(left-nav.tsx의 `env.demoMode ? null : <RecordItem .../>`).
- * env 강제 방식은 upload-dialog.demo.test.tsx와 같다.
+ * 택했다. 통합 모달에서도 녹음 탭을 숨긴다.
+ * env 강제 방식은 new-meeting-dialog.demo.test.tsx와 같다.
  */
 
 vi.mock("@/shared/config/env", async (importOriginal) => {
@@ -24,12 +24,8 @@ vi.mock("@/shared/api/client", () => ({
   apiClient: { get: vi.fn().mockResolvedValue({ data: [] }), post: vi.fn() },
 }));
 
-vi.mock("@/features/meeting/ui/upload-dialog", () => ({
-  UploadDialog: () => null,
-}));
-
-vi.mock("@/features/meeting/ui/live-start-dialog", () => ({
-  LiveStartDialog: () => null,
+vi.mock("@/features/meeting/ui/new-meeting-dialog", () => ({
+  NewMeetingDialog: () => null,
 }));
 
 vi.mock("@/features/demo/ui/tour-launch-button", () => ({

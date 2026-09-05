@@ -77,9 +77,9 @@ The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by 
   (경과 시간, heartbeat가 워커 박동 주기의 3배=90초를 넘으면 "신호 끊김" + 그 상태의 버튼은
   `stop`이 아니라 `cancel` — 읽어 줄 워커가 없는 플래그 대신 회의를 그 자리에서 닫는다),
   `ui/live-transcript.tsx`(자동 따라가기), 시작은
-  `ui/live-start-dialog.tsx`(업로드 모달에서 파일·일시를 뺀 것, 기본 제목은 브라우저 시각). 실패한
+  `ui/new-meeting-dialog.tsx`의 실시간 녹음 탭(제목을 비우면 브라우저 시각으로 생성). 실패한
   회의에 라이브 행이 남아 있으면 `TranscriptPane`의 `livePreview`로 읽기 전용 미리보기를 그리고,
-  `audio_device_failed`는 재처리 버튼을 숨긴다(파일이 없다). 데모 빌드는 녹음 버튼을 숨긴다.
+  `audio_device_failed`는 재처리 버튼을 숨긴다(파일이 없다). 사이드바의 “새 회의 기록하기”가 오디오 파일/실시간 녹음 탭을 가진 통합 모달을 연다. 공통 입력과 파일·일시는 탭 전환 시 유지하고 닫으면 초기화하며, 마지막 탭은 로컬 저장소에 기억한다. 데모 빌드는 파일 탭만 제공한다.
 
 `src/features/settings/` (처리 설정) owns the processing-config surface: `api` (`useProcessingSettings` / `useUpdateProcessingSettings` / `useCapabilities`), `lib` (`PRESET_META` — each preset also pins a `summary_model` — + `SUMMARY_MODEL_OPTIONS` + `PRESET_META_REVISION` — **keep synced with the BE preset definitions**; a `preset_revision` mismatch surfaces a drift notice), and `ui` (`ProcessingSettingsForm`, `OverrideSection`). The same sync constraint covers `api/types.ts`'s `SummaryModel` union, a hand-maintained mirror of BE's `SUMMARY_MODELS` catalog — a value outside it is a server 400 on PUT. Reached via LeftNav "처리 설정" → the `/settings` route.
 
