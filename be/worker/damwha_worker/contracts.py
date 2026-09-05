@@ -13,6 +13,7 @@ SUPPORTED_SCHEMA_VERSIONS: dict[str, frozenset[int]] = {
     "index_meeting": frozenset({1}),
     "extract_lenses": frozenset({1}),
     "summarize_meeting": frozenset({1}),
+    "live_session": frozenset({1}),
 }
 
 MeetingId = Annotated[str, StringConstraints(pattern=r"^mtg_[1-9][0-9]*$")]
@@ -351,6 +352,51 @@ class SummaryResponse(BaseModel):
     segments: list[SummarySegmentCandidate] = []
 
 
+class LiveSessionPayloadWire(BaseModel):
+    """wire v1. process는 API가 완전히 해석한 v5 process_meeting payload 그대로다."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1]
+    meeting_id: MeetingId
+    audio_key: str
+    source: Literal["mic"]
+    process: dict
+
+    @model_validator(mode="after")
+    def _process_matches(self):
+        if self.process.get("schema_version") != 5:
+            raise ValueError("live_session.process must be a wire v5 process_meeting payload")
+        if self.process.get("meeting_id") != self.meeting_id:
+            raise ValueError("live_session.process.meeting_id must equal meeting_id")
+        if self.process.get("audio_key") != self.audio_key:
+            raise ValueError("live_session.process.audio_key must equal audio_key")
+        return self
+
+
+class LiveSessionPayload(BaseModel):
+    """내부 표현. process는 정규화된 ProcessMeetingPayload(워커가 모델·임계값을 읽는 곳),
+    process_wire는 종료 시 그대로 최종 job에 넣을 원본 dict."""
+
+    schema_version: int = 1
+    meeting_id: MeetingId
+    audio_key: str
+    source: Literal["mic"]
+    process: ProcessMeetingPayload
+    process_wire: dict
+
+
+def _parse_live_session(data: dict) -> LiveSessionPayload:
+    wire = LiveSessionPayloadWire.model_validate(data)
+    return LiveSessionPayload(
+        meeting_id=wire.meeting_id,
+        audio_key=wire.audio_key,
+        source=wire.source,
+        process=_parse_process_meeting(wire.process),
+        process_wire=wire.process,
+    )
+
+
 def _parse_process_meeting(data: dict) -> ProcessMeetingPayload:
     version = data.get("schema_version", 1)
     if version == 1:
@@ -436,6 +482,8 @@ def parse_payload(job_type: str, data: dict):
         return EnrollSpeakerPayload.model_validate(data)
     if job_type == "index_meeting":
         return IndexMeetingPayload.model_validate(data)
+    if job_type == "live_session":
+        return _parse_live_session(data)
     if job_type == "summarize_meeting":
         return SummarizeMeetingPayload.model_validate(data)
     return ExtractLensesPayload.model_validate(data)
