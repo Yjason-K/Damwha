@@ -472,7 +472,7 @@ function MeetingView({
           aiAcked={aiAcked}
           onAckAi={onAckAi}
           onShowSummary={() => setTab("summary")}
-          livePreview={meeting.status === "failed" ? liveItems : undefined}
+          livePreview={meeting.status !== "done" ? liveItems : undefined}
         />
         <InsightPane
           meeting={meeting}

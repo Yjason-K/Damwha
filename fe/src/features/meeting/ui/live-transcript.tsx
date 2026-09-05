@@ -66,7 +66,7 @@ export function LiveTranscript({
         ) : (
           <ul className="flex flex-col gap-2">
             {items.map((u) => (
-              <li key={u.id} className="flex gap-3 text-base leading-relaxed">
+              <li key={u.id} className="flex gap-3 text-read leading-relaxed">
                 <span className="w-12 shrink-0 pt-px font-mono text-xs text-[color:var(--text-faint)]">
                   {u.t}
                 </span>
