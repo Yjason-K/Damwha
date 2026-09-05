@@ -2,7 +2,7 @@
   "schema_version": 1,
   "meeting_id": "mtg_1",
   "audio_key": "meetings/mtg_1/original.wav",
-  "source": "mic",
+  "source": "browser",
   "process": {
     "schema_version": 5,
     "meeting_id": "mtg_1",

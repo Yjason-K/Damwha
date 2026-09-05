@@ -244,4 +244,15 @@ describe('job payload contract', () => {
     expect(p.process.models.diarization.min_speakers).toBe(2);
     expect(() => LiveSessionPayloadSchema.parse(p)).not.toThrow();
   });
+
+  it('live_session accepts both mic and browser sources', () => {
+    const base = buildLiveSessionPayload({
+      meetingId: 'mtg_7', audioKey: 'meetings/mtg_7/original.wav',
+      processing: resolvePreset('standard', 'ko'),
+      followups: { lens: true, summary: true },
+    });
+    expect(LiveSessionPayloadSchema.parse({ ...base, source: 'mic' }).source).toBe('mic');
+    expect(LiveSessionPayloadSchema.parse({ ...base, source: 'browser' }).source).toBe('browser');
+    expect(() => LiveSessionPayloadSchema.parse({ ...base, source: 'system' })).toThrow();
+  });
 });

@@ -112,7 +112,7 @@ describe('contract fixtures (shared with pydantic worker)', () => {
   });
   it('validates live_session.valid.json and its embedded v5 process payload', () => {
     const p = LiveSessionPayloadSchema.parse(read('live_session.valid.json'));
-    expect(p.source).toBe('mic');
+    expect(p.source).toBe('browser');
     expect(p.process.schema_version).toBe(5);
     expect(p.process.audio_key).toBe(p.audio_key);
   });

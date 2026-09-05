@@ -360,7 +360,7 @@ class LiveSessionPayloadWire(BaseModel):
     schema_version: Literal[1]
     meeting_id: MeetingId
     audio_key: str
-    source: Literal["mic"]
+    source: Literal["mic", "browser"]
     process: dict
 
     @model_validator(mode="after")
@@ -381,7 +381,7 @@ class LiveSessionPayload(BaseModel):
     schema_version: int = 1
     meeting_id: MeetingId
     audio_key: str
-    source: Literal["mic"]
+    source: Literal["mic", "browser"]
     process: ProcessMeetingPayload
     process_wire: dict
 

@@ -21,7 +21,7 @@ def load(name):
 def test_parses_live_session_fixture_and_normalizes_process():
     p = parse_payload("live_session", load("live_session.valid.json"))
     assert isinstance(p, LiveSessionPayload)
-    assert p.source == "mic"
+    assert p.source == "browser"
     assert isinstance(p.process, ProcessMeetingPayload)
     assert p.process.schema_version == 5
     assert p.process.models.whisper_model == "large-v3-turbo"
@@ -61,4 +61,18 @@ def test_rejects_unknown_source_and_future_version():
         parse_payload("live_session", data)
     data = load("live_session.valid.json") | {"schema_version": 2}
     with pytest.raises(UnsupportedPayloadVersion):
+        parse_payload("live_session", data)
+
+
+def test_browser_source_is_accepted():
+    data = load("live_session.valid.json")
+    data["source"] = "browser"
+    p = parse_payload("live_session", data)
+    assert p.source == "browser"
+
+
+def test_unknown_source_is_rejected():
+    data = load("live_session.valid.json")
+    data["source"] = "system"
+    with pytest.raises(Exception):
         parse_payload("live_session", data)

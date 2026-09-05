@@ -151,7 +151,9 @@ export const LiveSessionPayloadSchema = z.object({
   schema_version: z.literal(1),
   meeting_id: z.string().regex(/^mtg_[1-9][0-9]*$/),
   audio_key: z.string().min(1),
-  source: z.literal('mic'),
+  // source는 오디오를 누가 잡는가다. 'browser'가 기본 경로이고, 'mic'은 나중에 시스템
+  // 오디오 구현체가 들어올 자리의 참조 구현으로 남는다 (설계 §2.1).
+  source: z.enum(['mic', 'browser']),
   process: ProcessMeetingPayloadV5Schema,
 }).strict();
 
