@@ -370,7 +370,8 @@ embedding, model, dimension, threshold) -> (speaker_id, similarity) | None`으�
 - 클립 하나의 예외는 로그만 남기고 계속 간다. `LIVE_CLIP_FAILURE_LIMIT`(상수 5)회 연속 실패면
   PERMANENT `live_stt_failed`로 세션을 끝낸다. finalize 없이 exit하므로 reaper 경로가 아니라
   `fail_process_meeting`과 같은 즉시 실패 경로로 회의를 `failed`로 닫는다. WAV는 남는다.
-- 루프 안 DB 오류는 다음 클립에서 재접속을 한 번 시도한다. WAV 쓰기는 영향받지 않는다. 오래
+- 루프 안 DB 오류는 클립 실패로 센다(5회 연속이면 세션 실패). stop 폴링의 DB 오류는 건너뛰고
+  계속 녹음한다. 자식은 재접속하지 않는다는 워커 원칙 그대로다. WAV 쓰기는 영향받지 않는다. 오래
   끊기면 finalize가 실패하고 §8의 크래시 경로로 간다.
 - heartbeat는 기존 daemon thread 그대로.
 
@@ -455,7 +456,7 @@ finalize로 간다. `Ctrl+C`가 녹음을 깔끔하게 끝내고 최종 패스�
 | 클립 하나의 전사·임베딩 예외 | 로그, 건너뜀 | 세션 계속 | 없음 |
 | 클립 5개 연속 실패 | PERMANENT `live_stt_failed`, finalize 없이 종료 | 회의 `failed`, 파일 있음 | 재처리 |
 | 세션 중 자식 크래시(OOM, 디스크 풀) | 죽음. writer 스레드가 디스크에 닿은 프레임까지 파일에 있고 헤더는 스트리밍 값 | reaper가 stale 창(`REAPER_STALE_MINUTES`, 기본 30분) 뒤 job과 회의를 `failed`로 | 재처리. normalize가 헤더를 고치고 EOF까지 읽는다 |
-| 루프 안 DB 오류 | 다음 클립에서 재접속 1회, WAV는 계속 | 오래 끊기면 finalize 실패 → 크래시 경로 | 재처리 |
+| 루프 안 DB 오류 | 클립 실패로 계수, stop 폴링은 건너뜀, WAV는 계속 | 5회 연속이면 `live_stt_failed`; 오래 끊기면 finalize 실패 → 크래시 경로 | 재처리 |
 | 워커 SIGTERM 1차 | stop과 동일하게 finalize | 정상 종료, 최종 패스 큐잉 | 없음 |
 | 워커 SIGTERM 2차 | SIGKILL | 크래시 경로 | 재처리 |
 | API `cancel`(기존 버리기) | heartbeat가 소유권 상실 감지 → 캡처 중단, 헤더 닫고 exit | 회의 `failed(cancelled)`, 파일 있음 | 재처리 또는 삭제 |
