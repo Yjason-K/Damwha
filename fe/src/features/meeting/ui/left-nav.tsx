@@ -12,6 +12,7 @@ import { env } from "@/shared/config/env";
 import { useMeetings } from "../api/meetings";
 import type { MeetingFilter, MeetingStatus } from "../model/types";
 import { Icon } from "./icons";
+import { LiveStartDialog } from "./live-start-dialog";
 import { UploadDialog } from "./upload-dialog";
 
 const TourLaunchButton = React.lazy(() =>
@@ -56,6 +57,19 @@ function NewMeetingItem({ onClick }: { onClick?: () => void }) {
   );
 }
 
+function RecordItem({ onClick }: { onClick?: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="mt-1.5 flex w-full cursor-pointer items-center gap-[9px] rounded-sm border border-border bg-card px-2.5 py-2 text-left text-sm font-medium text-foreground outline-none transition-colors duration-[80ms] hover:bg-[var(--gray-2)] focus-visible:[box-shadow:var(--focus-ring)]"
+    >
+      <Icon name="mic" size={16} />
+      <span className="flex-1">녹음 시작</span>
+    </button>
+  );
+}
+
 const FILTER_ITEMS: [MeetingFilter, string][] = [
   ["all", "전체"],
   ["fav", "즐겨찾기"],
@@ -63,6 +77,12 @@ const FILTER_ITEMS: [MeetingFilter, string][] = [
 
 /** 처리 중/실패 회의에 붙는 상태 뱃지 (done은 없음). */
 function statusBadge(status: MeetingStatus): React.ReactNode {
+  if (status === "recording")
+    return (
+      <Badge variant="accent" dot>
+        녹음 중
+      </Badge>
+    );
   if (status === "failed")
     return (
       <Badge variant="danger" dot>
@@ -124,6 +144,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
   const speakersMatch = useMatch("/speakers");
   const settingsMatch = useMatch("/settings");
   const [uploadOpen, setUploadOpen] = React.useState(false);
+  const [liveOpen, setLiveOpen] = React.useState(false);
   const { data: meetings, isLoading, isError } = useMeetings();
   const filtered = (meetings ?? []).filter((m) =>
     filter === "fav" ? m.fav : true,
@@ -151,6 +172,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
           />
         </div>
         <NewMeetingItem onClick={() => setUploadOpen(true)} />
+        {env.demoMode ? null : <RecordItem onClick={() => setLiveOpen(true)} />}
 
         <div className="mt-3.5 flex flex-col gap-0.5">
           <SidebarItem
@@ -253,6 +275,11 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
         open={uploadOpen}
         onOpenChange={setUploadOpen}
         onUploaded={(id) => navigate(`/meetings/${id}`)}
+      />
+      <LiveStartDialog
+        open={liveOpen}
+        onOpenChange={setLiveOpen}
+        onStarted={(id) => navigate(`/meetings/${id}`)}
       />
     </nav>
   );
