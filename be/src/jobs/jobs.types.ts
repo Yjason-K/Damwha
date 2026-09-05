@@ -6,7 +6,8 @@ export type JobType =
   | 'enroll_speaker'
   | 'index_meeting'
   | 'extract_lenses'
-  | 'summarize_meeting';
+  | 'summarize_meeting'
+  | 'live_session';
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed';
 
 export interface JobRow {
@@ -22,6 +23,7 @@ export interface JobRow {
   locked_by: string | null;
   locked_at: Date | null;
   next_attempt_at: Date | null;
+  stop_requested_at: Date | null;
   error: any;
   created_at: Date;
   updated_at: Date;

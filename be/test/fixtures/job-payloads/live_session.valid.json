@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "meeting_id": "mtg_1",
+  "audio_key": "meetings/mtg_1/original.wav",
+  "source": "mic",
+  "process": {
+    "schema_version": 5,
+    "meeting_id": "mtg_1",
+    "audio_key": "meetings/mtg_1/original.wav",
+    "processing_version": 0,
+    "reprocess": false,
+    "models": {
+      "whisper_model": "large-v3-turbo",
+      "language": "ko",
+      "devices": { "diarization": "gpu", "stt": "gpu" },
+      "preset": "standard",
+      "preset_revision": "2026-08-12.3",
+      "summary_model": "mlx-community/Qwen3.5-9B-8bit",
+      "diarization": { "model": "pyannote/speaker-diarization-community-1", "min_speakers": null, "max_speakers": null },
+      "embedding": { "model": "speechbrain/spkrec-ecapa-voxceleb", "dimension": 192 }
+    },
+    "identify": { "threshold": 0.8, "suggest_threshold": 0.6 },
+    "followups": { "lens": true, "summary": true }
+  }
+}

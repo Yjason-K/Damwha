@@ -5,6 +5,7 @@ import {
   EnrollSpeakerPayloadSchema,
   IndexMeetingPayloadSchema,
   SummarizeMeetingPayloadSchema,
+  LiveSessionPayloadSchema,
 } from '../src/contracts/job-payload.schema';
 
 const dir = path.join(__dirname, 'fixtures', 'job-payloads');
@@ -108,5 +109,22 @@ describe('contract fixtures (shared with pydantic worker)', () => {
   it('rejects summarize-meeting-v1.json with an unknown extraction_run_id field', () => {
     const withExtraField = { ...read('summarize-meeting-v1.json'), extraction_run_id: 'ler_1' };
     expect(() => SummarizeMeetingPayloadSchema.parse(withExtraField)).toThrow();
+  });
+  it('validates live_session.valid.json and its embedded v5 process payload', () => {
+    const p = LiveSessionPayloadSchema.parse(read('live_session.valid.json'));
+    expect(p.source).toBe('mic');
+    expect(p.process.schema_version).toBe(5);
+    expect(p.process.audio_key).toBe(p.audio_key);
+  });
+  it('rejects live_session whose process block is not v5', () => {
+    const bad = read('live_session.valid.json');
+    bad.process = { ...bad.process, schema_version: 4 };
+    delete bad.process.followups;
+    expect(() => LiveSessionPayloadSchema.parse(bad)).toThrow();
+  });
+  it('rejects live_session with an unknown source', () => {
+    const bad = read('live_session.valid.json');
+    bad.source = 'system';
+    expect(() => LiveSessionPayloadSchema.parse(bad)).toThrow();
   });
 });

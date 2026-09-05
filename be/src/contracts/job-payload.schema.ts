@@ -90,7 +90,7 @@ const ProcessMeetingPayloadV4Schema = z.object({
 // both-true. Required on the wire (like v3's summary_model): whether a run
 // produced lenses/summary is part of what the job recorded, not a worker default.
 const FollowupsSchemaV5 = z.object({ lens: z.boolean(), summary: z.boolean() }).strict();
-const ProcessMeetingPayloadV5Schema = z.object({
+export const ProcessMeetingPayloadV5Schema = z.object({
   schema_version: z.literal(5), ...processMeetingCommon,
   models: ModelsSchemaV3, identify: IdentifySchemaV4, followups: FollowupsSchemaV5,
 });
@@ -142,6 +142,19 @@ export const SummarizeMeetingPayloadSchema = z.object({
   model: z.string().min(1),
 }).strict();
 
+// 라이브 세션(실시간 녹음). process는 API가 시작 시점에 완전히 해석한 v5
+// process_meeting payload 그대로다 — 워커는 여기서 whisper/ECAPA/임계값을 읽고,
+// 종료 시 이 블록을 그대로 최종 job의 payload로 넣는다. 설정을 두 번 풀지 않고
+// 라이브 패스와 최종 패스가 같은 모델로 돈다는 것이 구조로 보장된다.
+// source는 나중에 시스템 오디오를 붙일 자리 (설계 §2.1).
+export const LiveSessionPayloadSchema = z.object({
+  schema_version: z.literal(1),
+  meeting_id: z.string().regex(/^mtg_[1-9][0-9]*$/),
+  audio_key: z.string().min(1),
+  source: z.literal('mic'),
+  process: ProcessMeetingPayloadV5Schema,
+}).strict();
+
 export type ProcessMeetingPayloadV1 = z.infer<typeof ProcessMeetingPayloadV1Schema>;
 export type ProcessMeetingPayloadV2 = z.infer<typeof ProcessMeetingPayloadV2Schema>;
 export type ProcessMeetingPayloadV3 = z.infer<typeof ProcessMeetingPayloadV3Schema>;
@@ -153,6 +166,7 @@ export type EnrollSpeakerPayload = z.infer<typeof EnrollSpeakerPayloadSchema>;
 export type IndexMeetingPayload = z.infer<typeof IndexMeetingPayloadSchema>;
 export type ExtractLensesPayload = z.infer<typeof ExtractLensesPayloadSchema>;
 export type SummarizeMeetingPayload = z.infer<typeof SummarizeMeetingPayloadSchema>;
+export type LiveSessionPayload = z.infer<typeof LiveSessionPayloadSchema>;
 
 export function buildProcessMeetingPayload(args: {
   meetingId: string; audioKey: string; processingVersion: number; reprocess: boolean;
@@ -233,5 +247,23 @@ export function buildSummarizeMeetingPayload(args: {
     meeting_id: args.meetingId,
     processing_version: args.processingVersion,
     model: args.model,
+  };
+}
+
+export function buildLiveSessionPayload(args: {
+  meetingId: string; audioKey: string;
+  processing: ProcessingConfig; followups: Followups;
+  speakers?: { min?: number; max?: number };
+}): LiveSessionPayload {
+  return {
+    schema_version: 1,
+    meeting_id: args.meetingId,
+    audio_key: args.audioKey,
+    source: 'mic',
+    process: buildProcessMeetingPayload({
+      meetingId: args.meetingId, audioKey: args.audioKey,
+      processingVersion: 0, reprocess: false,
+      processing: args.processing, followups: args.followups, speakers: args.speakers,
+    }),
   };
 }
