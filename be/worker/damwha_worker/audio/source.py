@@ -83,12 +83,14 @@ class MicSource:
     def __init__(self, device: int | str | None = None, *, sounddevice_module=None) -> None:
         self._device = device
         self._sd = sounddevice_module
-        self._q: queue.Queue[bytes | None] | None = None
+        # 생성 시점에 큐를 만든다 — frames()가 아직 한 번도 next()되지 않은 채 stop()이
+        # 먼저 오는 경우(취소 직후) 신호가 버려지면 안 된다. FileSource의 threading.Event와
+        # 같은 이유로 stop 신호통은 생성자에서부터 살아 있어야 한다.
+        self._q: queue.Queue[bytes | None] = queue.Queue()
 
     def frames(self) -> Iterator[bytes]:
         sd = self._sd or _import_sounddevice()
-        q: queue.Queue[bytes | None] = queue.Queue()
-        self._q = q
+        q = self._q
 
         def _callback(indata, frames, time_info, status) -> None:
             if status:
@@ -124,5 +126,4 @@ class MicSource:
             stream.close()
 
     def stop(self) -> None:
-        if self._q is not None:
-            self._q.put(None)
+        self._q.put(None)

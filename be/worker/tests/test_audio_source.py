@@ -83,6 +83,29 @@ def test_mic_source_streams_callback_frames_until_stop():
     assert got[0] == frame_bytes(0) and len(got[4]) == FRAME_BYTES
 
 
+def test_mic_source_stop_before_first_iteration_still_terminates():
+    """stop()이 frames()가 한 번도 next()되기 전에 먼저 오면(취소 직후) 신호가
+    버려지면 안 된다 — 큐가 생성자에서부터 살아 있어야 한다. 회귀 시 이 테스트는
+    행(hang)이 아니라 join 타임아웃으로 실패해야 스위트를 막지 않는다."""
+    sd = _FakeSounddevice()
+    src = MicSource(sounddevice_module=sd)
+    src.stop()  # 아직 frames()를 한 번도 호출하지 않은 채로 취소한다
+
+    done = threading.Event()
+    got = []
+
+    def _drain():
+        for f in src.frames():
+            got.append(f)
+        done.set()
+
+    t = threading.Thread(target=_drain, daemon=True)
+    t.start()
+    t.join(timeout=1.0)
+    assert done.is_set(), "stop() before the first next() must not hang frames()"
+    assert got == []
+
+
 def test_mic_source_maps_open_failure_to_permanent_audio_device_failed():
     class _Broken(_FakeStream):
         def start(self):
