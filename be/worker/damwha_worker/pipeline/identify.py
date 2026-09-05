@@ -76,6 +76,34 @@ def _vec(values: list[float]) -> str:
     return "[" + ",".join(repr(float(x)) for x in values) + "]"
 
 
+def _nearest_voiceprint(conn, vector, model, dimension) -> tuple[str, float] | None:
+    """matchable 화자의 성문 중 코사인 최근접 (speaker_id, similarity)."""
+    row = conn.execute(
+        """
+        SELECT v.speaker_id, 1 - (v.embedding <=> %s::vector) AS similarity
+        FROM voiceprint v
+        JOIN speaker s ON s.id = v.speaker_id
+        WHERE v.model = %s AND v.dimension = %s
+          AND s.enrollment_status = ANY(%s)
+        ORDER BY v.embedding <=> %s::vector ASC
+        LIMIT 1
+        """,
+        (_vec(vector), model, dimension, list(MATCHABLE_STATUSES), _vec(vector)),
+    ).fetchone()
+    if row is None:
+        return None
+    return row["speaker_id"], float(row["similarity"])
+
+
+def identify_embedding(conn, embedding, model, dimension, threshold) -> tuple[str, float] | None:
+    """라이브 클립 하나의 임베딩을 결합한다. 최종 패스와 같은 후보 집합·같은 SQL이고,
+    기준만 호출자가 정한다(라이브는 suggest_threshold — 설계 §2.8)."""
+    hit = _nearest_voiceprint(conn, embedding, model, dimension)
+    if hit is None or hit[1] < threshold:
+        return None
+    return hit
+
+
 def identify_clusters(
     conn, centroids, model, dimension, threshold, suggest_threshold=None
 ) -> dict[str, ClusterMatch]:
@@ -91,26 +119,15 @@ def identify_clusters(
         if centroid is None:
             out[label] = ClusterMatch()  # 임베딩 불가 라벨 — DB 조회 없이 미식별
             continue
-        row = conn.execute(
-            """
-            SELECT v.speaker_id, 1 - (v.embedding <=> %s::vector) AS similarity
-            FROM voiceprint v
-            JOIN speaker s ON s.id = v.speaker_id
-            WHERE v.model = %s AND v.dimension = %s
-              AND s.enrollment_status = ANY(%s)
-            ORDER BY v.embedding <=> %s::vector ASC
-            LIMIT 1
-            """,
-            (_vec(centroid), model, dimension, list(MATCHABLE_STATUSES), _vec(centroid)),
-        ).fetchone()
-        if row is None:
+        hit = _nearest_voiceprint(conn, centroid, model, dimension)
+        if hit is None:
             out[label] = ClusterMatch()
             continue
-        sim = float(row["similarity"])
+        speaker_id, sim = hit
         if sim >= threshold:
-            out[label] = ClusterMatch(speaker_id=row["speaker_id"], similarity=sim)
+            out[label] = ClusterMatch(speaker_id=speaker_id, similarity=sim)
         elif suggest_threshold is not None and sim >= suggest_threshold:
-            out[label] = ClusterMatch(suggested_speaker_id=row["speaker_id"], similarity=sim)
+            out[label] = ClusterMatch(suggested_speaker_id=speaker_id, similarity=sim)
         else:
             out[label] = ClusterMatch()
     return out
