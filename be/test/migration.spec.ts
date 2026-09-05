@@ -538,4 +538,17 @@ describe('migration', () => {
     await db.pool.query(`UPDATE job SET stage='capture' WHERE type='live_session'`);
     await db.pool.query(`DELETE FROM job WHERE type='live_session'`);
   });
+
+  it('023 adds live browser capture columns', async () => {
+    const { rows } = await db.pool.query(`
+      SELECT table_name, column_name, data_type FROM information_schema.columns
+      WHERE (table_name='job'     AND column_name IN ('sealed_bytes','last_input_at'))
+         OR (table_name='meeting' AND column_name='capture_error')
+      ORDER BY table_name, column_name`);
+    expect(rows).toEqual([
+      { table_name: 'job', column_name: 'last_input_at', data_type: 'timestamp with time zone' },
+      { table_name: 'job', column_name: 'sealed_bytes', data_type: 'bigint' },
+      { table_name: 'meeting', column_name: 'capture_error', data_type: 'jsonb' },
+    ]);
+  });
 });
