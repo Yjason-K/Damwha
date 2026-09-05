@@ -55,3 +55,12 @@ class Transcriber(Protocol):
 
 class TextEmbedder(Protocol):
     def embed_texts(self, texts: list[str]) -> list[list[float]]: ...
+
+
+class StreamingVAD(Protocol):
+    """프레임 단위 VAD. 이벤트는 ("start", ms) 또는 ("end", ms), ms는 스트림 시작 기준.
+    세그먼터는 자체 프레임 계수로 경계를 잡으므로 ms는 로그용이다."""
+
+    def process(self, pcm: bytes) -> list[tuple[str, int]]: ...
+
+    def reset(self) -> None: ...

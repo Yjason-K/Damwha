@@ -62,3 +62,19 @@ class FakeTextEmbedder:
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         return [self._by_text.get(t, [0.0] * self._dim) for t in texts]
+
+
+class FakeStreamingVAD:
+    """프레임 인덱스 → 이벤트 목록. 시각(ms)은 세그먼터가 무시하므로 0으로 둔다."""
+
+    def __init__(self, events: dict[int, list[tuple[str, int]]] | None = None) -> None:
+        self._events = events or {}
+        self.frames_seen = 0
+
+    def process(self, pcm: bytes) -> list[tuple[str, int]]:
+        i = self.frames_seen
+        self.frames_seen += 1
+        return list(self._events.get(i, []))
+
+    def reset(self) -> None:
+        self.frames_seen = 0
