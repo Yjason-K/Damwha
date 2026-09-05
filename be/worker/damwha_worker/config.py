@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     reaper_stale_minutes: float = 30.0
     reaper_interval_seconds: float = 300.0
     stt_chunk_minutes: float = 25.0
+    # 라이브 세션 상한. 넘으면 stop이 온 것과 똑같이 finalize한다 (설계 §4).
+    live_max_minutes: float = 240.0
     model_cache_dir: str | None = None
     search_embedding_model: str = "BAAI/bge-m3"
     search_embedding_dim: int = 1024

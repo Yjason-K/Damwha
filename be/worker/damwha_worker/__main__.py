@@ -15,6 +15,7 @@ from .llm_server import probe_models as check_lens_llm
 from .pipeline.enroll_speaker import run_enroll_speaker
 from .pipeline.extract_lenses import run_extract_lenses
 from .pipeline.index_meeting import run_index_meeting
+from .pipeline.live_session import run_live_session
 from .pipeline.process_meeting import run_process_meeting
 from .pipeline.summarize_meeting import run_summarize_meeting
 from .reaper import run_reaper_loop
@@ -84,6 +85,9 @@ def handle_job(
     llm_server=None,
     shutdown_event=None,
     register_abort=None,
+    build_live_models=None,
+    build_live_source=None,
+    live_max_minutes=240.0,
 ) -> str:
     llm_server = llm_server or _no_llm_server
     try:
@@ -153,6 +157,22 @@ def handle_job(
                     worker_id=worker_id,
                     shutdown_event=shutdown_event,
                 )
+        if job["type"] == "live_session":
+            # 소유권 상실은 루프가 1초마다 직접 읽는다(get_stop_requested → 'lost') —
+            # process_meeting의 shutdown 훅은 걸지 않는다. shutdown_event는 루프가 stop으로 다룬다.
+            live_models = build_live_models()
+            source = build_live_source()
+            return run_live_session(
+                conn,
+                job,
+                payload,
+                live_models,
+                storage,
+                source,
+                worker_id=worker_id,
+                shutdown_event=shutdown_event,
+                max_minutes=live_max_minutes,
+            )
         raise ValueError(f"unknown job type {job['type']}")
     except ShutdownRequested:
         log.info("job %s type=%s → shutdown requeue", job["id"], job["type"])
@@ -171,6 +191,10 @@ def handle_job(
             job["max_attempts"],
         )
         transient_retry = werr.kind is ErrorKind.TRANSIENT and job["attempts"] < job["max_attempts"]
+        if job["type"] == "live_session":
+            # 재시도는 없다 (설계 §2.6). 끊긴 녹음은 이어 붙일 수 없고, 파일은 디스크에 남는다.
+            ok = db.fail_process_meeting(conn, job["id"], worker_id, job["meeting_id"], error_json)
+            return "failed" if ok else "lost"
         if job["type"] == "enroll_speaker":
             speaker_id = (job["payload"] or {}).get("speaker_id")
             if transient_retry:
@@ -260,6 +284,8 @@ def dispatch_claimed_job(
     build_summary_client_fn=None,
     llm_server_fn=None,
     shutdown_event=None,
+    build_live_models_fn=None,
+    build_live_source_fn=None,
 ) -> str:
     """claim된 job 1건: heartbeat 진입 → 콜백(지연 빌드)을 handle_job에 주입."""
     with heartbeat_cm:
@@ -286,6 +312,13 @@ def dispatch_claimed_job(
             shutdown_event=shutdown_event,
             # heartbeat가 소유권 상실(운영자 취소/reaper)을 감지하면 LLM 서버를 내린다
             register_abort=getattr(heartbeat_cm, "set_on_lost", None),
+            build_live_models=(
+                (lambda: build_live_models_fn(job["payload"], settings))
+                if build_live_models_fn
+                else None
+            ),
+            build_live_source=build_live_source_fn,
+            live_max_minutes=settings.live_max_minutes,
         )
 
 
@@ -301,6 +334,8 @@ def run_single_job(
     build_lens_client_fn=None,
     build_summary_client_fn=None,
     llm_server_fn=None,
+    build_live_models_fn=None,
+    build_live_source_fn=None,
 ) -> int:
     """자식 진입점: job 1건 처리 후 exit code 반환.
 
@@ -334,6 +369,8 @@ def run_single_job(
             llm_server_fn=llm_server_fn,
             heartbeat_cm=hb,
             shutdown_event=shutdown,
+            build_live_models_fn=build_live_models_fn,
+            build_live_source_fn=build_live_source_fn,
         )
         # job-level outcome 로그 유지
         log.info("job %s type=%s → %s", job["id"], job["type"], outcome)
@@ -485,6 +522,16 @@ def run_child(settings, shutdown: threading.Event) -> int:
             worker_settings.lens_llm_max_tokens,
         )
 
+    def _build_live_models(payload, worker_settings):
+        from .models.registry import build_live_models
+
+        return build_live_models(payload, worker_settings)
+
+    def _build_live_source():
+        from .audio.source import MicSource
+
+        return MicSource()
+
     return run_single_job(
         settings,
         storage,
@@ -496,6 +543,8 @@ def run_child(settings, shutdown: threading.Event) -> int:
         build_lens_client_fn=_build_lens_client,
         build_summary_client_fn=_build_summary_client,
         llm_server_fn=lambda model: managed_llm_server(model, settings),
+        build_live_models_fn=_build_live_models,
+        build_live_source_fn=_build_live_source,
     )
 
 

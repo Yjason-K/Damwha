@@ -48,3 +48,24 @@ def build_text_embedder(settings: Settings):
     from .bge_embed import BgeM3TextEmbedder
 
     return BgeM3TextEmbedder(settings.search_embedding_model)
+
+
+def build_live_models(payload: dict, settings: Settings):
+    """live_session payload → 세션 자식이 상주시킬 세 모델. pyannote는 안 뜬다 (설계 §5.1)."""
+    from ..pipeline.live_session import LiveModels
+    from .silero_vad import StreamingSileroVAD
+
+    m = parse_models(payload["process"])
+    if m.devices.stt == "gpu":
+        from .whisper_mlx import MlxWhisper
+
+        transcriber = MlxWhisper(m.whisper_model)
+    else:
+        from .whisper_faster import FasterWhisper
+
+        transcriber = FasterWhisper(m.whisper_model, device="cpu")
+    return LiveModels(
+        transcriber=transcriber,
+        embedder=EcapaEmbedder(m.embedding.model, "cpu"),
+        vad=StreamingSileroVAD(),
+    )
