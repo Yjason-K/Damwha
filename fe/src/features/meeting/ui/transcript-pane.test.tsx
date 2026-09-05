@@ -42,6 +42,7 @@ function meeting(over: Partial<Meeting> = {}): Meeting {
     summaryError: null,
     error: null,
     status: "done",
+    recordedAtIso: "2026-08-11T10:00:00.000Z",
     audioUrl: "",
     totalSeconds: 600,
     speakers: { 1: { id: "spk_1", name: "김영재", role: "PM", spk: 1 } },

@@ -9,7 +9,12 @@
 
 export { ApiError, isApiError } from "@/shared/api/client";
 
-export type MeetingStatus = "uploaded" | "processing" | "done" | "failed";
+export type MeetingStatus =
+  | "recording"
+  | "uploaded"
+  | "processing"
+  | "done"
+  | "failed";
 
 /**
  * 회의별 화자 수 힌트 — 업로드 multipart `speakers`(JSON 문자열) / 재처리 body.
@@ -202,4 +207,40 @@ export type WireApiError = {
   statusCode: number;
   message: string;
   error?: string;
+};
+
+/** GET /meetings/:id/live 의 라이브 발화 1행. 화자는 전부 추정이다(설계 §2.8). */
+export type WireLiveUtterance = {
+  id: string;
+  seq: number;
+  start_ms: number;
+  end_ms: number;
+  text: string;
+  speaker_id: string | null;
+  speaker_name: string | null;
+  similarity: number | null;
+};
+
+/** GET /meetings/:id/live 응답. heartbeat_at은 세션 job의 locked_at. */
+export type WireLiveResponse = {
+  status: MeetingStatus;
+  stage: string | null;
+  heartbeat_at: string | null;
+  items: WireLiveUtterance[];
+};
+
+/** POST /meetings/live 요청 — 업로드와 같은 필드, JSON. */
+export type LiveStartRequest = {
+  title?: string;
+  processing?: import("@/features/settings/api/types").ProcessingOverride;
+  speakers?: SpeakerBounds;
+  defer_lens?: boolean;
+  defer_summary?: boolean;
+};
+
+/** POST /meetings/:id/live/stop 응답. */
+export type LiveStopResponse = {
+  meeting_id: string;
+  job_id: string;
+  outcome: "stopping" | "discarded";
 };

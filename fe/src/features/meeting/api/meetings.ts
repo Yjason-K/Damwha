@@ -13,6 +13,7 @@ import type {
   SummaryModel,
 } from "@/features/settings/api/types";
 import type { Meeting, MeetingStatus, MeetingSummary } from "../model/types";
+import { liveQueryKey } from "./live";
 import { toMeetingDetail, toMeetingSummary } from "./mappers";
 import { noteQueryKey } from "./notes";
 import type {
@@ -28,7 +29,7 @@ import type {
 export { meetingAudioUrl } from "./mappers";
 
 const isActive = (status: MeetingStatus) =>
-  status === "uploaded" || status === "processing";
+  status === "recording" || status === "uploaded" || status === "processing";
 
 /** 회의 목록. 처리 중인 회의가 있으면 3초 간격 폴링. */
 export function useMeetings(): UseQueryResult<MeetingSummary[]> {
@@ -188,6 +189,7 @@ export function useDeleteMeeting() {
       queryClient.removeQueries({ queryKey: ["meeting-status", vars.id] });
       queryClient.removeQueries({ queryKey: ["meeting-lenses", vars.id] });
       queryClient.removeQueries({ queryKey: noteQueryKey(vars.id) });
+      queryClient.removeQueries({ queryKey: liveQueryKey(vars.id) });
       queryClient.invalidateQueries({ queryKey: ["meetings"] });
     },
   });

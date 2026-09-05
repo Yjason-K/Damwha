@@ -10,7 +10,12 @@
 
 import type { JsonError, SummaryStatus } from "../api/types";
 
-export type MeetingStatus = "uploaded" | "processing" | "done" | "failed";
+export type MeetingStatus =
+  | "recording"
+  | "uploaded"
+  | "processing"
+  | "done"
+  | "failed";
 
 /** 회의별 등장 화자. `spk`는 등장 순으로 부여된 틴트 번호(1..n). */
 export type SpeakerRef = {
@@ -135,10 +140,23 @@ export type Meeting = {
   /** summaryStatus가 failed일 때의 사유. 없으면 null. */
   summaryError: JsonError | null;
   status: MeetingStatus;
+  /** 녹음 시작 시각(ISO). 라이브 배너의 경과 시간 기준. */
+  recordedAtIso: string;
   /** status가 failed일 때의 사유. 운영자 취소는 code === "cancelled". 없으면 null. */
   error: JsonError | null;
   audioUrl: string;
   totalSeconds: number;
   speakers: Record<number, SpeakerRef>;
   clusters: ClusterInfo[];
+};
+
+/** 라이브 미리보기 발화 — 화자는 추정이라 이름과 유사도만 있다. */
+export type LiveUtterance = {
+  id: string;
+  seq: number;
+  t: string;
+  startMs: number;
+  text: string;
+  speakerName: string | null;
+  similarity: number | null;
 };

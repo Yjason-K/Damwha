@@ -266,6 +266,7 @@ export function toMeetingDetail(wire: WireMeetingDetail): Meeting {
     summaryStatus: wire.summary?.status ?? null,
     summaryError: wire.summary?.error ?? null,
     status: wire.status,
+    recordedAtIso: wire.recorded_at ?? wire.created_at,
     error: wire.error ?? null,
     audioUrl: meetingAudioUrl(wire.id),
     totalSeconds: duration == null ? 0 : Math.floor(duration / 1000),
