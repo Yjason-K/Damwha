@@ -9,6 +9,7 @@ import {
   useRetryExtraction,
   useSetLensCompletion,
 } from "@/features/lens/api/lenses";
+import { useLiveUtterances, useStopLive } from "@/features/meeting/api/live";
 import { useMeetingLenses } from "@/features/meeting/api/lenses";
 import { formatClock, mapMeetingLenses } from "@/features/meeting/api/mappers";
 import {
@@ -28,6 +29,8 @@ import type { Meeting } from "@/features/meeting/model/types";
 import { CenterState, Spinner } from "@/features/meeting/ui/center-state";
 import { Icon } from "@/features/meeting/ui/icons";
 import { InsightPane } from "@/features/meeting/ui/insight-pane";
+import { LiveBanner } from "@/features/meeting/ui/live-banner";
+import { LiveTranscript } from "@/features/meeting/ui/live-transcript";
 import {
   adjacentUtterance,
   currentUtterance,
@@ -65,6 +68,7 @@ function ProcessingBanner({
   if (meeting.status === "failed") {
     // 운영자 취소도 failed로 저장된다(reprocess 가드를 그대로 타기 위해) — 문구만 가른다.
     const cancelled = meeting.error?.code === "cancelled";
+    const noMic = meeting.error?.code === "audio_device_failed";
     return (
       <div
         role="alert"
@@ -76,12 +80,18 @@ function ProcessingBanner({
           className="shrink-0 text-[color:var(--red-text)]"
         />
         <span className="font-semibold text-[color:var(--red-text)]">
-          {cancelled ? "처리를 취소했어요" : "처리에 실패했어요"}
+          {cancelled
+            ? "처리를 취소했어요"
+            : noMic
+              ? "마이크를 열지 못했어요"
+              : "처리에 실패했어요"}
         </span>
         <span className="text-[color:var(--text-secondary)]">
           {cancelled
             ? "재처리로 다시 시작할 수 있어요."
-            : "다시 업로드하거나 잠시 후 시도해 주세요."}
+            : noMic
+              ? "워커가 도는 Mac의 시스템 설정 › 개인정보 보호 및 보안 › 마이크에서 터미널 앱을 허용한 뒤 다시 녹음해 주세요."
+              : "다시 업로드하거나 잠시 후 시도해 주세요."}
         </span>
       </div>
     );
@@ -273,6 +283,11 @@ function MeetingView({
   const statusEnabled = !!meeting || summaryPending;
   const { data: procStatus } = useMeetingStatus(meetingId, statusEnabled);
 
+  // 라이브 미리보기 — recording에서는 1초, 처리 중엔 3초, failed는 한 번, done은 안 본다.
+  const { data: liveState } = useLiveUtterances(meetingId, meeting?.status);
+  const stopLive = useStopLive();
+  const liveItems = liveState?.items ?? [];
+
   useSyncSummaryStatus(
     meetingId,
     meeting?.summaryStatus,
@@ -425,6 +440,26 @@ function MeetingView({
         </CenterState>
       );
     }
+    if (meeting.status === "recording") {
+      return (
+        <>
+          <LiveTranscript items={liveItems} />
+          <aside
+            aria-label="인사이트"
+            className="flex w-[var(--rail-insight)] shrink-0 flex-col items-center justify-center border-l border-border bg-[var(--surface-panel)] px-6 text-center"
+          >
+            <Icon
+              name="sparkles"
+              size={20}
+              className="text-[color:var(--text-faint)]"
+            />
+            <p className="mt-2 text-sm text-[color:var(--text-muted)]">
+              녹음이 끝나면 요약과 렌즈가 만들어져요
+            </p>
+          </aside>
+        </>
+      );
+    }
     return (
       <>
         <TranscriptPane
@@ -437,6 +472,7 @@ function MeetingView({
           aiAcked={aiAcked}
           onAckAi={onAckAi}
           onShowSummary={() => setTab("summary")}
+          livePreview={meeting.status === "failed" ? liveItems : undefined}
         />
         <InsightPane
           meeting={meeting}
@@ -470,7 +506,22 @@ function MeetingView({
   return (
     <>
       <div className="col-start-2 flex min-w-0 flex-col">
-        {meeting && meeting.status !== "done" ? (
+        {meeting && meeting.status === "recording" ? (
+          <LiveBanner
+            recordedAtIso={meeting.recordedAtIso}
+            stage={liveState?.stage ?? null}
+            heartbeatAt={liveState?.heartbeatAt ?? null}
+            onStop={() =>
+              stopLive.mutate(meeting.id, {
+                onSuccess: (r) => {
+                  if (r.outcome === "discarded")
+                    navigate("/", { replace: true });
+                },
+              })
+            }
+            stopping={stopLive.isPending}
+          />
+        ) : meeting && meeting.status !== "done" ? (
           <ProcessingBanner meeting={meeting} status={procStatus} />
         ) : null}
         {meeting &&

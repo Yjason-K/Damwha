@@ -38,6 +38,7 @@ export default defineConfig([
             "cardVariants",
             "iconButtonVariants",
             "defaultLiveTitle",
+            "isHeartbeatStale",
           ],
         },
       ],

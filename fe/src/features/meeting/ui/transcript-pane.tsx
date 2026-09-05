@@ -31,9 +31,10 @@ import {
   useToggleFavorite,
 } from "../api/meetings";
 import { findMatches, type FindMatch } from "../lib/find-matches";
-import type { Meeting } from "../model/types";
+import type { LiveUtterance, Meeting } from "../model/types";
 import { Icon } from "./icons";
 import { ExportDialog } from "./export-dialog";
+import { LiveTranscript } from "./live-transcript";
 import { ReprocessDialog } from "./reprocess-dialog";
 import { ResolveDialog } from "./resolve-dialog";
 
@@ -369,6 +370,8 @@ type TranscriptPaneProps = {
   aiAcked: boolean;
   onAckAi: () => void;
   onShowSummary: () => void;
+  /** 실패한 회의에 남은 라이브 미리보기 — 전사가 없을 때만 그린다 (설계 §7.2). */
+  livePreview?: LiveUtterance[];
 };
 
 export function TranscriptPane({
@@ -381,6 +384,7 @@ export function TranscriptPane({
   aiAcked,
   onAckAi,
   onShowSummary,
+  livePreview,
 }: TranscriptPaneProps) {
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const [renameOpen, setRenameOpen] = React.useState(false);
@@ -587,7 +591,10 @@ export function TranscriptPane({
               <Icon name="download" size={16} />
             </IconButton>
           )}
-          {(meeting.status === "done" || meeting.status === "failed") && (
+          {/* 마이크를 못 연 실패는 파일이 없다 — 재처리할 게 없으니 숨긴다 */}
+          {(meeting.status === "done" ||
+            (meeting.status === "failed" &&
+              meeting.error?.code !== "audio_device_failed")) && (
             <IconButton
               label="회의 재처리"
               size="sm"
@@ -638,6 +645,15 @@ export function TranscriptPane({
             meeting={meeting}
             onDetail={onShowSummary}
             onAck={onAckAi}
+          />
+        ) : null}
+        {meeting.utterances.length === 0 &&
+        livePreview &&
+        livePreview.length > 0 ? (
+          <LiveTranscript
+            items={livePreview}
+            readOnly
+            className="min-h-[240px]"
           />
         ) : null}
         {/* role="log"는 암묵적으로 aria-live="polite"라 <mark>가 매 키 입력마다
