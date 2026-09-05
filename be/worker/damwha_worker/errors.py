@@ -44,6 +44,9 @@ PROBE_FAILED = "probe_failed"
 UNSUPPORTED_PAYLOAD_VERSION = "unsupported_payload_version"
 SAMPLE_TOO_SHORT = "sample_too_short"
 GPU_UNAVAILABLE = "gpu_unavailable"
+# 라이브 세션 (설계 §8). 둘 다 PERMANENT — 끊긴 녹음은 이어 붙일 수 없다.
+AUDIO_DEVICE_FAILED = "audio_device_failed"  # 마이크를 못 열었다 (권한·장치 없음·미설치)
+LIVE_STT_FAILED = "live_stt_failed"  # 클립 연속 실패 상한 초과
 # Mostly-transient codes (model_load_failed은 import류일 때 PERMANENT — classify 참조)
 MODEL_LOAD_FAILED = "model_load_failed"
 OOM = "oom"
