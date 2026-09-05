@@ -497,4 +497,45 @@ describe('migration', () => {
     );
     expect(col.rows[0].is_nullable).toBe('NO');
   });
+
+  it('allows exactly one recording meeting at a time', async () => {
+    await db.pool.query(`INSERT INTO meeting(audio_key, status) VALUES('a','recording')`);
+    await expect(
+      db.pool.query(`INSERT INTO meeting(audio_key, status) VALUES('b','recording')`),
+    ).rejects.toThrow(/meeting_single_recording_idx/);
+    // 다른 상태는 여럿이어도 된다
+    await db.pool.query(`INSERT INTO meeting(audio_key, status) VALUES('c','done'),('d','done')`);
+    await db.pool.query(`DELETE FROM meeting WHERE audio_key IN ('a','c','d')`);
+  });
+
+  it('live_utterance keeps one row per (meeting, seq), non-empty text and ordered bounds', async () => {
+    const m = await db.pool.query(`INSERT INTO meeting(audio_key) VALUES('lu') RETURNING id`);
+    const mid = m.rows[0].id;
+    const ins = (seq: number, text: string, start = 0, end = 1000) =>
+      db.pool.query(
+        `INSERT INTO live_utterance(meeting_id, job_id, seq, start_ms, end_ms, text)
+         VALUES($1,'job_1',$2,$3,$4,$5) RETURNING id`,
+        [mid, seq, start, end, text],
+      );
+    const first = await ins(0, '안녕');
+    expect(first.rows[0].id).toMatch(/^lut_[1-9][0-9]*$/);
+    await expect(ins(0, '중복')).rejects.toThrow(/duplicate key|unique/i);
+    await expect(ins(1, '')).rejects.toThrow(/check/i);
+    await expect(ins(2, '역순', 1000, 1000)).rejects.toThrow(/check/i);
+    await db.pool.query(`DELETE FROM meeting WHERE id=$1`, [mid]);
+  });
+
+  it('job.stop_requested_at exists and defaults to null', async () => {
+    const { rows } = await db.pool.query(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_name='job' AND column_name='stop_requested_at'`,
+    );
+    expect(rows).toHaveLength(1);
+    const j = await db.pool.query(
+      `INSERT INTO job(type, payload) VALUES('live_session','{}') RETURNING stop_requested_at, stage`,
+    );
+    expect(j.rows[0].stop_requested_at).toBeNull();
+    await db.pool.query(`UPDATE job SET stage='capture' WHERE type='live_session'`);
+    await db.pool.query(`DELETE FROM job WHERE type='live_session'`);
+  });
 });
