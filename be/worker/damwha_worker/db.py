@@ -26,6 +26,8 @@ def upsert_worker_capabilities(conn, value: dict) -> None:
 
 
 def claim(conn, worker_id: str) -> dict | None:
+    """queued job 하나를 잠근다. live_session은 사람이 회의 중이라 밀린 job보다 먼저 집는다
+    (API의 JobsRepository.claim과 같은 정렬)."""
     return conn.execute(
         """
         UPDATE job SET status='running', locked_by=%s, locked_at=now(),
@@ -34,7 +36,7 @@ def claim(conn, worker_id: str) -> dict | None:
           SELECT id FROM job
           WHERE status='queued'
             AND (next_attempt_at IS NULL OR next_attempt_at <= now())
-          ORDER BY next_attempt_at NULLS FIRST, created_at
+          ORDER BY (type = 'live_session') DESC, next_attempt_at NULLS FIRST, created_at
           FOR UPDATE SKIP LOCKED LIMIT 1
         ) RETURNING *
         """,
@@ -140,7 +142,9 @@ def reap_stale(conn, stale_minutes: float) -> tuple[int, int]:
         fail_meetings AS (
           UPDATE meeting m SET status='failed',
             error = jsonb_build_object('code','stale_worker','message','processing worker lost')
-          WHERE m.id IN (SELECT meeting_id FROM failed WHERE type='process_meeting')
+          WHERE m.id IN (
+            SELECT meeting_id FROM failed WHERE type IN ('process_meeting','live_session')
+          )
           RETURNING m.id
         ),
         fail_speakers AS (
