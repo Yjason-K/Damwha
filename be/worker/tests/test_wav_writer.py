@@ -90,3 +90,31 @@ def test_writer_thread_drains_queue_until_sentinel(tmp_path):
     w.close()
     with wave.open(path, "rb") as r:
         assert r.getnframes() == 3 * 512
+
+
+def test_writer_thread_records_the_exception_that_killed_it(tmp_path):
+    """예외를 삼키면 디스크가 찬 순간 스레드만 조용히 죽는다 — 세션이 볼 수 있게 남긴다."""
+
+    class FullDisk(WavWriter):
+        def append(self, pcm: bytes) -> None:
+            raise OSError(28, "No space left on device")
+
+    w = FullDisk(str(tmp_path / "t.wav"))
+    q: queue.Queue = queue.Queue()
+    t = run_writer_thread(w, q)
+    q.put(FRAME)
+    t.join(timeout=5)
+    assert not t.is_alive()
+    assert isinstance(t.error, OSError) and t.error.errno == 28
+    w.close()
+
+
+def test_writer_thread_leaves_error_none_on_a_clean_drain(tmp_path):
+    w = WavWriter(str(tmp_path / "t.wav"))
+    q: queue.Queue = queue.Queue()
+    t = run_writer_thread(w, q)
+    q.put(FRAME)
+    q.put(None)
+    t.join(timeout=5)
+    assert t.error is None
+    w.close()

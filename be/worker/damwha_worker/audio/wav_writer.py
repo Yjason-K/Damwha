@@ -104,20 +104,36 @@ def repair_streaming_header(path: str) -> bool:
     return True
 
 
-def run_writer_thread(writer: WavWriter, frames: "queue.Queue[bytes | None]") -> threading.Thread:
+class WriterThread(threading.Thread):
     """큐의 프레임을 디스크로 옮기는 전용 스레드. None을 받으면 끝난다(파일은 안 닫는다).
 
     미리보기 파이프라인(whisper·DB)과 다른 스레드에 두는 이유: 추론이 멈춰도 파일 쓰기는
     디스크 속도로만 진행돼야 "녹음은 잃지 않는다"가 성립한다 (설계 §2.9).
+
+    죽은 이유는 error에 남긴다 — live_session의 Capture.error와 짝이다. 예외를 삼키면
+    디스크가 찬 순간(ENOSPC) 이 스레드만 조용히 죽고, 남은 프레임은 아무도 읽지 않는 큐에
+    쌓인다. 세션은 그대로 finalize돼 "완료된 회의"가 잘린 파일과 틀린 duration_ms를 갖는다.
+    녹음은 조용히 잃지 않는다 — 보이게 실패해야 한다.
     """
 
-    def _loop() -> None:
-        while True:
-            pcm = frames.get()
-            if pcm is None:
-                return
-            writer.append(pcm)
+    def __init__(self, writer: WavWriter, frames: "queue.Queue[bytes | None]") -> None:
+        super().__init__(name="wav-writer", daemon=True)
+        self._writer = writer
+        self._frames = frames
+        self.error: BaseException | None = None
 
-    t = threading.Thread(target=_loop, name="wav-writer", daemon=True)
+    def run(self) -> None:
+        try:
+            while True:
+                pcm = self._frames.get()
+                if pcm is None:
+                    return
+                self._writer.append(pcm)
+        except BaseException as exc:  # noqa: BLE001 — 세션 루프가 error를 보고 실패시킨다
+            self.error = exc
+
+
+def run_writer_thread(writer: WavWriter, frames: "queue.Queue[bytes | None]") -> WriterThread:
+    t = WriterThread(writer, frames)
     t.start()
     return t

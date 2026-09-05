@@ -26,7 +26,7 @@ from .. import db
 from ..audio.source import FRAME_MS, SR, AudioSource
 from ..audio.wav_writer import WavWriter, run_writer_thread
 from ..contracts import LiveSessionPayload
-from ..errors import LIVE_STT_FAILED, ErrorKind, WorkerError
+from ..errors import AUDIO_DEVICE_FAILED, IO_ERROR, LIVE_STT_FAILED, ErrorKind, WorkerError
 from ..models.base import DiarSegment, Embedder, StreamingVAD, Transcriber
 from ..storage import Storage
 from .identify import identify_embedding
@@ -250,6 +250,16 @@ def run_live_session(
         writer.close()
         if capture.error is not None:
             raise capture.error
+        if writer_thread.error is not None:
+            # writer가 죽었으면 디스크에 닿은 프레임이 큐에 넣은 프레임보다 적다. finalize하면
+            # 잘린 파일과 틀린 duration_ms를 "완료된 회의"로 넘긴다 — 조용한 손실이야말로
+            # 이 기능이 막으려는 것이다. 보이게 실패한다(PERMANENT: 끊긴 녹음은 못 잇는다).
+            raise WorkerError(
+                IO_ERROR,
+                f"wav writer died mid-recording: {writer_thread.error!r}",
+                ErrorKind.PERMANENT,
+                stage="capture",
+            ) from writer_thread.error
         log.info(
             "%s live_session capture end reason=%s duration_ms=%d rows=%d dropped=%d",
             ctx,
@@ -260,6 +270,16 @@ def run_live_session(
         )
         if stop_reason == "lost":
             return "lost"
+        if writer.frames_written == 0:
+            # 넘길 녹음이 없다. finalize하면 회의가 uploaded가 되고 배치 job이 큐에 들어가는데,
+            # 아래 finally가 바로 그 job이 읽을 파일을 지운다(헤더만 남은 파일은 "파일 없음"
+            # — §8). 그래서 커밋과 삭제가 어긋나지 않도록 아예 넘기지 않는다.
+            raise WorkerError(
+                AUDIO_DEVICE_FAILED,
+                f"captured no audio (reason={stop_reason}) — nothing to hand off",
+                ErrorKind.PERMANENT,
+                stage="capture",
+            )
         last = segmenter.flush()
         if last is not None:
             handle(last)

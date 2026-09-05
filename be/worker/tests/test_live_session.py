@@ -7,14 +7,23 @@ import pytest
 
 from damwha_worker import db
 from damwha_worker.audio.source import FileSource
+from damwha_worker.audio.wav_writer import WavWriter
 from damwha_worker.contracts import parse_payload
-from damwha_worker.errors import AUDIO_DEVICE_FAILED, LIVE_STT_FAILED, ErrorKind, WorkerError
+from damwha_worker.errors import (
+    AUDIO_DEVICE_FAILED,
+    IO_ERROR,
+    LIVE_STT_FAILED,
+    ErrorKind,
+    WorkerError,
+)
 from damwha_worker.models.base import Word
+from damwha_worker.pipeline import live_session
 from damwha_worker.pipeline.live_session import Capture, LiveModels, run_live_session
 from damwha_worker.storage import Storage
 from tests.audio_fixtures import make_wav
 from tests.conftest import seed_job, seed_meeting, seed_speaker, seed_voiceprint
 from tests.fakes import (
+    BackloggedSource,
     FakeEmbedder,
     FakeStreamingVAD,
     FakeTranscriber,
@@ -315,6 +324,90 @@ def test_file_is_complete_even_when_transcription_is_slow(conn, tmp_path):
     assert out == "committed"
     with wave.open(str(tmp_path / "meetings" / str(mid) / "original.wav"), "rb") as r:
         assert r.getnframes() == 200 * 512
+
+
+def test_every_captured_frame_reaches_the_file_when_an_exception_aborts_the_loop(conn, tmp_path):
+    """종료 순서 회귀 가드: finally에서 capture.join()이 writer sentinel보다 먼저여야 한다.
+
+    마이크처럼 stop() 뒤에도 버퍼가 남는 소스에서, 클립 연속 실패가 finally로 뛰어들 때
+    캡처 스레드는 아직 살아 있다. sentinel을 먼저 보내면 writer가 일찍 끝나고 그 뒤 캡처가
+    넣는 프레임은 아무도 읽지 않는다 — 예외 경로마다 녹음 꼬리가 조용히 잘린다.
+    capture.join()을 writer_q.put(None) 아래로 옮기면 이 테스트가 깨져야 한다.
+    """
+
+    class Boom:
+        def transcribe(self, *a, **k):
+            raise RuntimeError("model exploded")
+
+    mid, job = _claimed(conn)
+    # 12프레임(384ms)짜리 발화 5개 → 5번째 실패가 프레임 72에서 터진다. 소스는 130프레임을
+    # 3ms 간격으로 내므로 그 시점에 58프레임이 아직 남아 있다.
+    events = {i * 15: [("start", 0)] for i in range(5)} | {
+        i * 15 + 12: [("end", 0)] for i in range(5)
+    }
+    src = BackloggedSource(130)
+    with pytest.raises(WorkerError) as ei:
+        _run(
+            conn,
+            tmp_path,
+            job,
+            _payload(mid),
+            _models(transcriber=Boom(), vad=FakeStreamingVAD(events)),
+            src,
+            clip_failure_limit=5,
+        )
+    assert ei.value.code == LIVE_STT_FAILED
+    assert src.emitted == 130  # stop()은 남은 버퍼 뒤에 서므로 소스는 끝까지 낸다
+    with wave.open(str(tmp_path / "meetings" / str(mid) / "original.wav"), "rb") as r:
+        assert r.getnframes() == src.emitted * 512  # 낸 프레임 = 디스크에 닿은 프레임
+
+
+def test_writer_death_fails_the_session_instead_of_committing_a_truncated_file(
+    conn, tmp_path, monkeypatch
+):
+    """디스크가 차서 writer 스레드가 죽으면(ENOSPC) 세션은 커밋하면 안 된다.
+
+    커밋하면 회의는 uploaded가 되고 duration_ms는 큐에 넣은 양이 아니라 디스크에 닿은
+    양만큼 틀리며, 아무 데도 그 사실이 남지 않는다 — 정확히 이 기능이 막으려는 조용한 손실.
+    """
+
+    class FullDisk(WavWriter):
+        def append(self, pcm: bytes) -> None:
+            if self.frames_written >= 10 * 512:
+                raise OSError(28, "No space left on device")
+            super().append(pcm)
+
+    monkeypatch.setattr(live_session, "WavWriter", FullDisk)
+    mid, job = _claimed(conn)
+    src = FileSource(make_wav(str(tmp_path / "in.wav"), 64))
+    with pytest.raises(WorkerError) as ei:
+        _run(conn, tmp_path, job, _payload(mid), _models(vad=FakeStreamingVAD()), src)
+    assert ei.value.code == IO_ERROR and ei.value.kind is ErrorKind.PERMANENT
+    m = conn.execute("SELECT status, duration_ms FROM meeting WHERE id=%s", (mid,)).fetchone()
+    assert m["status"] == "recording" and m["duration_ms"] is None
+    row = conn.execute("SELECT count(*) c FROM job WHERE type='process_meeting'").fetchone()
+    assert row["c"] == 0
+    # 디스크에 닿은 데까지는 헤더가 확정된 채 남는다 — 지우지 않는다.
+    with wave.open(str(tmp_path / "meetings" / str(mid) / "original.wav"), "rb") as r:
+        assert r.getnframes() == 10 * 512
+
+
+def test_zero_frame_session_is_not_finalized(conn, tmp_path):
+    """프레임 0이면 넘길 녹음이 없다 — finalize와 파일 삭제가 어긋나면 안 된다.
+
+    예전에는 커밋하고 회의를 uploaded로 올린 뒤 finally가 배치 job이 읽을 파일을 지웠다.
+    """
+    mid, job = _claimed(conn)
+    src = FileSource(make_wav(str(tmp_path / "in.wav"), 0))
+    with pytest.raises(WorkerError) as ei:
+        _run(conn, tmp_path, job, _payload(mid), _models(vad=FakeStreamingVAD()), src)
+    assert ei.value.code == AUDIO_DEVICE_FAILED and ei.value.kind is ErrorKind.PERMANENT
+    assert conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()["status"] == (
+        "recording"
+    )
+    row = conn.execute("SELECT count(*) c FROM job WHERE type='process_meeting'").fetchone()
+    assert row["c"] == 0
+    assert not (tmp_path / "meetings" / str(mid) / "original.wav").exists()
 
 
 def test_capture_bounds_the_preview_queue_but_never_the_writer_queue(tmp_path):
