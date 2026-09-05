@@ -23,6 +23,7 @@ NestJS API와 ML worker poller 사이에는 HTTP 호출이 없다. 둘의 비동
 | 렌즈 항목 추출 | `extract_lenses` | 로컬 LLM으로 action/decision/promise `lens_item`과 `lens_evidence` |
 | 회의 요약 생성 | `summarize_meeting` | 로컬 LLM으로 회의 전체 요약 `meeting_summary`(topics/segments) |
 | 검색 질의 임베딩 | `POST /embed` | 검색어의 BGE-M3 1024차원 벡터 |
+| 실시간 녹음 | `live_session` | 마이크 캡처 WAV, 미리보기 `live_utterance`, 종료 시 `process_meeting` 자동 큐잉 |
 | 작업 생명주기 | supervisor 부모 + job당 자식 | 원자적 claim, stage/progress, heartbeat, retry/fail, stale 결과 폐기 |
 
 ## 2. 시스템 컨텍스트
@@ -203,6 +204,30 @@ flowchart TD
 - **stage 경계 소유권 guard**: `enter_stage`는 `process_meeting`뿐 아니라 `enroll_speaker`/`index_meeting`에도 job 소유권을 확인시킨다. 소유권을 잃으면 `lost_ownership`(TRANSIENT)로 처리된다.
 - **attempts 회계 요약**: crash/transient 오류 = 시도 1회 소비, 우아한 종료 = 소비하지 않음(attempts − 1로 복원), 소진된 in-flight = reaper에게 위임.
 - **Heartbeat 재접속**: 자식 내부의 heartbeat 스레드는 별도 DB 연결을 유지하며, 연결/beat 실패 후에도 재접속을 시도해 살아있다. 이는 부모의 재spawn 정책과 독립적으로 in-flight job의 `locked_at`을 계속 갱신한다.
+
+### 라이브 세션 자식
+
+`live_session`을 claim한 자식은 종료 신호까지 산다. 마이크 콜백 → writer 큐(전용 스레드, 스트리밍
+헤더 WAV) + preview 큐(상한 5분) → 메인 루프(VAD → 세그먼트 → whisper → ECAPA 식별 → `live_utterance`).
+1초마다 `job.stop_requested_at`·소유권·shutdown·상한 시간을 본다.
+
+**종료 순서가 뒤바뀌면 안 된다.** 캡처 스레드를 join한 **뒤에야** writer 스레드에 종료 신호(sentinel)를
+보낸다 — 정상 종료와 예외 경로 모두 마찬가지다. 실제 마이크는 콜백이 소비자보다 앞서 버퍼를 채우므로
+`stop()` 뒤에도 한동안 프레임이 계속 나온다. 순서를 바꿔 writer를 먼저 끝내면 그 직후 캡처가 넣는
+프레임은 아무도 읽지 않는 큐에 쌓인 채 사라진다 — 순서를 되돌리는 회귀 테스트에서 130프레임 중 57개가
+이렇게 사라지는 것으로 확인했다. writer 스레드가 죽으면(디스크 풀 등) 그 오류를 캡처 스레드의 오류와
+동등하게 취급해 finalize 직전에 검사하고, 세션을 PERMANENT `io_error`로 실패시킨다 — 조용히 넘기면
+사용자가 실제로 녹음한 것보다 짧게 잘린 파일이(`duration_ms`도 디스크에 닿은 바이트 기준이라
+똑같이 짧게 찍힌 채) 아무 표시 없이 "완료된 회의"가 된다. 프레임을 한 개도 못 잡은 세션은
+`discarded`로 끝내지 않고 PERMANENT `audio_device_failed`로 실패한다 — `discarded`는 어떤 job도
+완료 처리하지 않는 경로라 회의가 `recording`에 그대로 남고, `meeting_single_recording_idx`가 동시
+녹음을 하나로 제한하므로 그 상태가 이후의 모든 녹음 시작을 영영 막게 된다. `MicSource`의 stop 신호
+큐는 `frames()`가 아니라 생성자에서 만든다 — 캡처가 시작되기도 전에 `stop()`이 먼저 오는 취소
+경쟁에서도 신호가 버려지지 않게 하기 위해서다.
+
+종료 순서 요약: 캡처 닫기 → writer join → 마지막 발화 처리 → finalize(회의 `uploaded`, payload의
+v5 `process_meeting` 큐잉). 재시도 없음, 1차 SIGTERM은 finalize. 상세:
+`docs/superpowers/specs/2026-09-05-live-recording-design.md`.
 
 ## 5. Job 타입별 계약
 

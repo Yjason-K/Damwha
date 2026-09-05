@@ -146,6 +146,41 @@ Separate Python project under `worker/` (uv + ruff + pytest + pydantic v2 + psyc
   startup timeout or an early exit. Because the server is a grandchild of the
   supervisor and inherits its process group, a group kill takes it down too;
   the normal path never relies on that.
+- **Live session is a fifth job type.** `live_session` (`pipeline/live_session.py`, spec
+  `docs/superpowers/specs/2026-09-05-live-recording-design.md`) records the worker Mac's
+  microphone and streams a preview (`live_utterance`) while the meeting is `recording`; on
+  stop it flips the meeting to `uploaded` and enqueues the payload's embedded **v5
+  `process_meeting`** verbatim — the batch pass is the record, the live pass is a preview.
+  Non-obvious rules: the mic callback tees frames into a **writer queue** (dedicated thread,
+  streaming WAV header `0xFFFFFFFF` until `close()`) and a bounded **preview queue**, so
+  inference stalls never lose audio; `ffmpeg.normalize` repairs a streaming header left by a
+  crash; the stop signal is `job.stop_requested_at` (cancel stays the discard path);
+  `max_attempts=1` and every live error is PERMANENT, and the first SIGTERM finalizes instead
+  of `requeue_for_shutdown`; claim orders `live_session` first (both claim SQLs); one
+  `recording` meeting at a time is enforced by `meeting_single_recording_idx`; live
+  identification binds at `suggest_threshold`; `persist_process_meeting` deletes the
+  meeting's `live_utterance` rows. Stop must lock the **job row first** (`FOR UPDATE OF j`)
+  — locking only the meeting lets `claim` (job row, `SKIP LOCKED`) slip in.
+  **Shutdown must join capture before it stops the writer, never the reverse.**
+  `run_live_session` closes the source and joins the capture thread first, and only then
+  sends the writer thread its sentinel — on every exit path, including exceptions. A real
+  mic keeps delivering already-buffered frames for a while after `stop()` (the callback
+  fills faster than the consumer drains), so ending the writer first lets it close the file
+  while capture is still feeding a queue nobody reads anymore — the tail is silently lost.
+  A regression test built on a source that keeps buffering past `stop()` caught this
+  concretely: reversing the two lines lost 57 of 130 frames. A dead **writer** thread
+  (`ENOSPC`, say) is now exactly as fatal as a dead **capture** thread — both carry an
+  `error` slot the main loop checks before finalizing — and fails the job PERMANENT
+  `io_error` rather than quietly committing a meeting whose file, and the `duration_ms`
+  recorded for it (derived from bytes actually on disk), are both cut short of what the
+  user actually recorded, with nothing to say so. A session that captured **zero** frames
+  likewise refuses to finalize (PERMANENT `audio_device_failed`) instead of returning a
+  `discarded` outcome: `discarded` leaves no job marking the session finished, and since
+  `meeting_single_recording_idx` allows only one `recording` meeting at a time, that meeting
+  would then block every future recording indefinitely. `MicSource`'s stop queue is built in
+  `__init__` rather than lazily in `frames()`, so a `stop()` that arrives before capture ever
+  starts (an immediate cancel) cannot be dropped — same reasoning as `FileSource`'s
+  `threading.Event`.
 - **Search indexing.** `index_meeting` is a separate job type (dispatched by the API after persist completes). Failure marks the job only — the meeting stays `done` and BM25-searchable. Query embedding is the **single exception to the job-table-only invariant**: the API calls the embed service (localhost HTTP RPC, `POST /embed`) directly at query time; this never crosses a network boundary (`EMBED_SERVICE_ALLOW_NON_LOOPBACK=false`).
 
 ## Commands

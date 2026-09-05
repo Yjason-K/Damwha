@@ -554,3 +554,37 @@ turbo는 같은 조건에서 2.9%p 퍼진다. payload 재현성을 설계 가치
 만족시킬 수 없다. 채우려면 `Qwen3-ForcedAligner-0.6B`를 2단으로 얹어야 하고, 그쪽은
 5분 제한이 있어 VAD span 단위 정렬이 강제된다. 그래서 `eval_stt.py`의 qwen 경로는
 `Transcriber`가 아니라 텍스트만 돌려주는 `qwen_transcribe()`로 두었다.
+
+## 라이브 세션 (`live_session`, 설계 2026-09-05)
+
+```bash
+uv sync --extra models          # sounddevice 포함
+uv run python scripts/smoke_live_session.py --mic --seconds 60      # 마이크 60초 뒤 자동 stop
+uv run python scripts/smoke_live_session.py --file ~/x/16k-mono.wav  # 파일을 실시간 속도로
+```
+
+- 첫 실행에 macOS가 **터미널 앱**에 마이크 권한을 묻는다. 거부하면 job이 `audio_device_failed`로
+  즉시 실패한다. 시스템 설정 › 개인정보 보호 및 보안 › 마이크에서 다시 허용.
+- 로그의 `latency_ms=`가 세그먼트 끝 → `live_utterance` INSERT 지연이다. 실측(날짜, 머신, 값)을 아래에 적는다.
+- 식별 결합 기준은 `suggest_threshold`(0.6)다. bind(0.8)와의 적중률 비교는 `eval_speaker_id.py`
+  방식으로 같은 클립을 두 기준에 돌려 여기 기록한다 — 설계 §2.8을 되돌릴 근거가 된다.
+- **종료 순서가 뒤바뀌면 안 된다.** `run_live_session`은 캡처 스레드를 join한 **뒤에야** writer
+  스레드에 종료 신호를 보낸다. 마이크 콜백은 소비자보다 앞서 버퍼를 채우므로 `stop()` 뒤에도
+  한동안 프레임이 계속 나온다 — 순서를 바꿔 writer를 먼저 끝내면 그 시점 이후 캡처가 넣는 프레임은
+  아무도 읽지 않는 큐에 쌓인 채 사라진다. 순서를 되돌리는 회귀 테스트에서 130프레임 중 57개가
+  이렇게 사라지는 것을 확인했다(`test_live_session.py`).
+- **writer 스레드가 죽으면(디스크 풀 등) 세션은 커밋하지 않고 PERMANENT `io_error`로 실패한다.**
+  조용히 넘기면 사용자가 실제로 녹음한 것보다 짧게 잘린 파일이(`duration_ms`도 디스크에 닿은
+  바이트 기준이라 똑같이 짧게 찍힌 채) 아무 오류 표시 없이 "완료된 회의"가 된다.
+- **프레임을 한 개도 못 잡은 세션은 finalize하지 않고 PERMANENT `audio_device_failed`로 실패한다.**
+  `discarded`로 끝내는 방안도 검토했지만, `discarded`는 어떤 job도 완료 처리를 하지 않는 경로라
+  회의가 `recording`에 계속 머문다 — `meeting_single_recording_idx`가 동시 녹음을 하나로
+  제한하므로, 그 상태로 남으면 이후의 모든 녹음 시작이 막힌다.
+- `MicSource`의 stop 신호 큐는 `frames()`가 아니라 생성자에서 만든다. 캡처가 시작되기도 전에
+  `stop()`이 먼저 오는(즉시 취소) 경쟁에서도 신호가 버려지지 않게 하기 위해서다.
+
+### 실측
+
+| 날짜 | 머신 | STT | latency_ms (중앙값/최대) | 비고 |
+|---|---|---|---|---|
+| 2026-09-05 | Apple M4 Pro, 48GB, macOS 26.6.2 | large-v3-turbo (mlx, gpu) | 5147 / 7356 | `--file`, 실제 회의 녹음 아님(공개 강연 클립) 60초, 4 세그먼트(4219/4360/5934/7356ms). `--mic`는 이 환경에 마이크 권한을 부여할 수 없어(비대화형 에이전트 세션) 실행하지 못했다 — 실행 경로는 `--file`과 캡처 스레드만 다르다. |

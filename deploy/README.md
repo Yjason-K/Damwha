@@ -62,6 +62,9 @@ damwha-embed     # 터미널 2 — 검색용 임베딩. 첫 실행 30–90초 �
 - 렌즈(액션/결정/약속)·요약은 업로드 직후 자동으로 큐에 들어가고, 워커가 그 job 직전에 `mlx_lm.server`를 띄웠다가 끝나면 내린다. 첫 요약은 모델 다운로드 시간이 더 붙는다.
 - 검색은 `damwha-embed`가 죽어 있어도 동작한다 — 키워드 검색으로 조용히 떨어질 뿐. 의미 검색이 안 되는 것 같으면 `curl localhost:8100/health`.
 - 화자 등록: 한 사람 목소리만 10–30초 클립으로. 여러 명 섞인 걸 넣으면 식별이 흐려진다.
+- **실시간 녹음**: 좌측 "녹음 시작"으로 이 Mac의 마이크를 바로 녹음한다. 첫 실행에 macOS가
+  `damwha-worker`를 띄운 터미널 앱에 마이크 권한을 묻는다. 녹음하는 동안은 다른 처리(요약·색인 등)가
+  대기하고, 종료하면 정식 처리가 이어진다. 데모 사이트에서는 꺼져 있다.
 
 ## 문제 생기면
 
@@ -75,6 +78,7 @@ damwha-embed     # 터미널 2 — 검색용 임베딩. 첫 실행 30–90초 �
 | 화자 분리 실패 / 401 | `HF_TOKEN` 비었거나 라이선스 3개 중 하나 미수락 → [HUGGINGFACE.md](HUGGINGFACE.md) |
 | 렌즈/요약이 `llm_server_start_failed` | `mlx_lm.server`가 PATH에 없음 → `uv tool install mlx-lm` |
 | 워커가 `DATABASE_URL` / `LENS_LLM_BASE_URL` 없다고 죽음 | `.env` 없는 폴더에서 실행함 |
+| 녹음이 `audio_device_failed`로 실패 | 마이크 권한 거부 또는 입력 장치 없음 — 시스템 설정 › 개인정보 보호 및 보안 › 마이크에서 터미널 앱 허용 |
 
 로그: `docker compose logs -f api`, 워커는 stderr. 워커는 기동 직후 자기 머신 스펙을 재서
 `host capabilities reported: {...}` 한 줄을 남기고 DB에 올린다 — 처리 설정 화면의 "내 머신"과
