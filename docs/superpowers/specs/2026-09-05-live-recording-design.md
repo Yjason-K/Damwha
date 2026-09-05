@@ -106,9 +106,23 @@ suggest 구간은 제안으로만 남긴다. 청크 하나의 임베딩은 centr
 
 ### 2.9 녹음 파일은 무엇이 죽어도 잃지 않는다
 
-WAV 쓰기는 마이크 프레임과 디스크 사이에만 있고 DB·모델에 의존하지 않는다. 헤더를 5초마다
-갱신하므로 어느 순간 죽어도 그때까지의 파일은 유효하다. 나머지 실패는 전부 "회의를 `failed`로
-닫고 기존 재처리로 그 파일을 최종 패스에 넘긴다"로 수렴한다(§8).
+이 불변식은 두 장치로 성립한다.
+
+- **쓰기 경로의 분리.** 마이크 콜백은 프레임을 두 큐에 나눠 넣고, 전용 writer 스레드가 그중
+  하나를 디스크로 옮긴다. 전사·식별·DB 조회는 다른 큐를 먹는 미리보기 파이프라인에만 있다.
+  추론이 느려지거나 DB가 멈춰도 파일 쓰기는 영향받지 않는다. 같은 루프에 두면 whisper가 도는
+  동안 프레임이 메모리에만 쌓이고, 그 순간 죽으면 그 구간을 잃는다.
+- **스트리밍 헤더.** 녹음 중에는 WAV 헤더의 RIFF 크기와 data 크기를 `0xFFFFFFFF`(길이 미정,
+  ffmpeg가 seek 불가 출력에 쓰는 관례)로 두고, 정상 종료 때만 실제 값을 쓴다. 이 머신의
+  ffmpeg로 확인한 결과, data 크기가 실제보다 작은 헤더(PCM 7초, 헤더 5초)는 probe와
+  normalize 모두 **5초로 잘리고**, `0` 또는 `0xFFFFFFFF`면 EOF까지 7초를 읽는다. 따라서
+  "주기적으로 헤더를 갱신한다"는 방식은 마지막 갱신 이후 구간을 잃으므로 쓰지 않는다. 어느
+  순간 죽어도 마지막 프레임까지 읽힌다.
+
+나머지 실패는 전부 "회의를 `failed`로 닫고 기존 재처리로 그 파일을 최종 패스에 넘긴다"로
+수렴한다(§8). 최종 패스의 normalize 단계는 스트리밍 헤더가 남은 파일을 만나면 파일 크기로
+헤더를 고쳐 쓴 뒤 진행한다(§5.2). 원본을 그대로 재생하는 `GET /meetings/:id/audio`까지
+정확한 헤더를 보게 하기 위해서다.
 
 ## 3. 데이터와 계약
 
@@ -131,6 +145,10 @@ ALTER TABLE job ADD CONSTRAINT job_stage_check
                    'extract_lenses','persist_lenses',
                    'summarize_meeting','persist_summary',
                    'capture','finalize'));
+
+-- 동시에 recording인 회의는 하나뿐이다. status 컬럼의 부분 유일 인덱스라 그 값의 행이
+-- 둘이 될 수 없다. 동시 시작 요청은 둘 다 "recording 없음"을 읽어도 INSERT에서 하나만 산다.
+CREATE UNIQUE INDEX meeting_single_recording_idx ON meeting (status) WHERE status = 'recording';
 
 ALTER TABLE job ADD COLUMN stop_requested_at timestamptz;
 
@@ -216,7 +234,10 @@ POST /meetings/live ─→ meeting(recording) + live_session(queued)
 ```
 
 **시작.** 이미 `recording`인 회의가 있으면 409. 마이크도 하나, supervisor 자식도 하나라
-세션은 한 번에 하나다. 회의를 `recording`으로 넣되 `audio_key`는
+세션은 한 번에 하나다. 사전 조회는 친절한 메시지를 위한 것이고, 보장은
+`meeting_single_recording_idx`가 한다. 동시 요청 둘이 모두 "없음"을 읽어도 INSERT에서 하나만
+살고, 나머지는 유일 위반(`23505`, 그 인덱스 이름)을 409로 바꿔 돌려준다. 회의를 `recording`으로
+넣되 `audio_key`는
 `meetings/<id>/original.wav`로 미리 배정하고, `original_filename`은 null이다. `title`은
 업로드와 같이 선택이고 서버는 기본값을 만들지 않는다. 기본 제목 `녹음 YYYY-MM-DD HH:mm`은
 시작 다이얼로그가 브라우저 시각으로 미리 채운다(§7.2). 컨테이너 API는 회의 시간대를 모른다.
@@ -227,16 +248,40 @@ job이 `queued`에 머문다.
 가드(`current_job_id = job.id`) 아래 다시 찍는다. 실제 녹음 시작 시각이 API 호출 시각이
 아니라 첫 샘플 시각이어야 경과 시간이 맞는다. 루프는 §5.
 
-**종료.** `POST /meetings/:id/live/stop`. 회의가 `recording`이 아니면 409. 트랜잭션 안에서
-회의를 잠그고 job 상태를 본다.
+**종료.** `POST /meetings/:id/live/stop`. 트랜잭션 안에서 **job 행을 먼저** 잠근다.
+
+```sql
+SELECT j.* FROM job j JOIN meeting m ON m.current_job_id = j.id
+WHERE m.id = $1 AND j.type = 'live_session' FOR UPDATE OF j;
+SELECT * FROM meeting WHERE id = $1 FOR UPDATE;
+```
+
+회의가 `recording`이 아니거나 세션 job이 없으면 409. 그다음 잠근 job의 상태로 가른다.
 - `running`: `stop_requested_at = now()`(이미 있으면 그대로), `{ outcome: 'stopping' }`.
 - `queued`: 녹음된 게 없다. job과 회의를 지우고 `{ outcome: 'discarded' }`.
-- 워커 claim과 겹치는 순간은 트랜잭션이 가른다. API가 먼저 잠그면 claim의 `SKIP LOCKED`가 그
-  행을 건너뛰고, claim이 먼저면 API는 `running`을 보고 플래그 경로로 간다.
 
-**finalize.** stage `finalize`(progress 100). 스트림을 닫고 WAV 헤더를 확정하고 샘플 수로
-길이를 잰다. 트랜잭션 하나에서 job 가드(`locked_by = worker AND status='running'`)와 회의
-가드(`status='recording' AND current_job_id = job.id`)를 통과하면:
+claim은 job 행만 `FOR UPDATE SKIP LOCKED`로 잠근다. 회의 행을 잠그는 것만으로는 그 사이
+claim이 끼어들어 이미 마이크를 연 세션을 API가 지울 수 있다. job 행을 잠근 채 판정해야 claim이
+그 행을 건너뛰고, claim이 먼저였다면 API는 `running`을 본다. 잠금 순서는 **job → meeting**으로,
+워커의 persist와 `fail_process_meeting`이 이미 쓰는 순서와 같다. (기존 `cancel`은 반대로
+meeting → job이라 워커 persist와 교차할 수 있는데, 이는 이 설계 이전부터 있던 것이고 Postgres가
+감지해 한쪽을 되돌린다. 여기서 넓히지 않는다.)
+
+**정상 종료의 순서.** 워커 루프가 stop을 읽으면:
+
+1. 캡처 스트림을 닫는다. 새 프레임이 더 오지 않는다.
+2. writer 스레드가 큐를 비우고 파일을 닫으며 헤더에 실제 크기를 쓴다.
+3. 미리보기 파이프라인이 진행 중이던 발화를 마지막 세그먼트로 강제 절단해 처리하고, 남은
+   프레임은 버린다. 최종 패스가 어차피 전부 다시 본다.
+4. finalize.
+
+파일이 닫힌 뒤에 최종 job이 큐에 들어가야 한다. 순서가 바뀌면 최종 패스가 열린 파일을 볼 수
+있다.
+
+**finalize.** stage `finalize`(progress 100). 샘플 수로 길이를 잰다. 트랜잭션 하나에서
+persist와 같은 순서로 job 가드(`SELECT ... FROM job WHERE id=$job AND locked_by=$worker AND
+status='running' FOR UPDATE`)를 먼저, 회의 가드(`status='recording' AND current_job_id = job.id`)를
+그다음에 통과하면:
 
 1. `meeting SET status='uploaded', duration_ms=$n`
 2. `INSERT job(type='process_meeting', meeting_id, payload=$process)`
@@ -255,7 +300,8 @@ job이 `queued`에 머문다.
 | 파일 | 책임 |
 |---|---|
 | `damwha_worker/audio/source.py` | `AudioSource` 프로토콜, `MicSource`(sounddevice), `FileSource`(WAV를 실시간 또는 즉시 흘림, 테스트·smoke용) |
-| `damwha_worker/audio/wav_writer.py` | 헤더 주기 갱신 WAV writer |
+| `damwha_worker/audio/wav_writer.py` | 스트리밍 헤더 WAV writer(전용 스레드), `repair_streaming_header(path)` |
+| `damwha_worker/pipeline/ffmpeg.py` | normalize 앞에서 `repair_streaming_header` 호출 |
 | `damwha_worker/models/silero_vad.py` | 기존 `SileroVAD`에 `StreamingSileroVAD` 추가(`VADIterator` 래핑) |
 | `damwha_worker/pipeline/live_segmenter.py` | VAD 이벤트 → 세그먼트. 패딩·최소 길이·강제 절단 순수 함수 |
 | `damwha_worker/pipeline/live_session.py` | 루프, 식별, finalize |
@@ -269,12 +315,20 @@ macOS wheel에 라이브러리 동봉). 결정적 테스트 스위트는 이걸 
 ### 5.2 캡처와 WAV
 
 `AudioSource.open()`은 16kHz 모노 int16, 512샘플(32ms) 프레임의 반복자를 내는 컨텍스트
-매니저다. `MicSource`의 콜백은 큐에 넣기만 한다. 첫 실행에 macOS 마이크 권한 프롬프트가
-터미널 앱 앞으로 뜬다(deploy README에 한 줄).
+매니저다. `MicSource`의 콜백은 프레임을 두 큐(writer, preview)에 넣기만 한다. 첫 실행에 macOS
+마이크 권한 프롬프트가 터미널 앱 앞으로 뜬다(deploy README에 한 줄).
 
-`WavWriter`는 헤더 44바이트를 자리만 잡아 쓰고 프레임을 이어 붙이다가 5초마다 RIFF 크기와
-data 크기 두 필드를 seek해서 고쳐 쓴다. 표준 `wave`는 닫을 때만 헤더를 쓰므로 자식이 죽으면
-길이 0짜리 헤더가 남는다. 30줄 남짓, 단위 테스트 대상. 디스크는 시간당 약 115MB.
+`WavWriter`는 전용 스레드에서 writer 큐를 비워 파일에 이어 쓴다. 헤더는 열 때 RIFF 크기와 data
+크기를 `0xFFFFFFFF`로 쓰고, `close()`에서만 실제 값으로 고친다. 중간 갱신은 없다. §2.9의 실측대로
+ffmpeg는 이 값을 "길이 미정"으로 읽어 EOF까지 디코딩하므로, 어느 순간 죽어도 마지막으로 디스크에
+닿은 프레임까지 살아 있다. writer 스레드는 디스크 외에 아무것도 기다리지 않고, 프로세스 크래시는
+커널 페이지 캐시가 살아남으므로 `fsync`는 하지 않는다. 디스크는 시간당 약 115MB.
+
+`repair_streaming_header(path)`는 WAV 헤더의 data 크기가 `0xFFFFFFFF`이거나 파일 크기를 넘으면
+실제 파일 크기에서 헤더를 뺀 값을 2바이트(int16 모노 샘플) 경계로 내림해 두 필드를 고쳐 쓴다.
+정상 파일은 건드리지 않는다. `process_meeting`의 normalize 단계가 원본을 열기 전에 부른다. 크래시
+후 재처리한 녹음이 그 시점부터 정확한 헤더를 갖게 되어, 원본을 그대로 내보내는 오디오 재생과
+어떤 다른 리더도 스트리밍 헤더를 볼 일이 없다.
 
 ### 5.3 분절
 
@@ -299,18 +353,20 @@ embedding, model, dimension, threshold) -> (speaker_id, similarity) | None`으�
 ### 5.5 루프
 
 ```
-[capture thread]  mic ──512샘플 프레임──▶ queue
-[main loop]       queue ──▶ WavWriter.append
-                        ──▶ StreamingSileroVAD ──segment──▶ temp wav
+[capture thread]  mic ──512샘플 프레임──▶ writer queue ──▶ [writer thread] WavWriter.append
+                                      └─▶ preview queue (상한 5분, 넘치면 오래된 것부터 버림)
+[main loop]       preview queue ──▶ StreamingSileroVAD ──segment──▶ temp wav
                                  ──▶ transcribe ──▶ text (비면 건너뜀)
                                  ──▶ embed ──▶ identify_embedding
                                  ──▶ insert_live_utterance(seq++)
                   매 1초: get_stop_requested, 상한 시간, shutdown_event
 ```
 
-- whisper가 도는 1~2초 동안 프레임은 큐에 쌓였다가 따라잡는다. 파일은 늘 완전하고 지연만
-  생긴다. 큐 깊이를 stage 로그에 남겨 CPU 프리셋처럼 실시간에 못 미치는 머신에서 밀리는 걸
-  볼 수 있게 한다. v1에서는 프레임을 버리지 않는다. 녹음의 완전성이 미리보기보다 우선이다.
+- 파일 쓰기와 미리보기는 서로 다른 큐와 스레드다. whisper가 도는 1~2초 동안 preview 큐에는
+  프레임이 쌓였다가 따라잡지만, writer 큐는 디스크 속도로만 비워지므로 파일은 추론과 무관하게
+  완전하다. preview 큐는 5분치를 상한으로 두고 넘치면 오래된 프레임부터 버리며 경고를
+  남긴다. 이 드롭은 미리보기에만 생기고 녹음에는 영향이 없다. 큐 깊이를 stage 로그에 남겨 CPU
+  프리셋처럼 실시간에 못 미치는 머신에서 밀리는 걸 볼 수 있게 한다.
 - 클립 하나의 예외는 로그만 남기고 계속 간다. `LIVE_CLIP_FAILURE_LIMIT`(상수 5)회 연속 실패면
   PERMANENT `live_stt_failed`로 세션을 끝낸다. finalize 없이 exit하므로 reaper 경로가 아니라
   `fail_process_meeting`과 같은 즉시 실패 경로로 회의를 `failed`로 닫는다. WAV는 남는다.
@@ -354,8 +410,11 @@ finalize로 간다. `Ctrl+C`가 녹음을 깔끔하게 끝내고 최종 패스�
 - `useStopLive(id)`: `POST .../live/stop` → `["meeting", id]`, `["meetings"]` 무효화.
   `discarded`면 `/`로 이동.
 - `useLiveUtterances(id, status)`: `["live-utterances", id]` 키. 마지막 `seq`를 `after`로 넘겨
-  append만 한다. `refetchInterval`은 `recording`이면 1000, `uploaded`/`processing`이면 3000,
-  그 외 false. 탭이 뒤로 가면 TanStack Query 기본대로 멈췄다가 복귀 시 커서로 따라잡는다.
+  append만 한다. `enabled`는 `recording`/`uploaded`/`processing`/`failed`. `refetchInterval`은
+  `recording`이면 1000, `uploaded`/`processing`이면 3000, `failed`는 한 번만 조회하고 폴링하지
+  않는다(`done`은 조회 자체를 안 한다. persist가 행을 지웠다). 실패한 회의에 새로 진입해도 같은
+  훅이 같은 조건으로 조회하므로 §2.4가 남겨 둔 행이 보인다. 탭이 뒤로 가면 TanStack Query
+  기본대로 멈췄다가 복귀 시 커서로 따라잡는다.
 - `model/types.ts`의 `MeetingStatus`에 `"recording"`, 새 `LiveUtterance` 타입. `api/types.ts`에
   wire 타입.
 
@@ -379,6 +438,11 @@ finalize로 간다. `Ctrl+C`가 녹음을 깔끔하게 끝내고 최종 패스�
   흐린 톤(`--text-muted` 계열)으로, `similarity`를 "82%"처럼 옆에 붙인다. 미식별은 "화자 ?".
   `uploaded`/`processing` 동안에도 같은 컴포넌트가 미리보기로 남고, `done`이 되면 기존
   `TranscriptPane`으로 교체된다.
+- **실패한 회의의 미리보기**: `status === "failed"`이고 라이브 행이 있으면 기존 실패 배너
+  아래 중앙에 같은 `LiveTranscript`를 읽기 전용으로 그린다. 단 `meeting.tracks`가 비어 있을
+  때만이다. 이전 처리 버전의 전사가 남아 있는 회의(재처리 실패)는 그 전사가 우선이고, 그런
+  회의에는 라이브 행이 없다. 페이지가 `status !== "done"`이면 항상 `useLiveUtterances`를 켜므로
+  새로 진입한 경우도 같은 경로다.
 - **실패 배너**: `meeting.error.code === "audio_device_failed"`면 macOS 마이크 권한 안내를
   보여주고 재처리 버튼을 숨긴다(파일이 없다). 다른 실패는 기존 재처리 경로 그대로.
 - 색·간격·상태 표현은 `fe/DESIGN.md`를 따른다. 새 토큰을 만들지 않는다.
@@ -390,7 +454,7 @@ finalize로 간다. `Ctrl+C`가 녹음을 깔끔하게 끝내고 최종 패스�
 | 마이크를 못 염(권한 거부, 장치 없음) | PERMANENT `audio_device_failed`, 즉시 | 회의 `failed`, 파일 없음 | 권한 안내. 재처리 숨김. 삭제 |
 | 클립 하나의 전사·임베딩 예외 | 로그, 건너뜀 | 세션 계속 | 없음 |
 | 클립 5개 연속 실패 | PERMANENT `live_stt_failed`, finalize 없이 종료 | 회의 `failed`, 파일 있음 | 재처리 |
-| 세션 중 자식 크래시(OOM, 디스크 풀) | 죽음 | reaper가 stale 창(`REAPER_STALE_MINUTES`, 기본 30분) 뒤 job과 회의를 `failed`로 | 재처리 |
+| 세션 중 자식 크래시(OOM, 디스크 풀) | 죽음. writer 스레드가 디스크에 닿은 프레임까지 파일에 있고 헤더는 스트리밍 값 | reaper가 stale 창(`REAPER_STALE_MINUTES`, 기본 30분) 뒤 job과 회의를 `failed`로 | 재처리. normalize가 헤더를 고치고 EOF까지 읽는다 |
 | 루프 안 DB 오류 | 다음 클립에서 재접속 1회, WAV는 계속 | 오래 끊기면 finalize 실패 → 크래시 경로 | 재처리 |
 | 워커 SIGTERM 1차 | stop과 동일하게 finalize | 정상 종료, 최종 패스 큐잉 | 없음 |
 | 워커 SIGTERM 2차 | SIGKILL | 크래시 경로 | 재처리 |
@@ -411,13 +475,18 @@ finalize로 간다. `Ctrl+C`가 녹음을 깔끔하게 끝내고 최종 패스�
 실모델은 로컬 smoke에서만.
 
 **워커(pytest)**
-- `test_wav_writer.py`: 프레임 N개 뒤 헤더 두 필드 값. close 없이 끊긴 파일을 `soundfile`로
-  다시 열어 프레임 수가 맞는지. 5초 주기 갱신이 실제로 일어나는지.
+- `test_wav_writer.py`: 열자마자 헤더 두 필드가 `0xFFFFFFFF`인지, `close()` 뒤 실제 값인지.
+  close 없이 끊긴 파일(프레임을 쓰다 중간에 멈춘 것)을 `repair_streaming_header`로 고쳐 `soundfile`로
+  열면 디스크에 닿은 프레임 수와 정확히 같은지. 홀수 바이트로 끊긴 파일이 샘플 경계로 내림되는지.
+  정상 헤더 파일은 repair가 건드리지 않는지. `test_ffmpeg.py`에 normalize가 repair를 먼저 부르는지.
 - `test_live_segmenter.py`: fake VAD 이벤트 시퀀스로 패딩·300ms 미만 버림·15초 강제 절단.
 - `test_live_session.py`: 루프 전체. `FileSource`(즉시 모드)로 WAV를 흘리고 `FakeTranscriber`,
   `FakeEmbedder`, fake 스트리밍 VAD를 꽂는다. `live_utterance`의 seq 순서와 ms 오프셋, 미리
   심은 성문에 suggest 임계값으로 이름이 붙는지, `recorded_at` 갱신, stop 플래그를 읽고 멈추는지,
   finalize 트랜잭션의 네 단계(§4), finalize 전 cancel이면 discarded이고 WAV는 남는지.
+  **쓰기 경로 분리**: transcriber가 오래 블록되는 fake를 꽂아도 파일의 프레임 수가 소스가 낸
+  프레임 수와 같은지. preview 큐 상한을 작게 두고 넘치면 드롭 경고가 나되 파일은 온전한지.
+  **종료 순서**: finalize의 INSERT 시점에 파일이 이미 닫혀 정확한 헤더를 갖는지.
 - 실패 분류: 소스가 열리다 죽으면 `audio_device_failed`, 클립 5연속 예외면 `live_stt_failed`,
   둘 다 PERMANENT이고 회의가 `failed`.
 - `test_db_lifecycle.py`: claim 우선순위. 더 늦게 들어온 `live_session`이 먼저 잡힌다.
@@ -428,10 +497,14 @@ finalize로 간다. `Ctrl+C`가 녹음을 깔끔하게 끝내고 최종 패스�
 
 **API(jest)**
 - 새 `test/live.e2e-spec.ts`: 시작이 201에 `recording` 회의, `max_attempts=1`인 `live_session`
-  job, `process` 블록이 `buildProcessMeetingPayload` 결과와 같은지. 두 번째 시작 409. `queued`
-  에서 stop은 회의가 사라지고 `discarded`. SQL로 claim을 흉내 낸 `running`에서 stop은
-  `stop_requested_at`이 찍히고 두 번 눌러도 200. `done` 회의에 stop은 409. `GET .../live?after=`
-  가 커서 이후 행만 주고 `stage`, `heartbeat_at`, `speaker_name`을 싣는지.
+  job, `process` 블록이 `buildProcessMeetingPayload` 결과와 같은지. 두 번째 시작 409.
+  **동시 시작**: `Promise.all`로 시작 요청 둘을 같이 보내 정확히 하나가 201, 하나가 409이고 DB에
+  `recording` 회의가 하나뿐인지(유일 인덱스 경로). `queued`에서 stop은 회의가 사라지고 `discarded`.
+  SQL로 claim을 흉내 낸 `running`에서 stop은 `stop_requested_at`이 찍히고 두 번 눌러도 200.
+  **stop과 claim의 경합**: 별도 커넥션의 트랜잭션이 job 행을 `FOR UPDATE`로 잡고 있는 동안
+  claim SQL을 돌리면 그 job을 건너뛰는지(`SKIP LOCKED`), 그리고 반대로 claim이 먼저 커밋된 뒤
+  stop이 `stopping`으로 가는지. `done` 회의에 stop은 409. `GET .../live?after=`가 커서 이후
+  행만 주고 `stage`, `heartbeat_at`, `speaker_name`을 싣는지. `failed` 회의에서도 행을 주는지.
 - `demo-read-only.e2e-spec.ts`: POST 둘이 403. `jobs.repository.spec.ts`: claim 우선순위.
   `reaper.spec.ts`: `live_session` 전파. `job-payload.spec.ts`: zod 스키마.
   `contract-fixtures.spec.ts`: 새 fixture.
@@ -444,7 +517,9 @@ finalize로 간다. `Ctrl+C`가 녹음을 깔끔하게 끝내고 최종 패스�
 - `live-banner.test.tsx`: 경과 시간, `queued` 문구, 종료 클릭 뒤 "종료 중…", heartbeat 30초
   초과 시 "신호 끊김", `audio_device_failed`에서 재처리 버튼이 숨는지.
 - `meeting.test.tsx`: `recording`이면 `LiveBanner`와 `LiveTranscript`가 뜨고 플레이바는 없다.
-  `left-nav.test.tsx`: "녹음 중" 뱃지. `meetings.test.tsx`: 폴링 간격 1초/3초.
+  `failed`이고 `tracks`가 비었고 라이브 행이 있으면 실패 배너 아래 읽기 전용 미리보기가 뜨고,
+  `tracks`가 있으면 뜨지 않는다. `left-nav.test.tsx`: "녹음 중" 뱃지. `meetings.test.tsx`:
+  폴링 간격 1초/3초, `failed`는 한 번만, `done`은 조회 안 함.
 
 **Smoke(로컬, 실모델, CI 밖)**
 - `worker/scripts/smoke_live_session.py`: `MicSource`로 60초, `FileSource`(실시간 모드)로
