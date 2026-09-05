@@ -13,9 +13,8 @@ import type {
   SummaryModel,
 } from "@/features/settings/api/types";
 import type { Meeting, MeetingStatus, MeetingSummary } from "../model/types";
-import { liveQueryKey } from "./live";
+import { removeMeetingCaches } from "./live";
 import { toMeetingDetail, toMeetingSummary } from "./mappers";
-import { noteQueryKey } from "./notes";
 import type {
   MeetingStatusResponse,
   ResolveClusterRequest,
@@ -183,13 +182,11 @@ export function useDeleteMeeting() {
       queryClient.setQueryData<MeetingSummary[]>(["meetings"], (old) =>
         old?.filter((m) => m.id !== vars.id),
       );
-      // 삭제된 회의의 상세/상태/렌즈 캐시를 제거해 렌더 잔존과 404 폴링 루프를
-      // 막고, 목록은 무효화해 다시 가져온다.
-      queryClient.removeQueries({ queryKey: ["meeting", vars.id] });
-      queryClient.removeQueries({ queryKey: ["meeting-status", vars.id] });
-      queryClient.removeQueries({ queryKey: ["meeting-lenses", vars.id] });
-      queryClient.removeQueries({ queryKey: noteQueryKey(vars.id) });
-      queryClient.removeQueries({ queryKey: liveQueryKey(vars.id) });
+      // 삭제된 회의의 상세/상태/렌즈/메모/라이브 캐시를 제거해 렌더 잔존과 404
+      // 폴링 루프를 막고, 목록은 무효화해 다시 가져온다. 이 회의가 통째로
+      // 사라졌을 때 지울 캐시 집합은 useStopLive의 discarded 분기와 같아야
+      // 하므로 removeMeetingCaches를 함께 쓴다.
+      removeMeetingCaches(queryClient, vars.id);
       queryClient.invalidateQueries({ queryKey: ["meetings"] });
     },
   });

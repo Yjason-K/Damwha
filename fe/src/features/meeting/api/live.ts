@@ -2,6 +2,7 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type QueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
 
@@ -13,6 +14,7 @@ import type {
   MeetingSummary,
 } from "../model/types";
 import { formatClock, toMeetingSummary } from "./mappers";
+import { noteQueryKey } from "./notes";
 import type {
   LiveStartRequest,
   LiveStopResponse,
@@ -27,6 +29,20 @@ import type {
  */
 
 export const liveQueryKey = (id: string) => ["live-utterances", id] as const;
+
+/**
+ * 회의가 통째로 사라졌을 때(삭제, 라이브 종료 discard) 그 회의에 딸린 캐시를
+ * 전부 지운다. useDeleteMeeting과 useStopLive의 discarded 분기가 "회의가
+ * 더는 없다"는 같은 상황이라 이 집합을 공유한다 — 한쪽만 손보면 나머지 캐시가
+ * 남아 낡은 화면과 404 폴링 루프로 이어지므로, 키 목록을 여기 한 곳에 둔다.
+ */
+export function removeMeetingCaches(queryClient: QueryClient, id: string) {
+  queryClient.removeQueries({ queryKey: ["meeting", id] });
+  queryClient.removeQueries({ queryKey: ["meeting-status", id] });
+  queryClient.removeQueries({ queryKey: ["meeting-lenses", id] });
+  queryClient.removeQueries({ queryKey: noteQueryKey(id) });
+  queryClient.removeQueries({ queryKey: liveQueryKey(id) });
+}
 
 export type LiveState = {
   status: MeetingStatus;
@@ -117,9 +133,7 @@ export function useStopLive() {
     },
     onSuccess: (data, id) => {
       if (data.outcome === "discarded") {
-        queryClient.removeQueries({ queryKey: ["meeting", id] });
-        queryClient.removeQueries({ queryKey: ["meeting-status", id] });
-        queryClient.removeQueries({ queryKey: liveQueryKey(id) });
+        removeMeetingCaches(queryClient, id);
       } else {
         queryClient.invalidateQueries({ queryKey: ["meeting", id] });
         queryClient.invalidateQueries({ queryKey: ["meeting-status", id] });

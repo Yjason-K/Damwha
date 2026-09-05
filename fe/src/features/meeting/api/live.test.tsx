@@ -11,6 +11,7 @@ import {
   useStartLive,
   useStopLive,
 } from "./live";
+import { noteQueryKey } from "./notes";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -119,7 +120,7 @@ test("녹음 시작은 JSON body를 보내고 목록을 무효화한다", async 
   expect(invalidate).toHaveBeenCalledWith({ queryKey: ["meetings"] });
 });
 
-test("종료가 discarded면 그 회의의 캐시를 지운다", async () => {
+test("종료가 discarded면 그 회의에 딸린 캐시를 모두 지운다", async () => {
   vi.spyOn(apiClient, "post").mockResolvedValue({
     data: { meeting_id: "m7", job_id: "job_1", outcome: "discarded" },
   } as never);
@@ -130,6 +131,12 @@ test("종료가 discarded면 그 회의의 캐시를 지운다", async () => {
     result.current.mutate("m7");
   });
   await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  // useDeleteMeeting과 같은 "회의가 더는 없다" 상황이므로 다섯 캐시 전부가
+  // 지워져야 한다 — 하나라도 빠지면 낡은 화면이나 404 폴링 루프로 이어진다.
   expect(remove).toHaveBeenCalledWith({ queryKey: ["meeting", "m7"] });
+  expect(remove).toHaveBeenCalledWith({ queryKey: ["meeting-status", "m7"] });
+  expect(remove).toHaveBeenCalledWith({ queryKey: ["meeting-lenses", "m7"] });
+  expect(remove).toHaveBeenCalledWith({ queryKey: noteQueryKey("m7") });
   expect(remove).toHaveBeenCalledWith({ queryKey: liveQueryKey("m7") });
+  expect(remove).toHaveBeenCalledTimes(5);
 });
