@@ -7,13 +7,20 @@ export class JobsRepository {
 
   async enqueue(
     exec: Queryable,
-    args: { type: JobType; meetingId: string | null; payload: unknown },
+    args: { type: JobType; meetingId: string | null; payload: unknown; maxAttempts?: number },
   ): Promise<JobRow> {
-    const { rows } = await exec.query<JobRow>(
-      `INSERT INTO job(type, meeting_id, payload)
-       VALUES($1, $2, $3::jsonb) RETURNING *`,
-      [args.type, args.meetingId, JSON.stringify(args.payload)],
-    );
+    // maxAttempts를 안 주면 컬럼 DEFAULT(3)를 그대로 쓴다 — 상수를 여기 복제하지 않는다.
+    const { rows } = args.maxAttempts === undefined
+      ? await exec.query<JobRow>(
+          `INSERT INTO job(type, meeting_id, payload)
+           VALUES($1, $2, $3::jsonb) RETURNING *`,
+          [args.type, args.meetingId, JSON.stringify(args.payload)],
+        )
+      : await exec.query<JobRow>(
+          `INSERT INTO job(type, meeting_id, payload, max_attempts)
+           VALUES($1, $2, $3::jsonb, $4) RETURNING *`,
+          [args.type, args.meetingId, JSON.stringify(args.payload), args.maxAttempts],
+        );
     this.logger.log(`enqueued job ${rows[0].id} type=${args.type} meeting=${args.meetingId ?? '-'}`);
     return rows[0];
   }
@@ -26,7 +33,8 @@ export class JobsRepository {
          SELECT id FROM job
          WHERE status='queued'
            AND (next_attempt_at IS NULL OR next_attempt_at <= now())
-         ORDER BY next_attempt_at NULLS FIRST, created_at
+         -- 라이브 세션은 사람이 회의 중이다 — 밀린 색인·요약보다 먼저 집는다 (설계 §3.3).
+         ORDER BY (type = 'live_session') DESC, next_attempt_at NULLS FIRST, created_at
          FOR UPDATE SKIP LOCKED LIMIT 1
        ) RETURNING *`,
       [workerId],
@@ -130,7 +138,7 @@ export class JobsRepository {
        fail_meetings AS (
          UPDATE meeting m SET status='failed',
            error = jsonb_build_object('code','stale_worker','message','processing worker lost')
-         WHERE m.id IN (SELECT meeting_id FROM failed WHERE type='process_meeting')
+         WHERE m.id IN (SELECT meeting_id FROM failed WHERE type IN ('process_meeting','live_session'))
          RETURNING m.id
        ),
        fail_speakers AS (

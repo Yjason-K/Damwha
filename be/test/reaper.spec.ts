@@ -90,4 +90,24 @@ describe('reapStale', () => {
     const res = await repo.reapStale(db.pool, 30);
     expect(res).toEqual({ requeued: 0, failed: 0 });
   });
+
+  it('fails a stale live_session outright and marks its meeting failed (max_attempts=1)', async () => {
+    const m = await db.pool.query(`INSERT INTO meeting(audio_key, status) VALUES('k','recording') RETURNING id`);
+    const mid = m.rows[0].id;
+    const j = await db.pool.query(
+      `INSERT INTO job(type, meeting_id, payload, status, locked_by, locked_at, attempts, max_attempts, stage)
+       VALUES('live_session',$1,'{}','running','w', now() - interval '45 minutes', 1, 1, 'capture') RETURNING id`,
+      [mid],
+    );
+    await db.pool.query(`UPDATE meeting SET current_job_id=$1 WHERE id=$2`, [j.rows[0].id, mid]);
+
+    const res = await repo.reapStale(db.pool, 30);
+    expect(res).toEqual({ requeued: 0, failed: 1 });
+    const job = await db.pool.query('SELECT status, error FROM job WHERE id=$1', [j.rows[0].id]);
+    expect(job.rows[0].status).toBe('failed');
+    expect(job.rows[0].error.code).toBe('stale_worker');
+    const meeting = await db.pool.query('SELECT status, error FROM meeting WHERE id=$1', [mid]);
+    expect(meeting.rows[0].status).toBe('failed');
+    expect(meeting.rows[0].error.code).toBe('stale_worker');
+  });
 });
