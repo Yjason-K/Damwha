@@ -235,7 +235,7 @@ describe('job payload contract', () => {
       speakers: { min: 2 },
     });
     expect(p).toMatchObject({
-      schema_version: 1, meeting_id: 'mtg_7', audio_key: 'meetings/mtg_7/original.wav', source: 'mic',
+      schema_version: 1, meeting_id: 'mtg_7', audio_key: 'meetings/mtg_7/original.wav', source: 'browser',
     });
     expect(p.process).toMatchObject({
       schema_version: 5, meeting_id: 'mtg_7', audio_key: 'meetings/mtg_7/original.wav',
@@ -243,6 +243,19 @@ describe('job payload contract', () => {
     });
     expect(p.process.models.diarization.min_speakers).toBe(2);
     expect(() => LiveSessionPayloadSchema.parse(p)).not.toThrow();
+  });
+
+  it('buildLiveSessionPayload defaults source to browser', () => {
+    // review Critical 1: 이 빌더의 실제 출력을 직접 보는 유일한 테스트다 — 다른 테스트는
+    // 손으로 쓴 리터럴이나 fixture를 검증할 뿐 빌더를 거치지 않는다. 기본값이 잘못돼도
+    // (source: 'mic') 402개 백엔드 테스트 중 아무것도 이 값을 못 봤다.
+    expect(
+      buildLiveSessionPayload({
+        meetingId: 'mtg_7', audioKey: 'meetings/mtg_7/live.wav',
+        processing: resolvePreset('standard', 'ko'),
+        followups: { lens: true, summary: true },
+      }).source,
+    ).toBe('browser');
   });
 
   it('live_session accepts both mic and browser sources', () => {

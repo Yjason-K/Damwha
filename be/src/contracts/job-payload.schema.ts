@@ -261,7 +261,10 @@ export function buildLiveSessionPayload(args: {
     schema_version: 1,
     meeting_id: args.meetingId,
     audio_key: args.audioKey,
-    source: 'mic',
+    // 실제로 이 값을 시작하는 곳은 LiveService.start() 하나뿐이고, 그 오디오는 항상
+    // 브라우저가 잡는다 — 'mic'은 나중에 붙을 시스템 오디오 참조 구현의 자리다 (설계
+    // §2.1, review Critical 1).
+    source: 'browser',
     process: buildProcessMeetingPayload({
       meetingId: args.meetingId, audioKey: args.audioKey,
       processingVersion: 0, reprocess: false,
