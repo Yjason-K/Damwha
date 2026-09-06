@@ -86,6 +86,9 @@ export class LiveRecorder {
   ) {}
 
   enqueue(chunk: Uint8Array) {
+    // 실패 후에는 더 받지 않는다 — 업로드 루프는 이미 멈췄으니 계속 받으면 stop()이
+    // 잘라내야 할 구멍만 커진다(설계 §2.9와 같은 원칙, review finding 2와 한 벌).
+    if (this.status.failed !== null) return;
     this.queue.push(chunk);
     this.report();
     if (
@@ -196,6 +199,20 @@ export class LiveRecorder {
   async stop(): Promise<void> {
     await this.teardown();
     await this.drain();
+    if (this.status.failed !== null && this.queue.length > 0) {
+      // run()은 실패 후 큐를 비우지 않고 빠져나온다 — 여기서 그 위에 최신 꼬리를 이어
+      // 붙이면 [offset..][큐에 남은 구멍][꼬리]가 "정상 완료"로 봉인된다. 큐를 보낼
+      // 방법은 없으니(업로드 루프가 이미 멈췄다) 마지막으로 확인된 연속 바이트에서
+      // 빈 바디로 봉인한다 (review finding 2).
+      await this.deps.postStop?.(
+        this.meetingId,
+        this.offset,
+        this.offset,
+        new Uint8Array(0),
+        this.elapsedMs(),
+      );
+      return;
+    }
     const tail = this.chunks.flush();
     await this.deps.postStop?.(
       this.meetingId,

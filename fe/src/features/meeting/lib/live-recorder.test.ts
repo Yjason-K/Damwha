@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CHUNK_BYTES, SR } from "./pcm-convert";
+import { CHUNK_BYTES, FRAME_BYTES, SR } from "./pcm-convert";
 import { checkCaptureSupport, LiveRecorder } from "./live-recorder";
 
 const chunkOf = (n = CHUNK_BYTES) => new Uint8Array(n);
@@ -82,6 +82,105 @@ describe("LiveRecorder upload loop", () => {
     for (let i = 0; i < 5; i += 1) r.enqueue(chunkOf()); // 5.12초 > 2초
     await r.drain();
     expect(r.status.failed).toBe("buffer_overflow");
+  });
+
+  it("stops enqueueing once failed — the queue does not keep growing past the failure", async () => {
+    const post = vi.fn(async () => {
+      throw new Error("down");
+    });
+    const r = new LiveRecorder({
+      postChunk: post,
+      retryDelayMs: 0,
+      bufferLimitMs: 2000, // 청크 2개(2048ms)에서 넘는다
+    });
+    for (let i = 0; i < 5; i += 1) r.enqueue(chunkOf());
+    await r.drain();
+    expect(r.status.failed).toBe("buffer_overflow");
+    // 실패를 일으킨 2개 이후로는 enqueue가 조용히 버려야 한다 — 안 그러면 stop()이
+    // 나중에 잘라내야 할 구멍만 계속 커진다. CHUNK_MS(1024)는 export되지 않아 리터럴로 쓴다.
+    expect(r.status.backlogMs).toBe(2 * 1024);
+  });
+});
+
+/**
+ * run()의 while 조건은 `queue.length > 0 && status.failed === null`이라, fail() 뒤에는
+ * 큐가 비지 않은 채로 루프가 빠진다. stop()이 그 위에 최신 꼬리만 이어 붙이면
+ * [offset..][큐에 남은 구멍][꼬리]가 "정상 완료"로 봉인된다 (review Important 2) — 이
+ * 리뷰가 지적하기 전까지 stop()을 실패 뒤에 부르는 테스트가 하나도 없었다.
+ */
+describe("LiveRecorder stop() after a recorder failure", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    Reflect.deleteProperty(navigator, "mediaDevices");
+  });
+
+  it("seals at the last contiguous offset with an empty body instead of splicing the queued hole", async () => {
+    const stream = {
+      getTracks: () => [{ stop: vi.fn() }],
+      getAudioTracks: () => [{ addEventListener: vi.fn() }],
+    } as unknown as MediaStream;
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue(stream) },
+    });
+
+    const port: { onmessage: ((e: MessageEvent<ArrayBuffer>) => void) | null } =
+      { onmessage: null };
+    class FakeAudioContext {
+      sampleRate = SR;
+      audioWorklet = { addModule: vi.fn().mockResolvedValue(undefined) };
+      createMediaStreamSource = vi.fn().mockReturnValue({ connect: vi.fn() });
+      close = vi.fn().mockResolvedValue(undefined);
+    }
+    class FakeAudioWorkletNode {
+      port = port;
+    }
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("AudioWorkletNode", FakeAudioWorkletNode);
+
+    // 네트워크가 죽어 있다 — 큐에 들어간 청크는 절대 전송되지 않는다.
+    const post = vi.fn(async () => {
+      throw new Error("network down");
+    });
+    const stopSpy = vi.fn<
+      (
+        id: string,
+        offset: number,
+        final: number,
+        body: Uint8Array,
+        elapsedMs: number,
+      ) => Promise<void>
+    >(async () => undefined);
+    const r = new LiveRecorder({
+      postChunk: post,
+      postStop: stopSpy,
+      retryDelayMs: 0,
+      bufferLimitMs: 2000, // 청크 2개(2048ms)면 넘는다
+    });
+
+    await r.start("mtg_1");
+    const frame = () => new ArrayBuffer(FRAME_BYTES);
+    // 청크 2개(64프레임) — 큐에 쌓이지만 네트워크가 죽어 있어 전송되지 않고, 그 백로그가
+    // buffer_overflow를 일으킨다.
+    for (let i = 0; i < 64; i += 1) {
+      port.onmessage?.({ data: frame() } as MessageEvent<ArrayBuffer>);
+    }
+    expect(r.status.failed).toBe("buffer_overflow");
+    // 청크 경계에 못 미치는 꼬리 5프레임 — 큐에 쌓인 두 청크보다 나중에 캡처됐다. 옛
+    // 코드는 stop()에서 이 꼬리를 flush()해 그대로 이어 붙였다.
+    for (let i = 0; i < 5; i += 1) {
+      port.onmessage?.({ data: frame() } as MessageEvent<ArrayBuffer>);
+    }
+
+    await r.drain();
+    await r.stop();
+
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+    const [id, offset, final, body] = stopSpy.mock.calls[0];
+    expect(id).toBe("mtg_1");
+    expect(offset).toBe(0);
+    expect(final).toBe(0);
+    expect((body as Uint8Array).byteLength).toBe(0);
   });
 });
 
