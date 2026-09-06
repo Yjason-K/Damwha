@@ -58,6 +58,29 @@ export class LiveRepository {
     return rows[0] ?? null;
   }
 
+  /** 잠그지 않는 사전 조회. 잠금 순서가 job → meeting이라 job id를 먼저 알아야 한다. */
+  async findLiveJob(exec: Queryable, meetingId: string): Promise<{ job_id: string } | null> {
+    const { rows } = await exec.query<{ job_id: string }>(
+      `SELECT j.id AS job_id FROM job j JOIN meeting m ON m.current_job_id = j.id
+       WHERE m.id=$1 AND j.type='live_session'`, [meetingId]);
+    return rows[0] ?? null;
+  }
+
+  async lockJobById(exec: Queryable, jobId: string): Promise<JobRow | null> {
+    const { rows } = await exec.query<JobRow>(`SELECT * FROM job WHERE id=$1 FOR UPDATE`, [jobId]);
+    return rows[0] ?? null;
+  }
+
+  /** producer 생존 신호. 워커 heartbeat(locked_at)는 tail 대기 중에도 뛰므로 별개다. */
+  async markInput(exec: Queryable, jobId: string): Promise<void> {
+    await exec.query(`UPDATE job SET last_input_at=now(), updated_at=now() WHERE id=$1`, [jobId]);
+  }
+
+  async setCaptureError(exec: Queryable, meetingId: string, err: object): Promise<void> {
+    await exec.query(`UPDATE meeting SET capture_error=$2::jsonb WHERE id=$1`,
+      [meetingId, JSON.stringify(err)]);
+  }
+
   async findUtterances(exec: Queryable, meetingId: string, afterSeq: number): Promise<LiveUtteranceRow[]> {
     const { rows } = await exec.query<LiveUtteranceRow>(
       `SELECT lu.id, lu.seq, lu.start_ms, lu.end_ms, lu.text, lu.speaker_id,

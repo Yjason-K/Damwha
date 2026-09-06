@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post, Query, Req } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { LiveService } from './live.service';
 
@@ -42,6 +42,19 @@ export class LiveController {
   })
   @HttpCode(200)
   stop(@Param('id') id: string) { return this.service.stop(id); }
+
+  @Post(':id/live/audio')
+  @ApiOperation({
+    summary: '라이브 PCM 청크 append',
+    description:
+      '16 kHz mono int16 raw PCM 32768바이트(1.024초)를 이어 붙인다. X-Audio-Offset은 PCM 바이트 '
+      + '오프셋(헤더 44바이트 제외). 불일치는 409 + expected_offset이라 ACK가 유실돼도 재동기화된다. '
+      + '동시에 하나만 in-flight로 보내야 한다 — HTTP 완료 순서는 전송 순서를 보장하지 않는다.',
+  })
+  @HttpCode(200)
+  append(@Param('id') id: string, @Req() req: { headers: Record<string, unknown>; body: Buffer }) {
+    return this.service.appendAudio(id, req.headers, req.body);
+  }
 
   @Get(':id/live')
   @ApiOperation({ summary: '라이브 발화 조회 (seq 커서)' })

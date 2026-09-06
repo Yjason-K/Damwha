@@ -200,7 +200,7 @@ payload를 `unsupported_payload_version`으로 영구 실패시킨다. §8을 �
 POST /meetings/:id/live/audio
   Content-Type: application/octet-stream
   X-Audio-Offset:  <이 청크가 시작하는 PCM 바이트 오프셋>
-  X-Capture-Time:  <이 청크의 마지막 프레임을 캡처한 시각. 클라이언트 Date.now() ms>
+  X-Capture-Elapsed:  <캡처 시작부터 이 청크 끝까지 경과한 ms>
   body: 32768 바이트 (512샘플 프레임 32개 = 1.024초)
 
 200 { accepted_offset, expected_offset }
@@ -242,10 +242,11 @@ POST /meetings/:id/live/audio
 누적 샘플 수도 답이 아니다. 슬립 중에는 AudioContext가 멈춰 샘플과 바이트가 함께 멈추므로
 갭 정보가 없다. 필요한 것은 **캡처 시점의 벽시계**다.
 
-서버는 이전 청크와 이번 청크의 `X-Capture-Time` 차이를, 그 사이에 들어온 PCM의 재생 시간
-(`Δoffset / 32000`초)과 비교한다. 전자가 크게 앞서면 그만큼 시간이 사라진 것이고,
-`meeting.capture_error`에 갭 구간을 남긴다. 클라이언트 시계를 **델타로만** 쓰므로 절대 시각의
-정확성은 요구하지 않는다.
+서버는 같은 요청 안에서 `X-Capture-Elapsed`와 그 청크까지의 오디오 재생 시간
+(`accepted_offset / 32` ms)을 비교한다. 전자가 `GAP_THRESHOLD_MS`(2초)보다 앞서면 그만큼
+시간이 사라진 것이고, `meeting.capture_error`에 남긴다. 이전 청크의 캡처 시각을 저장할
+필요가 없다 — 클라이언트가 자기 경과를 들고 오므로 서버는 두 수를 빼기만 한다. 클라이언트
+시계를 절대 시각으로 믿지 않는다는 성질도 그대로다.
 
 `last_input_at`은 서버 수신 시각으로 갱신한다 — 그것은 갭 판정이 아니라 producer 생존
 판정(§4.7)에 쓰는 값이고, 그 용도에는 수신 시각이 맞다.
@@ -256,7 +257,7 @@ POST /meetings/:id/live/audio
 POST /meetings/:id/live/stop
   X-Audio-Offset: <자투리가 시작하는 PCM 오프셋>
   X-Final-Offset: <최종 PCM 바이트 수>
-  X-Capture-Time: <마지막 프레임 캡처 시각>
+  X-Capture-Elapsed: <캡처 시작부터 이 자투리 끝까지 경과한 ms>
   body: 마지막 자투리 PCM (0바이트 가능, 512샘플 배수가 아닐 수 있음)
 
 200 { meeting_id, job_id, sealed_bytes, outcome: 'stopping' | 'finalized' }

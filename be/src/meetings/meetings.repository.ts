@@ -165,6 +165,27 @@ export class MeetingsRepository {
     );
   }
 
+  /**
+   * 라이브 캡처 실패 — 종결자는 API 하나다. 워커의 get_stop_requested는 job.error를
+   * 보지 않으므로 error만 넣으면 워커가 계속 tail한다 (설계 §7). markCancelled와 같은 모양이지만
+   * 호출 이유(운영자 취소 vs 디스크 I/O 실패)가 달라 별도 메서드로 둔다.
+   */
+  async markFailed(exec: Queryable, id: string, error: object): Promise<void> {
+    await exec.query(
+      `UPDATE meeting SET status='failed', error=$2::jsonb WHERE id=$1`,
+      [id, JSON.stringify(error)],
+    );
+  }
+
+  /** 라이브 첫 청크가 도착한 시각을 녹음 시각으로 찍는다. status 가드는 append가 이미
+   *  recording을 잠그고 확인한 뒤 부르므로 방어적 성격이다. */
+  async setRecordedAt(exec: Queryable, id: string): Promise<void> {
+    await exec.query(
+      `UPDATE meeting SET recorded_at=now() WHERE id=$1 AND status='recording'`,
+      [id],
+    );
+  }
+
   async bumpVersionForReprocess(exec: Queryable, id: string): Promise<number> {
     const { rows } = await exec.query<{ processing_version: number }>(
       `UPDATE meeting SET processing_version = processing_version + 1, status='uploaded', error=NULL
