@@ -36,7 +36,13 @@ export class LiveOrphanService {
   }
 
   async sweep(seconds = ORPHAN_SECONDS): Promise<number> {
-    const candidates = await this.live.findOrphanCandidates(this.db.pool, seconds);
+    let candidates;
+    try {
+      candidates = await this.live.findOrphanCandidates(this.db.pool, seconds);
+    } catch (e) {
+      this.log.warn(`orphan sweep failed to fetch candidates: ${String(e)}`);
+      return 0;
+    }
     let sealed = 0;
     for (const { job_id, meeting_id } of candidates) {
       try {
