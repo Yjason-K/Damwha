@@ -73,6 +73,21 @@ export class LiveRepository {
       [meetingId, JSON.stringify(err)]);
   }
 
+  /**
+   * 버려진 producer 후보. 두 번째 갈래가 필수다 — 브라우저가 /meetings/live 성공 뒤
+   * 첫 POST 전에 죽으면 last_input_at이 NULL이라 첫 갈래에 영원히 안 걸린다.
+   */
+  async findOrphanCandidates(exec: Queryable, seconds: number): Promise<Array<{ job_id: string; meeting_id: string }>> {
+    const { rows } = await exec.query<{ job_id: string; meeting_id: string }>(
+      `SELECT j.id AS job_id, m.id AS meeting_id
+       FROM job j JOIN meeting m ON m.current_job_id = j.id
+       WHERE j.type='live_session' AND m.status='recording' AND j.sealed_bytes IS NULL
+         AND ( j.last_input_at <  now() - ($1||' seconds')::interval
+            OR (j.last_input_at IS NULL AND j.created_at < now() - ($1||' seconds')::interval) )`,
+      [String(seconds)]);
+    return rows;
+  }
+
   async findUtterances(exec: Queryable, meetingId: string, afterSeq: number): Promise<LiveUtteranceRow[]> {
     const { rows } = await exec.query<LiveUtteranceRow>(
       `SELECT lu.id, lu.seq, lu.start_ms, lu.end_ms, lu.text, lu.speaker_id,

@@ -1,6 +1,7 @@
 import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common';
 import * as express from 'express';
 import { LiveController } from './live.controller';
+import { LiveOrphanService } from './live-orphan.service';
 import { LiveRepository } from './live.repository';
 import { LiveService, CHUNK_BYTES } from './live.service';
 import { MeetingsModule } from '../meetings/meetings.module';
@@ -10,7 +11,8 @@ import { SystemModule } from '../system/system.module';
 @Module({
   imports: [MeetingsModule, SettingsModule, SystemModule],
   controllers: [LiveController],
-  providers: [LiveRepository, LiveService],
+  providers: [LiveRepository, LiveService, LiveOrphanService],
+  exports: [LiveOrphanService],
 })
 export class LiveModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
