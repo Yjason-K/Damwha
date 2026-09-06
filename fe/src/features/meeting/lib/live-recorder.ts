@@ -162,21 +162,30 @@ export class LiveRecorder {
       },
     });
     const ctx = new AudioContext({ sampleRate: SR });
-    // 요청한 sampleRate를 user agent가 만족하지 않을 수 있다. 48 kHz PCM에 16 kHz 헤더를
-    // 씌우면 느리고 낮아진 정본이 조용히 만들어진다 (설계 §2.3).
-    if (ctx.sampleRate !== SR) {
-      await ctx.close();
-      this.stream.getTracks().forEach((t) => t.stop());
-      throw new Error(`browser gave ${ctx.sampleRate} Hz, need ${SR} Hz`);
-    }
+    // this.ctx를 여기서 바로 세운다 — 아래 어느 단계에서 던지든 teardown()이 이 ctx를
+    // 찾아 닫을 수 있어야 한다. 마이크를 얻은 뒤의 실패를 전부 같은 teardown()으로
+    // 모은다 — 손으로 세 벌을 따로 만들면 다음 실패 경로가 하나 빠지기 쉽다.
     this.ctx = ctx;
-    await ctx.audioWorklet.addModule(pcmWorkletUrl);
-    const node = new AudioWorkletNode(ctx, "pcm-processor");
-    node.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
-      const chunk = this.chunks.push(new Int16Array(e.data));
-      if (chunk) this.enqueue(chunk);
-    };
-    ctx.createMediaStreamSource(this.stream).connect(node);
+    try {
+      // 요청한 sampleRate를 user agent가 만족하지 않을 수 있다. 48 kHz PCM에 16 kHz
+      // 헤더를 씌우면 느리고 낮아진 정본이 조용히 만들어진다 (설계 §2.3).
+      if (ctx.sampleRate !== SR) {
+        throw new Error(`browser gave ${ctx.sampleRate} Hz, need ${SR} Hz`);
+      }
+      await ctx.audioWorklet.addModule(pcmWorkletUrl);
+      const node = new AudioWorkletNode(ctx, "pcm-processor");
+      node.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
+        const chunk = this.chunks.push(new Int16Array(e.data));
+        if (chunk) this.enqueue(chunk);
+      };
+      ctx.createMediaStreamSource(this.stream).connect(node);
+    } catch (err) {
+      // 워크릿 로딩 실패든 sample rate 불일치든, 마이크와 AudioContext를 켜 둔 채로
+      // start()가 실패하면 브라우저 녹음 표시등은 계속 켜져 있는데 아무것도 잡히지
+      // 않는다 — 단순 누수보다 나쁜, 조용히 잘못된 사용자 신뢰다.
+      await this.teardown();
+      throw err;
+    }
     // ended는 장치 제거·권한 회수다. 이걸 안 보면 워크릿이 무음을 계속 내보내 실제
     // 대화가 무음으로 기록된 채 회의가 정상 완료로 표시된다 (설계 §5.3).
     this.stream

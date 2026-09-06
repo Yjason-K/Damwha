@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CHUNK_BYTES } from "./pcm-convert";
+import { CHUNK_BYTES, SR } from "./pcm-convert";
 import { checkCaptureSupport, LiveRecorder } from "./live-recorder";
 
 const chunkOf = (n = CHUNK_BYTES) => new Uint8Array(n);
@@ -180,5 +180,47 @@ describe("checkCaptureSupport", () => {
   it("is ok when a device exists and permission is granted", async () => {
     stubMediaDevices({ permissionState: "granted" });
     expect(await checkCaptureSupport()).toEqual({ ok: true });
+  });
+});
+
+/**
+ * start()가 마이크는 얻었지만 워크릿 로딩에서 실패하는 경로. 여기서 정리를 빼먹으면
+ * 마이크가 계속 켜진 채로 남는다 — 사용자는 브라우저 녹음 표시등을 보고 여전히 녹음
+ * 중이라 믿지만 아무것도 잡히지 않는다, 단순 누수보다 나쁜 결과다.
+ */
+describe("LiveRecorder start() cleanup on worklet failure", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    Reflect.deleteProperty(navigator, "mediaDevices");
+  });
+
+  it("stops the mic stream and closes the AudioContext when addModule rejects", async () => {
+    const stopTrack = vi.fn();
+    const stream = {
+      getTracks: () => [{ stop: stopTrack }],
+      getAudioTracks: () => [{ addEventListener: vi.fn() }],
+    } as unknown as MediaStream;
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue(stream) },
+    });
+
+    const close = vi.fn().mockResolvedValue(undefined);
+    const addModule = vi
+      .fn()
+      .mockRejectedValue(new Error("worklet load failed"));
+    class FakeAudioContext {
+      sampleRate = SR;
+      audioWorklet = { addModule };
+      close = close;
+      createMediaStreamSource = vi.fn();
+    }
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+
+    const r = new LiveRecorder({ postChunk: vi.fn() });
+    // 에러의 정체(메시지)가 그대로 드러나야 한다 — 삼켜지거나 다른 에러로 바뀌면 안 된다.
+    await expect(r.start("mtg_1")).rejects.toThrow("worklet load failed");
+    expect(stopTrack).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
   });
 });
