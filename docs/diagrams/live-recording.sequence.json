@@ -233,7 +233,8 @@
       "title": "봉인의 권위는 DB에 있다",
       "items": [
         "job.sealed_bytes 커밋이 곧 봉인 — 파일 크기가 아니다",
-        "헤더 재작성은 락 밖 best-effort, repair_streaming_header가 그물"
+        "헤더 재작성은 락 밖 best-effort, repair_streaming_header가 그물",
+        "finalize는 워커가 running일 때만 — 그 외엔 API가 한다(stop·orphan 스윕)"
       ]
     },
     {

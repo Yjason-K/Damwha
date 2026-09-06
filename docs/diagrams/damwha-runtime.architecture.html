@@ -5036,12 +5036,12 @@
         <path data-edge-from="browser" data-edge-to="spa" data-edge-label="녹음 · 업로드" data-edge-key="0" data-edge-id="browser-to-spa" data-composition-points="170,332;280,332" d="M 170 332 L 280 332" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="spa" data-edge-to="api" data-edge-label="REST · multipart" data-edge-key="1" data-edge-id="spa-to-api" data-composition-points="420,332;530,332" d="M 420 332 L 530 332" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="api" data-edge-to="db" data-edge-label="raw SQL · job 적재" data-edge-key="2" data-edge-id="api-to-db" data-composition-points="695,332;800,332" d="M 695 332 L 800 332" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="api" data-edge-to="storage" data-edge-label="오디오 저장" data-edge-key="3" data-edge-id="api-to-storage" data-composition-points="612.5,364;612.5,480" d="M 612.5 364 L 612.5 480" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="api" data-edge-to="storage" data-edge-label="오디오 저장 · live.wav의 유일한 writer" data-edge-key="3" data-edge-id="api-to-storage" data-composition-points="612.5,364;612.5,480" d="M 612.5 364 L 612.5 480" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="api" data-edge-to="embed" data-edge-label="POST /embed · 쿼리 임베딩" data-edge-key="4" data-edge-id="api-to-embed" data-composition-points="612.5,300;612.5,184" d="M 612.5 300 L 612.5 184" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="supervisor" data-edge-to="db" data-edge-label="peek_queued · SKIP LOCKED" data-edge-key="5" data-edge-id="supervisor-to-db" data-composition-points="1080,202;1025,202;1025,325;970,325" d="M 1080 202 L 1033 202 Q 1025 202 1025 210 L 1025 317 Q 1025 325 1017 325 L 970 325" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="supervisor" data-edge-to="child" data-edge-label="job 1건당 spawn" data-edge-key="6" data-edge-id="supervisor-to-child" data-composition-points="1170,234;1170,420" d="M 1170 234 L 1170 420" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="child" data-edge-to="db" data-edge-label="claim · persist 소유권 가드" data-edge-key="7" data-edge-id="child-to-db" data-composition-points="1080,445;1025,445;1025,339;970,339" d="M 1080 445 L 1033 445 Q 1025 445 1025 437 L 1025 347 Q 1025 339 1017 339 L 970 339" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="child" data-edge-to="storage" data-edge-label="오디오 읽기 · live.wav 기록" data-edge-key="8" data-edge-id="child-to-storage" data-composition-points="1080,459;887.5,459;887.5,512;695,512" d="M 1080 459 L 895.5 459 Q 887.5 459 887.5 467 L 887.5 504 Q 887.5 512 879.5 512 L 695 512" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="child" data-edge-to="storage" data-edge-label="오디오 읽기 · live.wav tail" data-edge-key="8" data-edge-id="child-to-storage" data-composition-points="1080,459;887.5,459;887.5,512;695,512" d="M 1080 459 L 895.5 459 Q 887.5 459 887.5 467 L 887.5 504 Q 887.5 512 879.5 512 L 695 512" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="child" data-edge-to="llm" data-edge-label="lens · summary" data-edge-key="9" data-edge-id="child-to-llm" data-composition-points="1170,484;1170,600" d="M 1170 484 L 1170 600" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Components -->
@@ -5166,9 +5166,9 @@
           <rect x="699.3" y="312" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
           <text x="747.5" y="322" class="t-backend" font-size="8" text-anchor="middle">raw SQL · job 적재</text>
         </g>
-        <g data-detail="context" data-edge-from="api" data-edge-to="storage" data-edge-label="오디오 저장" data-edge-key="3" data-edge-id="api-to-storage">
-          <rect x="581.1" y="368" width="62.8" height="14" rx="3" class="c-mask"/>
-          <text x="612.5" y="378" class="t-muted" font-size="8" text-anchor="middle">오디오 저장</text>
+        <g data-detail="context" data-edge-from="api" data-edge-to="storage" data-edge-label="오디오 저장 · live.wav의 유일한 writer" data-edge-key="3" data-edge-id="api-to-storage">
+          <rect x="516.3" y="368" width="192.4" height="14" rx="3" class="c-mask"/>
+          <text x="612.5" y="378" class="t-muted" font-size="8" text-anchor="middle">오디오 저장 · live.wav의 유일한 writer</text>
         </g>
         <g data-detail="context" data-edge-from="api" data-edge-to="embed" data-edge-label="POST /embed · 쿼리 임베딩" data-edge-key="4" data-edge-id="api-to-embed">
           <rect x="547.5" y="280" width="130" height="14" rx="3" class="c-mask"/>
@@ -5186,9 +5186,9 @@
           <rect x="955.2" y="372" width="139.6" height="14" rx="3" class="c-mask"/>
           <text x="1025" y="382" class="t-backend" font-size="8" text-anchor="middle">claim · persist 소유권 가드</text>
         </g>
-        <g data-detail="context" data-edge-from="child" data-edge-to="storage" data-edge-label="오디오 읽기 · live.wav 기록" data-edge-key="8" data-edge-id="child-to-storage">
+        <g data-detail="context" data-edge-from="child" data-edge-to="storage" data-edge-label="오디오 읽기 · live.wav tail" data-edge-key="8" data-edge-id="child-to-storage">
           <rect x="817.7" y="465.5" width="139.6" height="14" rx="3" class="c-mask"/>
-          <text x="887.5" y="475.5" class="t-muted" font-size="8" text-anchor="middle">오디오 읽기 · live.wav 기록</text>
+          <text x="887.5" y="475.5" class="t-muted" font-size="8" text-anchor="middle">오디오 읽기 · live.wav tail</text>
         </g>
         <g data-detail="context" data-edge-from="child" data-edge-to="llm" data-edge-label="lens · summary" data-edge-key="9" data-edge-id="child-to-llm">
           <rect x="1131.4" y="488" width="77.2" height="14" rx="3" class="c-mask"/>
@@ -5416,6 +5416,7 @@
           <li>&bull; API와 워커 사이 통신은 job 테이블 하나뿐 — HTTP 없음</li>
           <li>&bull; 같은 payload를 zod(TS)와 pydantic(PY)이 각각 검증</li>
           <li>&bull; app_setting.worker_capabilities는 워커가 쓰고 API는 읽기만</li>
+          <li>&bull; 라이브 오디오는 API만 쓴다 — 워커는 자라는 파일을 읽기만 한다</li>
         </ul>
       </div>
 

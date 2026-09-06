@@ -49,7 +49,7 @@ getUserMedia
 ```
 
 **시각 자료:** [`docs/diagrams/live-recording.sequence.html`](../../diagrams/live-recording.sequence.html)
-— 브라우저를 열면 검색·경로 추적이 되는 단일 파일. (※ 아래 "리뷰 전 확인" 참고)
+— 브라우저를 열면 검색·경로 추적이 되는 단일 파일.
 
 ### 왜 이 모양인가 — 세 가지 결정
 
@@ -169,20 +169,19 @@ failed = reaper가 워커를 잃었다고 판정). 워커 생존 판정은 **rea
 
 ---
 
-## 리뷰 전 확인이 필요한 것 하나
+## 다이어그램
 
-**`docs/diagrams/` 다섯 파일(+30,000줄)이 이 PR에 섞여 있고, 제가 실수로 넣었습니다.**
+[`docs/diagrams/`](../../diagrams/)에 archify 산출물 둘이 함께 들어간다. `.json`이 정본이고
+`.html`은 거기서 결정적으로 컴파일된 의존성 없는 단일 파일이다(브라우저로 열면 검색·경로
+추적·PNG/SVG 내보내기가 된다). 재생성 절차는 [README](../../diagrams/README.md)에 있다.
 
-병렬 세션이 오늘 20:14–20:18에 만들어 작업 트리에 두었던 archify 산출물인데, 제 `git add -A`가
-`32f72bb`·`f396dfa`(각각 `capture_error` 배선과 `reapStale` 수정) 커밋에 함께 담았습니다.
-파일 자체는 이 기능을 설명하는 좋은 문서이고 README와 재생성 절차까지 있지만,
+- `live-recording.sequence.html` — 이 PR의 한 세션 시간 순서
+- `damwha-runtime.architecture.html` — 런타임 전체와 `job` 테이블 계약
 
-- 커밋 메시지와 내용이 어긋나고,
-- 700KB HTML × 2가 PR diff의 절반을 넘습니다(전체 57k 중 30k).
-
-**세 선택지:** ①그대로 둔다 ②별도 커밋으로 분리한다(최근 4커밋 rewrite) ③HTML은
-`.gitignore`하고 JSON만 남긴다(README에 재생성 절차가 있다). 다른 세션의 작업물이라 임의로
-지우지 않고 남겨 뒀습니다.
+머지 전에 아키텍처 다이어그램에서 **사실 오류 하나를 고쳤다**: `워커 child → 스토리지`가
+"live.wav 기록"이라고 말하고 있었는데, 워커는 라이브 오디오를 쓰지 않는다. 이 PR이 뒤집은
+바로 그 지점이라("API가 유일한 writer, 워커는 tail") 다이어그램이 옛 아키텍처를 주장하고
+있었다. `live.wav tail`로 고치고 계약 카드에 그 방향을 한 줄 박았다.
 
 ---
 

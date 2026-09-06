@@ -213,7 +213,7 @@
       "id": "api-to-storage",
       "from": "api",
       "to": "storage",
-      "label": "오디오 저장",
+      "label": "오디오 저장 · live.wav의 유일한 writer",
       "labelDy": 24
     },
     {
@@ -247,7 +247,7 @@
       "id": "child-to-storage",
       "from": "child",
       "to": "storage",
-      "label": "오디오 읽기 · live.wav 기록"
+      "label": "오디오 읽기 · live.wav tail"
     },
     {
       "id": "child-to-llm",
@@ -265,7 +265,8 @@
       "items": [
         "API와 워커 사이 통신은 job 테이블 하나뿐 — HTTP 없음",
         "같은 payload를 zod(TS)와 pydantic(PY)이 각각 검증",
-        "app_setting.worker_capabilities는 워커가 쓰고 API는 읽기만"
+        "app_setting.worker_capabilities는 워커가 쓰고 API는 읽기만",
+        "라이브 오디오는 API만 쓴다 — 워커는 자라는 파일을 읽기만 한다"
       ]
     },
     {

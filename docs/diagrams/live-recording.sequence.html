@@ -5451,6 +5451,7 @@
         <ul>
           <li>&bull; job.sealed_bytes 커밋이 곧 봉인 — 파일 크기가 아니다</li>
           <li>&bull; 헤더 재작성은 락 밖 best-effort, repair_streaming_header가 그물</li>
+          <li>&bull; finalize는 워커가 running일 때만 — 그 외엔 API가 한다(stop·orphan 스윕)</li>
         </ul>
       </div>
 
