@@ -592,9 +592,13 @@ pnpm dev               # 별 터미널
    표에 적는다).
 4. `meetings/<id>/live.wav`가 자라는지, 종료 후 `ffprobe`로 duration이 실제와 맞는지 본다.
 5. 종료 후 회의가 `uploaded` → `processing` → `done`으로 가는지 본다.
-6. **크래시 테스트:** 녹음 중 API를 `kill -9`하고 다시 띄운다. 브라우저가 409로 재동기화하고
+6. `meeting.capture_error`를 조회해 **NULL**인지 본다(`psql`이든 API 응답이든). 정상 녹음인데
+   이 값이 채워져 있으면 `X-Capture-Elapsed`가 캡처 시각이 아니라 전송 시각으로 새고 있다는
+   뜻이다(설계 §3.3.2가 막으려던 오탐 `capture_gap`) — 시계를 되짚어 원인을 찾는 대신 이 한
+   줄이 곧바로 잡아낸다.
+7. **크래시 테스트:** 녹음 중 API를 `kill -9`하고 다시 띄운다. 브라우저가 409로 재동기화하고
    이어지는지 본다.
-7. **탭 닫기 테스트:** 녹음 중 탭을 닫고 90초 뒤 회의가 `uploaded` + `capture_error=producer_abandoned`가
+8. **탭 닫기 테스트:** 녹음 중 탭을 닫고 90초 뒤 회의가 `uploaded` + `capture_error=producer_abandoned`가
    되는지 본다.
 
 - 로그의 `latency_ms=`가 세그먼트 끝 → `live_utterance` INSERT 지연이다. 실측(날짜, 머신, 값)을 아래에 적는다.
