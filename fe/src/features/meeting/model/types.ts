@@ -144,6 +144,12 @@ export type Meeting = {
   recordedAtIso: string;
   /** status가 failed일 때의 사유. 운영자 취소는 code === "cancelled". 없으면 null. */
   error: JsonError | null;
+  /**
+   * 라이브 캡처 이력(예: producer_abandoned) — error와 분리된 이유는 최종 처리가 성공해
+   * 회의가 done이 된 뒤에도 "브라우저 연결이 끊겨 여기까지 녹음됐다"는 사실은 남아야
+   * 하기 때문이다. 없으면 null.
+   */
+  captureError: JsonError | null;
   audioUrl: string;
   totalSeconds: number;
   speakers: Record<number, SpeakerRef>;

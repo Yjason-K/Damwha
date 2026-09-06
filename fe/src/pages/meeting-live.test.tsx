@@ -18,6 +18,11 @@ import type {
   WireMeetingDetail,
   WireUtterance,
 } from "@/features/meeting/api/types";
+import {
+  clearLiveCapture,
+  createLiveRecorder,
+} from "@/features/meeting/lib/live-session";
+import { SR } from "@/features/meeting/lib/pcm-convert";
 
 const meeting = (o: Partial<WireMeeting>): WireMeeting => ({
   id: "m1",
@@ -128,8 +133,42 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
+  clearLiveCapture("m1");
+  Reflect.deleteProperty(navigator, "mediaDevices");
 });
+
+/**
+ * "종료" 버튼이 이제 recorder.stop()을 거치므로, 실제로 시작된 레코더를 이 탭에
+ * 등록해 둬야 그 경로를 태운다. AudioContext/AudioWorkletNode는 jsdom에 없어
+ * 최소한으로 흉내만 낸다 — 오디오가 실제로 흐르는지는 lib/live-recorder.test.ts가
+ * 이미 덮는다; 여기서 보는 것은 "종료 클릭 → recorder.stop() → 올바른 헤더/바디로
+ * POST"라는 배선이다.
+ */
+function stubMicAndStartRecorder(meetingId: string) {
+  const stream = {
+    getTracks: () => [{ stop: vi.fn() }],
+    getAudioTracks: () => [{ addEventListener: vi.fn() }],
+  };
+  Object.defineProperty(navigator, "mediaDevices", {
+    configurable: true,
+    value: { getUserMedia: vi.fn().mockResolvedValue(stream) },
+  });
+  class FakeAudioContext {
+    sampleRate = SR;
+    audioWorklet = { addModule: vi.fn().mockResolvedValue(undefined) };
+    createMediaStreamSource = vi.fn().mockReturnValue({ connect: vi.fn() });
+    close = vi.fn().mockResolvedValue(undefined);
+  }
+  class FakeAudioWorkletNode {
+    port: { onmessage: unknown } = { onmessage: null };
+  }
+  vi.stubGlobal("AudioContext", FakeAudioContext);
+  vi.stubGlobal("AudioWorkletNode", FakeAudioWorkletNode);
+  const live = createLiveRecorder(meetingId);
+  return live.recorder.start(meetingId);
+}
 
 let getSpy: { mock: { calls: unknown[][] } };
 const statusCalls = () =>
@@ -170,16 +209,47 @@ test("녹음 중인 회의는 라이브 배너와 라이브 전사를 그리고 
   ).toBeInTheDocument();
 });
 
-test("종료를 누르면 stop을 호출하고 버튼이 잠긴다", async () => {
+test("종료를 누르면 recorder.stop()을 거쳐 오프셋·꼬리를 실은 stop을 보낸다", async () => {
+  await stubMicAndStartRecorder("m1");
   const post = vi.spyOn(apiClient, "post").mockResolvedValue({
     data: { meeting_id: "m1", job_id: "job_1", outcome: "stopping" },
   } as never);
   renderAt("/meetings/m1");
   const btn = await screen.findByRole("button", { name: "종료" });
   btn.click();
+  // 실제 마이크가 없어 청크는 하나도 안 쌓였으므로(오프셋 0) 꼬리는 빈 바디다 — 이
+  // 테스트가 보는 것은 "예전처럼 몸통 없이 부르지 않는다"는 배선이다(설계 §5.4).
   await waitFor(() =>
-    expect(post).toHaveBeenCalledWith("/meetings/m1/live/stop"),
+    expect(post).toHaveBeenCalledWith(
+      "/meetings/m1/live/stop",
+      expect.any(Uint8Array),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "Content-Type": "application/octet-stream",
+          "X-Audio-Offset": "0",
+          "X-Final-Offset": "0",
+        }),
+      }),
+    ),
   );
+});
+
+test("이 탭에서 시작하지 않은 녹음은 종료 대신 안내만 한다 — 오프셋을 몰라 꼬리를 보낼 수 없다", async () => {
+  const post = vi.spyOn(apiClient, "post");
+  renderAt("/meetings/m1");
+  const btn = await screen.findByRole("button", { name: "종료" });
+  btn.click();
+  // 새로고침 등으로 이 탭에 레코더가 없으면 마지막으로 받아준 오프셋을 아무도 모른다
+  // — 예전처럼 몸통 없이 stop을 부르면 400이고, cancel로 대체하면 이미 녹음된 내용을
+  // 파괴적으로 버린다. 그래서 여기선 네트워크를 아예 부르지 않는다(안내는 토스트 —
+  // 이 테스트는 실제 앱 Toaster를 마운트하지 않는 스텁 라우터라 문구까지는 보지 않는다).
+  await new Promise((r) => setTimeout(r, 0));
+  expect(post).not.toHaveBeenCalledWith(
+    "/meetings/m1/live/stop",
+    expect.anything(),
+    expect.anything(),
+  );
+  expect(post).not.toHaveBeenCalledWith("/meetings/m1/cancel");
 });
 
 test("실패한 회의에 라이브 행이 남아 있으면 읽기 전용 미리보기를 그린다", async () => {

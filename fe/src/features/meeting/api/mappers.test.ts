@@ -873,6 +873,27 @@ describe("toMeetingDetail — 요약", () => {
   });
 });
 
+describe("toMeetingDetail — captureError", () => {
+  it("capture_error를 그대로 옮긴다 — done이 된 뒤에도 남아야 하는 캡처 이력이다", () => {
+    const detail = toMeetingDetail({
+      ...makeDetail(),
+      capture_error: {
+        code: "producer_abandoned",
+        message: "the browser stopped sending audio",
+      },
+    });
+    expect(detail.captureError).toEqual({
+      code: "producer_abandoned",
+      message: "the browser stopped sending audio",
+    });
+  });
+
+  it("capture_error가 없으면 null이다", () => {
+    const detail = toMeetingDetail(makeDetail());
+    expect(detail.captureError).toBeNull();
+  });
+});
+
 describe("mapMeetingLenses", () => {
   const SPEAKERS = {
     1: { id: "spk_1", name: "김영재", role: "", spk: 1 },

@@ -48,6 +48,12 @@ export type WireMeeting = {
   current_job_id: string | null;
   processing_version: number;
   error: JsonError | null;
+  /**
+   * 라이브 캡처가 어떻게 얻어졌는가(예: producer_abandoned, capture_gap) — error("이 회의의
+   * 처리가 실패했는가")와는 별개다. `SELECT *`로 나오는 필드라 실제 응답엔 항상 있지만,
+   * 이 필드가 생기기 전에 쓰인 기존 테스트 픽스처를 깨지 않으려고 optional로 둔다.
+   */
+  capture_error?: JsonError | null;
   created_at: string;
 };
 
@@ -151,6 +157,8 @@ export type MeetingStatusResponse = {
   stage: string | null;
   progress: number | null;
   error: JsonError | null;
+  /** WireMeeting.capture_error와 같은 컬럼 — findStatus도 SELECT m.capture_error를 낸다. */
+  capture_error?: JsonError | null;
   summary: SummaryGenerationStatus | null;
   search_index: SearchIndexStatus | null;
 };

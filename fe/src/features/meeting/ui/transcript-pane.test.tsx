@@ -41,6 +41,7 @@ function meeting(over: Partial<Meeting> = {}): Meeting {
     summaryStatus: "done",
     summaryError: null,
     error: null,
+    captureError: null,
     status: "done",
     recordedAtIso: "2026-08-11T10:00:00.000Z",
     audioUrl: "",

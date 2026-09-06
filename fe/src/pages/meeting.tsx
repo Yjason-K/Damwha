@@ -25,11 +25,19 @@ import type {
   MeetingStatusResponse,
   SearchIndexStatus,
 } from "@/features/meeting/api/types";
+import type { RecorderStatus } from "@/features/meeting/lib/live-recorder";
+import {
+  clearLiveCapture,
+  getLiveRecorder,
+} from "@/features/meeting/lib/live-session";
 import type { Meeting } from "@/features/meeting/model/types";
 import { CenterState, Spinner } from "@/features/meeting/ui/center-state";
 import { Icon } from "@/features/meeting/ui/icons";
 import { InsightPane } from "@/features/meeting/ui/insight-pane";
-import { LiveBanner } from "@/features/meeting/ui/live-banner";
+import {
+  CaptureErrorNotice,
+  LiveBanner,
+} from "@/features/meeting/ui/live-banner";
 import { LiveTranscript } from "@/features/meeting/ui/live-transcript";
 import {
   adjacentUtterance,
@@ -290,6 +298,29 @@ function MeetingView({
   const cancelLive = useCancelProcessing();
   const liveItems = liveState?.items ?? [];
 
+  // 이 탭이 다이얼로그에서 시작한 브라우저 레코더 — 상태를 배너에 잇고, 종료가
+  // recorder.stop()을 부를 수 있게 한다. 회의를 만들지 않고 이 화면에 바로 들어왔거나
+  // (새로고침 등) 다른 탭에서 시작한 녹음이면 없다.
+  const [recorderStatus, setRecorderStatus] =
+    React.useState<RecorderStatus | null>(null);
+  React.useEffect(() => {
+    if (meeting?.status !== "recording") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setRecorderStatus(null);
+      return;
+    }
+    const live = getLiveRecorder(meeting.id);
+    if (!live) {
+      setRecorderStatus(null);
+      return;
+    }
+    live.recorder.onStatus = setRecorderStatus;
+    setRecorderStatus(live.recorder.status);
+    return () => {
+      live.recorder.onStatus = () => {};
+    };
+  }, [meeting?.id, meeting?.status]);
+
   useSyncSummaryStatus(
     meetingId,
     meeting?.summaryStatus,
@@ -297,6 +328,38 @@ function MeetingView({
   );
 
   const { toast } = useToast();
+
+  const handleStopLive = () => {
+    if (!meeting) return;
+    const live = getLiveRecorder(meeting.id);
+    if (!live) {
+      // 이 탭에서 시작한 녹음이 아니면(새로고침 등) 꼬리를 보낼 방법이 없다 — 오프셋을
+      // 아는 쪽은 그 레코더뿐이다. 여기선 강제로 취소(파괴적)하는 대신 안내만 한다;
+      // 연결이 끊기면 orphan sweep이 90초 안에 정상 finalize한다(설계 §4.7).
+      toast({
+        variant: "error",
+        title: "이 화면에서는 종료할 수 없어요",
+        description:
+          "녹음을 시작한 브라우저 탭에서 종료해 주세요. 연결이 끊기면 자동으로 정리돼요.",
+      });
+      return;
+    }
+    stopLive.mutate(
+      {
+        id: meeting.id,
+        stop: async () => {
+          await live.recorder.stop();
+          return live.stopOutcome.current;
+        },
+      },
+      {
+        onSuccess: (r) => {
+          clearLiveCapture(meeting.id);
+          if (r?.outcome === "discarded") navigate("/", { replace: true });
+        },
+      },
+    );
+  };
 
   // Real audio transport: keep the element in sync with speed / play state.
   // metaReady를 deps에 두는 이유: 첫 렌더에는 meeting이 없어 <audio>도 없고,
@@ -513,20 +576,18 @@ function MeetingView({
             recordedAtIso={meeting.recordedAtIso}
             stage={liveState?.stage ?? null}
             heartbeatAt={liveState?.heartbeatAt ?? null}
-            onStop={() =>
-              stopLive.mutate(meeting.id, {
-                onSuccess: (r) => {
-                  if (r.outcome === "discarded")
-                    navigate("/", { replace: true });
-                },
-              })
-            }
+            onStop={handleStopLive}
             onCancel={() => cancelLive.mutate(meeting.id)}
             stopping={stopLive.isPending}
             cancelling={cancelLive.isPending}
+            backlogMs={recorderStatus?.backlogMs}
+            failed={recorderStatus?.failed}
           />
         ) : meeting && meeting.status !== "done" ? (
           <ProcessingBanner meeting={meeting} status={procStatus} />
+        ) : null}
+        {meeting && meeting.status === "done" ? (
+          <CaptureErrorNotice error={meeting.captureError} />
         ) : null}
         {meeting &&
         meeting.status === "done" &&

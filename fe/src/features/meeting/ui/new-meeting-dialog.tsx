@@ -27,6 +27,8 @@ import { OverrideSection } from "@/features/settings/ui/override-section";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/shared/ui/tabs";
 import { useStartLive } from "../api/live";
 import { defaultLiveTitle } from "../lib/default-live-title";
+import { checkCaptureSupport } from "../lib/live-recorder";
+import { createLiveRecorder } from "../lib/live-session";
 
 import { useUploadMeeting } from "../api/meetings";
 import type { SpeakerBounds } from "../api/types";
@@ -46,6 +48,26 @@ function readSource(): MeetingSource {
     return "file";
   }
 }
+
+/**
+ * 실시간 녹음 시작 전 게이트 상태(설계 §5.2). insecure context·권한 거부·장치 없음이면
+ * 아예 회의를 만들지 않는다 — 원 설계에서 회의 중간에 audio_device_failed로 터지던
+ * 실패를 전부 시작 전으로 옮긴다. 통과하면 enumerateDevices() 결과로 장치를 고르게 한다.
+ */
+type CaptureGate =
+  | { reason: "insecure" | "denied" | "no_device" }
+  | { devices: MediaDeviceInfo[] };
+
+const CAPTURE_GATE_MESSAGE: Record<
+  "insecure" | "denied" | "no_device",
+  string
+> = {
+  insecure:
+    "HTTPS에서만 녹음할 수 있어요. localhost 또는 인증서가 있는 주소로 접속해 주세요.",
+  denied:
+    "마이크 권한이 거부돼 있어요. 브라우저의 사이트 설정에서 허용해 주세요.",
+  no_device: "입력 장치를 찾지 못했어요.",
+};
 
 /** 후속 처리 실행 시점 — defer 플래그의 UI 표현. */
 type FollowupTiming = "auto" | "later";
@@ -151,6 +173,10 @@ export function NewMeetingDialog({
   // 오래 걸리므로, 급할 때만 "나중에 실행"으로 돌려 전사까지만 받는다.
   const [deferLens, setDeferLens] = React.useState(false);
   const [deferSummary, setDeferSummary] = React.useState(false);
+  const [gate, setGate] = React.useState<CaptureGate | null>(null);
+  const [gateChecking, setGateChecking] = React.useState(false);
+  const [deviceId, setDeviceId] = React.useState<string | undefined>(undefined);
+  const deviceSelectId = React.useId();
   const upload = useUploadMeeting();
   const start = useStartLive();
   const pending = upload.isPending || start.isPending;
@@ -177,6 +203,9 @@ export function NewMeetingDialog({
     setSpeakers(undefined);
     setDeferLens(false);
     setDeferSummary(false);
+    setGate(null);
+    setGateChecking(false);
+    setDeviceId(undefined);
   };
 
   const handleOpenChange = (next: boolean) => {
@@ -190,6 +219,27 @@ export function NewMeetingDialog({
     e.preventDefault();
     if (pending || !isSpeakerBoundsValid(speakers)) return;
     if (source === "live" && !env.demoMode) {
+      // 게이트를 아직 통과하지 못했으면(첫 클릭, 또는 거부 뒤 재시도) 먼저 확인한다 —
+      // 통과 전에는 회의를 만들지 않는다. 통과하면 장치 선택을 보여주고 아래로 진행하지
+      // 않는다: 사용자가 마이크를 확인/선택한 뒤 같은 버튼을 한 번 더 눌러야 시작된다.
+      if (gateChecking || !gate || "reason" in gate) {
+        if (gateChecking) return;
+        setGateChecking(true);
+        void (async () => {
+          const support = await checkCaptureSupport();
+          if (!support.ok) {
+            setGate({ reason: support.reason });
+            setGateChecking(false);
+            return;
+          }
+          const all = await navigator.mediaDevices.enumerateDevices();
+          const devices = all.filter((d) => d.kind === "audioinput");
+          setGate({ devices });
+          setDeviceId((prev) => prev ?? devices[0]?.deviceId);
+          setGateChecking(false);
+        })();
+        return;
+      }
       start.mutate(
         {
           title: title.trim() || defaultLiveTitle(),
@@ -200,10 +250,24 @@ export function NewMeetingDialog({
         },
         {
           onSuccess: (summary) => {
+            // 마이크는 여기서 연다 — 이 다이얼로그가 권한을 막 확인한 자리다. 리코더는
+            // 회의 상세 화면이 리마운트를 사이에 두고 이어받도록 싱글턴에 등록한다.
+            createLiveRecorder(summary.id)
+              .recorder.start(summary.id, deviceId)
+              .catch((err) => {
+                toast({
+                  variant: "error",
+                  title: "마이크를 열지 못했어요",
+                  description:
+                    err instanceof Error
+                      ? err.message
+                      : "잠시 후 다시 시도해 주세요.",
+                });
+              });
             toast({
               variant: "success",
               title: "녹음 시작",
-              description: "마이크가 준비되면 발화가 실시간으로 표시돼요.",
+              description: "발화가 실시간으로 표시돼요.",
             });
             resetForm();
             onOpenChange(false);
@@ -370,15 +434,47 @@ export function NewMeetingDialog({
               </div>
             </TabsContent>
             {!env.demoMode && (
-              <TabsContent value="live">
-                <p className="text-sm text-[color:var(--text-secondary)]">
-                  서버로 사용하는 Mac의 마이크로 녹음해요. 접속한 기기의
-                  마이크가 아닐 수 있어요.
-                </p>
-                <p className="mt-2 text-sm text-[color:var(--text-muted)]">
-                  녹음 시작을 누르면 발화가 실시간으로 표시되고, 종료 후 화자
-                  분리와 전사가 진행돼요.
-                </p>
+              <TabsContent value="live" className="flex flex-col gap-3">
+                <div>
+                  <p className="text-sm text-[color:var(--text-secondary)]">
+                    이 브라우저의 마이크로 녹음해요. 지금 보고 있는 기기의
+                    마이크를 사용합니다.
+                  </p>
+                  <p className="mt-2 text-sm text-[color:var(--text-muted)]">
+                    녹음 시작을 누르면 발화가 실시간으로 표시되고, 종료 후 화자
+                    분리와 전사가 진행돼요.
+                  </p>
+                </div>
+                {gate && "reason" in gate ? (
+                  <p
+                    role="alert"
+                    className="text-sm text-[color:var(--red-text)]"
+                  >
+                    {CAPTURE_GATE_MESSAGE[gate.reason]}
+                  </p>
+                ) : null}
+                {gate && "devices" in gate ? (
+                  <div className="flex flex-col gap-1.5">
+                    <label
+                      htmlFor={deviceSelectId}
+                      className="text-sm font-medium text-[color:var(--text-secondary)]"
+                    >
+                      마이크
+                    </label>
+                    <select
+                      id={deviceSelectId}
+                      value={deviceId}
+                      onChange={(e) => setDeviceId(e.target.value)}
+                      className="h-8 rounded-sm border border-border bg-card px-2.5 text-base text-foreground outline-none focus-visible:border-[color:var(--border-focus)] focus-visible:[box-shadow:0_0_0_3px_var(--accent-2)]"
+                    >
+                      {gate.devices.map((d, i) => (
+                        <option key={d.deviceId || i} value={d.deviceId}>
+                          {d.label || `마이크 ${i + 1}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
               </TabsContent>
             )}
           </Tabs>
@@ -442,10 +538,11 @@ export function NewMeetingDialog({
             <Button
               type="submit"
               data-tour="upload-submit"
-              loading={pending}
+              loading={pending || gateChecking}
               disabled={
                 (source === "file" && !demoTour && !file) ||
                 pending ||
+                gateChecking ||
                 !isSpeakerBoundsValid(speakers)
               }
             >

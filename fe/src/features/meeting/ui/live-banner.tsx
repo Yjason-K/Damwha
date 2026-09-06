@@ -3,6 +3,8 @@ import * as React from "react";
 import { Button } from "@/shared/ui/button";
 
 import { formatClock } from "../api/mappers";
+import type { JsonError } from "../api/types";
+import { BACKLOG_WARN_MS, type RecorderFailure } from "../lib/live-recorder";
 import { Icon } from "./icons";
 
 /**
@@ -62,6 +64,10 @@ type LiveBannerProps = {
   cancelling?: boolean;
   /** 테스트용 시계. */
   now?: () => number;
+  /** LiveRecorder.status.backlogMs — 미전송 업로드 큐 길이(ms). */
+  backlogMs?: number;
+  /** LiveRecorder가 캡처를 멈췄으면 사유. 서버엔 이미 그때까지의 녹음이 있다. */
+  failed?: RecorderFailure | null;
 };
 
 export function LiveBanner({
@@ -73,12 +79,53 @@ export function LiveBanner({
   stopping,
   cancelling = false,
   now = Date.now,
+  backlogMs = 0,
+  failed = null,
 }: LiveBannerProps) {
   const queued = stage === null;
   const nowMs = useTick(now, !queued);
   const stale = !queued && isHeartbeatStale(heartbeatAt, nowMs);
   const started = new Date(recordedAtIso).getTime();
   const elapsed = Number.isNaN(started) ? 0 : Math.max(0, nowMs - started);
+
+  // 레코더가 스스로 멈춘 경우(버퍼 폭주·장치 끊김) — 워커 heartbeat는 여전히 정상일 수
+  // 있으므로 stale보다 먼저 본다. 서버엔 이미 그때까지의 녹음이 있으니 종료(stop)가
+  // 여전히 맞는 동작이다 — 큐를 비우고(이미 실패했으니 빈 큐) 꼬리를 봉인한다.
+  if (failed) {
+    return (
+      <div
+        role="alert"
+        className="flex items-center gap-2.5 border-b border-[color:var(--red-9)] bg-[var(--red-bg)] px-7 py-2.5 text-sm"
+      >
+        <Icon
+          name="mic"
+          size={15}
+          className="shrink-0 text-[color:var(--red-text)]"
+        />
+        <span className="font-semibold text-[color:var(--red-text)]">
+          녹음이 중단됐어요
+        </span>
+        <span className="text-[color:var(--text-secondary)]">
+          {failed === "buffer_overflow"
+            ? "업로드가 너무 밀려 더 버틸 수 없었어요."
+            : failed === "device_ended"
+              ? "마이크 연결이 끊겼어요."
+              : "업로드에 실패했어요."}{" "}
+          지금까지 녹음된 내용은 남아 있어요.
+        </span>
+        <Button
+          variant="secondary"
+          size="sm"
+          className="ml-auto shrink-0"
+          loading={stopping}
+          disabled={stopping}
+          onClick={onStop}
+        >
+          {stopping ? "종료 중…" : "종료"}
+        </Button>
+      </div>
+    );
+  }
 
   if (stale) {
     return (
@@ -137,9 +184,14 @@ export function LiveBanner({
       </span>
       <span className="text-[color:var(--text-secondary)]">
         {queued
-          ? "워커가 마이크를 열면 녹음이 시작돼요."
+          ? "브라우저가 녹음하고 있어요. 워커가 붙으면 발화가 흘러와요."
           : formatClock(elapsed)}
       </span>
+      {!queued && backlogMs > BACKLOG_WARN_MS ? (
+        <span className="text-[color:var(--red-text)]">
+          업로드가 밀리고 있어요
+        </span>
+      ) : null}
       <Button
         variant="secondary"
         size="sm"
@@ -150,6 +202,35 @@ export function LiveBanner({
       >
         {stopping ? "종료 중…" : queued ? "취소" : "종료"}
       </Button>
+    </div>
+  );
+}
+
+/**
+ * 캡처 이력 알림 — meeting.captureError. error(회의 처리 실패)와는 별개 필드라
+ * 최종 처리가 성공해 회의가 done이 된 뒤에도 계속 보여야 한다(그것이 두 필드를
+ * 나눈 이유다). 지금은 producer_abandoned 하나만 문구가 있다 — capture_gap 등
+ * 다른 code는 아직 표시하지 않는다.
+ */
+export function CaptureErrorNotice({
+  error,
+}: {
+  error: JsonError | null | undefined;
+}) {
+  if (error?.code !== "producer_abandoned") return null;
+  return (
+    <div
+      role="status"
+      className="flex items-center gap-2.5 border-b border-[color:var(--border-subtle)] bg-[var(--surface-panel)] px-7 py-2.5 text-sm"
+    >
+      <Icon
+        name="mic"
+        size={15}
+        className="shrink-0 text-[color:var(--text-faint)]"
+      />
+      <span className="text-[color:var(--text-secondary)]">
+        브라우저 연결이 끊겨 여기까지 녹음됐어요.
+      </span>
     </div>
   );
 }

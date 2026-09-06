@@ -1,7 +1,11 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
-import { LiveBanner, isHeartbeatStale } from "./live-banner";
+import {
+  CaptureErrorNotice,
+  LiveBanner,
+  isHeartbeatStale,
+} from "./live-banner";
 
 afterEach(cleanup);
 
@@ -102,6 +106,73 @@ test("신호가 끊긴 배너의 버튼은 stop이 아니라 cancel을 부른다
   expect(screen.getByRole("alert")).toHaveTextContent("재처리로 그 파일을");
 });
 
+test("업로드 백로그가 30초를 넘으면 경고 문구를 보여준다", () => {
+  render(
+    <LiveBanner
+      recordedAtIso="2026-09-05T10:00:00.000Z"
+      stage="capture"
+      heartbeatAt="2026-09-05T10:00:00.000Z"
+      onStop={() => {}}
+      onCancel={() => {}}
+      stopping={false}
+      now={() => T0}
+      backlogMs={45_000}
+    />,
+  );
+  expect(screen.getByText(/업로드가 밀리고/)).toBeInTheDocument();
+});
+
+test("백로그가 30초 이하면 경고 문구를 보이지 않는다", () => {
+  render(
+    <LiveBanner
+      recordedAtIso="2026-09-05T10:00:00.000Z"
+      stage="capture"
+      heartbeatAt="2026-09-05T10:00:00.000Z"
+      onStop={() => {}}
+      onCancel={() => {}}
+      stopping={false}
+      now={() => T0}
+      backlogMs={10_000}
+    />,
+  );
+  expect(screen.queryByText(/업로드가 밀리고/)).toBeNull();
+});
+
+test("레코더가 실패하면 눈에 띄게 종료됐음을 보여준다", () => {
+  render(
+    <LiveBanner
+      recordedAtIso="2026-09-05T10:00:00.000Z"
+      stage="capture"
+      heartbeatAt="2026-09-05T10:00:00.000Z"
+      onStop={() => {}}
+      onCancel={() => {}}
+      stopping={false}
+      now={() => T0}
+      backlogMs={61_000}
+      failed="buffer_overflow"
+    />,
+  );
+  expect(screen.getByRole("alert")).toHaveTextContent("녹음이 중단됐어요");
+});
+
+test("레코더 실패 배너의 버튼도 종료(stop)를 부른다 — 서버엔 이미 녹음이 있다", () => {
+  const onStop = vi.fn();
+  render(
+    <LiveBanner
+      recordedAtIso="2026-09-05T10:00:00.000Z"
+      stage="capture"
+      heartbeatAt="2026-09-05T10:00:00.000Z"
+      onStop={onStop}
+      onCancel={() => {}}
+      stopping={false}
+      now={() => T0}
+      failed="device_ended"
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "종료" }));
+  expect(onStop).toHaveBeenCalledTimes(1);
+});
+
 test("종료 중에는 버튼이 잠긴다", () => {
   render(
     <LiveBanner
@@ -115,4 +186,23 @@ test("종료 중에는 버튼이 잠긴다", () => {
     />,
   );
   expect(screen.getByRole("button", { name: /종료/ })).toBeDisabled();
+});
+
+// capture_error는 error와 분리된 필드다 — 최종 처리가 성공해 회의가 done이 된 뒤에도
+// "브라우저 연결이 끊겨 여기까지 녹음됐다"는 사실은 남아야 한다.
+test("producer_abandoned면 회의가 done이 된 뒤에도 캡처 이력을 보여준다", () => {
+  render(<CaptureErrorNotice error={{ code: "producer_abandoned" }} />);
+  expect(screen.getByText(/연결이 끊겨/)).toBeInTheDocument();
+});
+
+test("capture_error가 없으면 아무것도 그리지 않는다", () => {
+  const { container } = render(<CaptureErrorNotice error={null} />);
+  expect(container).toBeEmptyDOMElement();
+});
+
+test("모르는 code는 아무것도 그리지 않는다", () => {
+  const { container } = render(
+    <CaptureErrorNotice error={{ code: "capture_gap" }} />,
+  );
+  expect(container).toBeEmptyDOMElement();
 });
