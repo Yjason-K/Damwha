@@ -50,7 +50,9 @@ describe('live session api', () => {
     expect(res.status).toBe(201);
     expect(res.body.status).toBe('recording');
     expect(res.body.title).toBe('오늘 회의');
-    expect(res.body.audio_key).toMatch(/^meetings\/mtg_[1-9][0-9]*\/original\.wav$/);
+    // liveKey()가 만드는 실제 경로다 — spec §2.2/§4와 SMOKE.md가 가정하는 파일이다
+    // (LiveService.start()가 meetingKey()를 잘못 쓰던 버그, review finding 4).
+    expect(res.body.audio_key).toMatch(/^meetings\/mtg_[1-9][0-9]*\/live\.wav$/);
     const job = (await db.pool.query('SELECT * FROM job WHERE id=$1', [res.body.current_job_id])).rows[0];
     expect(job.type).toBe('live_session');
     expect(job.max_attempts).toBe(1);

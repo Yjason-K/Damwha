@@ -91,7 +91,7 @@ export class LiveService {
       throw new ConflictException('a recording is already in progress');
     }
     const meetingId = await nextId(this.db.pool, 'meeting');
-    const audioKey = this.storage.meetingKey(meetingId, 'live.wav');
+    const audioKey = this.storage.liveKey(meetingId);
     let meeting: MeetingRow;
     try {
       meeting = await this.db.withTransaction(async (c) => {
