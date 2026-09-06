@@ -65,6 +65,23 @@ class LiveSegmenter:
                 out.append(seg)
         return out
 
+    def skip_to(self, pos_ms: int) -> None:
+        """미리보기가 뒤처져 TailSource가 건너뛰었다 — 절대 위치를 다시 심는다.
+
+        _pos_ms는 push된 프레임을 세는 상대 카운터라, 건너뛴 만큼 실제 시각보다 밀린다.
+        그대로 두면 이후 모든 live_utterance.start_ms/end_ms가 어긋난다. 발화 점프가 이
+        제품의 핵심이라 화면에 틀린 시각이 뜨는 것 자체가 결함이다 (설계 §6.1).
+
+        열려 있던 세그먼트는 버린다 — 방금 그 한가운데에 구멍을 냈으므로 이어 붙이면
+        없는 오디오를 하나의 발화로 만든다. pre-roll도 같은 이유로 비운다.
+        """
+        self._pos_ms = pos_ms
+        self._cur = None
+        self._pre_roll.clear()
+        reset = getattr(self._vad, "reset", None)
+        if callable(reset):
+            reset()
+
     def flush(self) -> Segment | None:
         """종료 시 진행 중이던 발화를 닫는다."""
         if self._cur is None:

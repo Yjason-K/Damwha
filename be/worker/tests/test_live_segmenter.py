@@ -60,3 +60,49 @@ def test_ignores_end_without_start_and_start_while_open():
     seg = LiveSegmenter(vad)
     out = _run(seg, 25)
     assert len(out) == 1 and out[0].start_ms == 4 * FRAME_MS
+
+
+def test_skip_to_repositions_absolute_time():
+    # start가 건너뛴 직후 첫 프레임(vad 인덱스 0)에서 열리고, 충분한 길이 뒤 end로 닫힌다.
+    vad = FakeStreamingVAD({0: [("start", 0)], 14: [("end", 0)]})
+    seg = LiveSegmenter(vad)
+    seg.skip_to(600_000)  # 10분 지점으로 건너뛴다
+    out: list[Segment] = []
+    for i in range(15):
+        out.extend(seg.push(frame_bytes(i)))
+    assert len(out) == 1
+    assert out[0].start_ms >= 600_000
+
+
+def test_skip_to_drops_open_segment():
+    vad = FakeStreamingVAD({0: [("start", 0)]})
+    seg = LiveSegmenter(vad)
+    for i in range(12):  # end 없이 세그먼트를 열어 둔 채 최소 길이(300ms)를 넘긴다
+        seg.push(frame_bytes(i))
+    seg.skip_to(600_000)
+    assert seg.flush() is None  # 구멍을 냈으므로 열려 있던 세그먼트는 버려진다
+
+
+def test_skip_to_clears_pre_roll():
+    # skip_to 이전의 5프레임은 pre-roll만 채우고 세그먼트를 열지 않는다(start는 인덱스 5).
+    vad = FakeStreamingVAD({5: [("start", 0)], 20: [("end", 0)]})
+    seg = LiveSegmenter(vad)
+    for i in range(5):
+        seg.push(frame_bytes(i))
+    seg.skip_to(600_000)
+    out: list[Segment] = []
+    for i in range(5, 5 + 21):  # 건너뛴 뒤 vad 인덱스는 0부터 다시 세므로 start는 여섯 번째다
+        out.extend(seg.push(frame_bytes(i)))
+    assert len(out) == 1
+    # pre-roll이 비워지지 않았다면 건너뛰기 전 프레임이 섞여 600_000보다 앞선 시각이 된다
+    assert out[0].start_ms == 600_000
+
+
+def test_skip_to_resets_vad():
+    vad = FakeStreamingVAD({})
+    seg = LiveSegmenter(vad)
+    seg.push(frame_bytes(0))
+    seg.push(frame_bytes(1))
+    assert vad.frames_seen == 2
+    seg.skip_to(1000)
+    assert vad.frames_seen == 0
