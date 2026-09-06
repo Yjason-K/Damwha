@@ -66,6 +66,24 @@ def _shutdown_abort_hook(register_abort, shutdown_event):
     return _abort_hook(register_abort, shutdown_event.set if shutdown_event is not None else None)
 
 
+def _default_live_source(payload, storage, sealed_box):
+    """payload의 source로 구현체를 고른다.
+
+    'browser'는 API가 쓰는 파일을 따라 읽고, 'mic'은 이 Mac의 입력 장치를 연다.
+    mic은 나중에 시스템 오디오가 들어올 자리의 참조 구현으로 남는다 (설계 §2.1).
+    """
+    if payload.source == "browser":
+        from .audio.tail_source import TailSource
+
+        return TailSource(
+            storage.resolve(payload.audio_key),
+            sealed_bytes=lambda: sealed_box["bytes"],
+        )
+    from .audio.source import MicSource
+
+    return MicSource()
+
+
 def handle_job(
     conn,
     job: dict,
@@ -161,7 +179,10 @@ def handle_job(
             # 소유권 상실은 루프가 1초마다 직접 읽는다(get_stop_requested → 'lost') —
             # process_meeting의 shutdown 훅은 걸지 않는다. shutdown_event는 루프가 stop으로 다룬다.
             live_models = build_live_models()
-            source = build_live_source()
+            # source(TailSource)와 run_live_session이 같은 dict를 봐야 한다 — 소스는
+            # 생성 시점에 클로저로 쥐고, 루프는 매 폴링마다 이 자리에 최신 sealed_bytes를 쓴다.
+            sealed_box = {"bytes": None}
+            source = build_live_source(payload, storage, sealed_box)
             return run_live_session(
                 conn,
                 job,
@@ -172,6 +193,7 @@ def handle_job(
                 worker_id=worker_id,
                 shutdown_event=shutdown_event,
                 max_minutes=live_max_minutes,
+                sealed_box=sealed_box,
             )
         raise ValueError(f"unknown job type {job['type']}")
     except ShutdownRequested:
@@ -527,11 +549,6 @@ def run_child(settings, shutdown: threading.Event) -> int:
 
         return build_live_models(payload, worker_settings)
 
-    def _build_live_source():
-        from .audio.source import MicSource
-
-        return MicSource()
-
     return run_single_job(
         settings,
         storage,
@@ -544,7 +561,7 @@ def run_child(settings, shutdown: threading.Event) -> int:
         build_summary_client_fn=_build_summary_client,
         llm_server_fn=lambda model: managed_llm_server(model, settings),
         build_live_models_fn=_build_live_models,
-        build_live_source_fn=_build_live_source,
+        build_live_source_fn=_default_live_source,
     )
 
 

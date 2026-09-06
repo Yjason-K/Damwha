@@ -1,16 +1,27 @@
-"""라이브 세션 — 마이크 프레임을 파일과 미리보기 파이프라인으로 나눠 흘린다.
+"""라이브 세션 — API가 쓰는 WAV를 따라 읽어 미리보기를 만든다.
 
-[capture thread]  source.frames() ──▶ writer 큐 ──▶ [writer thread] WavWriter.append
-                                  └─▶ preview 큐 (상한 5분, 넘치면 오래된 것부터 버림)
-[main loop]       preview 큐 ──▶ LiveSegmenter ──segment──▶ temp wav
-                              ──▶ transcribe ──▶ text (비면 건너뜀)
-                              ──▶ embed ──▶ identify_embedding(suggest_threshold)
-                              ──▶ insert_live_utterance(seq++)
+[capture thread]  source.frames() ──▶ 유계 큐 (pos_ms, pcm)
+[main loop]       큐 ──▶ (위치 불연속이면 segmenter.skip_to)
+                      ──▶ LiveSegmenter ──segment──▶ temp wav
+                      ──▶ transcribe ──▶ text (비면 건너뜀)
+                      ──▶ embed ──▶ identify_embedding(suggest_threshold)
+                      ──▶ insert_live_utterance(seq++)
                   매 1초: get_stop_requested, shutdown_event, 상한 시간
 
-파일 쓰기와 미리보기는 서로 다른 큐·스레드다. 추론이 멈춰도 파일은 디스크 속도로 쓰인다
-(설계 §2.9). 오류는 전부 PERMANENT — 끊긴 녹음은 이어 붙일 수 없다 (§2.6). DB 오류는
-클립 실패로 세고 stop 폴링에서는 건너뛴다. 자식은 재접속하지 않는다는 워커 원칙 그대로다.
+워커는 이제 **reader**다. 파일은 API가 쓴다 (설계 §2.2). 그래서 원 설계 §2.9의 이중 큐와
+writer 스레드가 통째로 없다 — "추론이 멈춰도 파일 쓰기는 디스크 속도로"는 캡처가 브라우저로
+간 순간 이미 성립한다. API의 append는 whisper와 아예 다른 프로세스다.
+
+큐가 유계인 이유는 backpressure다. 미리보기가 느리면 큐가 차고 → capture 스레드가 put에서
+막히고 → TailSource가 전진을 멈추고 → 파일은 계속 자라고 → 다음 읽기에서 드리프트를 보고
+건너뛴다. 무계 큐면 드리프트가 큐 안에 쌓여 seek이 영영 안 일어난다.
+
+stop_requested_at과 sealed_bytes는 같은 트랜잭션에서 쓰이는 게 정상이지만(설계 §4.4 ③),
+API가 stop 플래그만 먼저 찍고 봉인을 나중에 쓰는 창(마이그레이션·API 버그)에 대비해, stop을
+본 뒤 STOP_WITHOUT_SEAL_SECONDS 안에 sealed_bytes가 안 오면 max_minutes(4시간)까지 기다리지
+않고 IO_ERROR로 끝낸다 — 봉인 없이는 TailSource가 절대 EOF를 내지 않는다.
+
+오류는 전부 PERMANENT — 끊긴 녹음은 이어 붙일 수 없다 (§2.6).
 """
 
 import logging
@@ -23,8 +34,7 @@ import wave
 from dataclasses import dataclass
 
 from .. import db
-from ..audio.source import FRAME_MS, SR, AudioSource
-from ..audio.wav_writer import WavWriter, run_writer_thread
+from ..audio.source import FRAME_MS, SR
 from ..contracts import LiveSessionPayload
 from ..errors import AUDIO_DEVICE_FAILED, IO_ERROR, LIVE_STT_FAILED, ErrorKind, WorkerError
 from ..models.base import DiarSegment, Embedder, StreamingVAD, Transcriber
@@ -35,9 +45,13 @@ from .stage import enter_stage
 
 log = logging.getLogger("damwha_worker")
 
-PREVIEW_QUEUE_MAX_FRAMES = 5 * 60 * 1000 // FRAME_MS  # 5분
+#: 2초. backpressure를 만들 만큼 작고, 전사 한 번의 지터를 흡수할 만큼은 크다.
+PREVIEW_QUEUE_MAX_FRAMES = 2000 // FRAME_MS
+BYTES_PER_MS = 32
 CLIP_FAILURE_LIMIT = 5
 STOP_POLL_SECONDS = 1.0
+#: API가 stop_requested_at만 찍고 sealed_bytes를 아직 안 쓴 창의 상한.
+STOP_WITHOUT_SEAL_SECONDS = 60.0
 
 
 @dataclass
@@ -48,26 +62,17 @@ class LiveModels:
 
 
 class Capture:
-    """capture thread: 소스의 프레임을 writer 큐와 preview 큐에 나눠 넣는다.
+    """capture thread: 소스의 프레임을 (위치, pcm)으로 유계 큐에 넣는다.
 
-    writer 큐는 무제한이다 — 녹음은 한 프레임도 버리지 않는다. preview 큐만 상한을 두고
-    넘치면 오래된 프레임부터 버린다(미리보기가 늦어질 뿐 파일은 온전하다). 소스가 끝나거나
-    죽으면 두 큐에 None을 넣어 소비자를 깨운다.
+    큐가 차면 put에서 막힌다. 그것이 TailSource에 backpressure를 주는 유일한 장치다.
+    소스가 끝나거나 죽으면 None을 넣어 소비자를 깨운다.
     """
 
-    def __init__(
-        self,
-        source: AudioSource,
-        writer_q: "queue.Queue[bytes | None]",
-        preview_q: "queue.Queue[bytes | None]",
-        *,
-        preview_max_frames: int,
-    ) -> None:
+    def __init__(self, source, q: "queue.Queue", *, stop_poll_seconds: float) -> None:
         self._source = source
-        self._writer_q = writer_q
-        self._preview_q = preview_q
-        self._max = preview_max_frames
-        self.dropped = 0
+        self._q = q
+        self._poll = stop_poll_seconds
+        self._stopped = threading.Event()
         self.error: BaseException | None = None
         self._thread = threading.Thread(target=self._run, name="live-capture", daemon=True)
 
@@ -77,24 +82,31 @@ class Capture:
     def join(self, timeout: float | None = None) -> None:
         self._thread.join(timeout)
 
+    def _put(self, item) -> bool:
+        """stop을 인지하는 blocking put. 소비자가 영영 안 먹어도 종료할 수 있어야 한다."""
+        while not self._stopped.is_set():
+            try:
+                self._q.put(item, timeout=self._poll)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def stop(self) -> None:
+        self._stopped.set()
+
     def _run(self) -> None:
         try:
             for pcm in self._source.frames():
-                self._writer_q.put(pcm)
-                if self._preview_q.qsize() >= self._max:
-                    try:
-                        self._preview_q.get_nowait()
-                        self.dropped += 1
-                        if self.dropped in (1, 100, 1000) or self.dropped % 10000 == 0:
-                            log.warning("live preview queue full — dropped %d frames", self.dropped)
-                    except queue.Empty:
-                        pass
-                self._preview_q.put(pcm)
+                if not self._put((self._source.position_ms, pcm)):
+                    return
         except BaseException as exc:  # noqa: BLE001 — 메인 루프가 다시 던진다
             self.error = exc
         finally:
-            self._writer_q.put(None)
-            self._preview_q.put(None)
+            try:
+                self._q.put_nowait(None)
+            except queue.Full:
+                pass
 
 
 def _write_clip(path: str, pcm: bytes) -> None:
@@ -114,7 +126,7 @@ def run_live_session(
     payload: LiveSessionPayload,
     models: LiveModels,
     storage: Storage,
-    source: AudioSource,
+    source,
     *,
     worker_id: str,
     shutdown_event: threading.Event | None = None,
@@ -122,26 +134,34 @@ def run_live_session(
     clip_failure_limit: int = CLIP_FAILURE_LIMIT,
     preview_max_frames: int = PREVIEW_QUEUE_MAX_FRAMES,
     stop_poll_seconds: float = STOP_POLL_SECONDS,
+    stop_without_seal_seconds: float = STOP_WITHOUT_SEAL_SECONDS,
+    sealed_box: dict | None = None,
     clock=time.monotonic,
 ) -> str:
     job_id = job["id"]
     meeting_id = payload.meeting_id
     ctx = f"job={job_id} meeting={meeting_id}"
     enter_stage(conn, job_id, worker_id, "capture", 0, shutdown_event)
-    if db.set_recording_started(conn, meeting_id, job_id) == 0:
+    signal, sealed = db.get_stop_requested(conn, job_id, worker_id)
+    if signal == "lost":
         log.info("%s live_session lost ownership before capture", ctx)
         return "lost"
+    # 호출자가 TailSource를 만들 때 이미 이 dict를 클로저로 쥐고 있을 수 있다 — 새로 만들지
+    # 않고 그 자리에서 갱신해야 소스와 루프가 같은 값을 본다.
+    if sealed_box is None:
+        sealed_box = {"bytes": sealed}
+    else:
+        sealed_box["bytes"] = sealed
 
-    writer = WavWriter(storage.resolve(payload.audio_key))
-    writer_q: queue.Queue[bytes | None] = queue.Queue()
-    preview_q: queue.Queue[bytes | None] = queue.Queue()
-    writer_thread = run_writer_thread(writer, writer_q)
-    capture = Capture(source, writer_q, preview_q, preview_max_frames=preview_max_frames)
+    q: queue.Queue = queue.Queue(maxsize=preview_max_frames)
+    capture = Capture(source, q, stop_poll_seconds=stop_poll_seconds)
     segmenter = LiveSegmenter(models.vad)
     tmpdir = tempfile.TemporaryDirectory(prefix="damwha-live-")
     state = {"seq": 0, "failures": 0}
     started = clock()
     last_poll = started
+    next_pos_ms: int | None = None
+    stop_seen_at: float | None = None
     stop_reason: str | None = None
     log.info("%s live_session capture start", ctx)
 
@@ -211,85 +231,92 @@ def run_live_session(
         capture.start()
         while True:
             try:
-                pcm = preview_q.get(timeout=stop_poll_seconds)
+                item = q.get(timeout=stop_poll_seconds)
             except queue.Empty:
-                pcm = _NO_FRAME
-            if pcm is None:
+                item = _NO_FRAME
+            if item is None:
                 stop_reason = "source_ended"
                 break
-            if pcm is not _NO_FRAME:
+            if item is not _NO_FRAME:
+                pos_ms, pcm = item
+                # 소스가 건너뛰었으면 세그먼터의 절대 위치를 다시 심는다. 이 프레임의 끝이
+                # pos_ms이므로 시작은 pos_ms - FRAME_MS다 (설계 §6.1). 첫 프레임은 next_pos_ms가
+                # 아직 없으므로(None) 건너뛰기로 취급하지 않는다 — 그렇지 않으면 세션마다 첫
+                # 프레임에서 스퓨리어스 skip_to(0)이 걸린다.
+                if next_pos_ms is not None and pos_ms != next_pos_ms:
+                    segmenter.skip_to(pos_ms - FRAME_MS)
+                next_pos_ms = pos_ms + FRAME_MS
                 for seg in segmenter.push(pcm):
                     handle(seg)
             now = clock()
             if now - last_poll >= stop_poll_seconds:
                 last_poll = now
-                if writer_thread.error is not None or capture.error is not None:
-                    # 쓰기 경로가 죽어도 미리보기는 멀쩡히 돈다 — 프레임은 아무도 읽지
-                    # 않는 writer 큐에 쌓이고, 줄은 계속 뜨고, heartbeat도 계속 뛴다.
-                    # 여기서 보지 않으면 디스크가 5분에 차도 사용자는 60분 뒤 종료를
-                    # 누를 때에야 안다. stop·소유권 상실과 같은 주기에서 같이 본다.
-                    stop_reason = "io_error"
+                if capture.error is not None:
+                    stop_reason = "capture_error"
                     break
                 try:
-                    signal = db.get_stop_requested(conn, job_id, worker_id)
-                except Exception:  # noqa: BLE001 — DB가 잠깐 죽어도 녹음은 계속
+                    signal, sealed = db.get_stop_requested(conn, job_id, worker_id)
+                    sealed_box["bytes"] = sealed
+                except Exception:  # noqa: BLE001 — DB가 잠깐 죽어도 미리보기는 계속
                     log.warning("%s stop poll failed — continuing", ctx, exc_info=True)
                     signal = None
                 if signal == "lost":
                     stop_reason = "lost"
                     break
                 if signal == "stop":
-                    stop_reason = "stop"
-                    break
+                    # 즉시 끝내지 않는다. 소스가 sealed_bytes에 닿으면 스스로 끝난다
+                    # (TailSource가 sealed를 보고 EOF를 낸다) — 그때 None이 큐에 온다.
+                    # 다만 sealed_bytes가 계속 안 오면(마이그레이션 창·API 버그) max_minutes
+                    # (4시간)까지 기다리지 않고 STOP_WITHOUT_SEAL_SECONDS 만에 끝낸다.
+                    if stop_seen_at is None:
+                        stop_seen_at = now
+                    elif (
+                        sealed_box["bytes"] is None
+                        and now - stop_seen_at >= stop_without_seal_seconds
+                    ):
+                        raise WorkerError(
+                            IO_ERROR,
+                            "stop requested but sealed_bytes still unset after "
+                            f"{stop_without_seal_seconds:.0f}s",
+                            ErrorKind.PERMANENT,
+                            stage="capture",
+                        )
                 if shutdown_event is not None and shutdown_event.is_set():
                     stop_reason = "shutdown"
                     break
                 if now - started >= max_minutes * 60:
                     stop_reason = "max_duration"
                     break
-        # 정상 종료 순서 (설계 §4): 캡처 닫기 → writer 비우고 파일 닫기 → 마지막 발화 → finalize
-        # capture.join()이 writer 종료보다 먼저다 — 캡처가 살아 있는 동안 writer가 끝나면
-        # 그 뒤 넣는 프레임이 조용히 사라진다. 캡처의 finally가 이미 sentinel을 넣으므로
-        # 조인만 하면 writer는 남은 프레임을 전부 비우고 스스로 끝난다.
         source.stop()
+        capture.stop()
         capture.join(timeout=10)
-        writer_thread.join(timeout=60)
-        # 오류 판정이 close()보다 먼저다. 디스크가 찬 상태의 close()는 남은 버퍼를
-        # flush하다 같은 ENOSPC를 다시 던지고, 그러면 진짜 원인(writer의 OSError)이
-        # 가려져 회의가 IO_ERROR가 아니라 uncategorized로 닫힌다. 실패 경로의 파일
-        # 닫기는 아래 finally가 조용히 맡는다(헤더가 스트리밍 값으로 남아도 재처리의
-        # repair_streaming_header가 고친다).
         if capture.error is not None:
             raise capture.error
-        if writer_thread.error is not None:
-            # writer가 죽었으면 디스크에 닿은 프레임이 큐에 넣은 프레임보다 적다. finalize하면
-            # 잘린 파일과 틀린 duration_ms를 "완료된 회의"로 넘긴다 — 조용한 손실이야말로
-            # 이 기능이 막으려는 것이다. 보이게 실패한다(PERMANENT: 끊긴 녹음은 못 잇는다).
-            raise WorkerError(
-                IO_ERROR,
-                f"wav writer died mid-recording: {writer_thread.error!r}",
-                ErrorKind.PERMANENT,
-                stage="capture",
-            ) from writer_thread.error
-        # 파일이 닫힌(=헤더가 확정된) 뒤에야 최종 job이 큐에 들어간다 (설계 §4).
-        writer.close()
+        sealed = sealed_box["bytes"]
         log.info(
-            "%s live_session capture end reason=%s duration_ms=%d rows=%d dropped=%d",
+            "%s live_session capture end reason=%s sealed_bytes=%s rows=%d skips=%d",
             ctx,
             stop_reason,
-            writer.duration_ms,
+            sealed,
             state["seq"],
-            capture.dropped,
+            getattr(source, "skips", 0),
         )
         if stop_reason == "lost":
             return "lost"
-        if writer.frames_written == 0:
-            # 넘길 녹음이 없다. finalize하면 회의가 uploaded가 되고 배치 job이 큐에 들어가는데,
-            # 아래 finally가 바로 그 job이 읽을 파일을 지운다(헤더만 남은 파일은 "파일 없음"
-            # — §8). 그래서 커밋과 삭제가 어긋나지 않도록 아예 넘기지 않는다.
+        if sealed is None:
+            # 봉인 없이 소스가 끝났다 — API가 아직 stop을 처리하지 않았다. 여기서
+            # finalize하면 자라는 중인 파일로 duration을 정하고 배치 패스를 큐에 넣는다.
+            raise WorkerError(
+                IO_ERROR,
+                f"live source ended before seal (reason={stop_reason})",
+                ErrorKind.PERMANENT,
+                stage="capture",
+            )
+        if sealed == 0:
+            # 한 바이트도 안 왔다. 넘길 녹음이 없다.
             raise WorkerError(
                 AUDIO_DEVICE_FAILED,
-                f"captured no audio (reason={stop_reason}) — nothing to hand off",
+                "captured no audio — nothing to hand off",
                 ErrorKind.PERMANENT,
                 stage="capture",
             )
@@ -303,31 +330,11 @@ def run_live_session(
             job_id=job_id,
             worker_id=worker_id,
             meeting_id=meeting_id,
-            duration_ms=writer.duration_ms,
+            duration_ms=sealed // BYTES_PER_MS,
             process_payload=payload.process_wire,
         )
     finally:
-        # 예외 경로에서도 파일은 닫는다(헤더 확정). 소스는 두 번 stop해도 안전하다.
-        # 순서가 곧 "녹음은 잃지 않는다"이다: sentinel을 캡처보다 먼저 보내면 writer가
-        # 일찍 끝나고, 그 뒤 캡처가 넣는 프레임은 아무도 읽지 않는다 — 모든 예외 경로에서
-        # 녹음 꼬리가 잘린다. 소스를 멈추고 캡처를 조인한 뒤에야 보낸다(캡처가 이미 넣은
-        # sentinel이 있으므로 이건 여분이고, 여분이어도 해가 없다).
         source.stop()
+        capture.stop()
         capture.join(timeout=10)
-        writer_q.put(None)
-        writer_thread.join(timeout=60)
-        # finally의 close()는 삼킨다. 여기서 던지면 지금 올라가던 예외를 대체해
-        # 디스크 풀이 IO_ERROR가 아니라 close의 OSError로 보고된다. 정상 경로에서는
-        # 위에서 이미 닫혔으므로 이 호출은 여분이다.
-        try:
-            writer.close()
-        except Exception:  # noqa: BLE001 — 원인 오류를 가리지 않는다
-            log.warning("%s wav writer close failed", ctx, exc_info=True)
-        if writer.frames_written == 0:
-            # 마이크를 못 열었거나 프레임이 하나도 없었다 — 헤더만 남은 파일은
-            # "파일 없음"이 맞다 (§8).
-            try:
-                os.unlink(storage.resolve(payload.audio_key))
-            except FileNotFoundError:
-                pass
         tmpdir.cleanup()

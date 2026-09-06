@@ -81,7 +81,10 @@ class FakeStreamingVAD:
 
 
 class SilenceSource:
-    """stop()이 올 때까지 무음 프레임을 낸다 — stop 플래그·상한 시간 테스트용."""
+    """stop()이 올 때까지 무음 프레임을 낸다 — stop 플래그·상한 시간 테스트용.
+
+    position_ms는 GrowingFileSource·TailSource와 같은 계약이다: yield된 프레임의 끝 시각.
+    """
 
     def __init__(self, interval_seconds: float = 0.005) -> None:
         import threading
@@ -89,12 +92,14 @@ class SilenceSource:
         self._stop = threading.Event()
         self._interval = interval_seconds
         self.emitted = 0
+        self.position_ms = 0
 
     def frames(self):
         import time
 
         while not self._stop.is_set():
             self.emitted += 1
+            self.position_ms += 32
             yield b"\x00" * 1024
             time.sleep(self._interval)
 
@@ -114,34 +119,27 @@ class RaisingSource:
         pass
 
 
-class BackloggedSource:
-    """MicSource와 같은 구조 — 콜백이 앞서 채운 큐를 frames()가 비운다.
+class GrowingFileSource:
+    """TailSource를 흉내 내는 fake. 프레임과 절대 위치를 같이 낸다."""
 
-    stop()이 이미 쌓인 프레임 *뒤에* sentinel을 넣으므로 stop() 뒤에도 프레임이 계속
-    나온다. 실제 마이크가 정확히 그렇다(PortAudio 콜백이 소비자보다 앞서 큐를 채운다).
-    종료 순서가 틀려 writer가 캡처보다 먼저 끝나면 그 꼬리가 파일에서 사라지는데,
-    프레임이 즉시 고갈되는 FileSource로는 그 창이 열리지 않아 잡히지 않는다.
-    """
-
-    def __init__(self, frames: int, *, interval_seconds: float = 0.003) -> None:
-        import queue
-
-        self._q: queue.Queue = queue.Queue()
-        for _ in range(frames):
-            self._q.put(b"\x00" * 1024)
-        self._interval = interval_seconds
-        self.emitted = 0
+    def __init__(self, frames, *, skip_after=None, skip_to_ms=None):
+        self._frames = list(frames)
+        self._skip_after = skip_after
+        self._skip_to_ms = skip_to_ms
+        self._i = 0
+        self.position_ms = 0
+        self.skips = 0
+        self.stopped = False
 
     def frames(self):
-        import time
-
-        while True:
-            pcm = self._q.get()
-            if pcm is None:
+        for i, f in enumerate(self._frames):
+            if self.stopped:
                 return
-            time.sleep(self._interval)
-            self.emitted += 1
-            yield pcm
+            if self._skip_after is not None and i == self._skip_after:
+                self.position_ms = self._skip_to_ms
+                self.skips += 1
+            self.position_ms += 32
+            yield f
 
     def stop(self) -> None:
-        self._q.put(None)
+        self.stopped = True

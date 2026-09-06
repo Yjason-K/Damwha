@@ -1,21 +1,28 @@
 from damwha_worker import db
-from damwha_worker.__main__ import handle_job
-from damwha_worker.audio.source import FileSource
+from damwha_worker.__main__ import _default_live_source, handle_job
+from damwha_worker.audio.source import FRAME_BYTES, MicSource
+from damwha_worker.audio.tail_source import TailSource
+from damwha_worker.contracts import parse_payload
 from damwha_worker.errors import AUDIO_DEVICE_FAILED, ErrorKind, WorkerError
 from damwha_worker.models.base import Word
 from damwha_worker.pipeline.live_session import LiveModels
 from damwha_worker.storage import Storage
-from tests.audio_fixtures import make_wav
 from tests.conftest import seed_job, seed_meeting
-from tests.fakes import FakeEmbedder, FakeStreamingVAD, FakeTranscriber, RaisingSource
+from tests.fakes import (
+    FakeEmbedder,
+    FakeStreamingVAD,
+    FakeTranscriber,
+    GrowingFileSource,
+    RaisingSource,
+)
 
 
-def _live_payload(mid):
+def _live_payload(mid, *, source="mic"):
     return {
         "schema_version": 1,
         "meeting_id": str(mid),
         "audio_key": f"meetings/{mid}/original.wav",
-        "source": "mic",
+        "source": source,
         "process": {
             "schema_version": 5,
             "meeting_id": str(mid),
@@ -58,14 +65,20 @@ def _models():
 def test_dispatches_live_session_and_queues_the_final_pass(conn, tmp_path):
     mid = seed_meeting(conn, status="recording")
     job = _claimed(conn, mid)
-    src = FileSource(make_wav(str(tmp_path / "in.wav"), 64))
+    conn.execute(
+        "UPDATE job SET stop_requested_at=now(), sealed_bytes=%s WHERE id=%s",
+        (FRAME_BYTES * 64, job["id"]),
+    )
+    src = GrowingFileSource([b"\x00" * FRAME_BYTES] * 64)
     out = handle_job(
         conn,
         job,
         Storage(str(tmp_path)),
         "w1",
         build_live_models=_models,
-        build_live_source=lambda: src,
+        # build_live_source는 이제 (payload, storage, sealed_box) 3개를 받는다(Task 8) —
+        # 여기서는 라우팅만 확인하므로 인자를 무시하고 미리 만든 fake를 그대로 낸다.
+        build_live_source=lambda *_a, **_k: src,
     )
     assert out == "committed"
     m = conn.execute("SELECT status, current_job_id FROM meeting WHERE id=%s", (mid,)).fetchone()
@@ -86,10 +99,24 @@ def test_live_failure_never_requeues_even_when_transient(conn, tmp_path):
         Storage(str(tmp_path)),
         "w1",
         build_live_models=_models,
-        build_live_source=lambda: src,
+        build_live_source=lambda *_a, **_k: src,
     )
     assert out == "failed"
     j = conn.execute("SELECT status, error FROM job WHERE id=%s", (job["id"],)).fetchone()
     assert j["status"] == "failed" and j["error"]["code"] == AUDIO_DEVICE_FAILED
     m = conn.execute("SELECT status, error FROM meeting WHERE id=%s", (mid,)).fetchone()
     assert m["status"] == "failed" and m["error"]["code"] == AUDIO_DEVICE_FAILED
+
+
+def test_default_live_source_picks_tail_source_for_browser(tmp_path):
+    """browser 세션은 API가 쓰는 파일을 따라 읽는 TailSource를 쓴다."""
+    payload = parse_payload("live_session", _live_payload("mtg_1", source="browser"))
+    src = _default_live_source(payload, Storage(str(tmp_path)), {"bytes": None})
+    assert isinstance(src, TailSource)
+
+
+def test_default_live_source_picks_mic_source_otherwise(tmp_path):
+    """mic 세션은 이 Mac의 입력 장치를 연다 — 시스템 오디오가 들어올 자리의 참조 구현(설계 §2.1)."""
+    payload = parse_payload("live_session", _live_payload("mtg_1"))
+    src = _default_live_source(payload, Storage(str(tmp_path)), {"bytes": None})
+    assert isinstance(src, MicSource)
