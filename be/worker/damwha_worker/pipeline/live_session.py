@@ -103,10 +103,12 @@ class Capture:
         except BaseException as exc:  # noqa: BLE001 — 메인 루프가 다시 던진다
             self.error = exc
         finally:
-            try:
-                self._q.put_nowait(None)
-            except queue.Full:
-                pass
+            # sentinel도 프레임과 같은 stop-aware blocking put을 쓴다. put_nowait이면 소스가
+            # 끝나는 바로 그 순간 큐가 가득 차 있을 때 Full로 조용히 사라진다 — 메인 루프가
+            # "소스가 끝났다"를 아는 유일한 길이 이 None이므로, 놓치면 stop_reason이 결코
+            # source_ended가 되지 못하고 max_minutes(4시간)까지 못 끝난다. _put이 False를
+            # 내면(소비자가 이미 stop()해 정리 중) 더 할 일이 없다 — 잃는 게 없다.
+            self._put(None)
 
 
 def _write_clip(path: str, pcm: bytes) -> None:

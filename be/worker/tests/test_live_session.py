@@ -392,12 +392,53 @@ def test_capture_blocks_instead_of_dropping_when_the_queue_is_full():
         assert src.position_ms == 64, "큐가 가득 찬 채로도 소스가 계속 진행했다 — 드롭됐다"
 
         # 드레인하면 막혔던 프레임들이 순서대로, 빠짐없이 큐를 통과한다. 마지막 None
-        # sentinel은 여기서 확인하지 않는다 — 큐가 딱 이 순간 다시 가득 찬 채로 소스가
-        # 끝나면 capture의 put_nowait(None)이 Full에 걸려 조용히 버려질 수 있다(별도로
-        # 확인해 재현 가능함을 확인했다); 그건 이 테스트가 확인하려는 backpressure
-        # 계약과는 다른 얘기라 여기서는 다루지 않는다.
+        # sentinel은 여기서 확인하지 않는다 — 그건 별도의 계약(end-of-stream 전달)이라
+        # test_capture_delivers_the_end_of_stream_sentinel_even_when_the_queue_is_full이
+        # 전담한다.
         received = [q.get(timeout=2.0) for _ in range(total)]
         assert received == [((i + 1) * 32, b"\x00" * FRAME_BYTES) for i in range(total)]
+    finally:
+        cap.stop()
+        cap.join(timeout=5)
+
+
+def test_capture_delivers_the_end_of_stream_sentinel_even_when_the_queue_is_full():
+    """소스가 끝나는 순간 큐가 꽉 차 있어도 sentinel(None)은 반드시 도착해야 한다.
+
+    메인 루프가 "소스가 끝났다"를 아는 유일한 길이 이 None이다 (live_session.py의
+    `if item is None: stop_reason = "source_ended"`). sentinel을 put_nowait로 넣던
+    시절엔 이 순간 큐가 가득 차 있으면 Full로 조용히 사라졌다 — sealed_bytes를 이미 받은
+    세션조차 그 사실을 영영 못 보고 max_minutes(4시간)까지 못 끝난다. 60초 stop-without
+    -seal 가드도 못 구한다: 그 가드는 sealed_bytes가 없을 때만 도는데, 이 시나리오는
+    정확히 봉인이 이미 왔기 때문에 소스가 끝난 경우다. 회의는 recording에 멈춰 있고,
+    meeting_single_recording_idx(부분 유니크 인덱스)가 그 상태인 회의를 하나로 막으므로
+    다음 녹음 전부가 4시간 동안 막힌다.
+
+    이 테스트는 put_nowait에 대해서는 실패해야 한다: 큐를 소스 프레임 수와 같은
+    maxsize로 채워 생성기가 끝나는 바로 그 순간 큐가 이미 가득 차 있게 만든다.
+    """
+    total = 3
+    src = GrowingFileSource([b"\x00" * FRAME_BYTES] * total)
+    q: queue.Queue = queue.Queue(maxsize=total)
+    cap = Capture(src, q, stop_poll_seconds=0.01)
+    cap.start()
+    try:
+        # 큐가 total개로 꽉 찰 때까지 기다린다 — 그 시점엔 소스도 이미 프레임을 전부
+        # 냈다(생성기 종료 직전/직후)이므로, sentinel을 넣을 빈자리가 없다.
+        deadline = time.monotonic() + 2.0
+        while q.qsize() < total and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert q.qsize() == total
+
+        # 드레인하지 않은 채 잠깐 더 기다린다 — 캡처 스레드가 생성기 종료를 마치고
+        # sentinel을 (막힌 채로) 재시도하고 있을 시간을 준다. put_nowait였다면 이 사이에
+        # 이미 사라졌을 것이고, 되돌릴 방법이 없다.
+        time.sleep(0.1)
+
+        received = [q.get(timeout=2.0) for _ in range(total)]
+        assert received == [((i + 1) * 32, b"\x00" * FRAME_BYTES) for i in range(total)]
+        sentinel = q.get(timeout=2.0)
+        assert sentinel is None, "sentinel이 도착하지 않았다 — source_ended를 영영 못 본다"
     finally:
         cap.stop()
         cap.join(timeout=5)
