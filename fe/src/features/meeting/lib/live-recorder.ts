@@ -57,10 +57,13 @@ export class LiveRecorder {
   status: RecorderStatus = { backlogMs: 0, failed: null };
   onStatus: (s: RecorderStatus) => void = () => {};
 
-  private queue: Uint8Array[] = [];
+  private queue: { body: Uint8Array; elapsedMs: number }[] = [];
   private pump: Promise<void> | null = null;
   private meetingId = "";
   private startedAt = 0;
+  /** 마지막으로 캡처된 프레임의 경과값. 큐에 못 들어간(청크 미완성) 꼬리를 stop()이
+   *  봉인할 때, 그 시점(전송 시각)이 아니라 이 값(캡처 시각)을 실어 보낸다. */
+  private lastCaptureElapsedMs = 0;
   private ctx: AudioContext | null = null;
   private stream: MediaStream | null = null;
   private readonly chunks = new ChunkAccumulator();
@@ -85,11 +88,11 @@ export class LiveRecorder {
     },
   ) {}
 
-  enqueue(chunk: Uint8Array) {
+  enqueue(chunk: Uint8Array, elapsedMs = 0) {
     // 실패 후에는 더 받지 않는다 — 업로드 루프는 이미 멈췄으니 계속 받으면 stop()이
     // 잘라내야 할 구멍만 커진다(설계 §2.9와 같은 원칙, review finding 2와 한 벌).
     if (this.status.failed !== null) return;
-    this.queue.push(chunk);
+    this.queue.push({ body: chunk, elapsedMs });
     this.report();
     if (
       this.queue.length * CHUNK_MS >
@@ -113,14 +116,17 @@ export class LiveRecorder {
 
   private async run(): Promise<void> {
     while (this.queue.length > 0 && this.status.failed === null) {
-      const body = this.queue[0];
+      const { body, elapsedMs } = this.queue[0];
       let res: PostResult;
       try {
+        // elapsedMs는 이 청크가 "잡힌" 시각이다(enqueue 때 같이 실었다) — 지금(전송
+        // 시각)을 다시 재면 백로그·재시도 대기가 그대로 오탐 갭으로 둔갑한다 (설계
+        // §3.3.2, review finding 4).
         res = await this.deps.postChunk(
           this.meetingId,
           this.offset,
           body,
-          this.elapsedMs(),
+          elapsedMs,
         );
       } catch {
         // 네트워크 실패. 청크를 버리지 않고 그대로 다시 보낸다.
@@ -152,7 +158,6 @@ export class LiveRecorder {
 
   async start(meetingId: string, deviceId?: string): Promise<void> {
     this.meetingId = meetingId;
-    this.startedAt = performance.now();
     this.stream = await navigator.mediaDevices.getUserMedia({
       // 셋 다 끈다. AGC와 노이즈 억제는 신호를 변형해 ECAPA 임베딩과 정본 STT를 같이
       // 나쁘게 만든다 (설계 §2.4).
@@ -178,10 +183,16 @@ export class LiveRecorder {
       await ctx.audioWorklet.addModule(pcmWorkletUrl);
       const node = new AudioWorkletNode(ctx, "pcm-processor");
       node.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
+        // elapsedMs는 이 프레임이 도착한 지금 잰다 — POST 시각까지 미루면 네트워크
+        // 지연·백로그가 그대로 캡처 경과에 섞인다 (설계 §3.3.2, review finding 4).
+        this.lastCaptureElapsedMs = this.elapsedMs();
         const chunk = this.chunks.push(new Int16Array(e.data));
-        if (chunk) this.enqueue(chunk);
+        if (chunk) this.enqueue(chunk, this.lastCaptureElapsedMs);
       };
       ctx.createMediaStreamSource(this.stream).connect(node);
+      // getUserMedia의 권한 프롬프트 대기를 시계에서 뺀다 — 그 전에 시작하면 origin당
+      // 첫 녹음마다 프롬프트 대기 시간만큼의 가짜 capture_gap이 영구히 남는다.
+      this.startedAt = performance.now();
     } catch (err) {
       // 워크릿 로딩 실패든 sample rate 불일치든, 마이크와 AudioContext를 켜 둔 채로
       // start()가 실패하면 브라우저 녹음 표시등은 계속 켜져 있는데 아무것도 잡히지
@@ -209,7 +220,7 @@ export class LiveRecorder {
         this.offset,
         this.offset,
         new Uint8Array(0),
-        this.elapsedMs(),
+        this.lastCaptureElapsedMs,
       );
       return;
     }
@@ -219,7 +230,7 @@ export class LiveRecorder {
       this.offset,
       this.offset + tail.byteLength,
       tail,
-      this.elapsedMs(),
+      this.lastCaptureElapsedMs,
     );
   }
 

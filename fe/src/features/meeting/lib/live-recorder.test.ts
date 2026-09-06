@@ -1,8 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHUNK_BYTES, FRAME_BYTES, SR } from "./pcm-convert";
-import { checkCaptureSupport, LiveRecorder } from "./live-recorder";
+import {
+  checkCaptureSupport,
+  LiveRecorder,
+  type PostResult,
+} from "./live-recorder";
 
 const chunkOf = (n = CHUNK_BYTES) => new Uint8Array(n);
+
+/** 즉시 settle하지 않는 Promise. 네트워크가 아직 응답하지 않은 상태를 흉내낸다. */
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
 
 describe("LiveRecorder upload loop", () => {
   it("sends one chunk at a time and advances the offset", async () => {
@@ -99,6 +112,45 @@ describe("LiveRecorder upload loop", () => {
     // 실패를 일으킨 2개 이후로는 enqueue가 조용히 버려야 한다 — 안 그러면 stop()이
     // 나중에 잘라내야 할 구멍만 계속 커진다. CHUNK_MS(1024)는 export되지 않아 리터럴로 쓴다.
     expect(r.status.backlogMs).toBe(2 * 1024);
+  });
+
+  it("carries the chunk's capture-time elapsed to postChunk instead of re-reading the clock when it is finally sent", async () => {
+    // 청크1은 네트워크가 느려 오래 붙들려 있고, 그 사이 청크2가 실제로는 금방(캡처
+    // 시각 기준 1024ms) 잡혀 큐에 들어간다. 청크1이 늦게 끝나 청크2가 한참 뒤(캡처
+    // 기준 5000ms)에야 전송되더라도, postChunk에 실리는 값은 전송 시각이 아니라
+    // 캡처 시각(1024)이어야 한다 (review finding 4).
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+
+    const seenElapsed: number[] = [];
+    const first = deferred<PostResult>();
+    const post = vi.fn(
+      async (
+        _id: string,
+        offset: number,
+        _body: Uint8Array,
+        elapsedMs: number,
+      ) => {
+        seenElapsed.push(elapsedMs);
+        if (offset === 0) return first.promise;
+        return { ok: true as const, expected: offset + CHUNK_BYTES };
+      },
+    );
+    const r = new LiveRecorder({ postChunk: post });
+
+    // 청크1: t=0에 캡처됨. postChunk가 즉시 불리고 pending 상태로 멈춘다.
+    r.enqueue(chunkOf(), 0);
+    // 청크2: t=1024(실제 캡처 시각)에 잡혀 큐에 들어간다 — 아직 청크1이 안 끝났으니
+    // 전송은 못 하고 큐에서 대기한다.
+    clock = 1024;
+    r.enqueue(chunkOf(), 1024);
+    // 이제 시간이 많이 흘렀다고 하자(네트워크 백로그) — 청크1이 이제야 끝난다.
+    clock = 5000;
+    first.resolve({ ok: true, expected: CHUNK_BYTES });
+
+    await r.drain();
+    expect(seenElapsed).toEqual([0, 1024]);
+    vi.restoreAllMocks();
   });
 });
 
