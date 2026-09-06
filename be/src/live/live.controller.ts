@@ -37,11 +37,19 @@ export class LiveController {
   @ApiOperation({
     summary: '실시간 녹음 종료',
     description:
-      '워커가 마이크를 연 뒤면 stop_requested_at을 찍고 stopping. 아직 queued면 녹음된 게 없으니 '
-      + '회의를 지우고 discarded. recording이 아니면 409.',
+      'X-Audio-Offset(자투리 시작 오프셋)과 X-Final-Offset(최종 PCM 바이트 수) 헤더, 마지막 '
+      + '자투리 PCM(0바이트 가능) body가 필요하다. 봉인과 마지막 청크를 한 요청으로 묶어 그 사이 '
+      + '창을 없앤다. 정상: 자투리를 append하고 봉인. 재시도(자투리가 이미 파일에 있음): append '
+      + '없이 봉인만 재개. 그 외 오프셋 불일치는 missing_chunk 409. 이미 봉인된 job에 같은 '
+      + 'X-Final-Offset으로 다시 오면 200 멱등, 다르면 409. 워커가 아직 claim하지 않은 세션은 '
+      + 'API가 직접 마무리한다 — 0바이트면 회의를 지우고 discarded, 그 외는 uploaded로 올리고 '
+      + 'process_meeting을 큐잉해 finalized. 이미 워커가 잡고 있으면 stop_requested_at만 찍고 '
+      + 'stopping(워커가 마무리한다). recording이 아니면 409, 회의가 없으면 404.',
   })
   @HttpCode(200)
-  stop(@Param('id') id: string) { return this.service.stop(id); }
+  stop(@Param('id') id: string, @Req() req: { headers: Record<string, unknown>; body: Buffer }) {
+    return this.service.stop(id, req.headers, req.body);
+  }
 
   @Post(':id/live/audio')
   @ApiOperation({

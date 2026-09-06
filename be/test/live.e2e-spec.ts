@@ -36,6 +36,15 @@ describe('live session api', () => {
       [jobId],
     );
 
+  // 이 파일의 stop 테스트는 전부 0바이트 세션(오디오를 한 번도 안 보냄)이다 — 기본값
+  // offset=final=0, 빈 바디로 새 종료 계약(§3.4)을 그대로 만족한다.
+  const stop = (id: string, offset = 0, final = 0, body = Buffer.alloc(0)) =>
+    request(srv()).post(`/meetings/${id}/live/stop`)
+      .set('Content-Type', 'application/octet-stream')
+      .set('X-Audio-Offset', String(offset))
+      .set('X-Final-Offset', String(final))
+      .send(body);
+
   it('POST /meetings/live creates a recording meeting and a live_session job with max_attempts=1', async () => {
     const res = await start({ title: '오늘 회의', defer_summary: true, speakers: { min: 2 } });
     expect(res.status).toBe(201);
@@ -76,9 +85,12 @@ describe('live session api', () => {
 
   it('stop on a queued session discards the meeting and job', async () => {
     const created = await start().expect(201);
-    const res = await request(srv()).post(`/meetings/${created.body.id}/live/stop`);
+    const res = await stop(created.body.id);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ meeting_id: created.body.id, job_id: created.body.current_job_id, outcome: 'discarded' });
+    expect(res.body).toEqual({
+      meeting_id: created.body.id, job_id: created.body.current_job_id,
+      sealed_bytes: 0, outcome: 'discarded',
+    });
     expect((await db.pool.query('SELECT count(*)::int AS n FROM meeting')).rows[0].n).toBe(0);
     expect((await db.pool.query('SELECT count(*)::int AS n FROM job')).rows[0].n).toBe(0);
   });
@@ -86,11 +98,11 @@ describe('live session api', () => {
   it('stop on a running session sets stop_requested_at once and is idempotent', async () => {
     const created = await start().expect(201);
     await claim(created.body.current_job_id);
-    const first = await request(srv()).post(`/meetings/${created.body.id}/live/stop`).expect(200);
+    const first = await stop(created.body.id).expect(200);
     expect(first.body.outcome).toBe('stopping');
     const at1 = (await db.pool.query('SELECT stop_requested_at FROM job WHERE id=$1', [created.body.current_job_id])).rows[0].stop_requested_at;
     expect(at1).not.toBeNull();
-    const second = await request(srv()).post(`/meetings/${created.body.id}/live/stop`).expect(200);
+    const second = await stop(created.body.id).expect(200);
     expect(second.body.outcome).toBe('stopping');
     const at2 = (await db.pool.query('SELECT stop_requested_at FROM job WHERE id=$1', [created.body.current_job_id])).rows[0].stop_requested_at;
     expect(new Date(at2).getTime()).toBe(new Date(at1).getTime());
@@ -98,8 +110,8 @@ describe('live session api', () => {
 
   it('stop → 409 when the meeting is not recording, 404 when missing', async () => {
     const done = await db.pool.query(`INSERT INTO meeting(audio_key,status) VALUES('k','done') RETURNING id`);
-    expect((await request(srv()).post(`/meetings/${done.rows[0].id}/live/stop`)).status).toBe(409);
-    expect((await request(srv()).post(`/meetings/mtg_999/live/stop`)).status).toBe(404);
+    expect((await stop(done.rows[0].id)).status).toBe(409);
+    expect((await stop('mtg_999')).status).toBe(404);
   });
 
   it('a claim skips the session job while stop holds its row lock', async () => {
@@ -117,7 +129,7 @@ describe('live session api', () => {
     } finally {
       holder.release();
     }
-    const res = await request(srv()).post(`/meetings/${created.body.id}/live/stop`).expect(200);
+    const res = await stop(created.body.id).expect(200);
     expect(res.body.outcome).toBe('stopping');
   });
 
@@ -134,28 +146,34 @@ describe('live session api', () => {
   // lockSessionJob 자신의 FOR UPDATE OF j에서 나온 것이다. Postgres 행 잠금 대기는
   // 결정적이라 타이밍에 기대는 게 아니다 — 짧은 유예 후에도 안 끝났다는 사실 자체가
   // 신호이고, 회귀가 있으면(잠금이 빠지면) 그 유예 안에 즉시 끝나버려 실패한다.
+  // 새 stop()은 가드를 통과하면 항상 seal()로 job 행에 쓴다(§3.4/§4.4) — 옛 stop()의
+  // "running도 queued도 아니면 409"라는 세 번째 분기가 사라졌으므로, job.status='done'은
+  // 더 이상 "다운스트림 쓰기가 없는 순수 읽기 경로"를 만들지 않는다(그 상태로도 seal이
+  // 실행돼 200 stopping이 나간다 — 실측 확인). 아래 주석에 적힌 원래 의도(대기가
+  // lockSessionJob 자신의 FOR UPDATE에서 나온다는 것을 증명)를 지키려면 가드에서 먼저
+  // 막히는 상태가 필요하다 — meeting.status를 바꾸면 job → meeting 잠금 순서(§4.3)는
+  // 그대로 유지하면서 job 행 잠금 경합 지점도 동일하게 lockJobById(구 lockSessionJob)가
+  // 된다.
   it('POST /meetings/:id/live/stop blocks on lockSessionJob while another transaction holds the job row, then completes once it releases', async () => {
     const created = await start().expect(201);
     const jobId = created.body.current_job_id;
-    await db.pool.query(`UPDATE job SET status='done' WHERE id=$1`, [jobId]);
+    await db.pool.query(`UPDATE meeting SET status='failed' WHERE id=$1`, [created.body.id]);
     const holder = await db.pool.connect();
     try {
       await holder.query('BEGIN');
       await holder.query('SELECT * FROM job WHERE id=$1 FOR UPDATE', [jobId]);
 
       let settled = false;
-      const stopReq = request(srv())
-        .post(`/meetings/${created.body.id}/live/stop`)
-        .then((res) => { settled = true; return res; });
+      const stopReq = stop(created.body.id).then((res) => { settled = true; return res; });
 
       await new Promise((r) => setTimeout(r, 500));
-      expect(settled).toBe(false); // stop()의 lockSessionJob이 holder 뒤에서 여전히 대기 중이어야 한다
+      expect(settled).toBe(false); // stop()의 lockJobById가 holder 뒤에서 여전히 대기 중이어야 한다
 
       await holder.query('COMMIT'); // 잠금을 풀어준다
       const res = await stopReq;
       expect(settled).toBe(true);
-      expect(res.status).toBe(409); // job.status='done' — running도 queued도 아니라 최종 409
-      expect(res.body.message).toBe('live session job is done');
+      expect(res.status).toBe(409); // meeting.status='failed' — 'recording'이 아니라 409
+      expect(res.body.message).toBe('meeting is not recording');
     } finally {
       holder.release();
     }

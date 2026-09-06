@@ -3,6 +3,7 @@ import { DatabaseService } from '../database/database.service';
 import { StorageService } from '../storage/storage.service';
 import { LiveAudioService } from '../storage/live-audio.service';
 import { JobsRepository } from '../jobs/jobs.repository';
+import { JobRow, Queryable } from '../jobs/jobs.types';
 import { MeetingsRepository, MeetingRow } from '../meetings/meetings.repository';
 import { SettingsService } from '../settings/settings.service';
 import { CapabilitiesService } from '../system/capabilities.service';
@@ -121,25 +122,92 @@ export class LiveService {
     return meeting;
   }
 
-  async stop(id: string): Promise<{ meeting_id: string; job_id: string; outcome: 'stopping' | 'discarded' }> {
+  /**
+   * 종료. 봉인과 마지막 청크 사이의 창을 없애기 위해 stop이 꼬리를 싣고 온다 (설계 §3.4).
+   *
+   * 세 경우로 갈린다 — 이것이 ③ 직전 크래시(설계 §4.4)를 복구 가능하게 만드는 규칙 전부다.
+   * - expected === X-Audio-Offset: 정상. body를 append + fsync한 뒤 봉인 커밋.
+   * - expected === X-Final-Offset: 꼬리가 이미 파일에 있다(③ 전 크래시 후 재시도). append
+   *   없이 봉인 커밋만 재개한다 — 이 경우가 없으면 재시도가 영원히 409만 받아 세션이 봉인되지
+   *   못하고, 부분 유일 인덱스가 다음 녹음을 막는다.
+   * - 그 외: `missing_chunk` 409.
+   *
+   * sealed_bytes가 이미 있으면(이 job에 대한 재요청) 멱등 처리한다 — meeting.status/
+   * current_job_id는 보지 않는다. API가 이미 finalize해 meeting이 'recording'을 벗어나고
+   * current_job_id가 다음 job으로 넘어간 뒤에도, 잃어버린 200 응답의 재시도는 성공해야 한다.
+   */
+  async stop(id: string, headers: Record<string, unknown>, body: Buffer) {
+    const offset = this.intHeader(headers['x-audio-offset'], 'X-Audio-Offset');
+    const final = this.intHeader(headers['x-final-offset'], 'X-Final-Offset');
+    const tail = body ?? Buffer.alloc(0);
+    if (offset % 2 !== 0 || final % 2 !== 0) throw new BadRequestException('offsets must be even');
+    if (final !== offset + tail.length) {
+      throw new BadRequestException('X-Final-Offset must equal X-Audio-Offset + body length');
+    }
+
     const result = await this.db.withTransaction(async (c) => {
-      const job = await this.live.lockSessionJob(c, id); // job 먼저 (설계 §4 잠금 순서)
+      const probe = await this.live.findLiveJob(c, id); // job → meeting 순서 (설계 §4.3)
+      const job = probe ? await this.live.lockJobById(c, probe.job_id) : null;
       const meeting = await this.meetings.lockById(c, id);
       if (!meeting) throw new NotFoundException('meeting not found');
-      if (meeting.status !== 'recording' || !job) throw new ConflictException('meeting is not recording');
-      if (job.status === 'running') {
-        await this.live.requestStop(c, job.id);
-        return { meeting_id: id, job_id: job.id, outcome: 'stopping' as const };
+      if (!job) throw new ConflictException('meeting is not recording');
+
+      // 멱등 재시도: 이 job은 이미 봉인됐다. 같은 길이면 성공, 다르면 계약 위반이다.
+      if (job.sealed_bytes !== null) {
+        if (Number(job.sealed_bytes) !== final) {
+          throw new ConflictException({ code: 'missing_chunk', expected_offset: Number(job.sealed_bytes) });
+        }
+        return { meeting_id: id, job_id: job.id, sealed_bytes: final, outcome: 'stopping' as const, job, meeting };
       }
+      if (meeting.status !== 'recording' || meeting.current_job_id !== job.id) {
+        throw new ConflictException('meeting is not recording');
+      }
+
+      const expected = await this.liveAudio.pcmSize(meeting.audio_key);
+      if (expected === offset) {
+        if (tail.length > 0) await this.liveAudio.append(meeting.audio_key, tail);
+      } else if (expected !== final) {
+        // ③ 전 크래시 후 재시도면 expected가 이미 final이다. 그 외는 결손이다.
+        throw new ConflictException({ code: 'missing_chunk', expected_offset: expected });
+      }
+      await this.live.seal(c, job.id, final);
+
       if (job.status === 'queued') {
-        // 워커가 아직 마이크를 열지 않았다 — 녹음된 게 없으니 회의째 지운다 (job은 cascade).
-        await this.meetings.deleteById(c, id);
-        return { meeting_id: id, job_id: job.id, outcome: 'discarded' as const };
+        // 워커가 한 번도 claim하지 않았다. 디스크엔 온전한 녹음이 있으므로 API가 마무리한다.
+        // 원 설계의 "녹음된 게 없으니 회의를 지운다"는 파괴적으로 틀리다 (설계 §2.11).
+        if (final === 0) {
+          await this.meetings.deleteById(c, id);
+          return { meeting_id: id, job_id: job.id, sealed_bytes: 0, outcome: 'discarded' as const, job, meeting };
+        }
+        await this.finalizeByApi(c, job, meeting, final);
+        return { meeting_id: id, job_id: job.id, sealed_bytes: final, outcome: 'finalized' as const, job, meeting };
       }
-      throw new ConflictException(`live session job is ${job.status}`);
+      return { meeting_id: id, job_id: job.id, sealed_bytes: final, outcome: 'stopping' as const, job, meeting };
     });
-    if (result.outcome === 'discarded') await this.storage.deleteDir(this.storage.meetingDir(id));
-    return result;
+
+    if (result.outcome === 'discarded') {
+      await this.storage.deleteDir(this.storage.meetingDir(id));
+    } else {
+      // 헤더 확정은 봉인 커밋 뒤 best-effort다. 실패해도 워커는 sealed_bytes를 보고,
+      // repair_streaming_header가 재처리 때 고친다 (설계 §4.4 ④).
+      await this.liveAudio.seal(result.meeting.audio_key, result.sealed_bytes).catch(() => undefined);
+    }
+    const { job, meeting, ...body_ } = result;
+    return body_;
+  }
+
+  /**
+   * API가 finalize하는 경로. 워커의 finalize_live_session과 같은 일을 하되 job 가드가
+   * status='queued'다(워커는 running AND locked_by). capture_error는 건드리지 않는다.
+   */
+  async finalizeByApi(c: Queryable, job: JobRow, meeting: MeetingRow, sealedBytes: number) {
+    await this.meetings.markUploaded(c, meeting.id, sealedBytes / 32);
+    const processWire = (job.payload as { process: object }).process;
+    const next = await this.jobs.enqueue(c, {
+      type: 'process_meeting', meetingId: meeting.id, payload: processWire,
+    });
+    await this.meetings.setCurrentJob(c, meeting.id, next.id);
+    await this.jobs.complete(c, job.id);
   }
 
   /**

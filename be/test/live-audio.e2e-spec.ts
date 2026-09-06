@@ -40,6 +40,20 @@ describe('live audio append', () => {
     return req.send(body);
   };
 
+  /** 워커의 claim을 SQL로 흉내 낸다. */
+  const claim = (jobId: string) =>
+    db.pool.query(
+      `UPDATE job SET status='running', locked_by='w1', locked_at=now(), attempts=1, stage='capture' WHERE id=$1`,
+      [jobId],
+    );
+
+  const stop = (id: string, offset: number, final: number, body = Buffer.alloc(0)) =>
+    request(srv()).post(`/meetings/${id}/live/stop`)
+      .set('Content-Type', 'application/octet-stream')
+      .set('X-Audio-Offset', String(offset))
+      .set('X-Final-Offset', String(final))
+      .send(body);
+
   it('accepts sequential chunks and reports the next expected offset', async () => {
     const { body: m } = await start().expect(201);
     await send(m.id, 0, chunk(1)).expect(200)
@@ -200,5 +214,82 @@ describe('live audio append', () => {
     jest.spyOn(app.get(LiveAudioService), 'create').mockRejectedValueOnce(new Error('ENOSPC'));
     await start().expect(500);
     await start().expect(201);   // meeting_single_recording_idx에 걸리지 않는다
+  });
+
+  it('stop appends the tail, seals, and rewrites the header', async () => {
+    const { body: m } = await start().expect(201);
+    await send(m.id, 0, chunk(1)).expect(200);
+    const tail = Buffer.alloc(1024, 9);
+    await stop(m.id, CHUNK, CHUNK + 1024, tail).expect(200)
+      .expect((r) => expect(r.body.sealed_bytes).toBe(CHUNK + 1024));
+
+    // job.meeting_id로 찾는다 — job이 'queued'였으므로 이 stop은 API finalize까지 겸해
+    // meeting.current_job_id를 다음(process_meeting) job으로 옮긴다. m.current_job_id로
+    // join하면 방금 봉인한 live_session job이 아니라 그 다음 job을 보게 된다.
+    const { rows } = await db.pool.query(
+      `SELECT j.sealed_bytes, j.stop_requested_at, m.audio_key FROM job j
+       JOIN meeting m ON m.id=j.meeting_id WHERE j.meeting_id=$1 AND j.type='live_session'`, [m.id]);
+    expect(Number(rows[0].sealed_bytes)).toBe(CHUNK + 1024);
+    expect(rows[0].stop_requested_at).not.toBeNull();
+    const buf = fs.readFileSync(path.join(process.env.STORAGE_ROOT!, rows[0].audio_key));
+    expect(buf.readUInt32LE(40)).toBe(CHUNK + 1024);   // 헤더가 확정됐다
+  });
+
+  it('stop resumes the seal when the tail is already on disk (crash before commit)', async () => {
+    const { body: m } = await start().expect(201);
+    await send(m.id, 0, chunk(1)).expect(200);
+    const tail = Buffer.alloc(1024, 9);
+    // ③ 직전 크래시를 흉내 낸다: 꼬리는 파일에 있고 DB는 아직 봉인 전
+    const { rows } = await db.pool.query(`SELECT audio_key FROM meeting WHERE id=$1`, [m.id]);
+    fs.appendFileSync(path.join(process.env.STORAGE_ROOT!, rows[0].audio_key), tail);
+
+    // 재시도 stop은 원래 offset을 보낸다. append 없이 봉인만 재개해야 한다.
+    await stop(m.id, CHUNK, CHUNK + 1024, tail).expect(200);
+    const size = fs.statSync(path.join(process.env.STORAGE_ROOT!, rows[0].audio_key)).size;
+    expect(size).toBe(44 + CHUNK + 1024);   // 꼬리가 두 번 붙지 않았다
+  });
+
+  it('stop is idempotent once sealed, and 409s on a different final offset', async () => {
+    const { body: m } = await start().expect(201);
+    await send(m.id, 0, chunk(1)).expect(200);
+    await stop(m.id, CHUNK, CHUNK).expect(200);
+    await stop(m.id, CHUNK, CHUNK).expect(200);
+    // 2바이트 꼬리를 실제로 실어 보내야 헤더 검증(X-Final-Offset === X-Audio-Offset + body
+    // 길이)을 통과해 sealed_bytes 불일치 409에 도달한다 — 빈 바디로 CHUNK+2를 주장하면
+    // 헤더 검증 자체에서 먼저 400이 난다.
+    await stop(m.id, CHUNK, CHUNK + 2, Buffer.alloc(2)).expect(409);
+  });
+
+  it('stop 409s when chunks are missing', async () => {
+    const { body: m } = await start().expect(201);
+    await stop(m.id, CHUNK * 3, CHUNK * 3).expect(409)
+      .expect((r) => expect(r.body.code).toBe('missing_chunk'));
+  });
+
+  it('the API finalizes itself when the worker never claimed the job', async () => {
+    const { body: m } = await start().expect(201);
+    await send(m.id, 0, chunk(1)).expect(200);
+    await stop(m.id, CHUNK, CHUNK).expect(200)
+      .expect((r) => expect(r.body.outcome).toBe('finalized'));
+
+    const { rows } = await db.pool.query(
+      `SELECT status, duration_ms FROM meeting WHERE id=$1`, [m.id]);
+    expect(rows[0].status).toBe('uploaded');
+    expect(rows[0].duration_ms).toBe(CHUNK / 32);
+    const { rows: jobs } = await db.pool.query(
+      `SELECT type, status FROM job WHERE meeting_id=$1 ORDER BY created_at`, [m.id]);
+    expect(jobs.map((j) => `${j.type}:${j.status}`)).toEqual(['live_session:done', 'process_meeting:queued']);
+  });
+
+  it('a running worker gets stopping, not finalized', async () => {
+    const { body: m } = await start().expect(201);
+    const { rows } = await db.pool.query(`SELECT current_job_id FROM meeting WHERE id=$1`, [m.id]);
+    await claim(rows[0].current_job_id);
+    await send(m.id, 0, chunk(1)).expect(200);
+    await stop(m.id, CHUNK, CHUNK).expect(200)
+      .expect((r) => expect(r.body.outcome).toBe('stopping'));
+    // 워커가 finalize한다 — 회의는 아직 recording이다
+    const after = await db.pool.query(`SELECT status FROM meeting WHERE id=$1`, [m.id]);
+    expect(after.rows[0].status).toBe('recording');
   });
 });
