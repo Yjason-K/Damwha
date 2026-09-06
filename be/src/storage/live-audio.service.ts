@@ -78,6 +78,15 @@ export class LiveAudioService {
   async seal(key: string, pcmBytes: number): Promise<void> {
     const fh = await fs.promises.open(this.storage.resolve(key), 'r+');
     try {
+      // 설계 §3.3.1이 요구하는 그물. 가드된 append만 파일을 늘리므로 산술상으로는
+      // 늘 성립하지만, 그 불변식이 깨진 채 헤더에 sealed_bytes를 써 넣으면 정본이
+      // 조용히 길거나 짧아진다 — 워커는 sealed_bytes만 보고 그 길이를 진실로 삼는다.
+      // 여기서 던지면 봉인 커밋은 이미 끝난 뒤라 호출자가 best-effort로 삼키고,
+      // 재처리 때 repair_streaming_header가 고친다 (설계 §4.4 ④).
+      const { size } = await fh.stat();
+      if (size - HEADER_LEN !== pcmBytes) {
+        throw new Error(`live audio is ${size - HEADER_LEN} PCM bytes but sealed at ${pcmBytes}: ${key}`);
+      }
       await fh.write(header(pcmBytes, 36 + pcmBytes), 0, HEADER_LEN, 0);
       await fh.datasync();
     } finally { await fh.close(); }

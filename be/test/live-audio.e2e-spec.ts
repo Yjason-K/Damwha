@@ -124,6 +124,22 @@ describe('live audio append', () => {
     expect(res.body.code).toBe('sealed');
   });
 
+  // 설계 §3.4가 stop에도 X-Capture-Elapsed를 싣게 한 이유 — 꼬리 구간의 불연속은
+  // append의 갭 검사가 볼 수 없다(그 청크는 애초에 오지 않았다).
+  it('stop detects a gap at the tail from X-Capture-Elapsed', async () => {
+    const { body: m } = await start().expect(201);
+    await send(m.id, 0, chunk(1)).expect(200);
+    // 1.024초를 올렸는데 캡처는 20초 지났다 — 19초가 사라졌다.
+    await request(srv()).post(`/meetings/${m.id}/live/stop`)
+      .set('Content-Type', 'application/octet-stream')
+      .set('X-Audio-Offset', String(CHUNK)).set('X-Final-Offset', String(CHUNK))
+      .set('X-Capture-Elapsed', '20000')
+      .send(Buffer.alloc(0)).expect(200);
+    const { rows } = await db.pool.query('SELECT capture_error FROM meeting WHERE id=$1', [m.id]);
+    expect(rows[0].capture_error.code).toBe('capture_gap');
+    expect(rows[0].capture_error.gap_ms).toBe(20000 - CHUNK / 32);
+  });
+
   it('two concurrent appends at the same offset — exactly one wins', async () => {
     const { body: m } = await start().expect(201);
     const [a, b] = await Promise.all([send(m.id, 0, chunk(1)), send(m.id, 0, chunk(2))]);

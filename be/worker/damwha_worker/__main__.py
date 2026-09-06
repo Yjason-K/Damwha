@@ -9,7 +9,7 @@ from contextlib import contextmanager, nullcontext
 from . import capabilities, console, db
 from .config import load_settings
 from .contracts import parse_payload
-from .errors import ErrorKind, ShutdownRequested, classify
+from .errors import AUDIO_DEVICE_FAILED, ErrorKind, ShutdownRequested, WorkerError, classify
 from .llm_server import managed_llm_server
 from .llm_server import probe_models as check_lens_llm
 from .pipeline.enroll_speaker import run_enroll_speaker
@@ -69,8 +69,16 @@ def _shutdown_abort_hook(register_abort, shutdown_event):
 def _default_live_source(payload, storage, sealed_box):
     """payload의 source로 구현체를 고른다.
 
-    'browser'는 API가 쓰는 파일을 따라 읽고, 'mic'은 이 Mac의 입력 장치를 연다.
-    mic은 나중에 시스템 오디오가 들어올 자리의 참조 구현으로 남는다 (설계 §2.1).
+    'browser'가 유일하게 동작하는 경로다 — API가 쓰는 파일을 따라 읽는다.
+
+    'mic'은 계약에 자리만 남아 있고 **여기서 즉시 거절한다.** 캡처를 브라우저로 옮긴 뒤로
+    mic 세션은 조용히 틀린 결과를 만든다: API는 브라우저가 보낸 바이트를 파일에 쓰고 워커는
+    이 Mac의 마이크를 전사하므로 정본과 미리보기가 서로 다른 소리가 되고, MicSource는
+    sealed_bytes를 보지 않으므로 stop 뒤에도 max_minutes(4시간)까지 돈다 — 그동안
+    meeting_single_recording_idx가 다음 녹음을 전부 막는다. 시작조차 못 하는 편이
+    네 시간 뒤에 알게 되는 것보다 낫다.
+
+    MicSource와 그 테스트는 나중에 시스템 오디오 캡처가 들어올 때의 참조로 남긴다.
     """
     if payload.source == "browser":
         from .audio.tail_source import TailSource
@@ -79,9 +87,12 @@ def _default_live_source(payload, storage, sealed_box):
             storage.resolve(payload.audio_key),
             sealed_bytes=lambda: sealed_box["bytes"],
         )
-    from .audio.source import MicSource
-
-    return MicSource()
+    raise WorkerError(
+        AUDIO_DEVICE_FAILED,
+        f"live source {payload.source!r} is not supported — capture moved to the browser",
+        ErrorKind.PERMANENT,
+        stage="capture",
+    )
 
 
 def handle_job(

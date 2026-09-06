@@ -1,6 +1,8 @@
+import pytest
+
 from damwha_worker import db
 from damwha_worker.__main__ import _default_live_source, handle_job
-from damwha_worker.audio.source import FRAME_BYTES, MicSource
+from damwha_worker.audio.source import FRAME_BYTES
 from damwha_worker.audio.tail_source import TailSource
 from damwha_worker.contracts import parse_payload
 from damwha_worker.errors import AUDIO_DEVICE_FAILED, ErrorKind, WorkerError
@@ -115,8 +117,15 @@ def test_default_live_source_picks_tail_source_for_browser(tmp_path):
     assert isinstance(src, TailSource)
 
 
-def test_default_live_source_picks_mic_source_otherwise(tmp_path):
-    """mic 세션은 이 Mac의 입력 장치를 연다 — 시스템 오디오가 들어올 자리의 참조 구현(설계 §2.1)."""
+def test_default_live_source_rejects_mic(tmp_path):
+    """mic 세션은 시작조차 하지 않는다.
+
+    캡처를 브라우저로 옮긴 뒤 mic은 조용히 틀린 결과를 만든다 — API는 브라우저 바이트를
+    파일에 쓰고 워커는 호스트 마이크를 전사하며, MicSource가 sealed_bytes를 안 보므로
+    stop 뒤에도 max_minutes(4시간)까지 돌아 그동안 새 녹음이 전부 막힌다.
+    """
     payload = parse_payload("live_session", _live_payload("mtg_1"))
-    src = _default_live_source(payload, Storage(str(tmp_path)), {"bytes": None})
-    assert isinstance(src, MicSource)
+    with pytest.raises(WorkerError) as e:
+        _default_live_source(payload, Storage(str(tmp_path)), {"bytes": None})
+    assert e.value.code == AUDIO_DEVICE_FAILED
+    assert e.value.kind is ErrorKind.PERMANENT

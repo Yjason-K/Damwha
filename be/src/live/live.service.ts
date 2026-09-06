@@ -171,6 +171,8 @@ export class LiveService {
     }
 
     const captureError = this.captureFailure(headers['x-capture-error']);
+    const elapsed = headers['x-capture-elapsed'] === undefined
+      ? null : this.intHeader(headers['x-capture-elapsed'], 'X-Capture-Elapsed');
 
     const result = await this.db.withTransaction(async (c) => {
       const probe = await this.live.findLiveJob(c, id); // job → meeting 순서 (설계 §4.3)
@@ -203,6 +205,17 @@ export class LiveService {
         throw new ConflictException({ code: 'missing_chunk', expected_offset: expected });
       }
       await this.live.seal(c, job.id, final);
+
+      // 설계 §3.4가 stop에도 X-Capture-Elapsed를 싣게 한 이유가 이것이다 — 꼬리 구간의
+      // 불연속은 append의 갭 검사가 못 본다(그 청크는 오지 않았다). 브라우저가 이미
+      // 구체적인 사유를 보냈으면 덮지 않는다: "마이크가 끊겼다"가 "시간이 비었다"보다
+      // 사용자에게 훨씬 쓸모 있고, 갭은 그 사유의 결과일 뿐이다.
+      if (elapsed !== null) {
+        const gap = elapsed - final / BYTES_PER_MS;
+        if (gap > GAP_THRESHOLD_MS) {
+          await this.live.setCaptureErrorIfUnset(c, id, { code: 'capture_gap', gap_ms: Math.round(gap) });
+        }
+      }
 
       if (job.status !== 'running') {
         // 이 job을 마무리할 워커가 없다. queued면 한 번도 claim되지 않았고, failed면
