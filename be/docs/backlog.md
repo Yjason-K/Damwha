@@ -158,3 +158,41 @@ RC2에서 검토했고 **현 데이터 규모에서는 기각**했다. corpus �
 - **재검토 트리거:** 서로 다른 녹음 환경의 회의가 20건 이상 쌓였을 때. `eval_speaker_id.py`의 `centered`
   변형과 leave-one-meeting-out 안정성을 다시 재면 된다.
 - 상태: **기각(현시점)**
+
+---
+
+## 라이브 녹음 브라우저 캡처 — 설계 §12 유보 항목 (등록 2026-09-06)
+
+`docs/superpowers/specs/2026-09-05-live-recording-design.md` §12("하지 않는 것")이 이번 구현 범위 밖으로
+명시적으로 미룬 항목들. 스펙은 날짜 스냅샷이라 고치지 않고, 후속 작업 후보로 여기 남긴다.
+
+- **라이브 녹음 HTTPS** — 브라우저와 워커 Mac을 분리하면 `http://192.168.x.x`가 secure
+  context가 아니라 `navigator.mediaDevices`가 undefined다. mkcert/Caddy 또는 Tailscale.
+  (설계 §10.1)
+- **라이브 녹음 IndexedDB spool** — 지금은 메모리 버퍼라 탭이 죽으면 미전송분을 잃는다.
+  같은 Mac에서는 1~2초라 감수했다. (설계 §2.9)
+- **시스템 오디오 멀티 트랙** — 브라우저 마이크와 워커의 시스템 오디오는 clock이 달라 한
+  WAV에 append할 수 없다. source별 트랙 + sample-clock 메타데이터가 필요하다. (설계 §10.3)
+- **Screen Wake Lock** — 시스템 슬립에서 AudioContext가 멈춘다. (설계 §10.4)
+- **청크 해시 receipt** — 지금은 "회의 하나에 producer는 브라우저 하나"를 전제한다.
+  다중 클라이언트가 생기면 이 전제부터 다시 본다. (설계 §10.2)
+
+### 결정 기록 — AudioWorklet 로딩은 `?worker&url`, `new URL(..., import.meta.url)`이 아니다
+
+Vite 문서가 명시한 표준 패턴은 `new URL('./pcm-worklet.ts', import.meta.url)`이다. 이 프로젝트는
+그 대신 `import pcmWorkletUrl from "./pcm-worklet.ts?worker&url"`(`fe/src/features/meeting/lib/live-recorder.ts`)를
+쓴다 — 표준 패턴을 기각한 이유:
+
+`new URL(...)`은 Vite의 "정적 분석 가능한 URL은 에셋으로 처리한다" 규칙을 타지만, `.ts` 파일은
+Vite의 에셋 목록에도 `assetsInclude`에도 없다. 그 경로를 태우면 **트랜스파일 없이 원본 TypeScript
+소스를 그대로 복사**한 파일의 URL을 돌려준다 — `declare global` 같은 TS 전용 구문이 그대로 남아
+브라우저가 파싱조차 못 한다. 이것이 위험한 이유는 **빌드가 에러 없이 성공**한다는 점이다: `pnpm fe
+build`는 초록불이고, 손상은 `ctx.audioWorklet.addModule(url)`이 실제 브라우저에서 그 URL을 가져와
+파싱을 시도하는 순간에만 드러난다 — jsdom에는 `AudioContext`가 없어 어떤 자동화 테스트도 이 경로를
+실행하지 않는다(아래 SMOKE.md 체크리스트 항목이 이 공백을 메우는 이유).
+
+`?worker&url`은 대상을 Rollup 워커 빌드로 한 번 더 태워 TS→JS 트랜스파일을 거친 뒤 그 산출물의
+URL만 돌려준다(Worker를 생성하지 않는다 — `AudioWorkletNode`가 필요한 건 URL이지 Worker 인스턴스가
+아니다). 검증은 `pnpm fe build` 후 `dist/assets/`에 실제 `.js` 파일이 나오는지로 했다.
+`fe/src/features/meeting/lib/pcm-worklet.ts`는 `addModule()`로 로드되는 별도 컨텍스트라 앱 번들의
+import를 쓸 수 없다는 제약도 같이 걸려 있다 — 상수를 복제해 유지한다.

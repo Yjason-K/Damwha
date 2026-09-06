@@ -557,25 +557,57 @@ turbo는 같은 조건에서 2.9%p 퍼진다. payload 재현성을 설계 가치
 
 ## 라이브 세션 (`live_session`, 설계 2026-09-05)
 
+**워커는 이제 writer가 아니라 reader다.** 실제 사용자 흐름은 브라우저가 마이크로 녹음해 API에
+초당 업로드하고, API가 그 바이트를 라이브 WAV에 append·봉인(`sealed_bytes`)하면, 워커의
+`TailSource`가 그 파일을 따라 읽으며 미리보기를 낸다 — 아래 `--tail`이 이 경로를 브라우저·API
+없이 흉내낸다. `--mic`는 워커가 이 Mac의 마이크를 직접 여는 **옛 경로**이고, 지금은 시스템 오디오
+구현체를 붙일 때를 위한 참조 경로로만 남아 있다(`AudioSource` 프로토콜이 `TailSource` 말고 다른
+구현도 지탱한다는 증거).
+
 ```bash
 uv sync --extra models          # sounddevice 포함
-uv run python scripts/smoke_live_session.py --mic --seconds 60      # 마이크 60초 뒤 자동 stop
-uv run python scripts/smoke_live_session.py --file ~/x/16k-mono.wav  # 파일을 실시간 속도로
+uv run python scripts/smoke_live_session.py --tail ~/x/16k-mono.wav --seconds 60
+                                 # <path>의 PCM을 새 파일에 실시간 append하며 TailSource로 미리보기
+uv run python scripts/smoke_live_session.py --file ~/x/16k-mono.wav  # 완결 파일을 실시간 속도로
+uv run python scripts/smoke_live_session.py --mic --seconds 60      # 참조 경로: 마이크 60초 뒤 자동 stop
 ```
 
-- 첫 실행에 macOS가 **터미널 앱**에 마이크 권한을 묻는다. 거부하면 job이 `audio_device_failed`로
-  즉시 실패한다. 시스템 설정 › 개인정보 보호 및 보안 › 마이크에서 다시 허용.
+**실제 기기 스모크(브라우저 녹음)는 코드가 아니라 사람이 브라우저에서 확인해야 한다.** 절차:
+
+```bash
+pnpm db:up && pnpm be migrate
+pnpm worker            # 별 터미널
+pnpm dev               # 별 터미널
+```
+
+1. `http://localhost:5173`을 브라우저로 연다.
+2. **AudioWorklet이 실제로 로드되는지 본다.** `pcm-worklet.ts`는 `ctx.audioWorklet.addModule()`로
+   로드되는 별도 컨텍스트라 jsdom으로는 실행 자체가 안 된다(jsdom에 `AudioContext`가 없다) —
+   `pnpm fe build`가 초록불이어도 이 경로가 브라우저에서 실제로 도는지는 전혀 증명하지 않는다.
+   `?worker&url` 트랜스파일이 깨지면(예: 원본 `.ts`가 그대로 복사되는 회귀) 콘솔에
+   `SyntaxError`/`addModule` reject가 뜨고 녹음이 시작되지 않는다 — 개발자 도구 콘솔을 열어
+   두고 녹음 시작 버튼을 눌러 에러가 없는지 확인한다(`be/docs/backlog.md`의 "AudioWorklet 로딩"
+   결정 기록 참고).
+3. 녹음 시작 → 1분 말하기 → 종료. 발화가 화면에 흘러오는지, 지연이 얼마인지 본다(실측을 아래
+   표에 적는다).
+4. `meetings/<id>/live.wav`가 자라는지, 종료 후 `ffprobe`로 duration이 실제와 맞는지 본다.
+5. 종료 후 회의가 `uploaded` → `processing` → `done`으로 가는지 본다.
+6. **크래시 테스트:** 녹음 중 API를 `kill -9`하고 다시 띄운다. 브라우저가 409로 재동기화하고
+   이어지는지 본다.
+7. **탭 닫기 테스트:** 녹음 중 탭을 닫고 90초 뒤 회의가 `uploaded` + `capture_error=producer_abandoned`가
+   되는지 본다.
+
 - 로그의 `latency_ms=`가 세그먼트 끝 → `live_utterance` INSERT 지연이다. 실측(날짜, 머신, 값)을 아래에 적는다.
 - 식별 결합 기준은 `suggest_threshold`(0.6)다. bind(0.8)와의 적중률 비교는 `eval_speaker_id.py`
   방식으로 같은 클립을 두 기준에 돌려 여기 기록한다 — 설계 §2.8을 되돌릴 근거가 된다.
-- **종료 순서가 뒤바뀌면 안 된다.** `run_live_session`은 캡처 스레드를 join한 **뒤에야** writer
-  스레드에 종료 신호를 보낸다. 마이크 콜백은 소비자보다 앞서 버퍼를 채우므로 `stop()` 뒤에도
-  한동안 프레임이 계속 나온다 — 순서를 바꿔 writer를 먼저 끝내면 그 시점 이후 캡처가 넣는 프레임은
-  아무도 읽지 않는 큐에 쌓인 채 사라진다. 순서를 되돌리는 회귀 테스트에서 130프레임 중 57개가
-  이렇게 사라지는 것을 확인했다(`test_live_session.py`).
-- **writer 스레드가 죽으면(디스크 풀 등) 세션은 커밋하지 않고 PERMANENT `io_error`로 실패한다.**
-  조용히 넘기면 사용자가 실제로 녹음한 것보다 짧게 잘린 파일이(`duration_ms`도 디스크에 닿은
-  바이트 기준이라 똑같이 짧게 찍힌 채) 아무 오류 표시 없이 "완료된 회의"가 된다.
+- **`sealed_bytes`가 EOF의 권위다, 파일 크기가 아니다.** `TailSource`는 헤더의 크기 필드를 읽지
+  않고 `job.sealed_bytes`(1초 폴링)가 오기를 기다린다 — 상세는 `docs/worker-architecture.md`
+  "라이브 세션 자식" 절.
+- **`--file`/`--mic`는 스스로 봉인하지 않는다 — `IO_ERROR`로 끝나는 게 정상이다.** 둘 다
+  `job.sealed_bytes`를 아무도 쓰지 않으므로, 소스가 자연히 끝나면(`--file`의 EOF) 또는 stop
+  요청 뒤 60초(`STOP_WITHOUT_SEAL_SECONDS`)가 지나면(`--mic`) `run_live_session`이 PERMANENT
+  `io_error`로 끝난다 — 이건 스모크 스크립트가 봉인 계약을 흉내내지 않기 때문이지 버그가 아니다.
+  이 계약을 실제로 만족시키는 건 `--tail`뿐이다(내부에서 `job.sealed_bytes`를 직접 찍는다).
 - **프레임을 한 개도 못 잡은 세션은 finalize하지 않고 PERMANENT `audio_device_failed`로 실패한다.**
   `discarded`로 끝내는 방안도 검토했지만, `discarded`는 어떤 job도 완료 처리를 하지 않는 경로라
   회의가 `recording`에 계속 머문다 — `meeting_single_recording_idx`가 동시 녹음을 하나로
@@ -588,6 +620,7 @@ uv run python scripts/smoke_live_session.py --file ~/x/16k-mono.wav  # 파일을
 | 날짜 | 머신 | STT | latency_ms (중앙값/최대) | 비고 |
 |---|---|---|---|---|
 | 2026-09-05 | Apple M4 Pro, 48GB, macOS 26.6.2 | large-v3-turbo (mlx, gpu) | 5147 / 7356 | `--file`, 실제 회의 녹음 아님(공개 강연 클립) 60초, 4 세그먼트(4219/4360/5934/7356ms). `--mic`는 이 환경에 마이크 권한을 부여할 수 없어(비대화형 에이전트 세션) 실행하지 못했다 — 실행 경로는 `--file`과 캡처 스레드만 다르다. |
+| 2026-09-06 | Apple M4 Pro, 48GB, macOS 26.6.2 | large-v3-turbo (mlx, gpu) | 1428 / 2767 | `--tail`(같은 강연 클립 60초를 새 파일에 1초 청크로 실시간 append, `TailSource`로 미리보기), 4 세그먼트(2767/1389/1467/1030ms), `skips=0`, `outcome=committed`. `--file`보다 훨씬 낮다 — 표본 4개뿐이고 두 실행의 시스템/모델 warm-up 상태가 달라 이 차이의 원인은 이 데이터만으로 가르지 못한다. 같은 세션에서 `--mic`도 실행됐다: 이번엔 마이크 권한 프롬프트 없이 스트림이 열렸다(과거 실측 시점과 환경이 달라진 것으로 보인다) — 다만 위 "`--file`/`--mic`는 스스로 봉인하지 않는다" 대로 `stop` 60초 뒤 `io_error`로 끝났다. |
 
 **이 실측은 설계의 "1~2초" 가정과 어긋난다.** 설계 §5.3/§9는 세그먼트 끝→미리보기 노출 지연을
 "보통 1~2초"로 예상했다. 실측 중앙값 5.1초·최대 7.4초는 그 값의 2.5~5배다. 설계 문서는 날짜
@@ -608,3 +641,10 @@ SSE를 넣을 근거를 강화하지 않는다. 반대로, 그 결정이 더 안
 너무 작아 생긴 잡음일 수 있고, 이 실행만으로는 구분할 수 없다. 모델을 예열한 채로 더 긴
 녹음·더 많은 세그먼트를, 가능하면 실제 `--mic`로 재측정하기 전까지는 중앙값도 최댓값도 잠정치로
 읽을 것.
+
+**2026-09-06의 `--tail` 재측정(중앙값 1.4초·최대 2.8초)은 설계의 "1~2초" 가정에 오히려 가깝다** —
+위 5.1초/7.4초와 같은 클립·같은 머신인데도 크게 다르다. `--tail`은 실제 배포 경로(자라는 파일 +
+`TailSource`)이고 `--file`은 완결 파일을 흘리는 옛 경로라는 차이는 있지만, 둘 다 같은
+`LiveSegmenter`→whisper→ECAPA→식별 코드를 타므로 이 차이가 경로 자체에서 온다고 보기는 어렵다 —
+더 그럴듯한 설명은 두 실행 시점의 워밍업 상태(캐시된 HF 메타데이터, 열 상태)다. 표본이 도합 8개뿐이라
+어느 쪽도 정착값이 아니다: **1~2초 가정을 다시 살릴 근거로도, 5~7초를 정설로 굳힐 근거로도 쓰지 말 것.**

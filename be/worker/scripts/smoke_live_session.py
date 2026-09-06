@@ -2,19 +2,27 @@
 
     uv run python scripts/smoke_live_session.py --mic --seconds 60
     uv run python scripts/smoke_live_session.py --file /path/16k-mono.wav
+    uv run python scripts/smoke_live_session.py --tail /path/16k-mono.wav --seconds 60
 
 testcontainers Postgres를 띄우고 마이그레이션·recording 회의·live_session job을 심은 뒤
 run_live_session을 돌린다. --mic는 지정한 초 뒤에 stop 플래그를 스스로 찍는다. --file은
-실시간 속도로 흘리고 EOF에서 끝난다. 세그먼트 끝 → live_utterance INSERT 지연(ms)을
+실시간 속도로 흘리고 EOF에서 끝난다. --tail은 <path>의 실제 WAV를 소스로 삼아 그 PCM을
+**새 파일**에 1초 청크로 실시간 append하면서 그 새 파일에 TailSource를 붙인다 — 브라우저가
+올리고 API가 쓰는 파일을 워커가 따라 읽는 경로를, 브라우저·API 없이 그 계약(스트리밍 헤더 →
+append → 봉인)만 흉내내어 재현한다. append가 끝나면 헤더를 확정하고 job.sealed_bytes를
+찍어 TailSource가 EOF를 내게 한다. 세그먼트 끝 → live_utterance INSERT 지연(ms)을
 "latency_ms=" 로그로 남긴다 — 설계 §9 "1~2초"의 실측이다. CI 테스트가 아니다.
 """
 
 import argparse
 import logging
+import os
+import struct
 import sys
 import tempfile
 import threading
 import time
+import wave
 from pathlib import Path
 
 import psycopg
@@ -23,7 +31,8 @@ from psycopg.types.json import Jsonb
 from testcontainers.postgres import PostgresContainer
 
 from damwha_worker import db
-from damwha_worker.audio.source import FileSource, MicSource
+from damwha_worker.audio.source import SR, FileSource, MicSource
+from damwha_worker.audio.tail_source import TailSource
 from damwha_worker.config import load_settings
 from damwha_worker.contracts import parse_payload
 from damwha_worker.models.registry import build_live_models
@@ -32,13 +41,62 @@ from damwha_worker.storage import Storage
 
 MIGRATIONS = Path(__file__).resolve().parents[2] / "src" / "database" / "migrations"
 
+#: be/src/storage/live-audio.service.ts와 바이트 단위로 동일한 상수·헤더 — 브라우저+API가
+#: 쓰는 라이브 WAV를 흉내낸다 (설계 §2.2, §2.8).
+HEADER_LEN = 44
+STREAMING_SIZE = 0xFFFFFFFF
 
-def _payload(meeting_id: str, audio_key: str, device: str) -> dict:
+
+def _wav_header(data_size: int, riff_size: int) -> bytes:
+    b = bytearray(HEADER_LEN)
+    b[0:4] = b"RIFF"
+    struct.pack_into("<I", b, 4, riff_size)
+    b[8:12] = b"WAVE"
+    b[12:16] = b"fmt "
+    struct.pack_into("<I", b, 16, 16)
+    struct.pack_into("<H", b, 20, 1)
+    struct.pack_into("<H", b, 22, 1)
+    struct.pack_into("<I", b, 24, SR)
+    struct.pack_into("<I", b, 28, SR * 2)
+    struct.pack_into("<H", b, 32, 2)
+    struct.pack_into("<H", b, 34, 16)
+    b[36:40] = b"data"
+    struct.pack_into("<I", b, 40, data_size)
+    return bytes(b)
+
+
+def _append_realtime(target_path: str, source_wav: str, max_seconds: int) -> int:
+    """source_wav의 PCM을 target_path 끝에 1초 청크로 실시간 append한다(설계 §2.5의
+    "초당 POST" 흉내). max_seconds만큼(또는 source_wav가 먼저 끝나면 그만큼) 쓰고 append한
+    바이트 수를 돌려준다. target_path는 이미 스트리밍 헤더가 쓰여 있어야 한다."""
+    max_bytes = max_seconds * SR * 2 if max_seconds else None
+    written = 0
+    with wave.open(source_wav, "rb") as w:
+        if (w.getframerate(), w.getnchannels(), w.getsampwidth()) != (SR, 1, 2):
+            raise SystemExit(
+                f"--tail source needs {SR} Hz mono int16 wav, got "
+                f"{w.getframerate()} Hz / {w.getnchannels()} ch / {w.getsampwidth() * 8} bit"
+            )
+        with open(target_path, "r+b") as f:
+            f.seek(0, os.SEEK_END)
+            while max_bytes is None or written < max_bytes:
+                pcm = w.readframes(SR)  # 1초치 샘플
+                if not pcm:
+                    break
+                f.write(pcm)
+                f.flush()
+                os.fsync(f.fileno())
+                written += len(pcm)
+                time.sleep(1.0)
+    return written
+
+
+def _payload(meeting_id: str, audio_key: str, device: str, *, source: str = "mic") -> dict:
     return {
         "schema_version": 1,
         "meeting_id": meeting_id,
         "audio_key": audio_key,
-        "source": "mic",
+        "source": source,
         "process": {
             "schema_version": 5,
             "meeting_id": meeting_id,
@@ -69,11 +127,17 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--mic", action="store_true")
     ap.add_argument("--file")
+    ap.add_argument(
+        "--tail",
+        metavar="SOURCE_WAV",
+        help="SOURCE_WAV의 PCM을 새 파일에 실시간 append하며 그 파일에 TailSource를 붙인다 "
+        "— 시스템 오디오 구현체가 아니라 브라우저+API가 쓰는 경로의 계약을 흉내낸다",
+    )
     ap.add_argument("--seconds", type=int, default=60)
     ap.add_argument("--device", choices=["gpu", "cpu"], default="gpu")
     args = ap.parse_args()
-    if not args.mic and not args.file:
-        ap.error("--mic 또는 --file 중 하나")
+    if sum(bool(m) for m in (args.mic, args.file, args.tail)) != 1:
+        ap.error("--mic, --file, --tail 중 정확히 하나")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     settings = load_settings()
 
@@ -89,9 +153,10 @@ def main() -> int:
         mid = conn.execute(
             "INSERT INTO meeting(audio_key, status) VALUES ('pending','recording') RETURNING id"
         ).fetchone()["id"]
-        audio_key = f"meetings/{mid}/original.wav"
+        audio_key = f"meetings/{mid}/{'live.wav' if args.tail else 'original.wav'}"
         conn.execute("UPDATE meeting SET audio_key=%s WHERE id=%s", (audio_key, mid))
-        payload_dict = _payload(mid, audio_key, args.device)
+        source_kind = "browser" if args.tail else "mic"
+        payload_dict = _payload(mid, audio_key, args.device, source=source_kind)
         jid = conn.execute(
             "INSERT INTO job(type, meeting_id, payload, max_attempts) "
             "VALUES ('live_session', %s, %s, 1) RETURNING id",
@@ -102,8 +167,32 @@ def main() -> int:
         assert job is not None and job["id"] == jid
 
         models = build_live_models(payload_dict, settings)
-        source = MicSource() if args.mic else FileSource(args.file, realtime=True)
-        if args.mic:
+        sealed_box: dict | None = None
+        if args.tail:
+            target_path = storage.resolve(audio_key)
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            with open(target_path, "wb") as f:
+                f.write(_wav_header(STREAMING_SIZE, STREAMING_SIZE))
+            sealed_box = {"bytes": None}
+            source = TailSource(target_path, sealed_bytes=lambda: sealed_box["bytes"])
+
+            def _tail_writer() -> None:
+                written = _append_realtime(target_path, args.tail, args.seconds)
+                with open(target_path, "r+b") as f:
+                    f.seek(0)
+                    f.write(_wav_header(written, 36 + written))
+                    f.flush()
+                    os.fsync(f.fileno())
+                with psycopg.connect(url, autocommit=True) as c2:
+                    c2.execute(
+                        "UPDATE job SET stop_requested_at=now(), sealed_bytes=%s WHERE id=%s",
+                        (written, jid),
+                    )
+                logging.info("tail writer sealed after %d bytes (%d ms)", written, written // 32)
+
+            threading.Thread(target=_tail_writer, daemon=True).start()
+        elif args.mic:
+            source = MicSource()
 
             def _stop_later() -> None:
                 time.sleep(args.seconds)
@@ -112,6 +201,8 @@ def main() -> int:
                 logging.info("stop requested after %ss", args.seconds)
 
             threading.Thread(target=_stop_later, daemon=True).start()
+        else:
+            source = FileSource(args.file, realtime=True)
 
         # 지연 측정: insert_live_utterance를 감싸 세그먼트 end_ms 대비 벽시계 지연을 찍는다.
         real_insert = db.insert_live_utterance
@@ -140,6 +231,7 @@ def main() -> int:
             source,
             worker_id=settings.worker_id,
             max_minutes=settings.live_max_minutes,
+            sealed_box=sealed_box,
         )
         rows = conn.execute(
             "SELECT seq, start_ms, end_ms, speaker_id, similarity, text FROM live_utterance "

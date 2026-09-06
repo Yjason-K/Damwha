@@ -25,6 +25,11 @@ FRAME_MS = FRAME_SAMPLES * 1000 // SR  # 32
 
 
 class AudioSource(Protocol):
+    #: yield한 마지막 프레임의 끝 시각(ms). 아직 하나도 안 냈으면 0. Capture._run이 매
+    #: 프레임마다 읽으므로(pipeline/live_session.py), 구현이 이를 빠뜨리면 런타임에서만
+    #: 터진다 — TailSource·GrowingFileSource(테스트 fake)와 계약이 같아야 한다.
+    position_ms: int
+
     def frames(self) -> Iterator[bytes]:
         """프레임을 순서대로 낸다. stop() 뒤(또는 EOF) 반복이 끝난다."""
         ...
@@ -40,6 +45,7 @@ class FileSource:
         self._realtime = realtime
         self._sleep = sleep
         self._stopped = threading.Event()
+        self.position_ms = 0
 
     def frames(self) -> Iterator[bytes]:
         with wave.open(self._path, "rb") as w:
@@ -54,6 +60,7 @@ class FileSource:
                     return  # 마지막 자투리는 버린다
                 if self._realtime:
                     self._sleep(FRAME_MS / 1000)
+                self.position_ms += FRAME_MS
                 yield pcm
 
     def stop(self) -> None:
@@ -76,6 +83,12 @@ def _import_sounddevice():
 class MicSource:
     """기본 입력 장치를 연다. 콜백은 큐에 넣기만 하고, frames()가 그 큐를 비운다.
 
+    `payload.source`가 "browser"면 워커는 이걸 쓰지 않는다 — __main__.py의
+    `_default_live_source`가 그 경우 TailSource를 고른다. MicSource는 시스템 오디오
+    구현체가 들어올 자리의 참조 구현으로 남아 있다: AudioSource 프로토콜이 TailSource
+    말고 다른 구현도 지탱한다는 증거이자, 그 구현이 실제로 존재하는 유일한 자리다. 지우지
+    않는다 (설계 §2.1).
+
     첫 실행에 macOS 마이크 권한 프롬프트가 터미널 앱 앞으로 뜬다. 거부·장치 없음·미설치는
     전부 PERMANENT audio_device_failed — 재시도로 달라질 게 없다.
     """
@@ -87,6 +100,7 @@ class MicSource:
         # 먼저 오는 경우(취소 직후) 신호가 버려지면 안 된다. FileSource의 threading.Event와
         # 같은 이유로 stop 신호통은 생성자에서부터 살아 있어야 한다.
         self._q: queue.Queue[bytes | None] = queue.Queue()
+        self.position_ms = 0
 
     def frames(self) -> Iterator[bytes]:
         sd = self._sd or _import_sounddevice()
@@ -120,6 +134,7 @@ class MicSource:
                 pcm = q.get()
                 if pcm is None:
                     return
+                self.position_ms += FRAME_MS
                 yield pcm
         finally:
             stream.stop()

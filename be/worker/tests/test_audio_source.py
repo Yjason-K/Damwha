@@ -40,6 +40,16 @@ def test_file_source_realtime_sleeps_one_frame_per_frame(tmp_path):
     assert slept == [FRAME_MS / 1000] * 4
 
 
+def test_file_source_position_ms_is_end_of_last_yielded_frame(tmp_path):
+    path = make_wav(str(tmp_path / "a.wav"), 3)
+    src = FileSource(path)
+    assert src.position_ms == 0
+    positions = []
+    for _ in src.frames():
+        positions.append(src.position_ms)
+    assert positions == [FRAME_MS, FRAME_MS * 2, FRAME_MS * 3]
+
+
 class _FakeStream:
     """sounddevice.InputStream 흉내 — start()에서 콜백을 스레드로 돌린다."""
 
@@ -116,6 +126,18 @@ def test_mic_source_maps_open_failure_to_permanent_audio_device_failed():
         list(src.frames())
     assert ei.value.code == AUDIO_DEVICE_FAILED
     assert ei.value.kind is ErrorKind.PERMANENT
+
+
+def test_mic_source_position_ms_is_end_of_last_yielded_frame():
+    sd = _FakeSounddevice()
+    src = MicSource(sounddevice_module=sd)
+    assert src.position_ms == 0
+    positions = []
+    for _f in src.frames():
+        positions.append(src.position_ms)
+        if len(positions) == 3:
+            src.stop()
+    assert positions == [FRAME_MS, FRAME_MS * 2, FRAME_MS * 3]
 
 
 def test_mic_source_without_sounddevice_installed_is_permanent(monkeypatch):

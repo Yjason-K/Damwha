@@ -1011,8 +1011,10 @@ def get_stop_requested(conn, job_id: str, worker_id: str) -> tuple[str | None, i
     ('stop', sealed_bytes) = API가 봉인을 끝냈다. 워커는 그 바이트까지 읽고 finalize한다.
     ('lost', None) = 소유권 상실 (cancel·reaper). (None, None) = 계속.
 
-    둘을 한 SELECT로 읽는 이유: 봉인은 stop_requested_at과 sealed_bytes를 같은 트랜잭션에서
-    쓰므로 따로 읽으면 그 사이 값이 바뀐 것을 볼 수 있다 (설계 §4.4 ③).
+    둘을 한 SELECT로 읽는 이유는 원자성이 아니다 — 이 커넥션은 autocommit이라
+    READ COMMITTED에서 두 SELECT가 찢어진 상태를 볼 수 없다. 이유는 (a) 왕복 1회이고
+    (b) sealed_bytes 읽기가 stop 검사와 같은 소유권 술어 안에 묶여, 그 사이 job이
+    재claim되면 낡은 값을 받는 TOCTOU가 닫히기 때문이다.
     """
     row = conn.execute(
         "SELECT status, locked_by, stop_requested_at, sealed_bytes FROM job WHERE id=%s",

@@ -23,7 +23,7 @@ NestJS API와 ML worker poller 사이에는 HTTP 호출이 없다. 둘의 비동
 | 렌즈 항목 추출 | `extract_lenses` | 로컬 LLM으로 action/decision/promise `lens_item`과 `lens_evidence` |
 | 회의 요약 생성 | `summarize_meeting` | 로컬 LLM으로 회의 전체 요약 `meeting_summary`(topics/segments) |
 | 검색 질의 임베딩 | `POST /embed` | 검색어의 BGE-M3 1024차원 벡터 |
-| 실시간 녹음 | `live_session` | 마이크 캡처 WAV, 미리보기 `live_utterance`, 종료 시 `process_meeting` 자동 큐잉 |
+| 실시간 녹음 | `live_session` | 브라우저가 올리고 API가 쓰는 WAV를 따라 읽어 미리보기 `live_utterance`, 종료 시 `process_meeting` 자동 큐잉 |
 | 작업 생명주기 | supervisor 부모 + job당 자식 | 원자적 claim, stage/progress, heartbeat, retry/fail, stale 결과 폐기 |
 
 ## 2. 시스템 컨텍스트
@@ -207,35 +207,65 @@ flowchart TD
 
 ### 라이브 세션 자식
 
-`live_session`을 claim한 자식은 종료 신호까지 산다. 마이크 콜백 → writer 큐(전용 스레드, 스트리밍
-헤더 WAV) + preview 큐(상한 5분) → 메인 루프(VAD → 세그먼트 → whisper → ECAPA 식별 → `live_utterance`).
-1초마다 `job.stop_requested_at`·소유권·shutdown·상한 시간을 본다.
+**워커는 이제 writer가 아니라 reader다.** 브라우저가 마이크로 잡은 PCM을 초당 API로 POST하고,
+API가 그 바이트를 라이브 WAV 파일에 append한 뒤 fsync한다(`be/src/storage/live-audio.service.ts`) —
+파일을 쓰는 프로세스는 워커가 아니라 API다. 워커의 `TailSource`(`audio/tail_source.py`)는 그
+파일을 뒤에서부터 따라 읽기만 한다. 이 분리 때문에 예전 설계(§2.9)의 이중 큐(writer 큐 + preview
+큐)와 전용 writer 스레드는 워커 쪽에서 통째로 없어졌다 — "추론이 멈춰도 파일 쓰기는 디스크 속도로
+계속된다"는 목표가 캡처를 브라우저+API로 옮긴 순간 이미 공짜로 성립하기 때문이다. `live_session`을
+claim한 자식은 이제 **캡처 스레드(`Capture`) → 유계 preview 큐(2초치 프레임) → 메인 루프**
+(불연속 감지 → `LiveSegmenter` → whisper → ECAPA 임베딩·식별 → `live_utterance` INSERT) 하나만
+가진다. 큐가 유계인 이유는 그 자체가 backpressure다 — 미리보기가 느리면 큐가 차고 → 캡처 스레드가
+`put`에서 막히고 → `TailSource`가 전진을 멈추고 → 파일은 API가 계속 쓰므로 다음 읽기에서 드리프트를
+관측해 앞으로 건너뛴다(§6.1, `DRIFT_BYTES`=30초).
 
-**종료 순서가 뒤바뀌면 안 된다.** 캡처 스레드를 join한 **뒤에야** writer 스레드에 종료 신호(sentinel)를
-보낸다 — 정상 종료와 예외 경로 모두 마찬가지다. 실제 마이크는 콜백이 소비자보다 앞서 버퍼를 채우므로
-`stop()` 뒤에도 한동안 프레임이 계속 나온다. 순서를 바꿔 writer를 먼저 끝내면 그 직후 캡처가 넣는
-프레임은 아무도 읽지 않는 큐에 쌓인 채 사라진다 — 순서를 되돌리는 회귀 테스트에서 130프레임 중 57개가
-이렇게 사라지는 것으로 확인했다. writer 스레드가 죽으면(디스크 풀 등) 그 오류를 캡처 스레드의 오류와
-동등하게 취급해 finalize 직전에 검사하고, 세션을 PERMANENT `io_error`로 실패시킨다 — 조용히 넘기면
-사용자가 실제로 녹음한 것보다 짧게 잘린 파일이(`duration_ms`도 디스크에 닿은 바이트 기준이라
-똑같이 짧게 찍힌 채) 아무 표시 없이 "완료된 회의"가 된다. 프레임을 한 개도 못 잡은 세션은
-`discarded`로 끝내지 않고 PERMANENT `audio_device_failed`로 실패한다 — `discarded`는 어떤 job도
-완료 처리하지 않는 경로라 회의가 `recording`에 그대로 남고, `meeting_single_recording_idx`가 동시
-녹음을 하나로 제한하므로 그 상태가 이후의 모든 녹음 시작을 영영 막게 된다. `MicSource`의 stop 신호
-큐는 `frames()`가 아니라 생성자에서 만든다 — 캡처가 시작되기도 전에 `stop()`이 먼저 오는 취소
-경쟁에서도 신호가 버려지지 않게 하기 위해서다.
+**`sealed_bytes`가 EOF의 권위이지, 파일 크기가 아니다.** 파일 append·헤더 재작성·`job.sealed_bytes`
+커밋은 하나의 트랜잭션으로 묶을 수 없어서(API가 append하는 순간과 `stop_requested_at`+`sealed_bytes`를
+커밋하는 순간이 별개 요청이다) 셋 중 무엇을 진실로 볼지 정해야 한다 — 정한 것이 `job.sealed_bytes`다.
+`TailSource`는 헤더의 크기 필드를 읽지 않는다(봉인 전환 중의 값을 믿으면 조기 종료한다). 메인
+루프는 1초마다 `db.get_stop_requested`로 `(status, locked_by, stop_requested_at, sealed_bytes)`를
+한 번의 SELECT로 읽는다 — 원자성 때문이 아니라(이 연결은 autocommit이라 READ COMMITTED에서 두
+SELECT가 찢어진 상태를 볼 수 없다) 왕복을 하나로 줄이고, sealed_bytes 읽기를 소유권 검사와 같은
+술어 안에 묶어 그 사이 job이 재claim되는 TOCTOU를 닫기 위해서다(`db.py::get_stop_requested`).
+`stop_requested_at`은 있는데 `sealed_bytes`가 아직 없는 창(API가 stop 플래그만 먼저 커밋하는
+마이그레이션/버그 시나리오)에 대비해, stop을 본 뒤 60초(`STOP_WITHOUT_SEAL_SECONDS`) 안에
+`sealed_bytes`가 오지 않으면 `max_minutes`(4시간)까지 기다리지 않고 PERMANENT `io_error`로 끝낸다 —
+봉인 없이는 `TailSource`가 절대 EOF를 내지 않기 때문이다.
 
-종료 순서 요약: 캡처 닫기 → writer join → 마지막 발화 처리 → finalize(회의 `uploaded`, payload의
-v5 `process_meeting` 큐잉). 재시도 없음, 1차 SIGTERM은 finalize. 상세:
-`docs/superpowers/specs/2026-09-05-live-recording-design.md`.
+`AudioSource` 프로토콜은 `frames()`/`stop()`에 더해 **`position_ms`**를 요구한다 — yield한 마지막
+프레임의 끝 시각(ms)이다. `Capture._run`이 매 프레임 `self._source.position_ms`를 읽어 세그먼터에
+불연속(스킵)을 알리므로(§6.1), 구현이 이를 빠뜨리면 타입 체크가 아니라 **첫 프레임에서 런타임
+`AttributeError`**로 터진다 — `FileSource`·`MicSource`가 한동안 이 상태였다(Task 15에서 발견·수정:
+`smoke_live_session.py`의 `--file`/`--mic` 두 모드 다 실행 자체가 안 됐다). `TailSource`와 테스트
+fake `GrowingFileSource`(`tests/fakes.py`)가 이 계약의 원본이었고, `FileSource`/`MicSource`는
+"yield한 프레임 수 × `FRAME_MS`"로 같은 값을 낸다.
 
-**세그먼트 끝 → 미리보기 노출 지연은 설계 예상(1~2초)보다 훨씬 크다.** `smoke_live_session.py`
-실측(중앙값 5.1초, 최대 7.4초, `worker/SMOKE.md` "라이브 세션" 실측 참고)이 large-v3-turbo(mlx,
-GPU)로 15초 세그먼트 하나를 처리하는 실제 시간을 보여준다. 이 격차는 설계 §2.7이 SSE를 뺀
-근거(폴링 오버헤드는 전사 시간 옆에서 작다)를 **약화시키지 않는다** — 전사가 예상보다 느릴수록
-1초 폴링이 얹는 평균 0.5초의 비중은 오히려 더 작아지므로(1.5초 기준 1/3 → 5초 기준 1/10),
-전송 방식을 바꿀 이유는 더 줄었다. 표본이 4개뿐이고 세션 안에서 지연이 단조 증가했다는 점은
-`SMOKE.md`에 남겨 뒀다 — 재측정 전까지 정착된 값으로 보지 않는다.
+`MicSource`는 이 Mac의 기본 입력 장치를 직접 연다 — 지금은 **참조 구현**이다. `payload.source`가
+`"browser"`면 `__main__.py::_default_live_source`가 `TailSource`를 고르고, `"mic"`이면 이걸 고른다.
+시스템 오디오 구현체가 들어올 자리이자 `AudioSource`가 `TailSource` 말고 다른 구현도 지탱한다는
+증거로 남아 있다 — 지우지 않는다. 다만 `mic`의 종료 계약은 브라우저 경로만큼 매끈하지 않다: API의
+`/live/.../stop`은 `X-Audio-Offset`/`X-Final-Offset` 기반으로 `sealed_bytes`를 정하므로(브라우저가
+실제로 올린 바이트 수), 브라우저를 거치지 않는 `mic` 세션에서는 이 값이 워커가 실제로 캡처한 바이트
+수와 무관하다. 프레임을 한 개도 못 잡은 세션은 `discarded`로 끝내지 않고 PERMANENT
+`audio_device_failed`로 실패한다 — `discarded`는 어떤 job도 완료 처리하지 않는 경로라 회의가
+`recording`에 그대로 남고, `meeting_single_recording_idx`가 동시 녹음을 하나로 제한하므로 그 상태가
+이후의 모든 녹음 시작을 영영 막게 된다. `MicSource`의 stop 신호 큐는 `frames()`가 아니라 생성자에서
+만든다 — 캡처가 시작되기도 전에 `stop()`이 먼저 오는 취소 경쟁에서도 신호가 버려지지 않게 하기
+위해서다.
+
+종료 순서 요약: 캡처 닫기(`source.stop()` + `capture.join`) → 마지막 발화 처리(`segmenter.flush()`)
+→ finalize(회의 `uploaded`, payload의 v5 `process_meeting` 큐잉). 재시도 없음, 1차 SIGTERM은
+finalize. 상세: `docs/superpowers/specs/2026-09-05-live-recording-design.md`.
+
+**세그먼트 끝 → 미리보기 노출 지연은 설계 예상(1~2초)보다 크다.** `smoke_live_session.py --file`
+실측(2026-09-05, 중앙값 5.1초·최대 7.4초)이 large-v3-turbo(mlx, GPU)로 15초 세그먼트 하나를 처리하는
+실제 시간을 보여준다. Task 15에서 같은 클립을 `--tail`(자라는 파일 + `TailSource`, 즉 실제 배포
+경로)로 다시 돌리자 1.0~2.8초로 훨씬 낮게 나왔다 — 표본이 4개뿐이고 두 실행의 시스템 상태(모델
+warm-up 여부, 발열)가 달라 이 차이의 원인을 이 데이터만으로는 가르지 못한다. 두 실측 모두
+`worker/SMOKE.md` "라이브 세션" 표에 있다. 어느 쪽 숫자든 설계 §2.7이 SSE를 뺀 근거(폴링 오버헤드는
+전사 시간 옆에서 작다)를 **약화시키지 않는다** — 전사가 느릴수록 1초 폴링이 얹는 평균 0.5초의 비중은
+오히려 작아지므로, 전송 방식을 바꿀 이유는 늘지 않는다. 재측정 전까지 어느 값도 정착된 값으로 보지
+않는다.
 
 ## 5. Job 타입별 계약
 
