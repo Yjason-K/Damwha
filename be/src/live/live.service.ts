@@ -203,9 +203,22 @@ export class LiveService {
       if (diskFailure === null) throw e;
       // 디스크 참 등. 종결자는 API 하나다 (설계 §7) — 위 트랜잭션이 롤백된 뒤,
       // 별도 트랜잭션으로 job/meeting을 닫는다 (start()의 io_error 처리와 같은 모양).
+      //
+      // 하지만 그 롤백이 잠금을 반납한 순간부터 이 회복 트랜잭션이 시작될 때까지는 창이다 —
+      // 그 사이 같은 오프셋의 정당한 재시도(잃어버린 ACK 재전송)가 끼어들어 먼저 append를
+      // 커밋해 세션을 살려 놨을 수 있다. meeting.status는 그 재시도가 성공해도 여전히
+      // 'recording'이라 그 값만으로는 구별이 안 된다 — 실제로 "아무도 안 끼어들었다"를
+      // 말해주는 건 파일이 우리가 쓰려던 오프셋에서 전진하지 않았다는 사실뿐이다. job →
+      // meeting 순서로 다시 잠그고 네 가지를 전부 재확인한 뒤에만 마킹한다. 하나라도
+      // 어긋나면 누군가 이겼다는 뜻이므로 마킹을 건너뛴다 — 이 요청 자체는 그래도 507이다.
       const { jobId } = diskFailure as { jobId: string };
       const err = { code: 'io_error', message: 'could not write live audio' };
       await this.db.withTransaction(async (c) => {
+        const job = await this.live.lockJobById(c, jobId);
+        const meeting = await this.meetings.lockById(c, id);
+        if (!job || !meeting) return;
+        if (meeting.status !== 'recording' || meeting.current_job_id !== jobId || job.sealed_bytes !== null) return;
+        if ((await this.liveAudio.pcmSize(meeting.audio_key)) !== offset) return;
         await this.jobs.fail(c, jobId, { ...err, kind: 'PERMANENT', stage: 'capture', message: String(e) });
         await this.meetings.markFailed(c, id, err);
       });

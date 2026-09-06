@@ -138,6 +138,54 @@ describe('live audio append', () => {
     await send(m.id, 0, chunk(1)).expect(409);
   });
 
+  // fix round 1: 위 507 테스트는 "다른 append가 끼어들지 않은" 단순한 경우만 본다. 회복
+  // 트랜잭션이 job → meeting을 다시 잠근 뒤 (1) meeting.status='recording' (2)
+  // meeting.current_job_id===jobId (3) job.sealed_bytes===null (4) 파일이 우리가 쓰려던
+  // 오프셋에서 전진하지 않았음을 전부 재확인하지 않으면, 롤백으로 잠금이 풀린 사이 같은
+  // 오프셋의 정당한 재시도(잃어버린 ACK 재전송)가 먼저 커밋해 세션을 살려 놨을 때 그 세션을
+  // 죽인다 — meeting.status는 성공한 재시도 뒤에도 여전히 'recording'이라 (1)만으로는
+  // 구별이 안 된다. 판별 신호는 오직 (4), 파일 위치뿐이다.
+  //
+  // 두 개의 실제 동시 HTTP 요청으로 이 경쟁을 재현하려면 "패자가 잠금을 넘겨받아 커밋을
+  // 마치는 시점"과 "승자가 롤백 후 회복 트랜잭션의 pcmSize를 확인하는 시점" 사이의 순서를
+  // 결정론적으로 강제할 손잡이가 프로덕션 코드에 없다 — 둘 다 승자의 ROLLBACK이 끝난 뒤에야
+  // 풀리는 별개의 pg 소켓 이벤트라, 이벤트 루프 스케줄링에 맡기면 테스트가 가끔씩만
+  // 통과하는 결과가 된다(실측: 콜 카운트로 lockJobById/pcmSize를 게이팅해 봤지만 "회복의
+  // 몇 번째 호출인지"가 그 자체로 같은 종류의 경쟁이었다). 그래서 팀리드가 제안한 대안대로
+  // "파일이 이미 전진해 있는 상태에서 회복 경로를 직접 태운다" — append가 실패를 보고하기
+  // *전에* 진짜 두 번째 write로 파일을 실제로 전진시켜, 그 다음에 실패를 던진다. 모킹은
+  // 순서(전진이 먼저, 실패 보고가 나중)만 강제하고, 그 뒤 회복 트랜잭션의 잠금 재획득·
+  // 네 가지 검증·pcmSize 읽기는 전부 진짜 코드가 진짜 DB·진짜 파일에 대해 수행한다.
+  it('a disk write failure whose file already advanced past the target offset skips the failure marking', async () => {
+    const { body: m } = await start().expect(201);
+    const liveAudio = app.get(LiveAudioService);
+    const realAppend = liveAudio.append.bind(liveAudio);
+    jest.spyOn(liveAudio, 'append').mockImplementationOnce(async (key: string, _pcm: Buffer) => {
+      // "다른 요청이 먼저 이 오프셋에 커밋했다"는 사실만 진짜로 만든다 — 그 뒤에야 우리
+      // 자신의 쓰기가 실패를 보고한다. 두 번째 호출은 이 mockImplementationOnce가 이미
+      // 소진된 뒤라 진짜 append로 떨어진다(재귀 아님).
+      await realAppend(key, chunk(9));
+      throw new Error('ENOSPC');
+    });
+
+    await send(m.id, 0, chunk(1)).expect(507);
+
+    const { rows } = await db.pool.query(
+      `SELECT m.status AS meeting_status, m.error AS meeting_error, m.audio_key,
+              j.status AS job_status, j.error AS job_error
+       FROM meeting m JOIN job j ON j.id = m.current_job_id WHERE m.id=$1`, [m.id]);
+    // 누군가(시뮬레이션된 재시도) 이겼다 — 회복 트랜잭션은 마킹을 건너뛰어야 한다
+    expect(rows[0].meeting_status).toBe('recording');
+    expect(rows[0].meeting_error).toBeNull();
+    expect(rows[0].job_status).not.toBe('failed');
+    expect(rows[0].job_error).toBeNull();
+    // 파일은 실제로 전진해 있다 — 우리가 강제한 전제가 그대로 남아 있음을 확인
+    const size = fs.statSync(path.join(db.storageRoot, rows[0].audio_key)).size;
+    expect(size).toBe(44 + CHUNK);
+    // 세션이 안 죽었으니 그 "재시도"의 진짜 다음 청크는 정상적으로 이어진다
+    await send(m.id, CHUNK, chunk(2)).expect(200);
+  });
+
   it('closes the session when the audio file cannot be created', async () => {
     jest.spyOn(app.get(LiveAudioService), 'create').mockRejectedValueOnce(new Error('ENOSPC'));
     await start().expect(500);
