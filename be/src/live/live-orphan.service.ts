@@ -51,7 +51,19 @@ export class LiveOrphanService {
           const meeting = await this.meetings.lockById(c, meeting_id);
           // 잠그는 사이 사용자가 stop을 눌렀을 수 있다.
           if (!job || !meeting || meeting.status !== 'recording'
-              || meeting.current_job_id !== job.id || job.sealed_bytes !== null) return false;
+              || meeting.current_job_id !== job.id) return false;
+
+          if (job.sealed_bytes !== null) {
+            // 이미 봉인됐는데 회의가 아직 recording이다 — 봉인할 때 워커에게 맡겼는데
+            // 그 워커가 사라졌다. running이면 아직 그가 마무리할 수 있으므로 건드리지
+            // 않는다 (candidate 질의가 이미 걸렀지만, 그 사이 재claim됐을 수 있다).
+            if (job.status === 'running') return false;
+            const bytes = Number(job.sealed_bytes);
+            if (bytes === 0) return false; // 0바이트는 봉인 시점에 이미 failed로 닫혔다
+            await this.liveService.finalizeByApi(c, job, meeting, bytes);
+            return true;
+          }
+
           const pcm = await this.liveAudio.pcmSize(meeting.audio_key);
           const bytes = Math.max(pcm, 0);
           await this.live.seal(c, job.id, bytes);
@@ -73,10 +85,12 @@ export class LiveOrphanService {
             message: 'the browser stopped sending audio',
             sealed_bytes: bytes,
           });
-          if (job.status === 'queued') {
+          // running인 동안만 워커가 stop_requested_at을 보고 스스로 finalize한다. 그 외
+          // (queued·failed)는 이 job을 끝낼 워커가 없으므로 API가 맡는다 — failed는 reaper가
+          // 워커를 잃었다고 판정한 job이다.
+          if (job.status !== 'running') {
             await this.liveService.finalizeByApi(c, job, meeting, bytes);
           }
-          // running이면 워커가 stop_requested_at을 보고 스스로 finalize한다.
           return true;
         });
         if (done) sealed += 1;

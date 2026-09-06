@@ -73,17 +73,37 @@ export class LiveRepository {
       [meetingId, JSON.stringify(err)]);
   }
 
+  /** 먼저 기록된 사유를 덮지 않는다. 브라우저가 보낸 "마이크가 끊겼다"가 API가 나중에
+   *  덧붙이는 "미리보기 워커를 잃었다"보다 사용자에게 훨씬 중요하다. */
+  async setCaptureErrorIfUnset(exec: Queryable, meetingId: string, err: object): Promise<void> {
+    await exec.query(`UPDATE meeting SET capture_error=$2::jsonb WHERE id=$1 AND capture_error IS NULL`,
+      [meetingId, JSON.stringify(err)]);
+  }
+
   /**
-   * 버려진 producer 후보. 두 번째 갈래가 필수다 — 브라우저가 /meetings/live 성공 뒤
-   * 첫 POST 전에 죽으면 last_input_at이 NULL이라 첫 갈래에 영원히 안 걸린다.
+   * 스위퍼가 손봐야 할 라이브 세션. 두 종류다.
+   *
+   * (a) 봉인 전 — 버려진 producer. 두 번째 갈래가 필수다: 브라우저가 /meetings/live 성공
+   *     뒤 첫 POST 전에 죽으면 last_input_at이 NULL이라 첫 갈래에 영원히 안 걸린다.
+   *
+   * (b) 봉인 후 — 마무리할 워커가 없다. 봉인은 됐는데 회의가 아직 'recording'이고 job이
+   *     더는 running이 아니면, 그 job을 끝낼 워커는 존재하지 않는다. 이 상태는 워커가
+   *     claim한 뒤 죽고(그래서 stop/스위퍼가 봉인만 하고 워커에게 맡겼는데) reaper가
+   *     뒤늦게 그 job을 failed로 내린 뒤에 생긴다. 여기서 안 집으면 회의가 'recording'에
+   *     영원히 갇히고 부분 유일 인덱스가 다음 녹음까지 막는다.
+   *
+   *     워커 생존 판정을 여기서 새로 하지 않고 job.status에 맡기는 것이 핵심이다 —
+   *     "이 워커는 죽었다"를 정하는 임계값은 이미 reaper 하나뿐이어야 한다.
    */
   async findOrphanCandidates(exec: Queryable, seconds: number): Promise<Array<{ job_id: string; meeting_id: string }>> {
     const { rows } = await exec.query<{ job_id: string; meeting_id: string }>(
       `SELECT j.id AS job_id, m.id AS meeting_id
        FROM job j JOIN meeting m ON m.current_job_id = j.id
-       WHERE j.type='live_session' AND m.status='recording' AND j.sealed_bytes IS NULL
-         AND ( j.last_input_at <  now() - ($1||' seconds')::interval
-            OR (j.last_input_at IS NULL AND j.created_at < now() - ($1||' seconds')::interval) )`,
+       WHERE j.type='live_session' AND m.status='recording'
+         AND ( ( j.sealed_bytes IS NULL
+                 AND ( j.last_input_at <  now() - ($1||' seconds')::interval
+                    OR (j.last_input_at IS NULL AND j.created_at < now() - ($1||' seconds')::interval) ) )
+            OR ( j.sealed_bytes IS NOT NULL AND j.status <> 'running' ) )`,
       [String(seconds)]);
     return rows;
   }

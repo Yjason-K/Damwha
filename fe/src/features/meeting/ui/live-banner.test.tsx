@@ -215,6 +215,7 @@ test.each([
   ["upload_failed", /업로드가 거절돼/],
   ["capture_failed", /중간에 멈춰/],
   ["capture_gap", /일부 구간이 기록되지 않았어요/],
+  ["preview_worker_lost", /녹음 자체는 온전해요/],
 ])("%s 캡처 이력을 문구로 보여준다", (code, pattern) => {
   render(<CaptureErrorNotice error={{ code }} />);
   expect(screen.getByText(pattern)).toBeInTheDocument();

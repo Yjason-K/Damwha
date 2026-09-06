@@ -91,7 +91,19 @@ describe('reapStale', () => {
     expect(res).toEqual({ requeued: 0, failed: 0 });
   });
 
-  it('fails a stale live_session outright and marks its meeting failed (max_attempts=1)', async () => {
+  /**
+   * 설계 §2.11 — "녹음은 워커 생존에 의존하지 않는다".
+   *
+   * 이 줄은 워커가 캡처자였을 때는 옳았다: 워커를 잃으면 녹음도 잃었으니까. 브라우저
+   * 캡처로 옮긴 뒤로는 오디오를 브라우저가 API로 보내고 API가 파일에 쓰므로, 워커가
+   * 죽어도 녹음은 계속된다(§7 표: "녹음은 계속. 미리보기만 없고"). 여기서 회의를
+   * failed로 만들면 아직 업로드 중인 멀쩡한 녹음을 죽이고, 브라우저는 그때부터 종단
+   * 409만 받다 buffer_overflow로 끝난다.
+   *
+   * job은 그대로 failed가 된다 — 그 워커는 실제로 사라졌고 max_attempts=1이라 재시도도
+   * 없다. 마무리는 stop이나 LiveOrphanService가 API 경로로 맡는다.
+   */
+  it('fails a stale live_session but leaves its meeting recording (max_attempts=1)', async () => {
     const m = await db.pool.query(`INSERT INTO meeting(audio_key, status) VALUES('k','recording') RETURNING id`);
     const mid = m.rows[0].id;
     const j = await db.pool.query(
@@ -107,7 +119,7 @@ describe('reapStale', () => {
     expect(job.rows[0].status).toBe('failed');
     expect(job.rows[0].error.code).toBe('stale_worker');
     const meeting = await db.pool.query('SELECT status, error FROM meeting WHERE id=$1', [mid]);
-    expect(meeting.rows[0].status).toBe('failed');
-    expect(meeting.rows[0].error.code).toBe('stale_worker');
+    expect(meeting.rows[0].status).toBe('recording');
+    expect(meeting.rows[0].error).toBeNull();
   });
 });

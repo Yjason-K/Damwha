@@ -204,8 +204,10 @@ export class LiveService {
       }
       await this.live.seal(c, job.id, final);
 
-      if (job.status === 'queued') {
-        // 워커가 한 번도 claim하지 않았다. 디스크엔 온전한 녹음이 있으므로 API가 마무리한다.
+      if (job.status !== 'running') {
+        // 이 job을 마무리할 워커가 없다. queued면 한 번도 claim되지 않았고, failed면
+        // reaper가 그 워커를 잃었다고 판정했다(설계 §2.11 — 워커를 잃어도 녹음은 살아
+        // 있다). 어느 쪽이든 디스크엔 온전한 녹음이 있으므로 API가 마무리한다.
         // 원 설계의 "녹음된 게 없으니 회의를 지운다"는 파괴적으로 틀리다 (설계 §2.11).
         if (final === 0) {
           await this.meetings.deleteById(c, id);
@@ -233,7 +235,17 @@ export class LiveService {
    * status='queued'다(워커는 running AND locked_by). capture_error는 건드리지 않는다.
    */
   async finalizeByApi(c: Queryable, job: JobRow, meeting: MeetingRow, sealedBytes: number) {
-    await this.meetings.markUploaded(c, meeting.id, sealedBytes / 32);
+    if (job.status === 'failed') {
+      // reaper가 워커를 잃었다고 판정한 job이다. 아래 jobs.complete가 그 error를 덮어
+      // 지우므로, "이 녹음은 라이브 미리보기 없이 얻어졌다"를 capture_error로 옮긴다
+      // (설계 §7 "녹음은 계속. 미리보기만 없고"). 이미 브라우저가 더 구체적인 사유를
+      // 보냈으면 덮지 않는다.
+      await this.live.setCaptureErrorIfUnset(c, meeting.id, {
+        code: 'preview_worker_lost',
+        message: 'the live preview worker was lost; the recording itself is intact',
+      });
+    }
+    await this.meetings.markUploaded(c, meeting.id, Math.floor(sealedBytes / BYTES_PER_MS));
     const processWire = (job.payload as { process: object }).process;
     const next = await this.jobs.enqueue(c, {
       type: 'process_meeting', meetingId: meeting.id, payload: processWire,

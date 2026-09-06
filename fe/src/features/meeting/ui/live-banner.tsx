@@ -223,6 +223,7 @@ const CAPTURE_ERROR_MESSAGE: Record<string, string> = {
   upload_failed: "업로드가 거절돼 여기까지만 녹음됐어요.",
   capture_failed: "녹음이 중간에 멈춰 여기까지만 녹음됐어요.",
   capture_gap: "녹음 중 일부 구간이 기록되지 않았어요.",
+  preview_worker_lost: "실시간 자막 서버가 끊겨 자막 없이 녹음됐어요. 녹음 자체는 온전해요.",
 };
 
 /**

@@ -100,4 +100,83 @@ describe('live orphan sweeper', () => {
     await age(m.id, 120, true);
     expect(await orphans.sweep()).toBe(0);
   });
+
+  /** 워커의 claim을 SQL로 흉내 낸다. */
+  const claim = (id: string) =>
+    db.pool.query(
+      `UPDATE job SET status='running', locked_by='w1', locked_at=now(), attempts=1, stage='capture'
+       WHERE id=(SELECT current_job_id FROM meeting WHERE id=$1)`, [id]);
+  /** reaper가 그 워커를 잃었다고 판정한 상태. */
+  const reap = (id: string) =>
+    db.pool.query(
+      `UPDATE job SET status='failed', error='{"code":"stale_worker"}'::jsonb
+       WHERE id=(SELECT current_job_id FROM meeting WHERE id=$1)`, [id]);
+
+  // 워커가 죽어 봉인만 되고 아무도 마무리하지 않는 상태를 스위퍼가 집어낸다. 이걸 안
+  // 집으면 회의가 'recording'에 영원히 갇히고 부분 유일 인덱스가 다음 녹음까지 막는다.
+  it('finalizes a sealed session whose worker was lost', async () => {
+    const { body: m } = await start().expect(201);
+    await claim(m.id);
+    await send(m.id, 0, chunk(1)).expect(200);
+    // 워커가 살아 있다고 믿고 봉인만 하고 넘긴다.
+    const res = await stop(m.id, CHUNK, CHUNK).expect(200);
+    expect(res.body.outcome).toBe('stopping');
+    expect((await db.pool.query(`SELECT status FROM meeting WHERE id=$1`, [m.id])).rows[0].status)
+      .toBe('recording');
+
+    await reap(m.id); // 그 워커는 없었다
+
+    expect(await orphans.sweep()).toBe(1);
+    const { rows } = await db.pool.query(
+      `SELECT status, duration_ms, capture_error FROM meeting WHERE id=$1`, [m.id]);
+    expect(rows[0].status).toBe('uploaded');
+    expect(rows[0].duration_ms).toBe(CHUNK / 32);
+    // jobs.complete가 job.error를 덮으므로 그 사실은 capture_error로 옮겨진다.
+    expect(rows[0].capture_error.code).toBe('preview_worker_lost');
+    const { rows: next } = await db.pool.query(
+      `SELECT type FROM job WHERE meeting_id=$1 AND type='process_meeting'`, [m.id]);
+    expect(next).toHaveLength(1);
+  });
+
+  it('leaves a sealed session to the worker while the job is still running', async () => {
+    const { body: m } = await start().expect(201);
+    await claim(m.id);
+    await send(m.id, 0, chunk(1)).expect(200);
+    await stop(m.id, CHUNK, CHUNK).expect(200);
+    expect(await orphans.sweep()).toBe(0);
+    expect((await db.pool.query(`SELECT status FROM meeting WHERE id=$1`, [m.id])).rows[0].status)
+      .toBe('recording');
+  });
+
+  // reaper가 job을 내린 뒤 사용자가 종료를 누른 경우 — 마무리할 워커가 없으므로 API가 한다.
+  it('stop finalizes when the reaper already failed the job', async () => {
+    const { body: m } = await start().expect(201);
+    await claim(m.id);
+    await send(m.id, 0, chunk(1)).expect(200);
+    await reap(m.id);
+
+    const res = await stop(m.id, CHUNK, CHUNK).expect(200);
+    expect(res.body.outcome).toBe('finalized');
+    const { rows } = await db.pool.query(
+      `SELECT status, capture_error FROM meeting WHERE id=$1`, [m.id]);
+    expect(rows[0].status).toBe('uploaded');
+    expect(rows[0].capture_error.code).toBe('preview_worker_lost');
+  });
+
+  // 브라우저가 보낸 구체적인 사유가 API의 일반적인 사유보다 우선한다.
+  it('does not overwrite a capture error the browser already reported', async () => {
+    const { body: m } = await start().expect(201);
+    await claim(m.id);
+    await send(m.id, 0, chunk(1)).expect(200);
+    await reap(m.id);
+
+    await request(srv()).post(`/meetings/${m.id}/live/stop`)
+      .set('Content-Type', 'application/octet-stream')
+      .set('X-Audio-Offset', String(CHUNK)).set('X-Final-Offset', String(CHUNK))
+      .set('X-Capture-Error', 'device_ended')
+      .send(Buffer.alloc(0)).expect(200);
+
+    const { rows } = await db.pool.query(`SELECT capture_error FROM meeting WHERE id=$1`, [m.id]);
+    expect(rows[0].capture_error.code).toBe('device_ended');
+  });
 });
