@@ -129,3 +129,26 @@ def test_default_live_source_rejects_mic(tmp_path):
         _default_live_source(payload, Storage(str(tmp_path)), {"bytes": None})
     assert e.value.code == AUDIO_DEVICE_FAILED
     assert e.value.kind is ErrorKind.PERMANENT
+
+
+def test_mic_session_closes_its_meeting_instead_of_hanging(conn, tmp_path):
+    """mic 거절이 회의를 'recording'에 남기면 안 된다.
+
+    _default_live_source의 raise는 run_live_session 이전이라, live_session의 실패 경로가
+    실제로 회의까지 닫는지는 별개 사실이다 — 안 닫으면 부분 유일 인덱스가 다음 녹음을
+    영원히 막아, 4시간 hang을 없애려던 수정이 더 나쁜 갇힘으로 바뀐다.
+    """
+    mid = seed_meeting(conn, status="recording")
+    job = _claimed(conn, mid)
+    out = handle_job(
+        conn,
+        job,
+        Storage(str(tmp_path)),
+        "w1",
+        build_live_models=_models,
+        build_live_source=_default_live_source,
+    )
+    assert out == "failed"
+    m = conn.execute("SELECT status, error FROM meeting WHERE id=%s", (mid,)).fetchone()
+    assert m["status"] == "failed"
+    assert m["error"]["code"] == AUDIO_DEVICE_FAILED

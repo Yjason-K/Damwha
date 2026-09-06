@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, HttpException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, HttpException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
 import { StorageService } from '../storage/storage.service';
 import { LiveAudioService } from '../storage/live-audio.service';
@@ -38,6 +38,7 @@ function isSingleRecordingViolation(e: unknown): boolean {
 
 @Injectable()
 export class LiveService {
+  private readonly log = new Logger(LiveService.name);
   constructor(
     private readonly db: DatabaseService,
     private readonly storage: StorageService,
@@ -171,8 +172,11 @@ export class LiveService {
     }
 
     const captureError = this.captureFailure(headers['x-capture-error']);
-    const elapsed = headers['x-capture-elapsed'] === undefined
-      ? null : this.intHeader(headers['x-capture-elapsed'], 'X-Capture-Elapsed');
+    // append와 달리 여기서는 형식이 틀려도 400을 내지 않는다. 거절된 청크는 클라이언트가
+    // 다시 보내면 되지만 거절된 stop은 회의를 'recording'에 가둔다 — X-Capture-Error를
+    // 관대하게 받는 것과 같은 이유다(설계 §7, API가 종결자). 못 읽으면 갭 판정만 건너뛴다.
+    const raw = headers['x-capture-elapsed'];
+    const elapsed = typeof raw === 'string' && /^\d+$/.test(raw) ? Number(raw) : null;
 
     const result = await this.db.withTransaction(async (c) => {
       const probe = await this.live.findLiveJob(c, id); // job → meeting 순서 (설계 §4.3)
@@ -237,7 +241,11 @@ export class LiveService {
     } else {
       // 헤더 확정은 봉인 커밋 뒤 best-effort다. 실패해도 워커는 sealed_bytes를 보고,
       // repair_streaming_header가 재처리 때 고친다 (설계 §4.4 ④).
-      await this.liveAudio.seal(result.meeting.audio_key, result.sealed_bytes).catch(() => undefined);
+      await this.liveAudio.seal(result.meeting.audio_key, result.sealed_bytes)
+        // 삼키되 흔적은 남긴다. 여기 실패에는 두 종류가 있다 — 단순 쓰기 실패(재처리 때
+        // repair_streaming_header가 고친다)와, seal()이 새로 확인하는 크기 불변식 위반
+        // (파일과 sealed_bytes가 어긋났다는 뜻이라 조용히 지나가면 안 된다).
+        .catch((e) => this.log.error(`live header seal failed for ${id}: ${String(e)}`));
     }
     const { job, meeting, ...body_ } = result;
     return body_;

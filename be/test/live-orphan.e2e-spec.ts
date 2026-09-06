@@ -163,6 +163,28 @@ describe('live orphan sweeper', () => {
     expect(rows[0].capture_error.code).toBe('preview_worker_lost');
   });
 
+  // 시작 직후 종료 + 워커 죽음. stop이 running job을 0바이트에서 봉인하고 워커에게
+  // 맡기는데 그 워커가 없다. finalize할 녹음이 없다고 그냥 두면 회의가 영원히
+  // recording이고 meeting_single_recording_idx가 다음 녹음을 전부 막는다.
+  it('closes a session sealed at zero bytes whose worker never finished it', async () => {
+    const { body: m } = await start().expect(201);
+    await claim(m.id);
+    await stop(m.id, 0, 0).expect(200); // 오디오를 한 번도 안 보냈다
+    await reap(m.id);
+
+    expect(await orphans.sweep()).toBe(1);
+    const { rows } = await db.pool.query(`SELECT status, error FROM meeting WHERE id=$1`, [m.id]);
+    expect(rows[0].status).toBe('failed');
+    expect(rows[0].error.code).toBe('producer_never_started');
+    // reaper가 이미 내린 job의 error는 덮지 않는다 — 그 job에 실제로 일어난 일이다.
+    const { rows: j } = await db.pool.query(
+      `SELECT error FROM job WHERE id=(SELECT current_job_id FROM meeting WHERE id=$1)`, [m.id]);
+    expect(j[0].error.code).toBe('stale_worker');
+
+    // 그리고 다음 녹음이 실제로 시작된다 — 이 테스트의 진짜 목적이다.
+    await start().expect(201);
+  });
+
   // 브라우저가 보낸 구체적인 사유가 API의 일반적인 사유보다 우선한다.
   it('does not overwrite a capture error the browser already reported', async () => {
     const { body: m } = await start().expect(201);

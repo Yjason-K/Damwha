@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { DatabaseService } from '../database/database.service';
 import { JobsRepository } from '../jobs/jobs.repository';
+import { JobRow, Queryable } from '../jobs/jobs.types';
 import { LiveAudioService } from '../storage/live-audio.service';
 import { LiveRepository } from './live.repository';
 import { LiveService } from './live.service';
@@ -35,6 +36,27 @@ export class LiveOrphanService {
     await this.sweep();
   }
 
+  /**
+   * 오디오가 한 바이트도 없는 세션을 닫는다. 회의를 'recording'에서 빼내는 것이 요점이다 —
+   * 안 빼면 meeting_single_recording_idx가 다음 녹음을 전부 막는다.
+   *
+   * job은 이미 failed일 수 있다(reaper가 먼저 내렸다). 그 경우 error를 덮지 않는다:
+   * "워커를 잃었다"가 이 job에 실제로 일어난 일이고, "오디오가 없다"는 회의 쪽 사실이다.
+   */
+  private async closeEmpty(c: Queryable, job: JobRow, meetingId: string): Promise<boolean> {
+    await this.meetings.markFailed(c, meetingId, {
+      code: 'producer_never_started',
+      message: 'the browser never sent any audio',
+    });
+    if (job.status !== 'failed') {
+      await this.jobs.fail(c, job.id, {
+        code: 'producer_never_started', kind: 'PERMANENT', stage: 'capture',
+        message: 'no audio received',
+      });
+    }
+    return true;
+  }
+
   async sweep(seconds = ORPHAN_SECONDS): Promise<number> {
     let candidates;
     try {
@@ -59,7 +81,11 @@ export class LiveOrphanService {
             // 않는다 (candidate 질의가 이미 걸렀지만, 그 사이 재claim됐을 수 있다).
             if (job.status === 'running') return false;
             const bytes = Number(job.sealed_bytes);
-            if (bytes === 0) return false; // 0바이트는 봉인 시점에 이미 failed로 닫혔다
+            // 0바이트 봉인은 스위퍼가 낸 것만이 아니다 — 사용자가 시작 직후 종료를 누르면
+            // stop이 running job을 0에서 봉인하고 워커에게 맡긴다. 그 워커가 죽으면 여기
+            // 온다. 넘길 녹음이 없으므로 finalize가 아니라 닫아야 한다. 그냥 두면 회의가
+            // 영원히 recording이고 부분 유일 인덱스가 다음 녹음을 전부 막는다.
+            if (bytes === 0) return await this.closeEmpty(c, job, meeting.id);
             await this.liveService.finalizeByApi(c, job, meeting, bytes);
             return true;
           }
@@ -67,19 +93,9 @@ export class LiveOrphanService {
           const pcm = await this.liveAudio.pcmSize(meeting.audio_key);
           const bytes = Math.max(pcm, 0);
           await this.live.seal(c, job.id, bytes);
-          if (bytes === 0) {
-            // 넘길 녹음이 없다. 삭제하지 않는다 — 자동 스캐너가 사용자 데이터를 지우지
-            // 않는다. 사용자가 직접 stop을 눌러 0바이트인 경우만 지운다 (설계 §4.7).
-            await this.meetings.markFailed(c, meeting.id, {
-              code: 'producer_never_started',
-              message: 'the browser never sent any audio',
-            });
-            await this.jobs.fail(c, job.id, {
-              code: 'producer_never_started', kind: 'PERMANENT', stage: 'capture',
-              message: 'no audio received',
-            });
-            return true;
-          }
+          // 넘길 녹음이 없다. 삭제하지 않는다 — 자동 스캐너가 사용자 데이터를 지우지
+          // 않는다. 사용자가 직접 stop을 눌러 0바이트인 경우만 지운다 (설계 §4.7).
+          if (bytes === 0) return await this.closeEmpty(c, job, meeting.id);
           await this.live.setCaptureError(c, meeting.id, {
             code: 'producer_abandoned',
             message: 'the browser stopped sending audio',
