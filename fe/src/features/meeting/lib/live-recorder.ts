@@ -169,12 +169,14 @@ export class LiveRecorder {
         ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
       },
     });
-    const ctx = new AudioContext({ sampleRate: SR });
-    // this.ctx를 여기서 바로 세운다 — 아래 어느 단계에서 던지든 teardown()이 이 ctx를
-    // 찾아 닫을 수 있어야 한다. 마이크를 얻은 뒤의 실패를 전부 같은 teardown()으로
-    // 모은다 — 손으로 세 벌을 따로 만들면 다음 실패 경로가 하나 빠지기 쉽다.
-    this.ctx = ctx;
     try {
+      // 요청한 sampleRate를 일부 브라우저는 생성자에서 곧바로 거부한다 — 이 생성자를
+      // try 밖에 두면 그 실패가 마이크를 켜 둔 채로 빠져나간다(review finding 3).
+      const ctx = new AudioContext({ sampleRate: SR });
+      // this.ctx를 여기서 바로 세운다 — 아래 어느 단계에서 던지든 teardown()이 이 ctx를
+      // 찾아 닫을 수 있어야 한다. 마이크를 얻은 뒤의 실패를 전부 같은 teardown()으로
+      // 모은다 — 손으로 세 벌을 따로 만들면 다음 실패 경로가 하나 빠지기 쉽다.
+      this.ctx = ctx;
       // 요청한 sampleRate를 user agent가 만족하지 않을 수 있다. 48 kHz PCM에 16 kHz
       // 헤더를 씌우면 느리고 낮아진 정본이 조용히 만들어진다 (설계 §2.3).
       if (ctx.sampleRate !== SR) {

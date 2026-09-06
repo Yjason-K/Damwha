@@ -374,4 +374,32 @@ describe("LiveRecorder start() cleanup on worklet failure", () => {
     expect(stopTrack).toHaveBeenCalledTimes(1);
     expect(close).toHaveBeenCalledTimes(1);
   });
+
+  /**
+   * 일부 브라우저는 지원하지 않는 sampleRate에 대해 `new AudioContext(...)` 생성자
+   * 자체에서 동기적으로 던진다. 이 생성자가 기존 try 밖에 있으면 그 예외가 곧바로
+   * start()를 실패시키면서 teardown()을 한 번도 안 태우고 빠져나가 — 마이크는 켜진
+   * 채로 아무것도 안 잡는다 (review finding 3).
+   */
+  it("stops the mic stream when the AudioContext constructor itself throws", async () => {
+    const stopTrack = vi.fn();
+    const stream = {
+      getTracks: () => [{ stop: stopTrack }],
+      getAudioTracks: () => [{ addEventListener: vi.fn() }],
+    } as unknown as MediaStream;
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue(stream) },
+    });
+    class ThrowingAudioContext {
+      constructor() {
+        throw new Error("unsupported sampleRate");
+      }
+    }
+    vi.stubGlobal("AudioContext", ThrowingAudioContext);
+
+    const r = new LiveRecorder({ postChunk: vi.fn() });
+    await expect(r.start("mtg_1")).rejects.toThrow("unsupported sampleRate");
+    expect(stopTrack).toHaveBeenCalledTimes(1);
+  });
 });
