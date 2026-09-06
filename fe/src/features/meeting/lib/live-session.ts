@@ -56,8 +56,8 @@ export function createLiveRecorder(meetingId: string): LiveCapture {
   const stopOutcome: { current: LiveStopResponse | null } = { current: null };
   const recorder = new LiveRecorder({
     postChunk: postLiveChunk,
-    postStop: (id, offset, final, body, elapsedMs) =>
-      postLiveStop(id, offset, final, body, elapsedMs, (res) => {
+    postStop: (id, offset, final, body, elapsedMs, failure) =>
+      postLiveStop(id, offset, final, body, elapsedMs, failure, (res) => {
         stopOutcome.current = res;
       }),
   });

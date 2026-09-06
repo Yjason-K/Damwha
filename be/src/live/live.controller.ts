@@ -44,7 +44,10 @@ export class LiveController {
       + 'X-Final-Offset으로 다시 오면 200 멱등, 다르면 409. 워커가 아직 claim하지 않은 세션은 '
       + 'API가 직접 마무리한다 — 0바이트면 회의를 지우고 discarded, 그 외는 uploaded로 올리고 '
       + 'process_meeting을 큐잉해 finalized. 이미 워커가 잡고 있으면 stop_requested_at만 찍고 '
-      + 'stopping(워커가 마무리한다). recording이 아니면 409, 회의가 없으면 404.',
+      + 'stopping(워커가 마무리한다). recording이 아니면 409, 회의가 없으면 404. '
+      + '선택 헤더 X-Capture-Error(device_ended/buffer_overflow/upload_failed)는 브라우저가 '
+      + '캡처를 끝까지 못 했다는 뜻이고 meeting.capture_error에 남는다 — 모르는 값도 거절하지 '
+      + '않고 capture_failed로 기록한다(진단 헤더가 봉인을 막으면 안 된다).',
   })
   @HttpCode(200)
   stop(@Param('id') id: string, @Req() req: { headers: Record<string, unknown>; body: Buffer }) {

@@ -207,17 +207,36 @@ export function LiveBanner({
 }
 
 /**
+ * 캡처 이력 문구. 전부 "이 녹음을 어떻게 얻었는가"를 말하고, 하나같이 "그래도 여기까지는
+ * 남아 있다"로 끝난다 — 이 배너가 뜨는 시점엔 이미 정본이 저장돼 있고 최종 처리도 보통
+ * 성공한다. 사용자가 알아야 하는 건 실패 자체가 아니라 **녹음이 예상보다 짧을 수 있다**는
+ * 것이다.
+ *
+ * 코드는 두 곳에서 온다 — 서버가 스스로 붙이는 것(producer_abandoned, capture_gap)과
+ * 브라우저가 stop의 X-Capture-Error로 실어 보내는 것(device_ended, buffer_overflow,
+ * upload_failed, capture_failed). `live.service.ts`의 CAPTURE_FAILURES와 같은 집합이다.
+ */
+const CAPTURE_ERROR_MESSAGE: Record<string, string> = {
+  producer_abandoned: "브라우저 연결이 끊겨 여기까지 녹음됐어요.",
+  device_ended: "마이크 연결이 끊겨 여기까지 녹음됐어요.",
+  buffer_overflow: "업로드가 너무 밀려 여기까지만 녹음됐어요.",
+  upload_failed: "업로드가 거절돼 여기까지만 녹음됐어요.",
+  capture_failed: "녹음이 중간에 멈춰 여기까지만 녹음됐어요.",
+  capture_gap: "녹음 중 일부 구간이 기록되지 않았어요.",
+};
+
+/**
  * 캡처 이력 알림 — meeting.captureError. error(회의 처리 실패)와는 별개 필드라
  * 최종 처리가 성공해 회의가 done이 된 뒤에도 계속 보여야 한다(그것이 두 필드를
- * 나눈 이유다). 지금은 producer_abandoned 하나만 문구가 있다 — capture_gap 등
- * 다른 code는 아직 표시하지 않는다.
+ * 나눈 이유다).
  */
 export function CaptureErrorNotice({
   error,
 }: {
   error: JsonError | null | undefined;
 }) {
-  if (error?.code !== "producer_abandoned") return null;
+  const message = error?.code ? CAPTURE_ERROR_MESSAGE[error.code] : undefined;
+  if (!message) return null;
   return (
     <div
       role="status"
@@ -228,9 +247,7 @@ export function CaptureErrorNotice({
         size={15}
         className="shrink-0 text-[color:var(--text-faint)]"
       />
-      <span className="text-[color:var(--text-secondary)]">
-        브라우저 연결이 끊겨 여기까지 녹음됐어요.
-      </span>
+      <span className="text-[color:var(--text-secondary)]">{message}</span>
     </div>
   );
 }

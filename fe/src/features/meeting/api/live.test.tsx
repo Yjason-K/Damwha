@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { apiClient } from "@/shared/api/client";
+import { LiveUploadRejected } from "../lib/live-recorder";
 import type { WireLiveResponse } from "./types";
 import {
   liveQueryKey,
@@ -219,7 +220,7 @@ test("종료 POST는 오프셋 헤더와 꼬리 바디를 싣고, 성공하면 �
   } as never);
   const onStopped = vi.fn();
   const tail = new Uint8Array(32);
-  await postLiveStop("m1", 32768, 32800, tail, 33000, onStopped);
+  await postLiveStop("m1", 32768, 32800, tail, 33000, null, onStopped);
   expect(post).toHaveBeenCalledWith(
     "/meetings/m1/live/stop",
     tail,
@@ -237,6 +238,37 @@ test("종료 POST는 오프셋 헤더와 꼬리 바디를 싣고, 성공하면 �
     job_id: "job_1",
     outcome: "stopping",
   });
+  // 정상 종료엔 실패 헤더가 붙지 않는다.
+  const cfg = post.mock.calls[0][2] as { headers: Record<string, string> };
+  expect(cfg.headers).not.toHaveProperty("X-Capture-Error");
+});
+
+// 이 헤더가 캡처 실패를 탭 밖으로 내보내는 유일한 통로다 (설계 §5.3·§7).
+test("종료 POST는 레코더 실패 사유를 X-Capture-Error로 싣는다", async () => {
+  const post = vi.spyOn(apiClient, "post").mockResolvedValue({
+    status: 200,
+    data: { meeting_id: "m1", job_id: "job_1", outcome: "stopping" },
+  } as never);
+  await postLiveStop("m1", 0, 0, new Uint8Array(0), 5000, "device_ended");
+  expect(post).toHaveBeenCalledWith(
+    "/meetings/m1/live/stop",
+    expect.anything(),
+    expect.objectContaining({
+      headers: expect.objectContaining({ "X-Capture-Error": "device_ended" }),
+    }),
+  );
+});
+
+// 재동기화할 오프셋이 없는 409를 그대로 통과시키면 offset이 undefined로 오염돼
+// 이후 모든 요청이 400을 받고 봉인 자체가 불가능해진다.
+test("expected_offset 없는 409는 LiveUploadRejected로 끊는다", async () => {
+  vi.spyOn(apiClient, "post").mockResolvedValue({
+    status: 409,
+    data: { code: "io_error", message: "disk" },
+  } as never);
+  await expect(
+    postLiveChunk("m1", 32768, new Uint8Array(32768), 1024),
+  ).rejects.toBeInstanceOf(LiveUploadRejected);
 });
 
 test("종료 POST가 409면 expected_offset을 담아 던지고 콜백을 부르지 않는다", async () => {
@@ -246,7 +278,7 @@ test("종료 POST가 409면 expected_offset을 담아 던지고 콜백을 부르
   } as never);
   const onStopped = vi.fn();
   await expect(
-    postLiveStop("m1", 0, 32, new Uint8Array(32), 100, onStopped),
+    postLiveStop("m1", 0, 32, new Uint8Array(32), 100, null, onStopped),
   ).rejects.toThrow("999");
   expect(onStopped).not.toHaveBeenCalled();
 });

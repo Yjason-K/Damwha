@@ -1,0 +1,266 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "라이브 녹음 — 브라우저 캡처 시퀀스",
+    "output": "live-recording.sequence.html",
+    "viewBox": [
+      1300,
+      840
+    ],
+    "column_fit": "spread",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "start",
+        "label": "세션 시작",
+        "focus": [
+          "browser",
+          "api",
+          "db",
+          "wav"
+        ],
+        "note": "201을 돌려주기 전에 44바이트 헤더 파일이 먼저 존재해야 한다."
+      },
+      {
+        "id": "streaming",
+        "label": "청크 스트리밍",
+        "focus": [
+          "browser",
+          "api",
+          "wav",
+          "child"
+        ],
+        "note": "API가 유일한 writer, 워커는 자라는 파일을 따라 읽는다."
+      },
+      {
+        "id": "seal",
+        "label": "봉인과 인계",
+        "focus": [
+          "browser",
+          "api",
+          "db",
+          "child"
+        ],
+        "note": "sealed_bytes 커밋이 봉인이고, 그 뒤 정본 파이프라인으로 넘어간다."
+      }
+    ]
+  },
+  "participants": [
+    {
+      "id": "browser",
+      "type": "external",
+      "label": "브라우저",
+      "sublabel": "AudioWorklet · 16 kHz mono"
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "NestJS API",
+      "sublabel": "LiveService"
+    },
+    {
+      "id": "wav",
+      "type": "database",
+      "label": "live.wav",
+      "sublabel": "meetings/<id>/live.wav"
+    },
+    {
+      "id": "db",
+      "type": "database",
+      "label": "PostgreSQL",
+      "sublabel": "job · meeting · live_utterance"
+    },
+    {
+      "id": "child",
+      "type": "backend",
+      "label": "워커 child",
+      "sublabel": "TailSource · LiveSegmenter"
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 320,
+      "label": "시작"
+    },
+    {
+      "from": 336,
+      "to": 604,
+      "label": "청크 스트리밍 — 초당 1회"
+    },
+    {
+      "from": 620,
+      "to": 792,
+      "label": "봉인과 인계"
+    }
+  ],
+  "messages": [
+    {
+      "from": "browser",
+      "to": "api",
+      "y": 180,
+      "label": "POST /meetings/live",
+      "variant": "emphasis"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "y": 216,
+      "label": "meeting(recording) + live_session(queued)",
+      "variant": "default"
+    },
+    {
+      "from": "api",
+      "to": "wav",
+      "y": 252,
+      "label": "44바이트 스트리밍 헤더 · fsync 후 rename",
+      "variant": "default"
+    },
+    {
+      "from": "api",
+      "to": "browser",
+      "y": 288,
+      "label": "201 meeting",
+      "variant": "return"
+    },
+    {
+      "from": "browser",
+      "to": "api",
+      "y": 360,
+      "label": "POST /live/audio — PCM 32,768 B · X-Audio-Offset",
+      "variant": "emphasis"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "y": 396,
+      "label": "job → meeting FOR UPDATE · offset 가드",
+      "variant": "security"
+    },
+    {
+      "from": "api",
+      "to": "wav",
+      "y": 432,
+      "label": "append + fdatasync (락 안에서)",
+      "variant": "emphasis"
+    },
+    {
+      "from": "api",
+      "to": "browser",
+      "y": 468,
+      "label": "200 커밋 후 · 불일치는 409 expected_offset",
+      "variant": "return"
+    },
+    {
+      "from": "child",
+      "to": "wav",
+      "y": 504,
+      "label": "tail — EOF는 끝이 아니라 따라잡음",
+      "variant": "default"
+    },
+    {
+      "from": "child",
+      "to": "db",
+      "y": 540,
+      "label": "live_utterance insert (seq)",
+      "variant": "default"
+    },
+    {
+      "from": "browser",
+      "to": "api",
+      "y": 576,
+      "label": "GET /live?after=seq — 미리보기 폴링",
+      "variant": "dashed"
+    },
+    {
+      "from": "browser",
+      "to": "api",
+      "y": 644,
+      "label": "POST /live/stop — 자투리 + X-Final-Offset",
+      "variant": "emphasis"
+    },
+    {
+      "from": "api",
+      "to": "wav",
+      "y": 680,
+      "label": "꼬리 append + fdatasync",
+      "variant": "default"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "y": 716,
+      "label": "sealed_bytes + stop_requested_at COMMIT — 봉인 성립",
+      "variant": "emphasis"
+    },
+    {
+      "from": "child",
+      "to": "db",
+      "y": 752,
+      "label": "sealed_bytes까지 읽고 finalize — uploaded + process_meeting",
+      "variant": "emphasis"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "api",
+      "from": 172,
+      "to": 296,
+      "type": "backend"
+    },
+    {
+      "participant": "api",
+      "from": 352,
+      "to": 476,
+      "type": "backend"
+    },
+    {
+      "participant": "child",
+      "from": 496,
+      "to": 548,
+      "type": "backend"
+    },
+    {
+      "participant": "api",
+      "from": 636,
+      "to": 724,
+      "type": "backend"
+    },
+    {
+      "participant": "child",
+      "from": 744,
+      "to": 790,
+      "type": "backend"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "봉인의 권위는 DB에 있다",
+      "items": [
+        "파일 append · WAV 헤더 재작성 · DB commit은 한 트랜잭션이 될 수 없다",
+        "job.sealed_bytes가 커밋되는 순간이 봉인 — 파일 크기가 아니다",
+        "커밋 후 헤더 재작성은 best-effort, repair_streaming_header가 그물"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "잠금 규율",
+      "items": [
+        "라이브 상태를 바꾸는 모든 경로가 job → meeting 순으로 FOR UPDATE",
+        "파일 I/O를 행 락 안에서 한다 — 두 요청이 같은 offset에 쓰는 경합을 원천 차단",
+        "200은 커밋 뒤에만 · 409 재동기화도 last_input_at을 갱신한다"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "정본과 미리보기는 다른 것",
+      "items": [
+        "정본은 live.wav — 손실 압축 없이 raw PCM, MediaRecorder를 기각한 이유",
+        "미리보기 live_utterance는 persist가 지운다 — 화면용이지 기록이 아니다",
+        "30초 이상 밀리면 파일 오프셋 기준으로 건너뛴다 — 시간축이 프레임 카운터가 아니다"
+      ]
+    }
+  ]
+}

@@ -202,7 +202,20 @@ test("capture_error가 없으면 아무것도 그리지 않는다", () => {
 
 test("모르는 code는 아무것도 그리지 않는다", () => {
   const { container } = render(
-    <CaptureErrorNotice error={{ code: "capture_gap" }} />,
+    <CaptureErrorNotice error={{ code: "something_new" }} />,
   );
   expect(container).toBeEmptyDOMElement();
+});
+
+// 브라우저가 stop의 X-Capture-Error로 보낸 사유들. 서버가 capture_error에 남기는데
+// 배너가 그리지 않으면 그 쓰기는 아무도 읽지 않는 죽은 컬럼이 된다.
+test.each([
+  ["device_ended", /마이크 연결이 끊겨/],
+  ["buffer_overflow", /업로드가 너무 밀려/],
+  ["upload_failed", /업로드가 거절돼/],
+  ["capture_failed", /중간에 멈춰/],
+  ["capture_gap", /일부 구간이 기록되지 않았어요/],
+])("%s 캡처 이력을 문구로 보여준다", (code, pattern) => {
+  render(<CaptureErrorNotice error={{ code }} />);
+  expect(screen.getByText(pattern)).toBeInTheDocument();
 });

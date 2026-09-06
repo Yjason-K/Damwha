@@ -8,7 +8,11 @@ import {
 
 import { apiClient } from "@/shared/api/client";
 
-import type { PostResult } from "../lib/live-recorder";
+import {
+  LiveUploadRejected,
+  type PostResult,
+  type RecorderFailure,
+} from "../lib/live-recorder";
 import type {
   LiveUtterance,
   MeetingStatus,
@@ -149,6 +153,16 @@ export async function postLiveChunk(
       validateStatus: (s) => s === 200 || s === 409,
     },
   );
+  // 409는 "여기서부터 다시 보내라"일 때만 정상 흐름이다. 종단 상태의 409(회의가 더는
+  // recording이 아님, io_error)는 오프셋을 싣지 않는데, 그 값을 그대로 받으면
+  // this.offset = undefined → "X-Audio-Offset: undefined" → 400 → 무한 재시도 →
+  // 60초 뒤 엉뚱한 이름(buffer_overflow)으로 죽고, stop마저 undefined 오프셋을 실어
+  // 봉인이 안 된다. 재동기화할 곳이 없는 409는 종단이므로 그렇게 알린다.
+  if (typeof res.data?.expected_offset !== "number") {
+    throw new LiveUploadRejected(
+      "live chunk rejected without an expected_offset",
+    );
+  }
   return { ok: res.status === 200, expected: res.data.expected_offset };
 }
 
@@ -167,6 +181,7 @@ export async function postLiveStop(
   final: number,
   body: Uint8Array,
   elapsedMs: number,
+  failure: RecorderFailure | null,
   onStopped?: (res: LiveStopResponse) => void,
 ): Promise<void> {
   const res = await apiClient.post<
@@ -177,6 +192,8 @@ export async function postLiveStop(
       "X-Audio-Offset": String(offset),
       "X-Final-Offset": String(final),
       "X-Capture-Elapsed": String(elapsedMs),
+      // 캡처가 실패해서 끝났다는 사실이 탭 밖으로 나가는 유일한 통로다 (설계 §5.3·§7).
+      ...(failure ? { "X-Capture-Error": failure } : {}),
     },
     validateStatus: (s) => s === 200 || s === 409,
   });

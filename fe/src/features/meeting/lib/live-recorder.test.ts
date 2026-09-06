@@ -3,7 +3,9 @@ import { CHUNK_BYTES, FRAME_BYTES, SR } from "./pcm-convert";
 import {
   checkCaptureSupport,
   LiveRecorder,
+  LiveUploadRejected,
   type PostResult,
+  type RecorderFailure,
 } from "./live-recorder";
 
 const chunkOf = (n = CHUNK_BYTES) => new Uint8Array(n);
@@ -160,6 +162,33 @@ describe("LiveRecorder upload loop", () => {
  * [offset..][큐에 남은 구멍][꼬리]가 "정상 완료"로 봉인된다 (review Important 2) — 이
  * 리뷰가 지적하기 전까지 stop()을 실패 뒤에 부르는 테스트가 하나도 없었다.
  */
+/** start()가 실제 워크릿을 태우는 경로를 흉내낸다 — jsdom엔 AudioContext가 없다. */
+function stubWorkletGlobals() {
+  const stream = {
+    getTracks: () => [{ stop: vi.fn() }],
+    getAudioTracks: () => [{ addEventListener: vi.fn() }],
+  } as unknown as MediaStream;
+  Object.defineProperty(navigator, "mediaDevices", {
+    configurable: true,
+    value: { getUserMedia: vi.fn().mockResolvedValue(stream) },
+  });
+  const port: { onmessage: ((e: MessageEvent<ArrayBuffer>) => void) | null } = {
+    onmessage: null,
+  };
+  class FakeAudioContext {
+    sampleRate = SR;
+    audioWorklet = { addModule: vi.fn().mockResolvedValue(undefined) };
+    createMediaStreamSource = vi.fn().mockReturnValue({ connect: vi.fn() });
+    close = vi.fn().mockResolvedValue(undefined);
+  }
+  class FakeAudioWorkletNode {
+    port = port;
+  }
+  vi.stubGlobal("AudioContext", FakeAudioContext);
+  vi.stubGlobal("AudioWorkletNode", FakeAudioWorkletNode);
+  return { port };
+}
+
 describe("LiveRecorder stop() after a recorder failure", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -167,28 +196,7 @@ describe("LiveRecorder stop() after a recorder failure", () => {
   });
 
   it("seals at the last contiguous offset with an empty body instead of splicing the queued hole", async () => {
-    const stream = {
-      getTracks: () => [{ stop: vi.fn() }],
-      getAudioTracks: () => [{ addEventListener: vi.fn() }],
-    } as unknown as MediaStream;
-    Object.defineProperty(navigator, "mediaDevices", {
-      configurable: true,
-      value: { getUserMedia: vi.fn().mockResolvedValue(stream) },
-    });
-
-    const port: { onmessage: ((e: MessageEvent<ArrayBuffer>) => void) | null } =
-      { onmessage: null };
-    class FakeAudioContext {
-      sampleRate = SR;
-      audioWorklet = { addModule: vi.fn().mockResolvedValue(undefined) };
-      createMediaStreamSource = vi.fn().mockReturnValue({ connect: vi.fn() });
-      close = vi.fn().mockResolvedValue(undefined);
-    }
-    class FakeAudioWorkletNode {
-      port = port;
-    }
-    vi.stubGlobal("AudioContext", FakeAudioContext);
-    vi.stubGlobal("AudioWorkletNode", FakeAudioWorkletNode);
+    const { port } = stubWorkletGlobals();
 
     // 네트워크가 죽어 있다 — 큐에 들어간 청크는 절대 전송되지 않는다.
     const post = vi.fn(async () => {
@@ -201,6 +209,7 @@ describe("LiveRecorder stop() after a recorder failure", () => {
         final: number,
         body: Uint8Array,
         elapsedMs: number,
+        failure: RecorderFailure | null,
       ) => Promise<void>
     >(async () => undefined);
     const r = new LiveRecorder({
@@ -228,11 +237,47 @@ describe("LiveRecorder stop() after a recorder failure", () => {
     await r.stop();
 
     expect(stopSpy).toHaveBeenCalledTimes(1);
-    const [id, offset, final, body] = stopSpy.mock.calls[0];
+    const [id, offset, final, body, , failure] = stopSpy.mock.calls[0];
     expect(id).toBe("mtg_1");
     expect(offset).toBe(0);
     expect(final).toBe(0);
     expect((body as Uint8Array).byteLength).toBe(0);
+    // 실패 사유가 stop에 실려야 서버의 meeting.capture_error에 남는다. 이게 없으면
+    // 마이크를 잃은 회의와 깨끗한 회의가 서버에서 구별되지 않는다 (설계 §5.3·§7).
+    expect(failure).toBe("buffer_overflow");
+  });
+
+  it("재동기화 오프셋 없는 거절은 재시도하지 않고 upload_failed로 끝낸다", async () => {
+    const { port } = stubWorkletGlobals();
+
+    // 종단 409 — postLiveChunk가 LiveUploadRejected로 바꿔 던지는 그 모양이다.
+    const post = vi.fn(async () => {
+      throw new LiveUploadRejected("no expected_offset");
+    });
+    const stopSpy = vi.fn(async () => undefined);
+    const r = new LiveRecorder({
+      postChunk: post,
+      postStop: stopSpy,
+      retryDelayMs: 0,
+    });
+    await r.start("mtg_1");
+    for (let i = 0; i < 32; i += 1) {
+      port.onmessage?.({
+        data: new ArrayBuffer(FRAME_BYTES),
+      } as MessageEvent<ArrayBuffer>);
+    }
+    await r.drain();
+
+    // 한 번만 시도하고 멈춘다 — 무한 재시도였다면 buffer_overflow로 60초를 태운다.
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(r.status.failed).toBe("upload_failed");
+
+    await r.stop();
+    // 오프셋이 오염되지 않은 채(0) 봉인되고, 사유가 실려 나간다.
+    const [, offset, final, , , failure] = stopSpy.mock.calls[0];
+    expect(offset).toBe(0);
+    expect(final).toBe(0);
+    expect(failure).toBe("upload_failed");
   });
 });
 

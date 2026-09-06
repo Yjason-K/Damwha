@@ -1,0 +1,290 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Damwha 런타임 아키텍처",
+    "output": "damwha-runtime.architecture.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "job-table-seam",
+        "label": "job 테이블 이음매",
+        "focus": [
+          "api",
+          "db",
+          "supervisor",
+          "child"
+        ],
+        "note": "API와 워커는 HTTP 없이 job 테이블 한 장으로만 통신한다."
+      },
+      {
+        "id": "upload-path",
+        "label": "업로드 경로",
+        "focus": [
+          "browser",
+          "spa",
+          "api",
+          "storage",
+          "db"
+        ],
+        "note": "브라우저에서 들어온 오디오가 디스크와 큐에 남기까지."
+      },
+      {
+        "id": "local-inference",
+        "label": "로컬 추론",
+        "focus": [
+          "child",
+          "llm",
+          "embed"
+        ],
+        "note": "추론은 전부 loopback — 외부 네트워크로 나가지 않는다."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "browser",
+      "type": "external",
+      "label": "브라우저",
+      "sublabel": "마이크 · 파일 업로드",
+      "pos": [
+        40,
+        300
+      ],
+      "size": [
+        130,
+        64
+      ]
+    },
+    {
+      "id": "spa",
+      "type": "frontend",
+      "label": "React SPA",
+      "sublabel": "Vite 8 · :5173",
+      "pos": [
+        280,
+        300
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "NestJS API",
+      "sublabel": ":3000 · raw SQL, ORM 없음",
+      "pos": [
+        530,
+        300
+      ],
+      "size": [
+        165,
+        64
+      ],
+      "tag": "ML 코드 없음"
+    },
+    {
+      "id": "db",
+      "type": "database",
+      "label": "PostgreSQL 16",
+      "sublabel": "pgvector + pg_bigm · :5432",
+      "pos": [
+        800,
+        300
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "tag": "job = 유일한 계약"
+    },
+    {
+      "id": "storage",
+      "type": "database",
+      "label": "오디오 스토리지",
+      "sublabel": "STORAGE_ROOT · 상대 키만",
+      "pos": [
+        530,
+        480
+      ],
+      "size": [
+        165,
+        64
+      ]
+    },
+    {
+      "id": "embed",
+      "type": "backend",
+      "label": "임베드 서비스",
+      "sublabel": "FastAPI · loopback",
+      "pos": [
+        530,
+        120
+      ],
+      "size": [
+        165,
+        64
+      ]
+    },
+    {
+      "id": "supervisor",
+      "type": "backend",
+      "label": "워커 supervisor",
+      "sublabel": "python -m damwha_worker",
+      "pos": [
+        1080,
+        170
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "tag": "peek + reaper"
+    },
+    {
+      "id": "child",
+      "type": "backend",
+      "label": "job child 프로세스",
+      "sublabel": "--once · job 1건 후 종료",
+      "pos": [
+        1080,
+        420
+      ],
+      "size": [
+        180,
+        64
+      ]
+    },
+    {
+      "id": "llm",
+      "type": "backend",
+      "label": "로컬 LLM",
+      "sublabel": "mlx_lm.server · :8000/v1",
+      "pos": [
+        1080,
+        600
+      ],
+      "size": [
+        180,
+        64
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "로컬 호스트 — 외부 네트워크 없음",
+      "wraps": [
+        "api",
+        "db",
+        "storage",
+        "embed",
+        "supervisor",
+        "child",
+        "llm"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "browser-to-spa",
+      "from": "browser",
+      "to": "spa",
+      "label": "녹음 · 업로드",
+      "variant": "emphasis"
+    },
+    {
+      "id": "spa-to-api",
+      "from": "spa",
+      "to": "api",
+      "label": "REST · multipart",
+      "variant": "emphasis"
+    },
+    {
+      "id": "api-to-db",
+      "from": "api",
+      "to": "db",
+      "label": "raw SQL · job 적재",
+      "variant": "emphasis"
+    },
+    {
+      "id": "api-to-storage",
+      "from": "api",
+      "to": "storage",
+      "label": "오디오 저장",
+      "labelDy": 24
+    },
+    {
+      "id": "api-to-embed",
+      "from": "api",
+      "to": "embed",
+      "label": "POST /embed · 쿼리 임베딩",
+      "variant": "dashed"
+    },
+    {
+      "id": "supervisor-to-db",
+      "from": "supervisor",
+      "to": "db",
+      "label": "peek_queued · SKIP LOCKED"
+    },
+    {
+      "id": "supervisor-to-child",
+      "from": "supervisor",
+      "to": "child",
+      "label": "job 1건당 spawn",
+      "labelDy": 24
+    },
+    {
+      "id": "child-to-db",
+      "from": "child",
+      "to": "db",
+      "label": "claim · persist 소유권 가드",
+      "variant": "emphasis"
+    },
+    {
+      "id": "child-to-storage",
+      "from": "child",
+      "to": "storage",
+      "label": "오디오 읽기 · live.wav 기록"
+    },
+    {
+      "id": "child-to-llm",
+      "from": "child",
+      "to": "llm",
+      "label": "lens · summary",
+      "variant": "dashed",
+      "labelDy": 24
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "계약",
+      "items": [
+        "API와 워커 사이 통신은 job 테이블 하나뿐 — HTTP 없음",
+        "같은 payload를 zod(TS)와 pydantic(PY)이 각각 검증",
+        "app_setting.worker_capabilities는 워커가 쓰고 API는 읽기만"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "워커 프로세스 모델",
+      "items": [
+        "supervisor는 peek만 하고, job 1건마다 child를 새로 띄운다",
+        "child exit code — 0 처리됨 · 3 없음 · 그 외 크래시 백오프",
+        "reaper는 두 벌(NestJS + supervisor)이 같은 CTE를 5분마다 돈다"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "로컬 전용 전제",
+      "items": [
+        "임베드 서비스와 LLM 모두 loopback 바인딩",
+        "쿼리 임베딩만 job 테이블 규칙의 유일한 예외",
+        "스토리지는 상대 키만 저장 — 클라이언트 파일명·절대경로 불신"
+      ]
+    }
+  ]
+}

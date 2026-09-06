@@ -43,6 +43,14 @@ export type RecorderFailure =
   | "buffer_overflow"
   | "device_ended"
   | "upload_failed";
+
+/**
+ * 재시도로 회복될 수 없는 업로드 거절. 일반 네트워크 실패는 같은 청크를 그대로 다시
+ * 보내면 되지만(그래서 run()이 무한 재시도한다), 서버가 재동기화할 오프셋도 주지 않고
+ * 거절한 경우는 다시 보내도 같은 답이 온다 — 60초 뒤 buffer_overflow로 죽는 대신
+ * 그 자리에서 upload_failed로 끝낸다.
+ */
+export class LiveUploadRejected extends Error {}
 export interface RecorderStatus {
   backlogMs: number;
   failed: RecorderFailure | null;
@@ -82,6 +90,9 @@ export class LiveRecorder {
         final: number,
         body: Uint8Array,
         elapsedMs: number,
+        /** 캡처가 실패해서 끝났으면 그 사유. 서버가 meeting.capture_error에 남긴다
+         *  (설계 §5.3·§7). null이면 정상 종료다. */
+        failure: RecorderFailure | null,
       ) => Promise<void>;
       retryDelayMs?: number;
       bufferLimitMs?: number;
@@ -128,7 +139,12 @@ export class LiveRecorder {
           body,
           elapsedMs,
         );
-      } catch {
+      } catch (e) {
+        if (e instanceof LiveUploadRejected) {
+          // 재동기화할 오프셋이 없는 거절 — 같은 청크를 다시 보내도 같은 답이다.
+          this.fail("upload_failed");
+          return;
+        }
         // 네트워크 실패. 청크를 버리지 않고 그대로 다시 보낸다.
         await new Promise((r) => setTimeout(r, this.deps.retryDelayMs ?? 1000));
         continue;
@@ -209,6 +225,11 @@ export class LiveRecorder {
       .addEventListener("ended", () => this.fail("device_ended"));
   }
 
+  /**
+   * 종료. `status.failed`를 stop 요청에 실어 보낸다 — 그것이 이 실패가 브라우저 탭
+   * 바깥에 남는 유일한 통로다. 토스트와 배너는 탭을 닫으면 사라지고, 정본 오디오는
+   * 짧아진 채 "정상 완료"로 보인다 (설계 §5.3·§7, review finding 3).
+   */
   async stop(): Promise<void> {
     await this.teardown();
     await this.drain();
@@ -223,16 +244,20 @@ export class LiveRecorder {
         this.offset,
         new Uint8Array(0),
         this.lastCaptureElapsedMs,
+        this.status.failed,
       );
       return;
     }
     const tail = this.chunks.flush();
+    // 큐가 비어 있어도 failed는 실어 보낸다 — device_ended가 큐가 빈 순간에 오면
+    // 꼬리는 온전하지만 그 뒤로 아무것도 잡히지 않았다는 사실은 그대로 남아야 한다.
     await this.deps.postStop?.(
       this.meetingId,
       this.offset,
       this.offset + tail.byteLength,
       tail,
       this.lastCaptureElapsedMs,
+      this.status.failed,
     );
   }
 

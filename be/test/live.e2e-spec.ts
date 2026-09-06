@@ -110,6 +110,44 @@ describe('live session api', () => {
     expect(new Date(at2).getTime()).toBe(new Date(at1).getTime());
   });
 
+  // 브라우저가 캡처를 끝까지 못 했다는 사실이 탭 밖에 남는 유일한 통로다 (설계 §5.3·§7).
+  // 이게 없으면 3분 만에 마이크를 잃은 회의와 깨끗한 회의가 서버에서 구별되지 않는다.
+  const stopWithCaptureError = (id: string, code: string) =>
+    request(srv()).post(`/meetings/${id}/live/stop`)
+      .set('Content-Type', 'application/octet-stream')
+      .set('X-Audio-Offset', '0').set('X-Final-Offset', '0')
+      .set('X-Capture-Error', code)
+      .send(Buffer.alloc(0));
+
+  it('stop records X-Capture-Error in meeting.capture_error', async () => {
+    const created = await start().expect(201);
+    await claim(created.body.current_job_id);
+    await stopWithCaptureError(created.body.id, 'device_ended').expect(200);
+    const { rows } = await db.pool.query('SELECT capture_error FROM meeting WHERE id=$1', [created.body.id]);
+    expect(rows[0].capture_error).toEqual({
+      code: 'device_ended', message: 'the microphone stopped before the user did',
+    });
+  });
+
+  it('stop still seals on an unknown X-Capture-Error, recording it as capture_failed', async () => {
+    const created = await start().expect(201);
+    await claim(created.body.current_job_id);
+    // 진단 헤더가 봉인을 막으면 회의가 recording에 갇히고 부분 유일 인덱스가 다음
+    // 녹음까지 막는다 — 400이 아니라 200이어야 한다.
+    const res = await stopWithCaptureError(created.body.id, 'wat').expect(200);
+    expect(res.body.outcome).toBe('stopping');
+    const { rows } = await db.pool.query('SELECT capture_error FROM meeting WHERE id=$1', [created.body.id]);
+    expect(rows[0].capture_error.code).toBe('capture_failed');
+  });
+
+  it('a clean stop leaves capture_error null', async () => {
+    const created = await start().expect(201);
+    await claim(created.body.current_job_id);
+    await stop(created.body.id).expect(200);
+    const { rows } = await db.pool.query('SELECT capture_error FROM meeting WHERE id=$1', [created.body.id]);
+    expect(rows[0].capture_error).toBeNull();
+  });
+
   it('stop → 409 when the meeting is not recording, 404 when missing', async () => {
     const done = await db.pool.query(`INSERT INTO meeting(audio_key,status) VALUES('k','done') RETURNING id`);
     expect((await stop(done.rows[0].id)).status).toBe(409);

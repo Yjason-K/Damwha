@@ -21,6 +21,16 @@ export const CHUNK_BYTES = 32768;
 export const GAP_THRESHOLD_MS = 2000;
 const BYTES_PER_MS = 32;
 
+/**
+ * stop이 X-Capture-Error로 실어 오는 브라우저측 캡처 실패 (설계 §5.3·§7). 문구는
+ * 사용자에게 보이므로 FE의 CaptureErrorNotice와 같은 코드를 쓴다.
+ */
+const CAPTURE_FAILURES: Record<string, string> = {
+  device_ended: 'the microphone stopped before the user did',
+  buffer_overflow: 'the upload backlog exceeded the buffer limit',
+  upload_failed: 'the server rejected an audio chunk',
+};
+
 function isSingleRecordingViolation(e: unknown): boolean {
   const err = e as { code?: string; constraint?: string } | null;
   return err?.code === '23505' && err?.constraint === RECORDING_INDEX;
@@ -42,6 +52,21 @@ export class LiveService {
   private intHeader(v: unknown, field: string): number {
     if (typeof v !== 'string' || !/^\d+$/.test(v)) throw new BadRequestException(`${field} must be a non-negative integer`);
     return Number(v);
+  }
+
+  /**
+   * X-Capture-Error를 capture_error에 넣을 모양으로 바꾼다.
+   *
+   * 모르는 값이라고 400을 던지지 않는다 — 이 헤더는 진단이고, API는 이 세션의 종결자다
+   * (설계 §7). 헤더 하나 때문에 stop이 거절되면 회의가 'recording'에 갇히고 부분 유일
+   * 인덱스가 다음 녹음까지 막는다. 사유를 못 알아들어도 "캡처가 실패했다"는 사실은
+   * 잃지 않도록 capture_failed로 접어 둔다.
+   */
+  private captureFailure(v: unknown): { code: string; message: string } | null {
+    if (typeof v !== 'string' || v === '') return null;
+    const known = CAPTURE_FAILURES[v];
+    if (known) return { code: v, message: known };
+    return { code: 'capture_failed', message: 'the browser reported an unrecognised capture failure' };
   }
 
   // JSON body라 multipart 문자열 파싱은 없다. 불리언은 불리언으로 받되, 업로드와의 대칭을
@@ -145,12 +170,19 @@ export class LiveService {
       throw new BadRequestException('X-Final-Offset must equal X-Audio-Offset + body length');
     }
 
+    const captureError = this.captureFailure(headers['x-capture-error']);
+
     const result = await this.db.withTransaction(async (c) => {
       const probe = await this.live.findLiveJob(c, id); // job → meeting 순서 (설계 §4.3)
       const job = probe ? await this.live.lockJobById(c, probe.job_id) : null;
       const meeting = await this.meetings.lockById(c, id);
       if (!meeting) throw new NotFoundException('meeting not found');
       if (!job) throw new ConflictException('meeting is not recording');
+
+      // 봉인 판정보다 먼저 쓴다. 아래 어느 경로로 나가든(정상·멱등 재시도) 이 사실은
+      // 남아야 하고, 던지는 경로에서는 트랜잭션과 함께 롤백되는 게 맞다 — 오프셋이
+      // 안 맞아 봉인되지 않은 stop은 아직 이 세션의 마지막 말이 아니다.
+      if (captureError) await this.live.setCaptureError(c, id, captureError);
 
       // 멱등 재시도: 이 job은 이미 봉인됐다. 같은 길이면 성공, 다르면 계약 위반이다.
       if (job.sealed_bytes !== null) {
