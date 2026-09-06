@@ -1,4 +1,5 @@
 import pytest
+from psycopg.types.json import Jsonb
 
 from damwha_worker import db
 from tests.conftest import seed_job, seed_meeting
@@ -27,13 +28,22 @@ def test_set_recording_started_is_guarded_by_current_job_and_status(conn):
 
 def test_get_stop_requested_reports_none_stop_or_lost(conn):
     mid, jid = _claimed_live(conn)
-    assert db.get_stop_requested(conn, jid, "w1") is None
+    assert db.get_stop_requested(conn, jid, "w1") == (None, None)
     conn.execute("UPDATE job SET stop_requested_at=now() WHERE id=%s", (jid,))
-    assert db.get_stop_requested(conn, jid, "w1") == "stop"
-    assert db.get_stop_requested(conn, jid, "someone-else") == "lost"
+    assert db.get_stop_requested(conn, jid, "w1") == ("stop", None)
+    assert db.get_stop_requested(conn, jid, "someone-else") == ("lost", None)
     conn.execute("UPDATE job SET status='failed' WHERE id=%s", (jid,))
-    assert db.get_stop_requested(conn, jid, "w1") == "lost"
-    assert db.get_stop_requested(conn, "job_999", "w1") == "lost"
+    assert db.get_stop_requested(conn, jid, "w1") == ("lost", None)
+    assert db.get_stop_requested(conn, "job_999", "w1") == ("lost", None)
+
+
+def test_get_stop_requested_returns_sealed_bytes(conn):
+    mid, jid = _claimed_live(conn)
+    assert db.get_stop_requested(conn, jid, "w1") == (None, None)
+    conn.execute(
+        "UPDATE job SET stop_requested_at=now(), sealed_bytes=%s WHERE id=%s", (65536, jid)
+    )
+    assert db.get_stop_requested(conn, jid, "w1") == ("stop", 65536)
 
 
 def test_insert_live_utterance_returns_id_and_enforces_seq(conn):
@@ -148,3 +158,26 @@ def test_finalize_returns_lost_without_job_ownership(conn):
         conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()["status"]
         == "recording"
     )
+
+
+def test_finalize_preserves_capture_error(conn):
+    mid, jid = _claimed_live(conn)
+    conn.execute(
+        "UPDATE meeting SET capture_error=%s WHERE id=%s",
+        (Jsonb({"code": "producer_abandoned"}), mid),
+    )
+    db.finalize_live_session(
+        conn,
+        job_id=jid,
+        worker_id="w1",
+        meeting_id=mid,
+        duration_ms=1000,
+        process_payload=PROCESS,
+    )
+    row = conn.execute(
+        "SELECT status, error, capture_error FROM meeting WHERE id=%s", (mid,)
+    ).fetchone()
+    assert row["status"] == "uploaded"
+    assert row["error"] is None
+    # 처리 실패 error는 지워도 캡처 이력은 남아야 한다 — 설계 §2.10
+    assert row["capture_error"] == {"code": "producer_abandoned"}

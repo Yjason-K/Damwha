@@ -1005,17 +1005,24 @@ def set_recording_started(conn, meeting_id: str, job_id: str) -> int:
     return cur.rowcount
 
 
-def get_stop_requested(conn, job_id: str, worker_id: str) -> str | None:
-    """루프가 1초마다 읽는 종료 신호. 'stop'=API가 종료 요청, 'lost'=소유권 상실
-    (cancel·reaper), None=계속."""
+def get_stop_requested(conn, job_id: str, worker_id: str) -> tuple[str | None, int | None]:
+    """루프가 1초마다 읽는 종료 신호와 봉인 길이.
+
+    ('stop', sealed_bytes) = API가 봉인을 끝냈다. 워커는 그 바이트까지 읽고 finalize한다.
+    ('lost', None) = 소유권 상실 (cancel·reaper). (None, None) = 계속.
+
+    둘을 한 SELECT로 읽는 이유: 봉인은 stop_requested_at과 sealed_bytes를 같은 트랜잭션에서
+    쓰므로 따로 읽으면 그 사이 값이 바뀐 것을 볼 수 있다 (설계 §4.4 ③).
+    """
     row = conn.execute(
-        "SELECT status, locked_by, stop_requested_at FROM job WHERE id=%s", (job_id,)
+        "SELECT status, locked_by, stop_requested_at, sealed_bytes FROM job WHERE id=%s",
+        (job_id,),
     ).fetchone()
     if row is None or row["locked_by"] != worker_id or row["status"] != "running":
-        return "lost"
+        return "lost", None
     if row["stop_requested_at"] is not None:
-        return "stop"
-    return None
+        return "stop", row["sealed_bytes"]
+    return None, None
 
 
 def insert_live_utterance(
@@ -1073,6 +1080,9 @@ def finalize_live_session(
                 """,
                 (duration_ms, meeting_id, job_id),
             )
+            # capture_error는 일부러 SET 목록에 없다. error는 "이 회의의 처리가 실패했는가"이고
+            # capture_error는 "이 녹음이 어떻게 얻어졌는가"다. 최종 패스가 성공해도 "40분 중
+            # 30분만 녹음됐다"는 계속 보여야 한다 (설계 §2.10).
             if cur.rowcount == 0:
                 conn.execute(
                     "UPDATE job SET status='done', error=%s, updated_at=now() WHERE id=%s",
