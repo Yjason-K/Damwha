@@ -45,7 +45,8 @@ export class LiveRepository {
    */
   async findLiveJob(exec: Queryable, meetingId: string): Promise<{ job_id: string } | null> {
     const { rows } = await exec.query<{ job_id: string }>(
-      `SELECT id AS job_id FROM job WHERE meeting_id=$1 AND type='live_session'`, [meetingId]);
+      `SELECT id AS job_id FROM job WHERE meeting_id=$1 AND type='live_session'
+       ORDER BY created_at DESC LIMIT 1`, [meetingId]);
     return rows[0] ?? null;
   }
 

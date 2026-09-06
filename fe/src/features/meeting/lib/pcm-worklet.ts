@@ -14,22 +14,26 @@ const FRAME_SAMPLES = 512;
  * lib.dom.d.ts에는 AudioWorkletGlobalScope가 없다 — registerProcessor()도
  * AudioWorkletProcessor도 타입이 없다. @types/audioworklet 같은 패키지도 설치돼 있지 않다.
  * 이 파일이 도는 스코프에서만 쓰는 최소 앰비언트 선언이다.
+ *
+ * `declare global`이 아니라 **모듈 스코프** declare다. tsconfig.app.json이
+ * `moduleDetection: "force"`라 이 파일은 import 없이도 모듈이고, 따라서 이 선언들은
+ * 이 파일 안에서만 보인다. global로 두면 의도적으로 최소·불완전한 이 타입이 프로그램
+ * 전역에 노출되고, 훗날 TS가 진짜 AudioWorklet lib 타입을 실으면 중복 식별자로 충돌한다.
+ * 런타임은 그대로다 — declare는 아무것도 방출하지 않고, 워크릿 스코프의 진짜 전역을 쓴다.
  */
-declare global {
-  class AudioWorkletProcessor {
-    readonly port: MessagePort;
-    process(
-      inputs: Float32Array[][],
-      outputs: Float32Array[][],
-      parameters: Record<string, Float32Array>,
-    ): boolean;
-  }
-
-  function registerProcessor(
-    name: string,
-    processorCtor: new () => AudioWorkletProcessor,
-  ): void;
+declare class AudioWorkletProcessor {
+  readonly port: MessagePort;
+  process(
+    inputs: Float32Array[][],
+    outputs: Float32Array[][],
+    parameters: Record<string, Float32Array>,
+  ): boolean;
 }
+
+declare function registerProcessor(
+  name: string,
+  processorCtor: new () => AudioWorkletProcessor,
+): void;
 
 class PcmProcessor extends AudioWorkletProcessor {
   private rest = new Float32Array(0);

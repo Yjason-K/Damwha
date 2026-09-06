@@ -254,7 +254,16 @@ describe("LiveRecorder stop() after a recorder failure", () => {
     const post = vi.fn(async () => {
       throw new LiveUploadRejected("no expected_offset");
     });
-    const stopSpy = vi.fn(async () => undefined);
+    const stopSpy = vi.fn<
+      (
+        id: string,
+        offset: number,
+        final: number,
+        body: Uint8Array,
+        elapsedMs: number,
+        failure: RecorderFailure | null,
+      ) => Promise<void>
+    >(async () => undefined);
     const r = new LiveRecorder({
       postChunk: post,
       postStop: stopSpy,

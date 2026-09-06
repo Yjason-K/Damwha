@@ -117,7 +117,11 @@ describe('live audio append', () => {
     await db.pool.query(
       `UPDATE job SET sealed_bytes=$2 WHERE id=(SELECT current_job_id FROM meeting WHERE id=$1)`,
       [m.id, CHUNK]);
-    await send(m.id, CHUNK, chunk(2)).expect(409);
+    // 409에 실린 오프셋이 곧 ACK 프로토콜이다 — 상태 코드만 보면 재동기화의 근거를
+    // 안 보는 셈이다. 봉인된 세션은 sealed_bytes가 그 값이다.
+    const res = await send(m.id, CHUNK, chunk(2)).expect(409);
+    expect(res.body.expected_offset).toBe(CHUNK);
+    expect(res.body.code).toBe('sealed');
   });
 
   it('two concurrent appends at the same offset — exactly one wins', async () => {

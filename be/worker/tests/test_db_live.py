@@ -15,17 +15,6 @@ def _claimed_live(conn, *, status="recording"):
     return mid, jid
 
 
-def test_set_recording_started_is_guarded_by_current_job_and_status(conn):
-    mid, jid = _claimed_live(conn)
-    before = conn.execute("SELECT recorded_at FROM meeting WHERE id=%s", (mid,)).fetchone()
-    assert db.set_recording_started(conn, mid, jid) == 1
-    after = conn.execute("SELECT recorded_at FROM meeting WHERE id=%s", (mid,)).fetchone()
-    assert after["recorded_at"] >= before["recorded_at"]
-    assert db.set_recording_started(conn, mid, "job_999") == 0
-    conn.execute("UPDATE meeting SET status='failed' WHERE id=%s", (mid,))
-    assert db.set_recording_started(conn, mid, jid) == 0
-
-
 def test_get_stop_requested_reports_none_stop_or_lost(conn):
     mid, jid = _claimed_live(conn)
     assert db.get_stop_requested(conn, jid, "w1") == (None, None)

@@ -992,19 +992,6 @@ def persist_enroll(
 # ── 라이브 세션 (설계 §4·§5) ─────────────────────────────────────────────
 
 
-def set_recording_started(conn, meeting_id: str, job_id: str) -> int:
-    """캡처가 실제로 시작된 시각을 recorded_at에 찍는다. API 호출 시각이 아니라 첫 샘플
-    시각이어야 경과 시간이 맞는다. 회의 가드(current_job_id·status)에 막히면 0."""
-    cur = conn.execute(
-        """
-        UPDATE meeting SET recorded_at=now()
-        WHERE id=%s AND current_job_id=%s AND status='recording'
-        """,
-        (meeting_id, job_id),
-    )
-    return cur.rowcount
-
-
 def get_stop_requested(conn, job_id: str, worker_id: str) -> tuple[str | None, int | None]:
     """루프가 1초마다 읽는 종료 신호와 봉인 길이.
 

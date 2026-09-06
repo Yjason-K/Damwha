@@ -299,9 +299,17 @@ describe('meetings', () => {
         request(srv()).post(`/meetings/${mid}/cancel`).send()
           .end((err, res) => resolve({ err, res }));
       });
-      // give the in-flight request real wall-clock time to reach its lock
-      // attempt before we probe.
-      await new Promise((r) => setTimeout(r, 200));
+      // 고정 대기(200ms)로는 이 테스트가 조용히 공허해진다 — 느린 머신에서 요청이
+      // 락에 닿기 전에 probe가 돌면 meeting은 당연히 'free'이고, 잠금 순서가 뒤집힌
+      // 구현에서도 통과한다. 실제로 막혔음을 관측한 뒤에만 probe한다.
+      const deadline = Date.now() + 5000;
+      for (;;) {
+        const { rows } = await db.pool.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted`);
+        if (rows[0].n > 0) break;
+        if (Date.now() > deadline) throw new Error('cancel never blocked on a lock');
+        await new Promise((r) => setTimeout(r, 20));
+      }
 
       // cancel이 job에서 막혀 있는 동안 meeting 행은 여전히 잠기지 않아야 한다.
       const probe = await db.pool.query(

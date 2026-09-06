@@ -27,15 +27,26 @@ def _wav(tmp_path, pcm=b""):
 
 
 class Clock:
-    """결정적 시계. sleep이 시간을 앞으로 민다 — 실제로 자지 않는다."""
+    """결정적 시계. sleep이 시간을 앞으로 민다 — 실제로 자지 않는다.
 
-    def __init__(self):
+    sleep 횟수에 상한이 있다. 이 시계는 실제로 자지 않으므로, TailSource가 끝나지 못하는
+    회귀(예: 종료 조건을 available이 아니라 yielded로 되돌리면 부분 프레임에서 영원히
+    돌지 못한다)가 나면 테스트가 **실패하지 않고 100% CPU로 hang한다** — 493개짜리
+    스위트에서 hang은 실패보다 나쁘고, 이 저장소엔 pytest-timeout 설정이 없다.
+    상한은 정상 테스트가 절대 닿지 않을 만큼 넉넉하다.
+    """
+
+    def __init__(self, max_sleeps=100_000):
         self.t = 0.0
+        self._left = max_sleeps
 
     def __call__(self):
         return self.t
 
     def sleep(self, s):
+        self._left -= 1
+        if self._left < 0:
+            raise AssertionError("TailSource가 끝나지 않는다 — 무한 폴링 회귀")
         self.t += s
 
 

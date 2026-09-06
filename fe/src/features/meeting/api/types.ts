@@ -157,8 +157,6 @@ export type MeetingStatusResponse = {
   stage: string | null;
   progress: number | null;
   error: JsonError | null;
-  /** WireMeeting.capture_error와 같은 컬럼 — findStatus도 SELECT m.capture_error를 낸다. */
-  capture_error?: JsonError | null;
   summary: SummaryGenerationStatus | null;
   search_index: SearchIndexStatus | null;
 };

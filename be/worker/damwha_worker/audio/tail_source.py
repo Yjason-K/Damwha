@@ -68,6 +68,7 @@ class TailSource:
             try:
                 return open(self._path, "rb")  # noqa: SIM115 — 수명이 frames()까지다
             except FileNotFoundError:
+                # 아직 안 만들어졌을 뿐일 수 있다 — grace 동안만 기다린다.
                 if self._clock() >= deadline:
                     raise WorkerError(
                         IO_ERROR,
@@ -76,10 +77,28 @@ class TailSource:
                         stage="capture",
                     ) from None
                 self._sleep(self._poll)
+            except OSError as e:
+                # 권한·EIO 등. 기다린다고 나아지지 않고, 분류하지 않으면 미분류 잡 실패로
+                # 표면화돼 io_error 실패 매트릭스(설계 §7)를 벗어난다.
+                raise WorkerError(
+                    IO_ERROR,
+                    f"could not open the live audio file: {self._path} ({e})",
+                    ErrorKind.PERMANENT,
+                    stage="capture",
+                ) from e
         return None
 
     def _available(self, sealed: int | None) -> int:
-        pcm = os.path.getsize(self._path) - HEADER_LEN
+        try:
+            pcm = os.path.getsize(self._path) - HEADER_LEN
+        except OSError as e:
+            # 세션 도중 회의가 삭제되면 여기 온다. _open()과 같은 코드로 분류한다.
+            raise WorkerError(
+                IO_ERROR,
+                f"the live audio file disappeared mid-session: {self._path} ({e})",
+                ErrorKind.PERMANENT,
+                stage="capture",
+            ) from e
         return pcm if sealed is None else min(pcm, sealed)
 
     def frames(self) -> Iterator[bytes]:

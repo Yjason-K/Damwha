@@ -42,9 +42,16 @@ export class LiveAudioService {
     const tmp = `${full}.tmp`;
     const fh = await fs.promises.open(tmp, 'w');
     try {
-      await fh.write(header(STREAMING_SIZE, STREAMING_SIZE));
-      await fh.datasync();
-    } finally { await fh.close(); }
+      try {
+        await fh.write(header(STREAMING_SIZE, STREAMING_SIZE));
+        await fh.datasync();
+      } finally { await fh.close(); }
+    } catch (e) {
+      // 설계 §4.1의 실패 매트릭스가 임시 파일 정리를 요구한다. 안 지우면 회의를
+      // 지울 때까지 남는다 — 그 자체가 디스크 부족의 원인이었을 수도 있다.
+      await fs.promises.unlink(tmp).catch(() => undefined);
+      throw e;
+    }
     await fs.promises.rename(tmp, full);
     const dh = await fs.promises.open(dir, 'r');
     try { await dh.sync(); } finally { await dh.close(); }

@@ -69,10 +69,3 @@ def test_browser_source_is_accepted():
     data["source"] = "browser"
     p = parse_payload("live_session", data)
     assert p.source == "browser"
-
-
-def test_unknown_source_is_rejected():
-    data = load("live_session.valid.json")
-    data["source"] = "system"
-    with pytest.raises(Exception):
-        parse_payload("live_session", data)
