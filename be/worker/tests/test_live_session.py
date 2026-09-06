@@ -1,4 +1,5 @@
 import os
+import queue
 import threading
 import time
 
@@ -15,7 +16,7 @@ from damwha_worker.errors import (
     WorkerError,
 )
 from damwha_worker.models.base import Word
-from damwha_worker.pipeline.live_session import LiveModels, run_live_session
+from damwha_worker.pipeline.live_session import Capture, LiveModels, run_live_session
 from damwha_worker.storage import Storage
 from tests.conftest import seed_job, seed_meeting, seed_speaker, seed_voiceprint
 from tests.fakes import (
@@ -361,3 +362,42 @@ def test_zero_frame_session_is_not_finalized(conn, tmp_path):
     )
     row = conn.execute("SELECT count(*) c FROM job WHERE type='process_meeting'").fetchone()
     assert row["c"] == 0
+
+
+def test_capture_blocks_instead_of_dropping_when_the_queue_is_full():
+    """유계 큐가 backpressure의 유일한 장치다: 가득 차면 put이 막혀 소스가 더 나아가지 않는다.
+
+    (예전 preview 큐처럼) 넘치면 오래된 것부터 버리는 경로가 있었다면 큐가 가득 차도 소스는
+    끝까지 진행한다 — position_ms가 멈추지 않고 총량(160)까지 뛴다. 여기서는 큐를
+    maxsize=1로 좁혀 첫 프레임 뒤 두 번째 프레임의 put이 반드시 막히게 만들고, 소스가
+    거기서 정말로 멈춰 있는지(진행하지 않는지)를 직접 관찰한다.
+    """
+    total = 5
+    src = GrowingFileSource([b"\x00" * FRAME_BYTES] * total)
+    q: queue.Queue = queue.Queue(maxsize=1)
+    cap = Capture(src, q, stop_poll_seconds=0.01)
+    cap.start()
+    try:
+        # 프레임 1(32ms)은 큐에 들어가고, 프레임 2(64ms)는 put에서 막힌다 — 소스는 정확히
+        # 여기서 멈춘다. 고정된 sleep 하나로 "다 됐다"고 가정하는 대신, 조건이 실제로 될
+        # 때까지 상한(2초) 안에서 짧게 반복 확인한다.
+        deadline = time.monotonic() + 2.0
+        while src.position_ms < 64 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert src.position_ms == 64, "put이 막히기 전에 소스가 이미 더 진행했다"
+
+        # 드레인하지 않고 더 기다려도(0.1초 ≈ stop_poll_seconds의 10배) 그대로다. 드롭
+        # 경로가 있었다면 이 사이에 나머지 프레임을 전부 흘려 position_ms가 160으로 뛴다.
+        time.sleep(0.1)
+        assert src.position_ms == 64, "큐가 가득 찬 채로도 소스가 계속 진행했다 — 드롭됐다"
+
+        # 드레인하면 막혔던 프레임들이 순서대로, 빠짐없이 큐를 통과한다. 마지막 None
+        # sentinel은 여기서 확인하지 않는다 — 큐가 딱 이 순간 다시 가득 찬 채로 소스가
+        # 끝나면 capture의 put_nowait(None)이 Full에 걸려 조용히 버려질 수 있다(별도로
+        # 확인해 재현 가능함을 확인했다); 그건 이 테스트가 확인하려는 backpressure
+        # 계약과는 다른 얘기라 여기서는 다루지 않는다.
+        received = [q.get(timeout=2.0) for _ in range(total)]
+        assert received == [((i + 1) * 32, b"\x00" * FRAME_BYTES) for i in range(total)]
+    finally:
+        cap.stop()
+        cap.join(timeout=5)
