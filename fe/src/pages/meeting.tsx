@@ -29,6 +29,7 @@ import type { RecorderStatus } from "@/features/meeting/lib/live-recorder";
 import {
   clearLiveCapture,
   getLiveRecorder,
+  subscribeLiveStatus,
 } from "@/features/meeting/lib/live-session";
 import type { Meeting } from "@/features/meeting/model/types";
 import { CenterState, Spinner } from "@/features/meeting/ui/center-state";
@@ -300,7 +301,10 @@ function MeetingView({
 
   // 이 탭이 다이얼로그에서 시작한 브라우저 레코더 — 상태를 배너에 잇고, 종료가
   // recorder.stop()을 부를 수 있게 한다. 회의를 만들지 않고 이 화면에 바로 들어왔거나
-  // (새로고침 등) 다른 탭에서 시작한 녹음이면 없다.
+  // (새로고침 등) 다른 탭에서 시작한 녹음이면 없다. recorder.onStatus 자체는 여기서
+  // 건드리지 않는다 — 그 슬롯은 live-session.ts가 실패 토스트용으로 쓰고 있어서,
+  // 이 화면이 마운트돼 있지 않을 때도(다른 회의를 보는 중) 실패가 계속 보고돼야 한다.
+  // subscribeLiveStatus로 별도 구독만 걸고 뗀다.
   const [recorderStatus, setRecorderStatus] =
     React.useState<RecorderStatus | null>(null);
   React.useEffect(() => {
@@ -314,10 +318,10 @@ function MeetingView({
       setRecorderStatus(null);
       return;
     }
-    live.recorder.onStatus = setRecorderStatus;
+    subscribeLiveStatus(meeting.id, setRecorderStatus);
     setRecorderStatus(live.recorder.status);
     return () => {
-      live.recorder.onStatus = () => {};
+      subscribeLiveStatus(meeting.id, null);
     };
   }, [meeting?.id, meeting?.status]);
 
