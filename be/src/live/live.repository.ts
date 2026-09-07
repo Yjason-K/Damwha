@@ -69,6 +69,16 @@ export class LiveRepository {
     await exec.query(`UPDATE job SET last_input_at=now(), updated_at=now() WHERE id=$1`, [jobId]);
   }
 
+  /** 확정 경계 전진. fdatasync 완료 후에만 부른다 — last_input_at도 같이 갱신한다,
+   *  경계가 전진했다는 사실 자체가 producer가 방금 살아 있었다는 증거이기 때문이다
+   *  (설계 §3.3 ④). 신규 job 생성 TX에서 bytes=0으로도 부른다. */
+  async setCommitted(exec: Queryable, jobId: string, bytes: number): Promise<void> {
+    await exec.query(
+      `UPDATE job SET committed_bytes=$2, last_input_at=now(), updated_at=now() WHERE id=$1`,
+      [jobId, bytes],
+    );
+  }
+
   async setCaptureError(exec: Queryable, meetingId: string, err: object): Promise<void> {
     await exec.query(`UPDATE meeting SET capture_error=$2::jsonb WHERE id=$1`,
       [meetingId, JSON.stringify(err)]);

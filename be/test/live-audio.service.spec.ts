@@ -56,4 +56,73 @@ describe('LiveAudioService', () => {
     expect(head().readUInt32LE(40)).toBe(1024);
     expect(head().readUInt32LE(4)).toBe(36 + 1024);
   });
+
+  describe('writeAt / recover (확정 경계 복구, 설계 §3.2–3.3)', () => {
+    it('replays a partially written tail from the committed boundary', async () => {
+      await svc.create(KEY);
+      const first = Buffer.alloc(32768, 1);
+      await svc.writeAt(KEY, 0, first);
+      fs.appendFileSync(path.join(root, KEY), Buffer.alloc(401, 9));
+      await svc.recover(KEY, 32768);
+      const tail = Buffer.alloc(1000, 2);
+      expect(await svc.writeAt(KEY, 32768, tail)).toBe(33768);
+      expect(fs.readFileSync(path.join(root, KEY)).subarray(44)).toEqual(
+        Buffer.concat([first, tail]),
+      );
+    });
+
+    it('recover is a no-op when the file already ends exactly at the committed boundary', async () => {
+      await svc.create(KEY);
+      await svc.writeAt(KEY, 0, Buffer.alloc(1024, 3));
+      await expect(svc.recover(KEY, 1024)).resolves.toBeUndefined();
+      expect(await svc.pcmSize(KEY)).toBe(1024);
+    });
+
+    it('recover throws when the file is shorter than the committed boundary (lost committed bytes)', async () => {
+      await svc.create(KEY);
+      await svc.writeAt(KEY, 0, Buffer.alloc(32766, 1)); // 확정=32768이라 주장하지만 실제=32766
+      await expect(svc.recover(KEY, 32768)).rejects.toThrow(/32766.*32768|32768.*32766/);
+      // 잃은 확정 바이트를 0으로 채워 넣지 않는다 — 파일 길이는 그대로다.
+      expect(await svc.pcmSize(KEY)).toBe(32766);
+    });
+
+    it('writeAt drains a write() that only advances 7 bytes per call', async () => {
+      await svc.create(KEY);
+      // fs 전체를 mock하지 않는다: 실제 파일에 정말 7바이트씩 쓰고 실제 bytesWritten을
+      // 반환한다. 한 번의 write 호출에 버퍼 전체가 쓰인다고 가정하는 구현은 이 테스트에서
+      // 데이터가 잘리거나 write 호출 수가 1로 관찰돼 실패한다.
+      const realOpen = fs.promises.open.bind(fs.promises);
+      const spy = jest.spyOn(fs.promises, 'open').mockImplementation(async (...args: Parameters<typeof fs.promises.open>) => {
+        const fh = await realOpen(...args);
+        const realWrite = fh.write.bind(fh);
+        (fh as any).write = async (buffer: Buffer, offset: number, length: number, position: number) => {
+          const chunk = Math.min(7, length);
+          return realWrite(buffer, offset, chunk, position);
+        };
+        return fh;
+      });
+      try {
+        const pcm = Buffer.alloc(30, 5);
+        expect(await svc.writeAt(KEY, 0, pcm)).toBe(30);
+        expect(fs.readFileSync(path.join(root, KEY)).subarray(44)).toEqual(pcm);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('writeAt throws when write() reports zero bytes written', async () => {
+      await svc.create(KEY);
+      const realOpen = fs.promises.open.bind(fs.promises);
+      const spy = jest.spyOn(fs.promises, 'open').mockImplementation(async (...args: Parameters<typeof fs.promises.open>) => {
+        const fh = await realOpen(...args);
+        (fh as any).write = async () => ({ bytesWritten: 0, buffer: Buffer.alloc(0) });
+        return fh;
+      });
+      try {
+        await expect(svc.writeAt(KEY, 0, Buffer.alloc(10, 1))).rejects.toThrow(/zero-byte/);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
 });

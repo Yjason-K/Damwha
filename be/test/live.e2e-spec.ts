@@ -64,6 +64,65 @@ describe('live session api', () => {
     expect(payload.process.processing_version).toBe(0);
   });
 
+  // 신규 browser live job은 파일(PCM 0바이트)과 같은 사실을 committed_bytes=0으로
+  // 들고 태어난다 — NULL이면 "아직 시작 전"과 구별이 안 된다 (설계 §3.2).
+  it('POST /meetings/live creates the job with committed_bytes=0', async () => {
+    const created = await start().expect(201);
+    const { rows } = await db.pool.query(
+      'SELECT committed_bytes FROM job WHERE id=$1', [created.body.current_job_id],
+    );
+    expect(rows[0].committed_bytes).toBe('0');
+  });
+
+  // 024의 CHECK 제약: committed_bytes는 live_session이고, 0 이상 짝수이며, sealed_bytes가
+  // 있으면 그와 같아야 한다. 과거(023 이전) 종료 job과 다른 타입의 NULL은 그대로 허용된다.
+  describe('024_live_committed_bytes CHECK', () => {
+    it('rejects a negative committed_bytes', async () => {
+      await expect(
+        db.pool.query(`INSERT INTO job(type, payload, committed_bytes) VALUES('live_session','{}'::jsonb,-2)`),
+      ).rejects.toThrow(/check constraint/i);
+    });
+
+    it('rejects an odd committed_bytes', async () => {
+      await expect(
+        db.pool.query(`INSERT INTO job(type, payload, committed_bytes) VALUES('live_session','{}'::jsonb,3)`),
+      ).rejects.toThrow(/check constraint/i);
+    });
+
+    it('rejects sealed_bytes and committed_bytes disagreeing', async () => {
+      await expect(
+        db.pool.query(
+          `INSERT INTO job(type, payload, sealed_bytes, committed_bytes) VALUES('live_session','{}'::jsonb,10,8)`,
+        ),
+      ).rejects.toThrow(/check constraint/i);
+    });
+
+    it('rejects a non-live_session job carrying committed_bytes', async () => {
+      await expect(
+        db.pool.query(
+          `INSERT INTO job(type, payload, committed_bytes) VALUES('process_meeting','{}'::jsonb,0)`,
+        ),
+      ).rejects.toThrow(/check constraint/i);
+    });
+
+    it('allows a NULL committed_bytes (past sessions, other job types)', async () => {
+      await expect(
+        db.pool.query(`INSERT INTO job(type, payload) VALUES('live_session','{}'::jsonb)`),
+      ).resolves.toBeDefined();
+      await expect(
+        db.pool.query(`INSERT INTO job(type, payload) VALUES('process_meeting','{}'::jsonb)`),
+      ).resolves.toBeDefined();
+    });
+
+    it('allows matching sealed_bytes and committed_bytes', async () => {
+      await expect(
+        db.pool.query(
+          `INSERT INTO job(type, payload, sealed_bytes, committed_bytes) VALUES('live_session','{}'::jsonb,10,10)`,
+        ),
+      ).resolves.toBeDefined();
+    });
+  });
+
   it('POST /meetings/live → 409 while another recording exists', async () => {
     await start().expect(201);
     const res = await start();

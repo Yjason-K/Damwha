@@ -125,6 +125,10 @@ export class LiveService {
         const payload = buildLiveSessionPayload({ meetingId, audioKey, processing, followups, speakers });
         // 재시도 없음 — 끊긴 녹음은 이어 붙일 수 없다 (설계 §2.6).
         const job = await this.jobs.enqueue(c, { type: 'live_session', meetingId, payload, maxAttempts: 1 });
+        // 확정 경계는 파일과 함께 태어난다 — 이 TX 밖에서 만드는 live.wav가 PCM 0바이트인
+        // 사실과 짝을 맞춘다. 여기서 안 하면 첫 append가 볼 committed_bytes가 NULL이라
+        // "아직 시작 전"과 "확정 0바이트"를 구별할 수 없다 (설계 §3.2).
+        await this.live.setCommitted(c, job.id, 0);
         return this.meetings.setCurrentJob(c, meetingId, job.id);
       });
     } catch (e) {
