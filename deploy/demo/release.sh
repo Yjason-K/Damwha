@@ -3,7 +3,7 @@
 #   deploy/demo/release.sh            # tag = today (YYYYMMDD) + latest
 #   deploy/demo/release.sh 20260902   # explicit tag
 #   PUSH=0 deploy/demo/release.sh     # build + load locally only (for compose smoke test)
-# Separate image names from the team-trial release (damwha-api / damwha-postgres),
+# Separate image names from the install release (damwha-api / damwha-postgres),
 # so nothing here touches those tags.
 set -euo pipefail
 TAG="${1:-$(date +%Y%m%d)}"

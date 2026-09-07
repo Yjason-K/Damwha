@@ -1,7 +1,7 @@
 # 공개 데모 배포
 
 읽기 전용 데모(설계 §3.6)를 홈 서버(arm64)에 올리고 Cloudflare Tunnel로 노출한다.
-팀 트라이얼 배포(`deploy/README.md`, `damwha-api`/`damwha-postgres`)와는 **이미지 이름부터
+자체 호스팅 배포(`deploy/README.md`, `damwha-api`/`damwha-postgres`)와는 **이미지 이름부터
 다른 별개 릴리스**다.
 
 ## 이미지

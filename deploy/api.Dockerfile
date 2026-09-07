@@ -5,7 +5,7 @@
 #
 # Public-demo variant (deploy/demo/): --build-arg VITE_DEMO_MODE=true bakes the
 # read-only SPA, --build-arg DEMO_SEED=true bakes demo/seed storage into
-# ./storage so the image needs no volume. Both default off; the team-trial image
+# ./storage so the image needs no volume. Both default off; the self-hosted image
 # is unchanged.
 ARG VITE_DEMO_MODE=false
 ARG DEMO_SEED=false
@@ -61,7 +61,7 @@ COPY --from=build /repo/packages/contracts/dist ./packages/contracts/dist
 COPY --from=build /repo/be/dist ./be/dist
 # main.ts serves dist/public as the SPA when it exists
 COPY --from=build /repo/fe/dist ./be/dist/public
-# Demo seed audio (empty unless DEMO_SEED=true); the team compose mounts a volume over it
+# Demo seed audio (empty unless DEMO_SEED=true); the self-hosted compose mounts a volume over it
 COPY --from=seed /seed ./be/storage
 
 # cwd = be/ so STORAGE_ROOT=./storage resolves like the dev setup
