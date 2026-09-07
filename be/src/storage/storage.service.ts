@@ -21,6 +21,10 @@ export class StorageService {
   meetingKey(meetingId: string, filename: string): string {
     return `meetings/${meetingId}/original${this.sanitizeExt(filename)}`;
   }
+  // 라이브 녹음 파일. meetingKey와 달리 확장자가 고정이다 — 브라우저가 항상 raw PCM을 올린다.
+  liveKey(meetingId: string): string {
+    return `meetings/${meetingId}/live.wav`;
+  }
   speakerKey(speakerId: string, filename: string): string {
     return `speakers/${speakerId}/sample${this.sanitizeExt(filename)}`;
   }
@@ -62,6 +66,17 @@ export class StorageService {
   }
   stat(key: string): Promise<fs.Stats> {
     return fs.promises.stat(this.resolve(key));
+  }
+  // stat() that answers null for a missing file instead of rejecting. Callers
+  // choosing between candidate keys need "is it there?" without an ENOENT
+  // escaping as a 500; every other error (EACCES, EIO) still throws.
+  async statOrNull(key: string): Promise<fs.Stats | null> {
+    try {
+      return await fs.promises.stat(this.resolve(key));
+    } catch (e: any) {
+      if (e?.code === 'ENOENT') return null;
+      throw e;
+    }
   }
   // Recursively remove a directory subtree addressed by a relative key prefix.
   // Routes through resolve() so the traversal guard applies; no-op if missing.

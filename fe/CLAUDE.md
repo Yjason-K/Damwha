@@ -37,6 +37,7 @@ pnpm lint             # eslint .
 pnpm format           # prettier --write .
 pnpm test             # vitest run (jsdom)
 pnpm test:watch       # vitest watch mode
+pnpm verify:worklet   # check the BUILT pcm-worklet asset — needs `pnpm build` first
 
 # single test file / by name
 pnpm vitest run src/pages/index-route.test.tsx
@@ -60,6 +61,7 @@ Vite 8 + React 19 SPA, **feature-based-lite** layout. Path alias `@/*` → `src/
   - `api/client.ts` — single Axios instance (baseURL from env).
   - `api/query-client.ts` — `createQueryClient()` factory (staleTime 60s, retry 1).
   - `config/env.ts` — typed access to `import.meta.env` (`VITE_API_BASE_URL`). Read env **only** through this module.
+  - `api/demo-read-only.ts` — `VITE_DEMO_MODE=true` builds install a request interceptor on `apiClient` that rejects every non-GET request (except `POST /search`) with `ApiError(403, …, "DEMO_READ_ONLY")` before it reaches the server and shows one throttled toast. Mutations that already toast their own failure skip it via `isDemoBlocked(error)` — add that guard to any new `onError` toast. `features/demo/ui/demo-notice-dialog.tsx` is the first-visit notice, lazy-loaded from `providers.tsx` only in demo mode. The real protection is the API's `DemoReadOnlyGuard`; this layer just prevents optimistic-update flicker (design §3.6).
   - `lib/utils.ts` — `cn()` (clsx + tailwind-merge).
   - `ui/` — shadcn/Radix components (the `@/shared/ui` alias).
 
@@ -68,6 +70,58 @@ Future features go under `src/features/<feature>/`, each owning its own `api`/`u
 The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by `--rail-nav`) and the ⌘K palette; `pages/meeting.tsx`'s `/meetings/:meetingId` view is the product's **three-pane browse shell** made concrete — content `<main>` (transcript) + insight `<aside>` (sized by `--rail-insight`) render inside the shell's `<Outlet/>`. It runs on live meeting data via TanStack Query hooks. (`--topbar-h` and `--content-max` are declared in `index.css` but currently unused — check them before inventing a new value.)
 
 `src/features/meeting/` owns the `/meetings/:meetingId` view's data layer. `api/mappers.ts`'s `toMeetingDetail` maps `summary` — embedded in the `GET /meetings/:id` response — into `topics`/`segments`/`summaryStatus` on the `Meeting` domain type; `api/meetings.ts` adds `useGenerateSummary` (regenerate; takes an optional `summary_model` sent as the request body — omitted means the server falls back to the global processing setting, and the override is never persisted; a 409 means a different model is already summarizing and gets its own toast, distinct from the generic failure toast) and `useSyncSummaryStatus` (reconciles the polled `/status` summary state into the detail cache). Per-meeting lenses are a separate fetch: `api/lenses.ts`'s `useMeetingLenses` calls its own `GET /meetings/:id/lenses` endpoint, mapped via `mapMeetingLenses`. `api/notes.ts`'s `useAutosaveNote`도 같은 이유로 `GET`/`PUT /meetings/:id/note`를 상세와 분리된 `["meeting-note", id]` 쿼리 키로 쓴다 — 자동저장이 상세 캐시(`["meeting", id]`)를 건드리면 그 캐시를 구독하는 전사 패널 전체가 800ms마다 리렌더된다. `ui/insight-pane.tsx` is the right rail — tabs are `요약 / 파일 / 메모` (참석자 is no longer its own tab); the 요약 tab stacks 요약 모델 선택 → 참석자 → 주요 주제 → 다음 할 일 → 핵심 결정 → 단락별 요약. The regeneration model-select state is owned by `src/pages/meeting.tsx` and passed down as props; `InsightPane` stays presentational.
+
+- **실시간 녹음(`recording` 상태).** `api/live.ts`의 `useStartLive`/`useStopLive`/`useLiveUtterances`가
+  `POST /meetings/live`, `POST /meetings/:id/live/stop`, `GET /meetings/:id/live?after=<seq>`를 쓴다.
+  라이브 발화는 상세 캐시와 분리된 `["live-utterances", id]` 키에 **커서 append**로 쌓고, 폴링은
+  `recording` 1초 / `uploaded`·`processing` 3초 / `failed` 1회 / `done` 없음. 화면은 `ui/live-banner.tsx`
+  (경과 시간, heartbeat가 워커 박동 주기의 3배=90초를 넘으면 "신호 끊김" + 그 상태의 버튼은
+  `stop`이 아니라 `cancel` — 읽어 줄 워커가 없는 플래그 대신 회의를 그 자리에서 닫는다),
+  `ui/live-transcript.tsx`(자동 따라가기), 시작은
+  `ui/new-meeting-dialog.tsx`의 실시간 녹음 탭(제목을 비우면 브라우저 시각으로 생성). 실패한
+  회의에 라이브 행이 남아 있으면 `TranscriptPane`의 `livePreview`로 읽기 전용 미리보기를 그리고,
+  `audio_device_failed`는 재처리 버튼을 숨긴다(파일이 없다). 사이드바의 “새 회의 기록하기”가 오디오 파일/실시간 녹음 탭을 가진 통합 모달을 연다. 공통 입력과 파일·일시는 탭 전환 시 유지하고 닫으면 초기화하며, 마지막 탭은 로컬 저장소에 기억한다. 데모 빌드는 파일 탭만 제공한다.
+
+- **캡처를 먼저 준비하고, 성공한 뒤에야 회의를 만든다** (`lib/live-session.ts`, `lib/live-recorder.ts`).
+  순서가 이 기능의 correctness다: 권한 거절·장치 부재·`AudioContext` 생성 실패·`addModule` 실패·
+  `ready` ACK 미도착은 **전부 `POST /meetings/live` 이전에** 드러나야 한다. 그래야 실패가 빈
+  `recording` 회의를 남기지 않고, `meeting_single_recording_idx`가 이후 녹음을 막는 일도 없다.
+  `RecorderPhase`가 그 계약을 타입으로 들고 있다 — `idle → preparing → prepared → recording →
+  stopping → stopped`이고, **회의 id를 가질 자격은 `prepared` 이후에만 있다.**
+  `prepareLiveRecorder()`는 첫 `await` **이전에** 모듈 수준 `active`를 예약한다. `getUserMedia`는
+  몇 초가 걸리고 그 사이 버튼이 다시 눌리는데, 예약이 없으면 두 번째 준비가 마이크를 하나 더 열고
+  둘 중 하나는 아무도 멈출 수 없는 채로 남는다. 생성 POST 이후의 실패는 `beginLiveCapture`가
+  0바이트 stop으로 그 회의를 지운다 — id를 알고 있으니 orphan 스캐너를 90초 기다릴 이유가 없다.
+  **모달의 “녹음 시작”은 두 번 눌러야 시작된다**: 첫 클릭은 `checkCaptureSupport()` 게이트(+장치
+  목록 조회)이고 두 번째가 실제 시작이다. 자동화로 이 흐름을 몰 때 이걸 모르면 “아무 일도 안
+  일어난다”로 보인다.
+
+- **Worklet 종료는 flush ACK로 끝난다** (`lib/pcm-worklet.ts`, `lib/pcm-worklet-protocol.ts`).
+  메시지는 메인→Worklet `begin`/`flush`, Worklet→메인 `ready`/`begun`/`pcm`/`flushed` 넷뿐이고
+  타입은 `pcm-worklet-protocol.ts` 한 곳에만 있다(양쪽이 값을 복제하지 않는다). 종료 시 그냥
+  끊지 않고 `flush`를 보내 Worklet이 들고 있던 `rest`(청크를 못 채운 마지막 샘플들)를 받아낸 뒤
+  `flushed`를 기다린다 — 이게 없으면 마지막 최대 1청크가 통째로 사라진다. `FLUSH_ACK_TIMEOUT_MS`
+  (2초)를 넘기면 `capture_flush_failed`를 남기고 **받은 데까지만** 봉인한다(정지를 막지 않는다).
+  그 자투리는 `POST /live/stop`의 **본문**으로 실려 간다: 마지막 청크와 봉인 사이에 창을 만들지
+  않기 위해서다. 실측(2026-09-07, 프로덕션 빌드, 실제 맥 마이크): 46개 풀 청크 뒤 stop이
+  27,392바이트 자투리를 싣고 갔고 `capture_error`는 NULL이었다.
+
+- **`pcm-worklet.ts?worker&url`은 원래부터 옳았다 — 이번에 고친 게 아니라 회귀를 막는 그물을
+  추가한 것이다.** jsdom에는 `AudioContext`가 없어 vitest는 이 파일을 절대 실행하지 않고,
+  vitest/`vite build`는 pre-bundle하므로 초록불이어도 브라우저 동작을 증명하지 않는다.
+  `pnpm fe verify:worklet`(`scripts/verify-pcm-worklet.mjs`)이 그 자리를 메운다: `fe/dist/assets/`
+  에서 `pcm-worklet-*.js`가 **정확히 하나** 있고 `.ts` 원본이 에셋으로 복사되지 않았음을 확인한
+  뒤, 그 산출물을 `node:vm`으로 평가해 protocol 테스트와 같은 begin/flush 시퀀스를 몰아 본다.
+  Worklet을 건드렸으면 `pnpm fe build && pnpm fe verify:worklet`을 같이 돌린다. 그래도 실제
+  `addModule()`은 브라우저에서만 증명된다.
+
+- **409는 두 종류다.** `expected_offset`만 있는 409는 재동기화 신호(서버의 확정 경계 —
+  `job.committed_bytes`로 맞춰 다시 보내라)이고, `code`가 붙은 409는 종료 사유다.
+  `PostResult.code`가 값으로 다루는 건 `sealed`와 `duration_limit` 둘(`ServerSeal`)이고,
+  024 이전 세션에 대한 거절은 `code: "io_error"`로 온다(디스크 오류가 아니라 호환성 거절인데
+  라벨이 그렇다 — 어차피 code가 붙은 409는 전부 종결로 다룬다). `expected_offset`이 **없는**
+  409도 종결적 실패다 — 여기서 `offset`을 `undefined`로 만들면 이후 모든 요청이 400이 되고
+  봉인해야 할 stop까지 막힌다.
 
 `src/features/settings/` (처리 설정) owns the processing-config surface: `api` (`useProcessingSettings` / `useUpdateProcessingSettings` / `useCapabilities`), `lib` (`PRESET_META` — each preset also pins a `summary_model` — + `SUMMARY_MODEL_OPTIONS` + `PRESET_META_REVISION` — **keep synced with the BE preset definitions**; a `preset_revision` mismatch surfaces a drift notice), and `ui` (`ProcessingSettingsForm`, `OverrideSection`). The same sync constraint covers `api/types.ts`'s `SummaryModel` union, a hand-maintained mirror of BE's `SUMMARY_MODELS` catalog — a value outside it is a server 400 on PUT. Reached via LeftNav "처리 설정" → the `/settings` route.
 

@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { isDemoBlocked } from "@/shared/api/demo-read-only";
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -59,6 +60,7 @@ function EnrollForm({ onDone }: { onDone: () => void }) {
           onDone();
         },
         onError: (error) => {
+          if (isDemoBlocked(error)) return;
           toast({
             title: "화자 등록 실패",
             description: toErrorMessage(error),

@@ -7,6 +7,8 @@ venv/
 .env
 /storage/
 /models/
+# pg_dump -Fc 스냅샷 — 수십 MB짜리 바이너리에 개인 회의 전사가 통째로 들어 있다
+/backups/
 *.wav
 *.m4a
 *.mp3

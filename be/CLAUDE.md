@@ -33,9 +33,12 @@ These cross-file rules are easy to break and are enforced by tests:
 - **Reprocess + stale guard**: reprocess bumps `meeting.processing_version` and enqueues a new job (it does **not** wrap ML in a DB transaction). The worker's `persist` step must only write results when `meeting.processing_version = payload.processing_version AND meeting.current_job_id = job.id` — otherwise a stale lower-version job would overwrite newer results. **`utterance` rows of older versions are retained** (migration `013`: the uniqueness key is `(meeting_id, processing_version, order_index)`) so lens evidence pointing at a superseded utterance stays valid; `meeting_cluster` is still replaced wholesale. Every reader therefore filters `u.processing_version = m.processing_version` — a query that forgets it will surface stale turns.
 - **Storage path safety (`src/storage/`)**: the DB stores only relative keys (`meetings/<meeting_id>/...`). Never trust client filenames or store absolute paths. All key→path resolution goes through `StorageService.resolve()`, which rejects traversal/absolute keys. Uploads use multer **diskStorage** (temp file) + `saveFromTemp` — never buffer large audio in memory.
 - **Speaker identification (`voiceprint`, `identify.py`)**: pgvector columns are fixed-dimension (`vector(192)`). Identification must filter voiceprints by matching `model` + `dimension`, and compares against speakers whose enrollment has **settled** — `ready` *or* `provisional` (`MATCHABLE_STATUSES`); `pending`/`failed` stay out. Provisional used to be excluded until a human renamed the speaker, and that made cross-meeting identity **structurally impossible**: a fresh install has zero `ready` speakers, so the candidate set was always empty and the same person re-appeared as a new speaker in every meeting (the same audio uploaded twice produced two disjoint speaker sets at centroid similarity 1.0000). Matching is **two-tier**, both thresholds stamped into the payload (wire **v4**): at/above `identify.threshold` the cluster **binds**; down to `identify.suggest_threshold` the score is too close to call, so the cluster still mints its own provisional speaker and the candidate is parked in `meeting_cluster.suggested_speaker_id`/`suggested_similarity` (migration `018`) for the user to confirm through the existing `POST /meetings/:id/clusters/:clusterId/resolve` — which clears the suggestion either way. v1–v3 payloads carry no band and behave exactly as before (bind or nothing). Cluster centroids are a **duration-weighted** mean (`centroids_by_label`): a sub-second backchannel carries little identity but plenty of the model's bias direction, and weighting drops the worst measured different-speaker pair from .674 to .619 without stranding short clusters the way a minimum-length filter did. Unidentified clusters are **auto-created as `provisional` speakers** (default name `Speaker_NNN` via `speaker_default_seq`) with an `auto_cluster` voiceprint carrying `source_cluster_id` provenance. **Every** diar label gets a `meeting_cluster` row — including one identify bound outright — because that table is the per-meeting `diar_label→speaker` record and the entry point for a user correction. `resolve` reattaches the cluster's single voiceprint (`ON CONFLICT (source_cluster_id)`) and GCs orphaned provisional speakers. `persist` likewise GCs unconfirmed `provisional` orphans on reprocess (a global conditional DELETE of `provisional` speakers with no utterance/cluster references; **a pending suggestion counts as a reference**, and confirmed `ready` speakers are never deleted). Thresholds are set from measurement, not feel — `worker/scripts/eval_speaker_id.py` replays the whole policy offline against the live DB; **retune with it**. Known gaps (stale-version speakers polluting the candidate pool, no intra-meeting merge, zero-utterance clusters becoming speakers) are recorded in `docs/backlog.md`.
+- **Live audio byte boundary (`src/live/`, `src/storage/live-audio.service.ts`, migration `024`)**: `job.committed_bytes` — not `stat().size` — is the append offset, the recovery point and the seal length. Any new code path that needs "how much audio is real" reads that column; a path that measures the file instead will silently accept the unconfirmed tail a crash or a short write left behind. `recover()` truncates to it before every append/stop/sweep, `writeAt` loops to a complete write and `datasync()`s before the boundary advances, and the two must land in **one** transaction. See the live-session section below for the full rule.
 - **Env loading**: the worker's `Settings` (`worker/damwha_worker/config.py`) has two **required** fields with no default — `DATABASE_URL` and `LENS_LLM_BASE_URL`. A default would blur "address not configured" into "nothing listening there", and the managed-server path binds that URL's `host:port`, so it must be explicit. The supervisor probes `GET {base_url}/models` once at startup (`log_lens_llm_health`) and **warns without failing** — `process_meeting` doesn't touch the LLM, so a down LLM server must not block audio ingestion. With `LENS_LLM_MANAGED=true` (the default) that startup probe logs info instead of warning: no server running yet is the normal state. On the API side, `loadEnv()` parses the full schema and **requires `DATABASE_URL`** — only call it inside constructors/runtime, never in decorator/module metadata (it runs at import time before tests set env). Use the narrow `maxUploadBytes()` helper in decorators instead.
 - **Lenses (`src/lenses/`, migrations `008`–`014`)**: `lens_item` holds actions/decisions/promises with a `source` (`ai`|`user`|`edited`), `user_modified`, `completion_status`, `lifecycle_status`; `lens_evidence` links an item to utterances (`primary`|`supporting`). **Re-extraction must never clobber human work** — `classifyAiMerge` (`lenses.service.ts`) only considers items that are `source='ai' AND NOT user_modified AND active AND open`, matches a candidate to one by `(kind, primary utterance)`, and archives eligible items no candidate matched. Everything else (user-created, edited, completed, archived) is invisible to the merge. An **active AI item must always keep exactly one primary evidence row** — enforced by deferred constraint triggers (`014`) plus service-level conflict guards on evidence add/remove; a `PATCH` with no editable field is a deliberate no-op so an empty request can't stamp `edited`/`user_modified` and silently drop the item out of merge eligibility. Evidence may only cite an utterance of the item's own meeting (deferred trigger, `013`).
 - **Lens extraction runs (`extract_lenses` job)**: `lens_extraction_run` is keyed per `(meeting, processing_version)`. The API side (`lens-extraction.service.ts`) requires `meeting.status='done'`, reuses the active run instead of enqueueing a second one (idempotent retry), and the worker auto-enqueues a run in the same transaction as `persist` (skipped when the worker has no `lens_llm_model` configured, **or when the payload's `followups.lens` is false** — upload sends `defer_lens=true` for that, and the user runs it later through the same manual endpoint; reprocess never defers). The worker guards every write with the same run/job/version ownership checks as the ML pipeline (`db.mark_lens_run_running` / `db.persist_lens_extraction`) and re-validates the LLM's ids server-side — an utterance or assignee that isn't in the meeting at that `processing_version` is rejected, never stored. `GET /lenses` (keyset cursor; `completion_status` is a **single value**, not a set) and `GET /lenses/extraction-status` back the global dashboard. `GET /meetings/:id/lenses` additionally returns `extraction_status` — the latest run's status **at the meeting's current `processing_version`**, or `null` when that version never ran one. It exists so the UI can tell "deferred / never extracted" from "extracted, found nothing"; a deferred upload writes no run row at all, so without it a deferred meeting is indistinguishable from an empty one. It is deliberately not a `failed` row — the global banner reads `failed` as a real extraction error.
+
+- **Demo read-only (`DEMO_READ_ONLY=true`)**: `src/common/demo-read-only.guard.ts` is a global `APP_GUARD` that answers every non-`GET`/`HEAD`/`OPTIONS` request with 403 `{ code: "DEMO_READ_ONLY" }`, except `POST /search` (a read with a body). Unset → no-op. It reads `process.env` directly at request time because `loadEnv()` requires `DATABASE_URL`. The SPA has a matching axios interceptor, but this guard is the actual protection — the API is a public URL in the demo (`docs/superpowers/specs/2026-09-01-public-demo-deployment-design.md` §3.6).
 
 ## Python worker (`worker/`)
 
@@ -144,6 +147,171 @@ Separate Python project under `worker/` (uv + ruff + pytest + pydantic v2 + psyc
   startup timeout or an early exit. Because the server is a grandchild of the
   supervisor and inherits its process group, a group kill takes it down too;
   the normal path never relies on that.
+- **Live session is a fifth job type — and the browser is the capturer, not the worker.**
+  `live_session` (`pipeline/live_session.py`) streams a preview (`live_utterance`) while the
+  meeting is `recording`; on stop the meeting flips to `uploaded` and the payload's embedded
+  **v5 `process_meeting`** is enqueued verbatim — the batch pass is the record, the live pass
+  is a preview. Two specs, in order: the original
+  `docs/superpowers/specs/2026-09-05-live-recording-design.md`, then
+  `docs/superpowers/specs/2026-09-05-live-recording-browser-capture-design.md`, which
+  **reverses its §2.1**. Read the second one's §2.1 first — the first spec's capture
+  architecture is history, not current behaviour.
+
+  **Who holds the audio.** The browser does `getUserMedia` → `AudioWorklet` → 16 kHz mono
+  int16 PCM → 32,768-byte chunks (1.024 s) → `POST /meetings/:id/live/audio`. The **API** is
+  the WAV writer (`storage/live-audio.service.ts` — `StorageService.save()` is `writeFile`,
+  which truncates, so append needed its own service); the worker **tails** that growing file
+  (`audio/tail_source.py`). The worker writes no audio at all. Constants must agree across
+  three languages: `SR=16000`, `FRAME_BYTES=1024`, `CHUNK_BYTES=32768`, `HEADER_LEN=44`,
+  **32 bytes/ms** (`live.service.ts`, `tail_source.py`, `pcm-convert.ts`).
+
+  **The offset/ACK protocol is the whole correctness story.** Each chunk carries an explicit
+  `X-Audio-Offset` (PCM bytes, header excluded); the server compares it against
+  **`job.committed_bytes`** and a mismatch is **409 carrying `expected_offset`**, so a lost
+  ACK resyncs instead of tearing a hole. Exactly one request in flight. A 409 that carries
+  *no* offset is terminal, not a resync — the client must treat it as a hard failure, or
+  `this.offset` goes `undefined` and every later request 400s including the stop that would
+  have sealed the recording. A resent chunk (`offset + len === committed`) is ACKed as a 409
+  at the committed boundary, and `markInput` is **committed before** that 409 is thrown —
+  a producer that is demonstrably alive must not be sealed by the orphan sweeper.
+
+  **`job.committed_bytes` (migration `024`) is the append-offset authority — the file length
+  is not.** This is the one rule the 2026-09-07 capture-hardening pass added, and everything
+  else follows from it. A crash between `write` and `fdatasync`, or a short `FileHandle.write`,
+  leaves an *unconfirmed tail* on disk: the file is longer than anything the API ever
+  acknowledged. Deriving `expected` from `stat.size - 44` (the pre-024 behaviour) would
+  promote those bytes to canon. So: `LiveAudioService.writeAt` loops until the whole buffer is
+  written (never assumes one `write` call drains it), `datasync()`s, and only then does
+  `setCommitted` advance the boundary **in the same transaction as the append**; every entry
+  point calls `recover(key, committed)` first, which **truncates the file back to
+  `44 + committed_bytes`** — and *throws* if the file is shorter than that, because losing
+  already-committed bytes is a disk failure, not something to zero-fill. `pcmSize()` survives
+  only as a test helper — no production path may reason from file length. The cap is
+  `MAX_PCM_BYTES = 460_800_000` (4 h at 32 bytes/ms).
+
+  **`committed_bytes` vs `sealed_bytes` — they are not the same fact.** `committed` advances on
+  every append; `sealed` is the single moment one of those boundaries is declared final. The
+  `024` CHECK enforces the relationship (`type='live_session'`, even, and
+  `sealed_bytes IS NULL OR sealed_bytes = committed_bytes`) so the two can never disagree in
+  the DB. `sealed_bytes` stays the **sole EOF authority** — not the file size, not the WAV
+  header. File append, header rewrite and DB commit cannot be one transaction, so one of them
+  has to win. `TailSource` therefore treats **EOF as "caught up", never as "done"**, caps its
+  reads at `committed_bytes`, and never reads the header's size fields (the API rewrites them
+  at seal time; a read mid-rewrite truncates the transcript). Stop carries the final tail
+  **in its body** so there is no window between the last chunk and the seal: `offset ===
+  committed` → append + seal in one transaction; an already-sealed job answers idempotently
+  when `sealed === final`; otherwise `missing_chunk` 409.
+
+  **A session created before `024` cannot be resumed.** `committed_bytes IS NULL` on a live
+  row means the session predates the column, and the API refuses it with a **409 whose `code`
+  is `io_error`** (message: "this live session predates the committed byte boundary") rather
+  than back-deriving a boundary from the file — back-deriving is exactly the unconfirmed-tail
+  bug the column exists to prevent. That code label is a known wart: it is a compatibility
+  refusal, not a disk error, and the client treats any code-bearing 409 as terminal either way.
+  That is why the deployment procedure in `deploy/README.md` requires draining active
+  recordings before applying `024`, and why `LiveOrphanService` closes such a row as an
+  `io_error` instead of sealing it.
+
+  **The 4-hour cap is enforced at the byte boundary, not by a timer.** A chunk that would cross
+  `MAX_PCM_BYTES` has its in-bounds prefix written and the session is sealed there; the client
+  gets a 409 with code `duration_limit` (not a plain resync) and stops capturing. That stop
+  does **not** finalize — a capped session is left to the worker or the sweeper.
+
+  **`meeting.capture_error` is separate from `meeting.error` on purpose** — finalize and
+  persist both write `error=NULL`, so "how this recording was obtained" needs a field that
+  survives a successful final pass. Written by: the browser's stop (`X-Capture-Error`:
+  `device_ended` / `buffer_overflow` / `upload_failed`; an unrecognised value is folded to
+  `capture_failed` rather than 400ing, because a diagnostic header must never block the seal),
+  the gap check on append and stop (`capture_gap`), and the orphan sweeper
+  (`producer_abandoned`) / API finalize (`preview_worker_lost`). Verified 2026-09-07 on a real
+  recording whose worker was killed mid-session: the meeting finished the canonical pass as
+  `done` with `error = NULL` **and `capture_error = preview_worker_lost` still set** — that
+  survival is the whole reason the column is separate.
+  `LiveService.stop` writes the header's error **before** the seal/idempotency branches, so a
+  retried stop that carries `X-Capture-Error` still records it after the session is sealed.
+
+  **Recording does not depend on the worker — a worker failure ends the *preview* only.**
+  `reapStale`'s `fail_meetings` covers `process_meeting` only, and **both reapers now agree**:
+  the Python `db.reap_stale` excludes `live_session` from `fail_meetings` and from the requeue
+  set exactly as the TypeScript `JobsRepository.reapStale` does. (Only the TS side had this
+  until 2026-09-07; the carry-over list had recorded the item as closed while `db.py` still
+  failed the meeting. `be/test/reaper.spec.ts` and
+  `worker/tests/test_db_lifecycle.py::test_reap_stale_fails_live_session_but_leaves_the_meeting_recording`
+  now pin the same contract on both sides.) The worker's own failure paths do the same: for a
+  `source='browser'` session, both the `ShutdownRequested` path and the generic exception path
+  call **`db.fail_live_preview`**, never `fail_process_meeting` — the job goes `failed` with
+  code `worker_shutdown` (or the classified error) while the meeting stays `recording` and
+  keeps accepting appends. Measured on 2026-09-07: SIGTERM to a live worker, then 15 further
+  `POST /live/audio` all 200 and `committed_bytes` advanced by exactly 15 × 32,768.
+
+  That makes **"who finalizes"** the load-bearing predicate, and it is `job.status !== 'running'`
+  (queued = never claimed, failed = the reaper *or the worker's own preview failure* closed it)
+  in **both** `LiveService.stop` and `LiveOrphanService.sweep`. The sweeper has two jobs, not
+  one: seal an abandoned producer (`last_input_at` stale ≥ 90 s, `@Cron(EVERY_30_SECONDS)` — a
+  worker's heartbeat cannot prove the *browser* is alive), **and** finalize an already-sealed
+  session no worker will finish. Without the second, a browser+worker death leaves the meeting
+  in `recording` forever and `meeting_single_recording_idx` blocks every future recording.
+  Worker liveness is judged only by `job.status` — the reaper owns that threshold, and a
+  second one here would drift from it.
+
+  **The sweeper re-validates liveness under the lock, not just status.** Candidate selection
+  and sealing are different transactions, so a browser can commit a perfectly good append in
+  between. After taking job → meeting locks, `sweep` re-checks `isProducerExpired` **against
+  the DB clock it now holds**; a session that became fresh again is left alone. Only then does
+  it `recover()` to the committed boundary and seal *there* — never at the file length. Order
+  matters: an already-sealed row skips the producer check entirely and goes straight to
+  recovery-finalize, and a `committed_bytes IS NULL` row is closed as `io_error` rather than
+  guessed at. A 0-byte sweep result is **failed and kept** (`producer_never_started`), not
+  deleted — only a user-pressed stop deletes a 0-byte meeting.
+
+  **Lock discipline: job row first, then meeting**, in every writer (`appendAudio`, `stop`,
+  `sweep`, `MeetingsService.cancel`, and the worker's `finalize_live_session`); the paths that
+  start from a meeting id re-verify `current_job_id` under both locks. Locking only the
+  meeting lets `claim` (job row, `SKIP LOCKED`) slip in.
+
+  **Failure marking lives in its own transaction.** The `io_error` path marks job+meeting in a
+  *separate* `withTransaction` after the append transaction rolled back — marking inside it and
+  throwing rolls the marking away too, and then nothing ever closes the session. That recovery
+  re-locks job → meeting and re-checks four things, the load-bearing one being
+  **`job.committed_bytes` is still the value it was when the write failed**, because a
+  legitimate retry (a lost ACK) may have won the race in between. The status alone cannot tell
+  (a successful append leaves the meeting `recording` either way), and **the file length is
+  useless here by construction** — our own partial write is what stretched it. The committed
+  boundary is the only signal that distinguishes "nobody made progress" from "someone else
+  already did".
+
+  **`source: 'mic'` is a reserved contract slot that is rejected at dispatch.** After the
+  capture flip a mic session is silently wrong — the API stores the browser's bytes while the
+  worker transcribes the host mic, and `MicSource` never observes `sealed_bytes`, so the loop
+  runs to `max_minutes` (4 h) after stop. `_default_live_source` raises PERMANENT
+  `audio_device_failed` instead. `MicSource` and its tests stay as the reference for a future
+  system-audio capturer (§10.3 constrains how that can share a WAV).
+
+  Unchanged from the original design: `max_attempts=1` and every live error is PERMANENT; a
+  live job is **never** `requeue_for_shutdown`d (a re-claimed worker would re-transcribe audio
+  that already went by); claim orders `live_session` first
+  (both claim SQLs); one `recording` meeting at a time (`meeting_single_recording_idx`); live
+  identification binds at `suggest_threshold`; `persist_process_meeting` deletes the meeting's
+  `live_utterance` rows; `ffmpeg.normalize` repairs a streaming header left by a crash.
+
+  **Deleted by the flip** (do not reintroduce): the mic callback's writer thread and its
+  streaming-WAV `close()`, the dual-queue tee, and the join-ordering rule between them. The
+  worker no longer owns a file handle. `pcm-worklet.ts` still has **no jsdom coverage** (jsdom
+  has no `AudioContext`), but it is no longer untested: `pnpm fe verify:worklet` evaluates the
+  **built** `fe/dist/assets/pcm-worklet-*.js` in `node:vm` and drives the same
+  begin/flush sequence as the protocol unit test, which is what catches a regression to
+  copying the raw `.ts` as a URL asset. A real browser is still the only check of
+  `audioWorklet.addModule()` itself — `worker/SMOKE.md`'s 실기기 브라우저 스모크 procedure.
+
+  **Deployment has two shapes and they differ in where the WAV lives.** Dev: API and worker are
+  both host processes and `be/.env`'s `./storage` is the worker's `../storage` — literally one
+  directory. Deploy (`deploy/docker-compose.yml`): the API is a Linux container whose
+  `STORAGE_ROOT=./storage` resolves to `/repo/be/storage`, bind-mounted from the host's
+  `deploy/storage`, which the host worker reads directly. Measured 2026-09-07 with an image
+  built from this branch: bytes the container committed were visible to a host `stat` within
+  **0.01–0.02 ms** of the 200, and a host `TailSource` read the container-written growing file
+  to its seal with `skips=0`. Applying `024` requires draining recordings first — see
+  `deploy/README.md`.
 - **Search indexing.** `index_meeting` is a separate job type (dispatched by the API after persist completes). Failure marks the job only — the meeting stays `done` and BM25-searchable. Query embedding is the **single exception to the job-table-only invariant**: the API calls the embed service (localhost HTTP RPC, `POST /embed`) directly at query time; this never crosses a network boundary (`EMBED_SERVICE_ALLOW_NON_LOOPBACK=false`).
 
 ## Commands

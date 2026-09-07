@@ -44,6 +44,47 @@ describe('meetings', () => {
     expect(job.rows[0].payload.processing_version).toBe(0);
   });
 
+  it('POST /meetings without recorded_at records the upload time', async () => {
+    const before = Date.now();
+    const res = await request(srv())
+      .post('/meetings')
+      .attach('audio', Buffer.from('fake-audio'), { filename: 'rec.m4a', contentType: 'audio/mp4' });
+    expect(res.status).toBe(201);
+    expect(res.body.recorded_at).not.toBeNull();
+    const recorded = new Date(res.body.recorded_at).getTime();
+    expect(recorded).toBeGreaterThanOrEqual(before - 1000);
+    expect(recorded).toBeLessThanOrEqual(Date.now() + 1000);
+  });
+
+  it('POST /meetings keeps an explicit recorded_at', async () => {
+    const res = await request(srv())
+      .post('/meetings')
+      .field('recorded_at', '2026-07-03T09:00:00Z')
+      .attach('audio', Buffer.from('fake-audio'), { filename: 'rec.m4a', contentType: 'audio/mp4' });
+    expect(res.status).toBe(201);
+    expect(new Date(res.body.recorded_at).toISOString()).toBe('2026-07-03T09:00:00.000Z');
+  });
+
+  it('POST /meetings → 400 for a non-ISO recorded_at and stores nothing', async () => {
+    const res = await request(srv())
+      .post('/meetings')
+      .field('recorded_at', 'not-a-date')
+      .attach('audio', Buffer.from('fake-audio'), { filename: 'rec.m4a', contentType: 'audio/mp4' });
+    expect(res.status).toBe(400);
+    const rows = await db.pool.query('SELECT count(*)::int AS n FROM meeting');
+    expect(rows.rows[0].n).toBe(0);
+  });
+
+  it('POST /meetings treats an empty recorded_at as unset', async () => {
+    // multipart 필드는 비워도 ''로 도착한다 — 정규화하지 않으면 ''::timestamptz가 500이다.
+    const res = await request(srv())
+      .post('/meetings')
+      .field('recorded_at', '')
+      .attach('audio', Buffer.from('fake-audio'), { filename: 'rec.m4a', contentType: 'audio/mp4' });
+    expect(res.status).toBe(201);
+    expect(res.body.recorded_at).not.toBeNull();
+  });
+
   it('POST /meetings preserves a Korean original filename (no mojibake)', async () => {
     // Browsers send the filename as raw UTF-8 bytes in the Content-Disposition
     // header; busboy then decodes them as latin1, producing mojibake. form-data
@@ -232,6 +273,55 @@ describe('meetings', () => {
     await db.pool.query(`UPDATE meeting SET status='done' WHERE id=$1`, [mid]);
     expect((await request(srv()).post(`/meetings/${mid}/cancel`)).status).toBe(409);
     expect((await request(srv()).post(`/meetings/mtg_999/cancel`)).status).toBe(404);
+  });
+
+  it('cancel locks the job before the meeting (job → meeting order)', async () => {
+    const created = await request(srv()).post('/meetings').attach('audio', Buffer.from('a'), { filename: 'a.wav', contentType: 'audio/wav' });
+    const mid = created.body.id;
+    const jid = created.body.current_job_id;
+    // simulate a worker mid-flight
+    await db.pool.query(`UPDATE job SET status='running', locked_by='w1', locked_at=now(), stage='stt', progress=75 WHERE id=$1`, [jid]);
+    await db.pool.query(`UPDATE meeting SET status='processing' WHERE id=$1`, [mid]);
+
+    // 다른 커넥션이 job 행을 먼저 잠근 채 붙들고 있으면, cancel은 meeting이 아니라
+    // job에서 막혀야 한다. meeting을 먼저 잠그는 구현이면 cancel이 meeting 락을 쥔 채
+    // job을 기다려 교차 deadlock의 재료가 된다.
+    const holder = await db.pool.connect();
+    try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT 1 FROM job WHERE id=$1 FOR UPDATE', [jid]);
+
+      // supertest doesn't send the request until .end()/.then() is invoked, so
+      // fire it explicitly here (via a wrapped promise we await later) instead
+      // of leaving the request unsent until the trailing await — that would run
+      // the whole request AFTER the ROLLBACK below and test nothing.
+      const cancelDone = new Promise<{ err: unknown; res: request.Response }>((resolve) => {
+        request(srv()).post(`/meetings/${mid}/cancel`).send()
+          .end((err, res) => resolve({ err, res }));
+      });
+      // 고정 대기(200ms)로는 이 테스트가 조용히 공허해진다 — 느린 머신에서 요청이
+      // 락에 닿기 전에 probe가 돌면 meeting은 당연히 'free'이고, 잠금 순서가 뒤집힌
+      // 구현에서도 통과한다. 실제로 막혔음을 관측한 뒤에만 probe한다.
+      const deadline = Date.now() + 5000;
+      for (;;) {
+        const { rows } = await db.pool.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted`);
+        if (rows[0].n > 0) break;
+        if (Date.now() > deadline) throw new Error('cancel never blocked on a lock');
+        await new Promise((r) => setTimeout(r, 20));
+      }
+
+      // cancel이 job에서 막혀 있는 동안 meeting 행은 여전히 잠기지 않아야 한다.
+      const probe = await db.pool.query(
+        `SELECT 1 FROM meeting WHERE id=$1 FOR UPDATE NOWAIT`, [mid],
+      ).then(() => 'free').catch(() => 'locked');
+      expect(probe).toBe('free');
+
+      await holder.query('ROLLBACK');
+      const { err, res } = await cancelDone;
+      if (err) throw err;
+      expect(res.status).toBe(200);
+    } finally { holder.release(); }
   });
 
   it('POST /meetings — payload가 v5이고 전역 설정(프리셋)을 따른다', async () => {

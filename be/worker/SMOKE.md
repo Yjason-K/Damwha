@@ -554,3 +554,199 @@ turbo는 같은 조건에서 2.9%p 퍼진다. payload 재현성을 설계 가치
 만족시킬 수 없다. 채우려면 `Qwen3-ForcedAligner-0.6B`를 2단으로 얹어야 하고, 그쪽은
 5분 제한이 있어 VAD span 단위 정렬이 강제된다. 그래서 `eval_stt.py`의 qwen 경로는
 `Transcriber`가 아니라 텍스트만 돌려주는 `qwen_transcribe()`로 두었다.
+
+## 라이브 세션 (`live_session`, 설계 2026-09-05)
+
+**워커는 이제 writer가 아니라 reader다.** 실제 사용자 흐름은 브라우저가 마이크로 녹음해 API에
+초당 업로드하고, API가 그 바이트를 라이브 WAV에 append·봉인(`sealed_bytes`)하면, 워커의
+`TailSource`가 그 파일을 따라 읽으며 미리보기를 낸다 — 아래 `--tail`이 이 경로를 브라우저·API
+없이 흉내낸다. `--mic`는 워커가 이 Mac의 마이크를 직접 여는 **옛 경로**이고, 지금은 시스템 오디오
+구현체를 붙일 때를 위한 참조 경로로만 남아 있다(`AudioSource` 프로토콜이 `TailSource` 말고 다른
+구현도 지탱한다는 증거).
+
+```bash
+uv sync --extra models          # sounddevice 포함
+uv run python scripts/smoke_live_session.py --tail ~/x/16k-mono.wav --seconds 60
+                                 # <path>의 PCM을 새 파일에 실시간 append하며 TailSource로 미리보기
+uv run python scripts/smoke_live_session.py --file ~/x/16k-mono.wav  # 완결 파일을 실시간 속도로
+uv run python scripts/smoke_live_session.py --mic --seconds 60      # 참조 경로: 마이크 60초 뒤 자동 stop
+```
+
+**실제 기기 스모크(브라우저 녹음)는 코드가 아니라 사람이 브라우저에서 확인해야 한다.** 절차:
+
+```bash
+pnpm db:up && pnpm be migrate
+pnpm worker            # 별 터미널
+pnpm dev               # 별 터미널
+```
+
+1. `http://localhost:5173`을 브라우저로 연다.
+   **“녹음 시작”은 두 번 눌러야 한다** — 첫 클릭은 `checkCaptureSupport()` 게이트(장치 목록을
+   받아 마이크 선택 콤보를 띄운다), 두 번째가 실제 시작이다. 이걸 모르면 “버튼을 눌렀는데
+   아무 일도 안 일어난다”로 오해한다.
+2. **AudioWorklet이 실제로 로드되는지 본다.** `pcm-worklet.ts`는 `ctx.audioWorklet.addModule()`로
+   로드되는 별도 컨텍스트라 jsdom으로는 실행 자체가 안 된다(jsdom에 `AudioContext`가 없다) —
+   `pnpm fe build`가 초록불이어도 이 경로가 브라우저에서 실제로 도는지는 전혀 증명하지 않는다.
+   `?worker&url` 트랜스파일이 깨지면(예: 원본 `.ts`가 그대로 복사되는 회귀) 콘솔에
+   `SyntaxError`/`addModule` reject가 뜨고 녹음이 시작되지 않는다 — 개발자 도구 콘솔을 열어
+   두고 녹음 시작 버튼을 눌러 에러가 없는지 확인한다(`be/docs/backlog.md`의 "AudioWorklet 로딩"
+   결정 기록 참고). 그 회귀만은 이제 자동으로도 잡힌다: `pnpm fe build && pnpm fe verify:worklet`이
+   빌드 산출물 `fe/dist/assets/pcm-worklet-*.js`를 `node:vm`으로 평가해 begin/flush 프로토콜까지
+   확인한다. **다만 vm 통과는 브라우저 `addModule()` 증명이 아니다** — 이 단계는 여전히 사람이 한다.
+2-1. **권한 거절 경로를 먼저 본다** (설계 §6). 브라우저 사이트 설정에서 마이크를 **차단**으로
+   두고 녹음 시작을 누른다. 합격 기준은 화면이 아니라 서버다: `POST /meetings/live`가 **한 번도
+   찍히지 않고**(API 로그) `meeting` 행이 늘지 않아야 한다. 캡처 준비가 회의 생성보다 먼저이므로
+   권한 거절은 빈 `recording` 회의를 만들 수 없다 — 만들었다면 그 순서가 깨진 것이다.
+   끝나면 권한을 원래대로 되돌린다.
+3. 녹음 시작 → 1분 말하기 → 종료. 발화가 화면에 흘러오는지, 지연이 얼마인지 본다(실측을 아래
+   표에 적는다).
+4. `meetings/<id>/live.wav`가 자라는지, 종료 후 `ffprobe`로 duration이 실제와 맞는지 본다.
+4-1. **바이트 회계를 맞춰 본다** (설계 §3). 이 네 등식이 라이브 녹음의 정본 계약이고, 하나라도
+   어긋나면 확정 경계가 새고 있다는 뜻이다.
+
+   ```sql
+   SELECT m.id, m.status, m.duration_ms, m.capture_error,
+          j.committed_bytes, j.sealed_bytes
+   FROM meeting m JOIN job j ON j.meeting_id=m.id
+   WHERE j.type='live_session' AND m.id = 'mtg_NN';
+   ```
+
+   - `physical_size = 44 + committed_bytes = 44 + sealed_bytes`
+   - WAV `data` 청크 크기 = `sealed_bytes`
+   - `duration_ms = floor(sealed_bytes / 32)`
+   - `ffprobe` duration = `duration_ms / 1000`, 16 kHz · mono · 16-bit
+
+   stop 요청 헤더도 같이 본다: `X-Audio-Offset`은 마지막 확정 경계(청크 크기의 배수),
+   `X-Final-Offset − X-Audio-Offset`이 flush가 건져 온 자투리(32,768 미만)다.
+   갭은 `X-Capture-Elapsed − sealed_bytes/32`이고, 이게 임계값을 넘으면 `capture_gap`이 붙는다.
+5. 종료 후 회의가 `uploaded` → `processing` → `done`으로 가는지 본다.
+6. `meeting.capture_error`를 조회해 **NULL**인지 본다(`psql`이든 API 응답이든). 정상 녹음인데
+   이 값이 채워져 있으면 `X-Capture-Elapsed`가 캡처 시각이 아니라 전송 시각으로 새고 있다는
+   뜻이다(설계 §3.3.2가 막으려던 오탐 `capture_gap`) — 시계를 되짚어 원인을 찾는 대신 이 한
+   줄이 곧바로 잡아낸다.
+7. **크래시 테스트:** 녹음 중 API를 `kill -9`하고 다시 띄운다. 브라우저가 409로 재동기화하고
+   이어지는지 본다.
+8. **탭 닫기 테스트:** 녹음 중 탭을 닫고 90초 뒤 회의가 `uploaded` + `capture_error=producer_abandoned`가
+   되는지 본다.
+9. **워커 사망 테스트(미리보기만 죽는다, 설계 §4.1–4.2):** 녹음 중 워커에 `SIGTERM`을 보낸다.
+   합격 기준은 세 가지다 — (a) 그 뒤로도 `POST /live/audio`가 계속 **200**이고
+   `committed_bytes`가 청크 크기만큼 계속 는다, (b) `job.status='failed'`이고
+   `error.code='worker_shutdown'`인데 `meeting.status`는 여전히 `recording`이다,
+   (c) 그 상태에서 종료를 누르면 워커가 없으므로 **API가 finalize**하고
+   `capture_error='preview_worker_lost'`가 붙는다. 워커를 다시 띄우면 정본 처리가 이어지고,
+   그때 `meeting.error`는 NULL이 되지만 **`capture_error`는 남아 있어야 한다** — 이 필드가
+   `error`와 따로 있는 이유가 그것이다.
+10. **배포 형상(API 컨테이너 + 호스트 워커)을 따로 본다.** 개발은 API·워커가 같은 호스트에서
+   같은 디렉터리를 보지만, 배포는 컨테이너가 쓴 파일을 호스트 워커가 bind mount로 읽는다
+   (`deploy/docker-compose.yml`의 `./storage:/repo/be/storage`). 확인할 것은 컨테이너의 append가
+   확정한 prefix를 호스트가 **제때** 보는가다 — `deploy/README.md`의 유지보수 절차 참고.
+
+- 로그의 `latency_ms=`가 세그먼트 끝 → `live_utterance` INSERT 지연이다. 실측(날짜, 머신, 값)을 아래에 적는다.
+- 식별 결합 기준은 `suggest_threshold`(0.6)다. bind(0.8)와의 적중률 비교는 `eval_speaker_id.py`
+  방식으로 같은 클립을 두 기준에 돌려 여기 기록한다 — 설계 §2.8을 되돌릴 근거가 된다.
+- **`sealed_bytes`가 EOF의 권위다, 파일 크기가 아니다.** `TailSource`는 헤더의 크기 필드를 읽지
+  않고 `job.sealed_bytes`(1초 폴링)가 오기를 기다린다 — 상세는 `docs/worker-architecture.md`
+  "라이브 세션 자식" 절.
+- **`--file`/`--mic`는 스스로 봉인하지 않는다 — `IO_ERROR`로 끝나는 게 정상이다.** 둘 다
+  `job.sealed_bytes`를 아무도 쓰지 않으므로, 소스가 자연히 끝나면(`--file`의 EOF) 또는 stop
+  요청 뒤 60초(`STOP_WITHOUT_SEAL_SECONDS`)가 지나면(`--mic`) `run_live_session`이 PERMANENT
+  `io_error`로 끝난다 — 이건 스모크 스크립트가 봉인 계약을 흉내내지 않기 때문이지 버그가 아니다.
+  이 계약을 실제로 만족시키는 건 `--tail`뿐이다(내부에서 `job.sealed_bytes`를 직접 찍는다).
+- **프레임을 한 개도 못 잡은 세션은 finalize하지 않고 PERMANENT `audio_device_failed`로 실패한다.**
+  `discarded`로 끝내는 방안도 검토했지만, `discarded`는 어떤 job도 완료 처리를 하지 않는 경로라
+  회의가 `recording`에 계속 머문다 — `meeting_single_recording_idx`가 동시 녹음을 하나로
+  제한하므로, 그 상태로 남으면 이후의 모든 녹음 시작이 막힌다.
+- `MicSource`의 stop 신호 큐는 `frames()`가 아니라 생성자에서 만든다. 캡처가 시작되기도 전에
+  `stop()`이 먼저 오는(즉시 취소) 경쟁에서도 신호가 버려지지 않게 하기 위해서다.
+
+### 실측
+
+| 날짜 | 머신 | STT | latency_ms (중앙값/최대) | 비고 |
+|---|---|---|---|---|
+| 2026-09-05 | Apple M4 Pro, 48GB, macOS 26.6.2 | large-v3-turbo (mlx, gpu) | 5147 / 7356 | `--file`, 실제 회의 녹음 아님(공개 강연 클립) 60초, 4 세그먼트(4219/4360/5934/7356ms). `--mic`는 이 환경에 마이크 권한을 부여할 수 없어(비대화형 에이전트 세션) 실행하지 못했다 — 실행 경로는 `--file`과 캡처 스레드만 다르다. |
+| 2026-09-06 | Apple M4 Pro, 48GB, macOS 26.6.2 | large-v3-turbo (mlx, gpu) | 1428 / 2767 | `--tail`(같은 강연 클립 60초를 새 파일에 1초 청크로 실시간 append, `TailSource`로 미리보기), 4 세그먼트(2767/1389/1467/1030ms), `skips=0`, `outcome=committed`. `--file`보다 훨씬 낮다 — 표본 4개뿐이고 두 실행의 시스템/모델 warm-up 상태가 달라 이 차이의 원인은 이 데이터만으로 가르지 못한다. 같은 세션에서 `--mic`도 실행됐다: 이번엔 마이크 권한 프롬프트 없이 스트림이 열렸다(과거 실측 시점과 환경이 달라진 것으로 보인다) — 다만 위 "`--file`/`--mic`는 스스로 봉인하지 않는다" 대로 `stop` 60초 뒤 `io_error`로 끝났다. |
+| 2026-09-07 | Apple M2, 16GB, macOS 26.0 (Darwin 27.0.0) | large-v3-turbo (mlx, gpu) | 측정 안 함 | **실기기 브라우저 스모크**, commit `585e358`, Chromium 152, 실제 MacBook Pro 내장 마이크. 세 회의: `mtg_29`(개발 서버 :5173), `mtg_30`(프로덕션 빌드 `pnpm fe preview` :4173), `mtg_31`(워커 SIGTERM 테스트). 바이트 회계는 셋 다 정확히 맞았다 — 아래 표. latency는 조용한 방이라 발화 세그먼트가 거의 안 생겨 의미 있는 표본을 못 얻었다(전사 품질이 아니라 프로토콜 검증이 목적이었다). |
+
+#### 2026-09-07 브라우저 스모크 바이트 회계
+
+실행 시각 2026-09-07 14:29–14:35 KST · commit `585e358` · macOS 26.0(Darwin 27.0.0), Apple M2 16GB ·
+Chromium 152 · 마이크 = MacBook Pro 내장(실제 권한 부여) · **개발 호스트 형상**(API·워커 모두 호스트).
+
+| 회의 | 경로 | physical | committed = sealed | data 청크 | duration_ms | ffprobe | stop 자투리 | 갭 | capture_error |
+|---|---|---|---|---|---|---|---|---|---|
+| `mtg_29` | 개발 서버 :5173 | 1,432,876 | 1,432,832 | 1,432,832 | 44,776 | 44.776s | 23,808 B (offset 1,409,024 = 43×32,768) | 4 ms | NULL |
+| `mtg_30` | 프로덕션 빌드 :4173 | 1,534,764 | 1,534,720 | 1,534,720 | 47,960 | 47.960s | 27,392 B (offset 1,507,328 = 46×32,768) | 44 ms | NULL |
+| `mtg_31` | 프로덕션 빌드 + 워커 SIGTERM | 1,260,076 | 1,260,032 | 1,260,032 | 39,376 | 39.376s | — | — | `preview_worker_lost` |
+
+셋 다 `physical = 44 + committed = 44 + sealed`, `data 청크 = sealed`,
+`duration_ms = floor(sealed/32)`, ffprobe 16 kHz·mono·16-bit가 정확히 성립했다.
+`mtg_29`/`mtg_30`의 stop 자투리는 32,768 미만이고 마지막 확정 경계는 청크 크기의 배수다 —
+설계 §3.4·§7의 "flush로 건진 나머지를 stop 본문에 싣는다"가 실제로 그 모양으로 일어났다.
+
+**`mtg_31`(워커 SIGTERM)이 §4.1–4.2를 통째로 태운 회의다.** 워커를 죽인 뒤(프로세스 0개)
+`POST /live/audio`가 **15번 더 전부 200**이었고 `committed_bytes`가 491,520 → 983,040으로
+정확히 15 × 32,768만큼 늘었다. job은 `failed`/`worker_shutdown`인데 meeting은 `recording`을
+유지했다. 종료를 누르자 워커가 없으므로 API가 finalize했고 `capture_error=preview_worker_lost`가
+붙었다. 워커를 다시 띄우니 `process_meeting` → `index_meeting`이 `done`으로 끝났고
+**`meeting.error`는 NULL, `capture_error`는 `preview_worker_lost` 그대로 남았다.**
+
+권한 거절도 실제로 봤다: Chromium 사이트 권한을 `denied`로 두면 `getUserMedia`가
+`NotAllowedError`로 거절되고, 그 상태에서 "녹음 시작"을 세 번 눌러도 `POST /meetings/live`가
+**0회**이고 `meeting`·`live_session` 행이 늘지 않았다(설계 §6).
+
+#### 2026-09-07 배포 형상(API 컨테이너 ↔ 호스트) 실측
+
+`deploy/api.Dockerfile`을 이 브랜치에서 빌드한 이미지로 API를 컨테이너에 띄우고
+`deploy/storage`를 bind mount한 뒤, 호스트에서 실제 `TailSource`로 읽었다.
+
+- 컨테이너가 만든 44바이트 헤더 파일이 호스트에 **즉시** 보였다.
+- append 12회 전부 200, 요청 지연 15.7–88.3 ms(첫 요청이 88.3, 이후 중앙값 ≈18 ms).
+- **확정된 prefix가 호스트 `stat`에 보이기까지의 지연 0.01–0.02 ms** — Docker Desktop VM 경계에서
+  측정 가능한 지연이 사실상 없었다. (이 값은 이 머신·이 Docker Desktop 버전의 실측이다.
+  다른 파일 공유 구현에서 같으리라 가정하지 말 것.)
+- 자라는 파일을 호스트 `TailSource`가 따라 읽어 봉인에서 정확히 멈췄다: `frames=201`,
+  `pcm_bytes_read=205,824`, `skips=0`, `signal=stop`, `sealed=206,384`.
+  읽은 값이 `sealed`보다 560바이트 작은 것은 **정상**이다 — `frames()`는 1024바이트 프레임만
+  내보내고 206,384 = 201×1024 + 560이라 마지막 한 프레임을 못 채운 나머지는 미리보기로 가지
+  않는다(정본 패스는 파일 전체를 읽는다).
+- 워커가 소유하지 않은 job에 대해 `get_live_input_state`가 `signal=lost`, `committed=0`을 돌려주고
+  `TailSource`가 아무것도 읽지 않는 것도 같이 확인됐다(소유권 가드).
+
+**이번에 검증하지 못한 것 — 미검증으로 남긴다.**
+
+- **HTTPS origin에서의 다른 기기 브라우저 녹음(수용 테스트 R7의 뒷부분).** 이 환경에 HTTPS
+  origin도, 두 번째 노트북도 없다. 위 실측은 전부 `http://localhost`(secure context이지만
+  HTTPS origin은 아니다)에서 했다. 설계 §8대로 **HTTP LAN IP는 권한 지원 환경으로 세지 않는다** —
+  LAN 브라우저 녹음은 여전히 미검증이다.
+- **운영 배포.** 위 컨테이너 실측은 검증용 일회성 컨테이너이고, 운영 배포는 수행하지 않았다.
+- **4시간 상한(R9)·orphan 경합(R4)·동시성(R8)의 브라우저 경유 실측.** 결정적 테스트로는 덮여
+  있지만 실기기로는 돌리지 않았다.
+- 2026-09-06 `mtg_15` 결과는 **이번 작업의 근거가 아니다**. 그때 코드에는 `committed_bytes`가
+  아예 없었다(migration `024`는 이 브랜치에서 추가됐다) — 위 표만 이번 변경의 증거다.
+
+**이 실측은 설계의 "1~2초" 가정과 어긋난다.** 설계 §5.3/§9는 세그먼트 끝→미리보기 노출 지연을
+"보통 1~2초"로 예상했다. 실측 중앙값 5.1초·최대 7.4초는 그 값의 2.5~5배다. 설계 문서는 날짜
+스냅샷이라 고치지 않고, 정정은 여기(살아있는 문서)에 남긴다: **large-v3-turbo(mlx, GPU)로 15초
+세그먼트 하나를 전사·임베딩·식별·INSERT하는 데 걸리는 실제 시간은 1~2초가 아니라 4~7초대다.**
+
+**그런데도 설계 §2.7의 결론(SSE를 넣지 않는다)은 이 실측으로 흔들리지 않고, 오히려 더 힘을
+받는다.** §2.7의 논거는 "지연의 큰 덩어리가 전사 자체이고, 폴링이 얹는 지연(1초 폴링이면 평균
+0.5초)은 그 옆에서 작다"는 것이었다. 전사가 1.5초였다면 폴링 오버헤드 0.5초는 전체의 약
+1/3(0.5/1.5)을 차지했겠지만, 실측처럼 5초라면 약 1/10(0.5/5)로 줄어든다 — **전사가 예상보다
+느릴수록 전송 방식(SSE vs 폴링)이 전체 지연에서 차지하는 비중은 오히려 작아진다.** 이 숫자는
+SSE를 넣을 근거를 강화하지 않는다. 반대로, 그 결정이 더 안전했다는 뜻이다.
+
+**이 값을 확정값으로 쓰지 말 것.** 표본이 4개뿐이고, 60초 안에서 세그먼트 순서대로
+4219→4360→5934→7356ms로 단조 증가했다 — 즉 최댓값은 시작 시점(모델은 세션 시작 전에 이미
+로드돼 있다)이 아니라 **끝 쪽 세그먼트**에서 나왔다. 그래서 "첫 호출 warm-up이 최댓값을
+끌어올렸다"는 흔한 설명은 이 데이터 모양과 맞지 않는다 — 열 스로틀링, 시스템 부하, 혹은 표본이
+너무 작아 생긴 잡음일 수 있고, 이 실행만으로는 구분할 수 없다. 모델을 예열한 채로 더 긴
+녹음·더 많은 세그먼트를, 가능하면 실제 `--mic`로 재측정하기 전까지는 중앙값도 최댓값도 잠정치로
+읽을 것.
+
+**2026-09-06의 `--tail` 재측정(중앙값 1.4초·최대 2.8초)은 설계의 "1~2초" 가정에 오히려 가깝다** —
+위 5.1초/7.4초와 같은 클립·같은 머신인데도 크게 다르다. `--tail`은 실제 배포 경로(자라는 파일 +
+`TailSource`)이고 `--file`은 완결 파일을 흘리는 옛 경로라는 차이는 있지만, 둘 다 같은
+`LiveSegmenter`→whisper→ECAPA→식별 코드를 타므로 이 차이가 경로 자체에서 온다고 보기는 어렵다 —
+더 그럴듯한 설명은 두 실행 시점의 워밍업 상태(캐시된 HF 메타데이터, 열 상태)다. 표본이 도합 8개뿐이라
+어느 쪽도 정착값이 아니다: **1~2초 가정을 다시 살릴 근거로도, 5~7초를 정설로 굳힐 근거로도 쓰지 말 것.**

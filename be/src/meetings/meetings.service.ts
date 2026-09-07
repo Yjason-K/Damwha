@@ -3,6 +3,7 @@ import { DatabaseService } from '../database/database.service';
 import { StorageService } from '../storage/storage.service';
 import { decodeOriginalName } from '../storage/upload-options';
 import { JobsRepository } from '../jobs/jobs.repository';
+import { JobRow } from '../jobs/jobs.types';
 import {
   buildProcessMeetingPayload, buildIndexMeetingPayload, Followups,
 } from '../contracts/job-payload.schema';
@@ -61,7 +62,9 @@ export class MeetingsService {
     let processing: ProcessingConfig;
     let followups: Followups;
     let speakers: SpeakerBounds | undefined;
+    let recordedAt: string | undefined;
     try {
+      recordedAt = this.parseRecordedAt(body.recorded_at);
       const override = this.parseOverrideString(body.processing); // JSON.parse + zod, 오류는 BadRequest
       speakers = this.parseSpeakersString(body.speakers);
       const global_ = await this.settings.getProcessingConfig();
@@ -82,9 +85,12 @@ export class MeetingsService {
 
     return this.db.withTransaction(async (c) => {
       const meeting = await c.query(
+        // DEFAULT는 컬럼을 생략했을 때만 걸린다. 값 바인딩을 유지하려면 COALESCE로
+        // "미지정 = 등록 시각" 규칙을 SQL 한 곳에 둔다 (문장을 두 벌로 나누면
+        // 파라미터 번호가 갈라진다).
         `INSERT INTO meeting(id, title, original_filename, audio_key, recorded_at, status)
-         VALUES($1,$2,$3,$4,$5,'uploaded') RETURNING *`,
-        [meetingId, body.title ?? null, originalName, audioKey, body.recorded_at ?? null],
+         VALUES($1,$2,$3,$4,COALESCE($5::timestamptz, now()),'uploaded') RETURNING *`,
+        [meetingId, body.title ?? null, originalName, audioKey, recordedAt ?? null],
       );
       const payload = buildProcessMeetingPayload({
         meetingId, audioKey, processingVersion: 0, reprocess: false, processing, followups, speakers,
@@ -103,6 +109,15 @@ export class MeetingsService {
     if (s === 'true') return true;
     if (s === 'false') return false;
     throw new BadRequestException(`${field} must be "true" or "false"`);
+  }
+
+  // 생략과 빈 문자열은 둘 다 "미지정"이다 — INSERT의 COALESCE가 등록 시각으로
+  // 채운다. multipart 필드는 비워도 ''로 도착하므로 정규화하지 않으면
+  // ''::timestamptz가 캐스트 에러(500)를 낸다.
+  private parseRecordedAt(s: string | undefined): string | undefined {
+    if (s === undefined || s === '') return undefined;
+    if (!isIso8601(s)) throw new BadRequestException('recorded_at must be an ISO-8601 datetime');
+    return s;
   }
 
   private parseSpeakersString(s: string | undefined): SpeakerBounds | undefined {
@@ -135,9 +150,10 @@ export class MeetingsService {
   }
 
   // Manual validation (no global ValidationPipe): title must be string|null,
-  // recorded_at must be an ISO-8601 datetime or null.
+  // recorded_at must be an ISO-8601 datetime. null is rejected — the column is
+  // NOT NULL since migration 021 and every meeting keeps a reference time.
   async update(id: string, body: { title?: unknown; recorded_at?: unknown }): Promise<MeetingRow> {
-    const patch: { title?: string | null; recorded_at?: string | null } = {};
+    const patch: { title?: string | null; recorded_at?: string } = {};
     if ('title' in body) {
       if (body.title !== null && typeof body.title !== 'string') {
         throw new BadRequestException('title must be a string or null');
@@ -145,13 +161,12 @@ export class MeetingsService {
       patch.title = body.title as string | null;
     }
     if ('recorded_at' in body) {
-      if (body.recorded_at === null) {
-        patch.recorded_at = null;
-      } else if (typeof body.recorded_at !== 'string' || !isIso8601(body.recorded_at)) {
-        throw new BadRequestException('recorded_at must be an ISO-8601 datetime or null');
-      } else {
-        patch.recorded_at = body.recorded_at;
+      if (typeof body.recorded_at !== 'string' || !isIso8601(body.recorded_at)) {
+        throw new BadRequestException(
+          'recorded_at must be an ISO-8601 datetime (null is not accepted — every meeting has a reference time)',
+        );
       }
+      patch.recorded_at = body.recorded_at;
     }
     const updated = await this.meetings.update(this.db.pool, id, patch);
     if (!updated) throw new NotFoundException('meeting not found');
@@ -238,14 +253,25 @@ export class MeetingsService {
    * 처리 취소 (POST /meetings/:id/cancel). 현재 job이 queued/running이면 failed(cancelled)로
    * 닫고 회의도 failed(cancelled)로 — 그러면 reprocess 가드(done|failed)를 그대로 통과해
    * 다시 돌릴 수 있다. 워커는 다음 stage 경계 또는 heartbeat에서 소유권 상실을 보고 멈춘다.
+   *
+   * 잠금은 job → meeting 순서다. LiveService.stop과 워커의 finalize_live_session이 같은
+   * 순서라, 여기만 meeting을 먼저 잠그면 교차 deadlock이 난다. current_job_id는 잠그지 않은
+   * 조회로 얻고, job을 잠근 뒤 meeting을 잠그고, 그 사이 current_job_id가 바뀌지 않았는지
+   * 다시 확인한다.
    */
   async cancel(id: string): Promise<{ meeting_id: string; job_id: string; status: 'failed' }> {
     return this.db.withTransaction(async (c) => {
+      const probe = await this.meetings.findById(c, id);
+      if (!probe) throw new NotFoundException('meeting not found');
+      const jobId = probe.current_job_id;
+      const job = jobId
+        ? (await c.query<JobRow>(`SELECT * FROM job WHERE id=$1 FOR UPDATE`, [jobId])).rows[0] ?? null
+        : null;
       const meeting = await this.meetings.lockById(c, id);
       if (!meeting) throw new NotFoundException('meeting not found');
-      const jobId = meeting.current_job_id;
-      const job = jobId ? await this.jobs.findById(c, jobId) : null;
-      if (!job || (job.status !== 'queued' && job.status !== 'running')) {
+      // job을 잠그는 사이 회의가 다른 job으로 옮겨갔으면 방금 잠근 job은 무의미하다.
+      if (!job || meeting.current_job_id !== job.id
+          || (job.status !== 'queued' && job.status !== 'running')) {
         throw new ConflictException('no processing in progress to cancel');
       }
       const error = JobsRepository.cancelledError(job.stage);
@@ -283,12 +309,21 @@ export class MeetingsService {
     });
   }
 
+  // 재생은 원본을 우선한다 — normalized는 STT용 16 kHz mono라 귀로 듣기엔 나쁘다.
+  // ffmpeg.normalize()는 리샘플·리먹싱만 하고 잘라내지 않아 두 파일의 길이가 같으므로,
+  // 어느 쪽을 흘려보내든 발화 타임스탬프는 그대로 맞는다. 원본이 없으면 normalized로
+  // 물러선다 — 처리 뒤 원본만 지운 회의도 재생은 되게.
   async getAudioDescriptor(id: string): Promise<{ key: string; size: number }> {
     const meeting = await this.meetings.findById(this.db.pool, id);
     if (!meeting) throw new NotFoundException('meeting not found');
-    const key = meeting.normalized_key ?? meeting.audio_key;
-    const stat = await this.storage.stat(key);
-    return { key, size: stat.size };
+    for (const key of [meeting.audio_key, meeting.normalized_key]) {
+      if (!key) continue;
+      const stat = await this.storage.statOrNull(key);
+      if (stat) return { key, size: stat.size };
+    }
+    // 회의 행은 있는데 파일이 하나도 없다 — 스토리지만 지워진 회의. stat의 ENOENT를
+    // 그대로 올리면 Nest 기본 핸들러가 500으로 매핑하는데, 부재는 404가 맞다.
+    throw new NotFoundException('audio file not found');
   }
 
   audioStream(key: string, range?: { start: number; end: number }) {

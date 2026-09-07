@@ -468,4 +468,87 @@ describe('migration', () => {
     await expect(db.pool.query(`INSERT INTO meeting(id,audio_key) VALUES('mtg_0','k')`)).rejects.toThrow(/check constraint/);
     await expect(db.pool.query(`INSERT INTO meeting(id,audio_key) VALUES('mtg_001','k')`)).rejects.toThrow(/check constraint/);
   });
+
+  it('021 backfills a null recorded_at from created_at and makes the column NOT NULL', async () => {
+    // startTestDb()는 항상 모든 마이그레이션을 적용한 DB를 준다. 021 이전 상태를
+    // 재현하려면 제약을 잠깐 풀어야 한다 — 021을 다시 실행하면 복구된다.
+    await db.pool.query(`ALTER TABLE meeting ALTER COLUMN recorded_at DROP NOT NULL`);
+    const seeded = await db.pool.query(
+      `INSERT INTO meeting(audio_key, status, recorded_at, created_at)
+       VALUES('k','uploaded', NULL, '2026-01-02T03:04:05Z') RETURNING id`,
+    );
+    const id = seeded.rows[0].id;
+
+    const sql = fs.readFileSync(
+      path.join(__dirname, '../src/database/migrations/021_meeting_recorded_at_not_null.sql'),
+      'utf8',
+    );
+    await db.pool.query(sql);
+
+    const row = await db.pool.query(
+      `SELECT recorded_at, created_at FROM meeting WHERE id=$1`,
+      [id],
+    );
+    expect(row.rows[0].recorded_at.toISOString()).toBe(row.rows[0].created_at.toISOString());
+
+    const col = await db.pool.query(
+      `SELECT is_nullable FROM information_schema.columns
+       WHERE table_name='meeting' AND column_name='recorded_at'`,
+    );
+    expect(col.rows[0].is_nullable).toBe('NO');
+  });
+
+  it('allows exactly one recording meeting at a time', async () => {
+    await db.pool.query(`INSERT INTO meeting(audio_key, status) VALUES('a','recording')`);
+    await expect(
+      db.pool.query(`INSERT INTO meeting(audio_key, status) VALUES('b','recording')`),
+    ).rejects.toThrow(/meeting_single_recording_idx/);
+    // 다른 상태는 여럿이어도 된다
+    await db.pool.query(`INSERT INTO meeting(audio_key, status) VALUES('c','done'),('d','done')`);
+    await db.pool.query(`DELETE FROM meeting WHERE audio_key IN ('a','c','d')`);
+  });
+
+  it('live_utterance keeps one row per (meeting, seq), non-empty text and ordered bounds', async () => {
+    const m = await db.pool.query(`INSERT INTO meeting(audio_key) VALUES('lu') RETURNING id`);
+    const mid = m.rows[0].id;
+    const ins = (seq: number, text: string, start = 0, end = 1000) =>
+      db.pool.query(
+        `INSERT INTO live_utterance(meeting_id, job_id, seq, start_ms, end_ms, text)
+         VALUES($1,'job_1',$2,$3,$4,$5) RETURNING id`,
+        [mid, seq, start, end, text],
+      );
+    const first = await ins(0, '안녕');
+    expect(first.rows[0].id).toMatch(/^lut_[1-9][0-9]*$/);
+    await expect(ins(0, '중복')).rejects.toThrow(/duplicate key|unique/i);
+    await expect(ins(1, '')).rejects.toThrow(/check/i);
+    await expect(ins(2, '역순', 1000, 1000)).rejects.toThrow(/check/i);
+    await db.pool.query(`DELETE FROM meeting WHERE id=$1`, [mid]);
+  });
+
+  it('job.stop_requested_at exists and defaults to null', async () => {
+    const { rows } = await db.pool.query(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_name='job' AND column_name='stop_requested_at'`,
+    );
+    expect(rows).toHaveLength(1);
+    const j = await db.pool.query(
+      `INSERT INTO job(type, payload) VALUES('live_session','{}') RETURNING stop_requested_at, stage`,
+    );
+    expect(j.rows[0].stop_requested_at).toBeNull();
+    await db.pool.query(`UPDATE job SET stage='capture' WHERE type='live_session'`);
+    await db.pool.query(`DELETE FROM job WHERE type='live_session'`);
+  });
+
+  it('023 adds live browser capture columns', async () => {
+    const { rows } = await db.pool.query(`
+      SELECT table_name, column_name, data_type FROM information_schema.columns
+      WHERE (table_name='job'     AND column_name IN ('sealed_bytes','last_input_at'))
+         OR (table_name='meeting' AND column_name='capture_error')
+      ORDER BY table_name, column_name`);
+    expect(rows).toEqual([
+      { table_name: 'job', column_name: 'last_input_at', data_type: 'timestamp with time zone' },
+      { table_name: 'job', column_name: 'sealed_bytes', data_type: 'bigint' },
+      { table_name: 'meeting', column_name: 'capture_error', data_type: 'jsonb' },
+    ]);
+  });
 });

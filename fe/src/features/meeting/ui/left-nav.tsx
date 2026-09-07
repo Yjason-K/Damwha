@@ -7,11 +7,18 @@ import { Kbd } from "@/shared/ui/kbd";
 import { SearchField } from "@/shared/ui/search-field";
 import { SidebarItem } from "@/shared/ui/sidebar-item";
 import { cn } from "@/shared/lib/utils";
+import { env } from "@/shared/config/env";
 
 import { useMeetings } from "../api/meetings";
 import type { MeetingFilter, MeetingStatus } from "../model/types";
 import { Icon } from "./icons";
-import { UploadDialog } from "./upload-dialog";
+import { NewMeetingDialog } from "./new-meeting-dialog";
+
+const TourLaunchButton = React.lazy(() =>
+  import("@/features/demo/ui/tour-launch-button").then((m) => ({
+    default: m.TourLaunchButton,
+  })),
+);
 
 /**
  * LeftNav — browse-first rail: logo, ⌘K search, new-meeting CTA, nav,
@@ -38,6 +45,7 @@ function NewMeetingItem({ onClick }: { onClick?: () => void }) {
   return (
     <button
       type="button"
+      data-tour="new-meeting"
       onClick={onClick}
       className="flex w-full cursor-pointer items-center gap-[9px] rounded-sm border border-[color:var(--accent-6)] bg-[var(--accent-1)] px-2.5 py-2 text-left text-sm font-semibold text-[color:var(--accent-text)] outline-none transition-colors duration-[80ms] hover:bg-[var(--accent-2)] focus-visible:[box-shadow:var(--focus-ring)]"
     >
@@ -55,6 +63,12 @@ const FILTER_ITEMS: [MeetingFilter, string][] = [
 
 /** 처리 중/실패 회의에 붙는 상태 뱃지 (done은 없음). */
 function statusBadge(status: MeetingStatus): React.ReactNode {
+  if (status === "recording")
+    return (
+      <Badge variant="accent" dot>
+        녹음 중
+      </Badge>
+    );
   if (status === "failed")
     return (
       <Badge variant="danger" dot>
@@ -115,7 +129,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
   const savedMatch = useMatch("/saved-utterances");
   const speakersMatch = useMatch("/speakers");
   const settingsMatch = useMatch("/settings");
-  const [uploadOpen, setUploadOpen] = React.useState(false);
+  const [newMeetingOpen, setNewMeetingOpen] = React.useState(false);
   const { data: meetings, isLoading, isError } = useMeetings();
   const filtered = (meetings ?? []).filter((m) =>
     filter === "fav" ? m.fav : true,
@@ -134,7 +148,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col px-2 pt-0.5 pb-2">
-        <div className="mb-3 px-0.5">
+        <div className="mb-3 px-0.5" data-tour="search-trigger">
           <SearchField
             asButton
             aria-label="검색 (명령 팔레트 열기)"
@@ -142,7 +156,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
             shortcut={<Kbd keys={["⌘", "K"]} />}
           />
         </div>
-        <NewMeetingItem onClick={() => setUploadOpen(true)} />
+        <NewMeetingItem onClick={() => setNewMeetingOpen(true)} />
 
         <div className="mt-3.5 flex flex-col gap-0.5">
           <SidebarItem
@@ -195,6 +209,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
           회의 목록
         </SectionLabel>
         <ul
+          data-tour="meeting-list"
           className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto overscroll-contain"
           aria-label="회의 목록"
           aria-busy={isLoading || undefined}
@@ -234,10 +249,16 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
         </ul>
       </div>
 
-      <UploadDialog
-        open={uploadOpen}
-        onOpenChange={setUploadOpen}
-        onUploaded={(id) => navigate(`/meetings/${id}`)}
+      {env.demoMode ? (
+        <React.Suspense fallback={null}>
+          <TourLaunchButton />
+        </React.Suspense>
+      ) : null}
+
+      <NewMeetingDialog
+        open={newMeetingOpen}
+        onOpenChange={setNewMeetingOpen}
+        onCreated={(id) => navigate(`/meetings/${id}`)}
       />
     </nav>
   );

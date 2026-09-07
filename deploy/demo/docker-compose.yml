@@ -1,0 +1,42 @@
+# Damwha public demo — read-only, seed baked into both images. No .env needed:
+#   docker compose -f docker-compose.yml up -d
+# Point a Cloudflare Tunnel public hostname at http://localhost:3000.
+# Design: docs/superpowers/specs/2026-09-01-public-demo-deployment-design.md §3.6, §6.2.
+name: damwha-demo
+
+services:
+  postgres:
+    image: ghcr.io/yjason-k/damwha-demo-postgres:${DAMWHA_DEMO_TAG:-latest}
+    container_name: damwha-demo-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: damwha
+    # no host port — only the api container talks to it
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d damwha"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  api:
+    image: ghcr.io/yjason-k/damwha-demo-api:${DAMWHA_DEMO_TAG:-latest}
+    container_name: damwha-demo-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${DAMWHA_DEMO_PORT:-3000}:3000"
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/damwha
+      STORAGE_ROOT: ./storage           # baked into the image
+      DEMO_READ_ONLY: "true"            # every non-GET (except POST /search) → 403
+      # No embed service in the demo: semantic search falls back to BM25 (pg_bigm).
+      EMBED_SERVICE_TIMEOUT_MS: "200"
+    restart: unless-stopped
+
+volumes:
+  pgdata:

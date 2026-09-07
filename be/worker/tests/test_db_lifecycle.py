@@ -221,6 +221,60 @@ def test_peek_queued_does_not_claim(conn):
     assert row["status"] == "queued"
 
 
+def test_claim_prefers_live_session_over_older_jobs(conn):
+    mid = seed_meeting(conn)
+    seed_job(conn, type="process_meeting", meeting_id=mid)
+    seed_job(conn, type="index_meeting", meeting_id=mid)
+    live = seed_job(conn, type="live_session", meeting_id=mid, max_attempts=1)
+
+    assert db.claim(conn, "w1")["id"] == live
+
+
+def _stale_live(conn, *, attempts=1, max_attempts=1):
+    mid = seed_meeting(conn, status="recording")
+    jid = seed_job(
+        conn,
+        type="live_session",
+        meeting_id=mid,
+        status="running",
+        locked_by="w1",
+        attempts=attempts,
+        max_attempts=max_attempts,
+        locked_minutes_ago=45,
+    )
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    return mid, jid
+
+
+def test_reap_stale_fails_live_session_but_leaves_the_meeting_recording(conn):
+    """워커를 잃는 것은 미리보기를 잃는 것이다 — 녹음을 잃는 것이 아니다 (설계 §4.1·§4.2).
+
+    오디오는 브라우저가 API로 보내고 API가 파일에 쓰므로 워커가 죽어도 녹음은 계속된다.
+    여기서 회의를 failed로 만들면 아직 업로드 중인 멀쩡한 녹음을 죽인다. TypeScript
+    reapStale과 같은 계약이며, be/test/reaper.spec.ts가 그쪽을 같은 모양으로 고정한다.
+    """
+    mid, jid = _stale_live(conn)
+
+    assert db.reap_stale(conn, 30) == (0, 1)
+    job = conn.execute("SELECT status, error FROM job WHERE id=%s", (jid,)).fetchone()
+    assert job["status"] == "failed" and job["error"]["code"] == "stale_worker"
+    meeting = conn.execute("SELECT status, error FROM meeting WHERE id=%s", (mid,)).fetchone()
+    assert meeting["status"] == "recording" and meeting["error"] is None
+
+
+def test_reap_stale_never_requeues_a_live_session(conn):
+    """미리보기 job은 재queue하지 않는다 (설계 §2.2·§4.2). max_attempts=1이 보통 그것을
+    보장하지만, 남는 attempts를 가진 라이브 행이 어쩌다 생겨도 requeue가 아니라 failed다 —
+    재claim된 워커는 이미 지나간 오디오를 앞에서부터 다시 전사하게 된다."""
+    mid, jid = _stale_live(conn, attempts=1, max_attempts=3)
+
+    assert db.reap_stale(conn, 30) == (0, 1)
+    job = conn.execute("SELECT status FROM job WHERE id=%s", (jid,)).fetchone()
+    assert job["status"] == "failed"
+    meeting = conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()
+    assert meeting["status"] == "recording"
+
+
 def test_worker_capabilities_upsert_overwrites(conn):
     db.upsert_worker_capabilities(conn, {"worker_id": "w1", "gpu_eligible": True})
     db.upsert_worker_capabilities(conn, {"worker_id": "w2", "gpu_eligible": False})

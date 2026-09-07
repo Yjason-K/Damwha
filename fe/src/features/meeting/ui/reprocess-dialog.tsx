@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { isDemoBlocked } from "@/shared/api/demo-read-only";
 import { isApiError } from "@/shared/api/client";
 import { Button } from "@/shared/ui/button";
 import {
@@ -69,6 +70,7 @@ export function ReprocessDialog({
           onOpenChange(false);
         },
         onError: (error) => {
+          if (isDemoBlocked(error)) return;
           toast({
             variant: "error",
             title: "재처리에 실패했어요.",

@@ -141,6 +141,7 @@ export function PlayerBar({
   return (
     // 랜드마크가 아니라 셸의 트랜스포트 줄 — footer(contentinfo)로 두면 오분류
     <div
+      data-tour="player-bar"
       className={cn(
         "flex shrink-0 items-center border-t border-border bg-[var(--surface-card)] px-5 pt-2.5 pb-3",
         className,

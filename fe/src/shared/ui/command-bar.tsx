@@ -93,6 +93,7 @@ function CommandBar({
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-[120] bg-[rgba(20,23,28,0.28)] backdrop-blur-[2px] data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0" />
         <DialogPrimitive.Content
+          data-tour="search-palette"
           className="fixed top-[12vh] left-1/2 z-[120] flex max-h-[60vh] w-[calc(100%-2rem)] max-w-[560px] -translate-x-1/2 flex-col overflow-hidden rounded-lg border border-border bg-card text-foreground outline-none [box-shadow:var(--shadow-lg)] data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
           aria-label="명령 팔레트"
         >

@@ -9,7 +9,12 @@
 
 export { ApiError, isApiError } from "@/shared/api/client";
 
-export type MeetingStatus = "uploaded" | "processing" | "done" | "failed";
+export type MeetingStatus =
+  | "recording"
+  | "uploaded"
+  | "processing"
+  | "done"
+  | "failed";
 
 /**
  * 회의별 화자 수 힌트 — 업로드 multipart `speakers`(JSON 문자열) / 재처리 body.
@@ -29,6 +34,30 @@ export type JsonError = {
   [key: string]: unknown;
 };
 
+/**
+ * `meeting.capture_error.code`가 가질 수 있는 값 — "이 녹음을 어떻게 얻었는가"의 사유다.
+ *
+ * 두 곳에서 온다: 브라우저가 stop의 `X-Capture-Error`로 실어 보내는 캡처 실패
+ * (`RecorderFailure`와 같은 집합 + 서버가 모르는 값을 접어 넣는 `capture_failed`)와,
+ * 서버가 스스로 붙이는 사유(`producer_abandoned`·`capture_gap`·`preview_worker_lost`).
+ * `be/src/live/live.service.ts`의 `CAPTURE_FAILURES`와 어긋나면 서버가 쓴 값을 화면이
+ * 못 읽는 죽은 컬럼이 되므로, `ui/live-banner.tsx`의 문구 표가 이 유니온을 강제한다.
+ */
+export type CaptureErrorCode =
+  | "device_ended"
+  | "buffer_overflow"
+  | "upload_failed"
+  | "capture_flush_failed"
+  | "capture_failed"
+  | "capture_gap"
+  | "producer_abandoned"
+  | "preview_worker_lost";
+
+/** capture_error 컬럼. 모르는 code도 올 수 있으므로 화면은 계속 방어적으로 읽는다. */
+export type CaptureError = Omit<JsonError, "code"> & {
+  code?: CaptureErrorCode;
+};
+
 /** meeting row (SELECT * FROM meeting). GET /meetings, upload, favorite 응답. */
 export type WireMeeting = {
   id: string;
@@ -43,6 +72,12 @@ export type WireMeeting = {
   current_job_id: string | null;
   processing_version: number;
   error: JsonError | null;
+  /**
+   * 라이브 캡처가 어떻게 얻어졌는가(예: producer_abandoned, capture_gap) — error("이 회의의
+   * 처리가 실패했는가")와는 별개다. `SELECT *`로 나오는 필드라 실제 응답엔 항상 있지만,
+   * 이 필드가 생기기 전에 쓰인 기존 테스트 픽스처를 깨지 않으려고 optional로 둔다.
+   */
+  capture_error?: CaptureError | null;
   created_at: string;
 };
 
@@ -202,4 +237,40 @@ export type WireApiError = {
   statusCode: number;
   message: string;
   error?: string;
+};
+
+/** GET /meetings/:id/live 의 라이브 발화 1행. 화자는 전부 추정이다(설계 §2.8). */
+export type WireLiveUtterance = {
+  id: string;
+  seq: number;
+  start_ms: number;
+  end_ms: number;
+  text: string;
+  speaker_id: string | null;
+  speaker_name: string | null;
+  similarity: number | null;
+};
+
+/** GET /meetings/:id/live 응답. heartbeat_at은 세션 job의 locked_at. */
+export type WireLiveResponse = {
+  status: MeetingStatus;
+  stage: string | null;
+  heartbeat_at: string | null;
+  items: WireLiveUtterance[];
+};
+
+/** POST /meetings/live 요청 — 업로드와 같은 필드, JSON. */
+export type LiveStartRequest = {
+  title?: string;
+  processing?: import("@/features/settings/api/types").ProcessingOverride;
+  speakers?: SpeakerBounds;
+  defer_lens?: boolean;
+  defer_summary?: boolean;
+};
+
+/** POST /meetings/:id/live/stop 응답. */
+export type LiveStopResponse = {
+  meeting_id: string;
+  job_id: string;
+  outcome: "stopping" | "discarded";
 };

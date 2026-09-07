@@ -117,4 +117,22 @@ describe('JobsRepository', () => {
     );
     expect(rows[0].status).toBe('failed');
   });
+
+  it('enqueue honors maxAttempts and leaves the column default otherwise', async () => {
+    const mid = await seedMeeting();
+    const one = await repo.enqueue(db.pool, { type: 'live_session', meetingId: mid, payload: {}, maxAttempts: 1 });
+    const def = await repo.enqueue(db.pool, { type: 'process_meeting', meetingId: mid, payload: {} });
+    expect(one.max_attempts).toBe(1);
+    expect(def.max_attempts).toBe(3);
+    expect(one.stop_requested_at).toBeNull();
+  });
+
+  it('claims a queued live_session ahead of an older queued process_meeting', async () => {
+    const mid = await seedMeeting();
+    await repo.enqueue(db.pool, { type: 'process_meeting', meetingId: mid, payload: {} });
+    await repo.enqueue(db.pool, { type: 'index_meeting', meetingId: mid, payload: {} });
+    const live = await repo.enqueue(db.pool, { type: 'live_session', meetingId: mid, payload: {}, maxAttempts: 1 });
+    const claimed = await repo.claim(db.pool, 'w');
+    expect(claimed!.id).toBe(live.id);
+  });
 });

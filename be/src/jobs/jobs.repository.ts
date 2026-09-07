@@ -7,13 +7,20 @@ export class JobsRepository {
 
   async enqueue(
     exec: Queryable,
-    args: { type: JobType; meetingId: string | null; payload: unknown },
+    args: { type: JobType; meetingId: string | null; payload: unknown; maxAttempts?: number },
   ): Promise<JobRow> {
-    const { rows } = await exec.query<JobRow>(
-      `INSERT INTO job(type, meeting_id, payload)
-       VALUES($1, $2, $3::jsonb) RETURNING *`,
-      [args.type, args.meetingId, JSON.stringify(args.payload)],
-    );
+    // maxAttempts를 안 주면 컬럼 DEFAULT(3)를 그대로 쓴다 — 상수를 여기 복제하지 않는다.
+    const { rows } = args.maxAttempts === undefined
+      ? await exec.query<JobRow>(
+          `INSERT INTO job(type, meeting_id, payload)
+           VALUES($1, $2, $3::jsonb) RETURNING *`,
+          [args.type, args.meetingId, JSON.stringify(args.payload)],
+        )
+      : await exec.query<JobRow>(
+          `INSERT INTO job(type, meeting_id, payload, max_attempts)
+           VALUES($1, $2, $3::jsonb, $4) RETURNING *`,
+          [args.type, args.meetingId, JSON.stringify(args.payload), args.maxAttempts],
+        );
     this.logger.log(`enqueued job ${rows[0].id} type=${args.type} meeting=${args.meetingId ?? '-'}`);
     return rows[0];
   }
@@ -26,7 +33,8 @@ export class JobsRepository {
          SELECT id FROM job
          WHERE status='queued'
            AND (next_attempt_at IS NULL OR next_attempt_at <= now())
-         ORDER BY next_attempt_at NULLS FIRST, created_at
+         -- 라이브 세션은 사람이 회의 중이다 — 밀린 색인·요약보다 먼저 집는다 (설계 §3.3).
+         ORDER BY (type = 'live_session') DESC, next_attempt_at NULLS FIRST, created_at
          FOR UPDATE SKIP LOCKED LIMIT 1
        ) RETURNING *`,
       [workerId],
@@ -101,10 +109,16 @@ export class JobsRepository {
            AND locked_at < now() - ($1 || ' minutes')::interval
          FOR UPDATE SKIP LOCKED
        ),
+       -- live_session은 재queue 대상이 아니다 (설계 §2.2·§4.2). 다시 claim해 봐야 다음 워커는
+       -- 이미 지나간 오디오를 앞에서부터 다시 전사한다. max_attempts=1이 보통 그것을 보장하지만,
+       -- 남는 attempts를 가진 라이브 행이 생겨도 여기서 failed로 간다 — 두 집합이 정확히
+       -- 반대라야 stale live job이 running에 영원히 남지 않는다.
        requeued AS (
          UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL,
            next_attempt_at=NULL, updated_at=now()
-         WHERE id IN (SELECT id FROM stale WHERE attempts < max_attempts)
+         WHERE id IN (
+           SELECT id FROM stale WHERE attempts < max_attempts AND type <> 'live_session'
+         )
          RETURNING id
        ),
        failed AS (
@@ -112,7 +126,9 @@ export class JobsRepository {
            error = jsonb_build_object('code','stale_worker',
                                        'message','worker lock expired',
                                        'stage', j.stage)
-         WHERE id IN (SELECT id FROM stale WHERE attempts >= max_attempts)
+         WHERE id IN (
+           SELECT id FROM stale WHERE attempts >= max_attempts OR type = 'live_session'
+         )
          RETURNING id, type, meeting_id, error
        ),
        fail_lens_extraction_runs AS (
@@ -127,10 +143,17 @@ export class JobsRepository {
          WHERE s.job_id=f.id AND f.type='summarize_meeting'
          RETURNING s.meeting_id
        ),
+       -- live_session은 일부러 빠져 있다. 워커가 캡처자였을 때는 "워커를 잃음 = 녹음을
+       -- 잃음"이었지만, 브라우저 캡처로 옮긴 뒤로는 아니다 — 오디오는 브라우저가 API로
+       -- 보내고 API가 파일에 쓰므로 워커가 죽어도 녹음은 계속된다 (설계 §2.11, §7의
+       -- "녹음은 계속. 미리보기만 없고"). 여기서 회의를 failed로 만들면 브라우저가 아직
+       -- 업로드 중인 멀쩡한 녹음을 죽인다. job은 그대로 failed가 되고(그 워커는 실제로
+       -- 사라졌다), 마무리는 stop이나 LiveOrphanService가 API 경로로 맡는다.
+       -- 워커의 db.reap_stale도 같은 계약이다 — 두 CTE는 함께 고친다.
        fail_meetings AS (
          UPDATE meeting m SET status='failed',
            error = jsonb_build_object('code','stale_worker','message','processing worker lost')
-         WHERE m.id IN (SELECT meeting_id FROM failed WHERE type='process_meeting')
+         WHERE m.id IN (SELECT meeting_id FROM failed WHERE type = 'process_meeting')
          RETURNING m.id
        ),
        fail_speakers AS (

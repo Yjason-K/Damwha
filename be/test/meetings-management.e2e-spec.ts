@@ -2,7 +2,6 @@ import { Test } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { startTestDb, StartedTestDb } from './db';
 import { AppModule } from '../src/app.module';
@@ -13,11 +12,8 @@ describe('meetings management (PATCH / DELETE)', () => {
   let storageRoot: string;
 
   beforeAll(async () => {
-    // StorageService canonicalizes STORAGE_ROOT in its constructor, so set it
-    // BEFORE the app is built. A fresh temp dir keeps disk assertions isolated.
-    storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dw-mtg-mgmt-'));
-    process.env.STORAGE_ROOT = storageRoot;
     db = await startTestDb();
+    storageRoot = db.storageRoot; // startTestDb가 잡은 스위트 전용 임시 디렉터리
     const mod = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = mod.createNestApplication();
     await app.init();
@@ -53,18 +49,24 @@ describe('meetings management (PATCH / DELETE)', () => {
     expect(row.rows[0].recorded_at).not.toBeNull();
   });
 
-  it('PATCH /meetings/:id accepts a date-only recorded_at and null clears', async () => {
+  it('PATCH /meetings/:id accepts a date-only recorded_at', async () => {
     const mid = (await upload()).body.id;
     const dateOnly = await request(srv()).patch(`/meetings/${mid}`).send({ recorded_at: '2026-07-03' });
     expect(dateOnly.status).toBe(200);
     expect(dateOnly.body.recorded_at).not.toBeNull();
 
-    const cleared = await request(srv())
-      .patch(`/meetings/${mid}`)
-      .send({ title: null, recorded_at: null });
+    const cleared = await request(srv()).patch(`/meetings/${mid}`).send({ title: null });
     expect(cleared.status).toBe(200);
     expect(cleared.body.title).toBeNull();
-    expect(cleared.body.recorded_at).toBeNull();
+  });
+
+  it('PATCH /meetings/:id → 400 when recorded_at is null', async () => {
+    // 모든 회의는 기준일시를 갖는다 — 해제할 수단을 남기면 NOT NULL이 뚫린다.
+    const mid = (await upload()).body.id;
+    const res = await request(srv()).patch(`/meetings/${mid}`).send({ recorded_at: null });
+    expect(res.status).toBe(400);
+    const row = await db.pool.query('SELECT recorded_at FROM meeting WHERE id=$1', [mid]);
+    expect(row.rows[0].recorded_at).not.toBeNull();
   });
 
   it('PATCH /meetings/:id → 400 for invalid recorded_at / title', async () => {

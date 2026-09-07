@@ -35,7 +35,8 @@ export interface LensItemRow {
   meeting_title: string | null;
   meeting_recorded_at: Date | null;
   // COALESCE(recorded_at, created_at) — the meeting's sort key. recorded_at is
-  // nullable, so the fallback keeps the keyset tuple free of NULLs.
+  // NOT NULL since migration 021, so the fallback is now unreachable; it is kept
+  // because rewriting the keyset sort key buys nothing and risks the ordering.
   meeting_sort_at: Date;
 }
 

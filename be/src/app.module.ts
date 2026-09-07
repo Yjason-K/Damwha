@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { APP_INTERCEPTOR } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 import { DatabaseModule } from './database/database.module';
 import { StorageModule } from './storage/storage.module';
@@ -13,8 +13,10 @@ import { LensesModule } from './lenses/lenses.module';
 import { SummaryModule } from './summary/summary.module';
 import { SavedUtterancesModule } from './saved-utterances/saved-utterances.module';
 import { NotesModule } from './notes/notes.module';
+import { LiveModule } from './live/live.module';
 import { HealthController } from './health/health.controller';
 import { HttpLoggingInterceptor } from './common/http-logging.interceptor';
+import { DemoReadOnlyGuard } from './common/demo-read-only.guard';
 
 @Module({
   imports: [
@@ -31,8 +33,13 @@ import { HttpLoggingInterceptor } from './common/http-logging.interceptor';
     SummaryModule,
     SavedUtterancesModule,
     NotesModule,
+    LiveModule,
   ],
   controllers: [HealthController],
-  providers: [{ provide: APP_INTERCEPTOR, useClass: HttpLoggingInterceptor }],
+  providers: [
+    { provide: APP_INTERCEPTOR, useClass: HttpLoggingInterceptor },
+    // 공개 데모 읽기 전용(설계 §3.6). DEMO_READ_ONLY 미설정이면 no-op.
+    { provide: APP_GUARD, useClass: DemoReadOnlyGuard },
+  ],
 })
 export class AppModule {}

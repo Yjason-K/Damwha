@@ -1,0 +1,59 @@
+/* driver.js 팝오버를 디자인 토큰에 맞춘다. 토큰은 index.css의 :root에 정의돼 있다. */
+.driver-popover.damwha-tour {
+  background: var(--surface-card);
+  color: var(--text-primary, currentColor);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  padding: 16px 18px;
+  max-width: 360px;
+  font-family: inherit;
+}
+.driver-popover.damwha-tour .driver-popover-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.driver-popover.damwha-tour .driver-popover-description {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+.driver-popover.damwha-tour .driver-popover-progress-text {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.driver-popover.damwha-tour .driver-popover-navigation-btns button {
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-card);
+  color: inherit;
+  text-shadow: none;
+  font-size: 12.5px;
+  padding: 5px 10px;
+}
+.driver-popover.damwha-tour .driver-popover-next-btn {
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
+  color: #fff;
+}
+.driver-popover.damwha-tour .driver-popover-next-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.driver-popover.damwha-tour .driver-popover-arrow-side-left.driver-popover-arrow { border-left-color: var(--surface-card); }
+.driver-popover.damwha-tour .driver-popover-arrow-side-right.driver-popover-arrow { border-right-color: var(--surface-card); }
+.driver-popover.damwha-tour .driver-popover-arrow-side-top.driver-popover-arrow { border-top-color: var(--surface-card); }
+.driver-popover.damwha-tour .driver-popover-arrow-side-bottom.driver-popover-arrow { border-bottom-color: var(--surface-card); }
+
+/* driver.css는 투어 중 `.driver-active *`의 pointer-events를 전부 끄고 팝오버·하이라이트
+   요소만 되살린다. 종료 확인 모달은 body에 포털되므로 마우스 클릭이 통째로 막힌다 —
+   모달과 오버레이를 같은 방식으로 되살린다. */
+.driver-active .damwha-tour-exit,
+.driver-active .damwha-tour-exit * {
+  pointer-events: auto;
+}
+/* driver 팝오버는 z-index 1000000000이라 Tailwind z-[10050]로는 그 뒤에 깔린다. */
+.driver-active .damwha-tour-exit {
+  z-index: 1000000001;
+}

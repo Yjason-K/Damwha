@@ -731,3 +731,38 @@ def test_persist_names_are_unique_across_two_meetings(conn):
     import re
 
     assert all(re.fullmatch(r"Speaker_\d{3,}", n) for n in names)
+
+
+def test_persist_deletes_the_meetings_live_utterances(conn):
+    mid, jid = _claimed_pm_job(conn, pv=0)
+    other = seed_meeting(conn)
+    for m in (mid, other):
+        db.insert_live_utterance(
+            conn,
+            meeting_id=m,
+            job_id=jid,
+            seq=0,
+            start_ms=0,
+            end_ms=500,
+            text="미리보기",
+            speaker_id=None,
+            similarity=None,
+        )
+    out = db.persist_process_meeting(
+        conn,
+        job_id=jid,
+        worker_id="w1",
+        meeting_id=mid,
+        processing_version=0,
+        normalized_key="meetings/x/normalized.flac",
+        duration_ms=500,
+        utterances=[],
+        clusters=[],
+        embedding_model="speechbrain/spkrec-ecapa-voxceleb",
+        embedding_dim=192,
+    )
+    assert out == "committed"
+    count = lambda m: conn.execute(  # noqa: E731
+        "SELECT count(*) c FROM live_utterance WHERE meeting_id=%s", (m,)
+    ).fetchone()["c"]
+    assert count(mid) == 0 and count(other) == 1

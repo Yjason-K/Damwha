@@ -21,6 +21,8 @@ def _settings_stub(pg_url):
         default_speaker_prefix = "Speaker"
         lens_llm_model = "qwen2.5:14b-instruct"
         summary_llm_model = "qwen2.5:14b-instruct"
+        meeting_timezone = "Asia/Seoul"
+        live_max_minutes = 240.0
 
     return S()
 

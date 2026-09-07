@@ -1,3 +1,5 @@
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -11,16 +13,24 @@ class Settings(BaseSettings):
     worker_id: str = "worker-1"
     hf_token: str | None = None
     poll_interval_seconds: float = 2.0
+    # 라이브 배너의 "신호 끊김" 임계값(fe/src/features/meeting/ui/live-banner.tsx의
+    # STALE_MS)이 이 값의 3배로 잡혀 있다. 주기를 늘리면 그 상수도 같이 본다 —
+    # 임계값이 주기에 가까워지면 건강한 녹음에서도 배너가 빨갛게 번쩍인다.
     heartbeat_interval_seconds: float = 30.0
     reaper_stale_minutes: float = 30.0
     reaper_interval_seconds: float = 300.0
     stt_chunk_minutes: float = 25.0
+    # 라이브 세션 상한. 넘으면 stop이 온 것과 똑같이 finalize한다 (설계 §4).
+    live_max_minutes: float = 240.0
     model_cache_dir: str | None = None
     search_embedding_model: str = "BAAI/bge-m3"
     search_embedding_dim: int = 1024
     embed_service_host: str = "127.0.0.1"
     embed_service_port: int = 8100
     default_speaker_prefix: str = "Speaker"
+    # 렌즈 프롬프트의 "Meeting date"를 렌더하는 존. recorded_at은 timestamptz라
+    # 존을 고정하지 않으면 오전 이른 회의가 UTC로 전날이 되어 due_at이 하루씩 밀린다.
+    meeting_timezone: str = "Asia/Seoul"
     # 필수 — 기본값을 두지 않는다. 기본값이 있으면 "주소를 안 넣었다"와 "그 주소에
     # 서버가 없다"가 구별되지 않고, lens_llm_managed 경로는 이 URL의 host:port에
     # 서버를 bind하므로 포트가 명시돼 있어야 한다. 설정 누락은 기동 시점에
@@ -49,6 +59,17 @@ class Settings(BaseSettings):
         v = v.strip()
         if not v:
             raise ValueError("default_speaker_prefix must not be empty")
+        return v
+
+    @field_validator("meeting_timezone")
+    @classmethod
+    def _known_timezone(cls, v: str) -> str:
+        # 기동 시점에 막는다. 폴백은 두지 않는다 — 잘못된 존으로 조용히 UTC를 쓰면
+        # 하루 어긋난 due_at이 저장되고, 그건 기동 실패보다 훨씬 늦게 발견된다.
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"unknown IANA timezone {v!r}") from exc
         return v
 
 

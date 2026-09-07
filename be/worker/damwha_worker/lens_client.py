@@ -1,9 +1,10 @@
 import json
-from datetime import date
-from typing import Any, Literal
+import logging
+from datetime import date, datetime
+from typing import Annotated, Any, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, BeforeValidator, ConfigDict, ValidationError
 
 from .contracts import LensCandidate, NonEmptyText, SpeakerId
 from .errors import (
@@ -12,6 +13,8 @@ from .errors import (
     ErrorKind,
     WorkerError,
 )
+
+log = logging.getLogger("damwha_worker")
 
 _EXTRACTION_SYSTEM_PROMPT = (
     "You are given a meeting transcript. The Speakers section lists one speaker per "
@@ -23,7 +26,10 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "supporting_indexes. Choose the exact primary utterance. primary_index and "
     "every supporting index must be index values from the transcript, and "
     "assignee_speaker_id must be a speaker_id from the Speakers section (not a "
-    "name) or null. Do not "
+    "name) or null. Write due_at as a YYYY-MM-DD calendar date. When an utterance "
+    'states a relative deadline ("today", "next Thursday"), resolve it against '
+    "the Meeting date line at the top of the transcript; if it cannot be resolved, "
+    "use null. Do not "
     "speculate or return duplicates. Write text in the language of the transcript."
 )
 
@@ -50,6 +56,35 @@ _EXTRACTION_SYSTEM_PROMPT = (
 _SPEAKER_KEYS = ("speaker_name", "speaker_id")
 
 
+def _due_at_or_none(v: Any) -> Any:
+    """파싱되지 않는 마감일은 그 항목만 마감일 없음으로 떨군다.
+
+    모델은 "오늘"·"목요일"·"22 일" 같은 상대 표현을 그대로 낸다. 예전에는 이 한
+    필드가 _LlmLensResponse 전체 검증을 깨서 추출 run이 통째로
+    llm_invalid_response(PERMANENT)로 죽었다.
+
+    관대화는 due_at에만 준다. kind·text·primary_index가 틀린 항목은 애초에 의미가
+    없고, 인덱스 조작은 없는 발화를 근거로 지목하는 문제라 조용히 넘기면 안 된다.
+    """
+    if v is None or isinstance(v, date):
+        return v
+    if isinstance(v, str):
+        s = v.strip()
+        try:
+            return date.fromisoformat(s)
+        except ValueError:
+            pass
+        try:
+            # 모델이 날짜 대신 ISO datetime을 내는 일이 잦다. date.fromisoformat은
+            # 그걸 받지 않으므로(3.12에서 ValueError) 여기서 한 번 더 시도한다 —
+            # 관대화는 파싱 안 되는 값을 흡수하라는 것이지, 파싱되는 값을 버리라는
+            # 것이 아니다.
+            return datetime.fromisoformat(s).date()
+        except ValueError:
+            return None
+    return None
+
+
 class _LlmLensItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -58,7 +93,7 @@ class _LlmLensItem(BaseModel):
     # nullable 두 필드는 기본값 None — response_format이 로컬 런타임에서 권고사항이라
     # 모델이 null 필드를 통째로 생략한다(contracts.LensCandidate와 같은 이유).
     assignee_speaker_id: SpeakerId | None = None
-    due_at: date | None = None
+    due_at: Annotated[date | None, BeforeValidator(_due_at_or_none)] = None
     primary_index: int
     supporting_indexes: list[int] = []
 
@@ -70,15 +105,33 @@ class _LlmLensResponse(BaseModel):
 
 
 def _map_indexes(parsed: _LlmLensResponse, ids: list[str]) -> list[LensCandidate]:
+    """모델이 지목한 인덱스를 실제 id로 옮긴다. 범위 밖은 **그 항목만** 버린다.
+
+    한때 범위 밖 인덱스 하나가 추출 run 전체를 PERMANENT로 죽였다. 두 가지가 그
+    판단을 뒤집었다:
+
+    * 요약 쪽에서 같은 실패가 실제로 났다 — mtg_16(발화 4개)에서 모델이 "index 10"을
+      지목했고 네 번 재시도해서 네 번 다 같은 자리에서 죽었다. 모델은 줄 수가 아니라
+      내용으로 나누므로, 발화가 몇 개 없고 내용이 길면 이 어긋남은 구조적이다.
+    * all-or-nothing은 이 파일이 이미 한 번 물린 함정이다 — mtg_1의 job_3에서 파싱
+      안 되는 날짜 6개가 멀쩡한 항목 10건을 통째로 날렸고, due_at은 그래서 항목 단위
+      관대화로 바뀌었다. 인덱스도 같은 모양의 문제다.
+
+    다만 요약처럼 **범위 안으로 접지는 않는다**. 렌즈의 primary는 "이 발화가 근거다"
+    라는 지목이라, 접으면 엉뚱한 발화에 주장을 붙이게 되고 UI의 근거 점프가 관계없는
+    곳으로 간다. 근거로 쓸 수 없으면 그 항목을 버리는 게 맞다. supporting은 선택
+    항목이라(기본값 []) 범위 밖인 것만 빼고 항목은 살린다.
+    """
     candidates: list[LensCandidate] = []
     for item in parsed.items:
-        for index in (item.primary_index, *item.supporting_indexes):
-            if not 1 <= index <= len(ids):
-                raise WorkerError(
-                    LLM_INVALID_RESPONSE,
-                    f"item cites index {index}, but valid indexes are 1..{len(ids)}",
-                    ErrorKind.PERMANENT,
-                )
+        if not 1 <= item.primary_index <= len(ids):
+            log.warning(
+                "lens item dropped: primary_index %s is outside 1..%s",
+                item.primary_index,
+                len(ids),
+            )
+            continue
+        supporting = [i for i in item.supporting_indexes if 1 <= i <= len(ids)]
         candidates.append(
             LensCandidate(
                 kind=item.kind,
@@ -86,7 +139,7 @@ def _map_indexes(parsed: _LlmLensResponse, ids: list[str]) -> list[LensCandidate
                 assignee_speaker_id=item.assignee_speaker_id,
                 due_at=item.due_at,
                 primary_utterance_id=ids[item.primary_index - 1],
-                supporting_utterance_ids=[ids[i - 1] for i in item.supporting_indexes],
+                supporting_utterance_ids=[ids[i - 1] for i in supporting],
             )
         )
     return candidates
@@ -113,15 +166,21 @@ def _render_transcript(utterances: list[dict[str, Any]]) -> str:
         text = " ".join(str(utterance.get("text") or "").split())
         speaker = next((utterance[k] for k in _SPEAKER_KEYS if utterance.get(k)), None)
         lines.append(f"{index} {speaker}: {text}" if speaker else f"{index}: {text}")
+    # 고를 수 있는 인덱스를 마지막에 못 박는다 — 범위를 말해 주지 않으면 모델이 없는
+    # 번호를 지목한다(요약 쪽 mtg_16). 발화 줄 **뒤에** 붙여 줄 번호와 어긋나지 않게 한다.
+    lines.append("")
+    lines.append(f"Valid utterance indexes are 1..{len(utterances)}.")
     return "\n".join(lines)
 
 
-def _render_prompt(utterances: list[dict[str, Any]]) -> str:
+def _render_prompt(utterances: list[dict[str, Any]], meeting_date: date | None) -> str:
     transcript = _render_transcript(utterances)
     speakers = _render_speakers(utterances)
-    if not speakers:
-        return transcript
-    return f"Speakers:\n{speakers}\n\n{transcript}"
+    body = f"Speakers:\n{speakers}\n\n{transcript}" if speakers else transcript
+    if meeting_date is None:
+        return body
+    # 존 이름은 싣지 않는다 — 날짜는 이미 meeting_timezone으로 환산돼서 온다.
+    return f"Meeting date: {meeting_date.isoformat()}\n\n{body}"
 
 
 def _strip_code_fence(content: str) -> str:
@@ -149,7 +208,13 @@ class LensClient:
         self._timeout_seconds = timeout_seconds
         self._max_tokens = max_tokens
 
-    def extract(self, *, model: str, utterances: list[dict[str, Any]]) -> list[LensCandidate]:
+    def extract(
+        self,
+        *,
+        model: str,
+        utterances: list[dict[str, Any]],
+        meeting_date: date | None = None,
+    ) -> list[LensCandidate]:
         ids = [u["id"] for u in utterances]
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         payload = {
@@ -159,7 +224,7 @@ class LensClient:
                     "role": "system",
                     "content": _EXTRACTION_SYSTEM_PROMPT,
                 },
-                {"role": "user", "content": _render_prompt(utterances)},
+                {"role": "user", "content": _render_prompt(utterances, meeting_date)},
             ],
             "response_format": {"type": "json_object"},
             # Reasoning models spend minutes thinking before emitting the items

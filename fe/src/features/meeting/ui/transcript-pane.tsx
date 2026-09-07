@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { isDemoBlocked } from "@/shared/api/demo-read-only";
 import { isApiError } from "@/shared/api/client";
 import { cn } from "@/shared/lib/utils";
 import { Badge } from "@/shared/ui/badge";
@@ -30,9 +31,10 @@ import {
   useToggleFavorite,
 } from "../api/meetings";
 import { findMatches, type FindMatch } from "../lib/find-matches";
-import type { Meeting } from "../model/types";
+import type { LiveUtterance, Meeting } from "../model/types";
 import { Icon } from "./icons";
 import { ExportDialog } from "./export-dialog";
+import { LiveTranscript } from "./live-transcript";
 import { ReprocessDialog } from "./reprocess-dialog";
 import { ResolveDialog } from "./resolve-dialog";
 
@@ -254,12 +256,14 @@ function RenameDialog({
           toast({ variant: "success", title: "회의 이름을 변경했어요." });
           onOpenChange(false);
         },
-        onError: (err) =>
+        onError: (err) => {
+          if (isDemoBlocked(err)) return;
           toast({
             variant: "error",
             title: "이름 변경에 실패했어요.",
             description: isApiError(err) ? err.message : undefined,
-          }),
+          });
+        },
       },
     );
   };
@@ -317,12 +321,14 @@ function DeleteDialog({
           onOpenChange(false);
           onDeleted();
         },
-        onError: (err) =>
+        onError: (err) => {
+          if (isDemoBlocked(err)) return;
           toast({
             variant: "error",
             title: "삭제에 실패했어요.",
             description: isApiError(err) ? err.message : undefined,
-          }),
+          });
+        },
       },
     );
   };
@@ -364,6 +370,11 @@ type TranscriptPaneProps = {
   aiAcked: boolean;
   onAckAi: () => void;
   onShowSummary: () => void;
+  /**
+   * 라이브 미리보기 — 실제 전사가 아직(uploaded/processing) 또는 끝내(failed) 없을 때
+   * 그 자리를 채운다. 전사가 있으면 전사가 이긴다 (설계 §7.2).
+   */
+  livePreview?: LiveUtterance[];
 };
 
 export function TranscriptPane({
@@ -376,6 +387,7 @@ export function TranscriptPane({
   aiAcked,
   onAckAi,
   onShowSummary,
+  livePreview,
 }: TranscriptPaneProps) {
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const [renameOpen, setRenameOpen] = React.useState(false);
@@ -465,12 +477,14 @@ export function TranscriptPane({
     favorite.mutate(
       { id: meeting.id, fav: !fav },
       {
-        onError: (err) =>
+        onError: (err) => {
+          if (isDemoBlocked(err)) return;
           toast({
             variant: "error",
             title: "즐겨찾기 변경에 실패했어요.",
             description: isApiError(err) ? err.message : undefined,
-          }),
+          });
+        },
       },
     );
 
@@ -580,7 +594,10 @@ export function TranscriptPane({
               <Icon name="download" size={16} />
             </IconButton>
           )}
-          {(meeting.status === "done" || meeting.status === "failed") && (
+          {/* 마이크를 못 연 실패는 파일이 없다 — 재처리할 게 없으니 숨긴다 */}
+          {(meeting.status === "done" ||
+            (meeting.status === "failed" &&
+              meeting.error?.code !== "audio_device_failed")) && (
             <IconButton
               label="회의 재처리"
               size="sm"
@@ -633,6 +650,15 @@ export function TranscriptPane({
             onAck={onAckAi}
           />
         ) : null}
+        {meeting.utterances.length === 0 &&
+        livePreview &&
+        livePreview.length > 0 ? (
+          <LiveTranscript
+            items={livePreview}
+            readOnly
+            className="min-h-[240px]"
+          />
+        ) : null}
         {/* role="log"는 암묵적으로 aria-live="polite"라 <mark>가 매 키 입력마다
         들고 나면 스크린리더가 타이핑 중 매칭 본문을 계속 읽는다 — 찾기용
         하이라이트는 아래 role="status" 카운터로 따로 안내하므로 여기는 끈다. */}
@@ -642,12 +668,13 @@ export function TranscriptPane({
           aria-label="회의 전사"
           aria-live="off"
         >
-          {meeting.utterances.map((u) => {
+          {meeting.utterances.map((u, i) => {
             const failed = u.status === "transcribe_failed";
             return (
               <Utterance
                 key={u.id}
                 data-uid={u.id}
+                {...(i === 0 ? { "data-tour": "utterance" } : {})}
                 tabIndex={-1}
                 speaker={meeting.speakers[u.spk].spk}
                 name={meeting.speakers[u.spk].name}
@@ -671,11 +698,13 @@ export function TranscriptPane({
                     ? utteranceId
                     : { utteranceId, text: u.text };
                   mutation.mutate(value as never, {
-                    onError: () =>
+                    onError: (err) => {
+                      if (isDemoBlocked(err)) return;
                       toast({
                         variant: "error",
                         title: "저장한 발언을 바꾸지 못했어요.",
-                      }),
+                      });
+                    },
                   });
                 }}
               >

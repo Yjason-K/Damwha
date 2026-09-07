@@ -9,12 +9,13 @@ from contextlib import contextmanager, nullcontext
 from . import capabilities, console, db
 from .config import load_settings
 from .contracts import parse_payload
-from .errors import ErrorKind, ShutdownRequested, classify
+from .errors import AUDIO_DEVICE_FAILED, ErrorKind, ShutdownRequested, WorkerError, classify
 from .llm_server import managed_llm_server
 from .llm_server import probe_models as check_lens_llm
 from .pipeline.enroll_speaker import run_enroll_speaker
 from .pipeline.extract_lenses import run_extract_lenses
 from .pipeline.index_meeting import run_index_meeting
+from .pipeline.live_session import run_live_session
 from .pipeline.process_meeting import run_process_meeting
 from .pipeline.summarize_meeting import run_summarize_meeting
 from .reaper import run_reaper_loop
@@ -24,6 +25,18 @@ log = logging.getLogger("damwha_worker")
 
 _MAX_BACKOFF_SECONDS = 60.0
 _TIMEOUT_EXC = subprocess.TimeoutExpired
+#: 미리보기를 반납하며 job에 남기는 사유. 회의에는 아무것도 쓰지 않는다 (설계 §4.2).
+_WORKER_SHUTDOWN = "worker_shutdown"
+
+
+def _is_browser_live(job: dict) -> bool:
+    """이 job이 브라우저가 캡처하는 라이브 세션인가.
+
+    payload의 source로 가르는 이유는 소유권이다. browser 세션의 오디오는 브라우저가 API로
+    보내고 API가 파일에 쓰므로, 워커 장애는 미리보기만 끝낼 수 있다 (설계 §4.1). mic 세션은
+    반대로 워커가 캡처자라 워커를 잃으면 그 녹음도 없다 — 기존 거절 정책대로 회의까지 닫는다.
+    """
+    return job["type"] == "live_session" and (job["payload"] or {}).get("source") == "browser"
 
 
 def _no_llm_server(_model):
@@ -65,6 +78,37 @@ def _shutdown_abort_hook(register_abort, shutdown_event):
     return _abort_hook(register_abort, shutdown_event.set if shutdown_event is not None else None)
 
 
+def _default_live_source(payload, storage, state_box):
+    """payload의 source로 구현체를 고른다.
+
+    'browser'가 유일하게 동작하는 경로다 — API가 쓰는 파일을 따라 읽는다.
+
+    'mic'은 계약에 자리만 남아 있고 **여기서 즉시 거절한다.** 캡처를 브라우저로 옮긴 뒤로
+    mic 세션은 조용히 틀린 결과를 만든다: API는 브라우저가 보낸 바이트를 파일에 쓰고 워커는
+    이 Mac의 마이크를 전사하므로 정본과 미리보기가 서로 다른 소리가 되고, MicSource는
+    봉인 경계를 보지 않으므로 stop 뒤에도 max_minutes(4시간)까지 돈다 — 그동안
+    meeting_single_recording_idx가 다음 녹음을 전부 막는다. 시작조차 못 하는 편이
+    네 시간 뒤에 알게 되는 것보다 낫다.
+
+    MicSource와 그 테스트는 나중에 시스템 오디오 캡처가 들어올 때의 참조로 남긴다.
+    """
+    if payload.source == "browser":
+        from .audio.tail_source import TailSource
+
+        return TailSource(
+            storage.resolve(payload.audio_key),
+            # 소스 스레드는 이 자리를 읽기만 한다 — 루프가 1초마다 스냅샷을 통째로
+            # 교체하므로 committed와 sealed가 서로 다른 시점의 값으로 섞이지 않는다.
+            input_state=lambda: state_box["state"],
+        )
+    raise WorkerError(
+        AUDIO_DEVICE_FAILED,
+        f"live source {payload.source!r} is not supported — capture moved to the browser",
+        ErrorKind.PERMANENT,
+        stage="capture",
+    )
+
+
 def handle_job(
     conn,
     job: dict,
@@ -80,9 +124,13 @@ def handle_job(
     default_speaker_prefix="Speaker",
     lens_llm_model=None,
     summary_llm_model=None,
+    meeting_timezone="Asia/Seoul",
     llm_server=None,
     shutdown_event=None,
     register_abort=None,
+    build_live_models=None,
+    build_live_source=None,
+    live_max_minutes=240.0,
 ) -> str:
     llm_server = llm_server or _no_llm_server
     try:
@@ -133,7 +181,13 @@ def handle_job(
             with llm_server(payload.model) as proc, _llm_abort_hook(register_abort, proc):
                 client = build_lens_client()
                 return run_extract_lenses(
-                    conn, job, payload, client, worker_id=worker_id, shutdown_event=shutdown_event
+                    conn,
+                    job,
+                    payload,
+                    client,
+                    worker_id=worker_id,
+                    shutdown_event=shutdown_event,
+                    meeting_timezone=meeting_timezone,
                 )
         if job["type"] == "summarize_meeting":
             with llm_server(payload.model) as proc, _llm_abort_hook(register_abort, proc):
@@ -146,8 +200,48 @@ def handle_job(
                     worker_id=worker_id,
                     shutdown_event=shutdown_event,
                 )
+        if job["type"] == "live_session":
+            # 소유권 상실은 루프가 1초마다 직접 읽는다(get_live_input_state → 'lost') —
+            # process_meeting의 shutdown 훅은 걸지 않는다. shutdown_event는 루프가 stop으로 다룬다.
+            live_models = build_live_models()
+            # source(TailSource)와 run_live_session이 같은 dict를 봐야 한다 — 소스는
+            # 생성 시점에 클로저로 쥐고, 루프는 매 폴링마다 이 자리에 최신 스냅샷을 놓는다.
+            # 첫 스냅샷은 run_live_session이 스스로 채운다.
+            state_box = {"state": db.LiveInputState(None, 0, None)}
+            source = build_live_source(payload, storage, state_box)
+            return run_live_session(
+                conn,
+                job,
+                payload,
+                live_models,
+                storage,
+                source,
+                worker_id=worker_id,
+                shutdown_event=shutdown_event,
+                max_minutes=live_max_minutes,
+                state_box=state_box,
+            )
         raise ValueError(f"unknown job type {job['type']}")
     except ShutdownRequested:
+        if job["type"] == "live_session":
+            # live job은 어떤 경우에도 requeue_for_shutdown에 들어가지 않는다 (설계 §4.2).
+            # 재claim한 워커는 이미 지나간 오디오를 앞에서부터 다시 전사하게 되고, 그동안
+            # 회의는 계속 자란다 — max_attempts=1과 같은 이유다.
+            log.info("job %s → live session returned on shutdown", job["id"])
+            error = {
+                "code": _WORKER_SHUTDOWN,
+                "message": "the preview worker shut down; the recording is unaffected",
+                "kind": ErrorKind.PERMANENT.value,
+                "stage": job.get("stage"),
+            }
+            # browser 세션은 미리보기만 반납한다 — 마무리는 봉인 뒤 API가 이어받는다.
+            # mic 세션은 워커가 캡처자라 반납할 미리보기가 아니라 잃은 녹음이다.
+            ok = (
+                db.fail_live_preview(conn, job["id"], worker_id, error)
+                if _is_browser_live(job)
+                else db.fail_process_meeting(conn, job["id"], worker_id, job["meeting_id"], error)
+            )
+            return "failed" if ok else "lost"
         log.info("job %s type=%s → shutdown requeue", job["id"], job["type"])
         ok = db.requeue_for_shutdown(conn, job["id"], worker_id)
         return "requeued_shutdown" if ok else "lost"
@@ -164,6 +258,15 @@ def handle_job(
             job["max_attempts"],
         )
         transient_retry = werr.kind is ErrorKind.TRANSIENT and job["attempts"] < job["max_attempts"]
+        if job["type"] == "live_session":
+            # 재시도는 없다 (설계 §2.6). 끊긴 녹음은 이어 붙일 수 없고, 파일은 디스크에 남는다.
+            if _is_browser_live(job):
+                # 미리보기 실패는 미리보기만 끝낸다 (설계 §4.1 3행) — OOM이든 클립 연속
+                # 실패든, 회의는 recording에 남아 append를 계속 받는다.
+                ok = db.fail_live_preview(conn, job["id"], worker_id, error_json)
+                return "failed" if ok else "lost"
+            ok = db.fail_process_meeting(conn, job["id"], worker_id, job["meeting_id"], error_json)
+            return "failed" if ok else "lost"
         if job["type"] == "enroll_speaker":
             speaker_id = (job["payload"] or {}).get("speaker_id")
             if transient_retry:
@@ -212,6 +315,7 @@ def run_once(
     default_speaker_prefix="Speaker",
     lens_llm_model=None,
     summary_llm_model=None,
+    meeting_timezone="Asia/Seoul",
     llm_server=None,
     shutdown_event=None,
 ) -> str | None:
@@ -232,6 +336,7 @@ def run_once(
         default_speaker_prefix=default_speaker_prefix,
         lens_llm_model=lens_llm_model,
         summary_llm_model=summary_llm_model,
+        meeting_timezone=meeting_timezone,
         llm_server=llm_server,
         shutdown_event=shutdown_event,
     )
@@ -251,6 +356,8 @@ def dispatch_claimed_job(
     build_summary_client_fn=None,
     llm_server_fn=None,
     shutdown_event=None,
+    build_live_models_fn=None,
+    build_live_source_fn=None,
 ) -> str:
     """claim된 job 1건: heartbeat 진입 → 콜백(지연 빌드)을 handle_job에 주입."""
     with heartbeat_cm:
@@ -272,10 +379,18 @@ def dispatch_claimed_job(
             default_speaker_prefix=settings.default_speaker_prefix,
             lens_llm_model=settings.lens_llm_model,
             summary_llm_model=settings.summary_llm_model,
+            meeting_timezone=settings.meeting_timezone,
             llm_server=llm_server_fn,
             shutdown_event=shutdown_event,
             # heartbeat가 소유권 상실(운영자 취소/reaper)을 감지하면 LLM 서버를 내린다
             register_abort=getattr(heartbeat_cm, "set_on_lost", None),
+            build_live_models=(
+                (lambda: build_live_models_fn(job["payload"], settings))
+                if build_live_models_fn
+                else None
+            ),
+            build_live_source=build_live_source_fn,
+            live_max_minutes=settings.live_max_minutes,
         )
 
 
@@ -291,6 +406,8 @@ def run_single_job(
     build_lens_client_fn=None,
     build_summary_client_fn=None,
     llm_server_fn=None,
+    build_live_models_fn=None,
+    build_live_source_fn=None,
 ) -> int:
     """자식 진입점: job 1건 처리 후 exit code 반환.
 
@@ -324,6 +441,8 @@ def run_single_job(
             llm_server_fn=llm_server_fn,
             heartbeat_cm=hb,
             shutdown_event=shutdown,
+            build_live_models_fn=build_live_models_fn,
+            build_live_source_fn=build_live_source_fn,
         )
         # job-level outcome 로그 유지
         log.info("job %s type=%s → %s", job["id"], job["type"], outcome)
@@ -475,6 +594,11 @@ def run_child(settings, shutdown: threading.Event) -> int:
             worker_settings.lens_llm_max_tokens,
         )
 
+    def _build_live_models(payload, worker_settings):
+        from .models.registry import build_live_models
+
+        return build_live_models(payload, worker_settings)
+
     return run_single_job(
         settings,
         storage,
@@ -486,6 +610,8 @@ def run_child(settings, shutdown: threading.Event) -> int:
         build_lens_client_fn=_build_lens_client,
         build_summary_client_fn=_build_summary_client,
         llm_server_fn=lambda model: managed_llm_server(model, settings),
+        build_live_models_fn=_build_live_models,
+        build_live_source_fn=_default_live_source,
     )
 
 

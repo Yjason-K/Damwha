@@ -1,0 +1,23 @@
+[
+  {
+    "id": "mtg_5",
+    "title": "v0와_Cursor가_불러온_프론트엔드_숙련도_논쟁",
+    "original_filename": "v0와_Cursor가_불러온_프론트엔드_숙련도_논쟁.m4a",
+    "audio_key": "meetings/mtg_5/original.m4a",
+    "normalized_key": "meetings/mtg_5/normalized.flac"
+  },
+  {
+    "id": "mtg_6",
+    "title": "AI_코딩이_만든_가짜_생산성의_함정",
+    "original_filename": "AI_코딩이_만든_가짜_생산성의_함정.m4a",
+    "audio_key": "meetings/mtg_6/original.m4a",
+    "normalized_key": "meetings/mtg_6/normalized.flac"
+  },
+  {
+    "id": "mtg_7",
+    "title": "AI가_내_머릿속_미지를_사냥하게_하라",
+    "original_filename": "AI가_내_머릿속_미지를_사냥하게_하라.m4a",
+    "audio_key": "meetings/mtg_7/original.m4a",
+    "normalized_key": "meetings/mtg_7/normalized.flac"
+  }
+]

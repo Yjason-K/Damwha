@@ -1,3 +1,4 @@
+import { isDemoBlocked } from "@/shared/api/demo-read-only";
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -39,6 +40,7 @@ export function DeleteSpeakerDialog({
         },
         onError: (error) => {
           // 409(진행 중 등록) 등 서버 메시지를 그대로 표출하고 다이얼로그는 유지.
+          if (isDemoBlocked(error)) return;
           toast({
             title: "화자 삭제 실패",
             description: toErrorMessage(error),

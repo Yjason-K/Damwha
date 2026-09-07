@@ -65,7 +65,10 @@ export function LensDashboard({ lens, onLens, onJumpEvidence }: Props) {
   const isEmpty = list.isSuccess && pages.every((p) => p.items.length === 0);
 
   return (
-    <main className="col-start-2 flex min-w-0 flex-col overflow-hidden bg-[var(--surface-app)]">
+    <main
+      data-tour="lens-page"
+      className="col-start-2 flex min-w-0 flex-col overflow-hidden bg-[var(--surface-app)]"
+    >
       <div className="shrink-0 border-b border-[color:var(--border-subtle)] bg-[var(--surface-card)] px-7 pt-[18px] pb-3.5">
         <div className="flex items-center gap-[9px]">
           <span className="inline-flex text-[color:var(--text-secondary)]">

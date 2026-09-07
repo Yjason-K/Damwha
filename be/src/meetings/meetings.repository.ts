@@ -5,7 +5,11 @@ export interface MeetingRow {
   id: string; title: string | null; original_filename: string | null;
   audio_key: string; normalized_key: string | null; recorded_at: Date | null;
   duration_ms: number | null; status: string; is_favorite: boolean; current_job_id: string | null;
-  processing_version: number; error: any; created_at: Date;
+  processing_version: number; error: any;
+  /** 라이브 캡처가 어떻게 얻어졌는가(예: capture_gap) — error("처리가 실패했는가")와는 별개다.
+   *  markUploaded는 일부러 이 필드를 건드리지 않는다 (마이그레이션 023). */
+  capture_error: any;
+  created_at: Date;
 }
 
 export interface ClusterRow {
@@ -26,7 +30,7 @@ export class MeetingsRepository {
   ): Promise<MeetingRow> {
     const { rows } = await exec.query<MeetingRow>(
       `INSERT INTO meeting(title, original_filename, audio_key, recorded_at, status)
-       VALUES($1,$2,$3,$4,'uploaded') RETURNING *`,
+       VALUES($1,$2,$3,COALESCE($4::timestamptz, now()),'uploaded') RETURNING *`,
       [args.title, args.originalFilename, args.audioKey, args.recordedAt],
     );
     return rows[0];
@@ -43,7 +47,7 @@ export class MeetingsRepository {
   async update(
     exec: Queryable,
     id: string,
-    patch: { title?: string | null; recorded_at?: string | null },
+    patch: { title?: string | null; recorded_at?: string },
   ): Promise<MeetingRow | null> {
     const sets: string[] = [];
     const params: unknown[] = [id];
@@ -118,7 +122,7 @@ export class MeetingsRepository {
   }
   async findStatus(exec: Queryable, id: string) {
     const { rows } = await exec.query(
-      `SELECT m.status, j.stage, j.progress, m.error,
+      `SELECT m.status, j.stage, j.progress, m.error, m.capture_error,
               CASE WHEN ler.id IS NULL THEN NULL ELSE jsonb_build_object(
                 'status', ler.status,
                 'model', ler.model,
@@ -162,6 +166,40 @@ export class MeetingsRepository {
     await exec.query(
       `UPDATE meeting SET status='failed', error=$2::jsonb WHERE id=$1`,
       [id, JSON.stringify(error)],
+    );
+  }
+
+  /**
+   * 라이브 stop이 워커 대신 finalize할 때 쓴다 — 워커의 finalize_live_session과 같은 UPDATE
+   * (설계 §4.5). capture_error는 일부러 SET 목록에 없다: error는 "이 회의의 처리가
+   * 실패했는가"이고 capture_error는 "이 녹음을 어떻게 얻었는가"라 최종 패스가 성공해도
+   * 캡처 중 있었던 문제(예: capture_gap)는 계속 보여야 한다.
+   */
+  async markUploaded(exec: Queryable, id: string, durationMs: number): Promise<void> {
+    await exec.query(
+      `UPDATE meeting SET status='uploaded', duration_ms=$2, error=NULL WHERE id=$1 AND status='recording'`,
+      [id, durationMs],
+    );
+  }
+
+  /**
+   * 라이브 캡처 실패 — 종결자는 API 하나다. 워커의 get_stop_requested는 job.error를
+   * 보지 않으므로 error만 넣으면 워커가 계속 tail한다 (설계 §7). markCancelled와 같은 모양이지만
+   * 호출 이유(운영자 취소 vs 디스크 I/O 실패)가 달라 별도 메서드로 둔다.
+   */
+  async markFailed(exec: Queryable, id: string, error: object): Promise<void> {
+    await exec.query(
+      `UPDATE meeting SET status='failed', error=$2::jsonb WHERE id=$1`,
+      [id, JSON.stringify(error)],
+    );
+  }
+
+  /** 라이브 첫 청크가 도착한 시각을 녹음 시각으로 찍는다. status 가드는 append가 이미
+   *  recording을 잠그고 확인한 뒤 부르므로 방어적 성격이다. */
+  async setRecordedAt(exec: Queryable, id: string): Promise<void> {
+    await exec.query(
+      `UPDATE meeting SET recorded_at=now() WHERE id=$1 AND status='recording'`,
+      [id],
     );
   }
 

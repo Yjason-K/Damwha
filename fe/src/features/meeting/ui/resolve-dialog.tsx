@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { isDemoBlocked } from "@/shared/api/demo-read-only";
 import { isApiError } from "@/shared/api/client";
 import { Avatar } from "@/shared/ui/avatar";
 import { Badge } from "@/shared/ui/badge";
@@ -218,12 +219,14 @@ function ResolveRow({
       {
         onSuccess: () =>
           toast({ variant: "success", title: `${label} 화자를 연결했어요.` }),
-        onError: (err) =>
+        onError: (err) => {
+          if (isDemoBlocked(err)) return;
           toast({
             variant: "error",
             title: "화자 연결에 실패했어요.",
             description: isApiError(err) ? err.message : undefined,
-          }),
+          });
+        },
       },
     );
   };

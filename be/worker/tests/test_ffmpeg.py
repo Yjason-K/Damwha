@@ -112,3 +112,18 @@ def test_normalize_failure_is_permanent(tmp_path):
     with pytest.raises(WorkerError) as ei:
         ffmpeg.normalize("/in/a", str(tmp_path / "n.wav"), runner=runner)
     assert ei.value.kind.value == "PERMANENT"
+
+
+def test_normalize_repairs_a_streaming_wav_header_before_ffmpeg(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        ffmpeg, "repair_streaming_header", lambda path: calls.append(("repair", path)) or True
+    )
+    monkeypatch.setattr(ffmpeg, "probe", lambda path: ffmpeg.ProbeResult(1))
+    ffmpeg.normalize(
+        "/in/live.wav",
+        str(tmp_path / "n.flac"),
+        runner=lambda cmd: calls.append(("ffmpeg", cmd)) or ok_proc(),
+    )
+    assert calls[0] == ("repair", "/in/live.wav")
+    assert calls[1][0] == "ffmpeg"
