@@ -14,7 +14,8 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "verify:worklet": "node scripts/verify-pcm-worklet.mjs"
   },
   "dependencies": {
     "@damwha/contracts": "workspace:*",

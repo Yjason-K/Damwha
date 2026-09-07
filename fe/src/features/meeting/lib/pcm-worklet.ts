@@ -1,14 +1,16 @@
 /// <reference lib="webworker" />
 /**
- * 오디오 스레드에서 도는 프로세서. 512샘플 int16 프레임을 메인 스레드로 보낸다.
+ * 오디오 스레드에서 도는 프로세서. 512샘플 int16 프레임을 메인 스레드로 보내고,
+ * flush 명령에 자투리(0–511샘플)를 실어 보낸 뒤 종료를 알린다 (설계 §7).
  *
  * 여기서 하는 일을 최소로 유지한다 — 이 콜백이 늦으면 오디오가 끊긴다. 청크 묶기와
  * 업로드는 메인 스레드가 한다.
  *
- * addModule()로 로드되는 별도 파일이라 앱 번들의 import를 쓸 수 없다. 상수를 복제하되
- * pcm-convert.ts와 같은 값이어야 한다.
+ * `?worker&url`로 로드되지만(설계 §8) worker 빌드가 import를 번들하므로, 상수·타입은
+ * pcm-convert.ts / pcm-worklet-protocol.ts를 그대로 import해 복제하지 않는다.
  */
-const FRAME_SAMPLES = 512;
+import { FrameAccumulator } from "./pcm-convert";
+import type { WorkletCommand, WorkletEvent } from "./pcm-worklet-protocol";
 
 /**
  * lib.dom.d.ts에는 AudioWorkletGlobalScope가 없다 — registerProcessor()도
@@ -36,31 +38,53 @@ declare function registerProcessor(
 ): void;
 
 class PcmProcessor extends AudioWorkletProcessor {
-  private rest = new Float32Array(0);
+  private readonly frames = new FrameAccumulator();
+  private began = false;
+  private finished = false;
+  private readySent = false;
+
+  constructor() {
+    super();
+    this.port.onmessage = (e: MessageEvent<WorkletCommand>) => {
+      const message = e.data;
+      if (message.type === "begin" && !this.began) {
+        this.began = true;
+        this.port.postMessage({ type: "begun" } satisfies WorkletEvent);
+      } else if (message.type === "flush" && !this.finished) {
+        this.finished = true;
+        const tail = this.frames.flush();
+        if (tail.length)
+          this.port.postMessage(
+            { type: "pcm", pcm: tail.buffer } satisfies WorkletEvent,
+            [tail.buffer],
+          );
+        this.port.postMessage({ type: "flushed" } satisfies WorkletEvent);
+      }
+    };
+  }
 
   process(inputs: Float32Array[][]): boolean {
     const input = inputs[0];
     if (!input || input.length === 0) return true;
+    // 무음이라도 유효한 입력이다 — begin 전에도 ready는 보낸다 (설계 §6).
+    if (!this.readySent) {
+      this.readySent = true;
+      this.port.postMessage({ type: "ready" } satisfies WorkletEvent);
+    }
+    // begin 전/flush 후에는 누적하지 않는다 (설계 §7).
+    if (!this.began || this.finished) return true;
     // 채널이 여럿이면 downmix한다. 첫 채널만 조용히 쓰면 정본이 달라진다 (설계 §2.3).
     const n = input[0].length;
     const mono = new Float32Array(n);
     for (let ch = 0; ch < input.length; ch += 1) {
       for (let i = 0; i < n; i += 1) mono[i] += input[ch][i] / input.length;
     }
-    const buf = new Float32Array(this.rest.length + mono.length);
-    buf.set(this.rest);
-    buf.set(mono, this.rest.length);
-    let at = 0;
-    while (buf.length - at >= FRAME_SAMPLES) {
-      const f = new Int16Array(FRAME_SAMPLES);
-      for (let i = 0; i < FRAME_SAMPLES; i += 1) {
-        const s = Math.max(-1, Math.min(1, buf[at + i]));
-        f[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-      }
-      this.port.postMessage(f.buffer, [f.buffer]);
-      at += FRAME_SAMPLES;
+    for (const frame of this.frames.push(mono)) {
+      this.port.postMessage(
+        { type: "pcm", pcm: frame.buffer } satisfies WorkletEvent,
+        [frame.buffer],
+      );
     }
-    this.rest = buf.slice(at);
     return true;
   }
 }

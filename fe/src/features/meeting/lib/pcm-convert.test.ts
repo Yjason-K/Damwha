@@ -30,16 +30,24 @@ describe("FrameAccumulator", () => {
       new FrameAccumulator().push(new Float32Array(FRAME_SAMPLES * 3)),
     ).toHaveLength(3);
   });
+
+  it("flush drains and empties the remaining rest as int16", () => {
+    const acc = new FrameAccumulator();
+    acc.push(new Float32Array(100).fill(1)); // 512 미만이라 rest에 남는다
+    const tail = acc.flush();
+    expect(Array.from(tail)).toEqual(Array(100).fill(32767));
+    expect(acc.flush().length).toBe(0);
+  });
 });
 
 describe("ChunkAccumulator", () => {
   it("emits a chunk every 32 frames", () => {
     const acc = new ChunkAccumulator();
     const frame = new Int16Array(FRAME_SAMPLES);
-    for (let i = 0; i < 31; i += 1) expect(acc.push(frame)).toBeNull();
-    const chunk = acc.push(frame);
-    expect(chunk).not.toBeNull();
-    expect(chunk!.byteLength).toBe(CHUNK_BYTES);
+    for (let i = 0; i < 31; i += 1) expect(acc.push(frame)).toEqual([]);
+    const chunks = acc.push(frame);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].byteLength).toBe(CHUNK_BYTES);
   });
 
   it("flush returns the partial tail without padding it", () => {
@@ -49,5 +57,16 @@ describe("ChunkAccumulator", () => {
     // 정본 WAV는 절대 자르지도 늘리지도 않는다 — 512샘플이 안 되는 꼬리도 그대로 (설계 §4.5)
     expect(tail.byteLength).toBe(1024);
     expect(acc.flush().byteLength).toBe(0);
+  });
+
+  it("keeps a 137-sample final tail without padding", () => {
+    const chunks = new ChunkAccumulator();
+    const input = new Int16Array(16384 + 137).fill(123);
+    const full = chunks.push(input);
+    expect(full.map((x) => x.byteLength)).toEqual([32768]);
+    const tail = chunks.flush();
+    expect(tail.byteLength).toBe(274);
+    expect(new Int16Array(tail.buffer)).toEqual(new Int16Array(137).fill(123));
+    expect(chunks.flush().byteLength).toBe(0);
   });
 });

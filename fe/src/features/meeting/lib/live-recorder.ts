@@ -259,8 +259,10 @@ export class LiveRecorder {
         // elapsedMs는 이 프레임이 도착한 지금 잰다 — POST 시각까지 미루면 네트워크
         // 지연·백로그가 그대로 캡처 경과에 섞인다 (설계 §3.3.2, review finding 4).
         this.lastCaptureElapsedMs = this.elapsedMs();
-        const chunk = this.chunks.push(new Int16Array(e.data));
-        if (chunk) this.enqueue(chunk, this.lastCaptureElapsedMs);
+        // push는 이제 완전 청크 배열을 준다(입력 길이와 무관 — 설계 §7); 전부 enqueue한다.
+        for (const chunk of this.chunks.push(new Int16Array(e.data))) {
+          this.enqueue(chunk, this.lastCaptureElapsedMs);
+        }
       };
       ctx.createMediaStreamSource(this.stream).connect(node);
       // getUserMedia의 권한 프롬프트 대기를 시계에서 뺀다 — 그 전에 시작하면 origin당
