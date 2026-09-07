@@ -23,7 +23,9 @@ _SUMMARY_SYSTEM_PROMPT = (
     "array of short phrases naming what was discussed. segments splits the "
     "conversation into consecutive chunks; each segment has exactly these fields: "
     "start_index, end_index, title, bullets. start_index and end_index must be "
-    "index values from the supplied utterances, in the order given. "
+    "index values from the supplied utterances, in the order given. Segments must "
+    "not overlap: each segment starts after the previous one ends, and no index "
+    "appears in two segments. "
     "bullets are short sentences restating what was said in that segment. Do not "
     "output timestamps. Do not speculate. Write topics, title, and bullets in the "
     "language of the transcript."
@@ -47,22 +49,25 @@ class _LlmSummaryResponse(BaseModel):
     segments: list[_LlmSegment] = []
 
 
-class _InvalidIndex(ValueError):
-    """모델이 공급된 범위 밖 인덱스를 인용했다."""
-
-
 def _map_indexes(parsed: _LlmSummaryResponse, ids: list[str]) -> SummaryResponse:
+    """모델이 지목한 인덱스를 실제 id로 옮긴다. 범위 밖은 **자른다**.
+
+    한때 여기서 PERMANENT로 거절했는데, mtg_16(발화 4개 · 그중 하나가 녹음의 72%)이
+    그 판단을 뒤집었다: 모델은 줄 수가 아니라 내용으로 나누기 때문에 발화가 몇 개
+    없고 내용이 길면 "index 10" 같은 없는 경계를 지목한다. 같은 회의를 네 번 돌려
+    네 번 다 같은 자리에서 죽었다 — 재시도로 넘어갈 성질이 아니다. 경계 하나 때문에
+    제목·불릿까지 통째로 잃는 대신 범위 안으로 접는다. 구간의 실제 시간은 어차피
+    _resolve_segments가 DB 행에서 파생시키므로, 접힌 경계도 없는 시간을 만들지 않는다.
+    """
+    last = len(ids)
     segments: list[SummarySegmentCandidate] = []
     for seg in parsed.segments:
-        for index in (seg.start_index, seg.end_index):
-            if not 1 <= index <= len(ids):
-                raise _InvalidIndex(
-                    f"segment cites index {index}, but valid indexes are 1..{len(ids)}"
-                )
+        start = min(max(seg.start_index, 1), last)
+        end = min(max(seg.end_index, 1), last)
         segments.append(
             SummarySegmentCandidate(
-                start_utterance_id=ids[seg.start_index - 1],
-                end_utterance_id=ids[seg.end_index - 1],
+                start_utterance_id=ids[start - 1],
+                end_utterance_id=ids[end - 1],
                 title=seg.title,
                 bullets=list(seg.bullets),
             )
@@ -101,6 +106,11 @@ def _render_transcript(utterances: list[dict[str, Any]]) -> str:
         text = " ".join(str(utterance.get("text") or "").split())
         speaker = next((utterance[k] for k in _SPEAKER_KEYS if utterance.get(k)), None)
         lines.append(f"{index} {speaker}: {text}" if speaker else f"{index}: {text}")
+    # 고를 수 있는 인덱스를 마지막에 못 박는다 — 범위를 말해 주지 않으면 발화가
+    # 4개뿐인 회의에서도 10을 지목한다(mtg_16). 발화 줄 **뒤에** 붙여 `<index> ...`
+    # 줄 번호와 인덱스가 어긋나지 않게 한다.
+    lines.append("")
+    lines.append(f"Valid utterance indexes are 1..{len(utterances)}.")
     return "\n".join(lines)
 
 
@@ -137,7 +147,7 @@ class SummaryClient:
         try:
             parsed = _LlmSummaryResponse.model_validate(json.loads(_strip_code_fence(content)))
             return _map_indexes(parsed, ids)
-        except (json.JSONDecodeError, ValidationError, _InvalidIndex) as exc:
+        except (json.JSONDecodeError, ValidationError) as exc:
             raise WorkerError(LLM_INVALID_RESPONSE, str(exc), ErrorKind.PERMANENT) from exc
 
     def _request(self, *, model: str, messages: list[dict[str, str]]) -> tuple[str, str | None]:

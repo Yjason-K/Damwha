@@ -122,7 +122,10 @@ def test_client_sends_the_lens_extraction_contract_prompt_and_utterances(httpx_m
         # 프롬프트에 없는 id를 지어낸다 (mtg_1의 utt_2658)
         {
             "role": "user",
-            "content": "Speakers:\nspk_1 Ada\n\n1 Ada: I will send it Friday.",
+            "content": (
+                "Speakers:\nspk_1 Ada\n\n1 Ada: I will send it Friday."
+                "\n\nValid utterance indexes are 1..1."
+            ),
         },
     ]
 
@@ -151,7 +154,7 @@ def test_client_prompt_omits_ids_and_timestamps_the_model_cannot_use(httpx_mock)
     # 이름 없는 화자는 명단에 id만 실리고 본문에서도 id가 화자 자리를 대신한다
     assert roster.splitlines() == ["Speakers:", "spk_1 Ada", "spk_2"]
     # 발화 내부 개행은 접는다 — 한 utterance는 한 줄
-    assert transcript.splitlines() == ["1 Ada: 다음 주까지 정리할게요", "2 spk_2: 네"]
+    assert transcript.splitlines()[:2] == ["1 Ada: 다음 주까지 정리할게요", "2 spk_2: 네"]
     assert "1234567" not in sent and "start_ms" not in sent
     # spk id는 명단에만 — 본문에 발화마다 반복되지 않는다
     assert "spk_1" not in transcript
@@ -183,7 +186,7 @@ def test_client_omits_the_speakers_section_when_no_utterance_has_a_speaker(httpx
     )
 
     sent = json.loads(httpx_mock.get_request().content)["messages"][1]["content"]
-    assert sent == "1: 가"
+    assert sent == "1: 가\n\nValid utterance indexes are 1..1."
 
 
 def test_client_treats_a_timeout_as_permanent(httpx_mock):
@@ -328,19 +331,79 @@ def test_client_maps_indexes_back_to_real_utterance_ids(httpx_mock):
     assert items[0].assignee_speaker_id is None and items[0].due_at is None
 
 
-def test_client_rejects_an_out_of_range_index_as_permanent(httpx_mock):
-    # 인덱스 방식에서 "지어낸 utterance"는 범위 밖 정수로 나타난다 — 즉시 PERMANENT
+def test_client_drops_the_item_whose_primary_index_is_out_of_range(httpx_mock):
+    """근거로 쓸 수 없는 항목만 버리고 나머지는 살린다.
+
+    렌즈 항목의 primary는 "이 발화가 근거다"라는 지목이라, 요약 구간처럼 범위 안으로
+    접으면 안 된다 — 엉뚱한 발화에 주장을 붙이는 셈이고 UI의 근거 점프가 관계없는
+    곳으로 간다. 그렇다고 run 전체를 죽이면 멀쩡한 항목까지 잃는다(mtg_1의 job_3에서
+    날짜 6개가 항목 10건을 날린 것과 같은 all-or-nothing 문제). 그 항목만 버린다.
+    """
     content = json.dumps(
-        {"items": [{"kind": "action", "text": "t", "primary_index": 99, "supporting_indexes": []}]}
+        {
+            "items": [
+                {"kind": "action", "text": "버려질 것", "primary_index": 99},
+                {"kind": "decision", "text": "살아남을 것", "primary_index": 1},
+            ]
+        }
     )
     httpx_mock.add_response(json={"choices": [{"message": {"content": content}}]})
 
-    with pytest.raises(WorkerError) as exc:
+    items = LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
+        model="job-model", utterances=[{"id": "utt_1", "text": "가"}]
+    )
+    assert [item.text for item in items] == ["살아남을 것"]
+    assert items[0].primary_utterance_id == "utt_1"
+
+
+def test_client_drops_only_the_out_of_range_supporting_indexes(httpx_mock):
+    """보조 근거는 선택 항목이다 — 하나가 범위 밖이라고 항목을 버리지 않는다."""
+    content = json.dumps(
+        {
+            "items": [
+                {
+                    "kind": "promise",
+                    "text": "내일까지 보고서",
+                    "primary_index": 1,
+                    "supporting_indexes": [2, 99, 0],
+                }
+            ]
+        }
+    )
+    httpx_mock.add_response(json={"choices": [{"message": {"content": content}}]})
+
+    items = LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
+        model="job-model",
+        utterances=[{"id": "utt_1", "text": "가"}, {"id": "utt_2", "text": "나"}],
+    )
+    assert items[0].primary_utterance_id == "utt_1"
+    assert items[0].supporting_utterance_ids == ["utt_2"]
+
+
+def test_client_returns_no_items_when_every_index_is_out_of_range(httpx_mock):
+    """전부 버려져도 실패가 아니다 — 0건 추출은 정상 결과다(렌즈 섹션이 사라진다)."""
+    content = json.dumps({"items": [{"kind": "action", "text": "t", "primary_index": 99}]})
+    httpx_mock.add_response(json={"choices": [{"message": {"content": content}}]})
+
+    assert (
         LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
             model="job-model", utterances=[{"id": "utt_1", "text": "가"}]
         )
-    assert exc.value.kind is ErrorKind.PERMANENT
-    assert "99" in exc.value.message and "1..1" in exc.value.message
+        == []
+    )
+
+
+def test_client_prompt_states_the_index_range(httpx_mock):
+    """고를 수 있는 인덱스를 못 박는다 — 요약 쪽(mtg_16)에서 없는 인덱스를 지목한 것과
+    같은 실패를 애초에 줄인다."""
+    httpx_mock.add_response(json={"choices": [{"message": {"content": '{"items": []}'}}]})
+
+    LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
+        model="job-model",
+        utterances=[{"id": "utt_1", "text": "가"}, {"id": "utt_2", "text": "나"}],
+    )
+    sent = json.loads(httpx_mock.get_requests()[0].content)["messages"][1]["content"]
+    assert "1..2" in sent
 
 
 def test_client_drops_an_unparseable_due_at_but_keeps_the_item(httpx_mock):
@@ -424,7 +487,10 @@ def test_client_puts_the_meeting_date_at_the_top_of_the_prompt(httpx_mock):
     )
 
     user = json.loads(httpx_mock.get_request().content)["messages"][1]["content"]
-    assert user == "Meeting date: 2026-09-02\n\nSpeakers:\nspk_1 Ada\n\n1 Ada: 오늘까지 보낼게요."
+    assert user == (
+        "Meeting date: 2026-09-02\n\nSpeakers:\nspk_1 Ada\n\n1 Ada: 오늘까지 보낼게요."
+        "\n\nValid utterance indexes are 1..1."
+    )
 
 
 def test_client_omits_the_meeting_date_line_when_it_is_unknown(httpx_mock):

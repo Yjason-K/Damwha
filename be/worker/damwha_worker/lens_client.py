@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
@@ -12,6 +13,8 @@ from .errors import (
     ErrorKind,
     WorkerError,
 )
+
+log = logging.getLogger("damwha_worker")
 
 _EXTRACTION_SYSTEM_PROMPT = (
     "You are given a meeting transcript. The Speakers section lists one speaker per "
@@ -102,15 +105,33 @@ class _LlmLensResponse(BaseModel):
 
 
 def _map_indexes(parsed: _LlmLensResponse, ids: list[str]) -> list[LensCandidate]:
+    """모델이 지목한 인덱스를 실제 id로 옮긴다. 범위 밖은 **그 항목만** 버린다.
+
+    한때 범위 밖 인덱스 하나가 추출 run 전체를 PERMANENT로 죽였다. 두 가지가 그
+    판단을 뒤집었다:
+
+    * 요약 쪽에서 같은 실패가 실제로 났다 — mtg_16(발화 4개)에서 모델이 "index 10"을
+      지목했고 네 번 재시도해서 네 번 다 같은 자리에서 죽었다. 모델은 줄 수가 아니라
+      내용으로 나누므로, 발화가 몇 개 없고 내용이 길면 이 어긋남은 구조적이다.
+    * all-or-nothing은 이 파일이 이미 한 번 물린 함정이다 — mtg_1의 job_3에서 파싱
+      안 되는 날짜 6개가 멀쩡한 항목 10건을 통째로 날렸고, due_at은 그래서 항목 단위
+      관대화로 바뀌었다. 인덱스도 같은 모양의 문제다.
+
+    다만 요약처럼 **범위 안으로 접지는 않는다**. 렌즈의 primary는 "이 발화가 근거다"
+    라는 지목이라, 접으면 엉뚱한 발화에 주장을 붙이게 되고 UI의 근거 점프가 관계없는
+    곳으로 간다. 근거로 쓸 수 없으면 그 항목을 버리는 게 맞다. supporting은 선택
+    항목이라(기본값 []) 범위 밖인 것만 빼고 항목은 살린다.
+    """
     candidates: list[LensCandidate] = []
     for item in parsed.items:
-        for index in (item.primary_index, *item.supporting_indexes):
-            if not 1 <= index <= len(ids):
-                raise WorkerError(
-                    LLM_INVALID_RESPONSE,
-                    f"item cites index {index}, but valid indexes are 1..{len(ids)}",
-                    ErrorKind.PERMANENT,
-                )
+        if not 1 <= item.primary_index <= len(ids):
+            log.warning(
+                "lens item dropped: primary_index %s is outside 1..%s",
+                item.primary_index,
+                len(ids),
+            )
+            continue
+        supporting = [i for i in item.supporting_indexes if 1 <= i <= len(ids)]
         candidates.append(
             LensCandidate(
                 kind=item.kind,
@@ -118,7 +139,7 @@ def _map_indexes(parsed: _LlmLensResponse, ids: list[str]) -> list[LensCandidate
                 assignee_speaker_id=item.assignee_speaker_id,
                 due_at=item.due_at,
                 primary_utterance_id=ids[item.primary_index - 1],
-                supporting_utterance_ids=[ids[i - 1] for i in item.supporting_indexes],
+                supporting_utterance_ids=[ids[i - 1] for i in supporting],
             )
         )
     return candidates
@@ -145,6 +166,10 @@ def _render_transcript(utterances: list[dict[str, Any]]) -> str:
         text = " ".join(str(utterance.get("text") or "").split())
         speaker = next((utterance[k] for k in _SPEAKER_KEYS if utterance.get(k)), None)
         lines.append(f"{index} {speaker}: {text}" if speaker else f"{index}: {text}")
+    # 고를 수 있는 인덱스를 마지막에 못 박는다 — 범위를 말해 주지 않으면 모델이 없는
+    # 번호를 지목한다(요약 쪽 mtg_16). 발화 줄 **뒤에** 붙여 줄 번호와 어긋나지 않게 한다.
+    lines.append("")
+    lines.append(f"Valid utterance indexes are 1..{len(utterances)}.")
     return "\n".join(lines)
 
 

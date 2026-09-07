@@ -309,17 +309,20 @@ def test_pipeline_rejects_segment_with_unknown_utterance(conn, summary_job):
     assert _one(conn, "SELECT segments FROM meeting_summary")["segments"] == []
 
 
-def test_pipeline_rejects_segment_with_reversed_boundaries(conn, summary_job):
+def test_pipeline_swaps_reversed_segment_boundaries(conn, summary_job):
+    """뒤집힌 경계는 되돌린다 — 모델이 시작과 끝을 바꿔 적었을 뿐 내용은 멀쩡하다."""
     job, ids = summary_job
     client = SimpleNamespace(
         summarize=lambda **_kw: _response([_segment(ids["utt_2"], ids["utt_1"])])
     )
-    with pytest.raises(WorkerError):
-        run_summarize_meeting(conn, job, _payload(job), client, worker_id="w")
-    assert _one(conn, "SELECT segments FROM meeting_summary")["segments"] == []
+    assert run_summarize_meeting(conn, job, _payload(job), client, worker_id="w") == "committed"
+    segment = _one(conn, "SELECT segments FROM meeting_summary")["segments"][0]
+    assert segment["start_utterance_id"] == ids["utt_1"]
+    assert segment["end_utterance_id"] == ids["utt_2"]
 
 
-def test_pipeline_rejects_out_of_order_segments(conn, summary_job):
+def test_pipeline_sorts_segments_returned_out_of_order(conn, summary_job):
+    """순서가 뒤바뀐 채로 와도 정렬해서 살린다 — 겹치는 게 아니라 나열이 틀린 것뿐이다."""
     job, ids = summary_job
     client = SimpleNamespace(
         summarize=lambda **_kw: _response(
@@ -329,8 +332,51 @@ def test_pipeline_rejects_out_of_order_segments(conn, summary_job):
             ]
         )
     )
-    with pytest.raises(WorkerError):
-        run_summarize_meeting(conn, job, _payload(job), client, worker_id="w")
+    assert run_summarize_meeting(conn, job, _payload(job), client, worker_id="w") == "committed"
+    segments = _one(conn, "SELECT segments FROM meeting_summary")["segments"]
+    assert [s["title"] for s in segments] == ["앞", "뒤"]
+
+
+def test_pipeline_folds_a_segment_contained_in_the_previous_one(conn, summary_job):
+    """mtg_16을 죽인 모양 그대로 — 마지막 발화를 두 구간이 나눠 가지려 한 경우.
+
+    발화가 4개뿐인데 내용은 6가지 주제였던 회의에서, 모델은 마지막 발화를 앞
+    구간의 끝이자 다음 구간의 시작으로 다시 썼다. 그 발화 안을 더 쪼갤 방법은
+    없으므로 새 구간을 만들지 않고, 잃으면 안 되는 불릿만 앞 구간에 합친다.
+    """
+    job, ids = summary_job
+    client = SimpleNamespace(
+        summarize=lambda **_kw: _response(
+            [
+                _segment(ids["utt_1"], ids["utt_2"], title="전체", bullets=("가",)),
+                _segment(ids["utt_2"], ids["utt_2"], title="뒷부분", bullets=("나", "다")),
+            ]
+        )
+    )
+    assert run_summarize_meeting(conn, job, _payload(job), client, worker_id="w") == "committed"
+    segments = _one(conn, "SELECT segments FROM meeting_summary")["segments"]
+    assert len(segments) == 1
+    assert segments[0]["title"] == "전체"
+    assert segments[0]["bullets"] == ["가", "나", "다"]
+
+
+def test_pipeline_trims_a_partially_overlapping_segment(conn, summary_job):
+    """일부만 겹치면 겹친 만큼 시작을 밀어 두 구간을 다 살린다."""
+    job, ids = summary_job
+    client = SimpleNamespace(
+        summarize=lambda **_kw: _response(
+            [
+                _segment(ids["utt_1"], ids["utt_1"], title="앞"),
+                _segment(ids["utt_1"], ids["utt_2"], title="뒤"),
+            ]
+        )
+    )
+    assert run_summarize_meeting(conn, job, _payload(job), client, worker_id="w") == "committed"
+    segments = _one(conn, "SELECT segments FROM meeting_summary")["segments"]
+    assert [(s["title"], s["start_utterance_id"]) for s in segments] == [
+        ("앞", ids["utt_1"]),
+        ("뒤", ids["utt_2"]),
+    ]
 
 
 def test_pipeline_stores_empty_summary_for_meeting_without_utterances(conn):
