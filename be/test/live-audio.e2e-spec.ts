@@ -76,6 +76,31 @@ describe('live audio append', () => {
     return app.get(StorageService).resolve(rows[0].audio_key);
   };
 
+  /**
+   * finalizeByApi를 호출자(stop·스위퍼)의 앞선 검사 없이 **직접** 때린다.
+   *
+   * stop은 job.status==='running'을 자기 분기에서 이미 거르므로, HTTP 경로만으로는 이
+   * 메서드의 소유권 가드에 닿지 못한다 — 가드 자체가 검사 대상일 때는 여기로 부른다.
+   */
+  const finalizeDirect = (meetingId: string, jobId: string, sealedBytes: number) =>
+    app.get(DatabaseService).withTransaction(async (c) => {
+      const job = await app.get(LiveRepository).lockJobById(c, jobId);
+      const meeting = await app.get(MeetingsRepository).lockById(c, meetingId);
+      return app.get(LiveService).finalizeByApi(c, job!, meeting!, sealedBytes);
+    });
+
+  const liveJobId = async (meetingId: string) => {
+    const { rows } = await db.pool.query(
+      `SELECT current_job_id FROM meeting WHERE id=$1`, [meetingId]);
+    return rows[0].current_job_id as string;
+  };
+
+  const processJobs = async (meetingId: string) => {
+    const { rows } = await db.pool.query(
+      `SELECT 1 FROM job WHERE meeting_id=$1 AND type='process_meeting'`, [meetingId]);
+    return rows.length;
+  };
+
   /** 이 회의의 live job이 가진 확정 경계. pg bigint라 문자열로 온다. */
   const committed = async (id: string) => {
     const { rows } = await db.pool.query(
@@ -543,22 +568,52 @@ describe('live audio append', () => {
     expect(rows[0].capture_error.code).toBe('device_ended');
   });
 
-  // 살아 있는 워커의 잠금을 API가 훔치지 않는다 (설계 §4.1 "봉인 + 정상 워커" 행).
-  // 봉인만 하고 물러나야 process job이 두 번 만들어지지 않는다.
-  it('the API refuses to finalize a sealed session a worker still holds', async () => {
+  /**
+   * 살아 있는 워커의 잠금을 API가 훔치지 않는다 (설계 §4.1 "봉인 + 정상 워커" 행).
+   *
+   * stop 경로만으로는 이것을 확인할 수 없다 — running은 stop 자신의 분기가 앞에서 걸러
+   * finalizeByApi에 닿지도 않는다(그 동작은 아래 'a running worker gets stopping' 이 본다).
+   * API가 worker_id를 가장하지 않는다는 것이 이 태스크의 요점이므로 가드를 직접 때린다.
+   */
+  it('finalizeByApi refuses a sealed session a worker still holds', async () => {
     const { body: m } = await start().expect(201);
-    const { rows: before } = await db.pool.query(
-      `SELECT current_job_id FROM meeting WHERE id=$1`, [m.id]);
-    await claim(before[0].current_job_id);
+    const jobId = await liveJobId(m.id);
+    await claim(jobId);
     await send(m.id, 0, chunk(1)).expect(200);
     await stop(m.id, CHUNK, CHUNK).expect(200)
       .expect((r) => expect(r.body.outcome).toBe('stopping'));
 
-    const { rows } = await db.pool.query(
-      `SELECT type FROM job WHERE meeting_id=$1 AND type='process_meeting'`, [m.id]);
-    expect(rows).toHaveLength(0);
+    // 봉인도 됐고 길이도 맞지만 그 job은 워커의 것이다 — 마무리는 그 워커의 몫이다.
+    expect(await finalizeDirect(m.id, jobId, CHUNK)).toBe(false);
+    expect(await processJobs(m.id)).toBe(0);
     const meeting = await db.pool.query(`SELECT status FROM meeting WHERE id=$1`, [m.id]);
     expect(meeting.rows[0].status).toBe('recording');
+  });
+
+  /**
+   * duration의 근거는 잠금 아래 읽은 sealed_bytes다 (설계 §4.1의 floor(sealed_bytes / 32)).
+   * 호출자가 다른 길이를 들고 오면 마무리하지 않는다 — 스위퍼는 아직 파일 크기에서 봉인
+   * 길이를 유도하므로, 그 값이 확정 경계와 어긋나면 미확정 꼬리가 정본 길이가 된다.
+   */
+  it('finalizeByApi refuses a sealed length that disagrees with the row', async () => {
+    const { body: m } = await start().expect(201);
+    await send(m.id, 0, chunk(1)).expect(200);
+    const jobId = await liveJobId(m.id);
+    // 스위퍼가 하는 일: 확정 경계에서 봉인하고 워커 없는 job을 API가 마무리한다.
+    await db.pool.query(
+      `UPDATE job SET stop_requested_at=now(), sealed_bytes=$2 WHERE id=$1`, [jobId, CHUNK]);
+
+    expect(await finalizeDirect(m.id, jobId, CHUNK * 2)).toBe(false);
+    expect(await processJobs(m.id)).toBe(0);
+    expect((await db.pool.query(`SELECT status FROM meeting WHERE id=$1`, [m.id])).rows[0].status)
+      .toBe('recording');
+
+    // 행과 같은 길이면 마무리하고, duration은 그 행의 값에서 나온다.
+    expect(await finalizeDirect(m.id, jobId, CHUNK)).toBe(true);
+    const { rows } = await db.pool.query(
+      `SELECT status, duration_ms FROM meeting WHERE id=$1`, [m.id]);
+    expect(rows[0]).toMatchObject({ status: 'uploaded', duration_ms: CHUNK / 32 });
+    expect(await processJobs(m.id)).toBe(1);
   });
 
   /**
@@ -569,31 +624,19 @@ describe('live audio append', () => {
   it('finalizeByApi refuses an unsealed session and refuses to finalize a done job twice', async () => {
     const { body: m } = await start().expect(201);
     await send(m.id, 0, chunk(1)).expect(200);
-    const finalize = (jobId: string) =>
-      app.get(DatabaseService).withTransaction(async (c) => {
-        const job = await app.get(LiveRepository).lockJobById(c, jobId);
-        const meeting = await app.get(MeetingsRepository).lockById(c, m.id);
-        return app.get(LiveService).finalizeByApi(c, job!, meeting!, CHUNK);
-      });
-    const { rows: live } = await db.pool.query(
-      `SELECT current_job_id FROM meeting WHERE id=$1`, [m.id]);
-    const jobId = live[0].current_job_id as string;
+    const jobId = await liveJobId(m.id);
 
     // 아직 봉인되지 않았다 — 끝 길이를 정한 사람이 없다.
-    expect(await finalize(jobId)).toBe(false);
-    expect((await db.pool.query(
-      `SELECT 1 FROM job WHERE meeting_id=$1 AND type='process_meeting'`, [m.id])).rows)
-      .toHaveLength(0);
+    expect(await finalizeDirect(m.id, jobId, CHUNK)).toBe(false);
+    expect(await processJobs(m.id)).toBe(0);
     expect((await db.pool.query(`SELECT status FROM meeting WHERE id=$1`, [m.id])).rows[0].status)
       .toBe('recording');
 
     // 봉인 뒤 stop이 스스로 마무리한다. 같은 job을 다시 finalize하지는 않는다.
     await stop(m.id, CHUNK, CHUNK).expect(200)
       .expect((r) => expect(r.body.outcome).toBe('finalized'));
-    expect(await finalize(jobId)).toBe(false);
-    expect((await db.pool.query(
-      `SELECT 1 FROM job WHERE meeting_id=$1 AND type='process_meeting'`, [m.id])).rows)
-      .toHaveLength(1);
+    expect(await finalizeDirect(m.id, jobId, CHUNK)).toBe(false);
+    expect(await processJobs(m.id)).toBe(1);
   });
 
   it('a running worker gets stopping, not finalized', async () => {

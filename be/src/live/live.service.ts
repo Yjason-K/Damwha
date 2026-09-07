@@ -440,6 +440,12 @@ export class LiveService {
    * 생존 조건(recording + current_job_id)을 재검증한다. 두 actor 모두 이 확인을 하므로
    * process job은 정확히 한 번만 만들어진다.
    *
+   * duration의 근거는 **잠금 아래 읽은 sealed_bytes**다 (설계 §4.1의 `floor(sealed_bytes / 32)`).
+   * 호출자가 넘긴 `sealedBytes`는 그 값과 같은지 확인하는 데만 쓰고, 다르면 마무리하지 않는다 —
+   * 스위퍼는 아직 파일 크기에서 봉인 길이를 유도하므로(live-orphan.service.ts), 그 값이 확정
+   * 경계와 어긋나는 순간 미확정 꼬리가 정본 길이가 된다. 검증한 값으로 쓰지 않으면 이 가드가
+   * 지키려던 바로 그 숫자만 검증을 비껴간다.
+   *
    * capture_error는 건드리지 않는다. 마무리하지 못하면 false — 남은 세션은 다음 스윕이 본다.
    */
   async finalizeByApi(
@@ -458,6 +464,7 @@ export class LiveService {
     const sealed = this.bigint(fresh.sealed_bytes, 'sealed_bytes');
     const committed = this.committedOf(fresh);
     if (committed !== null && committed !== sealed) return false;
+    if (sealed !== sealedBytes) return false;
     if (fresh.status === 'failed') {
       // reaper가 워커를 잃었다고 판정한 job이다. 아래 jobs.complete가 그 error를 덮어
       // 지우므로, "이 녹음은 라이브 미리보기 없이 얻어졌다"를 capture_error로 옮긴다
@@ -468,7 +475,7 @@ export class LiveService {
         message: 'the live preview worker was lost; the recording itself is intact',
       });
     }
-    await this.meetings.markUploaded(c, meeting.id, Math.floor(sealedBytes / BYTES_PER_MS));
+    await this.meetings.markUploaded(c, meeting.id, Math.floor(sealed / BYTES_PER_MS));
     const processWire = (job.payload as { process: object }).process;
     const next = await this.jobs.enqueue(c, {
       type: 'process_meeting', meetingId: meeting.id, payload: processWire,
