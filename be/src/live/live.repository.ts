@@ -119,6 +119,24 @@ export class LiveRepository {
     return rows;
   }
 
+  /**
+   * 이미 잠근 job의 producer 생존 검사 (설계 §5 ②). 후보 조회는 힌트일 뿐이라, 잠금을
+   * 얻고 나서 DB 시계로 다시 본다 — 그 사이 브라우저가 정상 append를 커밋했을 수 있다.
+   *
+   * `now()`가 아니라 `clock_timestamp()`다. `now()`는 트랜잭션 시작 시각이라 잠금 대기로
+   * 오래 멈춰 있었으면 실제 현재보다 과거를 가리킨다. 판정 기준은 잠금을 얻은 지금이다.
+   *
+   * 행이 사라졌으면 false — 없는 세션을 봉인 대상으로 삼지 않는다.
+   */
+  async isProducerExpired(exec: Queryable, jobId: string, seconds: number): Promise<boolean> {
+    const { rows } = await exec.query<{ expired: boolean }>(
+      `SELECT COALESCE(last_input_at, created_at)
+              < clock_timestamp() - ($2 || ' seconds')::interval AS expired
+       FROM job WHERE id=$1`,
+      [jobId, String(seconds)]);
+    return rows[0]?.expired ?? false;
+  }
+
   async findUtterances(exec: Queryable, meetingId: string, afterSeq: number): Promise<LiveUtteranceRow[]> {
     const { rows } = await exec.query<LiveUtteranceRow>(
       `SELECT lu.id, lu.seq, lu.start_ms, lu.end_ms, lu.text, lu.speaker_id,

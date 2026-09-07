@@ -3,6 +3,7 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import * as fs from 'fs';
 import * as path from 'path';
+import { Client } from 'pg';
 import { startTestDb, StartedTestDb } from './db';
 import { AppModule } from '../src/app.module';
 import { CAPABILITIES } from '../src/system/capabilities';
@@ -637,6 +638,161 @@ describe('live audio append', () => {
       .expect((r) => expect(r.body.outcome).toBe('finalized'));
     expect(await finalizeDirect(m.id, jobId, CHUNK)).toBe(false);
     expect(await processJobs(m.id)).toBe(1);
+  });
+
+  // ── 경합 (설계 §4.1·§4.3·§5) ──────────────────────────────────────────
+  //
+  // 순서는 전부 DB 잠금으로 강제한다. 게이트는 트랜잭션이 잠금을 쥔 채 멈추게 할 뿐이고,
+  // 누가 이기는지는 임의 sleep이 아니라 pg_locks가 확인한 실제 대기가 정한다.
+
+  /** supertest 요청은 await(=then)하기 전에는 전송되지 않는다. 경합 테스트는 상대를
+   *  기다리기 전에 요청이 이미 나가 있어야 하므로 여기서 전송을 시작한다. */
+  const fire = <T>(req: PromiseLike<T>): Promise<T> => Promise.resolve(req);
+
+  /** 트랜잭션 안에서 잠금을 쥔 채 멈추게 하는 게이트. */
+  const gate = () => {
+    let arrive!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>((r) => { arrive = r; });
+    const open = new Promise<void>((r) => { release = r; });
+    return { reached, arrive, release, open };
+  };
+
+  /** 별도 커넥션이 job 행을 잠근 채 fn을 돌린다. 실패해도 finally에서 반드시 반납한다. */
+  const withBarrier = async <T>(jobId: string, fn: (barrier: Client) => Promise<T>): Promise<T> => {
+    const barrier = new Client({ connectionString: db.url });
+    await barrier.connect();
+    try {
+      await barrier.query('BEGIN');
+      await barrier.query(`SELECT id FROM job WHERE id=$1 FOR UPDATE`, [jobId]);
+      return await fn(barrier);
+    } finally {
+      await barrier.query('ROLLBACK').catch(() => undefined);
+      await barrier.end();
+    }
+  };
+
+  /** pg_locks가 실제 대기를 보고할 때까지 기다린다. sleep이 아니라 DB가 판정한다. */
+  const awaitWaiters = async (n: number) => {
+    const deadline = Date.now() + 15000;
+    for (;;) {
+      const { rows } = await db.pool.query(
+        `SELECT count(DISTINCT pid)::int AS n FROM pg_locks WHERE NOT granted`);
+      if (rows[0].n >= n) return;
+      if (Date.now() > deadline) throw new Error(`timed out waiting for ${n} blocked backend(s)`);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  };
+
+  // queued API finalize ↔ claim, ①: stop이 job 행을 먼저 잠갔다. claim은 SKIP LOCKED라
+  // 기다리지 않고 건너뛴다 — 워커가 봉인 중인 세션을 가로채 두 종결자가 생기지 않는다.
+  it('a claim skips the job row a stop is holding, and the stop finalizes exactly once', async () => {
+    const { body: m } = await start().expect(201);
+    await send(m.id, 0, chunk(1)).expect(200);
+    const live = app.get(LiveRepository);
+    const realSeal = live.seal.bind(live);
+    const g = gate();
+    jest.spyOn(live, 'seal').mockImplementationOnce(async (exec, id, bytes) => {
+      g.arrive();          // job 행을 잠근 채 멈춘다
+      await g.open;
+      return realSeal(exec, id, bytes);
+    });
+
+    const stopping = fire(stop(m.id, CHUNK, CHUNK));
+    await g.reached;
+    const claimed = await app.get(JobsRepository).claim(db.pool, 'w1');
+    expect(claimed).toBeNull();      // 잠긴 행을 건너뛰었다는 증거
+    g.release();
+
+    const res = await stopping;
+    expect(res.status).toBe(200);
+    expect(res.body.outcome).toBe('finalized');
+    expect(await processJobs(m.id)).toBe(1);
+  });
+
+  // queued API finalize ↔ claim, ②: claim이 먼저 commit했다. 잠금을 기다리던 stop은
+  // 잠근 뒤 다시 읽은 행에서 running을 보고 워커에게 인계한다 — API는 finalize하지 않는다.
+  it('a stop that waited behind a claim hands the sealed session to the worker', async () => {
+    const { body: m } = await start().expect(201);
+    await send(m.id, 0, chunk(1)).expect(200);
+    const jobId = await liveJobId(m.id);
+
+    await withBarrier(jobId, async (barrier) => {
+      const stopping = fire(stop(m.id, CHUNK, CHUNK));
+      await awaitWaiters(1);         // stop이 job 행에서 대기 중이다
+      const claimed = await app.get(JobsRepository).claim(barrier, 'w1');
+      expect(claimed?.id).toBe(jobId);
+      await barrier.query('COMMIT');
+
+      const res = await stopping;
+      expect(res.status).toBe(200);
+      expect(res.body.outcome).toBe('stopping');
+    });
+
+    expect(await processJobs(m.id)).toBe(0);   // 워커의 몫이다 — process job은 아직 없다
+    const { rows } = await db.pool.query(
+      `SELECT status, locked_by, sealed_bytes FROM job WHERE id=$1`, [jobId]);
+    expect(rows[0].status).toBe('running');
+    expect(rows[0].locked_by).toBe('w1');
+    expect(Number(rows[0].sealed_bytes)).toBe(CHUNK);
+  });
+
+  // cancel ↔ append, ①: cancel이 job → meeting을 먼저 잠갔다. append는 그 행에서 기다린
+  // 뒤 409로 거절된다 — deadlock도 500도 아니고, 파일은 한 바이트도 자라지 않는다.
+  it('an append that waited behind a cancel is refused and never grows the file', async () => {
+    const { body: m } = await start().expect(201);
+    await send(m.id, 0, chunk(1)).expect(200);
+    const before = fs.statSync(await audioPath(m.id)).size;
+    const meetingsRepo = app.get(MeetingsRepository);
+    const realCancel = meetingsRepo.markCancelled.bind(meetingsRepo);
+    const g = gate();
+    jest.spyOn(meetingsRepo, 'markCancelled').mockImplementationOnce(async (exec, id, err) => {
+      g.arrive();          // job과 meeting을 모두 잠근 상태다
+      await g.open;
+      return realCancel(exec, id, err);
+    });
+
+    const cancelling = fire(request(srv()).post(`/meetings/${m.id}/cancel`).send());
+    await g.reached;
+    const appending = fire(send(m.id, CHUNK, chunk(2)));
+    await awaitWaiters(1);           // append가 job 행에서 대기 중이다
+    g.release();
+
+    const [c, a] = await Promise.all([cancelling, appending]);
+    expect(c.status).toBe(200);
+    expect(a.status).toBe(409);
+    expect(fs.statSync(await audioPath(m.id)).size).toBe(before);
+    expect(await committed(m.id)).toBe(CHUNK);
+  });
+
+  // cancel ↔ append, ②: append가 먼저 잠갔다. cancel은 기다렸다가 그 청크를 확정한
+  // 세션을 닫는다. 그 뒤로는 append가 거절되고 파일도 더는 자라지 않는다.
+  it('a cancel that waited behind an append closes the session and stops the growth', async () => {
+    const { body: m } = await start().expect(201);
+    await send(m.id, 0, chunk(1)).expect(200);
+    const live = app.get(LiveRepository);
+    const realCommit = live.setCommitted.bind(live);
+    const g = gate();
+    jest.spyOn(live, 'setCommitted').mockImplementationOnce(async (exec, id, bytes) => {
+      g.arrive();          // job 행을 잠근 채 멈춘다
+      await g.open;
+      return realCommit(exec, id, bytes);
+    });
+
+    const appending = fire(send(m.id, CHUNK, chunk(2)));
+    await g.reached;
+    const cancelling = fire(request(srv()).post(`/meetings/${m.id}/cancel`).send());
+    await awaitWaiters(1);           // cancel이 job 행에서 대기 중이다
+    g.release();
+
+    const [a, c] = await Promise.all([appending, cancelling]);
+    expect(a.status).toBe(200);
+    expect(c.status).toBe(200);
+    const grown = fs.statSync(await audioPath(m.id)).size;
+    expect(grown).toBe(44 + CHUNK * 2);
+
+    await send(m.id, CHUNK * 2, chunk(3)).expect(409);
+    expect(fs.statSync(await audioPath(m.id)).size).toBe(grown);
   });
 
   it('a running worker gets stopping, not finalized', async () => {
