@@ -66,7 +66,7 @@ def _shutdown_abort_hook(register_abort, shutdown_event):
     return _abort_hook(register_abort, shutdown_event.set if shutdown_event is not None else None)
 
 
-def _default_live_source(payload, storage, sealed_box):
+def _default_live_source(payload, storage, state_box):
     """payload의 source로 구현체를 고른다.
 
     'browser'가 유일하게 동작하는 경로다 — API가 쓰는 파일을 따라 읽는다.
@@ -74,7 +74,7 @@ def _default_live_source(payload, storage, sealed_box):
     'mic'은 계약에 자리만 남아 있고 **여기서 즉시 거절한다.** 캡처를 브라우저로 옮긴 뒤로
     mic 세션은 조용히 틀린 결과를 만든다: API는 브라우저가 보낸 바이트를 파일에 쓰고 워커는
     이 Mac의 마이크를 전사하므로 정본과 미리보기가 서로 다른 소리가 되고, MicSource는
-    sealed_bytes를 보지 않으므로 stop 뒤에도 max_minutes(4시간)까지 돈다 — 그동안
+    봉인 경계를 보지 않으므로 stop 뒤에도 max_minutes(4시간)까지 돈다 — 그동안
     meeting_single_recording_idx가 다음 녹음을 전부 막는다. 시작조차 못 하는 편이
     네 시간 뒤에 알게 되는 것보다 낫다.
 
@@ -85,7 +85,9 @@ def _default_live_source(payload, storage, sealed_box):
 
         return TailSource(
             storage.resolve(payload.audio_key),
-            sealed_bytes=lambda: sealed_box["bytes"],
+            # 소스 스레드는 이 자리를 읽기만 한다 — 루프가 1초마다 스냅샷을 통째로
+            # 교체하므로 committed와 sealed가 서로 다른 시점의 값으로 섞이지 않는다.
+            input_state=lambda: state_box["state"],
         )
     raise WorkerError(
         AUDIO_DEVICE_FAILED,
@@ -187,13 +189,14 @@ def handle_job(
                     shutdown_event=shutdown_event,
                 )
         if job["type"] == "live_session":
-            # 소유권 상실은 루프가 1초마다 직접 읽는다(get_stop_requested → 'lost') —
+            # 소유권 상실은 루프가 1초마다 직접 읽는다(get_live_input_state → 'lost') —
             # process_meeting의 shutdown 훅은 걸지 않는다. shutdown_event는 루프가 stop으로 다룬다.
             live_models = build_live_models()
             # source(TailSource)와 run_live_session이 같은 dict를 봐야 한다 — 소스는
-            # 생성 시점에 클로저로 쥐고, 루프는 매 폴링마다 이 자리에 최신 sealed_bytes를 쓴다.
-            sealed_box = {"bytes": None}
-            source = build_live_source(payload, storage, sealed_box)
+            # 생성 시점에 클로저로 쥐고, 루프는 매 폴링마다 이 자리에 최신 스냅샷을 놓는다.
+            # 첫 스냅샷은 run_live_session이 스스로 채운다.
+            state_box = {"state": db.LiveInputState(None, 0, None)}
+            source = build_live_source(payload, storage, state_box)
             return run_live_session(
                 conn,
                 job,
@@ -204,7 +207,7 @@ def handle_job(
                 worker_id=worker_id,
                 shutdown_event=shutdown_event,
                 max_minutes=live_max_minutes,
-                sealed_box=sealed_box,
+                state_box=state_box,
             )
         raise ValueError(f"unknown job type {job['type']}")
     except ShutdownRequested:

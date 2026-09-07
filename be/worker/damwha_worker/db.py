@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -992,26 +994,48 @@ def persist_enroll(
 # ── 라이브 세션 (설계 §4·§5) ─────────────────────────────────────────────
 
 
-def get_stop_requested(conn, job_id: str, worker_id: str) -> tuple[str | None, int | None]:
-    """루프가 1초마다 읽는 종료 신호와 봉인 길이.
+@dataclass(frozen=True)
+class LiveInputState:
+    """이 세션의 입력 경계 스냅샷. 읽기 스레드에 통째로 교체해 건네므로 불변이다.
 
-    ('stop', sealed_bytes) = API가 봉인을 끝냈다. 워커는 그 바이트까지 읽고 finalize한다.
-    ('lost', None) = 소유권 상실 (cancel·reaper). (None, None) = 계속.
+    signal: 'stop' = API가 봉인을 끝냈다. 'lost' = 소유권 상실(cancel·reaper). None = 계속.
+    committed_bytes: fdatasync 뒤 DB에 커밋된 연속 prefix. 읽기 상한이다 (설계 §3.5).
+    sealed_bytes: 그 prefix가 최종 길이로 확정됐다는 표시. EOF의 유일한 근거다.
+    """
 
-    둘을 한 SELECT로 읽는 이유는 원자성이 아니다 — 이 커넥션은 autocommit이라
+    signal: str | None
+    committed_bytes: int
+    sealed_bytes: int | None
+
+
+def get_live_input_state(conn, job_id: str, worker_id: str) -> LiveInputState:
+    """루프가 1초마다 읽는 종료 신호와 입력 경계 (설계 §3.5).
+
+    셋을 한 SELECT로 읽는 이유는 원자성이 아니다 — 이 커넥션은 autocommit이라
     READ COMMITTED에서 두 SELECT가 찢어진 상태를 볼 수 없다. 이유는 (a) 왕복 1회이고
-    (b) sealed_bytes 읽기가 stop 검사와 같은 소유권 술어 안에 묶여, 그 사이 job이
-    재claim되면 낡은 값을 받는 TOCTOU가 닫히기 때문이다.
+    (b) 경계 읽기가 stop 검사와 같은 소유권 술어 안에 묶여, 그 사이 job이 재claim되면
+    낡은 값을 받는 TOCTOU가 닫히기 때문이다.
+
+    lost일 때 committed=0을 내는 것은 의도적이다. 소유권을 잃은 워커가 마지막으로 본
+    경계를 계속 소비하면 이미 남이 쓰고 있는 파일을 전사하게 된다 — 소비자는 이 신호를
+    보면 더 읽지 않고 즉시 끝낸다 (설계 §4.2).
+
+    committed_bytes가 NULL인 활성 세션은 024 이전에 만들어진 것뿐이다. 파일 길이로
+    역산하지 않고 0으로 본다 — 그러면 미리보기가 아무것도 못 읽고 sealed에서 끝난다.
     """
     row = conn.execute(
-        "SELECT status, locked_by, stop_requested_at, sealed_bytes FROM job WHERE id=%s",
+        "SELECT status, locked_by, stop_requested_at, committed_bytes, sealed_bytes "
+        "FROM job WHERE id=%s",
         (job_id,),
     ).fetchone()
     if row is None or row["locked_by"] != worker_id or row["status"] != "running":
-        return "lost", None
-    if row["stop_requested_at"] is not None:
-        return "stop", row["sealed_bytes"]
-    return None, None
+        return LiveInputState("lost", 0, None)
+    committed = row["committed_bytes"]
+    return LiveInputState(
+        "stop" if row["stop_requested_at"] is not None else None,
+        0 if committed is None else int(committed),
+        row["sealed_bytes"],
+    )
 
 
 def insert_live_utterance(

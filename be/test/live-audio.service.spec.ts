@@ -39,10 +39,12 @@ describe('LiveAudioService', () => {
     expect(await svc.pcmSize(KEY)).toBe(0);
   });
 
-  it('append accumulates instead of truncating', async () => {
+  // 확정 경계 append가 누적인지 — StorageService.save()는 writeFile(=truncate)이라
+  // 그걸 썼다면 매 청크가 앞 청크를 덮어쓴다. 그 오용이 불가능한지가 이 파일의 출발점이다.
+  it('successive writeAt calls accumulate instead of truncating', async () => {
     await svc.create(KEY);
-    expect(await svc.append(KEY, Buffer.alloc(32768, 1))).toBe(32768);
-    expect(await svc.append(KEY, Buffer.alloc(32768, 2))).toBe(65536);
+    expect(await svc.writeAt(KEY, 0, Buffer.alloc(32768, 1))).toBe(32768);
+    expect(await svc.writeAt(KEY, 32768, Buffer.alloc(32768, 2))).toBe(65536);
     expect(await svc.pcmSize(KEY)).toBe(65536);
     const body = fs.readFileSync(path.join(root, KEY)).subarray(HEADER_LEN);
     expect(body[0]).toBe(1);
@@ -51,7 +53,7 @@ describe('LiveAudioService', () => {
 
   it('seal writes the real sizes into the header', async () => {
     await svc.create(KEY);
-    await svc.append(KEY, Buffer.alloc(1024, 7));
+    await svc.writeAt(KEY, 0, Buffer.alloc(1024, 7));
     await svc.seal(KEY, 1024);
     expect(head().readUInt32LE(40)).toBe(1024);
     expect(head().readUInt32LE(4)).toBe(36 + 1024);

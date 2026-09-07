@@ -7,9 +7,13 @@ import { startTestDb, StartedTestDb } from './db';
 import { AppModule } from '../src/app.module';
 import { CAPABILITIES } from '../src/system/capabilities';
 import { LiveAudioService } from '../src/storage/live-audio.service';
+import { StorageService } from '../src/storage/storage.service';
+import { LiveRepository } from '../src/live/live.repository';
 
 const CHUNK = 32768;
 const chunk = (fill: number) => Buffer.alloc(CHUNK, fill);
+/** 설계 §4.2의 4시간 상한. 리터럴로 둔다 — 구현이 아니라 wire 계약을 검사한다. */
+const MAX_PCM = 460800000;
 
 describe('live audio append', () => {
   let db: StartedTestDb;
@@ -53,6 +57,18 @@ describe('live audio append', () => {
       .set('X-Audio-Offset', String(offset))
       .set('X-Final-Offset', String(final))
       .send(body);
+
+  const audioPath = async (id: string) => {
+    const { rows } = await db.pool.query(`SELECT audio_key FROM meeting WHERE id=$1`, [id]);
+    return app.get(StorageService).resolve(rows[0].audio_key);
+  };
+
+  /** 이 회의의 live job이 가진 확정 경계. pg bigint라 문자열로 온다. */
+  const committed = async (id: string) => {
+    const { rows } = await db.pool.query(
+      `SELECT committed_bytes FROM job WHERE meeting_id=$1 AND type='live_session'`, [id]);
+    return Number(rows[0].committed_bytes);
+  };
 
   it('accepts sequential chunks and reports the next expected offset', async () => {
     const { body: m } = await start().expect(201);
@@ -124,6 +140,102 @@ describe('live audio append', () => {
     expect(res.body.code).toBe('sealed');
   });
 
+  // ── 확정 경계 (설계 §3.2·3.3) ────────────────────────────────────────────
+  //
+  // 파일 길이가 아니라 job.committed_bytes가 append 오프셋의 진실이다. 아래 셋은 그
+  // 차이가 실제로 드러나는 지점만 때린다 — 미확정 꼬리, 롤백된 commit, 부분 쓰기.
+
+  it('does not acknowledge PCM written before a rolled-back commit', async () => {
+    const { body: m } = await start().expect(201);
+    await send(m.id, 0, chunk(1)).expect(200);
+    const { rows } = await db.pool.query(
+      "SELECT audio_key FROM meeting WHERE id=$1",
+      [m.id],
+    );
+    const storage = app.get(StorageService);
+    fs.appendFileSync(storage.resolve(rows[0].audio_key), Buffer.alloc(401, 9));
+    await stop(m.id, CHUNK, CHUNK + 1000, Buffer.alloc(1000, 2)).expect(200);
+    expect(
+      fs.readFileSync(storage.resolve(rows[0].audio_key)).subarray(44),
+    ).toEqual(Buffer.concat([chunk(1), Buffer.alloc(1000, 2)]));
+  });
+
+  // 파일 sync는 끝났는데 그 뒤 TX가 롤백된 경우 — 설계 §3.4 크래시 표의 "PCM sync 후
+  // commit 전" 줄이다. 디스크에 전부 있어도 확정이 아니므로 경계는 그대로여야 하고,
+  // 무엇보다 **세션이 닫히면 안 된다**: 디스크는 멀쩡하니 같은 요청을 다시 보내면
+  // 회복된다. io_error(디스크 실패)와 DB TX 실패를 구별해야 하는 이유가 이것이다.
+  it('a rolled-back commit neither confirms the bytes nor closes the session', async () => {
+    const { body: m } = await start().expect(201);
+    await send(m.id, 0, chunk(1)).expect(200);
+    jest.spyOn(app.get(LiveRepository), 'setCommitted')
+      .mockRejectedValueOnce(new Error('connection reset by peer'));
+
+    await send(m.id, CHUNK, chunk(2)).expect(500);
+    expect(await committed(m.id)).toBe(CHUNK);
+    const { rows } = await db.pool.query(
+      `SELECT m.status, j.status AS job_status FROM meeting m
+       JOIN job j ON j.meeting_id=m.id AND j.type='live_session' WHERE m.id=$1`, [m.id]);
+    expect(rows[0].status).toBe('recording');
+    expect(rows[0].job_status).not.toBe('failed');
+
+    // 같은 요청을 그대로 재전송하면 미확정 꼬리를 잘라내고 다시 써 정확히 같은 PCM이 된다
+    await send(m.id, CHUNK, chunk(2)).expect(200)
+      .expect((r) => expect(r.body.expected_offset).toBe(CHUNK * 2));
+    expect(fs.readFileSync(await audioPath(m.id)).subarray(44))
+      .toEqual(Buffer.concat([chunk(1), chunk(2)]));
+  });
+
+  // 부분 쓰기 뒤 진짜 디스크 실패 — 예외를 정상적으로 catch하는 경로다(SIGKILL이 아니다).
+  // 세션은 io_error로 닫히되, **확정 경계는 한 바이트도 전진하지 않아야 한다**. 홀수
+  // 401바이트를 남기는 것은 프레임 경계조차 안 맞는 꼬리를 정본으로 인정하지 않는지 보기 위함이다.
+  it('a partial write leaves the committed boundary exactly where it was', async () => {
+    const { body: m } = await start().expect(201);
+    await send(m.id, 0, chunk(1)).expect(200);
+    const liveAudio = app.get(LiveAudioService);
+    const storage = app.get(StorageService);
+    jest.spyOn(liveAudio, 'writeAt').mockImplementationOnce(
+      async (key: string, offset: number, pcm: Buffer) => {
+        const fh = await fs.promises.open(storage.resolve(key), 'r+');
+        try {
+          await fh.write(pcm, 0, 401, 44 + offset);
+          await fh.datasync();
+        } finally { await fh.close(); }
+        throw new Error('ENOSPC');
+      });
+
+    await send(m.id, CHUNK, chunk(2)).expect(507);
+    expect(await committed(m.id)).toBe(CHUNK);
+    // 꼬리는 디스크에 남아 있다 — 그것이 "파일 길이는 진실이 아니다"의 전부다
+    expect(fs.statSync(await audioPath(m.id)).size).toBe(44 + CHUNK + 401);
+  });
+
+  // 설계 §4.2. 실제로 4시간을 기다리지 않는다 — sparse 파일과 맞는 DB 경계를 만들어
+  // 상한을 걸치는 청크 하나만 보낸다.
+  it('seals at the four-hour cap, writes only the prefix, and refuses the next chunk', async () => {
+    const { body: m } = await start().expect(201);
+    const path_ = await audioPath(m.id);
+    const boundary = MAX_PCM - 1024;
+    fs.truncateSync(path_, 44 + boundary);   // sparse — 460 MB를 실제로 쓰지 않는다
+    await db.pool.query(
+      `UPDATE job SET committed_bytes=$2 WHERE meeting_id=$1 AND type='live_session'`,
+      [m.id, boundary]);
+
+    await send(m.id, boundary, chunk(7)).expect(409)
+      .expect((r) => {
+        expect(r.body.code).toBe('duration_limit');
+        expect(r.body.expected_offset).toBe(MAX_PCM);
+      });
+    expect(fs.statSync(path_).size).toBe(44 + MAX_PCM);
+    expect(await committed(m.id)).toBe(MAX_PCM);
+    const { rows } = await db.pool.query(
+      `SELECT sealed_bytes FROM job WHERE meeting_id=$1 AND type='live_session'`, [m.id]);
+    expect(Number(rows[0].sealed_bytes)).toBe(MAX_PCM);
+
+    // 봉인된 뒤라 다음 청크는 거절된다 — 상한이 실제로 세션을 끝냈다는 뜻이다
+    await send(m.id, MAX_PCM, chunk(8)).expect(409)
+      .expect((r) => expect(r.body.code).toBe('sealed'));
+  });
+
   // 설계 §3.4가 stop에도 X-Capture-Elapsed를 싣게 한 이유 — 꼬리 구간의 불연속은
   // append의 갭 검사가 볼 수 없다(그 청크는 애초에 오지 않았다).
   it('stop detects a gap at the tail from X-Capture-Elapsed', async () => {
@@ -157,7 +269,7 @@ describe('live audio append', () => {
   // job/meeting이 실제로 failed로 커밋됐는지 직접 확인한다.
   it('507 on a disk write failure — job and meeting are actually marked failed, not rolled back', async () => {
     const { body: m } = await start().expect(201);
-    jest.spyOn(app.get(LiveAudioService), 'append').mockRejectedValueOnce(new Error('ENOSPC'));
+    jest.spyOn(app.get(LiveAudioService), 'writeAt').mockRejectedValueOnce(new Error('ENOSPC'));
     await send(m.id, 0, chunk(1)).expect(507)
       .expect((r) => expect(r.body).toEqual({ code: 'io_error' }));
     const { rows } = await db.pool.query(
@@ -172,40 +284,48 @@ describe('live audio append', () => {
     await send(m.id, 0, chunk(1)).expect(409);
   });
 
-  // fix round 1: 위 507 테스트는 "다른 append가 끼어들지 않은" 단순한 경우만 본다. 회복
-  // 트랜잭션이 job → meeting을 다시 잠근 뒤 (1) meeting.status='recording' (2)
-  // meeting.current_job_id===jobId (3) job.sealed_bytes===null (4) 파일이 우리가 쓰려던
-  // 오프셋에서 전진하지 않았음을 전부 재확인하지 않으면, 롤백으로 잠금이 풀린 사이 같은
-  // 오프셋의 정당한 재시도(잃어버린 ACK 재전송)가 먼저 커밋해 세션을 살려 놨을 때 그 세션을
-  // 죽인다 — meeting.status는 성공한 재시도 뒤에도 여전히 'recording'이라 (1)만으로는
-  // 구별이 안 된다. 판별 신호는 오직 (4), 파일 위치뿐이다.
+  // 위 507 테스트는 "다른 append가 끼어들지 않은" 단순한 경우만 본다. 회복 트랜잭션이
+  // job → meeting을 다시 잠근 뒤 (1) meeting.status='recording' (2)
+  // meeting.current_job_id===jobId (3) job.sealed_bytes===null (4) **확정 경계가 실패 전
+  // 값 그대로인지**를 전부 재확인하지 않으면, 롤백으로 잠금이 풀린 사이 같은 오프셋의
+  // 정당한 재시도(잃어버린 ACK 재전송)가 먼저 커밋해 세션을 살려 놨을 때 그 세션을 죽인다 —
+  // meeting.status는 성공한 재시도 뒤에도 여전히 'recording'이라 (1)만으로는 구별이 안 된다.
+  //
+  // (4)의 근거가 **파일 길이여서는 안 된다**는 것이 이번 계약의 핵심이다: 우리 자신의 부분
+  // 쓰기가 남긴 미확정 꼬리도 파일을 늘리므로, 파일 길이는 "남이 이겼다"와 "내가 절반만
+  // 썼다"를 구별하지 못한다. 확정 경계(job.committed_bytes)만이 그 신호다.
   //
   // 두 개의 실제 동시 HTTP 요청으로 이 경쟁을 재현하려면 "패자가 잠금을 넘겨받아 커밋을
-  // 마치는 시점"과 "승자가 롤백 후 회복 트랜잭션의 pcmSize를 확인하는 시점" 사이의 순서를
-  // 결정론적으로 강제할 손잡이가 프로덕션 코드에 없다 — 둘 다 승자의 ROLLBACK이 끝난 뒤에야
-  // 풀리는 별개의 pg 소켓 이벤트라, 이벤트 루프 스케줄링에 맡기면 테스트가 가끔씩만
-  // 통과하는 결과가 된다(실측: 콜 카운트로 lockJobById/pcmSize를 게이팅해 봤지만 "회복의
-  // 몇 번째 호출인지"가 그 자체로 같은 종류의 경쟁이었다). 그래서 팀리드가 제안한 대안대로
-  // "파일이 이미 전진해 있는 상태에서 회복 경로를 직접 태운다" — append가 실패를 보고하기
-  // *전에* 진짜 두 번째 write로 파일을 실제로 전진시켜, 그 다음에 실패를 던진다. 모킹은
-  // 순서(전진이 먼저, 실패 보고가 나중)만 강제하고, 그 뒤 회복 트랜잭션의 잠금 재획득·
-  // 네 가지 검증·pcmSize 읽기는 전부 진짜 코드가 진짜 DB·진짜 파일에 대해 수행한다.
-  it('a disk write failure whose file already advanced past the target offset skips the failure marking', async () => {
+  // 마치는 시점"과 "승자가 회복 트랜잭션에서 경계를 확인하는 시점" 사이의 순서를 결정론적으로
+  // 강제할 손잡이가 프로덕션 코드에 없다 — 이벤트 루프 스케줄링에 맡기면 가끔만 통과한다.
+  // 그래서 그 사건을 정확히 한 순간에 **진짜로** 일으킨다: append TX가 롤백해 잠금을 반납한
+  // 직후, 회복 TX가 job을 다시 잠그기 직전. 그 시점엔 어떤 TX도 job 행을 잡고 있지 않아
+  // 교착이 없다. 그 뒤의 재잠금·네 가지 재검증·경계 비교는 전부 진짜 코드가 진짜 DB·진짜
+  // 파일에 대해 수행한다.
+  it('a disk write failure whose committed boundary was advanced by another request skips the failure marking', async () => {
     const { body: m } = await start().expect(201);
     const liveAudio = app.get(LiveAudioService);
-    const realAppend = liveAudio.append.bind(liveAudio);
-    jest.spyOn(liveAudio, 'append').mockImplementationOnce(async (key: string, _pcm: Buffer) => {
-      // "다른 요청이 먼저 이 오프셋에 커밋했다"는 사실만 진짜로 만든다 — 그 뒤에야 우리
-      // 자신의 쓰기가 실패를 보고한다. 두 번째 호출은 이 mockImplementationOnce가 이미
-      // 소진된 뒤라 진짜 append로 떨어진다(재귀 아님).
-      await realAppend(key, chunk(9));
-      throw new Error('ENOSPC');
+    const repo = app.get(LiveRepository);
+    const key = (await db.pool.query(
+      `SELECT audio_key FROM meeting WHERE id=$1`, [m.id])).rows[0].audio_key;
+    jest.spyOn(liveAudio, 'writeAt').mockRejectedValueOnce(new Error('ENOSPC'));
+
+    const realLock = repo.lockJobById.bind(repo);
+    let locks = 0;
+    jest.spyOn(repo, 'lockJobById').mockImplementation(async (exec, jobId) => {
+      locks += 1;
+      // 1번은 실패하는 append TX, 2번은 그 롤백 뒤의 회복 TX다.
+      if (locks === 2) {
+        await liveAudio.writeAt(key, 0, chunk(9));   // mockRejectedValueOnce는 이미 소진됐다
+        await db.pool.query(`UPDATE job SET committed_bytes=$2 WHERE id=$1`, [jobId, CHUNK]);
+      }
+      return realLock(exec, jobId);
     });
 
     await send(m.id, 0, chunk(1)).expect(507);
 
     const { rows } = await db.pool.query(
-      `SELECT m.status AS meeting_status, m.error AS meeting_error, m.audio_key,
+      `SELECT m.status AS meeting_status, m.error AS meeting_error,
               j.status AS job_status, j.error AS job_error
        FROM meeting m JOIN job j ON j.id = m.current_job_id WHERE m.id=$1`, [m.id]);
     // 누군가(시뮬레이션된 재시도) 이겼다 — 회복 트랜잭션은 마킹을 건너뛰어야 한다
@@ -213,9 +333,7 @@ describe('live audio append', () => {
     expect(rows[0].meeting_error).toBeNull();
     expect(rows[0].job_status).not.toBe('failed');
     expect(rows[0].job_error).toBeNull();
-    // 파일은 실제로 전진해 있다 — 우리가 강제한 전제가 그대로 남아 있음을 확인
-    const size = fs.statSync(path.join(db.storageRoot, rows[0].audio_key)).size;
-    expect(size).toBe(44 + CHUNK);
+    expect(await committed(m.id)).toBe(CHUNK);
     // 세션이 안 죽었으니 그 "재시도"의 진짜 다음 청크는 정상적으로 이어진다
     await send(m.id, CHUNK, chunk(2)).expect(200);
   });

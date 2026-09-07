@@ -78,7 +78,7 @@ def test_dispatches_live_session_and_queues_the_final_pass(conn, tmp_path):
         Storage(str(tmp_path)),
         "w1",
         build_live_models=_models,
-        # build_live_source는 이제 (payload, storage, sealed_box) 3개를 받는다(Task 8) —
+        # build_live_source는 이제 (payload, storage, state_box) 3개를 받는다 —
         # 여기서는 라우팅만 확인하므로 인자를 무시하고 미리 만든 fake를 그대로 낸다.
         build_live_source=lambda *_a, **_k: src,
     )

@@ -51,18 +51,35 @@ export type RecorderFailure =
  * 그 자리에서 upload_failed로 끝낸다.
  */
 export class LiveUploadRejected extends Error {}
+
+/**
+ * 서버가 스스로 봉인한 사유. 캡처 실패가 아니므로 RecorderFailure와 구별한다 —
+ * duration_limit은 4시간 상한에 닿은 정상 종료이고, sealed는 스위퍼나 다른 경로가
+ * 이 세션을 이미 닫았다는 뜻이다 (설계 §3.3·§4.2).
+ */
+export type ServerSeal = "sealed" | "duration_limit";
+
 export interface RecorderStatus {
   backlogMs: number;
   failed: RecorderFailure | null;
+  /** 서버가 봉인해 캡처가 끝났다. 봉인된 상태를 조회해 수렴시킬 근거다. */
+  sealed: ServerSeal | null;
 }
+
+/**
+ * 업로드 응답. 200과 409를 status로 구별한다 — 409를 "이 청크는 이미 서버에 있다"로
+ * 뭉뚱그리면 결손 409(서버가 아직 이 청크를 못 받음)에서도 청크를 버려 구멍이 생긴다.
+ * expected는 서버의 확정 경계이고, code가 있으면 재동기화가 아니라 종료 사유다.
+ */
 export interface PostResult {
-  ok: boolean;
+  status: 200 | 409;
   expected: number;
+  code?: ServerSeal;
 }
 
 export class LiveRecorder {
   offset = 0;
-  status: RecorderStatus = { backlogMs: 0, failed: null };
+  status: RecorderStatus = { backlogMs: 0, failed: null, sealed: null };
   onStatus: (s: RecorderStatus) => void = () => {};
 
   private queue: { body: Uint8Array; elapsedMs: number }[] = [];
@@ -93,16 +110,16 @@ export class LiveRecorder {
         /** 캡처가 실패해서 끝났으면 그 사유. 서버가 meeting.capture_error에 남긴다
          *  (설계 §5.3·§7). null이면 정상 종료다. */
         failure: RecorderFailure | null,
-      ) => Promise<void>;
+      ) => Promise<PostResult>;
       retryDelayMs?: number;
       bufferLimitMs?: number;
     },
   ) {}
 
   enqueue(chunk: Uint8Array, elapsedMs = 0) {
-    // 실패 후에는 더 받지 않는다 — 업로드 루프는 이미 멈췄으니 계속 받으면 stop()이
-    // 잘라내야 할 구멍만 커진다(설계 §2.9와 같은 원칙, review finding 2와 한 벌).
-    if (this.status.failed !== null) return;
+    // 실패·서버 봉인 후에는 더 받지 않는다 — 업로드 루프는 이미 멈췄으니 계속 받으면
+    // stop()이 잘라내야 할 구멍만 커진다(설계 §2.9와 같은 원칙, review finding 2와 한 벌).
+    if (this.status.failed !== null || this.status.sealed !== null) return;
     this.queue.push({ body: chunk, elapsedMs });
     this.report();
     if (
@@ -125,34 +142,57 @@ export class LiveRecorder {
     while (this.pump) await this.pump;
   }
 
+  private wait(): Promise<void> {
+    return new Promise((r) => setTimeout(r, this.deps.retryDelayMs ?? 1000));
+  }
+
+  /**
+   * 업로드 루프. 판정의 기준은 상태 코드가 아니라 **서버의 확정 경계**다 (설계 §3.3).
+   *
+   * 409라는 이유만으로 청크를 버리면 안 된다. expected가 이 청크의 *끝*일 때만 서버가
+   * 이미 받았다는 뜻이고, expected가 이 청크의 *시작*이면 서버는 아직 못 받은 것이라
+   * 같은 청크를 다시 보내야 한다. 옛 코드는 둘을 구별하지 않아 결손 409에서도 청크를
+   * 버리고 전진했고, 그렇게 생긴 구멍은 봉인된 뒤에야 드러난다.
+   */
   private async run(): Promise<void> {
     while (this.queue.length > 0 && this.status.failed === null) {
       const { body, elapsedMs } = this.queue[0];
-      let res: PostResult;
       try {
         // elapsedMs는 이 청크가 "잡힌" 시각이다(enqueue 때 같이 실었다) — 지금(전송
         // 시각)을 다시 재면 백로그·재시도 대기가 그대로 오탐 갭으로 둔갑한다 (설계
         // §3.3.2, review finding 4).
-        res = await this.deps.postChunk(
+        const res = await this.deps.postChunk(
           this.meetingId,
           this.offset,
           body,
           elapsedMs,
         );
+        const end = this.offset + body.byteLength;
+        if (res.code === "sealed" || res.code === "duration_limit") {
+          // 서버가 이미 봉인했다. 일반 ACK로 dequeue하지 않는다 — 남은 청크는 절대
+          // 받아들여지지 않으므로 캡처와 큐를 정리하고 봉인 상태를 노출한다 (설계 §4.2).
+          this.sealedByServer(res.code);
+          return;
+        }
+        if (res.expected === end) {
+          this.offset = end;
+          this.queue.shift();
+        } else if (res.status === 409 && res.expected === this.offset) {
+          // 서버는 아직 이 청크를 못 받았다. 청크를 보존하고 기존 retry delay 후 재전송한다.
+          await this.wait();
+        } else {
+          throw new LiveUploadRejected("invalid audio acknowledgement");
+        }
       } catch (e) {
         if (e instanceof LiveUploadRejected) {
-          // 재동기화할 오프셋이 없는 거절 — 같은 청크를 다시 보내도 같은 답이다.
+          // 재동기화할 곳이 없는 거절 — 같은 청크를 다시 보내도 같은 답이다.
           this.fail("upload_failed");
           return;
         }
         // 네트워크 실패. 청크를 버리지 않고 그대로 다시 보낸다.
-        await new Promise((r) => setTimeout(r, this.deps.retryDelayMs ?? 1000));
+        await this.wait();
         continue;
       }
-      // 200이든 409든 서버가 알려준 expected가 진실이다. 409면 이 청크는 이미 서버에
-      // 있다는 뜻이므로(ACK 유실) 버리고 전진한다 (설계 §3.3).
-      this.offset = res.expected;
-      this.queue.shift();
       this.report();
     }
   }
@@ -168,6 +208,21 @@ export class LiveRecorder {
 
   private fail(reason: RecorderFailure) {
     this.status = { ...this.status, failed: reason };
+    this.onStatus(this.status);
+    void this.teardown();
+  }
+
+  /**
+   * 서버가 스스로 봉인했다. 캡처 실패가 아니므로 failed로 표시하지 않는다 — failed는
+   * stop이 X-Capture-Error로 실어 보내 meeting.capture_error에 남는 값이라, 4시간 상한에
+   * 정상 도달한 녹음을 "마이크가 끊겼다"와 같은 칸에 넣게 된다 (설계 §4.2).
+   *
+   * 남은 큐는 버린다. 서버 경계는 이미 최종이라 그 청크들은 무엇을 해도 받아들여지지
+   * 않고, 들고 있으면 stop이 그 위에 꼬리를 이어 붙일 위험만 남는다.
+   */
+  private sealedByServer(code: ServerSeal) {
+    this.queue = [];
+    this.status = { ...this.status, sealed: code, backlogMs: 0 };
     this.onStatus(this.status);
     void this.teardown();
   }
@@ -233,11 +288,28 @@ export class LiveRecorder {
   async stop(): Promise<void> {
     await this.teardown();
     await this.drain();
-    if (this.status.failed !== null && this.queue.length > 0) {
-      // run()은 실패 후 큐를 비우지 않고 빠져나온다 — 여기서 그 위에 최신 꼬리를 이어
-      // 붙이면 [offset..][큐에 남은 구멍][꼬리]가 "정상 완료"로 봉인된다. 큐를 보낼
-      // 방법은 없으니(업로드 루프가 이미 멈췄다) 마지막으로 확인된 연속 바이트에서
-      // 빈 바디로 봉인한다 (review finding 2).
+    // run()은 실패 후 큐를 비우지 않고 빠져나온다 — 그 위에 최신 꼬리를 이어 붙이면
+    // [offset..][큐에 남은 구멍][꼬리]가 "정상 완료"로 봉인된다. 큐를 보낼 방법은
+    // 없으니(업로드 루프가 이미 멈췄다) 마지막으로 확인된 연속 바이트에서 빈 바디로
+    // 봉인한다 (review finding 2).
+    const tail =
+      this.queue.length > 0 ? new Uint8Array(0) : this.chunks.flush();
+    // 큐가 비어 있어도 failed는 실어 보낸다 — device_ended가 큐가 빈 순간에 오면
+    // 꼬리는 온전하지만 그 뒤로 아무것도 잡히지 않았다는 사실은 그대로 남아야 한다.
+    const res = await this.deps.postStop?.(
+      this.meetingId,
+      this.offset,
+      this.offset + tail.byteLength,
+      tail,
+      this.lastCaptureElapsedMs,
+      this.status.failed,
+    );
+    if (res && res.status === 409 && res.expected > this.offset) {
+      // 서버의 확정 경계가 우리보다 앞서 있다 — 우리가 못 받은 ACK가 있었다는 뜻이다.
+      // 그 앞에 로컬 꼬리를 덧붙이면 서버가 이미 확정한 바이트 위에 구멍을 낸다.
+      // 서버 경계에서 빈 stop으로 다시 봉인한다 (설계 §7). 로컬 미전송 PCM은 버린다 —
+      // 그것을 성공으로 표시하는 것보다 짧은 녹음이 정직하다.
+      this.offset = res.expected;
       await this.deps.postStop?.(
         this.meetingId,
         this.offset,
@@ -246,19 +318,7 @@ export class LiveRecorder {
         this.lastCaptureElapsedMs,
         this.status.failed,
       );
-      return;
     }
-    const tail = this.chunks.flush();
-    // 큐가 비어 있어도 failed는 실어 보낸다 — device_ended가 큐가 빈 순간에 오면
-    // 꼬리는 온전하지만 그 뒤로 아무것도 잡히지 않았다는 사실은 그대로 남아야 한다.
-    await this.deps.postStop?.(
-      this.meetingId,
-      this.offset,
-      this.offset + tail.byteLength,
-      tail,
-      this.lastCaptureElapsedMs,
-      this.status.failed,
-    );
   }
 
   private async teardown() {

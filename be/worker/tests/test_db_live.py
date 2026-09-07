@@ -15,24 +15,38 @@ def _claimed_live(conn, *, status="recording"):
     return mid, jid
 
 
-def test_get_stop_requested_reports_none_stop_or_lost(conn):
+def test_get_live_input_state_reports_none_stop_or_lost(conn):
     mid, jid = _claimed_live(conn)
-    assert db.get_stop_requested(conn, jid, "w1") == (None, None)
+    assert db.get_live_input_state(conn, jid, "w1") == db.LiveInputState(None, 0, None)
     conn.execute("UPDATE job SET stop_requested_at=now() WHERE id=%s", (jid,))
-    assert db.get_stop_requested(conn, jid, "w1") == ("stop", None)
-    assert db.get_stop_requested(conn, jid, "someone-else") == ("lost", None)
+    assert db.get_live_input_state(conn, jid, "w1") == db.LiveInputState("stop", 0, None)
+    assert db.get_live_input_state(conn, jid, "nobody") == db.LiveInputState("lost", 0, None)
     conn.execute("UPDATE job SET status='failed' WHERE id=%s", (jid,))
-    assert db.get_stop_requested(conn, jid, "w1") == ("lost", None)
-    assert db.get_stop_requested(conn, "job_999", "w1") == ("lost", None)
+    assert db.get_live_input_state(conn, jid, "w1") == db.LiveInputState("lost", 0, None)
+    assert db.get_live_input_state(conn, "job_999", "w1") == db.LiveInputState("lost", 0, None)
 
 
-def test_get_stop_requested_returns_sealed_bytes(conn):
+def test_get_live_input_state_carries_both_boundaries(conn):
     mid, jid = _claimed_live(conn)
-    assert db.get_stop_requested(conn, jid, "w1") == (None, None)
+    # 봉인 전: 확정 경계만 전진한다. 그것이 TailSource의 읽기 상한이다 (설계 §3.5).
+    conn.execute("UPDATE job SET committed_bytes=%s WHERE id=%s", (32768, jid))
+    assert db.get_live_input_state(conn, jid, "w1") == db.LiveInputState(None, 32768, None)
     conn.execute(
-        "UPDATE job SET stop_requested_at=now(), sealed_bytes=%s WHERE id=%s", (65536, jid)
+        "UPDATE job SET stop_requested_at=now(), committed_bytes=%s, sealed_bytes=%s WHERE id=%s",
+        (65536, 65536, jid),
     )
-    assert db.get_stop_requested(conn, jid, "w1") == ("stop", 65536)
+    assert db.get_live_input_state(conn, jid, "w1") == db.LiveInputState("stop", 65536, 65536)
+
+
+def test_get_live_input_state_hides_the_boundary_once_ownership_is_lost(conn):
+    # 소유권을 잃은 워커가 마지막으로 본 경계를 계속 소비하면 이미 남이 쓰고 있는 파일을
+    # 전사한다. lost는 committed=0으로 나가고 소비자는 즉시 끝낸다 (설계 §4.2).
+    mid, jid = _claimed_live(conn)
+    conn.execute(
+        "UPDATE job SET stop_requested_at=now(), committed_bytes=%s, sealed_bytes=%s WHERE id=%s",
+        (65536, 65536, jid),
+    )
+    assert db.get_live_input_state(conn, jid, "w2") == db.LiveInputState("lost", 0, None)
 
 
 def test_insert_live_utterance_returns_id_and_enforces_seq(conn):

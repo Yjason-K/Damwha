@@ -6,7 +6,7 @@
                       ──▶ transcribe ──▶ text (비면 건너뜀)
                       ──▶ embed ──▶ identify_embedding(suggest_threshold)
                       ──▶ insert_live_utterance(seq++)
-                  매 1초: get_stop_requested, shutdown_event, 상한 시간
+                  매 1초: get_live_input_state, shutdown_event, 상한 시간
 
 워커는 이제 **reader**다. 파일은 API가 쓴다 (설계 §2.2). 그래서 원 설계 §2.9의 이중 큐와
 writer 스레드가 통째로 없다 — "추론이 멈춰도 파일 쓰기는 디스크 속도로"는 캡처가 브라우저로
@@ -15,6 +15,9 @@ writer 스레드가 통째로 없다 — "추론이 멈춰도 파일 쓰기는 �
 큐가 유계인 이유는 backpressure다. 미리보기가 느리면 큐가 차고 → capture 스레드가 put에서
 막히고 → TailSource가 전진을 멈추고 → 파일은 계속 자라고 → 다음 읽기에서 드리프트를 보고
 건너뛴다. 무계 큐면 드리프트가 큐 안에 쌓여 seek이 영영 안 일어난다.
+
+확정 경계(committed_bytes)와 봉인은 db.get_live_input_state 한 SELECT로 읽어 immutable
+스냅샷 하나로 소스 스레드에 건넨다 — 소스는 그 committed까지만 읽는다 (설계 §3.5).
 
 stop_requested_at과 sealed_bytes는 같은 트랜잭션에서 쓰이는 게 정상이지만(설계 §4.4 ③),
 API가 stop 플래그만 먼저 찍고 봉인을 나중에 쓰는 창(마이그레이션·API 버그)에 대비해, stop을
@@ -137,23 +140,24 @@ def run_live_session(
     preview_max_frames: int = PREVIEW_QUEUE_MAX_FRAMES,
     stop_poll_seconds: float = STOP_POLL_SECONDS,
     stop_without_seal_seconds: float = STOP_WITHOUT_SEAL_SECONDS,
-    sealed_box: dict | None = None,
+    state_box: dict | None = None,
     clock=time.monotonic,
 ) -> str:
     job_id = job["id"]
     meeting_id = payload.meeting_id
     ctx = f"job={job_id} meeting={meeting_id}"
     enter_stage(conn, job_id, worker_id, "capture", 0, shutdown_event)
-    signal, sealed = db.get_stop_requested(conn, job_id, worker_id)
-    if signal == "lost":
+    # 이름이 input_state인 이유: 아래 루프의 `state`는 seq/failures를 담는 별개의 dict다.
+    input_state = db.get_live_input_state(conn, job_id, worker_id)
+    if input_state.signal == "lost":
         log.info("%s live_session lost ownership before capture", ctx)
         return "lost"
     # 호출자가 TailSource를 만들 때 이미 이 dict를 클로저로 쥐고 있을 수 있다 — 새로 만들지
-    # 않고 그 자리에서 갱신해야 소스와 루프가 같은 값을 본다.
-    if sealed_box is None:
-        sealed_box = {"bytes": sealed}
+    # 않고 그 자리에서 스냅샷을 교체해야 소스와 루프가 같은 값을 본다.
+    if state_box is None:
+        state_box = {"state": input_state}
     else:
-        sealed_box["bytes"] = sealed
+        state_box["state"] = input_state
 
     q: queue.Queue = queue.Queue(maxsize=preview_max_frames)
     capture = Capture(source, q, stop_poll_seconds=stop_poll_seconds)
@@ -256,12 +260,15 @@ def run_live_session(
                 if capture.error is not None:
                     stop_reason = "capture_error"
                     break
+                signal = None
                 try:
-                    signal, sealed = db.get_stop_requested(conn, job_id, worker_id)
-                    sealed_box["bytes"] = sealed
+                    # 스냅샷을 통째로 교체한다 — 소스 스레드는 이 자리를 읽을 뿐이라
+                    # 필드가 서로 다른 시점의 값으로 섞일 수 없다 (설계 §3.5).
+                    input_state = db.get_live_input_state(conn, job_id, worker_id)
+                    state_box["state"] = input_state
+                    signal = input_state.signal
                 except Exception:  # noqa: BLE001 — DB가 잠깐 죽어도 미리보기는 계속
-                    log.warning("%s stop poll failed — continuing", ctx, exc_info=True)
-                    signal = None
+                    log.warning("%s input state poll failed — continuing", ctx, exc_info=True)
                 if signal == "lost":
                     stop_reason = "lost"
                     break
@@ -273,7 +280,7 @@ def run_live_session(
                     if stop_seen_at is None:
                         stop_seen_at = now
                     elif (
-                        sealed_box["bytes"] is None
+                        state_box["state"].sealed_bytes is None
                         and now - stop_seen_at >= stop_without_seal_seconds
                     ):
                         raise WorkerError(
@@ -294,7 +301,7 @@ def run_live_session(
         capture.join(timeout=10)
         if capture.error is not None:
             raise capture.error
-        sealed = sealed_box["bytes"]
+        sealed = state_box["state"].sealed_bytes
         log.info(
             "%s live_session capture end reason=%s sealed_bytes=%s rows=%d skips=%d",
             ctx,

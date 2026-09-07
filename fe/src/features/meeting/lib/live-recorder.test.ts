@@ -24,7 +24,7 @@ describe("LiveRecorder upload loop", () => {
     const seen: number[] = [];
     const post = vi.fn(async (_id, offset: number) => {
       seen.push(offset);
-      return { ok: true as const, expected: offset + CHUNK_BYTES };
+      return { status: 200 as const, expected: offset + CHUNK_BYTES };
     });
     const r = new LiveRecorder({ postChunk: post });
     r.enqueue(chunkOf());
@@ -41,7 +41,7 @@ describe("LiveRecorder upload loop", () => {
       maxInFlight = Math.max(maxInFlight, inFlight);
       await new Promise((r) => setTimeout(r, 5));
       inFlight -= 1;
-      return { ok: true as const, expected: offset + CHUNK_BYTES };
+      return { status: 200 as const, expected: offset + CHUNK_BYTES };
     });
     const r = new LiveRecorder({ postChunk: post });
     for (let i = 0; i < 4; i += 1) r.enqueue(chunkOf());
@@ -49,16 +49,16 @@ describe("LiveRecorder upload loop", () => {
     expect(maxInFlight).toBe(1);
   });
 
-  it("resyncs from the expected_offset a 409 carries", async () => {
+  it("dequeues on a 409 whose expected is this chunk's end (a lost ACK)", async () => {
     const seen: number[] = [];
     let first = true;
     const post = vi.fn(async (_id, offset: number) => {
       seen.push(offset);
       if (first) {
         first = false;
-        return { ok: false as const, expected: CHUNK_BYTES };
+        return { status: 409 as const, expected: CHUNK_BYTES };
       }
-      return { ok: true as const, expected: offset + CHUNK_BYTES };
+      return { status: 200 as const, expected: offset + CHUNK_BYTES };
     });
     const r = new LiveRecorder({ postChunk: post });
     r.enqueue(chunkOf());
@@ -75,7 +75,7 @@ describe("LiveRecorder upload loop", () => {
       seen.push(offset);
       calls += 1;
       if (calls === 1) throw new Error("network");
-      return { ok: true as const, expected: offset + CHUNK_BYTES };
+      return { status: 200 as const, expected: offset + CHUNK_BYTES };
     });
     const r = new LiveRecorder({ postChunk: post, retryDelayMs: 0 });
     r.enqueue(chunkOf());
@@ -135,7 +135,7 @@ describe("LiveRecorder upload loop", () => {
       ) => {
         seenElapsed.push(elapsedMs);
         if (offset === 0) return first.promise;
-        return { ok: true as const, expected: offset + CHUNK_BYTES };
+        return { status: 200 as const, expected: offset + CHUNK_BYTES };
       },
     );
     const r = new LiveRecorder({ postChunk: post });
@@ -148,11 +148,70 @@ describe("LiveRecorder upload loop", () => {
     r.enqueue(chunkOf(), 1024);
     // 이제 시간이 많이 흘렀다고 하자(네트워크 백로그) — 청크1이 이제야 끝난다.
     clock = 5000;
-    first.resolve({ ok: true, expected: CHUNK_BYTES });
+    first.resolve({ status: 200, expected: CHUNK_BYTES });
 
     await r.drain();
     expect(seenElapsed).toEqual([0, 1024]);
     vi.restoreAllMocks();
+  });
+
+  // 옛 코드는 "409면 서버가 이미 받았다"로 뭉뚱그려 결손 409에서도 청크를 버리고
+  // 전진했다. 그 구멍은 봉인된 뒤에야 드러나고 그때는 되돌릴 수 없다 (설계 §3.3).
+  it("keeps and resends the chunk on a 409 whose expected is this chunk's start", async () => {
+    const seen: number[] = [];
+    let calls = 0;
+    const post = vi.fn(async (_id, offset: number) => {
+      seen.push(offset);
+      calls += 1;
+      // 서버는 아직 이 청크를 못 받았다 — 확정 경계가 우리 오프셋 그대로다.
+      if (calls === 1) return { status: 409 as const, expected: offset };
+      return { status: 200 as const, expected: offset + CHUNK_BYTES };
+    });
+    const r = new LiveRecorder({ postChunk: post, retryDelayMs: 0 });
+    r.enqueue(chunkOf());
+    await r.drain();
+    expect(seen).toEqual([0, 0]); // 같은 청크를 다시 보냈다
+    expect(r.offset).toBe(CHUNK_BYTES);
+    expect(r.status.failed).toBeNull();
+  });
+
+  // 우리 청크의 시작도 끝도 아닌 경계는 재동기화할 곳이 없다 — 무한 재시도로 60초를
+  // 태우고 엉뚱한 이름(buffer_overflow)으로 죽는 대신 그 자리에서 끝낸다.
+  it("fails as upload_failed on a 409 that matches neither boundary", async () => {
+    const post = vi.fn(async () => ({
+      status: 409 as const,
+      expected: 12345,
+    }));
+    const r = new LiveRecorder({ postChunk: post, retryDelayMs: 0 });
+    r.enqueue(chunkOf());
+    await r.drain();
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(r.status.failed).toBe("upload_failed");
+    expect(r.offset).toBe(0); // 오프셋이 오염되지 않았다
+  });
+
+  // 서버가 4시간 상한에서 스스로 봉인했다. 일반 ACK로 dequeue하면 그 청크가 정본에
+  // 들어갔다고 착각한 채 다음 청크를 계속 보낸다 (설계 §4.2).
+  it("stops on a server seal without dequeuing, and reports it apart from a capture failure", async () => {
+    const post = vi.fn(async () => ({
+      status: 409 as const,
+      expected: 460800000,
+      code: "duration_limit" as const,
+    }));
+    const r = new LiveRecorder({ postChunk: post, retryDelayMs: 0 });
+    r.enqueue(chunkOf());
+    r.enqueue(chunkOf());
+    await r.drain();
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(r.status.sealed).toBe("duration_limit");
+    // 캡처 실패가 아니다 — failed면 stop이 X-Capture-Error를 실어 "마이크가 끊겼다"와
+    // 같은 칸에 정상 종료를 넣는다.
+    expect(r.status.failed).toBeNull();
+    expect(r.offset).toBe(0);
+    expect(r.status.backlogMs).toBe(0); // 남은 큐를 버렸다
+    // 봉인된 뒤로는 새 청크도 받지 않는다
+    r.enqueue(chunkOf());
+    expect(r.status.backlogMs).toBe(0);
   });
 });
 
@@ -210,8 +269,11 @@ describe("LiveRecorder stop() after a recorder failure", () => {
         body: Uint8Array,
         elapsedMs: number,
         failure: RecorderFailure | null,
-      ) => Promise<void>
-    >(async () => undefined);
+      ) => Promise<PostResult>
+    >(async (_id, _offset, final) => ({
+      status: 200 as const,
+      expected: final,
+    }));
     const r = new LiveRecorder({
       postChunk: post,
       postStop: stopSpy,
@@ -247,6 +309,55 @@ describe("LiveRecorder stop() after a recorder failure", () => {
     expect(failure).toBe("buffer_overflow");
   });
 
+  // 설계 §7. ACK를 잃은 채 stop을 보내면 서버의 확정 경계가 우리보다 앞서 있다. 로컬
+  // 꼬리를 그 앞에 덧붙이면 서버가 이미 확정한 바이트 위에 구멍을 낸다.
+  it("retries an empty stop at the server boundary when the server is ahead", async () => {
+    const { port } = stubWorkletGlobals();
+    // 청크는 200을 받았지만 그 ACK가 유실돼 로컬 offset이 0에 머물렀다고 하자.
+    const post = vi.fn(async () => ({ status: 200 as const, expected: 0 }));
+    const stopSpy = vi.fn<
+      (
+        id: string,
+        offset: number,
+        final: number,
+        body: Uint8Array,
+        elapsedMs: number,
+        failure: RecorderFailure | null,
+      ) => Promise<PostResult>
+    >(async (_id, offset) =>
+      offset === 0
+        ? { status: 409 as const, expected: CHUNK_BYTES }
+        : { status: 200 as const, expected: offset },
+    );
+    const r = new LiveRecorder({
+      postChunk: post,
+      postStop: stopSpy,
+      retryDelayMs: 0,
+    });
+    await r.start("mtg_1");
+    // 청크 하나 + 자투리 5프레임. expected가 청크 끝(CHUNK_BYTES)이 아니라 0이므로
+    // 레코더는 이 청크를 dequeue하지 않고 재시도만 하다가 stop을 맞는다.
+    for (let i = 0; i < 37; i += 1) {
+      port.onmessage?.({
+        data: new ArrayBuffer(FRAME_BYTES),
+      } as MessageEvent<ArrayBuffer>);
+    }
+    await r.stop();
+
+    expect(stopSpy).toHaveBeenCalledTimes(2);
+    // 첫 시도는 로컬 경계(0)에서. 큐에 구멍이 남아 있으므로 꼬리를 싣지 않는다.
+    const [, firstOffset, firstFinal, firstBody] = stopSpy.mock.calls[0];
+    expect(firstOffset).toBe(0);
+    expect(firstFinal).toBe(0);
+    expect((firstBody as Uint8Array).byteLength).toBe(0);
+    // 두 번째는 서버가 알려준 경계에서 빈 바디로 — 앞에 자투리를 덧붙이지 않는다.
+    const [, secondOffset, secondFinal, secondBody] = stopSpy.mock.calls[1];
+    expect(secondOffset).toBe(CHUNK_BYTES);
+    expect(secondFinal).toBe(CHUNK_BYTES);
+    expect((secondBody as Uint8Array).byteLength).toBe(0);
+    expect(r.offset).toBe(CHUNK_BYTES);
+  });
+
   it("재동기화 오프셋 없는 거절은 재시도하지 않고 upload_failed로 끝낸다", async () => {
     const { port } = stubWorkletGlobals();
 
@@ -262,8 +373,11 @@ describe("LiveRecorder stop() after a recorder failure", () => {
         body: Uint8Array,
         elapsedMs: number,
         failure: RecorderFailure | null,
-      ) => Promise<void>
-    >(async () => undefined);
+      ) => Promise<PostResult>
+    >(async (_id, _offset, final) => ({
+      status: 200 as const,
+      expected: final,
+    }));
     const r = new LiveRecorder({
       postChunk: post,
       postStop: stopSpy,

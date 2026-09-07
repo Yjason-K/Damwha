@@ -72,8 +72,8 @@ def _claimed(conn):
 
 
 def _seal(conn, job, n_bytes):
-    """stop_requested_at과 sealed_bytes를 같이 찍는다 — get_stop_requested는 stop_requested_at이
-    없으면 sealed_bytes가 있어도 (None, None)을 낸다 (설계 §4.4 ③)."""
+    """stop_requested_at과 sealed_bytes를 같이 찍는다 — get_live_input_state는
+    stop_requested_at이 없으면 sealed_bytes가 있어도 signal=None을 낸다 (설계 §4.4 ③)."""
     conn.execute(
         "UPDATE job SET stop_requested_at=now(), sealed_bytes=%s WHERE id=%s",
         (n_bytes, job["id"]),
