@@ -34,6 +34,30 @@ export type JsonError = {
   [key: string]: unknown;
 };
 
+/**
+ * `meeting.capture_error.code`가 가질 수 있는 값 — "이 녹음을 어떻게 얻었는가"의 사유다.
+ *
+ * 두 곳에서 온다: 브라우저가 stop의 `X-Capture-Error`로 실어 보내는 캡처 실패
+ * (`RecorderFailure`와 같은 집합 + 서버가 모르는 값을 접어 넣는 `capture_failed`)와,
+ * 서버가 스스로 붙이는 사유(`producer_abandoned`·`capture_gap`·`preview_worker_lost`).
+ * `be/src/live/live.service.ts`의 `CAPTURE_FAILURES`와 어긋나면 서버가 쓴 값을 화면이
+ * 못 읽는 죽은 컬럼이 되므로, `ui/live-banner.tsx`의 문구 표가 이 유니온을 강제한다.
+ */
+export type CaptureErrorCode =
+  | "device_ended"
+  | "buffer_overflow"
+  | "upload_failed"
+  | "capture_flush_failed"
+  | "capture_failed"
+  | "capture_gap"
+  | "producer_abandoned"
+  | "preview_worker_lost";
+
+/** capture_error 컬럼. 모르는 code도 올 수 있으므로 화면은 계속 방어적으로 읽는다. */
+export type CaptureError = Omit<JsonError, "code"> & {
+  code?: CaptureErrorCode;
+};
+
 /** meeting row (SELECT * FROM meeting). GET /meetings, upload, favorite 응답. */
 export type WireMeeting = {
   id: string;
@@ -53,7 +77,7 @@ export type WireMeeting = {
    * 처리가 실패했는가")와는 별개다. `SELECT *`로 나오는 필드라 실제 응답엔 항상 있지만,
    * 이 필드가 생기기 전에 쓰인 기존 테스트 픽스처를 깨지 않으려고 optional로 둔다.
    */
-  capture_error?: JsonError | null;
+  capture_error?: CaptureError | null;
   created_at: string;
 };
 

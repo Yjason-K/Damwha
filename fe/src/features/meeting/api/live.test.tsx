@@ -175,15 +175,13 @@ test("종료가 stopping이면 상세·상태만 무효화하고 캐시를 지�
 // 인터셉터가 2xx 외 전부를 reject하며 몸통을 버리므로, 409의 expected_offset을 읽으려면
 // 이 요청만 validateStatus를 넓혀야 한다 — 그 값이 재동기화의 근거다(설계 §3.3).
 test("청크 업로드는 apiClient로 바이너리 POST하고 200/409 모두 정상 흐름으로 돌려준다", async () => {
-  const post = vi
-    .spyOn(apiClient, "post")
-    .mockResolvedValue({
-      status: 200,
-      data: { expected_offset: 32768 },
-    } as never);
+  const post = vi.spyOn(apiClient, "post").mockResolvedValue({
+    status: 200,
+    data: { expected_offset: 32768 },
+  } as never);
   const body = new Uint8Array(32768);
   const result = await postLiveChunk("m1", 0, body, 1024);
-  expect(result).toEqual({ ok: true, expected: 32768 });
+  expect(result).toEqual({ status: 200, expected: 32768 });
   expect(post).toHaveBeenCalledWith(
     "/meetings/m1/live/audio",
     body,
@@ -204,13 +202,36 @@ test("청크 업로드는 apiClient로 바이너리 POST하고 200/409 모두 �
   expect(cfg.validateStatus(400)).toBe(false);
 });
 
-test("청크 업로드가 409면 ok:false와 서버의 expected_offset을 돌려준다", async () => {
+test("청크 업로드가 409면 status:409와 서버의 확정 경계를 돌려준다", async () => {
   vi.spyOn(apiClient, "post").mockResolvedValue({
     status: 409,
     data: { expected_offset: 32768 },
   } as never);
   const result = await postLiveChunk("m1", 65536, new Uint8Array(32768), 2048);
-  expect(result).toEqual({ ok: false, expected: 32768 });
+  expect(result).toEqual({ status: 409, expected: 32768 });
+});
+
+// 자동 봉인은 재동기화가 아니다 — 레코더가 일반 ACK와 갈라 다뤄야 하므로 code를 실어 보낸다.
+test("서버가 스스로 봉인한 409는 code를 그대로 실어 보낸다", async () => {
+  vi.spyOn(apiClient, "post").mockResolvedValue({
+    status: 409,
+    data: { expected_offset: 460800000, code: "duration_limit" },
+  } as never);
+  expect(
+    await postLiveChunk("m1", 460783616, new Uint8Array(32768), 1),
+  ).toEqual({ status: 409, expected: 460800000, code: "duration_limit" });
+});
+
+// 알 수 없는 code는 재동기화용 409의 부가 정보일 뿐이라 종료 사유로 승격하지 않는다.
+test("모르는 code는 PostResult에 실리지 않는다", async () => {
+  vi.spyOn(apiClient, "post").mockResolvedValue({
+    status: 409,
+    data: { expected_offset: 32768, code: "missing_chunk" },
+  } as never);
+  expect(await postLiveChunk("m1", 0, new Uint8Array(32768), 1)).toEqual({
+    status: 409,
+    expected: 32768,
+  });
 });
 
 test("종료 POST는 오프셋 헤더와 꼬리 바디를 싣고, 성공하면 응답을 콜백으로 넘긴다", async () => {
@@ -271,14 +292,26 @@ test("expected_offset 없는 409는 LiveUploadRejected로 끊는다", async () =
   ).rejects.toBeInstanceOf(LiveUploadRejected);
 });
 
-test("종료 POST가 409면 expected_offset을 담아 던지고 콜백을 부르지 않는다", async () => {
+// 옛 구현은 이 409를 그냥 던졌다. 그러면 서버의 확정 경계가 사라져 레코더가 그 자리에서
+// 빈 stop을 재시도할 수 없고, 세션이 영영 봉인되지 못한다 (설계 §7).
+test("종료 POST가 409면 서버의 확정 경계를 돌려주고 콜백을 부르지 않는다", async () => {
   vi.spyOn(apiClient, "post").mockResolvedValue({
     status: 409,
-    data: { expected_offset: 999 },
+    data: { expected_offset: 999, code: "missing_chunk" },
   } as never);
   const onStopped = vi.fn();
-  await expect(
-    postLiveStop("m1", 0, 32, new Uint8Array(32), 100, null, onStopped),
-  ).rejects.toThrow("999");
+  expect(
+    await postLiveStop("m1", 0, 32, new Uint8Array(32), 100, null, onStopped),
+  ).toEqual({ status: 409, expected: 999 });
   expect(onStopped).not.toHaveBeenCalled();
+});
+
+test("종료 POST가 성공하면 final을 확정 경계로 돌려준다", async () => {
+  vi.spyOn(apiClient, "post").mockResolvedValue({
+    status: 200,
+    data: { meeting_id: "m1", job_id: "job_1", outcome: "finalized" },
+  } as never);
+  expect(
+    await postLiveStop("m1", 32768, 32800, new Uint8Array(32), 100, null),
+  ).toEqual({ status: 200, expected: 32800 });
 });

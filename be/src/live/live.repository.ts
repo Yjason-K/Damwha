@@ -69,6 +69,16 @@ export class LiveRepository {
     await exec.query(`UPDATE job SET last_input_at=now(), updated_at=now() WHERE id=$1`, [jobId]);
   }
 
+  /** 확정 경계 전진. fdatasync 완료 후에만 부른다 — last_input_at도 같이 갱신한다,
+   *  경계가 전진했다는 사실 자체가 producer가 방금 살아 있었다는 증거이기 때문이다
+   *  (설계 §3.3 ④). 신규 job 생성 TX에서 bytes=0으로도 부른다. */
+  async setCommitted(exec: Queryable, jobId: string, bytes: number): Promise<void> {
+    await exec.query(
+      `UPDATE job SET committed_bytes=$2, last_input_at=now(), updated_at=now() WHERE id=$1`,
+      [jobId, bytes],
+    );
+  }
+
   async setCaptureError(exec: Queryable, meetingId: string, err: object): Promise<void> {
     await exec.query(`UPDATE meeting SET capture_error=$2::jsonb WHERE id=$1`,
       [meetingId, JSON.stringify(err)]);
@@ -107,6 +117,24 @@ export class LiveRepository {
             OR ( j.sealed_bytes IS NOT NULL AND j.status <> 'running' ) )`,
       [String(seconds)]);
     return rows;
+  }
+
+  /**
+   * 이미 잠근 job의 producer 생존 검사 (설계 §5 ②). 후보 조회는 힌트일 뿐이라, 잠금을
+   * 얻고 나서 DB 시계로 다시 본다 — 그 사이 브라우저가 정상 append를 커밋했을 수 있다.
+   *
+   * `now()`가 아니라 `clock_timestamp()`다. `now()`는 트랜잭션 시작 시각이라 잠금 대기로
+   * 오래 멈춰 있었으면 실제 현재보다 과거를 가리킨다. 판정 기준은 잠금을 얻은 지금이다.
+   *
+   * 행이 사라졌으면 false — 없는 세션을 봉인 대상으로 삼지 않는다.
+   */
+  async isProducerExpired(exec: Queryable, jobId: string, seconds: number): Promise<boolean> {
+    const { rows } = await exec.query<{ expired: boolean }>(
+      `SELECT COALESCE(last_input_at, created_at)
+              < clock_timestamp() - ($2 || ' seconds')::interval AS expired
+       FROM job WHERE id=$1`,
+      [jobId, String(seconds)]);
+    return rows[0]?.expired ?? false;
   }
 
   async findUtterances(exec: Queryable, meetingId: string, afterSeq: number): Promise<LiveUtteranceRow[]> {

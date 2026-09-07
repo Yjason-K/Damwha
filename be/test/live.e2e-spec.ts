@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
+import { SchedulerRegistry } from '@nestjs/schedule';
 import request from 'supertest';
 import { startTestDb, StartedTestDb } from './db';
 import { AppModule } from '../src/app.module';
@@ -22,6 +23,9 @@ describe('live session api', () => {
       .compile();
     app = mod.createNestApplication();
     await app.init();
+    // live-orphan.e2e-spec.ts와 같은 이유 — 이 스위트도 job 행을 직접 SQL로 조작해 결정적인
+    // 상태를 기대하므로, AppModule이 등록한 30초 주기 LiveOrphanService.sweepScheduled를 끈다.
+    app.get(SchedulerRegistry).getCronJobs().forEach((job) => job.stop());
   });
   afterEach(async () => { jest.restoreAllMocks(); await db.reset(); });
   afterAll(async () => { await app?.close(); await db?.stop(); });
@@ -36,14 +40,22 @@ describe('live session api', () => {
       [jobId],
     );
 
-  // 이 파일의 stop 테스트는 전부 0바이트 세션(오디오를 한 번도 안 보냄)이다 — 기본값
-  // offset=final=0, 빈 바디로 새 종료 계약(§3.4)을 그대로 만족한다.
+  // 기본값 offset=final=0, 빈 바디는 "오디오를 한 번도 안 보낸" 0바이트 세션이다.
+  // 설계 §3.4대로 그 stop은 **워커 상태와 무관하게 회의를 폐기**하므로, 봉인 뒤에도
+  // 회의가 남아 있어야 하는 테스트는 아래 sendChunk로 먼저 오디오를 올린다.
   const stop = (id: string, offset = 0, final = 0, body = Buffer.alloc(0)) =>
     request(srv()).post(`/meetings/${id}/live/stop`)
       .set('Content-Type', 'application/octet-stream')
       .set('X-Audio-Offset', String(offset))
       .set('X-Final-Offset', String(final))
       .send(body);
+
+  const CHUNK = 32768;
+  const sendChunk = (id: string) =>
+    request(srv()).post(`/meetings/${id}/live/audio`)
+      .set('Content-Type', 'application/octet-stream')
+      .set('X-Audio-Offset', '0')
+      .send(Buffer.alloc(CHUNK, 1));
 
   it('POST /meetings/live creates a recording meeting and a live_session job with max_attempts=1', async () => {
     const res = await start({ title: '오늘 회의', defer_summary: true, speakers: { min: 2 } });
@@ -62,6 +74,65 @@ describe('live session api', () => {
     expect(payload.process.followups).toEqual({ lens: true, summary: false });
     expect(payload.process.models.diarization.min_speakers).toBe(2);
     expect(payload.process.processing_version).toBe(0);
+  });
+
+  // 신규 browser live job은 파일(PCM 0바이트)과 같은 사실을 committed_bytes=0으로
+  // 들고 태어난다 — NULL이면 "아직 시작 전"과 구별이 안 된다 (설계 §3.2).
+  it('POST /meetings/live creates the job with committed_bytes=0', async () => {
+    const created = await start().expect(201);
+    const { rows } = await db.pool.query(
+      'SELECT committed_bytes FROM job WHERE id=$1', [created.body.current_job_id],
+    );
+    expect(rows[0].committed_bytes).toBe('0');
+  });
+
+  // 024의 CHECK 제약: committed_bytes는 live_session이고, 0 이상 짝수이며, sealed_bytes가
+  // 있으면 그와 같아야 한다. 과거(023 이전) 종료 job과 다른 타입의 NULL은 그대로 허용된다.
+  describe('024_live_committed_bytes CHECK', () => {
+    it('rejects a negative committed_bytes', async () => {
+      await expect(
+        db.pool.query(`INSERT INTO job(type, payload, committed_bytes) VALUES('live_session','{}'::jsonb,-2)`),
+      ).rejects.toThrow(/check constraint/i);
+    });
+
+    it('rejects an odd committed_bytes', async () => {
+      await expect(
+        db.pool.query(`INSERT INTO job(type, payload, committed_bytes) VALUES('live_session','{}'::jsonb,3)`),
+      ).rejects.toThrow(/check constraint/i);
+    });
+
+    it('rejects sealed_bytes and committed_bytes disagreeing', async () => {
+      await expect(
+        db.pool.query(
+          `INSERT INTO job(type, payload, sealed_bytes, committed_bytes) VALUES('live_session','{}'::jsonb,10,8)`,
+        ),
+      ).rejects.toThrow(/check constraint/i);
+    });
+
+    it('rejects a non-live_session job carrying committed_bytes', async () => {
+      await expect(
+        db.pool.query(
+          `INSERT INTO job(type, payload, committed_bytes) VALUES('process_meeting','{}'::jsonb,0)`,
+        ),
+      ).rejects.toThrow(/check constraint/i);
+    });
+
+    it('allows a NULL committed_bytes (past sessions, other job types)', async () => {
+      await expect(
+        db.pool.query(`INSERT INTO job(type, payload) VALUES('live_session','{}'::jsonb)`),
+      ).resolves.toBeDefined();
+      await expect(
+        db.pool.query(`INSERT INTO job(type, payload) VALUES('process_meeting','{}'::jsonb)`),
+      ).resolves.toBeDefined();
+    });
+
+    it('allows matching sealed_bytes and committed_bytes', async () => {
+      await expect(
+        db.pool.query(
+          `INSERT INTO job(type, payload, sealed_bytes, committed_bytes) VALUES('live_session','{}'::jsonb,10,10)`,
+        ),
+      ).resolves.toBeDefined();
+    });
   });
 
   it('POST /meetings/live → 409 while another recording exists', async () => {
@@ -100,11 +171,12 @@ describe('live session api', () => {
   it('stop on a running session sets stop_requested_at once and is idempotent', async () => {
     const created = await start().expect(201);
     await claim(created.body.current_job_id);
-    const first = await stop(created.body.id).expect(200);
+    await sendChunk(created.body.id).expect(200);
+    const first = await stop(created.body.id, CHUNK, CHUNK).expect(200);
     expect(first.body.outcome).toBe('stopping');
     const at1 = (await db.pool.query('SELECT stop_requested_at FROM job WHERE id=$1', [created.body.current_job_id])).rows[0].stop_requested_at;
     expect(at1).not.toBeNull();
-    const second = await stop(created.body.id).expect(200);
+    const second = await stop(created.body.id, CHUNK, CHUNK).expect(200);
     expect(second.body.outcome).toBe('stopping');
     const at2 = (await db.pool.query('SELECT stop_requested_at FROM job WHERE id=$1', [created.body.current_job_id])).rows[0].stop_requested_at;
     expect(new Date(at2).getTime()).toBe(new Date(at1).getTime());
@@ -112,16 +184,19 @@ describe('live session api', () => {
 
   // 브라우저가 캡처를 끝까지 못 했다는 사실이 탭 밖에 남는 유일한 통로다 (설계 §5.3·§7).
   // 이게 없으면 3분 만에 마이크를 잃은 회의와 깨끗한 회의가 서버에서 구별되지 않는다.
+  // 0바이트가 아니라 청크 하나를 올린 뒤 종료한다 — 0바이트 stop은 회의를 폐기하므로
+  // (설계 §3.4) capture_error를 읽을 회의 자체가 남지 않는다.
   const stopWithCaptureError = (id: string, code: string) =>
     request(srv()).post(`/meetings/${id}/live/stop`)
       .set('Content-Type', 'application/octet-stream')
-      .set('X-Audio-Offset', '0').set('X-Final-Offset', '0')
+      .set('X-Audio-Offset', String(CHUNK)).set('X-Final-Offset', String(CHUNK))
       .set('X-Capture-Error', code)
       .send(Buffer.alloc(0));
 
   it('stop records X-Capture-Error in meeting.capture_error', async () => {
     const created = await start().expect(201);
     await claim(created.body.current_job_id);
+    await sendChunk(created.body.id).expect(200);
     await stopWithCaptureError(created.body.id, 'device_ended').expect(200);
     const { rows } = await db.pool.query('SELECT capture_error FROM meeting WHERE id=$1', [created.body.id]);
     expect(rows[0].capture_error).toEqual({
@@ -132,6 +207,7 @@ describe('live session api', () => {
   it('stop still seals on an unknown X-Capture-Error, recording it as capture_failed', async () => {
     const created = await start().expect(201);
     await claim(created.body.current_job_id);
+    await sendChunk(created.body.id).expect(200);
     // 진단 헤더가 봉인을 막으면 회의가 recording에 갇히고 부분 유일 인덱스가 다음
     // 녹음까지 막는다 — 400이 아니라 200이어야 한다.
     const res = await stopWithCaptureError(created.body.id, 'wat').expect(200);
@@ -143,7 +219,8 @@ describe('live session api', () => {
   it('a clean stop leaves capture_error null', async () => {
     const created = await start().expect(201);
     await claim(created.body.current_job_id);
-    await stop(created.body.id).expect(200);
+    await sendChunk(created.body.id).expect(200);
+    await stop(created.body.id, CHUNK, CHUNK).expect(200);
     const { rows } = await db.pool.query('SELECT capture_error FROM meeting WHERE id=$1', [created.body.id]);
     expect(rows[0].capture_error).toBeNull();
   });
@@ -169,7 +246,8 @@ describe('live session api', () => {
     } finally {
       holder.release();
     }
-    const res = await stop(created.body.id).expect(200);
+    await sendChunk(created.body.id).expect(200);
+    const res = await stop(created.body.id, CHUNK, CHUNK).expect(200);
     expect(res.body.outcome).toBe('stopping');
   });
 

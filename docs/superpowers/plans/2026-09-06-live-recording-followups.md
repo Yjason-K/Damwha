@@ -31,6 +31,11 @@
 **정상 경로는 검증됐다.** 아래는 전부 *실패 경로*와 위생 항목이었다 — 스모크에서 아무것도
 실패하지 않았으므로 하나도 태워지지 않았다.
 
+> **이 `mtg_15` 결과는 2026-09-07 capture-hardening 작업의 근거가 아니다.** 그때 코드에는
+> `job.committed_bytes`가 아예 없었다(migration `024`는 그 브랜치에서 추가됐다). 즉 위 "바이트
+> 회계" 줄은 *파일 길이*를 기준으로 맞춘 것이고, 확정 경계를 기준으로 맞춘 것이 아니다.
+> 이후 변경의 증거는 `be/worker/SMOKE.md`의 2026-09-07 절에 따로 있다.
+
 ---
 
 ## 1. 닫힌 것
@@ -51,7 +56,31 @@
 | 커밋 | 닫은 항목 |
 |---|---|
 | `32f72bb` | **P0.1** 레코더 실패 → `capture_error` (§5.3·§7). 같이: 409-without-offset이 offset을 오염시키던 문제(P1 2.2), `upload_failed`가 실제로 발생하게, 배너가 여섯 코드를 전부 그리게 |
-| `f396dfa` | **P0.2** `reapStale`이 라이브 회의를 죽이던 문제 (§2.11·§7). 같이: "누가 finalize하는가"를 `!== 'running'`으로, 봉인-후-미마무리를 스위퍼가 집게, `duration_ms` 부동소수(P1 2.1) |
+| `f396dfa` | **P0.2** `reapStale`이 라이브 회의를 죽이던 문제 (§2.11·§7) — **TypeScript 쪽만**. 정정은 아래 참고. 같이: "누가 finalize하는가"를 `!== 'running'`으로, 봉인-후-미마무리를 스위퍼가 집게, `duration_ms` 부동소수(P1 2.1) |
+
+> **정정 (2026-09-07): 위 reaper 항목은 절반만 닫혀 있었다.** `f396dfa`가 고친 것은
+> `JobsRepository.reapStale`(TypeScript)뿐이고, 워커 슈퍼바이저가 실제로 돌리는
+> **Python `db.reap_stale`은 그대로였다** — 그쪽 `fail_meetings`는 여전히 라이브 회의를
+> `failed`로 만들고 있었다. 두 실행 경로가 다른 계약을 들고 있었으므로, 워커의 reaper가
+> 먼저 도는 배포에서는 멀쩡히 업로드 중인 녹음이 죽었을 것이다. 이 문서가 "닫힘"으로
+> 분류한 것은 착오다.
+>
+> 실제로 두 쪽을 일치시킨 것은 capture-hardening 브랜치의 `2a3562f`
+> ("fix(live): 워커 종료와 녹음 수명을 분리")다. 지금은 `db.reap_stale`이 `live_session`을
+> requeue 집합과 `fail_meetings` 집합 **양쪽에서** 제외하고, 두 집합이 정확히 반대라
+> stale live job이 `running`에 영원히 남지도 않는다. 고정하는 테스트도 양쪽에 있다 —
+> `be/test/reaper.spec.ts`와
+> `worker/tests/test_db_lifecycle.py::test_reap_stale_fails_live_session_but_leaves_the_meeting_recording`
+> ·`::test_reap_stale_never_requeues_a_live_session`.
+>
+> 2026-09-07 실기기로도 확인했다(회의 `mtg_31`): 녹음 중 워커에 SIGTERM → 그 뒤로도
+> `POST /live/audio` 15회 전부 200, `committed_bytes`가 정확히 15 × 32,768만큼 증가,
+> job은 `failed`/`worker_shutdown`인데 meeting은 `recording` 유지. 종료 뒤 API가 finalize해
+> `capture_error=preview_worker_lost`가 붙었고, 워커를 다시 띄우니 정본 처리가 `done`으로
+> 끝나면서 그 `capture_error`는 보존됐다.
+>
+> **교훈:** 이 저장소는 같은 규칙을 TypeScript와 Python 두 곳에 손으로 들고 있다. 한쪽을
+> 고치고 "닫힘"으로 적기 전에 반대쪽 파일을 열어 봐야 한다.
 | `6a93efb` | **P1 열 건** — tmp 정리, `LIMIT 1`, OSError 분류, hang 대신 실패하는 시계, `pg_locks` 폴링, 409 오프셋 단언, `declare global` 격리, 죽은 코드 셋 |
 | *(이 커밋)* | **스펙 괴리** — `mic` 즉시 거절, 봉인 후 크기 단언(§3.3.1), stop의 갭 검사(§3.4), `be/CLAUDE.md` 재작성 |
 
@@ -85,21 +114,47 @@
 값이 있다 — *`start()`는 스트림을 할당 시점부터 첫 프레임까지 소유하고, 모든 종료 경로가 그것을
 반납한다.*
 
-### 스펙 §9가 요구했으나 없는 동시성 테스트 셋
+### ~~스펙 §9가 요구했으나 없는 동시성 테스트 셋~~ — 닫힘 (2026-09-07)
 
-- cancel ↔ append
-- queued-finalize ↔ worker-claim
-- running-worker-finalize ↔ orphan-seal
+세 가지 모두 실제 잠금 경합 테스트가 생겼다. 코드 리뷰가 아니라 테스트가 잠금 순서를 고정한다.
 
-잠금 순서(job → meeting)는 다섯 writer 전부에서 확인됐고 역방향 간선이 없음도 확인됐지만,
-그것을 **고정하는 테스트**는 `live-audio.e2e-spec.ts`의 "two concurrent appends at the same
-offset"뿐이다. 나머지 셋은 코드 리뷰로만 보장된다.
+| 요구했던 경합 | 지금 고정하는 테스트 |
+|---|---|
+| cancel ↔ append | `live-audio.e2e-spec.ts` — "an append that waited behind a cancel is refused and never grows the file", "a cancel that waited behind an append closes the session and stops the growth" |
+| queued-finalize ↔ worker-claim | `live.e2e-spec.ts` — "a claim skips the session job while stop holds its row lock"; `live-orphan.e2e-spec.ts` — "finalizes a sealed session that no worker ever claimed", "stop finalizes when the reaper already failed the job" |
+| running-worker-finalize ↔ orphan-seal | `live-orphan.e2e-spec.ts` — "leaves a sealed session to the worker while the job is still running", "two sweepers on the same candidate produce exactly one process job" |
+
+기존 "two concurrent appends at the same offset"도 그대로 있다.
 
 ### 테스트 공백
 
-- `pcm-worklet.ts`는 **자동 커버리지 0**(jsdom에 `AudioContext`가 없다). 실기기 스모크
-  체크리스트 2단계가 유일한 그물.
-- orphan 스윕에 §9가 요구한 "`last_input_at`은 낡았는데 파일은 더 긴 경우"가 없다.
+- ~~orphan 스윕에 §9가 요구한 "`last_input_at`은 낡았는데 파일은 더 긴 경우"가 없다.~~
+  **닫힘** — `live-orphan.e2e-spec.ts`의 "an append that commits while the sweeper waits for
+  the job lock leaves the session alive"와 "judges freshness by the clock after the lock, not
+  by the transaction start"가 그 경합이다. 봉인 길이는 파일 길이가 아니라 확정 경계라는 것도
+  "seals at the committed boundary and truncates the uncommitted tail"이 고정한다.
+- `pcm-worklet.ts`는 여전히 **jsdom 커버리지 0**(jsdom에 `AudioContext`가 없다). 다만 완전한
+  공백은 아니게 됐다 — `pnpm fe verify:worklet`이 **빌드 산출물**을 `node:vm`으로 평가해
+  begin/flush 프로토콜을 검사하므로, `?worker&url`이 깨지는 회귀는 자동으로 잡힌다.
+  실제 `audioWorklet.addModule()`은 여전히 실기기 스모크에서만 증명된다.
+  (`?worker&url` 자체는 원래부터 옳았다 — 2026-09-07 작업은 그걸 고친 게 아니라 회귀 그물을
+  씌운 것이다.)
+
+### 2026-09-07 capture-hardening 브랜치가 닫은 것
+
+`fix/live-recording-capture-hardening` (`1116b82..585e358`). 설계는
+[capture-hardening spec](../specs/2026-09-07-live-recording-capture-hardening-design.md).
+
+- **확정 바이트 경계** (migration `024`, `job.committed_bytes`). append 오프셋·복구 지점·봉인
+  길이의 진실이 파일 길이에서 DB 컬럼으로 옮겨졌다. 부분 write와 sync 전후 크래시가 남기는
+  미확정 꼬리를 정본으로 인정하지 않는다. 완전 쓰기 루프 + fdatasync 후 같은 TX에서 경계 전진.
+- **워커 장애의 미리보기 격리.** `fail_live_preview`가 생겼고 Python `db.reap_stale`이
+  TypeScript와 같은 계약이 됐다(위 정정 참고).
+- **orphan 스위퍼의 잠금 후 생존 재검증.** 후보 조회와 봉인 사이에 커밋된 append를 덮지 않는다.
+- **캡처 준비 → 회의 생성 순서.** 권한·장치·Worklet 실패가 `POST /meetings/live` 이전에 드러난다.
+- **Worklet flush 프로토콜.** `flush`/`flushed` ACK로 마지막 자투리를 건져 stop 본문에 싣는다.
+- 실기기 스모크와 배포 형상 실측은 `be/worker/SMOKE.md`의 2026-09-07 절.
+  **미검증으로 남은 것: HTTPS origin·다른 기기 브라우저 녹음, 운영 배포.**
 
 ---
 
@@ -107,6 +162,13 @@ offset"뿐이다. 나머지 셋은 코드 리뷰로만 보장된다.
 
 `specs/`는 사후 편집하지 않는 스냅샷이므로(저장소 규약), 아래는 **코드가 정본이고 스펙이 옛
 서술**인 지점들이다. 현재 동작의 living doc은 `be/CLAUDE.md`다.
+
+> **먼저 읽을 것:** 2026-09-05 브라우저 캡처 설계의 일부 결정은
+> [2026-09-07 capture-hardening 설계](../specs/2026-09-07-live-recording-capture-hardening-design.md)
+> §1의 우선순위 표가 **덮어썼다**. 특히 "파일 길이가 append 오프셋의 진실" → **DB의
+> `committed_bytes`가 진실**, "워커 오류는 회의 실패" → **미리보기만 종료**, "회의 생성 뒤
+> getUserMedia" → **캡처 준비 완료 뒤 회의 생성**, "Worklet 중지 후 메인 버퍼 전송" →
+> **flush ACK 뒤 전송 종료**. 두 스냅샷이 부딪히면 나중 문서가 이긴다.
 
 | § | 스펙 | 실제 | 왜 이쪽인가 |
 |---|---|---|---|
@@ -127,7 +189,13 @@ offset"뿐이다. 나머지 셋은 코드 리뷰로만 보장된다.
   구간(평균 1.7초)에서 난다. 별도로 볼 값이 있다.
 - **공유 e2e 하네스의 `socket hang up` flake.** 베이스라인에서도 재현되고, 단언 불일치가 아니라
   소켓 레벨이며, 실패 파일이 실행마다 다르고 라이브와 무관하다. 이 브랜치의 회귀가 아니다.
-  (2026-09-06 재확인: 3회 중 1회 재현, 같은 서명.)
+  (2026-09-06 재확인: 3회 중 1회 재현, 같은 서명.
+  2026-09-07 `585e358`에서 be 전체 스위트 2회 — 둘 다 41/41 스위트·454/454 테스트 통과,
+  재현 없음. 두 번째 실행은 API·워커가 떠 있는 상태, 즉 자원 경합이 있는 조건이었다.
+  **재현되지 않았다는 것이 원인이 밝혀졌다는 뜻은 아니다** — 표본이 늘었을 뿐이다.)
+- **`live-crash.e2e-spec.ts`의 `replay()` 헬퍼에 `exit` 리스너가 없다.** 형제인 `crashAt`에는
+  있다. 재기동한 자식이 시작하자마자 죽으면 stderr가 삼켜진 채 jest 타임아웃까지 매달린다 —
+  위 flake가 이 파일에서 났을 때 읽을 수 없었던 이유로 유력하다. 아직 안 고쳤다.
 - **미해명 단일 관측:** Task 11 조사 중 200 대신 403을 한 번 봤다. 명명 가능한 두 기전은
   실험으로 배제됐고, 당시 측정은 서브에이전트와 동시에 전체 스위트를 돌린 자원 경합으로
   오염돼 있었다. 재현되면 그때 판단한다.

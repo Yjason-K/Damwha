@@ -109,10 +109,16 @@ export class JobsRepository {
            AND locked_at < now() - ($1 || ' minutes')::interval
          FOR UPDATE SKIP LOCKED
        ),
+       -- live_session은 재queue 대상이 아니다 (설계 §2.2·§4.2). 다시 claim해 봐야 다음 워커는
+       -- 이미 지나간 오디오를 앞에서부터 다시 전사한다. max_attempts=1이 보통 그것을 보장하지만,
+       -- 남는 attempts를 가진 라이브 행이 생겨도 여기서 failed로 간다 — 두 집합이 정확히
+       -- 반대라야 stale live job이 running에 영원히 남지 않는다.
        requeued AS (
          UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL,
            next_attempt_at=NULL, updated_at=now()
-         WHERE id IN (SELECT id FROM stale WHERE attempts < max_attempts)
+         WHERE id IN (
+           SELECT id FROM stale WHERE attempts < max_attempts AND type <> 'live_session'
+         )
          RETURNING id
        ),
        failed AS (
@@ -120,7 +126,9 @@ export class JobsRepository {
            error = jsonb_build_object('code','stale_worker',
                                        'message','worker lock expired',
                                        'stage', j.stage)
-         WHERE id IN (SELECT id FROM stale WHERE attempts >= max_attempts)
+         WHERE id IN (
+           SELECT id FROM stale WHERE attempts >= max_attempts OR type = 'live_session'
+         )
          RETURNING id, type, meeting_id, error
        ),
        fail_lens_extraction_runs AS (
@@ -141,6 +149,7 @@ export class JobsRepository {
        -- "녹음은 계속. 미리보기만 없고"). 여기서 회의를 failed로 만들면 브라우저가 아직
        -- 업로드 중인 멀쩡한 녹음을 죽인다. job은 그대로 failed가 되고(그 워커는 실제로
        -- 사라졌다), 마무리는 stop이나 LiveOrphanService가 API 경로로 맡는다.
+       -- 워커의 db.reap_stale도 같은 계약이다 — 두 CTE는 함께 고친다.
        fail_meetings AS (
          UPDATE meeting m SET status='failed',
            error = jsonb_build_object('code','stale_worker','message','processing worker lost')

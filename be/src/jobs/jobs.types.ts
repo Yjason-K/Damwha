@@ -31,4 +31,7 @@ export interface JobRow {
   sealed_bytes: string | null;
   /** producer(브라우저 append) 생존 신호. 워커 heartbeat(locked_at)와는 별개다 (마이그레이션 023). */
   last_input_at: Date | null;
+  /** fdatasync 완료 후 커밋된 연속 prefix 길이. bigint라 pg가 문자열로 돌려준다.
+   *  live_session이 아니거나 아직 시작 전이면 null (마이그레이션 024). */
+  committed_bytes: string | null;
 }

@@ -6,8 +6,17 @@ import time
 import pytest
 
 from damwha_worker.audio.source import FRAME_BYTES
-from damwha_worker.audio.tail_source import BYTES_PER_MS, DRIFT_BYTES, TailSource
+from damwha_worker.audio.tail_source import (
+    BYTES_PER_MS,
+    DRIFT_BYTES,
+    HEADER_LEN,
+    TailSource,
+)
+from damwha_worker.db import LiveInputState
 from damwha_worker.errors import IO_ERROR, WorkerError
+
+#: 확정 경계를 검사하지 않는 테스트가 쓰는 "파일 전체가 확정됨" 값.
+UNBOUNDED = 1 << 40
 
 HEADER = (
     b"RIFF"
@@ -61,9 +70,14 @@ class RealClock:
         time.sleep(s)
 
 
-def _src(path, sealed=None, **kw):
+def _src(path, sealed=None, committed=None, signal=None, **kw):
     c = kw.pop("clock", None) or Clock()
-    return TailSource(path, sealed_bytes=lambda: sealed, clock=c, sleep=c.sleep, **kw), c
+    if committed is None:
+        # 마이그레이션 024의 CHECK가 sealed_bytes = committed_bytes를 강제한다. 확정 경계
+        # 자체를 보는 테스트만 committed를 따로 준다.
+        committed = sealed if sealed is not None else UNBOUNDED
+    state = LiveInputState(signal, committed, sealed)
+    return TailSource(path, input_state=lambda: state, clock=c, sleep=c.sleep, **kw), c
 
 
 def test_yields_only_complete_frames(tmp_path):
@@ -187,3 +201,56 @@ def test_short_read_is_retried_not_treated_as_eof(tmp_path):
     src.stop()
     t.join(timeout=5)
     assert got[0] == b"\x07" * FRAME_BYTES
+
+
+# ── 확정 경계 (설계 §3.5) ───────────────────────────────────────────────────
+#
+# 읽기 상한은 파일 크기가 아니라 min(파일 크기, committed_bytes)다. 파일에는 크래시가 남긴
+# 미확정 꼬리가 붙어 있을 수 있고, 다음 요청이 그것을 잘라내고 다른 PCM을 쓴다.
+
+
+def test_never_reads_past_the_committed_boundary(tmp_path):
+    # 확정 한 프레임 + 미확정 한 프레임. 미확정 쪽은 파일에 있어도 나오면 안 된다.
+    path = _wav(tmp_path, b"\x01" * FRAME_BYTES + b"\x09" * FRAME_BYTES)
+    src, _ = _src(path, sealed=None, committed=FRAME_BYTES)
+    frames = src.frames()
+    assert next(frames) == b"\x01" * FRAME_BYTES
+    src.stop()
+    assert list(frames) == []
+
+
+def test_a_truncated_unconfirmed_tail_never_reaches_the_transcript(tmp_path):
+    # 미확정 꼬리를 미리 읽어 두면, API가 그것을 잘라내고 다른 PCM을 쓴 뒤 미리보기가
+    # 정본에 없는 소리를 말하게 된다 — 되돌릴 수 없는 종류의 오류다.
+    path = _wav(tmp_path, b"\x01" * FRAME_BYTES + b"\x09" * FRAME_BYTES)
+    box = {"state": LiveInputState(None, FRAME_BYTES, None)}
+    c = Clock()
+    src = TailSource(path, input_state=lambda: box["state"], clock=c, sleep=c.sleep)
+    frames = src.frames()
+    assert next(frames) == b"\x01" * FRAME_BYTES
+
+    # API가 미확정 꼬리를 truncate하고 다른 PCM을 다시 써 확정·봉인한다 (설계 §3.3 ①).
+    with open(path, "r+b") as f:
+        f.truncate(HEADER_LEN + FRAME_BYTES)
+        f.seek(HEADER_LEN + FRAME_BYTES)
+        f.write(b"\x02" * FRAME_BYTES)
+    box["state"] = LiveInputState("stop", FRAME_BYTES * 2, FRAME_BYTES * 2)
+
+    assert list(frames) == [b"\x02" * FRAME_BYTES]  # \x09는 한 번도 나오지 않았다
+
+
+def test_lost_ownership_ends_the_source_without_reading(tmp_path):
+    # 소유권을 잃은 뒤에도 읽으면 이미 남이 쓰고 있는 파일을 전사한다 (설계 §4.2).
+    path = _wav(tmp_path, b"\x01" * FRAME_BYTES * 4)
+    src, _ = _src(path, sealed=None, committed=FRAME_BYTES * 4, signal="lost")
+    assert list(src.frames()) == []
+
+
+def test_a_short_file_after_sealing_fails_only_after_the_timeout(tmp_path):
+    # 봉인 길이에 영영 못 닿는다 — 그냥 두면 미리보기가 max_minutes(4시간)까지 돈다.
+    path = _wav(tmp_path, b"\x01" * FRAME_BYTES)
+    src, clock = _src(path, sealed=FRAME_BYTES * 4, sealed_short_seconds=10.0, poll_seconds=0.5)
+    with pytest.raises(WorkerError) as e:
+        list(src.frames())
+    assert e.value.code == IO_ERROR
+    assert clock.t >= 10.0  # 곧바로 죽지 않고 상한만큼 기다렸다

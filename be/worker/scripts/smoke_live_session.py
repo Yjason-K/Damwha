@@ -65,10 +65,13 @@ def _wav_header(data_size: int, riff_size: int) -> bytes:
     return bytes(b)
 
 
-def _append_realtime(target_path: str, source_wav: str, max_seconds: int) -> int:
+def _append_realtime(target_path: str, source_wav: str, max_seconds: int, on_committed=None) -> int:
     """source_wav의 PCM을 target_path 끝에 1초 청크로 실시간 append한다(설계 §2.5의
     "초당 POST" 흉내). max_seconds만큼(또는 source_wav가 먼저 끝나면 그만큼) 쓰고 append한
-    바이트 수를 돌려준다. target_path는 이미 스트리밍 헤더가 쓰여 있어야 한다."""
+    바이트 수를 돌려준다. target_path는 이미 스트리밍 헤더가 쓰여 있어야 한다.
+
+    on_committed은 sync 뒤 확정 경계를 DB에 커밋하는 API의 역할을 흉내 낸다 — 이걸 안 하면
+    TailSource가 committed=0만 보고 봉인 전까지 한 프레임도 읽지 않는다 (설계 §3.3 ④)."""
     max_bytes = max_seconds * SR * 2 if max_seconds else None
     written = 0
     with wave.open(source_wav, "rb") as w:
@@ -87,6 +90,8 @@ def _append_realtime(target_path: str, source_wav: str, max_seconds: int) -> int
                 f.flush()
                 os.fsync(f.fileno())
                 written += len(pcm)
+                if on_committed is not None:
+                    on_committed(written)
                 time.sleep(1.0)
     return written
 
@@ -167,26 +172,39 @@ def main() -> int:
         assert job is not None and job["id"] == jid
 
         models = build_live_models(payload_dict, settings)
-        sealed_box: dict | None = None
+        state_box: dict | None = None
         if args.tail:
             target_path = storage.resolve(audio_key)
             os.makedirs(os.path.dirname(target_path), exist_ok=True)
             with open(target_path, "wb") as f:
                 f.write(_wav_header(STREAMING_SIZE, STREAMING_SIZE))
-            sealed_box = {"bytes": None}
-            source = TailSource(target_path, sealed_bytes=lambda: sealed_box["bytes"])
+            # run_live_session이 첫 스냅샷을 채운다. 소스는 이 자리를 읽기만 한다.
+            state_box = {"state": db.LiveInputState(None, 0, None)}
+            source = TailSource(target_path, input_state=lambda: state_box["state"])
 
             def _tail_writer() -> None:
-                written = _append_realtime(target_path, args.tail, args.seconds)
+                with psycopg.connect(url, autocommit=True) as c1:
+                    written = _append_realtime(
+                        target_path,
+                        args.tail,
+                        args.seconds,
+                        lambda n: c1.execute(
+                            "UPDATE job SET committed_bytes=%s, last_input_at=now() WHERE id=%s",
+                            (n, jid),
+                        ),
+                    )
                 with open(target_path, "r+b") as f:
                     f.seek(0)
                     f.write(_wav_header(written, 36 + written))
                     f.flush()
                     os.fsync(f.fileno())
                 with psycopg.connect(url, autocommit=True) as c2:
+                    # 확정 경계와 봉인은 API가 한 TX에서 같이 쓴다 (설계 §3.4) — 여기서도
+                    # 같이 써야 TailSource가 그 바이트까지 실제로 읽는다.
                     c2.execute(
-                        "UPDATE job SET stop_requested_at=now(), sealed_bytes=%s WHERE id=%s",
-                        (written, jid),
+                        "UPDATE job SET stop_requested_at=now(), committed_bytes=%s, "
+                        "sealed_bytes=%s WHERE id=%s",
+                        (written, written, jid),
                     )
                 logging.info("tail writer sealed after %d bytes (%d ms)", written, written // 32)
 
@@ -231,7 +249,7 @@ def main() -> int:
             source,
             worker_id=settings.worker_id,
             max_minutes=settings.live_max_minutes,
-            sealed_box=sealed_box,
+            state_box=state_box,
         )
         rows = conn.execute(
             "SELECT seq, start_ms, end_ms, speaker_id, similarity, text FROM live_utterance "

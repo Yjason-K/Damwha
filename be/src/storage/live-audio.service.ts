@@ -63,21 +63,59 @@ export class LiveAudioService {
     return st === null ? -1 : st.size - HEADER_LEN;
   }
 
-  /** 이어 붙이고 fdatasync한 뒤 새 PCM 크기를 돌려준다. */
-  async append(key: string, pcm: Buffer): Promise<number> {
+  /** `r+`로 열어 콜백을 돌리고 반드시 닫는다. 아래 세 연산이 같은 파일을 같은 모양으로 연다. */
+  private async withHandle<T>(key: string, fn: (fh: fs.promises.FileHandle) => Promise<T>): Promise<T> {
     const fh = await fs.promises.open(this.storage.resolve(key), 'r+');
     try {
-      const { size } = await fh.stat();
-      await fh.write(pcm, 0, pcm.length, size);
-      await fh.datasync();
-      return size + pcm.length - HEADER_LEN;
+      return await fn(fh);
     } finally { await fh.close(); }
+  }
+
+  /**
+   * committed 경계 뒤 미확정 꼬리를 truncate한다. 파일이 그 경계보다 짧으면 확정된
+   * 바이트 자체를 잃었다는 뜻이라 오류를 던진다 — 0으로 메워 넣지 않는다. 같으면
+   * no-op이다 (설계 §3.3 ①·②).
+   */
+  async recover(key: string, committedBytes: number): Promise<void> {
+    const boundary = HEADER_LEN + committedBytes;
+    await this.withHandle(key, async (fh) => {
+      const { size } = await fh.stat();
+      if (size < boundary) {
+        throw new Error(`live audio is ${size - HEADER_LEN} PCM bytes but committed ${committedBytes}: ${key}`);
+      }
+      if (size > boundary) {
+        await fh.truncate(boundary);
+        await fh.datasync();
+      }
+    });
+  }
+
+  /**
+   * committed 경계에 완전 positional write를 한다. 한 번의 write 호출이 버퍼 전체를
+   * 쓴다고 가정하지 않는다 — bytesWritten만큼만 전진하고 나머지를 반복해서 쓴다.
+   * fdatasync 뒤 새 확정 경계(offset+len)를 돌려준다 (설계 §3.2–3.3).
+   */
+  async writeAt(key: string, offset: number, pcm: Buffer): Promise<number> {
+    return this.withHandle(key, async (fh) => {
+      let written = 0;
+      while (written < pcm.length) {
+        const result = await fh.write(
+          pcm,
+          written,
+          pcm.length - written,
+          HEADER_LEN + offset + written,
+        );
+        if (result.bytesWritten === 0) throw new Error('zero-byte live audio write');
+        written += result.bytesWritten;
+      }
+      await fh.datasync();
+      return offset + written;
+    });
   }
 
   /** 헤더를 실제 크기로 확정한다. 봉인 커밋 뒤 best-effort로 부른다 (설계 §4.4 ④). */
   async seal(key: string, pcmBytes: number): Promise<void> {
-    const fh = await fs.promises.open(this.storage.resolve(key), 'r+');
-    try {
+    await this.withHandle(key, async (fh) => {
       // 설계 §3.3.1이 요구하는 그물. 가드된 append만 파일을 늘리므로 산술상으로는
       // 늘 성립하지만, 그 불변식이 깨진 채 헤더에 sealed_bytes를 써 넣으면 정본이
       // 조용히 길거나 짧아진다 — 워커는 sealed_bytes만 보고 그 길이를 진실로 삼는다.
@@ -89,6 +127,6 @@ export class LiveAudioService {
       }
       await fh.write(header(pcmBytes, 36 + pcmBytes), 0, HEADER_LEN, 0);
       await fh.datasync();
-    } finally { await fh.close(); }
+    });
   }
 }

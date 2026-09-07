@@ -1,9 +1,13 @@
 """자라는 WAV를 따라 읽는 AudioSource — 브라우저가 올리고 API가 쓰는 파일의 소비자.
 
 FileSource와 결정적으로 다른 점은 **EOF가 "끝"이 아니라 "따라잡음"**이라는 것이다.
-진짜 EOF는 sealed_bytes()가 값을 주고 읽기 오프셋이 거기 닿았을 때만 성립한다.
+진짜 EOF는 sealed_bytes가 값을 주고 읽기 오프셋이 거기 닿았을 때만 성립한다.
 파일 크기가 아니라 DB의 sealed_bytes가 권위인 이유: 파일 append·헤더 재작성·DB commit이
 한 트랜잭션이 될 수 없어서 셋 중 무엇이 진실인지 정해야 하기 때문이다 (설계 §2.7).
+
+같은 이유로 **읽기 상한도 파일 크기가 아니라 committed_bytes**다 (설계 §3.5). 파일에는
+크래시가 남긴 미확정 꼬리가 붙어 있을 수 있고, 다음 요청이 그것을 truncate하고 다른 PCM을
+쓴다. 확정 경계를 넘겨 읽으면 이미 전사한 미리보기가 정본에 없는 소리를 말하게 된다.
 
 WAV 헤더의 크기 필드는 읽지 않는다. 봉인 순간 API가 그 두 필드를 seek/write로 고치는데,
 전환 중의 값을 믿으면 파일을 조기 종료한다 (설계 §6).
@@ -14,6 +18,7 @@ import os
 import time
 from collections.abc import Callable, Iterator
 
+from ..db import LiveInputState
 from ..errors import IO_ERROR, ErrorKind, WorkerError
 from .source import FRAME_BYTES
 
@@ -27,6 +32,8 @@ DRIFT_BYTES = 960_000
 #: 무한 대기는 hang이므로 상한을 둔다 (설계 §4.1).
 ENOENT_GRACE_SECONDS = 60.0
 POLL_SECONDS = 0.05
+#: 봉인된 뒤에도 파일이 확정 경계에 못 미치는 상태를 이만큼 견딘다 (설계 §3.5).
+SEALED_SHORT_FILE_SECONDS = 10.0
 
 
 class TailSource:
@@ -34,23 +41,26 @@ class TailSource:
         self,
         path: str,
         *,
-        sealed_bytes: Callable[[], int | None],
+        input_state: Callable[[], LiveInputState],
         grace_seconds: float = ENOENT_GRACE_SECONDS,
         drift_bytes: int = DRIFT_BYTES,
         poll_seconds: float = POLL_SECONDS,
+        sealed_short_seconds: float = SEALED_SHORT_FILE_SECONDS,
         sleep=time.sleep,
         clock=time.monotonic,
     ) -> None:
         self._path = path
-        self._sealed = sealed_bytes
+        self._input_state = input_state
         self._grace = grace_seconds
         self._drift = drift_bytes
         self._poll = poll_seconds
+        self._sealed_short = sealed_short_seconds
         self._sleep = sleep
         self._clock = clock
         self._stopped = False
         self._yielded = 0  # yield한 PCM 바이트 (position의 근거)
         self._rest = b""  # 아직 프레임을 못 채운 나머지
+        self._short_since: float | None = None
         self.skips = 0
 
     @property
@@ -66,7 +76,13 @@ class TailSource:
         deadline = self._clock() + self._grace
         while not self._stopped:
             try:
-                return open(self._path, "rb")  # noqa: SIM115 — 수명이 frames()까지다
+                # buffering=0이 필수다. 기본 BufferedReader는 1,024바이트를 요청해도 OS에서
+                # 8,192바이트를 미리 읽어 두는데, 그 read-ahead가 확정 경계를 넘어 미확정
+                # 꼬리까지 캐시한다 — 다음 요청이 그 꼬리를 truncate하고 다른 PCM을 써도
+                # 이미 캐시된 옛 바이트가 그대로 전사된다. 확정 경계 상한이 무의미해지는
+                # 유일한 경로였다 (설계 §3.5). 대신 read()가 짧게 돌아올 수 있는데,
+                # frames()는 이미 short read를 재시도로 다룬다.
+                return open(self._path, "rb", buffering=0)  # noqa: SIM115 — 수명이 frames()까지다
             except FileNotFoundError:
                 # 아직 안 만들어졌을 뿐일 수 있다 — grace 동안만 기다린다.
                 if self._clock() >= deadline:
@@ -88,7 +104,8 @@ class TailSource:
                 ) from e
         return None
 
-    def _available(self, sealed: int | None) -> int:
+    def _available(self, committed: int) -> int:
+        """읽어도 되는 PCM 바이트. 확정 경계와 실제 파일 길이 중 작은 쪽이다 (설계 §3.5)."""
         try:
             pcm = os.path.getsize(self._path) - HEADER_LEN
         except OSError as e:
@@ -99,7 +116,29 @@ class TailSource:
                 ErrorKind.PERMANENT,
                 stage="capture",
             ) from e
-        return pcm if sealed is None else min(pcm, sealed)
+        return min(pcm, committed)
+
+    def _check_sealed_short_file(self, state: LiveInputState, available: int) -> None:
+        """봉인된 뒤에도 파일이 확정 경계에 못 미치면 정본이 잘린 것이다.
+
+        봉인은 EOF의 유일한 근거인데 그 길이에 영영 닿지 못하므로, 그냥 두면 미리보기가
+        max_minutes(4시간)까지 돈다. 잠깐의 지연과 구별하기 위해 상태가 이어질 때만
+        실패로 본다 (설계 §3.5).
+        """
+        if state.sealed_bytes is None or available >= state.sealed_bytes:
+            self._short_since = None
+            return
+        now = self._clock()
+        if self._short_since is None:
+            self._short_since = now
+        elif now - self._short_since >= self._sealed_short:
+            raise WorkerError(
+                IO_ERROR,
+                f"live audio stayed {available} PCM bytes after being sealed at "
+                f"{state.sealed_bytes} for {self._sealed_short:.0f}s: {self._path}",
+                ErrorKind.PERMANENT,
+                stage="capture",
+            )
 
     def frames(self) -> Iterator[bytes]:
         f = self._open()
@@ -108,8 +147,13 @@ class TailSource:
         f.seek(HEADER_LEN)  # PCM은 헤더 44바이트 다음부터 — 크기 필드는 절대 읽지 않는다
         try:
             while not self._stopped:
-                sealed = self._sealed()
-                available = self._available(sealed)
+                state = self._input_state()
+                if state.signal == "lost":
+                    # 이 job은 더 이상 우리 것이 아니다. 남의 세션 파일을 계속 읽지 않는다.
+                    return
+                sealed = state.sealed_bytes
+                available = self._available(state.committed_bytes)
+                self._check_sealed_short_file(state, available)
                 if self._yielded + len(self._rest) >= available:
                     # 따라잡았다. 봉인됐고 거기 도달했으면 진짜 끝이다 — yielded가 아니라
                     # available로 판단한다. 봉인 시점에 프레임 경계 중간에서 잘리면 남는
