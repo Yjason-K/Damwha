@@ -649,13 +649,36 @@ describe('live audio append', () => {
    *  기다리기 전에 요청이 이미 나가 있어야 하므로 여기서 전송을 시작한다. */
   const fire = <T>(req: PromiseLike<T>): Promise<T> => Promise.resolve(req);
 
-  /** 트랜잭션 안에서 잠금을 쥔 채 멈추게 하는 게이트. */
+  /**
+   * 트랜잭션 안에서 잠금을 쥔 채 멈추게 하는 게이트. withBarrier와 같은 모양이다 —
+   * `held()`가 finally에서 반드시 열어 주므로, 안에서 단언이 실패해도 잠금이 남지 않는다.
+   * 안 열면 스파이가 붙잡은 트랜잭션이 job 행을 쥔 채로 남아, 실패한 단언이 보고되는 대신
+   * 스위트가 테스트 타임아웃까지 매달린다 — 진짜 원인이 가려진다.
+   */
   const gate = () => {
     let arrive!: () => void;
     let release!: () => void;
     const reached = new Promise<void>((r) => { arrive = r; });
     const open = new Promise<void>((r) => { release = r; });
-    return { reached, arrive, release, open };
+    return {
+      arrive,
+      open,
+      /**
+       * 게이트에 도달할 때까지 기다렸다가 fn을 돌리고, 어떻게 끝나든 연다.
+       *
+       * fn은 값을 돌려주지 않는다. async 함수는 반환한 promise를 풀어 기다리므로, 진행
+       * 중인 요청을 여기서 돌려주면 게이트가 그 요청의 완료를 기다리는 교착이 된다 —
+       * 그 요청은 게이트가 열려야 진행할 수 있다. 필요한 promise는 바깥 변수로 내보낸다.
+       */
+      held: async (fn: () => Promise<void>): Promise<void> => {
+        await reached;
+        try {
+          await fn();
+        } finally {
+          release();
+        }
+      },
+    };
   };
 
   /** 별도 커넥션이 job 행을 잠근 채 fn을 돌린다. 실패해도 finally에서 반드시 반납한다. */
@@ -672,14 +695,30 @@ describe('live audio append', () => {
     }
   };
 
-  /** pg_locks가 실제 대기를 보고할 때까지 기다린다. sleep이 아니라 DB가 판정한다. */
+  /**
+   * `job` 행에서 잠금을 기다리는 백엔드가 n개가 될 때까지 기다린다. sleep이 아니라
+   * pg_locks가 판정한다.
+   *
+   * 클러스터 전체의 `NOT granted`를 세면 안 된다 — 무관한 백엔드 하나로도 조건이 차서,
+   * 정작 기다리던 대기자가 큐에 들어가기 전에 테스트가 진행된다. 그러면 경합 테스트가
+   * 엉뚱한 이유로 통과하고, 순서를 고정한다는 목적 자체가 사라진다. 그래서 대상을
+   * "무언가를 기다리는 중이면서 `job` 릴레이션 잠금을 이미 쥔" 백엔드로 좁힌다 —
+   * `SELECT … FROM job … FOR UPDATE`는 행을 기다리는 내내 job에 RowShareLock을 들고 있다.
+   */
   const awaitWaiters = async (n: number) => {
     const deadline = Date.now() + 15000;
     for (;;) {
       const { rows } = await db.pool.query(
-        `SELECT count(DISTINCT pid)::int AS n FROM pg_locks WHERE NOT granted`);
+        `SELECT count(DISTINCT w.pid)::int AS n
+           FROM pg_locks w
+          WHERE NOT w.granted
+            AND EXISTS (SELECT 1 FROM pg_locks h
+                         WHERE h.pid = w.pid AND h.granted
+                           AND h.locktype = 'relation' AND h.relation = 'job'::regclass)`);
       if (rows[0].n >= n) return;
-      if (Date.now() > deadline) throw new Error(`timed out waiting for ${n} blocked backend(s)`);
+      if (Date.now() > deadline) {
+        throw new Error(`timed out waiting for ${n} backend(s) blocked on the job row`);
+      }
       await new Promise((r) => setTimeout(r, 20));
     }
   };
@@ -699,10 +738,10 @@ describe('live audio append', () => {
     });
 
     const stopping = fire(stop(m.id, CHUNK, CHUNK));
-    await g.reached;
-    const claimed = await app.get(JobsRepository).claim(db.pool, 'w1');
-    expect(claimed).toBeNull();      // 잠긴 행을 건너뛰었다는 증거
-    g.release();
+    await g.held(async () => {
+      // stop이 job 행을 잠근 채 멈춰 있다. claim은 기다리지 않고 건너뛴다.
+      expect(await app.get(JobsRepository).claim(db.pool, 'w1')).toBeNull();
+    });
 
     const res = await stopping;
     expect(res.status).toBe(200);
@@ -753,10 +792,13 @@ describe('live audio append', () => {
     });
 
     const cancelling = fire(request(srv()).post(`/meetings/${m.id}/cancel`).send());
-    await g.reached;
-    const appending = fire(send(m.id, CHUNK, chunk(2)));
-    await awaitWaiters(1);           // append가 job 행에서 대기 중이다
-    g.release();
+    // 진행 중인 요청은 콜백 **밖으로** 내보낸다 — async 콜백이 promise를 반환하면 그것을
+    // 풀어 기다리게 되고, 게이트가 그 요청의 완료를 기다리는 교착이 된다.
+    let appending!: Promise<request.Response>;
+    await g.held(async () => {
+      appending = fire(send(m.id, CHUNK, chunk(2)));  // cancel이 job과 meeting을 쥔 상태다
+      await awaitWaiters(1);         // append가 job 행에서 대기 중이다
+    });
 
     const [c, a] = await Promise.all([cancelling, appending]);
     expect(c.status).toBe(200);
@@ -780,10 +822,11 @@ describe('live audio append', () => {
     });
 
     const appending = fire(send(m.id, CHUNK, chunk(2)));
-    await g.reached;
-    const cancelling = fire(request(srv()).post(`/meetings/${m.id}/cancel`).send());
-    await awaitWaiters(1);           // cancel이 job 행에서 대기 중이다
-    g.release();
+    let cancelling!: Promise<request.Response>;
+    await g.held(async () => {
+      cancelling = fire(request(srv()).post(`/meetings/${m.id}/cancel`).send());
+      await awaitWaiters(1);         // cancel이 job 행에서 대기 중이다
+    });
 
     const [a, c] = await Promise.all([appending, cancelling]);
     expect(a.status).toBe(200);

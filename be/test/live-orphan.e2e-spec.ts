@@ -93,14 +93,30 @@ describe('live orphan sweeper', () => {
     }
   };
 
-  /** pg_locks가 실제 대기를 보고할 때까지 기다린다. sleep이 아니라 DB가 판정한다. */
+  /**
+   * `job` 행에서 잠금을 기다리는 백엔드가 n개가 될 때까지 기다린다. sleep이 아니라
+   * pg_locks가 판정한다.
+   *
+   * 클러스터 전체의 `NOT granted`를 세면 안 된다 — 무관한 백엔드 하나로도 조건이 차서,
+   * 정작 기다리던 대기자가 큐에 들어가기 전에 테스트가 진행된다. 그러면 경합 테스트가
+   * 엉뚱한 이유로 통과하고, 순서를 고정한다는 목적 자체가 사라진다. 그래서 대상을
+   * "무언가를 기다리는 중이면서 `job` 릴레이션 잠금을 이미 쥔" 백엔드로 좁힌다 —
+   * `SELECT … FROM job … FOR UPDATE`는 행을 기다리는 내내 job에 RowShareLock을 들고 있다.
+   */
   const awaitWaiters = async (n: number) => {
     const deadline = Date.now() + 15000;
     for (;;) {
       const { rows } = await db.pool.query(
-        `SELECT count(DISTINCT pid)::int AS n FROM pg_locks WHERE NOT granted`);
+        `SELECT count(DISTINCT w.pid)::int AS n
+           FROM pg_locks w
+          WHERE NOT w.granted
+            AND EXISTS (SELECT 1 FROM pg_locks h
+                         WHERE h.pid = w.pid AND h.granted
+                           AND h.locktype = 'relation' AND h.relation = 'job'::regclass)`);
       if (rows[0].n >= n) return;
-      if (Date.now() > deadline) throw new Error(`timed out waiting for ${n} blocked backend(s)`);
+      if (Date.now() > deadline) {
+        throw new Error(`timed out waiting for ${n} backend(s) blocked on the job row`);
+      }
       await new Promise((r) => setTimeout(r, 20));
     }
   };
