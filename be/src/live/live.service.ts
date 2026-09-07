@@ -31,6 +31,7 @@ const CAPTURE_FAILURES: Record<string, string> = {
   device_ended: 'the microphone stopped before the user did',
   buffer_overflow: 'the upload backlog exceeded the buffer limit',
   upload_failed: 'the server rejected an audio chunk',
+  capture_flush_failed: 'the capture worklet never acknowledged the flush, so the tail may be short',
 };
 
 function isSingleRecordingViolation(e: unknown): boolean {

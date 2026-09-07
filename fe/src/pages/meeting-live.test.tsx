@@ -19,8 +19,9 @@ import type {
   WireUtterance,
 } from "@/features/meeting/api/types";
 import {
+  beginLiveCapture,
   clearLiveCapture,
-  createLiveRecorder,
+  prepareLiveRecorder,
 } from "@/features/meeting/lib/live-session";
 import { SR } from "@/features/meeting/lib/pcm-convert";
 
@@ -146,7 +147,7 @@ afterEach(() => {
  * 이미 덮는다; 여기서 보는 것은 "종료 클릭 → recorder.stop() → 올바른 헤더/바디로
  * POST"라는 배선이다.
  */
-function stubMicAndStartRecorder(meetingId: string) {
+async function stubMicAndStartRecorder(meetingId: string) {
   const stream = {
     getTracks: () => [{ stop: vi.fn() }],
     getAudioTracks: () => [{ addEventListener: vi.fn() }],
@@ -155,19 +156,38 @@ function stubMicAndStartRecorder(meetingId: string) {
     configurable: true,
     value: { getUserMedia: vi.fn().mockResolvedValue(stream) },
   });
+  // Worklet은 ready/begun/flushed ACK로만 말한다 (설계 §7) — 이 스텁이 그 셋을 답한다.
+  const port = {
+    onmessage: null as ((e: MessageEvent<unknown>) => void) | null,
+    postMessage(message: { type: string }) {
+      if (message.type === "begin") emit({ type: "begun" });
+      if (message.type === "flush") emit({ type: "flushed" });
+    },
+  };
+  const emit = (event: unknown) =>
+    port.onmessage?.({ data: event } as MessageEvent<unknown>);
   class FakeAudioContext {
     sampleRate = SR;
+    destination = {};
     audioWorklet = { addModule: vi.fn().mockResolvedValue(undefined) };
     createMediaStreamSource = vi.fn().mockReturnValue({ connect: vi.fn() });
+    createGain = vi
+      .fn()
+      .mockReturnValue({ gain: { value: 1 }, connect: vi.fn() });
     close = vi.fn().mockResolvedValue(undefined);
+    resume = vi.fn(async () => emit({ type: "ready" }));
   }
   class FakeAudioWorkletNode {
-    port: { onmessage: unknown } = { onmessage: null };
+    port = port;
+    connect = vi.fn();
+    disconnect = vi.fn();
   }
   vi.stubGlobal("AudioContext", FakeAudioContext);
   vi.stubGlobal("AudioWorkletNode", FakeAudioWorkletNode);
-  const live = createLiveRecorder(meetingId);
-  return live.recorder.start(meetingId);
+  // 준비가 끝난 뒤에야 회의에 붙인다 (설계 §6) — 화면은 그 결과인 활성 캡처만 본다.
+  const capture = await prepareLiveRecorder();
+  await beginLiveCapture(capture, meetingId);
+  return capture;
 }
 
 let getSpy: { mock: { calls: unknown[][] } };

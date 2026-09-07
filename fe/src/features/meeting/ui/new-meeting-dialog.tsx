@@ -27,8 +27,16 @@ import { OverrideSection } from "@/features/settings/ui/override-section";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/shared/ui/tabs";
 import { useStartLive } from "../api/live";
 import { defaultLiveTitle } from "../lib/default-live-title";
-import { checkCaptureSupport } from "../lib/live-recorder";
-import { createLiveRecorder } from "../lib/live-session";
+import {
+  checkCaptureSupport,
+  LiveCaptureCancelled,
+} from "../lib/live-recorder";
+import {
+  beginLiveCapture,
+  cancelLivePreparation,
+  LiveCaptureBusy,
+  prepareLiveRecorder,
+} from "../lib/live-session";
 
 import { useUploadMeeting } from "../api/meetings";
 import type { SpeakerBounds } from "../api/types";
@@ -179,10 +187,19 @@ export function NewMeetingDialog({
   const deviceSelectId = React.useId();
   const upload = useUploadMeeting();
   const start = useStartLive();
+  /**
+   * 게이트 확인 → 캡처 준비 → 회의 생성 → begin ACK. 이 전부가 한 번의 "녹음 시작"이라
+   * 그 동안 두 번째 시작이 들어오면 마이크가 둘, 회의가 둘 생긴다. state는 같은 tick의
+   * 연타를 막지 못하므로(리렌더 전에 두 번째 클릭이 들어온다) ref로 잠그고, state는
+   * 버튼의 loading 표시에만 쓴다.
+   */
+  const startingRef = React.useRef(false);
+  const [starting, setStarting] = React.useState(false);
   const pending = upload.isPending || start.isPending;
+  const busy = pending || starting || gateChecking;
 
   const changeSource = (value: string) => {
-    if (pending || env.demoMode) return;
+    if (busy || env.demoMode) return;
     const next = value === "live" ? "live" : "file";
     setSource(next);
     try {
@@ -205,19 +222,107 @@ export function NewMeetingDialog({
     setDeferSummary(false);
     setGate(null);
     setGateChecking(false);
+    setStarting(false);
     setDeviceId(undefined);
   };
 
   const handleOpenChange = (next: boolean) => {
     // 업로드 또는 녹음 시작 요청 중에는 닫히지 않도록 막는다.
     if (!next && pending) return;
-    if (!next) resetForm();
+    if (!next) {
+      // 준비 중이던 캡처(권한 프롬프트 대기 중일 수도 있다)를 놓아 준다 — 늦게 도착한
+      // 스트림을 아무도 안 닫으면 녹음 표시등만 켜진 채 남는다 (설계 §6.4). 이미 회의에
+      // 붙은 녹음은 건드리지 않는다.
+      void cancelLivePreparation();
+      resetForm();
+    }
     onOpenChange(next);
+  };
+
+  /**
+   * 시작 실패 토스트 — "이미 녹음 중"만 따로 말해 준다(서버의 409든, 이 탭이 이미 녹음
+   * 중이라 준비가 거절된 것이든 사용자에게는 같은 상황이다).
+   *
+   * 설명문으로 `error.message`를 쓰는 것은 **ApiError일 때뿐**이다. 레코더와 세션이 던지는
+   * 메시지는 전부 진단용 영어라("the capture worklet never acknowledged begun"), 그대로
+   * 실으면 한국어 UI에 영어 내부 문구가 뜬다 (`fe/CLAUDE.md`).
+   */
+  const showStartError = (error: unknown) => {
+    if (isDemoBlocked(error)) return;
+    const conflict =
+      error instanceof LiveCaptureBusy ||
+      (isApiError(error) && error.statusCode === 409);
+    toast({
+      variant: "error",
+      title: conflict ? "이미 녹음 중이에요" : "녹음을 시작하지 못했어요",
+      description: conflict
+        ? "진행 중인 녹음을 먼저 종료해 주세요."
+        : isApiError(error)
+          ? error.message
+          : "잠시 후 다시 시도해 주세요.",
+    });
+  };
+
+  /**
+   * 실시간 녹음 시작 (설계 §6). 준비가 **먼저**다 — 권한 거절·장치 부재·Worklet 로딩
+   * 실패는 `/meetings/live`를 부르기 전에 드러나야 하고, 그래야 실패가 빈 회의를 남기지
+   * 않는다. 201을 받은 뒤의 실패는 id를 알고 있으므로 beginLiveCapture가 0바이트 stop으로
+   * 정리한다. 생성 POST 자체는 재시도하지 않는다.
+   */
+  const startLive = async () => {
+    let capture;
+    try {
+      capture = await prepareLiveRecorder(deviceId);
+    } catch (error) {
+      // 사용자가 취소했거나 다른 시작에 밀린 준비 — 실패가 아니므로 조용히 접는다.
+      if (error instanceof LiveCaptureCancelled) return;
+      if (error instanceof LiveCaptureBusy) {
+        showStartError(error);
+        return;
+      }
+      // 권한 거절·장치 부재·Worklet 로딩 실패가 전부 여기로 온다. 그 예외의 message는
+      // 진단용 영어(DOMException "Permission denied", "browser gave 48000 Hz…")라 그대로
+      // 보여주지 않고, 사용자가 실제로 할 수 있는 일을 말한다.
+      toast({
+        variant: "error",
+        title: "마이크를 열지 못했어요",
+        description: "마이크 권한과 연결을 확인한 뒤 다시 시도해 주세요.",
+      });
+      return;
+    }
+    try {
+      const meeting = await start.mutateAsync({
+        title: title.trim() || defaultLiveTitle(),
+        processing,
+        speakers,
+        defer_lens: deferLens || undefined,
+        defer_summary: deferSummary || undefined,
+      });
+      await beginLiveCapture(capture, meeting.id);
+      toast({
+        variant: "success",
+        title: "녹음 시작",
+        description: "발화가 실시간으로 표시돼요.",
+      });
+      resetForm();
+      onOpenChange(false);
+      onCreated(meeting.id);
+    } catch (error) {
+      // dispose()가 아니라 이것을 부른다: dispose는 레코더 자원만 놓아 주고 live-session의
+      // `active`는 죽은 캡처를 계속 가리킨다. cancelLivePreparation이 짝이 맞는 호출이라
+      // 예약까지 함께 놓는다 — 그리고 회의에 이미 붙은 녹음은 건드리지 않으므로,
+      // beginLiveCapture가 성공한 뒤의 예외로 살아 있는 녹음을 죽이지 않는다.
+      await cancelLivePreparation();
+      // 다른 시작에 밀린 캡처 — 사용자가 한 일이 아니므로 오류로 알리지 않는다.
+      if (error instanceof LiveCaptureCancelled) return;
+      showStartError(error);
+    }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (pending || !isSpeakerBoundsValid(speakers)) return;
+    if (pending || startingRef.current || !isSpeakerBoundsValid(speakers))
+      return;
     if (source === "live" && !env.demoMode) {
       // 게이트를 아직 통과하지 못했으면(첫 클릭, 또는 거부 뒤 재시도) 먼저 확인한다 —
       // 통과 전에는 회의를 만들지 않는다. 통과하면 장치 선택을 보여주고 아래로 진행하지
@@ -240,56 +345,12 @@ export function NewMeetingDialog({
         })();
         return;
       }
-      start.mutate(
-        {
-          title: title.trim() || defaultLiveTitle(),
-          processing,
-          speakers,
-          defer_lens: deferLens || undefined,
-          defer_summary: deferSummary || undefined,
-        },
-        {
-          onSuccess: (summary) => {
-            // 마이크는 여기서 연다 — 이 다이얼로그가 권한을 막 확인한 자리다. 리코더는
-            // 회의 상세 화면이 리마운트를 사이에 두고 이어받도록 싱글턴에 등록한다.
-            createLiveRecorder(summary.id)
-              .recorder.start(summary.id, deviceId)
-              .catch((err) => {
-                toast({
-                  variant: "error",
-                  title: "마이크를 열지 못했어요",
-                  description:
-                    err instanceof Error
-                      ? err.message
-                      : "잠시 후 다시 시도해 주세요.",
-                });
-              });
-            toast({
-              variant: "success",
-              title: "녹음 시작",
-              description: "발화가 실시간으로 표시돼요.",
-            });
-            resetForm();
-            onOpenChange(false);
-            onCreated(summary.id);
-          },
-          onError: (error) => {
-            if (isDemoBlocked(error)) return;
-            const conflict = isApiError(error) && error.statusCode === 409;
-            toast({
-              variant: "error",
-              title: conflict
-                ? "이미 녹음 중이에요"
-                : "녹음을 시작하지 못했어요",
-              description: conflict
-                ? "진행 중인 녹음을 먼저 종료해 주세요."
-                : isApiError(error)
-                  ? error.message
-                  : "잠시 후 다시 시도해 주세요.",
-            });
-          },
-        },
-      );
+      startingRef.current = true;
+      setStarting(true);
+      void startLive().finally(() => {
+        startingRef.current = false;
+        setStarting(false);
+      });
       return;
     }
     if (demoTour) {
@@ -355,11 +416,11 @@ export function NewMeetingDialog({
         <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
           <Tabs value={source} onValueChange={changeSource}>
             <TabsList variant="choice" aria-label="회의 기록 방식">
-              <TabsTrigger value="file" disabled={pending} className="flex-1">
+              <TabsTrigger value="file" disabled={busy} className="flex-1">
                 오디오 파일
               </TabsTrigger>
               {!env.demoMode && (
-                <TabsTrigger value="live" disabled={pending} className="flex-1">
+                <TabsTrigger value="live" disabled={busy} className="flex-1">
                   실시간 녹음
                 </TabsTrigger>
               )}
@@ -538,11 +599,10 @@ export function NewMeetingDialog({
             <Button
               type="submit"
               data-tour="upload-submit"
-              loading={pending || gateChecking}
+              loading={busy}
               disabled={
                 (source === "file" && !demoTour && !file) ||
-                pending ||
-                gateChecking ||
+                busy ||
                 !isSpeakerBoundsValid(speakers)
               }
             >

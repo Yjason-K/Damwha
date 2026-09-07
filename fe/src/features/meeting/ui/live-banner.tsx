@@ -3,7 +3,7 @@ import * as React from "react";
 import { Button } from "@/shared/ui/button";
 
 import { formatClock } from "../api/mappers";
-import type { JsonError } from "../api/types";
+import type { CaptureErrorCode, JsonError } from "../api/types";
 import { BACKLOG_WARN_MS, type RecorderFailure } from "../lib/live-recorder";
 import { Icon } from "./icons";
 
@@ -70,6 +70,18 @@ type LiveBannerProps = {
   failed?: RecorderFailure | null;
 };
 
+/**
+ * 레코더가 스스로 멈춘 사유의 배너 문구. live-session.ts의 토스트 문구와 같은 사실을
+ * 말하지만 자리(배너 vs 토스트)가 달라 문장을 따로 둔다 — Record라 사유가 늘면 여기가
+ * 먼저 컴파일에서 걸린다.
+ */
+const RECORDER_FAILURE_MESSAGE: Record<RecorderFailure, string> = {
+  buffer_overflow: "업로드가 너무 밀려 더 버틸 수 없었어요.",
+  device_ended: "마이크 연결이 끊겼어요.",
+  upload_failed: "업로드에 실패했어요.",
+  capture_flush_failed: "마지막 오디오를 받아 오지 못했어요.",
+};
+
 export function LiveBanner({
   recordedAtIso,
   stage,
@@ -106,12 +118,7 @@ export function LiveBanner({
           녹음이 중단됐어요
         </span>
         <span className="text-[color:var(--text-secondary)]">
-          {failed === "buffer_overflow"
-            ? "업로드가 너무 밀려 더 버틸 수 없었어요."
-            : failed === "device_ended"
-              ? "마이크 연결이 끊겼어요."
-              : "업로드에 실패했어요."}{" "}
-          지금까지 녹음된 내용은 남아 있어요.
+          {RECORDER_FAILURE_MESSAGE[failed]} 지금까지 녹음된 내용은 남아 있어요.
         </span>
         <Button
           variant="secondary"
@@ -214,17 +221,25 @@ export function LiveBanner({
  *
  * 코드는 두 곳에서 온다 — 서버가 스스로 붙이는 것(producer_abandoned, capture_gap)과
  * 브라우저가 stop의 X-Capture-Error로 실어 보내는 것(device_ended, buffer_overflow,
- * upload_failed, capture_failed). `live.service.ts`의 CAPTURE_FAILURES와 같은 집합이다.
+ * upload_failed, capture_flush_failed, capture_failed). `live.service.ts`의
+ * CAPTURE_FAILURES와 같은 집합이다.
+ *
+ * 선언 타입은 `Record<string, string>`이고 값에만 `satisfies`를 건다: 서버가 아직 모르는
+ * 코드를 보내도 조회는 그대로 되어야 하고(아래에서 undefined면 아무것도 그리지 않는다),
+ * 동시에 CaptureErrorCode에 사유가 하나 늘면 문구를 빠뜨린 채로는 컴파일되지 않아야 한다.
  */
 const CAPTURE_ERROR_MESSAGE: Record<string, string> = {
   producer_abandoned: "브라우저 연결이 끊겨 여기까지 녹음됐어요.",
   device_ended: "마이크 연결이 끊겨 여기까지 녹음됐어요.",
   buffer_overflow: "업로드가 너무 밀려 여기까지만 녹음됐어요.",
   upload_failed: "업로드가 거절돼 여기까지만 녹음됐어요.",
+  capture_flush_failed:
+    "마지막 오디오를 받아 오지 못해 끝부분이 짧을 수 있어요.",
   capture_failed: "녹음이 중간에 멈춰 여기까지만 녹음됐어요.",
   capture_gap: "녹음 중 일부 구간이 기록되지 않았어요.",
-  preview_worker_lost: "실시간 자막 서버가 끊겨 자막 없이 녹음됐어요. 녹음 자체는 온전해요.",
-};
+  preview_worker_lost:
+    "실시간 자막 서버가 끊겨 자막 없이 녹음됐어요. 녹음 자체는 온전해요.",
+} satisfies Record<CaptureErrorCode, string>;
 
 /**
  * 캡처 이력 알림 — meeting.captureError. error(회의 처리 실패)와는 별개 필드라

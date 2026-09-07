@@ -155,6 +155,32 @@ test("레코더가 실패하면 눈에 띄게 종료됐음을 보여준다", () 
   expect(screen.getByRole("alert")).toHaveTextContent("녹음이 중단됐어요");
 });
 
+/**
+ * RecorderFailure의 사유 하나하나가 배너에 실제 문장으로 나와야 한다 — 사유는 늘었는데
+ * 배너가 "업로드에 실패했어요"로 뭉뚱그리면, 사용자는 무엇이 짧아졌는지 알 수 없다.
+ * capture_flush_failed는 이번에 늘어난 사유다 (설계 §7).
+ */
+test.each([
+  ["buffer_overflow", "업로드가 너무 밀려 더 버틸 수 없었어요."],
+  ["device_ended", "마이크 연결이 끊겼어요."],
+  ["upload_failed", "업로드에 실패했어요."],
+  ["capture_flush_failed", "마지막 오디오를 받아 오지 못했어요."],
+] as const)("%s 배너는 그 사유를 그대로 말한다", (failed, message) => {
+  render(
+    <LiveBanner
+      recordedAtIso="2026-09-05T10:00:00.000Z"
+      stage="capture"
+      heartbeatAt="2026-09-05T10:00:00.000Z"
+      onStop={() => {}}
+      onCancel={() => {}}
+      stopping={false}
+      now={() => T0}
+      failed={failed}
+    />,
+  );
+  expect(screen.getByRole("alert")).toHaveTextContent(message);
+});
+
 test("레코더 실패 배너의 버튼도 종료(stop)를 부른다 — 서버엔 이미 녹음이 있다", () => {
   const onStop = vi.fn();
   render(
@@ -213,6 +239,7 @@ test.each([
   ["device_ended", /마이크 연결이 끊겨/],
   ["buffer_overflow", /업로드가 너무 밀려/],
   ["upload_failed", /업로드가 거절돼/],
+  ["capture_flush_failed", /마지막 오디오를 받아 오지 못해/],
   ["capture_failed", /중간에 멈춰/],
   ["capture_gap", /일부 구간이 기록되지 않았어요/],
   ["preview_worker_lost", /녹음 자체는 온전해요/],

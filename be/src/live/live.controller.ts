@@ -50,7 +50,8 @@ export class LiveController {
       + 'stopping(워커가 마무리한다). recording이 아니면 409, 회의가 없으면 404. '
       + '누적 PCM 4시간 상한(460800000바이트)을 넘기면 상한까지만 쓰고 봉인한 뒤 '
       + "409 {code:'duration_limit'}. 디스크 실패는 507이고 세션을 io_error로 닫는다. "
-      + '선택 헤더 X-Capture-Error(device_ended/buffer_overflow/upload_failed)는 브라우저가 '
+      + '선택 헤더 X-Capture-Error(device_ended/buffer_overflow/upload_failed/'
+      + 'capture_flush_failed)는 브라우저가 '
       + '캡처를 끝까지 못 했다는 뜻이고 meeting.capture_error에 남는다 — 모르는 값도 거절하지 '
       + '않고 capture_failed로 기록한다(진단 헤더가 봉인을 막으면 안 된다).',
   })

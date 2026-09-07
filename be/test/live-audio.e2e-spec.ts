@@ -465,6 +465,19 @@ describe('live audio append', () => {
     expect(rows[0].capture_error.code).toBe('buffer_overflow');
   });
 
+  // 설계 §7: flush ACK 시간 초과는 capture_flush_failed를 남기고 받은 데까지만 봉인한다.
+  // 이 코드가 CAPTURE_FAILURES에 없으면 서버가 capture_failed로 접어 버려, "마지막 조각을
+  // 못 받았다"와 "녹음이 중간에 멈췄다"가 같은 칸에 들어가고 배너 문구도 뭉개진다.
+  it('a stop carrying capture_flush_failed records that exact reason', async () => {
+    const { body: m } = await start().expect(201);
+    await send(m.id, 0, chunk(1)).expect(200);
+    await stopWithError(m.id, CHUNK, CHUNK, 'capture_flush_failed').expect(200);
+    const { rows } = await db.pool.query(`SELECT capture_error FROM meeting WHERE id=$1`, [m.id]);
+    expect(rows[0].capture_error.code).toBe('capture_flush_failed');
+    // 알려진 사유라 진단 문구도 붙는다 — capture_failed 폴백이 아니다.
+    expect(rows[0].capture_error.message).toMatch(/flush/);
+  });
+
   // 설계 §3.4: "0바이트 사용자 stop은 worker 상태와 무관하게 job을 종료 처리한 뒤 회의를
   // 폐기한다." 워커에게 맡기면 그 워커가 duration 0짜리 회의를 finalize하고 정본 처리까지
   // 큐잉한다 — 넘길 오디오가 한 바이트도 없는데.

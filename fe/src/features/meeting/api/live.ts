@@ -128,6 +128,14 @@ export function useStartLive() {
 
 const LIVE_BINARY_HEADERS = { "Content-Type": "application/octet-stream" };
 
+/**
+ * 한 요청의 상한 (설계 §7). 응답 없는 소켓 하나가 in-flight 슬롯을 영원히 물고 있으면
+ * 큐는 60초 상한까지 부풀고, 정상 stop의 drain은 끝날 수가 없다 — 각 시도를 잘라 내야
+ * 재전송 루프가 돈다. axios는 signal이 abort되면 요청을 취소하고 reject하므로,
+ * 레코더 입장에선 여느 네트워크 실패와 같은 모양(같은 청크 재전송)이 된다.
+ */
+const REQUEST_TIMEOUT_MS = 10_000;
+
 type LiveBoundaryResponse = {
   expected_offset?: number;
   code?: string;
@@ -183,6 +191,7 @@ export async function postLiveChunk(
         "X-Audio-Offset": String(offset),
         "X-Capture-Elapsed": String(elapsedMs),
       },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       validateStatus: (s) => s === 200 || s === 409,
     },
   );
@@ -220,6 +229,7 @@ export async function postLiveStop(
         // 캡처가 실패해서 끝났다는 사실이 탭 밖으로 나가는 유일한 통로다 (설계 §5.3·§7).
         ...(failure ? { "X-Capture-Error": failure } : {}),
       },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       validateStatus: (s) => s === 200 || s === 409,
     },
   );
