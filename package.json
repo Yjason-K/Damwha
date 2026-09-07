@@ -1,6 +1,6 @@
 {
   "name": "damwha",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Damwha (담화) — personal, self-hosted conversation recording & search. Monorepo: damwha-be (NestJS API + Python ML worker) and damwha-fe (React SPA).",
   "license": "MIT",
@@ -28,6 +28,7 @@
     "fe:format": "pnpm --filter damwha-fe run format",
     "fe:test": "pnpm --filter damwha-fe run test",
     "worker": "uv run --directory be/worker python -m damwha_worker",
+    "embed": "uv run --directory be/worker damwha-embed",
     "worker:sync": "uv sync --directory be/worker --extra models",
     "worker:sync:test": "uv sync --directory be/worker",
     "worker:test": "uv run --directory be/worker pytest -q",

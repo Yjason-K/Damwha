@@ -44,6 +44,7 @@ pnpm be <script>              # any damwha-be script  (= pnpm --filter damwha-be
 pnpm fe <script>              # any damwha-fe script
 pnpm db:up / db:down          # Postgres via be/docker-compose.yml
 pnpm worker / worker:test     # uv run --directory be/worker ...
+pnpm embed                    # bge-m3 embed service on 127.0.0.1:8100 (foreground)
 pnpm worker:sync              # uv sync --extra models — the real worker's venv
 pnpm worker:sync:test         # same venv, models stripped (tests only)
 ```

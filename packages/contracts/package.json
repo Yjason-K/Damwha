@@ -1,6 +1,6 @@
 {
   "name": "@damwha/contracts",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Wire enums shared by damwha-be and damwha-fe. The single source of truth for values both sides must agree on.",
   "license": "MIT",
