@@ -581,16 +581,44 @@ pnpm dev               # 별 터미널
 ```
 
 1. `http://localhost:5173`을 브라우저로 연다.
+   **“녹음 시작”은 두 번 눌러야 한다** — 첫 클릭은 `checkCaptureSupport()` 게이트(장치 목록을
+   받아 마이크 선택 콤보를 띄운다), 두 번째가 실제 시작이다. 이걸 모르면 “버튼을 눌렀는데
+   아무 일도 안 일어난다”로 오해한다.
 2. **AudioWorklet이 실제로 로드되는지 본다.** `pcm-worklet.ts`는 `ctx.audioWorklet.addModule()`로
    로드되는 별도 컨텍스트라 jsdom으로는 실행 자체가 안 된다(jsdom에 `AudioContext`가 없다) —
    `pnpm fe build`가 초록불이어도 이 경로가 브라우저에서 실제로 도는지는 전혀 증명하지 않는다.
    `?worker&url` 트랜스파일이 깨지면(예: 원본 `.ts`가 그대로 복사되는 회귀) 콘솔에
    `SyntaxError`/`addModule` reject가 뜨고 녹음이 시작되지 않는다 — 개발자 도구 콘솔을 열어
    두고 녹음 시작 버튼을 눌러 에러가 없는지 확인한다(`be/docs/backlog.md`의 "AudioWorklet 로딩"
-   결정 기록 참고).
+   결정 기록 참고). 그 회귀만은 이제 자동으로도 잡힌다: `pnpm fe build && pnpm fe verify:worklet`이
+   빌드 산출물 `fe/dist/assets/pcm-worklet-*.js`를 `node:vm`으로 평가해 begin/flush 프로토콜까지
+   확인한다. **다만 vm 통과는 브라우저 `addModule()` 증명이 아니다** — 이 단계는 여전히 사람이 한다.
+2-1. **권한 거절 경로를 먼저 본다** (설계 §6). 브라우저 사이트 설정에서 마이크를 **차단**으로
+   두고 녹음 시작을 누른다. 합격 기준은 화면이 아니라 서버다: `POST /meetings/live`가 **한 번도
+   찍히지 않고**(API 로그) `meeting` 행이 늘지 않아야 한다. 캡처 준비가 회의 생성보다 먼저이므로
+   권한 거절은 빈 `recording` 회의를 만들 수 없다 — 만들었다면 그 순서가 깨진 것이다.
+   끝나면 권한을 원래대로 되돌린다.
 3. 녹음 시작 → 1분 말하기 → 종료. 발화가 화면에 흘러오는지, 지연이 얼마인지 본다(실측을 아래
    표에 적는다).
 4. `meetings/<id>/live.wav`가 자라는지, 종료 후 `ffprobe`로 duration이 실제와 맞는지 본다.
+4-1. **바이트 회계를 맞춰 본다** (설계 §3). 이 네 등식이 라이브 녹음의 정본 계약이고, 하나라도
+   어긋나면 확정 경계가 새고 있다는 뜻이다.
+
+   ```sql
+   SELECT m.id, m.status, m.duration_ms, m.capture_error,
+          j.committed_bytes, j.sealed_bytes
+   FROM meeting m JOIN job j ON j.meeting_id=m.id
+   WHERE j.type='live_session' AND m.id = 'mtg_NN';
+   ```
+
+   - `physical_size = 44 + committed_bytes = 44 + sealed_bytes`
+   - WAV `data` 청크 크기 = `sealed_bytes`
+   - `duration_ms = floor(sealed_bytes / 32)`
+   - `ffprobe` duration = `duration_ms / 1000`, 16 kHz · mono · 16-bit
+
+   stop 요청 헤더도 같이 본다: `X-Audio-Offset`은 마지막 확정 경계(청크 크기의 배수),
+   `X-Final-Offset − X-Audio-Offset`이 flush가 건져 온 자투리(32,768 미만)다.
+   갭은 `X-Capture-Elapsed − sealed_bytes/32`이고, 이게 임계값을 넘으면 `capture_gap`이 붙는다.
 5. 종료 후 회의가 `uploaded` → `processing` → `done`으로 가는지 본다.
 6. `meeting.capture_error`를 조회해 **NULL**인지 본다(`psql`이든 API 응답이든). 정상 녹음인데
    이 값이 채워져 있으면 `X-Capture-Elapsed`가 캡처 시각이 아니라 전송 시각으로 새고 있다는
@@ -600,6 +628,18 @@ pnpm dev               # 별 터미널
    이어지는지 본다.
 8. **탭 닫기 테스트:** 녹음 중 탭을 닫고 90초 뒤 회의가 `uploaded` + `capture_error=producer_abandoned`가
    되는지 본다.
+9. **워커 사망 테스트(미리보기만 죽는다, 설계 §4.1–4.2):** 녹음 중 워커에 `SIGTERM`을 보낸다.
+   합격 기준은 세 가지다 — (a) 그 뒤로도 `POST /live/audio`가 계속 **200**이고
+   `committed_bytes`가 청크 크기만큼 계속 는다, (b) `job.status='failed'`이고
+   `error.code='worker_shutdown'`인데 `meeting.status`는 여전히 `recording`이다,
+   (c) 그 상태에서 종료를 누르면 워커가 없으므로 **API가 finalize**하고
+   `capture_error='preview_worker_lost'`가 붙는다. 워커를 다시 띄우면 정본 처리가 이어지고,
+   그때 `meeting.error`는 NULL이 되지만 **`capture_error`는 남아 있어야 한다** — 이 필드가
+   `error`와 따로 있는 이유가 그것이다.
+10. **배포 형상(API 컨테이너 + 호스트 워커)을 따로 본다.** 개발은 API·워커가 같은 호스트에서
+   같은 디렉터리를 보지만, 배포는 컨테이너가 쓴 파일을 호스트 워커가 bind mount로 읽는다
+   (`deploy/docker-compose.yml`의 `./storage:/repo/be/storage`). 확인할 것은 컨테이너의 append가
+   확정한 prefix를 호스트가 **제때** 보는가다 — `deploy/README.md`의 유지보수 절차 참고.
 
 - 로그의 `latency_ms=`가 세그먼트 끝 → `live_utterance` INSERT 지연이다. 실측(날짜, 머신, 값)을 아래에 적는다.
 - 식별 결합 기준은 `suggest_threshold`(0.6)다. bind(0.8)와의 적중률 비교는 `eval_speaker_id.py`
@@ -625,6 +665,64 @@ pnpm dev               # 별 터미널
 |---|---|---|---|---|
 | 2026-09-05 | Apple M4 Pro, 48GB, macOS 26.6.2 | large-v3-turbo (mlx, gpu) | 5147 / 7356 | `--file`, 실제 회의 녹음 아님(공개 강연 클립) 60초, 4 세그먼트(4219/4360/5934/7356ms). `--mic`는 이 환경에 마이크 권한을 부여할 수 없어(비대화형 에이전트 세션) 실행하지 못했다 — 실행 경로는 `--file`과 캡처 스레드만 다르다. |
 | 2026-09-06 | Apple M4 Pro, 48GB, macOS 26.6.2 | large-v3-turbo (mlx, gpu) | 1428 / 2767 | `--tail`(같은 강연 클립 60초를 새 파일에 1초 청크로 실시간 append, `TailSource`로 미리보기), 4 세그먼트(2767/1389/1467/1030ms), `skips=0`, `outcome=committed`. `--file`보다 훨씬 낮다 — 표본 4개뿐이고 두 실행의 시스템/모델 warm-up 상태가 달라 이 차이의 원인은 이 데이터만으로 가르지 못한다. 같은 세션에서 `--mic`도 실행됐다: 이번엔 마이크 권한 프롬프트 없이 스트림이 열렸다(과거 실측 시점과 환경이 달라진 것으로 보인다) — 다만 위 "`--file`/`--mic`는 스스로 봉인하지 않는다" 대로 `stop` 60초 뒤 `io_error`로 끝났다. |
+| 2026-09-07 | Apple M2, 16GB, macOS 26.0 (Darwin 27.0.0) | large-v3-turbo (mlx, gpu) | 측정 안 함 | **실기기 브라우저 스모크**, commit `585e358`, Chromium 152, 실제 MacBook Pro 내장 마이크. 세 회의: `mtg_29`(개발 서버 :5173), `mtg_30`(프로덕션 빌드 `pnpm fe preview` :4173), `mtg_31`(워커 SIGTERM 테스트). 바이트 회계는 셋 다 정확히 맞았다 — 아래 표. latency는 조용한 방이라 발화 세그먼트가 거의 안 생겨 의미 있는 표본을 못 얻었다(전사 품질이 아니라 프로토콜 검증이 목적이었다). |
+
+#### 2026-09-07 브라우저 스모크 바이트 회계
+
+실행 시각 2026-09-07 14:29–14:35 KST · commit `585e358` · macOS 26.0(Darwin 27.0.0), Apple M2 16GB ·
+Chromium 152 · 마이크 = MacBook Pro 내장(실제 권한 부여) · **개발 호스트 형상**(API·워커 모두 호스트).
+
+| 회의 | 경로 | physical | committed = sealed | data 청크 | duration_ms | ffprobe | stop 자투리 | 갭 | capture_error |
+|---|---|---|---|---|---|---|---|---|---|
+| `mtg_29` | 개발 서버 :5173 | 1,432,876 | 1,432,832 | 1,432,832 | 44,776 | 44.776s | 23,808 B (offset 1,409,024 = 43×32,768) | 4 ms | NULL |
+| `mtg_30` | 프로덕션 빌드 :4173 | 1,534,764 | 1,534,720 | 1,534,720 | 47,960 | 47.960s | 27,392 B (offset 1,507,328 = 46×32,768) | 44 ms | NULL |
+| `mtg_31` | 프로덕션 빌드 + 워커 SIGTERM | 1,260,076 | 1,260,032 | 1,260,032 | 39,376 | 39.376s | — | — | `preview_worker_lost` |
+
+셋 다 `physical = 44 + committed = 44 + sealed`, `data 청크 = sealed`,
+`duration_ms = floor(sealed/32)`, ffprobe 16 kHz·mono·16-bit가 정확히 성립했다.
+`mtg_29`/`mtg_30`의 stop 자투리는 32,768 미만이고 마지막 확정 경계는 청크 크기의 배수다 —
+설계 §3.4·§7의 "flush로 건진 나머지를 stop 본문에 싣는다"가 실제로 그 모양으로 일어났다.
+
+**`mtg_31`(워커 SIGTERM)이 §4.1–4.2를 통째로 태운 회의다.** 워커를 죽인 뒤(프로세스 0개)
+`POST /live/audio`가 **15번 더 전부 200**이었고 `committed_bytes`가 491,520 → 983,040으로
+정확히 15 × 32,768만큼 늘었다. job은 `failed`/`worker_shutdown`인데 meeting은 `recording`을
+유지했다. 종료를 누르자 워커가 없으므로 API가 finalize했고 `capture_error=preview_worker_lost`가
+붙었다. 워커를 다시 띄우니 `process_meeting` → `index_meeting`이 `done`으로 끝났고
+**`meeting.error`는 NULL, `capture_error`는 `preview_worker_lost` 그대로 남았다.**
+
+권한 거절도 실제로 봤다: Chromium 사이트 권한을 `denied`로 두면 `getUserMedia`가
+`NotAllowedError`로 거절되고, 그 상태에서 "녹음 시작"을 세 번 눌러도 `POST /meetings/live`가
+**0회**이고 `meeting`·`live_session` 행이 늘지 않았다(설계 §6).
+
+#### 2026-09-07 배포 형상(API 컨테이너 ↔ 호스트) 실측
+
+`deploy/api.Dockerfile`을 이 브랜치에서 빌드한 이미지로 API를 컨테이너에 띄우고
+`deploy/storage`를 bind mount한 뒤, 호스트에서 실제 `TailSource`로 읽었다.
+
+- 컨테이너가 만든 44바이트 헤더 파일이 호스트에 **즉시** 보였다.
+- append 12회 전부 200, 요청 지연 15.7–88.3 ms(첫 요청이 88.3, 이후 중앙값 ≈18 ms).
+- **확정된 prefix가 호스트 `stat`에 보이기까지의 지연 0.01–0.02 ms** — Docker Desktop VM 경계에서
+  측정 가능한 지연이 사실상 없었다. (이 값은 이 머신·이 Docker Desktop 버전의 실측이다.
+  다른 파일 공유 구현에서 같으리라 가정하지 말 것.)
+- 자라는 파일을 호스트 `TailSource`가 따라 읽어 봉인에서 정확히 멈췄다: `frames=201`,
+  `pcm_bytes_read=205,824`, `skips=0`, `signal=stop`, `sealed=206,384`.
+  읽은 값이 `sealed`보다 560바이트 작은 것은 **정상**이다 — `frames()`는 1024바이트 프레임만
+  내보내고 206,384 = 201×1024 + 560이라 마지막 한 프레임을 못 채운 나머지는 미리보기로 가지
+  않는다(정본 패스는 파일 전체를 읽는다).
+- 워커가 소유하지 않은 job에 대해 `get_live_input_state`가 `signal=lost`, `committed=0`을 돌려주고
+  `TailSource`가 아무것도 읽지 않는 것도 같이 확인됐다(소유권 가드).
+
+**이번에 검증하지 못한 것 — 미검증으로 남긴다.**
+
+- **HTTPS origin에서의 다른 기기 브라우저 녹음(수용 테스트 R7의 뒷부분).** 이 환경에 HTTPS
+  origin도, 두 번째 노트북도 없다. 위 실측은 전부 `http://localhost`(secure context이지만
+  HTTPS origin은 아니다)에서 했다. 설계 §8대로 **HTTP LAN IP는 권한 지원 환경으로 세지 않는다** —
+  LAN 브라우저 녹음은 여전히 미검증이다.
+- **운영 배포.** 위 컨테이너 실측은 검증용 일회성 컨테이너이고, 운영 배포는 수행하지 않았다.
+- **4시간 상한(R9)·orphan 경합(R4)·동시성(R8)의 브라우저 경유 실측.** 결정적 테스트로는 덮여
+  있지만 실기기로는 돌리지 않았다.
+- 2026-09-06 `mtg_15` 결과는 **이번 작업의 근거가 아니다**. 그때 코드에는 `committed_bytes`가
+  아예 없었다(migration `024`는 이 브랜치에서 추가됐다) — 위 표만 이번 변경의 증거다.
 
 **이 실측은 설계의 "1~2초" 가정과 어긋난다.** 설계 §5.3/§9는 세그먼트 끝→미리보기 노출 지연을
 "보통 1~2초"로 예상했다. 실측 중앙값 5.1초·최대 7.4초는 그 값의 2.5~5배다. 설계 문서는 날짜
