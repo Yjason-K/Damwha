@@ -391,9 +391,14 @@ export class LiveService {
           // 이 job을 마무리할 워커가 없다. queued면 한 번도 claim되지 않았고, failed면
           // reaper가 그 워커를 잃었다고 판정했다(설계 §2.11 — 워커를 잃어도 녹음은 살아
           // 있다). 어느 쪽이든 디스크엔 온전한 녹음이 있으므로 API가 마무리한다.
-          await this.finalizeByApi(c, job, meeting, end);
+          // finalizeByApi가 자기 가드로 거절했으면 그 사실대로 답한다 — 봉인은 이미 커밋됐고
+          // 남은 마무리는 다음 스윕이 본다.
+          const finalized = await this.finalizeByApi(c, job, meeting, end);
           return {
-            ok: { meeting_id: id, job_id: job.id, sealed_bytes: end, outcome: 'finalized' as const },
+            ok: {
+              meeting_id: id, job_id: job.id, sealed_bytes: end,
+              outcome: finalized ? ('finalized' as const) : ('stopping' as const),
+            },
             audioKey: meeting.audio_key, sealedBytes: end, discarded: false,
           };
         }
@@ -424,11 +429,36 @@ export class LiveService {
   }
 
   /**
-   * API가 finalize하는 경로. 워커의 finalize_live_session과 같은 일을 하되 job 가드가
-   * status='queued'다(워커는 running AND locked_by). capture_error는 건드리지 않는다.
+   * API가 finalize하는 경로. 워커의 finalize_live_session과 같은 일을 하되 가드가 정반대다:
+   * 워커는 자기가 **들고 있는**(running AND locked_by) 봉인된 job만, API는 **아무도 들고
+   * 있지 않은** job만 마무리한다 — 명시적으로 queued(한 번도 claim되지 않음) 또는
+   * failed(reaper가 그 워커를 잃었다고 판정)다 (설계 §4.1). worker_id를 API가 가장하지
+   * 않으므로 running을 훔칠 길은 없고, done을 다시 finalize하지도 않는다.
+   *
+   * 호출자가 이미 job → meeting을 잠갔지만 그 행 사본은 잠근 시점의 것이다 — stop은 그
+   * 뒤에 같은 TX에서 봉인을 썼다. 그래서 잠금 아래에서 현재 상태를 다시 읽어 봉인 여부와
+   * 생존 조건(recording + current_job_id)을 재검증한다. 두 actor 모두 이 확인을 하므로
+   * process job은 정확히 한 번만 만들어진다.
+   *
+   * capture_error는 건드리지 않는다. 마무리하지 못하면 false — 남은 세션은 다음 스윕이 본다.
    */
-  async finalizeByApi(c: Queryable, job: JobRow, meeting: MeetingRow, sealedBytes: number) {
-    if (job.status === 'failed') {
+  async finalizeByApi(
+    c: Queryable, job: JobRow, meeting: MeetingRow, sealedBytes: number,
+  ): Promise<boolean> {
+    const fresh = await this.live.lockJobById(c, job.id);
+    const current = await this.meetings.lockById(c, meeting.id);
+    if (!fresh || !current) return false;
+    if (fresh.status !== 'queued' && fresh.status !== 'failed') return false;
+    if (current.status !== 'recording' || current.current_job_id !== fresh.id) return false;
+    // 봉인이 finalize의 선행 조건이다 (설계 §3.4) — 미봉인 세션은 아직 끝 길이가 없다.
+    // committed_bytes가 있으면 봉인과 같아야 한다: 024의 CHECK가 이미 강제하지만, 그
+    // 불변식이 duration의 근거이므로 여기서도 확인한다. 024 이전 세션(NULL)은 확정 경계
+    // 자체가 없으므로 봉인 길이만 보고 마무리한다 — 안 그러면 회의가 recording에 갇힌다.
+    if (fresh.sealed_bytes === null) return false;
+    const sealed = this.bigint(fresh.sealed_bytes, 'sealed_bytes');
+    const committed = this.committedOf(fresh);
+    if (committed !== null && committed !== sealed) return false;
+    if (fresh.status === 'failed') {
       // reaper가 워커를 잃었다고 판정한 job이다. 아래 jobs.complete가 그 error를 덮어
       // 지우므로, "이 녹음은 라이브 미리보기 없이 얻어졌다"를 capture_error로 옮긴다
       // (설계 §7 "녹음은 계속. 미리보기만 없고"). 이미 브라우저가 더 구체적인 사유를
@@ -445,6 +475,7 @@ export class LiveService {
     });
     await this.meetings.setCurrentJob(c, meeting.id, next.id);
     await this.jobs.complete(c, job.id);
+    return true;
   }
 
   /**

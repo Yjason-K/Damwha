@@ -25,6 +25,18 @@ log = logging.getLogger("damwha_worker")
 
 _MAX_BACKOFF_SECONDS = 60.0
 _TIMEOUT_EXC = subprocess.TimeoutExpired
+#: 미리보기를 반납하며 job에 남기는 사유. 회의에는 아무것도 쓰지 않는다 (설계 §4.2).
+_WORKER_SHUTDOWN = "worker_shutdown"
+
+
+def _is_browser_live(job: dict) -> bool:
+    """이 job이 브라우저가 캡처하는 라이브 세션인가.
+
+    payload의 source로 가르는 이유는 소유권이다. browser 세션의 오디오는 브라우저가 API로
+    보내고 API가 파일에 쓰므로, 워커 장애는 미리보기만 끝낼 수 있다 (설계 §4.1). mic 세션은
+    반대로 워커가 캡처자라 워커를 잃으면 그 녹음도 없다 — 기존 거절 정책대로 회의까지 닫는다.
+    """
+    return job["type"] == "live_session" and (job["payload"] or {}).get("source") == "browser"
 
 
 def _no_llm_server(_model):
@@ -211,6 +223,25 @@ def handle_job(
             )
         raise ValueError(f"unknown job type {job['type']}")
     except ShutdownRequested:
+        if job["type"] == "live_session":
+            # live job은 어떤 경우에도 requeue_for_shutdown에 들어가지 않는다 (설계 §4.2).
+            # 재claim한 워커는 이미 지나간 오디오를 앞에서부터 다시 전사하게 되고, 그동안
+            # 회의는 계속 자란다 — max_attempts=1과 같은 이유다.
+            log.info("job %s → live session returned on shutdown", job["id"])
+            error = {
+                "code": _WORKER_SHUTDOWN,
+                "message": "the preview worker shut down; the recording is unaffected",
+                "kind": ErrorKind.PERMANENT.value,
+                "stage": job.get("stage"),
+            }
+            # browser 세션은 미리보기만 반납한다 — 마무리는 봉인 뒤 API가 이어받는다.
+            # mic 세션은 워커가 캡처자라 반납할 미리보기가 아니라 잃은 녹음이다.
+            ok = (
+                db.fail_live_preview(conn, job["id"], worker_id, error)
+                if _is_browser_live(job)
+                else db.fail_process_meeting(conn, job["id"], worker_id, job["meeting_id"], error)
+            )
+            return "failed" if ok else "lost"
         log.info("job %s type=%s → shutdown requeue", job["id"], job["type"])
         ok = db.requeue_for_shutdown(conn, job["id"], worker_id)
         return "requeued_shutdown" if ok else "lost"
@@ -229,6 +260,11 @@ def handle_job(
         transient_retry = werr.kind is ErrorKind.TRANSIENT and job["attempts"] < job["max_attempts"]
         if job["type"] == "live_session":
             # 재시도는 없다 (설계 §2.6). 끊긴 녹음은 이어 붙일 수 없고, 파일은 디스크에 남는다.
+            if _is_browser_live(job):
+                # 미리보기 실패는 미리보기만 끝낸다 (설계 §4.1 3행) — OOM이든 클립 연속
+                # 실패든, 회의는 recording에 남아 append를 계속 받는다.
+                ok = db.fail_live_preview(conn, job["id"], worker_id, error_json)
+                return "failed" if ok else "lost"
             ok = db.fail_process_meeting(conn, job["id"], worker_id, job["meeting_id"], error_json)
             return "failed" if ok else "lost"
         if job["type"] == "enroll_speaker":

@@ -39,7 +39,14 @@ from dataclasses import dataclass
 from .. import db
 from ..audio.source import FRAME_MS, SR
 from ..contracts import LiveSessionPayload
-from ..errors import AUDIO_DEVICE_FAILED, IO_ERROR, LIVE_STT_FAILED, ErrorKind, WorkerError
+from ..errors import (
+    AUDIO_DEVICE_FAILED,
+    IO_ERROR,
+    LIVE_STT_FAILED,
+    ErrorKind,
+    ShutdownRequested,
+    WorkerError,
+)
 from ..models.base import DiarSegment, Embedder, StreamingVAD, Transcriber
 from ..storage import Storage
 from .identify import identify_embedding
@@ -312,6 +319,11 @@ def run_live_session(
         )
         if stop_reason == "lost":
             return "lost"
+        if stop_reason == "shutdown" and sealed is None:
+            # 봉인 전 SIGTERM은 미리보기를 반납한다 (설계 §4.2). 아래 finalize로 내려가면
+            # 아직 자라는 중인 파일의 길이를 정본 길이로 정하게 된다 — 끝을 정하는 것은
+            # API의 봉인이고, 그 뒤의 마무리는 stop이나 orphan 스위퍼가 이어받는다.
+            raise ShutdownRequested("shutdown requested before the session was sealed")
         if sealed is None:
             # 봉인 없이 소스가 끝났다 — API가 아직 stop을 처리하지 않았다. 여기서
             # finalize하면 자라는 중인 파일로 duration을 정하고 배치 패스를 큐에 넣는다.

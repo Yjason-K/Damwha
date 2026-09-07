@@ -122,4 +122,27 @@ describe('reapStale', () => {
     expect(meeting.rows[0].status).toBe('recording');
     expect(meeting.rows[0].error).toBeNull();
   });
+
+  /**
+   * 미리보기 job은 재queue하지 않는다 (설계 §2.2·§4.2). 재claim한 워커는 이미 지나간 오디오를
+   * 앞에서부터 다시 전사하고, 그동안 회의는 계속 자란다. max_attempts=1이 보통 이것을
+   * 보장하지만 그 값 하나에 기대지 않는다 — 남는 attempts를 가진 라이브 행도 failed로 간다.
+   * 워커의 db.reap_stale에도 같은 짝이 있다 (be/worker/tests/test_db_lifecycle.py).
+   */
+  it('never requeues a stale live_session, even with attempts left', async () => {
+    const m = await db.pool.query(`INSERT INTO meeting(audio_key, status) VALUES('k','recording') RETURNING id`);
+    const mid = m.rows[0].id;
+    const j = await db.pool.query(
+      `INSERT INTO job(type, meeting_id, payload, status, locked_by, locked_at, attempts, max_attempts, stage)
+       VALUES('live_session',$1,'{}','running','w', now() - interval '45 minutes', 1, 3, 'capture') RETURNING id`,
+      [mid],
+    );
+    await db.pool.query(`UPDATE meeting SET current_job_id=$1 WHERE id=$2`, [j.rows[0].id, mid]);
+
+    expect(await repo.reapStale(db.pool, 30)).toEqual({ requeued: 0, failed: 1 });
+    const job = await db.pool.query('SELECT status FROM job WHERE id=$1', [j.rows[0].id]);
+    expect(job.rows[0].status).toBe('failed');
+    const meeting = await db.pool.query('SELECT status FROM meeting WHERE id=$1', [mid]);
+    expect(meeting.rows[0].status).toBe('recording');
+  });
 });

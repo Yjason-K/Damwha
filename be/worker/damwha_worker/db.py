@@ -115,10 +115,16 @@ def reap_stale(conn, stale_minutes: float) -> tuple[int, int]:
             AND locked_at < now() - (%s || ' minutes')::interval
           FOR UPDATE SKIP LOCKED
         ),
+        -- live_session은 재queue 대상이 아니다 (설계 §2.2·§4.2). 다시 claim해 봐야 다음
+        -- 워커는 이미 지나간 오디오를 앞에서부터 다시 전사한다. max_attempts=1이 보통
+        -- 그것을 보장하지만, 남는 attempts를 가진 라이브 행이 생겨도 여기서 failed로 간다 —
+        -- 두 집합이 정확히 반대라야 stale live job이 running에 영원히 남지 않는다.
         requeued AS (
           UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL,
                  next_attempt_at=NULL, updated_at=now()
-          WHERE id IN (SELECT id FROM stale WHERE attempts < max_attempts)
+          WHERE id IN (
+            SELECT id FROM stale WHERE attempts < max_attempts AND type <> 'live_session'
+          )
           RETURNING id
         ),
         failed AS (
@@ -126,7 +132,9 @@ def reap_stale(conn, stale_minutes: float) -> tuple[int, int]:
             error = jsonb_build_object('code','stale_worker',
                                        'message','worker lock expired',
                                        'stage', j.stage)
-          WHERE id IN (SELECT id FROM stale WHERE attempts >= max_attempts)
+          WHERE id IN (
+            SELECT id FROM stale WHERE attempts >= max_attempts OR type = 'live_session'
+          )
           RETURNING id, type, meeting_id, error
         ),
         fail_lens_extraction_runs AS (
@@ -141,11 +149,17 @@ def reap_stale(conn, stale_minutes: float) -> tuple[int, int]:
           WHERE s.job_id=f.id AND f.type='summarize_meeting'
           RETURNING s.meeting_id
         ),
+        -- live_session은 일부러 빠져 있다. 워커가 캡처자였을 때는 "워커를 잃음 = 녹음을
+        -- 잃음"이었지만, 브라우저 캡처로 옮긴 뒤로는 아니다 — 오디오는 브라우저가 API로
+        -- 보내고 API가 파일에 쓰므로 워커가 죽어도 녹음은 계속된다 (설계 §4.1의
+        -- OOM/SIGKILL 행). 여기서 회의를 failed로 만들면 아직 업로드 중인 멀쩡한 녹음을
+        -- 죽인다. job은 그대로 failed가 되고, 마무리는 stop이나 orphan 스위퍼가 API
+        -- 경로로 맡는다. TypeScript의 JobsRepository.reapStale과 같은 계약이다.
         fail_meetings AS (
           UPDATE meeting m SET status='failed',
             error = jsonb_build_object('code','stale_worker','message','processing worker lost')
           WHERE m.id IN (
-            SELECT meeting_id FROM failed WHERE type IN ('process_meeting','live_session')
+            SELECT meeting_id FROM failed WHERE type = 'process_meeting'
           )
           RETURNING m.id
         ),
@@ -182,6 +196,27 @@ def fail_process_meeting(conn, job_id: str, worker_id: str, meeting_id: str, err
         return True
     except _Abort:
         return False
+
+
+def fail_live_preview(conn, job_id: str, worker_id: str, error: dict) -> bool:
+    """미리보기 job만 닫는다. 회의도, 확정·봉인 경계도 건드리지 않는다 (설계 §4.1·§4.2).
+
+    fail_process_meeting과 나란히 두었지만 하는 일이 정반대다. 저쪽은 "이 회의의 처리가
+    실패했다"를 회의에 전파하고, 이쪽은 전파하지 **않는다** — 브라우저 캡처로 옮긴 뒤로
+    오디오는 API가 쓰고 워커는 그 파일을 따라 읽을 뿐이라, 워커의 OOM·SIGTERM·클립 연속
+    실패가 진행 중인 녹음을 끝낼 권한이 없다. 회의는 recording에 남아 append를 계속 받고,
+    마무리는 봉인 뒤 API(stop 또는 orphan 스위퍼)가 한다.
+
+    소유권 가드가 0행을 내는 경우는 둘이다: 다른 워커가 이미 재claim했거나(reaper), 0바이트
+    사용자 stop이 회의를 지우면서 job이 FK CASCADE로 함께 사라졌거나. 어느 쪽이든 이 워커는
+    더 쓸 것이 없다는 뜻이라 false로 보고한다 — 호출자는 'lost'로 끝낸다.
+    """
+    cur = conn.execute(
+        "UPDATE job SET status='failed', error=%s, updated_at=now() "
+        "WHERE id=%s AND status='running' AND locked_by=%s",
+        (Jsonb(error), job_id, worker_id),
+    )
+    return cur.rowcount > 0
 
 
 def fail_enroll(conn, job_id: str, worker_id: str, speaker_id: str, error: dict) -> bool:
@@ -1077,14 +1112,23 @@ def finalize_live_session(
 
     잠금 순서는 persist와 같은 job → meeting. API의 stop도 같은 순서라 교차하지 않는다.
     라이브 발화는 여기서 지우지 않는다 — 최종 패스가 도는 1~2분 동안 미리보기로 남아야 한다.
+
+    워커가 마무리할 자격은 소유권(running + locked_by)만으로는 부족하다. **봉인된 세션**,
+    즉 sealed_bytes가 확정 경계와 같을 때만이다 (설계 §4.1). 그래야 duration_ms가 자라는
+    중인 파일의 길이가 아니라 API가 정한 최종 길이에서 나온다. 봉인 전이면 마무리할 사람은
+    아직 아무도 없고, 그 판단은 잠금 아래 DB 행으로 다시 확인한다 — 루프의 스냅샷은 최대
+    1초 낡았다.
     """
     try:
         with conn.transaction():
             owned = conn.execute(
-                "SELECT 1 FROM job WHERE id=%s AND locked_by=%s AND status='running' FOR UPDATE",
+                "SELECT committed_bytes, sealed_bytes FROM job "
+                "WHERE id=%s AND locked_by=%s AND status='running' FOR UPDATE",
                 (job_id, worker_id),
             ).fetchone()
             if owned is None:
+                raise _Abort
+            if owned["sealed_bytes"] is None or owned["sealed_bytes"] != owned["committed_bytes"]:
                 raise _Abort
             cur = conn.execute(
                 """

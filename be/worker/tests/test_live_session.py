@@ -13,6 +13,7 @@ from damwha_worker.errors import (
     IO_ERROR,
     LIVE_STT_FAILED,
     ErrorKind,
+    ShutdownRequested,
     WorkerError,
 )
 from damwha_worker.models.base import Word
@@ -73,10 +74,14 @@ def _claimed(conn):
 
 def _seal(conn, job, n_bytes):
     """stop_requested_at과 sealed_bytes를 같이 찍는다 — get_live_input_state는
-    stop_requested_at이 없으면 sealed_bytes가 있어도 signal=None을 낸다 (설계 §4.4 ③)."""
+    stop_requested_at이 없으면 sealed_bytes가 있어도 signal=None을 낸다 (설계 §4.4 ③).
+
+    확정 경계도 같이 올린다. API의 stop은 committed와 sealed를 하나의 TX에서 같은 값으로
+    커밋하고(설계 §3.4), 워커의 finalize는 그 둘이 일치할 때만 자기 차례로 본다 (설계 §4.1).
+    """
     conn.execute(
-        "UPDATE job SET stop_requested_at=now(), sealed_bytes=%s WHERE id=%s",
-        (n_bytes, job["id"]),
+        "UPDATE job SET stop_requested_at=now(), committed_bytes=%s, sealed_bytes=%s WHERE id=%s",
+        (n_bytes, n_bytes, job["id"]),
     )
 
 
@@ -233,7 +238,71 @@ def test_lost_ownership_returns_lost(conn, pg_url, tmp_path):
     assert row["c"] == 0
 
 
+def test_shutdown_before_the_seal_returns_the_preview(conn, tmp_path):
+    """봉인 전 SIGTERM은 미리보기를 반납한다 — 자기 마음대로 마무리하지 않는다 (설계 §4.2).
+
+    여기서 finalize하면 아직 자라는 중인 파일의 길이로 duration을 정하고, 브라우저가 보내는
+    중인 나머지 오디오를 정본에서 잘라낸 채 배치 패스를 큐에 넣는다. 봉인은 API의 몫이다.
+    """
+    mid, job = _claimed(conn)
+    ev = threading.Event()
+    src = SilenceSource()
+    threading.Timer(0.2, ev.set).start()
+    with pytest.raises(ShutdownRequested):
+        _run(
+            conn,
+            tmp_path,
+            job,
+            _payload(mid),
+            _models(vad=FakeStreamingVAD()),
+            src,
+            shutdown_event=ev,
+        )
+    assert conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()["status"] == (
+        "recording"
+    )
+    row = conn.execute("SELECT count(*) c FROM job WHERE type='process_meeting'").fetchone()
+    assert row["c"] == 0
+
+
+def test_max_duration_without_a_seal_does_not_finalize(conn, tmp_path):
+    """상한 시간 도달은 미리보기 반납일 뿐이지 임의 봉인이 아니다 (설계 §4.2).
+
+    4시간 상한을 강제하는 것은 API다(누적 460800000바이트에서 봉인). 워커가 여기서 스스로
+    끝을 정하면 두 actor가 서로 다른 정본 길이를 주장하게 된다.
+    """
+    mid, job = _claimed(conn)
+    conn.execute("UPDATE job SET committed_bytes=0 WHERE id=%s", (job["id"],))
+    src = SilenceSource()
+    ticks = iter([0.0, 0.0, 0.0, 10_000.0, 10_000.0, 10_000.0, 10_000.0, 10_000.0])
+    with pytest.raises(WorkerError) as ei:
+        _run(
+            conn,
+            tmp_path,
+            job,
+            _payload(mid),
+            _models(vad=FakeStreamingVAD()),
+            src,
+            max_minutes=1.0,
+            clock=lambda: next(ticks, 10_000.0),
+        )
+    assert ei.value.code == IO_ERROR
+    row = conn.execute("SELECT status, sealed_bytes FROM job WHERE id=%s", (job["id"],)).fetchone()
+    assert row["sealed_bytes"] is None
+    assert conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()["status"] == (
+        "recording"
+    )
+    assert (
+        conn.execute("SELECT count(*) c FROM job WHERE type='process_meeting'").fetchone()["c"] == 0
+    )
+
+
 def test_shutdown_event_finalizes_instead_of_requeue(conn, tmp_path):
+    """봉인 뒤의 SIGTERM은 마무리해도 된다 — 끝 길이는 이미 API가 정했다 (설계 §4.2).
+
+    재queue는 어느 쪽이든 안 된다(§2.2). 여기서 반납해도 API 인계로 수렴하지만, 정본 길이가
+    확정된 뒤라 이 워커가 끝내는 편이 회의를 30초 스윕까지 recording에 두지 않는다.
+    """
     mid, job = _claimed(conn)
     _seal(conn, job, FRAME_BYTES * 100)
     ev = threading.Event()

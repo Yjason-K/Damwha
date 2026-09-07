@@ -9,6 +9,10 @@ import { CAPABILITIES } from '../src/system/capabilities';
 import { LiveAudioService } from '../src/storage/live-audio.service';
 import { StorageService } from '../src/storage/storage.service';
 import { LiveRepository } from '../src/live/live.repository';
+import { JobsRepository } from '../src/jobs/jobs.repository';
+import { LiveService } from '../src/live/live.service';
+import { MeetingsRepository } from '../src/meetings/meetings.repository';
+import { DatabaseService } from '../src/database/database.service';
 
 const CHUNK = 32768;
 const chunk = (fill: number) => Buffer.alloc(CHUNK, fill);
@@ -474,6 +478,122 @@ describe('live audio append', () => {
     const { rows: jobs } = await db.pool.query(
       `SELECT type, status FROM job WHERE meeting_id=$1 ORDER BY created_at`, [m.id]);
     expect(jobs.map((j) => `${j.type}:${j.status}`)).toEqual(['live_session:done', 'process_meeting:queued']);
+  });
+
+  /**
+   * 수용 테스트 R1 — 워커를 잃어도 녹음은 계속된다 (설계 §4.1·§4.2).
+   *
+   * SQL로 job을 failed로 찍어 두고 그 뒤를 검사하면 "reaper가 회의까지 닫는가"라는 진짜
+   * 질문을 건너뛴다. 그래서 실제 reapStale을 부른다 — 워커 쪽 db.reap_stale에도 같은 짝이
+   * 있고(be/worker/tests/test_db_lifecycle.py), 두 CTE가 어긋나면 어느 한쪽 프로세스가
+   * 진행 중인 녹음을 죽인다.
+   */
+  it('a reaped preview worker never stops the recording — append keeps working, stop finalizes once', async () => {
+    const { body: m } = await start().expect(201);
+    const { rows: before } = await db.pool.query(
+      `SELECT current_job_id FROM meeting WHERE id=$1`, [m.id]);
+    const jobId = before[0].current_job_id as string;
+    await claim(jobId);
+    await send(m.id, 0, chunk(1)).expect(200);
+
+    // 워커가 OOM으로 사라져 heartbeat가 멎었다. 30분 뒤 reaper가 그 잠금을 회수한다.
+    await db.pool.query(`UPDATE job SET locked_at=now() - interval '45 minutes' WHERE id=$1`, [jobId]);
+    expect(await app.get(JobsRepository).reapStale(db.pool, 30)).toEqual({ requeued: 0, failed: 1 });
+
+    const reaped = await db.pool.query(`SELECT status FROM job WHERE id=$1`, [jobId]);
+    expect(reaped.rows[0].status).toBe('failed');
+    const during = await db.pool.query(`SELECT status, error FROM meeting WHERE id=$1`, [m.id]);
+    expect(during.rows[0].status).toBe('recording');
+    expect(during.rows[0].error).toBeNull();
+
+    // 브라우저는 아무것도 못 느낀다 — 다음 청크가 그대로 받아들여진다.
+    await send(m.id, CHUNK, chunk(2)).expect(200)
+      .expect((r) => expect(r.body.expected_offset).toBe(CHUNK * 2));
+
+    // 마무리는 API가 한 번만 한다.
+    await stop(m.id, CHUNK * 2, CHUNK * 2).expect(200)
+      .expect((r) => expect(r.body.outcome).toBe('finalized'));
+    const { rows } = await db.pool.query(
+      `SELECT status, duration_ms, capture_error FROM meeting WHERE id=$1`, [m.id]);
+    expect(rows[0].status).toBe('uploaded');
+    expect(rows[0].duration_ms).toBe((CHUNK * 2) / 32);
+    // jobs.complete가 job.error를 덮으므로 "미리보기 없이 얻은 녹음"은 capture_error로 남는다.
+    expect(rows[0].capture_error.code).toBe('preview_worker_lost');
+    const { rows: jobs } = await db.pool.query(
+      `SELECT type, status FROM job WHERE meeting_id=$1 ORDER BY created_at`, [m.id]);
+    expect(jobs.map((j) => `${j.type}:${j.status}`))
+      .toEqual(['live_session:done', 'process_meeting:queued']);
+  });
+
+  // 브라우저가 실제로 겪은 일이 API의 일반적인 사유보다 사용자에게 쓸모 있다 (설계 §7).
+  it('a reaped worker does not overwrite the capture error the browser reported', async () => {
+    const { body: m } = await start().expect(201);
+    const { rows: before } = await db.pool.query(
+      `SELECT current_job_id FROM meeting WHERE id=$1`, [m.id]);
+    await claim(before[0].current_job_id);
+    await send(m.id, 0, chunk(1)).expect(200);
+    await db.pool.query(
+      `UPDATE job SET locked_at=now() - interval '45 minutes' WHERE id=$1`, [before[0].current_job_id]);
+    await app.get(JobsRepository).reapStale(db.pool, 30);
+
+    await stopWithError(m.id, CHUNK, CHUNK, 'device_ended').expect(200)
+      .expect((r) => expect(r.body.outcome).toBe('finalized'));
+
+    const { rows } = await db.pool.query(`SELECT capture_error FROM meeting WHERE id=$1`, [m.id]);
+    expect(rows[0].capture_error.code).toBe('device_ended');
+  });
+
+  // 살아 있는 워커의 잠금을 API가 훔치지 않는다 (설계 §4.1 "봉인 + 정상 워커" 행).
+  // 봉인만 하고 물러나야 process job이 두 번 만들어지지 않는다.
+  it('the API refuses to finalize a sealed session a worker still holds', async () => {
+    const { body: m } = await start().expect(201);
+    const { rows: before } = await db.pool.query(
+      `SELECT current_job_id FROM meeting WHERE id=$1`, [m.id]);
+    await claim(before[0].current_job_id);
+    await send(m.id, 0, chunk(1)).expect(200);
+    await stop(m.id, CHUNK, CHUNK).expect(200)
+      .expect((r) => expect(r.body.outcome).toBe('stopping'));
+
+    const { rows } = await db.pool.query(
+      `SELECT type FROM job WHERE meeting_id=$1 AND type='process_meeting'`, [m.id]);
+    expect(rows).toHaveLength(0);
+    const meeting = await db.pool.query(`SELECT status FROM meeting WHERE id=$1`, [m.id]);
+    expect(meeting.rows[0].status).toBe('recording');
+  });
+
+  /**
+   * API finalize의 허용 상태는 queued 또는 failed이고, 선행 조건은 봉인이다 (설계 §4.1).
+   * 호출자(stop·스위퍼)가 앞에서 거른다고 이 가드를 생략하면, 두 actor가 process job을
+   * 두 번 만들거나 자라는 중인 파일의 길이로 duration을 정하는 길이 열린다.
+   */
+  it('finalizeByApi refuses an unsealed session and refuses to finalize a done job twice', async () => {
+    const { body: m } = await start().expect(201);
+    await send(m.id, 0, chunk(1)).expect(200);
+    const finalize = (jobId: string) =>
+      app.get(DatabaseService).withTransaction(async (c) => {
+        const job = await app.get(LiveRepository).lockJobById(c, jobId);
+        const meeting = await app.get(MeetingsRepository).lockById(c, m.id);
+        return app.get(LiveService).finalizeByApi(c, job!, meeting!, CHUNK);
+      });
+    const { rows: live } = await db.pool.query(
+      `SELECT current_job_id FROM meeting WHERE id=$1`, [m.id]);
+    const jobId = live[0].current_job_id as string;
+
+    // 아직 봉인되지 않았다 — 끝 길이를 정한 사람이 없다.
+    expect(await finalize(jobId)).toBe(false);
+    expect((await db.pool.query(
+      `SELECT 1 FROM job WHERE meeting_id=$1 AND type='process_meeting'`, [m.id])).rows)
+      .toHaveLength(0);
+    expect((await db.pool.query(`SELECT status FROM meeting WHERE id=$1`, [m.id])).rows[0].status)
+      .toBe('recording');
+
+    // 봉인 뒤 stop이 스스로 마무리한다. 같은 job을 다시 finalize하지는 않는다.
+    await stop(m.id, CHUNK, CHUNK).expect(200)
+      .expect((r) => expect(r.body.outcome).toBe('finalized'));
+    expect(await finalize(jobId)).toBe(false);
+    expect((await db.pool.query(
+      `SELECT 1 FROM job WHERE meeting_id=$1 AND type='process_meeting'`, [m.id])).rows)
+      .toHaveLength(1);
   });
 
   it('a running worker gets stopping, not finalized', async () => {
