@@ -1,16 +1,28 @@
-# Damwha team trial — Postgres + API/SPA in Docker, ML worker on the host.
+# Damwha self-hosted install — Postgres + API/SPA in Docker, ML worker on the host.
 # Both this file and the host worker read the `.env` next to it (compose for
 # ${...} substitution, the worker via pydantic-settings). See README.md.
+#
+# The project name is pinned so it does not change with the folder this file sits
+# in — a repo clone would derive `deploy`, an unpacked tarball `damwha`, and the
+# latter collides with the dev stack in be/docker-compose.yml (`name: damwha`).
+# Pinned, the volume is always `damwha-deploy_pgdata`. Changing this name orphans
+# that volume, exactly as the comment in be/docker-compose.yml warns.
+name: damwha-deploy
+
 services:
   postgres:
     image: ghcr.io/yjason-k/damwha-postgres:${DAMWHA_VERSION}
-    container_name: damwha-postgres
+    container_name: damwha-deploy-postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: damwha
     ports:
-      - "5432:5432"        # the host worker connects here (DATABASE_URL in .env)
+      # Host-side ports are deliberately not the service defaults: 5432 and 3000
+      # are what the dev stack (be/docker-compose.yml) and `pnpm dev` already use,
+      # so a clone of this repo would refuse to start. Override in .env if these
+      # are taken too — and keep DATABASE_URL's port in step with the first one.
+      - "${DAMWHA_DB_PORT:-15432}:5432"    # the host worker connects here (DATABASE_URL in .env)
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -22,12 +34,12 @@ services:
 
   api:
     image: ghcr.io/yjason-k/damwha-api:${DAMWHA_VERSION}
-    container_name: damwha-api
+    container_name: damwha-deploy-api
     depends_on:
       postgres:
         condition: service_healthy
     ports:
-      - "3000:3000"        # UI + API + Swagger (/docs)
+      - "${DAMWHA_API_PORT:-13000}:3000"   # UI + API + Swagger (/docs)
     environment:
       # Inside the compose network Postgres is `postgres`, not localhost —
       # this deliberately differs from the DATABASE_URL the host worker reads.
