@@ -40,7 +40,7 @@ make up        # Postgres + API/UI 컨테이너
 **릴리스로 설치한다면** — 받아서 푼 폴더에서 위와 똑같이 하면 된다:
 
 ```bash
-VER=0.2.0
+VER=0.2.1
 gh release download "v$VER" -R Yjason-K/Damwha -p '*.tar.gz' -p '*.whl'
 tar -xzf damwha-deploy-$VER.tar.gz && cd damwha
 ```
@@ -162,7 +162,7 @@ make upgrade
 되돌릴 때도 녹음을 먼저 비운다. `024`는 컬럼을 더하기만 하므로(additive) 옛 API가 그 컬럼을
 무시하고 그냥 돈다 — 컬럼이나 종료된 녹음 이력을 지울 이유는 없다.
 
-> **0.2.0 이전에서 올라오는 경우 — 한 번만 하는 이사.** 이 릴리스부터 compose 프로젝트 이름을
+> **0.2.1 이전에서 올라오는 경우 — 한 번만 하는 이사.** 이 릴리스부터 compose 프로젝트 이름을
 > `damwha-deploy`로 고정하고 포트를 13000·15432로 옮겼다. 예전에는 프로젝트 이름이 폴더에서
 > 유도돼(`damwha` 또는 `deploy`) 개발용 스택과 이름·포트가 겹쳤다. 이름이 바뀌면 **옛 볼륨은 새
 > 프로젝트에 따라오지 않는다.** 옛 데이터를 쓰려면 올리기 전에 옮긴다(옛 이름은
