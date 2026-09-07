@@ -21,6 +21,10 @@ export class StorageService {
   meetingKey(meetingId: string, filename: string): string {
     return `meetings/${meetingId}/original${this.sanitizeExt(filename)}`;
   }
+  // 라이브 녹음 파일. meetingKey와 달리 확장자가 고정이다 — 브라우저가 항상 raw PCM을 올린다.
+  liveKey(meetingId: string): string {
+    return `meetings/${meetingId}/live.wav`;
+  }
   speakerKey(speakerId: string, filename: string): string {
     return `speakers/${speakerId}/sample${this.sanitizeExt(filename)}`;
   }

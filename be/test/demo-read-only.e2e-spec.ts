@@ -44,4 +44,10 @@ describe('demo read-only (e2e)', () => {
     const res = await request(srv()).post('/search').send({ q: '출시' });
     expect(res.status).not.toBe(403);
   });
+
+  it('live start/stop are closed in demo mode', async () => {
+    expect((await request(srv()).post('/meetings/live').send({})).status).toBe(403);
+    expect((await request(srv()).post('/meetings/mtg_1/live/stop')).status).toBe(403);
+    expect((await request(srv()).get('/meetings/mtg_1/live')).status).not.toBe(403);
+  });
 });

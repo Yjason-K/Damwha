@@ -7,13 +7,20 @@ export class JobsRepository {
 
   async enqueue(
     exec: Queryable,
-    args: { type: JobType; meetingId: string | null; payload: unknown },
+    args: { type: JobType; meetingId: string | null; payload: unknown; maxAttempts?: number },
   ): Promise<JobRow> {
-    const { rows } = await exec.query<JobRow>(
-      `INSERT INTO job(type, meeting_id, payload)
-       VALUES($1, $2, $3::jsonb) RETURNING *`,
-      [args.type, args.meetingId, JSON.stringify(args.payload)],
-    );
+    // maxAttempts를 안 주면 컬럼 DEFAULT(3)를 그대로 쓴다 — 상수를 여기 복제하지 않는다.
+    const { rows } = args.maxAttempts === undefined
+      ? await exec.query<JobRow>(
+          `INSERT INTO job(type, meeting_id, payload)
+           VALUES($1, $2, $3::jsonb) RETURNING *`,
+          [args.type, args.meetingId, JSON.stringify(args.payload)],
+        )
+      : await exec.query<JobRow>(
+          `INSERT INTO job(type, meeting_id, payload, max_attempts)
+           VALUES($1, $2, $3::jsonb, $4) RETURNING *`,
+          [args.type, args.meetingId, JSON.stringify(args.payload), args.maxAttempts],
+        );
     this.logger.log(`enqueued job ${rows[0].id} type=${args.type} meeting=${args.meetingId ?? '-'}`);
     return rows[0];
   }
@@ -26,7 +33,8 @@ export class JobsRepository {
          SELECT id FROM job
          WHERE status='queued'
            AND (next_attempt_at IS NULL OR next_attempt_at <= now())
-         ORDER BY next_attempt_at NULLS FIRST, created_at
+         -- 라이브 세션은 사람이 회의 중이다 — 밀린 색인·요약보다 먼저 집는다 (설계 §3.3).
+         ORDER BY (type = 'live_session') DESC, next_attempt_at NULLS FIRST, created_at
          FOR UPDATE SKIP LOCKED LIMIT 1
        ) RETURNING *`,
       [workerId],
@@ -127,10 +135,16 @@ export class JobsRepository {
          WHERE s.job_id=f.id AND f.type='summarize_meeting'
          RETURNING s.meeting_id
        ),
+       -- live_session은 일부러 빠져 있다. 워커가 캡처자였을 때는 "워커를 잃음 = 녹음을
+       -- 잃음"이었지만, 브라우저 캡처로 옮긴 뒤로는 아니다 — 오디오는 브라우저가 API로
+       -- 보내고 API가 파일에 쓰므로 워커가 죽어도 녹음은 계속된다 (설계 §2.11, §7의
+       -- "녹음은 계속. 미리보기만 없고"). 여기서 회의를 failed로 만들면 브라우저가 아직
+       -- 업로드 중인 멀쩡한 녹음을 죽인다. job은 그대로 failed가 되고(그 워커는 실제로
+       -- 사라졌다), 마무리는 stop이나 LiveOrphanService가 API 경로로 맡는다.
        fail_meetings AS (
          UPDATE meeting m SET status='failed',
            error = jsonb_build_object('code','stale_worker','message','processing worker lost')
-         WHERE m.id IN (SELECT meeting_id FROM failed WHERE type='process_meeting')
+         WHERE m.id IN (SELECT meeting_id FROM failed WHERE type = 'process_meeting')
          RETURNING m.id
        ),
        fail_speakers AS (

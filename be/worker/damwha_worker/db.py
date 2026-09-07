@@ -26,6 +26,8 @@ def upsert_worker_capabilities(conn, value: dict) -> None:
 
 
 def claim(conn, worker_id: str) -> dict | None:
+    """queued job 하나를 잠근다. live_session은 사람이 회의 중이라 밀린 job보다 먼저 집는다
+    (API의 JobsRepository.claim과 같은 정렬)."""
     return conn.execute(
         """
         UPDATE job SET status='running', locked_by=%s, locked_at=now(),
@@ -34,7 +36,7 @@ def claim(conn, worker_id: str) -> dict | None:
           SELECT id FROM job
           WHERE status='queued'
             AND (next_attempt_at IS NULL OR next_attempt_at <= now())
-          ORDER BY next_attempt_at NULLS FIRST, created_at
+          ORDER BY (type = 'live_session') DESC, next_attempt_at NULLS FIRST, created_at
           FOR UPDATE SKIP LOCKED LIMIT 1
         ) RETURNING *
         """,
@@ -140,7 +142,9 @@ def reap_stale(conn, stale_minutes: float) -> tuple[int, int]:
         fail_meetings AS (
           UPDATE meeting m SET status='failed',
             error = jsonb_build_object('code','stale_worker','message','processing worker lost')
-          WHERE m.id IN (SELECT meeting_id FROM failed WHERE type='process_meeting')
+          WHERE m.id IN (
+            SELECT meeting_id FROM failed WHERE type IN ('process_meeting','live_session')
+          )
           RETURNING m.id
         ),
         fail_speakers AS (
@@ -523,6 +527,8 @@ def persist_process_meeting(
                   AND NOT EXISTS (SELECT 1 FROM meeting_cluster WHERE suggested_speaker_id = s.id)
                 """
             )
+            # 라이브 미리보기 행은 정본이 들어오는 이 순간 역할이 끝난다 (설계 §2.4).
+            conn.execute("DELETE FROM live_utterance WHERE meeting_id=%s", (meeting_id,))
             conn.execute(
                 "UPDATE job SET status='done', progress=100, updated_at=now() WHERE id=%s",
                 (job_id,),
@@ -973,6 +979,121 @@ def persist_enroll(
                 VALUES (%s,%s::vector,%s,%s,%s,%s,'enroll')
                 """,
                 (speaker_id, _vec(embedding), model, dimension, sample_duration_ms, quality_score),
+            )
+            conn.execute(
+                "UPDATE job SET status='done', progress=100, updated_at=now() WHERE id=%s",
+                (job_id,),
+            )
+            return "committed"
+    except _Abort:
+        return "lost"
+
+
+# ── 라이브 세션 (설계 §4·§5) ─────────────────────────────────────────────
+
+
+def get_stop_requested(conn, job_id: str, worker_id: str) -> tuple[str | None, int | None]:
+    """루프가 1초마다 읽는 종료 신호와 봉인 길이.
+
+    ('stop', sealed_bytes) = API가 봉인을 끝냈다. 워커는 그 바이트까지 읽고 finalize한다.
+    ('lost', None) = 소유권 상실 (cancel·reaper). (None, None) = 계속.
+
+    둘을 한 SELECT로 읽는 이유는 원자성이 아니다 — 이 커넥션은 autocommit이라
+    READ COMMITTED에서 두 SELECT가 찢어진 상태를 볼 수 없다. 이유는 (a) 왕복 1회이고
+    (b) sealed_bytes 읽기가 stop 검사와 같은 소유권 술어 안에 묶여, 그 사이 job이
+    재claim되면 낡은 값을 받는 TOCTOU가 닫히기 때문이다.
+    """
+    row = conn.execute(
+        "SELECT status, locked_by, stop_requested_at, sealed_bytes FROM job WHERE id=%s",
+        (job_id,),
+    ).fetchone()
+    if row is None or row["locked_by"] != worker_id or row["status"] != "running":
+        return "lost", None
+    if row["stop_requested_at"] is not None:
+        return "stop", row["sealed_bytes"]
+    return None, None
+
+
+def insert_live_utterance(
+    conn,
+    *,
+    meeting_id: str,
+    job_id: str,
+    seq: int,
+    start_ms: int,
+    end_ms: int,
+    text: str,
+    speaker_id: str | None,
+    similarity: float | None,
+) -> str:
+    return conn.execute(
+        """
+        INSERT INTO live_utterance(meeting_id, job_id, seq, start_ms, end_ms, text,
+                                   speaker_id, similarity)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
+        """,
+        (meeting_id, job_id, seq, start_ms, end_ms, text, speaker_id, similarity),
+    ).fetchone()["id"]
+
+
+def delete_live_utterances(conn, meeting_id: str) -> int:
+    return conn.execute("DELETE FROM live_utterance WHERE meeting_id=%s", (meeting_id,)).rowcount
+
+
+def finalize_live_session(
+    conn,
+    *,
+    job_id: str,
+    worker_id: str,
+    meeting_id: str,
+    duration_ms: int,
+    process_payload: dict,
+) -> str:
+    """녹음 종료: 회의를 uploaded로 바꾸고 payload의 v5 process_meeting을 그대로 큐잉한다.
+
+    잠금 순서는 persist와 같은 job → meeting. API의 stop도 같은 순서라 교차하지 않는다.
+    라이브 발화는 여기서 지우지 않는다 — 최종 패스가 도는 1~2분 동안 미리보기로 남아야 한다.
+    """
+    try:
+        with conn.transaction():
+            owned = conn.execute(
+                "SELECT 1 FROM job WHERE id=%s AND locked_by=%s AND status='running' FOR UPDATE",
+                (job_id, worker_id),
+            ).fetchone()
+            if owned is None:
+                raise _Abort
+            cur = conn.execute(
+                """
+                UPDATE meeting SET status='uploaded', duration_ms=%s, error=NULL
+                WHERE id=%s AND status='recording' AND current_job_id=%s
+                """,
+                (duration_ms, meeting_id, job_id),
+            )
+            # capture_error는 일부러 SET 목록에 없다. error는 "이 회의의 처리가 실패했는가"이고
+            # capture_error는 "이 녹음이 어떻게 얻어졌는가"다. 최종 패스가 성공해도 "40분 중
+            # 30분만 녹음됐다"는 계속 보여야 한다 (설계 §2.10).
+            if cur.rowcount == 0:
+                conn.execute(
+                    "UPDATE job SET status='done', error=%s, updated_at=now() WHERE id=%s",
+                    (
+                        Jsonb(
+                            {
+                                "code": "discarded_by_stale_guard",
+                                "message": "meeting is no longer recording under this job",
+                                "stage": "finalize",
+                            }
+                        ),
+                        job_id,
+                    ),
+                )
+                return "discarded"
+            new_job_id = conn.execute(
+                "INSERT INTO job(type, meeting_id, payload) VALUES('process_meeting', %s, %s) "
+                "RETURNING id",
+                (meeting_id, Jsonb(process_payload)),
+            ).fetchone()["id"]
+            conn.execute(
+                "UPDATE meeting SET current_job_id=%s WHERE id=%s", (new_job_id, meeting_id)
             )
             conn.execute(
                 "UPDATE job SET status='done', progress=100, updated_at=now() WHERE id=%s",

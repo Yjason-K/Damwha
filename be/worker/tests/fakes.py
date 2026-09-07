@@ -62,3 +62,84 @@ class FakeTextEmbedder:
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         return [self._by_text.get(t, [0.0] * self._dim) for t in texts]
+
+
+class FakeStreamingVAD:
+    """프레임 인덱스 → 이벤트 목록. 시각(ms)은 세그먼터가 무시하므로 0으로 둔다."""
+
+    def __init__(self, events: dict[int, list[tuple[str, int]]] | None = None) -> None:
+        self._events = events or {}
+        self.frames_seen = 0
+
+    def process(self, pcm: bytes) -> list[tuple[str, int]]:
+        i = self.frames_seen
+        self.frames_seen += 1
+        return list(self._events.get(i, []))
+
+    def reset(self) -> None:
+        self.frames_seen = 0
+
+
+class SilenceSource:
+    """stop()이 올 때까지 무음 프레임을 낸다 — stop 플래그·상한 시간 테스트용.
+
+    position_ms는 GrowingFileSource·TailSource와 같은 계약이다: yield된 프레임의 끝 시각.
+    """
+
+    def __init__(self, interval_seconds: float = 0.005) -> None:
+        import threading
+
+        self._stop = threading.Event()
+        self._interval = interval_seconds
+        self.emitted = 0
+        self.position_ms = 0
+
+    def frames(self):
+        import time
+
+        while not self._stop.is_set():
+            self.emitted += 1
+            self.position_ms += 32
+            yield b"\x00" * 1024
+            time.sleep(self._interval)
+
+    def stop(self) -> None:
+        self._stop.set()
+
+
+class RaisingSource:
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    def frames(self):
+        raise self._exc
+        yield  # noqa: RET503 — 제너레이터로 만들기 위한 도달 불가 yield
+
+    def stop(self) -> None:
+        pass
+
+
+class GrowingFileSource:
+    """TailSource를 흉내 내는 fake. 프레임과 절대 위치를 같이 낸다."""
+
+    def __init__(self, frames, *, skip_after=None, skip_to_ms=None):
+        self._frames = list(frames)
+        self._skip_after = skip_after
+        self._skip_to_ms = skip_to_ms
+        self._i = 0
+        self.position_ms = 0
+        self.skips = 0
+        self.stopped = False
+
+    def frames(self):
+        for i, f in enumerate(self._frames):
+            if self.stopped:
+                return
+            if self._skip_after is not None and i == self._skip_after:
+                self.position_ms = self._skip_to_ms
+                self.skips += 1
+            self.position_ms += 32
+            yield f
+
+    def stop(self) -> None:
+        self.stopped = True

@@ -12,7 +12,7 @@ import { env } from "@/shared/config/env";
 import { useMeetings } from "../api/meetings";
 import type { MeetingFilter, MeetingStatus } from "../model/types";
 import { Icon } from "./icons";
-import { UploadDialog } from "./upload-dialog";
+import { NewMeetingDialog } from "./new-meeting-dialog";
 
 const TourLaunchButton = React.lazy(() =>
   import("@/features/demo/ui/tour-launch-button").then((m) => ({
@@ -63,6 +63,12 @@ const FILTER_ITEMS: [MeetingFilter, string][] = [
 
 /** 처리 중/실패 회의에 붙는 상태 뱃지 (done은 없음). */
 function statusBadge(status: MeetingStatus): React.ReactNode {
+  if (status === "recording")
+    return (
+      <Badge variant="accent" dot>
+        녹음 중
+      </Badge>
+    );
   if (status === "failed")
     return (
       <Badge variant="danger" dot>
@@ -123,7 +129,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
   const savedMatch = useMatch("/saved-utterances");
   const speakersMatch = useMatch("/speakers");
   const settingsMatch = useMatch("/settings");
-  const [uploadOpen, setUploadOpen] = React.useState(false);
+  const [newMeetingOpen, setNewMeetingOpen] = React.useState(false);
   const { data: meetings, isLoading, isError } = useMeetings();
   const filtered = (meetings ?? []).filter((m) =>
     filter === "fav" ? m.fav : true,
@@ -150,7 +156,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
             shortcut={<Kbd keys={["⌘", "K"]} />}
           />
         </div>
-        <NewMeetingItem onClick={() => setUploadOpen(true)} />
+        <NewMeetingItem onClick={() => setNewMeetingOpen(true)} />
 
         <div className="mt-3.5 flex flex-col gap-0.5">
           <SidebarItem
@@ -249,10 +255,10 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
         </React.Suspense>
       ) : null}
 
-      <UploadDialog
-        open={uploadOpen}
-        onOpenChange={setUploadOpen}
-        onUploaded={(id) => navigate(`/meetings/${id}`)}
+      <NewMeetingDialog
+        open={newMeetingOpen}
+        onOpenChange={setNewMeetingOpen}
+        onCreated={(id) => navigate(`/meetings/${id}`)}
       />
     </nav>
   );

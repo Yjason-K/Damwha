@@ -221,6 +221,36 @@ def test_peek_queued_does_not_claim(conn):
     assert row["status"] == "queued"
 
 
+def test_claim_prefers_live_session_over_older_jobs(conn):
+    mid = seed_meeting(conn)
+    seed_job(conn, type="process_meeting", meeting_id=mid)
+    seed_job(conn, type="index_meeting", meeting_id=mid)
+    live = seed_job(conn, type="live_session", meeting_id=mid, max_attempts=1)
+
+    assert db.claim(conn, "w1")["id"] == live
+
+
+def test_reap_stale_fails_live_session_and_its_meeting(conn):
+    mid = seed_meeting(conn, status="recording")
+    jid = seed_job(
+        conn,
+        type="live_session",
+        meeting_id=mid,
+        status="running",
+        locked_by="w1",
+        attempts=1,
+        max_attempts=1,
+        locked_minutes_ago=45,
+    )
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+
+    assert db.reap_stale(conn, 30) == (0, 1)
+    job = conn.execute("SELECT status, error FROM job WHERE id=%s", (jid,)).fetchone()
+    assert job["status"] == "failed" and job["error"]["code"] == "stale_worker"
+    meeting = conn.execute("SELECT status, error FROM meeting WHERE id=%s", (mid,)).fetchone()
+    assert meeting["status"] == "failed" and meeting["error"]["code"] == "stale_worker"
+
+
 def test_worker_capabilities_upsert_overwrites(conn):
     db.upsert_worker_capabilities(conn, {"worker_id": "w1", "gpu_eligible": True})
     db.upsert_worker_capabilities(conn, {"worker_id": "w2", "gpu_eligible": False})

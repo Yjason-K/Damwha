@@ -13,8 +13,8 @@ import type {
   SummaryModel,
 } from "@/features/settings/api/types";
 import type { Meeting, MeetingStatus, MeetingSummary } from "../model/types";
+import { removeMeetingCaches } from "./live";
 import { toMeetingDetail, toMeetingSummary } from "./mappers";
-import { noteQueryKey } from "./notes";
 import type {
   MeetingStatusResponse,
   ResolveClusterRequest,
@@ -28,7 +28,7 @@ import type {
 export { meetingAudioUrl } from "./mappers";
 
 const isActive = (status: MeetingStatus) =>
-  status === "uploaded" || status === "processing";
+  status === "recording" || status === "uploaded" || status === "processing";
 
 /** 회의 목록. 처리 중인 회의가 있으면 3초 간격 폴링. */
 export function useMeetings(): UseQueryResult<MeetingSummary[]> {
@@ -78,10 +78,15 @@ export function useMeetingStatus(
     enabled: enabled && !!id,
     // 처리/요약/색인 중 하나라도 진행 중일 때만 폴링 — done 회의에서도 색인
     // 실패를 한 번은 조회해야 하므로 enabled는 열어 두고 여기서 멈춘다.
+    // recording이 빠지면 안 된다: 판정을 이 쿼리 자신의 마지막 응답으로 하는데,
+    // 녹음 중에는 그 응답이 늘 recording이라 폴링이 그 자리에서 멈추고 아무도
+    // 다시 깨우지 않는다. 종료 뒤 배치 패스 내내 "처리 중 · 0%"가 박히고 요약은
+    // 계속 생성 중으로 남는다. 위 isActive와 같은 집합이어야 한다.
     refetchInterval: (query) => {
       const d = query.state.data;
       if (!d) return 2000;
       const active =
+        d.status === "recording" ||
         d.status === "uploaded" ||
         d.status === "processing" ||
         d.summary?.status === "queued" ||
@@ -182,12 +187,11 @@ export function useDeleteMeeting() {
       queryClient.setQueryData<MeetingSummary[]>(["meetings"], (old) =>
         old?.filter((m) => m.id !== vars.id),
       );
-      // 삭제된 회의의 상세/상태/렌즈 캐시를 제거해 렌더 잔존과 404 폴링 루프를
-      // 막고, 목록은 무효화해 다시 가져온다.
-      queryClient.removeQueries({ queryKey: ["meeting", vars.id] });
-      queryClient.removeQueries({ queryKey: ["meeting-status", vars.id] });
-      queryClient.removeQueries({ queryKey: ["meeting-lenses", vars.id] });
-      queryClient.removeQueries({ queryKey: noteQueryKey(vars.id) });
+      // 삭제된 회의의 상세/상태/렌즈/메모/라이브 캐시를 제거해 렌더 잔존과 404
+      // 폴링 루프를 막고, 목록은 무효화해 다시 가져온다. 이 회의가 통째로
+      // 사라졌을 때 지울 캐시 집합은 useStopLive의 discarded 분기와 같아야
+      // 하므로 removeMeetingCaches를 함께 쓴다.
+      removeMeetingCaches(queryClient, vars.id);
       queryClient.invalidateQueries({ queryKey: ["meetings"] });
     },
   });

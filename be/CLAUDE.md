@@ -146,6 +146,89 @@ Separate Python project under `worker/` (uv + ruff + pytest + pydantic v2 + psyc
   startup timeout or an early exit. Because the server is a grandchild of the
   supervisor and inherits its process group, a group kill takes it down too;
   the normal path never relies on that.
+- **Live session is a fifth job type — and the browser is the capturer, not the worker.**
+  `live_session` (`pipeline/live_session.py`) streams a preview (`live_utterance`) while the
+  meeting is `recording`; on stop the meeting flips to `uploaded` and the payload's embedded
+  **v5 `process_meeting`** is enqueued verbatim — the batch pass is the record, the live pass
+  is a preview. Two specs, in order: the original
+  `docs/superpowers/specs/2026-09-05-live-recording-design.md`, then
+  `docs/superpowers/specs/2026-09-05-live-recording-browser-capture-design.md`, which
+  **reverses its §2.1**. Read the second one's §2.1 first — the first spec's capture
+  architecture is history, not current behaviour.
+
+  **Who holds the audio.** The browser does `getUserMedia` → `AudioWorklet` → 16 kHz mono
+  int16 PCM → 32,768-byte chunks (1.024 s) → `POST /meetings/:id/live/audio`. The **API** is
+  the WAV writer (`storage/live-audio.service.ts` — `StorageService.save()` is `writeFile`,
+  which truncates, so append needed its own service); the worker **tails** that growing file
+  (`audio/tail_source.py`). The worker writes no audio at all. Constants must agree across
+  three languages: `SR=16000`, `FRAME_BYTES=1024`, `CHUNK_BYTES=32768`, `HEADER_LEN=44`,
+  **32 bytes/ms** (`live.service.ts`, `tail_source.py`, `pcm-convert.ts`).
+
+  **The offset/ACK protocol is the whole correctness story.** Each chunk carries an explicit
+  `X-Audio-Offset` (PCM bytes, header excluded); the server derives `expected = stat.size - 44`
+  and a mismatch is **409 carrying `expected_offset`**, so a lost ACK resyncs instead of
+  tearing a hole. Exactly one request in flight. A 409 that carries *no* offset is terminal,
+  not a resync — the client must treat it as a hard failure, or `this.offset` goes `undefined`
+  and every later request 400s including the stop that would have sealed the recording.
+
+  **`job.sealed_bytes` is the sole EOF authority** — not the file size, not the WAV header.
+  File append, header rewrite and DB commit cannot be one transaction, so one of them has to
+  win. `TailSource` therefore treats **EOF as "caught up", never as "done"**, and never reads
+  the header's size fields (the API rewrites them at seal time; a read mid-rewrite truncates
+  the transcript). Stop carries the final tail **in its body** so there is no window between
+  the last chunk and the seal: `expected === offset` → append + seal; `expected === final` →
+  seal without appending (the crash-resume path); otherwise `missing_chunk` 409.
+
+  **`meeting.capture_error` is separate from `meeting.error` on purpose** — finalize and
+  persist both write `error=NULL`, so "how this recording was obtained" needs a field that
+  survives a successful final pass. Written by: the browser's stop (`X-Capture-Error`:
+  `device_ended` / `buffer_overflow` / `upload_failed`; an unrecognised value is folded to
+  `capture_failed` rather than 400ing, because a diagnostic header must never block the seal),
+  the gap check on append and stop (`capture_gap`), and the orphan sweeper
+  (`producer_abandoned`) / API finalize (`preview_worker_lost`).
+
+  **Recording does not depend on the worker.** `reapStale`'s `fail_meetings` covers
+  `process_meeting` only — a dead worker loses the live preview, never the recording. That
+  makes **"who finalizes"** the load-bearing predicate, and it is `job.status !== 'running'`
+  (queued = never claimed, failed = the reaper declared the worker dead) in **both**
+  `LiveService.stop` and `LiveOrphanService.sweep`. The sweeper has two jobs, not one: seal an
+  abandoned producer (`last_input_at` stale ≥ 90 s, `@Cron(EVERY_30_SECONDS)` — a worker's
+  heartbeat cannot prove the *browser* is alive), **and** finalize an already-sealed session
+  no worker will finish. Without the second, a browser+worker death leaves the meeting in
+  `recording` forever and `meeting_single_recording_idx` blocks every future recording.
+  Worker liveness is judged only by `job.status` — the reaper owns that threshold, and a
+  second one here would drift from it.
+
+  **Lock discipline: job row first, then meeting**, in every writer (`appendAudio`, `stop`,
+  `sweep`, `MeetingsService.cancel`, and the worker's `finalize_live_session`); the paths that
+  start from a meeting id re-verify `current_job_id` under both locks. Locking only the
+  meeting lets `claim` (job row, `SKIP LOCKED`) slip in.
+
+  **Failure marking lives in its own transaction.** The `io_error` path marks job+meeting in a
+  *separate* `withTransaction` after the append transaction rolled back — marking inside it and
+  throwing rolls the marking away too, and then nothing ever closes the session. That recovery
+  re-locks job → meeting and re-checks four things including `pcmSize === expected`, because a
+  legitimate retry may have won the race in between; the status alone cannot tell (a successful
+  append leaves the meeting `recording` either way).
+
+  **`source: 'mic'` is a reserved contract slot that is rejected at dispatch.** After the
+  capture flip a mic session is silently wrong — the API stores the browser's bytes while the
+  worker transcribes the host mic, and `MicSource` never observes `sealed_bytes`, so the loop
+  runs to `max_minutes` (4 h) after stop. `_default_live_source` raises PERMANENT
+  `audio_device_failed` instead. `MicSource` and its tests stay as the reference for a future
+  system-audio capturer (§10.3 constrains how that can share a WAV).
+
+  Unchanged from the original design: `max_attempts=1` and every live error is PERMANENT; the
+  first SIGTERM finalizes instead of `requeue_for_shutdown`; claim orders `live_session` first
+  (both claim SQLs); one `recording` meeting at a time (`meeting_single_recording_idx`); live
+  identification binds at `suggest_threshold`; `persist_process_meeting` deletes the meeting's
+  `live_utterance` rows; `ffmpeg.normalize` repairs a streaming header left by a crash.
+
+  **Deleted by the flip** (do not reintroduce): the mic callback's writer thread and its
+  streaming-WAV `close()`, the dual-queue tee, and the join-ordering rule between them. The
+  worker no longer owns a file handle. `worker/SMOKE.md`'s browser procedure (from "실기기
+  브라우저 스모크") is the only end-to-end check of `pcm-worklet.ts`, which has **zero automated
+  coverage** — jsdom has no `AudioContext`.
 - **Search indexing.** `index_meeting` is a separate job type (dispatched by the API after persist completes). Failure marks the job only — the meeting stays `done` and BM25-searchable. Query embedding is the **single exception to the job-table-only invariant**: the API calls the embed service (localhost HTTP RPC, `POST /embed`) directly at query time; this never crosses a network boundary (`EMBED_SERVICE_ALLOW_NON_LOOPBACK=false`).
 
 ## Commands

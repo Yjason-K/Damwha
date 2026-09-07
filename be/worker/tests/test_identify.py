@@ -209,3 +209,27 @@ def test_identify_picks_best_candidate_not_merely_one_above_threshold(conn):
         threshold=0.7,
     )
     assert out["S0"].speaker_id == near
+
+
+def test_identify_embedding_binds_at_threshold_and_returns_similarity(conn):
+    from damwha_worker.pipeline.identify import identify_embedding
+
+    sid = seed_speaker(conn, enrollment_status="ready")
+    seed_voiceprint(conn, speaker_id=sid, embedding=[1.0] + [0.0] * 191)
+    hit = identify_embedding(
+        conn, [1.0] + [0.0] * 191, "speechbrain/spkrec-ecapa-voxceleb", 192, 0.6
+    )
+    assert hit is not None
+    assert hit[0] == sid and hit[1] == pytest.approx(1.0, abs=1e-6)
+
+
+def test_identify_embedding_returns_none_below_threshold_or_without_candidates(conn):
+    from damwha_worker.pipeline.identify import identify_embedding
+
+    assert identify_embedding(conn, [1.0] + [0.0] * 191, "m", 192, 0.6) is None
+    sid = seed_speaker(conn, enrollment_status="ready")
+    seed_voiceprint(conn, speaker_id=sid, embedding=[1.0] + [0.0] * 191)
+    far = [0.0, 1.0] + [0.0] * 190  # cosine 0
+    assert identify_embedding(conn, far, "speechbrain/spkrec-ecapa-voxceleb", 192, 0.6) is None
+    # 모델이 다르면 후보가 아니다
+    assert identify_embedding(conn, [1.0] + [0.0] * 191, "other-model", 192, 0.6) is None

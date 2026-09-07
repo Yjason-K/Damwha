@@ -13,6 +13,7 @@ import { LensesModule } from './lenses/lenses.module';
 import { SummaryModule } from './summary/summary.module';
 import { SavedUtterancesModule } from './saved-utterances/saved-utterances.module';
 import { NotesModule } from './notes/notes.module';
+import { LiveModule } from './live/live.module';
 import { HealthController } from './health/health.controller';
 import { HttpLoggingInterceptor } from './common/http-logging.interceptor';
 import { DemoReadOnlyGuard } from './common/demo-read-only.guard';
@@ -32,6 +33,7 @@ import { DemoReadOnlyGuard } from './common/demo-read-only.guard';
     SummaryModule,
     SavedUtterancesModule,
     NotesModule,
+    LiveModule,
   ],
   controllers: [HealthController],
   providers: [

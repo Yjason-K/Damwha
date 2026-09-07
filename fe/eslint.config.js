@@ -35,6 +35,7 @@ export default defineConfig([
             "badgeVariants",
             "cardVariants",
             "iconButtonVariants",
+            "isHeartbeatStale",
           ],
         },
       ],

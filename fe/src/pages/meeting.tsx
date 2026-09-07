@@ -9,6 +9,7 @@ import {
   useRetryExtraction,
   useSetLensCompletion,
 } from "@/features/lens/api/lenses";
+import { useLiveUtterances, useStopLive } from "@/features/meeting/api/live";
 import { useMeetingLenses } from "@/features/meeting/api/lenses";
 import { formatClock, mapMeetingLenses } from "@/features/meeting/api/mappers";
 import {
@@ -24,10 +25,21 @@ import type {
   MeetingStatusResponse,
   SearchIndexStatus,
 } from "@/features/meeting/api/types";
+import type { RecorderStatus } from "@/features/meeting/lib/live-recorder";
+import {
+  clearLiveCapture,
+  getLiveRecorder,
+  subscribeLiveStatus,
+} from "@/features/meeting/lib/live-session";
 import type { Meeting } from "@/features/meeting/model/types";
 import { CenterState, Spinner } from "@/features/meeting/ui/center-state";
 import { Icon } from "@/features/meeting/ui/icons";
 import { InsightPane } from "@/features/meeting/ui/insight-pane";
+import {
+  CaptureErrorNotice,
+  LiveBanner,
+} from "@/features/meeting/ui/live-banner";
+import { LiveTranscript } from "@/features/meeting/ui/live-transcript";
 import {
   adjacentUtterance,
   currentUtterance,
@@ -65,6 +77,7 @@ function ProcessingBanner({
   if (meeting.status === "failed") {
     // 운영자 취소도 failed로 저장된다(reprocess 가드를 그대로 타기 위해) — 문구만 가른다.
     const cancelled = meeting.error?.code === "cancelled";
+    const noMic = meeting.error?.code === "audio_device_failed";
     return (
       <div
         role="alert"
@@ -76,12 +89,18 @@ function ProcessingBanner({
           className="shrink-0 text-[color:var(--red-text)]"
         />
         <span className="font-semibold text-[color:var(--red-text)]">
-          {cancelled ? "처리를 취소했어요" : "처리에 실패했어요"}
+          {cancelled
+            ? "처리를 취소했어요"
+            : noMic
+              ? "마이크를 열지 못했어요"
+              : "처리에 실패했어요"}
         </span>
         <span className="text-[color:var(--text-secondary)]">
           {cancelled
             ? "재처리로 다시 시작할 수 있어요."
-            : "다시 업로드하거나 잠시 후 시도해 주세요."}
+            : noMic
+              ? "워커가 도는 Mac의 시스템 설정 › 개인정보 보호 및 보안 › 마이크에서 터미널 앱을 허용한 뒤 다시 녹음해 주세요."
+              : "다시 업로드하거나 잠시 후 시도해 주세요."}
         </span>
       </div>
     );
@@ -273,6 +292,39 @@ function MeetingView({
   const statusEnabled = !!meeting || summaryPending;
   const { data: procStatus } = useMeetingStatus(meetingId, statusEnabled);
 
+  // 라이브 미리보기 — recording에서는 1초, 처리 중엔 3초, failed는 한 번, done은 안 본다.
+  const { data: liveState } = useLiveUtterances(meetingId, meeting?.status);
+  const stopLive = useStopLive();
+  // 워커 신호가 끊긴 배너의 탈출구 — ProcessingBanner의 취소와 같은 엔드포인트다.
+  const cancelLive = useCancelProcessing();
+  const liveItems = liveState?.items ?? [];
+
+  // 이 탭이 다이얼로그에서 시작한 브라우저 레코더 — 상태를 배너에 잇고, 종료가
+  // recorder.stop()을 부를 수 있게 한다. 회의를 만들지 않고 이 화면에 바로 들어왔거나
+  // (새로고침 등) 다른 탭에서 시작한 녹음이면 없다. recorder.onStatus 자체는 여기서
+  // 건드리지 않는다 — 그 슬롯은 live-session.ts가 실패 토스트용으로 쓰고 있어서,
+  // 이 화면이 마운트돼 있지 않을 때도(다른 회의를 보는 중) 실패가 계속 보고돼야 한다.
+  // subscribeLiveStatus로 별도 구독만 걸고 뗀다.
+  const [recorderStatus, setRecorderStatus] =
+    React.useState<RecorderStatus | null>(null);
+  React.useEffect(() => {
+    if (meeting?.status !== "recording") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setRecorderStatus(null);
+      return;
+    }
+    const live = getLiveRecorder(meeting.id);
+    if (!live) {
+      setRecorderStatus(null);
+      return;
+    }
+    subscribeLiveStatus(meeting.id, setRecorderStatus);
+    setRecorderStatus(live.recorder.status);
+    return () => {
+      subscribeLiveStatus(meeting.id, null);
+    };
+  }, [meeting?.id, meeting?.status]);
+
   useSyncSummaryStatus(
     meetingId,
     meeting?.summaryStatus,
@@ -280,6 +332,38 @@ function MeetingView({
   );
 
   const { toast } = useToast();
+
+  const handleStopLive = () => {
+    if (!meeting) return;
+    const live = getLiveRecorder(meeting.id);
+    if (!live) {
+      // 이 탭에서 시작한 녹음이 아니면(새로고침 등) 꼬리를 보낼 방법이 없다 — 오프셋을
+      // 아는 쪽은 그 레코더뿐이다. 여기선 강제로 취소(파괴적)하는 대신 안내만 한다;
+      // 연결이 끊기면 orphan sweep이 90초 안에 정상 finalize한다(설계 §4.7).
+      toast({
+        variant: "error",
+        title: "이 화면에서는 종료할 수 없어요",
+        description:
+          "녹음을 시작한 브라우저 탭에서 종료해 주세요. 연결이 끊기면 자동으로 정리돼요.",
+      });
+      return;
+    }
+    stopLive.mutate(
+      {
+        id: meeting.id,
+        stop: async () => {
+          await live.recorder.stop();
+          return live.stopOutcome.current;
+        },
+      },
+      {
+        onSuccess: (r) => {
+          clearLiveCapture(meeting.id);
+          if (r?.outcome === "discarded") navigate("/", { replace: true });
+        },
+      },
+    );
+  };
 
   // Real audio transport: keep the element in sync with speed / play state.
   // metaReady를 deps에 두는 이유: 첫 렌더에는 meeting이 없어 <audio>도 없고,
@@ -425,6 +509,26 @@ function MeetingView({
         </CenterState>
       );
     }
+    if (meeting.status === "recording") {
+      return (
+        <>
+          <LiveTranscript items={liveItems} />
+          <aside
+            aria-label="인사이트"
+            className="flex w-[var(--rail-insight)] shrink-0 flex-col items-center justify-center border-l border-border bg-[var(--surface-panel)] px-6 text-center"
+          >
+            <Icon
+              name="sparkles"
+              size={20}
+              className="text-[color:var(--text-faint)]"
+            />
+            <p className="mt-2 text-sm text-[color:var(--text-muted)]">
+              녹음이 끝나면 요약과 렌즈가 만들어져요
+            </p>
+          </aside>
+        </>
+      );
+    }
     return (
       <>
         <TranscriptPane
@@ -437,6 +541,7 @@ function MeetingView({
           aiAcked={aiAcked}
           onAckAi={onAckAi}
           onShowSummary={() => setTab("summary")}
+          livePreview={meeting.status !== "done" ? liveItems : undefined}
         />
         <InsightPane
           meeting={meeting}
@@ -470,8 +575,23 @@ function MeetingView({
   return (
     <>
       <div className="col-start-2 flex min-w-0 flex-col">
-        {meeting && meeting.status !== "done" ? (
+        {meeting && meeting.status === "recording" ? (
+          <LiveBanner
+            recordedAtIso={meeting.recordedAtIso}
+            stage={liveState?.stage ?? null}
+            heartbeatAt={liveState?.heartbeatAt ?? null}
+            onStop={handleStopLive}
+            onCancel={() => cancelLive.mutate(meeting.id)}
+            stopping={stopLive.isPending}
+            cancelling={cancelLive.isPending}
+            backlogMs={recorderStatus?.backlogMs}
+            failed={recorderStatus?.failed}
+          />
+        ) : meeting && meeting.status !== "done" ? (
           <ProcessingBanner meeting={meeting} status={procStatus} />
+        ) : null}
+        {meeting && meeting.status === "done" ? (
+          <CaptureErrorNotice error={meeting.captureError} />
         ) : null}
         {meeting &&
         meeting.status === "done" &&

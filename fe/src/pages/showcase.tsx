@@ -516,6 +516,13 @@ export function ShowcasePage() {
               </TabsList>
             </Tabs>
 
+            <Tabs defaultValue="file" className="max-w-sm">
+              <TabsList variant="choice" aria-label="기록 방식 예시">
+                <TabsTrigger value="file">오디오 파일</TabsTrigger>
+                <TabsTrigger value="live">실시간 녹음</TabsTrigger>
+              </TabsList>
+            </Tabs>
+
             <nav
               aria-label="사이드바 예시"
               className="w-64 rounded-md border border-border bg-sidebar p-2"

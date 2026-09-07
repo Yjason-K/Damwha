@@ -53,3 +53,13 @@ def test_unknown_meeting_timezone_fails_at_startup(monkeypatch):
     monkeypatch.setenv("MEETING_TIMEZONE", "Asia/Seuol")
     with pytest.raises(pydantic.ValidationError):
         load_settings()
+
+
+def test_live_max_minutes_defaults_to_four_hours(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://x")
+    monkeypatch.setenv("LENS_LLM_BASE_URL", "http://127.0.0.1:8000/v1")
+    from damwha_worker.config import Settings
+
+    assert Settings(_env_file=None).live_max_minutes == 240.0
+    monkeypatch.setenv("LIVE_MAX_MINUTES", "30")
+    assert Settings(_env_file=None).live_max_minutes == 30.0
