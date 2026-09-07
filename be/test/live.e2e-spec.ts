@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
+import { SchedulerRegistry } from '@nestjs/schedule';
 import request from 'supertest';
 import { startTestDb, StartedTestDb } from './db';
 import { AppModule } from '../src/app.module';
@@ -22,6 +23,9 @@ describe('live session api', () => {
       .compile();
     app = mod.createNestApplication();
     await app.init();
+    // live-orphan.e2e-spec.ts와 같은 이유 — 이 스위트도 job 행을 직접 SQL로 조작해 결정적인
+    // 상태를 기대하므로, AppModule이 등록한 30초 주기 LiveOrphanService.sweepScheduled를 끈다.
+    app.get(SchedulerRegistry).getCronJobs().forEach((job) => job.stop());
   });
   afterEach(async () => { jest.restoreAllMocks(); await db.reset(); });
   afterAll(async () => { await app?.close(); await db?.stop(); });

@@ -13,6 +13,7 @@ import 'reflect-metadata';
 import * as fs from 'fs';
 import { Test } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
+import { SchedulerRegistry } from '@nestjs/schedule';
 import request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { CAPABILITIES } from '../../src/system/capabilities';
@@ -115,6 +116,10 @@ async function main(): Promise<void> {
     .compile();
   const app = mod.createNestApplication();
   await app.init();
+  // 이 자식도 AppModule 전체를 띄우므로 LiveOrphanService.sweepScheduled가 30초마다 돈다.
+  // 부모와 같은 DB·파일을 공유하는 채로 크래시 지점에서 영원히 멈춰 있는 자식이므로,
+  // 배경 스윕이 그 사이 끼어들어 job/meeting을 건드리면 부모 쪽 어서션이 흔들린다.
+  app.get(SchedulerRegistry).getCronJobs().forEach((job) => job.stop());
 
   injectCrash(app, (process.env.CRASH_POINT ?? 'none') as CrashPoint);
   process.on('message', (cmd: ChildCommand) => {

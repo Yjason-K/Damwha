@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
+import { SchedulerRegistry } from '@nestjs/schedule';
 import { ChildProcess, fork } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -43,6 +44,10 @@ describe('live audio crash recovery', () => {
     app = mod.createNestApplication();
     await app.init();
     storage = app.get(StorageService);
+    // live-orphan.e2e-spec.ts와 같은 이유 — 이 부모 앱도 AppModule을 통째로 띄우므로
+    // LiveOrphanService.sweepScheduled가 30초마다 실제로 돈다. 크래시 자식들이 부모와
+    // 같은 job 행·파일을 공유하므로 배경 스윕이 끼어들면 committed_bytes 어서션이 흔들린다.
+    app.get(SchedulerRegistry).getCronJobs().forEach((job) => job.stop());
   });
   afterEach(async () => { await db.reset(); });
   afterAll(async () => { await app?.close(); await db?.stop(); });
@@ -67,6 +72,26 @@ describe('live audio crash recovery', () => {
   };
   const pcm = async (id: string) => fs.readFileSync(await audioPath(id)).subarray(44);
 
+  /** 자식별 누적 stderr. crashAt·replay가 실패 메시지에 실어 보낼 수 있도록 fork 시점부터
+   *  child 하나당 하나씩 채워 둔다. */
+  const stderrOf = new WeakMap<ChildProcess, { text: string }>();
+  const readStderr = (child: ChildProcess) => stderrOf.get(child)?.text || '(no stderr captured)';
+
+  /**
+   * 살아 있으면 SIGKILL하고 exit까지 기다린다. 이미 죽었으면 아무것도 하지 않는다.
+   *
+   * `child.exitCode === null` 확인과 `kill()` 사이에 자식이 먼저 죽으면(레이스) `kill()`이
+   * 신호를 보내지 못했다는 뜻으로 `false`를 돌려준다 — 그 경우 이미 지나간 'exit'를
+   * `once`로 기다리며 영원히 멈추지 않도록 그 자리에서 끝낸다.
+   */
+  async function killIfAlive(child: ChildProcess): Promise<void> {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    await new Promise<void>((resolve) => {
+      child.once('exit', () => resolve());
+      if (!child.kill('SIGKILL')) resolve();
+    });
+  }
+
   /** 자식 하나를 띄우고 ready를 기다린다. 어떤 경로로 끝나든 부모가 반드시 죽인다. */
   async function withChild<T>(point: CrashPoint, fn: (child: ChildProcess) => Promise<T>): Promise<T> {
     const child = fork(FIXTURE, [], {
@@ -75,47 +100,85 @@ describe('live audio crash recovery', () => {
       // stdout은 버린다 — 자식의 Nest 부팅 로그가 jest 출력을 덮으면 진짜 실패가 안 보인다.
       stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
     });
-    let stderr = '';
-    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+    const captured = { text: '' };
+    stderrOf.set(child, captured);
+    child.stderr?.on('data', (d: Buffer) => { captured.text += d.toString(); });
+    // fork 자체가 실패하면(스폰 불가, IPC 채널 오류 등) 'error'가 뜬다. 리스너가 하나도
+    // 없으면 EventEmitter가 처리되지 않은 예외로 던져 jest 워커 전체를 죽인다 — 그러면
+    // 실패 사유도 stderr도 안 보이는 채로 스위트가 통째로 사라진다. 이 리스너는 child의
+    // 수명 내내 유지해 그 상황을 막고, 활성 대기가 있으면 아래 각 단계의 onError가 그
+    // 대기를 개별적으로 reject한다.
+    child.on('error', () => undefined);
     try {
       await new Promise<void>((resolve, reject) => {
         const onMessage = (m: ChildMessage) => { if (m.type === 'ready') { cleanup(); resolve(); } };
-        const onExit = (code: number | null) => {
+        const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
           cleanup();
-          reject(new Error(`crash child (${point}) exited with ${code} before ready: ${stderr}`));
+          reject(new Error(
+            `crash child (${point}) exited (code=${code}, signal=${signal}) before ready: ${readStderr(child)}`));
         };
-        const cleanup = () => { child.off('message', onMessage); child.off('exit', onExit); };
+        const onError = (e: Error) => {
+          cleanup();
+          reject(new Error(`crash child (${point}) failed to start: ${e.message}`));
+        };
+        const cleanup = () => { child.off('message', onMessage); child.off('exit', onExit); child.off('error', onError); };
         child.on('message', onMessage);
         child.on('exit', onExit);
+        child.on('error', onError);
       });
       return await fn(child);
     } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill('SIGKILL');
-        await new Promise<void>((r) => child.once('exit', () => r()));
-      }
+      await killIfAlive(child);
     }
   }
 
   /** 자식에게 요청을 시키고 크래시 지점 도달을 기다린 뒤 SIGKILL한다. */
   async function crashAt(child: ChildProcess, point: CrashPoint, cmd: ChildCommand): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      child.on('message', (m: ChildMessage) => {
-        if (m.type === 'barrier' && m.point === point) resolve();
-        if (m.type === 'result') reject(new Error(`child answered ${m.status} instead of stopping at ${point}`));
-      });
+      const onMessage = (m: ChildMessage) => {
+        if (m.type === 'barrier' && m.point === point) { cleanup(); resolve(); }
+        if (m.type === 'result') {
+          cleanup();
+          reject(new Error(`child answered ${m.status} instead of stopping at ${point}`));
+        }
+      };
+      const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+        cleanup();
+        reject(new Error(
+          `crash child (${point}) exited (code=${code}, signal=${signal}) before reaching the barrier: ${readStderr(child)}`));
+      };
+      const onError = (e: Error) => {
+        cleanup();
+        reject(new Error(`crash child (${point}) errored before reaching the barrier: ${e.message}`));
+      };
+      const cleanup = () => { child.off('message', onMessage); child.off('exit', onExit); child.off('error', onError); };
+      child.on('message', onMessage);
+      child.on('exit', onExit);
+      child.on('error', onError);
       child.send(cmd);
     });
-    child.kill('SIGKILL');
-    await new Promise<void>((r) => child.once('exit', () => r()));
+    await killIfAlive(child);
   }
 
   /** 재기동 자식에게 **동일한** 요청을 다시 보낸다. */
   function replay(child: ChildProcess, cmd: ChildCommand): Promise<{ status: number; body: any }> {
-    return new Promise((resolve) => {
-      child.on('message', (m: ChildMessage) => {
-        if (m.type === 'result') resolve({ status: m.status, body: m.body });
-      });
+    return new Promise((resolve, reject) => {
+      const onMessage = (m: ChildMessage) => {
+        if (m.type === 'result') { cleanup(); resolve({ status: m.status, body: m.body }); }
+      };
+      const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+        cleanup();
+        reject(new Error(
+          `replay child exited (code=${code}, signal=${signal}) before answering: ${readStderr(child)}`));
+      };
+      const onError = (e: Error) => {
+        cleanup();
+        reject(new Error(`replay child errored before answering: ${e.message}`));
+      };
+      const cleanup = () => { child.off('message', onMessage); child.off('exit', onExit); child.off('error', onError); };
+      child.on('message', onMessage);
+      child.on('exit', onExit);
+      child.on('error', onError);
       child.send(cmd);
     });
   }

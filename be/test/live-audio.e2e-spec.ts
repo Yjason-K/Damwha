@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
+import { SchedulerRegistry } from '@nestjs/schedule';
 import request from 'supertest';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -35,6 +36,11 @@ describe('live audio append', () => {
       .compile();
     app = mod.createNestApplication();
     await app.init();
+    // live-orphan.e2e-spec.ts와 같은 이유 — AppModule의 ScheduleModule.forRoot()가 등록한
+    // LiveOrphanService.sweepScheduled가 30초마다 실제로 돈다. 이 스위트도 committed_bytes/
+    // sealed_bytes를 직접 조작하는 job 행에 대해 결정적인 상태를 기대하므로 백그라운드
+    // 스윕을 끈다.
+    app.get(SchedulerRegistry).getCronJobs().forEach((job) => job.stop());
   });
   afterEach(async () => { jest.restoreAllMocks(); await db.reset(); });
   afterAll(async () => { await app?.close(); await db?.stop(); });

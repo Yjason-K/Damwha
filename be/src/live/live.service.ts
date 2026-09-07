@@ -171,7 +171,7 @@ export class LiveService {
       if (!job || !meeting) return;
       if (meeting.status !== 'recording' || meeting.current_job_id !== failure.jobId
           || job.sealed_bytes !== null) return;
-      if (job.committed_bytes === null || Number(job.committed_bytes) !== failure.committed) return;
+      if (job.committed_bytes === null || this.bigint(job.committed_bytes, 'committed_bytes') !== failure.committed) return;
       await this.jobs.fail(c, failure.jobId, {
         ...err, kind: 'PERMANENT', stage: 'capture', message: failure.message,
       });
@@ -477,7 +477,7 @@ export class LiveService {
       });
     }
     await this.meetings.markUploaded(c, meeting.id, Math.floor(sealed / BYTES_PER_MS));
-    const processWire = (job.payload as { process: object }).process;
+    const processWire = (fresh.payload as { process: object }).process;
     const next = await this.jobs.enqueue(c, {
       type: 'process_meeting', meetingId: meeting.id, payload: processWire,
     });

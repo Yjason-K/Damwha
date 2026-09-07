@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
+import { SchedulerRegistry } from '@nestjs/schedule';
 import request from 'supertest';
 import * as fs from 'fs';
 import { Client } from 'pg';
@@ -31,6 +32,12 @@ describe('live orphan sweeper', () => {
     app = mod.createNestApplication();
     await app.init();
     orphans = app.get(LiveOrphanService);
+    // AppModule은 ScheduleModule.forRoot()를 등록하므로 LiveOrphanService.sweepScheduled가
+    // 실제로 30초마다 돈다. 이 스위트의 장벽 테스트는 job 잠금을 1~2초 실제 시간 동안
+    // 쥐고 있으므로, 그 사이 스케줄된 스윕이 끼어들어 잠금을 먼저 얻으면 아래에서 명시적으로
+    // 부르는 orphans.sweep()의 반환값(예: toBe(1))이 조용히 어긋난다. 이 스위트는 sweep()을
+    // 직접, 결정적으로 부르는 것이 전부이므로 백그라운드 스케줄은 여기서 끈다.
+    app.get(SchedulerRegistry).getCronJobs().forEach((job) => job.stop());
   });
   afterEach(async () => { jest.restoreAllMocks(); await db.reset(); });
   afterAll(async () => { await app?.close(); await db?.stop(); });
