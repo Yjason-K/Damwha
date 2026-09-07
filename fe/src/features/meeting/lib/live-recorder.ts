@@ -27,9 +27,17 @@ export const DRAIN_TIMEOUT_MS = 60_000;
 /** 캡처 상한 4시간 (설계 §4.2). begin ACK를 기준으로 잰다. */
 export const MAX_CAPTURE_MS = 4 * 60 * 60 * 1000;
 
+/** 게이트가 녹음을 막는 이유 (설계 §5.2). 전부 시작 **전에** 드러나야 한다. */
+export type CaptureBlock =
+  | "insecure"
+  | "denied"
+  | "no_device"
+  /** 장치는 있는데 열리지 않는다 — 보통 다른 앱이 점유 중이다(NotReadableError). */
+  | "unavailable";
+
 export type CaptureSupport =
   | { ok: true }
-  | { ok: false; reason: "insecure" | "denied" | "no_device" };
+  | { ok: false; reason: Exclude<CaptureBlock, "unavailable"> };
 
 /** 회의를 만들기 전에 부른다. 원 설계에서 회의 중간에 audio_device_failed로 터지던 실패를
  *  전부 시작 전으로 옮긴다 (설계 §5.2). */
@@ -51,6 +59,54 @@ export async function checkCaptureSupport(): Promise<CaptureSupport> {
     return { ok: false, reason: "no_device" };
   }
   return { ok: true };
+}
+
+export type CaptureDevices =
+  | { ok: true; devices: MediaDeviceInfo[] }
+  | { ok: false; reason: CaptureBlock };
+
+/**
+ * getUserMedia 거절을 게이트 사유로 옮긴다. 사용자가 할 수 있는 일이 셋 다 다르다 —
+ * 사이트 설정에서 허용하기(denied), 마이크 연결하기(no_device), 점유한 앱 닫기
+ * (unavailable). DOMException의 message는 진단용 영어라 쓰지 않고 name만 본다.
+ */
+function blockOf(error: unknown): CaptureBlock {
+  const name = error instanceof DOMException ? error.name : "";
+  if (name === "NotFoundError" || name === "OverconstrainedError")
+    return "no_device";
+  if (name === "NotReadableError" || name === "AbortError")
+    return "unavailable";
+  return "denied";
+}
+
+/**
+ * live 탭이 열릴 때 부른다: 권한을 **요청**하고 고를 수 있는 마이크를 돌려준다.
+ *
+ * checkCaptureSupport와 달리 프롬프트를 띄우는 이유는 label 때문이다 — 승인 전
+ * enumerateDevices()는 label이 빈 문자열이라 "마이크 1/2"밖에 못 보여주고, 그러면
+ * 사용자는 무엇을 고르는지 모른 채 고르게 된다. 순서도 그래서 이렇다: 먼저 프롬프트를
+ * 띄워도 소용없는 경우(insecure·이미 거부됨·장치 없음)를 걸러내고, 그 다음에 묻는다.
+ *
+ * 프롬프트용 스트림은 그 자리에서 닫는다. 붙들고 있으면 다이얼로그를 열어 둔 내내
+ * 브라우저 녹음 표시등이 켜져 있다 (설계 §6.4). 실제 캡처는 prepare()가 자기 제약으로
+ * (AGC·노이즈 억제 끔 — 설계 §2.4) 다시 연다: 권한은 이미 받았으므로 다시 묻지 않는다.
+ */
+export async function requestCaptureDevices(): Promise<CaptureDevices> {
+  const support = await checkCaptureSupport();
+  if (!support.ok) return support;
+  let probe: MediaStream;
+  try {
+    probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    return { ok: false, reason: blockOf(err) };
+  }
+  probe.getTracks().forEach((t) => t.stop());
+  const devices = (await navigator.mediaDevices.enumerateDevices()).filter(
+    (d) => d.kind === "audioinput",
+  );
+  // 프롬프트를 승인한 직후 마이크가 뽑히는 경우 — 고를 것이 없으면 시작할 수도 없다.
+  if (devices.length === 0) return { ok: false, reason: "no_device" };
+  return { ok: true, devices };
 }
 
 export type RecorderFailure =

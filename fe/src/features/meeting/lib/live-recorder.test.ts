@@ -6,6 +6,7 @@ import {
   LiveCaptureCancelled,
   LiveRecorder,
   LiveUploadRejected,
+  requestCaptureDevices,
   type PostResult,
   type RecorderFailure,
 } from "./live-recorder";
@@ -1054,15 +1055,26 @@ describe("LiveRecorder stop() after a recorder failure", () => {
  */
 function stubMediaDevices(
   options: {
-    devices?: Array<{ kind: string }>;
+    devices?: Array<{ kind: string; deviceId?: string; label?: string }>;
     permissionState?: "granted" | "denied" | "unsupported" | "throws";
+    /** 권한 프롬프트에서 거부·장치 없음 등으로 getUserMedia가 거절되는 경우. */
+    micRejects?: unknown;
   } = {},
 ) {
   const devices = options.devices ?? [{ kind: "audioinput" }];
+  const stopTrack = vi.fn();
+  const stream = {
+    getTracks: () => [{ stop: stopTrack }],
+  } as unknown as MediaStream;
+  const getUserMedia = vi.fn(() =>
+    options.micRejects !== undefined
+      ? Promise.reject(options.micRejects)
+      : Promise.resolve(stream),
+  );
   Object.defineProperty(navigator, "mediaDevices", {
     configurable: true,
     value: {
-      getUserMedia: vi.fn(),
+      getUserMedia,
       enumerateDevices: vi.fn().mockResolvedValue(devices),
     },
   });
@@ -1071,7 +1083,7 @@ function stubMediaDevices(
       configurable: true,
       value: undefined,
     });
-    return;
+    return { getUserMedia, stopTrack };
   }
   const query =
     options.permissionState === "throws"
@@ -1083,6 +1095,7 @@ function stubMediaDevices(
     configurable: true,
     value: { query },
   });
+  return { getUserMedia, stopTrack };
 }
 
 describe("checkCaptureSupport", () => {
@@ -1141,5 +1154,108 @@ describe("checkCaptureSupport", () => {
   it("is ok when a device exists and permission is granted", async () => {
     stubMediaDevices({ permissionState: "granted" });
     expect(await checkCaptureSupport()).toEqual({ ok: true });
+  });
+});
+
+/**
+ * 설계 §5.2의 게이트를 live 탭이 **열릴 때** 돌리기 위한 함수. checkCaptureSupport와
+ * 다른 점은 권한을 실제로 **요청**한다는 것이다 — 승인 전 enumerateDevices()는 label이
+ * 빈 문자열이라 "마이크 1/2"밖에 못 보여주고, 그러면 사용자는 무엇을 고르는지 모른 채
+ * 고르게 된다.
+ */
+describe("requestCaptureDevices", () => {
+  beforeEach(() => {
+    Reflect.deleteProperty(navigator, "mediaDevices");
+    Reflect.deleteProperty(navigator, "permissions");
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, "mediaDevices");
+    Reflect.deleteProperty(navigator, "permissions");
+  });
+
+  it("is insecure when navigator.mediaDevices is missing", async () => {
+    expect(await requestCaptureDevices()).toEqual({
+      ok: false,
+      reason: "insecure",
+    });
+  });
+
+  it("does not prompt when the pre-check already refuses", async () => {
+    // 이미 거부된 권한·장치 없음에 프롬프트를 띄우면 사용자는 답할 수 없는 창을 본다.
+    const denied = stubMediaDevices({ permissionState: "denied" });
+    expect(await requestCaptureDevices()).toEqual({
+      ok: false,
+      reason: "denied",
+    });
+    expect(denied.getUserMedia).not.toHaveBeenCalled();
+
+    const none = stubMediaDevices({ devices: [{ kind: "videoinput" }] });
+    expect(await requestCaptureDevices()).toEqual({
+      ok: false,
+      reason: "no_device",
+    });
+    expect(none.getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it("prompts once and returns the labelled audio inputs", async () => {
+    const mic = stubMediaDevices({
+      devices: [
+        { kind: "audioinput", deviceId: "a", label: "내장 마이크" },
+        { kind: "videoinput", deviceId: "cam", label: "웹캠" },
+        { kind: "audioinput", deviceId: "b", label: "USB 마이크" },
+      ],
+    });
+    const result = await requestCaptureDevices();
+
+    expect(mic.getUserMedia).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      ok: true,
+      devices: [
+        { kind: "audioinput", deviceId: "a", label: "내장 마이크" },
+        { kind: "audioinput", deviceId: "b", label: "USB 마이크" },
+      ],
+    });
+  });
+
+  it("closes the permission probe stream", async () => {
+    // 붙들고 있으면 다이얼로그를 열어 둔 내내 브라우저 녹음 표시등이 켜져 있다 (설계 §6.4).
+    const mic = stubMediaDevices();
+    await requestCaptureDevices();
+    expect(mic.stopTrack).toHaveBeenCalledTimes(1);
+  });
+
+  it("is denied when the user refuses the prompt", async () => {
+    stubMediaDevices({
+      micRejects: new DOMException("denied", "NotAllowedError"),
+    });
+    expect(await requestCaptureDevices()).toEqual({
+      ok: false,
+      reason: "denied",
+    });
+  });
+
+  it("is no_device when the prompt finds no microphone", async () => {
+    stubMediaDevices({
+      micRejects: new DOMException("no device", "NotFoundError"),
+    });
+    expect(await requestCaptureDevices()).toEqual({
+      ok: false,
+      reason: "no_device",
+    });
+  });
+
+  /**
+   * 다른 앱이 마이크를 점유한 경우(NotReadableError). "권한이 거부됐어요"로 뭉뚱그리면
+   * 사용자를 아무 문제도 없는 브라우저 사이트 설정으로 보낸다.
+   */
+  it("is unavailable when the device cannot be opened", async () => {
+    stubMediaDevices({
+      micRejects: new DOMException("in use", "NotReadableError"),
+    });
+    expect(await requestCaptureDevices()).toEqual({
+      ok: false,
+      reason: "unavailable",
+    });
   });
 });

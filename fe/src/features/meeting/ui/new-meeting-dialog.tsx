@@ -24,11 +24,19 @@ import { toast } from "@/shared/ui/use-toast";
 import type { ProcessingOverride } from "@/features/settings/api/types";
 import { OverrideSection } from "@/features/settings/ui/override-section";
 
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/shared/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/shared/ui/tabs";
 import { useStartLive } from "../api/live";
 import { defaultLiveTitle } from "../lib/default-live-title";
 import {
-  checkCaptureSupport,
+  requestCaptureDevices,
+  type CaptureBlock,
   LiveCaptureCancelled,
 } from "../lib/live-recorder";
 import {
@@ -60,22 +68,28 @@ function readSource(): MeetingSource {
 /**
  * 실시간 녹음 시작 전 게이트 상태(설계 §5.2). insecure context·권한 거부·장치 없음이면
  * 아예 회의를 만들지 않는다 — 원 설계에서 회의 중간에 audio_device_failed로 터지던
- * 실패를 전부 시작 전으로 옮긴다. 통과하면 enumerateDevices() 결과로 장치를 고르게 한다.
+ * 실패를 전부 시작 전으로 옮긴다. 게이트는 live 탭이 열릴 때 돌고, 통과해야만
+ * "녹음 시작"이 열린다: 권한을 받아 낸 뒤여야 마이크 목록에 진짜 이름이 나오고,
+ * 사용자가 무엇으로 녹음하는지 보고 고를 수 있다.
  */
-type CaptureGate =
-  | { reason: "insecure" | "denied" | "no_device" }
-  | { devices: MediaDeviceInfo[] };
+type CaptureGate = { reason: CaptureBlock } | { devices: MediaDeviceInfo[] };
 
-const CAPTURE_GATE_MESSAGE: Record<
-  "insecure" | "denied" | "no_device",
-  string
-> = {
+const CAPTURE_GATE_MESSAGE: Record<CaptureBlock, string> = {
   insecure:
     "HTTPS에서만 녹음할 수 있어요. localhost 또는 인증서가 있는 주소로 접속해 주세요.",
   denied:
     "마이크 권한이 거부돼 있어요. 브라우저의 사이트 설정에서 허용해 주세요.",
   no_device: "입력 장치를 찾지 못했어요.",
+  unavailable:
+    "마이크를 열지 못했어요. 다른 앱이 쓰고 있는지 확인한 뒤 다시 시도해 주세요.",
 };
+
+/**
+ * deviceId가 빈 문자열인 장치(권한 없이 열거된 상태의 브라우저가 준다)를 위한 값.
+ * Radix Select는 빈 value를 허용하지 않아 그대로 넣으면 렌더가 터진다. 시작할 때는
+ * 다시 undefined로 풀어 제약 없이(브라우저 기본 장치로) 연다.
+ */
+const DEFAULT_DEVICE = "__default__";
 
 /** 후속 처리 실행 시점 — defer 플래그의 UI 표현. */
 type FollowupTiming = "auto" | "later";
@@ -184,7 +198,13 @@ export function NewMeetingDialog({
   const [gate, setGate] = React.useState<CaptureGate | null>(null);
   const [gateChecking, setGateChecking] = React.useState(false);
   const [deviceId, setDeviceId] = React.useState<string | undefined>(undefined);
-  const deviceSelectId = React.useId();
+  /**
+   * 게이트의 세대. 0은 "아직 안 돌았다"라 효과가 이 값만 보고 한 번만 건다 —
+   * StrictMode의 이중 실행도 여기서 걸러진다. 늦게 끝난 게이트가 닫힌 다이얼로그나
+   * 새 시도의 결과를 덮어쓰지 않도록, 결과를 쓰기 전에 자기 세대를 다시 확인한다.
+   */
+  const gateRunRef = React.useRef(0);
+  const deviceLabelId = React.useId();
   const upload = useUploadMeeting();
   const start = useStartLive();
   /**
@@ -196,10 +216,48 @@ export function NewMeetingDialog({
   const startingRef = React.useRef(false);
   const [starting, setStarting] = React.useState(false);
   const pending = upload.isPending || start.isPending;
-  const busy = pending || starting || gateChecking;
+  /**
+   * 소스 탭을 잠그는 조건. 게이트 확인은 **넣지 않는다** — 그 대기에는 권한 프롬프트가
+   * 들어 있어 얼마든지 길어질 수 있고(설계 §6.4), 프롬프트를 띄운 채 사용자를 live
+   * 탭에 붙잡아 두면 파일 업로드로 돌아갈 길이 막힌다.
+   */
+  const sourceLocked = pending || starting;
+  /**
+   * 제출 버튼이 도는 조건. starting·gateChecking은 live 탭에만 있는 상태라 소스로
+   * 걸러 낸다 — 권한 프롬프트를 띄워 둔 채 파일 탭으로 돌아온 사용자의 업로드 버튼이
+   * 같이 잠기면 안 된다.
+   */
+  const submitBusy =
+    pending || (source === "live" && (starting || gateChecking));
+
+  /**
+   * 권한을 요청하고 고를 수 있는 마이크를 받아 온다. 프롬프트에는 시간 제한을 두지
+   * 않는다(설계 §6.4) — 사람이 프롬프트를 읽는 시간을 실패로 세면 안 된다.
+   */
+  const runGate = React.useCallback(async () => {
+    const run = ++gateRunRef.current;
+    setGateChecking(true);
+    const result = await requestCaptureDevices();
+    // 그 사이 다이얼로그가 닫혔거나(resetForm이 0으로 되돌린다) 다시 확인을 눌렀다.
+    if (run !== gateRunRef.current) return;
+    setGate(
+      result.ok ? { devices: result.devices } : { reason: result.reason },
+    );
+    if (result.ok)
+      setDeviceId(
+        (prev) => prev ?? result.devices[0]?.deviceId ?? DEFAULT_DEVICE,
+      );
+    setGateChecking(false);
+  }, []);
+
+  React.useEffect(() => {
+    if (!open || source !== "live" || env.demoMode) return;
+    if (gateRunRef.current !== 0) return;
+    void runGate();
+  }, [open, source, gate, runGate]);
 
   const changeSource = (value: string) => {
-    if (busy || env.demoMode) return;
+    if (sourceLocked || env.demoMode) return;
     const next = value === "live" ? "live" : "file";
     setSource(next);
     try {
@@ -220,9 +278,18 @@ export function NewMeetingDialog({
     setSpeakers(undefined);
     setDeferLens(false);
     setDeferSummary(false);
+    setStarting(false);
+  };
+
+  /**
+   * 게이트는 폼 입력이 아니라 "다이얼로그 한 번 열림"에 묶인다 — 시작에 성공해 폼을
+   * 비울 때까지 같이 지우면, 닫히기 전 한 프레임 동안 효과가 게이트를 다시 돌려
+   * 방금 시작한 녹음 위로 권한 프롬프트를 한 번 더 띄운다. 닫을 때만 되돌린다.
+   */
+  const resetGate = () => {
     setGate(null);
     setGateChecking(false);
-    setStarting(false);
+    gateRunRef.current = 0;
     setDeviceId(undefined);
   };
 
@@ -235,6 +302,7 @@ export function NewMeetingDialog({
       // 붙은 녹음은 건드리지 않는다.
       void cancelLivePreparation();
       resetForm();
+      resetGate();
     }
     onOpenChange(next);
   };
@@ -272,7 +340,9 @@ export function NewMeetingDialog({
   const startLive = async () => {
     let capture;
     try {
-      capture = await prepareLiveRecorder(deviceId);
+      capture = await prepareLiveRecorder(
+        deviceId === DEFAULT_DEVICE ? undefined : deviceId,
+      );
     } catch (error) {
       // 사용자가 취소했거나 다른 시작에 밀린 준비 — 실패가 아니므로 조용히 접는다.
       if (error instanceof LiveCaptureCancelled) return;
@@ -324,27 +394,10 @@ export function NewMeetingDialog({
     if (pending || startingRef.current || !isSpeakerBoundsValid(speakers))
       return;
     if (source === "live" && !env.demoMode) {
-      // 게이트를 아직 통과하지 못했으면(첫 클릭, 또는 거부 뒤 재시도) 먼저 확인한다 —
-      // 통과 전에는 회의를 만들지 않는다. 통과하면 장치 선택을 보여주고 아래로 진행하지
-      // 않는다: 사용자가 마이크를 확인/선택한 뒤 같은 버튼을 한 번 더 눌러야 시작된다.
-      if (gateChecking || !gate || "reason" in gate) {
-        if (gateChecking) return;
-        setGateChecking(true);
-        void (async () => {
-          const support = await checkCaptureSupport();
-          if (!support.ok) {
-            setGate({ reason: support.reason });
-            setGateChecking(false);
-            return;
-          }
-          const all = await navigator.mediaDevices.enumerateDevices();
-          const devices = all.filter((d) => d.kind === "audioinput");
-          setGate({ devices });
-          setDeviceId((prev) => prev ?? devices[0]?.deviceId);
-          setGateChecking(false);
-        })();
+      // 게이트(권한 확인 + 마이크 선택)를 통과하지 못했으면 시작하지 않는다 — 버튼도
+      // 막혀 있지만, 폼 제출은 버튼 말고도 들어온다(Enter).
+      if (gateChecking || !gate || "reason" in gate || deviceId === undefined)
         return;
-      }
       startingRef.current = true;
       setStarting(true);
       void startLive().finally(() => {
@@ -416,11 +469,19 @@ export function NewMeetingDialog({
         <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
           <Tabs value={source} onValueChange={changeSource}>
             <TabsList variant="choice" aria-label="회의 기록 방식">
-              <TabsTrigger value="file" disabled={busy} className="flex-1">
+              <TabsTrigger
+                value="file"
+                disabled={sourceLocked}
+                className="flex-1"
+              >
                 오디오 파일
               </TabsTrigger>
               {!env.demoMode && (
-                <TabsTrigger value="live" disabled={busy} className="flex-1">
+                <TabsTrigger
+                  value="live"
+                  disabled={sourceLocked}
+                  className="flex-1"
+                >
                   실시간 녹음
                 </TabsTrigger>
               )}
@@ -506,34 +567,54 @@ export function NewMeetingDialog({
                     분리와 전사가 진행돼요.
                   </p>
                 </div>
-                {gate && "reason" in gate ? (
-                  <p
-                    role="alert"
-                    className="text-sm text-[color:var(--red-text)]"
-                  >
-                    {CAPTURE_GATE_MESSAGE[gate.reason]}
+                {gateChecking ? (
+                  <p className="text-sm text-[color:var(--text-muted)]">
+                    마이크를 확인하고 있어요. 브라우저가 권한을 물어보면 허용해
+                    주세요.
                   </p>
+                ) : null}
+                {gate && "reason" in gate ? (
+                  <div className="flex flex-col items-start gap-2">
+                    <p
+                      role="alert"
+                      className="text-sm text-[color:var(--red-text)]"
+                    >
+                      {CAPTURE_GATE_MESSAGE[gate.reason]}
+                    </p>
+                    {/* 다이얼로그를 닫았다 열지 않고도 다시 시도할 수 있어야 한다. */}
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void runGate()}
+                    >
+                      다시 확인
+                    </Button>
+                  </div>
                 ) : null}
                 {gate && "devices" in gate ? (
                   <div className="flex flex-col gap-1.5">
-                    <label
-                      htmlFor={deviceSelectId}
+                    <span
+                      id={deviceLabelId}
                       className="text-sm font-medium text-[color:var(--text-secondary)]"
                     >
                       마이크
-                    </label>
-                    <select
-                      id={deviceSelectId}
-                      value={deviceId}
-                      onChange={(e) => setDeviceId(e.target.value)}
-                      className="h-8 rounded-sm border border-border bg-card px-2.5 text-base text-foreground outline-none focus-visible:border-[color:var(--border-focus)] focus-visible:[box-shadow:0_0_0_3px_var(--accent-2)]"
-                    >
-                      {gate.devices.map((d, i) => (
-                        <option key={d.deviceId || i} value={d.deviceId}>
-                          {d.label || `마이크 ${i + 1}`}
-                        </option>
-                      ))}
-                    </select>
+                    </span>
+                    <Select value={deviceId} onValueChange={setDeviceId}>
+                      <SelectTrigger aria-labelledby={deviceLabelId}>
+                        <SelectValue placeholder="마이크 선택" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {gate.devices.map((d, i) => (
+                          <SelectItem
+                            key={d.deviceId || i}
+                            value={d.deviceId || DEFAULT_DEVICE}
+                          >
+                            {d.label || `마이크 ${i + 1}`}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                 ) : null}
               </TabsContent>
@@ -599,10 +680,13 @@ export function NewMeetingDialog({
             <Button
               type="submit"
               data-tour="upload-submit"
-              loading={busy}
+              loading={submitBusy}
               disabled={
                 (source === "file" && !demoTour && !file) ||
-                busy ||
+                (source === "live" &&
+                  !env.demoMode &&
+                  (!gate || "reason" in gate || deviceId === undefined)) ||
+                submitBusy ||
                 !isSpeakerBoundsValid(speakers)
               }
             >

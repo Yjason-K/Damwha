@@ -6,6 +6,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { ApiError, apiClient } from "@/shared/api/client";
@@ -21,6 +22,11 @@ import { NewMeetingDialog } from "./new-meeting-dialog";
 import { defaultLiveTitle } from "../lib/default-live-title";
 
 afterEach(async () => {
+  // 토스트 store는 모듈 전역이라 cleanup()이 지우지 않는다 — 남겨 두면 다음 테스트가
+  // 이전 테스트의 토스트를 자기 것으로 본다. 닫기 버튼이 store에서 빼 준다.
+  document
+    .querySelectorAll<HTMLElement>('[data-slot="toast-close"]')
+    .forEach((b) => b.click());
   clearLiveCapture("m7");
   // 준비만 하고 회의에 붙지 않은 캡처가 남으면 다음 테스트의 소유자를 밀어낸다.
   await cancelLivePreparation();
@@ -67,6 +73,10 @@ type CaptureStubOptions = {
   micPrompt?: Promise<MediaStream>;
   /** getUserMedia 자체가 거부되는 경우(사용자가 프롬프트에서 거부). */
   micRejects?: unknown;
+  /** live 탭이 열릴 때 도는 게이트의 권한 프롬프트를 테스트가 직접 settle한다. */
+  probePrompt?: Promise<MediaStream>;
+  /** 게이트의 권한 프롬프트가 거부되는 경우. */
+  probeRejects?: unknown;
   addModuleRejects?: unknown;
   /** Worklet이 첫 유효 입력에서 ready를 보내는가 (설계 §6.3). */
   ready?: boolean;
@@ -91,7 +101,24 @@ function stubCapture(options: CaptureStubOptions = {}) {
     getAudioTracks: () => [{ addEventListener: vi.fn() }],
   } as unknown as MediaStream;
 
-  const getUserMedia = vi.fn(() => {
+  // 게이트의 권한 프롬프트용 스트림. 실제 캡처와 따로 세는 이유는 이 스트림이 곧바로
+  // 닫혀야 하고(녹음 표시등), 캡처 스트림의 누수 검사가 그 stop에 묻히면 안 되기 때문이다.
+  const probeStopTrack = vi.fn();
+  const probeStream = {
+    getTracks: () => [{ stop: probeStopTrack }],
+  } as unknown as MediaStream;
+
+  /** 캡처가 요청한 제약들. 게이트의 프롬프트(`audio: true`)와 구별해 센다. */
+  const capture: MediaStreamConstraints[] = [];
+  const probe: MediaStreamConstraints[] = [];
+  const getUserMedia = vi.fn((constraints: MediaStreamConstraints) => {
+    if (constraints.audio === true) {
+      probe.push(constraints);
+      if (options.probeRejects !== undefined)
+        return Promise.reject(options.probeRejects);
+      return options.probePrompt ?? Promise.resolve(probeStream);
+    }
+    capture.push(constraints);
     if (options.micRejects !== undefined)
       return Promise.reject(options.micRejects);
     return options.micPrompt ?? Promise.resolve(stream);
@@ -155,7 +182,7 @@ function stubCapture(options: CaptureStubOptions = {}) {
   vi.stubGlobal("AudioContext", FakeAudioContext);
   vi.stubGlobal("AudioWorkletNode", FakeAudioWorkletNode);
 
-  return { stopTrack, close, stream, posted, getUserMedia };
+  return { stopTrack, probeStopTrack, close, stream, posted, capture, probe };
 }
 
 function renderDialog(onStarted = vi.fn()) {
@@ -193,9 +220,8 @@ const stopCalls = (post: { mock: { calls: unknown[][] } }) =>
 const click = (name: string) =>
   fireEvent.click(screen.getByRole("button", { name }));
 
-/** 게이트(1번째 클릭)를 통과시켜 장치 목록을 띄운다. 실제 시작은 2번째 클릭이다. */
+/** 게이트는 live 탭이 열릴 때 저절로 돈다 — 장치 목록이 뜨면 시작할 수 있다. */
 async function passGate() {
-  click("녹음 시작");
   await screen.findByLabelText("마이크");
 }
 
@@ -210,7 +236,6 @@ test("기본 제목은 '녹음 YYYY-MM-DD HH:mm'이다", () => {
 // jsdom의 기본 상태가 정확히 그 상태라 아무것도 stub하지 않는다.
 test("insecure context에서는 녹음을 막고 회의를 만들지 않는다", async () => {
   const { post } = renderDialog();
-  click("녹음 시작");
   expect(await screen.findByText(/HTTPS/)).toBeInTheDocument();
   expect(startCalls(post)).toHaveLength(0);
 });
@@ -218,7 +243,6 @@ test("insecure context에서는 녹음을 막고 회의를 만들지 않는다",
 test("마이크 권한이 거부됐으면 녹음을 막는다", async () => {
   stubCapture({ permission: "denied" });
   const { post } = renderDialog();
-  click("녹음 시작");
   expect(await screen.findByText(/마이크 권한/)).toBeInTheDocument();
   expect(startCalls(post)).toHaveLength(0);
 });
@@ -226,17 +250,143 @@ test("마이크 권한이 거부됐으면 녹음을 막는다", async () => {
 test("입력 장치가 없으면 녹음을 막는다", async () => {
   stubCapture({ devices: [] });
   renderDialog();
-  click("녹음 시작");
   expect(
     await screen.findByText("입력 장치를 찾지 못했어요."),
   ).toBeInTheDocument();
 });
 
-test("게이트를 통과하면 enumerateDevices가 돌려준 입력 장치를 보여준다", async () => {
-  stubCapture({ devices: [{ deviceId: "a", label: "내장 마이크" }] });
+test("live 탭을 열면 클릭 없이 권한을 요청하고 마이크 목록을 보여준다", async () => {
+  const mic = stubCapture({
+    devices: [{ deviceId: "a", label: "내장 마이크" }],
+  });
   renderDialog();
+
+  // 승인 전 enumerateDevices()의 label은 빈 문자열이다 — 이름이 보인다는 것은
+  // 목록을 띄우기 **전에** 권한을 받아 냈다는 뜻이다.
+  expect(await screen.findByLabelText("마이크")).toHaveTextContent(
+    "내장 마이크",
+  );
+  // 프롬프트용 스트림은 곧바로 닫는다 — 다이얼로그를 열어 둔 내내 녹음 표시등이
+  // 켜져 있으면 안 된다 (설계 §6.4).
+  expect(mic.probeStopTrack).toHaveBeenCalledTimes(1);
+  // 아직 캡처는 열지 않았다. 시작은 사용자가 누른다.
+  expect(mic.capture).toHaveLength(0);
+});
+
+/**
+ * 게이트의 수명은 "다이얼로그 한 번 열림"이다. 닫을 때 되돌리지 않으면 다시 열었을 때
+ * 장치 목록도 선택도 없는 채로 시작 버튼만 잠겨 있는 화면이 남는다.
+ */
+test("닫았다 다시 열면 게이트를 다시 돌린다", async () => {
+  const mic = stubCapture();
+  vi.spyOn(apiClient, "get").mockResolvedValue({ data: {} } as never);
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  function Harness() {
+    const [open, setOpen] = useState(true);
+    return (
+      <>
+        <button onClick={() => setOpen(true)}>다시 열기</button>
+        <NewMeetingDialog
+          open={open}
+          onOpenChange={setOpen}
+          onCreated={() => {}}
+        />
+      </>
+    );
+  }
+  render(
+    <QueryClientProvider client={qc}>
+      <Harness />
+    </QueryClientProvider>,
+  );
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "실시간 녹음" }), {
+    button: 0,
+    ctrlKey: false,
+  });
+  await passGate();
+  expect(mic.probe).toHaveLength(1);
+
+  click("취소");
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  click("다시 열기");
+
+  await passGate();
+  expect(mic.probe).toHaveLength(2);
+  expect(screen.getByRole("button", { name: "녹음 시작" })).toBeEnabled();
+});
+
+test("게이트를 통과하기 전에는 녹음 시작을 누를 수 없다", async () => {
+  const prompt = deferred<MediaStream>();
+  const mic = stubCapture({ probePrompt: prompt.promise });
+  const { post } = renderDialog();
+
+  const button = screen.getByRole("button", { name: "녹음 시작" });
+  expect(button).toBeDisabled();
   click("녹음 시작");
-  expect(await screen.findByText("내장 마이크")).toBeInTheDocument();
+  expect(startCalls(post)).toHaveLength(0);
+
+  prompt.resolve(mic.stream);
+  await passGate();
+  await waitFor(() => expect(button).toBeEnabled());
+});
+
+test("게이트의 권한 프롬프트를 거부하면 안내하고 녹음 시작을 막는다", async () => {
+  stubCapture({
+    probeRejects: new DOMException("denied", "NotAllowedError"),
+  });
+  const { post } = renderDialog();
+
+  expect(await screen.findByText(/마이크 권한/)).toBeInTheDocument();
+  expect(screen.queryByLabelText("마이크")).toBeNull();
+  expect(screen.getByRole("button", { name: "녹음 시작" })).toBeDisabled();
+  expect(startCalls(post)).toHaveLength(0);
+});
+
+/**
+ * 프롬프트를 거부한 사용자는 다이얼로그를 닫았다 열지 않고도 다시 시도할 수 있어야
+ * 한다 — 게이트가 클릭이 아니라 탭 열림에 묶이면서 재시도 경로가 사라졌었다.
+ */
+test("게이트가 실패해도 다시 확인으로 재시도할 수 있다", async () => {
+  const prompt = deferred<MediaStream>();
+  const mic = stubCapture({
+    probeRejects: new DOMException("x", "AbortError"),
+  });
+  renderDialog();
+
+  expect(await screen.findByText(/다른 앱/)).toBeInTheDocument();
+  // 두 번째 시도에서는 사용자가 마이크를 놓아 주고 허용한다.
+  mic.probeStopTrack.mockClear();
+  Object.assign(navigator.mediaDevices, {
+    getUserMedia: vi.fn(() => prompt.promise),
+  });
+  click("다시 확인");
+  prompt.resolve(mic.stream);
+
+  await passGate();
+  expect(screen.getByRole("button", { name: "녹음 시작" })).toBeEnabled();
+});
+
+test("고른 마이크로 캡처를 연다", async () => {
+  const mic = stubCapture({
+    devices: [
+      { deviceId: "a", label: "내장 마이크" },
+      { deviceId: "b", label: "USB 마이크" },
+    ],
+  });
+  const { onStarted } = renderDialog();
+  await passGate();
+
+  // Radix Select는 jsdom에서 pointer 이벤트를 못 받아 클릭으로 열리지 않는다.
+  // 트리거에 포커스 후 ArrowDown으로 열고 옵션을 클릭한다 (`fe/CLAUDE.md`).
+  const trigger = screen.getByLabelText("마이크");
+  expect(trigger).toHaveTextContent("내장 마이크");
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("option", { name: "USB 마이크" }));
+  click("녹음 시작");
+
+  await waitFor(() => expect(onStarted).toHaveBeenCalledWith("m7"));
+  expect(mic.capture[0].audio).toMatchObject({ deviceId: { exact: "b" } });
 });
 
 /**
@@ -304,7 +454,7 @@ test("ready ACK 뒤에야 회의를 만들고, begun ACK 뒤에 상세로 이동
     defer_summary: true,
   });
   // 준비(마이크·Worklet)가 회의 생성보다 먼저다 — 이 순서가 이 태스크의 핵심이다.
-  expect(mic.getUserMedia).toHaveBeenCalled();
+  expect(mic.capture).toHaveLength(1);
   expect(mic.posted).toContainEqual({ type: "begin" });
   // 성공하면 브라우저 레코더를 이 회의 id로 등록한다 — 종료가 이 인스턴스를 찾아야 한다.
   expect(getLiveRecorder("m7")).toBeDefined();
@@ -344,7 +494,7 @@ test("생성 요청이 409로 실패한 뒤에도 같은 다이얼로그에서 �
   conflict.mockResolvedValue({ status: 201, data: WIRE } as never);
   click("녹음 시작");
   await waitFor(() => expect(onStarted).toHaveBeenCalledWith("m7"));
-  expect(mic.getUserMedia).toHaveBeenCalledTimes(2);
+  expect(mic.capture).toHaveLength(2);
   expect(getLiveRecorder("m7")).toBeDefined();
 });
 
@@ -477,5 +627,5 @@ test("시작 요청이 도는 동안 버튼을 다시 눌러도 회의를 두 �
   prompt.resolve(mic.stream);
   await waitFor(() => expect(onStarted).toHaveBeenCalledWith("m7"));
   expect(startCalls(post)).toHaveLength(1);
-  expect(mic.getUserMedia).toHaveBeenCalledTimes(1);
+  expect(mic.capture).toHaveLength(1);
 });
