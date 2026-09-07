@@ -38,11 +38,26 @@ function isSingleRecordingViolation(e: unknown): boolean {
   return err?.code === '23505' && err?.constraint === RECORDING_INDEX;
 }
 
-/** 409로 나갈 응답. TX 안에서 예외로 표현하지 않고 값으로 들고 나온다 (설계 §3.3). */
-interface LiveConflict {
-  code?: 'sealed' | 'missing_chunk' | 'duration_limit';
-  expected_offset: number;
-}
+/**
+ * 409로 나갈 응답. TX 안에서 **예외로 표현하지 않는다** (설계 §3.3) — 던지면 같은 TX가
+ * 이미 기록한 liveness(markInput)·실패 마킹(capture_error)이 함께 롤백된다. 값으로 들고
+ * 나와 commit 이후에 HTTP 상태로 바꾼다.
+ *
+ * 재동기화가 가능한 409는 expected_offset을 반드시 싣는다. 024 이전 세션처럼 재동기화할
+ * 경계 자체가 없는 종단 409만 offset 없는 모양이고, FE는 그것을 종단으로 다룬다.
+ */
+type LiveConflict =
+  | { code?: 'sealed' | 'missing_chunk' | 'duration_limit'; expected_offset: number }
+  | { code: 'io_error'; message: string };
+
+/**
+ * 024 이전에 만들어져 지금도 살아 있는 세션. 확정 경계가 없으니 재동기화할 곳도 없다
+ * (설계 §3.2 — 파일 길이 fallback을 쓰지 않는다).
+ */
+const LEGACY_SESSION_CONFLICT = {
+  code: 'io_error',
+  message: 'this live session predates the committed byte boundary',
+} as const;
 
 /**
  * 디스크 쓰기·복구 실패. DB TX 실패와 반드시 구별해야 한다.
@@ -91,19 +106,15 @@ export class LiveService {
   }
 
   /**
-   * 이 세션의 확정 경계.
+   * 이 세션의 확정 경계. 없으면 null — 호출자가 LEGACY_SESSION_CONFLICT를 **값으로**
+   * 반환한다(여기서 던지면 같은 TX의 capture_error가 롤백된다, 설계 §3.3).
    *
    * NULL은 024 이전에 만들어져 지금도 살아 있는 세션뿐이다. 파일 길이로 역산하지 않는다 —
    * 그러면 크래시가 남긴 미확정 꼬리를 정본으로 인정하게 되고, 이 컬럼을 도입한 이유가
    * 통째로 사라진다 (설계 §3.2). 배포 절차가 활성 녹음을 비우도록 요구하는 이유이기도 하다.
    */
-  private committedOf(job: JobRow): number {
-    if (job.committed_bytes === null) {
-      throw new ConflictException({
-        code: 'io_error',
-        message: 'this live session predates the committed byte boundary',
-      });
-    }
+  private committedOf(job: JobRow): number | null {
+    if (job.committed_bytes === null) return null;
     return this.bigint(job.committed_bytes, 'committed_bytes');
   }
 
@@ -308,19 +319,17 @@ export class LiveService {
         if (!meeting) throw new NotFoundException('meeting not found');
         if (!job) throw new ConflictException('meeting is not recording');
 
-        // 봉인 판정보다 먼저 쓴다. 봉인까지 간 경로(정상·멱등 재시도)에서는 이 사실이
-        // 남아야 하고, 오프셋이 안 맞아 봉인되지 않은 stop은 아직 이 세션의 마지막 말이
-        // 아니므로 그 409와 함께 롤백되는 게 맞다 — 그래서 missing_chunk만 값이 아니라
-        // 예외다. FE가 서버 경계에서 빈 stop을 재시도할 때 같은 헤더를 다시 실어 오므로
-        // 사유를 잃지도 않는다 (설계 §7). 봉인을 커밋하고 나가는 duration_limit은 반대로
-        // 값으로 들고 나가야 한다 — 던지면 그 봉인까지 롤백된다.
+        // 봉인 판정보다 먼저 쓴다. 아래 어느 경로로 나가든(정상·멱등 재시도·오프셋 불일치)
+        // 이 사실은 남아야 한다 — 그래서 이 뒤의 모든 409는 던지지 않고 값으로 나간다
+        // (설계 §3.3). 이 순서라야 이미 봉인된 job에 대한 재시도가 실어 온 X-Capture-Error도
+        // 기록된다: ACK를 잃은 stop 재시도가 바로 그 헤더가 도착하는 경로다.
         if (captureError) await this.live.setCaptureError(c, id, captureError);
 
         // 멱등 재시도: 이 job은 이미 봉인됐다. 같은 길이면 성공, 다르면 계약 위반이다.
         if (job.sealed_bytes !== null) {
           const sealed = this.bigint(job.sealed_bytes, 'sealed_bytes');
           if (sealed !== final) {
-            throw new ConflictException({ code: 'missing_chunk', expected_offset: sealed });
+            return { conflict: { code: 'missing_chunk' as const, expected_offset: sealed } };
           }
           // 새 process job을 만들지 않는다 — 이미 만들었거나, 워커/스위퍼의 몫이다.
           // done이면 누군가 마무리를 끝냈고, 아니면 아직 마무리가 남아 있다.
@@ -332,14 +341,18 @@ export class LiveService {
             audioKey: meeting.audio_key, sealedBytes: sealed, discarded: false,
           };
         }
+        // 미봉인인데 이 job이 더는 meeting을 대표하지 않는다 — cancel이 이 세션을 이미
+        // 닫았다. 여기서만 던지는 것이 의도다: setCaptureError는 덮어쓰기라, 세션을 실제로
+        // 닫은 쪽이 남긴 사유를 뒤늦게 도착한 브라우저 보고가 지우게 된다. 롤백되는 편이 맞다.
         if (meeting.status !== 'recording' || meeting.current_job_id !== job.id) {
           throw new ConflictException('meeting is not recording');
         }
 
         const committed = this.committedOf(job);
+        if (committed === null) return { conflict: LEGACY_SESSION_CONFLICT };
         await this.recoverOrFail(meeting.audio_key, committed, job.id);
         if (offset !== committed) {
-          throw new ConflictException({ code: 'missing_chunk', expected_offset: committed });
+          return { conflict: { code: 'missing_chunk' as const, expected_offset: committed } };
         }
         const { end, capped } = await this.commitPcm(c, job.id, meeting.audio_key, offset, tail, true);
 
@@ -359,18 +372,25 @@ export class LiveService {
           return { conflict: { code: 'duration_limit' as const, expected_offset: end } };
         }
 
+        // 사용자가 한 바이트도 안 보내고 종료했다. **워커 상태와 무관하게** 폐기한다
+        // (설계 §3.4) — 넘길 녹음이 없는데 running이라고 워커에게 맡기면 그 워커가
+        // duration 0짜리 회의를 finalize해 정본 처리까지 큐잉한다. job은 meeting FK의
+        // ON DELETE CASCADE로 함께 사라지고(001_init), 워커의 get_live_input_state는
+        // 다음 폴링에서 'lost'를 받아 스스로 끝낸다.
+        //
+        // 자동 스캐너의 0바이트와 다르다: 그쪽은 사용자가 종료를 누른 적이 없으므로
+        // producer_never_started 실패로 **남기고 지우지 않는다** (LiveOrphanService.closeEmpty).
+        if (end === 0) {
+          await this.meetings.deleteById(c, id);
+          return {
+            ok: { meeting_id: id, job_id: job.id, sealed_bytes: 0, outcome: 'discarded' as const },
+            audioKey: meeting.audio_key, sealedBytes: 0, discarded: true,
+          };
+        }
         if (job.status !== 'running') {
           // 이 job을 마무리할 워커가 없다. queued면 한 번도 claim되지 않았고, failed면
           // reaper가 그 워커를 잃었다고 판정했다(설계 §2.11 — 워커를 잃어도 녹음은 살아
           // 있다). 어느 쪽이든 디스크엔 온전한 녹음이 있으므로 API가 마무리한다.
-          // 원 설계의 "녹음된 게 없으니 회의를 지운다"는 파괴적으로 틀리다 (설계 §2.11).
-          if (end === 0) {
-            await this.meetings.deleteById(c, id);
-            return {
-              ok: { meeting_id: id, job_id: job.id, sealed_bytes: 0, outcome: 'discarded' as const },
-              audioKey: meeting.audio_key, sealedBytes: 0, discarded: true,
-            };
-          }
           await this.finalizeByApi(c, job, meeting, end);
           return {
             ok: { meeting_id: id, job_id: job.id, sealed_bytes: end, outcome: 'finalized' as const },
@@ -468,6 +488,7 @@ export class LiveService {
         }
 
         const committed = this.committedOf(job);
+        if (committed === null) return { conflict: LEGACY_SESSION_CONFLICT };
         await this.recoverOrFail(meeting.audio_key, committed, job.id);
 
         if (offset + body.length === committed) {

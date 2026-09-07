@@ -223,9 +223,17 @@ describe("LiveRecorder upload loop", () => {
  */
 /** start()가 실제 워크릿을 태우는 경로를 흉내낸다 — jsdom엔 AudioContext가 없다. */
 function stubWorkletGlobals() {
+  // 장치 ended 리스너를 붙잡아 둔다 — 마이크가 끊기는 순간을 테스트가 직접 만들 수 있어야
+  // 그 사유가 stop까지 실려 나가는지 검사할 수 있다.
+  const endedListeners: Array<() => void> = [];
   const stream = {
     getTracks: () => [{ stop: vi.fn() }],
-    getAudioTracks: () => [{ addEventListener: vi.fn() }],
+    getAudioTracks: () => [
+      {
+        addEventListener: (_type: string, fn: () => void) =>
+          endedListeners.push(fn),
+      },
+    ],
   } as unknown as MediaStream;
   Object.defineProperty(navigator, "mediaDevices", {
     configurable: true,
@@ -245,7 +253,7 @@ function stubWorkletGlobals() {
   }
   vi.stubGlobal("AudioContext", FakeAudioContext);
   vi.stubGlobal("AudioWorkletNode", FakeAudioWorkletNode);
-  return { port };
+  return { port, endTrack: () => endedListeners.forEach((fn) => fn()) };
 }
 
 describe("LiveRecorder stop() after a recorder failure", () => {
@@ -311,10 +319,13 @@ describe("LiveRecorder stop() after a recorder failure", () => {
 
   // 설계 §7. ACK를 잃은 채 stop을 보내면 서버의 확정 경계가 우리보다 앞서 있다. 로컬
   // 꼬리를 그 앞에 덧붙이면 서버가 이미 확정한 바이트 위에 구멍을 낸다.
-  it("retries an empty stop at the server boundary when the server is ahead", async () => {
-    const { port } = stubWorkletGlobals();
-    // 청크는 200을 받았지만 그 ACK가 유실돼 로컬 offset이 0에 머물렀다고 하자.
-    const post = vi.fn(async () => ({ status: 200 as const, expected: 0 }));
+  it("retries an empty stop at the server boundary, carrying the capture failure through", async () => {
+    const { port, endTrack } = stubWorkletGlobals();
+    // 업로드가 계속 실패해 로컬 offset이 0에 머물렀다. 서버는 그 사이 한 청크를 확정했지만
+    // 그 ACK가 유실됐고, stop이 409로 비로소 그 사실을 알게 된다.
+    const post = vi.fn(async () => {
+      throw new Error("network down");
+    });
     const stopSpy = vi.fn<
       (
         id: string,
@@ -335,26 +346,33 @@ describe("LiveRecorder stop() after a recorder failure", () => {
       retryDelayMs: 0,
     });
     await r.start("mtg_1");
-    // 청크 하나 + 자투리 5프레임. expected가 청크 끝(CHUNK_BYTES)이 아니라 0이므로
-    // 레코더는 이 청크를 dequeue하지 않고 재시도만 하다가 stop을 맞는다.
+    // 청크 하나(32프레임) + 자투리 5프레임. 청크는 전송에 실패해 큐에 남는다.
     for (let i = 0; i < 37; i += 1) {
       port.onmessage?.({
         data: new ArrayBuffer(FRAME_BYTES),
       } as MessageEvent<ArrayBuffer>);
     }
+    endTrack(); // 마이크가 끊겼다
+    expect(r.status.failed).toBe("device_ended");
     await r.stop();
 
     expect(stopSpy).toHaveBeenCalledTimes(2);
     // 첫 시도는 로컬 경계(0)에서. 큐에 구멍이 남아 있으므로 꼬리를 싣지 않는다.
-    const [, firstOffset, firstFinal, firstBody] = stopSpy.mock.calls[0];
+    const [, firstOffset, firstFinal, firstBody, , firstFailure] =
+      stopSpy.mock.calls[0];
     expect(firstOffset).toBe(0);
     expect(firstFinal).toBe(0);
     expect((firstBody as Uint8Array).byteLength).toBe(0);
+    expect(firstFailure).toBe("device_ended");
     // 두 번째는 서버가 알려준 경계에서 빈 바디로 — 앞에 자투리를 덧붙이지 않는다.
-    const [, secondOffset, secondFinal, secondBody] = stopSpy.mock.calls[1];
+    const [, secondOffset, secondFinal, secondBody, , secondFailure] =
+      stopSpy.mock.calls[1];
     expect(secondOffset).toBe(CHUNK_BYTES);
     expect(secondFinal).toBe(CHUNK_BYTES);
     expect((secondBody as Uint8Array).byteLength).toBe(0);
+    // 재시도가 사유를 떨어뜨리면 서버의 meeting.capture_error가 비고, 마이크를 잃은 회의가
+    // 깨끗한 회의와 구별되지 않는다 — 이 재시도가 그 헤더가 도착하는 유일한 경로다.
+    expect(secondFailure).toBe("device_ended");
     expect(r.offset).toBe(CHUNK_BYTES);
   });
 

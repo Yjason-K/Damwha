@@ -163,13 +163,19 @@ describe('live orphan sweeper', () => {
     expect(rows[0].capture_error.code).toBe('preview_worker_lost');
   });
 
-  // 시작 직후 종료 + 워커 죽음. stop이 running job을 0바이트에서 봉인하고 워커에게
-  // 맡기는데 그 워커가 없다. finalize할 녹음이 없다고 그냥 두면 회의가 영원히
-  // recording이고 meeting_single_recording_idx가 다음 녹음을 전부 막는다.
+  // 0바이트에서 봉인된 채 마무리할 워커가 없는 상태. finalize할 녹음이 없다고 그냥 두면
+  // 회의가 영원히 recording이고 meeting_single_recording_idx가 다음 녹음을 전부 막는다.
+  //
+  // 이 상태를 사용자 stop으로 만들지 않는 이유: 설계 §3.4대로 0바이트 사용자 stop은 워커
+  // 상태와 무관하게 회의를 **폐기**하므로(live-audio.e2e-spec.ts가 그것을 고정한다) 더는
+  // 이 상태에 도달하지 못한다. 남은 도달 경로는 SQL로 직접 만든 봉인 — 스캐너 자신이 남긴
+  // 봉인이나 옛 writer가 남긴 행이다. 검사 대상(스위퍼가 이 상태를 닫는가)은 그대로다.
   it('closes a session sealed at zero bytes whose worker never finished it', async () => {
     const { body: m } = await start().expect(201);
     await claim(m.id);
-    await stop(m.id, 0, 0).expect(200); // 오디오를 한 번도 안 보냈다
+    await db.pool.query(
+      `UPDATE job SET stop_requested_at=now(), committed_bytes=0, sealed_bytes=0
+       WHERE id=(SELECT current_job_id FROM meeting WHERE id=$1)`, [m.id]);
     await reap(m.id);
 
     expect(await orphans.sweep()).toBe(1);

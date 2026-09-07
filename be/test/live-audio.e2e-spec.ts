@@ -58,6 +58,15 @@ describe('live audio append', () => {
       .set('X-Final-Offset', String(final))
       .send(body);
 
+  /** 캡처 실패 사유를 실은 빈 stop. 브라우저가 끝까지 캡처하지 못했을 때의 모양이다. */
+  const stopWithError = (id: string, offset: number, final: number, code: string) =>
+    request(srv()).post(`/meetings/${id}/live/stop`)
+      .set('Content-Type', 'application/octet-stream')
+      .set('X-Audio-Offset', String(offset))
+      .set('X-Final-Offset', String(final))
+      .set('X-Capture-Error', code)
+      .send(Buffer.alloc(0));
+
   const audioPath = async (id: string) => {
     const { rows } = await db.pool.query(`SELECT audio_key FROM meeting WHERE id=$1`, [id]);
     return app.get(StorageService).resolve(rows[0].audio_key);
@@ -396,6 +405,54 @@ describe('live audio append', () => {
     // 길이)을 통과해 sealed_bytes 불일치 409에 도달한다 — 빈 바디로 CHUNK+2를 주장하면
     // 헤더 검증 자체에서 먼저 400이 난다.
     await stop(m.id, CHUNK, CHUNK + 2, Buffer.alloc(2)).expect(409);
+  });
+
+  // 설계 §3.3: TX 안에서 예외를 던져 실패 마킹을 롤백하지 않는다. 오프셋이 어긋난 stop도
+  // 그 요청이 실어 온 캡처 실패 사유는 남겨야 한다 — 그 헤더가 "이 회의는 마이크를 잃었다"를
+  // 탭 밖으로 내보내는 유일한 통로이고, ACK를 잃은 stop이 바로 그 헤더가 도착하는 경로다.
+  it('a missing_chunk stop still commits the capture error it carried', async () => {
+    const { body: m } = await start().expect(201);
+    await send(m.id, 0, chunk(1)).expect(200);
+    // 브라우저는 첫 청크의 ACK를 잃어 여전히 0에 있다고 믿는다.
+    await stopWithError(m.id, 0, 0, 'device_ended').expect(409)
+      .expect((r) => {
+        expect(r.body.code).toBe('missing_chunk');
+        expect(r.body.expected_offset).toBe(CHUNK);
+      });
+    const { rows } = await db.pool.query(`SELECT capture_error FROM meeting WHERE id=$1`, [m.id]);
+    expect(rows[0].capture_error.code).toBe('device_ended');
+    // 그리고 서버가 알려준 경계에서의 재시도가 실제로 봉인한다 (설계 §7).
+    await stopWithError(m.id, CHUNK, CHUNK, 'device_ended').expect(200);
+  });
+
+  it('a sealed stop with the wrong final still commits the capture error it carried', async () => {
+    const { body: m } = await start().expect(201);
+    await send(m.id, 0, chunk(1)).expect(200);
+    await stop(m.id, CHUNK, CHUNK).expect(200);
+    await stopWithError(m.id, 0, 0, 'buffer_overflow').expect(409)
+      .expect((r) => expect(r.body.expected_offset).toBe(CHUNK));
+    const { rows } = await db.pool.query(`SELECT capture_error FROM meeting WHERE id=$1`, [m.id]);
+    expect(rows[0].capture_error.code).toBe('buffer_overflow');
+  });
+
+  // 설계 §3.4: "0바이트 사용자 stop은 worker 상태와 무관하게 job을 종료 처리한 뒤 회의를
+  // 폐기한다." 워커에게 맡기면 그 워커가 duration 0짜리 회의를 finalize하고 정본 처리까지
+  // 큐잉한다 — 넘길 오디오가 한 바이트도 없는데.
+  it('a zero-byte user stop discards the meeting even while a worker holds the job', async () => {
+    const { body: m } = await start().expect(201);
+    const { rows: before } = await db.pool.query(
+      `SELECT current_job_id FROM meeting WHERE id=$1`, [m.id]);
+    await claim(before[0].current_job_id);
+
+    await stop(m.id, 0, 0).expect(200)
+      .expect((r) => expect(r.body.outcome).toBe('discarded'));
+
+    expect((await db.pool.query(`SELECT 1 FROM meeting WHERE id=$1`, [m.id])).rows).toHaveLength(0);
+    // job은 meeting FK의 ON DELETE CASCADE로 함께 사라진다 — 워커는 다음 폴링에서 lost다.
+    expect((await db.pool.query(`SELECT 1 FROM job WHERE id=$1`, [before[0].current_job_id])).rows)
+      .toHaveLength(0);
+    // 이 테스트의 진짜 목적: 다음 녹음이 막히지 않는다.
+    await start().expect(201);
   });
 
   it('stop 409s when chunks are missing', async () => {
