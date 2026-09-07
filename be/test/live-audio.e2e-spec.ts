@@ -14,6 +14,7 @@ import { JobsRepository } from '../src/jobs/jobs.repository';
 import { LiveService } from '../src/live/live.service';
 import { MeetingsRepository } from '../src/meetings/meetings.repository';
 import { DatabaseService } from '../src/database/database.service';
+import { Queryable } from '../src/jobs/jobs.types';
 
 const CHUNK = 32768;
 const chunk = (fill: number) => Buffer.alloc(CHUNK, fill);
@@ -669,11 +670,12 @@ describe('live audio append', () => {
    * 스위트가 테스트 타임아웃까지 매달린다 — 진짜 원인이 가려진다.
    */
   const gate = () => {
-    let arrive!: () => void;
+    let arrive!: (holderPid: number) => void;
     let release!: () => void;
-    const reached = new Promise<void>((r) => { arrive = r; });
+    const reached = new Promise<number>((r) => { arrive = r; });
     const open = new Promise<void>((r) => { release = r; });
     return {
+      /** 잠금을 쥔 백엔드의 pid를 실어 게이트 도착을 알린다 — 대기자를 지목하는 근거다. */
       arrive,
       open,
       /**
@@ -683,10 +685,10 @@ describe('live audio append', () => {
        * 중인 요청을 여기서 돌려주면 게이트가 그 요청의 완료를 기다리는 교착이 된다 —
        * 그 요청은 게이트가 열려야 진행할 수 있다. 필요한 promise는 바깥 변수로 내보낸다.
        */
-      held: async (fn: () => Promise<void>): Promise<void> => {
-        await reached;
+      held: async (fn: (holderPid: number) => Promise<void>): Promise<void> => {
+        const holderPid = await reached;
         try {
-          await fn();
+          await fn(holderPid);
         } finally {
           release();
         }
@@ -695,42 +697,53 @@ describe('live audio append', () => {
   };
 
   /** 별도 커넥션이 job 행을 잠근 채 fn을 돌린다. 실패해도 finally에서 반드시 반납한다. */
-  const withBarrier = async <T>(jobId: string, fn: (barrier: Client) => Promise<T>): Promise<T> => {
+  const withBarrier = async <T>(
+    jobId: string, fn: (barrier: Client, barrierPid: number) => Promise<T>,
+  ): Promise<T> => {
     const barrier = new Client({ connectionString: db.url });
     await barrier.connect();
     try {
       await barrier.query('BEGIN');
       await barrier.query(`SELECT id FROM job WHERE id=$1 FOR UPDATE`, [jobId]);
-      return await fn(barrier);
+      return await fn(barrier, await pidOf(barrier));
     } finally {
       await barrier.query('ROLLBACK').catch(() => undefined);
       await barrier.end();
     }
   };
 
+  /** 그 커넥션을 서비스하는 백엔드 pid. "누가 누구를 막는가"를 정확히 지목하는 데 쓴다. */
+  const pidOf = async (exec: Queryable): Promise<number> => {
+    const { rows } = await exec.query<{ pid: number }>(`SELECT pg_backend_pid()::int AS pid`);
+    return rows[0].pid;
+  };
+
   /**
-   * `job` 행에서 잠금을 기다리는 백엔드가 n개가 될 때까지 기다린다. sleep이 아니라
-   * pg_locks가 판정한다.
+   * 잠금 보유자 `holderPid` 뒤에 줄 선 백엔드가 n개가 될 때까지 기다린다. sleep이 아니라
+   * `pg_blocking_pids`가 판정한다 — `test_db_live.py`의 `_wait_until_blocked`와 같은 취지로
+   * **그 백엔드**를 지목한다.
    *
-   * 클러스터 전체의 `NOT granted`를 세면 안 된다 — 무관한 백엔드 하나로도 조건이 차서,
-   * 정작 기다리던 대기자가 큐에 들어가기 전에 테스트가 진행된다. 그러면 경합 테스트가
-   * 엉뚱한 이유로 통과하고, 순서를 고정한다는 목적 자체가 사라진다. 그래서 대상을
-   * "무언가를 기다리는 중이면서 `job` 릴레이션 잠금을 이미 쥔" 백엔드로 좁힌다 —
-   * `SELECT … FROM job … FOR UPDATE`는 행을 기다리는 내내 job에 RowShareLock을 들고 있다.
+   * 클러스터 전체의 `pg_locks WHERE NOT granted`를 세면 안 된다: 무관한 백엔드 하나만
+   * 막혀 있어도 조건이 차서, 정작 기다리던 대기자가 큐에 들어가기 전에 테스트가 진행된다.
+   * 그러면 경합 테스트가 엉뚱한 이유로 통과하고 순서를 고정한다는 목적 자체가 사라진다.
+   *
+   * 재귀인 이유: 같은 행의 두 번째 대기자는 보유자가 아니라 **첫 번째 대기자**가 쥔 tuple
+   * 잠금에서 막힌다. `pg_blocking_pids`는 직접 차단자만 주므로, 줄 전체를 세려면 사슬을
+   * 따라가야 한다.
    */
-  const awaitWaiters = async (n: number) => {
+  const awaitWaiters = async (n: number, holderPid: number) => {
     const deadline = Date.now() + 15000;
     for (;;) {
-      const { rows } = await db.pool.query(
-        `SELECT count(DISTINCT w.pid)::int AS n
-           FROM pg_locks w
-          WHERE NOT w.granted
-            AND EXISTS (SELECT 1 FROM pg_locks h
-                         WHERE h.pid = w.pid AND h.granted
-                           AND h.locktype = 'relation' AND h.relation = 'job'::regclass)`);
+      const { rows } = await db.pool.query<{ n: number }>(
+        `WITH RECURSIVE queue AS (
+           SELECT a.pid FROM pg_stat_activity a WHERE $1 = ANY(pg_blocking_pids(a.pid))
+           UNION
+           SELECT a.pid FROM pg_stat_activity a, queue q WHERE q.pid = ANY(pg_blocking_pids(a.pid))
+         )
+         SELECT count(*)::int AS n FROM queue WHERE pid <> $1`, [holderPid]);
       if (rows[0].n >= n) return;
       if (Date.now() > deadline) {
-        throw new Error(`timed out waiting for ${n} backend(s) blocked on the job row`);
+        throw new Error(`timed out waiting for ${n} backend(s) queued behind pid ${holderPid}`);
       }
       await new Promise((r) => setTimeout(r, 20));
     }
@@ -745,7 +758,7 @@ describe('live audio append', () => {
     const realSeal = live.seal.bind(live);
     const g = gate();
     jest.spyOn(live, 'seal').mockImplementationOnce(async (exec, id, bytes) => {
-      g.arrive();          // job 행을 잠근 채 멈춘다
+      g.arrive(await pidOf(exec));   // job 행을 잠근 채 멈춘다
       await g.open;
       return realSeal(exec, id, bytes);
     });
@@ -769,9 +782,9 @@ describe('live audio append', () => {
     await send(m.id, 0, chunk(1)).expect(200);
     const jobId = await liveJobId(m.id);
 
-    await withBarrier(jobId, async (barrier) => {
+    await withBarrier(jobId, async (barrier, barrierPid) => {
       const stopping = fire(stop(m.id, CHUNK, CHUNK));
-      await awaitWaiters(1);         // stop이 job 행에서 대기 중이다
+      await awaitWaiters(1, barrierPid);   // stop이 이 장벽 뒤에서 대기 중이다
       const claimed = await app.get(JobsRepository).claim(barrier, 'w1');
       expect(claimed?.id).toBe(jobId);
       await barrier.query('COMMIT');
@@ -799,7 +812,7 @@ describe('live audio append', () => {
     const realCancel = meetingsRepo.markCancelled.bind(meetingsRepo);
     const g = gate();
     jest.spyOn(meetingsRepo, 'markCancelled').mockImplementationOnce(async (exec, id, err) => {
-      g.arrive();          // job과 meeting을 모두 잠근 상태다
+      g.arrive(await pidOf(exec));   // job과 meeting을 모두 잠근 상태다
       await g.open;
       return realCancel(exec, id, err);
     });
@@ -808,9 +821,9 @@ describe('live audio append', () => {
     // 진행 중인 요청은 콜백 **밖으로** 내보낸다 — async 콜백이 promise를 반환하면 그것을
     // 풀어 기다리게 되고, 게이트가 그 요청의 완료를 기다리는 교착이 된다.
     let appending!: Promise<request.Response>;
-    await g.held(async () => {
+    await g.held(async (holderPid) => {
       appending = fire(send(m.id, CHUNK, chunk(2)));  // cancel이 job과 meeting을 쥔 상태다
-      await awaitWaiters(1);         // append가 job 행에서 대기 중이다
+      await awaitWaiters(1, holderPid);   // append가 그 cancel 뒤에서 대기 중이다
     });
 
     const [c, a] = await Promise.all([cancelling, appending]);
@@ -829,16 +842,16 @@ describe('live audio append', () => {
     const realCommit = live.setCommitted.bind(live);
     const g = gate();
     jest.spyOn(live, 'setCommitted').mockImplementationOnce(async (exec, id, bytes) => {
-      g.arrive();          // job 행을 잠근 채 멈춘다
+      g.arrive(await pidOf(exec));   // job 행을 잠근 채 멈춘다
       await g.open;
       return realCommit(exec, id, bytes);
     });
 
     const appending = fire(send(m.id, CHUNK, chunk(2)));
     let cancelling!: Promise<request.Response>;
-    await g.held(async () => {
+    await g.held(async (holderPid) => {
       cancelling = fire(request(srv()).post(`/meetings/${m.id}/cancel`).send());
-      await awaitWaiters(1);         // cancel이 job 행에서 대기 중이다
+      await awaitWaiters(1, holderPid);   // cancel이 그 append 뒤에서 대기 중이다
     });
 
     const [a, c] = await Promise.all([appending, cancelling]);
