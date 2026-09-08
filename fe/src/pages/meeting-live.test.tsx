@@ -66,6 +66,7 @@ let live: WireLiveResponse = {
   status: "recording",
   stage: "capture",
   heartbeat_at: new Date().toISOString(),
+  stop_requested_at: null,
   items: [],
 };
 // 실제 전사(발화)가 있는 회의를 그리는 케이스(우선순위 테스트)만 채운다 — 기본은 빈 배열.
@@ -124,6 +125,7 @@ beforeEach(() => {
     status: "recording",
     stage: "capture",
     heartbeat_at: new Date().toISOString(),
+    stop_requested_at: null,
     items: [],
   };
   currentUtterances = [];
@@ -281,6 +283,7 @@ test("실패한 회의에 라이브 행이 남아 있으면 읽기 전용 미리
     status: "failed",
     stage: "capture",
     heartbeat_at: null,
+    stop_requested_at: null,
     items: [
       {
         id: "lut_1",
@@ -307,7 +310,13 @@ test("마이크를 못 연 실패는 권한 안내를 보여주고 재처리 버
     status: "failed",
     error: { code: "audio_device_failed", message: "no mic" },
   });
-  live = { status: "failed", stage: null, heartbeat_at: null, items: [] };
+  live = {
+    status: "failed",
+    stage: null,
+    heartbeat_at: null,
+    stop_requested_at: null,
+    items: [],
+  };
   renderAt("/meetings/m1");
   const alert = await screen.findByRole("alert");
   expect(within(alert).getByText("마이크를 열지 못했어요")).toBeInTheDocument();
@@ -323,6 +332,7 @@ test("처리 중인 회의는 실제 전사가 없으면 라이브 미리보기�
     status: "processing",
     stage: "stt",
     heartbeat_at: null,
+    stop_requested_at: null,
     items: [
       {
         id: "lut_1",
@@ -355,6 +365,7 @@ test("실제 전사가 남아 있는 실패는 라이브 미리보기 대신 전
     status: "failed",
     stage: "stt",
     heartbeat_at: null,
+    stop_requested_at: null,
     items: [
       {
         id: "lut_1",
@@ -405,6 +416,7 @@ test("워커 신호가 끊긴 배너의 버튼은 cancel을 호출한다", async
   live = {
     ...live,
     heartbeat_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+    stop_requested_at: null,
   };
   const post = vi.spyOn(apiClient, "post").mockResolvedValue({
     data: { meeting_id: "m1", job_id: "job_1", status: "failed" },
@@ -414,4 +426,37 @@ test("워커 신호가 끊긴 배너의 버튼은 cancel을 호출한다", async
   btn.click();
   await waitFor(() => expect(post).toHaveBeenCalledWith("/meetings/m1/cancel"));
   expect(post).not.toHaveBeenCalledWith("/meetings/m1/live/stop");
+});
+
+// POST /live/stop은 봉인만 하고 200을 준다 — 마무리(전사 꼬리 + finalize)는 워커가
+// 자기 주기에 하고, 그동안 회의는 계속 'recording'이라 이 배너가 서 있는다. 예전에는
+// stopLive.isPending만 버튼을 죽여서, 응답이 오는 순간 종료 버튼이 되살아났다.
+// 다시 누르면 레코더가 이미 정리된 뒤라 "이 화면에서는 종료할 수 없어요"만 떴다.
+test("종료 요청이 도착한 뒤에는 종료 버튼이 죽고 마무리 중으로 보인다", async () => {
+  live = { ...live, stop_requested_at: new Date().toISOString() };
+  renderAt("/meetings/m1");
+
+  const btn = await screen.findByRole("button", { name: "종료 중…" });
+  expect(btn).toBeDisabled();
+  // 배너로 좁힌다 — 회의 상태 배지의 "녹음 중"은 meeting.status를 그대로 비추는
+  // 별개 표시이고, 마무리 구간에도 그 status는 실제로 'recording'이라 맞는 말이다.
+  const banner = screen.getByRole("status", { name: "녹음 상태" });
+  expect(within(banner).getByText("녹음을 마무리하는 중")).toBeInTheDocument();
+  expect(within(banner).queryByText("녹음 중")).toBeNull();
+});
+
+// 마무리 구간에도 워커는 죽을 수 있다. 그때 유일한 탈출구는 '녹음 취소'이므로
+// stale 판정이 계속 살아 있어야 한다 — 경과 시계를 얼리는 방식으로 고쳤다면
+// 이 배너는 영영 뜨지 않았을 것이다.
+test("마무리 중에 워커 신호가 끊기면 취소 배너로 넘어간다", async () => {
+  live = {
+    ...live,
+    stop_requested_at: new Date().toISOString(),
+    heartbeat_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+  };
+  renderAt("/meetings/m1");
+
+  expect(
+    await screen.findByRole("button", { name: "녹음 취소" }),
+  ).toBeInTheDocument();
 });

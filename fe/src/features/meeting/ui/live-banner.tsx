@@ -60,7 +60,19 @@ type LiveBannerProps = {
    * stop은 job에 플래그만 찍으므로 읽어 줄 워커가 없으면 아무 일도 일어나지 않는다.
    */
   onCancel: () => void;
+  /**
+   * 종료가 진행 중 — 요청이 아직 날아가는 중이거나(mutation pending), 이미 도착해
+   * 워커가 마무리하는 중이다. 두 구간을 합쳐서 받는 이유는 버튼 입장에서 같기 때문이다:
+   * 어느 쪽이든 다시 누를 것이 없다.
+   */
   stopping: boolean;
+  /**
+   * 봉인이 끝나고 워커가 마무리하는 중(job.stop_requested_at이 non-null).
+   *
+   * 이 구간에도 회의는 'recording'이라 이 배너가 계속 서 있는다. 표시를 안 바꾸면
+   * 이미 끝난 녹음을 두고 "녹음 중"과 올라가는 시계를 보여 주게 된다.
+   */
+  finishing?: boolean;
   cancelling?: boolean;
   /** 테스트용 시계. */
   now?: () => number;
@@ -89,12 +101,16 @@ export function LiveBanner({
   onStop,
   onCancel,
   stopping,
+  finishing = false,
   cancelling = false,
   now = Date.now,
   backlogMs = 0,
   failed = null,
 }: LiveBannerProps) {
   const queued = stage === null;
+  // 마무리 중에도 틱은 계속 돈다. 아래 stale 판정이 이 값을 쓰므로 여기서 멈추면
+  // 마무리 도중 워커가 죽어도 "신호 끊김" 배너가 영영 뜨지 않아, 유일한 탈출구인
+  // 녹음 취소에 닿지 못한 채 reaper의 30분을 기다리게 된다.
   const nowMs = useTick(now, !queued);
   const stale = !queued && isHeartbeatStale(heartbeatAt, nowMs);
   const started = new Date(recordedAtIso).getTime();
@@ -181,20 +197,37 @@ export function LiveBanner({
       <span
         aria-hidden="true"
         className={
-          queued
+          queued || finishing
             ? "size-2.5 shrink-0 rounded-full bg-[var(--text-faint)]"
-            : "size-2.5 shrink-0 animate-pulse rounded-full bg-[var(--red-9)]"
+            : "size-2.5 shrink-0 animate-pulse rounded-full bg-[var(--red-9)] motion-reduce:animate-none"
         }
       />
       <span className="font-semibold text-[color:var(--accent-text)]">
-        {queued ? "워커를 기다리는 중" : "녹음 중"}
+        {finishing
+          ? "녹음을 마무리하는 중"
+          : queued
+            ? "워커를 기다리는 중"
+            : "녹음 중"}
       </span>
-      <span className="text-[color:var(--text-secondary)]">
-        {queued
-          ? "브라우저가 녹음하고 있어요. 워커가 붙으면 발화가 흘러와요."
-          : formatClock(elapsed)}
+      {/* 마무리 중에는 경과 시계를 아예 지운다. 녹음은 이미 봉인돼 길이가 정해졌는데
+          recorded_at 기준의 이 값은 계속 자란다 — 얼려서 보여 줄 수도 있지만, 그러면
+          "봉인 시각"인 척하는 틀린 숫자가 된다. 그 자리에 무슨 일이 일어나는 중인지를
+          쓰는 편이 기다림을 설명한다. 시계에는 tabular-nums — 1초마다 바뀌는 자리수가
+          폭을 흔들면 옆 문구까지 같이 떤다. */}
+      <span
+        className={
+          finishing
+            ? "text-[color:var(--text-secondary)]"
+            : "tabular-nums text-[color:var(--text-secondary)]"
+        }
+      >
+        {finishing
+          ? "마지막 오디오를 저장하고 있어요. 곧 처리로 넘어가요."
+          : queued
+            ? "브라우저가 녹음하고 있어요. 워커가 붙으면 발화가 흘러와요."
+            : formatClock(elapsed)}
       </span>
-      {!queued && backlogMs > BACKLOG_WARN_MS ? (
+      {!queued && !finishing && backlogMs > BACKLOG_WARN_MS ? (
         <span className="text-[color:var(--red-text)]">
           업로드가 밀리고 있어요
         </span>

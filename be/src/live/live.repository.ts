@@ -6,7 +6,12 @@ export interface LiveUtteranceRow {
   id: string; seq: number; start_ms: number; end_ms: number; text: string;
   speaker_id: string | null; speaker_name: string | null; similarity: number | null;
 }
-export interface LiveHeadRow { status: string; stage: string | null; heartbeat_at: Date | null }
+export interface LiveHeadRow {
+  status: string;
+  stage: string | null;
+  heartbeat_at: Date | null;
+  stop_requested_at: Date | null;
+}
 
 @Injectable()
 export class LiveRepository {
@@ -27,7 +32,7 @@ export class LiveRepository {
 
   async findHead(exec: Queryable, meetingId: string): Promise<LiveHeadRow | null> {
     const { rows } = await exec.query<LiveHeadRow>(
-      `SELECT m.status, j.stage, j.locked_at AS heartbeat_at
+      `SELECT m.status, j.stage, j.locked_at AS heartbeat_at, j.stop_requested_at
        FROM meeting m LEFT JOIN job j ON j.id = m.current_job_id
        WHERE m.id=$1`,
       [meetingId],

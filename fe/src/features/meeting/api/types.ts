@@ -251,11 +251,17 @@ export type WireLiveUtterance = {
   similarity: number | null;
 };
 
-/** GET /meetings/:id/live 응답. heartbeat_at은 세션 job의 locked_at. */
+/**
+ * GET /meetings/:id/live 응답. heartbeat_at은 세션 job의 locked_at.
+ *
+ * stop_requested_at이 non-null이면 봉인은 끝났고 워커가 마무리하는 중이다. 그동안에도
+ * status는 'recording'이라, 이 필드가 "녹음 중"과 "마무리 중"을 가르는 유일한 근거다.
+ */
 export type WireLiveResponse = {
   status: MeetingStatus;
   stage: string | null;
   heartbeat_at: string | null;
+  stop_requested_at: string | null;
   items: WireLiveUtterance[];
 };
 

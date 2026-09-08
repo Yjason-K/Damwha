@@ -298,6 +298,19 @@ function MeetingView({
   // 워커 신호가 끊긴 배너의 탈출구 — ProcessingBanner의 취소와 같은 엔드포인트다.
   const cancelLive = useCancelProcessing();
   const liveItems = liveState?.items ?? [];
+  /**
+   * 종료 요청이 서버에 닿았고 워커가 마무리하는 중이다.
+   *
+   * stopLive.isPending만으로는 부족하다 — POST /live/stop은 봉인만 하고 200을 돌려주며,
+   * 마무리(전사 꼬리 + finalize)는 워커가 자기 폴링 주기에 한다. 그동안 회의는 여전히
+   * 'recording'이라 이 배너가 서 있는데, isPending은 이미 false로 돌아가 종료 버튼이
+   * 되살아난다. 그 버튼을 다시 누르면 레코더가 이미 정리된 뒤라(clearLiveCapture)
+   * "이 화면에서는 종료할 수 없어요" 토스트만 뜬다.
+   *
+   * 서버가 내려주는 값이라 새로고침이나 다른 탭에서도 같은 판단이 선다 — 로컬 state로
+   * 막으면 새로고침 한 번에 되살아난 버튼이 다시 보인다.
+   */
+  const finishingLive = liveState?.stopRequestedAt != null;
 
   // 이 탭이 다이얼로그에서 시작한 브라우저 레코더 — 상태를 배너에 잇고, 종료가
   // recorder.stop()을 부를 수 있게 한다. 회의를 만들지 않고 이 화면에 바로 들어왔거나
@@ -582,7 +595,8 @@ function MeetingView({
             heartbeatAt={liveState?.heartbeatAt ?? null}
             onStop={handleStopLive}
             onCancel={() => cancelLive.mutate(meeting.id)}
-            stopping={stopLive.isPending}
+            stopping={stopLive.isPending || finishingLive}
+            finishing={finishingLive}
             cancelling={cancelLive.isPending}
             backlogMs={recorderStatus?.backlogMs}
             failed={recorderStatus?.failed}

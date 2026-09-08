@@ -77,6 +77,15 @@ The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by 
   `recording` 1초 / `uploaded`·`processing` 3초 / `failed` 1회 / `done` 없음. 화면은 `ui/live-banner.tsx`
   (경과 시간, heartbeat가 워커 박동 주기의 3배=90초를 넘으면 "신호 끊김" + 그 상태의 버튼은
   `stop`이 아니라 `cancel` — 읽어 줄 워커가 없는 플래그 대신 회의를 그 자리에서 닫는다),
+  **종료를 누른 뒤 회의가 `recording`을 벗어나기까지의 구간은 `stop_requested_at`으로 안다.**
+  `POST /live/stop`은 봉인만 하고 200을 주고, 마무리(전사 꼬리 + finalize)는 워커가 자기
+  주기에 한다 — 그동안 회의는 계속 `recording`이라 배너가 서 있는데, `stopLive.isPending`은
+  이미 false로 돌아가 종료 버튼이 되살아났다(다시 누르면 레코더가 정리된 뒤라 "이 화면에서는
+  종료할 수 없어요"만 떴다). 그래서 `GET /meetings/:id/live`가 그 필드를 같이 내려주고
+  (`LiveState.stopRequestedAt`), 배너는 "녹음을 마무리하는 중"으로 바꾸며 버튼을 계속 죽여
+  둔다. **서버 값이라 새로고침·다른 탭에서도 같은 판단이 선다.** 이 구간에도 stale 판정은
+  살아 있어야 한다 — 마무리 도중 워커가 죽으면 `녹음 취소`가 유일한 탈출구이므로, 경과 시계를
+  얼리는 방식으로 고치면 안 된다(틱이 stale 계산을 먹인다). 시계는 얼리는 대신 지운다.
   `ui/live-transcript.tsx`(자동 따라가기), 시작은
   `ui/new-meeting-dialog.tsx`의 실시간 녹음 탭(제목을 비우면 브라우저 시각으로 생성). 실패한
   회의에 라이브 행이 남아 있으면 `TranscriptPane`의 `livePreview`로 읽기 전용 미리보기를 그리고,
