@@ -1,7 +1,6 @@
-import type { Meeting } from "./types";
+import { SAMPLE_MAX_SECONDS } from "@/shared/lib/use-sample-player";
 
-/** 샘플 한 개의 최대 길이(초). 화자를 알아보기엔 충분하고, 팝업에서 듣기엔 짧다. */
-const SAMPLE_MAX_SECONDS = 8;
+import type { Meeting } from "./types";
 
 export type Sample = { start: number; end: number };
 

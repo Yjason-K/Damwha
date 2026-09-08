@@ -235,6 +235,83 @@ describe('speakers management (DELETE)', () => {
     expect(ids).toContain(pending.rows[0].id);
   });
 
+  // 미리듣기 샘플 — 목록/단건 응답에 실려 오는 "가장 긴 발화" 좌표.
+  const addUtterance = (
+    mid: string,
+    sid: string,
+    o: { start: number; end: number; order: number; status?: string },
+  ) => db.pool.query(
+    `INSERT INTO utterance(meeting_id,speaker_id,diar_label,start_ms,end_ms,text,status,order_index,processing_version)
+     VALUES($1,$2,'S0',$3,$4,'안녕',$5,$6,0)`,
+    [mid, sid, o.start, o.end, o.status ?? 'ok', o.order],
+  );
+  const addMeeting = async (status = 'done') => (await db.pool.query(
+    `INSERT INTO meeting(audio_key,status) VALUES('k',$1) RETURNING id`, [status],
+  )).rows[0].id as string;
+  const addProvisional = async (name: string) => (await db.pool.query(
+    `INSERT INTO speaker(name, enrollment_status) VALUES($1,'provisional') RETURNING id`, [name],
+  )).rows[0].id as string;
+  const findSpeaker = (body: unknown[], id: string) =>
+    (body as { id: string }[]).find((s) => s.id === id);
+
+  it('GET /speakers carries the longest playable utterance as the preview sample', async () => {
+    const mid = await addMeeting();
+    const sid = await addProvisional('Speaker_001');
+    await addUtterance(mid, sid, { start: 0, end: 1_000, order: 0 });
+    await addUtterance(mid, sid, { start: 4_000, end: 12_000, order: 1 });
+    await addUtterance(mid, sid, { start: 20_000, end: 22_000, order: 2 });
+
+    const res = await request(srv()).get('/speakers').expect(200);
+    expect(findSpeaker(res.body, sid)).toMatchObject({
+      sample_meeting_id: mid, sample_start_ms: 4_000, sample_end_ms: 12_000,
+    });
+  });
+
+  it('GET /speakers offers no sample when nothing playable is attributed to the speaker', async () => {
+    // silence/transcribe_failed 발화는 들려줄 소리가 없다.
+    const mid = await addMeeting();
+    const unplayable = await addProvisional('Speaker_004');
+    await addUtterance(mid, unplayable, { start: 0, end: 9_000, order: 0, status: 'silence' });
+    await addUtterance(mid, unplayable, { start: 9_000, end: 18_000, order: 1, status: 'transcribe_failed' });
+    // 등록 화자는 회의에 한 번도 안 나왔을 수 있다 — 그래도 목록에는 남는다.
+    const neverSpoke = (await db.pool.query(
+      `INSERT INTO speaker(name, enrollment_status) VALUES('김영재','ready') RETURNING id`,
+    )).rows[0].id as string;
+
+    const res = await request(srv()).get('/speakers').expect(200);
+    for (const id of [unplayable, neverSpoke]) {
+      expect(findSpeaker(res.body, id)).toMatchObject({
+        sample_meeting_id: null, sample_start_ms: null, sample_end_ms: null,
+      });
+    }
+  });
+
+  it('GET /speakers ignores utterances of a meeting that is still processing', async () => {
+    // 처리 중 회의의 오디오는 워커가 os.replace로 갈아치운다. 그 파일을 겨눈
+    // 미리듣기는 재생 도중 끊기므로, 더 긴 발화라도 후보에서 뺀다.
+    const processing = await addMeeting('processing');
+    const done = await addMeeting();
+    const sid = await addProvisional('Speaker_005');
+    await addUtterance(processing, sid, { start: 0, end: 30_000, order: 0 });
+    await addUtterance(done, sid, { start: 500, end: 3_500, order: 0 });
+
+    const res = await request(srv()).get('/speakers').expect(200);
+    expect(findSpeaker(res.body, sid)).toMatchObject({
+      sample_meeting_id: done, sample_start_ms: 500, sample_end_ms: 3_500,
+    });
+  });
+
+  it('GET /speakers/:id carries the same preview sample as the list', async () => {
+    const mid = await addMeeting();
+    const sid = await addProvisional('Speaker_006');
+    await addUtterance(mid, sid, { start: 2_000, end: 7_000, order: 0 });
+
+    const res = await request(srv()).get(`/speakers/${sid}`).expect(200);
+    expect(res.body).toMatchObject({
+      sample_meeting_id: mid, sample_start_ms: 2_000, sample_end_ms: 7_000,
+    });
+  });
+
   it('DELETE /speakers/:id → 404 for unknown id', async () => {
     const res = await request(srv()).delete('/speakers/spk_999999');
     expect(res.status).toBe(404);

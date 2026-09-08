@@ -27,6 +27,7 @@ import { useSpeakers, type SpeakerItem } from "@/features/speaker/api/speakers";
 import { formatClock } from "../api/mappers";
 import { useResolveCluster } from "../api/meetings";
 import { cn } from "@/shared/lib/utils";
+import { useSamplePlayer } from "@/shared/lib/use-sample-player";
 import { pickSample, type Sample } from "../model/sample";
 import type { ClusterInfo, Meeting } from "../model/types";
 import { Icon } from "./icons";
@@ -42,60 +43,6 @@ import { Icon } from "./icons";
  */
 
 const NEW_SPEAKER = "__new__";
-
-/** 미디어 프래그먼트 — 브라우저가 start에서 시작해 end에서 스스로 멈춘다. */
-function sampleSrc(audioUrl: string, s: Sample): string {
-  return `${audioUrl}#t=${s.start},${s.end}`;
-}
-
-/**
- * 다이얼로그 안 공용 <audio> 하나로 미리듣기를 돌린다. 한 번에 한 행만 재생되고,
- * 메인 플레이어와는 별개라 본 재생 위치를 건드리지 않는다.
- */
-function useSamplePlayer(audioUrl: string) {
-  const audioRef = React.useRef<HTMLAudioElement>(null);
-  const [playingId, setPlayingId] = React.useState<string | null>(null);
-  /** 재생 중인 샘플의 시작점 — timeupdate에서 경과 시간을 계산할 기준. */
-  const startRef = React.useRef(0);
-  const [elapsed, setElapsed] = React.useState(0);
-
-  const stop = React.useCallback(() => {
-    audioRef.current?.pause();
-    setPlayingId(null);
-  }, []);
-
-  const toggle = React.useCallback(
-    (id: string, sample: Sample) => {
-      const a = audioRef.current;
-      if (!a) return;
-      if (playingId === id) {
-        stop();
-        return;
-      }
-      a.pause();
-      a.setAttribute("src", sampleSrc(audioUrl, sample));
-      startRef.current = sample.start;
-      setElapsed(0);
-      setPlayingId(id);
-      void a.play().catch(() => setPlayingId(null));
-    },
-    [audioUrl, playingId, stop],
-  );
-
-  const element = (
-    <audio
-      ref={audioRef}
-      preload="none"
-      onTimeUpdate={(e) =>
-        setElapsed(Math.max(0, e.currentTarget.currentTime - startRef.current))
-      }
-      onPause={() => setPlayingId(null)}
-      onEnded={() => setPlayingId(null)}
-    />
-  );
-
-  return { element, playingId, elapsed, toggle, stop };
-}
 
 /**
  * SampleRow — 카드 안의 독립된 "듣기" 단계. row 전체가 버튼이라 클릭 영역이 넓고,
@@ -347,7 +294,7 @@ export function ResolveDialog({
   const named = settled.filter((s) => s.status === "ready");
   const auto = settled.filter((s) => s.status === "provisional");
   const clusters = unresolvedClusters(meeting);
-  const player = useSamplePlayer(meeting.audioUrl);
+  const player = useSamplePlayer();
 
   const handleOpenChange = (next: boolean) => {
     if (!next) player.stop();
@@ -382,7 +329,9 @@ export function ResolveDialog({
                   sample={pickSample(meeting, c.spk)}
                   playing={player.playingId === c.id}
                   elapsed={player.elapsed}
-                  onToggleSample={(s) => player.toggle(c.id, s)}
+                  onToggleSample={(s) =>
+                    player.toggle(c.id, { url: meeting.audioUrl, ...s })
+                  }
                 />
               </li>
             ))}

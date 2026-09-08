@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router";
 import { afterEach, expect, test, vi } from "vitest";
 
 import type { WireSpeaker } from "@/features/meeting/api/types";
+import { env } from "@/shared/config/env";
 
 /**
  * 화자 관리 페이지 통합 테스트 — 목킹한 `apiClient`로 목록 렌더와 등록 다이얼로그
@@ -19,6 +20,10 @@ const fx = vi.hoisted(() => {
       current_job_id: null,
       enrollment_error: null,
       created_at: "2026-06-01T00:00:00.000Z",
+      // 16초짜리 발화 — 미리듣기는 8초에서 끊어야 한다.
+      sample_meeting_id: "mtg_3",
+      sample_start_ms: 4_000,
+      sample_end_ms: 20_000,
     },
     {
       id: "sp_2",
@@ -27,6 +32,20 @@ const fx = vi.hoisted(() => {
       current_job_id: null,
       enrollment_error: null,
       created_at: "2026-06-10T00:00:00.000Z",
+      sample_meeting_id: null,
+      sample_start_ms: null,
+      sample_end_ms: null,
+    },
+    {
+      id: "sp_3",
+      name: "박도윤",
+      enrollment_status: "provisional",
+      current_job_id: null,
+      enrollment_error: null,
+      created_at: "2026-06-11T00:00:00.000Z",
+      sample_meeting_id: "mtg_4",
+      sample_start_ms: 1_000,
+      sample_end_ms: 3_000,
     },
   ];
   return { speakers };
@@ -89,4 +108,59 @@ test("화자 등록 버튼으로 등록 다이얼로그를 연다", async () => 
     ),
   ).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "등록" })).toBeInTheDocument();
+});
+
+/** 미리듣기 — jsdom은 재생을 구현하지 않으므로 prototype을 가로챈다. */
+function stubAudio() {
+  const play = vi
+    .spyOn(HTMLMediaElement.prototype, "play")
+    .mockResolvedValue(undefined);
+  const pause = vi
+    .spyOn(HTMLMediaElement.prototype, "pause")
+    .mockImplementation(() => {});
+  return { play, pause };
+}
+
+const listen = (name: string) =>
+  screen.getByRole("button", { name: `${name} 목소리 듣기` });
+
+test("샘플이 있는 화자에만 미리듣기 버튼이 붙는다", async () => {
+  renderPage();
+  expect(await screen.findByText("이수민")).toBeInTheDocument();
+
+  expect(listen("김영재")).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: /이수민 목소리 듣기/ }),
+  ).not.toBeInTheDocument();
+});
+
+test("미리듣기는 그 회의 오디오의 발화 구간만 8초까지 재생한다", async () => {
+  const { play } = stubAudio();
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "김영재 목소리 듣기" }));
+
+  const audio = document.querySelector("audio") as HTMLAudioElement;
+  expect(audio.getAttribute("src")).toBe(
+    `${env.apiBaseUrl}/meetings/mtg_3/audio#t=4,12`,
+  );
+  expect(play).toHaveBeenCalled();
+  const playing = screen.getByRole("button", { name: "김영재 미리듣기 정지" });
+  expect(playing).toHaveAttribute("aria-pressed", "true");
+});
+
+test("다른 화자를 누르면 앞선 미리듣기는 멈춘다", async () => {
+  const { pause } = stubAudio();
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "김영재 목소리 듣기" }));
+  fireEvent.click(listen("박도윤"));
+
+  expect(pause).toHaveBeenCalled();
+  const audio = document.querySelector("audio") as HTMLAudioElement;
+  expect(audio.getAttribute("src")).toBe(
+    `${env.apiBaseUrl}/meetings/mtg_4/audio#t=1,3`,
+  );
+  expect(listen("김영재")).toHaveAttribute("aria-pressed", "false");
+  expect(
+    screen.getByRole("button", { name: "박도윤 미리듣기 정지" }),
+  ).toHaveAttribute("aria-pressed", "true");
 });

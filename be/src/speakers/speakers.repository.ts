@@ -6,6 +6,34 @@ export interface SpeakerRow {
   current_job_id: string | null; enrollment_error: any; created_at: Date;
 }
 
+// 목록/단건에만 실리는 미리듣기 좌표. 셋은 함께 오거나 함께 null이다.
+export interface SpeakerWithSample extends SpeakerRow {
+  sample_meeting_id: string | null;
+  sample_start_ms: number | null;
+  sample_end_ms: number | null;
+}
+
+// 화자를 알아듣게 해줄 발화 한 개를 고른다 — 저장된 샘플 파일이 아니라 회의
+// 오디오의 한 구간이라, 등록 화자든 회의에서 자동 생성된 provisional이든 똑같이
+// 커버된다. 프런트는 이 좌표를 /meetings/:id/audio#t=start,end 로 재생한다.
+//   status='ok'  — silence/transcribe_failed 구간은 들려줄 소리가 없다.
+//   m.status='done' — 처리 중 회의의 오디오는 워커가 os.replace로 갈아치운다.
+//                     그 파일을 겨눈 미리듣기는 재생 도중 끊긴다.
+const SAMPLE_LATERAL = `
+  LEFT JOIN LATERAL (
+    SELECT u.meeting_id, u.start_ms, u.end_ms
+      FROM utterance u
+      JOIN meeting m ON m.id = u.meeting_id
+     WHERE u.speaker_id = s.id AND u.status = 'ok' AND m.status = 'done'
+     ORDER BY (u.end_ms - u.start_ms) DESC, u.id
+     LIMIT 1
+  ) smp ON true`;
+
+const SAMPLE_COLUMNS = `s.*,
+         smp.meeting_id AS sample_meeting_id,
+         smp.start_ms   AS sample_start_ms,
+         smp.end_ms     AS sample_end_ms`;
+
 @Injectable()
 export class SpeakersRepository {
   async create(exec: Queryable, id: string, name: string): Promise<SpeakerRow> {
@@ -28,9 +56,10 @@ export class SpeakersRepository {
   // until the next persist runs it lingers as a speaker who never said anything.
   // 'ready'/'pending'/'failed' are never filtered: an enrolled speaker is built
   // from a voice sample and legitimately has no cluster.
-  async list(exec: Queryable): Promise<SpeakerRow[]> {
-    const { rows } = await exec.query<SpeakerRow>(
-      `SELECT * FROM speaker s
+  async list(exec: Queryable): Promise<SpeakerWithSample[]> {
+    const { rows } = await exec.query<SpeakerWithSample>(
+      `SELECT ${SAMPLE_COLUMNS}
+         FROM speaker s${SAMPLE_LATERAL}
         WHERE s.enrollment_status <> 'provisional'
            OR EXISTS (SELECT 1 FROM utterance WHERE speaker_id = s.id)
            OR EXISTS (SELECT 1 FROM meeting_cluster WHERE resolved_speaker_id = s.id)
@@ -39,8 +68,10 @@ export class SpeakersRepository {
     );
     return rows;
   }
-  async findById(exec: Queryable, id: string): Promise<SpeakerRow | null> {
-    const { rows } = await exec.query<SpeakerRow>(`SELECT * FROM speaker WHERE id=$1`, [id]);
+  async findById(exec: Queryable, id: string): Promise<SpeakerWithSample | null> {
+    const { rows } = await exec.query<SpeakerWithSample>(
+      `SELECT ${SAMPLE_COLUMNS} FROM speaker s${SAMPLE_LATERAL} WHERE s.id=$1`, [id],
+    );
     return rows[0] ?? null;
   }
   async rename(exec: Queryable, id: string, name: string): Promise<SpeakerRow | null> {

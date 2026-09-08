@@ -156,6 +156,13 @@ export type WireSpeaker = {
   current_job_id: string | null;
   enrollment_error: JsonError | null;
   created_at: string;
+  /**
+   * 미리듣기 좌표 — 이 화자의 가장 긴 발화 한 구간. 셋은 함께 오거나 함께
+   * null이다. 조회(GET)에만 실리고 등록/이름 변경 응답에는 없어서 optional.
+   */
+  sample_meeting_id?: string | null;
+  sample_start_ms?: number | null;
+  sample_end_ms?: number | null;
 };
 
 /** GET /meetings/:id/status 응답. */

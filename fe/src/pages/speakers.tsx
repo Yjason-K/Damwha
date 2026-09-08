@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
+import { useSamplePlayer } from "@/shared/lib/use-sample-player";
 import { useSpeakers } from "@/features/speaker/api/speakers";
 import { SpeakerRow } from "@/features/speaker/ui/speaker-row";
 import { EnrollSpeakerDialog } from "@/features/speaker/ui/enroll-speaker-dialog";
@@ -109,6 +110,8 @@ function EmptyState({ onRegister }: { onRegister: () => void }) {
 export function SpeakersPage() {
   const [enrollOpen, setEnrollOpen] = React.useState(false);
   const speakers = useSpeakers();
+  // 목록 전체가 <audio> 하나를 공유한다 — 한 번에 한 화자만 들린다.
+  const player = useSamplePlayer();
 
   return (
     <main
@@ -143,13 +146,21 @@ export function SpeakersPage() {
           <ul className="flex flex-col gap-2">
             {speakers.data.map((speaker, index) => (
               <li key={speaker.id}>
-                <SpeakerRow speaker={speaker} tint={index + 1} />
+                <SpeakerRow
+                  speaker={speaker}
+                  tint={index + 1}
+                  playing={player.playingId === speaker.id}
+                  onToggleSample={() => {
+                    if (speaker.sample) player.toggle(speaker.id, speaker.sample);
+                  }}
+                />
               </li>
             ))}
           </ul>
         )}
       </div>
 
+      {player.element}
       <EnrollSpeakerDialog open={enrollOpen} onOpenChange={setEnrollOpen} />
     </main>
   );
