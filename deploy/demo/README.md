@@ -76,4 +76,5 @@ DEMO_PUBLIC_URL=https://damwha-demo.0kimjae.dev deploy/demo/release.sh
 - 쓰기 전부 — API `DEMO_READ_ONLY=true`가 GET/HEAD/OPTIONS와 `POST /search` 외 요청을 403으로
   닫는다. SPA는 같은 요청을 서버에 보내기 전에 끊고 토스트를 띄운다.
 - 워커·임베드 서비스 — 없다. 검색은 BM25(pg_bigm)로 폴백한다(`"mode":"keyword"`).
+- 실시간 녹음 — 탭과 설명은 보이되 시작은 잠겨 있다. 마이크 권한도 묻지 않는다.
 - 첫 방문 안내 모달이 합성 오디오임을 고지한다(설계 §1 정직성 항목).

@@ -258,9 +258,12 @@ export function NewMeetingDialog({
   }, [open, source, gate, runGate]);
 
   const changeSource = (value: string) => {
-    if (sourceLocked || env.demoMode) return;
+    if (sourceLocked) return;
     const next = value === "live" ? "live" : "file";
     setSource(next);
+    // 데모는 기억하지 않는다 — readSource가 늘 file을 주므로 저장해도 죽은 값이고,
+    // 투어는 모달이 파일 탭으로 열린다는 전제로 단계를 짠다.
+    if (env.demoMode) return;
     try {
       localStorage.setItem(SOURCE_KEY, next);
     } catch {
@@ -394,7 +397,9 @@ export function NewMeetingDialog({
     e.preventDefault();
     if (pending || startingRef.current || !isSpeakerBoundsValid(speakers))
       return;
-    if (source === "live" && !env.demoMode) {
+    if (source === "live") {
+      // 데모는 녹음을 시작하지 않는다. 버튼도 막혀 있지만 Enter로도 들어온다.
+      if (env.demoMode) return;
       // 게이트(권한 확인 + 마이크 선택)를 통과하지 못했으면 시작하지 않는다 — 버튼도
       // 막혀 있지만, 폼 제출은 버튼 말고도 들어온다(Enter).
       if (gateChecking || !gate || "reason" in gate || deviceId === undefined)
@@ -491,15 +496,13 @@ export function NewMeetingDialog({
               >
                 오디오 파일
               </TabsTrigger>
-              {!env.demoMode && (
-                <TabsTrigger
-                  value="live"
-                  disabled={sourceLocked}
-                  className="flex-1"
-                >
-                  실시간 녹음
-                </TabsTrigger>
-              )}
+              <TabsTrigger
+                value="live"
+                disabled={sourceLocked}
+                className="flex-1"
+              >
+                실시간 녹음
+              </TabsTrigger>
             </TabsList>
             <TabsContent value="file" className="flex flex-col gap-4">
               {demoTour ? (
@@ -570,70 +573,78 @@ export function NewMeetingDialog({
                 </p>
               </div>
             </TabsContent>
-            {!env.demoMode && (
-              <TabsContent value="live" className="flex flex-col gap-3">
-                <div>
-                  <p className="text-sm text-[color:var(--text-secondary)]">
-                    이 브라우저의 마이크로 녹음해요. 지금 보고 있는 기기의
-                    마이크를 사용합니다.
+            <TabsContent value="live" className="flex flex-col gap-3">
+              <div>
+                <p className="text-sm text-[color:var(--text-secondary)]">
+                  이 브라우저의 마이크로 녹음해요. 지금 보고 있는 기기의
+                  마이크를 사용합니다.
+                </p>
+                <p className="mt-2 text-sm text-[color:var(--text-muted)]">
+                  녹음 시작을 누르면 발화가 실시간으로 표시되고, 종료 후 화자
+                  분리와 전사가 진행돼요.
+                </p>
+              </div>
+              {env.demoMode ? (
+                <p
+                  role="note"
+                  className="text-sm text-[color:var(--text-muted)]"
+                >
+                  데모에서는 녹음을 시작할 수 없어요 — 마이크 권한을 묻지 않고,
+                  녹음을 받아 처리할 워커도 없습니다. 실제 설치본에서는 여기서
+                  마이크를 고르고 바로 녹음이 시작돼요.
+                </p>
+              ) : null}
+              {gateChecking ? (
+                <p className="text-sm text-[color:var(--text-muted)]">
+                  마이크를 확인하고 있어요. 브라우저가 권한을 물어보면 허용해
+                  주세요.
+                </p>
+              ) : null}
+              {gate && "reason" in gate ? (
+                <div className="flex flex-col items-start gap-2">
+                  <p
+                    role="alert"
+                    className="text-sm text-[color:var(--red-text)]"
+                  >
+                    {CAPTURE_GATE_MESSAGE[gate.reason]}
                   </p>
-                  <p className="mt-2 text-sm text-[color:var(--text-muted)]">
-                    녹음 시작을 누르면 발화가 실시간으로 표시되고, 종료 후 화자
-                    분리와 전사가 진행돼요.
-                  </p>
+                  {/* 다이얼로그를 닫았다 열지 않고도 다시 시도할 수 있어야 한다. */}
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => void runGate()}
+                  >
+                    다시 확인
+                  </Button>
                 </div>
-                {gateChecking ? (
-                  <p className="text-sm text-[color:var(--text-muted)]">
-                    마이크를 확인하고 있어요. 브라우저가 권한을 물어보면 허용해
-                    주세요.
-                  </p>
-                ) : null}
-                {gate && "reason" in gate ? (
-                  <div className="flex flex-col items-start gap-2">
-                    <p
-                      role="alert"
-                      className="text-sm text-[color:var(--red-text)]"
-                    >
-                      {CAPTURE_GATE_MESSAGE[gate.reason]}
-                    </p>
-                    {/* 다이얼로그를 닫았다 열지 않고도 다시 시도할 수 있어야 한다. */}
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => void runGate()}
-                    >
-                      다시 확인
-                    </Button>
-                  </div>
-                ) : null}
-                {gate && "devices" in gate ? (
-                  <div className="flex flex-col gap-1.5">
-                    <span
-                      id={deviceLabelId}
-                      className="text-sm font-medium text-[color:var(--text-secondary)]"
-                    >
-                      마이크
-                    </span>
-                    <Select value={deviceId} onValueChange={setDeviceId}>
-                      <SelectTrigger aria-labelledby={deviceLabelId}>
-                        <SelectValue placeholder="마이크 선택" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {gate.devices.map((d, i) => (
-                          <SelectItem
-                            key={d.deviceId || i}
-                            value={d.deviceId || DEFAULT_DEVICE}
-                          >
-                            {d.label || `마이크 ${i + 1}`}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                ) : null}
-              </TabsContent>
-            )}
+              ) : null}
+              {gate && "devices" in gate ? (
+                <div className="flex flex-col gap-1.5">
+                  <span
+                    id={deviceLabelId}
+                    className="text-sm font-medium text-[color:var(--text-secondary)]"
+                  >
+                    마이크
+                  </span>
+                  <Select value={deviceId} onValueChange={setDeviceId}>
+                    <SelectTrigger aria-labelledby={deviceLabelId}>
+                      <SelectValue placeholder="마이크 선택" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {gate.devices.map((d, i) => (
+                        <SelectItem
+                          key={d.deviceId || i}
+                          value={d.deviceId || DEFAULT_DEVICE}
+                        >
+                          {d.label || `마이크 ${i + 1}`}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
+            </TabsContent>
           </Tabs>
 
           <Input
@@ -699,8 +710,10 @@ export function NewMeetingDialog({
               disabled={
                 (source === "file" && !demoTour && !file) ||
                 (source === "live" &&
-                  !env.demoMode &&
-                  (!gate || "reason" in gate || deviceId === undefined)) ||
+                  (env.demoMode ||
+                    !gate ||
+                    "reason" in gate ||
+                    deviceId === undefined)) ||
                 submitBusy ||
                 !isSpeakerBoundsValid(speakers)
               }

@@ -89,7 +89,7 @@ The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by 
   `ui/live-transcript.tsx`(자동 따라가기), 시작은
   `ui/new-meeting-dialog.tsx`의 실시간 녹음 탭(제목을 비우면 브라우저 시각으로 생성). 실패한
   회의에 라이브 행이 남아 있으면 `TranscriptPane`의 `livePreview`로 읽기 전용 미리보기를 그리고,
-  `audio_device_failed`는 재처리 버튼을 숨긴다(파일이 없다). 사이드바의 “새 회의 기록하기”가 오디오 파일/실시간 녹음 탭을 가진 통합 모달을 연다. 공통 입력과 파일·일시는 탭 전환 시 유지하고 닫으면 초기화하며, 마지막 탭은 로컬 저장소에 기억한다. 데모 빌드는 파일 탭만 제공한다.
+  `audio_device_failed`는 재처리 버튼을 숨긴다(파일이 없다). 사이드바의 “새 회의 기록하기”가 오디오 파일/실시간 녹음 탭을 가진 통합 모달을 연다. 공통 입력과 파일·일시는 탭 전환 시 유지하고 닫으면 초기화하며, 마지막 탭은 로컬 저장소에 기억한다. 데모 빌드도 두 탭을 다 보여주지만 실시간 녹음은 화면만이다 — 캡처 게이트를 돌리지 않아 마이크 권한을 묻지 않고(공개 데모에서 프롬프트를 띄우지 않는다), 시작 버튼은 잠겨 있으며 Enter 제출도 막힌다. 모달이 열릴 때의 탭은 데모에서 늘 파일이다(`readSource`) — 투어가 그 전제로 단계를 짠다.
 
 - **캡처를 먼저 준비하고, 성공한 뒤에야 회의를 만든다** (`lib/live-session.ts`, `lib/live-recorder.ts`).
   순서가 이 기능의 correctness다: 권한 거절·장치 부재·`AudioContext` 생성 실패·`addModule` 실패·
