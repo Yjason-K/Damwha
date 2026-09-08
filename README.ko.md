@@ -104,7 +104,7 @@ flowchart TB
 **API와 워커는 HTTP로 대화하지 않는다.** 둘 사이의 계약은 Postgres `job` 테이블
 하나뿐이고, 같은 payload를 TypeScript 쪽 zod와 Python 쪽 pydantic이 각각 검증한다.
 공유하는 다른 행은 `app_setting.worker_capabilities` 하나 — 워커가 쓰고 API는
-읽기만 한다. API가 자기 컨테이너 대신 호스트 맥의 사양을 보고할 수 있는 이유가 이것.
+읽기만 한다. 그래서 API가 자기 컨테이너 대신 호스트 맥의 사양을 보고할 수 있다.
 
 `pnpm worker`가 띄우는 **supervisor** 부모는 ML 라이브러리를 import하지 않는다.
 job 1건마다 `--once` child를 새로 띄우고 그 child는 job이 끝나면 종료하므로,
@@ -165,7 +165,7 @@ pnpm dev                   # API :3000 (라우트는 /api, Swagger는 /docs) + V
 
 **`.env`는 패키지마다 따로 둔다. 루트 `.env`는 없고, 있어서도 안 된다.**
 각 프로세스는 자기 옆의 파일을 읽고 상대 경로를 자기 cwd 기준으로 푼다.
-같은 키가 두 파일에서 다른 값을 갖는 이유가 이것이다.
+그래서 같은 키가 두 파일에서 다른 값을 갖는다.
 
 | 파일 | 읽는 쪽 | 복사 원본 |
 | --- | --- | --- |
