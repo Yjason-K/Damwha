@@ -4,6 +4,9 @@
 2건의 원본 오디오와, 호스트 Mac에서 **진짜 파이프라인으로 처리한 결과**를 데모 DB에 넣는
 시드다. 데모는 읽기 전용(설계 §3.6)이라 이 시드가 데모 데이터의 전부다.
 
+여기는 **데모에 들어가는 데이터**다. 이걸 이미지로 구워 서버에 올리는 쪽은
+[`deploy/demo/README.md`](../deploy/demo/README.md).
+
 ## 오디오 (`audio/`)
 
 Google NotebookLM에 주제를 주고 Audio Overview로 생성한 2인 대화. 실제 인물의 음성이 아니며,
@@ -47,6 +50,15 @@ DATABASE_URL=postgres://... STORAGE_ROOT=/var/lib/damwha/storage demo/seed/resto
 제목과 `original_filename`은 DB에서 NFC로 정규화해 뒀다. macOS 업로드는 NFD로 들어오는데,
 그대로 두면 pg_bigm 검색(NFC 입력)이 제목에 걸리지 않고 Linux에서 파일명 매칭도 어긋난다.
 
-## 다음 단계
+## 시드를 고친 뒤
 
-설계 §6.2 배포처 결정 → `restore.sh`로 시드 → `DEMO_READ_ONLY=true`, `VITE_DEMO_MODE=true`로 배포.
+`build.sh`로 다시 구웠으면 배포는 [`deploy/demo/README.md`](../deploy/demo/README.md)의
+`release.sh` 경로다 — 이미지가 덤프와 오디오를 안에 들고 나가므로 서버에서 `restore.sh`를
+돌릴 일은 없다.
+
+```bash
+demo/seed/build.sh        # 로컬 처리 결과 → demo/seed/
+deploy/demo/release.sh    # 이미지 빌드 + ghcr 푸시
+```
+
+`restore.sh`는 손으로 띄운 빈 DB를 채우는 수동 경로로만 남아 있다.

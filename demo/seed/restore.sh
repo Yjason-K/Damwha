@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
-# 공개 데모 DB와 스토리지를 시드로 채운다 — 설계 §6.5.
+# 빈 DB와 STORAGE_ROOT를 데모 시드로 채운다 — 수동 복구 전용.
 #   DATABASE_URL=postgres://... STORAGE_ROOT=/var/lib/damwha/storage demo/seed/restore.sh
+#
+# 배포는 이 스크립트를 쓰지 않는다. deploy/demo/release.sh가 구운 이미지가 대신한다 —
+# DB는 deploy/demo/initdb-restore.sh(첫 기동 initdb.d), 스토리지는 demo/seed/bake-storage.mjs
+# (deploy/api.Dockerfile의 DEMO_SEED=true). 손으로 띄운 DB를 채울 때만 여기를 쓴다.
+#
+# STORAGE_ROOT를 be/storage로 주지 말 것 — mtg_5/6/7의 original.m4a와 normalized.flac이
+# 데모 오디오로 덮인다(같은 id를 쓴다). 되돌리려면 원본 처리 결과를 다시 만들어야 한다.
+#
 # 대상 DB는 damwha/postgres-bigm 이미지(pgvector + pg_bigm)로 만든 빈 DB여야 한다.
 # 마이그레이션은 돌리지 않는다 — 덤프에 스키마와 _migrations가 들어 있다.
 set -euo pipefail

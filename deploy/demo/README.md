@@ -4,6 +4,9 @@
 자체 호스팅 배포(`deploy/README.md`, `damwha-api`/`damwha-postgres`)와는 **이미지 이름부터
 다른 별개 릴리스**다.
 
+여기는 **데모를 내보내는 방법**이다. 이미지에 실리는 오디오·덤프·시드 스크립트는
+[`demo/README.md`](../../demo/README.md).
+
 ## 이미지
 
 | 이미지 | 내용 |
