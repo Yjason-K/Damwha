@@ -39,8 +39,8 @@ export function TourExitDialog({ open, onContinue, onQuit }: Props) {
         <DialogHeader>
           <DialogTitle>둘러보기를 그만둘까요?</DialogTitle>
           <DialogDescription>
-            아직 보여드릴 단계가 남아 있어요. 그만둬도 왼쪽 아래 "둘러보기"로
-            다시 시작할 수 있어요.
+            아직 보여드릴 단계가 남아 있어요. 그만둬도 왼쪽 아래 "1분 가이드
+            보기"로 다시 시작할 수 있어요.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

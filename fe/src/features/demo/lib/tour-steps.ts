@@ -246,7 +246,7 @@ export function buildTourSteps(ctx: Ctx): TourStep[] {
       target: "settings-page",
       title: "처리 설정, 그리고 끝",
       description:
-        '전사·화자 분리·요약에 쓸 모델과 프리셋, GPU 사용 여부를 고르는 곳이에요. 여기까지가 둘러보기예요 — 이 데모는 읽기 전용이고, 오디오는 NotebookLM이 생성한 샘플이에요. 왼쪽 아래 "둘러보기"로 언제든 다시 볼 수 있어요.',
+        '전사·화자 분리·요약에 쓸 모델과 프리셋, GPU 사용 여부를 고르는 곳이에요. 여기까지가 둘러보기예요 — 이 데모는 읽기 전용이고, 오디오는 NotebookLM이 생성한 샘플이에요. 왼쪽 아래 "1분 가이드 보기"로 언제든 다시 볼 수 있어요.',
       side: "right",
       prepare: async () => {
         ctx.navigate("/settings");
