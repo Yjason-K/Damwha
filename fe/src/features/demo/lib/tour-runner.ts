@@ -6,6 +6,7 @@ import "../tour.css";
 import { router } from "@/app/router";
 import { env } from "@/shared/config/env";
 
+import { setTourActive } from "../model/tour-active";
 import { writeTourState } from "../model/tour-state";
 import {
   simulationPhase,
@@ -175,9 +176,11 @@ export const tourRunner = {
       onDestroyed: () => {
         liveCleanup?.();
         active = null;
+        setTourActive(false);
       },
     });
     active = d;
+    setTourActive(true);
     void resolveFrom(0).then((idx) => {
       // advance()와 같은 규칙 — 준비 중에 start()가 다시 불렸으면 이 d는 이미 낡았다.
       if (active !== d) return;

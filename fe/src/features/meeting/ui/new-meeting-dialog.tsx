@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { isDemoBlocked } from "@/shared/api/demo-read-only";
 import { isApiError } from "@/shared/api/client";
 import { env } from "@/shared/config/env";
+import { isTourActive } from "@/features/demo/model/tour-active";
 import { DemoUploadSource } from "@/features/demo/ui/demo-upload-source";
 import { startUploadSimulation } from "@/features/demo/model/upload-simulation";
 import { Button } from "@/shared/ui/button";
@@ -458,7 +459,21 @@ export function NewMeetingDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent>
+      <DialogContent
+        /**
+         * 투어 중에는 바깥 클릭·ESC로 닫지 않는다. driver의 오버레이가 이 모달 위를 덮고
+         * 있어서 스포트라이트 밖을 누르면 Radix가 "바깥 클릭"으로 읽고 모달을 닫아 버리는데,
+         * 그러면 다음 단계가 모달 안의 버튼을 찾지 못해 통째로 건너뛴다. 투어를 그만두는
+         * 경로는 driver의 확인 모달(TourNavigationGuard) 하나로 남긴다 — 닫기(X)·취소는
+         * 그대로 열려 있다.
+         */
+        onInteractOutside={(e) => {
+          if (isTourActive()) e.preventDefault();
+        }}
+        onEscapeKeyDown={(e) => {
+          if (isTourActive()) e.preventDefault();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>새 회의 기록하기</DialogTitle>
           <DialogDescription>
