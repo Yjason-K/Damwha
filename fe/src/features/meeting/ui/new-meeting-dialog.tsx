@@ -21,6 +21,7 @@ import {
 import { DatePicker } from "@/shared/ui/date-picker";
 import { Input } from "@/shared/ui/input";
 import { SegmentedControl } from "@/shared/ui/segmented-control";
+import { TimePicker } from "@/shared/ui/time-picker";
 import { toast } from "@/shared/ui/use-toast";
 import type { ProcessingOverride } from "@/features/settings/api/types";
 import { OverrideSection } from "@/features/settings/ui/override-section";
@@ -557,13 +558,13 @@ export function NewMeetingDialog({
                       onChange={setRecordedDate}
                     />
                   </div>
-                  <Input
-                    type="time"
-                    value={recordedTime}
-                    onChange={(e) => setRecordedTime(e.target.value)}
-                    containerClassName="w-[116px] shrink-0"
-                    aria-label="녹음 시각"
-                  />
+                  <div className="w-[116px] shrink-0">
+                    <TimePicker
+                      value={recordedTime}
+                      onChange={setRecordedTime}
+                      aria-label="녹음 시각"
+                    />
+                  </div>
                 </div>
                 <p
                   id={recordedHintId}
