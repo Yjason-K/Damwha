@@ -49,7 +49,7 @@ export function DemoNoticeDialog() {
           <DialogTitle>Damwha 공개 데모</DialogTitle>
           <DialogDescription>
             대화 녹음을 올리면 화자별 발화·요약·할 일로 정리해 주는
-            서비스입니다. 둘러보기가 업로드부터 검색까지 1분 남짓에
+            서비스입니다. 둘러보기가 업로드부터 검색까지 1~2분에
             보여드립니다.
           </DialogDescription>
         </DialogHeader>

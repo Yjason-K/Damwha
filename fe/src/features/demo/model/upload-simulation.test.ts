@@ -35,20 +35,22 @@ test("시작하면 uploaded=true를 저장하고 queued에서 시작한다", () 
   expect(invalidate).toHaveBeenCalledWith({ queryKey: ["meetings"] });
 });
 
-test("stage는 시간에 따라 순서대로 전진하고 progress는 stage 안에서 0→1이다", () => {
+test("stage가 전진해도 progress는 전체 기준으로 한 번만 올라간다", () => {
   const { client } = qc();
   startUploadSimulation("mtg_7", client);
-  vi.advanceTimersByTime(1_000);
-  expect(simulationView()?.stage).toBe("vad");
-  vi.advanceTimersByTime(1_000); // t=2s, vad는 1~3s
-  expect(simulationView()?.progress).toBeCloseTo(0.5, 5);
-  vi.advanceTimersByTime(1_000);
-  expect(simulationView()?.stage).toBe("diarize");
-  vi.advanceTimersByTime(8_000); // t=11s
-  expect(simulationView()?.stage).toBe("embed");
+  vi.advanceTimersByTime(2_500);
+  expect(simulationView()).toMatchObject({ stage: "vad", progress: 15 });
+  vi.advanceTimersByTime(3_500); // t=6s
+  expect(simulationView()).toMatchObject({ stage: "diarize", progress: 35 });
+  vi.advanceTimersByTime(3_500); // t=9.5s
+  expect(simulationView()).toMatchObject({ stage: "identify", progress: 50 });
+  vi.advanceTimersByTime(5_000); // t=14.5s — stt(12~17s)의 절반
+  expect(simulationView()).toMatchObject({ stage: "stt", progress: 83 }); // 75→90을 채운다
+  vi.advanceTimersByTime(7_500); // t=22s
+  expect(simulationView()).toMatchObject({ stage: "embed", progress: 98 });
 });
 
-test("전환마다 구독자와 네 쿼리 키를 알리고, 12초에 done이 된다", () => {
+test("전환마다 구독자와 네 쿼리 키를 알리고, 24초에 done이 된다", () => {
   const { client, invalidate } = qc();
   const cb = vi.fn();
   subscribeSimulation(cb);
@@ -71,12 +73,12 @@ test("전환마다 구독자와 네 쿼리 키를 알리고, 12초에 done이 �
 test("다시 시작하면 이전 타이머를 버리고 처음부터 돈다", () => {
   const { client } = qc();
   startUploadSimulation("mtg_7", client);
-  vi.advanceTimersByTime(6_000);
+  vi.advanceTimersByTime(13_000);
   expect(simulationView()?.stage).toBe("stt");
   startUploadSimulation("mtg_7", client);
   expect(simulationView()?.stage).toBe("queued");
-  vi.advanceTimersByTime(6_000);
-  expect(simulationView()?.stage).toBe("stt"); // 옛 타이머가 살아 있었다면 이미 embed/done
+  vi.advanceTimersByTime(13_000);
+  expect(simulationView()?.stage).toBe("stt"); // 옛 타이머가 살아 있었다면 이미 done
   expect(simulationPhase()).toBe("running");
 });
 

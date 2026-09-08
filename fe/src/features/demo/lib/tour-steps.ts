@@ -40,7 +40,7 @@ export function stageNarration(stage: SimStage): string {
 }
 
 export const PROCESSING_FOOTNOTE =
-  "실제로는 10분 회의에 몇 분이 걸리고, 이 처리는 Apple Silicon 로컬에서만 돌아요. 데모는 그 흐름을 12초로 재생해요.";
+  "실제로는 10분 회의에 몇 분이 걸리고, 이 처리는 Apple Silicon 로컬에서만 돌아요. 데모는 그 흐름을 24초로 재생해요.";
 
 type Ctx = {
   navigate: (to: string) => void;
