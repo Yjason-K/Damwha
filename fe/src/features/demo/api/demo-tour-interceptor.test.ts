@@ -62,7 +62,7 @@ test("업로드 후·시뮬레이션 없음: 응답을 그대로 흘린다", asy
 });
 
 test("시뮬레이션 중: 목록의 status와 /status 응답을 덮어쓴다", async () => {
-  const view: SimView = { meetingId: TOUR, stage: "stt", progress: 0.25 };
+  const view: SimView = { meetingId: TOUR, stage: "stt", progress: 80 };
   const list = client([{ id: TOUR, status: "done" }, { id: "mtg_5", status: "done" }]);
   install(list, { uploaded: true, view });
   expect((await list.get("/meetings")).data).toEqual([
@@ -75,7 +75,7 @@ test("시뮬레이션 중: 목록의 status와 /status 응답을 덮어쓴다", 
   expect((await status.get(`/meetings/${TOUR}/status`)).data).toEqual({
     status: "processing",
     stage: "stt",
-    progress: 0.25,
+    progress: 80,
     error: null,
     summary: { status: "queued", model: null, error: null },
     search_index: { status: "queued", error: null, updated_at: expect.any(String) },
@@ -83,7 +83,7 @@ test("시뮬레이션 중: 목록의 status와 /status 응답을 덮어쓴다", 
 });
 
 test("시뮬레이션 중: 상세에서 완성된 전사·클러스터·요약을 비운다", async () => {
-  const view: SimView = { meetingId: TOUR, stage: "stt", progress: 0.25 };
+  const view: SimView = { meetingId: TOUR, stage: "stt", progress: 80 };
   const detail = client({
     id: TOUR,
     title: "투어 회의",
@@ -104,7 +104,7 @@ test("시뮬레이션 중: 상세에서 완성된 전사·클러스터·요약�
 });
 
 test("시뮬레이션 중: /meetings/:id/lenses를 빈 queued로 덮어쓴다", async () => {
-  const view: SimView = { meetingId: TOUR, stage: "embed", progress: 0.5 };
+  const view: SimView = { meetingId: TOUR, stage: "embed", progress: 98 };
   const c = client({ items: [{ id: "l1" }], extraction_status: "done" });
   install(c, { uploaded: true, view });
   expect((await c.get(`/meetings/${TOUR}/lenses`)).data).toEqual({
@@ -131,7 +131,7 @@ test("시뮬레이션이 끝나면 상세·렌즈가 다시 진짜 응답이다"
 });
 
 test("시뮬레이션 중이라도 다른 회의 응답은 그대로다", async () => {
-  const view: SimView = { meetingId: TOUR, stage: "vad", progress: 0 };
+  const view: SimView = { meetingId: TOUR, stage: "vad", progress: 15 };
   const c = client({ id: "mtg_5", status: "done" });
   install(c, { uploaded: true, view });
   expect((await c.get("/meetings/mtg_5")).data).toEqual({ id: "mtg_5", status: "done" });

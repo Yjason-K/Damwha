@@ -1,20 +1,162 @@
+<div align="center">
+
+<img src="fe/public/og.png" alt="Damwha" width="760">
+
 # Damwha (담화)
 
-Personal, self-hosted conversation recording and search. The primary object is the
-**utterance** — speaker-attributed, timestamped, and traceable back to the original
-audio. Everything runs locally: no cloud ML, voiceprints stay on disk.
+**Self-hosted conversation recording and search.** Every utterance is
+speaker-attributed, timestamped, and traceable back to the original audio.
+Everything runs on your own Mac — no cloud ML, voiceprints stay on disk.
 
-## Packages
+[![License: MIT](https://img.shields.io/badge/License-MIT-1DDCA5.svg)](LICENSE)
+[![Node 22](https://img.shields.io/badge/Node-22-339933?logo=nodedotjs&logoColor=white)](.nvmrc)
+[![pnpm 10.26](https://img.shields.io/badge/pnpm-10.26-F69220?logo=pnpm&logoColor=white)](package.json)
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](be/worker/pyproject.toml)
+[![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-MLX-000000?logo=apple&logoColor=white)](#ml-models-gated-heavy)
+
+### [▶ Try the live demo](https://damwha-demo.0kimjae.dev)
+
+**English** · [한국어](README.ko.md)
+
+[Features](#features) · [How it works](#how-it-works) · [Quickstart](#quickstart) · [Architecture docs](be/CLAUDE.md)
+
+</div>
+
+---
+
+## What it is
+
+Conversations pile up, but finding "that thing we said" doesn't get easier.
+Memory fades, transcripts are long, and every STT service makes you rename
+"Speaker 1" by hand every single time.
+
+Damwha treats the **utterance** as the primary object. Each one is tied to four
+things — **who** said it (voiceprint-based automatic identification), **when**
+(which conversation, at what second), the **original text and audio**, and the
+**surrounding turns**. That's what makes the signature capability work:
+*utterance jump* — from a search hit or an extracted decision, land on the exact
+moment and hear it.
+
+A recording may be a meeting, an interview, a call, or just a conversation —
+nothing in the pipeline assumes "meeting". Typed extraction (action items,
+decisions, promises) is an extension layer: when a conversation isn't
+meeting-shaped it simply yields nothing and the section disappears.
+
+**Non-goals:** team wikis, per-member analytics dashboards, meeting knowledge
+graphs. This is a personal conversation memory, not a team monitoring tool.
+
+> The product UI and the design docs are written in **Korean**. Code, API, and
+> this README are in English.
+
+> **Before you record** — Damwha shows no recording notice, and it stores a
+> voiceprint for every participant in the conversation, not just yours. Getting
+> consent is on whoever runs it. → [Recording and consent](#recording-and-consent)
+
+## Live demo
+
+**[damwha-demo.0kimjae.dev](https://damwha-demo.0kimjae.dev)** — read-only, no
+signup. A 1-minute guided tour walks upload → diarization → transcript → search.
+
+The three sample conversations are Google NotebookLM Audio Overviews (**AI-generated
+voices, not real people** — the first-visit notice says so), processed by the
+*actual* pipeline on an M2. What you see is real output, not a mockup.
+
+## Features
+
+| | |
+| --- | --- |
+| <img src="docs/images/01-transcript.png" alt="Three-pane transcript view"> | <img src="docs/images/02-search.png" alt="Command palette search"> |
+| **Speaker-attributed transcript.** Three-pane shell: conversation list, transcript, insight panel. The bottom rail is a per-speaker activity timeline over the whole recording — click or drag anywhere on it to seek. | **⌘K search, everywhere.** Hybrid search (bge-m3 vectors + BM25/pg_bigm) over utterances *and* conversations, from any screen. Hits jump straight to the moment. |
+| <img src="docs/images/03-lenses.png" alt="Global lens dashboard"> | <img src="docs/images/04-settings.png" alt="Processing settings"> |
+| **Lenses across every conversation.** Action items, decisions, and promises extracted by a local LLM, each with a jump-to-evidence link. Auto-filled, non-blocking, and post-editable — re-extraction preserves anything you touched. | **Hardware-aware presets.** The app reads the host Mac's actual spec and recommends a preset; each one pins a Whisper size, a summary model, and per-stage CPU/GPU placement. |
+
+Also: browser-based live recording with a running preview, per-conversation
+notes, speaker enrollment and cross-conversation identity, export, and
+re-processing an old recording with a newer model.
+
+## How it works
+
+```mermaid
+flowchart TB
+  browser["Browser<br/>mic · file upload"]
+
+  subgraph host["Local host — nothing leaves the machine"]
+    direction TB
+    spa["React SPA<br/>Vite :5173"]
+    api["NestJS API<br/>:3000 · raw SQL, no ORM"]
+    db[("PostgreSQL 16 · pgvector + pg_bigm<br/><b>job table = the only contract</b>")]
+    storage[("Audio storage<br/>STORAGE_ROOT")]
+    embed["Embed service<br/>bge-m3 · :8100"]
+    sup["Worker supervisor<br/>no ML imports"]
+    child["job child · --once<br/>exits after one job"]
+    llm["Local LLM<br/>mlx_lm.server"]
+  end
+
+  browser --> spa
+  spa -->|"REST · multipart"| api
+  api -->|"raw SQL · enqueue job"| db
+  api -->|"sole writer of live.wav"| storage
+  api -.->|"query embedding"| embed
+  db -->|"peek · SKIP LOCKED"| sup
+  sup -->|"spawn per job"| child
+  child -->|"claim · persist"| db
+  child -->|"read audio · tail live.wav"| storage
+  child -.->|"lens · summary"| llm
+```
+
+The pipeline itself:
+
+```
+audio → ffmpeg normalize → VAD → diarization → speaker ID (pgvector cosine)
+      → STT (Whisper) → structured JSON → search indexing → lens ∥ summary → store
+```
+
+**The API and the worker never talk over HTTP.** The Postgres `job` table is the
+only contract between them, validated by zod on the TypeScript side and pydantic
+on the Python side. The one other shared row is `app_setting.worker_capabilities`,
+written by the worker and read-only for the API — that's how the API reports the
+host Mac's spec instead of its own container's.
+
+`pnpm worker` starts a **supervisor** parent that imports no ML libraries; per job
+it spawns a `--once` child that exits when the job is done, so the OS reclaims
+MLX/torch GPU memory between jobs instead of accumulating it into an OOM.
+
+Interactive versions of these diagrams (searchable, path-traceable, single-file
+HTML) live in [`docs/diagrams/`](docs/diagrams/README.md).
+
+## Repository layout
 
 | Path | Package | Stack |
 | --- | --- | --- |
 | `be/` | `damwha-be` | NestJS 10 HTTP API — raw SQL over Postgres (pgvector + pg_bigm), no ORM |
 | `be/worker/` | *(uv project)* | Python 3.12 ML worker: ffmpeg → VAD → diarization → speaker ID → STT → align, plus lens/summary extraction via a local LLM |
 | `fe/` | `damwha-fe` | React 19 + Vite 8 + Tailwind 4 SPA |
+| `packages/contracts/` | `@damwha/contracts` | Wire enums both Node packages must agree on |
 
-The API and the worker never talk over HTTP — the Postgres `job` table is the only
-contract between them (zod on the TypeScript side, pydantic on the Python side).
 `be/worker` is managed by uv and is **not** a pnpm workspace member.
+
+## Recording and consent
+
+Damwha **shows no recording notice**. Users must provide any notice and obtain
+any consent required by applicable law. A personal, local-only design does not
+itself exempt its use from legal obligations.
+
+Note also what gets stored: to identify speakers, a **voiceprint for every
+participant** lands in your local database, not just your own. And the export
+button writes the file without a confirmation step.
+
+Whether a recording and the processing that follows are lawful depends on the
+jurisdiction, the nature of the conversation, and the purpose of processing.
+Requirements differ from place to place and keep changing through amendments and
+case law, so this document points to no specific statute or decision. Obligations
+can arise while recording and processing even when everything stays local — what
+decides it is whether the activity is personal or professional, not where the
+data sits.
+
+**Legal responsibility for any recording made with this tool, and for what is
+done with it, rests entirely with the person using it.** This is not legal
+advice. Check the current rules in your own jurisdiction. When in doubt, ask
+before you record.
 
 ## Prerequisites
 
@@ -102,10 +244,6 @@ models are an optional extra (`[project.optional-dependencies] models`) and the 
 are lazy, so nothing complains until a job actually claims one. Re-run `pnpm worker:sync`
 after any test-only sync.
 
-`pnpm worker` starts a **supervisor** parent that imports no ML libraries; per job it
-spawns a `--once` child that exits when the job is done, so the OS reclaims MLX/torch
-GPU memory between jobs instead of accumulating it into an OOM.
-
 ### ML models (gated, heavy)
 
 The `models` extra pulls torch, pyannote, speechbrain, mlx-whisper and bge-m3 — tens of
@@ -187,6 +325,10 @@ arm64 images to GHCR and attaches the wheel plus a tarball of the run folder to 
 GitHub Release. The teammate-facing instructions are [`deploy/README.md`](deploy/README.md).
 The worker still runs on the host — MLX needs Apple Silicon, which Docker's Linux VM
 can't provide.
+
+The public demo is a **separate** release with its own images and its own seed data:
+[`deploy/demo/README.md`](deploy/demo/README.md) ships it, [`demo/README.md`](demo/README.md)
+describes what's inside it.
 
 ## Common tasks
 

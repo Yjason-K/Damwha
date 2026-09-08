@@ -339,6 +339,7 @@ describe('live session api', () => {
     expect(all.body.status).toBe('recording');
     expect(all.body.stage).toBe('capture');
     expect(all.body.heartbeat_at).not.toBeNull();
+    expect(all.body.stop_requested_at).toBeNull(); // 아직 종료를 부르지 않았다
     expect(all.body.items.map((i: { seq: number }) => i.seq)).toEqual([0, 1, 2]);
     expect(all.body.items[0]).toMatchObject({ text: '첫 줄', speaker_name: '영재', similarity: 0.82 });
     expect(all.body.items[1]).toMatchObject({ speaker_id: null, speaker_name: null, similarity: null });
@@ -361,5 +362,22 @@ describe('live session api', () => {
     const res = await request(srv()).get(`/meetings/${mid}/live`).expect(200);
     expect(res.body.status).toBe('failed');
     expect(res.body.items).toHaveLength(1);
+  });
+
+  // 워커가 running이면 stop은 봉인만 하고 마무리는 워커 몫이다 — 그동안 회의는 계속
+  // 'recording'이다. FE 배너가 "녹음 중"과 "마무리 중"을 가르는 근거가 이 필드뿐이라,
+  // 응답에서 빠지면 종료 버튼이 되살아난 것처럼 보인다.
+  it('GET /meetings/:id/live exposes stop_requested_at while the worker is still finalizing', async () => {
+    const created = await start().expect(201);
+    const mid = created.body.id;
+    await claim(created.body.current_job_id);
+    await sendChunk(mid).expect(200);
+
+    const stopped = await stop(mid, CHUNK, CHUNK).expect(200);
+    expect(stopped.body.outcome).toBe('stopping'); // 워커가 들고 있으니 API는 마무리하지 않는다
+
+    const live = await request(srv()).get(`/meetings/${mid}/live`).expect(200);
+    expect(live.body.status).toBe('recording'); // 아직 recording — 배너는 그대로 서 있다
+    expect(live.body.stop_requested_at).not.toBeNull();
   });
 });

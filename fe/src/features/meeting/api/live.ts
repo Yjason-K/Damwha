@@ -53,6 +53,8 @@ export type LiveState = {
   status: MeetingStatus;
   stage: string | null;
   heartbeatAt: string | null;
+  /** 종료 요청 시각. non-null이면 봉인 완료 — 워커가 마무리하는 중이다. */
+  stopRequestedAt: string | null;
   items: LiveUtterance[];
 };
 
@@ -102,6 +104,7 @@ export function useLiveUtterances(
         status: data.status,
         stage: data.stage,
         heartbeatAt: data.heartbeat_at,
+        stopRequestedAt: data.stop_requested_at ?? null,
         items: last === undefined ? fresh : [...(prev?.items ?? []), ...fresh],
       };
     },

@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { isDemoBlocked } from "@/shared/api/demo-read-only";
 import { isApiError } from "@/shared/api/client";
 import { env } from "@/shared/config/env";
+import { isTourActive } from "@/features/demo/model/tour-active";
 import { DemoUploadSource } from "@/features/demo/ui/demo-upload-source";
 import { startUploadSimulation } from "@/features/demo/model/upload-simulation";
 import { Button } from "@/shared/ui/button";
@@ -20,6 +21,7 @@ import {
 import { DatePicker } from "@/shared/ui/date-picker";
 import { Input } from "@/shared/ui/input";
 import { SegmentedControl } from "@/shared/ui/segmented-control";
+import { TimePicker } from "@/shared/ui/time-picker";
 import { toast } from "@/shared/ui/use-toast";
 import type { ProcessingOverride } from "@/features/settings/api/types";
 import { OverrideSection } from "@/features/settings/ui/override-section";
@@ -257,9 +259,12 @@ export function NewMeetingDialog({
   }, [open, source, gate, runGate]);
 
   const changeSource = (value: string) => {
-    if (sourceLocked || env.demoMode) return;
+    if (sourceLocked) return;
     const next = value === "live" ? "live" : "file";
     setSource(next);
+    // 데모는 기억하지 않는다 — readSource가 늘 file을 주므로 저장해도 죽은 값이고,
+    // 투어는 모달이 파일 탭으로 열린다는 전제로 단계를 짠다.
+    if (env.demoMode) return;
     try {
       localStorage.setItem(SOURCE_KEY, next);
     } catch {
@@ -393,7 +398,9 @@ export function NewMeetingDialog({
     e.preventDefault();
     if (pending || startingRef.current || !isSpeakerBoundsValid(speakers))
       return;
-    if (source === "live" && !env.demoMode) {
+    if (source === "live") {
+      // 데모는 녹음을 시작하지 않는다. 버튼도 막혀 있지만 Enter로도 들어온다.
+      if (env.demoMode) return;
       // 게이트(권한 확인 + 마이크 선택)를 통과하지 못했으면 시작하지 않는다 — 버튼도
       // 막혀 있지만, 폼 제출은 버튼 말고도 들어온다(Enter).
       if (gateChecking || !gate || "reason" in gate || deviceId === undefined)
@@ -458,7 +465,21 @@ export function NewMeetingDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent>
+      <DialogContent
+        /**
+         * 투어 중에는 바깥 클릭·ESC로 닫지 않는다. driver의 오버레이가 이 모달 위를 덮고
+         * 있어서 스포트라이트 밖을 누르면 Radix가 "바깥 클릭"으로 읽고 모달을 닫아 버리는데,
+         * 그러면 다음 단계가 모달 안의 버튼을 찾지 못해 통째로 건너뛴다. 투어를 그만두는
+         * 경로는 driver의 확인 모달(TourNavigationGuard) 하나로 남긴다 — 닫기(X)·취소는
+         * 그대로 열려 있다.
+         */
+        onInteractOutside={(e) => {
+          if (isTourActive()) e.preventDefault();
+        }}
+        onEscapeKeyDown={(e) => {
+          if (isTourActive()) e.preventDefault();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>새 회의 기록하기</DialogTitle>
           <DialogDescription>
@@ -476,15 +497,13 @@ export function NewMeetingDialog({
               >
                 오디오 파일
               </TabsTrigger>
-              {!env.demoMode && (
-                <TabsTrigger
-                  value="live"
-                  disabled={sourceLocked}
-                  className="flex-1"
-                >
-                  실시간 녹음
-                </TabsTrigger>
-              )}
+              <TabsTrigger
+                value="live"
+                disabled={sourceLocked}
+                className="flex-1"
+              >
+                실시간 녹음
+              </TabsTrigger>
             </TabsList>
             <TabsContent value="file" className="flex flex-col gap-4">
               {demoTour ? (
@@ -539,13 +558,13 @@ export function NewMeetingDialog({
                       onChange={setRecordedDate}
                     />
                   </div>
-                  <Input
-                    type="time"
-                    value={recordedTime}
-                    onChange={(e) => setRecordedTime(e.target.value)}
-                    containerClassName="w-[116px] shrink-0"
-                    aria-label="녹음 시각"
-                  />
+                  <div className="w-[116px] shrink-0">
+                    <TimePicker
+                      value={recordedTime}
+                      onChange={setRecordedTime}
+                      aria-label="녹음 시각"
+                    />
+                  </div>
                 </div>
                 <p
                   id={recordedHintId}
@@ -555,70 +574,78 @@ export function NewMeetingDialog({
                 </p>
               </div>
             </TabsContent>
-            {!env.demoMode && (
-              <TabsContent value="live" className="flex flex-col gap-3">
-                <div>
-                  <p className="text-sm text-[color:var(--text-secondary)]">
-                    이 브라우저의 마이크로 녹음해요. 지금 보고 있는 기기의
-                    마이크를 사용합니다.
+            <TabsContent value="live" className="flex flex-col gap-3">
+              <div>
+                <p className="text-sm text-[color:var(--text-secondary)]">
+                  이 브라우저의 마이크로 녹음해요. 지금 보고 있는 기기의
+                  마이크를 사용합니다.
+                </p>
+                <p className="mt-2 text-sm text-[color:var(--text-muted)]">
+                  녹음 시작을 누르면 발화가 실시간으로 표시되고, 종료 후 화자
+                  분리와 전사가 진행돼요.
+                </p>
+              </div>
+              {env.demoMode ? (
+                <p
+                  role="note"
+                  className="text-sm text-[color:var(--text-muted)]"
+                >
+                  데모에서는 녹음을 시작할 수 없어요 — 마이크 권한을 묻지 않고,
+                  녹음을 받아 처리할 워커도 없습니다. 실제 설치본에서는 여기서
+                  마이크를 고르고 바로 녹음이 시작돼요.
+                </p>
+              ) : null}
+              {gateChecking ? (
+                <p className="text-sm text-[color:var(--text-muted)]">
+                  마이크를 확인하고 있어요. 브라우저가 권한을 물어보면 허용해
+                  주세요.
+                </p>
+              ) : null}
+              {gate && "reason" in gate ? (
+                <div className="flex flex-col items-start gap-2">
+                  <p
+                    role="alert"
+                    className="text-sm text-[color:var(--red-text)]"
+                  >
+                    {CAPTURE_GATE_MESSAGE[gate.reason]}
                   </p>
-                  <p className="mt-2 text-sm text-[color:var(--text-muted)]">
-                    녹음 시작을 누르면 발화가 실시간으로 표시되고, 종료 후 화자
-                    분리와 전사가 진행돼요.
-                  </p>
+                  {/* 다이얼로그를 닫았다 열지 않고도 다시 시도할 수 있어야 한다. */}
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => void runGate()}
+                  >
+                    다시 확인
+                  </Button>
                 </div>
-                {gateChecking ? (
-                  <p className="text-sm text-[color:var(--text-muted)]">
-                    마이크를 확인하고 있어요. 브라우저가 권한을 물어보면 허용해
-                    주세요.
-                  </p>
-                ) : null}
-                {gate && "reason" in gate ? (
-                  <div className="flex flex-col items-start gap-2">
-                    <p
-                      role="alert"
-                      className="text-sm text-[color:var(--red-text)]"
-                    >
-                      {CAPTURE_GATE_MESSAGE[gate.reason]}
-                    </p>
-                    {/* 다이얼로그를 닫았다 열지 않고도 다시 시도할 수 있어야 한다. */}
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => void runGate()}
-                    >
-                      다시 확인
-                    </Button>
-                  </div>
-                ) : null}
-                {gate && "devices" in gate ? (
-                  <div className="flex flex-col gap-1.5">
-                    <span
-                      id={deviceLabelId}
-                      className="text-sm font-medium text-[color:var(--text-secondary)]"
-                    >
-                      마이크
-                    </span>
-                    <Select value={deviceId} onValueChange={setDeviceId}>
-                      <SelectTrigger aria-labelledby={deviceLabelId}>
-                        <SelectValue placeholder="마이크 선택" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {gate.devices.map((d, i) => (
-                          <SelectItem
-                            key={d.deviceId || i}
-                            value={d.deviceId || DEFAULT_DEVICE}
-                          >
-                            {d.label || `마이크 ${i + 1}`}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                ) : null}
-              </TabsContent>
-            )}
+              ) : null}
+              {gate && "devices" in gate ? (
+                <div className="flex flex-col gap-1.5">
+                  <span
+                    id={deviceLabelId}
+                    className="text-sm font-medium text-[color:var(--text-secondary)]"
+                  >
+                    마이크
+                  </span>
+                  <Select value={deviceId} onValueChange={setDeviceId}>
+                    <SelectTrigger aria-labelledby={deviceLabelId}>
+                      <SelectValue placeholder="마이크 선택" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {gate.devices.map((d, i) => (
+                        <SelectItem
+                          key={d.deviceId || i}
+                          value={d.deviceId || DEFAULT_DEVICE}
+                        >
+                          {d.label || `마이크 ${i + 1}`}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
+            </TabsContent>
           </Tabs>
 
           <Input
@@ -684,8 +711,10 @@ export function NewMeetingDialog({
               disabled={
                 (source === "file" && !demoTour && !file) ||
                 (source === "live" &&
-                  !env.demoMode &&
-                  (!gate || "reason" in gate || deviceId === undefined)) ||
+                  (env.demoMode ||
+                    !gate ||
+                    "reason" in gate ||
+                    deviceId === undefined)) ||
                 submitBusy ||
                 !isSpeakerBoundsValid(speakers)
               }

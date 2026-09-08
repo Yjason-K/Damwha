@@ -17,19 +17,27 @@ export type SimStage =
   | "persist"
   | "embed";
 
-/** 각 stage의 시작 시각(ms). 마지막 stage는 SIM_TOTAL_MS에서 끝난다. */
-export const STAGE_TIMELINE: readonly [SimStage, number][] = [
-  ["queued", 0],
-  ["vad", 1_000],
-  ["diarize", 3_000],
-  ["identify", 5_000],
-  ["stt", 6_000],
-  ["align", 9_000],
-  ["persist", 10_000],
-  ["embed", 11_000],
+/**
+ * 각 stage의 시작 시각(ms)과 그 시점의 **전체** 진행률(%). 진행률은 워커가 실제로 쓰는 값
+ * 그대로다(`process_meeting.py`의 enter_stage: vad 15 · diarize 35 · identify 50 · stt 75 ·
+ * align 90 · persist 95) — 그래서 배너의 %가 stage마다 0→100을 반복하지 않고 파이프라인
+ * 전체에서 한 번만 올라간다. 마지막 stage는 SIM_TOTAL_MS에서 끝난다.
+ *
+ * 간격은 narration 한 줄을 읽을 시간(stage당 2.5초 이상)에 맞춰 잡았다.
+ */
+export const STAGE_TIMELINE: readonly [SimStage, number, number][] = [
+  ["queued", 0, 0],
+  ["vad", 2_500, 15],
+  ["diarize", 6_000, 35],
+  ["identify", 9_500, 50],
+  ["stt", 12_000, 75],
+  ["align", 17_000, 90],
+  ["persist", 19_500, 95],
+  ["embed", 22_000, 98],
 ];
-export const SIM_TOTAL_MS = 12_000;
+export const SIM_TOTAL_MS = 24_000;
 
+/** progress는 파이프라인 전체 기준 0~100 — 상태 API가 내려주는 값과 같은 눈금이다. */
 export type SimView = { meetingId: string; stage: SimStage; progress: number };
 export type SimPhase = "idle" | "running" | "done";
 type Listener = (view: SimView | null, phase: SimPhase) => void;
@@ -43,15 +51,21 @@ let state: State = { phase: "idle" };
 let timers: ReturnType<typeof setTimeout>[] = [];
 const listeners = new Set<Listener>();
 
+/**
+ * 워커는 stage에 들어갈 때 progress를 한 번 쓰고 그 안에서는 고정이다. 예외는 가장 긴 stt로,
+ * clip마다 75→90 구간을 채운다(`pipeline/progress.py`). 데모도 같은 모양으로 움직인다 —
+ * stt는 timeline상 마지막이 아니므로 다음 항목이 항상 있다.
+ */
 function stageAt(elapsed: number): { stage: SimStage; progress: number } {
   let idx = 0;
   for (let i = 0; i < STAGE_TIMELINE.length; i++) {
     if (elapsed >= STAGE_TIMELINE[i][1]) idx = i;
   }
-  const [stage, start] = STAGE_TIMELINE[idx];
-  const end = idx + 1 < STAGE_TIMELINE.length ? STAGE_TIMELINE[idx + 1][1] : SIM_TOTAL_MS;
-  const progress = Math.min(1, Math.max(0, (elapsed - start) / (end - start)));
-  return { stage, progress };
+  const [stage, start, progress] = STAGE_TIMELINE[idx];
+  if (stage !== "stt") return { stage, progress };
+  const [, end, next] = STAGE_TIMELINE[idx + 1];
+  const ratio = Math.min(1, Math.max(0, (elapsed - start) / (end - start)));
+  return { stage, progress: Math.round(progress + (next - progress) * ratio) };
 }
 
 export function simulationView(now = Date.now()): SimView | null {

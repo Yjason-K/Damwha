@@ -573,6 +573,16 @@ export class LiveService {
     const head = await this.live.findHead(this.db.pool, id);
     if (!head) throw new NotFoundException('meeting not found');
     const items = await this.live.findUtterances(this.db.pool, id, afterSeq);
-    return { status: head.status, stage: head.stage, heartbeat_at: head.heartbeat_at, items };
+    // stop_requested_at은 회의가 'recording'을 벗어나기 전의 마무리 구간을 FE가 알아보는
+    // 유일한 신호다. stop은 봉인만 하고 마무리는 워커가 하므로(이 파일의 stop()), 그 사이
+    // meeting.status는 여전히 'recording'이고 배너는 이 필드 없이는 "녹음 중"과 구별할 수
+    // 없다. 응답 필드라 새로고침·다른 탭에서도 같은 판단이 선다.
+    return {
+      status: head.status,
+      stage: head.stage,
+      heartbeat_at: head.heartbeat_at,
+      stop_requested_at: head.stop_requested_at,
+      items,
+    };
   }
 }

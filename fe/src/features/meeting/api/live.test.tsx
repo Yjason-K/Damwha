@@ -32,6 +32,7 @@ const page = (items: WireLiveResponse["items"]): WireLiveResponse => ({
   status: "recording",
   stage: "capture",
   heartbeat_at: "2026-09-05T10:00:00.000Z",
+  stop_requested_at: null,
   items,
 });
 

@@ -80,7 +80,13 @@ export class LiveController {
   }
 
   @Get(':id/live')
-  @ApiOperation({ summary: '라이브 발화 조회 (seq 커서)' })
+  @ApiOperation({
+    summary: '라이브 발화 조회 (seq 커서)',
+    description:
+      'heartbeat_at은 세션 job의 locked_at(워커 박동), stop_requested_at은 종료 요청 시각이다. '
+      + '후자가 non-null이면 봉인은 끝났고 워커가 마무리하는 중 — 회의는 그동안에도 '
+      + "'recording'으로 남으므로, 이 필드 없이는 녹음 중과 마무리 중을 구별할 수 없다.",
+  })
   @ApiQuery({ name: 'after', required: false, description: '이 seq 이후 행만' })
   get(@Param('id') id: string, @Query('after') after?: string) {
     return this.service.getLive(id, after);

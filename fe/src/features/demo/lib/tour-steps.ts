@@ -40,7 +40,7 @@ export function stageNarration(stage: SimStage): string {
 }
 
 export const PROCESSING_FOOTNOTE =
-  "실제로는 10분 회의에 몇 분이 걸리고, 이 처리는 Apple Silicon 로컬에서만 돌아요. 데모는 그 흐름을 12초로 재생해요.";
+  "실제로는 10분 회의에 몇 분이 걸리고, 이 처리는 Apple Silicon 로컬에서만 돌아요. 데모는 그 흐름을 24초로 재생해요.";
 
 type Ctx = {
   navigate: (to: string) => void;
@@ -66,9 +66,9 @@ export function buildTourSteps(ctx: Ctx): TourStep[] {
         {
           id: "new",
           target: "new-meeting",
-          title: "새 대화는 오디오에서 시작해요",
+          title: "새 대화는 업로드나 실시간 녹음으로 시작해요",
           description:
-            "회의·인터뷰·통화 녹음을 올리면 화자 분리와 전사가 자동으로 돌아요.",
+            "회의·인터뷰·통화 녹음을 올리면 화자 분리와 전사가 자동으로 돌아요. 파일이 없으면 브라우저 마이크로 바로 녹음할 수도 있어요 — 데모는 읽기 전용이라 그 탭은 화면만 열어 뒀어요.",
           side: "right",
         },
         {
@@ -134,18 +134,10 @@ export function buildTourSteps(ctx: Ctx): TourStep[] {
           (b) => b.textContent?.includes("원문 보기"),
         );
         jump?.click();
-        // jumpTo는 하이라이트와 seek만 하고 재생은 하지 않는다(제품 설계). 데모는 소리가
-        // 나야 설득되니 재생 토글을 대신 눌러준다 — audio.play()를 직접 부르면 PlayerBar의
-        // playing 상태가 어긋나므로 실제 버튼을 눌러 React의 setPlaying을 거친다.
-        // "다음" 클릭의 사용자 활성화 창 안이라 autoplay 정책에 걸리지 않는다.
+        // jumpTo는 하이라이트와 seek만 하고 재생은 하지 않는다(제품 설계). 투어도 재생
+        // 토글을 대신 눌러주지 않는다 — 설명을 읽는 중에 소리가 나면 방해가 된다.
+        // 재생은 다음 "화자별 구간과 재생" 단계에서 사용자가 직접 누른다.
         await sleep(150);
-        if (document.querySelector("audio")?.paused !== false) {
-          document
-            .querySelector<HTMLButtonElement>(
-              '[data-tour="player-bar"] button[aria-label="재생"]',
-            )
-            ?.click();
-        }
       },
     },
     {
@@ -254,7 +246,7 @@ export function buildTourSteps(ctx: Ctx): TourStep[] {
       target: "settings-page",
       title: "처리 설정, 그리고 끝",
       description:
-        '전사·화자 분리·요약에 쓸 모델과 프리셋, GPU 사용 여부를 고르는 곳이에요. 여기까지가 둘러보기예요 — 이 데모는 읽기 전용이고, 오디오는 NotebookLM이 생성한 샘플이에요. 왼쪽 아래 "둘러보기"로 언제든 다시 볼 수 있어요.',
+        '전사·화자 분리·요약에 쓸 모델과 프리셋, GPU 사용 여부를 고르는 곳이에요. 여기까지가 둘러보기예요 — 이 데모는 읽기 전용이고, 오디오는 NotebookLM이 생성한 샘플이에요. 왼쪽 아래 "1분 가이드 보기"로 언제든 다시 볼 수 있어요.',
       side: "right",
       prepare: async () => {
         ctx.navigate("/settings");
