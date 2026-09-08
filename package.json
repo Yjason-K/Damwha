@@ -1,6 +1,6 @@
 {
   "name": "damwha",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "Damwha (담화) — personal, self-hosted conversation recording & search. Monorepo: damwha-be (NestJS API + Python ML worker) and damwha-fe (React SPA).",
   "license": "MIT",
