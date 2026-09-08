@@ -317,7 +317,7 @@ Then upload a recording in the UI (or `POST /meetings`), and watch the meeting g
 `queued → done` with a speaker-attributed timeline. End-to-end smoke scripts, per-preset
 checks, and the quality-measurement tooling live in [`be/worker/SMOKE.md`](be/worker/SMOKE.md).
 
-## Sharing a build with teammates
+## Installing it elsewhere
 
 `deploy/` packages the API + SPA as one Docker image and the worker as a wheel so a
 teammate needs no source checkout: `deploy/release.sh <version>` pushes the two

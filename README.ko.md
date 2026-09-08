@@ -307,7 +307,7 @@ mlx_lm.server --model mlx-community/Qwen3.5-4B-8bit \
 화자가 붙은 타임라인이 나온다. 엔드투엔드 스모크 스크립트, 프리셋별 점검, 품질 측정
 도구는 [`be/worker/SMOKE.md`](be/worker/SMOKE.md)에 있다.
 
-## 팀에 빌드 넘기기
+## 다른 맥에 설치하기
 
 `deploy/`는 API + SPA를 Docker 이미지 하나로, 워커를 wheel로 묶어서 받는 쪽이 소스를
 체크아웃하지 않아도 되게 한다. `deploy/release.sh <버전>`이 arm64 이미지 두 개를
