@@ -48,6 +48,10 @@ graphs. This is a personal conversation memory, not a team monitoring tool.
 > The product UI and the design docs are written in **Korean**. Code, API, and
 > this README are in English.
 
+> **Before you record** — Damwha shows no recording notice, and it stores a
+> voiceprint for every participant in the conversation, not just yours. Getting
+> consent is on whoever runs it. → [Recording and consent](#recording-and-consent)
+
 ## Live demo
 
 **[damwha-demo.0kimjae.dev](https://damwha-demo.0kimjae.dev)** — read-only, no
@@ -130,6 +134,29 @@ HTML) live in [`docs/diagrams/`](docs/diagrams/README.md).
 | `packages/contracts/` | `@damwha/contracts` | Wire enums both Node packages must agree on |
 
 `be/worker` is managed by uv and is **not** a pnpm workspace member.
+
+## Recording and consent
+
+Damwha **shows no recording notice**. Users must provide any notice and obtain
+any consent required by applicable law. A personal, local-only design does not
+itself exempt its use from legal obligations.
+
+Note also what gets stored: to identify speakers, a **voiceprint for every
+participant** lands in your local database, not just your own. And the export
+button writes the file without a confirmation step.
+
+Whether a recording and the processing that follows are lawful depends on the
+jurisdiction, the nature of the conversation, and the purpose of processing.
+Requirements differ from place to place and keep changing through amendments and
+case law, so this document points to no specific statute or decision. Obligations
+can arise while recording and processing even when everything stays local — what
+decides it is whether the activity is personal or professional, not where the
+data sits.
+
+**Legal responsibility for any recording made with this tool, and for what is
+done with it, rests entirely with the person using it.** This is not legal
+advice. Check the current rules in your own jurisdiction. When in doubt, ask
+before you record.
 
 ## Prerequisites
 
