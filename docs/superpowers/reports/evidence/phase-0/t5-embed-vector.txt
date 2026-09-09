@@ -1,0 +1,15 @@
+# Task 5 V4 — embed /embed (스펙 P0-C5)
+# utc: 2026-09-09T14:15:00Z
+# endpoint: http://127.0.0.1:58100/embed
+# 요청: {"texts":["담화는 회의 녹음을 요약한다","두 번째 문장은 벡터 개수를 확인하려고 넣는다"]}
+# curl exit: 0
+# be/worker/.env: SEARCH_EMBEDDING_MODEL=BAAI/bge-m3 SEARCH_EMBEDDING_DIM=1024
+#
+# 벡터 전량(1024차원 x 2)은 넣지 않는다 — 판정에 쓰는 요약이다.
+
+model: BAAI/bge-m3
+dimension: 1024
+vector_count: 2
+vector[0] len: 1024  head: [0.034910, 0.010353, -0.070133, 0.005738, ...]
+vector[1] len: 1024  head: [-0.051210, -0.028172, -0.027173, 0.012027, ...]
+two_vectors_identical: False

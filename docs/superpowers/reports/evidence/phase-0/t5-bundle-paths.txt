@@ -1,0 +1,36 @@
+# Task 5 V10 — 번들 실행과 개발 환경 비의존 (스펙 P0-C5b, §4.1, §4.4)
+# utc: 2026-09-09T14:17:08Z
+# 개발자 홈 자산 기준: $HOME/.cache/huggingface, $HOME/.local
+#   ($HOME 문자열 자체로 세지 않는다 — 이 저장소가 그 아래에 있어
+#    번들 경로까지 걸린다)
+
+== 1. llm.sh start가 실행한 바이너리 (스펙 P0-C5b)
+  기록된 binary : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/mlx_lm.server
+  셔뱅          : #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+  실제 cmdline  : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12 /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/mlx_lm.server --model mlx-community/Qwen3.5-4B-8bit --chat-template-args {"enable_thinking": false} --host 127.0.0.1 --port 58000
+  OK   bundle/python 하위다
+  OK   개발자 홈의 ~/.local 설치본이 아니다
+  OK   셔뱅이 번들 python이다 — /bin/sh 심이 아니라 dyld 실측이 산다
+  OK   기동한 프로세스의 argv에 그 경로가 있다
+
+== 2. dyld 증거의 ^dyld 줄에 개발 환경 경로가 있는가 (계획 규칙 6)
+  t5-embed: ^dyld 줄 1619건
+    OK   /Users/gim-yeongjae/.cache/huggingface: 0건
+    OK   /Users/gim-yeongjae/.local/: 0건
+    OK   /opt/homebrew: 0건
+    OK   /Library/Frameworks/Python.framework: 0건
+    OK   /usr/local/lib: 0건
+    OK   /usr/local/bin: 0건
+  t5-llm: ^dyld 줄 1803건
+    OK   /Users/gim-yeongjae/.cache/huggingface: 0건
+    OK   /Users/gim-yeongjae/.local/: 0건
+    OK   /opt/homebrew: 0건
+    OK   /Library/Frameworks/Python.framework: 0건
+    OK   /usr/local/lib: 0건
+    OK   /usr/local/bin: 0건
+
+== 3. 모델이 샌드박스 HF 캐시에 있는가 (스펙 §4.4 — 개발자 캐시에 쓰지 않는다)
+  샌드박스 HF_HOME : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/home/.cache/huggingface
+  OK   models--mlx-community--Qwen3.5-4B-8bit — 4.8G
+  OK   models--BAAI--bge-m3 — 4.3G
+  참고: 격리 래퍼가 주입한 HF_HOME은 /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/home/.cache/huggingface 이다 (스펙 §4.2 표)

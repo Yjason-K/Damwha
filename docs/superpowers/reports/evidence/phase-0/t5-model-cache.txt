@@ -1,0 +1,65 @@
+# Task 5 — 샌드박스 HF 캐시에 실제로 받은 것 (스펙 §4.4, P0-C13 참고)
+# utc: 2026-09-09T14:20:01Z
+#
+# 이 캐시는 격리 래퍼가 주입한 HF_HOME이며 개발자 ~/.cache/huggingface(40 GB)와
+# 완전히 분리돼 있다. Task 5 시작 시점에 이 디렉터리는 비어 있었다(0 B).
+# 즉 아래 값은 **빈 캐시에서 처음부터 받은 양**이다.
+#
+# P0-C13의 공식 측정은 Task 9의 몫이다. 여기 있는 것은 이 Task가 지나가며
+# 남긴 실측이고, 두 모델에 한정된다.
+
+HF_HOME: experiments/electron-phase-0/sandbox/home/.cache/huggingface
+
+## 저장소별 크기 (du -sh)
+4.3G	models--BAAI--bge-m3
+4.8G	models--mlx-community--Qwen3.5-4B-8bit
+
+## 캐시 전체
+9.1G	(전체)
+
+## bge-m3가 같은 가중치를 두 벌 받았다 — 실측
+sentence-transformers 5.6.0이 model.safetensors와 pytorch_model.bin을 **둘 다**
+받았다. 같은 가중치이고 실제로 쓰는 것은 하나다. 스냅샷 리비전도 둘로 갈렸다
+(safetensors만 다른 리비전에 있다). Phase 4의 초기 준비 용량 산정(P0-C13)에서
+2.1 GB가 그냥 낭비되는 자리이므로 Task 9가 확인할 항목으로 남긴다.
+
+blob 크기 (bytes, 내림차순 상위 5):
+2271145830   b5e0ce3470abf5ef3831aa1bd5553b486803e83251590ab7ff35a117cf6aad38
+2271064456   993b2248881724788dcab8c644a91dfd63584b6e5604ff2037cb5541e1e38e7e
+17098108   21106b6d7dab2952c1d496fb21d5dc9db75c28ed361a05f5020bbba27810dd08
+5069051   cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865
+15822   e5a320176edd6ee1cfb256e68ee5ac0004de9447
+
+리비전별 파일:
+  5617a9f61b028005a4858fdac845db406aefb181
+    1_Pooling
+    config.json ⇒ ../../blobs/e6eda1c72da8f9dc30fdd9b69c73d35af3b7a7ad
+    config_sentence_transformers.json ⇒ ../../blobs/1fba91c78a6c8e17227058ab6d4d3acb5d8630a9
+    modules.json ⇒ ../../blobs/952a9b81c0bfd99800fabf352f69c7ccd46c5e43
+    pytorch_model.bin ⇒ ../../blobs/b5e0ce3470abf5ef3831aa1bd5553b486803e83251590ab7ff35a117cf6aad38
+    README.md ⇒ ../../blobs/e5a320176edd6ee1cfb256e68ee5ac0004de9447
+    sentence_bert_config.json ⇒ ../../blobs/0140ba1eac83a3c9b857d64baba91969d988624b
+    sentencepiece.bpe.model ⇒ ../../blobs/cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865
+    special_tokens_map.json ⇒ ../../blobs/b1879d702821e753ffe4245048eee415d54a9385
+    tokenizer.json ⇒ ../../blobs/21106b6d7dab2952c1d496fb21d5dc9db75c28ed361a05f5020bbba27810dd08
+    tokenizer_config.json ⇒ ../../blobs/dc69ac559dcba2694012009aaa108c614541789a
+  9a0624b896d81da7492a910ffa53731274b6cf3d
+    model.safetensors ⇒ ../../blobs/993b2248881724788dcab8c644a91dfd63584b6e5604ff2037cb5541e1e38e7e
+
+## Qwen3.5-4B-8bit
+fetch 기록은 t5-llm-model-fetch.txt에 있다 (10개 파일, 5163524489 bytes, 57.6s).
+스냅샷 파일:
+  chat_template.jinja ⇒ ../../blobs/a585dec894e63da457d9440ec6aa7caa16d20860
+  config.json ⇒ ../../blobs/f56eb9d8b1bd3bf5f0beb296038555c48b049859
+  model.safetensors ⇒ ../../blobs/87c362fdb36bdee8e32ff5961bdceca58d26c2d9b00738543cc0e17e985b46ce
+  model.safetensors.index.json ⇒ ../../blobs/4e32124654a0cc8c20b4fd93ccdb139f4aa3794b
+  preprocessor_config.json ⇒ ../../blobs/2ea84a437d448ff71b08df68fdd949d5cc4ebb64
+  processor_config.json ⇒ ../../blobs/7ad6acdf4203f22b7b990e36ccc3a1fe38563d5e
+  tokenizer.json ⇒ ../../blobs/87a7830d63fcf43bf241c3c5242e96e62dd3fdc29224ca26fed8ea333db72de4
+  tokenizer_config.json ⇒ ../../blobs/a068e2468cff426a9b105006e74e044030a6faf4
+  video_preprocessor_config.json ⇒ ../../blobs/3ba673a5ad7d4d13f54155ecd38b2a94a6dac8fe
+  vocab.json ⇒ ../../blobs/0aa0ce0658d60ac4a5d609f4eadb0e8e43514176
+
+## 이 Task 종료 시점의 데이터 볼륨 여유 (R-14)
+Task 시작 시 21 GiB → 종료 시:
+/dev/disk3s5       460  416        11    98% 4492563 116638880    4%   /System/Volumes/Data

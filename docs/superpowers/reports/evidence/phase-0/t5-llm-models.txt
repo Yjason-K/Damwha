@@ -1,0 +1,13 @@
+# Task 5 V7 — mlx_lm.server /v1/models (스펙 P0-C5b)
+# utc: 2026-09-09T14:16:43Z
+# endpoint: http://127.0.0.1:58000/v1/models
+# curl exit: 0
+# llm.pid: 75447
+# 58000 를 LISTEN 하는 pid: 75447
+# HF 캐시(격리 주입값): /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/home/.cache/huggingface
+
+## 응답 원문
+{"object": "list", "data": [{"id": "mlx-community/Qwen3.5-4B-8bit", "object": "model", "created": 1788963403}]}
+
+## 모델 id 목록
+mlx-community/Qwen3.5-4B-8bit

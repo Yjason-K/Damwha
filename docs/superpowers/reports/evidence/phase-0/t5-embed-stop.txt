@@ -1,0 +1,13 @@
+# Task 5 V5 — embed.sh stop (스펙 P0-C5 / §4.4)
+# utc: 2026-09-09T14:15:08Z
+# 격리 대상: 아니오 — stop은 번들 바이너리를 실행하지 않고 PID 파일의
+#            프로세스에 SIGTERM만 보낸다 (스펙 §4.0)
+# 대상 pid: 74049
+# stop exit: 0
+
+SIGTERM: pid 74049
+종료 확인 (SIGTERM 1s 안에 내려갔다)
+
+종료 후 kill -0 74049: no
+종료 후 GET /health curl exit: 7 (응답: curl: (7) Failed to connect to 127.0.0.1 port 58100 after 0 ms: Couldn't connect to server)
+종료 후 58100 LISTEN pid: 없음

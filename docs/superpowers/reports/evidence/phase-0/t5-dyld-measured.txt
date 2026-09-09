@@ -1,0 +1,31 @@
+# Task 5 V11 — dyld 실측이 서버 프로세스의 것인가 (계획 규칙 6 / 6b / 6c)
+# utc: 2026-09-09T14:18:03Z
+# 판정 방식: pid를 먼저 고정하고 그 pid의 로드 목록에서 bundle/python/
+#            접두사를 센다. 파일 전체 grep은 헤더의 '# argv:' 줄에 항상
+#            매치되므로 쓰지 않는다.
+
+== t5-embed — dyld 실측 판독 (계획 규칙 6 / 6b / 6c)
+  증거 파일 : /Users/gim-yeongjae/project/daewha-electron-phase-0/docs/superpowers/reports/evidence/phase-0/t5-embed-dyld.txt
+  OK   MEASUREMENT_UNAVAILABLE 표시가 없다
+  OK   ^dyld 줄 1619건 (헤더가 아니라 dyld 줄만 셌다)
+  대상 pid  : 74049  (출처: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/run/embed-start.txt (stop 뒤 — 런처가 PID 파일과 같이 남긴 기동 기록))
+  증거의 pid: 74049 74336 
+  OK   pid 74049 이 /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/ 아래 이미지를 203건 로드했다
+       /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+       /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/libpython3.12.dylib
+       /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/pydantic_core/_pydantic_core.cpython-312-darwin.so
+  OK   pid 74049 이 연 이미지가 전부 번들 / usr/lib / System/Library 안이다
+embed_rc=0
+
+== t5-llm — dyld 실측 판독 (계획 규칙 6 / 6b / 6c)
+  증거 파일 : /Users/gim-yeongjae/project/daewha-electron-phase-0/docs/superpowers/reports/evidence/phase-0/t5-llm-dyld.txt
+  OK   MEASUREMENT_UNAVAILABLE 표시가 없다
+  OK   ^dyld 줄 1803건 (헤더가 아니라 dyld 줄만 셌다)
+  대상 pid  : 75447  (출처: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/run/llm-start.txt (stop 뒤 — 런처가 PID 파일과 같이 남긴 기동 기록))
+  증거의 pid: 75033 75447 
+  OK   pid 75447 이 /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/ 아래 이미지를 187건 로드했다
+       /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+       /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/libpython3.12.dylib
+       /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/mlx/core.cpython-312-darwin.so
+  OK   pid 75447 이 연 이미지가 전부 번들 / usr/lib / System/Library 안이다
+llm_rc=0

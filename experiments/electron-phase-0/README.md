@@ -330,6 +330,87 @@ OS python 바이트코드 캐시 같은 것들이라 금지 문자열이 당연�
   `lib/pkgconfig/*.pc`·`share/ffmpeg/`는 빌드 전용 산출물이라 뺐다 (pg의
   `pgxs`·`include` 제외와 같은 이유). 번들 크기는 42 MB.
 
+**11. Task 5가 실측으로 덧붙이는 것 (서비스를 쓰는 Task 6·7·9·11에게).**
+`services/embed.sh`·`services/llm.sh`가 두 서비스의 수명을 다룬다.
+
+```sh
+bash lib/run-isolated.sh --label t5-embed -- services/embed.sh start   # 58100
+bash lib/run-isolated.sh --label t5-llm   -- services/llm.sh   start   # 58000
+bash services/embed.sh stop      # PID 파일 대상 SIGTERM. 격리가 필요 없다
+bash services/llm.sh   status
+```
+
+- **규칙 3b의 `2> >(tee "$LOG" >&2)` 형태가 실제로 동작한다.** embed·
+  `mlx_lm.server`에는 로그를 파일에 직접 쓰는 옵션이 없어서 이 형태 말고는
+  규칙 2(“서버 stderr를 리다이렉트하지 않는다”)와 규칙 3b(“래퍼가 exit해도
+  로그가 남는다”)를 동시에 지킬 방법이 없다. 실측: `t5-embed-dyld.txt` 1619줄,
+  `t5-llm-dyld.txt` 1803줄이고 **전부 서버 프로세스의 것**이다. 같은 줄이
+  `$SANDBOX/run/{embed,llm}-stderr.txt`에도 그대로 남아 래퍼가 끝난 뒤에도
+  읽을 수 있다. `tee`는 `/usr/bin/tee`(플랫폼 바이너리)라 SIP가 `DYLD_*`를
+  지워 **자기 dyld 줄을 만들지 않는다** — 증거가 서버 것만으로 유지되는
+  이유가 이것이다.
+- **dyld 증거의 줄은 두 모양이다. 판정은 이미지 로드 줄로 한정해야 한다.**
+
+  ```
+  dyld[<pid>]: <UUID> /절대/경로              ← 실제 로드 (필드 3개)
+  dyld[<pid>]: move loaded to delayed: <이름>  ← 지연 초기화 기록 (필드 6개)
+  ```
+
+  둘째 모양에는 **경로가 없고 잎 이름만** 있다(`AVFoundation`,
+  `libtidy.A.dylib`). `$NF`로 “번들 밖 경로”를 세면 이것이 전부 위반으로
+  잡힌다 — 처음 만든 `t5-dyld-measured.sh`가 정확히 그래서 존재하지 않는
+  위반 160여 건을 냈다(`t5-dyld-measured.prev-*.txt`에 그 회차가 남아 있다).
+  Task 2의 postgres는 이 줄을 하나도 내지 않아(`t2-start-dyld.txt` 0건)
+  거기서는 드러나지 않았고, Task 3·4는 “번들 아래에서 연 이미지 수”만 세어
+  (접두사가 `/`로 시작해야 매치된다) 영향이 없었다. Python 프로세스에
+  `foreign` 검사를 처음 붙인 Task 5에서 드러난 것이다.
+  `verify/t5-lib.sh::t5_awk_load_line`이 그 필터다.
+- **판정 대상 pid는 PID 파일 → 기동 기록 순으로 찾는다.** 계획 Verify 표의
+  순서상 V11(dyld 판정)이 V5·V9(stop) 뒤에 오는데, stop이 PID 파일을 지우면
+  판정 자체가 불가능해진다. 그래서 런처가 PID 파일을 쓰는 **같은 순간 같은
+  `$!`로** `$SANDBOX/run/{embed,llm}-start.txt`에 pid·실행 파일·cmdline·로그
+  위치를 함께 남긴다(규칙 3b의 “로그 위치 기록”도 이 파일이다).
+- **`bundle/python/bin/mlx_lm.server`가 실제로 뜬다.** 스펙 §2가 지목한
+  “어떤 매니페스트에도 없는 네 번째 런타임”이 번들 안에서 기동하고 완성
+  응답을 냈다. 실행 경로는 `t5-llm-binpath.txt`에 있고, `~/.local/bin`의 uv
+  tool 설치본이 아니다. 셔뱅이 번들 python이라 dyld의 메인 이미지는
+  `bundle/python/bin/python3.12`이고, 판정은 규칙 6c대로 `bundle/python/`
+  **접두사**로 한다.
+- **`llm.sh start`는 기동 전에 모델을 받는다.** `/v1/models`는 HF 캐시를
+  훑어 목록을 만들므로(`scan_cache_dir()`), 캐시가 비면 서버가 멀쩡히 떠도
+  그 모델이 목록에 없다. 로드는 첫 `chat/completions`까지 미뤄진다. 그래서
+  `services/fetch_model.py`가 `mlx_lm.utils._download`(서버가 쓰는 그 경로)로
+  먼저 받는다. 진행 표시줄은 환경 변수가 아니라 in-process API
+  (`disable_progress_bars()`)로 끈다 — 스펙 §4.2 주입 화이트리스트를 넓히지
+  않으려고.
+- **`damwha-embed`·`damwha-worker`는 인자를 무시하고 바로 서비스를 띄운다.**
+  `--help`로 시험하지 마라. 포트는 명령줄이 아니라 주입된
+  `EMBED_SERVICE_HOST/PORT`로만 정해지고, `embed.sh`가 그 값이 58100인지
+  기동 전에 확인한다.
+- **두 런처는 서버를 `$SANDBOX`에서 띄운다.** `damwha_worker.config.Settings`가
+  `env_file=".env"`라 **현재 작업 디렉터리**의 `.env`를 읽는다. 저장소 어느
+  디렉터리에서 부르든 개발용 `.env`가 섞이지 않게 옮겨서 띄운다.
+- **stop은 SIGTERM만 쓰고 SIGKILL로 올리지 않는다.** 올리면 스펙 P0-C5b의
+  “SIGTERM에 종료된다”가 증거에서 사라진다. 둘 다 1초 안에 내려갔다.
+  `kill` 서브커맨드(SIGKILL)는 롤백 전용이며 판정에 쓰지 않는다.
+- **모델은 샌드박스 HF 캐시에만 받았다** (`t5-model-cache.txt`). Task 5 시작
+  시점에 그 캐시는 0 B였다.
+
+  | 저장소 | 크기 | 비고 |
+  | --- | --- | --- |
+  | `mlx-community/Qwen3.5-4B-8bit` | 4.8 GB (5163524489 B, 10파일, 57.6초) | `t5-llm-model-fetch.txt` |
+  | `BAAI/bge-m3` | 4.3 GB | **같은 가중치를 두 벌 받는다** |
+
+  bge-m3는 sentence-transformers가 `model.safetensors`(2.27 GB)와
+  `pytorch_model.bin`(2.27 GB)을 **둘 다** 받는다. 리비전도 둘로 갈린다.
+  2.1 GB가 그냥 낭비되는 자리이므로 Task 9(P0-C13)가 확인할 항목이다.
+- **디스크가 빡빡해졌다 (R-14).** Task 5 시작 21 GiB → 종료 **11 GiB**.
+  Task 7이 pyannote 게이트 3종과 whisper 모델을 더 받아야 하므로, 착수 전에
+  `preflight.sh`로 재고 부족하면 시작하지 말아라.
+- **기동 시간(참고).** embed는 bge-m3 다운로드·로드를 포함해 52초, llm은
+  모델 다운로드 58초 + 서버 기동 11초 = 69초였다. 첫 완성 요청(모델을
+  메모리에 올린다)은 4초.
+
 ## verify/ 규약
 
 각 스크립트는 조건을 만족하면 exit 0, 아니면 exit 1이고 판정 근거를 stdout에
