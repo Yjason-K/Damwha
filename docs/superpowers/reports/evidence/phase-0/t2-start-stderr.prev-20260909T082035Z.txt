@@ -1,0 +1,3 @@
+# t2-start 의 stderr (dyld 줄 제외). utc: 2026-09-09T08:17:52Z  exit: 0
+2026-09-09 17:17:52.308 KST [92863] LOG:  redirecting log output to logging collector process
+2026-09-09 17:17:52.308 KST [92863] HINT:  Future log output will appear in directory "log".

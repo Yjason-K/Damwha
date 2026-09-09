@@ -1,0 +1,321 @@
+# Task 2 — 재배치 1차 시도(순진한 형태)의 실측 기록
+#
+# 이 파일은 pg/build.sh의 **첫 형태**가 남긴 t2-build-relocation.txt를 그대로
+# 보존한 것이다. 그 형태에는 두 가지가 없었고, 그래서 재배치 후 G1이 깨졌다.
+#
+#   (1) 빌드 전용 산출물 제거 경로가 틀렸다. PGXS는 lib/pgxs가 아니라
+#       **lib/postgresql/pgxs**에 설치된다 (prefix에 "postgres"/"pgsql"이
+#       들어 있지 않으면 pkglibdir = prefix/lib/postgresql이다). 그래서
+#       Makefile.global이 번들에 남았고, 그 안의 /opt/homebrew/bin/openssl 등
+#       (configure가 찾아 둔 Homebrew 도구 경로)과 빌드 트리 절대 경로가
+#       G1 위반으로 잡혔다.
+#   (2) 확장 빌드에 -fmacro-prefix-map이 없었다. PGXS는 pg_config가 알려 주는
+#       **절대** include 경로로 컴파일하므로, 서버 헤더의 인라인 함수에 있는
+#       __FILE__이 스테이징 경로 그대로 vector.dylib에 박힌다. 이동 전에는
+#       검사 대상($ROOT=stage/pg) 안이라 INFO였다가, **이동한 뒤에 STALE-PATH
+#       위반으로 바뀐다** — 재배치 검증이 아니면 드러나지 않는 형태다.
+#
+# 아래 "## 5"의 INFO 두 줄과 "## 9"의 STALE-PATH 두 줄을 나란히 보면 그
+# 전환이 보인다. 두 문제의 수정은 build.sh에 들어 있고, 수정 후의 기록은
+# t2-build-relocation.txt다.
+#
+# ---------------------------------------------------------------------------
+# Task 2 — PostgreSQL 번들 구성과 재배치 실측 (스펙 P0-C1 / R-1 / R-2)
+# 이 파일은 pg/build.sh가 생성한다. 손으로 고치지 않는다.
+utc               : 2026-09-09T08:07:07Z
+격리 대상         : 아니오 — 빌드는 산출물을 만드는 수단이다 (스펙 §4.0)
+PostgreSQL        : 16.15 (개발 이미지 damwha/postgres-bigm:pg16의 PG_VERSION=16.15와 같은 계열)
+pgvector          : 0.8.6
+pg_bigm           : 1.2-20240606 (be/docker/postgres-bigm/Dockerfile과 같은 버전)
+빌드 시점 prefix  : /opt/damwha-phase0/pg16  (이 머신에 존재하지 않는 중립 경로)
+스테이징          : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg
+최종 번들         : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg
+
+## 1. 아카이브 체크섬 (pg/checksums.txt 대조 통과)
+c1575341fa7bd40f5274ea465b34390f4dc64cdd0770af327005caaeb9f6b7ed  postgresql-16.15.tar.bz2
+10bf9938906e5d643bbc4a7eea104b6f57ba4898e5b76b20e60484ea1d5a7f8f  pgvector-0.8.6.tar.gz
+69eabf7a6af19909fc8a33525768854b08c94929d7f9fa94fe31e737c04748ff  pg_bigm-1.2-20240606.tar.gz
+
+## 3. 빌드 구성
+configure 인자: --prefix=/opt/damwha-phase0/pg16 --without-icu --without-readline --without-zlib
+PG_SYSROOT: 일부러 없는 경로를 줘 -isysroot가 박히지 않게 했다
+240:CPPFLAGS =  
+241:PG_SYSROOT = 
+312:LDFLAGS = $(LDFLAGS_INTERNAL)   -Wl,-dead_strip_dylibs
+561:LDFLAGS += $(rpath)
+설치 직후 pg_config가 보고하는 경로 (스테이징 위치 기준으로 재계산된다):
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/postgresql
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/share/postgresql
+   '--prefix=/opt/damwha-phase0/pg16' '--without-icu' '--without-readline' '--without-zlib'
+
+## 4. 확장 설치 결과 (PGXS가 pg_config의 경로에 넣는다 — R-1의 자리)
+-rwxr-xr-x@ 1 gim-yeongjae  staff   55008  9월  9 17:08 /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/postgresql/pg_bigm.dylib
+-rwxr-xr-x@ 1 gim-yeongjae  staff  201824  9월  9 17:08 /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/postgresql/vector.dylib
+pg_bigm--1.0--1.1.sql pg_bigm--1.1--1.2.sql pg_bigm--1.2.sql pg_bigm.control vector--0.1.0--0.1.1.sql vector--0.1.1--0.1.3.sql vector--0.1.3--0.1.4.sql vector--0.1.4--0.1.5.sql vector--0.1.5--0.1.6.sql vector--0.1.6--0.1.7.sql vector--0.1.7--0.1.8.sql vector--0.1.8--0.2.0.sql vector--0.2.0--0.2.1.sql vector--0.2.1--0.2.2.sql vector--0.2.2--0.2.3.sql vector--0.2.3--0.2.4.sql vector--0.2.4--0.2.5.sql vector--0.2.5--0.2.6.sql vector--0.2.6--0.2.7.sql vector--0.2.7--0.3.0.sql vector--0.3.0--0.3.1.sql vector--0.3.1--0.3.2.sql vector--0.3.2--0.4.0.sql vector--0.4.0--0.4.1.sql vector--0.4.1--0.4.2.sql vector--0.4.2--0.4.3.sql vector--0.4.3--0.4.4.sql vector--0.4.4--0.5.0.sql vector--0.5.0--0.5.1.sql vector--0.5.1--0.6.0.sql vector--0.6.0--0.6.1.sql vector--0.6.1--0.6.2.sql vector--0.6.2--0.7.0.sql vector--0.7.0--0.7.1.sql vector--0.7.1--0.7.2.sql vector--0.7.2--0.7.3.sql vector--0.7.3--0.7.4.sql vector--0.7.4--0.8.0.sql vector--0.8.0--0.8.1.sql vector--0.8.1--0.8.2.sql vector--0.8.2--0.8.3.sql vector--0.8.3--0.8.4.sql vector--0.8.4--0.8.5.sql vector--0.8.5--0.8.6.sql vector--0.8.6.sql vector.control 
+
+## 5. G1 측정 A — 슬림화 전 스테이지 (/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg)
+# 빌드 전용 산출물(lib/pgxs, include, lib/pkgconfig)이 아직 들어 있는 상태다.
+check-macho.sh (G1, 스펙 §4.1)
+  대상          : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg
+  파일 수       : 1665
+  Mach-O 수     : 73
+  금지 문자열   : 9개 (lib/forbidden-strings.txt + 실행 시점 HOME)
+  문자열 후보   : 2개 파일
+  검사 대상 내부 절대경로(INFO): 2건
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/postgresql/vector.dylib: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/include/postgresql/server/access/tupmacs.hfetch_attcannot
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/postgresql/vector.dylib: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/include/postgresql/server/lib/simplehash.htidhash_statpointerhash_statoffsethash_stathnsw
+  위반          : 25건
+    STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/postgresql/pgxs/src/Makefile.global: /opt/homebrew/bin/ginstall  (금지 문자열: /opt/homebrew)
+    STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/postgresql/pgxs/src/Makefile.global: /opt/homebrew/bin/gmkdir  (금지 문자열: /opt/homebrew)
+    STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/postgresql/pgxs/src/Makefile.global: /opt/homebrew/bin/lz4  (금지 문자열: /opt/homebrew)
+    STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/postgresql/pgxs/src/Makefile.global: /opt/homebrew/bin/openssl  (금지 문자열: /opt/homebrew)
+    STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/postgresql/pgxs/src/Makefile.global: /opt/homebrew/bin/zstd  (금지 문자열: /opt/homebrew)
+    STALE-PATH /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/postgresql/pgxs/src/Makefile.global: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/src/postgresql-16.15  (번들 밖 절대 경로 — 검사 대상이 아닌 실험 디렉터리를 가리킨다, 금지 문자열: /Users/gim-yeongjae)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/clusterdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/createdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/createuser: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/dropdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/dropuser: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/initdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pg_amcheck: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pg_basebackup: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pg_dump: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pg_dumpall: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pg_isready: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pg_receivewal: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pg_recvlogical: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pg_restore: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pg_rewind: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pg_upgrade: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pgbench: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/psql: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/reindexdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+  (CHECK_MACHO_MAX_VIOLATIONS=25 에 도달해 스캔을 중단했다)
+(check-macho.sh exit: 1)
+
+## 6. 슬림화
+제거: lib/pgxs (Makefile.global에 빌드 트리 절대 경로가 들어 있다), include/, lib/pkgconfig/, lib/*.a
+이유: 확장 빌드 전용이며 앱 실행 경로가 아니다. Phase 3의 앱도 확장을 앱 안에서 빌드하지 않는다.
+크기: 30832 KiB -> 22340 KiB
+
+## 6b. G1 측정 B — 슬림화 후 / 이동 전 (/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg)
+check-macho.sh (G1, 스펙 §4.1)
+  대상          : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg
+  파일 수       : 777
+  Mach-O 수     : 73
+  금지 문자열   : 9개 (lib/forbidden-strings.txt + 실행 시점 HOME)
+  문자열 후보   : 2개 파일
+  검사 대상 내부 절대경로(INFO): 2건
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/postgresql/vector.dylib: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/include/postgresql/server/access/tupmacs.hfetch_attcannot
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/postgresql/vector.dylib: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/include/postgresql/server/lib/simplehash.htidhash_statpointerhash_statoffsethash_stathnsw
+  위반          : 44건
+    STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/postgresql/pgxs/src/Makefile.global: /opt/homebrew/bin/ginstall  (금지 문자열: /opt/homebrew)
+    STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/postgresql/pgxs/src/Makefile.global: /opt/homebrew/bin/gmkdir  (금지 문자열: /opt/homebrew)
+    STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/postgresql/pgxs/src/Makefile.global: /opt/homebrew/bin/lz4  (금지 문자열: /opt/homebrew)
+    STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/postgresql/pgxs/src/Makefile.global: /opt/homebrew/bin/openssl  (금지 문자열: /opt/homebrew)
+    STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/postgresql/pgxs/src/Makefile.global: /opt/homebrew/bin/zstd  (금지 문자열: /opt/homebrew)
+    STALE-PATH /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/postgresql/pgxs/src/Makefile.global: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/src/postgresql-16.15  (번들 밖 절대 경로 — 검사 대상이 아닌 실험 디렉터리를 가리킨다, 금지 문자열: /Users/gim-yeongjae)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/clusterdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/createdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/createuser: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/dropdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/dropuser: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/initdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pg_amcheck: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pg_basebackup: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pg_dump: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pg_dumpall: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pg_isready: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pg_receivewal: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pg_recvlogical: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pg_restore: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pg_rewind: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pg_upgrade: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/pgbench: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/psql: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/reindexdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/bin/vacuumdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/libecpg.6.dylib: /opt/damwha-phase0/pg16/lib/libecpg.6.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/libecpg.6.dylib: /opt/damwha-phase0/pg16/lib/libpgtypes.3.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/libecpg.6.dylib: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/libecpg.dylib: /opt/damwha-phase0/pg16/lib/libecpg.6.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/libecpg.dylib: /opt/damwha-phase0/pg16/lib/libpgtypes.3.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/libecpg.dylib: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/libecpg_compat.3.dylib: /opt/damwha-phase0/pg16/lib/libecpg.6.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/libecpg_compat.3.dylib: /opt/damwha-phase0/pg16/lib/libecpg_compat.3.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/libecpg_compat.3.dylib: /opt/damwha-phase0/pg16/lib/libpgtypes.3.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/libecpg_compat.dylib: /opt/damwha-phase0/pg16/lib/libecpg.6.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/libecpg_compat.dylib: /opt/damwha-phase0/pg16/lib/libecpg_compat.3.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/libecpg_compat.dylib: /opt/damwha-phase0/pg16/lib/libpgtypes.3.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/libpgtypes.3.dylib: /opt/damwha-phase0/pg16/lib/libpgtypes.3.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/libpgtypes.dylib: /opt/damwha-phase0/pg16/lib/libpgtypes.3.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/libpq.5.dylib: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/libpq.dylib: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/postgresql/libpqwalreceiver.dylib: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/lib/postgresql/pgxs/src/test/isolation/isolationtester: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+(check-macho.sh exit: 1)
+
+## 7. 재배치 직후 (고치기 전) — R-1 / R-2가 드러나는 자리
+이동: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg -> /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg
+
+### bin/psql 실행 (libpq를 링크하는 클라이언트)
+exit: 134
+  dyld[59029]: Library not loaded: /opt/damwha-phase0/pg16/lib/libpq.5.dylib
+    Referenced from: <81B2D762-B293-3142-9615-CBEB101CA464> /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/psql
+    Reason: tried: '/opt/damwha-phase0/pg16/lib/libpq.5.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/opt/damwha-phase0/pg16/lib/libpq.5.dylib' (no such file), '/opt/damwha-phase0/pg16/lib/libpq.5.dylib' (no such file)
+
+### bin/postgres 실행 (libpq를 링크하지 않는 서버)
+exit: 0
+  postgres (PostgreSQL) 16.15
+
+### 이동 후 pg_config가 보고하는 경로 (make_relative_path의 결과)
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/share/postgresql
+
+### G1 측정 C — 이동 후 / 고치기 전 (/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg)
+check-macho.sh (G1, 스펙 §4.1)
+  대상          : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg
+  파일 수       : 777
+  Mach-O 수     : 73
+  금지 문자열   : 9개 (lib/forbidden-strings.txt + 실행 시점 HOME)
+  문자열 후보   : 2개 파일
+  검사 대상 내부 절대경로(INFO): 0건
+  위반          : 46건
+    STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/pgxs/src/Makefile.global: /opt/homebrew/bin/ginstall  (금지 문자열: /opt/homebrew)
+    STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/pgxs/src/Makefile.global: /opt/homebrew/bin/gmkdir  (금지 문자열: /opt/homebrew)
+    STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/pgxs/src/Makefile.global: /opt/homebrew/bin/lz4  (금지 문자열: /opt/homebrew)
+    STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/pgxs/src/Makefile.global: /opt/homebrew/bin/openssl  (금지 문자열: /opt/homebrew)
+    STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/pgxs/src/Makefile.global: /opt/homebrew/bin/zstd  (금지 문자열: /opt/homebrew)
+    STALE-PATH /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/pgxs/src/Makefile.global: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/src/postgresql-16.15  (번들 밖 절대 경로 — 검사 대상이 아닌 실험 디렉터리를 가리킨다, 금지 문자열: /Users/gim-yeongjae)
+    STALE-PATH /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/vector.dylib: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/include/postgresql/server/access/tupmacs.hfetch_attcannot  (번들 밖 절대 경로 — 검사 대상이 아닌 실험 디렉터리를 가리킨다, 금지 문자열: /Users/gim-yeongjae)
+    STALE-PATH /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/vector.dylib: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/include/postgresql/server/lib/simplehash.htidhash_statpointerhash_statoffsethash_stathnsw  (번들 밖 절대 경로 — 검사 대상이 아닌 실험 디렉터리를 가리킨다, 금지 문자열: /Users/gim-yeongjae)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/clusterdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/createdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/createuser: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/dropdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/dropuser: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/initdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_amcheck: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_basebackup: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_dump: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_dumpall: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_isready: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_receivewal: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_recvlogical: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_restore: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_rewind: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_upgrade: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pgbench: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/psql: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/reindexdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/vacuumdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libecpg.6.dylib: /opt/damwha-phase0/pg16/lib/libecpg.6.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libecpg.6.dylib: /opt/damwha-phase0/pg16/lib/libpgtypes.3.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libecpg.6.dylib: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libecpg.dylib: /opt/damwha-phase0/pg16/lib/libecpg.6.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libecpg.dylib: /opt/damwha-phase0/pg16/lib/libpgtypes.3.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libecpg.dylib: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libecpg_compat.3.dylib: /opt/damwha-phase0/pg16/lib/libecpg.6.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libecpg_compat.3.dylib: /opt/damwha-phase0/pg16/lib/libecpg_compat.3.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libecpg_compat.3.dylib: /opt/damwha-phase0/pg16/lib/libpgtypes.3.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libecpg_compat.dylib: /opt/damwha-phase0/pg16/lib/libecpg.6.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libecpg_compat.dylib: /opt/damwha-phase0/pg16/lib/libecpg_compat.3.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libecpg_compat.dylib: /opt/damwha-phase0/pg16/lib/libpgtypes.3.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libpgtypes.3.dylib: /opt/damwha-phase0/pg16/lib/libpgtypes.3.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libpgtypes.dylib: /opt/damwha-phase0/pg16/lib/libpgtypes.3.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libpq.5.dylib: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libpq.dylib: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/libpqwalreceiver.dylib: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+    OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/pgxs/src/test/isolation/isolationtester: /opt/damwha-phase0/pg16/lib/libpq.5.dylib  (허용 접두사가 아니다)
+(check-macho.sh exit: 1)
+
+## 8. 사후 처리 (이 처리가 build.sh 안에 있어 재현 가능하다)
+install_name_tool로 고친 항목:
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/clusterdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/clusterdb: replacing existing signature
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/createdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/createdb: replacing existing signature
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/createuser: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/createuser: replacing existing signature
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/dropdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/dropdb: replacing existing signature
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/dropuser: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/dropuser: replacing existing signature
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/initdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/initdb: replacing existing signature
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_amcheck: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_amcheck: replacing existing signature
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_basebackup: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_basebackup: replacing existing signature
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_dump: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_dump: replacing existing signature
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_dumpall: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_dumpall: replacing existing signature
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_isready: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_isready: replacing existing signature
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_receivewal: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_receivewal: replacing existing signature
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_recvlogical: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_recvlogical: replacing existing signature
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_restore: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_restore: replacing existing signature
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_rewind: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_rewind: replacing existing signature
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_upgrade: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_upgrade: replacing existing signature
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pgbench: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pgbench: replacing existing signature
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/psql: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/psql: replacing existing signature
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/reindexdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/reindexdb: replacing existing signature
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/vacuumdb: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/vacuumdb: replacing existing signature
+    ID     /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libecpg_compat.3.dylib: /opt/damwha-phase0/pg16/lib/libecpg_compat.3.dylib -> @rpath/libecpg_compat.3.dylib
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libecpg_compat.3.dylib: /opt/damwha-phase0/pg16/lib/libecpg.6.dylib -> @loader_path/../lib/libecpg.6.dylib
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libecpg_compat.3.dylib: /opt/damwha-phase0/pg16/lib/libpgtypes.3.dylib -> @loader_path/../lib/libpgtypes.3.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libecpg_compat.3.dylib: replacing existing signature
+    ID     /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libecpg.6.dylib: /opt/damwha-phase0/pg16/lib/libecpg.6.dylib -> @rpath/libecpg.6.dylib
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libecpg.6.dylib: /opt/damwha-phase0/pg16/lib/libpgtypes.3.dylib -> @loader_path/../lib/libpgtypes.3.dylib
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libecpg.6.dylib: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libecpg.6.dylib: replacing existing signature
+    ID     /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libpgtypes.3.dylib: /opt/damwha-phase0/pg16/lib/libpgtypes.3.dylib -> @rpath/libpgtypes.3.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libpgtypes.3.dylib: replacing existing signature
+    ID     /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libpq.5.dylib: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @rpath/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/libpq.5.dylib: replacing existing signature
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/libpqwalreceiver.dylib: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/libpqwalreceiver.dylib: replacing existing signature
+    CHANGE /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/pgxs/src/test/isolation/isolationtester: /opt/damwha-phase0/pg16/lib/libpq.5.dylib -> @loader_path/../../../../../../lib/libpq.5.dylib
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/pgxs/src/test/isolation/isolationtester: replacing existing signature
+수정한 Mach-O는 codesign -f -s - 로 ad-hoc 재서명했다 (arm64 실행 조건).
+
+## 9. 사후 처리 후 최종 상태 (/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg)
+### bin/psql 실행
+exit: 0
+  psql (PostgreSQL) 16.15
+
+### G1 측정 D
+check-macho.sh (G1, 스펙 §4.1)
+  대상          : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg
+  파일 수       : 777
+  Mach-O 수     : 73
+  금지 문자열   : 9개 (lib/forbidden-strings.txt + 실행 시점 HOME)
+  문자열 후보   : 2개 파일
+  검사 대상 내부 절대경로(INFO): 0건
+  위반          : 8건
+    STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/pgxs/src/Makefile.global: /opt/homebrew/bin/ginstall  (금지 문자열: /opt/homebrew)
+    STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/pgxs/src/Makefile.global: /opt/homebrew/bin/gmkdir  (금지 문자열: /opt/homebrew)
+    STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/pgxs/src/Makefile.global: /opt/homebrew/bin/lz4  (금지 문자열: /opt/homebrew)
+    STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/pgxs/src/Makefile.global: /opt/homebrew/bin/openssl  (금지 문자열: /opt/homebrew)
+    STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/pgxs/src/Makefile.global: /opt/homebrew/bin/zstd  (금지 문자열: /opt/homebrew)
+    STALE-PATH /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/pgxs/src/Makefile.global: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/src/postgresql-16.15  (번들 밖 절대 경로 — 검사 대상이 아닌 실험 디렉터리를 가리킨다, 금지 문자열: /Users/gim-yeongjae)
+    STALE-PATH /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/vector.dylib: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/include/postgresql/server/access/tupmacs.hfetch_attcannot  (번들 밖 절대 경로 — 검사 대상이 아닌 실험 디렉터리를 가리킨다, 금지 문자열: /Users/gim-yeongjae)
+    STALE-PATH /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/vector.dylib: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pg/include/postgresql/server/lib/simplehash.htidhash_statpointerhash_statoffsethash_stathnsw  (번들 밖 절대 경로 — 검사 대상이 아닌 실험 디렉터리를 가리킨다, 금지 문자열: /Users/gim-yeongjae)
+(check-macho.sh exit: 1)
+
+### 번들 크기
+ 22M	/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg

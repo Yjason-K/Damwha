@@ -1,0 +1,38 @@
+# Task 2 V2c — 번들 pg_ctl start 시험 실행 (계획 규칙 2b의 실측)
+# 이 파일은 pg/pgctl-trial.sh가 생성한다. dyld 실측 자체는 옆 파일에 있다:
+#   /Users/gim-yeongjae/project/daewha-electron-phase-0/docs/superpowers/reports/evidence/phase-0/t2-pgctl-trial-dyld.txt (run-isolated.sh가 fd 2에서 캡처)
+utc                    : 2026-09-09T08:17:22Z
+격리 대상              : 예 (run-isolated.sh를 지난다)
+데이터 디렉터리        : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/pgdata-pgctl-trial  (본 서버의 /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/pgdata 가 아니다)
+규칙 1(재 export)      : 지켰다 — 차이의 원인을 pg_ctl 하나로 좁히기 위해
+-l 옵션                : 쓰지 않았다
+logging_collector      : off
+pg_ctl start exit      : 0
+시험 postmaster PID    : 92536
+pg_ctl stop exit       : 0
+
+## PID 파일 소유권 (스펙 §4.4)
+이 시험이 띄운 프로세스는 /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/run/pg.pid 에 **쓰이지 않는다**.
+시험 전 pg.pid : 없음
+시험 후 pg.pid : 없음
+
+## pg_ctl의 stdout **만** (stderr는 리다이렉트하지 않았다 — 규칙 2)
+# pg_ctl은 내부에서 /bin/sh -c "exec postgres ... 2>&1 &" 로 띄우므로
+# 서버의 stderr가 stdout으로 합쳐진다. fd 2만 캡처하는 래퍼에는 들어오지 않는다.
+  waiting for server to start....2026-09-09 17:17:20.372 KST [92536] LOG:  starting PostgreSQL 16.15 on aarch64-apple-darwin27.0.0, compiled by Apple clang version 21.0.0 (clang-2100.3.33.1), 64-bit
+  2026-09-09 17:17:20.372 KST [92536] LOG:  listening on IPv4 address "127.0.0.1", port 55432
+  2026-09-09 17:17:20.375 KST [92539] LOG:  database system was shut down at 2026-09-09 17:17:20 KST
+  2026-09-09 17:17:20.377 KST [92536] LOG:  database system is ready to accept connections
+   done
+  server started
+  2026-09-09 17:17:22.494 KST [92536] LOG:  received fast shutdown request
+  2026-09-09 17:17:22.495 KST [92536] LOG:  aborting any active transactions
+  2026-09-09 17:17:22.497 KST [92536] LOG:  background worker "logical replication launcher" (PID 92542) exited with exit code 1
+  2026-09-09 17:17:22.497 KST [92537] LOG:  shutting down
+  2026-09-09 17:17:22.497 KST [92537] LOG:  checkpoint starting: shutdown immediate
+  2026-09-09 17:17:22.501 KST [92537] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.004 s; sync files=2, longest=0.001 s, average=0.001 s; distance=0 kB, estimate=0 kB; lsn=0/14A24D0, redo lsn=0/14A24D0
+  2026-09-09 17:17:22.504 KST [92536] LOG:  database system is shut down
+
+## pg_ctl stop 출력
+  waiting for server to shut down.... done
+  server stopped

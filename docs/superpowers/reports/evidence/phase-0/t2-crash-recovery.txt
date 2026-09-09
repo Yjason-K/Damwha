@@ -1,0 +1,25 @@
+# Task 2 V7 — crash recovery 증거
+# utc: 2026-09-09T08:32:18Z
+# SIGKILL 대상 pid: 98493 (pg.pid) / 재기동 pid: 98713
+# 표식 행: t2-crash-20260909T083217Z
+# 로그: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/pgdata/log/server-20260909-173217.txt
+
+2026-09-09 17:32:17.050 KST [98493] LOG:  starting PostgreSQL 16.15 on aarch64-apple-darwin27.0.0, compiled by Apple clang version 21.0.0 (clang-2100.3.33.1), 64-bit
+2026-09-09 17:32:17.051 KST [98493] LOG:  listening on IPv4 address "127.0.0.1", port 55432
+2026-09-09 17:32:17.055 KST [98500] LOG:  database system was shut down at 2026-09-09 17:32:16 KST
+2026-09-09 17:32:17.056 KST [98501] FATAL:  the database system is starting up
+2026-09-09 17:32:17.058 KST [98493] LOG:  database system is ready to accept connections
+2026-09-09 17:32:17.586 KST [98507] FATAL:  role "gim-yeongjae" does not exist
+2026-09-09 17:32:17.847 KST [98655] NOTICE:  relation "t2_crash_probe" already exists, skipping
+2026-09-09 17:32:17.979 KST [98713] LOG:  starting PostgreSQL 16.15 on aarch64-apple-darwin27.0.0, compiled by Apple clang version 21.0.0 (clang-2100.3.33.1), 64-bit
+2026-09-09 17:32:17.980 KST [98713] LOG:  listening on IPv4 address "127.0.0.1", port 55432
+2026-09-09 17:32:17.982 KST [98720] LOG:  database system was interrupted; last known up at 2026-09-09 17:32:17 KST
+2026-09-09 17:32:17.983 KST [98721] FATAL:  the database system is starting up
+2026-09-09 17:32:18.062 KST [98720] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-09-09 17:32:18.064 KST [98720] LOG:  redo starts at 0/1B26B68
+2026-09-09 17:32:18.064 KST [98720] LOG:  invalid record length at 0/1B26D20: expected at least 24, got 0
+2026-09-09 17:32:18.064 KST [98720] LOG:  redo done at 0/1B26CF8 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-09-09 17:32:18.066 KST [98718] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-09-09 17:32:18.067 KST [98718] LOG:  checkpoint complete: wrote 5 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.002 s; sync files=4, longest=0.001 s, average=0.001 s; distance=0 kB, estimate=0 kB; lsn=0/1B26D20, redo lsn=0/1B26D20
+2026-09-09 17:32:18.069 KST [98713] LOG:  database system is ready to accept connections
+2026-09-09 17:32:18.513 KST [98729] FATAL:  role "gim-yeongjae" does not exist

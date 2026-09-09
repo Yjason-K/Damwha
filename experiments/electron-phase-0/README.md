@@ -246,6 +246,27 @@ OS python 바이트코드 캐시 같은 것들이라 금지 문자열이 당연�
 `git worktree list`로 주 worktree를 찾아 **읽기만** 한다. 다른 위치를 쓰려면
 `DAMWHA_SOURCE_STORAGE`로 지정한다.
 
+**8. Task 2가 실측으로 덧붙이는 것 (서버 런처를 만드는 Task 5에게).**
+자세한 내용과 증거 파일 목록은 `pg/README.md`에 있다. 런처를 쓰는 쪽만 요약한다.
+
+- **`pg_ctl start`는 규칙 2b대로 정말 못 쓴다.** 이제 실측이 있다 —
+  `t2-pgctl-trial-dyld.txt`의 dyld 줄 162건이 **전부 `pg_ctl` 자신의 것**이고
+  시험 postmaster의 pid로는 0건이다. 서버 로그는 pg_ctl의 stdout으로 나왔다.
+  규칙 1을 지켜도 결과가 같다.
+- **서버를 `&`로 띄울 때 stdout은 파일로 돌린다.** stderr는 절대 돌리면 안
+  되지만(규칙 2), stdout을 그대로 두면 서버가 그 fd를 물고 있어서
+  `... | tail`이나 `$(...)`로 런처를 부른 호출이 영영 끝나지 않는다. 래퍼
+  안에서는 규칙 3이 지켜지는데 파이프를 태우는 순간 깨진다.
+- **fork된 자식의 dyld 줄은 부모의 pid로 찍힌다.** dyld가 프로세스 시작
+  시점에 만든 `dyld[<pid>]:` 접두사를 그대로 물려받기 때문이다. PostgreSQL
+  백엔드가 확장을 dlopen한 줄이 postmaster의 pid로 남는 것이 그 예다.
+- **`install_name_tool`로 고친 Mach-O는 `codesign -f -s -`로 다시 서명해야
+  실행된다.** arm64에서는 서명 없는 Mach-O가 뜨지 않는다. ad-hoc 서명은
+  플랫폼 바이너리로 만들지 않으므로 `DYLD_*` 실측은 그대로 살아 있다.
+- **재배치 검증은 옮긴 뒤에 해야 의미가 있다.** 스테이징 경로 안을 가리키는
+  문자열은 `check-macho.sh`가 `INFO`로 분류하다가 옮기는 순간 `STALE-PATH`
+  위반이 된다. 같은 파일의 같은 문자열이다 (`t2-relocation-attempt1.txt`).
+
 ## verify/ 규약
 
 각 스크립트는 조건을 만족하면 exit 0, 아니면 exit 1이고 판정 근거를 stdout에

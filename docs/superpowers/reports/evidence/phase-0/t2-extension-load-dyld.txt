@@ -1,0 +1,12 @@
+# Task 2 — 확장 dlopen의 dyld 실측
+# 백엔드의 stderr는 logging_collector를 거쳐 서버 로그로 가므로
+# t2-start-dyld.txt에는 남지 않는다 (계획 규칙 3b). 여기로 옮긴다.
+# utc: 2026-09-09T08:32:09Z   pg.pid: 97869
+# 원본: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/pgdata/log/*.txt
+# dyld[<pid>]의 pid는 postmaster의 것으로 찍힌다 — fork된 백엔드가
+# 프로세스 시작 시점에 만들어진 접두사를 그대로 물려받기 때문이다.
+dyld[93429]: <1B98DB38-0843-35AF-818B-308EEA882FE1> /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/vector.dylib
+dyld[93429]: <3B2273DB-2895-30E2-9A78-2E51B930755C> /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/plpgsql.dylib
+dyld[93429]: <B960C51B-4601-39C8-A0CE-29491A9636E9> /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/pg_bigm.dylib
+dyld[97869]: <1B98DB38-0843-35AF-818B-308EEA882FE1> /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/vector.dylib
+dyld[97869]: <B960C51B-4601-39C8-A0CE-29491A9636E9> /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/lib/postgresql/pg_bigm.dylib

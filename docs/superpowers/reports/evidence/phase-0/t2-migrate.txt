@@ -1,0 +1,33 @@
+# Task 2 V4 — pnpm be:migrate 를 실험 DB(55432)에 적용한 기록
+#
+# **이 명령은 격리 대상이 아니다** (스펙 §4.0). be/CLAUDE.md가 src/database/migrate.ts +
+# _migrations 테이블을 단일 진실 원천으로 못 박았고, .sql을 손으로 실행하면 그 계약이
+# 깨진다. 그래서 개발 Node 환경에서 DATABASE_URL만 실험 DB로 바꿔 돌린다. 검증되는 것은
+# "번들 PostgreSQL이 이 마이그레이션 전량을 받아내는가"이지 "Node 없이 도는가"가 아니다.
+# Node 런타임은 Phase 1에서 Electron이 제공한다.
+#
+# dotenv는 이미 설정된 process.env를 덮어쓰지 않으므로 be/.env의 5432가 아니라
+# 아래 주입값이 쓰인다 — verify/t2-migrations.sh가 55432에 직접 붙어 그것을 확인한다.
+utc     : 2026-09-09T08:24:51Z
+cwd     : /Users/gim-yeongjae/project/daewha-electron-phase-0
+node    : v22.21.1  pnpm: 10.26.0
+명령    : DATABASE_URL=postgresql://postgres@127.0.0.1:55432/damwha pnpm be:migrate
+
+## 실행 전 _migrations
+f
+
+## 출력
+
+> damwha@0.2.3 be:migrate /Users/gim-yeongjae/project/daewha-electron-phase-0
+> pnpm --filter damwha-be run migrate
+
+
+> damwha-be@0.2.3 migrate /Users/gim-yeongjae/project/daewha-electron-phase-0/be
+> ts-node src/database/migrate.ts
+
+exit: 0
+
+## 실행 후 _migrations 행 수 (번들 psql로 55432에 직접 붙어서 셌다)
+24
+## 마이그레이션 파일 수
+24

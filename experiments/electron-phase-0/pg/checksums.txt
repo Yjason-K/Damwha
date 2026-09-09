@@ -1,0 +1,8 @@
+# Task 2가 내려받는 아카이브의 sha256. build.sh가 shasum -a 256 -c 로 대조한다.
+#
+# postgresql-16.15.tar.bz2 의 값은 배포처가 함께 공개하는 것과 같다:
+#   https://ftp.postgresql.org/pub/source/v16.15/postgresql-16.15.tar.bz2.sha256
+# GitHub의 태그 아카이브는 공개 체크섬이 없어 2026-09-09에 받은 값을 적어 둔다.
+c1575341fa7bd40f5274ea465b34390f4dc64cdd0770af327005caaeb9f6b7ed  postgresql-16.15.tar.bz2
+10bf9938906e5d643bbc4a7eea104b6f57ba4898e5b76b20e60484ea1d5a7f8f  pgvector-0.8.6.tar.gz
+69eabf7a6af19909fc8a33525768854b08c94929d7f9fa94fe31e737c04748ff  pg_bigm-1.2-20240606.tar.gz
