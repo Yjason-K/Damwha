@@ -1,4 +1,4 @@
-# t4-normalize 의 stderr (dyld 줄 제외). utc: 2026-09-09T13:40:59Z  exit: 0
+# t4-normalize 의 stderr (dyld 줄 제외). utc: 2026-09-09T13:54:23Z  exit: 0
 ffmpeg version 9.0.1 Copyright (c) 2000-2026 the FFmpeg developers
   built with Apple clang version 21.0.0 (clang-2100.3.33.1)
   configuration: --prefix=/opt/damwha-phase0/ffmpeg --disable-gpl --disable-nonfree --disable-version3 --disable-doc --disable-htmlpages --disable-manpages --disable-podpages --disable-txtpages --disable-avdevice --disable-network --disable-ffplay --enable-static --disable-shared --disable-debug
@@ -28,5 +28,5 @@ Output #0, flac, to '/Users/gim-yeongjae/project/daewha-electron-phase-0/experim
   Stream #0:0: Audio: flac, 16000 Hz, mono, s16, 128 kb/s
     Metadata:
       encoder         : Lavc63.1.101 flac
-size=   13824KiB time=00:10:18.41 bitrate= 183.1kbits/s speed=1.21e+03x elapsed=0:00:00.51    size=   27648KiB time=00:20:12.45 bitrate= 186.8kbits/s speed=1.2e+03x elapsed=0:00:01.01    size=   40960KiB time=00:30:32.37 bitrate= 183.1kbits/s speed=1.21e+03x elapsed=0:00:01.51    [out#0/flac @ 0x7b4500c600] video:0KiB audio:42299KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.019289%
-size=   42307KiB time=00:31:23.25 bitrate= 184.0kbits/s speed=1.21e+03x elapsed=0:00:01.55    
+size=   13568KiB time=00:10:05.56 bitrate= 183.5kbits/s speed=1.19e+03x elapsed=0:00:00.50    size=   26880KiB time=00:19:46.92 bitrate= 185.5kbits/s speed=1.18e+03x elapsed=0:00:01.00    size=   40192KiB time=00:29:48.33 bitrate= 184.1kbits/s speed=1.18e+03x elapsed=0:00:01.51    [out#0/flac @ 0x799300c600] video:0KiB audio:42299KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.019289%
+size=   42307KiB time=00:31:23.25 bitrate= 184.0kbits/s speed=1.17e+03x elapsed=0:00:01.60    

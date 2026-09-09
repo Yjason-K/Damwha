@@ -1,5 +1,5 @@
 # Task 4 V2 — 번들 ffprobe (재배치 후, P0-C6)
-# utc: 2026-09-09T13:40:57Z
+# utc: 2026-09-09T13:54:21Z
 # 실행: run-isolated.sh --label t4-probe -- /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/ffmpeg/bin/ffprobe -v error -show_entries format=duration -of json /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/audio/sample.flac
 # 이 명령은 be/worker/damwha_worker/pipeline/ffmpeg.py::probe()가 쓰는 것과 정확히 같다
 # exit: 0

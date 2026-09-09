@@ -730,6 +730,7 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 
 **Interfaces**
 
+- **`docker volume ls` 공백을 메운다.** Task 3·4가 연속으로 OrbStack API 무응답(`timeout` exit 124)에 걸려 볼륨 대조를 못 했다. 대체 증거(`be/storage` 매니페스트 무변화)와 "하네스에 볼륨 쓰기 경로가 없다"는 코드 근거는 있으나, 그대로 두면 P0-C14의 "실행하지 않은 검증을 성공으로 적지 않는다"와 부딪힌다. Task 11은 착수 시 OrbStack 복구 여부를 확인해 (a) 되면 Task 3의 before 목록(볼륨 15개)과 대조해 사후 보완하고, (b) 안 되면 **미측정으로 명시**하고 대체 증거만으로 무엇이 확인됐는지 적는다.
 - **G1 허용 목록의 실동작 폴백 3건을 증명한다.** Task 3이 `lib/g1-allowlist.txt`에 `실동작-폴백`으로 표시한 세 항목 — `soundfile.py`의 `/opt/homebrew`·`/usr/local/lib` 탐색 경로, `ctypes/macholib/dyld.py`의 `DEFAULT_LIBRARY_FALLBACK`, `PIL/_imagingft…so`의 fribidi dlopen 후보 — 은 번들 안에서 라이브러리를 못 찾을 때만 실행된다. Task 11은 dyld 실측과 P0-C8 자기 보고로 **그 경로가 실제로 쓰이지 않았음**을 보여야 한다. 보이지 못하면 P0-C7을 충족으로 적지 않는다.
 - P0-C7: `bundle/` 전체에 `check-macho.sh`를 다시 돌리고, `$EVIDENCE`의 모든 `*-dyld.txt`에서 금지 문자열을 검색한다. `MEASUREMENT_UNAVAILABLE`로 표시된 실행은 별도 집계하고 P0-C8의 자기 보고로 대체 확인한다.
 - **집계기는 dyld 줄이 0건인 것과 측정 자체가 불가능했던 것을 구분한다.** 번들 Mach-O를 실행한 항목인데 dyld 줄이 0건이면 그것은 "위반 없음"이 아니라 **런처가 re-export를 빠뜨린 미측정**이다. 위 "런처 스크립트의 dyld 실측 규칙"을 어긴 것이므로 통과로 집계하지 않는다.

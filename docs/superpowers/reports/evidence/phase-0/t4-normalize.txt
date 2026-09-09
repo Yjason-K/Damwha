@@ -1,5 +1,5 @@
 # Task 4 V3 — 번들 ffmpeg normalize (재배치 후, P0-C6)
-# utc: 2026-09-09T13:41:00Z
+# utc: 2026-09-09T13:54:25Z
 # 실행: run-isolated.sh --label t4-normalize -- /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/ffmpeg/bin/ffmpeg -y -i /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/audio/sample.flac -ac 1 -ar 16000 -sample_fmt s16 -c:a flac -compression_level 5 -f flac /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/run/t4-normalized.flac
 # 이 명령은 be/worker/damwha_worker/pipeline/ffmpeg.py::normalize()가 쓰는 것과 정확히 같다
 # exit: 0

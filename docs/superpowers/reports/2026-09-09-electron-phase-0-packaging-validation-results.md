@@ -142,6 +142,24 @@ Task 1은 통과했으나 reviewer가 Task 2·5 착수 전 반영을 권고한 �
 
 | 3 | `f4c9b78..aaf02f1` | electron-reviewer (fable) | 1 | 없음 | `evidence/phase-0/task-3-r1.md` | **PASS** |
 
+| 4 | `a6fd22b..8f86452` | electron-reviewer (sonnet) | 1 | 없음 | `evidence/phase-0/task-4-r1.md` | **PASS** |
+
+### Task 4 상세
+
+P0-C6 충족. 후보는 **소스 빌드**(스펙 §9 후보 2), `--disable-gpl --disable-nonfree --disable-version3`. configure가 스스로 `License: LGPL version 2.1 or later`를 보고한다. 공개 정적 빌드(후보 1)는 관례적으로 `libx264`·`libx265`·`libfdk-aac`를 켜 GPL 또는 nonfree 구성인데, 담화는 비디오를 다루지 않고 손실 인코딩도 하지 않아 그 비용을 치를 이유가 없다. 소스 빌드가 107초로 끝나 "빌드를 피할" 이점도 없었다. **R-8 해소.**
+
+`bundle/ffmpeg` = **42 MB**(`ffmpeg` 21.97 + `ffprobe` 21.78). `include/`·`lib/*.a`·`pkgconfig`·`share/`는 빌드 전용이라 제외했고, `otool -L`에 절대 경로 참조가 전혀 없어 실행에 영향이 없음을 reviewer가 확인했다.
+
+**재배치에서 아무것도 깨지지 않았다 — 세 번들 중 처음이다.** `--enable-static --disable-shared` 완전 정적 링크로 `otool -L` 의존이 `/usr/lib/*`·`/System/Library/Frameworks/*`뿐이고 **`LC_RPATH` 커맨드 자체가 없다.** 이동 전/후 G1 위반이 둘 다 0건이고, reviewer가 제3의 경로로 복사해 격리 실행한 결과 사후 처리 없이 정상 동작했다. Task 2(`install_name` 37건)·Task 3(`LC_RPATH` 58건)과 대비되며, **정적 링크가 재배치 문제를 통째로 없앤다**는 것이 Phase 3·4 결정에 쓸 사실이다.
+
+**Homebrew ffmpeg와의 구분이 이 Task의 핵심 위험이었다.** 이 머신의 Homebrew ffmpeg가 **같은 버전 9.0.1**이고, 두 `ffprobe -version` 첫 줄이 `ffprobe version 9.0.1 Copyright (c) 2007-2026 the FFmpeg developers`로 **글자 그대로 동일**하다(verifier 실측). 버전 문자열로는 구분이 불가능하고 dyld 로그의 메인 이미지 경로만이 근거다. 세 dyld 증거 모두 `^dyld` 688줄에 `/opt/homebrew` **0건**, 메인 이미지가 `bundle/ffmpeg/bin/{ffprobe,ffmpeg}`.
+
+**그 판정 로직 자체를 reviewer가 변이로 검증했다** — `t4-probe-dyld.txt`를 Homebrew 경로가 든 가짜 증거로 바꿔치기하니 정확히 FAIL(`dyld 줄에 /opt/homebrew 가 1건 있다` / `번들 아래 이미지를 연 pid가 없다 — 가짜 증거다`). 원본 복구 후 재확인까지 했다.
+
+**검증 명령이 제품 코드와 일치한다.** reviewer가 `pipeline/ffmpeg.py::probe()`/`normalize()`의 `cmd` 리스트와 `t4-probe.sh`/`t4-normalize.sh`의 인자열을 대조해 순서·값이 정확히 같음을 확인했다. duration `1883.254422`가 원본과 오차 0으로 일치.
+
+체크섬은 Task 2의 pgvector·pg_bigm과 같은 한계다 — ffmpeg.org가 공개 sha256을 제공하지 않고 이 머신에 gpg가 없어 `checksums.txt`는 2026-09-09 TLS 수신값의 자체 관측이다. README에 명시됐다.
+
 ### Task 3 상세
 
 P0-C3 충족. 후보는 **python-build-standalone 3.12.11 + `uv pip install --python`**(스펙 §9 후보 1). `bin/python3.12`가 libpython을 `@executable_path/../lib/…`로 참조하고 `LC_RPATH`가 없다. venv를 만들지 않고 배포본 `site-packages`에 직접 설치해 절대 경로가 박히는 층을 하나로 줄였다. `bundle/python` = **1509 MiB**(파일 38420개) — torch 411, mlx 203, llvmlite 124, scipy 81, onnxruntime 75 MiB. 모델은 없다.
