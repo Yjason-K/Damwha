@@ -15,8 +15,14 @@
 #   C. dyld 실측 대조군 — 플랫폼 바이너리가 아닌 Mach-O를 격리 실행했을 때
 #      dyld 줄이 실제로 잡히는지 본다. 이게 없으면 모든 실행이 조용히
 #      MEASUREMENT_UNAVAILABLE로 기록돼도 아무도 모른다.
+#   D. 런처 dyld 대조군 — SIP는 플랫폼 바이너리(/bin/bash 등)를 exec할 때마다
+#      환경에서 DYLD_*를 지운다. 그래서 번들 Mach-O를 bash 런처로 감싸는
+#      순간 실측이 끊긴다. 계획 "런처 스크립트의 dyld 실측 규칙"이 요구하는
+#      re-export가 실제로 그 차이를 만드는지 한 쌍으로 확인한다. 뒤 Task의
+#      런처(pg/run.sh, services/*.sh, lib/selfreport-all.sh)에서 누가
+#      re-export를 빠뜨리면 여기가 깨져서 바로 드러난다.
 #
-# 셋 다 "실패를 검출했을 때만" 통과다. 스크립트가 뒤집어 exit 0으로 만든다
+# 넷 다 "실패를 검출했을 때만" 통과다. 스크립트가 뒤집어 exit 0으로 만든다
 # (계획 "Verify 명령 작성 규칙").
 
 set -u
@@ -170,6 +176,17 @@ else
   fi
 fi
 
+# grep -c는 0건일 때 "0"을 찍고 **동시에** exit 1을 낸다. `|| echo 0`을 붙이면
+# 0이 두 줄 나와서 이어지는 정수 비교가 깨진다 — 하나만 낸다.
+dyld_lines() {
+  local n
+  n=$(grep -c '^dyld' "$1" 2>/dev/null)
+  case "$n" in
+    ''|*[!0-9]*) echo 0 ;;
+    *) echo "$n" ;;
+  esac
+}
+
 # ---------------------------------------------------------------------------
 # C. dyld 실측 대조군
 # ---------------------------------------------------------------------------
@@ -193,8 +210,8 @@ if bash "$EXP_LIB_DIR/run-isolated.sh" --label t1-dyld-control -- "$DYFIX/echo" 
     echo "       — dyld 실측이 동작하지 않는다는 뜻이다"
     FAIL=1
   else
-    N=$(grep -c '^dyld' "$DY" || true)
-    if [ "${N:-0}" -ge 1 ]; then
+    N=$(dyld_lines "$DY")
+    if [ "$N" -ge 1 ]; then
       echo "  OK   dyld 줄 ${N}건을 실측했다"
       grep '^dyld' "$DY" | head -n 3 | sed 's/^/    /'
     else
@@ -204,6 +221,76 @@ if bash "$EXP_LIB_DIR/run-isolated.sh" --label t1-dyld-control -- "$DYFIX/echo" 
   fi
 else
   echo "  FAIL 대조군 바이너리를 격리 실행하지 못했다"
+  FAIL=1
+fi
+
+# ---------------------------------------------------------------------------
+# D. 런처 dyld 대조군 (계획 "런처 스크립트의 dyld 실측 규칙" 5)
+# ---------------------------------------------------------------------------
+echo
+echo "== D. 런처 dyld 대조군 — re-export 없음 / 있음"
+# C절이 만든 ad-hoc 서명 Mach-O를 그대로 쓴다. 런처만 두 벌 만든다.
+cat > "$DYFIX/launch-noexport.sh" <<'LAUNCHER'
+#!/bin/bash
+# 규칙을 어긴 런처. SIP가 /bin/bash를 exec하며 DYLD_*를 지웠으므로 자식은
+# 계측 없이 뜬다. 대조군 전용이다 — 뒤 Task의 런처는 이렇게 쓰면 안 된다.
+exec "$1"
+LAUNCHER
+cat > "$DYFIX/launch-reexport.sh" <<'LAUNCHER'
+#!/bin/bash
+# 규칙을 지킨 런처. 번들 Mach-O를 exec하기 직전에 다시 설정한다.
+export DYLD_PRINT_LIBRARIES=1
+exec "$1"
+LAUNCHER
+chmod +x "$DYFIX/launch-noexport.sh" "$DYFIX/launch-reexport.sh"
+
+# D1 — re-export 없는 런처: dyld 줄 0건이어야 한다.
+if bash "$EXP_LIB_DIR/run-isolated.sh" --label t1-dyld-launcher-noexport \
+     -- "$DYFIX/launch-noexport.sh" "$DYFIX/echo" >/dev/null; then
+  D1="$EVIDENCE/t1-dyld-launcher-noexport-dyld.txt"
+  N1=$(dyld_lines "$D1")
+  if [ "$N1" -eq 0 ]; then
+    echo "  OK   D1: re-export 없는 런처는 dyld 0건이다 (SIP가 /bin/bash exec에서 지웠다)"
+    if head -n 1 "$D1" | grep -q '^MEASUREMENT_UNAVAILABLE$'; then
+      echo "  OK   D1: 증거가 MEASUREMENT_UNAVAILABLE로 표시됐다 — 통과로 집계되지 않는다"
+    else
+      echo "  FAIL D1: dyld 0건인데 MEASUREMENT_UNAVAILABLE 표시가 없다"
+      FAIL=1
+    fi
+  else
+    echo "  FAIL D1: re-export 없는 런처인데 dyld 줄이 ${N1}건이다 —"
+    echo "       이 대조군의 전제(SIP가 플랫폼 바이너리 exec에서 DYLD_*를 지운다)가"
+    echo "       깨졌다. 계획 '런처 스크립트의 dyld 실측 규칙'을 다시 재야 한다"
+    FAIL=1
+  fi
+else
+  echo "  FAIL D1: 런처를 격리 실행하지 못했다"
+  FAIL=1
+fi
+
+# D2 — re-export 있는 런처: dyld 줄 1건 이상이고, 그 줄이 **자식 Mach-O의**
+# 것이어야 한다. 줄 수만 보면 런처 자신의 로드 목록만 남은 가짜 증거를
+# 통과시킨다 (계획 규칙 2가 막는 형태).
+if bash "$EXP_LIB_DIR/run-isolated.sh" --label t1-dyld-launcher-reexport \
+     -- "$DYFIX/launch-reexport.sh" "$DYFIX/echo" >/dev/null; then
+  D2="$EVIDENCE/t1-dyld-launcher-reexport-dyld.txt"
+  N2=$(dyld_lines "$D2")
+  if [ "$N2" -ge 1 ]; then
+    echo "  OK   D2: re-export 있는 런처는 dyld ${N2}건을 실측했다"
+  else
+    echo "  FAIL D2: re-export를 했는데도 dyld 줄이 0건이다 — 실측이 끊겼다"
+    FAIL=1
+  fi
+  if grep -q -F "$DYFIX/echo" "$D2" 2>/dev/null; then
+    echo "  OK   D2: 실측된 줄이 자식 Mach-O의 것이다 (런처 자신의 목록만 남은 가짜 증거가 아니다)"
+  else
+    echo "  FAIL D2: dyld 줄에 자식 Mach-O($DYFIX/echo)가 없다 —"
+    echo "       줄 수는 0이 아닌데 정작 검증 대상의 라이브러리가 하나도 없는"
+    echo "       가짜 증거다 (계획 '런처 스크립트의 dyld 실측 규칙' 2)"
+    FAIL=1
+  fi
+else
+  echo "  FAIL D2: 런처를 격리 실행하지 못했다"
   FAIL=1
 fi
 

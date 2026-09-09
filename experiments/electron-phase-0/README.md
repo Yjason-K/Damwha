@@ -89,22 +89,62 @@ bash experiments/electron-phase-0/lib/snapshot-dev-assets.sh after
 갈라 증거로 나누기 때문이다. 실행 중에 보고 싶으면 래퍼가 시작할 때 출력하는
 `tail -f <경로>`를 쓴다.
 
-**2a. 래퍼가 받는 것은 자식의 fd 2 하나뿐이다 — Task 2·5가 알아야 한다.**
-`pg_ctl start -l <파일>`처럼 **데몬화하면서 stderr를 딴 데로 돌리는** 명령을
-래퍼에 통과시키면 dyld 줄이 0건이 되고, 래퍼는 그것을 SIP 탓
-(`MEASUREMENT_UNAVAILABLE`)으로 적는다 — 원인을 잘못 귀속한다. 서버는 래퍼
-아래 **포그라운드로** 띄우고, PID 파일에는 **서버 자신의 PID**를 쓴다(래퍼
-bash의 PID가 아니라). 그래야 dyld 실측이 서고 `run.sh kill`의 SIGKILL이
-실제 서버에 간다.
+**2a. 런처를 쓰면 dyld 실측이 끊긴다 — Task 2·5·11의 런처 규칙.**
+SIP는 플랫폼 바이너리(`/bin/bash`, `/bin/sh`, `/usr/bin/python3` 등)를
+**exec할 때마다** 환경에서 `DYLD_*`를 지운다. 환경 격리(`PATH`·`HOME`·
+화이트리스트)는 런처를 거쳐도 멀쩡한데 **dyld 실측만** 조용히 사라진다.
+직접 재서 확인했다.
+
+| 실행 형태 | dyld 줄 |
+| --- | --- |
+| `env -i DYLD_PRINT_LIBRARIES=1 <번들 Mach-O>` | 81 |
+| `env -i DYLD_PRINT_LIBRARIES=1 <bash 런처>` → 같은 Mach-O | **0** |
+| bash 런처가 `exec` 직전 `export DYLD_PRINT_LIBRARIES=1` | 81 |
+| 런처가 자식 stderr를 `2>/dev/null` | **0** |
+| 비플랫폼 런처(ad-hoc 서명 bash)가 자식 stderr를 리다이렉트 | 82 — **전부 런처 자신의 것**, 자식 것은 0건 |
+
+마지막 줄이 가장 위험하다. 줄 수가 0이 아니라 래퍼도 사람도 통과로 보는데
+정작 검증 대상의 라이브러리는 하나도 없다 — **위반 0건짜리 가짜 증거**다.
+`pg_ctl start -l <logfile>`이 정확히 이 형태를 만든다: `pg_ctl` 자신(번들
+Mach-O)의 로드 목록은 남고 `postgres`의 것은 로그 파일로 샌다.
+
+`exec` 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 지워진다.
+그래서 런처 쪽이 규칙을 지킨다.
+
+1. 번들 Mach-O를 `exec`하기 **직전에** 런처가 `export DYLD_PRINT_LIBRARIES=1`을
+   다시 설정한다. 대상은 `pg/run.sh`, `services/embed.sh`, `services/llm.sh`,
+   `lib/selfreport-all.sh`다.
+2. 그 프로세스의 stderr를 **리다이렉트하지 않는다.** `pg_ctl start -l <logfile>`
+   금지.
+3. 서버 런처의 `start`는 서버를 **백그라운드로 띄우고** 준비 상태
+   (`pg_isready`, `/health`, `/v1/models`)를 런처 안에서 기다린 뒤 exit 0 한다.
+   이 래퍼는 자식 종료까지 블로킹하고 증거도 그 뒤에 쓰므로(2b), 서버를
+   포그라운드로 두면 Verify 행이 영영 돌아오지 않는다. 준비가 끝난 시점이면
+   서버의 초기 로드 dyld 줄은 이미 전부 캡처에 담겨 있다.
+4. PID 파일에는 **서버 자신의 PID**를 쓴다(런처 bash의 PID가 아니라).
+   그래야 `run.sh kill`의 SIGKILL이 실제 서버에 가고, 아래 확인이 성립한다.
+
+**증거를 읽을 때.** 줄 수만 보지 않는다. `dyld[<pid>]`의 pid가
+`$SANDBOX/run/<name>.pid`의 서버 PID와 같은지, 그리고 로드 경로에 검증 대상
+번들 바이너리가 실제로 있는지 확인한다. 둘 중 하나라도 어긋나면 그 회차는
+측정에 실패한 것이다.
+
+`verify/t1-detector-negative.sh`의 D절이 이 규칙을 코드로 고정한다 —
+re-export 없는 런처는 dyld 0건, 있는 런처는 1건 이상이면서 그 줄이 자식
+Mach-O의 것이어야 한다. 뒤 Task에서 누가 re-export를 빠뜨리면 Task 1 검증이
+깨져서 바로 드러난다.
 
 **2b. 증거는 자식이 끝난 뒤에만 쓰인다.** 래퍼 bash가 먼저 죽으면 그 회차의
-증거는 남지 않고 자식은 고아가 된다. 긴 작업을 중단할 때는 자식을 먼저
+증거는 남지 않고 자식은 고아가 된다. 래퍼의 `trap ... EXIT`이 `$RUNTMP`를
+지우므로 원시 stderr까지 함께 사라진다. 긴 작업을 중단할 때는 자식을 먼저
 `$SANDBOX/run/`의 PID로 내린다.
 
-**2c. 자손 전부가 `DYLD_PRINT_LIBRARIES`를 물려받는다.** 워커가 띄우는
-ffmpeg나 `mlx_lm.server`의 stderr에도 dyld 줄이 섞여 같은 파일에 들어온다.
-증거를 읽을 때 한 프로세스의 로드 목록이 아니라 **프로세스 트리 전체의**
-로드 목록임을 감안한다. `dyld[<pid>]` 접두사로 갈라 볼 수 있다.
+**2c. `DYLD_PRINT_LIBRARIES`는 자손에게 그냥 상속되지 않는다.** 위 2a의
+이유로 **플랫폼 바이너리를 하나라도 거치면 끊긴다.** 워커가 `/bin/sh`를
+거쳐 ffmpeg를 띄우면 그 ffmpeg의 로드 목록은 증거에 없다. 반대로 번들
+Python이 ffmpeg를 직접 `exec`하면 나온다 — 어느 쪽인지는 **경로가 실제로
+찍혔는지로** 확인하지, 나왔을 것이라고 가정하지 않는다. 그렇게 이어진
+경우 한 파일에 여러 프로세스의 목록이 섞이므로 `dyld[<pid>]`로 갈라 본다.
 
 **3. `DYLD_PRINT_LIBRARIES`는 주입 화이트리스트가 아니라 계측 도구다.**
 스펙 §4.2 표의 이름 **12개**만 주입 대상이다 — 값을 기록하는 11개 + 비밀값
@@ -138,11 +178,22 @@ ffmpeg나 `mlx_lm.server`의 stderr에도 dyld 줄이 섞여 같은 파일에 �
 `allowed_dep`/문자열 면제와 같은 자리에 근거를 적고 넓힌다.
 
 **5a. Task 11의 증거 집계기(`aggregate-isolation.sh`)에게.**
-`$EVIDENCE/*-env.txt`와 `*-dyld.txt`에는 샌드박스 절대 경로가 **정상적으로**
-들어 있다(격리 실행의 `HOME`·`TMPDIR`이 거기다). 그것을 금지 문자열로 세면
-P0-C7이 항상 실패한다. 다만 면제는 `$SANDBOX` 하위와 실제로 검사한
-`bundle/` 하위로 좁혀라 — `$EXP` 전체를 뭉뚱그려 빼면 위 `STALE-PATH`와 같은
-구멍이 증거 집계 쪽에 그대로 생긴다.
+
+- `$EVIDENCE/*-env.txt`와 `*-dyld.txt`에는 샌드박스 절대 경로가 **정상적으로**
+  들어 있다(격리 실행의 `HOME`·`TMPDIR`이 거기다). 그것을 금지 문자열로 세면
+  P0-C7이 항상 실패한다. 다만 면제는 `$SANDBOX` 하위와 실제로 검사한
+  `bundle/` 하위로 좁혀라 — `$EXP` 전체를 뭉뚱그려 빼면 위 `STALE-PATH`와 같은
+  구멍이 증거 집계 쪽에 그대로 생긴다.
+- **dyld 0건을 "위반 없음"으로 세지 마라.** 번들 Mach-O를 실행한 항목인데
+  dyld 줄이 0건이면 그건 런처가 re-export를 빠뜨린 **미측정**이다(2a).
+  `MEASUREMENT_UNAVAILABLE`로 별도 집계하고, P0-C8의 런타임 자기 보고로
+  대체 확인하거나 미충족으로 남긴다.
+- 단 `t1-dyld-launcher-noexport-*`는 **의도된 음성 대조군**이다. 규칙을
+  어긴 런처가 정말로 0건이 되는지 보려고 일부러 만든 것이므로, 미측정
+  집계에서 빼고 그 사실을 결과 문서에 적는다.
+- `bundle/` 전체를 한 번에 `$ROOT`로 잡으면 형제 번들 참조가 `INFO`로
+  흡수된다. 형제 참조를 허용할지는 Task 3이 번들별 검사(`bundle/pg`,
+  `bundle/python`)에서 판정한 결과를 기준으로 한다.
 
 **5b. `check-macho.sh`는 `bundle/`(또는 `stage/`)을 가리켜 돌린다.**
 `$EXP` 전체를 가리키면 `sandbox/` 안의 부산물까지 훑는다 — 격리 실행이 남긴
