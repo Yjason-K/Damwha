@@ -3,11 +3,12 @@ import threading
 import pytest
 
 from damwha_worker import db
-from damwha_worker.__main__ import _default_live_source, handle_job
+from damwha_worker.__main__ import handle_job
 from damwha_worker.audio.source import FRAME_BYTES
 from damwha_worker.audio.tail_source import TailSource
 from damwha_worker.contracts import parse_payload
 from damwha_worker.errors import AUDIO_DEVICE_FAILED, ErrorKind, WorkerError
+from damwha_worker.jobs import default_live_source
 from damwha_worker.models.base import Word
 from damwha_worker.pipeline.live_session import LiveModels
 from damwha_worker.storage import Storage
@@ -119,7 +120,7 @@ def test_live_failure_never_requeues_even_when_transient(conn, tmp_path):
 def test_default_live_source_picks_tail_source_for_browser(tmp_path):
     """browser 세션은 API가 쓰는 파일을 따라 읽는 TailSource를 쓴다."""
     payload = parse_payload("live_session", _live_payload("mtg_1", source="browser"))
-    src = _default_live_source(payload, Storage(str(tmp_path)), {"bytes": None})
+    src = default_live_source(payload, Storage(str(tmp_path)), {"bytes": None})
     assert isinstance(src, TailSource)
 
 
@@ -132,7 +133,7 @@ def test_default_live_source_rejects_mic(tmp_path):
     """
     payload = parse_payload("live_session", _live_payload("mtg_1"))
     with pytest.raises(WorkerError) as e:
-        _default_live_source(payload, Storage(str(tmp_path)), {"bytes": None})
+        default_live_source(payload, Storage(str(tmp_path)), {"bytes": None})
     assert e.value.code == AUDIO_DEVICE_FAILED
     assert e.value.kind is ErrorKind.PERMANENT
 
@@ -140,7 +141,7 @@ def test_default_live_source_rejects_mic(tmp_path):
 def test_mic_session_closes_its_meeting_instead_of_hanging(conn, tmp_path):
     """mic 거절이 회의를 'recording'에 남기면 안 된다.
 
-    _default_live_source의 raise는 run_live_session 이전이라, live_session의 실패 경로가
+    default_live_source의 raise는 run_live_session 이전이라, live_session의 실패 경로가
     실제로 회의까지 닫는지는 별개 사실이다 — 안 닫으면 부분 유일 인덱스가 다음 녹음을
     영원히 막아, 4시간 hang을 없애려던 수정이 더 나쁜 갇힘으로 바뀐다.
     """
@@ -152,7 +153,7 @@ def test_mic_session_closes_its_meeting_instead_of_hanging(conn, tmp_path):
         Storage(str(tmp_path)),
         "w1",
         build_live_models=_models,
-        build_live_source=_default_live_source,
+        build_live_source=default_live_source,
     )
     assert out == "failed"
     m = conn.execute("SELECT status, error FROM meeting WHERE id=%s", (mid,)).fetchone()

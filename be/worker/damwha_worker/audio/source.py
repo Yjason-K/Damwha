@@ -84,7 +84,7 @@ class MicSource:
     """기본 입력 장치를 연다. 콜백은 큐에 넣기만 하고, frames()가 그 큐를 비운다.
 
     `payload.source`가 "browser"면 워커는 이걸 쓰지 않는다 — __main__.py의
-    `_default_live_source`가 그 경우 TailSource를 고른다. MicSource는 시스템 오디오
+    `default_live_source`가 그 경우 TailSource를 고른다. MicSource는 시스템 오디오
     구현체가 들어올 자리의 참조 구현으로 남아 있다: AudioSource 프로토콜이 TailSource
     말고 다른 구현도 지탱한다는 증거이자, 그 구현이 실제로 존재하는 유일한 자리다. 지우지
     않는다 (설계 §2.1).
