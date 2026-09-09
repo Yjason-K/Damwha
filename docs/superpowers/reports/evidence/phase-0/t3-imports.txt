@@ -1,5 +1,5 @@
 # Task 3 V2 — 번들 런타임 import (재배치 후)
-# utc: 2026-09-09T12:06:29Z
+# utc: 2026-09-09T12:59:03Z
 # 실행: run-isolated.sh --label t3-imports -- /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12 -c <모듈 import>
 # exit: 0
 

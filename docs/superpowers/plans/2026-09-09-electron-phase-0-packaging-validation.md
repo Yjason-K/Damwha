@@ -342,6 +342,8 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 - Create: `$EXP/ffmpeg/fetch.sh` — 번들 대상 ffmpeg·ffprobe를 `$EXP/stage/ffmpeg`에 배치
 - Create: `$EXP/verify/t4-probe.sh`, `t4-normalize.sh`, `t4-no-homebrew.sh`, `t4-license-recorded.sh`
 
+**시작 시 보완할 것:** Task 3의 `docker volume ls` after 측정이 OrbStack API 무응답(26분 매달림)으로 빠졌다. Task 4 시작 시 `docker volume ls`를 Task 3의 before 목록(볼륨 15개, `t3-dev-assets.txt`)과 대조해 사후 보완하고 증거에 그렇게 적는다. 다시 매달리면 그 클라이언트 PID만 종료하고 기록한다.
+
 **Interfaces**
 
 - `be/worker/damwha_worker/pipeline/ffmpeg.py`가 실제로 쓰는 두 명령만 검증 대상이다 — `ffprobe -v error -show_entries format=duration -of json <파일>`과 normalize 변환(16 kHz mono).
@@ -557,6 +559,7 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 **Files**
 
 - Create: `$EXP/signing/probe.sh` — ad-hoc 서명 + hardened runtime 적용, `sign` / `quarantine` 서브커맨드
+- Create: `$EXP/signing/unsigned-inventory.txt` — **서명이 아예 없는 Mach-O의 전수 목록.** Task 3 리뷰가 `bundle/python`의 Mach-O 460개 중 `relocate`가 손대지 않은 파일 일부에 서명이 없음을 확인했다(`charset_normalizer/*.so`, `fontTools/*.so`, `_sounddevice_data/…/libportaudio.dylib` 등, `codesign -v` → `code object is not signed at all`). 지금은 로드되지만 hardened runtime + library validation 아래에서 어떻게 되는지가 R-5의 본론이다. Task 8이 `codesign -v`로 전수 조사해 목록을 만들고, 그 각각이 서명 후에도 로드되는지 확인한다.
 - Create: `$EXP/signing/RESULTS.md` — 서명 실패 목록, 필요한 entitlement, Gatekeeper 동작
 - Create: `$EXP/verify/t8-hardened.sh`, `t8-signed-runtime.sh`, `t8-results-complete.sh`
 
@@ -595,6 +598,7 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 - [ ] 서명이 `bundle/` 사본(`signed/`)에 적용됐고 원본이 살아 있다 (V7)
 - [ ] hardened runtime이 실제로 켜진 상태에서 실행을 재시도했다 (V2)
 - [ ] MLX Metal 셰이더 런타임 컴파일(R-4)과 서명되지 않은 `.so` 로딩(R-5)이 각각 관찰됐다
+- [ ] 서명이 아예 없던 Mach-O의 전수 목록이 `signing/unsigned-inventory.txt`에 있고, 각각이 서명·hardened runtime 후에도 로드되는지 확인됐다
 - [ ] entitlement 결론이 "필요 없음"이든 "이 셋이 필요함"이든 근거 오류 메시지와 함께 기록됐다
 - [ ] R-12가 미재현 사각으로 명시되고 Phase 6 인계 목록에 들어갔다
 - [ ] 판정이 "성공/실패"가 아니라 "제약이 특정되었는가"로 이뤄졌다 (스펙 P0-C9 비고)

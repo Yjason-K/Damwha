@@ -140,6 +140,31 @@ Task 1은 통과했으나 reviewer가 Task 2·5 착수 전 반영을 권고한 �
 
 | 2 | `e6cfa77..8b8d355` | electron-reviewer (fable) | 1 | 없음 | `evidence/phase-0/task-2-r1.md` | **PASS** |
 
+| 3 | `f4c9b78..aaf02f1` | electron-reviewer (fable) | 1 | 없음 | `evidence/phase-0/task-3-r1.md` | **PASS** |
+
+### Task 3 상세
+
+P0-C3 충족. 후보는 **python-build-standalone 3.12.11 + `uv pip install --python`**(스펙 §9 후보 1). `bin/python3.12`가 libpython을 `@executable_path/../lib/…`로 참조하고 `LC_RPATH`가 없다. venv를 만들지 않고 배포본 `site-packages`에 직접 설치해 절대 경로가 박히는 층을 하나로 줄였다. `bundle/python` = **1509 MiB**(파일 38420개) — torch 411, mlx 203, llvmlite 124, scipy 81, onnxruntime 75 MiB. 모델은 없다.
+
+**후보 2(`uv venv --relocatable`) 탈락은 reviewer가 재현했다.** `--relocatable`이 상대화하는 것은 activate 스크립트뿐이고 `pyvenv.cfg`의 `home`은 절대 경로다. 기본 base가 `/opt/homebrew/opt/python@3.12`라 옮긴 뒤 `sys.base_prefix`가 `…/Python.framework/Versions/3.12`로 나온다 — G1 금지 문자열 두 개에 정면으로 걸린다. 후보 3(PyInstaller)은 P0-C8이 보는 `sys.prefix` 의미가 달라지고 진입점이 여럿(`mlx_lm.server`·`damwha-worker`·`damwha-embed`·`uvicorn`)이라 전제가 맞지 않는다. 후보 4(conda-pack)는 이 머신에 conda 계열이 없다(실측).
+
+**재배치: 이동 전 136 → 이동 후 201 → 사후 처리 후 0.**
+
+| 항목 | 내용 |
+| --- | --- |
+| R-9 (예측 적중) | `bin/`의 콘솔 스크립트 **65개 전부**가 stage 절대 경로 shebang. `mlx_lm.server`·`uvicorn`·`damwha-worker`·`damwha-embed` 포함. 이동 전 `INFO` → 이동 후 STALE-PATH 위반 |
+| wheel `LC_RPATH` 58건 (신규) | scikit-learn 51, scipy 3(Homebrew `gcc@13`), torchaudio 2, Pillow 1, PyAV 1. **dyld의 실제 검색 경로**라 가장 실질적 |
+| `LC_ID_DYLIB` 64건 | delocate `/DLC/…`, torch `/opt/llvm-openmp/…`, protobuf `bazel-out/…` → `@rpath/` 정규화 |
+| `_sysconfigdata` prefix | 설치 시점 값이라 `sys.prefix`와 갈림 |
+| `__pycache__` | 컴파일 시점 경로가 `.pyc`에 박힘 |
+| R-3 (미성립) | torch·mlx의 실제 의존 경로(`LC_LOAD_DYLIB`)가 허용 접두사 밖인 것 **0건** |
+
+**reviewer가 제3의 경로로 다시 옮겨 실측했다.** `relocate`를 다시 돌리면 셔뱅 65/65 재작성·sysconfig 재작성·`__pycache__` 760개 삭제가 일어나고 **`LC_RPATH` 0건·`LC_ID_DYLIB` 0건** — 첫 relocate가 완결적이고 Mach-O 처리는 멱등이다. 옮길 때마다 필요한 것은 셔뱅·sysconfig·pyc 셋뿐이다. `LC_ID_DYLIB` 정규화가 "의존이 아니라 id"라는 판단도 확인됐다 — Mach-O 460개 전체의 `LC_LOAD_DYLIB`에 옛 id 참조가 0건이고, dyld는 로더 쪽 `LC_LOAD_DYLIB`로 해석하지 피로드 dylib의 id를 참조하지 않는다.
+
+**검사기 수정을 reviewer가 직접 실측으로 검증했다.** Task 1이 네 회차로 신뢰를 세운 `check-macho.sh`를 Task 3이 고쳤으므로 Tier(normal)보다 한 단계 위인 fable로 리뷰했다. 결과: 같은 문자열을 다른 파일에 넣으면 위반, 허용된 파일에 다른 금지 문자열을 넣으면 위반, `setuptools/tests_evil.py`·`__pycache__/other…pyc`·태그 없는 `site.pyc`·`.pyc.bak` 전부 위반 — 글롭과 `.pyc→.py` 매핑 모두 우회 수단이 되지 않는다. 허용 목록에 STALE-PATH·OTOOL-L·LC_RPATH 항목을 **억지로 넣어도** 면제되지 않는다(`allow_reason`이 문자열 분기에서만 호출된다). `bundle/pg` 재검사는 exit 0·ALLOW 0건 — Task 2의 통과 판정이 소급해 흔들리지 않는다.
+
+**ALLOW 42건** 중 실동작 폴백은 `soundfile.py` 4, `ctypes/macholib/dyld.py` 1, `PIL/_imagingft…so` 1. `STALE-PATH`·`OTOOL-L`·`LC_RPATH`·`STRING` 전부 0.
+
 ### Task 2 상세
 
 P0-C1 충족. 후보는 **소스 빌드**(스펙 §9 후보 3) — PostgreSQL 16.15 + pgvector 0.8.6 + pg_bigm 1.2-20240606. ICU·readline·zlib을 끄고 빌드해 21 MB, `otool -L bin/postgres`의 외부 의존이 `/usr/lib/libSystem.B.dylib` 하나다. 16.15는 개발 이미지의 `PG_VERSION=16.15-1.pgdg12+2`와 같은 마이너다.
@@ -227,6 +252,16 @@ Task 1에서 나왔고 수정하지 않기로 한 것들이다.
 - `pg/run.sh:202-206` 주석의 "postmaster만 죽이면 보조 프로세스가 공유 메모리를 붙들어 다음 기동이 거절된다"는 **미실측 주장**이다. Phase 5에 의미가 있으므로 한 번 재거나 주장으로 표기해야 한다.
 - `pg/run.sh`의 `--auth=trust`가 실험 전용이라는 명시가 코드 주석과 `pg/README.md` 표에 있으나, README의 "뒤 Task가 알아야 하는 것" 목록에는 빠져 있다. Task 11이 Phase 3 인계 제약으로 옮겨야 한다.
 - G1은 `/opt/damwha-phase0/pg16` 문자열(35개 파일, 컴파일 시점 기본값)을 금지어로 두지 않아 보지 않는다. "재계산되는 기본값"과 "진짜 의존"은 G1로 구분되지 않으며, 옮긴 뒤 실행과 `pg_config` 자기 보고만이 구분한다. 이 구성에서는 그 실행이 있어 문제없었다.
+
+**Task 3에서 나온 것**
+- `lib/check-macho.sh:129-147` — 허용 규칙의 단위가 (경로, **금지 문자열 접두사**)이지 (경로, 토큰)이 아니다. reviewer 픽스처: `site.py`에 `/usr/local/lib/libsndfile.dylib`를 넣어도 `site.py + /usr/local/lib` 규칙으로 ALLOW 된다 — 근거는 "독스트링의 python2.5 예시 경로"인데 다른 토큰이 통과한다. ALLOW 줄에 토큰이 출력되므로 사람이 보면 드러나고 현재 42건은 전부 근거대로였다. 규칙에 4번째 열(토큰 글롭)을 두어 큰 파일의 규칙을 좁혀야 한다. **Task 4 이후 허용 목록에 항목을 추가할 때는 이 한계를 알고 넣어라.**
+- `lib/g1-allowlist.txt:81` — `scipy/linalg/_fblas…so` `/opt/homebrew` 규칙이 **죽은 규칙**이다. `LC_RPATH` 삭제와 함께 문자열 자체가 사라져 최종 번들에서 0건이다. 남겨 두면 그 파일에 새로 `/opt/homebrew`가 생겨도 흡수한다. 삭제해야 한다.
+- `lib/g1-allowlist.txt:90-92` — `certifi-*/METADATA` 류 글롭의 `*`가 `/`를 넘어가 `certifi-evil/sub/METADATA`도 ALLOW 된다(실측). `certifi-*.dist-info/METADATA`로 좁혀야 한다.
+- **`python/README.md:111-131`의 "옮기면 65개가 `bad interpreter`로 죽는다"는 옛 경로가 사라진 경우에만 맞다.** reviewer가 번들을 제3 경로로 복사하고 `relocate` 없이 `bin/uvicorn --version`을 실행하니 정상 종료했고 `sys.executable`이 **원래 `bundle/python/bin/python3.12`** 였다 — 옛 경로가 남아 있으면 죽지 않고 **조용히 다른 런타임을 실행한다.** 앱 업그레이드로 옛 버전이 잠시 공존하는 상황에서 더 위험한 형태다. Phase 4·6 인계 항목이다.
+- `python/build.sh:53` — `mlx-lm==0.31.3`만 고정되고 `mlx`(0.32.2)는 전이 해석이다. 매니페스트가 없어 여기 적은 것은 타당하나 **`mlx-lm`·`mlx` 버전의 단일 진실 원천이 아직 없다**(`pyproject.toml` 밖). P0-C12·Phase 4 인계.
+- 번들 Mach-O 460개 중 `relocate`가 손대지 않은 파일에 **서명이 아예 없는 것**이 있다(`charset_normalizer/*.so`, `fontTools/*.so`, `_sounddevice_data/…/libportaudio.dylib`; `codesign -v` → `code object is not signed at all`). 지금은 로드된다. **Task 8의 직접 입력**이라 계획에 전수 목록 작성을 넣었다.
+- 스펙 §4.4의 `docker volume ls` after 측정이 OrbStack 무응답(26분)으로 빠졌다. Task 3 코드에 docker 호출이 없고 볼륨에 쓰는 경로가 없어 차단으로 보지 않았다. Task 4 시작 시 before 목록(볼륨 15개)과 대조해 사후 보완하도록 계획에 넣었다.
+- **리뷰 부수효과(reviewer 자진 신고):** 사본 `damwha-embed --help`를 시험하다 그 진입점이 인자를 무시하고 서버를 띄운다는 것을 몰라 127.0.0.1:8100에 embed 서버가 두 번 떴다. 각각 PID로 종료했고 사전에 8100 리스너가 없어 개발 프로세스와 충돌하지 않았다. 그 실행이 `~/.cache/huggingface/.agent_harnesses.json`(6 KB 메타데이터)을 썼다 — 모델 파일 변경은 없으나 §4.4 문면상 위반이다. **`damwha-embed`·`damwha-worker`는 인자를 무시하고 바로 서비스를 띄우므로 `--help`로 시험하지 마라.**
 
 **검증 절차**
 - 3회차 verifier의 직접 재현이 4형태까지였고 가짜 증거 형태(비플랫폼 런처+리다이렉트)는 재현하지 않았다. 4회차에서 D3 대조군으로 코드에 고정됐다 — 해소.
