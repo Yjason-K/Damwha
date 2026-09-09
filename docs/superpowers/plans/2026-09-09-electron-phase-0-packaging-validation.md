@@ -65,10 +65,30 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 2. **런처는 그 프로세스의 stderr를 리다이렉트하지 않는다.** `pg_ctl start -l <logfile>`처럼 stderr를 파일로 돌리면 dyld 줄이 그 파일로 새고 증거에는 **런처 자신의 로드 목록**만 남는다. 줄 수가 0이 아니므로 래퍼가 통과로 보는데 정작 서버의 라이브러리는 하나도 없는, 위반 0건짜리 가짜 증거가 된다.
 2b. **`pg_ctl start`는 `-l`을 빼도 쓰지 않는다.** `pg_ctl`은 내부에서 `/bin/sh -c "exec postgres ... 2>&1 &"` 형태로 서버를 띄운다(`pg_ctl.c` `start_postmaster`). 그러면 SIP가 `/bin/sh`에서 `DYLD_*`를 지우고, 서버의 stderr는 stdout으로 합쳐져 fd 2만 캡처하는 래퍼에 들어오지 않는다. 규칙 1·2를 지켜도 결과가 같아진다. **`postgres -D <데이터 디렉터리> -p 55432 &`를 런처가 직접 띄운다.** 종료·상태 확인에 `pg_ctl stop`·`pg_isready`를 쓰는 것은 무방하다 — 측정 대상이 아니다. Task 2 착수 시 이 동작을 번들 `pg_ctl`로 한 번 확인하고 결과를 증거에 남긴다 (이 계획을 쓴 시점에는 번들 `pg_ctl`이 없어 실측하지 못했다).
 3. **서버 런처의 `start`는 서버를 백그라운드로 띄우고 준비 상태를 기다린 뒤 exit 0 한다.** `run-isolated.sh`는 자식 종료까지 블로킹하고 증거도 그 뒤에 쓰므로, 서버를 포그라운드로 두면 Verify 행이 영영 돌아오지 않는다. 준비 대기(`pg_isready`, `/health`, `/v1/models`)를 런처 안에서 끝내면 서버의 초기 로드 dyld 줄은 그때 이미 전부 나와 래퍼의 캡처에 담긴다.
-3b. **서버의 이후 로그는 서버 자신이 파일에 쓰게 한다.** 래퍼가 exit 하면 `trap ... EXIT`가 `$RUNTMP`를 지우는데, 서버의 stderr는 여전히 그 안의 파일을 가리키므로 이후 로그가 unlink된 파일로 사라진다. 기동 시점의 dyld 줄은 이미 캡처됐으니 측정에는 지장이 없지만, Task 2 V7(crash recovery)처럼 서버가 죽은 뒤 원인을 봐야 하는 검증에서 진단이 불가능해진다. PostgreSQL은 `logging_collector=on` + `log_directory`로 서버가 직접 쓰게 하고, embed·LLM 서비스는 준비 완료 후 로그 파일 위치를 `$SANDBOX/run/`에 기록한다.
+3b. **서버의 이후 로그가 사라지지 않게 한다.** 래퍼가 exit 하면 `trap ... EXIT`가 `$RUNTMP`를 지우는데, 서버의 stderr는 여전히 그 안의 파일을 가리키므로 이후 로그가 unlink된 파일로 사라진다. 기동 시점의 dyld 줄은 이미 캡처됐으니 측정에는 지장이 없지만, Task 2 V7(crash recovery)처럼 서버가 죽은 뒤 원인을 봐야 하는 검증에서 진단이 불가능해진다.
+
+    - **PostgreSQL:** `logging_collector=on` + `log_directory`로 서버가 직접 쓰게 한다. 단 그러면 백엔드가 `vector.so`·`pg_bigm.so`를 dlopen할 때의 dyld 줄이 syslogger를 거쳐 `$SANDBOX/pgdata/log/`로 가고 `t2-start-dyld.txt`에는 남지 않는다. 확장 로드 경로를 P0-C7 집계에 넣으려면 Task 2가 그 로그의 `dyld[` 줄을 별도 증거 파일로 옮긴다.
+    - **embed(uvicorn)·`mlx_lm.server`:** 서버가 파일에 직접 쓰는 로그 옵션이 없다. 런처가 `2> <file>`로 해결하면 **규칙 2 위반이자 D3가 잡는 가짜 증거 형태 그대로**가 된다. 두 규칙을 동시에 만족하는 형태는 다음 하나뿐이다.
+
+      ```
+      "$BIN" 2> >(tee "$LOG" >&2) &
+      ```
+
+      서버를 bash가 직접 exec하므로 dyld 줄이 `tee`를 거쳐 래퍼의 fd 2에 도달하고, 래퍼가 exit한 뒤에도 `$LOG`에 남는다. 로그 파일 위치는 `$SANDBOX/run/`에 기록한다.
 4. **PID 파일에는 서버 자신의 PID를 쓴다.** 래퍼 bash의 PID가 아니다. 증거의 `dyld[<pid>]`가 그 PID와 일치하는지 확인하는 것이 측정이 진짜인지 보는 방법이다.
 5. Task 1의 `verify/t1-detector-negative.sh`가 이 규칙을 코드로 고정한다 — re-export 없는 런처는 dyld 0건, 있는 런처는 1건 이상이어야 하며 어긋나면 exit 1.
 6. **dyld 증거를 검사할 때는 `^dyld`로 시작하는 줄에만 한정한다.** 증거 파일 헤더에 `# argv: <명령> <인자...>`가 들어 있어, 파일 전체를 대상으로 명령 경로를 `grep`하면 **dyld 줄에 그 경로가 0건이어도 헤더에 항상 매치된다.** Task 1의 D2 단정이 정확히 이 함정에 빠져, 런처 자신의 로드 목록만 82줄 남은 가짜 증거를 통과시켰다. 줄 수만 세는 것으로도 부족하다 — 그 pid의 로드 목록에 **검증 대상 바이너리 경로가 실제로 있는지**까지 본다.
+
+6b. **판정은 pid를 먼저 고정한 뒤 그 pid의 로드 목록을 본다.** 순서를 뒤집어 "바이너리 경로로 pid를 찾는" 방식은 틀린다 — Task 1의 `dyld_pid_for`는 첫 매치 pid 하나만 내는데, 런처가 기동 전에 같은 바이너리를 한 번 더 부르면(`postgres --version` 류) 첫 매치가 서버 pid가 아니다. Task 2·5의 판정은 이 형태여야 한다.
+
+    ```
+    awk -v p="dyld[$(cat "$PIDFILE")]:" -v d="$BUNDLE_DIR/" \
+        '$1==p && index($NF, d)==1 { n++ } END { exit !(n>0) }' "$DYLD_TXT"
+    ```
+
+6c. **바이너리 일치는 대상에 따라 정확 일치와 접두사를 가른다.** `postgres`는 실행 파일 자신이 메인 이미지이므로 경로 정확 일치로 본다. **`mlx_lm.server`·`uvicorn`처럼 셔뱅 스크립트인 것은 dyld의 메인 이미지가 셔뱅의 Python 인터프리터 경로**라 정확 일치가 항상 빈 값이 된다. 그쪽은 `bundle/python/` **접두사**로 판정한다 (계획 V11의 "`bundle/python` 하위"가 그 뜻이다).
+
+6d. **번들 경로에 공백을 넣지 않는다.** 판정이 `$NF` 기반이라 경로에 공백이 있으면 필드가 갈려 깨진다. `$EXP` 이하 어디에도 공백이 없어야 한다.
 
 ## Task 목록과 완료 기준 대응
 
@@ -108,7 +128,7 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 - Create: `$EXP/lib/preflight.sh` — 디스크 여유·포트 점유 확인
 - Create: `$EXP/lib/snapshot-dev-assets.sh` — 개발 자산 무변화 확인
 - Create: `$EXP/verify/t1-env-allowlist.sh`, `t1-no-dev-tools.sh`, `t1-home-isolated.sh`, `t1-detector-negative.sh`, `t1-evidence-tracked.sh`
-  - `t1-detector-negative.sh`는 정적 검사기 대조군에 더해 **런처 dyld 대조군 한 쌍**을 갖는다: re-export 없는 bash 런처 → dyld 0건, re-export 있는 bash 런처 → 1건 이상. 어긋나면 exit 1 (위 "런처 스크립트의 dyld 실측 규칙" 5)
+  - `t1-detector-negative.sh`는 정적 검사기 대조군에 더해 **런처 dyld 대조군 셋(D1·D2·D3)**을 갖는다: D1 re-export 없는 bash 런처 → dyld 0건, D2 re-export 있는 bash 런처 → 1건 이상이고 그 줄이 자식 Mach-O의 것, D3 가짜 증거 런처(ad-hoc 서명 bash 셔뱅 + 자식 stderr 리다이렉트) → dyld 1건 이상이지만 자식을 로드한 pid는 없음. 셋을 각각 개별로 단정하고 어긋나면 exit 1 (위 "런처 스크립트의 dyld 실측 규칙" 5·6)
 - Create: `$EXP/probe/deps-survey.md` — U-4 / U-5 조사 결과
 - Create: `$EXP/probe/audio-source.txt` — U-1: 복사한 회의 id와 원본 경로·크기·mtime
 
@@ -168,7 +188,7 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 - [ ] `.gitignore`가 `$EXP` 국소 파일이며 루트 `.gitignore`를 고치지 않았다
 - [ ] U-4 결론에 근거 파일·줄이 있고, 불확실 시 포함 쪽으로 결정했다
 - [ ] README의 뒤 Task 인계 항목이 실측과 일치한다. 특히 `DYLD_*`가 자손에게 상속된다고 적혀 있지 않다 — 플랫폼 바이너리를 거치면 끊긴다 (위 "런처 스크립트의 dyld 실측 규칙")
-- [ ] `t1-detector-negative.sh`에 런처 dyld 대조군 한 쌍이 있고, 각각을 개별로 단정한다
+- [ ] `t1-detector-negative.sh`에 런처 dyld 대조군 셋(D1·D2·D3)이 있고, 각각을 개별로 단정한다
 
 **Rollback**
 
@@ -197,6 +217,7 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 - `run.sh start`는 **`postgres -D "$SANDBOX/pgdata" -p 55432 &`를 직접 띄우고 `pg_isready`로 준비를 기다린 뒤 exit 0** 한다. 그 직전에 `export DYLD_PRINT_LIBRARIES=1`을 다시 설정하고 stderr를 리다이렉트하지 않는다. **`pg_ctl start`는 `-l` 유무와 무관하게 쓰지 않는다** — 내부의 `/bin/sh`가 `DYLD_*`를 잃고 stderr를 stdout으로 합친다 (위 규칙 1·2·2b). 서버의 이후 로그는 `logging_collector=on` + `log_directory`로 서버가 직접 쓰게 한다 (규칙 3b). `pg_ctl stop`·`pg_isready`는 측정 대상이 아니므로 써도 된다.
 - `run.sh`는 **postgres 자신의 PID**를 `$SANDBOX/run/pg.pid`에 쓴다. 래퍼 bash의 PID가 아니다. 데이터 디렉터리가 이미 있으면 `initdb`를 다시 하지 않는다 (멱등, 스펙 §4.4).
 - `run.sh kill`은 `$SANDBOX/run/pg.pid`의 PID에만 SIGKILL을 보낸다. 이름 기반 kill 금지.
+- **`pg_ctl start` 시험 실행(V2c)은 소유권을 분리한다.** 그것이 띄우는 postgres는 `pg.pid` 밖의 프로세스이고, V2의 서버가 같은 데이터 디렉터리를 잡고 있는 동안은 기동 자체가 실패한다. 순서를 못 박는다 — **V2 이전(또는 V6의 정지 직후) 서버가 떠 있지 않은 상태에서** `run-isolated.sh --label t2-pgctl-trial`로 실행하고, `pg_ctl stop`으로 내린 뒤, 그 pid가 `pg.pid`에 들어가지 않았음을 증거에 기록한다 (스펙 §4.4 PID 파일 규약).
 - 마이그레이션은 `DATABASE_URL`을 55432로 지정해 `pnpm be:migrate`로 적용한다. **이 명령은 스펙 §4.0에 따라 격리 대상 밖**이며, 증거에 그렇게 표시한다. (`dotenv`는 이미 설정된 `process.env`를 덮어쓰지 않으므로 `be/.env`의 값이 아니라 주입한 값이 쓰인다 — V2가 그것을 확인한다.)
 
 **Steps**
@@ -216,7 +237,7 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 | V1 | `<repo root>` | `bash experiments/electron-phase-0/lib/check-macho.sh experiments/electron-phase-0/bundle/pg` | exit 0. 재배치 후 위반 0건 |
 | V2 | `<repo root>` | `bash experiments/electron-phase-0/lib/run-isolated.sh --label t2-start -- experiments/electron-phase-0/pg/run.sh start` | exit 0. `$SANDBOX/run/pg.pid` 생성. 래퍼가 블로킹하지 않고 돌아온다 |
 | V2b | `<repo root>` | `bash experiments/electron-phase-0/verify/t2-dyld-measured.sh` | exit 0. `$EVIDENCE/t2-start-dyld.txt`의 **`^dyld` 줄에 한정**해, `pg.pid`의 PID를 가진 `dyld[<pid>]` 줄이 존재하고 그 pid의 로드 목록에 `bundle/pg` 하위 바이너리 경로가 실제로 있다. `MEASUREMENT_UNAVAILABLE`이 아니다 |
-| V2c | `<repo root>` | `bash experiments/electron-phase-0/verify/t2-no-pgctl-start.sh` | exit 0. `pg/run.sh`의 기동 경로에 `pg_ctl start`가 없고 `postgres`를 직접 띄운다. 번들 `pg_ctl start`를 한 번 시험 실행해 그것이 `/bin/sh`를 거쳐 dyld 실측을 잃는지 확인한 결과가 증거에 기록됨 (규칙 2b) |
+| V2c | `<repo root>` | `bash experiments/electron-phase-0/verify/t2-no-pgctl-start.sh` | exit 0. `pg/run.sh`의 기동 경로에 `pg_ctl start`가 없고 `postgres`를 직접 띄운다. 번들 `pg_ctl start` 시험 실행 결과(`/bin/sh`를 거쳐 dyld 실측을 잃는지)가 `$EVIDENCE/t2-pgctl-trial-dyld.txt`에 기록됨 (규칙 2b) |
 | V3 | `<repo root>` | `bash experiments/electron-phase-0/verify/t2-extensions.sh` | exit 0. `pg_extension`에 `vector`와 `pg_bigm`(버전 `1.2`)이 모두 존재 |
 | V4 | `<repo root>` | `DATABASE_URL=postgresql://postgres@127.0.0.1:55432/damwha pnpm be:migrate` | exit 0 |
 | V5 | `<repo root>` | `bash experiments/electron-phase-0/verify/t2-migrations.sh` | exit 0. 55432의 `_migrations` 행 수가 `be/src/database/migrations/*.sql` 파일 수(24)와 같음 |

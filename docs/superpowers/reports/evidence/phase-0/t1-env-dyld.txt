@@ -11,5 +11,5 @@ MEASUREMENT_UNAVAILABLE
 # 어느 쪽이든 통과로 기록하지 않고 측정 불가로 남긴다. 대체 확인은
 # G1 정적 검사와 P0-C8 런타임 자기 보고가 맡는다.
 # run-isolated.sh dyld 실측
-# label: t1-env   utc: 2026-09-09T07:34:34Z   exit: 0   dyld 줄 수: 0
+# label: t1-env   utc: 2026-09-09T07:36:57Z   exit: 0   dyld 줄 수: 0
 # argv: /usr/bin/env

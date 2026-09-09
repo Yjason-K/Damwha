@@ -118,11 +118,25 @@ Task 1이 수정 루프 3회 한도에 걸린 시점에 사용자가 4회차를 
 
 규칙 6은 Task 1의 차단 T1-B3에서 일반화한 것이다. 그 함정이 D2 단정 하나에 그치지 않고 Task 2·5·11의 dyld 검사 전부에 해당하므로 전역 규칙으로 올렸다.
 
+### 5회차 — Task 1 PASS 리뷰가 넘긴 계획 결함 (2026-09-09)
+
+Task 1은 통과했으나 reviewer가 Task 2·5 착수 전 반영을 권고한 비차단 7건이 나왔다. 지금까지 미반영 계획 결함이 매번 리뷰 한 회차를 잡아먹었으므로 착수 전에 넣었다 (760줄 → 781줄).
+
+| ID | 지적 | 조치 |
+| --- | --- | --- |
+| P-19 | 판정 순서가 뒤집혀 있다. Task 1의 `dyld_pid_for`는 **첫 매치 pid 하나만** 낸다. 런처가 기동 전에 같은 바이너리를 한 번 더 부르면(`postgres --version` 류) 첫 매치가 서버 pid가 아니다 — reviewer 모사에서 pid 파일 29521, 첫 매치 29520 | 규칙 6b 신설: **pid를 먼저 고정한 뒤 그 pid의 로드 목록을 본다.** `awk -v p="dyld[$(cat "$PIDFILE")]:" -v d="$BUNDLE_DIR/" '$1==p && index($NF,d)==1'` 형태를 계획에 박았다 |
+| P-20 | `mlx_lm.server`·`uvicorn`은 **셔뱅 스크립트**라 dyld의 메인 이미지가 셔뱅의 Python 인터프리터 경로다. 경로 정확 일치로 보면 Task 5는 항상 빈 값이 나온다 | 규칙 6c 신설: `postgres`는 정확 일치, Python 계열은 `bundle/python/` 접두사로 가른다. 계획 V11의 "`bundle/python` 하위"가 그 뜻임을 명시 |
+| P-21 | 판정이 `$NF` 기반이라 번들 경로에 공백이 있으면 필드가 갈려 깨진다 | 규칙 6d 신설: `$EXP` 이하에 공백 금지 |
+| P-22 | 규칙 3b와 규칙 2가 Task 5에서 충돌한다. embed(uvicorn)·`mlx_lm.server`에는 서버가 파일에 직접 쓰는 로그 옵션이 없어, 런처가 `2> <file>`로 해결하면 **규칙 2 위반이자 D3가 잡는 가짜 증거 형태 그대로**가 된다 | 규칙 3b에 두 규칙을 동시에 만족하는 유일한 형태 `"$BIN" 2> >(tee "$LOG" >&2) &`를 명시. 서버를 bash가 직접 exec하므로 dyld 줄이 tee를 거쳐 래퍼 fd 2에 도달하고 래퍼 exit 후에도 로그가 남는다 |
+| P-23 | `logging_collector=on`이면 postmaster exec 시점의 dyld 줄은 래퍼에 남지만, 백엔드가 `vector.so`·`pg_bigm.so`를 dlopen할 때의 dyld 줄은 syslogger를 거쳐 `$SANDBOX/pgdata/log/`로 간다. `t2-start-dyld.txt`에 확장 `.so` 경로가 없다 | 규칙 3b에 명시하고, 확장 로드 경로를 P0-C7 집계에 넣으려면 Task 2가 그 로그의 `dyld[` 줄을 별도 증거로 옮기도록 적었다 |
+| P-24 | Task 2 V2c의 `pg_ctl start` 시험 실행이 띄우는 postgres는 `pg.pid` 밖의 프로세스이고, V2의 서버가 같은 데이터 디렉터리를 잡고 있는 동안은 기동 자체가 실패한다. 언제·어떤 라벨로 돌리고 어떻게 내리는지가 없었다 | Task 2 Interfaces에 순서와 소유권을 못 박았다 — V2 이전(또는 V6 정지 직후) 서버가 없는 상태에서 `--label t2-pgctl-trial`로 실행 → `pg_ctl stop` → 그 pid가 `pg.pid`에 들어가지 않았음을 기록 |
+| P-25 | 계획 Task 1 Files·Review가 "런처 dyld 대조군 **한 쌍**"인데 구현은 D1·D2·D3 셋이다 | "셋(D1·D2·D3)"으로 정정하고 각각의 기대값을 명시 |
+
 ## 단계별 실행·리뷰
 
 | Task | 커밋 범위 | 검토자 (model) | 회차 | 차단 지적 → 조치 | 증거 | 통과 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `4f0b02c..961029f` (`17bae8d`, `f1e1dff`, `cd699ad`, `961029f`) | electron-reviewer (fable) | 3 | 아래 T1-B1 ~ T1-B3 | `evidence/phase-0/task-1-r{1,2,3}.md` | **미통과 — 수정 루프 3회 한도 도달, 사용자 확인 대기** |
+| 1 | `4f0b02c..f121570` (`17bae8d`, `f1e1dff`, `961029f`, `f121570`) | electron-reviewer (fable) | 4 | 아래 T1-B1 ~ T1-B3, 전건 해소 | `evidence/phase-0/task-1-r{1,2,3,4}.md` | **PASS** (4회차, 차단 0건) |
 
 ### Task 1 상세
 
@@ -132,9 +146,25 @@ Verify는 3회차 모두 V1~V12 전부 기대값과 일치했다. 차단은 전�
 | --- | --- | --- | --- | --- |
 | T1-B1 | 1 | `check-macho.sh`의 금지 문자열 면제가 `$EXP_ROOT` 전체라 `stage/`·`downloads/`·`sandbox/`를 가리키는 재배치 잔존 경로를 놓친다. P0-C3이 핵심 관찰 대상으로 못 박은 형태이자 R-9가 정확히 그것이다 | 면제를 `"$ROOT"\|"$ROOT"/*`로 좁히고 `STALE-PATH` 위반 범주 신설. 회귀 대조군 3종(shebang·`pyvenv.cfg`·`*.pc`) 추가 | **해소** (2회차 확인, reviewer가 픽스처 5건으로 재실측) |
 | T1-B2 | 2 | README의 Task 2·5 인계 항목이 실측과 반대. 2c "자손 전부가 `DYLD_*`를 물려받는다"는 거짓(플랫폼 바이너리를 거치면 SIP가 지운다), 2a의 증상 서술도 틀렸다(런처가 자식 stderr를 돌리면 `MEASUREMENT_UNAVAILABLE`이 아니라 **런처 자신의 로드 목록**이 정상 측정처럼 남는 가짜 증거) | README 2a 전면 재작성·2c 반전·5a 확장. 계획에 "런처 스크립트의 dyld 실측 규칙" 절 신설(`cd699ad`). D1/D2 대조군 추가 | **문서 수준 해소** (3회차 확인, reviewer 직접 측정값이 README 표와 일치) |
-| T1-B3 | 3 | D2의 "실측된 줄이 자식 Mach-O의 것이다" 단정이 **무효**다. `run-isolated.sh:171`이 증거 헤더에 `# argv: <런처> <자식 경로>`를 쓰는데 `t1-detector-negative.sh:284`의 `grep -q -F "$DYFIX/echo" "$D2"`가 파일 전체를 훑으므로, dyld 줄에 자식 경로가 0건이어도 헤더에 항상 매치된다. reviewer가 가짜 증거 런처(ad-hoc 서명 bash + `2>/dev/null`)를 투입하니 dyld 82줄이 전부 런처 것이고 자식 0건인데 D2 두 단정 모두 OK, 스크립트 exit 0 | 미조치 — 수정 루프 3회 한도 | **미해소** |
+| T1-B3 | 3 | D2의 "실측된 줄이 자식 Mach-O의 것이다" 단정이 **무효**다. `run-isolated.sh:171`이 증거 헤더에 `# argv: <런처> <자식 경로>`를 쓰는데 `t1-detector-negative.sh:284`의 `grep -q -F "$DYFIX/echo" "$D2"`가 파일 전체를 훑으므로, dyld 줄에 자식 경로가 0건이어도 헤더에 항상 매치된다. reviewer가 가짜 증거 런처(ad-hoc 서명 bash + `2>/dev/null`)를 투입하니 dyld 82줄이 전부 런처 것이고 자식 0건인데 D2 두 단정 모두 OK, 스크립트 exit 0 | 판독을 `dyld_lines`/`dyld_pid_for`/`dyld_pids` 세 함수로 분리해 `^dyld\[` 줄로 한정. `dyld_pid_for`는 `awk '/^dyld\[/ && $NF == b'`로 마지막 필드 전체 일치를 본다. 그 가짜 증거 런처를 **D3 대조군으로 추가** | **해소** (4회차) |
 
-T1-B3의 수정은 한 줄이다: `grep '^dyld' "$D2" \| grep -q -F "$DYFIX/echo"`. reviewer가 그 수정을 넣고 같은 가짜 증거 런처를 투입해 `FAIL D2: dyld 줄에 자식 Mach-O가 없다`, exit 1을 확인했다. 함께 `README.md:132-135`의 서술이 코드를 고친 뒤에야 참이 된다.
+**사용자 결정 (2026-09-09):** 수정 루프 3회 한도 도달 시점에 4회차를 승인. 범위는 T1-B3 수정과, Task 2 착수 전 반영이 낫다고 판정된 비차단 3건(계획 규칙 2b·3b·6)으로 제한했다.
+
+**4회차 판정 근거.** reviewer가 worktree 밖에 `lib/`·`verify/`를 복사해 변이 5종을 직접 넣었고 전부 잡혔다.
+
+| 변이 | 결과 |
+| --- | --- |
+| 무변이 | exit 0 (D1·D2·D3 전부 OK) |
+| D2 런처를 가짜 증거 런처로 교체 | `FAIL D2: 자식 Mach-O를 로드한 pid가 dyld 줄에 없다`, exit 1 |
+| `dyld_pid_for`를 3회차의 파일 전체 `grep`으로 되돌림 | `FAIL D3: ... 자식을 로드했다고 판정했다 (pid 1)`, exit 1 — 회귀 가드 작동 |
+| D2 런처를 re-export 없는 런처로 교체 | D2 두 단정 모두 FAIL, exit 1 |
+| D3 가짜 런처의 셔뱅을 플랫폼 `/bin/bash`로 | `FAIL D3: 가짜 증거 런처가 dyld 0건이다`, exit 1 |
+
+접두사 단위 테스트도 통과했다 — `/x/echo` 질의가 `/x/echo2`·`/x/echo/sub`·`/y/x/echo`를 전부 무시한다.
+
+D3의 실측 수치가 함정을 숫자로 남겼다. 커밋된 `t1-dyld-launcher-fake-dyld.txt`에서 `^dyld` 줄 **82건**, 그중 자식 Mach-O를 로드한 줄 **0건**, 파일 전체 grep 매치 **1건**(헤더 `# argv:`). 마지막 1건이 3회차에 통과를 만들어 낸 그것이다.
+
+**Task 1이 네 회차를 쓴 이유.** Verify는 네 회차 모두 V1~V12가 전부 기대값과 일치했다. 차단은 매번 기능이 아니라 **검사기가 진짜로 검사하는가**에서 나왔고, 셋 다 "통과하고 있었지만 사실은 아무것도 보고 있지 않던" 자리였다. Task 1이 이후 열 Task의 증거를 전부 생산하므로 여기서 걸러 내는 편이 싸다.
 
 
 ## 최종 검증
@@ -159,7 +189,9 @@ Task 1에서 나왔고 수정하지 않기로 한 것들이다.
 - 계획 규칙 3 · `run-isolated.sh:75,133` — 런처가 exit 0 한 뒤에도 서버의 stderr는 `$RUNTMP/stderr.raw`를 가리키는데 `trap`이 그 디렉터리를 지운다. 이후 서버 에러 로그가 unlink된 파일로 사라져 Task 2 V7(crash recovery) 진단이 어려워진다. postgres는 `logging_collector=on`+`log_directory`로, 서비스는 준비 후 로그 위치를 별도 기록하는 것이 낫다.
 
 **검증 절차**
-- 3회차 verifier의 직접 재현이 4형태까지였고 가짜 증거 형태(비플랫폼 런처+리다이렉트)는 재현하지 않았다. 재리뷰 시 그 형태를 증거에 포함해야 한다.
+- 3회차 verifier의 직접 재현이 4형태까지였고 가짜 증거 형태(비플랫폼 런처+리다이렉트)는 재현하지 않았다. 4회차에서 D3 대조군으로 코드에 고정됐다 — 해소.
+- `lib/run-isolated.sh`의 `MEASUREMENT_UNAVAILABLE` 문구가 dyld 0건의 원인을 둘로 병기했으나 셋이다. README 2a 표 4행(플랫폼 bash 런처가 re-export 하고도 자식 stderr를 `2>/dev/null` → 0건)은 규칙 2 위반으로 0건이 나는 세 번째 경로다. 원인 (1)을 "런처가 규칙 1 **또는 2**를 어겼다"로 고쳐야 한다.
+- 증거 `.txt`의 `archive_prev` 회전 로직이 그대로라 실행마다 `.prev-<timestamp>.txt`가 다시 생긴다. git이 이력을 보존하므로 중복이며, 회차마다 오케스트레이터가 지우고 있다. 로직 자체를 빼는 것이 낫다.
 
 ## 남은 제약·후속 Phase 인계
 
