@@ -198,10 +198,19 @@ Python이 ffmpeg를 직접 `exec`하면 나온다 — 어느 쪽인지는 **경�
 `verify/t1-detector-negative.sh`가 shebang·`pyvenv.cfg`·`*.pc` 세 형태로 이
 회귀를 막는다.
 
-형제 번들(`$EXP/bundle/*`)을 가리키는 절대 경로도 **지금은 위반**이다.
-번들 간 참조를 허용할지는 Task 3이 Python 런타임 구성 방식을 정하면서
-결정할 문제이지, 검사기가 미리 봐 줄 일이 아니다. 허용하기로 정하면 그때
-`allowed_dep`/문자열 면제와 같은 자리에 근거를 적고 넓힌다.
+형제 번들(`$EXP/bundle/*`)을 가리키는 절대 경로도 **위반**이다.
+**Task 3이 그대로 두기로 정했다** — `bundle/python`은 `bundle/pg`를 참조하지
+않는다 (psycopg는 `psycopg_binary`에 자기 libpq를 들고 온다). 번들 간 참조를
+만들 이유가 없으므로 검사기를 넓히지 않았다.
+
+**Task 3이 넓힌 것은 문자열 면제 하나뿐이다** — `lib/g1-allowlist.txt`.
+(상대 경로, 금지 문자열, 근거) 쌍으로만 걸리고, 적중은 숨기지 않고 `ALLOW`로
+근거와 함께 매 회차 출력된다. 왜 필요했는지는 `python/README.md`의
+"G1 문자열 검사와 스펙 §4.1의 긴장" 절에 있다. 요약: CPython 표준
+라이브러리와 제3자 wheel **원본**에 독스트링·다른 플랫폼 분기·배포자 빌드
+경로·ctypes 폴백 목록으로 금지 문자열이 구조적으로 들어 있어 문자 그대로의
+0건이 Python 런타임에서는 달성 불가능하다. **재배치를 깨는 것(STALE-PATH·
+OTOOL-L·LC_RPATH)은 하나도 목록에 넣지 않았고 전부 고쳤다.**
 
 **5a. Task 11의 증거 집계기(`aggregate-isolation.sh`)에게.**
 
@@ -266,6 +275,38 @@ OS python 바이트코드 캐시 같은 것들이라 금지 문자열이 당연�
 - **재배치 검증은 옮긴 뒤에 해야 의미가 있다.** 스테이징 경로 안을 가리키는
   문자열은 `check-macho.sh`가 `INFO`로 분류하다가 옮기는 순간 `STALE-PATH`
   위반이 된다. 같은 파일의 같은 문자열이다 (`t2-relocation-attempt1.txt`).
+
+**9. Task 3이 실측으로 덧붙이는 것 (Python 런타임을 쓰는 Task 4·5·7·9에게).**
+자세한 내용과 증거 파일 목록은 `python/README.md`에 있다. 쓰는 쪽만 요약한다.
+
+- **`bundle/python`을 옮기면 `python/build.sh relocate`를 다시 돌려야 한다.**
+  이 런타임은 "복사만 하면 도는" 형태가 **아니다.** 그냥 `mv` 하면 `bin/`의
+  셔뱅 스크립트 65개가 전부 `bad interpreter`로 죽는다 (R-9, 실측:
+  `t3-relocation-symptom.txt`). `mlx_lm.server`·`uvicorn`·`damwha-worker`·
+  `damwha-embed`가 전부 거기 있다.
+- **`bin/mlx_lm.server`의 셔뱅은 번들 python이다 — `/bin/sh` 심이 아니다.**
+  일부러 그렇게 뒀다. `/bin/sh` 심으로 만들면 재배치에는 강하지만 SIP가
+  `DYLD_*`를 지워 dyld 실측이 끊긴다(규칙 2a). 런처는 이 파일을 **직접
+  exec**하면 되고, dyld의 메인 이미지는 `bundle/python/bin/python3.12`가
+  된다 — 판정은 규칙 6c대로 `bundle/python/` **접두사**로 한다.
+  `verify/t3-lib.sh::t3_assert_dyld_measured`가 본뜰 형태다.
+- **`uv pip install`은 반드시 `--link-mode=copy`.** 기본 하드링크면 설치
+  파일이 개발자 uv 캐시의 inode를 공유하고, 그 캐시는 **개발
+  venv(`be/worker/.venv`)에도 하드링크돼 있다.** `install_name_tool`로 번들
+  Mach-O를 고치는 순간 개발 venv의 같은 파일이 함께 바뀐다 (스펙 §4.4 금지).
+- **wheel은 배포자의 빌드 머신 `LC_RPATH`를 그대로 들고 온다.** scikit-learn
+  51건, scipy 3건(`/opt/homebrew/Cellar/gcc@13/…`), torchaudio 2건, Pillow 1건,
+  PyAV 1건. dyld의 실제 검색 경로이므로 `relocate`가 지운다. 새 패키지를
+  넣으면 같은 검사를 다시 해야 한다.
+- **`otool -L`의 실제 의존 경로는 처음부터 전부 허용 접두사였다.** R-3이
+  걱정한 torch·mlx의 dylib 절대 경로는 나타나지 않았다. 위반으로 잡힌 64건은
+  전부 **의존이 아니라 `LC_ID_DYLIB`** (delocate의 `/DLC/…` 자리표시자 등)다.
+- **G1 전수 검사가 오래 걸린다.** 파일 3만 3천 개·Mach-O 460개라 한 번에
+  10분 안팎이다.
+- **번들 python을 실행하면 `__pycache__`가 생긴다.** `.pyc`에는 컴파일 시점
+  절대 경로가 들어가므로 재배치 후에는 지워야 한다. `relocate`가 한다.
+- **모델은 하나도 들어 있지 않다.** 이 번들은 코드뿐이고, HF 캐시는 격리
+  실행의 `HF_HOME`(샌드박스)으로 간다.
 
 ## verify/ 규약
 

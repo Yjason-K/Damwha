@@ -1,0 +1,10 @@
+# Task 3 V4 판정 — 자기 보고 경로 분류
+# utc: 2026-09-09T12:07:24Z
+# 원본 덤프: /Users/gim-yeongjae/project/daewha-electron-phase-0/docs/superpowers/reports/evidence/phase-0/t3-selfreport-json.txt
+
+## 뽑아낸 절대 경로 토큰: 888개
+sys.executable = /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+sys.prefix = /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python
+sys.base_prefix = /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python
+
+## 로드된 이미지 831개 중 허용 밖 0개

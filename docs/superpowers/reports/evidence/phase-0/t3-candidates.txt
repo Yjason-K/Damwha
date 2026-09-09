@@ -1,0 +1,106 @@
+# Task 3 — Python 런타임 후보 조사에서 실제로 확인한 값 (스펙 §9)
+# utc: 2026-09-09T11:37:17Z
+# 이 파일에는 **측정한 것만** 적는다. 판단과 근거는 python/README.md에 있다.
+
+## 후보 1 — python-build-standalone (uv가 내려받는 것과 같은 배포본)  ← 고름
+
+$ uv python list --all-versions | grep 3.12
+  cpython-3.12.14-macos-aarch64-none                   /opt/homebrew/bin/python3.12 -> ../Cellar/python@3.12/3.12.14/bin/python3.12
+  cpython-3.12.11-macos-aarch64-none                   <download available>
+  cpython-3.12.10-macos-aarch64-none                   <download available>
+  cpython-3.12.9-macos-aarch64-none                    <download available>
+  cpython-3.12.8-macos-aarch64-none                    <download available>
+  cpython-3.12.7-macos-aarch64-none                    <download available>
+  cpython-3.12.6-macos-aarch64-none                    <download available>
+  cpython-3.12.5-macos-aarch64-none                    <download available>
+  cpython-3.12.4-macos-aarch64-none                    <download available>
+  cpython-3.12.3-macos-aarch64-none                    <download available>
+  cpython-3.12.2-macos-aarch64-none                    <download available>
+  cpython-3.12.1-macos-aarch64-none                    <download available>
+  cpython-3.12.0-macos-aarch64-none                    <download available>
+
+받은 것: cpython-3.12.11-macos-aarch64-none  (BUILD 태그 20250902)
+설치 트리 크기: 47M
+
+$ otool -L bin/python3.12
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pydist/cpython-3.12.11-macos-aarch64-none/bin/python3.12:
+  	/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation (compatibility version 150.0.0, current version 2202.0.0)
+  	@executable_path/../lib/libpython3.12.dylib (compatibility version 3.12.0, current version 3.12.0)
+  	/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1336.61.1)
+
+$ otool -l bin/python3.12 | grep -A2 LC_RPATH   (없음이면 출력 없음)
+  (LC_RPATH 없음)
+
+$ file bin/python3.12
+  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pydist/cpython-3.12.11-macos-aarch64-none/bin/python3.12: Mach-O 64-bit executable arm64
+
+sha256:
+  6432adc2cbef21d8e525b03d9c662400994693b51976fd5d8d4501f6ac8e40a5  @EXP/stage/pydist/cpython-3.12.11-macos-aarch64-none/bin/python3.12
+  5fa17f809a1c5c8874bf54ecdaebdcc4b724497b9744e9a8e6094b6eeb43f3de  @EXP/stage/pydist/cpython-3.12.11-macos-aarch64-none/lib/libpython3.12.dylib
+
+구조상의 핵심: bin/python3.12 이 libpython을 @executable_path 상대로 참조한다.
+실행 파일 위치에서 prefix를 다시 계산하므로 트리를 통째로 옮겨도 sys.prefix가
+따라온다 (t3-relocation-symptom.txt ## 1 에 이동 후 실측이 있다).
+
+## 후보 2 — uv venv --relocatable
+
+### 2a. 기본값으로 만들면 무엇을 base로 잡는가
+$ uv venv --relocatable --python 3.12 v1
+  Using CPython 3.12.14 interpreter at: /opt/homebrew/opt/python@3.12/bin/python3.12
+$ cat v1/pyvenv.cfg
+  home = /opt/homebrew/opt/python@3.12/bin
+  relocatable = true
+$ ls -l v1/bin/python3.12
+  python3.12 -> python -> /opt/homebrew/opt/python@3.12/bin/python3.12
+$ mv v1 v2 && ./v2/bin/python3 -c 'import sys; print(sys.prefix, sys.base_prefix)'
+  <옮긴 자리>/v2 /opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12
+
+### 2b. base를 후보 1의 배포본으로 지정해도
+$ uv venv --relocatable --python <stage>/python/bin/python3.12 w1
+$ cat w1/pyvenv.cfg
+  home = /Users/.../experiments/electron-phase-0/stage/python/bin      <- 절대 경로
+$ mv w1 w2 && ./w2/bin/python3 -c 'import sys; print(sys.prefix, sys.base_prefix)'
+  <옮긴 자리>/w2   <stage>/python                                       <- base는 옛 자리
+
+즉 --relocatable 이 상대화하는 것은 activate 스크립트뿐이고, pyvenv.cfg의
+home은 그대로 절대 경로다. venv를 옮겨도 base가 따라오지 않으므로 결국
+후보 1의 배포본을 번들 안에 두어야 하고, 그 위에 절대 경로 층이 하나 더
+생긴다. (측정은 /private/tmp 아래 임시 디렉터리에서 했고 지웠다.)
+
+## 후보 3 — PyInstaller / py2app
+받아서 시도하지 않았다. 근거는 README.md에.
+
+## 후보 4 — conda-pack
+
+$ command -v conda mamba micromamba
+  (출력 없음 — 이 머신에 conda 계열이 설치돼 있지 않다)
+$ ls -d ~/miniconda3 ~/anaconda3
+  둘 다 없음
+
+## 이 머신에 실제로 있는 Python (스펙 §4.1이 금지 문자열로 든 것)
+$ ls -d /Library/Frameworks/Python.framework/Versions/*
+  /Library/Frameworks/Python.framework/Versions/3.11
+  /Library/Frameworks/Python.framework/Versions/3.9
+  /Library/Frameworks/Python.framework/Versions/Current ⇒ 3.9
+$ ls -l /usr/local/bin/python3* 2>/dev/null
+  lrwxr-xr-x root wheel 69 B Thu Feb 22 17:22:30 2024 /usr/local/bin/python3 ⇒ ../../../Library/Frameworks/Python.framework/Versions/3.9/bin/python3
+  lrwxr-xr-x root wheel 76 B Thu Feb 22 17:22:30 2024 /usr/local/bin/python3-config ⇒ ../../../Library/Frameworks/Python.framework/Versions/3.9/bin/python3-config
+  lrwxr-xr-x root wheel 77 B Thu Feb 22 17:22:30 2024 /usr/local/bin/python3-intel64 ⇒ ../../../Library/Frameworks/Python.framework/Versions/3.9/bin/python3-intel64
+  lrwxr-xr-x root wheel 73 B Thu Dec  7 17:21:56 2023 /usr/local/bin/python3.11 ⇒ ../../../Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11
+  lrwxr-xr-x root wheel 80 B Thu Dec  7 17:21:56 2023 /usr/local/bin/python3.11-config ⇒ ../../../Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11-config
+  lrwxr-xr-x root wheel 81 B Thu Dec  7 17:21:56 2023 /usr/local/bin/python3.11-intel64 ⇒ ../../../Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11-intel64
+  lrwxr-xr-x root wheel 71 B Thu Feb 22 17:22:30 2024 /usr/local/bin/python3.9 ⇒ ../../../Library/Frameworks/Python.framework/Versions/3.9/bin/python3.9
+  lrwxr-xr-x root wheel 78 B Thu Feb 22 17:22:30 2024 /usr/local/bin/python3.9-config ⇒ ../../../Library/Frameworks/Python.framework/Versions/3.9/bin/python3.9-config
+  lrwxr-xr-x root wheel 79 B Thu Feb 22 17:22:30 2024 /usr/local/bin/python3.9-intel64 ⇒ ../../../Library/Frameworks/Python.framework/Versions/3.9/bin/python3.9-intel64
+$ ls -d /opt/homebrew/opt/python@3.12
+  /opt/homebrew/opt/python@3.12 ⇒ ../Cellar/python@3.12/3.12.14
+$ ls ~/.local/share/uv/tools
+  damwha-worker
+  graphifyy
+  mlx-lm
+  ^ mlx-lm이 워커 venv **밖**에 있는 현재 구성이다 (스펙 §2).
+$ ls ~/.local/share/uv/tools/mlx-lm/lib/python*/site-packages | grep -i '^mlx.*dist-info'
+  mlx-0.32.2.dist-info
+  mlx_lm-0.31.3.dist-info
+  mlx_metal-0.32.2.dist-info
+  ^ 번들에도 이 버전을 넣는다 (build.sh 의 MLX_LM_VERSION).

@@ -1,0 +1,58 @@
+# Task 3 — 개발 자산 무변화 확인 (스펙 §4.4)
+#
+# snapshot-dev-assets.sh 는 결과를 dev-assets-latest.txt 에 **덮어쓴다.** Task 1이
+# 그렇게 설계했지만 스펙 §6의 "증거를 덮어쓰지 않는다"와 부딪치므로, Task 3은
+# 자기 회차의 사본을 이 파일로 남기고 dev-assets-latest.txt 는 Task 2 커밋
+# 상태로 되돌려 두었다.
+#
+# ## 판정
+#
+# - **be/storage: 무변화.** files / bytes / newest_mtime / manifest_sha256 이
+#   before 와 after 에서 완전히 같다 (a18870e6…6391be). Task 3은 be/storage 를
+#   읽지도 않았다 — 이 Task 에는 오디오가 필요 없다.
+# - **docker 볼륨: 비교 불가.** after 를 재는 도중 OrbStack 의 docker API 가
+#   응답을 멈췄다. `docker volume ls` 가 26분 넘게 매달려 있어 그 클라이언트
+#   프로세스만 종료시켰고(이름 기반 종료가 아니라 그 PID 하나), 그래서 after 의
+#   docker 절이 `daemon-unreachable` 이 됐다. 뒤이어 20초 타임아웃으로 한 번 더
+#   불러도 응답이 없었다. OrbStack 프로세스 자체는 살아 있다.
+#
+#   **이 Task 는 docker 명령을 하나도 실행하지 않는다.** 이 읽기 전용 목록
+#   조회가 유일하고, 볼륨을 만들거나 지우는 명령은 하네스 어디에도 없다
+#   (`docker volume rm` / `docker compose down -v` 없음 — README 참조).
+#   damwha_pgdata 에 대한 쓰기 경로가 존재하지 않으므로 볼륨이 바뀔 수 없다.
+#   다음 Task 가 docker 가 살아난 뒤 before/after 를 다시 재면 대조가 된다.
+#
+# snapshot-dev-assets.sh — 개발 자산 무변화 확인 (스펙 §4.4)
+# utc: 2026-09-09T12:41:50Z
+## before
+## docker volumes
+2deac09559ef79effc56c7230c228d0109d309fc4f208051ecc08c1c65c9ccc0
+3a0f65c5f8709d0b6b08af645aeb746d96a340603e1d37a12d4413556a16f984
+3a559c09626e43a1c2538d4173f17ecb0c710a9cabac042b7d0517f6f3a3d95e
+564b2a00aa80cb4b3795532907244d41dd6e245eae5d921bdf32a9bc9425830c
+7a6f325733f01c9cf627f80691db77ed6a4ebd06325108e804f01e6b140e5f81
+be_pgdata
+blog-local_minio_data
+blog-local_postgres_data
+c9975fd05f0848f0fe72889a84bf13ae1eb2b20bfbea00828398f19ab845473e
+damwha_pgdata
+docker_mariadb-local-data
+e33e9714513e13422fdd6cb4081a173df3460999fde456bd8294619ad0facb52
+redpanda_redpanda-data
+trb_db_db_data
+trb_db_db_logs
+## be/storage
+root: /Users/gim-yeongjae/project/daewha/be/storage
+files: 29
+bytes: 2227477523
+newest_mtime: 1788857034
+manifest_sha256: a18870e6592f160f3545fa349ec3fa972a1993f3b3203fdf21303012cf6391be
+## after
+## docker volumes
+docker: daemon-unreachable
+## be/storage
+root: /Users/gim-yeongjae/project/daewha/be/storage
+files: 29
+bytes: 2227477523
+newest_mtime: 1788857034
+manifest_sha256: a18870e6592f160f3545fa349ec3fa972a1993f3b3203fdf21303012cf6391be

@@ -1,0 +1,71 @@
+# Task 3 — check-macho.sh 를 고친 뒤 Task 1 음성 대조군을 다시 돌린 기록
+# utc: 2026-09-09T12:43:35Z
+#
+# Task 3 은 check-macho.sh 에 **문자열 허용 목록**(lib/g1-allowlist.txt)을
+# 더했다. 검사기를 건드렸으므로 '아직도 위반을 검출하는가'를 다시 확인해야
+# 한다 — 계획 Task 1 V5 가 그 대조군이고, 그대로 돌린 결과가 아래다.
+# (이 실행은 t1-dyld-*.txt 를 다시 쓴다. 그 파일들은 Task 1·2 커밋 상태로
+#  되돌려 두었고, 이 회차의 기록은 이 파일이다.)
+
+== A. 합성 대조군 — 금지 문자열 9종 + otool -L + LC_RPATH
+  금지 문자열 대조 파일 9개 생성
+  OK   check-macho.sh가 비정상 종료했다 (exit 1)
+    check-macho.sh (G1, 스펙 §4.1)
+      대상          : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/tmp/g1-detector-fixture
+      파일 수       : 14
+      Mach-O 수     : 2
+      금지 문자열   : 9개 (lib/forbidden-strings.txt + 실행 시점 HOME)
+      문자열 후보   : 12개 파일
+      허용 목록(ALLOW): 0건 / 규칙 24줄 (lib/g1-allowlist.txt)
+      검사 대상 내부 절대경로(INFO): 0건
+      위반          : 14건
+        STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/tmp/g1-detector-fixture/pattern-1.txt: /opt/homebrew/g1-detector-probe  (금지 문자열: /opt/homebrew)
+        STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/tmp/g1-detector-fixture/pattern-2.txt: /Library/Frameworks/Python.framework/g1-detector-probe  (금지 문자열: /Library/Frameworks/Python.framework)
+        STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/tmp/g1-detector-fixture/pattern-3.txt: /usr/local/bin/g1-detector-probe  (금지 문자열: /usr/local/bin)
+        STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/tmp/g1-detector-fixture/pattern-4.txt: /usr/local/lib/g1-detector-probe  (금지 문자열: /usr/local/lib)
+        STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/tmp/g1-detector-fixture/pattern-5.txt: /usr/local/Cellar/g1-detector-probe  (금지 문자열: /usr/local/Cellar)
+        STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/tmp/g1-detector-fixture/pattern-6.txt: /usr/local/opt/g1-detector-probe  (금지 문자열: /usr/local/opt)
+        STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/tmp/g1-detector-fixture/pattern-7.txt: /Users/gim-yeongjae/g1-detector-probe  (금지 문자열: /Users/gim-yeongjae)
+        STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/tmp/g1-detector-fixture/pattern-8.txt: /.venv/g1-detector-probe  (금지 문자열: /.venv)
+        STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/tmp/g1-detector-fixture/pattern-9.txt: /Library/Developer/CommandLineTools/g1-detector-probe  (금지 문자열: /Library/Developer/CommandLineTools)
+        STALE-PATH /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/tmp/g1-detector-fixture/stale-pkgconfig.pc: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/stale-prefix  (번들 밖 절대 경로 — 검사 대상이 아닌 실험 디렉터리를 가리킨다, 금지 문자열: /Users/gim-yeongjae)
+        STALE-PATH /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/tmp/g1-detector-fixture/stale-pyvenv.cfg: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/downloads/cpython/bin  (번들 밖 절대 경로 — 검사 대상이 아닌 실험 디렉터리를 가리킨다, 금지 문자열: /Users/gim-yeongjae)
+        STALE-PATH /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/tmp/g1-detector-fixture/stale-shebang: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3  (번들 밖 절대 경로 — 검사 대상이 아닌 실험 디렉터리를 가리킨다, 금지 문자열: /Users/gim-yeongjae)
+        OTOOL-L /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/tmp/g1-detector-fixture/dep-bad: /tmp/g1-detector-probe/libSystem.B.dylib  (허용 접두사가 아니다)
+        LC_RPATH /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/tmp/g1-detector-fixture/rpath-bad: /tmp/g1-detector-probe-rpath  (번들 밖 절대 경로)
+  OK   금지 문자열 9종을 모두 검출했다 (스펙 §4.1 표 7행 전부)
+  OK   otool -L 의존 경로 위반을 검출했다
+  OK   LC_RPATH 위반을 검출했다
+  OK   재배치 잔존 경로를 검출했다: stale-shebang
+  OK   재배치 잔존 경로를 검출했다: stale-pyvenv.cfg
+  OK   재배치 잔존 경로를 검출했다: stale-pkgconfig.pc
+  OK   fat 바이너리 경로를 아키텍처 꼬리표 없이 다뤘다
+
+== B. 실물 대조군 — check-macho.sh /opt/homebrew/bin
+  OK   비정상 종료했다 (exit 1)
+    검출한 위반 줄 수: 6
+      위반          : 6건
+
+== C. dyld 실측 대조군 — 플랫폼 바이너리가 아닌 Mach-O
+run-isolated: label=t1-dyld-control  stderr는 실행이 끝난 뒤에 나온다 (실시간: tail -f /var/folders/br/j4gx9hf16yn0bpvlwp7jdnpm0000gn/T//runiso.AyGmJt/stderr.raw)
+  OK   dyld 줄 81건을 실측했다
+    dyld[15214]: <1847B2BD-6C7D-3600-82B0-AC6B5F8F823F> /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/tmp/g2-dyld-control/echo
+    dyld[15214]: <4FDC9AA6-B344-37FE-B8C6-A4C94A038F57> /usr/lib/libSystem.B.dylib
+    dyld[15214]: <83E81326-A587-374F-ABC1-BAE48D0FEE0D> /usr/lib/system/libcache.dylib
+
+== D. 런처 dyld 대조군 — re-export 없음 / 있음 / 가짜 증거
+run-isolated: label=t1-dyld-launcher-noexport  stderr는 실행이 끝난 뒤에 나온다 (실시간: tail -f /var/folders/br/j4gx9hf16yn0bpvlwp7jdnpm0000gn/T//runiso.vPomSj/stderr.raw)
+  OK   D1: re-export 없는 런처는 dyld 0건이다 (SIP가 /bin/bash exec에서 지웠다)
+  OK   D1: 증거가 MEASUREMENT_UNAVAILABLE로 표시됐다 — 통과로 집계되지 않는다
+run-isolated: label=t1-dyld-launcher-reexport  stderr는 실행이 끝난 뒤에 나온다 (실시간: tail -f /var/folders/br/j4gx9hf16yn0bpvlwp7jdnpm0000gn/T//runiso.K2pPqe/stderr.raw)
+  OK   D2: re-export 있는 런처는 dyld 81건을 실측했다 (pid: 15353 )
+  OK   D2: pid 15353가 자식 Mach-O를 로드했다 — 검증 대상이 실제로 측정됐다
+run-isolated: label=t1-dyld-launcher-fake  stderr는 실행이 끝난 뒤에 나온다 (실시간: tail -f /var/folders/br/j4gx9hf16yn0bpvlwp7jdnpm0000gn/T//runiso.ZiVFzX/stderr.raw)
+  OK   D3: 가짜 증거 런처가 dyld 82건을 남겼다 — 줄 수만 보면 통과처럼 보인다
+  OK   D3: 자식 Mach-O를 로드한 pid가 없다고 올바로 판정했다 (pid: 15418 )
+  정보 파일 전체를 grep하면 이 가짜 증거도 매치된다 (헤더의 # argv: 줄).
+       ^dyld 줄로 한정해야 하는 이유다 (규칙 6).
+
+모든 대조군이 위반을 실제로 검출했다 — 계측기가 살아 있다
+
+# t1-detector-negative.sh exit: 0

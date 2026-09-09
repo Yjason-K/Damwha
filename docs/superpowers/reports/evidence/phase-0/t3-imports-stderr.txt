@@ -1,0 +1,2 @@
+# t3-imports 의 stderr (dyld 줄 제외). utc: 2026-09-09T12:05:12Z  exit: 0
+Matplotlib is building the font cache; this may take a moment.

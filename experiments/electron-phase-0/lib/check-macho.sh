@@ -9,10 +9,18 @@
 #   (2) otool -l의 LC_RPATH에 번들 밖 절대 경로가 없는가
 #   (3) **모든 파일**에 금지 문자열(lib/forbidden-strings.txt)이 없는가
 #
-# (3)의 면제는 **검사 대상 디렉터리 자신($ROOT) 하위 하나뿐**이다. 이 저장소가
-# 개발자 홈 아래에 있어서 번들의 자기 참조가 금지 문자열 /Users/<개발자>로
-# 시작할 뿐이므로 그것만 INFO로 뺀다. 같은 실험 디렉터리라도 stage/
-# downloads/ sandbox/ 처럼 **검사 대상 밖**을 가리키면 STALE-PATH 위반이다.
+# (3)의 경로 면제는 **검사 대상 디렉터리 자신($ROOT) 하위 하나뿐**이다. 이
+# 저장소가 개발자 홈 아래에 있어서 번들의 자기 참조가 금지 문자열
+# /Users/<개발자>로 시작할 뿐이므로 그것만 INFO로 뺀다. 같은 실험 디렉터리라도
+# stage/ downloads/ sandbox/ 처럼 **검사 대상 밖**을 가리키면 STALE-PATH 위반이다.
+#
+# 그와 별개로 lib/g1-allowlist.txt가 있으면 (검사 대상 기준 상대 경로, 금지
+# 문자열) 쌍이 정확히 일치하는 적중을 ALLOW로 분류한다 (Task 3이 추가).
+# 제3자 wheel과 CPython 표준 라이브러리 **원본**에 구조적으로 들어 있는
+# 문자열 — 독스트링, 다른 플랫폼용 분기, 배포자의 빌드 머신 경로, ctypes
+# 폴백 목록 — 을 위한 것이다. 적중은 숨기지 않고 근거와 함께 출력되며,
+# 목록에 없는 파일에 같은 문자열이 나오면 여전히 위반이다. 재배치를 깨는
+# 항목(STALE-PATH / OTOOL-L / LC_RPATH)은 목록에 넣지 않는다.
 #
 # (3)을 Mach-O로 좁히지 않는 이유는 스펙 §4.1이 적은 그대로다 — 재배치가
 # 깨지는 흔한 자리는 컴파일된 바이너리가 아니라 sysconfig 데이터, *.pc,
@@ -38,6 +46,10 @@ set -u
 # "Illegal byte sequence"로 줄을 버리거나 멈춘다 — 그러면 위반이 조용히 사라진다.
 export LC_ALL=C
 
+# 허용 목록은 탭 구분이다. 리터럴 탭을 스크립트 본문에 두면 편집 중에 공백으로
+# 바뀌기 쉬워 한 곳에서 만든다.
+TAB=$(printf '\t')
+
 MAX_VIOLATIONS=${CHECK_MACHO_MAX_VIOLATIONS:-0}
 
 [ $# -eq 1 ] || { echo "usage: check-macho.sh <directory>" >&2; exit 2; }
@@ -49,6 +61,18 @@ command -v file  >/dev/null 2>&1 || { echo "FAIL: file이 없다 (G1을 수행�
 
 PATTERN_SRC="$EXP_LIB_DIR/forbidden-strings.txt"
 [ -f "$PATTERN_SRC" ] || { echo "FAIL: 금지 문자열 파일이 없다: $PATTERN_SRC" >&2; exit 2; }
+
+# 금지 문자열 **허용 목록** (Task 3이 추가). 없어도 동작한다. 있으면 (검사 대상
+# 기준 상대 경로, 금지 문자열) 쌍이 일치하는 적중만 위반이 아니라 ALLOW로
+# 분류하고, 목록에 적힌 근거와 함께 보고서에 **그대로 출력한다.** 숨기는 것이
+# 아니라 분류하는 것이다.
+#
+# 왜 필요한지, 무엇을 넣고 무엇을 넣지 않는지는 그 파일의 머리말에 있다.
+# 요약하면: 재배치를 깨는 것(STALE-PATH / OTOOL-L / LC_RPATH)은 목록에 넣지
+# 않고 고친다. 제3자 wheel과 CPython 표준 라이브러리 **원본**에 구조적으로
+# 들어 있는 문자열만 분류해 남긴다. 경로를 반드시 적게 해서 전역 면제가
+# 생기지 않게 했다 — 같은 문자열이 다른 파일에 나타나면 여전히 위반이다.
+ALLOW_SRC="$EXP_LIB_DIR/g1-allowlist.txt"
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/checkmacho.XXXXXX") || exit 2
 trap 'rm -rf "$WORK"' EXIT
@@ -73,8 +97,56 @@ FILE_COUNT=$(tr '\0' '\n' < "$FILES" | wc -l | tr -d ' ')
 
 VIOL="$WORK/violations.txt"
 INFO="$WORK/internal.txt"
+ALLOWED="$WORK/allowed.txt"
 : > "$VIOL"
 : > "$INFO"
+: > "$ALLOWED"
+
+ALLOW_RULES="$WORK/allow-rules.txt"
+: > "$ALLOW_RULES"
+if [ -f "$ALLOW_SRC" ]; then
+  grep -v '^[[:space:]]*#' "$ALLOW_SRC" | grep -v '^[[:space:]]*$' > "$ALLOW_RULES"
+fi
+ALLOW_RULE_COUNT=$(wc -l < "$ALLOW_RULES" | tr -d ' ')
+
+# (상대 경로, 금지 문자열)이 허용 목록에 있으면 근거를 출력하고 0을 반환한다.
+# 규칙의 경로는 정확히 일치하거나, `*`가 들어 있으면 셸 글롭으로 본다.
+allow_reason() {
+  local rel="$1" pat="$2" rpath rpat reason
+  # 바이트코드 캐시는 원본 .py 의 분류를 따른다.
+  #   lib/python3.12/__pycache__/site.cpython-312.pyc  ->  lib/python3.12/site.py
+  # .pyc 안의 문자열 상수는 그 .py 를 컴파일한 결과라 같은 문자열이고 같은
+  # 근거다. 번들 python을 한 번이라도 실행하면 생기므로, 이것을 별도 규칙으로
+  # 두지 않으면 "검사 순서에 따라 통과 여부가 달라지는" 검사기가 된다.
+  # 매핑은 이 한 방향뿐이고, 대응하는 .py 규칙이 없으면 여전히 위반이다.
+  local src=""
+  case "$rel" in
+    */__pycache__/*.pyc)
+      src=$(printf '%s' "$rel" | sed -E 's#(.*/)__pycache__/([^/]+)\.cpython-[0-9]+(\.opt-[0-9]+)?\.pyc$#\1\2.py#')
+      [ "$src" = "$rel" ] && src=""
+      ;;
+  esac
+  while IFS="$TAB" read -r rpath rpat reason; do
+    [ -n "$rpath" ] || continue
+    [ "$rpat" = "$pat" ] || continue
+    case "$rpath" in
+      # 규칙에 * 가 들어 있으면 글롭으로, 아니면 정확히 일치로 본다.
+      *"*"*)
+        case "$rel" in $rpath) echo "$reason"; return 0 ;; esac
+        if [ -n "$src" ]; then
+          case "$src" in $rpath) echo "$reason (바이트코드 캐시)"; return 0 ;; esac
+        fi
+        ;;
+      *)
+        if [ "$rel" = "$rpath" ]; then echo "$reason"; return 0; fi
+        if [ -n "$src" ] && [ "$src" = "$rpath" ]; then
+          echo "$reason (바이트코드 캐시)"; return 0
+        fi
+        ;;
+    esac
+  done < "$ALLOW_RULES"
+  return 1
+}
 
 viol_count() { wc -l < "$VIOL" | tr -d ' '; }
 over_budget() {
@@ -98,6 +170,7 @@ while IFS= read -r f; do
   [ -n "$f" ] || continue
   # 패턴 원본 파일 자신은 검사 대상에서 제외한다 (파일 주석 참조).
   [ "$f" = "$PATTERN_SRC" ] && continue
+  [ "$f" = "$ALLOW_SRC" ] && continue
   over_budget && break
   while IFS= read -r p; do
     [ -n "$p" ] || continue
@@ -127,7 +200,13 @@ while IFS= read -r f; do
           add_viol "STALE-PATH $f: $tok  (번들 밖 절대 경로 — 검사 대상이 아닌 실험 디렉터리를 가리킨다, 금지 문자열: $p)"
           ;;
         *)
-          add_viol "STRING  $f: $tok  (금지 문자열: $p)"
+          if reason=$(allow_reason "${f#$ROOT/}" "$p"); then
+            # 허용 목록에 있다. 숨기지 않고 근거와 함께 ALLOW로 남긴다 —
+            # 목록도 근거도 커밋돼 있어 리뷰에서 그대로 보인다.
+            echo "$f: $tok  (금지 문자열: $p, 근거: $reason)" >> "$ALLOWED"
+          else
+            add_viol "STRING  $f: $tok  (금지 문자열: $p)"
+          fi
           ;;
       esac
     done <<EOT
@@ -198,6 +277,7 @@ done < "$MACHO"
 # --- 보고 --------------------------------------------------------------------
 N=$(viol_count)
 INFO_N=$(wc -l < "$INFO" | tr -d ' ')
+ALLOW_N=$(wc -l < "$ALLOWED" | tr -d ' ')
 
 echo "check-macho.sh (G1, 스펙 §4.1)"
 echo "  대상          : $ROOT"
@@ -205,6 +285,10 @@ echo "  파일 수       : $FILE_COUNT"
 echo "  Mach-O 수     : $MACHO_COUNT"
 echo "  금지 문자열   : ${PATTERN_COUNT}개 (lib/forbidden-strings.txt + 실행 시점 HOME)"
 echo "  문자열 후보   : $(wc -l < "$CANDIDATES" | tr -d ' ')개 파일"
+echo "  허용 목록(ALLOW): ${ALLOW_N}건 / 규칙 ${ALLOW_RULE_COUNT}줄 (lib/g1-allowlist.txt)"
+if [ "$ALLOW_N" -gt 0 ]; then
+  sed 's/^/    ALLOW /' "$ALLOWED"
+fi
 echo "  검사 대상 내부 절대경로(INFO): ${INFO_N}건"
 if [ "$INFO_N" -gt 0 ]; then
   head -n 20 "$INFO" | sed 's/^/    INFO  /'

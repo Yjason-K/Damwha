@@ -1,0 +1,212 @@
+# Task 3 재배치 사후 처리 (build.sh relocate)
+# utc: 2026-09-09T12:00:43Z
+# 대상: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python
+
+## R-9 — 콘솔 스크립트 셔뱅의 절대 경로
+  셔뱅 수정: bin/alembic   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/cffi-gen-src   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/ct2-fairseq-converter   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/ct2-marian-converter   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/ct2-openai-gpt2-converter   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/ct2-opennmt-py-converter   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/ct2-opennmt-tf-converter   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/ct2-opus-mt-converter   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/ct2-transformers-converter   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/damwha-embed   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/damwha-worker   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/dotenv   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/f2py   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/fabric   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/fastapi   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/fonttools   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/hf   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/httpx   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/huggingface-cli   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/idna   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/isympy   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mako-render   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/markdown-it   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mlx_lm   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mlx_lm.awq   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mlx_lm.benchmark   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mlx_lm.cache_prompt   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mlx_lm.chat   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mlx_lm.convert   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mlx_lm.dwq   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mlx_lm.dynamic_quant   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mlx_lm.evaluate   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mlx_lm.fuse   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mlx_lm.generate   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mlx_lm.gptq   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mlx_lm.lora   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mlx_lm.manage   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mlx_lm.perplexity   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mlx_lm.server   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mlx_lm.share   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mlx_lm.upload   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mlx_whisper   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mlx.distributed_config   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/mlx.launch   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/normalizer   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/numba   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/numpy-config   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/onnxruntime_test   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/optuna   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/pyannote-audio   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/pyannote-database   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/pyannote-metrics   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/pyannote-pipeline   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/pyav   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/pyftmerge   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/pyftsubset   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/pygmentize   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/tiny-agents   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/torchfrtrace   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/torchrun   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/tqdm   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/transformers   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/ttx   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/typer   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  셔뱅 수정: bin/uvicorn   #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/python/bin/python3.12
+  → 65개 수정
+
+## sysconfig 데이터의 설치 시점 prefix
+  prefix 재작성: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/pydist/cpython-3.12.11-macos-aarch64-none → /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python
+  확인: sysconfig.get_config_var('prefix') = /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python
+
+## PEP 610 direct_url.json (설치 출처 메타데이터)
+  삭제: lib/python3.12/site-packages/damwha_worker-0.2.3.dist-info/direct_url.json
+  → 1개 삭제
+
+## __pycache__ 정리
+  → 5개 디렉터리 삭제
+
+## Mach-O — 번들 밖 LC_RPATH 삭제
+  LC_RPATH 삭제: lib/python3.12/site-packages/av/.dylibs/libsharpyuv.0.1.2.dylib  <- /tmp/vendor/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/PIL/.dylibs/libjpeg.62.4.0.dylib  <- /Users/runner/work/Pillow/Pillow/build/deps/darwin/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/scipy/linalg/_fblas.cpython-312-darwin.so  <- /opt/homebrew/Cellar/gcc@13/13.4.0/lib/gcc/13
+  LC_RPATH 삭제: lib/python3.12/site-packages/scipy/linalg/_fblas.cpython-312-darwin.so  <- /opt/homebrew/Cellar/gcc@13/13.4.0/lib/gcc/13/gcc
+  LC_RPATH 삭제: lib/python3.12/site-packages/scipy/linalg/_fblas.cpython-312-darwin.so  <- /opt/homebrew/Cellar/gcc@13/13.4.0/lib/gcc/13/gcc/aarch64-apple-darwin23/13
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/__check_build/_check_build.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/_cyutility.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/_isotonic.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/cluster/_dbscan_inner.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/cluster/_hdbscan/_linkage.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/cluster/_hdbscan/_reachability.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/cluster/_hdbscan/_tree.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/cluster/_hierarchical_fast.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/datasets/_svmlight_format_fast.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/decomposition/_cdnmf_fast.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/decomposition/_online_lda_fast.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/ensemble/_gradient_boosting.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/ensemble/_hist_gradient_boosting/common.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/feature_extraction/_hashing_fast.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/linear_model/_cd_fast.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/linear_model/_sag_fast.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/linear_model/_sgd_fast.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/manifold/_utils.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/metrics/_dist_metrics.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/metrics/_pairwise_distances_reduction/_datasets_pair.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/metrics/_pairwise_distances_reduction/_middle_term_computer.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/metrics/cluster/_expected_mutual_info_fast.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/neighbors/_ball_tree.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/neighbors/_kd_tree.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/neighbors/_partition_nodes.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/neighbors/_quad_tree.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/preprocessing/_csr_polynomial_expansion.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/preprocessing/_target_encoder_fast.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/svm/_liblinear.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/svm/_libsvm_sparse.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/svm/_libsvm.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/svm/_newrand.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/tree/_criterion.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/tree/_partitioner.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/tree/_splitter.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/tree/_tree.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/tree/_utils.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/utils/_bitset.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/utils/_cython_blas.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/utils/_fast_dict.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/utils/_heap.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/utils/_isfinite.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/utils/_random.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/utils/_seq_dataset.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/utils/_sorting.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/utils/_typedefs.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/utils/_vector_sentinel.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/utils/_weight_vector.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/utils/arrayfuncs.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/utils/murmurhash.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/sklearn/utils/sparsefuncs_fast.cpython-312-darwin.so  <- /Users/runner/miniconda3/envs/build/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/torchaudio/lib/_torchaudio.abi3.so  <- /Users/ec2-user/runner/_work/_temp/conda_environment_23408961961/lib
+  LC_RPATH 삭제: lib/python3.12/site-packages/torchaudio/lib/libtorchaudio.abi3.so  <- /Users/ec2-user/runner/_work/_temp/conda_environment_23408961961/lib
+  → 58건 삭제 / 56개 파일 재서명
+
+## Mach-O — 번들 밖 LC_ID_DYLIB 정규화
+  LC_ID_DYLIB: lib/libpython3.12.dylib  experiments/electron-phase-0/stage/pydist/cpython-3.12.11-macos-aarch64-none/lib/libpython3.12.dylib → @executable_path/../lib/libpython3.12.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/av/.dylibs/libavcodec.62.28.102.dylib  /DLC/av/.dylibs/libavcodec.62.28.102.dylib → @rpath/libavcodec.62.28.102.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/av/.dylibs/libavdevice.62.3.102.dylib  /DLC/av/.dylibs/libavdevice.62.3.102.dylib → @rpath/libavdevice.62.3.102.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/av/.dylibs/libavfilter.11.14.102.dylib  /DLC/av/.dylibs/libavfilter.11.14.102.dylib → @rpath/libavfilter.11.14.102.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/av/.dylibs/libavformat.62.12.102.dylib  /DLC/av/.dylibs/libavformat.62.12.102.dylib → @rpath/libavformat.62.12.102.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/av/.dylibs/libavutil.60.26.102.dylib  /DLC/av/.dylibs/libavutil.60.26.102.dylib → @rpath/libavutil.60.26.102.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/av/.dylibs/libdav1d.7.dylib  /DLC/av/.dylibs/libdav1d.7.dylib → @rpath/libdav1d.7.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/av/.dylibs/libmp3lame.0.dylib  /DLC/av/.dylibs/libmp3lame.0.dylib → @rpath/libmp3lame.0.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/av/.dylibs/libopencore-amrnb.0.dylib  /DLC/av/.dylibs/libopencore-amrnb.0.dylib → @rpath/libopencore-amrnb.0.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/av/.dylibs/libopencore-amrwb.0.dylib  /DLC/av/.dylibs/libopencore-amrwb.0.dylib → @rpath/libopencore-amrwb.0.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/av/.dylibs/libopus.0.dylib  /DLC/av/.dylibs/libopus.0.dylib → @rpath/libopus.0.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/av/.dylibs/libsharpyuv.0.1.2.dylib  /DLC/av/.dylibs/libsharpyuv.0.1.2.dylib → @rpath/libsharpyuv.0.1.2.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/av/.dylibs/libSvtAv1Enc.4.1.0.dylib  /DLC/av/.dylibs/libSvtAv1Enc.4.1.0.dylib → @rpath/libSvtAv1Enc.4.1.0.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/av/.dylibs/libswresample.6.3.102.dylib  /DLC/av/.dylibs/libswresample.6.3.102.dylib → @rpath/libswresample.6.3.102.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/av/.dylibs/libswscale.9.5.102.dylib  /DLC/av/.dylibs/libswscale.9.5.102.dylib → @rpath/libswscale.9.5.102.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/av/.dylibs/libvpx.12.dylib  /DLC/av/.dylibs/libvpx.12.dylib → @rpath/libvpx.12.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/av/.dylibs/libwebp.7.2.0.dylib  /DLC/av/.dylibs/libwebp.7.2.0.dylib → @rpath/libwebp.7.2.0.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/av/.dylibs/libwebpmux.3.1.2.dylib  /DLC/av/.dylibs/libwebpmux.3.1.2.dylib → @rpath/libwebpmux.3.1.2.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/av/.dylibs/libx264.165.dylib  /DLC/av/.dylibs/libx264.165.dylib → @rpath/libx264.165.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/av/.dylibs/libx265.216.dylib  /DLC/av/.dylibs/libx265.216.dylib → @rpath/libx265.216.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/ctranslate2/.dylibs/libctranslate2.4.8.2.dylib  /DLC/ctranslate2/.dylibs/libctranslate2.4.8.2.dylib → @rpath/libctranslate2.4.8.2.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/google/_upb/_message.abi3.so  bazel-out/k8-opt-ST-9e73343f3d22/bin/python/lib_message_binary.so → @rpath/lib_message_binary.so
+  LC_ID_DYLIB: lib/python3.12/site-packages/PIL/.dylibs/libavif.16.4.2.dylib  /DLC/PIL/.dylibs/libavif.16.4.2.dylib → @rpath/libavif.16.4.2.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/PIL/.dylibs/libbrotlicommon.1.2.0.dylib  /DLC/PIL/.dylibs/libbrotlicommon.1.2.0.dylib → @rpath/libbrotlicommon.1.2.0.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/PIL/.dylibs/libbrotlidec.1.2.0.dylib  /DLC/PIL/.dylibs/libbrotlidec.1.2.0.dylib → @rpath/libbrotlidec.1.2.0.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/PIL/.dylibs/libfreetype.6.dylib  /DLC/PIL/.dylibs/libfreetype.6.dylib → @rpath/libfreetype.6.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/PIL/.dylibs/libharfbuzz.0.dylib  /DLC/PIL/.dylibs/libharfbuzz.0.dylib → @rpath/libharfbuzz.0.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/PIL/.dylibs/libjpeg.62.4.0.dylib  /DLC/PIL/.dylibs/libjpeg.62.4.0.dylib → @rpath/libjpeg.62.4.0.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/PIL/.dylibs/liblcms2.2.dylib  /DLC/PIL/.dylibs/liblcms2.2.dylib → @rpath/liblcms2.2.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/PIL/.dylibs/liblzma.5.dylib  /DLC/PIL/.dylibs/liblzma.5.dylib → @rpath/liblzma.5.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/PIL/.dylibs/libopenjp2.2.5.4.dylib  /DLC/PIL/.dylibs/libopenjp2.2.5.4.dylib → @rpath/libopenjp2.2.5.4.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/PIL/.dylibs/libpng16.16.dylib  /DLC/PIL/.dylibs/libpng16.16.dylib → @rpath/libpng16.16.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/PIL/.dylibs/libsharpyuv.0.dylib  /DLC/PIL/.dylibs/libsharpyuv.0.dylib → @rpath/libsharpyuv.0.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/PIL/.dylibs/libtiff.6.dylib  /DLC/PIL/.dylibs/libtiff.6.dylib → @rpath/libtiff.6.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/PIL/.dylibs/libwebp.7.dylib  /DLC/PIL/.dylibs/libwebp.7.dylib → @rpath/libwebp.7.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/PIL/.dylibs/libwebpdemux.2.dylib  /DLC/PIL/.dylibs/libwebpdemux.2.dylib → @rpath/libwebpdemux.2.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/PIL/.dylibs/libwebpmux.3.dylib  /DLC/PIL/.dylibs/libwebpmux.3.dylib → @rpath/libwebpmux.3.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/PIL/.dylibs/libXau.6.dylib  /DLC/PIL/.dylibs/libXau.6.dylib → @rpath/libXau.6.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/PIL/.dylibs/libxcb.1.1.0.dylib  /DLC/PIL/.dylibs/libxcb.1.1.0.dylib → @rpath/libxcb.1.1.0.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/PIL/.dylibs/libz.1.3.1.zlib-ng.dylib  /DLC/PIL/.dylibs/libz.1.3.1.zlib-ng.dylib → @rpath/libz.1.3.1.zlib-ng.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/psycopg_binary/.dylibs/libcom_err.3.0.dylib  /DLC/psycopg_binary/.dylibs/libcom_err.3.0.dylib → @rpath/libcom_err.3.0.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/psycopg_binary/.dylibs/libcrypto.3.dylib  /DLC/psycopg_binary/.dylibs/libcrypto.3.dylib → @rpath/libcrypto.3.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/psycopg_binary/.dylibs/libgssapi_krb5.2.2.dylib  /DLC/psycopg_binary/.dylibs/libgssapi_krb5.2.2.dylib → @rpath/libgssapi_krb5.2.2.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/psycopg_binary/.dylibs/libk5crypto.3.1.dylib  /DLC/psycopg_binary/.dylibs/libk5crypto.3.1.dylib → @rpath/libk5crypto.3.1.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/psycopg_binary/.dylibs/libkrb5.3.3.dylib  /DLC/psycopg_binary/.dylibs/libkrb5.3.3.dylib → @rpath/libkrb5.3.3.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/psycopg_binary/.dylibs/libkrb5support.1.1.dylib  /DLC/psycopg_binary/.dylibs/libkrb5support.1.1.dylib → @rpath/libkrb5support.1.1.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/psycopg_binary/.dylibs/liblber.2.dylib  /DLC/psycopg_binary/.dylibs/liblber.2.dylib → @rpath/liblber.2.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/psycopg_binary/.dylibs/libldap.2.dylib  /DLC/psycopg_binary/.dylibs/libldap.2.dylib → @rpath/libldap.2.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/psycopg_binary/.dylibs/libpq.5.dylib  /DLC/psycopg_binary/.dylibs/libpq.5.dylib → @rpath/libpq.5.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/psycopg_binary/.dylibs/libssl.3.dylib  /DLC/psycopg_binary/.dylibs/libssl.3.dylib → @rpath/libssl.3.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/scipy/.dylibs/libgcc_s.1.1.dylib  /DLC/scipy/.dylibs/libgcc_s.1.1.dylib → @rpath/libgcc_s.1.1.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/scipy/.dylibs/libgfortran.5.dylib  /DLC/scipy/.dylibs/libgfortran.5.dylib → @rpath/libgfortran.5.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/scipy/.dylibs/libquadmath.0.dylib  /DLC/scipy/.dylibs/libquadmath.0.dylib → @rpath/libquadmath.0.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/sklearn/.dylibs/libomp.dylib  /DLC/sklearn/.dylibs/libomp.dylib → @rpath/libomp.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/torch/lib/libomp.dylib  /opt/llvm-openmp/lib/libomp.dylib → @rpath/libomp.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/torchaudio/.dylibs/libc++.1.0.dylib  /DLC/torchaudio/.dylibs/libc++.1.0.dylib → @rpath/libc++.1.0.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/torchcodec/.dylibs/libavif.16.4.2.dylib  /DLC/torchcodec/.dylibs/libavif.16.4.2.dylib → @rpath/libavif.16.4.2.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/torchcodec/.dylibs/libc++.1.0.dylib  /DLC/torchcodec/.dylibs/libc++.1.0.dylib → @rpath/libc++.1.0.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/torchcodec/.dylibs/libjpeg.8.3.2.dylib  /DLC/torchcodec/.dylibs/libjpeg.8.3.2.dylib → @rpath/libjpeg.8.3.2.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/torchcodec/.dylibs/libpng16.16.dylib  /DLC/torchcodec/.dylibs/libpng16.16.dylib → @rpath/libpng16.16.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/torchcodec/.dylibs/libsharpyuv.0.1.2.dylib  /DLC/torchcodec/.dylibs/libsharpyuv.0.1.2.dylib → @rpath/libsharpyuv.0.1.2.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/torchcodec/.dylibs/libwebp.7.2.0.dylib  /DLC/torchcodec/.dylibs/libwebp.7.2.0.dylib → @rpath/libwebp.7.2.0.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/torchcodec/.dylibs/libwebpdemux.2.0.17.dylib  /DLC/torchcodec/.dylibs/libwebpdemux.2.0.17.dylib → @rpath/libwebpdemux.2.0.17.dylib
+  LC_ID_DYLIB: lib/python3.12/site-packages/torchcodec/.dylibs/libz.1.3.2.dylib  /DLC/torchcodec/.dylibs/libz.1.3.2.dylib → @rpath/libz.1.3.2.dylib
+  → 64건 변경 / 64개 파일 재서명
+
+재배치 사후 처리 끝.

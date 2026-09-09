@@ -1,0 +1,82 @@
+# G1 정적 검사 — verify/t3-*.sh 를 전부 돌린 **뒤**의 bundle/python
+# utc: 2026-09-09T12:15:34Z
+#
+# t3-g1-bundle.txt 는 build.sh all 이 relocate 직후에 잰 것이고, 이 파일은
+# 그 뒤 verify 스크립트 넷이 번들 python 을 실제로 실행한 상태에서 다시 잰
+# 것이다. 차이는 __pycache__ 뿐이다. 계획 Task 3 V1 을 재현하며, 검사 순서에
+# 상관없이 같은 결과가 나오는지 보는 것이 목적이다.
+
+check-macho.sh (G1, 스펙 §4.1)
+  대상          : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python
+  파일 수       : 38422
+  Mach-O 수     : 460
+  금지 문자열   : 9개 (lib/forbidden-strings.txt + 실행 시점 HOME)
+  문자열 후보   : 5225개 파일
+  허용 목록(ALLOW): 42건 / 규칙 24줄 (lib/g1-allowlist.txt)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/libpython3.12.dylib: /usr/local/lib/python2.5/site-packages  (금지 문자열: /usr/local/lib, 근거: site 모듈 독스트링의 예시 경로 (frozen). 실행 경로가 아니다)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/libpython3.12.dylib: /usr/local/lib/python2.5/site-packages/bar  (금지 문자열: /usr/local/lib, 근거: site 모듈 독스트링의 예시 경로 (frozen). 실행 경로가 아니다)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/libpython3.12.dylib: /usr/local/lib/python2.5/site-packages/foo  (금지 문자열: /usr/local/lib, 근거: site 모듈 독스트링의 예시 경로 (frozen). 실행 경로가 아니다)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/__pycache__/mimetypes.cpython-312.pyc: /usr/local/lib/netscape/mime.typesrz/usr/local/etc/mime.typesFc�  (금지 문자열: /usr/local/lib, 근거: 실동작-폴백. knownfiles에 있는 선택적 설정 파일 목록 — 없으면 건너뛴다 (바이트코드 캐시))
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/cgi.py: /usr/local/bin  (금지 문자열: /usr/local/bin, 근거: deprecated cgi 모듈의 셔뱅 예제 문자열)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/cgi.py: /usr/local/bin/python  (금지 문자열: /usr/local/bin, 근거: deprecated cgi 모듈의 셔뱅 예제 문자열)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/ctypes/macholib/__pycache__/dyld.cpython-312.pyc: /usr/local/libz/libz/usr/libc�r�  (금지 문자열: /usr/local/lib, 근거: 실동작-폴백. ctypes.util.find_library의 DEFAULT_LIBRARY_FALLBACK (바이트코드 캐시))
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/ctypes/macholib/dyld.py: /usr/local/lib  (금지 문자열: /usr/local/lib, 근거: 실동작-폴백. ctypes.util.find_library의 DEFAULT_LIBRARY_FALLBACK)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/mimetypes.py: /usr/local/lib/netscape/mime.types  (금지 문자열: /usr/local/lib, 근거: 실동작-폴백. knownfiles에 있는 선택적 설정 파일 목록 — 없으면 건너뛴다)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/pydoc_data/topics.py: /usr/local/lib/pythonX.Y/os.pyc  (금지 문자열: /usr/local/lib, 근거: help() 본문 텍스트)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/PIL/_imagingft.cpython-312-darwin.so: /usr/local/lib/libfribidi.dylibfribidi_get_par_embedding_levels_exfribidi_get_bracket_typesfribidi_unicode_to_charsetfribidi_charset_to_unicodefribidi_get_bidi_typesfribidi_get_par_embedding_levelsfribidi_version_infocligligahligdligcalt0.10.51CMYKFHSVILLALABLaPPARGBRGBARGBXRGBaYCbCrI  (금지 문자열: /usr/local/lib, 근거: 실동작-폴백. fribidi를 dlopen할 때의 후보 경로. 없으면 bidi 기능만 꺼진다)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/__pycache__/soundfile.cpython-312.pyc: /opt/homebrew/lib/z/usr/local/lib/�utf-8�replacez  (금지 문자열: /opt/homebrew, 근거: 실동작-폴백. 번들 _soundfile_data의 libsndfile을 못 찾을 때만 쓰이는 탐색 경로 (바이트코드 캐시))
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/__pycache__/soundfile.cpython-312.pyc: /usr/local/lib/�utf-8�replacez  (금지 문자열: /usr/local/lib, 근거: 실동작-폴백. 같은 탐색 목록의 다른 항목 (바이트코드 캐시))
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/av/datasets.py: /usr/local/lib  (금지 문자열: /usr/local/lib, 근거: FFmpeg 예제 데이터 탐색 경로 (Linux 관례))
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/certifi-2026.7.22.dist-info/METADATA: /usr/local/lib/python3.7/site-packages/certifi/cacert.pem  (금지 문자열: /usr/local/lib, 근거: 패키지 문서)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/contourpy/util/_build_config.py: /usr/local/lib/python3.12/site-packages/  (금지 문자열: /usr/local/lib, 근거: 빌드 구성 보고용 상수)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/huggingface_hub/cli/lfs.py: /.venv/bin/python  (금지 문자열: /.venv, 근거: 독스트링의 예제 셔뱅)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/huggingface_hub/utils/__pycache__/_runtime.cpython-312.pyc: /opt/homebrew/Cellar/hf/0.30.0/libexec/.  (금지 문자열: /opt/homebrew, 근거: Homebrew 설치를 감지하는 코드의 예제 주석 (바이트코드 캐시))
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/huggingface_hub/utils/__pycache__/_runtime.cpython-312.pyc: /opt/homebrew/Cellar/python@3.12/...  (금지 문자열: /opt/homebrew, 근거: Homebrew 설치를 감지하는 코드의 예제 주석 (바이트코드 캐시))
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/huggingface_hub/utils/_runtime.py: /opt/homebrew/...  (금지 문자열: /opt/homebrew, 근거: Homebrew 설치를 감지하는 코드의 예제 주석)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/huggingface_hub/utils/_runtime.py: /opt/homebrew/Cellar/hf/0.30.0/libexec/.  (금지 문자열: /opt/homebrew, 근거: Homebrew 설치를 감지하는 코드의 예제 주석)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/huggingface_hub/utils/_runtime.py: /opt/homebrew/Cellar/python@3.12/...  (금지 문자열: /opt/homebrew, 근거: Homebrew 설치를 감지하는 코드의 예제 주석)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/opentelemetry/semconv/_incubating/attributes/process_attributes.py: /usr/local/bin  (금지 문자열: /usr/local/bin, 근거: semantic convention 문서의 예시 값)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/scipy/odr/__odrpack.cpython-312-darwin.so: /opt/homebrew/Cellar/gcc@13/13.4.0/lib/gcc/13/gcc/aarch64-apple-darwin23/13/libgcc.a  (금지 문자열: /opt/homebrew, 근거: 같음 (libgcc.a 경로 문자열))
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/setuptools/tests/test_sdist.py: /.venv  (금지 문자열: /.venv, 근거: 테스트 픽스처)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/setuptools/tests/test_sdist.py: /.venv/lib/python3.9/site-packages/bar-2.dist-info/AUTHORS.rst  (금지 문자열: /.venv, 근거: 테스트 픽스처)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/soundfile.py: /opt/homebrew/lib  (금지 문자열: /opt/homebrew, 근거: 실동작-폴백. 번들 _soundfile_data의 libsndfile을 못 찾을 때만 쓰이는 탐색 경로)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/soundfile.py: /opt/homebrew/lib/  (금지 문자열: /opt/homebrew, 근거: 실동작-폴백. 번들 _soundfile_data의 libsndfile을 못 찾을 때만 쓰이는 탐색 경로)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/soundfile.py: /usr/local/lib  (금지 문자열: /usr/local/lib, 근거: 실동작-폴백. 같은 탐색 목록의 다른 항목)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/soundfile.py: /usr/local/lib/  (금지 문자열: /usr/local/lib, 근거: 실동작-폴백. 같은 탐색 목록의 다른 항목)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/sympy-1.14.0.dist-info/METADATA: /usr/local/lib/antlr-4.11.1-complete.jar  (금지 문자열: /usr/local/lib, 근거: 패키지 문서 (antlr jar 설치 안내))
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/threadpoolctl-3.6.0.dist-info/METADATA: /usr/local/lib/libflexiblas.so.3.3  (금지 문자열: /usr/local/lib, 근거: 패키지 문서)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/torch/backends/xeon/run_cpu.py: /usr/local/lib  (금지 문자열: /usr/local/lib, 근거: Linux/Xeon 전용 실행기의 경로 조립)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/torch/backends/xeon/run_cpu.py: /usr/local/lib/  (금지 문자열: /usr/local/lib, 근거: Linux/Xeon 전용 실행기의 경로 조립)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/torch/backends/xeon/run_cpu.py: /usr/local/lib64  (금지 문자열: /usr/local/lib, 근거: Linux/Xeon 전용 실행기의 경로 조립)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/torch/backends/xeon/run_cpu.py: /usr/local/lib64/  (금지 문자열: /usr/local/lib, 근거: Linux/Xeon 전용 실행기의 경로 조립)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/torch/distributed/_symmetric_memory/_nvshmem_triton.py: /usr/local/lib  (금지 문자열: /usr/local/lib, 근거: NVIDIA NVSHMEM 경로. CUDA 전용이라 macOS에서 실행되지 않는다)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/torch/distributed/elastic/agent/server/local_elastic_agent.py: /usr/local/bin/trainer  (금지 문자열: /usr/local/bin, 근거: 독스트링의 예제 명령)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site-packages/torchcodec/_core/CMakeLists.txt: /opt/homebrew/opt/ffmpeg/lib  (금지 문자열: /opt/homebrew, 근거: wheel에 같이 들어온 CMake 빌드 파일. 런타임에 읽지 않는다)
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site.py: /usr/local/lib/python2.5/site-packages  (금지 문자열: /usr/local/lib, 근거: 모듈 독스트링의 예시 경로("/usr/local/lib/python2.5/site-packages"))
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site.py: /usr/local/lib/python2.5/site-packages/bar  (금지 문자열: /usr/local/lib, 근거: 모듈 독스트링의 예시 경로("/usr/local/lib/python2.5/site-packages"))
+    ALLOW /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/site.py: /usr/local/lib/python2.5/site-packages/foo  (금지 문자열: /usr/local/lib, 근거: 모듈 독스트링의 예시 경로("/usr/local/lib/python2.5/site-packages"))
+  검사 대상 내부 절대경로(INFO): 5231건
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/alembic: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/cffi-gen-src: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/ct2-fairseq-converter: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/ct2-marian-converter: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/ct2-openai-gpt2-converter: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/ct2-opennmt-py-converter: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/ct2-opennmt-tf-converter: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/ct2-opus-mt-converter: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/ct2-transformers-converter: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/damwha-embed: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/damwha-worker: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/dotenv: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/f2py: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/fabric: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/fastapi: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/fonttools: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/hf: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/httpx: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/huggingface-cli: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+    INFO  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/idna: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+    ... (5231건 중 20건만 표시)
+  위반          : 0건
+
+# check-macho.sh exit: 0
