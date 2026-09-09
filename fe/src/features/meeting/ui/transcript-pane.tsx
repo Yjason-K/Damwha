@@ -620,13 +620,6 @@ export function TranscriptPane({
               name={meeting.speakers[a].name}
             />
           ))}
-          <button
-            type="button"
-            aria-label="참석자 추가"
-            className="inline-flex size-6 cursor-pointer items-center justify-center rounded-full border border-dashed border-[color:var(--border-strong)] text-[color:var(--text-muted)] outline-none transition-colors hover:text-foreground focus-visible:[box-shadow:var(--focus-ring)]"
-          >
-            <Icon name="plus" size={13} />
-          </button>
         </div>
       </div>
 
