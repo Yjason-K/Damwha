@@ -1,0 +1,53 @@
+# Task 6 — 개발 자산 무변화 확인 (스펙 §4.4, 계획 Task 6 V5)
+#
+# snapshot-dev-assets.sh는 결과를 dev-assets-latest.txt에 **덮어쓴다.**
+# Task 3·4·5와 같은 이유로(스펙 §6 "증거를 덮어쓰지 않는다"와 부딪침) 이 Task도
+# 자기 회차의 사본을 이 파일로 남기고 dev-assets-latest.txt는 이전 커밋 상태로
+# 되돌려 두었다.
+#
+# ## docker — 다섯 번째 Task 연속 무응답
+#
+# Task 3(26분 매달림)·Task 4(3회 시도 전부 실패)·Task 5(3회 전부 실패)에 이어
+# 이번에도 OrbStack의 docker API가 응답하지 않았다. 이 Task에서
+# `docker volume ls`를 3회 시도했고(before 스냅샷 1회, after 스냅샷 2회) 세 번
+# 모두 응답이 없어 **그 docker CLI 클라이언트 프로세스의 PID만** SIGTERM으로
+# 종료했다. 이름 기반 kill이 아니라 그 PID 하나이며, OrbStack 앱·헬퍼
+# 프로세스는 건드리지 않았다.
+#
+#   1) 2026-09-09 23:46 KST — pid 85867 종료 (before 스냅샷 중, 2분 34초 무응답)
+#   2) 2026-09-10 00:10 KST — pid 91646 종료 (after 스냅샷 중, 1분 30초 무응답)
+#   3) 2026-09-10 00:18 KST — pid 94730 종료 (V5 자기 점검 재실행 중, 1분 15초)
+#
+# 따라서 **Task 3 before 목록(볼륨 15개)과의 대조는 이번에도 완성하지 못했다.**
+# 계획이 Task 11에 넘긴 "docker volume ls 공백을 메운다" 항목은 그대로 남는다.
+#
+# ## 이 Task가 docker에 쓴 명령
+#
+# `docker volume ls`(읽기 전용 조회)뿐이며, 그것도 snapshot-dev-assets.sh가
+# 부른 것이다. `docker volume rm`·`docker compose down -v`는 이 하네스 어디에도
+# 없다. damwha_pgdata에 대한 쓰기 경로가 존재하지 않으므로, 조회가 안 됐다는
+# 사실 자체는 볼륨이 바뀌었다는 근거가 되지 않는다 — 이 Task가 그 사실을
+# **확인하지 못했다**는 뜻이다.
+#
+# ## be/storage — 확인됨, 무변화
+#
+# files/bytes/newest_mtime/manifest_sha256이 Task 3·4·5의 값과 완전히 같다
+# (a18870e6…6391be, 29 files, 2227477523 bytes). Task 6은 be/storage를 읽지도
+# 않았다 — 이 Task가 건드리는 것은 실험 DB(55432)와 embed 서비스(58100)뿐이다.
+#
+# ## 개발 DB(5432) — 접속하지 않았다
+#
+# 시드·질의는 전부 pg/psql.sh와 DATABASE_URL을 지나며, 두 값의 출처는
+# lib/config.sh의 EXP_PG_PORT=55432 하나다. drivers/seed_search.py는 시작할 때
+# DATABASE_URL에 ":55432/"가 없으면 아예 죽는다.
+#
+개발 자산 무변화 — docker 볼륨과 be/storage 매니페스트가 before와 같다
+## docker volumes
+docker: daemon-unreachable
+## be/storage
+root: /Users/gim-yeongjae/project/daewha/be/storage
+files: 29
+bytes: 2227477523
+newest_mtime: 1788857034
+manifest_sha256: a18870e6592f160f3545fa349ec3fa972a1993f3b3203fdf21303012cf6391be
+EXIT=0

@@ -1,0 +1,3 @@
+# t6-pg-start 의 stderr (dyld 줄 제외). utc: 2026-09-09T15:14:34Z  exit: 0
+2026-09-10 00:14:34.252 KST [95329] LOG:  redirecting log output to logging collector process
+2026-09-10 00:14:34.252 KST [95329] HINT:  Future log output will appear in directory "log".

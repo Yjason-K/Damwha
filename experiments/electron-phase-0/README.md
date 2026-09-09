@@ -411,6 +411,43 @@ bash services/llm.sh   status
   모델 다운로드 58초 + 서버 기동 11초 = 69초였다. 첫 완성 요청(모델을
   메모리에 올린다)은 4초.
 
+**12. Task 6이 실측으로 덧붙이는 것 (같은 DB를 쓰는 Task 7·11에게).**
+
+- **실험 DB에 Task 6의 회의가 남아 있다.** `$EVIDENCE/t6-meeting-id.txt`에 그
+  id가 **한 줄로만** 들어 있다(주석 없음). 지금 값은 `mtg_1`이고 발화 12건 ·
+  임베딩 12건이다. **Task 7의 결과 검증은 자기 meeting id로 스코프해야 한다** —
+  `SELECT count(*) FROM utterance` 같은 전역 집계는 이 12건을 함께 센다.
+- **회의 id는 재실행해도 그대로지만 utterance id는 바뀐다.**
+  `drivers/seed_search.py`는 title로 회의를 찾아 재사용하고 발화만 지웠다 다시
+  넣는다(임베딩은 `ON DELETE CASCADE`). 그래서 회차마다 `utt_*`가 새로 발급된다.
+  발화 id를 다른 파일에 적어 두고 재사용하지 말아라.
+- **`speaker` 행은 만들지 않았다.** `utterance.speaker_id`는 NULL이고 화자 정보는
+  `diar_label`(`SPEAKER_00`/`SPEAKER_01`)에만 있다. Task 7의 화자 식별이 보는
+  테이블을 이 실험이 미리 채우지 않으려는 것이다. 검색 쿼리는 `LEFT JOIN speaker`
+  라 없어도 두 경로가 다 돈다.
+- **시드 스크립트가 DB·embed 런처를 스스로 부른다.** 계획 Task 6의 Verify 표에는
+  Task 2 V2 · Task 5 V2 같은 기동 행이 없어서 V1이 단독으로 돌 수 있어야 했다.
+  둘 다 PID 파일로 멱등하므로 이미 떠 있으면 아무것도 하지 않는다. **떠 있지
+  않은 상태에서 V1을 돌리면 `t6-seed-dyld.txt`에 서버 pid가 섞인다** — 집계할 때
+  pid별로 갈라 보아라 (Task 11이 Task 5에서 같은 처리를 한다).
+- **`psql -c`는 psql 변수를 보간하지 않는다** (단일 질의 모드). `:'q'`·`:'qvec'`를
+  쓰는 SQL은 전부 `-f -`(stdin)로 넣어야 한다. `-c`로 넣으면 `syntax error at
+  or near ":"`로 죽는다.
+- **`IFS=$'\t' read`로 TSV를 읽지 말아라.** 탭은 IFS **공백 문자**라 연속된 탭이
+  하나로 뭉개져 빈 필드가 있는 줄에서 열이 통째로 밀린다. 실제로 그 때문에
+  `t6-hybrid.sh`가 utterance id 자리에서 meeting id를 읽었다. `awk -F'\t'`를 쓴다.
+- **`-A`(정렬 없음) 출력에는 패딩이 없으므로 `tr -d ' '`를 붙이지 않는다.**
+  `t2_scalar`가 그렇게 하는데, 값 안의 공백까지 지워져
+  `likequery('50% 절감')`이 `%50\%절감%`으로 보인다(실제 값은 `%50\% 절감%`).
+- **번들 pgvector는 0.8.6이다.** `<=>`의 구현 함수 이름은 `cosine_distance`이지
+  `vector_cosine_distance`가 아니다. 동명 오버로드(vector/halfvec/sparsevec)가
+  셋이라 `oprcode::text`는 `public.cosine_distance`로 스키마까지 붙어 나온다.
+  `search.service.ts:118-122`가 쓰는 `hnsw.iterative_scan`·`hnsw.ef_search` GUC도
+  둘 다 있다 — 없으면 `set_config`가 오류를 낸다.
+- **bge-m3의 출력 벡터는 L2 정규화돼 있다** (전 행의 노름이 1.000000).
+  `<=>`(코사인 거리)와 `<#>`(음의 내적)의 순위가 같아진다는 뜻이므로, 거리
+  값으로 무언가를 판정한다면 이 사실을 전제로 깔아도 된다.
+
 ## verify/ 규약
 
 각 스크립트는 조건을 만족하면 exit 0, 아니면 exit 1이고 판정 근거를 stdout에

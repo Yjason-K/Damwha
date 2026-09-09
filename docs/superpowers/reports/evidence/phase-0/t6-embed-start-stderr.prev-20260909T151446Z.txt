@@ -1,0 +1,7 @@
+# t6-embed-start 의 stderr (dyld 줄 제외). utc: 2026-09-09T14:55:54Z  exit: 0
+Loading weights:   0%|          | 0/391 [00:00<?, ?it/s]dyld[87399]: <4C4C44A6-5555-3144-A1BD-F878E0600D6B> /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+Loading weights: 100%|██████████| 391/391 [00:00<00:00, 59514.18it/s]
+INFO:     Started server process [87345]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:58100 (Press CTRL+C to quit)

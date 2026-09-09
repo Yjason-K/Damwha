@@ -1,0 +1,34 @@
+# Task 6 — 검색 시드 결과 (스펙 P0-C2, 계획 Task 6 V1)
+# utc: 2026-09-09T15:06:21Z
+# 격리: 이 스크립트는 **클라이언트**이므로 격리 대상 밖이다 (스펙 §4.0).
+#       run-isolated.sh 를 통해 부르는 것은 계획 V1의 형태를 따른 것이고,
+#       DATABASE_URL·EMBED_SERVICE_* 주입을 그 래퍼가 하기 때문이다.
+# db: postgresql://postgres@127.0.0.1:55432/damwha
+# embed: http://127.0.0.1:58100  (Task 5의 번들 bge-m3 — 난수·상수 벡터가 아니다)
+# 서비스: db: 이미 떠 있음, embed: 이미 떠 있음
+#
+# meeting_id: mtg_1
+# meeting.title: Phase 0 Task 6 하이브리드 검색 시드
+# meeting.status: done   processing_version: 1
+# utterances: 12    embeddings: 12
+# embedding model: BAAI/bge-m3   dimension: 1024
+#
+# group 의 뜻 (검증이 두 경로를 각각 보게 하려고 나눈 것이다)
+#   kw  질의어 "예산"을 글자 그대로 담는다 — LIKE likequery('예산') 에 걸린다
+#   sem 같은 주제지만 "예산" 글자가 없다 — 임베딩 거리로만 가까워진다
+#   off 주제가 다르다 — 거리가 멀어야 한다
+#
+## rows
+# order_index<TAB>group<TAB>utterance_id<TAB>text
+0	kw	utt_13	이번 분기 예산 집행 현황을 먼저 보고드리겠습니다.
+1	kw	utt_14	마케팅 예산은 작년 대비 이십 퍼센트 줄었습니다.
+2	kw	utt_15	예산 승인은 다음 주 화요일 임원 회의에서 결정됩니다.
+3	sem	utt_16	재무팀이 비용 절감안을 검토하고 있습니다.
+4	sem	utt_17	지출 항목을 다시 정리해서 회계 부서에 넘기겠습니다.
+5	sem	utt_18	자금 집행 승인 절차가 늦어져 대금 결제가 밀렸습니다.
+6	off	utt_19	점심은 회사 앞 국밥집에서 먹기로 했습니다.
+7	off	utt_20	주말에 비가 온다고 해서 등산 일정을 미뤘습니다.
+8	off	utt_21	새로 산 노트북 배터리가 하루를 못 버팁니다.
+9	off	utt_22	다음 스프린트 회고는 금요일 오후에 진행합니다.
+10	off	utt_23	회의실 프로젝터 케이블이 자꾸 빠집니다.
+11	off	utt_24	출장 숙소는 역 근처로 예약했습니다.
