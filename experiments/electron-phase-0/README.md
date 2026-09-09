@@ -109,30 +109,56 @@ SIP는 플랫폼 바이너리(`/bin/bash`, `/bin/sh`, `/usr/bin/python3` 등)를
 Mach-O)의 로드 목록은 남고 `postgres`의 것은 로그 파일로 샌다.
 
 `exec` 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 지워진다.
-그래서 런처 쪽이 규칙을 지킨다.
+그래서 런처 쪽이 규칙을 지킨다. 아래 "규칙 N"은 계획 "런처 스크립트의 dyld
+실측 규칙"의 번호이며, 이 README 자신의 항목 번호(2b·2c)와는 별개다.
 
-1. 번들 Mach-O를 `exec`하기 **직전에** 런처가 `export DYLD_PRINT_LIBRARIES=1`을
-   다시 설정한다. 대상은 `pg/run.sh`, `services/embed.sh`, `services/llm.sh`,
-   `lib/selfreport-all.sh`다.
-2. 그 프로세스의 stderr를 **리다이렉트하지 않는다.** `pg_ctl start -l <logfile>`
-   금지.
-3. 서버 런처의 `start`는 서버를 **백그라운드로 띄우고** 준비 상태
-   (`pg_isready`, `/health`, `/v1/models`)를 런처 안에서 기다린 뒤 exit 0 한다.
-   이 래퍼는 자식 종료까지 블로킹하고 증거도 그 뒤에 쓰므로(2b), 서버를
-   포그라운드로 두면 Verify 행이 영영 돌아오지 않는다. 준비가 끝난 시점이면
-   서버의 초기 로드 dyld 줄은 이미 전부 캡처에 담겨 있다.
-4. PID 파일에는 **서버 자신의 PID**를 쓴다(런처 bash의 PID가 아니라).
-   그래야 `run.sh kill`의 SIGKILL이 실제 서버에 가고, 아래 확인이 성립한다.
+- **규칙 1 — exec 직전에 다시 export한다.** 번들 Mach-O를 `exec`하기 직전에
+  런처가 `export DYLD_PRINT_LIBRARIES=1`을 다시 설정한다. 대상은 `pg/run.sh`,
+  `services/embed.sh`, `services/llm.sh`, `lib/selfreport-all.sh`다.
+- **규칙 2 — 그 프로세스의 stderr를 리다이렉트하지 않는다.**
+  `pg_ctl start -l <logfile>` 금지.
+- **규칙 2b — `pg_ctl start`는 `-l`을 빼도 쓰지 않는다.** `pg_ctl`이 내부에서
+  `/bin/sh -c "exec postgres ... 2>&1 &"`로 띄우므로 SIP가 그 `/bin/sh`에서
+  `DYLD_*`를 지우고 stderr가 stdout으로 합쳐진다. 규칙 1·2를 지켜도 결과가
+  같다. Task 2는 `postgres -D <데이터 디렉터리> -p 55432 &`를 직접 띄운다.
+- **규칙 3 — `start`는 백그라운드 기동 후 준비를 기다리고 exit 0 한다.**
+  준비 확인은 `pg_isready`·`/health`·`/v1/models`를 런처 안에서 한다. 이 래퍼는
+  자식 종료까지 블로킹하고 증거도 그 뒤에 쓰므로(README 2b), 서버를 포그라운드로
+  두면 Verify 행이 영영 돌아오지 않는다. 준비가 끝난 시점이면 서버의 초기 로드
+  dyld 줄은 이미 전부 캡처에 담겨 있다.
+- **규칙 3b — 서버의 이후 로그는 서버 자신이 파일에 쓰게 한다.** 래퍼가 exit하면
+  `trap ... EXIT`이 `$RUNTMP`를 지우는데 서버의 stderr는 여전히 그 안을 가리키므로
+  이후 로그가 unlink된 파일로 사라진다. 기동 시점의 dyld 줄은 이미 캡처됐으니
+  측정에는 지장이 없지만, crash recovery처럼 서버가 죽은 뒤 원인을 봐야 하는
+  검증에서 진단이 불가능해진다.
+- **규칙 4 — PID 파일에는 서버 자신의 PID를 쓴다.** 런처 bash의 PID가 아니다.
+  그래야 `run.sh kill`의 SIGKILL이 실제 서버에 가고, 아래 판독이 성립한다.
 
-**증거를 읽을 때.** 줄 수만 보지 않는다. `dyld[<pid>]`의 pid가
-`$SANDBOX/run/<name>.pid`의 서버 PID와 같은지, 그리고 로드 경로에 검증 대상
-번들 바이너리가 실제로 있는지 확인한다. 둘 중 하나라도 어긋나면 그 회차는
-측정에 실패한 것이다.
+**증거를 읽을 때 (계획 규칙 6).** 함정이 둘이다.
 
-`verify/t1-detector-negative.sh`의 D절이 이 규칙을 코드로 고정한다 —
-re-export 없는 런처는 dyld 0건, 있는 런처는 1건 이상이면서 그 줄이 자식
-Mach-O의 것이어야 한다. 뒤 Task에서 누가 re-export를 빠뜨리면 Task 1 검증이
-깨져서 바로 드러난다.
+- **파일 전체를 `grep`하지 마라.** 증거 헤더에 `# argv: <명령> <인자...>`가
+  들어 있어서, 검증 대상 경로로 파일 전체를 grep하면 **dyld 줄에 그 경로가
+  0건이어도 헤더에 항상 매치된다.** 3회차 리뷰가 잡은 것이 정확히 이것이다 —
+  D2의 단정이 이 함정에 빠져 가짜 증거를 통과시켰다. `^dyld`로 시작하는 줄로
+  한정한다.
+- **줄 수만 세지 마라.** 가짜 증거도 줄 수는 0이 아니다. `dyld[<pid>]`의 pid가
+  `$SANDBOX/run/<name>.pid`의 서버 PID와 같은지, 그리고 **그 pid의 로드 목록에
+  검증 대상 번들 바이너리 경로가 실제로 있는지**까지 본다. 어긋나면 그 회차는
+  측정에 실패한 것이다.
+
+`verify/t1-detector-negative.sh`의 D절이 이 판독을 코드로 고정하고, 뒤 Task의
+`t2-dyld-measured.sh` / `t5-dyld-measured.sh`가 본뜰 함수 셋
+(`dyld_lines` / `dyld_pid_for` / `dyld_pids`)을 담고 있다. 세 대조군이다.
+
+| | 런처 | 기대 |
+| --- | --- | --- |
+| D1 | re-export 없음 | dyld 0건 + `MEASUREMENT_UNAVAILABLE` 표시 |
+| D2 | re-export 있음 | dyld 1건 이상 **그리고** 자식 Mach-O를 로드한 pid가 있음 |
+| D3 | 비플랫폼 셔뱅 + 자식 stderr 리다이렉트 | dyld 1건 이상이지만 자식 Mach-O를 로드한 pid는 **없음** |
+
+D3이 규칙 6의 회귀 방지다. 판독을 파일 전체 grep으로 되돌리면 D3이 exit 1로
+잡는다. 뒤 Task에서 누가 re-export를 빠뜨리거나 자식 stderr를 돌리면 Task 1
+검증이 깨져서 바로 드러난다.
 
 **2b. 증거는 자식이 끝난 뒤에만 쓰인다.** 래퍼 bash가 먼저 죽으면 그 회차의
 증거는 남지 않고 자식은 고아가 된다. 래퍼의 `trap ... EXIT`이 `$RUNTMP`를
@@ -184,13 +210,21 @@ Python이 ffmpeg를 직접 `exec`하면 나온다 — 어느 쪽인지는 **경�
   P0-C7이 항상 실패한다. 다만 면제는 `$SANDBOX` 하위와 실제로 검사한
   `bundle/` 하위로 좁혀라 — `$EXP` 전체를 뭉뚱그려 빼면 위 `STALE-PATH`와 같은
   구멍이 증거 집계 쪽에 그대로 생긴다.
+- **금지 문자열도 dyld 경로도 `^dyld`로 시작하는 줄에서만 읽어라(규칙 6).**
+  증거 헤더의 `# argv:` 줄에는 실행한 명령의 경로가 그대로 들어 있어, 파일
+  전체를 대상으로 하면 dyld 줄에 없는 경로도 매치된다. 3회차 리뷰가 Task 1의
+  D2에서 잡은 함정이 이것이다.
 - **dyld 0건을 "위반 없음"으로 세지 마라.** 번들 Mach-O를 실행한 항목인데
   dyld 줄이 0건이면 그건 런처가 re-export를 빠뜨린 **미측정**이다(2a).
   `MEASUREMENT_UNAVAILABLE`로 별도 집계하고, P0-C8의 런타임 자기 보고로
   대체 확인하거나 미충족으로 남긴다.
-- 단 `t1-dyld-launcher-noexport-*`는 **의도된 음성 대조군**이다. 규칙을
-  어긴 런처가 정말로 0건이 되는지 보려고 일부러 만든 것이므로, 미측정
-  집계에서 빼고 그 사실을 결과 문서에 적는다.
+- 반대로 **줄 수가 0이 아니라고 측정됐다고 보지도 마라.** 그 pid의 로드 목록에
+  검증 대상 바이너리가 실제로 있는지 본다. 런처 자신의 로드 목록만 남은
+  가짜 증거가 그렇지 않다.
+- 단 `t1-dyld-launcher-noexport-*`와 `t1-dyld-launcher-fake-*`는 **의도된
+  음성 대조군**이다. 규칙을 어긴 런처가 정말로 0건이 되는지, 가짜 증거가
+  정말로 걸러지는지 보려고 일부러 만든 것이므로 미측정·미검증 집계에서 빼고
+  그 사실을 결과 문서에 적는다.
 - `bundle/` 전체를 한 번에 `$ROOT`로 잡으면 형제 번들 참조가 `INFO`로
   흡수된다. 형제 참조를 허용할지는 Task 3이 번들별 검사(`bundle/pg`,
   `bundle/python`)에서 판정한 결과를 기준으로 한다.

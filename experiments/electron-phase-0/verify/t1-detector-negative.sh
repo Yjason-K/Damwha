@@ -18,9 +18,11 @@
 #   D. 런처 dyld 대조군 — SIP는 플랫폼 바이너리(/bin/bash 등)를 exec할 때마다
 #      환경에서 DYLD_*를 지운다. 그래서 번들 Mach-O를 bash 런처로 감싸는
 #      순간 실측이 끊긴다. 계획 "런처 스크립트의 dyld 실측 규칙"이 요구하는
-#      re-export가 실제로 그 차이를 만드는지 한 쌍으로 확인한다. 뒤 Task의
-#      런처(pg/run.sh, services/*.sh, lib/selfreport-all.sh)에서 누가
-#      re-export를 빠뜨리면 여기가 깨져서 바로 드러난다.
+#      re-export가 실제로 그 차이를 만드는지 확인하고(D1·D2), 규칙 2가 막겠다고
+#      한 **가짜 증거**(런처 자신의 로드 목록만 남는 형태)를 판독이 실제로
+#      걸러 내는지 본다(D3). 뒤 Task의 런처(pg/run.sh, services/*.sh,
+#      lib/selfreport-all.sh)에서 누가 re-export를 빠뜨리거나 자식 stderr를
+#      돌리면 여기가 깨져서 바로 드러난다.
 #
 # 넷 다 "실패를 검출했을 때만" 통과다. 스크립트가 뒤집어 exit 0으로 만든다
 # (계획 "Verify 명령 작성 규칙").
@@ -176,8 +178,23 @@ else
   fi
 fi
 
-# grep -c는 0건일 때 "0"을 찍고 **동시에** exit 1을 낸다. `|| echo 0`을 붙이면
-# 0이 두 줄 나와서 이어지는 정수 비교가 깨진다 — 하나만 낸다.
+# --- dyld 증거 판독 (계획 "런처 스크립트의 dyld 실측 규칙" 6) -----------------
+#
+# **파일 전체를 grep하지 않는다.** 증거 헤더에 `# argv: <명령> <인자...>`가 들어
+# 있어서, 명령 경로로 파일 전체를 grep하면 dyld 줄에 그 경로가 0건이어도 헤더에
+# 항상 매치된다. 실제로 이 함정 때문에 D2가 "런처 자신의 로드 목록만 82줄 남은
+# 가짜 증거"를 통과시켰다.
+#
+# 줄 수만 세는 것으로도 부족하다. 가짜 증거도 줄 수는 0이 아니다. 그래서
+# **어느 pid가 검증 대상 바이너리를 실제로 로드했는지**까지 본다. dyld 줄은
+# `dyld[<pid>]: <UUID> <절대경로>` 형태라 마지막 필드가 로드된 이미지 경로다.
+#
+# Task 2·5의 t2-dyld-measured.sh / t5-dyld-measured.sh가 이 세 함수를 그대로
+# 본뜬다. 거기서는 <바이너리>를 번들 postgres·mlx_lm.server로 바꾸고, 나온
+# pid를 $SANDBOX/run/<name>.pid의 서버 PID와 대조하면 된다 (규칙 4).
+
+# ^dyld 줄 수. grep -c는 0건일 때 "0"을 찍고 **동시에** exit 1을 내므로
+# `|| echo 0`을 붙이면 0이 두 줄 나와 이어지는 정수 비교가 깨진다.
 dyld_lines() {
   local n
   n=$(grep -c '^dyld' "$1" 2>/dev/null)
@@ -185,6 +202,21 @@ dyld_lines() {
     ''|*[!0-9]*) echo 0 ;;
     *) echo "$n" ;;
   esac
+}
+
+# <파일>에서 <바이너리>를 실제로 로드한 pid. 없으면 빈 문자열.
+# 경로 비교는 마지막 필드 전체 일치라 /x/echo가 /x/echo2에 걸리지 않는다.
+dyld_pid_for() {
+  awk -v b="$2" '
+    /^dyld\[/ && $NF == b {
+      p = $1; sub(/^dyld\[/, "", p); sub(/\]:$/, "", p); print p; exit
+    }' "$1" 2>/dev/null
+}
+
+# <파일>의 dyld 줄에 등장한 pid 목록.
+dyld_pids() {
+  awk '/^dyld\[/ { p = $1; sub(/^dyld\[/, "", p); sub(/\]:$/, "", p); print p }' "$1" 2>/dev/null \
+    | sort -u | tr '\n' ' '
 }
 
 # ---------------------------------------------------------------------------
@@ -225,24 +257,31 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# D. 런처 dyld 대조군 (계획 "런처 스크립트의 dyld 실측 규칙" 5)
+# D. 런처 dyld 대조군 (계획 "런처 스크립트의 dyld 실측 규칙" 5·6)
 # ---------------------------------------------------------------------------
 echo
-echo "== D. 런처 dyld 대조군 — re-export 없음 / 있음"
-# C절이 만든 ad-hoc 서명 Mach-O를 그대로 쓴다. 런처만 두 벌 만든다.
+echo "== D. 런처 dyld 대조군 — re-export 없음 / 있음 / 가짜 증거"
+# C절이 만든 ad-hoc 서명 Mach-O를 자식으로 그대로 쓴다. 런처만 세 벌 만든다.
 cat > "$DYFIX/launch-noexport.sh" <<'LAUNCHER'
 #!/bin/bash
-# 규칙을 어긴 런처. SIP가 /bin/bash를 exec하며 DYLD_*를 지웠으므로 자식은
+# 규칙 1을 어긴 런처. SIP가 /bin/bash를 exec하며 DYLD_*를 지웠으므로 자식은
 # 계측 없이 뜬다. 대조군 전용이다 — 뒤 Task의 런처는 이렇게 쓰면 안 된다.
 exec "$1"
 LAUNCHER
 cat > "$DYFIX/launch-reexport.sh" <<'LAUNCHER'
 #!/bin/bash
-# 규칙을 지킨 런처. 번들 Mach-O를 exec하기 직전에 다시 설정한다.
+# 규칙 1을 지킨 런처. 번들 Mach-O를 exec하기 직전에 다시 설정한다.
 export DYLD_PRINT_LIBRARIES=1
 exec "$1"
 LAUNCHER
-chmod +x "$DYFIX/launch-noexport.sh" "$DYFIX/launch-reexport.sh"
+# 규칙 2를 어긴 런처. 셔뱅이 **플랫폼 바이너리가 아니라서** 런처 자신의 로드
+# 목록은 찍히는데, 자식의 stderr를 돌려 버려 정작 검증 대상의 줄은 하나도
+# 남지 않는다. pg_ctl start -l <logfile>이 만드는 형태와 같다.
+printf '#!%s\n"$1" 2>/dev/null\n' "$DYFIX/bash" > "$DYFIX/launch-fake.sh"
+cp /bin/bash "$DYFIX/bash"
+codesign -f -s - "$DYFIX/bash" >/dev/null 2>&1 \
+  || { echo "  FAIL 가짜 증거 런처용 bash 사본에 ad-hoc 서명을 하지 못했다"; FAIL=1; }
+chmod +x "$DYFIX/launch-noexport.sh" "$DYFIX/launch-reexport.sh" "$DYFIX/launch-fake.sh"
 
 # D1 — re-export 없는 런처: dyld 줄 0건이어야 한다.
 if bash "$EXP_LIB_DIR/run-isolated.sh" --label t1-dyld-launcher-noexport \
@@ -268,29 +307,63 @@ else
   FAIL=1
 fi
 
-# D2 — re-export 있는 런처: dyld 줄 1건 이상이고, 그 줄이 **자식 Mach-O의**
-# 것이어야 한다. 줄 수만 보면 런처 자신의 로드 목록만 남은 가짜 증거를
-# 통과시킨다 (계획 규칙 2가 막는 형태).
+# D2 — re-export 있는 런처: dyld 줄이 1건 이상이고, **자식 Mach-O를 실제로
+# 로드한 pid가 증거에 있어야** 한다.
 if bash "$EXP_LIB_DIR/run-isolated.sh" --label t1-dyld-launcher-reexport \
      -- "$DYFIX/launch-reexport.sh" "$DYFIX/echo" >/dev/null; then
   D2="$EVIDENCE/t1-dyld-launcher-reexport-dyld.txt"
   N2=$(dyld_lines "$D2")
   if [ "$N2" -ge 1 ]; then
-    echo "  OK   D2: re-export 있는 런처는 dyld ${N2}건을 실측했다"
+    echo "  OK   D2: re-export 있는 런처는 dyld ${N2}건을 실측했다 (pid: $(dyld_pids "$D2"))"
   else
     echo "  FAIL D2: re-export를 했는데도 dyld 줄이 0건이다 — 실측이 끊겼다"
     FAIL=1
   fi
-  if grep -q -F "$DYFIX/echo" "$D2" 2>/dev/null; then
-    echo "  OK   D2: 실측된 줄이 자식 Mach-O의 것이다 (런처 자신의 목록만 남은 가짜 증거가 아니다)"
+  PID2=$(dyld_pid_for "$D2" "$DYFIX/echo")
+  if [ -n "$PID2" ]; then
+    echo "  OK   D2: pid ${PID2}가 자식 Mach-O를 로드했다 — 검증 대상이 실제로 측정됐다"
   else
-    echo "  FAIL D2: dyld 줄에 자식 Mach-O($DYFIX/echo)가 없다 —"
+    echo "  FAIL D2: 자식 Mach-O($DYFIX/echo)를 로드한 pid가 dyld 줄에 없다 —"
     echo "       줄 수는 0이 아닌데 정작 검증 대상의 라이브러리가 하나도 없는"
-    echo "       가짜 증거다 (계획 '런처 스크립트의 dyld 실측 규칙' 2)"
+    echo "       가짜 증거다 (계획 '런처 스크립트의 dyld 실측 규칙' 2·6)"
     FAIL=1
   fi
 else
   echo "  FAIL D2: 런처를 격리 실행하지 못했다"
+  FAIL=1
+fi
+
+# D3 — 가짜 증거 런처: dyld 줄은 1건 이상 나오지만 자식 Mach-O는 0건이다.
+# 이 판정이 뒤집히면(자식을 로드했다고 나오면) D2의 단정이 무의미해진다.
+# 3회차 리뷰가 잡은 회귀가 정확히 이것이었다 — 파일 전체 grep이 헤더의
+# `# argv:` 줄에 매치돼 가짜 증거를 통과시켰다.
+if bash "$EXP_LIB_DIR/run-isolated.sh" --label t1-dyld-launcher-fake \
+     -- "$DYFIX/launch-fake.sh" "$DYFIX/echo" >/dev/null; then
+  D3="$EVIDENCE/t1-dyld-launcher-fake-dyld.txt"
+  N3=$(dyld_lines "$D3")
+  if [ "$N3" -ge 1 ]; then
+    echo "  OK   D3: 가짜 증거 런처가 dyld ${N3}건을 남겼다 — 줄 수만 보면 통과처럼 보인다"
+  else
+    echo "  FAIL D3: 가짜 증거 런처가 dyld 0건이다 — 이 대조군의 전제가 성립하지 않는다"
+    echo "       (런처 자신이 비플랫폼 Mach-O라 자기 로드 목록은 남아야 한다)"
+    FAIL=1
+  fi
+  PID3=$(dyld_pid_for "$D3" "$DYFIX/echo")
+  if [ -z "$PID3" ]; then
+    echo "  OK   D3: 자식 Mach-O를 로드한 pid가 없다고 올바로 판정했다 (pid: $(dyld_pids "$D3"))"
+  else
+    echo "  FAIL D3: 자식 stderr를 버렸는데도 자식을 로드했다고 판정했다 (pid $PID3) —"
+    echo "       판독이 dyld 줄이 아니라 헤더나 다른 줄에 매치되고 있다 (규칙 6)"
+    FAIL=1
+  fi
+  # 왜 규칙 6이 필요한지를 증거로 남긴다. 판정에는 쓰지 않는다 —
+  # run-isolated.sh가 헤더 형식을 바꾸면 이 관찰은 사라져도 된다.
+  if grep -q -F "$DYFIX/echo" "$D3" 2>/dev/null; then
+    echo "  정보 파일 전체를 grep하면 이 가짜 증거도 매치된다 (헤더의 # argv: 줄)."
+    echo "       ^dyld 줄로 한정해야 하는 이유다 (규칙 6)."
+  fi
+else
+  echo "  FAIL D3: 런처를 격리 실행하지 못했다"
   FAIL=1
 fi
 

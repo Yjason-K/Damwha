@@ -1,6 +1,6 @@
 # run-isolated.sh — G2 격리 실행 기록 (스펙 §4.2)
 label      : t1-home
-utc        : 2026-09-09T07:09:48Z
+utc        : 2026-09-09T07:34:35Z
 cwd        : /Users/gim-yeongjae/project/daewha-electron-phase-0
 격리 대상  : 예 — 이 래퍼를 통과한 명령은 전부 격리 대상이다 (스펙 §4.0)
 command    :

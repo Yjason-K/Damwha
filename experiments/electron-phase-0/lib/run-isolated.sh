@@ -24,8 +24,14 @@
 # 부작용이 없다. DYLD_PRINT_LIBRARIES는 계측 도구이지 주입 화이트리스트가
 # 아니며, 증거 파일에도 그렇게 표시한다.
 #
-# SIP는 플랫폼 바이너리에 대해 DYLD_*를 무시한다. 그 경우 dyld 줄이 0건이 되고
-# 증거 파일 첫 줄에 MEASUREMENT_UNAVAILABLE을 적는다 (스펙 §4.2, P0-C7).
+# dyld 줄이 0건이면 증거 파일 첫 줄에 MEASUREMENT_UNAVAILABLE을 적는다
+# (스펙 §4.2, P0-C7). 원인은 둘이고, 이 래퍼는 둘을 구분하지 못한다.
+#   (1) 런처가 re-export를 빠뜨렸다 — 실무에서 더 흔하다. SIP가 /bin/bash 같은
+#       플랫폼 바이너리를 exec하며 DYLD_*를 지우므로, 번들 Mach-O를 셸 스크립트로
+#       감싸는 순간 실측이 끊긴다 (계획 "런처 스크립트의 dyld 실측 규칙" 1).
+#   (2) 검증 대상 자체가 플랫폼 바이너리다 — /usr/bin/env처럼 SIP가 DYLD_*를
+#       무시하는 경우다.
+# 어느 쪽이든 통과로 기록하지 않는다.
 
 set -u
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/config.sh"
@@ -161,10 +167,17 @@ DYLD_N=$(wc -l < "$DYLD_LINES" | tr -d ' ')
 {
   if [ "$DYLD_N" -eq 0 ]; then
     echo "MEASUREMENT_UNAVAILABLE"
-    echo "# DYLD_PRINT_LIBRARIES=1을 켰는데 dyld 줄이 0건이다. SIP가 플랫폼"
-    echo "# 바이너리에 대해 DYLD_*를 무시했을 때 이렇게 된다 (스펙 §4.2 주의)."
-    echo "# 통과로 기록하지 않고 측정 불가로 남긴다. 대체 확인은 G1 정적 검사와"
-    echo "# P0-C8 런타임 자기 보고가 맡는다."
+    echo "# DYLD_PRINT_LIBRARIES=1을 켰는데 dyld 줄이 0건이다. 원인은 둘이고"
+    echo "# 이 래퍼는 둘을 구분하지 못한다 — 읽는 쪽이 판단한다."
+    echo "#   (1) 런처가 re-export를 빠뜨렸다. 더 흔한 원인이다. SIP가 /bin/bash"
+    echo "#       같은 플랫폼 바이너리를 exec하며 DYLD_*를 지우므로, 번들 Mach-O를"
+    echo "#       셸 스크립트로 감싸면 실측이 끊긴다. 그렇다면 런처를 고쳐서"
+    echo "#       (exec 직전 export DYLD_PRINT_LIBRARIES=1) 다시 재야 한다"
+    echo "#       (계획 '런처 스크립트의 dyld 실측 규칙' 1)."
+    echo "#   (2) 검증 대상 자체가 플랫폼 바이너리다(/usr/bin/env 등). SIP가"
+    echo "#       DYLD_*를 무시하므로 이 머신에서는 잴 수 없다 (스펙 §4.2 주의)."
+    echo "# 어느 쪽이든 통과로 기록하지 않고 측정 불가로 남긴다. 대체 확인은"
+    echo "# G1 정적 검사와 P0-C8 런타임 자기 보고가 맡는다."
   fi
   echo "# run-isolated.sh dyld 실측"
   echo "# label: $LABEL   utc: $STAMP   exit: $RC   dyld 줄 수: $DYLD_N"
