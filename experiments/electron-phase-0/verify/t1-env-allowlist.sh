@@ -10,7 +10,10 @@
 #                         있고 없고만 be/worker/.env의 상태와 대조한다.
 #   DYLD_PRINT_LIBRARIES  계측 도구다 (스펙 §4.2의 dyld 실측). 주입 화이트리스트가
 #                         아니며, SIP가 플랫폼 바이너리에서 지워 버리기도 한다.
-# 나머지 11개가 스펙 표와 정확히 일치해야 한다.
+# 나머지 11개가 스펙 표와 정확히 일치해야 한다. 스펙 §4.2 표의 이름을 세면
+# HF_TOKEN까지 12개다 — 표의 "행"은 10개지만 MODEL_CACHE_DIR·HF_HOME이 한
+# 행에, EMBED_SERVICE_HOST·PORT가 또 한 행에 묶여 있다. 주입은 12개를 하고,
+# 이름 집합 비교는 비밀값을 뺀 11개로 한다.
 
 set -u
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd -P)/config.sh"
@@ -32,7 +35,7 @@ printf '%s\n' "$NAMES" | sed 's/^/  /'
 
 echo
 if [ "$CORE" = "$EXPECTED" ]; then
-  echo "OK  주입 변수 11개가 스펙 §4.2 표와 정확히 일치한다"
+  echo "OK  주입 변수 11개(+ HF_TOKEN = 스펙 §4.2 표의 12개)가 정확히 일치한다"
 else
   echo "FAIL 주입 변수가 스펙 §4.2 표와 다르다"
   echo "  기대:"; printf '%s\n' "$EXPECTED" | sed 's/^/    /'

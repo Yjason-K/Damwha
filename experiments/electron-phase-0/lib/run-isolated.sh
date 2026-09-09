@@ -92,7 +92,7 @@ fi
   echo "command    :"
   for a in "$@"; do echo "  argv: $a"; done
   echo
-  echo "## 주입한 변수 (스펙 §4.2 표의 화이트리스트, 11개)"
+  echo "## 주입한 변수 (스펙 §4.2 표의 이름 12개 중, 값을 기록하는 11개)"
   echo "PATH=$ISO_PATH"
   echo "HOME=$ISO_HOME"
   echo "TMPDIR=$ISO_TMPDIR"

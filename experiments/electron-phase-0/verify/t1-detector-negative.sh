@@ -5,10 +5,11 @@
 # G2 dyld 실측(run-isolated.sh). 둘 중 하나가 눈이 멀면 나머지 열 Task의
 # "위반 0건"은 아무 의미가 없다. 그래서 셋을 확인한다.
 #
-#   A. 합성 대조군 — 금지 문자열 9종 전부, otool -L 의존 위반, LC_RPATH 위반을
-#      일부러 심은 디렉터리를 만들고 check-macho.sh가 **전부** 잡는지 본다.
-#      패턴 목록은 lib/forbidden-strings.txt에서 읽어 만들므로, 표에 행이
-#      늘어나면 대조군도 저절로 늘어난다.
+#   A. 합성 대조군 — 금지 문자열 9종 전부, otool -L 의존 위반, LC_RPATH 위반,
+#      그리고 **재배치 잔존 경로**(STALE-PATH)를 일부러 심은 디렉터리를 만들고
+#      check-macho.sh가 **전부** 잡는지 본다. 패턴 목록은
+#      lib/forbidden-strings.txt에서 읽어 만들므로, 표에 행이 늘어나면
+#      대조군도 저절로 늘어난다.
 #   B. 실물 대조군 — 계획 V5가 지정한 그대로 check-macho.sh /opt/homebrew/bin이
 #      비정상 종료하는지 본다.
 #   C. dyld 실측 대조군 — 플랫폼 바이너리가 아닌 Mach-O를 격리 실행했을 때
@@ -72,6 +73,16 @@ cc -o "$FIX/rpath-bad" "$FIX/rpath-bad.c" \
   || { echo "  FAIL rpath-bad 대조군을 컴파일하지 못했다"; FAIL=1; }
 rm -f "$FIX/rpath-bad.c"
 
+# STALE-PATH: 실험 디렉터리 안이지만 **검사 대상 밖**을 가리키는 경로.
+# 스테이징 자리(stage/)나 원본 아카이브 자리(downloads/), 샌드박스를 그대로
+# 박아 둔 형태이며, 번들을 옮기는 순간 깨진다 (스펙 P0-C3의 "이동 후에 깨지는
+# 것", R-9의 콘솔 스크립트 shebang). 검사기가 이걸 "실험 디렉터리 안이니까
+# 괜찮다"고 면제하면 재배치 검증이 통째로 무력화되므로 회귀를 여기서 막는다.
+# 세 형태 모두 스펙 §4.1이 텍스트 검사 대상으로 든 자리 그대로다.
+printf '#!%s/stage/python/bin/python3\n' "$EXP_ROOT" > "$FIX/stale-shebang"
+printf 'home = %s/downloads/cpython/bin\n' "$EXP_ROOT" > "$FIX/stale-pyvenv.cfg"
+printf 'prefix=%s/sandbox/stale-prefix\n' "$EXP_ROOT" > "$FIX/stale-pkgconfig.pc"
+
 OUT_A=$(bash "$CHECK" "$FIX" 2>&1); RC_A=$?
 if [ "$RC_A" -eq 0 ]; then
   echo "  FAIL check-macho.sh가 심어 둔 위반을 하나도 잡지 못했다 (exit 0)"
@@ -109,6 +120,23 @@ else
   echo "  FAIL LC_RPATH 위반을 검출하지 못했다"
   FAIL=1
 fi
+# 재배치 잔존 경로를 면제하지 않았는가. stage/ downloads/ sandbox/ 각각을
+# 따로 확인한다 — 한 종류만 잡고 나머지를 흘리는 회귀를 막기 위해서다.
+for stale in stale-shebang stale-pyvenv.cfg stale-pkgconfig.pc; do
+  if printf '%s\n' "$OUT_A" | grep -q "^ *STALE-PATH .*/$stale:"; then
+    echo "  OK   재배치 잔존 경로를 검출했다: $stale"
+  else
+    echo "  FAIL $stale 의 재배치 잔존 경로를 검출하지 못했다 —"
+    echo "       검사 대상 밖(stage/ downloads/ sandbox/)을 가리키는 경로가"
+    echo "       면제되고 있다. 그러면 재배치 검증이 무력화된다 (스펙 P0-C3, R-9)"
+    FAIL=1
+  fi
+done
+if printf '%s\n' "$OUT_A" | grep -q "^ *INFO .*/stale-"; then
+  echo "  FAIL 재배치 잔존 경로가 위반이 아니라 INFO로 집계됐다"
+  FAIL=1
+fi
+
 # fat 바이너리의 아키텍처 꼬리표를 경로로 오해하지 않았는가.
 if printf '%s\n' "$OUT_A" | grep -q '(for architecture'; then
   echo "  FAIL 위반 목록에 '(for architecture ...)' 유사 경로가 있다 —"

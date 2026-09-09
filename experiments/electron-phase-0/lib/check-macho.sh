@@ -9,6 +9,11 @@
 #   (2) otool -l의 LC_RPATH에 번들 밖 절대 경로가 없는가
 #   (3) **모든 파일**에 금지 문자열(lib/forbidden-strings.txt)이 없는가
 #
+# (3)의 면제는 **검사 대상 디렉터리 자신($ROOT) 하위 하나뿐**이다. 이 저장소가
+# 개발자 홈 아래에 있어서 번들의 자기 참조가 금지 문자열 /Users/<개발자>로
+# 시작할 뿐이므로 그것만 INFO로 뺀다. 같은 실험 디렉터리라도 stage/
+# downloads/ sandbox/ 처럼 **검사 대상 밖**을 가리키면 STALE-PATH 위반이다.
+#
 # (3)을 Mach-O로 좁히지 않는 이유는 스펙 §4.1이 적은 그대로다 — 재배치가
 # 깨지는 흔한 자리는 컴파일된 바이너리가 아니라 sysconfig 데이터, *.pc,
 # postgresql.conf, 셸 래퍼, 콘솔 스크립트 shebang처럼 빌드 시점 경로가 그대로
@@ -103,10 +108,23 @@ while IFS= read -r f; do
     while IFS= read -r tok; do
       [ -n "$tok" ] || continue
       case "$tok" in
-        "$EXP_ROOT"*)
-          # 번들·샌드박스 자기 자신의 절대 경로다. 개발 환경 의존이 아니므로
-          # 위반이 아니다. 재배치 위험은 아래 (1)(2)의 Mach-O 검사가 맡는다.
+        "$ROOT"|"$ROOT"/*)
+          # 검사 대상 자신의 절대 경로다. 이 저장소가 개발자 홈 아래에 있어서
+          # 번들의 자기 참조가 금지 문자열 /Users/<개발자>로 시작할 뿐이므로
+          # 개발 환경 의존이 아니다. 다만 재배치에는 약하다 — 그쪽은 아래
+          # (1)(2)의 Mach-O 검사가 맡는다.
           echo "$f: $tok" >> "$INFO"
+          ;;
+        "$EXP_ROOT"|"$EXP_ROOT"/*)
+          # 실험 디렉터리 안이지만 **검사 대상 밖**이다. stage/ downloads/
+          # sandbox/ 를 가리키는 경로가 여기 걸린다. 면제하면 안 된다 —
+          # 스테이징 자리나 원본 아카이브 자리가 그대로 박힌 것이고, 번들을
+          # 옮기는 순간 깨진다. 스펙 P0-C3이 "이동 전에는 되는데 이동 후에
+          # 깨지는 것"을 핵심 관찰 대상으로 두고, R-9(콘솔 스크립트 shebang의
+          # 절대 경로)가 정확히 이 형태다. 형제 번들($EXP/bundle/*)을 가리키는
+          # 경우도 지금은 위반으로 둔다 — 번들 간 참조를 허용할지는 Task 3이
+          # 정할 문제이지 검사기가 미리 봐 줄 일이 아니다.
+          add_viol "STALE-PATH $f: $tok  (번들 밖 절대 경로 — 검사 대상이 아닌 실험 디렉터리를 가리킨다, 금지 문자열: $p)"
           ;;
         *)
           add_viol "STRING  $f: $tok  (금지 문자열: $p)"
@@ -187,7 +205,7 @@ echo "  파일 수       : $FILE_COUNT"
 echo "  Mach-O 수     : $MACHO_COUNT"
 echo "  금지 문자열   : ${PATTERN_COUNT}개 (lib/forbidden-strings.txt + 실행 시점 HOME)"
 echo "  문자열 후보   : $(wc -l < "$CANDIDATES" | tr -d ' ')개 파일"
-echo "  번들 내부 절대경로(INFO): ${INFO_N}건"
+echo "  검사 대상 내부 절대경로(INFO): ${INFO_N}건"
 if [ "$INFO_N" -gt 0 ]; then
   head -n 20 "$INFO" | sed 's/^/    INFO  /'
   [ "$INFO_N" -gt 20 ] && echo "    ... (${INFO_N}건 중 20건만 표시)"

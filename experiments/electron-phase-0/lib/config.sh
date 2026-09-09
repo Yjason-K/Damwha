@@ -37,8 +37,10 @@ ISO_LENS_LLM_BASE_URL="http://127.0.0.1:$EXP_LLM_PORT/v1"
 # 값이 번들 안을 가리킨다는 것이 검사 대상이지 파일 존재가 아니다.
 ISO_LENS_LLM_SERVER_BIN="$EXP_ROOT/bundle/python/bin/mlx_lm.server"
 
-# 스펙 §4.2 표에서 값을 기록해도 되는 변수 11개. HF_TOKEN은 자격 증명이라
-# 이 목록에 없고, 증거에는 set/unset만 남는다.
+# 스펙 §4.2 표의 변수 이름은 HF_TOKEN까지 **12개**다 (MODEL_CACHE_DIR·HF_HOME이
+# 한 행에, EMBED_SERVICE_HOST·PORT가 또 한 행에 묶여 있어 행 수와 이름 수가
+# 다르다). 그중 **값을 기록해도 되는 11개**가 이 목록이다. HF_TOKEN은 자격
+# 증명이라 여기 없고, 주입은 하되 증거에는 set/unset만 남는다.
 ISO_VAR_NAMES="PATH HOME TMPDIR DATABASE_URL STORAGE_ROOT MODEL_CACHE_DIR HF_HOME EMBED_SERVICE_HOST EMBED_SERVICE_PORT LENS_LLM_BASE_URL LENS_LLM_SERVER_BIN"
 
 # HF_TOKEN의 출처. 값은 어떤 경로로도 stdout·증거 파일에 나가지 않는다.
