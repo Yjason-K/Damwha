@@ -19,7 +19,6 @@ const PATHS = {
   play: "M6 4.5v15l13-7.5z",
   pause: "M9 4.5v15M15 4.5v15",
   chevDown: "M6 9l6 6 6-6",
-  chevsUpDown: "M8 9l4-4 4 4M8 15l4 4 4-4",
   plus: "M12 5v14M5 12h14",
   check: "M5 12.5l5 5 9-10",
   clock: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3.5 2",

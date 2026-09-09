@@ -513,7 +513,7 @@ function Files({ meeting }: { meeting: Meeting }) {
         {meeting.files.map((f) => (
           <li
             key={f.name}
-            className="flex items-center gap-2 rounded-sm px-1.5 py-1.5 transition-colors hover:bg-[var(--surface-hover)]"
+            className="flex items-center gap-2 rounded-sm px-1.5 py-1.5"
           >
             <Icon
               name="file"
@@ -522,9 +522,6 @@ function Files({ meeting }: { meeting: Meeting }) {
             />
             <span className="min-w-0 flex-1 truncate text-sm text-foreground">
               {f.name}
-            </span>
-            <span className="shrink-0 font-mono text-2xs text-[color:var(--text-faint)]">
-              {f.size}
             </span>
           </li>
         ))}

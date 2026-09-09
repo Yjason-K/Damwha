@@ -163,3 +163,63 @@ test("고급에서 요약 모델을 바꾸면 custom으로 전환된다", async 
   fireEvent.click(await screen.findByRole("option", { name: /27B/ }));
   expect(screen.getByText(/사용자 지정 설정을 쓰고 있어요/)).toBeTruthy();
 });
+
+test("전사 언어를 바꾸면 custom으로 전환되고 저장 시 그 언어를 보낸다", async () => {
+  mockApi();
+  const put = vi
+    .spyOn(apiClient, "put")
+    .mockResolvedValue({ data: { ...CONFIG, preset: "custom" } } as never);
+  renderForm();
+  await screen.findByRole("radio", { name: /표준/ });
+
+  fireEvent.click(screen.getByRole("button", { name: /고급 설정/ }));
+  const trigger = screen.getByLabelText("전사 언어");
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("option", { name: /영어/ }));
+
+  expect(screen.getByText(/사용자 지정 설정을 쓰고 있어요/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "저장" }));
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith("/settings/processing", {
+      preset: "custom",
+      language: "en",
+      whisper_model: "large-v3-turbo",
+      devices: { diarization: "gpu", stt: "gpu" },
+      summary_model: "mlx-community/Qwen3.5-9B-8bit",
+    }),
+  );
+});
+
+test("카탈로그 밖 언어가 저장돼 있으면 그 값을 목록에 얹어 보여준다", async () => {
+  // 읽기는 관대하다 — 카탈로그 도입 전 저장된 행과 env STT_LANGUAGE(자유값)가
+  // 셀렉트에서 빈칸으로 보이면 저장 한 번에 조용히 다른 언어로 바뀐다.
+  mockApi({
+    ...CONFIG,
+    preset: "custom",
+    preset_revision: null,
+    language: "fr",
+  });
+  renderForm();
+  await screen.findByRole("radio", { name: /표준/ });
+  fireEvent.click(screen.getByRole("button", { name: /고급 설정/ }));
+  expect(screen.getByLabelText("전사 언어").textContent).toContain("fr");
+});
+
+test("카탈로그 밖 언어인 채로는 저장을 막고 이유를 알려준다", async () => {
+  // 서버 PUT은 카탈로그로 조여 있다 — 그대로 보내면 필드도 허용값도 안 알려주는
+  // zod union 400만 돌아온다. 버튼에서 미리 막는다.
+  mockApi({
+    ...CONFIG,
+    preset: "custom",
+    preset_revision: null,
+    language: "fr",
+  });
+  renderForm();
+  await screen.findByRole("radio", { name: /표준/ });
+  expect(
+    (screen.getByRole("button", { name: "저장" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+  expect(screen.getByText(/목록에서 언어를 골라/)).toBeTruthy();
+});

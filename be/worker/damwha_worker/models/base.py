@@ -6,6 +6,15 @@ from typing import Protocol
 # 때마다 호출된다. speech_spans 없이(전체 파일) 호출되면 총량을 모르므로 보고하지 않는다.
 ProgressFn = Callable[[int, int], None]
 
+# payload의 language 카탈로그 중 유일하게 코드가 아닌 값 (@damwha/contracts STT_LANGUAGES).
+# Whisper는 언어를 하나만 받으므로 '여러 언어'는 이 계약에 없다 — auto는 '지정하지 않음'이다.
+AUTO_LANGUAGE = "auto"
+
+
+def whisper_language(language: str) -> str | None:
+    """payload의 language를 whisper 인자로 옮긴다. `auto` → None(자동 감지)."""
+    return None if language == AUTO_LANGUAGE else language
+
 
 @dataclass
 class SpeechSpan:

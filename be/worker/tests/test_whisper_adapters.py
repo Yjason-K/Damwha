@@ -29,10 +29,12 @@ def _install_fake_mlx(monkeypatch, calls, loads=None):
 
     def transcribe(audio, **kwargs):
         calls.append({"audio": audio, **kwargs})
+        # 실제 mlx_whisper.transcribe는 감지/지정된 언어를 결과에 되돌려준다.
         return {
+            "language": kwargs.get("language") or "ko",
             "segments": [
                 {"words": [{"word": " 안녕", "start": 0.5, "end": 0.9, "probability": 0.9}]}
-            ]
+            ],
         }
 
     fake_whisper.transcribe = transcribe
@@ -230,3 +232,59 @@ def test_mlx_passes_decoded_array_not_path(monkeypatch):
     MlxWhisper("large-v3-turbo").transcribe("a.flac", "ko", SPANS)
     for kwargs in calls:
         assert kwargs["audio"] == ("mx", ["pcm", "a.flac"])
+
+
+# --- 언어: `auto`는 whisper 자동 감지(language=None)로 번역된다 ---
+
+
+def test_mlx_explicit_language_passes_through(monkeypatch):
+    calls = []
+    _install_fake_mlx(monkeypatch, calls)
+    from damwha_worker.models.whisper_mlx import MlxWhisper
+
+    MlxWhisper("large-v3-turbo").transcribe("a.wav", "ko", SPANS)
+    assert [c["language"] for c in calls] == ["ko", "ko"]
+
+
+def test_mlx_auto_detects_once_then_reuses_for_later_clips(monkeypatch):
+    # mlx_whisper는 language=None인 호출마다 파일 앞 30초로 언어를 다시 감지한다.
+    # clip마다 개별 호출하는 구조라 그대로 두면 감지가 clip 수만큼 반복된다
+    # (73-clip 파일이면 인코더 forward 73회). 첫 호출 결과를 재사용한다.
+    calls = []
+    _install_fake_mlx(monkeypatch, calls)
+    from damwha_worker.models.whisper_mlx import MlxWhisper
+
+    MlxWhisper("large-v3-turbo").transcribe("a.wav", "auto", SPANS)
+    assert calls[0]["language"] is None
+    assert [c["language"] for c in calls[1:]] == ["ko"]
+
+
+def test_mlx_auto_whole_file_passes_none(monkeypatch):
+    calls = []
+    _install_fake_mlx(monkeypatch, calls)
+    from damwha_worker.models.whisper_mlx import MlxWhisper
+
+    MlxWhisper("large-v3-turbo").transcribe("a.wav", "auto")
+    (kwargs,) = calls
+    assert kwargs["language"] is None
+
+
+def test_faster_explicit_language_passes_through(monkeypatch):
+    calls = []
+    _install_fake_faster(monkeypatch, calls)
+    from damwha_worker.models.whisper_faster import FasterWhisper
+
+    FasterWhisper("large-v3-turbo", device="cpu").transcribe("a.wav", "ko", SPANS)
+    (kwargs,) = calls
+    assert kwargs["language"] == "ko"
+
+
+def test_faster_auto_passes_none(monkeypatch):
+    # faster-whisper는 한 호출 안에서 스스로 한 번만 감지한다 — 재사용 배선 불필요.
+    calls = []
+    _install_fake_faster(monkeypatch, calls)
+    from damwha_worker.models.whisper_faster import FasterWhisper
+
+    FasterWhisper("large-v3-turbo", device="cpu").transcribe("a.wav", "auto", SPANS)
+    (kwargs,) = calls
+    assert kwargs["language"] is None

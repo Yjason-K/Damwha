@@ -87,7 +87,7 @@ export type SummarySegmentView = {
   bullets: string[];
 };
 
-export type FileEntry = { name: string; size: string };
+export type FileEntry = { name: string };
 
 export type MeetingFilter = "all" | "fav";
 
@@ -126,9 +126,6 @@ export type Meeting = {
   dur: string;
   timeRange: string;
   files: FileEntry[];
-  aiCount: number;
-  aiHeadline: string;
-  aiDetail: string;
   attendees: number[];
   unverified?: number[];
   fav?: boolean;

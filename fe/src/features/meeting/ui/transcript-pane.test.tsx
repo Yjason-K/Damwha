@@ -28,9 +28,6 @@ function meeting(over: Partial<Meeting> = {}): Meeting {
     dur: "10:00",
     timeRange: "10:00–10:10",
     files: [],
-    aiCount: 0,
-    aiHeadline: "",
-    aiDetail: "",
     attendees: [1],
     unverified: [],
     fav: false,
@@ -63,9 +60,6 @@ function renderPane(over: Partial<Meeting> = {}) {
         activeId=""
         onJump={vi.fn()}
         onDeleted={vi.fn()}
-        aiAcked
-        onAckAi={vi.fn()}
-        onShowSummary={vi.fn()}
       />
     </QueryClientProvider>,
   );
@@ -220,9 +214,6 @@ function renderUpdatable(over: Partial<Meeting> = {}, onJump = vi.fn()) {
         activeId=""
         onJump={onJump}
         onDeleted={vi.fn()}
-        aiAcked
-        onAckAi={vi.fn()}
-        onShowSummary={vi.fn()}
       />
     </QueryClientProvider>
   );
@@ -407,9 +398,6 @@ function renderPlayback(playingId: string, playing: boolean) {
         playing={isPlaying}
         onJump={vi.fn()}
         onDeleted={vi.fn()}
-        aiAcked
-        onAckAi={vi.fn()}
-        onShowSummary={vi.fn()}
       />
     </QueryClientProvider>
   );

@@ -26,17 +26,10 @@ const TourLaunchButton = React.lazy(() =>
  * UI kit (`timbre_app/LeftNav.jsx`).
  */
 
-function SectionLabel({
-  children,
-  action,
-}: {
-  children: React.ReactNode;
-  action?: React.ReactNode;
-}) {
+function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between px-2.5 pt-4 pb-1.5 text-2xs font-semibold tracking-[var(--tracking-wide)] text-[color:var(--text-faint)] uppercase">
       <span>{children}</span>
-      {action}
     </div>
   );
 }
@@ -196,18 +189,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
         <SectionLabel>필터</SectionLabel>
         <FilterPills value={filter} onChange={onFilter} />
 
-        <SectionLabel
-          action={
-            <button
-              type="button"
-              className="inline-flex cursor-pointer items-center gap-[3px] rounded-xs font-medium tracking-normal normal-case outline-none focus-visible:[box-shadow:var(--focus-ring)]"
-            >
-              최신순 <Icon name="chevsUpDown" size={12} />
-            </button>
-          }
-        >
-          회의 목록
-        </SectionLabel>
+        <SectionLabel>회의 목록</SectionLabel>
         <ul
           data-tour="meeting-list"
           className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto overscroll-contain"
