@@ -244,12 +244,7 @@ export function toMeetingDetail(wire: WireMeetingDetail): Meeting {
     date: localDate(start),
     dur: durOf(duration),
     timeRange: buildTimeRange(startIso, duration),
-    files: wire.original_filename
-      ? [{ name: wire.original_filename, size: "" }]
-      : [],
-    aiCount: 0,
-    aiHeadline: "",
-    aiDetail: "",
+    files: wire.original_filename ? [{ name: wire.original_filename }] : [],
     attendees,
     unverified,
     fav: wire.is_favorite,

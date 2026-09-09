@@ -198,15 +198,12 @@ function IndexFailedBanner({
  */
 export function MeetingRoute() {
   const { meetingId = "" } = useParams();
-  const [aiAck, setAiAck] = React.useState<Record<string, boolean>>({});
   const [speed, setSpeed] = React.useState(1);
 
   return (
     <MeetingView
       key={meetingId}
       meetingId={meetingId}
-      aiAcked={!!aiAck[meetingId]}
-      onAckAi={() => setAiAck((a) => ({ ...a, [meetingId]: true }))}
       speed={speed}
       onSpeed={setSpeed}
     />
@@ -215,16 +212,12 @@ export function MeetingRoute() {
 
 type MeetingViewProps = {
   meetingId: string;
-  aiAcked: boolean;
-  onAckAi: () => void;
   speed: number;
   onSpeed: (speed: number) => void;
 };
 
 function MeetingView({
   meetingId,
-  aiAcked,
-  onAckAi,
   speed,
   onSpeed,
 }: MeetingViewProps) {
@@ -551,9 +544,6 @@ function MeetingView({
           playing={playing}
           onJump={jumpTo}
           onDeleted={handleDeleted}
-          aiAcked={aiAcked}
-          onAckAi={onAckAi}
-          onShowSummary={() => setTab("summary")}
           livePreview={meeting.status !== "done" ? liveItems : undefined}
         />
         <InsightPane

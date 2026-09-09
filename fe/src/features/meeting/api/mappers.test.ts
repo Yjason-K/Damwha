@@ -423,10 +423,8 @@ describe("toMeetingDetail", () => {
   });
 
   it("파생 불가 필드는 빈 기본값, 파일/오디오/상태는 그대로 매핑한다", () => {
-    expect(detail.aiCount).toBe(0);
-    expect(detail.aiHeadline).toBe("");
     expect(detail.topics).toEqual([]);
-    expect(detail.files).toEqual([{ name: "회의녹음.m4a", size: "" }]);
+    expect(detail.files).toEqual([{ name: "회의녹음.m4a" }]);
     expect(detail.audioUrl).toBe(`${env.apiBaseUrl}/meetings/mtg_1/audio`);
     expect(detail.totalSeconds).toBe(3_720);
     expect(detail.status).toBe("done");

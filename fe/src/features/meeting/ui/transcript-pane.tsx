@@ -3,7 +3,6 @@ import * as React from "react";
 import { isDemoBlocked } from "@/shared/api/demo-read-only";
 import { isApiError } from "@/shared/api/client";
 import { cn } from "@/shared/lib/utils";
-import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -149,49 +148,6 @@ function MetaItem({
   );
 }
 
-function AiBanner({
-  meeting,
-  onDetail,
-  onAck,
-}: {
-  meeting: Meeting;
-  onDetail: () => void;
-  onAck: () => void;
-}) {
-  return (
-    <div className="mb-4 flex items-center gap-3 rounded-md border border-[color:var(--accent-6)] bg-[var(--accent-1)] px-3.5 py-3">
-      <Badge variant="accent" icon={<Icon name="sparkles" size={12} />}>
-        AI 제안 {meeting.aiCount}개
-      </Badge>
-      <div className="min-w-0 flex-1">
-        <div className="text-base font-semibold text-foreground">
-          {meeting.aiHeadline}
-        </div>
-        <div className="mt-0.5 text-xs text-[color:var(--text-secondary)]">
-          {meeting.aiDetail}
-        </div>
-      </div>
-      <Button
-        variant="secondary"
-        size="sm"
-        iconLeft={<Icon name="command" size={14} />}
-        onClick={onDetail}
-      >
-        자세히 보기
-      </Button>
-      <Button
-        variant="primary"
-        size="sm"
-        iconLeft={<Icon name="check" size={14} strokeWidth={2.4} />}
-        onClick={onAck}
-      >
-        요약 확인
-      </Button>
-    </div>
-  );
-}
-
-/** 미해결 화자가 있으면 확인을 유도하는 배너 — 클릭 시 ResolveDialog를 연다. */
 function VerifyBanner({
   count,
   onResolve,
@@ -367,9 +323,6 @@ type TranscriptPaneProps = {
   playing?: boolean;
   onJump: (uid: string) => void;
   onDeleted: () => void;
-  aiAcked: boolean;
-  onAckAi: () => void;
-  onShowSummary: () => void;
   /**
    * 라이브 미리보기 — 실제 전사가 아직(uploaded/processing) 또는 끝내(failed) 없을 때
    * 그 자리를 채운다. 전사가 있으면 전사가 이긴다 (설계 §7.2).
@@ -384,9 +337,6 @@ export function TranscriptPane({
   playing = false,
   onJump,
   onDeleted,
-  aiAcked,
-  onAckAi,
-  onShowSummary,
   livePreview,
 }: TranscriptPaneProps) {
   const scrollRef = React.useRef<HTMLDivElement>(null);
@@ -636,13 +586,6 @@ export function TranscriptPane({
           count={pendingCount}
           onResolve={() => setResolveOpen(true)}
         />
-        {!aiAcked && meeting.aiCount > 0 ? (
-          <AiBanner
-            meeting={meeting}
-            onDetail={onShowSummary}
-            onAck={onAckAi}
-          />
-        ) : null}
         {meeting.utterances.length === 0 &&
         livePreview &&
         livePreview.length > 0 ? (
