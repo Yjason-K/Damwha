@@ -87,9 +87,12 @@ flowchart LR
 
 | 영역 | 파일 | 책임 |
 |---|---|---|
-| 프로세스 진입점/dispatcher | [`worker/damwha_worker/__main__.py`](../worker/damwha_worker/__main__.py) | supervisor 부모(`run_supervisor`)의 peek/spawn/backoff, 자식(`run_single_job`, `--once`)의 claim→dispatch, job type 분기, 필요한 모델의 지연 생성, heartbeat 범위, 2단계 시그널, 공통 오류 처리 |
+| 프로세스 진입점 | [`worker/damwha_worker/__main__.py`](../worker/damwha_worker/__main__.py) | supervisor 부모(`run_supervisor`)의 peek/spawn/backoff, 자식(`run_single_job`, `--once`)의 claim, heartbeat 범위, 2단계 시그널 |
+| dispatcher | [`worker/damwha_worker/dispatch.py`](../worker/damwha_worker/dispatch.py) | claim→dispatch, 예외를 outcome으로 번역(공통 오류 처리) |
+| job type 정책 | [`worker/damwha_worker/jobs.py`](../worker/damwha_worker/jobs.py) | type별 handler — 실행/실패/shutdown 정책, `JobContext`(주입물), 소유권 상실 훅 |
+| 실모델 조립 | [`worker/damwha_worker/wiring.py`](../worker/damwha_worker/wiring.py) | 필요한 모델·LLM 클라이언트의 지연 생성 |
 | payload 계약 | [`worker/damwha_worker/contracts.py`](../worker/damwha_worker/contracts.py) | Pydantic 검증, `schema_version=1`, readable ID 형식 검증 |
-| DB adapter | [`worker/damwha_worker/db.py`](../worker/damwha_worker/db.py) | raw SQL claim/heartbeat/stage/requeue/fail/persist, ownership/stale guard |
+| DB adapter | [`worker/damwha_worker/db/`](../worker/damwha_worker/db/) | raw SQL, 도메인별 모듈(`queue`/`meetings`/`speakers`/`summaries`/`lenses`/`search`/`live`)로 갈라져 있고 패키지가 평평하게 다시 내보낸다. claim/heartbeat/stage/requeue/fail/persist, ownership/stale guard |
 | stale reaper | [`worker/damwha_worker/reaper.py`](../worker/damwha_worker/reaper.py) | 별도 DB 연결으로 stale recovery를 주기 실행; API reaper와 `SKIP LOCKED`로 공존 |
 | heartbeat | [`worker/damwha_worker/heartbeat.py`](../worker/damwha_worker/heartbeat.py) | 별도 DB 연결과 daemon thread로 `locked_at` 갱신 |
 | storage | [`worker/damwha_worker/storage.py`](../worker/damwha_worker/storage.py) | 상대 key를 root 내부 경로로 안전하게 변환, traversal 차단 |
@@ -156,7 +159,7 @@ flowchart TD
     connect -.->|"connect 실패 / 미포착 예외"| crash["전파 → nonzero exit (부모 backoff / reaper)"]
 ```
 
-자식은 job 1건을 처리(또는 handle_job 내부 requeue/fail)한 뒤 `exit 0`으로 종료하며, 부모는 대기 없이 즉시 다음 job을 peek→spawn한다. 자식은 재접속하지 않는다 — connect 실패나 미포착 예외는 nonzero로 전파해 부모의 크래시 분기(backoff)나 reaper가 복구한다. 부모의 큐 polling·재접속·우아한 종료는 아래 "복원력과 우아한 종료"에서 다룬다.
+자식은 job 1건을 처리(또는 `dispatch.run_job` 내부 requeue/fail)한 뒤 `exit 0`으로 종료하며, 부모는 대기 없이 즉시 다음 job을 peek→spawn한다. 자식은 재접속하지 않는다 — connect 실패나 미포착 예외는 nonzero로 전파해 부모의 크래시 분기(backoff)나 reaper가 복구한다. 부모의 큐 polling·재접속·우아한 종료는 아래 "복원력과 우아한 종료"에서 다룬다.
 
 ### Claim과 순서
 
@@ -226,7 +229,7 @@ claim한 자식은 이제 **캡처 스레드(`Capture`) → 유계 preview 큐(2
 루프는 1초마다 `db.get_stop_requested`로 `(status, locked_by, stop_requested_at, sealed_bytes)`를
 한 번의 SELECT로 읽는다 — 원자성 때문이 아니라(이 연결은 autocommit이라 READ COMMITTED에서 두
 SELECT가 찢어진 상태를 볼 수 없다) 왕복을 하나로 줄이고, sealed_bytes 읽기를 소유권 검사와 같은
-술어 안에 묶어 그 사이 job이 재claim되는 TOCTOU를 닫기 위해서다(`db.py::get_stop_requested`).
+술어 안에 묶어 그 사이 job이 재claim되는 TOCTOU를 닫기 위해서다(`db/live.py::get_live_input_state`).
 `stop_requested_at`은 있는데 `sealed_bytes`가 아직 없는 창(API가 stop 플래그만 먼저 커밋하는
 마이그레이션/버그 시나리오)에 대비해, stop을 본 뒤 60초(`STOP_WITHOUT_SEAL_SECONDS`) 안에
 `sealed_bytes`가 오지 않으면 `max_minutes`(4시간)까지 기다리지 않고 PERMANENT `io_error`로 끝낸다 —
@@ -241,7 +244,7 @@ fake `GrowingFileSource`(`tests/fakes.py`)가 이 계약의 원본이었고, `Fi
 "yield한 프레임 수 × `FRAME_MS`"로 같은 값을 낸다.
 
 `MicSource`는 이 Mac의 기본 입력 장치를 직접 연다 — 지금은 **참조 구현**이다. `payload.source`가
-`"browser"`면 `__main__.py::_default_live_source`가 `TailSource`를 고르고, `"mic"`이면 이걸 고른다.
+`"browser"`면 `jobs.py::default_live_source`가 `TailSource`를 고르고, `"mic"`이면 이걸 고른다.
 시스템 오디오 구현체가 들어올 자리이자 `AudioSource`가 `TailSource` 말고 다른 구현도 지탱한다는
 증거로 남아 있다 — 지우지 않는다. 다만 `mic`의 종료 계약은 브라우저 경로만큼 매끈하지 않다: API의
 `/live/.../stop`은 `X-Audio-Offset`/`X-Final-Offset` 기반으로 `sealed_bytes`를 정하므로(브라우저가
@@ -484,7 +487,7 @@ guard 결과에 따른 의미는 다음과 같다.
 | 모든 guard 통과 | `committed` | entity 결과와 job 완료를 같은 transaction에서 반영 |
 | stage 경계에서 종료 시그널 감지 | `requeued_shutdown` | entity 무변경, job은 `queued`로 복귀하고 attempts를 1 되돌림 |
 
-`extract_lenses`와 `summarize_meeting`은 `discarded` 행에서 예외다 — 둘 다 job을 닫을 때 자신의 결과 행도 함께 갱신하지만 목표 상태는 다르다. `extract_lenses`는 `lens_extraction_run.status`를 `done`으로 갱신하고(`mark_lens_run_running` `db.py:670-679`, `persist_lens_extraction` `db.py:710-719`), `summarize_meeting`은 `meeting_summary.status`를 `failed`로 갱신한다(바로 위 "회의 요약" guard 설명 참고) — 재생성이 영구히 막히지 않으려면 `failed`로 명시해야 하기 때문이다. `process_meeting`·`index_meeting`은 표대로 entity를 건드리지 않는다.
+`extract_lenses`와 `summarize_meeting`은 `discarded` 행에서 예외다 — 둘 다 job을 닫을 때 자신의 결과 행도 함께 갱신하지만 목표 상태는 다르다. `extract_lenses`는 `lens_extraction_run.status`를 `done`으로 갱신하고(`db/lenses.py`의 `mark_lens_run_running`·`persist_lens_extraction`), `summarize_meeting`은 `meeting_summary.status`를 `failed`로 갱신한다(바로 위 "회의 요약" guard 설명 참고) — 재생성이 영구히 막히지 않으려면 `failed`로 명시해야 하기 때문이다. `process_meeting`·`index_meeting`은 표대로 entity를 건드리지 않는다.
 
 ## 12. 저장 데이터와 파일
 
