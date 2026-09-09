@@ -1,0 +1,99 @@
+# Task 4 — ffmpeg/ffprobe 번들 구성과 재배치 실측 (스펙 P0-C6, R-8)
+# 이 파일은 ffmpeg/fetch.sh가 생성한다. 손으로 고치지 않는다.
+utc               : 2026-09-09T13:35:23Z
+격리 대상         : 아니오 — 빌드는 산출물을 만드는 수단이다 (스펙 §4.0)
+ffmpeg            : 9.0.1 (ffmpeg.org 배포 최신 안정판, 2026-09-09 확인)
+빌드 시점 prefix  : /opt/damwha-phase0/ffmpeg  (이 머신에 존재하지 않는 중립 경로)
+스테이징          : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/ffmpeg
+최종 번들         : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/ffmpeg
+
+## 1. 아카이브 체크섬 (ffmpeg/checksums.txt 대조 통과. 배포처 공개 체크섬/gpg 없음 — 근거는 checksums.txt 머리말)
+cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635  ffmpeg-9.0.1.tar.xz
+
+## 3. configure 결과 (스펙 R-8)
+License: LGPL version 2.1 or later
+
+## 4. 빌드
+make -j8 성공
+
+## 5. 번들에 넣은 파일 (설치 산출물 중 실행에 필요한 것만 — include/lib/share 제외)
+total 85464
+drwxr-xr-x@ 4 gim-yeongjae  staff       128  9월  9 22:37 .
+drwxr-xr-x@ 3 gim-yeongjae  staff        96  9월  9 22:37 ..
+-rwxr-xr-x@ 1 gim-yeongjae  staff  21974984  9월  9 22:37 ffmpeg
+-rwxr-xr-x@ 1 gim-yeongjae  staff  21782408  9월  9 22:37 ffprobe
+
+## 6. 이동 전 G1 (stage/ffmpeg) — exit 0
+check-macho.sh (G1, 스펙 §4.1)
+  대상          : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/stage/ffmpeg
+  파일 수       : 2
+  Mach-O 수     : 2
+  금지 문자열   : 9개 (lib/forbidden-strings.txt + 실행 시점 HOME)
+  문자열 후보   : 0개 파일
+  허용 목록(ALLOW): 0건 / 규칙 24줄 (lib/g1-allowlist.txt)
+  검사 대상 내부 절대경로(INFO): 0건
+  위반          : 0건
+
+## 8. 이동 후 G1 (bundle/ffmpeg) — exit 0
+check-macho.sh (G1, 스펙 §4.1)
+  대상          : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/ffmpeg
+  파일 수       : 2
+  Mach-O 수     : 2
+  금지 문자열   : 9개 (lib/forbidden-strings.txt + 실행 시점 HOME)
+  문자열 후보   : 0개 파일
+  허용 목록(ALLOW): 0건 / 규칙 24줄 (lib/g1-allowlist.txt)
+  검사 대상 내부 절대경로(INFO): 0건
+  위반          : 0건
+
+## 9. otool -L / LC_RPATH (재배치 후, install_name_tool 미사용)
+--- bin/ffmpeg : otool -L ---
+/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/ffmpeg/bin/ffmpeg:
+	/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL (compatibility version 1.0.0, current version 1.0.0)
+	/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1359.0.0)
+	/usr/lib/libz.1.dylib (compatibility version 1.0.0, current version 1.2.12)
+	/System/Library/Frameworks/VideoToolbox.framework/Versions/A/VideoToolbox (compatibility version 1.0.0, current version 3350.77.5)
+	/System/Library/Frameworks/CoreImage.framework/Versions/A/CoreImage (compatibility version 1.0.1, current version 7.0.0)
+	/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit (compatibility version 45.0.0, current version 2775.10.103)
+	/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation (compatibility version 150.0.0, current version 5027.0.69)
+	/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia (compatibility version 1.0.0, current version 3350.77.5)
+	/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo (compatibility version 1.2.0, current version 758.27.0)
+	/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices (compatibility version 1.0.0, current version 1226.0.0)
+	/usr/lib/libbz2.1.0.dylib (compatibility version 1.0.0, current version 1.0.8)
+	/usr/lib/libiconv.2.dylib (compatibility version 7.0.0, current version 7.0.0)
+	/System/Library/Frameworks/AudioToolbox.framework/Versions/A/AudioToolbox (compatibility version 1.0.0, current version 1000.0.0)
+	/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics (compatibility version 64.0.0, current version 2050.0.0)
+	/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation (compatibility version 300.0.0, current version 5027.0.69)
+	/usr/lib/libobjc.A.dylib (compatibility version 1.0.0, current version 228.0.0)
+--- bin/ffmpeg : LC_RPATH (없으면 출력 없음) ---
+--- bin/ffprobe : otool -L ---
+/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/ffmpeg/bin/ffprobe:
+	/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL (compatibility version 1.0.0, current version 1.0.0)
+	/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1359.0.0)
+	/usr/lib/libz.1.dylib (compatibility version 1.0.0, current version 1.2.12)
+	/System/Library/Frameworks/VideoToolbox.framework/Versions/A/VideoToolbox (compatibility version 1.0.0, current version 3350.77.5)
+	/System/Library/Frameworks/CoreImage.framework/Versions/A/CoreImage (compatibility version 1.0.1, current version 7.0.0)
+	/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit (compatibility version 45.0.0, current version 2775.10.103)
+	/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation (compatibility version 150.0.0, current version 5027.0.69)
+	/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia (compatibility version 1.0.0, current version 3350.77.5)
+	/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo (compatibility version 1.2.0, current version 758.27.0)
+	/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices (compatibility version 1.0.0, current version 1226.0.0)
+	/usr/lib/libbz2.1.0.dylib (compatibility version 1.0.0, current version 1.0.8)
+	/usr/lib/libiconv.2.dylib (compatibility version 7.0.0, current version 7.0.0)
+	/System/Library/Frameworks/AudioToolbox.framework/Versions/A/AudioToolbox (compatibility version 1.0.0, current version 1000.0.0)
+	/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics (compatibility version 64.0.0, current version 2050.0.0)
+	/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation (compatibility version 300.0.0, current version 5027.0.69)
+	/usr/lib/libobjc.A.dylib (compatibility version 1.0.0, current version 228.0.0)
+--- bin/ffprobe : LC_RPATH (없으면 출력 없음) ---
+
+## 10. ffmpeg -version (bundle/ffmpeg/bin/ffmpeg, 재배치 후)
+ffmpeg version 9.0.1 Copyright (c) 2000-2026 the FFmpeg developers
+built with Apple clang version 21.0.0 (clang-2100.3.33.1)
+configuration: --prefix=/opt/damwha-phase0/ffmpeg --disable-gpl --disable-nonfree --disable-version3 --disable-doc --disable-htmlpages --disable-manpages --disable-podpages --disable-txtpages --disable-avdevice --disable-network --disable-ffplay --enable-static --disable-shared --disable-debug
+libavutil      61.  1.101 / 61.  1.101
+libavcodec     63.  1.101 / 63.  1.101
+libavformat    63.  1.101 / 63.  1.101
+libavfilter    12.  1.101 / 12.  1.101
+libswscale     10.  1.101 / 10.  1.101
+libswresample   7.  1.101 /  7.  1.101
+
+Exiting with exit code 0

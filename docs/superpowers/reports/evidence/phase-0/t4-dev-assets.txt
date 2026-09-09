@@ -1,0 +1,65 @@
+# Task 4 — 개발 자산 무변화 확인 보완 (스펙 §4.4)
+#
+# snapshot-dev-assets.sh는 결과를 dev-assets-latest.txt에 **덮어쓴다.** Task 3와
+# 같은 이유로(스펙 §6 "증거를 덮어쓰지 않는다"와 부딪침) 이 Task도 자기 회차의
+# 사본을 이 파일로 남기고 dev-assets-latest.txt는 Task 2 커밋 상태로 되돌려
+# 두었다.
+#
+# ## 배경 — Task 4 계획의 "시작 시 보완할 것"
+#
+# Task 3의 docker volume ls after 측정이 OrbStack API 무응답(26분 매달림)으로
+# 빠졌다(t3-dev-assets.txt). Task 4 시작 시 before 목록(볼륨 15개, be_pgdata·
+# damwha_pgdata 포함)과 대조해 사후 보완하기로 계획에 적혀 있었다.
+#
+# ## 실측 — 여전히 불가, 매달릴 때마다 클라이언트 PID만 종료
+#
+# Task 4 진행 중 `docker volume ls`를 총 3회 시도했다(before 스냅샷 1회,
+# 사후 보완 재시도 1회, after 스냅샷 1회). 세 번 모두 15~30초 안에 응답이
+# 없었고, 매번 **그 `docker` CLI 클라이언트 프로세스의 PID만** SIGKILL로
+# 종료했다(계획 지시대로 — 이름 기반 kill이 아니라 그 PID 하나. OrbStack
+# 앱·헬퍼 프로세스(PID 1300/1397)는 세 번 다 그대로 살아 있었다).
+#
+#   1) 22:29 KST경 — pid 33778 종료 (Task 4 시작 시 사전 보완 시도)
+#   2) 22:29 KST경 — pid 34047 종료 (before 스냅샷 중)
+#   3) 22:41 KST경 — pid 64216 종료 (after 스냅샷 중)
+#
+# 즉 **Task 3 before 목록(15개 볼륨)과의 대조는 이번에도 완성하지 못했다.**
+# OrbStack의 docker API 자체가 이 세션 내내 무응답 상태였던 것으로 보인다 —
+# Task 3이 관찰한 것과 같은 증상이 몇 시간 뒤에도 이어졌다.
+#
+# ## 이 Task가 docker에 쓴 명령
+#
+# **`docker volume ls`(읽기 전용 조회)뿐이다.** `docker volume rm`·
+# `docker compose down -v`는 이 하네스 어디에도 없다(README 공통 원칙,
+# 스펙 §4.4). damwha_pgdata에 대한 쓰기 경로가 존재하지 않으므로, 조회가
+# 안 됐다는 사실 자체는 볼륨이 바뀌었다는 근거가 되지 않는다 — 그저 이
+# Task가 그 사실을 **확인하지 못했다**는 뜻이다. 다음 Task가 OrbStack이
+# 회복된 뒤 다시 재면 Task 3 before 목록과 대조할 수 있다.
+#
+# ## be/storage — 확인됨, 무변화
+#
+# files/bytes/newest_mtime/manifest_sha256이 Task 3의 before/after 및 이
+# Task의 before/after에서 전부 같다(a18870e6…6391be, 29 files,
+# 2227477523 bytes). Task 4는 be/storage를 읽지도 않았다 — 검증 오디오는
+# Task 1이 이미 복사해 둔 $SANDBOX/audio/sample.flac을 쓴다.
+#
+# snapshot-dev-assets.sh — 개발 자산 무변화 확인 (스펙 §4.4)
+# utc: 2026-09-09T13:42:51Z
+## before
+## docker volumes
+docker: daemon-unreachable
+## be/storage
+root: /Users/gim-yeongjae/project/daewha/be/storage
+files: 29
+bytes: 2227477523
+newest_mtime: 1788857034
+manifest_sha256: a18870e6592f160f3545fa349ec3fa972a1993f3b3203fdf21303012cf6391be
+## after
+## docker volumes
+docker: daemon-unreachable
+## be/storage
+root: /Users/gim-yeongjae/project/daewha/be/storage
+files: 29
+bytes: 2227477523
+newest_mtime: 1788857034
+manifest_sha256: a18870e6592f160f3545fa349ec3fa972a1993f3b3203fdf21303012cf6391be

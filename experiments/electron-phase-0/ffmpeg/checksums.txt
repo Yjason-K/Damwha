@@ -1,0 +1,10 @@
+# Task 4가 내려받는 아카이브의 sha256. fetch.sh가 shasum -a 256 -c 로 대조한다.
+#
+# ffmpeg.org는 이 경로에 배포처 공개 체크섬이나 gpg 서명(.asc)만 두고
+# SHA256SUMS류의 파일은 두지 않는다 — https://ffmpeg.org/releases/ffmpeg-9.0.1.tar.xz.sha256sum
+# 은 404다. .asc는 있지만(https://ffmpeg.org/releases/ffmpeg-9.0.1.tar.xz.asc)
+# 이 머신에 gpg가 없어(2026-09-09, `which gpg` 없음) 서명을 검증할 수 없다.
+# 그래서 2026-09-09에 HTTPS(TLS)로 받은 값을 여기 적어 두고, 재실행 시 같은
+# 바이트를 받았는지만 대조한다 — pgvector/pg_bigm의 GitHub 태그 아카이브와
+# 같은 한계다 (pg/checksums.txt 참조).
+cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635  ffmpeg-9.0.1.tar.xz

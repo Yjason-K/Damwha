@@ -308,6 +308,28 @@ OS python 바이트코드 캐시 같은 것들이라 금지 문자열이 당연�
 - **모델은 하나도 들어 있지 않다.** 이 번들은 코드뿐이고, HF 캐시는 격리
   실행의 `HF_HOME`(샌드박스)으로 간다.
 
+**10. Task 4가 실측으로 덧붙이는 것 (ffmpeg를 쓰는 Task 5·7에게).**
+자세한 내용과 증거 파일 목록은 `ffmpeg/README.md`에 있다. 쓰는 쪽만 요약한다.
+
+- **ffmpeg/ffprobe는 PostgreSQL·Python과 달리 재배치에서 아무것도 깨지지
+  않았다.** `--enable-static --disable-shared`로 완전 정적 링크했더니
+  `otool -L`의 의존이 `/usr/lib/*`·`/System/Library/Frameworks/*`뿐이고
+  `LC_RPATH` 커맨드 자체가 없다. `install_name_tool`·`codesign` 사후 처리가
+  필요 없다 — 이동 전/후 `check-macho.sh` 출력이 완전히 같다.
+- **셸 런처가 필요 없다.** 완전 정적 Mach-O라 `env -i`가 직접 `exec`한다
+  (번들 python과 같은 형태). `verify/t4-lib.sh::t4_run_ffmpeg` /
+  `t4_run_ffprobe`가 그 통로이고, 계획 규칙 1(exec 직전 재-export)이 필요
+  없다.
+- **Homebrew ffmpeg도 우연히 같은 버전(9.0.1)이다.** 버전 문자열로는 번들
+  실행과 Homebrew 실행이 구분되지 않는다 — dyld가 연 이미지의 경로만
+  신뢰할 수 있다(`t4-no-homebrew.sh`).
+- **라이선스는 LGPL v2.1+로 구성했다** (`--disable-gpl --disable-nonfree
+  --disable-version3`, R-8). 담화가 쓰는 probe·normalize 둘 다 native
+  코덱만으로 되므로 GPL 구성을 켤 이유가 없었다.
+- **번들은 `bin/ffmpeg`·`bin/ffprobe` 둘뿐이다.** `include/`·`lib/*.a`·
+  `lib/pkgconfig/*.pc`·`share/ffmpeg/`는 빌드 전용 산출물이라 뺐다 (pg의
+  `pgxs`·`include` 제외와 같은 이유). 번들 크기는 42 MB.
+
 ## verify/ 규약
 
 각 스크립트는 조건을 만족하면 exit 0, 아니면 exit 1이고 판정 근거를 stdout에
