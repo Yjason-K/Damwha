@@ -110,6 +110,20 @@ Task 1 재리뷰가 찾아냈고 메인 세션이 측정으로 확인했다. 계
 
 | Task | 커밋 범위 | 검토자 (model) | 회차 | 차단 지적 → 조치 | 증거 | 통과 |
 | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `4f0b02c..961029f` (`17bae8d`, `f1e1dff`, `cd699ad`, `961029f`) | electron-reviewer (fable) | 3 | 아래 T1-B1 ~ T1-B3 | `evidence/phase-0/task-1-r{1,2,3}.md` | **미통과 — 수정 루프 3회 한도 도달, 사용자 확인 대기** |
+
+### Task 1 상세
+
+Verify는 3회차 모두 V1~V12 전부 기대값과 일치했다. 차단은 전부 **검증 자체의 신뢰성**에서 나왔다 — 검사기가 실제로 위반을 잡는지의 문제다.
+
+| ID | 회차 | 차단 지적 | 조치 | 결과 |
+| --- | --- | --- | --- | --- |
+| T1-B1 | 1 | `check-macho.sh`의 금지 문자열 면제가 `$EXP_ROOT` 전체라 `stage/`·`downloads/`·`sandbox/`를 가리키는 재배치 잔존 경로를 놓친다. P0-C3이 핵심 관찰 대상으로 못 박은 형태이자 R-9가 정확히 그것이다 | 면제를 `"$ROOT"\|"$ROOT"/*`로 좁히고 `STALE-PATH` 위반 범주 신설. 회귀 대조군 3종(shebang·`pyvenv.cfg`·`*.pc`) 추가 | **해소** (2회차 확인, reviewer가 픽스처 5건으로 재실측) |
+| T1-B2 | 2 | README의 Task 2·5 인계 항목이 실측과 반대. 2c "자손 전부가 `DYLD_*`를 물려받는다"는 거짓(플랫폼 바이너리를 거치면 SIP가 지운다), 2a의 증상 서술도 틀렸다(런처가 자식 stderr를 돌리면 `MEASUREMENT_UNAVAILABLE`이 아니라 **런처 자신의 로드 목록**이 정상 측정처럼 남는 가짜 증거) | README 2a 전면 재작성·2c 반전·5a 확장. 계획에 "런처 스크립트의 dyld 실측 규칙" 절 신설(`cd699ad`). D1/D2 대조군 추가 | **문서 수준 해소** (3회차 확인, reviewer 직접 측정값이 README 표와 일치) |
+| T1-B3 | 3 | D2의 "실측된 줄이 자식 Mach-O의 것이다" 단정이 **무효**다. `run-isolated.sh:171`이 증거 헤더에 `# argv: <런처> <자식 경로>`를 쓰는데 `t1-detector-negative.sh:284`의 `grep -q -F "$DYFIX/echo" "$D2"`가 파일 전체를 훑으므로, dyld 줄에 자식 경로가 0건이어도 헤더에 항상 매치된다. reviewer가 가짜 증거 런처(ad-hoc 서명 bash + `2>/dev/null`)를 투입하니 dyld 82줄이 전부 런처 것이고 자식 0건인데 D2 두 단정 모두 OK, 스크립트 exit 0 | 미조치 — 수정 루프 3회 한도 | **미해소** |
+
+T1-B3의 수정은 한 줄이다: `grep '^dyld' "$D2" \| grep -q -F "$DYFIX/echo"`. reviewer가 그 수정을 넣고 같은 가짜 증거 런처를 투입해 `FAIL D2: dyld 줄에 자식 Mach-O가 없다`, exit 1을 확인했다. 함께 `README.md:132-135`의 서술이 코드를 고친 뒤에야 참이 된다.
+
 
 ## 최종 검증
 
@@ -118,7 +132,22 @@ Task 1 재리뷰가 찾아냈고 메인 세션이 측정으로 확인했다. 계
 
 ## 후속 작업 (비차단 지적)
 
--
+Task 1에서 나왔고 수정하지 않기로 한 것들이다.
+
+**하네스 자체**
+- `snapshot-dev-assets.sh:81` — `dev-assets-latest.txt`를 보관 없이 덮어쓴다. 스펙 §4.4가 "각 Task 종료 시 기록"을 요구하므로 이대로면 트리에 마지막 Task 기록만 남는다. `task-<N>-dev-assets.txt`로 이름을 나누는 것이 낫다.
+- V6 양성 대조군(`lib/`)에 Mach-O가 0개라 `otool` 경로의 오탐 여부가 검증되지 않았다.
+- `run-isolated.sh:131` — `HF_TOKEN`이 `env -i` argv에 잠깐 노출된다(같은 사용자의 `ps`). Phase 0 범위에서는 허용 가능.
+- 증거 `.txt`가 고정 이름이라 재실행이 커밋된 파일을 덮어쓰고 `.prev-<timestamp>.txt`를 남긴다. git이 이미 이력을 보존하므로 회전본은 중복이다 — 2026-09-09에 삭제했다.
+- `run-isolated.sh:27-28,164-167` — `MEASUREMENT_UNAVAILABLE` 주석이 0건의 원인을 "SIP가 플랫폼 바이너리에서 무시"로만 적는다. "런처가 re-export를 빠뜨림"이 더 흔한 원인이므로 두 원인을 병기해야 한다. Task 11 집계기와 사람이 이 문구를 읽는다.
+
+**Task 2 착수 전에 반영하면 회차 손실을 줄이는 것**
+- 계획 규칙 2가 `pg_ctl start -l`만 금지하는데, `pg_ctl start`는 `-l` 없이도 내부에서 `/bin/sh -c "exec postgres ... 2>&1 &"`로 서버를 띄운다(`pg_ctl.c start_postmaster`). 그러면 SIP가 `/bin/sh`에서 `DYLD_*`를 지우고 postgres의 stderr는 stdout으로 합쳐져 래퍼(fd 2만 캡처)에 안 들어온다. 규칙에 "`pg_ctl start` 자체를 쓰지 않고 `postgres -D ... &`를 직접 띄운다"를 명시해야 한다. **이 머신에 번들 pg_ctl이 없어 실측은 못 했다 — Task 2에서 확인이 필요하다.**
+- Task 2 V2b / Task 5 V11의 "`dyld[<pid>]`의 pid가 PID 파일과 일치" 기대값 — re-export 뒤 런처가 부르는 `pg_isready` 등 번들 Mach-O도 자기 pid로 dyld 줄을 남기므로 파일에는 pid가 여럿 섞인다. `t2-/t5-dyld-measured.sh`는 "PID 파일의 pid를 가진 dyld 줄이 존재하고 그 pid의 로드 목록에 번들 서버 바이너리 경로가 있다"로 판정하고, T1-B3과 같은 `# argv:` 헤더 함정을 피해 `^dyld` 줄로 한정해야 한다.
+- 계획 규칙 3 · `run-isolated.sh:75,133` — 런처가 exit 0 한 뒤에도 서버의 stderr는 `$RUNTMP/stderr.raw`를 가리키는데 `trap`이 그 디렉터리를 지운다. 이후 서버 에러 로그가 unlink된 파일로 사라져 Task 2 V7(crash recovery) 진단이 어려워진다. postgres는 `logging_collector=on`+`log_directory`로, 서비스는 준비 후 로그 위치를 별도 기록하는 것이 낫다.
+
+**검증 절차**
+- 3회차 verifier의 직접 재현이 4형태까지였고 가짜 증거 형태(비플랫폼 런처+리다이렉트)는 재현하지 않았다. 재리뷰 시 그 형태를 증거에 포함해야 한다.
 
 ## 남은 제약·후속 Phase 인계
 
