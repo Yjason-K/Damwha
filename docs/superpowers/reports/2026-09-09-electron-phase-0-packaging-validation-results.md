@@ -106,6 +106,18 @@ Task 1 재리뷰가 찾아냈고 메인 세션이 측정으로 확인했다. 계
 
 **사용자 결정 (2026-09-09):** P-11의 해법으로 "런처 re-export + 회귀 대조군" 채택. exec 심 방식은 심이 다시 bash를 exec하는 순간 `DYLD_*`가 또 지워지므로 성립하지 않는다.
 
+### 4회차 — Task 1 3회차 리뷰가 넘긴 계획 결함 (2026-09-09)
+
+Task 1이 수정 루프 3회 한도에 걸린 시점에 사용자가 4회차를 승인하면서, Task 2 착수 전에 반영하는 것이 낫다고 판정된 비차단 3건도 함께 계획에 넣었다 (751줄 → 760줄).
+
+| ID | 구분 | 지적 | 조치 |
+| --- | --- | --- | --- |
+| P-16 | 비차단 | 규칙 2가 `pg_ctl start -l`만 금지하는데, `pg_ctl start`는 `-l` 없이도 내부에서 `/bin/sh -c "exec postgres ... 2>&1 &"`로 서버를 띄운다(`pg_ctl.c` `start_postmaster`). SIP가 `/bin/sh`에서 `DYLD_*`를 지우고 stderr가 stdout으로 합쳐져 fd 2만 캡처하는 래퍼에 안 들어온다 — 규칙 1·2를 지켜도 결과가 같다 | 규칙 2b 신설: `pg_ctl start`를 `-l` 유무와 무관하게 배제하고 `postgres -D ... &`를 직접 띄운다. Task 2 Interfaces 반영, `t2-no-pgctl-start.sh`(V2c) 신설. **이 계획 시점에 번들 `pg_ctl`이 없어 실측하지 못했다 — Task 2가 확인하고 증거에 남긴다** |
+| P-17 | 비차단 | V2b·V11의 "`dyld[<pid>]`의 pid가 PID 파일과 일치" 기대값이 부족하다. re-export 뒤 런처가 부르는 `pg_isready` 등 번들 Mach-O도 자기 pid로 dyld 줄을 남겨 파일에 pid가 여럿 섞인다. 또 파일 전체를 grep하면 헤더의 `# argv:` 줄에 걸린다 | 규칙 6 신설: dyld 증거는 `^dyld` 줄로 한정해 읽고, 줄 수뿐 아니라 **그 pid의 로드 목록에 검증 대상 바이너리 경로가 실제로 있는지**까지 본다. V2b·V11 기대값과 Task 2·5·11 Review에 반영 |
+| P-18 | 비차단 | 규칙 3을 지켜 런처가 exit 0 해도, 서버의 stderr는 `$RUNTMP` 안 파일을 가리키는데 래퍼의 `trap ... EXIT`가 그 디렉터리를 지운다. 이후 서버 로그가 unlink된 파일로 사라져 Task 2 V7(crash recovery) 진단이 불가능해진다 | 규칙 3b 신설: PostgreSQL은 `logging_collector=on` + `log_directory`로 서버가 직접 쓰게 하고, embed·LLM 서비스는 준비 완료 후 로그 위치를 `$SANDBOX/run/`에 기록한다. Task 2·5 Interfaces·Review 반영 |
+
+규칙 6은 Task 1의 차단 T1-B3에서 일반화한 것이다. 그 함정이 D2 단정 하나에 그치지 않고 Task 2·5·11의 dyld 검사 전부에 해당하므로 전역 규칙으로 올렸다.
+
 ## 단계별 실행·리뷰
 
 | Task | 커밋 범위 | 검토자 (model) | 회차 | 차단 지적 → 조치 | 증거 | 통과 |
