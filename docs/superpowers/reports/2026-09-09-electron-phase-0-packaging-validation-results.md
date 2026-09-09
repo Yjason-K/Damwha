@@ -146,6 +146,22 @@ Task 1은 통과했으나 reviewer가 Task 2·5 착수 전 반영을 권고한 �
 
 | 5 | `385c1c4..f840679` | electron-reviewer (opus) | 1 | 없음 | `evidence/phase-0/task-5-r1.md` | **PASS** |
 
+| 6 | `3f98475..5ad955b` | electron-reviewer (opus) | 1 | 없음 | `evidence/phase-0/task-6-r1.md` | **PASS** |
+
+### Task 6 상세
+
+P0-C2 충족. 번들 PostgreSQL(55432)과 번들 embed(58100)를 붙여 `search.repository.ts`와 같은 CTE 구조로 질의했다. 질의 `'예산'`, cand_k=100, rrf_k=60 → **kw 3 / sem 12 / fused 12.** 두 경로가 각각 0건이 아니다.
+
+**`sem`이 실제 임베딩으로 동작한다는 증거가 세 회차에서 재현됐다.** `sem` 상위 3건에 **"예산" 글자가 없는** 발화("재무팀이 비용 절감안을 검토하고 있습니다.")가 든다 — `kw`는 절대 못 찾고 임베딩만 찾는 항목이다. 구현자 `utt_28`, verifier `utt_40`, reviewer `utt_40`로 재시드에 따라 id만 갈렸고 텍스트·거리값은 소수점 6자리까지 같다. 고정 모델·고정 문장의 결정적 결과다.
+
+**`fused`가 진짜 FULL OUTER JOIN이다.** cand_k=3에서 kw 3 / sem 3 / **fused 4**(kw만 1, sem만 1, 공통 2). INNER면 2, LEFT·RIGHT면 3이므로 4가 세 대안을 전부 배제한다. kw 전용 행의 점수가 정확히 `1/(60+3)=0.015873…`이라 sem 쪽 `COALESCE`가 0으로 채워졌음까지 확인된다. reviewer가 INNER·LEFT 위조 TSV를 검사기에 넣어 둘 다 exit 1을 확인했다.
+
+**확장이 이름만 있는 게 아니라 C 함수에 연결돼 있다.** `pg_depend`로 `likequery`·`bigm_similarity` → `pg_bigm`(`probin=$libdir/pg_bigm`), `cosine_distance` → `vector`(`$libdir/vector`). reviewer는 `pg_operator`까지 봐서 `<=>`(vector,vector) **연산자 자체가 `vector` 확장 소속**이고 `oprcode=public.cosine_distance`임을 확인했다. `likequery('50% 절감')` → `%50\% 절감%`(이스케이프), `bigm_similarity` 동일 1.0 / 유사 0.5 / 무관 0.0, `<=>` 직교 1 / 동일 0 / 반대 2.
+
+**dyld 증거에 pid 6개가 섞였다.** V1이 두 런처를 자체 기동하는 구조라 `t6-seed-dyld.txt` 2577줄이 embed 915 / driver 715 / resource_tracker 702 / `pg_isready` 82×2 / postgres 81로 갈린다. **규칙 6b(pid 먼저 고정)를 세워 두지 않았으면 통째로 세서 판정했을 것이다** — Task 2에서 `pg_isready` 하나를 보고 넣은 규칙이 여기서 훨씬 심한 형태로 회수됐다.
+
+**판정 강도를 reviewer가 수치로 검토했다.** 채택한 단정의 여유는 C("상위 3건에 off 없음") 0.1333, D("상위 3건에 sem 그룹 1건 이상") 0.0562. 제외한 "주제 6건이 off 6건보다 전부 앞선다"는 0.0097뿐이라 거리표로만 남긴 선택이 맞다(6~14배 차이). 다만 **난수 벡터를 잡는 것은 C 단정 하나뿐이고 우연 통과 확률이 C(6,3)/C(12,3) = 9.1%다.**
+
 ### Task 5 상세
 
 P0-C5·P0-C5b 충족. embed는 `127.0.0.1:58100`에서 `/health` → `{"status":"ok"}`, `/embed` → `model=BAAI/bge-m3`·`dimension=1024`. `mlx_lm.server`는 `bundle/python/bin/mlx_lm.server`이고 셔뱅이 번들 python3.12 — **스펙 §2가 지목한 "어떤 매니페스트에도 없는 네 번째 런타임"이 번들에서 떴다.** 인자 형태가 제품 경로(`llm_server.py:106-114`)와 동일하다.
@@ -310,6 +326,13 @@ Task 1에서 나왔고 수정하지 않기로 한 것들이다.
 - 번들 Mach-O 460개 중 `relocate`가 손대지 않은 파일에 **서명이 아예 없는 것**이 있다(`charset_normalizer/*.so`, `fontTools/*.so`, `_sounddevice_data/…/libportaudio.dylib`; `codesign -v` → `code object is not signed at all`). 지금은 로드된다. **Task 8의 직접 입력**이라 계획에 전수 목록 작성을 넣었다.
 - 스펙 §4.4의 `docker volume ls` after 측정이 OrbStack 무응답(26분)으로 빠졌다. Task 3 코드에 docker 호출이 없고 볼륨에 쓰는 경로가 없어 차단으로 보지 않았다. Task 4 시작 시 before 목록(볼륨 15개)과 대조해 사후 보완하도록 계획에 넣었다.
 - **리뷰 부수효과(reviewer 자진 신고):** 사본 `damwha-embed --help`를 시험하다 그 진입점이 인자를 무시하고 서버를 띄운다는 것을 몰라 127.0.0.1:8100에 embed 서버가 두 번 떴다. 각각 PID로 종료했고 사전에 8100 리스너가 없어 개발 프로세스와 충돌하지 않았다. 그 실행이 `~/.cache/huggingface/.agent_harnesses.json`(6 KB 메타데이터)을 썼다 — 모델 파일 변경은 없으나 §4.4 문면상 위반이다. **`damwha-embed`·`damwha-worker`는 인자를 무시하고 바로 서비스를 띄우므로 `--help`로 시험하지 마라.**
+
+**Task 6에서 나온 것**
+- `verify/t6-seed.sh:95`의 절 제목이 "난수·상수 벡터 차단"인데 **난수는 차단하지 못한다.** reviewer가 12행을 난수 단위벡터로 바꿔 확인했다 — "서로 다른 벡터 12개 / L2 노름 1"이 둘 다 OK로 exit 0이다. 상수·복제·차원 차단은 유효하다. 난수를 실제로 잡은 것은 `t6-hybrid.sh`의 C 단정 하나이고 우연 통과 확률이 9.1%다. 제목을 "상수·복제 벡터 차단"으로 좁히고 난수 차단 책임이 V3 C에 있음을 명시해야 한다.
+- `verify/t6-operators.sh:140` — 난수 벡터 상태에서도 exit 0으로 통과했다(우연히 가장 가까운 행이 kw, 가장 먼 행이 off였다). V4의 목적은 연산자 동작 확인이므로 문제는 아니나, **"거리 순서가 주제를 반영한다"를 V4로 근거 삼지 않는다.**
+- `drivers/query_search.sql:11-13`의 제품 코드 대조 줄 번호가 셋 어긋난다(`52-79` → 실제 52-83, "80-86" → 실제 77-83). 이 헤더가 "원본이 바뀌면 사본이 낡는다"를 대비하는 유일한 장치라 틀리면 목적을 잃는다.
+- **인덱스 경로가 한 번도 타지 않았다.** 시드가 12행뿐이라 `EXPLAIN`이 `sem`은 `Seq Scan` + `Sort`, `kw`도 `Seq Scan`을 낸다. `utterance_embedding_hnsw_idx`(hnsw/`vector_cosine_ops`)와 `utterance_text_bigm_idx`(gin/`gin_bigm_ops`)가 존재하지만 스캔에 쓰이지 않았다. P0-C2의 성공 판정에 인덱스 요구가 없어 차단은 아니다 — **번들 pgvector의 HNSW 스캔 경로는 Phase 0에서 미검증**이며 Phase 3 인계 항목이다.
+- 회전 정책이 한 Task 안에서 둘이다 — `seed_search.py:121-130`은 내용이 다를 때만, `t6-lib.sh:47-56`은 무조건 회전한다. 내용 손실은 없으나 `prev-*` 개수로 회차를 세면 어긋난다.
 
 **검증 절차**
 - 3회차 verifier의 직접 재현이 4형태까지였고 가짜 증거 형태(비플랫폼 런처+리다이렉트)는 재현하지 않았다. 4회차에서 D3 대조군으로 코드에 고정됐다 — 해소.

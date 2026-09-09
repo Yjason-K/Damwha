@@ -1,9 +1,9 @@
-# t6-seed 의 stderr (dyld 줄 제외). utc: 2026-09-09T15:11:40Z  exit: 0
-2026-09-10 00:11:40.238 KST [93784] LOG:  redirecting log output to logging collector process
-2026-09-10 00:11:40.238 KST [93784] HINT:  Future log output will appear in directory "log".
-Loading weights:   0%|          | 0/391 [00:00<?, ?it/s]dyld[93874]: <4C4C44A6-5555-3144-A1BD-F878E0600D6B> /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
-Loading weights: 100%|██████████| 391/391 [00:00<00:00, 58308.07it/s]
-INFO:     Started server process [93823]
+# t6-seed 의 stderr (dyld 줄 제외). utc: 2026-09-09T15:18:57Z  exit: 0
+2026-09-10 00:18:57.556 KST [96822] LOG:  redirecting log output to logging collector process
+2026-09-10 00:18:57.556 KST [96822] HINT:  Future log output will appear in directory "log".
+Loading weights:   0%|          | 0/391 [00:00<?, ?it/s]dyld[96915]: <4C4C44A6-5555-3144-A1BD-F878E0600D6B> /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
+Loading weights: 100%|██████████| 391/391 [00:00<00:00, 51425.93it/s]
+INFO:     Started server process [96862]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:58100 (Press CTRL+C to quit)

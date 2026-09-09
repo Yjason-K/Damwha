@@ -486,7 +486,7 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 - [ ] `e.model`/`e.dimension` 조건이 실제 쿼리처럼 걸려 있다
 - [ ] 두 경로가 **각각** 결과를 냈다 — 한쪽이 0건인데 fused만 보고 통과시키지 않았다 (V3이 세 조건을 모두 요구)
 - [ ] 시드가 실험 DB(55432)에만 들어갔다
-- [ ] 시드가 `001_init.sql`의 실제 컬럼·제약과 맞는다 (`diar_label` 필수, `status` 체크, `UNIQUE (meeting_id, order_index)`)
+- [ ] 시드가 실제 컬럼·제약과 맞는다 — `diar_label` 필수, `status` 체크(`001_init.sql:67-84`), **`UNIQUE (meeting_id, processing_version, order_index)`**(`013_versioned_utterance_history.sql:3-5`)
 - [ ] `verify/` 스크립트가 무조건 exit 0이 아니다
 
 ---
@@ -507,6 +507,8 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 - **`be/worker/scripts/smoke_process_meeting.py`를 실행하거나 수정하지 않는다.** 그 스크립트는 `PostgresContainer("damwha/postgres-bigm:pg16")`로 Docker를 띄우고, `testcontainers`는 `dev` 그룹이라 번들에 없다 (스펙 P0-C4). 페이로드 형태와 시드 절차만 **읽어서 참고**한다.
 - 드라이버는 `DATABASE_URL`(55432)로 접속하고 `damwha_worker`의 `run_once` 경로를 그대로 호출한다.
 - 오디오는 Task 1이 복사한 `$SANDBOX/audio/sample.flac`을 쓴다.
+- **서비스 기동·정지 책임.** Task 6의 Verify 표에 기동·정지 행이 둘 다 없어 V1이 두 런처를 스스로 부르고 아무도 내리지 않았다(verifier가 손으로 내렸다). Task 7은 시작 시점에 번들 PostgreSQL(55432)이 **정지 상태**라고 가정하고 드라이버가 직접 띄우며, **Verify 끝에 PID 파일 대상으로 내린다.** embed 서비스는 이 Task가 쓰지 않는다.
+- **DB 상태가 누적돼 있다.** Task 6이 `mtg_1`에 발화 12건을 남겼고 재시드마다 `utt_id_seq`만 오른다(회의는 title로 찾아 재사용하므로 늘지 않는다). Task 7의 모든 결과 검증은 **드라이버가 만든 meeting id로 스코프**한다 — `$EVIDENCE/t6-meeting-id.txt`(`mtg_1`)와 겹치지 않아야 한다.
 - 드라이버가 만든 `meeting` id를 `$EVIDENCE/t7-meeting-id.txt`에 남긴다. **모든 결과 검증은 이 id로 스코프한다** — Task 6이 같은 DB에 시드한 발화를 세지 않기 위해서다.
 - 드라이버는 **번들 런타임 안에서** 실행되므로 격리 대상이다 (스펙 P0-C4의 확인 환경).
 - `utterance`에 `speaker_cluster_id` 같은 컬럼은 **없다.** 화자 분리 결과는 `diar_label`에 들어간다 (`001_init.sql:72`).
@@ -732,6 +734,8 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 
 **Interfaces**
 
+- **개발자 HF 캐시 격리를 검사하는 장치가 하네스에 없다.** `snapshot-dev-assets.sh`는 docker 볼륨과 `be/storage`만 보고 `~/.cache/huggingface`는 보지 않는다. Task 6 리뷰가 `~/.cache/huggingface/.agent_harnesses.json`의 mtime이 Task 3 구간(2026-09-09 22:14)이라는 것을 찾았다 — `huggingface_hub`가 개발자 HOME 캐시에 쓴 흔적이며 `hub/` 하위 모델은 무변화다. **P0-C13이 캐시 격리를 전제하므로** Task 11은 그 디렉터리의 변경을 실측해 집계에 넣는다.
+- **pid → 역할 분류에 예외 둘이 있다.** (a) `t6-seed-dyld.txt`의 `resource_tracker` pid는 메인 이미지 줄이 stderr로 새어 첫 줄이 `libpython3.12.dylib`다 — "첫 줄 = 메인 이미지" 분류기가 그 pid에서 틀린다. (b) 커밋된 증거에는 pid→역할 표가 없다(그 표는 verifier의 `task-6-r1.md`에만 있다). 규칙 6b의 "PID 파일로 먼저 고정"은 사후에 쓸 수 없으므로 집계 시 이 둘을 명시적으로 다룬다.
 - **`<label>-stderr.txt`도 금지 문자열 검색 대상에 넣는다.** Task 5에서 서버와 자식이 같은 파이프에 동시에 써서 dyld 줄 하나가 tqdm 진행 표시줄에 붙었고(`t5-embed-stderr.txt:2`), `^dyld`를 만족하지 못해 dyld 증거가 아니라 stderr 증거로 갔다. 이번엔 번들 경로라 무해했지만 **원리상 위반 줄도 같은 방식으로 필터를 비껴갈 수 있다.**
 - **`experiments/electron-phase-0/README.md`의 Task 5 절(11번)에 사실 오류가 있다.** "dyld 줄이 전부 서버 프로세스의 것"이라고 적혔으나 실제 pid 분포는 embed `74049=916 / 74336=703`, llm `75447=901 / 75033=902`다. llm은 정확히 절반이 기동 전 `fetch_model` 자식의 것이다. **그 문장을 그대로 인용해 집계하면 수치가 틀어진다** — Task 11이 정정하고 집계에는 pid별 분포를 쓴다.
 - **`docker volume ls` 공백을 메운다.** Task 3·4가 연속으로 OrbStack API 무응답(`timeout` exit 124)에 걸려 볼륨 대조를 못 했다. 대체 증거(`be/storage` 매니페스트 무변화)와 "하네스에 볼륨 쓰기 경로가 없다"는 코드 근거는 있으나, 그대로 두면 P0-C14의 "실행하지 않은 검증을 성공으로 적지 않는다"와 부딪힌다. Task 11은 착수 시 OrbStack 복구 여부를 확인해 (a) 되면 Task 3의 before 목록(볼륨 15개)과 대조해 사후 보완하고, (b) 안 되면 **미측정으로 명시**하고 대체 증거만으로 무엇이 확인됐는지 적는다.
