@@ -239,6 +239,16 @@ Task 1에서 나왔고 수정하지 않기로 한 것들이다.
 
 ## 기술 결정과 변경 이유
 
+- 2026-09-09: **스펙 §4.1의 "금지 문자열 0건"은 우리가 빌드한 산출물에만 문자 그대로 적용한다.** Task 3이 보고한 스펙 충돌에 대한 결정이며 사용자가 승인했다.
+
+  Task 2(PostgreSQL)는 우리가 소스에서 빌드했으므로 위반 0건을 문자 그대로 달성했다. Python·ML 런타임은 우리가 빌드하지 않은 제3자 wheel 수백 개와 CPython 표준 라이브러리 **원본**으로 이뤄져 있고, 거기에는 금지 문자열이 구조적으로 들어 있다 — 독스트링(`site.py`의 `/usr/local/lib/python2.5/…`), 다른 플랫폼용 분기(torch의 Linux/Xeon·NVSHMEM 경로), wheel 배포자의 빌드 머신 경로, ctypes/dlopen 폴백 목록. **CPython 자신이 이것을 갖고 있고 3.11+에서 `site` 모듈이 동결돼 `libpython3.12.dylib`에 박히므로, 어떤 CPython 배포본을 골라도 마찬가지다.** 지우면 표준 라이브러리가 아니게 된다.
+
+  처리 방식: **재배치를 깨는 것(STALE-PATH·OTOOL-L·LC_RPATH)은 하나도 면제하지 않고 전부 고쳤다** (이동 후 201건 → 사후 처리 후 0건). 번들에서 뺄 수 있는 것(빌드 전용 트리·tkinter·pip)은 뺐다. 남은 24건만 `experiments/electron-phase-0/lib/g1-allowlist.txt`에 (상대 경로, 금지 문자열, 근거)로 분류했다. 경로를 반드시 적게 해 전역 면제를 막았고 — 같은 문자열이 다른 파일에 나오면 여전히 위반이다 — `bundle/pg`에는 한 줄도 걸리지 않는다. 매 회차 `ALLOW`로 근거와 함께 출력하므로 숨기는 것이 아니라 분류하는 것이다.
+
+  **P0-C7의 판정 기준:** "위반 0건"은 우리가 빌드한 산출물과 재배치를 깨는 모든 항목에 대해 적용한다. 제3자 원본 문자열은 "분류·근거·대체 확인"으로 처리하며, 대체 확인은 G2 dyld 실측(스펙 §4.2)과 P0-C8 런타임 자기 보고가 맡는다. 허용 목록 24건 중 **실동작 폴백 3건**(`soundfile.py`, `ctypes/macholib/dyld.py`, `PIL/_imagingft…so`)은 Task 11이 "실제로 쓰이지 않았음"을 증거로 보여야 하며, 보이지 못하면 P0-C7을 충족으로 적지 않는다. Phase 4 인계 항목이기도 하다.
+
+  스펙 문서 자체는 고치지 않는다 — 로드맵이 "확정된 날짜별 스펙·계획은 당시 결정의 기록으로 보존하고, 확정 후 설계 변경은 후속 문서에 원문 링크와 변경 이유를 남긴다"고 정했다. 이 항목이 그 기록이다.
+- 2026-09-09: **R-3은 성립하지 않았고 대신 wheel 배포자의 `LC_RPATH`가 나왔다.** R-3은 torch·mlx의 `.dylib`/`.metallib`가 빌드 시점 절대 경로를 참조할 위험이었는데, 번들 전체에서 실제 의존 경로(`LC_LOAD_DYLIB`)가 허용 접두사 밖인 것은 0건이었다. 대신 **wheel 배포자의 빌드 머신 `LC_RPATH` 58건**(scikit-learn 51, scipy 3 — Homebrew `gcc@13` 경로, torchaudio 2, Pillow 1, PyAV 1)이 나왔다. dyld의 실제 검색 경로라 실질적이며, `-delete_rpath` + `codesign -f -s -`로 해소했다. **R-9(콘솔 스크립트 shebang)는 예측대로 나타났다** — `bin/`의 65개 전부가 이동 후 `bad interpreter`로 죽었고 `mlx_lm.server`·`uvicorn`·`damwha-worker`·`damwha-embed`가 포함된다.
 - 2026-09-09: **R-2b 신설 — PostgreSQL 자체의 링크 시점 절대 `install_name`.** Task 2에서 드러났고 스펙의 위험 목록(R-1 확장·`pg_config` 절대 경로, R-2 `initdb` 시점 경로 가정)에 없는 제3의 메커니즘이다. `src/Makefile.shlib`이 공유 라이브러리에 절대 `install_name`을 박아, 번들을 옮기면 `bin/` 20개와 `lib/` 17개가 깨진다. **서버는 살고 클라이언트만 죽는 형태**라 서버만 확인하면 놓친다(`postgres`는 libpq를 링크하지 않는다). `install_name_tool -change`/`-id` + ad-hoc 재서명으로 해소되며 `pg/build.sh` 8단계에 재현 가능하게 남아 있다. **Task 8(재서명)과 Phase 3(재빌드 시 반드시 반복)에 인계한다.** R-2 자체는 성립하지 않았다 — `make_relative_path` 덕분에 존재하지 않는 prefix로 빌드해도 `initdb`와 `pg_config`가 번들 안을 찾는다.
 - 2026-09-09: **PostgreSQL 제공 방식은 소스 빌드로 결정**(P0-C12의 (1)에 해당, Task 10이 최종 확정). 배포 바이너리 두 후보가 실측으로 탈락했다 — EDB는 macOS 16.x 아카이브가 아예 없고, zonky는 `pg_config`·서버 헤더·pgxs가 없어 pg_bigm을 붙일 수단이 아카이브 안에 없다. 소스 빌드본은 21 MB로 zonky(296 MB)의 1/14이고 외부 링크 의존이 `libSystem` 하나다.
 - 2026-09-09: 검증 환경에서 **별도 macOS 사용자 계정을 쓰지 않기로** 결정. 새 계정은 `/opt/homebrew`·`/Library/Frameworks/Python.framework`(3.9·3.11 실제 설치됨)·`/usr/local/bin` 같은 머신 전역 설치물을 배제하지 못하고, 배제하는 항목(`~/.local/bin`, `~/.cache/huggingface`, 셸 설정, venv)은 이미 `env -i` + `HOME` 격리가 전부 막는다. 대신 G1의 금지 문자열 검사를 실측 목록으로 확장하고, P0-C8을 런타임 자기 보고 검증(`sys.prefix`/`sys.path`/`sysconfig`, `pg_config`/`SHOW data_directory`)으로 재정의했다. 실제 독립 설치 검증은 로드맵이 이미 Phase 6에 두고 있다.

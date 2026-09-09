@@ -726,6 +726,7 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 
 **Interfaces**
 
+- **G1 허용 목록의 실동작 폴백 3건을 증명한다.** Task 3이 `lib/g1-allowlist.txt`에 `실동작-폴백`으로 표시한 세 항목 — `soundfile.py`의 `/opt/homebrew`·`/usr/local/lib` 탐색 경로, `ctypes/macholib/dyld.py`의 `DEFAULT_LIBRARY_FALLBACK`, `PIL/_imagingft…so`의 fribidi dlopen 후보 — 은 번들 안에서 라이브러리를 못 찾을 때만 실행된다. Task 11은 dyld 실측과 P0-C8 자기 보고로 **그 경로가 실제로 쓰이지 않았음**을 보여야 한다. 보이지 못하면 P0-C7을 충족으로 적지 않는다.
 - P0-C7: `bundle/` 전체에 `check-macho.sh`를 다시 돌리고, `$EVIDENCE`의 모든 `*-dyld.txt`에서 금지 문자열을 검색한다. `MEASUREMENT_UNAVAILABLE`로 표시된 실행은 별도 집계하고 P0-C8의 자기 보고로 대체 확인한다.
 - **집계기는 dyld 줄이 0건인 것과 측정 자체가 불가능했던 것을 구분한다.** 번들 Mach-O를 실행한 항목인데 dyld 줄이 0건이면 그것은 "위반 없음"이 아니라 **런처가 re-export를 빠뜨린 미측정**이다. 위 "런처 스크립트의 dyld 실측 규칙"을 어긴 것이므로 통과로 집계하지 않는다.
 - 집계기의 금지 문자열 면제는 `$SANDBOX` 하위와 **실제로 검사한** `bundle/` 하위로 좁힌다. `bundle/` 전체를 한 번에 `$ROOT`로 잡으면 형제 번들 참조가 INFO로 흡수되므로, 형제 참조 허용 여부는 Task 3이 번들별 검사(`bundle/pg`, `bundle/python`)에서 판정한 결과를 기준으로 한다.
@@ -768,6 +769,7 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 - [ ] `MEASUREMENT_UNAVAILABLE`로 남은 dyld 항목이 각각 P0-C8의 자기 보고로 대체 확인됐거나, 안 됐다면 미충족으로 남았다
 - [ ] 번들 Mach-O를 실행했는데 dyld 줄이 0건인 항목을 통과로 집계하지 않았다 — 그것은 미측정이지 위반 없음이 아니다
 - [ ] 집계기가 dyld 증거를 `^dyld` 줄로 한정해 읽는다 — 헤더의 `# argv:` 줄을 dyld 줄로 세지 않는다 (규칙 6)
+- [ ] G1 허용 목록의 `실동작-폴백` 3건이 실제로 쓰이지 않았음이 dyld 실측·자기 보고로 확인됐다. `soundfile`이 번들 `_soundfile_data`의 libsndfile을 로드했고 `/opt/homebrew`·`/usr/local/lib`를 열지 않았음이 증거에 있다
 - [ ] `MEASUREMENT_UNAVAILABLE` 중 **Mach-O를 하나도 실행하지 않은 것**(멱등 조기 반환 등)을 "실행 없음"으로 따로 분류했다 — 미측정과 구분된다. `t2-initdb-again-dyld.txt`가 그 사례다
 - [ ] "남은 제약·후속 Phase 인계"에 스펙 §11의 4개 항목(다른 맥 독립 설치, 공증, R-12, macOS 최소 버전 실측)이 있다
 - [ ] 로드맵의 Phase 0 상태가 갱신됐고, 검증이 뒤집은 전제가 있으면 해당 Phase 설명도 고쳐졌다
