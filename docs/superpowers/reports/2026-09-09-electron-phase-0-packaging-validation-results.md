@@ -92,6 +92,20 @@ BASE 커밋: 스펙·계획 확정 커밋 `docs: Electron Phase 0 패키징 검�
 
 **확정.** 계획 실행 단계로 넘어갈 수 있다.
 
+### 3회차 — 실행 중 발견된 계획 결함 (2026-09-09)
+
+Task 1 재리뷰가 찾아냈고 메인 세션이 측정으로 확인했다. 계획을 수정했다(717줄 → 751줄).
+
+| ID | 구분 | 지적 | 근거 | 조치 |
+| --- | --- | --- | --- | --- |
+| P-11 | **차단** | SIP가 플랫폼 바이너리(`/bin/bash`, `/bin/sh`)를 exec할 때마다 환경에서 `DYLD_*`를 지운다. 계획의 Task 2 V2, Task 5 V2·V6, Task 11 V3은 전부 bash 런처를 거치므로 dyld 실측이 **0건**이 되고, 래퍼는 이를 SIP 탓(`MEASUREMENT_UNAVAILABLE`)으로 적어 원인을 잘못 귀속한다. 환경 격리(PATH·HOME) 자체는 멀쩡해서 겉으로는 통과처럼 보인다 | 메인 세션 측정 — `env -i DYLD_PRINT_LIBRARIES=1 <번들 Mach-O>` 81줄 / 같은 것을 bash 런처로 감싸면 0줄 / 런처가 exec 직전 re-export하면 81줄 | "런처 스크립트의 dyld 실측 규칙" 절 신설. 런처가 번들 Mach-O를 exec하기 직전에 `export DYLD_PRINT_LIBRARIES=1`을 다시 설정하도록 규칙화하고, Task 1의 `t1-detector-negative.sh`에 대조군 한 쌍(re-export 없음 → 0건 / 있음 → 1건 이상)을 넣어 코드로 고정. Task 2·5에 `t2-dyld-measured.sh`·`t5-dyld-measured.sh` 신설(V2b·V11) |
+| P-12 | **차단** | 런처가 비플랫폼 바이너리인데 자식 stderr를 리다이렉트하면(`pg_ctl start -l`) **런처 자신의 로드 목록**이 남는다. dyld 줄 수가 0이 아니므로 래퍼는 통과로 보는데 서버의 라이브러리는 하나도 없다 — 위반 0건짜리 가짜 증거 | Task 1 재리뷰 실측 (C 재현), 메인 세션 재확인 | 규칙 2로 stderr 리다이렉트를 금지하고 `pg_ctl start -l`을 명시적으로 배제. V2b·V11이 `dyld[<pid>]`와 PID 파일의 PID 일치를 요구하도록 해 런처 자신의 로드 목록으로는 통과하지 못하게 함 |
+| P-13 | **차단** | `run-isolated.sh`는 자식 종료까지 블로킹하고 증거도 그 뒤에 쓴다. Task 2 V2와 Task 5 V2·V6은 서버가 계속 떠 있기를 기대하면서 `exit 0`과 PID 파일 생성을 요구하므로, 서버를 래퍼 아래 포그라운드로 두면 그 행이 영영 돌아오지 않는다 | Task 1 재리뷰, `run-isolated.sh:133,175-178` | 규칙 3·4 신설 — 서버 런처의 `start`는 백그라운드 기동 후 준비 대기(`pg_isready`·`/health`·`/v1/models`)를 런처 안에서 끝내고 exit 0 한다. 준비가 끝난 시점이면 초기 로드 dyld 줄은 이미 전부 나와 캡처에 담긴다. PID 파일에는 래퍼 bash가 아니라 **서버 자신의 PID**를 쓴다 |
+| P-14 | 비차단 | Task 11 집계기가 "dyld 0건"과 "측정 불가"를 구분하지 않으면, 런처가 re-export를 빠뜨린 미측정이 위반 없음으로 집계된다. 또 `bundle/` 전체를 한 번에 `$ROOT`로 잡으면 형제 번들 참조가 INFO로 흡수돼 Task 3의 번들별 판정과 결과가 달라진다 | Task 1 재리뷰 | Task 11 Interfaces에 두 규칙을 추가하고 Review 체크리스트에 항목 신설 |
+| P-15 | 비차단 | 계획의 "스펙 §4.2 표의 11개 변수"가 오산이다. 표의 행은 10개지만 이름은 `HF_TOKEN`까지 12개다 (`MODEL_CACHE_DIR, HF_HOME` 행과 `EMBED_SERVICE_HOST/PORT` 행이 각각 이름 둘) | 스펙 §4.2 표 | 계획 2곳을 12로 정정하고 행/이름 수 차이를 본문에 명시 |
+
+**사용자 결정 (2026-09-09):** P-11의 해법으로 "런처 re-export + 회귀 대조군" 채택. exec 심 방식은 심이 다시 bash를 exec하는 순간 `DYLD_*`가 또 지워지므로 성립하지 않는다.
+
 ## 단계별 실행·리뷰
 
 | Task | 커밋 범위 | 검토자 (model) | 회차 | 차단 지적 → 조치 | 증거 | 통과 |

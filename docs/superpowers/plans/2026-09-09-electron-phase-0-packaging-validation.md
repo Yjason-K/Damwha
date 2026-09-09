@@ -46,6 +46,27 @@
 
 리뷰어는 **verify 스크립트의 내용도 diff에서 확인한다.** 무조건 exit 0인 스크립트는 차단 지적이다.
 
+## 런처 스크립트의 dyld 실측 규칙
+
+**2026-09-09 계획 수정.** Task 1 재리뷰가 찾아낸 사실이며, 측정으로 확인했다.
+
+SIP는 플랫폼 바이너리(`/bin/bash`, `/bin/sh`, `/usr/bin/python3` 등)를 **exec할 때마다** 환경에서 `DYLD_*`를 지운다. 환경 격리(`PATH`·`HOME`·화이트리스트)는 런처를 거쳐도 멀쩡하지만 **dyld 실측만 끊긴다.**
+
+| 실행 형태 | dyld 줄 |
+| --- | --- |
+| `env -i DYLD_PRINT_LIBRARIES=1 <번들 Mach-O>` | 81 |
+| `env -i DYLD_PRINT_LIBRARIES=1 <bash 런처>` → Mach-O | **0** |
+| bash 런처가 `exec` 직전 `export DYLD_PRINT_LIBRARIES=1` | 81 |
+| 런처가 자식 stderr를 `2>/dev/null` | **0** |
+
+exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 지워진다. 따라서 다음을 규칙으로 한다.
+
+1. **번들 Mach-O를 `exec`하기 직전에 런처가 `export DYLD_PRINT_LIBRARIES=1`을 다시 설정한다.** `$EXP/pg/run.sh`, `$EXP/services/embed.sh`, `$EXP/services/llm.sh`, `$EXP/lib/selfreport-all.sh`가 대상이다.
+2. **런처는 그 프로세스의 stderr를 리다이렉트하지 않는다.** `pg_ctl start -l <logfile>`처럼 stderr를 파일로 돌리면 dyld 줄이 그 파일로 새고 증거에는 **런처 자신의 로드 목록**만 남는다. 줄 수가 0이 아니므로 래퍼가 통과로 보는데 정작 서버의 라이브러리는 하나도 없는, 위반 0건짜리 가짜 증거가 된다.
+3. **서버 런처의 `start`는 서버를 백그라운드로 띄우고 준비 상태를 기다린 뒤 exit 0 한다.** `run-isolated.sh`는 자식 종료까지 블로킹하고 증거도 그 뒤에 쓰므로, 서버를 포그라운드로 두면 Verify 행이 영영 돌아오지 않는다. 준비 대기(`pg_isready`, `/health`, `/v1/models`)를 런처 안에서 끝내면 서버의 초기 로드 dyld 줄은 그때 이미 전부 나와 래퍼의 캡처에 담긴다.
+4. **PID 파일에는 서버 자신의 PID를 쓴다.** 래퍼 bash의 PID가 아니다. 증거의 `dyld[<pid>]`가 그 PID와 일치하는지 확인하는 것이 측정이 진짜인지 보는 방법이다.
+5. Task 1의 `verify/t1-detector-negative.sh`가 이 규칙을 코드로 고정한다 — re-export 없는 런처는 dyld 0건, 있는 런처는 1건 이상이어야 하며 어긋나면 exit 1.
+
 ## Task 목록과 완료 기준 대응
 
 | Task | 제목 | Tier | Spec |
@@ -84,13 +105,14 @@
 - Create: `$EXP/lib/preflight.sh` — 디스크 여유·포트 점유 확인
 - Create: `$EXP/lib/snapshot-dev-assets.sh` — 개발 자산 무변화 확인
 - Create: `$EXP/verify/t1-env-allowlist.sh`, `t1-no-dev-tools.sh`, `t1-home-isolated.sh`, `t1-detector-negative.sh`, `t1-evidence-tracked.sh`
+  - `t1-detector-negative.sh`는 정적 검사기 대조군에 더해 **런처 dyld 대조군 한 쌍**을 갖는다: re-export 없는 bash 런처 → dyld 0건, re-export 있는 bash 런처 → 1건 이상. 어긋나면 exit 1 (위 "런처 스크립트의 dyld 실측 규칙" 5)
 - Create: `$EXP/probe/deps-survey.md` — U-4 / U-5 조사 결과
 - Create: `$EXP/probe/audio-source.txt` — U-1: 복사한 회의 id와 원본 경로·크기·mtime
 
 **Interfaces**
 
 - `run-isolated.sh [--label <name>] -- <command...>`
-  - `/usr/bin/env -i`로 실행하고 스펙 §4.2 표의 11개 변수**만** 주입한다 (화이트리스트).
+  - `/usr/bin/env -i`로 실행하고 스펙 §4.2 표의 12개 변수**만** 주입한다 (화이트리스트). 표의 행은 10개지만 이름은 `HF_TOKEN`까지 12개다 — `MODEL_CACHE_DIR, HF_HOME` 행과 `EMBED_SERVICE_HOST/PORT` 행이 각각 이름 둘을 담는다.
   - `HF_TOKEN`은 `be/worker/.env`에서 읽어 주입하되 **증거에는 `set`/`unset`만 기록하고 값을 남기지 않는다.**
   - `DYLD_PRINT_LIBRARIES=1`로 한 번 더 실행해 로드된 dylib 경로를 `$EVIDENCE/<label>-dyld.txt`에 남긴다. `DYLD_*`가 무시된 것으로 판단되면 그 파일 첫 줄에 `MEASUREMENT_UNAVAILABLE`을 적는다.
   - 주입한 변수 이름과 값(비밀값 제외)을 `$EVIDENCE/<label>-env.txt`에 남긴다.
@@ -116,10 +138,10 @@
 | # | cwd | 명령 | 기대 |
 | --- | --- | --- | --- |
 | V1 | `<repo root>` | `bash experiments/electron-phase-0/lib/preflight.sh 5` | exit 0. 포트 55432·58000·58100이 `free`로 출력 |
-| V2 | `<repo root>` | `bash experiments/electron-phase-0/verify/t1-env-allowlist.sh` | exit 0. 격리 실행의 환경 변수 집합이 스펙 §4.2 표의 11개 이름과 정확히 일치하고, `VIRTUAL_ENV`·`PYTHONPATH`·`UV_*`가 없음 |
+| V2 | `<repo root>` | `bash experiments/electron-phase-0/verify/t1-env-allowlist.sh` | exit 0. 격리 실행의 환경 변수 집합이 스펙 §4.2 표의 12개 이름과 정확히 일치하고, `VIRTUAL_ENV`·`PYTHONPATH`·`UV_*`가 없음 |
 | V3 | `<repo root>` | `bash experiments/electron-phase-0/verify/t1-no-dev-tools.sh` | exit 0. 격리 안에서 `ffmpeg`·`uv`·`node`를 찾을 수 없고, `python3`은 `/usr/bin/python3`이며 `sys.prefix`가 `/Library/Frameworks/Python.framework`도 `.venv`도 아님 |
 | V4 | `<repo root>` | `bash experiments/electron-phase-0/verify/t1-home-isolated.sh` | exit 0. `$HOME`이 `experiments/electron-phase-0/sandbox/home`이고 개발자 홈의 `.cache`·`.local`이 보이지 않음 |
-| V5 | `<repo root>` | `bash experiments/electron-phase-0/verify/t1-detector-negative.sh` | exit 0. **음성 대조군** — `check-macho.sh /opt/homebrew/bin`이 위반을 실제로 검출(비정상 종료)했을 때만 통과 |
+| V5 | `<repo root>` | `bash experiments/electron-phase-0/verify/t1-detector-negative.sh` | exit 0. **음성 대조군** — (a) `check-macho.sh /opt/homebrew/bin`이 위반을 실제로 검출했고, (b) 재배치 잔존 경로 3형태(shebang·`pyvenv.cfg`·`*.pc`)가 각각 위반으로 잡히며, (c) re-export 없는 런처가 dyld 0건, 있는 런처가 1건 이상일 때만 통과 |
 | V6 | `<repo root>` | `bash experiments/electron-phase-0/lib/check-macho.sh experiments/electron-phase-0/lib` | exit 0. **양성 대조군** — 위반 없는 입력에서 오탐 없음 |
 | V7 | `<repo root>` | `bash experiments/electron-phase-0/verify/t1-evidence-tracked.sh` | exit 0. `$EVIDENCE`의 `.md`/`.txt`가 gitignore에 걸리지 않고, 디렉터리에 `.log` 파일이 없음 |
 | V8 | `<repo root>` | `grep -q 'U-4' experiments/electron-phase-0/probe/deps-survey.md && grep -q 'U-5' experiments/electron-phase-0/probe/deps-survey.md` | exit 0 |
@@ -142,6 +164,8 @@
 - [ ] 스크립트 어디에도 `pkill`·`killall`·`docker volume rm`·`docker compose down -v`가 없다 (스펙 §4.4)
 - [ ] `.gitignore`가 `$EXP` 국소 파일이며 루트 `.gitignore`를 고치지 않았다
 - [ ] U-4 결론에 근거 파일·줄이 있고, 불확실 시 포함 쪽으로 결정했다
+- [ ] README의 뒤 Task 인계 항목이 실측과 일치한다. 특히 `DYLD_*`가 자손에게 상속된다고 적혀 있지 않다 — 플랫폼 바이너리를 거치면 끊긴다 (위 "런처 스크립트의 dyld 실측 규칙")
+- [ ] `t1-detector-negative.sh`에 런처 dyld 대조군 한 쌍이 있고, 각각을 개별로 단정한다
 
 **Rollback**
 
@@ -161,13 +185,14 @@
 - Create: `$EXP/pg/build.sh` — 선택한 후보로 `$EXP/stage/pg` 구성 (pgvector·pg_bigm 포함)
 - Create: `$EXP/pg/run.sh` — `initdb` / `start` / `stop` / `kill` 서브커맨드
 - Create: `$EXP/pg/psql.sh` — 번들 psql을 55432에 붙이는 얇은 래퍼 (Verify가 반복해서 쓴다)
-- Create: `$EXP/verify/t2-extensions.sh`, `t2-migrations.sh`, `t2-restart.sh`, `t2-crash-recovery.sh`, `t2-idempotent.sh`, `t2-dev-db-untouched.sh`
+- Create: `$EXP/verify/t2-extensions.sh`, `t2-migrations.sh`, `t2-restart.sh`, `t2-crash-recovery.sh`, `t2-idempotent.sh`, `t2-dev-db-untouched.sh`, `t2-dyld-measured.sh`
 
 **Interfaces**
 
 - 스펙 §9의 PostgreSQL 후보 4종 중 하나를 고른다. 어느 경우든 `pgvector`와 `pg_bigm 1.2-20240606`은 별도 빌드가 필요하다 (`be/docker/postgres-bigm/Dockerfile`이 컨테이너 안에서 하는 일과 같다).
 - `run.sh start`는 포트 **55432**, 데이터 디렉터리 `$SANDBOX/pgdata`로 기동한다. **기존 `damwha_pgdata` 볼륨과 개발 5432 인스턴스를 건드리지 않는다.**
-- `run.sh`는 자기 PID만 `$SANDBOX/run/pg.pid`로 관리한다. 데이터 디렉터리가 이미 있으면 `initdb`를 다시 하지 않는다 (멱등, 스펙 §4.4).
+- `run.sh start`는 **백그라운드로 postgres를 띄우고 `pg_isready`로 준비를 기다린 뒤 exit 0** 한다. postgres를 `exec`하기 직전에 `export DYLD_PRINT_LIBRARIES=1`을 다시 설정하고, 그 프로세스의 stderr를 리다이렉트하지 않는다 — `pg_ctl start -l <logfile>` 금지. (위 "런처 스크립트의 dyld 실측 규칙" 1~3)
+- `run.sh`는 **postgres 자신의 PID**를 `$SANDBOX/run/pg.pid`에 쓴다. 래퍼 bash의 PID가 아니다. 데이터 디렉터리가 이미 있으면 `initdb`를 다시 하지 않는다 (멱등, 스펙 §4.4).
 - `run.sh kill`은 `$SANDBOX/run/pg.pid`의 PID에만 SIGKILL을 보낸다. 이름 기반 kill 금지.
 - 마이그레이션은 `DATABASE_URL`을 55432로 지정해 `pnpm be:migrate`로 적용한다. **이 명령은 스펙 §4.0에 따라 격리 대상 밖**이며, 증거에 그렇게 표시한다. (`dotenv`는 이미 설정된 `process.env`를 덮어쓰지 않으므로 `be/.env`의 값이 아니라 주입한 값이 쓰인다 — V2가 그것을 확인한다.)
 
@@ -186,7 +211,8 @@
 | # | cwd | 명령 | 기대 |
 | --- | --- | --- | --- |
 | V1 | `<repo root>` | `bash experiments/electron-phase-0/lib/check-macho.sh experiments/electron-phase-0/bundle/pg` | exit 0. 재배치 후 위반 0건 |
-| V2 | `<repo root>` | `bash experiments/electron-phase-0/lib/run-isolated.sh --label t2-start -- experiments/electron-phase-0/pg/run.sh start` | exit 0. `$SANDBOX/run/pg.pid` 생성 |
+| V2 | `<repo root>` | `bash experiments/electron-phase-0/lib/run-isolated.sh --label t2-start -- experiments/electron-phase-0/pg/run.sh start` | exit 0. `$SANDBOX/run/pg.pid` 생성. 래퍼가 블로킹하지 않고 돌아온다 |
+| V2b | `<repo root>` | `bash experiments/electron-phase-0/verify/t2-dyld-measured.sh` | exit 0. `$EVIDENCE/t2-start-dyld.txt`에 dyld 줄 1건 이상이고, 그 `dyld[<pid>]`의 pid가 `pg.pid`의 PID와 일치하며, `MEASUREMENT_UNAVAILABLE`이 아니다 |
 | V3 | `<repo root>` | `bash experiments/electron-phase-0/verify/t2-extensions.sh` | exit 0. `pg_extension`에 `vector`와 `pg_bigm`(버전 `1.2`)이 모두 존재 |
 | V4 | `<repo root>` | `DATABASE_URL=postgresql://postgres@127.0.0.1:55432/damwha pnpm be:migrate` | exit 0 |
 | V5 | `<repo root>` | `bash experiments/electron-phase-0/verify/t2-migrations.sh` | exit 0. 55432의 `_migrations` 행 수가 `be/src/database/migrations/*.sql` 파일 수(24)와 같음 |
@@ -205,6 +231,7 @@
 - [ ] 마이그레이션이 `pnpm be:migrate`로 적용됐다 — `.sql` 직접 실행이 아니다 (`_migrations` 계약, 스펙 §4.0)
 - [ ] V4가 실제로 55432에 적용됐음이 V5로 확인된다 (개발 DB가 아니다)
 - [ ] `run.sh kill`이 PID 파일 대상이다 — `pkill postgres` 같은 이름 기반 kill이 없다
+- [ ] `run.sh`가 postgres exec 직전에 `DYLD_PRINT_LIBRARIES`를 다시 export하고 stderr를 리다이렉트하지 않는다. `pg.pid`에 postgres 자신의 PID가 들어간다 (V2b가 그것을 증명)
 - [ ] 스테이징 경로가 아니라 **옮긴 뒤의 경로**(`bundle/pg`)에서 V2~V8이 수행됐다 — 재배치 검증이 실제로 이뤄졌다
 - [ ] `install_name_tool` 등 사후 처리를 했다면 `build.sh`에 남아 재현 가능하다
 - [ ] 스펙 P0-C1의 "SIGKILL 후 재기동" 조건이 V7로 존재한다
@@ -328,13 +355,14 @@
 
 - Create: `$EXP/services/embed.sh` — 번들 런타임으로 embed 서비스를 58100에 기동/종료
 - Create: `$EXP/services/llm.sh` — 번들 `mlx_lm.server`를 58000에 기동/종료
-- Create: `$EXP/verify/t5-embed-health.sh`, `t5-embed-vector.sh`, `t5-embed-stop.sh`, `t5-llm-models.sh`, `t5-llm-completion.sh`, `t5-llm-stop.sh`, `t5-bundle-paths.sh`
+- Create: `$EXP/verify/t5-embed-health.sh`, `t5-embed-vector.sh`, `t5-embed-stop.sh`, `t5-llm-models.sh`, `t5-llm-completion.sh`, `t5-llm-stop.sh`, `t5-bundle-paths.sh`, `t5-dyld-measured.sh`
 
 **Interfaces**
 
 - embed 서비스는 `damwha_worker.embed_service`를 **58100**으로 띄운다 (개발 8100과 분리).
 - `mlx_lm.server`는 **58000**에서 `mlx-community/Qwen3.5-4B-8bit`로 띄운다 (개발 8000과 분리).
-- 둘 다 자기 PID만 `$SANDBOX/run/{embed,llm}.pid`로 관리하고 SIGTERM으로 내린다. 이름 기반 kill 금지.
+- 둘 다 **서버 자신의 PID**를 `$SANDBOX/run/{embed,llm}.pid`에 쓰고 SIGTERM으로 내린다. 래퍼 bash의 PID가 아니다. 이름 기반 kill 금지.
+- 두 `start` 모두 서버를 **백그라운드로 띄우고 준비(`/health`, `/v1/models`)를 기다린 뒤 exit 0** 한다. 서버 프로세스를 `exec`하기 직전에 `export DYLD_PRINT_LIBRARIES=1`을 다시 설정하고 stderr를 리다이렉트하지 않는다 (위 "런처 스크립트의 dyld 실측 규칙" 1~4).
 - `llm.sh start`는 실행한 바이너리의 절대 경로를 `$EVIDENCE/t5-llm-binpath.txt`에 기록한다.
 - 모델은 샌드박스 `HOME` 아래 캐시에 받는다 — 개발자 `~/.cache/huggingface`를 쓰지 않는다.
 
@@ -350,15 +378,16 @@
 | # | cwd | 명령 | 기대 |
 | --- | --- | --- | --- |
 | V1 | `<repo root>` | `bash experiments/electron-phase-0/lib/preflight.sh 10` | exit 0 |
-| V2 | `<repo root>` | `bash experiments/electron-phase-0/lib/run-isolated.sh --label t5-embed -- experiments/electron-phase-0/services/embed.sh start` | exit 0 |
+| V2 | `<repo root>` | `bash experiments/electron-phase-0/lib/run-isolated.sh --label t5-embed -- experiments/electron-phase-0/services/embed.sh start` | exit 0. 래퍼가 블로킹하지 않고 돌아온다 |
 | V3 | `<repo root>` | `bash experiments/electron-phase-0/verify/t5-embed-health.sh` | exit 0. `GET /health`가 `{"status":"ok"}` |
 | V4 | `<repo root>` | `bash experiments/electron-phase-0/verify/t5-embed-vector.sh` | exit 0. `POST /embed`가 `model=BAAI/bge-m3`, `dimension=1024`, 벡터 1개, 길이 1024 |
 | V5 | `<repo root>` | `bash experiments/electron-phase-0/verify/t5-embed-stop.sh` | exit 0. `embed.sh stop` 후 58100이 응답하지 않음 |
-| V6 | `<repo root>` | `bash experiments/electron-phase-0/lib/run-isolated.sh --label t5-llm -- experiments/electron-phase-0/services/llm.sh start` | exit 0 |
+| V6 | `<repo root>` | `bash experiments/electron-phase-0/lib/run-isolated.sh --label t5-llm -- experiments/electron-phase-0/services/llm.sh start` | exit 0. 래퍼가 블로킹하지 않고 돌아온다 |
 | V7 | `<repo root>` | `bash experiments/electron-phase-0/verify/t5-llm-models.sh` | exit 0. `GET /v1/models` 응답에 `Qwen3.5-4B-8bit` 포함 |
 | V8 | `<repo root>` | `bash experiments/electron-phase-0/verify/t5-llm-completion.sh` | exit 0. `POST /v1/chat/completions`가 `choices` 1건을 반환 |
 | V9 | `<repo root>` | `bash experiments/electron-phase-0/verify/t5-llm-stop.sh` | exit 0. SIGTERM 후 58000이 응답하지 않음 |
 | V10 | `<repo root>` | `bash experiments/electron-phase-0/verify/t5-bundle-paths.sh` | exit 0. `t5-llm-binpath.txt`가 `bundle/python` 하위 경로이고 `/Users/gim-yeongjae/.local`이 아니며, dyld 증거에 개발자 HF 캐시가 0건 |
+| V11 | `<repo root>` | `bash experiments/electron-phase-0/verify/t5-dyld-measured.sh` | exit 0. `t5-embed-dyld.txt`·`t5-llm-dyld.txt` 각각 dyld 줄 1건 이상이고 `dyld[<pid>]`가 해당 PID 파일의 PID와 일치하며 `MEASUREMENT_UNAVAILABLE`이 아니다 |
 
 **Review**
 
@@ -366,6 +395,7 @@
 - [ ] `mlx_lm.server`가 번들 안 실행 파일이다 (V10) — `~/.local/bin/mlx_lm.server`가 아니다
 - [ ] 모델이 샌드박스 `HOME` 캐시에 받아졌다 (V10)
 - [ ] 두 서비스 모두 PID 파일 대상으로만 종료하고 이름 기반 kill이 없다
+- [ ] 두 런처가 서버 exec 직전에 `DYLD_PRINT_LIBRARIES`를 다시 export하고 stderr를 리다이렉트하지 않으며, PID 파일에 서버 자신의 PID를 쓴다 (V11이 그것을 증명)
 - [ ] 스펙 P0-C5b의 "SIGTERM에 종료된다" 조건이 V9로 확인된다
 - [ ] `embed_service`의 `dimension`이 1024이고 `be/worker/.env`의 `SEARCH_EMBEDDING_DIM`과 일치한다
 - [ ] `verify/` 스크립트가 무조건 exit 0이 아니다
@@ -657,7 +687,7 @@
 **Files**
 
 - Create: `$EXP/lib/aggregate-isolation.sh` — 전 Task의 증거를 훑어 금지 문자열·`MEASUREMENT_UNAVAILABLE` 집계
-- Create: `$EXP/lib/selfreport-all.sh` — Python·PostgreSQL·ffmpeg의 런타임 자기 보고 통합 덤프 (P0-C8)
+- Create: `$EXP/lib/selfreport-all.sh` — Python·PostgreSQL·ffmpeg의 런타임 자기 보고 통합 덤프 (P0-C8). 각 번들 Mach-O를 부르기 직전에 `export DYLD_PRINT_LIBRARIES=1`을 다시 설정하고 stderr를 리다이렉트하지 않는다 (위 "런처 스크립트의 dyld 실측 규칙")
 - Create: `$EXP/verify/t11-isolation.sh`, `t11-selfreport.sh`, `t11-criteria-recorded.sh`, `t11-roadmap-updated.sh`, `t11-evidence-committed.sh`, `t11-dev-untouched.sh`
 - Modify: `docs/superpowers/reports/2026-09-09-electron-phase-0-packaging-validation-results.md` — 최종 검증·남은 제약·기술 결정 채우기
 - Modify: `docs/electron-migration-roadmap.md` — Phase 0 상태와 후속 Phase에 영향을 주는 전제 갱신
@@ -665,6 +695,8 @@
 **Interfaces**
 
 - P0-C7: `bundle/` 전체에 `check-macho.sh`를 다시 돌리고, `$EVIDENCE`의 모든 `*-dyld.txt`에서 금지 문자열을 검색한다. `MEASUREMENT_UNAVAILABLE`로 표시된 실행은 별도 집계하고 P0-C8의 자기 보고로 대체 확인한다.
+- **집계기는 dyld 줄이 0건인 것과 측정 자체가 불가능했던 것을 구분한다.** 번들 Mach-O를 실행한 항목인데 dyld 줄이 0건이면 그것은 "위반 없음"이 아니라 **런처가 re-export를 빠뜨린 미측정**이다. 위 "런처 스크립트의 dyld 실측 규칙"을 어긴 것이므로 통과로 집계하지 않는다.
+- 집계기의 금지 문자열 면제는 `$SANDBOX` 하위와 **실제로 검사한** `bundle/` 하위로 좁힌다. `bundle/` 전체를 한 번에 `$ROOT`로 잡으면 형제 번들 참조가 INFO로 흡수되므로, 형제 참조 허용 여부는 Task 3이 번들별 검사(`bundle/pg`, `bundle/python`)에서 판정한 결과를 기준으로 한다.
 - P0-C8: Python(`sys.prefix`/`sys.path`/`sysconfig`/모듈 `__file__`), PostgreSQL(`pg_config --bindir --libdir --sharedir --pkglibdir`, `SHOW data_directory`, `SHOW dynamic_library_path`), ffmpeg/ffprobe(실행 경로)를 한 번에 덤프해 번들 밖 경로가 0건인지 확인한다.
 - 결과 문서의 "최종 검증" 표는 **15개 완료 기준 전부**(P0-C1 ~ C14 + C5b)에 대해 확인 방법·증거 경로·충족 여부를 갖는다. 실행하지 않은 검증을 성공으로 적지 않는다.
 - 로드맵 갱신은 Phase 0 절의 상태 문구와 결과 문서 링크를 포함한다. 검증이 뒤집은 전제가 있으면 해당 Phase 설명도 고친다.
@@ -702,6 +734,7 @@
 - [ ] 15개 완료 기준 전부가 결과 문서 "최종 검증" 표에 있고, 각 행이 확인 방법·증거 경로·충족 여부를 갖는다
 - [ ] **실행하지 않은 검증이 성공으로 적히지 않았다.** 미충족·측정불가·산정 항목이 그대로 표시된다
 - [ ] `MEASUREMENT_UNAVAILABLE`로 남은 dyld 항목이 각각 P0-C8의 자기 보고로 대체 확인됐거나, 안 됐다면 미충족으로 남았다
+- [ ] 번들 Mach-O를 실행했는데 dyld 줄이 0건인 항목을 통과로 집계하지 않았다 — 그것은 미측정이지 위반 없음이 아니다
 - [ ] "남은 제약·후속 Phase 인계"에 스펙 §11의 4개 항목(다른 맥 독립 설치, 공증, R-12, macOS 최소 버전 실측)이 있다
 - [ ] 로드맵의 Phase 0 상태가 갱신됐고, 검증이 뒤집은 전제가 있으면 해당 Phase 설명도 고쳐졌다
 - [ ] 제품 코드가 Phase 전체에서 한 줄도 바뀌지 않았다 (V9)
