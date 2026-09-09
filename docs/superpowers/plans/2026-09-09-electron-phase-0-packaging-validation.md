@@ -458,7 +458,9 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 - 시드 임베딩과 질의 벡터 모두 Task 5의 58100 embed 서비스가 만든다. 손으로 만든 난수·상수 벡터를 쓰지 않는다 — 그러면 `sem` 경로가 실제로 동작하는지 확인되지 않는다.
 - `utterance_embedding`의 `model='BAAI/bge-m3'`, `dimension=1024`.
 - 시드하는 `meeting`의 id를 `$EVIDENCE/t6-meeting-id.txt`에 남긴다. Task 7이 자기 회의와 구분하는 데 쓴다.
-- `utterance`의 실제 컬럼은 `meeting_id`·`speaker_id`·`diar_label`·`start_ms`·`end_ms`·`text`·`status`·`order_index`·`processing_version`이다 (`001_init.sql`). `status` 체크 제약은 `ok`/`silence`/`transcribe_failed`이고 `UNIQUE (meeting_id, order_index)`가 있다.
+- `utterance`의 실제 컬럼은 `meeting_id`·`speaker_id`·`diar_label`·`start_ms`·`end_ms`·`text`·`confidence`·`status`·`order_index`·`processing_version`·`job_id`이다 (`001_init.sql:67-84`). `status` 체크 제약은 `ok`/`silence`/`transcribe_failed`다.
+- **UNIQUE 제약은 `001_init.sql`의 것이 아니다.** `013_versioned_utterance_history.sql:3-5`가 `utterance_meeting_id_order_index_key`를 떨어뜨리고 **`UNIQUE (meeting_id, processing_version, order_index)`** 로 바꿨다 — 재처리가 이전 발화 행을 남겨 렌즈 증거를 살리기 위해서다. 시드가 이 제약을 기준으로 해야 한다.
+- **V1이 두 서비스를 스스로 띄운다.** 계획 Verify 표에 Task 2 V2·Task 5 V2에 해당하는 기동 행이 없으므로, `seed_search.py`가 `pg/run.sh`·`services/embed.sh`를 직접 부른다. 그 결과 `t6-seed-dyld.txt`에 서버 pid가 섞이므로 **Task 11 집계는 pid별로 갈라야 한다.**
 
 **Steps**
 
