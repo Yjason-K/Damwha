@@ -14,8 +14,15 @@ export type {
   Device,
   WhisperModel,
   SummaryModel,
+  SttLanguage,
 } from "@damwha/contracts";
-import type { PresetName, Device, WhisperModel, SummaryModel } from "@damwha/contracts";
+import type {
+  PresetName,
+  Device,
+  WhisperModel,
+  SummaryModel,
+  SttLanguage,
+} from "@damwha/contracts";
 
 /** GET /settings/processing — 항상 resolved 뷰. */
 export type ProcessingConfig = {
@@ -27,12 +34,16 @@ export type ProcessingConfig = {
   summary_model: SummaryModel;
 };
 
-/** PUT /settings/processing — 이름 프리셋은 이름+언어만, custom은 전 필드. */
+/**
+ * PUT /settings/processing — 이름 프리셋은 이름+언어만, custom은 전 필드.
+ * language가 `SttLanguage`인 건 쓰기 경로라서다 — 위 `ProcessingConfig`는 카탈로그
+ * 도입 전 저장값을 그대로 돌려받을 수 있어 `string`으로 남는다(BE와 같은 비대칭).
+ */
 export type ProcessingSettingsUpdate =
-  | { preset: PresetName; language: string }
+  | { preset: PresetName; language: SttLanguage }
   | {
       preset: "custom";
-      language: string;
+      language: SttLanguage;
       whisper_model: WhisperModel;
       devices: { diarization: Device; stt: Device };
       summary_model: SummaryModel;
@@ -47,7 +58,7 @@ export type ProcessingOverride = {
   preset?: PresetName;
   whisper_model?: WhisperModel;
   devices?: { diarization?: Device; stt?: Device };
-  language?: string;
+  language?: SttLanguage;
   summary_model?: SummaryModel;
 };
 

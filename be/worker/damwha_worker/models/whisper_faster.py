@@ -6,7 +6,7 @@ preset's cpu STT stays available there; kept for CUDA portability too.
 """
 
 from ..pipeline.stt_repetition import drop_repetition_loops
-from .base import ProgressFn, SpeechSpan, Word
+from .base import ProgressFn, SpeechSpan, Word, whisper_language
 
 # 환각 방어(스펙 §1.3) — whisper_mlx.py와 동일 값 유지 (백엔드 간 동작 일치)
 _CONDITION_ON_PREVIOUS_TEXT = False
@@ -67,9 +67,11 @@ class FasterWhisper:
             extra["clip_timestamps"] = [
                 t for s in speech_spans for t in (s.start_ms / 1000, s.end_ms / 1000)
             ]
+        # 'auto' → None. faster-whisper는 한 호출 안에서 스스로 한 번만 감지하므로
+        # mlx 쪽의 재사용 배선이 필요 없다.
         segments, _info = self._model.transcribe(
             wav_path,
-            language=language,
+            language=whisper_language(language),
             word_timestamps=True,
             condition_on_previous_text=_CONDITION_ON_PREVIOUS_TEXT,
             hallucination_silence_threshold=_HALLUCINATION_SILENCE_S,

@@ -59,4 +59,13 @@ describe('resolveProcessingConfig', () => {
   it('스키마: 목록 밖 summary_model 거부', () => {
     expect(ProcessingOverrideSchema.safeParse({ summary_model: 'gpt-9' }).success).toBe(false);
   });
+
+  it('스키마: 목록 밖 language 거부 — job 오버라이드도 쓰기 경로다', () => {
+    expect(ProcessingOverrideSchema.safeParse({ language: 'kor' }).success).toBe(false);
+  });
+
+  it('스키마: 카탈로그 language 허용 (auto 포함)', () => {
+    expect(ProcessingOverrideSchema.safeParse({ language: 'en' }).success).toBe(true);
+    expect(ProcessingOverrideSchema.safeParse({ language: 'auto' }).success).toBe(true);
+  });
 });

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { STT_LANGUAGES } from '@damwha/contracts';
 import { DeviceSchema, WHISPER_MODELS } from '../contracts/job-payload.schema';
 import { SUMMARY_MODELS } from '../contracts/model-catalog';
 import { loadEnv } from '../config/env';
@@ -6,24 +7,32 @@ import { ProcessingConfig, resolvePreset } from './presets';
 import { Logger } from '@nestjs/common';
 
 const log = new Logger('ProcessingConfig');
-const languageSchema = z.string().trim().min(1);
+
+// 언어는 읽기와 쓰기가 비대칭이다. 쓰기는 카탈로그로 조인다 — 이 필드는 예전에
+// FE의 자유 텍스트 입력이었고, `kor`/`한국어` 같은 값이 검증 없이 whisper까지
+// 그대로 흘러 조용히 엉뚱하게 디코딩됐다. 읽기는 계속 자유 문자열이다: 조이기
+// 전에 저장된 행과 env `STT_LANGUAGE`(자유값)를 400/파싱 실패로 만들지 않는다.
+const storedLanguageSchema = z.string().trim().min(1);
+const putLanguageSchema = z.enum(STT_LANGUAGES);
+
 const devicesSchema = z.object({ diarization: DeviceSchema, stt: DeviceSchema }).strict();
-const namedPresetSchema = z.object({
-  preset: z.enum(['light', 'standard', 'quality']),
-  language: languageSchema,
-}).strict();
+const namedPresetSchema = (language: z.ZodTypeAny) =>
+  z.object({
+    preset: z.enum(['light', 'standard', 'quality']),
+    language,
+  }).strict();
 
 // 읽기(저장값 파싱) — summary_model은 optional. 이 필드가 없던 시절에 저장된
 // custom 행이 있고, 그 행들의 실제 이전 동작은 env 값이었다 (spec §2).
 export const StoredProcessingValueSchema = z.union([
   z.object({
     preset: z.literal('custom'),
-    language: languageSchema,
+    language: storedLanguageSchema,
     whisper_model: z.enum(WHISPER_MODELS),
     devices: devicesSchema,
     summary_model: z.enum(SUMMARY_MODELS).optional(),
   }).strict(),
-  namedPresetSchema,
+  namedPresetSchema(storedLanguageSchema),
 ]);
 export type StoredProcessingValue = z.infer<typeof StoredProcessingValueSchema>;
 
@@ -31,12 +40,12 @@ export type StoredProcessingValue = z.infer<typeof StoredProcessingValueSchema>;
 export const PutProcessingValueSchema = z.union([
   z.object({
     preset: z.literal('custom'),
-    language: languageSchema,
+    language: putLanguageSchema,
     whisper_model: z.enum(WHISPER_MODELS),
     devices: devicesSchema,
     summary_model: z.enum(SUMMARY_MODELS),
   }).strict(),
-  namedPresetSchema,
+  namedPresetSchema(putLanguageSchema),
 ]);
 export type PutProcessingValue = z.infer<typeof PutProcessingValueSchema>;
 

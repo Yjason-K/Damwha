@@ -4,7 +4,6 @@ import { isDemoBlocked } from "@/shared/api/demo-read-only";
 import { isApiError } from "@/shared/api/client";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
-import { Input } from "@/shared/ui/input";
 import {
   Select,
   SelectContent,
@@ -30,9 +29,11 @@ import type {
 } from "../api/types";
 import {
   deviceSummary,
+  isSttLanguage,
   PRESET_META,
   PRESET_META_REVISION,
   PRESET_ORDER,
+  sttLanguageOptions,
   SUMMARY_MODEL_OPTIONS,
   WHISPER_MODEL_OPTIONS,
 } from "../lib/presets";
@@ -178,16 +179,18 @@ export function ProcessingSettingsForm() {
   };
 
   const handleSave = () => {
+    // 버튼이 이미 막혀 있다 — 타입을 좁히기 위한 방어.
+    if (!isSttLanguage(form.language)) return;
     const body =
       form.preset === "custom"
         ? {
             preset: "custom" as const,
-            language: form.language.trim(),
+            language: form.language,
             whisper_model: form.whisper_model,
             devices: form.devices,
             summary_model: form.summary_model,
           }
-        : { preset: form.preset, language: form.language.trim() };
+        : { preset: form.preset, language: form.language };
     update.mutate(body, {
       onSuccess: (resolved) => {
         setForm(fromConfig(resolved));
@@ -333,11 +336,30 @@ export function ProcessingSettingsForm() {
               }
             />
 
-            <Input
-              label="전사 언어"
-              value={form.language}
-              onChange={(e) => setKnob({ language: e.target.value })}
-            />
+            <div className="flex flex-col gap-1.5">
+              <span className="text-sm font-medium text-[color:var(--text-secondary)]">
+                전사 언어
+              </span>
+              <Select
+                value={form.language}
+                onValueChange={(v) => setKnob({ language: v })}
+              >
+                <SelectTrigger aria-label="전사 언어">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {sttLanguageOptions(form.language).map((o) => (
+                    <SelectItem key={o.value} value={o.value}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-[color:var(--text-muted)]">
+                한 녹음에 적용되는 언어는 하나예요. 한국어 문장에 섞인 영어
+                단어는 “한국어”로도 그대로 전사돼요.
+              </p>
+            </div>
           </div>
         )}
       </div>
@@ -347,11 +369,18 @@ export function ProcessingSettingsForm() {
         있어요.
       </p>
 
+      {!isSttLanguage(form.language) && (
+        <p className="text-xs text-[color:var(--red-text)]">
+          저장된 전사 언어({form.language})가 목록에 없는 값이에요. 고급 설정을
+          열어 목록에서 언어를 골라주세요.
+        </p>
+      )}
+
       <div>
         <Button
           onClick={handleSave}
           loading={update.isPending}
-          disabled={update.isPending || !form.language.trim()}
+          disabled={update.isPending || !isSttLanguage(form.language)}
         >
           저장
         </Button>

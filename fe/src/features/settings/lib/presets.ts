@@ -1,7 +1,12 @@
-import { SUMMARY_MODELS, WHISPER_MODELS } from "@damwha/contracts";
+import {
+  STT_LANGUAGES,
+  SUMMARY_MODELS,
+  WHISPER_MODELS,
+} from "@damwha/contracts";
 import type {
   Device,
   PresetName,
+  SttLanguage,
   SummaryModel,
   WhisperModel,
 } from "../api/types";
@@ -68,7 +73,10 @@ const WHISPER_MODEL_LABELS: Record<WhisperModel, string> = {
 };
 
 export const WHISPER_MODEL_OPTIONS: { value: WhisperModel; label: string }[] =
-  WHISPER_MODELS.map((value) => ({ value, label: WHISPER_MODEL_LABELS[value] }));
+  WHISPER_MODELS.map((value) => ({
+    value,
+    label: WHISPER_MODEL_LABELS[value],
+  }));
 
 const SUMMARY_MODEL_LABELS: Record<SummaryModel, string> = {
   "mlx-community/Qwen3.5-4B-8bit": "qwen3.5 4B — 가장 빠름, 8GB 램",
@@ -77,7 +85,40 @@ const SUMMARY_MODEL_LABELS: Record<SummaryModel, string> = {
 };
 
 export const SUMMARY_MODEL_OPTIONS: { value: SummaryModel; label: string }[] =
-  SUMMARY_MODELS.map((value) => ({ value, label: SUMMARY_MODEL_LABELS[value] }));
+  SUMMARY_MODELS.map((value) => ({
+    value,
+    label: SUMMARY_MODEL_LABELS[value],
+  }));
+
+const STT_LANGUAGE_LABELS: Record<SttLanguage, string> = {
+  auto: "자동 감지",
+  ko: "한국어",
+  en: "영어",
+  ja: "일본어",
+  zh: "중국어",
+};
+
+export const STT_LANGUAGE_OPTIONS: { value: string; label: string }[] =
+  STT_LANGUAGES.map((value) => ({ value, label: STT_LANGUAGE_LABELS[value] }));
+
+export function isSttLanguage(value: string): value is SttLanguage {
+  return (STT_LANGUAGES as readonly string[]).includes(value);
+}
+
+/**
+ * 저장된 값이 카탈로그 밖이면 그 값을 목록 끝에 얹는다. 서버는 읽기만 관대하고
+ * 쓰기는 카탈로그로 조이는데(BE `processing-config.ts`), 얹지 않으면 셀렉트가
+ * 빈칸으로 보여 사용자가 무엇이 걸려 있는지 모른 채 다른 언어로 덮어쓰게 된다.
+ */
+export function sttLanguageOptions(
+  current: string,
+): { value: string; label: string }[] {
+  if (isSttLanguage(current)) return STT_LANGUAGE_OPTIONS;
+  return [
+    ...STT_LANGUAGE_OPTIONS,
+    { value: current, label: `${current} — 목록에 없는 값` },
+  ];
+}
 
 /** 디바이스 요약 문자열 — 카드/고급 요약에 사용. */
 export function deviceSummary(devices: {

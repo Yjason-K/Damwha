@@ -8,7 +8,7 @@ reserved knob for splitting very long files in a future pass.
 """
 
 from ..pipeline.stt_repetition import drop_repetition_loops
-from .base import ProgressFn, SpeechSpan, Word
+from .base import ProgressFn, SpeechSpan, Word, whisper_language
 
 # 환각 방어(스펙 §1.3): 창 간 오류 전파(반복 루프) 차단 + 2초+ 무음 구간의 환각 의심
 # 단어 제거. word_timestamps=True가 전제. 값 변경 = 코드 변경(payload 재현성).
@@ -66,16 +66,27 @@ class MlxWhisper:
         # 배열 입력에서도 같은 '초 단위 절대 시각'으로 해석된다.
         audio = mx.array(load_audio(wav_path))
 
+        # 'auto'는 language를 비워 mlx_whisper가 감지하게 한다. 단 감지는 호출마다
+        # 다시 일어나고(앞 30초로 매번), 아래 루프는 clip마다 개별 호출한다 — 그대로
+        # 두면 인코더 forward가 clip 수만큼 반복된다(73-clip 파일이면 73회). 첫 호출이
+        # 돌려준 언어를 이후 호출에 넘겨 감지를 1회로 묶는다. 감지 대상은 어차피 파일
+        # 앞 30초라 clip마다 다시 감지해도 같은 답이 나온다.
+        lang = whisper_language(language)
+
         def _run(**extra) -> dict:
-            return mlx_whisper.transcribe(
+            nonlocal lang
+            result = mlx_whisper.transcribe(
                 audio,
                 path_or_hf_repo=self._repo,
-                language=language,
+                language=lang,
                 word_timestamps=True,
                 condition_on_previous_text=_CONDITION_ON_PREVIOUS_TEXT,
                 hallucination_silence_threshold=_HALLUCINATION_SILENCE_S,
                 **extra,
             )
+            if lang is None:
+                lang = result.get("language")
+            return result
 
         if speech_spans:
             # 발화 구간만 디코딩하되 clip마다 개별 호출한다. 다수 clip을 한 번에 넘기면

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { BadRequestException } from '@nestjs/common';
+import { STT_LANGUAGES } from '@damwha/contracts';
 import { DeviceSchema, WHISPER_MODELS } from '../contracts/job-payload.schema';
 import { SUMMARY_MODELS } from '../contracts/model-catalog';
 import { ProcessingConfig, resolvePreset } from './presets';
@@ -13,7 +14,8 @@ export const ProcessingOverrideSchema = z.object({
     .refine((d) => d.diarization !== undefined || d.stt !== undefined,
             'devices must set diarization or stt')
     .optional(),
-  language: z.string().trim().min(1).optional(),
+  // 쓰기 경로 — PUT과 같은 카탈로그로 조인다 (processing-config.ts의 비대칭 주석 참고)
+  language: z.enum(STT_LANGUAGES).optional(),
   summary_model: z.enum(SUMMARY_MODELS).optional(),
 }).strict();
 export type ProcessingOverride = z.infer<typeof ProcessingOverrideSchema>;

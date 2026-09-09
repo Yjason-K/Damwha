@@ -45,3 +45,17 @@ export type PresetName = (typeof PRESET_NAMES)[number];
 /** Per-stage device request. `gpu` never falls back to `cpu` — see be/CLAUDE.md. */
 export const DEVICES = ['cpu', 'gpu'] as const;
 export type Device = (typeof DEVICES)[number];
+
+/**
+ * 전사 언어. Whisper는 디코딩 시작 토큰으로 언어를 **하나만** 받는다 — 목록을
+ * 넘길 방법이 없어서 다중 선택은 이 계약에 존재하지 않는다. 문장 안에 영어
+ * 단어가 섞이는 한국어(code-switching)는 `ko` 하나로 이미 전사된다.
+ *
+ * `auto`는 언어를 비워 whisper가 감지하게 하는 값이다(파일당 1개로 확정).
+ * 워커가 `None`으로 변환한다 — `be/worker/damwha_worker/models/base.py`.
+ *
+ * 이 목록은 **쓰기 경로에서만** 강제된다. 읽기(저장된 행 / env `STT_LANGUAGE`)는
+ * 자유 문자열을 계속 허용한다 — 목록을 도입하기 전에 저장된 값이 있기 때문.
+ */
+export const STT_LANGUAGES = ['auto', 'ko', 'en', 'ja', 'zh'] as const;
+export type SttLanguage = (typeof STT_LANGUAGES)[number];
