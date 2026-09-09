@@ -1,5 +1,5 @@
 # Task 5 — mlx_lm 모델을 샌드박스 HF 캐시로 받은 기록 (스펙 P0-C5b, §4.4)
-# utc: 2026-09-09T14:16:30Z
+# utc: 2026-09-09T14:25:27Z
 # 실행: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12 /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/services/fetch_model.py mlx-community/Qwen3.5-4B-8bit   (격리 대상 — run-isolated.sh 안에서 돈다)
 # 다운로드 경로는 mlx_lm.utils._download 이며 서버가 쓰는 것과 같다.
 # elapsed_seconds는 이미 받아 둔 파일이 있으면 그만큼 짧아진다 —
@@ -11,5 +11,5 @@ snapshot_path  : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments
 files          : 10
 bytes          : 5163524489
 mib            : 4924.3
-elapsed_seconds: 57.6
+elapsed_seconds: 0.3
 downloader     : mlx_lm.utils._download (mlx-lm이 서버에서 쓰는 경로)

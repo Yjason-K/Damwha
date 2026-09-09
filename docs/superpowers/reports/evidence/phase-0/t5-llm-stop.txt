@@ -1,14 +1,14 @@
 # Task 5 V9 — llm.sh stop = PID 파일 대상 SIGTERM (스펙 P0-C5b)
-# utc: 2026-09-09T14:17:05Z
+# utc: 2026-09-09T14:25:43Z
 # 격리 대상: 아니오 — stop은 번들 바이너리를 실행하지 않고 SIGTERM만
 #            보낸다 (스펙 §4.0)
-# 대상 pid: 75447
+# 대상 pid: 78727
 # stop exit: 0
 # SIGKILL로 올리지 않는다 — 그러면 SIGTERM이 통했는지가 사라진다.
 
-SIGTERM: pid 75447
+SIGTERM: pid 78727
 종료 확인 (SIGTERM 1s 안에 내려갔다)
 
-종료 후 kill -0 75447: no
+종료 후 kill -0 78727: no
 종료 후 GET /v1/models curl exit: 7 (응답: curl: (7) Failed to connect to 127.0.0.1 port 58000 after 0 ms: Couldn't connect to server)
 종료 후 58000 LISTEN pid: 없음

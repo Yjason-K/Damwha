@@ -1,5 +1,5 @@
 # Task 5 — llm.sh start 가 실제로 실행한 바이너리 (스펙 P0-C5b)
-# utc: 2026-09-09T14:16:30Z
+# utc: 2026-09-09T14:25:27Z
 #
 # 스펙 §2가 지목한 대로 mlx_lm.server 는 어떤 매니페스트에도 없고, 개발
 # 절차는 uv tool 로 개발자 홈에 까는 것이다. 그래서 '번들 안의 실행
@@ -7,7 +7,7 @@
 
 binary   : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/mlx_lm.server
 shebang  : #!/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
-pid      : 75447
+pid      : 78727
 cmdline  : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12 /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/mlx_lm.server --model mlx-community/Qwen3.5-4B-8bit --chat-template-args {"enable_thinking": false} --host 127.0.0.1 --port 58000
 bundle   : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python
 model    : mlx-community/Qwen3.5-4B-8bit

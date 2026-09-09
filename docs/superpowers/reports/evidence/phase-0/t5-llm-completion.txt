@@ -1,12 +1,12 @@
 # Task 5 V8 — mlx_lm.server /v1/chat/completions (스펙 P0-C5b)
-# utc: 2026-09-09T14:16:50Z
+# utc: 2026-09-09T14:25:40Z
 # endpoint: http://127.0.0.1:58000/v1/chat/completions
 # 요청: {"model":"mlx-community/Qwen3.5-4B-8bit","messages":[{"role":"user","content":"Reply with exactly one word: ok"}],"max_tokens":16,"temperature":0.0}
-# curl exit: 0   경과: 4s (모델 로드 포함)
+# curl exit: 0   경과: 2s (모델 로드 포함)
 # 이 요청이 모델을 실제로 메모리에 올린다 — /v1/models는 캐시 스캔뿐이다.
 
 ## 판정에 쓴 요약
-id: chatcmpl-87c725b7-ca15-4e06-9d6d-24a61ccce5c8
+id: chatcmpl-c080e036-e383-4e5c-b08e-65e457864cae
 model: mlx-community/Qwen3.5-4B-8bit
 choices_count: 1
 choices[0].role: assistant
@@ -15,4 +15,4 @@ choices[0].content: 'ok'
 usage: {"completion_tokens": 2, "prompt_tokens": 19, "prompt_tokens_details": {"cached_tokens": 0}, "total_tokens": 21}
 
 ## 응답 원문
-{"id": "chatcmpl-87c725b7-ca15-4e06-9d6d-24a61ccce5c8", "system_fingerprint": "0.31.3-0.32.2-macOS-27.0-arm64-arm-64bit-applegpu_g14g", "object": "chat.completion", "model": "mlx-community/Qwen3.5-4B-8bit", "created": 1788963406, "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}], "usage": {"prompt_tokens": 19, "completion_tokens": 2, "total_tokens": 21, "prompt_tokens_details": {"cached_tokens": 0}}}
+{"id": "chatcmpl-c080e036-e383-4e5c-b08e-65e457864cae", "system_fingerprint": "0.31.3-0.32.2-macOS-27.0-arm64-arm-64bit-applegpu_g14g", "object": "chat.completion", "model": "mlx-community/Qwen3.5-4B-8bit", "created": 1788963938, "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}], "usage": {"prompt_tokens": 19, "completion_tokens": 2, "total_tokens": 21, "prompt_tokens_details": {"cached_tokens": 0}}}

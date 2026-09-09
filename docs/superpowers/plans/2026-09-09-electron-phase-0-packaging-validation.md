@@ -730,6 +730,8 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 
 **Interfaces**
 
+- **`<label>-stderr.txt`도 금지 문자열 검색 대상에 넣는다.** Task 5에서 서버와 자식이 같은 파이프에 동시에 써서 dyld 줄 하나가 tqdm 진행 표시줄에 붙었고(`t5-embed-stderr.txt:2`), `^dyld`를 만족하지 못해 dyld 증거가 아니라 stderr 증거로 갔다. 이번엔 번들 경로라 무해했지만 **원리상 위반 줄도 같은 방식으로 필터를 비껴갈 수 있다.**
+- **`experiments/electron-phase-0/README.md`의 Task 5 절(11번)에 사실 오류가 있다.** "dyld 줄이 전부 서버 프로세스의 것"이라고 적혔으나 실제 pid 분포는 embed `74049=916 / 74336=703`, llm `75447=901 / 75033=902`다. llm은 정확히 절반이 기동 전 `fetch_model` 자식의 것이다. **그 문장을 그대로 인용해 집계하면 수치가 틀어진다** — Task 11이 정정하고 집계에는 pid별 분포를 쓴다.
 - **`docker volume ls` 공백을 메운다.** Task 3·4가 연속으로 OrbStack API 무응답(`timeout` exit 124)에 걸려 볼륨 대조를 못 했다. 대체 증거(`be/storage` 매니페스트 무변화)와 "하네스에 볼륨 쓰기 경로가 없다"는 코드 근거는 있으나, 그대로 두면 P0-C14의 "실행하지 않은 검증을 성공으로 적지 않는다"와 부딪힌다. Task 11은 착수 시 OrbStack 복구 여부를 확인해 (a) 되면 Task 3의 before 목록(볼륨 15개)과 대조해 사후 보완하고, (b) 안 되면 **미측정으로 명시**하고 대체 증거만으로 무엇이 확인됐는지 적는다.
 - **G1 허용 목록의 실동작 폴백 3건을 증명한다.** Task 3이 `lib/g1-allowlist.txt`에 `실동작-폴백`으로 표시한 세 항목 — `soundfile.py`의 `/opt/homebrew`·`/usr/local/lib` 탐색 경로, `ctypes/macholib/dyld.py`의 `DEFAULT_LIBRARY_FALLBACK`, `PIL/_imagingft…so`의 fribidi dlopen 후보 — 은 번들 안에서 라이브러리를 못 찾을 때만 실행된다. Task 11은 dyld 실측과 P0-C8 자기 보고로 **그 경로가 실제로 쓰이지 않았음**을 보여야 한다. 보이지 못하면 P0-C7을 충족으로 적지 않는다.
 - P0-C7: `bundle/` 전체에 `check-macho.sh`를 다시 돌리고, `$EVIDENCE`의 모든 `*-dyld.txt`에서 금지 문자열을 검색한다. `MEASUREMENT_UNAVAILABLE`로 표시된 실행은 별도 집계하고 P0-C8의 자기 보고로 대체 확인한다.

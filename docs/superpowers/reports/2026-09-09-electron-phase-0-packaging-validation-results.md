@@ -144,6 +144,36 @@ Task 1은 통과했으나 reviewer가 Task 2·5 착수 전 반영을 권고한 �
 
 | 4 | `a6fd22b..8f86452` | electron-reviewer (sonnet) | 1 | 없음 | `evidence/phase-0/task-4-r1.md` | **PASS** |
 
+| 5 | `385c1c4..f840679` | electron-reviewer (opus) | 1 | 없음 | `evidence/phase-0/task-5-r1.md` | **PASS** |
+
+### Task 5 상세
+
+P0-C5·P0-C5b 충족. embed는 `127.0.0.1:58100`에서 `/health` → `{"status":"ok"}`, `/embed` → `model=BAAI/bge-m3`·`dimension=1024`. `mlx_lm.server`는 `bundle/python/bin/mlx_lm.server`이고 셔뱅이 번들 python3.12 — **스펙 §2가 지목한 "어떤 매니페스트에도 없는 네 번째 런타임"이 번들에서 떴다.** 인자 형태가 제품 경로(`llm_server.py:106-114`)와 동일하다.
+
+**규칙 3b의 `tee` 형태가 동작했고, 왜 동작하는지가 실측으로 밝혀졌다.** reviewer가 프로세스 트리를 직접 떴다 — `81161`(서버 python3.12) ← `81163`(프로세스 치환 bash) ← `81164`(`/usr/bin/tee`). **tee는 플랫폼 바이너리라 exec 시점에 SIP가 `DYLD_*`를 지워 자기 dyld 줄을 만들지 않는다.** 그래서 파이프 중간 프로세스가 증거를 오염시키지 않고, 서버는 bash가 직접 exec하므로 dyld 줄이 서버 것으로 남는다. 규칙 3b를 세울 때 의도한 근거가 아니었는데 결과적으로 이것이 그 형태가 깨끗한 이유다.
+
+| 항목 | embed | llm |
+| --- | --- | --- |
+| `^dyld` 총줄 | 1617 | 1802 |
+| 서버 pid의 줄 | 915 | 901 |
+| 그중 `bundle/python/` 하위 | 202 | 187 |
+| 서버 pid의 번들·`/usr/lib`·`/System/Library` 밖 로드 | **0** | **0** |
+| `/usr/bin/tee` pid의 dyld 줄 | **0** | **0** |
+
+개발자 자산 6종 전부 0건. 모델 9.1 GB가 전부 샌드박스 `HF_HOME`이고 개발자 `~/.cache/huggingface`는 실행 창 내 변경 0건.
+
+**검사기 결함이 하나 더 드러났다.** dyld 증거에 줄이 두 모양이다 — `dyld[pid]: <UUID> /절대/경로`(로드, 필드 3개)와 **`dyld[pid]: move loaded to delayed: <이름>`(경로 없이 잎 이름만)**. `$NF`로 "번들 밖 경로"를 세면 둘째가 전부 위반으로 잡혀 V11 1회차가 embed·llm 각각 **존재하지 않는 위반 155건**을 냈다. 이미지 로드 줄(`NF==3`)로 한정해 고쳤고, 그 실패 회차를 지우지 않고 `t5-dyld-measured.prev-20260909T141803Z.txt`로 커밋했다.
+
+reviewer가 커버리지 손실이 없음을 확인했다 — 증거의 `move loaded to delayed` 309건의 잎 이름이 **전부** 같은 파일에 전체 경로 로드 줄로도 존재한다(경로 로드 줄이 없는 이름 0개).
+
+**`t2-dyld-measured.sh`에 같은 `$NF` 구조가 남아 있으나 Task 2 판정은 유효하다.** 이 결함은 거짓 FAIL만 만들고 거짓 PASS는 만들지 못하며, `t2-start-dyld.txt`의 비-load 줄이 0건이다(t1~t4 전수 확인: t2 계열 0건, t3 155~255건, t4 111건). t3·t4 판정부는 접두사 아래 로드 수만 세어 영향이 없다.
+
+**규칙 4의 폴백은 취지 안이다.** V11이 stop 뒤에 오는데 stop이 PID 파일을 지우므로 런처가 `$SANDBOX/run/{embed,llm}-start.txt`에 기동 시점 pid를 함께 남긴다. reviewer가 `/bin/bash 3.2.57`에서 `cmd 2> >(tee f >&2) &` 뒤의 `$!`가 프로세스 치환이 아니라 cmd의 pid임을 실측했고, PID 파일 값 = `lsof`가 보고한 포트 소유 pid = `ps`의 서버 프로세스임을 확인했다. 같은 `$!`로 같은 순간에 쓰이므로 값이 갈릴 수 없다.
+
+**모델 다운로드 낭비 발견.** bge-m3가 같은 가중치를 두 벌 받는다 — blob `b5e0ce…`(2,271,145,830 B, `pytorch_model.bin`, rev `5617a9f…`=`refs/main`)와 `993b22…`(2,271,064,456 B, `model.safetensors`, rev `9a0624b…`). 리비전까지 갈린다. **2.1 GB 낭비**이며 Task 9(P0-C13)로 넘겼다.
+
+디스크 21 GiB → **11 GiB**. Task 7·9가 더 받아야 해 R-14가 조여 온다.
+
 ### Task 4 상세
 
 P0-C6 충족. 후보는 **소스 빌드**(스펙 §9 후보 2), `--disable-gpl --disable-nonfree --disable-version3`. configure가 스스로 `License: LGPL version 2.1 or later`를 보고한다. 공개 정적 빌드(후보 1)는 관례적으로 `libx264`·`libx265`·`libfdk-aac`를 켜 GPL 또는 nonfree 구성인데, 담화는 비디오를 다루지 않고 손실 인코딩도 하지 않아 그 비용을 치를 이유가 없다. 소스 빌드가 107초로 끝나 "빌드를 피할" 이점도 없었다. **R-8 해소.**

@@ -1,5 +1,5 @@
 # Task 5 V10 — 번들 실행과 개발 환경 비의존 (스펙 P0-C5b, §4.1, §4.4)
-# utc: 2026-09-09T14:17:08Z
+# utc: 2026-09-09T14:25:46Z
 # 개발자 홈 자산 기준: $HOME/.cache/huggingface, $HOME/.local
 #   ($HOME 문자열 자체로 세지 않는다 — 이 저장소가 그 아래에 있어
 #    번들 경로까지 걸린다)
@@ -14,14 +14,14 @@
   OK   기동한 프로세스의 argv에 그 경로가 있다
 
 == 2. dyld 증거의 ^dyld 줄에 개발 환경 경로가 있는가 (계획 규칙 6)
-  t5-embed: ^dyld 줄 1619건
+  t5-embed: ^dyld 줄 1617건
     OK   /Users/gim-yeongjae/.cache/huggingface: 0건
     OK   /Users/gim-yeongjae/.local/: 0건
     OK   /opt/homebrew: 0건
     OK   /Library/Frameworks/Python.framework: 0건
     OK   /usr/local/lib: 0건
     OK   /usr/local/bin: 0건
-  t5-llm: ^dyld 줄 1803건
+  t5-llm: ^dyld 줄 1802건
     OK   /Users/gim-yeongjae/.cache/huggingface: 0건
     OK   /Users/gim-yeongjae/.local/: 0건
     OK   /opt/homebrew: 0건
