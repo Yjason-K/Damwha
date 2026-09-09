@@ -1,0 +1,19 @@
+MEASUREMENT_UNAVAILABLE
+# DYLD_PRINT_LIBRARIES=1을 켰는데 dyld 줄이 0건이다. SIP가 플랫폼
+# 바이너리에 대해 DYLD_*를 무시했을 때 이렇게 된다 (스펙 §4.2 주의).
+# 통과로 기록하지 않고 측정 불가로 남긴다. 대체 확인은 G1 정적 검사와
+# P0-C8 런타임 자기 보고가 맡는다.
+# run-isolated.sh dyld 실측
+# label: t1-nodev   utc: 2026-09-09T06:18:48Z   exit: 0   dyld 줄 수: 0
+# argv: /bin/sh -c 
+for t in ffmpeg ffprobe uv node npm pnpm psql pg_ctl initdb mlx_lm.server; do
+  p=$(command -v "$t" 2>/dev/null) || p="(not found)"
+  echo "TOOL $t $p"
+done
+p=$(command -v python3 2>/dev/null) || p="(not found)"
+echo "TOOL python3 $p"
+if [ "$p" != "(not found)" ]; then
+  echo "PYPREFIX $(python3 -c "import sys; print(sys.prefix)" 2>/dev/null)"
+  echo "PYEXE $(python3 -c "import sys; print(sys.executable)" 2>/dev/null)"
+fi
+

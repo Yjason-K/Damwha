@@ -1,0 +1,27 @@
+# Phase 0 실험의 **국소** gitignore.
+#
+# 루트 .gitignore는 저장소 전역 규칙을 담고 있어 Phase 0의 일회성 경로를 섞지
+# 않는다 (스펙 §6). 이 파일이 무시하는 것은 전부 재생성 가능한 산출물이며,
+# 수 GB 규모다.
+#
+# 반대로 lib/ verify/ probe/ pg/ python/ ffmpeg/ 같은 스크립트·조사 결과는
+# 커밋한다 — Phase 0 브랜치에 남아야 재현이 가능하다.
+
+# 격리 실행의 HOME/TMPDIR/STORAGE_ROOT, 실험 DB 데이터 디렉터리, PID 파일
+sandbox/
+
+# 번들 후보 스테이징과 재배치 후의 번들
+stage/
+bundle/
+
+# 스펙 §4.4의 실험 DB 데이터 디렉터리 이름을 따로 쓰는 경우
+pgdata/
+
+# PID 파일을 $SANDBOX 밖에 두게 되는 경우의 안전망
+run/
+
+# 내려받은 아카이브(PostgreSQL/ffmpeg 배포본 등)
+downloads/
+
+# Task 8이 bundle/의 사본에 서명을 적용하는 자리
+signed/

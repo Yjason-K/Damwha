@@ -1,0 +1,63 @@
+### 왜 `mtg_28`인가 (U-1)
+
+**결론: `mtg_28`의 `original.flac`을 쓴다.**
+
+두 조건을 동시에 만족해야 한다 — (1) 2인 이상 대화일 것, (2) Task 4·7이 이
+파일로 전체 파이프라인을 도는 만큼 되도록 짧고 작을 것.
+
+**조건 (2) — 크기·길이.** `original.flac`을 가진 회의는 7건이다. 아래 표는
+`sandbox.sh copy-audio`가 이 파일 위쪽에 매번 다시 재서 붙이는 값이며, 그중
+`mtg_28`이 **길이와 크기 양쪽에서 최소**다.
+
+| meeting | size (bytes) | duration (s) | 비고 |
+| --- | --- | --- | --- |
+| mtg_20 | 184,184,148 | 2056.33 | |
+| mtg_22 | 224,100,107 | 2347.29 | |
+| mtg_23 | 188,087,217 | 2237.03 | |
+| mtg_24 | 286,554,049 | 3234.59 | 최장 |
+| mtg_25 | 250,946,691 | 2607.21 | mtg_26과 크기·길이가 동일 |
+| mtg_26 | 250,946,691 | 2607.21 | mtg_25와 동일 |
+| **mtg_28** | **153,866,982** | **1883.25** | **최소 — 선택** |
+
+`mtg_5`(normalized.wav만), `mtg_21`(original.wav), `mtg_34`·`mtg_36`(original.m4a)은
+`original.flac`이 없어 후보에서 빠진다. 스펙 §3.3과 계획 Task 1이 지정한 경로가
+`meetings/<id>/original.flac`이기 때문이다.
+
+**조건 (1) — 화자 수.** 오디오만 봐서는 알 수 없어서, 이미 처리가 끝나 있는
+개발 DB를 **읽기만** 했다. 쓰기는 하지 않았다 (스펙 §4.4).
+
+```
+docker exec damwha-postgres psql -U postgres -d damwha -A -F'|' -c \
+  "SELECT m.id, m.status, m.duration_ms, count(u.id) AS utt,
+          count(DISTINCT u.diar_label) AS diar, count(DISTINCT u.speaker_id) AS spk
+     FROM meeting m
+     LEFT JOIN utterance u ON u.meeting_id = m.id AND u.status = 'ok'
+    WHERE m.id IN ('mtg_20','mtg_22','mtg_23','mtg_24','mtg_25','mtg_26','mtg_28')
+    GROUP BY m.id, m.status, m.duration_ms ORDER BY m.id;"
+```
+
+```
+id|status|duration_ms|utt|diar|spk
+mtg_20|done|2056333|166|2|2
+mtg_22|done|2347293|624|2|2
+mtg_23|done|2237033|163|2|2
+mtg_24|done|3234586|692|5|5
+mtg_25|done|2607206|715|5|5
+mtg_26|done|2607206|631|5|5
+mtg_28|done|1883254|357|4|4
+```
+
+`mtg_28`은 `status='ok'` 발화 357건에 `diar_label`이 **4종**이다. "2인 이상"을
+넉넉히 넘기므로, Task 7 V4의 "`diar_label`의 서로 다른 값이 1개 이상"이 우연히
+만족되는 경우와 구별된다 — 화자 분리가 실제로 여러 화자를 갈랐는지 볼 수 있다.
+
+`duration_ms`(1883254)가 위 표의 ffprobe duration(1883.25 s)과 일치하는 것도
+같은 파일이라는 확인이 된다.
+
+**주의.** 이 화자 수는 **개발 DB에 남아 있는 과거 처리 결과**이지 Task 7이
+낼 결과가 아니다. Task 7은 실험 DB(55432)에 새로 처리해 넣으며, 정확도는
+판정 대상이 아니다 (스펙 P0-C4 비고).
+
+**원본 보호.** 위 조사는 전부 읽기다. `sandbox.sh copy-audio`는 복사 전후로
+원본의 크기·mtime·sha256을 재서 무변화를 확인하고, 그 값을 이 파일 위쪽에
+기록한다. 원본 경로에는 어떤 쓰기도 하지 않는다 (스펙 §4.4).

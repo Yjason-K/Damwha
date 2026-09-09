@@ -1,0 +1,188 @@
+#!/bin/bash
+# 계획 Task 1 V5 — **계측기가 실제로 계측하는가.**
+#
+# 이 하네스의 증거는 전부 두 계측기에서 나온다: G1 정적 검사(check-macho.sh)와
+# G2 dyld 실측(run-isolated.sh). 둘 중 하나가 눈이 멀면 나머지 열 Task의
+# "위반 0건"은 아무 의미가 없다. 그래서 셋을 확인한다.
+#
+#   A. 합성 대조군 — 금지 문자열 9종 전부, otool -L 의존 위반, LC_RPATH 위반을
+#      일부러 심은 디렉터리를 만들고 check-macho.sh가 **전부** 잡는지 본다.
+#      패턴 목록은 lib/forbidden-strings.txt에서 읽어 만들므로, 표에 행이
+#      늘어나면 대조군도 저절로 늘어난다.
+#   B. 실물 대조군 — 계획 V5가 지정한 그대로 check-macho.sh /opt/homebrew/bin이
+#      비정상 종료하는지 본다.
+#   C. dyld 실측 대조군 — 플랫폼 바이너리가 아닌 Mach-O를 격리 실행했을 때
+#      dyld 줄이 실제로 잡히는지 본다. 이게 없으면 모든 실행이 조용히
+#      MEASUREMENT_UNAVAILABLE로 기록돼도 아무도 모른다.
+#
+# 셋 다 "실패를 검출했을 때만" 통과다. 스크립트가 뒤집어 exit 0으로 만든다
+# (계획 "Verify 명령 작성 규칙").
+
+set -u
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd -P)/config.sh"
+
+FAIL=0
+CHECK="$EXP_LIB_DIR/check-macho.sh"
+PATTERN_SRC="$EXP_LIB_DIR/forbidden-strings.txt"
+
+exp_ensure_sandbox
+
+for t in install_name_tool codesign cc; do
+  command -v "$t" >/dev/null 2>&1 \
+    || { echo "FAIL: $t 가 없다 — 대조군을 만들 수 없다 (Command Line Tools 필요)"; exit 1; }
+done
+
+# ---------------------------------------------------------------------------
+# A. 합성 대조군
+# ---------------------------------------------------------------------------
+echo "== A. 합성 대조군 — 금지 문자열 9종 + otool -L + LC_RPATH"
+FIX="$SANDBOX/tmp/g1-detector-fixture"
+rm -rf "$FIX"
+mkdir -p "$FIX"
+
+PATTERNS=$(grep -v '^[[:space:]]*#' "$PATTERN_SRC" | grep -v '^[[:space:]]*$')
+PN=0
+while IFS= read -r p; do
+  [ -n "$p" ] || continue
+  PN=$((PN + 1))
+  # 토큰이 $EXP_ROOT로 시작하면 검사기가 "번들 내부"로 분류해 위반이 아니다.
+  # 어떤 패턴도 $EXP_ROOT의 접두사 전체가 되지는 않으므로 아래 형태면 안전하다.
+  printf '%s/g1-detector-probe\n' "$p" > "$FIX/pattern-$PN.txt"
+done <<EOT
+$PATTERNS
+EOT
+echo "  금지 문자열 대조 파일 ${PN}개 생성"
+
+# otool -L 위반: 의존 경로 하나를 허용 접두사 밖으로 바꾼다.
+# 여기에는 일부러 **universal(fat) 바이너리**를 쓴다. file이 fat 바이너리에
+# 대해 "path (for architecture arm64e)" 형태의 줄을 더 내는데, 그걸 경로로
+# 오해하면 fat 바이너리가 Mach-O 검사에서 통째로 빠진다. 아래 "(for
+# architecture" 단정이 그 회귀를 막는다.
+cp /bin/echo "$FIX/dep-bad"
+install_name_tool -change /usr/lib/libSystem.B.dylib \
+  /tmp/g1-detector-probe/libSystem.B.dylib "$FIX/dep-bad" >/dev/null 2>&1 \
+  || { echo "  FAIL dep-bad 대조군을 만들지 못했다"; FAIL=1; }
+
+# LC_RPATH 위반: 번들 밖 절대 경로를 rpath로 넣는다.
+# 시스템 바이너리 복사본에는 -add_rpath가 들어가지 않는다(헤더 여유 없음).
+# 그래서 rpath를 가진 바이너리를 직접 만든다.
+printf 'int main(void){return 0;}\n' > "$FIX/rpath-bad.c"
+cc -o "$FIX/rpath-bad" "$FIX/rpath-bad.c" \
+   -Wl,-rpath,/tmp/g1-detector-probe-rpath >/dev/null 2>&1 \
+  || { echo "  FAIL rpath-bad 대조군을 컴파일하지 못했다"; FAIL=1; }
+rm -f "$FIX/rpath-bad.c"
+
+OUT_A=$(bash "$CHECK" "$FIX" 2>&1); RC_A=$?
+if [ "$RC_A" -eq 0 ]; then
+  echo "  FAIL check-macho.sh가 심어 둔 위반을 하나도 잡지 못했다 (exit 0)"
+  FAIL=1
+else
+  echo "  OK   check-macho.sh가 비정상 종료했다 (exit $RC_A)"
+fi
+printf '%s\n' "$OUT_A" | sed 's/^/    /'
+
+MISSING=""
+while IFS= read -r p; do
+  [ -n "$p" ] || continue
+  if ! printf '%s\n' "$OUT_A" | grep -qF "금지 문자열: $p"; then
+    MISSING="$MISSING $p"
+  fi
+done <<EOT
+$PATTERNS
+EOT
+if [ -n "$MISSING" ]; then
+  echo "  FAIL 검출되지 않은 금지 문자열:$MISSING"
+  FAIL=1
+else
+  echo "  OK   금지 문자열 ${PN}종을 모두 검출했다 (스펙 §4.1 표 7행 전부)"
+fi
+
+if printf '%s\n' "$OUT_A" | grep -q '^ *OTOOL-L '; then
+  echo "  OK   otool -L 의존 경로 위반을 검출했다"
+else
+  echo "  FAIL otool -L 의존 경로 위반을 검출하지 못했다"
+  FAIL=1
+fi
+if printf '%s\n' "$OUT_A" | grep -q '^ *LC_RPATH '; then
+  echo "  OK   LC_RPATH 위반을 검출했다"
+else
+  echo "  FAIL LC_RPATH 위반을 검출하지 못했다"
+  FAIL=1
+fi
+# fat 바이너리의 아키텍처 꼬리표를 경로로 오해하지 않았는가.
+if printf '%s\n' "$OUT_A" | grep -q '(for architecture'; then
+  echo "  FAIL 위반 목록에 '(for architecture ...)' 유사 경로가 있다 —"
+  echo "       fat 바이너리 경로 파싱이 깨졌다는 뜻이고, 그러면 fat 바이너리가"
+  echo "       Mach-O 검사에서 조용히 빠진다"
+  FAIL=1
+else
+  echo "  OK   fat 바이너리 경로를 아키텍처 꼬리표 없이 다뤘다"
+fi
+
+# ---------------------------------------------------------------------------
+# B. 실물 대조군 (계획 V5가 지정한 대상)
+# ---------------------------------------------------------------------------
+echo
+echo "== B. 실물 대조군 — check-macho.sh /opt/homebrew/bin"
+HB=/opt/homebrew/bin
+if [ ! -d "$HB" ]; then
+  echo "  FAIL $HB 가 없다 — 대조군을 수행할 수 없다"
+  FAIL=1
+else
+  # 609개를 끝까지 읽을 필요는 없다. 위반 몇 건만 확인되면 검출력은 증명된다.
+  OUT_B=$(CHECK_MACHO_MAX_VIOLATIONS=3 bash "$CHECK" "$HB" 2>&1); RC_B=$?
+  if [ "$RC_B" -eq 0 ]; then
+    echo "  FAIL Homebrew 트리에서 위반을 하나도 잡지 못했다 (exit 0) — 검사기가 눈이 멀었다"
+    FAIL=1
+  else
+    echo "  OK   비정상 종료했다 (exit $RC_B)"
+    printf '%s\n' "$OUT_B" | grep -c '^    STRING\|^    OTOOL-L\|^    LC_RPATH' \
+      | sed 's/^/    검출한 위반 줄 수: /'
+    printf '%s\n' "$OUT_B" | grep '위반          :' | sed 's/^/    /'
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# C. dyld 실측 대조군
+# ---------------------------------------------------------------------------
+echo
+echo "== C. dyld 실측 대조군 — 플랫폼 바이너리가 아닌 Mach-O"
+# 시스템 바이너리를 복사하면 서명 컨텍스트를 잃어 실행이 막힌다. ad-hoc으로
+# 다시 서명하면 실행되고, 플랫폼 바이너리가 아니게 되어 SIP가 DYLD_*를 지우지
+# 않는다. Task 8이 쓸 codesign -s - 경로를 여기서 미리 한 번 밟는 셈이기도 하다.
+DYFIX="$SANDBOX/tmp/g2-dyld-control"
+rm -rf "$DYFIX"; mkdir -p "$DYFIX"
+cp /bin/echo "$DYFIX/echo"
+codesign -f -s - "$DYFIX/echo" >/dev/null 2>&1 \
+  || { echo "  FAIL ad-hoc 서명에 실패했다"; FAIL=1; }
+if bash "$EXP_LIB_DIR/run-isolated.sh" --label t1-dyld-control -- "$DYFIX/echo" g2-control >/dev/null; then
+  DY="$EVIDENCE/t1-dyld-control-dyld.txt"
+  if [ ! -f "$DY" ]; then
+    echo "  FAIL dyld 증거 파일이 없다: $DY"
+    FAIL=1
+  elif head -n 1 "$DY" | grep -q '^MEASUREMENT_UNAVAILABLE$'; then
+    echo "  FAIL 플랫폼 바이너리가 아닌데도 MEASUREMENT_UNAVAILABLE로 기록됐다"
+    echo "       — dyld 실측이 동작하지 않는다는 뜻이다"
+    FAIL=1
+  else
+    N=$(grep -c '^dyld' "$DY" || true)
+    if [ "${N:-0}" -ge 1 ]; then
+      echo "  OK   dyld 줄 ${N}건을 실측했다"
+      grep '^dyld' "$DY" | head -n 3 | sed 's/^/    /'
+    else
+      echo "  FAIL dyld 줄이 0건이다"
+      FAIL=1
+    fi
+  fi
+else
+  echo "  FAIL 대조군 바이너리를 격리 실행하지 못했다"
+  FAIL=1
+fi
+
+echo
+if [ "$FAIL" -eq 0 ]; then
+  echo "모든 대조군이 위반을 실제로 검출했다 — 계측기가 살아 있다"
+else
+  echo "대조군 중 하나 이상이 검출에 실패했다"
+fi
+exit $FAIL
