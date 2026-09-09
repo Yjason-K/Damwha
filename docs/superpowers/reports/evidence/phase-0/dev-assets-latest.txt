@@ -1,5 +1,5 @@
 # snapshot-dev-assets.sh — 개발 자산 무변화 확인 (스펙 §4.4)
-# utc: 2026-09-09T08:32:19Z
+# utc: 2026-09-09T08:38:21Z
 ## before
 ## docker volumes
 2deac09559ef79effc56c7230c228d0109d309fc4f208051ecc08c1c65c9ccc0

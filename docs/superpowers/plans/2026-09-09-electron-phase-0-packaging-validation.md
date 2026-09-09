@@ -40,7 +40,9 @@
 
 **Verify 표의 셀에는 파이프(`|`)와 `||`를 쓰지 않는다.** 마크다운 표에서 이스케이프가 필요해지고, verifier가 이스케이프된 문자열을 그대로 실행하면 명령이 깨진다. 합성이 필요한 검사는 `$EXP/verify/t<N>-<이름>.sh` 스크립트로 만들고 표에서는 그 스크립트 하나만 호출한다.
 
-각 스크립트는 **조건을 만족하면 exit 0, 아니면 exit 1**이며, 판정 근거를 stdout에 출력한다. "exit 1을 기대하는" 검사(음성 대조군)도 스크립트가 뒤집어 exit 0으로 만든다 — verifier가 비정상 종료와 의도된 실패를 구분하지 못하는 상황을 없애기 위해서다.
+각 스크립트는 **조건을 만족하면 exit 0, 아니면 exit 1**이며, 판정 근거를 stdout에 출력한다.
+
+**증거 파일을 `> "$OUT"`으로 덮어쓰지 않는다** (스펙 §6). 같은 이름으로 다시 쓰면 이전 회차의 증거가 사라진다. `lib/run-isolated.sh`의 `archive_prev`와 같은 회전을 쓰거나 회차를 파일명에 넣는다. Task 2의 `t2-extensions.sh`·`t2-crash-recovery.sh`·`pgctl-trial.sh`가 이 규칙을 어겼다 — 커밋본이 git에 남아 실해는 없었으나 되풀이하지 않는다. "exit 1을 기대하는" 검사(음성 대조군)도 스크립트가 뒤집어 exit 0으로 만든다 — verifier가 비정상 종료와 의도된 실패를 구분하지 못하는 상황을 없애기 위해서다.
 
 `&&`는 표에서 그대로 써도 된다 (이스케이프가 필요 없다).
 
@@ -217,6 +219,7 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 - `run.sh start`는 **`postgres -D "$SANDBOX/pgdata" -p 55432 &`를 직접 띄우고 `pg_isready`로 준비를 기다린 뒤 exit 0** 한다. 그 직전에 `export DYLD_PRINT_LIBRARIES=1`을 다시 설정하고 stderr를 리다이렉트하지 않는다. **`pg_ctl start`는 `-l` 유무와 무관하게 쓰지 않는다** — 내부의 `/bin/sh`가 `DYLD_*`를 잃고 stderr를 stdout으로 합친다 (위 규칙 1·2·2b). 서버의 이후 로그는 `logging_collector=on` + `log_directory`로 서버가 직접 쓰게 한다 (규칙 3b). `pg_ctl stop`·`pg_isready`는 측정 대상이 아니므로 써도 된다.
 - `run.sh`는 **postgres 자신의 PID**를 `$SANDBOX/run/pg.pid`에 쓴다. 래퍼 bash의 PID가 아니다. 데이터 디렉터리가 이미 있으면 `initdb`를 다시 하지 않는다 (멱등, 스펙 §4.4).
 - `run.sh kill`은 `$SANDBOX/run/pg.pid`의 PID에만 SIGKILL을 보낸다. 이름 기반 kill 금지.
+- `run.sh start`는 `damwha` 데이터베이스가 없으면 만든다. `initdb`는 `postgres`/`template*`만 만드는데 스펙 §4.2의 `DATABASE_URL`과 V4가 `/damwha`를 가리키기 때문이다. 멱등하게(`pg_database` 확인 후) 번들 `createdb`로 만든다.
 - **`pg_ctl start` 시험 실행(V2c)은 소유권을 분리한다.** 그것이 띄우는 postgres는 `pg.pid` 밖의 프로세스이고, V2의 서버가 같은 데이터 디렉터리를 잡고 있는 동안은 기동 자체가 실패한다. 순서를 못 박는다 — **V2 이전(또는 V6의 정지 직후) 서버가 떠 있지 않은 상태에서** `run-isolated.sh --label t2-pgctl-trial`로 실행하고, `pg_ctl stop`으로 내린 뒤, 그 pid가 `pg.pid`에 들어가지 않았음을 증거에 기록한다 (스펙 §4.4 PID 파일 규약).
 - 마이그레이션은 `DATABASE_URL`을 55432로 지정해 `pnpm be:migrate`로 적용한다. **이 명령은 스펙 §4.0에 따라 격리 대상 밖**이며, 증거에 그렇게 표시한다. (`dotenv`는 이미 설정된 `process.env`를 덮어쓰지 않으므로 `be/.env`의 값이 아니라 주입한 값이 쓰인다 — V2가 그것을 확인한다.)
 
@@ -252,7 +255,7 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 
 - [ ] `pg_bigm`이 `1.2-20240606`(현재 Dockerfile과 같은 버전)이다
 - [ ] 데이터 디렉터리가 `$SANDBOX/pgdata`이고 `damwha_pgdata`/`be_pgdata` 볼륨을 참조하지 않는다
-- [ ] 포트가 55432로 고정돼 있고 5432가 코드 어디에도 없다
+- [ ] 포트가 55432로 고정돼 있고, 실험 코드가 5432에 접속하거나 바인딩하지 않는다 (읽기 전용 `lsof`로 5432 점유를 확인하는 것은 무방하다)
 - [ ] 마이그레이션이 `pnpm be:migrate`로 적용됐다 — `.sql` 직접 실행이 아니다 (`_migrations` 계약, 스펙 §4.0)
 - [ ] V4가 실제로 55432에 적용됐음이 V5로 확인된다 (개발 DB가 아니다)
 - [ ] `run.sh kill`이 PID 파일 대상이다 — `pkill postgres` 같은 이름 기반 kill이 없다
@@ -765,6 +768,7 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 - [ ] `MEASUREMENT_UNAVAILABLE`로 남은 dyld 항목이 각각 P0-C8의 자기 보고로 대체 확인됐거나, 안 됐다면 미충족으로 남았다
 - [ ] 번들 Mach-O를 실행했는데 dyld 줄이 0건인 항목을 통과로 집계하지 않았다 — 그것은 미측정이지 위반 없음이 아니다
 - [ ] 집계기가 dyld 증거를 `^dyld` 줄로 한정해 읽는다 — 헤더의 `# argv:` 줄을 dyld 줄로 세지 않는다 (규칙 6)
+- [ ] `MEASUREMENT_UNAVAILABLE` 중 **Mach-O를 하나도 실행하지 않은 것**(멱등 조기 반환 등)을 "실행 없음"으로 따로 분류했다 — 미측정과 구분된다. `t2-initdb-again-dyld.txt`가 그 사례다
 - [ ] "남은 제약·후속 Phase 인계"에 스펙 §11의 4개 항목(다른 맥 독립 설치, 공증, R-12, macOS 최소 버전 실측)이 있다
 - [ ] 로드맵의 Phase 0 상태가 갱신됐고, 검증이 뒤집은 전제가 있으면 해당 Phase 설명도 고쳐졌다
 - [ ] 제품 코드가 Phase 전체에서 한 줄도 바뀌지 않았다 (V9)

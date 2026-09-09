@@ -138,6 +138,36 @@ Task 1은 통과했으나 reviewer가 Task 2·5 착수 전 반영을 권고한 �
 | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `4f0b02c..f121570` (`17bae8d`, `f1e1dff`, `961029f`, `f121570`) | electron-reviewer (fable) | 4 | 아래 T1-B1 ~ T1-B3, 전건 해소 | `evidence/phase-0/task-1-r{1,2,3,4}.md` | **PASS** (4회차, 차단 0건) |
 
+| 2 | `e6cfa77..8b8d355` | electron-reviewer (fable) | 1 | 없음 | `evidence/phase-0/task-2-r1.md` | **PASS** |
+
+### Task 2 상세
+
+P0-C1 충족. 후보는 **소스 빌드**(스펙 §9 후보 3) — PostgreSQL 16.15 + pgvector 0.8.6 + pg_bigm 1.2-20240606. ICU·readline·zlib을 끄고 빌드해 21 MB, `otool -L bin/postgres`의 외부 의존이 `/usr/lib/libSystem.B.dylib` 하나다. 16.15는 개발 이미지의 `PG_VERSION=16.15-1.pgdg12+2`와 같은 마이너다.
+
+**탈락은 추측이 아니라 실측이다.**
+
+| 후보 | 결과 |
+| --- | --- |
+| §9-1 EDB | 배포 페이지의 `osx-binaries.zip`은 9.2.24·9.3.25뿐이고 16.x의 macOS 칸은 설치 프로그램으로만 이어진다. **받을 것이 없다** — 스펙 §9가 적어 둔 전제가 현실과 다르다 |
+| §9-4 zonky | `darwin-arm64v8:16.15.0`을 받아 풀었다. `bin/`에 `initdb`·`pg_ctl`·`postgres` 셋뿐이고 `pg_config`·서버 헤더·pgxs가 없어 **확장을 붙일 수단이 아카이브 안에 없다.** 트리 296 MB(소스 빌드본의 14배) |
+| §9-2 Postgres.app | 설계상 탈락(미수령). pg_bigm 때문에 어차피 툴체인이 필요해 배포본의 이점이 남지 않고, ICU·OpenSSL 의존이 Task 8·9의 대상을 늘린다 |
+
+**재배치에서 실제로 깨진 것.** 빌드 prefix를 이 머신에 없는 `/opt/damwha-phase0/pg16`으로 두고 `stage/pg` → `bundle/pg`로 옮겼다.
+
+1. **공유 라이브러리 `install_name` 37건** (`bin/` 20 + `lib/` 17). 옮긴 직후 `psql --version`이 exit 134 — `dyld: Library not loaded: /opt/damwha-phase0/pg16/lib/libpq.5.dylib`. **서버는 멀쩡했다** — postgres는 libpq를 링크하지 않는다. 서버만 확인했으면 클라이언트가 전부 죽은 번들을 통과시켰다. `install_name_tool -change`/`-id` + ad-hoc 재서명(arm64는 서명 없는 Mach-O를 실행하지 않는다)으로 해소.
+2. **확장에 박힌 빌드 시점 include 경로.** PGXS가 `pg_config`의 절대 경로로 컴파일해 서버 헤더 인라인 함수의 `__FILE__`이 `vector.dylib`에 남는다. **이동 전 `INFO` → 이동 후 `STALE-PATH` 위반**. `-fmacro-prefix-map`으로 해소.
+3. `pkglibdir/pgxs`의 `Makefile.global`에 `configure` 탐지 결과(`/opt/homebrew/bin/{ginstall,gmkdir,lz4,openssl,zstd}`)가 남아 G1 위반. 그 디렉터리는 확장을 빌드할 때만 쓰이고 실행 경로가 아니므로 제거.
+
+1차 시도는 이동 후 G1 **exit 1, 위반 8건**이었고 수정 후 **exit 0, 0건**이다 (`t2-relocation-attempt1.txt` vs `t2-build-relocation.txt`).
+
+**빌드 조작이 검사 회피가 아님을 reviewer가 실행으로 확인했다.** `bundle/pg`를 제3의 경로로 다시 복사해 `env -i`로 `initdb` → 포트 55439 기동 → `CREATE EXTENSION` 2종 → `<=>`·`bigm_similarity`·`likequery` 실행. 서버 pid의 dyld 86줄 중 번들 이미지가 전부 복사본 경로였고 복사본·`/usr/lib`·`/System/Library` 밖 이미지 0건. `-fmacro-prefix-map`이 지운 것은 런타임 경로 해석에 관여하지 않는 진단 문자열(`__FILE__`)이고, pgxs가 지운 것은 링크 의존이 아니라 configure 탐지 결과 문자열이다.
+
+**V2c — 계획 규칙 2b가 실측으로 확인됐다.** 규칙 1(exec 직전 재-export)을 지키고 `-l` 없이 띄웠는데도 dyld 줄 162건이 전부 `pg_ctl` 자신의 것이고 시험 postmaster(pid 92536)의 줄은 **0건**. 서버 로그는 `pg_ctl`의 stdout으로 합쳐졌다. Task 1의 D3가 말한 가짜 증거의 실물이며, 규칙 2b가 없었으면 Task 2가 그대로 빠졌을 함정이다.
+
+**핵심 수치.** `_migrations` = 24 (V5·V6·V7·V8 전부). 정상 재기동 pid 1764→2767, SIGKILL 후 crash recovery pid 2767→3067(`automatic recovery in progress` 로그, crash 직전 커밋 행 생존), 멱등 `initdb`는 재초기화 없이 pid 불변. 개발 볼륨 15개·컨테이너 3개 동일, `be/storage` 매니페스트 sha256 전후 동일.
+
+**R-2는 성립하지 않았다.** `make_relative_path` 덕분에 존재하지 않는 prefix로 빌드해도 `initdb`가 `share/postgresql`을 찾았고 `pg_config`가 번들 안을 보고했다. 대신 드러난 `install_name` 37건은 R-1도 R-2도 아닌 **제3의 메커니즘**(PostgreSQL 자체의 링크 시점 절대 `install_name`, `src/Makefile.shlib`)이다. 아래 "기술 결정" 절에 **R-2b**로 등록했다.
+
 ### Task 1 상세
 
 Verify는 3회차 모두 V1~V12 전부 기대값과 일치했다. 차단은 전부 **검증 자체의 신뢰성**에서 나왔다 — 검사기가 실제로 위반을 잡는지의 문제다.
@@ -188,6 +218,16 @@ Task 1에서 나왔고 수정하지 않기로 한 것들이다.
 - Task 2 V2b / Task 5 V11의 "`dyld[<pid>]`의 pid가 PID 파일과 일치" 기대값 — re-export 뒤 런처가 부르는 `pg_isready` 등 번들 Mach-O도 자기 pid로 dyld 줄을 남기므로 파일에는 pid가 여럿 섞인다. `t2-/t5-dyld-measured.sh`는 "PID 파일의 pid를 가진 dyld 줄이 존재하고 그 pid의 로드 목록에 번들 서버 바이너리 경로가 있다"로 판정하고, T1-B3과 같은 `# argv:` 헤더 함정을 피해 `^dyld` 줄로 한정해야 한다.
 - 계획 규칙 3 · `run-isolated.sh:75,133` — 런처가 exit 0 한 뒤에도 서버의 stderr는 `$RUNTMP/stderr.raw`를 가리키는데 `trap`이 그 디렉터리를 지운다. 이후 서버 에러 로그가 unlink된 파일로 사라져 Task 2 V7(crash recovery) 진단이 어려워진다. postgres는 `logging_collector=on`+`log_directory`로, 서비스는 준비 후 로그 위치를 별도 기록하는 것이 낫다.
 
+**Task 2에서 나온 것**
+- `verify/t2-extensions.sh:85-97` — 확장 dyld 판정이 pid를 고정하지 않고(`/^dyld\[/`만) `$PGDATA/log/*.txt` 전 회차를 합친다. 이번 회차는 pid 1764 줄이 실재해 유효했으나, 다음 회차에 이전 로그만으로 통과할 수 있다 (규칙 6b 위반). `$1 == "dyld[" PID "]:"` 조건을 넣어야 한다.
+- `verify/t2-no-pgctl-start.sh:50` — 규칙 2 정적 검사 정규식 `[^&]*2>`가 `&> file`을 잡지 못한다. V2b가 실측 소실을 잡으므로 실해는 없다.
+- `t2-extensions.sh:86`·`t2-crash-recovery.sh:61`·`pg/pgctl-trial.sh:110`이 증거 파일을 `> "$OUT"`으로 덮어썼다(스펙 §6 위반). 커밋본이 git에 남아 실해는 없었다. 계획의 "Verify 명령 작성 규칙"에 금지 문구를 추가했다.
+- 계획 V6·V7이 `_migrations`=24만 본다. 스펙 P0-C1은 "마이그레이션이 만든 테이블 전량이 남는다"를 요구한다. reviewer가 직접 실측해 crash 회차·정상 재기동 뒤 public 테이블 17개가 V5 시점과 같은 집합임을 확인했으나, Verify 자체에는 `pg_tables` 집합 비교가 없다.
+- `pg/pgctl-trial.sh:70-78` — 시험 postmaster의 PID 파일·`trap`이 없어 그 사이 중단되면 55432에 고아 프로세스가 남는다 (스펙 §4.4 PID 파일 규약). 일회성이고 `run.sh start`가 포트 점유 pid를 알려 주므로 복구 가능.
+- `pg/run.sh:202-206` 주석의 "postmaster만 죽이면 보조 프로세스가 공유 메모리를 붙들어 다음 기동이 거절된다"는 **미실측 주장**이다. Phase 5에 의미가 있으므로 한 번 재거나 주장으로 표기해야 한다.
+- `pg/run.sh`의 `--auth=trust`가 실험 전용이라는 명시가 코드 주석과 `pg/README.md` 표에 있으나, README의 "뒤 Task가 알아야 하는 것" 목록에는 빠져 있다. Task 11이 Phase 3 인계 제약으로 옮겨야 한다.
+- G1은 `/opt/damwha-phase0/pg16` 문자열(35개 파일, 컴파일 시점 기본값)을 금지어로 두지 않아 보지 않는다. "재계산되는 기본값"과 "진짜 의존"은 G1로 구분되지 않으며, 옮긴 뒤 실행과 `pg_config` 자기 보고만이 구분한다. 이 구성에서는 그 실행이 있어 문제없었다.
+
 **검증 절차**
 - 3회차 verifier의 직접 재현이 4형태까지였고 가짜 증거 형태(비플랫폼 런처+리다이렉트)는 재현하지 않았다. 4회차에서 D3 대조군으로 코드에 고정됐다 — 해소.
 - `lib/run-isolated.sh`의 `MEASUREMENT_UNAVAILABLE` 문구가 dyld 0건의 원인을 둘로 병기했으나 셋이다. README 2a 표 4행(플랫폼 bash 런처가 re-export 하고도 자식 stderr를 `2>/dev/null` → 0건)은 규칙 2 위반으로 0건이 나는 세 번째 경로다. 원인 (1)을 "런처가 규칙 1 **또는 2**를 어겼다"로 고쳐야 한다.
@@ -199,6 +239,8 @@ Task 1에서 나왔고 수정하지 않기로 한 것들이다.
 
 ## 기술 결정과 변경 이유
 
+- 2026-09-09: **R-2b 신설 — PostgreSQL 자체의 링크 시점 절대 `install_name`.** Task 2에서 드러났고 스펙의 위험 목록(R-1 확장·`pg_config` 절대 경로, R-2 `initdb` 시점 경로 가정)에 없는 제3의 메커니즘이다. `src/Makefile.shlib`이 공유 라이브러리에 절대 `install_name`을 박아, 번들을 옮기면 `bin/` 20개와 `lib/` 17개가 깨진다. **서버는 살고 클라이언트만 죽는 형태**라 서버만 확인하면 놓친다(`postgres`는 libpq를 링크하지 않는다). `install_name_tool -change`/`-id` + ad-hoc 재서명으로 해소되며 `pg/build.sh` 8단계에 재현 가능하게 남아 있다. **Task 8(재서명)과 Phase 3(재빌드 시 반드시 반복)에 인계한다.** R-2 자체는 성립하지 않았다 — `make_relative_path` 덕분에 존재하지 않는 prefix로 빌드해도 `initdb`와 `pg_config`가 번들 안을 찾는다.
+- 2026-09-09: **PostgreSQL 제공 방식은 소스 빌드로 결정**(P0-C12의 (1)에 해당, Task 10이 최종 확정). 배포 바이너리 두 후보가 실측으로 탈락했다 — EDB는 macOS 16.x 아카이브가 아예 없고, zonky는 `pg_config`·서버 헤더·pgxs가 없어 pg_bigm을 붙일 수단이 아카이브 안에 없다. 소스 빌드본은 21 MB로 zonky(296 MB)의 1/14이고 외부 링크 의존이 `libSystem` 하나다.
 - 2026-09-09: 검증 환경에서 **별도 macOS 사용자 계정을 쓰지 않기로** 결정. 새 계정은 `/opt/homebrew`·`/Library/Frameworks/Python.framework`(3.9·3.11 실제 설치됨)·`/usr/local/bin` 같은 머신 전역 설치물을 배제하지 못하고, 배제하는 항목(`~/.local/bin`, `~/.cache/huggingface`, 셸 설정, venv)은 이미 `env -i` + `HOME` 격리가 전부 막는다. 대신 G1의 금지 문자열 검사를 실측 목록으로 확장하고, P0-C8을 런타임 자기 보고 검증(`sys.prefix`/`sys.path`/`sysconfig`, `pg_config`/`SHOW data_directory`)으로 재정의했다. 실제 독립 설치 검증은 로드맵이 이미 Phase 6에 두고 있다.
 - 2026-09-09: **Apple Developer Program 미가입 상태로 진행.** P0-C9는 ad-hoc 서명(`codesign -s -`) + hardened runtime(`--options runtime`)까지만 다룬다. R-4(MLX Metal 셰이더 런타임 컴파일·torch JIT)와 R-5(서명되지 않은 `.so` 로딩)는 그 조합으로 실측된다. 공증과 Team ID 기반 library validation(R-12)은 Phase 6 선결 조건으로 인계한다.
 - 2026-09-09: 마이그레이션 적용에서 **격리 대상의 경계**를 확정(§4.0). 격리하는 것은 번들에 들어갈 산출물과 그 실행 프로세스이고, 그것에 접속하는 클라이언트(Node·`psql`)는 아니다. Node 런타임은 Phase 1에서 Electron이 제공하므로 Phase 0의 기술 위험이 아니다.

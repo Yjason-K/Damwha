@@ -1,3 +1,3 @@
-# t2-restart 의 stderr (dyld 줄 제외). utc: 2026-09-09T08:32:16Z  exit: 0
-2026-09-09 17:32:17.050 KST [98493] LOG:  redirecting log output to logging collector process
-2026-09-09 17:32:17.050 KST [98493] HINT:  Future log output will appear in directory "log".
+# t2-restart 의 stderr (dyld 줄 제외). utc: 2026-09-09T08:37:57Z  exit: 0
+2026-09-09 17:37:57.168 KST [2767] LOG:  redirecting log output to logging collector process
+2026-09-09 17:37:57.168 KST [2767] HINT:  Future log output will appear in directory "log".
