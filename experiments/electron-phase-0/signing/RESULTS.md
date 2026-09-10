@@ -46,8 +46,12 @@ ALLOW로 분류한 42건이 그대로 위반으로 다시 나온다. 같은 트�
 `bundle/python` ALLOW 42건·위반 0건, `bundle/pg`·`bundle/ffmpeg` 위반 0건으로 **전부
 exit 0**이다(증거 `docs/superpowers/reports/evidence/phase-0/t8-bundle-integrity.txt`).
 즉 원본은 멀쩡하고, 어긋난 것은 검사 호출의 루트다. 이 Task는 공유 검사기와 허용 목록을
-고치지 않았다 — 그 둘은 Task 3에서 리뷰를 거쳤고 계획 Task 12 V1도 같은 형태로 부른다.
-**계획 쪽 결정 사항으로 남긴다.**
+고치지 않았다 — 그 둘은 Task 3에서 리뷰를 거쳤다. **고친 쪽은 호출이다.** 커밋
+`a276953`이 계획 Task 8 V7을 번들별 V7·V7b·V7c로 쪼개고 규칙 6e("G1 정적 검사는 번들을
+하나씩 부른다")를 신설했으며, 계획 Task 11 V1도 `t11-g1-all-bundles.sh`로 셋을 각각
+검사한다. 검사기를 접미사 매칭으로 바꾸는 대안은 택하지 않았다 — 그러면 "경로를 반드시
+적게 해 전역 면제를 막는다"는 허용 목록 설계가 무너지고, 상위 루트 호출은 형제 번들 간
+절대경로 참조를 INFO로 흡수해 오히려 느슨해진다.
 
 **디스크 판단.** 데이터 볼륨 여유가 12~15 GiB뿐이고 `bundle/python`이 1.5 GiB다. `bundle/`
 전체(약 1.6 GiB)를 복사해도 여유가 10 GiB 이상 남으므로 **부분 복사를 택하지 않고 전체를
@@ -338,15 +342,23 @@ R-4 표면 넷을 골라 **최소 집합**과 **거기서 `allow-unsigned-execut
   한다.)
 - **실제로 죽는 것은 `numba`다.** `numba`는 LLVM MCJIT으로 기계어를 만들어 **쓰기+실행**
   메모리에 올린다. hardened runtime은 그 매핑을 거부하고, 파이썬 예외가 아니라
-  프로세스를 SIGKILL한다(`exit 137 = 128+9`). `import numba` 만으로 죽는다.
+  프로세스를 SIGKILL한다(`exit 137 = 128+9`).
 
-  이것이 담화에 걸리는 이유는 import 사슬이다. **`mlx_whisper` → `numba`.** `numba`가
-  죽으면 STT 경로가 통째로 죽는다는 뜻이다. 다만 **`dlv`만 붙인 회차에서
-  `stack-imports`를 직접 재지는 않았다** — `reduce` 단계는 첫 FAIL(`numba-jit`)에서
-  멈추고, §3 표의 그 행이 나머지를 `-`로 남긴 이유가 그것이다. 그 회차에서 실제로 본 것은
-  `import numba` + `@njit` 실행이 SIGKILL된다는 것이고, `mlx_whisper`가 그 import를
-  끌어온다는 것은 import 사슬에서 온다. Phase 4가 사슬을 끊는 선택지를 볼 때 이 구분이
-  필요하다.
+  **사망 지점은 이 Task가 특정하지 못했다.** `check_numba_jit`(`probe.sh:391-406`)이 한
+  프로세스에서 `import numba` + `@njit` 정의 + 호출을 모두 하므로, SIGKILL이 import에서
+  났는지 컴파일에서 났는지 증거가 구분하지 않는다. 잰 것은 **그 셋을 묶어 돌리면
+  SIGKILL이고 `uem`을 붙이면 통과한다**까지다.
+
+  **방향이 Phase 4 작업량을 바꾼다.** 이것이 담화에 걸리는 자리는 `mlx_whisper` →
+  `numba` import 사슬인데, 번들의 `mlx_whisper/timing.py`는 `:8`에서 `import numba`를
+  하고 `:47`·`:72`에서 `@numba.jit(nopython=True)`로 함수를 **지연 컴파일**한다. 사망
+  지점이 컴파일이라면 STT는 import에서 죽지 않고 **word-timestamp DTW 경로에서만**
+  죽는다 — 그러면 사슬을 끊는 대신 그 기능만 피하는 선택지가 생긴다. import 자체가
+  거부되는 것이라면 STT 경로가 통째로 죽는다. **재측정 대상이며 Phase 4로 넘긴다**
+  (`import numba` 만 하는 프로세스와 `@njit` 호출까지 하는 프로세스를 갈라 재면 된다).
+
+  덧붙여 **`dlv`만 붙인 회차에서 `stack-imports`를 직접 재지는 않았다** — `reduce` 단계는
+  첫 FAIL(`numba-jit`)에서 멈추고, §3 표의 그 행이 나머지를 `-`로 남긴 이유가 그것이다.
 
   **`com.apple.security.cs.allow-jit`은 최소 집합에 들어가지 않는다.** `allow-jit`은
   `MAP_JIT` 매핑을 허용하는 entitlement이고 numba의 LLVM MCJIT은 그 경로를 쓰지 않는
@@ -460,7 +472,6 @@ cdhash 단위로 기억돼서, 같은 cdhash를 한 번 통과시키면 그 다�
 2026-09-10 10:49:35.702 Df syspolicyd[728:fa0c74] [com.apple.syspolicy.exec:default] GK evaluateScanResult: 1, PST: (path: d29b941d1e24aa8e), (team: (null)), (id: damwha-t8-gk-20260910014924-postgres), (bundle_id: NOT_A_BUNDLE), 1, 0, 1, 0, 0, 0, 0
 ```
 
-<!-- END:gatekeeper -->
 
 **위 블록의 출처를 밝혀 둔다.** 이 절의 값은 `2026-09-10T01:49:42Z`에 완주한
 `probe.sh quarantine` 회차가 만든 것이지만, 그 회차가 쓴 증거 파일은 남아 있지 않다.
@@ -470,8 +481,23 @@ cdhash 단위로 기억돼서, 같은 cdhash를 한 번 통과시키면 그 다�
 증거 파일 `t8-quarantine.txt`는 그 완주 회차가 남긴 작업 산출물
 (`sandbox/t8/frag-gatekeeper.md`, `sandbox/t8/gk-syslog.txt`)에서 **복구한 것**이며,
 파일 머리말이 그 사실을 적고 있다. **격리 속성을 다시 붙이지 않기로 한 결정에 따라
-재실행하지 않았다.** 재실행하면 `probe.sh quarantine`이 이 파일을 회전시키고 진짜 증거를
-새로 쓴다 — 중단되어도 속성이 남지 않도록 `cmd_quarantine`에 `trap`을 걸어 두었다.
+재실행하지 않았다.**
+
+이 문단은 `<!-- END:gatekeeper -->` **안쪽**에 있다. 밖에 두면 다음 회차가 블록만 갈아
+끼우고 이 문단은 그대로 남아 진짜 증거를 "복구본"이라고 거짓말한다.
+
+**다음 회차 주의.** `cmd_quarantine`의 정리 트랩은 2026-09-10 시점에 **주장하는 보장을
+하지 못했다** — 핸들러가 읽는 `targets`가 함수의 `local`이라 EXIT 트랩 시점에 스코프
+밖이고, `set -u` 아래에서 `targets: unbound variable`로 즉시 죽어 정리를 0건 했다.
+INT/TERM 에서는 정리하되 bash 가 루프 다음 문장으로 복귀해 남은 대상에 속성을 다시
+붙였고, `HUP`은 트랩 목록에 없었다. 위에 적힌 "속성이 남았다"가 그 결과다. 상태를
+`T8_GK_*` 전역으로 올리고 신호 핸들러가 정리 후 기본 처분으로 자신에게 같은 신호를 다시
+올려 실제로 멈추도록 고쳤으며, `HUP`을 추가했다. **그 수정은 재현 대조군으로만
+확인했고(정리 0건→3건, 신호 시 exit 0·끝까지 진행→exit 130·즉시 중단) 이 경로 자체는
+아직 실행되지 않았다 — 다음 `probe.sh quarantine`이 첫 실측이다.**
+
+<!-- END:gatekeeper -->
+
 
 ### 해석
 

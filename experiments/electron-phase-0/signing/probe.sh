@@ -90,6 +90,17 @@ ENT_TOKENS="jit uem dlv"
 # 나머지 결과가 통째로 사라진다.
 CHECKS="selfcheck unsigned-so numba-jit stack-imports torch-mps torch-jit mlx-metal mlx-compile mlx-lm-gen"
 
+# quarantine 회차의 정리 트랩이 읽는 상태.
+#
+# 전역인 이유: EXIT 트랩은 cmd_quarantine 이 **반환한 뒤**에 돈다. 그 시점에
+# 함수의 local 은 이미 스코프 밖이고, set -u 아래에서 핸들러가
+# "targets: unbound variable" 로 즉시 죽어 정리를 한 건도 못 한다.
+# 2026-09-10 실제로 그렇게 돼 signed/python/bin/python3.12 에 격리 속성이 남았다.
+T8_GK_TARGETS=""
+T8_GK_BACKUP=""
+T8_GK_LEVEL="none"
+T8_GK_ABORT=0
+
 # --- 작은 도구 ---------------------------------------------------------------
 
 t8_die() { echo "FAIL: $*" >&2; exit 1; }
@@ -383,8 +394,10 @@ def check_numba_jit(prefix):
     메모리에 올린다. hardened runtime 아래에서는 그 매핑이 거부되고, 파이썬
     예외가 아니라 프로세스가 SIGKILL 로 죽는다.
 
-    import 만으로도 죽으므로 실행까지 갈 필요는 없지만, JIT 이 정말 도는지를
-    보려고 @njit 함수를 하나 컴파일해 부른다.
+    주의 — 이 검사는 import 와 컴파일과 호출을 **한 프로세스에서 함께** 한다.
+    그래서 SIGKILL 이 나도 어디서 죽었는지 구분하지 못한다. mlx_whisper 의
+    @numba.jit 은 지연 컴파일이라 그 구분이 STT 경로의 크기를 바꾼다
+    (RESULTS.md §4 참조). 갈라 재려면 검사를 둘로 나눠야 한다.
     """
     import numba
     import numpy as np
@@ -1536,6 +1549,12 @@ cmd_quarantine() {
   local targets out
   targets="$SIGNED_ROOT/python/bin/python3.12 $SIGNED_ROOT/ffmpeg/bin/ffprobe $SIGNED_ROOT/pg/bin/postgres"
   out="$WORK/quarantine.txt"
+
+  # 정리 트랩이 읽는 전역. 격리 속성을 붙이기 **전에** 채운다.
+  T8_GK_TARGETS="$targets"
+  T8_GK_BACKUP="$backup_dir"
+  T8_GK_LEVEL="$level"
+  T8_GK_ABORT=0
   : > "$out"
 
   # 대상을 격리 러너로 한 번 부른다. 결과는 T8_Q_RC / T8_Q_OUT 에 남는다.
@@ -1565,7 +1584,7 @@ cmd_quarantine() {
     local target plist
     target="$1"
     if [ "$target" = "$SIGNED_PY" ]; then
-      plist=$(t8_plist_for "$level")
+      plist=$(t8_plist_for "$T8_GK_LEVEL")
       if [ -z "$plist" ]; then
         "$CODESIGN" --force --sign - --options runtime --timestamp=none "$target" >/dev/null 2>&1
       else
@@ -1584,16 +1603,19 @@ cmd_quarantine() {
   # 건드리는 모든 실행에서 Gatekeeper 가 사용자 화면에 대화상자를 띄운다
   # ("… Not Opened — Apple could not verify …"). 2026-09-10 실제로 그렇게 됐고
   # signed/python/bin/python3.12 에 속성이 남았다. 그래서 회차 밖에서 한 번 더
-  # 보장한다 — trap 은 정상 종료·인터럽트·오류 모두에서 돈다.
+  # 보장한다.
   #
   # 되돌리기까지 여기서 한다. 휴지통으로 옮겨진 파일이 있으면 백업에서 복구하고
   # 원래 서명 상태로 다시 서명한다. 같은 일을 (7)이 이미 했더라도 무해하다.
+  #
+  # 핸들러가 읽는 것은 전부 T8_GK_* 전역이다 — local 이면 EXIT 트랩 시점에
+  # 스코프 밖이라 set -u 가 핸들러를 죽인다 (파일 머리말의 전역 선언 참조).
   t8_gk_cleanup() {
     local rc_saved c
     rc_saved=$?
-    for c in $targets; do
-      if [ ! -f "$c" ] && [ -f "$backup_dir/$(basename "$c")" ]; then
-        cp -p "$backup_dir/$(basename "$c")" "$c" 2>/dev/null || true
+    for c in ${T8_GK_TARGETS:-}; do
+      if [ ! -f "$c" ] && [ -f "${T8_GK_BACKUP:-}/$(basename "$c")" ]; then
+        cp -p "$T8_GK_BACKUP/$(basename "$c")" "$c" 2>/dev/null || true
         chmod u+w "$c" 2>/dev/null || true
       fi
       [ -f "$c" ] || continue
@@ -1602,10 +1624,31 @@ cmd_quarantine() {
     done
     return $rc_saved
   }
-  trap 't8_gk_cleanup' EXIT INT TERM
+
+  # 신호는 정리만 하고 끝나서는 안 된다. bash 는 핸들러가 반환하면 루프의 다음
+  # 문장으로 **복귀**하므로, 정리한 직후 남은 대상에 격리 속성을 다시 붙이고
+  # 회차를 계속한다. TERM→유예→KILL 감독자 아래에서는 그 KILL 이 트랩 없이
+  # 꽂혀 속성이 그대로 남는다. 그래서 정리 후 기본 처분으로 자신에게 같은
+  # 신호를 다시 올려 종료 상태(128+signo)까지 보존하며 실제로 멈춘다.
+  t8_gk_signal() {
+    local sig
+    sig="$1"
+    T8_GK_ABORT=1
+    echo
+    echo "!! $sig 수신 — 격리 속성을 떼고 중단한다"
+    t8_gk_cleanup
+    trap - EXIT "$sig"
+    kill -s "$sig" $$
+  }
+
+  trap 't8_gk_cleanup' EXIT
+  trap 't8_gk_signal INT' INT
+  trap 't8_gk_signal TERM' TERM
+  trap 't8_gk_signal HUP' HUP
 
   local t rel rc body crc cout assess arc got ident gone plist
   for t in $targets; do
+    [ "$T8_GK_ABORT" -eq 0 ] || break
     [ -f "$t" ] || { echo "-- ${t#$SIGNED_ROOT/}: 파일이 없다 — 건너뛴다"; continue; }
     rel="${t#$SIGNED_ROOT/}"
     echo "-- $rel"
