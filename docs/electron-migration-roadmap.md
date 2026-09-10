@@ -249,8 +249,6 @@ Phase 3과 4는 기술적으로 분리 가능한 부분이 있지만, 실행·�
 - 단계별 리뷰는 매번 사용자의 수동 승인을 요구한다는 의미는 아니다. 승인된 범위 안의 수정은 계속 진행하고, 범위나 주요 동작이 바뀌면 스펙을 갱신·재리뷰하고 사용자에게 확인한다.
 - 모든 단계 완료 후 Phase 전체 완료 기준과 통합 동작을 검증하고 최종 리뷰한다.
 
-계획 실행 단계는 `.claude/skills/electron-plan-execute/`의 절차로 진행한다. Task마다 `electron-implementer` → `electron-verifier` → `electron-reviewer` 서브 에이전트를 순서대로 띄우고, 리뷰어는 구현 대화 없이 diff·스펙·계획·검증 증거만으로 판단한다. 각 에이전트의 model은 계획 Task의 `Tier`/`Model` 헤더로 정하며, 수정 루프는 3회를 넘기지 않는다. 계획 Task가 갖춰야 할 `Verify`·`Review` 블록 형식은 같은 스킬의 `references/plan-task-format.md`에 있고, 계획 검증 단계에서 이 형식을 기준으로 확인한다. 스펙·계획·계획 검증 단계는 서브 에이전트 없이 메인 세션이 진행한다.
-
 ### 6. 결과 반영
 
 - 완료한 범위, 검증 환경·명령·결과, 리뷰 지적과 해결 여부를 결과 문서에 기록한다.
@@ -269,6 +267,29 @@ Phase 3과 4는 기술적으로 분리 가능한 부분이 있지만, 실행·�
 결과 문서에는 스펙 리뷰, 계획 검증, 단계별 실행·리뷰, 최종 검증을 구분해서 기록한다. 각 기록에는 대상 버전 또는 커밋, 검토자, 지적 사항, 조치, 검증 증거, 통과 여부를 포함한다.
 
 작성·리뷰 중인 문서는 수정할 수 있다. 확정된 날짜별 스펙·계획은 당시 결정의 기록으로 보존하고, 확정 후 설계 변경은 후속 문서에 원문 링크와 변경 이유를 남긴다. 진행 상태와 변경된 전체 범위는 이 로드맵에 반영한다.
+
+## 사용하는 스킬 — superpowers 플러그인
+
+**위 여섯 단계는 `superpowers` 플러그인의 스킬로 진행한다.** 전용 하네스를 따로 만들지 않는다.
+
+| 단계 | 스킬 |
+| --- | --- |
+| 1. 구현 스펙 | `superpowers:brainstorming` — 스펙을 쓰기 전에 의도·요구사항·설계를 먼저 좁힌다 |
+| 3. 구현 계획 | `superpowers:writing-plans` |
+| 5. 계획 실행 | `superpowers:executing-plans`(별도 세션에서 리뷰 체크포인트를 두고 실행) 또는 단계가 서로 독립적이면 `superpowers:subagent-driven-development`(현 세션에서 Task를 서브 에이전트로) |
+| 5. 단계별 리뷰 | `superpowers:requesting-code-review` / `superpowers:receiving-code-review` |
+| 5·6. 완료 선언 전 | `superpowers:verification-before-completion` — 증거 없이 "통과"라고 쓰지 않는다 |
+| 구현 중 | `superpowers:test-driven-development`, 버그·검증 실패에는 `superpowers:systematic-debugging` |
+| 브랜치 운영 | `superpowers:using-git-worktrees`, 병합 판단에 `superpowers:finishing-a-development-branch` |
+
+스킬이 대체하지 않는 이 로드맵의 규칙은 그대로 적용한다.
+
+- 리뷰어는 구현 대화를 받지 않고 **diff·스펙·계획·검증 증거만으로** 판단한다.
+- 한 단계의 수정 루프는 **3회를 넘기지 않는다.** 넘어가면 계획 자체의 결함을 의심하고 사용자에게 확인한다.
+- **스펙·스펙 리뷰·계획 검증(1·2·4단계)은 메인 세션이 진행한다.** 이 세 단계는 사용자 승인이 걸려 있어 서브 에이전트에 넘기지 않는다.
+- 계획의 각 단계는 `Verify`와 `Review` 블록을 갖추고, 4단계(계획 검증)가 그 형식을 확인한다.
+
+**Phase 0은 이 방식이 아니었다.** `.claude/skills/electron-plan-execute/`와 `electron-implementer`·`electron-verifier`·`electron-reviewer` 서브 에이전트로 진행했고, Phase 0 결과 문서의 "검토자 (model)" 열이 그 에이전트 이름을 가리킨다. 그 기록은 당시 방식대로 보존하며, Phase 1부터는 위 표를 따른다.
 
 ## 브랜치 운영 방식
 
