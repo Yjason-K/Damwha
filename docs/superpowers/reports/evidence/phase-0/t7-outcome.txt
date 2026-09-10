@@ -1,5 +1,5 @@
 # Task 7 V3 — 회의가 done 인가 / normalize·probe·persist 가 돌았는가 (P0-C4)
-# utc: 2026-09-10T00:35:56Z
+# utc: 2026-09-10T00:57:19Z
 # 스코프: mtg_2 (t7-meeting-id.txt). Task 6 의 mtg_1 은 세지 않는다.
 # 격리: 이 스크립트는 **클라이언트**다 — 서버에 붙어 질의할 뿐이므로
 #       G2 를 지나지 않는다 (스펙 §4.0).
@@ -11,7 +11,11 @@
 RC_ID=0
 
 == 의존 서비스
-  db: 살아 있음 (pid 74506)
+  db 가 떠 있지 않다 — run-isolated.sh --label t7-pg-restart 로 기동한다
+postgres 기동: pid 87391  port 55432  data /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/pgdata
+준비됨 (pg_isready)
+데이터베이스 damwha 있음
+  db: 기동됨 (pid 87391)
 RC_DB=0
 
 == meeting 행 (mtg_2)

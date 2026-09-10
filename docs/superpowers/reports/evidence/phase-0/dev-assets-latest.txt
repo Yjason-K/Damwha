@@ -1,5 +1,5 @@
 # snapshot-dev-assets.sh — 개발 자산 무변화 확인 (스펙 §4.4)
-# utc: 2026-09-10T00:36:19Z
+# utc: 2026-09-10T00:58:13Z
 ## before
 ## docker volumes
 docker: daemon-unreachable

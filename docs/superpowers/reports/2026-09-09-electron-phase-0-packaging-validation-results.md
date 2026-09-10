@@ -148,6 +148,42 @@ Task 1은 통과했으나 reviewer가 Task 2·5 착수 전 반영을 권고한 �
 
 | 6 | `3f98475..5ad955b` | electron-reviewer (opus) | 1 | 없음 | `evidence/phase-0/task-6-r1.md` | **PASS** |
 
+| 7 | `350f03f..45aacd6` (`6668045`, `1727761`, `45aacd6`) | electron-reviewer (fable) | 2 | T7-B1 (해소) | `evidence/phase-0/task-7-r{1,2}.md` | **PASS** |
+
+### Task 7 상세
+
+**P0-C4 충족.** 번들 런타임만으로 31분 실제 오디오가 처리됐다 — 개발 venv도 Homebrew도 Docker도 없이.
+
+| 단계 | DB로 확인 | 로그값 |
+| --- | --- | --- |
+| normalize | `normalized_key` + 43.3 MB 파일 | 1,677 ms |
+| probe | `duration_ms=1883254` | — |
+| VAD | **DB 행 없음 — 로그만** | 7,046 ms, spans=268 |
+| diarization | `diar_label` 5종 | 169,527 ms, segments=1272 |
+| ECAPA | centroid 5/5, voiceprint 5 | 28,550 ms |
+| identify | provisional 화자 5 = `identified=0/5` | 50 ms |
+| STT | text 있는 `ok` 373건 | 315,088 ms, words=4028 |
+| align | order_index/start/end 457행 | 64,602 ms |
+| persist | `job done/progress=100` | `outcome=committed` |
+
+VAD만 DB 흔적이 없어 로그로 판정했다. reviewer가 타당하다고 봤다 — 그 줄은 제품 코드 `pipeline/timing.py::timed_stage`가 찍고 G2 래퍼가 stderr를 그대로 받은 것이지 구현자의 진술이 아니며, `process_meeting.py:85-87`에서 VAD는 건너뛸 스위치가 없고 STT가 그 `speech_spans`를 입력으로 받으므로 하류 DB 흔적이 있으면 구조적으로 돈 것이다.
+
+**차단 T7-B1 — V5가 멱등하지 않았다.** `RC_NEW`가 **현재** `t7-pipeline.txt`의 `NEW` 표시만 봐서, 캐시가 남는 한 재실행이 영원히 exit 1이었다. 스펙 §4.4는 "재실행은 멱등해야 한다"와 "처음부터 받은 측정은 빈 캐시에서 한 번만 수행하고 **그 회차를 증거에 명시**한다"를 요구한다 — "그 회차 기록"이지 "매 회차 새로 받음"이 아니다. 계획 V5의 기대 문구도 "저장소가 **존재**"였다. **스크립트가 계획보다 엄격해서 생긴 구현 결함이다.**
+
+수정은 (a)+(b) AND — 회전된 `t7-pipeline.prev-*.txt` 전수 탐색으로 회차를 특정하고, blobs가 실체·심볼릭 링크 아님·**`nlink` 전부 1**·생성 시각으로 재실행 멱등을 준다. `nlink=1`이 "개발자 캐시와 실체를 하드링크로 공유하지 않는다"를 **개발자 홈을 읽지 않고** 말해 준다.
+
+**"새로 받았다"의 실제 증거는 nlink가 아니다.** reviewer가 1회차 stderr의 httpx 요청 시각과 blob 생성 시각이 **파일 단위로 1:1 대응**함을 찾았다 — `config.yaml` 15:58:16Z↔`4022db…`, `segmentation/pytorch_model.bin` 15:58:26Z↔`7ad243…`, `plda/xvec_transform.npz` 15:58:29Z↔`325f1c…`, `plda/plda.npz` 15:58:30Z↔`9b77bc…`, `embedding/pytorch_model.bin` 15:58:32Z↔`6f10ff…`. `nlink=1`은 하드링크 공유만 배제하고 `cp`·APFS clone은 배제하지 못한다.
+
+**변이 9종 중 7종이 FAIL을 냈다** — blobs 전부 심볼릭 링크 / nlink 추가 / 회차 기록 제거 / 저장소 삭제 / `blobs/` 심볼릭 링크 / `blobs/` 비움 / 회차 파일 전무. 부수로 scratch 경로에서 돌리자 기록된 `HF_HOME` 대조가 살아 FAIL했다.
+
+**V7 `snapshot-dev-assets.sh after` exit 1 — 일치: 아니오.** 원인은 `before`(00:14:47Z)가 `docker: daemon-unreachable`, `after`가 볼륨 목록인 **docker 프로브 도달성 전환**이며, `be/storage` 매니페스트는 before/after 모두 `a18870e6592f160f3545fa349ec3fa972a1993f3b3203fdf21303012cf6391be`(29 files, 2,227,477,523 bytes)로 동일하다. 스펙 §4.4의 "`be/storage` 무변화"는 충족, 검사기 exit 코드는 미충족. 후속: Task 11 `t11-dev-untouched.sh`. **`before`를 다시 찍어 exit 0을 만들지 않는다** — 실험 이전 상태가 아니게 된다.
+
+**V2는 재리뷰 회차에 미실행이다.** 수정(`45aacd6`)이 `verify/t7-lib.sh`(+9)와 `verify/t7-sandbox-models.sh`(+111/-28)만 건드렸고 드라이버·번들·`be/worker`는 무변경이라, V5가 V2의 산출 파일을 읽기만 하므로 파이프라인 재실행이 판정에 새 정보를 주지 않는다. r1 결과(`outcome: committed`, `mtg_2`, 567,389 ms)를 옮겨 적었고 통과로 세지 않았다.
+
+**시간대 버그.** `stat -t '%Y-%m-%dT%H:%M:%SZ'`는 **현지 시각에 리터럴 `Z`를 붙인다** — 같은 blob에 `2026-09-10T00:58:16Z`(KST에 Z) vs `date -u -r`의 `2026-09-09T15:58:16Z`. 9시간·1일 어긋난다. reviewer가 `experiments/electron-phase-0/{lib,verify,pg,services}` 전체를 훑어 `stat`에 `-t`나 `%S` 서식을 쓰는 다른 곳이 **없음**을 확인했다 — 다른 Task 증거의 시각 표기는 틀리지 않았다.
+
+**재실행에서 458→457로 1건 줄었다.** STT 단어 수 4028→4013에 따른 align 차이이고 mlx-whisper GPU 경로의 비결정성이다. `transcribe_failed`는 두 회차 모두 84로 같고 VAD·diarize·embed는 `spans=268`·`segments=1272`·`clusters=5`로 결정적이었다.
+
 ### Task 6 상세
 
 P0-C2 충족. 번들 PostgreSQL(55432)과 번들 embed(58100)를 붙여 `search.repository.ts`와 같은 CTE 구조로 질의했다. 질의 `'예산'`, cand_k=100, rrf_k=60 → **kw 3 / sem 12 / fused 12.** 두 경로가 각각 0건이 아니다.
@@ -326,6 +362,15 @@ Task 1에서 나왔고 수정하지 않기로 한 것들이다.
 - 번들 Mach-O 460개 중 `relocate`가 손대지 않은 파일에 **서명이 아예 없는 것**이 있다(`charset_normalizer/*.so`, `fontTools/*.so`, `_sounddevice_data/…/libportaudio.dylib`; `codesign -v` → `code object is not signed at all`). 지금은 로드된다. **Task 8의 직접 입력**이라 계획에 전수 목록 작성을 넣었다.
 - 스펙 §4.4의 `docker volume ls` after 측정이 OrbStack 무응답(26분)으로 빠졌다. Task 3 코드에 docker 호출이 없고 볼륨에 쓰는 경로가 없어 차단으로 보지 않았다. Task 4 시작 시 before 목록(볼륨 15개)과 대조해 사후 보완하도록 계획에 넣었다.
 - **리뷰 부수효과(reviewer 자진 신고):** 사본 `damwha-embed --help`를 시험하다 그 진입점이 인자를 무시하고 서버를 띄운다는 것을 몰라 127.0.0.1:8100에 embed 서버가 두 번 떴다. 각각 PID로 종료했고 사전에 8100 리스너가 없어 개발 프로세스와 충돌하지 않았다. 그 실행이 `~/.cache/huggingface/.agent_harnesses.json`(6 KB 메타데이터)을 썼다 — 모델 파일 변경은 없으나 §4.4 문면상 위반이다. **`damwha-embed`·`damwha-worker`는 인자를 무시하고 바로 서비스를 띄우므로 `--help`로 시험하지 마라.**
+
+**Task 7에서 나온 것**
+- `verify/t7-sandbox-models.sh:110-119` — `nsym`(심볼릭 링크 수)을 출력만 하고 판정에 쓰지 않는다. reviewer 변이: 가장 큰 blob 26 MB 하나만 실제 캐시로의 심볼릭 링크로 바꿔도 **exit 0**이다(실체 판정이 `nb>=1 && bb>=1MB`뿐이라 나머지 5.9 MB가 문턱을 넘긴다). 1회차 스크립트에도 같은 구조였으므로 이번 수정의 퇴행은 아니고 실제 캐시는 심볼릭 링크 0개다. `[ "$nsym" -eq 0 ]`을 조건에 넣어야 한다.
+- 같은 파일 `:120-128` — 실체 파일이 0개일 때 `nbad=0`이 되어 `OK 전부 nlink=1`을 찍는다. 종료 코드는 다른 축에서 FAIL이라 판정은 맞지만 **출력 문장이 거짓**이다.
+- 같은 파일 `:130-140`·`:165-190` — 생성 시각과 회차 기록이 **서로 묶여 있지 않다.** 캐시가 NEW 회차 뒤에 지워지고 개발자 캐시에서 `cp`로 채워져도 nlink=1 + NEW 기록으로 통과한다. 실제 증거에서는 httpx 로그와 blob 시각을 사람이 읽어 묶었다.
+- `verify/t7-lib.sh:40-48`의 회전 파일명이 **1초 단위**라 같은 초의 두 회차 중 앞의 것이 `mv`로 덮인다. `t7-v5-idempotent.txt`에서 00:53:27 회차가 실제로 사라졌다. **t2·t4·t5·t6 lib와 `process_meeting_driver.py:188`·`seed_search.py:128`도 같은 형태다.** `mv -n` + 접미사 루프로 통일해야 한다.
+- `t7-no-docker.sh`의 리터럴 검사가 양쪽으로 약하다. reviewer 변이: `import docker` 추가 → exit 1, 주석 `# Docker is not used here` → exit 1(설명문까지 잡음), **`__import__("test"+"containers")` → exit 0**, `subprocess.run(["/usr/local/bin/"+"doc"+"ker",…])` → exit 0. 검사를 만족시키려고 docstring을 두 번 고치고 README에 "이름을 적지 마라"를 적게 된 것은 **검사가 문서 내용을 좌우하는 신호**다. `ast`로 import 이름·`subprocess` argv를 수집하고 주석·docstring은 제외해야 한다.
+- `process_meeting_driver.py:313-321`의 provisional 화자 GC가 **전역 조건**이다. 제품 `db/meetings.py:196-203`과 같은 SQL이라 제품 동작을 벗어나지 않고 현재 고아 0건이지만, 뒤 Task가 고아 provisional 화자를 시드하면 Task 7 재실행이 말없이 지운다.
+- 정규화에 쓴 **ffmpeg** 바이너리의 dyld 실측이 이 Task에 없다 — 재호출이 ffprobe만이다. 그 실측은 Task 4의 `t4-normalize-dyld.txt`에 있으므로 결과 기록에서 그 파일을 참조한다.
 
 **Task 6에서 나온 것**
 - `verify/t6-seed.sh:95`의 절 제목이 "난수·상수 벡터 차단"인데 **난수는 차단하지 못한다.** reviewer가 12행을 난수 단위벡터로 바꿔 확인했다 — "서로 다른 벡터 12개 / L2 노름 1"이 둘 다 OK로 exit 0이다. 상수·복제·차원 차단은 유효하다. 난수를 실제로 잡은 것은 `t6-hybrid.sh`의 C 단정 하나이고 우연 통과 확률이 9.1%다. 제목을 "상수·복제 벡터 차단"으로 좁히고 난수 차단 책임이 V3 C에 있음을 명시해야 한다.

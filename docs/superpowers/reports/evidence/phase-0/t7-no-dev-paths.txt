@@ -1,5 +1,5 @@
 # Task 7 V6 — dyld 증거에 개발 환경 경로가 0건이고 ffmpeg 가 번들인가
-# utc: 2026-09-10T00:36:08Z
+# utc: 2026-09-10T00:58:03Z
 # 판정은 ^dyld 줄 중 **이미지 로드 줄**(필드 3개 + <UUID> + 절대 경로)만
 # 대상으로 한다. 'move loaded to delayed' 줄은 로드가 아니고 경로도 없다.
 # 개발자 홈: /Users/gim-yeongjae  (worktree 가 이 아래 있어 홈 경로 전체를 금지어로

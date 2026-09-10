@@ -1,5 +1,5 @@
 # Task 7 V4 — 그 회의의 발화와 diar_label (P0-C4)
-# utc: 2026-09-10T00:35:59Z
+# utc: 2026-09-10T00:57:23Z
 # 스코프: mtg_2 (t7-meeting-id.txt). Task 6 의 mtg_1 은 세지 않는다.
 # 정확도는 판정 대상이 아니다 — 파이프라인이 실행되는가만 본다 (스펙 P0-C4 비고).
 # 격리: 이 스크립트는 **클라이언트**다 (스펙 §4.0).
@@ -7,7 +7,7 @@
 == 스코프
   대상 회의        : mtg_2  (processing_version=0)
   Task 6 의 회의   : mtg_1 — 세지 않는다
-  db: 살아 있음 (pid 74506)
+  db: 살아 있음 (pid 87391)
 RC_DB=0
 
 == utterance 의 컬럼 (화자 분리 결과는 diar_label 이다)
