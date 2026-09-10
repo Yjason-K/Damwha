@@ -90,6 +90,8 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 
 6c. **바이너리 일치는 대상에 따라 정확 일치와 접두사를 가른다.** `postgres`는 실행 파일 자신이 메인 이미지이므로 경로 정확 일치로 본다. **`mlx_lm.server`·`uvicorn`처럼 셔뱅 스크립트인 것은 dyld의 메인 이미지가 셔뱅의 Python 인터프리터 경로**라 정확 일치가 항상 빈 값이 된다. 그쪽은 `bundle/python/` **접두사**로 판정한다 (계획 V11의 "`bundle/python` 하위"가 그 뜻이다).
 
+6e. **G1 정적 검사는 번들을 하나씩 부른다 — `bundle/` 전체를 한 번에 넘기지 않는다.** `lib/g1-allowlist.txt`의 경로 열이 **검사 대상 루트 기준 상대 경로**이고(`check-macho.sh`의 `allow_reason "${f#$ROOT/}"`), 그 목록은 Task 3이 `ROOT=bundle/python`으로 썼다. `ROOT=bundle`이면 상대 경로가 `python/lib/…`로 한 칸 깊어져 **24개 규칙이 하나도 걸리지 않고 Task 3이 ALLOW로 분류한 42건이 위반으로 되살아난다**(ALLOW 0 / 위반 42). 하위로 나눠 부르면 `bundle/python` ALLOW 42·위반 0, `bundle/pg`·`bundle/ffmpeg` 위반 0으로 전부 exit 0이다. Task 3 리뷰도 같은 이유로 "형제 참조 허용 여부는 번들별 검사 결과를 기준으로 한다"고 정했다.
+
 6d. **번들 경로에 공백을 넣지 않는다.** 판정이 `$NF` 기반이라 경로에 공백이 있으면 필드가 갈려 깨진다. `$EXP` 이하 어디에도 공백이 없어야 한다.
 
 ## Task 목록과 완료 기준 대응
@@ -596,7 +598,9 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 | V4 | `<repo root>` | `bash experiments/electron-phase-0/signing/probe.sh quarantine` | exit 0. Gatekeeper 동작(허용/차단/프롬프트)이 `RESULTS.md`에 기록 |
 | V5 | `<repo root>` | `bash experiments/electron-phase-0/verify/t8-results-complete.sh` | exit 0. `RESULTS.md`에 서명 실패 목록·entitlement 결론·Gatekeeper 동작·공증 선결 조건·`R-12`가 모두 존재 |
 | V6 | `<repo root>` | `grep -c 'notarytool' experiments/electron-phase-0/signing/probe.sh` | `0`. 실제 공증 제출을 시도하지 않았다 |
-| V7 | `<repo root>` | `bash experiments/electron-phase-0/lib/check-macho.sh experiments/electron-phase-0/bundle` | exit 0. 원본 `bundle/`이 서명 작업으로 훼손되지 않았다 |
+| V7 | `<repo root>` | `bash experiments/electron-phase-0/lib/check-macho.sh experiments/electron-phase-0/bundle/pg` | exit 0. 원본이 서명 작업으로 훼손되지 않았다 |
+| V7b | `<repo root>` | `bash experiments/electron-phase-0/lib/check-macho.sh experiments/electron-phase-0/bundle/python` | exit 0 (ALLOW 42건) |
+| V7c | `<repo root>` | `bash experiments/electron-phase-0/lib/check-macho.sh experiments/electron-phase-0/bundle/ffmpeg` | exit 0 |
 
 **Review**
 
@@ -730,19 +734,22 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 
 - Create: `$EXP/lib/aggregate-isolation.sh` — 전 Task의 증거를 훑어 금지 문자열·`MEASUREMENT_UNAVAILABLE` 집계
 - Create: `$EXP/lib/selfreport-all.sh` — Python·PostgreSQL·ffmpeg의 런타임 자기 보고 통합 덤프 (P0-C8). 각 번들 Mach-O를 부르기 직전에 `export DYLD_PRINT_LIBRARIES=1`을 다시 설정하고 stderr를 리다이렉트하지 않는다 (위 "런처 스크립트의 dyld 실측 규칙")
-- Create: `$EXP/verify/t11-isolation.sh`, `t11-selfreport.sh`, `t11-criteria-recorded.sh`, `t11-roadmap-updated.sh`, `t11-evidence-committed.sh`, `t11-dev-untouched.sh`
+- Create: `$EXP/verify/t11-isolation.sh`, `t11-selfreport.sh`, `t11-criteria-recorded.sh`, `t11-roadmap-updated.sh`, `t11-evidence-committed.sh`, `t11-dev-untouched.sh`, `t11-g1-all-bundles.sh`
 - Modify: `docs/superpowers/reports/2026-09-09-electron-phase-0-packaging-validation-results.md` — 최종 검증·남은 제약·기술 결정 채우기
 - Modify: `docs/electron-migration-roadmap.md` — Phase 0 상태와 후속 Phase에 영향을 주는 전제 갱신
 
 **Interfaces**
 
+- **Apple의 quarantine 제거 요구사항을 Phase 6 인계에 넣는다.** Apple이 2025-02-18부터 **TestFlight·App Store로 배포되는 macOS 앱의 모든 파일**에서 `com.apple.quarantine` 확장 속성을 제거하도록 요구한다(`https://developer.apple.com/kr/news/upcoming-requirements/?id=02182025a`). 조치는 `xattr -rd com.apple.quarantine /path/to/app.app`이다.
+
+  로드맵의 배포 방식은 **DMG 직접 배포이고 Mac App Store는 명시적 제외**라 이 요구가 지금 강제되지는 않는다 — 그 페이지도 App Store 외부 배포에 대해서는 언급이 없다. 그래도 **빌드 파이프라인이 DMG를 만들기 전에 그 속성을 떼야 한다.** 이유가 둘이다. (1) 번들 안 파일에 quarantine이 붙어 있으면 실행 시 "Apple could not verify" 대화상자가 뜬다 — Task 8이 붙여 놓고 떼지 않은 속성 **하나** 때문에 사용자 화면에 반복해서 떴다. DMG로 받은 앱은 macOS가 자동으로 quarantine을 붙이므로 산출물에 **미리** 붙어 있으면 상황이 겹친다. (2) Phase 6가 Mac App Store 배포를 남겨 두면 그때 필수가 된다. **서명 전에 떼야** 서명이 그 속성을 포함하지 않는다 — 순서를 Phase 6 스펙에 고정한다.
 - **개발자 HF 캐시 격리를 검사하는 장치가 하네스에 없다.** `snapshot-dev-assets.sh`는 docker 볼륨과 `be/storage`만 보고 `~/.cache/huggingface`는 보지 않는다. Task 6 리뷰가 `~/.cache/huggingface/.agent_harnesses.json`의 mtime이 Task 3 구간(2026-09-09 22:14)이라는 것을 찾았다 — `huggingface_hub`가 개발자 HOME 캐시에 쓴 흔적이며 `hub/` 하위 모델은 무변화다. **P0-C13이 캐시 격리를 전제하므로** Task 11은 그 디렉터리의 변경을 실측해 집계에 넣는다.
 - **pid → 역할 분류에 예외 둘이 있다.** (a) `t6-seed-dyld.txt`의 `resource_tracker` pid는 메인 이미지 줄이 stderr로 새어 첫 줄이 `libpython3.12.dylib`다 — "첫 줄 = 메인 이미지" 분류기가 그 pid에서 틀린다. (b) 커밋된 증거에는 pid→역할 표가 없다(그 표는 verifier의 `task-6-r1.md`에만 있다). 규칙 6b의 "PID 파일로 먼저 고정"은 사후에 쓸 수 없으므로 집계 시 이 둘을 명시적으로 다룬다.
 - **`<label>-stderr.txt`도 금지 문자열 검색 대상에 넣는다.** Task 5에서 서버와 자식이 같은 파이프에 동시에 써서 dyld 줄 하나가 tqdm 진행 표시줄에 붙었고(`t5-embed-stderr.txt:2`), `^dyld`를 만족하지 못해 dyld 증거가 아니라 stderr 증거로 갔다. 이번엔 번들 경로라 무해했지만 **원리상 위반 줄도 같은 방식으로 필터를 비껴갈 수 있다.**
 - **`experiments/electron-phase-0/README.md`의 Task 5 절(11번)에 사실 오류가 있다.** "dyld 줄이 전부 서버 프로세스의 것"이라고 적혔으나 실제 pid 분포는 embed `74049=916 / 74336=703`, llm `75447=901 / 75033=902`다. llm은 정확히 절반이 기동 전 `fetch_model` 자식의 것이다. **그 문장을 그대로 인용해 집계하면 수치가 틀어진다** — Task 11이 정정하고 집계에는 pid별 분포를 쓴다.
 - **`docker volume ls` 공백을 메운다.** Task 3·4가 연속으로 OrbStack API 무응답(`timeout` exit 124)에 걸려 볼륨 대조를 못 했다. 대체 증거(`be/storage` 매니페스트 무변화)와 "하네스에 볼륨 쓰기 경로가 없다"는 코드 근거는 있으나, 그대로 두면 P0-C14의 "실행하지 않은 검증을 성공으로 적지 않는다"와 부딪힌다. Task 11은 착수 시 OrbStack 복구 여부를 확인해 (a) 되면 Task 3의 before 목록(볼륨 15개)과 대조해 사후 보완하고, (b) 안 되면 **미측정으로 명시**하고 대체 증거만으로 무엇이 확인됐는지 적는다.
 - **G1 허용 목록의 실동작 폴백 3건을 증명한다.** Task 3이 `lib/g1-allowlist.txt`에 `실동작-폴백`으로 표시한 세 항목 — `soundfile.py`의 `/opt/homebrew`·`/usr/local/lib` 탐색 경로, `ctypes/macholib/dyld.py`의 `DEFAULT_LIBRARY_FALLBACK`, `PIL/_imagingft…so`의 fribidi dlopen 후보 — 은 번들 안에서 라이브러리를 못 찾을 때만 실행된다. Task 11은 dyld 실측과 P0-C8 자기 보고로 **그 경로가 실제로 쓰이지 않았음**을 보여야 한다. 보이지 못하면 P0-C7을 충족으로 적지 않는다.
-- P0-C7: `bundle/` 전체에 `check-macho.sh`를 다시 돌리고, `$EVIDENCE`의 모든 `*-dyld.txt`에서 금지 문자열을 검색한다. `MEASUREMENT_UNAVAILABLE`로 표시된 실행은 별도 집계하고 P0-C8의 자기 보고로 대체 확인한다.
+- P0-C7: **`bundle/`의 세 하위 번들을 각각** `check-macho.sh`로 다시 돌리고, `$EVIDENCE`의 모든 `*-dyld.txt`에서 금지 문자열을 검색한다. `MEASUREMENT_UNAVAILABLE`로 표시된 실행은 별도 집계하고 P0-C8의 자기 보고로 대체 확인한다.
 - **집계기는 dyld 줄이 0건인 것과 측정 자체가 불가능했던 것을 구분한다.** 번들 Mach-O를 실행한 항목인데 dyld 줄이 0건이면 그것은 "위반 없음"이 아니라 **런처가 re-export를 빠뜨린 미측정**이다. 위 "런처 스크립트의 dyld 실측 규칙"을 어긴 것이므로 통과로 집계하지 않는다.
 - 집계기의 금지 문자열 면제는 `$SANDBOX` 하위와 **실제로 검사한** `bundle/` 하위로 좁힌다. `bundle/` 전체를 한 번에 `$ROOT`로 잡으면 형제 번들 참조가 INFO로 흡수되므로, 형제 참조 허용 여부는 Task 3이 번들별 검사(`bundle/pg`, `bundle/python`)에서 판정한 결과를 기준으로 한다.
 - P0-C8: Python(`sys.prefix`/`sys.path`/`sysconfig`/모듈 `__file__`), PostgreSQL(`pg_config --bindir --libdir --sharedir --pkglibdir`, `SHOW data_directory`, `SHOW dynamic_library_path`), ffmpeg/ffprobe(실행 경로)를 한 번에 덤프해 번들 밖 경로가 0건인지 확인한다.
@@ -765,7 +772,7 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 
 | # | cwd | 명령 | 기대 |
 | --- | --- | --- | --- |
-| V1 | `<repo root>` | `bash experiments/electron-phase-0/lib/check-macho.sh experiments/electron-phase-0/bundle` | exit 0. 번들 전체 정적 검사 위반 0건 |
+| V1 | `<repo root>` | `bash experiments/electron-phase-0/verify/t11-g1-all-bundles.sh` | exit 0. `bundle/pg`·`bundle/python`·`bundle/ffmpeg`를 **각각** 검사해 셋 다 위반 0건. 합계와 번들별 ALLOW 건수를 출력 |
 | V2 | `<repo root>` | `bash experiments/electron-phase-0/verify/t11-isolation.sh` | exit 0. 전 Task 증거의 금지 문자열 0건. `MEASUREMENT_UNAVAILABLE` 항목이 있으면 각각 P0-C8 대체 확인에 대응됨 |
 | V3 | `<repo root>` | `bash experiments/electron-phase-0/lib/run-isolated.sh --label t11-selfreport -- experiments/electron-phase-0/lib/selfreport-all.sh` | exit 0. Python·PostgreSQL·ffmpeg 자기 보고가 덤프됨 |
 | V4 | `<repo root>` | `bash experiments/electron-phase-0/verify/t11-selfreport.sh` | exit 0. 덤프된 모든 경로가 `bundle/` 또는 `sandbox/` 하위이고, `/Library/Frameworks/Python.framework`·`/opt/homebrew`·`/usr/local/bin`·`/usr/local/lib`·`.venv`·개발자 `~/.cache`·`~/.local`이 0건 |
