@@ -19,6 +19,12 @@ BASE 커밋: 스펙·계획 확정 커밋 `docs: Electron Phase 0 패키징 검�
 이 디렉터리는 브랜치에 보존만 된다"). 꺼내 보려면
 `git show archive/electron-phase-0-packaging-validation:<경로>`.
 
+**워크트리도 비웠다 (2026-09-10).** `bundle/`·`signed/`·`stage/`·HF 모델 등 재생성 가능한
+자산 약 15 GB를 지웠다. 되살리는 절차는 `experiments/electron-phase-0/README.md`의
+"정리된 상태에서 되살리기"에 있다. 지우기 전에 `sandbox/t8/`만 증거로 옮겨 커밋했다
+(`evidence/phase-0/t8-sandbox-work/`) — `signing/RESULTS.md` §6의 출처와 entitlement plist
+원본, 사라진 번들의 Mach-O 전수 목록이라 재생산할 수 없다.
+
 ## 스펙 리뷰
 
 | 회차 | 대상 버전 | 검토자 | 지적 | 조치 | 통과 |

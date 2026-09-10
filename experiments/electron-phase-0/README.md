@@ -74,6 +74,72 @@ bash experiments/electron-phase-0/lib/snapshot-dev-assets.sh before
 bash experiments/electron-phase-0/lib/snapshot-dev-assets.sh after
 ```
 
+## 정리된 상태에서 되살리기
+
+**2026-09-10에 이 워크트리의 재생성 가능한 자산을 전부 지웠다.** 15 GB → 133 MB.
+Phase 0을 중단하고 폴더를 참조용으로만 두기로 한 결정이다. 커밋된 스크립트·문서·증거는
+그대로 있고, 아래 것들이 없다.
+
+| 지운 것 | 용량 | 되살리는 명령 |
+| --- | --- | --- |
+| `sandbox/home/.cache` (HF 모델 5종) | 11 G | 파이프라인·서비스가 자동 다운로드. `services/llm.sh fetch-model`은 LLM만 따로 받는다 |
+| `bundle/` | 1.6 G | `pg/build.sh` · `python/build.sh all` · `ffmpeg/fetch.sh` |
+| `signed/` | 1.5 G | `signing/probe.sh sign` (`bundle/`이 먼저 있어야 한다) |
+| `stage/` | 613 M | 위 build.sh들이 중간물로 다시 만든다 |
+| `downloads/` | 36 M | 위 스크립트가 다시 받는다. 원본 해시는 `pg/checksums.txt`·`ffmpeg/checksums.txt`에 있다 |
+| `sandbox/{storage,audio,pgdata,run,tmp}` | 442 M | `sandbox.sh init` + `copy-audio` + `pg/run.sh initdb` |
+| 워크트리 `node_modules/` | 366 M | `pnpm install` (루트에서) |
+
+남긴 것은 `sandbox/{t8,state,driver}`다. 그중 `sandbox/t8/`은
+`docs/superpowers/reports/evidence/phase-0/t8-sandbox-work/`에 **사본을 커밋해 뒀다** —
+`RESULTS.md` §6의 출처(`gk-syslog.txt`·`frag-gatekeeper.md`)와 entitlement plist 원본,
+그리고 사라진 번들의 Mach-O 전수 목록이 거기 있고 지금은 재생산할 수 없다. 그 디렉터리의
+`README.md`가 되돌려 놓는 방법을 적는다.
+
+### 순서
+
+디스크 여유는 **모델까지 포함해 25 GiB 이상** 잡는다 (계획 Task 9의 `preflight.sh 25`).
+
+```sh
+# 0) 워크스페이스 (루트에서 — be/ 안에서 npm install 금지)
+pnpm install
+
+# 1) 사전 점검과 샌드박스
+bash experiments/electron-phase-0/lib/preflight.sh 25
+bash experiments/electron-phase-0/lib/sandbox.sh init
+bash experiments/electron-phase-0/lib/sandbox.sh copy-audio mtg_28
+
+# 2) 세 번들 — 각각 독립이라 순서는 상관없다
+bash experiments/electron-phase-0/pg/build.sh
+bash experiments/electron-phase-0/python/build.sh all
+bash experiments/electron-phase-0/ffmpeg/fetch.sh
+
+# 3) G1 정적 검사 — 번들별로 부른다 (규칙 6e: bundle/ 전체를 한 번에 넘기면 위반 42건이 되살아난다)
+for b in pg python ffmpeg; do
+  bash experiments/electron-phase-0/lib/check-macho.sh "experiments/electron-phase-0/bundle/$b"
+done
+
+# 4) DB
+bash experiments/electron-phase-0/pg/run.sh initdb
+bash experiments/electron-phase-0/pg/run.sh start
+DATABASE_URL=postgresql://postgres@127.0.0.1:55432/damwha pnpm be:migrate   # §4.0 — 클라이언트는 격리 대상 밖
+
+# 5) 서비스
+bash experiments/electron-phase-0/services/embed.sh start
+bash experiments/electron-phase-0/services/llm.sh start
+
+# 6) 서명 사본 (Task 8을 다시 볼 때만)
+bash experiments/electron-phase-0/signing/probe.sh sign
+```
+
+`HF_TOKEN`이 환경에 있어야 게이트 저장소(`pyannote/speaker-diarization-community-1`)를
+받는다. `$SANDBOX` 이하 경로에 **공백이 있으면 안 된다** (계획 규칙 6d).
+
+**`probe.sh quarantine`을 돌리기 전에 읽어라.** 정리 트랩의 결함(T8-B1)은 커밋
+`a1c0f0d`에서 고쳤지만 **그 경로는 아직 한 번도 실행되지 않았다.** 중단되면 대상에
+`com.apple.quarantine`이 남아 사용자 화면에 Gatekeeper 대화상자가 반복해서 뜬다.
+2026-09-10에 실제로 그렇게 됐다.
+
 ## 뒤 Task가 알아야 하는 설계 판단
 
 **1. `run-isolated.sh`는 명령을 한 번만 실행한다.**

@@ -1,0 +1,10 @@
+python/lib/python3.12/site-packages/_sounddevice_data/portaudio-binaries/libportaudio.dylib
+python/lib/python3.12/site-packages/charset_normalizer/cd.cpython-312-darwin.so
+python/lib/python3.12/site-packages/charset_normalizer/md.cpython-312-darwin.so
+python/lib/python3.12/site-packages/fontTools/cu2qu/cu2qu.cpython-312-darwin.so
+python/lib/python3.12/site-packages/fontTools/feaLib/lexer.cpython-312-darwin.so
+python/lib/python3.12/site-packages/fontTools/misc/bezierTools.cpython-312-darwin.so
+python/lib/python3.12/site-packages/fontTools/pens/momentsPen.cpython-312-darwin.so
+python/lib/python3.12/site-packages/fontTools/qu2cu/qu2cu.cpython-312-darwin.so
+python/lib/python3.12/site-packages/fontTools/varLib/iup.cpython-312-darwin.so
+python/lib/python3.12/site-packages/grpc/_cython/cygrpc.cpython-312-darwin.so
