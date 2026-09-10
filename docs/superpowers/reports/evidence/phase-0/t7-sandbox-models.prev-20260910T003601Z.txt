@@ -1,5 +1,5 @@
 # Task 7 V5 — 게이트 모델을 샌드박스 HOME 에 새로 받았는가 (P0-C4, R-6)
-# utc: 2026-09-10T00:36:01Z
+# utc: 2026-09-10T00:12:14Z
 # 개발자 캐시(~/.cache/huggingface)는 읽지도 쓰지도 않는다 (스펙 §4.4).
 # HF_TOKEN 은 set/unset 만 기록한다 (스펙 §4.2) — 이 파일에 값이 없다.
 
@@ -28,8 +28,11 @@ RC_PYANNOTE=0
 RC_BLOBS=0
 
 == 이 실행이 새로 받았는가 (드라이버가 전후로 재서 남긴 NEW 표시)
-  FAIL t7-pipeline.txt 에 NEW 표시가 없다 — 전부 이미 있던 캐시였다
-RC_NEW=1
+  NEW models--mlx-community--whisper-large-v3-turbo	1613980437
+  NEW models--pyannote--speaker-diarization-community-1	32821461
+  NEW models--speechbrain--spkrec-ecapa-voxceleb	88983513
+  OK   pyannote 게이트 저장소를 이 실행이 새로 받았다
+RC_NEW=0
 
 == 참고 — 이 실행이 쓴 다른 모델 (게이트 아님)
   speechbrain/spkrec-ecapa-voxceleb  (화자 임베딩)

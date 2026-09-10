@@ -1,5 +1,5 @@
 # Task 7 V3 — 회의가 done 인가 / normalize·probe·persist 가 돌았는가 (P0-C4)
-# utc: 2026-09-10T00:35:56Z
+# utc: 2026-09-10T00:12:54Z
 # 스코프: mtg_2 (t7-meeting-id.txt). Task 6 의 mtg_1 은 세지 않는다.
 # 격리: 이 스크립트는 **클라이언트**다 — 서버에 붙어 질의할 뿐이므로
 #       G2 를 지나지 않는다 (스펙 §4.0).
@@ -11,7 +11,7 @@
 RC_ID=0
 
 == 의존 서비스
-  db: 살아 있음 (pid 74506)
+  db: 살아 있음 (pid 10004)
 RC_DB=0
 
 == meeting 행 (mtg_2)
@@ -24,7 +24,7 @@ RC_DB=0
 RC_MEETING=0
 
 == job 행 (이 회의의 process_meeting)
-  id       : job_2
+  id       : job_1
   status   : done   progress: 100   stage: persist   attempts: 1
   error    : null
 RC_JOB=0
@@ -37,19 +37,19 @@ RC_QUEUE=0
 == 파이프라인 단계 완료 로그 (pipeline/timing.py::timed_stage)
    DB 행이 없는 단계(특히 VAD)는 이 줄이 유일한 직접 증거다.
   OK   normalize
-       damwha_worker job=job_2 meeting=mtg_2 stage=normalize done elapsed_ms=1694 reused=0 duration_ms=1883254
+       damwha_worker job=job_1 meeting=mtg_2 stage=normalize done elapsed_ms=1677 reused=0 duration_ms=1883254
   OK   vad
-       damwha_worker job=job_2 meeting=mtg_2 stage=vad done elapsed_ms=7143 spans=268
+       damwha_worker job=job_1 meeting=mtg_2 stage=vad done elapsed_ms=7046 spans=268
   OK   diarize
-       damwha_worker job=job_2 meeting=mtg_2 stage=diarize done elapsed_ms=166846 segments=1272 bounds=None-None
+       damwha_worker job=job_1 meeting=mtg_2 stage=diarize done elapsed_ms=169527 segments=1272 bounds=None-None
   OK   embed
-       damwha_worker job=job_2 meeting=mtg_2 stage=embed done elapsed_ms=29242 clusters=5 raw_labels=5
+       damwha_worker job=job_1 meeting=mtg_2 stage=embed done elapsed_ms=28550 clusters=5 raw_labels=5
   OK   identify
-       damwha_worker job=job_2 meeting=mtg_2 stage=identify done elapsed_ms=11 identified=0/5 suggested=0
+       damwha_worker job=job_1 meeting=mtg_2 stage=identify done elapsed_ms=50 identified=0/5 suggested=0
   OK   stt
-       damwha_worker job=job_2 meeting=mtg_2 stage=stt done elapsed_ms=291035 words=4013 spans=66 clipped_ms=1844216 duration_ms=1883254
+       damwha_worker job=job_1 meeting=mtg_2 stage=stt done elapsed_ms=315088 words=4028 spans=66 clipped_ms=1844216 duration_ms=1883254
   OK   align
-       damwha_worker job=job_2 meeting=mtg_2 stage=align done elapsed_ms=71240 utterances=457
+       damwha_worker job=job_1 meeting=mtg_2 stage=align done elapsed_ms=64602 utterances=458
   OK   persist
-       damwha_worker job=job_2 meeting=mtg_2 stage=persist done elapsed_ms=129 utterances=457 clusters=5 outcome=committed
+       damwha_worker job=job_1 meeting=mtg_2 stage=persist done elapsed_ms=90 utterances=458 clusters=5 outcome=committed
 RC_STAGES=0

@@ -1,5 +1,5 @@
 # snapshot-dev-assets.sh — 개발 자산 무변화 확인 (스펙 §4.4)
-# utc: 2026-09-09T15:22:22Z
+# utc: 2026-09-10T00:36:19Z
 ## before
 ## docker volumes
 docker: daemon-unreachable
@@ -11,7 +11,21 @@ newest_mtime: 1788857034
 manifest_sha256: a18870e6592f160f3545fa349ec3fa972a1993f3b3203fdf21303012cf6391be
 ## after
 ## docker volumes
-docker: daemon-unreachable
+2deac09559ef79effc56c7230c228d0109d309fc4f208051ecc08c1c65c9ccc0
+3a0f65c5f8709d0b6b08af645aeb746d96a340603e1d37a12d4413556a16f984
+3a559c09626e43a1c2538d4173f17ecb0c710a9cabac042b7d0517f6f3a3d95e
+564b2a00aa80cb4b3795532907244d41dd6e245eae5d921bdf32a9bc9425830c
+7a6f325733f01c9cf627f80691db77ed6a4ebd06325108e804f01e6b140e5f81
+be_pgdata
+blog-local_minio_data
+blog-local_postgres_data
+c9975fd05f0848f0fe72889a84bf13ae1eb2b20bfbea00828398f19ab845473e
+damwha_pgdata
+docker_mariadb-local-data
+e33e9714513e13422fdd6cb4081a173df3460999fde456bd8294619ad0facb52
+redpanda_redpanda-data
+trb_db_db_data
+trb_db_db_logs
 ## be/storage
 root: /Users/gim-yeongjae/project/daewha/be/storage
 files: 29

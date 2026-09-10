@@ -1,5 +1,5 @@
 # Task 7 V6 — dyld 증거에 개발 환경 경로가 0건이고 ffmpeg 가 번들인가
-# utc: 2026-09-10T00:36:08Z
+# utc: 2026-09-10T00:12:17Z
 # 판정은 ^dyld 줄 중 **이미지 로드 줄**(필드 3개 + <UUID> + 절대 경로)만
 # 대상으로 한다. 'move loaded to delayed' 줄은 로드가 아니고 경로도 없다.
 # 개발자 홈: /Users/gim-yeongjae  (worktree 가 이 아래 있어 홈 경로 전체를 금지어로
@@ -7,22 +7,22 @@
 
 == dyld 증거
   파일: /Users/gim-yeongjae/project/daewha-electron-phase-0/docs/superpowers/reports/evidence/phase-0/t7-pipeline-dyld.txt
-  dyld 줄        : 2674
-  이미지 로드 줄 : 2212  (필드 3개 + <UUID> + 절대 경로)
+  dyld 줄        : 2675
+  이미지 로드 줄 : 2213  (필드 3개 + <UUID> + 절대 경로)
 RC_MEASURED=0
 
 == pid 별 메인 이미지 (규칙 6b — pid 를 먼저 고정한다)
-  pid 74487  번들 아래 로드 284건
+  pid 9980  번들 아래 로드 285건
     메인 이미지: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
-  pid 74506  번들 아래 로드 1건
+  pid 10004  번들 아래 로드 1건
     메인 이미지: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/postgres
-  pid 74509  번들 아래 로드 2건
+  pid 10007  번들 아래 로드 2건
     메인 이미지: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_isready
-  pid 74518  번들 아래 로드 2건
+  pid 10016  번들 아래 로드 2건
     메인 이미지: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg/bin/pg_isready
-  pid 75132  번들 아래 로드 2건
+  pid 10739  번들 아래 로드 2건
     메인 이미지: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/python3.12
-  pid 76258  번들 아래 로드 1건
+  pid 11367  번들 아래 로드 1건
     메인 이미지: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/ffmpeg/bin/ffprobe
 
 == 금지 문자열 (이미지 로드 줄의 경로만 본다 — 규칙 6)
@@ -53,7 +53,7 @@ RC_FOREIGN=0
       #   pipeline/ffmpeg.py::_run 이 capture_output=True 로 그 stderr 를
       #   파이프로 가져가기 때문이다. 그래서 (b) 를 따로 잰다.
   (b) dyld 실측 — 드라이버가 stderr 를 물려준 채로 부른 번들 ffprobe
-      pid 76258 의 메인 이미지: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/ffmpeg/bin/ffprobe
+      pid 11367 의 메인 이미지: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/ffmpeg/bin/ffprobe
       그 pid 가 bundle/ffmpeg 아래에서 연 이미지: 1건
       OK   번들 ffmpeg 바이너리가 실제로 실행됐다
 RC_FFMPEG=0

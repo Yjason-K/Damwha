@@ -354,6 +354,15 @@ Task 1에서 나왔고 수정하지 않기로 한 것들이다.
   **P0-C7의 판정 기준:** "위반 0건"은 우리가 빌드한 산출물과 재배치를 깨는 모든 항목에 대해 적용한다. 제3자 원본 문자열은 "분류·근거·대체 확인"으로 처리하며, 대체 확인은 G2 dyld 실측(스펙 §4.2)과 P0-C8 런타임 자기 보고가 맡는다. 허용 목록 24건 중 **실동작 폴백 3건**(`soundfile.py`, `ctypes/macholib/dyld.py`, `PIL/_imagingft…so`)은 Task 11이 "실제로 쓰이지 않았음"을 증거로 보여야 하며, 보이지 못하면 P0-C7을 충족으로 적지 않는다. Phase 4 인계 항목이기도 하다.
 
   스펙 문서 자체는 고치지 않는다 — 로드맵이 "확정된 날짜별 스펙·계획은 당시 결정의 기록으로 보존하고, 확정 후 설계 변경은 후속 문서에 원문 링크와 변경 이유를 남긴다"고 정했다. 이 항목이 그 기록이다.
+- 2026-09-10: **P0-C4의 "게이트 모델 3종"은 제품 기본 파이프라인이 요구하는 게이트 저장소 전부로 읽는다.** Task 7 reviewer가 낸 SPEC-REVIEW에 대한 결정이며 사용자가 승인했다.
+
+  HF API 실측: `pyannote/speaker-diarization-community-1`은 `gated=auto`이고 **segmentation·embedding·plda를 자기 저장소에 담는다** — 게이트 저장소 **1종**. `speaker-diarization-3.1`(`auto`) + `segmentation-3.0`(`auto`)는 2종이고 `wespeaker-voxceleb-resnet34-LM`은 **`gated=False`**다. 즉 **어떤 설정으로 돌려도 3종이 나오지 않는다.**
+
+  "3종"의 출처는 `be/worker/SMOKE.md:9-12`의 "accept all three"인데, 그것은 **두 파이프라인의 게이트 저장소 합집합**(3.1 + segmentation-3.0 + community-1)이지 한 파이프라인이 3종을 받는다는 뜻이 아니다. 스펙을 쓸 때 이를 "한 번에 3종"으로 오독했다.
+
+  **P0-C4의 판정 기준:** "게이트 모델을 새로 받았다"는 **그 실행이 쓴 파이프라인이 요구하는 게이트 저장소 전부**를 샌드박스에 새로 받았는지로 본다. 제품 기본값(`be/src/config/env.ts:18`, `be/.env:9`)인 `community-1` 경로에서는 1종이며, Task 7이 그것을 받았다. 스펙 §2와 `SMOKE.md`의 "3종"은 pyannote.audio 3.x 시절 기록으로 남는다. 각 저장소의 게이트 여부는 **Task 9(P0-C10)가 실측해 표로 확정한다.**
+
+  스펙 문서 자체는 고치지 않는다 — 로드맵이 "확정된 날짜별 스펙·계획은 당시 결정의 기록으로 보존하고, 확정 후 설계 변경은 후속 문서에 원문 링크와 변경 이유를 남긴다"고 정했다. Task 3의 G1 허용 목록 결정과 같은 방식이다.
 - 2026-09-09: **R-3은 성립하지 않았고 대신 wheel 배포자의 `LC_RPATH`가 나왔다.** R-3은 torch·mlx의 `.dylib`/`.metallib`가 빌드 시점 절대 경로를 참조할 위험이었는데, 번들 전체에서 실제 의존 경로(`LC_LOAD_DYLIB`)가 허용 접두사 밖인 것은 0건이었다. 대신 **wheel 배포자의 빌드 머신 `LC_RPATH` 58건**(scikit-learn 51, scipy 3 — Homebrew `gcc@13` 경로, torchaudio 2, Pillow 1, PyAV 1)이 나왔다. dyld의 실제 검색 경로라 실질적이며, `-delete_rpath` + `codesign -f -s -`로 해소했다. **R-9(콘솔 스크립트 shebang)는 예측대로 나타났다** — `bin/`의 65개 전부가 이동 후 `bad interpreter`로 죽었고 `mlx_lm.server`·`uvicorn`·`damwha-worker`·`damwha-embed`가 포함된다.
 - 2026-09-09: **R-2b 신설 — PostgreSQL 자체의 링크 시점 절대 `install_name`.** Task 2에서 드러났고 스펙의 위험 목록(R-1 확장·`pg_config` 절대 경로, R-2 `initdb` 시점 경로 가정)에 없는 제3의 메커니즘이다. `src/Makefile.shlib`이 공유 라이브러리에 절대 `install_name`을 박아, 번들을 옮기면 `bin/` 20개와 `lib/` 17개가 깨진다. **서버는 살고 클라이언트만 죽는 형태**라 서버만 확인하면 놓친다(`postgres`는 libpq를 링크하지 않는다). `install_name_tool -change`/`-id` + ad-hoc 재서명으로 해소되며 `pg/build.sh` 8단계에 재현 가능하게 남아 있다. **Task 8(재서명)과 Phase 3(재빌드 시 반드시 반복)에 인계한다.** R-2 자체는 성립하지 않았다 — `make_relative_path` 덕분에 존재하지 않는 prefix로 빌드해도 `initdb`와 `pg_config`가 번들 안을 찾는다.
 - 2026-09-09: **PostgreSQL 제공 방식은 소스 빌드로 결정**(P0-C12의 (1)에 해당, Task 10이 최종 확정). 배포 바이너리 두 후보가 실측으로 탈락했다 — EDB는 macOS 16.x 아카이브가 아예 없고, zonky는 `pg_config`·서버 헤더·pgxs가 없어 pg_bigm을 붙일 수단이 아카이브 안에 없다. 소스 빌드본은 21 MB로 zonky(296 MB)의 1/14이고 외부 링크 의존이 `libSystem` 하나다.

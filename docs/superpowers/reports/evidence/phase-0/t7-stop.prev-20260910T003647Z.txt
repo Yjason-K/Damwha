@@ -1,17 +1,17 @@
 # Task 7 — 실험 PostgreSQL 정지 (계획 Task 7 Interfaces, 스펙 §4.4)
-# utc: 2026-09-10T00:36:47Z
+# utc: 2026-09-10T00:14:56Z
 
 == 정지 대상 (PID 파일 하나가 유일한 기준이다 — 스펙 §4.4)
   PID 파일 : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/run/pg.pid
-  기록된 PID: 74506
+  기록된 PID: 10004
   살아 있음 — pg/run.sh stop (pg_ctl -m fast stop)
     waiting for server to shut down.... done
     server stopped
-    정지 완료 (pid 74506)
+    정지 완료 (pid 10004)
 RC_STOP=0
 
 == 정지 확인
-  OK   pid 74506 가 살아 있지 않다
+  OK   pid 10004 가 살아 있지 않다
 RC_DEAD=0
   OK   포트 55432 가 비었다
 RC_PORT=0
