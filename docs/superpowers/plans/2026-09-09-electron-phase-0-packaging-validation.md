@@ -500,7 +500,7 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 **Files**
 
 - Create: `$EXP/drivers/process_meeting_driver.py` — 시드 + `run_once` 호출 + 결과 출력
-- Create: `$EXP/verify/t7-outcome.sh`, `t7-utterances.sh`, `t7-sandbox-models.sh`, `t7-no-dev-paths.sh`
+- Create: `$EXP/verify/t7-outcome.sh`, `t7-utterances.sh`, `t7-sandbox-models.sh`, `t7-no-dev-paths.sh`, `t7-no-docker.sh`, `t7-stop.sh`, `t7-lib.sh`
 
 **Interfaces**
 
@@ -512,6 +512,7 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 - 드라이버가 만든 `meeting` id를 `$EVIDENCE/t7-meeting-id.txt`에 남긴다. **모든 결과 검증은 이 id로 스코프한다** — Task 6이 같은 DB에 시드한 발화를 세지 않기 위해서다.
 - 드라이버는 **번들 런타임 안에서** 실행되므로 격리 대상이다 (스펙 P0-C4의 확인 환경).
 - `utterance`에 `speaker_cluster_id` 같은 컬럼은 **없다.** 화자 분리 결과는 `diar_label`에 들어간다 (`001_init.sql:72`).
+- **게이트 저장소는 3종이 아니다.** 제품 기본값 `pyannote/speaker-diarization-community-1`(`be/src/config/env.ts:13-18`)은 segmentation·embedding·plda를 자기 저장소에 담고 있어 실제 게이트 저장소가 **1종**이다. 3.1 계열을 쓰더라도 `wespeaker-voxceleb-resnet34-LM`은 현재 HF API 기준 `gated=False`라 2종이다. 스펙 §2와 `worker/SMOKE.md`의 "3종"은 pyannote.audio 3.x 시절 기록이다. **Task 9(P0-C10)가 각 저장소의 게이트 여부를 실측해 확정한다.**
 
 **Steps**
 
@@ -524,7 +525,7 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 
 | # | cwd | 명령 | 기대 |
 | --- | --- | --- | --- |
-| V1 | `<repo root>` | `bash experiments/electron-phase-0/lib/preflight.sh 40` | exit 0. 디스크 여유 확인 후에만 진행 |
+| V1 | `<repo root>` | `bash experiments/electron-phase-0/lib/preflight.sh 4` | exit 0. **`40`은 실측 없이 잡은 값이었고 실제 필요량의 22배다** — Task 7이 HF API로 잰 결과 모델 1.62 GiB + 오디오 사본 0.20 GiB = **1.82 GiB**다(`t7-disk-estimate.txt`). 스펙 §4.4는 숫자를 정하지 않고 "필요한 여유를 확인하고 부족하면 시작하지 않는다"만 요구한다 |
 | V2 | `<repo root>` | `bash experiments/electron-phase-0/lib/run-isolated.sh --label t7-pipeline -- experiments/electron-phase-0/bundle/python/bin/python3 experiments/electron-phase-0/drivers/process_meeting_driver.py` | exit 0. stdout에 `outcome: committed`, `$EVIDENCE/t7-meeting-id.txt` 생성 |
 | V3 | `<repo root>` | `bash experiments/electron-phase-0/verify/t7-outcome.sh` | exit 0. `t7-meeting-id.txt`의 회의가 `status='done'` |
 | V4 | `<repo root>` | `bash experiments/electron-phase-0/verify/t7-utterances.sh` | exit 0. **그 회의의** `status='ok'` 발화가 1건 이상이고 `text`가 비어 있지 않으며, `diar_label`의 서로 다른 값이 1개 이상 (diarization이 실제로 돌았다) |
@@ -532,8 +533,9 @@ exec 심으로는 못 고친다 — 심이 다시 bash를 exec하는 순간 또 
 | V6 | `<repo root>` | `bash experiments/electron-phase-0/verify/t7-no-dev-paths.sh` | exit 0. `t7-pipeline` dyld 증거에 개발자 `~/.cache`·`/opt/homebrew`·`.venv`가 0건이고, ffmpeg 실행 경로가 `bundle/ffmpeg` 하위 |
 | V7 | `<repo root>` | `bash experiments/electron-phase-0/lib/snapshot-dev-assets.sh after` | exit 0. `be/storage` 원본 무변화 |
 | V8 | `<repo root>` | `git status --porcelain be/worker/scripts` | 출력 없음. smoke 스크립트를 고치지 않았다 |
-| V9 | `<repo root>` | `grep -c 'testcontainers' experiments/electron-phase-0/drivers/process_meeting_driver.py` | `0`. 드라이버가 Docker를 쓰지 않는다 |
+| V9 | `<repo root>` | `bash experiments/electron-phase-0/verify/t7-no-docker.sh` | exit 0. 드라이버에 `testcontainers`·`docker` 참조가 없다. **`grep -c`를 직접 쓰지 않는다** — 0건일 때 `0`을 출력하면서 exit 1을 내므로 종료 코드로 판정하면 통과해야 할 때 실패한다 |
 | V10 | `<repo root>` | `git status --porcelain be/src be/worker/damwha_worker fe/src packages/contracts` | 출력 없음 |
+| V11 | `<repo root>` | `bash experiments/electron-phase-0/verify/t7-stop.sh` | exit 0. 번들 PostgreSQL이 PID 파일 대상으로 정지하고 55432가 비었다. **Interfaces가 Task 7에 정지 책임을 주는데 표에 행이 없었다** — Task 6이 같은 이유로 verifier가 손으로 내렸다 |
 
 **Review**
 
