@@ -280,7 +280,7 @@ Phase 3과 4는 기술적으로 분리 가능한 부분이 있지만, 실행·�
 | 5. 단계별 리뷰 | `superpowers:requesting-code-review` / `superpowers:receiving-code-review` |
 | 5·6. 완료 선언 전 | `superpowers:verification-before-completion` — 증거 없이 "통과"라고 쓰지 않는다 |
 | 구현 중 | `superpowers:test-driven-development`, 버그·검증 실패에는 `superpowers:systematic-debugging` |
-| 브랜치 운영 | `superpowers:using-git-worktrees`, 병합 판단에 `superpowers:finishing-a-development-branch` |
+| 브랜치 운영 | 병합 판단에 `superpowers:finishing-a-development-branch` |
 
 스킬이 대체하지 않는 이 로드맵의 규칙은 그대로 적용한다.
 
@@ -300,7 +300,7 @@ Phase 3과 4는 기술적으로 분리 가능한 부분이 있지만, 실행·�
 - 계획 내부 단계마다 브랜치를 추가하지 않는다. 리뷰 가능한 커밋으로 나누고 결과 문서에서 단계와 커밋을 연결한다.
 - 기본적으로 Phase당 PR 하나를 사용한다. 작업 중 초안 PR을 열 수 있으며, 단계별 리뷰와 최종 검증을 통과한 뒤 병합한다.
 - 이전 Phase가 기본 브랜치에 병합된 후, 갱신된 기본 브랜치에서 다음 Phase 브랜치를 만든다. 병합 전의 Phase 브랜치 위에 다음 Phase를 연쇄로 쌓지 않는다.
-- 실제 코드 작업은 가능하면 Phase 전용 worktree에서 진행해 기존 작업 디렉터리의 변경과 분리한다. worktree는 브랜치 정책을 대체하지 않는 작업 디렉터리 분리 수단이다.
+- 작업 디렉터리는 기본 저장소 하나를 쓴다. Phase 브랜치를 만들고 그 자리에서 작업한다. 별도 worktree를 두지 않는다 — Phase 1~2는 기존 서비스 코드를 고치지 않고 데스크톱 패키지를 더하는 범위라 병행할 작업이 없다. 한 저장소에서 두 브랜치를 동시에 열어야 할 일이 실제로 생기면 그때 worktree를 만든다.
 - Phase가 너무 커서 리뷰하기 어렵다면 구현 전에 범위를 `3a`, `3b`처럼 하위 Phase로 나누고 로드맵·스펙·병합 순서를 갱신한다.
 - 병렬 작업은 공통 계약이 확정되고 독립성이 확인된 경우에만 별도 계획으로 정한다. 각 브랜치는 병합 전 최신 기본 브랜치를 반영하고 통합 검증한다.
 
