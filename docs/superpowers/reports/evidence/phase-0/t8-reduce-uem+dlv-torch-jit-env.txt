@@ -1,0 +1,32 @@
+# run-isolated.sh — G2 격리 실행 기록 (스펙 §4.2)
+label      : t8-reduce-uem+dlv-torch-jit
+utc        : 2026-09-10T02:43:14Z
+cwd        : /Users/gim-yeongjae/project/daewha-electron-phase-0
+격리 대상  : 예 — 이 래퍼를 통과한 명령은 전부 격리 대상이다 (스펙 §4.0)
+command    :
+  argv: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12
+  argv: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/t8/payload.py
+  argv: torch-jit
+  argv: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python
+
+## 주입한 변수 (스펙 §4.2 표의 이름 12개 중, 값을 기록하는 11개)
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+HOME=/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/home
+TMPDIR=/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/tmp
+DATABASE_URL=postgresql://postgres@127.0.0.1:55432/damwha
+STORAGE_ROOT=/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/storage
+MODEL_CACHE_DIR=/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/home/.cache/damwha-models
+HF_HOME=/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/home/.cache/huggingface
+EMBED_SERVICE_HOST=127.0.0.1
+EMBED_SERVICE_PORT=58100
+LENS_LLM_BASE_URL=http://127.0.0.1:58000/v1
+LENS_LLM_SERVER_BIN=/Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/bin/mlx_lm.server
+
+## 비밀값
+HF_TOKEN=set   # 값은 기록하지 않는다 (스펙 §4.2). 출처: be/worker/.env
+
+## 계측 도구 변수 (주입 화이트리스트가 아니다)
+DYLD_PRINT_LIBRARIES=1   # G2 dyld 실측 (스펙 §4.2)
+
+exit: 0
+dyld 줄 수: 0

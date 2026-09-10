@@ -1,0 +1,33 @@
+# Task 8 — R-4 실측: JIT / 쓰기+실행 메모리와 GPU 셰이더 컴파일
+# utc: 2026-09-10T02:17:44Z
+# 메인 실행 파일: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12 (ad-hoc + --options runtime)
+#
+# A 최소 집합 [uem+dlv]
+# B 거기서 com.apple.security.cs.allow-unsigned-executable-memory 를 뺀 [dlv]
+#
+# 쓰기+실행 매핑 거부는 프로세스에 메시지를 주지 않고 SIGKILL 로 끝난다.
+# 시스템 로그에도 크래시 리포트에도 그 죽음에 대응하는 줄이 생기지 않는다
+# (SIGKILL 은 크래시 리포트를 만들지 않는다). 아래 로그는 같은 창에서 수집한
+# 코드 서명 관련 줄 전량이며, 인과는 A/B 대조가 세운다.
+#
+# 검사
+#   numba-jit   : numba 의 LLVM JIT (mlx_whisper 가 import 사슬로 끌어온다)
+#   torch-jit   : torch.jit.script
+#   mlx-metal   : mx.fast.metal_kernel — Metal 셰이더 소스를 런타임에 컴파일
+#   mlx-compile : mx.compile 그래프 컴파일
+
+## 회차 x 검사 (<회차기호>\t<entitlement 회차>\t<검사>\t<판정>\t<payload JSON>)
+A	uem+dlv	numba-jit	OK	{"check": "numba-jit", "ok": true, "numba_version": "0.67.0", "sum": 16.0}
+A	uem+dlv	torch-jit	OK	{"check": "torch-jit", "ok": true, "torch_version": "2.12.1", "jit_sum": 24.0}
+A	uem+dlv	mlx-metal	OK	{"check": "mlx-metal", "ok": true, "mlx_version": "0.32.2", "device": "Device(gpu, 0)", "first": 1.0, "last": 31.0}
+A	uem+dlv	mlx-compile	OK	{"check": "mlx-compile", "ok": true, "mlx_version": "0.32.2", "sum": 146095.53125}
+B	dlv	numba-jit	FAIL	{"check": "numba-jit", "ok": false, "exit": 137, "reason": "종료 코드 137 = 128+9 — 신호 9 로 죽었다. dyld/stderr 에 남은 줄이 없다"}
+B	dlv	torch-jit	OK	{"check": "torch-jit", "ok": true, "torch_version": "2.12.1", "jit_sum": 24.0}
+B	dlv	mlx-metal	OK	{"check": "mlx-metal", "ok": true, "mlx_version": "0.32.2", "device": "Device(gpu, 0)", "first": 1.0, "last": 31.0}
+B	dlv	mlx-compile	OK	{"check": "mlx-compile", "ok": true, "mlx_version": "0.32.2", "sum": 146019.96875}
+
+## 시스템 로그 (log show --start '2026-09-10 11:17:37')
+  2026-09-10 11:17:37.348 Df amfid[76589:fc277d] /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12 not valid: Error Domain=AppleMobileFileIntegrityError Code=-423 "The file is adhoc signed or signed by an unknown certificate chain" UserInfo={NSURL=file:///Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12, NSLocalizedDescription=The file is adhoc signed or signed by an unknown certificate chain}
+  2026-09-10 11:17:39.777 Df launchd[1:fcc59f] [pid/46021/com.apple.intents.intents-helper [46186]:] signaled service: Killed: 9
+  2026-09-10 11:17:39.777 Df launchd[1:fcc59f] [pid/46021/com.apple.intents.intents-helper [46186]:] scheduling cleanup in 9 sec after sending Killed: 9
+  2026-09-10 11:17:40.033 Df amfid[76589:fc277d] /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12 not valid: Error Domain=AppleMobileFileIntegrityError Code=-423 "The file is adhoc signed or signed by an unknown certificate chain" UserInfo={NSURL=file:///Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12, NSLocalizedDescription=The file is adhoc signed or signed by an unknown certificate chain}

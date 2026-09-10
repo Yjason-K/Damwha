@@ -1,0 +1,52 @@
+# Task 8 V7 — 원본 bundle/ 이 서명 작업으로 훼손되지 않았는가
+# utc: 2026-09-10T03:06:43Z
+#
+# 계획 Task 8 V7 은 'check-macho.sh <bundle>' 이 exit 0 이기를 기대한다.
+# 그 명령은 exit 1 을 낸다. 서명 때문이 아니다 — 아래 네 회차가 그것을 가른다.
+#
+# lib/g1-allowlist.txt 의 경로 열은 **검사 대상 루트 기준 상대 경로**이고
+# (check-macho.sh 의 allow_reason "${f#$ROOT/}"), 그 목록은 Task 3 이
+# ROOT=bundle/python 으로 돌리며 쓴 것이다. ROOT=bundle 로 부르면 같은 파일의
+# 상대 경로가 python/lib/... 로 한 칸 깊어져 규칙이 하나도 걸리지 않는다.
+# 그래서 Task 3 이 ALLOW 로 분류한 42건이 그대로 위반으로 다시 나온다.
+#
+# 서명은 사본 signed/ 에만 걸었다. 원본에 runtime 플래그가 없다는 음성 대조는
+# verify/t8-hardened.sh 가 따로 확인한다 (증거 t8-hardened.txt).
+
+## bash experiments/electron-phase-0/lib/check-macho.sh experiments/electron-phase-0/bundle
+exit: 1
+    대상          : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle
+    파일 수       : 40024
+    Mach-O 수     : 532
+    위반          : 42건
+      STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/libpython3.12.dylib: /usr/local/lib/python2.5/site-packages  (금지 문자열: /usr/local/lib)
+      STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/libpython3.12.dylib: /usr/local/lib/python2.5/site-packages/bar  (금지 문자열: /usr/local/lib)
+      STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/libpython3.12.dylib: /usr/local/lib/python2.5/site-packages/foo  (금지 문자열: /usr/local/lib)
+      STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/__pycache__/mimetypes.cpython-312.pyc: /usr/local/lib/netscape/mime.typesrz/usr/local/etc/mime.typesFc�  (금지 문자열: /usr/local/lib)
+      STRING  /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python/lib/python3.12/cgi.py: /usr/local/bin  (금지 문자열: /usr/local/bin)
+  (STRING 위반 줄: 줄 — 위 5줄만 표시)
+
+## bash experiments/electron-phase-0/lib/check-macho.sh experiments/electron-phase-0/bundle/python
+exit: 0
+    대상          : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/python
+    파일 수       : 39254
+    Mach-O 수     : 460
+    위반          : 0건
+  (STRING 위반 줄: 줄 — 위 5줄만 표시)
+
+## bash experiments/electron-phase-0/lib/check-macho.sh experiments/electron-phase-0/bundle/pg
+exit: 0
+    대상          : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/pg
+    파일 수       : 767
+    Mach-O 수     : 70
+    위반          : 0건
+  (STRING 위반 줄: 0줄 — 위 5줄만 표시)
+
+## bash experiments/electron-phase-0/lib/check-macho.sh experiments/electron-phase-0/bundle/ffmpeg
+exit: 0
+    대상          : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle/ffmpeg
+    파일 수       : 2
+    Mach-O 수     : 2
+    위반          : 0건
+  (STRING 위반 줄: 0줄 — 위 5줄만 표시)
+

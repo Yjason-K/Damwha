@@ -1,0 +1,18 @@
+# 서명이 아예 없는 Mach-O 전수 목록 (계획 Task 8 Files, 스펙 P0-C9 / R-5)
+#
+# 대상  : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle  (원본 번들. 서명은 사본 signed/ 에만 적용한다)
+# 방법  : find -type f | file | grep Mach-O 로 전수 열거한 뒤 각각에
+#         codesign --display --verbose=2 를 돌려 분류했다.
+# utc   : 2026-09-10T01:27:39Z
+#
+# Mach-O 전체        : 526개
+# 서명 없음          : 0개  (codesign: code object is not signed at all)
+# 나머지             : 526개  (분류 내역은 아래 '## 분류 요약')
+#
+# 경로는 번들 루트 기준 상대 경로다.
+
+## 서명 없음 (0개)
+
+## 분류 요약 (전체 526개)
+  292 sig=adhoc flags=0x20002(adhoc,linker-signed) team=not set authority=none
+  234 sig=adhoc flags=0x2(adhoc) team=not set authority=none

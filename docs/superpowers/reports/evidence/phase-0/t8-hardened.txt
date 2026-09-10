@@ -1,0 +1,19 @@
+# Task 8 V2 — hardened runtime 이 실제로 켜졌는가
+# utc: 2026-09-10T02:44:46Z
+# 사본: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed
+# 원본: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle  (서명하지 않았다 — 음성 대조)
+
+## 대표 Mach-O 의 CodeDirectory flags
+경로(사본 기준)                                                    사본 flags                 원본 flags
+python/bin/python3.12                                                    0x10002(adhoc,runtime)       0x20002(adhoc,linker-signed)
+python/lib/libpython3.12.dylib                                           0x10002(adhoc,runtime)       0x2(adhoc)
+python/lib/python3.12/site-packages/torch/lib/libtorch_cpu.dylib         0x10002(adhoc,runtime)       0x20002(adhoc,linker-signed)
+python/lib/python3.12/site-packages/mlx/lib/libmlx.dylib                 0x10002(adhoc,runtime)       0x20002(adhoc,linker-signed)
+python/lib/python3.12/site-packages/charset_normalizer/cd.cpython-312-darwin.so 0x10002(adhoc,runtime)       0x20002(adhoc,linker-signed)
+ffmpeg/bin/ffmpeg                                                        0x10002(adhoc,runtime)       0x20002(adhoc,linker-signed)
+ffmpeg/bin/ffprobe                                                       0x10002(adhoc,runtime)       0x20002(adhoc,linker-signed)
+pg/bin/postgres                                                          0x10002(adhoc,runtime)       0x20002(adhoc,linker-signed)
+pg/lib/postgresql/pg_bigm.dylib                                          0x10002(adhoc,runtime)       0x20002(adhoc,linker-signed)
+
+## 판정
+실패 항목 수: 0 (0 이면 통과)

@@ -1,0 +1,15 @@
+MEASUREMENT_UNAVAILABLE
+# DYLD_PRINT_LIBRARIES=1을 켰는데 dyld 줄이 0건이다. 원인은 둘이고
+# 이 래퍼는 둘을 구분하지 못한다 — 읽는 쪽이 판단한다.
+#   (1) 런처가 re-export를 빠뜨렸다. 더 흔한 원인이다. SIP가 /bin/bash
+#       같은 플랫폼 바이너리를 exec하며 DYLD_*를 지우므로, 번들 Mach-O를
+#       셸 스크립트로 감싸면 실측이 끊긴다. 그렇다면 런처를 고쳐서
+#       (exec 직전 export DYLD_PRINT_LIBRARIES=1) 다시 재야 한다
+#       (계획 '런처 스크립트의 dyld 실측 규칙' 1).
+#   (2) 검증 대상 자체가 플랫폼 바이너리다(/usr/bin/env 등). SIP가
+#       DYLD_*를 무시하므로 이 머신에서는 잴 수 없다 (스펙 §4.2 주의).
+# 어느 쪽이든 통과로 기록하지 않고 측정 불가로 남긴다. 대체 확인은
+# G1 정적 검사와 P0-C8 런타임 자기 보고가 맡는다.
+# run-isolated.sh dyld 실측
+# label: t8-escalate-jit+uem+dlv-stack-imports   utc: 2026-09-10T02:15:49Z   exit: 0   dyld 줄 수: 0
+# argv: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12 /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/t8/payload.py stack-imports /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python

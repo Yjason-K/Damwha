@@ -1,0 +1,86 @@
+# Task 8 — Gatekeeper 동작 관찰 (복구본)
+# utc: 2026-09-10T02:41:37Z  (복구 시각. 관찰 시각은 아래)
+#
+# ## 이 파일은 probe.sh 가 직접 쓴 증거가 아니다
+#
+# 관찰 회차 : 2026-09-10T01:49:42Z 의 `probe.sh quarantine` 실행 (완주했다)
+# 복구 출처 : experiments/electron-phase-0/sandbox/t8/frag-gatekeeper.md
+#             experiments/electron-phase-0/sandbox/t8/gk-syslog.txt
+#             — 그 회차가 남긴 작업 산출물이다. 아래 내용은 두 파일에서
+#             그대로 옮겼고 손으로 채운 측정값은 없다.
+#
+# 그 회차가 쓴 원본 증거 파일(t8-quarantine.txt)과 대상별 상세
+# (sandbox/t8/quarantine.txt)는 남아 있지 않다. 상세 파일은 그 뒤
+# 2026-09-10T02:17:51Z 에 시작했다가 중단된 다음 회차가 0바이트로 비웠다.
+# 그 중단된 회차는 signed/python/bin/python3.12 에 com.apple.quarantine 을
+# 남겼고, 사용자 화면에 Gatekeeper 대화상자가 반복해서 떴다. 속성은 제거됐다.
+#
+# 재실행하지 않은 이유: 사용자 지시로 격리 속성을 다시 붙이지 않는다.
+# 재실행이 필요하면 probe.sh quarantine 을 그대로 돌리면 된다 — 그 회차가
+# 이 파일을 .prev-<ts>.txt 로 회전시키고 진짜 증거를 새로 쓴다. 중단되어도
+# 속성이 남지 않도록 이제 trap 이 걸려 있다 (probe.sh cmd_quarantine).
+#
+# 방법 (probe.sh cmd_quarantine 이 한 것)
+#   1. 대상을 격리 속성 없이 한 번 실행한다 (대조군)
+#   2. 파일을 백업한다 — Gatekeeper 가 휴지통으로 옮길 수 있다
+#   3. 회차 전용 --identifier 로 다시 서명한다 (항상 첫 실행 조건)
+#   4. xattr -w com.apple.quarantine '<플래그>;<16진 epoch>;<에이전트>;'
+#   5. spctl --assess --type execute 로 정책 엔진 판정을 본다
+#   6. 같은 명령을 격리 속성이 붙은 채로 실행한다 (lib/run-isolated.sh)
+#   7. 파일이 사라졌으면 백업에서 되돌리고 서명 상태를 복구한다
+#
+# 사본 signed/ 에만 붙였다. 원본 bundle/ 은 이 단계에 관여하지 않는다.
+
+## 회차가 만든 RESULTS.md §6 조각 (sandbox/t8/frag-gatekeeper.md 그대로)
+
+  
+  측정: `2026-09-10T01:49:42Z` · 증거 `docs/superpowers/reports/evidence/phase-0/t8-quarantine.txt`
+  
+  부여한 격리 속성: `0081;6aa20ca4;damwha-phase0-probe;` (Finder·브라우저가 쓰는 형식 그대로)
+  
+  같은 명령을 격리 속성 **없이** 한 번, **붙인 채로** 한 번 돌렸다. 대조군이
+  없으면 종료 코드가 Gatekeeper 때문인지 알 수 없다. 격리 실행 직전에 대상마다
+  `--identifier`를 그 회차 전용 값으로 바꿔 다시 서명한다 — Gatekeeper의 판정은
+  cdhash 단위로 기억돼서, 같은 cdhash를 한 번 통과시키면 그 다음 회차가 조용히
+  달라지기 때문이다(실측: 1회차 SIGKILL, 2회차 exit 0).
+  
+  | 대상 | 대조군 실행 (속성 없음) | `spctl --assess --type execute` | 격리 속성이 붙은 채로 실행 | OS가 파일을 지웠나 |
+  | --- | --- | --- | --- | --- |
+  | `python/bin/python3.12` | exit 0 | exit 3 | exit 137 | no |
+  | `ffmpeg/bin/ffprobe` | exit 0 | exit 3 | exit 137 | no |
+  | `pg/bin/postgres` | exit 0 | exit 3 | exit 137 | no |
+  
+  `spctl` 원문과 실행 출력은 증거 파일에 그대로 있다. 종료 코드 137은 128+9,
+  즉 **SIGKILL**이다. 누가 죽였는지는 시스템 로그가 말해 준다:
+  
+  ```
+  2026-09-10 10:49:24.649 Df amfid[76589:fa0a0e] /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12 not valid: Error Domain=AppleMobileFileIntegrityError Code=-423 "The file is adhoc signed or signed by an unknown certificate chain" UserInfo={NSURL=file:///Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12, NSLocalizedDescription=The file is adhoc signed or signed by an unknown certificate chain}
+  2026-09-10 10:49:24.792 Df syspolicyd[728:fa0c70] [com.apple.syspolicy.exec:default] GK evaluateScanResult: 1, PST: (path: 40b87848f627f51a), (team: (null)), (id: damwha-t8-gk-20260910014924-python3.12), (bundle_id: NOT_A_BUNDLE), 1, 0, 1, 0, 0, 0, 5
+  2026-09-10 10:49:24.792 Df syspolicyd[728:fa0c70] [com.apple.syspolicy.exec:default] Prompt shown (8, 0), waiting for response: PST: (path: 40b87848f627f51a), (team: (null)), (id: damwha-t8-gk-20260910014924-python3.12), (bundle_id: NOT_A_BUNDLE)
+  2026-09-10 10:49:31.236 Df amfid[76589:fa0a0e] /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/ffmpeg/bin/ffprobe not valid: Error Domain=AppleMobileFileIntegrityError Code=-423 "The file is adhoc signed or signed by an unknown certificate chain" UserInfo={NSURL=file:///Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/ffmpeg/bin/ffprobe, NSLocalizedDescription=The file is adhoc signed or signed by an unknown certificate chain}
+  2026-09-10 10:49:31.727 Df syspolicyd[728:fa040b] [com.apple.syspolicy.exec:default] GK evaluateScanResult: 2, PST: (path: 8e9bacff6298e297), (team: (null)), (id: ffprobe-555549441c8c837ca7da384fa0363ce1e40ae71c), (bundle_id: NOT_A_BUNDLE), 0, 0, 1, 0, 0, 0, 0
+  2026-09-10 10:49:32.304 Df amfid[76589:fa0a0e] /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/ffmpeg/bin/ffprobe not valid: Error Domain=AppleMobileFileIntegrityError Code=-423 "The file is adhoc signed or signed by an unknown certificate chain" UserInfo={NSURL=file:///Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/ffmpeg/bin/ffprobe, NSLocalizedDescription=The file is adhoc signed or signed by an unknown certificate chain}
+  2026-09-10 10:49:32.626 Df syspolicyd[728:fa0c71] [com.apple.syspolicy.exec:default] GK evaluateScanResult: 1, PST: (path: 8e9bacff6298e297), (team: (null)), (id: damwha-t8-gk-20260910014924-ffprobe), (bundle_id: NOT_A_BUNDLE), 1, 0, 1, 0, 0, 0, 0
+  2026-09-10 10:49:32.626 Df syspolicyd[728:fa0c71] [com.apple.syspolicy.exec:default] Prompt shown (6, 0), waiting for response: PST: (path: 8e9bacff6298e297), (team: (null)), (id: damwha-t8-gk-20260910014924-ffprobe), (bundle_id: NOT_A_BUNDLE)
+  2026-09-10 10:49:34.327 Df amfid[76589:fa0a0e] /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/pg/bin/postgres not valid: Error Domain=AppleMobileFileIntegrityError Code=-423 "The file is adhoc signed or signed by an unknown certificate chain" UserInfo={NSURL=file:///Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/pg/bin/postgres, NSLocalizedDescription=The file is adhoc signed or signed by an unknown certificate chain}
+  2026-09-10 10:49:34.668 Df syspolicyd[728:fa0c72] [com.apple.syspolicy.exec:default] GK evaluateScanResult: 2, PST: (path: d29b941d1e24aa8e), (team: (null)), (id: postgres-55554944168653d2bad83513864afc9ff5a3e35e), (bundle_id: NOT_A_BUNDLE), 0, 0, 1, 0, 0, 0, 0
+  2026-09-10 10:49:35.107 Df amfid[76589:fa0a0e] /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/pg/bin/postgres not valid: Error Domain=AppleMobileFileIntegrityError Code=-423 "The file is adhoc signed or signed by an unknown certificate chain" UserInfo={NSURL=file:///Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/pg/bin/postgres, NSLocalizedDescription=The file is adhoc signed or signed by an unknown certificate chain}
+  2026-09-10 10:49:35.702 Df syspolicyd[728:fa0c74] [com.apple.syspolicy.exec:default] GK evaluateScanResult: 1, PST: (path: d29b941d1e24aa8e), (team: (null)), (id: damwha-t8-gk-20260910014924-postgres), (bundle_id: NOT_A_BUNDLE), 1, 0, 1, 0, 0, 0, 0
+  ```
+  
+
+## 시스템 로그 전량 (sandbox/t8/gk-syslog.txt 그대로, 13줄)
+
+  2026-09-10 10:49:24.649 Df amfid[76589:fa0a0e] /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12 not valid: Error Domain=AppleMobileFileIntegrityError Code=-423 "The file is adhoc signed or signed by an unknown certificate chain" UserInfo={NSURL=file:///Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12, NSLocalizedDescription=The file is adhoc signed or signed by an unknown certificate chain}
+  2026-09-10 10:49:24.792 Df syspolicyd[728:fa0c70] [com.apple.syspolicy.exec:default] GK evaluateScanResult: 1, PST: (path: 40b87848f627f51a), (team: (null)), (id: damwha-t8-gk-20260910014924-python3.12), (bundle_id: NOT_A_BUNDLE), 1, 0, 1, 0, 0, 0, 5
+  2026-09-10 10:49:24.792 Df syspolicyd[728:fa0c70] [com.apple.syspolicy.exec:default] Prompt shown (8, 0), waiting for response: PST: (path: 40b87848f627f51a), (team: (null)), (id: damwha-t8-gk-20260910014924-python3.12), (bundle_id: NOT_A_BUNDLE)
+  2026-09-10 10:49:31.236 Df amfid[76589:fa0a0e] /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/ffmpeg/bin/ffprobe not valid: Error Domain=AppleMobileFileIntegrityError Code=-423 "The file is adhoc signed or signed by an unknown certificate chain" UserInfo={NSURL=file:///Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/ffmpeg/bin/ffprobe, NSLocalizedDescription=The file is adhoc signed or signed by an unknown certificate chain}
+  2026-09-10 10:49:31.727 Df syspolicyd[728:fa040b] [com.apple.syspolicy.exec:default] GK evaluateScanResult: 2, PST: (path: 8e9bacff6298e297), (team: (null)), (id: ffprobe-555549441c8c837ca7da384fa0363ce1e40ae71c), (bundle_id: NOT_A_BUNDLE), 0, 0, 1, 0, 0, 0, 0
+  2026-09-10 10:49:32.304 Df amfid[76589:fa0a0e] /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/ffmpeg/bin/ffprobe not valid: Error Domain=AppleMobileFileIntegrityError Code=-423 "The file is adhoc signed or signed by an unknown certificate chain" UserInfo={NSURL=file:///Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/ffmpeg/bin/ffprobe, NSLocalizedDescription=The file is adhoc signed or signed by an unknown certificate chain}
+  2026-09-10 10:49:32.626 Df syspolicyd[728:fa0c71] [com.apple.syspolicy.exec:default] GK evaluateScanResult: 1, PST: (path: 8e9bacff6298e297), (team: (null)), (id: damwha-t8-gk-20260910014924-ffprobe), (bundle_id: NOT_A_BUNDLE), 1, 0, 1, 0, 0, 0, 0
+  2026-09-10 10:49:32.626 Df syspolicyd[728:fa0c71] [com.apple.syspolicy.exec:default] Prompt shown (6, 0), waiting for response: PST: (path: 8e9bacff6298e297), (team: (null)), (id: damwha-t8-gk-20260910014924-ffprobe), (bundle_id: NOT_A_BUNDLE)
+  2026-09-10 10:49:34.327 Df amfid[76589:fa0a0e] /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/pg/bin/postgres not valid: Error Domain=AppleMobileFileIntegrityError Code=-423 "The file is adhoc signed or signed by an unknown certificate chain" UserInfo={NSURL=file:///Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/pg/bin/postgres, NSLocalizedDescription=The file is adhoc signed or signed by an unknown certificate chain}
+  2026-09-10 10:49:34.668 Df syspolicyd[728:fa0c72] [com.apple.syspolicy.exec:default] GK evaluateScanResult: 2, PST: (path: d29b941d1e24aa8e), (team: (null)), (id: postgres-55554944168653d2bad83513864afc9ff5a3e35e), (bundle_id: NOT_A_BUNDLE), 0, 0, 1, 0, 0, 0, 0
+  2026-09-10 10:49:35.107 Df amfid[76589:fa0a0e] /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/pg/bin/postgres not valid: Error Domain=AppleMobileFileIntegrityError Code=-423 "The file is adhoc signed or signed by an unknown certificate chain" UserInfo={NSURL=file:///Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/pg/bin/postgres, NSLocalizedDescription=The file is adhoc signed or signed by an unknown certificate chain}
+  2026-09-10 10:49:35.702 Df syspolicyd[728:fa0c74] [com.apple.syspolicy.exec:default] GK evaluateScanResult: 1, PST: (path: d29b941d1e24aa8e), (team: (null)), (id: damwha-t8-gk-20260910014924-postgres), (bundle_id: NOT_A_BUNDLE), 1, 0, 1, 0, 0, 0, 0
+  2026-09-10 10:49:35.702 Df syspolicyd[728:fa0c74] [com.apple.syspolicy.exec:default] Prompt shown (6, 0), waiting for response: PST: (path: d29b941d1e24aa8e), (team: (null)), (id: damwha-t8-gk-20260910014924-postgres), (bundle_id: NOT_A_BUNDLE)
