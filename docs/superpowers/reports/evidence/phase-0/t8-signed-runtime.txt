@@ -1,5 +1,5 @@
 # Task 8 V3 — 서명된 런타임(ad-hoc + hardened runtime)에서의 import / MPS
-# utc: 2026-09-10T02:44:56Z
+# utc: 2026-09-10T04:09:09Z
 # 대상: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12
 # 실행: lib/run-isolated.sh --label t8-signed-runtime
 # exit: 0

@@ -1,0 +1,39 @@
+# Task 8 V5 — RESULTS.md 완비 검사
+# utc: 2026-09-10T03:54:38Z
+# 문서: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signing/RESULTS.md
+# 전수 목록: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signing/unsigned-inventory.txt
+# 서명 증거: /Users/gim-yeongjae/project/daewha-electron-phase-0/docs/superpowers/reports/evidence/phase-0/t8-sign.txt
+#
+# 검사 20개 중 FAIL 0개 / 음성 대조 실패 0개
+
+## 항목별
+OK	sign-fail-count	서명 실패 0개로 집계돼 있다
+OK	sign-fail-list	실패 0건이 "0건"으로 명시돼 있다
+OK	sign-fail-evidence	증거 t8-sign.txt 도 0개라고 적고 있다
+OK	ent-conclusion	결론이 entitlement 를 이름으로 든다: com.apple.security.cs.allow-unsigned-executable-memory com.apple.security.cs.disable-library-validation
+OK	ent-matrix	회차 표에 escalate 4행 / reduce 3행이 있다
+OK	ent-error-text	실패 회차의 오류 원문이 29줄 실려 있다
+OK	gk-block	§6 에 실측 블록이 들어 있다
+OK	gk-exit	대상 3개의 종료 코드가 표로 적혀 있다
+OK	gk-attr	§6 이 com.apple.quarantine 부여를 적고 있다
+OK	gk-verdict	§6 이 허용/차단/프롬프트 중 무엇이었는지 말한다
+OK	gk-evidence	인용한 증거가 있다: t8-quarantine.txt
+OK	notarize-list	공증 선결 조건이 12개 항목으로 있다
+OK	notarize-scope	제출하지 않았다고 명시돼 있다
+OK	notarize-devid	목록이 Developer ID 인증서를 선결 조건으로 든다
+OK	r12-present	R-12 가 7줄에 나온다
+OK	r12-blind	R-12 가 미재현 사각으로 서술돼 있다
+OK	r12-handoff	Phase 6 인계 목록이 R-12 를 가리킨다
+OK	inv-doc	§1 집계: 전체 526 / arm64 무서명 0 / 타슬라이스만 무서명 10
+OK	inv-file	전수 목록과 집계가 일치한다 (526 / 0 / 10)
+OK	inv-arch-split	문서가 arm64 슬라이스와 다른 슬라이스를 구분해 적는다
+
+## 음성 대조 (항목을 지운 사본을 같은 로직에 먹인다)
+  OK   no-sign-fail-list -> sign-fail-list 가 FAIL 로 잡힌다
+  OK   wrong-sign-count -> sign-fail-evidence 가 FAIL 로 잡힌다
+  OK   no-ent-conclusion -> ent-conclusion 가 FAIL 로 잡힌다
+  OK   no-ent-matrix -> ent-matrix 가 FAIL 로 잡힌다
+  OK   gk-placeholder -> gk-block 가 FAIL 로 잡힌다
+  OK   no-notarize -> notarize-list 가 FAIL 로 잡힌다
+  OK   no-r12 -> r12-present 가 FAIL 로 잡힌다
+  OK   inv-mismatch -> inv-file 가 FAIL 로 잡힌다

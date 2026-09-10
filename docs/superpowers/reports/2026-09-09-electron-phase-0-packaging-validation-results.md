@@ -150,6 +150,45 @@ Task 1은 통과했으나 reviewer가 Task 2·5 착수 전 반영을 권고한 �
 
 | 7 | `350f03f..45aacd6` (`6668045`, `1727761`, `45aacd6`) | electron-reviewer (fable) | 2 | T7-B1 (해소) | `evidence/phase-0/task-7-r{1,2}.md` | **PASS** |
 
+| 8 | `f83e1f3..a07e17e` | electron-reviewer (opus) | 1 | T8-B1·T8-B2 (**미해소**) | `evidence/phase-0/task-8-r1.md` | **미통과 — 사용자 지시로 중단** |
+
+### Task 8 상세
+
+**P0-C9는 충족이다.** 그 기준은 "성공/실패"가 아니라 **"제약이 특정되었는가"**이고, 서명 실패 목록(0건, 526개 전량 수용)·entitlement 최소 집합(`uem+dlv`, 근거 오류 원문 포함)·Gatekeeper 동작(차단·SIGKILL·`spctl` rejected·프롬프트)·공증 선결 조건 12항·R-12 미재현 사각이 전부 문서화됐다. **차단 2건은 "제약이 특정되지 않았다"가 아니라 특정된 제약 중 하나가 실측이 아닌 것과, 안전 장치가 문서가 주장하는 대로 동작하지 않는 것이다.**
+
+**R-4 — 스펙이 걱정한 자리는 통과했다.** MLX Metal 셰이더 런타임 컴파일과 `torch.jit.script`가 hardened runtime에서 **깨지지 않았다.** 실제로 죽는 것은 numba의 LLVM MCJIT이고 `allow-unsigned-executable-memory`로 풀린다.
+
+| 회차 | 결과 |
+| --- | --- |
+| escalate `none` / `jit` / `jit+uem` | 각 9검사 FAIL |
+| escalate `jit+uem+dlv` | 9 OK |
+| reduce `uem+dlv` | 9 OK |
+| reduce `dlv` | numba-jit만 FAIL (exit 137) |
+| reduce `uem` | selfcheck FAIL |
+
+두 단원소 부분집합이 모두 깨지므로 **`{uem, dlv}`는 진짜 극소집합**이다. `jit+dlv`를 재지 않았다는 유보와 "`jit`만으로는 안 된다는 것은 문헌 지식"이라는 구분이 문서에 정확히 적혀 있다. `mlx_whisper → transcribe → timing → numba` 사슬은 reviewer가 번들 소스로 확인했다(`mlx_whisper/__init__.py:3`, `transcribe.py:22`, `timing.py:8`).
+
+쓰기+실행 매핑 거부는 **메시지 없이 SIGKILL**이고 크래시 리포트도 남지 않는다 — A/B 대조 없이는 원인을 찾을 수 없다.
+
+**R-5 — `disable-library-validation`으로도 안 열린다.** 대상 10개를 ad-hoc 서명하면 전부 로드되고, `codesign --remove-signature`로 떼면 전부 `missing code signature`로 실패한다. **dlv는 서명 주체를 안 따질 뿐 "서명 없음"을 허용하지 않는다.** Phase 4는 wheel의 무서명 `.so`를 빌드 시점에 전부 서명해야 한다 — 선택이 아니라 필수다.
+
+**슬라이스 구분이 Phase 4 작업량을 바꾼다.** reviewer가 `bundle/` 526개 Mach-O를 다시 훑어 재현했다 — **arm64 무서명 0 / 다른 슬라이스만 무서명 10 / 전 슬라이스 서명 516.** `codesign --verify`를 `--arch` 없이 부르면 universal 파일에서 x86_64 슬라이스 하나만 서명이 없어도 파일 전체를 `not signed at all`로 보고한다. **이 번들의 arm64 무서명은 0개다** — Task 3 리뷰의 "서명이 아예 없는 것들이 있다"가 그 오독이었고 `unsigned-inventory.txt`가 정정했다.
+
+**규칙 6e가 합성 트리로 원인까지 재현됐다.** `ROOT=t`이면 ALLOW 0·위반 4, `ROOT=t/python`이면 ALLOW 4·위반 0. 원인은 `check-macho.sh:203`의 `allow_reason "${f#$ROOT/}"`와 허용 목록의 경로 열이 `bundle/python` 기준이라는 것. **호출 쪽을 고친 결정도 옳다** — 검사기를 접미사 매칭으로 바꾸면 "경로를 반드시 적게 해 전역 면제를 막는다"는 허용 목록 설계가 무너지고, 상위 루트 호출은 형제 번들 간 절대경로 참조를 INFO로 흡수해 오히려 느슨해진다.
+
+**Gatekeeper 증거는 복구본이지만 유효로 판정됐다.** reviewer 근거 셋 — (1) `RESULTS.md` §6 블록이 `sandbox/t8/frag-gatekeeper.md`와 공백 제외 **바이트 동일**이고 그 파일은 `probe.sh:1730-1769`이 awk로 뽑는 **기계 산출물**이다, (2) `--identifier` 값 `damwha-t8-gk-20260910014924-*`가 `probe.sh:1623`의 생성 규칙·시각과 맞는다, (3) `sandbox/t8/gk-syslog.txt`에 `amfid … Code=-423 "adhoc signed or signed by an unknown certificate chain"`과 `syspolicyd … GK evaluateScanResult`·`Prompt shown`이 남아 있다. 되짚을 수 없는 것은 대상별 종료 코드의 1차 출력뿐이고 그 사실이 증거 머리말과 §6에 명시돼 있다.
+
+#### 차단 2건 — 미해소
+
+| ID | 지적 |
+| --- | --- |
+| **T8-B1** | `signing/probe.sh:1591-1605` — `cmd_quarantine`의 `trap 't8_gk_cleanup' EXIT INT TERM`이 **주장하는 보장을 하지 못한다.** ① 정상 종료에서 아예 돌지 않는다 — `targets`가 `local`이라 EXIT 트랩 시점에 스코프 밖이고 `set -u` 아래에서 핸들러가 `targets: unbound variable`로 즉시 중단돼 정리 0건. `probe.sh:1587`의 "trap 은 정상 종료·인터럽트·오류 모두에서 돈다"는 사실이 아니다. ② INT/TERM에서 정리는 하지만 **회차를 멈추지 않는다** — 핸들러가 `xattr -d` 후 bash가 루프 다음 문장으로 복귀해 남은 대상에 다시 붙이고 계속 진행한다. TERM→유예→KILL 감독자 아래에서는 속성이 그대로 남는다. **2026-09-10 사용자 화면에 대화상자를 띄운 그 상태다.** ③ `HUP`이 트랩 목록에 없다 |
+| **T8-B2** | `signing/RESULTS.md:345`(및 `probe.sh:386` 독스트링) — "`import numba` 만으로 죽는다"를 **이 Task가 측정한 적이 없다.** `check_numba_jit`(`probe.sh:391-406`)이 한 프로세스에서 import + `@njit` 정의 + 호출을 모두 해 어디서 죽었는지 구분되지 않는다. **방향이 결과를 바꾼다** — `mlx_whisper/timing.py:47,72`의 `@numba.jit(nopython=True)`는 지연 컴파일이므로, 사망 지점이 컴파일이라면 STT는 import에서 죽지 않고 word-timestamp DTW 경로에서만 죽는다. §4 "Phase 4·6 함의"와 §9 인계 5번의 크기가 달라진다. 같은 문서 `:348-353`이 "`dlv` 회차에서 `stack-imports`를 직접 재지 않았다"고 정확히 유보해 **345행과 서로 모순된다** |
+
+둘 다 문장·트랩 수정으로 해소 가능하며 **재측정은 필요 없다.** 사용자 지시로 수정 루프를 돌리지 않고 중단했다.
+
+**T8-B1은 재개 시 최우선이다.** 그 경로는 이번 회차에 실행되지 않아 **다음 `probe.sh quarantine`이 첫 실측**이 되고, 고치지 않으면 사용자 화면에 대화상자가 다시 뜬다.
+
 ### Task 7 상세
 
 **P0-C4 충족.** 번들 런타임만으로 31분 실제 오디오가 처리됐다 — 개발 venv도 Homebrew도 Docker도 없이.
@@ -362,6 +401,16 @@ Task 1에서 나왔고 수정하지 않기로 한 것들이다.
 - 번들 Mach-O 460개 중 `relocate`가 손대지 않은 파일에 **서명이 아예 없는 것**이 있다(`charset_normalizer/*.so`, `fontTools/*.so`, `_sounddevice_data/…/libportaudio.dylib`; `codesign -v` → `code object is not signed at all`). 지금은 로드된다. **Task 8의 직접 입력**이라 계획에 전수 목록 작성을 넣었다.
 - 스펙 §4.4의 `docker volume ls` after 측정이 OrbStack 무응답(26분)으로 빠졌다. Task 3 코드에 docker 호출이 없고 볼륨에 쓰는 경로가 없어 차단으로 보지 않았다. Task 4 시작 시 before 목록(볼륨 15개)과 대조해 사후 보완하도록 계획에 넣었다.
 - **리뷰 부수효과(reviewer 자진 신고):** 사본 `damwha-embed --help`를 시험하다 그 진입점이 인자를 무시하고 서버를 띄운다는 것을 몰라 127.0.0.1:8100에 embed 서버가 두 번 떴다. 각각 PID로 종료했고 사전에 8100 리스너가 없어 개발 프로세스와 충돌하지 않았다. 그 실행이 `~/.cache/huggingface/.agent_harnesses.json`(6 KB 메타데이터)을 썼다 — 모델 파일 변경은 없으나 §4.4 문면상 위반이다. **`damwha-embed`·`damwha-worker`는 인자를 무시하고 바로 서비스를 띄우므로 `--help`로 시험하지 마라.**
+
+**Task 8에서 나온 것**
+- `signing/RESULTS.md:39-50` — 계획 V7 충돌 서술이 낡았다. `a276953`이 V7/V7b/V7c 분할과 규칙 6e로 이미 결정했는데 문서는 "계획 쪽 결정 사항으로 남긴다"로 열어 둔다. 같은 문단의 "계획 Task 12 V1"은 **존재하지 않는 Task**다(계획은 11까지, 해당 행은 Task 11 V1).
+- `signing/RESULTS.md:469-478` — 복구 출처 문단이 `<!-- END:gatekeeper -->` **바깥**에 있다. 다음 `probe.sh quarantine`이 블록만 갈아 끼우면 이 문단이 남아 **"복구본이다"라고 거짓말한다.**
+- `verify/t8-results-complete.sh` — reviewer 변이 11건 중 9건을 잡았다. 놓친 셋: (a) §6 표의 `exit 137`을 `exit 0`으로 바꿔도 20개 전부 OK(§6 값이 `t8-quarantine.txt`와 대조되지 않는다 — 하필 그 절이 복구본이다), (b) entitlement 결론 이름을 `allow-jit`으로 위조해도 OK(다만 V3이 사본의 실제 entitlement와 대조해 잡는다), (c) `sign-fail-list`의 "0건" 검사가 §2 전체를 grep해 `--verify 실패 0건` 같은 무관한 문자열로도 충족된다.
+- `verify/t8-signed-runtime.sh:190-200` — "깨진 항목이 `RESULTS.md`에 기록됐는가"가 **모듈 이름의 단순 등장 여부**다. 스택 모듈 이름은 이미 문서 전반에 있어 실제 import 실패가 자동으로 "기록됨"이 되어 exit 0으로 빠진다. 이번 회차는 16개 전부 OK라 발현하지 않았다.
+- 계획 V6이 `grep -c 'notarytool'`을 직접 부른다 — 매치 0건에서 stdout `0` / exit **1**. 계획 스스로 "조건을 만족하면 exit 0"을 요구하고 `1727761`이 같은 이유로 Task 7 V9를 스크립트로 옮긴 선례가 있다. `verify/t8-no-notarize.sh`로 감싸야 한다.
+- **회전 파일 163개 중 비교 가능한 158쌍 전부가 `utc:` 헤더 한 줄만 다르다.** `t8_rotate`(`probe.sh:99-113`)가 내용 비교 없이 무조건 회전하기 때문이다. `run-isolated.sh`의 주석은 "내용이 다른 이전 회차는 옆으로 보관한다"고 적었지만 **코드는 비교하지 않는다.** 회전 전 `cmp`로 동일하면 버려야 한다.
+- 번들별 G1 호출은 `bundle/` **최상위 파일**을 검사하지 않는다. 현재 `bundle/.DS_Store`가 있고 상위 루트 호출을 버렸으므로 아무도 훑지 않는다. Task 11 `t11-g1-all-bundles.sh`가 최상위를 따로 보거나 제외를 명시해야 한다.
+- **V4 미실행**이 계획 Verify 한 행이 실행되지 않았다는 사실로 Task 11 집계까지 실려야 한다(스펙 P0-C14 "실행하지 않은 검증이 성공으로 적히지 않는다"). 증거와 `RESULTS.md`가 모두 미실행·복구본임을 밝히고 있어 현재는 위반이 아니다.
 
 **Task 7에서 나온 것**
 - `verify/t7-sandbox-models.sh:110-119` — `nsym`(심볼릭 링크 수)을 출력만 하고 판정에 쓰지 않는다. reviewer 변이: 가장 큰 blob 26 MB 하나만 실제 캐시로의 심볼릭 링크로 바꿔도 **exit 0**이다(실체 판정이 `nb>=1 && bb>=1MB`뿐이라 나머지 5.9 MB가 문턱을 넘긴다). 1회차 스크립트에도 같은 구조였으므로 이번 수정의 퇴행은 아니고 실제 캐시는 심볼릭 링크 0개다. `[ "$nsym" -eq 0 ]`을 조건에 넣어야 한다.

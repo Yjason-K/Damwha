@@ -1,5 +1,5 @@
 # Task 8 — signed/ 전수 ad-hoc 서명 결과
-# utc: 2026-09-10T02:41:22Z
+# utc: 2026-09-10T04:05:55Z
 # 명령: codesign --force --sign - --options runtime --timestamp=none <파일>
 # 대상: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed   Mach-O 정규 파일: 526개
 #

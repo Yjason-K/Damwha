@@ -1,0 +1,4 @@
+# run-isolated.sh dyld 실측
+# label: t8-escalate-jit-torch-mps   utc: 2026-09-10T02:41:25Z   exit: 134   dyld 줄 수: 1
+# argv: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12 /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/t8/payload.py torch-mps /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python
+dyld[62696]: Library not loaded: @executable_path/../lib/libpython3.12.dylib

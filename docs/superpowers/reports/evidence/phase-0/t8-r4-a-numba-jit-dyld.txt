@@ -11,5 +11,5 @@ MEASUREMENT_UNAVAILABLE
 # 어느 쪽이든 통과로 기록하지 않고 측정 불가로 남긴다. 대체 확인은
 # G1 정적 검사와 P0-C8 런타임 자기 보고가 맡는다.
 # run-isolated.sh dyld 실측
-# label: t8-r4-a-numba-jit   utc: 2026-09-10T02:43:25Z   exit: 0   dyld 줄 수: 0
+# label: t8-r4-a-numba-jit   utc: 2026-09-10T04:08:24Z   exit: 0   dyld 줄 수: 0
 # argv: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12 /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/t8/payload.py numba-jit /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python

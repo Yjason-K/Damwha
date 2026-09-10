@@ -1,4 +1,4 @@
 # run-isolated.sh dyld 실측
-# label: t8-escalate-jit-numba-jit   utc: 2026-09-10T02:41:25Z   exit: 134   dyld 줄 수: 1
+# label: t8-escalate-jit-numba-jit   utc: 2026-09-10T04:05:58Z   exit: 134   dyld 줄 수: 1
 # argv: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12 /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/t8/payload.py numba-jit /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python
-dyld[62490]: Library not loaded: @executable_path/../lib/libpython3.12.dylib
+dyld[95391]: Library not loaded: @executable_path/../lib/libpython3.12.dylib

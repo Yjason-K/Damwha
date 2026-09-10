@@ -1,5 +1,5 @@
 # Task 8 — R-5 실측: 서명되지 않은 .so 를 hardened runtime 이 막는가
-# utc: 2026-09-10T02:43:31Z
+# utc: 2026-09-10T04:08:35Z
 # 메인 실행 파일: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12 (ad-hoc + --options runtime)
 #
 # 대상 10개 (원본 bundle/ 에서 슬라이스 하나라도 서명이 없던 Mach-O)

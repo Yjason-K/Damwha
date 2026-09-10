@@ -1,5 +1,5 @@
 # Task 8 — R-4 실측: JIT / 쓰기+실행 메모리와 GPU 셰이더 컴파일
-# utc: 2026-09-10T02:43:30Z
+# utc: 2026-09-10T04:08:33Z
 # 메인 실행 파일: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12 (ad-hoc + --options runtime)
 #
 # A 최소 집합 [uem+dlv]
@@ -20,12 +20,16 @@
 A	uem+dlv	numba-jit	OK	{"check": "numba-jit", "ok": true, "numba_version": "0.67.0", "sum": 16.0}
 A	uem+dlv	torch-jit	OK	{"check": "torch-jit", "ok": true, "torch_version": "2.12.1", "jit_sum": 24.0}
 A	uem+dlv	mlx-metal	OK	{"check": "mlx-metal", "ok": true, "mlx_version": "0.32.2", "device": "Device(gpu, 0)", "first": 1.0, "last": 31.0}
-A	uem+dlv	mlx-compile	OK	{"check": "mlx-compile", "ok": true, "mlx_version": "0.32.2", "sum": 145984.28125}
+A	uem+dlv	mlx-compile	OK	{"check": "mlx-compile", "ok": true, "mlx_version": "0.32.2", "sum": 146111.671875}
 B	dlv	numba-jit	FAIL	{"check": "numba-jit", "ok": false, "exit": 137, "reason": "종료 코드 137 = 128+9 — 신호 9 로 죽었다. dyld/stderr 에 남은 줄이 없다"}
 B	dlv	torch-jit	OK	{"check": "torch-jit", "ok": true, "torch_version": "2.12.1", "jit_sum": 24.0}
 B	dlv	mlx-metal	OK	{"check": "mlx-metal", "ok": true, "mlx_version": "0.32.2", "device": "Device(gpu, 0)", "first": 1.0, "last": 31.0}
-B	dlv	mlx-compile	OK	{"check": "mlx-compile", "ok": true, "mlx_version": "0.32.2", "sum": 146045.125}
+B	dlv	mlx-compile	OK	{"check": "mlx-compile", "ok": true, "mlx_version": "0.32.2", "sum": 145900.59375}
 
-## 시스템 로그 (log show --start '2026-09-10 11:43:25')
-  2026-09-10 11:43:25.153 Df amfid[76589:102a84d] /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12 not valid: Error Domain=AppleMobileFileIntegrityError Code=-423 "The file is adhoc signed or signed by an unknown certificate chain" UserInfo={NSURL=file:///Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12, NSLocalizedDescription=The file is adhoc signed or signed by an unknown certificate chain}
-  2026-09-10 11:43:26.955 Df amfid[76589:104f6c8] /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12 not valid: Error Domain=AppleMobileFileIntegrityError Code=-423 "The file is adhoc signed or signed by an unknown certificate chain" UserInfo={NSURL=file:///Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12, NSLocalizedDescription=The file is adhoc signed or signed by an unknown certificate chain}
+## 시스템 로그 (log show --start '2026-09-10 13:08:24')
+  2026-09-10 13:08:24.285 Df amfid[76589:1445d12] /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12 not valid: Error Domain=AppleMobileFileIntegrityError Code=-423 "The file is adhoc signed or signed by an unknown certificate chain" UserInfo={NSURL=file:///Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12, NSLocalizedDescription=The file is adhoc signed or signed by an unknown certificate chain}
+  2026-09-10 13:08:28.257 Df amfid[76589:1445d12] /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12 not valid: Error Domain=AppleMobileFileIntegrityError Code=-423 "The file is adhoc signed or signed by an unknown certificate chain" UserInfo={NSURL=file:///Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed/python/bin/python3.12, NSLocalizedDescription=The file is adhoc signed or signed by an unknown certificate chain}
+  2026-09-10 13:08:28.357 Df launchd[1:1446d76] [pid/99755/com.apple.intents.intents-helper [99756]:] signaled service: Killed: 9
+  2026-09-10 13:08:28.357 Df launchd[1:1446d76] [pid/99755/com.apple.intents.intents-helper [99756]:] scheduling cleanup in 9 sec after sending Killed: 9
+  2026-09-10 13:08:30.701 Df launchd[1:1446d76] [pid/99952/com.apple.intents.intents-helper [127]:] signaled service: Killed: 9
+  2026-09-10 13:08:30.701 Df launchd[1:1446d76] [pid/99952/com.apple.intents.intents-helper [127]:] scheduling cleanup in 9 sec after sending Killed: 9

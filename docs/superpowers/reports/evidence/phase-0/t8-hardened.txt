@@ -1,5 +1,5 @@
 # Task 8 V2 — hardened runtime 이 실제로 켜졌는가
-# utc: 2026-09-10T02:44:46Z
+# utc: 2026-09-10T04:08:59Z
 # 사본: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/signed
 # 원본: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle  (서명하지 않았다 — 음성 대조)
 

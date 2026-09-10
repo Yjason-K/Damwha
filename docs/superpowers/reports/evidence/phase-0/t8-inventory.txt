@@ -1,5 +1,5 @@
 # Task 8 — bundle/ Mach-O 서명 상태 전수 (원본, 서명 전)
-# utc: 2026-09-10T02:39:30Z   대상: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle   Mach-O 정규 파일: 526개
+# utc: 2026-09-10T04:04:10Z   대상: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/bundle   Mach-O 정규 파일: 526개
 # 형식: <분류> <codesign --display 요약>\t<번들 기준 상대 경로>
 
 arm64-signed-otherarch-unsigned sig=adhoc flags=0x20002(adhoc,linker-signed) team=not set	python/lib/python3.12/site-packages/_sounddevice_data/portaudio-binaries/libportaudio.dylib
