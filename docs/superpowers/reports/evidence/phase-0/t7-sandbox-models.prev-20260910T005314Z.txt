@@ -1,11 +1,7 @@
-# Task 7 V5 — 게이트 모델이 샌드박스 HOME 에 새로 받힌 실체인가 (P0-C4, R-6)
-# utc: 2026-09-10T00:53:28Z
+# Task 7 V5 — 게이트 모델을 샌드박스 HOME 에 새로 받았는가 (P0-C4, R-6)
+# utc: 2026-09-10T00:36:01Z
 # 개발자 캐시(~/.cache/huggingface)는 읽지도 쓰지도 않는다 (스펙 §4.4).
 # HF_TOKEN 은 set/unset 만 기록한다 (스펙 §4.2) — 이 파일에 값이 없다.
-# 판정은 재실행에도 변하지 않는 파일시스템 사실(실체·nlink=1·생성 시각)과,
-# 회전된 회차 파일까지 뒤진 다운로드 기록 둘로 한다. '현재 회차가 새로
-# 받았는가'는 보지 않는다 — 스펙 §4.4 가 재실행 시 캐시를 이어받으라고
-# 정하므로 그것으로 판정하면 두 번째 실행부터 반드시 실패한다.
 
 == HF_HOME (스펙 §4.2 주입 화이트리스트)
   config.sh 의 값     : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/home/.cache/huggingface
@@ -27,28 +23,13 @@ RC_SANDBOX=0
     경로: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/sandbox/home/.cache/huggingface/hub/models--pyannote--speaker-diarization-community-1
     blobs 실체 파일: 5개  32821421 bytes  (심볼릭 링크 0개)
     OK   가중치가 샌드박스 안에 실체로 있다
-    하드링크 수가 1이 아닌 blob: 0개
-    OK   전부 nlink=1 — 다른 캐시에서 하드링크로 끌어온 것이 아니다
-    blob 생성 시각(UTC): 2026-09-09T15:58:16Z ~ 2026-09-09T15:58:32Z
     refs/main: 3533c8cf8e369892e6b79ff1bf80f7b0286a54ee
 RC_PYANNOTE=0
 RC_BLOBS=0
 
-== 어느 회차가 받았는가 (스펙 §4.4 "그 회차를 증거에 명시")
-   **현재 회차의 NEW 표시로 판정하지 않는다.** 드라이버는 실행 전후의
-   hub/ 차집합으로 NEW 를 찍는데, 스펙 §4.4 는 재실행 시 샌드박스
-   캐시를 지우지 않고 이어받으라고 정한다. 그래서 두 번째 실행부터는
-   NEW 가 반드시 0건이고, 그것으로 판정하면 검사가 영영 실패한다.
-   스펙이 요구하는 것은 "빈 캐시에서 한 번만 재고 그 회차를 증거에
-   명시"이므로, **회전된 회차 파일까지 전부** 뒤져 그 회차를 찾는다.
-  --   t7-pipeline.txt  (utc 2026-09-10T00:35:18Z)  pyannote NEW 0건 — 캐시를 이어받은 회차
-  NEW  t7-pipeline.prev-20260910T003518Z.txt  (utc 2026-09-09T16:08:29Z)
-         NEW models--mlx-community--whisper-large-v3-turbo	1613980437
-         NEW models--pyannote--speaker-diarization-community-1	32821461
-         NEW models--speechbrain--spkrec-ecapa-voxceleb	88983513
-  OK   pyannote 게이트 저장소를 새로 받은 회차가 1개 기록돼 있다: t7-pipeline.prev-20260910T003518Z.txt
-RC_NEW=0
-RC_NEW_FILES= t7-pipeline.prev-20260910T003518Z.txt
+== 이 실행이 새로 받았는가 (드라이버가 전후로 재서 남긴 NEW 표시)
+  FAIL t7-pipeline.txt 에 NEW 표시가 없다 — 전부 이미 있던 캐시였다
+RC_NEW=1
 
 == 참고 — 이 실행이 쓴 다른 모델 (게이트 아님)
   speechbrain/spkrec-ecapa-voxceleb  (화자 임베딩)
