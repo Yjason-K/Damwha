@@ -8,6 +8,17 @@ BASE 커밋: 스펙·계획 확정 커밋 `docs: Electron Phase 0 패키징 검�
 스펙: [2026-09-09-electron-phase-0-packaging-validation-design.md](../specs/2026-09-09-electron-phase-0-packaging-validation-design.md)
 계획: [2026-09-09-electron-phase-0-packaging-validation.md](../plans/2026-09-09-electron-phase-0-packaging-validation.md)
 
+**상태 (2026-09-10): Task 8에서 중단.** Task 1~7 통과, Task 8 미통과, Task 9~11 미착수.
+사용자 판단으로 남은 검증을 멈추고 Phase 1부터 순차 전환하기로 했다. 중단 시점의 판정은
+아래 [최종 검증](#최종-검증)에, 넘기는 것은 [남은 제약·후속 Phase 인계](#남은-제약후속-phase-인계)에 있다.
+
+**이 문서가 인용하는 `experiments/electron-phase-0/…`와 `evidence/phase-0/…`는 `dev`에
+없다.** 하네스 88파일과 증거 614파일은 브랜치
+`feat/electron-migration-phase-0-packaging-validation`과 태그
+`archive/electron-phase-0-packaging-validation`에만 보존한다 (스펙 §6: "Phase 0이 끝나면
+이 디렉터리는 브랜치에 보존만 된다"). 꺼내 보려면
+`git show archive/electron-phase-0-packaging-validation:<경로>`.
+
 ## 스펙 리뷰
 
 | 회차 | 대상 버전 | 검토자 | 지적 | 조치 | 통과 |
@@ -150,7 +161,18 @@ Task 1은 통과했으나 reviewer가 Task 2·5 착수 전 반영을 권고한 �
 
 | 7 | `350f03f..45aacd6` (`6668045`, `1727761`, `45aacd6`) | electron-reviewer (fable) | 2 | T7-B1 (해소) | `evidence/phase-0/task-7-r{1,2}.md` | **PASS** |
 
-| 8 | `f83e1f3..a07e17e` | electron-reviewer (opus) | 1 | T8-B1·T8-B2 (**미해소**) | `evidence/phase-0/task-8-r1.md` | **미통과 — 사용자 지시로 중단** |
+| 8 | `f83e1f3..a07e17e` | electron-reviewer (opus) | 1 | T8-B1·T8-B2 (중단 시점 미해소, 이후 `a1c0f0d`로 해소) | `evidence/phase-0/task-8-r1.md` | **미통과 — 사용자 지시로 중단** |
+
+| 9 | — | — | — | — | — | **미착수** (P0-C10·C13 — 모델 라이선스·게이팅과 용량·초기 비용) |
+
+| 10 | — | — | — | — | — | **미착수** (P0-C11·C12 — 최소 macOS 버전과 실행 환경 제공 방식 확정) |
+
+| 11 | — | — | — | — | — | **미착수** (P0-C7·C8·C14 — Phase 통합 검증과 결과 반영) |
+
+**Task 8의 판정은 바꾸지 않는다.** 차단 2건은 중단 후 `a1c0f0d`에서 서술 정정과 트랩 수정으로
+해소했으나, 그것으로 Task가 통과한 것은 아니다 — 계획의 Task 8은 verifier 재실행과 reviewer
+재리뷰까지가 한 단위이고 그 둘을 돌리지 않았다. **P0-C9 자체는 충족이다** (판정 기준이
+"제약이 특정되었는가"이므로. 위 [최종 검증](#최종-검증) 참조).
 
 ### Task 8 상세
 
@@ -363,8 +385,40 @@ D3의 실측 수치가 함정을 숫자로 남겼다. 커밋된 `t1-dyld-launche
 
 ## 최종 검증
 
+**Phase 0을 완주하지 않았다.** 아래 표는 중단 시점의 판정이며, 스펙 P0-C14가 요구한
+"실행하지 않은 검증이 성공으로 적히지 않는다"를 그대로 지킨다. 증거 경로는 전부
+`docs/superpowers/reports/evidence/phase-0/` 기준이다.
+
 | 완료 기준 | 확인 방법 | 증거 | 충족 |
 | --- | --- | --- | --- |
+| **P0-C1** 독립 PostgreSQL + 확장 2종 | Task 2 — 소스 빌드 번들로 `initdb` → 55432 기동 → `CREATE EXTENSION` 2종 → `pnpm be:migrate` → 정상 재기동 → SIGKILL 후 crash recovery | `task-2-r1.md`, `t2-*.txt` | **충족.** `_migrations`=24가 정상 재기동(pid 1764→2767)·강제 종료 후 재기동(2767→3067) 양쪽에서 유지. public 테이블 17개 동일 |
+| **P0-C2** 독립 DB 검색 쿼리 | Task 6 — 번들 DB + 번들 embed로 `kw`/`sem`/`fused` CTE 실행 | `task-6-r1.md`, `t6-*.txt` | **충족.** cand_k=3에서 kw 3 / sem 3 / **fused 4**로 FULL OUTER JOIN 확인. `sem` 상위에 "예산" 글자 없는 발화가 들어 임베딩 동작 입증 |
+| **P0-C3** 재배치 가능한 Python 런타임 | Task 3 — pbs 3.12.11 + `uv pip install --python`, 다른 절대 경로로 이동 후 13종 import + `mps_available()` | `task-3-r1.md`, `t3-*.txt` | **충족.** 위반 이동 전 136 → 이동 후 201 → 사후 처리 후 **0**. reviewer가 제3 경로로 다시 옮겨 재현 |
+| **P0-C4** 실제 음성 처리 파이프라인 | Task 7 — 31분 실오디오로 normalize→probe→VAD→diarization→ECAPA→identify→STT→align→persist | `task-7-r{1,2}.md`, `t7-*.txt` | **충족.** `outcome=committed`, `job done/progress=100`, `status='ok'` 발화 373건. 게이트 저장소는 제품 기본값 경로가 요구하는 `community-1` 1종을 샌드박스에 새로 받음 (판정 기준은 아래 "기술 결정" 2026-09-10 항목) |
+| **P0-C5** bge-m3 임베딩 서비스 | Task 5 — 번들 런타임에서 `58100` 기동, `/health`·`/embed` | `task-5-r1.md`, `t5-embed-*.txt` | **충족.** `{"status":"ok"}`, `model=BAAI/bge-m3`, `dimension=1024` |
+| **P0-C5b** `mlx_lm.server` 번들 실행 | Task 5 — `58000`에서 `Qwen3.5-4B-8bit` 기동 → `/v1/models` → 생성 → SIGTERM | `task-5-r1.md`, `t5-llm-*.txt` | **충족.** 뜬 것이 `bundle/python/bin/mlx_lm.server`(셔뱅이 번들 python3.12)임을 경로로 확인. 인자 형태가 제품 `llm_server.py:106-114`와 동일 |
+| **P0-C6** ffmpeg / ffprobe 번들 실행 | Task 4 — 소스 빌드(LGPL 2.1) 번들로 probe·normalize | `task-4-r1.md`, `t4-*.txt` | **충족.** duration `1883.254422` 원본과 오차 0, 16 kHz mono 43.3 MB 생성. Homebrew ffmpeg가 **같은 버전 9.0.1**이라 버전 문자열로는 구분 불가 — dyld 688줄에 `/opt/homebrew` 0건, 메인 이미지가 번들 경로인 것이 근거 |
+| **P0-C9** 서명·공증·Gatekeeper 제약 | Task 8 — ad-hoc 서명 526개, entitlement escalate/reduce 7회차, 격리 속성 부여 후 실행·`spctl` | `task-8-r1.md`, `t8-*.txt`, `signing/RESULTS.md` | **충족.** 판정 기준이 "성공/실패"가 아니라 "제약이 특정되었는가"다 (스펙 §5). 서명 실패 0건(526개 전량 수용)·극소 entitlement 집합 `{uem, dlv}`·Gatekeeper 차단(SIGKILL, `spctl` rejected, `Prompt shown`)·공증 선결 조건 12항이 전부 기록됐다. 리뷰 차단 2건은 서술·트랩 결함이었고 `a1c0f0d`로 해소 |
+| **P0-C7** G1 + G2 전수 통과 | Task 11(미실행)이 전 번들·전 회차를 집계할 예정이었다 | 각 Task 증거에 **범위별로만** 존재 | **미충족.** 각 Task 범위에서는 전부 위반 0건이고 `bundle/{pg,python,ffmpeg}`를 번들별로 부르면 셋 다 exit 0이다. 없는 것은 (a) 전 회차 dyld 증거의 통합 집계와 "0건"과 "측정 불가"의 구분, (b) 허용 목록 24건 중 **실동작 폴백 3건**(`soundfile.py`, `ctypes/macholib/dyld.py`, `PIL/_imagingft…so`)이 실제로 쓰이지 않았다는 증거. 스펙이 그 증거 없이는 충족으로 적지 말라고 못 박았다 |
+| **P0-C8** 머신 전역 설치물 비의존 | Task 3·5·7이 번들별로 자기 보고 | `t3-selfreport.txt`, `t5-bundle-paths.txt` | **부분.** `sys.prefix`·`sys.path`·`sysconfig`·`pg_config`가 전부 번들 안을 가리키고 `/Library/Frameworks/Python.framework`가 어디에도 없음을 확인했다. 전 번들 통합 덤프는 Task 11 몫이라 없다 |
+| **P0-C10** 모델 라이선스·게이팅·재배포 | Task 9 — 미실행 | 없음 | **미충족.** whisper 6종(`whisper_mlx.py::_REPO`)·pyannote 계열·bge-m3·요약 모델의 라이선스·게이팅·재배포 가능 여부 표가 없다. Task 7이 부수로 확인한 것은 `community-1`이 `gated=auto`, `wespeaker-voxceleb-resnet34-LM`이 `gated=False`라는 것뿐 |
+| **P0-C11** 지원 macOS 최소 버전 | Task 10 — 미실행 | 없음 | **미충족.** 값이 정해지지 않았다. 강제 요소 후보(MLX Metal, PostgreSQL 빌드 타깃, Electron)를 대조하지 않았다 |
+| **P0-C12** 실행 환경 제공 방식 결정 | Task 10이 네 결정을 최종 확정할 예정이었다 | 아래 "기술 결정" 절 | **부분.** 셋은 실측으로 정해졌다 — PostgreSQL **소스 빌드**(EDB·zonky 실측 탈락), Python **python-build-standalone + `uv pip install --python`**(venv·PyInstaller·conda-pack 탈락), ffmpeg **LGPL 소스 정적 빌드**. 확정 문서와 `mlx-lm`·`mlx` 버전의 단일 진실 원천이 없다 |
+| **P0-C13** 설치 용량과 초기 준비 비용 | Task 9 — 미실행. 번들 용량만 실측 | Task 2·3·4 증거 | **부분.** 번들 용량은 **실측**이다 — `pg` 21 MB / `python` 1509 MiB(38420파일) / `ffmpeg` 42 MB. 없는 것은 프리셋별 초기 다운로드 용량·시간이고, `quality`의 `Qwen3.5-27B-8bit`는 디스크 여유(11 GiB) 때문에 애초에 `산정`으로 계획돼 있었다 |
+| **P0-C14** 보고서 완성과 로드맵 갱신 | 이 문서 + 로드맵 Phase 0 절 | 이 절 | **충족.** 15개 기준 전부에 충족/미충족과 증거 경로가 있고, 실행하지 않은 검증(C10·C11)이 성공으로 적히지 않았다. 완주가 아니라 **중단 시점의 기록**임을 머리말과 이 절이 명시한다 |
+
+### 로드맵 Phase 0 완료 기준 대응
+
+| 로드맵 완료 기준 | 결과 |
+| --- | --- |
+| 개발자의 기존 PATH·가상환경·Homebrew에 의존하지 않는 환경에서 DB 검색과 실제 음성 처리·임베딩 실행 성공 | **충족.** 검색 Task 6, 음성 처리 Task 7, 임베딩 Task 5. 셋 다 `env -i` + 격리 `HOME`/`TMPDIR`에서 돌았고 dyld 실측으로 개발 자산 참조 0건을 보였다 |
+| 가능한 패키징 방식, 검증 환경, 남은 제약을 문서로 기록 | **충족.** 이 문서와 `experiments/electron-phase-0/{pg,python,ffmpeg,signing}/README.md`·`RESULTS.md` |
+| 후속 Phase에서 사용할 실행 환경 제공 방식을 결정. 실패한 항목은 대안 검증 후 진행 | **부분.** 세 런타임의 제공 방식은 실측으로 정해졌고 탈락안도 실측으로 배제됐다. 미결은 최소 macOS 버전(P0-C11)과 모델 배포 조건(P0-C10) |
+
+**이 Phase가 실제로 답한 질문.** "Python·MLX·PostgreSQL·ffmpeg를 개발 환경 없이 번들로
+띄워 쓸 수 있는가"에 **예**로 답했고, 답의 근거가 dyld 로드 목록이라는 반증 가능한
+형태로 남았다. Phase 1~4가 그 위에서 시작할 수 있다. 답하지 못한 것은 **배포 조건**
+(모델 라이선스, 최소 macOS 버전, 공증)이며 전부 Phase 4·6에서 마주친다.
 
 ## 후속 작업 (비차단 지적)
 
@@ -435,7 +489,112 @@ Task 1에서 나왔고 수정하지 않기로 한 것들이다.
 
 ## 남은 제약·후속 Phase 인계
 
-- 스펙 §11 "Phase 6로 넘기는 검증" 참조. 최종 검증 후 실제 결과를 반영해 갱신한다.
+Phase 0을 중단하면서 확정한 인계 목록이다. 스펙 §11 "Phase 6로 넘기는 검증"을 실제
+결과로 갱신했다.
+
+### Phase 1 (Electron 앱 기반)
+
+- 이 Phase의 산출물 중 Phase 1이 쓰는 것은 **없다.** Phase 1은 기존 개발 환경의 DB·worker·embed를
+  그대로 쓰므로 번들이 필요하지 않다. 검증 하네스도 이식하지 않는다 (스펙 §6).
+- Node 런타임은 Electron이 제공하므로 Phase 0의 검증 대상이 아니었다 (§4.0의 격리 경계).
+
+### Phase 3 (PostgreSQL 내장)
+
+- **제공 방식은 소스 빌드다.** PostgreSQL 16.15 + pgvector 0.8.6 + pg_bigm 1.2-20240606, ICU·readline·zlib off.
+  21 MB, `otool -L bin/postgres`의 외부 의존이 `/usr/lib/libSystem.B.dylib` 하나. 재현 절차는
+  `experiments/electron-phase-0/pg/build.sh`.
+- **R-2b — 재빌드할 때마다 `install_name` 37건을 반드시 고쳐야 한다.** `src/Makefile.shlib`이 공유
+  라이브러리에 절대 `install_name`을 박아, 번들을 옮기면 `bin/` 20개와 `lib/` 17개가 깨진다.
+  **서버는 살고 클라이언트만 죽는 형태**라(`postgres`는 libpq를 링크하지 않는다) 서버만 확인하면
+  놓친다. `install_name_tool -change`/`-id` + ad-hoc 재서명으로 해소되며 `pg/build.sh` 8단계에 있다.
+  arm64는 서명 없는 Mach-O를 실행하지 않으므로 재서명이 선택이 아니다.
+- **확장은 `-fmacro-prefix-map`으로 빌드한다.** PGXS가 `pg_config`의 절대 경로로 컴파일해 서버 헤더
+  인라인 함수의 `__FILE__`이 `vector.dylib`에 남는다 (이동 전 INFO → 이동 후 STALE-PATH 위반).
+- **`--auth=trust`는 실험 전용이다.** `pg/run.sh`가 쓰는 값이며 제품에 그대로 옮기면 안 된다.
+- `pg_ctl start`를 쓰지 않는다 — `-l` 유무와 무관하게 내부에서 `/bin/sh -c "exec postgres … 2>&1 &"`로
+  띄우므로 SIP가 `DYLD_*`를 지우고 서버 stderr가 stdout에 합쳐진다. Phase 3의 프로세스 관리도 이
+  제약을 받는다 (`postgres -D … &` 직접 기동 + `logging_collector=on`).
+- crash recovery는 재배치된 데이터 디렉터리에서 동작한다 — SIGKILL 후 재기동에 `automatic recovery in progress`,
+  커밋 행 생존, `_migrations`=24 유지. Phase 3 완료 기준 "앱 재시작 후 데이터 유지"와 Phase 5 "강제 종료"의 전제가 확인됐다.
+
+### Phase 4 (Python·ML 실행 환경 내장)
+
+- **제공 방식은 python-build-standalone 3.12.11 + `uv pip install --python`이다.** venv를 만들지 않고
+  배포본 `site-packages`에 직접 설치한다. 재현 절차는 `experiments/electron-phase-0/python/build.sh`.
+  탈락안: `uv venv --relocatable`(`pyvenv.cfg`의 `home`이 절대 경로), PyInstaller(`sys.prefix` 의미가
+  달라지고 진입점이 넷), conda-pack(이 머신에 conda 계열 없음).
+- **옮길 때마다 셋을 반복해야 한다** — `bin/` 콘솔 스크립트 셔뱅 65개, `_sysconfigdata` prefix,
+  `__pycache__` 760개 삭제. Mach-O 처리(`LC_RPATH` 58건 삭제, `LC_ID_DYLIB` 64건 정규화)는 첫
+  relocate로 완결되고 멱등이다.
+- **셔뱅 함정이 Phase 4·6의 진짜 위험이다.** 옛 경로가 **사라진** 경우에만 `bad interpreter`로 죽는다.
+  옛 경로가 남아 있으면 죽지 않고 **조용히 다른 런타임을 실행한다** — reviewer가 번들을 제3 경로로
+  복사하고 relocate 없이 `bin/uvicorn --version`을 돌리자 정상 종료했고 `sys.executable`이 원래
+  `bundle/python/bin/python3.12`였다. 앱 업그레이드로 두 버전이 잠시 공존할 때 이 형태가 된다.
+- **무서명 `.so`는 빌드 시점에 전부 서명해야 한다 — 선택이 아니다.** `disable-library-validation`은
+  서명 주체를 안 따질 뿐 "서명 없음"을 허용하지 않는다. 대상 10개를 ad-hoc 서명하면 전부 로드되고
+  `codesign --remove-signature`로 떼면 전부 `missing code signature`로 실패한다.
+- **슬라이스 구분이 작업량을 바꾼다.** 이 번들의 **arm64 무서명은 0개**이고, 다른 슬라이스만 무서명인
+  것이 10개, 전 슬라이스 서명이 516개다. `codesign --verify`를 `--arch` 없이 부르면 universal 파일에서
+  x86_64 슬라이스 하나만 서명이 없어도 파일 전체를 `not signed at all`로 보고한다.
+- **최소 entitlement 집합은 `{allow-unsigned-executable-memory, disable-library-validation}`이다.**
+  MLX Metal 셰이더 런타임 컴파일과 `torch.jit.script`는 hardened runtime에서 깨지지 않는다. 깨지는 것은
+  numba의 LLVM MCJIT이고 쓰기+실행 매핑 거부는 **메시지 없이 SIGKILL**이며 크래시 리포트도 남지 않는다 —
+  A/B 대조 없이는 원인을 찾을 수 없다. `allow-jit`은 최소 집합에 들어가지 않으나 `jit+dlv` 회차는 재지 않았다.
+- **재측정 대상 하나 — numba 사망 지점.** import인지 컴파일인지 구분되지 않았고, 컴파일이라면 STT는
+  import에서 죽지 않고 word-timestamp DTW 경로에서만 죽는다. `signing/RESULTS.md` §4 참조.
+- **`mlx-lm`·`mlx` 버전의 단일 진실 원천이 없다.** `pyproject.toml` 밖에 있고 `python/build.sh:53`이
+  `mlx-lm==0.31.3`만 고정한다(`mlx` 0.32.2는 전이 해석). Phase 4가 매니페스트를 만들어야 한다.
+- **bge-m3가 같은 가중치를 두 벌 받는다** — `pytorch_model.bin`(rev `5617a9f…`)과
+  `model.safetensors`(rev `9a0624b…`)로 리비전까지 갈린다. **2.1 GB 낭비**이며 다운로드 경로를 지정해야 한다.
+- **ffmpeg는 LGPL 2.1 정적 소스 빌드다** (`--disable-gpl --disable-nonfree --disable-version3`).
+  configure가 스스로 `License: LGPL version 2.1 or later`를 보고한다. 완전 정적이라 `LC_RPATH`가 없고
+  재배치에서 아무것도 깨지지 않는다 — 세 번들 중 유일하다. 공개 정적 빌드는 관례적으로 `libx264`·`libx265`·
+  `libfdk-aac`를 켜 GPL/nonfree 구성이라 쓰지 않는다.
+- **G1 허용 목록 24건은 Phase 4가 다시 봐야 한다.** 제3자 wheel과 CPython 표준 라이브러리 **원본**의
+  문자열이라 지울 수 없다. 그중 **실동작 폴백 3건**(`soundfile.py`, `ctypes/macholib/dyld.py`,
+  `PIL/_imagingft…so`)은 "실제로 쓰이지 않음"을 보여야 P0-C7을 충족으로 적을 수 있다.
+
+### Phase 5 (데이터 이전·복구)
+
+- `pg/run.sh:202-206` 주석의 "postmaster만 죽이면 보조 프로세스가 공유 메모리를 붙들어 다음 기동이
+  거절된다"는 **미실측 주장**이다. Phase 5에 의미가 있으므로 한 번 재거나 주장으로 표기해야 한다.
+
+### Phase 6 (배포·독립 설치 검증)
+
+- **공증을 제출한 적이 없다.** Apple Developer Program 미가입 상태로 진행했고 P0-C9는 ad-hoc 서명 +
+  hardened runtime까지만 다뤘다. 선결 조건 12항이 `signing/RESULTS.md`에 있다.
+- **R-12 — Team ID 기반 library validation은 미재현 사각이다.** ad-hoc 서명에서는 Team ID가 `not set`이라
+  Developer ID 서명에서만 나타나는 실패 형태를 이 Phase가 볼 수 없었다.
+- **깨끗한 다른 맥에서의 설치는 검증하지 않았다.** 별도 macOS 사용자 계정을 쓰지 않기로 한 결정
+  (아래 "기술 결정" 2026-09-09 항목)에 따라, `env -i` + `HOME` 격리와 G1 금지 문자열 실측 목록으로 대체했다.
+  실제 독립 설치 검증은 로드맵이 이미 Phase 6에 두고 있다.
+- **격리 속성 정리 트랩은 아직 실측되지 않았다.** `a1c0f0d`가 T8-B1을 고쳤고 재현 대조군으로 확인했으나
+  그 경로 자체는 실행되지 않았다 — **다음 `probe.sh quarantine`이 첫 실측이다.**
+
+### 검증 하네스 자체에 남은 결함
+
+Phase 0을 재개하거나 하네스를 참조할 때만 의미가 있다. 전부 거짓 FAIL 쪽이거나 이번 판정에
+영향이 없음이 확인된 것들이다.
+
+- `verify/t2-extensions.sh:85-97` — 확장 dyld 판정이 pid를 고정하지 않고 `$PGDATA/log/*.txt` 전 회차를
+  합친다 (규칙 6b 위반). 이번 회차는 pid 1764 줄이 실재해 유효했으나, 다음 회차에 이전 로그만으로
+  통과할 수 있다.
+- `verify/t2-dyld-measured.sh` — Task 5가 고친 `$NF` 구조가 남아 있다. `dyld[pid]: move loaded to delayed: <이름>`
+  줄(경로 없음)을 위반으로 세는 결함인데, **거짓 FAIL만 만들고 거짓 PASS는 만들지 못하며**
+  `t2-start-dyld.txt`의 비-load 줄이 0건이라 Task 2 판정은 유효하다.
+- `lib/check-macho.sh:129-147` — 허용 규칙의 단위가 (경로, **금지 문자열 접두사**)이지 (경로, 토큰)이
+  아니다. 같은 파일에 같은 접두사의 다른 토큰이 들어와도 ALLOW 된다. 4번째 열(토큰 글롭)이 필요하다.
+- `lib/g1-allowlist.txt:81` — `scipy/linalg/_fblas…so`의 `/opt/homebrew` 규칙이 **죽은 규칙**이다
+  (`LC_RPATH` 삭제로 문자열 자체가 사라졌다). 남겨 두면 새로 생긴 `/opt/homebrew`를 흡수한다.
+- `lib/g1-allowlist.txt:90-92` — `certifi-*/METADATA` 류 글롭의 `*`가 `/`를 넘어간다.
+- `lib/snapshot-dev-assets.sh:81` — `dev-assets-latest.txt`를 보관 없이 덮어써 마지막 Task 기록만 남는다.
+- `lib/run-isolated.sh:27-28,164-167` — `MEASUREMENT_UNAVAILABLE` 주석이 0건의 원인을 SIP로만 적는다.
+  "런처가 re-export를 빠뜨림"이 더 흔한 원인이므로 병기해야 한다.
+- `lib/run-isolated.sh:131` — `HF_TOKEN`이 `env -i` argv에 잠깐 노출된다(같은 사용자의 `ps`).
+- 증거 `.txt`의 `archive_prev` 회전 로직 — git이 이력을 보존하므로 `.prev-<timestamp>.txt`는 중복이다.
+  `a1c0f0d`에서 회전본을 전부 지웠고, 로직 자체를 빼는 것이 낫다.
+- **`damwha-embed`·`damwha-worker`는 인자를 무시하고 바로 서비스를 띄운다.** `--help`로 시험하면
+  포트를 잡는다 (Task 3 리뷰 부수효과).
 
 ## 기술 결정과 변경 이유
 

@@ -2,7 +2,12 @@
 
 작성일: 2026-09-09
 
-상태: Phase 구성 정리 완료. 각 Phase의 상세 구현 스펙·계획과 구현은 미착수.
+상태 (2026-09-10): Phase 0 **부분 완료 후 중단**. Phase 1부터 순차 전환한다.
+핵심 기술 위험은 확인됐다 — Python·MLX·PostgreSQL·ffmpeg가 개발 venv·Homebrew·Docker 없이
+번들에서 떴고, 31분 실오디오 전체 파이프라인과 하이브리드 검색이 그 위에서 돌았다.
+미결은 **배포 조건**(모델 라이선스·게이팅, 최소 macOS 버전, 공증)이며 Phase 4·6에서 마주친다.
+결과: [Phase 0 검증 결과](superpowers/reports/2026-09-09-electron-phase-0-packaging-validation-results.md).
+Phase 1~6의 상세 구현 스펙·계획과 구현은 미착수.
 
 ## 목표와 전제
 
@@ -51,6 +56,27 @@
 - 후속 Phase에서 사용할 실행 환경 제공 방식을 결정. 실패한 항목은 대안 검증 후 진행.
 
 산출물은 검증 결과와 기술 결정이다. 검증용 코드를 곧바로 제품 구현으로 간주하지 않는다.
+
+**결과 (2026-09-10): 부분 완료 후 중단.** 스펙·계획은 [2026-09-09-electron-phase-0-packaging-validation-design.md](superpowers/specs/2026-09-09-electron-phase-0-packaging-validation-design.md)와
+[2026-09-09-electron-phase-0-packaging-validation.md](superpowers/plans/2026-09-09-electron-phase-0-packaging-validation.md),
+실행 결과는 [2026-09-09-electron-phase-0-packaging-validation-results.md](superpowers/reports/2026-09-09-electron-phase-0-packaging-validation-results.md)에 있다.
+
+| 완료 기준 | 결과 |
+| --- | --- |
+| 개발자의 기존 PATH·가상환경·Homebrew에 의존하지 않는 환경에서 DB 검색과 실제 음성 처리·임베딩 실행 성공 | **충족** |
+| 가능한 패키징 방식, 검증 환경, 남은 제약을 문서로 기록 | **충족** |
+| 후속 Phase에서 사용할 실행 환경 제공 방식을 결정 | **부분** — 세 런타임의 제공 방식은 실측으로 정해졌고, 최소 macOS 버전과 모델 배포 조건이 미결이다 |
+
+확정된 제공 방식: PostgreSQL 16.15 **소스 빌드**(+pgvector·pg_bigm, 21 MB), Python
+**python-build-standalone 3.12.11 + `uv pip install --python`**(1509 MiB), ffmpeg **LGPL 2.1
+정적 소스 빌드**(42 MB). 탈락안도 실측으로 배제했다.
+
+검증한 것: Task 1~7 통과. 중단한 것: Task 8(서명·Gatekeeper — P0-C9는 충족, Task 판정은 미통과),
+Task 9~11 미착수. 미결 항목은 결과 문서의 "남은 제약·후속 Phase 인계"가 Phase별로 나눠 담는다.
+
+검증 하네스(`experiments/electron-phase-0/`, 88파일)와 증거(614파일)는 `dev`에 병합하지 않고
+브랜치 `feat/electron-migration-phase-0-packaging-validation`과 태그
+`archive/electron-phase-0-packaging-validation`에 보존한다 (스펙 §6).
 
 ### Phase 1. Electron 앱 기반
 
