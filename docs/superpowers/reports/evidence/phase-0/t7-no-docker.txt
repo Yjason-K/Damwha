@@ -1,0 +1,25 @@
+# Task 7 V9 — 드라이버가 컨테이너 런타임을 쓰지 않는가 (P0-C4)
+# utc: 2026-09-10T00:22:22Z
+# grep -c 의 종료 코드에 기대지 않는다 — 0건일 때 exit 1 이라 판정이 뒤집힌다.
+# 이 검사는 코드와 주석·docstring 을 구분하지 않는다. 드라이버 docstring 에
+# 그 이름을 다시 적으면 깨진다 (스크립트 머리말 참고).
+
+== 검사 대상
+  파일: /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0/drivers/process_meeting_driver.py
+  줄 수: 629
+RC_FILE=0
+
+== 리터럴 등장 (대소문자 무시, 매치된 **줄 수**)
+   코드와 주석·docstring 을 구분하지 않는다 — 이 파일 어디에도 없어야 한다.
+  OK   0건  'testcontainers'
+  OK   0건  'docker'
+RC_PATTERNS=0
+
+== 드라이버가 실제로 붙는 곳 (컨테이너가 아니라 번들 PostgreSQL 이다)
+  스펙 §4.2 의 DATABASE_URL 은 127.0.0.1:55432 이고,
+  드라이버는 DSN 에 ':55432/' 가 없으면 시작조차 하지 않는다.
+  OK   드라이버에 실험 포트 55432 가드가 있다
+       40:시작 시점에 번들 PostgreSQL(55432)이 **정지 상태**라고 가정하고 이 드라이버가
+       201:    if ":55432/" not in dsn:
+       202:        die(f"DATABASE_URL 이 실험 포트 55432 가 아니다: {dsn!r} — 개발 DB(5432)에 쓰지 않는다")
+RC_PORT=0

@@ -501,6 +501,16 @@ bash services/llm.sh   status
   `extract_lenses`/`summarize_meeting`을 queued로 남기고, 다음 회차의
   `db.claim`이 그것을 먼저 집어 재실행이 멱등하지 않게 된다. `index_meeting`은
   `run_once`가 `search_embedding`을 `(None, None)`으로 두므로 애초에 안 생긴다.
+- **V9는 드라이버 파일 전체를 본다 — 주석·docstring도 센다.** 검사(`verify/`의
+  V9 스크립트)는 `testcontainers`·`docker` 두 낱말이 몇 줄에 나오는지를 셀 뿐
+  코드와 설명문을 구분하지 않고 대소문자도 무시한다. 그래서 드라이버가
+  "smoke 스크립트를 왜 안 쓰는가"를 설명하면서 그 이름을 한 번만 적어도 깨진다
+  (실제로 두 번 깨졌다 — 처음은 라이브러리 이름, 두 번째는 **V9 스크립트의
+  파일 이름 자체**를 docstring에 적어서다). 설명이 필요하면 "컨테이너 런타임"
+  같은 표현을 쓰고, 검사 대상을 코드 줄로 좁히고 싶으면 먼저 계획을 고쳐라.
+- **`grep -c`의 종료 코드에 기대지 말아라.** 0건이면 `0`을 출력하면서 **exit 1**
+  이다. "없어야 정상"인 검사를 종료 코드로 판정하면 정확히 뒤집힌다.
+  `t7-lib.sh::t7_count_literal`이 값만 읽고 종료 코드를 흘린다.
 - **`utterance` 재삽입은 먼저 지워야 한다.** 013 이후 UNIQUE가
   `(meeting_id, processing_version, order_index)`라 같은 버전으로 다시 넣으면
   충돌한다. 드라이버는 자기 회의의 utterance·meeting_cluster를 지우고,
