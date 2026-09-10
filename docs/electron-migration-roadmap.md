@@ -289,7 +289,7 @@ Phase 3과 4는 기술적으로 분리 가능한 부분이 있지만, 실행·�
 - **스펙·스펙 리뷰·계획 검증(1·2·4단계)은 메인 세션이 진행한다.** 이 세 단계는 사용자 승인이 걸려 있어 서브 에이전트에 넘기지 않는다.
 - 계획의 각 단계는 `Verify`와 `Review` 블록을 갖추고, 4단계(계획 검증)가 그 형식을 확인한다.
 
-**Phase 0은 이 방식이 아니었다.** `.claude/skills/electron-plan-execute/`와 `electron-implementer`·`electron-verifier`·`electron-reviewer` 서브 에이전트로 진행했고, Phase 0 결과 문서의 "검토자 (model)" 열이 그 에이전트 이름을 가리킨다. 그 기록은 당시 방식대로 보존하며, Phase 1부터는 위 표를 따른다.
+**Phase 0은 이 방식이 아니었다.** 전용 스킬 `electron-plan-execute`와 서브 에이전트 `electron-implementer`·`electron-verifier`·`electron-reviewer`로 진행했고, Phase 0 결과 문서의 "검토자 (model)" 열이 그 에이전트 이름을 가리킨다. **그 넷은 지웠다** — 위 표로 대체되어 더 쓰지 않는다. 당시 정의를 봐야 하면 커밋 `1175212`(`chore: Electron 전환 계획 실행용 개발 하네스를 추가한다`)나 태그 `archive/electron-phase-0-packaging-validation`에 있다.
 
 ## 브랜치 운영 방식
 
