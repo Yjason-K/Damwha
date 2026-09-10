@@ -1,0 +1,155 @@
+# t7-pipeline 의 stderr (dyld 줄 제외). utc: 2026-09-09T15:58:09Z  exit: 0
+2026-09-10 00:58:09.970 KST [10004] LOG:  redirecting log output to logging collector process
+2026-09-10 00:58:09.970 KST [10004] HINT:  Future log output will appear in directory "log".
+2026-09-10 00:58:16,800 INFO httpx HTTP Request: HEAD https://huggingface.co/pyannote/speaker-diarization-community-1/resolve/main/config.yaml "HTTP/1.1 200 OK"
+2026-09-10 00:58:17,023 INFO httpx HTTP Request: GET https://huggingface.co/pyannote/speaker-diarization-community-1/resolve/main/config.yaml "HTTP/1.1 200 OK"
+2026-09-10 00:58:26,058 INFO speechbrain.utils.quirks Applied quirks (see `speechbrain.utils.quirks`): [disable_jit_profiling, allow_tf32]
+2026-09-10 00:58:26,058 INFO speechbrain.utils.quirks Excluded quirks specified by the `SB_DISABLE_QUIRKS` environment (comma-separated list): []
+2026-09-10 00:58:26,903 INFO httpx HTTP Request: HEAD https://huggingface.co/pyannote/speaker-diarization-community-1/resolve/main/segmentation/pytorch_model.bin "HTTP/1.1 302 Found"
+2026-09-10 00:58:27,146 INFO httpx HTTP Request: GET https://huggingface.co/api/models/pyannote/speaker-diarization-community-1/xet-read-token/3533c8cf8e369892e6b79ff1bf80f7b0286a54ee "HTTP/1.1 200 OK"
+2026-09-10 00:58:29,285 INFO httpx HTTP Request: HEAD https://huggingface.co/pyannote/speaker-diarization-community-1/resolve/main/plda/xvec_transform.npz "HTTP/1.1 302 Found"
+2026-09-10 00:58:30,804 INFO httpx HTTP Request: HEAD https://huggingface.co/pyannote/speaker-diarization-community-1/resolve/main/plda/plda.npz "HTTP/1.1 302 Found"
+2026-09-10 00:58:32,392 INFO httpx HTTP Request: HEAD https://huggingface.co/pyannote/speaker-diarization-community-1/resolve/main/embedding/pytorch_model.bin "HTTP/1.1 302 Found"
+2026-09-10 00:58:35,052 INFO speechbrain.utils.fetching Fetch hyperparams.yaml: Fetching from HuggingFace Hub 'speechbrain/spkrec-ecapa-voxceleb' if not cached
+2026-09-10 00:58:35,296 INFO httpx HTTP Request: HEAD https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb/resolve/main/hyperparams.yaml "HTTP/1.1 307 Temporary Redirect"
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+2026-09-10 00:58:35,297 WARNING huggingface_hub.utils._http Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+2026-09-10 00:58:35,307 INFO httpx HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/speechbrain/spkrec-ecapa-voxceleb/0f99f2d0ebe89ac095bcc5903c4dd8f72b367286/hyperparams.yaml?%2Fspeechbrain%2Fspkrec-ecapa-voxceleb%2Fresolve%2Fmain%2Fhyperparams.yaml=&etag=%2270e4cd0beb74ca08a2df9de6bd79d938670a4d15%22 "HTTP/1.1 200 OK"
+2026-09-10 00:58:35,320 INFO httpx HTTP Request: GET https://huggingface.co/api/resolve-cache/models/speechbrain/spkrec-ecapa-voxceleb/0f99f2d0ebe89ac095bcc5903c4dd8f72b367286/hyperparams.yaml?%2Fspeechbrain%2Fspkrec-ecapa-voxceleb%2Fresolve%2Fmain%2Fhyperparams.yaml=&etag=%2270e4cd0beb74ca08a2df9de6bd79d938670a4d15%22 "HTTP/1.1 200 OK"
+2026-09-10 00:58:35,574 INFO httpx HTTP Request: HEAD https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb/resolve/main/hyperparams.yaml "HTTP/1.1 307 Temporary Redirect"
+2026-09-10 00:58:35,585 INFO httpx HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/speechbrain/spkrec-ecapa-voxceleb/0f99f2d0ebe89ac095bcc5903c4dd8f72b367286/hyperparams.yaml?%2Fspeechbrain%2Fspkrec-ecapa-voxceleb%2Fresolve%2Fmain%2Fhyperparams.yaml=&etag=%2270e4cd0beb74ca08a2df9de6bd79d938670a4d15%22 "HTTP/1.1 200 OK"
+2026-09-10 00:58:35,728 INFO speechbrain.utils.fetching Fetch embedding_model.ckpt: Fetching from HuggingFace Hub 'speechbrain/spkrec-ecapa-voxceleb' if not cached
+2026-09-10 00:58:35,933 INFO httpx HTTP Request: HEAD https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb/resolve/main/embedding_model.ckpt "HTTP/1.1 302 Found"
+2026-09-10 00:58:36,132 INFO httpx HTTP Request: GET https://huggingface.co/api/models/speechbrain/spkrec-ecapa-voxceleb/xet-read-token/0f99f2d0ebe89ac095bcc5903c4dd8f72b367286 "HTTP/1.1 200 OK"
+2026-09-10 00:58:39,324 INFO httpx HTTP Request: HEAD https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb/resolve/main/embedding_model.ckpt "HTTP/1.1 302 Found"
+2026-09-10 00:58:39,326 INFO speechbrain.utils.fetching Fetch mean_var_norm_emb.ckpt: Fetching from HuggingFace Hub 'speechbrain/spkrec-ecapa-voxceleb' if not cached
+2026-09-10 00:58:39,527 INFO httpx HTTP Request: HEAD https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb/resolve/main/mean_var_norm_emb.ckpt "HTTP/1.1 307 Temporary Redirect"
+2026-09-10 00:58:39,536 INFO httpx HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/speechbrain/spkrec-ecapa-voxceleb/0f99f2d0ebe89ac095bcc5903c4dd8f72b367286/mean_var_norm_emb.ckpt?%2Fspeechbrain%2Fspkrec-ecapa-voxceleb%2Fresolve%2Fmain%2Fmean_var_norm_emb.ckpt=&etag=%221978c5e7f20d5ffd14c8a932a7e85a09816f3da9%22 "HTTP/1.1 200 OK"
+2026-09-10 00:58:39,549 INFO httpx HTTP Request: GET https://huggingface.co/api/resolve-cache/models/speechbrain/spkrec-ecapa-voxceleb/0f99f2d0ebe89ac095bcc5903c4dd8f72b367286/mean_var_norm_emb.ckpt?%2Fspeechbrain%2Fspkrec-ecapa-voxceleb%2Fresolve%2Fmain%2Fmean_var_norm_emb.ckpt=&etag=%221978c5e7f20d5ffd14c8a932a7e85a09816f3da9%22 "HTTP/1.1 200 OK"
+2026-09-10 00:58:39,743 INFO httpx HTTP Request: HEAD https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb/resolve/main/mean_var_norm_emb.ckpt "HTTP/1.1 307 Temporary Redirect"
+2026-09-10 00:58:39,754 INFO httpx HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/speechbrain/spkrec-ecapa-voxceleb/0f99f2d0ebe89ac095bcc5903c4dd8f72b367286/mean_var_norm_emb.ckpt?%2Fspeechbrain%2Fspkrec-ecapa-voxceleb%2Fresolve%2Fmain%2Fmean_var_norm_emb.ckpt=&etag=%221978c5e7f20d5ffd14c8a932a7e85a09816f3da9%22 "HTTP/1.1 200 OK"
+2026-09-10 00:58:39,755 INFO speechbrain.utils.fetching Fetch classifier.ckpt: Fetching from HuggingFace Hub 'speechbrain/spkrec-ecapa-voxceleb' if not cached
+2026-09-10 00:58:39,963 INFO httpx HTTP Request: HEAD https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb/resolve/main/classifier.ckpt "HTTP/1.1 302 Found"
+2026-09-10 00:58:41,974 INFO httpx HTTP Request: HEAD https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb/resolve/main/classifier.ckpt "HTTP/1.1 302 Found"
+2026-09-10 00:58:41,976 INFO speechbrain.utils.fetching Fetch label_encoder.txt: Fetching from HuggingFace Hub 'speechbrain/spkrec-ecapa-voxceleb' if not cached
+2026-09-10 00:58:42,172 INFO httpx HTTP Request: HEAD https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb/resolve/main/label_encoder.txt "HTTP/1.1 307 Temporary Redirect"
+2026-09-10 00:58:42,182 INFO httpx HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/speechbrain/spkrec-ecapa-voxceleb/0f99f2d0ebe89ac095bcc5903c4dd8f72b367286/label_encoder.txt?%2Fspeechbrain%2Fspkrec-ecapa-voxceleb%2Fresolve%2Fmain%2Flabel_encoder.txt=&etag=%2272c6fa7b170cbfd169df5e09326cd97febdf086a%22 "HTTP/1.1 200 OK"
+2026-09-10 00:58:42,196 INFO httpx HTTP Request: GET https://huggingface.co/api/resolve-cache/models/speechbrain/spkrec-ecapa-voxceleb/0f99f2d0ebe89ac095bcc5903c4dd8f72b367286/label_encoder.txt?%2Fspeechbrain%2Fspkrec-ecapa-voxceleb%2Fresolve%2Fmain%2Flabel_encoder.txt=&etag=%2272c6fa7b170cbfd169df5e09326cd97febdf086a%22 "HTTP/1.1 200 OK"
+2026-09-10 00:58:42,398 INFO httpx HTTP Request: HEAD https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb/resolve/main/label_encoder.txt "HTTP/1.1 307 Temporary Redirect"
+2026-09-10 00:58:42,407 INFO httpx HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/speechbrain/spkrec-ecapa-voxceleb/0f99f2d0ebe89ac095bcc5903c4dd8f72b367286/label_encoder.txt?%2Fspeechbrain%2Fspkrec-ecapa-voxceleb%2Fresolve%2Fmain%2Flabel_encoder.txt=&etag=%2272c6fa7b170cbfd169df5e09326cd97febdf086a%22 "HTTP/1.1 200 OK"
+2026-09-10 00:58:42,408 INFO speechbrain.utils.parameter_transfer Loading pretrained files for: embedding_model, mean_var_norm_emb, classifier, label_encoder
+2026-09-10 00:58:42,505 INFO damwha_worker job=job_1 meeting=mtg_2 process_meeting start pv=0
+2026-09-10 00:58:44,183 INFO damwha_worker job=job_1 meeting=mtg_2 stage=normalize done elapsed_ms=1677 reused=0 duration_ms=1883254
+2026-09-10 00:58:51,231 INFO damwha_worker job=job_1 meeting=mtg_2 stage=vad done elapsed_ms=7046 spans=268
+2026-09-10 00:59:06,242 INFO damwha_worker job=job_1 meeting=mtg_2 stage=diarize running elapsed_ms=15010
+2026-09-10 00:59:21,247 INFO damwha_worker job=job_1 meeting=mtg_2 stage=diarize running elapsed_ms=30014
+2026-09-10 00:59:36,258 INFO damwha_worker job=job_1 meeting=mtg_2 stage=diarize running elapsed_ms=45026
+2026-09-10 00:59:51,266 INFO damwha_worker job=job_1 meeting=mtg_2 stage=diarize running elapsed_ms=60033
+2026-09-10 01:00:06,277 INFO damwha_worker job=job_1 meeting=mtg_2 stage=diarize running elapsed_ms=75045
+2026-09-10 01:00:21,288 INFO damwha_worker job=job_1 meeting=mtg_2 stage=diarize running elapsed_ms=90055
+2026-09-10 01:00:36,299 INFO damwha_worker job=job_1 meeting=mtg_2 stage=diarize running elapsed_ms=105066
+2026-09-10 01:00:51,307 INFO damwha_worker job=job_1 meeting=mtg_2 stage=diarize running elapsed_ms=120074
+2026-09-10 01:01:06,318 INFO damwha_worker job=job_1 meeting=mtg_2 stage=diarize running elapsed_ms=135085
+2026-09-10 01:01:21,329 INFO damwha_worker job=job_1 meeting=mtg_2 stage=diarize running elapsed_ms=150096
+2026-09-10 01:01:36,341 INFO damwha_worker job=job_1 meeting=mtg_2 stage=diarize running elapsed_ms=165108
+2026-09-10 01:01:40,760 INFO damwha_worker job=job_1 meeting=mtg_2 stage=diarize done elapsed_ms=169527 segments=1272 bounds=None-None
+2026-09-10 01:01:55,785 INFO damwha_worker job=job_1 meeting=mtg_2 stage=embed running elapsed_ms=15006
+2026-09-10 01:02:09,330 INFO damwha_worker job=job_1 meeting=mtg_2 stage=embed done elapsed_ms=28550 clusters=5 raw_labels=5
+2026-09-10 01:02:09,380 INFO damwha_worker job=job_1 meeting=mtg_2 stage=identify done elapsed_ms=50 identified=0/5 suggested=0
+2026-09-10 01:02:11,808 INFO httpx HTTP Request: GET https://huggingface.co/api/models/mlx-community/whisper-large-v3-turbo/revision/main "HTTP/1.1 200 OK"
+2026-09-10 01:02:12,072 INFO httpx HTTP Request: GET https://huggingface.co/api/models/mlx-community/whisper-large-v3-turbo/tree/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb?recursive=true&expand=false "HTTP/1.1 200 OK"
+Fetching 4 files:   0%|          | 0/4 [00:00<?, ?it/s]2026-09-10 01:02:12,336 INFO httpx HTTP Request: HEAD https://huggingface.co/mlx-community/whisper-large-v3-turbo/resolve/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb/README.md "HTTP/1.1 307 Temporary Redirect"
+2026-09-10 01:02:12,425 INFO httpx HTTP Request: HEAD https://huggingface.co/mlx-community/whisper-large-v3-turbo/resolve/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb/.gitattributes "HTTP/1.1 307 Temporary Redirect"
+2026-09-10 01:02:12,428 INFO httpx HTTP Request: GET https://huggingface.co/api/models/mlx-community/whisper-large-v3-turbo/xet-read-token/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb "HTTP/1.1 200 OK"
+2026-09-10 01:02:12,434 INFO httpx HTTP Request: HEAD https://huggingface.co/mlx-community/whisper-large-v3-turbo/resolve/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-09-10 01:02:12,639 INFO httpx HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/mlx-community/whisper-large-v3-turbo/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb/README.md?%2Fmlx-community%2Fwhisper-large-v3-turbo%2Fresolve%2Fa4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb%2FREADME.md=&etag=%223569b423420febc3a0e1949b9e6aff2bf3bba2c7%22 "HTTP/1.1 200 OK"
+2026-09-10 01:02:12,741 INFO httpx HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/mlx-community/whisper-large-v3-turbo/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb/.gitattributes?%2Fmlx-community%2Fwhisper-large-v3-turbo%2Fresolve%2Fa4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb%2F.gitattributes=&etag=%22a6344aac8c09253b3b630fb776ae94478aa0275b%22 "HTTP/1.1 200 OK"
+2026-09-10 01:02:12,750 INFO httpx HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/mlx-community/whisper-large-v3-turbo/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb/config.json?%2Fmlx-community%2Fwhisper-large-v3-turbo%2Fresolve%2Fa4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb%2Fconfig.json=&etag=%226ac9a52a28f70a2e5681c250a470eca6e9c8cc3e%22 "HTTP/1.1 200 OK"
+2026-09-10 01:02:12,951 INFO httpx HTTP Request: GET https://huggingface.co/api/resolve-cache/models/mlx-community/whisper-large-v3-turbo/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb/README.md?%2Fmlx-community%2Fwhisper-large-v3-turbo%2Fresolve%2Fa4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb%2FREADME.md=&etag=%223569b423420febc3a0e1949b9e6aff2bf3bba2c7%22 "HTTP/1.1 200 OK"
+Fetching 4 files:  25%|██▌       | 1/4 [00:00<00:02,  1.14it/s]2026-09-10 01:02:13,061 INFO httpx HTTP Request: GET https://huggingface.co/api/resolve-cache/models/mlx-community/whisper-large-v3-turbo/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb/.gitattributes?%2Fmlx-community%2Fwhisper-large-v3-turbo%2Fresolve%2Fa4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb%2F.gitattributes=&etag=%22a6344aac8c09253b3b630fb776ae94478aa0275b%22 "HTTP/1.1 200 OK"
+Fetching 4 files:  50%|█████     | 2/4 [00:00<00:00,  2.35it/s]2026-09-10 01:02:13,071 INFO httpx HTTP Request: GET https://huggingface.co/api/resolve-cache/models/mlx-community/whisper-large-v3-turbo/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb/config.json?%2Fmlx-community%2Fwhisper-large-v3-turbo%2Fresolve%2Fa4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb%2Fconfig.json=&etag=%226ac9a52a28f70a2e5681c250a470eca6e9c8cc3e%22 "HTTP/1.1 200 OK"
+2026-09-10 01:02:24,388 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running elapsed_ms=15006
+Fetching 4 files: 100%|██████████| 4/4 [00:19<00:00,  5.98s/it]Fetching 4 files: 100%|██████████| 4/4 [00:19<00:00,  4.89s/it]
+2026-09-10 01:02:39,122 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=1/66 audio_ms=21644/1844216 pct=1 rate=0.7x eta_s=2504
+2026-09-10 01:02:39,389 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running elapsed_ms=30008
+2026-09-10 01:02:41,741 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=2/66 audio_ms=31736/1844216 pct=1 rate=1.0x eta_s=1848
+2026-09-10 01:02:54,400 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running elapsed_ms=45018
+2026-09-10 01:03:00,517 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=4/66 audio_ms=185232/1844216 pct=10 rate=3.6x eta_s=457
+2026-09-10 01:03:03,576 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=5/66 audio_ms=207580/1844216 pct=11 rate=3.8x eta_s=427
+2026-09-10 01:03:08,381 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=6/66 audio_ms=240040/1844216 pct=13 rate=4.1x eta_s=394
+2026-09-10 01:03:09,408 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running elapsed_ms=60025
+2026-09-10 01:03:10,769 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=7/66 audio_ms=256212/1844216 pct=13 rate=4.2x eta_s=380
+2026-09-10 01:03:18,080 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=9/66 audio_ms=311148/1844216 pct=16 rate=4.5x eta_s=338
+2026-09-10 01:03:20,740 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=10/66 audio_ms=328920/1844216 pct=17 rate=4.6x eta_s=328
+2026-09-10 01:03:23,763 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=11/66 audio_ms=356420/1844216 pct=19 rate=4.8x eta_s=310
+2026-09-10 01:03:24,413 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running elapsed_ms=75030
+2026-09-10 01:03:26,121 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=12/66 audio_ms=370960/1844216 pct=20 rate=4.8x eta_s=304
+2026-09-10 01:03:28,775 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=13/66 audio_ms=389884/1844216 pct=21 rate=4.9x eta_s=296
+2026-09-10 01:03:33,776 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=14/66 audio_ms=421256/1844216 pct=22 rate=5.0x eta_s=285
+2026-09-10 01:03:39,419 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running elapsed_ms=90036
+2026-09-10 01:03:42,672 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=15/66 audio_ms=490900/1844216 pct=26 rate=5.3x eta_s=257
+2026-09-10 01:03:45,309 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=16/66 audio_ms=503519/1844216 pct=27 rate=5.2x eta_s=255
+2026-09-10 01:03:50,364 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=17/66 audio_ms=534795/1844216 pct=28 rate=5.3x eta_s=247
+2026-09-10 01:03:52,521 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=18/66 audio_ms=540279/1844216 pct=29 rate=5.2x eta_s=248
+2026-09-10 01:03:54,427 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running elapsed_ms=105044
+2026-09-10 01:03:58,530 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=19/66 audio_ms=595555/1844216 pct=32 rate=5.5x eta_s=228
+2026-09-10 01:04:07,363 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=20/66 audio_ms=666607/1844216 pct=36 rate=5.7x eta_s=208
+2026-09-10 01:04:09,432 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running elapsed_ms=120049
+2026-09-10 01:04:09,837 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=21/66 audio_ms=678267/1844216 pct=36 rate=5.6x eta_s=207
+2026-09-10 01:04:18,725 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=22/66 audio_ms=758151/1844216 pct=41 rate=5.9x eta_s=185
+2026-09-10 01:04:24,439 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running elapsed_ms=135055
+2026-09-10 01:04:38,789 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=23/66 audio_ms=952403/1844216 pct=51 rate=6.4x eta_s=139
+2026-09-10 01:04:39,452 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running elapsed_ms=150069
+2026-09-10 01:04:41,926 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=24/66 audio_ms=978495/1844216 pct=53 rate=6.4x eta_s=134
+2026-09-10 01:04:48,689 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=26/66 audio_ms=1019287/1844216 pct=55 rate=6.4x eta_s=128
+2026-09-10 01:04:53,870 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=27/66 audio_ms=1055652/1844216 pct=57 rate=6.4x eta_s=122
+2026-09-10 01:04:54,458 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running elapsed_ms=165074
+2026-09-10 01:04:59,780 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=28/66 audio_ms=1097872/1844216 pct=59 rate=6.4x eta_s=115
+2026-09-10 01:05:09,468 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running elapsed_ms=180085
+2026-09-10 01:05:12,702 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=29/66 audio_ms=1137148/1844216 pct=61 rate=6.2x eta_s=113
+2026-09-10 01:05:18,156 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=30/66 audio_ms=1181256/1844216 pct=64 rate=6.3x eta_s=105
+2026-09-10 01:05:20,424 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=31/66 audio_ms=1193492/1844216 pct=64 rate=6.2x eta_s=104
+2026-09-10 01:05:22,672 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=32/66 audio_ms=1208960/1844216 pct=65 rate=6.3x eta_s=101
+2026-09-10 01:05:24,472 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running elapsed_ms=195088
+2026-09-10 01:05:24,866 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=33/66 audio_ms=1217420/1844216 pct=66 rate=6.2x eta_s=100
+2026-09-10 01:05:26,924 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=34/66 audio_ms=1225016/1844216 pct=66 rate=6.2x eta_s=99
+2026-09-10 01:05:30,383 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=35/66 audio_ms=1251972/1844216 pct=67 rate=6.2x eta_s=95
+2026-09-10 01:05:32,405 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=36/66 audio_ms=1254864/1844216 pct=68 rate=6.2x eta_s=95
+2026-09-10 01:05:34,600 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=37/66 audio_ms=1262908/1844216 pct=68 rate=6.2x eta_s=94
+2026-09-10 01:05:39,202 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=39/66 audio_ms=1281076/1844216 pct=69 rate=6.1x eta_s=92
+2026-09-10 01:05:39,474 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running elapsed_ms=210090
+2026-09-10 01:05:41,679 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=40/66 audio_ms=1297344/1844216 pct=70 rate=6.1x eta_s=89
+2026-09-10 01:05:48,712 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=42/66 audio_ms=1344056/1844216 pct=72 rate=6.1x eta_s=81
+2026-09-10 01:05:51,152 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=43/66 audio_ms=1356036/1844216 pct=73 rate=6.1x eta_s=79
+2026-09-10 01:05:53,324 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=44/66 audio_ms=1358512/1844216 pct=73 rate=6.1x eta_s=80
+2026-09-10 01:05:54,484 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running elapsed_ms=225101
+2026-09-10 01:06:02,887 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=46/66 audio_ms=1362056/1844216 pct=73 rate=5.8x eta_s=82
+2026-09-10 01:06:06,036 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=47/66 audio_ms=1384500/1844216 pct=75 rate=5.9x eta_s=78
+2026-09-10 01:06:09,486 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running elapsed_ms=240102
+2026-09-10 01:06:10,117 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=49/66 audio_ms=1394508/1844216 pct=75 rate=5.8x eta_s=77
+2026-09-10 01:06:15,682 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=50/66 audio_ms=1442008/1844216 pct=78 rate=5.9x eta_s=68
+2026-09-10 01:06:19,878 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=52/66 audio_ms=1456400/1844216 pct=78 rate=5.8x eta_s=66
+2026-09-10 01:06:21,975 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=53/66 audio_ms=1465436/1844216 pct=79 rate=5.8x eta_s=65
+2026-09-10 01:06:24,497 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running elapsed_ms=255113
+2026-09-10 01:06:25,161 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=54/66 audio_ms=1494696/1844216 pct=81 rate=5.8x eta_s=59
+2026-09-10 01:06:27,717 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=55/66 audio_ms=1510996/1844216 pct=81 rate=5.8x eta_s=56
+2026-09-10 01:06:31,800 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=57/66 audio_ms=1524332/1844216 pct=82 rate=5.8x eta_s=55
+2026-09-10 01:06:34,376 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=58/66 audio_ms=1545464/1844216 pct=83 rate=5.8x eta_s=51
+2026-09-10 01:06:39,507 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running elapsed_ms=270123
+2026-09-10 01:06:42,977 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=59/66 audio_ms=1624228/1844216 pct=88 rate=5.9x eta_s=37
+2026-09-10 01:06:49,682 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=61/66 audio_ms=1658684/1844216 pct=89 rate=5.9x eta_s=31
+2026-09-10 01:06:54,518 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running elapsed_ms=285134
+2026-09-10 01:06:54,894 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=62/66 audio_ms=1699496/1844216 pct=92 rate=6.0x eta_s=24
+2026-09-10 01:07:00,232 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=63/66 audio_ms=1746676/1844216 pct=94 rate=6.0x eta_s=16
+2026-09-10 01:07:09,527 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running elapsed_ms=300143
+2026-09-10 01:07:16,783 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=64/66 audio_ms=1807360/1844216 pct=98 rate=5.9x eta_s=6
+2026-09-10 01:07:21,411 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=65/66 audio_ms=1814732/1844216 pct=98 rate=5.8x eta_s=5
+2026-09-10 01:07:24,465 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt running units=66/66 audio_ms=1844216/1844216 pct=100 rate=5.9x
+2026-09-10 01:07:24,472 INFO damwha_worker job=job_1 meeting=mtg_2 stage=stt done elapsed_ms=315088 words=4028 spans=66 clipped_ms=1844216 duration_ms=1883254
+2026-09-10 01:07:39,482 INFO damwha_worker job=job_1 meeting=mtg_2 stage=align running elapsed_ms=15007
+2026-09-10 01:07:54,485 INFO damwha_worker job=job_1 meeting=mtg_2 stage=align running elapsed_ms=30010
+2026-09-10 01:08:09,495 INFO damwha_worker job=job_1 meeting=mtg_2 stage=align running elapsed_ms=45020
+2026-09-10 01:08:24,500 INFO damwha_worker job=job_1 meeting=mtg_2 stage=align running elapsed_ms=60025
+2026-09-10 01:08:29,076 INFO damwha_worker job=job_1 meeting=mtg_2 stage=align done elapsed_ms=64602 utterances=458
+2026-09-10 01:08:29,168 INFO damwha_worker job=job_1 meeting=mtg_2 stage=persist done elapsed_ms=90 utterances=458 clusters=5 outcome=committed
+2026-09-10 01:08:29,168 INFO damwha_worker job=job_1 meeting=mtg_2 process_meeting done outcome=committed total_ms=586660

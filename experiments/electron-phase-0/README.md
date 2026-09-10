@@ -448,6 +448,65 @@ bash services/llm.sh   status
   `<=>`(코사인 거리)와 `<#>`(음의 내적)의 순위가 같아진다는 뜻이므로, 거리
   값으로 무언가를 판정한다면 이 사실을 전제로 깔아도 된다.
 
+**13. Task 7이 실측으로 덧붙이는 것 (Task 9·11에게).**
+
+- **`bash`는 3.2다. 명령 치환 안에서 `case`를 쓸 수 없다.** macOS의 `/bin/bash`
+  는 3.2.57이고 그 파서는 `REPORT=$( ... case ... esac ... )` 형태를 통째로
+  거부한다 — `syntax error near unexpected token ';;'`. 이 하네스의 verify
+  스크립트는 판정 근거를 전부 `$( )` 안에서 만드는 형태라 정면으로 걸린다.
+  같은 이유로 **heredoc(`<<EOT`)도 명령 치환 안에서 쓰지 않는다.** 술어가
+  필요하면 `t7-lib.sh`의 `t7_is_uint` / `t7_under`처럼 **함수로 빼서** 부른다
+  (함수 본문은 치환 밖이라 `case`가 된다). 목록 순회는 `for x in $LIST`로 한다
+  — `$EXP` 이하 경로에는 공백이 없다(계획 규칙 6d).
+- **파이프라인이 부른 ffmpeg/ffprobe는 dyld 증거에 나오지 않는다.**
+  `be/worker/damwha_worker/pipeline/ffmpeg.py::_run`이 `capture_output=True`로
+  자식의 stderr를 파이프로 가져가므로 `DYLD_PRINT_LIBRARIES=1`이 찍은 줄이
+  래퍼의 fd 2에 도달하지 못한다. SIP 때문이 아니다 — 그 자식들은 `/bin/sh`를
+  거치지도 않는다. 번들 ffmpeg의 dyld 실측이 필요하면 **stderr를 물려준 채로
+  따로 한 번 더 부른다**(드라이버가 정규화 산출물 재확인으로 그렇게 한다).
+  파이프라인이 어느 바이너리를 썼는지는 같은 프로세스·같은 PATH에서 잰
+  `shutil.which()` 값이 답한다.
+- **제품 코드는 ffmpeg를 이름으로 부른다.** 격리 `PATH`
+  (`/usr/bin:/bin:/usr/sbin:/sbin`)에는 없으므로, 드라이버가 자기 프로세스의
+  `PATH` 앞에 `bundle/ffmpeg/bin`을 붙인다. 붙이는 값은 번들 내부 절대 경로라
+  스펙 §4.2의 `LENS_LLM_SERVER_BIN`과 같은 성격이고, Phase 4의 Electron 메인
+  프로세스도 같은 일을 해야 한다.
+- **`pyannote/speaker-diarization-3.1`을 쓰지 말아라.**
+  `be/src/config/env.ts:13-18`이 "설치된 pyannote.audio 4.x 아래에서 3.1은
+  클러스터링이 모든 화자를 한 라벨로 뭉갠다(mtg_5 실측)"고 기록했고 제품
+  기본값은 `pyannote/speaker-diarization-community-1`이다. community-1은
+  **자기 저장소 안에** segmentation·embedding·plda를 다 갖고 있어(config.yaml이
+  `$model/...`을 가리킨다) 외부 저장소를 끌어오지 않는다. 즉 이 파이프라인이
+  실제로 받는 게이트 저장소는 **1종**이다 — 스펙 P0-C4의 "게이트 모델 3종"은
+  3.1 계열(3.1 + segmentation-3.0 + wespeaker) 기준의 표현이고, 그중
+  `wespeaker-voxceleb-resnet34-LM`은 HF API 기준 현재 `gated=False`다.
+- **모델 실측 용량** (샌드박스 HF 캐시, blobs 실체 기준).
+  `pyannote/speaker-diarization-community-1` 32,821,461 B ·
+  `speechbrain/spkrec-ecapa-voxceleb` 88,983,513 B ·
+  `mlx-community/whisper-large-v3-turbo` 1,613,980,437 B. 합계 **1.62 GiB**.
+  silero-vad는 pip 패키지가 가중치를 동봉해 다운로드가 없다
+  (`site-packages/silero_vad/data/silero_vad.jit`). 저장소별 상한은
+  `probe/hf_size_survey.py`로 다시 잴 수 있다(Task 9의 용량 산정에 그대로 쓴다).
+- **31분 오디오 1건의 벽시계 시간은 586초**다(`total_ms=586660`). 단계별로
+  normalize 1.7초 · VAD 7.0초 · diarize 169.5초 · ECAPA embed 28.6초 ·
+  identify 0.05초 · STT 315.1초 · align 64.6초 · persist 0.09초.
+  모델 다운로드(1.62 GiB)는 이 시간 밖이다.
+- **DB에 `mtg_2`가 생겼다.** Task 6의 `mtg_1`(발화 12건, `processing_version=1`)
+  옆에 발화 458건(`ok` 374 / `transcribe_failed` 84), `diar_label` 5종,
+  `meeting_cluster` 5행, `auto_cluster` voiceprint 5건, `speaker` 5행
+  (전부 `provisional`)이 있다. **전역 집계는 두 회의를 함께 센다** — Task 11의
+  집계는 meeting id로 스코프해야 한다.
+- **후속 job은 큐잉하지 않았다.** payload를 wire v5로 만들고
+  `followups={lens:false, summary:false}`를 실었다. 켜 두면 persist가
+  `extract_lenses`/`summarize_meeting`을 queued로 남기고, 다음 회차의
+  `db.claim`이 그것을 먼저 집어 재실행이 멱등하지 않게 된다. `index_meeting`은
+  `run_once`가 `search_embedding`을 `(None, None)`으로 두므로 애초에 안 생긴다.
+- **`utterance` 재삽입은 먼저 지워야 한다.** 013 이후 UNIQUE가
+  `(meeting_id, processing_version, order_index)`라 같은 버전으로 다시 넣으면
+  충돌한다. 드라이버는 자기 회의의 utterance·meeting_cluster를 지우고,
+  `persist_process_meeting`과 **같은 SQL**로 고아가 된 provisional 화자를
+  정리한 뒤 다시 돈다.
+
 ## verify/ 규약
 
 각 스크립트는 조건을 만족하면 exit 0, 아니면 exit 1이고 판정 근거를 stdout에

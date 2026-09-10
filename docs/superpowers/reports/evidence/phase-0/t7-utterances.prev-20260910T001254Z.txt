@@ -1,0 +1,45 @@
+# Task 7 V4 — 그 회의의 발화와 diar_label (P0-C4)
+# utc: 2026-09-10T00:12:47Z
+# 스코프: mtg_1 (t7-meeting-id.txt). Task 6 의 mtg_1 은 세지 않는다.
+# 정확도는 판정 대상이 아니다 — 파이프라인이 실행되는가만 본다 (스펙 P0-C4 비고).
+# 격리: 이 스크립트는 **클라이언트**다 (스펙 §4.0).
+
+== 스코프
+  대상 회의        : mtg_1  (processing_version=0)
+  Task 6 의 회의   : mtg_1 — 세지 않는다
+  db: 살아 있음 (pid 10004)
+RC_DB=0
+
+== utterance 의 컬럼 (화자 분리 결과는 diar_label 이다)
+  diar_label         컬럼 수: 1  (1 이어야 한다)
+  speaker_cluster_id 컬럼 수: 0  (0 이어야 한다 — 존재하지 않는 컬럼이다)
+RC_COLUMNS=0
+
+== 회의별 발화 수 (스코프가 갈려 있는가)
+  mtg_1	12
+  mtg_2	458
+
+== mtg_1 의 발화
+  전체                              : 0
+  status='ok'                       : 0
+  status='ok' 이고 text 가 비지 않음 : 0
+  status 분포:
+  FAIL text 가 있는 status='ok' 발화가 0건이다 — STT 결과가 없다
+RC_UTTERANCES=1
+
+== mtg_1 의 diar_label (화자 분리가 실제로 돌았는가)
+  모델: pyannote/speaker-diarization-community-1
+  서로 다른 diar_label: 0
+  라벨별 발화 수:
+  FAIL diar_label 이 하나도 없다
+RC_LABELS=1
+
+== ECAPA 임베딩의 DB 흔적 (speechbrain/spkrec-ecapa-voxceleb, 192차원)
+  meeting_cluster 행          : 0
+  그중 centroid 가 NULL 이 아닌 것: 0
+  auto_cluster voiceprint      : 0
+  FAIL centroid 가 하나도 없다 — ECAPA 임베딩이 돌지 않았다
+  FAIL auto_cluster voiceprint 가 없다
+RC_ECAPA=1
+
+== 텍스트 표본 (앞 3건의 길이만 — 회의 내용은 PII 라 싣지 않는다)

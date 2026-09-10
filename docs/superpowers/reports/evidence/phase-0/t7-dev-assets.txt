@@ -1,0 +1,144 @@
+# Task 7 — 개발 자산 무변화 확인 (스펙 §4.4, 계획 Task 7 V7)
+# utc: 2026-09-10T00:14:47Z
+#
+# snapshot-dev-assets.sh 는 결과를 dev-assets-latest.txt 에 **덮어쓴다.**
+# Task 3·4·5·6 과 같은 이유로(스펙 §6 "증거를 덮어쓰지 않는다"와 부딪침) 이
+# Task 도 자기 회차의 사본을 이 파일로 남기고 dev-assets-latest.txt 는 이전
+# 커밋 상태로 되돌려 두었다.
+#
+# ## V7 은 exit 1 로 끝났다. 원인은 be/storage 가 아니다.
+#
+# **be/storage 는 한 바이트도 바뀌지 않았다.** 매니페스트 해시가 Task 3·4·5·6
+# 과 완전히 같다.
+#
+#     files            29
+#     bytes            2227477523
+#     newest_mtime     1788857034
+#     manifest_sha256  a18870e6592f160f3545fa349ec3fa972a1993f3b3203fdf21303012cf6391be
+#
+# diff 가 잡은 것은 **docker 프로브 한 줄**이다.
+#
+#     before: docker: daemon-unreachable
+#     after : (볼륨 15개 목록)
+#
+# 이 Task 를 시작한 00:45 KST 에는 OrbStack 의 docker API 가 또 응답하지 않아
+# (Task 3~6 에 이어 여섯 번째) `docker volume ls` 를 2분 4초 기다린 뒤 **그
+# CLI 클라이언트 프로세스의 PID 하나만** SIGTERM 으로 종료했다. 이름 기반
+# kill 이 아니라 pid 6145 하나이며, OrbStack 앱·헬퍼 프로세스는 건드리지
+# 않았다. 그래서 before 스냅샷에 "daemon-unreachable" 이 박혔다.
+#
+#   2026-09-10 00:45:40 KST — pid 6145 종료 (before 스냅샷 중, 2분 4초 무응답)
+#
+# 09:13 KST 의 after 스냅샷 시점에는 daemon 이 응답했고, 그래서 같은 프로브가
+# 서로 다른 답을 냈다. **실험이 볼륨을 만들거나 지운 것이 아니다** —
+# `damwha_pgdata` 와 `be_pgdata` 가 둘 다 목록에 있다. 이 하네스에는
+# `docker compose down -v` 도 `docker volume rm` 도 없다.
+#
+# before 를 다시 찍어 통과시키지 않는다. 그것은 작업이 끝난 뒤에 찍은 값을
+# "작업 전"이라고 적는 것이다. 실패를 그대로 남기고 원인을 적는다.
+#
+# ## 원인을 분리한 대조군
+#
+# docker 가 응답하는 상태에서 before → after 를 연달아(사이에 아무 일도 하지
+# 않고) 찍어 봤다. exit 0 이다. 즉 스크립트가 잡은 차이는 docker 도달성이
+# 뒤집힌 것 하나뿐이고, be/storage 쪽 판정은 멀쩡하다.
+#
+#     snapshot-dev-assets.sh before   exit 0
+#     snapshot-dev-assets.sh after    exit 0  ("개발 자산 무변화")
+#
+# ## 개발 DB(5432) — 접속하지 않았다
+#
+# 이 Task 가 쓴 DSN 은 t7-pipeline-env.txt 의
+# postgresql://postgres@127.0.0.1:55432/damwha 하나다. 드라이버는 DATABASE_URL
+# 에 ":55432/" 가 없으면 시작조차 하지 않는다.
+#
+# ## 개발자 HF 캐시 — 읽지도 쓰지도 않았다
+#
+# HF_HOME 이 샌드박스로 돌려져 있고(t7-sandbox-models.txt), dyld 이미지 로드
+# 줄에 개발자 ~/.cache 가 0건이다(t7-no-dev-paths.txt).
+#
+# ## V7 실행 원본 (00:45 before → 09:13 after)
+  # snapshot-dev-assets.sh — 개발 자산 무변화 확인 (스펙 §4.4)
+  # utc: 2026-09-10T00:13:18Z
+  ## before
+  ## docker volumes
+  docker: daemon-unreachable
+  ## be/storage
+  root: /Users/gim-yeongjae/project/daewha/be/storage
+  files: 29
+  bytes: 2227477523
+  newest_mtime: 1788857034
+  manifest_sha256: a18870e6592f160f3545fa349ec3fa972a1993f3b3203fdf21303012cf6391be
+  ## after
+  ## docker volumes
+  2deac09559ef79effc56c7230c228d0109d309fc4f208051ecc08c1c65c9ccc0
+  3a0f65c5f8709d0b6b08af645aeb746d96a340603e1d37a12d4413556a16f984
+  3a559c09626e43a1c2538d4173f17ecb0c710a9cabac042b7d0517f6f3a3d95e
+  564b2a00aa80cb4b3795532907244d41dd6e245eae5d921bdf32a9bc9425830c
+  7a6f325733f01c9cf627f80691db77ed6a4ebd06325108e804f01e6b140e5f81
+  be_pgdata
+  blog-local_minio_data
+  blog-local_postgres_data
+  c9975fd05f0848f0fe72889a84bf13ae1eb2b20bfbea00828398f19ab845473e
+  damwha_pgdata
+  docker_mariadb-local-data
+  e33e9714513e13422fdd6cb4081a173df3460999fde456bd8294619ad0facb52
+  redpanda_redpanda-data
+  trb_db_db_data
+  trb_db_db_logs
+  ## be/storage
+  root: /Users/gim-yeongjae/project/daewha/be/storage
+  files: 29
+  bytes: 2227477523
+  newest_mtime: 1788857034
+  manifest_sha256: a18870e6592f160f3545fa349ec3fa972a1993f3b3203fdf21303012cf6391be
+#
+# ## 대조군 (docker 가 응답하는 상태에서 before → after 연속)
+  # snapshot-dev-assets.sh — 개발 자산 무변화 확인 (스펙 §4.4)
+  # utc: 2026-09-10T00:14:18Z
+  ## before
+  ## docker volumes
+  2deac09559ef79effc56c7230c228d0109d309fc4f208051ecc08c1c65c9ccc0
+  3a0f65c5f8709d0b6b08af645aeb746d96a340603e1d37a12d4413556a16f984
+  3a559c09626e43a1c2538d4173f17ecb0c710a9cabac042b7d0517f6f3a3d95e
+  564b2a00aa80cb4b3795532907244d41dd6e245eae5d921bdf32a9bc9425830c
+  7a6f325733f01c9cf627f80691db77ed6a4ebd06325108e804f01e6b140e5f81
+  be_pgdata
+  blog-local_minio_data
+  blog-local_postgres_data
+  c9975fd05f0848f0fe72889a84bf13ae1eb2b20bfbea00828398f19ab845473e
+  damwha_pgdata
+  docker_mariadb-local-data
+  e33e9714513e13422fdd6cb4081a173df3460999fde456bd8294619ad0facb52
+  redpanda_redpanda-data
+  trb_db_db_data
+  trb_db_db_logs
+  ## be/storage
+  root: /Users/gim-yeongjae/project/daewha/be/storage
+  files: 29
+  bytes: 2227477523
+  newest_mtime: 1788857034
+  manifest_sha256: a18870e6592f160f3545fa349ec3fa972a1993f3b3203fdf21303012cf6391be
+  ## after
+  ## docker volumes
+  2deac09559ef79effc56c7230c228d0109d309fc4f208051ecc08c1c65c9ccc0
+  3a0f65c5f8709d0b6b08af645aeb746d96a340603e1d37a12d4413556a16f984
+  3a559c09626e43a1c2538d4173f17ecb0c710a9cabac042b7d0517f6f3a3d95e
+  564b2a00aa80cb4b3795532907244d41dd6e245eae5d921bdf32a9bc9425830c
+  7a6f325733f01c9cf627f80691db77ed6a4ebd06325108e804f01e6b140e5f81
+  be_pgdata
+  blog-local_minio_data
+  blog-local_postgres_data
+  c9975fd05f0848f0fe72889a84bf13ae1eb2b20bfbea00828398f19ab845473e
+  damwha_pgdata
+  docker_mariadb-local-data
+  e33e9714513e13422fdd6cb4081a173df3460999fde456bd8294619ad0facb52
+  redpanda_redpanda-data
+  trb_db_db_data
+  trb_db_db_logs
+  ## be/storage
+  root: /Users/gim-yeongjae/project/daewha/be/storage
+  files: 29
+  bytes: 2227477523
+  newest_mtime: 1788857034
+  manifest_sha256: a18870e6592f160f3545fa349ec3fa972a1993f3b3203fdf21303012cf6391be

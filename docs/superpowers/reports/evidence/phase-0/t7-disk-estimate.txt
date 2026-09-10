@@ -1,0 +1,143 @@
+# Task 7 — 착수 전 디스크 산정 (스펙 §4.4 "디스크 여유", R-14)
+# utc: 2026-09-09T15:57:58Z
+#
+# ## 왜 이 파일이 있나
+#
+# 계획 Task 7 의 V1 은 `preflight.sh 40` 이다. 그런데 기준 호스트의 데이터
+# 볼륨 여유는 **12 GiB(98% 사용)** 다 — 스펙 §4.4 가 적어 둔 "27 GiB(94%)"는
+# Task 2~6 이 번들과 모델을 쌓기 전의 값이다. 40 을 그대로 쓰면 이 Task 는
+# 시작조차 못 하고 실패로 보고된다. 그것이 R-14 가 설계한 동작이므로, 임의로
+# 임계값을 낮추기 전에 **실제 필요량을 재서** 근거를 남긴다.
+#
+# 스펙 §4.4 가 요구하는 것은 "필요한 여유를 확인하고 부족하면 시작하지
+# 않는다"이지 특정 숫자가 아니다. 40 은 계획이 Task 별 실측 없이 잡은 값이다.
+#
+# ## 필요량 산정
+#
+# (A) HF 모델 다운로드 — 아래 실측 표(probe/hf_size_survey.py)에서
+#     **이 Task 가 실제로 받는 것만** 합산한다.
+#
+#       pyannote/speaker-diarization-community-1      33.7 MB  (게이트)
+#       speechbrain/spkrec-ecapa-voxceleb             89.1 MB
+#       mlx-community/whisper-large-v3-turbo        1,614.0 MB
+#       silero-vad                                       0    (pip 패키지가 가중치를 동봉 —
+#                                                             bundle/python/.../silero_vad/data/silero_vad.jit)
+#       ------------------------------------------------------
+#       소계                                        1,736.8 MB  ≈ 1.62 GiB
+#
+#     저장소 **전체** 크기라 상한이다. pyannote·speechbrain 은 필요한 파일만
+#     받으므로(README·예제 오디오·벤치마크 rttm 제외) 실제로는 더 작다.
+#     HF 캐시는 blobs/ 에 실체를 두고 snapshots/ 는 심볼릭 링크라 중복이 없다.
+#
+#     `pyannote/speaker-diarization-3.1` 계열(3.1 + segmentation-3.0 +
+#     wespeaker-voxceleb-resnet34-LM = 43.6 MB)은 **받지 않는다.**
+#     `be/src/config/env.ts:13-18` 이 "설치된 pyannote.audio 4.x 아래에서 3.1 은
+#     클러스터링이 모든 화자를 한 라벨로 뭉갠다(mtg_5 실측)"고 기록했고 제품
+#     기본값이 community-1 로 바뀌었다. 받아도 파이프라인이 쓰지 않는다.
+#
+# (B) 작업 산출물
+#
+#       $SANDBOX/storage/meetings/<id>/original.flac  153.9 MB  (sample.flac 사본)
+#       normalized.flac (16 kHz mono s16 FLAC, 1883 s)  ~40 MB  (무압축 60.3 MB 의 약 60%)
+#       DB 증가분(발화 수백 + 192차원 centroid)          < 10 MB
+#       dyld/stderr 증거                                 < 10 MB
+#       ------------------------------------------------------
+#       소계                                            ~214 MB  ≈ 0.20 GiB
+#
+# (C) 합계 ≈ 1.82 GiB.
+#
+# ## 판단
+#
+# 12 GiB 여유 안에 들어간다. **여유의 6.6배가 남는다.** 계획 V1 의 40 은 이
+# Task 의 실제 필요량보다 22배 큰 과대 산정이다. 자기 점검은
+# `preflight.sh 4` 로 돌렸다 — 산정치 1.82 GiB 에 2배 이상의 여유를 둔
+# 값이고, 12 GiB 여유에서 통과한다. **계획 수정은 이 Task 가 하지 않는다.**
+#
+# ## 원본 조사
+#
+# Task 7 디스크 산정 — HF 저장소 크기 실측 (스펙 §4.4, R-14)
+# 도구: probe/hf_size_survey.py  (격리 대상 아님 — 측정 수단, 스펙 §4.0)
+# HF_TOKEN: set   # 값은 기록하지 않는다 (스펙 §4.2)
+#
+# 합계는 저장소 **전체**다. 실제 다운로드는 필요한 파일만이라 이보다 작다.
+#
+repo	gated	total_bytes	total_MB	files
+pyannote/speaker-diarization-community-1	auto	33695573	33.7	10
+#   제품 기본 diarization 파이프라인 (be/src/config/env.ts:18, be/.env:9). 게이트.
+#         26.65 MB  embedding/pytorch_model.bin
+#          5.91 MB  segmentation/pytorch_model.bin
+#          0.86 MB  diarization.gif
+pyannote/speaker-diarization-3.1	auto	10927005	10.9	24
+#   smoke 스크립트 payload 의 옛 값. 게이트. 설치된 pyannote.audio 4.x 에서 클러스터링이 깨진다고 env.ts:13-17 이 기록.
+#          3.60 MB  reproducible_research/DIHARD.SpeakerDiarization.Benchmark.test.rttm
+#          1.98 MB  reproducible_research/VoxConverse.SpeakerDiarization.Benchmark.test.rttm
+#          1.44 MB  reproducible_research/REPERE.SpeakerDiarization.Benchmark.test.rttm
+pyannote/segmentation-3.0	auto	5982351	6.0	6
+#   3.1 파이프라인이 참조하는 게이트 서브모델.
+#          5.91 MB  pytorch_model.bin
+#          0.07 MB  example.png
+#          0.00 MB  README.md
+pyannote/wespeaker-voxceleb-resnet34-LM	False	26650477	26.7	4
+#   3.1 파이프라인이 참조하는 임베딩 서브모델.
+#         26.65 MB  pytorch_model.bin
+#          0.00 MB  README.md
+#          0.00 MB  .gitattributes
+speechbrain/spkrec-ecapa-voxceleb	False	89133738	89.1	10
+#   화자 임베딩 (models/ecapa_embed.py). 제품 기본값.
+#         83.32 MB  embedding_model.ckpt
+#          5.53 MB  classifier.ckpt
+#          0.13 MB  label_encoder.txt
+mlx-community/whisper-large-v3-turbo	False	1613979758	1614.0	4
+#   devices.stt=gpu 의 STT (models/whisper_mlx.py). be/.env:6 의 기본값.
+#       1613.98 MB  weights.safetensors
+#          0.00 MB  .gitattributes
+#          0.00 MB  README.md
+mlx-community/whisper-small-mlx	False	481309720	481.3	4
+#   같은 경로의 더 작은 후보.
+#        481.31 MB  weights.npz
+#          0.00 MB  .gitattributes
+#          0.00 MB  README.md
+mlx-community/whisper-tiny	False	74420189	74.4	4
+#   같은 경로의 가장 작은 후보.
+#         74.42 MB  weights.npz
+#          0.00 MB  .gitattributes
+#          0.00 MB  config.json
+Systran/faster-whisper-large-v3	False	3090839273	3090.8	7
+#   devices.stt=cpu 의 STT (models/whisper_faster.py).
+#       3087.28 MB  model.bin
+#          2.48 MB  tokenizer.json
+#          1.07 MB  vocabulary.json
+Systran/faster-whisper-tiny	False	78207087	78.2	6
+#   같은 경로의 가장 작은 후보.
+#         75.54 MB  model.bin
+#          2.20 MB  tokenizer.json
+#          0.46 MB  vocabulary.txt
+#
+# 데이터 볼륨 여유 (df -g, 이 조사 시점)
+# Filesystem   1G-blocks Used Available Capacity iused     ifree %iused  Mounted on
+# /dev/disk3s5       460  414        12    98% 4463708 131739760    3%   /System/Volumes/Data
+#
+# ## preflight.sh 4 (자기 점검, 이 산정 뒤)
+# preflight.sh — 사전 점검
+# 
+# 디스크
+#   대상 경로 : /Users/gim-yeongjae/project/daewha-electron-phase-0/experiments/electron-phase-0
+#   마운트    : /System/Volumes/Data
+#   여유      : 12 GiB
+#   필요      : 4 GiB
+#   판정      : 충분
+# 
+# 포트 (개발 기본값 5432 / 8000 / 8100과 분리된 실험 포트, 스펙 §7.1 U-6)
+#   55432 (실험 DB): free
+#   58000 (mlx_lm.server): free
+#   58100 (embed): free
+# 
+# 검사 도구 (스펙 §4.0 — 피검사 대상이 아니라 측정 수단이다)
+#   otool: /usr/bin/otool
+#   file: /usr/bin/file
+#   lsof: /usr/sbin/lsof
+#   shasum: /usr/bin/shasum
+#   df: /bin/df
+# 
+# be/storage(읽기 전용 원본): /Users/gim-yeongjae/project/daewha/be/storage
+# preflight.sh 4 exit: 0

@@ -1,0 +1,45 @@
+# Task 7 V3 — 회의가 done 인가 / normalize·probe·persist 가 돌았는가 (P0-C4)
+# utc: 2026-09-10T00:12:46Z
+# 스코프: mtg_1 (t7-meeting-id.txt). Task 6 의 mtg_1 은 세지 않는다.
+# 격리: 이 스크립트는 **클라이언트**다 — 서버에 붙어 질의할 뿐이므로
+#       G2 를 지나지 않는다 (스펙 §4.0).
+
+== 회의 id (모든 질의를 이 id 로 스코프한다)
+  t7-meeting-id.txt : mtg_1
+  t6-meeting-id.txt : mtg_1
+  FAIL Task 6 의 회의와 같은 id 다 — 그 시드를 세고 있다
+RC_ID=1
+
+== 의존 서비스
+  db: 살아 있음 (pid 10004)
+RC_DB=0
+
+== meeting 행 (mtg_1)
+  status             : done
+  duration_ms        : 60000
+  normalized_key     : -
+  processing_version : 1
+  error              : null
+  FAIL normalized_key 가 비었다 — ffmpeg normalize 가 돌지 않았다
+RC_MEETING=1
+
+== job 행 (이 회의의 process_meeting)
+  FAIL 이 회의의 process_meeting job 이 없다
+RC_JOB=1
+
+== 후속 job (payload followups 를 껐다 — 큐가 비어 있어야 한다)
+  queued job: 0
+  OK   재실행이 멱등하다 (다음 회차의 db.claim 이 남의 job 을 집지 않는다)
+RC_QUEUE=0
+
+== 파이프라인 단계 완료 로그 (pipeline/timing.py::timed_stage)
+   DB 행이 없는 단계(특히 VAD)는 이 줄이 유일한 직접 증거다.
+  FAIL normalize 의 완료 줄이 /Users/gim-yeongjae/project/daewha-electron-phase-0/docs/superpowers/reports/evidence/phase-0/t7-pipeline-stderr.txt 에 없다
+  FAIL vad 의 완료 줄이 /Users/gim-yeongjae/project/daewha-electron-phase-0/docs/superpowers/reports/evidence/phase-0/t7-pipeline-stderr.txt 에 없다
+  FAIL diarize 의 완료 줄이 /Users/gim-yeongjae/project/daewha-electron-phase-0/docs/superpowers/reports/evidence/phase-0/t7-pipeline-stderr.txt 에 없다
+  FAIL embed 의 완료 줄이 /Users/gim-yeongjae/project/daewha-electron-phase-0/docs/superpowers/reports/evidence/phase-0/t7-pipeline-stderr.txt 에 없다
+  FAIL identify 의 완료 줄이 /Users/gim-yeongjae/project/daewha-electron-phase-0/docs/superpowers/reports/evidence/phase-0/t7-pipeline-stderr.txt 에 없다
+  FAIL stt 의 완료 줄이 /Users/gim-yeongjae/project/daewha-electron-phase-0/docs/superpowers/reports/evidence/phase-0/t7-pipeline-stderr.txt 에 없다
+  FAIL align 의 완료 줄이 /Users/gim-yeongjae/project/daewha-electron-phase-0/docs/superpowers/reports/evidence/phase-0/t7-pipeline-stderr.txt 에 없다
+  FAIL persist 의 완료 줄이 /Users/gim-yeongjae/project/daewha-electron-phase-0/docs/superpowers/reports/evidence/phase-0/t7-pipeline-stderr.txt 에 없다
+RC_STAGES=1

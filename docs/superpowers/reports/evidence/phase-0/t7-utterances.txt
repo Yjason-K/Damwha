@@ -1,0 +1,54 @@
+# Task 7 V4 — 그 회의의 발화와 diar_label (P0-C4)
+# utc: 2026-09-10T00:12:55Z
+# 스코프: mtg_2 (t7-meeting-id.txt). Task 6 의 mtg_1 은 세지 않는다.
+# 정확도는 판정 대상이 아니다 — 파이프라인이 실행되는가만 본다 (스펙 P0-C4 비고).
+# 격리: 이 스크립트는 **클라이언트**다 (스펙 §4.0).
+
+== 스코프
+  대상 회의        : mtg_2  (processing_version=0)
+  Task 6 의 회의   : mtg_1 — 세지 않는다
+  db: 살아 있음 (pid 10004)
+RC_DB=0
+
+== utterance 의 컬럼 (화자 분리 결과는 diar_label 이다)
+  diar_label         컬럼 수: 1  (1 이어야 한다)
+  speaker_cluster_id 컬럼 수: 0  (0 이어야 한다 — 존재하지 않는 컬럼이다)
+RC_COLUMNS=0
+
+== 회의별 발화 수 (스코프가 갈려 있는가)
+  mtg_1	12
+  mtg_2	458
+
+== mtg_2 의 발화
+  전체                              : 458
+  status='ok'                       : 374
+  status='ok' 이고 text 가 비지 않음 : 374
+  status 분포:
+    ok	374
+    transcribe_failed	84
+  OK   text 가 있는 status='ok' 발화가 374건 (1건 이상)
+RC_UTTERANCES=0
+
+== mtg_2 의 diar_label (화자 분리가 실제로 돌았는가)
+  모델: pyannote/speaker-diarization-community-1
+  서로 다른 diar_label: 5
+  라벨별 발화 수:
+    SPEAKER_00	17	7
+    SPEAKER_01	156	139
+    SPEAKER_02	65	51
+    SPEAKER_03	93	71
+    SPEAKER_04	127	106
+  OK   서로 다른 diar_label 이 5개 (1개 이상)
+RC_LABELS=0
+
+== ECAPA 임베딩의 DB 흔적 (speechbrain/spkrec-ecapa-voxceleb, 192차원)
+  meeting_cluster 행          : 5
+  그중 centroid 가 NULL 이 아닌 것: 5
+  auto_cluster voiceprint      : 5
+  OK   centroid 5건 / voiceprint 5건 — 임베딩이 돌았다
+RC_ECAPA=0
+
+== 텍스트 표본 (앞 3건의 길이만 — 회의 내용은 PII 라 싣지 않는다)
+  order_index=0	SPEAKER_00	6
+  order_index=1	SPEAKER_03	72
+  order_index=2	SPEAKER_02	6
