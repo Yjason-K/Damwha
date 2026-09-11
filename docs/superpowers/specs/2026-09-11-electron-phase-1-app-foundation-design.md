@@ -149,7 +149,9 @@ Phase 1이 자식을 만들면서 그 정리를 Phase 2로 미루면 Phase 1 산
 
 ### 6.3 경로 계약
 
-`<userData>`는 `app.getPath('userData')`이고, `productName: "Damwha"`로 `~/Library/Application Support/Damwha`가 된다. 로드맵이 후보로 둔 경로와 같다.
+`<userData>`는 `app.getPath('userData')`이고 `~/Library/Application Support/Damwha`다. 로드맵이 후보로 둔 경로와 같다.
+
+**그 경로가 되게 하려면 `app.setName("Damwha")`를 명시해야 한다.** 2026-09-11 실측: `app.getPath('userData')`는 `productName`이 아니라 `app.getName()`에서 나오고, 그것은 `desktop/package.json`의 `name` 필드(`damwha-desktop`)를 읽는다. 이름을 고정하지 않으면 개발 모드는 `~/Library/Application Support/damwha-desktop/`를, packaged 모드는 electron-builder가 `productName`으로 정한 `Damwha`를 써서 **두 모드가 서로 다른 `config.json`·`storage/`·`logs/`를 갖는다.** P1-C12·P1-C14와 worker의 `STORAGE_ROOT` 합의가 모두 경로가 하나라는 전제에 서 있으므로, `main.ts`가 userData를 처음 읽기 전에 이름을 고정한다.
 
 ```
 ~/Library/Application Support/Damwha/
