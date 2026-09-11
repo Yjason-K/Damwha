@@ -36,9 +36,21 @@ export function loadConfig(userDataDir: string): LoadedConfig {
   const defaults = defaultConfig(userDataDir);
 
   if (!fs.existsSync(file)) {
-    fs.mkdirSync(userDataDir, { recursive: true });
-    fs.writeFileSync(file, `${JSON.stringify(defaults, null, 2)}\n`);
-    return { env: defaults, created: true };
+    // 이 두 줄은 원래 try 밖이라 userData가 읽기 전용이거나 디스크가 찼을 때 그대로
+    // 던졌다. 호출부인 startOnce()는 showStatus({state:"starting"}) 직후라 그 예외가
+    // 실패 화면에 닿지 못하고 앱이 "준비 중"에 영원히 머문다. 파일을 남기지 못하는 것은
+    // 기본값으로 계속 갈 수 없는 이유가 아니다 — 경고로 바꾼다.
+    try {
+      fs.mkdirSync(userDataDir, { recursive: true });
+      fs.writeFileSync(file, `${JSON.stringify(defaults, null, 2)}\n`);
+      return { env: defaults, created: true };
+    } catch (e) {
+      return {
+        env: defaults,
+        created: false,
+        warning: `config.json을 만들 수 없어 기본값으로 실행합니다: ${reason(e)}`,
+      };
+    }
   }
 
   let parsed: unknown;

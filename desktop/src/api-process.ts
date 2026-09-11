@@ -39,6 +39,18 @@ export interface LaunchOptions {
 
 const TAIL_LIMIT = 8_000;
 
+/**
+ * utilityProcess의 env 타입은 Record<string, string>이라 process.env를 그대로 펼칠 수
+ * 없다 — 값이 undefined일 수 있다. 문자열 값만 남겨 상속 가능한 모양으로 만든다.
+ */
+function inheritedEnv(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (typeof value === "string") out[key] = value;
+  }
+  return out;
+}
+
 function makeSink(logFile?: string) {
   let tail = "";
   let closed = false;
@@ -69,6 +81,21 @@ function makeSink(logFile?: string) {
   };
 }
 
+/**
+ * 리스너가 던져도 삼킨다. 이 호출은 자식의 'exit' 이벤트 안에서 일어나므로, 던지면
+ * 그대로 Electron main 프로세스의 uncaught exception이 된다. 실제 경로가 있다 —
+ * watchForDeath의 리스너가 BrowserWindow를 건드리는데, 창을 닫는 행위 자체가 자식을
+ * 죽이는 종료를 부르므로 검사와 사용 사이에 창이 파괴될 수 있고 loadFile은 그때
+ * 'Object has been destroyed'를 **동기로** 던진다. 알림 실패가 앱을 죽일 이유는 없다.
+ */
+function notify(listener: (code: number) => void, exitCode: number): void {
+  try {
+    listener(exitCode);
+  } catch {
+    // 알릴 곳이 없다. 자식은 이미 죽었고 이 예외를 올릴 화면도 없다.
+  }
+}
+
 /** 종료 알림을 모으는 작은 상자. 이미 종료된 뒤 등록해도 즉시 부른다. */
 function exitNotifier() {
   const listeners: Array<(code: number) => void> = [];
@@ -77,10 +104,10 @@ function exitNotifier() {
     settle(exitCode: number) {
       if (code !== null) return;
       code = exitCode;
-      for (const l of listeners) l(exitCode);
+      for (const l of listeners) notify(l, exitCode);
     },
     add(listener: (code: number) => void) {
-      if (code !== null) listener(code);
+      if (code !== null) notify(listener, code);
       else listeners.push(listener);
     },
     code: () => code,
@@ -115,8 +142,13 @@ export function launchPackaged(options: LaunchOptions): ApiHandle {
   const child: UtilityProcess = electronUtilityProcess().fork(options.entry, [], {
     cwd: options.cwd,
     stdio: "pipe",
-    // HOST가 options.env 뒤에 와야 config.json 한 줄로 LAN에 열리지 않는다.
-    env: { ...options.env, HOST: "127.0.0.1" },
+    // env를 주면 환경이 통째로 **대체**된다 — 예전엔 options.env만 줘서 packaged의 API
+    // 자식이 PATH·HOME·TMPDIR·LANG 없이 돌았다. 실측 결과: be/src/system/capabilities.ts의
+    // execFile('sysctl', …)이 이름만으로 부르는데, PATH가 없으면 execvp가 /usr/bin:/bin으로
+    // 되돌아가고 /usr/sbin/sysctl은 거기 없어 ENOENT — packaged 앱만 chip: null을 보고했다.
+    // launchDev와 같은 모양으로 맞춘다. options.env와 HOST가 여전히 뒤라 보장은 그대로다:
+    // HOST가 마지막이어야 config.json 한 줄로 LAN에 열리지 않는다.
+    env: { ...inheritedEnv(), ...options.env, HOST: "127.0.0.1" },
   });
   // utilityProcess.pid는 fork() 직후 undefined이고 'spawn' 이벤트에서야 채워진다
   // (Fix round 2 실측). 동기로 한 번만 잡아 두면 packaged 모드에서 이 handle의 pid가
@@ -155,7 +187,14 @@ export function launchPackaged(options: LaunchOptions): ApiHandle {
     onExit: exit.add,
     async stop(graceMs) {
       if (exit.code() !== null) return;
-      child.kill();
+      // 두 런처를 통틀어 유일하게 맨몸이던 kill 호출이다. before-quit의
+      // stopAll()이 이것을 거치므로, 던지면 app.quit()까지 못 가고 앱이 창 없이
+      // 남는다. 실패해도 아래 escalate가 SIGKILL로 이어 간다.
+      try {
+        child.kill();
+      } catch {
+        // 이미 죽었거나 핸들이 유효하지 않다 — escalate가 이어받는다.
+      }
       await escalate(
         (signal) => {
           if (pid === undefined) return;
