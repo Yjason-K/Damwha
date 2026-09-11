@@ -1,5 +1,8 @@
 import { app, BrowserWindow } from "electron";
+import { execFile } from "child_process";
+import * as net from "net";
 import * as path from "path";
+import { promisify } from "util";
 import { loadConfig, type ApiEnv } from "./config";
 import { MAX_PORT_ATTEMPTS, choosePort, isAddrInUse } from "./port";
 import {
@@ -11,9 +14,12 @@ import {
 } from "./readiness";
 import { launchDev, launchPackaged, type ApiHandle } from "./api-process";
 import { launchVite } from "./vite-process";
-import { lastMeaningfulLine, showStatus } from "./shell-window";
+import { lastMeaningfulLine } from "./stderr";
+import { showStatus } from "./shell-window";
 import { applyNavigationBoundary, applyPermissionBoundary } from "./permissions";
 import { installMenu } from "./menu";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * userData는 productName이 아니라 package.json의 name에서 나오므로, dev와 packaged가
@@ -164,10 +170,98 @@ type AttemptOutcome =
 const DB_UNREACHABLE = /database unreachable/;
 
 /**
+ * 소유권 판정(스펙 §6.4, R1-11) 메커니즘 (a) — 스폰 전 사전 점검.
+ * 후보 포트에 이미 응답하는 무언가가 있으면 자식을 아예 띄우지 않고 다음 포트로
+ * 넘어간다. 값싸고, 흔한 경우(외부 API가 이미 그 포트를 쥐고 있음)를 스폰조차 없이
+ * 막는다. `attempt()`가 매번 새 포트에 대해 부르므로 경쟁은 "점검 뒤 자식이 bind하는
+ * 사이" 창 하나뿐이고, 그 창은 메커니즘 (b)가 닫는다.
+ */
+function isPortOccupied(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ port, host: "127.0.0.1" });
+    const settle = (occupied: boolean) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(occupied);
+    };
+    socket.once("connect", () => settle(true));
+    socket.once("error", () => settle(false));
+    socket.setTimeout(PROBE_TIMEOUT_MS, () => settle(false));
+  });
+}
+
+/** `lsof -sTCP:LISTEN`으로 그 포트에서 실제로 LISTEN 중인 pid들을 얻는다. 매치가
+ *  없으면 lsof가 exit 1을 내는데, 이는 "리스너 없음"과 같은 뜻이라 빈 배열로 다룬다. */
+async function listenerPids(port: number): Promise<number[]> {
+  try {
+    const { stdout } = await execFileAsync(
+      "/usr/sbin/lsof",
+      ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"],
+      { timeout: 1_000 },
+    );
+    return stdout
+      .split("\n")
+      .map((line) => Number(line.trim()))
+      .filter((pid) => Number.isInteger(pid) && pid > 0);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * rootPid의 모든 자손 pid를 `ps`의 pid/ppid 목록에서 BFS로 모은다. 개발 모드의 자식은
+ * pnpm → nest(CLI) → node(dist/main) 체인이라, 실제로 포트를 bind하는 것은 추적 중인
+ * pid의 손자다 — 직계 비교만으로는 dev를 오판한다(실측: Fix round 1 보고서).
+ */
+async function descendantPids(rootPid: number): Promise<Set<number>> {
+  const { stdout } = await execFileAsync("/bin/ps", ["-axo", "pid,ppid"], { timeout: 1_000 });
+  const rows = stdout
+    .split("\n")
+    .slice(1)
+    .map((line) => line.trim().split(/\s+/).map(Number))
+    .filter((row): row is [number, number] => row.length === 2 && row.every(Number.isInteger));
+
+  const result = new Set<number>();
+  let frontier = [rootPid];
+  while (frontier.length > 0) {
+    const next: number[] = [];
+    for (const [pid, ppid] of rows) {
+      if (frontier.includes(ppid) && !result.has(pid)) {
+        result.add(pid);
+        next.push(pid);
+      }
+    }
+    frontier = next;
+  }
+  return result;
+}
+
+/**
+ * 소유권 판정 메커니즘 (b) — 응답이 있어도 그 응답이 우리 자식에서 온 것인지 확인한다.
+ * "그 포트에 응답이 있다"를 준비 신호로 쓰지 말라는 스펙 §6.4의 명시적 계약이다.
+ * dev(자식 = pnpm, 실제 리스너는 손자)와 packaged(자식 = utilityProcess 헬퍼, 리스너
+ * 자신) 양쪽 다 자손 집합에 자기 자신을 포함시켜 커버한다. lsof/ps 자체가 실패하면
+ * 소유를 증명할 수 없으므로 안전하게 "아니오"로 본다 — 준비 판정은 실패 쪽으로 닫는다.
+ */
+async function verifyOwnListener(port: number, childPid: number | undefined): Promise<boolean> {
+  if (childPid === undefined) return false;
+  try {
+    const [owners, descendants] = await Promise.all([listenerPids(port), descendantPids(childPid)]);
+    return owners.some((pid) => pid === childPid || descendants.has(pid));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 한 포트로 한 번 시도한다. 전역 `api`를 보지 않고 이 호출이 만든 handle만 관찰한다 —
  * 겹친 start()가 서로의 자식을 오관찰하지 않게 하려면 이 격리가 필요하다.
  */
 async function attempt(port: number, env: ApiEnv): Promise<AttemptOutcome> {
+  // 메커니즘 (a): 스폰 전에 포트가 이미 응답하는지 본다 — 외부 API가 점유한 흔한
+  // 경우는 자식을 띄우지도 않고 여기서 걸러진다.
+  if (await isPortOccupied(port)) return { kind: "addr-in-use" };
+
   const launch = app.isPackaged ? launchPackaged : launchDev;
   const handle = launch({
     entry: path.join(apiRoot(), "dist", "main.js"),
@@ -178,7 +272,15 @@ async function attempt(port: number, env: ApiEnv): Promise<AttemptOutcome> {
   inFlight = handle;
   const origin = `http://127.0.0.1:${port}`;
   const outcome = await waitForReady({
-    probe: () => probeHealth(origin),
+    probe: async () => {
+      const result = await probeHealth(origin);
+      if (result !== "ready") return result;
+      // 메커니즘 (b): 200을 받았어도 그 소켓의 실제 리스너가 우리 자식(또는 그
+      // 자손)인지 확인한다. 아니면 "아직 준비 안 됨"으로 돌려보내 폴링을 계속한다 —
+      // 우리 자식이 뒤이어 EADDRINUSE로 죽으면 기존 분기가 다음 포트로 넘긴다.
+      const owned = await verifyOwnListener(port, handle.pid);
+      return owned ? "ready" : "no-response";
+    },
     isAlive: () => handle.alive(),
     timeoutMs: READY_TIMEOUT_MS,
     intervalMs: READY_INTERVAL_MS,
@@ -290,7 +392,14 @@ async function startOnce(): Promise<void> {
       return;
     }
 
-    const detail = [warning, lastMeaningfulLine(outcome.handle.stderrTail())]
+    // stop() 전에 읽는다 — 아직 살아 있는 자식(dev의 pnpm 래퍼)이면 stop()의 강제
+    // 종료가 만든 코드가 아니라 "아직 종료 안 됨"을 그대로 보여야 한다.
+    const exitCode = outcome.handle.exitCode();
+    const detail = [
+      warning,
+      lastMeaningfulLine(outcome.handle.stderrTail()),
+      exitCode !== null ? `(종료 코드 ${exitCode})` : undefined,
+    ]
       .filter((s): s is string => typeof s === "string" && s.length > 0)
       .join(" / ");
     await outcome.handle.stop(STOP_GRACE_MS);

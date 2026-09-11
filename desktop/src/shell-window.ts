@@ -1,6 +1,10 @@
 import { app, type BrowserWindow } from "electron";
 import * as path from "path";
 
+// electron을 값으로 import하는 이 파일은 vitest가 못 불러온다. lastMeaningfulLine()의
+// 순수 로직은 desktop/src/stderr.ts에 있다 — 여기서는 기존 호출부를 위해 재노출만 한다.
+export { lastMeaningfulLine } from "./stderr";
+
 export type ShellState = "starting" | "db-unreachable" | "failed";
 
 export interface ShellStatus {
@@ -24,17 +28,3 @@ export function showStatus(win: BrowserWindow, status: ShellStatus): Promise<voi
   return win.loadFile(shellFile(), { query });
 }
 
-// NestJS Logger는 stderr가 TTY가 아니어도 ANSI 색상 escape를 쓴다. textContent로
-// 넣으면 그 제어문자가 글자 그대로 남아, 원인을 알려 주는 화면이 깨져 보인다.
-// eslint-disable-next-line no-control-regex
-const ANSI_SGR = /\x1b\[[0-9;]*m/g;
-
-/** API stderr에서 사람에게 보여줄 마지막 의미 있는 줄. */
-export function lastMeaningfulLine(stderr: string): string {
-  const lines = stderr
-    .replace(ANSI_SGR, "")
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
-  return lines.length > 0 ? lines[lines.length - 1] : "";
-}
