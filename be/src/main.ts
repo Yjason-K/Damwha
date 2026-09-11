@@ -43,8 +43,8 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('docs', app, document);
 
-  await app.listen(env.PORT);
-  Logger.log(`Damwha API listening on :${env.PORT} (docs at /docs)`, 'Bootstrap');
+  await app.listen(env.PORT, env.HOST);
+  Logger.log(`Damwha API listening on ${env.HOST}:${env.PORT} (docs at /docs)`, 'Bootstrap');
 }
 bootstrap().catch((e: unknown) => {
   // DatabaseService.onModuleInit의 DB 프로브 실패 등 — 스택 대신 원인 한 줄로 끝낸다
