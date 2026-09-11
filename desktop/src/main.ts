@@ -185,15 +185,19 @@ async function attempt(port: number, env: ApiEnv): Promise<AttemptOutcome> {
   });
   if (outcome.kind === "ready") return { kind: "ready", handle, origin };
   if (outcome.kind === "db-unreachable") return { kind: "db-unreachable", handle };
-  if (outcome.kind === "child-exited") {
-    const tail = handle.stderrTail();
-    if (isAddrInUse(tail)) {
-      await handle.stop(STOP_GRACE_MS);
-      inFlight = null;
-      return { kind: "addr-in-use" };
-    }
-    if (DB_UNREACHABLE.test(tail)) return { kind: "db-unreachable", handle };
+
+  // child-exited와 timeout 양쪽에서 stderr를 본다. 개발 모드의 자식은
+  // nest start --watch 래퍼라 진짜 API가 죽어도 살아 있고, 그래서 outcome이
+  // child-exited가 아니라 timeout으로 온다. child-exited에서만 보면 개발 모드에서
+  // 포트 폴백이 영원히 일어나지 않고 DB 미기동 화면에도 닿지 못한다. tail은
+  // handle마다 따로이므로 이 문구가 있으면 그 자식이 실제로 그 조건을 만난 것이다.
+  const tail = handle.stderrTail();
+  if (isAddrInUse(tail)) {
+    await handle.stop(STOP_GRACE_MS);
+    inFlight = null;
+    return { kind: "addr-in-use" };
   }
+  if (DB_UNREACHABLE.test(tail)) return { kind: "db-unreachable", handle };
   return { kind: "failed", handle };
 }
 
