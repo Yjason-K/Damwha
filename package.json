@@ -40,7 +40,6 @@
     "db:logs": "docker compose -f be/docker-compose.yml logs -f postgres"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["electron"],
     "ignoredBuiltDependencies": [
       "@nestjs/core",
       "cpu-features",
