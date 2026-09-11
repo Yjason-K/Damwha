@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <title>담화</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0; height: 100vh;
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 12px;
+        font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif;
+        background: #fbfbfa; color: #1c1b1a;
+      }
+      @media (prefers-color-scheme: dark) { body { background: #191817; color: #e8e6e3; } }
+      h1 { font-size: 15px; font-weight: 600; margin: 0; }
+      p { margin: 0; opacity: 0.72; max-width: 46ch; text-align: center; }
+      pre {
+        margin: 0; padding: 10px 12px; max-width: 70ch; overflow-x: auto;
+        font-size: 12px; border-radius: 6px;
+        background: rgba(127, 127, 127, 0.12);
+      }
+      .hint { font-size: 12px; opacity: 0.56; }
+    </style>
+  </head>
+  <body>
+    <h1 id="headline">담화를 준비하고 있어요</h1>
+    <p id="body"></p>
+    <pre id="detail" hidden></pre>
+    <p class="hint" id="hint" hidden></p>
+    <script>
+      const q = new URLSearchParams(location.search);
+      const state = q.get("state") ?? "starting";
+      const copy = {
+        starting: ["담화를 준비하고 있어요", "서비스가 뜨기를 기다리고 있어요."],
+        "db-unreachable": [
+          "데이터베이스에 연결할 수 없어요",
+          "Postgres가 떠 있는지 확인해 주세요. 터미널에서 `pnpm db:up`으로 띄울 수 있어요.",
+        ],
+        failed: ["담화를 시작하지 못했어요", "아래 내용이 원인이에요."],
+      };
+      const [headline, body] = copy[state] ?? copy.failed;
+      document.getElementById("headline").textContent = headline;
+      document.getElementById("body").textContent = body;
+
+      const detail = q.get("detail");
+      if (detail) {
+        const el = document.getElementById("detail");
+        el.textContent = detail;
+        el.hidden = false;
+      }
+
+      const parts = [];
+      const retry = q.get("retryInSeconds");
+      if (retry) parts.push(`${retry}초 뒤에 다시 시도해요.`);
+      const log = q.get("logPath");
+      if (log) parts.push(`로그: ${log}`);
+      parts.push("메뉴의 서비스 > 다시 시도로 지금 재시도할 수 있어요.");
+      const hint = document.getElementById("hint");
+      hint.textContent = parts.join(" ");
+      hint.hidden = false;
+    </script>
+  </body>
+</html>
