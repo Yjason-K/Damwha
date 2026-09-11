@@ -67,7 +67,13 @@ for (const needle of [repo, path.join(process.env.HOME ?? "", ".pnpm-store"), "/
     check(`grep ran for "${needle}"`, false, `exit ${r.status}: ${(r.stderr ?? "").trim()}`);
     continue;
   }
-  const files = (r.stdout ?? "").split("\n").filter((l) => l.length > 0);
+  const files = (r.stdout ?? "")
+    .split("\n")
+    .filter((l) => l.length > 0)
+    // codesign이 만드는 서명 매니페스트(_CodeSignature/CodeResources)는 번들 자신의
+    // 내부 상대경로("Resources/api/node_modules/.pnpm/...")를 해시와 함께 나열할
+    // 뿐이다 — 이 서명 이후 단계에서 생기는, 유출이 아닌 정상적인 자기 참조다.
+    .filter((l) => !l.includes(`${path.sep}_CodeSignature${path.sep}`));
   check(`no "${needle}" in the bundle`, files.length === 0, files.slice(0, 5).join(", "));
 }
 
@@ -86,6 +92,25 @@ try {
   usage = "";
 }
 check("Info.plist carries NSMicrophoneUsageDescription", usage.length > 0, usage);
+
+// 7. 재서명 후 앱이 Electron 프리빌트가 아니라 자기 identifier를 갖는다
+// codesign -dv는 정보를 stdout이 아니라 stderr에 쓴다.
+const codesignInfo = spawnSync("codesign", ["-dv", "--verbose=2", appDir], { encoding: "utf8" });
+if (codesignInfo.error !== undefined) {
+  check("codesign -dv ran", false, String(codesignInfo.error.message));
+} else {
+  const identifierLine = /^Identifier=(.+)$/m.exec(codesignInfo.stderr ?? "");
+  const identifier = identifierLine ? identifierLine[1].trim() : "";
+  check("codesign Identifier is kr.damwha.app (not Electron)", identifier === "kr.damwha.app", identifier || "(not found)");
+}
+
+// 8. 서명된 리소스가 온전하다 — 재서명이 앱을 깨뜨리지 않았는지
+const codesignVerify = spawnSync("codesign", ["--verify", "--deep", "--strict", appDir], { encoding: "utf8" });
+if (codesignVerify.error !== undefined) {
+  check("codesign --verify ran", false, String(codesignVerify.error.message));
+} else {
+  check("codesign --verify --deep --strict passes", codesignVerify.status === 0, (codesignVerify.stderr ?? "").trim());
+}
 
 if (failures.length > 0) {
   console.error(`\n${failures.length} bundle hygiene check(s) failed.`);

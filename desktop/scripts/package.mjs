@@ -59,4 +59,13 @@ run("find", [apiNodeModules, "-name", ".bin", "-type", "d", "-prune", "-exec", "
 fs.rmSync(path.join(apiNodeModules, ".pnpm", "lock.yaml"), { force: true });
 
 run("pnpm", ["exec", "electron-builder", "--dir"], desktop);
+
+// electron-builder는 target: dir + 서명 설정 없음이면 번들을 재서명하지 않는다.
+// 그러면 Electron 프리빌트의 링커 서명이 남아 Identifier가 Electron이 되고,
+// Info.plist가 서명에 묶이지 않는다. 그 상태의 앱은 자기 이름의 TCC 주체가 아니라
+// 이 맥의 다른 무서명 Electron 앱과 마이크 권한을 공유한다. Developer ID 서명과
+// 공증은 Phase 6이고, 여기서 필요한 것은 번들이 자기 정체성을 갖는 것뿐이다.
+const appPath = path.join(desktop, "out", "mac-arm64", "Damwha.app");
+run("codesign", ["--force", "--deep", "--sign", "-", appPath], desktop);
+
 run("node", [path.join("scripts", "check-bundle.mjs")], desktop);
