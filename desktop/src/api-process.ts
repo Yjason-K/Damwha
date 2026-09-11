@@ -41,10 +41,16 @@ const TAIL_LIMIT = 8_000;
 
 function makeSink(logFile?: string) {
   let tail = "";
+  let closed = false;
   let out: fs.WriteStream | undefined;
   if (logFile !== undefined) {
     fs.mkdirSync(path.dirname(logFile), { recursive: true });
     out = fs.createWriteStream(logFile, { flags: "a" });
+    // 디스크가 차거나 권한이 없으면 스트림이 'error'를 낸다. 리스너가 없으면 그
+    // 예외가 앱을 죽인다 — 로그를 못 쓰는 것은 앱이 죽을 이유가 아니다.
+    out.on("error", () => {
+      out = undefined;
+    });
   }
   return {
     write(chunk: Buffer | string, isError: boolean) {
@@ -53,7 +59,13 @@ function makeSink(logFile?: string) {
       if (isError) tail = (tail + text).slice(-TAIL_LIMIT);
     },
     tail: () => tail,
-    close: () => out?.end(),
+    // 'error'와 'exit' 양쪽에서 불린다. end()를 두 번 부르면
+    // ERR_STREAM_WRITE_AFTER_END가 나므로 한 번만 닫는다.
+    close() {
+      if (closed) return;
+      closed = true;
+      out?.end();
+    },
   };
 }
 
@@ -113,6 +125,18 @@ export function launchPackaged(options: LaunchOptions): ApiHandle {
     sink.close();
     exit.settle(exitCode);
   });
+  // spawn 자체가 실패하면 Node는 'exit'가 아니라 'error'를 낸다. 리스너가 없으면
+  // EventEmitter가 예외를 던져 Electron main 프로세스째 죽는다 — 자식의 실패를
+  // 화면에 올린다는 이 모듈의 목적과 정반대다. settle은 멱등이라 'exit'가 뒤이어
+  // 오더라도 먼저 기록된 코드가 유지된다.
+  // UtilityProcess의 'error'는 ChildProcess와 시그니처가 달라 (type, location, report) —
+  // Electron 타입 선언에 맞춘다. 문서상 'error' 뒤에도 'exit'가 반드시 오지만,
+  // 리스너 자체가 없으면 EventEmitter가 예외를 던지는 문제는 동일하다.
+  child.on("error", (type, location) => {
+    sink.write(`utility process error: ${type} ${location}\n`, true);
+    sink.close();
+    exit.settle(-1);
+  });
   return {
     get pid() {
       return pid;
@@ -161,6 +185,15 @@ export function launchDev(options: LaunchOptions): ApiHandle {
   child.on("exit", (exitCode) => {
     sink.close();
     exit.settle(exitCode ?? 0);
+  });
+  // spawn 자체가 실패하면 Node는 'exit'가 아니라 'error'를 낸다. 리스너가 없으면
+  // EventEmitter가 예외를 던져 Electron main 프로세스째 죽는다 — 자식의 실패를
+  // 화면에 올린다는 이 모듈의 목적과 정반대다. settle은 멱등이라 'exit'가 뒤이어
+  // 오더라도 먼저 기록된 코드가 유지된다.
+  child.on("error", (err: Error) => {
+    sink.write(`spawn failed: ${err.message}\n`, true);
+    sink.close();
+    exit.settle(-1);
   });
   const killGroup = (signal: NodeJS.Signals) => {
     if (pid === undefined) return;
