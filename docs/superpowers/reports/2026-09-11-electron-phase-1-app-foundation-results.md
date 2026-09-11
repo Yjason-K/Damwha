@@ -90,7 +90,25 @@
 
 ## 단계별 실행·리뷰
 
-미실시.
+### Task 2 — API 실행 경로 실측
+
+R1-1(`utilityProcess`로 NestJS가 뜨는가)과 R1-2·R1-9(`pnpm deploy` 트리가 실행 가능한가)를 실측했다. Postgres는 OrbStack의 `damwha-postgres` 컨테이너로 이미 떠 있었다(`pnpm db:up` 불필요).
+
+| 항목 | 실측 결과 |
+| --- | --- |
+| `pnpm deploy` 형태 (옵션 없음) | `pnpm --filter=damwha-be --prod deploy desktop/build/api` → `ERR_PNPM_DEPLOY_NONINJECTED_WORKSPACE`. pnpm 10.26.0은 `inject-workspace-packages=true`가 없는 워크스페이스의 배포를 기본 거부한다 |
+| `pnpm deploy` 형태 (`--legacy`) | 트리 생성에는 성공하지만 `dist/` 디렉터리가 통째로 빠진다 |
+| `pnpm deploy` 형태 (`--config.inject-workspace-packages=true`, non-legacy) | 워크스페이스 주입 오류는 사라지지만 같은 이유로 `dist/`가 여전히 빠진다 |
+| 원인 확인 | `be/.gitignore`에 `dist/`가 있고 `be/package.json`에 `"files"` 허용 목록이 없다. pnpm deploy는 legacy·non-legacy 관계없이 `pnpm pack`과 같은 파일 선택 규칙(`.gitignore` 기반)을 쓰므로 gitignore된 `dist/`를 배포 트리에서 제외한다. `pnpm pack --pack-destination /tmp` 후 tarball 안 `package/dist/` 항목 수를 세어(`grep -c`) 0건임을 직접 확인해 검증했다 |
+| 측정을 위해 취한 조치 | `be/.gitignore`의 `dist/` 줄을 측정 동안만 주석 처리하고 `pnpm --filter=damwha-be --prod --config.inject-workspace-packages=true deploy desktop/build/api`를 재실행해 `dist/main.js`가 포함된 완전한 트리를 얻었다. 측정 직후 `git checkout -- be/.gitignore`로 원복했고 `git status`로 무변경을 확인했다 — 이 파일은 커밋에 포함되지 않는다 |
+| 심볼릭 링크 탈출 건수 | 트리 내 심볼릭 링크 379개 중 트리 밖을 가리키는 것 **0건** (`find desktop/build/api -type l -exec … readlink -f …` 후 트리 절대경로로 grep → "트리 밖을 가리키는 링크 없음"). `node-linker=hoisted`·`--legacy` 대안은 이 목적으로는 불필요했다 |
+| `@damwha/contracts` 빌드 산출물 | `node_modules/@damwha/contracts/dist/{cjs,esm}` 둘 다 실재 |
+| `node dist/main.js` 헬스체크 | `PORT=53001 HOST=127.0.0.1 DATABASE_URL=… STORAGE_ROOT="$HOME/Library/Application Support/Damwha/storage" node dist/main.js` 기동 후 `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:53001/api/health` → **200**, 응답 본문 `{"status":"ok","db":"ok"}`. `SIGTERM`으로 정상 종료 확인 |
+| `utilityProcess.fork` 헬스체크 | 브리핑 원문 그대로 `desktop/src/probe-main.ts`를 만들어 `pnpm --filter damwha-desktop run compile` 후 `npx electron dist/probe-main.js` 실행 → `[probe] health: 200`, `[probe] child pid: 52119`, `[probe] api exited: 0`. Step 5의 `ELECTRON_RUN_AS_NODE` + `spawn` 대체안은 필요 없었다 |
+
+**결정 1 — 자식 API 기동 수단**: `utilityProcess.fork`. 15초 타임아웃 안에 헬스체크 200과 자식 pid(52119)를 받았고 대체안이 필요 없었다.
+
+**결정 2 — `pnpm deploy` 호출 형태**: `pnpm --filter=damwha-be --prod --config.inject-workspace-packages=true deploy desktop/build/api` (legacy 아님, node-linker는 기본값 유지 — 심볼릭 링크가 이미 트리 안에서 완결되므로 hoisted로 바꿀 필요가 없다). 다만 이 호출이 그대로 동작하려면 선행 조건이 하나 더 있다: **`be/package.json`에 `dist`를 포함하는 `"files"` 허용 목록을 추가해야 한다.** 그렇지 않으면 `be/.gitignore`의 `dist/` 때문에 pnpm이 빌드 산출물 자체를 배포 트리에서 제외한다 — 이는 브리핑이 예상한 "트리 밖 심볼릭 링크" 문제와는 별개로 이번 실측에서 새로 드러난 차단 요인이다. 이 Task는 측정 스파이크이므로 `be/package.json`을 영구 수정하지 않았다(측정 동안 `be/.gitignore`만 일시 수정했다가 되돌렸다) — Task 6·Task 10 중 실제 배포 절차를 배선하는 쪽이 `be/package.json`에 `"files": ["dist", …]` (또는 동등한 수단)을 추가해야 이 호출이 그대로 성립한다.
 
 ## 최종 검증
 
