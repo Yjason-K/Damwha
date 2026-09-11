@@ -10,6 +10,8 @@ export function applyPermissionBoundary(allowedOrigins: () => string[]): void {
   s.setPermissionRequestHandler((contents, permission, callback) => {
     callback(permission === "media" && isAllowedOrigin(contents.getURL(), allowedOrigins()));
   });
+  // requestingOrigin을 그대로 믿는다 — 이 앱은 프레임이 하나뿐이라 위 핸들러가 보는
+  // contents.getURL()의 origin과 언제나 같다. iframe이 생기면 둘이 갈라질 수 있다.
   s.setPermissionCheckHandler((_contents, permission, requestingOrigin) => {
     return permission === "media" && allowedOrigins().includes(requestingOrigin);
   });
