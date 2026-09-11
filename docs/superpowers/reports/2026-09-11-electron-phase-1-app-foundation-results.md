@@ -4,9 +4,9 @@
 브랜치: `feat/electron-migration-phase-1-app-foundation`
 브랜치 분기점: `a4f3a99` (`dev`)
 스펙: [2026-09-11-electron-phase-1-app-foundation-design.md](../specs/2026-09-11-electron-phase-1-app-foundation-design.md)
-계획: 미작성
+계획: [2026-09-11-electron-phase-1-app-foundation.md](../plans/2026-09-11-electron-phase-1-app-foundation.md)
 
-**상태 (2026-09-11): 스펙 리뷰 통과. 구현 계획 작성 전.**
+**상태 (2026-09-11): 스펙 리뷰·계획 검증 통과. 구현 착수 전.**
 
 ## 스펙 리뷰
 
@@ -47,9 +47,46 @@
 - 신설 위험: R1-9 (`pnpm deploy` Experimental), R1-10 (`EADDRINUSE` 구분 실패), R1-11 (외부 API 오인).
 - 로드맵 변경 3곳: Phase 1 범위에 자식 정리 추가, Phase 2 범위·완료 기준의 해당 항목을 확장으로 재서술, Phase 1 상태 기록.
 
+### 3회차 — 계획 검증 중 드러난 스펙 수정
+
+| ID | 지적 | 조치 |
+| --- | --- | --- |
+| F-11 | §5의 "쓰기가 필요한 모든 경로는 `<userData>` 아래"가 §6.3이 허용하는 `config.json` 오버라이드와 모순된다. Task 4의 테스트는 절대 `STORAGE_ROOT`를 그대로 수용하도록 의도적으로 쓰여 있다 | §5에 문단을 추가해 구분했다 — `.app` 번들 내부 무쓰기는 절대 규칙, "`<userData>` 아래"는 **기본 설정의 성질**이며 사람이 `config.json`으로 열 수 있다. P1-C14는 기본 설정 상태를 판정한다 |
+
 ## 계획 검증
 
-미실시.
+| 회차 | 대상 버전 | 검토자 | 지적 | 조치 | 통과 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 초안 (미커밋) | 메인 세션 (자체 검토) | 4건 — `be` 스펙 파일 위치가 `be/jest.config.js`의 관례와 다름, pnpm isolated linker에서 `electron` 경로, `defaults read`가 `.app` plist에서 불안정, `pnpm desktop exec`가 `run exec`로 풀림 | 전건 반영 후 `27fa1cb`로 커밋 | 통과 |
+| 2 | `27fa1cb` | Codex (`codex:rescue`) | V-1 ~ V-14 (차단 12, 비차단 2). 판정 NEEDS CHANGES | V-1~V-12 반영, V-13은 스펙 수정으로 처리(F-11), V-14는 확인만 | 통과 |
+
+### 1회차 지적 상세 — 메인 세션 자체 검토
+
+| ID | 지적 | 조치 |
+| --- | --- | --- |
+| P-1 | 계획이 `be/test/config/env.spec.ts`를 만들라고 하지만 기존 스펙은 전부 `be/test/` 바로 아래 평평하게 있고 `jest.config.js`의 `roots`가 그 구조를 전제한다 | `be/test/env.spec.ts`로 고치고 관례를 계획에 명시 |
+| P-2 | `node_modules/electron/dist/Electron.app` 확인 경로가 pnpm isolated linker와 맞지 않는다 | `desktop/node_modules/electron/...`으로 고침 |
+| P-3 | `defaults read <경로>/Info.plist <키>`는 `.app` 안의 plist에서 신뢰할 수 없다 | `plutil -extract ... raw -o -`로 교체 |
+| P-4 | `pnpm desktop exec node …`는 `pnpm --filter … run exec`로 풀려 실패한다 | `pnpm --filter damwha-desktop exec`로 고침 |
+
+### 2회차 지적 상세 — Codex
+
+| ID | 차단 | 지적 | 조치 |
+| --- | --- | --- | --- |
+| V-1 | 차단 | `waitForReady()`가 deadline을 `probe()` 반환 뒤에만 검사한다. 소켓은 붙었는데 응답이 없어 `fetch`가 영원히 매달리면 30초 타임아웃에 **도달하지 못한다.** 테스트도 그 경로를 시험하지 않는다 | `PROBE_TIMEOUT_MS`(2초)를 도입해 `probeHealth`에 `AbortController` + race를 넣고, `waitForReady`도 probe를 상한과 경주시켰다. 경주에 주입된 `sleep`을 쓰면 테스트의 가짜 시계를 밀어 버리므로 실제 타이머(`noResponseAfter`)를 따로 뒀다. "probe가 끝나지 않아도 타임아웃" 테스트 2건 추가 |
+| V-2 | 차단 | `launchDev`가 `process.kill(-pid)`를 쓰지만 `spawn`에 `detached: true`가 없어 음수 pid가 프로세스 그룹을 가리키지 못한다. catch로 떨어져 pnpm만 죽고 `nest`가 만든 손자 API가 남는다. 계획도 "남으면 추가한다"고만 적어 붙여 쓸 코드가 틀렸다 | `detached: true`를 필수 옵션으로 코드에 넣고, 검증 단계를 "이미 들어 있는 전제가 성립하는지 잰다"로 바꿨다. `launchVite`도 같이 고쳤다 |
+| V-3 | 차단 | `start()` 호출이 직렬화·무효화되지 않는다. 메뉴 재시도와 자동 재시도가 겹치면 한 호출이 다른 호출의 전역 `api`를 죽이고도 이전 호출이 계속 그것을 관찰해 잘못된 `apiOrigin`, 중복 자식, 잘못된 실패 화면이 가능하다 | `generation` 세대 번호와 `start()` 직렬화를 넣었다. `attempt()`가 전역 `api`가 아니라 자기 호출의 local handle만 관찰하도록 반환 타입을 `AttemptOutcome`으로 바꿨다. 뒤처진 세대는 자기 자식을 치우고 물러난다. 겹친 재시도에서 자식이 하나인지 재는 검증 단계 추가 |
+| V-4 | 차단 | Task 10의 dev 경로가 `http://localhost:5173`을 로드하지만 Vite 기동은 Task 11에서 붙는다. Task 10의 "담화 화면까지" Verify는 독립 실행으로 통과할 수 없어 개별 리뷰가 불가능하다 | Task 10의 검증 범위를 "API가 ready가 되고 로그에 listening이 찍히는 것"까지로 좁히고, Vite가 없어 연결 실패 화면이 뜨는 것이 정상임을 명시했다. 담화 화면 완주는 Task 11이 검증한다 |
+| V-5 | 차단 | ready 뒤 API가 죽는 경우를 관찰하는 코드가 없다. `ApiHandle`이 exit 구독을 제공하지 않고 main도 구독하지 않는다. 스펙 §8이 사망 알림을 요구하는데 매핑표에도 빠졌다 | `ApiHandle.onExit`를 추가했다(이미 죽은 뒤 등록해도 즉시 호출 — 등록과 종료의 경쟁 제거). main에 `watchForDeath`를 넣어 자기 세대의 자식이 죽으면 화면에 알리고 재시도를 건다. ready 이후 자식을 죽여 보는 검증 단계와, 스펙 §8 전체를 Task에 매핑한 표를 추가했다 |
+| V-6 | 차단 | `check-bundle.mjs`가 `grep` 실패를 이유와 무관하게 "매치 없음"으로 처리한다. 권한·I/O 오류도 번들 위생 통과로 위장된다 | `spawnSync`로 바꿔 status 1만 "매치 없음"으로 허용하고, 그 밖의 status와 `error`는 검사 실패로 기록한다 |
+| V-7 | 차단 | 심볼릭 링크 탈출 판정이 `target.startsWith(realApi)`라 `/…/api`와 `/…/api-escaped`를 구별하지 못한다 | `path.relative`로 경로 관계를 판정한다 |
+| V-8 | 차단 | P1-C10 검증 순서가 성립하지 않는다. 앱이 이미 3000을 쥔 상태에서 외부 API를 띄우려 하고, 이어지는 `open`은 single-instance 처리로 기존 창만 포커스한다. 스펙은 `pnpm dev` 점유를 말하는데 계획은 `pnpm be:dev`로 바꿨다 | 순서를 다시 썼다 — 앱 완전 종료 → `pnpm dev` 기동 및 health 확인 → 외부 pid 기록 → `.app` 실행 → 앱 pid·포트 기록 → 앱 종료 → 외부 API 생존 확인 → 외부만 정리. 점유 주체를 스펙대로 `pnpm dev`로 되돌렸다 |
+| V-9 | 차단 | P1-C8이 앱이 떠 있는 상태에서 `config.json`을 고치고 `open`한다. single-instance lock 때문에 새 자식이 뜨지 않아 바꾼 값을 읽지 않으며 zod 기동 실패가 검증되지 않는다 | 설정 변경 전 앱 종료와 자식 무잔존 확인을 선행 조건으로 넣고, 검증 뒤 키 삭제와 정상 재기동까지 포함했다 |
+| V-10 | 차단 | (a) `.app` 쓰기 검증이 `-newer Info.plist`라 빌드 시점에 이미 새로운 파일을 오탐하고 오래된 파일의 수정을 놓친다. (b) P1-C14의 DB 비교가 `diff`인데 기대값은 `meeting`·`utterance` 증가를 허용한다고 적어, 정상 동작에서 반드시 실패한다 | (a) 실행 전후 체크섬 manifest 비교로 바꿨다. (b) 세 항목의 판정 규칙을 분리했다 — `be/storage`·compose는 완전 동일, `_migrations`는 동일, `meeting`·`utterance`는 `after >= before`. 판정 스크립트를 계획에 넣었다 |
+| V-11 | 차단 | P1-C14가 "앱을 처음 실행하기 전" 스냅샷을 요구하지만 Task 12 Step 5가 이미 `.app`을 실행한 뒤 Task 13이 스냅샷을 뜬다. 기준선이 아무것도 증명하지 못한다 | 기준선을 **Task 1 Step 11**로 옮겼다 — 그 Task의 빈 창은 API를 띄우지 않아 쓰기가 없는 마지막 시점이다. `/tmp`가 아니라 `~/.cache/damwha-p1-evidence/`에 두고 채취 시각을 함께 기록한다. Task 13 Step 1은 기준선의 유효성만 확인하고, 없으면 P1-C14를 **미판정**으로 적는다 |
+| V-12 | 차단 | `be/worker/.env`의 `STORAGE_ROOT`를 바꾼 뒤 worker를 띄우면 기존 `be/storage`를 가리키는 queued/running job이 파일을 못 찾아 `failed`로 기록된다. 계획에 큐 확인도 백업·복구 절차도 없다 | Task 13 Step 2를 신설했다 — 원본을 `worker.env.backup`으로 보관, worker 정지, `job`의 queued/running이 0인지 확인(있으면 진행 금지), 그 뒤 경로 변경. Step 14에 되돌림 결정과 양쪽 한계를 기록하는 절차를 넣었다 |
+| V-13 | 비차단 | `config.json`의 절대 `STORAGE_ROOT`를 무조건 수용하므로 `<userData>` 밖으로도 쓴다. 스펙 §5의 문장과 충돌하지만 §6.3은 그 오버라이드를 명시적으로 허용한다 | **스펙 수정으로 처리**(위 F-11). 계획의 코드와 테스트는 그대로 두었다 — 의도된 동작이다 |
+| V-14 | 비차단 | `utilityProcess.fork`의 `cwd`·`env`·`stdio`, `loadFile`의 `query`, permission-check handler의 세 번째 인자, menu roles, `@electron/asar.listPackage`, `mac.extendInfo`·`extraResources`·`mac.target: dir`, `pnpm --filter=… --prod deploy <dir>` 인자 순서가 모두 실제와 일치 | 변경 없음. `utilityProcess`가 `app.whenReady()` 뒤에만 호출 가능하다는 점을 `launchPackaged`의 주석으로 남겼다 |
 
 ## 단계별 실행·리뷰
 

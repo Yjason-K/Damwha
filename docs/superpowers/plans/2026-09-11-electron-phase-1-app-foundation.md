@@ -263,18 +263,44 @@ Run: `pnpm test`
 
 Expected: `desktop`의 vitest가 참여한다. 테스트 파일이 아직 없으므로 "No test files found"로 끝나며, 그 자체는 실패가 아니어야 한다. 실패로 끝나면 `vitest run --passWithNoTests`로 바꾼다.
 
-- [ ] **Step 11: 커밋**
+- [ ] **Step 11: P1-C14의 보존 기준선을 뜬다**
+
+**이 Task에서 떠야 한다.** Task 10부터 API 자식이 실제로 돌고 Task 12가 `.app`을 실행하므로, 그 뒤에 뜬 스냅샷은 "앱이 `be/storage`에 쓰지 않았다"를 증명하지 못한다. 이 Task의 빈 창은 API를 띄우지 않아 아무것도 쓰지 않는다 — 기준선을 뜰 수 있는 마지막 시점이다.
+
+`/tmp`는 재부팅에 비워지므로 쓰지 않는다.
+
+```bash
+EV="$HOME/.cache/damwha-p1-evidence"
+mkdir -p "$EV"
+date -u +%Y-%m-%dT%H:%M:%SZ > "$EV/baseline-taken-at.txt"
+( cd be/storage && find . -type f -exec shasum -a 256 {} \; | sort ) > "$EV/storage-before.txt"
+wc -l < "$EV/storage-before.txt"
+psql postgres://postgres:postgres@localhost:5432/damwha -At -F, -c \
+  "select 'meeting', count(*) from meeting union all select 'utterance', count(*) from utterance union all select '_migrations', count(*) from _migrations" \
+  | sort > "$EV/rows-before.txt"
+docker compose -f be/docker-compose.yml config | grep -E "^name:|pgdata" | sort > "$EV/compose-before.txt"
+cat "$EV/rows-before.txt" "$EV/compose-before.txt"
+```
+
+Expected: `storage-before.txt`가 비어 있지 않다(기존 회의가 있다면). `rows-before.txt`에 세 줄. `compose-before.txt`에 `name: damwha`와 `pgdata`가 있다.
+
+DB가 안 떠 있으면 `pnpm db:up` 후 다시 한다. **`storage-before.txt`가 빈 파일이면 기준선이 무의미하다** — `be/storage`에 파일이 정말 없는지 `ls be/storage/meetings`로 확인하고 결과 문서에 그 사실을 적는다.
+
+- [ ] **Step 12: 커밋**
 
 ```bash
 git add pnpm-workspace.yaml package.json pnpm-lock.yaml desktop/
 git commit -m "feat(desktop): damwha-desktop 패키지를 만들고 빈 창을 띄운다"
 ```
 
+증거 파일은 `~/.cache/damwha-p1-evidence/`에 있고 커밋하지 않는다 — 개인 녹음의 체크섬이다.
+
 **Verify:**
 - `pnpm desktop:dev`로 창이 뜬다.
 - `pnpm dev`가 Electron 창을 띄우지 않는다.
 - `pnpm build`가 `desktop/out`을 만들지 않는다.
 - `desktop/package.json`에 `dependencies` 키가 없다.
+- `~/.cache/damwha-p1-evidence/`에 `storage-before.txt`·`rows-before.txt`·`compose-before.txt`·`baseline-taken-at.txt` 넷이 있다.
 
 **Review:**
 - 루트 스크립트가 `--filter`로만 desktop을 부르는가.
@@ -923,7 +949,7 @@ git commit -m "feat(desktop): 고정 포트 우선에 탐색 포트 폴백을 �
   - `interface WaitOptions { probe; isAlive; timeoutMs; intervalMs; sleep?; now? }`
   - `function waitForReady(options: WaitOptions): Promise<ReadyOutcome>`
   - `function probeHealth(baseUrl: string, fetchImpl?): Promise<ProbeResult>`
-  - `const READY_TIMEOUT_MS = 30_000`, `const READY_INTERVAL_MS = 250`
+  - `const READY_TIMEOUT_MS = 30_000`, `const READY_INTERVAL_MS = 250`, `const PROBE_TIMEOUT_MS = 2_000`
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
@@ -975,6 +1001,19 @@ describe("waitForReady", () => {
     expect(await waitForReady(h.options)).toEqual({ kind: "timeout" });
   });
 
+  it("times out even when a probe never settles", async () => {
+    // 연결은 됐지만 응답이 없는 API가 이 형태다. probe 반환 뒤에만 deadline을 보면
+    // 영원히 매달린다.
+    const outcome = await waitForReady({
+      probe: () => new Promise<never>(() => {}),
+      isAlive: () => true,
+      timeoutMs: 60,
+      intervalMs: 10,
+      probeTimeoutMs: 20,
+    });
+    expect(outcome).toEqual({ kind: "timeout" });
+  }, 2_000);
+
   it("stops immediately when the child is gone and never probes", async () => {
     const probe = vi.fn(never);
     const outcome = await waitForReady({
@@ -1023,6 +1062,11 @@ describe("probeHealth", () => {
     expect(r).toBe("no-response");
   });
 
+  it("gives up on a request that never settles", async () => {
+    const r = await probeHealth("http://127.0.0.1:3000", () => new Promise<never>(() => {}), 30);
+    expect(r).toBe("no-response");
+  }, 2_000);
+
   it("maps any other status to no-response", async () => {
     const r = await probeHealth("http://127.0.0.1:3000", async () => ({ status: 404 }) as Response);
     expect(r).toBe("no-response");
@@ -1062,6 +1106,11 @@ export type ReadyOutcome =
  */
 export const READY_TIMEOUT_MS = 30_000;
 export const READY_INTERVAL_MS = 250;
+/**
+ * 개별 probe의 상한. 소켓은 붙었는데 응답이 없는 API가 실제로 있으며, 그 경우
+ * fetch는 스스로 끝나지 않는다. 이 상한이 없으면 READY_TIMEOUT_MS에 도달하지 못한다.
+ */
+export const PROBE_TIMEOUT_MS = 2_000;
 
 export interface WaitOptions {
   probe: () => Promise<ProbeResult>;
@@ -1069,6 +1118,8 @@ export interface WaitOptions {
   isAlive: () => boolean;
   timeoutMs: number;
   intervalMs: number;
+  /** 개별 probe의 상한. 기본 PROBE_TIMEOUT_MS. */
+  probeTimeoutMs?: number;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
 }
@@ -1076,19 +1127,33 @@ export interface WaitOptions {
 export async function waitForReady(options: WaitOptions): Promise<ReadyOutcome> {
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const now = options.now ?? Date.now;
+  const probeTimeoutMs = options.probeTimeoutMs ?? PROBE_TIMEOUT_MS;
   const deadline = now() + options.timeoutMs;
+  const remaining = () => deadline - now();
 
   for (;;) {
     if (!options.isAlive()) return { kind: "child-exited" };
-    const result = await options.probe();
+    if (remaining() <= 0) return { kind: "timeout" };
+    // probe가 스스로 끝나지 않을 수 있으므로 상한과 경주시킨다. probe에 자체 상한이
+    // 있어도 이중으로 막는다 — 루프가 멈추는 것이 probe 구현에 의존하면 안 된다.
+    // 주입된 sleep을 쓰지 않는 이유: 테스트의 가짜 시계를 밀어 버린다.
+    const result = await Promise.race([options.probe(), noResponseAfter(probeTimeoutMs)]);
     if (result === "ready") return { kind: "ready" };
     if (result === "db-unreachable") return { kind: "db-unreachable" };
-    if (now() >= deadline) return { kind: "timeout" };
+    if (remaining() <= 0) return { kind: "timeout" };
     await sleep(options.intervalMs);
   }
 }
 
-type FetchLike = (url: string) => Promise<{ status: number }>;
+function noResponseAfter(ms: number): Promise<ProbeResult> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve("no-response"), ms);
+    // 매 회차마다 타이머가 쌓이지 않게 한다. probe가 먼저 끝나면 이 promise는 버려진다.
+    if (typeof timer === "object" && "unref" in timer) timer.unref();
+  });
+}
+
+type FetchLike = (url: string, init?: { signal: AbortSignal }) => Promise<{ status: number }>;
 
 /**
  * 200은 API와 DB 둘 다 살아 있음, 503은 API만 살아 있음(be/src/health/health.controller.ts).
@@ -1096,15 +1161,31 @@ type FetchLike = (url: string) => Promise<{ status: number }>;
  */
 export async function probeHealth(
   baseUrl: string,
-  fetchImpl: FetchLike = (url) => fetch(url),
+  fetchImpl: FetchLike = (url, init) => fetch(url, init),
+  timeoutMs: number = PROBE_TIMEOUT_MS,
 ): Promise<ProbeResult> {
+  // 소켓은 붙었는데 응답이 없으면 fetch는 스스로 끝나지 않는다. abort로 실제 요청을
+  // 끊고, race로 호출자에게는 시간 안에 돌려준다 — signal을 무시하는 구현도 막힌다.
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve(null);
+    }, timeoutMs);
+  });
   try {
-    const { status } = await fetchImpl(`${baseUrl}/api/health`);
+    const status = await Promise.race([
+      fetchImpl(`${baseUrl}/api/health`, { signal: controller.signal }).then((r) => r.status),
+      expired,
+    ]);
     if (status === 200) return "ready";
     if (status === 503) return "db-unreachable";
     return "no-response";
   } catch {
     return "no-response";
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 ```
@@ -1247,7 +1328,7 @@ git commit -m "feat(desktop): 자기 origin 판정을 분리한다"
 **Interfaces:**
 - Consumes: `ApiEnv` (Task 4)
 - Produces:
-  - `interface ApiHandle { pid: number | undefined; alive(): boolean; stderrTail(): string; exitCode(): number | null; stop(graceMs: number): Promise<void> }`
+  - `interface ApiHandle { pid: number | undefined; alive(): boolean; stderrTail(): string; exitCode(): number | null; onExit(listener: (code: number) => void): void; stop(graceMs: number): Promise<void> }`
   - `interface LaunchOptions { entry: string; cwd: string; env: ApiEnv; logFile?: string }`
   - `function launchPackaged(options: LaunchOptions): ApiHandle`
   - `function launchDev(options: LaunchOptions): ApiHandle`
@@ -1269,6 +1350,11 @@ export interface ApiHandle {
   /** 실패 화면에 올릴 stderr 꼬리. 사람이 읽을 마지막 줄이 여기서 나온다. */
   stderrTail(): string;
   exitCode(): number | null;
+  /**
+   * 종료 알림. ready 뒤에 죽는 경우를 화면에 알리려면 이게 있어야 한다 (스펙 §8).
+   * 이미 죽은 뒤에 등록해도 즉시 호출된다 — 등록과 종료의 경쟁을 없앤다.
+   */
+  onExit(listener: (code: number) => void): void;
   stop(graceMs: number): Promise<void>;
 }
 
@@ -1301,46 +1387,85 @@ function makeSink(logFile?: string) {
   };
 }
 
-/** SIGTERM으로 안 죽으면 SIGKILL. utilityProcess.kill()에는 신호 인자가 없다. */
-async function escalate(pid: number | undefined, exited: () => boolean, graceMs: number): Promise<void> {
-  const start = Date.now();
-  while (!exited() && Date.now() - start < graceMs) {
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  if (!exited() && pid !== undefined) {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-      // 이미 죽었으면 ESRCH — 무시한다.
+/** 종료 알림을 모으는 작은 상자. 이미 종료된 뒤 등록해도 즉시 부른다. */
+function exitNotifier() {
+  const listeners: Array<(code: number) => void> = [];
+  let code: number | null = null;
+  return {
+    settle(exitCode: number) {
+      if (code !== null) return;
+      code = exitCode;
+      for (const l of listeners) l(exitCode);
+    },
+    add(listener: (code: number) => void) {
+      if (code !== null) listener(code);
+      else listeners.push(listener);
+    },
+    code: () => code,
+  };
+}
+
+/**
+ * SIGTERM으로 안 죽으면 SIGKILL. utilityProcess.kill()에는 신호 인자가 없다.
+ * SIGKILL 뒤에도 유한 시간만 기다린다 — 무한 대기는 종료를 막는다.
+ */
+async function escalate(
+  kill: (signal: NodeJS.Signals) => void,
+  exited: () => boolean,
+  graceMs: number,
+): Promise<void> {
+  const waitUntil = async (ms: number) => {
+    const start = Date.now();
+    while (!exited() && Date.now() - start < ms) {
+      await new Promise((r) => setTimeout(r, 50));
     }
-  }
+  };
+  await waitUntil(graceMs);
+  if (exited()) return;
+  kill("SIGKILL");
+  await waitUntil(2_000);
 }
 
 export function launchPackaged(options: LaunchOptions): ApiHandle {
   const sink = makeSink(options.logFile);
-  let code: number | null = null;
+  const exit = exitNotifier();
+  // utilityProcess는 app.whenReady() 뒤에만 부를 수 있다. main.ts가 그 순서를 지킨다.
   const child: UtilityProcess = utilityProcess.fork(options.entry, [], {
     cwd: options.cwd,
     stdio: "pipe",
+    // HOST가 options.env 뒤에 와야 config.json 한 줄로 LAN에 열리지 않는다.
     env: { ...options.env, HOST: "127.0.0.1" },
   });
+  const pid = child.pid;
   child.stdout?.on("data", (b: Buffer) => sink.write(b, false));
   child.stderr?.on("data", (b: Buffer) => sink.write(b, true));
   child.on("exit", (exitCode: number) => {
-    code = exitCode;
     sink.close();
+    exit.settle(exitCode);
   });
   return {
     get pid() {
-      return child.pid;
+      return pid;
     },
-    alive: () => code === null,
+    alive: () => exit.code() === null,
     stderrTail: sink.tail,
-    exitCode: () => code,
+    exitCode: exit.code,
+    onExit: exit.add,
     async stop(graceMs) {
-      if (code !== null) return;
+      if (exit.code() !== null) return;
       child.kill();
-      await escalate(child.pid, () => code !== null, graceMs);
+      await escalate(
+        (signal) => {
+          if (pid === undefined) return;
+          try {
+            process.kill(pid, signal);
+          } catch {
+            // 이미 죽었으면 ESRCH — 무시한다.
+          }
+        },
+        () => exit.code() !== null,
+        graceMs,
+      );
     },
   };
 }
@@ -1351,34 +1476,47 @@ export function launchPackaged(options: LaunchOptions): ApiHandle {
  */
 export function launchDev(options: LaunchOptions): ApiHandle {
   const sink = makeSink(options.logFile);
-  let code: number | null = null;
+  const exit = exitNotifier();
   const child: ChildProcess = spawn("pnpm", ["--filter", "damwha-be", "run", "dev"], {
     cwd: options.cwd,
     stdio: ["ignore", "pipe", "pipe"],
+    // 필수다. detached가 없으면 자식이 부모의 프로세스 그룹에 들어가 process.kill(-pid)가
+    // 그룹을 못 찾고, pnpm만 죽어 nest가 만든 손자 API가 남는다.
+    detached: true,
     env: { ...process.env, ...options.env, HOST: "127.0.0.1" },
   });
+  const pid = child.pid;
   child.stdout?.on("data", (b: Buffer) => sink.write(b, false));
   child.stderr?.on("data", (b: Buffer) => sink.write(b, true));
   child.on("exit", (exitCode) => {
-    code = exitCode ?? 0;
     sink.close();
+    exit.settle(exitCode ?? 0);
   });
+  const killGroup = (signal: NodeJS.Signals) => {
+    if (pid === undefined) return;
+    try {
+      // 음수 pid = 프로세스 그룹 전체. detached로 만들었으므로 pid가 그룹 리더다.
+      process.kill(-pid, signal);
+    } catch {
+      try {
+        child.kill(signal);
+      } catch {
+        // 이미 죽었다.
+      }
+    }
+  };
   return {
     get pid() {
-      return child.pid;
+      return pid;
     },
-    alive: () => code === null,
+    alive: () => exit.code() === null,
     stderrTail: sink.tail,
-    exitCode: () => code,
+    exitCode: exit.code,
+    onExit: exit.add,
     async stop(graceMs) {
-      if (code !== null) return;
-      // nest start --watch는 자식을 또 만든다. 프로세스 그룹째 보낸다.
-      try {
-        if (child.pid !== undefined) process.kill(-child.pid, "SIGTERM");
-      } catch {
-        child.kill("SIGTERM");
-      }
-      await escalate(child.pid, () => code !== null, graceMs);
+      if (exit.code() !== null) return;
+      killGroup("SIGTERM");
+      await escalate(killGroup, () => exit.code() !== null, graceMs);
     },
   };
 }
@@ -1386,7 +1524,7 @@ export function launchDev(options: LaunchOptions): ApiHandle {
 
 - [ ] **Step 2: dev 종료가 손자 프로세스를 남기지 않는지 확인한다**
 
-`launchDev`의 `process.kill(-pid)`는 자식이 프로세스 그룹 리더여야 동작한다. `spawn`에 `detached: true`를 주면 그룹이 생긴다. 확인하고 필요하면 추가한다.
+`detached: true`는 위 코드에 이미 들어 있다 — 그것이 `process.kill(-pid)`가 동작하는 전제다. 이 단계는 그 전제가 실제로 성립하는지 재는 것이다.
 
 Run:
 
@@ -1406,7 +1544,7 @@ setTimeout(async () => {
 "
 ```
 
-Expected: `leftover: ""`. 남으면 `spawn` 옵션에 `detached: true`를 넣고 다시 확인한다.
+Expected: `leftover: ""`. 남으면 `killGroup`이 그룹을 못 찾은 것이다 — `child.pid`가 그룹 리더인지(`ps -o pid,pgid -p <pid>`에서 둘이 같은지) 확인하고, 아니면 `detached` 옵션이 실제로 적용됐는지 본다.
 
 `require('electron')`이 Node에서 실패하므로 이 확인은 `api-process.js`의 `launchDev`만 부르는데도 모듈 최상단 import 때문에 막힐 수 있다. 막히면 `utilityProcess` import를 함수 안의 지연 `require`로 옮긴다.
 
@@ -1695,6 +1833,12 @@ let apiOrigin: string | null = null;
 let retryCount = 0;
 let retryTimer: NodeJS.Timeout | null = null;
 let quitting = false;
+/**
+ * start()가 겹치면 한 호출이 다른 호출의 자식을 죽이고도 이전 호출이 계속 전역 상태를
+ * 갱신한다. 세대 번호로 최신 호출만 전역 상태와 창을 건드리게 한다.
+ */
+let generation = 0;
+let starting: Promise<void> | null = null;
 
 function allowedOrigins(): string[] {
   const list: string[] = [];
@@ -1754,38 +1898,69 @@ function scheduleRetry(): number | undefined {
   return Math.round(delay / 1000);
 }
 
-/** 한 포트로 한 번 시도한다. EADDRINUSE면 null을 돌려 호출자가 다음 포트로 넘어가게 한다. */
-async function attempt(port: number, env: ApiEnv): Promise<"ready" | "db-unreachable" | "addr-in-use" | "failed"> {
+type AttemptOutcome =
+  | { kind: "ready"; handle: ApiHandle; origin: string }
+  | { kind: "db-unreachable"; handle: ApiHandle }
+  | { kind: "addr-in-use" }
+  | { kind: "failed"; handle: ApiHandle };
+
+/**
+ * 한 포트로 한 번 시도한다. 전역 `api`를 보지 않고 이 호출이 만든 handle만 관찰한다 —
+ * 겹친 start()가 서로의 자식을 오관찰하지 않게 하려면 이 격리가 필요하다.
+ */
+async function attempt(port: number, env: ApiEnv): Promise<AttemptOutcome> {
   const launch = app.isPackaged ? launchPackaged : launchDev;
-  api = launch({
+  const handle = launch({
     entry: path.join(apiRoot(), "dist", "main.js"),
     cwd: apiRoot(),
     env: { ...env, PORT: String(port) },
     logFile: logFile(),
   });
-  const base = `http://127.0.0.1:${port}`;
+  const origin = `http://127.0.0.1:${port}`;
   const outcome = await waitForReady({
-    probe: () => probeHealth(base),
-    isAlive: () => api?.alive() ?? false,
+    probe: () => probeHealth(origin),
+    isAlive: () => handle.alive(),
     timeoutMs: READY_TIMEOUT_MS,
     intervalMs: READY_INTERVAL_MS,
   });
-  if (outcome.kind === "ready") {
-    apiOrigin = base;
-    return "ready";
+  if (outcome.kind === "ready") return { kind: "ready", handle, origin };
+  if (outcome.kind === "db-unreachable") return { kind: "db-unreachable", handle };
+  if (outcome.kind === "child-exited" && isAddrInUse(handle.stderrTail())) {
+    await handle.stop(STOP_GRACE_MS);
+    return { kind: "addr-in-use" };
   }
-  if (outcome.kind === "db-unreachable") return "db-unreachable";
-  if (outcome.kind === "child-exited" && isAddrInUse(api?.stderrTail() ?? "")) {
-    await stopApi();
-    return "addr-in-use";
-  }
-  return "failed";
+  return { kind: "failed", handle };
 }
 
-async function start(): Promise<void> {
+/** ready 뒤에 자식이 죽으면 화면에 알린다. 자동 재시작은 Phase 2다 (스펙 §8). */
+function watchForDeath(handle: ApiHandle, mine: number): void {
+  handle.onExit((code) => {
+    if (mine !== generation || quitting || win === null) return;
+    api = null;
+    apiOrigin = null;
+    const seconds = scheduleRetry();
+    void showStatus(win, {
+      state: "failed",
+      detail: `API가 종료됐어요 (코드 ${code}). ${lastMeaningfulLine(handle.stderrTail())}`,
+      retryInSeconds: seconds,
+      logPath: logFile(),
+    });
+  });
+}
+
+/** 동시 호출을 직렬화한다. 메뉴 재시도와 자동 재시도가 겹칠 수 있다. */
+function start(): Promise<void> {
+  const run = (starting ?? Promise.resolve()).then(() => startOnce());
+  starting = run.catch(() => undefined);
+  return run;
+}
+
+async function startOnce(): Promise<void> {
   if (win === null) return;
-  const tail = () => lastMeaningfulLine(api?.stderrTail() ?? "");
+  generation += 1;
+  const mine = generation;
   await stopApi();
+  if (mine !== generation || win === null) return;
   await showStatus(win, { state: "starting" });
 
   const { env, warning } = loadConfig(app.getPath("userData"));
@@ -1793,22 +1968,36 @@ async function start(): Promise<void> {
 
   for (let i = 0; i < MAX_PORT_ATTEMPTS; i += 1) {
     const port = await choosePort(preferred, i);
-    const result = await attempt(port, env);
-    if (result === "ready") {
-      retryCount = 0;
-      const target = app.isPackaged ? `${apiOrigin}/` : VITE_ORIGIN;
-      await win.loadURL(target);
+    const outcome = await attempt(port, env);
+
+    // 내가 도는 동안 더 새로운 start()가 시작됐다면 내가 만든 자식을 치우고 물러난다.
+    if (mine !== generation) {
+      if (outcome.kind !== "addr-in-use") await outcome.handle.stop(STOP_GRACE_MS);
       return;
     }
-    if (result === "addr-in-use") continue;
+    if (win === null) {
+      if (outcome.kind !== "addr-in-use") await outcome.handle.stop(STOP_GRACE_MS);
+      return;
+    }
 
-    const detail = [warning, result === "db-unreachable" ? undefined : tail()]
+    if (outcome.kind === "addr-in-use") continue;
+
+    if (outcome.kind === "ready") {
+      api = outcome.handle;
+      apiOrigin = outcome.origin;
+      retryCount = 0;
+      watchForDeath(outcome.handle, mine);
+      await win.loadURL(app.isPackaged ? `${outcome.origin}/` : VITE_ORIGIN);
+      return;
+    }
+
+    const detail = [warning, outcome.kind === "db-unreachable" ? undefined : lastMeaningfulLine(outcome.handle.stderrTail())]
       .filter((s): s is string => typeof s === "string" && s.length > 0)
       .join(" / ");
+    await outcome.handle.stop(STOP_GRACE_MS);
     const seconds = scheduleRetry();
-    await stopApi();
     await showStatus(win, {
-      state: result === "db-unreachable" ? "db-unreachable" : "failed",
+      state: outcome.kind === "db-unreachable" ? "db-unreachable" : "failed",
       detail: detail.length > 0 ? detail : undefined,
       retryInSeconds: seconds,
       logPath: logFile(),
@@ -1876,9 +2065,11 @@ pnpm db:down
 pnpm desktop:dev
 ```
 
-Expected: 창이 "담화를 시작하지 못했어요" 또는 "데이터베이스에 연결할 수 없어요"를 보이고, `detail`에 `database unreachable at postgres://postgres:***@localhost:5432/damwha`가 있고, 재시도 안내가 보인다. 로그 경로가 `~/Library/Application Support/Damwha/logs/api.log`다.
+Expected: 창이 "데이터베이스에 연결할 수 없어요"를 보이고, `detail`에 `database unreachable at postgres://postgres:***@localhost:5432/damwha`가 있고, 재시도 안내가 보인다. 로그 경로가 `~/Library/Application Support/Damwha/logs/api.log`다.
 
-- [ ] **Step 4: DB를 올려 자동 재시도가 붙는지 확인한다**
+- [ ] **Step 4: DB를 올려 준비 상태 전환을 확인한다**
+
+**이 Task는 Vite를 띄우지 않는다** — Vite 기동은 Task 11이 붙인다. 그래서 여기서는 렌더러가 담화 화면까지 가는 것을 보지 않고, **API가 ready가 되어 main이 화면 전환을 시도하는 것까지**만 확인한다. 그 이상을 보려면 Vite를 손으로 띄운다.
 
 앱을 띄운 채 다른 터미널에서:
 
@@ -1886,9 +2077,24 @@ Expected: 창이 "담화를 시작하지 못했어요" 또는 "데이터베이�
 pnpm db:up
 ```
 
-Expected: 다음 자동 재시도에서 화면이 담화로 바뀐다. 기다리기 싫으면 메뉴의 **서비스 > 다시 시도**를 누른다.
+Expected: 다음 자동 재시도에서 준비 화면이 사라지고 창이 `http://localhost:5173`을 로드하려 한다. Vite가 없으므로 연결 실패 화면이 뜨는 것이 **정상**이다. `~/Library/Application Support/Damwha/logs/api.log`의 마지막 줄이 `Damwha API listening on 127.0.0.1:<port>`다.
 
-- [ ] **Step 5: 종료 후 잔존 프로세스를 확인한다**
+담화 화면까지 보고 싶으면 또 다른 터미널에서 `pnpm fe:dev`를 띄운 뒤 메뉴의 **서비스 > 다시 시도**를 누른다. 이때 Vite는 `fe/.env`의 `VITE_API_BASE_URL=http://localhost:3000/api`를 쓰므로 API가 3000을 잡은 경우에만 맞는다 — 포트 주입은 Task 11의 일이다.
+
+- [ ] **Step 5: ready 이후 사망이 화면에 뜨는지 확인한다**
+
+담화 화면(또는 Step 4의 로드 시도) 상태에서 API 자식만 죽인다.
+
+```bash
+kill $(pgrep -f "dist/main.js" | head -1)   # packaged 아님 → nest 프로세스
+pgrep -f "nest start"
+```
+
+dev에서는 `nest start`의 손자가 실제 API다. 그 pid를 골라 죽인다.
+
+Expected: 창이 "담화를 시작하지 못했어요"로 바뀌고 `detail`에 `API가 종료됐어요 (코드 …)`가 있다. 자동 재시도 안내가 보인다.
+
+- [ ] **Step 6: 종료 후 잔존 프로세스를 확인한다**
 
 앱을 닫고:
 
@@ -1899,7 +2105,17 @@ pgrep -f "damwha_worker" >/dev/null && echo "worker 살아 있음 (정상)"
 
 Expected: API 잔존 없음. worker는 살아 있다.
 
-- [ ] **Step 6: 커밋**
+- [ ] **Step 7: 겹친 재시도가 자식을 둘로 만들지 않는지 확인한다**
+
+DB를 내려 실패 화면을 띄운 상태에서, 자동 재시도가 도는 동안 메뉴의 **서비스 > 다시 시도**를 빠르게 세 번 누른다.
+
+```bash
+pgrep -c -f "nest start"
+```
+
+Expected: 1 이하. 2 이상이면 `generation` 가드나 `start()` 직렬화가 동작하지 않는 것이다.
+
+- [ ] **Step 8: 커밋**
 
 ```bash
 git add desktop/src/main.ts
@@ -1908,15 +2124,20 @@ git commit -m "feat(desktop): API 기동·포트 폴백·자동 재시도·종�
 
 **Verify:**
 - DB 없이 띄우면 원인이 화면에 나온다.
-- DB를 올리면 자동 재시도 또는 메뉴 재시도로 담화 화면에 도달한다.
+- DB를 올리면 자동 재시도로 API가 ready가 되고 로그에 `listening on 127.0.0.1:<port>`가 찍힌다. (담화 화면 완주는 Task 11이 검증한다.)
+- ready 이후 API 자식을 죽이면 화면이 사망을 알린다.
+- 메뉴 재시도를 연달아 눌러도 API 자식이 하나다.
 - 앱 종료 후 API 잔존 0, worker 생존.
 - 두 번 실행하면 창이 하나다.
 
 **Review:**
 - `before-quit`가 두 번 돌지 않는가 (`quitting` 가드).
 - `addr-in-use`가 아닌 실패에서 포트 루프를 계속 돌지 않는가.
-- `apiOrigin`이 `stopApi()`에서 비워져 허용 origin이 남지 않는가.
+- `attempt()`가 전역 `api`를 보지 않고 자기 handle만 관찰하는가.
+- 뒤처진 세대가 자기 자식을 치우고 물러나는가 — 전역 상태나 창을 건드리면 결함이다.
+- `apiOrigin`이 `stopApi()`와 사망 감지에서 비워져 허용 origin이 남지 않는가.
 - 자동 재시도 타이머가 종료 시 취소되는가.
+- `watchForDeath`가 종료 중(`quitting`)에는 침묵하는가.
 
 ---
 
@@ -1953,14 +2174,17 @@ export interface ViteOptions {
  * 옳은 주소를 본다 (스펙 §11).
  */
 export function launchVite(options: ViteOptions): ApiHandle {
+  const listeners: Array<(code: number) => void> = [];
   let code: number | null = null;
   let tail = "";
   const child = spawn("pnpm", ["--filter", "damwha-fe", "run", "dev"], {
     cwd: options.cwd,
     stdio: ["ignore", "pipe", "pipe"],
+    // API 자식과 같은 이유다 — 그룹 종료가 동작해야 esbuild 손자가 남지 않는다.
     detached: true,
     env: { ...process.env, VITE_API_BASE_URL: options.apiBaseUrl },
   });
+  const pid = child.pid;
   child.stdout?.on("data", (b: Buffer) => process.stdout.write(`[vite] ${b}`));
   child.stderr?.on("data", (b: Buffer) => {
     tail = (tail + b.toString()).slice(-8_000);
@@ -1968,32 +2192,44 @@ export function launchVite(options: ViteOptions): ApiHandle {
   });
   child.on("exit", (exitCode) => {
     code = exitCode ?? 0;
+    for (const l of listeners) l(code);
   });
+  const killGroup = (signal: NodeJS.Signals) => {
+    if (pid === undefined) return;
+    try {
+      process.kill(-pid, signal);
+    } catch {
+      try {
+        child.kill(signal);
+      } catch {
+        // 이미 죽었다.
+      }
+    }
+  };
   return {
     get pid() {
-      return child.pid;
+      return pid;
     },
     alive: () => code === null,
     stderrTail: () => tail,
     exitCode: () => code,
+    onExit(listener) {
+      if (code !== null) listener(code);
+      else listeners.push(listener);
+    },
     async stop(graceMs) {
       if (code !== null) return;
-      try {
-        if (child.pid !== undefined) process.kill(-child.pid, "SIGTERM");
-      } catch {
-        child.kill("SIGTERM");
-      }
-      const start = Date.now();
-      while (code === null && Date.now() - start < graceMs) {
-        await new Promise((r) => setTimeout(r, 50));
-      }
-      if (code === null && child.pid !== undefined) {
-        try {
-          process.kill(-child.pid, "SIGKILL");
-        } catch {
-          // 이미 죽었다.
+      killGroup("SIGTERM");
+      const waitUntil = async (ms: number) => {
+        const start = Date.now();
+        while (code === null && Date.now() - start < ms) {
+          await new Promise((r) => setTimeout(r, 50));
         }
-      }
+      };
+      await waitUntil(graceMs);
+      if (code !== null) return;
+      killGroup("SIGKILL");
+      await waitUntil(2_000);
     },
   };
 }
@@ -2009,43 +2245,73 @@ import { launchVite } from "./vite-process";
 let vite: ApiHandle | null = null;
 ```
 
-`start()`의 `result === "ready"` 분기를 바꾼다.
+렌더러가 볼 주소를 만드는 함수를 넣는다. Task 10의 `startOnce()`는 `outcome.kind === "ready"` 분기에서 `win.loadURL(app.isPackaged ? … : VITE_ORIGIN)`을 부르는데, dev에서는 그 전에 Vite가 떠 있어야 한다.
 
 ```ts
-    if (result === "ready") {
-      retryCount = 0;
-      if (app.isPackaged) {
-        await win.loadURL(`${apiOrigin}/`);
-      } else {
-        if (vite === null) {
-          vite = launchVite({ cwd: apiRoot(), apiBaseUrl: `${apiOrigin}/api` });
-        }
-        // Vite의 첫 서빙까지 기다린다 — 준비 판정과 같은 루프를 재사용한다.
-        const up = await waitForReady({
-          probe: async () => {
-            try {
-              const res = await fetch(VITE_ORIGIN);
-              return res.status < 500 ? "ready" : "no-response";
-            } catch {
-              return "no-response";
-            }
-          },
-          isAlive: () => vite?.alive() ?? false,
-          timeoutMs: READY_TIMEOUT_MS,
-          intervalMs: READY_INTERVAL_MS,
-        });
-        if (up.kind !== "ready") {
-          await showStatus(win, {
-            state: "failed",
-            detail: `Vite를 띄우지 못했어요: ${lastMeaningfulLine(vite?.stderrTail() ?? "")}`,
-            logPath: logFile(),
-          });
-          return;
-        }
-        await win.loadURL(VITE_ORIGIN);
+/**
+ * dev에서 렌더러가 볼 주소. Vite를 이 시점에 띄우고 첫 서빙까지 기다린다.
+ * Vite는 API 포트가 바뀌어도 살려 둔다 — 재시도마다 재기동하면 HMR이 끊긴다.
+ */
+async function rendererTarget(apiBase: string): Promise<{ url: string } | { error: string }> {
+  if (app.isPackaged) return { url: `${apiBase}/` };
+  if (vite === null || !vite.alive()) {
+    vite = launchVite({ cwd: apiRoot(), apiBaseUrl: `${apiBase}/api` });
+  }
+  const up = await waitForReady({
+    probe: async () => {
+      try {
+        const res = await fetch(VITE_ORIGIN, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+        return res.status < 500 ? "ready" : "no-response";
+      } catch {
+        return "no-response";
       }
+    },
+    isAlive: () => vite?.alive() ?? false,
+    timeoutMs: READY_TIMEOUT_MS,
+    intervalMs: READY_INTERVAL_MS,
+  });
+  if (up.kind !== "ready") {
+    return { error: `Vite를 띄우지 못했어요: ${lastMeaningfulLine(vite?.stderrTail() ?? "")}` };
+  }
+  return { url: VITE_ORIGIN };
+}
+```
+
+`startOnce()`의 ready 분기를 바꾼다.
+
+```ts
+    if (outcome.kind === "ready") {
+      api = outcome.handle;
+      apiOrigin = outcome.origin;
+      retryCount = 0;
+      watchForDeath(outcome.handle, mine);
+      const target = await rendererTarget(outcome.origin);
+      if (mine !== generation || win === null) return;
+      if ("error" in target) {
+        const seconds = scheduleRetry();
+        await showStatus(win, { state: "failed", detail: target.error, retryInSeconds: seconds, logPath: logFile() });
+        return;
+      }
+      await win.loadURL(target.url);
       return;
     }
+```
+
+**dev에서 Vite가 API 주소를 한 번만 받는 문제.** `VITE_API_BASE_URL`은 Vite 기동 시점에 고정된다. 첫 기동 뒤 API 포트가 바뀌면(재시도에서 폴백) Vite가 든 주소가 낡는다. 그래서 API origin이 바뀌었을 때만 Vite를 재기동한다.
+
+```ts
+let viteApiBase: string | null = null;
+```
+
+`rendererTarget`의 기동 조건을 바꾼다.
+
+```ts
+  const wanted = `${apiBase}/api`;
+  if (vite === null || !vite.alive() || viteApiBase !== wanted) {
+    if (vite !== null) await vite.stop(STOP_GRACE_MS);
+    vite = launchVite({ cwd: apiRoot(), apiBaseUrl: wanted });
+    viteApiBase = wanted;
+  }
 ```
 
 `stopApi()`와 나란히 Vite도 정리한다.
@@ -2054,11 +2320,14 @@ let vite: ApiHandle | null = null;
 async function stopAll(): Promise<void> {
   const v = vite;
   vite = null;
+  viteApiBase = null;
   await Promise.all([stopApi(), v === null ? Promise.resolve() : v.stop(STOP_GRACE_MS)]);
 }
 ```
 
-`before-quit`의 `stopApi()`를 `stopAll()`로 바꾼다. `start()` 안의 `await stopApi()`는 그대로 둔다 — 재시도할 때 Vite는 살려 둔다.
+`before-quit`의 `stopApi()`를 `stopAll()`로 바꾼다. `startOnce()` 안의 `await stopApi()`는 그대로 둔다 — 재시도할 때 Vite는 살려 둔다.
+
+`PROBE_TIMEOUT_MS`를 `readiness`에서 추가로 import한다.
 
 - [ ] **Step 3: 타입 검사와 실행을 확인한다**
 
@@ -2198,7 +2467,7 @@ run("node", [path.join("scripts", "check-bundle.mjs")], desktop);
 import * as asar from "@electron/asar";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 
 const desktop = path.resolve(import.meta.dirname, "..");
 const repo = path.resolve(desktop, "..");
@@ -2231,6 +2500,11 @@ const realApi = fs.realpathSync(apiDir);
 const links = execFileSync("find", [apiDir, "-type", "l"], { encoding: "utf8" })
   .split("\n")
   .filter((l) => l.length > 0);
+// 문자열 접두사 비교는 /…/api 와 /…/api-escaped 를 구별하지 못한다. 경로 관계로 판정한다.
+const insideApi = (target) => {
+  const rel = path.relative(realApi, target);
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+};
 const escaping = links.filter((link) => {
   let target;
   try {
@@ -2238,21 +2512,26 @@ const escaping = links.filter((link) => {
   } catch {
     return true; // 깨진 링크도 위반이다
   }
-  return !target.startsWith(realApi);
+  return !insideApi(target);
 });
 check("no symlink escapes the api tree", escaping.length === 0, escaping.slice(0, 5).join(", "));
 console.log(`      (${links.length} symlink(s) inside the tree — allowed)`);
 
 // 4. 저장소 경로와 pnpm store 경로 문자열이 없다
+// grep의 exit 1만 "매치 없음"이다. 2 이상은 권한·I/O 오류이고, 그것을 통과로 삼으면
+// 검사가 조용히 무력해진다.
 for (const needle of [repo, path.join(process.env.HOME ?? "", ".pnpm-store"), "/.pnpm/"]) {
   if (needle.length < 4) continue;
-  let hits = "";
-  try {
-    hits = execFileSync("grep", ["-rlF", needle, contents], { encoding: "utf8" });
-  } catch {
-    hits = ""; // grep은 결과가 없으면 exit 1
+  const r = spawnSync("grep", ["-rlF", "--", needle, contents], { encoding: "utf8" });
+  if (r.error !== undefined) {
+    check(`grep ran for "${needle}"`, false, String(r.error.message));
+    continue;
   }
-  const files = hits.split("\n").filter((l) => l.length > 0);
+  if (r.status !== 0 && r.status !== 1) {
+    check(`grep ran for "${needle}"`, false, `exit ${r.status}: ${(r.stderr ?? "").trim()}`);
+    continue;
+  }
+  const files = (r.stdout ?? "").split("\n").filter((l) => l.length > 0);
   check(`no "${needle}" in the bundle`, files.length === 0, files.slice(0, 5).join(", "));
 }
 
@@ -2328,61 +2607,105 @@ git commit -m "feat(desktop): .app 빌드 파이프라인과 번들 위생 검�
 - Consumes: Task 1~12 전부
 - Produces: 판정이 채워진 결과 문서.
 
-- [ ] **Step 1: 선행 조건을 갖춘다**
+- [ ] **Step 1: 기준선이 유효한지 먼저 확인한다**
+
+Task 1 Step 11이 뜬 기준선을 쓴다. 여기서 새로 뜨지 않는다 — 그 사이 Task 10과 Task 12가 앱을 실행했으므로 지금 뜬 스냅샷은 아무것도 증명하지 않는다.
+
+```bash
+EV="$HOME/.cache/damwha-p1-evidence"
+cat "$EV/baseline-taken-at.txt"
+wc -l < "$EV/storage-before.txt"
+```
+
+Expected: 네 파일이 있고 시각이 Task 1 시점이다. 없으면 **P1-C14를 판정할 수 없다** — 결과 문서에 미판정으로 적고, 다음 Phase에서 기준선부터 다시 뜬다. 없는 것을 통과로 적지 않는다.
+
+- [ ] **Step 2: worker의 STORAGE_ROOT를 앱 값에 맞춘다**
+
+원래 값을 되돌릴 수 있게 보관하고, 기존 큐를 먼저 비운다. **`be/worker/.env`는 gitignore 대상이라 커밋되지 않으므로 이 백업이 유일한 복구 수단이다.**
+
+```bash
+EV="$HOME/.cache/damwha-p1-evidence"
+cp be/worker/.env "$EV/worker.env.backup"
+grep STORAGE_ROOT be/worker/.env
+```
+
+먼저 **worker를 멈춘다.** 그 뒤 남은 작업이 없는지 본다.
+
+```bash
+psql postgres://postgres:postgres@localhost:5432/damwha -At -c \
+  "select status, count(*) from job where status in ('queued','running') group by status"
+```
+
+Expected: 출력 없음. 남아 있으면 그 작업들은 기존 `be/storage`의 파일을 가리키므로, 경로를 바꾼 worker가 파일을 못 찾아 `failed`로 기록한다 — 기존 회의의 상태를 망친다. **비기 전까지 진행하지 않는다.** 원래 경로의 worker로 큐를 비우고 다시 온다.
+
+큐가 비었으면 경로를 바꾼다.
+
+```bash
+python3 - <<'PY'
+import pathlib, re, os
+p = pathlib.Path("be/worker/.env")
+target = str(pathlib.Path.home() / "Library/Application Support/Damwha/storage")
+s = p.read_text()
+s2 = re.sub(r"^STORAGE_ROOT=.*$", f"STORAGE_ROOT={target}", s, count=1, flags=re.M)
+assert s2 != s, "STORAGE_ROOT 줄을 찾지 못했다"
+p.write_text(s2)
+print(f"STORAGE_ROOT -> {target}")
+PY
+mkdir -p "$HOME/Library/Application Support/Damwha/storage"
+```
+
+- [ ] **Step 3: 남은 선행 조건을 갖춘다**
 
 ```bash
 pnpm db:up
-# be/worker/.env 의 STORAGE_ROOT 를 앱과 같은 절대 경로로 맞춘다
-grep STORAGE_ROOT be/worker/.env
 pnpm be:migrate
 ```
 
-`be/worker/.env`가 아직 `../storage`면 아래로 바꾼다. **이 파일은 gitignore 대상이라 커밋되지 않는다.**
+그 뒤 `pnpm worker`, `pnpm embed`를 각 터미널에서 띄운다. worker 로그의 첫 줄에 새 `STORAGE_ROOT`가 반영됐는지 본다.
 
-```
-STORAGE_ROOT=/Users/<사용자>/Library/Application Support/Damwha/storage
-```
-
-그 뒤 `pnpm worker`, `pnpm embed`를 각 터미널에서 띄운다.
-
-- [ ] **Step 2: P1-C14의 사전 스냅샷을 뜬다**
-
-앱을 아직 실행하지 않은 상태에서 한다. **이 단계를 건너뛰면 P1-C14를 판정할 수 없다.**
-
-```bash
-mkdir -p /tmp/p1-evidence
-cd be/storage && find . -type f -exec shasum -a 256 {} \; | sort > /tmp/p1-evidence/storage-before.txt; cd -
-wc -l /tmp/p1-evidence/storage-before.txt
-psql postgres://postgres:postgres@localhost:5432/damwha -At -c \
-  "select 'meeting', count(*) from meeting union all select 'utterance', count(*) from utterance union all select '_migrations', count(*) from _migrations" \
-  > /tmp/p1-evidence/rows-before.txt
-docker compose -f be/docker-compose.yml config | grep -E "^name:|pgdata" > /tmp/p1-evidence/compose-before.txt
-cat /tmp/p1-evidence/rows-before.txt /tmp/p1-evidence/compose-before.txt
-```
-
-- [ ] **Step 3: 실사용 기준 4건을 수행한다 (P1-C1 ~ P1-C4)**
+- [ ] **Step 4: 실사용 기준 4건을 수행한다 (P1-C1 ~ P1-C4)**
 
 ```bash
 pnpm desktop:build
-open desktop/out/mac-arm64/Damwha.app
+# .app 내부 쓰기 판정을 위한 실행 전 manifest (P1-C12)
+EV="$HOME/.cache/damwha-p1-evidence"
+APP="desktop/out/mac-arm64/Damwha.app"
+find "$APP" -type f -exec shasum -a 256 {} \; | sort > "$EV/app-before.txt"
+wc -l < "$EV/app-before.txt"
+open "$APP"
 ```
 
-순서대로 한다. 각 단계에서 화면을 캡처해 `/tmp/p1-evidence/`에 둔다.
+순서대로 한다. 각 단계에서 화면을 캡처해 `$EV/`에 둔다.
 
 1. **P1-C1** — 터미널 명령 없이 창이 담화 화면까지 간다.
 2. **P1-C2** — 오디오 파일로 회의를 만들고 처리가 끝날 때까지 둔다. 전사 결과가 화면에 뜬다.
 3. **P1-C3** — 라이브 녹음을 시작한다. macOS 마이크 권한 대화상자가 뜨고 문구가 `NSMicrophoneUsageDescription`의 것이다. 허가 후 녹음·중단하고 결과를 본다.
 4. **P1-C4** — 검색어를 넣어 키워드·의미 결과가 섞여 나오는지 본다.
 
-- [ ] **Step 4: 프로세스 소유권 2건을 수행한다 (P1-C5, P1-C6)**
+- [ ] **Step 5: 경로·바인드 위생을 앱이 떠 있는 동안 확인한다 (P1-C9, P1-C12 일부)**
+
+Step 4의 앱이 아직 떠 있는 상태에서 한다.
 
 ```bash
-# 앱이 떠 있는 상태에서
-pgrep -fl "dist/main.js" > /tmp/p1-evidence/procs-running.txt
-pgrep -fl "damwha_worker\|damwha-embed" >> /tmp/p1-evidence/procs-running.txt
-# 두 번째 인스턴스
-open desktop/out/mac-arm64/Damwha.app
-# 창이 하나인지, API 프로세스가 하나인지 확인
+APP_PID=$(pgrep -f "dist/main.js" | head -1)
+echo "api pid: $APP_PID"
+lsof -nP -iTCP -sTCP:LISTEN -a -p "$APP_PID"
+ps eww -o command= -p "$APP_PID" | tr ' ' '\n' | grep -E "^(STORAGE_ROOT|DATABASE_URL|HOST)="
+LAN=$(ipconfig getifaddr en0)
+APP_PORT=$(lsof -nP -iTCP -sTCP:LISTEN -a -p "$APP_PID" -Fn | sed -n 's/.*:\([0-9]*\)$/\1/p' | head -1)
+curl -sS -m 3 "http://$LAN:$APP_PORT/api/health" && echo "실패: LAN에서 응답했다" || echo "LAN 접속 거부 — 정상"
+```
+
+Expected: LISTEN 주소가 `127.0.0.1:<port>`다 — `*:<port>`면 P1-C9 실패. 주입된 세 값이 절대 경로·절대 주소이고 `HOST=127.0.0.1`이다. LAN 주소로는 거부된다.
+
+- [ ] **Step 6: 프로세스 소유권 2건을 수행한다 (P1-C5, P1-C6)**
+
+앱이 떠 있는 상태에서 두 번째 인스턴스를 연다.
+
+```bash
+pgrep -fl "dist/main.js" > "$EV/procs-running.txt"
+pgrep -fl "damwha_worker|damwha-embed" >> "$EV/procs-running.txt"
+open "$APP"
 pgrep -c -f "dist/main.js"
 ```
 
@@ -2392,20 +2715,43 @@ Expected: 창 하나, `dist/main.js` 프로세스 1개.
 
 ```bash
 pgrep -fl "dist/main.js" || echo "API 잔존 없음"
-pgrep -fl "damwha_worker\|damwha-embed" || echo "경고: worker/embed가 죽었다 — P1-C5 실패"
+pgrep -fl "damwha_worker|damwha-embed" || echo "경고: worker/embed가 죽었다 — P1-C5 실패"
 ```
 
-- [ ] **Step 5: 실패 표시 2건을 수행한다 (P1-C7, P1-C8)**
+- [ ] **Step 7: 번들 위생을 확인한다 (P1-C11)**
 
 ```bash
+pnpm --filter damwha-desktop exec node scripts/check-bundle.mjs
+```
+
+Expected: 전 항목 PASS, exit 0.
+
+- [ ] **Step 8: DB 미기동 실패 표시를 확인한다 (P1-C7)**
+
+앱이 완전히 닫힌 상태에서 시작한다.
+
+```bash
+pgrep -f "dist/main.js" && echo "앱이 아직 떠 있다 — 먼저 닫는다"
 pnpm db:down
-open desktop/out/mac-arm64/Damwha.app
+open "$APP"
 ```
 
-Expected: 화면이 DB 연결 실패를 말하고 `database unreachable at …` 원문이 보인다. 로그 경로가 보인다. 앱을 닫고 `pnpm db:up` 후 다시 열면 정상 화면.
+Expected: 화면이 DB 연결 실패를 말하고 `database unreachable at postgres://postgres:***@localhost:5432/damwha` 원문과 로그 경로가 보인다.
+
+DB를 올려 회복까지 확인한다.
 
 ```bash
-# P1-C8 — 다른 기동 실패
+pnpm db:up
+```
+
+Expected: 자동 재시도 또는 메뉴 재시도로 담화 화면에 도달한다. 확인 후 **앱을 닫는다.**
+
+- [ ] **Step 9: 다른 기동 실패 표시를 확인한다 (P1-C8)**
+
+**앱이 닫혀 있어야 한다.** 떠 있으면 single-instance lock 때문에 `open`이 기존 창만 앞으로 보내고 새 자식이 뜨지 않아 바꾼 설정을 읽지 않는다.
+
+```bash
+pgrep -f "dist/main.js" && echo "먼저 앱을 닫는다" || echo "앱 닫힘 확인"
 python3 - <<'PY'
 import json, pathlib
 p = pathlib.Path.home() / "Library/Application Support/Damwha/config.json"
@@ -2413,10 +2759,12 @@ c = json.loads(p.read_text())
 c["SUMMARY_LLM_MODEL"] = "not-in-the-catalog"
 p.write_text(json.dumps(c, indent=2) + "\n")
 PY
-open desktop/out/mac-arm64/Damwha.app
+open "$APP"
 ```
 
-Expected: 기동 실패 화면. `detail`이 zod 검증 실패를 말하며 **P1-C7의 DB 문안과 다르다.** 확인 후 그 키를 지운다.
+Expected: 기동 실패 화면. `detail`이 zod 검증 실패를 말하며 **P1-C7의 DB 문안과 다르다.**
+
+앱을 닫고 키를 지운 뒤 정상 기동까지 확인한다.
 
 ```bash
 python3 - <<'PY'
@@ -2426,45 +2774,56 @@ c = json.loads(p.read_text())
 c.pop("SUMMARY_LLM_MODEL", None)
 p.write_text(json.dumps(c, indent=2) + "\n")
 PY
+open "$APP"
 ```
 
-- [ ] **Step 6: 경계 4건을 수행한다 (P1-C9 ~ P1-C12)**
+Expected: 담화 화면. 확인 후 **앱을 닫는다.**
+
+- [ ] **Step 10: 포트 폴백을 확인한다 (P1-C10)**
+
+순서가 중요하다. **앱을 먼저 완전히 닫고**, 외부 API가 3000을 잡은 것을 확인한 뒤 앱을 연다. 앱이 이미 3000을 쥐고 있으면 외부 API가 실패해 검증 자체가 성립하지 않는다.
 
 ```bash
-# P1-C9 — 로컬 바인드
-open desktop/out/mac-arm64/Damwha.app
-PORT=$(lsof -nP -iTCP -sTCP:LISTEN | grep -E "Damwha|dist/main" | head -1)
-echo "$PORT"   # 127.0.0.1:<port> 여야 한다. *:<port>면 실패
-LAN=$(ipconfig getifaddr en0)
-curl -sS -m 3 "http://$LAN:3000/api/health" && echo "실패: LAN에서 응답했다" || echo "LAN 접속 거부 — 정상"
+pgrep -f "dist/main.js" && echo "먼저 앱을 닫는다" || echo "앱 닫힘 확인"
+# 스펙 P1-C10이 말하는 점유 주체는 pnpm dev다
+pnpm dev > "$EV/pnpm-dev.log" 2>&1 &
+DEV_PGID=$!
+sleep 15
+curl -s -o /dev/null -w 'external api on 3000: %{http_code}\n' http://127.0.0.1:3000/api/health
+EXTERNAL_PID=$(lsof -nP -iTCP:3000 -sTCP:LISTEN -t | head -1)
+echo "external pid: $EXTERNAL_PID"
+open "$APP"
+sleep 20
+APP_PID=$(pgrep -f "dist/main.js" | grep -v "^$EXTERNAL_PID$" | head -1)
+lsof -nP -iTCP -sTCP:LISTEN -a -p "$APP_PID"
 ```
 
+Expected: 앱의 API가 3000이 **아닌** 포트에서 LISTEN한다. 화면이 정상 동작한다. 마이크 권한을 **다시 묻지 않는다**.
+
+앱을 닫고 외부 것만 정리한다.
+
 ```bash
-# P1-C10 — 포트 폴백
-pnpm be:dev &     # 3000 점유
-open desktop/out/mac-arm64/Damwha.app
-lsof -nP -iTCP -sTCP:LISTEN | grep -E "Damwha|dist/main"
+pgrep -f "dist/main.js" | grep -v "^$EXTERNAL_PID$" || echo "앱 API 잔존 없음"
+curl -s -o /dev/null -w 'external api still up: %{http_code}\n' http://127.0.0.1:3000/api/health
+kill -- -"$DEV_PGID" 2>/dev/null || kill "$DEV_PGID"
 ```
 
-Expected: 앱이 3000이 아닌 포트다. 마이크 권한을 다시 묻지 않는다. 앱을 닫은 뒤 손으로 띄운 `pnpm be:dev`가 살아 있다.
+Expected: 앱 API 잔존 없음. 외부 API는 앱 종료 후에도 200 — 앱이 남의 프로세스를 죽이지 않았다는 뜻이다.
+
+- [ ] **Step 11: `.app` 내부 쓰기를 확인한다 (P1-C12 나머지)**
+
+Step 4의 `app-before.txt`와 비교한다. mtime 비교는 빌드 시점에 이미 새로운 파일을 오탐하고 오래된 파일의 수정은 놓친다.
 
 ```bash
-# P1-C11 — 번들 위생
-pnpm --filter damwha-desktop exec node scripts/check-bundle.mjs
+find "$APP" -type f -exec shasum -a 256 {} \; | sort > "$EV/app-after.txt"
+diff "$EV/app-before.txt" "$EV/app-after.txt" && echo ".app 내부 무변경 — 정상"
 ```
 
-```bash
-# P1-C12 — 경로 위생
-find desktop/out/mac-arm64/Damwha.app -newer desktop/out/mac-arm64/Damwha.app/Contents/Info.plist -type f | head
-ps eww -o command $(pgrep -f "dist/main.js" | head -1) | tr ' ' '\n' | grep -E "STORAGE_ROOT|DATABASE_URL|HOST"
-```
+Expected: diff가 비어 있다.
 
-Expected: `.app` 안에 새 파일이 없다. 주입값이 절대 경로·절대 주소이고 `HOST=127.0.0.1`이다.
-
-- [ ] **Step 7: 회귀와 데이터 보존 2건을 수행한다 (P1-C13, P1-C14)**
+- [ ] **Step 12: 회귀를 확인한다 (P1-C13)**
 
 ```bash
-# P1-C13
 pnpm install
 pnpm build
 pnpm test
@@ -2473,34 +2832,75 @@ pnpm dev        # Electron 창이 뜨지 않는지 확인 후 중단
 docker build -f deploy/api.Dockerfile -t damwha-api:p1-check .
 ```
 
+Expected: 넷 다 통과. `pnpm dev`가 Electron 창을 띄우지 않는다. 이미지 빌드 성공.
+
+- [ ] **Step 13: 데이터 보존을 확인한다 (P1-C14)**
+
+세 항목의 판정 규칙이 서로 다르다. `be/storage`와 compose는 **완전 동일**, `_migrations`는 **동일**, `meeting`·`utterance`는 **줄지 않음**이다. 새 업로드와 녹음을 했으니 뒤의 둘은 늘어난다 — 그것을 `diff`로 보면 정상 동작이 실패로 잡힌다.
+
 ```bash
-# P1-C14 — 사후 스냅샷
-cd be/storage && find . -type f -exec shasum -a 256 {} \; | sort > /tmp/p1-evidence/storage-after.txt; cd -
-diff /tmp/p1-evidence/storage-before.txt /tmp/p1-evidence/storage-after.txt && echo "be/storage 무변경 — 정상"
-psql postgres://postgres:postgres@localhost:5432/damwha -At -c \
+EV="$HOME/.cache/damwha-p1-evidence"
+( cd be/storage && find . -type f -exec shasum -a 256 {} \; | sort ) > "$EV/storage-after.txt"
+diff "$EV/storage-before.txt" "$EV/storage-after.txt" && echo "PASS be/storage 무변경" || echo "FAIL be/storage가 바뀌었다"
+
+docker compose -f be/docker-compose.yml config | grep -E "^name:|pgdata" | sort > "$EV/compose-after.txt"
+diff "$EV/compose-before.txt" "$EV/compose-after.txt" && echo "PASS compose 무변경" || echo "FAIL compose가 바뀌었다"
+
+psql postgres://postgres:postgres@localhost:5432/damwha -At -F, -c \
   "select 'meeting', count(*) from meeting union all select 'utterance', count(*) from utterance union all select '_migrations', count(*) from _migrations" \
-  > /tmp/p1-evidence/rows-after.txt
-diff /tmp/p1-evidence/rows-before.txt /tmp/p1-evidence/rows-after.txt
-docker compose -f be/docker-compose.yml config | grep -E "^name:|pgdata" > /tmp/p1-evidence/compose-after.txt
-diff /tmp/p1-evidence/compose-before.txt /tmp/p1-evidence/compose-after.txt && echo "compose 무변경 — 정상"
+  | sort > "$EV/rows-after.txt"
+python3 - <<'PY'
+import os, pathlib
+ev = pathlib.Path(os.environ["HOME"]) / ".cache/damwha-p1-evidence"
+def rows(name):
+    return dict(
+        (line.split(",")[0], int(line.split(",")[1]))
+        for line in (ev / name).read_text().split("\n") if line.strip()
+    )
+before, after = rows("rows-before.txt"), rows("rows-after.txt")
+ok = True
+if before["_migrations"] != after["_migrations"]:
+    print(f"FAIL _migrations {before['_migrations']} -> {after['_migrations']} (앱이 마이그레이션을 돌렸다)"); ok = False
+else:
+    print(f"PASS _migrations 동일 ({after['_migrations']})")
+for key in ("meeting", "utterance"):
+    if after[key] < before[key]:
+        print(f"FAIL {key} {before[key]} -> {after[key]} (기존 행이 사라졌다)"); ok = False
+    else:
+        print(f"PASS {key} {before[key]} -> {after[key]} (줄지 않음)")
+raise SystemExit(0 if ok else 1)
+PY
 ```
 
-Expected: `be/storage`가 한 건도 다르지 않다. `_migrations` 행 수가 같다. `meeting`·`utterance`는 늘기만 했다(줄면 실패). compose `name`과 볼륨이 같다.
+Expected: 네 판정 모두 PASS. `be/storage`와 compose는 완전 동일, `_migrations` 동일, `meeting`·`utterance`는 늘거나 같다.
 
-- [ ] **Step 8: 결과 문서를 채운다**
+- [ ] **Step 14: worker의 STORAGE_ROOT를 되돌릴지 결정한다**
+
+Phase 2 이후 앱이 worker를 직접 띄우면 이 값은 앱이 주입한다. 그때까지 웹 흐름(`pnpm dev` + `pnpm worker`)으로 기존 회의를 처리하려면 원래 값이 맞다.
+
+```bash
+EV="$HOME/.cache/damwha-p1-evidence"
+diff "$EV/worker.env.backup" be/worker/.env
+# 되돌리려면
+# cp "$EV/worker.env.backup" be/worker/.env
+```
+
+되돌렸는지 되돌리지 않았는지를 **결과 문서에 적는다.** 되돌리지 않으면 웹 흐름에서 기존 회의의 재처리가 파일을 못 찾는다. 되돌리면 데스크톱 앱의 새 업로드가 처리되지 않는다. 둘 다 Phase 5까지의 알려진 한계다.
+
+- [ ] **Step 15: 결과 문서를 채운다**
 
 `docs/superpowers/reports/2026-09-11-electron-phase-1-app-foundation-results.md`에 쓴다.
 
 - "단계별 실행·리뷰" — Task 1~12 각각의 커밋 범위, 검토자, 지적, 조치, 통과 여부.
 - "최종 검증" — P1-C1 ~ P1-C14의 판정 표. 각 행에 실행한 명령과 관찰된 값. 통과하지 못한 기준은 **통과로 적지 않는다.**
-- 실측으로 확정된 값 — `READY_TIMEOUT_MS`·`READY_INTERVAL_MS`의 실제 콜드 스타트 소요, `RETRY_DELAYS_MS`, `MAX_PORT_ATTEMPTS`, 쓴 `pnpm deploy` 형태, 선택된 자식 기동 수단, `.app` 용량, Gatekeeper 조치 필요 여부.
-- "남은 제약·후속 Phase 인계" — 기존 회의 오디오 404(Phase 5), CORS와 API 인증(Phase 6), `be/worker/.env`를 손으로 맞춰야 하는 것(Phase 2·4).
+- 실측으로 확정된 값 — `READY_TIMEOUT_MS`·`READY_INTERVAL_MS`·`PROBE_TIMEOUT_MS`의 실제 콜드 스타트 소요, `RETRY_DELAYS_MS`, `MAX_PORT_ATTEMPTS`, 쓴 `pnpm deploy` 형태, 선택된 자식 기동 수단, `.app` 용량, Gatekeeper 조치 필요 여부.
+- "남은 제약·후속 Phase 인계" — 기존 회의 오디오 404(Phase 5), CORS와 API 인증(Phase 6), `be/worker/.env`를 손으로 맞춰야 하는 것과 Step 14의 되돌림 결정(Phase 2·4·5), ready 이후 사망 시 자동 재시작 부재(Phase 2).
 
-- [ ] **Step 9: 로드맵 상태를 갱신한다**
+- [ ] **Step 16: 로드맵 상태를 갱신한다**
 
 `docs/electron-migration-roadmap.md`의 Phase 1 "상태" 문단을 실제 결과로 바꾼다. 완료 기준 3개에 대한 충족·부분·미충족을 표로 적고, 부분이면 무엇이 남았는지 쓴다.
 
-- [ ] **Step 10: 커밋**
+- [ ] **Step 17: 커밋**
 
 ```bash
 git add docs/superpowers/reports/2026-09-11-electron-phase-1-app-foundation-results.md docs/electron-migration-roadmap.md
@@ -2510,12 +2910,16 @@ git commit -m "docs: Electron Phase 1 통합 검증 결과를 기록한다"
 **Verify:**
 - P1-C1 ~ P1-C14 열네 행이 모두 판정과 증거를 갖는다.
 - `be/storage` diff가 비어 있다.
+- `_migrations` 행 수가 같고 `meeting`·`utterance`가 줄지 않았다.
+- `.app` 실행 전후 manifest가 동일하다.
+- P1-C10에서 외부 API가 앱 종료 후에도 살아 있었다.
 - `pnpm build`·`pnpm test`·`pnpm lint`·Docker 이미지 빌드가 통과한다.
 
 **Review:**
-- 실행하지 않은 검증을 통과로 적지 않았는가.
+- 실행하지 않은 검증을 통과로 적지 않았는가. 기준선이 없어 판정 불가인 항목을 통과로 적지 않았는가.
 - 실측치가 코드의 상수와 일치하는가.
 - 로드맵 상태가 실제 판정과 어긋나지 않는가.
+- `be/worker/.env`의 최종 상태와 그 선택의 결과가 문서에 적혔는가.
 
 ---
 
@@ -2535,8 +2939,24 @@ git commit -m "docs: Electron Phase 1 통합 검증 결과를 기록한다"
 | P1-C10 포트 폴백 | 5, 10, 11 | 13 Step 6 |
 | P1-C11 번들 위생 | 1, 12 | 12 Step 4, 13 Step 6 |
 | P1-C12 경로 위생 | 4, 10, 12 | 13 Step 6 |
-| P1-C13 웹 흐름 회귀 없음 | 1, 3 | 1 Step 10, 13 Step 7 |
-| P1-C14 기존 데이터 보존 | 4 (STORAGE_ROOT 분리) | 13 Step 2, Step 7 |
+| P1-C13 웹 흐름 회귀 없음 | 1, 3 | 1 Step 10, 13 Step 12 |
+| P1-C14 기존 데이터 보존 | 4 (STORAGE_ROOT 분리) | **1 Step 11 (기준선)**, 13 Step 1, Step 13 |
+
+### 완료 기준이 아닌 스펙 요구의 대응
+
+스펙 §8의 실패 동작 표는 완료 기준 식별자를 갖지 않지만 구현 대상이다.
+
+| 스펙 §8 항목 | 구현 Task | 검증 |
+| --- | --- | --- |
+| `config.json`이 깨진 JSON → 기본값으로 진행, 덮어쓰지 않음 | 4 | 4 Step 1 테스트 |
+| 고정 포트 점유 → 폴백 | 5, 10 | 13 Step 10 |
+| 빈 포트도 못 잡음 → 기동 실패 화면 | 5, 10 | 10 Review (`MAX_PORT_ATTEMPTS` 상한) |
+| API 유예 시간 내 미준비 → 실패 화면 + 자식 정리 | 6, 10 | 6 Step 1 테스트, 10 Step 3 |
+| `database unreachable`로 exit 1 → 원문 표시 | 9, 10 | 13 Step 8 |
+| 그 밖의 exit 1 → 종료 코드와 stderr 표시 | 9, 10 | 13 Step 9 |
+| 부팅 뒤 DB 끊김 → 503 원인 화면 | 6, 9 | 6 Step 1 테스트 (`db-unreachable`) |
+| **실행 중 API 사망 → 화면에 알림** | 8 (`onExit`), 10 (`watchForDeath`) | 10 Step 5 |
+| 마이크 권한 거부 → 녹음만 막힘 | 9 | 13 Step 4 (P1-C3) |
 
 ## 스펙 위험과 Task 대응
 
@@ -2547,9 +2967,23 @@ git commit -m "docs: Electron Phase 1 통합 검증 결과를 기록한다"
 | R1-3 `nest build`가 `dist/public`을 지운다 | 12 (순서 고정) |
 | R1-4 상대 경로가 번들 내부를 가리킨다 | 4, 13 Step 6 |
 | R1-5 electron-builder가 pnpm 레이아웃에서 실패한다 | 1 (`dependencies` 비움), 12 |
-| R1-6 폴백 후 마이크 권한 재요청 | 9, 13 Step 6 |
-| R1-7 `STORAGE_ROOT` 불일치로 조용한 실패 | 13 Step 1 (선행 조건) |
-| R1-8 `sandbox: true`가 `getUserMedia`를 막는다 | 13 Step 3 |
+| R1-6 폴백 후 마이크 권한 재요청 | 9, 13 Step 10 |
+| R1-7 `STORAGE_ROOT` 불일치로 조용한 실패 | 13 Step 2 (선행 조건 + 큐 확인 + 백업) |
+| R1-8 `sandbox: true`가 `getUserMedia`를 막는다 | 13 Step 4 |
 | R1-9 `pnpm deploy`가 Experimental | 2, 12 |
 | R1-10 `EADDRINUSE`를 못 가른다 | 5, 10 |
-| R1-11 외부 API를 자기 것으로 오인 | 10, 13 Step 6 |
+| R1-11 외부 API를 자기 것으로 오인 | 10, 13 Step 10 |
+
+계획 검증에서 추가로 닫은 것 — 스펙의 위험 목록에는 없지만 계획이 만들어 낸 결함이다.
+
+| 결함 | 닫는 Task |
+| --- | --- |
+| probe가 끝나지 않으면 준비 판정 루프가 타임아웃에 도달하지 못한다 | 6 (`PROBE_TIMEOUT_MS` + race, 전용 테스트) |
+| `detached` 없이 `process.kill(-pid)`를 불러 손자 API가 남는다 | 8 (`detached: true` 고정) |
+| 겹친 `start()`가 서로의 자식을 오관찰한다 | 10 (`generation` + 호출 직렬화 + local handle) |
+| 종료 escalation이 무한 대기할 수 있다 | 8 (`escalate`의 2차 상한) |
+| `grep` 오류를 번들 위생 통과로 위장한다 | 12 (`spawnSync` + status 검사) |
+| 심볼릭 링크 탈출 판정이 경로 접두사 오판을 한다 | 12 (`path.relative`) |
+| P1-C14 기준선이 앱 실행 뒤에 찍힌다 | 1 Step 11 (기준선을 앱 실행 전으로) |
+| `.app` 쓰기 판정이 mtime이라 오탐·누락한다 | 13 Step 4·11 (manifest 비교) |
+| `be/worker/.env` 변경이 기존 큐를 실패로 만든다 | 13 Step 2 (큐 확인 + 백업 + 되돌림 결정) |
