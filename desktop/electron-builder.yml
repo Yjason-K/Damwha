@@ -1,0 +1,26 @@
+# Phase 1은 서명 없는 .app까지만 만든다. dmg·서명·공증은 Phase 6 (스펙 §4.2).
+appId: kr.damwha.app
+productName: Damwha
+directories:
+  output: out
+  buildResources: build-resources
+# asar 안에는 컴파일된 main과 셸 화면만 들어간다. desktop에는 dependencies가 없으므로
+# electron-builder가 훑을 prod 의존성이 없다 (스펙 P1-C11).
+files:
+  - dist/**/*
+  - shell/**/*
+  - package.json
+# API 트리는 pnpm deploy 산출물을 통째로 복사한다. electron-builder는 내용을 해석하지 않는다.
+# from은 build/api가 아니라 build다 (실측으로 확정) — app-builder-lib의 파일 필터가
+# `from` 바로 아래 자식이 정확히 "node_modules"면 그 디렉터리를 통째로 건너뛴다
+# (asar로 패키징되는 메인 앱 자신의 의존성만 염두에 둔 하드코딩이라, extraResources에도
+# 무차별 적용된다). build/에는 api/ 하나만 있으므로 한 단계 위에서 복사하면
+# "api/node_modules"가 되어 그 규칙을 피하면서도 결과는 똑같이 Resources/api다.
+extraResources:
+  - from: build
+mac:
+  target: dir
+  category: public.app-category.productivity
+  extendInfo:
+    # 없으면 macOS가 마이크 요청 시 앱을 죽인다 (스펙 §6.6).
+    NSMicrophoneUsageDescription: 담화가 회의를 녹음하려면 마이크를 사용해요. 녹음과 처리는 이 맥 안에서만 일어나요.
