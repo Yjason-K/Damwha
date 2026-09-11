@@ -7,8 +7,8 @@
 번들에서 떴고, 31분 실오디오 전체 파이프라인과 하이브리드 검색이 그 위에서 돌았다.
 미결은 **배포 조건**(모델 라이선스·게이팅, 최소 macOS 버전, 공증)이며 Phase 4·6에서 마주친다.
 결과: [Phase 0 검증 결과](superpowers/reports/2026-09-09-electron-phase-0-packaging-validation-results.md).
-**Phase 1은 2026-09-11에 구현·통합 검증까지 마쳤다**(완료 기준 3개 중 2개 충족, 1개 부분 충족 —
-아래 Phase 1 절 참조). Phase 2~6의 상세 구현 스펙·계획과 구현은 미착수.
+**Phase 1은 2026-09-11에 구현·통합 검증·수정 3회차까지 마쳤다**(완료 기준 3개 전부 충족,
+스펙 기준 14건 전부 충족 — 아래 Phase 1 절 참조). Phase 2~6의 상세 구현 스펙·계획과 구현은 미착수.
 
 ## 목표와 전제
 
@@ -97,10 +97,12 @@ Task 9~11 미착수. 미결 항목은 결과 문서의 "남은 제약·후속 Ph
 - DB와 worker·embed는 기존 환경에서 실행해 사용.
 - 기존 웹 개발·실행 흐름과 충돌하지 않음.
 
-**상태 (2026-09-11): 구현 12개 Task 완료, 통합 검증 완료. 완료 기준 3개 중 2개 충족·1개 부분 충족.**
+**상태 (2026-09-11): 구현 12개 Task 완료, 통합 검증 완료, 수정 3회차 완료. 완료 기준 3개 전부 충족.**
 앱 아이콘으로 실행해 업로드·녹음·검색이 되고, 기존 웹 흐름은 회귀 없이 공존하며, 기존
-`be/storage`와 `damwha_pgdata`는 한 바이트도 바뀌지 않았다. 스펙 완료 기준 14건 기준으로는
-**12건 충족, 2건 부분 미충족**이다. 스펙은
+`be/storage`와 `damwha_pgdata`는 한 바이트도 바뀌지 않았다. 스펙 완료 기준 14건 기준으로도
+**14건 전부 충족**이다. 통합 검증 시점에는 2건이 부분 미충족이었으나(P1-C8 실패 원인 문안,
+P1-C10 외부 API 오인) 같은 브랜치의 `d8f2af1`·`8dcd08e`가 둘 다 닫았고, 최종 리뷰의
+`ac6507a`가 기동·종료 경로의 예외 4건을 더 막았다. 스펙은
 [2026-09-11-electron-phase-1-app-foundation-design.md](superpowers/specs/2026-09-11-electron-phase-1-app-foundation-design.md),
 브랜치는 `feat/electron-migration-phase-1-app-foundation`, 판정과 증거는
 [Phase 1 결과](superpowers/reports/2026-09-11-electron-phase-1-app-foundation-results.md)에 있다.
@@ -109,11 +111,14 @@ Task 9~11 미착수. 미결 항목은 결과 문서의 "남은 제약·후속 Ph
 | --- | --- | --- |
 | 앱 아이콘으로 실행하여 업로드·녹음·검색 가능 | **충족** | 사용자가 패키징된 `.app`을 Finder에서 실행해 P1-C1~C4를 전부 확인했다. 마이크 대화상자는 `NSMicrophoneUsageDescription` 문구로 떴고 녹음이 완주했다 |
 | DB와 worker·embed는 기존 환경에서 실행해 사용 | **충족** | 앱은 자기가 만든 API 자식만 정리하고 외부 `worker`·`embed`·Postgres는 종료 후에도 살아 있었다(P1-C5). 단 **`be/worker/.env`의 `STORAGE_ROOT`를 사람이 앱 값에 맞춰야 한다** — 검증 후 웹 흐름 기본값 `../storage`로 되돌렸으므로, 지금 상태에서 앱으로 올린 새 파일은 worker가 찾지 못한다. Phase 2가 worker를 앱이 띄우면 사라지는 제약이다 |
-| 기존 웹 개발·실행 흐름과 충돌하지 않음 | **부분 충족** | `pnpm install`·`build`·`test`(43 suites / 468 tests)·`lint`·`docker build`가 모두 통과하고 `pnpm dev`는 Electron을 띄우지 않는다(P1-C13). `be/storage`·compose·`_migrations`도 불변이다(P1-C14). **남은 것:** 같은 포트의 외부 API가 `/api/health`에 200을 주면 앱이 그것을 자기 자식의 준비로 오인해 포트 폴백에 실패한다(P1-C10, R1-11). 스펙 문언대로 `pnpm dev`가 점유한 경우에는 `0.0.0.0`과 `127.0.0.1`이 겹쳐 bind돼 충돌 자체가 나지 않고 양쪽 다 정상 동작했다 |
+| 기존 웹 개발·실행 흐름과 충돌하지 않음 | **충족** | `pnpm install`·`build`·`test`(be 43 suites / 468 tests, fe 62 파일 / 566 tests, desktop 5 파일 / 46 tests)·`lint`·`docker build`가 모두 통과하고 `pnpm dev`는 Electron을 띄우지 않는다(P1-C13). `be/storage`·compose·`_migrations`도 불변이다(P1-C14). 같은 포트의 외부 API가 `/api/health`에 200을 줘도 앱은 그것을 자기 자식으로 오인하지 않는다 — 스폰 전 TCP 사전 점검과 `lsof`/`ps` 소유권 증명 두 기구로 판정한다(P1-C10, R1-11 해소). **동작 변경:** 그 결과 `pnpm dev`가 3000을 쓰는 동안 앱은 겹쳐 bind하지 않고 **항상 다른 포트로 옮긴다.** 외부 API는 손대지 않고 앱 종료 후에도 계속 응답한다 |
 
-부분 충족 2건(P1-C8 기동 실패 문안, P1-C10 외부 API 오인)은 코드 위치와 재현 절차가 결과
-문서에 특정돼 있으며 **Phase 2**가 닫는다. 이 Phase가 새로 확정한 사실 하나를 Phase 6이
-받는다 — **ad-hoc 서명은 TCC 권한을 바이너리 cdhash에 묶으므로 재빌드마다 마이크 권한이
+**Phase 2로 넘기는 완료 기준은 없다.** 결과 문서에 남긴 것은 기준 미충족이 아니라 품질·검증
+범위의 한계 셋이다 — (1) 실패 화면이 한 줄만 고르는 휴리스틱이라 zod 같은 여러 줄 원인은
+`startup failed: [`까지만 보인다(원인 문장은 로그에 있다), (2) P1-C10 재측정이 시험한 것은
+사전 점검이지 소유권 확인이 아니며 `unverified-owner` 화면은 종단간 미발화·코드 검토로만
+확인, (3) 포트 폴백 후 macOS TCC 대화상자 재요청 여부(R1-6)는 GUI 확인이 필요해 미판정.
+이 Phase가 새로 확정한 사실 하나를 Phase 6이 받는다 — **ad-hoc 서명은 TCC 권한을 바이너리 cdhash에 묶으므로 재빌드마다 마이크 권한이
 무효가 된다.** Developer ID 서명은 배포 편의가 아니라 업데이트를 내보내기 위한 선행 조건이다.
 
 ### Phase 2. 서비스 실행 통합

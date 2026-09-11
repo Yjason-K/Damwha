@@ -6,9 +6,12 @@
 스펙: [2026-09-11-electron-phase-1-app-foundation-design.md](../specs/2026-09-11-electron-phase-1-app-foundation-design.md)
 계획: [2026-09-11-electron-phase-1-app-foundation.md](../plans/2026-09-11-electron-phase-1-app-foundation.md)
 
-**상태 (2026-09-11): 구현 12개 Task 완료, 통합 검증 완료.**
-완료 기준 14건 중 **12건 충족, 2건 부분 미충족**(P1-C8 실패 원인 문안, P1-C10 포트
-폴백의 외부 API 오인). 두 건 모두 코드 위치와 재현 절차가 아래에 특정돼 있다.
+**상태 (2026-09-11): 구현 12개 Task 완료, 통합 검증 완료, 수정 회차 3번 완료.**
+완료 기준 14건 **전부 충족**. 통합 검증 시점(`fc65f11`)에는 2건이 부분 미충족이었고
+(P1-C8 실패 원인 문안, P1-C10 포트 폴백의 외부 API 오인) 그때는 Phase 2로 넘길
+계획이었으나, 같은 브랜치에서 `d8f2af1`·`8dcd08e`가 **둘 다 닫았다.** 이 문서는 그
+뒤의 상태로 다시 썼다 — 아래 "수정 회차"와 "판정 표"의 측정 빌드 표기를 함께 읽어야
+어느 판정이 어느 빌드에서 나온 것인지 알 수 있다.
 
 ## 스펙 리뷰
 
@@ -155,6 +158,22 @@ GUI가 없으므로 화면 도달은 두 대체 수단으로 판정했다 — `-
 싣기 때문에 어느 화면인지가 URL로 드러난다), 그리고
 `~/Library/Application Support/Damwha/logs/api.log`.
 
+### 어느 판정이 어느 빌드에서 나왔나
+
+판정을 낸 빌드가 셋이다. 이 구분을 지우면 "충족"이 어느 코드에 대한 것인지 알 수 없게
+되므로 표의 각 행에 측정 빌드를 밝힌다.
+
+| 빌드 | 커밋 | 그 빌드에서 나온 판정 |
+| --- | --- | --- |
+| **통합 검증 빌드** | `75a19f8` 이후 | P1-C1 ~ P1-C14 **전부의 최초 측정.** 이 빌드에서 P1-C8·P1-C10이 부분 미충족으로 나왔다 |
+| **수정 1·2회차 빌드** | `8dcd08e` 이후 | P1-C8·P1-C10 **재측정** (충족으로 전환). 그 밖의 기준은 재측정하지 않았다 |
+| **최종 리뷰 수정 빌드** | `ac6507a` 이후 | P1-C1(정상 기동)·P1-C5(자식 정리)·P1-C7 계열(설정 오류 화면)·P1-C11(번들 위생) **재측정.** 아래 "수정 3회차" 참조 |
+
+**재측정하지 않은 기준은 통합 검증 빌드의 판정을 그대로 쓴다.** P1-C2·C3·C4(사용자 수행),
+P1-C12·C13·C14가 여기 해당한다. 이후 수정들이 만진 것은 데스크톱 셸의 기동·종료 경로뿐이고
+`be`/`fe`는 한 줄도 건드리지 않았으므로 그 판정은 유효하지만, **같은 빌드에서 다시 잰 것은
+아니다.**
+
 ### 판정 표
 
 | 기준 | 판정 | 실행한 명령과 관찰된 값 |
@@ -166,18 +185,19 @@ GUI가 없으므로 화면 도달은 두 대체 수단으로 판정했다 — `-
 | **P1-C5** 자식 정리·외부 보존 | **충족** | 앱 기동 후 `osascript -e 'tell application id "kr.damwha.app" to quit'`. 2초 안에 Electron main 0개, API 자식 0개, 3000 점유 0. 같은 시점에 외부 `damwha_worker`·`damwha-embed` 4개 프로세스 전부 생존. P1-C10의 세 경우 모두에서 외부 API·점유자가 앱 종료 뒤에도 살아 있었다(200 응답) |
 | **P1-C6** 중복 실행 방지 | **충족** | 앱이 떠 있는 상태에서 (a) `open -a Damwha.app` → Electron main 1개, CDP page target 1개 유지. (b) `Contents/MacOS/Damwha`를 직접 실행 → 두 번째 프로세스가 스스로 **exit 0**으로 종료(`requestSingleInstanceLock` 실패 경로), Electron main은 여전히 1개. API 자식도 1개 |
 | **P1-C7** DB 미기동 원인 표시 | **충족** | `pnpm db:down` 후 기동. 3초 만에 `status.html?state=db-unreachable&detail=…&retryInSeconds=3&logPath=…`. `detail` 원문: `[Nest] 55229 … ERROR [Bootstrap] startup failed: database unreachable at postgres://postgres:***@localhost:5432/damwha:` — 비밀번호는 `maskUrl`이 가렸고 로그 경로가 화면에 있다. `pnpm db:up` 후 **자동 재시도로 3초 만에** `http://127.0.0.1:3000/`에 도달 |
-| **P1-C8** 다른 기동 실패 원인 표시 | **미충족 (부분)** | `config.json`에 `SUMMARY_LLM_MODEL=not-in-the-catalog`를 넣고 기동. 화면은 떴고 **P1-C7과 구별된다**(`state=failed` vs `db-unreachable`). 그러나 `detail`이 문자 그대로 **`]`** 한 글자다. 아래 "P1-C8 상세" 참조. 자식 잔존은 없었고, 키 삭제 후 2초 만에 정상 기동했다 |
+| **P1-C8** 다른 기동 실패 원인 표시 | **충족** (`ac6507a` 빌드에서 재측정) | `config.json`에 `SUMMARY_LLM_MODEL=not-in-the-catalog`를 넣고 기동. 2초 만에 `state=failed`. `detail` 원문: `[Nest] 88764 - 09/11/2026, 5:07:51 PM   ERROR [Bootstrap] startup failed: [ / (종료 코드 1)`. 통합 검증 때의 `]` 한 글자가 아니라 **`startup failed:` 계약 줄**이고, **종료 코드가 화면에 있다**. P1-C7의 DB 문안(`startup failed: database unreachable at …`)과 다르다. 자식 잔존 0. 키 삭제 후 정상 기동. 남은 한계는 아래 "P1-C8 상세" 참조 |
 | **P1-C9** 로컬 바인드 | **충족** | `lsof -nP -iTCP -sTCP:LISTEN -a -p <api pid>` → `TCP 127.0.0.1:3000 (LISTEN)` 한 줄, `*:3000` 아님. 주입된 env는 `HOST=127.0.0.1`, `PORT=3000`, `DATABASE_URL=postgres://…`, `STORAGE_ROOT=/Users/…/Library/Application Support/Damwha/storage` — 셋 다 절대값. LAN 주소 `172.16.1.154:3000`은 `Couldn't connect to server`로 거부 |
-| **P1-C10** 포트 폴백 | **미충족 (부분)** | 세 경우를 실측했다. 아래 "P1-C10 상세" 참조. 폴백 기구 자체는 동작하지만 **R1-11(외부 API 오인)이 닫히지 않았다** |
+| **P1-C10** 포트 폴백 | **충족** (`ac6507a` 빌드에서 재측정) | 통합 검증에서 미충족이던 (b2) — `127.0.0.1:3000`을 외부가 점유하고 `/api/health`에 **200**을 주는 경우 — 를 그대로 다시 만들었다. 앱은 1초 만에 `http://127.0.0.1:63451/`로 떴고, 3000의 리스너는 **점유자 pid 하나뿐**이었으며, 앱 종료 뒤에도 점유자가 살아서 `/api/health`에 200을 줬다. R1-11이 닫혔다. 아래 "P1-C10 상세"의 **재측정** 절과 그 단서 두 개를 함께 읽어야 한다 |
 | **P1-C11** 번들 위생 | **충족** | `pnpm --filter damwha-desktop exec node scripts/check-bundle.mjs` → 11개 항목 전부 PASS, exit 0. `dependencies` 없음, `app.asar`에 `node_modules` 0건, 트리 밖 심볼릭 링크 0건(트리 안 379개는 허용), 저장소 경로·pnpm store 경로 문자열 0건, SPA가 `api/dist/public/index.html`에 있음, `NSMicrophoneUsageDescription` 존재, `codesign` Identifier가 `kr.damwha.app`, `codesign --verify --deep --strict` exit 0 |
 | **P1-C12** 경로 위생 | **충족** (판정 구간 한정) | 주입 env 3종 전부 절대 경로(P1-C9 행). 자식의 cwd는 `Contents/Resources/api` — 번들 **안**이지만, 실행 전후 체크섬 manifest 7,655개 파일이 **완전 동일**했다(`diff` 무출력). 다만 manifest는 P1-C5~C14 구간(정상 기동 5회, DB 미기동 1회, zod 실패 1회, 포트 점유 3회, 중복 실행 2회) 앞뒤로만 떴다 — 사용자의 P1-C1~C4 구간은 사전 manifest가 없어 **판정 범위 밖**이다 |
 | **P1-C13** 웹 흐름 회귀 없음 | **충족** | `pnpm install` exit 0 / `pnpm build` exit 0 / `pnpm lint` exit 0(fe에 기존 경고 1건, 오류 0) / `pnpm test` — 1회차에 `be/test/lenses.e2e-spec.ts`가 `socket hang up`으로 1건 실패했으나 단독 재실행 40/40 통과, 부하를 걷어낸 뒤 전체 재실행 **43 suites / 468 tests 전부 통과**(테스트는 testcontainers의 일회용 Postgres와 임시 `STORAGE_ROOT`를 쓰므로 실 데이터와 무관하다). `pnpm dev`는 API 3000 + Vite 5173만 띄우고 **Electron 프로세스 0개**(`desktop`에 `dev` 스크립트가 없다). `docker build -f deploy/api.Dockerfile -t damwha-api:p1-check .` 성공, 314 MB |
 | **P1-C14** 기존 데이터 보존 | **충족** (`.DS_Store` 예외) | 기준선은 Task 1이 2026-09-11T02:23:59Z에 뜬 `~/.cache/damwha-p1-evidence/`다. `be/storage` 32개 항목 중 **29개 데이터 파일 체크섬 완전 동일**, 유일한 차이는 Finder가 갱신한 `./.DS_Store` 1건(파일 수는 32로 동일). compose `config` 비교 완전 동일(`name: damwha`, `damwha_pgdata` 유지, `be_pgdata`는 손대지 않음). `_migrations` 24 → 24 **동일**. `meeting` 11 → 12, `utterance` 4619 → 4620 — 둘 다 **줄지 않음**(사용자의 P1-C2·C3이 더한 분) |
 
-### P1-C8 상세 — 왜 부분 미충족인가
+### P1-C8 상세 — 통합 검증에서 왜 부분 미충족이었고, 어떻게 닫혔나
 
 스펙 §9의 성공 판정은 "기동 실패가 화면에 나오고 **stderr 마지막 줄과 종료 코드**를 볼 수
-있다"이다. 관찰된 것:
+있다"이다. **아래는 통합 검증 빌드(`75a19f8` 이후)의 관찰이다** — 수정 뒤의 값은 판정 표의
+P1-C8 행과 이 절 끝의 "수정과 재측정"에 있다. 그때 관찰된 것:
 
 - `state=failed`로 화면은 떴고 P1-C7의 DB 문안과 다르다 → 이 부분은 충족.
 - `detail`이 **`]`** 한 글자다. `retryInSeconds=3`, `logPath`는 정상.
@@ -208,12 +228,36 @@ ERROR [Bootstrap] startup failed: [
 기동 실패 경로인 `startOnce()`의 `showStatus` 호출(`main.ts:299-304`)은 `outcome.handle.exitCode()`를
 읽지 않는다.
 
-**두 결함 모두 수정하지 않았다.** 이 Task의 역할은 판정과 기록이고, 고치면 새 리뷰 라운드가
-필요하다. Phase 2로 넘긴다.
+#### 수정과 재측정 (`d8f2af1`)
 
-### P1-C10 상세 — 세 경우의 실측
+위 두 결함은 **같은 브랜치에서 닫혔다.** 통합 검증 Task가 "Phase 2로 넘긴다"고 적었던
+것은 그 Task의 역할이 판정과 기록이었기 때문이고, 이어진 수정 회차가 실제로 고쳤다.
+
+- `lastMeaningfulLine()`을 `desktop/src/stderr.ts`로 빼고 규칙을 바꿨다. 1순위는
+  `be/src/main.ts`의 계약 줄인 **`startup failed:`를 담은 마지막 줄**, 2순위는 괄호·구두점만
+  있는 줄을 건너뛴 마지막 유의미한 줄이다. `]`는 2순위에서도 걸러진다.
+  (부수 효과로 `shell-window.ts`가 electron을 값으로 import해 vitest가 못 불러오던 문제도
+  풀려, 이 로직에 단위 테스트가 생겼다 — `desktop/tests/stderr.test.ts`.)
+- 기동 실패 화면에 **종료 코드**를 넣었다(`(종료 코드 1)`).
+
+`ac6507a` 빌드 재측정 결과는 판정 표의 P1-C8 행에 원문 그대로 있다.
+
+**남은 한계 — 이 기준의 letter는 충족하지만 zod 경로의 원인은 아직 화면에 없다.**
+스펙 §9의 판정 항목(실패 화면 도달 / stderr 줄 / 종료 코드 / P1-C7과 다른 문안 / 자식
+무잔존)은 전부 관찰됐다. 그러나 zod 실패의 **실제 원인 문장**은
+`"message": "Invalid enum value. Expected …, received 'not-in-the-catalog'"`이고, 이것은
+`startup failed:` 계약 줄의 **다음** 줄부터 시작하는 pretty-print JSON 안에 있다. 화면이
+보여 주는 것은 그 계약 줄 하나이므로 사용자가 읽는 문구는 `startup failed: [`에서 끊긴다.
+`]`보다는 낫고(어느 단계에서 죽었는지와 종료 코드를 알 수 있다) 로그 경로가 화면에 있어
+원문에 닿을 수는 있지만, **한 줄만 고르는 휴리스틱으로는 여러 줄 원인을 화면에 올릴 수
+없다**는 사실 자체는 그대로다. 완료 기준의 미충족이 아니라 품질 한계로 기록하고, 여러 줄
+메시지를 다루는 일은 Phase 2의 화면 개선에 남긴다.
+
+### P1-C10 상세 — 세 경우의 실측, 그리고 재측정
 
 스펙이 말하는 점유 주체는 `pnpm dev`다. 그대로 해 보니 **충돌 자체가 일어나지 않았다.**
+**아래 표는 통합 검증 빌드(`75a19f8` 이후)의 관찰이고, (a)와 (b2)는 수정 뒤 달라졌다** —
+이 절 끝의 "재측정"을 함께 읽어야 한다.
 
 | 점유자 | 점유 주소 | 앱의 API가 잡은 주소 | 화면 | 판정 |
 | --- | --- | --- | --- | --- |
@@ -227,6 +271,13 @@ ERROR [Bootstrap] startup failed: [
 실행되지 않는다. 검증이 성립하지 않는 것이지 앱이 틀린 것은 아니다 — 앱은 자기 자식이
 쥔 포트를 보고 있었고, 외부 프로세스를 죽이지도 않았다.
 
+> **(a)는 수정 뒤 더 이상 성립하지 않는다.** 위 표는 `75a19f8` 빌드의 관찰이다. 이제
+> 기구 (a)가 `127.0.0.1:3000`에 연결해 보고 `*:3000`의 리스너가 그 연결을 받으므로, 앱은
+> `pnpm dev`가 도는 동안 3000을 점유된 것으로 보고 **항상 다른 포트로 옮긴다.** 겹쳐
+> bind하던 동작은 사라졌다. 바뀐 쪽이 옳다 — 겹쳐 bind는 "누가 그 포트를 쥐고 있는가"를
+> 앱이 모른 채 우연히 성립한 것이고, 외부 리스너가 `127.0.0.1`에 붙어 있기만 하면 곧장
+> (b2)의 오인으로 넘어간다. 스펙 §6.4에 같은 내용을 적었다.
+
 (b2)가 실제 결함이다. `main.ts:180-185`의 `attempt()`는 자식을 띄우자마자
 `probeHealth(origin)`으로 **그 포트의 응답**을 준비 신호로 쓴다. 자식이 `EADDRINUSE`로
 죽기 전에 첫 probe가 나가고, 그 200은 외부 점유자가 준 것이므로 앱은 `ready`로 판정해
@@ -237,12 +288,114 @@ ERROR [Bootstrap] startup failed: [
 이것은 스펙 §6.4가 F-8을 닫으며 명시한 계약
 — *"'그 포트에 응답이 있다'를 준비 신호로 쓰지 않는다 — 응답이 외부 API에서 올 수 있다"* —
 을 구현이 지키지 않은 것이다. 소유권은 자식 핸들로만 판정해야 하며, 최소한 자식이
-`EADDRINUSE`로 죽었는지를 probe 성공보다 먼저 확인해야 한다. Phase 2로 넘긴다.
+`EADDRINUSE`로 죽었는지를 probe 성공보다 먼저 확인해야 한다.
+
+#### 수정 (`d8f2af1`, `8dcd08e`)
+
+기구를 둘로 나눴다. 스펙 §6.4를 같은 내용으로 개정했다("소유권을 판정하는 두 기구").
+
+- **(a) 스폰 전 사전 점검** `isPortOccupied(port)` — 후보 포트에 TCP로 붙어 보고 누가
+  받으면 자식을 띄우지 않고 다음 후보로 간다.
+- **(b) 준비 후 소유 증명** `verifyOwnListener(port, childPid)` — health 200을 받아도
+  `lsof -sTCP:LISTEN -t`의 리스너 pid가 우리 자식이거나 그 자손일 때만 `ready`로 본다.
+  dev는 `pnpm`→`nest`→`node`의 **손자**가, packaged는 `utilityProcess` 헬퍼 **자신**이
+  bind하므로 `ps`의 pid/ppid를 BFS로 훑어 양쪽을 한 판정으로 덮는다.
+
+`8dcd08e`는 그 (b)가 packaged에서 통째로 무력했던 회귀를 고쳤다 — `utilityProcess.pid`는
+`fork()` 직후 `undefined`이고 `'spawn'` 이벤트에서야 채워지는데 동기로 한 번만 읽고 있었다.
+그래서 packaged의 모든 handle이 생애 내내 `pid === undefined`였고, 소유 확인이 **자기
+자식조차** 인정하지 못해 건강한 자식이 매번 30초 타임아웃으로 죽었다. 같은 커밋에서
+"health 200은 봤지만 소유를 증명 못 한 채 끝난 타임아웃"을 `failed`로 뭉개지 않고
+`unverified-owner`라는 별도 outcome으로 갈라, 같은 결함이 다음에 원인 없는 화면으로
+숨지 않게 했다.
+
+#### 재측정 (`ac6507a` 빌드, 2026-09-11)
+
+통합 검증에서 미충족이던 **(b2)를 그대로 재현했다** — `127.0.0.1:3000`에 외부 프로세스를
+띄우고 모든 GET에 200을 주게 했다(`/api/health` → 200 확인).
+
+| 관찰 항목 | 값 |
+| --- | --- |
+| 앱이 도달한 URL (CDP) | `http://127.0.0.1:63451/` — 폴백 성공 |
+| 도달까지 | 1초 |
+| 앱 기동 중 3000의 LISTEN pid | 점유자 pid **하나뿐** (앱은 3000에 붙지 않았다) |
+| 앱 종료 후 점유자 | **생존**, `/api/health` → 200 |
+| 앱 종료 후 Damwha 프로세스 | 0 |
+
+같은 회차에서 확인된 다른 경로: packaged 정상 기동이 CDP 기준 약 2초 만에
+`http://127.0.0.1:3000/meetings/mtg_37`에 도달하고 종료 후 잔존 프로세스 0,
+폴백 경우가 `http://127.0.0.1:61434/`에 도달하며 3000의 외부 점유자는 손대지 않은 채
+계속 200을 주고, 개발 흐름이 `http://localhost:5173/meetings/mtg_37`에 도달한다.
+
+**이 재측정에 붙는 단서 두 개. 이것을 지우면 기록이 실제보다 강해진다.**
+
+- **P1-C10 재실행이 시험한 것은 사전 점검이지 소유권 확인이 아니다.** 기구 (a)가 자식이
+  생기기도 전에 점유자를 잡아내기 때문이다. 즉 이 재측정은 (a)의 동작을 증명하고, 계약을
+  실제로 지키는 (b)는 이 경로에서 발화하지 않는다.
+- **`unverified-owner` 실패 화면은 종단간으로 한 번도 발화시켜 본 적이 없고, 코드
+  검토로만 확인했다.** (a)를 통과한 뒤 (b)만 실패하는 상태 — 점검과 bind 사이에 다른
+  프로세스가 그 포트를 가져가는 TOCTOU 창 — 를 인위적으로 만들지 못했다.
 
 마이크 권한 재요청 여부(R1-6)는 **미판정**이다. 폴백이 일어난 (b1)에서 앱은 새 origin
 `http://127.0.0.1:57192`를 정상 로드했고, `permissions.ts:8-26`은 허용 origin에 대해
 `media`를 자동 부여하므로 Electron 층에서 다시 묻지 않는 것은 코드로 확인된다. 그러나
 macOS TCC 대화상자가 다시 뜨는지는 GUI와 Finder 실행이 필요해 이 세션에서 관찰할 수 없었다.
+
+### 수정 회차
+
+통합 검증(`fc65f11`) 뒤에 같은 브랜치에서 세 번의 수정이 있었다. 이 문서는 그 셋을 모두
+반영한 상태다.
+
+| 회차 | 커밋 | 고친 것 | 어떻게 드러났나 |
+| --- | --- | --- | --- |
+| 1 | `d8f2af1` | P1-C10의 외부 API 오인(소유권 두 기구), P1-C8의 실패 원인 문안과 종료 코드 | 통합 검증의 실측 |
+| 2 | `8dcd08e` | packaged의 `utilityProcess.pid`가 생애 내내 `undefined`라 1회차의 소유권 확인이 통째로 무력했던 회귀. `unverified-owner` outcome 분리 | 1회차 직후의 재측정에서 건강한 자식이 30초 타임아웃으로 죽는 것으로 드러났다 |
+| 3 | `ac6507a` | 기동·종료 경로의 예외 4건 — 아래 | 브랜치 전체 최종 리뷰 |
+
+**3회차가 고친 것.** 전부 라이프사이클의 에러 경로이고, 1·2회차가 이 코드를 두 번
+고쳤다는 사실 자체가 여기를 다시 보게 만들었다.
+
+- **`startOnce()`가 스스로 던지는 예외에 실패 경로가 없었다.** `config.json`의
+  `{"PORT": 70000}`(또는 `-1`, `1.5`)은 `choosePort`가 던지고, 못 쓰는 userData는
+  `loadConfig`의 `writeFileSync`가 던지고, 막힌 포트 탐색은 `freePort`가 던진다. 셋 다
+  `showStatus({state:"starting"})` **뒤**라 상태 갱신도 재시도도 로그도 없이 앱이
+  "준비 중"에 영원히 머물렀다 — 이 Phase가 이미 두 번 값을 치른 조용한 정지와 같은
+  모양이고, 이번 문은 사용자가 직접 고치는 파일에서 열린다. 실측(수정 전 `d8f2af1`
+  빌드): 24초 동안 CDP URL이 `status.html?state=starting` 그대로였고 stderr에
+  `UnhandledPromiseRejectionWarning: Error: invalid preferred port: 70000`이 찍혔다.
+  수정 후 같은 조건에서 3초 만에
+  `status.html?state=failed&detail=config.json의 PORT 값 "70000"은(는) 1~65535의 정수가 아니에요. …&retryInSeconds=3`
+  에 도달하고, 재시도 간격이 3 → 8 → 20으로 올라가는 것까지 관찰됐다.
+- **`launchPackaged`가 자식에게 환경을 통째로 갈아 줬다.** `utilityProcess.fork`의 `env`는
+  대체이지 병합이 아닌데 `options.env`만 줘서, packaged API 자식이 `PATH`·`HOME`·`TMPDIR`·
+  `LANG` 없이 돌았다. `be/src/system/capabilities.ts:44`가 `execFile('sysctl', …)`를 이름만으로
+  부르는데 `PATH`가 없으면 `execvp`가 `/usr/bin:/bin`으로 되돌아가고 `/usr/sbin/sysctl`은
+  거기 없어 ENOENT — **packaged 앱만** `chip: null`을 보고했다. `launchDev`와 같은 모양
+  (`{ ...process.env, ...options.env, HOST: "127.0.0.1" }`)으로 맞췄다. `options.env`와
+  `HOST`가 여전히 마지막이라 §6.6의 LAN 노출 방지 보장은 그대로다. 수정 후 실측:
+  `GET /api/system/capabilities` → `{"platform":"darwin","arch":"arm64","chip":"Apple M2","memory_gb":16,"gpu_eligible":true,"recommended_preset":"standard"}`.
+  자식 env에 `PATH`·`HOME`·`TMPDIR`·`LANG`이 모두 있고 `HOST=127.0.0.1`이 유지된다.
+- **자식의 `exit` 리스너가 던지면 main 프로세스가 죽었다.** `exitNotifier.settle`의
+  `for (const l of listeners) l(exitCode)`에 격리가 없었다. 등록된 리스너는 `watchForDeath`의
+  것 하나이고 그것이 `BrowserWindow`를 건드리는데, **창을 닫는 행위 자체가 자식을 죽이는
+  종료를 부르므로** `win === null` 검사와 `loadFile` 호출 사이에 창이 파괴될 수 있고
+  `loadFile`은 그때 `Object has been destroyed`를 **동기로** 던진다. 알림 루프를
+  `try/catch`로 감싸고, 창 판정을 `isDestroyed()`까지 보게 하고, `void showStatus(...)`에
+  `.catch()`를 붙였다. 같은 계열로 `before-quit`의
+  `void stopAll().then(() => app.quit())`도 고쳤다 — `stopAll()`이 거부하면 `app.quit()`이
+  아예 불리지 않아, `event.preventDefault()`로 막아 둔 종료가 영영 재개되지 않고 앱이 창
+  없이 남는다. `.finally()`로 바꾸고 `launchPackaged.stop`의 맨몸 `child.kill()`도 감쌌다.
+- **`quitting`을 네 군데 중 한 군데에서만 봤다.** `before-quit`이 `quitting = true`와
+  `cancelRetry()`를 지난 뒤에, `waitForReady`나 Vite 대기에 들어가 있던 `startOnce`가
+  죽은 자식을 보고 깨어나 실패 분기로 떨어져 `scheduleRetry()`를 다시 걸고(종료가 방금
+  치운 타이머다) 사라졌을 수 있는 창에 `showStatus()`를 불렀다. 세대·종료·창 파괴를 한
+  자리에서 보는 `activeWindow(mine)`으로 네 검사를 통일하고, `scheduleRetry()`를 종료 중
+  no-op으로 만들고, 승격된 자식을 두고 물러나지 않도록 `abandon(handle)`을 넣었다.
+
+3회차 뒤 재검증: `desktop` lint·compile 통과, `desktop` 테스트 5 파일 46개 통과,
+`pnpm desktop:build`의 번들 위생 11항목 전부 PASS, 루트 `pnpm lint` exit 0,
+루트 `pnpm test` — be 43 suites / 468 tests, fe 62 파일 / 566 tests,
+desktop 5 파일 / 46 tests **전부 통과**.
 
 ### 실측으로 확정된 값
 
@@ -297,11 +450,16 @@ P1-C3은 이 Phase에서 가장 오래 막힌 기준이고, 그 과정이 Phase 
 
 ### 이 Phase에서 닫지 못한 완료 기준
 
-| 기준 | 남은 것 | 인계 |
+**완료 기준 14건은 전부 충족했다.** 통합 검증이 남겼던 P1-C8·P1-C10 두 건은 같은
+브랜치에서 닫혔으므로 **Phase 2의 백로그로 넘기지 않는다.** 아래는 기준 미충족이 아니라
+품질·검증 범위의 한계로 남는 것들이다.
+
+| 항목 | 남은 것 | 인계 |
 | --- | --- | --- |
-| P1-C8 | 여러 줄 stderr에서 `lastMeaningfulLine()`이 의미 없는 마지막 줄(`]`)을 고른다. 기동 실패 화면에 종료 코드가 없다 | **Phase 2.** `desktop/src/shell-window.ts:33`과 `main.ts:293-304` |
-| P1-C10 | `attempt()`가 포트 응답을 준비 신호로 써서, 같은 포트의 외부 API가 `/api/health`에 200을 주면 그것을 자기 자식의 준비로 오인한다(R1-11). 폴백이 일어나지 않는다 | **Phase 2.** `desktop/src/main.ts:170-202` |
+| P1-C8 품질 (기준은 충족) | 한 줄만 고르는 휴리스틱이라 zod 같은 여러 줄 원인은 화면에 `startup failed: [`까지만 나온다. 원인 문장은 로그에만 있다 | Phase 2의 화면 개선. `desktop/src/stderr.ts` |
+| P1-C10 검증 범위 (기준은 충족) | 재실행이 시험한 것은 사전 점검(a)이지 소유권 확인(b)이 아니다. `unverified-owner` 화면은 종단간 미발화, 코드 검토로만 확인 | Phase 2 검증에서 TOCTOU 창을 인위적으로 만들 수단이 생기면 1회 확인 |
 | R1-6 (P1-C10의 일부) | 포트 폴백 후 macOS TCC 대화상자가 다시 뜨는지 미판정 — GUI와 Finder 실행 필요 | Phase 2 검증 시 사람이 1회 확인 |
+| 3000 공존 동작 변경 | `pnpm dev`가 도는 동안 앱이 3000에 겹쳐 bind하던 동작이 사라졌다. 앱은 항상 다른 포트로 옮긴다 | 의도된 변경. 스펙 §6.4에 기록 |
 
 ### 서명 — Phase 6의 성격이 바뀐다
 
