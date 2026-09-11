@@ -27,6 +27,9 @@
     "fe:lint": "pnpm --filter damwha-fe run lint",
     "fe:format": "pnpm --filter damwha-fe run format",
     "fe:test": "pnpm --filter damwha-fe run test",
+    "desktop": "pnpm --filter damwha-desktop run",
+    "desktop:dev": "pnpm --filter damwha-desktop run start:desktop",
+    "desktop:build": "pnpm --filter damwha-desktop run package:desktop",
     "worker": "uv run --directory be/worker python -m damwha_worker",
     "embed": "uv run --directory be/worker damwha-embed",
     "worker:sync": "uv sync --directory be/worker --extra models",
@@ -37,6 +40,7 @@
     "db:logs": "docker compose -f be/docker-compose.yml logs -f postgres"
   },
   "pnpm": {
+    "onlyBuiltDependencies": ["electron"],
     "ignoredBuiltDependencies": [
       "@nestjs/core",
       "cpu-features",

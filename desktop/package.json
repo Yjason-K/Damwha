@@ -1,0 +1,26 @@
+{
+  "name": "damwha-desktop",
+  "private": true,
+  "version": "0.2.3",
+  "license": "MIT",
+  "description": "Damwha macOS desktop shell. Runs the NestJS API as a child process and loads the SPA it serves.",
+  "main": "dist/main.js",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "scripts": {
+    "compile": "tsc -p tsconfig.json",
+    "start:desktop": "pnpm run compile && electron .",
+    "package:desktop": "node scripts/package.mjs",
+    "test": "vitest run --passWithNoTests",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@electron/asar": "^4.0.1",
+    "@types/node": "^22.20.0",
+    "electron": "44.3.0",
+    "electron-builder": "26.15.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.9"
+  }
+}
