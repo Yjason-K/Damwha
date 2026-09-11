@@ -122,7 +122,7 @@ packages:
     "compile": "tsc -p tsconfig.json",
     "start:desktop": "pnpm run compile && electron .",
     "package:desktop": "node scripts/package.mjs",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
@@ -261,7 +261,7 @@ Expected: `be`·`fe`·`contracts`만 빌드된다. `desktop/out`이 생기지 �
 
 Run: `pnpm test`
 
-Expected: `desktop`의 vitest가 참여한다. 테스트 파일이 아직 없으므로 "No test files found"로 끝나며, 그 자체는 실패가 아니어야 한다. 실패로 끝나면 `vitest run --passWithNoTests`로 바꾼다.
+Expected: `desktop`의 vitest가 참여하고 exit 0으로 끝난다. 테스트 파일이 아직 없으므로 `--passWithNoTests`가 필요하다 — 없으면 `vitest run`이 exit 1이 되어 루트 `pnpm test`(P1-C13의 관문)를 깬다.
 
 - [ ] **Step 11: P1-C14의 보존 기준선을 뜬다**
 
@@ -275,7 +275,7 @@ mkdir -p "$EV"
 date -u +%Y-%m-%dT%H:%M:%SZ > "$EV/baseline-taken-at.txt"
 ( cd be/storage && find . -type f -exec shasum -a 256 {} \; | sort ) > "$EV/storage-before.txt"
 wc -l < "$EV/storage-before.txt"
-psql postgres://postgres:postgres@localhost:5432/damwha -At -F, -c \
+docker compose -f be/docker-compose.yml exec -T postgres psql -U postgres -d damwha -At -F, -c \
   "select 'meeting', count(*) from meeting union all select 'utterance', count(*) from utterance union all select '_migrations', count(*) from _migrations" \
   | sort > "$EV/rows-before.txt"
 docker compose -f be/docker-compose.yml config | grep -E "^name:|pgdata" | sort > "$EV/compose-before.txt"
@@ -1341,8 +1341,18 @@ Task 2가 `utilityProcess`를 통과시켰다고 가정한 코드다. 통과하�
 import { spawn, type ChildProcess } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import { utilityProcess, type UtilityProcess } from "electron";
+import type { UtilityProcess } from "electron";
 import type { ApiEnv } from "./config";
+
+/**
+ * electron을 모듈 최상단에서 값으로 import하지 않는다. 그러면 이 파일을 평범한 Node에서
+ * 부를 수 없고, launchDev의 프로세스 그룹 종료를 Electron 밖에서 검증할 수 없다.
+ * 타입만 최상단에서 가져오고 값은 쓰는 자리에서 받는다.
+ */
+function electronUtilityProcess() {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return (require("electron") as typeof import("electron")).utilityProcess;
+}
 
 export interface ApiHandle {
   readonly pid: number | undefined;
@@ -1430,7 +1440,7 @@ export function launchPackaged(options: LaunchOptions): ApiHandle {
   const sink = makeSink(options.logFile);
   const exit = exitNotifier();
   // utilityProcess는 app.whenReady() 뒤에만 부를 수 있다. main.ts가 그 순서를 지킨다.
-  const child: UtilityProcess = utilityProcess.fork(options.entry, [], {
+  const child: UtilityProcess = electronUtilityProcess().fork(options.entry, [], {
     cwd: options.cwd,
     stdio: "pipe",
     // HOST가 options.env 뒤에 와야 config.json 한 줄로 LAN에 열리지 않는다.
@@ -1546,15 +1556,7 @@ setTimeout(async () => {
 
 Expected: `leftover: ""`. 남으면 `killGroup`이 그룹을 못 찾은 것이다 — `child.pid`가 그룹 리더인지(`ps -o pid,pgid -p <pid>`에서 둘이 같은지) 확인하고, 아니면 `detached` 옵션이 실제로 적용됐는지 본다.
 
-`require('electron')`이 Node에서 실패하므로 이 확인은 `api-process.js`의 `launchDev`만 부르는데도 모듈 최상단 import 때문에 막힐 수 있다. 막히면 `utilityProcess` import를 함수 안의 지연 `require`로 옮긴다.
-
-```ts
-function forkUtility(options: LaunchOptions) {
-  // 모듈 최상단에서 electron을 import하면 Node에서 이 파일을 부를 수 없다.
-  const { utilityProcess } = require("electron") as typeof import("electron");
-  return utilityProcess.fork(/* ... */);
-}
-```
+이 확인이 평범한 `node`에서 도는 것은 위 코드가 `electron`을 **값으로 최상단 import하지 않기** 때문이다. 최상단에서 `import { utilityProcess } from "electron"`을 하면 이 파일은 Electron 밖에서 로드되지 않아 이 단계 자체가 불가능해진다.
 
 - [ ] **Step 3: 커밋**
 
@@ -2632,7 +2634,7 @@ grep STORAGE_ROOT be/worker/.env
 먼저 **worker를 멈춘다.** 그 뒤 남은 작업이 없는지 본다.
 
 ```bash
-psql postgres://postgres:postgres@localhost:5432/damwha -At -c \
+docker compose -f be/docker-compose.yml exec -T postgres psql -U postgres -d damwha -At -c \
   "select status, count(*) from job where status in ('queued','running') group by status"
 ```
 
@@ -2687,6 +2689,8 @@ open "$APP"
 Step 4의 앱이 아직 떠 있는 상태에서 한다.
 
 ```bash
+EV="$HOME/.cache/damwha-p1-evidence"
+APP="desktop/out/mac-arm64/Damwha.app"
 APP_PID=$(pgrep -f "dist/main.js" | head -1)
 echo "api pid: $APP_PID"
 lsof -nP -iTCP -sTCP:LISTEN -a -p "$APP_PID"
@@ -2703,6 +2707,8 @@ Expected: LISTEN 주소가 `127.0.0.1:<port>`다 — `*:<port>`면 P1-C9 실패.
 앱이 떠 있는 상태에서 두 번째 인스턴스를 연다.
 
 ```bash
+EV="$HOME/.cache/damwha-p1-evidence"
+APP="desktop/out/mac-arm64/Damwha.app"
 pgrep -fl "dist/main.js" > "$EV/procs-running.txt"
 pgrep -fl "damwha_worker|damwha-embed" >> "$EV/procs-running.txt"
 open "$APP"
@@ -2731,6 +2737,8 @@ Expected: 전 항목 PASS, exit 0.
 앱이 완전히 닫힌 상태에서 시작한다.
 
 ```bash
+EV="$HOME/.cache/damwha-p1-evidence"
+APP="desktop/out/mac-arm64/Damwha.app"
 pgrep -f "dist/main.js" && echo "앱이 아직 떠 있다 — 먼저 닫는다"
 pnpm db:down
 open "$APP"
@@ -2751,6 +2759,8 @@ Expected: 자동 재시도 또는 메뉴 재시도로 담화 화면에 도달한
 **앱이 닫혀 있어야 한다.** 떠 있으면 single-instance lock 때문에 `open`이 기존 창만 앞으로 보내고 새 자식이 뜨지 않아 바꾼 설정을 읽지 않는다.
 
 ```bash
+EV="$HOME/.cache/damwha-p1-evidence"
+APP="desktop/out/mac-arm64/Damwha.app"
 pgrep -f "dist/main.js" && echo "먼저 앱을 닫는다" || echo "앱 닫힘 확인"
 python3 - <<'PY'
 import json, pathlib
@@ -2784,6 +2794,8 @@ Expected: 담화 화면. 확인 후 **앱을 닫는다.**
 순서가 중요하다. **앱을 먼저 완전히 닫고**, 외부 API가 3000을 잡은 것을 확인한 뒤 앱을 연다. 앱이 이미 3000을 쥐고 있으면 외부 API가 실패해 검증 자체가 성립하지 않는다.
 
 ```bash
+EV="$HOME/.cache/damwha-p1-evidence"
+APP="desktop/out/mac-arm64/Damwha.app"
 pgrep -f "dist/main.js" && echo "먼저 앱을 닫는다" || echo "앱 닫힘 확인"
 # 스펙 P1-C10이 말하는 점유 주체는 pnpm dev다
 pnpm dev > "$EV/pnpm-dev.log" 2>&1 &
@@ -2815,6 +2827,8 @@ Expected: 앱 API 잔존 없음. 외부 API는 앱 종료 후에도 200 — 앱�
 Step 4의 `app-before.txt`와 비교한다. mtime 비교는 빌드 시점에 이미 새로운 파일을 오탐하고 오래된 파일의 수정은 놓친다.
 
 ```bash
+EV="$HOME/.cache/damwha-p1-evidence"
+APP="desktop/out/mac-arm64/Damwha.app"
 find "$APP" -type f -exec shasum -a 256 {} \; | sort > "$EV/app-after.txt"
 diff "$EV/app-before.txt" "$EV/app-after.txt" && echo ".app 내부 무변경 — 정상"
 ```
@@ -2846,7 +2860,7 @@ diff "$EV/storage-before.txt" "$EV/storage-after.txt" && echo "PASS be/storage �
 docker compose -f be/docker-compose.yml config | grep -E "^name:|pgdata" | sort > "$EV/compose-after.txt"
 diff "$EV/compose-before.txt" "$EV/compose-after.txt" && echo "PASS compose 무변경" || echo "FAIL compose가 바뀌었다"
 
-psql postgres://postgres:postgres@localhost:5432/damwha -At -F, -c \
+docker compose -f be/docker-compose.yml exec -T postgres psql -U postgres -d damwha -At -F, -c \
   "select 'meeting', count(*) from meeting union all select 'utterance', count(*) from utterance union all select '_migrations', count(*) from _migrations" \
   | sort > "$EV/rows-after.txt"
 python3 - <<'PY'
