@@ -2067,7 +2067,9 @@ pnpm db:down
 pnpm desktop:dev
 ```
 
-Expected: 창이 "데이터베이스에 연결할 수 없어요"를 보이고, `detail`에 `database unreachable at postgres://postgres:***@localhost:5432/damwha`가 있고, 재시도 안내가 보인다. 로그 경로가 `~/Library/Application Support/Damwha/logs/api.log`다.
+Expected: **개발 모드에서는 일반 기동 실패 화면**이 유예 시간(30초)이 지난 뒤에 뜬다. `~/Library/Application Support/Damwha/logs/api.log`의 마지막 줄에 `startup failed: database unreachable at postgres://postgres:***@localhost:5432/damwha`가 있다.
+
+"데이터베이스에 연결할 수 없어요" 화면이 **안 나오는 것이 정상이다.** 개발 모드의 자식은 `nest start --watch`이고 그 래퍼는 진짜 API가 죽어도 살아 있어서, `alive()`가 계속 참이라 `child-exited` 분기에 닿지 못한다(스펙 §6.5의 개발 모드 단서). packaged 모드는 `utilityProcess.fork`가 `dist/main.js`를 직접 띄우므로 그 화면이 제대로 나오며, P1-C7이 그것을 판정한다.
 
 - [ ] **Step 4: DB를 올려 준비 상태 전환을 확인한다**
 
@@ -2088,7 +2090,7 @@ Expected: 다음 자동 재시도에서 준비 화면이 사라지고 창이 `ht
 담화 화면(또는 Step 4의 로드 시도) 상태에서 API 자식만 죽인다.
 
 ```bash
-kill $(pgrep -f "dist/main.js" | head -1)   # packaged 아님 → nest 프로세스
+kill $(pgrep -f "dist/main" | head -1)   # packaged 아님 → nest 프로세스
 pgrep -f "nest(\.js)? start"
 ```
 
@@ -2112,7 +2114,7 @@ Expected: API 잔존 없음. worker는 살아 있다.
 DB를 내려 실패 화면을 띄운 상태에서, 자동 재시도가 도는 동안 메뉴의 **서비스 > 다시 시도**를 빠르게 세 번 누른다.
 
 ```bash
-pgrep -c -f "nest(\.js)? start"
+pgrep -f "nest(\.js)? start" | wc -l | tr -d ' '
 ```
 
 Expected: 1 이하. 2 이상이면 `generation` 가드나 `start()` 직렬화가 동작하지 않는 것이다.
@@ -2723,7 +2725,7 @@ Step 4의 앱이 아직 떠 있는 상태에서 한다.
 ```bash
 EV="$HOME/.cache/damwha-p1-evidence"
 APP="desktop/out/mac-arm64/Damwha.app"
-APP_PID=$(pgrep -f "dist/main.js" | head -1)
+APP_PID=$(pgrep -f "dist/main" | head -1)
 echo "api pid: $APP_PID"
 lsof -nP -iTCP -sTCP:LISTEN -a -p "$APP_PID"
 ps eww -o command= -p "$APP_PID" | tr ' ' '\n' | grep -E "^(STORAGE_ROOT|DATABASE_URL|HOST)="
@@ -2741,10 +2743,10 @@ Expected: LISTEN 주소가 `127.0.0.1:<port>`다 — `*:<port>`면 P1-C9 실패.
 ```bash
 EV="$HOME/.cache/damwha-p1-evidence"
 APP="desktop/out/mac-arm64/Damwha.app"
-pgrep -fl "dist/main.js" > "$EV/procs-running.txt"
+pgrep -fl "dist/main" > "$EV/procs-running.txt"
 pgrep -fl "damwha_worker|damwha-embed" >> "$EV/procs-running.txt"
 open "$APP"
-pgrep -c -f "dist/main.js"
+pgrep -f "dist/main" | wc -l | tr -d ' '
 ```
 
 Expected: 창 하나, `dist/main.js` 프로세스 1개.
@@ -2752,7 +2754,7 @@ Expected: 창 하나, `dist/main.js` 프로세스 1개.
 앱을 닫고:
 
 ```bash
-pgrep -fl "dist/main.js" || echo "API 잔존 없음"
+pgrep -fl "dist/main" || echo "API 잔존 없음"
 pgrep -fl "damwha_worker|damwha-embed" || echo "경고: worker/embed가 죽었다 — P1-C5 실패"
 ```
 
@@ -2771,7 +2773,7 @@ Expected: 전 항목 PASS, exit 0.
 ```bash
 EV="$HOME/.cache/damwha-p1-evidence"
 APP="desktop/out/mac-arm64/Damwha.app"
-pgrep -f "dist/main.js" && echo "앱이 아직 떠 있다 — 먼저 닫는다"
+pgrep -f "dist/main" && echo "앱이 아직 떠 있다 — 먼저 닫는다"
 pnpm db:down
 open "$APP"
 ```
@@ -2793,7 +2795,7 @@ Expected: 자동 재시도 또는 메뉴 재시도로 담화 화면에 도달한
 ```bash
 EV="$HOME/.cache/damwha-p1-evidence"
 APP="desktop/out/mac-arm64/Damwha.app"
-pgrep -f "dist/main.js" && echo "먼저 앱을 닫는다" || echo "앱 닫힘 확인"
+pgrep -f "dist/main" && echo "먼저 앱을 닫는다" || echo "앱 닫힘 확인"
 python3 - <<'PY'
 import json, pathlib
 p = pathlib.Path.home() / "Library/Application Support/Damwha/config.json"
@@ -2828,7 +2830,7 @@ Expected: 담화 화면. 확인 후 **앱을 닫는다.**
 ```bash
 EV="$HOME/.cache/damwha-p1-evidence"
 APP="desktop/out/mac-arm64/Damwha.app"
-pgrep -f "dist/main.js" && echo "먼저 앱을 닫는다" || echo "앱 닫힘 확인"
+pgrep -f "dist/main" && echo "먼저 앱을 닫는다" || echo "앱 닫힘 확인"
 # 스펙 P1-C10이 말하는 점유 주체는 pnpm dev다
 pnpm dev > "$EV/pnpm-dev.log" 2>&1 &
 DEV_PGID=$!
@@ -2838,7 +2840,7 @@ EXTERNAL_PID=$(lsof -nP -iTCP:3000 -sTCP:LISTEN -t | head -1)
 echo "external pid: $EXTERNAL_PID"
 open "$APP"
 sleep 20
-APP_PID=$(pgrep -f "dist/main.js" | grep -v "^$EXTERNAL_PID$" | head -1)
+APP_PID=$(pgrep -f "dist/main" | grep -v "^$EXTERNAL_PID$" | head -1)
 lsof -nP -iTCP -sTCP:LISTEN -a -p "$APP_PID"
 ```
 
@@ -2847,7 +2849,7 @@ Expected: 앱의 API가 3000이 **아닌** 포트에서 LISTEN한다. 화면이 
 앱을 닫고 외부 것만 정리한다.
 
 ```bash
-pgrep -f "dist/main.js" | grep -v "^$EXTERNAL_PID$" || echo "앱 API 잔존 없음"
+pgrep -f "dist/main" | grep -v "^$EXTERNAL_PID$" || echo "앱 API 잔존 없음"
 curl -s -o /dev/null -w 'external api still up: %{http_code}\n' http://127.0.0.1:3000/api/health
 kill -- -"$DEV_PGID" 2>/dev/null || kill "$DEV_PGID"
 ```
