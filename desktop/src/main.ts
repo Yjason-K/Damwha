@@ -2,11 +2,27 @@ import { app, BrowserWindow } from "electron";
 import * as path from "path";
 import { loadConfig, type ApiEnv } from "./config";
 import { MAX_PORT_ATTEMPTS, choosePort, isAddrInUse } from "./port";
-import { READY_INTERVAL_MS, READY_TIMEOUT_MS, probeHealth, waitForReady } from "./readiness";
+import {
+  PROBE_TIMEOUT_MS,
+  READY_INTERVAL_MS,
+  READY_TIMEOUT_MS,
+  probeHealth,
+  waitForReady,
+} from "./readiness";
 import { launchDev, launchPackaged, type ApiHandle } from "./api-process";
+import { launchVite } from "./vite-process";
 import { lastMeaningfulLine, showStatus } from "./shell-window";
 import { applyNavigationBoundary, applyPermissionBoundary } from "./permissions";
 import { installMenu } from "./menu";
+
+/**
+ * userData는 productName이 아니라 package.json의 name에서 나오므로, dev와 packaged가
+ * 같은 경로를 쓰게 이름을 고정한다 (스펙 §6.3). 고정하지 않으면 dev는
+ * ~/Library/Application Support/damwha-desktop/를, packaged는 .../Damwha/를 써서
+ * config.json·storage/·logs/가 갈라진다. getPath('userData')를 처음 읽기 전에 불러야
+ * 하므로 모듈 최상단에 둔다 — requestSingleInstanceLock의 잠금도 이 경로를 쓴다.
+ */
+app.setName("Damwha");
 
 /** 실패 후 자동 재시도 간격. 세 번째부터는 사람이 손 쓸 문제라 늘리지 않는다. */
 const RETRY_DELAYS_MS = [3_000, 8_000, 20_000];
@@ -19,6 +35,13 @@ let api: ApiHandle | null = null;
 /** ready 이전의 자식. api에 승격되기 전에 종료가 오면 이것을 정리해야 한다. */
 let inFlight: ApiHandle | null = null;
 let apiOrigin: string | null = null;
+/** dev에서만 쓰인다. packaged는 API 자신의 origin을 로드하므로 Vite가 없다. */
+let vite: ApiHandle | null = null;
+/**
+ * 마지막으로 Vite에 준 API base. VITE_API_BASE_URL은 Vite 기동 시점에 고정되므로,
+ * 포트 폴백으로 API origin이 바뀌면 이 값과 비교해 Vite를 재기동할지 정한다.
+ */
+let viteApiBase: string | null = null;
 let retryCount = 0;
 let retryTimer: NodeJS.Timeout | null = null;
 let quitting = false;
@@ -75,6 +98,48 @@ async function stopApi(): Promise<void> {
   inFlight = null;
   apiOrigin = null;
   await Promise.all(handles.map((h) => h.stop(STOP_GRACE_MS)));
+}
+
+/** before-quit에서 쓴다. startOnce()의 재시도 경로는 Vite를 살려 둬야 하므로 stopApi()를 쓴다. */
+async function stopAll(): Promise<void> {
+  const v = vite;
+  vite = null;
+  viteApiBase = null;
+  await Promise.all([stopApi(), v === null ? Promise.resolve() : v.stop(STOP_GRACE_MS)]);
+}
+
+/**
+ * dev에서 렌더러가 볼 주소. Vite를 이 시점에 띄우고 첫 서빙까지 기다린다.
+ * Vite는 API 포트가 바뀌어도 살려 둔다 — 재시도마다 재기동하면 HMR이 끊긴다. 단,
+ * API origin이 포트 폴백으로 바뀌면 VITE_API_BASE_URL이 낡으므로 그때만 재기동한다.
+ */
+async function rendererTarget(apiBase: string): Promise<{ url: string } | { error: string }> {
+  if (app.isPackaged) return { url: `${apiBase}/` };
+
+  const wanted = `${apiBase}/api`;
+  if (vite === null || !vite.alive() || viteApiBase !== wanted) {
+    if (vite !== null) await vite.stop(STOP_GRACE_MS);
+    vite = launchVite({ cwd: apiRoot(), apiBaseUrl: wanted });
+    viteApiBase = wanted;
+  }
+
+  const up = await waitForReady({
+    probe: async () => {
+      try {
+        const res = await fetch(VITE_ORIGIN, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+        return res.status < 500 ? "ready" : "no-response";
+      } catch {
+        return "no-response";
+      }
+    },
+    isAlive: () => vite?.alive() ?? false,
+    timeoutMs: READY_TIMEOUT_MS,
+    intervalMs: READY_INTERVAL_MS,
+  });
+  if (up.kind !== "ready") {
+    return { error: `Vite를 띄우지 못했어요: ${lastMeaningfulLine(vite?.stderrTail() ?? "")}` };
+  }
+  return { url: VITE_ORIGIN };
 }
 
 function scheduleRetry(): number | undefined {
@@ -195,7 +260,19 @@ async function startOnce(): Promise<void> {
       retryCount = 0;
       watchForDeath(outcome.handle, mine);
       try {
-        await win.loadURL(app.isPackaged ? `${outcome.origin}/` : VITE_ORIGIN);
+        const target = await rendererTarget(outcome.origin);
+        if (mine !== generation || win === null) return;
+        if ("error" in target) {
+          const seconds = scheduleRetry();
+          await showStatus(win, {
+            state: "failed",
+            detail: target.error,
+            retryInSeconds: seconds,
+            logPath: logFile(),
+          });
+          return;
+        }
+        await win.loadURL(target.url);
       } catch (e) {
         if (mine !== generation || win === null) return;
         const seconds = scheduleRetry();
@@ -267,6 +344,6 @@ if (!app.requestSingleInstanceLock()) {
     quitting = true;
     cancelRetry();
     event.preventDefault();
-    void stopApi().then(() => app.quit());
+    void stopAll().then(() => app.quit());
   });
 }
