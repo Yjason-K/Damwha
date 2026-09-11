@@ -39,7 +39,7 @@ Phase 0이 확정한 PostgreSQL·Python·ffmpeg 제공 방식은 Phase 3·4가 �
 | `deploy/api.Dockerfile` | `VITE_API_BASE_URL=/api`로 단일 origin 빌드 | 변경 없음. 데스크톱 빌드가 같은 조합을 쓴다 |
 | `be/worker/`, `packages/contracts/` | — | 변경 없음 |
 
-제품 코드 변경은 `be/src/main.ts`와 `be/src/config/env.ts` **두 파일뿐**이다. §10에 전량을 적는다.
+제품 코드 변경은 `be/src/main.ts`, `be/src/config/env.ts`, `be/package.json` **세 파일뿐**이다. §10에 전량을 적는다.
 
 ## 4. 범위
 
@@ -409,7 +409,7 @@ API 포트를 쓰는 것은 렌더러뿐이다. worker는 DB로만 붙고(`be/CL
 
 ## 10. 제품 코드 변경 목록
 
-`desktop/` 신설과 `pnpm-workspace.yaml`·루트 `package.json` 스크립트 추가 외에, 기존 코드 변경은 이 둘뿐이다.
+`desktop/` 신설과 `pnpm-workspace.yaml`·루트 `package.json` 스크립트 추가 외에, 기존 코드 변경은 이 셋뿐이다.
 
 **`be/src/config/env.ts`** — `HOST` 추가.
 
@@ -427,6 +427,14 @@ await app.listen(env.PORT, env.HOST);
 
 로그 줄도 host를 포함하게 고친다.
 
+**`be/package.json`** — `files` 허용 목록 추가.
+
+```json
+"files": ["dist"],
+```
+
+2026-09-11 실측으로 추가된 항목이다(§11). `pnpm deploy`가 `pnpm pack`의 파일 선택 규칙을 따르므로, 허용 목록이 없으면 산출 트리가 `be/.gitignore`가 무시하는 `dist/`를 빠뜨리고 `src`·`test`·`docs`·`docker`와 Python `worker/` 트리를 대신 앱 번들에 넣는다. `be`는 `private: true`라 발행되지 않고 `files`는 pack·publish·deploy에만 작용한다 — `deploy/api.Dockerfile`은 `COPY be ./be`로 디렉터리를 그대로 복사하므로 영향이 없고, 워크스페이스 링크도 영향이 없다.
+
 `fe/` 소스는 변경하지 않는다. 값 주입만 한다 — packaged 빌드는 `VITE_API_BASE_URL=/api`, 개발 실행은 결정된 포트를 담은 절대 URL.
 
 ## 11. 빌드와 실행 흐름
@@ -443,12 +451,18 @@ pnpm desktop:dev
 pnpm desktop:build
   1. pnpm be build
   2. pnpm fe build                     VITE_API_BASE_URL=/api
-  3. pnpm --filter=damwha-be --prod deploy desktop/build/api
+  3. pnpm --filter=damwha-be --prod \
+       --config.inject-workspace-packages=true deploy desktop/build/api
   4. fe/dist → desktop/build/api/dist/public 복사
   5. electron-builder --dir            desktop/build/api → Resources/api
 ```
 
-`pnpm deploy`는 pnpm 10.26.0에서 **Experimental**로 표시돼 있고 `--legacy` 스위치를 갖는다. 산출 트리가 자기 안에서 완결되지 않으면(트리 밖이나 pnpm store를 가리키는 링크가 남으면) `--legacy`를 쓰거나 그 명령에만 `--config.node-linker=hoisted`를 붙인다. **루트 `.npmrc`는 고치지 않는다** — 그 파일의 주석이 hoisting 금지를 명시하고 있고, 여기서 필요한 것은 저장소 전체가 아니라 이 한 산출물이다.
+`pnpm deploy`는 pnpm 10.26.0에서 **Experimental**이다. 2026-09-11 실측(결과 문서의 Task 2)으로 두 가지가 확정됐다.
+
+- 맨 `--prod deploy`는 `ERR_PNPM_DEPLOY_NONINJECTED_WORKSPACE`로 **거절당한다.** `--config.inject-workspace-packages=true`가 필요하다. 플래그는 이 명령에만 붙으므로 **루트 `.npmrc`는 고치지 않는다** — 그 파일의 주석이 hoisting 금지를 명시하고 있고, 여기서 필요한 것은 저장소 전체가 아니라 이 한 산출물이다.
+- `pnpm deploy`는 `pnpm pack`의 파일 선택 규칙을 따른다. 그래서 허용 목록이 없으면 `be/.gitignore`가 무시하는 `dist/`가 **트리에서 빠지고** `src`·`test`·`docs`·`docker`와 Python `worker/` 트리가 대신 들어온다. `be/package.json`에 `"files": ["dist"]`를 넣어 고친다 — 이것이 §10의 세 번째 변경이다.
+
+산출 트리의 심볼릭 링크는 379개이고 트리 밖을 가리키는 것은 0건이다. 단, 그 판정은 기준 경로를 **realpath한 뒤에만** 옳다 — macOS의 `/tmp`가 `/private/tmp` 심볼릭이라 문자열 접두사로 비교하면 트리 안의 링크가 거짓 위반으로 잡힌다. P1-C11의 검사가 `fs.realpathSync`와 `path.relative`를 쓰는 이유가 이것이다.
 
 Vite는 셸 환경변수가 `.env` 파일을 이기므로, 개발에서 포트가 폴백돼도 렌더러가 옳은 주소를 본다.
 
@@ -479,7 +493,7 @@ Vite는 셸 환경변수가 `.env` 파일을 이기므로, 개발에서 포트�
 | --- | --- | --- | --- |
 | R1-1 | `utilityProcess`가 NestJS의 데코레이터·`reflect-metadata` 초기화에서 깨진다 | 1단계 실측 | `ELECTRON_RUN_AS_NODE` + `child_process.spawn` |
 | R1-2 | `pnpm deploy` 트리에서 `@damwha/contracts`가 심볼릭으로 남거나 `dist`가 빠진다 | P1-C11, 1단계 실행 검증 | 빌드 순서 조정. 필요하면 `prepare` 산출물을 명시 복사 |
-| R1-9 | `pnpm deploy`가 Experimental이라 pnpm 판올림에서 동작이 바뀐다 | 1단계 실행 검증, P1-C11 | `--legacy` 또는 명령 범위 `--config.node-linker=hoisted`. 루트 `.npmrc`는 손대지 않는다. 쓴 조합을 결과 문서에 고정 기록 |
+| R1-9 | `pnpm deploy`가 Experimental이라 pnpm 판올림에서 동작이 바뀐다 | **2026-09-11 실측으로 해소** — 필요한 조합은 `--config.inject-workspace-packages=true` + `be/package.json`의 `files` 허용 목록이다(§11). 루트 `.npmrc`는 손대지 않았다. 판올림 시 이 조합을 다시 재야 한다 | 결과 문서 Task 2에 명령과 출력을 고정 기록 |
 | R1-3 | `nest build`가 `dist`를 비워 `dist/public`이 사라진다 | 빌드 후 파일 확인 | §11의 순서 고정 |
 | R1-4 | packaged cwd가 `.app` 안이라 상대 경로가 번들 내부를 가리킨다 | P1-C12 | 모든 경로를 절대값으로 주입 |
 | R1-5 | electron-builder가 pnpm isolated 레이아웃에서 의존성을 못 찾는다 | P1-C11 | `dependencies`를 비운 상태 유지. `.npmrc`는 고치지 않는다 |

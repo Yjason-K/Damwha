@@ -19,7 +19,7 @@
 - **`desktop`에 `dev`·`build` 스크립트를 두지 않는다.** 루트 `dev`가 `pnpm --parallel --recursive run dev`, `build`가 `pnpm --recursive run build`이기 때문이다. `start:desktop`·`package:desktop`을 쓰고 루트가 `--filter`로 부른다. `lint`·`test`는 recursive에 참여한다. (스펙 §6.1, P1-C13)
 - **루트 `.npmrc`를 고치지 않는다.** `node-linker=hoisted`를 추가하지 않는다. (스펙 §11, P1-C13)
 - **`fe/` 소스를 고치지 않는다.** 값 주입만 한다. (스펙 §10)
-- **`be/` 변경은 `src/config/env.ts`와 `src/main.ts` 두 파일뿐이다.** `HOST` 기본값은 `0.0.0.0`이어야 한다 — Docker 배포와 `pnpm be:dev` 동작을 보존한다. (스펙 §10)
+- **`be/` 변경은 `src/config/env.ts`, `src/main.ts`, `package.json` 세 파일뿐이다.** `HOST` 기본값은 `0.0.0.0`이어야 한다 — Docker 배포와 `pnpm be:dev` 동작을 보존한다. `package.json`은 `"files": ["dist"]` 한 줄만 얻는다(Task 12 Step 0, 실측 근거는 Task 2 결과). (스펙 §10)
 - **앱은 `.app` 번들 안에 쓰지 않는다.** 쓰기가 필요한 모든 경로는 `<userData>` 아래다. (스펙 §5, P1-C12)
 - **앱은 기존 `be/storage`에 쓰지 않는다.** 기존 `meeting`·`utterance` 행을 지우지 않고 마이그레이션을 실행하지 않는다. (스펙 §5, P1-C14)
 - `appId: kr.damwha.app`, `productName: Damwha`, `mac.target: dir`. (스펙 §6.1, §4.2)
@@ -2392,7 +2392,32 @@ git commit -m "feat(desktop): 개발 실행이 Vite까지 띄우고 API 주소�
 
 **Interfaces:**
 - Consumes: Task 2의 `pnpm deploy` 결정, Task 10~11의 main
-- Produces: `desktop/out/mac-arm64/Damwha.app`. `node scripts/check-bundle.mjs`가 P1-C11·P1-C12의 정적 항목을 판정한다.
+- Produces: `desktop/out/mac-arm64/Damwha.app`. `node scripts/check-bundle.mjs`가 P1-C11·P1-C12의 정적 항목을 판정한다. `be/package.json`의 `files` 허용 목록.
+
+- [ ] **Step 0: `be/package.json`에 `files` 허용 목록을 넣는다**
+
+Task 2가 실측한 사실이 이 단계를 강제한다. `pnpm deploy`는 `pnpm pack`의 파일 선택 규칙을 따르므로, 허용 목록이 없으면 산출 트리가 **`dist/`를 통째로 빠뜨리고**(`be/.gitignore`가 `dist/`를 무시한다) 대신 `src`·`test`·`docs`·`docker`와 **Python `worker/` 트리까지 앱 번들에 쓸어 담는다.**
+
+`license` 줄 바로 아래에 한 줄을 넣는다.
+
+```json
+  "files": ["dist"],
+```
+
+`be`는 `private: true`라 발행되지 않고, `files`는 pack·publish·deploy에만 작용한다. `deploy/api.Dockerfile`은 `COPY be ./be`로 디렉터리를 그대로 복사하므로 영향을 받지 않고, 워크스페이스 링크도 영향이 없다.
+
+확인:
+
+```bash
+rm -rf /tmp/files-check
+pnpm --filter=damwha-be --prod --config.inject-workspace-packages=true deploy /tmp/files-check
+ls /tmp/files-check
+ls /tmp/files-check/dist/main.js
+ls /tmp/files-check/dist/database/migrations/*.sql | wc -l
+rm -rf /tmp/files-check
+```
+
+Expected: 최상위가 `dist`·`node_modules`·`package.json`·`pnpm-lock.yaml` 넷뿐이다. `dist/main.js`가 있고 마이그레이션 `.sql`이 24개다. `src`·`test`·`worker`가 **없다**.
 
 - [ ] **Step 1: electron-builder.yml을 쓴다**
 
@@ -2448,9 +2473,16 @@ run("pnpm", ["--filter", "damwha-be", "run", "build"]);
 run("pnpm", ["--filter", "damwha-fe", "run", "build"], repo, { VITE_API_BASE_URL: "/api" });
 
 fs.rmSync(apiTree, { recursive: true, force: true });
-// Task 2가 확정한 형태를 쓴다. --config.node-linker=hoisted나 --legacy가 필요했다면
-// 결과 문서의 Task 2 표에 적힌 대로 여기 인자를 맞춘다.
-run("pnpm", ["--filter=damwha-be", "--prod", "deploy", path.relative(repo, apiTree)]);
+// Task 2가 실측으로 확정한 형태다. 맨 `--prod deploy`는 pnpm 10.26.0에서
+// ERR_PNPM_DEPLOY_NONINJECTED_WORKSPACE로 아예 거절당한다. 플래그는 이 명령에만
+// 붙으므로 루트 .npmrc는 그대로다.
+run("pnpm", [
+  "--filter=damwha-be",
+  "--prod",
+  "--config.inject-workspace-packages=true",
+  "deploy",
+  path.relative(repo, apiTree),
+]);
 
 const publicDir = path.join(apiTree, "dist", "public");
 fs.rmSync(publicDir, { recursive: true, force: true });
