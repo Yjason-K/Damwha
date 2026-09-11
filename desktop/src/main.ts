@@ -163,6 +163,7 @@ type AttemptOutcome =
   | { kind: "ready"; handle: ApiHandle; origin: string }
   | { kind: "db-unreachable"; handle: ApiHandle }
   | { kind: "addr-in-use" }
+  | { kind: "unverified-owner"; handle: ApiHandle; port: number }
   | { kind: "failed"; handle: ApiHandle };
 
 /** be/src/main.ts의 fail-fast가 찍는 문구. 이것이 DB 미기동의 유일한 신호다 — 이 경우
@@ -271,6 +272,12 @@ async function attempt(port: number, env: ApiEnv): Promise<AttemptOutcome> {
   });
   inFlight = handle;
   const origin = `http://127.0.0.1:${port}`;
+  // health가 200을 준 적은 있지만 소유를 끝내 확인 못 한 채로 끝나는 경우를 구분해
+  // 두려고 둔다 — Fix round 1의 결함(packaged의 pid가 fork() 직후 undefined라 소유
+  // 확인이 매번 실패하던 버그)이 실패 화면에 아무 원인도 없이 30초 타임아웃으로만
+  // 드러났었다. 자식은 죽지 않았는데 우리가 소유를 증명 못 했다는 사실 자체가
+  // 화면에 보여야 다음에 같은 결함이 조용히 묻히지 않는다.
+  let sawUnverifiedReady = false;
   const outcome = await waitForReady({
     probe: async () => {
       const result = await probeHealth(origin);
@@ -279,6 +286,7 @@ async function attempt(port: number, env: ApiEnv): Promise<AttemptOutcome> {
       // 자손)인지 확인한다. 아니면 "아직 준비 안 됨"으로 돌려보내 폴링을 계속한다 —
       // 우리 자식이 뒤이어 EADDRINUSE로 죽으면 기존 분기가 다음 포트로 넘긴다.
       const owned = await verifyOwnListener(port, handle.pid);
+      if (!owned) sawUnverifiedReady = true;
       return owned ? "ready" : "no-response";
     },
     isAlive: () => handle.alive(),
@@ -300,6 +308,12 @@ async function attempt(port: number, env: ApiEnv): Promise<AttemptOutcome> {
     return { kind: "addr-in-use" };
   }
   if (DB_UNREACHABLE.test(tail)) return { kind: "db-unreachable", handle };
+  // EADDRINUSE도 database unreachable도 아니면서 health 200을 본 적이 있는 timeout —
+  // 자식이 진짜 응답하고 있는데 소유를 증명하지 못한 경우다(외부 프로세스가 계속
+  // 버티고 있거나, lsof/ps 판정 도구 자체가 실패했거나). 이걸 그냥 "failed"로 뭉개면
+  // 사람이 보는 화면은 stderr에 에러가 없어 detail이 빈 채로 30초 뒤 원인 불명 실패로만
+  // 보인다 — Fix round 1의 결함이 정확히 이렇게 숨었었다.
+  if (sawUnverifiedReady) return { kind: "unverified-owner", handle, port };
   return { kind: "failed", handle };
 }
 
@@ -389,6 +403,23 @@ async function startOnce(): Promise<void> {
           logPath: logFile(),
         });
       }
+      return;
+    }
+
+    if (outcome.kind === "unverified-owner") {
+      // 자식은 안 죽었다(EADDRINUSE도, database unreachable도 아니다) — 그런데도
+      // 소유를 증명 못 했다는 사실 자체를 detail에 그대로 적는다. stderr에는 보통
+      // 아무 에러도 없어서(자식이 실제로는 건강하게 응답 중이므로) 기존 lastMeaningfulLine
+      // 경로를 타면 detail이 비어 "원인 불명 실패"로만 보인다.
+      await outcome.handle.stop(STOP_GRACE_MS);
+      inFlight = null;
+      const seconds = scheduleRetry();
+      await showStatus(win, {
+        state: "failed",
+        detail: `포트 ${outcome.port}에서 응답을 받았지만 우리가 띄운 자식 소유인지 확인하지 못했어요. 다른 프로세스가 그 포트를 이미 쓰고 있을 수 있어요.`,
+        retryInSeconds: seconds,
+        logPath: logFile(),
+      });
       return;
     }
 

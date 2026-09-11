@@ -118,7 +118,15 @@ export function launchPackaged(options: LaunchOptions): ApiHandle {
     // HOST가 options.env 뒤에 와야 config.json 한 줄로 LAN에 열리지 않는다.
     env: { ...options.env, HOST: "127.0.0.1" },
   });
-  const pid = child.pid;
+  // utilityProcess.pid는 fork() 직후 undefined이고 'spawn' 이벤트에서야 채워진다
+  // (Fix round 2 실측). 동기로 한 번만 잡아 두면 packaged 모드에서 이 handle의 pid가
+  // 영원히 undefined가 되어, pid로 소유권을 확인하는 verifyOwnListener()가 자기
+  // 자식조차 인정하지 못하고 매 시도가 30초 타임아웃으로 죽는다 — let으로 두고
+  // 'spawn'에서 갱신해, getter·kill 경로 모두 최신 값을 본다.
+  let pid = child.pid;
+  child.once("spawn", () => {
+    pid = child.pid;
+  });
   child.stdout?.on("data", (b: Buffer) => sink.write(b, false));
   child.stderr?.on("data", (b: Buffer) => sink.write(b, true));
   child.on("exit", (exitCode: number) => {
