@@ -233,11 +233,11 @@ API 포트를 쓰는 것은 렌더러뿐이다. worker는 DB로만 붙고(`be/CL
 
 `maskUrl`이 비밀번호를 `***`로 가리므로 그 메시지를 화면에 그대로 올려도 된다.
 
-**이 표는 packaged 모드에서 정확하고, 개발 모드에서는 한 줄이 어긋난다.** 2026-09-11 실측: 개발 모드의 자식은 `nest start --watch`이고, 그 래퍼는 **자기 자식(진짜 API)이 죽어도 살아 있다** — watch 모드의 본래 동작이다. 그래서 개발 모드에서는 `alive()`가 계속 참이라 "자식이 exit 1" 행이 관찰되지 않고, DB 미기동은 `database unreachable` 화면 대신 유예 시간이 다 지난 뒤의 일반 기동 실패 화면으로 나타난다.
+**개발 모드는 자식의 모양이 다르지만, 표는 양쪽에서 성립한다.** 2026-09-11 실측: 개발 모드의 자식은 `nest start --watch`이고 그 래퍼는 **자기 자식(진짜 API)이 죽어도 살아 있다** — watch 모드의 본래 동작이다. 그래서 `alive()`가 계속 참이고 `waitForReady`는 `child-exited`가 아니라 `timeout`을 돌려준다.
 
-packaged 모드에는 이 문제가 없다. `launchPackaged`가 `utilityProcess.fork`로 `dist/main.js`를 **직접** 띄우므로 handle의 수명이 곧 API의 수명이다. 완료 기준 P1-C1~C14는 전부 packaged에서 판정하므로 이 표대로 성립한다.
+그 차이를 흡수하는 것이 `attempt()`의 stderr 검사다. `isAddrInUse`와 `database unreachable` 판정을 `child-exited`뿐 아니라 `timeout`에서도 수행한다 — stderr tail은 handle마다 따로이므로, 그 문구가 있으면 그 자식이 실제로 그 조건을 만난 것이다. 이 처리가 없으면 개발 모드에서 **포트 폴백이 영원히 일어나지 않고**(재시도마다 같은 고정 포트를 다시 고른다) DB 미기동 화면에도 닿지 못한다. 두 가지 모두 실측으로 확인하고 고쳤다.
 
-개발 모드를 맞추려면 `--watch`를 빼야 하는데, 그러면 백엔드 핫 리로드가 사라진다. 개발자 편의 경로를 위해 그 값을 치르지 않는다 — 백엔드를 고치며 일할 때는 기존 `pnpm dev` 웹 흐름이 그대로 있다. 프로세스 오케스트레이션은 Phase 2의 범위이므로, 개발 모드와 packaged 모드의 프로세스 의미를 일치시키는 일은 그쪽에서 다룬다.
+packaged 모드는 `launchPackaged`가 `utilityProcess.fork`로 `dist/main.js`를 **직접** 띄우므로 handle의 수명이 곧 API의 수명이고, 두 검사가 `child-exited`에서 그대로 발화한다.
 
 | 관찰 | 뜻 | 화면 |
 | --- | --- | --- |
