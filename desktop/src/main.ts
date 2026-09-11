@@ -16,6 +16,8 @@ const VITE_ORIGIN = "http://localhost:5173";
 
 let win: BrowserWindow | null = null;
 let api: ApiHandle | null = null;
+/** ready 이전의 자식. api에 승격되기 전에 종료가 오면 이것을 정리해야 한다. */
+let inFlight: ApiHandle | null = null;
 let apiOrigin: string | null = null;
 let retryCount = 0;
 let retryTimer: NodeJS.Timeout | null = null;
@@ -68,10 +70,11 @@ function cancelRetry(): void {
 }
 
 async function stopApi(): Promise<void> {
-  const handle = api;
+  const handles = [api, inFlight].filter((h): h is ApiHandle => h !== null);
   api = null;
+  inFlight = null;
   apiOrigin = null;
-  if (handle !== null) await handle.stop(STOP_GRACE_MS);
+  await Promise.all(handles.map((h) => h.stop(STOP_GRACE_MS)));
 }
 
 function scheduleRetry(): number | undefined {
@@ -91,6 +94,10 @@ type AttemptOutcome =
   | { kind: "addr-in-use" }
   | { kind: "failed"; handle: ApiHandle };
 
+/** be/src/main.ts의 fail-fast가 찍는 문구. 이것이 DB 미기동의 유일한 신호다 — 이 경우
+ *  API는 listen조차 하지 않으므로 health의 503은 관찰되지 않는다(스펙 §6.5). */
+const DB_UNREACHABLE = /database unreachable/;
+
 /**
  * 한 포트로 한 번 시도한다. 전역 `api`를 보지 않고 이 호출이 만든 handle만 관찰한다 —
  * 겹친 start()가 서로의 자식을 오관찰하지 않게 하려면 이 격리가 필요하다.
@@ -103,6 +110,7 @@ async function attempt(port: number, env: ApiEnv): Promise<AttemptOutcome> {
     env: { ...env, PORT: String(port) },
     logFile: logFile(),
   });
+  inFlight = handle;
   const origin = `http://127.0.0.1:${port}`;
   const outcome = await waitForReady({
     probe: () => probeHealth(origin),
@@ -112,9 +120,14 @@ async function attempt(port: number, env: ApiEnv): Promise<AttemptOutcome> {
   });
   if (outcome.kind === "ready") return { kind: "ready", handle, origin };
   if (outcome.kind === "db-unreachable") return { kind: "db-unreachable", handle };
-  if (outcome.kind === "child-exited" && isAddrInUse(handle.stderrTail())) {
-    await handle.stop(STOP_GRACE_MS);
-    return { kind: "addr-in-use" };
+  if (outcome.kind === "child-exited") {
+    const tail = handle.stderrTail();
+    if (isAddrInUse(tail)) {
+      await handle.stop(STOP_GRACE_MS);
+      inFlight = null;
+      return { kind: "addr-in-use" };
+    }
+    if (DB_UNREACHABLE.test(tail)) return { kind: "db-unreachable", handle };
   }
   return { kind: "failed", handle };
 }
@@ -159,11 +172,17 @@ async function startOnce(): Promise<void> {
 
     // 내가 도는 동안 더 새로운 start()가 시작됐다면 내가 만든 자식을 치우고 물러난다.
     if (mine !== generation) {
-      if (outcome.kind !== "addr-in-use") await outcome.handle.stop(STOP_GRACE_MS);
+      if (outcome.kind !== "addr-in-use") {
+        await outcome.handle.stop(STOP_GRACE_MS);
+        inFlight = null;
+      }
       return;
     }
     if (win === null) {
-      if (outcome.kind !== "addr-in-use") await outcome.handle.stop(STOP_GRACE_MS);
+      if (outcome.kind !== "addr-in-use") {
+        await outcome.handle.stop(STOP_GRACE_MS);
+        inFlight = null;
+      }
       return;
     }
 
@@ -171,17 +190,30 @@ async function startOnce(): Promise<void> {
 
     if (outcome.kind === "ready") {
       api = outcome.handle;
+      inFlight = null;
       apiOrigin = outcome.origin;
       retryCount = 0;
       watchForDeath(outcome.handle, mine);
-      await win.loadURL(app.isPackaged ? `${outcome.origin}/` : VITE_ORIGIN);
+      try {
+        await win.loadURL(app.isPackaged ? `${outcome.origin}/` : VITE_ORIGIN);
+      } catch (e) {
+        if (mine !== generation || win === null) return;
+        const seconds = scheduleRetry();
+        await showStatus(win, {
+          state: "failed",
+          detail: `화면을 불러오지 못했어요: ${e instanceof Error ? e.message : String(e)}`,
+          retryInSeconds: seconds,
+          logPath: logFile(),
+        });
+      }
       return;
     }
 
-    const detail = [warning, outcome.kind === "db-unreachable" ? undefined : lastMeaningfulLine(outcome.handle.stderrTail())]
+    const detail = [warning, lastMeaningfulLine(outcome.handle.stderrTail())]
       .filter((s): s is string => typeof s === "string" && s.length > 0)
       .join(" / ");
     await outcome.handle.stop(STOP_GRACE_MS);
+    inFlight = null;
     const seconds = scheduleRetry();
     await showStatus(win, {
       state: outcome.kind === "db-unreachable" ? "db-unreachable" : "failed",
