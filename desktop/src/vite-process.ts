@@ -29,9 +29,23 @@ export function launchVite(options: ViteOptions): ApiHandle {
     tail = (tail + b.toString()).slice(-8_000);
     process.stderr.write(`[vite!] ${b}`);
   });
+  /** 종료 알림은 한 번만 나간다. 'error' 뒤에 'exit'가 또 와도 먼저 기록된 코드가 유지된다. */
+  const settle = (exitCode: number) => {
+    if (code !== null) return;
+    code = exitCode;
+    for (const l of listeners) l(exitCode);
+  };
   child.on("exit", (exitCode) => {
-    code = exitCode ?? 0;
-    for (const l of listeners) l(code);
+    settle(exitCode ?? 0);
+  });
+  // spawn 자체가 실패하면 Node는 'exit'가 아니라 'error'를 낸다. 리스너가 없으면
+  // EventEmitter가 예외를 던져 Electron main 프로세스째 죽는다 — rendererTarget이
+  // 보여줄 수 있는 "Vite를 띄우지 못했어요" 화면 대신 앱이 통째로 사라진다.
+  // api-process.ts가 같은 이유로 같은 처리를 한다 (pnpm이 PATH에 없거나 corepack이
+  // GUI 실행 환경에서 활성화되지 않은 경우).
+  child.on("error", (err: Error) => {
+    tail = (tail + `spawn failed: ${err.message}\n`).slice(-8_000);
+    settle(-1);
   });
   const killGroup = (signal: NodeJS.Signals) => {
     if (pid === undefined) return;
