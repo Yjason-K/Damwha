@@ -6,7 +6,9 @@
 스펙: [2026-09-11-electron-phase-1-app-foundation-design.md](../specs/2026-09-11-electron-phase-1-app-foundation-design.md)
 계획: [2026-09-11-electron-phase-1-app-foundation.md](../plans/2026-09-11-electron-phase-1-app-foundation.md)
 
-**상태 (2026-09-11): 스펙 리뷰·계획 검증 통과. 구현 착수 전.**
+**상태 (2026-09-11): 구현 12개 Task 완료, 통합 검증 완료.**
+완료 기준 14건 중 **12건 충족, 2건 부분 미충족**(P1-C8 실패 원인 문안, P1-C10 포트
+폴백의 외부 API 오인). 두 건 모두 코드 위치와 재현 절차가 아래에 특정돼 있다.
 
 ## 스펙 리뷰
 
@@ -90,6 +92,39 @@
 
 ## 단계별 실행·리뷰
 
+계획 실행은 superpowers SDD 원장(`.superpowers/sdd/2026-09-11-electron-phase-1-app-foundation/progress.md`)이
+Task마다 구현·리뷰·수정 라운드를 기록했다. 아래는 그 원장을 커밋 범위로 압축한 것이다.
+리뷰어는 각 Task의 diff와 스펙·계획만 받았고 구현 대화를 받지 않았다.
+
+| Task | 커밋 범위 | 리뷰 지적 | 조치 | 통과 |
+| --- | --- | --- | --- | --- |
+| 1 데스크톱 패키지·빈 창 | `2d47232..8a5bfd8` | 1건 — 조건 미충족인데 추가된 루트 `pnpm.onlyBuiltDependencies: ["electron"]` | 되돌림(`8a5bfd8`) | 통과 (minor 2건 보류) |
+| 2 API 실행 경로 실측 | `8a5bfd8..2dc4282` | 1건 — 표가 Step 순서가 아니라 주제별 | 보류(외형) | 통과 |
+| 3 `be` 바인드 host | `46aed65..d5e5c55` | 1건 — TDD-red가 ts-jest 암묵 타입검사에 의존 | 보류 | 통과 |
+| 4~7 config·port·readiness·origin (일괄) | `d5e5c55..9115eaf` | 3건 — `noResponseAfter` 타이머 미해제, 테스트 이름과 단언 불일치, 중복 분기 커버리지 | 전부 보류(무해) | 통과 |
+| 8 자식 API 기동·정리 | `9115eaf..f9ea2f2` | 2건 차단 — 두 런처 모두 `child.on("error")` 없음(spawn 실패가 main을 죽인다), 로그 WriteStream `error` 미처리 + `close()` 비멱등 | 같은 라운드에서 수정(`f9ea2f2`) | 통과 (minor 2건 보류) |
+| 9 셸 화면·권한·메뉴 | `dc37854..0f18ee8` | 3건 — ANSI escape 잔존, 상태 조회 fallback, 권한 핸들러 주석. 추가로 **"두 권한 핸들러의 origin 도출 경로가 다르다"는 Minor를 보류** | 앞 3건 수정(`0f18ee8`), Minor 보류 | 통과 — **이 보류가 이 Phase의 마지막 차단 요인이 됐다** |
+| 10 main 배선 | `0f18ee8..f2266e8` | 3건 — `inFlight` 추적 누락(준비 전 종료 시 자식 유출), `loadURL` 실패 미처리, DB 미기동 화면 도달 실패 | 전부 수정(`f2266e8`) | 통과 (minor 3건 보류) |
+| 11 dev Vite 기동·API 주소 주입 | `e9678d2..a9f4f85` | 2건 — dev에서 포트 폴백·DB 화면에 닿지 못함, `vite-process.ts`에도 `child.on("error")` 없음 | 2라운드 수정(`7f6d9ef`, `a9f4f85`) | 통과 (parked 1, minor 1) |
+| 12 패키징·번들 위생 | `a9f4f85..165dd75` | 1건 차단 — electron-builder가 `target: dir` + 서명 설정 없음이면 재서명하지 않아 번들이 Electron 프리빌트의 서명을 그대로 갖는다 | ad-hoc 재서명 + 위생 검사 2개 추가(`165dd75`) | 통과 (minor 1건 보류) |
+| 9 (2차 수정) 권한 조회 핸들러 | `165dd75..75a19f8` | P1-C3 차단 — `permissions.query`가 항상 `denied` | `requestingOrigin`을 `isAllowedOrigin`으로 정규화(`75a19f8`) | 통과 |
+
+Task 11은 구현자가 두 번 커밋 없이 멈췄다(끝나지 않는 명령을 띄우고 턴을 종료). 세 번째
+구현자의 결과를 채택했고, 그 과정에서 컨트롤러가 이전 구현자의 포트 점유 픽스처를
+"고아 프로세스"로 오인해 죽였다. 이후 규칙: **다른 에이전트의 프로세스를 알리지 않고 죽이지 않는다.**
+
+### Task 9의 보류가 만든 교훈
+
+Task 9 리뷰어의 Minor — "두 권한 핸들러가 origin을 서로 다른 경로로 도출하며 공통
+정규화를 거치지 않는다" — 를 "프레임이 하나뿐이라 저위험"으로 판단해 보류했다. 위험은
+프레임 수가 아니라 **문자열 정규화**였다. 실측하니 `requestingOrigin`은
+`"http://localhost:5173/"`처럼 끝에 슬래시가 붙어 오는데 `allowedOrigins()`는 슬래시 없는
+origin을 담고 있어, 원문 `.includes()` 비교는 영원히 거짓이었다. `getUserMedia`는
+`setPermissionRequestHandler`(origin을 `contents.getURL()`에서 뽑는다)를 타서 성공하는데
+`permissions.query`만 거부되는 불일치가 여기서 났고, 렌더러는 조회 결과만 보고
+"마이크 권한이 거부돼 있어요"를 그려 **macOS에 묻지도 않았다.** P1-C3이 마지막까지 막힌
+진짜 원인이 이것이다.
+
 ### Task 2 — API 실행 경로 실측
 
 R1-1(`utilityProcess`로 NestJS가 뜨는가)과 R1-2·R1-9(`pnpm deploy` 트리가 실행 가능한가)를 실측했다. Postgres는 OrbStack의 `damwha-postgres` 컨테이너로 이미 떠 있었다(`pnpm db:up` 불필요).
@@ -112,8 +147,229 @@ R1-1(`utilityProcess`로 NestJS가 뜨는가)과 R1-2·R1-9(`pnpm deploy` 트리
 
 ## 최종 검증
 
-미실시.
+수행일 2026-09-11. P1-C1 ~ P1-C4는 GUI·실제 마이크·실제 파일이 필요해 **사용자가 직접**
+패키징된 앱에서 수행했고, P1-C5 ~ P1-C14는 에이전트가 같은 `.app`
+(`desktop/out/mac-arm64/Damwha.app`, `75a19f8` 이후 빌드)에 대해 수행했다. 에이전트에는
+GUI가 없으므로 화면 도달은 두 대체 수단으로 판정했다 — `--remote-debugging-port`로
+연 CDP에서 창이 실제로 로드한 URL을 읽는 것(`showStatus`가 셸 상태를 query string에
+싣기 때문에 어느 화면인지가 URL로 드러난다), 그리고
+`~/Library/Application Support/Damwha/logs/api.log`.
+
+### 판정 표
+
+| 기준 | 판정 | 실행한 명령과 관찰된 값 |
+| --- | --- | --- |
+| **P1-C1** 앱 아이콘 실행 | **충족** | 사용자가 Finder에서 `Damwha.app`을 실행. 터미널 명령 없이 창이 담화 화면에 도달했다 |
+| **P1-C2** 업로드와 처리 | **충족** | 사용자가 오디오 파일로 회의를 만들고 전사 결과를 화면에서 확인. 생성된 `mtg_37`은 `meeting.status=done`이고 오디오는 `~/Library/Application Support/Damwha/storage/meetings/mtg_37/{original.m4a,normalized.flac}`에 있다 |
+| **P1-C3** 녹음과 마이크 권한 | **충족** | 사용자가 `tccutil reset Microphone kr.damwha.app` 후 Finder에서 실행. macOS 마이크 대화상자가 `NSMicrophoneUsageDescription`의 문구로 떴고 녹음·중단·결과 확인까지 완주했다. 세 차례의 원인 규명 기록은 아래 "마이크 권한" 절에 있다 |
+| **P1-C4** 검색 | **충족** | 사용자가 검색어를 넣어 키워드·의미 결과가 섞여 나오는 것을 확인 |
+| **P1-C5** 자식 정리·외부 보존 | **충족** | 앱 기동 후 `osascript -e 'tell application id "kr.damwha.app" to quit'`. 2초 안에 Electron main 0개, API 자식 0개, 3000 점유 0. 같은 시점에 외부 `damwha_worker`·`damwha-embed` 4개 프로세스 전부 생존. P1-C10의 세 경우 모두에서 외부 API·점유자가 앱 종료 뒤에도 살아 있었다(200 응답) |
+| **P1-C6** 중복 실행 방지 | **충족** | 앱이 떠 있는 상태에서 (a) `open -a Damwha.app` → Electron main 1개, CDP page target 1개 유지. (b) `Contents/MacOS/Damwha`를 직접 실행 → 두 번째 프로세스가 스스로 **exit 0**으로 종료(`requestSingleInstanceLock` 실패 경로), Electron main은 여전히 1개. API 자식도 1개 |
+| **P1-C7** DB 미기동 원인 표시 | **충족** | `pnpm db:down` 후 기동. 3초 만에 `status.html?state=db-unreachable&detail=…&retryInSeconds=3&logPath=…`. `detail` 원문: `[Nest] 55229 … ERROR [Bootstrap] startup failed: database unreachable at postgres://postgres:***@localhost:5432/damwha:` — 비밀번호는 `maskUrl`이 가렸고 로그 경로가 화면에 있다. `pnpm db:up` 후 **자동 재시도로 3초 만에** `http://127.0.0.1:3000/`에 도달 |
+| **P1-C8** 다른 기동 실패 원인 표시 | **미충족 (부분)** | `config.json`에 `SUMMARY_LLM_MODEL=not-in-the-catalog`를 넣고 기동. 화면은 떴고 **P1-C7과 구별된다**(`state=failed` vs `db-unreachable`). 그러나 `detail`이 문자 그대로 **`]`** 한 글자다. 아래 "P1-C8 상세" 참조. 자식 잔존은 없었고, 키 삭제 후 2초 만에 정상 기동했다 |
+| **P1-C9** 로컬 바인드 | **충족** | `lsof -nP -iTCP -sTCP:LISTEN -a -p <api pid>` → `TCP 127.0.0.1:3000 (LISTEN)` 한 줄, `*:3000` 아님. 주입된 env는 `HOST=127.0.0.1`, `PORT=3000`, `DATABASE_URL=postgres://…`, `STORAGE_ROOT=/Users/…/Library/Application Support/Damwha/storage` — 셋 다 절대값. LAN 주소 `172.16.1.154:3000`은 `Couldn't connect to server`로 거부 |
+| **P1-C10** 포트 폴백 | **미충족 (부분)** | 세 경우를 실측했다. 아래 "P1-C10 상세" 참조. 폴백 기구 자체는 동작하지만 **R1-11(외부 API 오인)이 닫히지 않았다** |
+| **P1-C11** 번들 위생 | **충족** | `pnpm --filter damwha-desktop exec node scripts/check-bundle.mjs` → 11개 항목 전부 PASS, exit 0. `dependencies` 없음, `app.asar`에 `node_modules` 0건, 트리 밖 심볼릭 링크 0건(트리 안 379개는 허용), 저장소 경로·pnpm store 경로 문자열 0건, SPA가 `api/dist/public/index.html`에 있음, `NSMicrophoneUsageDescription` 존재, `codesign` Identifier가 `kr.damwha.app`, `codesign --verify --deep --strict` exit 0 |
+| **P1-C12** 경로 위생 | **충족** (판정 구간 한정) | 주입 env 3종 전부 절대 경로(P1-C9 행). 자식의 cwd는 `Contents/Resources/api` — 번들 **안**이지만, 실행 전후 체크섬 manifest 7,655개 파일이 **완전 동일**했다(`diff` 무출력). 다만 manifest는 P1-C5~C14 구간(정상 기동 5회, DB 미기동 1회, zod 실패 1회, 포트 점유 3회, 중복 실행 2회) 앞뒤로만 떴다 — 사용자의 P1-C1~C4 구간은 사전 manifest가 없어 **판정 범위 밖**이다 |
+| **P1-C13** 웹 흐름 회귀 없음 | **충족** | `pnpm install` exit 0 / `pnpm build` exit 0 / `pnpm lint` exit 0(fe에 기존 경고 1건, 오류 0) / `pnpm test` — 1회차에 `be/test/lenses.e2e-spec.ts`가 `socket hang up`으로 1건 실패했으나 단독 재실행 40/40 통과, 부하를 걷어낸 뒤 전체 재실행 **43 suites / 468 tests 전부 통과**(테스트는 testcontainers의 일회용 Postgres와 임시 `STORAGE_ROOT`를 쓰므로 실 데이터와 무관하다). `pnpm dev`는 API 3000 + Vite 5173만 띄우고 **Electron 프로세스 0개**(`desktop`에 `dev` 스크립트가 없다). `docker build -f deploy/api.Dockerfile -t damwha-api:p1-check .` 성공, 314 MB |
+| **P1-C14** 기존 데이터 보존 | **충족** (`.DS_Store` 예외) | 기준선은 Task 1이 2026-09-11T02:23:59Z에 뜬 `~/.cache/damwha-p1-evidence/`다. `be/storage` 32개 항목 중 **29개 데이터 파일 체크섬 완전 동일**, 유일한 차이는 Finder가 갱신한 `./.DS_Store` 1건(파일 수는 32로 동일). compose `config` 비교 완전 동일(`name: damwha`, `damwha_pgdata` 유지, `be_pgdata`는 손대지 않음). `_migrations` 24 → 24 **동일**. `meeting` 11 → 12, `utterance` 4619 → 4620 — 둘 다 **줄지 않음**(사용자의 P1-C2·C3이 더한 분) |
+
+### P1-C8 상세 — 왜 부분 미충족인가
+
+스펙 §9의 성공 판정은 "기동 실패가 화면에 나오고 **stderr 마지막 줄과 종료 코드**를 볼 수
+있다"이다. 관찰된 것:
+
+- `state=failed`로 화면은 떴고 P1-C7의 DB 문안과 다르다 → 이 부분은 충족.
+- `detail`이 **`]`** 한 글자다. `retryInSeconds=3`, `logPath`는 정상.
+- **종료 코드가 화면에 없다.**
+
+원인은 추측이 아니라 실측이다. 같은 기동의 `api.log`에 찍힌 stderr는 zod 오류를
+pretty-print한 15줄짜리 JSON 배열이고, 그 **마지막 비어 있지 않은 줄이 정확히 `]`**다.
+
+```
+ERROR [Bootstrap] startup failed: [
+  {
+    "received": "not-in-the-catalog",
+    "code": "invalid_enum_value",
+    ...
+    "message": "Invalid enum value. Expected 'mlx-community/Qwen3.5-4B-8bit' | … , received 'not-in-the-catalog'"
+  }
+]
+```
+
+`desktop/src/shell-window.ts:33`의 `lastMeaningfulLine()`은 "마지막 비어 있지 않은 줄"을
+고른다. 이 휴리스틱은 한 줄짜리 실패(P1-C7의 `database unreachable …`)에는 맞고 여러 줄
+실패에는 맞지 않는다. Task 9 리뷰어가 "스택 트레이스 프레임이 잡힐 수 있다"는 Important를
+냈고, 당시 컨트롤러가 `be/src/main.ts`가 스택 대신 한 줄만 찍는다는 실측으로 기각했다 —
+그 실측은 DB 실패 경로에 대해서만 옳았다. zod 실패 경로는 `EnvSchema.parse`가 던지는
+`ZodError`의 `message`가 그 자체로 여러 줄이라 같은 `catch`를 타고도 여러 줄이 된다.
+
+종료 코드는 별개 누락이다. `main.ts`의 `watchForDeath()`는 `코드 ${code}`를 문안에 넣지만,
+기동 실패 경로인 `startOnce()`의 `showStatus` 호출(`main.ts:299-304`)은 `outcome.handle.exitCode()`를
+읽지 않는다.
+
+**두 결함 모두 수정하지 않았다.** 이 Task의 역할은 판정과 기록이고, 고치면 새 리뷰 라운드가
+필요하다. Phase 2로 넘긴다.
+
+### P1-C10 상세 — 세 경우의 실측
+
+스펙이 말하는 점유 주체는 `pnpm dev`다. 그대로 해 보니 **충돌 자체가 일어나지 않았다.**
+
+| 점유자 | 점유 주소 | 앱의 API가 잡은 주소 | 화면 | 판정 |
+| --- | --- | --- | --- | --- |
+| (a) `pnpm dev` (스펙 문언) | `*:3000` (`HOST` 기본값 `0.0.0.0`) | **`127.0.0.1:3000`** — 같은 포트에 함께 bind됨 | `http://127.0.0.1:3000/` 정상 | 폴백 **미발생**. 앱은 정상 동작하고 외부는 앱 종료 후에도 200 |
+| (b1) `127.0.0.1:3000` 점유, `/api/health`에 200을 주지 않음 | `127.0.0.1:3000` | **`127.0.0.1:57192`** (탐색 포트) | `http://127.0.0.1:57192/meetings/mtg_37` 정상 | **폴백 성공.** 점유자 생존 |
+| (b2) `127.0.0.1:3000` 점유, `/api/health`에 **200**을 줌 | `127.0.0.1:3000` | 없음 — 자식이 `EADDRINUSE`로 죽음 | `state=failed`, `detail=API가 종료됐어요 (코드 1). … listen EADDRINUSE: address already in use 127.0.0.1:3000` | **폴백 실패 (R1-11)** |
+
+(a)는 macOS/BSD의 소켓 의미론 때문이다. `SO_REUSEADDR`가 켜진 상태에서 `0.0.0.0:3000` 위에
+`127.0.0.1:3000`을 겹쳐 bind하는 것이 허용되고, loopback 트래픽은 더 구체적인 bind가
+가져간다. 그래서 스펙이 지정한 점유 주체로는 `EADDRINUSE`가 발생하지 않고 폴백 경로가
+실행되지 않는다. 검증이 성립하지 않는 것이지 앱이 틀린 것은 아니다 — 앱은 자기 자식이
+쥔 포트를 보고 있었고, 외부 프로세스를 죽이지도 않았다.
+
+(b2)가 실제 결함이다. `main.ts:180-185`의 `attempt()`는 자식을 띄우자마자
+`probeHealth(origin)`으로 **그 포트의 응답**을 준비 신호로 쓴다. 자식이 `EADDRINUSE`로
+죽기 전에 첫 probe가 나가고, 그 200은 외부 점유자가 준 것이므로 앱은 `ready`로 판정해
+`apiOrigin`을 `http://127.0.0.1:3000`으로 잡고 `watchForDeath`를 건다. 곧 자기 자식이
+죽으면서 사망 화면이 뜨고, `addr-in-use` 분기에 닿지 못해 **다음 포트로 넘어가지 않는다.**
+재시도는 다시 3000부터 시작하므로 같은 자리를 반복한다.
+
+이것은 스펙 §6.4가 F-8을 닫으며 명시한 계약
+— *"'그 포트에 응답이 있다'를 준비 신호로 쓰지 않는다 — 응답이 외부 API에서 올 수 있다"* —
+을 구현이 지키지 않은 것이다. 소유권은 자식 핸들로만 판정해야 하며, 최소한 자식이
+`EADDRINUSE`로 죽었는지를 probe 성공보다 먼저 확인해야 한다. Phase 2로 넘긴다.
+
+마이크 권한 재요청 여부(R1-6)는 **미판정**이다. 폴백이 일어난 (b1)에서 앱은 새 origin
+`http://127.0.0.1:57192`를 정상 로드했고, `permissions.ts:8-26`은 허용 origin에 대해
+`media`를 자동 부여하므로 Electron 층에서 다시 묻지 않는 것은 코드로 확인된다. 그러나
+macOS TCC 대화상자가 다시 뜨는지는 GUI와 Finder 실행이 필요해 이 세션에서 관찰할 수 없었다.
+
+### 실측으로 확정된 값
+
+| 항목 | 코드의 값 | 실측 |
+| --- | --- | --- |
+| `READY_TIMEOUT_MS` | `30_000` (`desktop/src/readiness.ts:16`) | packaged 콜드 스타트는 `open`부터 `/api/health` 200까지 **1.7초**. 상한의 6% |
+| `READY_INTERVAL_MS` | `250` | 1.7초 안에 판정되므로 폴링 횟수는 한 자릿수 |
+| `PROBE_TIMEOUT_MS` | `2_000` | 이번 실행에서 probe가 상한에 걸린 경우는 없었다 |
+| `RETRY_DELAYS_MS` | `[3_000, 8_000, 20_000]` (`main.ts:28`) | 실패 화면의 `retryInSeconds=3` — 첫 값이 화면에 그대로 나온다. P1-C7의 DB 복구가 자동 재시도로 3초 만에 성립 |
+| `MAX_PORT_ATTEMPTS` | `4` (고정 1 + 탐색 3, `port.ts:7`) | (b1)에서 1회 폴백으로 `57192` 획득 |
+| `pnpm deploy` 형태 | — | `pnpm --filter=damwha-be --prod --config.inject-workspace-packages=true deploy desktop/build/api`. 선행 조건으로 `be/package.json`에 `"files": ["dist"]`가 필요하다(`be/.gitignore`의 `dist/` 때문에 빠진다) |
+| 자식 기동 수단 | `utilityProcess.fork` | 실측 argv: `Damwha Helper.app/Contents/MacOS/Damwha Helper --type=utility --utility-sub-type=node.mojom.NodeService`, ppid = Electron main. cwd = `Contents/Resources/api` |
+| `.app` 용량 | — | **353 MB**, 파일 7,655개. `app.asar` 80 KB(main + 셸만), 나머지는 `Resources/api` 트리와 Electron 프레임워크 |
+| Gatekeeper 조치 | — | `spctl -a -vvv` → **rejected**(ad-hoc, 공증 없음). 로컬 빌드에는 `com.apple.quarantine` 속성이 없어 실행에는 조치가 필요 없었다. 배포본은 Phase 6의 Developer ID + 공증이 있어야 한다 |
+
+### 검증 절차 자체에서 드러난 사실
+
+- **packaged 모드에서 `pgrep -f "dist/main"`은 API 자식을 찾지 못한다.** 계획과 Task 13
+  브리핑이 쓰던 이 패턴은 `nest`가 `node … be/dist/main`을 띄우는 **dev 전용**이다.
+  packaged의 자식은 `utilityProcess.fork`가 만든 Electron 헬퍼라 argv에 `dist/main`이
+  없다. 올바른 탐색은 `pgrep -P <Electron main pid>` 후 argv에서
+  `--utility-sub-type=node.mojom.NodeService`를 찾는 것, 또는 포트로 `lsof -t`다.
+- `pgrep -c`는 macOS에 없다. `pgrep -f X | wc -l`로 센다.
+- 두 번째 인스턴스를 `open`으로 여는 것은 single-instance를 **시험하지 않는다** —
+  LaunchServices가 기존 앱을 활성화할 뿐 새 프로세스를 만들지 않을 수 있다.
+  `Contents/MacOS/Damwha`를 직접 실행해야 진짜 두 번째 프로세스가 생긴다.
+- 터미널에서 앱을 실행하면 macOS가 TCC를 앱이 아니라 터미널에 귀속시킨다. 권한 검증은
+  반드시 Finder 실행으로 해야 한다.
+
+### 마이크 권한 — 세 차례의 원인 규명
+
+P1-C3은 이 Phase에서 가장 오래 막힌 기준이고, 그 과정이 Phase 6의 입력을 만들었다.
+
+1. **대화상자가 뜨지 않음.** `codesign -dv`가 `Identifier=Electron`,
+   `Sealed Resources=none`를 보고했다. electron-builder는 `target: dir`에 서명 설정이
+   없으면 번들을 재서명하지 않아, 앱이 Electron 프리빌트의 링커 서명을 그대로 갖는다.
+   앱이 **자기 TCC 주체가 아니었다** — 이 맥의 다른 미서명 Electron 앱들과 권한을 공유한다.
+   조치: 패키징 파이프라인에 `codesign --force --deep --sign -`를 추가(`165dd75`).
+2. **재서명 후에도 거부.** `codesign -d --requirements -`가
+   `designated => cdhash H"7e5cefc6…"` — cdhash **하나뿐인** designated requirement를 냈다.
+   ad-hoc 서명의 DR은 항상 이 형태로 환원된다. TCC는 DR에 권한을 묶으므로 **재빌드할 때마다
+   권한이 무효가 된다.** 시스템 설정에는 예전 빌드의 "Damwha" 항목이 남아 있어 macOS가
+   다시 묻지도 않았다. 조치: 사용자가 `tccutil reset Microphone kr.damwha.app` 실행.
+3. **리셋 후에도 앱이 스스로 "권한 거부"를 그림.** 렌더러가
+   `navigator.permissions.query({name:'microphone'})`로 `denied`를 받고 `getUserMedia`를
+   아예 부르지 않아 macOS에 물어볼 기회가 없었다. 원인은 위 "Task 9의 보류가 만든 교훈"에
+   적은 origin 정규화 불일치다. 수정(`75a19f8`) 후 CDP 측정: microphone `granted`,
+   `getUserMedia`가 실제 트랙 획득. 사용자가 Finder 실행으로 대화상자와 녹음 완주를 확인했다.
+
 
 ## 남은 제약·후속 Phase 인계
 
-스펙 §15가 현재 상태를 담는다. 구현이 끝나면 실제 결과로 갱신한다.
+### 이 Phase에서 닫지 못한 완료 기준
+
+| 기준 | 남은 것 | 인계 |
+| --- | --- | --- |
+| P1-C8 | 여러 줄 stderr에서 `lastMeaningfulLine()`이 의미 없는 마지막 줄(`]`)을 고른다. 기동 실패 화면에 종료 코드가 없다 | **Phase 2.** `desktop/src/shell-window.ts:33`과 `main.ts:293-304` |
+| P1-C10 | `attempt()`가 포트 응답을 준비 신호로 써서, 같은 포트의 외부 API가 `/api/health`에 200을 주면 그것을 자기 자식의 준비로 오인한다(R1-11). 폴백이 일어나지 않는다 | **Phase 2.** `desktop/src/main.ts:170-202` |
+| R1-6 (P1-C10의 일부) | 포트 폴백 후 macOS TCC 대화상자가 다시 뜨는지 미판정 — GUI와 Finder 실행 필요 | Phase 2 검증 시 사람이 1회 확인 |
+
+### 서명 — Phase 6의 성격이 바뀐다
+
+**ad-hoc 서명은 TCC 권한을 바이너리의 cdhash에 못 박는다.** `codesign -d --requirements -`가
+낸 designated requirement는 `cdhash H"…"` 하나뿐이고, TCC는 DR에 권한을 묶는다. 따라서
+**재빌드할 때마다 마이크 권한이 무효가 되고**, 사용자 화면에는 예전 빌드의 항목이 남아
+macOS가 다시 묻지도 않는다. Developer ID 서명의 DR은
+`identifier "kr.damwha.app" and anchor apple generic and certificate leaf[subject.OU] = "<TEAMID>"`
+로 재빌드에 걸쳐 **안정적**이다.
+
+그러므로 Developer ID 서명은 배포 편의가 아니라 **앱의 권한이 업데이트를 넘어 살아남기
+위한 선행 조건**이다. ad-hoc으로 업데이트를 내보내면 매 판올림마다 사용자가 마이크 권한을
+다시 줘야 하고 이전 항목은 유령으로 남는다. Phase 0은 서명을 Phase 6으로 미뤘지만 이
+층까지 닿지 않았다(Phase 0 Task 8은 Gatekeeper에서 멈췄다).
+
+Phase 6 입력으로 확인된 현재 상태: 사용자는 Apple Developer Program에 가입했으나
+`security find-identity -v -p codesigning`에는 iOS 인증서
+(`iPhone Distribution: Mediology Co., Ltd. (HJJNV9Y5W8)`)만 있고 **Developer ID Application
+인증서도 notarytool 프로필도 없다.** 필요한 것: 팀 선택(개인 vs Mediology), Account Holder가
+발급하는 Developer ID Application 인증서, 개인 키의 `.p12` 백업(잃으면 같은 identity로
+업데이트를 서명할 수 없다), App Store Connect API 키 기반 공증 자격증명.
+
+### 기존 회의 오디오 404 — Phase 5
+
+앱은 `STORAGE_ROOT`를 `~/Library/Application Support/Damwha/storage`로 잡는다. 기존 회의
+11건의 파일은 `be/storage`에 있으므로 **앱에서 그 회의의 오디오는 404가 된다.** 의도된
+선택이고(스펙 §6.3), 데이터 이전은 **Phase 5**가 진다. P1-C14가 판정하듯 `be/storage`는
+이 Phase에서 한 바이트도 바뀌지 않았으므로 이전 대상은 온전하다.
+
+### `be/worker/.env` — 되돌렸다
+
+worker는 API와 같은 `STORAGE_ROOT`를 봐야 한다. 검증을 위해 Task 13 Step 2가 이 값을 앱의
+경로로 바꿨고, **검증을 마친 뒤 원래 값 `../storage`로 되돌렸다.**
+
+- 되돌리기 전 `job` 테이블에 `queued`·`running`이 0건임을 확인했다(현재 `done` 69, `failed` 25).
+  앱이 만든 `mtg_37`도 이미 `done`이라 미완 작업을 남기지 않는다.
+- 백업은 `~/.cache/damwha-p1-evidence/worker.env.backup`에 그대로 있다. 이 파일은
+  gitignore 대상이라 **이 백업이 유일한 복구 수단**이다.
+- **선택의 대가:** 이제 웹 흐름(`pnpm dev` + `pnpm worker`)은 기존 회의 전부를 정상
+  처리하지만, **데스크톱 앱에서 새로 올린 파일은 worker가 찾지 못해 처리되지 않는다.**
+  앱으로 처리까지 하려면 `be/worker/.env`의 `STORAGE_ROOT`를
+  `/Users/<user>/Library/Application Support/Damwha/storage`로 바꾸고 worker를 재시작해야 한다.
+- 되돌린 것은 파일이다. **이미 떠 있는 worker 프로세스는 재시작 전까지 검증용 값을 그대로
+  들고 있다.** 다음 재시작부터 `../storage`가 적용된다.
+- 이 수동 합의 자체가 제약이다. **Phase 2**가 worker를 앱이 직접 띄우면 앱이 값을 주입하므로
+  사라진다.
+
+### dev 모드와 packaged 모드의 프로세스 의미가 다르다 — Phase 2
+
+dev의 API 자식은 `nest start --watch` **래퍼**다. 이 래퍼는 자기 손자(진짜 API)가
+fail-fast로 죽어도 살아 있으므로, `waitForReady`의 결과가 `child-exited`가 아니라
+`timeout`으로 온다. `attempt()`는 이것을 `timeout`에서도 stderr를 검사하는 방식으로
+흡수한다(`main.ts:189-201`) — 그 검사가 없으면 dev에서 포트 폴백이 영원히 일어나지 않고
+DB 미기동 화면에도 닿지 못한다. packaged의 자식은 `utilityProcess`라 죽으면 바로
+`child-exited`가 온다.
+
+즉 **두 모드의 프로세스 의미가 다르고, 코드가 그 차이를 한쪽으로 보정하고 있다.**
+`stderrTail()`은 handle마다 따로이므로 오판정은 아니지만, 두 모드를 같은 의미로 만드는
+일은 **Phase 2**의 몫이다.
+
+### ready 이후 자동 재시작 부재 — Phase 2
+
+`watchForDeath()`는 ready 뒤 자식이 죽으면 화면에 알리고 `scheduleRetry()`를 건다. 이것은
+전체 `start()`의 재실행이지 프로세스 감독이 아니다. 서비스 수준의 감독·재시작은 Phase 2다.
+
+### CORS와 API 인증 — Phase 6
+
+`HOST=127.0.0.1`은 LAN 노출을 막지만(P1-C9로 실측 확인) API는 여전히 무제한 CORS를 켜고
+인증이 없다. 남은 위협은 같은 머신의 다른 프로세스이며 CORS로는 막히지 않는다. 데스크톱이
+되면서 새로 생긴 노출이 아니므로 Phase 1에서 고치지 않았다(스펙 F-9). **Phase 6** 배포
+보안 검토가 진다.
