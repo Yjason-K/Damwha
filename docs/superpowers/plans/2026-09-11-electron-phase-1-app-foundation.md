@@ -1548,7 +1548,7 @@ setTimeout(async () => {
   await h.stop(5000);
   console.log('exit', h.exitCode());
   setTimeout(() => {
-    require('child_process').exec('pgrep -f \"nest start\"', (e, out) => console.log('leftover:', JSON.stringify(out.trim())));
+    require('child_process').exec('pgrep -f \"nest(\\.js)? start\"', (e, out) => console.log('leftover:', JSON.stringify(out.trim())));
   }, 1000);
 }, 12000);
 "
@@ -1567,7 +1567,7 @@ git commit -m "feat(desktop): 자식 API를 띄우고 정리한다"
 
 **Verify:**
 - `pnpm desktop lint`(= `tsc --noEmit`) 통과.
-- `launchDev`로 띄운 API를 `stop()`한 뒤 `pgrep -f "nest start"`가 비어 있다.
+- `launchDev`로 띄운 API를 `stop()`한 뒤 `pgrep -f "nest(\.js)? start"`가 비어 있다.
 
 **Review:**
 - `HOST: "127.0.0.1"`이 `options.env` **뒤에** 있어 덮이지 않는가.
@@ -2089,7 +2089,7 @@ Expected: 다음 자동 재시도에서 준비 화면이 사라지고 창이 `ht
 
 ```bash
 kill $(pgrep -f "dist/main.js" | head -1)   # packaged 아님 → nest 프로세스
-pgrep -f "nest start"
+pgrep -f "nest(\.js)? start"
 ```
 
 dev에서는 `nest start`의 손자가 실제 API다. 그 pid를 골라 죽인다.
@@ -2101,7 +2101,7 @@ Expected: 창이 "담화를 시작하지 못했어요"로 바뀌고 `detail`에 
 앱을 닫고:
 
 ```bash
-pgrep -f "nest start" || echo "API 잔존 없음"
+pgrep -f "nest(\.js)? start" || echo "API 잔존 없음"
 pgrep -f "damwha_worker" >/dev/null && echo "worker 살아 있음 (정상)"
 ```
 
@@ -2112,7 +2112,7 @@ Expected: API 잔존 없음. worker는 살아 있다.
 DB를 내려 실패 화면을 띄운 상태에서, 자동 재시도가 도는 동안 메뉴의 **서비스 > 다시 시도**를 빠르게 세 번 누른다.
 
 ```bash
-pgrep -c -f "nest start"
+pgrep -c -f "nest(\.js)? start"
 ```
 
 Expected: 1 이하. 2 이상이면 `generation` 가드나 `start()` 직렬화가 동작하지 않는 것이다.
@@ -2358,7 +2358,7 @@ Expected: 앱이 3000이 아닌 포트로 API를 띄우고, 화면이 정상 동
 앱을 닫고:
 
 ```bash
-pgrep -f "nest start" || echo "API 잔존 없음"
+pgrep -f "nest(\.js)? start" || echo "API 잔존 없음"
 pgrep -f "vite" || echo "Vite 잔존 없음"
 ```
 
