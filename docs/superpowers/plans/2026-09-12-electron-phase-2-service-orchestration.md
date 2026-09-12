@@ -2173,11 +2173,21 @@ docker compose -f be/docker-compose.yml exec -T postgres \
   psql -U postgres -d postgres -c "CREATE DATABASE damwha_migration_gate;"
 pnpm be:build
 DATABASE_URL="postgres://postgres:postgres@localhost:5432/damwha_migration_gate" \
-  pnpm be:start 2>&1 | head -40 | grep -i "pending migration" || echo "경고 문구 없음"
+  pnpm be:start > /tmp/api-out.log 2> /tmp/api-err.log &
+sleep 20; kill %1
+echo "--- stdout ---"; grep -i "pending migration" /tmp/api-out.log || echo "없음"
+echo "--- stderr ---"; grep -i "pending migration" /tmp/api-err.log || echo "없음"
 ```
 
-찾은 줄을 `PENDING` 정규식과 대조한다. 특히 **`—`가 em dash인지 하이픈인지** 확인한다. 다르면
-테스트 상수와 정규식을 실제 출력으로 고치고 Step 1~5를 다시 돈다. 확인 후 정리한다:
+**두 스트림을 절대 합치지 마라.** 이 자리에 `2>&1`을 쓰면 경고가 보이고 확인이 통과하는데,
+그것이 정확히 이 단계가 놓쳤던 결함이다(2026-09-12 실측): 경고는 **stdout에만** 있고
+`ApiHandle.stderrTail()`은 stdout을 한 줄도 담지 않으므로, 문구가 완벽히 맞아도 게이트가
+영영 안 터진다. `2>&1`은 그 사실을 가린다.
+
+찾은 줄을 `PENDING` 정규식과 대조한다. 특히 **`—`가 em dash인지 하이픈인지** 확인한다
+(`hexdump -C`로 본다). 그리고 **어느 스트림에 있었는지**를 기록한다 — 게이트는 그 스트림을
+읽어야 한다. 다르면 테스트 상수·정규식·읽는 스트림을 실제에 맞게 고치고 Step 1~5를 다시 돈다.
+확인 후 정리한다:
 
 ```bash
 docker compose -f be/docker-compose.yml exec -T postgres \
