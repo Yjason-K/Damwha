@@ -21,6 +21,7 @@ import { mayRenderShell } from "./shell-latch";
 import { maySpawnServices } from "./spawn-guard";
 import { openWindowFlow } from "./window-flow";
 import {
+  createQuitLatch,
   decideCloseEvent,
   graceExpiryPrompt,
   runCloseFlow,
@@ -1116,9 +1117,25 @@ if (!app.requestSingleInstanceLock()) {
 
   // 앱이 만든 자식은 앱이 정리한다 (스펙 §6.2, P1-C5). 순서·확인·핸드셰이크는
   // quit-flow.ts가 정한다 — 여기 남는 것은 잎과, preventDefault의 짝인 app.quit()뿐이다.
+  const quitLatch = createQuitLatch();
   app.on("before-quit", (event) => {
-    if (quitting) return;
+    const gate = quitLatch.press();
+    // 우리 자신의 app.quit()이다. 여기서 막으면 preventDefault의 짝이 사라져 앱이 창도 없이
+    // 남아 다시는 끝나지 않는다.
+    if (gate === "let-it-quit") return;
     event.preventDefault();
+    if (gate === "ignore") {
+      // 마무리가 도는 중의 2차 ⌘Q. 통과시키면 Electron이 즉시 창을 파괴하고 프로세스를 끝내
+      // 녹음의 꼬리를 잃거나(P2-C13) detached 자식을 고아로 남긴다(P1-C5·P2-C4). 새 흐름을
+      // 시작하면 같은 질문을 두 번 받는다. 판정은 quit-flow.ts의 decideQuitEvent에 있다.
+      appendSupervisorLog("종료하는 중에 종료를 다시 눌렀어요 — 진행 중인 마무리를 기다립니다.");
+      return;
+    }
+    // preventDefault를 부른 이번 종료의 짝. 통과 래치는 **여기서만** 올라간다.
+    const quitNow = () => {
+      quitLatch.allow();
+      app.quit();
+    };
     // quitting을 여기서 올리지 않는다. 확인 대화상자에서 "취소"를 고르면 앱은 계속
     // 살아야 하는데, 래치가 먼저 올라가 있으면 그 뒤로 activeWindow가 영원히 null을
     // 돌려줘(spawn-guard) 재시도도 상태 갱신도 죽는다 — 종료하지 않은 앱이 종료된 앱처럼
@@ -1149,7 +1166,7 @@ if (!app.requestSingleInstanceLock()) {
       stopServices,
       log: appendSupervisorLog,
       warn: showQuitNotice,
-      quit: () => app.quit(),
+      quit: quitNow,
     }).catch((e: unknown) => {
       // preventDefault로 이번 종료를 막았으므로 app.quit()이 반드시 다시 불려야 한다.
       // 확인 대화상자 자체가 거부하는 경로(창이 죽는 중, 표시 실패)가 이 catch에만 걸린다 —
@@ -1157,7 +1174,13 @@ if (!app.requestSingleInstanceLock()) {
       // 치른 자리다). 자식을 못 죽였더라도 종료는 진행한다.
       appendSupervisorLog(`종료 중 예외 — ${reasonOf(e)}`);
       quitting = true;
-      app.quit();
-    });
+      quitNow();
+    })
+      .finally(() => {
+        // "취소"를 고르면 앱은 그대로 산다. 그때 진입 래치를 내려야 다음 ⌘Q가 다시 묻는다 —
+        // 올려 둔 채로 두면 사용자가 앱을 영영 끌 수 없다. 흐름이 실제로 종료로 끝났으면
+        // quitAllowed가 이미 올라가 있어 이 하강은 판정에 닿지 못한다.
+        quitLatch.settle();
+      });
   });
 }

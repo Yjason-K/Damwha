@@ -284,3 +284,80 @@ export function decideCloseEvent(state: {
   if (state.closing) return "ignore";
   return "run-flow";
 }
+
+/**
+ * `before-quit` 이벤트 하나를 어떻게 대할 것인가. `decideCloseEvent`와 **같은 모양의 같은
+ * 결함**을 종료 경로에서 닫는다 (재리뷰 3의 N4).
+ *
+ * `main.ts`는 오랫동안 `if (quitting) return;`이었다 — `preventDefault` 없이 통과. 그런데
+ * `quitting`은 `beginQuit()`이 **핸드셰이크(≤30초)·"종료 중" 화면·2차 스냅샷·`stopServices`의
+ * worker 유예(90초)·남은 것 경고보다 전부 앞에서** 올리는 래치다. 그래서 그 긴 구간의 2차 ⌘Q가
+ * 그대로 통과해 Electron이 즉시 창을 파괴하고 프로세스를 끝냈다. 결과 둘:
+ * - 핸드셰이크 중이면 렌더러가 죽어 `LiveRecorder.stop()`이 못 끝나고 tail 청크를 잃는다 →
+ *   `capture_error = producer_abandoned` (완료 기준 P2-C13). N1과 **똑같은 값**이다.
+ * - `stopServices` 중이면 main이 먼저 죽어 `detached: true`인 worker·API·Vite가 고아로 남고
+ *   (services/worker.ts, supervisor.ts가 "Electron이 죽어도 살아남는다"고 적어 둔 그것),
+ *   남은 것 경고는 영영 안 뜬다 → 스펙 §6.2 / P1-C5 / P2-C4 위반.
+ * 그리고 `beginQuit` **이전**(확인 대화상자가 떠 있는 동안)의 2차 ⌘Q는 `quitting`이 아직
+ * 거짓이라 **두 번째 `runQuitFlow`를 시작했다** — 창 닫기에서 이미 없앤 "같은 질문 두 번"이다.
+ *
+ * 그래서 통과의 근거는 **`quitting`이 아니다.** `quitting`은 되돌릴 수 없는 지점을 표시하려고
+ * 일부러 이르게 올리는 래치이고(그 자리를 옮기면 "취소"한 앱이 종료된 앱처럼 군다 —
+ * main.ts의 주석이 값을 치른 자리다), 그것을 통과 신호로 쓴 것이 정확히 이 결함이다.
+ * 통과의 근거는 오직 **`quitAllowed` — 우리가 마무리를 끝내고 `app.quit()`을 부르기로 했다는
+ * 사실** 하나뿐이다. `closed`가 창 쪽에서 하는 역할과 같다.
+ *
+ * - `quitAllowed` — 우리 자신의 `app.quit()`이다. **통과.** 막으면 `preventDefault`를 이미
+ *   불렀으므로 앱이 창도 없이 남아 다시는 끝나지 않는다 (Phase 1이 값을 치른 자리다).
+ * - `quitRequested` — 흐름이 도는 중에 사람이 **다시 누른** 것이다. 막고 무시한다. 통과시키면
+ *   위의 두 결과가 그대로 나고, 새 흐름을 시작하면 같은 질문을 두 번 받는다.
+ * - 둘 다 아니면 첫 입력이다. 막고 흐름을 시작한다.
+ */
+export type QuitGate = "let-it-quit" | "ignore" | "run-flow";
+
+export function decideQuitEvent(state: { quitAllowed: boolean; quitRequested: boolean }): QuitGate {
+  if (state.quitAllowed) return "let-it-quit";
+  if (state.quitRequested) return "ignore";
+  return "run-flow";
+}
+
+/**
+ * 그 두 래치의 **수명**. 판정만 꺼내고 래치를 main.ts에 두면 "취소한 뒤 다시 ⌘Q가 먹는가"를
+ * 어떤 테스트도 부를 수 없다 — `decideQuitEvent`로 그것을 단언하려 하면 첫 입력 테스트와
+ * **완전히 같은 입력**이 되어 새로 지키는 성질이 0이 된다 (재리뷰 3의 N6이 창 쪽에서 잡은 것이
+ * 정확히 그 모양이다). 그래서 래치를 여기 둔다. main.ts에 남는 것은 잎(`preventDefault`·
+ * `app.quit`·로그)과 배선뿐이다.
+ */
+export interface QuitLatch {
+  /** `before-quit` 한 번. `"run-flow"`를 돌려줄 때 진입 래치를 올린다. */
+  press(): QuitGate;
+  /** 우리 자신의 `app.quit()` **직전**. 이 뒤의 `before-quit`만 통과한다. */
+  allow(): void;
+  /**
+   * 흐름이 끝났다. 진입 래치를 내려 다음 ⌘Q가 다시 묻게 한다 — "취소"를 고른 뒤에도 래치가
+   * 올라가 있으면 사용자가 앱을 영영 끌 수 없다.
+   *
+   * 조건 없이 내린다. `allow()`가 한 번 불린 뒤에는 `quitRequested` 값이 판정에 닿지 못하므로
+   * (`quitAllowed`가 먼저 통과시킨다) 가드를 두면 어떤 테스트로도 죽일 수 없는 줄이 하나
+   * 생긴다. 이 작업의 반복 결함이 그것이다.
+   */
+  settle(): void;
+}
+
+export function createQuitLatch(): QuitLatch {
+  let quitAllowed = false;
+  let quitRequested = false;
+  return {
+    press: () => {
+      const gate = decideQuitEvent({ quitAllowed, quitRequested });
+      if (gate === "run-flow") quitRequested = true;
+      return gate;
+    },
+    allow: () => {
+      quitAllowed = true;
+    },
+    settle: () => {
+      quitRequested = false;
+    },
+  };
+}

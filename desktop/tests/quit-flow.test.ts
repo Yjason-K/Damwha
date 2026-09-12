@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   CLOSE_WHILE_RECORDING,
+  createQuitLatch,
   decideCloseEvent,
+  decideQuitEvent,
   graceExpiryPrompt,
   leftoverNotice,
   runCloseFlow,
@@ -448,6 +450,10 @@ describe("decideCloseEvent", () => {
   });
 
   it("asks the close flow on the first press", () => {
+    // "취소" 뒤의 다음 ⌘W도 **같은 상태**다 — finally가 closing을 내리고 closed는 서지 않는다.
+    // 그래서 그 갈래를 위한 따로 된 테스트는 이 줄과 완전히 같은 입력을 단언할 뿐이라 새로
+    // 지키는 성질이 0이었다 (재리뷰 3의 N6). 래치를 내리는 것은 순수 함수가 아니라 main.ts의
+    // finally이므로 여기서는 잠글 수 없다 — 수동 점검 항목으로 남는다.
     expect(decideCloseEvent({ quitting: false, closing: false, closed: false })).toBe("run-flow");
   });
 
@@ -465,9 +471,54 @@ describe("decideCloseEvent", () => {
     // "run-flow"도 안 된다 — 그러면 같은 질문을 두 번 받는다(F2가 없앤 결함).
     expect(decideCloseEvent({ quitting: false, closing: true, closed: false })).toBe("ignore");
   });
+});
 
-  it("closes on the very next press after the user cancelled", () => {
-    // "취소"는 closed를 세우지 않고 finally가 래치를 내린다. 그 다음 ⌘W는 다시 묻는다.
-    expect(decideCloseEvent({ quitting: false, closing: false, closed: false })).toBe("run-flow");
+describe("decideQuitEvent", () => {
+  // main.ts의 before-quit 핸들러는 vitest가 영영 못 부른다(electron을 값으로 import한다).
+  // 그래서 **무엇을 통과시키고 무엇을 막는가**라는 판정만 여기로 꺼냈다.
+  //
+  // 통과의 근거가 `quitting`이 **아니라는 것**이 이 세 갈래의 전부다. `quitting`은 beginQuit이
+  // 핸드셰이크·화면·stopServices보다 앞에서 올리는 래치라, 그것을 통과 신호로 쓰면 그 긴
+  // 구간의 2차 ⌘Q가 창을 파괴하고(→ producer_abandoned) detached 자식을 고아로 남긴다.
+  it("lets our own app.quit() through once the flow decided to quit", () => {
+    // 이 갈래를 막으면 preventDefault의 짝이 사라져 앱이 창도 없이 남아 다시는 끝나지 않는다.
+    expect(decideQuitEvent({ quitAllowed: true, quitRequested: true })).toBe("let-it-quit");
+  });
+
+  it("prevents and ignores a second press while the flow is still running", () => {
+    // 재리뷰 3의 N4. "let-it-quit"이면 Electron이 즉시 창을 파괴하고 프로세스를 끝내 녹음의
+    // 꼬리를 잃고(P2-C13) worker·API가 고아로 남는다(P1-C5·P2-C4). "run-flow"도 안 된다 —
+    // 확인 대화상자가 떠 있는 동안의 2차 ⌘Q가 두 번째 흐름을 시작하던 것이 같은 결함이다.
+    expect(decideQuitEvent({ quitAllowed: false, quitRequested: true })).toBe("ignore");
+  });
+
+  it("runs the quit flow on the first press", () => {
+    expect(decideQuitEvent({ quitAllowed: false, quitRequested: false })).toBe("run-flow");
+  });
+});
+
+describe("createQuitLatch", () => {
+  it("raises the entry latch on the first press so the next one is ignored", () => {
+    const latch = createQuitLatch();
+    expect(latch.press()).toBe("run-flow");
+    expect(latch.press()).toBe("ignore");
+    expect(latch.press()).toBe("ignore");
+  });
+
+  it("lets the quit through only after allow()", () => {
+    const latch = createQuitLatch();
+    expect(latch.press()).toBe("run-flow");
+    latch.allow();
+    expect(latch.press()).toBe("let-it-quit");
+  });
+
+  it("asks again on the next press after the user cancelled", () => {
+    // 확인 대화상자에서 "취소" → 흐름은 quit()을 부르지 않고 끝난다(allow() 없음). 그때
+    // 진입 래치가 내려가지 않으면 사용자가 앱을 **영영 끌 수 없다** — 이후 모든 ⌘Q가
+    // preventDefault만 맞고 "ignore"로 삼켜진다.
+    const latch = createQuitLatch();
+    expect(latch.press()).toBe("run-flow");
+    latch.settle();
+    expect(latch.press()).toBe("run-flow");
   });
 });
