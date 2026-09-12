@@ -449,7 +449,9 @@ EOF
   - `types.ts`: `ServiceId`, `ProcessState`, `HealthState`, `ServiceStatus`, `ServiceHandle`,
     `LaunchContext`, `LaunchResult`, `ReadinessResult`, `ServiceSpec`, `StopPlan`, `StopOutcome`
   - `supervisor.ts`: `orderOf(specs)`, `createSupervisor(specs, ctx, hooks)` →
-    `{ start(), stopAll(plan), statuses(), noteExit(id, code) }`
+    `{ start(), stopAll(plan), statuses(), runtimeOf(id) }`. 감독자가 재시작 정책도 소유한다 —
+    ready 이후 사망을 감시해 `backoffMs`로 다시 띄우고 `maxAttempts`에서 멈춘다. `gate: false`인
+    서비스의 준비 대기는 배경으로 돌아 기동 루프를 막지 않는다.
 
 - [ ] **Step 1: `types.ts`를 쓴다 (값이 없으므로 테스트 없음)**
 
@@ -692,6 +694,183 @@ describe("supervisor.start", () => {
   });
 });
 
+describe("supervisor restart policy", () => {
+  it("does not block the start loop on a non-gate service", async () => {
+    // embed는 bge-m3를 import 시점에 올려 30초 이상 걸린다. 직렬로 기다리면 창이 그만큼
+    // 늦게 뜬다 — 스펙 §6.7의 "게이트는 셋뿐"이 이 비대칭을 뜻한다.
+    const order: ServiceId[] = [];
+    const s = createSupervisor(
+      [
+        spec("embed", {
+          gate: false,
+          readiness: async () => {
+            await new Promise((r) => setTimeout(r, 200));
+            return { kind: "ready" };
+          },
+          launch: async () => {
+            order.push("embed");
+            return { handle: null, owned: true };
+          },
+        }),
+        spec("api", {
+          launch: async () => {
+            order.push("api");
+            return { handle: null, owned: true };
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 2_000, readyIntervalMs: 10 },
+    );
+    await s.start();
+    // start()가 embed의 200ms를 기다렸다면 api는 그 뒤에 온다. 기다리지 않았으면 둘 다 즉시.
+    expect(order).toEqual(["embed", "api"]);
+    expect(s.statuses().find((x) => x.id === "api")!.process).toBe("running");
+  });
+
+  it("relaunches after the process dies and counts the attempt", async () => {
+    let launches = 0;
+    let listener: ((code: number) => void) | null = null;
+    const s = createSupervisor(
+      [
+        spec("worker", {
+          gate: true,
+          restart: { maxAttempts: 2, backoffMs: [5] },
+          launch: async () => {
+            launches += 1;
+            return {
+              handle: {
+                pid: 1,
+                alive: () => true,
+                stderrTail: () => "",
+                exitCode: () => null,
+                onExit: (l: (c: number) => void) => {
+                  listener = l;
+                },
+                stop: async () => undefined,
+              } as never,
+              owned: true,
+            };
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    expect(launches).toBe(1);
+    listener!(1);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(launches).toBe(2);
+    expect(s.statuses()[0].restarts).toBe(1);
+  });
+
+  it("stops relaunching at maxAttempts instead of looping forever", async () => {
+    let launches = 0;
+    const listeners: Array<(code: number) => void> = [];
+    const s = createSupervisor(
+      [
+        spec("worker", {
+          restart: { maxAttempts: 2, backoffMs: [5] },
+          launch: async () => {
+            launches += 1;
+            return {
+              handle: {
+                pid: 1,
+                alive: () => true,
+                stderrTail: () => "",
+                exitCode: () => null,
+                onExit: (l: (c: number) => void) => listeners.push(l),
+                stop: async () => undefined,
+              } as never,
+              owned: true,
+            };
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    for (let i = 0; i < 5; i += 1) {
+      listeners.at(-1)?.(1);
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    expect(launches).toBe(3); // 최초 1 + 재시작 2
+  });
+
+  it("never restarts a service whose policy is never", async () => {
+    // postgres. compose의 restart: unless-stopped가 이미 그 일을 한다.
+    let launches = 0;
+    let listener: ((code: number) => void) | null = null;
+    const s = createSupervisor(
+      [
+        spec("postgres", {
+          restart: "never",
+          launch: async () => {
+            launches += 1;
+            return {
+              handle: {
+                pid: 1,
+                alive: () => true,
+                stderrTail: () => "",
+                exitCode: () => null,
+                onExit: (l: (c: number) => void) => {
+                  listener = l;
+                },
+                stop: async () => undefined,
+              } as never,
+              owned: true,
+            };
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    listener!(1);
+    await new Promise((r) => setTimeout(r, 40));
+    expect(launches).toBe(1);
+  });
+
+  it("does not restart once stopAll has begun", async () => {
+    // 종료가 방금 치운 것을 타이머가 되살리면 앱이 창 없이 프로세스만 남긴다.
+    let launches = 0;
+    let listener: ((code: number) => void) | null = null;
+    const s = createSupervisor(
+      [
+        spec("worker", {
+          restart: { maxAttempts: 3, backoffMs: [10] },
+          launch: async () => {
+            launches += 1;
+            return {
+              handle: {
+                pid: 1,
+                alive: () => true,
+                stderrTail: () => "",
+                exitCode: () => null,
+                onExit: (l: (c: number) => void) => {
+                  listener = l;
+                },
+                stop: async () => undefined,
+              } as never,
+              owned: true,
+            };
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await s.stopAll({ graceMs: 5 });
+    listener!(1);
+    await new Promise((r) => setTimeout(r, 40));
+    expect(launches).toBe(1);
+  });
+});
+
 describe("supervisor.stopAll", () => {
   it("stops in reverse dependency order", async () => {
     const order: ServiceId[] = [];
@@ -845,6 +1024,10 @@ export function createSupervisor(
     ]),
   );
 
+  /** 종료가 시작되면 재시작을 걸지 않는다. 종료가 방금 치운 것을 타이머가 되살리면 안 된다. */
+  let stopping = false;
+  const timers = new Set<NodeJS.Timeout>();
+
   const statuses = () => ordered.map((s) => ({ ...runtimes.get(s.id)!.status }));
   const emit = () => hooks.onStatus?.(statuses());
   const log = (line: string) => hooks.log?.(line);
@@ -904,50 +1087,115 @@ export function createSupervisor(
     return false;
   }
 
+  /** 배경으로 도는 비게이트 준비 대기. stopAll이 기다릴 수 있게 모아 둔다. */
+  const pending = new Set<Promise<void>>();
+
+  /**
+   * 한 서비스를 띄우고 준비까지 본다. 게이트면 호출자가 await하고, 아니면 배경으로 돈다 —
+   * embed는 bge-m3를 import 시점에 올려 30초 이상 걸리는데 그것을 직렬로 기다리면 창이 그만큼
+   * 늦게 뜬다. 스펙 §6.7의 "게이트는 셋뿐"은 이 비대칭을 뜻한다.
+   */
+  async function bring(spec: ServiceSpec): Promise<boolean> {
+    const rt = runtimes.get(spec.id)!;
+    const external = await spec.detectExternal(ctx);
+    if (external.kind === "stand-down") {
+      log(`${spec.id}: 외부 인스턴스가 있어 앱이 띄우지 않는다 — ${external.detail}`);
+      set(spec.id, { process: "running", health: "unknown", owned: false, detail: external.detail });
+      return true;
+    }
+
+    set(spec.id, { process: "starting", health: "unknown" });
+    try {
+      rt.result = await spec.launch(ctx);
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      set(spec.id, { process: "failed", health: "unknown", detail });
+      log(`${spec.id}: 기동 실패 — ${detail}`);
+      return false;
+    }
+    set(spec.id, { owned: rt.result.owned });
+    if (external.kind === "adopt") log(`${spec.id}: 외부 인스턴스를 채택했다 — ${external.detail}`);
+
+    if (await awaitReady(rt)) {
+      log(`${spec.id}: 준비됨`);
+      watchForDeath(rt);
+      return true;
+    }
+    // 준비 못 한 것은 우리가 띄웠으면 치운다. 남겨 두면 재시도가 그 위에 또 띄운다.
+    if (rt.result !== null && rt.result.owned) {
+      await spec.stop(rt.result, { graceMs: 5_000 }).catch(() => undefined);
+      rt.result = null;
+    }
+    scheduleRestart(spec, "기동 실패");
+    return false;
+  }
+
+  /**
+   * ready 이후에 죽으면 백오프로 다시 띄운다. 상한을 넘으면 failed로 고정하고 메뉴의 재시도를
+   * 기다린다 (스펙 §6.8). postgres는 restart가 "never"다 — compose의 restart: unless-stopped가
+   * 이미 그 일을 하고, 감독자가 둘이면 같은 컨테이너를 다툰다.
+   */
+  function scheduleRestart(spec: ServiceSpec, why: string): void {
+    if (spec.restart === "never" || stopping) return;
+    const rt = runtimes.get(spec.id)!;
+    const attempt = rt.status.restarts;
+    if (attempt >= spec.restart.maxAttempts) {
+      log(`${spec.id}: 재시작 상한 ${spec.restart.maxAttempts}회를 넘겼다 — 수동 재시도를 기다린다`);
+      return;
+    }
+    const delay = spec.restart.backoffMs[Math.min(attempt, spec.restart.backoffMs.length - 1)];
+    set(spec.id, { restarts: attempt + 1 });
+    log(`${spec.id}: ${why} — ${Math.round(delay / 1000)}초 뒤 재시작 (${attempt + 1}회차)`);
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      if (stopping) return;
+      const p = bring(spec).then(() => undefined);
+      pending.add(p);
+      void p.finally(() => pending.delete(p));
+    }, delay);
+    timers.add(timer);
+  }
+
+  /** ready 뒤 자식이 죽는 것을 감시한다. degraded는 여기 오지 않는다 — 프로세스는 살아 있다. */
+  function watchForDeath(rt: Runtime): void {
+    const handle = rt.result?.handle;
+    if (handle === null || handle === undefined) return;
+    handle.onExit((code) => {
+      if (stopping) return;
+      set(rt.spec.id, {
+        process: "failed",
+        health: "unknown",
+        detail: `프로세스가 종료됐어요 (코드 ${code}).`,
+      });
+      rt.result = null;
+      scheduleRestart(rt.spec, `종료 (코드 ${code})`);
+    });
+  }
+
   async function start(): Promise<void> {
     // prepare()를 전부 먼저 돌린다. embed의 포트 결정처럼 다른 서비스의 env가 그것에 의존한다.
+    // 선언 순서와 무관하게 launch보다 먼저 끝난다.
     for (const spec of ordered) {
       if (spec.prepare === undefined) continue;
       Object.assign(ctx.env, await spec.prepare(ctx));
     }
 
     for (const spec of ordered) {
-      const rt = runtimes.get(spec.id)!;
-      const external = await spec.detectExternal(ctx);
-      if (external.kind === "stand-down") {
-        log(`${spec.id}: 외부 인스턴스가 있어 앱이 띄우지 않는다 — ${external.detail}`);
-        set(spec.id, { process: "running", health: "unknown", owned: false, detail: external.detail });
+      if (!spec.gate) {
+        // 배경으로 돌린다. 실패해도 기동 전체를 멈추지 않는다.
+        const p = bring(spec).then(() => undefined);
+        pending.add(p);
+        void p.finally(() => pending.delete(p));
         continue;
       }
-
-      set(spec.id, { process: "starting", health: "unknown" });
-      try {
-        rt.result = await spec.launch(ctx);
-      } catch (e) {
-        const detail = e instanceof Error ? e.message : String(e);
-        set(spec.id, { process: "failed", health: "unknown", detail });
-        log(`${spec.id}: 기동 실패 — ${detail}`);
-        if (spec.gate) return;
-        continue;
-      }
-      set(spec.id, { owned: rt.result.owned });
-      if (external.kind === "adopt") log(`${spec.id}: 외부 인스턴스를 채택했다 — ${external.detail}`);
-
-      const ok = await awaitReady(rt);
-      if (ok) {
-        log(`${spec.id}: 준비됨`);
-        continue;
-      }
-      // 준비 못 한 것은 우리가 띄웠으면 치운다. 남겨 두면 다음 재시도가 그 위에 또 띄운다.
-      if (rt.result.owned) {
-        await spec.stop(rt.result, { graceMs: 5_000 }).catch(() => undefined);
-        rt.result = null;
-      }
-      if (spec.gate) return;
+      if (!(await bring(spec))) return;
     }
   }
 
   async function stopAll(plan: StopPlan): Promise<StopOutcome> {
+    stopping = true;
+    for (const t of timers) clearTimeout(t);
+    timers.clear();
     const leaked: number[] = [];
     let stopped = true;
     // 역순. dependsOn이 정한 순서를 뒤집는 것이 곧 의존 역순이다.
@@ -977,7 +1225,7 @@ export function createSupervisor(
 - [ ] **Step 5: 테스트가 통과하는지 확인한다**
 
 Run: `pnpm --filter damwha-desktop exec vitest run tests/supervisor.test.ts`
-Expected: PASS — 13 tests
+Expected: PASS — 18 tests
 
 - [ ] **Step 6: 전체 테스트와 타입 검사**
 
@@ -1021,6 +1269,11 @@ EOF
 - 게이트 서비스가 실패했을 때 **뒤 서비스를 띄우지 않는가.** 띄우면 스키마 없는 DB 위에 worker가
   올라가는 경로가 열린다.
 - 준비 못 한 자식을 `stop`으로 치우는가. 안 치우면 재시도마다 프로세스가 쌓인다.
+- **비게이트 서비스가 기동 루프를 막지 않는가.** 막으면 embed의 bge-m3 로딩이 창을 30초 늦춘다.
+- **재시작이 실제로 구현됐는가.** `restart` 필드를 선언만 하고 아무도 읽지 않으면 스펙 §6.8이
+  글자로만 남고 P2-C11을 판정할 수 없다.
+- `stopAll` 뒤에 재시작 타이머가 살아남지 않는가. 살아남으면 종료가 치운 것을 되살린다.
+- `restart: "never"`인 postgres를 정말 재시작하지 않는가.
 
 ---
 
@@ -3668,10 +3921,13 @@ Expected: PASS — 기존 + 5 tests
 `isPortOccupied`·`listenerPids`·`descendantPids`·`verifyOwnListener`는 **그대로 남기고** 어댑터에
 주입한다.
 
-먼저 `electron` import에 `dialog`를 더한다 — 현재는 `{ app, BrowserWindow }`뿐이다.
+먼저 import를 보강한다. 현재 `main.ts`는 `electron`에서 `{ app, BrowserWindow }`만 가져오고
+`fs`를 전혀 가져오지 않는다 — 아래 헬퍼 넷이 둘 다 쓴다.
 
 ```ts
 import { app, BrowserWindow, dialog } from "electron";
+import * as fs from "fs";
+import type { LaunchContext, ServiceId, ServiceStatus } from "./services/types";
 ```
 
 그리고 이 Task가 쓰는 작은 헬퍼 넷을 `main.ts`에 정의한다. 계획의 다른 자리에서 이름만
@@ -3819,8 +4075,10 @@ async function startServices(mine: number): Promise<void> {
 
   supervisor = createSupervisor(
     [
+      // 선언 순서의 역순이 곧 종료 순서다. 스펙 §6.9가 worker → embed → api를 요구하므로
+      // 여기는 postgres → api → embed → worker여야 한다. embed의 prepare()는 launch보다
+      // 먼저 전부 돌므로 api가 EMBED_SERVICE_URL을 못 보는 일은 없다.
       postgresSpec((args) => dockerRun(docker, args)),
-      embedSpec({ probe: (url) => probeEmbedContract(url, wantEmbed), freePort }),
       apiSpec({
         verifyOwnListener,
         isPortOccupied,
@@ -3828,6 +4086,7 @@ async function startServices(mine: number): Promise<void> {
         onMigrationCheckSkipped: () =>
           appendSupervisorLog("마이그레이션 검사가 건너뛰어졌어요 — 통과한 것이 아닙니다."),
       }),
+      embedSpec({ probe: (url) => probeEmbedContract(url, wantEmbed), freePort }),
       workerSpec({ listExternal: listExternalWorkers }),
     ],
     ctx,
