@@ -85,6 +85,14 @@ export interface ServiceSpec {
    * 2026-09-12 실측으로 31초가 걸렸고(따뜻한 캐시), 모델 캐시가 비면 훨씬 길다.
    */
   readyTimeoutMs?: number;
+  /**
+   * ready 도달 뒤 이 주기로 readiness()를 다시 부른다. 없으면 계속 감시하지 않는다.
+   * 나누어 둔 두 축은 관측이 있어야 뜻이 생긴다 (스펙 §6.6) — API는 부팅 뒤 DB가 끊겨도
+   * 죽지 않으므로, 다시 묻지 않으면 감독자는 영원히 running/ok로 남고 모든 요청은 실패한다.
+   * 재프로브는 상태만 바꾼다. 재시작은 걸지 않는다 — 의존이 돌아오지 않는 한 같은 실패를
+   * 반복하며 백오프만 태우고, 스펙 §6.8이 금지한 의존 캐스케이드가 된다.
+   */
+  healthIntervalMs?: number;
   stop(result: LaunchResult, plan: StopPlan): Promise<StopOutcome>;
   restart: { maxAttempts: number; backoffMs: readonly number[] } | "never";
 }

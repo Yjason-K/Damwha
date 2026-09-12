@@ -1,4 +1,5 @@
 import type {
+  ExternalState,
   LaunchContext,
   LaunchResult,
   ReadinessResult,
@@ -16,10 +17,22 @@ export interface SupervisorHooks {
   log?(line: string): void;
   readyTimeoutMs?: number;
   readyIntervalMs?: number;
+  /** 재시작 예산을 돌려주는 안정 창. 기본값은 분 단위라 테스트가 줄이려고 열어 둔다. */
+  stableResetMs?: number;
 }
 
 const DEFAULT_READY_TIMEOUT_MS = 60_000;
 const DEFAULT_READY_INTERVAL_MS = 400;
+/**
+ * ready를 이만큼 유지하면 restarts를 0으로 되돌린다 (스펙 §6.8 — "retryCount는 ready 도달 시
+ * 0으로 돌아간다"). ready 즉시 되돌리면 몇 초마다 죽는 서비스가 예산을 매번 새로 받아 무한
+ * 재시작이 되고(P2-C11이 금지한다), 영영 되돌리지 않으면 maxAttempts가 앱 실행 전체의 누적
+ * 상한이 되어 월·화에 한 번씩 복구된 서비스가 목요일에는 재시작되지 않는다. 창을 두면 둘 다
+ * 만족한다 — 플래핑은 창을 못 넘고, 진짜 복구는 넘는다.
+ */
+const DEFAULT_STABLE_RESET_MS = 60_000;
+/** bring()이 준비 못 한 자식을 치울 때 주는 유예. */
+const CLEANUP_GRACE_MS = 5_000;
 
 /**
  * 의존 순서 위상 정렬. 같은 층에서는 선언 순서를 유지한다 — 순서가 바뀌면 로그와 화면의 줄
@@ -54,6 +67,16 @@ interface Runtime {
   spec: ServiceSpec;
   status: ServiceStatus;
   result: LaunchResult | null;
+  /**
+   * 한 번이라도 ready에 닿았나. 게이트의 "기동 중 실패"와 "ready 이후 사망"을 가르는 값이다 —
+   * 앞의 것은 start()가 이미 반환한 뒤에 이 서비스만 되살려 봐야 창은 실패 화면인 채로
+   * 뒤 서비스가 영원히 안 뜨는 막힌 길이 된다.
+   */
+  everReady: boolean;
+  /** ready 뒤 주기 재프로브. 서비스마다 하나만 돈다. */
+  healthTimer: NodeJS.Timeout | null;
+  /** 안정 창이 지나면 재시작 예산을 돌려주는 타이머. */
+  budgetTimer: NodeJS.Timeout | null;
 }
 
 export function createSupervisor(
@@ -69,6 +92,9 @@ export function createSupervisor(
         spec,
         status: { id: spec.id, process: "stopped", health: "unknown", owned: false, restarts: 0 },
         result: null,
+        everReady: false,
+        healthTimer: null,
+        budgetTimer: null,
       },
     ]),
   );
@@ -80,11 +106,28 @@ export function createSupervisor(
   const statuses = () => ordered.map((s) => ({ ...runtimes.get(s.id)!.status }));
   const emit = () => hooks.onStatus?.(statuses());
   const log = (line: string) => hooks.log?.(line);
+  const reason = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
   const set = (id: ServiceId, patch: Partial<ServiceStatus>) => {
     const rt = runtimes.get(id)!;
     rt.status = { ...rt.status, ...patch };
     emit();
+  };
+
+  /** 예약한 타이머는 전부 timers에도 넣는다 — stopAll이 그 한 곳만 비우면 되게. */
+  const arm = (ms: number, fn: () => void): NodeJS.Timeout => {
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      fn();
+    }, ms);
+    timers.add(timer);
+    return timer;
+  };
+
+  const disarm = (timer: NodeJS.Timeout | null) => {
+    if (timer === null) return;
+    clearTimeout(timer);
+    timers.delete(timer);
   };
 
   const applyReadiness = (id: ServiceId, r: ReadinessResult): boolean => {
@@ -113,10 +156,16 @@ export function createSupervisor(
     let last: ReadinessResult = { kind: "not-ready" };
 
     for (;;) {
+      // 종료가 지나갔으면 더 볼 것이 없다. 그리고 stopAll은 rt.result를 null로 만드는데,
+      // 그 null을 어댑터에 넘기면 첫 줄의 result.handle 역참조에서 TypeError가 나고 그것이
+      // 배경 프라미스의 처리되지 않은 rejection이 된다. 여기서 끊는다 — 상태는 stopAll이
+      // 이미 stopped로 적었으므로 덧쓰지 않는다.
+      const result = rt.result;
+      if (stopping || result === null) return false;
       // 프로세스가 있는 서비스는 죽으면 더 기다릴 이유가 없다. 핸들이 없는 서비스
-      // (postgres 컨테이너)는 이 검사를 건너뛴다.
-      if (rt.result?.handle !== null && rt.result?.handle !== undefined && !rt.result.handle.alive()) {
-        const code = rt.result.handle.exitCode();
+      // (postgres 컨테이너, 채택한 외부 인스턴스)는 이 검사를 건너뛴다.
+      if (result.handle !== null && !result.handle.alive()) {
+        const code = result.handle.exitCode();
         set(rt.spec.id, {
           process: "failed",
           health: "unknown",
@@ -124,7 +173,7 @@ export function createSupervisor(
         });
         return false;
       }
-      last = await rt.spec.readiness(rt.result!, ctx);
+      last = await rt.spec.readiness(result, ctx);
       if (applyReadiness(rt.spec.id, last)) return true;
       if (last.kind === "failed") break;
       if (Date.now() >= deadline) break;
@@ -136,8 +185,70 @@ export function createSupervisor(
     return false;
   }
 
-  /** 배경으로 도는 비게이트 준비 대기. stopAll이 기다릴 수 있게 모아 둔다. */
+  /**
+   * ready 이후의 주기 재프로브 (스펙 §6.6·§8). 프로세스 축은 건드리지 않는다 — 프로세스는
+   * 살아 있는데 일을 못 하는 상태가 정확히 degraded이고, 여기서 재시작을 걸면 DB가 돌아오지
+   * 않는 한 같은 실패를 반복하며 백오프만 태운다. DB가 돌아오면 다음 프로브의 ready가
+   * applyReadiness를 통해 스스로 ok로 되돌린다.
+   */
+  function scheduleHealthProbe(rt: Runtime, intervalMs: number): void {
+    if (stopping) return;
+    rt.healthTimer = arm(intervalMs, () => {
+      void probeHealth(rt, intervalMs);
+    });
+  }
+
+  async function probeHealth(rt: Runtime, intervalMs: number): Promise<void> {
+    const result = rt.result;
+    if (stopping || result === null) return;
+    let r: ReadinessResult;
+    try {
+      r = await rt.spec.readiness(result, ctx);
+    } catch (e) {
+      // 프로브가 던지는 것도 판정이다. 여기서 새어 나가면 처리되지 않은 rejection이 된다.
+      r = { kind: "failed", detail: `상태 확인이 실패했어요 — ${reason(e)}` };
+    }
+    // await 사이에 종료가 지나갔을 수 있다. 그 뒤의 set은 이미 내려간 서비스를 되살려 적는다.
+    if (stopping || rt.result === null) return;
+    if (!applyReadiness(rt.spec.id, r)) {
+      const detail = r.kind === "failed" ? r.detail : "준비 상태로 답하지 않아요.";
+      set(rt.spec.id, { health: "degraded", detail });
+    }
+    scheduleHealthProbe(rt, intervalMs);
+  }
+
+  /** ready를 안정 창만큼 유지하면 재시작 예산을 돌려준다. 근거는 DEFAULT_STABLE_RESET_MS. */
+  function scheduleBudgetReset(rt: Runtime): void {
+    disarm(rt.budgetTimer);
+    rt.budgetTimer = null;
+    if (rt.status.restarts === 0) return;
+    const ms = hooks.stableResetMs ?? DEFAULT_STABLE_RESET_MS;
+    rt.budgetTimer = arm(ms, () => {
+      rt.budgetTimer = null;
+      if (stopping || rt.status.process !== "running") return;
+      log(`${rt.spec.id}: ${Math.round(ms / 1000)}초 동안 안정적이라 재시작 예산을 되돌린다`);
+      set(rt.spec.id, { restarts: 0 });
+    });
+  }
+
+  /** 배경으로 도는 비게이트 준비 대기. stopAll이 이것을 기다린 뒤에 내린다. */
   const pending = new Set<Promise<void>>();
+
+  /**
+   * bring을 배경으로 돌린다. 예외를 반드시 상태로 바꾼다 — 배경 프라미스의 rejection은
+   * 아무도 잡지 않으면 Electron main의 uncaught exception이 되고, 하필 종료 경로에서 난다.
+   */
+  function background(spec: ServiceSpec): void {
+    const p = bring(spec)
+      .catch((e: unknown) => {
+        const detail = reason(e);
+        set(spec.id, { process: "failed", health: "unknown", detail });
+        log(`${spec.id}: 배경 기동에서 예외 — ${detail}`);
+      })
+      .then(() => undefined);
+    pending.add(p);
+    void p.finally(() => pending.delete(p));
+  }
 
   /**
    * 한 서비스를 띄우고 준비까지 본다. 게이트면 호출자가 await하고, 아니면 배경으로 돈다 —
@@ -146,7 +257,28 @@ export function createSupervisor(
    */
   async function bring(spec: ServiceSpec): Promise<boolean> {
     const rt = runtimes.get(spec.id)!;
-    const external = await spec.detectExternal(ctx);
+    if (stopping) return false;
+    // 이미 우리가 쥔 인스턴스가 있으면 아무것도 하지 않는다. 두 번째 bring은 첫 핸들의
+    // 유일한 참조인 rt.result를 덮어써 그 프로세스를 영원히 놓친다 (P2-C4).
+    if (rt.result !== null) return rt.status.process === "running";
+    disarm(rt.healthTimer);
+    rt.healthTimer = null;
+    disarm(rt.budgetTimer);
+    rt.budgetTimer = null;
+
+    let external: ExternalState;
+    try {
+      external = await spec.detectExternal(ctx);
+    } catch (e) {
+      // 외부 탐지도 바깥 명령을 돌린다 (worker는 ps). 여기서 던지면 서비스가 화면 문구도
+      // 재시작도 없이 영영 기동 전 상태에 고정된다 — launch와 같게 실패로 적는다.
+      const detail = `외부 인스턴스 확인이 실패했어요 — ${reason(e)}`;
+      set(spec.id, { process: "failed", health: "unknown", detail });
+      log(`${spec.id}: detectExternal 실패 — ${reason(e)}`);
+      return false;
+    }
+    if (stopping) return false;
+
     if (external.kind === "stand-down") {
       log(`${spec.id}: 외부 인스턴스가 있어 앱이 띄우지 않는다 — ${external.detail}`);
       set(spec.id, { process: "running", health: "unknown", owned: false, detail: external.detail });
@@ -164,25 +296,41 @@ export function createSupervisor(
       try {
         rt.result = await spec.launch(ctx);
       } catch (e) {
-        const detail = e instanceof Error ? e.message : String(e);
+        const detail = reason(e);
         set(spec.id, { process: "failed", health: "unknown", detail });
         log(`${spec.id}: 기동 실패 — ${detail}`);
         return false;
       }
     }
     set(spec.id, { owned: rt.result.owned });
+    if (stopping) {
+      // 종료가 이 await 사이를 지나갔다. 방금 만든 자식을 rt.result에 **남겨 둬야** 한다 —
+      // stopAll은 pending을 먼저 기다리므로 이 대입이 역순 루프보다 먼저 보이고, 거기서
+      // 내려야 leaked가 정직해진다. 여기서 우리가 몰래 치우면 그 결과가 StopOutcome에
+      // 실리지 않는다.
+      log(`${spec.id}: 종료 중에 기동이 끝났다 — stopAll에 넘긴다`);
+      return false;
+    }
 
     if (await awaitReady(rt)) {
       log(`${spec.id}: 준비됨`);
+      rt.everReady = true;
       watchForDeath(rt);
+      scheduleBudgetReset(rt);
+      if (spec.healthIntervalMs !== undefined) scheduleHealthProbe(rt, spec.healthIntervalMs);
       return true;
     }
+    if (stopping) return false;
     // 준비 못 한 것은 우리가 띄웠으면 치운다. 남겨 두면 재시도가 그 위에 또 띄운다.
     if (rt.result !== null && rt.result.owned) {
-      await spec.stop(rt.result, { graceMs: 5_000 }).catch(() => undefined);
-      rt.result = null;
+      await spec.stop(rt.result, { graceMs: CLEANUP_GRACE_MS }).catch(() => undefined);
     }
-    scheduleRestart(spec, "기동 실패");
+    // 채택한 인스턴스도 참조를 끊는다 — 남겨 두면 위의 재진입 가드가 재시도를 막는다.
+    rt.result = null;
+    // 기동 중 실패한 **게이트**에는 재시작을 걸지 않는다. start()는 이미 반환했고 창은 실패
+    // 화면이므로, 백오프 뒤 이 서비스만 running이 되어도 뒤 서비스는 영원히 안 뜬다. 그
+    // 경우의 복구는 메뉴의 "다시 시도"다 (스펙 §6.8) — retry()가 그 진입점이다.
+    if (!spec.gate || rt.everReady) scheduleRestart(spec, "기동 실패");
     return false;
   }
 
@@ -202,14 +350,10 @@ export function createSupervisor(
     const delay = spec.restart.backoffMs[Math.min(attempt, spec.restart.backoffMs.length - 1)];
     set(spec.id, { restarts: attempt + 1 });
     log(`${spec.id}: ${why} — ${Math.round(delay / 1000)}초 뒤 재시작 (${attempt + 1}회차)`);
-    const timer = setTimeout(() => {
-      timers.delete(timer);
+    arm(delay, () => {
       if (stopping) return;
-      const p = bring(spec).then(() => undefined);
-      pending.add(p);
-      void p.finally(() => pending.delete(p));
-    }, delay);
-    timers.add(timer);
+      background(spec);
+    });
   }
 
   /** ready 뒤 자식이 죽는 것을 감시한다. degraded는 여기 오지 않는다 — 프로세스는 살아 있다. */
@@ -218,6 +362,11 @@ export function createSupervisor(
     if (handle === null || handle === undefined) return;
     handle.onExit((code) => {
       if (stopping) return;
+      // 죽은 프로세스에 계속 물어볼 이유가 없다. 재기동한 bring이 새로 건다.
+      disarm(rt.healthTimer);
+      rt.healthTimer = null;
+      disarm(rt.budgetTimer);
+      rt.budgetTimer = null;
       set(rt.spec.id, {
         process: "failed",
         health: "unknown",
@@ -235,13 +384,29 @@ export function createSupervisor(
       if (spec.prepare === undefined) continue;
       Object.assign(ctx.env, await spec.prepare(ctx));
     }
+    await runFrom(ordered);
+  }
 
-    for (const spec of ordered) {
+  /**
+   * 메뉴의 "다시 시도" (스펙 §6.8). start()를 다시 부르는 것으로 때울 수 없다 — 그러면
+   * prepare()가 전부 다시 돌아 embed의 포트가 **살아 있는 embed 밑에서** 바뀌고(Object.assign이
+   * 호출자의 ctx.env를 제자리에서 고친다), 이미 running인 서비스 위에 두 번째 인스턴스가 떠서
+   * 첫 핸들의 유일한 참조가 사라진다. 여기서는 prepare를 건너뛰고 아직 안 뜬 것부터 잇는다.
+   */
+  async function retry(): Promise<void> {
+    if (stopping) return;
+    await runFrom(ordered.filter((s) => runtimes.get(s.id)!.status.process !== "running"));
+  }
+
+  /** 기동 시퀀스 본문. 게이트 의미(실패하면 뒤를 띄우지 않는다)는 여기 한 곳에만 있다. */
+  async function runFrom(list: readonly ServiceSpec[]): Promise<void> {
+    for (const spec of list) {
+      const rt = runtimes.get(spec.id)!;
+      // failed로 고정된 서비스는 예산을 다 썼다. 사람이 다시 시도했으니 예산도 새로 준다.
+      if (rt.status.restarts !== 0 && rt.status.process !== "running") set(spec.id, { restarts: 0 });
       if (!spec.gate) {
         // 배경으로 돌린다. 실패해도 기동 전체를 멈추지 않는다.
-        const p = bring(spec).then(() => undefined);
-        pending.add(p);
-        void p.finally(() => pending.delete(p));
+        background(spec);
         continue;
       }
       if (!(await bring(spec))) return;
@@ -252,6 +417,11 @@ export function createSupervisor(
     stopping = true;
     for (const t of timers) clearTimeout(t);
     timers.clear();
+    // 배경 bring이 아직 돌고 있을 수 있다. 기다리지 않으면 그것이 **stopAll이 반환한 뒤에**
+    // 프로세스를 만들고, 그 프로세스를 가리키는 유일한 참조(rt.result)는 아무도 읽지 않는다.
+    // launchWithUv도 launchDev도 detached라 그런 자식은 Electron이 죽어도 살아남는다 (P2-C4).
+    // stopping 검사만으로는 부족하다 — launch()가 반환하고 대입되기까지의 구간이 남는다.
+    await Promise.allSettled([...pending]);
     const leaked: number[] = [];
     let stopped = true;
     // 역순. dependsOn이 정한 순서를 뒤집는 것이 곧 의존 역순이다.
@@ -266,7 +436,7 @@ export function createSupervisor(
       } catch (e) {
         // 하나가 던져도 나머지는 내린다 — 여기서 멈추면 앞선 서비스가 통째로 남는다.
         stopped = false;
-        log(`${spec.id}: 종료 중 예외 — ${e instanceof Error ? e.message : String(e)}`);
+        log(`${spec.id}: 종료 중 예외 — ${reason(e)}`);
       }
       rt.result = null;
       set(spec.id, { process: "stopped", health: "unknown", owned: false });
@@ -274,5 +444,5 @@ export function createSupervisor(
     return { stopped, leaked };
   }
 
-  return { start, stopAll, statuses, runtimeOf: (id: ServiceId) => runtimes.get(id) };
+  return { start, retry, stopAll, statuses, runtimeOf: (id: ServiceId) => runtimes.get(id) };
 }

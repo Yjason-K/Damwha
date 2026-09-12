@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { createSupervisor, orderOf } from "../src/services/supervisor";
-import type { LaunchContext, ServiceId, ServiceSpec } from "../src/services/types";
+import type {
+  LaunchContext,
+  LaunchResult,
+  ReadinessResult,
+  ServiceId,
+  ServiceSpec,
+} from "../src/services/types";
 
 function ctx(): LaunchContext {
   return {
@@ -26,6 +32,21 @@ function spec(id: ServiceId, over: Partial<ServiceSpec> = {}): ServiceSpec {
     restart: "never",
     ...over,
   };
+}
+
+/**
+ * onExit 리스너를 테스트가 쥐는 가짜 프로세스 핸들. 사망 시점을 테스트가 직접 정해야
+ * 재시작 정책을 실시간 대기 없이 밟을 수 있다.
+ */
+function fakeHandle(capture: (listener: (code: number) => void) => void) {
+  return {
+    pid: 1,
+    alive: () => true,
+    stderrTail: () => "",
+    exitCode: () => null,
+    onExit: capture,
+    stop: async () => undefined,
+  } as never;
 }
 
 describe("orderOf", () => {
@@ -177,8 +198,12 @@ describe("supervisor restart policy", () => {
       { readyTimeoutMs: 2_000, readyIntervalMs: 10 },
     );
     await s.start();
-    // start()가 embed의 200ms를 기다렸다면 api는 그 뒤에 온다. 기다리지 않았으면 둘 다 즉시.
     expect(order).toEqual(["embed", "api"]);
+    // 여기가 이 성질을 잡는 단언이다. launch 호출 **순서**는 직렬 구현에서도 똑같으므로
+    // order만으로는 아무것도 증명하지 못한다(직렬로 되돌려도 초록이었다). start()가 embed의
+    // 200ms 준비를 기다렸다면 이 시점에 embed는 이미 running이다 — 아직 starting이라는 것이
+    // 곧 기동 루프가 그것을 기다리지 않았다는 뜻이다.
+    expect(s.statuses().find((x) => x.id === "embed")!.process).toBe("starting");
     expect(s.statuses().find((x) => x.id === "api")!.process).toBe("running");
   });
 
@@ -391,5 +416,339 @@ describe("supervisor.stopAll", () => {
     await s.start();
     await s.stopAll({ graceMs: 10 });
     expect(stopped).toEqual(["api"]);
+  });
+});
+
+describe("supervisor.stopAll — 진행 중인 배경 기동 (C1)", () => {
+  it("does not let a background bring create a process after stopAll returned", async () => {
+    // launchWithUv도 launchDev도 detached다. stopAll이 반환한 **뒤에** 만들어진 자식은
+    // Electron이 죽어도 살아남고, 그것을 가리키는 참조는 아무 데도 없다 (P2-C4).
+    const live = new Set<number>();
+    let launched = 0;
+    let release!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const s = createSupervisor(
+      [
+        spec("worker", {
+          gate: false,
+          detectExternal: async () => {
+            await held;
+            return { kind: "absent" };
+          },
+          launch: async () => {
+            launched += 1;
+            live.add(4242);
+            return { handle: null, owned: true };
+          },
+          stop: async () => {
+            live.delete(4242);
+            return { stopped: true, leaked: [] };
+          },
+        }),
+      ],
+      ctx(),
+      {},
+    );
+    await s.start();
+    const stopping = s.stopAll({ graceMs: 5 });
+    release();
+    const out = await stopping;
+    await new Promise((r) => setTimeout(r, 30));
+    // 만들었다가 도로 치우는 것으로는 부족하다 — 종료가 시작된 뒤에는 아예 만들지 않는다.
+    expect(launched).toBe(0);
+    expect([...live]).toEqual([]);
+    expect(out).toEqual({ stopped: true, leaked: [] });
+  });
+
+  it("stops a process the background bring created while stopAll was waiting", async () => {
+    // launch()가 반환하고 rt.result에 대입되기까지의 구간. stopping 깃발만으로는 못 막고,
+    // stopAll이 pending을 기다려야 그 자식이 역순 루프에 잡힌다 — 그래야 leaked도 정직하다.
+    let release!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const stopped: number[] = [];
+    const s = createSupervisor(
+      [
+        spec("worker", {
+          gate: false,
+          launch: async () => {
+            await held;
+            return { handle: null, owned: true };
+          },
+          stop: async () => {
+            stopped.push(4242);
+            return { stopped: false, leaked: [4242] };
+          },
+        }),
+      ],
+      ctx(),
+      {},
+    );
+    await s.start();
+    await new Promise((r) => setTimeout(r, 10));
+    const stopping = s.stopAll({ graceMs: 5 });
+    release();
+    const out = await stopping;
+    expect(stopped).toEqual([4242]);
+    expect(out).toEqual({ stopped: false, leaked: [4242] });
+  });
+});
+
+describe("supervisor health monitoring (C2)", () => {
+  it("re-probes readiness after ready and comes back from degraded on its own", async () => {
+    // 스펙 §6.6 — API는 부팅 뒤 DB가 끊겨도 죽지 않고 503을 준다. 다시 묻지 않으면 감독자는
+    // 영원히 running/ok이고 모든 요청은 실패한다. P2-C11이 판정하는 것이 이 왕복이다.
+    let phase: ReadinessResult = { kind: "ready" };
+    const probes: number[] = [];
+    const s = createSupervisor(
+      [
+        spec("api", {
+          healthIntervalMs: 5,
+          readiness: async () => {
+            probes.push(1);
+            return phase;
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    expect(s.statuses()[0].health).toBe("ok");
+
+    phase = { kind: "degraded", detail: "DB에 못 붙어요." };
+    await vi.waitFor(() => {
+      const st = s.statuses()[0];
+      expect(st.process).toBe("running");
+      expect(st.health).toBe("degraded");
+      expect(st.detail).toBe("DB에 못 붙어요.");
+    });
+
+    phase = { kind: "ready" };
+    await vi.waitFor(() => expect(s.statuses()[0].health).toBe("ok"));
+
+    await s.stopAll({ graceMs: 5 });
+    const after = probes.length;
+    await new Promise((r) => setTimeout(r, 40));
+    // 재프로브 타이머도 timers에 있으므로 stopAll이 껐다.
+    expect(probes.length).toBe(after);
+  });
+
+  it("records a failing health probe without restarting the service", async () => {
+    // 재프로브는 상태만 바꾼다. 여기서 재시작을 걸면 의존이 돌아오지 않는 한 같은 실패를
+    // 반복하며 백오프만 태운다 (스펙 §6.8).
+    let launches = 0;
+    let phase: ReadinessResult = { kind: "ready" };
+    const s = createSupervisor(
+      [
+        spec("worker", {
+          healthIntervalMs: 5,
+          restart: { maxAttempts: 3, backoffMs: [5] },
+          launch: async () => {
+            launches += 1;
+            return { handle: null, owned: true };
+          },
+          readiness: async () => phase,
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    phase = { kind: "failed", detail: "포트가 닫혔어요." };
+    await vi.waitFor(() => expect(s.statuses()[0].detail).toBe("포트가 닫혔어요."));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(launches).toBe(1);
+    expect(s.statuses()[0].process).toBe("running");
+    expect(s.statuses()[0].restarts).toBe(0);
+    await s.stopAll({ graceMs: 5 });
+  });
+});
+
+describe("supervisor 배경 실패 처리 (I1)", () => {
+  it("drops a background readiness poll the moment stopAll begins", async () => {
+    // 배경 폴링이 남은 readyTimeoutMs를 다 써 버리면 pending을 기다리는 stopAll이 그만큼
+    // 막힌다 — embed의 그 값은 180초다. 그리고 그 폴링은 stopAll이 null로 만든 rt.result를
+    // 어댑터에 그대로 넘겨(첫 줄이 result.handle 역참조다) 처리되지 않은 rejection을 만든다.
+    let sawNull = false;
+    const s = createSupervisor(
+      [
+        spec("worker", {
+          gate: false,
+          readiness: async (result) => {
+            if ((result as LaunchResult | null) === null) sawNull = true;
+            return { kind: "not-ready" };
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 5_000, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await new Promise((r) => setTimeout(r, 20));
+    const t0 = Date.now();
+    await s.stopAll({ graceMs: 5 });
+    // 5초 유예에 1초 한도 — 재는 것은 "폴링을 끝까지 기다렸는가"뿐이라 여유가 5배다.
+    expect(Date.now() - t0).toBeLessThan(1_000);
+    await new Promise((r) => setTimeout(r, 40));
+    expect(sawNull).toBe(false);
+  });
+
+  it("reports failed when detectExternal throws instead of pinning the service", async () => {
+    // worker의 detectExternal은 Task 12가 주입하는 ps 실행이다. 그것이 던지면 서비스는
+    // 화면 문구도 재시작도 없이 기동 전 상태에 영영 고정된다.
+    const s = createSupervisor(
+      [
+        spec("worker", {
+          detectExternal: async () => {
+            throw new Error("ps를 못 돌렸어요");
+          },
+        }),
+      ],
+      ctx(),
+      {},
+    );
+    await s.start();
+    const st = s.statuses()[0];
+    expect(st.process).toBe("failed");
+    expect(st.detail).toContain("ps를 못 돌렸어요");
+  });
+
+  it("turns an exception in a background bring into a failed status", async () => {
+    const s = createSupervisor(
+      [
+        spec("embed", {
+          gate: false,
+          readiness: async () => {
+            throw new Error("프로브가 터졌어요");
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 50, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await vi.waitFor(() => {
+      const st = s.statuses()[0];
+      expect(st.process).toBe("failed");
+      expect(st.detail).toContain("프로브가 터졌어요");
+    });
+  });
+});
+
+describe("supervisor 게이트 재시작과 재시도 (I3·I4·I5)", () => {
+  it("does not restart a gate service that failed during the initial start", async () => {
+    // 재시작이 이 서비스만 되살리면 창은 실패 화면인데 상태 창만 running이 되고, 뒤 서비스는
+    // 영원히 안 뜬다. 그 경우의 복구는 메뉴의 "다시 시도" = retry()다 (스펙 §6.8).
+    let launches = 0;
+    const later = vi.fn(async () => ({ handle: null, owned: true }));
+    const s = createSupervisor(
+      [
+        spec("api", {
+          restart: { maxAttempts: 3, backoffMs: [5] },
+          launch: async () => {
+            launches += 1;
+            return { handle: null, owned: true };
+          },
+          readiness: async () => ({ kind: "failed", detail: "부팅에 실패했어요." }),
+        }),
+        spec("worker", { dependsOn: ["api"], launch: later }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 50, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await new Promise((r) => setTimeout(r, 40));
+    expect(launches).toBe(1);
+    expect(later).not.toHaveBeenCalled();
+    const st = s.statuses().find((x) => x.id === "api")!;
+    expect(st.process).toBe("failed");
+    expect(st.restarts).toBe(0);
+  });
+
+  it("gives the restart budget back after the service stays ready", async () => {
+    // 안 돌려주면 maxAttempts가 앱 실행 전체의 누적 상한이 되어, 한 번씩 복구된 서비스가
+    // 나중에는 영영 재시작되지 않는다 (스펙 §6.8 "retryCount는 ready 도달 시 0으로").
+    let launches = 0;
+    let listener: ((code: number) => void) | null = null;
+    const s = createSupervisor(
+      [
+        spec("worker", {
+          restart: { maxAttempts: 1, backoffMs: [5] },
+          launch: async () => {
+            launches += 1;
+            return {
+              handle: fakeHandle((l) => {
+                listener = l;
+              }),
+              owned: true,
+            };
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5, stableResetMs: 100 },
+    );
+    await s.start();
+    listener!(1);
+    // onExit는 동기로 불리므로 예산 1을 쓴 것이 이 줄에서 이미 보인다.
+    expect(s.statuses()[0].restarts).toBe(1);
+    await vi.waitFor(() => expect(launches).toBe(2));
+    // 안정 창을 넘기면 예산이 돌아온다.
+    await vi.waitFor(() => expect(s.statuses()[0].restarts).toBe(0));
+    listener!(1);
+    await vi.waitFor(() => expect(launches).toBe(3));
+    await s.stopAll({ graceMs: 5 });
+  });
+
+  it("retry resumes the sequence without re-running prepare or relaunching a running service", async () => {
+    // start()를 다시 부르는 것으로 때우면 prepare()가 전부 다시 돌아 살아 있는 embed 밑에서
+    // 포트가 바뀌고, 이미 running인 api 위에 두 번째 인스턴스가 떠서 첫 핸들을 놓친다.
+    let prepares = 0;
+    let apiLaunches = 0;
+    let workerLaunches = 0;
+    let apiReady = false;
+    const s = createSupervisor(
+      [
+        spec("api", {
+          restart: { maxAttempts: 1, backoffMs: [5] },
+          prepare: async () => {
+            prepares += 1;
+            return { EMBED_SERVICE_PORT: String(8100 + prepares) };
+          },
+          launch: async () => {
+            apiLaunches += 1;
+            return { handle: null, owned: true };
+          },
+          readiness: async () => (apiReady ? { kind: "ready" } : { kind: "failed", detail: "DB가 없어요." }),
+        }),
+        spec("worker", {
+          dependsOn: ["api"],
+          launch: async () => {
+            workerLaunches += 1;
+            return { handle: null, owned: true };
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 30, readyIntervalMs: 5 },
+    );
+    await s.start();
+    expect(apiLaunches).toBe(1);
+    expect(workerLaunches).toBe(0);
+
+    apiReady = true;
+    await s.retry();
+    expect(prepares).toBe(1);
+    expect(apiLaunches).toBe(2);
+    expect(workerLaunches).toBe(1);
+
+    // 두 번째 재시도는 둘 다 running이므로 아무것도 하지 않는다.
+    await s.retry();
+    expect(apiLaunches).toBe(2);
+    expect(workerLaunches).toBe(1);
   });
 });
