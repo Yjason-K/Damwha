@@ -49,6 +49,10 @@ function recorder(
     captureDescendants: mark("capture", undefined),
     beginQuit: () => log.push("begin"),
     showQuitting: mark("quitting", undefined),
+    // tsconfig의 include는 src/**만이라 **테스트는 타입 검사를 받지 않는다.** 이 필드를 빼면
+    // screenTimeoutMs가 undefined가 되고 setTimeout(fn, undefined)은 0ms라, 상한이 매번
+    // 이겨서 화면을 기다리는 코드가 통째로 안 돌면서도 초록불이 난다.
+    screenTimeoutMs: 50,
     stopRecording: mark("handshake", { stopped: true }),
     handshakeTimeoutMs: 50,
     stopServices: mark("stop", { stopped: true, leaked: [] }),
@@ -137,6 +141,39 @@ describe("runQuitFlow", () => {
     expect(log).toContain("stop:start");
     expect(log[log.length - 1]).toBe("quit");
     expect(lines.join("\n")).toContain("창이 이미 없어요");
+  });
+
+  it("quits even when the renderer never commits the quitting screen", async () => {
+    // 이 잎은 win.loadFile — **렌더러가 커밋해야** 끝나는 프라미스다. 봉쇄된 렌더러(무한 JS
+    // 루프)에서는 거부하지도 해결하지도 않는다. beginQuit()과 finally의 quit() 사이에 상한
+    // 없는 대기가 하나라도 있으면 그 순간 앱을 끌 길이 사라진다 — before-quit이 이미
+    // preventDefault를 불렀기 때문이다. "봉쇄된 렌더러가 종료나 닫힘을 막는 일은 없어야
+    // 한다"는 판정이 이 자리에도 적용된다 (재리뷰 2의 N2).
+    const { log, lines, deps } = recorder({
+      showQuitting: () => new Promise<void>(() => undefined),
+      screenTimeoutMs: 20,
+    });
+    await runQuitFlow(deps);
+    // 화면 뒤의 것들이 전부 돌았다. 상한이 없으면 여기까지 오지 못한다(테스트가 멎는다).
+    expect(log).toContain("stop:start");
+    expect(log[log.length - 1]).toBe("quit");
+    // 조용히 지나가지 않는다. 로그가 없으면 Task 15의 수동 점검이 이것을 관측할 수 없다.
+    expect(lines.join("\n")).toContain("종료 화면이 20ms 안에 뜨지 않았어요");
+  });
+
+  it("still reports a screen that actually failed, instead of only the deadline", async () => {
+    // 상한을 걸면서 거부를 삼키면, 창이 파괴되는 중이라 loadFile이 거부한 경우까지 "시간
+    // 초과"로 뭉개진다. 원인이 다르면 로그도 달라야 한다 — 이 줄이 Task 15의 수동 점검에서
+    // 두 경우를 가르는 유일한 단서다.
+    const { lines, deps } = recorder({
+      showQuitting: async () => {
+        throw new Error("창이 이미 없어요");
+      },
+      screenTimeoutMs: 5_000,
+    });
+    await runQuitFlow(deps);
+    expect(lines.join("\n")).toContain("종료 화면을 걸지 못했어요 — 창이 이미 없어요");
+    expect(lines.join("\n")).not.toContain("안 뜨지 않았어요");
   });
 
   it("does not quit, stop anything, or latch when the user cancels", async () => {

@@ -439,6 +439,40 @@ export async function askIsRecording(
   }
 }
 
+/**
+ * 렌더러에 매달리는 **어떤** 대기든 상한 안에 끝내고 돌아온다. 답이 필요 없고 "끝났는가"만
+ * 필요한 자리용이다 — `askIsRecording`이 세 갈래의 **답**을 판정하는 것과 다르다.
+ *
+ * 존재 이유는 askIsRecording과 같다. `before-quit`이 `preventDefault`를 부른 뒤로 `app.quit()`은
+ * 반드시 다시 불려야 하는데, 그 사이에 **렌더러가 끝내 줘야 끝나는 await**가 하나라도 상한
+ * 없이 있으면 봉쇄된 렌더러가 앱을 영영 못 끄게 만든다. `win.loadFile()`이 정확히 그런
+ * 프라미스다 — Chromium이 교차 출처 내비게이션을 새 렌더 프로세스로 처리해 구해 줄 수도
+ * 있지만, 그것은 우리 코드가 보장하는 것이 아니고 §6.9의 "증명하지 못하면 깨끗하다고 말하지
+ * 않는다"가 그대로 적용되는 자리다.
+ *
+ * **거부는 삼키지 않는다.** 부르는 쪽의 `catch`가 "화면을 못 걸었다"를 적는 유일한 자리다.
+ * (상한에 걸린 뒤 늦게 도착하는 거부는 `Promise.race`가 이미 진 쪽에도 핸들러를 달아 두므로
+ * unhandled rejection이 되지 않는다 — 그것을 값으로 들고 있다가 다시 던지는 장치를 한 번
+ * 넣었다가 뺐다. 그 장치를 지우는 변이가 아무 테스트도 죽이지 않았고, 실제로 동작이 같다.)
+ */
+export async function runWithin(
+  call: () => Promise<unknown>,
+  opts: { timeoutMs: number; onTimeout: () => void },
+): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const expired = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      opts.onTimeout();
+      resolve();
+    }, opts.timeoutMs);
+  });
+  try {
+    await Promise.race([call().then(() => undefined), expired]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export async function runHandshake(
   call: () => Promise<{ stopped: boolean; reason?: string }>,
   opts: { timeoutMs: number },

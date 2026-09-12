@@ -1,4 +1,4 @@
-import { decideQuit, runHandshake, STOP_DETAIL, type InFlight } from "./shutdown";
+import { decideQuit, runHandshake, runWithin, STOP_DETAIL, type InFlight } from "./shutdown";
 import type { StopOutcome } from "./services/types";
 
 /**
@@ -42,8 +42,19 @@ export interface QuitFlowDeps {
    *
    * 그런데 이 잎은 창 하나짜리 앱에서 **내비게이션**이라 렌더러를 파괴한다. 그래서
    * 핸드셰이크보다 앞에 둘 수 없다 — runQuitFlow의 주석이 그 순서를 적어 뒀다.
+   *
+   * 그리고 이 프라미스는 **렌더러가 커밋해야 끝난다.** 상한은 아래 screenTimeoutMs가 건다.
    */
   showQuitting(): Promise<void>;
+  /**
+   * 그 화면을 기다리는 상한. 사람이 아니라 렌더러를 기다리는 시간이다.
+   *
+   * beginQuit()과 finally의 quit() 사이에서 **렌더러에 매달리는 대기는 전부 상한이 있어야
+   * 한다.** 하나라도 없으면 봉쇄된 렌더러가 ⌘Q를 영영 끝나지 않게 만든다 — before-quit이
+   * 이미 preventDefault를 불렀으므로 앱을 끌 길이 사라진다. 화면은 침묵을 줄이려고 거는
+   * 것이지 종료의 전제가 아니므로, 안 뜨면 로그만 남기고 지나간다.
+   */
+  screenTimeoutMs: number;
   /** 렌더러의 라이브 중지. 훅이 없거나 창이 죽었으면 stopped:false로 답한다. */
   stopRecording(): Promise<{ stopped: boolean; reason?: string }>;
   /** 그 핸드셰이크의 상한. 사람이 아니라 렌더러를 기다리는 시간이다. */
@@ -108,7 +119,17 @@ export async function runQuitFlow(deps: QuitFlowDeps): Promise<void> {
       }
     }
     try {
-      await deps.showQuitting();
+      // 상한을 건다. 이 잎(win.loadFile)은 **렌더러가 커밋해야** 끝나는 프라미스라, 봉쇄된
+      // 렌더러 하나가 아래 finally의 quit()에 영영 닿지 못하게 만든다 — before-quit이 이미
+      // preventDefault를 불렀으므로 앱을 끌 길이 없어진다. isRecordingIn을 3초에 묶은 것과
+      // 같은 규칙이고, 이 자리가 beginQuit과 quit 사이에 남아 있던 마지막 무상한 대기였다.
+      await runWithin(deps.showQuitting, {
+        timeoutMs: deps.screenTimeoutMs,
+        onTimeout: () =>
+          deps.log(
+            `종료 화면이 ${deps.screenTimeoutMs}ms 안에 뜨지 않았어요 — 기다리지 않고 종료를 계속합니다.`,
+          ),
+      });
     } catch (e) {
       // 화면을 못 걸었다고 종료를 멈추지 않는다. 창이 이미 파괴되는 중이면 여기가 거부한다.
       deps.log(`종료 화면을 걸지 못했어요 — ${e instanceof Error ? e.message : String(e)}`);

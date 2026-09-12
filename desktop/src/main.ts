@@ -83,6 +83,12 @@ const HANDSHAKE_TIMEOUT_MS = 30_000;
  * 짧다 — 훅은 동기 불리언 하나를 돌려준다. 값보다 **상한이 있다는 사실**이 요구사항이다.
  */
 const RENDERER_ASK_TIMEOUT_MS = 3_000;
+/**
+ * "종료 중" 화면을 기다리는 상한. 잎은 `win.loadFile(shell/status.html)`이고 그 프라미스는
+ * **렌더러가 커밋해야** 끝난다 — 봉쇄된 렌더러 하나가 ⌘Q를 영영 못 끝나게 만드는 자리였다.
+ * 침묵을 줄이려고 거는 화면이지 종료의 전제가 아니므로, 안 뜨면 로그만 남기고 지나간다.
+ */
+const QUIT_SCREEN_TIMEOUT_MS = 5_000;
 /** 개발에서 렌더러는 Vite가 서빙한다. 그 포트는 Vite 기본값이다. */
 const VITE_ORIGIN = "http://localhost:5173";
 
@@ -1139,6 +1145,7 @@ if (!app.requestSingleInstanceLock()) {
           ? Promise.resolve({ stopped: false, reason: "창이 이미 없어요." })
           : stopRecordingIn(win),
       handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
+      screenTimeoutMs: QUIT_SCREEN_TIMEOUT_MS,
       stopServices,
       log: appendSupervisorLog,
       warn: showQuitNotice,
