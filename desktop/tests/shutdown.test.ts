@@ -136,7 +136,12 @@ describe("stopWorkerProcess", () => {
   // 경로인데, 자손이 있는 기존 테스트는 전부 stillAlive를 주입해 이 기본 분기를 우회한다.
   // 재리뷰가 실측한 변이 두 종 — (a) process.kill이 안 던질 때의 `return true`를 false로,
   // (b) catch의 `code !== "ESRCH"`를 뒤집어 EPERM(존재하지만 남의 것)을 죽음으로 읽게 —
-  // 둘 다 기존 21개 테스트를 초록불로 통과시켰다. 아래 두 테스트가 각각 하나씩 잡는다.
+  // 둘 다 기존 21개 테스트를 초록불로 통과시켰다. 아래 세 테스트가 각각 하나씩 잡는다.
+  //
+  // (round 2 잔여) 처음 넣은 두 테스트는 전부 "살아 있다" 방향만 단정했다 — try 블록과
+  // catch 블록을 통째로 `return true`로 바꿔도(모든 pid가 무조건 살아 있다) 그 두 테스트는
+  // 계속 초록불이었다. catch가 "죽었다"(false)를 답하는 것을 강제하는 테스트가 없었기
+  // 때문이다. 세 번째 테스트가 그 방향을 잠근다.
   it("treats a real, still-running descendant as alive through the default probe", async () => {
     // 실제 신호를 보내지 않는다 — process.kill(pid, 0)은 신호를 배달하지 않고 존재만
     // 묻는다. 자기 자신의 pid(현재 이 vitest 프로세스)를 자손인 척 주입하면 항상 진짜
@@ -176,6 +181,33 @@ describe("stopWorkerProcess", () => {
         },
       });
       expect(out).toEqual({ stopped: false, leaked: [9999] });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("treats a genuinely gone descendant as dead through the default probe", async () => {
+    // ESRCH(그 pid가 존재하지 않는다)를 흉내 낸다. 위 EPERM 테스트와 대칭이다 — 저건
+    // "죽지 않은 것을 죽었다고 하지 않는다"를 지키고, 이건 "죽은 것을 살아 있다고 하지
+    // 않는다"를 지킨다. 이 테스트가 없으면 try·catch 두 분기를 통째로 `return true`로
+    // 바꿔(모든 pid가 무조건 살아 있다) 위 두 테스트를 그대로 통과시킬 수 있다 — catch가
+    // "죽었다"를 답하도록 강제하는 것이 이 함수의 유일한 역할이다.
+    const spy = vi.spyOn(process, "kill").mockImplementation(() => {
+      const err = new Error("kill ESRCH") as NodeJS.ErrnoException;
+      err.code = "ESRCH";
+      throw err;
+    });
+    try {
+      const out = await stopWorkerProcess(handle(1), {
+        graceMs: 20,
+        pollMs: 5,
+        signal: () => undefined,
+        descendants: async () => new Set([9998]),
+        onGraceExpired: async () => {
+          throw new Error("1단계에서 끝났으니 물을 일이 없다");
+        },
+      });
+      expect(out).toEqual({ stopped: true, leaked: [] });
     } finally {
       spy.mockRestore();
     }
