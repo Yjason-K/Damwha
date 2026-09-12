@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  askIsRecording,
   captureDescendants,
   decideQuit,
   hasOnceChild,
@@ -7,6 +8,77 @@ import {
   STOP_DETAIL,
   stopWorkerProcess,
 } from "../src/shutdown";
+
+describe("askIsRecording", () => {
+  // 이 왕복은 봉쇄된 렌더러가 ⌘Q·⌘W를 영구히 막는 유일한 남은 자리였다. 상한이 있다는
+  // 사실과, 상한에 걸렸을 때의 답이 무엇인가가 판정 대상이다.
+  const never = () => new Promise<never>(() => undefined);
+
+  it("answers what the renderer answered, without waiting out the bound", async () => {
+    const late: string[] = [];
+    const opts = { timeoutMs: 50, onTimeout: () => late.push("timeout") };
+    expect(await askIsRecording(async () => true, opts)).toBe(true);
+    expect(await askIsRecording(async () => false, opts)).toBe(false);
+    // 답이 왔으면 타이머는 꺼진다 — 상한이 뒤늦게 발화해 답을 덮어쓰지 않는다.
+    await new Promise((r) => setTimeout(r, 70));
+    expect(late).toEqual([]);
+  });
+
+  it("answers NO when the round-trip rejects", async () => {
+    // 프레임이 이미 없거나 훅이 없다는 뜻이다. 중지할 녹음도 없으므로 확인을 묻지 않는다.
+    const late: string[] = [];
+    const out = await askIsRecording(() => Promise.reject(new Error("Script failed to execute")), {
+      timeoutMs: 50,
+      onTimeout: () => late.push("timeout"),
+    });
+    expect(out).toBe(false);
+    expect(late).toEqual([]);
+  });
+
+  it("answers YES — not 'unknown' — when the renderer never answers, and says so", async () => {
+    // 렌더러의 JS 스레드가 막히면 executeJavaScript는 거부하지도 해결하지도 않는다.
+    // 여기서 "아니오"로 닫으면 확인도 핸드셰이크도 건너뛰어 녹음을 조용히 버린다.
+    // 그 반대 비용(확인 한 번 더)이 훨씬 싸다.
+    const said: string[] = [];
+    const out = await askIsRecording(never, {
+      timeoutMs: 10,
+      onTimeout: () => said.push("timeout"),
+    });
+    expect(out).toBe(true);
+    expect(said).toEqual(["timeout"]);
+  });
+
+  it("comes back within the bound instead of waiting on a wedged renderer", async () => {
+    // 상한이 없으면 ⌘Q는 before-quit의 preventDefault 뒤 이 물음에서 멎어 app.quit()이
+    // 영영 안 불린다 — 어떤 키를 눌러도 앱을 끌 수 없어진다.
+    const t0 = Date.now();
+    await askIsRecording(never, { timeoutMs: 20, onTimeout: () => undefined });
+    expect(Date.now() - t0).toBeLessThan(1_000);
+  });
+
+  it("does not leave an unhandled rejection behind when the answer arrives too late", async () => {
+    // 상한에 걸린 뒤에도 남은 프라미스는 살아 있다. 그것이 나중에 거부하면 Electron main의
+    // unhandled rejection이 되고, 하필 종료 중에 난다.
+    let reject: (e: Error) => void = () => undefined;
+    const out = await askIsRecording(
+      () =>
+        new Promise((_, r) => {
+          reject = r;
+        }),
+      { timeoutMs: 10, onTimeout: () => undefined },
+    );
+    expect(out).toBe(true);
+    const seen: unknown[] = [];
+    const onUnhandled = (e: unknown): void => {
+      seen.push(e);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    reject(new Error("늦게 도착한 거부"));
+    await new Promise((r) => setTimeout(r, 20));
+    process.off("unhandledRejection", onUnhandled);
+    expect(seen).toEqual([]);
+  });
+});
 
 describe("stopWorkerProcess", () => {
   function handle(aliveFor: number) {

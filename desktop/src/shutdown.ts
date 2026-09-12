@@ -397,6 +397,48 @@ export type HandshakeResult =
  * 돌려준다 — 그때는 sweeper 경로로 떨어지고, 다음 앱 실행 때 API가 뜨면 봉인·마감된다.
  * 종료 자체를 막지는 않는다 (스펙 §6.9).
  */
+/**
+ * "이 창이 지금 녹음 중인가"를 렌더러에 묻는 왕복 하나. **상한이 이 함수의 존재 이유다.**
+ *
+ * `webContents.executeJavaScript`는 렌더러의 JS 스레드가 막혀 있으면 거부하지도 해결하지도
+ * 않는다. 상한이 없으면 ⌘Q는 before-quit이 이미 preventDefault를 부른 뒤 이 물음에서 멎어
+ * `app.quit()`이 영영 안 불리고, ⌘W도 같은 이유로 창을 영영 못 닫는다 — 어떤 키를 눌러도
+ * 나갈 길이 없어진다. 봉쇄된 렌더러가 앱의 종료나 창의 닫힘을 막는 일은 없어야 한다.
+ *
+ * 세 갈래의 답이 각각 다르다.
+ * - 답했다 → 그 답 그대로.
+ * - 거부했다 → **아니오.** 프레임이 이미 없거나 훅이 없다는 뜻이고, 그러면 중지할 녹음도 없다.
+ * - 시간이 지났다 → **예.** "모른다"를 "녹음 아님"으로 닫지 않는다. 확인을 한 번 더 묻는
+ *   비용이 녹음을 조용히 버리는 비용보다 싸고, 이 답으로 이어지는 핸드셰이크에는 자기
+ *   상한(runHandshake)이 있어 그쪽에서 다시 막히지 않는다.
+ *
+ * main.ts에 두면 어떤 테스트도 이것을 부를 수 없다 — electron을 값으로 import하는 파일은
+ * vitest가 못 불러온다(shell-window.ts:4). 저 자리에 있는 동안에는 상한을 통째로 지우는
+ * 변이도, 시간 초과의 답을 false로 뒤집는 변이도 초록불로 살아남는다.
+ */
+export async function askIsRecording(
+  call: () => Promise<unknown>,
+  opts: { timeoutMs: number; onTimeout: () => void },
+): Promise<boolean> {
+  // 남은 프라미스가 나중에 거부하면 unhandled rejection이 된다 — 여기서 받아 둔다.
+  const asked = call().then(
+    (v) => Boolean(v),
+    () => false,
+  );
+  let timer: NodeJS.Timeout | undefined;
+  const expired = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => {
+      opts.onTimeout();
+      resolve(true);
+    }, opts.timeoutMs);
+  });
+  try {
+    return await Promise.race([asked, expired]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export async function runHandshake(
   call: () => Promise<{ stopped: boolean; reason?: string }>,
   opts: { timeoutMs: number },

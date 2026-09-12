@@ -21,7 +21,12 @@ import { mayRenderShell } from "./shell-latch";
 import { maySpawnServices } from "./spawn-guard";
 import { openWindowFlow } from "./window-flow";
 import { graceExpiryPrompt, runCloseFlow, runQuitFlow, type QuitNotice } from "./quit-flow";
-import { captureDescendants, hasOnceChild, stopWorkerProcess } from "./shutdown";
+import {
+  askIsRecording,
+  captureDescendants,
+  hasOnceChild,
+  stopWorkerProcess,
+} from "./shutdown";
 import { installMenu } from "./menu";
 import { createSupervisor } from "./services/supervisor";
 import { verifyOwnListener as checkOwnListener } from "./services/own-listener";
@@ -67,6 +72,11 @@ const STOP_GRACE_MS = 5_000;
 const WORKER_GRACE_MS = 90_000;
 /** 렌더러의 라이브 중지를 기다리는 상한. 사람이 아니라 렌더러를 기다리는 시간이다. */
 const HANDSHAKE_TIMEOUT_MS = 30_000;
+/**
+ * 렌더러에 "녹음 중인가"를 묻는 왕복의 상한. 사람이 아니라 렌더러를 기다리는 시간이라
+ * 짧다 — 훅은 동기 불리언 하나를 돌려준다. 값보다 **상한이 있다는 사실**이 요구사항이다.
+ */
+const RENDERER_ASK_TIMEOUT_MS = 3_000;
 /** 개발에서 렌더러는 Vite가 서빙한다. 그 포트는 Vite 기본값이다. */
 const VITE_ORIGIN = "http://localhost:5173";
 
@@ -212,7 +222,7 @@ function openWindow(): BrowserWindow {
   // 닫아도 분석은 계속되고, 그것이 이 Phase의 목적이다 (완료 기준 P2-C12).
   //
   // preventDefault는 **동기로** 불러야 하는데 "녹음 중인가"는 렌더러에 물어야 해서
-  // 비동기다. 그래서 첫 close는 무조건 막고, 판정한 뒤 래치를 올린 채 다시 닫는다 —
+  // 비동기다. 그래서 첫 close는 무조건 막고, 래치를 올린 채 판정한 뒤 다시 닫는다 —
   // 녹음 중이 아니면 그 왕복이 몇 밀리초라 사람 눈에는 그냥 닫힌 것과 같다.
   let closing = false;
   created.on("close", (event) => {
@@ -220,8 +230,19 @@ function openWindow(): BrowserWindow {
     // 여기서 또 물으면 사용자가 같은 질문을 두 번 받는다.
     if (quitting || closing) return;
     event.preventDefault();
+    // 래치는 **진입에서** 올린다. 완료 시점에만 올리면 핸드셰이크(최대 30초) 동안 창이
+    // 정상 상호작용 상태라, 그때 ⌘W나 빨간 버튼을 다시 누르면 두 번째 흐름이 시작된다 —
+    // 렌더러는 아직 중지 중이라 isRecording()이 또 true를 돌려주므로 **사용자가 같은
+    // 질문을 두 번 받는다.** 더 나쁜 꼬리도 있다: 먼저 끝난 쪽이 창을 파괴하면 나중 쪽의
+    // close()는 파괴된 BrowserWindow 호출이라 TypeError를 던지고, 그 예외는 아래 catch를
+    // 타는데 catch가 **다시** 닫으므로 catch 자체가 던져 main 프로세스의 unhandled
+    // rejection이 된다.
+    closing = true;
+    let closed = false;
     const closeNow = () => {
-      closing = true;
+      closed = true;
+      // 그 사이 창이 이미 파괴됐으면 여기서 멈춘다 (겹친 흐름, 앱 종료, 크래시).
+      if (created.isDestroyed()) return;
       created.close();
     };
     void runCloseFlow({
@@ -252,6 +273,10 @@ function openWindow(): BrowserWindow {
       // 경로와의 일관성이 낫다**는 판정을 받았다. 다시 뒤집지 않는다.
       appendSupervisorLog(`창을 닫는 중 예외 — ${reasonOf(e)}`);
       closeNow();
+    }).finally(() => {
+      // "취소"를 고르면 창은 그대로 남는다. 그때는 래치를 내려 다음 ⌘W가 다시 묻게 한다 —
+      // 진입 래치를 올려 둔 채로 두면 사용자가 창을 영영 닫을 수 없다.
+      if (!closed) closing = false;
     });
   });
   return created;
@@ -339,13 +364,18 @@ async function isAnalysing(): Promise<boolean> {
  */
 async function isRecordingIn(target: BrowserWindow): Promise<boolean> {
   if (target.isDestroyed()) return false;
-  try {
-    return (await target.webContents.executeJavaScript(
-      "Boolean(window.__damwha_desktop?.isRecording?.())",
-    )) as boolean;
-  } catch {
-    return false;
-  }
+  // 상한이 없으면 봉쇄된 렌더러 하나가 ⌘Q와 ⌘W를 통째로 막는다. 그 판정(거부는 "아니오",
+  // 시간 초과는 "예")은 shutdown.ts의 askIsRecording에 있다 — 여기 두면 부를 수가 없다.
+  return askIsRecording(
+    () => target.webContents.executeJavaScript("Boolean(window.__damwha_desktop?.isRecording?.())"),
+    {
+      timeoutMs: RENDERER_ASK_TIMEOUT_MS,
+      onTimeout: () =>
+        appendSupervisorLog(
+          `렌더러가 ${RENDERER_ASK_TIMEOUT_MS}ms 안에 "녹음 중인가"에 답하지 않았어요 — 녹음 중으로 보고 진행합니다.`,
+        ),
+    },
+  );
 }
 
 /** 렌더러의 라이브 중지. 훅이 없거나 창이 죽었으면 성공으로 읽지 않는다. */
