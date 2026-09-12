@@ -22,6 +22,7 @@ import { maySpawnServices } from "./spawn-guard";
 import { openWindowFlow } from "./window-flow";
 import { installMenu } from "./menu";
 import { createSupervisor } from "./services/supervisor";
+import { verifyOwnListener as checkOwnListener } from "./services/own-listener";
 import { buildSpecs } from "./services/specs";
 import {
   listExternalWorkers as scanExternalWorkers,
@@ -368,20 +369,13 @@ export async function descendantPids(rootPid: number): Promise<Set<number>> {
 }
 
 /**
- * 소유권 판정 메커니즘 (b) — 응답이 있어도 그 응답이 우리 자식에서 온 것인지 확인한다.
- * "그 포트에 응답이 있다"를 준비 신호로 쓰지 말라는 스펙 §6.4의 명시적 계약이다.
- * dev(자식 = pnpm, 실제 리스너는 손자)와 packaged(자식 = utilityProcess 헬퍼, 리스너
- * 자신) 양쪽 다 자손 집합에 자기 자신을 포함시켜 커버한다. lsof/ps 자체가 실패하면
- * 소유를 증명할 수 없으므로 안전하게 "아니오"로 본다 — 준비 판정은 실패 쪽으로 닫는다.
+ * 소유권 판정 메커니즘 (b)의 배선. 판정(우리 자식인지 보는 그 한 줄, 조회 실패를 "아니오"로
+ * 닫는 규칙)은 services/own-listener.ts에 있다 — 여기 두면 electron을 값으로 import하는 이
+ * 파일이라 어떤 테스트도 그것을 부를 수 없고, 술어를 `true`로 바꿔도 초록불이 유지된다
+ * (재리뷰 N4). listExternalWorkers와 같은 분리다.
  */
-async function verifyOwnListener(port: number, childPid: number | undefined): Promise<boolean> {
-  if (childPid === undefined) return false;
-  try {
-    const [owners, descendants] = await Promise.all([listenerPids(port), descendantPids(childPid)]);
-    return owners.some((pid) => pid === childPid || descendants.has(pid));
-  } catch {
-    return false;
-  }
+function verifyOwnListener(port: number, childPid: number | undefined): Promise<boolean> {
+  return checkOwnListener({ listeners: listenerPids, descendants: descendantPids }, port, childPid);
 }
 
 /**
