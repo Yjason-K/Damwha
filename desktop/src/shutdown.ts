@@ -11,7 +11,54 @@ export interface StopWorkerOptions {
   maxWaits?: number;
   /** 주어진 pid 중 아직 살아 있는 것을 돌려준다. 안 주면 아래 기본 구현을 쓴다. */
   stillAlive?(pids: number[]): Promise<number[]>;
+  /**
+   * 호출자가 **진입 전에**, supervisor가 아직 살아 있던 시점에 찍어 둔 자손 집합.
+   *
+   * 이 모듈은 진입해서야 자손을 찍는데, 그때 supervisor가 이미 죽어 있으면 그 자손은
+   * 벌써 pid 1로 재부모화되어 어떤 ppid BFS로도 보이지 않는다 (`--once` 자식은
+   * `start_new_session=True`, 그 자식이 띄운 `mlx_lm.server`는 그 아래). 그 상태에서
+   * "자손 없음"을 읽고 깨끗하다고 보고하면 고아를 남기고도 초록불이다 — 바로 그것이
+   * Task 11이 이 모듈 밖으로 미룬 결함(N2)이고, 고칠 자리가 호출자라서 미뤄졌다.
+   *
+   * `undefined`와 빈 Set은 **다른 뜻**이다. 빈 Set은 "살아 있을 때 봤고 자손이 없었다",
+   * `undefined`는 "찍어 두지 못했다" — 후자는 아래에서 깨끗하다고 보고하지 않는다.
+   * supervisor가 살아서 진입한 보통 경로에서는 이 값을 쓰지 않는다: 그때는 이 모듈이
+   * 직접 찍는 스냅샷이 더 새것이고, 낡은 집합을 합치면 그 사이 OS가 재사용한 pid를
+   * "우리가 남긴 것"이라며 사람에게 보여 주게 된다 (스펙 §6.9 — 후보이지 증거가 아니다).
+   */
+  knownDescendants?: ReadonlySet<number>;
+  /**
+   * 이 모듈의 판단 기록. 스냅샷 실패처럼 결과값(`stopped:false`)만으로는 사후에 무엇이
+   * 잘못됐는지 알 수 없는 사건이 여기로 간다.
+   *
+   * 기본값이 `console.error`인 것은 개발 편의일 뿐이다 — **패키징된 .app을 Finder로
+   * 실행하면 Electron main의 stderr에는 받을 곳이 없고**, logs.ts의 회전 로그는 자식
+   * 프로세스의 stdout/stderr만 파일로 보낸다. 그래서 프로덕션 호출자(main.ts)는 반드시
+   * 이 구멍에 supervisor.log를 꽂는다. 이 seam을 Task 11이 아니라 지금 만드는 이유는
+   * 그때는 꽂을 프로덕션 호출자가 없었기 때문이다.
+   */
+  log?(line: string): void;
 }
+
+/**
+ * `StopOutcome.detail`에 실리는 이유. 종료 대화상자가 이 문장을 **그대로** 사람에게 보이므로
+ * 여기가 곧 사용자 문구다. 한곳에 모아 두는 이유는 세 상태를 구분해 말하는 것이 이 필드의
+ * 존재 이유 전부이기 때문이다 (types.ts의 StopOutcome.detail 주석).
+ */
+export const STOP_DETAIL = {
+  /** 신호를 보냈는데도 살아 있는 것이 있다. */
+  orphans: "종료 신호를 보냈지만 아직 살아 있는 프로세스가 있어요.",
+  /** ps를 못 읽었다. 남은 것이 있는지 **없는지도** 모른다. */
+  unverifiable: "프로세스 목록을 읽지 못해서, 남은 것이 있는지 확인하지 못했어요.",
+  /** 사람이 "계속 기다리기"를 골랐다. 실패가 아니라 선택이다. */
+  declined:
+    "강제 종료를 고르지 않아서 작업 처리기가 하던 일을 마무리하는 중이에요. 이미 종료 신호를 받았으니 안전한 지점에 닿으면 스스로 끝납니다.",
+  /** supervisor가 먼저 죽었고, 그 자식이 아직 살아 있다. */
+  diedFirst: "작업 처리기가 먼저 종료돼서, 그 아래에 있던 프로세스가 남았어요.",
+  /** supervisor가 먼저 죽었고, 우리는 그 자식을 본 적이 없다. */
+  diedUnseen:
+    "작업 처리기가 이미 종료된 뒤라, 그 아래에 남은 프로세스가 있는지 확인할 방법이 없었어요.",
+} as const;
 
 /**
  * signal 0은 아무 신호도 배달하지 않고 "그 pid가 존재하는가"만 커널에 묻는다. ESRCH만
@@ -58,26 +105,51 @@ export async function stopWorkerProcess(
   // 정상 종료를 삼키는 것처럼 보였던 것은 테스트 픽스처 쪽 문제였다: 목의
   // `alive: () => ++calls <= aliveFor`에서 handle(0)은 첫 호출부터 false라
   // "이미 죽은 핸들"을 모형화한다 — "SIGTERM을 받고 곧 죽는다"는 handle(1)이다.
-  if (pid === undefined || !handle.alive()) return { stopped: true, leaked: [] };
+  if (pid === undefined) return { stopped: true, leaked: [] };
+
+  /**
+   * 주어진 pid 중 살아 있는 것. root는 handle이 권위 있게 답하므로 그쪽을 쓰고(공짜다),
+   * 자손은 물어볼 핸들이 없어 존재만 확인한다. 주입이 있으면 그것을 쓴다.
+   */
+  const survivors = async (pids: number[]): Promise<number[]> => {
+    if (pids.length === 0) return [];
+    if (opts.stillAlive !== undefined) return opts.stillAlive(pids);
+    return pids.filter((p) => (p === pid ? handle.alive() : processExists(p)));
+  };
+
+  if (!handle.alive()) {
+    // 이 자리에서 자손을 찍어 봐야 소용이 없다 — supervisor가 죽은 순간 그 자식들은 pid 1로
+    // 재부모화되어 ppid BFS에서 사라졌다. 그러므로 유일한 단서는 호출자가 **살아 있을 때**
+    // 찍어 준 집합이다. Task 11은 여기서 무조건 {stopped:true, leaked:[]}를 돌려줬고, 그것이
+    // 이월된 결함 N2다: supervisor가 먼저 죽은 종료는 고아를 남기고도 "깨끗함"으로 보고됐다.
+    const known = opts.knownDescendants;
+    if (known === undefined) {
+      // 호출자가 찍어 두지 못했다. 자손이 없다는 것도 증명하지 못한 것이므로 깨끗하다고
+      // 말하지 않는다 — 스냅샷 실패를 "자손 없음"으로 뭉개지 않는 것과 같은 규칙이다.
+      return { stopped: false, leaked: [], detail: STOP_DETAIL.diedUnseen };
+    }
+    const orphans = await survivors([...known]);
+    return orphans.length === 0
+      ? { stopped: true, leaked: [] }
+      : { stopped: false, leaked: orphans, detail: STOP_DETAIL.diedFirst };
+  }
 
   // 자손 스냅샷을 한 곳으로 모은다. 실패(ps가 죽거나 타임아웃)를 "자손 없음"으로 뭉개면
   // 반대 방향의 실수가 된다 — main.ts의 verifyOwnListener가 소유를 증명 못 할 때 "아니오"로
-  // 닫는 것과 같은 이유로, 여기서도 "확인 못 함"을 "깨끗함"으로 보고하지 않는다.
-  // StopOutcome에는 stopped/leaked 두 필드뿐이라 실패 사유를 실어 보낼 자리가 없다 —
-  // 그래서 실패는 그 자리에서 console.error로 남기고, snapshotFailed로 기억해 뒀다가 이
-  // 함수가 반환하는 모든 "clean" 판정을 무효로 만든다. 다만 그 console.error가 실제로
-  // 읽히는 것은 **터미널에서 띄웠을 때뿐이다**: 패키징된 .app을 Finder로 실행하면 메인
-  // 프로세스의 stderr에는 받을 곳이 없고, logs.ts의 회전 로그는 자식 프로세스의
-  // stdout/stderr만 파일로 보낸다. 즉 이 줄은 개발 모드의 단서이지 사후 조사용 기록이
-  // 아니다 — 사람에게 도달하는 신호는 stopped:false 하나뿐이고, 그것을 화면에 어떻게
-  // 적을지는 종료 대화상자를 가진 Task 13이 정한다.
+  // 닫는 것과 같은 이유로, 여기서도 "확인 못 함"을 "깨끗함"으로 보고하지 않는다. 실패는
+  // 그 자리에서 log()로 남기고, snapshotFailed로 기억해 뒀다가 이 함수가 반환하는 모든
+  // "clean" 판정을 무효로 만든다. 사람에게는 STOP_DETAIL.unverifiable이 그 사실을 말한다 —
+  // Task 11에는 그 자리가 없어(StopOutcome이 stopped/leaked뿐이었다) 이 상태가 "아무것도
+  // 안 남았다"와 같은 값이었고, 기록도 console.error뿐이라 패키징된 .app에서는 받을 곳이
+  // 없었다. 지금은 둘 다 호출자가 채운다: detail은 대화상자로, log는 supervisor.log로.
   let snapshotFailed = false;
+  const log = opts.log ?? ((line: string) => console.error(line));
   const snapshotDescendants = async (): Promise<Set<number>> => {
     try {
       return await opts.descendants(pid);
     } catch (e) {
       snapshotFailed = true;
-      console.error(
+      log(
         `[shutdown] worker 자손 스냅샷 실패 — 이 종료를 "확인됨"으로 보고하지 않는다: ${
           e instanceof Error ? e.message : String(e)
         }`,
@@ -96,13 +168,16 @@ export async function stopWorkerProcess(
   let capturedDescendants = await snapshotDescendants();
 
   /**
-   * 주어진 pid 중 살아 있는 것. root는 handle이 권위 있게 답하므로 그쪽을 쓰고(공짜다),
-   * 자손은 물어볼 핸들이 없어 존재만 확인한다. 주입이 있으면 그것을 쓴다.
+   * 살아남은 후보 목록 하나를 결과로 바꾼다. 두 실패 이유가 겹칠 수 있어 한 자리에 모은다 —
+   * 고아도 있고 스냅샷도 실패했으면 둘 다 적는다. `detail`은 `stopped:false`일 때만 채운다.
    */
-  const survivors = async (pids: number[]): Promise<number[]> => {
-    if (pids.length === 0) return [];
-    if (opts.stillAlive !== undefined) return opts.stillAlive(pids);
-    return pids.filter((p) => (p === pid ? handle.alive() : processExists(p)));
+  const verdict = (leaked: number[]): StopOutcome => {
+    const why: string[] = [];
+    if (leaked.length > 0) why.push(STOP_DETAIL.orphans);
+    if (snapshotFailed) why.push(STOP_DETAIL.unverifiable);
+    return why.length === 0
+      ? { stopped: true, leaked }
+      : { stopped: false, leaked, detail: why.join(" ") };
   };
 
   /** supervisor는 죽었다. 지금까지 찍어 둔 자손 스냅샷이 남아 있으면 깨끗한 종료가 아니다.
@@ -110,7 +185,7 @@ export async function stopWorkerProcess(
    *  것이므로 "비어 있으니 깨끗하다"고 말하지 않는다. */
   const cleanUnlessOrphans = async (): Promise<StopOutcome> => {
     const orphans = await survivors([...capturedDescendants]);
-    return { stopped: orphans.length === 0 && !snapshotFailed, leaked: orphans };
+    return verdict(orphans);
   };
 
   const waitForExit = async (ms: number): Promise<boolean> => {
@@ -142,7 +217,9 @@ export async function stopWorkerProcess(
   // 2단계. 사람이 거절하면 여기서 멈춘다. 다만 이 시점의 프로세스는 방금 alive()로 확인한
   // 살아 있는 프로세스다 — types.ts:67이 leaked를 "화면과 로그에 적을 pid"로 정의하는데
   // 빈 배열을 돌려주면 화면은 "깨끗하지 않다"고만 말하고 무엇을 죽여야 할지는 말하지 못한다.
-  if (!(await opts.onGraceExpired("worker"))) return { stopped: false, leaked: [pid] };
+  if (!(await opts.onGraceExpired("worker"))) {
+    return { stopped: false, leaked: [pid], detail: STOP_DETAIL.declined };
+  }
 
   // 3단계. SIGKILL이 아니라 두 번째 SIGTERM이다.
   opts.signal(-pid, "SIGTERM");
@@ -158,13 +235,74 @@ export async function stopWorkerProcess(
   // 5단계. 지금까지 찍어 둔 스냅샷들도 후보에 넣는다 — 그때 우리 자손이었는데 끝까지
   // 살아 있다면 그 사이 부모를 잃어 BFS에서 사라졌더라도 여전히 우리가 남긴 프로세스다.
   const candidates = [...new Set([pid, ...tree, ...capturedDescendants])];
-  const leaked = await survivors(candidates);
-  return { stopped: leaked.length === 0 && !snapshotFailed, leaked };
+  return verdict(await survivors(candidates));
 }
 
 export interface InFlight {
   recording: boolean;
   analysing: boolean;
+}
+
+/**
+ * "분석 중"의 판정 그 자체. `ps -axo pid,command` 출력과 우리 worker의 자손 집합을 받아,
+ * 그중에 `--once` 자식이 있는가를 본다 (스펙 §6.9 — 새 API 엔드포인트를 만들지 않는다).
+ *
+ * `tree`에 없는 pid는 보지 않는 것이 이 함수의 절반이다. 명령줄만 훑으면 **외부** worker의
+ * `--once` 자식도 잡히는데, 그 job은 우리가 소유하지 않으므로 우리 종료가 확인을 받을
+ * 이유가 없다. 나머지 절반은 `--once`를 낱말 경계로 보는 것이다 — `--once-only` 같은 다른
+ * 인자나 경로 문자열 안의 `--once`를 부분 문자열로 잡으면 진행 중이 아닌 종료가 매번
+ * 확인을 묻는다.
+ *
+ * main.ts가 아니라 여기 있는 이유: electron을 값으로 import하는 파일은 vitest가 못 불러온다
+ * (shell-window.ts:4). 저 자리에 두면 정규식을 `/--once/`로 넓히는 변이도, `tree.has` 한 줄을
+ * 지우는 변이도 초록불로 살아남는다 — listExternalWorkers·verifyOwnListener를 모듈로 뺀 것과
+ * 같은 분리다.
+ */
+export function hasOnceChild(psOutput: string, tree: ReadonlySet<number>): boolean {
+  for (const line of psOutput.split("\n")) {
+    const t = line.trim();
+    const space = t.indexOf(" ");
+    if (space <= 0) continue;
+    if (!tree.has(Number(t.slice(0, space)))) continue;
+    if (/(^|\s)--once(\s|$)/.test(t.slice(space + 1))) return true;
+  }
+  return false;
+}
+
+/**
+ * 종료 진입 전에 찍어 두는 worker 자손 스냅샷. 마지막으로 **성공한** 집합을 들고 다닌다.
+ *
+ * 규칙 셋이 전부이고, 셋 다 하중을 받는다.
+ * - supervisor가 살아 있을 때만 찍는다. 죽은 뒤의 BFS는 재부모화된 자손을 못 보고, 그
+ *   사이 OS가 재사용한 pid를 우리 것이라며 주워 올 수 있다.
+ * - 실패(ps 타임아웃)는 **이전 성공을 덮지 않는다.** 덮으면 늦은 실패 하나가 일찍 찍어 둔
+ *   유일한 증거를 지운다.
+ * - 못 찍었으면 `undefined`를 그대로 유지한다 — stopWorkerProcess가 그것을 "확인 못 함"으로
+ *   읽어 깨끗하다고 보고하지 않는다.
+ *
+ * 두 번 부른다 (quit-flow.ts): 종료 흐름에 들어가자마자 한 번(확인 대화상자는 시간 상한이
+ * 없어서, 그 뒤에 찍으면 대화상자가 떠 있는 동안 죽은 supervisor의 자손을 영영 못 본다),
+ * 그리고 서비스를 내리기 **직전**에 한 번(가장 새것이라 pid 재사용 위험이 가장 작다).
+ */
+export async function captureDescendants(
+  previous: ReadonlySet<number> | undefined,
+  deps: {
+    pid(): number | undefined;
+    alive(): boolean;
+    descendants(rootPid: number): Promise<Set<number>>;
+    log(line: string): void;
+  },
+): Promise<ReadonlySet<number> | undefined> {
+  const pid = deps.pid();
+  if (pid === undefined || !deps.alive()) return previous;
+  try {
+    return await deps.descendants(pid);
+  } catch (e) {
+    deps.log(
+      `[shutdown] 종료 전 worker 자손 스냅샷 실패 — ${e instanceof Error ? e.message : String(e)}`,
+    );
+    return previous;
+  }
 }
 
 export interface QuitDecision {

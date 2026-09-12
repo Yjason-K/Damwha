@@ -393,6 +393,51 @@ describe("supervisor.stopAll", () => {
     expect(out.leaked.sort()).toEqual([111, 222, 333]);
   });
 
+  it("carries each service's reason out, not just the fact that it was not clean", async () => {
+    // detail을 버리면 종료 대화상자가 "고아가 살아 있다"와 "확인하지 못했다"와 "사람이
+    // 강제를 거절했다"를 같은 말로 적게 된다 — 어댑터가 애써 구분한 것이 여기서 사라진다.
+    const s = createSupervisor(
+      [
+        spec("api", { stop: async () => ({ stopped: true, leaked: [] }) }),
+        spec("worker", {
+          stop: async () => ({ stopped: false, leaked: [222], detail: "아직 살아 있어요." }),
+        }),
+      ],
+      ctx(),
+      {},
+    );
+    await s.start();
+    const out = await s.stopAll({ graceMs: 10 });
+    expect(out.detail).toBe("아직 살아 있어요.");
+  });
+
+  it("says nothing extra when every service stopped cleanly", async () => {
+    const s = createSupervisor([spec("api"), spec("worker")], ctx(), {});
+    await s.start();
+    expect((await s.stopAll({ graceMs: 10 })).detail).toBeUndefined();
+  });
+
+  it("puts a throwing stop on the screen, not only in the log", async () => {
+    // 던지는 stop은 leaked도 비어 있어서 그 자리가 완전히 말이 없다 — 화면은 "깨끗하지
+    // 않다"만 말하고 무엇이 왜 실패했는지는 로그 파일을 열어야만 알 수 있었다.
+    const s = createSupervisor(
+      [
+        spec("worker", {
+          stop: async () => {
+            throw new Error("boom");
+          },
+        }),
+      ],
+      ctx(),
+      {},
+    );
+    await s.start();
+    const out = await s.stopAll({ graceMs: 10 });
+    expect(out.stopped).toBe(false);
+    expect(out.detail).toContain("worker");
+    expect(out.detail).toContain("boom");
+  });
+
   it("keeps stopping the rest when one service's stop throws", async () => {
     const stopped: ServiceId[] = [];
     const s = createSupervisor(

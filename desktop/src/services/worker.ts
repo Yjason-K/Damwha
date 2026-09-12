@@ -3,7 +3,14 @@ import * as fs from "fs";
 import * as path from "path";
 import { makeSink, sinkTails } from "../api-process";
 import { buildChildPath } from "./resolve";
-import type { LaunchContext, LaunchResult, ReadinessResult, ServiceSpec } from "./types";
+import type {
+  LaunchContext,
+  LaunchResult,
+  ReadinessResult,
+  ServiceSpec,
+  StopOutcome,
+  StopPlan,
+} from "./types";
 
 /** Task 7이 __main__.py에 넣은 줄. DB에 실제로 붙은 뒤에만 나온다. */
 const READY = /supervisor \S+ ready \(db connected\)/g;
@@ -153,8 +160,17 @@ export interface WorkerDeps {
   listExternal(): Promise<number[]>;
   /** worker의 .env 존재 확인. 테스트가 주입한다. */
   exists?(p: string): boolean;
-  /** 종료 절차. Task 11의 stopWorker를 main.ts가 넘긴다. */
-  stop?(result: LaunchResult, graceMs: number): Promise<{ stopped: boolean; leaked: number[] }>;
+  /**
+   * 종료 절차. Task 11의 stopWorkerProcess를 main.ts가 넘긴다.
+   *
+   * `graceMs`가 아니라 **StopPlan 전체**를 받는다. 유예 초과 대화상자를 띄우는 것은
+   * `plan.onGraceExpired`이고, 그것을 여기서 넘겨주지 않으면 어댑터가 그 콜백에 닿을 길이
+   * 없다 — 감독자도 그것을 부르지 않으므로(stopAll은 plan을 spec.stop에 넘기기만 한다)
+   * 아무도 부르지 않는 콜백이 되어, 유예가 지나도 사람에게 묻지 않고 조용히 강제 단계를
+   * 건너뛴다. 대화상자를 어댑터가 **직접** 띄우지 않는 이유도 같다: 그러면 감독자가
+   * 넘겨준 것과 둘이 되어 사용자가 같은 질문을 두 번 받는다.
+   */
+  stop?(result: LaunchResult, plan: StopPlan): Promise<StopOutcome>;
 }
 
 export function workerSpec(deps: WorkerDeps): ServiceSpec {
@@ -213,7 +229,7 @@ export function workerSpec(deps: WorkerDeps): ServiceSpec {
       return workerReady(tail) ? { kind: "ready" } : { kind: "not-ready" };
     },
     async stop(result, plan) {
-      if (deps.stop !== undefined) return deps.stop(result, plan.graceMs);
+      if (deps.stop !== undefined) return deps.stop(result, plan);
       const handle = result.handle;
       if (handle === null) return { stopped: true, leaked: [] };
       await handle.stop(plan.graceMs);

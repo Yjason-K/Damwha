@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { decideQuit, runHandshake, stopWorkerProcess } from "../src/shutdown";
+import {
+  captureDescendants,
+  decideQuit,
+  hasOnceChild,
+  runHandshake,
+  STOP_DETAIL,
+  stopWorkerProcess,
+} from "../src/shutdown";
 
 describe("stopWorkerProcess", () => {
   function handle(aliveFor: number) {
@@ -46,7 +53,7 @@ describe("stopWorkerProcess", () => {
     expect(signals.filter(([, s]) => s === "SIGKILL")).toHaveLength(0);
     // 거절한 시점의 프로세스는 방금 살아 있다고 확인된 프로세스다. stopped:false만으로는
     // 화면이 "깨끗하지 않다"고만 말하고 무엇을 죽여야 하는지는 말하지 못한다 (types.ts:67).
-    expect(out).toEqual({ stopped: false, leaked: [4242] });
+    expect(out).toEqual({ stopped: false, leaked: [4242], detail: STOP_DETAIL.declined });
   });
 
   it("escalates with a SECOND SIGTERM, not SIGKILL", async () => {
@@ -147,7 +154,7 @@ describe("stopWorkerProcess", () => {
       onGraceExpired: async () => true,
       maxWaits: 2,
     });
-    expect(out).toEqual({ stopped: false, leaked: [4242] });
+    expect(out).toEqual({ stopped: false, leaked: [4242], detail: STOP_DETAIL.orphans });
   });
 
   // Finding 1 (재리뷰): processExists(기본 자손 생존 확인)는 실제 호출자가 쓰는 유일한
@@ -174,7 +181,7 @@ describe("stopWorkerProcess", () => {
         throw new Error("1단계에서 끝났으니 물을 일이 없다");
       },
     });
-    expect(out).toEqual({ stopped: false, leaked: [process.pid] });
+    expect(out).toEqual({ stopped: false, leaked: [process.pid], detail: STOP_DETAIL.orphans });
   });
 
   it("does not read a permission-denied descendant as dead", async () => {
@@ -198,7 +205,7 @@ describe("stopWorkerProcess", () => {
           throw new Error("1단계에서 끝났으니 물을 일이 없다");
         },
       });
-      expect(out).toEqual({ stopped: false, leaked: [9999] });
+      expect(out).toEqual({ stopped: false, leaked: [9999], detail: STOP_DETAIL.orphans });
     } finally {
       spy.mockRestore();
     }
@@ -249,7 +256,7 @@ describe("stopWorkerProcess", () => {
       },
       stillAlive: async (pids) => pids.filter((p) => alive.has(p)),
     });
-    expect(out).toEqual({ stopped: false, leaked: [5001] });
+    expect(out).toEqual({ stopped: false, leaked: [5001], detail: STOP_DETAIL.orphans });
   });
 
   it("does not call it clean when a descendant captured at entry outlives stage 3", async () => {
@@ -265,7 +272,7 @@ describe("stopWorkerProcess", () => {
       maxWaits: 2,
       stillAlive: async (pids) => pids.filter((p) => alive.has(p)),
     });
-    expect(out).toEqual({ stopped: false, leaked: [5001] });
+    expect(out).toEqual({ stopped: false, leaked: [5001], detail: STOP_DETAIL.orphans });
   });
 
   it("catches a descendant that appears only in the re-snapshot taken when the grace expires", async () => {
@@ -291,7 +298,7 @@ describe("stopWorkerProcess", () => {
       maxWaits: 2,
       stillAlive: async (pids) => pids.filter((p) => alive.has(p)),
     });
-    expect(out).toEqual({ stopped: false, leaked: [6001] });
+    expect(out).toEqual({ stopped: false, leaked: [6001], detail: STOP_DETAIL.orphans });
   });
 
   it("still reports a clean stop when the captured descendants went with it", async () => {
@@ -331,8 +338,8 @@ describe("stopWorkerProcess", () => {
       });
       // leaked는 비어 있다 — 어떤 pid가 남았는지조차 모른다. 그래도 stopped는 false다:
       // "확인 못 했다"를 "깨끗했다"로 보고하지 않는다.
-      expect(out).toEqual({ stopped: false, leaked: [] });
-      // StopOutcome에는 이유를 실을 자리가 없다 — 사라지지 않게 최소한 로그에는 남는다.
+      expect(out).toEqual({ stopped: false, leaked: [], detail: STOP_DETAIL.unverifiable });
+      // 기본 싱크는 console.error다 — 이 자리에 프로덕션 로그를 꽂는 것은 아래 log 테스트가 본다.
       expect(errors.length).toBeGreaterThan(0);
     } finally {
       spy.mockRestore();
@@ -356,7 +363,7 @@ describe("stopWorkerProcess", () => {
         onGraceExpired: async () => true,
         maxWaits: 2,
       });
-      expect(out).toEqual({ stopped: false, leaked: [] });
+      expect(out).toEqual({ stopped: false, leaked: [], detail: STOP_DETAIL.unverifiable });
     } finally {
       spy.mockRestore();
     }
@@ -386,7 +393,7 @@ describe("stopWorkerProcess", () => {
         // stopped:true가 나온다면 그건 순전히 5단계 가드가 빠졌기 때문이어야 한다.
         stillAlive: async () => [],
       });
-      expect(out).toEqual({ stopped: false, leaked: [] });
+      expect(out).toEqual({ stopped: false, leaked: [], detail: STOP_DETAIL.unverifiable });
     } finally {
       spy.mockRestore();
     }
@@ -425,7 +432,7 @@ describe("stopWorkerProcess", () => {
         // 오직 "진입 때 확인을 못 했다"이기 위해서다.
         stillAlive: async () => [],
       });
-      expect(out).toEqual({ stopped: false, leaked: [] });
+      expect(out).toEqual({ stopped: false, leaked: [], detail: STOP_DETAIL.unverifiable });
     } finally {
       spy.mockRestore();
     }
@@ -462,7 +469,7 @@ describe("stopWorkerProcess", () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]).toContain(5001);
     expect(seen[0]).toContain(4242);
-    expect(out).toEqual({ stopped: false, leaked: [5001] });
+    expect(out).toEqual({ stopped: false, leaked: [5001], detail: STOP_DETAIL.orphans });
   });
 
   it("unions the entry snapshot with the re-snapshot instead of replacing it", async () => {
@@ -496,7 +503,7 @@ describe("stopWorkerProcess", () => {
     // 두 스냅샷에 한 번씩만 나타난 pid가 **둘 다** 생존 확인에 도달해야 한다.
     expect(seen[0]).toContain(7001);
     expect(seen[0]).toContain(7002);
-    expect(out).toEqual({ stopped: false, leaked: [7001] });
+    expect(out).toEqual({ stopped: false, leaked: [7001], detail: STOP_DETAIL.orphans });
   });
 
   it("walks from the positive root pid, and snapshots at the two moments the design depends on", async () => {
@@ -557,6 +564,9 @@ describe("stopWorkerProcess", () => {
     // alive()는 `code === null`이라 자식이 끝나고 Node가 거둬들인 뒤에만 false가 된다 —
     // 바로 그 순간부터 OS가 그 pid를 재사용할 수 있다. 며칠씩 켜 두는 앱에서 죽은 핸들에
     // signal(-pid)를 쏘면 남의 프로세스 그룹을 때린다.
+    //
+    // 호출자가 "살아 있을 때 봤고 자손이 없었다"(빈 Set)를 넘겼으므로 깨끗한 종료다.
+    // 그것을 넘기지 않는 경우는 아래 두 테스트가 따로 본다 — 그때는 깨끗하지 않다.
     const signals: Array<[number, string]> = [];
     const out = await stopWorkerProcess(handle(0), {
       graceMs: 20,
@@ -564,9 +574,50 @@ describe("stopWorkerProcess", () => {
       signal: (pid, sig) => signals.push([pid, sig]),
       descendants: async () => new Set<number>(),
       onGraceExpired: async () => true,
+      knownDescendants: new Set<number>(),
     });
     expect(signals).toEqual([]);
     expect(out).toEqual({ stopped: true, leaked: [] });
+  });
+
+  // ── 이월 결함 N2 ────────────────────────────────────────────────────────────
+  // 진입 가드가 `{stopped:true, leaked:[]}`를 무조건 돌려주던 자리다. supervisor가 먼저
+  // 죽으면 그 `--once` 자식(start_new_session)과 그것이 띄운 mlx_lm.server는 pid 1로
+  // 재부모화되어 **어떤 ppid BFS로도 보이지 않는다** — 그래서 이 모듈이 진입해서 찍는
+  // 스냅샷은 빈 집합이고, 고아가 살아 있는 종료가 "깨끗함"으로 보고됐다. 고칠 자리가
+  // 모듈 밖(호출자가 살아 있을 때 찍어 둬야 한다)이라 Task 13으로 넘어왔다.
+  it("reports the orphans the caller captured when the supervisor died before we got here", async () => {
+    const signals: Array<[number, string]> = [];
+    const out = await stopWorkerProcess(handle(0), {
+      graceMs: 20,
+      pollMs: 5,
+      signal: (pid, sig) => signals.push([pid, sig]),
+      // 지금 찍으면 빈 집합이다. 재부모화된 자손은 여기 없다 — 그것이 이 결함의 전부다.
+      descendants: async () => new Set<number>(),
+      onGraceExpired: async () => true,
+      knownDescendants: new Set([8801, 8802]),
+      stillAlive: async (pids) => pids.filter((p) => p === 8802),
+    });
+    // 죽은 핸들에는 여전히 신호를 쏘지 않는다. pid가 재사용됐을 수 있다.
+    expect(signals).toEqual([]);
+    expect(out).toEqual({
+      stopped: false,
+      leaked: [8802],
+      detail: STOP_DETAIL.diedFirst,
+    });
+  });
+
+  it("does not call a supervisor that died unseen a clean stop", async () => {
+    // 호출자가 한 번도 못 찍었다 = 자손이 없다는 것도 증명하지 못했다. 스냅샷 실패를
+    // "자손 없음"으로 뭉개지 않는 것과 같은 규칙이다 (스펙 §6.9).
+    const out = await stopWorkerProcess(handle(0), {
+      graceMs: 20,
+      pollMs: 5,
+      signal: () => undefined,
+      descendants: async () => new Set<number>(),
+      onGraceExpired: async () => true,
+    });
+    expect(out).toEqual({ stopped: false, leaked: [], detail: STOP_DETAIL.diedUnseen });
   });
 
   it("does nothing when there is no pid", async () => {
@@ -583,6 +634,137 @@ describe("stopWorkerProcess", () => {
     );
     expect(signals).toEqual([]);
     expect(out.stopped).toBe(true);
+  });
+});
+
+describe("stopWorkerProcess의 로그 싱크", () => {
+  function handle(aliveFor: number) {
+    let calls = 0;
+    return {
+      pid: 4242,
+      alive: () => ++calls <= aliveFor,
+      stderrTail: () => "",
+      exitCode: () => null,
+      onExit: () => undefined,
+      stop: async () => undefined,
+    } as never;
+  }
+
+  it("sends the snapshot failure to the injected sink instead of console.error", async () => {
+    // 패키징된 .app을 Finder로 실행하면 Electron main의 stderr에는 받을 곳이 없다. 이
+    // seam이 없으면 스냅샷 실패는 dev 터미널에서만 보이고 사후 조사에는 아무 기록이 없다.
+    const seen: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const out = await stopWorkerProcess(handle(1), {
+        graceMs: 20,
+        pollMs: 5,
+        signal: () => undefined,
+        descendants: async () => {
+          throw new Error("ps 실패");
+        },
+        onGraceExpired: async () => true,
+        log: (line) => seen.push(line),
+      });
+      expect(seen).toHaveLength(1);
+      expect(seen[0]).toContain("ps 실패");
+      // 싱크를 줬으면 console.error로는 가지 않는다 — 두 곳에 적으면 어느 쪽을 지워도
+      // 다른 쪽이 테스트를 초록으로 붙들어 준다.
+      expect(spy).not.toHaveBeenCalled();
+      expect(out.stopped).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe("hasOnceChild", () => {
+  const PS = [
+    "  PID COMMAND",
+    " 4242 /opt/uv run --directory /r/be/worker python -m damwha_worker",
+    " 4243 /opt/uv run python -m damwha_worker --once --job 17",
+    " 7777 /opt/uv run python -m damwha_worker --once --job 99",
+  ].join("\n");
+
+  it("finds the --once child of our own worker", () => {
+    expect(hasOnceChild(PS, new Set([4243]))).toBe(true);
+  });
+
+  it("ignores an external worker's --once child", () => {
+    // 7777도 --once지만 우리 자손이 아니다. 외부 worker가 하는 일은 우리가 소유하지
+    // 않으므로 우리 종료가 확인을 받을 이유가 없다 (스펙 §6.9). tree 검사를 지우면
+    // 이 단언이 무너진다 — 우리 트리에는 --once가 하나도 없는데 true가 된다.
+    expect(hasOnceChild(PS, new Set([4242]))).toBe(false);
+  });
+
+  it("does not match --once inside a longer word", () => {
+    // 낱말 경계가 없으면 --once-only나 경로 안의 --once가 걸려, 진행 중이 아닌 종료가
+    // 매번 확인을 묻는다.
+    const ps = ["  PID COMMAND", " 5150 python -m damwha_worker --once-only"].join("\n");
+    expect(hasOnceChild(ps, new Set([5150]))).toBe(false);
+  });
+
+  it("survives a header-only or empty listing", () => {
+    expect(hasOnceChild("  PID COMMAND", new Set([4243]))).toBe(false);
+    expect(hasOnceChild("", new Set([4243]))).toBe(false);
+  });
+});
+
+describe("captureDescendants", () => {
+  const noLog = () => undefined;
+
+  it("captures while the supervisor is alive", async () => {
+    const out = await captureDescendants(undefined, {
+      pid: () => 4242,
+      alive: () => true,
+      descendants: async () => new Set([1, 2]),
+      log: noLog,
+    });
+    expect([...(out ?? [])]).toEqual([1, 2]);
+  });
+
+  it("keeps the previous capture when the supervisor is already dead", async () => {
+    // 죽은 뒤의 BFS는 재부모화된 자손을 못 보고, 그 사이 OS가 재사용한 pid를 우리 것이라며
+    // 주워 올 수 있다. 새로 찍지 않고 살아 있을 때 찍어 둔 것을 유지한다.
+    let walked = false;
+    const previous = new Set([9001]);
+    const out = await captureDescendants(previous, {
+      pid: () => 4242,
+      alive: () => false,
+      descendants: async () => {
+        walked = true;
+        return new Set([7777]);
+      },
+      log: noLog,
+    });
+    expect(walked).toBe(false);
+    expect(out).toBe(previous);
+  });
+
+  it("does not let a late ps failure erase the only evidence we had", async () => {
+    const seen: string[] = [];
+    const previous = new Set([9001]);
+    const out = await captureDescendants(previous, {
+      pid: () => 4242,
+      alive: () => true,
+      descendants: async () => {
+        throw new Error("ps 타임아웃");
+      },
+      log: (line) => seen.push(line),
+    });
+    expect(out).toBe(previous);
+    expect(seen[0]).toContain("ps 타임아웃");
+  });
+
+  it("stays undefined when there was never anything to capture", async () => {
+    // undefined는 빈 Set과 다른 뜻이다 — "자손이 없었다"가 아니라 "확인하지 못했다"다.
+    const out = await captureDescendants(undefined, {
+      pid: () => undefined,
+      alive: () => true,
+      descendants: async () => new Set([1]),
+      log: noLog,
+    });
+    expect(out).toBeUndefined();
   });
 });
 

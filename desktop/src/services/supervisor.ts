@@ -479,6 +479,11 @@ export function createSupervisor(
     // 타이머(역시 stopping을 본다)뿐이라 이 루프는 서비스 수만큼 돌고 빈다.
     while (pending.size > 0) await Promise.allSettled([...pending]);
     const leaked: number[] = [];
+    // 왜 깨끗하지 않은지를 모은다. 이것을 버리면 종료 대화상자가 "고아가 살아 있다"와
+    // "확인하지 못했다"와 "사람이 강제를 거절했다"를 같은 말로 적게 된다 (types.ts의
+    // StopOutcome.detail). 어댑터가 애써 구분해 돌려준 것이 여기서 사라지면 그 구분은
+    // 어디에도 없다.
+    const details: string[] = [];
     let stopped = true;
     // 역순. dependsOn이 정한 순서를 뒤집는 것이 곧 의존 역순이다.
     for (const spec of [...ordered].reverse()) {
@@ -489,15 +494,23 @@ export function createSupervisor(
         const out = await spec.stop(rt.result, plan);
         if (!out.stopped) stopped = false;
         leaked.push(...out.leaked);
+        if (out.detail !== undefined) details.push(out.detail);
       } catch (e) {
         // 하나가 던져도 나머지는 내린다 — 여기서 멈추면 앞선 서비스가 통째로 남는다.
         stopped = false;
-        log(`${spec.id}: 종료 중 예외 — ${reason(e)}`);
+        const why = `${spec.id}: 종료 중 예외 — ${reason(e)}`;
+        // 화면에도 실어 보낸다. 로그 한 줄로 끝내면 사용자는 "깨끗하지 않다"만 보고
+        // 무엇이 왜 실패했는지는 로그 파일을 열어야만 알 수 있다 — 던지는 stop은 leaked도
+        // 비어 있어서 그 자리가 완전히 말이 없다.
+        details.push(why);
+        log(why);
       }
       rt.result = null;
       set(spec.id, { process: "stopped", health: "unknown", owned: false });
     }
-    return { stopped, leaked };
+    return details.length === 0
+      ? { stopped, leaked }
+      : { stopped, leaked, detail: details.join("\n") };
   }
 
   return { start, retry, stopAll, statuses, runtimeOf: (id: ServiceId) => runtimes.get(id) };

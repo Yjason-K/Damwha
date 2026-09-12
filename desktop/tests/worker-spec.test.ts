@@ -124,4 +124,47 @@ describe("workerSpec", () => {
     const r = await spec.readiness({ handle: handle("boom", false), owned: true }, ctx());
     expect(r.kind).toBe("failed");
   });
+
+  it("hands the injected stop the WHOLE plan, not just the grace", async () => {
+    // 유예 초과 대화상자를 띄우는 것은 plan.onGraceExpired다. graceMs만 넘기면 어댑터가
+    // 그 콜백에 닿을 길이 없고, 감독자도 그것을 부르지 않으므로(stopAll은 plan을
+    // spec.stop에 넘기기만 한다) 아무도 부르지 않는 콜백이 된다 — 유예가 지나도 사람에게
+    // 묻지 않고 조용히 강제 단계를 건너뛴다. 그 상태로는 P2-C4·P2-C5가 둘 다 조용히
+    // 실패한다: worker는 살아남고, 사용자는 자기가 받은 적 없는 질문의 결과를 본다.
+    const asked: string[] = [];
+    const seen: unknown[] = [];
+    const spec = workerSpec(
+      deps({
+        stop: async (_result: unknown, plan: { onGraceExpired?: (id: string) => Promise<boolean> }) => {
+          seen.push(plan);
+          // 어댑터가 하는 일이 바로 이것이다 — 자기가 묻지 않고 감독자가 준 것을 전달한다.
+          await plan.onGraceExpired?.("worker");
+          return { stopped: true, leaked: [] };
+        },
+      }) as never,
+    );
+    await spec.stop(
+      { handle: handle(READY), owned: true },
+      {
+        graceMs: 5_000,
+        onGraceExpired: async (id) => {
+          asked.push(id);
+          return true;
+        },
+      },
+    );
+    expect(asked).toEqual(["worker"]);
+    expect(seen[0]).toMatchObject({ graceMs: 5_000 });
+  });
+
+  it("carries the adapter's reason back out", async () => {
+    // 어댑터가 구분해 돌려준 detail이 여기서 떨어지면 대화상자가 그것을 볼 수 없다.
+    const spec = workerSpec(
+      deps({
+        stop: async () => ({ stopped: false, leaked: [7], detail: "사람이 강제를 거절했어요." }),
+      }) as never,
+    );
+    const out = await spec.stop({ handle: handle(READY), owned: true }, { graceMs: 10 });
+    expect(out).toEqual({ stopped: false, leaked: [7], detail: "사람이 강제를 거절했어요." });
+  });
 });
