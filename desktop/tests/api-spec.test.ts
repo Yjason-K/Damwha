@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { apiSpec, migrationCheckSkipped, pendingMigrations } from "../src/services/api";
+import { describe, expect, it, vi } from "vitest";
+import { apiSpec, judgeAfterProbe, migrationCheckSkipped, pendingMigrations } from "../src/services/api";
+import type { ApiDeps } from "../src/services/api";
+import type { ServiceHandle } from "../src/services/types";
 
 const WARN =
   "[Nest] 123  - 09/12/2026  WARN [DatabaseService] 3 pending migration(s): " +
@@ -50,5 +52,77 @@ describe("migrationCheckSkipped", () => {
 
   it("is false for a normal boot", () => {
     expect(migrationCheckSkipped("LOG listening on 127.0.0.1:3000")).toBe(false);
+  });
+});
+
+/**
+ * 진짜 API 자식을 흉내 낸 가짜 handle. stdout·stderr를 각자 독립적으로 조작할 수
+ * 있어야 "게이트가 둘 중 어느 쪽을 읽는가"를 고정할 수 있다.
+ */
+function fakeHandle(streams: { stdout?: string; stderr?: string }): ServiceHandle {
+  return {
+    pid: 4242,
+    alive: () => true,
+    stderrTail: () => streams.stderr ?? "",
+    stdoutTail: () => streams.stdout ?? "",
+    exitCode: () => null,
+    onExit: () => undefined,
+    stop: async () => undefined,
+  };
+}
+
+function fakeDeps(over: Partial<ApiDeps> = {}): ApiDeps {
+  return {
+    verifyOwnListener: async () => true,
+    isPortOccupied: async () => false,
+    onPendingMigrations: () => undefined,
+    onMigrationCheckSkipped: () => undefined,
+    ...over,
+  };
+}
+
+describe("judgeAfterProbe — 게이트가 읽는 스트림 고정", () => {
+  // 2026-09-12 실측: NestJS 기본 ConsoleLogger는 .error()만 stderr로 보내고 .warn()은
+  // stdout에 쓴다. database.service.ts의 미적용 마이그레이션 경고는 .warn()이라 실전에는
+  // 항상 stdout에만 있다 — stderrTail()만 보던 첫 구현은 이 테스트가 없어 회귀를 못 잡았다.
+  it("stdout에 있는 경고를 읽어 게이트를 발화시킨다", async () => {
+    const onPendingMigrations = vi.fn();
+    const handle = fakeHandle({ stdout: WARN, stderr: "" });
+
+    const result = await judgeAfterProbe(handle, handle.stderrTail(), "ready", 3000, fakeDeps({ onPendingMigrations }));
+
+    expect(result.kind).toBe("failed");
+    expect(onPendingMigrations).toHaveBeenCalledWith({
+      count: 3,
+      names: "022_x.sql, 023_y.sql, 024_z.sql",
+    });
+  });
+
+  it("같은 경고가 stderr에만 있으면 (stdout이 비어 있으면) 게이트는 발화하지 않는다", async () => {
+    const onPendingMigrations = vi.fn();
+    // stdout은 비고, 경고는(실수로) stderr 쪽에 있는 상황을 뒤집어 확인한다 — 게이트가
+    // 우연히 두 스트림을 다 보거나 stderr만 보는 퇴행이 생기면 이 테스트가 깨진다.
+    const handle = fakeHandle({ stdout: "", stderr: WARN });
+
+    const result = await judgeAfterProbe(handle, handle.stderrTail(), "ready", 3000, fakeDeps({ onPendingMigrations }));
+
+    expect(result.kind).toBe("ready");
+    expect(onPendingMigrations).not.toHaveBeenCalled();
+  });
+
+  it("stdout의 검사 건너뜀 경고도 잡는다 — stderr에 있으면 못 잡는다", async () => {
+    const onMigrationCheckSkipped = vi.fn();
+    const skipped = "WARN pending migration check skipped: ENOENT";
+
+    const inStdout = fakeHandle({ stdout: skipped, stderr: "" });
+    const r1 = await judgeAfterProbe(inStdout, "", "ready", 3000, fakeDeps({ onMigrationCheckSkipped }));
+    expect(r1.kind).toBe("ready");
+    expect(onMigrationCheckSkipped).toHaveBeenCalledOnce();
+
+    onMigrationCheckSkipped.mockClear();
+    const inStderr = fakeHandle({ stdout: "", stderr: skipped });
+    const r2 = await judgeAfterProbe(inStderr, skipped, "ready", 3000, fakeDeps({ onMigrationCheckSkipped }));
+    expect(r2.kind).toBe("ready");
+    expect(onMigrationCheckSkipped).not.toHaveBeenCalled();
   });
 });

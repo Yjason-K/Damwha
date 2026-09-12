@@ -2,24 +2,33 @@ import * as path from "path";
 import { launchDev, launchPackaged } from "../api-process";
 import { MAX_PORT_ATTEMPTS, choosePort, isAddrInUse } from "../port";
 import { probeHealth } from "../readiness";
+import type { ProbeResult } from "../readiness";
 import { ANSI_SGR, failureBlock } from "../stderr";
-import type { LaunchContext, LaunchResult, ReadinessResult, ServiceSpec } from "./types";
+import type { LaunchContext, LaunchResult, ReadinessResult, ServiceHandle, ServiceSpec } from "./types";
 
 /**
  * be/src/database/database.service.ts:44-53이 찍는 줄. 앱이 pg 클라이언트를 갖지 않고
  * 미적용 마이그레이션을 아는 유일한 길이다 — 의존을 더하면 desktop의 dependencies가 비지 않아
  * 번들 위생 기준이 깨진다 (스펙 §6.7).
+ *
+ * 인자 이름을 stdout으로 둔다: NestJS 기본 ConsoleLogger는 `.error()`만 stderr로
+ * 보내고 `.warn()`(이 줄이 쓰는 레벨)은 stdout에 쓴다(2026-09-12 실측,
+ * @nestjs/common의 console-logger.service.js — printMessages가 writeStreamType을
+ * 안 받으면 process.stdout으로 떨어진다). 처음 구현은 이걸 handle.stderrTail()에
+ * 넣어 호출했는데, 실제로 API를 띄워 stdout·stderr를 분리 캡처하기 전까지는 문구·
+ * 정규식이 실측과 일치한다는 이유로 이 실수를 못 잡았다 — 게이트가 있는데 한 번도
+ * 발화하지 않는, 화면은 멀쩡한데 스키마가 빈 최악의 실패로 이어질 뻔했다.
  */
 const PENDING = /(\d+)\s+pending migration\(s\):\s*([^\n]*?)\s*—\s*run/;
 const SKIPPED = /pending migration check skipped/;
 
-export function pendingMigrations(stderr: string): { count: number; names: string } | null {
-  const m = PENDING.exec(stderr.replace(ANSI_SGR, ""));
+export function pendingMigrations(stdout: string): { count: number; names: string } | null {
+  const m = PENDING.exec(stdout.replace(ANSI_SGR, ""));
   return m === null ? null : { count: Number(m[1]), names: m[2] };
 }
 
-export function migrationCheckSkipped(stderr: string): boolean {
-  return SKIPPED.test(stderr.replace(ANSI_SGR, ""));
+export function migrationCheckSkipped(stdout: string): boolean {
+  return SKIPPED.test(stdout.replace(ANSI_SGR, ""));
 }
 
 export interface ApiDeps {
@@ -28,6 +37,54 @@ export interface ApiDeps {
   isPortOccupied(port: number): Promise<boolean>;
   onPendingMigrations(info: { count: number; names: string }): void;
   onMigrationCheckSkipped(): void;
+}
+
+/**
+ * probeHealth가 이미 답한 뒤의 판정만 따로 뗐다. probeHealth 자신은 실제 HTTP를
+ * 쏘므로, readiness() 안에 있으면 "게이트가 stdout을 읽는지 stderr를 읽는지"를
+ * 실제로 뜬 서버 없이는 검증할 수 없다 — 가짜 handle과 이미 정해진 probe 결과만으로
+ * 순수하게 부를 수 있게 갈라낸 것이 이 함수다. 바로 이 분리가 없어서 스트림이
+ * 틀렸다는 것을 브리프 단계에서 못 잡았다 (위 PENDING 주석 참고).
+ */
+export async function judgeAfterProbe(
+  handle: ServiceHandle,
+  stderrTail: string,
+  probe: ProbeResult,
+  port: number,
+  deps: ApiDeps,
+): Promise<ReadinessResult> {
+  if (probe === "ready") {
+    // 메커니즘 (b): 200을 받아도 그 리스너가 우리 자식인지 증명한다 (Phase 1 §6.4).
+    if (!(await deps.verifyOwnListener(port, handle.pid))) return { kind: "not-ready" };
+
+    // 게이트는 health 200 뒤에만 본다. 이보다 이르면 경고가 아직 로그에 없어
+    // 게이트가 매번 통과한다.
+    const stdoutTail = handle.stdoutTail();
+    const pending = pendingMigrations(stdoutTail);
+    if (pending !== null) {
+      deps.onPendingMigrations(pending);
+      return {
+        kind: "failed",
+        detail:
+          `적용되지 않은 마이그레이션이 ${pending.count}개 있어요 (${pending.names}).\n` +
+          "터미널에서 `pnpm be:migrate`를 실행한 뒤 다시 시도해 주세요.",
+      };
+    }
+    if (migrationCheckSkipped(stdoutTail)) deps.onMigrationCheckSkipped();
+    return { kind: "ready" };
+  }
+  if (probe === "db-unreachable") {
+    // 부팅 뒤 DB가 끊긴 경우다. 프로세스는 살아 있으므로 degraded이지 failed가 아니다 —
+    // failed면 재시작 정책이 발화해 백오프만 태운다 (스펙 §6.6).
+    return {
+      kind: "degraded",
+      detail: "데이터베이스에 연결할 수 없어요. DB가 뜨면 자동으로 복구됩니다.",
+    };
+  }
+  if (!handle.alive() || /database unreachable/.test(stderrTail)) {
+    return { kind: "failed", detail: failureBlock(stderrTail) };
+  }
+  return { kind: "not-ready" };
 }
 
 export function apiSpec(deps: ApiDeps): ServiceSpec {
@@ -77,37 +134,7 @@ export function apiSpec(deps: ApiDeps): ServiceSpec {
       if (isAddrInUse(tail)) return { kind: "failed", detail: "포트가 이미 쓰이고 있어요." };
 
       const probe = await probeHealth(origin);
-      if (probe === "ready") {
-        // 메커니즘 (b): 200을 받아도 그 리스너가 우리 자식인지 증명한다 (Phase 1 §6.4).
-        if (!(await deps.verifyOwnListener(port, handle.pid))) return { kind: "not-ready" };
-
-        // 게이트는 health 200 뒤에만 본다. 이보다 이르면 경고가 아직 stderr에 없어
-        // 게이트가 매번 통과한다.
-        const pending = pendingMigrations(tail);
-        if (pending !== null) {
-          deps.onPendingMigrations(pending);
-          return {
-            kind: "failed",
-            detail:
-              `적용되지 않은 마이그레이션이 ${pending.count}개 있어요 (${pending.names}).\n` +
-              "터미널에서 `pnpm be:migrate`를 실행한 뒤 다시 시도해 주세요.",
-          };
-        }
-        if (migrationCheckSkipped(tail)) deps.onMigrationCheckSkipped();
-        return { kind: "ready" };
-      }
-      if (probe === "db-unreachable") {
-        // 부팅 뒤 DB가 끊긴 경우다. 프로세스는 살아 있으므로 degraded이지 failed가 아니다 —
-        // failed면 재시작 정책이 발화해 백오프만 태운다 (스펙 §6.6).
-        return {
-          kind: "degraded",
-          detail: "데이터베이스에 연결할 수 없어요. DB가 뜨면 자동으로 복구됩니다.",
-        };
-      }
-      if (!handle.alive() || /database unreachable/.test(tail)) {
-        return { kind: "failed", detail: failureBlock(tail) };
-      }
-      return { kind: "not-ready" };
+      return judgeAfterProbe(handle, tail, probe, port, deps);
     },
     async stop(result, plan) {
       const handle = result.handle;

@@ -19,6 +19,18 @@ export interface ApiHandle {
   alive(): boolean;
   /** 실패 화면에 올릴 stderr 꼬리. 사람이 읽을 마지막 줄이 여기서 나온다. */
   stderrTail(): string;
+  /**
+   * stdout 꼬리. NestJS 기본 ConsoleLogger는 `.error()`만 stderr로 보내고
+   * `.log`/`.warn`/`.debug`/`.verbose`는 전부 stdout에 쓴다(2026-09-12 실측,
+   * @nestjs/common의 console-logger.service.js). database.service.ts의 미적용
+   * 마이그레이션 경고는 `.warn()`이라 stderrTail()로는 절대 보이지 않는다 — 그런
+   * advisory 판정은 이 꼬리를 읽어야 한다.
+   *
+   * stderrTail과 절대 합치지 않는다. 합치면 평범한 stdout 로그 한 줄이
+   * lastMeaningfulLine·isAddrInUse·`database unreachable` 판정(모두 "실패의 원인"을
+   * stderr에서 찾는다는 전제로 쓰였다)을 오염시켜, 실패 화면이 엉뚱한 원인을 말하게 된다.
+   */
+  stdoutTail(): string;
   exitCode(): number | null;
   /**
    * 종료 알림. ready 뒤에 죽는 경우를 화면에 알리려면 이게 있어야 한다 (스펙 §8).
@@ -53,6 +65,9 @@ function inheritedEnv(): Record<string, string> {
 
 function makeSink(logFile?: string) {
   let tail = "";
+  // stderr 꼬리와 별도로 쌓는다 — 합치면 평범한 stdout 로그가 lastMeaningfulLine 같은
+  // "실패 원인" 판정을 오염시킨다. ApiHandle.stdoutTail의 doc 코멘트에 이유가 있다.
+  let stdoutTail = "";
   let closed = false;
   let out: fs.WriteStream | undefined;
   if (logFile !== undefined) {
@@ -69,8 +84,10 @@ function makeSink(logFile?: string) {
       const text = chunk.toString();
       out?.write(text);
       if (isError) tail = (tail + text).slice(-TAIL_LIMIT);
+      else stdoutTail = (stdoutTail + text).slice(-TAIL_LIMIT);
     },
     tail: () => tail,
+    stdoutTail: () => stdoutTail,
     // 'error'와 'exit' 양쪽에서 불린다. end()를 두 번 부르면
     // ERR_STREAM_WRITE_AFTER_END가 나므로 한 번만 닫는다.
     close() {
@@ -183,6 +200,7 @@ export function launchPackaged(options: LaunchOptions): ApiHandle {
     },
     alive: () => exit.code() === null,
     stderrTail: sink.tail,
+    stdoutTail: sink.stdoutTail,
     exitCode: exit.code,
     onExit: exit.add,
     async stop(graceMs) {
@@ -261,6 +279,7 @@ export function launchDev(options: LaunchOptions): ApiHandle {
     },
     alive: () => exit.code() === null,
     stderrTail: sink.tail,
+    stdoutTail: sink.stdoutTail,
     exitCode: exit.code,
     onExit: exit.add,
     async stop(graceMs) {
