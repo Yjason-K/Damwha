@@ -757,8 +757,11 @@ if (!app.requestSingleInstanceLock()) {
     // 상태인지도 보이지 않는다. showShell이 래치도 같이 내려 renderStatus가 이 창을 다시
     // 그릴 수 있게 된다 (완료 기준 P2-C12, 리뷰 Important-3).
     // 순서와 실패 경로는 window-flow.ts가 정한다. 잎(loadFile·loadURL·대화상자)만 여기 있다.
+    // 감독자가 없는 경우(기동이 감독자를 세우기 전에 접혔다)의 복구도 거기서 정한다.
     void openWindowFlow({
       showShell: () => showShell(opened, shellStatusOf()),
+      servicesRunning: () => supervisor !== null,
+      start,
       attach: () => reattachWindow(mine),
       onFailure: (e) => reportFailure(mine, "창을 다시 붙이지 못했어요", e),
     }).catch((e: unknown) => {
