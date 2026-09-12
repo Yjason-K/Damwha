@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import type { UtilityProcess } from "electron";
 import type { ApiEnv } from "./config";
+import { stripAnsi } from "./logs";
 
 /**
  * electron을 모듈 최상단에서 값으로 import하지 않는다. 그러면 이 파일을 평범한 Node에서
@@ -82,7 +83,9 @@ export function makeSink(logFile?: string) {
   return {
     write(chunk: Buffer | string, isError: boolean) {
       const text = chunk.toString();
-      out?.write(text);
+      // 파일에만 벗긴다. worker는 진행 바와 로그가 같은 stderr를 쓰고(console.install_logging),
+      // NestJS Logger도 TTY가 아닌 stderr에 색상을 쓴다 — 그대로 두면 제어문자가 글자로 남는다.
+      out?.write(stripAnsi(text));
       if (isError) tail = (tail + text).slice(-TAIL_LIMIT);
       else stdoutTail = (stdoutTail + text).slice(-TAIL_LIMIT);
     },
