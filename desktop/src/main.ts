@@ -612,8 +612,15 @@ function announceRestartNotice(mine: number, notice: string): void {
     buttons: ["확인"],
   };
   const target = activeWindow(mine);
-  const shown =
-    target === null ? dialog.showMessageBox(options) : dialog.showMessageBox(target, options);
+  // 창이 없으면 띄우지 않는다. 여기까지 오는데 창이 없는 경우는 종료 중이거나 더 새로운
+  // start()가 세대를 가져간 경우뿐이고, 부모 없는 app-modal은 사용자가 방금 닫은 앱을 위해
+  // 화면 한가운데 떠 버린다. 여섯 개의 다른 소비자는 모두 null을 "하지 않는다"로 읽는다 —
+  // 이것만 예외였다 (재리뷰 3 §5-2). 안내는 로그에 남으므로 사라지지는 않는다.
+  if (target === null) {
+    appendSupervisorLog(`재시작 안내를 띄울 창이 없어요 — ${notice}`);
+    return;
+  }
+  const shown = dialog.showMessageBox(target, options);
   void shown.catch((e: unknown) => {
     appendSupervisorLog(`재시작 안내를 띄우지 못했어요 — ${reasonOf(e)}`);
   });

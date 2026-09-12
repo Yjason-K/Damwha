@@ -227,11 +227,15 @@ describe("RESTART_ONLY_KEYS", () => {
       { kind: "mismatch", detail: "모델 other/model" },
       { kind: "absent" },
     ];
-    for (const probe of probes) {
-      const { ctx, read } = recordingCtx({
-        EMBED_SERVICE_HOST: "127.0.0.1",
-        EMBED_SERVICE_PORT: "8100",
-      });
+    // env 모양도 같이 돌린다. 값이 있는 모양 하나만 주면 `ctx.env.A ?? ctx.env.B`의 오른쪽은
+    // 영영 평가되지 않아 Proxy가 B를 기록하지 못한다 — 손으로 적은 목록으로 되돌아가는
+    // 조용한 구멍이다 (재리뷰 3 §4-1이 변이 K로 실측했다). 빈 env가 그 오른쪽을 깨운다.
+    const shapes: Record<string, string>[] = [
+      { EMBED_SERVICE_HOST: "127.0.0.1", EMBED_SERVICE_PORT: "8100" },
+      {},
+    ];
+    for (const [probe, env] of probes.flatMap((p) => shapes.map((e) => [p, e] as const))) {
+      const { ctx, read } = recordingCtx(env);
       const spec = embedSpec({ probe: async () => probe, freePort: async () => 54321 });
       const written = await spec.prepare!(ctx);
       expect(read.size).toBeGreaterThan(0);

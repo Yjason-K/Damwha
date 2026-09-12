@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -34,7 +35,7 @@ export interface LoadedConfig {
  *
  * 실행마다 새 값, 실행 안에서는 고정 — 그 성질이 파일의 유무와 무관해야 한다.
  */
-const RUN_WORKER_ID = `desktop-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e4)}`;
+const RUN_WORKER_ID = `desktop-${randomUUID()}`;
 
 /** 앱이 기본값을 갖는 키. 그 밖의 키는 be/src/config/env.ts의 zod 기본값으로 떨어진다. */
 export function defaultConfig(userDataDir: string): ApiEnv {
