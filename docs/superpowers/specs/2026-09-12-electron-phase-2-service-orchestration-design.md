@@ -327,7 +327,17 @@ API·worker 양쪽의 SQL 계약 변경이라 이 Phase 밖이다 — §13 R2-6,
 | postgres | `docker compose ps --format json`의 `Health == "healthy"` | healthy를 잃음 |
 | api | `/api/health` 200 **+ `verifyOwnListener()` 소유 증명** (Phase 1 §6.4) | `/api/health` 503 |
 | embed | `POST /embed` 계약 프로브 통과 (§6.5) | 프로브 실패 |
-| worker | **DB 연결 성공 뒤에 찍히는 ready 로그 한 줄** (§10) | — |
+| worker | **DB 연결 성공 뒤에 찍히는 ready 로그 한 줄** (§10) | 그 줄보다 **뒤에** `reconnect failed`가 있음 |
+
+**worker의 `degraded`도 같은 줄 하나로 판정한다.** worker는 API와 같은 모양의 문제를 갖는다 —
+ready 뒤에 DB가 끊기면 `_reconnect()` 백오프 루프에 들어가 프로세스는 살아 있고 큐만 멈춘다
+(`__main__.py:117-124`가 peek 오류에서 재접속을 다시 부른다). 프로세스 생존만 보는 감독자는 그것을
+정상으로 읽는다.
+
+그래서 §10의 ready 로그는 **첫 연결이 아니라 `_reconnect()`가 성공할 때마다** 찍는다. 그러면 한
+줄이 두 가지를 다 준다 — 처음 나오면 `ready`, `reconnect failed`(`__main__.py:173`)가 그보다 뒤에
+있으면 `degraded`, 그 뒤에 다시 나오면 `ok`로의 회복이다. API와 마찬가지로 `degraded`는 재시작을
+유발하지 않는다.
 
 **worker의 준비 신호를 새로 만드는 이유.** 기존 `supervisor <id> started`는 쓸 수 없다 —
 `__main__.py:296`이 그 줄을 찍고 `:298`이 `run_supervisor()`를 부르며, **실제 DB 연결은 그 안
@@ -597,6 +607,10 @@ Phase 1 §8을 잇고 이 Phase의 것을 더한다.
   `mlx_lm.server`·`node`를 전수 확인한다. `docker compose ps`도 전후로 비교한다.
 - 성공 판정: 앱이 만든 프로세스가 **0개** 남는다. supervisor·`--once` 자식·`mlx_lm.server`가 모두
   없다. **Postgres 컨테이너는 살아 있고** 볼륨도 그대로다.
+- 비고: `mlx_lm.server`를 실제로 띄우려면 LLM 모델이 내려받아져 있어야 한다. 그 조건을 만들 수 없으면
+  **그 사실을 증거에 적고**, 대신 `--once` 자식이 있는 상태(= 임의의 `process_meeting` 처리 중)에서
+  강제 종료를 걸어 §6.9 4단계의 자손 SIGKILL이 세션이 다른 자식까지 잡는지를 판정한다. 그 4단계가
+  `mlx_lm.server`를 잡는 근거와 같은 근거다 — 둘 다 `ps`의 ppid BFS로 찾는다.
 
 **P2-C5. 분석 중 정중한 종료**
 
@@ -632,8 +646,10 @@ Phase 1 §8을 잇고 이 Phase의 것을 더한다.
 
 **P2-C9. 미적용 마이그레이션**
 
-- 확인 환경: packaged. `_migrations`에서 마지막 행을 지운 **복제 DB**를 가리키게 한다. **운영
-  DB에 하지 않는다.**
+- 확인 환경: packaged. **운영 DB에 하지 않는다.** 같은 클러스터 안에 빈 데이터베이스를 하나 만들고
+  (`CREATE DATABASE damwha_migration_gate;`) `config.json`의 `DATABASE_URL`이 그것을 가리키게 한다.
+  `damwha` 데이터베이스와 `damwha_pgdata` 볼륨은 손대지 않는다. 확인 후 `DROP DATABASE`하고
+  `config.json`을 원복한다.
 - 확인 방법: 앱을 실행한다. 상태 창과 프로세스 목록을 본다.
 - 성공 판정: 창이 담화 화면으로 넘어가지 않고 `pnpm be:migrate` 안내가 뜬다. **worker가 뜨지
   않는다.** 복제 DB의 `_migrations` 행 수가 변하지 않는다 — 앱이 마이그레이션을 실행하지 않았다.
@@ -643,13 +659,16 @@ Phase 1 §8을 잇고 이 Phase의 것을 더한다.
 
 **P2-C10. worker DB 설정만 틀렸을 때 준비로 오판하지 않음**
 
-- 확인 환경: packaged. `config.json`의 `DATABASE_URL`은 정상으로 두고, worker에게만 잘못된 값이
-  가도록 만든다(구현 계획이 수단을 정한다).
-- 확인 방법: 앱을 실행하고 상태 창을 본다.
-- 성공 판정: worker가 **`running`/`ok`로 표시되지 않는다.** 유예 초과 후 `failed`가 되고 DB 연결
-  문제일 수 있다는 원인이 보인다.
+- 확인 환경: packaged. 넷이 준비된 상태.
+- 확인 방법: `docker compose stop postgres`로 DB를 내린다. 그 상태에서 앱이 소유한 worker
+  supervisor를 밖에서 죽여 앱의 재시작 정책을 발화시킨다. 상태 창과 `worker.log`를 본다.
+- 성공 판정: 재시작된 worker가 **`running`/`ok`로 표시되지 않는다.** `worker.log`에는
+  `supervisor <id> started`가 있지만 ready 로그는 없고, 유예 초과 후 `failed`가 되며 DB 연결
+  문제일 수 있다는 원인이 보인다. DB를 올리고 메뉴에서 다시 시도하면 `ok`에 도달한다.
 - 근거: 기존 `supervisor <id> started`는 DB 연결 **전**에 찍힌다(`__main__.py:296` → `:298` →
-  `:107`). 이 기준이 그 회귀를 막는다.
+  `:107`). 그 줄을 준비 신호로 쓰면 이 상황이 "준비됨"으로 보인다. 이 기준이 그 회귀를 막는다.
+  설정을 조작하지 않고 DB를 내려 같은 조건을 만드므로 `config.json`에 검증 전용 키를 추가하지
+  않는다.
 
 **P2-C11. 부팅 뒤 DB 끊김**
 
@@ -711,13 +730,14 @@ Phase 1 §8을 잇고 이 Phase의 것을 더한다.
 
 **`be/worker/damwha_worker/__main__.py`** — DB 연결 성공 뒤의 ready 로그 한 줄.
 
-`run_supervisor()`의 첫 `_reconnect()`가 성공한 직후에 찍는다. 기존 `supervisor %s started`
-(`:296`)는 그대로 두고 **더한다** — 그 줄은 "프로세스가 떴다"의 신호로 여전히 쓸모가 있고,
-지우면 기존 로그를 읽던 사람의 기대가 깨진다.
+`run_supervisor()`에서 **`_reconnect()`가 성공할 때마다** 찍는다 — 첫 연결(`:107`)과 peek 오류
+뒤의 재연결(`:120`) 둘 다다. 한 번만 찍으면 ready는 판정되지만 §6.6의 `degraded` 회복을 관찰할 수
+없다. 기존 `supervisor %s started`(`:296`)는 그대로 두고 **더한다** — 그 줄은 "프로세스가 떴다"의
+신호로 여전히 쓸모가 있고, 지우면 기존 로그를 읽던 사람의 기대가 깨진다.
 
 `run_supervisor()`는 `connect_fn`을 주입받으므로 기존 테스트 구조에서 이 줄을 고정할 수 있다.
-worker 테스트에 그 검사를 추가한다 — 문구가 데스크톱의 계약이 되므로 테스트가 없으면 리팩터링이
-조용히 깨뜨린다.
+worker 테스트에 두 검사를 추가한다 — 첫 연결에서 찍히는가, **재연결에서 다시 찍히는가.** 문구가
+데스크톱의 계약이 되므로 테스트가 없으면 리팩터링이 조용히 깨뜨린다.
 
 **`fe/`** — 종료 handshake용 훅.
 
@@ -768,7 +788,6 @@ window.__damwha_desktop = {
 | worker ready 로그의 정확한 문구 | 구현 값 | 계획에서 정하고 worker 테스트로 고정 |
 | 종료 유예 시간(worker·embed·api 각각) | 구현 값 | 계획에서 정하고 근거를 결과 문서에 남긴다 |
 | 로그 회전 크기·세대 수 | 구현 값 | 계획에서 정한다 (초안 10 MB × 3) |
-| P2-C10의 "worker에게만 잘못된 DB URL을 주는" 수단 | 검증 수단 | 계획에서 정한다 |
 | 상태 창의 문안과 시각 언어 | 구현 세부 | 구현 단계. `fe/DESIGN.md`의 톤을 따른다 |
 | `fe/` 훅의 정확한 등록 위치 | 구현 세부 | 구현 단계. 중지 버튼과 같은 경로를 부른다는 계약은 §10에서 닫혔다 |
 
