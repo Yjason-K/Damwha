@@ -439,6 +439,15 @@ worker → embed → api → (postgres는 건드리지 않는다)
 4. 그래도 남으면 `descendantPids()`로 자손 집합을 훑어 SIGKILL. `start_new_session`은 세션만 바꾸고
    **부모-자식 관계는 그대로**라 `ps`의 ppid BFS가 여전히 찾아낸다. 이 단계가 §6.5의
    `WORKER_ID` 재사용 구멍도 닫는다.
+
+   **여기서 SIGTERM이 아니라 SIGKILL인 것은 의도다.** 앞의 두 SIGTERM은 그룹(`-pid`) 대상이라
+   `start_new_session`인 `--once` 자식에게 애초에 닿지 않았고, 봉쇄된 supervisor가 전달도
+   못 했다. 그러므로 이 자식에게 SIGTERM을 보내면 stage boundary에서 `requeue_for_shutdown`을
+   탈 수 있다 — 이론상 더 낫다. 그럼에도 SIGKILL을 택하는 이유는 **사용자가 바로 앞 대화상자에서
+   "지금 강제 종료"를 골랐기** 때문이다. 그 지점에서 stage boundary를 기다리는 것은 요청과
+   반대다. 대가는 그 job이 `running`으로 남아 reaper가 회수할 때까지 멈춰 보이는 것이고,
+   그것은 사용자가 고른 대가다. 완료 기준 P2-C5가 판정하는 것은 강제를 **고르지 않은**
+   정중한 경로다.
 5. 그래도 남으면 **pid를 화면과 로그에 적는다.** 정리 실패를 조용히 넘기지 않는다.
 
 유예 시간의 구체 값은 구현 계획이 정하고 근거를 결과 문서에 남긴다. stage boundary는 31분 오디오의
