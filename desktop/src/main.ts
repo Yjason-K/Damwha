@@ -406,7 +406,7 @@ async function askGraceExpired(): Promise<boolean> {
 /** 정리하지 못한 것을 보인다. 문구는 quit-flow.ts의 leftoverNotice가 만든다. */
 async function showQuitNotice(notice: QuitNotice): Promise<void> {
   await ask({
-    type: notice.kind,
+    type: "warning",
     buttons: ["확인"],
     message: notice.message,
     detail: notice.detail,
@@ -430,8 +430,11 @@ function stopOwnWorker(result: LaunchResult, plan: StopPlan): Promise<StopOutcom
       }
     },
     descendants: descendantPids,
-    // 묻지 않고 감독자가 준 것을 그대로 쓴다. 없으면 강제하지 않는다.
-    onGraceExpired: (id) => plan.onGraceExpired?.(id) ?? Promise.resolve(false),
+    // 묻지 않고 감독자가 준 것을 **그대로** 넘긴다. `?? false`로 감싸지 않는다 — 이제
+    // false는 "포기한다"가 아니라 "한 번 더 기다린다"라서, 물어볼 사람이 없는 호출자
+    // (supervisor의 기동 실패 정리)에 그 기본값을 씌우면 아무도 답하지 않는 루프가 된다.
+    // undefined를 undefined로 두는 것이 곧 "물을 데가 없으면 강제하지 않는다"다.
+    onGraceExpired: plan.onGraceExpired,
     knownDescendants: knownWorkerDescendants,
     // packaged main에는 콘솔 싱크가 없다. 스냅샷 실패 기록이 사라지지 않게 로그로 보낸다.
     log: appendSupervisorLog,
@@ -1075,6 +1078,12 @@ if (!app.requestSingleInstanceLock()) {
         quitting = true;
         cancelRetry();
       },
+      // activeWindow를 쓰지 않는다 — quitting이 이미 참이라 그것은 항상 null을 돌려준다
+      // (spawn-guard). 여기서 보고 싶은 것은 "지금 창이 있는가"뿐이다.
+      showQuitting: () =>
+        win === null || win.isDestroyed()
+          ? Promise.resolve()
+          : showShell(win, { state: "quitting" }),
       stopRecording: () =>
         win === null
           ? Promise.resolve({ stopped: false, reason: "창이 이미 없어요." })

@@ -5,8 +5,21 @@ export interface StopWorkerOptions {
   pollMs: number;
   signal(pid: number, sig: NodeJS.Signals): void;
   descendants(rootPid: number): Promise<Set<number>>;
-  /** 유예가 지났을 때 사람에게 묻는다. true면 강제 단계로 올라간다. */
-  onGraceExpired(id: ServiceId): Promise<boolean>;
+  /**
+   * 유예가 지났을 때 사람에게 묻는다.
+   *
+   * - `true` → 강제 단계로 올라간다.
+   * - `false` → **유예를 한 번 더 주고 다시 묻는다.** 대화상자의 "계속 기다리기"가 약속하는
+   *   것이 그것이다. 예전에는 `false`가 "포기한다"였고, 그래서 사용자가 조심스러운 쪽을
+   *   골랐는데 앱이 돌고 있는 job을 두고 나가 버렸다 — 버튼이 거짓말을 하는 쪽이 버튼이
+   *   없는 것보다 나쁘다. 폭주하지 않는다: 한 바퀴 더 기다릴 때마다 사람의 클릭 한 번이 든다.
+   * - **없으면** 강제하지 않고 그 자리에서 보고한다. 물어볼 사람이 없는 호출자가 실제로
+   *   있다 — `supervisor.ts`의 `bringOnce`가 준비 못 한 자식을 치울 때
+   *   `{graceMs: CLEANUP_GRACE_MS}`만 넘긴다. 그 경로에서 "다시 묻는다"를 적용하면 아무도
+   *   답하지 않는 루프가 되어 기동 정리가 영영 끝나지 않는다. 이것이 boolean 하나로
+   *   "기다린다"와 "물을 데가 없다"를 겸할 수 없는 이유다.
+   */
+  onGraceExpired?(id: ServiceId): Promise<boolean>;
   /** 테스트가 폴링 횟수를 묶는다. */
   maxWaits?: number;
   /** 주어진 pid 중 아직 살아 있는 것을 돌려준다. 안 주면 아래 기본 구현을 쓴다. */
@@ -50,9 +63,9 @@ export const STOP_DETAIL = {
   orphans: "종료 신호를 보냈지만 아직 살아 있는 프로세스가 있어요.",
   /** ps를 못 읽었다. 남은 것이 있는지 **없는지도** 모른다. */
   unverifiable: "프로세스 목록을 읽지 못해서, 남은 것이 있는지 확인하지 못했어요.",
-  /** 사람이 "계속 기다리기"를 골랐다. 실패가 아니라 선택이다. */
-  declined:
-    "강제 종료를 고르지 않아서 작업 처리기가 하던 일을 마무리하는 중이에요. 이미 종료 신호를 받았으니 안전한 지점에 닿으면 스스로 끝납니다.",
+  /** 물어볼 사람이 없어 강제로 올리지 않았다 (기동 실패 정리 경로). 화면에는 닿지 않는다. */
+  unattended:
+    "강제 종료 여부를 물을 수 있는 사람이 없어서 그대로 두었어요. 작업 처리기는 종료 신호를 받았으니 안전한 지점에 닿으면 스스로 끝납니다.",
   /** supervisor가 먼저 죽었고, 그 자식이 아직 살아 있다. */
   diedFirst: "작업 처리기가 먼저 종료돼서, 그 아래에 있던 프로세스가 남았어요.",
   /** supervisor가 먼저 죽었고, 우리는 그 자식을 본 적이 없다. */
@@ -87,7 +100,8 @@ function processExists(pid: number): boolean {
  *    자식은 job마다 새로 뜨므로 진입 스냅샷 하나만으로는 그 사이 새로 뜬 자식을 놓친다.
  * 1. SIGTERM 1회 — supervisor가 자식에 전달하고 자식은 stage boundary에서 멈춰
  *    requeue_for_shutdown을 부른다. 그 경로가 attempts를 되돌린다.
- * 2. 유예 초과 → 사람에게 묻는다.
+ * 2. 유예 초과 → 사람에게 묻는다. "계속 기다리기"면 유예를 한 번 더 주고 **다시 묻는다** —
+ *    끝나는 길은 프로세스가 스스로 끝나거나 사람이 강제를 고르는 것뿐이다.
  * 3. 강제 → SIGTERM 2회차. supervisor가 자식을 kill하고 os._exit한다.
  * 4. 그래도 남으면 자손 집합에 SIGKILL. start_new_session은 세션만 바꾸고 부모-자식
  *    관계는 그대로라 ps의 ppid BFS가 여전히 찾아낸다.
@@ -201,24 +215,39 @@ export async function stopWorkerProcess(
   opts.signal(-pid, "SIGTERM");
   if (await waitForExit(opts.graceMs)) return cleanUnlessOrphans();
 
-  // 재스냅샷. worker의 --once 자식은 job마다 새로 뜨므로 진입 스냅샷 이후에 새로 뜬 자식은
-  // 그 스냅샷만으로는 안 보인다. 이 자리인 이유는 **방금 waitForExit이 마지막 alive()로
-  // "아직 살아 있다"를 읽고 돌아왔기** 때문이다 — supervisor가 살아 있어야 그 자손이 ppid
-  // BFS에 보인다. 바로 아래 onGraceExpired는 사람이 답할 때까지 시간 제한 없이 막히는
-  // 네이티브 대화상자라, 그 뒤로 옮기면 이 근거가 사라진다: 대화상자가 떠 있는 동안
-  // supervisor가 죽고 자손이 pid 1로 재부모화되면 OS는 그 pid들을 재사용할 수 있고, 그때
-  // 도는 BFS는 **남의 프로세스**를 capturedDescendants에 합쳐 5단계가 그것을 "우리가 남긴
-  // pid"라며 사람에게 보여 준다. 대화상자 동안 새로 뜨는 --once 자식을 놓치는 것은 감수한다
-  // — 그 시점의 supervisor는 이미 SIGTERM을 받아 새 job을 집지 않고 requeue 중이다.
-  // 신호를 보내는 게 아니라 뒤의 "깨끗함" 판정이 참고할 후보 집합에 합칠 뿐이다 — 실제로
-  // 죽일 대상(4단계)은 그 자리에서 다시 걷는 트리를 쓴다.
-  capturedDescendants = new Set([...capturedDescendants, ...(await snapshotDescendants())]);
+  // 2단계. 유예가 지날 때마다 **다시 묻는다.** 사람이 "계속 기다리기"를 고르면 실제로
+  // 기다린다 — 유예를 한 번 더 주고, 그 유예도 지나면 또 묻는다. 이 루프가 끝나는 길은
+  // 둘뿐이다: 프로세스가 스스로 끝나거나(깨끗), 사람이 강제를 고르거나(3단계). 무한히 도는
+  // 것처럼 보이지만 한 바퀴마다 사람의 클릭 한 번이 들어가므로 폭주하지 않는다.
+  for (;;) {
+    // 재스냅샷. worker의 --once 자식은 job마다 새로 뜨므로 앞선 스냅샷만으로는 그 사이 새로
+    // 뜬 자식을 놓친다. 이 자리인 이유는 **방금 waitForExit이 마지막 alive()로 "아직 살아
+    // 있다"를 읽고 돌아왔기** 때문이다 — supervisor가 살아 있어야 그 자손이 ppid BFS에
+    // 보인다. 바로 아래 onGraceExpired는 사람이 답할 때까지 시간 제한 없이 막히는 네이티브
+    // 대화상자라, 그 뒤로 옮기면 이 근거가 사라진다: 대화상자가 떠 있는 동안 supervisor가
+    // 죽고 자손이 pid 1로 재부모화되면 OS는 그 pid들을 재사용할 수 있고, 그때 도는 BFS는
+    // **남의 프로세스**를 capturedDescendants에 합쳐 5단계가 그것을 "우리가 남긴 pid"라며
+    // 사람에게 보여 준다. 매 바퀴 찍는 것도 같은 이유다 — 기다리는 동안에도 시간은 간다.
+    // 대화상자 동안 새로 뜨는 --once 자식을 놓치는 것은 감수한다: 그 시점의 supervisor는
+    // 이미 SIGTERM을 받아 새 job을 집지 않고 requeue 중이다. 신호를 보내는 게 아니라 뒤의
+    // "깨끗함" 판정이 참고할 후보 집합에 합칠 뿐이다 — 실제로 죽일 대상(4단계)은 그 자리에서
+    // 다시 걷는 트리를 쓴다.
+    capturedDescendants = new Set([...capturedDescendants, ...(await snapshotDescendants())]);
 
-  // 2단계. 사람이 거절하면 여기서 멈춘다. 다만 이 시점의 프로세스는 방금 alive()로 확인한
-  // 살아 있는 프로세스다 — types.ts:67이 leaked를 "화면과 로그에 적을 pid"로 정의하는데
-  // 빈 배열을 돌려주면 화면은 "깨끗하지 않다"고만 말하고 무엇을 죽여야 할지는 말하지 못한다.
-  if (!(await opts.onGraceExpired("worker"))) {
-    return { stopped: false, leaked: [pid], detail: STOP_DETAIL.declined };
+    const askUser = opts.onGraceExpired;
+    if (askUser === undefined) {
+      // 물어볼 사람이 없다. 여기서 계속 기다리면 기동 실패 정리가 영영 끝나지 않는다.
+      // 이 시점의 프로세스는 방금 alive()로 확인한 살아 있는 프로세스이므로 pid를 싣는다 —
+      // types.ts가 leaked를 "화면과 로그에 적을 pid"로 정의하는데 빈 배열을 돌려주면
+      // 무엇이 남았는지를 말하지 못한다.
+      return { stopped: false, leaked: [pid], detail: STOP_DETAIL.unattended };
+    }
+    if (await askUser("worker")) break;
+
+    // "계속 기다리기". **신호를 다시 보내지 않는다** — 이미 SIGTERM을 받고 stage boundary로
+    // 가는 중이고, 두 번째 SIGTERM은 supervisor가 자식을 kill하고 os._exit하게 만드는
+    // 강제(3단계)다. 기다리겠다는 답에 그것을 보내면 버튼이 또 거짓말을 하게 된다.
+    if (await waitForExit(opts.graceMs)) return cleanUnlessOrphans();
   }
 
   // 3단계. SIGKILL이 아니라 두 번째 SIGTERM이다.

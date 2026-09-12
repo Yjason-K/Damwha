@@ -32,6 +32,15 @@ export interface QuitFlowDeps {
   captureDescendants(): Promise<void>;
   /** 되돌릴 수 없는 지점 — quitting 래치를 올리고 재시도 타이머를 끈다. */
   beginQuit(): void;
+  /**
+   * "종료 중" 화면을 건다. 창이 없으면 아무것도 하지 않는다.
+   *
+   * worker의 유예는 90초이고(31분 오디오의 STT stage boundary가 분 단위일 수 있다) 그 앞에
+   * 핸드셰이크 30초가 더 있다. 그동안 화면이 그대로면 ⌘Q를 누른 사람은 앱이 멎었다고
+   * 결론 내리고 **강제 종료**를 누른다 — 정중한 경로가 존재하는 이유가 그것을 피하는 것인데
+   * 침묵이 그 사람을 거기로 민다. P2-C5는 바로 그 순간에 깨진다.
+   */
+  showQuitting(): Promise<void>;
   /** 렌더러의 라이브 중지. 훅이 없거나 창이 죽었으면 stopped:false로 답한다. */
   stopRecording(): Promise<{ stopped: boolean; reason?: string }>;
   /** 그 핸드셰이크의 상한. 사람이 아니라 렌더러를 기다리는 시간이다. */
@@ -52,14 +61,14 @@ export interface DialogCopy {
   detail: string;
 }
 
-export interface QuitNotice extends DialogCopy {
-  /**
-   * 경고 아이콘을 붙일 것인가. 사람이 "계속 기다리기"를 고른 결과에 경고 아이콘을 달면
-   * 방금 고른 것을 오류라고 말하는 셈이라, 이 구분까지가 한 세트다. 잎(main.ts)은 이 값을
-   * dialog의 type으로 옮기기만 한다 — 거기서 고르게 두면 어떤 테스트도 그 선택을 못 본다.
-   */
-  kind: "info" | "warning";
-}
+/**
+ * 한때 `kind: "info" | "warning"`이 여기 있었다. 사람이 "계속 기다리기"를 골라 worker를
+ * 남겨 둔 결과에 경고 아이콘을 달지 않으려던 것인데, **F2가 그 상태 자체를 없앴다** —
+ * 이제 "계속 기다리기"는 실제로 기다리므로 그 답으로 끝나는 종료가 존재하지 않는다.
+ * 남은 둘(고아 생존 / 증명 실패)은 둘 다 경고다. 값이 하나뿐인 필드를 남겨 두면 그것을
+ * 단언하는 테스트는 아무것도 지키지 못한다.
+ */
+export type QuitNotice = DialogCopy;
 
 export async function runQuitFlow(deps: QuitFlowDeps): Promise<void> {
   // 가장 이른 스냅샷. 아래 confirm은 사람이 답할 때까지 무한히 막히므로, 이 한 줄이
@@ -70,6 +79,14 @@ export async function runQuitFlow(deps: QuitFlowDeps): Promise<void> {
 
   deps.beginQuit();
   try {
+    // 되돌릴 수 없는 지점을 지나자마자 화면부터 바꾼다. 아래 둘(핸드셰이크 30초, worker
+    // 유예 90초)이 시작되기 **전**이어야 뜻이 있다.
+    try {
+      await deps.showQuitting();
+    } catch (e) {
+      // 화면을 못 걸었다고 종료를 멈추지 않는다. 창이 이미 파괴되는 중이면 여기가 거부한다.
+      deps.log(`종료 화면을 걸지 못했어요 — ${e instanceof Error ? e.message : String(e)}`);
+    }
     if (decision.stopRecording) {
       const result = await runHandshake(deps.stopRecording, {
         timeoutMs: deps.handshakeTimeoutMs,
@@ -139,18 +156,12 @@ export function leftoverNotice(out: StopOutcome): QuitNotice {
       : "남은 것이 있는지 없는지를 확인하지 못했어요 — 없다는 뜻이 아닙니다. 터미널에서 damwha_worker·mlx_lm.server가 남아 있는지 직접 봐 주세요.";
   const detail = `${why}\n\n${pids}\n\n자세한 내용은 로그에 있습니다.`;
 
-  // 포함 비교인 이유: supervisor.stopAll이 서비스별 detail을 줄바꿈으로 이어 붙이므로
-  // 같은지 보면 서비스가 둘 이상 사유를 낸 순간 이 갈래가 조용히 죽는다.
-  if (why.includes(STOP_DETAIL.declined)) {
-    // 사용자가 방금 고른 결과다. 경고가 아니라 안내다.
-    return { kind: "info", message: "작업 처리기가 아직 마무리 중이에요.", detail };
-  }
   if (out.leaked.length > 0) {
-    return { kind: "warning", message: "아직 살아 있을 수 있는 프로세스가 있어요.", detail };
+    return { message: "아직 살아 있을 수 있는 프로세스가 있어요.", detail };
   }
   // 스펙 §6.9 — "깨끗하지 않은데 무엇이 남았는지도 모른다"는 정상적으로 존재하는 상태다.
   // "정리했어요"도 "아무것도 안 남았어요"도 아니다. 둘 중 어느 쪽으로도 읽히지 않게 적는다.
-  return { kind: "warning", message: "정리가 끝났는지 확인하지 못했어요.", detail };
+  return { message: "정리가 끝났는지 확인하지 못했어요.", detail };
 }
 
 

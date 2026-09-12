@@ -38,22 +38,112 @@ describe("stopWorkerProcess", () => {
     expect(out).toEqual({ stopped: true, leaked: [] });
   });
 
-  it("asks before escalating and does nothing more when the answer is no", async () => {
+  it("actually waits when the user says 'keep waiting', and asks again", async () => {
+    // 버튼이 "계속 기다리기"라고 적혀 있으면 기다려야 한다. 예전에는 false가 "포기한다"라
+    // 사용자가 조심스러운 쪽을 골랐는데 앱이 돌고 있는 job을 두고 나가 버렸다.
+    // 여기서는 두 번 기다린 뒤 프로세스가 스스로 끝난다 → 대화상자 2회, 깨끗한 종료.
     const signals: Array<[number, string]> = [];
-    const ask = vi.fn(async () => false);
+    let asked = 0;
+    let alive = true;
+    const out = await stopWorkerProcess(
+      {
+        pid: 4242,
+        alive: () => alive,
+        stderrTail: () => "",
+        exitCode: () => null,
+        onExit: () => undefined,
+        stop: async () => undefined,
+      } as never,
+      {
+        graceMs: 20,
+        pollMs: 5,
+        signal: (pid, sig) => signals.push([pid, sig]),
+        descendants: async () => new Set<number>(),
+        onGraceExpired: async () => {
+          asked += 1;
+          // 두 번째로 기다리기를 고른 뒤 그 유예 안에 프로세스가 끝난다.
+          if (asked === 2) alive = false;
+          return false;
+        },
+        maxWaits: 2,
+      },
+    );
+    expect(asked).toBe(2);
+    // 기다리겠다는 답에 두 번째 SIGTERM을 보내면 안 된다 — 그것이 곧 강제(3단계)다.
+    expect(signals).toEqual([[-4242, "SIGTERM"]]);
+    expect(out).toEqual({ stopped: true, leaked: [] });
+  });
+
+  it("escalates on the round the user finally says 'force now'", async () => {
+    const signals: Array<[number, string]> = [];
+    let asked = 0;
     const out = await stopWorkerProcess(handle(999), {
       graceMs: 20,
       pollMs: 5,
       signal: (pid, sig) => signals.push([pid, sig]),
       descendants: async () => new Set<number>(),
-      onGraceExpired: ask,
+      onGraceExpired: async () => {
+        asked += 1;
+        return asked === 2;
+      },
+      maxWaits: 2,
+      stillAlive: async (pids) => pids,
+    });
+    expect(asked).toBe(2);
+    // 1단계 SIGTERM + (기다림) + 3단계 SIGTERM + 4단계 SIGKILL.
+    expect(signals.filter(([, sig]) => sig === "SIGTERM")).toHaveLength(2);
+    expect(signals.filter(([, sig]) => sig === "SIGKILL").length).toBeGreaterThan(0);
+    expect(out.stopped).toBe(false);
+  });
+
+  it("gives up instead of waiting forever when there is nobody to ask", async () => {
+    // supervisor.ts의 bringOnce는 준비 못 한 자식을 치울 때 {graceMs}만 넘긴다. 그 경로에
+    // "다시 묻는다"를 적용하면 아무도 답하지 않는 루프가 되어 기동 정리가 영영 안 끝난다.
+    const signals: Array<[number, string]> = [];
+    const out = await stopWorkerProcess(handle(999), {
+      graceMs: 20,
+      pollMs: 5,
+      signal: (pid, sig) => signals.push([pid, sig]),
+      descendants: async () => new Set<number>(),
       maxWaits: 2,
     });
-    expect(ask).toHaveBeenCalled();
-    expect(signals.filter(([, s]) => s === "SIGKILL")).toHaveLength(0);
-    // 거절한 시점의 프로세스는 방금 살아 있다고 확인된 프로세스다. stopped:false만으로는
-    // 화면이 "깨끗하지 않다"고만 말하고 무엇을 죽여야 하는지는 말하지 못한다 (types.ts:67).
-    expect(out).toEqual({ stopped: false, leaked: [4242], detail: STOP_DETAIL.declined });
+    expect(signals.filter(([, sig]) => sig === "SIGKILL")).toHaveLength(0);
+    expect(out).toEqual({ stopped: false, leaked: [4242], detail: STOP_DETAIL.unattended });
+  });
+
+  it("re-snapshots on every wait round, not only the first", async () => {
+    // 기다리는 동안에도 시간은 간다 — job마다 새로 뜨는 --once 자식은 한 번 찍은 스냅샷
+    // 으로는 안 보인다. 이 줄을 루프 밖으로 빼면 둘째 바퀴부터 새 자식을 놓친다.
+    let walks = 0;
+    let asked = 0;
+    let alive = true;
+    await stopWorkerProcess(
+      {
+        pid: 4242,
+        alive: () => alive,
+        stderrTail: () => "",
+        exitCode: () => null,
+        onExit: () => undefined,
+        stop: async () => undefined,
+      } as never,
+      {
+        graceMs: 20,
+        pollMs: 5,
+        signal: () => undefined,
+        descendants: async () => {
+          walks += 1;
+          return new Set<number>();
+        },
+        onGraceExpired: async () => {
+          asked += 1;
+          if (asked === 3) alive = false;
+          return false;
+        },
+        maxWaits: 2,
+      },
+    );
+    // 진입 1회 + 대화상자 앞 3회.
+    expect(walks).toBe(4);
   });
 
   it("escalates with a SECOND SIGTERM, not SIGKILL", async () => {

@@ -28,7 +28,7 @@ function recorder(
 ) {
   const log: string[] = [];
   const lines: string[] = [];
-  const warned: Array<{ message: string; detail: string; kind: string }> = [];
+  const warned: Array<{ message: string; detail: string }> = [];
   const asked: string[] = [];
   const mark = <T>(what: string, value: T) => async () => {
     log.push(`${what}:start`);
@@ -47,6 +47,7 @@ function recorder(
     },
     captureDescendants: mark("capture", undefined),
     beginQuit: () => log.push("begin"),
+    showQuitting: mark("quitting", undefined),
     stopRecording: mark("handshake", { stopped: true }),
     handshakeTimeoutMs: 50,
     stopServices: mark("stop", { stopped: true, leaked: [] }),
@@ -68,7 +69,12 @@ describe("runQuitFlow", () => {
     const { log, asked, deps } = recorder();
     await runQuitFlow(deps);
     expect(asked).toEqual([]);
-    expect(log).toEqual([...seq("capture", "inFlight"), "begin", ...seq("capture", "stop"), "quit"]);
+    expect(log).toEqual([
+      ...seq("capture", "inFlight"),
+      "begin",
+      ...seq("quitting", "capture", "stop"),
+      "quit",
+    ]);
   });
 
   it("snapshots the worker's descendants BEFORE the confirmation dialog", async () => {
@@ -89,6 +95,35 @@ describe("runQuitFlow", () => {
     expect(capturesBeforeStop).toHaveLength(2);
   });
 
+  it("puts a screen up before the long waits start", async () => {
+    // 핸드셰이크 30초 + worker 유예 90초. 그동안 화면이 그대로면 ⌘Q를 누른 사람은 앱이
+    // 멎었다고 결론 내리고 강제 종료를 누른다 — 정중한 경로가 존재하는 이유를 침묵이
+    // 무효로 만든다 (완료 기준 P2-C5).
+    const { log, deps } = recorder({}, { recording: true, analysing: false });
+    await runQuitFlow(deps);
+    expect(log.indexOf("quitting:end")).toBeLessThan(log.indexOf("handshake:start"));
+    expect(log.indexOf("quitting:end")).toBeLessThan(log.indexOf("stop:start"));
+  });
+
+  it("does not put that screen up before the user has agreed to quit", async () => {
+    const { log, deps } = recorder({ confirm: async () => false }, { recording: true, analysing: false });
+    await runQuitFlow(deps);
+    expect(log).not.toContain("quitting:start");
+  });
+
+  it("quits even when the quitting screen cannot be shown", async () => {
+    // 창이 파괴되는 중이면 loadFile이 거부한다. 그걸로 종료를 멈추면 앱이 영영 안 꺼진다.
+    const { log, lines, deps } = recorder({
+      showQuitting: async () => {
+        throw new Error("창이 이미 없어요");
+      },
+    });
+    await runQuitFlow(deps);
+    expect(log).toContain("stop:start");
+    expect(log[log.length - 1]).toBe("quit");
+    expect(lines.join("\n")).toContain("창이 이미 없어요");
+  });
+
   it("does not quit, stop anything, or latch when the user cancels", async () => {
     const { log, deps } = recorder({ confirm: async () => false }, { recording: true, analysing: false });
     await runQuitFlow(deps);
@@ -105,7 +140,7 @@ describe("runQuitFlow", () => {
     expect(log).toEqual([
       ...seq("capture", "inFlight", "confirm"),
       "begin",
-      ...seq("handshake", "capture", "stop"),
+      ...seq("quitting", "handshake", "capture", "stop"),
       "quit",
     ]);
   });
@@ -225,7 +260,6 @@ describe("graceExpiryPrompt", () => {
 describe("leftoverNotice", () => {
   it("words a live orphan as something still running", () => {
     const n = leftoverNotice({ stopped: false, leaked: [11, 12], detail: STOP_DETAIL.orphans });
-    expect(n.kind).toBe("warning");
     expect(n.message).toContain("살아 있을 수 있는");
     expect(n.detail).toContain(STOP_DETAIL.orphans);
     expect(n.detail).toContain("11, 12");
@@ -238,7 +272,6 @@ describe("leftoverNotice", () => {
     // 한다"고 못 박는 자리다. "확인하지 못했다"까지 적고 멈추면 읽는 사람은 그것을
     // "찾아봤는데 없더라"로 읽는다 — 그래서 "없다는 뜻이 아니다"를 문구가 직접 말한다.
     const n = leftoverNotice({ stopped: false, leaked: [], detail: STOP_DETAIL.unverifiable });
-    expect(n.kind).toBe("warning");
     expect(n.message).toContain("확인하지 못했");
     expect(n.detail).toContain(STOP_DETAIL.unverifiable);
     expect(n.detail).toContain("없다는 뜻이 아닙니다");
@@ -246,25 +279,16 @@ describe("leftoverNotice", () => {
     expect(n.message).not.toContain("정리를 끝냈");
   });
 
-  it("does not call the user's own choice a failure", () => {
-    // "계속 기다리기"를 고른 사람에게 정리 실패라고 적고 경고 아이콘까지 달면, 방금 고른
-    // 것을 오류라고 말하는 셈이다. 이 구분이 detail 필드가 존재하는 이유다.
-    const n = leftoverNotice({ stopped: false, leaked: [4242], detail: STOP_DETAIL.declined });
-    expect(n.kind).toBe("info");
-    expect(n.message).toContain("마무리");
-    expect(n.detail).toContain("스스로 끝납니다");
-    expect(n.detail).not.toContain(STOP_DETAIL.orphans);
-  });
-
-  it("still reads the user's choice after the supervisor joined several reasons", () => {
-    // stopAll이 서비스별 사유를 줄바꿈으로 이어 붙인다. 같은지 비교하면 두 번째 사유가
-    // 붙는 순간 이 갈래가 조용히 죽어, 사용자가 고른 결과가 다시 경고로 뜬다.
+  it("shows every reason the supervisor joined, not just the first", () => {
+    // stopAll이 서비스별 사유를 줄바꿈으로 이어 붙인다. 한 줄만 실어 보내면 두 번째
+    // 서비스가 왜 깨끗하지 않았는지가 화면에서 사라진다.
     const n = leftoverNotice({
       stopped: false,
       leaked: [4242],
-      detail: `${STOP_DETAIL.declined}\napi: 종료 중 예외 — boom`,
+      detail: `${STOP_DETAIL.orphans}\napi: 종료 중 예외 — boom`,
     });
-    expect(n.kind).toBe("info");
+    expect(n.detail).toContain(STOP_DETAIL.orphans);
+    expect(n.detail).toContain("boom");
   });
 
   it("falls back to 'could not verify' when no reason came back at all", () => {
