@@ -43,6 +43,51 @@ describe("parseComposeStatus", () => {
   it("reports unreadable output instead of guessing", () => {
     expect(parseComposeStatus("not json at all").kind).toBe("unreadable");
   });
+
+  it("finds postgres among several JSONL rows", () => {
+    const other = '{"Name":"damwha-redis","Service":"redis","State":"running","Health":""}';
+    expect(parseComposeStatus(`${other}\n${HEALTHY}`)).toEqual({ kind: "healthy" });
+  });
+
+  it("says absent when the compose file has other services but no postgres", () => {
+    const other = '{"Name":"damwha-redis","Service":"redis","State":"running","Health":""}';
+    expect(parseComposeStatus(other)).toEqual({ kind: "absent" });
+    // 필드가 빠진 행도 행이다 — 객체이기만 하면 "우리가 찾는 서비스가 아니다"로 읽는다.
+    expect(parseComposeStatus('{"Name":"damwha-postgres"}')).toEqual({ kind: "absent" });
+  });
+
+  it("treats a running container with no health verdict as starting", () => {
+    // Health가 아예 없는 것과 빈 문자열인 것은 같은 뜻이다 — 아직 healthy라고 말한 적이 없다.
+    expect(parseComposeStatus('{"Service":"postgres","State":"running"}')).toEqual({
+      kind: "starting",
+    });
+    expect(parseComposeStatus('{"Service":"postgres","State":"running","Health":""}')).toEqual({
+      kind: "starting",
+    });
+  });
+
+  it("reports unreadable when one line of JSONL is malformed", () => {
+    // 세 줄 중 가운데만 깨졌다. 앞줄이 우연히 postgres였다고 해서 판정하면 안 된다 — 출력을
+    // 못 읽은 것이지, 컨테이너 상태를 읽은 것이 아니다.
+    const broken = `${HEALTHY}\n{"Service":"postgres", oops\n${EXITED}`;
+    expect(parseComposeStatus(broken).kind).toBe("unreadable");
+  });
+
+  it("never throws on JSON that is valid but is not a row", () => {
+    // `null`은 JSON으로 멀쩡해서 try/catch를 지나간 뒤 r.Service에서 TypeError를 던졌다.
+    // 던지면 readiness가 던지고, 그것은 기동 시퀀스를 세운다 — 어떤 입력에도 값으로 답한다.
+    for (const input of ["null", "true", "false", "42", '"x"', "[null]", "[1,2]", '["x"]']) {
+      const state = parseComposeStatus(input);
+      // 객체가 아닌 행은 깨진 출력이다. absent로 내려 보내면 사람은 준비 유예가 다 찰 때까지
+      // 아무 설명도 못 보고, 원문도 잃는다.
+      expect({ input, kind: state.kind }).toEqual({ input, kind: "unreadable" });
+      expect(state.kind === "unreadable" && state.detail).toBe(input);
+    }
+  });
+
+  it("says absent for an empty JSON array — nothing is up", () => {
+    expect(parseComposeStatus("[]")).toEqual({ kind: "absent" });
+  });
 });
 
 describe("postgresSpec", () => {
@@ -85,6 +130,25 @@ describe("postgresSpec", () => {
     expect(calls.flat()).not.toContain("down");
     expect(calls.flat()).not.toContain("stop");
     expect(calls.flat()).not.toContain("rm");
+  });
+
+  it("asks for stopped containers too — `ps -a`", async () => {
+    // 2026-09-12 실측: 멈춘 컨테이너는 `ps`에 **아예 나오지 않고** `ps -a`에만
+    // State:"exited"로 나온다. -a가 빠지면 어댑터는 exited를 영영 관측하지 못하고, 내려간
+    // 컨테이너가 "absent"와 구분되지 않는다. `up -d`와 달리 이 플래그는 출력으로 티가 나지
+    // 않으므로 여기서 못 박는다.
+    const calls: string[][] = [];
+    const spec = postgresSpec(async (args) => {
+      calls.push(args);
+      return { stdout: "", stderr: "", code: 0 };
+    });
+    await spec.detectExternal(ctx());
+    await spec.readiness({ handle: null, owned: true }, ctx());
+    expect(calls.length).toBe(2);
+    for (const args of calls) {
+      expect(args).toContain("ps");
+      expect(args).toContain("-a");
+    }
   });
 
   it("points compose at the repo's own file", async () => {

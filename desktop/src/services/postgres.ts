@@ -25,28 +25,49 @@ function composeFile(ctx: LaunchContext): string {
   return path.join(ctx.repoRoot, "be", "docker-compose.yml");
 }
 
+/** compose의 한 행인가. JSON으로는 멀쩡하지만 객체가 아닌 값(null·true·숫자·문자열·배열)을 가른다. */
+function isRow(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /**
  * compose는 버전에 따라 JSON 배열 하나를 주기도 하고 줄마다 객체를 주기도 한다. 둘 다 받는다 —
  * 형식 하나만 받으면 사람의 Docker Desktop 판올림이 준비 판정을 조용히 깨뜨린다.
+ *
+ * 무슨 입력에도 **던지지 않는다**. 이 함수는 readiness가 부르고, readiness가 던지면 그 서비스는
+ * 기동 시퀀스를 통째로 세운다 — "준비를 못 했다"는 판정이어야 할 일이 예외가 된다. 못 읽으면
+ * 못 읽었다고(unreadable) 원문을 달아 답하는 것이 이 함수의 유일한 실패 방식이다.
  */
 export function parseComposeStatus(stdout: string): ComposeState {
   const text = stdout.trim();
   if (text.length === 0) return { kind: "absent" };
+  const unreadable: ComposeState = { kind: "unreadable", detail: text.slice(0, 200) };
 
-  const rows: Array<Record<string, unknown>> = [];
+  let values: unknown[];
   try {
     if (text.startsWith("[")) {
       const parsed: unknown = JSON.parse(text);
-      if (!Array.isArray(parsed)) return { kind: "unreadable", detail: text.slice(0, 200) };
-      rows.push(...(parsed as Array<Record<string, unknown>>));
+      if (!Array.isArray(parsed)) return unreadable;
+      values = parsed;
     } else {
-      for (const line of text.split("\n")) {
-        const t = line.trim();
-        if (t.length > 0) rows.push(JSON.parse(t) as Record<string, unknown>);
-      }
+      values = text
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line) as unknown);
     }
   } catch {
-    return { kind: "unreadable", detail: text.slice(0, 200) };
+    return unreadable;
+  }
+
+  const rows: Array<Record<string, unknown>> = [];
+  for (const value of values) {
+    // 객체가 아닌 행은 "우리가 안 보는 서비스"가 아니라 **깨진 출력**이다. `null` 하나에
+    // r.Service가 TypeError를 던진 것이 이 검사가 생긴 이유고, 조용히 건너뛰어 absent로
+    // 내려가면 그것대로 나쁘다 — absent는 not-ready라 사람은 준비 유예가 다 찰 때까지 아무
+    // 설명도 못 본다. 살아 있는지를 읽으려던 출력이 이해가 안 되면 모른다고 말한다.
+    if (!isRow(value)) return unreadable;
+    rows.push(value);
   }
 
   const row = rows.find((r) => r.Service === "postgres");
