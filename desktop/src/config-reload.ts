@@ -25,6 +25,23 @@ import { PREPARE_DERIVED_KEYS } from "./services/embed";
  */
 export const RESTART_ONLY_KEYS: readonly string[] = [...PREPARE_DERIVED_KEYS, "WORKER_ID"];
 
+/** 재적용 한 번의 결과. */
+export interface ConfigReloadResult {
+  /** 실패 화면에 얹을 "다시 켜야 바뀌어요" 안내. 어긋남이 없으면 null. */
+  notice: string | null;
+  /**
+   * 이 안내가 **직전 재적용과 다르다** = 사용자에게 아직 말하지 않은 새 내용이다.
+   *
+   * 부르는 쪽이 이것으로 대화상자를 띄울지 가른다. 담화 화면이 붙은 뒤에는 셸 화면이 다시
+   * 그려지지 않으므로(shell-latch.ts) 안내가 갈 곳이 없는데, embed는 게이트가 아니라서
+   * "API는 running, embed만 failed"가 설계상 정상이고(스펙 §6.7) 그 상태에서 사용자가
+   * 고치는 값이 바로 EMBED_SERVICE_PORT다 — 안내가 가장 필요한 조합이 정확히 안내가
+   * 사라지는 조합이었다 (재재리뷰 §3-2). 그렇다고 재시도마다 띄우면 모달이 쌓인다.
+   * 어긋남이 없을 때는 항상 false다 — 띄울 것이 없다.
+   */
+  isNew: boolean;
+}
+
 export interface ConfigReloadDeps {
   /** config.json을 다시 읽는다 (main.ts: loadConfig(app.getPath("userData"))). */
   load(): LoadedConfig;
@@ -37,21 +54,22 @@ export interface ConfigReloadDeps {
 }
 
 /**
- * 재적용기를 만든다. 돌려주는 함수는 "이 값은 앱을 다시 켜야 바뀝니다" 안내를 돌려주고,
- * 부르는 쪽(main.ts)이 그것을 실패 화면에 얹는다. 화면이 말하지 않으면 사용자는 자기 수정이
- * 왜 안 먹는지 알 길이 없고, 그 침묵이 §4-1의 절반이었다.
+ * 재적용기를 만든다. 돌려주는 함수는 "이 값은 앱을 다시 켜야 바뀝니다" 안내와, 그것이 **새
+ * 내용인지**를 돌려주고, 부르는 쪽(main.ts)이 앞엣것을 실패 화면에 얹고 뒤엣것으로 대화상자를
+ * 가른다. 화면이 말하지 않으면 사용자는 자기 수정이 왜 안 먹는지 알 길이 없고, 그 침묵이
+ * §4-1의 절반이었다.
  *
  * 팩토리인 이유는 **중복 로그 억제 상태**를 들기 위해서다. 같은 경고를 재시도마다(3·8·20초)
  * 다시 적으면 supervisor.log에서 새 사건과 반복이 구별되지 않는다. renderStatus는 이미
  * lastStatusLine으로 같은 일을 하는데 이 경로에만 그것이 없었다 (재리뷰 §4-6).
  */
-export function createConfigReloader(deps: ConfigReloadDeps): () => string | null {
+export function createConfigReloader(deps: ConfigReloadDeps): () => ConfigReloadResult {
   let lastWarning = "";
   let lastNotice = "";
 
-  return (): string | null => {
+  return (): ConfigReloadResult => {
     const live = deps.live();
-    if (live === null) return null;
+    if (live === null) return { notice: null, isNew: false };
 
     const cfg = deps.load();
     const warning = cfg.warning ?? "";
@@ -74,16 +92,21 @@ export function createConfigReloader(deps: ConfigReloadDeps): () => string | nul
     if (applied.length > 0) deps.log(`config.json을 다시 읽었어요 — ${applied.join(" / ")}`);
 
     if (needsRestart.length === 0) {
+      // 리셋이 빠지면 어긋남이 풀렸다가 **같은 모양으로** 다시 났을 때 두 번째를 아무도
+      // 적지 않고 아무도 말하지 않는다 — 로그도 대화상자도 첫 번째로 끝난다.
       lastNotice = "";
-      return null;
+      return { notice: null, isNew: false };
     }
     const notice = `${needsRestart
       .map((r) => `${r.key}은(는) 파일에 ${r.file}, 실행 중인 값은 ${r.live}`)
       .join(" / ")} — 이 키는 앱을 다시 켜야 바뀌어요.`;
-    if (notice !== lastNotice) {
+    // `lastNotice === ""`가 아니라 `notice !== lastNotice`다. 어긋난 키가 하나에서 둘로 늘거나
+    // 값이 바뀌면 그것은 **새 내용**이고, 로그도 대화상자도 그것을 다시 말해야 한다.
+    const isNew = notice !== lastNotice;
+    if (isNew) {
       lastNotice = notice;
       deps.log(notice);
     }
-    return notice;
+    return { notice, isNew };
   };
 }

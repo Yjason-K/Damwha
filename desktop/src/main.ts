@@ -555,6 +555,8 @@ async function startServices(mine: number): Promise<void> {
   await showShell(opening, { state: "starting" });
 
   const existing = supervisor;
+  // 담화 화면이 붙은 뒤에도 사용자에게 닿아야 하는 안내. 아래 reattachWindow 다음에 쓴다.
+  let announce: string | null = null;
   if (existing === null) {
     if (!(await createSupervisorFor(mine))) return;
   } else {
@@ -562,7 +564,9 @@ async function startServices(mine: number): Promise<void> {
     // 적는데 ctx.env가 감독자 생성 시점에 얼어붙으면 그 문장이 거짓이 된다 (완료 기준 P2-C8).
     // 실행 중에 바꿀 수 없는 키는 바꾸지 않고 안내를 돌려준다 — shellStatusOf가 그것을 화면에
     // 얹는다.
-    restartNotice = reloadConfig();
+    const reloaded = reloadConfig();
+    restartNotice = reloaded.notice;
+    if (reloaded.isNew && reloaded.notice !== null) announce = reloaded.notice;
     // 이미 감독자가 있으면 **다시 만들지 않는다.** 두 번째 감독자를 세우면 첫 감독자가 쥔
     // 자식들의 유일한 참조가 사라져 아무도 그들을 내리지 못하고, 넷이 두 벌 뜬다 (P2-C4).
     // 재시도는 감독자 자신의 입구를 쓴다 — prepare()를 건너뛰고 아직 못 뜬 것부터 잇는다
@@ -581,6 +585,38 @@ async function startServices(mine: number): Promise<void> {
   retryCount = 0;
   // origin은 감독자의 런타임에서 읽는다. Phase 1의 전역 apiOrigin은 이제 쓰지 않는다.
   await reattachWindow(mine);
+  // 여기까지 왔다는 것은 담화 화면이 붙었다는 뜻이고, 그 뒤로 shellStatusOf의 안내 줄은
+  // **어떤 화면에도 닿지 않는다** — renderStatus는 붙은 창을 다시 그리지 않는다
+  // (mayRenderShell, shell-latch.ts). 그런데 embed는 게이트가 아니라서 "API는 running,
+  // embed만 failed"가 설계상 정상이고(스펙 §6.7), 그 상태에서 사용자가 고치는 값이 바로
+  // EMBED_SERVICE_PORT다 — 안내가 가장 필요한 조합이 정확히 안내가 사라지는 조합이었다
+  // (재재리뷰 §3-2). 사용자가 "다시 시도"를 눌러 직접 물은 질문이므로 답은 화면에 있어야
+  // 한다: 네이티브 대화상자로 띄운다 (스펙 §6.11). 새 안내일 때만 띄우므로 재시도를
+  // 거듭해도 모달이 쌓이지 않는다 (config-reload.ts의 isNew).
+  if (announce !== null) announceRestartNotice(mine, announce);
+}
+
+/**
+ * "다시 켜야 바뀌어요"를 대화상자로 띄운다. 담화 화면이 붙은 뒤에는 이것이 유일한 경로다.
+ *
+ * await하지 않는다. 기다리면 startServices가 사용자가 버튼을 누를 때까지 끝나지 않고,
+ * start()의 직렬화 체인(starting)이 그만큼 통째로 밀린다 — 자동 재시도와 메뉴의 재시도가
+ * 사람 손을 기다리게 되는 것은 답이 아니다. 대신 거부를 삼키지 않고 적는다: void 프라미스의
+ * 거부는 Electron main의 uncaught exception이 된다.
+ */
+function announceRestartNotice(mine: number, notice: string): void {
+  const options = {
+    type: "info" as const,
+    message: "이 값은 앱을 다시 켜야 바뀌어요",
+    detail: notice,
+    buttons: ["확인"],
+  };
+  const target = activeWindow(mine);
+  const shown =
+    target === null ? dialog.showMessageBox(options) : dialog.showMessageBox(target, options);
+  void shown.catch((e: unknown) => {
+    appendSupervisorLog(`재시작 안내를 띄우지 못했어요 — ${reasonOf(e)}`);
+  });
 }
 
 /**

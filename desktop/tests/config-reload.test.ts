@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createConfigReloader, RESTART_ONLY_KEYS } from "../src/config-reload";
 import type { ApiEnv, LoadedConfig } from "../src/config";
+import { embedSpec } from "../src/services/embed";
+import { buildSpecs, type SpecDeps } from "../src/services/specs";
+import type { EmbedProbe } from "../src/services/external";
+import type { LaunchContext } from "../src/services/types";
 
 /**
  * 잎만 가짜다 — 파일 읽기(main.ts의 loadConfig)와 로그. 판정은 진짜 코드가 한다.
@@ -34,7 +38,7 @@ function harness(live: { env: ApiEnv; baseline: ApiEnv } | null) {
 describe("createConfigReloader", () => {
   it("does not read the file before there is a supervisor to refresh", () => {
     const h = harness(null);
-    expect(h.reload()).toBeNull();
+    expect(h.reload()).toEqual({ notice: null, isNew: false });
     expect(h.loadCount()).toBe(0);
   });
 
@@ -46,7 +50,7 @@ describe("createConfigReloader", () => {
     };
     const h = harness(live);
     h.file({ DATABASE_URL: "postgres://right" });
-    expect(h.reload()).toBeNull();
+    expect(h.reload().notice).toBeNull();
     expect(live.env.DATABASE_URL).toBe("postgres://right");
     expect(h.log).toEqual(["config.json을 다시 읽었어요 — 바뀐 키: DATABASE_URL"]);
   });
@@ -73,7 +77,7 @@ describe("createConfigReloader", () => {
     };
     const h = harness(live);
     h.file({ EMBED_SERVICE_PORT: "9000" });
-    const notice = h.reload();
+    const { notice } = h.reload();
     expect(live.env.EMBED_SERVICE_PORT).toBe("8100");
     expect(live.env.EMBED_SERVICE_URL).toBe("http://127.0.0.1:8100");
     expect(notice).toContain("EMBED_SERVICE_PORT");
@@ -86,7 +90,7 @@ describe("createConfigReloader", () => {
     const live = { env: { WORKER_ID: "desktop-live" }, baseline: { WORKER_ID: "desktop-live" } };
     const h = harness(live);
     h.file({ WORKER_ID: "desktop-other" });
-    const notice = h.reload();
+    const { notice } = h.reload();
     expect(live.env.WORKER_ID).toBe("desktop-live");
     expect(notice).toContain("WORKER_ID");
   });
@@ -100,7 +104,10 @@ describe("createConfigReloader", () => {
     h.file({ EMBED_SERVICE_PORT: "9000" });
     const first = h.reload();
     const second = h.reload();
-    expect(second).toBe(first);
+    expect(first.isNew).toBe(true);
+    expect(second.notice).toBe(first.notice);
+    // 같은 안내는 다시 말하지 않는다 — 로그도, 대화상자도 (main.ts는 isNew로 가른다).
+    expect(second.isNew).toBe(false);
     expect(h.log.filter((l) => l.includes("EMBED_SERVICE_PORT"))).toHaveLength(1);
   });
 
@@ -108,9 +115,49 @@ describe("createConfigReloader", () => {
     const live = { env: { EMBED_SERVICE_PORT: "8100" }, baseline: { EMBED_SERVICE_PORT: "8100" } };
     const h = harness(live);
     h.file({ EMBED_SERVICE_PORT: "9000" });
-    expect(h.reload()).not.toBeNull();
+    expect(h.reload().notice).not.toBeNull();
     h.file({ EMBED_SERVICE_PORT: "8100" });
-    expect(h.reload()).toBeNull();
+    expect(h.reload()).toEqual({ notice: null, isNew: false });
+  });
+
+  it("says a changed notice again — one disagreeing key becoming two is new information", () => {
+    // 디듀프의 기준은 "이미 한 번 말했는가"(lastNotice === "")가 아니라 "같은 말인가"다.
+    // 앞엣것이면 어긋난 키가 늘거나 값이 바뀌어도 로그는 첫 안내로 끝나고, 담화 화면이 붙은
+    // 뒤에는 대화상자도 뜨지 않는다 — 화면은 이미 안내를 보여줄 수 없는 상태다 (§3-2).
+    const live = {
+      env: { EMBED_SERVICE_PORT: "8100", WORKER_ID: "desktop-live" },
+      baseline: { EMBED_SERVICE_PORT: "8100", WORKER_ID: "desktop-live" },
+    };
+    const h = harness(live);
+    h.file({ EMBED_SERVICE_PORT: "9000", WORKER_ID: "desktop-live" });
+    const first = h.reload();
+    h.file({ EMBED_SERVICE_PORT: "9000", WORKER_ID: "desktop-other" });
+    const second = h.reload();
+    expect(first.isNew).toBe(true);
+    expect(second.notice).not.toBe(first.notice);
+    expect(second.isNew).toBe(true);
+    expect(h.log).toHaveLength(2);
+  });
+
+  it("re-arms once the file agrees — the same disagreement a second time is news again", () => {
+    // 어긋남이 풀렸을 때 lastNotice를 비우지 않으면, 사용자가 값을 되돌렸다가 다시 고친
+    // 경우의 두 번째를 아무도 적지 않고 아무도 말하지 않는다.
+    const live = { env: { EMBED_SERVICE_PORT: "8100" }, baseline: { EMBED_SERVICE_PORT: "8100" } };
+    const h = harness(live);
+    h.file({ EMBED_SERVICE_PORT: "9000" });
+    expect(h.reload().isNew).toBe(true);
+    h.file({ EMBED_SERVICE_PORT: "8100" });
+    expect(h.reload().notice).toBeNull();
+    h.file({ EMBED_SERVICE_PORT: "9000" });
+    expect(h.reload().isNew).toBe(true);
+    expect(h.log).toHaveLength(2);
+  });
+
+  it("never calls a notice new while nothing disagrees — there is no modal to raise", () => {
+    const live = { env: { PORT: "3000" }, baseline: { PORT: "3000" } };
+    const h = harness(live);
+    h.file({ PORT: "3100" });
+    expect(h.reload()).toEqual({ notice: null, isNew: false });
   });
 
   it("repeats a warning only when it changes", () => {
@@ -129,13 +176,78 @@ describe("createConfigReloader", () => {
   });
 });
 
+/** prepare가 ctx.env에서 **실제로 읽은** 키를 기록한다. 손으로 적은 목록과 달리 같이 자란다. */
+function recordingCtx(env: Record<string, string>): { ctx: LaunchContext; read: Set<string> } {
+  const read = new Set<string>();
+  const proxy = new Proxy(env, {
+    get(target, key) {
+      if (typeof key === "string") read.add(key);
+      return Reflect.get(target, key) as unknown;
+    },
+  });
+  return {
+    ctx: {
+      repoRoot: "/r",
+      userData: "/u",
+      packaged: true,
+      env: proxy,
+      bins: { uv: "/opt/homebrew/bin/uv", docker: null },
+      searchDirs: [],
+      logFile: (id) => `/u/logs/${id}.log`,
+    },
+    read,
+  };
+}
+
+const specFakes: SpecDeps = {
+  docker: async () => ({ stdout: "", stderr: "", code: 0 }),
+  api: {
+    verifyOwnListener: async () => true,
+    isPortOccupied: async () => false,
+    onPendingMigrations: () => undefined,
+    onMigrationCheckSkipped: () => undefined,
+  },
+  embed: { probe: async () => ({ kind: "absent" as const }), freePort: async () => 8100 },
+  worker: { listExternal: async () => [] },
+};
+
 describe("RESTART_ONLY_KEYS", () => {
-  it("covers every key embedSpec.prepare derives from", () => {
-    // services/embed.ts가 소유하는 집합을 그대로 쓴다. 여기에 손으로 다시 적으면 prepare가
-    // 키를 하나 더 파생시키는 날 둘이 갈린다.
-    expect(RESTART_ONLY_KEYS).toContain("EMBED_SERVICE_PORT");
-    expect(RESTART_ONLY_KEYS).toContain("EMBED_SERVICE_URL");
-    expect(RESTART_ONLY_KEYS).toContain("EMBED_SERVICE_HOST");
+  /**
+   * 손으로 적은 이름 셋을 toContain으로 보면 키가 **빠질** 때만 빨개지고, prepare가 넷째 키를
+   * 파생시키는 날에는 집합도 테스트도 같이 침묵한다 — services/embed.ts의 주석이 피하려던
+   * "두 벌로 적기"가 테스트 쪽에 그대로 남는 모양이다 (재재리뷰 §4-6). 그래서 목록을 적지 않고
+   * **진짜 prepare를 불러** 읽은 키(Proxy)와 돌려준 키(결과 객체)를 그대로 끌어낸다.
+   *
+   * 이 테스트가 못 잡는 것: prepare가 읽지도 쓰지도 않으면서 그 결과에 딸려 가는 키가 생기는
+   * 경우. 그런 키는 어떤 기계적 관찰로도 드러나지 않는다.
+   */
+  it("covers every key embedSpec.prepare actually reads or writes — derived, not hand-copied", async () => {
+    const probes: EmbedProbe[] = [
+      { kind: "match" },
+      { kind: "mismatch", detail: "모델 other/model" },
+      { kind: "absent" },
+    ];
+    for (const probe of probes) {
+      const { ctx, read } = recordingCtx({
+        EMBED_SERVICE_HOST: "127.0.0.1",
+        EMBED_SERVICE_PORT: "8100",
+      });
+      const spec = embedSpec({ probe: async () => probe, freePort: async () => 54321 });
+      const written = await spec.prepare!(ctx);
+      expect(read.size).toBeGreaterThan(0);
+      for (const key of read) expect(RESTART_ONLY_KEYS).toContain(key);
+      for (const key of Object.keys(written)) expect(RESTART_ONLY_KEYS).toContain(key);
+    }
+  });
+
+  it("is complete only while embed is the one spec with a prepare", () => {
+    // 위 테스트는 embedSpec 하나만 본다. 다른 spec이 prepare를 갖는 순간 그 집합은 조용히
+    // 불완전해지므로, 그 순간을 여기서 빨갛게 만든다 — 다음 사람이 같은 결함을 다시 만들지
+    // 않도록.
+    const withPrepare = buildSpecs(specFakes)
+      .filter((s) => s.prepare !== undefined)
+      .map((s) => s.id);
+    expect(withPrepare).toEqual(["embed"]);
   });
 
   it("covers this run's identity", () => {
