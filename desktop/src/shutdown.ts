@@ -33,11 +33,11 @@ function processExists(pid: number): boolean {
  * start_new_session=True로 띄우므로 프로세스 그룹 kill이 그 자식에 닿지 않고, supervisor를
  * 죽이면 자식과 그것이 띄운 mlx_lm.server가 고아로 남는다 (스펙 §6.9).
  *
- * 0. 진입할 때, 그리고 강제 단계 직전에 자손 집합을 찍어 둔다(둘 다 supervisor 생존이
- *    확인된 시점). 아래 어느 단계에서 "깨끗하다"고 말하기 전에 그 집합이 아직 살아
- *    있는지 되본다 — supervisor가 먼저 죽으면 그 자손은 pid 1로 재부모화되어 사후
- *    BFS로는 보이지 않는다. worker의 --once 자식은 job마다 새로 뜨므로 진입 스냅샷
- *    하나만으로는 그 사이 새로 뜬 자식을 놓친다.
+ * 0. 진입할 때, 그리고 1단계 유예가 지난 직후(사람에게 묻기 **전**)에 자손 집합을 찍어
+ *    둔다 — 둘 다 방금 alive()로 supervisor 생존을 읽은 시점이다. 아래 어느 단계에서
+ *    "깨끗하다"고 말하기 전에 그 집합이 아직 살아 있는지 되본다 — supervisor가 먼저
+ *    죽으면 그 자손은 pid 1로 재부모화되어 사후 BFS로는 보이지 않는다. worker의 --once
+ *    자식은 job마다 새로 뜨므로 진입 스냅샷 하나만으로는 그 사이 새로 뜬 자식을 놓친다.
  * 1. SIGTERM 1회 — supervisor가 자식에 전달하고 자식은 stage boundary에서 멈춰
  *    requeue_for_shutdown을 부른다. 그 경로가 attempts를 되돌린다.
  * 2. 유예 초과 → 사람에게 묻는다.
@@ -64,8 +64,13 @@ export async function stopWorkerProcess(
   // 반대 방향의 실수가 된다 — main.ts의 verifyOwnListener가 소유를 증명 못 할 때 "아니오"로
   // 닫는 것과 같은 이유로, 여기서도 "확인 못 함"을 "깨끗함"으로 보고하지 않는다.
   // StopOutcome에는 stopped/leaked 두 필드뿐이라 실패 사유를 실어 보낼 자리가 없다 —
-  // 그래서 실패는 그 자리에서 console.error로 남기고(로그에서 사라지지 않게),
-  // snapshotFailed로 기억해 뒀다가 이 함수가 반환하는 모든 "clean" 판정을 무효로 만든다.
+  // 그래서 실패는 그 자리에서 console.error로 남기고, snapshotFailed로 기억해 뒀다가 이
+  // 함수가 반환하는 모든 "clean" 판정을 무효로 만든다. 다만 그 console.error가 실제로
+  // 읽히는 것은 **터미널에서 띄웠을 때뿐이다**: 패키징된 .app을 Finder로 실행하면 메인
+  // 프로세스의 stderr에는 받을 곳이 없고, logs.ts의 회전 로그는 자식 프로세스의
+  // stdout/stderr만 파일로 보낸다. 즉 이 줄은 개발 모드의 단서이지 사후 조사용 기록이
+  // 아니다 — 사람에게 도달하는 신호는 stopped:false 하나뿐이고, 그것을 화면에 어떻게
+  // 적을지는 종료 대화상자를 가진 Task 13이 정한다.
   let snapshotFailed = false;
   const snapshotDescendants = async (): Promise<Set<number>> => {
     try {
@@ -121,17 +126,23 @@ export async function stopWorkerProcess(
   opts.signal(-pid, "SIGTERM");
   if (await waitForExit(opts.graceMs)) return cleanUnlessOrphans();
 
+  // 재스냅샷. worker의 --once 자식은 job마다 새로 뜨므로 진입 스냅샷 이후에 새로 뜬 자식은
+  // 그 스냅샷만으로는 안 보인다. 이 자리인 이유는 **방금 waitForExit이 마지막 alive()로
+  // "아직 살아 있다"를 읽고 돌아왔기** 때문이다 — supervisor가 살아 있어야 그 자손이 ppid
+  // BFS에 보인다. 바로 아래 onGraceExpired는 사람이 답할 때까지 시간 제한 없이 막히는
+  // 네이티브 대화상자라, 그 뒤로 옮기면 이 근거가 사라진다: 대화상자가 떠 있는 동안
+  // supervisor가 죽고 자손이 pid 1로 재부모화되면 OS는 그 pid들을 재사용할 수 있고, 그때
+  // 도는 BFS는 **남의 프로세스**를 capturedDescendants에 합쳐 5단계가 그것을 "우리가 남긴
+  // pid"라며 사람에게 보여 준다. 대화상자 동안 새로 뜨는 --once 자식을 놓치는 것은 감수한다
+  // — 그 시점의 supervisor는 이미 SIGTERM을 받아 새 job을 집지 않고 requeue 중이다.
+  // 신호를 보내는 게 아니라 뒤의 "깨끗함" 판정이 참고할 후보 집합에 합칠 뿐이다 — 실제로
+  // 죽일 대상(4단계)은 그 자리에서 다시 걷는 트리를 쓴다.
+  capturedDescendants = new Set([...capturedDescendants, ...(await snapshotDescendants())]);
+
   // 2단계. 사람이 거절하면 여기서 멈춘다. 다만 이 시점의 프로세스는 방금 alive()로 확인한
   // 살아 있는 프로세스다 — types.ts:67이 leaked를 "화면과 로그에 적을 pid"로 정의하는데
   // 빈 배열을 돌려주면 화면은 "깨끗하지 않다"고만 말하고 무엇을 죽여야 할지는 말하지 못한다.
   if (!(await opts.onGraceExpired("worker"))) return { stopped: false, leaked: [pid] };
-
-  // 강제 단계 직전 재스냅샷. worker의 --once 자식은 job마다 새로 뜨므로 진입 스냅샷 이후에
-  // 새로 뜬 자식은 그 스냅샷만으로는 안 보인다. 지금(1단계 대기가 막 "아직 살아 있다"를
-  // 확인한 직후)이 supervisor 생존이 다시 보장되는 유일한 재확인 지점이다. 신호를 보내는
-  // 게 아니라 뒤의 "깨끗함" 판정이 참고할 후보 집합에 합칠 뿐이다 — 실제로 죽일 대상
-  // (4단계)은 그 자리에서 다시 걷는 트리를 쓴다.
-  capturedDescendants = new Set([...capturedDescendants, ...(await snapshotDescendants())]);
 
   // 3단계. SIGKILL이 아니라 두 번째 SIGTERM이다.
   opts.signal(-pid, "SIGTERM");

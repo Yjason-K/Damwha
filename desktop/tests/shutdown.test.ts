@@ -250,11 +250,11 @@ describe("stopWorkerProcess", () => {
     expect(out).toEqual({ stopped: false, leaked: [5001] });
   });
 
-  it("catches a descendant that appears only in the re-snapshot taken right before the forced SIGTERM", async () => {
-    // worker의 --once 자식은 job마다 새로 뜬다. 진입 스냅샷 이후, 강제 단계(3단계) 직전에
-    // 새로 뜬 자식은 진입 스냅샷 하나만으로는 안 보인다. handle(4)는 바로 그 강제 단계의
-    // 두 번째 SIGTERM 직후 죽으므로 cleanUnlessOrphans가 참고하는 것은 "지금까지 찍어 둔
-    // 스냅샷들"뿐이다 — 그 자손이 stage 4의 사후 BFS에 잡힐 기회조차 없다. 강제 단계 직전
+  it("catches a descendant that appears only in the re-snapshot taken when the grace expires", async () => {
+    // worker의 --once 자식은 job마다 새로 뜬다. 진입 스냅샷 이후, 1단계 유예가 지날 때까지
+    // 새로 뜬 자식은 진입 스냅샷 하나만으로는 안 보인다. handle(4)는 강제 단계의 두 번째
+    // SIGTERM 직후 죽으므로 cleanUnlessOrphans가 참고하는 것은 "지금까지 찍어 둔
+    // 스냅샷들"뿐이다 — 그 자손이 stage 4의 사후 BFS에 잡힐 기회조차 없다. 유예 직후
     // 재스냅샷이 없으면 이 경우는 {stopped:true, leaked:[]}로 뭉개진다 — 정확히 이
     // 테스트가 지키는 것이다.
     const alive = new Set([6001]);
@@ -265,7 +265,7 @@ describe("stopWorkerProcess", () => {
       signal: () => undefined,
       descendants: async () => {
         call += 1;
-        // 1번째 호출(진입 스냅샷)에는 아직 없다. 2번째 호출(강제 단계 직전 재스냅샷)부터
+        // 1번째 호출(진입 스냅샷)에는 아직 없다. 2번째 호출(유예 직후 재스냅샷)부터
         // 보인다.
         return call === 1 ? new Set<number>() : new Set([6001]);
       },
@@ -293,7 +293,7 @@ describe("stopWorkerProcess", () => {
   // Finding 3 (재리뷰, 이월): opts.descendants(pid).catch(() => new Set())가 열거 실패를
   // "자손 없음"으로 뭉개면 그 뒤로 이 모듈은 "깨끗하다"고 보고한다 — main.ts의
   // verifyOwnListener가 소유를 증명 못 할 때 "아니오"로 닫는 것과 정반대 방향의 편향이다.
-  // 아래 두 테스트는 각각 진입 스냅샷과 강제 단계 직전 재스냅샷이 실패하는 경우를 본다.
+  // 아래 두 테스트는 각각 진입 스냅샷과 유예 직후 재스냅샷이 실패하는 경우를 본다.
   it("does not report clean when the entry snapshot could not be taken", async () => {
     const errors: unknown[] = [];
     const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
@@ -321,7 +321,7 @@ describe("stopWorkerProcess", () => {
     }
   });
 
-  it("does not report clean when the re-snapshot before the forced SIGTERM could not be taken", async () => {
+  it("does not report clean when the re-snapshot at grace expiry could not be taken", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
       let call = 0;
@@ -331,7 +331,7 @@ describe("stopWorkerProcess", () => {
         signal: () => undefined,
         descendants: async () => {
           call += 1;
-          // 진입 스냅샷(1번째)은 정상이다. 강제 단계 직전 재스냅샷(2번째)만 실패한다.
+          // 진입 스냅샷(1번째)은 정상이다. 유예 직후 재스냅샷(2번째)만 실패한다.
           if (call === 2) throw new Error("ps 실패");
           return new Set<number>();
         },
@@ -357,7 +357,7 @@ describe("stopWorkerProcess", () => {
         signal: () => undefined,
         descendants: async () => {
           call += 1;
-          // 진입(1번째)·강제 단계 직전(2번째) 스냅샷은 정상이다. 4단계의 재확인용 트리
+          // 진입(1번째)·유예 직후(2번째) 스냅샷은 정상이다. 4단계의 재확인용 트리
           // 걷기(3번째)만 실패한다.
           if (call === 3) throw new Error("ps 실패");
           return new Set<number>();
@@ -372,6 +372,167 @@ describe("stopWorkerProcess", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  // 재리뷰 2 (변이 12종 중 8종 생존): 아래 넷은 프로덕션 코드가 아니라 **테스트가 지키지
+  // 못하던 성질**을 잠근다. 공통 원인은 이 프로젝트에서 반복된 한 가지다 — 주입 씨앗을
+  // 만들고 전부 가짜를 주입하는데, 그 가짜가 **인자를 안 읽고 호출됐다는 사실도 기록하지
+  // 않아** 프로덕션이 무엇을·언제 물었는지 아무도 관측하지 못한다.
+
+  it("keeps a failed early snapshot sticky all the way to the stage-5 verdict", async () => {
+    // snapshotFailed가 sticky해야만 의미가 있는 유일한 조합: **앞에서 실패하고 뒤에서
+    // 성공한다.** 기존 세 실패 테스트는 실패 지점이 곧 반환 지점이라(1·3단계 조기 반환,
+    // 또는 5단계 직전) 이 조합을 한 번도 안 태웠고, 4단계 직전에 `snapshotFailed = false;`
+    // 한 줄을 넣어도 28개가 전부 초록불이었다.
+    //
+    // 프로덕션 시나리오: 진입 ps가 1초 상한에 걸려 실패한다 → 우리는 진입 시점 자손을
+    // 영영 모른다 → worker가 1·3단계를 버텨 사람이 강제를 고른다 → 4단계 트리 걷기는
+    // 성공한다 → 재부모화된 고아가 있어도 5단계가 {stopped:true, leaked:[]}를 보고한다.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      let call = 0;
+      const out = await stopWorkerProcess(handle(999), {
+        graceMs: 10,
+        pollMs: 5,
+        signal: () => undefined,
+        descendants: async () => {
+          call += 1;
+          // 진입 스냅샷(1번째)만 실패한다. 그 뒤 재스냅샷·4단계 트리 걷기는 정상이다.
+          if (call === 1) throw new Error("ps 타임아웃");
+          return new Set<number>();
+        },
+        onGraceExpired: async () => true,
+        maxWaits: 2,
+        // 진짜 생존은 "아무것도 안 남았다"로 고정한다 — stopped가 false여야 하는 이유가
+        // 오직 "진입 때 확인을 못 했다"이기 위해서다.
+        stillAlive: async () => [],
+      });
+      expect(out).toEqual({ stopped: false, leaked: [] });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("hands the captured descendants to the stage-5 survivor check, not just the root pid", async () => {
+    // round 1이 고친 버그("진입 때 우리 자손이었는데 BFS에서 사라진 프로세스를 5단계
+    // 후보에 넣는다")를 되돌리는 변이 `const candidates = [pid];`가 28개를 전부 통과했다.
+    // 원인은 5단계까지 가는 기존 두 테스트가 **인자를 안 읽는** stillAlive를 주입해
+    // 후보 목록이 가짜의 입력으로만 쓰이고 버려지기 때문이다. 여기서는 건네받은 목록을
+    // 그대로 기록해서 단정한다.
+    const seen: number[][] = [];
+    const alive = new Set([5001]);
+    let call = 0;
+    const out = await stopWorkerProcess(handle(999), {
+      graceMs: 10,
+      pollMs: 5,
+      signal: () => undefined,
+      descendants: async () => {
+        call += 1;
+        // supervisor가 살아 있는 진입 시점에만 보인다. 그 뒤 부모를 잃고 pid 1로
+        // 재부모화되면 이후 ppid BFS에는 영영 안 나온다.
+        return call === 1 ? new Set([5001]) : new Set<number>();
+      },
+      onGraceExpired: async () => true,
+      maxWaits: 2,
+      stillAlive: async (pids) => {
+        seen.push([...pids]);
+        return pids.filter((p) => alive.has(p));
+      },
+    });
+    // handle(999)라 1·3단계 대기가 모두 실패하고 cleanUnlessOrphans는 안 탄다 — 이
+    // 호출은 5단계의 그것 하나뿐이다.
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain(5001);
+    expect(seen[0]).toContain(4242);
+    expect(out).toEqual({ stopped: false, leaked: [5001] });
+  });
+
+  it("unions the entry snapshot with the re-snapshot instead of replacing it", async () => {
+    // 합집합을 덮어쓰기로 바꿔도 28개가 전부 초록불이었다 — 기존 테스트들은 두 스냅샷이
+    // 같은 값을 돌려주거나 진입이 비어 있어 두 의미가 구분되지 않았다.
+    //
+    // §6.9가 이 모듈을 만든 이유가 정확히 이 경우다: 진입 때 자손이던 --once 자식 A가
+    // job을 마치고 종료하면 A가 띄운 mlx_lm.server는 pid 1로 재부모화되어 재스냅샷의
+    // BFS에는 안 보인다. 덮어쓰기면 A는 캡처 집합에서 사라지고, A가 살아남아도
+    // "깨끗함"으로 보고된다.
+    const seen: number[][] = [];
+    const alive = new Set([7001]);
+    let call = 0;
+    const out = await stopWorkerProcess(handle(999), {
+      graceMs: 10,
+      pollMs: 5,
+      signal: () => undefined,
+      descendants: async () => {
+        call += 1;
+        if (call === 1) return new Set([7001]); // 진입 스냅샷에만 보인다
+        if (call === 2) return new Set([7002]); // 재스냅샷에만 보인다
+        return new Set<number>(); // 4단계 사후 BFS에는 둘 다 없다
+      },
+      onGraceExpired: async () => true,
+      maxWaits: 2,
+      stillAlive: async (pids) => {
+        seen.push([...pids]);
+        return pids.filter((p) => alive.has(p));
+      },
+    });
+    // 두 스냅샷에 한 번씩만 나타난 pid가 **둘 다** 생존 확인에 도달해야 한다.
+    expect(seen[0]).toContain(7001);
+    expect(seen[0]).toContain(7002);
+    expect(out).toEqual({ stopped: false, leaked: [7001] });
+  });
+
+  it("walks from the positive root pid, and snapshots at the two moments the design depends on", async () => {
+    // descendants 가짜가 전부 인자 없는 `async () =>`라, (a) 어떤 루트로 걷는지와
+    // (b) signal 호출들과의 상대 순서를 아무도 보지 않았다. 그래서
+    // `opts.descendants(pid)` → `opts.descendants(-pid)` 한 글자 오타가 28개를 통과했다
+    // — 프로덕션의 descendantPids는 ps의 ppid 행을 BFS하므로 -pid로는 어떤 행도 매치되지
+    // 않아 **항상 빈 집합**을 돌려준다. 고아 탐지가 통째로, 조용히 죽는다(던지지 않으니
+    // snapshotFailed도 안 켜진다). 스냅샷 시점을 옮기는 변이 셋도 마찬가지로 통과했다.
+    //
+    // 두 가짜를 **하나의 이벤트 배열**에 기록해 루트 인자와 순서를 함께 잠근다.
+    const events: Array<[string, ...unknown[]]> = [];
+    const out = await stopWorkerProcess(handle(999), {
+      graceMs: 10,
+      pollMs: 5,
+      signal: (target, sig) => events.push(["signal", target, sig]),
+      descendants: async (root) => {
+        events.push(["descendants", root]);
+        return new Set<number>();
+      },
+      onGraceExpired: async () => {
+        events.push(["ask"]);
+        return true;
+      },
+      maxWaits: 2,
+      stillAlive: async () => [],
+    });
+
+    // (a) BFS의 루트는 언제나 **양수** pid다. 음수는 "프로세스 그룹"이라는 뜻이고
+    //     그것을 아는 것은 signal뿐이다 — ps의 ppid 열에는 음수가 없다.
+    expect(events.filter((e) => e[0] === "descendants").map((e) => e[1])).toEqual([
+      4242, 4242, 4242,
+    ]);
+
+    const names = events.map((e) => e[0]);
+    // (b) 진입 스냅샷은 **첫 SIGTERM보다 먼저**다. 신호를 쏜 뒤에 찍으면 supervisor의
+    //     죽음과 경주하게 되고, 지면 재부모화된 자손을 영영 못 본다.
+    // (c) 재스냅샷은 **대화상자보다 먼저**다. onGraceExpired는 사람이 답할 때까지 시간
+    //     제한 없이 막히므로, 그 뒤에서 찍으면 supervisor 생존이라는 근거가 사라지고
+    //     재사용된 pid(=남의 프로세스)를 capturedDescendants에 합칠 수 있다.
+    expect(names.slice(0, 4)).toEqual(["descendants", "signal", "descendants", "ask"]);
+
+    // 전체 순서도 함께 못 박는다. 4단계의 세 번째 걷기는 SIGKILL **직전**이어야 한다 —
+    // 낡은 스냅샷을 죽이지 않고 그 자리에서 다시 걸은 트리를 죽이는 것이 그 이유다.
+    expect(events).toEqual([
+      ["descendants", 4242],
+      ["signal", -4242, "SIGTERM"],
+      ["descendants", 4242],
+      ["ask"],
+      ["signal", -4242, "SIGTERM"],
+      ["descendants", 4242],
+      ["signal", 4242, "SIGKILL"],
+    ]);
+    expect(out).toEqual({ stopped: true, leaked: [] });
   });
 
   it("refuses to signal a handle that is already dead at entry", async () => {
