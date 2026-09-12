@@ -136,7 +136,7 @@ export function leftoverNotice(out: StopOutcome): QuitNotice {
   const pids =
     out.leaked.length > 0
       ? `pid ${out.leaked.join(", ")} — 이 목록은 후보이지 증거가 아니에요. 그 사이 끝난 pid를 다른 프로그램이 이미 쓰고 있을 수 있으니, 터미널에서 무엇인지 확인한 뒤에 정리해 주세요.`
-      : "남은 pid를 특정하지 못했어요. 터미널에서 damwha_worker·mlx_lm.server가 남아 있는지 봐 주세요.";
+      : "남은 것이 있는지 없는지를 확인하지 못했어요 — 없다는 뜻이 아닙니다. 터미널에서 damwha_worker·mlx_lm.server가 남아 있는지 직접 봐 주세요.";
   const detail = `${why}\n\n${pids}\n\n자세한 내용은 로그에 있습니다.`;
 
   // 포함 비교인 이유: supervisor.stopAll이 서비스별 detail을 줄바꿈으로 이어 붙이므로
@@ -149,5 +149,57 @@ export function leftoverNotice(out: StopOutcome): QuitNotice {
     return { kind: "warning", message: "아직 살아 있을 수 있는 프로세스가 있어요.", detail };
   }
   // 스펙 §6.9 — "깨끗하지 않은데 무엇이 남았는지도 모른다"는 정상적으로 존재하는 상태다.
-  return { kind: "warning", message: "정리를 끝까지 확인하지 못했어요.", detail };
+  // "정리했어요"도 "아무것도 안 남았어요"도 아니다. 둘 중 어느 쪽으로도 읽히지 않게 적는다.
+  return { kind: "warning", message: "정리가 끝났는지 확인하지 못했어요.", detail };
+}
+
+
+/**
+ * 녹음 중에 **창을 닫을 때**의 절차 (스펙 §6.10).
+ *
+ * 창을 닫는 것은 종료가 아니다 — 앱도 네 서비스도 계속 산다(P2-C12). 그런데 창을 닫으면
+ * 렌더러가 파괴되고, `fe/src`에 `beforeunload`·`pagehide` 훅이 0건이라 `LiveRecorder.stop()`이
+ * 아예 불리지 않는다. 마지막 tail 청크가 서버에 못 들어가고, ⌘Q와 달리 API가 살아 있으므로
+ * `LiveOrphanService.sweep`이 90초 뒤 **실제로 발화해** `capture_error`를 `producer_abandoned`로
+ * 봉인한다. 즉 조용한 데이터 유실이고, 그래서 §6.10이 여기에도 같은 확인과 같은 핸드셰이크를
+ * 요구한다.
+ *
+ * **분석 중에는 아무것도 하지 않는다** — 대화상자도 띄우지 않는다. 창을 닫아도 분석은
+ * 계속되고 그것이 이 변경의 목적이며, P2-C12가 판정하는 것이 정확히 그 경우다.
+ *
+ * 이 흐름에는 **앱을 끄거나 서비스를 내릴 방법이 아예 없다** — CloseFlowDeps에 그런 구멍을
+ * 두지 않았다. 창 닫기가 종료로 번지는 것은 Phase 1의 동작이고, 타입이 그것을 막는다.
+ */
+export interface CloseFlowDeps {
+  /** 이 창이 지금 녹음 중인가. 렌더러 훅에 묻는다. */
+  isRecording(): Promise<boolean>;
+  confirm(message: string): Promise<boolean>;
+  stopRecording(): Promise<{ stopped: boolean; reason?: string }>;
+  handshakeTimeoutMs: number;
+  log(line: string): void;
+  /** 이번에는 막지 않고 창을 실제로 닫는다. */
+  close(): void;
+}
+
+export const CLOSE_WHILE_RECORDING =
+  "녹음이 진행 중이에요. 창을 닫으면 녹음을 먼저 안전하게 마무리합니다. 앱과 서비스는 계속 실행되니 분석은 그대로 이어져요. 창을 닫을까요?";
+
+export async function runCloseFlow(deps: CloseFlowDeps): Promise<void> {
+  // 녹음 중이 아니면 **묻지 않는다.** 분석 중이어도 마찬가지다 (스펙 §6.10, P2-C12).
+  if (!(await deps.isRecording())) {
+    deps.close();
+    return;
+  }
+  // 취소하면 창을 그대로 둔다. 종료 경로와 달리 여기서 멈추는 것은 사용자를 가두지 않는다 —
+  // 앱도 창도 그대로이고, 다시 닫으면 다시 묻는다.
+  if (!(await deps.confirm(CLOSE_WHILE_RECORDING))) return;
+  const result = await runHandshake(deps.stopRecording, { timeoutMs: deps.handshakeTimeoutMs });
+  if (result.kind !== "stopped") {
+    // 창 닫기 자체는 막지 않는다. 여기서는 API가 살아 있으므로 sweeper가 90초 뒤 봉인한다 —
+    // 봉인은 되고 tail 청크만 잃는다. 그 사실을 조용히 넘기지 않고 적는다.
+    deps.log(
+      `창을 닫는 중 녹음을 정상 중지하지 못했어요 (${result.kind}). 서버가 곧 마무리합니다.`,
+    );
+  }
+  deps.close();
 }

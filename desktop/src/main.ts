@@ -20,7 +20,7 @@ import { applyNavigationBoundary, applyPermissionBoundary } from "./permissions"
 import { mayRenderShell } from "./shell-latch";
 import { maySpawnServices } from "./spawn-guard";
 import { openWindowFlow } from "./window-flow";
-import { graceExpiryPrompt, runQuitFlow, type QuitNotice } from "./quit-flow";
+import { graceExpiryPrompt, runCloseFlow, runQuitFlow, type QuitNotice } from "./quit-flow";
 import { captureDescendants, hasOnceChild, stopWorkerProcess } from "./shutdown";
 import { installMenu } from "./menu";
 import { createSupervisor } from "./services/supervisor";
@@ -206,6 +206,52 @@ function openWindow(): BrowserWindow {
     // 더 새 창이 이미 전역을 차지했으면 그것을 지우지 않는다.
     if (win === created) win = null;
   });
+
+  // 창 닫기 ≠ 종료. 다만 창을 닫으면 렌더러가 죽어 녹음이 끊기므로, 녹음 중에만 ⌘Q와 같은
+  // 확인과 같은 핸드셰이크를 건다 (스펙 §6.10). 분석 중에는 아무것도 하지 않는다 — 창을
+  // 닫아도 분석은 계속되고, 그것이 이 Phase의 목적이다 (완료 기준 P2-C12).
+  //
+  // preventDefault는 **동기로** 불러야 하는데 "녹음 중인가"는 렌더러에 물어야 해서
+  // 비동기다. 그래서 첫 close는 무조건 막고, 판정한 뒤 래치를 올린 채 다시 닫는다 —
+  // 녹음 중이 아니면 그 왕복이 몇 밀리초라 사람 눈에는 그냥 닫힌 것과 같다.
+  let closing = false;
+  created.on("close", (event) => {
+    // 종료 경로가 닫는 창은 건드리지 않는다. quitFlow가 이미 확인도 핸드셰이크도 했고,
+    // 여기서 또 물으면 사용자가 같은 질문을 두 번 받는다.
+    if (quitting || closing) return;
+    event.preventDefault();
+    const closeNow = () => {
+      closing = true;
+      created.close();
+    };
+    void runCloseFlow({
+      isRecording: () => isRecordingIn(created),
+      confirm: async (message) => {
+        const { response } = await ask(
+          {
+            type: "question",
+            buttons: ["닫기", "취소"],
+            defaultId: 1,
+            cancelId: 1,
+            message: "창을 닫을까요?",
+            detail: message,
+          },
+          created,
+        );
+        return response === 0;
+      },
+      stopRecording: () => stopRecordingIn(created),
+      handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
+      log: appendSupervisorLog,
+      close: closeNow,
+    }).catch((e: unknown) => {
+      // 여기서 삼키면 창이 영영 안 닫힌다 — preventDefault를 이미 불렀기 때문이다.
+      // 핸드셰이크 실패가 종료를 막지 않는 것과 같은 규칙을 창에도 적용한다: 닫는다.
+      // API는 살아 있으므로 sweeper가 90초 뒤 봉인한다.
+      appendSupervisorLog(`창을 닫는 중 예외 — ${reasonOf(e)}`);
+      closeNow();
+    });
+  });
   return created;
 }
 
@@ -283,10 +329,14 @@ async function isAnalysing(): Promise<boolean> {
   }
 }
 
-/** 녹음 중인가 — 렌더러의 훅에 묻는다. 캡처는 브라우저가 갖고 있으므로 렌더러만이 안다. */
-async function isRecording(): Promise<boolean> {
-  const target = win;
-  if (target === null || target.isDestroyed()) return false;
+/**
+ * 녹음 중인가 — 렌더러의 훅에 묻는다. 캡처는 브라우저가 갖고 있으므로 렌더러만이 안다.
+ *
+ * 전역 `win`이 아니라 창을 받는다. 창 닫기 경로는 **닫히려는 그 창**에 물어야 하고,
+ * 그 창이 전역과 다를 수 있다(더 새 창이 이미 전역을 차지했다).
+ */
+async function isRecordingIn(target: BrowserWindow): Promise<boolean> {
+  if (target.isDestroyed()) return false;
   try {
     return (await target.webContents.executeJavaScript(
       "Boolean(window.__damwha_desktop?.isRecording?.())",
@@ -294,6 +344,14 @@ async function isRecording(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** 렌더러의 라이브 중지. 훅이 없거나 창이 죽었으면 성공으로 읽지 않는다. */
+function stopRecordingIn(target: BrowserWindow): Promise<{ stopped: boolean; reason?: string }> {
+  if (target.isDestroyed()) return Promise.resolve({ stopped: false, reason: "창이 이미 없어요." });
+  return target.webContents.executeJavaScript(
+    "window.__damwha_desktop?.stopLiveRecording?.() ?? {stopped:false, reason:'no-bridge'}",
+  ) as Promise<{ stopped: boolean; reason?: string }>;
 }
 
 /**
@@ -305,8 +363,11 @@ async function isRecording(): Promise<boolean> {
  * 행동(⌘Q·메뉴)에 대한 직접적인 응답**이다. 창을 닫고 Dock에서 ⌘Q를 누르는 것은 평범한
  * 경로이고, 그때 아무것도 묻지 않으면 녹음·분석 확인이 통째로 사라진다.
  */
-function ask(options: Electron.MessageBoxOptions): Promise<Electron.MessageBoxReturnValue> {
-  const target = win !== null && !win.isDestroyed() ? win : null;
+function ask(
+  options: Electron.MessageBoxOptions,
+  parent: BrowserWindow | null = win,
+): Promise<Electron.MessageBoxReturnValue> {
+  const target = parent !== null && !parent.isDestroyed() ? parent : null;
   return target === null ? dialog.showMessageBox(options) : dialog.showMessageBox(target, options);
 }
 
@@ -1004,7 +1065,10 @@ if (!app.requestSingleInstanceLock()) {
     // 돌려줘(spawn-guard) 재시도도 상태 갱신도 죽는다 — 종료하지 않은 앱이 종료된 앱처럼
     // 군다. 되돌릴 수 없는 지점(beginQuit)에서 올린다.
     void runQuitFlow({
-      inFlight: async () => ({ recording: await isRecording(), analysing: await isAnalysing() }),
+      inFlight: async () => ({
+        recording: win !== null && (await isRecordingIn(win)),
+        analysing: await isAnalysing(),
+      }),
       confirm: confirmQuit,
       captureDescendants: captureWorkerDescendants,
       beginQuit: () => {
@@ -1012,11 +1076,9 @@ if (!app.requestSingleInstanceLock()) {
         cancelRetry();
       },
       stopRecording: () =>
-        win === null || win.isDestroyed()
+        win === null
           ? Promise.resolve({ stopped: false, reason: "창이 이미 없어요." })
-          : (win.webContents.executeJavaScript(
-              "window.__damwha_desktop?.stopLiveRecording?.() ?? {stopped:false, reason:'no-bridge'}",
-            ) as Promise<{ stopped: boolean; reason?: string }>),
+          : stopRecordingIn(win),
       handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
       stopServices,
       log: appendSupervisorLog,

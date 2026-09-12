@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { graceExpiryPrompt, leftoverNotice, runQuitFlow, type QuitFlowDeps } from "../src/quit-flow";
+import {
+  CLOSE_WHILE_RECORDING,
+  graceExpiryPrompt,
+  leftoverNotice,
+  runCloseFlow,
+  runQuitFlow,
+  type CloseFlowDeps,
+  type QuitFlowDeps,
+} from "../src/quit-flow";
 import { STOP_DETAIL } from "../src/shutdown";
 
 /**
@@ -226,11 +234,16 @@ describe("leftoverNotice", () => {
   });
 
   it("words an unprovable stop as unprovable, not as 'nothing left'", () => {
+    // 스펙 §6.9가 "종료 대화상자와 상태 창은 이 상태를 '남은 것 없음'과 구별해 표시해야
+    // 한다"고 못 박는 자리다. "확인하지 못했다"까지 적고 멈추면 읽는 사람은 그것을
+    // "찾아봤는데 없더라"로 읽는다 — 그래서 "없다는 뜻이 아니다"를 문구가 직접 말한다.
     const n = leftoverNotice({ stopped: false, leaked: [], detail: STOP_DETAIL.unverifiable });
     expect(n.kind).toBe("warning");
     expect(n.message).toContain("확인하지 못했");
     expect(n.detail).toContain(STOP_DETAIL.unverifiable);
-    expect(n.detail).toContain("특정하지 못했");
+    expect(n.detail).toContain("없다는 뜻이 아닙니다");
+    // "정리했다"로도 "아무것도 안 남았다"로도 읽히면 안 된다.
+    expect(n.message).not.toContain("정리를 끝냈");
   });
 
   it("does not call the user's own choice a failure", () => {
@@ -257,5 +270,90 @@ describe("leftoverNotice", () => {
   it("falls back to 'could not verify' when no reason came back at all", () => {
     const n = leftoverNotice({ stopped: false, leaked: [] });
     expect(n.detail).toContain(STOP_DETAIL.unverifiable);
+  });
+});
+
+
+/**
+ * 창 닫기. 종료가 아니다 — 이 흐름에는 앱을 끄거나 서비스를 내릴 구멍이 타입에 아예 없다.
+ */
+function closeRecorder(over: Partial<CloseFlowDeps> = {}, recording = true) {
+  const log: string[] = [];
+  const lines: string[] = [];
+  const asked: string[] = [];
+  const mark = <T>(what: string, value: T) => async () => {
+    log.push(`${what}:start`);
+    await tick();
+    log.push(`${what}:end`);
+    return value;
+  };
+  const deps: CloseFlowDeps = {
+    isRecording: mark("isRecording", recording),
+    confirm: async (message: string) => {
+      asked.push(message);
+      log.push("confirm:start");
+      await tick();
+      log.push("confirm:end");
+      return true;
+    },
+    stopRecording: mark("handshake", { stopped: true }),
+    handshakeTimeoutMs: 50,
+    log: (line) => lines.push(line),
+    close: () => log.push("close"),
+    ...over,
+  };
+  return { log, lines, asked, deps };
+}
+
+describe("runCloseFlow", () => {
+  it("closes silently when nothing is recording — no dialog at all", async () => {
+    // 완료 기준 P2-C12: 분석 job이 running인 상태에서 창을 닫아도 확인 대화상자는 뜨지
+    // 않는다. 창을 닫아도 분석은 계속되고, 그것이 이 변경의 목적이다 (스펙 §6.10).
+    const { log, asked, deps } = closeRecorder({}, false);
+    await runCloseFlow(deps);
+    expect(asked).toEqual([]);
+    expect(log).toEqual([...seq("isRecording"), "close"]);
+  });
+
+  it("finishes the handshake BEFORE the window is allowed to close", async () => {
+    // 창이 먼저 죽으면 LiveRecorder.stop()이 아예 불리지 않는다 (fe/src에 beforeunload 0건).
+    // 여기서는 API가 살아 있어 sweeper가 90초 뒤 실제로 발화하므로, 그 결과는 조용한
+    // producer_abandoned다 — ⌘Q 경로보다 오히려 눈에 덜 띈다.
+    const { log, asked, deps } = closeRecorder();
+    await runCloseFlow(deps);
+    expect(asked).toEqual([CLOSE_WHILE_RECORDING]);
+    expect(log).toEqual([...seq("isRecording", "confirm", "handshake"), "close"]);
+  });
+
+  it("keeps the window open when the user cancels", async () => {
+    const { log, deps } = closeRecorder({ confirm: async () => false });
+    await runCloseFlow(deps);
+    expect(log).not.toContain("close");
+    expect(log).not.toContain("handshake:start");
+  });
+
+  it("still closes when the renderer refuses to stop, and says so", async () => {
+    const { log, lines, deps } = closeRecorder({
+      stopRecording: async () => ({ stopped: false, reason: "훅이 없어요" }),
+    });
+    await runCloseFlow(deps);
+    expect(log[log.length - 1]).toBe("close");
+    expect(lines.join("\n")).toContain("failed");
+  });
+
+  it("still closes when the renderer never answers", async () => {
+    const { log, lines, deps } = closeRecorder({
+      stopRecording: () => new Promise(() => undefined),
+      handshakeTimeoutMs: 20,
+    });
+    await runCloseFlow(deps);
+    expect(log[log.length - 1]).toBe("close");
+    expect(lines.join("\n")).toContain("timeout");
+  });
+
+  it("tells the user the app keeps running", async () => {
+    // 창 닫기는 종료가 아니다. 문구가 그렇게 말하지 않으면 사용자는 긴 전사를 중단시킬까
+    // 두려워 창을 못 닫는다 (스펙 §6.10의 전제 전체가 그것이다).
+    expect(CLOSE_WHILE_RECORDING).toContain("앱과 서비스는 계속 실행");
   });
 });
