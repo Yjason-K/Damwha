@@ -374,9 +374,22 @@ database.service.ts:44-53`은 미적용 마이그레이션을 **경고만 하고
 재접속 루프에 들어간다.
 
 **판정은 API 자신의 기동 로그로 한다.** `database.service.ts`가 이미
-`N pending migration(s): … — run \`pnpm be:migrate\``를 찍고, 앱은 Phase 1부터 API의 stderr를
+`N pending migration(s): … — run \`pnpm be:migrate\``를 찍고, 앱은 Phase 1부터 API의 출력을
 받고 있다. main에 pg 클라이언트를 넣지 않는 이유가 이것이다 — 넣으면 `desktop/package.json`의
 `dependencies`가 비지 않아 Phase 1의 번들 위생 기준(P1-C11, 이 Phase에서는 P2-C14)이 깨진다.
+
+**그 줄은 stdout에 있다. stderr가 아니다** (2026-09-12 실측, Task 6). 이 문서의 초판은
+"앱은 Phase 1부터 API의 stderr를 받고 있다"고 적었고 그것이 틀렸다. 근거:
+`database.service.ts:47,53`이 두 신호를 모두 `logger.warn()`으로 찍고, NestJS의
+`ConsoleLogger.printMessages`는 `process[writeStreamType ?? 'stdout']`에 쓰며 `'stderr'`를
+넘기는 것은 `.error()` 하나뿐이다(`console-logger.service.js:52`). 그런데 Phase 1의
+`makeSink`는 `isError`일 때만 tail에 쌓는다(`api-process.ts:18`) — 로그 **파일**에는 두
+스트림이 다 들어가지만 `stderrTail()`에는 stdout이 한 줄도 없다.
+
+그래서 `ApiHandle`에 **`stdoutTail()`을 따로 더한다.** 합치지 않는 이유는 `stderrTail()`이
+`lastMeaningfulLine`·`isAddrInUse`·`database unreachable` 판정에서 **실패 원인**을 찾는 데
+쓰이기 때문이다 — 평범한 stdout 한 줄이 `lastMeaningfulLine`을 이기면 실패 화면이 엉뚱한
+원인을 말하기 시작한다. 게이트는 `stdoutTail()`을, 나머지는 `stderrTail()`을 읽는다.
 
 두 가지를 2026-09-12에 확인했다.
 
@@ -753,6 +766,10 @@ window.__damwha_desktop = {
 `stopLiveRecording()`은 화면의 중지 버튼과 **같은 경로**를 부른다 — 별도 종료 경로를 만들면 둘이
 갈라진다. 웹 배포에서는 아무도 부르지 않으므로 무해하고, `fe/`가 이 객체 없이도 동작하는 성질은
 유지된다(Phase 1 §6.6의 조건).
+
+`database.service.ts`를 `.warn()`에서 `.error()`로 바꾸는 길도 있었으나 택하지 않았다 —
+웹·Docker 배포의 동작을 바꾸고(이 Phase의 제품 코드 예산 밖이다), 그 파일의 주석이 의도적으로
+advisory라고 적어 둔 조건을 error 수준으로 올리게 된다.
 
 **변경하지 않는 것:** `be/src/`, `be/docker-compose.yml`, `packages/contracts/`, `.npmrc`,
 `be/.env`, `be/worker/.env`, `fe/.env`.
