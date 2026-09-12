@@ -107,6 +107,9 @@ describe("runQuitFlow", () => {
     const { log, deps } = recorder({}, { recording: false, analysing: true });
     await runQuitFlow(deps);
     expect(log).not.toContain("handshake:start");
+    // indexOf만 비교하면 화면이 **통째로 사라져도** 통과한다 — 없는 값의 indexOf는 -1이고
+    // -1 < 무엇이든 참이다. 이 갈래를 위해 쓰인 테스트가 이 갈래를 지키지 못했다.
+    expect(log).toContain("quitting:end");
     expect(log.indexOf("quitting:end")).toBeLessThan(log.indexOf("stop:start"));
   });
 

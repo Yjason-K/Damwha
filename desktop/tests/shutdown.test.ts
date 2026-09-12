@@ -628,6 +628,9 @@ describe("stopWorkerProcess", () => {
     // 후보 목록이 가짜의 입력으로만 쓰이고 버려지기 때문이다. 여기서는 건네받은 목록을
     // 그대로 기록해서 단정한다.
     const seen: number[][] = [];
+    // 입력만이 아니라 **나온 것**도 적는다. 좁히기를 지키는 유일한 방법이다 — 입력만 보면
+    // "매 바퀴 전체 후보로 되돌아간다"는 변이도 seen[0]의 부분집합이라 통과한다.
+    const returned: number[][] = [];
     const alive = new Set([5001]);
     let call = 0;
     const out = await stopWorkerProcess(handle(999), {
@@ -644,7 +647,9 @@ describe("stopWorkerProcess", () => {
       maxWaits: 2,
       stillAlive: async (pids) => {
         seen.push([...pids]);
-        return pids.filter((p) => alive.has(p));
+        const left = pids.filter((p) => alive.has(p));
+        returned.push([...left]);
+        return left;
       },
     });
     // handle(999)라 1·3단계 대기가 모두 실패하고 cleanUnlessOrphans는 안 탄다 — 여기
@@ -655,9 +660,18 @@ describe("stopWorkerProcess", () => {
     expect(seen.length).toBeGreaterThan(0);
     expect(seen[0]).toContain(5001);
     expect(seen[0]).toContain(4242);
-    // 재확인은 **직전 생존자만** 다시 묻는다. 한 번 죽은 것으로 읽힌 pid를 다시 묻지
-    // 않으므로, 그 사이 OS가 그 번호를 재사용해도 남의 프로세스를 누수로 올리지 않는다.
-    for (const later of seen.slice(1)) expect(seen[0]).toEqual(expect.arrayContaining(later));
+    // 재확인은 **직전 확인에서 살아 있던 것만** 다시 묻는다. 한 번 죽은 것으로 읽힌 pid를
+    // 다시 묻지 않으므로, 그 사이 OS가 그 번호를 재사용해도 남의 프로세스를 누수로 올리지
+    // 않는다.
+    //
+    // `seen[0]`과 비교하면 안 된다 — seen[0]은 **전체 후보 합집합**이라 어떤 후속 호출도
+    // 자기 자신의 부분집합이고, 매 바퀴 그 합집합으로 되돌아가는 변이까지 통과한다.
+    // 지켜야 하는 성질은 부분집합이 아니라 **등식**이다: i번째 확인의 입력 = (i-1)번째
+    // 확인이 살아 있다고 답한 것 그 자체.
+    expect(seen.length).toBeGreaterThan(1);
+    for (let i = 1; i < seen.length; i += 1) expect(seen[i]).toEqual(returned[i - 1]);
+    // 그리고 그 목록은 실제로 좁혀진다 — 좁혀지지 않는 픽스처였다면 위 등식은 공허하다.
+    expect(seen[0].length).toBeGreaterThan(seen[1].length);
     expect(out).toEqual({ stopped: false, leaked: [5001], detail: STOP_DETAIL.orphans });
   });
 
