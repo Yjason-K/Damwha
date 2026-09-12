@@ -133,9 +133,24 @@ export function refreshEnv(
 
   for (const [key, value] of Object.entries(fresh)) {
     if (restartOnly.includes(key)) {
-      // 살아 있는 값과 비교한다. baseline과 비교하면 "prepare가 옮겨서 어긋난" 쪽을 못 본다.
+      // 두 질문을 **둘 다** 물어야 한다.
+      //   "사용자가 파일을 고쳤는가" → value !== baseline[key]
+      //   "지금 어긋나 있는가"       → value !== current[key]
+      //
+      // 둘째만 보면 prepare()가 포트를 옮긴 **정상 상태**에서 거짓 안내가 뜬다: 파일은 8100
+      // 그대로인데 살아 있는 값이 54321이라(외부 embed가 8100을 쥐어 스펙 §6.5대로 옮겼다)
+      // "다시 켜야 바뀌어요"가 재시도마다 뜬다. 사용자는 파일을 건드린 적이 없고, 다시 켜도
+      // 외부 embed가 그대로면 또 옮긴다 — 할 수 있는 일이 없는데 하라고 시키는 안내이고,
+      // 그런 안내가 실패 화면에서 진짜 실패 줄과 나란히 선다 (재재리뷰 §4-5).
+      // 첫째만 보면 사용자가 파일을 살아 있는 값으로 맞춰 놓은 뒤에도 안내가 남는다.
+      //
+      // baseline은 여기서 움직이지 않는다. restart-only 키는 이 실행 안에서 current도
+      // baseline도 얼어 있고(prepare는 감독자 생성 때 한 번만 돈다), baseline을 파일 값으로
+      // 끌어올리면 어긋남이 그대로인데 다음 재시도가 침묵한다.
       const live = current[key];
-      if (live !== value) needsRestart.push({ key, file: value, live: live ?? "(없음)" });
+      if (value !== baseline[key] && value !== live) {
+        needsRestart.push({ key, file: value, live: live ?? "(없음)" });
+      }
       continue;
     }
     // prepare()가 옮긴 값은 파일이 이긴다고 볼 수 없다.

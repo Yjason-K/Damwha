@@ -241,14 +241,59 @@ describe("refreshEnv", () => {
   });
 
   it("does not undo a value prepare() moved to match a live child", () => {
-    // embed의 prepare는 포트가 겹치면 EMBED_SERVICE_PORT를 옮기고 EMBED_SERVICE_URL을 그
-    // 한 값에서 파생시킨다. 파일 값으로 되돌리면 둘이 어긋나고, 어긋난 결과는 오류가 아니라
-    // 조용한 degrade다.
+    // **갱신 루프**의 `current[key] !== baseline[key]` 한 줄을 지키는 테스트다. 파일이 말한
+    // 값(baseline)에서 살아 있는 값이 이미 옮겨져 있으면 파일이 이긴다고 볼 수 없다.
+    //
+    // 이 테스트는 원래 EMBED_SERVICE_PORT를 썼는데, 라운드 2가 그 키를 restartOnly 분기로
+    // 빼내면서 **지키려던 줄에 닿지 않게 됐다** — 초록인 채로 다른 것을 지키고 있었고, 그 줄을
+    // 지우는 변이가 294개 초록 아래 살아남았다 (재재리뷰 §4-2). 그래서 restart-only가 아닌
+    // 키로 다시 쓴다. 새 분기를 낼 때는 기존 테스트가 아직 원래 줄에 닿는지 같이 봐야 한다.
+    const current = { SUMMARY_LLM_MODEL: "moved-by-prepare", PORT: "3000" };
+    const baseline = { SUMMARY_LLM_MODEL: "from-file", PORT: "3000" };
+    const out = refreshEnv(
+      current,
+      baseline,
+      { SUMMARY_LLM_MODEL: "from-file", PORT: "3000" },
+      RESTART_ONLY,
+    );
+    expect(current.SUMMARY_LLM_MODEL).toBe("moved-by-prepare");
+    expect(out.changed).toEqual([]);
+  });
+
+  it("says nothing when prepare() moved the port and the file never changed", () => {
+    // 재재리뷰 §4-5. 외부 embed가 8100을 쥐고 있으면 prepare가 스펙 §6.5대로 포트를 옮긴다 —
+    // 그것이 **정상 상태**다. 사용자는 파일을 건드린 적이 없고, 앱을 다시 켜도 외부 embed가
+    // 그대로면 또 옮긴다. 여기서 "다시 켜야 바뀌어요"를 띄우면 실패 화면에서 진짜 실패 줄과
+    // 나란히, 사용자가 할 수 있는 일이 없는 곳으로 보내는 문장이 재시도마다 선다.
     const current = { EMBED_SERVICE_PORT: "54321", EMBED_SERVICE_URL: "http://127.0.0.1:54321" };
     const baseline = { EMBED_SERVICE_PORT: "8100" };
     const out = refreshEnv(current, baseline, { EMBED_SERVICE_PORT: "8100" }, RESTART_ONLY);
-    expect(current.EMBED_SERVICE_PORT).toBe("54321");
+    expect(out.needsRestart).toEqual([]);
     expect(out.changed).toEqual([]);
+    expect(current.EMBED_SERVICE_PORT).toBe("54321");
+  });
+
+  it("stops asking for a restart once the file names the value that is actually running", () => {
+    // 판정의 다른 축. 사용자가 파일을 고치기는 했는데(54321 !== baseline 8100) 고친 결과가
+    // 살아 있는 값과 같다 — 어긋난 것이 없으므로 할 말도 없다. baseline만 보는 판정은 여기서
+    // 거짓 안내를 낸다.
+    const current = { EMBED_SERVICE_PORT: "54321" };
+    const baseline = { EMBED_SERVICE_PORT: "8100" };
+    const out = refreshEnv(current, baseline, { EMBED_SERVICE_PORT: "54321" }, RESTART_ONLY);
+    expect(out.needsRestart).toEqual([]);
+    expect(current.EMBED_SERVICE_PORT).toBe("54321");
+  });
+
+  it("refuses a key prepare() derives from even when the live value is still the file's", () => {
+    // **갱신 루프의 restartOnly 단락**을 지키는 테스트다. current === baseline이라 prepare-moved
+    // 배제는 여기서 아무것도 하지 않는다 — 단락이 빠지면 이 값은 그대로 얹힌다. 위의
+    // "does not undo a value prepare() moved…"와 짝이고, 둘이 갱신 루프의 두 분기를 나눠 진다.
+    const current = { EMBED_SERVICE_PORT: "8100" };
+    const baseline = { EMBED_SERVICE_PORT: "8100" };
+    const out = refreshEnv(current, baseline, { EMBED_SERVICE_PORT: "9000" }, RESTART_ONLY);
+    expect(current.EMBED_SERVICE_PORT).toBe("8100");
+    expect(out.changed).toEqual([]);
+    expect(out.needsRestart.map((r) => r.key)).toEqual(["EMBED_SERVICE_PORT"]);
   });
 
   it("refuses a key prepare() derives from, however the file and the live value differ", () => {
@@ -346,6 +391,22 @@ describe("refreshEnv", () => {
     expect(out.removed).toEqual(["SUMMARY_LLM_MODEL"]);
     // 두 번째 재시도가 같은 키를 또 지웠다고 말하지 않는다.
     expect(refreshEnv(current, baseline, { PORT: "3000" }, RESTART_ONLY).removed).toEqual([]);
+  });
+
+  it("does not let the file's silence strip this run's identity", () => {
+    // **삭제 루프의 restartOnly 가드**. config.json에서 WORKER_ID를 지우는 것은 평범한
+    // 조작이다("앱이 알아서 만들겠지"). 그 침묵이 살아 있는 env에서도 그것을 지우면 백오프가
+    // 되살린 worker는 be/worker/damwha_worker/config.py:13의 기본값 worker-1로 뜨고,
+    // locked_by만 보는 소유권 가드가 외부 worker와 이 앱을 구별하지 못한다 — 스펙 §6.5가
+    // WORKER_ID를 실행마다 새로 만드는 이유가 통째로 무효가 된다 (재재리뷰 §4-1).
+    //
+    // current === baseline이므로 prepare-moved 배제는 여기서 아무것도 하지 않는다. 이 키를
+    // 살리는 줄은 restartOnly 가드 하나뿐이다.
+    const current: Record<string, string> = { WORKER_ID: "desktop-live", PORT: "3000" };
+    const baseline: Record<string, string> = { ...current };
+    const out = refreshEnv(current, baseline, { PORT: "3000" }, RESTART_ONLY);
+    expect(current.WORKER_ID).toBe("desktop-live");
+    expect(out.removed).toEqual([]);
   });
 
   it("does not let the file's silence delete a value prepare() contributed", () => {
