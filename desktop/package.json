@@ -13,7 +13,7 @@
     "start:desktop": "pnpm run compile && electron .",
     "package:desktop": "node scripts/package.mjs",
     "test": "vitest run --passWithNoTests",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "lint": "tsc -p tsconfig.lint.json"
   },
   "devDependencies": {
     "@electron/asar": "^4.0.1",
