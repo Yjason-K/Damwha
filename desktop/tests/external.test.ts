@@ -1,43 +1,106 @@
 import { describe, expect, it } from "vitest";
 import { parseWorkerProcesses, probeEmbedContract } from "../src/services/external";
 
-// 2026-09-12 실측(`pnpm worker`): "uv run --directory be/worker python -m damwha_worker" 자체가
-// damwha_worker를 인자로 그대로 갖고 있어, 실제 supervisor(venv의 python3)의 부모인 uv 프로세스도
-// 문자열 매치만으로는 supervisor로 오탐한다. python 앞에 래퍼가 끼는 게 아니라 별도 pid로 나란히
-// 뜨는 형태다 — 경로도 homebrew가 아니라 be/worker/.venv 밑이다.
+// 2026-09-12 실측한 다섯 가지 모양을 한 fixture에 모았다. 첫 줄(4101)만 supervisor다.
+// 4102/4103이 핵심이다 — 둘 다 `-m damwha_worker`를 인자로 그대로 갖고 있고, 4103이
+// **앱이 자기 worker를 띄울 때 나오는 기본 모양**이다(Task 2의 findExecutable이 절대
+// 경로를 주고 Task 8의 launchWithUv가 그 경로로 spawn한다). 문자열 필터로는 못 거른다.
 const PS = [
   "  PID COMMAND",
   " 4101 /Users/jason/projects/Damwha2/be/worker/.venv/bin/python3 -m damwha_worker",
   " 4102 uv run --directory be/worker python -m damwha_worker",
-  " 4207 /opt/homebrew/bin/python3.12 -m damwha_worker --once",
+  " 4103 /opt/homebrew/bin/uv run --directory /Users/jason/projects/Damwha2/be/worker python -m damwha_worker",
+  " 4207 /Users/jason/projects/Damwha2/be/worker/.venv/bin/python3 -m damwha_worker --once",
   " 4300 /usr/bin/grep damwha_worker",
+  " 4310 /bin/zsh -c source /snap.sh && pnpm worker && echo damwha_worker",
   " 4400 /Applications/Damwha.app/Contents/MacOS/Damwha",
 ].join("\n");
 
+// 위 fixture를 만든 실제 캡처를 그대로 박아 둔다. 명령은
+// `/opt/homebrew/bin/uv run --directory …/be/worker python -m damwha_worker`(앱이 부르는
+// 방식 그대로)였고, 아래는 `ps -axo pid,command | grep "[d]amwha_worker"`의 원문이다.
+// 4310을 손으로 줄인 것과 달리 실제 셸 줄에는 `-m damwha_worker`가 **토큰 쌍으로**
+// 들어 있어, argv[0] 검사 없이는 원리적으로 구분할 수 없다.
+const REAL_PS = [
+  "  PID COMMAND",
+  "19645 /bin/zsh -c source /Users/jason/.claude/shell-snapshots/snapshot-zsh-1789195230214-jc6uuq.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval '/opt/homebrew/bin/uv run --directory /Users/jason/projects/Damwha2/be/worker python -m damwha_worker > /tmp/scratch/w.log 2>&1' < /dev/null && pwd -P >| /tmp/claude-59b3-cwd",
+  "19651 /opt/homebrew/bin/uv run --directory /Users/jason/projects/Damwha2/be/worker python -m damwha_worker",
+  "19652 /Users/jason/projects/Damwha2/be/worker/.venv/bin/python3 -m damwha_worker",
+].join("\n");
+
+// Phase 4에서 번들 런타임이 venv를 대체하면 앱은 uv를 거치지 않고 python을 직접 spawn한다.
+// 그러면 우리가 띄운 root 자신이 supervisor 줄이 되고, 이름 필터는 그걸 (당연히) 잡는다.
+const PS_APP_OWNED = [
+  "  PID COMMAND",
+  " 5001 /Applications/Damwha.app/Contents/Resources/python/bin/python3 -m damwha_worker",
+].join("\n");
+
 describe("parseWorkerProcesses", () => {
-  it("finds a supervisor", () => {
+  it("finds the venv-python supervisor and nothing else", () => {
     expect(parseWorkerProcesses(PS, new Set())).toEqual([4101]);
   });
 
-  it("ignores the uv run launcher that merely repeats the module argument", () => {
-    // uv가 아직 exec하기 전이라 "uv run ... -m damwha_worker"라는 별개의 pid가 실제
-    // supervisor(4101)와 나란히 떠 있다. 이걸 세면 앱이 자기 worker인지 외부 worker인지와
-    // 무관하게 pid가 하나 더 잡혀, 자손 집합이 둘 다를 못 덮는 경로에서 오탐할 수 있다.
+  it("accepts any python-named argv[0], not just the venv path", () => {
+    // 허용 목록이 실측 경로 하나에만 맞춰지면, 사용자가 시스템 python으로 띄운 외부
+    // supervisor를 놓쳐 앱이 그 옆에 두 번째 worker를 띄운다.
+    for (const argv0 of [
+      "/opt/homebrew/bin/python3.12",
+      "/usr/bin/python3",
+      "/opt/homebrew/opt/python@3.13/bin/python3.13",
+      "python",
+    ]) {
+      expect(parseWorkerProcesses(`  PID COMMAND\n 7001 ${argv0} -m damwha_worker`, new Set())).toEqual(
+        [7001],
+      );
+    }
+  });
+
+  it("ignores the bare `uv run` launcher (a terminal `pnpm worker`)", () => {
+    // uv가 exec로 자신을 대체하지 않아 실제 supervisor의 부모로 남는다. 별개의 pid다.
     expect(parseWorkerProcesses(PS, new Set())).not.toContain(4102);
+  });
+
+  it("ignores the absolute-path `uv run` launcher the app itself spawns", () => {
+    // 앞선 구현의 `^uv\s+run` 앵커가 놓친 모양이다. 앱은 uv를 늘 절대 경로로 부르므로
+    // 이것이 예외가 아니라 기본이다. 이걸 세면 앱은 자기 런처를 외부 supervisor로 보고
+    // worker를 영영 띄우지 않는다.
+    expect(parseWorkerProcesses(PS, new Set())).not.toContain(4103);
   });
 
   it("ignores the one-shot child", () => {
     // __main__.py:279가 자식을 [sys.executable, "-m", "damwha_worker", "--once"]로 띄운다.
     // 거르지 않으면 job 하나를 처리 중인 자식을 상시 supervisor로 오인해 앱이 영영 안 띄운다.
     expect(parseWorkerProcesses(PS, new Set())).not.toContain(4207);
-  });
-
-  it("ignores our own descendants", () => {
-    expect(parseWorkerProcesses(PS, new Set([4101]))).toEqual([]);
+    // 다만 토큰 비교라서 `--once`로 시작하는 다른 플래그에는 걸리지 않는다.
+    expect(
+      parseWorkerProcesses("  PID COMMAND\n 7100 /usr/bin/python3 -m damwha_worker --once-ish", new Set()),
+    ).toEqual([7100]);
   });
 
   it("ignores a grep that merely mentions the module", () => {
     expect(parseWorkerProcesses(PS, new Set())).not.toContain(4300);
+  });
+
+  it("ignores a shell whose command text merely mentions the module", () => {
+    expect(parseWorkerProcesses(PS, new Set())).not.toContain(4310);
+  });
+
+  it("ignores an unrelated process with no module argument at all", () => {
+    expect(parseWorkerProcesses(PS, new Set())).not.toContain(4400);
+  });
+
+  it("returns only the supervisor from the real 2026-09-12 ps capture", () => {
+    // 앞선 거부 목록 구현은 이 원문에 [19645, 19651, 19652]를 돌려줬다 — 셋 중 둘이 오탐이다.
+    expect(parseWorkerProcesses(REAL_PS, new Set())).toEqual([19652]);
+  });
+
+  it("excludes any pid in ourPids, including the launcher root itself", () => {
+    // 이 함수는 우리 것/남의 것을 pid 집합으로만 가른다. main.ts의 descendantPids(root)는
+    // root를 반환값에 넣지 않으므로(main.ts:261-273) 호출부가 root를 손수 합쳐야 한다 —
+    // verifyOwnListener가 main.ts:287에서 하는 것과 같다. 그 의무를 여기서 못 박는다.
+    expect(parseWorkerProcesses(PS_APP_OWNED, new Set())).toEqual([5001]);
+    expect(parseWorkerProcesses(PS_APP_OWNED, new Set([5001]))).toEqual([]);
+    expect(parseWorkerProcesses(PS, new Set([4101]))).toEqual([]);
   });
 
   it("returns nothing for empty or header-only input", () => {
@@ -98,6 +161,29 @@ describe("probeEmbedContract", () => {
         throw new Error("not json");
       },
     }));
+    expect(r.kind).toBe("absent");
+  });
+
+  it("returns absent instead of hanging when the request never settles", async () => {
+    // AbortController만으로는 못 막는 경우다 — signal을 보지 않는 상대는 abort해도 안 끝난다.
+    // 여기서 매달리면 기동 순서 전체가 멈춰 앱이 아무 서비스도 못 띄운다.
+    const r = await probeEmbedContract(
+      "http://127.0.0.1:8100",
+      want,
+      () => new Promise<never>(() => {}),
+      10,
+    );
+    expect(r.kind).toBe("absent");
+  });
+
+  it("returns absent instead of hanging when the body never arrives", async () => {
+    // 헤더는 200으로 왔지만 본문이 안 오는 경우. res.json()에서 매달린다.
+    const r = await probeEmbedContract(
+      "http://127.0.0.1:8100",
+      want,
+      async () => ({ status: 200, json: () => new Promise<never>(() => {}) }),
+      10,
+    );
     expect(r.kind).toBe("absent");
   });
 });
