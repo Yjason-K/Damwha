@@ -10,8 +10,10 @@ import {
   cancelLivePreparation,
   clearLiveCapture,
   getLiveRecorder,
+  hasLiveCapture,
   LiveCaptureBusy,
   prepareLiveRecorder,
+  stopActiveLiveCapture,
   subscribeLiveStatus,
 } from "./live-session";
 
@@ -328,5 +330,54 @@ describe("live-session registry", () => {
     mic.endDevice(); // 이미 실패한 뒤 다시 이벤트가 와도(예: 리스너 중복) 한 번만.
     await new Promise((r) => setTimeout(r, 0));
     expect(screen.getAllByText("녹음이 중단됐어요")).toHaveLength(1);
+  });
+
+  /**
+   * 데스크톱 종료 handshake(desktop-bridge.ts)가 쓰는 두 함수. desktop-bridge.test.ts는
+   * live-session 자체를 모킹하므로, 이 파일이 실제 registry·isLiveCapture 판정을
+   * 검증하는 유일한 자리다.
+   */
+  it("hasLiveCapture는 활성 녹음이 있을 때만 true다", async () => {
+    stubMic();
+    expect(hasLiveCapture()).toBe(false);
+    await startCapture("m1");
+    expect(hasLiveCapture()).toBe(true);
+  });
+
+  /**
+   * R9와 같은 함정 — meetingId만 보면 서버가 스스로 봉인한 뒤에도 "녹음 중"으로 남는다.
+   * hasLiveCapture가 isLiveCapture 판정을 그대로 쓰는지는 이 테스트로만 드러난다.
+   */
+  it("서버가 스스로 봉인한 캡처는 registry에 남아 있어도 hasLiveCapture가 false다", async () => {
+    stubMic();
+    vi.spyOn(apiClient, "post").mockResolvedValue({
+      status: 409,
+      data: { expected_offset: 460800000, code: "duration_limit" },
+    } as never);
+    const sealed = await startCapture("m1");
+    sealed.recorder.enqueue(new Uint8Array(CHUNK_BYTES));
+    await sealed.recorder.drain();
+    expect(sealed.recorder.status.sealed).toBe("duration_limit");
+    expect(hasLiveCapture()).toBe(false);
+  });
+
+  it("stopActiveLiveCapture는 화면의 종료 버튼과 같은 recorder.stop() 경로로 중지한다", async () => {
+    stubMic();
+    const post = vi.spyOn(apiClient, "post").mockResolvedValue({
+      status: 200,
+      data: { meeting_id: "m1", job_id: "job_1", outcome: "stopping" },
+    } as never);
+    const capture = await startCapture("m1");
+    await stopActiveLiveCapture();
+    expect(capture.recorder.status.phase).toBe("stopped");
+    expect(post).toHaveBeenCalledWith(
+      "/meetings/m1/live/stop",
+      expect.any(Uint8Array),
+      expect.anything(),
+    );
+  });
+
+  it("stopActiveLiveCapture는 활성 녹음이 없으면 아무 것도 하지 않는다", async () => {
+    await expect(stopActiveLiveCapture()).resolves.toBeUndefined();
   });
 });
