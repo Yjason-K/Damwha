@@ -1898,7 +1898,7 @@ MSG
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { migrationCheckSkipped, pendingMigrations } from "../src/services/api";
+import { apiSpec, migrationCheckSkipped, pendingMigrations } from "../src/services/api";
 
 const WARN =
   "[Nest] 123  - 09/12/2026  WARN [DatabaseService] 3 pending migration(s): " +
@@ -1924,6 +1924,20 @@ describe("pendingMigrations", () => {
 
   it("survives ANSI colour from the Nest logger", () => {
     expect(pendingMigrations(`\x1b[33m${WARN}\x1b[39m`)?.count).toBe(3);
+  });
+});
+
+describe("apiSpec shape", () => {
+  it("keeps watching health after it is ready", () => {
+    // 부팅 뒤 DB가 끊기면 API는 죽지 않고 503을 준다. 주기적 재확인이 없으면 그 전환을
+    // 아무도 관찰하지 못해 running/ok로 영원히 남는다 — P2-C11을 판정할 수 없다.
+    const spec = apiSpec({
+      verifyOwnListener: async () => true,
+      isPortOccupied: async () => false,
+      onPendingMigrations: () => undefined,
+      onMigrationCheckSkipped: () => undefined,
+    });
+    expect(spec.healthIntervalMs).toBeGreaterThan(0);
   });
 });
 
@@ -2148,7 +2162,7 @@ export function apiSpec(deps: ApiDeps): ServiceSpec {
 - [ ] **Step 5: 테스트가 통과하는지 확인한다**
 
 Run: `pnpm --filter damwha-desktop exec vitest run tests/api-spec.test.ts tests/stderr.test.ts`
-Expected: PASS — api-spec 6 tests, stderr 기존 + 5 tests
+Expected: PASS — api-spec 7 tests, stderr 기존 + 5 tests
 
 - [ ] **Step 6: 실제 API의 경고 문구를 1회 대조한다**
 
@@ -2540,6 +2554,12 @@ describe("workerSpec", () => {
     expect(r.kind).toBe("degraded");
   });
 
+  it("keeps watching health after it is ready", () => {
+    // worker도 ready 뒤 DB가 끊기면 _reconnect 루프에 들어가 프로세스는 살고 큐만 멈춘다.
+    // stderr 꼬리를 읽을 뿐이라 주기가 짧아도 값싸다.
+    expect(workerSpec(deps() as never).healthIntervalMs).toBeGreaterThan(0);
+  });
+
   it("reports failed when the process died", async () => {
     const spec = workerSpec(deps() as never);
     const r = await spec.readiness({ handle: handle("boom", false), owned: true }, ctx());
@@ -2618,6 +2638,12 @@ describe("embedSpec shape", () => {
     const spec = embedSpec({ probe: async () => ({ kind: "absent" }), freePort: async () => 8100 });
     expect(spec.gate).toBe(false);
     expect(spec.dependsOn).toEqual([]);
+  });
+
+  it("keeps watching health after it is ready", () => {
+    // 채택한 외부 embed가 내려가는 것도 이 경로로만 알아챈다.
+    const spec = embedSpec({ probe: async () => ({ kind: "absent" }), freePort: async () => 8100 });
+    expect(spec.healthIntervalMs).toBeGreaterThan(0);
   });
 
   it("allows far more than the default readiness window", () => {
@@ -2935,7 +2961,7 @@ export function embedSpec(deps: EmbedDeps): ServiceSpec {
 - [ ] **Step 6: 두 테스트가 통과하는지 확인한다**
 
 Run: `pnpm --filter damwha-desktop exec vitest run tests/worker-spec.test.ts tests/embed-spec.test.ts`
-Expected: PASS — worker 12 tests, embed 9 tests
+Expected: PASS — worker 13 tests, embed 10 tests
 
 - [ ] **Step 7: 실제 worker의 ready 문구와 대조한다**
 
