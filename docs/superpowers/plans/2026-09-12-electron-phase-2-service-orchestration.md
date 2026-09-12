@@ -3032,7 +3032,8 @@ MSG
 
 **Files:**
 - Create: `desktop/src/logs.ts`
-- Test: `desktop/tests/logs.test.ts`
+- Modify: `desktop/src/api-process.ts` (`makeSink`의 파일 쓰기 경로에만 ANSI 제거)
+- Test: `desktop/tests/logs.test.ts`, `desktop/tests/api-process.test.ts` (확장)
 
 **Interfaces:**
 - Consumes: Phase 1의 `ANSI_SGR`
@@ -3213,20 +3214,31 @@ export function stripAnsi(text: string): string {
 Run: `pnpm --filter damwha-desktop exec vitest run tests/logs.test.ts`
 Expected: PASS — 10 tests
 
-- [ ] **Step 5: `launchWithUv`와 Phase 1의 `makeSink`가 ANSI를 벗기게 한다**
+- [ ] **Step 5: `makeSink`가 로그 파일에 쓸 때만 ANSI를 벗기게 한다**
 
-`desktop/src/services/worker.ts`의 `append`를 고친다:
+**이 단계는 Task 8 이후 대상이 바뀌었다.** 계획 초판은 `worker.ts`의 손수 만든 `append`를
+고치라고 했으나, Task 8의 수정 라운드가 그것을 없애고 `api-process.ts`의 `makeSink`를
+재사용하게 했다(`worker.ts:100-101`이 `sink.write(b, false/true)`를 부른다). 이제 세 런처 중
+둘이 같은 sink를 쓰므로 **고칠 자리는 `makeSink` 한 곳**이다.
+
+`desktop/src/api-process.ts`의 `makeSink`에서 파일 쓰기 경로에만 `stripAnsi`를 건다:
 
 ```ts
-  const append = (b: Buffer) => {
-    const text = b.toString();
-    out.write(stripAnsi(text));
-    tail = (tail + text).slice(-32_000);
-  };
+    write(chunk: Buffer | string, isError: boolean) {
+      const text = chunk.toString();
+      // 파일에만 벗긴다. worker는 진행 바와 로그가 같은 stderr를 쓰고(console.install_logging),
+      // NestJS Logger도 TTY가 아닌 stderr에 색상을 쓴다 — 그대로 두면 제어문자가 글자로 남는다.
+      out?.write(stripAnsi(text));
+      if (isError) tail = (tail + text).slice(-TAIL_LIMIT);
+      else stdoutTail = (stdoutTail + text).slice(-TAIL_LIMIT);
+    },
 ```
 
-`stripAnsi`를 import한다. **tail은 벗기지 않는다** — 화면에 올릴 때 `failureBlock`이 이미 벗기고,
-여기서 또 벗기면 Phase 1의 `lastMeaningfulLine` 테스트가 가정하는 입력이 달라진다.
+**두 tail은 벗기지 않는다** — 화면에 올릴 때 `failureBlock`·`lastMeaningfulLine`이 이미 벗기고,
+여기서 또 벗기면 Phase 1의 `stderr.test.ts`가 가정하는 입력이 달라진다.
+
+`logs.ts`가 `stderr.ts`의 `ANSI_SGR`을 쓰고 `api-process.ts`가 `logs.ts`의 `stripAnsi`를 쓰므로
+import 순환이 생기지 않는지 확인한다(`stderr.ts`는 아무것도 import하지 않는다).
 
 - [ ] **Step 6: 전체 테스트·타입 검사 후 커밋**
 
