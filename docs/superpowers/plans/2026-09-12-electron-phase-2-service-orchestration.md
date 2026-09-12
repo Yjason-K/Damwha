@@ -538,6 +538,11 @@ export interface ServiceSpec {
   /** ← Phase 3·4가 갈아끼우는 유일한 지점. */
   launch(ctx: LaunchContext): Promise<LaunchResult>;
   readiness(result: LaunchResult, ctx: LaunchContext): Promise<ReadinessResult>;
+  /**
+   * 이 서비스만의 준비 유예. 없으면 감독자 기본값. embed는 bge-m3를 import 시점에 올려
+   * 2026-09-12 실측으로 31초가 걸렸고(따뜻한 캐시), 모델 캐시가 비면 훨씬 길다.
+   */
+  readyTimeoutMs?: number;
   stop(result: LaunchResult, plan: StopPlan): Promise<StopOutcome>;
   restart: { maxAttempts: number; backoffMs: readonly number[] } | "never";
 }
@@ -1058,7 +1063,7 @@ export function createSupervisor(
    * 우회하면 다음 사람이 그 값을 DB 이야기로 읽는다. 폴링은 여기 여덟 줄이면 된다.
    */
   async function awaitReady(rt: Runtime): Promise<boolean> {
-    const timeoutMs = hooks.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS;
+    const timeoutMs = rt.spec.readyTimeoutMs ?? hooks.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS;
     const intervalMs = hooks.readyIntervalMs ?? DEFAULT_READY_INTERVAL_MS;
     const deadline = Date.now() + timeoutMs;
     let last: ReadinessResult = { kind: "not-ready" };
@@ -1548,8 +1553,9 @@ MSG
 
 - [ ] **Step 1: 실패 테스트를 쓴다**
 
-`desktop/tests/postgres.test.ts`. **Task 1 Step 1·2에서 잰 실제 출력으로 아래 세 상수를 교체한다.**
-아래는 compose v2.2x의 JSONL 형태를 가정한 것이다.
+`desktop/tests/postgres.test.ts`. 아래 세 상수는 **2026-09-12 실측값이다**(Docker Compose v5.5.0,
+이 기계). 출력은 JSONL이고 `Name`·`Service`·`State`·`Health` 필드가 있으며, 멈춘 컨테이너는
+`ps`에서 **빠지고** `ps -a`에만 `State: "exited"`, `Health: ""`로 나온다 — `-a`가 필수다.
 
 ```ts
 import { describe, expect, it, vi } from "vitest";
@@ -1647,6 +1653,19 @@ describe("postgresSpec", () => {
   });
 
   it("reports the daemon being down as a failure that names the fix", async () => {
+    // 2026-09-12 실측 문구(compose v5.5.0). 예전 Docker의 "Cannot connect to the Docker
+    // daemon at …"도 같은 분기를 타야 한다.
+    const spec = postgresSpec(async () => ({
+      stdout: "",
+      stderr:
+        "failed to connect to the docker API at unix:///var/run/docker.sock; check if the path " +
+        "is correct and if the daemon is running: dial unix: connect: no such file or directory",
+      code: 1,
+    }));
+    await expect(spec.launch(ctx())).rejects.toThrow(/Docker Desktop/);
+  });
+
+  it("also recognises the older Docker wording", async () => {
     const spec = postgresSpec(async () => ({
       stdout: "",
       stderr: "Cannot connect to the Docker daemon at unix:///var/run/docker.sock.",
@@ -1702,8 +1721,14 @@ export type ComposeState =
   | { kind: "absent" }
   | { kind: "unreadable"; detail: string };
 
-/** 데몬이 없을 때 docker CLI가 내는 문구. Task 1 Step 3의 실측으로 확정한다. */
-const DAEMON_DOWN = /cannot connect to the docker daemon|is the docker daemon running/i;
+/**
+ * 데몬이 없을 때 docker CLI가 내는 문구. 2026-09-12 실측(compose v5.5.0):
+ *   failed to connect to the docker API at unix://…; check if the path is correct and if the
+ *   daemon is running: dial unix …: connect: no such file or directory   (exit 1, stdout 빈 문자열)
+ * 예전 Docker는 "Cannot connect to the Docker daemon at …"를 냈으므로 둘 다 받는다.
+ */
+const DAEMON_DOWN =
+  /cannot connect to the docker daemon|failed to connect to the docker api|daemon is running/i;
 const DAEMON_FIX = "Docker Desktop이 실행 중이 아니에요. 실행한 뒤 다시 시도해 주세요.";
 
 function composeFile(ctx: LaunchContext): string {
@@ -1792,7 +1817,7 @@ export function postgresSpec(run: DockerRunner): ServiceSpec {
 - [ ] **Step 4: 테스트가 통과하는지 확인한다**
 
 Run: `pnpm --filter damwha-desktop exec vitest run tests/postgres.test.ts`
-Expected: PASS — 16 tests
+Expected: PASS — 17 tests
 
 - [ ] **Step 5: 실제 compose 출력으로 파서를 확인한다**
 
@@ -2583,6 +2608,12 @@ describe("embedSpec shape", () => {
     expect(spec.dependsOn).toEqual([]);
   });
 
+  it("allows far more than the default readiness window", () => {
+    // 2026-09-12 실측 31초(따뜻한 캐시). 기본 60초는 캐시가 식으면 부족하다.
+    const spec = embedSpec({ probe: async () => ({ kind: "absent" }), freePort: async () => 8100 });
+    expect(spec.readyTimeoutMs).toBeGreaterThanOrEqual(120_000);
+  });
+
   it("refuses to launch without uv", async () => {
     const spec = embedSpec({ probe: async () => ({ kind: "absent" }), freePort: async () => 8100 });
     await expect(
@@ -2829,6 +2860,9 @@ export function embedSpec(deps: EmbedDeps): ServiceSpec {
     // 앱 전체를 세우는 것은 손해이고, 그동안에도 회의 목록과 업로드는 동작한다 (스펙 §6.7).
     dependsOn: [],
     gate: false,
+    // 2026-09-12 실측: 최소 PATH + 절대 경로 uv로 /health 200까지 31초(따뜻한 모델 캐시).
+    // 기본 60초로는 캐시가 식은 첫 실행을 못 덮는다.
+    readyTimeoutMs: 180_000,
     async prepare(ctx: LaunchContext) {
       const host = ctx.env.EMBED_SERVICE_HOST ?? "127.0.0.1";
       const wanted = ctx.env.EMBED_SERVICE_PORT ?? "8100";
@@ -2883,7 +2917,7 @@ export function embedSpec(deps: EmbedDeps): ServiceSpec {
 - [ ] **Step 6: 두 테스트가 통과하는지 확인한다**
 
 Run: `pnpm --filter damwha-desktop exec vitest run tests/worker-spec.test.ts tests/embed-spec.test.ts`
-Expected: PASS — worker 12 tests, embed 8 tests
+Expected: PASS — worker 12 tests, embed 9 tests
 
 - [ ] **Step 7: 실제 worker의 ready 문구와 대조한다**
 

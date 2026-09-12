@@ -139,6 +139,31 @@
 **재검증 결과: 통과.** 지적 6건을 반영한 뒤 다시 훑어 정의 없는 식별자 0건, 시그니처 불일치 0건,
 경로 불일치 0건을 확인했다.
 
+## 2.4 사전 실측 (계획 Task 1)
+
+구현 전에 스펙 §12의 미확정 둘을 실측으로 닫았다. 측정이 계획의 결함 하나를 잡았다.
+
+| 항목 | 측정값 (2026-09-12, 이 기계) |
+| --- | --- |
+| Docker Compose | v5.5.0 |
+| `ps --format json` 형태 | **JSONL** (줄마다 객체, 배열 아님). 필드 `Name`·`Service`·`State`·`Health` |
+| running + healthy | `{"State":"running","Health":"healthy"}` |
+| 멈춘 컨테이너 | `ps`에서 **빠진다.** `ps -a`에만 `{"State":"exited","Health":""}` → **`-a` 필수** |
+| 데몬 없음 | exit **1**, stdout 빈 문자열, stderr `failed to connect to the docker API at unix://…; check if the path is correct and if the daemon is running: …` |
+| GUI 앱 PATH | `launchctl getenv PATH`가 비어 있다 → 시스템 기본 `/usr/bin:/bin:/usr/sbin:/sbin`. 그 넷에 `uv`·`docker` **둘 다 없다**(실제 `/opt/homebrew/bin/uv`, `/usr/local/bin/docker`) |
+| 최소 PATH + 절대 경로 uv | `uv run --directory be/worker python -c …` → `ok 3.12.13`. **동작한다** |
+| embed 준비 시간 | `/health` 200까지 **31초** (따뜻한 모델 캐시) |
+| embed `/embed` 응답 | `model=BAAI/bge-m3`, `dimension=1024`, 벡터 길이 1024 |
+
+**측정이 잡은 계획 결함 1건.** 계획의 `DAEMON_DOWN` 정규식
+`/cannot connect to the docker daemon|is the docker daemon running/i`가 **실제 문구를 잡지 못한다** —
+Docker가 "failed to connect to the docker API … if the daemon is running"으로 말한다. 세 패턴으로
+넓히고(옛 문구 포함) Task 5 테스트에 두 케이스를 각각 뒀다. 이것이 Task 1을 구현 앞에 둔 이유다.
+
+**측정이 확인한 설계 판단 1건.** embed 31초는 사전 스캔의 C-4(비게이트 서비스가 직렬로 대기해
+실제로는 게이트가 된다)가 실제 문제였음을 뜻한다. 그 31초가 창 표시를 그만큼 늦췄을 것이다.
+감독자가 비게이트를 배경으로 돌리도록 고쳤고, embed에는 서비스별 준비 유예 180초를 뒀다.
+
 ## 3. 단계별 실행과 리뷰
 
 **아직 수행하지 않았다.** 각 단계의 구현 커밋, 검증 명령과 출력, 리뷰 대상 diff와 지적·조치를
