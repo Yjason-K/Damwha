@@ -1616,6 +1616,11 @@ describe("postgresSpec", () => {
     expect(postgresSpec(ok).restart).toBe("never");
   });
 
+  it("keeps watching health after it is ready", () => {
+    // 없으면 컨테이너가 내려가도 running/ok로 남는다 — P2-C11을 판정할 수 없다.
+    expect(postgresSpec(ok).healthIntervalMs).toBeGreaterThan(0);
+  });
+
   it("is a gate", () => {
     expect(postgresSpec(ok).gate).toBe(true);
   });
@@ -1779,6 +1784,9 @@ export function postgresSpec(run: DockerRunner): ServiceSpec {
     id: "postgres",
     dependsOn: [],
     gate: true,
+    // 준비 뒤에도 이 주기로 다시 본다. 없으면 컨테이너가 내려가도 아무도 모르고 running/ok로
+    // 남는다. docker compose ps는 서브프로세스 스폰이라 30초로 둔다 (스펙 §6.6, P2-C11).
+    healthIntervalMs: 30_000,
     async detectExternal(ctx) {
       const s = await status(ctx);
       // 이미 떠 있으면 그게 정상이다. 우리가 띄웠든 사람이 띄웠든 컨테이너는 하나다.
@@ -1817,7 +1825,7 @@ export function postgresSpec(run: DockerRunner): ServiceSpec {
 - [ ] **Step 4: 테스트가 통과하는지 확인한다**
 
 Run: `pnpm --filter damwha-desktop exec vitest run tests/postgres.test.ts`
-Expected: PASS — 17 tests
+Expected: PASS — 18 tests
 
 - [ ] **Step 5: 실제 compose 출력으로 파서를 확인한다**
 
@@ -2054,6 +2062,10 @@ export function apiSpec(deps: ApiDeps): ServiceSpec {
     id: "api",
     dependsOn: ["postgres"],
     gate: true,
+    // 부팅 뒤 DB가 끊기면 API는 죽지 않고 503을 준다. 그 전환을 관찰하는 유일한 수단이
+    // 이 주기적 재확인이다 — 없으면 running/ok로 영원히 남는다 (스펙 §6.6, P2-C11).
+    // /api/health 한 번이라 값싸다.
+    healthIntervalMs: 10_000,
     async detectExternal() {
       // 외부 API는 채택 대상도 비기동 대상도 아니다 — launch()가 포트를 옮긴다 (Phase 1 §6.4).
       return { kind: "absent" };
@@ -2785,6 +2797,9 @@ export function workerSpec(deps: WorkerDeps): ServiceSpec {
     id: "worker",
     dependsOn: ["postgres"],
     gate: false,
+    // stderr 꼬리를 읽을 뿐이라 사실상 공짜다. ready 줄 뒤에 reconnect 실패가 나타나는
+    // 순간을 잡는다 (스펙 §6.6).
+    healthIntervalMs: 10_000,
     async detectExternal() {
       const pids = await deps.listExternal();
       if (pids.length === 0) return { kind: "absent" };
@@ -2863,6 +2878,9 @@ export function embedSpec(deps: EmbedDeps): ServiceSpec {
     // 2026-09-12 실측: 최소 PATH + 절대 경로 uv로 /health 200까지 31초(따뜻한 모델 캐시).
     // 기본 60초로는 캐시가 식은 첫 실행을 못 덮는다.
     readyTimeoutMs: 180_000,
+    // 짧은 문자열 임베딩 1회라 30초 주기면 무시할 만하다. 채택한 외부 embed가 내려가는
+    // 것도 이 경로로 알아챈다 (스펙 §6.6).
+    healthIntervalMs: 30_000,
     async prepare(ctx: LaunchContext) {
       const host = ctx.env.EMBED_SERVICE_HOST ?? "127.0.0.1";
       const wanted = ctx.env.EMBED_SERVICE_PORT ?? "8100";
