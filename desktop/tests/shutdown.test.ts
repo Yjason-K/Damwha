@@ -201,6 +201,27 @@ describe("stopWorkerProcess", () => {
     expect([...killed].sort((a, b) => a - b)).toEqual([4242, 5003, 5004]);
   });
 
+  it("gives a SIGKILLed process time to be reaped instead of reporting it leaked", async () => {
+    // SIGKILL은 즉시가 아니라 커널이 그 프로세스를 다음에 깨울 때 반영되고, 그 뒤로도 부모가
+    // 거둬들이기 전까지 kill(pid,0)은 성공한다. 폴 한 번 뒤의 스냅샷 하나로 판정하면
+    // **거둬지는 중일 뿐인 pid**가 "아직 살아 있을 수 있는 프로세스"로 사람에게 올라간다 —
+    // 거짓 누수 보고는 진짜 누수와 똑같은 걱정을 사용자에게 지운다.
+    let look = 0;
+    const out = await stopWorkerProcess(handle(999), {
+      graceMs: 10,
+      pollMs: 5,
+      signal: () => undefined,
+      descendants: async () => new Set([6001]),
+      onGraceExpired: async () => true,
+      maxWaits: 2,
+      // handle(999)라 1·3단계 대기가 모두 실패해 cleanUnlessOrphans는 안 탄다 — 아래
+      // 호출은 전부 4단계 SIGKILL 뒤의 확인이다. 첫 확인에서는 아직 거둬지지 않았다.
+      stillAlive: async (pids) => (++look === 1 ? [...pids] : []),
+    });
+    expect(look).toBeGreaterThan(1);
+    expect(out).toEqual({ stopped: true, leaked: [] });
+  });
+
   it("reports what it could not clean instead of claiming success", async () => {
     const out = await stopWorkerProcess(handle(999), {
       graceMs: 10,
@@ -554,11 +575,17 @@ describe("stopWorkerProcess", () => {
         return pids.filter((p) => alive.has(p));
       },
     });
-    // handle(999)라 1·3단계 대기가 모두 실패하고 cleanUnlessOrphans는 안 탄다 — 이
-    // 호출은 5단계의 그것 하나뿐이다.
-    expect(seen).toHaveLength(1);
+    // handle(999)라 1·3단계 대기가 모두 실패하고 cleanUnlessOrphans는 안 탄다 — 여기
+    // 보이는 호출은 전부 5단계의 것이다. 5단계는 SIGKILL 직후 한 번만 보지 않고 상한을 둔
+    // 재확인을 돌리므로(거둬지는 중인 pid를 누수로 보고하지 않기 위해서다) 여러 번 나올 수
+    // 있다. 판정 대상은 **첫 확인이 무엇을 받았는가**다 — 그 목록에 캡처 집합이 없으면
+    // 진입 때만 보였던 고아는 영영 확인되지 않는다.
+    expect(seen.length).toBeGreaterThan(0);
     expect(seen[0]).toContain(5001);
     expect(seen[0]).toContain(4242);
+    // 재확인은 **직전 생존자만** 다시 묻는다. 한 번 죽은 것으로 읽힌 pid를 다시 묻지
+    // 않으므로, 그 사이 OS가 그 번호를 재사용해도 남의 프로세스를 누수로 올리지 않는다.
+    for (const later of seen.slice(1)) expect(seen[0]).toEqual(expect.arrayContaining(later));
     expect(out).toEqual({ stopped: false, leaked: [5001], detail: STOP_DETAIL.orphans });
   });
 

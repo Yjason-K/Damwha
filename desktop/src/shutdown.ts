@@ -107,6 +107,13 @@ function processExists(pid: number): boolean {
  *    관계는 그대로라 ps의 ppid BFS가 여전히 찾아낸다.
  * 5. 그래도 남으면 pid를 돌려준다. 정리 실패를 조용히 넘기지 않는다.
  */
+/**
+ * 4단계 SIGKILL 뒤 "정말 없어졌나"를 몇 번까지 다시 볼 것인가. 폴 간격(`pollMs`)마다 한 번씩
+ * 보므로 실제 상한은 `REAP_CHECKS * pollMs`다(프로덕션의 200ms로 1초). 상한이 있다는 사실이
+ * 요구사항이다 — 이 루프가 무한이면 종료가 거둬지지 않는 좀비 하나에 영영 매달린다.
+ */
+const REAP_CHECKS = 5;
+
 export async function stopWorkerProcess(
   handle: ServiceHandle,
   opts: StopWorkerOptions,
@@ -259,12 +266,23 @@ export async function stopWorkerProcess(
   // 남의 프로세스로 간다. 스냅샷은 "죽었나"를 읽는 데만 쓰고 죽이지는 않는다.
   const tree = await snapshotDescendants();
   for (const target of [pid, ...tree]) opts.signal(target, "SIGKILL");
-  await new Promise((r) => setTimeout(r, opts.pollMs));
 
   // 5단계. 지금까지 찍어 둔 스냅샷들도 후보에 넣는다 — 그때 우리 자손이었는데 끝까지
   // 살아 있다면 그 사이 부모를 잃어 BFS에서 사라졌더라도 여전히 우리가 남긴 프로세스다.
-  const candidates = [...new Set([pid, ...tree, ...capturedDescendants])];
-  return verdict(await survivors(candidates));
+  //
+  // **한 번만 보지 않는다.** SIGKILL은 즉시가 아니라 커널이 그 프로세스를 다음에 깨울 때
+  // 반영되고, 그 뒤로도 부모가 거둬들이기 전까지 `kill(pid,0)`은 성공한다. 폴 한 번 뒤의
+  // 스냅샷 하나로 판정하면 **거둬지는 중일 뿐인 pid**가 사람에게 "아직 살아 있을 수 있는
+  // 프로세스"로 올라간다 — 거짓 누수 보고는 진짜 누수와 똑같은 걱정을 사용자에게 지운다.
+  // 그래서 짧게, 그러나 **상한을 두고** 다시 본다. 매 바퀴 후보를 직전 생존자로 좁히므로
+  // 한 번 죽은 것으로 읽힌 pid를 다시 묻지 않는다(=OS가 그 번호를 재사용해도 안 잡힌다).
+  let left = [...new Set([pid, ...tree, ...capturedDescendants])];
+  for (let i = 0; i < REAP_CHECKS; i += 1) {
+    await new Promise((r) => setTimeout(r, opts.pollMs));
+    left = await survivors(left);
+    if (left.length === 0) break;
+  }
+  return verdict(left);
 }
 
 export interface InFlight {
