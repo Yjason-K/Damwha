@@ -186,4 +186,34 @@ describe("probeEmbedContract", () => {
     );
     expect(r.kind).toBe("absent");
   });
+
+  it("aborts the signal it handed the fetch when the timeout fires, and not otherwise", async () => {
+    // 매달림 안전성은 두 가지에 기대고 있다: (1) 내부 경주가 우리 쪽 판정을 끝내는 것,
+    // (2) 전역 fetch가 AbortSignal을 지켜 실제 요청을 정리하는 것. 주입한 fake로 (2)를
+    // 증명할 수는 없다 — 그건 Node의 몫이다. 대신 증명할 수 있는 우리 쪽 계약을 고정한다:
+    // 타임아웃이 울린 시점에 우리가 넘긴 signal이 abort되어 있어야 한다. 그러지 않으면
+    // 경주만 이기고 요청은 그대로 떠 있어, 매 프로브가 소켓을 하나씩 남긴다.
+    let captured: AbortSignal | undefined;
+    const timedOut = await probeEmbedContract(
+      "http://127.0.0.1:8100",
+      want,
+      (_url, init) => {
+        captured = init.signal;
+        return new Promise<never>(() => {});
+      },
+      10,
+    );
+    expect(timedOut.kind).toBe("absent");
+    expect(captured?.aborted).toBe(true);
+
+    // 성공 경로에서는 abort하지 않는다 — 이걸 같이 못 박지 않으면 위 단정이 공허해진다
+    // (늘 abort된 signal을 넘겨도 통과하니까). finally의 clearTimeout이 이걸 보장한다.
+    let onSuccess: AbortSignal | undefined;
+    const matched = await probeEmbedContract("http://127.0.0.1:8100", want, async (_url, init) => {
+      onSuccess = init.signal;
+      return { status: 200, json: async () => ({ model: want.model, dimension: want.dimension }) };
+    });
+    expect(matched.kind).toBe("match");
+    expect(onSuccess?.aborted).toBe(false);
+  });
 });
