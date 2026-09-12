@@ -1,4 +1,5 @@
 import inspect
+import logging
 import sys
 import threading
 from types import SimpleNamespace
@@ -241,3 +242,54 @@ def test_child_spawn_uses_sys_executable_and_new_session():
 
 def test_run_loop_removed():
     assert not hasattr(m, "run_loop")
+
+
+def test_supervisor_logs_ready_after_db_connect(conn, pg_url, caplog):
+    # 기존 `supervisor <id> started`는 run_supervisor 호출 **전**에 찍히므로
+    # (__main__.py:296 → :298 → :107) 준비 신호로 쓸 수 없다. DB에 실제로 붙은 뒤
+    # 찍히는 줄이 데스크톱 앱의 준비 계약이다.
+    caplog.set_level(logging.INFO, logger="damwha_worker")
+    shutdown = threading.Event()
+    t = threading.Timer(0.05, shutdown.set)
+    t.start()
+    run_supervisor(
+        _peek_settings(),
+        shutdown,
+        connect_fn=lambda: db.connect(pg_url),
+        spawn_fn=lambda: _StubProc(0),
+        child_holder={"proc": None, "count": 0},
+    )
+    t.cancel()
+    # r.message는 caplog 핸들러가 이미 substitute한 최종 문자열이라 다시 %-format하면
+    # (브리핑 원안이 그랬다) 인자가 남아 TypeError가 난다 — getMessage()로 재확인한다.
+    assert any("ready (db connected)" in r.getMessage() for r in caplog.records)
+
+
+def test_supervisor_logs_ready_again_after_reconnect(conn, pg_url, monkeypatch, caplog):
+    # 한 번만 찍으면 ready는 판정되지만 degraded에서 ok로 돌아온 것을 관찰할 수 없다
+    # (스펙 §6.6). peek 예외 → 재접속 경로에서도 같은 줄이 나와야 한다.
+    caplog.set_level(logging.INFO, logger="damwha_worker")
+    peek_calls = {"count": 0}
+    real_peek = db.peek_queued
+
+    def _flaky_peek(c):
+        peek_calls["count"] += 1
+        if peek_calls["count"] == 1:
+            raise RuntimeError("simulated db blip")
+        return real_peek(c)
+
+    monkeypatch.setattr(db, "peek_queued", _flaky_peek)
+
+    shutdown = threading.Event()
+    monkeypatch.setattr(shutdown, "wait", lambda t: (shutdown.set(), True)[1])
+
+    run_supervisor(
+        _peek_settings(),
+        shutdown,
+        connect_fn=lambda: db.connect(pg_url),
+        spawn_fn=lambda: _StubProc(0),
+        child_holder={"proc": None, "count": 0},
+    )
+
+    ready_lines = [r for r in caplog.records if "ready (db connected)" in r.getMessage()]
+    assert len(ready_lines) == 2  # 최초 접속 + peek 예외 후 재접속
