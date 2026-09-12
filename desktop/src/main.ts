@@ -247,7 +247,9 @@ function openWindow(): BrowserWindow {
     }).catch((e: unknown) => {
       // 여기서 삼키면 창이 영영 안 닫힌다 — preventDefault를 이미 불렀기 때문이다.
       // 핸드셰이크 실패가 종료를 막지 않는 것과 같은 규칙을 창에도 적용한다: 닫는다.
-      // API는 살아 있으므로 sweeper가 90초 뒤 봉인한다.
+      // API는 살아 있으므로 sweeper가 90초 뒤 봉인한다. 반대 선택(창을 열어 둔다)도
+      // 방어 가능해 한 번 올렸고, **한 번 실패한 모달 뒤에 사용자를 가두는 것보다 종료
+      // 경로와의 일관성이 낫다**는 판정을 받았다. 다시 뒤집지 않는다.
       appendSupervisorLog(`창을 닫는 중 예외 — ${reasonOf(e)}`);
       closeNow();
     });
