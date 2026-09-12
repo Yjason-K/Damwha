@@ -180,7 +180,17 @@ export function createSupervisor(
         });
         return false;
       }
-      last = await rt.spec.readiness(result, ctx);
+      try {
+        last = await rt.spec.readiness(result, ctx);
+      } catch (e) {
+        // 준비 판정도 바깥 명령을 돌린다 (postgres는 docker compose ps, api는 HTTP). 그것이
+        // 던지면 bringOnce가 통째로 거부해 아래의 실패 정리 — 자식을 치우고 rt.result를 null로
+        // 되돌리는 줄 — 이 건너뛰어지고, 남은 rt.result가 재진입 가드에 걸려 그 서비스의 재시도를
+        // 앱이 사는 내내 막는다. 게이트면 그 거부가 runFrom을 타고 start()까지 올라간다.
+        // detectExternal과 probeHealth가 이미 그렇게 하듯, 예외도 실패 판정으로 받는다.
+        last = { kind: "failed", detail: `준비 확인이 실패했어요 — ${reason(e)}` };
+        log(`${rt.spec.id}: 준비 확인에서 예외 — ${reason(e)}`);
+      }
       if (applyReadiness(rt.spec.id, last)) return true;
       if (last.kind === "failed") break;
       if (Date.now() >= deadline) break;

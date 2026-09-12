@@ -617,6 +617,46 @@ describe("supervisor 배경 실패 처리 (I1)", () => {
     expect(st.detail).toContain("ps를 못 돌렸어요");
   });
 
+  it("treats a throwing readiness as a failed probe instead of blowing up the start sequence", async () => {
+    // postgres의 readiness는 docker compose ps를 돌리고 그 출력을 판다 — 파서가 던지면 여기로
+    // 온다. 잡지 않으면 bringOnce가 통째로 거부해 (1) 실패 정리가 건너뛰어져 rt.result가 남고,
+    // 남은 rt.result는 재진입 가드에 걸려 이 서비스의 재시도를 앱이 사는 내내 막으며,
+    // (2) 게이트라서 그 거부가 runFrom을 타고 start()까지 올라간다.
+    const stop = vi.fn(async () => ({ stopped: true, leaked: [] }));
+    const launch = vi.fn(async () => ({ handle: null, owned: true }));
+    const later = vi.fn(async () => ({ handle: null, owned: true }));
+    let throwing = true;
+    const s = createSupervisor(
+      [
+        spec("postgres", {
+          launch,
+          stop,
+          readiness: async () => {
+            if (throwing) throw new TypeError("Cannot read properties of null (reading 'Service')");
+            return { kind: "ready" };
+          },
+        }),
+        spec("api", { dependsOn: ["postgres"], launch: later }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 30, readyIntervalMs: 5 },
+    );
+
+    await expect(s.start()).resolves.toBeUndefined();
+    const st = s.statuses().find((x) => x.id === "postgres")!;
+    expect(st.process).toBe("failed");
+    expect(st.detail).toContain("Cannot read properties of null");
+    // 게이트가 막혔으니 뒤는 뜨지 않는다 — failed 판정을 받은 게이트와 똑같이 군다.
+    expect(later).not.toHaveBeenCalled();
+    // 실패 경로가 돌았다: 우리가 띄운 것을 치웠고,
+    expect(stop).toHaveBeenCalled();
+    // rt.result를 비워 뒀기에 메뉴의 "다시 시도"가 실제로 다시 띄운다.
+    throwing = false;
+    await s.retry();
+    expect(launch).toHaveBeenCalledTimes(2);
+    expect(s.statuses().find((x) => x.id === "postgres")!.process).toBe("running");
+  });
+
   it("turns an exception in a background bring into a failed status", async () => {
     const s = createSupervisor(
       [
