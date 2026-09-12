@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ANSI_SGR, lastMeaningfulLine } from "../src/stderr";
+import { ANSI_SGR, failureBlock, lastMeaningfulLine } from "../src/stderr";
 
 const RED = "\x1b[31m";
 const RESET = "\x1b[39m";
@@ -60,5 +60,42 @@ describe("lastMeaningfulLine", () => {
       "\n",
     );
     expect(lastMeaningfulLine(stderr)).toBe("at Object.<anonymous> (/app/dist/main.js:1:1)");
+  });
+});
+
+describe("failureBlock", () => {
+  it("keeps every line of a multi-line cause", () => {
+    // Phase 1의 lastMeaningfulLine은 한 줄만 골라 zod 원인이 `startup failed: [`까지만 보였다.
+    const stderr = [
+      "[Nest] LOG starting",
+      "startup failed: [",
+      '  { "path": ["SUMMARY_LLM_MODEL"], "message": "Invalid input" }',
+      "]",
+    ].join("\n");
+    const block = failureBlock(stderr);
+    expect(block).toContain("startup failed:");
+    expect(block).toContain("SUMMARY_LLM_MODEL");
+    expect(block.endsWith("]")).toBe(true);
+  });
+
+  it("falls back to the last meaningful line when there is no startup failure", () => {
+    expect(failureBlock("[Nest] LOG a\nsomething broke")).toBe("something broke");
+  });
+
+  it("caps the block so a runaway stderr cannot fill the screen", () => {
+    const stderr = [
+      "startup failed: [",
+      ...Array.from({ length: 200 }, (_, i) => `  line ${i}`),
+    ].join("\n");
+    expect(failureBlock(stderr, 10).split("\n")).toHaveLength(10);
+  });
+
+  it("strips ANSI from the whole block", () => {
+    expect(failureBlock("\x1b[31mstartup failed: nope\x1b[39m")).toBe("startup failed: nope");
+  });
+
+  it("returns an empty string for empty input", () => {
+    expect(failureBlock("")).toBe("");
+    expect(failureBlock("   \n  ")).toBe("");
   });
 });

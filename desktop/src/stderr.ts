@@ -43,3 +43,31 @@ export function lastMeaningfulLine(stderr: string): string {
   }
   return "";
 }
+
+/** 원인 블록의 기본 상한. 화면이 감당할 수 있는 줄 수이고, 전문은 로그 파일에 있다. */
+const BLOCK_LIMIT = 24;
+
+/**
+ * `startup failed:`부터 끝까지를 블록으로 돌려준다.
+ *
+ * lastMeaningfulLine은 한 줄만 고르므로 zod 검증 실패처럼 여러 줄인 원인이 화면에
+ * `startup failed: [`까지만 보였다(Phase 1 결과의 남은 한계). 원인 문장은 로그에만 있었다.
+ * 그 줄부터 끝까지를 상한 안에서 그대로 올린다.
+ */
+export function failureBlock(stderr: string, maxLines: number = BLOCK_LIMIT): string {
+  const lines = stderr
+    .replace(ANSI_SGR, "")
+    .split("\n")
+    .map((l) => l.trimEnd())
+    .filter((l) => l.trim().length > 0);
+
+  let start = -1;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (lines[i].includes("startup failed:")) {
+      start = i;
+      break;
+    }
+  }
+  if (start < 0) return lastMeaningfulLine(stderr);
+  return lines.slice(start, start + maxLines).join("\n");
+}
