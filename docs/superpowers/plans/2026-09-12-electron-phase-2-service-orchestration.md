@@ -770,7 +770,6 @@ Expected: FAIL — `Cannot find module '../src/services/supervisor'`
 - [ ] **Step 4: `supervisor.ts`를 쓴다**
 
 ```ts
-import { waitForReady } from "../readiness";
 import type {
   LaunchContext,
   LaunchResult,
@@ -869,29 +868,38 @@ export function createSupervisor(
     return false;
   };
 
+  /**
+   * Phase 1의 waitForReady를 쓰지 않는다. 그 함수의 결과 어휘는 API 하나를 위한 것
+   * ("ready" / "db-unreachable" / "child-exited" / "timeout")이라 ReadinessResult 넷을
+   * 그대로 실어 나를 수 없고, `failed`를 "db-unreachable"에 태워 조기 탈출시키는 식으로
+   * 우회하면 다음 사람이 그 값을 DB 이야기로 읽는다. 폴링은 여기 여덟 줄이면 된다.
+   */
   async function awaitReady(rt: Runtime): Promise<boolean> {
+    const timeoutMs = hooks.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS;
+    const intervalMs = hooks.readyIntervalMs ?? DEFAULT_READY_INTERVAL_MS;
+    const deadline = Date.now() + timeoutMs;
     let last: ReadinessResult = { kind: "not-ready" };
-    const outcome = await waitForReady({
-      probe: async () => {
-        last = await rt.spec.readiness(rt.result!, ctx);
-        if (last.kind === "ready" || last.kind === "degraded") return "ready";
-        if (last.kind === "failed") return "db-unreachable"; // waitForReady의 조기 탈출 경로를 빌린다
-        return "no-response";
-      },
-      isAlive: () => rt.result?.handle?.alive() ?? true,
-      timeoutMs: hooks.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
-      intervalMs: hooks.readyIntervalMs ?? DEFAULT_READY_INTERVAL_MS,
-    });
 
-    if (outcome.kind === "ready" || outcome.kind === "db-unreachable") {
+    for (;;) {
+      // 프로세스가 있는 서비스는 죽으면 더 기다릴 이유가 없다. 핸들이 없는 서비스
+      // (postgres 컨테이너)는 이 검사를 건너뛴다.
+      if (rt.result?.handle !== null && rt.result?.handle !== undefined && !rt.result.handle.alive()) {
+        const code = rt.result.handle.exitCode();
+        set(rt.spec.id, {
+          process: "failed",
+          health: "unknown",
+          detail: `프로세스가 종료됐어요 (코드 ${code ?? "?"}).`,
+        });
+        return false;
+      }
+      last = await rt.spec.readiness(rt.result!, ctx);
       if (applyReadiness(rt.spec.id, last)) return true;
+      if (last.kind === "failed") break;
+      if (Date.now() >= deadline) break;
+      await new Promise((r) => setTimeout(r, intervalMs));
     }
-    const detail =
-      last.kind === "failed" || last.kind === "degraded"
-        ? last.detail
-        : outcome.kind === "child-exited"
-          ? `프로세스가 종료됐어요 (코드 ${rt.result?.handle?.exitCode() ?? "?"})`
-          : "준비 시간을 넘겼어요";
+
+    const detail = last.kind === "failed" ? last.detail : "준비 시간을 넘겼어요.";
     set(rt.spec.id, { process: "failed", health: "unknown", detail });
     return false;
   }
@@ -3660,6 +3668,74 @@ Expected: PASS — 기존 + 5 tests
 `isPortOccupied`·`listenerPids`·`descendantPids`·`verifyOwnListener`는 **그대로 남기고** 어댑터에
 주입한다.
 
+먼저 `electron` import에 `dialog`를 더한다 — 현재는 `{ app, BrowserWindow }`뿐이다.
+
+```ts
+import { app, BrowserWindow, dialog } from "electron";
+```
+
+그리고 이 Task가 쓰는 작은 헬퍼 넷을 `main.ts`에 정의한다. 계획의 다른 자리에서 이름만
+등장하지 않게, 여기서 전부 만든다.
+
+```ts
+function logPathOf(id: ServiceId | "supervisor"): string {
+  return path.join(app.getPath("userData"), "logs", `${id}.log`);
+}
+
+/** 감독자 자신의 판단 기록. 자식의 stdout이 아니라 앱이 무엇을 왜 했는지가 여기 남는다. */
+function appendSupervisorLog(line: string): void {
+  try {
+    const file = logPathOf("supervisor");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, `${new Date().toISOString()} ${line}\n`);
+  } catch {
+    // 로그를 못 쓰는 것은 앱이 죽을 이유가 아니다 (Phase 1의 makeSink와 같은 규칙).
+  }
+}
+
+/**
+ * config.json에 한 키만 덧쓴다. 파일 전체를 다시 쓰지 않는 이유는 사용자가 손으로 넣은
+ * 다른 키와 주석 없는 포맷을 보존하기 위해서다. 실패해도 기동을 막지 않는다 — 다음 실행에
+ * 다시 물어보면 된다.
+ */
+function saveConfigValue(userData: string, key: string, value: string): void {
+  const file = path.join(userData, "config.json");
+  try {
+    const raw = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "{}";
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    parsed[key] = value;
+    fs.writeFileSync(file, `${JSON.stringify(parsed, null, 2)}\n`);
+  } catch (e) {
+    appendSupervisorLog(`config.json에 ${key}를 저장하지 못했어요: ${String(e)}`);
+  }
+}
+
+/** 앱이 정한 API origin. 감독자의 런타임에서 읽는다 — 전역 변수를 따로 두면 갈린다. */
+function currentApiOrigin(): string | null {
+  return supervisor?.runtimeOf("api")?.result?.origin ?? null;
+}
+
+/**
+ * 창을 다시 연 뒤 화면을 붙인다. 서비스는 이미 떠 있으므로 다시 띄우지 않는다 —
+ * activate에서 startServices()를 부르면 넷을 또 띄운다.
+ */
+async function reattachWindow(mine: number): Promise<void> {
+  const origin = currentApiOrigin();
+  const target = activeWindow(mine);
+  if (target === null) return;
+  if (origin === null) {
+    await showStatus(target, { state: "starting" });
+    return;
+  }
+  const renderer = await rendererTarget(origin);
+  if ("error" in renderer) {
+    await showStatus(target, { state: "failed", detail: renderer.error, logPath: logPathOf("api") });
+    return;
+  }
+  await target.loadURL(renderer.url);
+}
+```
+
 ```ts
 import { createSupervisor } from "./services/supervisor";
 import { apiSpec } from "./services/api";
@@ -3755,7 +3831,7 @@ async function startServices(mine: number): Promise<void> {
       workerSpec({ listExternal: listExternalWorkers }),
     ],
     ctx,
-    { onStatus: (s) => renderStatus(s, mine), log: appendSupervisorLog },
+    { onStatus: renderStatus, log: appendSupervisorLog },
   );
 
   await supervisor.start();
@@ -3769,8 +3845,8 @@ async function startServices(mine: number): Promise<void> {
     });
     return;
   }
-  const target = await rendererTarget(apiOrigin!);
-  // 이하 Phase 1의 렌더러 부착 경로를 그대로 쓴다.
+  // origin은 감독자의 런타임에서 읽는다. Phase 1의 전역 apiOrigin은 이제 쓰지 않는다.
+  await reattachWindow(mine);
 }
 
 async function listExternalWorkers(): Promise<number[]> {
@@ -3807,7 +3883,7 @@ async function listExternalWorkers(): Promise<number[]> {
       win = null;
     });
     // 서비스는 이미 떠 있다. 화면만 다시 붙인다.
-    void reattachWindow();
+    void reattachWindow(generation);
   });
 ```
 
@@ -4040,8 +4116,16 @@ async function quitFlow(): Promise<void> {
       }),
 ```
 
-`currentGraceAnswer`는 `stopAll`의 `onGraceExpired`가 채운다. **대화상자는 감독자 쪽에서 한 번만
-띄운다** — 어댑터가 또 띄우면 사용자가 같은 질문을 두 번 받는다.
+`currentGraceAnswer`는 `main.ts`의 모듈 변수다. **대화상자는 감독자 쪽에서 한 번만 띄운다** —
+어댑터가 또 띄우면 사용자가 같은 질문을 두 번 받는다.
+
+```ts
+/** stopAll의 onGraceExpired가 받은 사람의 답. 어댑터는 묻지 않고 이 값을 읽기만 한다. */
+let currentGraceAnswer = false;
+```
+
+`quitFlow()`의 `onGraceExpired`가 `currentGraceAnswer = response === 1`로 채운 뒤 그 값을
+돌려준다.
 
 - [ ] **Step 4: 메뉴에 "서비스 상태"를 더한다**
 
@@ -4358,7 +4442,7 @@ cat ~/.cache/damwha-p2-evidence/counts-before.txt
 pnpm install
 pnpm build
 pnpm desktop:build
-ls -la desktop/build/mac*/Damwha.app 2>/dev/null || ls -la desktop/build
+ls -la desktop/out/mac-arm64/Damwha.app
 ```
 
 - [ ] **Step 3: P2-C1 — 터미널 없이 전체 서비스 준비**

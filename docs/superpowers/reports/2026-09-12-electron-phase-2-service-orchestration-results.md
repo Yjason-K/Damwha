@@ -88,7 +88,54 @@
 
 ## 2. 계획 검증
 
-**아직 수행하지 않았다.** 구현 계획 작성 후 채운다.
+| | |
+| --- | --- |
+| 검토자 | 메인 세션 (로드맵 §"계획 검증"은 이 단계를 서브 에이전트에 넘기지 않는다) |
+| 대상 커밋 | `c1a162b` — `docs: Phase 2 구현 계획을 쓴다 — 15 Task` |
+| 계획 | [2026-09-12-electron-phase-2-service-orchestration.md](../plans/2026-09-12-electron-phase-2-service-orchestration.md) — 15 Task, 4,575줄 |
+
+### 2.1 완료 기준과 구현 단계의 연결
+
+**15건 전부 연결됐다.** 각 기준은 그것을 만드는 Task와 그것을 판정하는 Task 15의 Step을 함께 갖는다.
+
+| 기준 | 만드는 Task | 판정 |
+| --- | --- | --- |
+| P2-C1 터미널 없이 전체 준비 | 3, 5, 6, 8, 12 | 15 Step 3 |
+| P2-C2 `.env` 불변 처리 완주 | 8 (env 주입), 12 | 15 Step 4 |
+| P2-C3 의미 검색 | 8 (`EMBED_PORT` 단일 파생) | 15 Step 4 |
+| P2-C4 트리 정리 0개 | 11, 13 | 15 Step 5 |
+| P2-C5 정중한 종료와 `attempts` | 11, 13 | 15 Step 5 |
+| P2-C6 외부 서비스 보존 | 4, 8 | 15 Step 6 |
+| P2-C7 Docker 데몬 없음 | 5, 14 | 15 Step 7 |
+| P2-C8 실행 파일 못 찾음 | 2, 8, 14 | 15 Step 7 |
+| P2-C9 마이그레이션 게이트 | 6 | 15 Step 8 |
+| P2-C10 worker 준비 오판 방지 | 7, 8 | 15 Step 9 |
+| P2-C11 부팅 뒤 DB 끊김 | 3, 6 | 15 Step 9 |
+| P2-C12 창 닫기와 앱 종료 | 12 | 15 Step 10 |
+| P2-C13 녹음 handshake | 10, 11, 13 | 15 Step 10 |
+| P2-C14 회귀와 번들 위생 | 12, 전 Task | 15 Step 11 |
+| P2-C15 데이터 보존 | 5 (`stop` 없음), 6 (게이트) | 15 Step 12 |
+
+### 2.2 지적 6건. 전부 조치했다.
+
+| # | 등급 | 지적 | 조치 |
+| --- | --- | --- | --- |
+| V-1 | 차단 | **정의되지 않은 식별자 5개** — `saveConfigValue`·`logPathOf`·`currentGraceAnswer`·`appendSupervisorLog`·`reattachWindow`가 이름만 등장했다. 계획을 순서대로 읽는 구현자는 이 자리에서 막힌다 | Task 12에 넷의 구현을 넣고, `currentGraceAnswer`는 Task 13에 모듈 변수로 명시했다 |
+| V-2 | 차단 | **`renderStatus`의 시그니처가 두 Task에서 달랐다** — Task 12가 `(s, mine)`로 부르고 Task 14가 `(statuses)`로 정의했다 | 호출부를 `onStatus: renderStatus`로 맞췄다 |
+| V-3 | 차단 | **Task 12가 Phase 1의 전역 `apiOrigin`을 그대로 쓴다고 가정했다.** 새 `apiSpec`은 origin을 `LaunchResult`로 돌려주므로 그 전역은 더 이상 채워지지 않는다 | `currentApiOrigin()`을 더해 감독자 런타임에서 읽게 하고, 렌더러 부착을 `reattachWindow(mine)` 하나로 모았다 |
+| V-4 | 차단 | **packaged 산출물 경로가 틀렸다** — Task 15가 `desktop/build/mac*/Damwha.app`을 봤지만 `electron-builder.yml`의 `directories.output`은 `out`이고 `check-bundle.mjs`도 `desktop/out/mac-arm64/Damwha.app`을 본다. `desktop/build`는 `pnpm deploy`의 API 스테이징 디렉터리다 | 경로를 `desktop/out/mac-arm64/Damwha.app`으로 고쳤다 |
+| V-5 | 중간 | **감독자가 Phase 1의 `waitForReady`를 우회 사용했다** — `ReadinessResult`의 `failed`를 `"db-unreachable"`에 태워 조기 탈출시켰다. 그 함수의 결과 어휘는 API 하나를 위한 것이라, 다음 사람이 그 값을 DB 이야기로 읽는다 | 감독자가 자기 폴링 루프를 갖게 했다(여덟 줄). `waitForReady` import를 지웠다 |
+| V-6 | 경미 | **`dialog` import가 빠졌다** — `main.ts`는 `{ app, BrowserWindow }`만 가져오는데 Task 12·13이 `dialog`를 쓴다 | Task 12 Step 5에 import 줄을 명시했다 |
+
+### 2.3 그 밖에 확인한 것
+
+- **명령이 실제로 존재한다.** `pnpm --filter damwha-desktop exec vitest`(vitest 4.1.9 devDep 확인), `pnpm worker:test -- -k`(루트 스크립트가 `uv run --directory be/worker pytest -q`), `pnpm --filter damwha-fe exec vitest`(fe에 vitest 4.1.9), `node desktop/scripts/check-bundle.mjs`(인자 없음), `pnpm be:start`(`node dist/main.js`), `pnpm --filter damwha-desktop run compile`.
+- **각 Task가 개별 리뷰 가능하다.** 15개 Task 전부에 `Verify`·`Review` 블록이 있다(로드맵 §"계획 실행"의 형식 요구). Task 12까지 종료는 Phase 1 동작 그대로이고 Task 13이 바꾼다 — 감독자와 종료를 따로 리뷰할 수 있다.
+- **파괴적 명령을 전수 확인했다.** `CREATE/DROP DATABASE`는 Task 6 Step 6과 Task 15 Step 8 둘뿐이고 대상은 새로 만든 빈 DB이며 정리 단계가 붙어 있다. `docker compose down`은 Task 15 Step 3에서 한 번 쓰는데 검증자가 "전부 꺼진 상태"를 만드는 행위이고 `-v`가 없어 볼륨을 지우지 않는다. 앱 코드에는 `down`·`stop`·`rm`이 없다(Task 5의 Verify가 `grep`으로 판정).
+- **스펙 밖의 작업이 없다.** 계획의 모든 Task가 스펙 §6~§10의 절로 되짚어진다. 스펙 변경이 필요해진 항목도 없다.
+
+**재검증 결과: 통과.** 지적 6건을 반영한 뒤 다시 훑어 정의 없는 식별자 0건, 시그니처 불일치 0건,
+경로 불일치 0건을 확인했다.
 
 ## 3. 단계별 실행과 리뷰
 
