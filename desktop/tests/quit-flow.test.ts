@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CLOSE_WHILE_RECORDING,
+  decideCloseEvent,
   graceExpiryPrompt,
   leftoverNotice,
   runCloseFlow,
@@ -393,5 +394,40 @@ describe("runCloseFlow", () => {
     // 창 닫기는 종료가 아니다. 문구가 그렇게 말하지 않으면 사용자는 긴 전사를 중단시킬까
     // 두려워 창을 못 닫는다 (스펙 §6.10의 전제 전체가 그것이다).
     expect(CLOSE_WHILE_RECORDING).toContain("앱과 서비스는 계속 실행");
+  });
+});
+
+describe("decideCloseEvent", () => {
+  // main.ts의 close 핸들러는 vitest가 영영 못 부른다(electron을 값으로 import한다).
+  // 그래서 **무엇을 통과시키고 무엇을 막는가**라는 판정만 여기로 꺼냈다. main.ts에 남는 것은
+  // 배선뿐이다: 래치 두 개를 들고, 통과가 아닌 두 갈래에서 preventDefault를 부른다.
+  it("lets the quit path close the window", () => {
+    // ⌘Q가 닫는 창은 이미 확인도 핸드셰이크도 끝났다. 여기서 막으면 종료가 창을 못 닫는다.
+    expect(decideCloseEvent({ quitting: true, closing: false, closed: false })).toBe("let-it-close");
+    expect(decideCloseEvent({ quitting: true, closing: true, closed: false })).toBe("let-it-close");
+  });
+
+  it("asks the close flow on the first press", () => {
+    expect(decideCloseEvent({ quitting: false, closing: false, closed: false })).toBe("run-flow");
+  });
+
+  it("lets our own close() through once the flow decided to close", () => {
+    // closeNow()가 closed를 먼저 세우고 close()를 부른다. 이 갈래를 막으면 흐름을 다 돌고도
+    // 창이 영영 안 닫힌다 — preventDefault를 이미 불렀기 때문이다.
+    expect(decideCloseEvent({ quitting: false, closing: true, closed: true })).toBe("let-it-close");
+  });
+
+  it("prevents and ignores a second press while the handshake is still running", () => {
+    // 재리뷰 2의 N1. 이 갈래가 "let-it-close"면 Electron이 창을 그대로 파괴해 핸드셰이크
+    // 한가운데서 렌더러가 죽고, LiveRecorder.stop()이 끝나지 못해 마지막 tail 청크를 잃는다
+    // → meeting.capture_error = producer_abandoned. 창 닫기 경로에는 "종료 중" 화면도 없어
+    // 최대 30초 동안 아무 피드백이 없으므로 한 번 더 누르는 것은 드문 조작이 아니다.
+    // "run-flow"도 안 된다 — 그러면 같은 질문을 두 번 받는다(F2가 없앤 결함).
+    expect(decideCloseEvent({ quitting: false, closing: true, closed: false })).toBe("ignore");
+  });
+
+  it("closes on the very next press after the user cancelled", () => {
+    // "취소"는 closed를 세우지 않고 finally가 래치를 내린다. 그 다음 ⌘W는 다시 묻는다.
+    expect(decideCloseEvent({ quitting: false, closing: false, closed: false })).toBe("run-flow");
   });
 });

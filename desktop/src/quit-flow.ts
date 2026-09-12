@@ -231,3 +231,35 @@ export async function runCloseFlow(deps: CloseFlowDeps): Promise<void> {
   }
   deps.close();
 }
+
+/**
+ * 창의 `close` 이벤트 하나를 어떻게 대할 것인가. **`preventDefault`는 동기로 불러야 하는데
+ * 판정(`isRecording`)은 비동기**라서, main.ts의 핸들러는 "첫 close를 막고 → 흐름을 돌리고 →
+ * 다시 닫는다"는 두 박자로 돈다. 그 두 박자 사이에 들어오는 이벤트를 가르는 것이 여기다.
+ *
+ * 세 갈래가 각각 다른 이유로 필요하다.
+ * - `quitting` — 종료 경로가 닫는 창이다. 이미 확인도 핸드셰이크도 끝났으므로 **통과**시킨다.
+ *   여기서 막으면 ⌘Q가 창을 못 닫는다.
+ * - `closed` — 우리가 `closeNow()`에서 부른 `close()`가 돌아온 것이다. 이것도 **통과**다.
+ *   막으면 흐름을 다 돌고도 창이 영영 안 닫힌다 — preventDefault를 이미 불렀기 때문이다.
+ * - `closing` — 흐름이 도는 **중에 사람이 다시 누른** 것이다(⌘W·빨간 버튼). 이때 통과시키면
+ *   Electron이 창을 그대로 파괴해 핸드셰이크 한가운데서 렌더러가 죽는다 —
+ *   `LiveRecorder.stop()`이 끝나지 못해 마지막 tail 청크를 잃고 `capture_error`가
+ *   `producer_abandoned`가 된다. 이 경로에는 "종료 중" 화면조차 없어 최대 30초 동안 아무
+ *   피드백이 없으므로, 한 번 더 누르는 것은 드문 조작이 아니다. **막고 무시한다.**
+ *
+ * `closing`만 보고 통과시키던 것이 재리뷰 2의 N1이다. 진입 래치가 "같은 질문 두 번"을
+ * 없애면서, 그 대가로 2차 입력이 즉시 파괴가 됐다. 통과의 근거는 래치가 아니라 **`closed` —
+ * 우리가 닫기로 결정했다는 사실** 하나뿐이다.
+ */
+export type CloseGate = "let-it-close" | "ignore" | "run-flow";
+
+export function decideCloseEvent(state: {
+  quitting: boolean;
+  closing: boolean;
+  closed: boolean;
+}): CloseGate {
+  if (state.quitting || state.closed) return "let-it-close";
+  if (state.closing) return "ignore";
+  return "run-flow";
+}

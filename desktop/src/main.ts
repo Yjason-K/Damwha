@@ -20,7 +20,13 @@ import { applyNavigationBoundary, applyPermissionBoundary } from "./permissions"
 import { mayRenderShell } from "./shell-latch";
 import { maySpawnServices } from "./spawn-guard";
 import { openWindowFlow } from "./window-flow";
-import { graceExpiryPrompt, runCloseFlow, runQuitFlow, type QuitNotice } from "./quit-flow";
+import {
+  decideCloseEvent,
+  graceExpiryPrompt,
+  runCloseFlow,
+  runQuitFlow,
+  type QuitNotice,
+} from "./quit-flow";
 import {
   askIsRecording,
   captureDescendants,
@@ -224,21 +230,33 @@ function openWindow(): BrowserWindow {
   // preventDefault는 **동기로** 불러야 하는데 "녹음 중인가"는 렌더러에 물어야 해서
   // 비동기다. 그래서 첫 close는 무조건 막고, 래치를 올린 채 판정한 뒤 다시 닫는다 —
   // 녹음 중이 아니면 그 왕복이 몇 밀리초라 사람 눈에는 그냥 닫힌 것과 같다.
+  //
+  // 래치는 **진입에서** 올린다. 완료 시점에만 올리면 핸드셰이크(최대 30초) 동안 창이
+  // 정상 상호작용 상태라, 그때 ⌘W나 빨간 버튼을 다시 누르면 두 번째 흐름이 시작된다 —
+  // 렌더러는 아직 중지 중이라 isRecording()이 또 true를 돌려주므로 **사용자가 같은
+  // 질문을 두 번 받는다.** 더 나쁜 꼬리도 있다: 먼저 끝난 쪽이 창을 파괴하면 나중 쪽의
+  // close()는 파괴된 BrowserWindow 호출이라 TypeError를 던지고, 그 예외는 아래 catch를
+  // 타는데 catch가 **다시** 닫으므로 catch 자체가 던져 main 프로세스의 unhandled
+  // rejection이 된다.
+  //
+  // `closed`는 흐름 바깥에 둔다 — 흐름 안에 있으면 "우리가 부른 close()"와 "사람이 한 번 더
+  // 누른 close"를 이 핸들러가 구별할 수 없고, 그러면 2차 입력이 그대로 통과해 핸드셰이크
+  // 한가운데서 렌더러가 파괴된다 (재리뷰 2의 N1). 판정 자체는 decideCloseEvent에 있다.
   let closing = false;
+  let closed = false;
   created.on("close", (event) => {
-    // 종료 경로가 닫는 창은 건드리지 않는다. quitFlow가 이미 확인도 핸드셰이크도 했고,
-    // 여기서 또 물으면 사용자가 같은 질문을 두 번 받는다.
-    if (quitting || closing) return;
+    const gate = decideCloseEvent({ quitting, closing, closed });
+    // 종료 경로가 닫는 창과 우리가 방금 닫기로 한 창은 건드리지 않는다. quitFlow가 이미
+    // 확인도 핸드셰이크도 했고, 여기서 또 물으면 사용자가 같은 질문을 두 번 받는다.
+    if (gate === "let-it-close") return;
     event.preventDefault();
-    // 래치는 **진입에서** 올린다. 완료 시점에만 올리면 핸드셰이크(최대 30초) 동안 창이
-    // 정상 상호작용 상태라, 그때 ⌘W나 빨간 버튼을 다시 누르면 두 번째 흐름이 시작된다 —
-    // 렌더러는 아직 중지 중이라 isRecording()이 또 true를 돌려주므로 **사용자가 같은
-    // 질문을 두 번 받는다.** 더 나쁜 꼬리도 있다: 먼저 끝난 쪽이 창을 파괴하면 나중 쪽의
-    // close()는 파괴된 BrowserWindow 호출이라 TypeError를 던지고, 그 예외는 아래 catch를
-    // 타는데 catch가 **다시** 닫으므로 catch 자체가 던져 main 프로세스의 unhandled
-    // rejection이 된다.
+    if (gate === "ignore") {
+      // 흐름이 도는 중의 2차 ⌘W. 막고 무시한다 — 통과시키면 창이 파괴돼 녹음의 꼬리를 잃고,
+      // 새 흐름을 시작하면 같은 질문을 두 번 받는다.
+      appendSupervisorLog("창을 닫는 중에 닫기를 다시 눌렀어요 — 진행 중인 마무리를 기다립니다.");
+      return;
+    }
     closing = true;
-    let closed = false;
     const closeNow = () => {
       closed = true;
       // 그 사이 창이 이미 파괴됐으면 여기서 멈춘다 (겹친 흐름, 앱 종료, 크래시).
