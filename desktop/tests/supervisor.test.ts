@@ -752,3 +752,92 @@ describe("supervisor 게이트 재시작과 재시도 (I3·I4·I5)", () => {
     expect(workerLaunches).toBe(1);
   });
 });
+
+describe("supervisor 단일 비행과 종료의 시야 (N1·N2)", () => {
+  it("stops a process a gate bring created while stopAll was waiting", async () => {
+    // 게이트 bring은 runFrom이 인라인으로 await한다. 그 프라미스가 pending에 없으면 stopAll은
+    // bring 진입부터 rt.result 대입까지 — API는 그 구간이 부팅 전체라 수 초다 — 를 통째로 못
+    // 보고 지나간다. 사용자 경로는 스플래시에서 API가 아직 뜨는 중에 ⌘Q다. 그렇게 태어난
+    // 자식은 detached라 Electron이 죽어도 살아 포트 3000을 쥔다 (P2-C4).
+    let release!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const live = new Set<number>();
+    const s = createSupervisor(
+      [
+        spec("api", {
+          gate: true,
+          launch: async () => {
+            await held;
+            live.add(3000);
+            return { handle: null, owned: true };
+          },
+          stop: async () => {
+            live.delete(3000);
+            return { stopped: false, leaked: [3000] };
+          },
+        }),
+      ],
+      ctx(),
+      {},
+    );
+    // start()를 await하지 않는다 — 부팅이 끝나기 전에 종료가 오는 것이 이 결함의 전제다.
+    const started = s.start();
+    await new Promise((r) => setTimeout(r, 10));
+    const stopping = s.stopAll({ graceMs: 5 });
+    // 게이트 구간을 기다리지 않는 stopAll은 이 20ms 안에 이미 반환해 버린다.
+    await new Promise((r) => setTimeout(r, 20));
+    release();
+    const out = await stopping;
+    await started;
+    // 자식은 stopAll이 기다리는 동안 태어났다. 그것을 내리고, leaked에 정직하게 싣는다.
+    expect([...live]).toEqual([]);
+    expect(out).toEqual({ stopped: false, leaked: [3000] });
+  });
+
+  it("launches once when a retry races the bring that is already starting", async () => {
+    // 재진입 가드(rt.result !== null)는 launch가 반환한 **뒤에야** 문다. detectExternal 안에
+    // 멈춘 사이에 메뉴의 "다시 시도"가 눌리면 두 bring이 나란히 그 가드를 지나 프로세스가 두 벌
+    // 뜨고, 먼저 뜬 쪽의 유일한 참조인 rt.result가 덮어써져 stopAll이 영원히 못 찾는다.
+    // 메뉴는 app.whenReady()에서 기동 시퀀스가 끝나기 전에 이미 설치된다 (Task 13).
+    let release!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const live = new Set<number>();
+    let launches = 0;
+    const s = createSupervisor(
+      [
+        spec("worker", {
+          gate: false,
+          detectExternal: async () => {
+            await held;
+            return { kind: "absent" };
+          },
+          launch: async () => {
+            launches += 1;
+            const pid = 7000 + launches;
+            live.add(pid);
+            return { handle: null, owned: true, origin: String(pid) };
+          },
+          stop: async (result) => {
+            live.delete(Number(result.origin));
+            return { stopped: true, leaked: [] };
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await s.retry();
+    release();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(launches).toBe(1);
+    // 두 벌 떴다면 stopAll이 쥔 참조는 하나뿐이라 나머지 한 벌이 여기 남는다.
+    await s.stopAll({ graceMs: 5 });
+    expect([...live]).toEqual([]);
+  });
+});

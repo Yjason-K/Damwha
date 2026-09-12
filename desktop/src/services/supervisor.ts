@@ -77,6 +77,12 @@ interface Runtime {
   healthTimer: NodeJS.Timeout | null;
   /** 안정 창이 지나면 재시작 예산을 돌려주는 타이머. */
   budgetTimer: NodeJS.Timeout | null;
+  /**
+   * 진행 중인 bring(). 한 값이 두 가지를 막는다 — 같은 서비스에 두 번째 bring이 겹쳐 들어와
+   * 프로세스를 두 벌 만드는 것, 그리고 bring 진입부터 rt.result 대입까지의 구간이 stopAll의
+   * 시야 밖으로 새는 것. 둘 다 "아직 rt.result가 없는 동안"이라는 같은 창에서 벌어진다.
+   */
+  inFlight: Promise<boolean> | null;
 }
 
 export function createSupervisor(
@@ -95,6 +101,7 @@ export function createSupervisor(
         everReady: false,
         healthTimer: null,
         budgetTimer: null,
+        inFlight: null,
       },
     ]),
   );
@@ -231,31 +238,65 @@ export function createSupervisor(
     });
   }
 
-  /** 배경으로 도는 비게이트 준비 대기. stopAll이 이것을 기다린 뒤에 내린다. */
-  const pending = new Set<Promise<void>>();
+  /**
+   * 진행 중인 bring 전부. stopAll이 이것을 기다린 뒤에 내린다.
+   *
+   * 배경만이 아니라 **게이트도** 들어온다. 게이트 bring은 runFrom이 인라인으로 await하지만
+   * 그 프라미스를 아는 것은 runFrom뿐이라, 등록하지 않으면 종료는 bring 진입부터 rt.result
+   * 대입까지를 통째로 보지 못한다 — API는 그 구간이 부팅 전체라 수 초다. 스플래시에서 ⌘Q가
+   * 정확히 그 창을 친다.
+   */
+  const pending = new Set<Promise<unknown>>();
 
   /**
    * bring을 배경으로 돌린다. 예외를 반드시 상태로 바꾼다 — 배경 프라미스의 rejection은
    * 아무도 잡지 않으면 Electron main의 uncaught exception이 되고, 하필 종료 경로에서 난다.
+   * pending 등록은 여기서 하지 않는다. bring이 한다 — 게이트와 배경이 같은 한 줄을 쓰면
+   * 한쪽만 등록에서 빠지는 일이 생길 수 없다.
    */
   function background(spec: ServiceSpec): void {
-    const p = bring(spec)
-      .catch((e: unknown) => {
-        const detail = reason(e);
-        set(spec.id, { process: "failed", health: "unknown", detail });
-        log(`${spec.id}: 배경 기동에서 예외 — ${detail}`);
-      })
-      .then(() => undefined);
-    pending.add(p);
-    void p.finally(() => pending.delete(p));
+    void bring(spec).catch((e: unknown) => {
+      const detail = reason(e);
+      set(spec.id, { process: "failed", health: "unknown", detail });
+      log(`${spec.id}: 배경 기동에서 예외 — ${detail}`);
+    });
+  }
+
+  /**
+   * 서비스마다 bring을 한 번에 하나만 돌리고(단일 비행), 그 프라미스를 pending에 남긴다.
+   *
+   * 단일 비행이 필요한 이유: bringOnce의 재진입 가드(rt.result !== null)는 launch가 **반환한
+   * 뒤에야** 문다. 그 앞 구간 — detectExternal과 launch 자체 — 에 두 번째 bring이 들어오면
+   * 둘 다 가드를 지나 프로세스가 두 벌 뜨고, 먼저 뜬 쪽의 유일한 참조인 rt.result가 덮어써져
+   * stopAll이 그것을 영원히 못 찾는다. 메뉴의 "다시 시도"는 app.whenReady()에서 기동 시퀀스가
+   * 끝나기 전에 이미 설치되므로, 부팅 중에 눌리는 것은 가정이 아니라 평범한 경로다.
+   *
+   * pending 등록도 같은 자리에 두는 이유는 pending 선언부 주석에 있다.
+   */
+  function bring(spec: ServiceSpec): Promise<boolean> {
+    const rt = runtimes.get(spec.id)!;
+    if (rt.inFlight !== null) return rt.inFlight;
+    const p = bringOnce(spec);
+    rt.inFlight = p;
+    // pending에는 거부하지 않는 쪽을 넣는다. allSettled는 rejection을 견디지만, p에 처리기가
+    // 하나도 붙지 않는 순간이 생기면 그것이 곧 처리되지 않은 rejection이다.
+    const tracked = p.catch(() => undefined);
+    pending.add(tracked);
+    void tracked.finally(() => {
+      if (rt.inFlight === p) rt.inFlight = null;
+      pending.delete(tracked);
+    });
+    return p;
   }
 
   /**
    * 한 서비스를 띄우고 준비까지 본다. 게이트면 호출자가 await하고, 아니면 배경으로 돈다 —
    * embed는 bge-m3를 import 시점에 올려 30초 이상 걸리는데 그것을 직렬로 기다리면 창이 그만큼
    * 늦게 뜬다. 스펙 §6.7의 "게이트는 셋뿐"은 이 비대칭을 뜻한다.
+   *
+   * 직접 부르지 않는다. 겹침과 종료 가시성을 함께 다루는 bring()이 유일한 입구다.
    */
-  async function bring(spec: ServiceSpec): Promise<boolean> {
+  async function bringOnce(spec: ServiceSpec): Promise<boolean> {
     const rt = runtimes.get(spec.id)!;
     if (stopping) return false;
     // 이미 우리가 쥔 인스턴스가 있으면 아무것도 하지 않는다. 두 번째 bring은 첫 핸들의
@@ -305,9 +346,9 @@ export function createSupervisor(
     set(spec.id, { owned: rt.result.owned });
     if (stopping) {
       // 종료가 이 await 사이를 지나갔다. 방금 만든 자식을 rt.result에 **남겨 둬야** 한다 —
-      // stopAll은 pending을 먼저 기다리므로 이 대입이 역순 루프보다 먼저 보이고, 거기서
-      // 내려야 leaked가 정직해진다. 여기서 우리가 몰래 치우면 그 결과가 StopOutcome에
-      // 실리지 않는다.
+      // 게이트든 배경이든 이 bring은 pending에 있어 stopAll이 먼저 기다리므로, 이 대입은
+      // 역순 루프보다 반드시 먼저 보인다. 거기서 내려야 leaked가 정직해진다. 여기서 우리가
+      // 몰래 치우면 그 결과가 StopOutcome에 실리지 않는다.
       log(`${spec.id}: 종료 중에 기동이 끝났다 — stopAll에 넘긴다`);
       return false;
     }
@@ -417,11 +458,16 @@ export function createSupervisor(
     stopping = true;
     for (const t of timers) clearTimeout(t);
     timers.clear();
-    // 배경 bring이 아직 돌고 있을 수 있다. 기다리지 않으면 그것이 **stopAll이 반환한 뒤에**
+    // 진행 중인 bring이 아직 있을 수 있다. 기다리지 않으면 그것이 **stopAll이 반환한 뒤에**
     // 프로세스를 만들고, 그 프로세스를 가리키는 유일한 참조(rt.result)는 아무도 읽지 않는다.
     // launchWithUv도 launchDev도 detached라 그런 자식은 Electron이 죽어도 살아남는다 (P2-C4).
     // stopping 검사만으로는 부족하다 — launch()가 반환하고 대입되기까지의 구간이 남는다.
-    await Promise.allSettled([...pending]);
+    //
+    // 한 번의 allSettled로 끝내지 않는다. 게이트 bring이 끝나면 runFrom이 그 자리에서 다음
+    // 서비스의 bring을 새로 등록하므로, 스냅숏 하나만 기다리면 그 다음 것을 놓친다. stopping이
+    // 이미 참이라 새 bring은 진입부에서 곧장 물러나고, 새 등록의 출처는 runFrom과 재시작
+    // 타이머(역시 stopping을 본다)뿐이라 이 루프는 서비스 수만큼 돌고 빈다.
+    while (pending.size > 0) await Promise.allSettled([...pending]);
     const leaked: number[] = [];
     let stopped = true;
     // 역순. dependsOn이 정한 순서를 뒤집는 것이 곧 의존 역순이다.
