@@ -1,6 +1,7 @@
-import { spawn } from "child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { makeSink, sinkTails } from "../api-process";
 import { buildChildPath } from "./resolve";
 import type { LaunchContext, LaunchResult, ReadinessResult, ServiceSpec } from "./types";
 
@@ -30,11 +31,22 @@ export function workerDegraded(stderr: string): boolean {
   return lastIndexOfMatch(stderr, RECONNECT_FAILED) > ready;
 }
 
+/**
+ * launchWithUv가 실제 child_process.spawn 대신 부를 함수의 모양. 테스트가 이 자리에
+ * 가짜를 주입해 detached·'error' 리스너·스트림 분리를 진짜 프로세스 없이 검증한다
+ * (스펙대로면 api-process.ts의 launchDev/launchPackaged처럼 이 세 가지가 가장 조용히
+ * 깨지는 지점이다 — 리뷰가 실측으로 확인: detached를 지워도, 'error' 리스너를 지워도
+ * 기존 179개 테스트는 전부 그대로 통과했다).
+ */
+export type SpawnFn = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
+
 export interface UvLaunchOptions {
   ctx: LaunchContext;
   args: readonly string[];
   logId: "worker" | "embed";
   extraEnv?: Record<string, string>;
+  /** 테스트 주입용. 기본은 실제 child_process.spawn. */
+  spawnFn?: SpawnFn;
 }
 
 /**
@@ -49,13 +61,16 @@ export function launchWithUv(options: UvLaunchOptions): LaunchResult {
     );
   }
   const workerDir = path.join(ctx.repoRoot, "be", "worker");
-  const logFile = ctx.logFile(logId);
-  fs.mkdirSync(path.dirname(logFile), { recursive: true });
-  const out = fs.createWriteStream(logFile, { flags: "a" });
-  // 로그를 못 쓰는 것은 앱이 죽을 이유가 아니다 (Phase 1의 makeSink와 같은 규칙).
-  out.on("error", () => undefined);
+  // stdout과 stderr를 하나로 합치지 않는다. worker의 ready 줄은 stderr에 나오고
+  // (console.py:110, BarAwareStreamHandler(sys.stderr)), embed(uvicorn)의 접근 로그는
+  // stdout에 나온다(2026-09-12 실측) — 둘을 합치면 readiness()가 읽는 stderrTail()에
+  // 30초 헬스 프로브·실제 검색 요청마다 접근 로그가 섞여, 정작 죽었을 때 봐야 할
+  // 트레이스백을 그 노이즈가 밀어낸다. api-process.ts가 API 런처에서 이미 겪은 문제라
+  // 같은 도구(makeSink/sinkTails)로 같은 모양으로 푼다.
+  const sink = makeSink(ctx.logFile(logId));
+  const spawnFn = options.spawnFn ?? spawn;
 
-  const child = spawn(ctx.bins.uv, ["run", "--directory", workerDir, ...args], {
+  const child = spawnFn(ctx.bins.uv, ["run", "--directory", workerDir, ...args], {
     cwd: workerDir,
     stdio: ["ignore", "pipe", "pipe"],
     // detached가 없으면 자식이 부모 그룹에 들어가 process.kill(-pid)가 그룹을 못 찾는다.
@@ -68,13 +83,12 @@ export function launchWithUv(options: UvLaunchOptions): LaunchResult {
     },
   });
 
-  let tail = "";
   let code: number | null = null;
   const listeners: Array<(c: number) => void> = [];
   const settle = (c: number) => {
     if (code !== null) return;
     code = c;
-    out.end();
+    sink.close();
     for (const l of listeners) {
       try {
         l(c);
@@ -83,17 +97,12 @@ export function launchWithUv(options: UvLaunchOptions): LaunchResult {
       }
     }
   };
-  const append = (b: Buffer) => {
-    const text = b.toString();
-    out.write(text);
-    tail = (tail + text).slice(-32_000);
-  };
-  child.stdout?.on("data", append);
-  child.stderr?.on("data", append);
+  child.stdout?.on("data", (b: Buffer) => sink.write(b, false));
+  child.stderr?.on("data", (b: Buffer) => sink.write(b, true));
   child.on("exit", (c) => settle(c ?? 0));
   // spawn 실패는 'exit'가 아니라 'error'로 온다. 리스너가 없으면 Electron main이 통째로 죽는다.
   child.on("error", (e: Error) => {
-    tail = `${tail}spawn failed: ${e.message}\n`;
+    sink.write(`spawn failed: ${e.message}\n`, true);
     settle(-1);
   });
 
@@ -113,12 +122,15 @@ export function launchWithUv(options: UvLaunchOptions): LaunchResult {
 
   return {
     owned: true,
+    // as never를 지웠다 — 그 캐스트가 ServiceHandle(=ApiHandle)이 요구하는 stdoutTail()의
+    // 부재를 가려 왔다. 지금은 sinkTails(sink)가 그 자리를 실제로 채우므로 다시
+    // 타입 검사 대상이 된다.
     handle: {
       get pid() {
         return pid;
       },
       alive: () => code === null,
-      stderrTail: () => tail,
+      ...sinkTails(sink),
       exitCode: () => code,
       onExit(listener: (c: number) => void) {
         if (code !== null) listener(code);
@@ -132,7 +144,7 @@ export function launchWithUv(options: UvLaunchOptions): LaunchResult {
           await new Promise((r) => setTimeout(r, 50));
         }
       },
-    } as never,
+    },
   };
 }
 
