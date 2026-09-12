@@ -56,28 +56,14 @@ describe("askIsRecording", () => {
     expect(Date.now() - t0).toBeLessThan(1_000);
   });
 
-  it("does not leave an unhandled rejection behind when the answer arrives too late", async () => {
-    // 상한에 걸린 뒤에도 남은 프라미스는 살아 있다. 그것이 나중에 거부하면 Electron main의
-    // unhandled rejection이 되고, 하필 종료 중에 난다.
-    let reject: (e: Error) => void = () => undefined;
-    const out = await askIsRecording(
-      () =>
-        new Promise((_, r) => {
-          reject = r;
-        }),
-      { timeoutMs: 10, onTimeout: () => undefined },
-    );
-    expect(out).toBe(true);
-    const seen: unknown[] = [];
-    const onUnhandled = (e: unknown): void => {
-      seen.push(e);
-    };
-    process.on("unhandledRejection", onUnhandled);
-    reject(new Error("늦게 도착한 거부"));
-    await new Promise((r) => setTimeout(r, 20));
-    process.off("unhandledRejection", onUnhandled);
-    expect(seen).toEqual([]);
-  });
+  // 상한에 걸린 뒤 늦게 도착하는 거부가 unhandled가 되는가 — **테스트를 두지 않는다.**
+  // `Promise.race`는 진 프라미스에도 언제나 반응을 등록하므로 늦은 거부는 **어떤 구현에서도**
+  // unhandled가 되지 않는다. 즉 이것은 우리 코드의 성질이 아니라 언어의 성질이고, 그 테스트를
+  // 빨갛게 만드는 코드 변경이 존재하지 않는다 (재리뷰 3이 askIsRecording의 선행 거부 핸들러를
+  // 지우는 변이로 실측했다 — 죽은 것은 `answers NO when the round-trip rejects` 하나뿐이었고
+  // 이 테스트는 초록으로 살아남았다). 실패할 수 없는 테스트는 없는 것보다 나쁘다: 진짜 방어가
+  // 들어갈 자리를 차지하고, 모든 집계에서 커버리지처럼 읽힌다.
+  // 거부가 값으로 바뀐다는 성질 자체는 위의 `answers NO when the round-trip rejects`가 지킨다.
 });
 
 describe("stopWorkerProcess", () => {

@@ -420,7 +420,9 @@ export async function askIsRecording(
   call: () => Promise<unknown>,
   opts: { timeoutMs: number; onTimeout: () => void },
 ): Promise<boolean> {
-  // 남은 프라미스가 나중에 거부하면 unhandled rejection이 된다 — 여기서 받아 둔다.
+  // 거부를 **값으로** 바꾼다 — 위 세 갈래의 둘째("거부했다 → 아니오")가 이 핸들러다.
+  // 상한에 진 뒤 늦게 오는 거부를 unhandled로부터 막는 장치로 읽지 말 것: `Promise.race`는
+  // 진 프라미스에도 언제나 반응을 등록하므로 그것은 이 핸들러가 없어도 성립한다.
   const asked = call().then(
     (v) => Boolean(v),
     () => false,

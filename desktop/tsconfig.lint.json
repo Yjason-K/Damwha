@@ -7,7 +7,10 @@
   // 데였다 — QuitFlowDeps에 필수 필드를 하나 더하자 픽스처는 그 필드가 없는 채로 조용히
   // 통과했고, 값이 undefined인 `setTimeout(fn, undefined)`는 0ms라 상한이 항상 이겨 테스트가
   // 계속 초록이었다. 타입이 잡았어야 할 것을 아무도 잡지 못한 것이다.
+  //
+  // 루트의 `*.ts`(vitest.config.ts)도 넣는다. 어느 설정에도 안 들어가 있던 자리라, 거기의
+  // 타입 오류는 `pnpm lint`도 `vitest run`도(vite가 타입을 벗겨 실행한다) 잡지 못했다.
   "extends": "./tsconfig.json",
   "compilerOptions": { "noEmit": true, "rootDir": "." },
-  "include": ["src/**/*.ts", "tests/**/*.ts"]
+  "include": ["src/**/*.ts", "tests/**/*.ts", "*.ts"]
 }
