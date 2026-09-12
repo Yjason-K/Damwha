@@ -95,13 +95,27 @@ describe("runQuitFlow", () => {
     expect(capturesBeforeStop).toHaveLength(2);
   });
 
-  it("puts a screen up before the long waits start", async () => {
-    // 핸드셰이크 30초 + worker 유예 90초. 그동안 화면이 그대로면 ⌘Q를 누른 사람은 앱이
-    // 멎었다고 결론 내리고 강제 종료를 누른다 — 정중한 경로가 존재하는 이유를 침묵이
-    // 무효로 만든다 (완료 기준 P2-C5).
+  it("puts a screen up before the worker grace when there is no handshake to run", async () => {
+    // 녹음이 없으면 앞에 남은 긴 기다림은 worker 유예 90초뿐이고, 파괴할 렌더러 훅도 없다.
+    // 그동안 화면이 그대로면 ⌘Q를 누른 사람은 앱이 멎었다고 결론 내리고 강제 종료를 누른다
+    // — 정중한 경로가 존재하는 이유를 침묵이 무효로 만든다 (완료 기준 P2-C5).
+    const { log, deps } = recorder({}, { recording: false, analysing: true });
+    await runQuitFlow(deps);
+    expect(log).not.toContain("handshake:start");
+    expect(log.indexOf("quitting:end")).toBeLessThan(log.indexOf("stop:start"));
+  });
+
+  it("runs the handshake BEFORE the screen that would destroy the renderer", async () => {
+    // 이 화면의 잎은 창이 하나뿐인 앱에서 win.loadFile(status.html) — 그 창의 내비게이션이라
+    // 렌더러의 window.__damwha_desktop을 문서째 파괴한다. 화면이 먼저 뜨면 핸드셰이크는
+    // 언제나 no-bridge를 받고 tail 청크를 잃는다 → capture_error = producer_abandoned
+    // (완료 기준 P2-C13). §6.9: "종료 순서의 맨 앞에 handshake를 둔다."
+    //
+    // 그래도 화면은 stopServices(worker 유예 90초) **앞**에 온다 — P2-C5의 침묵은 그
+    // 90초가 만들고, 그 앞자리는 이 순서로도 그대로 지켜진다.
     const { log, deps } = recorder({}, { recording: true, analysing: false });
     await runQuitFlow(deps);
-    expect(log.indexOf("quitting:end")).toBeLessThan(log.indexOf("handshake:start"));
+    expect(log.indexOf("handshake:end")).toBeLessThan(log.indexOf("quitting:start"));
     expect(log.indexOf("quitting:end")).toBeLessThan(log.indexOf("stop:start"));
   });
 
@@ -140,7 +154,7 @@ describe("runQuitFlow", () => {
     expect(log).toEqual([
       ...seq("capture", "inFlight", "confirm"),
       "begin",
-      ...seq("quitting", "handshake", "capture", "stop"),
+      ...seq("handshake", "quitting", "capture", "stop"),
       "quit",
     ]);
   });

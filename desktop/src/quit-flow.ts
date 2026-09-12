@@ -35,10 +35,13 @@ export interface QuitFlowDeps {
   /**
    * "종료 중" 화면을 건다. 창이 없으면 아무것도 하지 않는다.
    *
-   * worker의 유예는 90초이고(31분 오디오의 STT stage boundary가 분 단위일 수 있다) 그 앞에
-   * 핸드셰이크 30초가 더 있다. 그동안 화면이 그대로면 ⌘Q를 누른 사람은 앱이 멎었다고
-   * 결론 내리고 **강제 종료**를 누른다 — 정중한 경로가 존재하는 이유가 그것을 피하는 것인데
-   * 침묵이 그 사람을 거기로 민다. P2-C5는 바로 그 순간에 깨진다.
+   * worker의 유예는 90초다(31분 오디오의 STT stage boundary가 분 단위일 수 있다). 그동안
+   * 화면이 그대로면 ⌘Q를 누른 사람은 앱이 멎었다고 결론 내리고 **강제 종료**를 누른다 —
+   * 정중한 경로가 존재하는 이유가 그것을 피하는 것인데 침묵이 그 사람을 거기로 민다.
+   * P2-C5는 바로 그 순간에 깨진다.
+   *
+   * 그런데 이 잎은 창 하나짜리 앱에서 **내비게이션**이라 렌더러를 파괴한다. 그래서
+   * 핸드셰이크보다 앞에 둘 수 없다 — runQuitFlow의 주석이 그 순서를 적어 뒀다.
    */
   showQuitting(): Promise<void>;
   /** 렌더러의 라이브 중지. 훅이 없거나 창이 죽었으면 stopped:false로 답한다. */
@@ -79,14 +82,19 @@ export async function runQuitFlow(deps: QuitFlowDeps): Promise<void> {
 
   deps.beginQuit();
   try {
-    // 되돌릴 수 없는 지점을 지나자마자 화면부터 바꾼다. 아래 둘(핸드셰이크 30초, worker
-    // 유예 90초)이 시작되기 **전**이어야 뜻이 있다.
-    try {
-      await deps.showQuitting();
-    } catch (e) {
-      // 화면을 못 걸었다고 종료를 멈추지 않는다. 창이 이미 파괴되는 중이면 여기가 거부한다.
-      deps.log(`종료 화면을 걸지 못했어요 — ${e instanceof Error ? e.message : String(e)}`);
-    }
+    // **핸드셰이크가 화면보다 먼저다.** "종료 중" 화면의 잎은 창이 하나뿐인 이 앱에서
+    // `win.loadFile(shell/status.html)` — 즉 그 창의 **내비게이션**이고, 그것이 렌더러의
+    // `window.__damwha_desktop`을 문서째 파괴한다. 화면을 먼저 걸면 뒤이은 핸드셰이크는
+    // 언제나 `{stopped:false, reason:'no-bridge'}`를 받아, 마지막 tail 청크를 잃은 채
+    // `capture_error = producer_abandoned`로 끝난다 (완료 기준 P2-C13). §6.9가 "종료
+    // 순서의 맨 앞에 handshake를 둔다"고 못 박은 이유가 정확히 이것이다.
+    //
+    // 침묵(P2-C5)은 그래도 최소로 줄인다. 화면을 거는 시점이 두 갈래인 것이 그 때문이다.
+    // - 녹음 중이 아니면 **핸드셰이크가 아예 없으므로 곧바로 건다.** 앞에 남은 긴 기다림은
+    //   worker 유예 90초 하나뿐이고, 이쪽이 흔한 경우다.
+    // - 녹음 중이면 핸드셰이크 **뒤에** 건다. 살아 있는 녹음의 정상 중지는 1초 남짓이라
+    //   그 침묵은 짧다 — 30초는 상한이지 예상 비용이 아니다. 그 간극을 메우자고 녹음의
+    //   꼬리를 버리는 것은 값이 맞지 않는다.
     if (decision.stopRecording) {
       const result = await runHandshake(deps.stopRecording, {
         timeoutMs: deps.handshakeTimeoutMs,
@@ -98,6 +106,12 @@ export async function runQuitFlow(deps: QuitFlowDeps): Promise<void> {
           `녹음을 정상 중지하지 못했어요 (${result.kind}). 다음 실행 때 서버가 마무리합니다.`,
         );
       }
+    }
+    try {
+      await deps.showQuitting();
+    } catch (e) {
+      // 화면을 못 걸었다고 종료를 멈추지 않는다. 창이 이미 파괴되는 중이면 여기가 거부한다.
+      deps.log(`종료 화면을 걸지 못했어요 — ${e instanceof Error ? e.message : String(e)}`);
     }
     // 두 번째 스냅샷. supervisor가 아직 살아 있는 마지막 지점이라 가장 새것이고, pid
     // 재사용 위험이 가장 작다. 여기서 실패해도 위에서 찍어 둔 것이 남는다.
