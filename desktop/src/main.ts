@@ -20,6 +20,8 @@ import { applyNavigationBoundary, applyPermissionBoundary } from "./permissions"
 import { mayRenderShell } from "./shell-latch";
 import { maySpawnServices } from "./spawn-guard";
 import { openWindowFlow } from "./window-flow";
+import { graceExpiryPrompt, runQuitFlow, type QuitNotice } from "./quit-flow";
+import { captureDescendants, hasOnceChild, stopWorkerProcess } from "./shutdown";
 import { installMenu } from "./menu";
 import { createSupervisor } from "./services/supervisor";
 import { verifyOwnListener as checkOwnListener } from "./services/own-listener";
@@ -34,9 +36,12 @@ import { rotateIfNeeded } from "./logs";
 import { freePort } from "./port";
 import type {
   LaunchContext,
+  LaunchResult,
   ProcessState,
   ServiceId,
   ServiceStatus,
+  StopOutcome,
+  StopPlan,
 } from "./services/types";
 
 const execFileAsync = promisify(execFile);
@@ -53,6 +58,15 @@ app.setName("Damwha");
 /** 실패 후 자동 재시도 간격. 세 번째부터는 사람이 손 쓸 문제라 늘리지 않는다. */
 const RETRY_DELAYS_MS = [3_000, 8_000, 20_000];
 const STOP_GRACE_MS = 5_000;
+/**
+ * worker만의 유예. stage boundary는 31분 오디오의 STT 한가운데면 분 단위가 될 수 있고,
+ * 그 경계에 닿아야 `requeue_for_shutdown`이 돌아 `attempts`가 되돌아간다 (완료 기준 P2-C5).
+ * 5초를 주면 사실상 매번 유예를 넘겨 사람에게 강제 종료를 묻게 되고, 그 질문에 "예"는
+ * 정확히 P2-C5가 금지하는 결과를 만든다.
+ */
+const WORKER_GRACE_MS = 90_000;
+/** 렌더러의 라이브 중지를 기다리는 상한. 사람이 아니라 렌더러를 기다리는 시간이다. */
+const HANDSHAKE_TIMEOUT_MS = 30_000;
 /** 개발에서 렌더러는 Vite가 서빙한다. 그 포트는 Vite 기본값이다. */
 const VITE_ORIGIN = "http://localhost:5173";
 
@@ -110,6 +124,16 @@ let launchCtx: { ctx: LaunchContext; baseline: ApiEnv } | null = null;
  * 없고, 그 침묵이 재리뷰 §4-1의 절반이었다.
  */
 let restartNotice: string | null = null;
+/**
+ * 종료 전에 찍어 둔 worker 자손 pid. `undefined`와 빈 Set은 **다른 뜻**이다 —
+ * shutdown.ts의 knownDescendants 주석에 있다.
+ *
+ * 이 변수가 있는 이유(이월 결함 N2): supervisor가 먼저 죽으면 그 `--once` 자식과 그것이
+ * 띄운 `mlx_lm.server`는 pid 1로 재부모화되어 **그 뒤 어떤 ppid BFS에도 보이지 않는다.**
+ * stopWorkerProcess는 진입해서야 자손을 찍으므로 그 경우 빈 집합만 보고 "깨끗함"을
+ * 보고했다. 살아 있을 때 찍어 두는 일은 모듈 밖에서만 할 수 있어서 이 자리에 있다.
+ */
+let knownWorkerDescendants: ReadonlySet<number> | undefined;
 
 /** 앱이 정한 API origin. 감독자의 런타임에서 읽는다 — 전역 변수를 따로 두면 갈린다. */
 function currentApiOrigin(): string | null {
@@ -220,31 +244,184 @@ function activeWindow(mine: number): BrowserWindow | null {
   return may ? current : null;
 }
 
+/** 앱이 소유한 worker supervisor의 핸들. 없으면(외부 채택·미기동) undefined다. */
+function ownWorkerHandle() {
+  return supervisor?.runtimeOf("worker")?.result?.handle ?? undefined;
+}
+
 /**
- * before-quit에서 쓴다. 감독자가 자식을 소유하므로 여기서는 감독자에게 넘기고, dev의
- * Vite만 직접 내린다 (Vite는 감독자가 모르는 자식이다).
- *
- * Task 13이 이 자리를 종료 계약(핸드셰이크·대화상자·자손 스냅샷)으로 바꾼다. 지금은
- * Phase 1과 같은 모양 — "앱이 만든 자식은 앱이 정리한다"(스펙 §6.2, P1-C5) — 을 감독자를
- * 향해 그대로 유지한다. 여기를 비워 두면 넷 중 셋이 detached 자식이라 앱이 죽어도 살아남는다.
+ * supervisor가 아직 살아 있는 지금 자손을 찍어 둔다. 판정(살아 있을 때만 찍는다, 실패가
+ * 이전 성공을 덮지 않는다)은 shutdown.ts에 있다 — 여기 두면 어떤 테스트도 부를 수 없다.
  */
-async function stopAll(): Promise<void> {
+async function captureWorkerDescendants(): Promise<void> {
+  const handle = ownWorkerHandle();
+  knownWorkerDescendants = await captureDescendants(knownWorkerDescendants, {
+    pid: () => handle?.pid,
+    alive: () => handle?.alive() ?? false,
+    descendants: descendantPids,
+    log: appendSupervisorLog,
+  });
+}
+
+/**
+ * 분석 중인가 — 앱이 소유한 worker에 `--once` 자식이 있는가. 새 API 엔드포인트를 만들지
+ * 않는다. 외부 worker가 하는 일은 우리가 소유하지 않으므로 판정 대상이 아니다 (스펙 §6.9).
+ *
+ * 판정 자체는 shutdown.ts의 hasOnceChild에 있다. 여기 남는 것은 ps 왕복뿐이다.
+ */
+async function isAnalysing(): Promise<boolean> {
+  const pid = ownWorkerHandle()?.pid;
+  if (pid === undefined) return false;
+  try {
+    const tree = await descendantPids(pid);
+    if (tree.size === 0) return false;
+    const { stdout } = await execFileAsync("/bin/ps", ["-axo", "pid,command"], { timeout: 2_000 });
+    return hasOnceChild(stdout, tree);
+  } catch {
+    // 판정 도구가 실패하면 "아니오"로 본다. 확인을 못 띄우는 것이 종료를 막는 것보다 낫다.
+    return false;
+  }
+}
+
+/** 녹음 중인가 — 렌더러의 훅에 묻는다. 캡처는 브라우저가 갖고 있으므로 렌더러만이 안다. */
+async function isRecording(): Promise<boolean> {
+  const target = win;
+  if (target === null || target.isDestroyed()) return false;
+  try {
+    return (await target.webContents.executeJavaScript(
+      "Boolean(window.__damwha_desktop?.isRecording?.())",
+    )) as boolean;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 대화상자를 띄운다. 창이 있으면 그 창에 붙인다.
+ *
+ * 창이 없을 때 **띄우기는 한다** — announceRestartNotice가 같은 상황에서 띄우지 않는 것과
+ * 반대인데, 둘의 성격이 다르기 때문이다(재리뷰 3 §5-2). 그쪽은 앱이 스스로 꺼내는 안내라
+ * 방금 창을 닫은 사람 앞에 부모 없는 모달로 뜨면 안 되지만, 여기 셋은 **사용자가 방금 한
+ * 행동(⌘Q·메뉴)에 대한 직접적인 응답**이다. 창을 닫고 Dock에서 ⌘Q를 누르는 것은 평범한
+ * 경로이고, 그때 아무것도 묻지 않으면 녹음·분석 확인이 통째로 사라진다.
+ */
+function ask(options: Electron.MessageBoxOptions): Promise<Electron.MessageBoxReturnValue> {
+  const target = win !== null && !win.isDestroyed() ? win : null;
+  return target === null ? dialog.showMessageBox(options) : dialog.showMessageBox(target, options);
+}
+
+/** 종료 확인. 문구(무엇이 진행 중이고 무엇을 약속하는가)는 decideQuit이 만든다. */
+async function confirmQuit(message: string): Promise<boolean> {
+  const { response } = await ask({
+    type: "question",
+    buttons: ["종료", "취소"],
+    defaultId: 1,
+    cancelId: 1,
+    message: "담화를 종료할까요?",
+    detail: message,
+  });
+  return response === 0;
+}
+
+/**
+ * 유예 초과. **이 앱에서 이 질문을 띄우는 곳은 여기 하나뿐이다** — 어댑터가 또 띄우면
+ * 사용자가 같은 질문을 두 번 받는다. 어댑터(stopOwnWorker)는 이 콜백을 그대로 전달만 한다.
+ */
+async function askGraceExpired(): Promise<boolean> {
+  // 지금 `--once` 자식이 있으면 정상적으로 마무리 중이라는 뜻이다. 두 경우를 한 문구로
+  // 합치면 진행이 잘 되고 있는 사람에게 "응답하지 않습니다"라고 말하게 된다.
+  const prompt = graceExpiryPrompt(await isAnalysing());
+  const { response } = await ask({
+    type: "question",
+    buttons: ["계속 기다리기", "지금 강제 종료"],
+    defaultId: 0,
+    cancelId: 0,
+    message: prompt.message,
+    detail: prompt.detail,
+  });
+  return response === 1;
+}
+
+/** 정리하지 못한 것을 보인다. 문구는 quit-flow.ts의 leftoverNotice가 만든다. */
+async function showQuitNotice(notice: QuitNotice): Promise<void> {
+  await ask({
+    type: notice.kind,
+    buttons: ["확인"],
+    message: notice.message,
+    detail: notice.detail,
+  });
+}
+
+/**
+ * 앱이 소유한 worker의 종료 절차 (스펙 §6.9). 판정은 전부 shutdown.ts에 있다.
+ */
+function stopOwnWorker(result: LaunchResult, plan: StopPlan): Promise<StopOutcome> {
+  const handle = result.handle;
+  if (handle === null) return Promise.resolve({ stopped: true, leaked: [] });
+  return stopWorkerProcess(handle, {
+    graceMs: Math.max(plan.graceMs, WORKER_GRACE_MS),
+    pollMs: 200,
+    signal: (pid, sig) => {
+      try {
+        process.kill(pid, sig);
+      } catch {
+        // 이미 죽었으면 ESRCH.
+      }
+    },
+    descendants: descendantPids,
+    // 묻지 않고 감독자가 준 것을 그대로 쓴다. 없으면 강제하지 않는다.
+    onGraceExpired: (id) => plan.onGraceExpired?.(id) ?? Promise.resolve(false),
+    knownDescendants: knownWorkerDescendants,
+    // packaged main에는 콘솔 싱크가 없다. 스냅샷 실패 기록이 사라지지 않게 로그로 보낸다.
+    log: appendSupervisorLog,
+  });
+}
+
+/**
+ * 역순 종료 + dev의 Vite. Vite는 감독자가 모르는 자식이라 여기서 직접 내린다.
+ *
+ * 유예 안에 안 끝난 Vite도 결과에 실어 보낸다 — P2-C4가 세는 "앱이 만든 프로세스"에는
+ * 그 node도 들어간다. 감독자의 결과만 돌려주면 dev에서 남은 Vite는 아무 데도 안 적힌다.
+ */
+async function stopServices(): Promise<StopOutcome> {
   const v = vite;
   vite = null;
   viteApiBase = null;
   const sup = supervisor;
-  await Promise.all([
-    v === null ? Promise.resolve() : v.stop(STOP_GRACE_MS),
+  const [viteLeaked, out] = await Promise.all([
+    (async (): Promise<number[]> => {
+      if (v === null) return [];
+      await v.stop(STOP_GRACE_MS);
+      return v.alive() && v.pid !== undefined ? [v.pid] : [];
+    })(),
     sup === null
-      ? Promise.resolve()
-      : sup.stopAll({ graceMs: STOP_GRACE_MS }).then((out) => {
-          if (!out.stopped) {
-            appendSupervisorLog(
-              `종료: 정리하지 못한 프로세스가 남았어요 (pid ${out.leaked.join(", ") || "확인 불가"}).`,
-            );
-          }
-        }),
+      ? Promise.resolve<StopOutcome>({ stopped: true, leaked: [] })
+      : sup.stopAll({ graceMs: STOP_GRACE_MS, onGraceExpired: askGraceExpired }),
   ]);
+  if (viteLeaked.length === 0) return out;
+  return {
+    stopped: false,
+    leaked: [...out.leaked, ...viteLeaked],
+    detail: [out.detail, "개발 서버(Vite)가 유예 안에 끝나지 않았어요."]
+      .filter((line): line is string => line !== undefined)
+      .join("\n"),
+  };
+}
+
+/**
+ * 담화 화면이 붙은 뒤에는 준비 화면이 더 이상 그려지지 않으므로(shell-latch.ts) 서비스
+ * 상태를 볼 채널이 없다. Task 14가 상태 창을 만들 때까지 이 대화상자가 그 자리다 —
+ * 셸 화면과 **같은** statusLine을 쓰므로 두 곳의 문구가 갈리지 않는다.
+ */
+function showServiceStatus(): void {
+  const all = supervisor?.statuses() ?? [];
+  const detail =
+    all.length === 0
+      ? "아직 서비스를 띄우지 않았어요. 메뉴의 “다시 시도”를 눌러 주세요."
+      : [...all.map(statusLine), ...(restartNotice === null ? [] : ["", restartNotice])].join("\n");
+  void ask({ type: "info", buttons: ["확인"], message: "서비스 상태", detail }).catch(
+    (e: unknown) => appendSupervisorLog(`상태를 띄우지 못했어요 — ${reasonOf(e)}`),
+  );
 }
 
 /**
@@ -733,7 +910,7 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
           appendSupervisorLog("마이그레이션 검사가 건너뛰어졌어요 — 통과한 것이 아닙니다."),
       },
       embed: { probe: (url) => probeEmbedContract(url, wantEmbed), freePort },
-      worker: { listExternal: listExternalWorkers },
+      worker: { listExternal: listExternalWorkers, stop: stopOwnWorker },
     }),
     ctx,
     { onStatus: renderStatus, log: appendSupervisorLog },
@@ -771,10 +948,13 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     applyPermissionBoundary(allowedOrigins);
-    installMenu(() => {
-      retryCount = 0;
-      cancelRetry();
-      void start();
+    installMenu({
+      onRetry: () => {
+        retryCount = 0;
+        cancelRetry();
+        void start();
+      },
+      onShowStatus: showServiceStatus,
     });
     openWindow();
     await start();
@@ -814,17 +994,42 @@ if (!app.requestSingleInstanceLock()) {
     });
   });
 
-  // 앱이 만든 자식은 앱이 정리한다 (스펙 §6.2, P1-C5).
+  // 앱이 만든 자식은 앱이 정리한다 (스펙 §6.2, P1-C5). 순서·확인·핸드셰이크는
+  // quit-flow.ts가 정한다 — 여기 남는 것은 잎과, preventDefault의 짝인 app.quit()뿐이다.
   app.on("before-quit", (event) => {
     if (quitting) return;
-    quitting = true;
-    cancelRetry();
     event.preventDefault();
-    // preventDefault로 이번 종료를 막았으므로 app.quit()이 반드시 다시 불려야 한다.
-    // .then()이면 stopAll()이 거부할 때 그 호출이 통째로 사라져 앱이 창도 없이
-    // 남는다 — 첫 Cmd+Q 뒤로 영영 끝나지 않는다. 자식을 못 죽였더라도 종료는 진행한다.
-    void stopAll()
-      .catch(() => undefined)
-      .finally(() => app.quit());
+    // quitting을 여기서 올리지 않는다. 확인 대화상자에서 "취소"를 고르면 앱은 계속
+    // 살아야 하는데, 래치가 먼저 올라가 있으면 그 뒤로 activeWindow가 영원히 null을
+    // 돌려줘(spawn-guard) 재시도도 상태 갱신도 죽는다 — 종료하지 않은 앱이 종료된 앱처럼
+    // 군다. 되돌릴 수 없는 지점(beginQuit)에서 올린다.
+    void runQuitFlow({
+      inFlight: async () => ({ recording: await isRecording(), analysing: await isAnalysing() }),
+      confirm: confirmQuit,
+      captureDescendants: captureWorkerDescendants,
+      beginQuit: () => {
+        quitting = true;
+        cancelRetry();
+      },
+      stopRecording: () =>
+        win === null || win.isDestroyed()
+          ? Promise.resolve({ stopped: false, reason: "창이 이미 없어요." })
+          : (win.webContents.executeJavaScript(
+              "window.__damwha_desktop?.stopLiveRecording?.() ?? {stopped:false, reason:'no-bridge'}",
+            ) as Promise<{ stopped: boolean; reason?: string }>),
+      handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
+      stopServices,
+      log: appendSupervisorLog,
+      warn: showQuitNotice,
+      quit: () => app.quit(),
+    }).catch((e: unknown) => {
+      // preventDefault로 이번 종료를 막았으므로 app.quit()이 반드시 다시 불려야 한다.
+      // 확인 대화상자 자체가 거부하는 경로(창이 죽는 중, 표시 실패)가 이 catch에만 걸린다 —
+      // 여기서 삼키면 앱이 창도 없이 남아 첫 ⌘Q 뒤로 영영 끝나지 않는다 (Phase 1이 값을
+      // 치른 자리다). 자식을 못 죽였더라도 종료는 진행한다.
+      appendSupervisorLog(`종료 중 예외 — ${reasonOf(e)}`);
+      quitting = true;
+      app.quit();
+    });
   });
 }
