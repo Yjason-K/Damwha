@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseWorkerProcesses, probeEmbedContract } from "../src/services/external";
+import {
+  listExternalWorkers,
+  parseWorkerProcesses,
+  probeEmbedContract,
+} from "../src/services/external";
 
 // 2026-09-12 실측한 다섯 가지 모양을 한 fixture에 모았다. 첫 줄(4101)만 supervisor다.
 // 4102/4103이 핵심이다 — 둘 다 `-m damwha_worker`를 인자로 그대로 갖고 있고, 4103이
@@ -106,6 +110,58 @@ describe("parseWorkerProcesses", () => {
   it("returns nothing for empty or header-only input", () => {
     expect(parseWorkerProcesses("", new Set())).toEqual([]);
     expect(parseWorkerProcesses("  PID COMMAND", new Set())).toEqual([]);
+  });
+});
+
+describe("listExternalWorkers", () => {
+  // parseWorkerProcesses의 테스트는 ourPids를 손으로 받으므로 **그 집합을 누가 어떻게
+  // 채우는지**는 검증하지 않는다. 그 채우는 두 줄이 여기 있고, 여기서 잠근다 — 한 줄만
+  // 빠져도 앱은 자기가 방금 띄운 worker를 "외부 worker"로 보고 스스로 서서(§6.5의
+  // stand-down) worker를 영영 띄우지 않는다 (P2-C6).
+
+  it("does not report the worker we launched ourselves — the root pid included", async () => {
+    // Phase 4의 번들 런타임처럼 root 자신이 python supervisor 줄인 경우. descendants는
+    // 비어 있으므로 root를 ours에 직접 넣지 않으면 우리 자신이 외부 worker가 된다.
+    const out = await listExternalWorkers({
+      ps: async () => PS_APP_OWNED,
+      ownPid: () => 5001,
+      descendants: async () => new Set<number>(),
+    });
+    expect(out).toEqual([]);
+  });
+
+  it("does not report a supervisor that is a descendant of our launcher", async () => {
+    // 지금의 기본 모양: root는 uv(4103)이고 진짜 supervisor(4101)는 그 자손이다.
+    const out = await listExternalWorkers({
+      ps: async () => PS,
+      ownPid: () => 4103,
+      descendants: async (root) => (root === 4103 ? new Set([4101]) : new Set<number>()),
+    });
+    expect(out).toEqual([]);
+  });
+
+  it("reports the external supervisor when we have not launched one", async () => {
+    let asked = 0;
+    const out = await listExternalWorkers({
+      ps: async () => PS,
+      ownPid: () => undefined,
+      descendants: async () => {
+        asked += 1;
+        return new Set<number>();
+      },
+    });
+    expect(out).toEqual([4101]);
+    // 띄운 적이 없으면 자손을 물을 대상도 없다 — ps를 한 번 더 도는 값을 낭비하지 않는다.
+    expect(asked).toBe(0);
+  });
+
+  it("still reports a stranger while our own worker runs", async () => {
+    const out = await listExternalWorkers({
+      ps: async () => `${PS_APP_OWNED}\n 4101 /usr/bin/python3 -m damwha_worker`,
+      ownPid: () => 5001,
+      descendants: async () => new Set<number>(),
+    });
+    expect(out).toEqual([4101]);
   });
 });
 

@@ -89,6 +89,38 @@ export function parseWorkerProcesses(psOutput: string, ourPids: ReadonlySet<numb
   return out;
 }
 
+export interface WorkerScanDeps {
+  /** `ps -axo pid,command`의 출력. */
+  ps(): Promise<string>;
+  /** 우리가 띄운 worker 런처의 pid. 아직 안 띄웠으면 undefined. */
+  ownPid(): number | undefined;
+  /** main.ts의 descendantPids. root는 **빼고** 자손만 돌려준다. */
+  descendants(rootPid: number): Promise<Set<number>>;
+}
+
+/**
+ * 지금 돌고 있는 **우리 것이 아닌** worker supervisor의 pid.
+ *
+ * 배선(ps 실행, 자손 조회)이 아니라 판정이 여기 있는 이유: ourPids를 채우는 두 줄이 이
+ * 판정의 전부인데, 그 두 줄을 main.ts에 두면 어떤 테스트도 그것을 부를 수 없다 —
+ * main.ts는 electron을 값으로 import해 vitest가 못 불러온다(shell-window.ts:4). 그러면
+ * `ours.add(pid)`를 지워도 위 parseWorkerProcesses 테스트는 전부 초록으로 남는다. 그
+ * 테스트들은 ourPids를 **손으로** 받으므로 집합을 누가 채우는지는 보지 않기 때문이다.
+ */
+export async function listExternalWorkers(deps: WorkerScanDeps): Promise<number[]> {
+  const ours = new Set<number>();
+  const pid = deps.ownPid();
+  if (pid !== undefined) {
+    // root 자신을 반드시 넣는다. descendants(root)는 자식만 돌려주므로 이 줄이 없으면
+    // 우리가 띄운 supervisor가 "외부 worker"로 분류되고, 스펙 §6.5의 stand-down이 우리
+    // 자신을 향해 발화해 앱이 worker를 영영 띄우지 않는다 (P2-C6). verifyOwnListener가
+    // main.ts에서 `pid === childPid || descendants.has(pid)`로 하는 것과 같은 보정이다.
+    ours.add(pid);
+    for (const d of await deps.descendants(pid)) ours.add(d);
+  }
+  return parseWorkerProcesses(await deps.ps(), ours);
+}
+
 export type EmbedProbe =
   | { kind: "match" }
   | { kind: "mismatch"; detail: string }
