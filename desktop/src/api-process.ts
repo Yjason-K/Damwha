@@ -63,7 +63,7 @@ function inheritedEnv(): Record<string, string> {
   return out;
 }
 
-function makeSink(logFile?: string) {
+export function makeSink(logFile?: string) {
   let tail = "";
   // stderr 꼬리와 별도로 쌓는다 — 합치면 평범한 stdout 로그가 lastMeaningfulLine 같은
   // "실패 원인" 판정을 오염시킨다. ApiHandle.stdoutTail의 doc 코멘트에 이유가 있다.
@@ -96,6 +96,21 @@ function makeSink(logFile?: string) {
       out?.end();
     },
   };
+}
+
+/**
+ * makeSink()가 쌓은 두 축적기를 ApiHandle이 노출할 이름(stderrTail/stdoutTail)에
+ * 연결한다. launchDev·launchPackaged가 이 매핑을 각자 return 객체에 복붙해 두면,
+ * 복붙 한 번의 실수로 `stdoutTail: sink.stdoutTail`이 `sink.tail`로 뒤바뀌어도
+ * 타입은 그대로 맞는다 — 실제로 그 사고가 한 번 났고 리뷰도, tsc도 못 잡았다.
+ * 매핑을 이 함수 하나로 모으면 여기 하나만 테스트해도 두 런처의 배선이 함께
+ * 보장된다.
+ */
+export function sinkTails(sink: { tail(): string; stdoutTail(): string }): {
+  stderrTail(): string;
+  stdoutTail(): string;
+} {
+  return { stderrTail: sink.tail, stdoutTail: sink.stdoutTail };
 }
 
 /**
@@ -199,8 +214,7 @@ export function launchPackaged(options: LaunchOptions): ApiHandle {
       return pid;
     },
     alive: () => exit.code() === null,
-    stderrTail: sink.tail,
-    stdoutTail: sink.stdoutTail,
+    ...sinkTails(sink),
     exitCode: exit.code,
     onExit: exit.add,
     async stop(graceMs) {
@@ -278,8 +292,7 @@ export function launchDev(options: LaunchOptions): ApiHandle {
       return pid;
     },
     alive: () => exit.code() === null,
-    stderrTail: sink.tail,
-    stdoutTail: sink.stdoutTail,
+    ...sinkTails(sink),
     exitCode: exit.code,
     onExit: exit.add,
     async stop(graceMs) {

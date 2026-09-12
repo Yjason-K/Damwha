@@ -45,14 +45,19 @@ export interface ApiDeps {
  * 실제로 뜬 서버 없이는 검증할 수 없다 — 가짜 handle과 이미 정해진 probe 결과만으로
  * 순수하게 부를 수 있게 갈라낸 것이 이 함수다. 바로 이 분리가 없어서 스트림이
  * 틀렸다는 것을 브리프 단계에서 못 잡았다 (위 PENDING 주석 참고).
+ *
+ * stderr 꼬리는 매개변수로 받지 않고 handle에서 직접 읽는다. handle이 이미
+ * stderrTail()을 갖고 있는데 따로 받으면, 호출자가 다른 handle의 꼬리를 잘못
+ * 넘길 길이 열린다 — 실제로 이전 테스트 한 곳이 그 형태였다(값은 우연히 같았지만
+ * 타입은 그 불일치를 막지 못했다).
  */
 export async function judgeAfterProbe(
   handle: ServiceHandle,
-  stderrTail: string,
   probe: ProbeResult,
   port: number,
   deps: ApiDeps,
 ): Promise<ReadinessResult> {
+  const stderrTail = handle.stderrTail();
   if (probe === "ready") {
     // 메커니즘 (b): 200을 받아도 그 리스너가 우리 자식인지 증명한다 (Phase 1 §6.4).
     if (!(await deps.verifyOwnListener(port, handle.pid))) return { kind: "not-ready" };
@@ -134,7 +139,7 @@ export function apiSpec(deps: ApiDeps): ServiceSpec {
       if (isAddrInUse(tail)) return { kind: "failed", detail: "포트가 이미 쓰이고 있어요." };
 
       const probe = await probeHealth(origin);
-      return judgeAfterProbe(handle, tail, probe, port, deps);
+      return judgeAfterProbe(handle, probe, port, deps);
     },
     async stop(result, plan) {
       const handle = result.handle;

@@ -89,7 +89,7 @@ describe("judgeAfterProbe — 게이트가 읽는 스트림 고정", () => {
     const onPendingMigrations = vi.fn();
     const handle = fakeHandle({ stdout: WARN, stderr: "" });
 
-    const result = await judgeAfterProbe(handle, handle.stderrTail(), "ready", 3000, fakeDeps({ onPendingMigrations }));
+    const result = await judgeAfterProbe(handle, "ready", 3000, fakeDeps({ onPendingMigrations }));
 
     expect(result.kind).toBe("failed");
     expect(onPendingMigrations).toHaveBeenCalledWith({
@@ -104,7 +104,7 @@ describe("judgeAfterProbe — 게이트가 읽는 스트림 고정", () => {
     // 우연히 두 스트림을 다 보거나 stderr만 보는 퇴행이 생기면 이 테스트가 깨진다.
     const handle = fakeHandle({ stdout: "", stderr: WARN });
 
-    const result = await judgeAfterProbe(handle, handle.stderrTail(), "ready", 3000, fakeDeps({ onPendingMigrations }));
+    const result = await judgeAfterProbe(handle, "ready", 3000, fakeDeps({ onPendingMigrations }));
 
     expect(result.kind).toBe("ready");
     expect(onPendingMigrations).not.toHaveBeenCalled();
@@ -115,14 +115,52 @@ describe("judgeAfterProbe — 게이트가 읽는 스트림 고정", () => {
     const skipped = "WARN pending migration check skipped: ENOENT";
 
     const inStdout = fakeHandle({ stdout: skipped, stderr: "" });
-    const r1 = await judgeAfterProbe(inStdout, "", "ready", 3000, fakeDeps({ onMigrationCheckSkipped }));
+    const r1 = await judgeAfterProbe(inStdout, "ready", 3000, fakeDeps({ onMigrationCheckSkipped }));
     expect(r1.kind).toBe("ready");
     expect(onMigrationCheckSkipped).toHaveBeenCalledOnce();
 
     onMigrationCheckSkipped.mockClear();
     const inStderr = fakeHandle({ stdout: "", stderr: skipped });
-    const r2 = await judgeAfterProbe(inStderr, skipped, "ready", 3000, fakeDeps({ onMigrationCheckSkipped }));
+    const r2 = await judgeAfterProbe(inStderr, "ready", 3000, fakeDeps({ onMigrationCheckSkipped }));
     expect(r2.kind).toBe("ready");
     expect(onMigrationCheckSkipped).not.toHaveBeenCalled();
+  });
+});
+
+describe("judgeAfterProbe — 소유 증명이 게이트보다 먼저다", () => {
+  // Phase 1 §6.4: health 200은 "그 포트에서 누군가 200을 줬다"는 뜻일 뿐, 우리 자식이
+  // 준 200이라는 증거가 아니다 — 다른 프로세스가 같은 포트를 먼저 잡았을 수 있다.
+  // verifyOwnListener가 그 증명이고, 이게 실패하면 아래의 마이그레이션 게이트는 아예
+  // 평가돼서는 안 된다 — 남의 프로세스의 stdout을 우리 마이그레이션 판정에 쓰면 안 되니까.
+  it("소유가 증명되지 않으면 not-ready로 돌아가고 게이트 콜백은 하나도 부르지 않는다", async () => {
+    const onPendingMigrations = vi.fn();
+    const onMigrationCheckSkipped = vi.fn();
+    // stdout에 마이그레이션 경고를 일부러 채워 둔다 — 게이트가 소유 증명을 건너뛰고
+    // 평가까지 가 버리면 이 콜백들이 불려서 드러난다.
+    const handle = fakeHandle({ stdout: WARN, stderr: "" });
+    const deps = fakeDeps({
+      verifyOwnListener: async () => false,
+      onPendingMigrations,
+      onMigrationCheckSkipped,
+    });
+
+    const result = await judgeAfterProbe(handle, "ready", 3000, deps);
+
+    expect(result).toEqual({ kind: "not-ready" });
+    expect(onPendingMigrations).not.toHaveBeenCalled();
+    expect(onMigrationCheckSkipped).not.toHaveBeenCalled();
+  });
+});
+
+describe("judgeAfterProbe — db-unreachable은 degraded다", () => {
+  // 스펙 §6.6: 부팅 뒤 DB가 끊겨도 API 프로세스는 죽지 않고 503을 준다. 여기서 failed를
+  // 돌리면 감독자의 재시작 정책이 발화하는데, 재시작해도 DB가 돌아오지 않으므로 백오프
+  // 예산만 태우고 끝난다 — degraded로만 표시하고 살려 둬야 DB가 돌아왔을 때 자동 회복된다.
+  it("db-unreachable은 failed가 아니라 degraded로 간다", async () => {
+    const handle = fakeHandle({});
+
+    const result = await judgeAfterProbe(handle, "db-unreachable", 3000, fakeDeps());
+
+    expect(result.kind).toBe("degraded");
   });
 });
