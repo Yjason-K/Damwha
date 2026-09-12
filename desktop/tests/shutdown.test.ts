@@ -132,6 +132,55 @@ describe("stopWorkerProcess", () => {
     expect(out).toEqual({ stopped: false, leaked: [4242] });
   });
 
+  // Finding 1 (재리뷰): processExists(기본 자손 생존 확인)는 실제 호출자가 쓰는 유일한
+  // 경로인데, 자손이 있는 기존 테스트는 전부 stillAlive를 주입해 이 기본 분기를 우회한다.
+  // 재리뷰가 실측한 변이 두 종 — (a) process.kill이 안 던질 때의 `return true`를 false로,
+  // (b) catch의 `code !== "ESRCH"`를 뒤집어 EPERM(존재하지만 남의 것)을 죽음으로 읽게 —
+  // 둘 다 기존 21개 테스트를 초록불로 통과시켰다. 아래 두 테스트가 각각 하나씩 잡는다.
+  it("treats a real, still-running descendant as alive through the default probe", async () => {
+    // 실제 신호를 보내지 않는다 — process.kill(pid, 0)은 신호를 배달하지 않고 존재만
+    // 묻는다. 자기 자신의 pid(현재 이 vitest 프로세스)를 자손인 척 주입하면 항상 진짜
+    // "살아 있다"를 모형화할 수 있다. 이 경로가 변이 (a)를 잡는다: process.kill이 던지지
+    // 않을 때 true 대신 false를 돌려주면 이 pid가 leaked에서 사라진다.
+    const out = await stopWorkerProcess(handle(1), {
+      graceMs: 20,
+      pollMs: 5,
+      signal: () => undefined,
+      descendants: async () => new Set([process.pid]),
+      onGraceExpired: async () => {
+        throw new Error("1단계에서 끝났으니 물을 일이 없다");
+      },
+    });
+    expect(out).toEqual({ stopped: false, leaked: [process.pid] });
+  });
+
+  it("does not read a permission-denied descendant as dead", async () => {
+    // EPERM(존재하지만 남의 프로세스)을 이식성 있게 실제로 재현하기는 어렵다 — 루트로
+    // 도는 CI는 아예 안 던진다. process.kill을 흉내 내되, 어떤 pid로도 실제 커널 호출을
+    // 하지 않는다(신호 0은 원래도 아무것도 배달하지 않지만, 이 테스트는 그마저도 안 부른다).
+    // 이 경로가 변이 (b)를 잡는다: catch의 ESRCH 판정이 뒤집히면 EPERM이 "죽음"으로 읽혀
+    // 이 pid가 leaked에서 사라진다.
+    const spy = vi.spyOn(process, "kill").mockImplementation(() => {
+      const err = new Error("kill EPERM") as NodeJS.ErrnoException;
+      err.code = "EPERM";
+      throw err;
+    });
+    try {
+      const out = await stopWorkerProcess(handle(1), {
+        graceMs: 20,
+        pollMs: 5,
+        signal: () => undefined,
+        descendants: async () => new Set([9999]),
+        onGraceExpired: async () => {
+          throw new Error("1단계에서 끝났으니 물을 일이 없다");
+        },
+      });
+      expect(out).toEqual({ stopped: false, leaked: [9999] });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   // 아래 세 테스트는 "supervisor가 스스로 죽었다"는 경우를 본다. 그때 --once 자식과 그
   // 자식이 띄운 mlx_lm.server는 pid 1로 재부모화되어 사후 ppid BFS로는 보이지 않는다 —
   // 그래서 진입 시점에 자손을 한 번 찍어 두지 않으면 이 모듈은 고아를 남겨 두고도
@@ -169,6 +218,32 @@ describe("stopWorkerProcess", () => {
     expect(out).toEqual({ stopped: false, leaked: [5001] });
   });
 
+  it("catches a descendant that appears only in the re-snapshot taken right before the forced SIGTERM", async () => {
+    // worker의 --once 자식은 job마다 새로 뜬다. 진입 스냅샷 이후, 강제 단계(3단계) 직전에
+    // 새로 뜬 자식은 진입 스냅샷 하나만으로는 안 보인다. handle(4)는 바로 그 강제 단계의
+    // 두 번째 SIGTERM 직후 죽으므로 cleanUnlessOrphans가 참고하는 것은 "지금까지 찍어 둔
+    // 스냅샷들"뿐이다 — 그 자손이 stage 4의 사후 BFS에 잡힐 기회조차 없다. 강제 단계 직전
+    // 재스냅샷이 없으면 이 경우는 {stopped:true, leaked:[]}로 뭉개진다 — 정확히 이
+    // 테스트가 지키는 것이다.
+    const alive = new Set([6001]);
+    let call = 0;
+    const out = await stopWorkerProcess(handle(4), {
+      graceMs: 20,
+      pollMs: 5,
+      signal: () => undefined,
+      descendants: async () => {
+        call += 1;
+        // 1번째 호출(진입 스냅샷)에는 아직 없다. 2번째 호출(강제 단계 직전 재스냅샷)부터
+        // 보인다.
+        return call === 1 ? new Set<number>() : new Set([6001]);
+      },
+      onGraceExpired: async () => true,
+      maxWaits: 2,
+      stillAlive: async (pids) => pids.filter((p) => alive.has(p)),
+    });
+    expect(out).toEqual({ stopped: false, leaked: [6001] });
+  });
+
   it("still reports a clean stop when the captured descendants went with it", async () => {
     // 같은 경로인데 자손도 같이 죽은 경우. 스냅샷 확인이 늘 leaked를 만들어 내면
     // 평범한 종료마다 거짓 경고가 뜬다 — leaked는 사람에게 보여 주는 값이라 그러면 안 된다.
@@ -181,6 +256,90 @@ describe("stopWorkerProcess", () => {
       stillAlive: async () => [],
     });
     expect(out).toEqual({ stopped: true, leaked: [] });
+  });
+
+  // Finding 3 (재리뷰, 이월): opts.descendants(pid).catch(() => new Set())가 열거 실패를
+  // "자손 없음"으로 뭉개면 그 뒤로 이 모듈은 "깨끗하다"고 보고한다 — main.ts의
+  // verifyOwnListener가 소유를 증명 못 할 때 "아니오"로 닫는 것과 정반대 방향의 편향이다.
+  // 아래 두 테스트는 각각 진입 스냅샷과 강제 단계 직전 재스냅샷이 실패하는 경우를 본다.
+  it("does not report clean when the entry snapshot could not be taken", async () => {
+    const errors: unknown[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      errors.push(args);
+    });
+    try {
+      const out = await stopWorkerProcess(handle(1), {
+        graceMs: 20,
+        pollMs: 5,
+        signal: () => undefined,
+        descendants: async () => {
+          throw new Error("ps 실패");
+        },
+        onGraceExpired: async () => {
+          throw new Error("1단계에서 끝났으니 물을 일이 없다");
+        },
+      });
+      // leaked는 비어 있다 — 어떤 pid가 남았는지조차 모른다. 그래도 stopped는 false다:
+      // "확인 못 했다"를 "깨끗했다"로 보고하지 않는다.
+      expect(out).toEqual({ stopped: false, leaked: [] });
+      // StopOutcome에는 이유를 실을 자리가 없다 — 사라지지 않게 최소한 로그에는 남는다.
+      expect(errors.length).toBeGreaterThan(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("does not report clean when the re-snapshot before the forced SIGTERM could not be taken", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      let call = 0;
+      const out = await stopWorkerProcess(handle(4), {
+        graceMs: 20,
+        pollMs: 5,
+        signal: () => undefined,
+        descendants: async () => {
+          call += 1;
+          // 진입 스냅샷(1번째)은 정상이다. 강제 단계 직전 재스냅샷(2번째)만 실패한다.
+          if (call === 2) throw new Error("ps 실패");
+          return new Set<number>();
+        },
+        onGraceExpired: async () => true,
+        maxWaits: 2,
+      });
+      expect(out).toEqual({ stopped: false, leaked: [] });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("does not report clean when the pre-SIGKILL tree walk (stage 4) could not be taken", async () => {
+    // 앞의 두 테스트는 cleanUnlessOrphans(1·3단계 조기 반환) 경로만 태운다. 5단계 최종
+    // 반환에도 같은 snapshotFailed 가드가 있는데, 그 갈래를 지워도 위 두 테스트는 계속
+    // 초록불이다(cleanUnlessOrphans까지도 안 간다) — 이 테스트가 그 갈래를 직접 태운다.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      let call = 0;
+      const out = await stopWorkerProcess(handle(999), {
+        graceMs: 10,
+        pollMs: 5,
+        signal: () => undefined,
+        descendants: async () => {
+          call += 1;
+          // 진입(1번째)·강제 단계 직전(2번째) 스냅샷은 정상이다. 4단계의 재확인용 트리
+          // 걷기(3번째)만 실패한다.
+          if (call === 3) throw new Error("ps 실패");
+          return new Set<number>();
+        },
+        onGraceExpired: async () => true,
+        maxWaits: 2,
+        // 진짜 생존 여부와 무관하게 "아무것도 안 남았다"로 고정한다 — 실패했는데도
+        // stopped:true가 나온다면 그건 순전히 5단계 가드가 빠졌기 때문이어야 한다.
+        stillAlive: async () => [],
+      });
+      expect(out).toEqual({ stopped: false, leaked: [] });
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("refuses to signal a handle that is already dead at entry", async () => {
