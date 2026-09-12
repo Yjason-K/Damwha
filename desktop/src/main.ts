@@ -17,6 +17,8 @@ import { lastMeaningfulLine } from "./stderr";
 import { showStatus, type ShellStatus } from "./shell-window";
 import { applyNavigationBoundary, applyPermissionBoundary } from "./permissions";
 import { mayRenderShell } from "./shell-latch";
+import { maySpawnServices } from "./spawn-guard";
+import { openWindowFlow } from "./window-flow";
 import { installMenu } from "./menu";
 import { createSupervisor } from "./services/supervisor";
 import { buildSpecs } from "./services/specs";
@@ -192,21 +194,22 @@ function cancelRetry(): void {
 }
 
 /**
- * 이 세대가 아직 화면을 건드려도 되는가. 아니면 null이고, 부른 쪽은 물러난다.
- * 세 가지를 한자리에서 본다 — 예전에는 `mine !== generation || win === null`만 보는
- * 검사가 네 군데 흩어져 있었다.
+ * 이 세대가 아직 화면을 건드리고 자식을 띄워도 되는가. 아니면 null이고, 부른 쪽은 물러난다.
+ * 예전에는 `mine !== generation || win === null`만 보는 검사가 네 군데 흩어져 있었다.
  *
- * - 세대: 더 새로운 start()가 시작됐으면 이 호출의 관찰은 이미 낡았다.
- * - quitting: before-quit이 cancelRetry()를 이미 돌렸다. 여기서 화면을 갱신하거나
- *   재시도를 다시 걸면 종료가 치운 것을 되살린다 — 기동 중 종료가 정확히 이 모양이었다.
- * - isDestroyed: 'closed' 이벤트가 win을 null로 만들기 전에도 창은 파괴돼 있을 수 있고,
- *   그 창에 loadFile을 부르면 'Object has been destroyed'가 **동기로** 던져진다.
- *   win !== null만으로는 그 창을 걸러 내지 못한다.
+ * 판정은 spawn-guard.ts에 있다 — electron 전역을 **읽는 일**만 여기 남는다. 같은 규칙을 두 벌
+ * 적으면(여기 하나, 스폰 직전에 하나) 한쪽만 고치는 사고가 나므로 그 술어는 하나다. 세 조건의
+ * 근거는 그 모듈의 주석에 있다.
  */
 function activeWindow(mine: number): BrowserWindow | null {
-  if (mine !== generation || quitting) return null;
-  if (win === null || win.isDestroyed()) return null;
-  return win;
+  const current = win;
+  const may = maySpawnServices({
+    quitting,
+    generation,
+    mine,
+    hasWindow: current !== null && !current.isDestroyed(),
+  });
+  return may ? current : null;
 }
 
 /**
@@ -750,12 +753,15 @@ if (!app.requestSingleInstanceLock()) {
     // rendererTarget이 재기동 + waitForReady의 30초를 통째로 그렇게 돈다), 지금 서비스가 어떤
     // 상태인지도 보이지 않는다. showShell이 래치도 같이 내려 renderStatus가 이 창을 다시
     // 그릴 수 있게 된다 (완료 기준 P2-C12, 리뷰 Important-3).
-    void (async () => {
-      await showShell(opened, shellStatusOf()).catch(() => undefined);
-      await reattachWindow(mine);
-    })().catch((e: unknown) => {
-      // startServices 경로와 같은 안전망. 로그 한 줄로 끝내면 빈 창에 영구히 머문다.
-      void reportFailure(mine, "창을 다시 붙이지 못했어요", e);
+    // 순서와 실패 경로는 window-flow.ts가 정한다. 잎(loadFile·loadURL·대화상자)만 여기 있다.
+    void openWindowFlow({
+      showShell: () => showShell(opened, shellStatusOf()),
+      attach: () => reattachWindow(mine),
+      onFailure: (e) => reportFailure(mine, "창을 다시 붙이지 못했어요", e),
+    }).catch((e: unknown) => {
+      // 실패 처리 자체가 거부하면 여기서 멈춘다 — void 프라미스의 거부는 Electron main의
+      // uncaught exception이 되고, 하필 화면이 이미 잘못된 순간에 난다.
+      appendSupervisorLog(`창을 다시 붙이는 중 예외 — ${reasonOf(e)}`);
     });
   });
 
