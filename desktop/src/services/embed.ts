@@ -7,6 +7,26 @@ export interface EmbedDeps {
   freePort(): Promise<number>;
 }
 
+/**
+ * 아래 prepare가 **읽거나 만들어 내는** 키. 재시도의 config.json 재적용이 이 집합을 건너뛴다
+ * (config.ts의 refreshEnv, config-reload.ts).
+ *
+ * 파생의 입력(HOST·PORT)과 결과(URL)가 한 집합인 이유: 입력만 다시 읽고 파생을 다시 돌리지
+ * 않으면 URL이 옛 포트에 남는다. 그 어긋남은 오류가 아니라 **조용한 degrade**다 — API는
+ * 죽지 않고 의미 검색만 키워드 검색으로 떨어진다. 그래서 "실행 중에는 안 바꾼다, 대신
+ * 말한다"가 유일하게 정직한 답이다 (재리뷰 §4-1).
+ *
+ * HOST를 넣어 두는 것은 지금은 무해한 중복이다(앱이 127.0.0.1을 고정 주입하므로 파일 값과
+ * 살아 있는 값이 어긋날 수 없다). 그래도 함께 둔다 — 이 집합의 정의는 "prepare가 의존하는
+ * 키"이지 "지금 어긋날 수 있는 키"가 아니고, 둘을 섞으면 다음 사람이 HOST의 성질이 바뀌는
+ * 순간 같은 결함을 다시 만든다.
+ */
+export const PREPARE_DERIVED_KEYS = [
+  "EMBED_SERVICE_HOST",
+  "EMBED_SERVICE_PORT",
+  "EMBED_SERVICE_URL",
+] as const;
+
 function baseUrl(host: string, port: string): string {
   return `http://${host}:${port}`;
 }

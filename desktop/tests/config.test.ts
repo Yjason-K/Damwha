@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -48,11 +48,29 @@ describe("defaultConfig — Phase 2 keys", () => {
   it("mints a worker id that cannot collide with an external worker", () => {
     // 기본값 worker-1을 외부 worker와 나눠 쓰면 locked_by만 보는 소유권 가드가
     // 둘을 구별하지 못한다 (스펙 §6.5).
-    const a = defaultConfig("/u").WORKER_ID;
-    const b = defaultConfig("/u").WORKER_ID;
-    expect(a).toMatch(/^desktop-/);
-    expect(a).not.toBe("worker-1");
-    expect(a).not.toBe(b);
+    const id = defaultConfig("/u").WORKER_ID;
+    expect(id).toMatch(/^desktop-/);
+    expect(id).not.toBe("worker-1");
+  });
+
+  it("keeps the same worker id for every call in one run", async () => {
+    // 재리뷰 §4-2. config.json이 값을 못 줄 때(JSON이 깨졌다·객체가 아니다·첫 실행의 쓰기가
+    // 실패했다 — 전부 실패 화면이 편집을 권하는 상황이다) loadConfig가 이것을 매번 다시
+    // 민다. 그러면 백오프가 되살린 worker가 **새 신분으로** 떠서 옛 id로 locked_by가 찍힌
+    // job을 다시 집지 못하고(스펙 §6.5), 재적용 진단은 파일을 건드리지도 않았는데
+    // "바뀐 키: WORKER_ID"를 3·8·20초마다 적는다.
+    expect(defaultConfig("/u").WORKER_ID).toBe(defaultConfig("/u").WORKER_ID);
+    // 파일이 값을 못 주는 경로에서도 같아야 한다 — 그 경로가 정확히 재시도 루프와 같이 온다.
+    fs.writeFileSync(path.join(dir, "config.json"), "{ not json");
+    expect(loadConfig(dir).env.WORKER_ID).toBe(loadConfig(dir).env.WORKER_ID);
+  });
+
+  it("still mints a new worker id for the next run", async () => {
+    // "실행마다 새 값, 실행 안에서는 고정"의 나머지 절반. 모듈을 다시 불러오는 것이 곧
+    // 새 실행이다 — 상수를 고정 문자열로 바꾸면 두 실행이 같은 신분을 나눠 쓴다.
+    vi.resetModules();
+    const again = (await import("../src/config")).defaultConfig("/u").WORKER_ID;
+    expect(again).not.toBe(defaultConfig("/u").WORKER_ID);
   });
 });
 
@@ -204,14 +222,22 @@ describe("loadConfig — app-owned keys", () => {
 });
 
 describe("refreshEnv", () => {
+  /** 이 파일은 기구만 본다. 실제로 어느 키가 여기 들어가는지는 config-reload.test.ts가 잠근다. */
+  const RESTART_ONLY = ["EMBED_SERVICE_PORT", "EMBED_SERVICE_URL", "WORKER_ID"];
+
   it("lets a corrected config.json value reach a running LaunchContext", () => {
     // 완료 기준 P2-C8. 실패 화면은 "값을 고치면 다시 시도합니다"라고 적는데, 감독자를 실행당
     // 하나만 만드는 구조에서는 ctx.env가 생성 시점에 얼어붙어 그 문장이 거짓이 된다.
     const current = { DATABASE_URL: "postgres://wrong", PORT: "3000" };
     const baseline = { ...current };
-    const changed = refreshEnv(current, baseline, { DATABASE_URL: "postgres://right", PORT: "3000" });
+    const out = refreshEnv(
+      current,
+      baseline,
+      { DATABASE_URL: "postgres://right", PORT: "3000" },
+      RESTART_ONLY,
+    );
     expect(current.DATABASE_URL).toBe("postgres://right");
-    expect(changed).toEqual(["DATABASE_URL"]);
+    expect(out.changed).toEqual(["DATABASE_URL"]);
   });
 
   it("does not undo a value prepare() moved to match a live child", () => {
@@ -220,15 +246,77 @@ describe("refreshEnv", () => {
     // 조용한 degrade다.
     const current = { EMBED_SERVICE_PORT: "54321", EMBED_SERVICE_URL: "http://127.0.0.1:54321" };
     const baseline = { EMBED_SERVICE_PORT: "8100" };
-    const changed = refreshEnv(current, baseline, { EMBED_SERVICE_PORT: "8100" });
+    const out = refreshEnv(current, baseline, { EMBED_SERVICE_PORT: "8100" }, RESTART_ONLY);
     expect(current.EMBED_SERVICE_PORT).toBe("54321");
-    expect(changed).toEqual([]);
+    expect(out.changed).toEqual([]);
+  });
+
+  it("refuses a key prepare() derives from, however the file and the live value differ", () => {
+    // 재리뷰 §4-1. 파생의 **입력**을 다시 읽으면서 파생을 다시 돌리지 않는 것은 아예 다시
+    // 읽지 않는 것보다 나쁘다: embed는 9000에 bind하고 준비 판정은 8100을 찌르고(180초 뒤
+    // failed ×3), API에게 넘어간 URL은 :8100이라 의미 검색이 오류 없이 키워드 검색으로
+    // 떨어진다. 살아 있는 감독자 안에서 PORT와 URL이 어긋나는 일은 없어야 한다.
+    const current = {
+      EMBED_SERVICE_PORT: "8100",
+      EMBED_SERVICE_URL: "http://127.0.0.1:8100",
+    };
+    const baseline = { EMBED_SERVICE_PORT: "8100" };
+    const out = refreshEnv(current, baseline, { EMBED_SERVICE_PORT: "9000" }, RESTART_ONLY);
+    expect(current.EMBED_SERVICE_PORT).toBe("8100");
+    expect(current.EMBED_SERVICE_URL).toBe("http://127.0.0.1:8100");
+    expect(out.changed).toEqual([]);
+  });
+
+  it("reports the refused key with both values so the screen can say what disagrees", () => {
+    const current = { EMBED_SERVICE_PORT: "8100" };
+    const baseline = { EMBED_SERVICE_PORT: "8100" };
+    const out = refreshEnv(current, baseline, { EMBED_SERVICE_PORT: "9000" }, RESTART_ONLY);
+    expect(out.needsRestart).toEqual([
+      { key: "EMBED_SERVICE_PORT", file: "9000", live: "8100" },
+    ]);
+  });
+
+  it("reports the mirror case too — prepare moved the port and the file still disagrees", () => {
+    // 이쪽은 예전에 완전히 침묵했다: current !== baseline이라 continue로 빠지고 changed가
+    // 비어 있어 로그도 화면도 아무 말을 하지 않았다. 사용자의 수정은 영영 무시된다.
+    const current = { EMBED_SERVICE_PORT: "54321" };
+    const baseline = { EMBED_SERVICE_PORT: "8100" };
+    const out = refreshEnv(current, baseline, { EMBED_SERVICE_PORT: "9000" }, RESTART_ONLY);
+    expect(out.needsRestart).toEqual([
+      { key: "EMBED_SERVICE_PORT", file: "9000", live: "54321" },
+    ]);
+    expect(current.EMBED_SERVICE_PORT).toBe("54321");
+  });
+
+  it("says nothing about a restart-only key the file agrees with", () => {
+    const current = { EMBED_SERVICE_PORT: "8100", WORKER_ID: "desktop-a" };
+    const baseline = { ...current };
+    const out = refreshEnv(
+      current,
+      baseline,
+      { EMBED_SERVICE_PORT: "8100", WORKER_ID: "desktop-a" },
+      RESTART_ONLY,
+    );
+    expect(out.needsRestart).toEqual([]);
+    expect(out.changed).toEqual([]);
+  });
+
+  it("never swaps a running worker's identity", () => {
+    // 재리뷰 §4-2의 다른 절반. WORKER_ID는 이 실행의 신분이다 — 살아 있는 worker 밑에서
+    // 바뀌면 백오프가 되살린 worker가 새 id로 떠서 옛 id의 locked_by 행이 고아가 된다.
+    const current = { WORKER_ID: "desktop-live" };
+    const baseline = { WORKER_ID: "desktop-live" };
+    const out = refreshEnv(current, baseline, { WORKER_ID: "desktop-other" }, RESTART_ONLY);
+    expect(current.WORKER_ID).toBe("desktop-live");
+    expect(out.changed).toEqual([]);
+    expect(out.needsRestart.map((r) => r.key)).toEqual(["WORKER_ID"]);
   });
 
   it("reports nothing when the file has not changed", () => {
     const current = { PORT: "3000" };
     const baseline = { PORT: "3000" };
-    expect(refreshEnv(current, baseline, { PORT: "3000" })).toEqual([]);
+    const out = refreshEnv(current, baseline, { PORT: "3000" }, RESTART_ONLY);
+    expect(out).toEqual({ changed: [], removed: [], needsRestart: [] });
   });
 
   it("takes a second edit to the same key — the baseline moves with the file", () => {
@@ -236,15 +324,40 @@ describe("refreshEnv", () => {
     // 수정을 영영 받지 못한다.
     const current = { PORT: "3000" };
     const baseline = { PORT: "3000" };
-    refreshEnv(current, baseline, { PORT: "3100" });
-    expect(refreshEnv(current, baseline, { PORT: "3200" })).toEqual(["PORT"]);
+    refreshEnv(current, baseline, { PORT: "3100" }, RESTART_ONLY);
+    expect(refreshEnv(current, baseline, { PORT: "3200" }, RESTART_ONLY).changed).toEqual(["PORT"]);
     expect(current.PORT).toBe("3200");
   });
 
   it("adds a key the file gained since startup", () => {
     const current: Record<string, string> = { PORT: "3000" };
     const baseline: Record<string, string> = { PORT: "3000" };
-    refreshEnv(current, baseline, { PORT: "3000", SUMMARY_LLM_MODEL: "x" });
+    refreshEnv(current, baseline, { PORT: "3000", SUMMARY_LLM_MODEL: "x" }, RESTART_ONLY);
     expect(current.SUMMARY_LLM_MODEL).toBe("x");
+  });
+
+  it("drops a key the user deleted from config.json", () => {
+    // 재리뷰 §4-8. "파일을 다시 읽는다"가 파일과 옛 값의 합집합을 뜻하면, 키를 지운
+    // 사용자에게는 화면의 "값을 고치면 다시 시도합니다"가 여전히 거짓이다.
+    const current: Record<string, string> = { PORT: "3000", SUMMARY_LLM_MODEL: "old" };
+    const baseline: Record<string, string> = { PORT: "3000", SUMMARY_LLM_MODEL: "old" };
+    const out = refreshEnv(current, baseline, { PORT: "3000" }, RESTART_ONLY);
+    expect(current.SUMMARY_LLM_MODEL).toBeUndefined();
+    expect(out.removed).toEqual(["SUMMARY_LLM_MODEL"]);
+    // 두 번째 재시도가 같은 키를 또 지웠다고 말하지 않는다.
+    expect(refreshEnv(current, baseline, { PORT: "3000" }, RESTART_ONLY).removed).toEqual([]);
+  });
+
+  it("does not let the file's silence delete a value prepare() contributed", () => {
+    // prepare가 만든 EMBED_SERVICE_URL은 파일에 원래 없다. 파일에 없다는 이유로 지우면
+    // 살아 있는 embed의 주소가 사라진다.
+    const current: Record<string, string> = {
+      PORT: "3000",
+      SUMMARY_LLM_MODEL: "moved-by-prepare",
+    };
+    const baseline: Record<string, string> = { PORT: "3000", SUMMARY_LLM_MODEL: "from-file" };
+    const out = refreshEnv(current, baseline, { PORT: "3000" }, RESTART_ONLY);
+    expect(current.SUMMARY_LLM_MODEL).toBe("moved-by-prepare");
+    expect(out.removed).toEqual([]);
   });
 });

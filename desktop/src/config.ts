@@ -18,6 +18,24 @@ export interface LoadedConfig {
   extraPath: string[];
 }
 
+/**
+ * 이 **실행**의 worker 식별자. 모듈 로드 시 한 번만 민다.
+ *
+ * defaultConfig 안에서 밀면 호출마다 다른 값이 나온다. 보통은 첫 실행의 config.json이 이 값을
+ * 적어 두어 다음 호출이 파일 값을 쓰므로 드러나지 않지만, **파일이 값을 못 주는 경로**가 셋
+ * 있고 셋 다 재시도 루프와 같이 온다 — JSON이 깨졌을 때, 최상위가 객체가 아닐 때, 첫 실행의
+ * 쓰기가 실패했을 때(읽기 전용 userData·디스크 가득). 전부 실패 화면이 "config.json을
+ * 고쳐 보세요"라고 권하는 바로 그 상황이다.
+ *
+ * 그 상태에서 재시도가 loadConfig를 다시 부르면 WORKER_ID가 매번 새로 발급되고, 백오프가
+ * 되살린 worker는 **새 신분으로** 떠서 옛 id로 locked_by가 찍힌 job을 다시 집지 못한다
+ * (스펙 §6.5의 소유권 가드는 locked_by만 본다). 진단도 거짓말을 한다 — 파일을 건드리지
+ * 않았는데 "바뀐 키: WORKER_ID"가 3·8·20초마다 찍힌다 (재리뷰 §4-2).
+ *
+ * 실행마다 새 값, 실행 안에서는 고정 — 그 성질이 파일의 유무와 무관해야 한다.
+ */
+const RUN_WORKER_ID = `desktop-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e4)}`;
+
 /** 앱이 기본값을 갖는 키. 그 밖의 키는 be/src/config/env.ts의 zod 기본값으로 떨어진다. */
 export function defaultConfig(userDataDir: string): ApiEnv {
   return {
@@ -27,7 +45,7 @@ export function defaultConfig(userDataDir: string): ApiEnv {
     EMBED_SERVICE_PORT: "8100",
     // 기본값 worker-1을 외부 worker와 나눠 쓰면 locked_by만 보는 소유권 가드가 둘을
     // 구별하지 못한다. 실행마다 새로 만든다 (스펙 §6.5).
-    WORKER_ID: `desktop-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e4)}`,
+    WORKER_ID: RUN_WORKER_ID,
   };
 }
 
@@ -57,25 +75,69 @@ function withAppOwned(env: ApiEnv): ApiEnv {
   return { ...env, EMBED_SERVICE_HOST: LOOPBACK };
 }
 
+/** 파일과 실행 중인 값이 다르지만 **바꾸지 않은** 키. 앱을 다시 켜야 반영된다. */
+export interface RestartOnlyKey {
+  key: string;
+  /** config.json이 지금 말하는 값. */
+  file: string;
+  /** 살아 있는 감독자가 쓰고 있는 값. */
+  live: string;
+}
+
+export interface EnvRefresh {
+  /** 살아 있는 env에 실제로 얹은 키. */
+  changed: string[];
+  /** 파일에서 사라져 살아 있는 env에서도 지운 키. */
+  removed: string[];
+  /** 파일이 바꾸라고 했지만 실행 중에는 바꿀 수 없는 키. */
+  needsRestart: RestartOnlyKey[];
+}
+
 /**
  * 재시도가 config.json을 다시 읽을 때 쓴다 (완료 기준 P2-C8). 실패 화면은 "값을 고치면 다시
  * 시도합니다"라고 적는데, 감독자를 실행당 하나만 만드는 구조에서는 LaunchContext.env가 생성
  * 시점에 얼어붙어 그 문장이 거짓이 된다 — Phase 1은 재시도마다 loadConfig를 다시 읽었다.
  *
- * prepare()가 기여한 값은 덮지 않는다. embed의 prepare는 포트가 겹칠 때 EMBED_SERVICE_PORT를
- * 살아 있는 자식에 맞춰 옮기고 EMBED_SERVICE_URL을 그 한 값에서 파생시키므로, 파일 값으로
- * 되돌리면 둘이 어긋나고 어긋난 결과는 오류가 아니라 조용한 degrade다(services/embed.ts의
- * 주석). "파일에서 읽은 값이 아직 그대로인 키만 갱신한다"가 그 구별의 전부다.
+ * **`restartOnly`가 이 함수의 핵심 판정이다.** 파생의 입력이 되는 값을 다시 읽으면서 파생을
+ * 다시 돌리지 않는 것은, 아예 다시 읽지 않는 것보다 나쁘다. 실측(재리뷰 §4-1): 사용자가
+ * `EMBED_SERVICE_PORT`를 8100→9000으로 고치면 이 함수가 그것을 살아 있는 env에 얹는데,
+ * `EMBED_SERVICE_URL`은 파일에 없어 갱신되지 않고 `retry()`는 설계상 `prepare()`를 건너뛰므로
+ * embedSpec의 클로저 url도 `:8100`에 얼어 있다. embed는 9000에 bind하고 준비 판정은 8100을
+ * 찌른다 → 180초 뒤 failed ×3. 그리고 API에게 넘어간 URL이 `:8100`이라 **의미 검색이 오류 없이
+ * 키워드 검색으로 떨어진다.** 앱을 다시 켜기 전에는 풀리지 않고, 그동안 화면은 "값을 고치면
+ * 다시 시도합니다"라고 적고 있다.
  *
- * baseline도 제자리에서 갱신한다 — 다음 재시도의 기준 역시 "파일이 마지막으로 말한 값"이어야
- * 하고, 그러지 않으면 한 번 바뀐 키는 두 번째 수정을 영영 받지 못한다.
+ * 그래서 그런 키는 **건드리지 않고 보고한다.** 반대 방향(prepare가 포트를 옮긴 뒤 사용자가
+ * 파일을 고치는 경우)도 같은 한 규칙이 덮는다 — 예전에는 그쪽이 조용히 무시됐다.
+ * "다시 켜야 반영됩니다"는 받아들일 수 있는 답이고, "검색이 조용히 의미 검색이 아니게 됐다"는
+ * 받아들일 수 없다.
  *
- * 돌려주는 것은 실제로 바뀐 키 목록이다. 로그에 적을 값이 없으면 재시도가 무엇을 새로 읽었는지
- * 사람이 확인할 수 없다.
+ * 그 밖의 키는 prepare()가 기여한 값만 지킨다: "파일에서 읽은 값이 아직 그대로인 키만
+ * 갱신한다"(current === baseline)가 그 구별의 전부다. baseline도 제자리에서 갱신한다 — 다음
+ * 재시도의 기준 역시 "파일이 마지막으로 말한 값"이어야 하고, 그러지 않으면 한 번 바뀐 키는
+ * 두 번째 수정을 영영 받지 못한다.
+ *
+ * 파일에서 **사라진** 키는 살아 있는 env에서도 지운다. "파일을 다시 읽는다"가 파일과
+ * 옛 값의 합집합을 뜻하면, 키를 지운 사용자에게는 화면의 그 문장이 여전히 거짓이다
+ * (재리뷰 §4-8).
  */
-export function refreshEnv(current: ApiEnv, baseline: ApiEnv, fresh: ApiEnv): string[] {
+export function refreshEnv(
+  current: ApiEnv,
+  baseline: ApiEnv,
+  fresh: ApiEnv,
+  restartOnly: readonly string[],
+): EnvRefresh {
   const changed: string[] = [];
+  const removed: string[] = [];
+  const needsRestart: RestartOnlyKey[] = [];
+
   for (const [key, value] of Object.entries(fresh)) {
+    if (restartOnly.includes(key)) {
+      // 살아 있는 값과 비교한다. baseline과 비교하면 "prepare가 옮겨서 어긋난" 쪽을 못 본다.
+      const live = current[key];
+      if (live !== value) needsRestart.push({ key, file: value, live: live ?? "(없음)" });
+      continue;
+    }
     // prepare()가 옮긴 값은 파일이 이긴다고 볼 수 없다.
     if (current[key] !== baseline[key]) continue;
     if (current[key] === value) continue;
@@ -83,7 +145,19 @@ export function refreshEnv(current: ApiEnv, baseline: ApiEnv, fresh: ApiEnv): st
     baseline[key] = value;
     changed.push(key);
   }
-  return changed;
+
+  // Object.keys는 스냅숏이라 순회 중 삭제해도 안전하다.
+  for (const key of Object.keys(baseline)) {
+    if (key in fresh) continue;
+    if (restartOnly.includes(key)) continue;
+    // 파일의 침묵이 prepare()가 옮긴 값을 지우지는 못한다. 위 갱신 규칙과 같은 기준이다.
+    if (current[key] !== baseline[key]) continue;
+    delete current[key];
+    delete baseline[key];
+    removed.push(key);
+  }
+
+  return { changed, removed, needsRestart };
 }
 
 /** 자식 env가 아니라 앱이 쓰는 설정. 그대로 주입하면 API·worker의 zod/pydantic이 모르는

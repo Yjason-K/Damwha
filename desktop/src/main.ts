@@ -4,7 +4,8 @@ import * as fs from "fs";
 import * as net from "net";
 import * as path from "path";
 import { promisify } from "util";
-import { loadConfig, refreshEnv, type ApiEnv } from "./config";
+import { loadConfig, type ApiEnv } from "./config";
+import { createConfigReloader } from "./config-reload";
 import {
   PROBE_TIMEOUT_MS,
   READY_INTERVAL_MS,
@@ -102,6 +103,12 @@ let supervisor: ReturnType<typeof createSupervisor> | null = null;
  * (config.ts의 refreshEnv).
  */
 let launchCtx: { ctx: LaunchContext; baseline: ApiEnv } | null = null;
+/**
+ * "이 값은 앱을 다시 켜야 바뀌어요" 안내. 재적용기가 매번 다시 계산하므로 어긋남이 풀리면
+ * 저절로 null이 된다. 화면이 이것을 말하지 않으면 사용자는 자기 수정이 왜 안 먹는지 알 길이
+ * 없고, 그 침묵이 재리뷰 §4-1의 절반이었다.
+ */
+let restartNotice: string | null = null;
 
 /** 앱이 정한 API origin. 감독자의 런타임에서 읽는다 — 전역 변수를 따로 두면 갈린다. */
 function currentApiOrigin(): string | null {
@@ -436,12 +443,15 @@ function statusLine(s: ServiceStatus): string {
 /** 감독자의 지금 상태를 셸 화면 한 장으로 접는다. 실패가 있으면 그 원인을 머리에 세운다. */
 function shellStatusOf(): ShellStatus {
   const all = supervisor?.statuses() ?? [];
+  // 화면이 "값을 고치면 다시 시도합니다"라고 적는 이상, 고쳐도 반영되지 않는 값은 화면이
+  // 말해야 한다. 조용히 어긋난 채로 두는 것이 재리뷰 §4-1이 지적한 결함의 절반이다.
+  const lines = [...all.map(statusLine), ...(restartNotice === null ? [] : [restartNotice])];
   const failed = all.find((s) => s.process === "failed");
-  if (failed === undefined) return { state: "starting", detail: all.map(statusLine).join("\n") };
+  if (failed === undefined) return { state: "starting", detail: lines.join("\n") };
   return {
     // postgres가 넘어졌으면 그 화면의 문구("데이터베이스에 연결할 수 없어요")가 맞다.
     state: failed.id === "postgres" ? "db-unreachable" : "failed",
-    detail: all.map(statusLine).join("\n"),
+    detail: lines.join("\n"),
     // postgres는 컨테이너라 자기 로그 파일이 없다 — 앱의 판단 기록으로 보낸다.
     logPath: logPathOf(failed.id === "postgres" ? "supervisor" : failed.id),
   };
@@ -556,7 +566,9 @@ async function startServices(mine: number): Promise<void> {
   } else {
     // 재시도 전에 config.json을 다시 읽는다. 실패 화면이 "값을 고치면 다시 시도합니다"라고
     // 적는데 ctx.env가 감독자 생성 시점에 얼어붙으면 그 문장이 거짓이 된다 (완료 기준 P2-C8).
-    reloadConfigInto();
+    // 실행 중에 바꿀 수 없는 키는 바꾸지 않고 안내를 돌려준다 — shellStatusOf가 그것을 화면에
+    // 얹는다.
+    restartNotice = reloadConfig();
     // 이미 감독자가 있으면 **다시 만들지 않는다.** 두 번째 감독자를 세우면 첫 감독자가 쥔
     // 자식들의 유일한 참조가 사라져 아무도 그들을 내리지 못하고, 넷이 두 벌 뜬다 (P2-C4).
     // 재시도는 감독자 자신의 입구를 쓴다 — prepare()를 건너뛰고 아직 못 뜬 것부터 잇는다
@@ -579,7 +591,9 @@ async function startServices(mine: number): Promise<void> {
 
 /**
  * 재시도가 읽는 config.json. Phase 1은 재시도마다 loadConfig를 다시 읽었고, 감독자를 실행당
- * 하나로 묶으면서 그것이 사라졌다 (리뷰 Minor-3).
+ * 하나로 묶으면서 그것이 사라졌다 (리뷰 Minor-3). 판정(무엇을 반영하고, 무엇을 두고, 무엇을
+ * 한 번만 적는가)은 config-reload.ts에 있다 — 여기 두면 어떤 테스트도 그것을 부를 수 없고,
+ * 실제로 그 자리에 있는 동안 결함 둘이 그 안에서 났다 (재리뷰 §4-1·§4-2).
  *
  * 자식 env만 다시 읽는다. ctx.bins(uv·docker)와 repoRoot는 여기서 갱신해도 소용이 없다 —
  * postgresSpec은 docker 경로를 클로저로 이미 붙잡고 있어 ctx를 고쳐도 옛 값을 쓴다. 그 둘을
@@ -587,16 +601,11 @@ async function startServices(mine: number): Promise<void> {
  * 버리는 일이라 P2-C4가 금지한다. 그러므로 실패 화면의 "값을 고치면 다시 시도합니다"가 참인
  * 범위는 DATABASE_URL·STORAGE_ROOT·PORT 같은 **자식 env 키**다.
  */
-function reloadConfigInto(): void {
-  const live = launchCtx;
-  if (live === null) return;
-  const cfg = loadConfig(app.getPath("userData"));
-  if (cfg.warning !== undefined) appendSupervisorLog(cfg.warning);
-  const changed = refreshEnv(live.ctx.env, live.baseline, cfg.env);
-  if (changed.length > 0) {
-    appendSupervisorLog(`config.json을 다시 읽었어요 — 바뀐 키: ${changed.join(", ")}`);
-  }
-}
+const reloadConfig = createConfigReloader({
+  load: () => loadConfig(app.getPath("userData")),
+  live: () => (launchCtx === null ? null : { env: launchCtx.ctx.env, baseline: launchCtx.baseline }),
+  log: appendSupervisorLog,
+});
 
 /**
  * 감독자를 세운다. 세울 수 없는 이유(설정 오류)를 화면에 적었으면 false를 돌려주고,
