@@ -4,7 +4,7 @@ import * as fs from "fs";
 import * as net from "net";
 import * as path from "path";
 import { promisify } from "util";
-import { loadConfig } from "./config";
+import { loadConfig, refreshEnv, type ApiEnv } from "./config";
 import {
   PROBE_TIMEOUT_MS,
   READY_INTERVAL_MS,
@@ -16,12 +16,10 @@ import { launchVite } from "./vite-process";
 import { lastMeaningfulLine } from "./stderr";
 import { showStatus, type ShellStatus } from "./shell-window";
 import { applyNavigationBoundary, applyPermissionBoundary } from "./permissions";
+import { mayRenderShell } from "./shell-latch";
 import { installMenu } from "./menu";
 import { createSupervisor } from "./services/supervisor";
-import { apiSpec } from "./services/api";
-import { postgresSpec } from "./services/postgres";
-import { workerSpec } from "./services/worker";
-import { embedSpec } from "./services/embed";
+import { buildSpecs } from "./services/specs";
 import {
   listExternalWorkers as scanExternalWorkers,
   probeEmbedContract,
@@ -78,10 +76,12 @@ let viteApiBase: string | null = null;
 /** 이번 실행이 쓰는 저장소 체크아웃. resolveRepoRoot가 정하고 Vite 기동도 이것을 쓴다. */
 let repoRoot: string | null = null;
 /**
- * 창이 지금 담화 화면을 보고 있는가. renderStatus가 준비 화면을 덮어써도 되는지를 이
- * 값 하나로 판단한다 — 앱을 쓰는 중에 loadFile을 부르면 사용자가 보던 것이 사라진다.
+ * 담화 화면을 붙여 둔 창. boolean이 아니라 **창 자체**를 드는 이유는 shell-latch.ts에 있다 —
+ * 창이 닫히거나 갈리면 이 값은 자동으로 낡고, mayRenderShell이 그것을 본다. boolean 래치는
+ * 자기가 기술하는 창보다 오래 살아서, 창을 한 번 닫으면 그 뒤 어떤 상태도 화면에 닿지
+ * 못했다 (Task 12 리뷰 Critical-1).
  */
-let rendererAttached = false;
+let attachedWindow: BrowserWindow | null = null;
 let lastStatusLine = "";
 let retryCount = 0;
 let retryTimer: NodeJS.Timeout | null = null;
@@ -94,6 +94,12 @@ let generation = 0;
 let starting: Promise<void> | null = null;
 /** 넷을 쥔 감독자. 실행당 하나다 — 아래 startServices의 주석에 이유가 있다. */
 let supervisor: ReturnType<typeof createSupervisor> | null = null;
+/**
+ * 감독자가 쥔 LaunchContext와, 그 env를 만든 config.json의 값(baseline). 재시도가 파일을 다시
+ * 읽어 ctx.env에 얹을 때 "파일에서 온 값"과 "prepare()가 옮긴 값"을 가르는 기준이 baseline이다
+ * (config.ts의 refreshEnv).
+ */
+let launchCtx: { ctx: LaunchContext; baseline: ApiEnv } | null = null;
 
 /** 앱이 정한 API origin. 감독자의 런타임에서 읽는다 — 전역 변수를 따로 두면 갈린다. */
 function currentApiOrigin(): string | null {
@@ -156,11 +162,25 @@ function createWindow(): BrowserWindow {
 }
 
 /**
+ * 창을 만들고 전역과 'closed'를 잇는다. whenReady와 activate가 같은 세 줄을 각각 갖고 있었고,
+ * 한쪽만 고치는 사고가 정확히 리뷰 Important-3이었다. 창 생성은 이 한 자리뿐이다.
+ */
+function openWindow(): BrowserWindow {
+  const created = createWindow();
+  win = created;
+  created.on("closed", () => {
+    // 더 새 창이 이미 전역을 차지했으면 그것을 지우지 않는다.
+    if (win === created) win = null;
+  });
+  return created;
+}
+
+/**
  * 준비 화면을 띄운다. showStatus를 직접 부르지 않는 이유는 이 한 줄 때문이다 — 창이 다시
  * 셸 화면을 보고 있다는 사실을 renderStatus가 알아야, 그 뒤의 상태 변화가 화면에 닿는다.
  */
 function showShell(target: BrowserWindow, status: ShellStatus): Promise<void> {
-  rendererAttached = false;
+  attachedWindow = null;
   return showStatus(target, status);
 }
 
@@ -440,9 +460,9 @@ function renderStatus(statuses: ServiceStatus[]): void {
     lastStatusLine = line;
     appendSupervisorLog(`상태 ${line}`);
   }
-  if (rendererAttached) return;
   const target = activeWindow(generation);
   if (target === null) return;
+  if (!mayRenderShell(attachedWindow, target)) return;
   void showShell(target, shellStatusOf()).catch(() => undefined);
 }
 
@@ -469,9 +489,9 @@ async function reattachWindow(mine: number): Promise<void> {
     });
     return;
   }
-  // loadURL이 끝난 뒤에 내리면 그 사이에 들어온 상태 갱신이 방금 붙인 앱 화면을 준비
-  // 화면으로 되돌린다. 붙이기 **전에** 내린다.
-  rendererAttached = true;
+  // loadURL이 끝난 뒤에 올리면 그 사이에 들어온 상태 갱신이 방금 붙인 앱 화면을 준비
+  // 화면으로 되돌린다. 붙이기 **전에** 올린다.
+  attachedWindow = target;
   await target.loadURL(renderer.url);
 }
 
@@ -484,6 +504,24 @@ function start(): Promise<void> {
 
 function reasonOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * 실패를 화면과 재시도로 바꾼다. startOnce와 activate가 **같은** 안전망을 쓴다 — Task 12는
+ * 이것을 startOnce에만 뒀고, activate의 loadURL 거부는 supervisor.log 한 줄로 끝나 창이
+ * 영구히 빈 흰 화면으로 남았다 (리뷰 Important-3).
+ */
+async function reportFailure(mine: number, what: string, e: unknown): Promise<void> {
+  appendSupervisorLog(`${what} — ${reasonOf(e)}`);
+  const target = activeWindow(mine);
+  if (target === null) return;
+  const seconds = scheduleRetry();
+  await showShell(target, {
+    state: "failed",
+    detail: `${what}: ${reasonOf(e)}`,
+    retryInSeconds: seconds,
+    logPath: logPathOf("supervisor"),
+  }).catch(() => undefined);
 }
 
 /**
@@ -500,16 +538,7 @@ async function startOnce(): Promise<void> {
   try {
     await startServices(mine);
   } catch (e) {
-    appendSupervisorLog(`기동 실패 — ${reasonOf(e)}`);
-    const target = activeWindow(mine);
-    if (target === null) return;
-    const seconds = scheduleRetry();
-    await showShell(target, {
-      state: "failed",
-      detail: `앱을 시작하지 못했어요: ${reasonOf(e)}`,
-      retryInSeconds: seconds,
-      logPath: logPathOf("supervisor"),
-    }).catch(() => undefined);
+    await reportFailure(mine, "앱을 시작하지 못했어요", e);
   }
 }
 
@@ -518,14 +547,18 @@ async function startServices(mine: number): Promise<void> {
   if (opening === null) return;
   await showShell(opening, { state: "starting" });
 
-  if (supervisor === null) {
+  const existing = supervisor;
+  if (existing === null) {
     if (!(await createSupervisorFor(mine))) return;
   } else {
+    // 재시도 전에 config.json을 다시 읽는다. 실패 화면이 "값을 고치면 다시 시도합니다"라고
+    // 적는데 ctx.env가 감독자 생성 시점에 얼어붙으면 그 문장이 거짓이 된다 (완료 기준 P2-C8).
+    reloadConfigInto();
     // 이미 감독자가 있으면 **다시 만들지 않는다.** 두 번째 감독자를 세우면 첫 감독자가 쥔
     // 자식들의 유일한 참조가 사라져 아무도 그들을 내리지 못하고, 넷이 두 벌 뜬다 (P2-C4).
     // 재시도는 감독자 자신의 입구를 쓴다 — prepare()를 건너뛰고 아직 못 뜬 것부터 잇는다
     // (supervisor.ts의 retry 주석).
-    await supervisor.retry();
+    await existing.retry();
   }
 
   const all = supervisor?.statuses() ?? [];
@@ -539,6 +572,27 @@ async function startServices(mine: number): Promise<void> {
   retryCount = 0;
   // origin은 감독자의 런타임에서 읽는다. Phase 1의 전역 apiOrigin은 이제 쓰지 않는다.
   await reattachWindow(mine);
+}
+
+/**
+ * 재시도가 읽는 config.json. Phase 1은 재시도마다 loadConfig를 다시 읽었고, 감독자를 실행당
+ * 하나로 묶으면서 그것이 사라졌다 (리뷰 Minor-3).
+ *
+ * 자식 env만 다시 읽는다. ctx.bins(uv·docker)와 repoRoot는 여기서 갱신해도 소용이 없다 —
+ * postgresSpec은 docker 경로를 클로저로 이미 붙잡고 있어 ctx를 고쳐도 옛 값을 쓴다. 그 둘을
+ * 반영하려면 감독자를 다시 만들어야 하고, 그것은 첫 감독자가 쥔 자식 셋의 유일한 참조를
+ * 버리는 일이라 P2-C4가 금지한다. 그러므로 실패 화면의 "값을 고치면 다시 시도합니다"가 참인
+ * 범위는 DATABASE_URL·STORAGE_ROOT·PORT 같은 **자식 env 키**다.
+ */
+function reloadConfigInto(): void {
+  const live = launchCtx;
+  if (live === null) return;
+  const cfg = loadConfig(app.getPath("userData"));
+  if (cfg.warning !== undefined) appendSupervisorLog(cfg.warning);
+  const changed = refreshEnv(live.ctx.env, live.baseline, cfg.env);
+  if (changed.length > 0) {
+    appendSupervisorLog(`config.json을 다시 읽었어요 — 바뀐 키: ${changed.join(", ")}`);
+  }
 }
 
 /**
@@ -608,27 +662,51 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
     dimension: Number(cfg.env.SEARCH_EMBEDDING_DIM ?? "1024"),
   };
 
-  supervisor = createSupervisor(
-    [
-      // 선언 순서의 역순이 곧 종료 순서다. 스펙 §6.9가 worker → embed → api를 요구하므로
-      // 여기는 postgres → api → embed → worker여야 한다. embed의 prepare()는 launch보다
-      // 먼저 전부 돌므로 api가 EMBED_SERVICE_URL을 못 보는 일은 없다.
-      postgresSpec((args) => dockerRun(docker, args)),
-      apiSpec({
+  // 자식을 띄우기 전에 한 번 더 본다. 여기까지 오는 길에는 resolveRepoRoot의 폴더 선택
+  // 대화상자가 있고(packaged 첫 실행에서는 상한이 없다), 그 사이에 ⌘Q가 들어오면 stopAll()은
+  // supervisor를 null로 스냅숏해 아무것도 정리하지 않고 끝난다. 그 **뒤에** 이 컨티뉴에이션이
+  // docker compose up -d와 detached 자식 둘을 띄우면 아무도 정리하지 않는 프로세스가 된다.
+  // 감독자가 선 뒤로는 감독자 자신의 stopping/pending이 같은 일을 하므로, 구멍은 정확히
+  // supervisor가 아직 null인 이 구간 하나다 — Phase 1의 runStart에 있던 검사와 같다
+  // (리뷰 Important-2).
+  if (activeWindow(mine) === null) return false;
+
+  // 선언 배열은 services/specs.ts에 있다. 종료 순서(§6.9)와 게이트 집합(§6.7)을 그 배열
+  // 하나가 정하는데, 여기 두면 어떤 테스트도 그것을 부를 수 없다 (specs.ts의 주석).
+  const created = createSupervisor(
+    buildSpecs({
+      docker: (args) => dockerRun(docker, args),
+      api: {
         verifyOwnListener,
         isPortOccupied,
         onPendingMigrations: () => undefined,
         onMigrationCheckSkipped: () =>
           appendSupervisorLog("마이그레이션 검사가 건너뛰어졌어요 — 통과한 것이 아닙니다."),
-      }),
-      embedSpec({ probe: (url) => probeEmbedContract(url, wantEmbed), freePort }),
-      workerSpec({ listExternal: listExternalWorkers }),
-    ],
+      },
+      embed: { probe: (url) => probeEmbedContract(url, wantEmbed), freePort },
+      worker: { listExternal: listExternalWorkers },
+    }),
     ctx,
     { onStatus: renderStatus, log: appendSupervisorLog },
   );
+  // start()가 끝나기 전에 대입해야 한다 — onStatus가 그 사이에 여러 번 발화하고, shellStatusOf()는
+  // supervisor에서 상태를 읽는다. 대입이 뒤면 기동 화면에 서비스 줄이 한 줄도 안 뜬다.
+  supervisor = created;
+  launchCtx = { ctx, baseline: { ...cfg.env } };
 
-  await supervisor.start();
+  try {
+    await created.start();
+  } catch (e) {
+    // 거부된 기동이 감독자를 남기면 이후 모든 재시도가 retry() 분기로 가 prepare()를 **영영**
+    // 건너뛴다. 그러면 EMBED_SERVICE_URL이 채워지지 않고 embedSpec의 클로저 url이 ""로 남아
+    // readiness가 180초 뒤 failed로 떨어진다. Task 5가 rt.result로 같은 모양의 사고를 냈다
+    // (리뷰 Minor-2). 버려도 고아가 되는 자식은 없다 — start()가 거부할 수 있는 지점은
+    // prepare() 하나이고(bringOnce는 자기 예외를 전부 상태로 바꾼다) 그것은 어떤 launch보다
+    // 먼저 돈다.
+    if (supervisor === created) supervisor = null;
+    if (launchCtx?.ctx === ctx) launchCtx = null;
+    throw e;
+  }
   return true;
 }
 
@@ -649,10 +727,7 @@ if (!app.requestSingleInstanceLock()) {
       cancelRetry();
       void start();
     });
-    win = createWindow();
-    win.on("closed", () => {
-      win = null;
-    });
+    openWindow();
     await start();
   });
 
@@ -668,13 +743,19 @@ if (!app.requestSingleInstanceLock()) {
       win.focus();
       return;
     }
-    win = createWindow();
-    win.on("closed", () => {
-      win = null;
-    });
-    // 서비스는 이미 떠 있다. 화면만 다시 붙인다.
-    void reattachWindow(generation).catch((e: unknown) => {
-      appendSupervisorLog(`창을 다시 붙이지 못했어요 — ${reasonOf(e)}`);
+    const opened = openWindow();
+    const mine = generation;
+    // 서비스는 이미 떠 있다. 화면만 다시 붙인다 — 다만 **셸 화면을 먼저 건다.** 그러지 않으면
+    // reattachWindow가 loadURL에 닿을 때까지 창이 빈 흰 화면이고(dev에서 Vite가 죽어 있으면
+    // rendererTarget이 재기동 + waitForReady의 30초를 통째로 그렇게 돈다), 지금 서비스가 어떤
+    // 상태인지도 보이지 않는다. showShell이 래치도 같이 내려 renderStatus가 이 창을 다시
+    // 그릴 수 있게 된다 (완료 기준 P2-C12, 리뷰 Important-3).
+    void (async () => {
+      await showShell(opened, shellStatusOf()).catch(() => undefined);
+      await reattachWindow(mine);
+    })().catch((e: unknown) => {
+      // startServices 경로와 같은 안전망. 로그 한 줄로 끝내면 빈 창에 영구히 머문다.
+      void reportFailure(mine, "창을 다시 붙이지 못했어요", e);
     });
   });
 
