@@ -65,25 +65,43 @@ describe("stopWorkerProcess", () => {
     expect(signals[1]).toBe("SIGTERM");
   });
 
-  it("finally SIGKILLs the descendant set, which crosses the new session", async () => {
+  it("SIGKILLs the tree it just walked, not the snapshots it captured two graces ago", async () => {
     // --once 자식은 start_new_session이라 그룹 kill에 안 잡히지만 부모-자식 관계는
     // 그대로라 ps의 ppid BFS가 찾는다 (스펙 §6.9 4단계).
+    //
+    // 그리고 4단계는 이 모듈에서 **실제 신호를 보내는 유일한 곳**이고 그 신호가 SIGKILL이다.
+    // 그래서 대상이 무엇인지가 다른 어느 단계보다 중요하다: 캡처해 둔 스냅샷들은 이 시점에
+    // 유예 두 번만큼 낡았고, 그 사이 끝난 pid를 OS가 재사용했다면 SIGKILL은 **남의
+    // 프로세스**로 간다. shutdown.ts의 4단계 주석이 바로 그것을 "세 번째 ps를 도는 이유"로
+    // 적어 뒀는데, 세 스냅샷이 늘 같은 집합을 돌려주던 예전 형태로는 "방금 걸은 트리"와
+    // "낡은 캡처 집합" 두 의미가 구분되지 않아 대상을 캡처 집합으로 바꿔도 초록불이었다.
+    // 호출 순번마다 다른 집합을 돌려줘 그 둘을 갈라놓는다.
     const killed: number[] = [];
+    let call = 0;
     await stopWorkerProcess(handle(999), {
       graceMs: 10,
       pollMs: 5,
       signal: (pid, sig) => {
         if (sig === "SIGKILL") killed.push(pid);
       },
-      descendants: async () => new Set([5001, 5002]),
+      descendants: async () => {
+        call += 1;
+        if (call === 1) return new Set([5001]); // 진입 스냅샷 — 읽는 데만 쓴다
+        if (call === 2) return new Set([5002]); // 유예 직후 재스냅샷 — 역시 읽기 전용
+        return new Set([5003, 5004]); // 4단계가 그 자리에서 걸은 트리 — 죽일 대상은 이것뿐
+      },
       onGraceExpired: async () => true,
       maxWaits: 2,
       // 여기서 stillAlive를 주는 이유는 단정이 아니라 격리다. 기본 구현은 핸들이 답해 줄 수
-      // 없는 자손 pid를 signal 0으로 확인하는데, 5001·5002는 이 기계에 실제로 존재할 수
+      // 없는 자손 pid를 signal 0으로 확인하는데, 5001~5004는 이 기계에 실제로 존재할 수
       // 있는 번호다 — 테스트가 진짜 프로세스를 건드리지 않게 가짜를 주입한다.
       stillAlive: async () => [],
     });
-    expect(killed.sort()).toEqual([4242, 5001, 5002]);
+    // 낡은 스냅샷의 pid는 신호를 받지 않는다. 그것들은 "죽었나"를 읽는 데만 쓰인다.
+    expect(killed).not.toContain(5001);
+    expect(killed).not.toContain(5002);
+    // root 자신은 함께 죽인다 — 자손만 죽이면 supervisor가 남는다.
+    expect([...killed].sort((a, b) => a - b)).toEqual([4242, 5003, 5004]);
   });
 
   it("reports what it could not clean instead of claiming success", async () => {
