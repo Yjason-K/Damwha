@@ -20,33 +20,34 @@ export interface LoadedConfig {
 }
 
 /**
- * 이 **실행**의 worker 식별자. 모듈 로드 시 한 번만 민다.
+ * 이 **실행**의 worker 식별자. 모듈 로드 시 한 번만 민다. **실행마다 새 값, 실행 안에서는
+ * 고정** — 두 성질 다 config.json과 무관해야 한다 (스펙 §6.5).
  *
- * defaultConfig 안에서 밀면 호출마다 다른 값이 나온다. 보통은 첫 실행의 config.json이 이 값을
- * 적어 두어 다음 호출이 파일 값을 쓰므로 드러나지 않지만, **파일이 값을 못 주는 경로**가 셋
- * 있고 셋 다 재시도 루프와 같이 온다 — JSON이 깨졌을 때, 최상위가 객체가 아닐 때, 첫 실행의
- * 쓰기가 실패했을 때(읽기 전용 userData·디스크 가득). 전부 실패 화면이 "config.json을
- * 고쳐 보세요"라고 권하는 바로 그 상황이다.
+ * 실행 안에서 고정인 이유(재리뷰 §4-2): 호출마다 밀면 재시도가 loadConfig를 다시 부를 때마다
+ * 신분이 바뀌어, 백오프가 되살린 worker가 옛 id로 locked_by가 찍힌 job을 다시 집지 못하고
+ * 재적용 진단이 "바뀐 키: WORKER_ID"를 3·8·20초마다 적는다.
  *
- * 그 상태에서 재시도가 loadConfig를 다시 부르면 WORKER_ID가 매번 새로 발급되고, 백오프가
- * 되살린 worker는 **새 신분으로** 떠서 옛 id로 locked_by가 찍힌 job을 다시 집지 못한다
- * (스펙 §6.5의 소유권 가드는 locked_by만 본다). 진단도 거짓말을 한다 — 파일을 건드리지
- * 않았는데 "바뀐 키: WORKER_ID"가 3·8·20초마다 찍힌다 (재리뷰 §4-2).
- *
- * 실행마다 새 값, 실행 안에서는 고정 — 그 성질이 파일의 유무와 무관해야 한다.
+ * 실행마다 새 값인 이유(최종 리뷰 I-4): 기본값 worker-1을 외부 worker와 나눠 쓰면 locked_by만
+ * 보는 소유권 가드가 둘을 구별하지 못하고, **이전 실행에서 살아남은 `--once` 자식**이 새
+ * 실행의 supervisor와 같은 id를 쥐면 같은 구멍이 실행 사이로 넓어진다(R2-6). 그래서 이 값은
+ * **config.json에 적지도, 거기서 읽지도 않는다.** 한때 첫 실행이 이것을 파일에 적어 두 번째
+ * 실행부터 같은 id를 다시 썼다 — "크래시 뒤 잠긴 job을 되찾으려면 id가 안정적이어야 한다"는
+ * 근거였는데, 그런 경로는 없다: claim은 queued만 집고 reaper는 locked_at의 나이만 본다
+ * (be/worker/damwha_worker/db/queue.py). 그 빌드가 남긴 파일의 WORKER_ID 키는 아래
+ * withAppOwned가 덮어 무효로 만든다 — 앱이 적었던 값이라 경고하지 않는다.
  */
 const RUN_WORKER_ID = `desktop-${randomUUID()}`;
 
-/** 앱이 기본값을 갖는 키. 그 밖의 키는 be/src/config/env.ts의 zod 기본값으로 떨어진다. */
+/**
+ * 앱이 기본값을 갖는 키. 첫 실행의 config.json이 **그대로 이것**이다. 그 밖의 키는
+ * be/src/config/env.ts의 zod 기본값으로 떨어진다. WORKER_ID는 여기 없다 — 위 RUN_WORKER_ID.
+ */
 export function defaultConfig(userDataDir: string): ApiEnv {
   return {
     DATABASE_URL: "postgres://postgres:postgres@localhost:5432/damwha",
     STORAGE_ROOT: path.join(userDataDir, "storage"),
     PORT: "3000",
     EMBED_SERVICE_PORT: "8100",
-    // 기본값 worker-1을 외부 worker와 나눠 쓰면 locked_by만 보는 소유권 가드가 둘을
-    // 구별하지 못한다. 실행마다 새로 만든다 (스펙 §6.5).
-    WORKER_ID: RUN_WORKER_ID,
   };
 }
 
@@ -71,9 +72,12 @@ const APP_OWNED_KEYS = ["HOST", "EMBED_SERVICE_HOST"];
  * 되는 값"으로 광고되고, 그것이 정확히 이 결함의 절반이었다 (Task 12 리뷰 Important-1).
  * services/embed.ts의 `?? "127.0.0.1"` 기본값과 겹치지만, 그것은 ctx.env가 이 키를 아예
  * 갖지 않는 경로(테스트)를 위한 것이고 자식 env를 정하는 것은 여기다.
+ *
+ * WORKER_ID도 같은 이유로 여기서 얹는다. 파일 값보다 **뒤에** 펼치므로, 이전 빌드가 적어 둔
+ * config.json의 WORKER_ID는 이 실행의 값을 이기지 못한다 (RUN_WORKER_ID 주석).
  */
 function withAppOwned(env: ApiEnv): ApiEnv {
-  return { ...env, EMBED_SERVICE_HOST: LOOPBACK };
+  return { ...env, EMBED_SERVICE_HOST: LOOPBACK, WORKER_ID: RUN_WORKER_ID };
 }
 
 /** 파일과 실행 중인 값이 다르지만 **바꾸지 않은** 키. 앱을 다시 켜야 반영된다. */

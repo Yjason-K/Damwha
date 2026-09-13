@@ -23,13 +23,14 @@ describe("defaultConfig", () => {
     expect(path.isAbsolute(env.STORAGE_ROOT)).toBe(true);
   });
 
-  it("carries the keys the app owns defaults for", () => {
+  it("carries the keys the app owns defaults for — and not WORKER_ID, which is per run", () => {
+    // defaultConfig가 그대로 첫 실행의 config.json이 된다. WORKER_ID를 여기 두면 파일에 적혀
+    // 다음 실행이 같은 신분을 다시 쓴다 (최종 리뷰 I-4).
     expect(Object.keys(defaultConfig("/tmp/ud")).sort()).toEqual([
       "DATABASE_URL",
       "EMBED_SERVICE_PORT",
       "PORT",
       "STORAGE_ROOT",
-      "WORKER_ID",
     ]);
   });
 
@@ -48,29 +49,45 @@ describe("defaultConfig — Phase 2 keys", () => {
   it("mints a worker id that cannot collide with an external worker", () => {
     // 기본값 worker-1을 외부 worker와 나눠 쓰면 locked_by만 보는 소유권 가드가
     // 둘을 구별하지 못한다 (스펙 §6.5).
-    const id = defaultConfig("/u").WORKER_ID;
+    const id = loadConfig(dir).env.WORKER_ID;
     expect(id).toMatch(/^desktop-/);
     expect(id).not.toBe("worker-1");
   });
 
   it("keeps the same worker id for every call in one run", async () => {
-    // 재리뷰 §4-2. config.json이 값을 못 줄 때(JSON이 깨졌다·객체가 아니다·첫 실행의 쓰기가
-    // 실패했다 — 전부 실패 화면이 편집을 권하는 상황이다) loadConfig가 이것을 매번 다시
-    // 민다. 그러면 백오프가 되살린 worker가 **새 신분으로** 떠서 옛 id로 locked_by가 찍힌
-    // job을 다시 집지 못하고(스펙 §6.5), 재적용 진단은 파일을 건드리지도 않았는데
-    // "바뀐 키: WORKER_ID"를 3·8·20초마다 적는다.
-    expect(defaultConfig("/u").WORKER_ID).toBe(defaultConfig("/u").WORKER_ID);
+    // 재리뷰 §4-2. 재시도가 loadConfig를 다시 부를 때마다 id가 새로 발급되면, 백오프가 되살린
+    // worker가 **새 신분으로** 떠서 옛 id로 locked_by가 찍힌 job을 다시 집지 못하고(스펙 §6.5),
+    // 재적용 진단은 파일을 건드리지도 않았는데 "바뀐 키: WORKER_ID"를 3·8·20초마다 적는다.
+    // 첫 호출은 config.json을 만들고 둘째는 그것을 읽는다 — 두 경로가 같은 값을 줘야 한다.
+    const first = loadConfig(dir);
+    expect(first.created).toBe(true);
+    expect(loadConfig(dir).env.WORKER_ID).toBe(first.env.WORKER_ID);
     // 파일이 값을 못 주는 경로에서도 같아야 한다 — 그 경로가 정확히 재시도 루프와 같이 온다.
     fs.writeFileSync(path.join(dir, "config.json"), "{ not json");
-    expect(loadConfig(dir).env.WORKER_ID).toBe(loadConfig(dir).env.WORKER_ID);
+    expect(loadConfig(dir).env.WORKER_ID).toBe(first.env.WORKER_ID);
   });
 
-  it("still mints a new worker id for the next run", async () => {
-    // "실행마다 새 값, 실행 안에서는 고정"의 나머지 절반. 모듈을 다시 불러오는 것이 곧
-    // 새 실행이다 — 상수를 고정 문자열로 바꾸면 두 실행이 같은 신분을 나눠 쓴다.
+  it("does not write the worker id to config.json", () => {
+    // 적으면 다음 실행이 그 파일을 읽는다. 아래 테스트가 그때도 새 id가 나오는지를 보지만, 사람에게
+    // "고쳐도 되는 값"으로 광고하지 않는 것도 따로 지킨다 (EMBED_SERVICE_HOST와 같은 규칙).
+    loadConfig(dir);
+    const onDisk = JSON.parse(fs.readFileSync(path.join(dir, "config.json"), "utf8"));
+    expect("WORKER_ID" in onDisk).toBe(false);
+  });
+
+  it("mints a new worker id for the next run even when config.json still holds the previous run's id", async () => {
+    // 최종 리뷰 I-4. 예전 테스트는 "모듈을 다시 불러오는 것"을 새 실행으로 보고 defaultConfig만
+    // 불렀다 — 진짜 두 번째 실행은 **config.json도 읽는다**는 사실을 빼먹어, 첫 실행이 id를 파일에
+    // 적고 둘째가 그것을 다시 쓰는 동안에도 초록이었다. 여기서는 같은 userData로 두 실행을 돌리고,
+    // 둘 사이에 이전 빌드가 남긴 모양 그대로 파일에 첫 실행의 id를 넣어 둔다.
+    const run1 = loadConfig(dir).env.WORKER_ID;
+    const file = path.join(dir, "config.json");
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), WORKER_ID: run1 }));
+
     vi.resetModules();
-    const again = (await import("../src/config")).defaultConfig("/u").WORKER_ID;
-    expect(again).not.toBe(defaultConfig("/u").WORKER_ID);
+    const run2 = (await import("../src/config")).loadConfig(dir).env.WORKER_ID;
+    expect(run2).toMatch(/^desktop-/);
+    expect(run2).not.toBe(run1);
   });
 });
 
