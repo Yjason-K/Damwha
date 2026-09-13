@@ -92,8 +92,37 @@ describe("stopWorkerProcess", () => {
       descendants: async () => new Set<number>(),
       onGraceExpired: async () => true,
     });
-    expect(signals).toEqual([[-4242, "SIGTERM"]]);
+    // 정확히 한 번, **uv의 pid(양수)** 로. 그룹(-4242)이면 uv가 받은 것을 한 번 더 전달해
+    // supervisor가 두 번 받고, 두 번째를 강제로 읽어 --once 자식을 kill한다 (스펙 §6.9 1단계).
+    expect(signals).toEqual([[4242, "SIGTERM"]]);
     expect(out).toEqual({ stopped: true, leaked: [] });
+  });
+
+  it("never signals a process group in the polite (1) or forced (3) SIGTERM — uv forwards each one, so a group signal arrives twice", async () => {
+    // 2026-09-13 실측: `process.kill(-uvPid, "SIGTERM")` 한 번에 uv 아래 Python의 SIGTERM 핸들러가
+    // 두 번 불렸다(5/5) — 한 번은 같은 그룹이라 커널이, 한 번은 uv가 전달해서. supervisor의
+    // 2단계 핸들러는 두 번째에서 --once 자식을 proc.kill()하고 os._exit(1)하므로, 그룹 신호는
+    // "정중한" 1단계를 곧바로 강제로 만들고 requeue_for_shutdown을 건너뛴다 (P2-C5).
+    //
+    // 두 SIGTERM이 모두 나오는 경로(사람이 강제를 고른다)를 끝까지 돌리고, SIGTERM 전부가
+    // 핸들의 pid 그 자체로 갔는지를 본다. 음수가 하나라도 있으면 실패한다 — 1단계든 3단계든.
+    const signals: Array<[number, string]> = [];
+    await stopWorkerProcess(handle(999), {
+      graceMs: 10,
+      pollMs: 5,
+      signal: (pid, sig) => signals.push([pid, sig]),
+      descendants: async () => new Set<number>(),
+      onGraceExpired: async () => true,
+      maxWaits: 2,
+      stillAlive: async () => [],
+    });
+    const terms = signals.filter(([, sig]) => sig === "SIGTERM");
+    expect(terms).toEqual([
+      [4242, "SIGTERM"],
+      [4242, "SIGTERM"],
+    ]);
+    // 4단계를 포함해 이 모듈의 어떤 신호도 그룹을 겨누지 않는다.
+    expect(signals.filter(([pid]) => pid < 0)).toEqual([]);
   });
 
   it("actually waits when the user says 'keep waiting', and asks again", async () => {
@@ -127,8 +156,9 @@ describe("stopWorkerProcess", () => {
       },
     );
     expect(asked).toBe(2);
-    // 기다리겠다는 답에 두 번째 SIGTERM을 보내면 안 된다 — 그것이 곧 강제(3단계)다.
-    expect(signals).toEqual([[-4242, "SIGTERM"]]);
+    // 기다리겠다는 답에 두 번째 SIGTERM을 보내면 안 된다 — 그것이 곧 강제(3단계)다. 이 한 번도
+    // uv의 pid(양수)로 간다: 그룹이면 이 한 번이 supervisor에게는 이미 두 번이다.
+    expect(signals).toEqual([[4242, "SIGTERM"]]);
     expect(out).toEqual({ stopped: true, leaked: [] });
   });
 
@@ -722,7 +752,7 @@ describe("stopWorkerProcess", () => {
     });
 
     // (a) BFS의 루트는 언제나 **양수** pid다. 음수는 "프로세스 그룹"이라는 뜻이고
-    //     그것을 아는 것은 signal뿐이다 — ps의 ppid 열에는 음수가 없다.
+    //     ps의 ppid 열에는 음수가 없다.
     expect(events.filter((e) => e[0] === "descendants").map((e) => e[1])).toEqual([
       4242, 4242, 4242,
     ]);
@@ -737,12 +767,13 @@ describe("stopWorkerProcess", () => {
 
     // 전체 순서도 함께 못 박는다. 4단계의 세 번째 걷기는 SIGKILL **직전**이어야 한다 —
     // 낡은 스냅샷을 죽이지 않고 그 자리에서 다시 걸은 트리를 죽이는 것이 그 이유다.
+    // 두 SIGTERM의 대상은 uv의 pid(양수)다 — 그룹이면 uv의 전달과 겹쳐 supervisor가 두 번 받는다.
     expect(events).toEqual([
       ["descendants", 4242],
-      ["signal", -4242, "SIGTERM"],
+      ["signal", 4242, "SIGTERM"],
       ["descendants", 4242],
       ["ask"],
-      ["signal", -4242, "SIGTERM"],
+      ["signal", 4242, "SIGTERM"],
       ["descendants", 4242],
       ["signal", 4242, "SIGKILL"],
     ]);

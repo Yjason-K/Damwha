@@ -99,10 +99,11 @@ function processExists(pid: number): boolean {
  *    죽으면 그 자손은 pid 1로 재부모화되어 사후 BFS로는 보이지 않는다. worker의 --once
  *    자식은 job마다 새로 뜨므로 진입 스냅샷 하나만으로는 그 사이 새로 뜬 자식을 놓친다.
  * 1. SIGTERM 1회 — supervisor가 자식에 전달하고 자식은 stage boundary에서 멈춰
- *    requeue_for_shutdown을 부른다. 그 경로가 attempts를 되돌린다.
+ *    requeue_for_shutdown을 부른다. 그 경로가 attempts를 되돌린다. **uv의 pid로 보낸다,
+ *    그룹이 아니라.** 이유는 본문의 1단계 주석에 있다.
  * 2. 유예 초과 → 사람에게 묻는다. "계속 기다리기"면 유예를 한 번 더 주고 **다시 묻는다** —
  *    끝나는 길은 프로세스가 스스로 끝나거나 사람이 강제를 고르는 것뿐이다.
- * 3. 강제 → SIGTERM 2회차. supervisor가 자식을 kill하고 os._exit한다.
+ * 3. 강제 → SIGTERM 2회차(역시 uv의 pid). supervisor가 자식을 kill하고 os._exit한다.
  * 4. 그래도 남으면 자손 집합에 SIGKILL. start_new_session은 세션만 바꾸고 부모-자식
  *    관계는 그대로라 ps의 ppid BFS가 여전히 찾아낸다.
  * 5. 그래도 남으면 pid를 돌려준다. 정리 실패를 조용히 넘기지 않는다.
@@ -122,7 +123,7 @@ export async function stopWorkerProcess(
   // pid가 없으면 애초에 우리가 띄운 적이 없다. alive()도 같이 본다 — ApiHandle의 alive()는
   // `code === null`이라 "자식이 끝났고 Node가 'exit'로 거둬들였다" 이후에만 false가 되고,
   // 바로 그 순간부터 OS는 그 pid를 재사용할 수 있다. 며칠씩 켜 두는 앱에서 이미 죽은
-  // 핸들에 signal(-pid, SIGTERM)을 쏘면 남의 프로세스 그룹을 때린다. 이 가드가
+  // 핸들에 signal(pid, SIGTERM)을 쏘면 남의 프로세스를 때린다. 이 가드가
   // 정상 종료를 삼키는 것처럼 보였던 것은 테스트 픽스처 쪽 문제였다: 목의
   // `alive: () => ++calls <= aliveFor`에서 handle(0)은 첫 호출부터 false라
   // "이미 죽은 핸들"을 모형화한다 — "SIGTERM을 받고 곧 죽는다"는 handle(1)이다.
@@ -218,8 +219,15 @@ export async function stopWorkerProcess(
     return !handle.alive();
   };
 
-  // 1단계. 음수 pid = 프로세스 그룹. launchWithUv가 detached로 띄우므로 pid가 그룹 리더다.
-  opts.signal(-pid, "SIGTERM");
+  // 1단계. **양수 pid — uv 하나에만 보낸다.** 그룹(-pid)으로 보내면 정중한 종료가 강제 종료가
+  // 된다. `pid`는 uv이고 Python supervisor는 uv와 같은 그룹이라, 그룹 신호는 커널이 supervisor에
+  // 한 번 배달하고 uv가 받은 것을 **또 한 번** 전달한다(uv run은 SIGTERM을 무조건 자식에 넘긴다).
+  // 2026-09-13 실측: 그룹 SIGTERM 1회 → Python 핸들러 2회 호출(5/5), uv pid 1회 → 1회(2/2).
+  // supervisor의 핸들러(__main__.py:_on_signal)는 두 번째를 "강제"로 읽어 --once 자식을
+  // proc.kill()하고 os._exit(1)한다 — job이 돌고 있으면 requeue_for_shutdown이 영영 안 돌아
+  // P2-C5가 결정적으로 깨진다. uv의 그룹에서 이 신호가 닿아야 할 것은 supervisor뿐이다: --once
+  // 자식은 start_new_session이라 원래 그룹 밖이고, mlx_lm.server는 그 자식의 세션에 있다.
+  opts.signal(pid, "SIGTERM");
   if (await waitForExit(opts.graceMs)) return cleanUnlessOrphans();
 
   // 2단계. 유예가 지날 때마다 **다시 묻는다.** 사람이 "계속 기다리기"를 고르면 실제로
@@ -257,8 +265,9 @@ export async function stopWorkerProcess(
     if (await waitForExit(opts.graceMs)) return cleanUnlessOrphans();
   }
 
-  // 3단계. SIGKILL이 아니라 두 번째 SIGTERM이다.
-  opts.signal(-pid, "SIGTERM");
+  // 3단계. SIGKILL이 아니라 두 번째 SIGTERM이다. 1단계와 같은 이유로 uv의 pid로 보낸다 —
+  // uv가 정확히 한 번 전달하므로 supervisor가 받는 것이 "두 번째"다(그룹이면 셋째·넷째가 된다).
+  opts.signal(pid, "SIGTERM");
   if (await waitForExit(opts.graceMs)) return cleanUnlessOrphans();
 
   // 4단계. 세션이 다른 자손까지 ppid BFS로 찾아 직접 죽인다. 여기서 죽일 대상은 방금 다시

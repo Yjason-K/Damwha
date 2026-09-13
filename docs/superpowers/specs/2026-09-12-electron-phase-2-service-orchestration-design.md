@@ -439,23 +439,56 @@ worker → embed → api → (postgres는 건드리지 않는다)
    새로 뜬 자식을 놓친다. **대화상자 뒤가 아니라 앞에서 찍는다**: 대화상자는 시간 상한이 없어
    그 사이 supervisor가 죽고 OS가 pid를 재사용하면 남의 프로세스가 스냅샷에 섞인다.
 
-1. **SIGTERM 1회.** supervisor의 2단계 핸들러가 자식에 SIGTERM을 전달하고
+1. **SIGTERM 1회, uv의 pid로.** supervisor의 2단계 핸들러가 자식에 SIGTERM을 전달하고
    (`__main__.py:_on_signal`), 자식은 stage boundary에서 멈춰 `requeue_for_shutdown`을 부른다 —
    이 경로가 **`attempts`를 되돌려** 재시도를 태우지 않는다(`jobs.py:144-147`). P2-C5가 판정한다.
 2. 유예 초과 → 네이티브 대화상자 `[계속 기다리기 / 지금 강제 종료]`.
-3. 강제 → **SIGTERM 2회차.** supervisor가 자식을 `kill()`하고 `os._exit(1)`한다.
+3. 강제 → **SIGTERM 2회차, 역시 uv의 pid로.** supervisor가 자식을 `kill()`하고 `os._exit(1)`한다.
 4. 그래도 남으면 `descendantPids()`로 자손 집합을 훑어 SIGKILL. `start_new_session`은 세션만 바꾸고
-   **부모-자식 관계는 그대로**라 `ps`의 ppid BFS가 여전히 찾아낸다. 이 단계가 §6.5의
-   `WORKER_ID` 재사용 구멍도 닫는다.
+   **부모-자식 관계는 그대로**라 `ps`의 ppid BFS가 여전히 찾아낸다. 이 단계는 **앱이 내리는**
+   종료의 구멍만 닫는다 — worker가 스스로 죽고 재시작되는 경로는 §6.5가 따로 다룬다.
 
-   **여기서 SIGTERM이 아니라 SIGKILL인 것은 의도다.** 앞의 두 SIGTERM은 그룹(`-pid`) 대상이라
-   `start_new_session`인 `--once` 자식에게 애초에 닿지 않았고, 봉쇄된 supervisor가 전달도
-   못 했다. 그러므로 이 자식에게 SIGTERM을 보내면 stage boundary에서 `requeue_for_shutdown`을
-   탈 수 있다 — 이론상 더 낫다. 그럼에도 SIGKILL을 택하는 이유는 **사용자가 바로 앞 대화상자에서
-   "지금 강제 종료"를 골랐기** 때문이다. 그 지점에서 stage boundary를 기다리는 것은 요청과
-   반대다. 대가는 그 job이 `running`으로 남아 reaper가 회수할 때까지 멈춰 보이는 것이고,
-   그것은 사용자가 고른 대가다. 완료 기준 P2-C5가 판정하는 것은 강제를 **고르지 않은**
-   정중한 경로다.
+   **1·3단계의 SIGTERM이 그룹(`-pid`)이 아니라 uv의 pid인 이유** (2026-09-13 수정, 최종 리뷰 I-1).
+   초판과 커밋 `606c55d`는 두 SIGTERM을 그룹에 보냈고, 그것이 정중한 경로를 강제 경로로 만들었다.
+   `pid`는 uv이고 Python supervisor는 uv와 **같은 그룹**이다. 그래서 그룹 신호 하나가 supervisor에게
+   두 번 닿는다 — 커널이 그룹 구성원이라 한 번, `uv run`이 받은 SIGTERM을 자식에게 무조건 전달해서
+   또 한 번. 장난감 스크립트로 실측했다(앱·실제 worker가 아니다). `uv run` 아래 Python에
+   `process.kill(-uvPid, "SIGTERM")` 1회 → 핸들러 **2회**(5/5), `process.kill(uvPid, "SIGTERM")` 1회 →
+   **1회**(2/2), uv pid에 1초 간격 2회 → 정확히 2회(3/3). uv 0.10.9. supervisor의 핸들러는 두 번째를
+   "강제"로 읽으므로, job이 돌고 있으면 1단계가 곧바로 `--once` 자식을 `kill()`하고
+   `requeue_for_shutdown`은 영영 돌지 않았다 — P2-C5가 **결정적으로** 깨지는 구조였다. uv의 pid로 보내면
+   uv가 정확히 한 번 전달한다. 3단계도 같은 이유로 uv의 pid이고, 그래야 supervisor가 받는 것이
+   정확히 "두 번째"다.
+
+   이 전환이 잃는 것은 하나다. uv의 그룹에는 uv와 supervisor 말고 **supervisor가 `start_new_session`
+   없이 띄운 짧은 자식**도 있다 — `capabilities.probe_mps`가 데몬 스레드에서 `subprocess.run`으로
+   띄우는 torch 프로브(수십 초, 상한 120초)다. 그룹 신호는 그것도 끝냈지만 uv pid 신호는 닿지 않는다.
+   장난감 실측: 같은 그룹의 자식은 supervisor가 SIGTERM으로 끝난 뒤에도 살아 있었고(1/1) 자기 일을
+   마치고 스스로 끝났다. 그룹 신호에서는 함께 죽었다(1/1). 그래서 **worker가 뜬 직후 약 2분 안의
+   종료는 그 프로브 pid를 "남은 후보"로 보고할 수 있다.** 거짓 보고는 아니다 — 실제로 살아 있는 우리
+   프로세스이고 곧 스스로 끝난다. 그 대가를 `attempts` 유실과 바꾸지 않는다.
+
+   **embed도 같은 규칙이다** (`launchWithUv`의 stop). 같은 이중 배달이 실측됐다(uvicorn 0.49.0의
+   `handle_exit` 2회, 2/2). 다만 uvicorn은 두 번째 SIGTERM을 강제로 읽지 않아(`sig == SIGINT`일 때만)
+   진행 중인 요청이 끝까지 나갔다 — 지금은 해가 없다. 그래도 한 런처가 두 서비스에 같은 신호 규칙을
+   쓰고, embed의 그룹에는 uv와 uvicorn뿐이라 그룹이어야만 닿는 것이 없다. uvicorn 구현 한 줄에
+   기대 두지 않는다.
+
+   **API와 Vite는 그룹 신호를 그대로 둔다.** pnpm도 SIGTERM을 전달한다(장난감 실측:
+   `pnpm run` 아래 node 자식에 그룹 SIGTERM 1회 → 2회, 2/2). 그러나 두 번째 배달이 정중함을 깨는
+   대상이 없다. API(`be/src`)에는 `enableShutdownHooks`가 없어 첫 SIGTERM에 바로 끝나고, Nest CLI
+   (`start --watch`)에도 SIGTERM 핸들러가 없다(`start.action.js`는 `exit` 리스너뿐이다). Vite 8.1은
+   `process.once("SIGTERM")`라 두 번째가 기본 동작(즉시 종료)이 되지만 개발 서버에는 지킬 상태가
+   없다. 반대로 그 체인에서는 그룹이 **필요하다** — pnpm → Nest CLI → API의 손자는 pnpm의 pid 신호로는
+   닿는다는 보장이 없다(`api-process.ts`의 `detached` 주석).
+
+   **4단계가 SIGTERM이 아니라 SIGKILL인 것은 의도다.** `--once` 자식은 `start_new_session`이라 앞의
+   두 SIGTERM의 대상이 아니었고, 봉쇄된 supervisor는 전달도 못 했다. 그러므로 이 자식에게
+   SIGTERM을 보내면 stage boundary에서 `requeue_for_shutdown`을 탈 수 있다 — 이론상 더 낫다.
+   그럼에도 SIGKILL을 택하는 이유는 **사용자가 바로 앞 대화상자에서 "지금 강제 종료"를 골랐기**
+   때문이다. 그 지점에서 stage boundary를 기다리는 것은 요청과 반대다. 대가는 그 job이 `running`으로
+   남아 reaper가 회수할 때까지 멈춰 보이는 것이고, 그것은 사용자가 고른 대가다. 완료 기준 P2-C5가
+   판정하는 것은 강제를 **고르지 않은** 정중한 경로다.
 5. 그래도 남으면 **pid를 화면과 로그에 적는다.** 정리 실패를 조용히 넘기지 않는다.
 
 **증명하지 못하면 깨끗하다고 말하지 않는다.** 0단계의 스냅샷 자체가 실패할 수 있다 — `ps`가

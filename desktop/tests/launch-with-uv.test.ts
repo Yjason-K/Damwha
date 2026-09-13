@@ -54,7 +54,32 @@ afterEach(() => {
 });
 
 describe("launchWithUv", () => {
-  it("detached: true로 띄운다 — 없으면 process.kill(-pid)가 그룹을 못 찾아 종료 시 고아가 남는다", () => {
+  it("stop()은 SIGTERM을 uv의 pid 하나로 보낸다 — 그룹으로 보내면 uv의 전달과 겹쳐 자식이 두 번 받는다", async () => {
+    // 2026-09-13 실측: uv run 아래 자식에 그룹 SIGTERM 1회 → 핸들러 2회(커널 한 번, uv 전달 한 번).
+    // worker supervisor는 두 번째를 강제로 읽고, embed(uvicorn)는 지금 버전이 우연히 그러지 않을
+    // 뿐이다. 진짜 신호가 나가지 않게 process.kill을 가로챈다 — 4242는 이 기계에 실재할 수 있는 pid다.
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-launch-"));
+    const child = fakeChild();
+    const spawnFn = vi.fn().mockReturnValue(child);
+    const kills: Array<[number, string | number | undefined]> = [];
+    const spy = vi.spyOn(process, "kill").mockImplementation((pid, sig) => {
+      kills.push([pid, sig]);
+      return true;
+    });
+    try {
+      const { handle } = launchWithUv({ ctx: ctx(), args: ["damwha-embed"], logId: "embed", spawnFn });
+      if (handle === null) throw new Error("handle이 없다");
+      // 신호를 받자마자 끝나는 자식을 흉내 낸다. 유예 루프가 한 바퀴 안에 빠져나온다.
+      const stopping = handle.stop(1_000);
+      child.emit("exit", 0);
+      await stopping;
+    } finally {
+      spy.mockRestore();
+    }
+    expect(kills).toEqual([[4242, "SIGTERM"]]);
+  });
+
+  it("detached: true로 띄운다 — 없으면 uv와 Python이 Electron의 그룹에 들어가 그룹 신호가 종료 절차를 건너뛴다", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-launch-"));
     const child = fakeChild();
     const spawnFn = vi.fn().mockReturnValue(child);

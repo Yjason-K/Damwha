@@ -78,7 +78,9 @@ export function launchWithUv(options: UvLaunchOptions): LaunchResult {
   const child = spawnFn(ctx.bins.uv, ["run", "--directory", workerDir, ...args], {
     cwd: workerDir,
     stdio: ["ignore", "pipe", "pipe"],
-    // detached가 없으면 자식이 부모 그룹에 들어가 process.kill(-pid)가 그룹을 못 찾는다.
+    // 자기 프로세스 그룹을 갖게 한다. 종료 신호는 이제 그룹이 아니라 uv의 pid로 보내므로(아래
+    // signalUv) 그 이유는 아니다 — 없으면 uv와 Python이 **Electron의** 그룹에 들어가, dev 터미널의
+    // Ctrl-C 같은 그룹 신호가 우리 종료 절차(§6.9)를 거치지 않고 둘에게 곧바로 닿는다.
     detached: true,
     env: {
       ...process.env,
@@ -112,10 +114,22 @@ export function launchWithUv(options: UvLaunchOptions): LaunchResult {
   });
 
   const pid = child.pid;
-  const killGroup = (signal: NodeJS.Signals) => {
+  /**
+   * **uv의 pid로 보낸다, 그룹이 아니라.** `uv run`은 받은 SIGTERM을 자식에게 한 번씩 전달하고, 그
+   * 자식은 uv와 같은 그룹이라 그룹 신호는 커널이 한 번 더 배달한다 — 자식이 두 번 받는다.
+   * 2026-09-13 실측(스크래치 toy): uv 아래 uvicorn 0.49.0에 그룹 SIGTERM 1회 → `handle_exit` 2회
+   * (2/2), uv pid 1회 → 1회(1/1). worker supervisor에서는 그 두 번째가 강제 종료다(shutdown.ts
+   * 1단계). embed(uvicorn)는 두 번째 SIGTERM을 강제로 읽지 않아(SIGINT만 그렇다) 진행 중인 요청이
+   * 끝까지 나갔지만, 그것은 uvicorn 구현 한 줄(`sig == SIGINT`)에 기댄 우연이다. 한 런처가 두
+   * 서비스에 같은 규칙을 쓴다. embed에서 그룹이라서만 닿는 것도 없다: 그 그룹에는 uv와 uvicorn
+   * Python뿐이다(bge-m3는 프로세스 안에서 올라온다). 프로덕션 worker는 이 경로가 아니라 main.ts의
+   * stopOwnWorker → shutdown.ts로 내린다 — 그쪽에 남는 차이(같은 그룹의 capabilities 프로브)는
+   * 스펙 §6.9에 적었다.
+   */
+  const signalUv = (signal: NodeJS.Signals) => {
     if (pid === undefined) return;
     try {
-      process.kill(-pid, signal);
+      process.kill(pid, signal);
     } catch {
       try {
         child.kill(signal);
@@ -143,7 +157,7 @@ export function launchWithUv(options: UvLaunchOptions): LaunchResult {
       },
       async stop(graceMs: number) {
         if (code !== null) return;
-        killGroup("SIGTERM");
+        signalUv("SIGTERM");
         const until = Date.now() + graceMs;
         while (code === null && Date.now() < until) {
           await new Promise((r) => setTimeout(r, 50));
