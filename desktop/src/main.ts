@@ -1070,7 +1070,9 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    if (win === null) return;
+    // activate와 같은 가드. 'closed'가 win을 null로 만들기 전에도 창은 파괴돼 있을 수 있고
+    // (spawn-guard.ts), 그때 isMinimized()가 동기로 던지면 main의 uncaught exception이다.
+    if (win === null || win.isDestroyed()) return;
     if (win.isMinimized()) win.restore();
     win.focus();
   });
@@ -1101,6 +1103,10 @@ if (!app.requestSingleInstanceLock()) {
       win.focus();
       return;
     }
+    // 마무리 중에는 새 창을 만들지 않는다. 자식은 어차피 되살아나지 않지만(spawn-guard가
+    // quitting을 본다) "종료 중"인 앱에 준비 화면을 단 창이 뜨고, 그 창이 win이 되어
+    // showQuitting·stopRecording의 대상까지 바뀐다. 있는 창을 앞으로 보내는 위 갈래는 둔다.
+    if (quitting) return;
     const opened = openWindow();
     const mine = generation;
     // 서비스는 이미 떠 있다. 화면만 다시 붙인다 — 다만 **셸 화면을 먼저 건다.** 그러지 않으면
