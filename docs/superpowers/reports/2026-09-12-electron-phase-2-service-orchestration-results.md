@@ -5,7 +5,7 @@
 스펙: [2026-09-12-electron-phase-2-service-orchestration-design.md](../specs/2026-09-12-electron-phase-2-service-orchestration-design.md)
 로드맵: [electron-migration-roadmap.md](../../electron-migration-roadmap.md) § "Phase 2. 서비스 실행 통합"
 
-**상태 (2026-09-12): 스펙 리뷰 통과. 구현 계획 작성·검증 통과. 구현 미착수.**
+**상태 (2026-09-13): 구현 완료. packaged 통합 검증에서 완료 기준 P2-C1~P2-C15 15건 충족 (§4).** 검증 중 드러난 결함 4건은 이 브랜치에서 고친 뒤 다시 판정했다(§4.2). 남은 제약과 인계는 §5.
 
 이 문서는 로드맵이 정한 네 기록을 구분해 담는다 — 스펙 리뷰, 계획 검증, 단계별 실행·리뷰,
 최종 검증. 아직 채워지지 않은 절은 그 사실을 적어 둔다. **실행하지 않은 검증을 성공으로
@@ -190,7 +190,12 @@ Docker가 "failed to connect to the docker API … if the daemon is running"으�
 | 8 | worker 어댑터 · `launchWithUv` | `892d16f..39e2979` | 1 | 스트림 분리 · `as never` 제거 · 런처 무검증 |
 | 9 | embed 어댑터 | `56000bf..a8cc48c` | 0 | — |
 | 10 | 렌더러 브리지 (`__damwha_desktop`) | `a8cc48c..06a6bed` | 1 | `isLiveCapture` 가드가 무검증이었다 |
-| 11 | 종료 정책 | `06a6bed..` (진행 중) | 2 | 아래 §3.3 |
+| 11 | 종료 정책 | `06a6bed..ea6a818` | 3 | 진입 가드·자손 스냅샷·`leaked` 정직성, `processExists`·재스냅샷 무검증 (§3.3) |
+| 12 | main 배선 · 창 흐름 · 상태 채널 | `717d5ec..cf66e4a` | 3 | 재시도의 config 재적용이 embed 포트 파생을 어긋내고 `WORKER_ID`를 재발급했다. 테스트할 수 없는 `main.ts` 잎을 모듈 6개로 분리 |
+| 13 | 종료 흐름 배선 (quit · close · handshake) | `cf66e4a..e90d5d3` | 5 (차단기 판정) | 내 판정 "⌘Q 직후 종료 화면"이 handshake 전에 렌더러를 파괴했다. "false = 계속 기다리기"가 된 뒤 `?? Promise.resolve(false)` 기본값이 무한 대기가 됐다 |
+| 14 | 실패 표시 (상태 창 · 원인 카탈로그) | `e90d5d3..6362561` | 3 | degraded 안내가 사람이 움직여야 풀리는 원인을 가렸다. 같은 view를 두 번 그려 실시간 갱신을 지키지 못하는 테스트 |
+| 최종 | whole-branch 리뷰 → 수정 1회 + 재리뷰 1회 | `6362561..e00cf9b` | 1 | 아래 §3.2 "최종 리뷰가 잡은 것" |
+| 15 | packaged 통합 검증 | `9602c5f`, `24f9080`, `ccb407a`, `6d22ed5` | — | §4.2의 결함 4건 |
 
 ### 3.2 이 단계들에서 실제로 잡힌 결함
 
@@ -229,6 +234,24 @@ stderr로 보내고 미적용 마이그레이션 경고는 `.warn()`이라 **std
 → 앱이 살아 있는 동안 재시도 영구 차단이다. (3) "인자 제거는 타입 정리라 런타임 변화가 없다"
 → stderr 읽는 시점을 probe 뒤로 옮겨 지연된 staleness 버그를 소리 없이 고쳤다.
 
+**최종 whole-branch 리뷰가 잡은 것 (Critical 0, Important 4).**
+
+- **I-1 — 정중한 종료가 사실상 강제 종료였다.**
+  - 원인: `kill(-pgid)`가 uv 그룹의 Python supervisor에 SIGTERM을 **두 번** 닿게 했다 — 커널이 한 번,
+    `uv run`의 전달이 한 번. supervisor는 두 번째를 "강제"로 읽어 `--once` 자식을 죽이고 `os._exit(1)`한다.
+  - 영향: job이 돌고 있으면 P2-C5가 **결정적으로** 실패한다.
+  - 확인: 컨트롤러가 장난감 스크립트로 실측했다(5/5 두 번, uv pid 대상은 2/2 한 번).
+  - 수정: 1·3단계 SIGTERM을 uv pid로 보낸다. supervisor가 끝난 뒤에만 그룹에 한 번 보내 같은 그룹의 MPS
+    probe 자식을 거둔다.
+  - Task 11 때의 6/6 측정은 job이 없는 상태라 이것을 못 봤다. 실앱 확인은 P2-C5.
+- **I-4 — `WORKER_ID`를 실행 간 고정한 Task 12의 내 판정은 스펙 §6.5 위반이었다.**
+  - 실행 간 고정은 R2-6을 오히려 넓힌다.
+  - 수정: 실행마다 새로 만들고 `config.json`에 쓰지 않는다. 옛 빌드가 남긴 값도 이기지 못한다.
+- **I-3 — 크래시 뒤 재시작 경로의 고아를 §6.9가 막는다는 스펙 주장이 거짓이었다.**
+  스펙만 정정하고 메커니즘은 Phase 6으로 넘겼다(§5.3).
+- **I-2** — 테스트 강도 결함. 수정 뒤 재리뷰의 I-A(대화상자 동안 끝난 worker에 신호를 보냄)는 컨트롤러가 `e00cf9b`로
+  고쳤다.
+
 **내가 틀렸고 리뷰어가 고친 것 1건.** 나는 모든 `stopped: true` 직전에 자손을 훑자고 했다.
 리뷰어가 그것으로는 못 잡는다는 것을 보였다 — 감독자가 먼저 죽으면 OS가 그 자식을 pid 1로
 재부모화하므로 사후 BFS에는 아무것도 안 보인다. 옳은 수정은 **감독자가 살아 있는 진입 시점에
@@ -236,7 +259,7 @@ stderr로 보내고 미적용 마이그레이션 경고는 `.warn()`이라 **std
 
 ### 3.3 판정 기록
 
-실행 중 내린 판정은 **37건**이다. 전문은 원장
+실행 중 내린 판정은 Task 11 시점에 **37건**, Task 15 끝에 **98건**이다. 전문은 원장
 (`.superpowers/sdd/.../progress.md`, git 추적 대상 아님)에 `Ruling:` 항목으로 시간순으로 있고,
 각 항목은 "무엇을 정했나 / 왜 / 틀렸을 때 비용" 세 줄을 갖는다. 여기에는 **제품 동작을 바꾼 것**만
 추린다.
@@ -263,7 +286,8 @@ stderr로 보내고 미적용 마이그레이션 경고는 `.warn()`이라 **std
 
 ### 3.4 이월 항목
 
-전부 `.superpowers/sdd/.../deferred.md`에 있다. 후속 Task가 받아야 하는 것만 적는다.
+전부 `.superpowers/sdd/.../deferred.md`에 있다. 아래는 Task 11 시점에 적은 인계이고, **Task 12~14와 최종 리뷰
+수정이 모두 받아 처리했다.** 끝까지 남은 것은 §5.3에 옮겼다.
 
 **Task 12가 받는 것**
 - `descendantPids`를 `main.ts`에서 export한다 (Task 13이 `opts.descendants`에 배선한다).
@@ -290,38 +314,188 @@ stderr로 보내고 미적용 마이그레이션 경고는 `.warn()`이라 **std
 
 ## 4. 최종 검증
 
-**아직 수행하지 않았다. P2-C1~P2-C15 중 충족된 것은 0건이다.**
+**결과: P2-C1~P2-C15 15건 모두 충족.** 단, 검증 도중 제품 결함 4건이 드러났다. 전부 이 브랜치에서
+고쳤고, 영향받은 기준은 고친 빌드로 다시 판정했다(§4.2). 첫 판정에서 실패한 기준은 P2-C11 하나다.
 
-이 시점에 desktop 225 · worker 526 · fe 578개 테스트가 통과하지만, **그것은 완료 기준을 하나도
-판정하지 않는다.** §9의 15개 기준은 전부 `pnpm desktop:build`로 만든 `Damwha.app`을 Finder에서
-실행한 상태를 확인 환경으로 못박는다 — 단위 테스트는 그 환경에 들어가 본 적이 없다. 지금까지
-증명된 것은 "부품이 각각 명세대로 동작한다"이고, 기준이 묻는 것은 "터미널을 열지 않은 사람이
-앱을 켰을 때 실제로 그렇게 되는가"다.
+- 확인 환경: `pnpm desktop:build`로 만든 `desktop/out/mac-arm64/Damwha.app`.
+- 진행: 사용자와 공동 진행, 2026-09-13 18:29~23:41 KST. 화면 판정은 사용자가 보고 답했고, 로그·프로세스·DB는
+  컨트롤러가 직접 조회했다.
+- 증거 파일: 저장소 밖 `~/.cache/damwha-p2-evidence/`. 기준별 파일 이름은 원장의 Task 15 항목에 있다.
+- 실데이터에 닿는 동작은 사용자가 Task 15에 한해 허락한 네 가지뿐이고, 매번 실행 직전에 다시 확인했다.
+  - postgres 컨테이너 stop/start
+  - 검증용 DB 생성·삭제
+  - 실제 DB에 회의 추가
+  - Docker Desktop 종료
+- `docker compose down`·`pnpm be:migrate`·`.env` 수정은 한 번도 하지 않았다.
 
-기준별 현재 상태는 아래와 같다. **"부품 준비됨"은 충족이 아니다.**
+### 4.1 판정
 
-| 기준 | 주제 | 현재 | 남은 것 |
+빌드는 네 번 바뀌었다. 판정마다 어느 빌드였는지 적는다. 이후 빌드에서 판정을 흔드는 변경은 §4.2의 수정뿐이고,
+그 수정이 닿는 기준(C4·C5·C10·C11)은 수정 뒤 빌드에서 판정했다.
+
+| 기준 | 판정 | 빌드 | 증거 |
 | --- | --- | --- | --- |
-| P2-C1 | 터미널 없이 넷 다 준비 | 부품 준비됨 | Task 12 배선 + packaged 실행 |
-| P2-C2 | `be/worker/.env` 무변경 업로드 | 부품 준비됨 | packaged 실행 + 체크섬 대조 |
-| P2-C3 | 의미 검색 동작 | 부품 준비됨 | packaged 실행. 어긋나도 **오류 없이** 키워드 전용으로 떨어져 이 판정이 유일한 관찰 지점이다 |
-| P2-C4 | 전체 트리 정리 | 종료 정책 완성 (Task 11) | Task 13 배선 + packaged 실행 |
-| P2-C5 | 분석 중 정중한 종료 | 종료 정책 완성 | Task 13 + `job.attempts` 확인 |
-| P2-C6 | 외부 서비스 보존·구분 | 감지 완성 (Task 4·8) | Task 12의 root pid 수정(§3.3) 없이는 **거짓 실패한다** |
-| P2-C7 | Docker 데몬 없음 | 감지 완성 (Task 4) | Task 14 화면 + packaged 실행 |
-| P2-C8 | 실행 파일 못 찾음 | 탐색 완성 (Task 2) | Task 14 화면 + packaged 실행 |
-| P2-C9 | 미적용 마이그레이션 | 게이트 완성 (Task 5·6) | packaged 실행. **복제 DB로만 한다** — §9의 절차를 그대로 따른다 |
-| P2-C10 | worker DB 설정만 틀림 | ready 신호 완성 (Task 7) | Task 12·14 + `docker compose stop postgres` |
-| P2-C11 | 부팅 뒤 DB 끊김 | health 감시 완성 (Task 6·7) | Task 14 상태 창 + packaged 실행 |
-| P2-C12 | 창 닫기 ≠ 앱 종료 | — | Task 12 Step 6 |
-| P2-C13 | 녹음 중 종료 handshake | fe 훅 완성 (Task 10) | Task 13 배선 + packaged 실행 |
-| P2-C14 | 웹 흐름·번들 위생 회귀 없음 | — | 루트 `build`/`test`/`lint` + `docker build` + `check-bundle.mjs` |
-| P2-C15 | 기존 데이터 보존 | — | C1~C6·C12·C13 수행 전후 체크섬·행 수 대조 |
+| P2-C1 터미널 없이 넷 다 준비 | **충족** | `24f9080` | 사용자가 Finder로 실행했고 터미널 명령은 없었다. 상태 창에 넷이 실행 중으로 떴다(사용자 확인). supervisor.log 12:22:32Z에 넷 모두 `running/ok`(api 0.5초·worker 1초·embed 10초). 앱이 멈춰 있던 컨테이너 `f2028e470e9a`를 재기동했고 재생성은 없었다. 뒤 두 빌드의 기동에서도 넷 `ok`가 매번 반복됐다 |
+| P2-C2 `be/worker/.env` 무변경 업로드 | **충족** | `24f9080`(처리) · `6d22ed5`(화면) | 앱에서 업로드한 mtg_18을 앱 소유 worker가 job_91로 처리해 `done`, 발화 426. 전사 화면을 사용자가 확인했다. `be/worker/.env` sha `67572e8f…`가 전후 같다 — `STORAGE_ROOT=../storage` 그대로 |
+| P2-C3 의미 검색 | **충족** | `24f9080` · `ccb407a` | 사용자가 검색 정상을 확인했다. `POST /api/search 201` 5회와 같은 시각에 embed.log `POST /embed 200`이 찍혔고, 키워드 전용 폴백 경고는 0건 |
+| P2-C4 전체 트리 정리 | **충족 (한계 있음)** | `ccb407a` | 렌즈 job_97 중 `mlx_lm.server`(pid 26687, `--once` 자식의 세션)가 떠 있는 상태에서 ⌘Q. 0.5초 간격 추적에서 worker·`--once`·`mlx_lm.server`·embed·앱이 1초 안에 전부 사라졌고, 5초 뒤 0개. 3000/8000/8100 포트 비었고 컨테이너는 Up. **한계:** 3단계(강제 SIGTERM)와 4단계(자손 SIGKILL)는 발화하지 않았다 — 두 번째 대화상자 중에 렌즈 단계가 끝나 자식이 LLM 서버를 스스로 내렸다. 강제 경로는 단위 테스트로만 존재한다 |
+| P2-C5 분석 중 정중한 종료 | **충족 (2/2)** | `24f9080` · `ccb407a` | job_95 STT 도중 ⌘Q → 대화상자에서 종료 → job `queued`, `attempts` 1→0, `locked_by` 해제. worker.log에 "forwarding SIGTERM to child"가 **1회**, "again — killing child"는 없다. `requeued_shutdown`. 최종 리뷰 I-1 수정이 실제 앱에서 성립했다 |
+| P2-C6 외부 서비스 보존·구분 | **충족** | `24f9080` | 터미널 `pnpm worker`(pid 4590)·`pnpm embed`(pid 5467)를 띄운 뒤 앱 실행. embed는 채택하고, worker는 띄우지 않으면서 pid를 적은 경고를 냈다. 앱 소유 worker·embed는 0개. ⌘Q 뒤에도 외부 두 프로세스가 살아 있었고 `:8100/health`가 ok |
+| P2-C7 Docker 데몬 없음 | **충족** | `6d22ed5` | Docker Desktop을 완전히 종료(§4.3)한 뒤 앱 실행. `postgres: 기동 실패 — Docker Desktop이 실행 중이 아니에요.`와 실행 안내가 화면에 떴다(사용자 확인). Docker를 켜자 창의 자동 재시도가 9초 뒤 같은 컨테이너를 채택했고, 넷 `ok` |
+| P2-C8 실행 파일 못 찾음 | **충족** | `ccb407a` | `config.json`에 `UV_BIN=/nowhere/uv`. worker·embed가 `spawn failed: spawn /nowhere/uv ENOENT`로 재시작 3회 뒤 `failed`. 상태 창에 경로와 "config.json의 UV_BIN·DOCKER_BIN" 안내가 떴다(사용자 확인). 원복함. §5.2의 "재시도로는 안 고쳐진다"를 함께 발견 |
+| P2-C9 미적용 마이그레이션 | **충족** | `ccb407a` | 같은 클러스터의 빈 DB `damwha_migration_gate`로 실행. api.log에 `24 pending migration(s): 001_init.sql … — run pnpm be:migrate` — packaged 트리에 `.sql`이 실렸다는 증거다(`skipped` 아님). health 200 뒤 0.5초에 api `failed`. worker·embed는 기동 0회. 복제 DB에는 `_migrations` 테이블이 전후로 없다. 화면은 실패 + `pnpm be:migrate` 안내(사용자 확인). 확인 뒤 DROP, `config.json`은 sha 대조로 원복 |
+| P2-C10 worker DB 설정만 틀림 | **충족** | `ccb407a` | DB를 내린 채 앱 소유 worker supervisor를 SIGKILL했다. pid는 34787→uv 34786→앱 34699 사슬로 확인했다. 재시작 3회가 모두 60초 유예를 넘겨 `failed`였고, `running/ok`는 한 번도 없었다. worker.log: `started` 3줄, `ready (db connected)` 0줄, `reconnect failed` 18줄. DB를 올리고 메뉴 재시도하자 넷 `ok`(사용자 확인). **한계:** 원인 문구("데이터베이스에 연결하지 못해 멈춰 있을 수 있어요…")는 코드와 단위 테스트가 근거이고, 사용자가 화면 문구를 읽지는 않았다 |
+| P2-C11 부팅 뒤 DB 끊김 | **1차 실패 → 수정 후 충족** | `ccb407a` ✗ / `6d22ed5` ✓ | 1차: api 프로세스가 **죽었다**(§4.2-4). 수정 빌드: DB 다운 66초 동안 같은 pid가 `running/degraded`였고, health 503이 10초마다, 재시작·종료 기록 0. DB 복귀 8초 뒤 스스로 `ok`, worker는 28초 뒤 `ok`. 실행 전체에서 api 기동은 1회 |
+| P2-C12 창 닫기 ≠ 앱 종료 | **충족** | `ccb407a` | job_95 처리 중 빨간 버튼으로 창을 닫았다. 대화상자는 없었고, Dock 클릭으로 창이 돌아왔고, 처리는 계속됐다(사용자 확인). 그 사이 supervisor.log에 정지 기록 없음 |
+| P2-C13 녹음 중 종료 handshake | **충족** | `6d22ed5` | 라이브 녹음 약 40초 중 ⌘Q → "녹음 중 종료" 대화상자를 승인했다(사용자 확인). `POST …/live/stop 200`이 worker의 SIGTERM보다 먼저다. mtg_21은 `uploaded`, `capture_error` NULL(≠`producer_abandoned`). job_98 `committed_bytes`=`sealed_bytes`=1,333,760 = WAV 666,880프레임 = 41.68초 = `duration_ms`. 재실행하자 `processing`을 거쳐 `done` |
+| P2-C14 웹 흐름·번들 위생 | **충족** | `6d22ed5` (HEAD) | 루트 install·build·lint·test 모두 exit 0 — desktop 543, fe 578, be 470, worker 526. `pnpm build`는 contracts·be·fe만 빌드했고 `.app` mtime은 그대로. `docker build -f deploy/api.Dockerfile .` exit 0. check-bundle 13/13(저장소 절대 경로 0건 포함). `pnpm dev` 웹 흐름(목록·전사·검색)을 사용자가 확인했고 Electron은 뜨지 않았다. fe lint 경고 1건은 이 브랜치가 안 건드린 파일의 기존 경고 |
+| P2-C15 기존 데이터 보존 | **충족** | 전 구간 | `be/storage` 131파일 체크섬 diff 0줄. 기존 meeting 12건과 그 발화 1,463건 그대로(+ 승인된 테스트 회의 mtg_17~21). `_migrations` 25 → 25. compose `name: damwha`, 볼륨 `damwha_pgdata`와 컨테이너 `f2028e470e9a`의 생성 시각이 기준선과 같다 — 재생성 없음 |
 
-Task 15가 이 표를 실제 판정으로 바꾼다. 판정 값은 실행 결과로만 채운다 — 추론으로 채우지 않는다.
+### 4.2 검증이 잡은 결함
+
+넷 모두 단위 테스트가 전부 초록인 상태에서 packaged 실행으로만 드러났다.
+
+**1. packaged 앱에 옛 코드가 실렸다 (`24f9080`).**
+
+- 원인: `pnpm desktop:build`가 desktop TypeScript를 컴파일하지 않았다. 그래서 00:24에 만든 `dist`(그 뒤 커밋 15개
+  누락)가 번들에 실렸다.
+- 방어가 못 막은 이유: check-bundle 11/11은 통과했다. 파일 **존재**만 봤지 내용이 현재 소스인지는 보지 않았다.
+- 발견 경위: 첫 실행이 만든 `config.json`에 I-4가 없앴어야 할 `WORKER_ID`가 적혀 있었다.
+- 수정: 패키징이 `dist`를 지우고 먼저 컴파일한다. check-bundle에 "asar의 `dist/*.js`가 현재 소스를 새로 컴파일한
+  결과와 바이트 단위로 같다"를 더했다(13/13). 옛 번들에 새 검사가 FAIL하는 것을 확인했다.
+- 옛 빌드에서 본 것은 판정에 쓰지 않았다.
+
+**2. 서명 신원이 모호했다 (`9602c5f`).**
+
+- 원인: 키체인에 이름이 같은 "Apple Development" 인증서가 둘 있어, electron-builder의 자동 탐색이 codesign
+  `ambiguous`로 실패했다.
+- 수정: `mac.identity: null`로 자동 탐색을 끄고, 설계대로 스크립트가 ad-hoc 서명한다. 키체인은 건드리지 않았다.
+
+**3. 처리 중 worker가 거짓 `degraded`로 떴다 (`ccb407a`).**
+
+- 원인: ready 줄을 8KB stderr 꼬리에서 찾았다. 처리 로그가 쌓이면 그 줄이 창 밖으로 밀려나, 첫 분석 뒤
+  재시작 전까지 계속 `degraded`였다.
+- 수정: stderr를 줄 단위로 훑어 마지막 준비 사건을 기억한다.
+- 실앱 확인: ready 뒤 stderr가 11,051B로 8KB를 넘겨도 `ok`를 유지했다.
+
+**4. DB가 연결을 끊으면 API 프로세스가 죽었다 (`6d22ed5`, `be/`).**
+
+- 스펙 §6.6의 "API는 죽지 않고 503을 준다"가 요청 시점의 DB 부재에만 맞았다.
+- 원인: `docker compose stop postgres`처럼 서버가 연결을 끊으면(57P01) pg-pool이 idle 클라이언트의 오류를
+  pool의 `'error'`로 올린다. `DatabaseService`에 리스너가 없어 Node가 프로세스를 죽였다(`Unhandled 'error'
+  event`, 코드 1). `withTransaction`이 빌린 클라이언트도 같은 부류다.
+- 수정: 두 곳에서 `'error'`를 받아 경고만 남긴다.
+- 테스트: testcontainers Postgres에서 `pg_terminate_backend`로 두 경로를 재현한다. 수정 전 RED를 확인했다.
+- 변이 3종이 모두 잡혔다:
+  - pool 리스너 제거 → `Unhandled error … 57P01`
+  - 트랜잭션 리스너 제거 → `Connection terminated unexpectedly`
+  - `removeListener` 제거 → `Expected 1, Received 2`
+- 스펙 §6.6·§10에 정정을 적었다. 웹·Docker 배포에도 그대로 옳은 수정이다.
+
+### 4.3 비고
+
+**Docker Desktop 종료가 한 번에 되지 않았다 (P2-C7 준비).**
+
+1. `quit app "Docker"` 뒤 엔진은 내려갔지만(`docker info` 500) 앱과 백엔드가 2분 넘게 남았다.
+2. 사용자가 메뉴로 완전 종료한 뒤에도 `com.docker.backend` 트리가 남아 `docker ps`가 응답 없이 멈췄다.
+3. 사용자 승인을 받아 그 백엔드 둘에만 SIGTERM을 보냈고, 5초 안에 전부 끝났다.
+4. 그 뒤 CLI가 앱이 판정하는 문구로 즉시 실패했다.
+
+멈춘 Docker(소켓은 받는데 응답이 없음)에서 앱이 어떻게 보이는지는 실측하지 않았다. `dockerRun`의 30초 타임아웃을
+거쳐 일반 실패로 뜰 것이다.
+
+**"처리가 느려졌다"는 보고 — 앱은 원인이 아니다.** 같은 오디오(음성 1,623,469ms), 같은 설정으로 쟀다.
+
+| job | worker | STT | 배속 |
+| --- | --- | --- | --- |
+| job_87 | 앱 소유, 옛 빌드, 앱 기동 직후 | 274.0초 | 5.92배 |
+| job_91 | 앱 소유, 새 빌드 | 234.8초 | 6.91배 |
+| job_93 | 터미널 `pnpm worker` | 약 244초 | 6.65배 |
+
+과거 9배속 기록은 다른 오디오였다. worker 자체의 회귀인지는 옛 회의를 지금 worker로 재처리해야 알 수 있고,
+이 Phase 범위 밖이다(§5.3).
+
+**Phase 1에서 넘어온 확인 항목 (스펙 §9 비고) — 둘 다 미확인.**
+
+- `unverified-owner` 화면의 종단간 발화: 포트를 외부 API가 쥔 상황을 만들 기회가 없었다.
+- 포트 폴백 뒤 TCC 재요청: 이번 검증 내내 포트 폴백이 일어나지 않았다.
 
 ## 5. 남은 제약과 후속 Phase 인계
 
-**아직 채우지 않았다.** 스펙 §15가 현재까지 식별한 인계 항목을 담고 있다 —
-Phase 3의 마이그레이션 실행 게이트, Phase 4의 `FFMPEG_BIN`/`FFPROBE_BIN`,
-Phase 5의 sweeper 경로 검증, Phase 6의 job lease token 판단.
+### 5.1 구현 값과 근거
+
+| 값 | 현재 | 근거 |
+| --- | --- | --- |
+| worker 종료 유예 (`WORKER_GRACE_MS`) | 90초 | stage boundary까지 기다리는 정중한 경로. 넘기면 `[계속 기다리기 / 지금 강제 종료]` |
+| 종료 handshake 상한 (`HANDSHAKE_TIMEOUT_MS`) | 90초 | fe 상수로 계산한 렌더러 최악 중지 82초 이상. 테스트가 이 부등식을 고정한다 |
+| 준비 유예 | 기본 60초, embed 180초 | embed 첫 로드 실측 31초의 6배 |
+| 재시작 정책 | `[3s, 8s, 20s]` 3회 → `failed` 고정 | Phase 1 `RETRY_DELAYS_MS` 재사용. postgres는 `never`(compose `restart: unless-stopped`) |
+| 재시작 예산 초기화 | ready 뒤 60초 유지 | 하루 켜 둔 앱이 예산을 소진하지 않게 |
+| 기동 중 정리 유예 (`CLEANUP_GRACE_MS`) | 5초 (worker는 90초로 올라감 — §5.3 M-5) | 준비 실패한 자식을 치우고 재시도 |
+| health 재확인 | api·worker 10초, postgres·embed 30초 | P2-C11의 `degraded` ↔ `ok` 전이를 관찰하는 유일한 수단 |
+| docker CLI 타임아웃 | 30초 | 멈춘 Docker에서 무한 대기하지 않게 |
+| 로그 회전 | 10MB × 3세대, 기동 시 1회 | 스트림이 열린 뒤 옮기면 핸들이 옛 파일을 가리킨다. 한 실행 안에서는 상한 없음(§5.3 M-8) |
+| stderr·stdout 꼬리 | 8,000자. worker 준비 판정은 줄 단위(carry 8,000자) | §4.2-3 |
+
+### 5.2 이번 검증에서 드러났지만 고치지 않은 것
+
+모두 데이터 손실은 없고 동작이나 안내 수준이다. 후속 Phase가 받거나 별도 작업으로 연다.
+
+1. **게이트 실패 뒤 창이 상한 없이 자동 재시도한다.**
+   - 현상: 창 타이머가 3초·8초 뒤 **20초마다** API를 계속 다시 띄운다(P2-C9에서 1분 40초에 7회, 기동마다 api.log ~8.5KB).
+     감독자는 게이트에 재시작을 걸지 않지만 `main.ts`의 `scheduleRetry`가 그것을 우회한다.
+   - 스펙과의 관계: 계획이 명시한 동작이지만 스펙 §6.7의 "거기서 멈춰 안내"와 어긋난다.
+   - 참고할 점: `pnpm be:migrate` 뒤 클릭 없이 회복되고, Docker를 켰을 때(P2-C7)는 이것이 복구 경로였다.
+     상한이나 로그 억제를 정할 때 이 둘을 같이 봐야 한다.
+2. **`UV_BIN`·`DOCKER_BIN`을 고치고 "다시 시도"해도 반영되지 않는다.**
+   - 원인: 경로가 감독자 생성 때 한 번 정해지고(`main.ts:1011`) 재시도는 같은 감독자를 쓴다.
+   - 실측: 원복한 `config.json`으로 재시도해도 `spawn /nowhere/uv ENOENT`가 반복됐다.
+   - 화면은 "config.json에 경로를 적어 주세요"까지만 말하고 "앱을 다시 켜야 한다"는 말하지 않는다.
+3. **종료 화면이 90초 넘게 진행 표시 없이 떠 있다.** 렌즈 중 ⌘Q에서 사용자가 "엄청 오래 걸렸다"고 보고했다.
+   경과 시간이나 마무리 중인 작업 이름을 보여줄 후보.
+4. **상태줄이 기동 전이나 정지 뒤의 서비스에 `(외부)`를 붙인다.** 초기 상태와 `stopAll`이 `owned:false`로 적기
+   때문이다. P2-C6의 진짜 외부 표시와 헷갈릴 수 있다.
+5. **패키징이 Finder와 경합한다.** electron-builder가 `out/mac-arm64`를 비우는 사이 Finder가 `.DS_Store`를 다시 써
+   `ENOTEMPTY`로 실패했다. 그 폴더를 Finder로 열어 둔 경우다. 남은 것을 지우고 다시 빌드하면 된다.
+6. **P2-C4의 강제 경로(3·4단계)는 실앱에서 발화하지 않았다** (§4.1).
+
+### 5.3 최종 리뷰에서 남긴 것
+
+- **I-3 — worker supervisor가 크래시한 뒤의 재시작은 이전 `--once` 자식을 추적하지 않는다.**
+  - 피해 조건: 같은 `WORKER_ID`의 고아가 아직 쓰는 중에 reaper가 그 job을 되돌리면, 한 job에 writer가 둘 생긴다.
+  - 스펙: §6.5·R2-6에 정직하게 적어 두었다.
+  - 해소: job별 lease token과 함께 **Phase 6**. 부분 해소 설계(`ServiceSpec.leftovers` 훅, worker 어댑터의
+    `--once` 스냅샷, 감독자 `held` 상태)의 전문은 원장 작업 공간의 `final-fix-report.md` "I-3 — deferred design"에 있다.
+  - 이것을 밟는 완료 기준은 없다.
+- **M-5.** 기동 중 정리가 `StopOutcome`을 버리고 `rt.result`를 비운다. 정리하지 못한 자식이 추적에서 빠지고, 재시작이
+  그 옆에 또 띄울 수 있다. `Math.max(plan.graceMs, WORKER_GRACE_MS)`가 worker의 5초 정리 유예를 90초로 바꾼다.
+- **M-8.** 로그 회전이 기동 시 1회뿐이라 창을 닫고 오래 켜 두면 `worker.log`가 한 실행 안에서 무한히 자란다
+  (스펙 §6.12는 크기 기반 회전을 요구한다).
+- **M-7.** 브리지 이름(`__damwha_desktop`, `isRecording`, `stopLiveRecording`)이 fe의 `DesktopBridge`와 문자열로만
+  묶여 있다. fe에서 이름을 바꾸면 P2-C13의 확인과 handshake가 조용히 건너뛰어진다.
+- **M-9.** 다른 흐름 중에 누른 ⌘Q·⌘W는 로그 한 줄만 남기고 화면에는 아무 반응이 없다.
+- 테스트 강도 잔여 — 변이가 살아남는 곳:
+  - M-1: 상태줄의 degraded 문구
+  - M-2: 서비스 창 "마지막 갱신" 시각, `status.html`의 `?? "3"`
+  - M-R: 4단계 SIGKILL 뒤 settle 대기
+  - M-10: `pollMs: 0` 무한 회전(도달 불가)
+  - PORT 검증 중복
+  - `main.ts`의 잎(electron import라 테스트 불가 — 신호 실패 로그 등)
+- **job_97 `llm_invalid_response`** (렌즈 LLM 응답 형식)와 **worker 처리 속도의 과거 대비 회귀 여부**는 이 Phase
+  범위 밖이다. 앱과는 무관함을 확인했다(§4.3).
+
+### 5.4 후속 Phase 인계 (스펙 §15)
+
+- **Phase 3** — 마이그레이션 실행.
+  - 지금 앱은 감지해 멈추기만 하고(P2-C9) 실행하지 않는다.
+  - 실행 게이트를 넣을 때 §5.2-1의 자동 재시도 루프를 함께 정리한다.
+- **Phase 4** — 번들 도구. `FFMPEG_BIN`/`FFPROBE_BIN`.
+  - worker의 `pipeline/ffmpeg.py`가 두 실행 파일을 리터럴로 부르므로, 번들 ffmpeg를 넣는 것만으로는 개발 도구가
+    없는 맥에서 동작하지 않는다.
+  - `UV_BIN`처럼 탐색·설정·안내가 필요하고, §5.2-2의 "재시도로 반영 안 됨"도 같은 자리다.
+- **Phase 5** — sweeper 경로 검증.
+  - 종료 handshake가 실패하거나 시간을 넘겼을 때, 다음 실행의 `LiveOrphanService`가 봉인·마감하는 경로다.
+  - P2-C13은 handshake가 성공한 경로만 밟았다.
+- **Phase 6** — job lease token.
+  - R2-6과 I-3의 근본 해소.
+  - Developer ID 서명(§4.2-2의 ad-hoc 서명을 대체).

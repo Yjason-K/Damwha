@@ -331,6 +331,16 @@ Postgres를 내린 채 worker를 죽이므로 claim된 job도 `--once` 자식도
 (`be/src/health/health.controller.ts`). 프로세스가 살아 있으므로 종료 기반 재시작은 발화하지 않고,
 `state`만 보는 감독자는 "정상 실행 중"을 띄우면서 모든 요청이 실패한다.
 
+**2026-09-13 수정 (P2-C11 packaged 실측).** "API는 죽지 않는다"는 **틀렸다.** 요청 시점에 DB에 못
+닿는 경우만 맞았다. `docker compose stop postgres`처럼 서버가 연결을 끊으면(57P01 `terminating
+connection due to administrator command`) pg-pool이 **idle 클라이언트의 오류를 pool에 `'error'`로
+올리는데**, `DatabaseService`의 `Pool`에 리스너가 없어 Node가 처리되지 않은 이벤트로 프로세스를
+죽였다 — api `failed`(코드 1) → 재시작 3회(부팅 fail-fast로 매번 실패) → 상한. `withTransaction`이
+빌려 간 클라이언트도 같은 부류다(대여 중에는 pool의 idle 리스너가 빠진다). 두 곳에 `'error'`를 받아
+경고만 남기게 고쳤다(`6d22ed5`, §10). 고친 빌드에서 이 절의 동작 — DB 다운 66초 동안
+`running/degraded`, 재시작 0, 복귀 8초 뒤 `ok` — 이 실측으로 성립했다. R2-5의 "확인됨"은 fail-fast의
+위치만 봤고 이 경로를 보지 않았다.
+
 그래서 **`degraded`는 재시작을 유발하지 않는다.** 재시작해도 DB가 돌아오지 않으면 같고, 백오프만
 태운다. 대신 원인과 복구 방법을 띄우고 health 회복을 계속 감시한다. DB가 돌아오면 스스로
 `ok`로 돌아온다(P2-C11).
@@ -836,7 +846,7 @@ Phase 1 §8을 잇고 이 Phase의 것을 더한다.
 
 ## 10. 제품 코드 변경 목록
 
-`desktop/` 확장과 루트 스크립트 외에, 기존 코드 변경은 **둘뿐**이다.
+`desktop/` 확장과 루트 스크립트 외에, 기존 코드 변경은 **둘뿐**이다. (2026-09-13 packaged 검증에서 셋째가 더해졌다 — 이 절 끝의 `be/src/database/database.service.ts`.)
 
 **`be/worker/damwha_worker/__main__.py`** — DB 연결 성공 뒤의 ready 로그 한 줄.
 
@@ -868,7 +878,13 @@ window.__damwha_desktop = {
 웹·Docker 배포의 동작을 바꾸고(이 Phase의 제품 코드 예산 밖이다), 그 파일의 주석이 의도적으로
 advisory라고 적어 둔 조건을 error 수준으로 올리게 된다.
 
-**변경하지 않는 것:** `be/src/`, `be/docker-compose.yml`, `packages/contracts/`, `.npmrc`,
+**`be/src/database/database.service.ts`** (2026-09-13 추가, `6d22ed5`) — pool과 `withTransaction`이 빌린
+클라이언트의 `'error'`를 받아 경고만 남긴다. 서버가 연결을 끊으면 이 리스너가 없어 API 프로세스가
+죽었다(§6.6의 2026-09-13 수정, P2-C11). 웹·Docker 배포에도 똑같이 옳은 수정이라 이 Phase의 예산 밖이라는
+위 논리와 부딪히지 않는다 — 동작을 바꾸는 것이 아니라 크래시를 없앤다. 두 경로를 testcontainers
+Postgres에서 `pg_terminate_backend`로 재현하는 테스트가 고정한다(`be/test/database.service.spec.ts`).
+
+**변경하지 않는 것:** `be/src/`(위 한 파일 제외), `be/docker-compose.yml`, `packages/contracts/`, `.npmrc`,
 `be/.env`, `be/worker/.env`, `fe/.env`.
 
 ## 11. 빌드와 실행 흐름
