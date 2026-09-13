@@ -21,8 +21,7 @@ import { mayRenderShell } from "./shell-latch";
 import { maySpawnServices } from "./spawn-guard";
 import { openWindowFlow } from "./window-flow";
 import {
-  createQuitLatch,
-  decideCloseEvent,
+  createFlowLatch,
   graceExpiryPrompt,
   runCloseFlow,
   runQuitFlow,
@@ -127,6 +126,13 @@ let lastStatusLine = "";
 let retryCount = 0;
 let retryTimer: NodeJS.Timeout | null = null;
 let quitting = false;
+/**
+ * ⌘Q의 흐름과 ⌘W의 흐름이 **공유하는** 래치 한 벌. 둘은 같은 창·같은 녹음을 상대하므로 도는
+ * 흐름은 언제나 0개 아니면 1개다 — 판정과 수명은 quit-flow.ts의 createFlowLatch에 있다.
+ * 여기(모듈 전역)에 **한 번** 만든다. 핸들러나 openWindow 안에서 만들면 각자 따로 된 `running`을
+ * 들어 두 흐름이 다시 서로를 모르게 되고, 어떤 테스트도 그것을 볼 수 없다.
+ */
+const flows = createFlowLatch();
 /**
  * start()가 겹치면 한 호출이 다른 호출의 자식을 죽이고도 이전 호출이 계속 전역 상태를
  * 갱신한다. 세대 번호로 최신 호출만 전역 상태와 창을 건드리게 한다.
@@ -246,26 +252,27 @@ function openWindow(): BrowserWindow {
   // 타는데 catch가 **다시** 닫으므로 catch 자체가 던져 main 프로세스의 unhandled
   // rejection이 된다.
   //
-  // `closed`는 흐름 바깥에 둔다 — 흐름 안에 있으면 "우리가 부른 close()"와 "사람이 한 번 더
-  // 누른 close"를 이 핸들러가 구별할 수 없고, 그러면 2차 입력이 그대로 통과해 핸드셰이크
-  // 한가운데서 렌더러가 파괴된다 (재리뷰 2의 N1). 판정 자체는 decideCloseEvent에 있다.
-  let closing = false;
-  let closed = false;
+  // "우리가 부른 close()"(closed)는 이 창의 사실이라 창마다 한 벌이고, "도는 흐름"(running)은
+  // 종료 흐름과 공유한다 — 둘 다 flows.forWindow()가 든다. 판정은 decideCloseEvent에 있다.
+  const latch = flows.forWindow();
   created.on("close", (event) => {
-    const gate = decideCloseEvent({ quitting, closing, closed });
+    const gate = latch.press();
     // 종료 경로가 닫는 창과 우리가 방금 닫기로 한 창은 건드리지 않는다. quitFlow가 이미
     // 확인도 핸드셰이크도 했고, 여기서 또 물으면 사용자가 같은 질문을 두 번 받는다.
     if (gate === "let-it-close") return;
     event.preventDefault();
     if (gate === "ignore") {
-      // 흐름이 도는 중의 2차 ⌘W. 막고 무시한다 — 통과시키면 창이 파괴돼 녹음의 꼬리를 잃고,
-      // 새 흐름을 시작하면 같은 질문을 두 번 받는다.
-      appendSupervisorLog("창을 닫는 중에 닫기를 다시 눌렀어요 — 진행 중인 마무리를 기다립니다.");
+      // 흐름이 도는 중의 ⌘W. 막고 무시한다 — 통과시키면 창이 파괴돼 녹음의 꼬리를 잃고,
+      // 새 흐름을 시작하면 같은 질문을 두 번 받는다. 그 흐름이 종료여도 같다(재리뷰 4의 N3).
+      appendSupervisorLog(
+        flows.running() === "quit"
+          ? "종료를 마무리하는 중에 창 닫기를 눌렀어요 — 진행 중인 마무리를 기다립니다."
+          : "창을 닫는 중에 닫기를 다시 눌렀어요 — 진행 중인 마무리를 기다립니다.",
+      );
       return;
     }
-    closing = true;
     const closeNow = () => {
-      closed = true;
+      latch.allow();
       // 그 사이 창이 이미 파괴됐으면 여기서 멈춘다 (겹친 흐름, 앱 종료, 크래시).
       if (created.isDestroyed()) return;
       created.close();
@@ -299,9 +306,10 @@ function openWindow(): BrowserWindow {
       appendSupervisorLog(`창을 닫는 중 예외 — ${reasonOf(e)}`);
       closeNow();
     }).finally(() => {
-      // "취소"를 고르면 창은 그대로 남는다. 그때는 래치를 내려 다음 ⌘W가 다시 묻게 한다 —
-      // 진입 래치를 올려 둔 채로 두면 사용자가 창을 영영 닫을 수 없다.
-      if (!closed) closing = false;
+      // **조건 없이** 내린다. "취소"면 다음 ⌘W가 다시 물어야 하고, 창을 실제로 닫았으면 이제
+      // ⌘Q가 먹어야 한다 — running은 종료 흐름과 공유라, 닫힌 창이 그것을 쥔 채 사라지면
+      // 앱을 영영 끌 수 없다. (예전의 `if (!closed) closing = false`를 옮기면 그 결함이다.)
+      latch.settle();
     });
   });
   return created;
@@ -1117,23 +1125,27 @@ if (!app.requestSingleInstanceLock()) {
 
   // 앱이 만든 자식은 앱이 정리한다 (스펙 §6.2, P1-C5). 순서·확인·핸드셰이크는
   // quit-flow.ts가 정한다 — 여기 남는 것은 잎과, preventDefault의 짝인 app.quit()뿐이다.
-  const quitLatch = createQuitLatch();
   app.on("before-quit", (event) => {
-    const gate = quitLatch.press();
+    const gate = flows.quit.press();
     // 우리 자신의 app.quit()이다. 여기서 막으면 preventDefault의 짝이 사라져 앱이 창도 없이
     // 남아 다시는 끝나지 않는다.
     if (gate === "let-it-quit") return;
     event.preventDefault();
     if (gate === "ignore") {
-      // 마무리가 도는 중의 2차 ⌘Q. 통과시키면 Electron이 즉시 창을 파괴하고 프로세스를 끝내
+      // 흐름이 도는 중의 ⌘Q. 통과시키면 Electron이 즉시 창을 파괴하고 프로세스를 끝내
       // 녹음의 꼬리를 잃거나(P2-C13) detached 자식을 고아로 남긴다(P1-C5·P2-C4). 새 흐름을
-      // 시작하면 같은 질문을 두 번 받는다. 판정은 quit-flow.ts의 decideQuitEvent에 있다.
-      appendSupervisorLog("종료하는 중에 종료를 다시 눌렀어요 — 진행 중인 마무리를 기다립니다.");
+      // 시작하면 같은 질문을 두 번 받는다. 그 흐름이 창 닫기여도 같다(재리뷰 4의 N3) — 그때는
+      // 창 닫기가 끝난 뒤 다시 누르면 된다. 판정은 quit-flow.ts의 decideQuitEvent에 있다.
+      appendSupervisorLog(
+        flows.running() === "close"
+          ? "창을 닫는 중에 종료를 눌렀어요 — 창 닫기가 끝난 뒤 다시 종료해 주세요."
+          : "종료하는 중에 종료를 다시 눌렀어요 — 진행 중인 마무리를 기다립니다.",
+      );
       return;
     }
     // preventDefault를 부른 이번 종료의 짝. 통과 래치는 **여기서만** 올라간다.
     const quitNow = () => {
-      quitLatch.allow();
+      flows.quit.allow();
       app.quit();
     };
     // quitting을 여기서 올리지 않는다. 확인 대화상자에서 "취소"를 고르면 앱은 계속
@@ -1180,7 +1192,7 @@ if (!app.requestSingleInstanceLock()) {
         // "취소"를 고르면 앱은 그대로 산다. 그때 진입 래치를 내려야 다음 ⌘Q가 다시 묻는다 —
         // 올려 둔 채로 두면 사용자가 앱을 영영 끌 수 없다. 흐름이 실제로 종료로 끝났으면
         // quitAllowed가 이미 올라가 있어 이 하강은 판정에 닿지 못한다.
-        quitLatch.settle();
+        flows.quit.settle();
       });
   });
 }

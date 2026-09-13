@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CLOSE_WHILE_RECORDING,
-  createQuitLatch,
+  createFlowLatch,
   decideCloseEvent,
   decideQuitEvent,
   graceExpiryPrompt,
@@ -441,26 +441,27 @@ describe("runCloseFlow", () => {
 
 describe("decideCloseEvent", () => {
   // main.ts의 close 핸들러는 vitest가 영영 못 부른다(electron을 값으로 import한다).
-  // 그래서 **무엇을 통과시키고 무엇을 막는가**라는 판정만 여기로 꺼냈다. main.ts에 남는 것은
-  // 배선뿐이다: 래치 두 개를 들고, 통과가 아닌 두 갈래에서 preventDefault를 부른다.
-  it("lets the quit path close the window", () => {
-    // ⌘Q가 닫는 창은 이미 확인도 핸드셰이크도 끝났다. 여기서 막으면 종료가 창을 못 닫는다.
-    expect(decideCloseEvent({ quitting: true, closing: false, closed: false })).toBe("let-it-close");
-    expect(decideCloseEvent({ quitting: true, closing: true, closed: false })).toBe("let-it-close");
+  // 그래서 **무엇을 통과시키고 무엇을 막는가**라는 판정만 여기로 꺼냈다. 래치의 수명은
+  // 아래 createFlowLatch가 잠그고, main.ts에 남는 것은 preventDefault와 배선뿐이다.
+  it("lets the quit path close the window, even though the quit flow is still running", () => {
+    // allow()는 quitNow() 안, 흐름이 끝나기 **전에** 올라간다. 그래서 app.quit()이 닫는 창의
+    // close는 running이 아직 "quit"인 채로 온다. running을 먼저 보면 그 창을 막고, 창 하나의
+    // close가 막히면 Electron은 종료 자체를 취소한다 — 확인도 핸드셰이크도 끝난 종료가.
+    expect(decideCloseEvent({ quitAllowed: true, closed: false, running: "quit" })).toBe(
+      "let-it-close",
+    );
   });
 
   it("asks the close flow on the first press", () => {
-    // "취소" 뒤의 다음 ⌘W도 **같은 상태**다 — finally가 closing을 내리고 closed는 서지 않는다.
-    // 그래서 그 갈래를 위한 따로 된 테스트는 이 줄과 완전히 같은 입력을 단언할 뿐이라 새로
-    // 지키는 성질이 0이었다 (재리뷰 3의 N6). 래치를 내리는 것은 순수 함수가 아니라 main.ts의
-    // finally이므로 여기서는 잠글 수 없다 — 수동 점검 항목으로 남는다.
-    expect(decideCloseEvent({ quitting: false, closing: false, closed: false })).toBe("run-flow");
+    expect(decideCloseEvent({ quitAllowed: false, closed: false, running: null })).toBe("run-flow");
   });
 
   it("lets our own close() through once the flow decided to close", () => {
     // closeNow()가 closed를 먼저 세우고 close()를 부른다. 이 갈래를 막으면 흐름을 다 돌고도
     // 창이 영영 안 닫힌다 — preventDefault를 이미 불렀기 때문이다.
-    expect(decideCloseEvent({ quitting: false, closing: true, closed: true })).toBe("let-it-close");
+    expect(decideCloseEvent({ quitAllowed: false, closed: true, running: "close" })).toBe(
+      "let-it-close",
+    );
   });
 
   it("prevents and ignores a second press while the handshake is still running", () => {
@@ -469,7 +470,16 @@ describe("decideCloseEvent", () => {
     // → meeting.capture_error = producer_abandoned. 창 닫기 경로에는 "종료 중" 화면도 없어
     // 최대 30초 동안 아무 피드백이 없으므로 한 번 더 누르는 것은 드문 조작이 아니다.
     // "run-flow"도 안 된다 — 그러면 같은 질문을 두 번 받는다(F2가 없앤 결함).
-    expect(decideCloseEvent({ quitting: false, closing: true, closed: false })).toBe("ignore");
+    expect(decideCloseEvent({ quitAllowed: false, closed: false, running: "close" })).toBe(
+      "ignore",
+    );
+  });
+
+  it("prevents and ignores a window close while the quit flow has not yet allowed the quit", () => {
+    // 재리뷰 4의 N3. 종료 흐름이 확인 대화상자·핸드셰이크·worker 유예 중 어디에 있든, 그동안의
+    // ⌘W가 창을 파괴하면 종료 흐름의 핸드셰이크가 렌더러를 잃는다(P2-C13). 닫기 흐름을 새로
+    // 시작하면 거의 같은 질문이 두 장 뜨고, 둘 다 승인되면 stopRecording이 겹쳐 돈다.
+    expect(decideCloseEvent({ quitAllowed: false, closed: false, running: "quit" })).toBe("ignore");
   });
 });
 
@@ -477,48 +487,118 @@ describe("decideQuitEvent", () => {
   // main.ts의 before-quit 핸들러는 vitest가 영영 못 부른다(electron을 값으로 import한다).
   // 그래서 **무엇을 통과시키고 무엇을 막는가**라는 판정만 여기로 꺼냈다.
   //
-  // 통과의 근거가 `quitting`이 **아니라는 것**이 이 세 갈래의 전부다. `quitting`은 beginQuit이
+  // 통과의 근거가 `quitting`이 **아니라는 것**이 이 갈래들의 전부다. `quitting`은 beginQuit이
   // 핸드셰이크·화면·stopServices보다 앞에서 올리는 래치라, 그것을 통과 신호로 쓰면 그 긴
   // 구간의 2차 ⌘Q가 창을 파괴하고(→ producer_abandoned) detached 자식을 고아로 남긴다.
   it("lets our own app.quit() through once the flow decided to quit", () => {
     // 이 갈래를 막으면 preventDefault의 짝이 사라져 앱이 창도 없이 남아 다시는 끝나지 않는다.
-    expect(decideQuitEvent({ quitAllowed: true, quitRequested: true })).toBe("let-it-quit");
+    expect(decideQuitEvent({ quitAllowed: true, running: "quit" })).toBe("let-it-quit");
   });
 
   it("prevents and ignores a second press while the flow is still running", () => {
     // 재리뷰 3의 N4. "let-it-quit"이면 Electron이 즉시 창을 파괴하고 프로세스를 끝내 녹음의
     // 꼬리를 잃고(P2-C13) worker·API가 고아로 남는다(P1-C5·P2-C4). "run-flow"도 안 된다 —
     // 확인 대화상자가 떠 있는 동안의 2차 ⌘Q가 두 번째 흐름을 시작하던 것이 같은 결함이다.
-    expect(decideQuitEvent({ quitAllowed: false, quitRequested: true })).toBe("ignore");
+    expect(decideQuitEvent({ quitAllowed: false, running: "quit" })).toBe("ignore");
+  });
+
+  it("prevents and ignores a quit while the close flow is running", () => {
+    // 재리뷰 4의 N3의 반대 순서. ⌘W의 확인은 창에 붙은 시트라 앱 메뉴가 살아 있어 ⌘Q가
+    // 실제로 들어온다. 통과시키면 닫기 흐름의 핸드셰이크 한가운데서 창이 파괴되고, 새 흐름을
+    // 시작하면 질문 두 장 + 겹친 stopRecording이다.
+    expect(decideQuitEvent({ quitAllowed: false, running: "close" })).toBe("ignore");
   });
 
   it("runs the quit flow on the first press", () => {
-    expect(decideQuitEvent({ quitAllowed: false, quitRequested: false })).toBe("run-flow");
+    expect(decideQuitEvent({ quitAllowed: false, running: null })).toBe("run-flow");
   });
 });
 
-describe("createQuitLatch", () => {
+/**
+ * 판정이 아니라 **수명**을 잠근다 — 무엇이 언제 올라가고 무엇이 절대 내려가지 않는가.
+ * main.ts의 핸들러는 `press()`의 결과로만 갈라지고, 흐름의 끝에서 `allow()`/`settle()`만 부른다.
+ */
+describe("createFlowLatch", () => {
   it("raises the entry latch on the first press so the next one is ignored", () => {
-    const latch = createQuitLatch();
-    expect(latch.press()).toBe("run-flow");
-    expect(latch.press()).toBe("ignore");
-    expect(latch.press()).toBe("ignore");
+    const flows = createFlowLatch();
+    expect(flows.quit.press()).toBe("run-flow");
+    expect(flows.quit.press()).toBe("ignore");
+    expect(flows.quit.press()).toBe("ignore");
   });
 
-  it("lets the quit through only after allow()", () => {
-    const latch = createQuitLatch();
-    expect(latch.press()).toBe("run-flow");
-    latch.allow();
-    expect(latch.press()).toBe("let-it-quit");
+  it("lets our own quit — and the window it closes — through after allow(), even once the flow settles", () => {
+    // allow()는 quitNow() 안, 흐름이 끝나기 **전에** 올라가고, main.ts의 .finally(settle)는
+    // 그 **직후에** 돈다. 그 사이와 그 뒤에 두 이벤트가 온다: app.quit()의 before-quit과, 그
+    // 종료가 닫는 창의 close. 재리뷰 4의 N1: settle이 통과 래치까지 내리면 전자는 방금 승인한
+    // 질문을 다시 묻고, 후자는 닫기 흐름이 되어 preventDefault로 **종료 자체를 취소한다.**
+    // 그 변이에 368개 테스트가 전부 초록이었다 — settle() 뒤의 press()를 부른 곳이 없었다.
+    const flows = createFlowLatch();
+    const win = flows.forWindow();
+    expect(flows.quit.press()).toBe("run-flow");
+    flows.quit.allow();
+    expect(flows.quit.press()).toBe("let-it-quit");
+    expect(win.press()).toBe("let-it-close");
+    flows.quit.settle();
+    expect(flows.quit.press()).toBe("let-it-quit");
+    expect(win.press()).toBe("let-it-close");
   });
 
-  it("asks again on the next press after the user cancelled", () => {
-    // 확인 대화상자에서 "취소" → 흐름은 quit()을 부르지 않고 끝난다(allow() 없음). 그때
-    // 진입 래치가 내려가지 않으면 사용자가 앱을 **영영 끌 수 없다** — 이후 모든 ⌘Q가
-    // preventDefault만 맞고 "ignore"로 삼켜진다.
-    const latch = createQuitLatch();
-    expect(latch.press()).toBe("run-flow");
-    latch.settle();
-    expect(latch.press()).toBe("run-flow");
+  it("asks again after a cancel, and leaves the other flow startable too", () => {
+    // 확인 대화상자에서 "취소" → 흐름은 allow() 없이 끝난다. 그때 진입 래치가 내려가지 않으면
+    // 사용자가 앱을(창을) **영영 끌 수 없다** — 이후 모든 입력이 preventDefault만 맞고
+    // "ignore"로 삼켜진다. 도는 흐름은 두 진입점이 공유하므로, 한쪽의 취소가 다른 쪽도 풀어야 한다.
+    const flows = createFlowLatch();
+    const win = flows.forWindow();
+    expect(flows.quit.press()).toBe("run-flow");
+    flows.quit.settle();
+    expect(flows.quit.press()).toBe("run-flow");
+    flows.quit.settle();
+    expect(win.press()).toBe("run-flow");
+    win.settle();
+    expect(win.press()).toBe("run-flow");
+    win.settle();
+    expect(flows.quit.press()).toBe("run-flow");
+  });
+
+  it("runs at most one flow: ⌘W is ignored during the quit flow, ⌘Q during the close flow", () => {
+    // 재리뷰 4의 N3. 두 흐름이 각자 자기 재입력만 막으면 서로를 모른 채 같은 녹음에 동시에
+    // stopRecording을 보내고, 먼저 끝난 쪽이 창을 파괴해 다른 쪽이 렌더러를 잃는다(P2-C13).
+    const quitFirst = createFlowLatch();
+    const w1 = quitFirst.forWindow();
+    expect(quitFirst.quit.press()).toBe("run-flow");
+    expect(w1.press()).toBe("ignore");
+    expect(quitFirst.running()).toBe("quit");
+
+    const closeFirst = createFlowLatch();
+    const w2 = closeFirst.forWindow();
+    expect(w2.press()).toBe("run-flow");
+    expect(closeFirst.quit.press()).toBe("ignore");
+    expect(closeFirst.running()).toBe("close");
+  });
+
+  it("releases ⌘Q after a close flow that actually closed its window", () => {
+    // running은 창 밖의 공유 값이다. 닫힌 창이 그것을 쥔 채 사라지면 그 뒤의 ⌘Q가 전부
+    // "ignore"로 삼켜져 앱을 영영 끌 수 없다 — 창마다 closing을 들던 시절의
+    // `if (!closed) closing = false`를 그대로 옮기면 나는 결함이다.
+    const flows = createFlowLatch();
+    const win = flows.forWindow();
+    expect(win.press()).toBe("run-flow");
+    expect(win.press()).toBe("ignore");
+    win.allow();
+    expect(win.press()).toBe("let-it-close");
+    win.settle();
+    expect(flows.quit.press()).toBe("run-flow");
+  });
+
+  it("keeps `closed` per window, so a reopened window still asks", () => {
+    // 창을 한 번 닫은 뒤 Dock에서 다시 연 창의 첫 ⌘W가 확인도 핸드셰이크도 없이 통과하면
+    // 그 창의 녹음 꼬리를 잃는다.
+    const flows = createFlowLatch();
+    const first = flows.forWindow();
+    expect(first.press()).toBe("run-flow");
+    first.allow();
+    first.settle();
+    const reopened = flows.forWindow();
+    expect(reopened.press()).toBe("run-flow");
   });
 });

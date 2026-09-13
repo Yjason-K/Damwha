@@ -254,34 +254,58 @@ export async function runCloseFlow(deps: CloseFlowDeps): Promise<void> {
 }
 
 /**
+ * 지금 도는 흐름이 무엇인가. **두 흐름이 서로를 아는 것은 이 한 값뿐이다.**
+ *
+ * ⌘Q의 흐름과 ⌘W의 흐름은 다른 이벤트에서 시작하지만 같은 창·같은 녹음을 상대한다. 각자가
+ * 자기 재입력만 막고 상대를 모르면 둘이 **동시에** 돈다. 확인 대화상자는 창이 있으면 시트라
+ * 앱 메뉴가 살아 있어서, ⌘W의 시트가 떠 있는 동안의 ⌘Q도 그 반대도 실제로 들어온다.
+ * 결과 둘:
+ * - 거의 같은 질문 두 장. 각 경로 **안에서** 이미 두 번 없앤 결함이 경로 **사이**에 남는다.
+ * - 둘 다 승인되면 `stopRecordingIn(win)`이 겹쳐 돌고, 먼저 끝난 닫기 흐름이 창을 파괴해
+ *   종료 흐름의 핸드셰이크가 한가운데서 렌더러를 잃는다 → `capture_error =
+ *   producer_abandoned` (완료 기준 P2-C13).
+ *
+ * 이 작업에서 **같은 모양이 다섯 번** 나왔다 — 매번 "각자는 옳은데 둘이 같이 돌면 틀리다"였고
+ * 매번 플래그를 하나씩 더 붙여 막았다. 그래서 여섯 번째는 플래그가 아니라 **값**으로 막는다:
+ * 도는 흐름은 언제나 0개 아니면 1개이고, 그것이 무엇인지를 두 판정이 같은 자리에서 읽는다.
+ * 새 진입점이 생겨도 이 값 하나만 보면 된다.
+ */
+export type RunningFlow = "quit" | "close" | null;
+
+/**
  * 창의 `close` 이벤트 하나를 어떻게 대할 것인가. **`preventDefault`는 동기로 불러야 하는데
  * 판정(`isRecording`)은 비동기**라서, main.ts의 핸들러는 "첫 close를 막고 → 흐름을 돌리고 →
  * 다시 닫는다"는 두 박자로 돈다. 그 두 박자 사이에 들어오는 이벤트를 가르는 것이 여기다.
  *
  * 세 갈래가 각각 다른 이유로 필요하다.
- * - `quitting` — 종료 경로가 닫는 창이다. 이미 확인도 핸드셰이크도 끝났으므로 **통과**시킨다.
- *   여기서 막으면 ⌘Q가 창을 못 닫는다.
+ * - `quitAllowed` — 종료 흐름이 마무리를 끝내고 `app.quit()`을 부르기로 했다. 이미 확인도
+ *   핸드셰이크도 끝났으므로 **통과**시킨다. 여기서 막으면 ⌘Q가 창을 못 닫는다.
  * - `closed` — 우리가 `closeNow()`에서 부른 `close()`가 돌아온 것이다. 이것도 **통과**다.
  *   막으면 흐름을 다 돌고도 창이 영영 안 닫힌다 — preventDefault를 이미 불렀기 때문이다.
- * - `closing` — 흐름이 도는 **중에 사람이 다시 누른** 것이다(⌘W·빨간 버튼). 이때 통과시키면
- *   Electron이 창을 그대로 파괴해 핸드셰이크 한가운데서 렌더러가 죽는다 —
- *   `LiveRecorder.stop()`이 끝나지 못해 마지막 tail 청크를 잃고 `capture_error`가
- *   `producer_abandoned`가 된다. 이 경로에는 "종료 중" 화면조차 없어 최대 30초 동안 아무
- *   피드백이 없으므로, 한 번 더 누르는 것은 드문 조작이 아니다. **막고 무시한다.**
+ * - `running` — 흐름이 도는 **중**이다. 내 흐름의 2차 ⌘W든(사람이 다시 누른 것) 종료 흐름이든
+ *   똑같이 **막고 무시한다.** 통과시키면 Electron이 창을 그대로 파괴해 핸드셰이크 한가운데서
+ *   렌더러가 죽는다 — `LiveRecorder.stop()`이 끝나지 못해 마지막 tail 청크를 잃고
+ *   `capture_error`가 `producer_abandoned`가 된다. 이 경로에는 "종료 중" 화면조차 없어 최대
+ *   30초 동안 아무 피드백이 없으므로, 한 번 더 누르는 것은 드문 조작이 아니다.
+ *
+ * 통과의 근거가 `quitting`이 **아닌 것**이 재리뷰 4의 N3에서 바뀐 자리다. `quitting`은
+ * `beginQuit`이 핸드셰이크(≤30초)·"종료 중" 화면·worker 유예(90초)보다 **앞에서** 올리는
+ * 래치라, 그것으로 통과시키면 그 긴 구간의 ⌘W가 창을 파괴한다 — 종료 쪽에서 이미 값을 치르고
+ * 고친 바로 그 결함(재리뷰 3의 N4)이 창 쪽에 그대로 남아 있었다. 이제 두 판정이 **같은 근거**를
+ * 쓴다: 통과는 "우리가 닫기로/끝내기로 결정했다"는 사실에서만 나온다.
  *
  * `closing`만 보고 통과시키던 것이 재리뷰 2의 N1이다. 진입 래치가 "같은 질문 두 번"을
- * 없애면서, 그 대가로 2차 입력이 즉시 파괴가 됐다. 통과의 근거는 래치가 아니라 **`closed` —
- * 우리가 닫기로 결정했다는 사실** 하나뿐이다.
+ * 없애면서, 그 대가로 2차 입력이 즉시 파괴가 됐다.
  */
 export type CloseGate = "let-it-close" | "ignore" | "run-flow";
 
 export function decideCloseEvent(state: {
-  quitting: boolean;
-  closing: boolean;
+  quitAllowed: boolean;
   closed: boolean;
+  running: RunningFlow;
 }): CloseGate {
-  if (state.quitting || state.closed) return "let-it-close";
-  if (state.closing) return "ignore";
+  if (state.quitAllowed || state.closed) return "let-it-close";
+  if (state.running !== null) return "ignore";
   return "run-flow";
 }
 
@@ -294,7 +318,7 @@ export function decideCloseEvent(state: {
  * worker 유예(90초)·남은 것 경고보다 전부 앞에서** 올리는 래치다. 그래서 그 긴 구간의 2차 ⌘Q가
  * 그대로 통과해 Electron이 즉시 창을 파괴하고 프로세스를 끝냈다. 결과 둘:
  * - 핸드셰이크 중이면 렌더러가 죽어 `LiveRecorder.stop()`이 못 끝나고 tail 청크를 잃는다 →
- *   `capture_error = producer_abandoned` (완료 기준 P2-C13). N1과 **똑같은 값**이다.
+ *   `capture_error = producer_abandoned` (완료 기준 P2-C13).
  * - `stopServices` 중이면 main이 먼저 죽어 `detached: true`인 worker·API·Vite가 고아로 남고
  *   (services/worker.ts, supervisor.ts가 "Electron이 죽어도 살아남는다"고 적어 둔 그것),
  *   남은 것 경고는 영영 안 뜬다 → 스펙 §6.2 / P1-C5 / P2-C4 위반.
@@ -309,24 +333,29 @@ export function decideCloseEvent(state: {
  *
  * - `quitAllowed` — 우리 자신의 `app.quit()`이다. **통과.** 막으면 `preventDefault`를 이미
  *   불렀으므로 앱이 창도 없이 남아 다시는 끝나지 않는다 (Phase 1이 값을 치른 자리다).
- * - `quitRequested` — 흐름이 도는 중에 사람이 **다시 누른** 것이다. 막고 무시한다. 통과시키면
- *   위의 두 결과가 그대로 나고, 새 흐름을 시작하면 같은 질문을 두 번 받는다.
+ * - `running` — 흐름이 도는 중에 사람이 **다시 누른** 것이다. 그 흐름이 종료든(2차 ⌘Q) 창
+ *   닫기든(⌘W의 시트가 떠 있는 동안의 ⌘Q) 똑같이 막고 무시한다. 통과시키면 위의 두 결과가
+ *   그대로 나고, 새 흐름을 시작하면 같은 질문을 두 번 받는다.
  * - 둘 다 아니면 첫 입력이다. 막고 흐름을 시작한다.
  */
 export type QuitGate = "let-it-quit" | "ignore" | "run-flow";
 
-export function decideQuitEvent(state: { quitAllowed: boolean; quitRequested: boolean }): QuitGate {
+export function decideQuitEvent(state: { quitAllowed: boolean; running: RunningFlow }): QuitGate {
   if (state.quitAllowed) return "let-it-quit";
-  if (state.quitRequested) return "ignore";
+  if (state.running !== null) return "ignore";
   return "run-flow";
 }
 
 /**
- * 그 두 래치의 **수명**. 판정만 꺼내고 래치를 main.ts에 두면 "취소한 뒤 다시 ⌘Q가 먹는가"를
+ * 그 래치들의 **수명**. 판정만 꺼내고 래치를 main.ts에 두면 "취소한 뒤 다시 ⌘Q가 먹는가"를
  * 어떤 테스트도 부를 수 없다 — `decideQuitEvent`로 그것을 단언하려 하면 첫 입력 테스트와
  * **완전히 같은 입력**이 되어 새로 지키는 성질이 0이 된다 (재리뷰 3의 N6이 창 쪽에서 잡은 것이
  * 정확히 그 모양이다). 그래서 래치를 여기 둔다. main.ts에 남는 것은 잎(`preventDefault`·
- * `app.quit`·로그)과 배선뿐이다.
+ * `app.quit`·`close`·로그)과 배선뿐이다.
+ *
+ * 두 래치를 **한 객체가** 만든다. 그래야 "지금 도는 흐름"이 한 벌이고, 서로를 모른 채 각자
+ * 도는 상태가 **표현될 수 없다.** 전역 플래그 두 벌로 같은 것을 흉내 내면 한쪽만 고치는
+ * 사고가 나는데, 이 작업이 그 사고를 다섯 번 냈다.
  */
 export interface QuitLatch {
   /** `before-quit` 한 번. `"run-flow"`를 돌려줄 때 진입 래치를 올린다. */
@@ -335,29 +364,81 @@ export interface QuitLatch {
   allow(): void;
   /**
    * 흐름이 끝났다. 진입 래치를 내려 다음 ⌘Q가 다시 묻게 한다 — "취소"를 고른 뒤에도 래치가
-   * 올라가 있으면 사용자가 앱을 영영 끌 수 없다.
+   * 올라가 있으면 사용자가 앱을 영영 끌 수 없다. 창 닫기 흐름도 다시 시작할 수 있어야 한다.
    *
-   * 조건 없이 내린다. `allow()`가 한 번 불린 뒤에는 `quitRequested` 값이 판정에 닿지 못하므로
+   * 조건 없이 내린다. `allow()`가 한 번 불린 뒤에는 `running` 값이 판정에 닿지 못하므로
    * (`quitAllowed`가 먼저 통과시킨다) 가드를 두면 어떤 테스트로도 죽일 수 없는 줄이 하나
-   * 생긴다. 이 작업의 반복 결함이 그것이다.
+   * 생긴다. 이 작업의 반복 결함이 그것이다. 그 전제(=`allow()`는 되돌릴 수 없다)는 이제
+   * 테스트가 직접 잠근다 — `settle()` 뒤의 `press()`가 여전히 `"let-it-quit"`이어야 한다.
    */
   settle(): void;
 }
 
-export function createQuitLatch(): QuitLatch {
+/**
+ * 창 **하나**의 닫기 래치. `closed`는 그 창의 사실이라 창 밖에 둘 수 없다 — 전역에 두면 창을
+ * 한 번 닫은 뒤 다시 연 창의 첫 ⌘W가 확인도 핸드셰이크도 없이 통과한다.
+ */
+export interface CloseLatch {
+  /** `close` 한 번. `"run-flow"`를 돌려줄 때 이 창의 흐름을 공유 상태에 등록한다. */
+  press(): CloseGate;
+  /** 우리 자신의 `close()` **직전**. 이 뒤의 이 창의 `close`만 통과한다. */
+  allow(): void;
+  /**
+   * 흐름이 끝났다("취소" 포함). 다음 ⌘W도, ⌘Q도 다시 시작할 수 있다.
+   *
+   * **창을 실제로 닫은 뒤에도** 부른다. `running`은 창 밖의 공유 값이라, 닫힌 창이 그것을 쥔 채
+   * 사라지면 그 뒤의 ⌘Q가 전부 `"ignore"`로 삼켜져 앱을 영영 끌 수 없다. 창마다 따로 `closing`을
+   * 들던 시절의 `if (!closed) closing = false`를 그대로 옮기면 정확히 그 결함이 난다.
+   */
+  settle(): void;
+}
+
+export interface FlowLatch {
+  /** 앱에 하나뿐인 종료 래치. */
+  quit: QuitLatch;
+  /** 창마다 하나씩. 같은 `running`을 공유한다. */
+  forWindow(): CloseLatch;
+  /** 지금 도는 흐름. 판정은 위 두 래치가 하고, 이것은 **로그 문구**만을 위한 것이다. */
+  running(): RunningFlow;
+}
+
+export function createFlowLatch(): FlowLatch {
   let quitAllowed = false;
-  let quitRequested = false;
+  let running: RunningFlow = null;
+  // 두 흐름의 `settle`은 **같은 한 줄**이다. 따로 적으면 한쪽만 고치는 사고가 나는 자리이고,
+  // 무엇보다 여기서 `quitAllowed`를 내리면 안 된다 — 종료 흐름의 `finally`가 `quitNow()`
+  // (= `allow()` + `app.quit()`) **직후에** 이것을 부르므로, `app.quit()`이 낸 `before-quit`이
+  // 다음 턴에 오면 `"run-flow"`를 받아 방금 승인한 질문을 다시 묻고, 그 종료가 닫는 창의
+  // `close`는 새 닫기 흐름이 되어 종료 자체를 취소한다. 판정할 것이 끝났으면 도는 흐름만 내린다.
+  const settle = () => {
+    running = null;
+  };
   return {
-    press: () => {
-      const gate = decideQuitEvent({ quitAllowed, quitRequested });
-      if (gate === "run-flow") quitRequested = true;
-      return gate;
+    quit: {
+      press: () => {
+        const gate = decideQuitEvent({ quitAllowed, running });
+        if (gate === "run-flow") running = "quit";
+        return gate;
+      },
+      allow: () => {
+        quitAllowed = true;
+      },
+      settle,
     },
-    allow: () => {
-      quitAllowed = true;
+    forWindow: () => {
+      let closed = false;
+      return {
+        press: () => {
+          const gate = decideCloseEvent({ quitAllowed, closed, running });
+          if (gate === "run-flow") running = "close";
+          return gate;
+        },
+        allow: () => {
+          closed = true;
+        },
+        settle,
+      };
     },
-    settle: () => {
-      quitRequested = false;
-    },
+    running: () => running,
   };
 }
