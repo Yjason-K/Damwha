@@ -176,7 +176,7 @@ describe("statusLine / shellStatusFrom", () => {
     expect(statusLine(st("embed", { owned: false }))).toBe("검색 임베딩: 실행 중 (앱이 띄우지 않음)");
   });
 
-  it("uses the db-unreachable screen when postgres failed, with the supervisor log", () => {
+  it("uses the db-unreachable screen when postgres failed on the Docker daemon, with the supervisor log", () => {
     const shell = shellStatusFrom({
       statuses: [st("postgres", { process: "failed", health: "unknown", detail: CAUSES.dockerDaemonDown.text }), st("api", { process: "stopped", health: "unknown" })],
       restartNotice: null,

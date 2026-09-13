@@ -4,8 +4,9 @@ import * as path from "path";
 import * as vm from "vm";
 import { describe, expect, it } from "vitest";
 import { CAUSES } from "../src/causes";
-import { servicesView } from "../src/status-view";
-import type { ServiceStatus } from "../src/services/types";
+import { servicesView, shellStatusFrom } from "../src/status-view";
+import { postgresSpec } from "../src/services/postgres";
+import type { LaunchContext, ServiceStatus } from "../src/services/types";
 
 /**
  * shell/*.html의 **실제** 인라인 스크립트를 가짜 DOM에서 돌린다. 사본을 테스트하지 않는다 —
@@ -263,6 +264,52 @@ describe("status.html", () => {
     expect(byId.get("headline")!.textContent).toBe("데이터베이스에 연결할 수 없어요");
     // P2-C7의 문구: Docker Desktop.
     expect(byId.get("body")!.textContent).toMatch(/Docker Desktop이 실행 중인지/);
+  });
+
+  describe("the body follows the cause — the screen main.ts shows for a postgres failure", () => {
+    // 원인은 실제 postgres 어댑터가 낸 것, 화면 상태는 main.ts가 넘기는 shellStatusFrom의 것, 쿼리는
+    // shell-window.ts의 showStatus가 만드는 모양 그대로다.
+    const ctx: LaunchContext = {
+      repoRoot: "/r",
+      userData: "/u",
+      packaged: true,
+      env: {},
+      bins: { uv: null, docker: "/nowhere/docker" },
+      searchDirs: [],
+      logFile: (id) => `/u/logs/${id}.log`,
+    };
+    const screenFor = async (stderr: string) => {
+      const reason = await postgresSpec(async () => ({ stdout: "", stderr, code: 1 }))
+        .launch(ctx)
+        .then(
+          () => "",
+          (e: Error) => e.message,
+        );
+      const shell = shellStatusFrom({
+        statuses: [{ id: "postgres", process: "failed", health: "unknown", owned: true, restarts: 0, detail: reason }],
+        restartNotice: null,
+        logPathOf: (id) => `/l/${id}.log`,
+      });
+      const query = new URLSearchParams({ state: shell.state, detail: shell.detail ?? "", logPath: shell.logPath ?? "" });
+      const { byId } = loadPage("status.html", `?${query}`);
+      const text = (id: string) => byId.get(id)!.textContent;
+      return { body: text("body"), detail: text("detail"), all: ["headline", "body", "detail", "hint"].map(text).join("\n") };
+    };
+
+    it("a DOCKER_BIN pointing nowhere is not sent to Docker Desktop (P2-C8, docker)", async () => {
+      // main.ts의 dockerRun이 실행 파일 없는 execFile 거부를 넘기는 모양 (`err.stderr || String(e)`).
+      const screen = await screenFor("Error: spawn /nowhere/docker ENOENT");
+      expect(screen.detail).toMatch(/DOCKER_BIN/);
+      expect(screen.all).not.toMatch(/Docker Desktop/);
+    });
+
+    it("a Docker daemon that is down still gets the Docker Desktop body (P2-C7)", async () => {
+      const screen = await screenFor(
+        "failed to connect to the docker API at unix:///x/docker.sock; check if the path is correct and if the daemon is running",
+      );
+      expect(screen.body).toMatch(/Docker Desktop이 실행 중인지/);
+      expect(screen.detail).toMatch(/Docker Desktop을 실행/);
+    });
   });
 
   it("shows a multi-line cause whole and as text, not truncated at `startup failed: [`", () => {

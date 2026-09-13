@@ -1,3 +1,4 @@
+import { causeIn } from "./causes";
 import { causeOf, hintForDetail, recoveryHint } from "./shell-hints";
 import type { ShellStatus } from "./shell-window";
 import type { ProcessState, ServiceId, ServiceStatus } from "./services/types";
@@ -89,8 +90,11 @@ export function shellStatusFrom(input: ShellInput): ShellStatus {
   const failed = input.statuses.find((s) => s.process === "failed");
   if (failed === undefined) return { state: "starting", detail: lines.join("\n") };
   return {
-    // postgres가 넘어졌으면 그 화면의 문구("데이터베이스에 연결할 수 없어요")가 맞다.
-    state: failed.id === "postgres" ? "db-unreachable" : "failed",
+    // db-unreachable 화면의 본문은 "Docker Desktop이 실행 중인지 확인해 주세요"로 고정이다. 원인이
+    // Docker 데몬일 때만 그 화면을 쓴다 — postgres가 넘어진 다른 원인(DOCKER_BIN이 틀린 `spawn … ENOENT`,
+    // compose stderr 원문, 유예 초과)에 쓰면 해결 줄은 DOCKER_BIN을 말하는데 본문은 사람을 Docker
+    // Desktop으로 보낸다(리뷰 M-1). 그때는 일반 실패 화면이 원인과 해결 줄을 그대로 보인다.
+    state: failed.id === "postgres" && causeIn(failed.detail ?? "") === "dockerDaemonDown" ? "db-unreachable" : "failed",
     detail: lines.join("\n"),
     logPath: input.logPathOf(logIdOf(failed.id)),
   };
