@@ -461,7 +461,24 @@ export function createSupervisor(
    */
   async function retry(): Promise<void> {
     if (stopping) return;
-    await runFrom(ordered.filter((s) => runtimes.get(s.id)!.status.process !== "running"));
+    await runFrom(ordered.filter((s) => needsRetry(runtimes.get(s.id)!)));
+  }
+
+  /**
+   * 재시도가 다시 돌릴 서비스. running이 아닌 것, 그리고 **running인데 쥔 결과가 없는 것** —
+   * 외부 인스턴스에 밀려 서지 않은(stand-down) 서비스다.
+   *
+   * 뒤의 절이 없으면 stand-down worker는 `running`이라 재시도가 영영 건너뛴다. 사용자가 상태 창의
+   * 안내("터미널의 worker를 끄고 다시 시도하거나…")대로 터미널 worker를 끄고 재시도해도 아무 일도
+   * 일어나지 않고, 앱은 다시 켤 때까지 자기 worker를 띄우지 않는다(P2-C6의 자연스러운 복구다).
+   * 외부 worker가 아직 있으면 detectExternal이 다시 서지 않을 뿐이라 해가 없다.
+   *
+   * 채택한 서비스(`{handle: null, owned: false}`)와 앱이 띄운 서비스는 결과를 쥐고 있으므로 이 절에
+   * 걸리지 않는다 — 걸리면 살아 있는 인스턴스 옆에 두 번째를 띄운다 (bringOnce의 재진입 가드는
+   * rt.result로 막지만, 그 전에 여기서 거르는 것이 계약이다).
+   */
+  function needsRetry(rt: Runtime): boolean {
+    return rt.status.process !== "running" || rt.result === null;
   }
 
   /** 기동 시퀀스 본문. 게이트 의미(실패하면 뒤를 띄우지 않는다)는 여기 한 곳에만 있다. */

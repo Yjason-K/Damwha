@@ -4,6 +4,7 @@ import { CAUSES } from "../src/causes";
 import { DEGRADED_HINT, HINTS } from "../src/shell-hints";
 import {
   HINT_PREFIX,
+  causeWithFix,
   NO_SERVICES_YET,
   failureDetail,
   renderCall,
@@ -12,7 +13,10 @@ import {
   statusLine,
   type ServicesView,
 } from "../src/status-view";
-import type { ServiceId, ServiceStatus } from "../src/services/types";
+import { judgeAfterProbe } from "../src/services/api";
+import { postgresSpec } from "../src/services/postgres";
+import { workerSpec } from "../src/services/worker";
+import type { LaunchContext, ServiceId, ServiceStatus } from "../src/services/types";
 
 const st = (id: ServiceId, over: Partial<ServiceStatus> = {}): ServiceStatus => ({
   id,
@@ -229,5 +233,91 @@ describe("renderCall — main이 렌더러에서 실행하는 식", () => {
   it("evaluates to undefined so executeJavaScript has nothing to serialise", () => {
     const sandbox = { window: { __damwha_render: () => ({ node: "not cloneable" }) } };
     expect(vm.runInNewContext(renderCall({ rows: [], notices: [] }), sandbox)).toBeUndefined();
+  });
+});
+
+describe("화면이 싣는 해결 문구 — 완료 기준 P2-C7·C8·C9 (Task 14 D2)", () => {
+  // 원인 문구에서 고치는 방법을 떼어 HINTS로 옮겼다. 그러면 그 방법이 화면에 오르는 것은 전적으로
+  // 조립(causeWithFix)에 달렸고, 세 완료 기준의 문구가 전부 그 줄에 있다. 원인은 실제 어댑터가 낸
+  // 것을 쓰고, 단언은 main.ts가 화면에 넘기는 바로 그 값(shellStatusFrom·failureDetail·servicesView)에
+  // 건다.
+  const ctx = (over: Partial<LaunchContext> = {}): LaunchContext => ({
+    repoRoot: "/r",
+    userData: "/u",
+    packaged: true,
+    env: {},
+    bins: { uv: "/opt/homebrew/bin/uv", docker: "/usr/local/bin/docker" },
+    searchDirs: [],
+    logFile: (id) => `/u/logs/${id}.log`,
+    ...over,
+  });
+  const reasonOf = async (p: Promise<unknown>) => p.then(() => "", (e: Error) => e.message);
+  const failed = (id: ServiceId, detail: string): ServiceStatus =>
+    st(id, { process: "failed", health: "unknown", detail });
+
+  it("P2-C7: Docker daemon down — the failure screen says to run Docker Desktop", async () => {
+    const detail = await reasonOf(
+      postgresSpec(async () => ({
+        stdout: "",
+        stderr: "failed to connect to the docker API at unix:///x/docker.sock; check if the daemon is running",
+        code: 1,
+      })).launch(ctx()),
+    );
+    const shell = shellStatusFrom({
+      statuses: [failed("postgres", detail), st("api", { process: "stopped", health: "unknown" })],
+      restartNotice: null,
+      logPathOf,
+    });
+    expect(shell.state).toBe("db-unreachable");
+    expect(shell.detail).toContain("Docker Desktop이 실행 중이 아니에요");
+    expect(shell.detail).toContain("Docker Desktop을 실행");
+  });
+
+  it("P2-C8: uv not found — names what is missing and the config.json fix, on the failure screen and in the status window", async () => {
+    const detail = await reasonOf(workerSpec({ listExternal: async () => [] }).launch(ctx({ bins: { uv: null, docker: null } })));
+    const statuses = [st("postgres"), st("api"), failed("worker", detail)];
+    const shell = shellStatusFrom({ statuses, restartNotice: null, logPathOf });
+    expect(shell.detail).toContain("uv를 찾지 못했어요");
+    expect(shell.detail).toMatch(/config\.json의 UV_BIN/);
+    const row = servicesView({ statuses, restartNotice: null, logPathOf }).rows[2];
+    expect(row.cause).toContain("uv를 찾지 못했어요");
+    expect(row.hint).toMatch(/config\.json의 UV_BIN/);
+  });
+
+  it("P2-C8: docker not found before the supervisor exists — names it and the config.json fix", () => {
+    const text = failureDetail("앱을 시작하지 못했어요", CAUSES.dockerMissing.text);
+    expect(text).toContain("docker를 찾지 못했어요");
+    expect(text).toMatch(/config\.json의 .*DOCKER_BIN/);
+  });
+
+  it("P2-C9: pending migrations — the failure screen gives the `pnpm be:migrate` guidance", async () => {
+    const r = await judgeAfterProbe(
+      {
+        pid: 1,
+        alive: () => true,
+        stderrTail: () => "",
+        stdoutTail: () => "WARN 3 pending migration(s): 022_x.sql, 023_y.sql, 024_z.sql — run `pnpm be:migrate`",
+        exitCode: () => null,
+        onExit: () => undefined,
+        stop: async () => undefined,
+      },
+      "ready",
+      3000,
+      {
+        verifyOwnListener: async () => true,
+        isPortOccupied: async () => false,
+        onPendingMigrations: () => undefined,
+        onMigrationCheckSkipped: () => undefined,
+      },
+    );
+    const detail = r.kind === "failed" ? r.detail : "";
+    const shell = shellStatusFrom({ statuses: [st("postgres"), failed("api", detail)], restartNotice: null, logPathOf });
+    expect(shell.detail).toContain("적용되지 않은 마이그레이션이 3개 있어요");
+    expect(shell.detail).toContain("`pnpm be:migrate`");
+  });
+
+  it("causeWithFix puts the fix on its own line under the cause, and nothing when there is no hint", () => {
+    expect(causeWithFix("원인", "고치는 법")).toBe(`원인\n${HINT_PREFIX}고치는 법`);
+    expect(causeWithFix("원인", undefined)).toBe("원인");
   });
 });

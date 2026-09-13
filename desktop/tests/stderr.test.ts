@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ANSI_SGR, exitCauseBlock, failureBlock, lastMeaningfulLine } from "../src/stderr";
+import { ANSI_SGR, BLOCK_MAX_CHARS, exitCauseBlock, failureBlock, lastMeaningfulLine } from "../src/stderr";
 
 const RED = "\x1b[31m";
 const RESET = "\x1b[39m";
@@ -116,5 +116,33 @@ describe("exitCauseBlock", () => {
   it("strips ANSI and blank lines, and is empty for empty input", () => {
     expect(exitCauseBlock("\x1b[31mboom\x1b[39m\n\n  \n")).toBe("boom");
     expect(exitCauseBlock("")).toBe("");
+  });
+});
+
+describe("원인 블록의 글자 상한 (Task 14 D3)", () => {
+  // 줄 수 상한만으로는 줄바꿈 없는 한 줄이 stderr 꼬리 8KB를 통째로 화면에 싣는다.
+  const huge = "x".repeat(8_000);
+
+  it("bounds a startup-failed block by characters and keeps its head, where the cause is", () => {
+    const block = failureBlock(`startup failed: ${huge}`);
+    expect(block.length).toBe(BLOCK_MAX_CHARS + 1);
+    expect(block.startsWith("startup failed: x")).toBe(true);
+    expect(block.endsWith("…")).toBe(true);
+  });
+
+  it("bounds a tail by characters and keeps its end, where a traceback's cause is", () => {
+    const block = exitCauseBlock(`${huge}\nRuntimeError: boom`);
+    expect(block.length).toBeLessThanOrEqual(BLOCK_MAX_CHARS + 1);
+    expect(block.startsWith("…")).toBe(true);
+    expect(block.endsWith("RuntimeError: boom")).toBe(true);
+  });
+
+  it("bounds a single enormous line with no startup failure", () => {
+    expect(exitCauseBlock(huge).length).toBe(BLOCK_MAX_CHARS + 1);
+    expect(failureBlock(huge).length).toBe(BLOCK_MAX_CHARS + 1);
+  });
+
+  it("leaves a block under the limit alone", () => {
+    expect(exitCauseBlock("a\nb")).toBe("a\nb");
   });
 });

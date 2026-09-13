@@ -48,6 +48,23 @@ export function lastMeaningfulLine(stderr: string): string {
 const BLOCK_LIMIT = 24;
 
 /**
+ * 원인 블록의 글자 상한. 줄 수만 묶으면 줄바꿈 없는 한 줄(JSON 로그, 진행 바의 `\r` 덩어리)이
+ * stderr 꼬리 8KB를 통째로 화면과 실패 화면의 URL 쿼리에 싣는다. 전문은 로그 파일에 있다.
+ */
+export const BLOCK_MAX_CHARS = 3_000;
+
+/** 잘렸다는 표시. 잘린 쪽에 붙는다. */
+const ELIDED = "…";
+
+function headOf(text: string): string {
+  return text.length <= BLOCK_MAX_CHARS ? text : `${text.slice(0, BLOCK_MAX_CHARS)}${ELIDED}`;
+}
+
+function tailOf(text: string): string {
+  return text.length <= BLOCK_MAX_CHARS ? text : `${ELIDED}${text.slice(-BLOCK_MAX_CHARS)}`;
+}
+
+/**
  * `startup failed:`부터 끝까지를 블록으로 돌려준다.
  *
  * lastMeaningfulLine은 한 줄만 고르므로 zod 검증 실패처럼 여러 줄인 원인이 화면에
@@ -68,8 +85,9 @@ export function failureBlock(stderr: string, maxLines: number = BLOCK_LIMIT): st
       break;
     }
   }
-  if (start < 0) return lastMeaningfulLine(stderr);
-  return lines.slice(start, start + maxLines).join("\n");
+  // 원인은 `startup failed:` 줄부터 시작하므로 넘치면 뒤를 자른다.
+  if (start < 0) return tailOf(lastMeaningfulLine(stderr));
+  return headOf(lines.slice(start, start + maxLines).join("\n"));
 }
 
 /** 죽은 자식의 원인 블록에서 `startup failed:`가 없을 때 올리는 꼬리 줄 수. */
@@ -94,5 +112,6 @@ export function exitCauseBlock(stderr: string, maxLines: number = EXIT_TAIL_LINE
     .map((l) => l.trimEnd())
     .filter((l) => l.trim().length > 0);
   if (lines.some((l) => l.includes(STARTUP_FAILED))) return failureBlock(stderr);
-  return lines.slice(-maxLines).join("\n");
+  // 트레이스백은 끝에 원인이 있으므로 넘치면 앞을 자른다.
+  return tailOf(lines.slice(-maxLines).join("\n"));
 }

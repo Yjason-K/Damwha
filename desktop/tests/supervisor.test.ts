@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { judgeAfterProbe } from "../src/services/api";
 import { createSupervisor, orderOf } from "../src/services/supervisor";
 import type {
   LaunchContext,
@@ -1015,6 +1016,61 @@ describe("createSupervisor — 죽은 자식의 원인 (스펙 §8, Task 14)", (
     expect(s.statuses()[0].detail).toBe("프로세스가 종료됐어요 (코드 134).\nRuntimeError: Metal device lost");
   });
 
+  it("bounds what it puts on screen — never the raw 8 KB tail", async () => {
+    const tail = `${"진행 ".repeat(2_700)}\nRuntimeError: boom`;
+    expect(tail.length).toBeGreaterThan(7_000);
+    const s = createSupervisor(
+      [spec("worker", { launch: async () => ({ handle: deadHandle(tail, 1), owned: true }) })],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    const detail = s.statuses()[0].detail ?? "";
+    expect(detail.length).toBeLessThanOrEqual("프로세스가 종료됐어요 (코드 1).\n".length + 3_001);
+    expect(detail.endsWith("RuntimeError: boom")).toBe(true);
+  });
+
+  it("fails a live API whose stderr says startup failed without waiting out the ready timeout (dev: nest --watch)", async () => {
+    // 감독자 수준에서 본다: judgeAfterProbe가 실패를 돌려주면 awaitReady는 유예를 기다리지 않고
+    // 곧장 failed로 끝낸다. 판정이 not-ready로 돌아가면 이 테스트는 30초 유예 대신 1초 안에 실패한다.
+    const handle = {
+      pid: 1,
+      alive: () => true,
+      stderrTail: () => 'ERROR [Bootstrap] startup failed: [\n  { "path": ["SUMMARY_LLM_MODEL"] }\n]',
+      stdoutTail: () => "",
+      exitCode: () => null,
+      onExit: () => undefined,
+      stop: async () => undefined,
+    };
+    const s = createSupervisor(
+      [
+        spec("api", {
+          launch: async () => ({ handle, owned: true }),
+          readiness: (result) =>
+            judgeAfterProbe(result.handle!, "no-response", 3000, {
+              verifyOwnListener: async () => true,
+              isPortOccupied: async () => false,
+              onPendingMigrations: () => undefined,
+              onMigrationCheckSkipped: () => undefined,
+            }),
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 30_000, readyIntervalMs: 5 },
+    );
+    try {
+      const started = Date.now();
+      // await하지 않는다 — 게이트라 start()는 준비 판정이 끝날 때까지 돌아오지 않고, 되돌린 변이에서는
+      // 그것이 30초다.
+      void s.start();
+      await vi.waitFor(() => expect(s.statuses()[0].process).toBe("failed"), { timeout: 1_000 });
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(s.statuses()[0].detail).toContain('"path": ["SUMMARY_LLM_MODEL"]');
+    } finally {
+      await s.stopAll({ graceMs: 5 });
+    }
+  });
+
   it("keeps the bare exit line when the child left nothing on stderr", async () => {
     const s = createSupervisor(
       [spec("api", { launch: async () => ({ handle: deadHandle("   \n"), owned: true }) })],
@@ -1023,5 +1079,113 @@ describe("createSupervisor — 죽은 자식의 원인 (스펙 §8, Task 14)", (
     );
     await s.start();
     expect(s.statuses()[0].detail).toBe("프로세스가 종료됐어요 (코드 1).");
+  });
+});
+
+describe("createSupervisor — 재시도와 stand-down (Task 14 Q1)", () => {
+  it("retry re-detects a service the app stood down for, and launches its own once the external one is gone", async () => {
+    // 상태 창의 안내가 "터미널의 worker를 끄고 다시 시도하거나…"다. 재시도가 running인 stand-down
+    // worker를 건너뛰면 그 안내는 사용자가 따라 해도 아무 일도 일어나지 않는 거짓이 된다.
+    let external = true;
+    let detects = 0;
+    let launches = 0;
+    const s = createSupervisor(
+      [
+        spec("worker", {
+          gate: false,
+          detectExternal: async () => {
+            detects += 1;
+            return external ? { kind: "stand-down", detail: "외부 worker가 실행 중이에요 (pid 4101)." } : { kind: "absent" };
+          },
+          launch: async () => {
+            launches += 1;
+            return { handle: null, owned: true };
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0]).toMatchObject({ process: "running", owned: false }));
+    expect(launches).toBe(0);
+
+    external = false;
+    await s.retry();
+    await vi.waitFor(() => expect(s.statuses()[0]).toMatchObject({ process: "running", owned: true }));
+    expect(detects).toBe(2);
+    expect(launches).toBe(1);
+    // ready가 stand-down의 경고를 지운다.
+    expect(s.statuses()[0].detail).toBeUndefined();
+    await s.stopAll({ graceMs: 5 });
+  });
+
+  it("retry just stands down again while the external worker is still running", async () => {
+    let launches = 0;
+    const s = createSupervisor(
+      [
+        spec("worker", {
+          gate: false,
+          detectExternal: async () => ({ kind: "stand-down", detail: "외부 worker" }),
+          launch: async () => {
+            launches += 1;
+            return { handle: null, owned: true };
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await s.retry();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(launches).toBe(0);
+    expect(s.statuses()[0]).toMatchObject({ process: "running", owned: false, detail: "외부 worker" });
+  });
+
+  it("retry does not touch an adopted service or a running one the app launched — no second instance beside them", async () => {
+    // 넓힌 필터 때문에 이미 가진 인스턴스 옆에 두 번째가 뜨지 않는지 **결과로** 고정한다. 채택은
+    // {handle: null, owned: false}를, 앱이 띄운 것은 자기 결과를 쥐므로 필터에 걸리지 않는다.
+    // 막는 층은 둘이다: 이 필터와 bringOnce 첫머리의 재진입 가드(`rt.result !== null`, detectExternal
+    // **앞**). 둘은 서로를 덮어서 하나만 무너뜨리는 변이는 관찰되지 않는다 — 필터를 전부로 넓혀도,
+    // 가드만 지워도 초록이다(실측). 둘 다 무너뜨리면 여기서 detectExternal·launch가 다시 돈다.
+    const detects = { postgres: 0, api: 0 };
+    const launches = { postgres: 0, api: 0 };
+    const s = createSupervisor(
+      [
+        spec("postgres", {
+          detectExternal: async () => {
+            detects.postgres += 1;
+            return { kind: "adopt", detail: "이미 실행 중인 컨테이너" };
+          },
+          launch: async () => {
+            launches.postgres += 1;
+            return { handle: null, owned: true };
+          },
+        }),
+        spec("api", {
+          dependsOn: ["postgres"],
+          detectExternal: async () => {
+            detects.api += 1;
+            return { kind: "absent" };
+          },
+          launch: async () => {
+            launches.api += 1;
+            return { handle: null, owned: true };
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    expect(s.statuses().map((x) => [x.id, x.process, x.owned])).toEqual([
+      ["postgres", "running", false],
+      ["api", "running", true],
+    ]);
+    await s.retry();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(detects).toEqual({ postgres: 1, api: 1 });
+    expect(launches).toEqual({ postgres: 0, api: 1 });
   });
 });

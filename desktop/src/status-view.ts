@@ -41,15 +41,26 @@ function indent(text: string, pad: string): string {
   return text.split("\n").join(`\n${pad}`);
 }
 
+/**
+ * 화면에 오르는 원인 한 덩어리 — 원인 줄(들)과, 안내가 있으면 그 아래 `해결: …` 줄.
+ *
+ * 실패 화면으로 가는 두 길이 **이것 하나**를 쓴다: 감독자 상태에서 오는 원인(statusLine →
+ * shellStatusFrom)과 감독자를 세우기 전의 예외(failureDetail). 원인 문구에서 고치는 방법을 떼어
+ * HINTS로 옮겼으므로(causes.ts), 이 조립이 빠지면 화면에는 원인만 남는다 — "Docker Desktop을
+ * 실행하세요"(P2-C7), "config.json의 UV_BIN·DOCKER_BIN"(P2-C8), "`pnpm be:migrate`"(P2-C9)가 전부
+ * 그 줄에 있다. main.ts는 이 결과를 넘기기만 한다.
+ */
+export function causeWithFix(cause: string, hint: string | undefined): string {
+  return hint === undefined ? cause : `${cause}\n${HINT_PREFIX}${hint}`;
+}
+
 /** 셸 화면의 서비스 한 줄. 원인이 있으면 그 아래 안내까지 붙인다. */
 export function statusLine(s: ServiceStatus): string {
   const adopted = s.process === "running" && !s.owned ? " (앱이 띄우지 않음)" : "";
   const degraded = s.health === "degraded" ? " — 동작이 제한돼요" : "";
   const shown = s.detail !== undefined && (s.process === "failed" || s.health === "degraded");
-  const why = shown ? `\n    ${indent(s.detail ?? "", "    ")}` : "";
-  const hint = shown ? recoveryHint(s) : undefined;
-  const fix = hint === undefined ? "" : `\n    ${HINT_PREFIX}${hint}`;
-  return `${SERVICE_LABELS[s.id]}: ${PROCESS_LABELS[s.process]}${adopted}${degraded}${why}${fix}`;
+  const why = shown ? `\n    ${indent(causeWithFix(s.detail ?? "", recoveryHint(s)), "    ")}` : "";
+  return `${SERVICE_LABELS[s.id]}: ${PROCESS_LABELS[s.process]}${adopted}${degraded}${why}`;
 }
 
 export interface ShellInput {
@@ -81,8 +92,7 @@ export function shellStatusFrom(input: ShellInput): ShellStatus {
  * 서비스 상태가 없으므로 recoveryHint가 아니라 원인 문구로 안내를 고른다.
  */
 export function failureDetail(what: string, reason: string): string {
-  const hint = hintForDetail(reason);
-  return hint === undefined ? `${what}: ${reason}` : `${what}: ${reason}\n${HINT_PREFIX}${hint}`;
+  return causeWithFix(`${what}: ${reason}`, hintForDetail(reason));
 }
 
 /** 상태 창의 줄 색. 강조는 이것 하나다. */
