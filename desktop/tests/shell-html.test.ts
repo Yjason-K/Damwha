@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vm from "vm";
 import { describe, expect, it } from "vitest";
+import { CAUSES } from "../src/causes";
 import { servicesView } from "../src/status-view";
 import type { ServiceStatus } from "../src/services/types";
 
@@ -207,15 +208,42 @@ describe("services.html", () => {
     expect(warning.textContent).toBe(`주의: ${view.rows[0].warning}`);
   });
 
-  it("replaces the rows on every render instead of appending — it is redrawn live", () => {
+  it("draws what the latest render says and nothing of the one before — it is redrawn live (P2-C11)", () => {
+    // 전에는 **같은** view를 두 번 넣었다. 두 번째 호출을 무시하는 페이지도 통과했다(리뷰 I-2) — 사람이
+    // degraded가 ok로 돌아오기를 지켜보는 창이 첫 로드 모습에 멈춰도 초록이었다. 서로 다른 둘을 넣는다.
     const { sandbox, byId } = loadPage("services.html");
     const render = sandbox.__damwha_render as (v: unknown) => void;
-    const view = servicesView({ statuses: [failed], restartNotice: "x", logPathOf: (id) => id });
-    render(view);
-    render(view);
-    expect(byId.get("rows")!.children).toHaveLength(1);
-    expect(byId.get("notices")!.children).toHaveLength(1);
+    const api = { id: "api", process: "running", owned: true, restarts: 0 } as const;
+    const logPathOf = (id: string) => `/l/${id}.log`;
+    const rows = () => byId.get("rows")!.children;
+    const byClass = (node: FakeNode, className: string) => node.all().filter((n) => n.className === className);
+
+    render(
+      servicesView({
+        statuses: [{ ...api, health: "degraded", detail: CAUSES.apiDbUnreachable.text }],
+        restartNotice: "다시 켜야 바뀌어요",
+        logPathOf,
+      }),
+    );
+    // 첫 그림이 실제로 degraded였다는 것을 먼저 본다 — 아니면 아래의 "사라졌다"가 아무것도 말하지 않는다.
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0].dataset.tone).toBe("warn");
+    expect(byClass(rows()[0], "state")[0].textContent).toBe("실행 중 · 동작 제한");
+    expect(byClass(rows()[0], "cause")[0].textContent).toBe(CAUSES.apiDbUnreachable.text);
     expect(byId.get("notices")!.hidden).toBe(false);
+
+    render(servicesView({ statuses: [{ ...api, health: "ok" }], restartNotice: null, logPathOf }));
+    // 붙이지 않고 바꿨다.
+    expect(rows()).toHaveLength(1);
+    // 둘째 view가 보인다.
+    expect(rows()[0].dataset.tone).toBe("ok");
+    expect(byClass(rows()[0], "state")[0].textContent).toBe("실행 중");
+    // 첫째 view의 것은 남지 않았다.
+    expect(rows()[0].textContent).not.toContain("동작 제한");
+    expect(byClass(rows()[0], "cause")).toHaveLength(0);
+    expect(byClass(rows()[0], "hint")).toHaveLength(0);
+    expect(byId.get("notices")!.children).toHaveLength(0);
+    expect(byId.get("notices")!.hidden).toBe(true);
     expect(byId.get("updated")!.textContent).toMatch(/^마지막 갱신 /);
   });
 
