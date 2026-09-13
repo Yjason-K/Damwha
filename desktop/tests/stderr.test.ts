@@ -142,6 +142,16 @@ describe("원인 블록의 글자 상한 (Task 14 D3)", () => {
     expect(failureBlock(huge).length).toBe(BLOCK_MAX_CHARS + 1);
   });
 
+  it("keeps the end of a single enormous line with no startup failure, not its start (리뷰 M-3)", () => {
+    // startup failed가 없으면 원인이 줄 앞에 있다는 계약이 없다. 한 줄로 뭉친 진행 바·로그의 최신 내용은 끝에
+    // 있고, 같은 경우 exitCauseBlock도 끝을 남긴다 — 둘이 같은 글자를 보여야 한다.
+    const line = `START${huge}END`;
+    const block = failureBlock(line);
+    expect(block.startsWith("…")).toBe(true);
+    expect(block.endsWith("END")).toBe(true);
+    expect(block).toBe(exitCauseBlock(line));
+  });
+
   it("leaves a block under the limit alone", () => {
     expect(exitCauseBlock("a\nb")).toBe("a\nb");
   });

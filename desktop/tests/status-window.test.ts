@@ -196,6 +196,20 @@ describe("createStatusWindow — 스스로 띄우기", () => {
     expect(h.wins).toHaveLength(1);
   });
 
+  it("tracks the episode per service — an announced worker failure does not use up embed's (리뷰 M-2)", () => {
+    // worker를 알린 뒤 사용자가 창을 닫았고 worker는 failed로 남아 있다. 그 사이 embed가 넘어지면 새 사건이다.
+    const h = harness();
+    h.sw.onStatus([st("worker", "failed"), st("embed", "running")]);
+    expect(h.wins).toHaveLength(1);
+    h.close(h.wins[0]);
+    h.sw.onStatus([st("worker", "failed"), st("embed", "failed")]);
+    expect(h.wins).toHaveLength(2);
+    // 그리고 둘 다 알렸으니 그대로 남은 실패는 다시 띄우지 않는다.
+    h.close(h.wins[1]);
+    h.sw.onStatus([st("worker", "failed"), st("embed", "failed")]);
+    expect(h.wins).toHaveLength(2);
+  });
+
   it("opens again for a new failure after the service reached running", () => {
     const h = harness();
     h.sw.onStatus([st("api", "failed")]);
