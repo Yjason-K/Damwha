@@ -210,6 +210,25 @@ describe("createStatusWindow — 스스로 띄우기", () => {
     expect(h.wins).toHaveLength(2);
   });
 
+  it("does not let another service reaching running clear this service's failure episode (리뷰 M-2, 지우는 방향)", () => {
+    // 실제 앱에서는 postgres·api가 늘 running이고 API 헬스 프로브가 10초마다 status를 낸다. worker가
+    // failed인 채로 그 status가 반복되면, 닫은 창이 아무것도 안 바뀌었는데 되살아나서는 안 된다.
+    const h = harness();
+    h.sw.onStatus([st("postgres", "running"), st("api", "running"), st("embed", "running"), st("worker", "failed")]);
+    expect(h.wins).toHaveLength(1);
+    h.close(h.wins[0]);
+
+    for (let i = 0; i < 3; i++) {
+      h.sw.onStatus([st("postgres", "running"), st("api", "running"), st("embed", "running"), st("worker", "failed")]);
+    }
+    expect(h.wins).toHaveLength(1);
+
+    // 재무장은 그대로 살아 있어야 한다: worker 자신이 running에 닿은 뒤 다시 failed면 새 사건이다.
+    h.sw.onStatus([st("postgres", "running"), st("api", "running"), st("embed", "running"), st("worker", "running")]);
+    h.sw.onStatus([st("postgres", "running"), st("api", "running"), st("embed", "running"), st("worker", "failed")]);
+    expect(h.wins).toHaveLength(2);
+  });
+
   it("opens again for a new failure after the service reached running", () => {
     const h = harness();
     h.sw.onStatus([st("api", "failed")]);

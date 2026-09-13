@@ -202,6 +202,35 @@ describe("statusLine / shellStatusFrom", () => {
     expect(shell.retryInSeconds).toBeUndefined();
   });
 
+  it("does not use the db-unreachable screen for a raw compose error that is not the Docker daemon (리뷰 M-1)", () => {
+    // 5432 포트 충돌 같은 원문 compose stderr는 알려진 원인이 아니다(causeIn이 undefined). 그때도
+    // db-unreachable로 가면 "Docker Desktop이 실행 중인지 확인해 주세요"가 이미 켜져 있는 Docker
+    // Desktop을 가리키는 거짓 안내가 된다 — 해결 줄은 포트 얘기를 하는데 본문은 딴 데를 가리킨다.
+    const shell = shellStatusFrom({
+      statuses: [
+        st("postgres", { process: "failed", health: "unknown", detail: "Bind for 0.0.0.0:5432 failed: port is already allocated" }),
+        st("api", { process: "stopped", health: "unknown" }),
+      ],
+      restartNotice: null,
+      logPathOf,
+    });
+    expect(shell.state).not.toBe("db-unreachable");
+    expect(shell.detail).not.toMatch(/Docker Desktop/);
+  });
+
+  it("does not use the db-unreachable screen for a postgres readiness timeout (리뷰 M-1)", () => {
+    const shell = shellStatusFrom({
+      statuses: [
+        st("postgres", { process: "failed", health: "unknown", detail: CAUSES.readyTimeout.text }),
+        st("api", { process: "stopped", health: "unknown" }),
+      ],
+      restartNotice: null,
+      logPathOf,
+    });
+    expect(shell.state).not.toBe("db-unreachable");
+    expect(shell.detail).not.toMatch(/Docker Desktop/);
+  });
+
   it("uses the generic failed screen for any other failed service, with that service's log", () => {
     const shell = shellStatusFrom({
       statuses: [st("postgres"), st("api", { process: "failed", health: "unknown", detail: "x" })],

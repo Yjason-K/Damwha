@@ -313,6 +313,56 @@ describe("recoveryHint — 실제 어댑터가 낸 원인에서", () => {
     expect(row.hint).not.toMatch(/자동으로/);
   });
 
+  it("postgres: `docker compose stop postgres` leaves the container exited — the degraded row does not claim to recover on its own (P2-C11, 리뷰 N-1)", async () => {
+    // compose ps -a는 내려간 컨테이너도 돌려준다(State: exited) — 데몬은 떠 있다. ready였던 postgres가
+    // 그 뒤로 넘어가면 readiness는 not-ready이고, 감독자는 notAnswering으로 degraded를 적는다.
+    // postgres는 dependsOn: []이고 restart: unless-stopped인 컨테이너는 stop 뒤 스스로 안 돌아온다 —
+    // "의존하는 서비스가 돌아오면 자동으로 복구됩니다"는 여기서 거짓이다.
+    const HEALTHY = '{"Name":"damwha-postgres","Service":"postgres","State":"running","Health":"healthy"}';
+    const EXITED = '{"Name":"damwha-postgres","Service":"postgres","State":"exited","Health":""}';
+    let launched = false;
+    let stopped = false;
+    const run = async (args: string[]) => {
+      if (stopped) return { stdout: EXITED, stderr: "", code: 0 };
+      if (args.includes("up")) launched = true;
+      return { stdout: args.includes("ps") && launched ? HEALTHY : "", stderr: "", code: 0 };
+    };
+    const sup = createSupervisor([{ ...postgresSpec(run), healthIntervalMs: 5 }], ctx(), { readyIntervalMs: 5 });
+    await sup.start();
+    expect(sup.statuses()[0]).toMatchObject({ process: "running", health: "ok" });
+
+    stopped = true;
+    await vi.waitFor(() => expect(sup.statuses()[0].health).toBe("degraded"));
+    const status = sup.statuses()[0];
+    await sup.stopAll({ graceMs: 5 });
+    expect(status.detail).toBe(CAUSES.notAnswering.text);
+    expect(recoveryHint(status) ?? "").not.toMatch(/자동으로/);
+  });
+
+  it("worker: reconnect failing after ready is degraded and DOES get the auto-recover hint (뒤집힌 방향의 잠금, 리뷰 N-1)", async () => {
+    // 위와 반대 방향의 결함을 잠근다: workerDbUnreachable.selfRecovers를 false로 뒤집어도(리뷰 표의 F4)
+    // 517개가 그대로 초록이었다 — degraded worker 줄이 참인 안내를 조용히 잃어도 아무도 못 본다.
+    const spec = workerSpec({ listExternal: async () => [] });
+    const tail = "INFO supervisor desktop-7 ready (db connected)\nWARNING reconnect failed — retry in 2s";
+    const r = await spec.readiness(
+      {
+        handle: {
+          pid: 1,
+          alive: () => true,
+          stderrTail: () => tail,
+          exitCode: () => null,
+          onExit: () => undefined,
+          stop: async () => undefined,
+        },
+        owned: true,
+      } as never,
+      ctx(),
+    );
+    expect(r).toEqual({ kind: "degraded", detail: CAUSES.workerDbUnreachable.text });
+    const detail = r.kind === "degraded" ? r.detail : "";
+    expect(recoveryHint(s({ id: "worker", process: "running", health: "degraded", detail }))).toBe(DEGRADED_HINT);
+  });
+
   it("api: database dropped after boot is degraded and recovers on its own", async () => {
     const r = await judgeAfterProbe(apiHandle(""), "db-unreachable", 3000, apiDeps);
     expect(r.kind).toBe("degraded");
