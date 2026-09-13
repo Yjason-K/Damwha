@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { workerDegraded, workerReady, workerSpec } from "../src/services/worker";
+import { BLOCK_MAX_CHARS } from "../src/stderr";
 import type { LaunchContext, ServiceHandle } from "../src/services/types";
 
 const READY = "INFO supervisor desktop-7 ready (db connected)";
@@ -123,6 +124,15 @@ describe("workerSpec", () => {
     const spec = workerSpec(deps() as never);
     const r = await spec.readiness({ handle: handle("boom", false), owned: true }, ctx());
     expect(r.kind).toBe("failed");
+  });
+
+  it("bounds a dead worker's cause by characters too, keeping the end (리뷰 M-5)", async () => {
+    // 줄 수(12)만 자르면 줄바꿈 없는 한 줄 — 진행 바의 `\r` 덩어리 — 이 stderr 꼬리를 통째로 싣는다.
+    const spec = workerSpec(deps() as never);
+    const r = await spec.readiness({ handle: handle(`${"x".repeat(8_000)}RuntimeError: boom`, false), owned: true }, ctx());
+    const detail = r.kind === "failed" ? r.detail : "";
+    expect(detail.length).toBe(BLOCK_MAX_CHARS + 1);
+    expect(detail.endsWith("RuntimeError: boom")).toBe(true);
   });
 
   it("hands the injected stop the WHOLE plan, not just the grace", async () => {

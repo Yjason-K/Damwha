@@ -1,3 +1,4 @@
+import { exitCauseBlock } from "../stderr";
 import type { EmbedProbe } from "./external";
 import { launchWithUv } from "./worker";
 import type { LaunchContext, ReadinessResult, ServiceSpec } from "./types";
@@ -78,7 +79,8 @@ export function embedSpec(deps: EmbedDeps): ServiceSpec {
     async readiness(result): Promise<ReadinessResult> {
       const handle = result.handle;
       if (handle !== null && !handle.alive()) {
-        return { kind: "failed", detail: handle.stderrTail().split("\n").slice(-12).join("\n").trim() };
+        // 감독자의 exitedDetail과 같은 블록이다 — 줄 수만 자르면 줄바꿈 없는 한 줄이 상한 없이 화면에 오른다.
+        return { kind: "failed", detail: exitCauseBlock(handle.stderrTail()) };
       }
       const probe = await deps.probe(url);
       if (probe.kind === "match") return { kind: "ready" };

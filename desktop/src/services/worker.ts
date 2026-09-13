@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { makeSink, sinkTails } from "../api-process";
 import { CAUSES } from "../causes";
+import { exitCauseBlock } from "../stderr";
 import { buildChildPath } from "./resolve";
 import type {
   LaunchContext,
@@ -202,7 +203,8 @@ export function workerSpec(deps: WorkerDeps): ServiceSpec {
       if (handle === null) return { kind: "failed", detail: CAUSES.noHandle.text };
       const tail = handle.stderrTail();
       if (!handle.alive()) {
-        return { kind: "failed", detail: tail.split("\n").slice(-12).join("\n").trim() };
+        // 감독자의 exitedDetail과 같은 블록이다 — 줄 수만 자르면 줄바꿈 없는 한 줄이 상한 없이 화면에 오른다.
+        return { kind: "failed", detail: exitCauseBlock(tail) };
       }
       if (workerDegraded(tail)) {
         // "자동으로 복구됩니다"는 shell-hints.ts의 DEGRADED_HINT가 붙인다.

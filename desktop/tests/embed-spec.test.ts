@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { embedSpec } from "../src/services/embed";
-import type { LaunchContext } from "../src/services/types";
+import { BLOCK_MAX_CHARS } from "../src/stderr";
+import type { LaunchContext, ServiceHandle } from "../src/services/types";
 
 function ctx(env: Record<string, string> = {}): LaunchContext {
   return {
@@ -75,6 +76,22 @@ describe("embedSpec shape", () => {
     // 2026-09-12 실측 31초(따뜻한 캐시). 기본 60초는 캐시가 식으면 부족하다.
     const spec = embedSpec({ probe: async () => ({ kind: "absent" }), freePort: async () => 8100 });
     expect(spec.readyTimeoutMs).toBeGreaterThanOrEqual(120_000);
+  });
+
+  it("bounds a dead embed's cause by characters too, keeping the end (리뷰 M-5)", async () => {
+    const spec = embedSpec({ probe: async () => ({ kind: "absent" }), freePort: async () => 8100 });
+    const dead = {
+      pid: 4242,
+      alive: () => false,
+      stderrTail: () => `${"x".repeat(8_000)}RuntimeError: boom`,
+      exitCode: () => 1,
+      onExit: () => undefined,
+      stop: async () => undefined,
+    } as unknown as ServiceHandle;
+    const r = await spec.readiness({ handle: dead, owned: true }, ctx());
+    const detail = r.kind === "failed" ? r.detail : "";
+    expect(detail.length).toBe(BLOCK_MAX_CHARS + 1);
+    expect(detail.endsWith("RuntimeError: boom")).toBe(true);
   });
 
   it("refuses to launch without uv", async () => {
