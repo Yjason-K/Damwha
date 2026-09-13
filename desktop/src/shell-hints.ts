@@ -25,9 +25,9 @@ export const HINTS: Record<CauseId, Hint> = {
   dockerDaemonDown: "Docker Desktop을 실행한 뒤 다시 시도해 주세요.",
   dockerMissing: INSTALL_OR_CONFIGURE,
   uvMissing: INSTALL_OR_CONFIGURE,
-  // uv를 부르는 것은 worker·embed뿐이다. dev의 API 런처는 pnpm을 부르므로 거기에 UV_BIN을
-  // 말하면 틀린 안내다.
-  spawnNotFound: { worker: INSTALL_OR_CONFIGURE, embed: INSTALL_OR_CONFIGURE },
+  // uv를 부르는 것은 worker·embed, docker를 부르는 것은 postgres다. dev의 API 런처는 pnpm을
+  // 부르므로 거기에 UV_BIN·DOCKER_BIN을 말하면 틀린 안내다.
+  spawnNotFound: { postgres: INSTALL_OR_CONFIGURE, worker: INSTALL_OR_CONFIGURE, embed: INSTALL_OR_CONFIGURE },
   workerEnvMissing: "be/worker/.env.example을 복사해 값을 채운 뒤 다시 시도해 주세요.",
   pendingMigrations: "터미널에서 `pnpm be:migrate`를 실행한 뒤 다시 시도해 주세요.",
   externalWorker:

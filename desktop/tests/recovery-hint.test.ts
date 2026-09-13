@@ -325,3 +325,37 @@ describe("recoveryHint — 실제 어댑터가 낸 원인에서", () => {
     expect(recoveryHint(st)).toBe(HINTS.uvMissing);
   });
 });
+
+describe("recoveryHint — DOCKER_BIN이 가리키는 곳에 파일이 없을 때", () => {
+  it("postgres fails with the spawn ENOENT cause and the DOCKER_BIN hint, not an empty cause", async () => {
+    // main.ts의 dockerRun이 이 거부를 {stderr, code}로 바꾼다. execFile은 실행 파일이 없으면 stderr를
+    // **빈 문자열**로 채우므로 `??`로 받으면 원인이 ""였다 — 여기서는 dockerRun이 넘기는 모양
+    // (`String(e)`)을 그대로 쓴다. dockerRun 자체는 main.ts라 부를 수 없다.
+    const { execFile } = await import("child_process");
+    const { promisify } = await import("util");
+    const e = await promisify(execFile)("/nowhere/docker", ["compose", "ps"]).then(
+      () => {
+        throw new Error("실행됐다");
+      },
+      (err: { stderr?: string }) => err,
+    );
+    expect(e.stderr).toBe("");
+    const spec = postgresSpec(async () => ({ stdout: "", stderr: e.stderr || String(e), code: 1 }));
+    let detail = "";
+    try {
+      await spec.launch({
+        repoRoot: "/r",
+        userData: "/u",
+        packaged: true,
+        env: {},
+        bins: { uv: null, docker: "/nowhere/docker" },
+        searchDirs: [],
+        logFile: (id) => `/u/logs/${id}.log`,
+      });
+    } catch (err) {
+      detail = (err as Error).message;
+    }
+    expect(detail).toBe("Error: spawn /nowhere/docker ENOENT");
+    expect(recoveryHint(s({ id: "postgres", detail }))).toMatch(/DOCKER_BIN/);
+  });
+});

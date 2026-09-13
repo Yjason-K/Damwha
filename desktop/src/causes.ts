@@ -46,12 +46,14 @@ export const CAUSES = {
     text: "uv를 찾지 못했어요.",
   },
   /**
-   * 경로는 있었는데 그 자리에 실행 파일이 없다 — config.json의 UV_BIN이 틀린 경우다(탐색은
-   * 존재하는 파일만 돌려준다). 이 문구는 **앱이 쓰지 않는다.** launchWithUv가 싱크에 적는
-   * `spawn failed: <e.message>`의 Node 쪽 모양이고, 감독자가 죽은 자식의 stderr 블록으로 올린다.
+   * 경로는 있었는데 그 자리에 실행 파일이 없다 — config.json의 UV_BIN·DOCKER_BIN이 틀린 경우다
+   * (탐색은 존재하는 파일만 돌려준다). 이 문구는 **앱이 쓰지 않는다.** Node의 `spawn <경로> ENOENT`
+   * 이고, 두 길로 올라온다: launchWithUv가 싱크에 적는 `spawn failed: <e.message>`를 감독자가 죽은
+   * 자식의 블록으로(worker·embed), main.ts의 dockerRun이 `Error: <e.message>`를 compose stderr
+   * 자리로(postgres).
    */
   spawnNotFound: {
-    match: /spawn failed: spawn \S+ ENOENT/,
+    match: /spawn \S+ ENOENT/,
     text: (bin: string) => `spawn failed: spawn ${bin} ENOENT`,
   },
   /** worker — be/worker/.env가 없다. */

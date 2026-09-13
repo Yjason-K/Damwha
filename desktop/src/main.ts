@@ -706,8 +706,15 @@ async function dockerRun(bin: string, args: string[]) {
     const { stdout, stderr } = await execFileAsync(bin, args, { timeout: 30_000 });
     return { stdout, stderr, code: 0 };
   } catch (e) {
-    const err = e as { stdout?: string; stderr?: string; code?: number };
-    return { stdout: err.stdout ?? "", stderr: err.stderr ?? String(e), code: err.code ?? 1 };
+    const err = e as { stdout?: string; stderr?: string; code?: number | string };
+    // `||`이지 `??`가 아니다. 실행 파일이 없으면(DOCKER_BIN이 틀림) execFile은 stderr를 **빈
+    // 문자열**로 채워 거부하므로, `??`는 그 빈 문자열을 원인으로 넘겨 postgres가 원인 없는
+    // "실패"로 섰다. 숫자가 아닌 code("ENOENT")도 실패다 — 0이 아니면 된다.
+    return {
+      stdout: err.stdout ?? "",
+      stderr: err.stderr || String(e),
+      code: typeof err.code === "number" ? err.code : 1,
+    };
   }
 }
 
