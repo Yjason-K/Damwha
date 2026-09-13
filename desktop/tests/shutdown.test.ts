@@ -107,13 +107,124 @@ describe("stopWorkerProcess", () => {
       descendants: async () => new Set<number>(),
       onGraceExpired: async () => true,
     });
-    // 정확히 한 번, **uv의 pid(양수)** 로. 그룹(-4242)이면 uv가 받은 것을 한 번 더 전달해
-    // supervisor가 두 번 받고, 두 번째를 강제로 읽어 --once 자식을 kill한다 (스펙 §6.9 1단계).
-    expect(signals).toEqual([[4242, "SIGTERM"]]);
+    // supervisor에게는 정확히 한 번, **uv의 pid(양수)** 로. 그룹(-4242)이면 uv가 받은 것을 한 번 더
+    // 전달해 supervisor가 두 번 받고, 두 번째를 강제로 읽어 --once 자식을 kill한다 (스펙 §6.9 1단계).
+    // 뒤의 그룹 신호는 supervisor가 **끝난 뒤** 같은 그룹의 남은 자식을 거두는 것이라 받을 supervisor가
+    // 없다 — 순서 자체는 아래 "reaps uv's process group only after…" 두 테스트가 잠근다.
+    expect(signals).toEqual([
+      [4242, "SIGTERM"],
+      [-4242, "SIGTERM"],
+    ]);
     expect(out).toEqual({ stopped: true, leaked: [] });
   });
 
-  it("never signals a process group in the polite (1) or forced (3) SIGTERM — uv forwards each one, so a group signal arrives twice", async () => {
+  it("reaps uv's process group only after the supervisor has exited — never while it is alive (after stage 1)", async () => {
+    // 그룹 신호가 supervisor가 살아 있을 때 나가면 그것이 곧 I-1의 이중 배달이다(uv가 받은 것을 전달하고
+    // 커널이 그룹에도 배달한다). 그래서 신호마다 **그 순간** 루트가 살아 있었는지를 함께 적는다.
+    // 루트는 uv pid에 SIGTERM을 받은 뒤 다음 틱에 끝난다.
+    let exited = false;
+    const events: Array<[number, string, boolean]> = [];
+    const out = await stopWorkerProcess(
+      {
+        pid: 4242,
+        alive: () => !exited,
+        stderrTail: () => "",
+        exitCode: () => null,
+        onExit: () => undefined,
+        stop: async () => undefined,
+      } as never,
+      {
+        graceMs: 50,
+        pollMs: 5,
+        signal: (target, sig) => {
+          events.push([target, sig, !exited]);
+          if (target === 4242 && sig === "SIGTERM") setTimeout(() => (exited = true), 1);
+        },
+        descendants: async () => new Set<number>(),
+        onGraceExpired: async () => true,
+      },
+    );
+    expect(events).toEqual([
+      [4242, "SIGTERM", true],
+      [-4242, "SIGTERM", false],
+    ]);
+    expect(out).toEqual({ stopped: true, leaked: [] });
+  });
+
+  it("reaps uv's process group only after the supervisor has exited — never while it is alive (after the forced stage 3)", async () => {
+    let exited = false;
+    let terms = 0;
+    const events: Array<[number, string, boolean]> = [];
+    await stopWorkerProcess(
+      {
+        pid: 4242,
+        alive: () => !exited,
+        stderrTail: () => "",
+        exitCode: () => null,
+        onExit: () => undefined,
+        stop: async () => undefined,
+      } as never,
+      {
+        graceMs: 10,
+        pollMs: 5,
+        signal: (target, sig) => {
+          events.push([target, sig, !exited]);
+          // 첫 SIGTERM은 버틴다(job이 stage boundary에 못 닿았다). 사람이 강제를 고른 두 번째에 끝난다.
+          if (target === 4242 && sig === "SIGTERM" && ++terms === 2) setTimeout(() => (exited = true), 1);
+        },
+        descendants: async () => new Set<number>(),
+        onGraceExpired: async () => true,
+        maxWaits: 4,
+      },
+    );
+    expect(events).toEqual([
+      [4242, "SIGTERM", true],
+      [4242, "SIGTERM", true],
+      [-4242, "SIGTERM", false],
+    ]);
+  });
+
+  it("does not report a same-group leftover (the capabilities probe) as leaked once the group is reaped, and gives the signal time to land", async () => {
+    // capabilities.probe_mps는 supervisor가 start_new_session 없이 subprocess.run으로 띄운다 — uv의 그룹
+    // 구성원이다. 1단계가 uv pid로만 보내므로 그것은 신호를 받지 않고 supervisor보다 오래 산다(장난감
+    // 실측 1/1). 기동 직후 ⌘Q가 그 pid를 누수로 보고하면 P2-C4("남은 프로세스 0개")가 깨진다.
+    //
+    // 가짜의 생존 답은 실측을 따른다: 그룹 신호 **직후**의 확인에서는 아직 보이고(5/5), 그다음 확인에서
+    // 사라진다(200ms 안, 5/5). 그래서 이 테스트는 두 가지를 함께 잠근다 — 그룹 신호가 나가는가, 그리고
+    // 판정이 신호 직후 한 번만 보고 끝나지 않는가.
+    let exited = false;
+    let reaped = false;
+    let checksAfterReap = 0;
+    const out = await stopWorkerProcess(
+      {
+        pid: 4242,
+        alive: () => !exited,
+        stderrTail: () => "",
+        exitCode: () => null,
+        onExit: () => undefined,
+        stop: async () => undefined,
+      } as never,
+      {
+        graceMs: 50,
+        pollMs: 5,
+        signal: (target, sig) => {
+          if (target === 4242 && sig === "SIGTERM") setTimeout(() => (exited = true), 1);
+          if (target === -4242 && sig === "SIGTERM") reaped = true;
+        },
+        // supervisor가 살아 있을 때 찍힌 자손 — 같은 그룹의 프로브 하나.
+        descendants: async () => new Set([5001]),
+        onGraceExpired: async () => true,
+        stillAlive: async (pids) => {
+          if (!reaped) return pids;
+          checksAfterReap += 1;
+          return checksAfterReap === 1 ? pids : [];
+        },
+      },
+    );
+    expect(out).toEqual({ stopped: true, leaked: [] });
+  });
+
+  it("never signals a process group while the supervisor is alive — in the polite (1) or forced (3) SIGTERM, uv forwards each one, so a group signal arrives twice", async () => {
     // 2026-09-13 실측: `process.kill(-uvPid, "SIGTERM")` 한 번에 uv 아래 Python의 SIGTERM 핸들러가
     // 두 번 불렸다(5/5) — 한 번은 같은 그룹이라 커널이, 한 번은 uv가 전달해서. supervisor의
     // 2단계 핸들러는 두 번째에서 --once 자식을 proc.kill()하고 os._exit(1)하므로, 그룹 신호는
@@ -136,7 +247,8 @@ describe("stopWorkerProcess", () => {
       [4242, "SIGTERM"],
       [4242, "SIGTERM"],
     ]);
-    // 4단계를 포함해 이 모듈의 어떤 신호도 그룹을 겨누지 않는다.
+    // 이 경로에서 supervisor는 끝까지 살아 있다(handle(999)) — 4단계까지 가도 그룹 신호는 하나도 없다.
+    // 그룹에 보내는 유일한 자리는 supervisor가 끝난 **뒤**다.
     expect(signals.filter(([pid]) => pid < 0)).toEqual([]);
   });
 
@@ -172,8 +284,12 @@ describe("stopWorkerProcess", () => {
     );
     expect(asked).toBe(2);
     // 기다리겠다는 답에 두 번째 SIGTERM을 보내면 안 된다 — 그것이 곧 강제(3단계)다. 이 한 번도
-    // uv의 pid(양수)로 간다: 그룹이면 이 한 번이 supervisor에게는 이미 두 번이다.
-    expect(signals).toEqual([[4242, "SIGTERM"]]);
+    // uv의 pid(양수)로 간다: 그룹이면 이 한 번이 supervisor에게는 이미 두 번이다. 뒤의 그룹 신호는
+    // supervisor가 스스로 끝난 **뒤**의 거두기라 supervisor에게 가는 두 번째 신호가 아니다.
+    expect(signals).toEqual([
+      [4242, "SIGTERM"],
+      [-4242, "SIGTERM"],
+    ]);
     expect(out).toEqual({ stopped: true, leaked: [] });
   });
 

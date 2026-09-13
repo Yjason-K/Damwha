@@ -297,10 +297,25 @@ pydantic-settings는 환경변수가 `.env`를 이긴다 — 2026-09-12 실측�
 
 **`WORKER_ID`는 앱 실행마다 새로 만든다.** 기본값 `worker-1`을 외부 worker와 나눠 쓰면
 `locked_by = worker_id AND status='running'`만 보는 소유권 가드가 둘을 구별하지 못한다
-(`be/worker/damwha_worker/db/queue.py`). 더 좁은 위험이 이 Phase 때문에 새로 생긴다 — **재시작할
-때 supervisor만 죽이면 `--once` 자식이 살아남아 같은 `WORKER_ID`를 쥔 채 돌고, 새 supervisor가
-같은 id로 뜬다.** §6.9의 자손 정리가 그 구멍을 닫는다. 근본적인 해소(claim마다 lease token)는
-API·worker 양쪽의 SQL 계약 변경이라 이 Phase 밖이다 — §13 R2-6, §15.
+(`be/worker/damwha_worker/db/queue.py`). 더 좁은 위험이 이 Phase 때문에 새로 생긴다 — **supervisor만
+죽고 `--once` 자식이 살아남으면, 그 자식은 같은 `WORKER_ID`를 쥔 채 돌고 새 supervisor가 같은 id로
+뜬다.**
+
+이 구멍은 **두 경로 중 하나만 닫혀 있다** (2026-09-13 수정, 최종 리뷰 I-3). 초판은 "§6.9의 자손 정리가
+그 구멍을 닫는다"고 적었는데, §6.9는 **앱이 내리는 종료** 경로다.
+- **앱이 내리는 종료(⌘Q·메뉴)**: 닫혀 있다. §6.9가 supervisor가 살아 있을 때 자손을 찍어 두고, 정중한
+  정지로 `--once` 자식이 `requeue_for_shutdown`을 타게 하며, 남은 것은 SIGKILL하거나 보고한다.
+- **worker supervisor가 스스로 죽고 감독자가 재시작하는 경로(§6.8)**: 열려 있다. `--once` 자식은 pid 1로
+  재부모화되어 같은 `WORKER_ID`로 계속 돌고, 재시작 경로는 스냅샷을 찍지 않으므로 그것을 추적하지도
+  보고하지도 않는다 — 뒤의 ⌘Q도 그것을 보지 못한다.
+
+그 경로의 피해에는 조건이 둘 필요하다. 고아가 **아직 쓰는 중**이어야 하고, 그 사이 reaper가
+`locked_at`의 나이로 **그 job을 requeue해** 새 supervisor의 자식이 그것을 다시 claim해야 한다 — 그때 두
+프로세스가 같은 `locked_by`로 소유권 가드를 통과한다. 이 Phase는 그것을 고치지 않는다. 앱 쪽의 부분
+해소(살아 있을 때 `--once` 자식을 찍어 두고, 그것이 사라질 때까지 재시작을 보류)는 설계했지만 넣지
+않았다. 스냅샷 주기보다 짧게 산 자식은 여전히 놓치는 부분 해소이고, 근본 해소인 **claim마다의 lease
+token**과 함께 한 번에 하는 것이 맞다 — §13 R2-6, §15. 완료 기준 중 이 경로를 밟는 것은 없다: P2-C10은
+Postgres를 내린 채 worker를 죽이므로 claim된 job도 `--once` 자식도 없다.
 
 ### 6.6 준비 상태 계약
 
@@ -460,13 +475,30 @@ worker → embed → api → (postgres는 건드리지 않는다)
    uv가 정확히 한 번 전달한다. 3단계도 같은 이유로 uv의 pid이고, 그래야 supervisor가 받는 것이
    정확히 "두 번째"다.
 
-   이 전환이 잃는 것은 하나다. uv의 그룹에는 uv와 supervisor 말고 **supervisor가 `start_new_session`
-   없이 띄운 짧은 자식**도 있다 — `capabilities.probe_mps`가 데몬 스레드에서 `subprocess.run`으로
-   띄우는 torch 프로브(수십 초, 상한 120초)다. 그룹 신호는 그것도 끝냈지만 uv pid 신호는 닿지 않는다.
-   장난감 실측: 같은 그룹의 자식은 supervisor가 SIGTERM으로 끝난 뒤에도 살아 있었고(1/1) 자기 일을
-   마치고 스스로 끝났다. 그룹 신호에서는 함께 죽었다(1/1). 그래서 **worker가 뜬 직후 약 2분 안의
-   종료는 그 프로브 pid를 "남은 후보"로 보고할 수 있다.** 거짓 보고는 아니다 — 실제로 살아 있는 우리
-   프로세스이고 곧 스스로 끝난다. 그 대가를 `attempts` 유실과 바꾸지 않는다.
+   **supervisor가 끝난 뒤에는 그룹에 SIGTERM을 한 번 보낸다** (같은 날, I-1의 후속). uv의 그룹에는 uv와
+   supervisor 말고 **supervisor가 `start_new_session` 없이 띄운 짧은 자식**도 있다 —
+   `capabilities.probe_mps`가 데몬 스레드에서 `subprocess.run`으로 띄우는 torch 프로브(수십 초, 상한
+   120초)다. uv pid 신호는 거기 닿지 않는다. 장난감 실측으로 같은 그룹의 자식은 supervisor가 SIGTERM으로
+   끝난 뒤에도 살아 있었다(1/1). 그대로 두면 worker가 뜬 직후 약 2분 안의 ⌘Q가 그 pid를 남은 프로세스로
+   보고해 P2-C4("남은 프로세스 0개")가 깨진다.
+
+   그래서 1·2·3단계의 기다림에서 supervisor(uv)가 **끝난 것을 확인한 직후에만** `kill(-pgid, SIGTERM)`을
+   한 번 보내고, 그 뒤에 기존 생존 확인을 한다. 세 가지가 이것을 안전하게 만든다.
+   - **이중 배달이 없다.** 받을 supervisor가 이미 없으므로 이것을 "두 번째"로 읽을 프로세스가 없다.
+     살아 있는 동안 그룹에 보내면 안 되는 이유(위)가 여기서는 성립하지 않는다.
+   - **우리 것에만 닿는다.** 그룹에 구성원이 남아 있는 동안 그 번호는 새 pid로 배정되지 않고,
+     `kill(-pgid)`는 그 그룹 구성원 — 우리가 띄운 uv의 자손 중 setsid하지 않은 것 — 에만 닿는다.
+     `--once` 자식(`start_new_session=True`)은 닿지 않으며, 그것이 아직 살아 있으면 기존의 보고 전용
+     경로가 다룬다. 그룹이 이미 비었으면 신호는 ESRCH이고, 번호가 풀린 뒤 신호까지의 창은 폴 한 번
+     (200ms)을 넘지 않는다.
+   - **진입할 때 이미 죽어 있던 핸들에는 보내지 않는다.** 언제 죽었는지 모르므로 그 창에 상한이 없다.
+
+   장난감 실측(uv 0.10.9, 앱이 아니다): uv pid SIGTERM → uv 종료 → 그룹 SIGTERM 순서로, supervisor 흉내의
+   핸들러는 SIGTERM을 **한 번**만 받았고(5/5), 같은 그룹의 프로브 자식은 그룹 신호 **직후**
+   `kill(pid, 0)`에는 아직 보였지만(5/5) 200ms 뒤에는 사라졌으며(5/5) 그룹은 ESRCH가 됐다.
+   `start_new_session` 자식은 그 신호 뒤에도 살아 있었다(1/1). 신호 직후 한 번만 보고 판정하면 거둬지는
+   중인 프로브를 누수로 보고하므로, 이 생존 확인도 4단계 뒤와 같은 상한 있는 재확인(최대 5회 × 200ms)을
+   거친다.
 
    **embed도 같은 규칙이다** (`launchWithUv`의 stop). 같은 이중 배달이 실측됐다(uvicorn 0.49.0의
    `handle_exit` 2회, 2/2). 다만 uvicorn은 두 번째 SIGTERM을 강제로 읽지 않아(`sig == SIGINT`일 때만)
@@ -879,7 +911,7 @@ advisory라고 적어 둔 조건을 error 수준으로 올리게 된다.
 | R2-3 | `supervisor started`가 DB 연결 전이라 준비를 오판한다 | **확인됨** (`__main__.py:296`/`:298`/`:107`) | §10의 ready 로그 추가. P2-C10 |
 | R2-4 | 녹음 중 종료가 렌더러를 파괴해 마지막 청크를 잃는다 | **확인됨** (`fe/src`에 `beforeunload` 0건) | §6.9 handshake. P2-C13 |
 | R2-5 | 부팅 뒤 DB 끊김에 API가 fail-fast하지 않아 감독자가 정상으로 오판한다 | **확인됨** (fail-fast는 `onModuleInit`에만) | §6.6 상태 모델 분리. P2-C11 |
-| R2-6 | 같은 `WORKER_ID`를 쓰는 두 프로세스가 소유권 가드를 통과해 한 job을 두 번 쓴다 | P2-C4, P2-C5 | 실행마다 새 `WORKER_ID` + §6.9의 자손 정리. **근본 해소(lease token)는 범위 밖 — §15** |
+| R2-6 | 같은 `WORKER_ID`를 쓰는 두 프로세스가 소유권 가드를 통과해 한 job을 두 번 쓴다 | P2-C4, P2-C5 | 실행마다 새 `WORKER_ID` + §6.9의 자손 정리(앱이 내리는 종료만). **worker supervisor가 스스로 죽고 재시작되면 `--once` 자식이 같은 `WORKER_ID`로 남을 수 있고(§6.5), 피해는 그 고아가 아직 쓰는 중에 reaper가 그 job을 requeue할 때 난다. 그 해소는 근본 해소(lease token)와 함께 범위 밖 — §15** |
 | R2-7 | 외부 embed가 다른 모델·차원인데 채택돼 검색이 조용히 degrade된다 | P2-C3, P2-C6 | §6.5의 `/embed` 계약 프로브 |
 | R2-8 | 빈 볼륨에서 화면은 정상인데 모든 요청이 실패한다 | P2-C9 | §6.7의 마이그레이션 감지 게이트 |
 | R2-9 | `LENS_LLM_BASE_URL` 부재로 worker가 로그 한 줄 전에 죽는다 | P2-C1 | §6.4의 `.env` 존재 확인 + 주입 |

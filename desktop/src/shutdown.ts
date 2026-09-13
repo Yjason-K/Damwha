@@ -107,11 +107,16 @@ function processExists(pid: number): boolean {
  * 4. 그래도 남으면 자손 집합에 SIGKILL. start_new_session은 세션만 바꾸고 부모-자식
  *    관계는 그대로라 ps의 ppid BFS가 여전히 찾아낸다.
  * 5. 그래도 남으면 pid를 돌려준다. 정리 실패를 조용히 넘기지 않는다.
+ *
+ * 1·2·3단계의 기다림에서 supervisor가 **끝나면**, 그 자리에서 uv의 그룹에 SIGTERM을 한 번
+ * 보내 같은 그룹에 남은 짧은 자식(capabilities 프로브)을 거둔 뒤 판정한다 (cleanUnlessOrphans).
+ * 살아 있는 동안에는 절대 그룹에 보내지 않는다.
  */
 /**
- * 4단계 SIGKILL 뒤 "정말 없어졌나"를 몇 번까지 다시 볼 것인가. 폴 간격(`pollMs`)마다 한 번씩
- * 보므로 실제 상한은 `REAP_CHECKS * pollMs`다(프로덕션의 200ms로 1초). 상한이 있다는 사실이
- * 요구사항이다 — 이 루프가 무한이면 종료가 거둬지지 않는 좀비 하나에 영영 매달린다.
+ * 신호 뒤 "정말 없어졌나"를 몇 번까지 다시 볼 것인가 — 4단계 SIGKILL 뒤, 그리고 supervisor가
+ * 끝난 뒤의 그룹 SIGTERM 뒤. 폴 간격(`pollMs`)마다 한 번씩 보므로 실제 상한은
+ * `REAP_CHECKS * pollMs`다(프로덕션의 200ms로 1초). 상한이 있다는 사실이 요구사항이다 — 이
+ * 루프가 무한이면 종료가 거둬지지 않는 좀비 하나에 영영 매달린다.
  */
 const REAP_CHECKS = 5;
 
@@ -202,12 +207,53 @@ export async function stopWorkerProcess(
       : { stopped: false, leaked, detail: why.join(" ") };
   };
 
-  /** supervisor는 죽었다. 지금까지 찍어 둔 자손 스냅샷이 남아 있으면 깨끗한 종료가 아니다.
-   *  스냅샷을 한 번이라도 못 찍었으면(snapshotFailed) 자손이 없다는 것도 증명 못 한
-   *  것이므로 "비어 있으니 깨끗하다"고 말하지 않는다. */
+  /**
+   * 후보 중 살아 있는 것을 **짧게, 상한을 두고** 다시 본다. 매 바퀴 후보를 직전 생존자로
+   * 좁히므로 한 번 죽은 것으로 읽힌 pid를 다시 묻지 않는다(=OS가 그 번호를 재사용해도 안
+   * 잡힌다). 한 번만 보면 **거둬지는 중일 뿐인 pid**가 사람에게 누수로 올라간다 — 신호는
+   * 커널이 그 프로세스를 다음에 깨울 때 반영되고, 부모가 거둬들이기 전까지 `kill(pid,0)`은
+   * 성공한다. 거짓 누수 보고는 진짜 누수와 똑같은 걱정을 사용자에게 지운다.
+   */
+  const settle = async (candidates: number[]): Promise<number[]> => {
+    let left = candidates;
+    for (let i = 0; i < REAP_CHECKS && left.length > 0; i += 1) {
+      await new Promise((r) => setTimeout(r, opts.pollMs));
+      left = await survivors(left);
+    }
+    return left;
+  };
+
+  /**
+   * supervisor(uv)가 **방금** 끝났다 — 이 호출 안에서 alive()가 false를 읽은 직후에만 온다.
+   *
+   * 먼저 uv의 **프로세스 그룹**에 SIGTERM을 한 번 보내 같은 그룹에 남은 것을 거둔다. supervisor는
+   * `start_new_session` 없이도 짧은 자식을 띄운다 — `capabilities.probe_mps`가 데몬 스레드에서
+   * `subprocess.run`으로 torch를 import하는 프로브(수십 초, 상한 120초)다. 1·3단계가 uv의 pid로만
+   * 보내므로 그 자식은 신호를 받지 않고 supervisor보다 오래 살아, 기동 직후의 ⌘Q가 그것을 누수로
+   * 보고했다(P2-C4는 남은 프로세스 0개를 요구한다). 2026-09-13 장난감 실측: uv가 끝난 뒤 그룹
+   * SIGTERM → 같은 그룹의 자식은 200ms 안에 사라졌고(5/5), `start_new_session` 자식은 그대로였다(1/1).
+   *
+   * 이 신호가 안전한 이유 셋.
+   * - **이중 배달이 없다.** supervisor는 이미 끝났으므로 이것을 "두 번째"로 읽을 프로세스가 없다.
+   *   살아 있는 동안 그룹에 보내면 안 되는 이유(1단계 주석)가 여기서는 성립하지 않는다.
+   * - **우리 것에만 닿는다.** 그룹에 구성원이 하나라도 남아 있는 동안 그 번호는 새 pid로 배정되지
+   *   않고, `kill(-pgid)`는 그 그룹 구성원 — 우리가 띄운 uv의 자손 중 setsid하지 않은 것 — 에만
+   *   닿는다. `--once` 자식(`start_new_session=True`)은 닿지 않으므로 아래의 보고 전용 경로가 그대로
+   *   다룬다. 그룹이 이미 비었으면 신호는 ESRCH이고, 그 번호가 풀린 뒤 신호까지의 창은 폴 한 번
+   *   (`pollMs`)을 넘지 않는다.
+   * - **진입 때 이미 죽어 있던 핸들에는 보내지 않는다.** 그 경로는 언제 죽었는지 모르므로 이 창에
+   *   상한이 없다 — 위의 진입 가드가 신호 없이 끝낸다.
+   *
+   * 그 뒤 찍어 둔 자손이 남아 있으면 깨끗한 종료가 아니다. 스냅샷을 한 번이라도 못 찍었으면
+   * (snapshotFailed) 자손이 없다는 것도 증명 못 한 것이므로 "비어 있으니 깨끗하다"고 말하지 않는다.
+   * 방금 보낸 신호가 반영될 시간을 settle이 준다 — 같은 실측에서 신호 직후의 `kill(pid,0)`은
+   * 5번 모두 아직 성공했다.
+   */
   const cleanUnlessOrphans = async (): Promise<StopOutcome> => {
-    const orphans = await survivors([...capturedDescendants]);
-    return verdict(orphans);
+    opts.signal(-pid, "SIGTERM");
+    const candidates = [...capturedDescendants];
+    const first = await survivors(candidates);
+    return verdict(await settle(first));
   };
 
   const waitForExit = async (ms: number): Promise<boolean> => {
@@ -278,20 +324,8 @@ export async function stopWorkerProcess(
 
   // 5단계. 지금까지 찍어 둔 스냅샷들도 후보에 넣는다 — 그때 우리 자손이었는데 끝까지
   // 살아 있다면 그 사이 부모를 잃어 BFS에서 사라졌더라도 여전히 우리가 남긴 프로세스다.
-  //
-  // **한 번만 보지 않는다.** SIGKILL은 즉시가 아니라 커널이 그 프로세스를 다음에 깨울 때
-  // 반영되고, 그 뒤로도 부모가 거둬들이기 전까지 `kill(pid,0)`은 성공한다. 폴 한 번 뒤의
-  // 스냅샷 하나로 판정하면 **거둬지는 중일 뿐인 pid**가 사람에게 "아직 살아 있을 수 있는
-  // 프로세스"로 올라간다 — 거짓 누수 보고는 진짜 누수와 똑같은 걱정을 사용자에게 지운다.
-  // 그래서 짧게, 그러나 **상한을 두고** 다시 본다. 매 바퀴 후보를 직전 생존자로 좁히므로
-  // 한 번 죽은 것으로 읽힌 pid를 다시 묻지 않는다(=OS가 그 번호를 재사용해도 안 잡힌다).
-  let left = [...new Set([pid, ...tree, ...capturedDescendants])];
-  for (let i = 0; i < REAP_CHECKS; i += 1) {
-    await new Promise((r) => setTimeout(r, opts.pollMs));
-    left = await survivors(left);
-    if (left.length === 0) break;
-  }
-  return verdict(left);
+  // **한 번만 보지 않는다** — SIGKILL도 반영과 거둬들임에 시간이 든다 (settle 주석).
+  return verdict(await settle([...new Set([pid, ...tree, ...capturedDescendants])]));
 }
 
 export interface InFlight {
