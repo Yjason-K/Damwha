@@ -11,6 +11,7 @@ import { probeEmbedContract } from "../src/services/external";
 import { postgresSpec } from "../src/services/postgres";
 import { createSupervisor } from "../src/services/supervisor";
 import { launchWithUv, workerSpec } from "../src/services/worker";
+import { servicesView } from "../src/status-view";
 import type { LaunchContext, ServiceId, ServiceSpec, ServiceStatus } from "../src/services/types";
 
 const s = (over: Partial<ServiceStatus>): ServiceStatus => ({
@@ -59,8 +60,10 @@ describe("recoveryHint", () => {
   });
 
   it("returns undefined for an unrecognised cause rather than inventing one", () => {
-    // 모르는 원인에 그럴듯한 안내를 붙이면 사용자를 엉뚱한 곳으로 보낸다.
+    // 모르는 원인에 그럴듯한 안내를 붙이면 사용자를 엉뚱한 곳으로 보낸다. degraded여도 같다 — "자동으로
+    // 복구됩니다"도 안내이고, 원문 stderr(compose 출력 같은)는 그렇게 풀린다는 근거가 없다.
     expect(recoveryHint(s({ detail: "알 수 없는 오류 0x99" }))).toBeUndefined();
+    expect(recoveryHint(s({ process: "running", health: "degraded", detail: "알 수 없는 오류 0x99" }))).toBeUndefined();
   });
 });
 
@@ -89,6 +92,12 @@ const SAMPLE_ARGS: { [K in TemplateId]: ArgsOf<K> } = {
   externalCheckFailed: ["ps를 못 돌렸어요"],
 };
 
+/** 실패한 서비스에 이 원인이 받아야 하는 안내 — HINTS 표를 그대로 읽는다. */
+function mappedHint(id: CauseId, sid: ServiceId): string | undefined {
+  const mapped = HINTS[id];
+  return mapped === null ? undefined : typeof mapped === "string" ? mapped : mapped[sid];
+}
+
 function sampleOf(id: CauseId): string {
   const text = CAUSES[id].text;
   if (typeof text === "string") return text;
@@ -111,9 +120,8 @@ describe("recoveryHint — 원인 목록 전체 (causes.ts에서 끌어온다)",
   it("a failed service gets exactly the hint its cause is mapped to, for every service id", () => {
     const wrong: string[] = [];
     for (const id of CAUSE_IDS) {
-      const mapped = HINTS[id];
       for (const sid of SERVICE_IDS) {
-        const want = mapped === null ? undefined : typeof mapped === "string" ? mapped : mapped[sid];
+        const want = mappedHint(id, sid);
         const got = recoveryHint(s({ id: sid, detail: sampleOf(id) }));
         if (got !== want) wrong.push(`${id}@${sid}: ${String(got)}`);
       }
@@ -121,14 +129,27 @@ describe("recoveryHint — 원인 목록 전체 (causes.ts에서 끌어온다)",
     expect(wrong).toEqual([]);
   });
 
-  it("every degraded cause says it recovers on its own and never says to restart", () => {
+  it("a degraded service is told it recovers on its own only when the catalog says its cause does — otherwise it gets its cause's own fix", () => {
+    // 전에는 이 테스트가 **모든** 원인 × 서비스에 DEGRADED_HINT를 단언해 결함을 지켰다(리뷰 I-1).
+    // 어느 원인이든 degraded로 온다 — 감독자의 재프로브가 readiness의 failed detail을 degraded에 싣는다.
+    // 부팅 뒤 Docker Desktop이 꺼진 postgres가 그렇고, 사람이 켜기 전에는 돌아오지 않는다. 기대값은
+    // 원인 목록의 선언(selfRecovers)에서 끌어온다 — 원인을 더하면 그 원인도 이 검사를 탄다.
     expect(DEGRADED_HINT).not.toMatch(/다시 시작하세요|재시작하세요|다시 켜 주세요/);
+    const wrong: string[] = [];
     for (const id of CAUSE_IDS) {
       for (const sid of SERVICE_IDS) {
-        expect(recoveryHint(s({ id: sid, process: "running", health: "degraded", detail: sampleOf(id) })))
-          .toBe(DEGRADED_HINT);
+        const want = CAUSES[id].selfRecovers ? DEGRADED_HINT : mappedHint(id, sid);
+        const got = recoveryHint(s({ id: sid, process: "running", health: "degraded", detail: sampleOf(id) }));
+        if (got !== want) wrong.push(`${id}@${sid}: ${String(got)}`);
       }
     }
+    expect(wrong).toEqual([]);
+  });
+
+  it("a cause that recovers on its own has no fix for a person — and a cause with a fix is not marked as recovering on its own", () => {
+    // 위 검사는 선언을 **따르는지**만 본다. 선언 자체가 틀리면(dockerDaemonDown을 selfRecovers로 적으면)
+    // 위는 초록인 채 I-1이 돌아온다. 사람이 할 일이 적힌 원인은 정의상 저절로 풀리지 않는다.
+    expect(CAUSE_IDS.filter((id) => CAUSES[id].selfRecovers && HINTS[id] !== null)).toEqual([]);
   });
 
   it("a stale cause on a service that is starting again or stopped gets no hint", () => {
@@ -257,6 +278,39 @@ describe("recoveryHint — 실제 어댑터가 낸 원인에서", () => {
     expect(r.kind).toBe("failed");
     const detail = r.kind === "failed" ? r.detail : "";
     expect(recoveryHint(s({ id: "api", detail }))).toBe(HINTS.pendingMigrations);
+  });
+
+  it("postgres: Docker Desktop quit after boot — the degraded row says to start Docker Desktop, not that it recovers on its own (I-1)", async () => {
+    // 배터리 때문에 Docker Desktop을 끄는 평범한 경로. postgres는 ready 뒤에도 재프로브하고, 데몬이 없으면
+    // readiness가 failed + dockerDaemonDown을 돌려주며, 감독자가 그것을 degraded로 적는다. 사람이 Docker
+    // Desktop을 켜기 전에는 복구되지 않는다 — postgres는 dependsOn: []라 "의존하는 서비스"도 없다.
+    const HEALTHY = '{"Name":"damwha-postgres","Service":"postgres","State":"running","Health":"healthy"}';
+    let launched = false;
+    let daemonUp = true;
+    const run = async (args: string[]) => {
+      if (!daemonUp) {
+        return {
+          stdout: "",
+          stderr:
+            "failed to connect to the docker API at unix:///Users/x/.docker/run/docker.sock; check if the path is correct and if the daemon is running",
+          code: 1,
+        };
+      }
+      if (args.includes("up")) launched = true;
+      return { stdout: args.includes("ps") && launched ? HEALTHY : "", stderr: "", code: 0 };
+    };
+    const sup = createSupervisor([{ ...postgresSpec(run), healthIntervalMs: 5 }], ctx(), { readyIntervalMs: 5 });
+    await sup.start();
+    expect(sup.statuses()[0]).toMatchObject({ process: "running", health: "ok" });
+
+    daemonUp = false;
+    await vi.waitFor(() => expect(sup.statuses()[0].health).toBe("degraded"));
+    const row = servicesView({ statuses: sup.statuses(), restartNotice: null, logPathOf: (id) => id }).rows[0];
+    await sup.stopAll({ graceMs: 5 });
+    expect(row.state).toBe("실행 중 · 동작 제한");
+    expect(row.cause).toBe("Docker Desktop이 실행 중이 아니에요.");
+    expect(row.hint).toMatch(/Docker Desktop을 실행/);
+    expect(row.hint).not.toMatch(/자동으로/);
   });
 
   it("api: database dropped after boot is degraded and recovers on its own", async () => {

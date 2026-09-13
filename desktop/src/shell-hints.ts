@@ -1,4 +1,4 @@
-import { causeIn, type CauseId } from "./causes";
+import { CAUSES, causeIn, type CauseId } from "./causes";
 import type { ServiceId, ServiceStatus } from "./services/types";
 
 /**
@@ -34,9 +34,11 @@ export const HINTS: Record<CauseId, Hint> = {
     "터미널의 worker를 끄고 다시 시도하거나, 그 worker의 STORAGE_ROOT가 앱과 같은지 확인해 주세요.",
   embedMismatch: "외부 embed 서비스를 끄면 앱이 직접 띄웁니다.",
   repoRootMissing: "be/worker와 be/docker-compose.yml이 있는 폴더를 골라 주세요.",
-  // degraded 문구다. recoveryHint는 degraded를 원인보다 먼저 보므로 여기에는 닿지 않는다.
+  // 스스로 풀리는 원인이다(causes.ts의 selfRecovers). degraded면 recoveryHint가 DEGRADED_HINT를
+  // 붙이고, 사람이 할 일이 없으므로 여기는 null이어야 한다 — 테스트가 본다.
   apiDbUnreachable: null,
   workerDbUnreachable: null,
+  // ready 뒤 재프로브가 던졌거나 답하지 않는다. 왜인지 모르므로 고칠 방법도, "자동으로 복구된다"도 말하지 않는다.
   healthProbeThrew: null,
   notAnswering: null,
   // 다음 기동이 다른 포트를 고른다 — 실패 화면이 이미 재시도를 말한다.
@@ -57,7 +59,11 @@ export const HINTS: Record<CauseId, Hint> = {
   externalCheckFailed: null,
 };
 
-/** degraded의 안내. "다시 시작하세요"라고 말하지 않는다 — 재시작은 이 경우 도움이 안 된다. */
+/**
+ * **스스로 풀리는** 원인으로 degraded인 서비스의 안내. "다시 시작하세요"라고 말하지 않는다 — 재시작은
+ * 이 경우 도움이 안 된다. degraded 전부의 안내가 아니다: 사람이 움직여야 풀리는 원인은 degraded여도
+ * 자기 안내를 쓴다(recoveryHint).
+ */
 export const DEGRADED_HINT = "의존하는 서비스가 돌아오면 자동으로 복구됩니다. 앱을 다시 시작하지 않아도 됩니다.";
 
 /**
@@ -66,7 +72,10 @@ export const DEGRADED_HINT = "의존하는 서비스가 돌아오면 자동으�
  */
 export function hintForDetail(detail: string, id?: ServiceId): string | undefined {
   const cause = causeIn(detail);
-  if (cause === undefined) return undefined;
+  return cause === undefined ? undefined : hintOf(cause, id);
+}
+
+function hintOf(cause: CauseId, id: ServiceId | undefined): string | undefined {
   const hint = HINTS[cause];
   if (hint === null) return undefined;
   if (typeof hint === "string") return hint;
@@ -89,7 +98,12 @@ export function causeOf(status: ServiceStatus): string | undefined {
 
 export function recoveryHint(status: ServiceStatus): string | undefined {
   if (status.process === "running" && status.health === "ok") return undefined;
-  if (status.health === "degraded") return DEGRADED_HINT;
   const detail = causeOf(status);
-  return detail === undefined ? undefined : hintForDetail(detail, status.id);
+  const cause = detail === undefined ? undefined : causeIn(detail);
+  if (cause === undefined) return undefined;
+  // 원인을 **먼저** 본다. degraded를 먼저 보면 부팅 뒤 Docker Desktop이 꺼진 postgres에 "자동으로
+  // 복구됩니다"가 붙고 "Docker Desktop을 실행"이 사라진다 — 사람이 켜기 전에는 복구되지 않는데
+  // (Task 14 리뷰 I-1). 스스로 풀린다고 카탈로그가 선언한 원인만 그 안내를 받는다.
+  if (status.health === "degraded" && CAUSES[cause].selfRecovers) return DEGRADED_HINT;
+  return hintOf(cause, status.id);
 }
