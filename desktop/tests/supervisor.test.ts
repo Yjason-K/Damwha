@@ -703,6 +703,42 @@ describe("supervisor 배경 실패 처리 (I1)", () => {
     expect(s.statuses().find((x) => x.id === "postgres")!.process).toBe("running");
   });
 
+  it("turns a throwing gate launch into a failed status — start() resolves, and the background service it already started stays stoppable (F6)", async () => {
+    // F6의 전제: start()가 거부할 수 있는 곳은 prepare() 하나다. main.ts의 createSupervisorFor는 start()가
+    // 거부하면 **감독자를 버린다**(재시도가 prepare를 영영 건너뛰지 않게) — 그 판단이 안전한 것은 거부가
+    // 어떤 launch보다 먼저 났을 때뿐이다. 그런데 게이트 postgres의 launch(docker compose up)가 던질 때
+    // bringOnce의 catch가 없으면 그 거부가 runFrom을 타고 start()까지 오르고, 그 사이 배경으로 이미 뜬
+    // embed는 버려진 감독자에만 적혀 있어 아무도 내리지 못한다(P2-C4). 최종 리뷰에서 그 catch를 지워도
+    // 522개가 초록이었다.
+    const embedStop = vi.fn(async () => ({ stopped: true, leaked: [] }));
+    const embedLaunch = vi.fn(async () => ({ handle: null, owned: true }));
+    const apiLaunch = vi.fn(async () => ({ handle: null, owned: true }));
+    const s = createSupervisor(
+      [
+        spec("embed", { gate: false, launch: embedLaunch, stop: embedStop }),
+        spec("postgres", {
+          launch: async () => {
+            throw new Error("spawn /nowhere/docker ENOENT");
+          },
+        }),
+        spec("api", { dependsOn: ["postgres"], launch: apiLaunch }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 50, readyIntervalMs: 5 },
+    );
+
+    await expect(s.start()).resolves.toBeUndefined();
+    const pg = s.statuses().find((x) => x.id === "postgres")!;
+    expect(pg.process).toBe("failed");
+    expect(pg.detail).toContain("spawn /nowhere/docker ENOENT");
+    expect(apiLaunch).not.toHaveBeenCalled();
+
+    // 감독자가 살아 있으므로 배경 embed는 여전히 이 감독자의 것이다 — 종료가 그것을 내린다.
+    await vi.waitFor(() => expect(embedLaunch).toHaveBeenCalledTimes(1));
+    await s.stopAll({ graceMs: 5 });
+    expect(embedStop).toHaveBeenCalledTimes(1);
+  });
+
   it("turns an exception in a background bring into a failed status", async () => {
     const s = createSupervisor(
       [

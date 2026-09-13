@@ -215,7 +215,11 @@ describe("statusLine / shellStatusFrom", () => {
       logPathOf,
     });
     expect(shell.state).not.toBe("db-unreachable");
-    expect(shell.detail).not.toMatch(/Docker Desktop/);
+    // 여기 있던 `detail`에 대한 `not.toMatch(/Docker Desktop/)`는 아무것도 지키지 않았다(최종 리뷰 M-3) —
+    // 그 문구는 status.html의 db-unreachable 본문에만 있고 detail에는 어떤 경로로도 들어오지 않는다.
+    // 본문 선택은 위 state 단언이 지킨다. 대신 일반 실패 화면이 **원문 원인을 그대로** 싣는지를 본다:
+    // 이 원인에는 안내가 없으므로(causeIn이 모른다) 사람이 포트 충돌을 읽을 곳은 이 줄뿐이다.
+    expect(shell.detail).toContain("Bind for 0.0.0.0:5432 failed: port is already allocated");
   });
 
   it("does not use the db-unreachable screen for a postgres readiness timeout (리뷰 M-1)", () => {
@@ -228,7 +232,9 @@ describe("statusLine / shellStatusFrom", () => {
       logPathOf,
     });
     expect(shell.state).not.toBe("db-unreachable");
-    expect(shell.detail).not.toMatch(/Docker Desktop/);
+    // 위 테스트와 같은 이유로 vacuous한 `not.toMatch`를 원인 단언으로 바꿨다 — 일반 실패 화면이 postgres의
+    // 유예 초과를 그대로 말한다.
+    expect(shell.detail).toContain(CAUSES.readyTimeout.text);
   });
 
   it("uses the generic failed screen for any other failed service, with that service's log", () => {

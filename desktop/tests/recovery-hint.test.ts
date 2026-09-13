@@ -339,6 +339,37 @@ describe("recoveryHint — 실제 어댑터가 낸 원인에서", () => {
     expect(recoveryHint(status) ?? "").not.toMatch(/자동으로/);
   });
 
+  it("supervisor: a health probe that throws after ready is degraded and does not claim to recover on its own (최종 리뷰 M-3)", async () => {
+    // N-1이 notAnswering·workerDbUnreachable 둘만 잠그고 셋째 갈래를 남겼다 — healthProbeThrew.selfRecovers를
+    // true로 뒤집어도 522개가 초록이었다. 재프로브가 **왜** 던졌는지 모르므로 스스로 풀린다고 말할 근거가
+    // 없다. 그 원인 문구는 감독자의 probeHealth만 만들므로, 진짜 감독자로 그 경로를 태운다.
+    let throwNow = false;
+    const spec: ServiceSpec = {
+      id: "embed",
+      dependsOn: [],
+      gate: false,
+      healthIntervalMs: 5,
+      detectExternal: async () => ({ kind: "absent" }),
+      launch: async () => ({ handle: null, owned: false }),
+      readiness: async () => {
+        if (throwNow) throw new Error("probe exploded");
+        return { kind: "ready" };
+      },
+      stop: async () => ({ stopped: true, leaked: [] }),
+      restart: "never",
+    };
+    const sup = createSupervisor([spec], ctx(), { readyIntervalMs: 5 });
+    await sup.start();
+    await vi.waitFor(() => expect(sup.statuses()[0]).toMatchObject({ process: "running", health: "ok" }));
+
+    throwNow = true;
+    await vi.waitFor(() => expect(sup.statuses()[0].health).toBe("degraded"));
+    const status = sup.statuses()[0];
+    await sup.stopAll({ graceMs: 5 });
+    expect(status.detail).toBe(CAUSES.healthProbeThrew.text("probe exploded"));
+    expect(recoveryHint(status)).not.toBe(DEGRADED_HINT);
+  });
+
   it("worker: reconnect failing after ready is degraded and DOES get the auto-recover hint (뒤집힌 방향의 잠금, 리뷰 N-1)", async () => {
     // 위와 반대 방향의 결함을 잠근다: workerDbUnreachable.selfRecovers를 false로 뒤집어도(리뷰 표의 F4)
     // 517개가 그대로 초록이었다 — degraded worker 줄이 참인 안내를 조용히 잃어도 아무도 못 본다.
