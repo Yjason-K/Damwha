@@ -20,6 +20,13 @@ extraResources:
   - from: build
 mac:
   target: dir
+  # electron-builder가 스스로 서명하지 않게 한다. 서명은 scripts/package.mjs가 electron-builder
+  # 뒤에 ad-hoc(`--sign -`)으로 한다 — 그 스크립트의 주석이 "서명 설정 없음이면 재서명하지 않는다"를
+  # 전제한다. 그런데 설정이 비어 있으면 electron-builder는 키체인에서 신원을 **자동으로 찾는다**:
+  # 2026-09-13 이 맥의 키체인에 이름이 같은 "Apple Development" 인증서가 둘 생기자 그것을 집어
+  # codesign이 `ambiguous`로 실패했다(Phase 1 때는 iOS 배포 인증서뿐이라 드러나지 않았다).
+  # null이 자동 탐색을 끄는 문서화된 값이다. Developer ID 서명·공증은 Phase 6.
+  identity: null
   category: public.app-category.productivity
   extendInfo:
     # 없으면 macOS가 마이크 요청 시 앱을 죽인다 (스펙 §6.6).
