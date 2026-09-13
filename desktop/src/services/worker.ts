@@ -9,6 +9,7 @@ import type {
   LaunchContext,
   LaunchResult,
   ReadinessResult,
+  ServiceHandle,
   ServiceSpec,
   StopOutcome,
   StopPlan,
@@ -16,8 +17,14 @@ import type {
 
 /** Task 7이 __main__.py에 넣은 줄. DB에 실제로 붙은 뒤에만 나온다. */
 const READY = /supervisor \S+ ready \(db connected\)/g;
-/** __main__.py:173의 백오프 경고. */
+/** __main__.py `_reconnect()`의 백오프 경고. */
 const RECONNECT_FAILED = /reconnect failed/g;
+
+/**
+ * 줄바꿈이 아직 오지 않은 마지막 조각을 다음 청크까지 들고 가는 상한. 진행 바는 `\r`로만 다시 그려
+ * 한 "줄"이 한없이 길어질 수 있으므로 **끝쪽**을 남긴다 — 그 뒤에 이어 붙는 로그 줄이 거기 있다.
+ */
+const LINE_CARRY_LIMIT = 8_000;
 
 function lastIndexOfMatch(text: string, re: RegExp): number {
   let last = -1;
@@ -26,18 +33,44 @@ function lastIndexOfMatch(text: string, re: RegExp): number {
   return last;
 }
 
-export function workerReady(stderr: string): boolean {
-  return lastIndexOfMatch(stderr, READY) >= 0;
+export type WorkerReadinessState = "not-ready" | "ready" | "degraded";
+
+export interface ReadinessWatch {
+  /** stderr 청크를 받는 순서대로 넣는다. 줄 경계는 청크 경계와 무관하다. */
+  feed(text: string): void;
+  state(): WorkerReadinessState;
 }
 
 /**
- * ready 줄보다 **뒤에** reconnect 실패가 있으면 degraded다. 그 뒤에 ready가 또 나오면 회복이다 —
- * Task 7이 재접속에서도 같은 줄을 찍게 한 이유가 이것이다 (스펙 §6.6).
+ * worker의 준비는 **사건**이다 — ready 줄은 supervisor 기동(과 재접속 성공)마다 한 번 찍힌다. 예전에는
+ * 8,000자로 굴러가는 stderr 꼬리에서 그 줄을 찾았는데, 처리 중인 worker는 몇 초마다 STT 진행 줄을 찍어
+ * 그 줄이 꼬리에서 밀려났다(2026-09-13 packaged 실측: ready 뒤 60번째 줄). 그 순간부터 멀쩡히 일하는
+ * worker가 재시작 전까지 running/degraded("준비 상태로 답하지 않아요")로 남았고, 그 상태를 지켜보는
+ * P2-C10·P2-C11은 판정할 수 없게 됐다. 그래서 스트림을 줄 단위로 훑어 마지막 사건을 든다.
+ *
+ * - ready → `ready`. reconnect 실패 뒤의 ready는 회복이다 (스펙 §6.6).
+ * - ready를 **본 뒤의** reconnect 실패 → `degraded`.
+ * - ready를 한 번도 못 봤으면 reconnect 실패가 있어도 `not-ready`다. degraded를 답하면 감독자가
+ *   running으로 적는데, DB가 처음부터 틀린 worker는 준비 유예를 넘겨 failed가 되어야 한다 (P2-C10).
+ *   `supervisor <id> started`는 DB 연결 전 줄이라 아무 사건도 아니다.
  */
-export function workerDegraded(stderr: string): boolean {
-  const ready = lastIndexOfMatch(stderr, READY);
-  if (ready < 0) return false;
-  return lastIndexOfMatch(stderr, RECONNECT_FAILED) > ready;
+export function makeReadinessWatch(): ReadinessWatch {
+  let carry = "";
+  let state: WorkerReadinessState = "not-ready";
+  const see = (line: string) => {
+    const ready = lastIndexOfMatch(line, READY);
+    const failed = lastIndexOfMatch(line, RECONNECT_FAILED);
+    if (ready > failed) state = "ready";
+    else if (failed > ready && state !== "not-ready") state = "degraded";
+  };
+  return {
+    feed(text: string) {
+      const lines = (carry + text).split("\n");
+      carry = (lines.pop() ?? "").slice(-LINE_CARRY_LIMIT);
+      for (const line of lines) see(line);
+    },
+    state: () => state,
+  };
 }
 
 /**
@@ -56,6 +89,8 @@ export interface UvLaunchOptions {
   extraEnv?: Record<string, string>;
   /** 테스트 주입용. 기본은 실제 child_process.spawn. */
   spawnFn?: SpawnFn;
+  /** stderr 청크를 싱크와 같은 순서로 받는다. worker의 ReadinessWatch가 여기 붙는다. */
+  onStderr?: (text: string) => void;
 }
 
 /**
@@ -105,7 +140,10 @@ export function launchWithUv(options: UvLaunchOptions): LaunchResult {
     }
   };
   child.stdout?.on("data", (b: Buffer) => sink.write(b, false));
-  child.stderr?.on("data", (b: Buffer) => sink.write(b, true));
+  child.stderr?.on("data", (b: Buffer) => {
+    sink.write(b, true);
+    options.onStderr?.(b.toString());
+  });
   child.on("exit", (c) => settle(c ?? 0));
   // spawn 실패는 'exit'가 아니라 'error'로 온다. 리스너가 없으면 Electron main이 통째로 죽는다.
   child.on("error", (e: Error) => {
@@ -172,6 +210,8 @@ export interface WorkerDeps {
   listExternal(): Promise<number[]>;
   /** worker의 .env 존재 확인. 테스트가 주입한다. */
   exists?(p: string): boolean;
+  /** 테스트 주입용. launch()가 그대로 launchWithUv에 넘긴다 — 기본은 실제 child_process.spawn. */
+  spawnFn?: SpawnFn;
   /**
    * 종료 절차. Task 11의 stopWorkerProcess를 main.ts가 넘긴다.
    *
@@ -187,13 +227,18 @@ export interface WorkerDeps {
 
 export function workerSpec(deps: WorkerDeps): ServiceSpec {
   const exists = deps.exists ?? fs.existsSync;
+  /**
+   * 기동마다 하나. 핸들로 드는 이유는 api.ts의 createMigrationCheckWatch와 같다 — 재시작한 worker는
+   * 새 핸들이라 사건을 처음부터 다시 본다. 불리언 하나로 들면 옛 기동의 ready가 새 기동에 남는다.
+   */
+  const watches = new WeakMap<ServiceHandle, ReadinessWatch>();
 
   return {
     id: "worker",
     dependsOn: ["postgres"],
     gate: false,
-    // stderr 꼬리를 읽을 뿐이라 사실상 공짜다. ready 줄 뒤에 reconnect 실패가 나타나는
-    // 순간을 잡는다 (스펙 §6.6).
+    // 스트림이 이미 갱신해 둔 마지막 사건을 읽을 뿐이라 사실상 공짜다. ready 뒤에 reconnect
+    // 실패가 나타나는 순간을 잡는다 (스펙 §6.6).
     healthIntervalMs: 10_000,
     async detectExternal() {
       const pids = await deps.listExternal();
@@ -210,21 +255,33 @@ export function workerSpec(deps: WorkerDeps): ServiceSpec {
       if (ctx.bins.uv === null) throw new Error(CAUSES.uvMissing.text);
       const envFile = path.join(ctx.repoRoot, "be", "worker", ".env");
       if (!exists(envFile)) throw new Error(CAUSES.workerEnvMissing.text);
-      return launchWithUv({ ctx, args: ["python", "-m", "damwha_worker"], logId: "worker" });
+      // 감시를 spawn **전에** 만들어 onStderr로 넘긴다 — 첫 청크부터 빠짐없이 본다.
+      const watch = makeReadinessWatch();
+      const result = launchWithUv({
+        ctx,
+        args: ["python", "-m", "damwha_worker"],
+        logId: "worker",
+        spawnFn: deps.spawnFn,
+        onStderr: watch.feed,
+      });
+      if (result.handle !== null) watches.set(result.handle, watch);
+      return result;
     },
     async readiness(result): Promise<ReadinessResult> {
       const handle = result.handle;
       if (handle === null) return { kind: "failed", detail: CAUSES.noHandle.text };
-      const tail = handle.stderrTail();
       if (!handle.alive()) {
-        // 감독자의 exitedDetail과 같은 블록이다 — 줄 수만 자르면 줄바꿈 없는 한 줄이 상한 없이 화면에 오른다.
-        return { kind: "failed", detail: exitCauseBlock(tail) };
+        // 죽은 worker의 원인은 여전히 꼬리에서 온다. 감독자의 exitedDetail과 같은 블록이다 — 줄 수만
+        // 자르면 줄바꿈 없는 한 줄이 상한 없이 화면에 오른다.
+        return { kind: "failed", detail: exitCauseBlock(handle.stderrTail()) };
       }
-      if (workerDegraded(tail)) {
+      // 이 spec의 launch()가 만든 핸들만 여기로 온다. 감시가 없으면 준비를 증명할 근거도 없다.
+      const state = watches.get(handle)?.state() ?? "not-ready";
+      if (state === "degraded") {
         // "자동으로 복구됩니다"는 shell-hints.ts의 DEGRADED_HINT가 붙인다.
         return { kind: "degraded", detail: CAUSES.workerDbUnreachable.text };
       }
-      return workerReady(tail) ? { kind: "ready" } : { kind: "not-ready" };
+      return state === "ready" ? { kind: "ready" } : { kind: "not-ready" };
     },
     async stop(result, plan) {
       if (deps.stop !== undefined) return deps.stop(result, plan);

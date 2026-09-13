@@ -373,22 +373,17 @@ describe("recoveryHint — 실제 어댑터가 낸 원인에서", () => {
   it("worker: reconnect failing after ready is degraded and DOES get the auto-recover hint (뒤집힌 방향의 잠금, 리뷰 N-1)", async () => {
     // 위와 반대 방향의 결함을 잠근다: workerDbUnreachable.selfRecovers를 false로 뒤집어도(리뷰 표의 F4)
     // 517개가 그대로 초록이었다 — degraded worker 줄이 참인 안내를 조용히 잃어도 아무도 못 본다.
-    const spec = workerSpec({ listExternal: async () => [] });
-    const tail = "INFO supervisor desktop-7 ready (db connected)\nWARNING reconnect failed — retry in 2s";
-    const r = await spec.readiness(
-      {
-        handle: {
-          pid: 1,
-          alive: () => true,
-          stderrTail: () => tail,
-          exitCode: () => null,
-          onExit: () => undefined,
-          stop: async () => undefined,
-        },
-        owned: true,
-      } as never,
-      ctx(),
-    );
+    // readiness는 launch()가 stderr 스트림에 붙인 감시를 읽으므로, 손으로 만든 handle이 아니라 launch를 거친다.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-hint-"));
+    tmp = dir;
+    const child = new EventEmitter() as unknown as ChildProcess & { stderr: EventEmitter };
+    Object.assign(child, { stdout: new EventEmitter(), stderr: new EventEmitter(), pid: 1, kill: () => true });
+    const spec = workerSpec({ listExternal: async () => [], exists: () => true, spawnFn: () => child });
+    const launchCtx = ctx({ logFile: (id) => path.join(dir, `${id}.log`) });
+    const result = await spec.launch(launchCtx);
+    child.stderr.emit("data", Buffer.from("INFO supervisor desktop-7 ready (db connected)\nWARNING reconnect failed — retry in 2s\n"));
+    const r = await spec.readiness(result, launchCtx);
+    child.emit("exit", 0);
     expect(r).toEqual({ kind: "degraded", detail: CAUSES.workerDbUnreachable.text });
     const detail = r.kind === "degraded" ? r.detail : "";
     expect(recoveryHint(s({ id: "worker", process: "running", health: "degraded", detail }))).toBe(DEGRADED_HINT);

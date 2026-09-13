@@ -1,11 +1,24 @@
-import { describe, expect, it, vi } from "vitest";
-import { workerDegraded, workerReady, workerSpec } from "../src/services/worker";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import { afterEach, describe, expect, it } from "vitest";
+import { makeReadinessWatch, workerSpec } from "../src/services/worker";
 import { BLOCK_MAX_CHARS } from "../src/stderr";
 import type { LaunchContext, ServiceHandle } from "../src/services/types";
+import { fakeChild } from "./fake-child";
 
 const READY = "INFO supervisor desktop-7 ready (db connected)";
 const STARTED = "INFO supervisor desktop-7 started";
 const RECONNECT_FAILED = "WARNING reconnect failed — retry in 2s";
+
+/**
+ * 처리 중인 worker가 몇 초마다 찍는 STT 진행 줄. 2026-09-13 packaged 실측: 실제 worker.log에서
+ * ready 줄 뒤 60번째 줄(15% 진행 줄)에서 stderr 꼬리가 8,000자를 넘었다. 여기서는 그보다 넉넉히 쌓는다.
+ */
+const PROGRESS = Array.from(
+  { length: 250 },
+  (_, i) => `INFO [stt] meeting 42 transcribing ${i % 100}% (chunk ${i}/250)\n`,
+).join("");
 
 function ctx(over: Partial<LaunchContext> = {}): LaunchContext {
   return {
@@ -31,33 +44,125 @@ function handle(tail: string, alive = true): ServiceHandle {
   } as unknown as ServiceHandle;
 }
 
-describe("workerReady", () => {
-  it("is false for the pre-connect line", () => {
-    // __main__.py:296은 DB에 붙기 전에 찍힌다. 이 줄을 준비로 읽으면 화면은
-    // "준비됨"인데 큐는 영원히 안 돈다.
-    expect(workerReady(STARTED)).toBe(false);
-  });
-
-  it("is true once the post-connect line appears", () => {
-    expect(workerReady(`${STARTED}\n${READY}`)).toBe(true);
-  });
-
+describe("makeReadinessWatch", () => {
   it("survives a worker id with dashes and digits", () => {
-    expect(workerReady("INFO supervisor desktop-1757600000-99 ready (db connected)")).toBe(true);
+    const watch = makeReadinessWatch();
+    watch.feed("INFO supervisor desktop-1757600000-99 ready (db connected)\n");
+    expect(watch.state()).toBe("ready");
+  });
+
+  it("keeps the END of an over-long unterminated line — a ready line after a `\\r` bar still counts", () => {
+    // 진행 바는 줄바꿈 없이 `\r`로 다시 그린다. 그 뒤에 로그 줄이 이어 붙으면 한 "줄"이 길어진다.
+    const watch = makeReadinessWatch();
+    watch.feed(`${"\r 15% |####      |".repeat(10_000)}\r${READY}`);
+    expect(watch.state()).toBe("not-ready");
+    watch.feed("\n");
+    expect(watch.state()).toBe("ready");
+  });
+
+  it("bounds the carried partial line — a marker buried far before the newline is dropped, not kept forever", () => {
+    // 끝나지 않는 한 줄이 메모리를 한없이 키우지 않는다는 것의, 밖에서 볼 수 있는 모서리다.
+    // 실제 ready 줄은 logging이 줄바꿈까지 한 번에 쓰므로 이렇게 묻히지 않는다.
+    const watch = makeReadinessWatch();
+    watch.feed(READY);
+    watch.feed("x".repeat(100_000));
+    watch.feed("\n");
+    expect(watch.state()).toBe("not-ready");
   });
 });
 
-describe("workerDegraded", () => {
-  it("is true when a reconnect failure follows the last ready line", () => {
-    expect(workerDegraded(`${READY}\n${RECONNECT_FAILED}`)).toBe(true);
+let tmpDir: string | undefined;
+afterEach(() => {
+  if (tmpDir !== undefined) fs.rmSync(tmpDir, { recursive: true, force: true });
+  tmpDir = undefined;
+});
+
+/**
+ * 진짜 launch() 경로로 띄운다 — spawn만 가짜다. readiness가 무엇을 읽는지는 launchWithUv의
+ * stderr 리스너에서 readiness()까지의 배선 전체가 정하므로, 손으로 만든 handle로는 그 배선을 볼 수 없다.
+ */
+async function launched() {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-worker-"));
+  const dir = tmpDir;
+  const child = fakeChild();
+  const spec = workerSpec({ listExternal: async () => [], exists: () => true, spawnFn: () => child });
+  const launchCtx = ctx({ logFile: (id) => path.join(dir, `${id}.log`) });
+  const result = await spec.launch(launchCtx);
+  const h = result.handle;
+  if (h === null) throw new Error("handle이 없다");
+  return {
+    handle: h,
+    stderr: (text: string) => child.stderr.emit("data", Buffer.from(text)),
+    exit: (code: number) => child.emit("exit", code),
+    readiness: () => spec.readiness(result, launchCtx),
+  };
+}
+
+describe("workerSpec readiness — stderr 스트림의 마지막 준비 이벤트로 판정한다", () => {
+  it("stays ready after the ready line scrolls out of the 8,000-char stderr tail (packaged 실측 결함)", async () => {
+    const w = await launched();
+    w.stderr(`${STARTED}\n${READY}\n`);
+    w.stderr(PROGRESS);
+    // 전제: ready 줄이 정말로 꼬리에서 밀려났다. 이것이 거짓이면 이 테스트는 아무것도 지키지 않는다.
+    expect(w.handle.stderrTail()).not.toContain("ready (db connected)");
+    expect((await w.readiness()).kind).toBe("ready");
+    w.exit(0);
   });
 
-  it("is false when a ready line follows the failure — that is recovery", () => {
-    expect(workerDegraded(`${READY}\n${RECONNECT_FAILED}\n${READY}`)).toBe(false);
+  it("started alone is not ready — the pre-connect line must never count (P2-C10)", async () => {
+    // __main__.py의 started 줄은 DB에 붙기 전에 찍힌다. 이 줄을 준비로 읽으면 화면은
+    // "준비됨"인데 큐는 영원히 안 돈다.
+    const w = await launched();
+    w.stderr(`${STARTED}\n`);
+    expect((await w.readiness()).kind).toBe("not-ready");
+    w.exit(0);
   });
 
-  it("is false before the first ready line", () => {
-    expect(workerDegraded(`${STARTED}\n${RECONNECT_FAILED}`)).toBe(false);
+  it("a DB broken from the start is not-ready, never degraded — reconnect failure before any ready (P2-C10)", async () => {
+    // degraded를 답하면 감독자의 applyReadiness가 running으로 적는다. 한 번도 붙은 적 없는 worker는
+    // 준비 유예를 넘겨 failed가 되어야 한다.
+    const w = await launched();
+    w.stderr(`${STARTED}\n${RECONNECT_FAILED}\nTraceback (most recent call last):\n  psycopg.OperationalError: boom\n`);
+    expect((await w.readiness()).kind).toBe("not-ready");
+    w.exit(0);
+  });
+
+  it("ready → (long processing) → reconnect failed is degraded", async () => {
+    const w = await launched();
+    w.stderr(`${STARTED}\n${READY}\n`);
+    w.stderr(PROGRESS);
+    w.stderr(`${RECONNECT_FAILED}\nTraceback (most recent call last):\n  psycopg.OperationalError: boom\n`);
+    expect(await w.readiness()).toMatchObject({ kind: "degraded" });
+    w.exit(0);
+  });
+
+  it("reconnect failed → ready is ready again, and stays so through long processing (회복)", async () => {
+    const w = await launched();
+    w.stderr(`${STARTED}\n${READY}\n${RECONNECT_FAILED}\n`);
+    expect((await w.readiness()).kind).toBe("degraded");
+    w.stderr(`${READY}\n`);
+    w.stderr(PROGRESS);
+    expect((await w.readiness()).kind).toBe("ready");
+    w.exit(0);
+  });
+
+  it("recognizes a ready line split across two stderr chunks", async () => {
+    const w = await launched();
+    w.stderr(`${STARTED}\nINFO supervisor desktop-7 rea`);
+    w.stderr("dy (db connected)\n");
+    expect((await w.readiness()).kind).toBe("ready");
+    w.exit(0);
+  });
+
+  it("an exited worker is failed with its exit cause, even after it was ready", async () => {
+    const w = await launched();
+    w.stderr(`${STARTED}\n${READY}\n`);
+    w.stderr(PROGRESS);
+    w.stderr("Traceback (most recent call last):\nRuntimeError: boom\n");
+    w.exit(1);
+    const r = await w.readiness();
+    expect(r.kind).toBe("failed");
+    expect(r.kind === "failed" ? r.detail : "").toContain("RuntimeError: boom");
   });
 });
 
@@ -97,26 +202,9 @@ describe("workerSpec", () => {
     await expect(spec.launch(ctx())).rejects.toThrow(/\.env/);
   });
 
-  it("reads ready from stderr, not from the process being alive", async () => {
-    const spec = workerSpec(deps() as never);
-    const notYet = await spec.readiness({ handle: handle(STARTED), owned: true }, ctx());
-    expect(notYet.kind).toBe("not-ready");
-    const yes = await spec.readiness({ handle: handle(`${STARTED}\n${READY}`), owned: true }, ctx());
-    expect(yes.kind).toBe("ready");
-  });
-
-  it("reports degraded when the DB drops after ready", async () => {
-    const spec = workerSpec(deps() as never);
-    const r = await spec.readiness(
-      { handle: handle(`${READY}\n${RECONNECT_FAILED}`), owned: true },
-      ctx(),
-    );
-    expect(r.kind).toBe("degraded");
-  });
-
   it("keeps watching health after it is ready", () => {
     // worker도 ready 뒤 DB가 끊기면 _reconnect 루프에 들어가 프로세스는 살고 큐만 멈춘다.
-    // stderr 꼬리를 읽을 뿐이라 주기가 짧아도 값싸다.
+    // 이미 쌓아 둔 마지막 이벤트를 읽을 뿐이라 주기가 짧아도 값싸다.
     expect(workerSpec(deps() as never).healthIntervalMs).toBeGreaterThan(0);
   });
 

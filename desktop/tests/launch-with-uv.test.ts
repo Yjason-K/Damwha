@@ -1,11 +1,11 @@
-import { EventEmitter } from "events";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { launchWithUv } from "../src/services/worker";
 import type { LaunchContext } from "../src/services/types";
-import type { ChildProcess, SpawnOptions } from "child_process";
+import type { SpawnOptions } from "child_process";
+import { fakeChild } from "./fake-child";
 
 /**
  * worker·embed 어댑터 테스트는 전부 가짜 handle을 주입해 launchWithUv 자체는 한 번도
@@ -27,26 +27,6 @@ function ctx(over: Partial<LaunchContext> = {}): LaunchContext {
     logFile: (id) => path.join(tmpDir, `${id}.log`),
     ...over,
   } as LaunchContext;
-}
-
-/**
- * 진짜 child_process.ChildProcess 대신 쓰는 가짜. stdout·stderr를 별도 EventEmitter로
- * 두어야 launchWithUv가 각각에 다는 리스너를 실제 ChildProcess와 같은 모양으로 태울 수
- * 있다. EventEmitter 자체가 'error' 이벤트를 리스너 없이 emit하면 동기로 다시 던지는
- * 성질을 이용해 "'error' 리스너가 달려 있는가"를 검증한다.
- */
-function fakeChild(): ChildProcess & { stdout: EventEmitter; stderr: EventEmitter } {
-  const child = new EventEmitter() as unknown as ChildProcess & {
-    stdout: EventEmitter;
-    stderr: EventEmitter;
-  };
-  Object.assign(child, {
-    stdout: new EventEmitter(),
-    stderr: new EventEmitter(),
-    pid: 4242,
-    kill: () => true,
-  });
-  return child;
 }
 
 afterEach(() => {
