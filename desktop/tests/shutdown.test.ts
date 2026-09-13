@@ -35,6 +35,21 @@ describe("askIsRecording", () => {
     expect(late).toEqual([]);
   });
 
+  it("answers NO — instead of rejecting — when the round-trip throws synchronously", async () => {
+    // webContents.executeJavaScript는 파괴된 webContents에서 프라미스가 아니라 **동기 예외**를 낸다.
+    // `call().then(…)`은 그것을 못 잡아 이 함수가 거부했고, 그 거부가 종료 흐름을 확인 전에 끝내
+    // 서비스를 하나도 내리지 않은 채 앱이 나갔다 (최종 리뷰 I-2).
+    const late: string[] = [];
+    const out = await askIsRecording(
+      () => {
+        throw new Error("Object has been destroyed");
+      },
+      { timeoutMs: 50, onTimeout: () => late.push("timeout") },
+    );
+    expect(out).toBe(false);
+    expect(late).toEqual([]);
+  });
+
   it("answers YES — not 'unknown' — when the renderer never answers, and says so", async () => {
     // 렌더러의 JS 스레드가 막히면 executeJavaScript는 거부하지도 해결하지도 않는다.
     // 여기서 "아니오"로 닫으면 확인도 핸드셰이크도 건너뛰어 녹음을 조용히 버린다.

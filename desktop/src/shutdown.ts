@@ -432,7 +432,12 @@ export async function askIsRecording(
   // 거부를 **값으로** 바꾼다 — 위 세 갈래의 둘째("거부했다 → 아니오")가 이 핸들러다.
   // 상한에 진 뒤 늦게 오는 거부를 unhandled로부터 막는 장치로 읽지 말 것: `Promise.race`는
   // 진 프라미스에도 언제나 반응을 등록하므로 그것은 이 핸들러가 없어도 성립한다.
-  const asked = call().then(
+  //
+  // `call()`을 직접 부르지 않고 `then` 안에서 부른다. `webContents.executeJavaScript`는 파괴된
+  // webContents에서 프라미스를 돌려주는 대신 **동기로 던지고**, `call().then(…)`은 그 예외를
+  // 잡지 못해 이 함수 전체가 거부했다 — "거부했다 → 아니오"라는 약속이 가장 흔한 거부 모양에서
+  // 깨졌고, 그 거부가 종료 흐름을 확인 전에 끝냈다 (최종 리뷰 I-2).
+  const asked = Promise.resolve().then(call).then(
     (v) => Boolean(v),
     () => false,
   );

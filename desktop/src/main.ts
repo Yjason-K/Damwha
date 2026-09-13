@@ -1202,10 +1202,13 @@ if (!app.requestSingleInstanceLock()) {
       warn: showQuitNotice,
       quit: quitNow,
     }).catch((e: unknown) => {
-      // preventDefault로 이번 종료를 막았으므로 app.quit()이 반드시 다시 불려야 한다.
-      // 확인 대화상자 자체가 거부하는 경로(창이 죽는 중, 표시 실패)가 이 catch에만 걸린다 —
+      // preventDefault로 이번 종료를 막았으므로 app.quit()이 반드시 다시 불려야 한다 —
       // 여기서 삼키면 앱이 창도 없이 남아 첫 ⌘Q 뒤로 영영 끝나지 않는다 (Phase 1이 값을
-      // 치른 자리다). 자식을 못 죽였더라도 종료는 진행한다.
+      // 치른 자리다). **확인 대화상자·inFlight·스냅샷의 거부는 더 이상 여기 오지 않는다**:
+      // 예전에는 그것들이 이 catch에 걸려 서비스를 하나도 내리지 않고 끝났고(최종 리뷰 I-2),
+      // 지금은 runQuitFlow가 그 경우에도 정상 종료 경로(서비스 정지 포함)를 탄다. 여기 오는 것은
+      // beginQuit 뒤의 잎이 던진 예외(stopServices 자체의 거부, 경고 표시 실패)뿐이고, 그때
+      // quit()은 흐름의 finally가 이미 불렀다 — 아래는 그 짝을 한 번 더 보장할 뿐이다.
       appendSupervisorLog(`종료 중 예외 — ${reasonOf(e)}`);
       quitting = true;
       quitNow();

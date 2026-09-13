@@ -189,6 +189,83 @@ describe("runQuitFlow", () => {
     expect(log).not.toContain("quit");
   });
 
+  // ── 묻지도 못했을 때 (최종 리뷰 I-2) ────────────────────────────────────────────
+  // 확인 전에 거부가 나면 흐름이 스냅샷 한 장만 찍고 거부했고, main.ts의 catch는 app.quit()만
+  // 불렀다 — worker·embed가 정지 신호 한 번 없이 남고 사람에게는 아무 말도 없었다(P2-C4).
+  // 정한 답: 실패가 종료를 막지 않고 자식도 남기지 않도록 **정상 종료 경로를 그대로 탄다.**
+  const rejectingAfterTick = (what: string, log: string[]) => async () => {
+    log.push(`${what}:start`);
+    await tick();
+    throw new Error("Object has been destroyed");
+  };
+
+  it("stops every service before quitting when the confirmation dialog itself fails", async () => {
+    const r = recorder({}, { recording: true, analysing: true });
+    r.deps.confirm = rejectingAfterTick("confirm", r.log);
+    // 흐름이 거부하지 않는다 — 거부하면 main.ts의 catch가 서비스를 내리지 않고 끝낸다.
+    await expect(runQuitFlow(r.deps)).resolves.toBeUndefined();
+    // 알던 대로 녹음 중이었으므로 핸드셰이크가 먼저, 그 뒤 화면·2차 스냅샷·서비스 정지, 마지막에 quit.
+    expect(r.log).toEqual([
+      ...seq("capture", "inFlight"),
+      "confirm:start",
+      "begin",
+      ...seq("handshake", "quitting", "capture", "stop"),
+      "quit",
+    ]);
+    // 조용히 넘기지 않는다 — Task 15의 수동 점검이 이 줄로 이 경로를 관측한다.
+    expect(r.lines.join("\n")).toContain("종료 확인을 묻지 못했어요 (Object has been destroyed)");
+  });
+
+  it("uses what it did learn: no handshake when only the dialog failed and nothing was recording", async () => {
+    // 모르는 것만 "녹음 중"으로 본다. 아는 답(녹음 아님)을 버리고 핸드셰이크를 돌리면 녹음이 없는
+    // 창에 중지를 부르고 "정상 중지하지 못했어요"라는 거짓 로그를 남긴다.
+    const r = recorder({}, { recording: false, analysing: true });
+    r.deps.confirm = rejectingAfterTick("confirm", r.log);
+    await runQuitFlow(r.deps);
+    expect(r.log).toEqual([
+      ...seq("capture", "inFlight"),
+      "confirm:start",
+      "begin",
+      ...seq("quitting", "capture", "stop"),
+      "quit",
+    ]);
+  });
+
+  it("finishes a possible recording and stops every service when it could not even learn what is in flight", async () => {
+    // 녹음 여부를 모른다. "아니오"로 닫으면 녹음 중이던 창의 tail 청크를 조용히 잃는다(P2-C13) —
+    // 핸드셰이크에는 자기 상한이 있고, 녹음이 없으면 no-bridge로 끝날 뿐이다.
+    const r = recorder();
+    r.deps.inFlight = rejectingAfterTick("inFlight", r.log) as QuitFlowDeps["inFlight"];
+    await expect(runQuitFlow(r.deps)).resolves.toBeUndefined();
+    expect(r.asked).toEqual([]);
+    expect(r.log).toEqual([
+      ...seq("capture"),
+      "inFlight:start",
+      "begin",
+      ...seq("handshake", "quitting", "capture", "stop"),
+      "quit",
+    ]);
+  });
+
+  it("neither skips the question nor the service stop when a descendant snapshot fails", async () => {
+    // 두 스냅샷 모두 거부한다. 첫째가 새면 확인 없이 끝나고, 둘째가 새면 stopServices를 건너뛴 채
+    // finally의 quit()으로 떨어진다 — 둘 다 자식을 남긴다.
+    const r = recorder({}, { recording: false, analysing: true });
+    r.deps.captureDescendants = rejectingAfterTick("capture", r.log) as QuitFlowDeps["captureDescendants"];
+    await expect(runQuitFlow(r.deps)).resolves.toBeUndefined();
+    expect(r.log).toEqual([
+      "capture:start",
+      ...seq("inFlight", "confirm"),
+      "begin",
+      "quitting:start",
+      "quitting:end",
+      "capture:start",
+      ...seq("stop"),
+      "quit",
+    ]);
+    expect(r.lines.join("\n")).toContain("종료 전 자손 스냅샷이 실패했어요 — Object has been destroyed");
+  });
+
   it("finishes the renderer handshake BEFORE any service is stopped", async () => {
     // 창이 먼저 죽으면 마지막 청크를 잃고, 그것을 봉인하는 sweeper는 API의 @Cron이라
     // 우리가 API도 내리는 이 경로에서는 아무도 봉인하지 않는다 → producer_abandoned.

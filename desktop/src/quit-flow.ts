@@ -1,4 +1,11 @@
-import { decideQuit, runHandshake, runWithin, STOP_DETAIL, type InFlight } from "./shutdown";
+import {
+  decideQuit,
+  runHandshake,
+  runWithin,
+  STOP_DETAIL,
+  type InFlight,
+  type QuitDecision,
+} from "./shutdown";
 import type { StopOutcome } from "./services/types";
 
 /**
@@ -85,10 +92,45 @@ export interface DialogCopy {
 export type QuitNotice = DialogCopy;
 
 export async function runQuitFlow(deps: QuitFlowDeps): Promise<void> {
+  /**
+   * 스냅샷 실패는 **묻지 않을 이유도, 서비스를 내리지 않을 이유도 아니다.** 구현
+   * (shutdown.ts의 captureDescendants)은 마지막 성공을 유지하므로 한 번 못 찍어도 잃는 것은
+   * 이번 한 장뿐이다. 거부를 흘려보내면 첫 번째에서는 확인 없이, 두 번째에서는 stopServices를
+   * 건너뛴 채 finally의 quit()으로 떨어져 detached 자식이 고아가 된다(P2-C4).
+   */
+  const snapshot = async () => {
+    try {
+      await deps.captureDescendants();
+    } catch (e) {
+      deps.log(`종료 전 자손 스냅샷이 실패했어요 — ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
   // 가장 이른 스냅샷. 아래 confirm은 사람이 답할 때까지 무한히 막히므로, 이 한 줄이
   // "대화상자가 떠 있는 동안 supervisor가 죽었다"를 관측할 수 있는 유일한 시점이다.
-  await deps.captureDescendants();
-  const decision = await decideQuit(await deps.inFlight(), deps.confirm);
+  await snapshot();
+
+  // **묻지도 못했을 때**(최종 리뷰 I-2). before-quit이 이미 preventDefault를 불렀으므로 여기서
+  // 거부를 밖으로 던지면 main.ts의 catch가 app.quit()만 불러, worker·embed(dev면 API·Vite까지)가
+  // 정지 신호 한 번 없이 남는다 — 알림도 없다. 반대로 "종료하지 않는다"로 닫으면 대화상자가
+  // 계속 실패하는 동안 ⌘Q가 영영 먹지 않는다. 이 앱이 이미 세운 규칙 둘 — 실패가 앱의 종료를
+  // 막지 않는다, 그리고 우리 자식을 남기지 않는다 — 을 둘 다 지키는 답은 하나다: **아래의 정상
+  // 종료 경로를 그대로 탄다.** ⌘Q를 누른 사람의 뜻은 종료이고, 확인이 지키려던 것은 그 경로
+  // 안에 이미 있다 — 분석은 정중한 정지로 다시 큐에 들어가고(P2-C5), 녹음은 핸드셰이크가
+  // 마무리한다(P2-C13). 녹음 여부를 모르면 **녹음 중으로 본다**: 핸드셰이크에는 자기 상한이
+  // 있고 녹음이 없으면 no-bridge로 끝날 뿐이지만, 반대로 틀리면 tail 청크를 조용히 잃는다
+  // (askIsRecording이 시간 초과를 "예"로 닫는 것과 같은 방향이다).
+  let state: InFlight | undefined;
+  let decision: QuitDecision;
+  try {
+    state = await deps.inFlight();
+    decision = await decideQuit(state, deps.confirm);
+  } catch (e) {
+    decision = { quit: true, stopRecording: state?.recording ?? true };
+    deps.log(
+      `종료 확인을 묻지 못했어요 (${e instanceof Error ? e.message : String(e)}) — 묻지 않은 채로 정상 종료 절차를 진행합니다.`,
+    );
+  }
   if (!decision.quit) return;
 
   deps.beginQuit();
@@ -136,7 +178,7 @@ export async function runQuitFlow(deps: QuitFlowDeps): Promise<void> {
     }
     // 두 번째 스냅샷. supervisor가 아직 살아 있는 마지막 지점이라 가장 새것이고, pid
     // 재사용 위험이 가장 작다. 여기서 실패해도 위에서 찍어 둔 것이 남는다.
-    await deps.captureDescendants();
+    await snapshot();
 
     const out = await deps.stopServices();
     if (!out.stopped) {
