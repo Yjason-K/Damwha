@@ -31,6 +31,37 @@ if (fs.existsSync(asarPath)) {
   check("app.asar has no node_modules", bundled.length === 0, `${bundled.length} entries`);
 }
 
+// 2b. 번들의 desktop 코드가 **지금 소스를 컴파일한 결과와 같다**. 이름만 보면 옛 dist가 실려도 통과한다 —
+// 2026-09-13 실제로 그랬다(상태 창 모듈이 통째로 없고 shutdown.js는 옛 신호를 보냈다). 그래서 임시
+// 디렉터리에 새로 컴파일해 .js를 바이트 단위로 대조한다. tsc 출력은 outDir과 무관하게 같다(실측).
+// .map은 outDir 기준 상대 경로를 담아 달라지므로 비교하지 않는다.
+if (fs.existsSync(asarPath)) {
+  const fresh = fs.mkdtempSync(path.join(desktop, ".fresh-dist-"));
+  try {
+    execFileSync("pnpm", ["exec", "tsc", "-p", "tsconfig.json", "--outDir", fresh], { cwd: desktop, stdio: "pipe" });
+    const walk = (dir, base = "") =>
+      fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) =>
+        d.isDirectory() ? walk(path.join(dir, d.name), path.join(base, d.name)) : [path.join(base, d.name)],
+      );
+    const want = walk(fresh).filter((f) => f.endsWith(".js")).sort();
+    const bundledJs = asar
+      .listPackage(asarPath, { isPack: false })
+      .filter((e) => e.startsWith("/dist/") && e.endsWith(".js"))
+      .map((e) => e.slice("/dist/".length))
+      .sort();
+    const missing = want.filter((f) => !bundledJs.includes(f));
+    const extra = bundledJs.filter((f) => !want.includes(f));
+    check("app.asar has every compiled desktop module and no stale extra", missing.length === 0 && extra.length === 0,
+      [missing.length ? `missing: ${missing.join(", ")}` : "", extra.length ? `extra: ${extra.join(", ")}` : ""].filter(Boolean).join("; "));
+    const differ = want.filter(
+      (f) => bundledJs.includes(f) && !asar.extractFile(asarPath, path.join("dist", f)).equals(fs.readFileSync(path.join(fresh, f))),
+    );
+    check("app.asar desktop code equals a fresh compile of the current source", differ.length === 0, differ.join(", "));
+  } finally {
+    fs.rmSync(fresh, { recursive: true, force: true });
+  }
+}
+
 // 3. API 트리 밖을 가리키는 심볼릭 링크가 없다
 const realApi = fs.realpathSync(apiDir);
 const links = execFileSync("find", [apiDir, "-type", "l"], { encoding: "utf8" })

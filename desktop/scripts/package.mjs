@@ -14,6 +14,14 @@ function run(cmd, args, cwd = repo, extraEnv = {}) {
   execFileSync(cmd, args, { cwd, stdio: "inherit", env: { ...process.env, ...extraEnv } });
 }
 
+// desktop 자신을 **먼저, 깨끗하게** 컴파일한다. electron-builder는 package.json의 main(dist/main.js)과
+// dist/ 전체를 그대로 싣는데, 루트 `pnpm build`에는 desktop의 컴파일이 없다(desktop에는 build 스크립트가
+// 없고 compile만 있다). 이 줄이 없던 2026-09-13, 그날 새벽의 dist가 그대로 실려 그 뒤 소스 커밋
+// 15개(Task 14 상태 창 전체, 최종 리뷰의 SIGTERM 수정)가 빠진 앱으로 packaged 검증을 시작했다.
+// dist를 지우는 이유: 소스에서 지운 모듈의 .js가 남아 번들에 실리지 않게 한다.
+fs.rmSync(path.join(desktop, "dist"), { recursive: true, force: true });
+run("pnpm", ["--filter", "damwha-desktop", "run", "compile"]);
+
 run("pnpm", ["--filter", "damwha-be", "run", "build"]);
 // fe/.env 의 VITE_API_BASE_URL 은 절대 URL이다. 셸 환경변수가 .env 파일을 이기므로
 // 여기서 덮어 단일 origin 빌드를 만든다 (스펙 §11).
