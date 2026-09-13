@@ -84,7 +84,7 @@ describe("workerSpec", () => {
     expect((await workerSpec(deps() as never).detectExternal(ctx())).kind).toBe("absent");
   });
 
-  it("refuses to launch without uv and names the fix", async () => {
+  it("refuses to launch without uv and names what is missing (the fix is recoveryHint's)", async () => {
     const spec = workerSpec(deps() as never);
     await expect(spec.launch(ctx({ bins: { uv: null, docker: null } }))).rejects.toThrow(/uv/);
   });

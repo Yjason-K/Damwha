@@ -1,3 +1,5 @@
+import { CAUSES } from "../causes";
+
 /**
  * worker는 포트가 없어 Phase 1의 소유 판정 기구(isPortOccupied / verifyOwnListener)를 쓸 수
  * 없다. 대신 ps의 커맨드라인을 본다 (스펙 §6.5).
@@ -154,10 +156,7 @@ async function readContract(
   const dimension = typeof body.dimension === "number" ? body.dimension : null;
   if (model === null || dimension === null) return { kind: "absent" };
   if (model !== want.model || dimension !== want.dimension) {
-    return {
-      kind: "mismatch",
-      detail: `모델 ${model}·차원 ${dimension}을 서빙하고 있어요 (앱은 ${want.model}·${want.dimension}이 필요해요)`,
-    };
+    return { kind: "mismatch", detail: CAUSES.embedMismatch.text(model, dimension, want.model, want.dimension) };
   }
   return { kind: "match" };
 }

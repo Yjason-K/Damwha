@@ -2,6 +2,7 @@ import { spawn, type ChildProcess, type SpawnOptions } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import { makeSink, sinkTails } from "../api-process";
+import { CAUSES } from "../causes";
 import { buildChildPath } from "./resolve";
 import type {
   LaunchContext,
@@ -62,11 +63,7 @@ export interface UvLaunchOptions {
  */
 export function launchWithUv(options: UvLaunchOptions): LaunchResult {
   const { ctx, args, logId } = options;
-  if (ctx.bins.uv === null) {
-    throw new Error(
-      "uv를 찾지 못했어요. 설치하거나 config.json의 UV_BIN에 경로를 적어 주세요.",
-    );
-  }
+  if (ctx.bins.uv === null) throw new Error(CAUSES.uvMissing.text);
   const workerDir = path.join(ctx.repoRoot, "be", "worker");
   // stdout과 stderr를 하나로 합치지 않는다. worker의 ready 줄은 stderr에 나오고
   // (console.py:110, BarAwareStreamHandler(sys.stderr)), embed(uvicorn)의 접근 로그는
@@ -188,43 +185,28 @@ export function workerSpec(deps: WorkerDeps): ServiceSpec {
       if (pids.length === 0) return { kind: "absent" };
       // ps eww는 SIP 때문에 다른 프로세스의 env를 내주지 않는다(2026-09-12 실측).
       // 그 worker가 앱과 같은 STORAGE_ROOT를 보는지 증명할 수 없으므로 채택하지 않는다.
-      return {
-        kind: "stand-down",
-        detail:
-          `외부 worker가 실행 중이에요 (pid ${pids.join(", ")}). 앱은 자기 worker를 띄우지 않습니다. ` +
-          "그 worker의 STORAGE_ROOT가 앱과 다르면 앱으로 올린 파일이 처리되지 않아요.",
-      };
+      return { kind: "stand-down", detail: CAUSES.externalWorker.text(pids) };
     },
     async launch(ctx) {
       // uv 확인이 .env 확인보다 먼저다. repoRoot는 packaged 빌드마다 다르고 실제 체크아웃이
       // 아닐 수도 있어(테스트의 "/r"처럼) .env 존재 검사가 먼저면 uv 부재와 무관하게 항상
       // ".env 없음"으로 넘어져, uv를 못 찾은 진짜 원인이 화면에 뜨지 않는다. launchWithUv도
       // 같은 검사를 하지만 그건 .env를 통과한 뒤라 이미 늦다.
-      if (ctx.bins.uv === null) {
-        throw new Error(
-          "uv를 찾지 못했어요. 설치하거나 config.json의 UV_BIN에 경로를 적어 주세요.",
-        );
-      }
+      if (ctx.bins.uv === null) throw new Error(CAUSES.uvMissing.text);
       const envFile = path.join(ctx.repoRoot, "be", "worker", ".env");
-      if (!exists(envFile)) {
-        throw new Error(
-          "be/worker/.env가 없어요. be/worker/.env.example을 복사해 값을 채운 뒤 다시 시도해 주세요.",
-        );
-      }
+      if (!exists(envFile)) throw new Error(CAUSES.workerEnvMissing.text);
       return launchWithUv({ ctx, args: ["python", "-m", "damwha_worker"], logId: "worker" });
     },
     async readiness(result): Promise<ReadinessResult> {
       const handle = result.handle;
-      if (handle === null) return { kind: "failed", detail: "핸들이 없어요." };
+      if (handle === null) return { kind: "failed", detail: CAUSES.noHandle.text };
       const tail = handle.stderrTail();
       if (!handle.alive()) {
         return { kind: "failed", detail: tail.split("\n").slice(-12).join("\n").trim() };
       }
       if (workerDegraded(tail)) {
-        return {
-          kind: "degraded",
-          detail: "데이터베이스에 연결할 수 없어 작업을 집지 못하고 있어요. DB가 뜨면 자동으로 복구됩니다.",
-        };
+        // "자동으로 복구됩니다"는 shell-hints.ts의 DEGRADED_HINT가 붙인다.
+        return { kind: "degraded", detail: CAUSES.workerDbUnreachable.text };
       }
       return workerReady(tail) ? { kind: "ready" } : { kind: "not-ready" };
     },

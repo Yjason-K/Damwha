@@ -1,3 +1,5 @@
+import { CAUSES } from "../causes";
+import { exitCauseBlock } from "../stderr";
 import type {
   ExternalState,
   LaunchContext,
@@ -33,6 +35,20 @@ const DEFAULT_READY_INTERVAL_MS = 400;
 const DEFAULT_STABLE_RESET_MS = 60_000;
 /** bring()이 준비 못 한 자식을 치울 때 주는 유예. */
 const CLEANUP_GRACE_MS = 5_000;
+
+/**
+ * 자식이 죽었을 때의 원인: 종료 코드와 그 자식의 stderr 블록 (스펙 §8).
+ *
+ * 코드만 적으면 사람이 볼 수 있는 것은 "프로세스가 종료됐어요 (코드 1)."뿐이고 **왜**는 로그
+ * 파일에만 있다. 어댑터의 readiness도 죽은 핸들의 꼬리를 원인으로 올리도록 짜여 있지만,
+ * awaitReady가 readiness보다 먼저 죽음을 보고 여기서 끝내므로 그 경로는 경쟁에서 이길 때만
+ * 돈다 — 원인을 붙이는 자리는 이곳이어야 한다.
+ */
+export function exitedDetail(code: number | null, stderrTail: string): string {
+  const head = CAUSES.processExited.text(code ?? "?");
+  const block = exitCauseBlock(stderrTail);
+  return block === "" ? head : `${head}\n${block}`;
+}
 
 /**
  * 의존 순서 위상 정렬. 같은 층에서는 선언 순서를 유지한다 — 순서가 바뀌면 로그와 화면의 줄
@@ -172,11 +188,10 @@ export function createSupervisor(
       // 프로세스가 있는 서비스는 죽으면 더 기다릴 이유가 없다. 핸들이 없는 서비스
       // (postgres 컨테이너, 채택한 외부 인스턴스)는 이 검사를 건너뛴다.
       if (result.handle !== null && !result.handle.alive()) {
-        const code = result.handle.exitCode();
         set(rt.spec.id, {
           process: "failed",
           health: "unknown",
-          detail: `프로세스가 종료됐어요 (코드 ${code ?? "?"}).`,
+          detail: exitedDetail(result.handle.exitCode(), result.handle.stderrTail()),
         });
         return false;
       }
@@ -188,7 +203,7 @@ export function createSupervisor(
         // 되돌리는 줄 — 이 건너뛰어지고, 남은 rt.result가 재진입 가드에 걸려 그 서비스의 재시도를
         // 앱이 사는 내내 막는다. 게이트면 그 거부가 runFrom을 타고 start()까지 올라간다.
         // detectExternal과 probeHealth가 이미 그렇게 하듯, 예외도 실패 판정으로 받는다.
-        last = { kind: "failed", detail: `준비 확인이 실패했어요 — ${reason(e)}` };
+        last = { kind: "failed", detail: CAUSES.readinessThrew.text(reason(e)) };
         log(`${rt.spec.id}: 준비 확인에서 예외 — ${reason(e)}`);
       }
       if (applyReadiness(rt.spec.id, last)) return true;
@@ -197,7 +212,7 @@ export function createSupervisor(
       await new Promise((r) => setTimeout(r, intervalMs));
     }
 
-    const detail = last.kind === "failed" ? last.detail : "준비 시간을 넘겼어요.";
+    const detail = last.kind === "failed" ? last.detail : CAUSES.readyTimeout.text;
     set(rt.spec.id, { process: "failed", health: "unknown", detail });
     return false;
   }
@@ -223,12 +238,12 @@ export function createSupervisor(
       r = await rt.spec.readiness(result, ctx);
     } catch (e) {
       // 프로브가 던지는 것도 판정이다. 여기서 새어 나가면 처리되지 않은 rejection이 된다.
-      r = { kind: "failed", detail: `상태 확인이 실패했어요 — ${reason(e)}` };
+      r = { kind: "failed", detail: CAUSES.healthProbeThrew.text(reason(e)) };
     }
     // await 사이에 종료가 지나갔을 수 있다. 그 뒤의 set은 이미 내려간 서비스를 되살려 적는다.
     if (stopping || rt.result === null) return;
     if (!applyReadiness(rt.spec.id, r)) {
-      const detail = r.kind === "failed" ? r.detail : "준비 상태로 답하지 않아요.";
+      const detail = r.kind === "failed" ? r.detail : CAUSES.notAnswering.text;
       set(rt.spec.id, { health: "degraded", detail });
     }
     scheduleHealthProbe(rt, intervalMs);
@@ -323,7 +338,7 @@ export function createSupervisor(
     } catch (e) {
       // 외부 탐지도 바깥 명령을 돌린다 (worker는 ps). 여기서 던지면 서비스가 화면 문구도
       // 재시작도 없이 영영 기동 전 상태에 고정된다 — launch와 같게 실패로 적는다.
-      const detail = `외부 인스턴스 확인이 실패했어요 — ${reason(e)}`;
+      const detail = CAUSES.externalCheckFailed.text(reason(e));
       set(spec.id, { process: "failed", health: "unknown", detail });
       log(`${spec.id}: detectExternal 실패 — ${reason(e)}`);
       return false;
@@ -421,7 +436,7 @@ export function createSupervisor(
       set(rt.spec.id, {
         process: "failed",
         health: "unknown",
-        detail: `프로세스가 종료됐어요 (코드 ${code}).`,
+        detail: exitedDetail(code, handle.stderrTail()),
       });
       rt.result = null;
       scheduleRestart(rt.spec, `종료 (코드 ${code})`);

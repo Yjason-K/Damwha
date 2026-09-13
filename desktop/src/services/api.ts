@@ -3,6 +3,7 @@ import { launchDev, launchPackaged } from "../api-process";
 import { MAX_PORT_ATTEMPTS, choosePort, isAddrInUse } from "../port";
 import { probeHealth } from "../readiness";
 import type { ProbeResult } from "../readiness";
+import { CAUSES } from "../causes";
 import { ANSI_SGR, failureBlock } from "../stderr";
 import type { LaunchContext, LaunchResult, ReadinessResult, ServiceHandle, ServiceSpec } from "./types";
 
@@ -68,12 +69,8 @@ export async function judgeAfterProbe(
     const pending = pendingMigrations(stdoutTail);
     if (pending !== null) {
       deps.onPendingMigrations(pending);
-      return {
-        kind: "failed",
-        detail:
-          `적용되지 않은 마이그레이션이 ${pending.count}개 있어요 (${pending.names}).\n` +
-          "터미널에서 `pnpm be:migrate`를 실행한 뒤 다시 시도해 주세요.",
-      };
+      // "`pnpm be:migrate`를 실행하세요"는 shell-hints.ts의 안내가 붙인다.
+      return { kind: "failed", detail: CAUSES.pendingMigrations.text(pending.count, pending.names) };
     }
     if (migrationCheckSkipped(stdoutTail)) deps.onMigrationCheckSkipped();
     return { kind: "ready" };
@@ -81,12 +78,14 @@ export async function judgeAfterProbe(
   if (probe === "db-unreachable") {
     // 부팅 뒤 DB가 끊긴 경우다. 프로세스는 살아 있으므로 degraded이지 failed가 아니다 —
     // failed면 재시작 정책이 발화해 백오프만 태운다 (스펙 §6.6).
-    return {
-      kind: "degraded",
-      detail: "데이터베이스에 연결할 수 없어요. DB가 뜨면 자동으로 복구됩니다.",
-    };
+    return { kind: "degraded", detail: CAUSES.apiDbUnreachable.text };
   }
-  if (!handle.alive() || /database unreachable/.test(stderrTail)) {
+  // 살아 있어도 `startup failed:`면 부팅은 끝났다. dev의 자식은 `nest start --watch`라, 안의
+  // node가 be/src/main.ts의 fail-fast로 exit(1)해도 nest CLI는 파일 변경을 기다리며 **살아
+  // 남는다.** 이 줄이 없으면 dev에서 zod 검증 실패는 준비 유예(60초)를 다 채운 뒤 "준비 시간을
+  // 넘겼어요."로만 보이고, 원인 블록은 한 줄도 화면에 오르지 않는다. packaged는 프로세스가
+  // 죽으므로 감독자의 exitedDetail이 같은 블록을 올린다.
+  if (!handle.alive() || /database unreachable|startup failed:/.test(stderrTail)) {
     return { kind: "failed", detail: failureBlock(stderrTail) };
   }
   return { kind: "not-ready" };
@@ -129,14 +128,14 @@ export function apiSpec(deps: ApiDeps): ServiceSpec {
         origin = `http://127.0.0.1:${candidate}`;
         return { handle, owned: true, origin };
       }
-      throw new Error(`${MAX_PORT_ATTEMPTS}번 시도했지만 쓸 수 있는 포트를 찾지 못했어요.`);
+      throw new Error(CAUSES.noFreePort.text(MAX_PORT_ATTEMPTS));
     },
     async readiness(result): Promise<ReadinessResult> {
       const handle = result.handle;
-      if (handle === null || origin === null) return { kind: "failed", detail: "핸들이 없어요." };
+      if (handle === null || origin === null) return { kind: "failed", detail: CAUSES.noHandle.text };
 
       const tail = handle.stderrTail();
-      if (isAddrInUse(tail)) return { kind: "failed", detail: "포트가 이미 쓰이고 있어요." };
+      if (isAddrInUse(tail)) return { kind: "failed", detail: CAUSES.portInUse.text };
 
       const probe = await probeHealth(origin);
       return judgeAfterProbe(handle, probe, port, deps);

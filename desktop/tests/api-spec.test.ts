@@ -164,3 +164,24 @@ describe("judgeAfterProbe — db-unreachable은 degraded다", () => {
     expect(result.kind).toBe("degraded");
   });
 });
+
+describe("judgeAfterProbe — 살아 있어도 startup failed면 실패다 (Task 14)", () => {
+  // dev의 자식은 `nest start --watch`다. 안의 node가 fail-fast로 exit(1)해도 nest CLI는 파일 변경을
+  // 기다리며 살아 있어서, alive()만 보면 준비 유예 60초를 다 채운 뒤 "준비 시간을 넘겼어요."로만
+  // 끝났다 — zod 원인 블록은 한 줄도 화면에 오르지 않았다.
+  it("fails with the whole block while the watcher is still alive", async () => {
+    const handle = fakeHandle({
+      stderr: 'ERROR [Bootstrap] startup failed: [\n  { "path": ["SUMMARY_LLM_MODEL"] }\n]\n',
+    });
+    const result = await judgeAfterProbe(handle, "no-response", 3000, fakeDeps());
+    expect(result).toEqual({
+      kind: "failed",
+      detail: 'ERROR [Bootstrap] startup failed: [\n  { "path": ["SUMMARY_LLM_MODEL"] }\n]',
+    });
+  });
+
+  it("still waits while a live process has not answered and has not failed", async () => {
+    const handle = fakeHandle({ stderr: "[Nest] LOG compiling…\n" });
+    expect(await judgeAfterProbe(handle, "no-response", 3000, fakeDeps())).toEqual({ kind: "not-ready" });
+  });
+});

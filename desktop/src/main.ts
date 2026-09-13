@@ -15,11 +15,14 @@ import {
 import type { ApiHandle } from "./api-process";
 import { launchVite } from "./vite-process";
 import { lastMeaningfulLine } from "./stderr";
-import { showStatus, type ShellStatus } from "./shell-window";
+import { createServicesWindow, showStatus, type ShellStatus } from "./shell-window";
+import { CAUSES } from "./causes";
+import { failureDetail, servicesView, shellStatusFrom } from "./status-view";
+import { createStatusWindow, mayAutoOpen } from "./status-window";
 import { applyNavigationBoundary, applyPermissionBoundary } from "./permissions";
 import { mayRenderShell } from "./shell-latch";
 import { maySpawnServices } from "./spawn-guard";
-import { openWindowFlow } from "./window-flow";
+import { decideMenuRetry, openWindowFlow } from "./window-flow";
 import {
   createFlowLatch,
   graceExpiryPrompt,
@@ -48,7 +51,6 @@ import { freePort } from "./port";
 import type {
   LaunchContext,
   LaunchResult,
-  ProcessState,
   ServiceId,
   ServiceStatus,
   StopOutcome,
@@ -91,19 +93,6 @@ const RENDERER_ASK_TIMEOUT_MS = 3_000;
 const QUIT_SCREEN_TIMEOUT_MS = 5_000;
 /** 개발에서 렌더러는 Vite가 서빙한다. 그 포트는 Vite 기본값이다. */
 const VITE_ORIGIN = "http://localhost:5173";
-
-const SERVICE_LABELS: Record<ServiceId, string> = {
-  postgres: "데이터베이스",
-  api: "API",
-  embed: "검색 임베딩",
-  worker: "작업 처리기",
-};
-const PROCESS_LABELS: Record<ProcessState, string> = {
-  stopped: "대기 중",
-  starting: "준비 중",
-  running: "실행 중",
-  failed: "실패",
-};
 
 let win: BrowserWindow | null = null;
 /** dev에서만 쓰인다. packaged는 API 자신의 origin을 로드하므로 Vite가 없다. */
@@ -538,20 +527,34 @@ async function stopServices(): Promise<StopOutcome> {
 }
 
 /**
- * 담화 화면이 붙은 뒤에는 준비 화면이 더 이상 그려지지 않으므로(shell-latch.ts) 서비스
- * 상태를 볼 채널이 없다. Task 14가 상태 창을 만들 때까지 이 대화상자가 그 자리다 —
- * 셸 화면과 **같은** statusLine을 쓰므로 두 곳의 문구가 갈리지 않는다.
+ * 서비스 상태 창 (메뉴 → 서비스 → 서비스 상태). 담화 화면이 붙은 뒤에는 준비 화면이 더 이상
+ * 그려지지 않으므로(shell-latch.ts) 앱을 쓰는 동안 상태를 볼 곳이 이것뿐이다.
+ *
+ * 수명·갱신·자동으로 띄우는 규칙은 status-window.ts에, 그리는 재료는 status-view.ts에 있다.
+ * 여기 남는 것은 electron 잎과 전역을 읽는 일이다.
  */
-function showServiceStatus(): void {
-  const all = supervisor?.statuses() ?? [];
-  const detail =
-    all.length === 0
-      ? "아직 서비스를 띄우지 않았어요. 메뉴의 “다시 시도”를 눌러 주세요."
-      : [...all.map(statusLine), ...(restartNotice === null ? [] : ["", restartNotice])].join("\n");
-  void ask({ type: "info", buttons: ["확인"], message: "서비스 상태", detail }).catch(
-    (e: unknown) => appendSupervisorLog(`상태를 띄우지 못했어요 — ${reasonOf(e)}`),
-  );
-}
+const statusWindow = createStatusWindow<BrowserWindow>({
+  create: (focus) =>
+    createServicesWindow(focus, (e) => appendSupervisorLog(`상태 창을 열지 못했어요 — ${reasonOf(e)}`)),
+  alive: (w) => !w.isDestroyed(),
+  focus: (w) => {
+    if (w.isMinimized()) w.restore();
+    w.show();
+    w.focus();
+  },
+  onLoad: (w, listener) => w.webContents.on("did-finish-load", listener),
+  onClosed: (w, listener) => w.on("closed", listener),
+  run: (w, script) => w.webContents.executeJavaScript(script),
+  view: () => servicesViewNow(),
+  statuses: () => supervisor?.statuses() ?? [],
+  mayAutoOpen: () =>
+    mayAutoOpen({
+      quitting,
+      hasWindow: win !== null && !win.isDestroyed(),
+      rendererAttached: win !== null && !win.isDestroyed() && !mayRenderShell(attachedWindow, win),
+    }),
+  log: appendSupervisorLog,
+});
 
 /**
  * dev에서 렌더러가 볼 주소. Vite를 이 시점에 띄우고 첫 서빙까지 기다린다.
@@ -731,35 +734,19 @@ async function resolveRepoRoot(configured: string | undefined): Promise<string |
   return dir;
 }
 
-function statusLine(s: ServiceStatus): string {
-  const adopted = s.process === "running" && !s.owned ? " (앱이 띄우지 않음)" : "";
-  const degraded = s.health === "degraded" ? " — 동작이 제한돼요" : "";
-  const why = s.detail !== undefined && (s.process === "failed" || s.health === "degraded")
-    ? `\n    ${s.detail.split("\n").join("\n    ")}`
-    : "";
-  return `${SERVICE_LABELS[s.id]}: ${PROCESS_LABELS[s.process]}${adopted}${degraded}${why}`;
+/** 감독자의 지금 상태를 셸 화면 한 장으로 접는다. 판정은 status-view.ts의 shellStatusFrom에 있다. */
+function shellStatusOf(): ShellStatus {
+  return shellStatusFrom({ statuses: supervisor?.statuses() ?? [], restartNotice, logPathOf });
 }
 
-/** 감독자의 지금 상태를 셸 화면 한 장으로 접는다. 실패가 있으면 그 원인을 머리에 세운다. */
-function shellStatusOf(): ShellStatus {
-  const all = supervisor?.statuses() ?? [];
-  // 화면이 "값을 고치면 다시 시도합니다"라고 적는 이상, 고쳐도 반영되지 않는 값은 화면이
-  // 말해야 한다. 조용히 어긋난 채로 두는 것이 재리뷰 §4-1이 지적한 결함의 절반이다.
-  const lines = [...all.map(statusLine), ...(restartNotice === null ? [] : [restartNotice])];
-  const failed = all.find((s) => s.process === "failed");
-  if (failed === undefined) return { state: "starting", detail: lines.join("\n") };
-  return {
-    // postgres가 넘어졌으면 그 화면의 문구("데이터베이스에 연결할 수 없어요")가 맞다.
-    state: failed.id === "postgres" ? "db-unreachable" : "failed",
-    detail: lines.join("\n"),
-    // postgres는 컨테이너라 자기 로그 파일이 없다 — 앱의 판단 기록으로 보낸다.
-    logPath: logPathOf(failed.id === "postgres" ? "supervisor" : failed.id),
-  };
+/** 상태 창이 그릴 재료. 판정은 status-view.ts의 servicesView에 있다. */
+function servicesViewNow() {
+  return servicesView({ statuses: supervisor?.statuses() ?? null, restartNotice, logPathOf });
 }
 
 /**
- * 감독자의 상태 변화를 두 곳으로 보낸다 — supervisor.log와, 아직 준비 화면이 떠 있는
- * 동안의 창.
+ * 감독자의 상태 변화를 세 곳으로 보낸다 — supervisor.log, 상태 창, 아직 준비 화면이 떠 있는
+ * 동안의 메인 창.
  *
  * 렌더러가 이미 붙은 뒤에는 창을 건드리지 않는다. showStatus는 loadFile이라 앱을 쓰는
  * 중에 부르면 사용자가 보던 것을 준비 화면으로 갈아 끼운다. ready 이후의 사망은 감독자가
@@ -773,6 +760,9 @@ function renderStatus(statuses: ServiceStatus[]): void {
     lastStatusLine = line;
     appendSupervisorLog(`상태 ${line}`);
   }
+  // 메인 창 검사보다 **먼저** 보낸다. 상태 창은 메인 창을 닫은 뒤에도 떠 있을 수 있고, 그때
+  // 아래 activeWindow는 null이다 — 뒤에 두면 창을 닫는 순간 상태 창이 얼어붙는다.
+  statusWindow.onStatus(statuses);
   const target = activeWindow(generation);
   if (target === null) return;
   if (!mayRenderShell(attachedWindow, target)) return;
@@ -806,6 +796,10 @@ async function reattachWindow(mine: number): Promise<void> {
   // 화면으로 되돌린다. 붙이기 **전에** 올린다.
   attachedWindow = target;
   await target.loadURL(renderer.url);
+  // 붙기 전에 넘어진 서비스(uv가 없으면 worker는 몇 밀리초 만에 넘어진다)는 그때 실패 화면에
+  // 잠깐 보였을 뿐, 이제 어떤 화면에도 없다. 감독자는 더 낼 상태가 없어 onStatus도 다시 돌지
+  // 않으므로, 붙인 직후 여기서 한 번 더 묻는다.
+  statusWindow.reconsider();
 }
 
 /** 동시 호출을 직렬화한다. 메뉴 재시도와 자동 재시도가 겹칠 수 있다. */
@@ -831,7 +825,7 @@ async function reportFailure(mine: number, what: string, e: unknown): Promise<vo
   const seconds = scheduleRetry();
   await showShell(target, {
     state: "failed",
-    detail: `${what}: ${reasonOf(e)}`,
+    detail: failureDetail(what, reasonOf(e)),
     retryInSeconds: seconds,
     logPath: logPathOf("supervisor"),
   }).catch(() => undefined);
@@ -872,6 +866,9 @@ async function startServices(mine: number): Promise<void> {
     // 얹는다.
     const reloaded = reloadConfig();
     restartNotice = reloaded.notice;
+    // 상태 창이 떠 있으면 거기에도 싣는다. 대화상자(아래 announce)는 그대로 둔다 — 상태 창은 열려
+    // 있지 않을 수 있다.
+    statusWindow.refresh();
     if (reloaded.isNew && reloaded.notice !== null) announce = reloaded.notice;
     // 이미 감독자가 있으면 **다시 만들지 않는다.** 두 번째 감독자를 세우면 첫 감독자가 쥔
     // 자식들의 유일한 참조가 사라져 아무도 그들을 내리지 못하고, 넷이 두 벌 뜬다 (P2-C4).
@@ -986,17 +983,14 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
   }
 
   const resolved = await resolveRepoRoot(cfg.repoRoot);
-  if (resolved === null) throw new Error("저장소 폴더를 확인하지 못했어요.");
+  if (resolved === null) throw new Error(CAUSES.repoRootMissing.text);
   repoRoot = resolved;
 
   const dirs = searchDirs(app.getPath("home"), cfg.extraPath);
   const uv = cfg.uvBin ?? findExecutable("uv", dirs);
   const docker = cfg.dockerBin ?? findExecutable("docker", dirs);
-  if (docker === null) {
-    throw new Error(
-      "docker를 찾지 못했어요. Docker Desktop을 설치했는지, config.json의 DOCKER_BIN 경로가 맞는지 확인해 주세요.",
-    );
-  }
+  // 고치는 방법(설치 · DOCKER_BIN)은 reportFailure가 failureDetail로 붙인다.
+  if (docker === null) throw new Error(CAUSES.dockerMissing.text);
 
   const ctx: LaunchContext = {
     repoRoot: resolved,
@@ -1081,11 +1075,15 @@ if (!app.requestSingleInstanceLock()) {
     applyPermissionBoundary(allowedOrigins);
     installMenu({
       onRetry: () => {
+        // 판정(종료 중이면 무시, 창이 없으면 창부터)은 window-flow.ts의 decideMenuRetry에 있다.
+        const plan = decideMenuRetry({ quitting, hasWindow: win !== null && !win.isDestroyed() });
+        if (plan === "ignore") return;
         retryCount = 0;
         cancelRetry();
+        if (plan === "open-window") openWindow();
         void start();
       },
-      onShowStatus: showServiceStatus,
+      onShowStatus: () => statusWindow.open(),
     });
     openWindow();
     await start();

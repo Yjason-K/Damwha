@@ -71,3 +71,28 @@ export function failureBlock(stderr: string, maxLines: number = BLOCK_LIMIT): st
   if (start < 0) return lastMeaningfulLine(stderr);
   return lines.slice(start, start + maxLines).join("\n");
 }
+
+/** 죽은 자식의 원인 블록에서 `startup failed:`가 없을 때 올리는 꼬리 줄 수. */
+const EXIT_TAIL_LINES = 12;
+
+/**
+ * 죽은 자식이 남긴 원인 블록 (스펙 §8 "ready 신호 전에 죽음 → stderr 블록과 종료 코드").
+ *
+ * `startup failed:`가 있으면 failureBlock — API의 fail-fast 계약이 원인을 그 줄부터 적는다.
+ * 없으면 마지막 몇 줄이다. failureBlock의 대체 경로(마지막 의미 있는 줄 **하나**)를 쓰지 않는
+ * 이유는 worker·embed가 파이썬이라서다: 트레이스백의 마지막 줄은 예외 이름뿐이고, 어느 모듈의
+ * 어느 호출에서 났는지는 그 위 줄들에 있다. worker/embed 어댑터의 readiness가 이미 12줄을 쓴다.
+ *
+ * 감독자가 이것을 부른다 — 그래야 failureBlock이 사용자가 보는 화면에 닿는다. 전에는 api
+ * 어댑터의 readiness만 불렀는데, 감독자의 "핸들이 죽었나" 검사가 readiness보다 먼저 돌아
+ * packaged에서 죽은 API의 zod 원인은 한 번도 화면에 오르지 못했다.
+ */
+export function exitCauseBlock(stderr: string, maxLines: number = EXIT_TAIL_LINES): string {
+  const lines = stderr
+    .replace(ANSI_SGR, "")
+    .split("\n")
+    .map((l) => l.trimEnd())
+    .filter((l) => l.trim().length > 0);
+  if (lines.some((l) => l.includes(STARTUP_FAILED))) return failureBlock(stderr);
+  return lines.slice(-maxLines).join("\n");
+}

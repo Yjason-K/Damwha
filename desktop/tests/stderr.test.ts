@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ANSI_SGR, failureBlock, lastMeaningfulLine } from "../src/stderr";
+import { ANSI_SGR, exitCauseBlock, failureBlock, lastMeaningfulLine } from "../src/stderr";
 
 const RED = "\x1b[31m";
 const RESET = "\x1b[39m";
@@ -97,5 +97,24 @@ describe("failureBlock", () => {
   it("returns an empty string for empty input", () => {
     expect(failureBlock("")).toBe("");
     expect(failureBlock("   \n  ")).toBe("");
+  });
+});
+
+describe("exitCauseBlock", () => {
+  it("uses failureBlock when there is a startup failure", () => {
+    const stderr = "[Nest] LOG a\nstartup failed: [\n  {}\n]\nnoise after";
+    expect(exitCauseBlock(stderr)).toBe(failureBlock(stderr));
+    expect(exitCauseBlock(stderr).startsWith("startup failed: [")).toBe(true);
+  });
+
+  it("keeps the last lines of a traceback instead of only the exception line", () => {
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i}`);
+    expect(exitCauseBlock(lines.join("\n"))).toBe(lines.slice(-12).join("\n"));
+    expect(exitCauseBlock(lines.join("\n"), 3)).toBe("line 17\nline 18\nline 19");
+  });
+
+  it("strips ANSI and blank lines, and is empty for empty input", () => {
+    expect(exitCauseBlock("\x1b[31mboom\x1b[39m\n\n  \n")).toBe("boom");
+    expect(exitCauseBlock("")).toBe("");
   });
 });

@@ -15,10 +15,15 @@
       @media (prefers-color-scheme: dark) { body { background: #191817; color: #e8e6e3; } }
       h1 { font-size: 15px; font-weight: 600; margin: 0; }
       p { margin: 0; opacity: 0.72; max-width: 46ch; text-align: center; }
+      /* 원인은 여러 줄이다 — zod 검증 실패는 `startup failed: [`부터 JSON 블록이 이어지고, 해결
+         안내가 그 아래 붙는다. Phase 1은 한 줄을 가정해 가로 스크롤 한 줄로 보였다. 줄바꿈을 살리고
+         긴 줄은 접되, 창을 다 먹지 않게 높이를 묶는다 — 전문은 로그 파일에 있다. */
       pre {
-        margin: 0; padding: 10px 12px; max-width: 70ch; overflow-x: auto;
+        margin: 0; padding: 10px 12px; width: min(70ch, calc(100vw - 48px));
         font-size: 12px; border-radius: 6px;
         background: rgba(127, 127, 127, 0.12);
+        white-space: pre-wrap; overflow-wrap: anywhere;
+        max-height: calc(24lh + 20px); overflow-y: auto;
       }
       .hint { font-size: 12px; opacity: 0.56; }
     </style>
@@ -37,9 +42,11 @@
           "담화를 종료하고 있어요",
           "진행 중인 작업을 안전한 지점까지 마무리하는 중이에요. 몇 분이 걸릴 수 있어요 — 그동안 강제 종료하지 말아 주세요.",
         ],
+        // 앱이 `docker compose up -d`로 Postgres를 직접 띄운다 (Phase 2). 터미널 명령을 안내하면
+        // 거짓이다 — 여기까지 오는 현실적인 원인은 Docker Desktop이 꺼져 있는 것이다 (P2-C7).
         "db-unreachable": [
           "데이터베이스에 연결할 수 없어요",
-          "Postgres가 떠 있는지 확인해 주세요. 터미널에서 `pnpm db:up`으로 띄울 수 있어요.",
+          "앱이 Docker로 데이터베이스를 직접 띄워요. Docker Desktop이 실행 중인지 확인해 주세요.",
         ],
         failed: ["담화를 시작하지 못했어요", "아래 내용이 원인이에요."],
       };

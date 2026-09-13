@@ -7,7 +7,7 @@ import { Menu, type MenuItemConstructorOptions } from "electron";
  */
 export interface MenuHandlers {
   onRetry(): void;
-  /** 서비스 상태를 사람에게 보인다. 창 자체는 Task 14가 만든다. */
+  /** 서비스 상태 창을 연다 (status-window.ts). 이미 열려 있으면 앞으로 가져온다. */
   onShowStatus(): void;
 }
 

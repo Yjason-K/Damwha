@@ -1,4 +1,5 @@
 import * as path from "path";
+import { CAUSES } from "../causes";
 import type { LaunchContext, LaunchResult, ReadinessResult, ServiceSpec } from "./types";
 
 export type DockerRunner = (
@@ -19,7 +20,8 @@ export type ComposeState =
  */
 const DAEMON_DOWN =
   /cannot connect to the docker daemon|failed to connect to the docker api|daemon is running/i;
-const DAEMON_FIX = "Docker Desktop이 실행 중이 아니에요. 실행한 뒤 다시 시도해 주세요.";
+/** 원인만 적는다. "Docker Desktop을 실행하세요"는 shell-hints.ts의 안내가 붙인다. */
+const DAEMON_DOWN_CAUSE = CAUSES.dockerDaemonDown.text;
 
 function composeFile(ctx: LaunchContext): string {
   return path.join(ctx.repoRoot, "be", "docker-compose.yml");
@@ -80,7 +82,7 @@ export function postgresSpec(run: DockerRunner): ServiceSpec {
   const status = async (ctx: LaunchContext): Promise<ComposeState> => {
     const r = await run(["compose", "-f", composeFile(ctx), "ps", "-a", "--format", "json"]);
     if (r.code !== 0) {
-      const detail = DAEMON_DOWN.test(r.stderr) ? DAEMON_FIX : r.stderr.trim().slice(0, 400);
+      const detail = DAEMON_DOWN.test(r.stderr) ? DAEMON_DOWN_CAUSE : r.stderr.trim().slice(0, 400);
       return { kind: "unreadable", detail };
     }
     return parseComposeStatus(r.stdout);
@@ -103,7 +105,7 @@ export function postgresSpec(run: DockerRunner): ServiceSpec {
       // up -d만 부른다. down·stop·rm은 이 파일 어디에도 없다 — 앱은 컨테이너를 내리지 않는다.
       const r = await run(["compose", "-f", composeFile(ctx), "up", "-d"]);
       if (r.code !== 0) {
-        throw new Error(DAEMON_DOWN.test(r.stderr) ? DAEMON_FIX : r.stderr.trim().slice(0, 400));
+        throw new Error(DAEMON_DOWN.test(r.stderr) ? DAEMON_DOWN_CAUSE : r.stderr.trim().slice(0, 400));
       }
       // 컨테이너는 Docker 데몬 소유다. 앱이 쥔 프로세스 핸들이 없으므로 null이고,
       // owned가 true여도 stop()이 아무것도 하지 않는다.

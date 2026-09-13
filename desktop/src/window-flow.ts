@@ -57,3 +57,30 @@ export async function openWindowFlow(deps: WindowFlowDeps): Promise<void> {
     await deps.onFailure(e);
   }
 }
+
+export interface MenuRetryGate {
+  /** before-quit이 이미 지나갔다. */
+  quitting: boolean;
+  /** 메인 창이 살아 있다 (`win !== null && !win.isDestroyed()`). */
+  hasWindow: boolean;
+}
+
+/**
+ * 메뉴의 "다시 시도"가 할 일.
+ *
+ * - `"ignore"` — 종료 중이다. 재시도가 세대 번호를 올리고 화면을 건드리는 것은 종료가 방금
+ *   치운 것을 되살리는 길이다.
+ * - `"start"` — 창이 있다. 기동 경로가 준비 화면부터 스스로 건다.
+ * - `"open-window"` — 창이 **없다.** 창부터 열고 기동한다.
+ *
+ * 세 번째 갈래가 이 함수가 생긴 이유다. 창이 없을 때 앱은 자동 재시도를 하지 않는다 — 기동
+ * 경로는 창에 준비·실패 화면을 거는 일과 한 몸이고, 스폰 가드(spawn-guard.ts)가 창 없는 기동을
+ * 일부러 막는다(창을 닫은 사람 몰래 docker compose와 자식 둘을 띄우지 않는다). 그래서 걸려 있던
+ * 재시도 타이머도 창이 닫히면 헛돈다. 그렇다면 **메뉴의 재시도가 유일한 복구**여야 하는데,
+ * 예전에는 start() → startOnce()가 `win === null`에서 곧장 물러나 창을 닫고 누른 재시도가
+ * 아무 일도 하지 않았다. macOS에서 창을 다 닫아도 메뉴 막대는 살아 있으므로 이것은 평범한 경로다.
+ */
+export function decideMenuRetry(gate: MenuRetryGate): "ignore" | "start" | "open-window" {
+  if (gate.quitting) return "ignore";
+  return gate.hasWindow ? "start" : "open-window";
+}

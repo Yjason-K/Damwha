@@ -926,3 +926,102 @@ describe("supervisor 단일 비행과 종료의 시야 (N1·N2)", () => {
     expect([...live]).toEqual([]);
   });
 });
+
+describe("createSupervisor — 죽은 자식의 원인 (스펙 §8, Task 14)", () => {
+  // Phase 1의 failureBlock은 api 어댑터의 readiness에서만 불렸는데, awaitReady가 readiness보다
+  // **먼저** 죽음을 보고 "프로세스가 종료됐어요 (코드 1)."로 끝냈다. packaged에서 zod 검증 실패로
+  // exit(1)한 API의 원인은 그래서 한 번도 화면에 오르지 못했다.
+  const ZOD_STDERR = [
+    "[Nest] 1  - 09/13/2026   LOG [NestFactory] Starting Nest application...",
+    "\x1b[31m[Nest] 1  - ERROR [Bootstrap] startup failed: [",
+    "  {",
+    '    "received": "not-in-the-catalog",',
+    '    "path": ["SUMMARY_LLM_MODEL"]',
+    "  }",
+    "]\x1b[39m",
+  ].join("\n");
+
+  const deadHandle = (stderr: string, code = 1) =>
+    ({
+      pid: 1,
+      alive: () => false,
+      stderrTail: () => stderr,
+      exitCode: () => code,
+      onExit: () => undefined,
+      stop: async () => undefined,
+    }) as never;
+
+  it("shows the exit code and the whole startup-failed block when a child dies before ready", async () => {
+    const s = createSupervisor(
+      [spec("api", { launch: async () => ({ handle: deadHandle(ZOD_STDERR), owned: true }) })],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    const st = s.statuses()[0];
+    expect(st.process).toBe("failed");
+    expect(st.detail).toBe(
+      [
+        "프로세스가 종료됐어요 (코드 1).",
+        "[Nest] 1  - ERROR [Bootstrap] startup failed: [",
+        "  {",
+        '    "received": "not-in-the-catalog",',
+        '    "path": ["SUMMARY_LLM_MODEL"]',
+        "  }",
+        "]",
+      ].join("\n"),
+    );
+  });
+
+  it("shows the last stderr lines of a Python child that dies without a startup-failed line", async () => {
+    const trace = ["Traceback (most recent call last):", '  File "x.py", line 1', "ModuleNotFoundError: No module named 'mlx'"];
+    const s = createSupervisor(
+      [spec("worker", { launch: async () => ({ handle: deadHandle(trace.join("\n"), 2), owned: true }) })],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    expect(s.statuses()[0].detail).toBe(["프로세스가 종료됐어요 (코드 2).", ...trace].join("\n"));
+  });
+
+  it("shows the stderr block when a child dies after ready, too", async () => {
+    let listener: ((code: number) => void) | null = null;
+    let stderr = "";
+    const s = createSupervisor(
+      [
+        spec("embed", {
+          launch: async () => ({
+            handle: {
+              pid: 1,
+              alive: () => true,
+              stderrTail: () => stderr,
+              exitCode: () => null,
+              onExit: (l: (c: number) => void) => {
+                listener = l;
+              },
+              stop: async () => undefined,
+            } as never,
+            owned: true,
+          }),
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    expect(s.statuses()[0].process).toBe("running");
+    stderr = "RuntimeError: Metal device lost";
+    listener!(134);
+    expect(s.statuses()[0].detail).toBe("프로세스가 종료됐어요 (코드 134).\nRuntimeError: Metal device lost");
+  });
+
+  it("keeps the bare exit line when the child left nothing on stderr", async () => {
+    const s = createSupervisor(
+      [spec("api", { launch: async () => ({ handle: deadHandle("   \n"), owned: true }) })],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    expect(s.statuses()[0].detail).toBe("프로세스가 종료됐어요 (코드 1).");
+  });
+});

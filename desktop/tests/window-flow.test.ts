@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openWindowFlow, type WindowFlowDeps } from "../src/window-flow";
+import { decideMenuRetry, openWindowFlow, type WindowFlowDeps } from "../src/window-flow";
 
 /**
  * 잎만 가짜다. 판정 대상인 순서는 진짜 코드가 정한다.
@@ -138,5 +138,20 @@ describe("openWindowFlow", () => {
       },
     });
     await expect(openWindowFlow(deps)).rejects.toBe(boom);
+  });
+});
+
+describe("decideMenuRetry — 창이 없을 때 메뉴의 재시도가 유일한 복구다 (Task 14)", () => {
+  it("opens a window first when there is none — start() alone returns at `win === null`", () => {
+    expect(decideMenuRetry({ quitting: false, hasWindow: false })).toBe("open-window");
+  });
+
+  it("just starts when a window is there", () => {
+    expect(decideMenuRetry({ quitting: false, hasWindow: true })).toBe("start");
+  });
+
+  it("does nothing while quitting, with or without a window", () => {
+    expect(decideMenuRetry({ quitting: true, hasWindow: true })).toBe("ignore");
+    expect(decideMenuRetry({ quitting: true, hasWindow: false })).toBe("ignore");
   });
 });
