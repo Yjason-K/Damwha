@@ -249,8 +249,8 @@ export async function stopWorkerProcess(
    * 방금 보낸 신호가 반영될 시간을 settle이 준다 — 같은 실측에서 신호 직후의 `kill(pid,0)`은
    * 5번 모두 아직 성공했다.
    */
-  const cleanUnlessOrphans = async (): Promise<StopOutcome> => {
-    opts.signal(-pid, "SIGTERM");
+  const cleanUnlessOrphans = async ({ reap }: { reap: boolean } = { reap: true }): Promise<StopOutcome> => {
+    if (reap) opts.signal(-pid, "SIGTERM");
     const candidates = [...capturedDescendants];
     const first = await survivors(candidates);
     return verdict(await settle(first));
@@ -303,7 +303,14 @@ export async function stopWorkerProcess(
       // 무엇이 남았는지를 말하지 못한다.
       return { stopped: false, leaked: [pid], detail: STOP_DETAIL.unattended };
     }
-    if (await askUser("worker")) break;
+    const force = await askUser("worker");
+    // 대화상자는 시간 상한이 없다. 그동안 supervisor가 스스로 끝났을 수 있고, 그랬다면 **언제**
+    // 끝났는지 모른다 — 그룹이 비어 pgid 번호가 풀린 지 오래일 수 있어 그룹 신호의 "폴 한 번 안"이라는
+    // 근거가 여기서는 성립하지 않는다(최종 재리뷰 I-A). 3단계의 SIGTERM도 마찬가지로 받을 사람이
+    // 없다. 그래서 여기서 죽어 있으면 **아무 신호도 보내지 않고** 찍어 둔 자손의 생존만 보고한다.
+    // 루트의 생존은 handle.alive()가 권위 있게 답한다 — 거둬지지 않은 자식의 pid는 재사용되지 않는다.
+    if (!handle.alive()) return cleanUnlessOrphans({ reap: false });
+    if (force) break;
 
     // "계속 기다리기". **신호를 다시 보내지 않는다** — 이미 SIGTERM을 받고 stage boundary로
     // 가는 중이고, 두 번째 SIGTERM은 supervisor가 자식을 kill하고 os._exit하게 만드는

@@ -148,6 +148,36 @@ describe("loadConfig", () => {
     expect(r.env.PORT).toBe("3000");
   });
 
+  // 기본값으로 떨어지는 경로에서도 앱이 주장하는 두 값은 그대로여야 한다. 빠지면 자식이
+  // be/worker/.env를 읽어 WORKER_ID가 외부 worker와 같은 `worker-1`이 되고(스펙 §6.5), embed의
+  // 루프백 바인딩도 그 파일이 정하게 된다(§6.11). 네 경로 중 두 곳은 이것을 지키는 테스트가
+  // 없었다(최종 재리뷰 M-A).
+  const appOwnedHold = (env: Record<string, string>) => {
+    expect(env.EMBED_SERVICE_HOST).toBe("127.0.0.1");
+    expect(env.WORKER_ID).toMatch(/^desktop-/);
+  };
+
+  it("keeps the app-owned values when config.json is not an object", () => {
+    fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify([1, 2]));
+    appOwnedHold(loadConfig(dir).env);
+  });
+
+  it("keeps the app-owned values when config.json cannot be created", () => {
+    // userData가 디렉터리가 아니라 파일 밑이면 mkdir이 ENOTDIR로 실패한다 — 권한을 건드리지 않고
+    // "만들 수 없다" 경로를 연다.
+    const blocker = path.join(dir, "not-a-dir");
+    fs.writeFileSync(blocker, "");
+    const r = loadConfig(path.join(blocker, "userData"));
+    expect(r.created).toBe(false);
+    expect(r.warning).toMatch(/만들 수 없어/);
+    appOwnedHold(r.env);
+  });
+
+  it("keeps the app-owned values when config.json is broken JSON", () => {
+    fs.writeFileSync(path.join(dir, "config.json"), "{ not json");
+    appOwnedHold(loadConfig(dir).env);
+  });
+
   it("never returns a HOST key — the app injects that itself", () => {
     fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ HOST: "0.0.0.0" }));
     expect(loadConfig(dir).env.HOST).toBeUndefined();

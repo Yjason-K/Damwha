@@ -184,6 +184,49 @@ describe("stopWorkerProcess", () => {
     ]);
   });
 
+  for (const [answer, label] of [
+    [true, "the user chose to force"],
+    [false, "the user chose to keep waiting"],
+  ] as const) {
+    it(`sends no signal at all when the supervisor died while the grace dialog was open — ${label}`, async () => {
+      // 대화상자는 상한이 없다. 그 사이 루트가 끝났으면 그룹 신호의 "폴 한 번 안" 근거도, 3단계
+      // SIGTERM을 받을 사람도 없다(최종 재리뷰 I-A). 신호마다 그 순간의 생존을 적어, 묻고 난 뒤에는
+      // 어떤 신호도 나가지 않았음을 본다. 찍어 둔 자손이 살아 있으면 그것은 여전히 보고한다.
+      let exited = false;
+      let asked = false;
+      const events: Array<[number, string, boolean, boolean]> = [];
+      const out = await stopWorkerProcess(
+        {
+          pid: 4242,
+          alive: () => !exited,
+          stderrTail: () => "",
+          exitCode: () => null,
+          onExit: () => undefined,
+          stop: async () => undefined,
+        } as never,
+        {
+          graceMs: 10,
+          pollMs: 5,
+          maxWaits: 2,
+          signal: (target, sig) => events.push([target, sig, !exited, asked]),
+          descendants: async () => new Set([5001]),
+          stillAlive: async (pids) => pids.filter((p) => p === 5001),
+          onGraceExpired: async () => {
+            asked = true;
+            // 사람이 대화상자를 보고 있는 동안 supervisor가 스스로 끝난다.
+            exited = true;
+            await new Promise((r) => setTimeout(r, 20));
+            return answer;
+          },
+        },
+      );
+      expect(events.filter(([, , , afterAsk]) => afterAsk)).toEqual([]);
+      expect(events).toEqual([[4242, "SIGTERM", true, false]]);
+      expect(out.stopped).toBe(false);
+      expect(out.leaked).toEqual([5001]);
+    });
+  }
+
   it("does not report a same-group leftover (the capabilities probe) as leaked once the group is reaped, and gives the signal time to land", async () => {
     // capabilities.probe_mps는 supervisor가 start_new_session 없이 subprocess.run으로 띄운다 — uv의 그룹
     // 구성원이다. 1단계가 uv pid로만 보내므로 그것은 신호를 받지 않고 supervisor보다 오래 산다(장난감
@@ -275,8 +318,11 @@ describe("stopWorkerProcess", () => {
         descendants: async () => new Set<number>(),
         onGraceExpired: async () => {
           asked += 1;
-          // 두 번째로 기다리기를 고른 뒤 그 유예 안에 프로세스가 끝난다.
-          if (asked === 2) alive = false;
+          // 두 번째로 기다리기를 고른 **뒤 그 유예 안에** 프로세스가 끝난다. 대화상자가 떠 있는
+          // 동안 끝나게 하면(= 여기서 곧바로 alive=false) 그것은 다른 경우다 — 언제 끝났는지 모르므로
+          // 신호를 보내지 않는다(아래 "sends no signal at all when the supervisor died while the grace
+          // dialog was open"). 이 픽스처는 원래 그 둘을 구별하지 않았다.
+          if (asked === 2) setTimeout(() => (alive = false), 1);
           return false;
         },
         maxWaits: 2,

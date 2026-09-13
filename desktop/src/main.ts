@@ -479,8 +479,11 @@ function stopOwnWorker(result: LaunchResult, plan: StopPlan): Promise<StopOutcom
     signal: (pid, sig) => {
       try {
         process.kill(pid, sig);
-      } catch {
-        // 이미 죽었으면 ESRCH.
+      } catch (e) {
+        // 이미 죽었으면 ESRCH — 정상이라 적지 않는다. 그 밖(EPERM 등)은 신호가 닿지 않았다는
+        // 뜻이라 조용히 삼키면 종료가 왜 안 끝났는지 아무 흔적도 남지 않는다(최종 재리뷰 M-B).
+        const code = (e as NodeJS.ErrnoException).code;
+        if (code !== "ESRCH") appendSupervisorLog(`worker 신호 ${sig} → ${pid} 실패 — ${reasonOf(e)}`);
       }
     },
     descendants: descendantPids,
