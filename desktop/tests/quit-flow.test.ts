@@ -1,6 +1,9 @@
+import * as fs from "fs";
+import * as path from "path";
 import { describe, expect, it } from "vitest";
 import {
   CLOSE_WHILE_RECORDING,
+  HANDSHAKE_TIMEOUT_MS,
   createFlowLatch,
   decideCloseEvent,
   decideQuitEvent,
@@ -677,5 +680,38 @@ describe("createFlowLatch", () => {
     first.settle();
     const reopened = flows.forWindow();
     expect(reopened.press()).toBe("run-flow");
+  });
+});
+
+describe("HANDSHAKE_TIMEOUT_MS", () => {
+  /**
+   * fe 소스에서 상수 하나를 읽는다. import하지 않는 이유: live-recorder.ts는 `?worker&url` 워크릿
+   * import를 가져 Vite 밖(여기 vitest)에서 불러올 수 없고, desktop이 fe 모듈에 값으로 의존하면
+   * 번들 위생(P2-C14)이 흔들린다. 선언이 사라지거나 모양이 바뀌면 여기서 **던진다** — 조용히
+   * NaN으로 비교해 초록이 되지 않게.
+   */
+  const feConstant = (file: string, name: string): number => {
+    const src = fs.readFileSync(path.resolve(__dirname, "../../fe/src", file), "utf8");
+    const m = new RegExp(`const ${name} = ([0-9_]+);`).exec(src);
+    if (m === null) throw new Error(`${file}에서 ${name} 선언을 찾지 못했다`);
+    return Number(m[1].replace(/_/g, ""));
+  };
+
+  it("outlasts the renderer's own worst-case live stop, so main never cuts off a stop that is still legitimately running (P2-C13)", () => {
+    // LiveRecorder.stop()의 정상 경로: flush ACK를 기다리고 → 큐를 drain하고 → stop POST를 보낸다.
+    // 서버 경계가 앞서 있으면 stop POST가 한 번 더 간다. 셋 다 자기 상한이 있고, 그 합이 렌더러가
+    // "아직 정상적으로 멈추는 중"일 수 있는 최대 시간이다. 핸드셰이크가 그보다 먼저 포기하면 main이
+    // 서비스를 내려 마지막 tail과 봉인 요청이 갈 곳을 잃는다 → capture_error = producer_abandoned.
+    const recorder = fs.readFileSync(
+      path.resolve(__dirname, "../../fe/src/features/meeting/lib/live-recorder.ts"),
+      "utf8",
+    );
+    const stopPosts = recorder.match(/this\.deps\.postStop\(/g)?.length ?? 0;
+    expect(stopPosts).toBeGreaterThan(0);
+    const budget =
+      feConstant("features/meeting/lib/live-recorder.ts", "FLUSH_ACK_TIMEOUT_MS") +
+      feConstant("features/meeting/lib/live-recorder.ts", "DRAIN_TIMEOUT_MS") +
+      stopPosts * feConstant("features/meeting/api/live.ts", "REQUEST_TIMEOUT_MS");
+    expect(HANDSHAKE_TIMEOUT_MS).toBeGreaterThanOrEqual(budget);
   });
 });

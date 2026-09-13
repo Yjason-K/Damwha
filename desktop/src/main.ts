@@ -26,6 +26,7 @@ import { decideMenuRetry, gateUp, openWindowFlow } from "./window-flow";
 import {
   createFlowLatch,
   graceExpiryPrompt,
+  HANDSHAKE_TIMEOUT_MS,
   runCloseFlow,
   runQuitFlow,
   type QuitNotice,
@@ -79,8 +80,6 @@ const STOP_GRACE_MS = 5_000;
  * 정확히 P2-C5가 금지하는 결과를 만든다.
  */
 const WORKER_GRACE_MS = 90_000;
-/** 렌더러의 라이브 중지를 기다리는 상한. 사람이 아니라 렌더러를 기다리는 시간이다. */
-const HANDSHAKE_TIMEOUT_MS = 30_000;
 /**
  * 렌더러에 "녹음 중인가"를 묻는 왕복의 상한. 사람이 아니라 렌더러를 기다리는 시간이라
  * 짧다 — 훅은 동기 불리언 하나를 돌려준다. 값보다 **상한이 있다는 사실**이 요구사항이다.
@@ -234,7 +233,7 @@ function openWindow(): BrowserWindow {
   // 비동기다. 그래서 첫 close는 무조건 막고, 래치를 올린 채 판정한 뒤 다시 닫는다 —
   // 녹음 중이 아니면 그 왕복이 몇 밀리초라 사람 눈에는 그냥 닫힌 것과 같다.
   //
-  // 래치는 **진입에서** 올린다. 완료 시점에만 올리면 핸드셰이크(최대 30초) 동안 창이
+  // 래치는 **진입에서** 올린다. 완료 시점에만 올리면 핸드셰이크(HANDSHAKE_TIMEOUT_MS) 동안 창이
   // 정상 상호작용 상태라, 그때 ⌘W나 빨간 버튼을 다시 누르면 두 번째 흐름이 시작된다 —
   // 렌더러는 아직 중지 중이라 isRecording()이 또 true를 돌려주므로 **사용자가 같은
   // 질문을 두 번 받는다.** 더 나쁜 꼬리도 있다: 먼저 끝난 쪽이 창을 파괴하면 나중 쪽의

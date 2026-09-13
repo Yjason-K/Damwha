@@ -76,6 +76,22 @@ export interface QuitFlowDeps {
   quit(): void;
 }
 
+/**
+ * 렌더러의 라이브 중지를 기다리는 상한. 사람이 아니라 렌더러를 기다리는 시간이다.
+ *
+ * **렌더러가 스스로 포기하기 전에 우리가 먼저 포기하면 안 된다.** 한때 30초였는데 fe의
+ * `LiveRecorder.stop()`은 정상 경로에서만 flush ACK(≤2초) → 큐 drain(≤60초) → stop POST
+ * (≤10초, 서버 경계가 앞서 있으면 한 번 더 ≤10초)를 돈다 — 최대 82초. 느린 마지막 업로드가
+ * 30초를 넘기면 main이 핸드셰이크를 끊고 서비스를 내려, 렌더러가 아직 보내던 tail 청크와
+ * 봉인 요청이 갈 곳을 잃고 `capture_error = producer_abandoned`로 끝났다 (완료 기준 P2-C13,
+ * 최종 리뷰 M-6). 그 합에 여유를 얹어 90초다. 합과의 관계는 테스트가 fe 소스의 상수를 직접
+ * 읽어 잠근다 — fe가 drain을 늘리면 그 테스트가 먼저 깨진다.
+ *
+ * 긴 상한이 곧 긴 침묵은 아니다: 그동안 렌더러는 스스로 "중지 중"을 보이고, 살아 있는 녹음의
+ * 정상 중지는 1초 남짓이다. 봉쇄된 렌더러에서만 이 상한을 다 쓴다.
+ */
+export const HANDSHAKE_TIMEOUT_MS = 90_000;
+
 /** 대화상자 한 장의 글. 버튼과 아이콘은 부르는 쪽이 정한다. */
 export interface DialogCopy {
   message: string;
@@ -146,7 +162,7 @@ export async function runQuitFlow(deps: QuitFlowDeps): Promise<void> {
     // - 녹음 중이 아니면 **핸드셰이크가 아예 없으므로 곧바로 건다.** 앞에 남은 긴 기다림은
     //   worker 유예 90초 하나뿐이고, 이쪽이 흔한 경우다.
     // - 녹음 중이면 핸드셰이크 **뒤에** 건다. 살아 있는 녹음의 정상 중지는 1초 남짓이라
-    //   그 침묵은 짧다 — 30초는 상한이지 예상 비용이 아니다. 그 간극을 메우자고 녹음의
+    //   그 침묵은 짧다 — HANDSHAKE_TIMEOUT_MS는 상한이지 예상 비용이 아니다. 그 간극을 메우자고 녹음의
     //   꼬리를 버리는 것은 값이 맞지 않는다.
     if (decision.stopRecording) {
       const result = await runHandshake(deps.stopRecording, {
@@ -328,10 +344,11 @@ export type RunningFlow = "quit" | "close" | null;
  *   똑같이 **막고 무시한다.** 통과시키면 Electron이 창을 그대로 파괴해 핸드셰이크 한가운데서
  *   렌더러가 죽는다 — `LiveRecorder.stop()`이 끝나지 못해 마지막 tail 청크를 잃고
  *   `capture_error`가 `producer_abandoned`가 된다. 이 경로에는 "종료 중" 화면조차 없어 최대
- *   30초 동안 아무 피드백이 없으므로, 한 번 더 누르는 것은 드문 조작이 아니다.
+ *   핸드셰이크 상한(HANDSHAKE_TIMEOUT_MS) 동안 main 쪽 피드백이 없으므로, 한 번 더 누르는 것은
+ *   드문 조작이 아니다.
  *
  * 통과의 근거가 `quitting`이 **아닌 것**이 재리뷰 4의 N3에서 바뀐 자리다. `quitting`은
- * `beginQuit`이 핸드셰이크(≤30초)·"종료 중" 화면·worker 유예(90초)보다 **앞에서** 올리는
+ * `beginQuit`이 핸드셰이크(≤90초)·"종료 중" 화면·worker 유예(90초)보다 **앞에서** 올리는
  * 래치라, 그것으로 통과시키면 그 긴 구간의 ⌘W가 창을 파괴한다 — 종료 쪽에서 이미 값을 치르고
  * 고친 바로 그 결함(재리뷰 3의 N4)이 창 쪽에 그대로 남아 있었다. 이제 두 판정이 **같은 근거**를
  * 쓴다: 통과는 "우리가 닫기로/끝내기로 결정했다"는 사실에서만 나온다.
@@ -356,7 +373,7 @@ export function decideCloseEvent(state: {
  * 결함**을 종료 경로에서 닫는다 (재리뷰 3의 N4).
  *
  * `main.ts`는 오랫동안 `if (quitting) return;`이었다 — `preventDefault` 없이 통과. 그런데
- * `quitting`은 `beginQuit()`이 **핸드셰이크(≤30초)·"종료 중" 화면·2차 스냅샷·`stopServices`의
+ * `quitting`은 `beginQuit()`이 **핸드셰이크(≤90초)·"종료 중" 화면·2차 스냅샷·`stopServices`의
  * worker 유예(90초)·남은 것 경고보다 전부 앞에서** 올리는 래치다. 그래서 그 긴 구간의 2차 ⌘Q가
  * 그대로 통과해 Electron이 즉시 창을 파괴하고 프로세스를 끝냈다. 결과 둘:
  * - 핸드셰이크 중이면 렌더러가 죽어 `LiveRecorder.stop()`이 못 끝나고 tail 청크를 잃는다 →
