@@ -1,3 +1,5 @@
+import type { ServiceStatus } from "./services/types";
+
 /**
  * 창을 **다시** 열었을 때의 순서 결정. 서비스는 이미 떠 있으므로 다시 띄우지 않는다 —
  * 여기서 하는 일은 "사용자가 보는 것이 언제 무엇이 되는가"뿐이다.
@@ -15,8 +17,11 @@
 export interface WindowFlowDeps {
   /** 셸(준비/실패) 화면을 건다. 래치도 함께 내려가 이후 상태 갱신이 이 창에 닿는다. */
   showShell(): Promise<void>;
-  /** 감독자가 서 있는가 (main.ts: supervisor !== null). 없으면 붙일 것이 없다. */
-  servicesRunning(): boolean;
+  /**
+   * 붙일 것이 있는가 — 게이트를 다 넘어 API가 떠 있는가 (main.ts: `gateUp(supervisor?.statuses())`).
+   * 아니면 붙이지 않고 기동(=재시도)으로 간다.
+   */
+  readyToAttach(): boolean;
   /** 서비스를 (다시) 띄운다. 준비 화면은 그 경로가 스스로 건다 (main.ts의 start). */
   start(): Promise<void>;
   /** 담화 화면을 붙인다. */
@@ -41,8 +46,16 @@ export async function openWindowFlow(deps: WindowFlowDeps): Promise<void> {
     // 셸을 못 걸었다고 붙이기를 포기하지 않는다. 붙이기가 성공하면 그것이 곧 화면이고,
     // 실패하면 아래 onFailure가 다시 화면을 시도한다. 여기서 물러나면 창은 빈 채로 남는다.
   }
-  if (!deps.servicesRunning()) {
-    // 감독자가 없다 = 붙일 것이 없다. 첫 기동이 감독자를 세우기 **전에** 접혔다는 뜻이고,
+  if (!deps.readyToAttach()) {
+    // 붙일 것이 없다. 두 경우다.
+    //
+    // (1) 게이트가 넘어진 채 창이 닫혔다 (Task 14). 창이 없으면 자동 재시도는 헛돌고(스폰 가드가
+    // 창 없는 기동을 막는다) 걸려 있던 타이머도 다음을 걸지 못한다. 예전에는 여기서 붙이기로 가
+    // reattachWindow가 카운트다운 없는 실패 화면을 걸었다 — 거짓은 아니었지만 사용자가 돌아온 순간
+    // 앱이 아무것도 하지 않았다. 기동으로 가면 재시도가 돌고, 또 넘어지면 **실제로 걸린** 타이머의
+    // 초를 화면이 말한다. 화면의 카운트다운과 걸린 타이머가 늘 같은 자리(scheduleRetry)에서 나온다.
+    //
+    // (2) 감독자가 아예 없다. 첫 기동이 감독자를 세우기 **전에** 접혔다는 뜻이고,
     // 그 길은 실제로 있다: resolveRepoRoot의 폴더 선택 대화상자는 시간 상한이 없고, 그 사이
     // 창을 닫으면(⌘Q가 아니라 그냥 닫기 — 스펙 §6.10이 허용한다) 스폰 가드가 기동을 접는다.
     // 그때 재시도 타이머는 걸리지 않는다(걸 자리가 없다). 여기서 start()를 부르지 않으면
@@ -83,4 +96,15 @@ export interface MenuRetryGate {
 export function decideMenuRetry(gate: MenuRetryGate): "ignore" | "start" | "open-window" {
   if (gate.quitting) return "ignore";
   return gate.hasWindow ? "start" : "open-window";
+}
+
+/**
+ * 게이트를 다 넘었는가 — API가 떠 있는가. 렌더러는 API origin에 붙으므로 이것이 "붙일 수 있다"다.
+ * degraded여도 떠 있다(DB가 끊겨도 API는 살아 503을 주고, 화면은 붙어 있어야 회복을 본다).
+ *
+ * 기동 경로(startServices)와 창 다시 열기(openWindowFlow)가 **같은 술어**를 쓴다. 둘이 따로 적혀
+ * 있으면 한쪽은 "재시도 + 카운트다운"으로, 다른 쪽은 "붙이기"로 가는 어긋남이 생긴다.
+ */
+export function gateUp(statuses: readonly ServiceStatus[] | null): boolean {
+  return statuses?.find((s) => s.id === "api")?.process === "running";
 }

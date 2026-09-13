@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { apiSpec, judgeAfterProbe, migrationCheckSkipped, pendingMigrations } from "../src/services/api";
+import {
+  MIGRATION_CHECK_SKIPPED_LOG,
+  apiSpec,
+  createMigrationCheckWatch,
+  judgeAfterProbe,
+  migrationCheckSkipped,
+  pendingMigrations,
+} from "../src/services/api";
 import type { ApiDeps } from "../src/services/api";
 import type { ServiceHandle } from "../src/services/types";
 
@@ -118,6 +125,8 @@ describe("judgeAfterProbe — 게이트가 읽는 스트림 고정", () => {
     const r1 = await judgeAfterProbe(inStdout, "ready", 3000, fakeDeps({ onMigrationCheckSkipped }));
     expect(r1.kind).toBe("ready");
     expect(onMigrationCheckSkipped).toHaveBeenCalledOnce();
+    // 어느 기동의 일인지 넘긴다 — 받는 쪽이 그것으로 한 기동에 한 번만 적는다.
+    expect(onMigrationCheckSkipped).toHaveBeenCalledWith(inStdout);
 
     onMigrationCheckSkipped.mockClear();
     const inStderr = fakeHandle({ stdout: "", stderr: skipped });
@@ -183,5 +192,52 @@ describe("judgeAfterProbe — 살아 있어도 startup failed면 실패다 (Task
   it("still waits while a live process has not answered and has not failed", async () => {
     const handle = fakeHandle({ stderr: "[Nest] LOG compiling…\n" });
     expect(await judgeAfterProbe(handle, "no-response", 3000, fakeDeps())).toEqual({ kind: "not-ready" });
+  });
+});
+
+describe("createMigrationCheckWatch — 스스로 꺼진 게이트를 기동 단위로 든다 (Task 14 fix 1-3)", () => {
+  const SKIPPED = "WARN [DatabaseService] pending migration check skipped: ENOENT dist/database/migrations";
+
+  it("logs once per API launch even though every 10-second health probe reports it again", async () => {
+    const logs: string[] = [];
+    const watch = createMigrationCheckWatch((l) => logs.push(l));
+    const handle = fakeHandle({ stdout: SKIPPED });
+    const deps = fakeDeps({ onMigrationCheckSkipped: watch.skipped });
+    for (let i = 0; i < 5; i += 1) await judgeAfterProbe(handle, "ready", 3000, deps);
+    expect(logs).toEqual([MIGRATION_CHECK_SKIPPED_LOG]);
+    expect(watch.skippedFor(handle)).toBe(true);
+  });
+
+  it("stays skipped after the warning rolls out of the 8 KB stdout tail — the check still did not run", async () => {
+    const watch = createMigrationCheckWatch(() => undefined);
+    let stdout = SKIPPED;
+    const handle = fakeHandle({});
+    handle.stdoutTail = () => stdout;
+    const deps = fakeDeps({ onMigrationCheckSkipped: watch.skipped });
+    await judgeAfterProbe(handle, "ready", 3000, deps);
+    stdout = "[Nest] LOG GET /api/meetings 200".repeat(300);
+    await judgeAfterProbe(handle, "ready", 3000, deps);
+    expect(watch.skippedFor(handle)).toBe(true);
+  });
+
+  it("starts clean for a new API launch, and logs again if that one skips too", async () => {
+    const logs: string[] = [];
+    const watch = createMigrationCheckWatch((l) => logs.push(l));
+    const first = fakeHandle({ stdout: SKIPPED });
+    const second = fakeHandle({ stdout: "LOG 0 pending migrations" });
+    const third = fakeHandle({ stdout: SKIPPED });
+    const deps = fakeDeps({ onMigrationCheckSkipped: watch.skipped });
+    await judgeAfterProbe(first, "ready", 3000, deps);
+    await judgeAfterProbe(second, "ready", 3000, deps);
+    expect(watch.skippedFor(second)).toBe(false);
+    await judgeAfterProbe(third, "ready", 3000, deps);
+    expect(watch.skippedFor(third)).toBe(true);
+    expect(logs).toEqual([MIGRATION_CHECK_SKIPPED_LOG, MIGRATION_CHECK_SKIPPED_LOG]);
+  });
+
+  it("is not skipped when there is no API handle", () => {
+    const watch = createMigrationCheckWatch(() => undefined);
+    expect(watch.skippedFor(null)).toBe(false);
+    expect(watch.skippedFor(undefined)).toBe(false);
   });
 });

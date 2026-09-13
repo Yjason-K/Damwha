@@ -22,7 +22,7 @@ import { createStatusWindow, mayAutoOpen } from "./status-window";
 import { applyNavigationBoundary, applyPermissionBoundary } from "./permissions";
 import { mayRenderShell } from "./shell-latch";
 import { maySpawnServices } from "./spawn-guard";
-import { decideMenuRetry, openWindowFlow } from "./window-flow";
+import { decideMenuRetry, gateUp, openWindowFlow } from "./window-flow";
 import {
   createFlowLatch,
   graceExpiryPrompt,
@@ -45,6 +45,7 @@ import {
   probeEmbedContract,
 } from "./services/external";
 import { findExecutable, searchDirs } from "./services/resolve";
+import { createMigrationCheckWatch } from "./services/api";
 import { isRepoRoot } from "./repo-root";
 import { rotateIfNeeded } from "./logs";
 import { freePort } from "./port";
@@ -748,7 +749,12 @@ function shellStatusOf(): ShellStatus {
 
 /** 상태 창이 그릴 재료. 판정은 status-view.ts의 servicesView에 있다. */
 function servicesViewNow() {
-  return servicesView({ statuses: supervisor?.statuses() ?? null, restartNotice, logPathOf });
+  return servicesView({
+    statuses: supervisor?.statuses() ?? null,
+    restartNotice,
+    logPathOf,
+    migrationCheckSkipped: migrationWatch.skippedFor(supervisor?.runtimeOf("api")?.result?.handle),
+  });
 }
 
 /**
@@ -884,9 +890,9 @@ async function startServices(mine: number): Promise<void> {
     await existing.retry();
   }
 
-  const all = supervisor?.statuses() ?? [];
-  const api = all.find((s) => s.id === "api");
-  if (api?.process !== "running") {
+  // openWindowFlow와 같은 술어다(window-flow.ts의 gateUp) — 둘이 갈리면 한쪽은 재시도로, 다른
+  // 쪽은 붙이기로 간다.
+  if (!gateUp(supervisor?.statuses() ?? null)) {
     const target = activeWindow(mine);
     if (target === null) return;
     await showShell(target, { ...shellStatusOf(), retryInSeconds: scheduleRetry() });
@@ -948,6 +954,12 @@ function announceRestartNotice(mine: number, notice: string): void {
  * 버리는 일이라 P2-C4가 금지한다. 그러므로 실패 화면의 "값을 고치면 다시 시도합니다"가 참인
  * 범위는 DATABASE_URL·STORAGE_ROOT·PORT 같은 **자식 env 키**다.
  */
+/**
+ * "이 API 기동은 마이그레이션 검사를 건너뛰었다". 판정(한 기동에 한 번 적기, 꼬리에서 줄이 밀려나도
+ * 유지, 새 기동은 새로)은 services/api.ts의 createMigrationCheckWatch에 있다.
+ */
+const migrationWatch = createMigrationCheckWatch(appendSupervisorLog);
+
 const reloadConfig = createConfigReloader({
   load: () => loadConfig(app.getPath("userData")),
   live: () => (launchCtx === null ? null : { env: launchCtx.ctx.env, baseline: launchCtx.baseline }),
@@ -1036,8 +1048,7 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
         verifyOwnListener,
         isPortOccupied,
         onPendingMigrations: () => undefined,
-        onMigrationCheckSkipped: () =>
-          appendSupervisorLog("마이그레이션 검사가 건너뛰어졌어요 — 통과한 것이 아닙니다."),
+        onMigrationCheckSkipped: (handle) => migrationWatch.skipped(handle),
       },
       embed: { probe: (url) => probeEmbedContract(url, wantEmbed), freePort },
       worker: { listExternal: listExternalWorkers, stop: stopOwnWorker },
@@ -1123,7 +1134,7 @@ if (!app.requestSingleInstanceLock()) {
     // 감독자가 없는 경우(기동이 감독자를 세우기 전에 접혔다)의 복구도 거기서 정한다.
     void openWindowFlow({
       showShell: () => showShell(opened, shellStatusOf()),
-      servicesRunning: () => supervisor !== null,
+      readyToAttach: () => gateUp(supervisor?.statuses() ?? null),
       start,
       attach: () => reattachWindow(mine),
       onFailure: (e) => reportFailure(mine, "창을 다시 붙이지 못했어요", e),

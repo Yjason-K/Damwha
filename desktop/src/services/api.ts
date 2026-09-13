@@ -37,7 +37,44 @@ export interface ApiDeps {
   verifyOwnListener(port: number, pid: number | undefined): Promise<boolean>;
   isPortOccupied(port: number): Promise<boolean>;
   onPendingMigrations(info: { count: number; names: string }): void;
-  onMigrationCheckSkipped(): void;
+  /**
+   * API가 미적용 마이그레이션 검사를 **돌리지 못했다**. 게이트는 통과시키되 그 사실을 남긴다
+   * (스펙 §6.7). 어느 API 인스턴스의 일인지 핸들을 넘긴다 — 받는 쪽(createMigrationCheckWatch)이
+   * 그것으로 한 기동에 한 번만 적고, 새 기동이면 새로 판단한다.
+   */
+  onMigrationCheckSkipped(handle: ServiceHandle): void;
+}
+
+/** supervisor.log에 남기는 줄. 한 API 기동에 한 번이다. */
+export const MIGRATION_CHECK_SKIPPED_LOG = "마이그레이션 검사가 건너뛰어졌어요 — 통과한 것이 아닙니다.";
+
+/**
+ * "이 API는 마이그레이션 검사를 건너뛰었다"를 **기동 단위로** 든다.
+ *
+ * 왜 필요한가: 스펙 §9 P2-C9의 비고 — `.sql`이 packaged 트리에 실리지 않으면 API가 `pending
+ * migration check skipped`를 찍고 게이트가 **조용히 꺼진다.** 스스로 꺼질 수 있는 게이트는 사람이
+ * 보는 곳에서 그렇다고 말해야 하고, 그곳이 상태 창이다. 예전에는 supervisor.log 한 줄뿐이었고,
+ * 그 줄마저 ready인 헬스 프로브마다(10초) 다시 찍혀 새 사건과 반복이 구별되지 않았다.
+ *
+ * 왜 핸들로 드는가: 그 경고는 부팅 때 한 번 stdout에 찍히고, 판정은 8KB로 굴러가는 stdout 꼬리를
+ * 본다. 요청 로그가 쌓여 그 줄이 꼬리에서 밀려나도 **검사가 돈 것이 아니다** — 그래서 한 번 본
+ * 핸들은 계속 "건너뜀"이다. 반대로 API가 죽고 새로 뜨면 그 기동은 검사를 새로 하므로, 새 핸들은
+ * 깨끗하게 시작한다. 불리언 하나로 들면 둘 중 하나가 틀린다.
+ */
+export function createMigrationCheckWatch(log: (line: string) => void) {
+  const skipped = new WeakSet<ServiceHandle>();
+  return {
+    /** ApiDeps.onMigrationCheckSkipped에 꽂는다. 같은 핸들에는 한 번만 적는다. */
+    skipped(handle: ServiceHandle): void {
+      if (skipped.has(handle)) return;
+      skipped.add(handle);
+      log(MIGRATION_CHECK_SKIPPED_LOG);
+    },
+    /** 지금 API 핸들이 검사를 건너뛴 기동인가. 핸들이 없으면(안 떴다·죽었다) 아니다. */
+    skippedFor(handle: ServiceHandle | null | undefined): boolean {
+      return handle !== null && handle !== undefined && skipped.has(handle);
+    },
+  };
 }
 
 /**
@@ -72,7 +109,7 @@ export async function judgeAfterProbe(
       // "`pnpm be:migrate`를 실행하세요"는 shell-hints.ts의 안내가 붙인다.
       return { kind: "failed", detail: CAUSES.pendingMigrations.text(pending.count, pending.names) };
     }
-    if (migrationCheckSkipped(stdoutTail)) deps.onMigrationCheckSkipped();
+    if (migrationCheckSkipped(stdoutTail)) deps.onMigrationCheckSkipped(handle);
     return { kind: "ready" };
   }
   if (probe === "db-unreachable") {

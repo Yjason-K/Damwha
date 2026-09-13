@@ -29,6 +29,15 @@ export const PROCESS_LABELS: Record<ProcessState, string> = {
 /** 안내 줄의 머리. 실패 화면과 상태 줄이 같은 말을 쓴다. */
 export const HINT_PREFIX = "해결: ";
 
+/**
+ * API가 미적용 마이그레이션 검사를 건너뛴 기동이면 api 줄에 붙는 경고. 게이트는 통과했지만
+ * **검사가 돌지 않았다**는 것과 **통과했다**는 것은 다른 사실이다 (스펙 §6.7·§8, P2-C9 비고:
+ * packaged 트리에 `.sql`이 빠지면 게이트가 조용히 꺼진다).
+ */
+export const MIGRATION_CHECK_SKIPPED_WARNING =
+  "마이그레이션 검사가 돌지 않았어요. 통과한 것이 아니에요 — 적용되지 않은 마이그레이션이 있어도 앱이 알아채지 못해요. " +
+  "터미널에서 `pnpm be:migrate`를 실행하면 남은 마이그레이션이 적용됩니다.";
+
 /** 아직 감독자가 없을 때 두 화면이 말하는 것. */
 export const NO_SERVICES_YET = "아직 서비스를 띄우지 않았어요. 메뉴의 서비스 > 다시 시도를 눌러 주세요.";
 
@@ -109,6 +118,8 @@ export interface ServiceRow {
   /** 원인 원문. 서브프로세스 stderr가 들어온다 — 렌더러는 반드시 글자로만 넣는다. */
   cause?: string;
   hint?: string;
+  /** 실패는 아니지만 사람이 알아야 하는 것 — 검사를 건너뛴 게이트. */
+  warning?: string;
   log: string;
 }
 
@@ -123,6 +134,8 @@ export interface ServicesInput {
   statuses: readonly ServiceStatus[] | null;
   restartNotice: string | null;
   logPathOf(id: ServiceId | "supervisor"): string;
+  /** 지금 API 기동이 마이그레이션 검사를 건너뛰었다 (services/api.ts의 createMigrationCheckWatch). */
+  migrationCheckSkipped?: boolean;
 }
 
 function toneOf(s: ServiceStatus, cause: string | undefined): Tone {
@@ -158,6 +171,11 @@ export function servicesView(input: ServicesInput): ServicesView {
     const hint = recoveryHint(s);
     if (cause !== undefined) row.cause = cause;
     if (hint !== undefined) row.hint = hint;
+    // 떠 있는 API에만 붙인다. 죽었거나 다시 뜨는 중이면 그 기동의 판정은 아직 없다.
+    if (s.id === "api" && s.process === "running" && input.migrationCheckSkipped === true) {
+      row.warning = MIGRATION_CHECK_SKIPPED_WARNING;
+      if (row.tone === "ok") row.tone = "warn";
+    }
     return row;
   });
   return { rows, notices };

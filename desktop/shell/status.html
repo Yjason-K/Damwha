@@ -2,6 +2,13 @@
 <html lang="ko">
   <head>
     <meta charset="utf-8" />
+    <!-- 스펙 §6.11. 원인 문구에는 서브프로세스 stderr가 들어오므로 글자로만 넣는 것(textContent)이 첫 겹이고
+         이것이 둘째 겹이다: 이 파일의 인라인 스크립트·스타일 **하나씩만** 해시로 허용하고, 그 밖의 스크립트
+         (주입된 onerror= 같은 인라인 핸들러 포함)·원격 자원·이미지·폼 전송은 전부 막는다. 스크립트나
+         스타일을 한 글자라도 고치면 해시를 다시 계산해야 한다 — tests/shell-html.test.ts가 어긋남을 잡는다.
+         임베더가 실행하는 스크립트(main의 executeJavaScript)는 script-src를 거치지 않는다고 본다 — headless
+         Chrome에서 CDP Runtime.evaluate로 이 정책 아래 렌더를 확인했고, Electron에서의 확인은 packaged 점검 몫이다. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-5OoszLgD0rJ83wQFd2eIL+7ua869H/wo+01HXITcqmc='; style-src 'sha256-Qz7cNLlq1WfuHKTT5usxWJ+qEcq7LfPxuxtRCjG3mdU='; base-uri 'none'; form-action 'none'" />
     <title>담화</title>
     <style>
       :root { color-scheme: light dark; }

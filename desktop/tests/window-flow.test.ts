@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { decideMenuRetry, openWindowFlow, type WindowFlowDeps } from "../src/window-flow";
+import { decideMenuRetry, gateUp, openWindowFlow, type WindowFlowDeps } from "../src/window-flow";
+import type { ServiceStatus } from "../src/services/types";
 
 /**
  * 잎만 가짜다. 판정 대상인 순서는 진짜 코드가 정한다.
@@ -29,7 +30,7 @@ function recorder(over: Partial<WindowFlowDeps> = {}) {
   };
   const deps: WindowFlowDeps = {
     showShell: record("shell"),
-    servicesRunning: () => true,
+    readyToAttach: () => true,
     start: record("start"),
     attach: record("attach"),
     onFailure: record("failure"),
@@ -91,7 +92,7 @@ describe("openWindowFlow", () => {
     // 재리뷰 §4-3. 첫 기동이 감독자를 세우기 전에 접히면(폴더 선택 대화상자 중 창 닫기)
     // 창을 다시 열어도 붙일 것이 없다. start()를 부르지 않으면 서비스 줄이 한 줄도 없는
     // 빈 "준비 중" 화면에 영구히 서고, 탈출구는 메뉴의 "다시 시도"뿐이다.
-    const { log, deps } = recorder({ servicesRunning: () => false });
+    const { log, deps } = recorder({ readyToAttach: () => false });
     await openWindowFlow(deps);
     expect(log).toEqual(seq("shell", "start"));
   });
@@ -99,13 +100,13 @@ describe("openWindowFlow", () => {
   it("does not attach when there is nothing to attach to", async () => {
     // reattachWindow는 감독자가 없으면 빈 준비 화면을 다시 걸 뿐이다. 그 길로 가면
     // start()가 영영 안 불린다.
-    const { log, deps } = recorder({ servicesRunning: () => false });
+    const { log, deps } = recorder({ readyToAttach: () => false });
     await openWindowFlow(deps);
     expect(log.join(" ")).not.toContain("attach");
   });
 
   it("waits for the shell screen before starting the services", async () => {
-    const { log, deps } = recorder({ servicesRunning: () => false });
+    const { log, deps } = recorder({ readyToAttach: () => false });
     await openWindowFlow(deps);
     // 셸이 **닫힌 뒤에** start가 시작한다 — 겹치면 start의 준비 화면을 이 loadFile이 덮는다.
     expect(log.slice(0, 3)).toEqual([...seq("shell"), "start:start"]);
@@ -131,7 +132,7 @@ describe("openWindowFlow", () => {
   it("lets a rejected start reach the caller too", async () => {
     const boom = new Error("start blew up");
     const { deps } = recorder({
-      servicesRunning: () => false,
+      readyToAttach: () => false,
       start: async () => {
         await tick();
         throw boom;
@@ -153,5 +154,42 @@ describe("decideMenuRetry — 창이 없을 때 메뉴의 재시도가 유일한
   it("does nothing while quitting, with or without a window", () => {
     expect(decideMenuRetry({ quitting: true, hasWindow: true })).toBe("ignore");
     expect(decideMenuRetry({ quitting: true, hasWindow: false })).toBe("ignore");
+  });
+});
+
+describe("창을 다시 열 때 넘어진 게이트 — 재시도를 되살린다 (Task 14 fix 1-4)", () => {
+  const st = (id: ServiceStatus["id"], process: ServiceStatus["process"]): ServiceStatus => ({
+    id,
+    process,
+    health: process === "running" ? "ok" : "unknown",
+    owned: true,
+    restarts: 0,
+  });
+
+  it("gateUp is true only when the API is running (degraded counts as up)", () => {
+    expect(gateUp(null)).toBe(false);
+    expect(gateUp([])).toBe(false);
+    expect(gateUp([st("postgres", "running")])).toBe(false);
+    for (const p of ["failed", "starting", "stopped"] as const) {
+      expect(gateUp([st("postgres", "running"), st("api", p)])).toBe(false);
+    }
+    expect(gateUp([st("postgres", "running"), st("api", "running")])).toBe(true);
+    expect(gateUp([{ ...st("api", "running"), health: "degraded" }])).toBe(true);
+  });
+
+  it("reopening after postgres failed starts (retries) instead of attaching to nothing", async () => {
+    // 창이 없는 동안 자동 재시도는 헛돌았다. 기동으로 가야 재시도가 다시 돌고, 화면의 카운트다운이
+    // 실제로 걸린 타이머에서 나온다.
+    const failed = [st("postgres", "failed"), st("api", "stopped"), st("embed", "running"), st("worker", "stopped")];
+    const { log, deps } = recorder({ readyToAttach: () => gateUp(failed) });
+    await openWindowFlow(deps);
+    expect(log).toEqual(seq("shell", "start"));
+  });
+
+  it("reopening with the API up attaches, even if a background service failed", async () => {
+    const up = [st("postgres", "running"), st("api", "running"), st("embed", "failed"), st("worker", "running")];
+    const { log, deps } = recorder({ readyToAttach: () => gateUp(up) });
+    await openWindowFlow(deps);
+    expect(log).toEqual(seq("shell", "attach"));
   });
 });

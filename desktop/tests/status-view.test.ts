@@ -128,6 +128,29 @@ describe("servicesView", () => {
     expect(view.notices).toEqual([notice]);
   });
 
+  it("warns on the api row when this API launch skipped the migration check — the gate switched itself off (P2-C9)", () => {
+    const view = servicesView({ statuses: ALL_OK, restartNotice: null, logPathOf, migrationCheckSkipped: true });
+    const api = view.rows.find((r) => r.id === "api")!;
+    expect(api.tone).toBe("warn");
+    expect(api.warning).toContain("마이그레이션 검사가 돌지 않았어요");
+    expect(api.warning).toContain("통과한 것이 아니에요");
+    expect(api.warning).toContain("pnpm be:migrate");
+    // 다른 줄에는 붙지 않는다.
+    expect(view.rows.filter((r) => r.warning !== undefined).map((r) => r.id)).toEqual(["api"]);
+  });
+
+  it("does not warn when the check ran, or on an API that is not up", () => {
+    expect(servicesView({ statuses: ALL_OK, restartNotice: null, logPathOf }).rows[1].warning).toBeUndefined();
+    const down = servicesView({
+      statuses: [st("api", { process: "failed", health: "unknown", detail: "x" })],
+      restartNotice: null,
+      logPathOf,
+      migrationCheckSkipped: true,
+    });
+    expect(down.rows[0].warning).toBeUndefined();
+    expect(down.rows[0].tone).toBe("fail");
+  });
+
   it("says nothing has been started yet when there is no supervisor", () => {
     const view = servicesView({ statuses: null, restartNotice: null, logPathOf });
     expect(view.rows).toEqual([]);
@@ -161,9 +184,22 @@ describe("statusLine / shellStatusFrom", () => {
     });
     expect(shell.state).toBe("db-unreachable");
     expect(shell.logPath).toBe("/logs/supervisor.log");
-    // P2-C7: 원인과 "Docker Desktop을 실행"이 실패 화면에 있다.
-    expect(shell.detail).toContain(CAUSES.dockerDaemonDown.text);
-    expect(shell.detail).toContain(HINTS.dockerDaemonDown as string);
+    // P2-C7: 원인과 "Docker Desktop을 실행"이 실패 화면에 있다. 상수를 상수에 대지 않는다 — 안내
+    // 문구에서 "Docker Desktop"을 빼도 초록인 단언은 기준을 지키지 않는다.
+    expect(shell.detail).toContain("Docker Desktop이 실행 중이 아니에요");
+    expect(shell.detail).toContain("Docker Desktop을 실행");
+  });
+
+  it("never puts a retry countdown on the screen by itself — only the code that schedules the timer may", () => {
+    // 카운트다운은 main.ts의 scheduleRetry가 실제로 타이머를 건 자리에서만 붙는다. 이 조립이 초를
+    // 스스로 적으면, 창을 다시 연 화면처럼 아무 타이머도 없는 곳에서 "N초 뒤에 다시 시도해요"라고
+    // 거짓말을 한다.
+    const shell = shellStatusFrom({
+      statuses: [st("postgres", { process: "failed", health: "unknown", detail: CAUSES.dockerDaemonDown.text })],
+      restartNotice: null,
+      logPathOf,
+    });
+    expect(shell.retryInSeconds).toBeUndefined();
   });
 
   it("uses the generic failed screen for any other failed service, with that service's log", () => {

@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import * as vm from "vm";
@@ -191,6 +192,21 @@ describe("services.html", () => {
     expect(byId.get("notices")!.hidden).toBe(true);
   });
 
+  it("shows the skipped-migration-check warning on the api row as text", () => {
+    const { sandbox, byId } = loadPage("services.html");
+    const view = servicesView({
+      statuses: [{ id: "api", process: "running", health: "ok", owned: true, restarts: 0 }],
+      restartNotice: null,
+      logPathOf: (id) => id,
+      migrationCheckSkipped: true,
+    });
+    (sandbox.__damwha_render as (v: unknown) => void)(view);
+    const row = byId.get("rows")!.children[0];
+    expect(row.dataset.tone).toBe("warn");
+    const warning = row.all().find((n) => n.className === "warning")!;
+    expect(warning.textContent).toBe(`주의: ${view.rows[0].warning}`);
+  });
+
   it("replaces the rows on every render instead of appending — it is redrawn live", () => {
     const { sandbox, byId } = loadPage("services.html");
     const render = sandbox.__damwha_render as (v: unknown) => void;
@@ -242,4 +258,43 @@ describe("status.html", () => {
     const { html } = loadPage("status.html");
     expect(codeOf(html)).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|document\.write|<button\b|<form\b/);
   });
+});
+
+describe("Content-Security-Policy — 둘째 겹 (스펙 §6.11, Task 14 fix 1-5)", () => {
+  const sha = (text: string) => `'sha256-${createHash("sha256").update(text, "utf8").digest("base64")}'`;
+
+  for (const file of ["services.html", "status.html"]) {
+    describe(file, () => {
+      const html = fs.readFileSync(path.join(__dirname, "..", "shell", file), "utf8");
+      const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(html)?.[1] ?? "";
+      const directives = new Map(
+        csp
+          .split(";")
+          .map((d) => d.trim().split(/\s+/))
+          .filter((d) => d[0] !== "")
+          .map(([name, ...values]) => [name, values] as const),
+      );
+
+      it("allows exactly this file's inline script and style by hash — a stale hash would blank the page", () => {
+        const script = /<script>([\s\S]*?)<\/script>/.exec(html)![1];
+        const style = /<style>([\s\S]*?)<\/style>/.exec(html)![1];
+        expect(directives.get("script-src")).toEqual([sha(script)]);
+        expect(directives.get("style-src")).toEqual([sha(style)]);
+      });
+
+      it("denies everything else: no inline handlers, no eval, no remote or data sources", () => {
+        expect(directives.get("default-src")).toEqual(["'none'"]);
+        expect(directives.get("base-uri")).toEqual(["'none'"]);
+        expect(directives.get("form-action")).toEqual(["'none'"]);
+        expect(csp).not.toMatch(/unsafe-inline|unsafe-eval|unsafe-hashes|https?:|data:|blob:|\*/);
+      });
+
+      it("is declared before the style and script it governs", () => {
+        const at = html.indexOf("Content-Security-Policy");
+        expect(at).toBeGreaterThan(-1);
+        expect(at).toBeLessThan(html.indexOf("<style>"));
+        expect(at).toBeLessThan(html.indexOf("<script>"));
+      });
+    });
+  }
 });
