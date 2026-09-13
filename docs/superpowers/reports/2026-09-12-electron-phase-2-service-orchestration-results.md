@@ -464,8 +464,7 @@ stderr로 보내고 미적용 마이그레이션 경고는 `.warn()`이라 **std
 - **I-3 — worker supervisor가 크래시한 뒤의 재시작은 이전 `--once` 자식을 추적하지 않는다.**
   - 피해 조건: 같은 `WORKER_ID`의 고아가 아직 쓰는 중에 reaper가 그 job을 되돌리면, 한 job에 writer가 둘 생긴다.
   - 스펙: §6.5·R2-6에 정직하게 적어 두었다.
-  - 해소: job별 lease token과 함께 **Phase 6**. 부분 해소 설계(`ServiceSpec.leftovers` 훅, worker 어댑터의
-    `--once` 스냅샷, 감독자 `held` 상태)의 전문은 원장 작업 공간의 `final-fix-report.md` "I-3 — deferred design"에 있다.
+  - 해소: job별 lease token과 함께 **Phase 6**. 부분 해소 설계는 부록 A에 있다.
   - 이것을 밟는 완료 기준은 없다.
 - **M-5.** 기동 중 정리가 `StopOutcome`을 버리고 `rt.result`를 비운다. 정리하지 못한 자식이 추적에서 빠지고, 재시작이
   그 옆에 또 띄울 수 있다. `Math.max(plan.graceMs, WORKER_GRACE_MS)`가 worker의 5초 정리 유예를 90초로 바꾼다.
@@ -499,3 +498,42 @@ stderr로 보내고 미적용 마이그레이션 경고는 `.warn()`이라 **std
 - **Phase 6** — job lease token.
   - R2-6과 I-3의 근본 해소.
   - Developer ID 서명(§4.2-2의 ad-hoc 서명을 대체).
+
+## 부록 A. I-3 — 보류한 설계 (Phase 6이 lease token과 함께 쓴다)
+
+최종 리뷰 수정 중 구현자가 구현 전에 올린 설계다. 설계는 옳다고 판정했다. 넣지 않은 이유는 세 가지다.
+
+1. 마지막 수정 dispatch에 새 감독자 상태·새 훅·health tick마다 `ps`·재시작 보류를 한꺼번에 넣게 된다.
+2. 이것을 밟는 완료 기준이 없다.
+3. 부분 해소이고, 근본 해소(job별 lease token)와 한 번에 하는 편이 낫다.
+
+**왜 재시작 경로 한 곳만 고쳐서는 안 되나.** supervisor가 죽은 뒤 `--once` 자식은 ppid 1이 되어 어떤 ppid BFS에도
+안 보인다. 그래서 스냅샷은 **supervisor가 살아 있을 때** 찍어야 한다. 그러려면 `ps`가 필요한데, 그것은 범용
+감독자가 아니라 `main.ts`나 어댑터 deps에 산다.
+
+**설계.**
+
+1. **`types.ts`** — 선택 훅 `ServiceSpec.leftovers?(): Promise<number[]>`를 더한다.
+   - 이 서비스의 이전 인스턴스가 남긴, 아직 살아 있는 프로세스를 돌려준다.
+   - 읽기 전용이다. 신호는 보내지 않는다.
+2. **worker 어댑터** — deps `onceChildren(rootPid)`·`stillOnce(pids)`를 더한다.
+   - `readiness()`가 ready/degraded로 판정할 때만 `--once` pid를 찍는다. 10초 health tick마다 `ps` 한 번이다.
+     ready 전에는 `--once` 자식이 있을 수 없다.
+   - `leftovers()`는 `stillOnce(마지막 스냅샷)`이다. `ps`가 실패하면 후보를 유지한다 — 사라졌다고 증명할 수 없기
+     때문이다.
+   - 트리 전체가 아니라 `--once` pid만 본다. 고아 `mlx_lm.server`는 스스로 끝나지 않아 worker를 영원히 막는다.
+   - 생존 확인 때 그 pid의 명령에 아직 `--once`가 있는지 다시 본다. pid가 재사용됐으면 보류가 걸리지 않는다.
+3. **`shutdown.ts`** — 순수 파서 `onceChildren(psOutput, set)`을 두고, `hasOnceChild`는 `.length > 0`이 된다.
+   `main.ts`는 `ps -axo pid,ppid,command` 한 번으로 두 deps를 배선한다.
+4. **`supervisor.ts`**
+   - `Runtime.held: number[] | null`을 더한다.
+   - `watchForDeath` → `awaitLeftovers`.
+     - 목록이 비어 있지 않은 동안 `failed`(종료 원인 + 새 CAUSES 문구)로 두고, `arm()`으로 5초마다 다시 본다.
+     - 비면 평소의 `scheduleRestart`로 간다.
+     - 보류는 재시작 예산을 쓰지 않는다.
+   - 보류 중에는 `bringOnce`가 바로 돌아간다. 메뉴 재시도가 고아 옆에 새 worker를 띄우지 못한다.
+   - `stopAll`은 보류 중인 런타임의 leftovers를 다시 보고 `{stopped:false, leaked, detail}`을 보고한다.
+     신호 없이 거짓 "깨끗한 ⌘Q"를 없앤다.
+   - 보류는 `pending`에 넣지 않는다. 종료가 그것을 기다리지 않는다.
+
+**알려진 한계:** supervisor가 죽기 10초 안에 뜬 `--once` 자식은 놓친다.
