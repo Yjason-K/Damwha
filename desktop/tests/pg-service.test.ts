@@ -196,6 +196,8 @@ describe("embeddedPostgresSpec.launch — refusals change nothing", () => {
     expect(e.message).toMatch(/짝이 맞지 않아/);
     expect(tools(t.world)).toEqual([]);
     expect(fs.existsSync(t.layout.pgdata)).toBe(false);
+    expect(fs.existsSync(t.layout.runDir)).toBe(false);
+    expect(fs.existsSync(t.layout.backups)).toBe(false);
   });
 
   it("refuses a cluster without a marker", async () => {
@@ -203,6 +205,8 @@ describe("embeddedPostgresSpec.launch — refusals change nothing", () => {
     t.existing({ marker: null });
     await refusal(t.spec.launch(t.ctx));
     expect(t.handles).toHaveLength(0);
+    expect(fs.existsSync(t.layout.runDir)).toBe(false);
+    expect(fs.existsSync(t.layout.backups)).toBe(false);
   });
 
   it("refuses a marker from another cluster", async () => {
@@ -210,6 +214,8 @@ describe("embeddedPostgresSpec.launch — refusals change nothing", () => {
     t.existing({ marker: serializeMarker({ clusterId: "999", databaseOid: 16384 }) });
     await refusal(t.spec.launch(t.ctx));
     expect(t.handles).toHaveLength(0);
+    expect(fs.existsSync(t.layout.runDir)).toBe(false);
+    expect(fs.existsSync(t.layout.backups)).toBe(false);
   });
 
   it("refuses another major version without reading the control file", async () => {
@@ -218,6 +224,8 @@ describe("embeddedPostgresSpec.launch — refusals change nothing", () => {
     const e = await refusal(t.spec.launch(t.ctx));
     expect(e.message).toMatch(/PostgreSQL 버전\(15\)/);
     expect(tools(t.world)).toEqual([]);
+    expect(fs.existsSync(t.layout.runDir)).toBe(false);
+    expect(fs.existsSync(t.layout.backups)).toBe(false);
   });
 
   it("refuses when the bundle is incomplete and names what is missing", async () => {
@@ -226,6 +234,8 @@ describe("embeddedPostgresSpec.launch — refusals change nothing", () => {
     const e = await refusal(t.spec.launch(t.ctx));
     expect(e.message).toMatch(/pg_dump/);
     expect(fs.existsSync(t.layout.dataDir)).toBe(false);
+    expect(fs.existsSync(t.layout.runDir)).toBe(false);
+    expect(fs.existsSync(t.layout.backups)).toBe(false);
   });
 
   it("turns an unexpected throw into a manual failure", async () => {
@@ -260,9 +270,15 @@ describe("embeddedPostgresSpec.launch — the lock left by a previous run", () =
     t.existing();
     pidfile(t, 4242);
     t.deps.psInfo = ourPostgres(t);
+    const leftover = path.join(t.layout.dataDir, "postgres.initdb-deadbeef");
+    fs.mkdirSync(leftover, { recursive: true });
     const e = await refusal(t.spec.launch(t.ctx));
     expect(e.message).toMatch(/pid 4242/);
     expect(t.handles).toHaveLength(0);
+    // 락 판정 전에는 §5의 삭제·디렉터리 생성 어느 쪽도 일어나지 않아야 한다.
+    expect(fs.existsSync(t.layout.runDir)).toBe(false);
+    expect(fs.existsSync(t.layout.backups)).toBe(false);
+    expect(fs.existsSync(leftover)).toBe(true);
   });
 
   it("removes a stale lock whose pid now belongs to another program", async () => {
@@ -282,10 +298,15 @@ describe("embeddedPostgresSpec.launch — the lock left by a previous run", () =
     const t = setup({ psInfo: async () => { throw new Error("ps timed out"); } });
     t.existing();
     pidfile(t, 4242);
+    const leftover = path.join(t.layout.dataDir, "postgres.initdb-deadbeef");
+    fs.mkdirSync(leftover, { recursive: true });
     const e = await refusal(t.spec.launch(t.ctx));
     expect(e.message).toMatch(/잠금 파일의 주인\(pid 4242\)/);
     expect(fs.existsSync(path.join(t.layout.pgdata, "postmaster.pid"))).toBe(true);
     expect(t.handles).toHaveLength(0);
+    expect(fs.existsSync(t.layout.runDir)).toBe(false);
+    expect(fs.existsSync(t.layout.backups)).toBe(false);
+    expect(fs.existsSync(leftover)).toBe(true);
   });
 
   it("leaves a lock of a dead pid to PostgreSQL", async () => {
@@ -339,6 +360,18 @@ describe("embeddedPostgresSpec.readiness", () => {
     expect(tools(t.world)).not.toContain("createdb");
   });
 
+  it("distinguishes an unparseable marker from a missing one", async () => {
+    const t = setup();
+    t.existing();
+    const r = await launched(t);
+    t.handles[0].markReady();
+    // 파일은 있는데 못 읽는 경우다 — 판정표 2가 파일이 아예 없는 경우(cluster-without-marker)와 다른 이유를 말해야 한다.
+    fs.writeFileSync(t.layout.marker, "not json");
+    const out = await t.spec.readiness(r, t.ctx);
+    expect(out).toMatchObject({ kind: "failed", recovery: "manual" });
+    expect((out as { detail: string }).detail).toMatch(/짝 표시를 읽을 수 없어요/);
+  });
+
   it("refuses a recreated database", async () => {
     const t = setup();
     t.existing();
@@ -366,6 +399,23 @@ describe("embeddedPostgresSpec.readiness", () => {
     expect(await t.spec.readiness(r, t.ctx)).toEqual({ kind: "ready" });
     t.handles[0].markReady("stopping");
     expect(await t.spec.readiness(r, t.ctx)).toMatchObject({ kind: "degraded" });
+  });
+
+  it("does not treat stopping as degraded before table 2 has verified the handle", async () => {
+    const t = setup();
+    const r = await launched(t);
+    // 판정표 2를 아직 통과하지 않은 핸들 — stopping을 degraded로 올리면 감독자가 이걸 성공으로 읽는다.
+    t.handles[0].markReady("stopping");
+    expect(await t.spec.readiness(r, t.ctx)).toEqual({ kind: "not-ready" });
+  });
+
+  it("tags a server that died before ready as auto — worth a restart", async () => {
+    const t = setup();
+    const r = await launched(t);
+    t.handles[0].die();
+    const out = await t.spec.readiness(r, t.ctx);
+    expect(out).toMatchObject({ kind: "failed", recovery: "auto" });
+    expect((out as { detail: string }).detail).toMatch(/프로세스가 종료됐어요 \(코드 1\)/);
   });
 
   it("hands the launch signal to every tool so ⌘Q can end them", async () => {

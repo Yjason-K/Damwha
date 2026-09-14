@@ -26,8 +26,13 @@ describe.skipIf(!HAVE_BUNDLE)("embedded postgres against the real bundle", () =>
   });
 
   afterAll(async () => {
-    for (const r of started) if (r.handle?.alive()) await r.handle.stop(10_000);
-    fs.rmSync(ud, { recursive: true, force: true });
+    // 하나의 stop()이 던져도(실번들이라 실제로 일어날 수 있다) 나머지 postmaster를 못 내리고 임시 디렉터리도
+    // 못 지우면 다음 실행이 남은 소켓·pid를 물려받는다 — allSettled로 전부 시도하고, 삭제는 finally로 반드시 한다.
+    try {
+      await Promise.allSettled(started.filter((r) => r.handle?.alive()).map((r) => r.handle!.stop(10_000)));
+    } finally {
+      fs.rmSync(ud, { recursive: true, force: true });
+    }
   });
 
   function deps(): EmbeddedPostgresDeps {

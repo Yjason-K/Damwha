@@ -190,8 +190,12 @@ export function embeddedPostgresSpec(deps: EmbeddedPostgresDeps): ServiceSpec {
 
   /** 판정표 2 (§6.2). */
   async function verifyDatabase(signal: AbortSignal): Promise<"ok" | "retry"> {
-    const marker = parseMarker(readIfExists(layout.marker) ?? "");
-    if (marker === null) refuse(pairing("cluster-without-marker"));
+    // 파일이 아예 없는 것과 있는데 못 읽는 것은 다른 이유다 — decideCluster(판정표 1)가 자신이 읽는 마커에 이미
+    // 같은 구분을 두므로(pg-pairing.ts), 판정표 2도 같은 어휘를 쓴다.
+    const markerText = readIfExists(layout.marker);
+    if (markerText === null) refuse(pairing("cluster-without-marker"));
+    const marker = parseMarker(markerText);
+    if (marker === null) refuse(pairing("marker-unreadable"));
     const oid = await queryDatabaseOid(signal);
     if (oid === "retry") return "retry";
     const decision = decideDatabase({ oid, marker, storageHasFiles: readStorageFacts(layout.storage).hasFiles });
@@ -245,23 +249,34 @@ export function embeddedPostgresSpec(deps: EmbeddedPostgresDeps): ServiceSpec {
           if (decision.reason === "controldata-failed") refuse(CAUSES.pgControldataFailed.text(controldataFailure ?? layout.pgdata));
           refuse(pairing(decision.reason));
         }
-        ensureDirs();
-        removeInitdbLeftovers();
-        if (decision.kind === "initdb") await initCluster(ctx.signal);
-        else await handleLock();
+        // 락 판정(handleLock)도 거부할 수 있다 — ps가 실패하거나 고아가 안 내려가면. 그 거부가 §5를 어기지 않도록
+        // "start" 경로는 handleLock을 먼저 끝내고서야 디렉터리를 만들고 initdb 임시물을 지운다.
+        if (decision.kind === "initdb") {
+          ensureDirs();
+          removeInitdbLeftovers();
+          await initCluster(ctx.signal);
+        } else {
+          await handleLock();
+          ensureDirs();
+          removeInitdbLeftovers();
+        }
         return { handle: deps.spawnPostmaster(ctx.logFile("postgres")), owned: true };
       });
     },
     async readiness(result, ctx): Promise<ReadinessResult> {
       const handle = result.handle;
       if (handle === null) return { kind: "failed", detail: CAUSES.noHandle.text, recovery: "manual" };
-      // 부류를 붙이지 않는다(auto). 서버가 준비 전에 죽은 것은 다시 띄워 볼 만하다 (스펙 §6.7 표).
-      if (!handle.alive()) return { kind: "failed", detail: failureBlock(handle.stderrTail()) || CAUSES.processExited.text(handle.exitCode() ?? "?") };
+      // auto로 못박는다. 서버가 준비 전에 죽은 것은 다시 띄워 볼 만하다 (스펙 §6.7 표) — manualUnlessTagged와
+      // 달리 readiness()는 기본값이 없으므로, 명시하지 않으면 undefined가 되어 감독자가 이 행을 특정할 수 없다.
+      if (!handle.alive())
+        return { kind: "failed", recovery: "auto", detail: failureBlock(handle.stderrTail()) || CAUSES.processExited.text(handle.exitCode() ?? "?") };
       const text = readIfExists(path.join(layout.pgdata, "postmaster.pid"));
       const pidfile = text === null ? null : parsePostmasterPid(text);
       // pid를 대조한다. 고아를 내린 직후나 재시작 직후에는 이전 postmaster의 ready가 파일에 남아 있을 수 있다.
       if (pidfile === null || pidfile.pid !== handle.pid) return { kind: "not-ready" };
-      if (pidfile.status === "stopping") return { kind: "degraded", detail: CAUSES.pgStopping.text };
+      // 판정표 2를 아직 통과하지 않은 핸들의 stopping은 degraded가 아니다 — 감독자는 degraded를 게이트가 열려도
+      // 되는 신호로 읽으므로, 검증 전에 이 상태를 주면 마이그레이션을 못 마친 데이터베이스로 게이트가 열린다.
+      if (pidfile.status === "stopping") return verified.has(handle) ? { kind: "degraded", detail: CAUSES.pgStopping.text } : { kind: "not-ready" };
       if (pidfile.status !== "ready" || !fs.existsSync(layout.socketFile)) return { kind: "not-ready" };
       if (verified.has(handle)) return { kind: "ready" };
       try {
