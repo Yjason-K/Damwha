@@ -262,8 +262,8 @@ describe("statusLine / shellStatusFrom", () => {
 
 describe("failureDetail", () => {
   it("adds the hint under a cause thrown before the supervisor exists", () => {
-    expect(failureDetail("앱을 시작하지 못했어요", CAUSES.dockerMissing.text)).toBe(
-      `앱을 시작하지 못했어요: ${CAUSES.dockerMissing.text}\n${HINT_PREFIX}${HINTS.dockerMissing}`,
+    expect(failureDetail("앱을 시작하지 못했어요", CAUSES.repoRootMissing.text)).toBe(
+      `앱을 시작하지 못했어요: ${CAUSES.repoRootMissing.text}\n${HINT_PREFIX}${HINTS.repoRootMissing}`,
     );
   });
 
@@ -343,12 +343,6 @@ describe("화면이 싣는 해결 문구 — 완료 기준 P2-C7·C8·C9 (Task 1
     const row = servicesView({ statuses, restartNotice: null, logPathOf }).rows[2];
     expect(row.cause).toContain("uv를 찾지 못했어요");
     expect(row.hint).toMatch(/config\.json의 UV_BIN/);
-  });
-
-  it("P2-C8: docker not found before the supervisor exists — names it and the config.json fix", () => {
-    const text = failureDetail("앱을 시작하지 못했어요", CAUSES.dockerMissing.text);
-    expect(text).toContain("docker를 찾지 못했어요");
-    expect(text).toMatch(/config\.json의 .*DOCKER_BIN/);
   });
 
   it("P2-C9: pending migrations — the failure screen gives the `pnpm be:migrate` guidance", async () => {

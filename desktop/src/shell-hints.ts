@@ -15,19 +15,17 @@ import type { ServiceId, ServiceStatus } from "./services/types";
  */
 type Hint = string | null | Partial<Record<ServiceId, string>>;
 
-const INSTALL_OR_CONFIGURE = "설치했는지 확인하거나, config.json의 UV_BIN·DOCKER_BIN에 경로를 적어 주세요.";
+const INSTALL_OR_CONFIGURE = "설치했는지 확인하거나, config.json의 UV_BIN에 경로를 적어 주세요.";
 
 /**
  * `Record<CauseId, …>`라서 causes.ts에 원인을 더하고 여기서 안내를 정하지 않으면 lint(tsc)가
  * 걸린다. 그 강제가 이 표가 "손으로 적은 목록이라 원인 하나를 조용히 빠뜨리는" 일을 막는다.
  */
 export const HINTS: Record<CauseId, Hint> = {
-  dockerDaemonDown: "Docker Desktop을 실행한 뒤 다시 시도해 주세요.",
-  dockerMissing: INSTALL_OR_CONFIGURE,
   uvMissing: INSTALL_OR_CONFIGURE,
-  // uv를 부르는 것은 worker·embed, docker를 부르는 것은 postgres다. dev의 API 런처는 pnpm을
-  // 부르므로 거기에 UV_BIN·DOCKER_BIN을 말하면 틀린 안내다.
-  spawnNotFound: { postgres: INSTALL_OR_CONFIGURE, worker: INSTALL_OR_CONFIGURE, embed: INSTALL_OR_CONFIGURE },
+  // uv를 부르는 것은 worker·embed다. dev의 API 런처는 pnpm을 부르므로 거기에 UV_BIN을 말하면
+  // 틀린 안내다.
+  spawnNotFound: { worker: INSTALL_OR_CONFIGURE, embed: INSTALL_OR_CONFIGURE },
   workerEnvMissing: "be/worker/.env.example을 복사해 값을 채운 뒤 다시 시도해 주세요.",
   pendingMigrations: "터미널에서 `pnpm be:migrate`를 실행한 뒤 다시 시도해 주세요.",
   externalWorker:
@@ -90,7 +88,7 @@ export const HINTS: Record<CauseId, Hint> = {
 export const DEGRADED_HINT = "의존하는 서비스가 돌아오면 자동으로 복구됩니다. 앱을 다시 시작하지 않아도 됩니다.";
 
 /**
- * 원인 문구 하나에 대한 안내. 서비스 상태가 아닌 원인(감독자를 세우기 전의 실패 — docker·저장소
+ * 원인 문구 하나에 대한 안내. 서비스 상태가 아닌 원인(감독자를 세우기 전의 실패 — 저장소
  * 폴더)도 이것을 쓴다. `id`가 없으면 id별 안내는 고르지 않는다.
  */
 export function hintForDetail(detail: string, id?: ServiceId): string | undefined {
@@ -124,9 +122,9 @@ export function recoveryHint(status: ServiceStatus): string | undefined {
   const detail = causeOf(status);
   const cause = detail === undefined ? undefined : causeIn(detail);
   if (cause === undefined) return undefined;
-  // 원인을 **먼저** 본다. degraded를 먼저 보면 부팅 뒤 Docker Desktop이 꺼진 postgres에 "자동으로
-  // 복구됩니다"가 붙고 "Docker Desktop을 실행"이 사라진다 — 사람이 켜기 전에는 복구되지 않는데
-  // (Task 14 리뷰 I-1). 스스로 풀린다고 카탈로그가 선언한 원인만 그 안내를 받는다.
+  // 원인을 **먼저** 본다. degraded를 먼저 보면 종료 중(pgStopping)으로 degraded가 된 postgres에도
+  // "자동으로 복구됩니다"가 붙어 그 원인 자신의 안내가 사라진다 — 사람이 다시 시도를 누르기
+  // 전에는 복구되지 않는데 (Task 14 리뷰 I-1). 스스로 풀린다고 카탈로그가 선언한 원인만 그 안내를 받는다.
   if (status.health === "degraded" && CAUSES[cause].selfRecovers) return DEGRADED_HINT;
   return hintOf(cause, status.id);
 }

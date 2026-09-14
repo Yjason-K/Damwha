@@ -33,8 +33,8 @@ export interface Cause {
    * 자신의 안내다.
    *
    * degraded라고 저절로 풀리는 것이 아니다. 감독자의 재프로브는 readiness의 failed detail을 그대로
-   * degraded에 싣는다 — 부팅 뒤 Docker Desktop이 꺼진 postgres가 `dockerDaemonDown`으로 degraded가
-   * 되고, 그것은 사람이 Docker Desktop을 켜기 전에는 돌아오지 않는다. 전에는 degraded면 원인을 보지
+   * degraded에 싣는다 — 부팅 뒤 데이터베이스가 종료 중(pgStopping)으로 degraded가 된 postgres가
+   * 그렇고, 그것은 사람이 다시 시도를 누르기 전에는 돌아오지 않는다. 전에는 degraded면 원인을 보지
    * 않고 "자동으로 복구됩니다"를 붙여 바로 그 행동을 지웠다 (Task 14 리뷰 I-1).
    *
    * 필수 필드라 원인을 더하면서 정하지 않으면 lint(tsc)가 걸린다. 모르면 false다 — 거짓 안심이
@@ -44,18 +44,6 @@ export interface Cause {
 }
 
 export const CAUSES = {
-  /** postgres — docker CLI가 데몬에 못 붙었다 (postgres.ts의 DAEMON_DOWN). */
-  dockerDaemonDown: {
-    match: /Docker Desktop이 실행 중이 아니에요/,
-    text: "Docker Desktop이 실행 중이 아니에요.",
-    selfRecovers: false,
-  },
-  /** main.ts — config.json에도 탐색 목록에도 docker가 없다. */
-  dockerMissing: {
-    match: /docker를 찾지 못했어요/,
-    text: "docker를 찾지 못했어요.",
-    selfRecovers: false,
-  },
   /** worker·embed — config.json에도 탐색 목록에도 uv가 없다. */
   uvMissing: {
     match: /uv를 찾지 못했어요/,
@@ -63,11 +51,10 @@ export const CAUSES = {
     selfRecovers: false,
   },
   /**
-   * 경로는 있었는데 그 자리에 실행 파일이 없다 — config.json의 UV_BIN·DOCKER_BIN이 틀린 경우다
+   * 경로는 있었는데 그 자리에 실행 파일이 없다 — config.json의 UV_BIN이 틀린 경우다
    * (탐색은 존재하는 파일만 돌려준다). 이 문구는 **앱이 쓰지 않는다.** Node의 `spawn <경로> ENOENT`
-   * 이고, 두 길로 올라온다: launchWithUv가 싱크에 적는 `spawn failed: <e.message>`를 감독자가 죽은
-   * 자식의 블록으로(worker·embed), main.ts의 dockerRun이 `Error: <e.message>`를 compose stderr
-   * 자리로(postgres).
+   * 이고, launchWithUv가 싱크에 적는 `spawn failed: <e.message>`를 감독자가 죽은 자식의
+   * 블록으로 올린다(worker·embed).
    */
   spawnNotFound: {
     match: /spawn \S+ ENOENT/,

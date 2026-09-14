@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createConfigReloader, RESTART_ONLY_KEYS } from "../src/config-reload";
 import type { ApiEnv, DatabaseMode, LoadedConfig } from "../src/config";
 import { embedSpec } from "../src/services/embed";
+import { externalPostgresSpec } from "../src/services/pg-service";
 import { buildSpecs, type SpecDeps } from "../src/services/specs";
 import type { EmbedProbe } from "../src/services/external";
 import type { LaunchContext } from "../src/services/types";
@@ -202,7 +203,7 @@ function recordingCtx(env: Record<string, string>): { ctx: LaunchContext; read: 
 }
 
 const specFakes: SpecDeps = {
-  docker: async () => ({ stdout: "", stderr: "", code: 0 }),
+  postgres: externalPostgresSpec(),
   api: {
     verifyOwnListener: async () => true,
     isPortOccupied: async () => false,

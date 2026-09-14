@@ -50,6 +50,13 @@ import { createMigrationCheckWatch } from "./services/api";
 import { isRepoRoot } from "./repo-root";
 import { rotateIfNeeded } from "./logs";
 import { freePort } from "./port";
+import { mayAutoRetry } from "./retry-policy";
+import { packagedMigrationRunner } from "./migrate-process";
+import { devMigrationRunner, runMigrationGate } from "./services/migration-gate";
+import { DB_NAME, DB_SUPERUSER, pgBinaries, pgLayout } from "./services/pg-layout";
+import { psInfo, spawnPostmaster, stopOrphanPostmaster } from "./services/pg-handle";
+import { embeddedPostgresSpec, externalPostgresSpec, PG_FAST_GRACE_MS, PG_IMMEDIATE_GRACE_MS } from "./services/pg-service";
+import { runTool } from "./services/tool-runner";
 import type {
   LaunchContext,
   LaunchResult,
@@ -142,6 +149,8 @@ let launchCtx: { ctx: Omit<LaunchContext, "signal">; baseline: ApiEnv; mode: Dat
  * 없고, 그 침묵이 재리뷰 §4-1의 절반이었다.
  */
 let restartNotice: string | null = null;
+/** config.json이 말했지만 앱이 쓰지 않은 값의 경고(loadConfig의 warning). 화면과 상태 창의 안내 줄에 남긴다. */
+let configWarning: string | null = null;
 /**
  * 종료 전에 찍어 둔 worker 자손 pid. `undefined`와 빈 Set은 **다른 뜻**이다 —
  * shutdown.ts의 knownDescendants 주석에 있다.
@@ -704,21 +713,19 @@ function listExternalWorkers(): Promise<number[]> {
   });
 }
 
-async function dockerRun(bin: string, args: string[]) {
-  try {
-    const { stdout, stderr } = await execFileAsync(bin, args, { timeout: 30_000 });
-    return { stdout, stderr, code: 0 };
-  } catch (e) {
-    const err = e as { stdout?: string; stderr?: string; code?: number | string };
-    // `||`이지 `??`가 아니다. 실행 파일이 없으면(DOCKER_BIN이 틀림) execFile은 stderr를 **빈
-    // 문자열**로 채워 거부하므로, `??`는 그 빈 문자열을 원인으로 넘겨 postgres가 원인 없는
-    // "실패"로 섰다. 숫자가 아닌 code("ENOENT")도 실패다 — 0이 아니면 된다.
-    return {
-      stdout: err.stdout ?? "",
-      stderr: err.stderr || String(e),
-      code: typeof err.code === "number" ? err.code : 1,
-    };
-  }
+/** 번들 PostgreSQL 트리. packaged는 Resources, dev는 build-postgres.sh가 스테이징한 자리다 (Phase 3 스펙 §6.8). */
+function pgBundleDir(): string {
+  return app.isPackaged ? path.join(process.resourcesPath, "postgres") : path.join(app.getAppPath(), "build", "postgres");
+}
+
+/** 상태 창의 postgres 줄에 싣는 디버깅 접속 명령 (스펙 §6.3). 번들 psql을 쓴다 — Homebrew psql이 없는 맥이다. */
+function debugCommand(): string {
+  const layout = pgLayout(app.getPath("userData"));
+  return `"${pgBinaries(pgBundleDir()).psql}" -h "${layout.runDir}" -U ${DB_SUPERUSER} ${DB_NAME}`;
+}
+
+function currentDatabaseMode(): DatabaseMode | null {
+  return launchCtx?.mode ?? null;
 }
 
 /**
@@ -734,7 +741,7 @@ async function resolveRepoRoot(configured: string | undefined): Promise<string |
   }
   const picked = await dialog.showOpenDialog({
     title: "담화 저장소 폴더를 골라 주세요",
-    message: "be/worker와 be/docker-compose.yml이 있는 폴더입니다.",
+    message: "be/worker가 있는 담화 저장소 폴더입니다.",
     properties: ["openDirectory"],
   });
   const dir = picked.filePaths[0];
@@ -746,14 +753,24 @@ async function resolveRepoRoot(configured: string | undefined): Promise<string |
 
 /** 감독자의 지금 상태를 셸 화면 한 장으로 접는다. 판정은 status-view.ts의 shellStatusFrom에 있다. */
 function shellStatusOf(): ShellStatus {
-  return shellStatusFrom({ statuses: supervisor?.statuses() ?? [], restartNotice, logPathOf });
+  return shellStatusFrom({
+    statuses: supervisor?.statuses() ?? [],
+    restartNotice,
+    configWarning,
+    externalDatabase: currentDatabaseMode()?.kind === "external",
+    logPathOf,
+  });
 }
 
 /** 상태 창이 그릴 재료. 판정은 status-view.ts의 servicesView에 있다. */
 function servicesViewNow() {
+  const mode = currentDatabaseMode();
   return servicesView({
     statuses: supervisor?.statuses() ?? null,
     restartNotice,
+    configWarning,
+    externalDatabase: mode?.kind === "external",
+    debugCommand: mode?.kind === "embedded" ? debugCommand() : null,
     logPathOf,
     migrationCheckSkipped: migrationWatch.skippedFor(supervisor?.runtimeOf("api")?.result?.handle),
   });
@@ -837,7 +854,7 @@ async function reportFailure(mine: number, what: string, e: unknown): Promise<vo
   appendSupervisorLog(`${what} — ${reasonOf(e)}`);
   const target = activeWindow(mine);
   if (target === null) return;
-  const seconds = scheduleRetry();
+  const seconds = mayAutoRetry(null, e) ? scheduleRetry() : undefined;
   await showShell(target, {
     state: "failed",
     detail: failureDetail(what, reasonOf(e)),
@@ -897,7 +914,9 @@ async function startServices(mine: number): Promise<void> {
   if (!gateUp(supervisor?.statuses() ?? null)) {
     const target = activeWindow(mine);
     if (target === null) return;
-    await showShell(target, { ...shellStatusOf(), retryInSeconds: scheduleRetry() });
+    // 사람 손이 필요한 실패면 타이머를 걸지 않는다 — 마이그레이션이 20초마다 재실행되고 백업이 쌓인다 (Phase 3 스펙 §6.7).
+    const retryInSeconds = mayAutoRetry(supervisor?.statuses() ?? null) ? scheduleRetry() : undefined;
+    await showShell(target, { ...shellStatusOf(), retryInSeconds });
     return;
   }
   retryCount = 0;
@@ -951,7 +970,7 @@ function announceRestartNotice(mine: number, notice: string): void {
  * 실제로 그 자리에 있는 동안 결함 둘이 그 안에서 났다 (재리뷰 §4-1·§4-2).
  *
  * 자식 env만 다시 읽는다. ctx.bins(uv)와 repoRoot는 여기서 갱신해도 소용이 없다 —
- * postgresSpec은 docker 경로를 클로저로 이미 붙잡고 있어 ctx를 고쳐도 옛 값을 쓴다. 그 둘을
+ * 번들 경로와 모드도 감독자 생성 때 한 번 정해진다. 그 넷을
  * 반영하려면 감독자를 다시 만들어야 하고, 그것은 첫 감독자가 쥔 자식 셋의 유일한 참조를
  * 버리는 일이라 P2-C4가 금지한다. 그러므로 실패 화면의 "값을 고치면 다시 시도합니다"가 참인
  * 범위는 DATABASE_URL·STORAGE_ROOT·PORT 같은 **자식 env 키**다.
@@ -970,13 +989,14 @@ const reloadConfig = createConfigReloader({
 
 /**
  * 감독자를 세운다. 세울 수 없는 이유(설정 오류)를 화면에 적었으면 false를 돌려주고,
- * 부른 쪽은 물러난다. 던지는 실패(저장소·docker 부재)는 startOnce의 catch가 받는다.
+ * 부른 쪽은 물러난다. 던지는 실패(저장소 부재)는 startOnce의 catch가 받는다.
  */
 async function createSupervisorFor(mine: number): Promise<boolean> {
   const userData = app.getPath("userData");
   const cfg = loadConfig(userData);
   if (cfg.warning !== undefined) appendSupervisorLog(cfg.warning);
   for (const note of cfg.notes) appendSupervisorLog(note);
+  configWarning = cfg.warning ?? null;
 
   const requested = Number(cfg.env.PORT);
   /**
@@ -1010,10 +1030,6 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
 
   const dirs = searchDirs(app.getPath("home"), cfg.extraPath);
   const uv = cfg.uvBin ?? findExecutable("uv", dirs);
-  // DOCKER_BIN은 config.ts가 더 이상 읽지 않는다. compose 어댑터는 Task 12에서 사라진다.
-  const docker = findExecutable("docker", dirs);
-  // 고치는 방법(설치 · DOCKER_BIN)은 reportFailure가 failureDetail로 붙인다.
-  if (docker === null) throw new Error(CAUSES.dockerMissing.text);
 
   const ctx: Omit<LaunchContext, "signal"> = {
     repoRoot: resolved,
@@ -1025,7 +1041,7 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
     logFile: logPathOf,
   };
   // 스트림이 열린 뒤 옮기면 열린 핸들이 옮겨진 파일을 계속 가리킨다 — 띄우기 전에 돌린다.
-  for (const id of ["supervisor", "api", "worker", "embed"] as const) {
+  for (const id of ["supervisor", "api", "worker", "embed", "postgres"] as const) {
     rotateIfNeeded(logPathOf(id));
   }
 
@@ -1034,10 +1050,49 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
     dimension: Number(cfg.env.SEARCH_EMBEDDING_DIM ?? "1024"),
   };
 
+  const mode = cfg.databaseMode;
+  const layout = pgLayout(userData);
+  const binaries = pgBinaries(pgBundleDir());
+  const postgres =
+    mode.kind === "external"
+      ? externalPostgresSpec()
+      : embeddedPostgresSpec({
+          binaries,
+          layout,
+          runTool,
+          psInfo,
+          spawnPostmaster: (logFile) => spawnPostmaster({ binaries, layout, logFile, immediateGraceMs: PG_IMMEDIATE_GRACE_MS }),
+          stopOrphan: (pid) => stopOrphanPostmaster(pid, PG_FAST_GRACE_MS, PG_IMMEDIATE_GRACE_MS),
+          log: appendSupervisorLog,
+        });
+  // 러너의 env는 API와 같다 — inheritedEnv 위에 자식 env. DATABASE_URL을 **항상** 싣는다: dev의 cwd(be/)에서 dotenv가
+  // be/.env를 읽지만 이미 있는 값을 덮지 않는다 (스펙 §6.5-1).
+  const runnerEnv = (): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) if (typeof v === "string") out[k] = v;
+    return { ...out, ...ctx.env };
+  };
+  const migrationGate =
+    mode.kind === "external"
+      ? undefined
+      : (signal: AbortSignal) =>
+          runMigrationGate(
+            {
+              runner: app.isPackaged
+                ? packagedMigrationRunner({ apiDir: path.join(process.resourcesPath, "api"), env: runnerEnv() })
+                : devMigrationRunner({ repoRoot: resolved, env: runnerEnv(), runTool }),
+              runTool,
+              binaries,
+              layout,
+              log: appendSupervisorLog,
+            },
+            signal,
+          );
+
   // 자식을 띄우기 전에 한 번 더 본다. 여기까지 오는 길에는 resolveRepoRoot의 폴더 선택
   // 대화상자가 있고(packaged 첫 실행에서는 상한이 없다), 그 사이에 ⌘Q가 들어오면 stopAll()은
   // supervisor를 null로 스냅숏해 아무것도 정리하지 않고 끝난다. 그 **뒤에** 이 컨티뉴에이션이
-  // docker compose up -d와 detached 자식 둘을 띄우면 아무도 정리하지 않는 프로세스가 된다.
+  // postmaster와 detached 자식 둘을 띄우면 아무도 정리하지 않는 프로세스가 된다.
   // 감독자가 선 뒤로는 감독자 자신의 stopping/pending이 같은 일을 하므로, 구멍은 정확히
   // supervisor가 아직 null인 이 구간 하나다 — Phase 1의 runStart에 있던 검사와 같다
   // (리뷰 Important-2).
@@ -1047,12 +1102,13 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
   // 하나가 정하는데, 여기 두면 어떤 테스트도 그것을 부를 수 없다 (specs.ts의 주석).
   const created = createSupervisor(
     buildSpecs({
-      docker: (args) => dockerRun(docker, args),
+      postgres,
       api: {
         verifyOwnListener,
         isPortOccupied,
         onPendingMigrations: () => undefined,
         onMigrationCheckSkipped: (handle) => migrationWatch.skipped(handle),
+        ...(migrationGate === undefined ? {} : { migrationGate }),
       },
       embed: { probe: (url) => probeEmbedContract(url, wantEmbed), freePort },
       worker: { listExternal: listExternalWorkers, stop: stopOwnWorker },

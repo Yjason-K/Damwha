@@ -8,10 +8,10 @@ import { CAUSES, CAUSE_IDS, causeIn, type CauseId } from "../src/causes";
 import { DEGRADED_HINT, HINTS, hintForDetail, recoveryHint } from "../src/shell-hints";
 import { judgeAfterProbe } from "../src/services/api";
 import { probeEmbedContract } from "../src/services/external";
-import { postgresSpec } from "../src/services/postgres";
+import { embeddedPostgresSpec } from "../src/services/pg-service";
+import { PG_BINARY_NAMES, pgBinaries, pgLayout } from "../src/services/pg-layout";
 import { createSupervisor } from "../src/services/supervisor";
 import { launchWithUv, workerSpec } from "../src/services/worker";
-import { servicesView } from "../src/status-view";
 import type { LaunchContext, ServiceId, ServiceSpec, ServiceStatus } from "../src/services/types";
 
 const s = (over: Partial<ServiceStatus>): ServiceStatus => ({
@@ -24,11 +24,6 @@ const s = (over: Partial<ServiceStatus>): ServiceStatus => ({
 });
 
 describe("recoveryHint", () => {
-  it("tells the user to start Docker", () => {
-    expect(recoveryHint(s({ id: "postgres", detail: "Docker Desktop이 실행 중이 아니에요." })))
-      .toMatch(/Docker Desktop/);
-  });
-
   it("tells the user where to put the uv path", () => {
     expect(recoveryHint(s({ id: "worker", detail: "uv를 찾지 못했어요." })))
       .toMatch(/config\.json/);
@@ -186,8 +181,6 @@ describe("recoveryHint — 스펙 §6.12의 표가 말하는 것", () => {
   // 원인별 안내의 **내용**. 위의 매핑 검사는 "표가 정한 대로 나오는가"만 보므로 표 자체가 틀린
   // 말을 해도 초록이다. 스펙 표의 행마다 핵심 낱말을 고정한다.
   const rows: Array<[CauseId, ServiceId, RegExp]> = [
-    ["dockerDaemonDown", "postgres", /Docker Desktop을 실행/],
-    ["dockerMissing", "postgres", /DOCKER_BIN/],
     ["uvMissing", "worker", /config\.json의 UV_BIN/],
     ["spawnNotFound", "worker", /UV_BIN/],
     ["repoRootMissing", "api", /폴더를 골라/],
@@ -240,17 +233,6 @@ describe("recoveryHint — 실제 어댑터가 낸 원인에서", () => {
     throw new Error("던지지 않았다");
   };
 
-  it("postgres: Docker daemon down (compose up -d)", async () => {
-    const spec = postgresSpec(async () => ({
-      stdout: "",
-      stderr:
-        "failed to connect to the docker API at unix:///Users/x/.docker/run/docker.sock; check if the path is correct and if the daemon is running",
-      code: 1,
-    }));
-    const detail = await thrown(spec.launch(ctx()));
-    expect(recoveryHint(s({ id: "postgres", detail }))).toBe(HINTS.dockerDaemonDown);
-  });
-
   it("worker: uv missing", async () => {
     const detail = await thrown(
       workerSpec({ listExternal: async () => [] }).launch(ctx({ bins: { uv: null } })),
@@ -299,63 +281,42 @@ describe("recoveryHint — 실제 어댑터가 낸 원인에서", () => {
     expect(recoveryHint(s({ id: "api", detail }))).toBe(HINTS.pendingMigrations);
   });
 
-  it("postgres: Docker Desktop quit after boot — the degraded row says to start Docker Desktop, not that it recovers on its own (I-1)", async () => {
-    // 배터리 때문에 Docker Desktop을 끄는 평범한 경로. postgres는 ready 뒤에도 재프로브하고, 데몬이 없으면
-    // readiness가 failed + dockerDaemonDown을 돌려주며, 감독자가 그것을 degraded로 적는다. 사람이 Docker
-    // Desktop을 켜기 전에는 복구되지 않는다 — postgres는 dependsOn: []라 "의존하는 서비스"도 없다.
-    const HEALTHY = '{"Name":"damwha-postgres","Service":"postgres","State":"running","Health":"healthy"}';
-    let launched = false;
-    let daemonUp = true;
-    const run = async (args: string[]) => {
-      if (!daemonUp) {
-        return {
-          stdout: "",
-          stderr:
-            "failed to connect to the docker API at unix:///Users/x/.docker/run/docker.sock; check if the path is correct and if the daemon is running",
-          code: 1,
-        };
+  it("postgres: a pairing refusal from the real adapter gets its fix, and says the app changed nothing", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "dw-rh-"));
+    try {
+      const layout = pgLayout(path.join(root, "ud"));
+      const bundle = path.join(root, "bundle");
+      fs.mkdirSync(path.join(bundle, "bin"), { recursive: true });
+      for (const n of PG_BINARY_NAMES) {
+        fs.writeFileSync(path.join(bundle, "bin", n), "");
+        fs.chmodSync(path.join(bundle, "bin", n), 0o755);
       }
-      if (args.includes("up")) launched = true;
-      return { stdout: args.includes("ps") && launched ? HEALTHY : "", stderr: "", code: 0 };
-    };
-    const sup = createSupervisor([{ ...postgresSpec(run), healthIntervalMs: 5 }], ctx(), { readyIntervalMs: 5 });
-    await sup.start();
-    expect(sup.statuses()[0]).toMatchObject({ process: "running", health: "ok" });
-
-    daemonUp = false;
-    await vi.waitFor(() => expect(sup.statuses()[0].health).toBe("degraded"));
-    const row = servicesView({ statuses: sup.statuses(), restartNotice: null, logPathOf: (id) => id }).rows[0];
-    await sup.stopAll({ graceMs: 5 });
-    expect(row.state).toBe("실행 중 · 동작 제한");
-    expect(row.cause).toBe("Docker Desktop이 실행 중이 아니에요.");
-    expect(row.hint).toMatch(/Docker Desktop을 실행/);
-    expect(row.hint).not.toMatch(/자동으로/);
+      fs.mkdirSync(path.join(layout.storage, "meetings", "mtg_37"), { recursive: true });
+      fs.writeFileSync(path.join(layout.storage, "meetings", "mtg_37", "original.m4a"), "x");
+      const spec = embeddedPostgresSpec({
+        binaries: pgBinaries(bundle),
+        layout,
+        runTool: async () => ({ code: 0, stdout: "", stderr: "", timedOut: false, aborted: false }),
+        psInfo: async () => null,
+        spawnPostmaster: () => {
+          throw new Error("스폰까지 오면 안 된다");
+        },
+        stopOrphan: async () => "fast",
+        log: () => undefined,
+      });
+      const detail = await spec.launch({ ...ctx(), userData: layout.userData }).then(
+        () => "",
+        (e: Error) => e.message,
+      );
+      expect(recoveryHint(s({ id: "postgres", detail }))).toBe(HINTS.pgPairingRefused);
+      expect(HINTS.pgPairingRefused).toMatch(/아무것도 지우거나 새로 만들지 않았어요/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
-  it("postgres: `docker compose stop postgres` leaves the container exited — the degraded row does not claim to recover on its own (P2-C11, 리뷰 N-1)", async () => {
-    // compose ps -a는 내려간 컨테이너도 돌려준다(State: exited) — 데몬은 떠 있다. ready였던 postgres가
-    // 그 뒤로 넘어가면 readiness는 not-ready이고, 감독자는 notAnswering으로 degraded를 적는다.
-    // postgres는 dependsOn: []이고 restart: unless-stopped인 컨테이너는 stop 뒤 스스로 안 돌아온다 —
-    // "의존하는 서비스가 돌아오면 자동으로 복구됩니다"는 여기서 거짓이다.
-    const HEALTHY = '{"Name":"damwha-postgres","Service":"postgres","State":"running","Health":"healthy"}';
-    const EXITED = '{"Name":"damwha-postgres","Service":"postgres","State":"exited","Health":""}';
-    let launched = false;
-    let stopped = false;
-    const run = async (args: string[]) => {
-      if (stopped) return { stdout: EXITED, stderr: "", code: 0 };
-      if (args.includes("up")) launched = true;
-      return { stdout: args.includes("ps") && launched ? HEALTHY : "", stderr: "", code: 0 };
-    };
-    const sup = createSupervisor([{ ...postgresSpec(run), healthIntervalMs: 5 }], ctx(), { readyIntervalMs: 5 });
-    await sup.start();
-    expect(sup.statuses()[0]).toMatchObject({ process: "running", health: "ok" });
-
-    stopped = true;
-    await vi.waitFor(() => expect(sup.statuses()[0].health).toBe("degraded"));
-    const status = sup.statuses()[0];
-    await sup.stopAll({ graceMs: 5 });
-    expect(status.detail).toBe(CAUSES.notAnswering.text);
-    expect(recoveryHint(status) ?? "").not.toMatch(/자동으로/);
+  it("postgres: a database that is stopping is degraded and does not claim to recover on its own", () => {
+    expect(recoveryHint(s({ id: "postgres", process: "running", health: "degraded", detail: CAUSES.pgStopping.text }))).toBeUndefined();
   });
 
   it("supervisor: a health probe that throws after ready is degraded and does not claim to recover on its own (최종 리뷰 M-3)", async () => {
@@ -472,41 +433,6 @@ describe("recoveryHint — 실제 어댑터가 낸 원인에서", () => {
     const st = sup.statuses()[0];
     expect(st.detail).toContain("spawn /nowhere/uv ENOENT");
     expect(recoveryHint(st)).toBe(HINTS.uvMissing);
-  });
-});
-
-describe("recoveryHint — DOCKER_BIN이 가리키는 곳에 파일이 없을 때", () => {
-  it("postgres fails with the spawn ENOENT cause and the DOCKER_BIN hint, not an empty cause", async () => {
-    // main.ts의 dockerRun이 이 거부를 {stderr, code}로 바꾼다. execFile은 실행 파일이 없으면 stderr를
-    // **빈 문자열**로 채우므로 `??`로 받으면 원인이 ""였다 — 여기서는 dockerRun이 넘기는 모양
-    // (`String(e)`)을 그대로 쓴다. dockerRun 자체는 main.ts라 부를 수 없다.
-    const { execFile } = await import("child_process");
-    const { promisify } = await import("util");
-    const e = await promisify(execFile)("/nowhere/docker", ["compose", "ps"]).then(
-      () => {
-        throw new Error("실행됐다");
-      },
-      (err: { stderr?: string }) => err,
-    );
-    expect(e.stderr).toBe("");
-    const spec = postgresSpec(async () => ({ stdout: "", stderr: e.stderr || String(e), code: 1 }));
-    let detail = "";
-    try {
-      await spec.launch({
-        repoRoot: "/r",
-        userData: "/u",
-        packaged: true,
-        env: {},
-        bins: { uv: null },
-        searchDirs: [],
-        logFile: (id) => `/u/logs/${id}.log`,
-        signal: new AbortController().signal,
-      });
-    } catch (err) {
-      detail = (err as Error).message;
-    }
-    expect(detail).toBe("Error: spawn /nowhere/docker ENOENT");
-    expect(recoveryHint(s({ id: "postgres", detail }))).toMatch(/DOCKER_BIN/);
   });
 });
 

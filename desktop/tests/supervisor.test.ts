@@ -666,7 +666,7 @@ describe("supervisor 배경 실패 처리 (I1)", () => {
   });
 
   it("treats a throwing readiness as a failed probe instead of blowing up the start sequence", async () => {
-    // postgres의 readiness는 docker compose ps를 돌리고 그 출력을 판다 — 파서가 던지면 여기로
+    // postgres의 readiness는 postmaster.pid를 읽는다 — 파서가 던지면 여기로
     // 온다. 잡지 않으면 bringOnce가 통째로 거부해 (1) 실패 정리가 건너뛰어져 rt.result가 남고,
     // 남은 rt.result는 재진입 가드에 걸려 이 서비스의 재시도를 앱이 사는 내내 막으며,
     // (2) 게이트라서 그 거부가 runFrom을 타고 start()까지 올라간다.
@@ -708,7 +708,7 @@ describe("supervisor 배경 실패 처리 (I1)", () => {
   it("turns a throwing gate launch into a failed status — start() resolves, and the background service it already started stays stoppable (F6)", async () => {
     // F6의 전제: start()가 거부할 수 있는 곳은 prepare() 하나다. main.ts의 createSupervisorFor는 start()가
     // 거부하면 **감독자를 버린다**(재시도가 prepare를 영영 건너뛰지 않게) — 그 판단이 안전한 것은 거부가
-    // 어떤 launch보다 먼저 났을 때뿐이다. 그런데 게이트 postgres의 launch(docker compose up)가 던질 때
+    // 어떤 launch보다 먼저 났을 때뿐이다. 그런데 게이트 postgres의 launch(postmaster 스폰)가 던질 때
     // bringOnce의 catch가 없으면 그 거부가 runFrom을 타고 start()까지 오르고, 그 사이 배경으로 이미 뜬
     // embed는 버려진 감독자에만 적혀 있어 아무도 내리지 못한다(P2-C4). 최종 리뷰에서 그 catch를 지워도
     // 522개가 초록이었다.
@@ -720,7 +720,7 @@ describe("supervisor 배경 실패 처리 (I1)", () => {
         spec("embed", { gate: false, launch: embedLaunch, stop: embedStop }),
         spec("postgres", {
           launch: async () => {
-            throw new Error("spawn /nowhere/docker ENOENT");
+            throw new Error("spawn /nowhere/postgres ENOENT");
           },
         }),
         spec("api", { dependsOn: ["postgres"], launch: apiLaunch }),
@@ -732,7 +732,7 @@ describe("supervisor 배경 실패 처리 (I1)", () => {
     await expect(s.start()).resolves.toBeUndefined();
     const pg = s.statuses().find((x) => x.id === "postgres")!;
     expect(pg.process).toBe("failed");
-    expect(pg.detail).toContain("spawn /nowhere/docker ENOENT");
+    expect(pg.detail).toContain("spawn /nowhere/postgres ENOENT");
     expect(apiLaunch).not.toHaveBeenCalled();
 
     // 감독자가 살아 있으므로 배경 embed는 여전히 이 감독자의 것이다 — 종료가 그것을 내린다.

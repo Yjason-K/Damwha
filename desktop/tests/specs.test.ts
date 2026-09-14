@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildSpecs, type SpecDeps } from "../src/services/specs";
+import { externalPostgresSpec } from "../src/services/pg-service";
 import { orderOf } from "../src/services/supervisor";
 
 /**
@@ -8,7 +9,7 @@ import { orderOf } from "../src/services/supervisor";
  * 있으면 판정되고, 그 셋은 deps와 무관하다.
  */
 const fakes: SpecDeps = {
-  docker: async () => ({ stdout: "", stderr: "", code: 0 }),
+  postgres: externalPostgresSpec(),
   api: {
     verifyOwnListener: async () => true,
     isPortOccupied: async () => false,
@@ -42,5 +43,10 @@ describe("buildSpecs", () => {
     const specs = buildSpecs(fakes);
     expect(specs.filter((s) => s.gate).map((s) => s.id)).toEqual(["postgres", "api"]);
     expect(specs.filter((s) => !s.gate).map((s) => s.id)).toEqual(["embed", "worker"]);
+  });
+
+  it("keeps the same order and gates with the embedded postgres", () => {
+    const embedded = { ...fakes, postgres: { ...externalPostgresSpec(), restart: { maxAttempts: 3, backoffMs: [1] } } as never };
+    expect([...orderOf(buildSpecs(embedded))].reverse().map((s) => s.id)).toEqual(["worker", "embed", "api", "postgres"]);
   });
 });
