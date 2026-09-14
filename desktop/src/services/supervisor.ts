@@ -411,8 +411,8 @@ export function createSupervisor(
 
   /**
    * ready 이후에 죽으면 백오프로 다시 띄운다. 상한을 넘으면 failed로 고정하고 메뉴의 재시도를
-   * 기다린다 (스펙 §6.8). postgres는 내장 어댑터가 자기 백오프([3s, 8s, 20s])를 따로 갖는다 —
-   * 여기서 또 걸면 같은 클러스터를 둘이 다툰다.
+   * 기다린다 (스펙 §6.8). postgres도 이 경로를 탄다 — 내장 어댑터의 restart가 [3s, 8s, 20s]이고,
+   * 재시작도 launch()를 거치므로 고아·낡은 락 판정을 매번 다시 한다 (Phase 3 스펙 §6.4 재시작).
    */
   function scheduleRestart(spec: ServiceSpec, why: string): void {
     if (spec.restart === "never" || stopping) return;
