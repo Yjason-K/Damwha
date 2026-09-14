@@ -140,9 +140,15 @@ Phase 2 §5를 잇는다. 달라지는 것과 새로 생기는 것:
 
 #### 배치
 
-`<userData>`는 packaged에서 `~/Library/Application Support/Damwha`, dev에서
-`~/Library/Application Support/damwha-desktop`이다(Phase 1 결과가 확인한 `productName`/`name` 차이).
-**두 모드의 클러스터는 서로 다르다** — dev에서 무엇을 해도 packaged 데이터에 닿지 않는다.
+`<userData>`는 dev와 packaged **모두** `~/Library/Application Support/Damwha`다. `desktop/src/main.ts:71`의
+`app.setName("Damwha")`가 둘을 한 경로로 고정한다(Phase 1 §6.3). 이 맥에 있는 `…/damwha-desktop`은 그 고정 전
+Phase 1 초기 실행의 잔재이고 어느 모드도 쓰지 않는다. **그래서 클러스터도 하나다** — `pnpm desktop:dev`와 빌드된
+`.app`이 같은 `data/`를 연다. 두 모드의 PG 바이너리는 경로만 다르고 같은 소스·같은 메이저이므로(§6.8) 같은 PGDATA를
+번갈아 열 수 있다. 이 사실이 두 곳에 영향을 준다: §6.4 고아 판정은 **두 바이너리 경로 모두**를 우리 postgres로 보고,
+§9의 파괴적 검증은 클러스터를 백업한 뒤 하고 되돌린다.
+
+(2026-09-14 정정 — 초판은 dev가 `damwha-desktop`을 써서 클러스터가 둘이라고 적었다. 계획 작성 중 `main.ts`를 읽다
+발견했다. 결과 문서 §1.3 S-4.)
 
 ```
 <userData>/
@@ -291,7 +297,7 @@ postgresql://damwha@/damwha?host=<run 디렉터리의 percent-encoding>
 있으면 그 소비자에만 키-값 형식(`host=… dbname=… user=…`)을 주는 파생으로 바꾸고 결과 문서에 적는다.
 
 **소켓 경로 길이.** macOS `sun_path`는 104바이트라 소켓 경로는 103바이트 이하여야 한다. 이 맥에서
-packaged `…/Damwha/run/.s.PGSQL.5432`는 72바이트, dev는 80바이트다. 기동 전에 계산해 넘으면 원인과
+`…/Damwha/run/.s.PGSQL.5432`는 72바이트다(dev·packaged 공통). 기동 전에 계산해 넘으면 원인과
 바이트 수를 보여주고 거부한다(`manual`). 대체 디렉터리로 폴백하지 않는다 — `/tmp` 류는 다른
 사용자와 공유되는 자리라 0700 경계가 무너진다.
 
@@ -319,7 +325,10 @@ worker`)가 이미 postgres를 **맨 먼저 기동, 맨 나중에 종료**로 �
 
 1. **사전 판정** — 소켓 경로 길이(§6.3), 페어링(§6.2). 거부면 던진다.
 2. **고아·낡은 락 판정** — `PGDATA/postmaster.pid`가 있으면 첫 줄의 pid를 `ps`로 확인한다.
-   - 살아 있고 명령이 **번들 `postgres`이며 `-D <우리 PGDATA>`를 가진다** → 이전 실행이 남긴 고아다.
+   - 살아 있고 명령의 실행 파일 이름이 **`postgres`이며 `-D <우리 PGDATA>`를 가진다** → 이전 실행이 남긴 고아다.
+     실행 파일 **경로**는 보지 않는다 — dev와 packaged가 같은 클러스터를 다른 경로의 바이너리로 열고(§6.1), 빌드된
+     `.app`의 위치도 고정돼 있지 않다. 같은 PGDATA를 쥔 postmaster는 PostgreSQL의 락 때문에 하나뿐이므로 이 두
+     조건으로 충분하다.
      단일 인스턴스 락이 있으므로 다른 앱 인스턴스일 수 없다. **채택하지 않고** SIGINT(fast)로 내리고
      종료를 기다린 뒤 새로 띄운다. 채택하지 않는 이유: 앱 업데이트 뒤라면 그 postmaster는 옛
      바이너리이고, 채택하면 버전이 어긋난 서버가 조용히 계속 돈다. 그 대가는 크래시 뒤 한 번의
@@ -484,7 +493,8 @@ dev의 `be/` cwd에서는 dotenv가 `be/.env`를 읽지만 이미 있는 환경�
 
 `unknown`이 비어 있지 않으면 이 DB는 **이 앱보다 새 버전의 앱이 스키마를 올린 것**이다. 옛 API 코드가
 새 스키마에서 도는 것을 막는다. 복구 부류 `manual`. dev에서 브랜치를 오가면 걸리는 경우이므로
-안내에 "외부 디버그 모드를 쓰거나 dev 데이터 폴더(`damwha-desktop/data`)를 정리"를 적는다. 앱은
+안내에 "새 스키마를 올린 브랜치로 돌아가거나, 외부 디버그 모드를 쓰세요"를 적는다. dev와 packaged가 한 클러스터를
+쓰므로(§6.1) 데이터 폴더를 지우라고 안내하지 않는다 — 그것은 실제 데이터다. 앱은
 아무것도 지우지 않는다.
 
 #### 3. 백업
@@ -809,13 +819,20 @@ Phase 2 §8을 잇는다. Docker 관련 행은 없어지고 아래가 더해진�
   `_migrations`의 `900_p3_probe.sql` 행과 `p3_probe` 테이블을 지운다. ⌘Q 한 **뒤** 두 파일을 빼고 다시 빌드한다. 그
   앱으로 실행해 정상 진입하면 정리가 끝난 것이다. 순서를 바꾸면 P3-C8과 같은 거부를 만난다.
 
+**파괴적 검증의 격리 (P3-C8·C9b·C10 공통).** dev와 packaged가 한 클러스터를 쓰므로(§6.1) 따로 버릴 "dev
+클러스터"가 없다. 세 기준은 다음 절차 안에서만 한다. 앱이 **꺼져 있고** 번들 postgres 프로세스가 0개임을 확인한 뒤
+`ditto "<userData>/data" "<userData>/data.p3-<기준>-backup"`으로 PGDATA·스토리지·마커를 통째로 복사하고(서버가 꺼진
+상태의 파일 복사라 일관적이다), 기준을 수행하고, 앱을 끈 뒤 `<userData>/data`를 그 복사본으로 **되돌린다**(원래 것을
+`data.p3-<기준>-after`로 옮기고 복사본을 `data`로 옮긴 다음, 정상 진입을 확인하고 `-after`를 지운다). 되돌리기와 지우기는
+검증자가 하며 앱은 하지 않는다.
+
 **P3-C8. `unknown` 마이그레이션 거부**
 
-- 확인 환경: dev(`pnpm desktop:dev`)의 클러스터. 앱이 떠 있는 동안 상태 창의 `psql` 명령으로 `_migrations`에
+- 확인 환경: packaged, 위 격리 절차 안. 앱이 떠 있는 동안 상태 창의 `psql` 명령으로 `_migrations`에
   `INSERT … VALUES ('999_from_future.sql')`한 뒤 ⌘Q.
 - 확인 방법: 앱을 다시 실행한다.
 - 성공 판정: 거부 화면에 "더 새 버전의 앱" 원인과 이름이 있다. API가 뜨지 않는다. `_migrations` 행이 그대로다.
-  확인 뒤 거부 화면이 떠 있는 동안(서버는 떠 있다) 그 행을 지운다.
+  확인 뒤 격리 절차대로 되돌린다.
 
 ### 축 D — 거부
 
@@ -828,8 +845,8 @@ Phase 2 §8을 잇는다. Docker 관련 행은 없어지고 아래가 더해진�
 
 **P3-C9b. 데이터베이스를 다시 만든 클러스터 거부** (판정표 2)
 
-- 확인 환경: dev 클러스터. 업로드한 회의가 하나 이상 있어 `data/storage`가 비어 있지 않은 상태. **이 기준은 dev
-  클러스터의 데이터를 버린다** — 확인 뒤 사람이 dev `data/`를 지워 정리한다(앱은 지우지 않는다).
+- 확인 환경: packaged, 위 격리 절차 안. 업로드한 회의가 하나 이상 있어 `data/storage`가 비어 있지 않은 상태.
+  확인 뒤 격리 절차대로 되돌린다.
 - 확인 방법: 앱이 떠 있는 동안 상태 창의 `psql` 명령으로 `postgres` 데이터베이스에 접속해
   `DROP DATABASE damwha WITH (FORCE)`. ⌘Q 뒤 다시 실행한다.
 - 성공 판정: 거부 화면에 "데이터베이스가 지워졌다" 원인이 있다. `damwha` 데이터베이스가 **다시 만들어지지 않았다**
@@ -837,10 +854,10 @@ Phase 2 §8을 잇는다. Docker 관련 행은 없어지고 아래가 더해진�
 
 **P3-C10. PostgreSQL 메이저 불일치 거부**
 
-- 확인 환경: dev 클러스터. 앱을 끄고 `PG_VERSION`을 백업한 뒤 내용을 `15`로 바꾼다.
+- 확인 환경: packaged, 위 격리 절차 안. 앱을 끈 상태에서 `data/postgres/PG_VERSION`의 내용을 `15`로 바꾼다.
 - 확인 방법: 앱 실행.
 - 성공 판정: 거부 화면에 두 버전이 있다. 번들 postgres가 뜨지 않았다. `PG_VERSION` 외의 PGDATA 파일 체크섬이 불변이다.
-  원복 뒤 정상 진입.
+  격리 절차대로 되돌린 뒤 정상 진입.
 
 **P3-C11. 외부 디버그 모드**
 
@@ -848,7 +865,7 @@ Phase 2 §8을 잇는다. Docker 관련 행은 없어지고 아래가 더해진�
   `DEBUG_EXTERNAL_DATABASE_URL`=Docker DB 주소.
 - 확인 방법: 앱 실행. 상태 창, 프로세스 목록, `data/`를 본다. 확인 뒤 키를 지운다.
 - 성공 판정: 번들 postgres 프로세스 0개. 상태 창과 상태줄에 `외부 DB(디버깅)`. 기존 회의 목록이 보인다.
-  Docker DB의 `_migrations` 행 수가 불변이다. dev `data/`의 목록·체크섬이 불변이다. `backups/`에 새 파일이 없다.
+  Docker DB의 `_migrations` 행 수가 불변이다. `<userData>/data/`의 목록·체크섬이 불변이다. `backups/`에 새 파일이 없다.
 
 ### 축 E — 번들·회귀·데이터 보존
 
@@ -872,8 +889,8 @@ Phase 2 §8을 잇는다. Docker 관련 행은 없어지고 아래가 더해진�
 **P3-C14. 기존 데이터 보존**
 
 - 확인 환경: 전 구간.
-- 확인 방법: 첫 실행 전에 기록한다 — `be/storage` 전체 목록·체크섬, packaged·dev `<userData>/storage` 목록·체크섬,
-  두 `config.json`의 sha, Docker 볼륨 `damwha_pgdata`·컨테이너 `damwha-postgres`의 생성 시각, Docker DB의
+- 확인 방법: 첫 실행 전에 기록한다 — `be/storage` 전체 목록·체크섬, `<userData>/storage` 목록·체크섬,
+  `config.json`의 sha, Docker 볼륨 `damwha_pgdata`·컨테이너 `damwha-postgres`의 생성 시각, Docker DB의
   `meeting`·`utterance`·`_migrations` 행 수. P3-C1~C15 수행 뒤 같은 것을 다시 뜬다.
 - 성공 판정: 전부 같다. 단 P3-C11이 실행한 앱 API가 Docker DB에 쓴 행(있다면)은 증거에 적고 행 수 비교에서
   그 몫만 뺀다 — 앱은 그 모드에서 마이그레이션을 실행하지 않았어야 하고 `_migrations`는 **정확히** 같아야 한다.
@@ -920,7 +937,7 @@ Phase 2 §8을 잇는다. Docker 관련 행은 없어지고 아래가 더해진�
 | | dev (`pnpm desktop:dev`) | packaged |
 | --- | --- | --- |
 | PG 바이너리 | `build-postgres.sh`(캐시) → `desktop/build/postgres` | `Resources/postgres` |
-| userData | `damwha-desktop` | `Damwha` |
+| userData·클러스터 | `Damwha` (공유, §6.1) | `Damwha` |
 | postgres | 번들 `postgres -D` | 같다 |
 | 마이그레이션 조회·실행 | `pnpm --filter damwha-be run migrate [-- --status]` | `utilityProcess.fork(Resources/api/dist/database/migrate.js)` |
 | api·worker·embed | Phase 2와 같다 | Phase 2와 같다 |
