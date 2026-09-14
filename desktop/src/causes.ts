@@ -107,6 +107,116 @@ export const CAUSES = {
     text: "저장소 폴더를 확인하지 못했어요.",
     selfRecovers: false,
   },
+  /** postgres — 번들에 PG 실행 파일이 없다 (Phase 3 스펙 §6.8). */
+  pgBundleMissing: {
+    match: /내장 데이터베이스 실행 파일이 없어요/,
+    text: (names: readonly string[]) => `내장 데이터베이스 실행 파일이 없어요 (${names.join(", ")}).`,
+    selfRecovers: false,
+  },
+  /** postgres — macOS sun_path 한도 (스펙 §6.3). */
+  pgSocketPathTooLong: {
+    match: /데이터베이스 소켓 경로가 너무 길어요/,
+    text: (socketPath: string, bytes: number) =>
+      `데이터베이스 소켓 경로가 너무 길어요 (${bytes}바이트, 최대 103바이트): ${socketPath}`,
+    selfRecovers: false,
+  },
+  /** postgres — 판정표 1·2의 거부 (스펙 §6.2). why는 어떤 행인지를 사람 말로 적는다. */
+  pgPairingRefused: {
+    match: /짝이 맞지 않아 데이터베이스를 열지 않았어요/,
+    text: (why: string, pgdata: string, storage: string) =>
+      `데이터와 파일 저장소의 짝이 맞지 않아 데이터베이스를 열지 않았어요 — ${why} (데이터베이스: ${pgdata}, 파일 저장소: ${storage})`,
+    selfRecovers: false,
+  },
+  /** postgres — PG_VERSION이 번들 메이저와 다르다. 메이저 업그레이드는 Phase 6. */
+  pgVersionMismatch: {
+    match: /데이터 폴더의 PostgreSQL 버전\(/,
+    text: (found: string, want: string) => `데이터 폴더의 PostgreSQL 버전(${found})이 앱의 버전(${want})과 달라요.`,
+    selfRecovers: false,
+  },
+  /** postgres — pg_controldata가 클러스터를 읽지 못했다. */
+  pgControldataFailed: {
+    match: /데이터베이스 폴더를 읽지 못했어요/,
+    text: (detail: string) => `데이터베이스 폴더를 읽지 못했어요 — ${detail}`,
+    selfRecovers: false,
+  },
+  /** postgres — 락 파일의 pid가 누구인지 증명하지 못했다 (ps 실패). 지우지 않는다. */
+  pgLockUnprovable: {
+    match: /데이터베이스 잠금 파일의 주인/,
+    text: (pid: number, file: string, why: string) =>
+      `데이터베이스 잠금 파일의 주인(pid ${pid})을 확인하지 못했어요 (${file}) — ${why}`,
+    selfRecovers: false,
+  },
+  /** postgres — 이전 실행의 고아 postmaster가 SIGINT·SIGQUIT에도 남았다. */
+  pgOrphanStuck: {
+    match: /이전 실행이 남긴 데이터베이스\(pid/,
+    text: (pid: number) => `이전 실행이 남긴 데이터베이스(pid ${pid})가 종료되지 않아요.`,
+    selfRecovers: false,
+  },
+  pgInitdbFailed: {
+    match: /데이터베이스 클러스터를 만들지 못했어요/,
+    text: (block: string) => `새 데이터베이스 클러스터를 만들지 못했어요.\n${block}`,
+    selfRecovers: false,
+  },
+  pgCreatedbFailed: {
+    match: /데이터베이스\(damwha\)를 만들지 못했어요/,
+    text: (block: string) => `데이터베이스(damwha)를 만들지 못했어요.\n${block}`,
+    selfRecovers: false,
+  },
+  /** postgres — 판정표 2의 psql 조회 자체가 실패했다. */
+  pgQueryFailed: {
+    match: /데이터베이스 상태를 확인하지 못했어요/,
+    text: (block: string) => `데이터베이스 상태를 확인하지 못했어요.\n${block}`,
+    selfRecovers: false,
+  },
+  /** postgres 종료 — fast·immediate 유예 뒤에도 postmaster가 남았다. 앱은 SIGKILL하지 않는다. */
+  pgStopLeaked: {
+    match: /데이터베이스\(pid [^)]*\)가 종료되지 않았어요/,
+    text: (pid: number | string) => `데이터베이스(pid ${pid})가 종료되지 않았어요.`,
+    selfRecovers: false,
+  },
+  /** postgres degraded — postmaster.pid가 stopping이다. */
+  pgStopping: {
+    match: /데이터베이스가 종료되는 중이에요/,
+    text: "데이터베이스가 종료되는 중이에요.",
+    selfRecovers: false,
+  },
+  /** api 게이트 — 러너가 실패했거나 상태 줄을 내지 않았다. 무출력 exit 0도 여기다 (스펙 §10). */
+  migrationStatusFailed: {
+    match: /마이그레이션 상태를 확인하지 못했어요/,
+    text: (block: string) => `마이그레이션 상태를 확인하지 못했어요.\n${block}`,
+    selfRecovers: false,
+  },
+  /** api 게이트 — 번들에 없는 이름이 적용돼 있다. 옛 앱이 새 스키마를 열지 않는다 (스펙 §6.5-2). */
+  migrationUnknown: {
+    match: /더 새 버전의 앱이 이 데이터를 업데이트했어요/,
+    text: (names: readonly string[]) => `더 새 버전의 앱이 이 데이터를 업데이트했어요 (${names.join(", ")}).`,
+    selfRecovers: false,
+  },
+  /** api 게이트 — 적용 전 백업 실패. 적용하지 않았다. */
+  backupFailed: {
+    match: /백업을 만들지 못해 마이그레이션을 적용하지 않았어요/,
+    text: (block: string) => `마이그레이션 전 백업을 만들지 못해 마이그레이션을 적용하지 않았어요.\n${block}`,
+    selfRecovers: false,
+  },
+  /** api 게이트 — 러너가 실패했다. 백업이 있으면 그 경로를 싣는다. */
+  migrationFailed: {
+    match: /^마이그레이션을 적용하지 못했어요/m,
+    text: (block: string, backup: string | null) =>
+      `마이그레이션을 적용하지 못했어요.${backup === null ? "" : ` 적용 전 백업: ${backup}`}\n${block}`,
+    selfRecovers: false,
+  },
+  /** api — 실행 게이트를 통과했는데 러너나 API가 미적용을 말한다. 두 트리가 어긋났다 (스펙 §6.5-5). */
+  migrationsStillPending: {
+    match: /마이그레이션을 실행했는데 \d+개가 여전히 적용되지 않았어요/,
+    text: (count: number, names: string) => `마이그레이션을 실행했는데 ${count}개가 여전히 적용되지 않았어요 (${names}).`,
+    selfRecovers: false,
+  },
+  /** postgres — DEBUG_EXTERNAL_DATABASE_URL로 붙었다. 실패가 아니라 상시 경고다 (스펙 §6.1). */
+  externalDatabase: {
+    match: /외부 DB\(디버깅\)/,
+    text: "외부 DB(디버깅) — DEBUG_EXTERNAL_DATABASE_URL로 연결했어요. 앱은 이 데이터베이스를 띄우지도, 마이그레이션하지도 않아요.",
+    selfRecovers: false,
+  },
   /**
    * api degraded — 부팅 뒤 DB가 끊겼다 (스펙 §6.6). API는 살아 있고 DB가 돌아오면 스스로 다시 붙는다 —
    * 이 서비스에서 사람이 할 일은 없다. DB가 **왜** 안 돌아오는지(Docker Desktop이 꺼졌다)는 postgres

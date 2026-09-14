@@ -90,6 +90,22 @@ const SAMPLE_ARGS: { [K in TemplateId]: ArgsOf<K> } = {
   readinessThrew: ["boom"],
   healthProbeThrew: ["boom"],
   externalCheckFailed: ["ps를 못 돌렸어요"],
+  pgBundleMissing: [["initdb", "psql"]],
+  pgSocketPathTooLong: ["/x/run/.s.PGSQL.5432", 120],
+  pgPairingRefused: ["파일 저장소가 다른 데이터베이스의 것이에요", "/u/data/postgres", "/u/data/storage"],
+  pgVersionMismatch: ["15", "16"],
+  pgControldataFailed: ["pg_controldata: 종료 코드 1"],
+  pgLockUnprovable: [4242, "/u/data/postgres/postmaster.pid", "ps가 실패했어요"],
+  pgOrphanStuck: [4242],
+  pgInitdbFailed: ["initdb: 종료 코드 1"],
+  pgCreatedbFailed: ["createdb: 종료 코드 1"],
+  pgQueryFailed: ["psql: 종료 코드 1"],
+  pgStopLeaked: [4242],
+  migrationStatusFailed: ["마이그레이션 러너: 종료 코드 1"],
+  migrationUnknown: [["999_from_future.sql"]],
+  backupFailed: ["pg_dump: 종료 코드 1"],
+  migrationFailed: ["마이그레이션 러너: 종료 코드 1\nERROR: relation \"x\" does not exist", "/u/backups/20260914T101500Z-before-025_x.sql.dump"],
+  migrationsStillPending: [1, "025_x.sql"],
 };
 
 /** 실패한 서비스에 이 원인이 받아야 하는 안내 — HINTS 표를 그대로 읽는다. */
@@ -179,8 +195,8 @@ describe("recoveryHint — 스펙 §6.12의 표가 말하는 것", () => {
     ["pendingMigrations", "api", /pnpm be:migrate/],
     ["externalWorker", "worker", /worker를 끄.*STORAGE_ROOT/],
     ["embedMismatch", "embed", /embed/],
-    // P2-C10: 유예를 넘긴 worker에는 DB 연결 문제일 수 있다는 원인이 보여야 한다 (스펙 §8).
-    ["readyTimeout", "worker", /데이터베이스.*config\.json의 DATABASE_URL/],
+    // P2-C10: 유예를 넘긴 worker에는 DB 연결 문제일 수 있다는 원인이 보여야 한다 (Phase 2 스펙 §8).
+    ["readyTimeout", "worker", /데이터베이스에 연결하지 못해.*데이터베이스 줄의 상태/],
   ];
   it.each(rows)("%s on %s", (cause, id, want) => {
     expect(hintForDetail(sampleOf(cause), id)).toMatch(want);
@@ -188,7 +204,9 @@ describe("recoveryHint — 스펙 §6.12의 표가 말하는 것", () => {
 
   it("does not blame the database for a timeout it cannot narrow down", () => {
     // ready 줄이 DB 연결 뒤에 찍히는 것은 worker뿐이다. embed의 유예 초과는 모델 로딩일 수 있다.
-    for (const id of ["postgres", "api", "embed"] as const) {
+    // postgres는 여기서 빠진다 — Phase 3부터 자기 크래시 복구가 오래 걸릴 수 있다는 자기 원인을
+    // 따로 받는다(logs/postgres/를 가리킨다). 아래 "server's own logs" 테스트가 그것을 본다.
+    for (const id of ["api", "embed"] as const) {
       expect(recoveryHint(s({ id, detail: CAUSES.readyTimeout.text }))).toBeUndefined();
     }
   });
@@ -489,5 +507,31 @@ describe("recoveryHint — DOCKER_BIN이 가리키는 곳에 파일이 없을 �
     }
     expect(detail).toBe("Error: spawn /nowhere/docker ENOENT");
     expect(recoveryHint(s({ id: "postgres", detail }))).toMatch(/DOCKER_BIN/);
+  });
+});
+
+describe("Phase 3 causes", () => {
+  it("names the backup in a migration failure so the person knows where the data before it is", () => {
+    const text = CAUSES.migrationFailed.text("boom", "/u/backups/b.dump");
+    expect(text).toContain("/u/backups/b.dump");
+    expect(CAUSES.migrationFailed.text("boom", null)).not.toContain("백업");
+  });
+
+  it("never tells a person to delete the data folder — dev and packaged share one cluster", () => {
+    // 스펙 §6.1·§6.5-2. 안내가 data 폴더를 지우라고 하면 실제 데이터를 지우라는 말이다.
+    for (const id of CAUSE_IDS) {
+      const hint = HINTS[id];
+      const texts = hint === null ? [] : typeof hint === "string" ? [hint] : Object.values(hint);
+      for (const t of texts) expect(t, id).not.toMatch(/(data|데이터) ?폴더를 (지우|삭제|정리)/);
+    }
+  });
+
+  it("points a postgres readiness timeout and a postgres exit at the server's own logs", () => {
+    expect(recoveryHint(s({ id: "postgres", detail: CAUSES.readyTimeout.text }))).toMatch(/logs\/postgres\//);
+    expect(recoveryHint(s({ id: "postgres", detail: CAUSES.processExited.text(1) }))).toMatch(/logs\/postgres\//);
+  });
+
+  it("does not tell the worker to fix DATABASE_URL in config.json — the app derives it now", () => {
+    expect(recoveryHint(s({ id: "worker", detail: CAUSES.readyTimeout.text }))).not.toMatch(/DATABASE_URL/);
   });
 });
