@@ -53,7 +53,8 @@ export const HINTS: Record<CauseId, Hint> = {
   migrationUnknown:
     "이 데이터를 업데이트한 브랜치나 앱 버전으로 실행하거나, config.json의 DEBUG_EXTERNAL_DATABASE_URL로 외부 DB를 쓰세요.",
   backupFailed: "디스크 여유 공간을 확인한 뒤 다시 시도해 주세요.",
-  migrationFailed: "원인을 고친 앱으로 다시 실행해 주세요. 적용 전 데이터는 위 백업에 있어요.",
+  migrationFailed:
+    "원인을 고친 앱으로 다시 실행해 주세요. 적용 전 데이터는 위 백업에 있어요. 러너의 전체 출력은 logs/supervisor.log에 있어요.",
   migrationsStillPending: "앱을 다시 만들어 주세요 — 마이그레이션 러너와 API가 서로 다른 파일을 보고 있어요.",
   externalDatabase: null,
   // 스스로 풀리는 원인이다(causes.ts의 selfRecovers). degraded면 recoveryHint가 DEGRADED_HINT를

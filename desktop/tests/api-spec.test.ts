@@ -298,6 +298,23 @@ describe("apiSpec — migration gate (Phase 3)", () => {
     expect(isPortOccupied).not.toHaveBeenCalled();
   });
 
+  it("wraps a gate that throws a plain Error as manual too — the call site does not trust the gate's own wiring", async () => {
+    const isPortOccupied = vi.fn(async () => false);
+    const verifyOwnListener = vi.fn(async () => true);
+    const spec = apiSpec(
+      baseDeps({
+        isPortOccupied,
+        verifyOwnListener,
+        migrationGate: async () => {
+          throw new Error("x");
+        },
+      }),
+    );
+    await expect(spec.launch(ctx())).rejects.toMatchObject({ recovery: "manual" });
+    expect(isPortOccupied).not.toHaveBeenCalled();
+    expect(verifyOwnListener).not.toHaveBeenCalled();
+  });
+
   it("reports pending migrations after a gate as a manual mismatch, not as `pnpm be:migrate`", async () => {
     const handle = {
       pid: 1,

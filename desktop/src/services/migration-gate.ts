@@ -66,6 +66,50 @@ export function backupStamp(d: Date): string {
   return d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 }
 
+const MAX_LOGGED_LINES = 400;
+
+/** 마지막 한 줄의 개행만 지운다. trim()은 서두의 빈 줄까지 지워 줄 번호가 실제 출력과 어긋난다. */
+function splitLines(text: string): string[] {
+  if (text === "") return [];
+  const lines = text.split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+
+/**
+ * 러너의 stdout·stderr 전체를 supervisor.log에 남긴다 (스펙 §6.5-4). 화면에는 원인 줄 하나만 보이므로,
+ * 그 줄을 못 찾을 때도 전체 진단이 로그에는 남아 있어야 한다.
+ */
+function logRunnerOutput(deps: MigrationGateDeps, r: ToolResult): void {
+  for (const [stream, text] of [["stdout", r.stdout], ["stderr", r.stderr]] as const) {
+    const lines = splitLines(text);
+    for (const line of lines.slice(0, MAX_LOGGED_LINES)) deps.log(`마이그레이션 러너 ${stream}: ${line}`);
+    if (lines.length > MAX_LOGGED_LINES) {
+      deps.log(`마이그레이션 러너 ${stream}: … (${lines.length - MAX_LOGGED_LINES}줄 더 생략)`);
+    }
+  }
+}
+
+/** pg DatabaseError의 원인 줄. `error: relation "x" does not exist`처럼 서두에 온다. */
+const ERROR_LINE = /^\s*(?:error|[A-Za-z]*Error)(?:\s*\[[^\]]*\])?:\s.*/;
+/** DETAIL:·HINT: 같은 psql류 이어붙임 줄. 원인 줄 바로 다음일 때만 함께 보여준다. */
+const CONTINUATION_LINE = /^\s*(?:DETAIL|HINT):/;
+
+/**
+ * 화면에 보일 원인 줄. describeToolFailure의 "꼬리 12줄"에는 pg DatabaseError의 원인이 없다 —
+ * migrate.ts의 `console.error(e)`가 첫 줄(원인) 뒤로 스택과 20여 줄의 속성 덤프를 찍고, dev의 pnpm은
+ * 그 뒤에 `ELIFECYCLE …`까지 붙인다. 원인은 항상 stderr 서두에 있으므로 거기서 찾는다. 못 찾으면
+ * (원인 형태를 모르는 오류라면) 기존 방식으로 되돌아간다.
+ */
+function runnerFailureBlock(what: string, r: ToolResult): string {
+  const head = splitLines(r.stderr).slice(0, 10);
+  const idx = head.findIndex((l) => ERROR_LINE.test(l));
+  if (idx === -1) return describeToolFailure(what, r);
+  const next = head[idx + 1];
+  const cont = next !== undefined && CONTINUATION_LINE.test(next) ? `\n${next.trim()}` : "";
+  return `${what}: ${head[idx].trim()}${cont}`;
+}
+
 /** §5의 셋째·넷째 삭제. 앱이 만드는 이름 형식이고 실제 파일일 때만. */
 function removeOwned(file: string, pattern: RegExp, log: (line: string) => void): void {
   if (!pattern.test(path.basename(file))) return;
@@ -96,9 +140,12 @@ async function backup(deps: MigrationGateDeps, firstPending: string, signal: Abo
   if (!toolOk(list)) throw new ServiceFailure(CAUSES.backupFailed.text(describeToolFailure("pg_restore --list", list)), "manual");
   fs.renameSync(partial, final);
 
-  // 새 백업이 검증된 **뒤에만** 오래된 것을 지운다.
-  const dumps = fs.readdirSync(dir).filter((n) => DUMP_NAME.test(n)).sort();
-  for (const name of dumps.slice(0, Math.max(0, dumps.length - KEEP_BACKUPS))) removeOwned(path.join(dir, name), DUMP_NAME, deps.log);
+  // 새 백업이 검증된 **뒤에만** 오래된 것을 지운다. 후보에서 방금 만든 파일 자신은 뺀다 — stamp가
+  // 기존 파일들보다 이르면(시계가 되돌아갔거나 스텁 now()) 사전순 정렬에서 자신이 가장 오래된
+  // 것으로 잡혀, 검증까지 마친 새 백업이 그 자리에서 지워진다.
+  const finalName = path.basename(final);
+  const dumps = fs.readdirSync(dir).filter((n) => DUMP_NAME.test(n) && n !== finalName).sort();
+  for (const name of dumps.slice(0, Math.max(0, dumps.length - (KEEP_BACKUPS - 1)))) removeOwned(path.join(dir, name), DUMP_NAME, deps.log);
   deps.log(`마이그레이션 게이트: 적용 전 백업 — ${final}`);
   return final;
 }
@@ -106,11 +153,13 @@ async function backup(deps: MigrationGateDeps, firstPending: string, signal: Abo
 export function runMigrationGate(deps: MigrationGateDeps, signal: AbortSignal): Promise<GateOutcome> {
   return manualUnlessTagged(async () => {
     const s = await deps.runner.status(signal);
-    const status = toolOk(s) ? parseStatusOutput(s.stdout) : null;
+    if (!toolOk(s)) {
+      logRunnerOutput(deps, s);
+      throw new ServiceFailure(CAUSES.migrationStatusFailed.text(runnerFailureBlock("마이그레이션 러너", s)), "manual");
+    }
+    const status = parseStatusOutput(s.stdout);
     if (status === null) {
-      const why = toolOk(s)
-        ? `마이그레이션 러너가 상태 줄을 내지 않았어요\n${s.stdout.trim().split("\n").slice(-6).join("\n")}`
-        : describeToolFailure("마이그레이션 러너", s);
+      const why = `마이그레이션 러너가 상태 줄을 내지 않았어요\n${s.stdout.trim().split("\n").slice(-6).join("\n")}`;
       throw new ServiceFailure(CAUSES.migrationStatusFailed.text(why), "manual");
     }
     // 옛 API 코드가 새 스키마에서 돌지 않게 한다. 아무것도 지우지 않는다 (스펙 §6.5-2).
@@ -121,7 +170,8 @@ export function runMigrationGate(deps: MigrationGateDeps, signal: AbortSignal): 
     deps.log(`마이그레이션 게이트: ${status.pending.length}개 적용 — ${status.pending.join(", ")}`);
     const r = await deps.runner.run(signal);
     if (!toolOk(r)) {
-      throw new ServiceFailure(CAUSES.migrationFailed.text(describeToolFailure("마이그레이션 러너", r), backupPath), "manual");
+      logRunnerOutput(deps, r);
+      throw new ServiceFailure(CAUSES.migrationFailed.text(runnerFailureBlock("마이그레이션 러너", r), backupPath), "manual");
     }
     const after = parseStatusOutput(r.stdout);
     if (after === null || after.pending.length > 0) {

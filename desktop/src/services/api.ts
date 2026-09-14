@@ -5,6 +5,7 @@ import { probeHealth } from "../readiness";
 import type { ProbeResult } from "../readiness";
 import { CAUSES } from "../causes";
 import { ANSI_SGR, failureBlock } from "../stderr";
+import { manualUnlessTagged } from "./failure";
 import type { LaunchContext, LaunchResult, ReadinessResult, ServiceHandle, ServiceSpec } from "./types";
 
 /**
@@ -156,7 +157,9 @@ export function apiSpec(deps: ApiDeps): ServiceSpec {
     },
     async launch(ctx): Promise<LaunchResult> {
       // 스키마를 먼저 맞춘다. API가 뜬 뒤에 적용하면 부팅 중인 API가 빈 스키마를 본다.
-      if (deps.migrationGate !== undefined) await deps.migrationGate(ctx.signal);
+      // 게이트 자신이 manualUnlessTagged로 감싸여 있지만, 이 호출 자리에서 다시 감싼다 — 배선이
+      // 바뀌어 감싸지 않은 게이트가 들어와도 여기서 자동 재시도로 새지 않는다.
+      if (deps.migrationGate !== undefined) await manualUnlessTagged(() => deps.migrationGate!(ctx.signal));
       const requested = Number(ctx.env.PORT ?? "3000");
       const base =
         Number.isInteger(requested) && requested >= 1 && requested <= 65535 ? requested : 3000;
