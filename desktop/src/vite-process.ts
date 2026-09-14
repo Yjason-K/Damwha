@@ -65,6 +65,10 @@ export function launchVite(options: ViteOptions): ApiHandle {
     },
     alive: () => code === null,
     stderrTail: () => tail,
+    // Vite의 stdout은 쌓지 않고 곧장 process.stdout으로 흘려보낸다(위 참고) — 이
+    // 핸들을 마이그레이션 게이트처럼 stdout을 읽는 판정에 쓸 일이 없어 축적할 이유가
+    // 없다. ApiHandle 타입만 맞춘다.
+    stdoutTail: () => "",
     exitCode: () => code,
     onExit(listener) {
       if (code !== null) listener(code);

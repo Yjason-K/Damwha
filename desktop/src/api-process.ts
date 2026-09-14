@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import type { UtilityProcess } from "electron";
 import type { ApiEnv } from "./config";
+import { stripAnsi } from "./logs";
 
 /**
  * electron을 모듈 최상단에서 값으로 import하지 않는다. 그러면 이 파일을 평범한 Node에서
@@ -19,6 +20,18 @@ export interface ApiHandle {
   alive(): boolean;
   /** 실패 화면에 올릴 stderr 꼬리. 사람이 읽을 마지막 줄이 여기서 나온다. */
   stderrTail(): string;
+  /**
+   * stdout 꼬리. NestJS 기본 ConsoleLogger는 `.error()`만 stderr로 보내고
+   * `.log`/`.warn`/`.debug`/`.verbose`는 전부 stdout에 쓴다(2026-09-12 실측,
+   * @nestjs/common의 console-logger.service.js). database.service.ts의 미적용
+   * 마이그레이션 경고는 `.warn()`이라 stderrTail()로는 절대 보이지 않는다 — 그런
+   * advisory 판정은 이 꼬리를 읽어야 한다.
+   *
+   * stderrTail과 절대 합치지 않는다. 합치면 평범한 stdout 로그 한 줄이
+   * lastMeaningfulLine·isAddrInUse·`database unreachable` 판정(모두 "실패의 원인"을
+   * stderr에서 찾는다는 전제로 쓰였다)을 오염시켜, 실패 화면이 엉뚱한 원인을 말하게 된다.
+   */
+  stdoutTail(): string;
   exitCode(): number | null;
   /**
    * 종료 알림. ready 뒤에 죽는 경우를 화면에 알리려면 이게 있어야 한다 (스펙 §8).
@@ -51,8 +64,11 @@ function inheritedEnv(): Record<string, string> {
   return out;
 }
 
-function makeSink(logFile?: string) {
+export function makeSink(logFile?: string) {
   let tail = "";
+  // stderr 꼬리와 별도로 쌓는다 — 합치면 평범한 stdout 로그가 lastMeaningfulLine 같은
+  // "실패 원인" 판정을 오염시킨다. ApiHandle.stdoutTail의 doc 코멘트에 이유가 있다.
+  let stdoutTail = "";
   let closed = false;
   let out: fs.WriteStream | undefined;
   if (logFile !== undefined) {
@@ -67,10 +83,14 @@ function makeSink(logFile?: string) {
   return {
     write(chunk: Buffer | string, isError: boolean) {
       const text = chunk.toString();
-      out?.write(text);
+      // 파일에만 벗긴다. worker는 진행 바와 로그가 같은 stderr를 쓰고(console.install_logging),
+      // NestJS Logger도 TTY가 아닌 stderr에 색상을 쓴다 — 그대로 두면 제어문자가 글자로 남는다.
+      out?.write(stripAnsi(text));
       if (isError) tail = (tail + text).slice(-TAIL_LIMIT);
+      else stdoutTail = (stdoutTail + text).slice(-TAIL_LIMIT);
     },
     tail: () => tail,
+    stdoutTail: () => stdoutTail,
     // 'error'와 'exit' 양쪽에서 불린다. end()를 두 번 부르면
     // ERR_STREAM_WRITE_AFTER_END가 나므로 한 번만 닫는다.
     close() {
@@ -79,6 +99,21 @@ function makeSink(logFile?: string) {
       out?.end();
     },
   };
+}
+
+/**
+ * makeSink()가 쌓은 두 축적기를 ApiHandle이 노출할 이름(stderrTail/stdoutTail)에
+ * 연결한다. launchDev·launchPackaged가 이 매핑을 각자 return 객체에 복붙해 두면,
+ * 복붙 한 번의 실수로 `stdoutTail: sink.stdoutTail`이 `sink.tail`로 뒤바뀌어도
+ * 타입은 그대로 맞는다 — 실제로 그 사고가 한 번 났고 리뷰도, tsc도 못 잡았다.
+ * 매핑을 이 함수 하나로 모으면 여기 하나만 테스트해도 두 런처의 배선이 함께
+ * 보장된다.
+ */
+export function sinkTails(sink: { tail(): string; stdoutTail(): string }): {
+  stderrTail(): string;
+  stdoutTail(): string;
+} {
+  return { stderrTail: sink.tail, stdoutTail: sink.stdoutTail };
 }
 
 /**
@@ -182,7 +217,7 @@ export function launchPackaged(options: LaunchOptions): ApiHandle {
       return pid;
     },
     alive: () => exit.code() === null,
-    stderrTail: sink.tail,
+    ...sinkTails(sink),
     exitCode: exit.code,
     onExit: exit.add,
     async stop(graceMs) {
@@ -260,7 +295,7 @@ export function launchDev(options: LaunchOptions): ApiHandle {
       return pid;
     },
     alive: () => exit.code() === null,
-    stderrTail: sink.tail,
+    ...sinkTails(sink),
     exitCode: exit.code,
     onExit: exit.add,
     async stop(graceMs) {

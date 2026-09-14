@@ -107,6 +107,10 @@ def run_supervisor(settings, shutdown, *, connect_fn, spawn_fn, child_holder) ->
     conn = _reconnect(connect_fn, shutdown)
     if conn is None:
         return
+    # 데스크톱 앱의 준비 계약. `supervisor <id> started`는 이 함수를 부르기 **전**에 찍히므로
+    # 잘못된 DATABASE_URL이면 그 줄만 남고 여기 백오프 루프에 무기한 머문다 — 화면은
+    # "준비됨"인데 큐는 영원히 안 돈다. 이 줄만이 "실제로 붙었다"를 뜻한다.
+    log.info("supervisor %s ready (db connected)", settings.worker_id)
     consecutive_failures = 0
     while not shutdown.is_set():
         try:
@@ -120,6 +124,9 @@ def run_supervisor(settings, shutdown, *, connect_fn, spawn_fn, child_holder) ->
             conn = _reconnect(connect_fn, shutdown)
             if conn is None:
                 return
+            # 재접속에서도 같은 줄을 찍는다. 한 번만 찍으면 degraded에서 ok로 돌아온 것을
+            # 앱이 관찰할 수 없다 (스펙 §6.6).
+            log.info("supervisor %s ready (db connected)", settings.worker_id)
             consecutive_failures = 0  # DB 재접속은 자식 크래시가 아니다
             continue
         if not has_job:

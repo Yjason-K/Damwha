@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <!-- 스펙 §6.11. 원인 문구에는 서브프로세스 stderr가 들어오므로 글자로만 넣는 것(textContent)이 첫 겹이고
+         이것이 둘째 겹이다: 이 파일의 인라인 스크립트·스타일 **하나씩만** 해시로 허용하고, 그 밖의 스크립트
+         (주입된 onerror= 같은 인라인 핸들러 포함)·원격 자원·이미지·폼 전송은 전부 막는다. 스크립트나
+         스타일을 한 글자라도 고치면 해시를 다시 계산해야 한다 — tests/shell-html.test.ts가 어긋남을 잡는다.
+         임베더가 실행하는 스크립트(main의 executeJavaScript)는 script-src를 거치지 않는다고 본다 — headless
+         Chrome에서 CDP Runtime.evaluate로 이 정책 아래 렌더를 확인했고, Electron에서의 확인은 packaged 점검 몫이다. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-M+3ICtm4q8uQj3hgc0VCZJYNTCSziKYEFIUIaecPJvo='; style-src 'sha256-SweU5NFADroyIvgnEvDL28/YNhKFBlulXlAOKOd4nvs='; base-uri 'none'; form-action 'none'" />
+    <title>서비스 상태</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #fbfbfa; --fg: #1c1b1a; --muted: rgba(28, 27, 26, 0.6);
+        --line: rgba(28, 27, 26, 0.1); --sunken: rgba(127, 127, 127, 0.1);
+        --ok: #2f9e6f; --warn: #b7791f; --fail: #c2413b; --idle: rgba(127, 127, 127, 0.55);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #191817; --fg: #e8e6e3; --muted: rgba(232, 230, 227, 0.6);
+          --line: rgba(232, 230, 227, 0.12);
+          --ok: #4cc38a; --warn: #e0a84f; --fail: #ec6a5e;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; padding: 20px 24px 24px;
+        font: 13px/1.55 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif;
+        background: var(--bg); color: var(--fg);
+      }
+      header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+      h1 { font-size: 15px; font-weight: 600; margin: 0; }
+      .meta { margin: 0; font-size: 12px; color: var(--muted); }
+      #notices { margin: 14px 0 0; padding: 0; list-style: none; }
+      #notices li {
+        padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px;
+        font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere;
+      }
+      #notices li + li { margin-top: 6px; }
+      #rows { margin: 14px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+      .row { padding: 12px 0; border-bottom: 1px solid var(--line); }
+      .head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .name { font-weight: 600; }
+      .badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+      .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--idle); flex: none; }
+      .row[data-tone="ok"] .dot { background: var(--ok); }
+      .row[data-tone="warn"] .dot { background: var(--warn); }
+      .row[data-tone="fail"] .dot { background: var(--fail); }
+      .notes { font-size: 12px; color: var(--muted); }
+      /* 원인은 여러 줄이다(zod 검증 실패, 파이썬 트레이스백). 줄바꿈을 살리되 긴 줄은 접고,
+         화면을 다 먹지 않게 높이를 묶는다 — 전문은 로그 파일에 있다. */
+      .cause {
+        margin: 8px 0 0; padding: 8px 10px; border-radius: 6px; background: var(--sunken);
+        font: 11.5px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+        white-space: pre-wrap; overflow-wrap: anywhere;
+        max-height: calc(16lh + 16px); overflow-y: auto;
+      }
+      .hint { margin: 6px 0 0; font-size: 12px; }
+      .warning { margin: 6px 0 0; font-size: 12px; }
+      .warning::before { content: ""; display: inline-block; width: 3px; height: 0.9em; margin-right: 6px; background: var(--warn); vertical-align: -1px; }
+      .log { margin: 4px 0 0; font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+      .foot { margin: 14px 0 0; font-size: 12px; color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>서비스 상태</h1>
+      <p class="meta" id="updated">상태를 기다리고 있어요.</p>
+    </header>
+    <ul id="notices" hidden></ul>
+    <ul id="rows"></ul>
+    <p class="foot">
+      이 창은 보기 전용이에요. 멈춘 서비스는 메뉴의 서비스 &gt; 다시 시도로 다시 띄울 수 있어요.
+    </p>
+    <script>
+      // main이 executeJavaScript로 부른다 (스펙 §6.11 — main → 렌더러 한 방향). 여기서 main을
+      // 부를 경로는 없다: preload도 IPC도 없고, 이 페이지에는 버튼도 폼도 없다.
+      //
+      // 받는 문자열에는 서브프로세스 stderr가 들어 있다. **전부 textContent로만 넣는다.**
+      // HTML로 해석하는 싱크(innerHTML·insertAdjacentHTML·outerHTML·document.write)를 쓰지
+      // 않는다 — tests/shell-html.test.ts가 이 파일의 스크립트를 그 싱크가 던지는 DOM에서 돌린다.
+      (function () {
+        function el(tag, className, text) {
+          const node = document.createElement(tag);
+          if (className) node.className = className;
+          if (text !== undefined) node.textContent = text;
+          return node;
+        }
+
+        function row(r) {
+          const item = el("li", "row");
+          item.dataset.tone = r.tone;
+          const head = el("div", "head");
+          head.append(el("span", "name", r.name));
+          const badge = el("span", "badge");
+          badge.append(el("span", "dot"), el("span", "state", r.state));
+          head.append(badge);
+          if (r.notes.length > 0) head.append(el("span", "notes", r.notes.join(" · ")));
+          item.append(head);
+          if (typeof r.cause === "string") item.append(el("pre", "cause", r.cause));
+          if (typeof r.hint === "string") item.append(el("p", "hint", "해결: " + r.hint));
+          if (typeof r.warning === "string") item.append(el("p", "warning", "주의: " + r.warning));
+          item.append(el("p", "log", "로그: " + r.log));
+          return item;
+        }
+
+        window.__damwha_render = function (view) {
+          const notices = document.getElementById("notices");
+          notices.replaceChildren(...view.notices.map((text) => el("li", "", text)));
+          notices.hidden = view.notices.length === 0;
+          document.getElementById("rows").replaceChildren(...view.rows.map(row));
+          // 창이 살아 있는지 사람이 알 수 있게 한다 — degraded가 ok로 돌아오기를 기다리는 사람은
+          // "안 바뀐 것"과 "안 갱신된 것"을 구분해야 한다.
+          document.getElementById("updated").textContent =
+            "마지막 갱신 " + new Date().toLocaleTimeString("ko-KR");
+        };
+      })();
+    </script>
+  </body>
+</html>

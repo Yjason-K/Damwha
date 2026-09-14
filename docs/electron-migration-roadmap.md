@@ -8,7 +8,9 @@
 미결은 **배포 조건**(모델 라이선스·게이팅, 최소 macOS 버전, 공증)이며 Phase 4·6에서 마주친다.
 결과: [Phase 0 검증 결과](superpowers/reports/2026-09-09-electron-phase-0-packaging-validation-results.md).
 **Phase 1은 2026-09-11에 구현·통합 검증·수정 3회차까지 마쳤다**(완료 기준 3개 전부 충족,
-스펙 기준 14건 전부 충족 — 아래 Phase 1 절 참조). Phase 2~6의 상세 구현 스펙·계획과 구현은 미착수.
+스펙 기준 14건 전부 충족 — 아래 Phase 1 절 참조).
+**Phase 2는 2026-09-13에 구현·최종 리뷰·packaged 통합 검증을 마쳤다**(완료 기준 4개 전부 충족,
+스펙 기준 15건 전부 충족 — 아래 Phase 2 절 참조). Phase 3~6의 상세 구현 스펙·계획과 구현은 미착수.
 
 ## 목표와 전제
 
@@ -142,6 +144,31 @@ P1-C10 외부 API 오인) 같은 브랜치의 `d8f2af1`·`8dcd08e`가 둘 다 �
 
 이 단계까지는 기존 DB·Python 설치가 필요하다. 현재 사용자의 실행 불편을 해결하는 첫 실사용 목표다.
 
+**상태 (2026-09-13): 구현 14개 Task·최종 whole-branch 리뷰·packaged 통합 검증 완료. 완료 기준 4개 전부 충족.**
+앱을 켜기만 하면 Postgres 컨테이너·API·worker·embed가 의존 순서로 준비되고, 종료하면 앱이 만든
+프로세스가 하나도 남지 않으며, `be/worker/.env`를 손대지 않고 업로드가 처리된다 — Phase 1이 사람에게
+맡긴 `STORAGE_ROOT` 합의가 사라졌다. 스펙 완료 기준 15건 기준으로도 **15건 전부 충족**이다. packaged
+검증에서 결함 4건이 드러나 같은 브랜치에서 고친 뒤 다시 판정했다 — 번들에 옛 코드가 실리던 패키징
+(`24f9080`), 처리 중 거짓 `degraded`(`ccb407a`), 서명 신원 모호(`9602c5f`), **DB가 연결을 끊으면 API
+프로세스가 죽던 `be/` 결함**(`6d22ed5`, P2-C11의 첫 판정 실패). 스펙은
+[2026-09-12-electron-phase-2-service-orchestration-design.md](superpowers/specs/2026-09-12-electron-phase-2-service-orchestration-design.md),
+브랜치는 `feat/electron-migration-phase-2-service-orchestration`, 판정과 증거는
+[Phase 2 결과](superpowers/reports/2026-09-12-electron-phase-2-service-orchestration-results.md)에 있다.
+
+| 완료 기준 | 판정 | 근거와 남은 것 |
+| --- | --- | --- |
+| 사전 설치 환경이 갖춰진 현재 맥에서 앱 실행만으로 전체 서비스 준비 | **충족** | Finder 실행만으로 넷이 `running/ok`에 도달했다(P2-C1). 앱 업로드가 앱 소유 worker로 처리되고 `be/worker/.env`는 한 바이트도 바뀌지 않았다(P2-C2). 의미 검색이 embed에 실제로 닿는다(P2-C3). 녹음 중 종료는 렌더러의 중지를 완주시킨 뒤 끝나 오디오를 버리지 않는다(P2-C13) |
+| 앱이 생성한 자식 프로세스가 종료 후 남지 않음 — 전체 서비스 기준 | **충족** | `mlx_lm.server`가 뜬 렌즈 job 중 ⌘Q에서 worker·`--once` 자식·LLM 서버·embed·API가 전부 사라졌다(P2-C4). 분석 중 종료는 job을 `attempts` 소모 없이 `queued`로 되돌린다(P2-C5, 2/2). 창 닫기는 종료가 아니다(P2-C12). **한계:** 강제 종료 4단계의 자손 SIGKILL은 실앱에서 발화하지 않았고 단위 테스트로만 존재한다 |
+| 외부에서 이미 실행 중인 서비스를 앱 소유 프로세스와 구분하여 관리 | **충족** | 터미널 `pnpm worker`가 있으면 앱은 자기 worker를 띄우지 않고 경고하며, 외부 embed는 채택한다. 앱 종료 뒤 둘 다 살아 있다(P2-C6). Postgres는 앱이 멈추지 않는다 |
+| 서비스 시작 실패 시 원인과 복구 방법을 앱에서 확인 가능 | **충족** | Docker 꺼짐(P2-C7)·실행 파일 없음(P2-C8)·미적용 마이그레이션(P2-C9, 복제 DB로)·worker DB 연결 불가(P2-C10)·부팅 뒤 DB 끊김(P2-C11, `degraded`로 표시되고 재시작 없이 스스로 회복)이 모두 원인과 안내로 화면에 떴다 |
+
+**Phase 3~6으로 넘기는 완료 기준은 없다.** 결과 문서 §5에 남긴 것은 동작·안내 수준의 한계다 —
+(1) 게이트 실패 뒤 창이 상한 없이 20초마다 자동 재시도한다(Phase 3의 마이그레이션 실행 게이트와 함께
+정리), (2) `UV_BIN`·`DOCKER_BIN`을 고친 뒤 "다시 시도"로는 반영되지 않고 앱을 다시 켜야 한다,
+(3) 종료 화면이 긴 마무리 동안 진행 표시가 없다, (4) worker supervisor가 **크래시**해 재시작되면 이전
+`--once` 자식을 추적하지 않는다 — job lease token과 함께 Phase 6이 받는다. Phase 1에서 넘어온
+`unverified-owner` 종단간 발화와 TCC 재요청(R1-6)은 이번 검증에서도 기회가 없어 미확인이다.
+
 ### Phase 3. PostgreSQL 내장
 
 **목표:** Docker 의존을 제거한다.
@@ -167,6 +194,7 @@ P1-C10 외부 API 오인) 같은 브랜치의 `d8f2af1`·`8dcd08e`가 둘 다 �
 범위:
 
 - Python·ML 라이브러리·ffmpeg 포함 및 worker·embed 실행 경로 전환.
+- worker `Settings`에 `FFMPEG_BIN`/`FFPROBE_BIN` 추가 — `be/worker/damwha_worker/pipeline/ffmpeg.py`가 `ffmpeg`·`ffprobe`를 이름으로만 부르므로, 번들에 ffmpeg를 넣는 것만으로는 개발 도구가 없는 맥에서 찾지 못한다(Phase 2 스펙 §15). Phase 2의 `UV_BIN`처럼 탐색·설정·안내가 함께 필요하다.
 - 모델 저장 위치, 다운로드 진행·실패·재시도 처리.
 - 필요한 모델 이용 동의·토큰 설정과 초기 준비 상태 안내.
 
