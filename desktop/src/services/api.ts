@@ -1,10 +1,10 @@
 import * as path from "path";
-import { launchDev, launchPackaged } from "../api-process";
-import { MAX_PORT_ATTEMPTS, choosePort, isAddrInUse } from "../port";
-import { probeHealth } from "../readiness";
-import type { ProbeResult } from "../readiness";
-import { CAUSES } from "../causes";
-import { ANSI_SGR, failureBlock } from "../stderr";
+import { launchDev, launchPackaged } from "./api-process";
+import { MAX_PORT_ATTEMPTS, choosePort, isAddrInUse } from "../process/ports";
+import { probeHealth } from "../process/readiness";
+import type { ProbeResult } from "../process/readiness";
+import { CAUSES } from "../diagnostics/causes";
+import { ANSI_SGR, failureBlock } from "../diagnostics/stderr";
 import { manualUnlessTagged } from "./failure";
 import type { LaunchContext, LaunchResult, ReadinessResult, ServiceHandle, ServiceSpec } from "./types";
 

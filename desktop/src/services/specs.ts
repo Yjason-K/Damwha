@@ -28,9 +28,9 @@ export interface SpecDeps {
  *   내려간 뒤 fast 종료로 끝난다.
  *
  * main.ts에 두면 어떤 테스트도 이 배열을 부를 수 없다(electron을 값으로 import하는 파일은
- * vitest가 못 불러온다 — shell-window.ts:4). 실제로 그 자리에 있는 동안 선언 순서를
+ * vitest가 못 불러온다 — shell-window.ts:1). 실제로 그 자리에 있는 동안 선언 순서를
  * `postgres → api → worker → embed`로 바꾸는 변이가 235개 초록불 아래 살아남았다
- * (Task 12 리뷰 N5). listExternalWorkers를 services/external.ts로 옮긴 것과 같은 분리다 —
+ * (Task 12 리뷰 N5). listExternalWorkers를 services/worker-discovery.ts로 옮긴 것과 같은 분리다 —
  * main.ts에는 의존(postgres 번들 경로·probe·ps 왕복)을 만드는 배선만 남는다.
  */
 export function buildSpecs(deps: SpecDeps): ServiceSpec[] {

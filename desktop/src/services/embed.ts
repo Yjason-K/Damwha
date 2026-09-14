@@ -1,5 +1,5 @@
-import { exitCauseBlock } from "../stderr";
-import type { EmbedProbe } from "./external";
+import { exitCauseBlock } from "../diagnostics/stderr";
+import type { EmbedProbe } from "./worker-discovery";
 import { launchWithUv } from "./worker";
 import type { LaunchContext, ReadinessResult, ServiceSpec } from "./types";
 

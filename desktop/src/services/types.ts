@@ -1,5 +1,5 @@
-import type { ApiHandle } from "../api-process";
-import type { ApiEnv } from "../config";
+import type { ApiHandle } from "./api-process";
+import type { ApiEnv } from "../config/config";
 
 export type ServiceId = "postgres" | "api" | "embed" | "worker";
 

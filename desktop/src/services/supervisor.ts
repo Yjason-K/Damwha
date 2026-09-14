@@ -1,5 +1,5 @@
-import { CAUSES } from "../causes";
-import { exitCauseBlock } from "../stderr";
+import { CAUSES } from "../diagnostics/causes";
+import { exitCauseBlock } from "../diagnostics/stderr";
 import { recoveryOf } from "./failure";
 import type {
   ExternalState,

@@ -4,25 +4,25 @@ import * as fs from "fs";
 import * as net from "net";
 import * as path from "path";
 import { promisify } from "util";
-import { loadConfig, withoutDbKeys, type ApiEnv, type DatabaseMode } from "./config";
-import { createConfigReloader } from "./config-reload";
+import { loadConfig, withoutDbKeys, type ApiEnv, type DatabaseMode } from "./config/config";
+import { createConfigReloader } from "./config/config-reload";
 import {
   PROBE_TIMEOUT_MS,
   READY_INTERVAL_MS,
   READY_TIMEOUT_MS,
   waitForReady,
-} from "./readiness";
-import type { ApiHandle } from "./api-process";
-import { launchVite } from "./vite-process";
-import { lastMeaningfulLine } from "./stderr";
-import { createServicesWindow, showStatus, type ShellStatus } from "./shell-window";
-import { CAUSES } from "./causes";
-import { failureDetail, servicesView, shellStatusFrom } from "./status-view";
-import { createStatusWindow, mayAutoOpen } from "./status-window";
-import { applyNavigationBoundary, applyPermissionBoundary } from "./permissions";
-import { mayRenderShell } from "./shell-latch";
-import { maySpawnServices } from "./spawn-guard";
-import { decideMenuRetry, gateUp, openWindowFlow } from "./window-flow";
+} from "./process/readiness";
+import type { ApiHandle } from "./services/api-process";
+import { launchVite } from "./dev/vite-process";
+import { lastMeaningfulLine } from "./diagnostics/stderr";
+import { createServicesWindow, showStatus, type ShellStatus } from "./windows/shell-window";
+import { CAUSES } from "./diagnostics/causes";
+import { failureDetail, servicesView, shellStatusFrom } from "./windows/status-view";
+import { createStatusWindow, mayAutoOpen } from "./windows/status-window";
+import { applyNavigationBoundary, applyPermissionBoundary } from "./windows/permissions";
+import { mayRenderShell } from "./windows/shell-latch";
+import { maySpawnServices } from "./app/spawn-guard";
+import { decideMenuRetry, gateUp, openWindowFlow } from "./app/window-flow";
 import {
   createFlowLatch,
   graceExpiryPrompt,
@@ -30,33 +30,33 @@ import {
   runCloseFlow,
   runQuitFlow,
   type QuitNotice,
-} from "./quit-flow";
+} from "./app/quit-flow";
 import {
   askIsRecording,
   captureDescendants,
   hasOnceChild,
   stopWorkerProcess,
-} from "./shutdown";
-import { installMenu } from "./menu";
+} from "./services/worker-shutdown";
+import { installMenu } from "./windows/menu";
 import { createSupervisor } from "./services/supervisor";
-import { verifyOwnListener as checkOwnListener } from "./services/own-listener";
+import { verifyOwnListener as checkOwnListener } from "./process/own-listener";
 import { buildSpecs } from "./services/specs";
 import {
   listExternalWorkers as scanExternalWorkers,
   probeEmbedContract,
-} from "./services/external";
-import { findExecutable, searchDirs } from "./services/resolve";
+} from "./services/worker-discovery";
+import { findExecutable, searchDirs } from "./process/executables";
 import { createMigrationCheckWatch } from "./services/api";
-import { isRepoRoot } from "./repo-root";
-import { rotateIfNeeded } from "./logs";
-import { freePort } from "./port";
-import { mayAutoRetry } from "./retry-policy";
-import { packagedMigrationRunner } from "./migrate-process";
-import { devMigrationRunner, runMigrationGate } from "./services/migration-gate";
-import { DB_NAME, DB_SUPERUSER, pgBinaries, pgLayout } from "./services/pg-layout";
-import { psInfo, spawnPostmaster, stopOrphanPostmaster } from "./services/pg-handle";
-import { embeddedPostgresSpec, externalPostgresSpec, PG_FAST_GRACE_MS, PG_IMMEDIATE_GRACE_MS } from "./services/pg-service";
-import { runTool } from "./services/tool-runner";
+import { isRepoRoot } from "./config/repo-root";
+import { rotateIfNeeded } from "./diagnostics/logs";
+import { freePort } from "./process/ports";
+import { mayAutoRetry } from "./app/retry-policy";
+import { packagedMigrationRunner } from "./services/postgres/migration-runner";
+import { devMigrationRunner, runMigrationGate } from "./services/postgres/migration-gate";
+import { DB_NAME, DB_SUPERUSER, pgBinaries, pgLayout } from "./services/postgres/layout";
+import { psInfo, spawnPostmaster, stopOrphanPostmaster } from "./services/postgres/handle";
+import { embeddedPostgresSpec, externalPostgresSpec, PG_FAST_GRACE_MS, PG_IMMEDIATE_GRACE_MS } from "./services/postgres/service";
+import { runTool } from "./process/tool-runner";
 import type {
   LaunchContext,
   LaunchResult,
@@ -153,7 +153,7 @@ let restartNotice: string | null = null;
 let configWarning: string | null = null;
 /**
  * 종료 전에 찍어 둔 worker 자손 pid. `undefined`와 빈 Set은 **다른 뜻**이다 —
- * shutdown.ts의 knownDescendants 주석에 있다.
+ * worker-shutdown.ts의 knownDescendants 주석에 있다.
  *
  * 이 변수가 있는 이유(이월 결함 N2): supervisor가 먼저 죽으면 그 `--once` 자식과 그것이
  * 띄운 `mlx_lm.server`는 pid 1로 재부모화되어 **그 뒤 어떤 ppid BFS에도 보이지 않는다.**
@@ -355,7 +355,7 @@ function ownWorkerHandle() {
 
 /**
  * supervisor가 아직 살아 있는 지금 자손을 찍어 둔다. 판정(살아 있을 때만 찍는다, 실패가
- * 이전 성공을 덮지 않는다)은 shutdown.ts에 있다 — 여기 두면 어떤 테스트도 부를 수 없다.
+ * 이전 성공을 덮지 않는다)은 services/worker-shutdown.ts에 있다 — 여기 두면 어떤 테스트도 부를 수 없다.
  */
 async function captureWorkerDescendants(): Promise<void> {
   const handle = ownWorkerHandle();
@@ -371,7 +371,7 @@ async function captureWorkerDescendants(): Promise<void> {
  * 분석 중인가 — 앱이 소유한 worker에 `--once` 자식이 있는가. 새 API 엔드포인트를 만들지
  * 않는다. 외부 worker가 하는 일은 우리가 소유하지 않으므로 판정 대상이 아니다 (스펙 §6.9).
  *
- * 판정 자체는 shutdown.ts의 hasOnceChild에 있다. 여기 남는 것은 ps 왕복뿐이다.
+ * 판정 자체는 services/worker-shutdown.ts의 hasOnceChild에 있다. 여기 남는 것은 ps 왕복뿐이다.
  */
 async function isAnalysing(): Promise<boolean> {
   const pid = ownWorkerHandle()?.pid;
@@ -396,7 +396,7 @@ async function isAnalysing(): Promise<boolean> {
 async function isRecordingIn(target: BrowserWindow): Promise<boolean> {
   if (target.isDestroyed()) return false;
   // 상한이 없으면 봉쇄된 렌더러 하나가 ⌘Q와 ⌘W를 통째로 막는다. 그 판정(거부는 "아니오",
-  // 시간 초과는 "예")은 shutdown.ts의 askIsRecording에 있다 — 여기 두면 부를 수가 없다.
+  // 시간 초과는 "예")은 services/worker-shutdown.ts의 askIsRecording에 있다 — 여기 두면 부를 수가 없다.
   return askIsRecording(
     () => target.webContents.executeJavaScript("Boolean(window.__damwha_desktop?.isRecording?.())"),
     {
@@ -477,7 +477,7 @@ async function showQuitNotice(notice: QuitNotice): Promise<void> {
 }
 
 /**
- * 앱이 소유한 worker의 종료 절차 (스펙 §6.9). 판정은 전부 shutdown.ts에 있다.
+ * 앱이 소유한 worker의 종료 절차 (스펙 §6.9). 판정은 전부 services/worker-shutdown.ts에 있다.
  */
 function stopOwnWorker(result: LaunchResult, plan: StopPlan): Promise<StopOutcome> {
   const handle = result.handle;
@@ -691,7 +691,7 @@ export async function descendantPids(rootPid: number): Promise<Set<number>> {
 
 /**
  * 소유권 판정 메커니즘 (b)의 배선. 판정(우리 자식인지 보는 그 한 줄, 조회 실패를 "아니오"로
- * 닫는 규칙)은 services/own-listener.ts에 있다 — 여기 두면 electron을 값으로 import하는 이
+ * 닫는 규칙)은 process/own-listener.ts에 있다 — 여기 두면 electron을 값으로 import하는 이
  * 파일이라 어떤 테스트도 그것을 부를 수 없고, 술어를 `true`로 바꿔도 초록불이 유지된다
  * (재리뷰 N4). listExternalWorkers와 같은 분리다.
  */
@@ -700,7 +700,7 @@ function verifyOwnListener(port: number, childPid: number | undefined): Promise<
 }
 
 /**
- * 감독자에 넘기는 배선. 판정 자체(우리 것을 빼는 두 줄 포함)는 services/external.ts에
+ * 감독자에 넘기는 배선. 판정 자체(우리 것을 빼는 두 줄 포함)는 services/worker-discovery.ts에
  * 있다 — 여기 두면 electron을 값으로 import하는 이 파일이라 어떤 테스트도 그것을 부를 수
  * 없고, `ours.add(pid)`를 빠뜨려도 초록불이 유지된다.
  */

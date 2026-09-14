@@ -1,10 +1,10 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import { makeSink, sinkTails } from "../api-process";
-import { CAUSES } from "../causes";
-import { exitCauseBlock } from "../stderr";
-import { buildChildPath } from "./resolve";
+import { makeSink, sinkTails } from "./api-process";
+import { CAUSES } from "../diagnostics/causes";
+import { exitCauseBlock } from "../diagnostics/stderr";
+import { buildChildPath } from "../process/executables";
 import type {
   LaunchContext,
   LaunchResult,
@@ -156,12 +156,12 @@ export function launchWithUv(options: UvLaunchOptions): LaunchResult {
    * **uv의 pid로 보낸다, 그룹이 아니라.** `uv run`은 받은 SIGTERM을 자식에게 한 번씩 전달하고, 그
    * 자식은 uv와 같은 그룹이라 그룹 신호는 커널이 한 번 더 배달한다 — 자식이 두 번 받는다.
    * 2026-09-13 실측(스크래치 toy): uv 아래 uvicorn 0.49.0에 그룹 SIGTERM 1회 → `handle_exit` 2회
-   * (2/2), uv pid 1회 → 1회(1/1). worker supervisor에서는 그 두 번째가 강제 종료다(shutdown.ts
+   * (2/2), uv pid 1회 → 1회(1/1). worker supervisor에서는 그 두 번째가 강제 종료다(worker-shutdown.ts
    * 1단계). embed(uvicorn)는 두 번째 SIGTERM을 강제로 읽지 않아(SIGINT만 그렇다) 진행 중인 요청이
    * 끝까지 나갔지만, 그것은 uvicorn 구현 한 줄(`sig == SIGINT`)에 기댄 우연이다. 한 런처가 두
    * 서비스에 같은 규칙을 쓴다. embed에서 그룹이라서만 닿는 것도 없다: 그 그룹에는 uv와 uvicorn
    * Python뿐이다(bge-m3는 프로세스 안에서 올라온다). 프로덕션 worker는 이 경로가 아니라 main.ts의
-   * stopOwnWorker → shutdown.ts로 내린다 — 그쪽에 남는 차이(같은 그룹의 capabilities 프로브)는
+   * stopOwnWorker → worker-shutdown.ts로 내린다 — 그쪽에 남는 차이(같은 그룹의 capabilities 프로브)는
    * 스펙 §6.9에 적었다.
    */
   const signalUv = (signal: NodeJS.Signals) => {
