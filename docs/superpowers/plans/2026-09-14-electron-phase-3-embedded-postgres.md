@@ -3772,7 +3772,8 @@ describe.skipIf(!HAVE_BUNDLE)("embedded postgres against the real bundle", () =>
     const spec = embeddedPostgresSpec(deps());
     const r = await bringUp(spec, ctx());
     const layout = pgLayout(ud);
-    const q = await psql("SELECT current_setting('listen_addresses'), current_setting('lc_collate'), current_database()");
+    // PostgreSQL 16에는 lc_collate 설정이 없다(2026-09-14 Task 3 실측) — 데이터베이스의 콜레이션은 pg_database에 있다.
+    const q = await psql("SELECT current_setting('listen_addresses'), (SELECT datcollate FROM pg_database WHERE datname = current_database()), current_database()");
     expect(q.stdout.trim()).toBe("|C|damwha");
     expect((fs.statSync(layout.runDir).mode & 0o777).toString(8)).toBe("700");
     const marker = parseMarker(fs.readFileSync(layout.marker, "utf8"));
