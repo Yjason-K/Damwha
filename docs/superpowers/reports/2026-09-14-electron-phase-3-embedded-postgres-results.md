@@ -162,7 +162,66 @@
 | psycopg 3.3.4 `conninfo_to_dict` (같은 URI) | `{'user': 'damwha', 'dbname': 'damwha', 'host': '/Users/gim-yeongjae/Library/Application Support/Damwha/run'}` | 같다 |
 | 이 맥의 소켓 경로 길이 | 72바이트 (한도 103) | Task 5의 경계 테스트 |
 
-**Task 3 (구현 1단계).** 아직 없다.
+**Task 3 (구현 1단계, 2026-09-14, 스크래치 클러스터 `/tmp/dwp3.*`).**
+
+| 항목 | 측정값 | 이 값이 확인하거나 바꾼 계획 가정 |
+| --- | --- | --- |
+| (Task 1 Step 4 이관) 첫 빌드 시간 | 빌드 단계 77초, zsh `time` total 1:20.30 | Task 1의 빌드 시간 예산 |
+| (Task 1 Step 4 이관) 캐시·스테이징 크기 | `desktop/.cache/postgres` 267M, `desktop/build/postgres` 21M | `extraResources`로 앱에 실리는 크기(21M)와 소스 캐시 크기(267M, `.gitignore` 대상)가 다르다는 전제를 확인 |
+| Step 1: `initdb -D "<공백 포함 경로>"` 소요 시간 | 0.554초 (`real`) | 공백 포함 경로에서도 `initdb`가 그대로 동작 |
+| Step 1: `Database system identifier:` 줄 | `Database system identifier:           7685220739933878966` (레이블 뒤 공백 정렬 + 숫자만) | Task 5가 이 줄을 파싱할 때 쓸 정확한 포맷 |
+| Step 1: `postmaster.pid` 8번째 줄의 상태 전이 | 0.05초 폴링 60회 동안 `ready   $` 한 줄만 관측됨 — `starting`이 포착되지 않을 만큼 전이가 빠르다(폴링 해상도 미달) | Task 5의 `starting→ready` 전이 감지 로직은 "starting을 본다"를 전제하면 안 된다 — "ready 도달"만으로 판정해야 한다(가정 일부 수정, 아래 참고) |
+| Step 1: 소켓 파일 권한 | `.s.PGSQL.5432` 700 (`stat -f '%Lp'`) | `unix_socket_permissions=0700`이 실제로 걸린다 |
+| Step 1: `ps -o comm=` | `/Users/gim-yeongjae/project/daewha/desktop/build/postgres/bin/postgres` (전체 경로, 프로세스 타이틀 변경 없음) | Task 5 `classifyLockOwner`의 가정과 **일치** — 전체 경로다 |
+| Step 1: `ps -o args=` | `... postgres -D /tmp/dwp3.Vy2S/App Support/pg -c listen_addresses= ...` — `-D` 뒤 공백 포함 경로가 그대로, 인용부호 없이 이어진다(경로 자체에 공백이 있어도 `-D`의 값으로 남은 문자열 전체를 취급하면 파싱 가능) | Task 5 `classifyLockOwner`가 `-D` 다음 토큰을 "다음 ` -c`/` -`까지"로 자르면 안 되고 알려진 접두 플래그들을 걷어낸 나머지로 판단해야 한다는 점을 확인. `-D` 값 자체는 그대로 살아있다는 가정은 **일치** |
+| Step 1: TCP 리스닝 소켓 수 | 0 (`lsof -iTCP` 결과 없음) | `listen_addresses=''`가 TCP를 전혀 열지 않는다는 P3-C4 전제 확인 |
+| Step 2: `migrate.ts --status` / 적용 후 | `{"applied":0,"pending":[…24개…],"unknown":[]}` → `{"applied":24,"pending":[],"unknown":[]}` (문자 그대로 기대값과 일치) | Task 2의 출력 형식, Task 5·8이 그대로 파싱해도 되는 근거 |
+| Step 2: `pnpm --filter damwha-be run migrate -- --status` | `--`가 그대로 전달되어 `--status`로 동작 | pnpm이 `--` 뒤 인자를 손대지 않는다는 전제 확인 |
+| Step 2: node-pg·psycopg 소켓 접속 | 두 클라이언트 모두 `host=<공백 포함 URL 인코딩 경로>`로 접속 성공. psycopg: `('damwha', True, 'C', 24)`(`inet_client_addr() is null`=True → TCP 아님) | R3-2 재확인. **단, `current_setting('lc_collate')`/`SHOW lc_collate`는 이 빌드·Docker 이미지 양쪽 모두에서 `ERROR: unrecognized configuration parameter "lc_collate"`로 실패한다** — `lc_collate`/`lc_ctype`는 PostgreSQL에서 GUC(`pg_settings`)가 아니라 DB 속성(`pg_database.datcollate`/`datctype`)이라 `SHOW`/`current_setting`으로 못 읽는다(브리프 Step 2·5 SQL 자체의 오류, 이 실측 이후 발견). `SELECT datcollate FROM pg_database WHERE datname=current_database()`로 대체해 `'C'`를 확인했다 — Task 5·14가 로캘 값을 읽어야 하면 이 방식을 쓴다 |
+| Step 3: `SIGKILL` 뒤 자식 소멸 | 1초 이내(`pgrep`로 무자식 확인) — postmaster 자체가 유일한 프로세스였고 즉시 사라짐 | P3-C15의 "죽은 뒤 잔존 자식이 없다" 경로 확인 |
+| Step 3: `SIGKILL` 직후 소켓·잠금 파일 잔존 여부 | **남는다.** (별도 반복 실험으로 확인 — 브리프의 `ls "$M/run"`은 점파일을 감추는 bare `ls`라 오판 위험이 있어 `ls -la`로 재확인) `SIGKILL` 뒤 `.s.PGSQL.5432`·`.s.PGSQL.5432.lock`이 그대로 남는다 | Task 5 고아 판정은 소켓 파일 존재만으로 "살아있다"고 오판하면 안 되고 `postmaster.pid`의 pid 생존 여부(`kill -0`)로 판정해야 한다는 전제를 강화 |
+| Step 3: `SIGKILL` 뒤 재기동 | **거절되지 않았다.** `pre-existing shared memory block`/lock 오류 없이 곧바로 crash recovery 로그(`database system was not properly shut down; automatic recovery in progress` → `redo` → `checkpoint` → `ready to accept connections`)를 남기고 `ready`에 도달(첫 폴링에서 이미 ready, 전이가 폴링 해상도보다 빠름) | R3-9 첫 답 — "`SIGKILL` 뒤 재기동이 거절된다"는 가정은 **틀렸다**. 죽은 pid가 확실하면 postgres가 스스로 stale lock을 무시하고 자동 복구한다. Task 5·14의 "재기동 거절" 분기는 "동일 pid가 아직 살아있는 다른 postmaster가 같은 데이터 디렉터리를 쓰는 경우"에만 발생한다고 좁혀야 한다(§12·P3-C15 재판정은 Task 14에서 실앱으로) |
+| Step 3: `SIGINT` 중 8번째 줄 | 폴링 해상도(0.05초) 안에서 `stopping`이 관측되지 않고 곧바로 프로세스 소멸 — 셧다운이 그보다 빠르다 | 8번째 줄 `stopping` 감지에 의존하는 로직이 있다면 타이밍 경합에 약하다는 점을 기록(현재 계획엔 없음) |
+| Step 3: `SIGINT` 정상 종료 뒤 | `postmaster.pid` 삭제됨, `run/` 디렉터리 완전히 빔(소켓·잠금 파일 모두 제거, `ls -la`로 확인), 로그에 `received fast shutdown request` → `database system is shut down` | 정상 종료와 `SIGKILL`의 차이(파일 잔존 여부)가 Task 5 고아 판정의 핵심 신호라는 점 확인 |
+| Step 4: 발화 1,500 + 임베딩(1024차원) 1,500 적재 후 `pg_dump -Fc` | 0.507초, 16,663,747바이트(약 15.9MiB) | Task 12·14의 백업 시간·용량 예산 |
+| Step 4: `pg_restore --list` | exit 0, `Compression: none`(경고 문구 없음) | 압축 없는 커스텀 포맷 덤프가 그대로 목록화된다는 전제 확인 |
+| Step 5 (판정 게이트): `dw-p3-locale`(기본 로캘 `en_US.utf8`/`en_US.utf8`) vs 임베디드(`C`)에서 `kw1`·`kw2`·`kw3` | **완전히 동일**(문자열·정렬·유사도 값까지 일치) — 두 파일 전문은 아래 §2.4-부록 참고 | **진행.** 스펙 §12의 "다르면 로캘을 다시 정한다"는 발동하지 않았다 — `pg_bigm` 기반 키워드 검색은 로캘 영향을 받지 않는다 |
+| Step 5: `ord`(제목 정렬)·`case`(대소문자 접기) | 다르다 — `ord`: Docker(en_US.utf8)는 로캘 콜레이션 순, 임베디드(C)는 코드포인트 순(대문자·기호가 한글보다 앞으로 옴). `case`: `lower('ÉCLAIR 예산')`가 C에서는 `Éclair 예산`(É 유지), en_US.utf8에서는 `éclair 예산`(é로 접힘). `upper`도 대칭적으로 다르다 | `grep -rn "ORDER BY .*title\|lower(\|ILIKE" be/src` **0건** — 제품 코드가 제목 정렬·대소문자 접기·`ILIKE`를 쓰지 않는다. **영향 없음 → 진행**(멈추지 않음) |
+| Step 5: `diff "$R/docker.txt" "$R/embedded.txt"` | exit 1 (차이는 `ord`·`case`만, 위에서 영향 없음으로 판정) | 판정 게이트 통과 근거 |
+| Step 6: `codesign --force --deep --sign -` 뒤 4개 확인 | `codesign --verify --deep --strict "$A"` exit 0 / `codesign --verify .../bin/psql` exit 0 / `libpq.5.dylib`가 `Signature=adhoc`으로 개별 서명 유지 / `psql --version`·`postgres --version` 둘 다 정상 실행(16.15) | **가정과 일치** — `codesign --deep`이 Resources 안 Mach-O의 개별 ad-hoc 서명을 덮어쓰지 않고 실행 가능 상태를 유지한다. Task 12에 "재서명 뒤 다시 개별 서명" 단계를 추가할 필요 없음 |
+| 정리 확인 | 스크래치(`/tmp/dwp3.*`) 전부 삭제, `dw-p3-locale` 컨테이너 `--rm`으로 자동 제거(재확인 시 목록 없음), `damwha-postgres` 생성 시각(`2026-09-11 15:43:37 +0900 KST`) 실측 전후 불변, `~/Library/Application Support/Damwha`에 `data`·`run`·`backups` 없음(기존 `config.json`·`storage`·`logs` 등은 이 실측과 무관하게 이미 존재) | 측정 규칙 준수 확인 |
+
+**Step 5 두 결과 파일 전문 (`$R/docker.txt` vs `$R/embedded.txt`, `diff` 결과는 위 표 참고):**
+
+```
+docker.txt (dw-p3-locale, en_US.utf8):
+kw1|Budget 예산 line items|0.142857
+kw1|올해 예산을 다시 검토하겠습니다|0.111111
+kw1|예산안 초안은 다음 주에 나옵니다|0.105263
+kw2|50% 절감 목표를 세웠어요
+kw3|ÉCLAIR éclair Éclair
+ord|나눔 워크숍
+ord|가을 예산 회의
+ord|ábaco 점검
+ord|Budget review
+ord|Éclair 회고
+ord|zeta 정리
+case|éclair 예산|ÉCLAIR
+
+embedded.txt (스크래치 클러스터, C):
+kw1|Budget 예산 line items|0.142857
+kw1|올해 예산을 다시 검토하겠습니다|0.111111
+kw1|예산안 초안은 다음 주에 나옵니다|0.105263
+kw2|50% 절감 목표를 세웠어요
+kw3|ÉCLAIR éclair Éclair
+ord|Budget review
+ord|zeta 정리
+ord|Éclair 회고
+ord|ábaco 점검
+ord|가을 예산 회의
+ord|나눔 워크숍
+case|Éclair 예산|éCLAIR
+```
 
 ## 3. 단계별 실행과 리뷰
 
