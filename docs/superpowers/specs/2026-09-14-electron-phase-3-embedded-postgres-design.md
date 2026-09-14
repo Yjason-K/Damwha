@@ -367,7 +367,7 @@ postgres는 Phase 1·2의 `launchDev`/`launchPackaged` 핸들을 **쓰지 않는
 - 신호는 **postmaster pid 하나에만** 보낸다. 백엔드 자식에게는 postmaster가 전달한다.
 - `stop(graceMs)`은 아래 "종료"의 SIGINT → SIGQUIT 절차와 **같은 함수**다. 어댑터 `stop`, 감독자의 기동 중 정리
   (`supervisor.ts:392`), 어느 경로로 불려도 SIGKILL과 그룹 신호가 나가지 않는다.
-- stdout·stderr는 Phase 2의 `makeSink`로 `logs/postgres/stderr.log`에 쓰고 꼬리를 유지한다.
+- stdout·stderr는 Phase 2의 `makeSink`로 `logs/postgres.log`(`LaunchContext.logFile("postgres")`)에 쓰고 꼬리를 유지한다. 수집기가 뜬 뒤의 서버 로그는 `logs/postgres/`에 있다.
 - 테스트가 "어떤 경로로도 `SIGKILL`·음수 pid 신호를 보내지 않는다"를 고정한다.
 
 #### 준비 판정 (`readiness`)
@@ -380,7 +380,7 @@ postgres는 Phase 1·2의 `launchDev`/`launchPackaged` 핸들을 **쓰지 않는
 | --- | --- |
 | 핸들이 죽었다 | `failed` — `stderrTail()`의 원인 블록 + `logs/postgres/`의 마지막 오류 줄 |
 | `postmaster.pid`의 pid ≠ 핸들 pid | `not-ready` (아직 우리 서버의 락 파일이 아니다) |
-| 상태 `starting` | `not-ready`. 유예의 절반을 넘기면 detail에 "복구 중일 수 있어요" |
+| 상태 `starting` | `not-ready`. 준비 유예를 넘기면 postgres의 준비 시간 초과 안내가 "복구 중이면 오래 걸릴 수 있어요"를 말한다(`not-ready`에는 문구를 실을 자리가 없어, 감독자 계약을 넓히지 않고 안내로 푼다) |
 | 상태 `ready` + 소켓 파일 존재, **이 핸들에서 판정표 2를 아직 통과하지 않음** | 판정표 2 수행 → 통과면 `ready`, 거부면 `failed`(`manual`), 도구 실패면 `failed`(`manual`) |
 | 상태 `ready` + 소켓 파일 존재, 이 핸들에서 통과함 | `ready` |
 | 상태 `stopping` | `degraded` (재확인 중에만 나타난다) |
@@ -924,10 +924,9 @@ Phase 2 §8을 잇는다. Docker 관련 행은 없어지고 아래가 더해진�
   `_migrations` 전체 이름을 읽어 §6.5-1의 한 줄 JSON을 stdout에 쓰고 exit 0. 없으면 기존 `runMigrations` 그대로.
 - 판정 함수를 export해 `be/test/migration.spec.ts`(testcontainers)에 세 경우를 고정한다 — 빈 DB(`applied 0`,
   `pending` 전부), 전부 적용(`pending []`), `_migrations`에 모르는 이름(`unknown`에 나타남).
-- **utilityProcess에서 `require.main === module`이 참인지는 미확정이다**(§12). 거짓이면 `--status`도 인자 없는
-  실행도 **아무 일도 하지 않고 exit 0**으로 끝나 게이트가 조용히 통과한다. 그 경우 `be/src/database/`에
-  `require.main` 검사가 없는 전용 엔트리 파일을 하나 더하고 이 절을 결과 문서에서 갱신한다. 어느 쪽이든
-  게이트는 `--status`의 JSON을 **파싱할 수 있어야 통과**하도록 해, 무출력 exit 0을 성공으로 읽지 않는다.
+- utilityProcess에서 `require.main === module`은 **참이다**(2026-09-14 계획 작성 중 실측, §12) — 전용 엔트리가 필요
+  없다. 그래도 게이트는 JSON을 **파싱할 수 있어야 통과**한다. 진입 방식이 바뀌어 러너가 아무 일도 하지 않고 exit 0으로
+  끝나는 날에도 조용히 통과하지 않게 하는 장치다. 적용 뒤에도 같은 줄을 찍어 게이트가 "실행 뒤 미적용 0"을 확인한다.
 
 **변경하지 않는 것:** `be/src/`(위 한 파일 제외), `be/worker/`, `fe/`, `packages/contracts/`,
 `be/docker-compose.yml`, `be/docker/`, 모든 `.env`.
@@ -951,8 +950,8 @@ Phase 2 §8을 잇는다. Docker 관련 행은 없어지고 아래가 더해진�
 
 | 항목 | 성격 | 언제 닫히나 |
 | --- | --- | --- |
-| 공백 포함 소켓 URI를 node-pg·psycopg 3·`migrate.js`가 받는가 | 기술 위험 | 계획 1단계. 못 받으면 소비자별 파생 |
-| `utilityProcess.fork`에서 `require.main === module` | 기술 위험 | 계획 1단계. 거짓이면 전용 엔트리(§10) |
+| 공백 포함 소켓 URI를 node-pg·psycopg 3·`migrate.js`가 받는가 | 기술 위험 | **파싱은 해소**(2026-09-14 계획 작성 중 실측 — node-pg는 host를 소켓 경로로 해석해 `…/run/.s.PGSQL.5432`에 붙으려 하고 TCP로 새지 않는다, psycopg `conninfo_to_dict`도 host를 경로로 돌려준다). 실제 서버 접속은 계획 Task 3 |
+| `utilityProcess.fork`에서 `require.main === module` | 기술 위험 | **해소**(2026-09-14 계획 작성 중 실측, Electron 44.3.0) — 참이고 인자는 `process.argv`로 온다. 전용 엔트리는 필요 없다 |
 | `--locale=C` 클러스터에서 pg_bigm 한글 검색·정렬이 Docker DB(로캘 실측)와 같은가 | 기술 위험 | 계획 1단계. 같은 시드로 `search.repository.ts`와 같은 질의를 두 DB에 돌려 비교. **다르면 구현 전에 스펙으로 돌아와 로캘을 다시 정한다.** 실앱 판정은 P3-C1 (a) |
 | `--without-zlib`의 `pg_dump -Fc` 동작과 크기 | 기술 확인 | 계획 1단계 |
 | 최종 `codesign --deep`이 `Resources/postgres`의 개별 서명을 유지하는가 | 기술 확인 | 계획 1단계 또는 §6.9 첫 실행 |
@@ -969,7 +968,7 @@ Phase 2 §8을 잇는다. Docker 관련 행은 없어지고 아래가 더해진�
 | --- | --- | --- | --- |
 | R3-1 | 새 DB의 id 시퀀스가 옛 스토리지 파일을 덮어쓴다 | P3-C1(`mtg_37` 불변), P3-C9 | §6.2 페어링과 `data/storage` 분리 |
 | R3-2 | 공백 포함 소켓 URI를 어떤 드라이버가 못 받아 조용히 TCP `localhost:5432`(Docker DB)로 붙는다 | 계획 1단계, P3-C4 | 실측 후 소비자별 파생. **P3-C4를 Docker가 떠 있는 채로 판정하는 이유가 이것이다** — 잘못 붙으면 Docker DB의 회의가 보인다 |
-| R3-3 | utilityProcess에서 러너가 무출력 exit 0 → 게이트가 조용히 통과 | 계획 1단계 | §10 — JSON 파싱을 통과 조건으로 |
+| R3-3 | utilityProcess에서 러너가 무출력 exit 0 → 게이트가 조용히 통과 | 계획 작성 중 실측으로 **성립하지 않음** 확인 | §10 — 그래도 JSON 파싱을 통과 조건으로 둔다 |
 | R3-4 | 재배치 수정·서명 누락으로 클라이언트 바이너리만 죽는다 (Phase 0 R-2b) | P3-C12 | §6.9-4 `env -i psql --version` |
 | R3-5 | 마이그레이션 실패가 자동 재시도로 반복되고 백업이 쌓인다 | P3-C7 | §6.7 `manual` |
 | R3-6 | 옛 앱이 새 스키마 위에서 돈다 | P3-C8 | §6.5-2 `unknown` 거부 |
@@ -1023,7 +1022,7 @@ Phase 2 §8을 잇는다. Docker 관련 행은 없어지고 아래가 더해진�
 ## 16. 산출물
 
 - `desktop/scripts/build-postgres.sh`, `desktop/scripts/postgres-checksums.txt`.
-- `desktop/src/services/postgres.ts`(내장·외부 디버그 두 spec), api 어댑터의 실행 게이트, 복구 부류.
+- `desktop/src/services/pg-service.ts`(내장·외부 디버그 두 spec — compose 어댑터 `services/postgres.ts`는 삭제), api 어댑터의 실행 게이트, 복구 부류.
 - `check-bundle.mjs`·`package.mjs`·`desktop/package.json`·`desktop/.gitignore` 갱신.
 - `be/src/database/migrate.ts`의 `--status`·advisory lock과 그 테스트.
 - `desktop/src/services/types.ts`·`supervisor.ts`의 `recovery`와 `LaunchContext.signal`, `config-reload.ts`의 모드 비교.
