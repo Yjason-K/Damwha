@@ -122,9 +122,10 @@ export function recoveryHint(status: ServiceStatus): string | undefined {
   const detail = causeOf(status);
   const cause = detail === undefined ? undefined : causeIn(detail);
   if (cause === undefined) return undefined;
-  // 원인을 **먼저** 본다. degraded를 먼저 보면 종료 중(pgStopping)으로 degraded가 된 postgres에도
-  // "자동으로 복구됩니다"가 붙어 그 원인 자신의 안내가 사라진다 — 사람이 다시 시도를 누르기
-  // 전에는 복구되지 않는데 (Task 14 리뷰 I-1). 스스로 풀린다고 카탈로그가 선언한 원인만 그 안내를 받는다.
+  // 원인을 **먼저** 본다. degraded를 먼저 보면 원인 모를 not-ready로 degraded가 된 postgres
+  // (notAnswering)에도 "자동으로 복구됩니다"가 붙어 그 원인 자신의 안내가 사라진다 — 왜
+  // 그런지 모르므로 스스로 풀린다고 약속할 근거가 없다 (Task 14 리뷰 I-1). 스스로 풀린다고
+  // 카탈로그가 선언한 원인만 그 안내를 받는다.
   if (status.health === "degraded" && CAUSES[cause].selfRecovers) return DEGRADED_HINT;
   return hintOf(cause, status.id);
 }

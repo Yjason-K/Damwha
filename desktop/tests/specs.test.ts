@@ -45,7 +45,7 @@ describe("buildSpecs", () => {
     expect(specs.filter((s) => !s.gate).map((s) => s.id)).toEqual(["embed", "worker"]);
   });
 
-  it("keeps the same order and gates with the embedded postgres", () => {
+  it("keeps the same shutdown order with a restart-capable postgres spec (embedded mode)", () => {
     const embedded = { ...fakes, postgres: { ...externalPostgresSpec(), restart: { maxAttempts: 3, backoffMs: [1] } } as never };
     expect([...orderOf(buildSpecs(embedded))].reverse().map((s) => s.id)).toEqual(["worker", "embed", "api", "postgres"]);
   });

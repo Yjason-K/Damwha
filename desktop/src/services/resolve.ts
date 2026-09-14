@@ -2,8 +2,8 @@ import * as fs from "fs";
 import * as path from "path";
 
 /**
- * Finder로 띄운 앱의 PATH는 /usr/bin:/bin:/usr/sbin:/sbin뿐이다(2026-09-12 실측). uv도 docker도
- * 거기 없다. 이 목록이 두 가지를 한다 — 둘의 절대 경로를 찾고, 같은 목록을 자식 PATH에 붙인다.
+ * Finder로 띄운 앱의 PATH는 /usr/bin:/bin:/usr/sbin:/sbin뿐이다(2026-09-12 실측). uv도
+ * 거기 없다. 이 목록이 두 가지를 한다 — uv의 절대 경로를 찾고, 같은 목록을 자식 PATH에 붙인다.
  * 두 번째가 없으면 worker 안의 shutil.which("mlx_lm.server")와 pipeline/ffmpeg.py의 리터럴
  * 호출이 실패한다 (스펙 §6.3).
  */

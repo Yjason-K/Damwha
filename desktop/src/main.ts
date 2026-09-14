@@ -854,7 +854,10 @@ async function reportFailure(mine: number, what: string, e: unknown): Promise<vo
   appendSupervisorLog(`${what} — ${reasonOf(e)}`);
   const target = activeWindow(mine);
   if (target === null) return;
-  const seconds = mayAutoRetry(null, e) ? scheduleRetry() : undefined;
+  // null이 아니라 지금 감독자의 상태를 본다 — 이미 manual로 선 서비스가 있는데도 그 사실을
+  // 못 보고 auto로 읽으면(예: showShell 자체가 거부한 경우) 사람 손이 필요한 실패에 타이머를
+  // 다시 건다 (Task 12 fix round 1).
+  const seconds = mayAutoRetry(supervisor?.statuses() ?? null, e) ? scheduleRetry() : undefined;
   await showShell(target, {
     state: "failed",
     detail: failureDetail(what, reasonOf(e)),
@@ -915,7 +918,12 @@ async function startServices(mine: number): Promise<void> {
     const target = activeWindow(mine);
     if (target === null) return;
     // 사람 손이 필요한 실패면 타이머를 걸지 않는다 — 마이그레이션이 20초마다 재실행되고 백업이 쌓인다 (Phase 3 스펙 §6.7).
-    const retryInSeconds = mayAutoRetry(supervisor?.statuses() ?? null) ? scheduleRetry() : undefined;
+    const mayRetry = mayAutoRetry(supervisor?.statuses() ?? null);
+    // 이전(auto) 실패가 걸어 둔 타이머가 있으면 지운다 — 그 타이머가 그대로 남으면, 지금은
+    // manual로 선 게이트인데도 이전 타이머가 한 번 더 깨어나 재시도를 걸고 마이그레이션
+    // 게이트를 다시 돌려 백업을 하나 더 쌓는다 (Task 12 fix round 1).
+    if (!mayRetry) cancelRetry();
+    const retryInSeconds = mayRetry ? scheduleRetry() : undefined;
     await showShell(target, { ...shellStatusOf(), retryInSeconds });
     return;
   }
@@ -973,7 +981,9 @@ function announceRestartNotice(mine: number, notice: string): void {
  * 번들 경로와 모드도 감독자 생성 때 한 번 정해진다. 그 넷을
  * 반영하려면 감독자를 다시 만들어야 하고, 그것은 첫 감독자가 쥔 자식 셋의 유일한 참조를
  * 버리는 일이라 P2-C4가 금지한다. 그러므로 실패 화면의 "값을 고치면 다시 시도합니다"가 참인
- * 범위는 DATABASE_URL·STORAGE_ROOT·PORT 같은 **자식 env 키**다.
+ * 범위는 PORT·EMBED_SERVICE_PORT 같은 **자식 env 키**다 — DATABASE_URL·STORAGE_ROOT는 여기 들지
+ * 않는다. 그 둘은 모드(cfg.databaseMode)가 정하는 값이라 baseline에서 애초에 빠져 있고
+ * (withoutDbKeys), 재시도로 config.json을 다시 읽어도 바뀌지 않는다(스펙 §6.6).
  */
 /**
  * "이 API 기동은 마이그레이션 검사를 건너뛰었다". 판정(한 기동에 한 번 적기, 꼬리에서 줄이 밀려나도
@@ -1198,6 +1208,7 @@ if (!app.requestSingleInstanceLock()) {
       start,
       attach: () => reattachWindow(mine),
       onFailure: (e) => reportFailure(mine, "창을 다시 붙이지 못했어요", e),
+      autoRetryAllowed: () => mayAutoRetry(supervisor?.statuses() ?? null),
     }).catch((e: unknown) => {
       // 실패 처리 자체가 거부하면 여기서 멈춘다 — void 프라미스의 거부는 Electron main의
       // uncaught exception이 되고, 하필 화면이 이미 잘못된 순간에 난다.

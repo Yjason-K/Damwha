@@ -101,7 +101,7 @@ export function shellStatusFrom(input: ShellInput): ShellStatus {
 }
 
 /**
- * 감독자를 세우기 **전의** 실패(저장소 폴더·docker 부재 같은 던지는 실패)를 화면 문구로 만든다.
+ * 감독자를 세우기 **전의** 실패(저장소 폴더를 확인하지 못한 것 같은 던지는 실패)를 화면 문구로 만든다.
  * 서비스 상태가 없으므로 recoveryHint가 아니라 원인 문구로 안내를 고른다.
  */
 export function failureDetail(what: string, reason: string): string {

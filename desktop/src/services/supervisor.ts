@@ -205,7 +205,7 @@ export function createSupervisor(
       try {
         last = await rt.spec.readiness(result, ctx);
       } catch (e) {
-        // 준비 판정도 바깥 명령을 돌린다 (postgres는 docker compose ps, api는 HTTP). 그것이
+        // 준비 판정도 바깥 자원을 본다 (postgres는 postmaster.pid를 읽고 psql로 확인, api는 HTTP). 그것이
         // 던지면 bringOnce가 통째로 거부해 아래의 실패 정리 — 자식을 치우고 rt.result를 null로
         // 되돌리는 줄 — 이 건너뛰어지고, 남은 rt.result가 재진입 가드에 걸려 그 서비스의 재시도를
         // 앱이 사는 내내 막는다. 게이트면 그 거부가 runFrom을 타고 start()까지 올라간다.

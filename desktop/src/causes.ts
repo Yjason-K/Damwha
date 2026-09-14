@@ -32,10 +32,11 @@ export interface Cause {
    * (shell-hints.ts의 recoveryHint): true면 "자동으로 복구됩니다"(DEGRADED_HINT), false면 그 원인
    * 자신의 안내다.
    *
-   * degraded라고 저절로 풀리는 것이 아니다. 감독자의 재프로브는 readiness의 failed detail을 그대로
-   * degraded에 싣는다 — 부팅 뒤 데이터베이스가 종료 중(pgStopping)으로 degraded가 된 postgres가
-   * 그렇고, 그것은 사람이 다시 시도를 누르기 전에는 돌아오지 않는다. 전에는 degraded면 원인을 보지
-   * 않고 "자동으로 복구됩니다"를 붙여 바로 그 행동을 지웠다 (Task 14 리뷰 I-1).
+   * degraded라고 저절로 풀리는 것이 아니다. 감독자의 재프로브가 readiness의 실패를 그대로
+   * degraded에 싣기도 한다 — ready였던 postgres가 재프로브에서 원인 모를 not-ready를 받으면
+   * `notAnswering`으로 degraded가 되고, 왜 그런지 모르므로 스스로 풀린다고 약속할 근거가 없다.
+   * 전에는 degraded면 원인을 보지 않고 "자동으로 복구됩니다"를 붙여 바로 그 판단을 지웠다
+   * (Task 14 리뷰 I-1).
    *
    * 필수 필드라 원인을 더하면서 정하지 않으면 lint(tsc)가 걸린다. 모르면 false다 — 거짓 안심이
    * 침묵보다 나쁘다.
@@ -206,8 +207,8 @@ export const CAUSES = {
   },
   /**
    * api degraded — 부팅 뒤 DB가 끊겼다 (스펙 §6.6). API는 살아 있고 DB가 돌아오면 스스로 다시 붙는다 —
-   * 이 서비스에서 사람이 할 일은 없다. DB가 **왜** 안 돌아오는지(Docker Desktop이 꺼졌다)는 postgres
-   * 줄이 자기 원인과 안내로 말한다.
+   * 이 서비스에서 사람이 할 일은 없다. DB가 **왜** 안 돌아오는지(postgres가 재시작 중이거나 거부됐다)는
+   * postgres 줄이 자기 원인과 안내로 말한다.
    */
   apiDbUnreachable: {
     match: /데이터베이스에 연결할 수 없어요/,
@@ -264,7 +265,9 @@ export const CAUSES = {
   },
   /**
    * 감독자 — ready 뒤 재프로브가 not-ready를 돌려줬다 (degraded). 스스로 풀린다고 볼 근거가 없다:
-   * `docker compose stop postgres`로 내린 컨테이너가 이 모양이고, 사람이 start하기 전에는 그대로다.
+   * ready였던 postgres가 재프로브에서 원인 모를 not-ready를 받는 경우가 이 모양이고(예:
+   * postmaster.pid가 잠깐 "ready"도 "stopping"도 아닌 값을 보인다), 왜 그런지 모르므로
+   * 사람이 확인하기 전에는 그대로다.
    */
   notAnswering: {
     match: /준비 상태로 답하지 않아요/,

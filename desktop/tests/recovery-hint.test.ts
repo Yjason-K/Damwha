@@ -143,7 +143,8 @@ describe("recoveryHint — 원인 목록 전체 (causes.ts에서 끌어온다)",
   it("a degraded service is told it recovers on its own only when the catalog says its cause does — otherwise it gets its cause's own fix", () => {
     // 전에는 이 테스트가 **모든** 원인 × 서비스에 DEGRADED_HINT를 단언해 결함을 지켰다(리뷰 I-1).
     // 어느 원인이든 degraded로 온다 — 감독자의 재프로브가 readiness의 failed detail을 degraded에 싣는다.
-    // 부팅 뒤 Docker Desktop이 꺼진 postgres가 그렇고, 사람이 켜기 전에는 돌아오지 않는다. 기대값은
+    // ready였던 postgres가 재프로브에서 원인 모를 not-ready를 받은(notAnswering) 경우가 그렇고,
+    // 왜 그런지 모르므로 사람이 확인하기 전에는 돌아오지 않는다. 기대값은
     // 원인 목록의 선언(selfRecovers)에서 끌어온다 — 원인을 더하면 그 원인도 이 검사를 탄다.
     expect(DEGRADED_HINT).not.toMatch(/다시 시작하세요|재시작하세요|다시 켜 주세요/);
     const wrong: string[] = [];
@@ -158,7 +159,7 @@ describe("recoveryHint — 원인 목록 전체 (causes.ts에서 끌어온다)",
   });
 
   it("a cause that recovers on its own has no fix for a person — and a cause with a fix is not marked as recovering on its own", () => {
-    // 위 검사는 선언을 **따르는지**만 본다. 선언 자체가 틀리면(dockerDaemonDown을 selfRecovers로 적으면)
+    // 위 검사는 선언을 **따르는지**만 본다. 선언 자체가 틀리면(notAnswering을 selfRecovers로 적으면)
     // 위는 초록인 채 I-1이 돌아온다. 사람이 할 일이 적힌 원인은 정의상 저절로 풀리지 않는다.
     expect(CAUSE_IDS.filter((id) => CAUSES[id].selfRecovers && HINTS[id] !== null)).toEqual([]);
   });
@@ -463,5 +464,15 @@ describe("Phase 3 causes", () => {
 
   it("does not tell the worker to fix DATABASE_URL in config.json — the app derives it now", () => {
     expect(recoveryHint(s({ id: "worker", detail: CAUSES.readyTimeout.text }))).not.toMatch(/DATABASE_URL/);
+  });
+
+  it("does not claim a postgres that goes not-ready for no known reason recovers on its own (notAnswering)", () => {
+    // 이 원인을 고정하는 유일한 테스트였던 "docker compose stop postgres" 테스트가 Task 12에서
+    // Docker 원인과 함께 지워졌다 — 내장 postgres로 다시 건다. ready였던 postgres가 재프로브에서
+    // 원인 모를 not-ready를 받으면(notAnswering) 왜 그런지 모르므로 스스로 풀린다고 말하지 않는다.
+    expect(CAUSES.notAnswering.selfRecovers).toBe(false);
+    const status = s({ id: "postgres", process: "running", health: "degraded", detail: CAUSES.notAnswering.text });
+    expect(recoveryHint(status)).not.toBe(DEGRADED_HINT);
+    expect(recoveryHint(status) ?? "").not.toMatch(/자동으로/);
   });
 });

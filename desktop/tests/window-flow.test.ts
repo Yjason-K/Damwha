@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { decideMenuRetry, gateUp, openWindowFlow, type WindowFlowDeps } from "../src/window-flow";
+import { mayAutoRetry } from "../src/retry-policy";
 import type { ServiceStatus } from "../src/services/types";
 
 /**
@@ -34,6 +35,7 @@ function recorder(over: Partial<WindowFlowDeps> = {}) {
     start: record("start"),
     attach: record("attach"),
     onFailure: record("failure"),
+    autoRetryAllowed: () => true,
     ...over,
   };
   return { log, deps };
@@ -191,5 +193,37 @@ describe("창을 다시 열 때 넘어진 게이트 — 재시도를 되살린�
     const { log, deps } = recorder({ readyToAttach: () => gateUp(up) });
     await openWindowFlow(deps);
     expect(log).toEqual(seq("shell", "attach"));
+  });
+});
+
+describe("창을 다시 열 때 manual 실패는 재시도하지 않는다 (Task 12 fix round 1, 스펙 §6.7)", () => {
+  it("does not start when the gate is down for a manual reason — the retry button is the only way back", async () => {
+    // 마이그레이션 게이트 같은 manual 실패다. 창을 여닫을 때마다 start()가 다시 돌면 게이트가
+    // 또 실행돼 백업이 하나씩 쌓인다. 셸은 이미 위에서 걸었으니 화면이 비지는 않는다.
+    const { log, deps } = recorder({ readyToAttach: () => false, autoRetryAllowed: () => false });
+    await openWindowFlow(deps);
+    expect(log).toEqual(seq("shell"));
+  });
+
+  it("still starts when the gate is down for an auto-recoverable reason", async () => {
+    const { log, deps } = recorder({ readyToAttach: () => false, autoRetryAllowed: () => true });
+    await openWindowFlow(deps);
+    expect(log).toEqual(seq("shell", "start"));
+  });
+
+  it("still starts when there is no supervisor yet — autoRetryAllowed mirrors mayAutoRetry(null)", async () => {
+    // main.ts는 `mayAutoRetry(supervisor?.statuses() ?? null)`로 잇는다. 감독자가 없으면
+    // statuses가 null이고, mayAutoRetry(null)은 항상 true다 — 창을 다시 열어도 첫 기동이
+    // 감독자를 세우기 전에 접힌 경우까지 막히면 안 된다.
+    const { log, deps } = recorder({ readyToAttach: () => false, autoRetryAllowed: () => mayAutoRetry(null) });
+    await openWindowFlow(deps);
+    expect(log).toEqual(seq("shell", "start"));
+  });
+
+  it("the menu retry starts regardless of the failure class", () => {
+    // decideMenuRetry는 autoRetryAllowed를 보지 않는다 — 사람이 누른 재시도는 manual이든
+    // auto든 항상 통과시킨다(스펙 §6.7의 "탈출구").
+    expect(decideMenuRetry({ quitting: false, hasWindow: true })).toBe("start");
+    expect(decideMenuRetry({ quitting: false, hasWindow: false })).toBe("open-window");
   });
 });
