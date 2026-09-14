@@ -14,7 +14,6 @@ import {
   type ServicesView,
 } from "../src/status-view";
 import { judgeAfterProbe } from "../src/services/api";
-import { postgresSpec } from "../src/services/postgres";
 import { workerSpec } from "../src/services/worker";
 import type { LaunchContext, ServiceId, ServiceStatus } from "../src/services/types";
 
@@ -45,10 +44,10 @@ describe("servicesView", () => {
     expect(view.rows.every((r) => r.cause === undefined && r.hint === undefined)).toBe(true);
   });
 
-  it("sends postgres to supervisor.log — the container has no log file of its own", () => {
+  it("sends postgres to its own log — the bundled cluster keeps postgres.log (Phase 3)", () => {
     const view = servicesView({ statuses: ALL_OK, restartNotice: null, logPathOf });
     expect(view.rows.map((r) => r.log)).toEqual([
-      "/logs/supervisor.log",
+      "/logs/postgres.log",
       "/logs/api.log",
       "/logs/embed.log",
       "/logs/worker.log",
@@ -156,14 +155,44 @@ describe("servicesView", () => {
     expect(view.rows).toEqual([]);
     expect(view.notices).toEqual([NO_SERVICES_YET]);
   });
+
+  it("marks the adopted debug database on the row and in the status line, as a warning that does not go away", () => {
+    const statuses = [st("postgres", { owned: false }), st("api")];
+    const view = servicesView({ statuses, restartNotice: null, logPathOf, externalDatabase: true });
+    expect(view.rows[0].tone).toBe("warn");
+    expect(view.rows[0].notes).toContain("외부 DB(디버깅)");
+    expect(view.rows[0].notes).not.toContain("앱이 띄우지 않음");
+    expect(view.rows[0].warning).toBe(CAUSES.externalDatabase.text);
+    expect(statusLine(statuses[0], true)).toBe("데이터베이스: 실행 중 (외부 DB(디버깅))");
+  });
+
+  it("shows the psql command on a running embedded database row only", () => {
+    const cmd = `"/B/postgres/bin/psql" -h "/u/run" -U damwha damwha`;
+    const up = servicesView({ statuses: [st("postgres")], restartNotice: null, logPathOf, debugCommand: cmd });
+    expect(up.rows[0].command).toBe(cmd);
+    const down = servicesView({ statuses: [st("postgres", { process: "failed", health: "unknown" })], restartNotice: null, logPathOf, debugCommand: cmd });
+    expect(down.rows[0].command).toBeUndefined();
+    const external = servicesView({ statuses: [st("postgres", { owned: false })], restartNotice: null, logPathOf, externalDatabase: true, debugCommand: cmd });
+    expect(external.rows[0].command).toBeUndefined();
+  });
+
+  it("puts a config warning among the notices and on the failure screen", () => {
+    const warning = "내장 DB 모드에서는 config.json의 DATABASE_URL를 쓰지 않아요";
+    expect(servicesView({ statuses: [st("api")], restartNotice: null, logPathOf, configWarning: warning }).notices).toContain(warning);
+    const shell = shellStatusFrom({ statuses: [st("api")], restartNotice: null, logPathOf, configWarning: warning });
+    expect(shell.detail).toContain(warning);
+  });
+
+  it("links postgres to its own log, not the supervisor's", () => {
+    expect(servicesView({ statuses: [st("postgres")], restartNotice: null, logPathOf }).rows[0].log).toBe("/logs/postgres.log");
+  });
 });
 
 describe("statusLine / shellStatusFrom", () => {
   it("puts the cause and then the hint under a failed service", () => {
-    const line = statusLine(st("postgres", { process: "failed", health: "unknown", detail: CAUSES.dockerDaemonDown.text }));
-    expect(line).toBe(
-      `데이터베이스: 실패\n    ${CAUSES.dockerDaemonDown.text}\n    ${HINT_PREFIX}${HINTS.dockerDaemonDown}`,
-    );
+    const detail = CAUSES.pgPairingRefused.text("파일 저장소가 다른 데이터베이스의 것이에요", "/u/data/postgres", "/u/data/storage");
+    const line = statusLine(st("postgres", { process: "failed", health: "unknown", detail }));
+    expect(line).toBe(`데이터베이스: 실패\n    ${detail}\n    ${HINT_PREFIX}${HINTS.pgPairingRefused}`);
   });
 
   it("indents every line of a multi-line cause", () => {
@@ -176,18 +205,16 @@ describe("statusLine / shellStatusFrom", () => {
     expect(statusLine(st("embed", { owned: false }))).toBe("검색 임베딩: 실행 중 (앱이 띄우지 않음)");
   });
 
-  it("uses the db-unreachable screen when postgres failed on the Docker daemon, with the supervisor log", () => {
+  it("always uses the plain failure screen for a postgres failure, with the server's own log (Phase 3)", () => {
+    const detail = CAUSES.pgVersionMismatch.text("15", "16");
     const shell = shellStatusFrom({
-      statuses: [st("postgres", { process: "failed", health: "unknown", detail: CAUSES.dockerDaemonDown.text }), st("api", { process: "stopped", health: "unknown" })],
+      statuses: [st("postgres", { process: "failed", health: "unknown", detail }), st("api", { process: "stopped", health: "unknown" })],
       restartNotice: null,
       logPathOf,
     });
-    expect(shell.state).toBe("db-unreachable");
-    expect(shell.logPath).toBe("/logs/supervisor.log");
-    // P2-C7: 원인과 "Docker Desktop을 실행"이 실패 화면에 있다. 상수를 상수에 대지 않는다 — 안내
-    // 문구에서 "Docker Desktop"을 빼도 초록인 단언은 기준을 지키지 않는다.
-    expect(shell.detail).toContain("Docker Desktop이 실행 중이 아니에요");
-    expect(shell.detail).toContain("Docker Desktop을 실행");
+    expect(shell.state).toBe("failed");
+    expect(shell.logPath).toBe("/logs/postgres.log");
+    expect(shell.detail).toContain(HINTS.pgVersionMismatch as string);
   });
 
   it("never puts a retry countdown on the screen by itself — only the code that schedules the timer may", () => {
@@ -195,31 +222,11 @@ describe("statusLine / shellStatusFrom", () => {
     // 스스로 적으면, 창을 다시 연 화면처럼 아무 타이머도 없는 곳에서 "N초 뒤에 다시 시도해요"라고
     // 거짓말을 한다.
     const shell = shellStatusFrom({
-      statuses: [st("postgres", { process: "failed", health: "unknown", detail: CAUSES.dockerDaemonDown.text })],
+      statuses: [st("postgres", { process: "failed", health: "unknown", detail: CAUSES.pgVersionMismatch.text("15", "16") })],
       restartNotice: null,
       logPathOf,
     });
     expect(shell.retryInSeconds).toBeUndefined();
-  });
-
-  it("does not use the db-unreachable screen for a raw compose error that is not the Docker daemon (리뷰 M-1)", () => {
-    // 5432 포트 충돌 같은 원문 compose stderr는 알려진 원인이 아니다(causeIn이 undefined). 그때도
-    // db-unreachable로 가면 "Docker Desktop이 실행 중인지 확인해 주세요"가 이미 켜져 있는 Docker
-    // Desktop을 가리키는 거짓 안내가 된다 — 해결 줄은 포트 얘기를 하는데 본문은 딴 데를 가리킨다.
-    const shell = shellStatusFrom({
-      statuses: [
-        st("postgres", { process: "failed", health: "unknown", detail: "Bind for 0.0.0.0:5432 failed: port is already allocated" }),
-        st("api", { process: "stopped", health: "unknown" }),
-      ],
-      restartNotice: null,
-      logPathOf,
-    });
-    expect(shell.state).not.toBe("db-unreachable");
-    // 여기 있던 `detail`에 대한 `not.toMatch(/Docker Desktop/)`는 아무것도 지키지 않았다(최종 리뷰 M-3) —
-    // 그 문구는 status.html의 db-unreachable 본문에만 있고 detail에는 어떤 경로로도 들어오지 않는다.
-    // 본문 선택은 위 state 단언이 지킨다. 대신 일반 실패 화면이 **원문 원인을 그대로** 싣는지를 본다:
-    // 이 원인에는 안내가 없으므로(causeIn이 모른다) 사람이 포트 충돌을 읽을 곳은 이 줄뿐이다.
-    expect(shell.detail).toContain("Bind for 0.0.0.0:5432 failed: port is already allocated");
   });
 
   it("does not use the db-unreachable screen for a postgres readiness timeout (리뷰 M-1)", () => {
@@ -326,24 +333,6 @@ describe("화면이 싣는 해결 문구 — 완료 기준 P2-C7·C8·C9 (Task 1
   const reasonOf = async (p: Promise<unknown>) => p.then(() => "", (e: Error) => e.message);
   const failed = (id: ServiceId, detail: string): ServiceStatus =>
     st(id, { process: "failed", health: "unknown", detail });
-
-  it("P2-C7: Docker daemon down — the failure screen says to run Docker Desktop", async () => {
-    const detail = await reasonOf(
-      postgresSpec(async () => ({
-        stdout: "",
-        stderr: "failed to connect to the docker API at unix:///x/docker.sock; check if the daemon is running",
-        code: 1,
-      })).launch(ctx()),
-    );
-    const shell = shellStatusFrom({
-      statuses: [failed("postgres", detail), st("api", { process: "stopped", health: "unknown" })],
-      restartNotice: null,
-      logPathOf,
-    });
-    expect(shell.state).toBe("db-unreachable");
-    expect(shell.detail).toContain("Docker Desktop이 실행 중이 아니에요");
-    expect(shell.detail).toContain("Docker Desktop을 실행");
-  });
 
   it("P2-C8: uv not found — names what is missing and the config.json fix, on the failure screen and in the status window", async () => {
     const detail = await reasonOf(workerSpec({ listExternal: async () => [] }).launch(ctx({ bins: { uv: null } })));

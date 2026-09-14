@@ -6,7 +6,7 @@ import { applyNavigationBoundary } from "./permissions";
 // 순수 로직은 desktop/src/stderr.ts에 있다 — 여기서는 기존 호출부를 위해 재노출만 한다.
 export { lastMeaningfulLine } from "./stderr";
 
-export type ShellState = "starting" | "quitting" | "db-unreachable" | "failed";
+export type ShellState = "starting" | "quitting" | "failed";
 
 export interface ShellStatus {
   state: ShellState;

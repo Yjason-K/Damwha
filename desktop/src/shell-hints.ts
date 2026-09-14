@@ -33,7 +33,7 @@ export const HINTS: Record<CauseId, Hint> = {
   externalWorker:
     "터미널의 worker를 끄고 다시 시도하거나, 그 worker의 STORAGE_ROOT가 앱과 같은지 확인해 주세요.",
   embedMismatch: "외부 embed 서비스를 끄면 앱이 직접 띄웁니다.",
-  repoRootMissing: "be/worker와 be/docker-compose.yml이 있는 폴더를 골라 주세요.",
+  repoRootMissing: "be/worker가 있는 담화 저장소 폴더를 골라 주세요.",
   pgBundleMissing:
     "앱을 다시 설치해 주세요. 개발 중이면 `bash desktop/scripts/build-postgres.sh`를 실행한 뒤 다시 시도해 주세요.",
   pgSocketPathTooLong: "지금 macOS 계정에서는 내장 데이터베이스를 열 수 없어요. 계정 이름이 짧은 계정에서 실행해 주세요.",

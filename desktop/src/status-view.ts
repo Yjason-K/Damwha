@@ -1,4 +1,4 @@
-import { causeIn } from "./causes";
+import { CAUSES } from "./causes";
 import { causeOf, hintForDetail, recoveryHint } from "./shell-hints";
 import type { ShellStatus } from "./shell-window";
 import type { ProcessState, ServiceId, ServiceStatus } from "./services/types";
@@ -9,8 +9,8 @@ import type { ProcessState, ServiceId, ServiceStatus } from "./services/types";
  *
  * main.ts에 있던 statusLine·shellStatusOf를 옮겼다. 그 자리에 있는 동안 둘은 구조적으로
  * 무검증이었고(electron을 값으로 import하는 파일은 vitest가 못 불러온다 — shell-window.ts:4),
- * "postgres가 넘어지면 db-unreachable 화면"이라는 판정도 함께 거기 있었다. main.ts에는 전역을
- * 읽어 넘기는 잎만 남는다.
+ * "postgres가 넘어지면 Docker 전용 화면"이라는 판정도 함께 거기 있었다(Phase 3에서 없앴다). main.ts에는
+ * 전역을 읽어 넘기는 잎만 남는다.
  */
 
 export const SERVICE_LABELS: Record<ServiceId, string> = {
@@ -42,10 +42,8 @@ export const MIGRATION_CHECK_SKIPPED_WARNING =
 /** 아직 감독자가 없을 때 두 화면이 말하는 것. */
 export const NO_SERVICES_YET = "아직 서비스를 띄우지 않았어요. 메뉴의 서비스 > 다시 시도를 눌러 주세요.";
 
-/** 로그 파일 이름. postgres는 컨테이너라 자기 로그 파일이 없다 — 앱의 판단 기록으로 보낸다. */
-export function logIdOf(id: ServiceId): ServiceId | "supervisor" {
-  return id === "postgres" ? "supervisor" : id;
-}
+/** 외부 디버그 모드의 postgres 줄에 붙는 표시. 실패가 아니라 상시 경고다 (Phase 3 스펙 §6.1). */
+export const EXTERNAL_DATABASE_NOTE = "외부 DB(디버깅)";
 
 function indent(text: string, pad: string): string {
   return text.split("\n").join(`\n${pad}`);
@@ -65,8 +63,13 @@ export function causeWithFix(cause: string, hint: string | undefined): string {
 }
 
 /** 셸 화면의 서비스 한 줄. 원인이 있으면 그 아래 안내까지 붙인다. */
-export function statusLine(s: ServiceStatus): string {
-  const adopted = s.process === "running" && !s.owned ? " (앱이 띄우지 않음)" : "";
+export function statusLine(s: ServiceStatus, externalDatabase = false): string {
+  const adopted =
+    s.process === "running" && !s.owned
+      ? s.id === "postgres" && externalDatabase
+        ? ` (${EXTERNAL_DATABASE_NOTE})`
+        : " (앱이 띄우지 않음)"
+      : "";
   const degraded = s.health === "degraded" ? " — 동작이 제한돼요" : "";
   const shown = s.detail !== undefined && (s.process === "failed" || s.health === "degraded");
   const why = shown ? `\n    ${indent(causeWithFix(s.detail ?? "", recoveryHint(s)), "    ")}` : "";
@@ -77,6 +80,8 @@ export interface ShellInput {
   statuses: readonly ServiceStatus[];
   restartNotice: string | null;
   logPathOf(id: ServiceId | "supervisor"): string;
+  externalDatabase?: boolean;
+  configWarning?: string | null;
 }
 
 /** 감독자의 지금 상태를 셸 화면 한 장으로 접는다. 실패가 있으면 그 원인을 머리에 세운다. */
@@ -84,20 +89,15 @@ export function shellStatusFrom(input: ShellInput): ShellStatus {
   // 화면이 "값을 고치면 다시 시도합니다"라고 적는 이상, 고쳐도 반영되지 않는 값은 화면이
   // 말해야 한다. 조용히 어긋난 채로 두는 것이 재리뷰 §4-1이 지적한 결함의 절반이다.
   const lines = [
-    ...input.statuses.map(statusLine),
+    ...input.statuses.map((s) => statusLine(s, input.externalDatabase === true)),
     ...(input.restartNotice === null ? [] : [input.restartNotice]),
+    ...(input.configWarning === undefined || input.configWarning === null ? [] : [input.configWarning]),
   ];
   const failed = input.statuses.find((s) => s.process === "failed");
   if (failed === undefined) return { state: "starting", detail: lines.join("\n") };
-  return {
-    // db-unreachable 화면의 본문은 "Docker Desktop이 실행 중인지 확인해 주세요"로 고정이다. 원인이
-    // Docker 데몬일 때만 그 화면을 쓴다 — postgres가 넘어진 다른 원인(DOCKER_BIN이 틀린 `spawn … ENOENT`,
-    // compose stderr 원문, 유예 초과)에 쓰면 해결 줄은 DOCKER_BIN을 말하는데 본문은 사람을 Docker
-    // Desktop으로 보낸다(리뷰 M-1). 그때는 일반 실패 화면이 원인과 해결 줄을 그대로 보인다.
-    state: failed.id === "postgres" && causeIn(failed.detail ?? "") === "dockerDaemonDown" ? "db-unreachable" : "failed",
-    detail: lines.join("\n"),
-    logPath: input.logPathOf(logIdOf(failed.id)),
-  };
+  // Phase 2의 db-unreachable 화면("Docker Desktop이 실행 중인지 확인해 주세요")은 없다 — 앱이 Docker를 부르지 않는다.
+  // 어떤 실패든 일반 실패 화면이 원인과 해결 줄을 그대로 보인다.
+  return { state: "failed", detail: lines.join("\n"), logPath: input.logPathOf(failed.id) };
 }
 
 /**
@@ -125,6 +125,8 @@ export interface ServiceRow {
   /** 실패는 아니지만 사람이 알아야 하는 것 — 검사를 건너뛴 게이트. */
   warning?: string;
   log: string;
+  /** 실행 중인 내장 DB에 붙는 디버깅 접속 명령 (스펙 §6.3). 렌더러는 글자로만 넣는다. */
+  command?: string;
 }
 
 export interface ServicesView {
@@ -140,6 +142,9 @@ export interface ServicesInput {
   logPathOf(id: ServiceId | "supervisor"): string;
   /** 지금 API 기동이 마이그레이션 검사를 건너뛰었다 (services/api.ts의 createMigrationCheckWatch). */
   migrationCheckSkipped?: boolean;
+  externalDatabase?: boolean;
+  configWarning?: string | null;
+  debugCommand?: string | null;
 }
 
 function toneOf(s: ServiceStatus, cause: string | undefined): Tone {
@@ -157,11 +162,14 @@ export function servicesView(input: ServicesInput): ServicesView {
   const notices = [
     ...(input.statuses === null ? [NO_SERVICES_YET] : []),
     ...(input.restartNotice === null ? [] : [input.restartNotice]),
+    ...(input.configWarning === undefined || input.configWarning === null ? [] : [input.configWarning]),
   ];
+  const external = input.externalDatabase === true;
   const rows = (input.statuses ?? []).map((s): ServiceRow => {
     const cause = causeOf(s);
+    const debugDb = s.id === "postgres" && external;
     const notes = [
-      ...(s.process === "running" && !s.owned ? ["앱이 띄우지 않음"] : []),
+      ...(s.process === "running" && !s.owned ? [debugDb ? EXTERNAL_DATABASE_NOTE : "앱이 띄우지 않음"] : []),
       ...(s.restarts > 0 ? [`재시작 ${s.restarts}회`] : []),
     ];
     const row: ServiceRow = {
@@ -170,7 +178,7 @@ export function servicesView(input: ServicesInput): ServicesView {
       state: `${PROCESS_LABELS[s.process]}${s.health === "degraded" ? " · 동작 제한" : ""}`,
       tone: toneOf(s, cause),
       notes,
-      log: input.logPathOf(logIdOf(s.id)),
+      log: input.logPathOf(s.id),
     };
     const hint = recoveryHint(s);
     if (cause !== undefined) row.cause = cause;
@@ -179,6 +187,14 @@ export function servicesView(input: ServicesInput): ServicesView {
     if (s.id === "api" && s.process === "running" && input.migrationCheckSkipped === true) {
       row.warning = MIGRATION_CHECK_SKIPPED_WARNING;
       if (row.tone === "ok") row.tone = "warn";
+    }
+    if (debugDb && s.process === "running") {
+      // 제품 경로가 아니다. 사용자가 Docker DB를 쓰고 있다는 사실을 상태 창이 치우지 않는다 (R3-14).
+      row.warning = CAUSES.externalDatabase.text;
+      row.tone = "warn";
+    }
+    if (s.id === "postgres" && !external && s.process === "running" && typeof input.debugCommand === "string") {
+      row.command = input.debugCommand;
     }
     return row;
   });
