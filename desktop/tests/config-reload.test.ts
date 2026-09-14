@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createConfigReloader, RESTART_ONLY_KEYS } from "../src/config-reload";
-import type { ApiEnv, LoadedConfig } from "../src/config";
+import type { ApiEnv, DatabaseMode, LoadedConfig } from "../src/config";
 import { embedSpec } from "../src/services/embed";
 import { buildSpecs, type SpecDeps } from "../src/services/specs";
 import type { EmbedProbe } from "../src/services/external";
@@ -13,24 +13,24 @@ import type { LaunchContext } from "../src/services/types";
  * 정확히 그 열 줄 안에 있었다 (§4-1 파생 키, §4-2 WORKER_ID). electron을 값으로 import하는
  * 파일이라 어떤 테스트도 그것을 부를 수 없었다.
  */
-function harness(live: { env: ApiEnv; baseline: ApiEnv } | null) {
+function harness(live: { env: ApiEnv; baseline: ApiEnv } | null, liveMode: DatabaseMode = { kind: "embedded" }) {
   const log: string[] = [];
-  let next: LoadedConfig = { env: {}, created: false, extraPath: [] };
+  let next: LoadedConfig = { env: {}, created: false, extraPath: [], notes: [], databaseMode: { kind: "embedded" } };
   let loads = 0;
   const reload = createConfigReloader({
     load: () => {
       loads += 1;
       return next;
     },
-    live: () => live,
+    live: () => (live === null ? null : { env: live.env, baseline: live.baseline, mode: liveMode }),
     log: (line) => void log.push(line),
   });
   return {
     log,
     reload,
     loadCount: () => loads,
-    file(env: ApiEnv, warning?: string) {
-      next = { env, created: false, extraPath: [], ...(warning === undefined ? {} : { warning }) };
+    file(env: ApiEnv, warning?: string, databaseMode: DatabaseMode = { kind: "embedded" }) {
+      next = { env, created: false, extraPath: [], notes: [], databaseMode, ...(warning === undefined ? {} : { warning }) };
     },
   };
 }
@@ -44,15 +44,16 @@ describe("createConfigReloader", () => {
 
   it("puts a corrected pass-through value into the live env and names it once", () => {
     // 완료 기준 P2-C8. 이 경로가 없으면 실패 화면의 "값을 고치면 다시 시도합니다"가 거짓이다.
+    // DB 키는 이제 재적용 대상이 아니다.
     const live = {
-      env: { DATABASE_URL: "postgres://wrong" },
-      baseline: { DATABASE_URL: "postgres://wrong" },
+      env: { SUMMARY_LLM_MODEL: "a/wrong" },
+      baseline: { SUMMARY_LLM_MODEL: "a/wrong" },
     };
     const h = harness(live);
-    h.file({ DATABASE_URL: "postgres://right" });
+    h.file({ SUMMARY_LLM_MODEL: "a/right" });
     expect(h.reload().notice).toBeNull();
-    expect(live.env.DATABASE_URL).toBe("postgres://right");
-    expect(h.log).toEqual(["config.json을 다시 읽었어요 — 바뀐 키: DATABASE_URL"]);
+    expect(live.env.SUMMARY_LLM_MODEL).toBe("a/right");
+    expect(h.log).toEqual(["config.json을 다시 읽었어요 — 바뀐 키: SUMMARY_LLM_MODEL"]);
   });
 
   it("names a key the user deleted from the file", () => {
@@ -257,5 +258,60 @@ describe("RESTART_ONLY_KEYS", () => {
 
   it("covers this run's identity", () => {
     expect(RESTART_ONLY_KEYS).toContain("WORKER_ID");
+  });
+});
+
+describe("createConfigReloader — database mode (Phase 3 스펙 §6.6)", () => {
+  it("never writes DATABASE_URL or STORAGE_ROOT into the live env, whatever the file says", () => {
+    const live = {
+      env: { DATABASE_URL: "postgresql://damwha@/damwha?host=%2Fu%2Frun", STORAGE_ROOT: "/u/data/storage", PORT: "3000" },
+      baseline: { PORT: "3000" },
+    };
+    const h = harness(live);
+    h.file({ DATABASE_URL: "postgres://elsewhere", STORAGE_ROOT: "/elsewhere", PORT: "3000" });
+    h.reload();
+    expect(live.env.DATABASE_URL).toBe("postgresql://damwha@/damwha?host=%2Fu%2Frun");
+    expect(live.env.STORAGE_ROOT).toBe("/u/data/storage");
+  });
+
+  it("does not delete the live database keys when the file has none", () => {
+    const live = { env: { DATABASE_URL: "postgresql://damwha@/damwha?host=%2Fu", STORAGE_ROOT: "/u/data/storage" }, baseline: {} };
+    const h = harness(live);
+    h.file({});
+    h.reload();
+    expect(live.env).toMatchObject({ DATABASE_URL: "postgresql://damwha@/damwha?host=%2Fu", STORAGE_ROOT: "/u/data/storage" });
+  });
+
+  it("says a restart is needed when the file adds external debug mode", () => {
+    const live = { env: { STORAGE_ROOT: "/u/data/storage" }, baseline: {} };
+    const h = harness(live);
+    h.file({ STORAGE_ROOT: "/u/storage" }, undefined, { kind: "external", url: "postgres://postgres:secret@localhost:5432/damwha" });
+    const r = h.reload();
+    expect(r.notice).toMatch(/다시 켜야/);
+    expect(r.notice).toMatch(/외부 DB/);
+    expect(r.notice).not.toContain("secret");
+  });
+
+  it("says a restart is needed when the file removes external debug mode — the direction refreshEnv could not see", () => {
+    const live = { env: { STORAGE_ROOT: "/u/storage" }, baseline: {} };
+    const h = harness(live, { kind: "external", url: "postgres://x@h/db" });
+    h.file({ STORAGE_ROOT: "/u/data/storage" });
+    expect(h.reload().notice).toMatch(/내장 DB.*다시 켜야|다시 켜야.*내장 DB/);
+  });
+
+  it("says a restart is needed when the external URL or its storage changes", () => {
+    const live = { env: { STORAGE_ROOT: "/u/storage" }, baseline: {} };
+    const h = harness(live, { kind: "external", url: "postgres://x@h/db" });
+    h.file({ STORAGE_ROOT: "/u/storage" }, undefined, { kind: "external", url: "postgres://x@h/other" });
+    expect(h.reload().notice).toMatch(/다시 켜야/);
+    h.file({ STORAGE_ROOT: "/srv/audio" }, undefined, { kind: "external", url: "postgres://x@h/db" });
+    expect(h.reload().notice).toMatch(/다시 켜야/);
+  });
+
+  it("says nothing when the mode and storage agree", () => {
+    const live = { env: { STORAGE_ROOT: "/u/data/storage" }, baseline: {} };
+    const h = harness(live);
+    h.file({ STORAGE_ROOT: "/u/data/storage" });
+    expect(h.reload()).toEqual({ notice: null, isNew: false });
   });
 });

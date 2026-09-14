@@ -1,4 +1,4 @@
-import { refreshEnv, type ApiEnv, type LoadedConfig } from "./config";
+import { refreshEnv, withoutDbKeys, type ApiEnv, type DatabaseMode, type LoadedConfig } from "./config";
 import { PREPARE_DERIVED_KEYS } from "./services/embed";
 
 /**
@@ -46,11 +46,28 @@ export interface ConfigReloadDeps {
   /** config.json을 다시 읽는다 (main.ts: loadConfig(app.getPath("userData"))). */
   load(): LoadedConfig;
   /**
-   * 살아 있는 감독자의 env와, 그것을 만든 파일 값(baseline). 감독자가 아직 없으면 null —
-   * 그때는 읽을 이유가 없다. 감독자 생성 경로가 어차피 파일을 처음부터 읽는다.
+   * 살아 있는 감독자의 env와, 그것을 만든 파일 값(baseline — DB 키를 뺀 것), 그리고 감독자를 만들 때 정한 DB 모드.
+   * 감독자가 아직 없으면 null.
    */
-  live(): { env: ApiEnv; baseline: ApiEnv } | null;
+  live(): { env: ApiEnv; baseline: ApiEnv; mode: DatabaseMode } | null;
   log(line: string): void;
+}
+
+/** 화면·로그에 싣는 모드 이름. URL의 비밀번호는 가린다 — 이 문구는 supervisor.log와 대화상자에 남는다. */
+export function describeMode(m: DatabaseMode): string {
+  if (m.kind === "embedded") return "내장 DB";
+  try {
+    const u = new URL(m.url);
+    if (u.password !== "") u.password = "***";
+    return `외부 DB(디버깅) ${u.toString()}`;
+  } catch {
+    return "외부 DB(디버깅)";
+  }
+}
+
+function sameMode(a: DatabaseMode, b: DatabaseMode): boolean {
+  if (a.kind === "embedded" || b.kind === "embedded") return a.kind === b.kind;
+  return a.url === b.url;
 }
 
 /**
@@ -78,10 +95,11 @@ export function createConfigReloader(deps: ConfigReloadDeps): () => ConfigReload
       if (warning !== "") deps.log(warning);
     }
 
+    // DB 키는 넘기지 않는다. 모드가 정하는 값이라 파일로 바뀌지 않고, 지운다고 사라지지도 않는다 (스펙 §6.6).
     const { changed, removed, needsRestart } = refreshEnv(
       live.env,
       live.baseline,
-      cfg.env,
+      withoutDbKeys(cfg.env),
       RESTART_ONLY_KEYS,
     );
     // 갱신·삭제는 되풀이될 수 없다(baseline이 같이 움직인다). 그래서 여기는 디듀프하지 않는다 —
@@ -91,15 +109,26 @@ export function createConfigReloader(deps: ConfigReloadDeps): () => ConfigReload
     if (removed.length > 0) applied.push(`지운 키: ${removed.join(", ")}`);
     if (applied.length > 0) deps.log(`config.json을 다시 읽었어요 — ${applied.join(" / ")}`);
 
-    if (needsRestart.length === 0) {
+    const notices: string[] = [];
+    if (needsRestart.length > 0) {
+      notices.push(
+        `${needsRestart.map((r) => `${r.key}은(는) 파일에 ${r.file}, 실행 중인 값은 ${r.live}`).join(" / ")} — 이 키는 앱을 다시 켜야 바뀌어요.`,
+      );
+    }
+    // 키 단위가 아니라 모드 자체를 비교한다. refreshEnv는 파일에서 **사라진** restart-only 키를 보고하지 않으므로,
+    // DEBUG_EXTERNAL_DATABASE_URL을 지워 내장 모드로 돌아가려는 사람에게 아무 말도 하지 않는다 (외부 리뷰 #5).
+    if (!sameMode(cfg.databaseMode, live.mode) || cfg.env.STORAGE_ROOT !== live.env.STORAGE_ROOT) {
+      notices.push(
+        `데이터베이스가 파일에서는 ${describeMode(cfg.databaseMode)}(파일 저장소 ${cfg.env.STORAGE_ROOT}), 실행 중에는 ${describeMode(live.mode)}(파일 저장소 ${live.env.STORAGE_ROOT})예요 — 앱을 다시 켜야 바뀌어요.`,
+      );
+    }
+    if (notices.length === 0) {
       // 리셋이 빠지면 어긋남이 풀렸다가 **같은 모양으로** 다시 났을 때 두 번째를 아무도
       // 적지 않고 아무도 말하지 않는다 — 로그도 대화상자도 첫 번째로 끝난다.
       lastNotice = "";
       return { notice: null, isNew: false };
     }
-    const notice = `${needsRestart
-      .map((r) => `${r.key}은(는) 파일에 ${r.file}, 실행 중인 값은 ${r.live}`)
-      .join(" / ")} — 이 키는 앱을 다시 켜야 바뀌어요.`;
+    const notice = notices.join(" / ");
     // `lastNotice === ""`가 아니라 `notice !== lastNotice`다. 어긋난 키가 하나에서 둘로 늘거나
     // 값이 바뀌면 그것은 **새 내용**이고, 로그도 대화상자도 그것을 다시 말해야 한다.
     const isNew = notice !== lastNotice;

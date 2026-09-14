@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
+import { embeddedDatabaseUrl, pgLayout } from "./services/pg-layout";
 
 /** 자식 API에 넣을 환경변수. 값은 항상 문자열이다. */
 export type ApiEnv = Record<string, string>;
@@ -9,14 +10,32 @@ export interface LoadedConfig {
   env: ApiEnv;
   /** config.json을 이번 실행에서 만들었으면 true */
   created: boolean;
-  /** 파일이 있었지만 쓸 수 없어 기본값으로 진행한 이유 */
+  /** 화면에 보일 경고. 사람이 적은 값을 앱이 쓰지 않았을 때. */
   warning?: string;
-  /** 저장소 체크아웃. 없으면 main.ts가 추측하거나 사람에게 묻는다 (스펙 §6.4). */
+  /** 로그에만 남기는 사실. 사람이 고른 적 없는 옛 기본값을 무시한 것처럼, 화면에 띄우면 할 일 없는 안내가 되는 것. */
+  notes: string[];
+  /** 저장소 체크아웃. 없으면 main.ts가 추측하거나 사람에게 묻는다 (Phase 2 스펙 §6.4). */
   repoRoot?: string;
   uvBin?: string;
-  dockerBin?: string;
   /** PATH 탐색에 앞세울 디렉터리. 기본 목록을 이긴다 (services/resolve.ts). */
   extraPath: string[];
+  /** 감독자를 만들 때 한 번 정한다. 실행 중에는 바꾸지 않고 재적용기가 보고만 한다 (Phase 3 스펙 §6.1). */
+  databaseMode: DatabaseMode;
+}
+
+/** 내장 모드가 기본이다. 외부 모드는 사람이 DEBUG_EXTERNAL_DATABASE_URL을 적었을 때만 켜지는 디버깅 탈출구다. */
+export type DatabaseMode = { kind: "embedded" } | { kind: "external"; url: string };
+
+/** Phase 1·2의 defaultConfig가 첫 실행 config.json에 적던 값. 이 값과 문자 그대로 같으면 사람이 고른 것이 아니다. */
+export const LEGACY_DATABASE_URL = "postgres://postgres:postgres@localhost:5432/damwha";
+
+/** 모드가 정하는 키. 재적용(refreshEnv)의 대상이 아니다 — 다시 켜도 파일 값으로 바뀌지 않는 값이다 (스펙 §6.6). */
+export const DB_ENV_KEYS = ["DATABASE_URL", "STORAGE_ROOT"] as const;
+
+export function withoutDbKeys(env: ApiEnv): ApiEnv {
+  const out: ApiEnv = { ...env };
+  for (const key of DB_ENV_KEYS) delete out[key];
+  return out;
 }
 
 /**
@@ -39,13 +58,12 @@ export interface LoadedConfig {
 const RUN_WORKER_ID = `desktop-${randomUUID()}`;
 
 /**
- * 앱이 기본값을 갖는 키. 첫 실행의 config.json이 **그대로 이것**이다. 그 밖의 키는
- * be/src/config/env.ts의 zod 기본값으로 떨어진다. WORKER_ID는 여기 없다 — 위 RUN_WORKER_ID.
+ * 앱이 기본값을 갖는 키. 첫 실행의 config.json이 **그대로 이것**이다. DATABASE_URL·STORAGE_ROOT는 여기 없다 —
+ * Phase 3부터 모드가 정하는 앱 소유 값이고(withDatabase), 파일에 적으면 사람에게 "고쳐도 되는 값"으로 광고된다.
+ * WORKER_ID도 없다 — 위 RUN_WORKER_ID.
  */
-export function defaultConfig(userDataDir: string): ApiEnv {
+export function defaultConfig(_userDataDir: string): ApiEnv {
   return {
-    DATABASE_URL: "postgres://postgres:postgres@localhost:5432/damwha",
-    STORAGE_ROOT: path.join(userDataDir, "storage"),
     PORT: "3000",
     EMBED_SERVICE_PORT: "8100",
   };
@@ -182,15 +200,28 @@ export function refreshEnv(
 
 /** 자식 env가 아니라 앱이 쓰는 설정. 그대로 주입하면 API·worker의 zod/pydantic이 모르는
  *  키를 받거나(무해) 배열이 문자열로 새어 들어간다(유해). */
-const APP_SETTING_KEYS = ["REPO_ROOT", "EXTRA_PATH", "UV_BIN", "DOCKER_BIN"];
+const APP_SETTING_KEYS = ["REPO_ROOT", "EXTRA_PATH", "UV_BIN", "DEBUG_EXTERNAL_DATABASE_URL"];
 
 function reason(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** 내장 모드의 DB 쌍 (스펙 §6.1). 파일 값보다 **뒤에** 얹는다 — 앱이 주장하는 값이지 물려받는 값이 아니다. */
+function withEmbeddedDatabase(env: ApiEnv, userDataDir: string): ApiEnv {
+  const layout = pgLayout(userDataDir);
+  return { ...env, DATABASE_URL: embeddedDatabaseUrl(layout), STORAGE_ROOT: layout.storage };
+}
+
 export function loadConfig(userDataDir: string): LoadedConfig {
   const file = path.join(userDataDir, "config.json");
   const defaults = defaultConfig(userDataDir);
+  // 파일을 못 쓰거나 읽지 못해도 내장 모드다. 외부 모드는 사람이 명시적으로 적어야만 켜진다.
+  const embedded = (): Pick<LoadedConfig, "env" | "notes" | "extraPath" | "databaseMode"> => ({
+    env: withAppOwned(withEmbeddedDatabase(defaults, userDataDir)),
+    notes: [],
+    extraPath: [],
+    databaseMode: { kind: "embedded" },
+  });
 
   if (!fs.existsSync(file)) {
     // 이 두 줄은 원래 try 밖이라 userData가 읽기 전용이거나 디스크가 찼을 때 그대로
@@ -200,14 +231,9 @@ export function loadConfig(userDataDir: string): LoadedConfig {
     try {
       fs.mkdirSync(userDataDir, { recursive: true });
       fs.writeFileSync(file, `${JSON.stringify(defaults, null, 2)}\n`);
-      return { env: withAppOwned(defaults), created: true, extraPath: [] };
+      return { ...embedded(), created: true };
     } catch (e) {
-      return {
-        env: withAppOwned(defaults),
-        created: false,
-        extraPath: [],
-        warning: `config.json을 만들 수 없어 기본값으로 실행합니다: ${reason(e)}`,
-      };
+      return { ...embedded(), created: false, warning: `config.json을 만들 수 없어 기본값으로 실행합니다: ${reason(e)}` };
     }
   }
 
@@ -216,42 +242,36 @@ export function loadConfig(userDataDir: string): LoadedConfig {
     parsed = JSON.parse(fs.readFileSync(file, "utf8"));
   } catch (e) {
     // 덮어쓰지 않는다 — 사용자가 직접 고칠 수 있어야 한다 (스펙 §8).
-    return {
-      env: withAppOwned(defaults),
-      created: false,
-      extraPath: [],
-      warning: `config.json을 읽을 수 없어 기본값으로 실행합니다: ${reason(e)}`,
-    };
+    return { ...embedded(), created: false, warning: `config.json을 읽을 수 없어 기본값으로 실행합니다: ${reason(e)}` };
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return {
-      env: withAppOwned(defaults),
-      created: false,
-      extraPath: [],
-      warning: "config.json이 객체가 아니라 기본값으로 실행합니다.",
-    };
+    return { ...embedded(), created: false, warning: "config.json이 객체가 아니라 기본값으로 실행합니다." };
   }
 
   const env: ApiEnv = { ...defaults };
-  const settings: { repoRoot?: string; uvBin?: string; dockerBin?: string; extraPath: string[] } = {
-    extraPath: [],
-  };
+  const settings: { repoRoot?: string; uvBin?: string; externalUrl?: string; extraPath: string[] } = { extraPath: [] };
+  const fileDb: Partial<Record<(typeof DB_ENV_KEYS)[number], string>> = {};
   // 값을 버렸으면 왜 버렸는지 적는다. 조용히 무시하면 사용자는 자기가 적은 경로가 왜 안 먹는지
   // 알 길이 없고, 다음에 보는 화면은 엉뚱한 원인을 말한다.
   const warnings: string[] = [];
+  const notes: string[] = [];
   for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
     if (APP_OWNED_KEYS.includes(key)) {
-      // 버리는 것으로 끝내지 않는다. 사용자가 이 키를 적었다는 것은 자기 값이 먹기를 기대한다는
-      // 뜻이고, 조용히 무시하면 "0.0.0.0으로 적었는데 왜 LAN에서 안 보이지"를 끝없이 파게 된다.
       warnings.push(
         `config.json의 ${key}는 앱이 ${LOOPBACK}으로 고정합니다. 파일 값은 무시했습니다: ${JSON.stringify(value)}`,
       );
       continue;
     }
+    if (key === "DOCKER_BIN") {
+      notes.push("config.json의 DOCKER_BIN은 쓰지 않아요 — Phase 3부터 앱은 Docker를 부르지 않습니다.");
+      continue;
+    }
+    if ((DB_ENV_KEYS as readonly string[]).includes(key)) {
+      // 모드가 정한다. 여기서는 옛 키 판정을 위해 파일 값만 기억한다.
+      if (typeof value === "string") fileDb[key as (typeof DB_ENV_KEYS)[number]] = value;
+      continue;
+    }
     if (APP_SETTING_KEYS.includes(key)) {
-      // 앱 설정은 env에 넣지 않고 여기서 받는다. continue가 빠지면 EXTRA_PATH 배열이
-      // String(value)로 자식 env에 들어가고, 받는 쪽(pydantic)이 그것을 어떻게 읽을지
-      // 우리가 정할 수 없다.
       if (key === "EXTRA_PATH") {
         // 문자열 **목록만** 받는다. 반쯤 맞는 목록을 PATH 앞에 붙이면 uv·docker 탐색이 조용히
         // 엉뚱한 곳을 본다. 원소 타입까지 보는 이유는 섞인 배열이 Array.isArray를 통과한다는
@@ -266,10 +286,12 @@ export function loadConfig(userDataDir: string): LoadedConfig {
             `config.json의 EXTRA_PATH는 문자열 목록이어야 해요. 이 값은 무시했습니다: ${JSON.stringify(value)}`,
           );
         }
+      } else if (key === "DEBUG_EXTERNAL_DATABASE_URL") {
+        if (typeof value === "string" && value.trim() !== "") settings.externalUrl = value;
+        else warnings.push(`config.json의 DEBUG_EXTERNAL_DATABASE_URL은 비어 있지 않은 문자열이어야 해요. 내장 DB로 실행합니다: ${JSON.stringify(value)}`);
       } else if (typeof value === "string") {
         if (key === "REPO_ROOT") settings.repoRoot = value;
-        else if (key === "UV_BIN") settings.uvBin = value;
-        else settings.dockerBin = value;
+        else settings.uvBin = value;
       }
       continue;
     }
@@ -278,12 +300,33 @@ export function loadConfig(userDataDir: string): LoadedConfig {
     // 그 밖의 타입은 무시한다. 값의 유효성은 API의 zod가 판정한다.
   }
 
-  // 상대 경로가 남으면 packaged 앱의 cwd가 .app 안이라 번들 내부를 가리킨다 (스펙 §6.3).
-  env.STORAGE_ROOT = path.resolve(userDataDir, env.STORAGE_ROOT);
+  let databaseMode: DatabaseMode;
+  let withDb: ApiEnv;
+  if (settings.externalUrl !== undefined) {
+    databaseMode = { kind: "external", url: settings.externalUrl };
+    // 상대 경로가 남으면 packaged 앱의 cwd가 .app 안이라 번들 내부를 가리킨다 (Phase 1 스펙 §6.3).
+    withDb = { ...env, DATABASE_URL: settings.externalUrl, STORAGE_ROOT: path.resolve(userDataDir, fileDb.STORAGE_ROOT ?? "storage") };
+    if (fileDb.DATABASE_URL !== undefined) notes.push("외부 DB 모드는 DEBUG_EXTERNAL_DATABASE_URL을 써요 — config.json의 DATABASE_URL은 무시했습니다.");
+  } else {
+    databaseMode = { kind: "embedded" };
+    withDb = withEmbeddedDatabase(env, userDataDir);
+    for (const key of DB_ENV_KEYS) {
+      const value = fileDb[key];
+      if (value === undefined) continue;
+      const legacy = key === "DATABASE_URL" ? value === LEGACY_DATABASE_URL : path.resolve(userDataDir, value) === path.join(userDataDir, "storage");
+      if (legacy) notes.push(`config.json의 ${key}는 Phase 1·2의 기본값이에요 — 내장 DB 모드에서는 쓰지 않습니다.`);
+      else warnings.push(`내장 DB 모드에서는 config.json의 ${key}를 쓰지 않아요 (파일 값: ${JSON.stringify(value)}). 외부 DB로 디버깅하려면 DEBUG_EXTERNAL_DATABASE_URL을 적어 주세요.`);
+    }
+  }
+
   return {
-    env: withAppOwned(env),
+    env: withAppOwned(withDb),
     created: false,
-    ...settings,
+    notes,
+    databaseMode,
+    extraPath: settings.extraPath,
+    ...(settings.repoRoot === undefined ? {} : { repoRoot: settings.repoRoot }),
+    ...(settings.uvBin === undefined ? {} : { uvBin: settings.uvBin }),
     ...(warnings.length > 0 ? { warning: warnings.join(" / ") } : {}),
   };
 }

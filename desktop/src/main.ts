@@ -4,7 +4,7 @@ import * as fs from "fs";
 import * as net from "net";
 import * as path from "path";
 import { promisify } from "util";
-import { loadConfig, type ApiEnv } from "./config";
+import { loadConfig, withoutDbKeys, type ApiEnv, type DatabaseMode } from "./config";
 import { createConfigReloader } from "./config-reload";
 import {
   PROBE_TIMEOUT_MS,
@@ -135,7 +135,7 @@ let supervisor: ReturnType<typeof createSupervisor> | null = null;
  * 읽어 ctx.env에 얹을 때 "파일에서 온 값"과 "prepare()가 옮긴 값"을 가르는 기준이 baseline이다
  * (config.ts의 refreshEnv).
  */
-let launchCtx: { ctx: Omit<LaunchContext, "signal">; baseline: ApiEnv } | null = null;
+let launchCtx: { ctx: Omit<LaunchContext, "signal">; baseline: ApiEnv; mode: DatabaseMode } | null = null;
 /**
  * "이 값은 앱을 다시 켜야 바뀌어요" 안내. 재적용기가 매번 다시 계산하므로 어긋남이 풀리면
  * 저절로 null이 된다. 화면이 이것을 말하지 않으면 사용자는 자기 수정이 왜 안 먹는지 알 길이
@@ -964,7 +964,7 @@ const migrationWatch = createMigrationCheckWatch(appendSupervisorLog);
 
 const reloadConfig = createConfigReloader({
   load: () => loadConfig(app.getPath("userData")),
-  live: () => (launchCtx === null ? null : { env: launchCtx.ctx.env, baseline: launchCtx.baseline }),
+  live: () => (launchCtx === null ? null : { env: launchCtx.ctx.env, baseline: launchCtx.baseline, mode: launchCtx.mode }),
   log: appendSupervisorLog,
 });
 
@@ -976,6 +976,7 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
   const userData = app.getPath("userData");
   const cfg = loadConfig(userData);
   if (cfg.warning !== undefined) appendSupervisorLog(cfg.warning);
+  for (const note of cfg.notes) appendSupervisorLog(note);
 
   const requested = Number(cfg.env.PORT);
   /**
@@ -1009,7 +1010,8 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
 
   const dirs = searchDirs(app.getPath("home"), cfg.extraPath);
   const uv = cfg.uvBin ?? findExecutable("uv", dirs);
-  const docker = cfg.dockerBin ?? findExecutable("docker", dirs);
+  // DOCKER_BIN은 config.ts가 더 이상 읽지 않는다. compose 어댑터는 Task 12에서 사라진다.
+  const docker = findExecutable("docker", dirs);
   // 고치는 방법(설치 · DOCKER_BIN)은 reportFailure가 failureDetail로 붙인다.
   if (docker === null) throw new Error(CAUSES.dockerMissing.text);
 
@@ -1061,7 +1063,7 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
   // start()가 끝나기 전에 대입해야 한다 — onStatus가 그 사이에 여러 번 발화하고, shellStatusOf()는
   // supervisor에서 상태를 읽는다. 대입이 뒤면 기동 화면에 서비스 줄이 한 줄도 안 뜬다.
   supervisor = created;
-  launchCtx = { ctx, baseline: { ...cfg.env } };
+  launchCtx = { ctx, baseline: withoutDbKeys(cfg.env), mode: cfg.databaseMode };
 
   try {
     await created.start();

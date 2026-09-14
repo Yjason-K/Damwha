@@ -5,7 +5,8 @@ import * as path from "path";
 import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { defaultConfig, loadConfig, refreshEnv } from "../src/config";
+import { DB_ENV_KEYS, defaultConfig, LEGACY_DATABASE_URL, loadConfig, refreshEnv, withoutDbKeys } from "../src/config";
+import { embeddedDatabaseUrl, pgLayout } from "../src/services/pg-layout";
 
 let dir: string;
 
@@ -17,21 +18,16 @@ afterEach(() => {
 });
 
 describe("defaultConfig", () => {
-  it("puts storage under the user data directory as an absolute path", () => {
+  it("does not put the database or the storage into the first config.json — the app derives both (Phase 3)", () => {
+    // Phase 1·2는 여기에 Docker DB 주소와 <userData>/storage를 적었고, 그 값이 사람이 고른 것인지 옛 기본값인지
+    // 파일만으로 구별되지 않게 됐다 (Phase 3 스펙 §6.1 옛 키).
     const env = defaultConfig("/tmp/ud");
-    expect(env.STORAGE_ROOT).toBe(path.join("/tmp/ud", "storage"));
-    expect(path.isAbsolute(env.STORAGE_ROOT)).toBe(true);
+    expect(env.DATABASE_URL).toBeUndefined();
+    expect(env.STORAGE_ROOT).toBeUndefined();
   });
 
   it("carries the keys the app owns defaults for — and not WORKER_ID, which is per run", () => {
-    // defaultConfig가 그대로 첫 실행의 config.json이 된다. WORKER_ID를 여기 두면 파일에 적혀
-    // 다음 실행이 같은 신분을 다시 쓴다 (최종 리뷰 I-4).
-    expect(Object.keys(defaultConfig("/tmp/ud")).sort()).toEqual([
-      "DATABASE_URL",
-      "EMBED_SERVICE_PORT",
-      "PORT",
-      "STORAGE_ROOT",
-    ]);
+    expect(Object.keys(defaultConfig("/tmp/ud")).sort()).toEqual(["EMBED_SERVICE_PORT", "PORT"]);
   });
 
   it("does not carry EMBED_SERVICE_HOST — that key must never reach config.json", () => {
@@ -97,13 +93,12 @@ describe("loadConfig", () => {
     expect(r.created).toBe(true);
     expect(r.warning).toBeUndefined();
     const onDisk = JSON.parse(fs.readFileSync(path.join(dir, "config.json"), "utf8"));
-    expect(onDisk.DATABASE_URL).toBe("postgres://postgres:postgres@localhost:5432/damwha");
+    expect("DATABASE_URL" in onDisk).toBe(false);
     expect(onDisk.PORT).toBe("3000");
-    // 파일에는 없고,
     expect("EMBED_SERVICE_HOST" in onDisk).toBe(false);
-    // 자식 env에는 앱이 직접 얹는다. 아무것도 넣지 않으면 be/worker/.env의 낡은 값이 이긴다 —
-    // pydantic-settings는 환경변수를 .env보다 먼저 본다.
     expect(r.env.EMBED_SERVICE_HOST).toBe("127.0.0.1");
+    expect(r.databaseMode).toEqual({ kind: "embedded" });
+    expect(r.env.DATABASE_URL).toBe(embeddedDatabaseUrl(pgLayout(dir)));
   });
 
   it("passes through keys that have no app default", () => {
@@ -121,13 +116,13 @@ describe("loadConfig", () => {
     expect(env.DEMO_READ_ONLY).toBe("false");
   });
 
-  it("resolves a relative STORAGE_ROOT against the user data directory", () => {
-    fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ STORAGE_ROOT: "./audio" }));
+  it("resolves a relative STORAGE_ROOT against the user data directory in external debug mode", () => {
+    fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ DEBUG_EXTERNAL_DATABASE_URL: "postgres://x@h/db", STORAGE_ROOT: "./audio" }));
     expect(loadConfig(dir).env.STORAGE_ROOT).toBe(path.join(dir, "audio"));
   });
 
-  it("keeps an absolute STORAGE_ROOT as given", () => {
-    fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ STORAGE_ROOT: "/srv/damwha" }));
+  it("keeps an absolute STORAGE_ROOT as given in external debug mode", () => {
+    fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ DEBUG_EXTERNAL_DATABASE_URL: "postgres://x@h/db", STORAGE_ROOT: "/srv/damwha" }));
     expect(loadConfig(dir).env.STORAGE_ROOT).toBe("/srv/damwha");
   });
 
@@ -254,17 +249,18 @@ describe("loadConfig — app-owned keys", () => {
     expect(c.warning).toMatch(/EXTRA_PATH/);
   });
 
-  it("reads REPO_ROOT, UV_BIN and DOCKER_BIN as app settings, not child env", () => {
-    const dir = mkdtempSync(join(tmpdir(), "damwha-cfg-"));
-    writeFileSync(
-      join(dir, "config.json"),
+  it("reads REPO_ROOT and UV_BIN as app settings, and ignores DOCKER_BIN with a log note (Phase 3)", () => {
+    fs.writeFileSync(
+      path.join(dir, "config.json"),
       JSON.stringify({ REPO_ROOT: "/r", UV_BIN: "/x/uv", DOCKER_BIN: "/x/docker" }),
     );
     const c = loadConfig(dir);
     expect(c.repoRoot).toBe("/r");
     expect(c.uvBin).toBe("/x/uv");
-    expect(c.dockerBin).toBe("/x/docker");
-    expect(c.env.REPO_ROOT).toBeUndefined();
+    expect("dockerBin" in c).toBe(false);
+    for (const key of ["REPO_ROOT", "UV_BIN", "DOCKER_BIN"]) expect(key in c.env).toBe(false);
+    expect(c.warning).toBeUndefined();
+    expect(c.notes.join("\n")).toMatch(/DOCKER_BIN/);
   });
 });
 
@@ -467,5 +463,65 @@ describe("refreshEnv", () => {
     const out = refreshEnv(current, baseline, { PORT: "3000" }, RESTART_ONLY);
     expect(current.SUMMARY_LLM_MODEL).toBe("moved-by-prepare");
     expect(out.removed).toEqual([]);
+  });
+});
+
+describe("loadConfig — database mode (Phase 3 스펙 §6.1)", () => {
+  const write = (obj: Record<string, unknown>) => fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(obj));
+
+  it("derives the embedded database and its paired storage by default", () => {
+    write({ PORT: "3000" });
+    const c = loadConfig(dir);
+    const layout = pgLayout(dir);
+    expect(c.databaseMode).toEqual({ kind: "embedded" });
+    expect(c.env.DATABASE_URL).toBe(embeddedDatabaseUrl(layout));
+    expect(c.env.STORAGE_ROOT).toBe(layout.storage);
+  });
+
+  it("ignores the Phase 1·2 defaults quietly — a note for the log, nothing on screen, the file untouched", () => {
+    write({ DATABASE_URL: LEGACY_DATABASE_URL, STORAGE_ROOT: path.join(dir, "storage"), PORT: "3000" });
+    const before = fs.readFileSync(path.join(dir, "config.json"));
+    const c = loadConfig(dir);
+    expect(c.warning).toBeUndefined();
+    expect(c.notes).toHaveLength(2);
+    expect(c.env.DATABASE_URL).toBe(embeddedDatabaseUrl(pgLayout(dir)));
+    expect(c.env.STORAGE_ROOT).toBe(pgLayout(dir).storage);
+    expect(fs.readFileSync(path.join(dir, "config.json")).equals(before)).toBe(true);
+  });
+
+  it("warns on screen about a DATABASE_URL someone chose, and still uses the embedded database", () => {
+    write({ DATABASE_URL: "postgres://me:pw@db.internal:5432/other" });
+    const c = loadConfig(dir);
+    expect(c.warning).toMatch(/DATABASE_URL/);
+    expect(c.warning).toMatch(/DEBUG_EXTERNAL_DATABASE_URL/);
+    expect(c.env.DATABASE_URL).toBe(embeddedDatabaseUrl(pgLayout(dir)));
+  });
+
+  it("switches to external debug mode only when DEBUG_EXTERNAL_DATABASE_URL is written, and keeps that key out of the child env", () => {
+    write({ DEBUG_EXTERNAL_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/damwha" });
+    const c = loadConfig(dir);
+    expect(c.databaseMode).toEqual({ kind: "external", url: "postgres://postgres:postgres@localhost:5432/damwha" });
+    expect(c.env.DATABASE_URL).toBe("postgres://postgres:postgres@localhost:5432/damwha");
+    expect(c.env.STORAGE_ROOT).toBe(path.join(dir, "storage"));
+    expect("DEBUG_EXTERNAL_DATABASE_URL" in c.env).toBe(false);
+  });
+
+  it("rejects a DEBUG_EXTERNAL_DATABASE_URL that is not a non-empty string and stays embedded", () => {
+    write({ DEBUG_EXTERNAL_DATABASE_URL: 5432 });
+    const c = loadConfig(dir);
+    expect(c.databaseMode).toEqual({ kind: "embedded" });
+    expect(c.warning).toMatch(/DEBUG_EXTERNAL_DATABASE_URL/);
+  });
+
+  it("stays embedded when config.json is broken", () => {
+    fs.writeFileSync(path.join(dir, "config.json"), "{ not json");
+    const c = loadConfig(dir);
+    expect(c.databaseMode).toEqual({ kind: "embedded" });
+    expect(c.env.DATABASE_URL).toBe(embeddedDatabaseUrl(pgLayout(dir)));
+  });
+
+  it("strips exactly the database keys for the reload baseline", () => {
+    expect(DB_ENV_KEYS).toEqual(["DATABASE_URL", "STORAGE_ROOT"]);
+    expect(withoutDbKeys({ DATABASE_URL: "a", STORAGE_ROOT: "b", PORT: "3000" })).toEqual({ PORT: "3000" });
   });
 });
