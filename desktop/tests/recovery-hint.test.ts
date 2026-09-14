@@ -526,6 +526,10 @@ describe("Phase 3 causes", () => {
     }
   });
 
+  it("tells a pairing-refusal reader to check the folder was not moved OR deleted (스펙 §6.7 원문 문구)", () => {
+    expect(HINTS.pgPairingRefused).toMatch(/옮기거나 지우지 않았는지/);
+  });
+
   it("points a postgres readiness timeout and a postgres exit at the server's own logs", () => {
     expect(recoveryHint(s({ id: "postgres", detail: CAUSES.readyTimeout.text }))).toMatch(/logs\/postgres\//);
     expect(recoveryHint(s({ id: "postgres", detail: CAUSES.processExited.text(1) }))).toMatch(/logs\/postgres\//);

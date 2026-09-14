@@ -38,7 +38,7 @@ export const HINTS: Record<CauseId, Hint> = {
     "앱을 다시 설치해 주세요. 개발 중이면 `bash desktop/scripts/build-postgres.sh`를 실행한 뒤 다시 시도해 주세요.",
   pgSocketPathTooLong: "지금 macOS 계정에서는 내장 데이터베이스를 열 수 없어요. 계정 이름이 짧은 계정에서 실행해 주세요.",
   pgPairingRefused:
-    "data 폴더와 그 안의 postgres·storage를 옮기거나 바꾸지 않았는지 확인해 주세요. 앱은 아무것도 지우거나 새로 만들지 않았어요.",
+    "data 폴더와 그 안의 postgres·storage를 옮기거나 지우지 않았는지 확인해 주세요. 앱은 아무것도 지우거나 새로 만들지 않았어요.",
   pgVersionMismatch: "이 데이터를 만든 버전의 앱으로 열어 주세요. 앱은 데이터를 바꾸지 않았어요.",
   pgControldataFailed: "data/postgres가 손상되지 않았는지 확인해 주세요. 앱은 아무것도 바꾸지 않았어요.",
   pgLockUnprovable: "활성 상태 보기에서 그 pid가 무엇인지 확인한 뒤 다시 시도해 주세요. 앱은 잠금 파일을 지우지 않았어요.",
