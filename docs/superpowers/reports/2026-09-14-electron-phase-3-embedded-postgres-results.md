@@ -5,10 +5,11 @@
 스펙: [2026-09-14-electron-phase-3-embedded-postgres-design.md](../specs/2026-09-14-electron-phase-3-embedded-postgres-design.md)
 로드맵: [electron-migration-roadmap.md](../../electron-migration-roadmap.md) § "Phase 3. PostgreSQL 내장"
 
-**상태 (2026-09-14): 스펙 리뷰·구현 계획·계획 검증 완료. 구현 미착수.**
+**상태 (2026-09-14): 구현 13개 Task·최종 whole-branch 리뷰·packaged 통합 검증 완료. 완료 기준 16건(P3-C1~C15, C9b) 전부 충족.**
+통합 검증이 결함 1건(실패 화면이 10초마다 다시 로드됨)을 드러내 같은 브랜치에서 고친 뒤 실앱에서 다시 확인했다(`0f97171`).
 
 이 문서는 로드맵이 정한 네 기록을 구분해 담는다 — 스펙 리뷰, 계획 검증, 단계별 실행·리뷰, 최종 검증.
-아직 채워지지 않은 절은 그 사실을 적어 둔다. **실행하지 않은 검증을 성공으로 가정하지 않는다.**
+**실행하지 않은 검증을 성공으로 가정하지 않는다.** 조건을 달고 통과로 적은 기준은 §4.1의 비고에 조건을 적었다.
 
 ## 1. 스펙 리뷰
 
@@ -225,12 +226,228 @@ case|Éclair 예산|éCLAIR
 
 ## 3. 단계별 실행과 리뷰
 
-아직 없다.
+실행 방식은 **Subagent-Driven Development**다 — Task마다 새 구현자(sonnet)를 붙이고, 그 diff만 보는 리뷰어를
+따로 붙였다(Task 8·9·12는 opus). 지적이 남으면 같은 구현자에게 수정 라운드를 열고 범위를 좁힌 재리뷰로 닫았다.
+수정 루프 상한은 로드맵 규칙대로 3회이고, 넘긴 Task는 없다. 판정(Ruling)은 전부 원장
+(`.superpowers/sdd/2026-09-14-electron-phase-3-embedded-postgres/progress.md`)에 남겼다.
+
+Phase 2의 규칙을 처음부터 적용했다 — **변이 증거와 TDD RED/GREEN 원문**을 리뷰의 필수 제출물로 두고, 보고서가
+재구성한 출력은 그 자체를 지적했다. Task 14(packaged 통합 검증)는 서브에이전트에 넘기지 않고 메인 세션이 사용자와
+함께 했다.
+
+### 3.1 단계별 결과
+
+| Task | 내용 | 커밋 범위 | 수정 라운드 | 그 라운드가 연 이유 |
+| --- | --- | --- | --- | --- |
+| 1 | PG 번들 빌드 스크립트 | `ec3963e..b7117a4` | 0 | — |
+| 2 | `migrate.ts --status` · advisory lock | `b7117a4..4e0a221` | 0 | — |
+| 3 | 사전 실측 | `4e0a221..34055c4` | 1 | `lc_collate` 판정의 원문 증거가 없었다. PG16에 그 GUC가 없음을 두 환경 원문으로 붙였고, 계획 Task 8의 통합 테스트를 `pg_database.datcollate`로 고쳤다(`5736053`) |
+| 4 | 복구 부류 · `LaunchContext.signal` | `34055c4..a4a1721` | 0 | — |
+| 5 | 배치·페어링·락 파일 순수 판정 | `a4a1721..9bb03b9` | 0 | — |
+| 6 | 도구 실행기 · postmaster 핸들 | `9bb03b9..0716eb7` | 0 | — |
+| 7 | 원인 카탈로그 · 안내 | `0716eb7..6b4873d` | 1 | 페어링 거부 안내가 스펙의 "옮기거나 **지우지** 않았는지"를 "바꾸지"로 적었다(계획 원문) |
+| 8 | 내장·외부 postgres 어댑터 | `6b4873d..b35a73b` | 1 | 락 거부가 디렉터리를 만든 뒤라 §5 위반, 판정표 2 전 `stopping`이 게이트를 연다, 죽은 핸들 행에 부류 없음 (§3.2) |
+| 9 | 마이그레이션 실행 게이트 | `b35a73b..720a38e` | 1 | 검증 실패 시 prune하지 않음을 잡는 테스트 없음, 러너 실패 원인이 잘리고 로그에 안 남음 (§3.2) |
+| 10 | 설정의 DB 모드 · 재적용 | `720a38e..99ff0d4` | 0 | — |
+| 11 | 화면 — 내장 DB 표시, Docker 화면 제거 | `99ff0d4..f368f14` | 0 | — |
+| 12 | main 배선 · Docker 경로 제거 | `f368f14..1f7f449` | 1 | manual 실패가 창 재열기·이전 타이머로 다시 돈다 (§3.2) |
+| 13 | 패키징 · 번들 위생 검사 | `1f7f449..393a665` | 0 | — |
+| 최종 | whole-branch 리뷰(fable) → 수정 1회 + 재리뷰 1회 | `393a665..aa537d1` | 1 | 비밀번호가 경고·로그에 그대로 실림 외 4건 (§3.2) |
+| 14 | packaged 통합 검증 | `aa537d1..0f97171` | 1 | 실패 화면이 10초마다 다시 로드됨 (§4.2) |
+
+계획의 테스트 수 표기는 Task 5(38→36)·6(17→16)·8(25→24)에서 틀렸다. 리뷰가 브리프의 테스트 코드를 직접 세어 빠진
+테스트가 없음을 확인했다.
+
+### 3.2 이 단계들에서 실제로 잡힌 결함
+
+전부 리뷰 또는 컨트롤러의 독립 확인이 잡았고, 대부분이 **계획 원문을 그대로 옮긴 코드**의 결함이었다. 구현자의 자기
+보고로 드러난 것은 테스트 수 오기와 URL 검증 방식(아래 마지막 항목)뿐이다.
+
+**락 거부가 파일시스템을 바꿨다 (Task 8).** 스펙 §5는 "고아 확인 불가"를 아무것도 만들거나 지우지 않는 거부로
+명시했는데, 계획의 `launch()`는 `ensureDirs()`·`removeInitdbLeftovers()`를 락 판정보다 먼저 불렀다. `ps`가 실패하거나
+고아가 내려가지 않아 거부할 때 이미 `run/`·`backups/`가 생기고 `postgres.initdb-*`가 지워진 뒤였다. 기존 거부 테스트는
+그 디렉터리의 부재를 보지 않아 초록이었다.
+
+**판정표 2 전에 게이트가 열렸다 (Task 8).** `postmaster.pid`가 `stopping`이면 계획 코드는 무조건 `degraded`를 냈고,
+감독자는 `degraded`를 준비 완료로 본다. 기동 중 누가 서버를 내리면 `damwha` DB 확인 없이 api가 뜬다.
+
+**"검증 실패 시 옛 백업을 지우지 않는다"를 지키는 테스트가 없었다 (Task 9).** 계획의 해당 테스트는 `pg_dump`를
+실패시켜 prune 코드에 닿기 전에 끝났다. 변이 "prune을 검증 앞으로"가 모든 테스트를 통과했다 — 데이터를 지우는
+경로다. 기존 `.dump` 6개 + 덤프 성공 + `pg_restore --list` 실패 테스트로 잠갔고, 시계가 거꾸로 가면 방금 만든 백업이
+지워지는 결함도 함께 고쳤다.
+
+**마이그레이션 실패의 원인이 사라졌다 (Task 9).** 게이트는 stderr 꼬리 12줄을 보였는데 `migrate.ts`는
+`console.error(DatabaseError)`를 찍는다. 그 꼬리 12줄은 `routine: 'parserOpenTable' }` 같은 속성 덤프라 오류 문장과
+code가 잘렸고, 러너 출력 전체는 어느 로그에도 남지 않았다. 게이트가 출력 전체를 `supervisor.log`에 남기고 화면에는
+stderr **앞쪽**의 첫 오류 줄을 싣게 했다. P3-C7의 실패 화면이 `error: relation "p3_nope" does not exist`를 보인 것이 이
+수정이다.
+
+**manual 실패가 되살아났다 (Task 12).** (1) 앞선 auto 실패가 걸어 둔 타이머가 manual 실패 뒤에도 한 번 더 돌아
+게이트를 재실행했다 — 백업이 하나 더 쌓인다. (2) 창을 다시 열면 `window-flow.ts`가 `start()`를 무조건 불러 manual
+실패를 재실행했다. 스펙 §6.7은 "manual은 버튼과 메뉴로만"이다. 둘 다 테스트할 수 없는 `main.ts`에서 리뷰가 읽어
+잡았다.
+
+**최종 리뷰가 잡은 것 (5건).**
+- 내장 모드에서 `config.json`의 옛 `DATABASE_URL`이 기본값과 다르면, 경고가 그 값을 비밀번호째 화면과
+  `supervisor.log`에 실었다. 가림 처리를 공용 함수로 뽑았다(`mask-db-url.ts`).
+- initdb 실패 뒤 임시 디렉터리 삭제에 로그 줄이 없었다(§5).
+- `spawnNotFound`의 정규식이 Phase 3 원인 블록 속 `spawn … ENOENT`를 먼저 잡아 원인·안내가 바뀌었다.
+- 낡은 주석 2곳.
+- 상태 창 postgres 줄에 서버 로그 폴더(`logs/postgres/`) 안내가 없었다.
+
+재리뷰는 새로 쓴 주석 하나가 "postgres만 따로 백오프를 갖는다"는 사실과 다른 설명을 지어냈다고 지적했고,
+컨트롤러가 직접 고쳤다(`aa537d1`).
+
+**계획이 틀렸던 곳 (구현자 보고).** 계획의 `embeddedDatabaseUrl` 테스트는 `new URL("postgresql://damwha@/damwha?…")`로
+검증했는데, WHATWG URL은 userinfo와 빈 host의 조합을 스킴과 무관하게 거부한다. 구현 문자열은 스펙대로 두고,
+테스트만 `pg-connection-string`과 같은 방식(`@/` → 더미 호스트)으로 바꿨다.
+
+### 3.3 판정 기록
+
+원장의 Ruling 중 결과에 영향을 준 것만 옮긴다.
+
+| 판정 | 이유 | 틀렸다면 |
+| --- | --- | --- |
+| 수정 루프 상한 3회 (스킬의 5회 대신) | 로드맵 규칙 | 3회 뒤 사용자에게 한 번 묻는 대기 |
+| Task 14는 메인 세션이 사용자와 함께 | Docker 종료·데이터 격리를 매 단계 확인해야 한다 | 메인 컨텍스트 사용 증가 |
+| Task 12 dev 실행의 GUI 확인은 로그·`ps`·번들 `psql`로, 화면 문구는 Task 14로 | 서브에이전트는 창을 볼 수 없다 | dev 화면 결함이 늦게 드러남 |
+| 상태 창 postgres 로그 링크는 `logs/postgres.log`로 두고 폴더는 안내 줄로 | `logPathOf`는 로그 싱크와 같은 함수라 폴더로 바꾸면 싱크가 깨진다 | 스펙 §6.7 문구와 한 곳 다름 (§5.2) |
+| 최종 리뷰를 packaged 검증 **앞**으로 | 리뷰 수정이 들어가면 사용자와 한 검증 증거가 낡는다 | 리뷰가 Task 14 결과를 못 본다 — 실제로 Task 14가 결함 1건을 따로 냈다 |
+| utilityProcess `'exit'` 뒤 stdout 유실 가능성은 코드를 고치지 않고 콜드 기동 10회로 측정 | 사용자 공간 완화책이 없다(Electron이 exit 뒤 stdout을 null로 만든다) | 가끔 "상태 줄을 내지 않았어요"로 수동 재시도 |
+| P3-C1의 "config.json sha 불변"은 "`REPO_ROOT` 추가 외 불변"으로 | 이 userData에는 `REPO_ROOT`가 없어 packaged가 Phase 2 규칙대로 물어 저장한다(유일한 쓰기 예외) | C1·C14의 config 항목이 조건부 |
+| 실패 화면 깜빡임은 검증 도중 수정하고 같은 조건으로 재확인 | 사용자가 재시도로 오인했다. 수정이 다른 기준의 판정을 바꾸지 않는다 | 한 번 더 격리 절차 |
+
+### 3.4 이월 항목
+
+per-Task 리뷰의 경미 지적과 parked 항목은 최종 리뷰가 하나씩 분류했다(FIX-NOW 1건은 위 비밀번호 노출). 남긴 것은 §5.2·§5.3에 적었다.
 
 ## 4. 최종 검증
 
-아직 없다. 완료 기준 P3-C1~C15(+C9b)는 하나도 실행되지 않았다.
+packaged는 `pnpm desktop:build`로 만든 `desktop/out/mac-arm64/Damwha.app`을 실행했다. 실데이터에 닿는 조작(OrbStack
+종료·기동, 검증 전용 마이그레이션 빌드, `data/` 격리 복사·되돌리기, postmaster·앱 `kill -9`, `config.json` 키 편집)은
+매번 직전에 사용자 확인을 받았다. 증거는 저장소 밖 `~/.cache/damwha-p3-evidence/`에 있다.
+
+**환경 차이.** 이 맥의 Docker 런타임은 Docker Desktop이 아니라 **OrbStack**이다. 스펙의 "Docker Desktop 완전 종료"는
+OrbStack 종료로 수행했고(`docker info` 실패 기록), 같은 런타임의 다른 프로젝트 컨테이너도 함께 멈췄다.
+
+**시작 상태.** Task 12의 dev 실행이 실제 userData에 만든 `data/`·`run/`·`backups/`는 P3-C1이 "기존 userData 위의 첫
+실행"을 보도록 증거 폴더(`t12-dev-data/`)로 옮기고 시작했다.
+
+### 4.1 판정
+
+| 기준 | 판정 | 빌드 커밋 | 근거 (증거 파일) |
+| --- | --- | --- | --- |
+| P3-C1 Docker 없이 첫 실행·처리·검색 | **충족 (조건)** | `aa537d1` | `docker info` 실패. 새 클러스터·DB 생성, `_migrations` 24. 한국어 오디오 1건 `done`, 파일은 `data/storage/meetings/mtg_1/`에만 생겼다. 처리 중 `pg_stat_activity`의 client backend 5개가 전부 `client_addr` NULL. (a) 고유명사 `일론 머스크` 키워드 검색, (b) 전사에 없는 표현 `로켓 회사의 재무 성과` 의미 검색이 모두 발화를 찾았다(사용자 확인, `api.log`의 `POST /api/search`). userData `storage/` 체크섬 불변. 옛 키 경고는 화면에 없고 로그에 한 줄씩. **조건:** `config.json`은 `REPO_ROOT` 추가만 달라졌다(packaged 폴더 선택). `embed.log`에 시각이 없어 "같은 시각의 `POST /embed 200`"은 증명하지 못하고 호출 존재만 확인했다 (`c1-*.txt`) |
+| P3-C2 재시작 후 데이터 유지 | **충족** | `aa537d1` | ⌘Q 뒤 재실행. 마커 `{7685289567798622822, 16384}`와 `pg_controldata` id가 종료 전과 같다. PG 로그 `database system was shut down` 뒤 곧바로 ready, recovery 줄 없음. 회의·전사가 보였다(사용자 확인) (`c2-after-restart.txt`) |
+| P3-C3 앱 비정상 종료 뒤 고아 처리 | **충족** | `aa537d1` | 제목을 바꾼 뒤 앱 main `kill -9`. postmaster 47001이 ppid 1로 생존. 재실행 시 `supervisor.log`에 "이전 실행이 남긴 postmaster(pid 47001)를 내린다" → "종료 결과 — fast"(PG 로그상 4ms). 새 postmaster 48655 ≠ 47001, postmaster 트리 하나, 제목 유지 (`c3.txt`) |
+| P3-C4 TCP를 열지 않고 기존 PG와 공존 | **충족** | `aa537d1` | `damwha-postgres`가 5432에 떠 있는 상태. 번들 postmaster와 자식의 TCP 소켓 0개, 5432 리스너는 OrbStack뿐, `run/` 700. 내장 클러스터의 client backend 전부 소켓 접속. Docker DB의 client backend 수가 실행 전후 모두 1(측정용 psql 자신). 앱 화면의 회의 목록은 내장 클러스터의 1건(사용자 확인) (`c4.txt`) |
+| P3-C5 종료 후 번들 postgres 0개 | **충족** | `aa537d1` | 앱 main이 사라진 뒤 45초 동안 0.5초 간격 추적에서 번들 postgres가 한 번도 보이지 않았다 — main보다 먼저 내려갔다(`supervisor.log`상 postgres stopped 07:36:53.505Z, main 소멸 07:36:53.99Z). PG 로그 `received fast shutdown request` → `database system is shut down`(6ms), `immediate` 없음. `run/` 비어 있음. 종료 순서 worker → embed → api → postgres (`c5-track.txt`) |
+| P3-C6 데이터가 있는 DB에 새 마이그레이션 | **충족** | `aa537d1` + 미커밋 `900_p3_probe.sql` | `…-before-900_p3_probe.sql.dump`의 mtime 08:22:41.774Z < `applied_at` 08:22:41.857Z. `pg_restore --list` exit 0. `_migrations` 25. `.partial` 없음. 정상 진입 (`c6.txt`) |
+| P3-C7 마이그레이션 실패 — 멈추고 반복하지 않음 | **충족** | `aa537d1` + 미커밋 `900`·`901` | 120초 동안 10초 간격: 게이트 실행 1회, 새 백업 1개, API·worker 프로세스 0개. `_migrations`에 901 없음. 실패 화면에 원인(`relation "p3_nope" does not exist`)과 백업 경로, 카운트다운 없음(사용자 확인). 정리: 실패 화면에서 psql로 900 행·`p3_probe` 삭제 → 두 파일 삭제 → 재빌드(번들에 9xx 0개) → 정상 진입 (`c7*.txt`) |
+| P3-C8 `unknown` 마이그레이션 거부 | **충족** | `aa537d1` | 격리 절차 안. `999_from_future.sql` 삽입 뒤 재실행 → "더 새 버전의 앱이 이 데이터를 업데이트했어요 (999_from_future.sql)". API 0, 재시도 0, `_migrations` 불변. 되돌린 뒤 정상 진입 (`step8.txt`) |
+| P3-C9 페어링 거부 | **충족** | `aa537d1` | `data/postgres` 이름 변경 → "파일 저장소에 파일이 있는데 데이터베이스가 없어요"와 두 경로. `data/`에 새 `postgres`·`postgres.initdb-*` 없음, `data/storage` 체크섬 불변, 카운트다운 없음. 되돌린 뒤 정상 진입 |
+| P3-C9b 데이터베이스를 다시 만든 클러스터 거부 | **충족** | `aa537d1` | 격리 절차 안. `DROP DATABASE damwha WITH (FORCE)` 뒤 재실행 → "데이터베이스(damwha)가 지워졌어요". `base/`에 시스템 DB 셋(1·4·5)만 — 다시 만들어지지 않았다. 마커·`data/storage` 체크섬 불변. API 0. 되돌린 뒤 정상 진입. `pg_database` 대신 `base/` 목록으로 판정했다 — 거부 뒤 감독자가 postmaster를 내려 조회할 서버가 없다 |
+| P3-C10 PostgreSQL 메이저 불일치 거부 | **충족** | `aa537d1` | 격리 절차 안. `PG_VERSION` 16→15 → "데이터 폴더의 PostgreSQL 버전(15)이 앱의 버전(16)과 달라요". 번들 postgres 0. `PG_VERSION` 외 PGDATA 체크섬 불변. 되돌린 뒤 정상 진입 |
+| P3-C11 외부 디버그 모드 | **충족** | `0f97171` (dev) | 사람이 `DEBUG_EXTERNAL_DATABASE_URL`을 적고 `pnpm desktop:dev`. 번들 postgres 0, `run/` 비어 있음. 상태 창에 `외부 DB(디버깅)`(사용자 확인). API의 회의 목록 12건(Docker DB). Docker `_migrations` 24 불변, `data/` 파일 1374개 체크섬 불변, `backups/` 새 파일 없음. 키 삭제 뒤 `config.json` sha가 C11 전과 같다 (`c11.txt`) |
+| P3-C12 번들 위생 | **충족** | `57c08bd`, `aa537d1`, `0f97171` | 20줄 전부 PASS(Phase 2 13 + PG 7줄, §6.9 항목 5는 기존 저장소 경로 grep이 덮는다). 변이 — `psql`의 `libpq` 의존을 중립 prefix로 되돌림 → deps·`env -i psql` FAIL, `pg_bigm.control` 삭제 → 확장 항목 FAIL, 재빌드 뒤 전부 PASS(Task 13) (`c12-desktop-build.log`) |
+| P3-C13 회귀 없음 | **충족 (비고)** | `0f97171` | 루트 `pnpm install`·`build`·`lint` 통과, `pnpm build`가 PG를 빌드하지 않고 `.app`을 바꾸지 않았다. `pnpm test`: desktop 675/675, fe 578/578, be 474/475 — 실패 1건은 `meetings.e2e-spec`의 `socket hang up`이며 그 파일만 3회 재실행해 41/41씩 통과했다(이 브랜치의 be 변경은 `migrate.ts`뿐). `pnpm worker:test` 526 통과. `docker build -f deploy/api.Dockerfile .` 성공. `pnpm dev` 웹 흐름(목록·전사·검색) 사용자 확인, Electron 안 뜸. `pnpm desktop:dev`가 packaged가 만든 클러스터를 dev 바이너리로 열어 네 서비스 `ok` (`c13*.txt`) |
+| P3-C14 기존 데이터 보존 | **충족 (조건)** | 전 구간 | `be/storage`·userData `storage/` 체크섬 불변. `damwha_pgdata` 볼륨·`damwha-postgres` 컨테이너 생성 시각 불변. Docker DB `meeting`·`utterance`·`_migrations` = 12·4620·24로 기준선과 같다. 앱이 Docker DB에 쓴 것은 P3-C11 중 worker 기동의 `app_setting.worker_capabilities` 갱신(11:52:06Z) 한 행이다. **조건:** `config.json`은 `REPO_ROOT` 추가만 달라졌다 (`c14.txt`) |
+| P3-C15 postmaster 사망 시 재시작과 회복 | **충족 (비고)** | `aa537d1` | postmaster `kill -9` → 감독자가 3초 백오프로 재기동, 3.5초 만에 `running/ok`, 60초 안정 뒤 예산 복원. **공유 메모리·락 때문에 재기동이 거절된 적은 없다** — crash recovery(redo)가 0.08초에 끝났다. api·worker는 재시작 없이 `ok`, 데이터 유지. **비고:** 끊긴 시간(3.5초)이 api 헬스 확인 간격보다 짧아 api의 `degraded` 경유는 관찰되지 않았다 (`c15.txt`) |
+
+**추가 측정 — packaged 마이그레이션 상태 줄 유실.** 최종 리뷰가 "utilityProcess는 `'exit'` 직후 stdout을 끊어 마지막
+상태 줄을 잃을 수 있다"고 지적해, 정상 종료 → 콜드 기동을 10회 반복했다. 10회 모두 12~15초 안에 네 서비스가 준비됐고
+`마이그레이션 상태를 확인하지 못했어요`는 0회였다 (`cold-launches.txt`).
+
+### 4.2 검증이 잡은 결함
+
+**실패 화면이 10초마다 다시 로드됐다 (`0f97171`).** P3-C8 거부 화면을 본 사용자가 "깜빡이는 걸 보니 재시도하는 것
+같다"고 했다. 로그상 기동 실패는 1회뿐이고 러너 프로세스도 없었다. 원인은 감독자가 바뀐 것이 없어도 헬스 확인마다
+상태를 내보내고, `main.ts`가 그때마다 `showStatus` → `win.loadFile(status.html, query)`로 페이지를 **다시 로드**하는
+것이었다. Phase 2부터 있던 경로이지만 Phase 2의 compose 헬스 간격은 30초였고, 이 Phase의 postgres는 10초라 세 배
+자주 보인다. 같은 파일·같은 쿼리면 다시 로드하지 않는 순수 판정(`shell-url.ts`)을 두고, 확신이 없으면 로드한다.
+리뷰 뒤 같은 조건(격리 절차 안의 999 행)으로 30초 넘게 봐 깜빡임이 사라진 것을 사용자가 확인했다.
+
+### 4.3 비고
+
+- **dev와 packaged가 한 클러스터를 쓴다는 설계 가정이 실측됐다.** packaged가 만든 클러스터를 `pnpm desktop:dev`가
+  `desktop/build/postgres` 바이너리로 열어 정상 동작했다(P3-C13).
+- **Task 3의 C 로캘 판정이 실사용에서도 성립했다.** `--locale=C` 클러스터에서 한글 고유명사 키워드 검색이 발화를
+  찾았다(P3-C1). 정렬 순서가 Docker 이미지와 다르다는 사전 실측(§2.4)은 제품이 그 순서에 기대는 곳이 없어 영향이
+  없었다.
+- **검증 중 남은 백업.** P3-C6·C7이 만든 덤프 2개(`…-before-900_p3_probe.sql.dump`, `…-before-901_p3_broken.sql.dump`)가
+  실제 userData `backups/`에 남아 있다. 앱의 보관 규칙(최근 5개)에 맡긴다.
 
 ## 5. 남은 제약과 후속 Phase 인계
 
-아직 없다.
+### 5.1 구현 값과 근거
+
+| 값 | 어디 | 근거 |
+| --- | --- | --- |
+| 준비 유예 180초 | `PG_READY_TIMEOUT_MS` | crash recovery 포함 상한. 실측 기동 약 0.5초, P3-C15의 crash recovery(redo) 0.08초 |
+| 헬스 간격 10초 | `PG_HEALTH_INTERVAL_MS` | `postmaster.pid` 파일 읽기라 값싸다 |
+| fast 30초 → immediate 10초 | `PG_FAST_GRACE_MS`·`PG_IMMEDIATE_GRACE_MS` | 클라이언트가 없는 시점의 종료. 실측 fast 종료 4~6ms |
+| 도구 deadline | `PG_TOOL_DEADLINES` initdb 120s · controldata 10s · psql 15s · createdb 30s | 실측의 수십 배 |
+| 마이그레이션 상태 조회 60초, `pg_restore --list` 60초, `pg_dump`는 deadline 없음 | `migration-gate.ts` | 덤프는 데이터 크기에 비례해 종료 신호로만 끊는다 |
+| 백업 보관 5개 | `KEEP_BACKUPS` | 스펙 §6.5-3 |
+| 재시작 `[3s, 8s, 20s]` 3회 | `pg-service.ts` | 스펙 §6.4. P3-C15에서 1회차로 회복 |
+
+### 5.2 이번 검증에서 드러났지만 고치지 않은 것
+
+1. **packaged 마이그레이션 상태 줄 유실 가능성.** 10회 측정에서 0회였지만 원리상 남는다. 실패하면 manual로 멈추고
+   (fail-closed) 사용자는 "다시 시도"를 누른다. 관찰되면 `migrate.ts --status-file <경로>`로 파일을 통해 받는 설계가
+   대안이다.
+2. **앱 main이 강제 종료되면 worker 트리가 고아로 남고 새 실행이 정리하지 않는다 (Phase 2 동작).** P3-C3에서 옛 worker와
+   새 worker가 함께 돌았다. 고아 embed는 한 번은 채택됐지만, 그 뒤 실행에서는 채택되지 않고 새 embed가 따로 떠 둘이 모델
+   메모리를 썼다. 채택한 embed는 앱이 소유하지 않아 종료 뒤에도 남는다. 검증자가 SIGTERM으로 정리했다. job 테이블 잠금이
+   중복 처리를 막지만, worker의 고아 처분은 Phase 6의 job lease token과 함께 다룰 일이다.
+3. **준비 판정(판정표 2) 거부는 `supervisor.log`에 사유가 남지 않는다.** 기동 실패는 `기동 실패 — …`로 남는데, 준비
+   판정 실패는 상태 줄(`postgres=failed`)만 남아 사유는 화면에서만 보인다.
+4. **게이트 실패 화면의 `로그:` 경로가 `api.log`다.** 러너 출력 전체는 `supervisor.log`에 있고 안내 문구가 그렇게
+   말하지만, 경로 줄은 그 로그를 가리키지 않는다.
+5. **`be` 빌드가 마이그레이션을 두 번 복사한다 (기존 동작).** `nest build`의 assets가 `dist/database/migrations`를 채운
+   뒤 `cp -r`이 그 안에 `migrations/`를 한 겹 더 만든다. `deleteOutDir`가 매 빌드 지워 파일 삭제는 반영되고,
+   `migrate.ts`는 `.sql`로 끝나는 항목만 읽어(`migrate.ts:19`) 동작에는 영향이 없다.
+6. **be e2e 테스트 1건의 간헐 실패.** `meetings.e2e-spec`의 reprocess 테스트가 전체 실행 부하에서 `socket hang up`을
+   한 번 냈다.
+
+### 5.3 최종 리뷰·per-Task 리뷰에서 남긴 것
+
+- **dev 마이그레이션 러너는 중단 신호로 손자까지 끝나지 않는다.** 실행기가 `pnpm`만 끝내고 `ts-node` 손자는 남으며
+  `'close'`를 기다린다 — dev에서 긴 마이그레이션 중 ⌘Q가 실행 끝까지 늦어진다. advisory lock이 겹친 러너를 막아 데이터는
+  안전하다. packaged 러너(utilityProcess)는 해당 없다.
+- **postgres `stop()`은 감독자의 짧은 정리 유예를 무시한다.** 준비 전 postmaster 정리도 fast 30초 + immediate 10초를
+  쓴다 — 최악의 ⌘Q 지연 40초. 스펙 §6.4가 "같은 함수"를 요구한 결과다.
+- **psql exit 2를 전부 "아직 접속 불가"로 본다.** 영구 접속 실패(역할 없음 등)도 180초 준비 유예를 다 쓰고 auto로
+  재시도된다. 앱이 만든 클러스터에서는 거의 생기지 않는 조건이고 백업·마이그레이션에는 닿지 않는다.
+- **`readiness()` 본문 전체가 부류 래퍼로 감싸이지 않았다** (스펙 §6.7:589). 래퍼 밖의 줄은 실사용에서 던지지 않는다.
+- **준비 전에 죽은 서버의 화면 사유에 `logs/postgres/`의 마지막 오류 줄이 없다.** 감독자가 `alive()`를 먼저 봐 자기
+  종료 사유를 쓰고, 안내가 `logs/postgres/` 폴더를 가리킨다.
+- **상태 창 postgres 줄의 로그 경로는 `logs/postgres.log`(초기 stderr)다.** 스펙 §6.7은 `logs/postgres/`를 적었다.
+  폴더는 같은 줄의 안내(`서버 로그: …/logs/postgres/`)로 보인다.
+- **`configWarning`은 "다시 시도"의 설정 재적용에서 갱신되지 않는다.** `config.json`을 고친 뒤에도 앱을 다시 켤 때까지
+  옛 경고가 남는다.
+- **실패 화면 재로드 제거로, 렌더러가 멈췄을 때 주기적 재로드가 우연히 해 주던 복구가 사라졌다.** 지금 코드에는 렌더러
+  크래시 처리가 없어 회귀는 아니다.
+- 경미: `debugCommand`의 큰따옴표가 경로 속 `$`·`` ` ``·`"`를 막지 않는다. `check-bundle.mjs`의 `file -b` 실행 실패 시
+  예외, PG 트리가 통째로 없을 때 두 줄이 빈 목록으로 PASS(다른 세 줄이 FAIL). `readStorageFacts`가 읽기 실패한 마커를
+  "마커 없음"으로 합친다(둘 다 거부).
+
+### 5.4 후속 Phase 인계 (스펙 §15를 실제 결과로 갱신)
+
+- **Phase 4**
+  - Phase 2가 넘긴 것 그대로(`FFMPEG_BIN`/`FFPROBE_BIN`, `UV_BIN` 재시도 반영).
+  - 번들 바이너리를 `PATH` 탐색이 아니라 앱이 아는 경로로 부르는 이 Phase의 방식(`pgBinaries`)을 worker·embed·ffmpeg에
+    적용할지 결정한다.
+  - §5.2-2의 강제 종료 뒤 고아 worker·embed 처분 — worker·embed를 번들하며 소유 판정을 다시 짠다.
+- **Phase 5**
+  - Docker DB → 내장 클러스터 이전. 대상 스토리지는 `<userData>/storage`(Phase 1·2 앱 업로드)와 `be/storage`(웹 흐름)이며
+    둘 다 Docker DB와 짝이다. 이전 뒤 마커를 새 `clusterId`·`databaseOid`로 적는다.
+  - 이 Phase가 거부만 하는 짝 불일치를 사람이 짝을 증명하고 마커를 고치는 도구.
+  - 백업 복원 절차와 그 검증(이 Phase는 만들고 목차를 읽는 것까지).
+  - 강제 종료·잠자기·디스크 부족 중 PG 동작. 이번 검증은 postmaster·앱 `kill -9`까지만 했다.
+- **Phase 6**
+  - PostgreSQL 메이저 업그레이드(`pg_upgrade`) — 이 Phase는 거부만 한다(P3-C10).
+  - 업데이트 전 백업 정책의 일반화 — 이 Phase의 마이그레이션 전 백업이 첫 조각이다.
+  - 소스 아카이브 서명 검증과 재현 가능 빌드, `Resources/postgres`의 Developer ID 서명·hardened runtime.
+  - Phase 2가 넘긴 job lease token, `enableCors`·API 인증.
+  - §5.2-1 상태 줄 유실이 관찰되면 `--status-file`.

@@ -10,7 +10,9 @@
 **Phase 1은 2026-09-11에 구현·통합 검증·수정 3회차까지 마쳤다**(완료 기준 3개 전부 충족,
 스펙 기준 14건 전부 충족 — 아래 Phase 1 절 참조).
 **Phase 2는 2026-09-13에 구현·최종 리뷰·packaged 통합 검증을 마쳤다**(완료 기준 4개 전부 충족,
-스펙 기준 15건 전부 충족 — 아래 Phase 2 절 참조). Phase 3~6의 상세 구현 스펙·계획과 구현은 미착수.
+스펙 기준 15건 전부 충족 — 아래 Phase 2 절 참조).
+**Phase 3은 2026-09-14에 구현·최종 리뷰·packaged 통합 검증을 마쳤다**(완료 기준 3개 전부 충족,
+스펙 기준 16건 전부 충족 — 아래 Phase 3 절 참조). Phase 4~6의 상세 구현 스펙·계획과 구현은 미착수.
 
 ## 목표와 전제
 
@@ -184,6 +186,30 @@ P1-C10 외부 API 오인) 같은 브랜치의 `d8f2af1`·`8dcd08e`가 둘 다 �
 - Docker 없이 신규 DB로 앱 실행·검색 성공.
 - 앱 재시작 후 데이터 유지.
 - 기존 개발용 DB·볼륨을 변경하거나 덮어쓰지 않음.
+
+**상태 (2026-09-14): 구현 13개 Task·최종 whole-branch 리뷰·packaged 통합 검증 완료. 완료 기준 3개 전부 충족.**
+앱이 PostgreSQL 16.15(pgvector·pg_bigm 포함)를 번들로 싣고, `~/Library/Application Support/Damwha/data/`에 자기
+클러스터를 만들어 Unix 소켓으로만 연다. 스키마는 API를 띄우기 전에 앱이 적용하고, 데이터가 있는 DB면 먼저
+`pg_dump`로 백업한다. 클러스터와 파일 저장소의 짝이 맞지 않거나(마커), DB가 지워졌거나, 앱보다 새 스키마이거나,
+메이저 버전이 다르면 아무것도 바꾸지 않고 거부하며, 이런 manual 실패는 자동 재시도하지 않는다. Docker 개발 DB에 붙는
+외부 디버그 모드(`DEBUG_EXTERNAL_DATABASE_URL`)는 감지만 한다. 스펙 완료 기준 16건 기준으로도 **16건 전부 충족**이다.
+packaged 검증에서 결함 1건(실패 화면이 10초마다 다시 로드돼 재시도처럼 보임)이 드러나 같은 브랜치에서 고친 뒤 다시
+확인했다(`0f97171`). 스펙은
+[2026-09-14-electron-phase-3-embedded-postgres-design.md](superpowers/specs/2026-09-14-electron-phase-3-embedded-postgres-design.md),
+브랜치는 `feat/electron-migration-phase-3-embedded-postgres`, 판정과 증거는
+[Phase 3 결과](superpowers/reports/2026-09-14-electron-phase-3-embedded-postgres-results.md)에 있다.
+
+| 완료 기준 | 판정 | 근거와 남은 것 |
+| --- | --- | --- |
+| Docker 없이 신규 DB로 앱 실행·검색 성공 | **충족** | Docker 런타임을 끈 채 packaged 첫 실행이 클러스터·DB를 만들고 마이그레이션 24개를 적용했다. 한국어 오디오가 처리되고 키워드(pg_bigm, C 로캘)·의미 검색이 모두 발화를 찾았다. 앱의 모든 DB 접속이 소켓이었다(P3-C1). Docker DB가 5432에 떠 있어도 TCP를 열지 않고 공존한다(P3-C4). 데이터가 있는 DB의 새 마이그레이션은 백업 뒤 적용되고, 실패하면 멈춰 반복하지 않는다(P3-C6·C7) |
+| 앱 재시작 후 데이터 유지 | **충족** | ⌘Q 뒤 같은 클러스터·DB·데이터로 recovery 없이 다시 떴다(P3-C2). 종료는 fast로 끝나 postgres가 남지 않는다(P3-C5). 앱 강제 종료 뒤 남은 postmaster는 다음 실행이 채택하지 않고 내린다(P3-C3). postmaster가 죽으면 3초 뒤 재기동해 스스로 회복한다(P3-C15) |
+| 기존 개발용 DB·볼륨을 변경하거나 덮어쓰지 않음 | **충족** | 검증 전 구간 뒤 `damwha_pgdata`·`damwha-postgres` 생성 시각, Docker DB 행 수, `be/storage`·userData `storage/` 체크섬이 기준선과 같다(P3-C14). 외부 디버그 모드에서도 마이그레이션을 실행하지 않았다(P3-C11). **한계:** 그 모드에서 worker가 기동하며 `app_setting.worker_capabilities` 한 행을 Docker DB에 쓴다. `config.json`은 packaged가 저장소 폴더를 물어 `REPO_ROOT`를 적은 것만 달라졌다(Phase 2부터의 유일한 쓰기 예외) |
+
+**Phase 4~6으로 넘기는 완료 기준은 없다.** 결과 문서 §5에 남긴 것은 동작·진단 수준의 한계다 —
+(1) 앱 main이 강제 종료되면 worker 트리가 고아로 남고 다음 실행이 정리하지 않는다(Phase 2 동작, Phase 4·6),
+(2) packaged 마이그레이션 상태 줄이 utilityProcess 종료와 경합해 유실될 수 있다 — 10회 측정에서 0회, 나오면 manual로
+멈춘다, (3) 준비 판정 거부의 사유가 `supervisor.log`에 남지 않는다, (4) dev 러너는 ⌘Q에 손자 프로세스까지 끝나지 않는다.
+Docker DB → 내장 클러스터 이전과 짝 복구 도구는 Phase 5, `pg_upgrade`와 `Resources/postgres` 서명은 Phase 6이 받는다.
 
 기존 데이터 이전은 Phase 5에서 처리한다.
 
