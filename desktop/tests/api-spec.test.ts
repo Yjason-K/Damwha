@@ -8,7 +8,8 @@ import {
   pendingMigrations,
 } from "../src/services/api";
 import type { ApiDeps } from "../src/services/api";
-import type { ServiceHandle } from "../src/services/types";
+import { ServiceFailure } from "../src/services/failure";
+import type { LaunchContext, ServiceHandle } from "../src/services/types";
 
 const WARN =
   "[Nest] 123  - 09/12/2026  WARN [DatabaseService] 3 pending migration(s): " +
@@ -239,5 +240,78 @@ describe("createMigrationCheckWatch — 스스로 꺼진 게이트를 기동 단
     const watch = createMigrationCheckWatch(() => undefined);
     expect(watch.skippedFor(null)).toBe(false);
     expect(watch.skippedFor(undefined)).toBe(false);
+  });
+});
+
+describe("apiSpec — migration gate (Phase 3)", () => {
+  const baseDeps = (over: Partial<ApiDeps> = {}): ApiDeps => ({
+    verifyOwnListener: async () => true,
+    isPortOccupied: async () => true,
+    onPendingMigrations: () => undefined,
+    onMigrationCheckSkipped: () => undefined,
+    ...over,
+  });
+  const ctx = (): LaunchContext => ({
+    repoRoot: "/r",
+    userData: "/u",
+    packaged: false,
+    env: { PORT: "3000" },
+    bins: { uv: null },
+    searchDirs: [],
+    logFile: () => "/u/logs/api.log",
+    signal: new AbortController().signal,
+  });
+
+  it("runs the gate before looking for a port, with the launch signal", async () => {
+    const order: string[] = [];
+    const c = ctx();
+    let seen: AbortSignal | undefined;
+    const spec = apiSpec(
+      baseDeps({
+        migrationGate: async (signal) => {
+          order.push("gate");
+          seen = signal;
+        },
+        isPortOccupied: async () => {
+          order.push("port");
+          return true; // 모든 포트가 막혀 스폰까지 가지 않는다
+        },
+      }),
+    );
+    await expect(spec.launch(c)).rejects.toThrow(/포트/);
+    expect(order[0]).toBe("gate");
+    expect(order[1]).toBe("port");
+    expect(seen).toBe(c.signal);
+  });
+
+  it("does not spawn the API when the gate refuses, and keeps the manual class", async () => {
+    const isPortOccupied = vi.fn(async () => false);
+    const spec = apiSpec(
+      baseDeps({
+        isPortOccupied,
+        migrationGate: async () => {
+          throw new ServiceFailure("마이그레이션을 적용하지 못했어요.", "manual");
+        },
+      }),
+    );
+    await expect(spec.launch(ctx())).rejects.toMatchObject({ recovery: "manual" });
+    expect(isPortOccupied).not.toHaveBeenCalled();
+  });
+
+  it("reports pending migrations after a gate as a manual mismatch, not as `pnpm be:migrate`", async () => {
+    const handle = {
+      pid: 1,
+      alive: () => true,
+      stderrTail: () => "",
+      stdoutTail: () => WARN,
+      exitCode: () => null,
+      onExit: () => undefined,
+      stop: async () => undefined,
+    } as ServiceHandle;
+    const withGate = await judgeAfterProbe(handle, "ready", 3000, baseDeps({ migrationGate: async () => undefined }));
+    expect(withGate).toMatchObject({ kind: "failed", recovery: "manual", detail: expect.stringMatching(/여전히 적용되지 않았어요/) });
+    const withoutGate = await judgeAfterProbe(handle, "ready", 3000, baseDeps());
+    expect(withoutGate).toMatchObject({ kind: "failed", detail: expect.stringMatching(/적용되지 않은 마이그레이션이 3개/) });
+    expect((withoutGate as { recovery?: string }).recovery).toBeUndefined();
   });
 });
