@@ -4383,10 +4383,6 @@ export function forkNodeTool(
     let spawnError: string | undefined;
     let settled = false;
     let deadline: NodeJS.Timeout | undefined;
-    let pid = child.pid;
-    child.once("spawn", () => {
-      pid = child.pid;
-    });
     const terminate = () => {
       try {
         child.kill();
@@ -4419,7 +4415,6 @@ export function forkNodeTool(
       settled = true;
       clearTimeout(deadline);
       opts.signal?.removeEventListener("abort", onAbort);
-      void pid;
       resolve({ code, stdout, stderr, timedOut, aborted, ...(spawnError === undefined ? {} : { spawnError }) });
     });
   });
@@ -5396,6 +5391,7 @@ MSG
 
 **Review:**
 - 외부 모드 경고가 postgres가 실행 중인 동안 **항상** 붙는가(원인 유무와 무관).
+- `statusLine`을 `.map(statusLine)`처럼 함수 그대로 넘기는 곳이 남지 않았는가 — 두 번째 인자로 배열 index가 들어가 `externalDatabase` 자리를 차지한다(index 0은 거짓, 1 이상은 참).
 - 디버깅 명령이 `textContent`로만 들어가는가(`innerHTML` 없음).
 - 실패 화면이 postgres 실패에서 `logs/postgres.log`를 가리키는가.
 

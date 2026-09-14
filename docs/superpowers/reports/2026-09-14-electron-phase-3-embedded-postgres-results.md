@@ -5,7 +5,7 @@
 스펙: [2026-09-14-electron-phase-3-embedded-postgres-design.md](../specs/2026-09-14-electron-phase-3-embedded-postgres-design.md)
 로드맵: [electron-migration-roadmap.md](../../electron-migration-roadmap.md) § "Phase 3. PostgreSQL 내장"
 
-**상태 (2026-09-14): 스펙 리뷰 완료. 구현 계획 작성 전.**
+**상태 (2026-09-14): 스펙 리뷰·구현 계획·계획 검증 완료. 구현 미착수.**
 
 이 문서는 로드맵이 정한 네 기록을 구분해 담는다 — 스펙 리뷰, 계획 검증, 단계별 실행·리뷰, 최종 검증.
 아직 채워지지 않은 절은 그 사실을 적어 둔다. **실행하지 않은 검증을 성공으로 가정하지 않는다.**
@@ -87,11 +87,82 @@
 | 커밋 | 내용 |
 | --- | --- |
 | `b8470db` | 스펙 최초 작성 |
-| (이 커밋) | Codex 지적 11건·내부 리뷰 S-2·S-3 반영, 결과 문서 개설 |
+| `e12ee65` | Codex 지적 11건·내부 리뷰 S-2·S-3 반영, 결과 문서 개설 |
+| `54e74c0` | 내부 리뷰 S-4 — dev·packaged userData 공유 정정 |
+| `1cae368` | 구현 계획(14 Task), 계획 작성 중 실측으로 닫힌 스펙 §12 두 항목 반영 |
 
 ## 2. 계획 검증
 
-아직 없다 — 구현 계획 작성 전.
+| | |
+| --- | --- |
+| 검토자 | 메인 세션 (로드맵 §"계획 검증"은 이 단계를 서브 에이전트에 넘기지 않는다) |
+| 대상 커밋 | `1cae368` — `docs: Phase 3 구현 계획을 쓴다 — 14 Task` |
+| 계획 | [2026-09-14-electron-phase-3-embedded-postgres.md](../plans/2026-09-14-electron-phase-3-embedded-postgres.md) — 14 Task |
+
+### 2.1 완료 기준과 구현 단계의 연결
+
+**16건 전부 연결됐다.** 판정은 전부 Task 14가 packaged에서 하고, 단위·통합 테스트가 앞 Task에서 같은 성질을 먼저 잠근다.
+
+| 기준 | 만드는 Task | 앞선 자동 판정 | 판정 |
+| --- | --- | --- | --- |
+| P3-C1 Docker 없이 첫 실행·처리·검색 | 1, 2, 5, 8, 9, 10, 12, 13 | Task 8 통합 테스트, Task 12 dev 실행 | 14 Step 3 |
+| P3-C2 재시작 후 데이터 유지 | 5, 8 | Task 8 통합 테스트 2 | 14 Step 4 |
+| P3-C3 앱 비정상 종료 뒤 고아 | 6, 8 | Task 8 통합 테스트 3, 단위(고아·낡은 락·ps 실패) | 14 Step 5 |
+| P3-C4 TCP 없음·기존 PG 공존 | 5, 6 | Task 8 통합 테스트 1(`listen_addresses`), Task 3 Step 1 | 14 Step 6 |
+| P3-C5 종료 후 0개 | 6, 8 | 단위(`stopPostmaster`), 통합(소켓 소멸) | 14 Step 4 |
+| P3-C6 백업 후 적용 | 2, 9 | 단위(순서·검증·보관) | 14 Step 7 |
+| P3-C7 실패 멈춤·반복 없음 | 4, 9, 12 | 단위(`mayAutoRetry`, 게이트 실패) | 14 Step 7 |
+| P3-C8 `unknown` 거부 | 2, 9 | 단위(be·desktop) | 14 Step 8 |
+| P3-C9 페어링 거부 | 5, 8 | 단위(판정표 1 전 행) | 14 Step 8 |
+| P3-C9b DB 재생성 거부 | 5, 8 | 단위(판정표 2 전 행) | 14 Step 8 |
+| P3-C10 메이저 불일치 | 5, 8 | 단위 | 14 Step 8 |
+| P3-C11 외부 디버그 모드 | 8, 9, 10, 11, 12 | 단위(모드·배지·게이트 없음) | 14 Step 9 |
+| P3-C12 번들 위생 | 1, 13 | Task 13 변이 | 14 Step 2 |
+| P3-C13 회귀 | 전 Task | 매 Task의 test·lint | 14 Step 10 |
+| P3-C14 데이터 보존 | 8, 9, 10 | Task 12 dev 실행 전후 대조 | 14 Step 1·11 |
+| P3-C15 postmaster 사망 | 4, 8 | Task 3 Step 3 실측 | 14 Step 5 |
+
+### 2.2 지적 8건. 전부 조치했다.
+
+계획을 쓰는 동안 자기 점검으로 고친 것(ensureDirs 위치, 테스트의 TS 좁히기·바이트 계산, C6/C7 순서)은 여기 세지 않는다. 아래는 계획 전체를 저장소와 대조한 검증에서 나온 것이다.
+
+| # | 등급 | 지적 | 조치 |
+| --- | --- | --- | --- |
+| V-1 | 차단 | **없는 명령** — Task 2가 `pnpm --filter damwha-be run lint`를 부른다. `be/package.json`에 `lint` 스크립트가 없다(실측: `build start dev start:dev migrate test test:e2e`) | `pnpm --filter damwha-be run build`(nest build의 tsc)로 교체 |
+| V-2 | 차단 | **Task 4가 컴파일을 깬다** — `LaunchContext.bins`에서 docker를 빼고 `signal`을 더하는데, 고칠 테스트 헬퍼 표에 `recovery-hint.test.ts`(4곳)·`shell-html.test.ts`·`postgres.test.ts`가 빠졌다. 실측 `grep "bins:" desktop/tests`로 찾았다 | 표에 세 파일을 더하고 "`grep … bins` 0건까지"를 완료 조건으로 |
+| V-3 | 차단 | **중복 선언** — Task 10이 main.ts에 `withoutDbKeys`·`DatabaseMode` import와 `cfg.notes` 로그 줄을 넣고, Task 12가 같은 것을 또 넣으라고 적었다 | Task 12에서 두 지시를 지우고 "Task 10에서 이미 들어왔다"로 |
+| V-4 | 중간 | **Task 11 뒤 Task 12가 컴파일을 깰 수 있다** — Task 11이 compose 어댑터를 쓰던 테스트를 지우면서 그 import(`postgresSpec`)를 남기면, Task 12가 `services/postgres.ts`를 지우는 순간 테스트 파일이 컴파일되지 않는다 | Task 11에 "쓰이지 않게 된 import를 함께 지운다"를 명시 |
+| V-5 | 중간 | **판정 경로 오판 위험** — 현재 `status-view.ts:87`이 `input.statuses.map(statusLine)`이다. Task 11이 `statusLine`에 두 번째 인자를 더하면 `map`의 index가 그 자리에 들어간다 | 계획 코드는 화살표로 감싼다. Task 11 Review에 "함수 그대로 넘기는 곳이 없는가"를 추가 |
+| V-6 | 경미 | Task 9 api 테스트의 `ctx()`가 `as const`라 `LaunchContext`와의 호환이 우연에 기댄다 | `(): LaunchContext =>`로 타입을 단다 |
+| V-7 | 경미 | Task 9 `forkNodeTool`에 쓰이지 않는 `pid` 추적과 `void pid;`가 남았다 | 지웠다 |
+| V-8 | 경미 | 계획 머리말의 결과 문서 담당 Task 번호와 파일 구조 표가 Task를 나눈 뒤의 번호와 어긋났다(원인 카탈로그를 먼저, compose 제거를 배선 Task로 옮기면서 13→14 Task) | 표·머리말을 현재 번호로 |
+
+### 2.3 그 밖에 확인한 것
+
+- **명령이 실제로 존재한다.** `pnpm --filter damwha-desktop exec vitest run …`(vitest 4.1.9, `describe.skipIf` 있음), `pnpm --filter damwha-desktop run test|lint|compile`, `pnpm --filter damwha-be exec jest …`, `pnpm --filter damwha-be run build|migrate`, `pnpm desktop:build`·`desktop:dev`, `uv run --directory be/worker`, `node desktop/scripts/check-bundle.mjs`.
+- **경로가 맞다.** `app.getAppPath()`는 dev에서 `desktop/`(shell-window.ts의 주석), packaged 산출물은 `desktop/out/mac-arm64/Damwha.app`(electron-builder `directories.output: out`), `extraResources: from: build`가 `build/postgres`를 `Resources/postgres`로 싣는다.
+- **파괴적 명령을 전수 확인했다.**
+  - `rm -rf`: Task 1은 `desktop/.cache/postgres/*`·`desktop/build/postgres(.tmp)`만, Task 3은 `/tmp/dwp3.*`만, 앱 코드는 §5의 네 삭제만(이름 형식·`lstat` 검사 포함).
+  - 실제 userData에 닿는 것: Task 12 Step 5의 dev 실행이 **처음으로** `data/`를 만든다(전후로 `storage/`·`config.json` 대조). Task 14 Step 1이 사용자 확인 뒤 그것을 증거 폴더로 옮긴다. Task 14 Step 8의 격리 절차(`ditto`·`mv`·`rm -rf data.p3-*-after`)는 매번 사용자 확인.
+  - Docker: Task 3은 임시 컨테이너 `dw-p3-locale`(`--rm`, 볼륨 없음)만. 개발 DB에는 Task 14의 읽기 조회만.
+  - 검증 전용 마이그레이션(Task 14 Step 7)은 커밋하지 않고, 정리 순서가 적혀 있다.
+- **각 Task가 개별 리뷰 가능하고 끝마다 초록이다.** compose 어댑터·Docker 원인은 모든 소비자가 바뀌는 Task 12에서 한꺼번에 지운다. 새 어댑터를 새 파일(`pg-service.ts`)에 두는 이유가 그것이다.
+- **스펙 밖의 작업이 없다.** 새 파일(`desktop/CLAUDE.md`)은 스펙 §16의 "데스크톱 운영 문서"다. 스펙과 이름이 다른 두 곳(`pg-service.ts`, `logs/postgres.log`)은 계획 머리말에 이유와 함께 적었고 스펙 본문도 맞췄다(`1cae368`).
+
+**재검증 결과: 통과.** 지적 8건 반영 뒤 이름 대조(계획 "자기 검토" 절), 자리표시 0건, `Verify`·`Review` 블록 14/14를 다시 확인했다.
+
+### 2.4 사전 실측
+
+**계획 작성 중 (2026-09-14, 메인 세션).** 계획의 분기를 줄이려고 싸게 잴 수 있는 둘을 먼저 쟀다.
+
+| 항목 | 측정값 | 이 값이 정한 것 |
+| --- | --- | --- |
+| utilityProcess에서 `require.main === module` (Electron 44.3.0, `utilityProcess.fork(child.js, ["--status"])`) | `true`. `process.argv` = `[Electron Helper 경로, child.js, "--status"]` | packaged 러너가 `Resources/api/dist/database/migrate.js`를 그대로 fork한다. 전용 엔트리 파일 불필요(스펙 §10·R3-3) |
+| node-pg 8.23.0이 `postgresql://damwha@/damwha?host=%2FUsers%2F…%2FApplication%20Support%2FDamwha%2Frun`를 해석 | `host`=`/Users/gim-yeongjae/Library/Application Support/Damwha/run`, `database`/`user`=`damwha`. 서버 없이 접속하면 `ENOENT …/run/.s.PGSQL.5432` — **TCP로 새지 않는다** | `embeddedDatabaseUrl`의 형식(Task 5). R3-2의 파싱 측면 해소 |
+| psycopg 3.3.4 `conninfo_to_dict` (같은 URI) | `{'user': 'damwha', 'dbname': 'damwha', 'host': '/Users/gim-yeongjae/Library/Application Support/Damwha/run'}` | 같다 |
+| 이 맥의 소켓 경로 길이 | 72바이트 (한도 103) | Task 5의 경계 테스트 |
+
+**Task 3 (구현 1단계).** 아직 없다.
 
 ## 3. 단계별 실행과 리뷰
 
