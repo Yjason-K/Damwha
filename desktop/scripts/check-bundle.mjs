@@ -143,6 +143,52 @@ if (codesignVerify.error !== undefined) {
   check("codesign --verify --deep --strict passes", codesignVerify.status === 0, (codesignVerify.stderr ?? "").trim());
 }
 
+// 9~14. 내장 PostgreSQL 트리 (Electron Phase 3 스펙 §6.9)
+const pgDir = path.join(contents, "Resources", "postgres");
+const pgBins = ["postgres", "initdb", "pg_controldata", "createdb", "psql", "pg_dump", "pg_restore"];
+const missingBins = pgBins.filter((b) => {
+  try {
+    fs.accessSync(path.join(pgDir, "bin", b), fs.constants.X_OK);
+    return false;
+  } catch {
+    return true;
+  }
+});
+check("postgres tree has every binary the app calls", missingBins.length === 0, missingBins.join(", "));
+
+const extFiles = ["lib/postgresql/vector.dylib", "lib/postgresql/pg_bigm.dylib", "share/postgresql/extension/vector.control", "share/postgresql/extension/pg_bigm.control"];
+const missingExt = extFiles.filter((f) => !fs.existsSync(path.join(pgDir, f)));
+check("postgres tree has pgvector and pg_bigm", missingExt.length === 0, missingExt.join(", "));
+
+// 심볼릭 링크는 따라가지 않는다 — 같은 dylib을 두 번 센다.
+const pgMachos = fs.existsSync(pgDir)
+  ? execFileSync("find", [pgDir, "-type", "f"], { encoding: "utf8" })
+      .split("\n")
+      .filter((f) => f.length > 0)
+      .filter((f) => spawnSync("file", ["-b", f], { encoding: "utf8" }).stdout.startsWith("Mach-O"))
+  : [];
+check("postgres tree has Mach-O files to check", pgMachos.length > 0, `${pgMachos.length}`);
+
+const badDeps = [];
+for (const f of pgMachos) {
+  const out = spawnSync("otool", ["-L", f], { encoding: "utf8" }).stdout ?? "";
+  for (const line of out.split("\n").slice(1)) {
+    const dep = line.trim().replace(/ \(compatibility.*$/, "");
+    if (dep === "") continue;
+    if (!/^(@loader_path\/|@rpath\/|\/usr\/lib\/|\/System\/Library\/)/.test(dep)) badDeps.push(`${path.relative(pgDir, f)} -> ${dep}`);
+  }
+}
+check("postgres Mach-O files depend only on the bundle and the system", badDeps.length === 0, badDeps.slice(0, 5).join("; "));
+
+const unsigned = pgMachos.filter((f) => spawnSync("codesign", ["--verify", f], { encoding: "utf8" }).status !== 0);
+check("postgres Mach-O files carry a valid signature", unsigned.length === 0, unsigned.slice(0, 5).map((f) => path.relative(pgDir, f)).join(", "));
+
+// 서버만 보면 클라이언트가 전부 죽은 트리를 통과시킨다 (Phase 0 R-2b). env -i로 둘 다 부른다.
+for (const bin of ["postgres", "psql"]) {
+  const r = spawnSync("env", ["-i", path.join(pgDir, "bin", bin), "--version"], { encoding: "utf8" });
+  check(`env -i ${bin} --version runs from the bundle`, r.status === 0, (r.stdout || r.stderr || "").trim());
+}
+
 if (failures.length > 0) {
   console.error(`\n${failures.length} bundle hygiene check(s) failed.`);
   process.exit(1);
