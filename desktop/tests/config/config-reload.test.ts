@@ -4,7 +4,7 @@ import type { ApiEnv, DatabaseMode, LoadedConfig } from "../../src/config/config
 import { embedSpec } from "../../src/services/embed";
 import { externalPostgresSpec } from "../../src/services/postgres/service";
 import { buildSpecs, type SpecDeps } from "../../src/services/specs";
-import type { EmbedProbe } from "../../src/services/worker-discovery";
+import type { EmbedProbe } from "../../src/services/embed-probe";
 import type { LaunchContext } from "../../src/services/types";
 
 /**

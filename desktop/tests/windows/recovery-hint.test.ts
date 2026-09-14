@@ -7,11 +7,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CAUSES, CAUSE_IDS, causeIn, type CauseId } from "../../src/diagnostics/causes";
 import { DEGRADED_HINT, HINTS, hintForDetail, recoveryHint } from "../../src/windows/shell-hints";
 import { judgeAfterProbe } from "../../src/services/api";
-import { probeEmbedContract } from "../../src/services/worker-discovery";
+import { probeEmbedContract } from "../../src/services/embed-probe";
 import { embeddedPostgresSpec } from "../../src/services/postgres/service";
 import { PG_BINARY_NAMES, pgBinaries, pgLayout } from "../../src/services/postgres/layout";
 import { createSupervisor } from "../../src/services/supervisor";
-import { launchWithUv, workerSpec } from "../../src/services/worker";
+import { workerSpec } from "../../src/services/worker";
+import { launchWithUv } from "../../src/process/uv-launcher";
 import type { LaunchContext, ServiceId, ServiceSpec, ServiceStatus } from "../../src/services/types";
 
 const s = (over: Partial<ServiceStatus>): ServiceStatus => ({

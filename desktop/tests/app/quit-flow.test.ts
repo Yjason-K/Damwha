@@ -1,11 +1,12 @@
 import * as fs from "fs";
 import * as path from "path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CLOSE_WHILE_RECORDING,
   HANDSHAKE_TIMEOUT_MS,
   createFlowLatch,
   decideCloseEvent,
+  decideQuit,
   decideQuitEvent,
   graceExpiryPrompt,
   leftoverNotice,
@@ -713,5 +714,55 @@ describe("HANDSHAKE_TIMEOUT_MS", () => {
       feConstant("features/meeting/lib/live-recorder.ts", "DRAIN_TIMEOUT_MS") +
       stopPosts * feConstant("features/meeting/api/live.ts", "REQUEST_TIMEOUT_MS");
     expect(HANDSHAKE_TIMEOUT_MS).toBeGreaterThanOrEqual(budget);
+  });
+});
+
+describe("decideQuit", () => {
+  it("asks when a recording is in flight", async () => {
+    // 브리프 원문은 vi.fn(async () => true)였는데, decideQuit의 ask 시그니처가
+    // (message: string) => Promise<boolean>>라 인자가 없는 함수로 추론되면
+    // mock.calls[0][0] 인덱싱이 tsc(TS2493)에서 걸린다 — vitest는 esbuild로
+    // transpile만 하므로 안 잡히지만, lint가 커버하지 않는 tests/를 따로 타입
+    // 검사하면 드러난다. 파라미터 타입을 명시해 실제 시그니처와 맞춘다.
+    const ask = vi.fn(async (_message: string) => true);
+    const d = await decideQuit({ recording: true, analysing: false }, ask);
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(ask.mock.calls[0][0]).toMatch(/녹음/);
+    expect(d).toEqual({ quit: true, stopRecording: true });
+  });
+
+  it("asks when a job is running", async () => {
+    const ask = vi.fn(async (_message: string) => true);
+    const d = await decideQuit({ recording: false, analysing: true }, ask);
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(ask.mock.calls[0][0]).toMatch(/분석/);
+    expect(d).toEqual({ quit: true, stopRecording: false });
+  });
+
+  it("asks once, keeping BOTH promises, when both are in flight", async () => {
+    const ask = vi.fn(async (_message: string) => true);
+    await decideQuit({ recording: true, analysing: true }, ask);
+    expect(ask).toHaveBeenCalledTimes(1);
+    const message = ask.mock.calls[0][0];
+    expect(message).toMatch(/녹음/);
+    expect(message).toMatch(/분석/);
+    // 이름만 부르는 것으로는 부족하다. 둘 다 진행 중일 때 약속을 삼항으로 고르면 분석 쪽
+    // 문장이 통째로 사라지는데, /녹음/·/분석/만 보는 단정은 그 손실을 보지 못한다 —
+    // "녹음이 진행 중이에요, 분석이 진행 중이에요"에 이미 두 낱말이 다 들어 있기 때문이다.
+    // 사용자가 다시 큐에 들어간다는 보장을 가장 필요로 하는 경우가 바로 이 경우다.
+    expect(message).toMatch(/녹음을 먼저 안전하게 마무리합니다/);
+    expect(message).toMatch(/다시 큐에 넣습니다/);
+  });
+
+  it("does not ask when nothing is in flight", async () => {
+    const ask = vi.fn(async () => true);
+    const d = await decideQuit({ recording: false, analysing: false }, ask);
+    expect(ask).not.toHaveBeenCalled();
+    expect(d).toEqual({ quit: true, stopRecording: false });
+  });
+
+  it("cancels the quit when the user says no", async () => {
+    const d = await decideQuit({ recording: true, analysing: false }, async () => false);
+    expect(d.quit).toBe(false);
   });
 });

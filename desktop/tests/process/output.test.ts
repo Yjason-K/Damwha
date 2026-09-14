@@ -2,14 +2,14 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { makeSink, sinkTails } from "../../src/services/api-process";
+import { makeSink, sinkTails } from "../../src/process/output";
 
 const RED = "\x1b[31m";
 const RESET = "\x1b[39m";
 
 /** fs.WriteStream.write는 비동기라 close() 직후 바로 읽으면 아직 디스크에 없을 수 있다.
  *  실제 스트림 객체를 makeSink가 밖으로 안 내놓으므로 'finish'를 직접 못 걸고, 내용이
- *  나타날 때까지 짧게 폴링한다 — worker.ts:143의 stop() 폴링과 같은 방식이다. */
+ *  나타날 때까지 짧게 폴링한다 — uv-launcher.ts의 stop() 폴링과 같은 방식이다. */
 async function waitForContent(file: string, timeoutMs = 2_000): Promise<string> {
   const start = Date.now();
   for (;;) {
@@ -25,7 +25,7 @@ async function waitForContent(file: string, timeoutMs = 2_000): Promise<string> 
 }
 
 /**
- * launchDev·launchPackaged 둘 다 makeSink()로 청크를 쌓고 sinkTails()로 ApiHandle이
+ * launchDev·launchPackaged 둘 다 makeSink()로 청크를 쌓고 sinkTails()로 ProcessHandle이
  * 노출할 이름에 연결한다. 이전엔 그 두 런처가 이 매핑을 각자 복붙해 뒀는데, 리뷰
  * 한 번이 `stdoutTail: sink.stdoutTail`을 `sink.tail`로 되돌려도(원래 나던 버그 그대로)
  * 타입이 그대로 맞아 tsc도, judgeAfterProbe를 가짜 handle로 부르는 기존 테스트도
@@ -53,7 +53,7 @@ describe("makeSink — 청크를 스트림별로 분리해 쌓는다", () => {
   });
 });
 
-describe("sinkTails — ApiHandle 배선 고정", () => {
+describe("sinkTails — ProcessHandle 배선 고정", () => {
   it("stdout 청크는 stdoutTail()에, stderr 청크는 stderrTail()에 각각 간다", () => {
     // makeSink → sinkTails 순서는 launchDev·launchPackaged가 실제로 handle을 만들 때
     // 쓰는 것과 똑같다. 이 둘이 만나는 지점 하나만 지키면 두 런처의 배선이 함께

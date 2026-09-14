@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  listExternalWorkers,
-  parseWorkerProcesses,
-  probeEmbedContract,
-} from "../../src/services/worker-discovery";
+import { hasOnceChild, listExternalWorkers, parseWorkerProcesses } from "../../src/services/worker-discovery";
 
 // 2026-09-12 실측한 다섯 가지 모양을 한 fixture에 모았다. 첫 줄(4101)만 supervisor다.
 // 4102/4103이 핵심이다 — 둘 다 `-m damwha_worker`를 인자로 그대로 갖고 있고, 4103이
@@ -99,9 +95,9 @@ describe("parseWorkerProcesses", () => {
   });
 
   it("excludes any pid in ourPids, including the launcher root itself", () => {
-    // 이 함수는 우리 것/남의 것을 pid 집합으로만 가른다. main.ts의 descendantPids(root)는
-    // root를 반환값에 넣지 않으므로(main.ts:261-273) 호출부가 root를 손수 합쳐야 한다 —
-    // verifyOwnListener가 main.ts:287에서 하는 것과 같다. 그 의무를 여기서 못 박는다.
+    // 이 함수는 우리 것/남의 것을 pid 집합으로만 가른다. process-tree.ts의 descendantPids(root)는
+    // root를 반환값에 넣지 않으므로 호출부가 root를 손수 합쳐야 한다 —
+    // verifyOwnListener가 own-listener.ts에서 하는 것과 같다. 그 의무를 여기서 못 박는다.
     expect(parseWorkerProcesses(PS_APP_OWNED, new Set())).toEqual([5001]);
     expect(parseWorkerProcesses(PS_APP_OWNED, new Set([5001]))).toEqual([]);
     expect(parseWorkerProcesses(PS, new Set([4101]))).toEqual([]);
@@ -165,111 +161,34 @@ describe("listExternalWorkers", () => {
   });
 });
 
-describe("probeEmbedContract", () => {
-  const want = { model: "BAAI/bge-m3", dimension: 1024 };
+describe("hasOnceChild", () => {
+  const PS = [
+    "  PID COMMAND",
+    " 4242 /opt/uv run --directory /r/be/worker python -m damwha_worker",
+    " 4243 /opt/uv run python -m damwha_worker --once --job 17",
+    " 7777 /opt/uv run python -m damwha_worker --once --job 99",
+  ].join("\n");
 
-  it("matches when model and dimension agree", async () => {
-    const r = await probeEmbedContract("http://127.0.0.1:8100", want, async () => ({
-      status: 200,
-      json: async () => ({ model: "BAAI/bge-m3", dimension: 1024, vectors: [[0.1]] }),
-    }));
-    expect(r.kind).toBe("match");
+  it("finds the --once child of our own worker", () => {
+    expect(hasOnceChild(PS, new Set([4243]))).toBe(true);
   });
 
-  it("reports a mismatched model instead of adopting it", async () => {
-    // /health는 {"status":"ok"}만 돌려주므로 다른 모델도 200을 준다 (embed_service.py:24-25).
-    const r = await probeEmbedContract("http://127.0.0.1:8100", want, async () => ({
-      status: 200,
-      json: async () => ({ model: "other/model", dimension: 1024, vectors: [[0.1]] }),
-    }));
-    expect(r.kind).toBe("mismatch");
-    expect(r.kind === "mismatch" && r.detail).toContain("other/model");
+  it("ignores an external worker's --once child", () => {
+    // 7777도 --once지만 우리 자손이 아니다. 외부 worker가 하는 일은 우리가 소유하지
+    // 않으므로 우리 종료가 확인을 받을 이유가 없다 (스펙 §6.9). tree 검사를 지우면
+    // 이 단언이 무너진다 — 우리 트리에는 --once가 하나도 없는데 true가 된다.
+    expect(hasOnceChild(PS, new Set([4242]))).toBe(false);
   });
 
-  it("reports a mismatched dimension", async () => {
-    const r = await probeEmbedContract("http://127.0.0.1:8100", want, async () => ({
-      status: 200,
-      json: async () => ({ model: "BAAI/bge-m3", dimension: 768, vectors: [[0.1]] }),
-    }));
-    expect(r.kind).toBe("mismatch");
-    expect(r.kind === "mismatch" && r.detail).toContain("768");
+  it("does not match --once inside a longer word", () => {
+    // 낱말 경계가 없으면 --once-only나 경로 안의 --once가 걸려, 진행 중이 아닌 종료가
+    // 매번 확인을 묻는다.
+    const ps = ["  PID COMMAND", " 5150 python -m damwha_worker --once-only"].join("\n");
+    expect(hasOnceChild(ps, new Set([5150]))).toBe(false);
   });
 
-  it("treats a refused connection as absent", async () => {
-    const r = await probeEmbedContract("http://127.0.0.1:8100", want, async () => {
-      throw new Error("ECONNREFUSED");
-    });
-    expect(r.kind).toBe("absent");
-  });
-
-  it("treats a non-200 as absent", async () => {
-    const r = await probeEmbedContract("http://127.0.0.1:8100", want, async () => ({
-      status: 503,
-      json: async () => ({}),
-    }));
-    expect(r.kind).toBe("absent");
-  });
-
-  it("treats unparseable JSON as absent rather than throwing", async () => {
-    const r = await probeEmbedContract("http://127.0.0.1:8100", want, async () => ({
-      status: 200,
-      json: async () => {
-        throw new Error("not json");
-      },
-    }));
-    expect(r.kind).toBe("absent");
-  });
-
-  it("returns absent instead of hanging when the request never settles", async () => {
-    // AbortController만으로는 못 막는 경우다 — signal을 보지 않는 상대는 abort해도 안 끝난다.
-    // 여기서 매달리면 기동 순서 전체가 멈춰 앱이 아무 서비스도 못 띄운다.
-    const r = await probeEmbedContract(
-      "http://127.0.0.1:8100",
-      want,
-      () => new Promise<never>(() => {}),
-      10,
-    );
-    expect(r.kind).toBe("absent");
-  });
-
-  it("returns absent instead of hanging when the body never arrives", async () => {
-    // 헤더는 200으로 왔지만 본문이 안 오는 경우. res.json()에서 매달린다.
-    const r = await probeEmbedContract(
-      "http://127.0.0.1:8100",
-      want,
-      async () => ({ status: 200, json: () => new Promise<never>(() => {}) }),
-      10,
-    );
-    expect(r.kind).toBe("absent");
-  });
-
-  it("aborts the signal it handed the fetch when the timeout fires, and not otherwise", async () => {
-    // 매달림 안전성은 두 가지에 기대고 있다: (1) 내부 경주가 우리 쪽 판정을 끝내는 것,
-    // (2) 전역 fetch가 AbortSignal을 지켜 실제 요청을 정리하는 것. 주입한 fake로 (2)를
-    // 증명할 수는 없다 — 그건 Node의 몫이다. 대신 증명할 수 있는 우리 쪽 계약을 고정한다:
-    // 타임아웃이 울린 시점에 우리가 넘긴 signal이 abort되어 있어야 한다. 그러지 않으면
-    // 경주만 이기고 요청은 그대로 떠 있어, 매 프로브가 소켓을 하나씩 남긴다.
-    let captured: AbortSignal | undefined;
-    const timedOut = await probeEmbedContract(
-      "http://127.0.0.1:8100",
-      want,
-      (_url, init) => {
-        captured = init.signal;
-        return new Promise<never>(() => {});
-      },
-      10,
-    );
-    expect(timedOut.kind).toBe("absent");
-    expect(captured?.aborted).toBe(true);
-
-    // 성공 경로에서는 abort하지 않는다 — 이걸 같이 못 박지 않으면 위 단정이 공허해진다
-    // (늘 abort된 signal을 넘겨도 통과하니까). finally의 clearTimeout이 이걸 보장한다.
-    let onSuccess: AbortSignal | undefined;
-    const matched = await probeEmbedContract("http://127.0.0.1:8100", want, async (_url, init) => {
-      onSuccess = init.signal;
-      return { status: 200, json: async () => ({ model: want.model, dimension: want.dimension }) };
-    });
-    expect(matched.kind).toBe("match");
-    expect(onSuccess?.aborted).toBe(false);
+  it("survives a header-only or empty listing", () => {
+    expect(hasOnceChild("  PID COMMAND", new Set([4243]))).toBe(false);
+    expect(hasOnceChild("", new Set([4243]))).toBe(false);
   });
 });

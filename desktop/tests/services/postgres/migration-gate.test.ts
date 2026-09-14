@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ServiceFailure } from "../../../src/services/failure";
 import {
   backupStamp,
-  devMigrationRunner,
   KEEP_BACKUPS,
   parseStatusOutput,
   runMigrationGate,
@@ -316,26 +315,5 @@ describe("runner 실패의 원인 줄과 전체 로그 (스펙 §6.5-4)", () => 
     expect(logged).toHaveLength(401);
     expect(logged[399]).toBe("마이그레이션 러너 stderr: line 399");
     expect(logged[400]).toMatch(/50줄 더 생략/);
-  });
-});
-
-describe("devMigrationRunner", () => {
-  it("runs the same script as `pnpm be:migrate`, with a deadline only on --status", async () => {
-    const calls: Array<{ bin: string; args: readonly string[]; opts: ToolOptions }> = [];
-    const r = devMigrationRunner({
-      repoRoot: "/r",
-      env: { DATABASE_URL: "postgresql://damwha@/damwha?host=%2Fx" },
-      runTool: async (bin, args, opts) => {
-        calls.push({ bin, args, opts });
-        return ok();
-      },
-    });
-    await r.status(signal);
-    await r.run(signal);
-    expect(calls[0]).toMatchObject({ bin: "pnpm", args: ["--filter", "damwha-be", "run", "migrate", "--", "--status"] });
-    expect(calls[0].opts).toMatchObject({ cwd: "/r", deadlineMs: 60_000, signal });
-    expect(calls[1].args).toEqual(["--filter", "damwha-be", "run", "migrate"]);
-    expect(calls[1].opts.deadlineMs).toBeUndefined();
-    expect(calls[1].opts.env.DATABASE_URL).toContain("host=");
   });
 });

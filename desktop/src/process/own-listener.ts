@@ -11,7 +11,7 @@
 export interface OwnListenerDeps {
   /** 그 포트에서 실제로 LISTEN 중인 pid들 (main.ts의 lsof -sTCP:LISTEN). */
   listeners(port: number): Promise<number[]>;
-  /** rootPid의 자손. **root 자신은 들어 있지 않다** (main.ts의 descendantPids). */
+  /** rootPid의 자손. **root 자신은 들어 있지 않다** (process-tree.ts의 descendantPids). */
   descendants(rootPid: number): Promise<Set<number>>;
 }
 

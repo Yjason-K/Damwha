@@ -12,7 +12,7 @@ import {
   READY_TIMEOUT_MS,
   waitForReady,
 } from "./process/readiness";
-import type { ApiHandle } from "./services/api-process";
+import type { ProcessHandle } from "./process/handle";
 import { launchVite } from "./dev/vite-process";
 import { lastMeaningfulLine } from "./diagnostics/stderr";
 import { createServicesWindow, showStatus, type ShellStatus } from "./windows/shell-window";
@@ -31,28 +31,23 @@ import {
   runQuitFlow,
   type QuitNotice,
 } from "./app/quit-flow";
-import {
-  askIsRecording,
-  captureDescendants,
-  hasOnceChild,
-  stopWorkerProcess,
-} from "./services/worker-shutdown";
+import { captureDescendants, stopWorkerProcess } from "./services/worker-shutdown";
+import { askIsRecording } from "./windows/recording-bridge";
 import { installMenu } from "./windows/menu";
 import { createSupervisor } from "./services/supervisor";
 import { verifyOwnListener as checkOwnListener } from "./process/own-listener";
+import { descendantPids, listenerPids } from "./process/process-tree";
 import { buildSpecs } from "./services/specs";
-import {
-  listExternalWorkers as scanExternalWorkers,
-  probeEmbedContract,
-} from "./services/worker-discovery";
+import { hasOnceChild, listExternalWorkers as scanExternalWorkers } from "./services/worker-discovery";
+import { probeEmbedContract } from "./services/embed-probe";
 import { findExecutable, searchDirs } from "./process/executables";
 import { createMigrationCheckWatch } from "./services/api";
 import { isRepoRoot } from "./config/repo-root";
 import { rotateIfNeeded } from "./diagnostics/logs";
 import { freePort } from "./process/ports";
 import { mayAutoRetry } from "./app/retry-policy";
-import { packagedMigrationRunner } from "./services/postgres/migration-runner";
-import { devMigrationRunner, runMigrationGate } from "./services/postgres/migration-gate";
+import { devMigrationRunner, packagedMigrationRunner } from "./services/postgres/migration-runner";
+import { runMigrationGate } from "./services/postgres/migration-gate";
 import { DB_NAME, DB_SUPERUSER, pgBinaries, pgLayout } from "./services/postgres/layout";
 import { psInfo, spawnPostmaster, stopOrphanPostmaster } from "./services/postgres/handle";
 import { embeddedPostgresSpec, externalPostgresSpec, PG_FAST_GRACE_MS, PG_IMMEDIATE_GRACE_MS } from "./services/postgres/service";
@@ -103,7 +98,7 @@ const VITE_ORIGIN = "http://localhost:5173";
 
 let win: BrowserWindow | null = null;
 /** dev에서만 쓰인다. packaged는 API 자신의 origin을 로드하므로 Vite가 없다. */
-let vite: ApiHandle | null = null;
+let vite: ProcessHandle | null = null;
 /**
  * 마지막으로 Vite에 준 API base. VITE_API_BASE_URL은 Vite 기동 시점에 고정되므로,
  * 포트 폴백으로 API origin이 바뀌면 이 값과 비교해 Vite를 재기동할지 정한다.
@@ -371,7 +366,7 @@ async function captureWorkerDescendants(): Promise<void> {
  * 분석 중인가 — 앱이 소유한 worker에 `--once` 자식이 있는가. 새 API 엔드포인트를 만들지
  * 않는다. 외부 worker가 하는 일은 우리가 소유하지 않으므로 판정 대상이 아니다 (스펙 §6.9).
  *
- * 판정 자체는 services/worker-shutdown.ts의 hasOnceChild에 있다. 여기 남는 것은 ps 왕복뿐이다.
+ * 판정 자체는 services/worker-discovery.ts의 hasOnceChild에 있다. 여기 남는 것은 ps 왕복뿐이다.
  */
 async function isAnalysing(): Promise<boolean> {
   const pid = ownWorkerHandle()?.pid;
@@ -396,7 +391,7 @@ async function isAnalysing(): Promise<boolean> {
 async function isRecordingIn(target: BrowserWindow): Promise<boolean> {
   if (target.isDestroyed()) return false;
   // 상한이 없으면 봉쇄된 렌더러 하나가 ⌘Q와 ⌘W를 통째로 막는다. 그 판정(거부는 "아니오",
-  // 시간 초과는 "예")은 services/worker-shutdown.ts의 askIsRecording에 있다 — 여기 두면 부를 수가 없다.
+  // 시간 초과는 "예")은 windows/recording-bridge.ts의 askIsRecording에 있다 — 여기 두면 부를 수가 없다.
   return askIsRecording(
     () => target.webContents.executeJavaScript("Boolean(window.__damwha_desktop?.isRecording?.())"),
     {
@@ -637,56 +632,6 @@ function isPortOccupied(port: number): Promise<boolean> {
     socket.once("error", () => settle(false));
     socket.setTimeout(PROBE_TIMEOUT_MS, () => settle(false));
   });
-}
-
-/** `lsof -sTCP:LISTEN`으로 그 포트에서 실제로 LISTEN 중인 pid들을 얻는다. 매치가
- *  없으면 lsof가 exit 1을 내는데, 이는 "리스너 없음"과 같은 뜻이라 빈 배열로 다룬다. */
-async function listenerPids(port: number): Promise<number[]> {
-  try {
-    const { stdout } = await execFileAsync(
-      "/usr/sbin/lsof",
-      ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"],
-      { timeout: 1_000 },
-    );
-    return stdout
-      .split("\n")
-      .map((line) => Number(line.trim()))
-      .filter((pid) => Number.isInteger(pid) && pid > 0);
-  } catch {
-    return [];
-  }
-}
-
-/**
- * rootPid의 모든 자손 pid를 `ps`의 pid/ppid 목록에서 BFS로 모은다. 개발 모드의 자식은
- * pnpm → nest(CLI) → node(dist/main) 체인이라, 실제로 포트를 bind하는 것은 추적 중인
- * pid의 손자다 — 직계 비교만으로는 dev를 오판한다(실측: Fix round 1 보고서).
- *
- * **root 자신은 결과에 들어 있지 않다.** 부르는 쪽이 합쳐야 한다 — verifyOwnListener는
- * `pid === childPid || …`로, listExternalWorkers는 `ours.add(pid)`로 그렇게 한다.
- * export하는 이유는 Task 13의 stopWorkerProcess가 같은 조회를 쓰기 때문이다.
- */
-export async function descendantPids(rootPid: number): Promise<Set<number>> {
-  const { stdout } = await execFileAsync("/bin/ps", ["-axo", "pid,ppid"], { timeout: 1_000 });
-  const rows = stdout
-    .split("\n")
-    .slice(1)
-    .map((line) => line.trim().split(/\s+/).map(Number))
-    .filter((row): row is [number, number] => row.length === 2 && row.every(Number.isInteger));
-
-  const result = new Set<number>();
-  let frontier = [rootPid];
-  while (frontier.length > 0) {
-    const next: number[] = [];
-    for (const [pid, ppid] of rows) {
-      if (frontier.includes(ppid) && !result.has(pid)) {
-        result.add(pid);
-        next.push(pid);
-      }
-    }
-    frontier = next;
-  }
-  return result;
 }
 
 /**

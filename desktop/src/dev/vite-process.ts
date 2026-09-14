@@ -1,5 +1,5 @@
 import { spawn } from "child_process";
-import type { ApiHandle } from "../services/api-process";
+import type { ProcessHandle } from "../process/handle";
 
 export interface ViteOptions {
   /** 저장소 루트 */
@@ -12,7 +12,7 @@ export interface ViteOptions {
  * Vite는 셸 환경변수가 .env 파일을 이긴다. 그래서 API 포트가 폴백돼도 렌더러가
  * 옳은 주소를 본다 (스펙 §11).
  */
-export function launchVite(options: ViteOptions): ApiHandle {
+export function launchVite(options: ViteOptions): ProcessHandle {
   const listeners: Array<(code: number) => void> = [];
   let code: number | null = null;
   let tail = "";
@@ -67,7 +67,7 @@ export function launchVite(options: ViteOptions): ApiHandle {
     stderrTail: () => tail,
     // Vite의 stdout은 쌓지 않고 곧장 process.stdout으로 흘려보낸다(위 참고) — 이
     // 핸들을 마이그레이션 게이트처럼 stdout을 읽는 판정에 쓸 일이 없어 축적할 이유가
-    // 없다. ApiHandle 타입만 맞춘다.
+    // 없다. ProcessHandle 타입만 맞춘다.
     stdoutTail: () => "",
     exitCode: () => code,
     onExit(listener) {

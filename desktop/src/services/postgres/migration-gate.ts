@@ -181,13 +181,3 @@ export function runMigrationGate(deps: MigrationGateDeps, signal: AbortSignal): 
     return { kind: "migrated", applied: status.pending, backup: backupPath };
   });
 }
-
-/** dev — `pnpm be:migrate`와 같은 스크립트(ts-node). cwd가 be/라 dotenv가 be/.env를 읽지만 주입한 env를 덮지 않는다. */
-export function devMigrationRunner(o: { repoRoot: string; env: Record<string, string>; runTool: MigrationGateDeps["runTool"] }): MigrationRunner {
-  const base = ["--filter", "damwha-be", "run", "migrate"];
-  return {
-    status: (signal) => o.runTool("pnpm", [...base, "--", "--status"], { cwd: o.repoRoot, env: o.env, deadlineMs: MIGRATION_STATUS_DEADLINE_MS, signal }),
-    // 실행에는 deadline을 두지 않는다 — 데이터 크기에 비례하고, 멈추면 종료 신호가 끝낸다.
-    run: (signal) => o.runTool("pnpm", base, { cwd: o.repoRoot, env: o.env, signal }),
-  };
-}

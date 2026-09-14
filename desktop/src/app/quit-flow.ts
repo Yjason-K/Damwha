@@ -1,12 +1,46 @@
-import {
-  decideQuit,
-  runHandshake,
-  runWithin,
-  STOP_DETAIL,
-  type InFlight,
-  type QuitDecision,
-} from "../services/worker-shutdown";
 import type { StopOutcome } from "../services/types";
+import { STOP_DETAIL } from "../services/worker-shutdown";
+import { runHandshake, runWithin } from "../windows/recording-bridge";
+
+export interface InFlight {
+  recording: boolean;
+  analysing: boolean;
+}
+
+export interface QuitDecision {
+  quit: boolean;
+  /** 종료 전에 렌더러의 라이브 중지를 완주시켜야 하는가. */
+  stopRecording: boolean;
+}
+
+/**
+ * 녹음·분석 둘 다 확인을 받는다. 한 번만 묻는다 — 둘이 동시에 진행 중이라고 대화상자를
+ * 두 번 띄우면 사용자는 두 번째가 무엇에 대한 질문인지 모른다.
+ */
+export async function decideQuit(
+  state: InFlight,
+  ask: (message: string) => Promise<boolean>,
+): Promise<QuitDecision> {
+  if (!state.recording && !state.analysing) return { quit: true, stopRecording: false };
+
+  // 무엇이 진행 중인지와, 각각에 무엇을 약속하는지를 따로 모은다. 약속을 삼항으로 고르면
+  // 둘 다 진행 중일 때 한쪽이 통째로 사라진다 — 녹음이 있으면 분석 문장이 밀려나, 정작
+  // "분석은 다시 큐에 넣는다"는 보장이 가장 필요한 상황에서 그 말을 하지 않게 된다.
+  // 낱말 조사는 "녹음"·"분석" 둘 다 받침이 있어 "과"/"이"로 고정이다.
+  const nouns: string[] = [];
+  const promises: string[] = [];
+  if (state.recording) {
+    nouns.push("녹음");
+    promises.push("종료하면 녹음을 먼저 안전하게 마무리합니다.");
+  }
+  if (state.analysing) {
+    nouns.push("분석");
+    promises.push("진행 중인 분석은 안전한 지점에서 멈추고 다시 큐에 넣습니다.");
+  }
+
+  const ok = await ask(`${nouns.join("과 ")}이 진행 중이에요. ${promises.join(" ")} 종료할까요?`);
+  return { quit: ok, stopRecording: ok && state.recording };
+}
 
 /**
  * ⌘Q·메뉴 종료가 실제로 무엇을 **어떤 순서로** 하는가.

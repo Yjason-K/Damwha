@@ -1,5 +1,5 @@
 import { execFile, spawn } from "child_process";
-import { makeSink, sinkTails } from "../api-process";
+import { makeSink, sinkTails } from "../../process/output";
 import { pgToolEnv, PG_SOCKET_PORT, type PgBinaries, type PgLayout } from "./layout";
 import type { ProcessInfo } from "./pidfile";
 import type { SpawnFn } from "../../process/tool-runner";

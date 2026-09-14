@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { launchWithUv } from "../../src/services/worker";
+import { launchWithUv } from "../../src/process/uv-launcher";
 import type { LaunchContext } from "../../src/services/types";
 import type { SpawnOptions } from "child_process";
 import { fakeChild } from "../fake-child";

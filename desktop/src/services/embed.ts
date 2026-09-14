@@ -1,6 +1,6 @@
 import { exitCauseBlock } from "../diagnostics/stderr";
-import type { EmbedProbe } from "./worker-discovery";
-import { launchWithUv } from "./worker";
+import { launchWithUv } from "../process/uv-launcher";
+import type { EmbedProbe } from "./embed-probe";
 import type { LaunchContext, ReadinessResult, ServiceSpec } from "./types";
 
 export interface EmbedDeps {

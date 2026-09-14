@@ -1,4 +1,4 @@
-import type { ApiHandle } from "./api-process";
+import type { ProcessHandle } from "../process/handle";
 import type { ApiEnv } from "../config/config";
 
 export type ServiceId = "postgres" | "api" | "embed" | "worker";
@@ -16,8 +16,8 @@ export type HealthState = "unknown" | "ok" | "degraded";
  */
 export type Recovery = "auto" | "manual";
 
-/** Phase 1의 ApiHandle이 이미 필요한 것을 다 갖고 있다. 이름만 넓힌다. */
-export type ServiceHandle = ApiHandle;
+/** 서비스의 핸들은 공통 프로세스 핸들 그대로다 (process/handle.ts). */
+export type ServiceHandle = ProcessHandle;
 
 export interface ServiceStatus {
   id: ServiceId;
