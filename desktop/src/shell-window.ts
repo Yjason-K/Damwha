@@ -1,6 +1,7 @@
 import { app, BrowserWindow } from "electron";
 import * as path from "path";
 import { applyNavigationBoundary } from "./permissions";
+import { isSameShellPage } from "./shell-url";
 
 // electron을 값으로 import하는 이 파일은 vitest가 못 불러온다. lastMeaningfulLine()의
 // 순수 로직은 desktop/src/stderr.ts에 있다 — 여기서는 기존 호출부를 위해 재노출만 한다.
@@ -26,7 +27,19 @@ export function showStatus(win: BrowserWindow, status: ShellStatus): Promise<voi
   if (status.detail !== undefined) query.detail = status.detail;
   if (status.retryInSeconds !== undefined) query.retryInSeconds = String(status.retryInSeconds);
   if (status.logPath !== undefined) query.logPath = status.logPath;
-  return win.loadFile(shellFileOf("status.html"), { query });
+  const file = shellFileOf("status.html");
+  // 건강 검사(10초 간격)처럼 값이 하나도 안 바뀐 갱신은 loadFile을 건너뛴다 — 안 그러면
+  // 상태가 그대로인데도 매번 페이지를 통째로 다시 로드해 실패 화면이 깜빡인다. 의심스러우면
+  // (창이 파괴됐거나 getURL이 던지면) 그냥 아래로 흘러 다시 그린다 — isSameShellPage는 그런
+  // 경우를 안 보고 넘겨받은 두 URL만 비교한다.
+  try {
+    if (!win.isDestroyed() && isSameShellPage(win.webContents.getURL(), file, query)) {
+      return Promise.resolve();
+    }
+  } catch {
+    // 의심스러우면 다시 그린다 — 아래 loadFile로 흘러간다.
+  }
+  return win.loadFile(file, { query });
 }
 
 /**
