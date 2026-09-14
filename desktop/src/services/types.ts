@@ -9,6 +9,13 @@ export type ProcessState = "stopped" | "starting" | "running" | "failed";
  *  끊겨도 죽지 않고 503을 주므로, 프로세스 축만 보는 감독자는 정상으로 오판한다. */
 export type HealthState = "unknown" | "ok" | "degraded";
 
+/**
+ * 실패를 사람 손 없이 다시 시도해도 되는가 (Phase 3 스펙 §6.7). 없으면 auto로 읽는다 — Phase 2의 어댑터는 이 값을
+ * 붙이지 않고, 그 복구 경로(Docker를 켜면 자동 재시도가 진입시키던 것 같은)를 이 추가가 조용히 끄면 안 된다.
+ * manual은 마이그레이션 실패·페어링 거부처럼 같은 시도를 반복해도 결과가 같고, 반복이 해로운(백업이 쌓이는) 원인이다.
+ */
+export type Recovery = "auto" | "manual";
+
 /** Phase 1의 ApiHandle이 이미 필요한 것을 다 갖고 있다. 이름만 넓힌다. */
 export type ServiceHandle = ApiHandle;
 
@@ -21,6 +28,8 @@ export interface ServiceStatus {
   /** 앱이 이 서비스를 소유하는가. 외부를 채택했거나 안 띄웠으면 false. */
   owned: boolean;
   restarts: number;
+  /** failed일 때만 뜻이 있다. 감독자가 실패의 부류를 여기로 옮기고, 다시 뜨거나 ready가 되면 지운다. */
+  recovery?: Recovery;
 }
 
 export interface LaunchContext {
@@ -29,9 +38,15 @@ export interface LaunchContext {
   packaged: boolean;
   /** config.json에서 온 값 + 어댑터들의 prepare()가 기여한 값. */
   env: ApiEnv;
-  bins: { uv: string | null; docker: string | null };
+  bins: { uv: string | null };
   searchDirs: readonly string[];
   logFile(id: ServiceId): string;
+  /**
+   * 기동 중단 신호. 감독자가 붙이고 stopAll 첫머리에서 abort한다 (Phase 3 스펙 §6.4). 감독자의 준비 유예는 launch()가
+   * 반환한 뒤에야 시작하고 stopAll은 진행 중인 기동을 끝까지 기다리므로, launch() 안의 도구(initdb·pg_dump·마이그레이션
+   * 러너)가 멈추면 이 신호 없이는 ⌘Q도 멈춘다.
+   */
+  signal: AbortSignal;
 }
 
 export interface LaunchResult {
@@ -54,7 +69,7 @@ export type ReadinessResult =
   | { kind: "ready" }
   | { kind: "not-ready" }
   | { kind: "degraded"; detail: string }
-  | { kind: "failed"; detail: string };
+  | { kind: "failed"; detail: string; recovery?: Recovery };
 
 export interface StopPlan {
   graceMs: number;

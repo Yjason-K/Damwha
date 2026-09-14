@@ -26,9 +26,10 @@ function ctx(over: Partial<LaunchContext> = {}): LaunchContext {
     userData: "/u",
     packaged: true,
     env: { DATABASE_URL: "postgres://x", STORAGE_ROOT: "/u/storage" },
-    bins: { uv: "/opt/homebrew/bin/uv", docker: "/usr/local/bin/docker" },
+    bins: { uv: "/opt/homebrew/bin/uv" },
     searchDirs: ["/opt/homebrew/bin"],
     logFile: (id) => `/u/logs/${id}.log`,
+    signal: new AbortController().signal,
     ...over,
   };
 }
@@ -192,7 +193,7 @@ describe("workerSpec", () => {
 
   it("refuses to launch without uv and names what is missing (the fix is recoveryHint's)", async () => {
     const spec = workerSpec(deps() as never);
-    await expect(spec.launch(ctx({ bins: { uv: null, docker: null } }))).rejects.toThrow(/uv/);
+    await expect(spec.launch(ctx({ bins: { uv: null } }))).rejects.toThrow(/uv/);
   });
 
   it("refuses to launch when the worker .env is missing", async () => {

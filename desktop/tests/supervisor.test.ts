@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { judgeAfterProbe } from "../src/services/api";
+import { ServiceFailure } from "../src/services/failure";
 import { createSupervisor, orderOf } from "../src/services/supervisor";
 import type {
   LaunchContext,
@@ -15,9 +16,10 @@ function ctx(): LaunchContext {
     userData: "/u",
     packaged: false,
     env: {},
-    bins: { uv: "/opt/homebrew/bin/uv", docker: "/usr/local/bin/docker" },
+    bins: { uv: "/opt/homebrew/bin/uv" },
     searchDirs: ["/opt/homebrew/bin"],
     logFile: (id) => `/u/logs/${id}.log`,
+    signal: new AbortController().signal,
   };
 }
 
@@ -1223,5 +1225,107 @@ describe("createSupervisor — 재시도와 stand-down (Task 14 Q1)", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(detects).toEqual({ postgres: 1, api: 1 });
     expect(launches).toEqual({ postgres: 0, api: 1 });
+  });
+});
+
+describe("supervisor — recovery class and launch abort (Phase 3)", () => {
+  it("copies a manual class from a launch failure onto the status", async () => {
+    const s = createSupervisor(
+      [spec("postgres", { launch: async () => { throw new ServiceFailure("짝이 맞지 않아요", "manual"); } })],
+      ctx(),
+      {},
+    );
+    await s.start();
+    expect(s.statuses()[0]).toMatchObject({ process: "failed", recovery: "manual", detail: "짝이 맞지 않아요" });
+  });
+
+  it("copies a manual class from a failed readiness onto the status", async () => {
+    const s = createSupervisor(
+      [spec("api", { readiness: async () => ({ kind: "failed", detail: "마이그레이션 실패", recovery: "manual" }) })],
+      ctx(),
+      {},
+    );
+    await s.start();
+    expect(s.statuses()[0]).toMatchObject({ process: "failed", recovery: "manual" });
+  });
+
+  it("leaves the class empty for an untagged failure — Phase 2 adapters keep auto", async () => {
+    const s = createSupervisor(
+      [spec("api", { launch: async () => { throw new Error("spawn ENOENT"); } })],
+      ctx(),
+      {},
+    );
+    await s.start();
+    expect(s.statuses()[0].recovery).toBeUndefined();
+  });
+
+  it("clears the class when the service is tried again", async () => {
+    let first = true;
+    const s = createSupervisor(
+      [
+        spec("postgres", {
+          launch: async () => {
+            if (first) {
+              first = false;
+              throw new ServiceFailure("거부", "manual");
+            }
+            return { handle: null, owned: true };
+          },
+        }),
+      ],
+      ctx(),
+      {},
+    );
+    await s.start();
+    expect(s.statuses()[0].recovery).toBe("manual");
+    await s.retry();
+    expect(s.statuses()[0]).toMatchObject({ process: "running", recovery: undefined });
+  });
+
+  it("does not schedule a restart for a manual readiness failure of a background service", async () => {
+    // 재시작해도 같은 판정이 나오고(짝이 맞지 않는다), 반복이 도구를 또 부른다.
+    const log: string[] = [];
+    const s = createSupervisor(
+      [
+        spec("embed", {
+          gate: false,
+          readiness: async () => ({ kind: "failed", detail: "거부", recovery: "manual" }),
+          restart: { maxAttempts: 3, backoffMs: [1, 1, 1] },
+        }),
+      ],
+      ctx(),
+      { log: (l) => void log.push(l) },
+    );
+    await s.start();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(s.statuses()[0]).toMatchObject({ process: "failed", restarts: 0 });
+    expect(log.some((l) => l.includes("재시작"))).toBe(false);
+  });
+
+  it("aborts ctx.signal at the start of stopAll so a hung launch() cannot hold ⌘Q", async () => {
+    // 클로저 안에서 대입하는 let은 TS가 null로 좁혀 버린다. 상자에 담는다.
+    const box: { signal?: AbortSignal } = {};
+    const s = createSupervisor(
+      [
+        spec("postgres", {
+          launch: (c) =>
+            new Promise<LaunchResult>((_, reject) => {
+              box.signal = c.signal;
+              c.signal.addEventListener("abort", () => reject(new ServiceFailure("중단됨", "manual")));
+            }),
+        }),
+      ],
+      ctx(),
+      {},
+    );
+    const starting = s.start();
+    await new Promise((r) => setTimeout(r, 10));
+    const stopped = await Promise.race([
+      s.stopAll({ graceMs: 10 }).then(() => "stopped"),
+      new Promise((r) => setTimeout(() => r("hung"), 1_000)),
+    ]);
+    expect(stopped).toBe("stopped");
+    expect(box.signal?.aborted).toBe(true);
+    await starting;
   });
 });

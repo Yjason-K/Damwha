@@ -274,9 +274,10 @@ describe("status.html", () => {
       userData: "/u",
       packaged: true,
       env: {},
-      bins: { uv: null, docker: "/nowhere/docker" },
+      bins: { uv: null },
       searchDirs: [],
       logFile: (id) => `/u/logs/${id}.log`,
+      signal: new AbortController().signal,
     };
     const screenFor = async (stderr: string) => {
       const reason = await postgresSpec(async () => ({ stdout: "", stderr, code: 1 }))

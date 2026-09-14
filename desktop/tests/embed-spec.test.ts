@@ -9,9 +9,10 @@ function ctx(env: Record<string, string> = {}): LaunchContext {
     userData: "/u",
     packaged: true,
     env: { EMBED_SERVICE_HOST: "127.0.0.1", EMBED_SERVICE_PORT: "8100", ...env },
-    bins: { uv: "/opt/homebrew/bin/uv", docker: null },
+    bins: { uv: "/opt/homebrew/bin/uv" },
     searchDirs: [],
     logFile: (id) => `/u/logs/${id}.log`,
+    signal: new AbortController().signal,
   };
 }
 
@@ -97,7 +98,7 @@ describe("embedSpec shape", () => {
   it("refuses to launch without uv", async () => {
     const spec = embedSpec({ probe: async () => ({ kind: "absent" }), freePort: async () => 8100 });
     await expect(
-      spec.launch({ ...ctx(), bins: { uv: null, docker: null } }),
+      spec.launch({ ...ctx(), bins: { uv: null } }),
     ).rejects.toThrow(/uv/);
   });
 });

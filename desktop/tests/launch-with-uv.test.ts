@@ -22,9 +22,10 @@ function ctx(over: Partial<LaunchContext> = {}): LaunchContext {
     userData: "/u",
     packaged: true,
     env: {},
-    bins: { uv: "/opt/homebrew/bin/uv", docker: null },
+    bins: { uv: "/opt/homebrew/bin/uv" },
     searchDirs: [],
     logFile: (id) => path.join(tmpDir, `${id}.log`),
+    signal: new AbortController().signal,
     ...over,
   } as LaunchContext;
 }

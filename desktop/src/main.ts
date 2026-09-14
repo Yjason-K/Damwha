@@ -135,7 +135,7 @@ let supervisor: ReturnType<typeof createSupervisor> | null = null;
  * 읽어 ctx.env에 얹을 때 "파일에서 온 값"과 "prepare()가 옮긴 값"을 가르는 기준이 baseline이다
  * (config.ts의 refreshEnv).
  */
-let launchCtx: { ctx: LaunchContext; baseline: ApiEnv } | null = null;
+let launchCtx: { ctx: Omit<LaunchContext, "signal">; baseline: ApiEnv } | null = null;
 /**
  * "이 값은 앱을 다시 켜야 바뀌어요" 안내. 재적용기가 매번 다시 계산하므로 어긋남이 풀리면
  * 저절로 null이 된다. 화면이 이것을 말하지 않으면 사용자는 자기 수정이 왜 안 먹는지 알 길이
@@ -950,7 +950,7 @@ function announceRestartNotice(mine: number, notice: string): void {
  * 한 번만 적는가)은 config-reload.ts에 있다 — 여기 두면 어떤 테스트도 그것을 부를 수 없고,
  * 실제로 그 자리에 있는 동안 결함 둘이 그 안에서 났다 (재리뷰 §4-1·§4-2).
  *
- * 자식 env만 다시 읽는다. ctx.bins(uv·docker)와 repoRoot는 여기서 갱신해도 소용이 없다 —
+ * 자식 env만 다시 읽는다. ctx.bins(uv)와 repoRoot는 여기서 갱신해도 소용이 없다 —
  * postgresSpec은 docker 경로를 클로저로 이미 붙잡고 있어 ctx를 고쳐도 옛 값을 쓴다. 그 둘을
  * 반영하려면 감독자를 다시 만들어야 하고, 그것은 첫 감독자가 쥔 자식 셋의 유일한 참조를
  * 버리는 일이라 P2-C4가 금지한다. 그러므로 실패 화면의 "값을 고치면 다시 시도합니다"가 참인
@@ -1013,12 +1013,12 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
   // 고치는 방법(설치 · DOCKER_BIN)은 reportFailure가 failureDetail로 붙인다.
   if (docker === null) throw new Error(CAUSES.dockerMissing.text);
 
-  const ctx: LaunchContext = {
+  const ctx: Omit<LaunchContext, "signal"> = {
     repoRoot: resolved,
     userData,
     packaged: app.isPackaged,
     env: cfg.env,
-    bins: { uv, docker },
+    bins: { uv },
     searchDirs: dirs,
     logFile: logPathOf,
   };

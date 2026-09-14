@@ -206,9 +206,10 @@ describe("recoveryHint — 실제 어댑터가 낸 원인에서", () => {
     userData: "/u",
     packaged: true,
     env: {},
-    bins: { uv: "/opt/homebrew/bin/uv", docker: "/usr/local/bin/docker" },
+    bins: { uv: "/opt/homebrew/bin/uv" },
     searchDirs: [],
     logFile: (id) => `/u/logs/${id}.log`,
+    signal: new AbortController().signal,
     ...over,
   });
 
@@ -234,7 +235,7 @@ describe("recoveryHint — 실제 어댑터가 낸 원인에서", () => {
 
   it("worker: uv missing", async () => {
     const detail = await thrown(
-      workerSpec({ listExternal: async () => [] }).launch(ctx({ bins: { uv: null, docker: null } })),
+      workerSpec({ listExternal: async () => [] }).launch(ctx({ bins: { uv: null } })),
     );
     expect(recoveryHint(s({ id: "worker", detail }))).toBe(HINTS.uvMissing);
   });
@@ -442,7 +443,7 @@ describe("recoveryHint — 실제 어댑터가 낸 원인에서", () => {
       setTimeout(() => child.emit("error", Object.assign(new Error("spawn /nowhere/uv ENOENT"), { code: "ENOENT" })), 0);
       return child;
     };
-    const launchCtx = ctx({ bins: { uv: "/nowhere/uv", docker: null }, logFile: (id) => path.join(dir, `${id}.log`) });
+    const launchCtx = ctx({ bins: { uv: "/nowhere/uv" }, logFile: (id) => path.join(dir, `${id}.log`) });
     const sup = createSupervisor(
       [workerOnly({ launch: async (c) => launchWithUv({ ctx: c, args: ["x"], logId: "worker", spawnFn }) })],
       launchCtx,
@@ -478,9 +479,10 @@ describe("recoveryHint — DOCKER_BIN이 가리키는 곳에 파일이 없을 �
         userData: "/u",
         packaged: true,
         env: {},
-        bins: { uv: null, docker: "/nowhere/docker" },
+        bins: { uv: null },
         searchDirs: [],
         logFile: (id) => `/u/logs/${id}.log`,
+        signal: new AbortController().signal,
       });
     } catch (err) {
       detail = (err as Error).message;

@@ -12,9 +12,10 @@ function ctx(): LaunchContext {
     userData: "/u",
     packaged: true,
     env: {},
-    bins: { uv: "/opt/homebrew/bin/uv", docker: "/usr/local/bin/docker" },
+    bins: { uv: "/opt/homebrew/bin/uv" },
     searchDirs: [],
     logFile: (id) => `/u/logs/${id}.log`,
+    signal: new AbortController().signal,
   };
 }
 

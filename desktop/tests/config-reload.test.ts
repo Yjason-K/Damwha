@@ -191,9 +191,10 @@ function recordingCtx(env: Record<string, string>): { ctx: LaunchContext; read: 
       userData: "/u",
       packaged: true,
       env: proxy,
-      bins: { uv: "/opt/homebrew/bin/uv", docker: null },
+      bins: { uv: "/opt/homebrew/bin/uv" },
       searchDirs: [],
       logFile: (id) => `/u/logs/${id}.log`,
+      signal: new AbortController().signal,
     },
     read,
   };
