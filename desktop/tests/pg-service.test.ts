@@ -172,6 +172,10 @@ describe("embeddedPostgresSpec.launch — first run", () => {
     expect(fs.existsSync(t.layout.marker)).toBe(false);
     expect(fs.readdirSync(t.layout.dataDir)).toEqual([]);
     expect(t.handles).toHaveLength(0);
+    // 스펙 §5는 앱이 지우는 넷 중 하나(앱이 만든 initdb 임시 디렉터리)마다 supervisor.log에
+    // 남기라고 한다 — 지웠다는 사실 자체가 조용히 사라지면 안 된다.
+    const tmp = t.world.calls[0].args[t.world.calls[0].args.indexOf("-D") + 1];
+    expect(t.log.some((l) => l.includes("실패한 initdb 임시 디렉터리를 지웠다") && l.includes(tmp))).toBe(true);
   });
 
   it("clears a previous run's initdb leftovers but never follows a symlink with that name", async () => {

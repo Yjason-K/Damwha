@@ -771,6 +771,10 @@ function servicesViewNow() {
     configWarning,
     externalDatabase: mode?.kind === "external",
     debugCommand: mode?.kind === "embedded" ? debugCommand() : null,
+    // 스펙 §6.7 — 상태 창의 postgres 로그 참조는 logs/postgres/ 폴더를 가리킨다. row.log는
+    // logPathOf("postgres")(기동 싱크) 그대로 두고, 이 값은 postgres 자신이 쌓는 로그의 위치를
+    // 옆에 덧붙인다. debugCommand와 같은 길 — 외부 디버그 모드에는 앱의 postgres도 로그도 없다.
+    postgresLogDir: mode?.kind === "embedded" ? pgLayout(app.getPath("userData")).logDir : null,
     logPathOf,
     migrationCheckSkipped: migrationWatch.skippedFor(supervisor?.runtimeOf("api")?.result?.handle),
   });

@@ -126,11 +126,13 @@ export function embeddedPostgresSpec(deps: EmbeddedPostgresDeps): ServiceSpec {
     );
     if (!toolOk(r)) {
       fs.rmSync(tmp, { recursive: true, force: true });
+      deps.log(`postgres: 실패한 initdb 임시 디렉터리를 지웠다 — ${tmp}`);
       refuse(CAUSES.pgInitdbFailed.text(describeToolFailure("initdb", r)));
     }
     const c = await readClusterId(tmp, signal);
     if (c.id === null) {
       fs.rmSync(tmp, { recursive: true, force: true });
+      deps.log(`postgres: 실패한 initdb 임시 디렉터리를 지웠다 — ${tmp}`);
       refuse(CAUSES.pgInitdbFailed.text(c.failure ?? "pg_controldata"));
     }
     // 마커를 옮기기 **전에** 쓴다. 그래야 "클러스터는 있는데 마커가 없다"가 앱이 만든 클러스터에서 생길 수 없다 (§6.2).

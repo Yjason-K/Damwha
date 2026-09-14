@@ -145,6 +145,14 @@ export interface ServicesInput {
   externalDatabase?: boolean;
   configWarning?: string | null;
   debugCommand?: string | null;
+  /**
+   * 내장 postgres가 자기 로그를 쌓는 폴더 (스펙 §6.7 — 상태 창의 postgres 로그 참조는
+   * `logs/postgres/`를 가리켜야 한다). row.log 자체는 그대로 `logPathOf("postgres")`
+   * (기동 싱크 logs/postgres.log)로 남는다 — 이 값은 그 옆에 덧붙는 안내일 뿐이다.
+   * debugCommand와 같은 길로 들어온다: main.ts가 app.getPath("userData")에서 만들고,
+   * 외부 디버그 모드에서는 null이다.
+   */
+  postgresLogDir?: string | null;
 }
 
 function toneOf(s: ServiceStatus, cause: string | undefined): Tone {
@@ -171,6 +179,9 @@ export function servicesView(input: ServicesInput): ServicesView {
     const notes = [
       ...(s.process === "running" && !s.owned ? [debugDb ? EXTERNAL_DATABASE_NOTE : "앱이 띄우지 않음"] : []),
       ...(s.restarts > 0 ? [`재시작 ${s.restarts}회`] : []),
+      ...(s.id === "postgres" && !external && typeof input.postgresLogDir === "string"
+        ? [`서버 로그: ${input.postgresLogDir}`]
+        : []),
     ];
     const row: ServiceRow = {
       id: s.id,

@@ -176,6 +176,28 @@ describe("servicesView", () => {
     expect(external.rows[0].command).toBeUndefined();
   });
 
+  it("notes where the embedded postgres server keeps its own logs, only for the embedded database", () => {
+    // 스펙 §6.7: 상태 창의 postgres 로그 참조는 logs/postgres/ 폴더를 가리켜야 한다. row.log는
+    // 실행 싱크(logs/postgres.log)로 남지만, 내장 모드에서는 서버 자신의 로그 폴더도 알려준다.
+    const dir = "/u/logs/postgres";
+    const embedded = servicesView({ statuses: [st("postgres")], restartNotice: null, logPathOf, postgresLogDir: dir });
+    expect(embedded.rows[0].notes).toContain(`서버 로그: ${dir}`);
+
+    // 외부 디버그 모드는 앱이 그 postgres를 띄우지도 로그를 갖지도 않는다.
+    const external = servicesView({
+      statuses: [st("postgres", { owned: false })],
+      restartNotice: null,
+      logPathOf,
+      externalDatabase: true,
+      postgresLogDir: dir,
+    });
+    expect(external.rows[0].notes.some((n) => n.includes("서버 로그"))).toBe(false);
+
+    // 다른 서비스 줄에는 붙지 않는다.
+    const other = servicesView({ statuses: [st("api")], restartNotice: null, logPathOf, postgresLogDir: dir });
+    expect(other.rows[0].notes).toEqual([]);
+  });
+
   it("puts a config warning among the notices and on the failure screen", () => {
     const warning = "내장 DB 모드에서는 config.json의 DATABASE_URL를 쓰지 않아요";
     expect(servicesView({ statuses: [st("api")], restartNotice: null, logPathOf, configWarning: warning }).notices).toContain(warning);

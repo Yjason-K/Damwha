@@ -466,6 +466,15 @@ describe("Phase 3 causes", () => {
     expect(recoveryHint(s({ id: "worker", detail: CAUSES.readyTimeout.text }))).not.toMatch(/DATABASE_URL/);
   });
 
+  it("does not let spawnNotFound swallow a Phase 3 block that happens to embed a spawn ENOENT failure", () => {
+    // migration-gate.ts의 runnerFailureBlock은 원인 형태를 모르면 describeToolFailure로 되돌아가고,
+    // 그 문구가 "실행하지 못했어요 (spawn pnpm ENOENT)"다. spawnNotFound의 정규식이 이 문구만 보고
+    // CAUSE_IDS를 spawnNotFound가 먼저 걸리는 순서로 두면, migrationStatusFailed 같은 Phase 3 원인이
+    // 자기 문구("마이그레이션 상태를 확인하지 못했어요")로 시작하는데도 엉뚱한 원인·안내로 읽힌다.
+    const detail = CAUSES.migrationStatusFailed.text("마이그레이션 러너: 실행하지 못했어요 (spawn pnpm ENOENT)");
+    expect(causeIn(detail)).toBe("migrationStatusFailed");
+  });
+
   it("does not claim a postgres that goes not-ready for no known reason recovers on its own (notAnswering)", () => {
     // 이 원인을 고정하는 유일한 테스트였던 "docker compose stop postgres" 테스트가 Task 12에서
     // Docker 원인과 함께 지워졌다 — 내장 postgres로 다시 건다. ready였던 postgres가 재프로브에서

@@ -411,8 +411,8 @@ export function createSupervisor(
 
   /**
    * ready 이후에 죽으면 백오프로 다시 띄운다. 상한을 넘으면 failed로 고정하고 메뉴의 재시도를
-   * 기다린다 (스펙 §6.8). postgres는 restart가 "never"다 — compose의 restart: unless-stopped가
-   * 이미 그 일을 하고, 감독자가 둘이면 같은 컨테이너를 다툰다.
+   * 기다린다 (스펙 §6.8). postgres는 내장 어댑터가 자기 백오프([3s, 8s, 20s])를 따로 갖는다 —
+   * 여기서 또 걸면 같은 클러스터를 둘이 다툰다.
    */
   function scheduleRestart(spec: ServiceSpec, why: string): void {
     if (spec.restart === "never" || stopping) return;

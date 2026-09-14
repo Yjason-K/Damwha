@@ -51,17 +51,6 @@ export const CAUSES = {
     text: "uv를 찾지 못했어요.",
     selfRecovers: false,
   },
-  /**
-   * 경로는 있었는데 그 자리에 실행 파일이 없다 — config.json의 UV_BIN이 틀린 경우다
-   * (탐색은 존재하는 파일만 돌려준다). 이 문구는 **앱이 쓰지 않는다.** Node의 `spawn <경로> ENOENT`
-   * 이고, launchWithUv가 싱크에 적는 `spawn failed: <e.message>`를 감독자가 죽은 자식의
-   * 블록으로 올린다(worker·embed).
-   */
-  spawnNotFound: {
-    match: /spawn \S+ ENOENT/,
-    text: (bin: string) => `spawn failed: spawn ${bin} ENOENT`,
-    selfRecovers: false,
-  },
   /** worker — be/worker/.env가 없다. */
   workerEnvMissing: {
     match: /\.env가 없어요/,
@@ -197,6 +186,25 @@ export const CAUSES = {
   migrationsStillPending: {
     match: /마이그레이션을 실행했는데 \d+개가 여전히 적용되지 않았어요/,
     text: (count: number, names: string) => `마이그레이션을 실행했는데 ${count}개가 여전히 적용되지 않았어요 (${names}).`,
+    selfRecovers: false,
+  },
+  /**
+   * 경로는 있었는데 그 자리에 실행 파일이 없다 — config.json의 UV_BIN이 틀린 경우다
+   * (탐색은 존재하는 파일만 돌려준다). 이 문구는 **앱이 쓰지 않는다.** Node의 `spawn <경로> ENOENT`
+   * 이고, launchWithUv가 싱크에 적는 `spawn failed: <e.message>`를 감독자가 죽은 자식의
+   * 블록으로 올린다(worker·embed).
+   *
+   * 위 Phase 3 원인들(pgInitdbFailed·pgControldataFailed·pgCreatedbFailed·pgQueryFailed·
+   * migrationStatusFailed·backupFailed·migrationFailed) **뒤**에 둔다. 그 원인들은 도구 실행
+   * 자체가 spawn ENOENT로 실패한 경우를 describeToolFailure의 "실행하지 못했어요 (spawn … ENOENT)"로
+   * 자기 block 안에 그대로 옮겨 담는데, 이 원인이 그 앞에 있으면 CAUSE_IDS.find가 여기서 먼저
+   * 걸려 "마이그레이션 러너를 실행하지 못했어요" 같은 Phase 3 실패가 엉뚱하게 UV_BIN 안내를 받는다
+   * (한 자리 리뷰). Phase 3 원인의 정규식은 모두 자기 문구의 맨 앞 한국어로 시작해 매칭되므로,
+   * 순서만 뒤로 미뤄도 그쪽이 먼저 잡는다.
+   */
+  spawnNotFound: {
+    match: /spawn \S+ ENOENT/,
+    text: (bin: string) => `spawn failed: spawn ${bin} ENOENT`,
     selfRecovers: false,
   },
   /** postgres — DEBUG_EXTERNAL_DATABASE_URL로 붙었다. 실패가 아니라 상시 경고다 (스펙 §6.1). */

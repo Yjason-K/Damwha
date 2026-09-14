@@ -1,4 +1,5 @@
 import { refreshEnv, withoutDbKeys, type ApiEnv, type DatabaseMode, type LoadedConfig } from "./config";
+import { maskDatabaseUrl } from "./mask-db-url";
 import { PREPARE_DERIVED_KEYS } from "./services/embed";
 
 /**
@@ -56,13 +57,8 @@ export interface ConfigReloadDeps {
 /** 화면·로그에 싣는 모드 이름. URL의 비밀번호는 가린다 — 이 문구는 supervisor.log와 대화상자에 남는다. */
 export function describeMode(m: DatabaseMode): string {
   if (m.kind === "embedded") return "내장 DB";
-  try {
-    const u = new URL(m.url);
-    if (u.password !== "") u.password = "***";
-    return `외부 DB(디버깅) ${u.toString()}`;
-  } catch {
-    return "외부 DB(디버깅)";
-  }
+  const masked = maskDatabaseUrl(m.url);
+  return masked === null ? "외부 DB(디버깅)" : `외부 DB(디버깅) ${masked}`;
 }
 
 function sameMode(a: DatabaseMode, b: DatabaseMode): boolean {

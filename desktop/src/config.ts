@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
+import { maskDatabaseUrl } from "./mask-db-url";
 import { embeddedDatabaseUrl, pgLayout } from "./services/pg-layout";
 
 /** 자식 API에 넣을 환경변수. 값은 항상 문자열이다. */
@@ -315,7 +316,19 @@ export function loadConfig(userDataDir: string): LoadedConfig {
       if (value === undefined) continue;
       const legacy = key === "DATABASE_URL" ? value === LEGACY_DATABASE_URL : path.resolve(userDataDir, value) === path.join(userDataDir, "storage");
       if (legacy) notes.push(`config.json의 ${key}는 Phase 1·2의 기본값이에요 — 내장 DB 모드에서는 쓰지 않습니다.`);
-      else warnings.push(`내장 DB 모드에서는 config.json의 ${key}를 쓰지 않아요 (파일 값: ${JSON.stringify(value)}). 외부 DB로 디버깅하려면 DEBUG_EXTERNAL_DATABASE_URL을 적어 주세요.`);
+      else {
+        // DATABASE_URL은 사람이 손으로 적은 진짜 비밀번호를 담고 있을 수 있다 — 화면에도 뜨고
+        // supervisor.log에도 남는 문구라 원문을 그대로 옮기지 않는다. STORAGE_ROOT는 경로라
+        // 가릴 것이 없어 그대로 둔다.
+        const shown =
+          key === "DATABASE_URL"
+            ? (() => {
+                const masked = maskDatabaseUrl(value);
+                return masked === null ? "파일에 값이 있습니다(가려서 표시하지 않아요)" : `파일 값: ${JSON.stringify(masked)}`;
+              })()
+            : `파일 값: ${JSON.stringify(value)}`;
+        warnings.push(`내장 DB 모드에서는 config.json의 ${key}를 쓰지 않아요 (${shown}). 외부 DB로 디버깅하려면 DEBUG_EXTERNAL_DATABASE_URL을 적어 주세요.`);
+      }
     }
   }
 

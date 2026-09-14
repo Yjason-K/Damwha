@@ -497,6 +497,23 @@ describe("loadConfig — database mode (Phase 3 스펙 §6.1)", () => {
     expect(c.env.DATABASE_URL).toBe(embeddedDatabaseUrl(pgLayout(dir)));
   });
 
+  it("masks the password in a discarded DATABASE_URL instead of printing it raw to screen and supervisor.log", () => {
+    // 사람이 손으로 적은 URL은 진짜 비밀번호를 담고 있을 수 있다. 옛 키 경고는 화면에도 뜨고
+    // supervisor.log에도 남으므로 원문을 그대로 옮기면 그 비밀번호가 로그 파일에 평문으로 앉는다.
+    write({ DATABASE_URL: "postgres://me:s3cret@db.example:5432/x" });
+    const c = loadConfig(dir);
+    expect(c.warning).toBeDefined();
+    expect(c.warning).not.toContain("s3cret");
+    expect(c.warning).toContain("***");
+  });
+
+  it("omits the value entirely when the discarded DATABASE_URL cannot be parsed as a URL", () => {
+    write({ DATABASE_URL: "not-a-url-at-all" });
+    const c = loadConfig(dir);
+    expect(c.warning).toBeDefined();
+    expect(c.warning).not.toContain("not-a-url-at-all");
+  });
+
   it("switches to external debug mode only when DEBUG_EXTERNAL_DATABASE_URL is written, and keeps that key out of the child env", () => {
     write({ DEBUG_EXTERNAL_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/damwha" });
     const c = loadConfig(dir);
