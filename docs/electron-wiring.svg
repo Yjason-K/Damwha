@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1140 560" width="1140" height="560" role="img" aria-label="dev 모드는 Electron main이 pnpm으로 API 체인과 Vite를 띄우고 창이 5173을 로드하는 3프로세스 구조, packaged 모드는 utilityProcess로 API 하나만 띄우고 그 API가 SPA까지 서빙하는 2프로세스 구조">
+  <title>담화 데스크톱 배선도 — dev와 packaged</title>
+  <defs>
+    <marker id="ar-desktop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <polygon points="0,1 10,5 0,9" fill="#1c6c88"/>
+    </marker>
+    <marker id="ar-be" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <polygon points="0,1 10,5 0,9" fill="#74488f"/>
+    </marker>
+    <marker id="ar-fe" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <polygon points="0,1 10,5 0,9" fill="#2b7452"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1140" height="560" fill="#eef1f4"/>
+
+  <g font-family="system-ui, -apple-system, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif">
+
+    <!-- ================= DEV PANEL ================= -->
+    <rect x="20" y="20" width="520" height="520" rx="8" fill="#ffffff" stroke="#ccd5de" stroke-width="1"/>
+    <text x="44" y="58" font-size="19" font-weight="700" fill="#12161c">dev</text>
+    <text x="44" y="80" font-size="12" fill="#5d6773" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">pnpm desktop:dev · 프로세스 3 · 오리진 2</text>
+
+    <rect x="170" y="104" width="220" height="58" rx="5" fill="#dceef4" stroke="#1c6c88" stroke-width="1.5"/>
+    <text x="186" y="128" font-size="13" font-weight="600" fill="#12161c">Electron main</text>
+    <text x="186" y="147" font-size="11" fill="#5d6773" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">desktop/dist/main.js</text>
+
+    <!-- API group -->
+    <rect x="44" y="214" width="232" height="130" rx="5" fill="#eee3f6" stroke="#74488f" stroke-width="1.5"/>
+    <text x="58" y="236" font-size="11.5" font-weight="600" fill="#12161c">API 자식 · detached 그룹</text>
+    <rect x="58" y="246" width="204" height="84" rx="4" fill="#f7f9fb" stroke="#9fabb8" stroke-width="1.2"/>
+    <text x="70" y="264" font-size="10.5" fill="#5d6773" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">pnpm --filter damwha-be dev</text>
+    <rect x="70" y="272" width="180" height="48" rx="4" fill="#ffffff" stroke="#9fabb8" stroke-width="1.2"/>
+    <text x="82" y="290" font-size="10.5" fill="#5d6773" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">nest start --watch</text>
+    <text x="82" y="308" font-size="10.5" font-weight="600" fill="#12161c" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">node — :PORT  ← bind</text>
+
+    <!-- Vite group -->
+    <rect x="292" y="214" width="224" height="130" rx="5" fill="#dcf0e5" stroke="#2b7452" stroke-width="1.5"/>
+    <text x="306" y="236" font-size="11.5" font-weight="600" fill="#12161c">Vite 자식 · detached 그룹</text>
+    <rect x="306" y="246" width="196" height="84" rx="4" fill="#f7f9fb" stroke="#9fabb8" stroke-width="1.2"/>
+    <text x="318" y="264" font-size="10.5" fill="#5d6773" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">pnpm --filter damwha-fe dev</text>
+    <rect x="318" y="272" width="172" height="48" rx="4" fill="#ffffff" stroke="#9fabb8" stroke-width="1.2"/>
+    <text x="330" y="301" font-size="10.5" font-weight="600" fill="#12161c" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">vite — :5173</text>
+
+    <!-- window -->
+    <rect x="170" y="424" width="220" height="60" rx="5" fill="#dceef4" stroke="#1c6c88" stroke-width="1.5"/>
+    <text x="186" y="448" font-size="13" font-weight="600" fill="#12161c">BrowserWindow</text>
+    <text x="186" y="467" font-size="10.5" fill="#5d6773" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">loadURL(localhost:5173)</text>
+
+    <!-- edges -->
+    <path d="M206,164 L166,210" fill="none" stroke="#1c6c88" stroke-width="1.6" marker-end="url(#ar-desktop)"/>
+    <path d="M354,164 L394,210" fill="none" stroke="#1c6c88" stroke-width="1.6" marker-end="url(#ar-desktop)"/>
+    <text x="280" y="192" font-size="10.5" text-anchor="middle" fill="#39434f" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">spawn detached</text>
+
+    <path d="M394,346 L356,420" fill="none" stroke="#2b7452" stroke-width="1.6" marker-end="url(#ar-fe)"/>
+    <text x="404" y="392" font-size="10.5" fill="#39434f" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">SPA 서빙</text>
+
+    <path d="M166,452 L120,326" fill="none" stroke="#74488f" stroke-width="1.6" marker-end="url(#ar-be)"/>
+    <text x="158" y="380" font-size="10.5" text-anchor="end" fill="#39434f" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">fetch :PORT/api</text>
+    <text x="158" y="396" font-size="10.5" text-anchor="end" fill="#5d6773">다른 오리진</text>
+
+    <!-- ================= PACKAGED PANEL ================= -->
+    <rect x="600" y="20" width="520" height="520" rx="8" fill="#ffffff" stroke="#ccd5de" stroke-width="1"/>
+    <text x="624" y="58" font-size="19" font-weight="700" fill="#12161c">packaged</text>
+    <text x="624" y="80" font-size="12" fill="#5d6773" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">Damwha.app · 프로세스 2 · 오리진 1</text>
+
+    <rect x="750" y="104" width="220" height="58" rx="5" fill="#dceef4" stroke="#1c6c88" stroke-width="1.5"/>
+    <text x="766" y="128" font-size="13" font-weight="600" fill="#12161c">Electron main</text>
+    <text x="766" y="147" font-size="11" fill="#5d6773" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">app.asar/dist/main.js</text>
+
+    <!-- API -->
+    <rect x="624" y="214" width="232" height="130" rx="5" fill="#eee3f6" stroke="#74488f" stroke-width="1.5"/>
+    <text x="638" y="240" font-size="12.5" font-weight="600" fill="#12161c">utilityProcess (API)</text>
+    <text x="638" y="262" font-size="10.5" fill="#5d6773" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">Resources/api/dist/main.js</text>
+    <text x="638" y="282" font-size="10.5" fill="#5d6773" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">127.0.0.1:PORT  ← bind</text>
+    <rect x="638" y="294" width="204" height="34" rx="4" fill="#ffffff" stroke="#9fabb8" stroke-width="1.2"/>
+    <text x="650" y="316" font-size="10.5" fill="#12161c" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">serves dist/public</text>
+
+    <!-- ghost vite: same grid slot as dev's Vite group -->
+    <rect x="872" y="214" width="224" height="130" rx="5" fill="none" stroke="#9fabb8" stroke-width="1.5" stroke-dasharray="5 5"/>
+    <text x="886" y="252" font-size="12.5" font-weight="600" fill="#5d6773">Vite — 없음</text>
+    <text x="886" y="276" font-size="10.5" fill="#5d6773">SPA는 빌드 시점에</text>
+    <text x="886" y="294" font-size="10.5" fill="#5d6773" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">dist/public</text>
+    <text x="886" y="312" font-size="10.5" fill="#5d6773">으로 들어간다</text>
+
+    <!-- window -->
+    <rect x="750" y="424" width="220" height="60" rx="5" fill="#dceef4" stroke="#1c6c88" stroke-width="1.5"/>
+    <text x="766" y="448" font-size="13" font-weight="600" fill="#12161c">BrowserWindow</text>
+    <text x="766" y="467" font-size="10.5" fill="#5d6773" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">loadURL(127.0.0.1:PORT/)</text>
+
+    <!-- edges -->
+    <path d="M800,164 L760,210" fill="none" stroke="#1c6c88" stroke-width="1.6" marker-end="url(#ar-desktop)"/>
+    <text x="812" y="182" font-size="10.5" fill="#39434f" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">utilityProcess.fork</text>
+    <text x="812" y="198" font-size="10.5" fill="#5d6773" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">+ env, HOST 마지막</text>
+
+    <path d="M760,348 L800,420" fill="none" stroke="#74488f" stroke-width="1.6" marker-end="url(#ar-be)"/>
+    <text x="812" y="382" font-size="10.5" fill="#39434f" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">SPA + /api</text>
+    <text x="812" y="398" font-size="10.5" fill="#5d6773">같은 오리진 — CORS 없음</text>
+
+    <!-- footer note -->
+    <text x="44" y="524" font-size="11" fill="#5d6773">desktop 패키지는 be·fe를 import하지 않는다. 연결은 spawn · fork · 환경변수 · HTTP · stderr 문자열이 전부다.</text>
+  </g>
+</svg>

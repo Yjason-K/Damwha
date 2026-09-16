@@ -732,13 +732,25 @@ app_setting.model_readiness = {
 
 - **감독자** — `model_readiness`에 그 서비스의 `downloading`이 있고 `updated_at`이 갱신되고
   있으면 유예 시계를 멈춘다. 고정 deadline이 아니라 **다운로드 시간을 뺀 누적**으로 센다.
-- **`_wait_ready`** — 같은 판정을 Python 쪽에서 한다. 여기서는 DB를 다시 읽을 필요가 없다.
-  §6.2의 `llm_entry`가 **같은 프로세스**라 다운로드 진행을 직접 안다.
+- **`_wait_ready`** — 같은 판정을 Python 쪽에서 한다. **DB를 읽어야 한다.**
+  `_wait_ready`(`llm_server.py:130`)는 **`--once` 자식**의 코드이고 `llm_entry`는 그것이
+  `popen`한 **자식**이다 — 둘은 다른 프로세스다. §6.2가 말하는 "같은 프로세스"는
+  `llm_entry`와 `mlx_lm.server.main()` 사이의 관계이지 `_wait_ready`와의 관계가 아니다.
+  그래서 `llm_entry`가 `model_readiness`에 올린 `updated_at`을 `_wait_ready`가 주기적으로
+  읽어 유예를 민다. `--once` 자식은 이미 DB 연결을 갖고 있으므로 그것을 `_wait_ready`에
+  넘기는 시그니처 변경이 따른다.
 
-**LLM 다운로드 진행의 관측 수단이 §6.2 결정에서 나온다.** `mlx_lm.server`를 별도 프로세스로
-띄웠다면 그 안의 HF 다운로드를 볼 길이 없어 "시작·완료만 기록"이 최선이었고, 그러면 진행이
-정상인 120초 동안에도 갱신이 없어 무진행으로 오판했다. `llm_entry`가 같은 프로세스에서
-`main()`을 부르므로 **HF 훅을 걸어 다른 모델과 똑같이 바이트 진행을 올린다.**
+**LLM 다운로드 진행의 관측 수단이 §6.2 결정에서 나온다.** `mlx_lm.server`를 그냥 실행했다면
+그 프로세스 안의 HF 다운로드에 훅을 걸 수 없어 "시작·완료만 기록"이 최선이었고, 그러면 진행이
+정상인 120초 동안에도 갱신이 없어 무진행으로 오판했다. `llm_entry`가 `main()`을 부르기 **전에**
+훅을 설치하므로 다른 모델과 똑같이 바이트 진행을 올린다. `llm_entry`는 그 보고를 위해
+**자기 DB 연결을 연다** — supervisor·`--once` 자식에 이은 세 번째 writer 프로세스다.
+
+**훅 지점은 구현 전에 확정해야 한다 (미확정 — §12).** `huggingface_hub`에 전역 진행 훅이
+없어 `snapshot_download`/`hf_hub_download`의 `tqdm_class`를 주입해야 하는데, `mlx_lm`·
+sentence-transformers·pyannote 셋 다 그 인자를 넘기지 않는다. 남는 수단은 모듈 속성 교체이고
+라이브러리 버전에 취약하다. **확정하지 못하면 바이트 진행을 포기하고 `updated_at` 하트비트만
+남긴다** — 그 경우 P4-C6을 "다운로드 중임이 화면에 보인다"로 내리고 진행률은 요구하지 않는다.
 
 무진행 판정은 `bytes_done` 증가가 아니라 **`updated_at`** 기준이다 — `bytes_total`을 모르는
 다운로드가 있고, 그럴 때 `bytes_done`만 보면 진행 중인 것을 멈춘 것으로 본다.
@@ -842,7 +854,7 @@ Phase 2·3의 나머지 규칙은 유지한다 — manual 실패는 자동 재�
 | P4-C9 | 두 번째 실행은 모델을 다시 받지 않는다 | `models/` 크기·mtime 불변, 처리 성공, `model_readiness`에 새 `downloading` 0건. **판정은 이 셋이다** — huggingface.co로 나가는 패킷 0건은 라이브러리가 리비전 확인 요청을 보낼 수 있어 요구하지 않는다. 오프라인에서도 되는지는 별도로 본다 (P4-C29) |
 | P4-C10 | bge-m3를 한 벌만 받는다 | `models/hub/models--BAAI--bge-m3`의 리비전 1개, `pytorch_model.bin` 부재 |
 | P4-C29 | 모델을 받아 둔 뒤에는 네트워크 없이도 처리가 된다 | 캐시가 찬 상태에서 네트워크를 끊고 업로드 1건 완주 |
-| P4-C11 | 요약·렌즈가 **번들** mlx-lm으로 돈다 | `~/.local/bin/mlx_lm.server`를 일시 격리한 상태에서 요약 job 성공. `ps -o args`가 번들 python `-m mlx_lm.server` |
+| P4-C11 | 요약·렌즈가 **번들** mlx-lm으로 돈다 | `~/.local/bin/mlx_lm.server`를 일시 격리한 상태에서 요약 job 성공. `ps -o args`가 번들 python `-m damwha_worker.llm_entry` |
 
 ### 축 C — 격리
 
@@ -968,6 +980,7 @@ pnpm desktop:build
 | `HF_HOME`으로 안 덮이는 라이브러리 캐시가 있는지 | 구현 중 실측, P4-C13이 판정 (§6.3) |
 | `LENS_LLM_BASE_URL`의 포트 — 고정 vs 빈 포트 탐색 | 구현 중. embed의 `freePort()` 선례 |
 | 모델 준비 FE 표시의 위치·형태 | 구현 중. `fe/DESIGN.md` 관례 |
+| **HF 다운로드 진행 훅의 지점** — 바이트 진행이 가능한지 | **구현 계획 Task 17 Step 5-c의 사전 조사.** 불가하면 P4-C6을 하트비트로 내리고 §6.9를 갱신한다 |
 | supervisor 크래시 재시작 시 같은 run-id `--once` 자식 처분 | 구현 중 (§6.5). 기본은 회수하지 않는다 |
 | `.app` 최종 크기 | 빌드 뒤 실측. 예상 1.6~1.8 GB |
 
@@ -1119,6 +1132,41 @@ pnpm desktop:build
 merge의 동시성 테스트, 토큰 교체 후 live env 갱신 경로, Task 11–13의 중간 컴파일 실패 제거
 (공존 후 삭제), 완료 기준별 구현·검증 연결표.
 
-### 17.3 메인 세션 리뷰
+### 17.3 외부 리뷰 — 3회차 (대상: 스펙 `4180768` + 계획 `eb80de2`)
+
+**판정: 확정 불가 — blocking 8건.** 리뷰어가 지시된 4건(셔뱅 래퍼·merge SQL·기준선 스크립트·
+`ps` 판독)을 실제로 돌렸다. 메인 세션이 전부 저장소 코드로 재확인했고 **8건 모두 사실이었다.**
+
+원인이 하나로 모인다 — **Task 3·4·5가 Phase 0의 실제 `build.sh`를 "옮긴다"고 적어 놓고 그
+파일을 읽지 않고 재구성했다.** blocking 3건이 여기서 나왔다. 조치로 태그
+`archive/electron-phase-0-packaging-validation`의 `experiments/electron-phase-0/python/build.sh`
+(511줄)를 꺼내 그 조작을 그대로 옮겼다.
+
+| 지적 | 확인 | 반영 |
+| --- | --- | --- |
+| ffmpeg LGPL 검사가 항상 실패한다 — configure가 `License:`를 `config.log`에 안 쓴다 | 리뷰어가 ffmpeg 7.1.1 configure를 받아 확인(`echo` 한 곳뿐). Phase 0의 `ffmpeg/fetch.sh:151-161`이 stdout을 파일로 받았다 | 계획 Task 3 — stdout을 `tee`로 받아 검사 + `config.mak`의 `CONFIG_GPL`/`NONFREE` 이중 확인 |
+| `direct_url.json`이 저장소 절대 경로를 번들에 싣고 기존 번들 검사가 실패한다 | **실측** — `.venv`의 파일이 `{"url":"file:///Users/…/be/worker"}`. `check-bundle.mjs:90`이 `grep -rlF <repo> Contents`로 Resources 전체를 훑는다 | 계획 Task 4 `relocate()` 3절 — Phase 0 그대로 삭제 |
+| `fix_macho`가 `BUILD_PREFIX`를 매칭하는데 그 문자열이 트리에 없다 | Phase 0 `build.sh:370-400` — 필터는 `@*`·번들 안·`/usr/lib`·`/System` **제외 전부**. 58건은 wheel 배포자 경로(`/opt/homebrew` gcc 등) | 계획 Task 4 — 필터 교체, `BUILD_PREFIX` 상수 삭제, **0건이면 `die`** |
+| Task 8이 Task 17의 모듈을 import하고 경로도 틀렸다 | 계획 자체 | Task 8은 자리만 주석. **Task 17이 꽂는다** |
+| Task 17 본문·커밋·Review가 옛 설계(별도 프로세스)를 담고 있다 | 계획 자체 | 세 곳 정정 |
+| **§6.9의 `_wait_ready`가 프로세스 경계를 잘못 뒀다** | `llm_server.py:130` — `_wait_ready`는 `--once` 자식의 코드이고 `llm_entry`는 그것의 **자식**이다. "같은 프로세스"는 `llm_entry`↔`mlx_lm.server.main()` 관계다 | **이 스펙 §6.9 정정** — DB를 읽어야 한다. `--once` 자식의 연결을 `_wait_ready`에 넘긴다 |
+| Task 14 Step 6-b가 Task 18의 `restartService`를 쓴다 | 계획 자체 | **Task 19 Step 1-b로 옮겼다.** 번호와 실행 순서가 일치한다 |
+| Task 0 Step 3이 `be/.env`에 쓰고 복구가 실패한다 | **실측** — `be/.gitignore:7`이 무시해 `git checkout`이 `pathspec did not match`. probe 줄이 영구히 남는다 | 기준선 **사본**을 조작해 탐지를 실증한다 |
+
+**important 중 스펙에 영향을 준 것 하나.** `install_hf_progress_hook`의 훅 지점이 존재하지
+않을 수 있다 — `huggingface_hub`에 전역 훅이 없고 `tqdm_class`를 넘겨야 하는데 `mlx_lm`·
+sentence-transformers·pyannote 셋 다 안 넘긴다. §6.9에 그 사실과 **대안**(하트비트만)을 적고
+§12의 미확정 표에 올렸다. 계획 Task 17 Step 5-c가 구현 전에 조사한다. **불가로 판정되면
+P4-C6을 내려야 하고 그것은 다시 스펙 변경이다.**
+
+**Phase 0의 설계 결정 하나를 의식적으로 뒤집었다.** Phase 0는 셔뱅을 절대 경로로 다시 쓰고
+`#!/bin/sh` 트릭을 **기각했다** — "SIP가 `/bin/sh` exec에서 `DYLD_*`를 지워 Task 5의 dyld 실측이
+통째로 끊긴다"(`build.sh:274-277`). 그 근거는 Phase 4에 없다(dyld 실측을 하지 않는다). 대신
+Phase 4는 반대 제약을 받는다 — 한 빌드 산출물이 두 자리(dev `desktop/build/python`, packaged
+`Resources/python`)에 놓이고 electron-builder의 복사 지점에 훅을 걸 수 없어, 절대 경로를 쓰면
+**`.app` 안에 dev 트리 경로가 실려** 금지 문자열 검사를 위반한다. 그래서 위치 독립 형태
+(`${0%/*}`, 외부 명령 없음)를 쓴다. 리뷰어가 제한된 PATH·공백 경로에서 동작을 실측했다.
+
+### 17.4 메인 세션 리뷰
 
 (작성 예정.)

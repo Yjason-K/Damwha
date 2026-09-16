@@ -165,9 +165,15 @@ sums "$HOME/Library/Application Support/Damwha/storage" abs-userdata-legacy-stor
 # Docker 볼륨은 메타데이터만으로는 내용 보존을 증명하지 못한다 — 행 수를 직접 센다.
 # DB가 꺼져 있으면 빈 파일이고, verify도 같은 조건이면 대조는 성립한다.
 docker volume inspect damwha_pgdata > "$DEST/abs-pgdata-meta.json" 2>/dev/null || : > "$DEST/abs-pgdata-meta.json"
-psql "postgres://postgres:postgres@localhost:5432/damwha" -tAc \
-  "select relname||'='||n_live_tup from pg_stat_user_tables order by relname" \
-  > "$DEST/abs-docker-db-rows.txt" 2>/dev/null || : > "$DEST/abs-docker-db-rows.txt"
+# host psql이 없는 맥이 많다. 컨테이너 안의 것을 쓴다 — 없으면 **빈 파일이 아니라
+# "측정 불가"를 적어** verify가 빈 파일끼리 PASS하는 일이 없게 한다.
+if docker exec damwha-postgres psql -U postgres -d damwha -tAc \
+     "select relname||'='||n_live_tup from pg_stat_user_tables order by relname" \
+     > "$DEST/abs-docker-db-rows.txt" 2>/dev/null && [ -s "$DEST/abs-docker-db-rows.txt" ]; then
+  :
+else
+  echo "MEASUREMENT-UNAVAILABLE (docker exec damwha-postgres psql)" > "$DEST/abs-docker-db-rows.txt"
+fi
 
 # ── 허용 변경: 복구에 필요한 것 ───────────────────────────────────────────────
 cp be/worker/uv.lock "$DEST/mut-uv.lock" 2>/dev/null || :
@@ -195,7 +201,13 @@ if [ "$MODE" = verify ]; then
     [ -e "$f" ] || continue
     n=$(basename "$f")
     if diff -q "$f" "$OUT/later/$n" >/dev/null 2>&1; then
-      echo "PASS  $n"
+      # 양쪽이 "측정 불가"면 같아서 PASS가 되지만, 그것은 대조가 아니다.
+      if grep -q '^MEASUREMENT-UNAVAILABLE' "$f" 2>/dev/null; then
+        echo "SKIP  $n — 기준선이 측정 불가였다. 이 항목은 판정하지 않는다"
+        fail=1
+      else
+        echo "PASS  $n"
+      fi
     else
       echo "FAIL  $n"
       diff "$f" "$OUT/later/$n" | head -10
@@ -232,12 +244,19 @@ ls -la /tmp/p4-baseline/now
 
 ```bash
 bash desktop/scripts/phase4-baseline.sh verify    # 아무것도 안 바꿨으니 전부 PASS
-echo "probe" >> be/.env && bash desktop/scripts/phase4-baseline.sh verify | grep 'FAIL.*be-env'
-git checkout be/.env
+
+# 탐지 실증은 **기준선 사본**을 조작해서 한다. 실파일은 건드리지 않는다.
+echo "probe-line" >> /tmp/p4-baseline/later/abs-be-env.txt
+bash desktop/scripts/phase4-baseline.sh verify 2>&1 | grep 'FAIL.*abs-be-env'
+rm -rf /tmp/p4-baseline/later      # 조작한 사본은 버린다
 ```
 
 기대: 첫 실행이 전부 `PASS`, 둘째가 `FAIL  abs-be-env.txt`. **탐지가 되는 것을 확인하지 않은
 기준선은 기준선이 아니다.**
+
+**실파일에 쓰지 않는 이유가 둘이다.** (1) `be/.env`는 스펙 §5의 절대 불변 1번이고,
+(2) `be/.gitignore:7`이 그것을 무시하므로 `git checkout be/.env`는 `pathspec did not match`로
+**실패한다** — probe 줄이 영구히 남아 C26을 이 Task 자신이 깨뜨린다.
 
 **Verify:** Step 2·3 통과. `/tmp/p4-baseline/now`에 파일이 있다.
 
@@ -292,7 +311,14 @@ mkdir -p /tmp/numba-probe && cd /tmp/numba-probe
 curl -fsSL -o py.tar.gz \
   "https://github.com/astral-sh/python-build-standalone/releases/download/20250818/cpython-3.12.11+20250818-aarch64-apple-darwin-install_only.tar.gz"
 tar xzf py.tar.gz          # → ./python/
-uv pip install --python ./python/bin/python3.12 numba
+# **잠금 버전을 쓴다.** 최신 numba를 깔면 번들에 실릴 것과 다른 LLVM을 재게 되고,
+# 그 측정으로 entitlement를 정하면 근거가 없다. uv.lock이 단일 진실 원천이다.
+uv export --directory /Users/gim-yeongjae/project/daewha/be/worker \
+  --extra models --no-dev --no-hashes --no-emit-project \
+  | grep -E '^(numba|llvmlite)==' > pins.txt
+cat pins.txt      # 비어 있으면 Task 2를 먼저 돌려 잠금을 갱신하고 온다
+[ -s pins.txt ] || { echo "잠금에 numba가 없다"; exit 1; }
+uv pip install --python ./python/bin/python3.12 -r pins.txt
 ```
 
 `install_only` 아카이브를 쓰는 이유: 재배치 조작 없이 그 자리에서 돌면 되고, 이 측정은 재배치를 보는 것이 아니라 **JIT이 hardened runtime에서 사는지**를 본다.
@@ -363,14 +389,17 @@ PY="$PY_TREE/bin/python3.12"
 echo "== hardened runtime + entitlements로 서명한다: $ENTS"
 # 인터프리터와 모든 .so를 서명한다. 하나라도 빠지면 dlv가 그것을 거부해
 # numba와 무관한 이유로 죽고, 그 죽음이 JIT 판정으로 오독된다.
-find "$PY_TREE" -type f \( -name '*.so' -o -name '*.dylib' -o -perm -u+x \) -print0 |
-  while IFS= read -r -d '' f; do
-    file -b "$f" | grep -q 'Mach-O' || continue
+#
+# **파이프 뒤 while이 아니라 프로세스 치환이다.** `find | while … exit 3`의 exit는
+# 파이프 서브셸만 끝내고 스크립트는 계속 진행한다 — 무서명 트리로 프로브를 돌려
+# dlv 거부를 JIT 사망으로 오독하게 된다. 이 스크립트 주석이 경고한 바로 그 형태다.
+while IFS= read -r -d '' f; do
     # 서명 실패를 삼키지 않는다. 서명 안 된 .so는 dlv가 거부해 numba와 무관한 이유로
     # 죽고, 그 죽음이 JIT 판정으로 오독된다 (Phase 0 R-5).
     codesign --force --sign - --options runtime --entitlements "$ENTS" "$f" \
       || { echo "서명 실패: $f" >&2; exit 3; }
-  done
+  done < <(find "$PY_TREE" -type f \( -name '*.so' -o -name '*.dylib' -o -perm -u+x \) -print0 |
+             while IFS= read -r -d '' f; do file -b "$f" | grep -q 'Mach-O' && printf '%s\0' "$f"; done)
 
 run_probe() {
   local name="$1"
@@ -733,6 +762,9 @@ if [ ! -f "$DONE" ]; then
   #   ffprobe -show_entries format=duration   (컨테이너 길이)
   #   ffmpeg -ac 1 -ar 16000 -sample_fmt s16 -c:a flac   (16kHz mono s16 FLAC)
   # 디코더는 사용자가 올리는 모든 포맷을 받아야 하므로 끄지 않는다.
+  # configure의 stdout을 파일로 받는다. 라이선스 줄이 **config.log에 없기** 때문이다 —
+  # configure:8003의 `echo "License: $license"`는 log()/echolog()를 안 거쳐 stdout에만 나간다.
+  # Phase 0의 ffmpeg/fetch.sh:151-161이 같은 이유로 stdout을 받아 검사했다.
   ./configure \
     --prefix="$BUILD_PREFIX" \
     --disable-gpl --disable-nonfree --disable-version3 \
@@ -740,12 +772,21 @@ if [ ! -f "$DONE" ]; then
     --disable-doc --disable-debug \
     --disable-ffplay \
     --enable-pthreads \
-    || die "configure 실패"
+    2>&1 | tee "$WORK/configure.out"
+  [ "${PIPESTATUS[0]}" = 0 ] || die "configure 실패"
 
-  # configure가 스스로 라이선스를 보고한다. 그 줄을 눈으로 확인하는 대신 검사한다 —
-  # 플래그를 하나 지우면 GPL 구성이 조용히 나온다.
-  grep -q "License: LGPL version 2.1 or later" ffbuild/config.log \
-    || die "LGPL 2.1 구성이 아니다 — configure 플래그를 확인하라"
+  # configure가 스스로 라이선스를 보고한다. 눈으로 보는 대신 검사한다 — 플래그를 하나
+  # 지우면 GPL 구성이 조용히 나온다.
+  #
+  # **config.log가 아니라 stdout을 본다.** ffmpeg 7.1.1의 configure는 이 줄을
+  # `echo "License: $license"`(configure:8003)로만 내고 log()·echolog()를 거치지 않아
+  # ffbuild/config.log에는 들어가지 않는다. config.log를 grep하면 **항상 실패한다.**
+  grep -q "^License: LGPL version 2.1 or later" "$WORK/configure.out" \
+    || die "LGPL 2.1 구성이 아니다 — configure 플래그를 확인하라: $WORK/configure.out"
+
+  # 이중 확인: 생성된 config.mak에 GPL·nonfree 플래그가 없어야 한다.
+  ! grep -qE '^CONFIG_(GPL|NONFREE)=yes' ffbuild/config.mak \
+    || die "config.mak에 GPL/NONFREE가 켜져 있다"
 
   make -j"$(sysctl -n hw.ncpu)" || die "make 실패"
   make install DESTDIR="$OUT.tmp" || die "make install 실패"
@@ -804,7 +845,7 @@ time bash desktop/scripts/build-ffmpeg.sh    # 두 번째 — 스테이징만이
 - [ ] **Step 6: 실제로 우리 파이프라인 명령이 도는지 확인한다**
 
 ```bash
-SRC=$(ls be/storage/**/*.wav be/storage/**/*.m4a 2>/dev/null | head -1)
+SRC=$(find be/storage -type f \( -name "*.wav" -o -name "*.m4a" \) 2>/dev/null | head -1)
 [ -n "$SRC" ] || SRC=/System/Library/Sounds/Glass.aiff
 desktop/build/ffmpeg/bin/ffprobe -v error -show_entries format=duration -of json "$SRC"
 desktop/build/ffmpeg/bin/ffmpeg -y -i "$SRC" -ac 1 -ar 16000 -sample_fmt s16 -c:a flac \
@@ -888,8 +929,11 @@ set -euo pipefail
 PY_RELEASE=20250818
 PY_VERSION=3.12.11
 PY_ASSET="cpython-$PY_VERSION+$PY_RELEASE-aarch64-apple-darwin-install_only.tar.gz"
-# 이 머신에 없는 중립 경로. 재배치가 되는지 빌드 때 드러나게 한다.
-BUILD_PREFIX=/opt/damwha-embedded-py312
+PY_MINOR=3.12
+# BUILD_PREFIX가 없다. build-postgres.sh·build-ffmpeg.sh와 다른 점이다 — 그 둘은
+# `./configure --prefix`로 **소스에서 빌드**하지만 Python은 Astral이 만든 아카이브를 풀 뿐이라
+# 우리가 정한 prefix가 트리 어디에도 없다. 재배치 대상은 그 대신 **제3자 wheel이 남긴 경로**다
+# (fix_macho의 LC_RPATH 절 참고).
 
 DESKTOP="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 REPO="$(cd "$DESKTOP/.." && pwd -P)"
@@ -920,7 +964,7 @@ done
 # ── 캐시 키 두 개 ────────────────────────────────────────────────────────────
 # 런타임 층: Python 버전·prefix·체크섬·의존성 잠금·이 스크립트.
 RT_KEY=$( {
-  echo "$PY_VERSION $PY_RELEASE $BUILD_PREFIX"
+  echo "$PY_VERSION $PY_RELEASE"
   shasum -a 256 "$SUMS" "$SCRIPT" "$WORKER/pyproject.toml" "$WORKER/uv.lock" "$ENTS" | awk '{print $1}'
 } | shasum -a 256 | cut -c1-16)
 
@@ -953,104 +997,195 @@ fetch() {
   mv "$DL/$out.part" "$DL/$out"
 }
 
-# ── 재배치 3종 ───────────────────────────────────────────────────────────────
-# Phase 0이 실측으로 확정한 목록이다. 매 빌드 반복해야 한다 — Mach-O 처리(LC_RPATH 삭제,
-# LC_ID_DYLIB 정규화)와 달리 이 셋은 멱등이 아니라 "옮길 때마다" 필요하다.
+# ── 재배치 ───────────────────────────────────────────────────────────────────
+# Phase 0의 experiments/electron-phase-0/python/build.sh(태그
+# archive/electron-phase-0-packaging-validation) 조작을 그대로 옮긴다. **하나하나가 실측으로
+# 정해진 것**이라 근거를 그 자리에 적는다. 매 빌드 반복한다 — Mach-O 처리와 달리 이 넷은
+# 멱등이 아니라 "옮길 때마다" 필요하다.
 relocate() {
   local tree="$1"
 
-  # 1. bin/ 콘솔 스크립트 셔뱅 (Phase 0 실측 65개).
-  #    옛 경로가 **사라진** 경우에만 bad interpreter로 죽는다. 남아 있으면 죽지 않고
-  #    조용히 다른 런타임을 실행한다 — 앱 업데이트로 두 버전이 공존할 때 그 형태다 (R-6).
-  #    우리 실행 경로는 전부 `-m`이라 셔뱅을 안 타지만, 사람이 손으로 부를 수 있고
-  #    일부 라이브러리가 자기 콘솔 스크립트를 부른다.
-  local n=0
-  while IFS= read -r f; do
-    head -c 2 "$f" 2>/dev/null | grep -q '^#!' || continue
-    grep -q '^#!.*python' "$f" 2>/dev/null || continue
-    # 실행 위치와 무관하게 **자기 옆의** 인터프리터를 찾게 한다.
-    #
-    # `dirname`을 부르지 않는다. 앱이 주는 자식 PATH는 `<python>/bin:<ffmpeg>/bin`뿐이라
-    # (스펙 §6.2) `/usr/bin/dirname`이 없다 — `dirname: command not found` 뒤 `/python3.12`를
-    # 실행하려다 실패한다. 셸 매개변수 확장 `${0%/*}`은 외부 명령을 안 쓴다.
-    #
-    # 만들어지는 것은 sh와 Python 둘 다 읽는 polyglot이다 — sh는 `"true" '''...'''`를
-    # 명령으로 보고 exec 줄에 닿고, Python은 그 전체를 문자열 리터럴로 본다.
-    # **검증은 인터프리터 직접 실행이 아니라 이 스크립트 자체를 제한된 PATH에서
-    # 실행해서 한다** (Step 5-b).
-    python3 - "$f" <<'SHEBANG_PY'
-import pathlib, sys
-p = pathlib.Path(sys.argv[1])
-body = b"\n".join(p.read_bytes().split(b"\n")[1:])
-new = (b"#!/bin/sh\n"
-       b"'''exec' \"${0%/*}/python3.12\" \"$0\" \"$@\"\n"
-       b"'''\n") + body
-p.write_bytes(new)
-SHEBANG_PY
-    n=$((n+1))
-  done < <(find "$tree/bin" -type f -perm -u+x 2>/dev/null)
-  say "  셔뱅 $n개 재배치"
+  # ── 1. bin/ 콘솔 스크립트 셔뱅 ──────────────────────────────────────────────
+  # uv/pip이 만드는 콘솔 스크립트는 셔뱅에 **설치 시점 인터프리터의 절대 경로**를 박는다.
+  # 옮기면 그 경로가 없어져 스크립트가 통째로 죽고(Phase 0 R-9), 더 나쁘게는 옛 경로가
+  # 남아 있으면 죽지 않고 **조용히 다른 런타임을 실행한다**(R-6).
+  #
+  # **Phase 0는 절대 경로를 현재 트리로 다시 쓰는 방식을 썼고 sh 트릭을 명시적으로
+  # 기각했다** — "SIP가 /bin/sh exec에서 DYLD_*를 지워 Task 5의 dyld 실측이 통째로
+  # 끊긴다". 그 근거는 Phase 4에 적용되지 않는다(dyld 실측을 하지 않는다).
+  #
+  # Phase 4는 **반대 제약**을 받는다: 한 빌드 산출물이 두 자리에 놓인다(dev는
+  # desktop/build/python, packaged는 Resources/python). 절대 경로를 쓰면 스테이징마다 다시
+  # 써야 하는데 electron-builder가 Resources로 복사하는 지점에는 훅을 걸 수 없어,
+  # **.app 안에 dev 트리 절대 경로가 실린다** — check-bundle.mjs의 금지 문자열 검사 위반이다.
+  # 그래서 위치 독립 형태를 쓴다. `${0%/*}`는 셸 매개변수 확장이라 외부 명령을 안 부른다
+  # (자식 PATH에는 /usr/bin이 없어 `dirname`을 못 쓴다 — 스펙 §6.2).
+  local n=0 f first line
+  for f in "$tree"/bin/*; do
+    [ -f "$f" ] || continue
+    first=$(head -c 2 "$f" 2>/dev/null)
+    [ "$first" = "#!" ] || continue
+    line=$(head -n 1 "$f")
+    case "$line" in
+      "#!/bin/sh") continue ;;                    # 이미 고친 것
+      \#\!*python*)
+        local tmp="$f.reloc.$$"
+        {
+          printf '#!/bin/sh\n'
+          printf "'''exec' \"%s\" \"\$0\" \"\$@\"\n" '${0%/*}/python'"$PY_MINOR"
+          printf "'''\n"
+          tail -n +2 "$f"
+        } > "$tmp"
+        chmod 755 "$tmp"
+        mv "$tmp" "$f"
+        n=$((n + 1))
+        ;;
+    esac
+  done
+  say "  셔뱅 ${n}개 재배치"
 
-  # 2. _sysconfigdata의 prefix. sysconfig가 이 값으로 헤더·라이브러리를 찾는다.
-  local sc
-  sc=$(find "$tree/lib" -name '_sysconfigdata_*.py' | head -1)
-  [ -n "$sc" ] || die "_sysconfigdata를 못 찾았다"
-  python3 - "$sc" "$BUILD_PREFIX" <<'PYEOF'
-import sys, pathlib
-p, old = pathlib.Path(sys.argv[1]), sys.argv[2]
-t = p.read_text()
-# 절대 prefix를 지우면 sysconfig가 sys.prefix로 떨어진다 — 그것이 우리가 원하는 동작이다.
-p.write_text(t.replace(old, "/usr/local"))
-PYEOF
-  say "  _sysconfigdata prefix 정리"
+  # ── 2. sysconfig 데이터의 설치 시점 prefix ──────────────────────────────────
+  # uv가 설치 시점에 _sysconfigdata__darwin_darwin.py의 prefix 계열 값을 자기 설치
+  # 디렉터리로 다시 쓴다. sysconfig.get_config_vars()가 그 값을 그대로 돌려주므로
+  # P4-C12(런타임 자기 보고)에서 바로 드러난다.
+  #
+  # **파일을 정규식으로 긁지 않고 런타임에게 직접 묻는다.** 이 파일의 표기가 홑따옴표인지
+  # 겹따옴표인지, 한 줄인지 여러 줄인지는 배포본마다 다르다 — Phase 0에서 실제로 겹따옴표라
+  # 홑따옴표 regex가 **조용히 빈 값을 냈다.**
+  local sysdata="$tree/lib/python$PY_MINOR/_sysconfigdata__darwin_darwin.py"
+  if [ -f "$sysdata" ]; then
+    local cur after esc_from esc_to
+    cur=$("$tree/bin/python$PY_MINOR" -c \
+          "import sys,sysconfig; sys.stdout.write(sysconfig.get_config_var('prefix') or '')" 2>/dev/null)
+    if [ -n "$cur" ] && [ "$cur" != "$tree" ]; then
+      esc_from=$(printf '%s' "$cur"  | sed 's/[&/\]/\\&/g')
+      esc_to=$(printf '%s'   "$tree" | sed 's/[&/\]/\\&/g')
+      LC_ALL=C sed -i '' "s/$esc_from/$esc_to/g" "$sysdata"
+      # 고쳐졌는지 런타임에게 **다시 묻는다.** 조용히 실패하면 P4-C12가 그대로 무너진다.
+      after=$("$tree/bin/python$PY_MINOR" -c \
+              "import sys,sysconfig; sys.stdout.write(sysconfig.get_config_var('prefix') or '')" 2>/dev/null)
+      [ "$after" = "$tree" ] || die "sysconfig prefix 재작성 실패: '${after:-없음}'"
+      say "  sysconfig prefix: $cur → $tree"
+    elif [ -z "$cur" ]; then
+      die "sysconfig prefix를 읽지 못했다 — 번들 python이 실행되지 않는다"
+    else
+      say "  sysconfig prefix 이미 일치"
+    fi
+  else
+    die "_sysconfigdata를 못 찾았다: $sysdata"
+  fi
 
-  # 3. __pycache__ 전부 삭제 (Phase 0 실측 760개). 옛 경로가 박힌 .pyc가 남으면
-  #    소스보다 그것이 먼저 쓰인다.
-  find "$tree" -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
-  say "  __pycache__ 삭제"
+  # ── 3. PEP 610 direct_url.json ──────────────────────────────────────────────
+  # wheel이나 프로젝트를 **파일 경로로** 설치하면 그 경로가 여기 남는다. worker 층의
+  # `uv pip install <저장소>/be/worker`가 정확히 그 형태다:
+  #   {"url":"file:///Users/…/daewha/be/worker","dir_info":{"editable":true}}
+  # 런타임이 읽지 않는 설치 출처 기록이므로 지운다(PEP 610은 선택 사항).
+  #
+  # **지우지 않으면 check-bundle.mjs의 기존 4번 검사가 실패한다** — 그것은
+  # `grep -rlF <repo> Contents`로 Resources 전체를 훑는다.
+  local du=0
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    rm -f "$d"; du=$((du + 1))
+  done < <(find "$tree/lib/python$PY_MINOR/site-packages" -name direct_url.json 2>/dev/null)
+  say "  direct_url.json ${du}개 삭제"
+
+  # ── 4. __pycache__ ──────────────────────────────────────────────────────────
+  # 번들 python을 한 번이라도 실행하면 .pyc가 생기고, 그 안에 컴파일 시점의 **소스 절대
+  # 경로**(co_filename)와 모듈 문자열 상수가 들어간다. 위에서 .py를 고쳐도 옛 .pyc가
+  # 남아 있으면 그것이 먼저 쓰인다.
+  local pc
+  pc=$(find "$tree" -type d -name __pycache__ 2>/dev/null | wc -l | tr -d ' ')
+  find "$tree" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
+  say "  __pycache__ ${pc}개 삭제"
 }
 
-# ── Mach-O 처리 (멱등) ───────────────────────────────────────────────────────
+# ── Mach-O 처리 ──────────────────────────────────────────────────────────────
+# install_name_tool은 서명을 무효로 만든다. Phase 0는 **고친 파일마다 즉시 재서명**했다.
+resign() { codesign --force --sign - --options runtime --entitlements "$ENTS" "$1" 2>/dev/null; }
+
+macho_list() {
+  find "$1" -type f \( -name '*.so' -o -name '*.dylib' -o -perm -u+x \) -print0 |
+    while IFS= read -r -d '' f; do
+      file -b "$f" 2>/dev/null | grep -q 'Mach-O' && printf '%s\n' "$f"
+    done
+}
+
 fix_macho() {
-  local tree="$1" rpaths=0 ids=0
-  while IFS= read -r -d '' f; do
-    file -b "$f" | grep -q 'Mach-O' || continue
-    # LC_RPATH가 빌드 prefix를 가리키면 지운다 (Phase 0 실측 58건).
+  local tree="$1" m rp idv base newid rn=0 in_=0
+
+  # ── LC_RPATH — **번들 밖 전부 삭제** ────────────────────────────────────────
+  # Phase 0가 "이 Task에서 가장 실질적인 발견"이라 적은 것이다. wheel 배포자의 빌드 머신
+  # 경로가 LC_RPATH로 남아 있고 LC_RPATH는 dyld의 **실제 검색 경로**다. 특히 scipy의 확장
+  # 모듈에 /opt/homebrew의 gcc 경로가 들어 있어, 그 자리에 같은 이름의 dylib이 있으면
+  # 번들이 아니라 Homebrew 쪽을 연다 — P4-C13의 구조적 증명이 여기서 깨진다.
+  #
+  # **BUILD_PREFIX로 거르지 않는다.** 이 스크립트는 Python을 소스에서 빌드하지 않고
+  # 아카이브를 풀 뿐이라 그 문자열은 트리 어디에도 없다. 실측된 58건은 전부 제3자 경로다.
+  while IFS= read -r m; do
+    [ -n "$m" ] || continue
+    local touched=0
     while IFS= read -r rp; do
       [ -n "$rp" ] || continue
-      case "$rp" in "$BUILD_PREFIX"*) install_name_tool -delete_rpath "$rp" "$f" 2>/dev/null && rpaths=$((rpaths+1)) ;; esac
-    done < <(otool -l "$f" | awk '/LC_RPATH/{p=1} p&&/path /{print $2; p=0}')
-    # LC_ID_DYLIB를 @rpath 상대로 정규화 (Phase 0 실측 64건).
-    local id
-    id=$(otool -D "$f" 2>/dev/null | tail -n +2)
-    case "$id" in
-      "$BUILD_PREFIX"*) install_name_tool -id "@rpath/$(basename "$f")" "$f" 2>/dev/null && ids=$((ids+1)) ;;
+      case "$rp" in
+        @*|"$tree"|"$tree"/*|/usr/lib|/usr/lib/*|/System/Library|/System/Library/*) continue ;;
+      esac
+      install_name_tool -delete_rpath "$rp" "$m" 2>/dev/null \
+        && { rn=$((rn + 1)); touched=1; } \
+        || say "  경고: LC_RPATH 삭제 실패 ${m#$tree/}  <- $rp"
+    done < <(otool -l "$m" 2>/dev/null |
+               awk '/^ *cmd LC_RPATH/{r=1;next} r&&/^ *path /{print $2; r=0}' | sort -u)
+    [ "$touched" = 1 ] && resign "$m"
+  done < <(macho_list "$tree")
+  say "  LC_RPATH ${rn}건 삭제"
+  # Phase 0 실측이 58건이다. 0건이면 필터가 틀렸거나 트리가 바뀐 것이다 — 조용히 넘기지 않는다.
+  [ "$rn" -gt 0 ] || die "LC_RPATH 삭제가 0건이다 — 필터를 확인하라 (Phase 0 실측 58건)"
+
+  # ── LC_ID_DYLIB — 번들 밖 id 정규화 ────────────────────────────────────────
+  # wheel의 dylib은 delocate가 넣은 자리표시자 id(/DLC/…)나 빌드 시점 경로
+  # (/opt/llvm-openmp/…, bazel-out/…)를 갖고 있다. 의존 참조는 전부 @loader_path/@rpath라
+  # 그 id가 dyld에서 해석되지는 않지만 otool -L의 첫 줄로 나와 금지 문자열 검사에 걸린다.
+  while IFS= read -r m; do
+    [ -n "$m" ] || continue
+    # otool -D는 fat 바이너리에서 헤더 줄을 섞어 낸다. id만 남긴다.
+    idv=$(otool -D "$m" 2>/dev/null | grep -v ':$' | grep -v '^Architectures in the fat file' | sed -n '1p')
+    [ -n "$idv" ] || continue
+    case "$idv" in @*|"$tree"|"$tree"/*) continue ;; esac
+    base=$(basename "$idv")
+    case "${m#$tree/}" in
+      # **libpython만 다르다.** bin/python3.12가 @executable_path/../lib/…로 참조하므로
+      # id도 같은 형태여야 한다. @rpath/로 바꾸면 인터프리터가 자기 런타임을 못 찾는다.
+      lib/libpython$PY_MINOR.dylib) newid="@executable_path/../lib/libpython$PY_MINOR.dylib" ;;
+      *) newid="@rpath/$base" ;;
     esac
-  done < <(find "$tree" -type f \( -name '*.so' -o -name '*.dylib' -o -perm -u+x \) -print0)
-  say "  LC_RPATH $rpaths건 삭제, LC_ID_DYLIB $ids건 정규화"
+    install_name_tool -id "$newid" "$m" 2>/dev/null \
+      && { resign "$m"; in_=$((in_ + 1)); } \
+      || say "  경고: id 변경 실패 ${m#$tree/}  ($idv)"
+  done < <(macho_list "$tree")
+  say "  LC_ID_DYLIB ${in_}건 정규화"
 }
 
 # ── 서명 ─────────────────────────────────────────────────────────────────────
 # arm64는 서명 없는 Mach-O를 실행하지 않는다. disable-library-validation은 서명 주체를
 # 안 따질 뿐 "서명 없음"은 허용하지 않는다 (Phase 0 R-5) — 선택이 아니라 필수다.
 sign_tree() {
-  local tree="$1" n=0
-  while IFS= read -r -d '' f; do
-    file -b "$f" | grep -q 'Mach-O' || continue
-    codesign --force --sign - --options runtime --entitlements "$ENTS" "$f" 2>/dev/null && n=$((n+1))
-  done < <(find "$tree" -type f \( -name '*.so' -o -name '*.dylib' -o -perm -u+x \) -print0)
-  say "  Mach-O $n개 서명"
+  local n=0 f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    resign "$f" && n=$((n + 1))
+  done < <(macho_list "$1")
+  say "  Mach-O ${n}개 서명"
 }
 
 verify_signatures() {
-  local tree="$1" bad=0
-  while IFS= read -r -d '' f; do
-    file -b "$f" | grep -q 'Mach-O' || continue
+  local bad=0 f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
     # --arch arm64가 핵심이다. 없이 부르면 universal 파일의 x86_64 슬라이스 하나 때문에
     # 파일 전체가 "not signed at all"로 보고된다 (Phase 0). 이 번들의 arm64 무서명은 0개다.
-    codesign --verify --arch arm64 "$f" 2>/dev/null || { echo "  무서명: $f"; bad=$((bad+1)); }
-  done < <(find "$tree" -type f \( -name '*.so' -o -name '*.dylib' -o -perm -u+x \) -print0)
-  [ "$bad" -eq 0 ] || die "arm64 무서명 $bad건"
+    codesign --verify --arch arm64 "$f" 2>/dev/null || { say "  무서명: ${f#$1/}"; bad=$((bad+1)); }
+  done < <(macho_list "$1")
+  [ "$bad" -eq 0 ] || die "arm64 무서명 ${bad}건"
   say "  arm64 서명 전수 확인"
 }
 
@@ -1068,7 +1203,9 @@ if [ ! -f "$RT_DONE" ]; then
 
   say "  의존성 설치 (uv.lock 기준)"
   # uv.lock이 단일 진실 원천이다. 스크립트가 버전을 스스로 적지 않는다.
-  uv export --directory "$WORKER" --extra models --no-hashes --no-emit-project \
+  # --no-dev 필수: uv export의 기본은 dev 그룹 포함이라 pytest·ruff·testcontainers가
+  # 1.5 GB 번들에 함께 실린다.
+  uv export --directory "$WORKER" --extra models --no-dev --no-hashes --no-emit-project \
     --format requirements-txt > "$RT_OUT.tmp/requirements.txt" || die "uv export 실패"
   uv pip install --python "$RT_OUT.tmp/tree/bin/python3.12" \
     -r "$RT_OUT.tmp/requirements.txt" || die "의존성 설치 실패"
@@ -1245,7 +1382,7 @@ fi
 # 스펙 §2.4의 결함(매니페스트 밖 전역 설치 의존)에 대한 회귀 방지다.
 #
 # **import하지 않고 찾기만 한다.** `import`는 부작용이 있는 모듈에서 위험하다 —
-# embed_service는 Task 6이 고치기 전까지 모듈 수준에서 load_settings()와
+# embed_service는 Task 8이 고치기 전까지 모듈 수준에서 load_settings()와
 # build_text_embedder()를 부르므로(embed_service.py:10-11), import하면 빌드 머신이
 # DATABASE_URL을 요구하고 bge-m3 2.2GB를 받는다. importlib.util.find_spec은 모듈을
 # **찾기만** 하고 실행하지 않는다.
@@ -1749,6 +1886,7 @@ normalize 안의 검증 probe에 runner를 넘기는 것도 함께 고쳤다. �
 - Consumes: Task 2의 `mlx-lm` 매니페스트
 - Produces:
   - `damwha_worker.llm_entry` 모듈 — `python -m damwha_worker.llm_entry --run-id=X --model … --host … --port …`
+    **Task 17이 이 모듈의 `main()`에 진행 훅 두 줄을 더한다** (이 Task는 자리만 주석으로 남긴다).
   - `embed_service`가 import 부작용 없이 `python -m`으로 뜬다.
   - `lens_llm_server_bin` 기본값 `""` = 모듈 진입.
   Task 15의 고아 판정이 `llm_entry`를 모듈 목록에 넣는다.
@@ -1862,15 +2000,17 @@ def main() -> None:  # pragma: no cover — 실서버 기동 (로컬 실행)
 
     from mlx_lm.server import main as server_main
 
-    from .downloads import install_hf_progress_hook
     from .runtime_report import runtime_facts
 
     logging.basicConfig(level=logging.INFO)
     logging.getLogger(__name__).info("runtime %s", json.dumps(runtime_facts(), ensure_ascii=False))
 
-    # 같은 프로세스라 걸 수 있는 훅. LLM 모델의 다운로드 진행이 다른 모델과 똑같이
-    # model_readiness로 올라간다 (Task 17).
-    install_hf_progress_hook()
+    # 진행 보고 훅은 **Task 17이 여기 꽂는다.** 이 Task에서 부르면 아직 없는 모듈을
+    # import해 Step 8이 ImportError로 죽는다 — 각 Task가 초록불로 끝나야 한다는 규칙
+    # (로드맵 §5) 위반이다. Task 17이 이 자리에 다음 두 줄을 더한다:
+    #
+    #     from .models.downloads import install_hf_progress_hook
+    #     install_hf_progress_hook(writer=f"llm:{model_arg_of(sys.argv)}")
 
     # argv[0]은 남긴다 — argparse가 prog 이름으로 쓴다.
     sys.argv = [sys.argv[0], *_passthrough(sys.argv[1:])]
@@ -3709,39 +3849,9 @@ export async function openTokenWindow(deps: {
   },
 ```
 
-- [ ] **Step 6-b: 토큰 교체가 live env에 닿는 경로를 만든다**
-
-저장만으로는 안 된다. 감독자가 쥔 `ctx.env`는 기동 시점에 얼어붙고, 기존 설정 재적용
-(`config-reload.ts:87-95`)은 **`config.json`만** 읽는다 — 토큰은 거기 없다(Keychain에 있다).
-
-```typescript
-/**
- * 토큰을 바꾼 뒤 **살아 있는 env**에 반영한다. 저장 → 재조회 → live env 갱신 → 재시작이
- * 한 흐름이어야 한다 (P4-C4).
- *
- * `refreshEnv`로 흘리지 않는 이유: 그것은 config.json이 진실인 키를 위한 것이고, 토큰은
- * 파일에 없다. 여기서 직접 얹는다.
- */
-async function applyTokenChange(token: string): Promise<void> {
-  store.write(token);
-  liveEnv.HF_TOKEN = store.read() ?? "";   // 저장된 것을 다시 읽어 얹는다
-  await restartService("worker");           // Task 18의 서비스 재시작 경로
-  await restartService("embed");
-}
-```
-
-**`store.write` 뒤에 `store.read()`로 다시 읽는다** — 암호화·복호화 왕복이 실제로 되는지를
-그 자리에서 확인하는 것이 재시작 뒤 "왜 안 되지"보다 낫다.
-
-테스트:
-
-```typescript
-it("토큰을 바꾸면 재시작한 자식이 새 값을 받는다 (P4-C4)", async () => {
-  await applyTokenChange("hf_new_value");
-  expect(liveEnv.HF_TOKEN).toBe("hf_new_value");
-  expect(restarted).toEqual(["worker", "embed"]);
-});
-```
+**토큰 교체 뒤 살아 있는 env를 갱신하는 경로는 Task 19가 만든다.** 그것이
+`restartService`(Task 18)를 쓰는데 이 Task는 Task 18보다 앞이라, 여기 두면 커밋 시점에
+컴파일되지 않는다. 이 Task는 **저장·검증·읽기**까지만 한다.
 
 - [ ] **Step 7: 손으로 확인한다**
 
@@ -3809,7 +3919,10 @@ safeStorage(macOS Keychain)로 암호화해 0600으로 저장하고, 복호화�
 - Consumes: Task 10의 `pythonBinaries`, Task 11의 `LaunchContext.runId`
 - Produces:
   - `export interface DamwhaProcess { pid: number; module: string; runId: string | null; once: boolean; argv0: string }`
-  - `export function parseDamwhaProcesses(psText: string, bundleRoot: string): DamwhaProcess[]`
+  - `export interface KnownTree { root: string; python: string }`
+  - `export function parseDamwhaProcesses(psText: string, trees: readonly KnownTree[]): DamwhaProcess[]`
+    — **`bundleRoot` 하나가 아니라 트리 목록이다.** 조건 3(번들 아래인가)을 각 항목의 `root`로
+    판정해야 dev·packaged 두 인터프리터를 함께 시험할 수 있다.
   - `export function classify(p: DamwhaProcess, myRunId: string): "mine" | "orphan" | "external"`
   - `export async function reapOrphans(deps): Promise<{ reaped: number[]; failed: true } | { reaped: number[] }>`
 
@@ -3885,9 +3998,19 @@ describe("parseDamwhaProcesses", () => {
   });
 
   it("dev와 packaged 두 인터프리터를 다 시험한다", () => {
-    const dev = "/repo/desktop/build/python/bin/python3.12";
+    // 하나의 userData를 두 빌드가 공유한다(Phase 3의 결정) — dev로 띄웠다 끄고 packaged로
+    // 켜는 순서가 실제로 있다. **조건 3을 각 트리의 root로 판정해야** dev python이 안 걸린다.
+    const devRoot = "/repo/desktop/build/python";
+    const dev = `${devRoot}/bin/python3.12`;
     const ps = `  303 ${dev} -m damwha_worker --run-id=run-a`;
-    expect(parseDamwhaProcesses(ps, BUNDLE, [PY, dev])).toHaveLength(1);
+    expect(parseDamwhaProcesses(ps, [{ root: BUNDLE, python: PY }, { root: devRoot, python: dev }]))
+      .toHaveLength(1);
+  });
+
+  it("packaged가 dev 트리 경로를 모르면 그 목록에서 빠질 뿐 오탐하지 않는다", () => {
+    const dev = "/repo/desktop/build/python/bin/python3.12";
+    const ps = `  304 ${dev} -m damwha_worker --run-id=run-a`;
+    expect(parseDamwhaProcesses(ps, [{ root: BUNDLE, python: PY }])).toEqual([]);
   });
 
   it("ps 출력이 잘려 접두사가 안 맞으면 담지 않는다 — '고아 없음'과 구별은 호출부가 한다", () => {
@@ -4048,6 +4171,21 @@ pnpm --filter damwha-desktop run test
 pnpm --filter damwha-desktop run lint
 ```
 
+- [ ] **Step 6-b: `reapOrphans`의 실패 경로를 테스트한다 (P4-C22)**
+
+```typescript
+it("ps가 비영으로 끝나면 failed를 돌려준다", async () => {
+  const r = await reapOrphans({ ...deps, ps: async () => { throw new Error("ps: exit 1"); } });
+  expect("failed" in r).toBe(true);
+});
+
+it("ps 출력이 비면 failed다 — '고아 없음'과 구별한다", async () => {
+  // 이 맥에 damwha 프로세스가 없어도 ps는 수백 줄을 낸다. 빈 출력은 실패다.
+  const r = await reapOrphans({ ...deps, ps: async () => "" });
+  expect("failed" in r).toBe(true);
+});
+```
+
 **Verify:** 테스트 전부 통과.
 
 **Review:**
@@ -4185,6 +4323,16 @@ describe("reapOwnedOnQuit", () => {
     expect(lines.join(" ")).toMatch(/101/);
   });
 
+  it("스캔 후 사라진 pid는 kill하지 않는다", async () => {
+    const killed: number[] = [];
+    const { d } = deps(`  101 ${PY} -m damwha_worker --run-id=run-a`, {
+      kill: (pid: number) => { killed.push(pid); },
+      exists: () => false,        // 스캔과 신호 사이에 이미 끝났다
+    });
+    await reapOwnedOnQuit(d);
+    expect(killed).toEqual([]);
+  });
+
   it("아무것도 없으면 조용하다", async () => {
     const lines: string[] = [];
     const { d } = deps("", { log: (s: string) => lines.push(s) });
@@ -4241,9 +4389,16 @@ export async function reapOwnedOnQuit(deps: ReapDeps): Promise<{ reaped: DamwhaP
   const found = await scanOwned(deps);
   // 자손을 부모보다 **먼저** 죽인다. 순서가 뒤집히면 부모가 사라지며 트리를 잃는다.
   for (const proc of found) {
-    for (const child of await deps.descendantsOf(proc.pid)) deps.kill(child);
+    for (const child of await deps.descendantsOf(proc.pid)) {
+      if (deps.exists(child)) deps.kill(child);
+    }
   }
-  for (const proc of found) deps.kill(proc.pid);
+  // **신호 직전에 다시 확인한다.** 스캔과 신호 사이에 그 프로세스가 스스로 끝나고 OS가
+  // pid를 재사용할 수 있다 — 며칠씩 켜 두는 앱에서 남의 프로세스를 때리게 된다
+  // (worker-shutdown.ts가 같은 이유로 alive()를 본다).
+  for (const proc of found) {
+    if (deps.exists(proc.pid)) deps.kill(proc.pid);
+  }
   // 회수한 것이 있으면 A층이 놓쳤다는 뜻이다. 조용히 덮으면 그 결함이 영영 안 보인다.
   if (found.length > 0) {
     deps.log(`종료 회수: ${found.map((p) => `${p.module}(${p.pid})`).join(", ")}`);
@@ -4252,15 +4407,31 @@ export async function reapOwnedOnQuit(deps: ReapDeps): Promise<{ reaped: DamwhaP
 }
 ```
 
-- [ ] **Step 5: `quit-flow.ts`가 `stopAll()` 뒤에 부르게 한다**
+- [ ] **Step 5: `main.ts`의 `stopServices()`를 try/finally로 감싼다**
+
+**`quit-flow.ts`에 넣으면 안 된다.** 거기에는 `stopAll`이 없고(`deps.stopServices()`를 부른다,
+`quit-flow.ts:233`), `stopAll`은 `main.ts:511`의 `stopServices()` 안에 있다. 그리고
+`main.ts:1230`의 `.catch`가 **`stopServices` 자체가 거부한 경우**를 받아 `quitNow()`로 가는데,
+`runQuitFlow` 안에 B층을 두면 그 경로에서 건너뛰어진다 — B층의 존재 이유가 "A층이 놓친
+경로"인데 그중 하나를 놓친다.
 
 ```typescript
-  const outcome = await supervisor.stopAll(plan);
-  // B층. 핸들 유무와 무관하게 **항상** 돈다 (스펙 §6.5).
-  const swept = await reapOwnedOnQuit(reapDeps);
-  // 종료 화면의 "남은 것" 판정에 B층 결과를 합친다 — A층이 clean이라고 해도 여기서
-  // 회수한 것이 있으면 그것은 clean이 아니었다.
+// desktop/src/main.ts
+async function stopServices(): Promise<StopOutcome> {
+  try {
+    const outcome = await supervisor.stopAll(plan);
+    return mergeSweep(outcome, await reapOwnedOnQuit(reapDeps));
+  } finally {
+    // stopAll이 던져도 B층은 돈다. 그것이 이 층의 존재 이유다.
+  }
+}
 ```
+
+정확히는 `try { … } catch (e) { await reapOwnedOnQuit(reapDeps); throw e; }` + 정상 경로의
+`mergeSweep`이다 — `finally`에서 두 번 부르지 않도록 한 쪽만 고른다.
+
+**`mergeSweep`이 하는 일:** A층이 `stopped: true`라고 해도 B층이 무언가 회수했으면 그것은
+clean이 아니었다. 종료 화면의 "남은 것" 판정에 합친다.
 
 - [ ] **Step 6: 통과를 확인한다**
 
@@ -4273,7 +4444,10 @@ pnpm --filter damwha-desktop run lint
 
 **Review:**
 - B층이 **핸들도 감독자 상태도 안 보는가.**
-- `stopAll()` **뒤에** 도는가.
+- **`stopAll`이 던진 경로에서도 도는가** (`main.ts:1230`의 `.catch`가 받는 경우).
+- `quit-flow.ts`가 아니라 `main.ts`의 `stopServices()` 안인가.
+- **신호 직전 pid 정체성을 다시 확인하는가** (`deps.exists`) — 스캔과 신호 사이에 pid가
+  재사용될 수 있다. 스펙 §6.5가 요구한다.
 - 내 run-id만 대상인가.
 - 자손을 부모보다 먼저 죽이는가.
 - 회수한 것을 로그에 남기는가 (A층 결함의 유일한 단서다).
@@ -4318,7 +4492,9 @@ rt.result를 null로 만들고 stopAll이 그 서비스를 건너뛴다.
 - Produces:
   - `MODEL_READINESS_KEY = "model_readiness"`
   - `def merge_model_readiness(conn, key: str, entry: dict) -> None` — **원자적 merge**
-  - `def report_download(conn_factory, key: str)` — 컨텍스트 매니저. 진입에 `downloading`, 성공에 `ready`, 예외에 `failed`.
+  - `def report_download(conn_factory, key: str, writer: str)` — 컨텍스트 매니저. 진입에 `downloading`, 성공에 `ready`, 예외에 `failed`.
+  - `def install_hf_progress_hook(writer: str) -> None` — **훅 지점은 Step 5-c가 정한다.**
+    `llm_entry`·`bge_embed`·`whisper_mlx`·`pyannote_diar` 넷이 부른다.
   - `errors.classify_download(exc) -> ErrorKind` — 401·403은 PERMANENT.
   Task 19의 API·FE가 이 행을 읽는다.
 
@@ -4443,7 +4619,11 @@ def merge_model_readiness(conn, key: str, entry: dict, writer: str | None = None
 ```
 
 한 문장으로 쓴다. `INSERT … ON CONFLICT DO UPDATE`에서 **충돌한 행의 현재 `entries`**에
-`jsonb_build_object(key, entry)`를 `||`로 merge하고, 역전 방지는 `WHERE`에 넣는다:
+`jsonb_build_object(key, entry)`를 `||`로 merge하고, 역전 방지는 `WHERE`에 넣는다. **`updated_at`은 함수가 한 번 만들어 `entry`와 `WHERE` 양쪽에
+같은 값을 넣는다** — 호출자가 안 주면 비교 기준이 빈 문자열이 되어 어떤 옛 값도 덮어쓴다.
+최상위 `updated_at`은 `GREATEST`로 올려야 다른 key의 더 오래된 쓰기에 뒤로 가지 않는다.
+ISO 문자열은 **고정 정밀도**로 만든다 — 같은 초에서 소수부 유무가 섞이면 사전순이 시간순과
+달라진다(`'…20Z' < '…20.5Z'`는 거짓).
 
 ```sql
 INSERT INTO app_setting (key, value) VALUES (%(k)s, %(seed)s::jsonb)
@@ -4474,10 +4654,13 @@ WHERE COALESCE(
 
 **진행 갱신은 초당 1회 이하로 누른다.** 한 다운로드가 DB를 두들기지 않게.
 
-여기서 다루지 않는 것이 하나 있다 — `mlx_lm.server`는 **별도 프로세스**라 이 훅이 자동으로
-붙지 않는다. LLM 모델의 첫 다운로드는 그 서버가 자기 안에서 하고, 우리는 서버가 준비될
-때까지의 시간으로만 그것을 안다 (llm_server.py의 start timeout). 그래서 LLM 항목은
-`downloading`을 서버 기동 시작에, `ready`를 준비 완료에 적는다 — 바이트 진행은 없다.
+**LLM 모델도 같은 훅을 탄다.** Task 8의 `llm_entry`가 `mlx_lm.server.main()`을 **같은
+프로세스에서** 부르므로, 이 모듈의 훅을 그 진입에도 꽂을 수 있다. 별도 프로세스로 띄웠다면
+LLM 다운로드 진행을 관측할 길이 없어 "시작·완료만 기록"이 최선이었고, 그러면 정상 다운로드
+120초 동안 갱신이 없어 Task 18의 무진행 규칙이 그것을 실패로 오판했다.
+
+`llm_entry`는 DB 연결을 스스로 연다 — 세 번째 writer 프로세스다. `DATABASE_URL`은 앱이
+주입한 것을 물려받는다.
 """
 ```
 
@@ -4503,6 +4686,32 @@ Phase 3이 남긴 "외부 DB 모드에서 worker가 capabilities 한 행을 쓴�
 
 앱 쪽은 Task 12의 `appOwnedChildEnv`가 `databaseMode.kind === "external"`일 때
 `DAMWHA_SHARED_STATE: "off"`를 넣는다.
+
+- [ ] **Step 5-c: 훅 지점을 먼저 조사한다 — 이 결과가 P4-C6의 크기를 정한다**
+
+`huggingface_hub`에는 **전역 진행 훅이 없다.** `snapshot_download`/`hf_hub_download`의
+`tqdm_class` 인자를 넘겨야 하는데 `mlx_lm.utils._download`·sentence-transformers·pyannote
+셋 다 그것을 넘기지 않는다. 남는 수단은 모듈 속성 교체이고 라이브러리 버전에 취약하다.
+
+```bash
+V=$(uv export --directory be/worker --extra models --no-dev --no-hashes --no-emit-project | grep '^huggingface-hub==')
+echo "$V"
+uv run --directory be/worker python - <<'PY'
+import inspect
+from huggingface_hub import snapshot_download, hf_hub_download
+for f in (snapshot_download, hf_hub_download):
+    p = inspect.signature(f).parameters
+    print(f.__name__, "tqdm_class" in p, sorted(p)[:6])
+PY
+```
+
+| 결과 | 조치 |
+| --- | --- |
+| `tqdm_class`가 둘 다 있다 | `mlx_lm.utils.snapshot_download`와 `huggingface_hub.snapshot_download`를 `functools.partial(…, tqdm_class=…)`로 교체. **빌드가 시그니처 존재를 assert한다**(build-python.sh 8단계에 한 줄) |
+| 하나만 있거나 없다 | **바이트 진행을 포기한다.** `updated_at` 하트비트만 남기고, 스펙 §6.9와 P4-C6을 "다운로드 중임이 보인다"로 내린다. 스펙 개정이 필요하므로 **사용자에게 알린다** |
+
+**이 조사 없이 `install_hf_progress_hook`을 구현하지 않는다.** 스펙 §12가 이것을 미확정으로
+적었다.
 
 - [ ] **Step 6: `pyannote_diar.py`의 401·403을 보존한다**
 
@@ -4533,7 +4742,8 @@ uv run --directory be/worker ruff check .
 - 역전 방지가 실제로 동작하는가.
 - 진행 갱신이 초당 1회 이하로 눌리는가.
 - 401·403이 PERMANENT인가.
-- `mlx_lm.server`의 한계가 주석에 적혀 있는가.
+- **`llm_entry`의 `main()`에 훅이 꽂혔는가** (Task 8이 주석으로 남긴 자리).
+- `llm_entry`가 자기 DB 연결을 여는가 — 세 번째 writer 프로세스다.
 
 - [ ] **Step 9: 커밋**
 
@@ -4562,8 +4772,9 @@ bge-m3는 리비전을 고정하고 safetensors만 받는다. 지금까지 같�
 pytorch_model.bin과 model.safetensors로 두 벌, 리비전까지 갈려 받아
 2.1 GB를 낭비했다.
 
-mlx_lm.server는 별도 프로세스라 진행 훅이 안 붙는다 — LLM 항목은 바이트
-진행 없이 기동 시작/준비 완료만 적는다.
+LLM 모델도 같은 훅을 탄다. llm_entry가 mlx_lm.server.main()을 같은
+프로세스에서 부르기 때문이다 — 별도 프로세스였다면 바이트 진행을 관측할
+길이 없어 Task 18의 무진행 규칙이 정상 다운로드를 실패로 오판했다.
 ```
 
 ---
@@ -4760,6 +4971,59 @@ LLM 서버도 600초 제한이다. 제한을 넘는 다운로드는 진행 중�
 
 `worker_capabilities`를 읽는 자리와 같은 방식으로 `model_readiness`를 읽어 설정 조회 응답에 `modelReadiness`로 얹는다. **읽기 전용이다** — API가 이 행을 쓰지 않는다.
 
+- [ ] **Step 1-b: 토큰 교체가 live env에 닿는 경로를 만든다 (Task 14에서 옮겨 왔다)**
+
+저장만으로는 안 된다. 감독자가 쥔 `ctx.env`는 기동 시점에 얼어붙고, 기존 설정 재적용
+(`config-reload.ts`)은 **`config.json`만** 읽는다 — 토큰은 거기 없다(Keychain에 있다).
+
+이 Task에 있는 이유: `restartService`(Task 18)와 "서비스 다시 시작" 버튼이 **둘 다 여기**
+있어야 한 커밋이 컴파일된다.
+
+```typescript
+/**
+ * 토큰을 바꾼 뒤 **살아 있는 env**에 반영한다. 저장 → 재조회 → live env 갱신 → 재시작이
+ * 한 흐름이어야 한다 (P4-C4).
+ *
+ * `refreshEnv`로 흘리지 않는 이유: 그것은 config.json이 진실인 키를 위한 것이고, 토큰은
+ * 파일에 없다. 여기서 직접 얹는다.
+ */
+export async function applyTokenChange(deps: TokenChangeDeps, token: string): Promise<void> {
+  deps.store.write(token);
+  // 저장된 것을 **다시 읽어** 얹는다 — 암호화·복호화 왕복이 실제로 되는지를 그 자리에서
+  // 확인하는 것이 재시작 뒤 "왜 안 되지"보다 낫다.
+  const back = deps.store.read();
+  if (back === null) throw new Error("토큰을 저장했지만 다시 읽지 못했어요.");
+  deps.liveEnv.HF_TOKEN = back;
+  await deps.restartService("worker");
+  await deps.restartService("embed");
+}
+
+export interface TokenChangeDeps {
+  store: TokenStore;
+  liveEnv: Record<string, string>;
+  restartService(id: ServiceId): Promise<void>;
+}
+```
+
+테스트 (`desktop/tests/windows/apply-token-change.test.ts`):
+
+```typescript
+it("토큰을 바꾸면 live env가 갱신되고 두 서비스가 재시작된다 (P4-C4)", async () => {
+  const restarted: string[] = [];
+  const liveEnv: Record<string, string> = { HF_TOKEN: "hf_old" };
+  const store = makeTokenStore(tmpDir(), fakeStorage());
+  await applyTokenChange({ store, liveEnv, restartService: async (id) => { restarted.push(id); } }, "hf_new");
+  expect(liveEnv.HF_TOKEN).toBe("hf_new");
+  expect(restarted).toEqual(["worker", "embed"]);
+});
+
+it("저장은 됐는데 다시 읽히지 않으면 던진다 — 재시작 전에 막는다", async () => {
+  const store = { ...makeTokenStore(tmpDir(), fakeStorage()), read: () => null };
+  await expect(applyTokenChange({ store, liveEnv: {}, restartService: async () => {} }, "hf_x"))
+    .rejects.toThrow();
+});
+```
+
 - [ ] **Step 2: 상태 창에 세 가지를 더한다**
 
 1. **모델 준비** — `downloading`이면 진행(`bytesTotal`이 0이면 "받는 중"만), `failed`면 사유와 §6.10의 층별 안내.
@@ -4816,7 +5080,7 @@ git commit -m "feat: 모델 준비 상태와 토큰 설정을 화면에 보인�
 
 ## Task 20: 통합 검증과 결과 문서
 
-스펙 §9의 완료 기준 28건을 판정한다. **증거 없이 "통과"라고 쓰지 않는다** (`superpowers:verification-before-completion`).
+스펙 §9의 완료 기준 30건을 판정한다. **증거 없이 "통과"라고 쓰지 않는다** (`superpowers:verification-before-completion`).
 
 **Files:**
 - Create: `docs/superpowers/reports/2026-09-16-electron-phase-4-embedded-python-runtime-results.md`
@@ -4833,7 +5097,7 @@ ls /tmp/p4-baseline/now || { echo "Task 0의 기준선이 없다 — 이 검증�
 
 없으면 **여기서 멈추고 사용자에게 알린다.** 기준선 없이 "데이터가 보존됐다"고 적을 수 없다.
 
-- [ ] **Step 2: packaged 앱으로 축 A~E를 순서대로 판정한다**
+- [ ] **Step 2: packaged 앱으로 축 A~E를 순서대로 판정한다 (30건)**
 
 각 기준마다 **명령과 출력**을 결과 문서에 남긴다. 스펙 §9의 "확인" 열이 절차다.
 
@@ -4972,8 +5236,13 @@ Phase 3 결과 문서(`2026-09-14-…-results.md`)의 절 구성을 따른다:
 - **Task 11 → 13.** 11이 새 런처를 더해 공존시키고, 13이 소비자를 옮긴 뒤 옛 것을 지운다.
   **각 Task가 초록불로 끝난다** — 중간에 컴파일이 깨진 커밋을 남기지 않는다.
 - **Task 17 → 18.** 유예 계산이 `model_readiness`를 읽는다.
-- **Task 18 → 14 Step 6-b.** 토큰 교체가 `restartService`를 쓴다. 14를 18 뒤로 미루거나,
-  14에서 그 Step만 뒤로 뺀다.
+- **Task 14 → 18 → 19.** 토큰 교체의 live env 갱신은 `restartService`(Task 18)를 쓰므로
+  **Task 19로 옮겼다**(Step 1-b). Task 14는 저장·검증·읽기까지만 한다. 번호와 실행 순서가
+  일치한다.
+- **Task 8 → 17.** `llm_entry`의 진행 훅은 Task 17이 꽂는다. Task 8은 자리만 주석으로 남긴다 —
+  거기서 부르면 아직 없는 모듈을 import해 Step 8이 죽는다.
+- **Task 17 Step 5-c가 분기점이다.** 훅 지점을 못 찾으면 P4-C6을 내려야 하고 그것은 스펙
+  변경이다 — 사용자 확인이 필요하다.
 
 **5. 각 Task의 종료 상태** — 모든 Task가 `test`·`lint` 통과 상태로 끝난다. 로드맵 §5는
 필수 검증 실패가 다음 단계 진행을 막는다고 못 박으므로, 의도적 실패를 다음 Task로 넘기지
