@@ -8,7 +8,13 @@
 
 **Tech Stack:** Electron 44 / TypeScript / vitest (desktop), Python 3.12 + pydantic-settings + pytest (worker), python-build-standalone, uv (빌드 전용), ffmpeg LGPL 정적 빌드, PostgreSQL 16 (Phase 3).
 
-**Spec:** [docs/superpowers/specs/2026-09-16-electron-phase-4-embedded-python-runtime-design.md](../specs/2026-09-16-electron-phase-4-embedded-python-runtime-design.md)
+**Spec:** [docs/superpowers/specs/2026-09-16-electron-phase-4-embedded-python-runtime-design.md](../specs/2026-09-16-electron-phase-4-embedded-python-runtime-design.md) (개정본 `4180768` 기준 — 스펙 §17.2)
+
+**개정 (2026-09-16):** Codex 계획 검증 1회차의 blocking 10건·important 7건을 반영했다.
+스펙을 고쳐야 했던 여섯은 스펙 개정이 받았고(§17.2), 이 계획은 나머지를 받는다.
+가장 큰 구조 변화 셋 — **Task 0(기준선)이 신설되어 맨 앞에 온다**, **LLM은 `llm_entry`
+진입 모듈로 감싼다(Task 8)**, **Task 11이 옛 런처를 지우지 않고 공존시킨다**(중간 컴파일
+실패 제거).
 
 ## Global Constraints
 
@@ -23,7 +29,10 @@
 - **자식 PATH는 `<python>/bin:<ffmpeg>/bin`뿐이다.** 개발 도구 폴백을 주지 않는다.
 - **`npm install` 금지** (repo CLAUDE.md). `pnpm`만 쓴다.
 - **패키지를 루트에서 실행하지 않는다.** 루트 스크립트가 `--filter`/`--directory`로 cwd를 잡는다.
-- **절대 불변** — `be/worker/.venv`, `be/worker/.env`, `be/.env`, `fe/.env`, `~/.cache/huggingface`, `~/.local/bin`, `~/.local/share/uv`, Docker 볼륨 `damwha_pgdata`, `be/storage`, `<userData>/storage/`. 어떤 Task도 이것을 쓰지 않는다.
+- **절대 불변** — `be/worker/.env`, `be/.env`, `fe/.env`, `~/.cache/huggingface`, `~/.local/share/uv`, Docker 볼륨 `damwha_pgdata`, `be/storage`, `<userData>/storage/`. 어떤 Task도 이것을 쓰지 않는다.
+- **허용 변경** (스펙 §5의 표) — `be/worker/.venv`는 Task 2가 `uv sync`로 새 잠금에 맞추고,
+  `~/.local/bin/mlx_lm.server`는 Task 20이 검증 중 일시 이동한다. **둘 다 Task 0이 기준선을
+  뜬 뒤에만** 손댄다. 복구 절차는 각 Task에 있다.
 - **커밋 메시지는 한국어 본문**으로 쓴다 (저장소 관례). 제목은 `type(scope): 한 줄`.
 
 ## 검증 명령 모음
@@ -94,6 +103,169 @@
 | --- | --- |
 | `desktop/src/process/uv-launcher.ts` | `python-launcher.ts`가 대체 |
 | `desktop/tests/process/uv-launcher.test.ts` | 위와 같이 |
+
+---
+
+## Task 0: 기준선 — 무엇이든 건드리기 전에
+
+스펙 §5가 **절대 불변**과 **허용 변경** 두 부류를 나눴다. 기준선을 검증 단계(Task 20)에서
+뜨면 그 앞의 변경을 못 잡는다 — Task 2가 이미 `.venv`를 바꾼 뒤다.
+
+**Files:**
+- Create: `desktop/scripts/phase4-baseline.sh`
+
+**Interfaces:**
+- Consumes: 없음
+- Produces: `/tmp/p4-baseline/` — Task 20이 대조하는 기준선. 스크립트는 **찍기와 대조 둘 다**
+  한다(`baseline` / `verify` 인자).
+
+- [ ] **Step 1: 스크립트를 쓴다**
+
+`desktop/scripts/phase4-baseline.sh`:
+
+```bash
+#!/bin/bash
+# desktop/scripts/phase4-baseline.sh
+#
+# Electron Phase 4의 데이터 안전 기준선 (스펙 §5). 두 부류를 **따로** 찍는다 —
+# 절대 불변은 바이트 단위로, 허용 변경은 복구에 필요한 것만.
+#
+#   bash desktop/scripts/phase4-baseline.sh baseline   기준선을 찍는다 (첫 Task보다 먼저)
+#   bash desktop/scripts/phase4-baseline.sh verify     지금 상태와 대조한다
+
+set -uo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+OUT="${P4_BASELINE_DIR:-/tmp/p4-baseline}"
+MODE="${1:?usage: phase4-baseline.sh baseline|verify}"
+DEST="$OUT/$([ "$MODE" = baseline ] && echo now || echo later)"
+
+mkdir -p "$DEST"
+cd "$REPO"
+
+sums() {  # 경로 하나를 해시 목록으로. 없으면 빈 파일 — "없음"도 상태다.
+  local target="$1" out="$2"
+  if [ -e "$target" ]; then
+    find "$target" -type f -exec shasum -a 256 {} + 2>/dev/null | sort > "$DEST/$out"
+  else
+    : > "$DEST/$out"
+  fi
+}
+
+# ── 절대 불변: 바이트 단위 ────────────────────────────────────────────────────
+sums be/worker/.env            abs-worker-env.txt
+sums be/.env                   abs-be-env.txt
+sums fe/.env                   abs-fe-env.txt
+sums be/storage                abs-be-storage.txt
+# HF 캐시는 수십 GB다. blob 내용까지 해시하면 몇 분 걸린다 — 파일 목록과 크기로 충분하다.
+# (우리가 걱정하는 변화는 "새 다운로드가 여기 떨어졌나"이지 비트 손상이 아니다.)
+find "$HOME/.cache/huggingface" -type f -exec stat -f '%z %N' {} + 2>/dev/null | sort > "$DEST/abs-hf-cache.txt"
+ls -la "$HOME/.local/share/uv/tools" > "$DEST/abs-uv-tools.txt" 2>/dev/null || : > "$DEST/abs-uv-tools.txt"
+sums "$HOME/Library/Application Support/Damwha/storage" abs-userdata-legacy-storage.txt
+# Docker 볼륨은 메타데이터만으로는 내용 보존을 증명하지 못한다 — 행 수를 직접 센다.
+# DB가 꺼져 있으면 빈 파일이고, verify도 같은 조건이면 대조는 성립한다.
+docker volume inspect damwha_pgdata > "$DEST/abs-pgdata-meta.json" 2>/dev/null || : > "$DEST/abs-pgdata-meta.json"
+psql "postgres://postgres:postgres@localhost:5432/damwha" -tAc \
+  "select relname||'='||n_live_tup from pg_stat_user_tables order by relname" \
+  > "$DEST/abs-docker-db-rows.txt" 2>/dev/null || : > "$DEST/abs-docker-db-rows.txt"
+
+# ── 허용 변경: 복구에 필요한 것 ───────────────────────────────────────────────
+cp be/worker/uv.lock "$DEST/mut-uv.lock" 2>/dev/null || :
+uv run --directory be/worker python -c "
+import importlib.metadata as m
+for p in sorted(('torch','torchaudio','numpy','mlx','mlx-lm','mlx-whisper','faster-whisper',
+                 'pyannote.audio','speechbrain','sentence-transformers','numba','llvmlite')):
+    try: print(p, m.version(p))
+    except Exception: print(p, 'MISSING')
+" > "$DEST/mut-venv-versions.txt" 2>/dev/null || : > "$DEST/mut-venv-versions.txt"
+ls -la "$HOME/.local/bin" > "$DEST/mut-local-bin.txt" 2>/dev/null || :
+
+# ── 앱 데이터: 기존 레코드 보존으로 판정 ──────────────────────────────────────
+APP="$HOME/Library/Application Support/Damwha"
+sums "$APP/data/storage" app-storage.txt
+"$REPO/desktop/build/postgres/bin/psql" -h "$APP/run" -U damwha damwha -tAc \
+  "select 'meeting='||count(*) from meeting" > "$DEST/app-db-rows.txt" 2>/dev/null || : > "$DEST/app-db-rows.txt"
+
+echo "== $MODE → $DEST"
+
+if [ "$MODE" = verify ]; then
+  echo
+  fail=0
+  for f in "$OUT/now"/abs-*.txt "$OUT/now"/abs-*.json; do
+    [ -e "$f" ] || continue
+    n=$(basename "$f")
+    if diff -q "$f" "$OUT/later/$n" >/dev/null 2>&1; then
+      echo "PASS  $n"
+    else
+      echo "FAIL  $n"
+      diff "$f" "$OUT/later/$n" | head -10
+      fail=1
+    fi
+  done
+  echo
+  echo "허용 변경(mut-*)과 앱 데이터(app-*)는 자동 판정하지 않는다 — 사람이 대조한다:"
+  ls "$OUT/later" | grep -E '^(mut|app)-' | sed 's/^/  /'
+  exit $fail
+fi
+```
+
+```bash
+chmod +x desktop/scripts/phase4-baseline.sh
+```
+
+**절대 불변은 `diff`로 자동 판정하고 허용 변경·앱 데이터는 하지 않는다.** 뒤 둘은
+"바뀌었는가"가 아니라 "**어떻게** 바뀌었는가"를 봐야 하고 그것은 사람의 일이다 — 앱 데이터는
+증가만 있어야 하고(P4-C27), `.venv`는 새 잠금과 일치해야 한다(P4-C25).
+
+- [ ] **Step 2: 기준선을 찍는다**
+
+```bash
+pnpm db:up          # Docker DB 행 수를 세려면 떠 있어야 한다
+bash desktop/scripts/phase4-baseline.sh baseline
+ls -la /tmp/p4-baseline/now
+```
+
+**출력이 비어 있는 파일이 있으면 그 이유를 적어 둔다** — `verify`가 같은 조건에서 돌아야
+대조가 성립한다(DB가 꺼져 있었으면 나중에도 꺼 두거나, 켜고 다시 기준선을 찍는다).
+
+- [ ] **Step 3: 대조가 실제로 도는지 확인한다**
+
+```bash
+bash desktop/scripts/phase4-baseline.sh verify    # 아무것도 안 바꿨으니 전부 PASS
+echo "probe" >> be/.env && bash desktop/scripts/phase4-baseline.sh verify | grep 'FAIL.*be-env'
+git checkout be/.env
+```
+
+기대: 첫 실행이 전부 `PASS`, 둘째가 `FAIL  abs-be-env.txt`. **탐지가 되는 것을 확인하지 않은
+기준선은 기준선이 아니다.**
+
+**Verify:** Step 2·3 통과. `/tmp/p4-baseline/now`에 파일이 있다.
+
+**Review:**
+- 절대 불변 목록이 스펙 §5와 **정확히** 같은가.
+- `.venv`·`~/.local/bin`이 절대 불변이 **아닌** 자리(`mut-`)에 있는가.
+- Docker DB를 메타데이터가 아니라 **행 수**로 재는가.
+- Step 3이 탐지를 실증하는가.
+
+- [ ] **Step 4: 커밋**
+
+```bash
+git add desktop/scripts/phase4-baseline.sh
+git commit -m "chore(desktop): Phase 4 데이터 안전 기준선 스크립트를 더한다"
+```
+
+커밋 본문:
+
+```
+스펙 §5가 절대 불변과 허용 변경을 나눴다. 기준선을 검증 단계에서 뜨면
+그 앞의 변경을 못 잡는다 — 의존성 정렬이 이미 .venv를 바꾼 뒤다.
+
+절대 불변만 diff로 자동 판정한다. 허용 변경과 앱 데이터는 '바뀌었는가'가
+아니라 '어떻게 바뀌었는가'를 봐야 하고 그것은 사람의 일이다.
+
+Docker 볼륨은 메타데이터가 아니라 행 수로 잰다. 볼륨 생성 시각이 같아도
+내용은 바뀔 수 있다.
+```
 
 ---
 
@@ -194,7 +366,10 @@ echo "== hardened runtime + entitlements로 서명한다: $ENTS"
 find "$PY_TREE" -type f \( -name '*.so' -o -name '*.dylib' -o -perm -u+x \) -print0 |
   while IFS= read -r -d '' f; do
     file -b "$f" | grep -q 'Mach-O' || continue
-    codesign --force --sign - --options runtime --entitlements "$ENTS" "$f" 2>/dev/null
+    # 서명 실패를 삼키지 않는다. 서명 안 된 .so는 dlv가 거부해 numba와 무관한 이유로
+    # 죽고, 그 죽음이 JIT 판정으로 오독된다 (Phase 0 R-5).
+    codesign --force --sign - --options runtime --entitlements "$ENTS" "$f" \
+      || { echo "서명 실패: $f" >&2; exit 3; }
   done
 
 run_probe() {
@@ -259,11 +434,19 @@ bash desktop/scripts/probe-numba.sh /tmp/numba-probe/python desktop/build-resour
 
 - [ ] **Step 5: 죽었으면 `allow-jit`을 더해 다시 잰다**
 
+**사본을 먼저 만들고 키를 더한다.** 순서를 뒤집으면 PlistBuddy가 없는 파일에 쓰려다
+실패하고, `|| cp`가 **키 없는 원본**을 남겨 "allow-jit으로도 죽는다"는 거짓 판정이 나온다.
+
 ```bash
-/usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.allow-jit bool true" \
-  /tmp/ents-with-jit.plist 2>/dev/null || \
-  cp desktop/build-resources/entitlements.mac.plist /tmp/ents-with-jit.plist
-# 위 한 줄로 안 되면 손으로 키를 더한 사본을 /tmp/ents-with-jit.plist에 만든다.
+cp desktop/build-resources/entitlements.mac.plist /tmp/ents-with-jit.plist
+/usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.allow-jit bool true" /tmp/ents-with-jit.plist
+
+# 세 키가 다 있는지 확인한 뒤에만 잰다. 확인 없이 재면 무엇을 잰 건지 모른다.
+for k in allow-unsigned-executable-memory disable-library-validation allow-jit; do
+  /usr/libexec/PlistBuddy -c "Print :com.apple.security.cs.$k" /tmp/ents-with-jit.plist \
+    || { echo "키 누락: $k"; exit 1; }
+done
+
 bash desktop/scripts/probe-numba.sh /tmp/numba-probe/python /tmp/ents-with-jit.plist
 ```
 
@@ -356,13 +539,26 @@ git diff --stat be/worker/uv.lock
 git diff be/worker/uv.lock | grep -E '^[+-]version|^[+-]name' | head -40
 ```
 
-- [ ] **Step 4: 테스트 venv와 실제 venv를 새 잠금으로 맞춘다**
+- [ ] **Step 4: 허용 변경 절차를 밟아 venv를 새 잠금으로 맞춘다**
+
+`.venv` 변경은 **스펙 §5의 허용 변경**이다 — 절대 불변이 아니다. 절차가 정해져 있다.
 
 ```bash
-pnpm worker:sync          # uv sync --extra models — 실제 워커의 venv
+# 1. Task 0이 기준선을 떴는지 확인한다. 없으면 여기서 멈춘다.
+[ -f /tmp/p4-baseline/now/mut-uv.lock ] || { echo "Task 0을 먼저 돌려라"; exit 1; }
+
+# 2. 복구용 사본. Task 0의 것과 별개로 이 Task 직전 상태를 남긴다.
+cp be/worker/uv.lock /tmp/p4-uv.lock.before-task2
+
+# 3. 정렬
+pnpm worker:sync          # uv sync --extra models
 ```
 
-**`.venv`는 §Global Constraints의 절대 불변 목록에 없다** — 그 목록은 `be/worker/.venv`를 포함하지만, 그것은 "이 Phase의 앱 코드가 건드리지 않는다"는 뜻이고 **의존성 정렬은 이 Task의 명시적 산출물**이다 (스펙 §6.1: "두 스택이 갈린 채로 두지 않는다"). 아래 Step 5가 회귀를 확인한다.
+**복구:** `cp /tmp/p4-uv.lock.before-task2 be/worker/uv.lock && pnpm worker:sync`.
+
+`.venv`가 허용 변경인 근거는 **재생성 가능한 파생물**이라는 것이다 — `.env`(사람이 적은 값)나
+`~/.cache/huggingface`(수십 GB의 다운로드)와 성질이 다르다. 그리고 `mlx-lm`을 매니페스트에
+넣으면서 `.venv`를 그 잠금에 안 맞추면 **두 스택이 갈린 채로 남는다**(스펙 §6.1).
 
 - [ ] **Step 5: 버전 변화를 기록하고 회귀를 확인한다**
 
@@ -395,24 +591,15 @@ pnpm db:up
 
 기대: 전사 텍스트가 이전과 같거나, 다르다면 그 차이를 결과 문서에 적는다. 차이가 크면 `mlx` 고정값을 이전 버전으로 되돌린다.
 
-- [ ] **Step 7: `lens_llm_server_bin` 기본값을 모듈 진입으로 내린다**
+**`lens_llm_server_bin`의 기본값은 이 Task에서 바꾸지 않는다.** 초안은 여기서 `""`로 내리고
+"실제 사용은 다음 커밋"이라고 적었는데, 그러면 **이 커밋 시점에 관리형 LLM 서버가 뜨지
+않는다**(`shutil.which("")` → `None`). 로드맵 §5는 각 단계가 검증 가능한 상태여야 한다고
+못 박는다. 기본값과 그것을 읽는 코드를 **Task 8이 한 번에** 바꾼다.
 
-`be/worker/damwha_worker/config.py:47`:
-
-```python
-    # 빈 문자열이 "번들 python의 모듈 진입(`-m mlx_lm.server`)을 쓴다"는 뜻이다.
-    # 값을 채우면 그것을 실행 파일로 그대로 실행한다 — 수동 운용이나 다른 백엔드용 탈출구다.
-    # 옛 기본값 "mlx_lm.server"는 shutil.which가 PATH에서 찾는 콘솔 스크립트였고,
-    # 그것이 곧 개발 머신의 uv tool 전역 설치 의존이었다 (Electron Phase 4 스펙 §2.4).
-    lens_llm_server_bin: str = ""
-```
-
-`llm_server.py`가 이 값을 실제로 쓰는 방식은 Task 10이 고친다. 이 Step은 기본값만 바꾼다 — Task 10 전까지 `shutil.which("")`가 `None`을 돌려주므로 **`LENS_LLM_SERVER_BIN`을 명시하지 않으면 관리형 LLM 서버가 뜨지 않는다.** 두 Task는 연달아 간다.
-
-- [ ] **Step 8: 커밋**
+- [ ] **Step 7: 커밋**
 
 ```bash
-git add be/worker/pyproject.toml be/worker/uv.lock be/worker/damwha_worker/config.py
+git add be/worker/pyproject.toml be/worker/uv.lock
 git commit -m "fix(worker): mlx-lm과 mlx를 매니페스트에 고정한다
 
 mlx-lm은 pyproject·uv.lock·.venv 어디에도 없었고, 렌즈·요약은
@@ -424,8 +611,9 @@ mlx는 전이 의존이지만 함께 명시 고정한다 — Electron Phase 4의
 이 파일을 단일 진실 원천으로 삼으므로, 전이 해석에 맡기면 빌드마다 다른
 버전이 들어가고 그것이 STT 출력을 바꿔도 기록이 남지 않는다.
 
-lens_llm_server_bin의 기본값을 빈 문자열로 내려 \"번들 모듈 진입\"을 뜻하게
-했다. 실제 진입 변경은 다음 커밋이다."
+이 커밋은 매니페스트와 잠금만 바꾼다. 진입 방식은 Task 8이 기본값과 함께
+한 번에 바꾼다 — 기본값만 먼저 내리면 그 시점에 관리형 LLM 서버가 뜨지
+않는 상태가 커밋으로 남는다."
 ```
 
 ---
@@ -739,10 +927,13 @@ RT_KEY=$( {
 # worker 층: 런타임 키 + damwha_worker 소스 트리 전체.
 #   -type f 로 디렉터리를 빼고, 경로까지 해시에 넣어 파일 이동도 키를 바꾼다.
 #   __pycache__는 제외한다 — 소스가 같아도 내용이 달라져 캐시가 영영 안 맞는다.
+#   **경로를 해시에 남긴다.** awk로 경로를 버리면 내용이 같은 두 파일의 rename이 같은 키가
+#   되어, 모듈을 옮긴 변경이 캐시에 안 잡힌다. (삭제는 목록이 줄어 잡히지만 rename은 안 잡힌다.)
+#   `.py`만 보지 않는 이유: 패키지 안의 자원 파일(.sql·.json 등)도 동작을 바꾼다.
 WK_KEY=$( {
   echo "$RT_KEY"
-  find "$WORKER/damwha_worker" -type f -name '*.py' -not -path '*/__pycache__/*' -print0 |
-    sort -z | xargs -0 shasum -a 256 | awk '{print $1}'
+  ( cd "$WORKER" && find damwha_worker -type f -not -path '*/__pycache__/*' -print0 |
+      sort -z | xargs -0 shasum -a 256 )
 } | shasum -a 256 | cut -c1-16)
 
 RT_OUT="$CACHE/rt-$RT_KEY"
@@ -777,20 +968,25 @@ relocate() {
   while IFS= read -r f; do
     head -c 2 "$f" 2>/dev/null | grep -q '^#!' || continue
     grep -q '^#!.*python' "$f" 2>/dev/null || continue
-    # 실행 위치와 무관하게 자기 옆의 인터프리터를 찾게 한다.
-    python3 - "$f" <<'PYEOF'
-import sys, pathlib
+    # 실행 위치와 무관하게 **자기 옆의** 인터프리터를 찾게 한다.
+    #
+    # `dirname`을 부르지 않는다. 앱이 주는 자식 PATH는 `<python>/bin:<ffmpeg>/bin`뿐이라
+    # (스펙 §6.2) `/usr/bin/dirname`이 없다 — `dirname: command not found` 뒤 `/python3.12`를
+    # 실행하려다 실패한다. 셸 매개변수 확장 `${0%/*}`은 외부 명령을 안 쓴다.
+    #
+    # 만들어지는 것은 sh와 Python 둘 다 읽는 polyglot이다 — sh는 `"true" '''...'''`를
+    # 명령으로 보고 exec 줄에 닿고, Python은 그 전체를 문자열 리터럴로 본다.
+    # **검증은 인터프리터 직접 실행이 아니라 이 스크립트 자체를 제한된 PATH에서
+    # 실행해서 한다** (Step 5-b).
+    python3 - "$f" <<'SHEBANG_PY'
+import pathlib, sys
 p = pathlib.Path(sys.argv[1])
-lines = p.read_bytes().split(b"\n")
-lines[0] = b'#!/bin/sh\n"exec" "$(dirname "$0")/python3.12" "$0" "$@"'.split(b"\n")[0]
-# 위 한 줄만으로는 부족하다 — sh 셔뱅 트릭은 두 줄이 필요하다. 아래처럼 다시 쓴다.
-body = b"\n".join(lines[1:])
-new = (b'#!/bin/sh\n'
-       b'"true" \'\'\'\\\'\n'
-       b'exec "$(dirname "$0")/python3.12" "$0" "$@"\n'
+body = b"\n".join(p.read_bytes().split(b"\n")[1:])
+new = (b"#!/bin/sh\n"
+       b"'''exec' \"${0%/*}/python3.12\" \"$0\" \"$@\"\n"
        b"'''\n") + body
 p.write_bytes(new)
-PYEOF
+SHEBANG_PY
     n=$((n+1))
   done < <(find "$tree/bin" -type f -perm -u+x 2>/dev/null)
   say "  셔뱅 $n개 재배치"
@@ -936,6 +1132,26 @@ mv "${RT}.hidden" "$RT"
 
 기대: 원래 경로가 **사라져도** 옮긴 트리가 돈다. 이것이 R-6의 진짜 검사다 — 옛 경로가 남아 있으면 깨진 트리도 조용히 돈다.
 
+**5-b. 콘솔 스크립트 자체를 제한된 PATH에서 실행한다.** 인터프리터 직접 실행만으로는
+셔뱅 래퍼를 검증하지 못한다 — 앱이 자식에게 주는 PATH에는 `/usr/bin`이 없다(스펙 §6.2).
+
+```bash
+BIN=$(ls /tmp/py-moved/bin/*.py 2>/dev/null | head -1)
+[ -n "$BIN" ] || BIN=$(grep -rl '^#!/bin/sh' /tmp/py-moved/bin | head -1)
+env -i PATH="/tmp/py-moved/bin" HOME=/tmp "$BIN" --version 2>&1 | head -3
+```
+
+기대: 정상 출력. `dirname: command not found`나 `/python3.12: not found`가 나오면
+셔뱅 재작성이 외부 명령에 의존하고 있다는 뜻이다.
+
+**공백이 든 경로에서도 확인한다** — 설치 경로에 공백은 흔하다.
+
+```bash
+mkdir -p "/tmp/py spaced" && ditto /tmp/py-moved "/tmp/py spaced/python"
+env -i PATH="/tmp/py spaced/python/bin" HOME=/tmp "/tmp/py spaced/python/bin/$(basename "$BIN")" --version 2>&1 | head -3
+rm -rf "/tmp/py spaced"
+```
+
 ```bash
 rm -rf /tmp/py-moved
 ```
@@ -1027,11 +1243,28 @@ fi
 # ── 진입점 확인 ──────────────────────────────────────────────────────────────
 # 빌드에서 잡지 않으면 첫 실행에서야 드러난다. mlx_lm이 여기 걸리는 것이
 # 스펙 §2.4의 결함(매니페스트 밖 전역 설치 의존)에 대한 회귀 방지다.
+#
+# **import하지 않고 찾기만 한다.** `import`는 부작용이 있는 모듈에서 위험하다 —
+# embed_service는 Task 6이 고치기 전까지 모듈 수준에서 load_settings()와
+# build_text_embedder()를 부르므로(embed_service.py:10-11), import하면 빌드 머신이
+# DATABASE_URL을 요구하고 bge-m3 2.2GB를 받는다. importlib.util.find_spec은 모듈을
+# **찾기만** 하고 실행하지 않는다.
 say "진입점 확인"
 "$WK_OUT/bin/python3.12" -c "
-import damwha_worker, damwha_worker.embed_service, mlx_lm.server
-print('  import OK')
-" || die "진입점 import 실패 — pyproject.toml의 models extra를 확인하라"
+import importlib.util as u, sys
+missing = [m for m in ('damwha_worker', 'damwha_worker.__main__', 'damwha_worker.embed_service',
+                       'damwha_worker.llm_entry', 'mlx_lm.server')
+           if u.find_spec(m) is None]
+if missing:
+    print('  없는 모듈:', ', '.join(missing)); sys.exit(1)
+print('  모듈 확인 OK')
+" || die "진입점 모듈이 없다 — pyproject.toml의 models extra와 damwha_worker 설치를 확인하라"
+
+# 무거운 의존성이 실제로 로드되는지는 따로 본다. 이쪽은 부작용이 없는 것들만이다.
+"$WK_OUT/bin/python3.12" -c "
+import torch, numpy, mlx, mlx_whisper, pyannote.audio, sentence_transformers
+print('  ML 스택 import OK')
+" || die "ML 스택 import 실패"
 
 # ── 스테이징 ─────────────────────────────────────────────────────────────────
 say "스테이징: $STAGED"
@@ -1353,7 +1586,7 @@ def test_probe_uses_ffprobe_bin_from_env(monkeypatch):
     assert seen[0][0] == "/bundle/ffmpeg/bin/ffprobe"
 
 
-def test_normalize_uses_both_bins_from_env(monkeypatch, tmp_path):
+def test_normalize_uses_ffmpeg_bin_from_env(monkeypatch, tmp_path):
     monkeypatch.setenv("FFMPEG_BIN", "/bundle/ffmpeg/bin/ffmpeg")
     monkeypatch.setenv("FFPROBE_BIN", "/bundle/ffmpeg/bin/ffprobe")
     src = tmp_path / "a.wav"
@@ -1362,13 +1595,14 @@ def test_normalize_uses_both_bins_from_env(monkeypatch, tmp_path):
 
     def runner(cmd):
         seen.append(cmd)
-        # normalize 안의 재귀 probe(temp_path)도 이 runner를 타야 한다.
         return subprocess.CompletedProcess(cmd, 0, b'{"format":{"duration":"1.0"}}', b"")
+
+    # 재귀 검증 probe는 모듈 기본 runner를 탄다(기존 동작) — 그것을 스텁해 실제 ffprobe를
+    # 부르지 않게 한다. 이 테스트가 보는 것은 ffmpeg 명령의 첫 인자다.
+    monkeypatch.setattr(ffmpeg, "probe", lambda path: ffmpeg.ProbeResult(1000))
 
     ffmpeg.normalize(str(src), str(tmp_path / "b.flac"), runner=runner)
     assert seen[0][0] == "/bundle/ffmpeg/bin/ffmpeg"
-    # 정규화 뒤 검증 probe가 PATH의 ffprobe로 떨어지지 않는다.
-    assert any(cmd[0] == "/bundle/ffmpeg/bin/ffprobe" for cmd in seen[1:])
 
 
 def test_bins_default_to_bare_names(monkeypatch):
@@ -1428,13 +1662,19 @@ def _bin(name: str) -> str:
             "-y",
 ```
 
-`normalize()` 안의 재귀 검증 호출(`ffmpeg.py:82`)에 `runner`를 넘긴다 — 지금은 안 넘겨 주입된 runner를 잃는다:
+`normalize()` 안의 재귀 검증 호출(`ffmpeg.py:82`)은 **건드리지 않는다.**
+
+바이너리는 그쪽에서도 `_bin`을 다시 읽으므로 자동으로 따라온다. `runner`를 넘기는 것은
+별개 변경이고 **이 Phase의 범위가 아니다** — 넘기면 기존 테스트가 깨진다:
 
 ```python
-        # 넘기지 않으면 정규화 뒤 검증만 모듈 기본 runner로 떨어진다. `_bin`은 그쪽에서도
-        # 다시 읽히므로 바이너리는 맞지만, 테스트가 주입한 runner를 잃는다.
-        probe(temp_path, runner=runner)
+# tests/test_ffmpeg.py:49, :122 — 모듈 속성을 갈아 끼운다
+monkeypatch.setattr(ffmpeg, "probe", lambda path: ffmpeg.ProbeResult(1))
 ```
+
+`probe(temp_path, runner=runner)`는 저 lambda에 `TypeError: <lambda>() got an unexpected
+keyword argument 'runner'`를 낸다. 지금 그 재귀 호출이 모듈 기본 runner를 타는 것은
+**의도된 기존 동작**이고(정규화 결과를 진짜 ffprobe로 검증한다) 바꿀 이유가 없다.
 
 - [ ] **Step 5: `config.py`에 필드를 더한다**
 
@@ -1495,44 +1735,182 @@ normalize 안의 검증 probe에 runner를 넘기는 것도 함께 고쳤다. �
 
 ---
 
-## Task 8: worker — 모듈 진입과 LLM 서버
+## Task 8: worker — 모듈 진입, `llm_entry`, import 부작용 제거
 
 **Files:**
+- Create: `be/worker/damwha_worker/llm_entry.py`
+- Create: `be/worker/tests/test_llm_entry.py`
 - Modify: `be/worker/damwha_worker/embed_service.py`
 - Modify: `be/worker/damwha_worker/llm_server.py`
+- Modify: `be/worker/damwha_worker/config.py`
 - Modify: `be/worker/tests/test_llm_server.py`
 
 **Interfaces:**
-- Consumes: Task 2의 `lens_llm_server_bin` 기본값 `""`
-- Produces: `python -m damwha_worker.embed_service`가 뜬다. LLM 서버가 `[sys.executable, "-m", "mlx_lm.server", …]`로 뜬다. Task 10의 고아 판정이 그 모양을 가정한다.
+- Consumes: Task 2의 `mlx-lm` 매니페스트
+- Produces:
+  - `damwha_worker.llm_entry` 모듈 — `python -m damwha_worker.llm_entry --run-id=X --model … --host … --port …`
+  - `embed_service`가 import 부작용 없이 `python -m`으로 뜬다.
+  - `lens_llm_server_bin` 기본값 `""` = 모듈 진입.
+  Task 15의 고아 판정이 `llm_entry`를 모듈 목록에 넣는다.
 
-- [ ] **Step 1: `embed_service.py`에 모듈 진입을 더한다**
+- [ ] **Step 1: 지금 코드를 읽는다**
 
-파일 끝 `main()` 아래에:
+```bash
+sed -n '1,15p' be/worker/damwha_worker/embed_service.py
+sed -n '60,120p' be/worker/damwha_worker/llm_server.py
+sed -n '1,40p' be/worker/tests/test_llm_server.py
+```
+
+확인할 것 셋:
+- `embed_service.py:10-11`이 **모듈 수준**에서 `load_settings()`·`build_text_embedder()`를
+  부른다 — import만으로 `DATABASE_URL`을 요구하고 bge-m3를 받는다.
+- 실제 함수 이름은 `managed_llm_server(model, settings, *, popen, probe, monotonic, sleep)`다
+  (`llm_server.py:68`). 인자 순서가 `(model, settings)`다.
+- `_wait_ready(proc, model, settings, probe, monotonic, sleep)`가 600초를 센다(`:128`).
+
+- [ ] **Step 2: `embed_service.py`의 import 부작용을 없앤다**
+
+모듈 수준의 두 줄을 지연 초기화로 바꾼다:
 
 ```python
+_settings = None
+_embedder = None
+
+
+def _ready():
+    """설정과 임베더를 **처음 쓸 때** 만든다.
+
+    모듈 수준에서 만들면 `import damwha_worker.embed_service`만으로 DATABASE_URL을 요구하고
+    bge-m3(2.2 GB)를 내려받는다. 빌드의 진입점 확인(build-python.sh 8단계)과 어떤 정적
+    분석도 이 모듈을 건드릴 수 없게 된다 (Electron Phase 4 스펙 §4.1-17).
+
+    FastAPI 핸들러는 요청마다 부르지만 두 번째부터는 캐시를 돌려주므로 값싸다. main()이
+    uvicorn 전에 한 번 불러 **기동 시점에** 모델을 올린다 — 첫 요청이 31초 걸리지 않게.
+    """
+    global _settings, _embedder
+    if _embedder is None:
+        _settings = load_settings()
+        _embedder = build_text_embedder(_settings)
+    return _settings, _embedder
+```
+
+`health()`는 `_ready()`를 부르지 않는다 — 모델이 아직 안 올라왔어도 프로세스가 살아 있음을
+답해야 한다. `embed()`와 `main()`만 부른다.
+
+`main()`에 자기 보고와 모델 선로딩을 넣는다:
+
+```python
+def main() -> None:  # pragma: no cover — 실모델 + uvicorn (로컬 실행)
+    import json
+    import logging
+
+    import uvicorn
+
+    from .runtime_report import runtime_facts
+
+    logging.basicConfig(level=logging.INFO)
+    logging.getLogger(__name__).info("runtime %s", json.dumps(runtime_facts(), ensure_ascii=False))
+    settings, _ = _ready()   # uvicorn 전에 모델을 올린다
+    uvicorn.run(app, host=settings.embed_service_host, port=settings.embed_service_port)
+
+
 if __name__ == "__main__":  # pragma: no cover
     # `python -m damwha_worker.embed_service`. 앱은 콘솔 스크립트(bin/damwha-embed)를
     # 부르지 않는다 — 그것은 셔뱅을 타고, 옛 경로가 남아 있으면 죽지 않고 조용히 다른
-    # 런타임을 실행한다 (Electron Phase 0 R-6, Phase 4 스펙 §6.2).
-    # [project.scripts]의 damwha-embed는 그대로 둔다 — deploy/README.md의
-    # `uv tool install` 경로가 쓴다.
+    # 런타임을 실행한다 (Phase 0 R-6, Phase 4 스펙 §6.2).
+    # [project.scripts]의 damwha-embed는 그대로 둔다 — deploy/README.md가 쓴다.
     main()
 ```
 
-- [ ] **Step 2: 실패하는 테스트를 쓴다**
+(`runtime_report`는 Task 9가 만든다. **Task 8과 9를 연달아 실행하거나**, 이 Step의 자기 보고
+줄만 Task 9로 미룬다 — 미루면 이 커밋에서 그 import를 빼 둔다.)
 
-`be/worker/tests/test_llm_server.py`를 먼저 읽어 기존 스텁 모양을 맞춘다:
-
-```bash
-sed -n '1,60p' be/worker/tests/test_llm_server.py
-```
-
-그다음 추가:
+- [ ] **Step 3: `llm_entry.py`를 쓴다**
 
 ```python
-def test_starts_server_as_bundled_module_by_default(monkeypatch, tmp_path):
-    """기본값(빈 lens_llm_server_bin)이면 sys.executable의 -m 모듈 진입이다."""
+"""LLM 서버를 **앱이 소유를 증명할 수 있는 모양**으로 띄우는 얇은 진입 모듈.
+
+`mlx_lm.server`를 직접 부르면 두 가지가 다 안 된다 — upstream CLI라 `--run-id`를 주면
+모르는 인자로 죽고, 안 주면 소유 표식이 없는 프로세스가 된다. 부모 트리로 판정하는 것도
+못 한다: Python supervisor는 두 번째 신호에서 `--once` 자식을 SIGKILL하고 `os._exit`하므로
+(`__main__.py:268-287`), 부모와 `--once`가 둘 다 사라지면 훑을 트리가 없다
+(Electron Phase 4 스펙 §6.2·§6.5).
+
+그래서 이 모듈이 그 사이에 앉는다. 하는 일은 셋뿐이다:
+  1. `--run-id`를 받아서 **버린다** (앱이 `ps -axo args`로 읽는 것이 전부다).
+  2. 나머지 인자로 `sys.argv`를 재구성한다.
+  3. **같은 프로세스에서** `mlx_lm.server`의 `main()`을 부른다.
+
+중간 프로세스를 만들지 않는 것이 중요하다 — exec 래퍼나 부모-자식 구조로 하면 스펙 §6.2가
+없앤 uv 구조가 되살아난다. 같은 프로세스라는 점의 부수 효과로 **HF 다운로드 훅을 걸 수
+있다** — 별도 프로세스였다면 LLM 모델의 다운로드 진행을 관측할 길이 없었다 (§6.9).
+"""
+
+import sys
+
+from .runtime_report import RUN_ID_PREFIX
+
+
+def _passthrough(argv: list[str]) -> list[str]:
+    """`--run-id=…`만 뺀 나머지. mlx_lm.server가 그대로 받는다."""
+    return [a for a in argv if not a.startswith(RUN_ID_PREFIX)]
+
+
+def main() -> None:  # pragma: no cover — 실서버 기동 (로컬 실행)
+    import json
+    import logging
+
+    from mlx_lm.server import main as server_main
+
+    from .downloads import install_hf_progress_hook
+    from .runtime_report import runtime_facts
+
+    logging.basicConfig(level=logging.INFO)
+    logging.getLogger(__name__).info("runtime %s", json.dumps(runtime_facts(), ensure_ascii=False))
+
+    # 같은 프로세스라 걸 수 있는 훅. LLM 모델의 다운로드 진행이 다른 모델과 똑같이
+    # model_readiness로 올라간다 (Task 17).
+    install_hf_progress_hook()
+
+    # argv[0]은 남긴다 — argparse가 prog 이름으로 쓴다.
+    sys.argv = [sys.argv[0], *_passthrough(sys.argv[1:])]
+    server_main()
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
+```
+
+- [ ] **Step 4: 실패하는 테스트를 쓴다**
+
+`be/worker/tests/test_llm_entry.py`:
+
+```python
+from damwha_worker.llm_entry import _passthrough
+
+
+def test_drops_run_id_only():
+    argv = ["--run-id=abc-123", "--model", "m/x", "--host", "127.0.0.1", "--port", "9911"]
+    assert _passthrough(argv) == ["--model", "m/x", "--host", "127.0.0.1", "--port", "9911"]
+
+
+def test_keeps_everything_when_no_run_id():
+    argv = ["--model", "m/x"]
+    assert _passthrough(argv) == argv
+
+
+def test_does_not_drop_a_value_that_merely_contains_run_id():
+    # `--run-id`로 **시작하는** 토큰만 뺀다.
+    argv = ["--model", "org/run-id-model"]
+    assert _passthrough(argv) == argv
+```
+
+`be/worker/tests/test_llm_server.py`에 더한다 — **실제 시그니처는
+`managed_llm_server(model, settings, *, popen, probe, monotonic, sleep)`다:**
+
+```python
+def test_starts_server_through_llm_entry_by_default(tmp_path):
+    """기본값(빈 lens_llm_server_bin)이면 sys.executable의 llm_entry 모듈 진입이다."""
     seen = []
 
     class FakeProc:
@@ -1546,18 +1924,20 @@ def test_starts_server_as_bundled_module_by_default(monkeypatch, tmp_path):
         return FakeProc()
 
     settings = _settings(lens_llm_server_bin="", lens_llm_base_url="http://127.0.0.1:9911")
-    probes = iter([None, object()])   # 첫 번째는 "안 떠 있다", 두 번째는 "떴다"
-    with llm_server.managed_server(settings, "m/x", popen=popen,
-                                   probe=lambda url: next(probes),
-                                   monotonic=lambda: 0.0, sleep=lambda s: None):
+    probes = iter([None, object()])   # 안 떠 있다 → 떴다
+    with llm_server.managed_llm_server(
+        "m/x", settings, popen=popen, probe=lambda url: next(probes),
+        monotonic=lambda: 0.0, sleep=lambda s: None,
+    ):
         pass
 
     assert seen[0][0] == sys.executable
-    assert seen[0][1:3] == ["-m", "mlx_lm.server"]
+    assert seen[0][1:3] == ["-m", "damwha_worker.llm_entry"]
+    assert any(a.startswith("--run-id=") for a in seen[0]), "소유 표식이 argv에 있어야 한다"
     assert "--model" in seen[0]
 
 
-def test_explicit_binary_still_wins(monkeypatch, tmp_path):
+def test_explicit_binary_still_wins(tmp_path):
     """값을 채우면 그것을 실행 파일로 그대로 쓴다 — 수동 운용·다른 백엔드용 탈출구."""
     exe = tmp_path / "my-server"
     exe.write_text("#!/bin/sh\n")
@@ -1572,20 +1952,25 @@ def test_explicit_binary_still_wins(monkeypatch, tmp_path):
 
     settings = _settings(lens_llm_server_bin=str(exe), lens_llm_base_url="http://127.0.0.1:9911")
     probes = iter([None, object()])
-    with llm_server.managed_server(settings, "m/x", popen=lambda a, **k: (seen.append(a), FakeProc())[1],
-                                   probe=lambda url: next(probes),
-                                   monotonic=lambda: 0.0, sleep=lambda s: None):
+    with llm_server.managed_llm_server(
+        "m/x", settings, popen=lambda a, **k: (seen.append(a), FakeProc())[1],
+        probe=lambda url: next(probes), monotonic=lambda: 0.0, sleep=lambda s: None,
+    ):
         pass
 
     assert seen[0][0] == str(exe)
+    # 탈출구로 띄운 서버에는 표식이 없다 — 앱이 소유를 증명할 수 없다 (스펙 §6.5).
+    assert not any(a.startswith("--run-id=") for a in seen[0])
 
 
 def test_missing_explicit_binary_reports_the_setting_not_uv_tool(tmp_path):
     settings = _settings(lens_llm_server_bin="/nope/mlx_lm.server",
                          lens_llm_base_url="http://127.0.0.1:9911")
     with pytest.raises(WorkerError) as e:
-        with llm_server.managed_server(settings, "m/x", probe=lambda url: None,
-                                       monotonic=lambda: 0.0, sleep=lambda s: None):
+        with llm_server.managed_llm_server(
+            "m/x", settings, probe=lambda url: None,
+            monotonic=lambda: 0.0, sleep=lambda s: None,
+        ):
             pass
     msg = str(e.value)
     # 옛 문구는 `uv tool install mlx-lm`을 안내했다 — 번들에서는 틀린 안내다.
@@ -1595,31 +1980,37 @@ def test_missing_explicit_binary_reports_the_setting_not_uv_tool(tmp_path):
 
 `_settings` 헬퍼가 없으면 기존 테스트의 설정 생성 방식을 그대로 쓴다.
 
-- [ ] **Step 3: 실패를 확인한다**
+- [ ] **Step 5: 실패를 확인한다**
 
 ```bash
-uv run --directory be/worker pytest tests/test_llm_server.py -v
+uv run --directory be/worker pytest tests/test_llm_entry.py tests/test_llm_server.py -v
 ```
 
-- [ ] **Step 4: `llm_server.py`를 고친다**
+- [ ] **Step 6: `config.py`와 `llm_server.py`를 함께 고친다**
 
-`binary = shutil.which(...)` 블록(`:92-100`)을 통째로 바꾼다:
+`config.py`:
 
 ```python
-    # 기본은 **번들 python의 모듈 진입**이다 (Electron Phase 4 스펙 §6.2).
+    # 빈 문자열이 "번들 python의 모듈 진입(`-m damwha_worker.llm_entry`)을 쓴다"는 뜻이다.
+    # 값을 채우면 그것을 실행 파일로 그대로 실행한다 — 수동 운용이나 다른 백엔드용 탈출구이고,
+    # 그렇게 띄운 서버는 앱이 소유를 증명할 수 없다 (Electron Phase 4 스펙 §6.5).
     #
-    # 옛 코드는 shutil.which("mlx_lm.server")로 PATH의 **콘솔 스크립트**를 찾았고, 그것이
-    # 곧 개발 머신의 `uv tool install mlx-lm` 전역 설치 의존이었다 — mlx-lm은 2026-09-16까지
-    # pyproject·uv.lock·.venv 어디에도 없었다 (스펙 §2.4). 개발 도구가 없는 맥에는 그 경로가
-    # 없다.
-    #
-    # sys.executable을 쓰므로 번들에서는 번들 mlx-lm이, 웹 흐름에서는 .venv의 것이 뜬다.
-    # 콘솔 스크립트를 피하는 이유는 그것이 셔뱅을 타기 때문이다 (Phase 0 R-6).
+    # 옛 기본값 "mlx_lm.server"는 shutil.which가 PATH에서 찾는 콘솔 스크립트였고, 그것이 곧
+    # 개발 머신의 uv tool 전역 설치 의존이었다 (스펙 §2.4).
+    lens_llm_server_bin: str = ""
+```
+
+`llm_server.py`의 `binary = shutil.which(...)` 블록(`:92-100`)을 바꾼다:
+
+```python
     if settings.lens_llm_server_bin == "":
-        argv_head = [sys.executable, "-m", "mlx_lm.server"]
-        shown = f"{sys.executable} -m mlx_lm.server"
+        # 앱이 주입한 run-id를 그대로 물려준다. 없으면(웹 흐름) 붙이지 않는다.
+        run_id = run_id_arg(sys.argv)
+        argv_head = [sys.executable, "-m", "damwha_worker.llm_entry"]
+        if run_id is not None:
+            argv_head.append(f"--run-id={run_id}")
+        shown = f"{sys.executable} -m damwha_worker.llm_entry"
     else:
-        # 값을 채우면 그것을 실행 파일로 그대로 쓴다 — 수동 운용이나 다른 백엔드용 탈출구다.
         binary = shutil.which(settings.lens_llm_server_bin)
         if binary is None:
             raise WorkerError(
@@ -1633,78 +2024,72 @@ uv run --directory be/worker pytest tests/test_llm_server.py -v
         shown = binary
 
     log.info("starting LLM server: %s %s on %s:%s", shown, model, host, port)
-    proc = popen(
-        [
-            *argv_head,
-            "--model",
-            model,
-            # 서버 기본값도 추론 off로 맞춘다 — 클라이언트도 요청마다 같은 값을 보낸다.
-            "--chat-template-args",
-            json.dumps({"enable_thinking": False}),
-            "--host",
-            host,
-            "--port",
-            str(port),
-        ]
-    )
+    proc = popen([*argv_head, "--model", model,
+                  "--chat-template-args", json.dumps({"enable_thinking": False}),
+                  "--host", host, "--port", str(port)])
 ```
 
-`import sys`가 파일 위에 없으면 더한다.
+import를 더한다: `import sys`, `from .runtime_report import run_id_arg`.
 
-**`--run-id`를 붙이지 않는다.** `mlx_lm.server`는 upstream CLI라 모르는 인자로 죽는다. 소유 판정은 Task 10이 부모 worker의 자손 트리로 다룬다.
-
-- [ ] **Step 5: 통과를 확인한다**
+- [ ] **Step 7: 통과를 확인한다**
 
 ```bash
-uv run --directory be/worker pytest tests/test_llm_server.py -v
+uv run --directory be/worker pytest tests/test_llm_entry.py tests/test_llm_server.py -v
 pnpm worker:test
 uv run --directory be/worker ruff check .
 ```
 
-- [ ] **Step 6: 실제로 뜨는지 확인한다 (수동)**
+- [ ] **Step 8: 실제로 뜨는지 확인한다 (수동)**
 
 ```bash
-uv run --directory be/worker python -m mlx_lm.server --help | head -3
-uv run --directory be/worker python -m damwha_worker.embed_service &
-sleep 40 && curl -s http://127.0.0.1:8100/health && kill %1
+# import가 부작용 없이 되는가 — 설정도 DB도 없이
+env -u DATABASE_URL uv run --directory be/worker python -c \
+  "import importlib.util as u; print(all(u.find_spec(m) for m in ('damwha_worker.embed_service','damwha_worker.llm_entry','mlx_lm.server')))"
+
+# llm_entry가 mlx_lm.server의 인자를 그대로 받는가
+uv run --directory be/worker python -m damwha_worker.llm_entry --run-id=probe --help 2>&1 | head -5
 ```
 
-기대: `--help`가 나온다(Task 2가 mlx-lm을 깔았다는 증거). embed가 `{"status":"ok"}`.
+기대: 첫째가 `True`(부작용 없음). 둘째가 mlx_lm.server의 `--help`(run-id가 그쪽에 안 새고
+argparse가 안 죽는다).
 
-**Verify:** Step 5·6 통과.
+**Verify:** Step 7·8 통과.
 
 **Review:**
-- `--run-id`를 `mlx_lm.server`에 **안** 붙이는가.
-- 빈 문자열이 모듈 진입, 값이 있으면 그 파일 — 두 갈래가 명확한가.
-- 오류 문구에서 `uv tool install` 안내가 사라졌는가.
-- `[project.scripts]`의 `damwha-embed`를 안 지웠는가.
+- `embed_service` import가 **설정을 안 읽고 모델을 안 받는가** (Step 8 첫 명령이 그 증거).
+- `health()`가 `_ready()`를 안 부르는가.
+- `llm_entry`가 **중간 프로세스를 안 만드는가** (exec도 Popen도 없이 `main()` 직접 호출).
+- `--run-id`가 `mlx_lm.server`에 안 새는가.
+- 탈출구(`LENS_LLM_SERVER_BIN`)로 띄운 서버에 표식이 **없음을** 테스트가 확인하는가.
+- 시그니처가 `managed_llm_server(model, settings, *, …)`인가.
 
-- [ ] **Step 7: 커밋**
+- [ ] **Step 9: 커밋**
 
 ```bash
-git add be/worker/damwha_worker/embed_service.py be/worker/damwha_worker/llm_server.py be/worker/tests/test_llm_server.py
-git commit -m "feat(worker): embed와 LLM 서버를 모듈 진입으로 띄운다"
+git add be/worker/damwha_worker/llm_entry.py be/worker/damwha_worker/embed_service.py \
+        be/worker/damwha_worker/llm_server.py be/worker/damwha_worker/config.py \
+        be/worker/tests/test_llm_entry.py be/worker/tests/test_llm_server.py
+git commit -m "feat(worker): LLM 서버를 소유 표식이 남는 진입 모듈로 감싼다"
 ```
 
 커밋 본문:
 
 ```
-embed_service에 __main__ 블록을 더해 `python -m`으로 뜨게 했다.
+mlx_lm.server를 직접 부르면 두 가지가 다 안 된다 — upstream CLI라 --run-id를
+주면 모르는 인자로 죽고, 안 주면 소유 표식이 없는 프로세스가 된다. 부모
+트리로 판정하는 것도 못 한다: supervisor는 두 번째 신호에서 --once를
+SIGKILL하고 os._exit하므로 둘 다 사라지면 훑을 트리가 없다.
 
-LLM 서버는 shutil.which로 찾은 콘솔 스크립트 대신
-[sys.executable, "-m", "mlx_lm.server"]로 띄운다. 옛 경로는 PATH의
-~/.local/bin/mlx_lm.server였고 그것이 곧 `uv tool install mlx-lm` 전역 설치
-의존이었다 — 개발 도구가 없는 맥에는 그 경로가 없다. sys.executable을
-쓰므로 번들에서는 번들 mlx-lm이, 웹 흐름에서는 .venv의 것이 뜬다.
+그래서 llm_entry가 사이에 앉는다. run-id를 받아서 버리고, 나머지 인자로
+sys.argv를 재구성해 같은 프로세스에서 mlx_lm.server.main()을 부른다. 중간
+프로세스를 만들지 않아 uv 구조가 되살아나지 않고, 같은 프로세스라 HF
+다운로드 훅을 걸 수 있다 — 별도 프로세스였다면 LLM 모델의 진행을 관측할
+길이 없었다.
 
-콘솔 스크립트를 피하는 이유는 셔뱅이다. 옛 경로가 남아 있으면 죽지 않고
-조용히 다른 런타임을 실행한다.
-
-LENS_LLM_SERVER_BIN에 값을 채우면 여전히 그것을 그대로 실행한다 — 수동
-운용과 다른 백엔드를 위한 탈출구다. 오류 문구도 그 설정을 가리키게 고쳤다.
+embed_service의 import 부작용도 함께 없앴다. 모듈 수준에서 load_settings()와
+build_text_embedder()를 부르고 있어 import만으로 DATABASE_URL을 요구하고
+bge-m3 2.2GB를 받았다 — 빌드의 진입점 확인이 그것을 건드릴 수 없었다.
 ```
-
----
 
 ## Task 9: worker — `--run-id` 수용·전파와 런타임 자기 보고
 
@@ -1849,18 +2234,25 @@ import를 더한다: `import json`, `from .runtime_report import run_id_arg, run
 
 (c) `main()`의 argv 처리는 **건드리지 않는다**. `"--once" in sys.argv[1:]`는 모르는 인자가 있어도 안전하다.
 
-- [ ] **Step 5: `embed_service.py`에도 자기 보고를 더한다**
+- [ ] **Step 5: `capabilities.py`의 프로브에도 자기 보고를 넣는다**
 
-`main()` 안 `uvicorn.run(...)` **위에**:
+`capabilities.py:68`의 `[sys.executable, "-c", _PROBE_CODE]`는 **별도 프로세스**다 — 부모의
+보고가 그것을 증명하지 못한다. P4-C12가 다섯 프로세스를 전부 요구하므로 `_PROBE_CODE`에 한
+줄을 더한다:
 
 ```python
-    import json
-    import logging
-
-    from .runtime_report import runtime_facts
-
-    logging.getLogger(__name__).info("runtime %s", json.dumps(runtime_facts(), ensure_ascii=False))
+# 프로브가 찍는 마지막 줄. 부모가 stdout에서 JSON을 파싱하므로 **stderr로** 보낸다 —
+# stdout에 섞으면 기존 파싱이 깨진다 (P4-C12는 로그만 읽으면 된다).
+_PROBE_CODE = _PROBE_CODE + '''
+import sys as _s, json as _j
+print("runtime " + _j.dumps({"executable": _s.executable, "prefix": _s.prefix}), file=_s.stderr)
+'''
 ```
+
+실제 형태는 `_PROBE_CODE`의 지금 모양을 읽고 맞춘다 (`sed -n '40,80p' be/worker/damwha_worker/capabilities.py`).
+**stdout을 건드리면 안 된다** — 부모가 그것을 JSON으로 파싱한다.
+
+`embed_service.py`의 자기 보고는 **Task 8이 이미 넣었다** (`main()` 안, `_ready()` 앞).
 
 - [ ] **Step 6: 통과를 확인한다**
 
@@ -2072,7 +2464,13 @@ sitePackages를 함께 내보내는 이유는 고아 판정이 '이 프로세스
   - `LaunchContext`가 `repoRoot: string | null`, `bins: { python: string; ffmpeg: string; ffprobe: string }`, `runId: string`을 갖는다.
   Task 13이 이것으로 worker·embed 어댑터를 다시 쓴다.
 
-**주의:** 이 Task만으로는 `lint`가 통과하지 않는다 — `services/worker.ts`·`embed.ts`가 아직 옛 런처를 import한다. **Task 13을 연달아 실행한다.** 둘을 한 커밋에 묶지 않는 이유는 어댑터 변경이 별도 리뷰 단위이기 때문이다.
+**옛 런처를 이 Task에서 지우지 않는다.** 초안은 여기서 `uv-launcher.ts`를 `git rm`해
+Task 13까지 컴파일이 깨진 상태를 남겼는데, 로드맵 §5는 **필수 검증 실패가 다음 단계 진행을
+막는다**고 못 박는다. 중간 상태가 초록불이 아니면 그 단계는 리뷰할 수 없다.
+
+대신 **공존시킨다** — 새 런처를 더하고, Task 13이 소비자를 옮긴 뒤, **Task 13이 옛 것을
+지운다.** `LaunchContext`도 같은 방식이다: `bins`에 새 키를 더하되 `uv`를 남겨 두고(옵셔널),
+Task 13이 마지막 소비자를 옮긴 뒤 뺀다. 이 Task는 `test`·`lint` 둘 다 통과한 상태로 끝난다.
 
 - [ ] **Step 1: 지금 런처를 읽는다**
 
@@ -2091,13 +2489,24 @@ sed -n '40,75p' desktop/src/diagnostics/causes.ts
 
 ```typescript
 export interface LaunchContext {
-  /** dev 전용. packaged는 저장소를 보지 않는다 (Phase 4 스펙 §6.3). */
-  repoRoot: string | null;
+  /**
+   * dev 전용. packaged는 저장소를 보지 않는다 (Phase 4 스펙 §6.3).
+   *
+   * **nullable로 바꾸는 것은 Task 12다** — 이 Task는 `bins`만 더한다. 여기서 같이 바꾸면
+   * `api.ts:172`(`path.join(root, "dist", "main.js")`)와 마이그레이션 러너가 그 자리에서
+   * 타입 오류를 내고, 그것을 고치는 것은 Task 12의 범위다.
+   */
+  repoRoot: string;
   userData: string;
   packaged: boolean;
   env: ApiEnv;
-  /** 앱이 아는 절대 경로. uv는 Phase 4에서 런타임 의존이 아니게 됐다 — 빌드 도구로만 남는다. */
-  bins: { python: string; ffmpeg: string; ffprobe: string };
+  /**
+   * 앱이 아는 절대 경로. uv는 Phase 4에서 런타임 의존이 아니게 된다 — 빌드 도구로만 남는다.
+   *
+   * `uv`를 **아직 남겨 둔다.** 마지막 소비자(worker·embed 어댑터)를 Task 13이 옮긴 뒤 그
+   * Task가 뺀다. 여기서 빼면 이 Task가 컴파일되지 않는 상태로 끝난다.
+   */
+  bins: { python: string; ffmpeg: string; ffprobe: string; uv: string | null };
   /**
    * 이 **실행**의 식별자. 앱이 띄우는 모든 Python 프로세스가 argv에 `--run-id=<이 값>`을
    * 갖는다. env가 아니라 argv인 이유: `ps eww`는 SIP 때문에 다른 프로세스의 env를 내주지
@@ -2380,16 +2789,17 @@ export function launchPython(options: PythonLaunchOptions): LaunchResult {
 }
 ```
 
-- [ ] **Step 7: 통과를 확인하고 옛 런처를 지운다**
+- [ ] **Step 7: 통과를 확인한다 — 옛 런처는 그대로 둔다**
 
 ```bash
-pnpm --filter damwha-desktop run test -- python-launcher
-git rm desktop/src/process/uv-launcher.ts desktop/tests/process/uv-launcher.test.ts
+pnpm --filter damwha-desktop run test
+pnpm --filter damwha-desktop run lint
 ```
 
-`pnpm --filter damwha-desktop run lint`는 여기서 **실패한다** — `services/worker.ts`·`embed.ts`가 아직 옛 런처를 import한다. Task 13이 닫는다.
+기대: **둘 다 통과.** 옛 `uv-launcher.ts`와 그 테스트가 아직 살아 있고 소비자도 그대로라
+이 Task는 초록불로 끝난다. 삭제는 Task 13이 한다.
 
-**Verify:** `python-launcher` 테스트 7개 전부 통과.
+**Verify:** `python-launcher` 테스트 7개 + 기존 테스트 전부 통과, `lint` 통과.
 
 **Review:**
 - `--run-id`가 argv **마지막**에 오는가 (모듈 자신의 인자와 안 섞이게).
@@ -2404,7 +2814,7 @@ git rm desktop/src/process/uv-launcher.ts desktop/tests/process/uv-launcher.test
 ```bash
 git add desktop/src/process/python-launcher.ts desktop/tests/process/python-launcher.test.ts \
         desktop/src/services/types.ts desktop/src/diagnostics/causes.ts
-git commit -m "feat(desktop): uv 런처를 번들 Python 런처로 갈아끼운다"
+git commit -m "feat(desktop): 번들 Python 런처를 더한다 (옛 uv 런처와 공존)"
 ```
 
 커밋 본문:
@@ -2422,7 +2832,8 @@ uv run --directory가 하던 셋 중 둘은 사라지고 하나는 옮겨 갔다
 폴백이 남으면 Homebrew ffmpeg가 조용히 쓰여도 검증이 통과하고, lsof
 스냅숏으로는 그것을 확정적으로 부정할 수 없다 — 참조 경로 자체를 없앤다.
 
-이 커밋만으로는 worker·embed 어댑터가 컴파일되지 않는다. 다음 커밋이 잇는다.
+옛 uv 런처는 아직 지우지 않는다. 소비자를 옮긴 뒤 다음 커밋이 지운다 —
+중간에 컴파일이 깨진 커밋을 남기지 않기 위해서다.
 ```
 
 ---
@@ -2595,9 +3006,49 @@ export function sanitizeChildEnv(inherited: Record<string, string | undefined>):
 }
 ```
 
-`python-launcher.ts`의 `env`에서 `...process.env` 대신 `...sanitizeChildEnv(process.env)`를 쓰도록 고친다.
+**씻는 자리가 중요하다.** 상속분만 씻고 `ctx.env`를 뒤에 합치면 구멍이 남는다 —
+`config.json`이 임의 문자열 키를 그대로 통과시키므로(`config.ts:299-300`) 사용자가
+`PYTHONHOME`이나 `HF_HUB_CACHE`를 **다시 넣을 수 있다** (스펙 §6.3). 그래서
+**합친 뒤에 씻고, 앱이 주장하는 값만 그 뒤에 얹는다:**
 
-- [ ] **Step 4: `repo-root.ts`와 `main.ts`의 게이트를 고친다**
+```typescript
+      ...sanitizeChildEnv({ ...process.env, ...ctx.env, ...options.extraEnv }),
+      // 앱이 **의도적으로** 넣는 값은 금지 목록보다 뒤다. HF_HOME과 dev PYTHONPATH가
+      // 씻겨 나가면 안 된다.
+      ...appOwnedChildEnv(ctx),
+      PATH: `${path.dirname(ctx.bins.python)}:${path.dirname(ctx.bins.ffmpeg)}`,
+```
+
+`appOwnedChildEnv(ctx)`는 `HF_HOME`·`FFMPEG_BIN`·`FFPROBE_BIN`·`LENS_LLM_BASE_URL`·
+`DAMWHA_SHARED_STATE`와 dev의 `PYTHONPATH`를 돌려준다.
+
+그리고 `loadConfig`가 금지 키를 **버리고 경고한다** — 조용히 무시하면 사용자는 자기가 적은
+값이 왜 안 먹는지 알 길이 없다(`EXTRA_PATH`·`HOST`가 이미 그 규칙을 쓴다).
+
+- [ ] **Step 3-b: `config.json`의 금지 키를 거절하는 테스트를 더한다**
+
+```typescript
+it("config.json으로 금지 env를 다시 넣을 수 없다 (P4-C30)", () => {
+  const dir = mkTmpUserData({ PYTHONHOME: "/opt/py", HF_HUB_CACHE: "/tmp/x" });
+  const cfg = loadConfig(dir);
+  expect(cfg.env.PYTHONHOME).toBeUndefined();
+  expect(cfg.env.HF_HUB_CACHE).toBeUndefined();
+  expect(cfg.warning).toContain("PYTHONHOME");
+});
+```
+
+- [ ] **Step 4: `repo-root.ts`·`main.ts`·`api.ts`의 게이트와 타입을 고친다**
+
+`repoRoot`를 nullable로 만들면 **두 소비자가 함께 깨진다.** 이 Step이 셋을 한 번에 본다:
+
+| 자리 | 지금 | 고칠 것 |
+| --- | --- | --- |
+| `api.ts:172` | `const root = ctx.packaged ? path.join(process.resourcesPath, "api") : ctx.repoRoot;` | packaged가 아닌데 `repoRoot`가 null이면 **기동 자체가 dev 전용 실패**다. 그 자리에서 `CAUSES.repoRootMissing`으로 던진다 — `path.join(null, …)`에 닿기 전에 |
+| 마이그레이션 러너 | `resolved`를 참조한다 | 같은 판정을 쓴다. packaged는 번들 러너라 `repoRoot`가 필요 없다 |
+| `main.ts` | `resolveRepoRoot`가 `async` + 대화상자 | 동기 + 대화상자 없음 |
+
+`repoRootMissing`은 **지우지 않고 dev 전용 원인으로 남긴다** — dev에서 저장소를 못 찾으면
+API를 띄울 수 없는 것이 사실이기 때문이다.
 
 `repo-root.ts` 주석을 사실에 맞게 고친다:
 
@@ -2642,7 +3093,8 @@ function resolveRepoRoot(configured: string | undefined): string | null {
 ```
 
 - `saveConfigValue(…, "REPO_ROOT", dir)` 호출을 지운다. **`config.json`에 앱이 쓰는 유일한 예외가 사라진다** (Phase 3 결과 §4.3이 적은 그 예외다).
-- `CAUSES.repoRootMissing`을 지운다. 쓰는 곳이 없어졌다.
+- `CAUSES.repoRootMissing`은 **남긴다.** 문구만 dev 전용으로 고친다 — packaged는 이 원인에
+  닿지 않는다.
 
 (d) 같은 자리에서 `bins`와 `runId`를 만든다:
 
@@ -2699,16 +3151,21 @@ pnpm --filter damwha-desktop run test
 pnpm --filter damwha-desktop run lint
 ```
 
-`lint`는 아직 `worker.ts`·`embed.ts` 때문에 실패할 수 있다 — Task 13이 닫는다.
+기대: **둘 다 통과.** 옛 런처가 아직 살아 있고(Task 11) 소비자도 그대로라 이 Task도
+초록불로 끝난다.
 
-**Verify:** `config`·`child-env` 테스트 전부 통과.
+**Verify:** `config`·`child-env` 테스트 + 기존 테스트 전부 통과, `lint` 통과.
 
 **Review:**
 - `HF_TOKEN` 경고에 **값이 안 실리는가.**
 - `UV_BIN`이 note(로그)이고 warning(화면)이 아닌가.
 - packaged에서 `resolveRepoRoot`가 폴더 선택창을 **안 띄우는가.**
 - `saveConfigValue(… "REPO_ROOT" …)`가 사라졌는가 — `config.json`에 앱이 쓰는 예외가 없어진다.
-- `sanitizeChildEnv`가 `PYTHONPATH`를 지우고, dev만 `ctx.env`로 다시 넣는가.
+- `sanitizeChildEnv`가 **최종 합성 env**에 적용되는가 (상속분만이 아니라).
+- 앱이 주장하는 값(`HF_HOME`·dev `PYTHONPATH`)이 그 **뒤에** 얹히는가.
+- `config.json`의 금지 키가 버려지고 **경고가 나는가** (P4-C30).
+- `api.ts`와 마이그레이션 러너가 dev에서 `repoRoot` null을 만나면 **`path.join`에 닿기 전에**
+  원인을 내는가.
 - `LENS_LLM_BASE_URL`이 실제로 들어가는가 (빠지면 worker가 기동 실패한다).
 
 - [ ] **Step 6: 커밋**
@@ -2753,7 +3210,8 @@ HF_TOKEN은 앱 소유 키로 거절하되 값을 경고 문구에 싣지 않는
 - Consumes: Task 11의 `launchPython`, Task 12의 `LaunchContext`
 - Produces: `workerSpec`·`embedSpec`이 번들 python으로 뜬다. 시그니처는 그대로 — `WorkerDeps`에서 `exists`만 사라진다.
 
-**이 Task가 `lint`를 다시 통과시킨다.** Task 11·12와 연달아 실행한다.
+**옛 런처를 지우는 것이 이 Task다.** Task 11이 새 런처를 더해 공존시켰고, 여기서 소비자를
+옮긴 **뒤에** 옛 것을 지운다. 그래야 중간에 컴파일이 깨진 커밋이 안 남는다(로드맵 §5).
 
 - [ ] **Step 1: 지금 어댑터를 읽는다**
 
@@ -2856,16 +3314,31 @@ import를 바꾼다: `import { launchWithUv } from "../process/uv-launcher";` �
 
 `EmbedDeps`에 `spawnFn?: SpawnFn`을 더한다 (테스트 주입용 — `WorkerDeps`와 같은 이유).
 
-- [ ] **Step 6: 통과를 확인한다**
+- [ ] **Step 6: 소비자를 다 옮긴 뒤 옛 런처와 `bins.uv`를 지운다**
+
+```bash
+grep -rn "uv-launcher\|bins.uv\|launchWithUv" desktop/src desktop/tests
+```
+
+**결과가 비어야** 다음으로 간다. 비었으면:
+
+```bash
+git rm desktop/src/process/uv-launcher.ts desktop/tests/process/uv-launcher.test.ts
+```
+
+`LaunchContext.bins`에서 `uv`를 뺀다(Task 11이 남겨 둔 것). `main.ts`의
+`const uv = cfg.uvBin ?? findExecutable("uv", dirs);`도 지운다.
+
+- [ ] **Step 7: 통과를 확인한다**
 
 ```bash
 pnpm --filter damwha-desktop run test
 pnpm --filter damwha-desktop run lint
 ```
 
-기대: **둘 다 통과.** Task 11에서 열린 컴파일 실패가 여기서 닫힌다.
+기대: **둘 다 통과.** 이 Task도, 앞의 둘도 각각 초록불이다.
 
-- [ ] **Step 7: dev에서 실제로 뜨는지 본다**
+- [ ] **Step 8: dev에서 실제로 뜨는지 본다**
 
 ```bash
 pnpm --filter damwha-desktop run start:desktop
@@ -2877,15 +3350,17 @@ pnpm --filter damwha-desktop run start:desktop
 
 **Review:**
 - `.env` 검사가 완전히 사라졌는가.
-- `ctx.bins.uv` 참조가 남아 있지 않은가 (`grep -rn "bins.uv" desktop/src`).
+- `uv-launcher`·`bins.uv`·`launchWithUv` 참조가 **하나도 안 남았는가** (Step 6의 grep).
 - embed가 모듈 진입인가 (콘솔 스크립트가 아니라).
 - `WorkerDeps.exists`를 쓰는 테스트가 남아 있지 않은가.
 
-- [ ] **Step 8: 커밋**
+- [ ] **Step 9: 커밋**
 
 ```bash
-git add desktop/src/services/worker.ts desktop/src/services/embed.ts desktop/tests/services/
-git commit -m "feat(desktop): worker와 embed를 번들 Python으로 띄운다"
+git add desktop/src/services/worker.ts desktop/src/services/embed.ts desktop/tests/services/ \
+        desktop/src/services/types.ts desktop/src/main.ts
+git add -u desktop/src/process/uv-launcher.ts desktop/tests/process/uv-launcher.test.ts
+git commit -m "feat(desktop): worker와 embed를 번들 Python으로 띄우고 uv 런처를 지운다"
 ```
 
 커밋 본문:
@@ -3234,6 +3709,40 @@ export async function openTokenWindow(deps: {
   },
 ```
 
+- [ ] **Step 6-b: 토큰 교체가 live env에 닿는 경로를 만든다**
+
+저장만으로는 안 된다. 감독자가 쥔 `ctx.env`는 기동 시점에 얼어붙고, 기존 설정 재적용
+(`config-reload.ts:87-95`)은 **`config.json`만** 읽는다 — 토큰은 거기 없다(Keychain에 있다).
+
+```typescript
+/**
+ * 토큰을 바꾼 뒤 **살아 있는 env**에 반영한다. 저장 → 재조회 → live env 갱신 → 재시작이
+ * 한 흐름이어야 한다 (P4-C4).
+ *
+ * `refreshEnv`로 흘리지 않는 이유: 그것은 config.json이 진실인 키를 위한 것이고, 토큰은
+ * 파일에 없다. 여기서 직접 얹는다.
+ */
+async function applyTokenChange(token: string): Promise<void> {
+  store.write(token);
+  liveEnv.HF_TOKEN = store.read() ?? "";   // 저장된 것을 다시 읽어 얹는다
+  await restartService("worker");           // Task 18의 서비스 재시작 경로
+  await restartService("embed");
+}
+```
+
+**`store.write` 뒤에 `store.read()`로 다시 읽는다** — 암호화·복호화 왕복이 실제로 되는지를
+그 자리에서 확인하는 것이 재시작 뒤 "왜 안 되지"보다 낫다.
+
+테스트:
+
+```typescript
+it("토큰을 바꾸면 재시작한 자식이 새 값을 받는다 (P4-C4)", async () => {
+  await applyTokenChange("hf_new_value");
+  expect(liveEnv.HF_TOKEN).toBe("hf_new_value");
+  expect(restarted).toEqual(["worker", "embed"]);
+});
+```
+
 - [ ] **Step 7: 손으로 확인한다**
 
 ```bash
@@ -3330,7 +3839,7 @@ describe("parseDamwhaProcesses", () => {
       `  102 ${PY} -m damwha_worker --once --run-id=run-a`,
       `  103 ${PY} -m damwha_worker.embed_service --run-id=run-a`,
     ].join("\n");
-    const found = parseDamwhaProcesses(ps, BUNDLE);
+    const found = parseDamwhaProcesses(ps, BUNDLE, [PY]);
     expect(found.map((p) => p.pid)).toEqual([101, 102, 103]);
     expect(found[1].once).toBe(true);
     expect(found[2].module).toBe("damwha_worker.embed_service");
@@ -3338,12 +3847,12 @@ describe("parseDamwhaProcesses", () => {
 
   it("저장소 .venv의 worker는 잡지 않는다 — 조건 3(번들 트리 아래)에서 빠진다", () => {
     const ps = `  201 /repo/be/worker/.venv/bin/python -m damwha_worker`;
-    expect(parseDamwhaProcesses(ps, BUNDLE)).toEqual([]);
+    expect(parseDamwhaProcesses(ps, BUNDLE, [PY])).toEqual([]);
   });
 
   it("uv 런처 줄을 잡지 않는다", () => {
     const ps = `  202 /opt/homebrew/bin/uv run --directory /repo/be/worker python -m damwha_worker`;
-    expect(parseDamwhaProcesses(ps, BUNDLE)).toEqual([]);
+    expect(parseDamwhaProcesses(ps, BUNDLE, [PY])).toEqual([]);
   });
 
   it("모듈 이름만 언급하는 셸 줄을 잡지 않는다", () => {
@@ -3355,8 +3864,35 @@ describe("parseDamwhaProcesses", () => {
   });
 
   it("run-id가 없는 번들 프로세스도 담되 runId는 null이다", () => {
-    const found = parseDamwhaProcesses(`  205 ${PY} -m damwha_worker`, BUNDLE);
+    const found = parseDamwhaProcesses(`  205 ${PY} -m damwha_worker`, BUNDLE, [PY]);
     expect(found[0].runId).toBeNull();
+  });
+
+  it("**공백이 든 설치 경로를 견딘다**", () => {
+    // /Applications 밖에 둔 앱, 이름에 공백이 있는 폴더 — 둘 다 흔하다.
+    const spaced = "/Users/me/My Apps/Damwha.app/Contents/Resources/python";
+    const spacedPy = `${spaced}/bin/python3.12`;
+    const ps = `  301 ${spacedPy} -m damwha_worker --run-id=run-a`;
+    const found = parseDamwhaProcesses(ps, spaced, [spacedPy]);
+    expect(found).toHaveLength(1);
+    expect(found[0].runId).toBe("run-a");
+  });
+
+  it("llm_entry도 같은 규칙으로 잡는다", () => {
+    const ps = `  302 ${PY} -m damwha_worker.llm_entry --run-id=run-a --model m/x`;
+    const found = parseDamwhaProcesses(ps, BUNDLE, [PY]);
+    expect(found[0].module).toBe("damwha_worker.llm_entry");
+  });
+
+  it("dev와 packaged 두 인터프리터를 다 시험한다", () => {
+    const dev = "/repo/desktop/build/python/bin/python3.12";
+    const ps = `  303 ${dev} -m damwha_worker --run-id=run-a`;
+    expect(parseDamwhaProcesses(ps, BUNDLE, [PY, dev])).toHaveLength(1);
+  });
+
+  it("ps 출력이 잘려 접두사가 안 맞으면 담지 않는다 — '고아 없음'과 구별은 호출부가 한다", () => {
+    const ps = `  304 ${PY.slice(0, 20)}`;
+    expect(parseDamwhaProcesses(ps, BUNDLE, [PY])).toEqual([]);
   });
 });
 
@@ -3402,7 +3938,14 @@ import * as path from "path";
  */
 
 const PYTHON_BASENAME = /^python[\d.]*$/;
-const MODULES = ["damwha_worker", "damwha_worker.embed_service"] as const;
+const MODULES = [
+  "damwha_worker",
+  "damwha_worker.embed_service",
+  // §6.2의 얇은 진입 모듈. 이것 덕에 LLM 서버도 다른 셋과 같은 규칙으로 판정된다 —
+  // mlx_lm.server를 직접 띄웠다면 표식이 없어 부모 트리에 기대야 했고, 부모와 --once가
+  // 둘 다 죽으면 그 트리가 사라진다.
+  "damwha_worker.llm_entry",
+] as const;
 const RUN_ID_PREFIX = "--run-id=";
 /** `ps -axo pid,args` 한 줄. */
 const PS_ROW = /^\s*(\d+)\s+(\S.*?)\s*$/;
@@ -3417,17 +3960,30 @@ export interface DamwhaProcess {
   argv0: string;
 }
 
-export function parseDamwhaProcesses(psText: string, bundleRoot: string): DamwhaProcess[] {
+/**
+ * `knownPythons`는 앱이 아는 인터프리터 절대 경로들이다 — packaged(`Resources/python/bin/…`)와
+ * dev(`desktop/build/python/bin/…`) 둘. 둘 다 시험하는 이유는 하나의 userData를 두 빌드가
+ * 공유하기 때문이다(Phase 3의 결정) — dev로 띄웠다 끄고 packaged로 켜는 순서가 실제로 있다.
+ */
+export function parseDamwhaProcesses(
+  psText: string,
+  bundleRoot: string,
+  knownPythons: readonly string[],
+): DamwhaProcess[] {
   const out: DamwhaProcess[] = [];
   for (const line of psText.split("\n")) {
     const m = PS_ROW.exec(line);
     if (m === null) continue;
-    const tokens = m[2].split(/\s+/).filter((t) => t.length > 0);
-    const argv0 = tokens[0];
-    if (argv0 === undefined) continue;
+    const args = m[2];
 
-    // 조건 1 — argv[0] basename이 python 실행 파일이다. uv 런처 줄과 셸 줄이 여기서 빠진다.
-    if (!PYTHON_BASENAME.test(path.basename(argv0))) continue;
+    // 조건 1·3 — **아는 접두사로 먼저 자른다.** `ps -axo pid,args`는 argv를 공백으로 이어
+    // 붙인 평탄한 문자열이라 다시 토큰으로 쪼갤 수 없다. `/Users/x/My Apps/Damwha.app/…`처럼
+    // 공백이 든 설치 경로는 흔하고, 단순 `split(/\s+/)`는 argv[0]을 `/Users/x/My`로 잘라
+    // **정상 프로세스를 판정에서 누락시킨다** — 고아 정리가 조용히 생략된다.
+    // 앱은 자기 인터프리터 경로를 정확히 알고 있으므로 그것으로 자른다 (스펙 §6.5).
+    const argv0 = knownPythons.find((py) => args.startsWith(`${py} `) || args === py);
+    if (argv0 === undefined) continue;
+    const tokens = args.slice(argv0.length).split(/\s+/).filter((x) => x.length > 0);
 
     // 조건 2 — `-m <모듈>`이 토큰 **쌍**으로 있다. 모듈 이름만 언급하는 줄이 빠진다.
     const mi = tokens.findIndex((t, i) => t === "-m" && (MODULES as readonly string[]).includes(tokens[i + 1] ?? ""));
@@ -3529,134 +4085,224 @@ Phase 3 결과 §5.2-2가 넘긴 문제다. 앱 main이 강제 종료되면 work
 
 ---
 
-## Task 16: 부모 선종료 자손 회수
+## Task 16: 앱 종료 회수 (B층) — 핸들과 독립인 마지막 단계
 
 **Files:**
-- Modify: `desktop/src/services/worker-shutdown.ts`
-- Modify: `desktop/tests/services/worker-shutdown.test.ts`
+- Create: `desktop/src/app/reap-on-quit.ts`
+- Create: `desktop/tests/app/reap-on-quit.test.ts`
+- Modify: `desktop/src/app/quit-flow.ts`
+- Modify: `desktop/tests/services/supervisor.test.ts` (통합 경로)
 
 **Interfaces:**
-- Consumes: Task 15의 `parseDamwhaProcesses`·`classify`
-- Produces: `stopWorkerProcess`가 부모 소멸 뒤에도 `--once` 자식과 그 트리의 `mlx_lm.server`를 회수한다.
+- Consumes: Task 15의 `parseDamwhaProcesses`·`classify`·`reapOrphans`
+- Produces: `export async function reapOwnedOnQuit(deps): Promise<{ reaped: DamwhaProcess[] }>`
+  — `quit-flow`가 `stopAll()` **뒤에** 부른다.
 
-- [ ] **Step 1: 왜 필요한지 확인한다**
+- [ ] **Step 1: 왜 `stop()` 안에 넣으면 안 되는지 확인한다**
 
 ```bash
 sed -n '262,292p' be/worker/damwha_worker/__main__.py
-sed -n '250,260p' desktop/src/services/worker-shutdown.ts
-sed -n '320,340p' desktop/src/services/worker-shutdown.ts
+sed -n '432,455p' desktop/src/services/supervisor.ts
+sed -n '530,542p' desktop/src/services/supervisor.ts
 ```
 
-보이는 것: supervisor는 **두 번째 신호에서** `proc.kill()` 뒤 `os._exit(1)`한다. 자식은 `start_new_session=True`라 **별도 세션**이다. 부모가 먼저 사라지면 자손 SIGKILL 단계가 훑을 트리를 잃는다.
+**두 가지가 겹친다:**
+
+1. Python supervisor는 **두 번째 신호에서** `--once` 자식을 `proc.kill()`하고 `os._exit(1)`한다
+   (`__main__.py:273-287`). 자식은 `start_new_session=True`라 별도 세션이므로, 부모가 먼저
+   사라지면 자손 SIGKILL 단계가 훑을 트리가 없다.
+2. **감독자가 죽은 서비스의 `stop()`을 아예 안 부른다.** `watchForDeath`가
+   `rt.result = null`로 만들고(`supervisor.ts:453`), `stopAll`이
+   `if (rt.result === null || !rt.result.owned) continue`로 건너뛴다(`:536`).
+   그래서 **`stopWorkerProcess` 안에 무엇을 넣어도 이 경로에서는 실행되지 않는다.**
+
+둘째가 결정적이다 — 초안은 회수 코드를 `stopWorkerProcess`에 넣었는데 그것은 호출조차 안 될
+수 있다. 그래서 **핸들과 무관한 층**을 따로 만든다 (스펙 §6.5의 B층).
 
 - [ ] **Step 2: 실패하는 테스트를 쓴다**
 
-```typescript
-it("부모가 먼저 사라져도 남은 --once 자식과 LLM 서버를 회수한다", async () => {
-  // 부모는 이미 죽었다(alive=false). 트리를 훑을 수 없는 상태다.
-  const handle = deadHandle();
-  const killed: number[] = [];
-  const out = await stopWorkerProcess(
-    { handle, owned: true },
-    { graceMs: 100 },
-    {
-      runId: "run-a",
-      bundleRoot: "/b/python",
-      // 부모 없이도 ps에서 내 run-id의 --once 자식이 보인다.
-      ps: async () => "  311 /b/python/bin/python3.12 -m damwha_worker --once --run-id=run-a",
-      descendantsOf: async (pid) => (pid === 311 ? [312] : []),  // 312 = mlx_lm.server
-      kill: (pid) => { killed.push(pid); },
-      exists: (pid) => !killed.includes(pid),
-    },
-  );
-  expect(killed).toContain(311);
-  expect(killed).toContain(312);
-  expect(out.stopped).toBe(true);
-});
+`desktop/tests/app/reap-on-quit.test.ts`:
 
-it("다른 run-id의 --once는 건드리지 않는다", async () => {
+```typescript
+import { describe, expect, it, vi } from "vitest";
+import { reapOwnedOnQuit } from "../../src/app/reap-on-quit";
+
+const PY = "/b/python/bin/python3.12";
+
+function deps(psText: string, over = {}) {
   const killed: number[] = [];
-  await stopWorkerProcess(
-    { handle: deadHandle(), owned: true },
-    { graceMs: 100 },
-    {
+  return {
+    killed,
+    d: {
       runId: "run-a",
       bundleRoot: "/b/python",
-      ps: async () => "  411 /b/python/bin/python3.12 -m damwha_worker --once --run-id=run-other",
+      knownPythons: [PY],
+      ps: async () => psText,
       descendantsOf: async () => [],
-      kill: (pid) => killed.push(pid),
-      exists: () => false,
+      kill: (pid: number) => { killed.push(pid); },
+      exists: (pid: number) => !killed.includes(pid),
+      log: () => {},
+      ...over,
     },
-  );
-  expect(killed).not.toContain(411);
+  };
+}
+
+describe("reapOwnedOnQuit", () => {
+  it("핸들 없이도 내 run-id의 프로세스를 전부 회수한다", async () => {
+    const { killed, d } = deps([
+      `  101 ${PY} -m damwha_worker --run-id=run-a`,
+      `  102 ${PY} -m damwha_worker --once --run-id=run-a`,
+      `  103 ${PY} -m damwha_worker.llm_entry --run-id=run-a --model m/x`,
+      `  104 ${PY} -m damwha_worker.embed_service --run-id=run-a`,
+    ].join("\n"));
+    const out = await reapOwnedOnQuit(d);
+    expect(killed.sort()).toEqual([101, 102, 103, 104]);
+    expect(out.reaped).toHaveLength(4);
+  });
+
+  it("**부모와 --once가 둘 다 없어도** 남은 llm_entry를 회수한다 (P4-C19-b)", async () => {
+    const { killed, d } = deps(`  103 ${PY} -m damwha_worker.llm_entry --run-id=run-a --model m/x`);
+    await reapOwnedOnQuit(d);
+    expect(killed).toEqual([103]);
+  });
+
+  it("다른 run-id는 건드리지 않는다 — 그것은 기동 시 정리가 맡는다", async () => {
+    const { killed, d } = deps(`  201 ${PY} -m damwha_worker --run-id=run-other`);
+    await reapOwnedOnQuit(d);
+    expect(killed).toEqual([]);
+  });
+
+  it("run-id 없는 외부 worker를 건드리지 않는다", async () => {
+    const { killed, d } = deps(`  202 /repo/be/worker/.venv/bin/python -m damwha_worker`);
+    await reapOwnedOnQuit(d);
+    expect(killed).toEqual([]);
+  });
+
+  it("회수한 것이 있으면 로그에 남긴다 — A층이 놓쳤다는 뜻이다", async () => {
+    const lines: string[] = [];
+    const { d } = deps(`  101 ${PY} -m damwha_worker --run-id=run-a`, { log: (s: string) => lines.push(s) });
+    await reapOwnedOnQuit(d);
+    expect(lines.join(" ")).toMatch(/101/);
+  });
+
+  it("아무것도 없으면 조용하다", async () => {
+    const lines: string[] = [];
+    const { d } = deps("", { log: (s: string) => lines.push(s) });
+    const out = await reapOwnedOnQuit(d);
+    expect(out.reaped).toEqual([]);
+    expect(lines).toEqual([]);
+  });
 });
 ```
 
-(기존 테스트의 `deps` 주입 모양을 먼저 읽고 맞춘다.)
+감독자 통합 테스트 — **`watchForDeath` → `rt.result=null` → `stopAll` 경로를 실제로 밟는다:**
+
+```typescript
+it("worker가 먼저 죽어 stopAll이 건너뛴 뒤에도 B층이 회수한다 (P4-C19-a)", async () => {
+  const sup = makeSupervisor(/* … */);
+  await sup.start();
+  killWorkerHandle();                 // onExit 발화 → rt.result = null
+  await sup.stopAll(plan);            // worker의 stop()은 불리지 않는다
+  expect(workerStopCalls).toBe(0);    // 그것이 이 경로의 전제다
+  const out = await reapOwnedOnQuit(d);
+  expect(out.reaped.map((p) => p.pid)).toContain(WORKER_PID);
+});
+```
 
 - [ ] **Step 3: 실패를 확인한다**
 
 ```bash
-pnpm --filter damwha-desktop run test -- worker-shutdown
+pnpm --filter damwha-desktop run test -- reap-on-quit
 ```
 
-- [ ] **Step 4: 종료 절차에 3단계를 더한다**
-
-기존 단계(SIGTERM → 유예 → 자손 SIGKILL) 뒤에:
+- [ ] **Step 4: `reap-on-quit.ts`를 쓴다**
 
 ```typescript
-  // 3단계 — **부모가 이미 사라진 경우의 자손 회수** (Electron Phase 4 스펙 §6.5).
-  //
-  // Python supervisor는 두 번째 신호에서 `proc.kill()` 뒤 `os._exit(1)`한다
-  // (__main__.py:268-287). 자식은 `start_new_session=True`라 별도 세션이므로, 부모가
-  // 먼저 사라지면 2단계가 훑을 트리 자체가 없다. 그래서 pid 트리가 아니라 **표식**으로
-  // 찾는다 — 내 run-id를 가진 `--once` 프로세스와 그 트리의 mlx_lm.server다.
-  //
-  // 내 run-id만 대상이다. 다른 run-id는 이전 실행의 고아이고 그것은 기동 시 정리가 맡는다
-  // (process/orphans.ts) — 종료 중에 남의 것을 건드리지 않는다.
-  const leftovers = parseDamwhaProcesses(await deps.ps(), deps.bundleRoot)
-    .filter((p) => p.once && classify(p, deps.runId) === "mine");
-  for (const p of leftovers) {
-    for (const child of await deps.descendantsOf(p.pid)) deps.kill(child);
-    deps.kill(p.pid);
+/**
+ * **B층 — 앱 종료 회수** (Electron Phase 4 스펙 §6.5).
+ *
+ * A층(서비스별 `stop()`)이 놓치는 경로가 둘이다:
+ *
+ *  1. Python supervisor가 두 번째 신호에서 `--once`를 `proc.kill()`하고 `os._exit(1)`한다
+ *     (`__main__.py:273-287`). 자식은 `start_new_session=True`라 별도 세션이라, 부모가 먼저
+ *     사라지면 자손 SIGKILL이 훑을 트리가 없다.
+ *  2. **감독자가 죽은 서비스의 `stop()`을 부르지 않는다.** `watchForDeath`가 `rt.result=null`로
+ *     만들고(`supervisor.ts:453`) `stopAll`이 그 서비스를 건너뛴다(`:536`).
+ *
+ * 그래서 이 층은 **핸들도 감독자 상태도 보지 않는다.** `ps`에서 내 run-id를 가진 프로세스를
+ * 찾아 내리는 것이 전부다 — 판정 근거가 argv의 표식이라 부모가 있든 없든 똑같이 동작한다.
+ *
+ * 대상은 **내 run-id만**이다. 다른 run-id는 이전 실행의 고아이고 그것은 기동 시 정리가
+ * 맡는다(`process/orphans.ts`) — 종료 중에 남의 것을 건드리지 않는다.
+ */
+export async function reapOwnedOnQuit(deps: ReapDeps): Promise<{ reaped: DamwhaProcess[] }> {
+  // 스캔이 실패하면 빈 목록이다. 기동 때와 달리 여기서 막을 것이 없다 — 앱은 어차피 끝난다.
+  // 그 사실만 로그에 남긴다.
+  const found = await scanOwned(deps);
+  // 자손을 부모보다 **먼저** 죽인다. 순서가 뒤집히면 부모가 사라지며 트리를 잃는다.
+  for (const proc of found) {
+    for (const child of await deps.descendantsOf(proc.pid)) deps.kill(child);
   }
+  for (const proc of found) deps.kill(proc.pid);
+  // 회수한 것이 있으면 A층이 놓쳤다는 뜻이다. 조용히 덮으면 그 결함이 영영 안 보인다.
+  if (found.length > 0) {
+    deps.log(`종료 회수: ${found.map((p) => `${p.module}(${p.pid})`).join(", ")}`);
+  }
+  return { reaped: found };
+}
 ```
 
-- [ ] **Step 5: 통과를 확인한다**
+- [ ] **Step 5: `quit-flow.ts`가 `stopAll()` 뒤에 부르게 한다**
+
+```typescript
+  const outcome = await supervisor.stopAll(plan);
+  // B층. 핸들 유무와 무관하게 **항상** 돈다 (스펙 §6.5).
+  const swept = await reapOwnedOnQuit(reapDeps);
+  // 종료 화면의 "남은 것" 판정에 B층 결과를 합친다 — A층이 clean이라고 해도 여기서
+  // 회수한 것이 있으면 그것은 clean이 아니었다.
+```
+
+- [ ] **Step 6: 통과를 확인한다**
 
 ```bash
 pnpm --filter damwha-desktop run test
 pnpm --filter damwha-desktop run lint
 ```
 
-**Verify:** 테스트 전부 통과.
+**Verify:** `reap-on-quit` 6건 + 감독자 통합 1건 전부 통과.
 
 **Review:**
-- 3단계가 **내 run-id만** 대상으로 하는가.
-- `--once`만 보는가 (supervisor 본체는 1·2단계가 이미 다뤘다).
-- 자손을 부모보다 **먼저** 죽이는가.
-- 기존 `StopOutcome`의 `stopped`·`leaked`·`detail` 의미가 안 깨졌는가.
+- B층이 **핸들도 감독자 상태도 안 보는가.**
+- `stopAll()` **뒤에** 도는가.
+- 내 run-id만 대상인가.
+- 자손을 부모보다 먼저 죽이는가.
+- 회수한 것을 로그에 남기는가 (A층 결함의 유일한 단서다).
+- 통합 테스트가 `rt.result=null` 상태를 **실제로 지나는가** — `workerStopCalls === 0`이
+  그 증거다.
 
-- [ ] **Step 6: 커밋**
+- [ ] **Step 7: 커밋**
 
 ```bash
-git add desktop/src/services/worker-shutdown.ts desktop/tests/services/worker-shutdown.test.ts
-git commit -m "fix(desktop): 부모가 먼저 죽어도 남은 --once 자식을 회수한다"
+git add desktop/src/app/reap-on-quit.ts desktop/tests/app/reap-on-quit.test.ts \
+        desktop/src/app/quit-flow.ts desktop/tests/services/supervisor.test.ts
+git commit -m "feat(desktop): 앱 종료에 핸들과 무관한 회수 단계를 더한다"
 ```
 
 커밋 본문:
 
 ```
-Python supervisor는 두 번째 신호에서 proc.kill() 뒤 os._exit(1)한다. 자식은
-start_new_session=True라 별도 세션이므로, 부모가 먼저 사라지면 자손 SIGKILL
-단계가 훑을 트리 자체가 없다.
+서비스별 stop()이 놓치는 경로가 둘이다. Python supervisor는 두 번째 신호에서
+--once를 kill하고 os._exit하며 그 자식은 별도 세션이라 트리가 끊긴다. 그리고
+감독자는 죽은 서비스의 stop()을 아예 부르지 않는다 — watchForDeath가
+rt.result를 null로 만들고 stopAll이 그 서비스를 건너뛴다.
 
-그래서 pid 트리가 아니라 표식으로 찾는다 — 내 run-id를 가진 --once
-프로세스와 그 트리의 mlx_lm.server. 내 run-id만 대상이다. 다른 run-id는
-이전 실행의 고아이고 기동 시 정리가 맡는다.
+둘째가 결정적이다. stop() 안에 무엇을 넣어도 그 경로에서는 실행되지 않으므로
+핸들과 무관한 층을 따로 둔다. ps에서 내 run-id를 가진 프로세스를 찾아 내리는
+것이 전부라 부모가 있든 없든 똑같이 동작한다.
+
+회수한 것이 있으면 로그에 남긴다 — 그것은 A층이 놓쳤다는 뜻이고, 조용히
+덮으면 그 결함이 영영 안 보인다.
 ```
-
----
 
 ## Task 17: `model_readiness` — worker가 쓰고 API가 읽는다
 
@@ -3745,6 +4391,40 @@ def test_network_failure_is_transient():
 uv run --directory be/worker pytest tests/test_model_readiness.py -v
 ```
 
+- [ ] **Step 3-b: 동시성과 외부 DB 모드 테스트를 더한다**
+
+```python
+def test_two_connections_do_not_erase_each_other(conn, conn2):
+    """실제 writer는 supervisor·--once 자식·embed로 **다른 프로세스**다. 한 연결에서
+    순차로 쓰는 테스트는 그 경합을 증명하지 못한다."""
+    merge_model_readiness(conn, "a/x", {"state": "downloading"})
+    merge_model_readiness(conn2, "b/y", {"state": "downloading"})
+    assert set(read_model_readiness(conn)["entries"]) == {"a/x", "b/y"}
+
+
+def test_creates_the_row_when_absent(conn):
+    conn.execute("delete from app_setting where key = %s", (MODEL_READINESS_KEY,))
+    merge_model_readiness(conn, "a/x", {"state": "downloading"})
+    assert read_model_readiness(conn)["entries"]["a/x"]["state"] == "downloading"
+
+
+def test_equal_timestamps_keep_the_stored_value(conn):
+    """동률은 무시한다 — 먼저 쓴 것이 이긴다. 뒤집으면 진행 갱신이 ready를 덮을 수 있다."""
+    merge_model_readiness(conn, "a/x", {"state": "ready", "updated_at": "2026-09-16T00:00:20Z"})
+    merge_model_readiness(conn, "a/x", {"state": "downloading", "updated_at": "2026-09-16T00:00:20Z"})
+    assert read_model_readiness(conn)["entries"]["a/x"]["state"] == "ready"
+
+
+def test_shared_state_off_writes_nothing(conn, monkeypatch):
+    """외부 DB 디버그 모드 (스펙 §5·§6.9). worker_capabilities도 같은 규칙이다."""
+    monkeypatch.setenv("DAMWHA_SHARED_STATE", "off")
+    merge_model_readiness(conn, "a/x", {"state": "downloading"})
+    assert read_model_readiness(conn) == {} or "a/x" not in read_model_readiness(conn).get("entries", {})
+```
+
+`conn2`는 **두 번째 연결**을 주는 fixture다. 없으면 만든다 — 기존 `conn` fixture와 같은 DB를
+가리키되 연결이 달라야 한다.
+
 - [ ] **Step 4: `db/core.py`에 원자적 merge를 더한다**
 
 ```python
@@ -3762,7 +4442,30 @@ def merge_model_readiness(conn, key: str, entry: dict, writer: str | None = None
     """
 ```
 
-구현은 `jsonb_set` + `||`로 하되, 역전 방지는 `WHERE` 절의 시각 비교로 한다. 한 문장 안에서 끝나야 한다 — 두 문장으로 나누면 그 사이에 다른 writer가 낀다.
+한 문장으로 쓴다. `INSERT … ON CONFLICT DO UPDATE`에서 **충돌한 행의 현재 `entries`**에
+`jsonb_build_object(key, entry)`를 `||`로 merge하고, 역전 방지는 `WHERE`에 넣는다:
+
+```sql
+INSERT INTO app_setting (key, value) VALUES (%(k)s, %(seed)s::jsonb)
+ON CONFLICT (key) DO UPDATE SET value = jsonb_set(
+  app_setting.value, '{entries}',
+  COALESCE(app_setting.value->'entries', '{}'::jsonb) || %(entry)s::jsonb
+)
+WHERE COALESCE(
+  app_setting.value->'entries'->%(mk)s->>'updated_at', ''
+) < %(now)s
+```
+
+- `seed`는 이 key 하나만 담은 완성된 문서다 — 행이 없을 때 그대로 들어간다.
+- `WHERE`의 `COALESCE(…, '')`가 **없는 key를 빈 문자열로** 만들어 항상 통과시킨다.
+- `<` 비교라 **동률은 무시**한다 — 먼저 쓴 것이 이긴다. `<=`로 하면 같은 밀리초의 진행
+  갱신이 `ready`를 덮을 수 있다.
+- ISO8601 UTC 문자열이라 사전순 비교가 시간순과 같다.
+- 최상위 `updated_at`도 같은 문장에서 갱신한다 (`jsonb_set`을 한 번 더 감싸거나
+  `||`로 얹는다).
+
+`WHERE`가 거짓이면 **아무 행도 안 바뀐다** — 그것이 의도다. 두 문장으로 나누면 그 사이에
+다른 writer가 낀다.
 
 - [ ] **Step 5: `downloads.py`를 쓴다**
 
@@ -3779,6 +4482,27 @@ def merge_model_readiness(conn, key: str, entry: dict, writer: str | None = None
 ```
 
 `bge_embed.py`·`pyannote_diar.py`·`whisper_mlx.py`의 모델 로드를 이 컨텍스트 매니저로 감싼다.
+
+- [ ] **Step 5-b: `DAMWHA_SHARED_STATE`로 두 writer를 끈다**
+
+`db/core.py`에 게이트 하나:
+
+```python
+def shared_state_enabled() -> bool:
+    """외부 DB 디버그 모드에서는 공유 행을 쓰지 않는다 (Electron Phase 4 스펙 §5·§6.9).
+
+    URL 모양으로 추정하지 않는다 — worker는 자기가 어느 DB에 붙었는지 알 수 없다. 앱이
+    명시적으로 끈다. 기본은 켬이라 웹 흐름(`pnpm worker`, 이 변수 없음)의 기존 보고 동작은
+    그대로다.
+    """
+    return os.environ.get("DAMWHA_SHARED_STATE", "on") != "off"
+```
+
+`merge_model_readiness`와 **`upsert_worker_capabilities` 둘 다** 첫 줄에서 이것을 본다.
+Phase 3이 남긴 "외부 DB 모드에서 worker가 capabilities 한 행을 쓴다"는 한계가 여기서 닫힌다.
+
+앱 쪽은 Task 12의 `appOwnedChildEnv`가 `databaseMode.kind === "external"`일 때
+`DAMWHA_SHARED_STATE: "off"`를 넣는다.
 
 - [ ] **Step 6: `pyannote_diar.py`의 401·403을 보존한다**
 
@@ -3855,29 +4579,48 @@ mlx_lm.server는 별도 프로세스라 진행 훅이 안 붙는다 — LLM 항�
 **Interfaces:**
 - Consumes: Task 17의 `model_readiness` 행 모양
 - Produces:
-  - `export interface ReadinessEntry { key: string; state: "downloading" | "ready" | "failed"; bytesDone: number; bytesTotal: number; updatedAt: number; error: string | null }`
+  - `export interface ReadinessEntry { key: string; state: "downloading" | "ready" | "failed"; bytesDone: number; bytesTotal: number; updatedAt: number; writer: string; attempt: number; error: string | null }`
   - `export function parseModelReadiness(json: unknown): ReadinessEntry[]`
-  - `export function downloadInProgress(entries: ReadinessEntry[], now: number, stallMs: number): boolean`
+  - `export function downloadInProgress(entries: ReadinessEntry[], writer: string, now: number, stallMs: number): boolean`
+    — **`writer`로 거른다.** 스펙 §6.9가 요구한 구별이다.
   - `export const STALL_MS = 120_000`
   - 감독자에 `restartService(id)` — `retry()`와 별개 경로.
+
+`writer`와 `attempt`를 `ReadinessEntry`에 **남긴다.** 초안은 버렸는데, 그러면 다른 서비스의
+다운로드로 이 서비스의 유예가 연장된다.
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
 ```typescript
 describe("downloadInProgress", () => {
+  const entry = (over = {}) => ({
+    key: "a", state: "downloading", bytesDone: 1, bytesTotal: 9,
+    updatedAt: 1_000, writer: "embed", attempt: 1, error: null, ...over,
+  });
+
   it("진행이 갱신되고 있으면 true — 준비 유예를 소모하지 않는다", () => {
-    const e = [{ key: "a", state: "downloading", bytesDone: 1, bytesTotal: 9, updatedAt: 1_000, error: null }];
-    expect(downloadInProgress(e as never, 1_000 + 30_000, STALL_MS)).toBe(true);
+    expect(downloadInProgress([entry()] as never, "embed", 1_000 + 30_000, STALL_MS)).toBe(true);
   });
 
   it("진행이 120초 멈추면 false — 무진행으로 본다", () => {
-    const e = [{ key: "a", state: "downloading", bytesDone: 1, bytesTotal: 9, updatedAt: 1_000, error: null }];
-    expect(downloadInProgress(e as never, 1_000 + 130_000, STALL_MS)).toBe(false);
+    expect(downloadInProgress([entry()] as never, "embed", 1_000 + 130_000, STALL_MS)).toBe(false);
   });
 
   it("downloading이 없으면 false", () => {
-    const e = [{ key: "a", state: "ready", bytesDone: 9, bytesTotal: 9, updatedAt: 1_000, error: null }];
-    expect(downloadInProgress(e as never, 2_000, STALL_MS)).toBe(false);
+    expect(downloadInProgress([entry({ state: "ready" })] as never, "embed", 2_000, STALL_MS)).toBe(false);
+  });
+
+  it("**다른 writer의 다운로드는 이 서비스의 시계를 멈추지 않는다**", () => {
+    // embed가 죽어 가는 동안 worker가 whisper를 받고 있으면, 그것 때문에 embed의 유예가
+    // 영영 안 끝나서는 안 된다 (스펙 §6.9).
+    const e = [entry({ writer: "desktop-uuid-worker", key: "mlx-community/whisper" })];
+    expect(downloadInProgress(e as never, "embed", 1_000 + 30_000, STALL_MS)).toBe(false);
+  });
+
+  it("무진행 판정이 bytesDone이 아니라 updatedAt 기준이다", () => {
+    // bytes_total을 모르는 다운로드가 있다. bytesDone만 보면 진행 중인 것을 멈춘 것으로 본다.
+    const e = [entry({ bytesDone: 0, bytesTotal: 0, updatedAt: 1_000 })];
+    expect(downloadInProgress(e as never, "embed", 1_000 + 30_000, STALL_MS)).toBe(true);
   });
 });
 ```
@@ -3896,7 +4639,30 @@ it("restartService는 살아 있는 서비스도 내리고 다시 띄운다 — 
 });
 ```
 
-- [ ] **Step 2: 실패를 확인하고 구현한다**
+- [ ] **Step 2-b: LLM 쪽 제한을 Python에 넣는다**
+
+`llm_server.py:_wait_ready`의 600초 deadline에 같은 규칙을 넣는다. **DB를 다시 읽을 필요가
+없다** — Task 8의 `llm_entry`가 같은 프로세스에서 돌므로 다운로드 진행을 직접 안다.
+
+```python
+def _wait_ready(proc, model, settings, probe, monotonic, sleep) -> None:
+    """서버가 /models에 응답할 때까지 기다린다. 조기 종료는 그 자리에서 실패.
+
+    첫 실행은 HF 다운로드를 포함한다. **다운로드가 진행 중인 동안에는 deadline을 밀어
+    준다** — 고정 600초로는 큰 모델의 첫 다운로드를 못 덮고, 넘으면 받다 만 것을 버리고
+    처음부터 다시 받는 고리가 생긴다 (Electron Phase 4 스펙 §6.9).
+
+    대신 **무진행 상한**을 둔다: 진행이 STALL_SECONDS 동안 멈추면 실패로 본다. 진행의
+    근거는 자식이 model_readiness에 남기는 updated_at이다 — 바이트 수가 아니다.
+    bytes_total을 모르는 다운로드가 있다.
+    """
+```
+
+`llm_entry`가 `install_hf_progress_hook()`으로 진행을 올리고(Task 17), `_wait_ready`는 그
+행의 `updated_at`을 본다. 부모(`--once` 자식)와 LLM 서버는 다른 프로세스라 DB가 그 사이의
+유일한 통로다 — 이것이 §6.9의 관측 수단이 `llm_entry` 결정에 기대는 지점이다.
+
+- [ ] **Step 3: 실패를 확인하고 구현한다**
 
 `model-readiness.ts`는 순수 모듈이다(electron·DB를 모른다). 감독자가 DB에서 읽은 JSON을 넘긴다.
 
@@ -3907,12 +4673,20 @@ it("restartService는 살아 있는 서비스도 내리고 다시 띄운다 — 
    * 준비 유예 계산에 다운로드를 끼워 넣는다 (Electron Phase 4 스펙 §6.9).
    *
    * embed의 readyTimeoutMs는 180초인데(embed.ts:47) bge-m3 첫 다운로드는 그보다 오래
-   * 걸린다. LLM 서버도 600초 제한이다(config.py:54). 제한을 넘는 다운로드는 진행
-   * 중이어도 실패·종료·재시작 대상이 되고, 그러면 받다 만 것을 버리고 처음부터 다시
-   * 받는 고리가 생긴다.
+   * 걸린다. 제한을 넘는 다운로드는 진행 중이어도 실패·재시작 대상이 되고, 그러면 받다 만
+   * 것을 버리고 처음부터 다시 받는 고리가 생긴다.
    *
-   * 그래서 **진행이 갱신되고 있으면 유예를 소모하지 않고**, 대신 무진행 120초로 판정한다.
-   * 두 서비스가 같은 규칙을 쓴다.
+   * **이 규칙은 embed에만 적용된다.** LLM 서버의 600초 제한은 감독자가 아니라 Python
+   * `llm_server.py:_wait_ready`(`config.py:53`) 안에 있다 — 그 서버는 이미 준비된 worker의
+   * job 자식이 띄우고, `awaitReady()`는 서비스 기동 때만 돈다. 감독자는 그것을 볼 수 없다.
+   * LLM 쪽은 Step 2-b가 Python에서 같은 규칙을 넣는다.
+   *
+   * 고정 deadline이 아니라 **다운로드 시간을 뺀 누적**으로 센다. 그러지 않으면 다운로드가
+   * 끝난 뒤 남은 유예가 0이라 곧바로 실패한다.
+   *
+   * **`writer`로 서비스를 구별한다.** 다른 서비스가 받는 모델 때문에 이 서비스의 시계가
+   * 멈추면 안 된다 — embed가 죽어 가는 동안 worker가 whisper를 받고 있으면 embed의 유예가
+   * 영영 안 끝난다.
    */
 ```
 
@@ -3930,19 +4704,22 @@ it("restartService는 살아 있는 서비스도 내리고 다시 띄운다 — 
   async function restartService(id: ServiceId): Promise<void> { /* … */ }
 ```
 
-- [ ] **Step 3: 통과를 확인한다**
+- [ ] **Step 4: 통과를 확인한다**
 
 ```bash
 pnpm --filter damwha-desktop run test
 pnpm --filter damwha-desktop run lint
+pnpm worker:test
 ```
 
 **Verify:** 테스트 전부 통과.
 
 **Review:**
-- `restartService`가 `owned: false`를 거부하는가.
-- 무진행 판정이 `updatedAt` 기준인가 (`bytesDone` 증가가 아니라 — 크기를 모르는 다운로드가 있다).
-- 진행 중 유예 면제가 **두 서비스 모두**에 적용되는가.
+- `restartService`가 `owned: false`(채택한 외부 embed)와 stand-down worker를 **거부하는가.**
+- 무진행 판정이 `updatedAt` 기준인가 (`bytesDone`이 아니라).
+- **`writer`로 서비스를 구별하는가** — 다른 서비스의 다운로드가 이 서비스의 시계를 멈추면 안 된다.
+- 감독자가 **고정 deadline이 아니라 누적**으로 세는가.
+- LLM 쪽 제한이 **Python에** 들어갔는가 (감독자가 아니라).
 
 - [ ] **Step 4: 커밋**
 
@@ -4046,21 +4823,15 @@ git commit -m "feat: 모델 준비 상태와 토큰 설정을 화면에 보인�
 - Modify: `docs/electron-migration-roadmap.md` (Phase 4 상태)
 - Modify: `desktop/CLAUDE.md`, `be/worker` 운영 문서
 
-- [ ] **Step 1: 기준선을 뜬다 (P4-C26·C27의 근거)**
+- [ ] **Step 1: 기준선을 대조할 수 있는지 먼저 본다**
+
+기준선은 **Task 0이 이미 떴다.** 여기서 뜨면 Task 2가 `.venv`를 바꾼 뒤다.
 
 ```bash
-BASE=/tmp/p4-baseline && mkdir -p $BASE
-# 절대 불변 목록 (스펙 §5)
-for p in be/worker/.venv be/worker/.env be/.env fe/.env be/storage; do
-  find "$p" -type f -exec shasum -a 256 {} + 2>/dev/null | sort > "$BASE/$(echo $p | tr / _).txt"
-done
-find ~/.cache/huggingface -maxdepth 2 2>/dev/null | sort > $BASE/hf-cache.txt
-ls -la ~/.local/bin > $BASE/local-bin.txt
-docker volume inspect damwha_pgdata > $BASE/pgdata.json 2>/dev/null || true
-# 앱 데이터 영역 (기존 레코드 보존으로 판정)
-psql "$(cat /tmp/p4-dburl 2>/dev/null)" -c "select count(*) from meeting" > $BASE/meeting-count.txt 2>/dev/null || true
-find ~/Library/Application\ Support/Damwha/data/storage -type f -exec shasum -a 256 {} + 2>/dev/null | sort > $BASE/app-storage.txt
+ls /tmp/p4-baseline/now || { echo "Task 0의 기준선이 없다 — 이 검증은 성립하지 않는다"; exit 1; }
 ```
+
+없으면 **여기서 멈추고 사용자에게 알린다.** 기준선 없이 "데이터가 보존됐다"고 적을 수 없다.
 
 - [ ] **Step 2: packaged 앱으로 축 A~E를 순서대로 판정한다**
 
@@ -4081,10 +4852,21 @@ mv /tmp/mlx_lm.server.hidden ~/.local/bin/mlx_lm.server
 - [ ] **Step 3: 기준선과 대조한다**
 
 ```bash
-# 절대 불변: 바이트 단위
-for f in $BASE/*.txt; do diff "$f" <(…같은 명령 재실행…) || echo "변경됨: $f"; done
-# 앱 데이터: 기존 레코드가 전부 있고 증가만 있다
+pnpm db:up          # Task 0과 **같은 조건**이어야 한다
+bash desktop/scripts/phase4-baseline.sh verify
 ```
+
+기대: `abs-*` 전부 `PASS`. 하나라도 `FAIL`이면 P4-C26 미충족이다.
+
+`mut-*`(허용 변경)과 `app-*`(앱 데이터)는 스크립트가 판정하지 않는다 — 사람이 본다:
+
+| 대조 | 합격 조건 |
+| --- | --- |
+| `mut-uv.lock` | Task 2가 의도한 차이(`mlx-lm`·`mlx` 추가)만. 다른 패키지 버전 변화가 있으면 P4-C25의 회귀 확인 결과를 함께 적는다 |
+| `mut-venv-versions.txt` | 새 `uv.lock`과 일치 |
+| `mut-local-bin.txt` | `mlx_lm.server`가 **제자리로 돌아왔는가** (P4-C11이 일시 이동시켰다) |
+| `app-storage.txt` | 기준선의 모든 줄이 지금도 있다. **추가만** 있고 삭제·변경 0 |
+| `app-db-rows.txt` | 회의 수가 줄지 않았다 |
 
 - [ ] **Step 4: 결과 문서를 쓴다**
 
@@ -4139,10 +4921,60 @@ Phase 3 결과 문서(`2026-09-14-…-results.md`)의 절 구성을 따른다:
 | §2.4 mlx-lm 편입 | 2 |
 | §9 완료 기준 28건 | 20 |
 
-**2. 완료 기준 coverage** — 28건 전부 Task 20이 판정하고, 각 기준을 만드는 Task는 위 표가 잇는다. P4-C28(numba)만 Task 1이 직접 만든다.
+**2. 완료 기준 coverage** — 30건 각각의 구현 Task와 관찰 지점:
+
+| ID | 만드는 Task | 판정 | 실패 재현 |
+| --- | --- | --- | --- |
+| C1 토큰 게이트 | 14 | 20 | 토큰 파일 삭제 |
+| C2 평문 없음 | 14 | 20 | — (grep) |
+| C3 오타 거절 | 14 | 14·20 | 잘못된 토큰 |
+| C4 토큰 교체 반영 | 14 (Step 6-b) | 14·20 | 미수락 계정 → 수락 계정 |
+| C5 모델 0에서 완주 | 8·17 | 20 | `models/` 비우기 |
+| C6 진행 표시 | 17·19 | 20 | — |
+| C7 끊김·이어받기 | 17·19 | 20 | 네트워크 차단 |
+| C8 403 vs 401 | 17 (`pyannote_diar`·`errors`) | 20 | 미수락 계정 토큰 |
+| C9 재다운로드 없음 | 17 | 20 | — |
+| C10 bge-m3 한 벌 | 17 (Step 7) | 20 | — |
+| C11 번들 mlx-lm | 2·5·8 | 20 | `~/.local/bin/mlx_lm.server` 일시 이동 |
+| C12 번들 런타임 | 9 (`runtime_report`, capabilities 프로브 포함) | 20 | — |
+| C13 외부 미참조 | 11 (PATH) ·12 (env 위생) | 20 | — |
+| C14 캐시 재사용 | 12 (`HF_HOME`) | 20 | `.app` 교체 |
+| C15 번들 위생 | 4·5·6 | 6·20 | — |
+| C16 저장소 없이 기동 | 12 | 20 | 저장소 일시 이동 |
+| C17 ⌘Q 정리 | 13·16 | 20 | — |
+| C18 고아 정리 | 15 | 20 | `kill -9` main |
+| C19 부모 선종료 (a·b) | 16 | 16 (통합)·20 | supervisor·`--once` `kill -9` |
+| C20 자손 SIGKILL | 16 | 20 | `SIG_IGN` fixture 프로세스 |
+| C21 외부 worker 보존 | 15 | 20 | `pnpm worker` 동시 실행 |
+| C22 스캔 실패 시 중단 | 15 | 15 (단위) | `ps` 비영 종료·빈 출력 주입 |
+| C23 dev 반영 | 12 (`PYTHONPATH`) | 20 | — |
+| C24 웹 회귀 | — (회귀 방지) | 20 (별도 회차) | — |
+| C25 mlx 정렬 회귀 | 2 (Step 6) | 2·20 | — |
+| C26 절대 불변 | 0 | 20 | Task 0 Step 3이 탐지를 실증 |
+| C27 앱 데이터 보존 | 0 | 20 | — |
+| C28 numba 측정 | 1 | 1·20 | — |
+| C29 오프라인 처리 | 17 | 20 | 네트워크 차단 |
+| C30 env 재주입 차단 | 12 (Step 3-b) | 12 (단위)·20 | `config.json`에 `PYTHONHOME` |
+
+**단위 테스트로만 판정하는 것**(스펙 §9 비고): C22, `safeStorage` 불가, 복호화 실패,
+무진행 제한, `model_readiness` 동시 writer 역전.
 
 **3. 타입 일관성** — `pythonBinaries`/`ffmpegBinaries`(Task 10) → `LaunchContext.bins`(Task 11) → `launchPython`(Task 11) → `workerSpec`/`embedSpec`(Task 13). `parseDamwhaProcesses`/`classify`(Task 15) → `worker-shutdown`(Task 16). `merge_model_readiness`(Task 17) → `parseModelReadiness`(Task 18) → 화면(Task 19).
 
-**4. 순서 의존** — Task 11·12·13은 **연달아** 실행한다 (11에서 `lint`가 깨지고 13에서 닫힌다). Task 1은 첫째여야 한다 (결과가 Task 6의 entitlement를 가른다). Task 2는 Task 4보다 앞이어야 한다 (`uv.lock`이 빌드 입력이다).
+**4. 순서 의존:**
 
-**5. 앞 Task의 참조 정정** — Task 5의 "Task 7의 `pythonBinaries()`"와 Task 6의 "Task 10·12가 그 경로를 읽는다"는 각각 **Task 10**·**Task 12**를 가리킨다. 실행자는 위 표를 기준으로 본다.
+- **Task 0이 맨 앞이다.** 기준선을 Task 2보다 뒤에 뜨면 `.venv` 변경을 못 잡는다.
+- **Task 1은 Task 2 뒤, Task 6 앞이다.** 잠금에서 numba 버전을 읽어야 하고(Task 2),
+  결과가 entitlement를 가른다(Task 6). `uv.lock`에 numba가 이미 있으면 Task 2 전에 재도 된다.
+- **Task 2 → Task 4.** `uv.lock`이 빌드 입력이다.
+- **Task 8 → Task 9.** `embed_service`의 자기 보고가 `runtime_report`(Task 9)를 쓴다.
+  연달아 실행하거나, Task 8에서 그 줄만 빼 둔다.
+- **Task 11 → 13.** 11이 새 런처를 더해 공존시키고, 13이 소비자를 옮긴 뒤 옛 것을 지운다.
+  **각 Task가 초록불로 끝난다** — 중간에 컴파일이 깨진 커밋을 남기지 않는다.
+- **Task 17 → 18.** 유예 계산이 `model_readiness`를 읽는다.
+- **Task 18 → 14 Step 6-b.** 토큰 교체가 `restartService`를 쓴다. 14를 18 뒤로 미루거나,
+  14에서 그 Step만 뒤로 뺀다.
+
+**5. 각 Task의 종료 상태** — 모든 Task가 `test`·`lint` 통과 상태로 끝난다. 로드맵 §5는
+필수 검증 실패가 다음 단계 진행을 막는다고 못 박으므로, 의도적 실패를 다음 Task로 넘기지
+않는다 (초안의 Task 11–13과 Task 2 Step 7이 그것을 어겼다).
