@@ -95,10 +95,12 @@
 - Consumes: 없음
 - Produces: `/tmp/p4-baseline/{now,later}/` + `baseline`·`verify` 두 모드. Part 2의 검증이 대조한다.
 
-- [ ] **Step 1: 스크립트를 쓴다**
+- [x] **Step 1: 스크립트를 쓴다**
 
 `desktop/scripts/phase4-baseline.sh` — 전문은 아래. **셸이라 전문을 싣고 Step 2·3이 실행으로
 검증한다** (규칙 1).
+
+**[실행됨: `bash desktop/scripts/phase4-baseline.sh baseline` → rc=0, 7.9초, 산출 13개]**
 
 ```bash
 #!/bin/bash
@@ -171,6 +173,11 @@ echo "== $MODE → $DEST"
 
 if [ "$MODE" = verify ]; then
   echo
+  # 기준선 없이 부르면 루프가 한 번도 안 돌아 조용히 통과한다. 그것은 대조가 아니다.
+  if ! compgen -G "$OUT/now/abs-*.txt" > /dev/null; then
+    echo "기준선이 없다: $OUT/now — 먼저 baseline 모드로 찍어라" >&2
+    exit 2
+  fi
   fail=0
   for f in "$OUT/now"/abs-*.txt; do
     [ -e "$f" ] || continue
@@ -198,7 +205,7 @@ fi
 chmod +x desktop/scripts/phase4-baseline.sh
 ```
 
-- [ ] **Step 2: 기준선을 찍는다**
+- [x] **Step 2: 기준선을 찍는다**
 
 ```bash
 pnpm db:up          # Docker DB 행 수를 세려면 떠 있어야 한다
@@ -206,30 +213,61 @@ bash desktop/scripts/phase4-baseline.sh baseline
 ls -la /tmp/p4-baseline/now
 ```
 
+컨테이너가 이미 healthy면 `pnpm db:up`을 건너뛴다 — 조건은 이미 충족됐고 `compose up`은
+compose 파일이 바뀌었을 때 컨테이너를 재생성한다.
+
 `MEASUREMENT-UNAVAILABLE`이 있으면 그 이유를 적어 둔다 — `verify`가 같은 조건이어야 한다.
 
-- [ ] **Step 3: 탐지가 되는지 실증한다**
+**[실행됨: 2026-09-16. `app-db-rows.txt`만 `MEASUREMENT-UNAVAILABLE (embedded psql)` — 앱이
+안 떠 있어 `<userData>/run`에 소켓이 없다. `app-` 접두사라 자동 판정 대상이 아니지만 `verify`도
+앱 미기동 상태여야 한다. 나머지 12개는 측정됐다.]**
+
+이 기준선이 확인한 것 셋 — 스펙 §2.4가 실측으로 재확인됐다.
+
+| 값 | 실측 | 뜻 |
+| --- | --- | --- |
+| `.venv`의 `mlx-lm` | **MISSING** | 매니페스트 밖. `~/.local/share/uv/tools/mlx-lm` 전역 설치에 기대고 있다 |
+| `.venv`의 `mlx` | 0.31.2 | Task 3이 `uv.lock`에 맞춰 옮길 대상 |
+| `.venv`의 `numba`·`llvmlite` | 0.65.1 · 0.47.0 | **이미 잠금에 있다** → Task 2를 Task 3보다 먼저 돌려도 된다 |
+
+- [x] **Step 3: 탐지가 되는지 실증한다**
+
+`verify`는 diff 전에 `later/`를 **다시 수집해서 덮어쓴다**(`sums()`의 `> "$DEST/…"`). 그래서
+`later/`를 조작하고 `verify`를 부르면 조작이 diff 전에 지워져 `FAIL`이 나오지 않는다
+(**[실행됨: 2026-09-16 — probe 줄이 사라지고 grep이 rc=1로 빈손]**). 조작 대상은 `verify`가
+건드리지 않는 `now/` 쪽이고, 진짜 기준선을 더럽히지 않도록 **트리째 사본**에 한다.
 
 ```bash
 bash desktop/scripts/phase4-baseline.sh verify              # 전부 PASS
-echo "probe-line" >> /tmp/p4-baseline/later/abs-be-env.txt  # **사본**을 조작한다
-bash desktop/scripts/phase4-baseline.sh verify 2>&1 | grep 'FAIL.*abs-be-env'
-rm -rf /tmp/p4-baseline/later
+
+rm -rf /tmp/p4-baseline-probe
+cp -R /tmp/p4-baseline /tmp/p4-baseline-probe               # **사본**을 조작한다
+echo "probe-line" >> /tmp/p4-baseline-probe/now/abs-be-env.txt
+P4_BASELINE_DIR=/tmp/p4-baseline-probe \
+  bash desktop/scripts/phase4-baseline.sh verify 2>&1 | grep 'FAIL.*abs-be-env'
+rm -rf /tmp/p4-baseline-probe /tmp/p4-baseline/later
 ```
 
 **실파일에 쓰지 않는다.** `be/.env`는 절대 불변이고, `be/.gitignore:7`이 무시하므로
 `git checkout be/.env`는 `pathspec did not match`로 **실패한다** — probe 줄이 영구히 남는다.
 
+**[실행됨: 2026-09-16. `verify` 8건 전부 PASS → 사본 조작 후 `FAIL abs-be-env.txt` + `< probe-line`.
+진짜 기준선 불변. 기준선 없는 `verify`는 가드가 rc=2로 막는다.]**
+
 **Verify:** Step 2·3 통과. `git status`가 깨끗하다.
 
 **Review:**
-- 절대 불변 목록이 스펙 §5와 정확히 같은가.
+- 절대 불변 목록이 스펙 §5와 정확히 같은가. **`~/.cache/uv`는 §5에 없고 여기에도 없어야
+  한다** — Task 3의 `uv sync`가 그 캐시에 정당하게 쓰므로 절대 불변에 넣으면 모순이다.
 - `.venv`·`~/.local/bin`이 `mut-` 쪽인가.
 - Docker DB를 메타데이터가 아니라 **행 수**로 재는가.
 - `uv run`에 `--no-sync`가 있는가 — 없으면 기준선이 자기 측정 대상을 움직인다.
-- Step 3이 **사본**을 조작하는가.
+- Step 3이 **사본의 `now/`**를 조작하는가. `later/`는 `verify`가 덮어쓴다.
+- 기준선 없는 `verify`가 조용히 통과하지 않는가.
 
-- [ ] **Step 4: 커밋** — `chore(desktop): Phase 4 데이터 안전 기준선 스크립트를 더한다`
+**[리뷰 결과: 6항 전부 통과 — 2026-09-16 메인 세션]**
+
+- [x] **Step 4: 커밋** — `chore(desktop): Phase 4 데이터 안전 기준선 스크립트를 더한다`
 
 ---
 
