@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- **번들 Python 트리 전용.** Task 2가 실측한 최소 집합이고 둘 다 load-bearing이다 —
+       없으면 dyld가 SIGABRT, disable-library-validation만 있으면 import numba가 SIGKILL.
+       Electron 본체는 entitlements.mac.plist를 쓴다 (allow-jit이 더 필요하다). -->
+
+  <!-- numba의 LLVM이 **모듈 로드 시점에** 실행 메모리를 잡는다. 호출이 아니라 import다. -->
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <!-- 제3자 wheel의 .so는 우리 Team ID로 서명되지 않는다. dlv는 서명 주체를 안 따질 뿐
+       "서명 없음"은 허용하지 않으므로, 빌드의 전수 서명과 짝이다 (Phase 0 R-5). -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

@@ -43,16 +43,23 @@
 - **ffmpeg LGPL 2.1 정적 빌드.** 버전과 configure 플래그는 Phase 0 원본
   (`docs/superpowers/reference/electron-phase-0/ffmpeg-fetch.sh`)을 따른다 — **다르면 원본이 맞다.**
 - **`mlx-lm` 기준값 0.31.3.** `uv.lock`이 단일 진실 원천이다.
-- **entitlement 최소 집합** — `allow-unsigned-executable-memory`, `disable-library-validation`.
-  `allow-jit`은 Task 2의 측정이 요구할 때만. **측정 결과 요구하지 않는다** (2026-09-16) —
-  최소 집합으로 numba가 산다. 둘 다 각각 필요하다: 없으면 dyld가 SIGABRT,
-  `disable-library-validation`만 있으면 `import numba`가 SIGKILL.
+- **entitlement plist는 둘이다** (스펙 §6.1). `entitlements.python.plist` = 최소 집합 둘
+  (`allow-unsigned-executable-memory`, `disable-library-validation`) → `Resources/python`·
+  `Resources/ffmpeg`. `entitlements.mac.plist` = 위 둘 + **`allow-jit`** → `Damwha.app`.
+  **`.app`에 `allow-jit`이 없으면 V8이 rc=133으로 죽는다** (2026-09-16 실측). Task 2의 numba
+  측정은 Python 트리에만 적용된다. 트리 쪽은 최소 집합으로 numba가 산다 — 둘 다 각각
+  필요하다: 없으면 dyld가 SIGABRT, `disable-library-validation`만 있으면 `import numba`가 SIGKILL.
+- **entitlements plist의 XML 주석에 하이픈 두 개를 연달아 쓰지 않는다.** AMFI 파서가 거부해
+  `codesign`이 rc=1로 실패하고, `plutil -lint`는 그것을 통과시킨다. **서명에 실패한 `.app`도
+  실행되므로** 실행 성공을 서명 성공으로 읽지 않는다.
 - **서명 판정은 `codesign --verify --arch arm64`.** `--arch` 없이 부르지 않는다.
 - **번들에 절대 경로를 굽지 않는다** (스펙 §6.1-b).
 - **`npm install` 금지.** 패키지를 루트에서 실행하지 않는다.
-- **절대 불변** — `be/worker/.env`, `be/.env`, `fe/.env`, `~/.cache/huggingface`,
-  `~/.cache/uv`, `~/.local/share/uv`, Docker 볼륨 `damwha_pgdata`, `be/storage`,
-  `<userData>/storage/`.
+- **절대 불변** (스펙 §5와 글자 그대로 같다) — `be/worker/.env`, `be/.env`, `fe/.env`,
+  `~/.cache/huggingface`, Docker 볼륨 `damwha_pgdata`, `be/storage`, `<userData>/storage/`.
+  **`~/.cache/uv`는 여기 없다** — Task 3의 `uv sync`가 그 캐시에 정당하게 쓰므로 넣으면
+  규칙과 사실이 어긋난다. `~/.local/share/uv/tools`는 §5 허용 변경 표의 "건드리지 않는다"이고
+  Task 1이 그것을 `abs-` 쪽에서 감시한다.
 - **허용 변경** — `be/worker/.venv`(Task 3), `~/.local/bin/mlx_lm.server`(Part 2의 검증).
   **Task 1이 기준선을 뜬 뒤에만** 손댄다.
 - 커밋 메시지는 한국어 본문. 제목은 `type(scope): 한 줄`.
@@ -74,7 +81,8 @@
 | --- | --- |
 | `desktop/scripts/phase4-baseline.sh` | 데이터 안전 기준선 — 찍기·대조 |
 | `desktop/scripts/probe-numba.sh` + `numba-probe/*.py` | numba JIT 사망 지점 측정 |
-| `desktop/build-resources/entitlements.mac.plist` | hardened runtime entitlement |
+| `desktop/build-resources/entitlements.mac.plist` | `.app`(Electron)용 entitlement — `allow-jit` 포함 |
+| `desktop/build-resources/entitlements.python.plist` | 번들 Python 트리용 entitlement — 최소 집합 둘 |
 | `desktop/scripts/build-ffmpeg.sh` + `ffmpeg-checksums.txt` | ffmpeg LGPL 정적 빌드 |
 | `desktop/scripts/build-python.sh` + `python-checksums.txt` | Python 트리 (캐시 2층) |
 | `desktop/scripts/package.mjs` | 빌드 호출·서명 (수정) |
@@ -275,10 +283,11 @@ rm -rf /tmp/p4-baseline-probe /tmp/p4-baseline/later
 
 ## Task 2: numba 사망 지점 측정 — 뒤를 가르는 분기
 
-**이 결과가 Task 5·7의 entitlement 목록과 Phase 진행 여부를 정한다.** (둘이 `entitlements.mac.plist`를
-소비한다 — Task 5는 빌드 중 Mach-O 전수 서명, Task 7은 `.app` 최종 서명. Task 6은 쓰지 않는다.)
+**이 결과가 Task 5·7의 entitlement 목록과 Phase 진행 여부를 정한다.** Task 5는 빌드 중 Mach-O
+전수 서명에 `entitlements.python.plist`를, Task 7은 `.app` 최종 서명에 `entitlements.mac.plist`를
+쓴다. Task 6은 쓰지 않는다. **plist가 둘인 이유는 Step 6-c에 있다.**
 
-**Files:** Create `desktop/scripts/probe-numba.sh`, `desktop/scripts/numba-probe/{import_only,define_only,call_it}.py`, `desktop/build-resources/entitlements.mac.plist`
+**Files:** Create `desktop/scripts/probe-numba.sh`, `desktop/scripts/numba-probe/{import_only,define_only,call_it}.py`, `desktop/build-resources/entitlements.python.plist`, `desktop/build-resources/entitlements.mac.plist`
 
 **Interfaces:**
 - Consumes: Task 3의 `uv.lock` (numba·llvmlite 고정 버전). **`uv.lock`에 numba가 이미 있으면
@@ -289,9 +298,10 @@ rm -rf /tmp/p4-baseline-probe /tmp/p4-baseline/later
 첫 줄(plist 그대로, 다음 Task)로 간다. Task 1의 기준선이 잠금에 numba 0.65.1·llvmlite 0.47.0이
 이미 있음을 확인해 Task 3보다 먼저 돌렸다.]**
 
-- [x] **Step 1: entitlements를 만든다**
+- [x] **Step 1: entitlements를 만든다 — plist 둘**
 
-`desktop/build-resources/entitlements.mac.plist`:
+`desktop/build-resources/entitlements.python.plist` (번들 Python 트리 전용. 이 Task가 재는 것이
+이 집합이다):
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -310,6 +320,17 @@ rm -rf /tmp/p4-baseline-probe /tmp/p4-baseline/later
 </plist>
 ```
 
+`desktop/build-resources/entitlements.mac.plist` (`.app` 본체용)는 **같은 둘에 `allow-jit`을
+더한다.** 근거는 Step 6-c의 측정이다. `--deep`이 Electron Framework와 헬퍼에도 hardened
+runtime을 걸기 때문에 이 셋이 `.app` 전체에 적용된다.
+
+**XML 주석에 하이픈 두 개를 연달아 쓰지 않는다.** `codesign`이
+`Failed to parse entitlements: AMFIUnserializeXML: syntax error near line N`으로 rc=1에
+실패한다 — `plutil -lint`는 통과시키므로 lint만으로는 못 잡는다.
+**[실행됨: 2026-09-16 — 주석에 `codesign --deep`을 적었다가 그대로 당했다. 게다가 서명이
+실패한 `.app`도 linker-signed 상태로 **그냥 실행되어**, 실행 성공을 서명 성공으로 읽으면
+거짓 통과가 난다.]**
+
 - [x] **Step 2: 세 프로브를 각각 별개 파일로 쓴다**
 
 한 프로세스에서 셋을 다 하면 어디서 죽었는지 구분되지 않는다 — Phase 0의 `probe.sh:391-406`이
@@ -327,7 +348,7 @@ LLVM MCJIT을 탄다.
 - [x] **Step 3: 측정 스크립트를 쓴다**
 
 **[실행됨: `bash desktop/scripts/probe-numba.sh /tmp/numba-probe/python
-desktop/build-resources/entitlements.mac.plist` → Mach-O 42개 서명, 3/3 통과, rc=0]**
+desktop/build-resources/entitlements.python.plist` → Mach-O 42개 서명, 3/3 통과, rc=0]**
 
 서명 개수 가드를 더했다. 트리 경로가 틀리면 `find`가 0건을 내고 프로브가 **서명 없이** 돌아
 거짓 `survives`가 나온다 — Task 4의 `fix_macho` 0건 지적과 같은 부류다.
@@ -412,7 +433,7 @@ for p in import_only define_only call_it; do
   /tmp/numba-probe/python/bin/python3.12 desktop/scripts/numba-probe/$p.py; echo "$p rc=$?"
 done
 
-bash desktop/scripts/probe-numba.sh /tmp/numba-probe/python desktop/build-resources/entitlements.mac.plist
+bash desktop/scripts/probe-numba.sh /tmp/numba-probe/python desktop/build-resources/entitlements.python.plist
 ```
 
 `install_only` 아카이브를 쓰는 이유: 재배치 조작 없이 그 자리에서 돌면 되고, 이 측정은
@@ -430,7 +451,7 @@ bash desktop/scripts/probe-numba.sh /tmp/numba-probe/python desktop/build-resour
 `|| cp`가 **키 없는 원본**을 남겨 거짓 판정이 나온다.
 
 ```bash
-cp desktop/build-resources/entitlements.mac.plist /tmp/ents-with-jit.plist
+cp desktop/build-resources/entitlements.python.plist /tmp/ents-with-jit.plist
 /usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.allow-jit bool true" /tmp/ents-with-jit.plist
 for k in allow-unsigned-executable-memory disable-library-validation allow-jit; do
   /usr/libexec/PlistBuddy -c "Print :com.apple.security.cs.$k" /tmp/ents-with-jit.plist \
@@ -462,8 +483,53 @@ bash desktop/scripts/probe-numba.sh /tmp/numba-probe/python /tmp/ents-with-jit.p
 프로브가 실제 경로를 밟는다는 증거이자, 스펙 §6.1의 "Phase 0 실측 최소 집합"의 재확인이다.
 Phase 0 R-4가 적은 "메시지 없는 SIGKILL"이 그대로 재현됐다.
 
+**Step 6-c: 같은 entitlement가 `.app`에도 맞는지 잰다** (5회차 blocking B-1. 이것을 안 재면
+Task 7이 `.app`을 기동 불능으로 만든다.)
+
+Task 2의 측정 대상은 **Python 프로세스**다. 그 결과를 `.app`에 옮겨 적으면 안 된다 —
+`codesign --deep`은 Electron Framework와 헬퍼에도 같은 entitlement를 건다.
+
+```bash
+SRC=desktop/node_modules/electron/dist/Electron.app
+for v in ctl min jit; do
+  rm -rf "/tmp/p4-ent/$v" && mkdir -p "/tmp/p4-ent/$v" && cp -R "$SRC" "/tmp/p4-ent/$v/E.app"
+  mkdir -p "/tmp/p4-ent/$v/E.app/Contents/Resources/app"
+  printf '{"name":"p4probe","version":"1.0.0","main":"main.js"}\n' \
+    > "/tmp/p4-ent/$v/E.app/Contents/Resources/app/package.json"
+  cat > "/tmp/p4-ent/$v/E.app/Contents/Resources/app/main.js" <<'JS'
+const { app } = require('electron')
+app.disableHardwareAcceleration()
+app.on('ready', () => { console.log('RESULT JS-OK', new Function('return 1+1')()); app.exit(0) })
+JS
+done
+"/tmp/p4-ent/ctl/E.app/Contents/MacOS/Electron"; echo "ctl rc=$?"      # 대조군
+
+codesign --force --deep --sign - --options runtime \
+  --entitlements desktop/build-resources/entitlements.python.plist "/tmp/p4-ent/min/E.app"
+echo "codesign rc=$?"          # **0이 아니면 아래 실행 결과는 무의미하다**
+"/tmp/p4-ent/min/E.app/Contents/MacOS/Electron"; echo "min rc=$?"
+
+codesign --force --deep --sign - --options runtime \
+  --entitlements desktop/build-resources/entitlements.mac.plist "/tmp/p4-ent/jit/E.app"
+echo "codesign rc=$?"
+"/tmp/p4-ent/jit/E.app/Contents/MacOS/Electron"; echo "jit rc=$?"
+rm -rf /tmp/p4-ent
+```
+
+**[실행됨: 2026-09-16, Electron 44.3.0]**
+
+| 서명 | 실행 rc | 결과 |
+| --- | --- | --- |
+| 손 안 댐 (대조군) | 0 | `RESULT JS-OK 2` |
+| 최소 집합 (= Python용 plist) | **133** | `Fatal process out of memory: Failed to reserve virtual memory for CodeRange` |
+| `.app`용 plist (+`allow-jit`) | 0 | `RESULT JS-OK 2`, `flags=0x10002(adhoc,runtime)`, 키 셋 |
+
+`allow-jit`을 더한 plist로 numba 프로브를 다시 돌려도 `survives`다 — 두 요구는 충돌하지
+않는다. 그럼에도 트리에는 최소 집합만 준다 (권한 최소화).
+
 **Verify:** 판정 한 줄이 나온다. 세 프로브가 **각각 별개 프로세스**로 돌았다.
-`codesign -d --entitlements - /tmp/numba-probe/python/bin/python3.12`가 키를 보인다.
+`codesign -d --entitlements - /tmp/numba-probe/python/bin/python3.12`가 키 **둘**을 보인다.
+Step 6-c의 `.app`은 키 **셋**을 보이고 실행 rc=0이다.
 
 **[검증됨: 판정 `survives`. 세 프로브가 별개 `$PY` 호출. `codesign -d --entitlements -`가 키
 둘을 보이고 `codesign -dvvv`가 `flags=0x10002(adhoc,runtime)`을 보인다 — hardened runtime이
@@ -476,9 +542,12 @@ Phase 0 R-4가 적은 "메시지 없는 SIGKILL"이 그대로 재현됐다.
 - `uv export`에 `--frozen`이 있는가.
 - 서명 0건을 `survives`로 읽지 않는가.
 - 대조군이 있는가 — 없으면 죽음의 원인을 hardened runtime에 귀속시킬 수 없다.
+- **판정의 적용 범위를 Python 트리로 한정하는가.** `.app`은 Step 6-c가 따로 잰다.
+- `codesign` 종료 코드를 보는가 — 서명이 실패해도 앱은 실행된다.
 
-**[리뷰 결과: 6항 전부 통과 — 2026-09-16 메인 세션. `rc=134`(SIGABRT, dyld)와
-`rc=137`(SIGKILL, W+X)이 실제로 구분되는 것을 측정으로 확인했다.]**
+**[리뷰 결과: 8항 전부 통과 — 2026-09-16 메인 세션. `rc=134`(SIGABRT, dyld)와
+`rc=137`(SIGKILL, W+X)이 실제로 구분되는 것을 측정으로 확인했다. 마지막 두 항은 5회차
+blocking B-1을 받아 더한 것이다.]**
 
 - [x] **Step 7: 커밋** — `chore(desktop): numba JIT이 hardened runtime에서 사는지 가르는 프로브를 더한다`
 
@@ -564,21 +633,31 @@ uv run --directory be/worker ruff check .
 
 기대: `mlx-lm 0.31.3`이 **새로 나타난다.** `mlx`·`torch`·`numpy`는 그대로.
 
-- [ ] **Step 6: `mlx`·`torch`가 바뀌었으면 실오디오 1건으로 확인한다**
+- [ ] **Step 6: 실오디오 1건 + 요약 1건으로 확인한다**
 
-Step 5의 diff에 그 셋의 변화가 있을 때만. 없으면 건너뛴다. 기존 회의 하나를 재처리해 전사
-텍스트를 이전과 대조하고, 차이가 크면 `mlx` 고정값을 되돌린다.
+**전사(STT)** — Step 5의 diff에 `mlx`·`torch`·`numpy` 변화가 있을 때만. 없으면 건너뛴다.
+기존 회의 하나를 재처리해 전사 텍스트를 이전과 대조하고, 차이가 크면 `mlx` 고정값을 되돌린다.
+
+**요약·렌즈 — diff와 무관하게 항상 한다.** `.venv`의 `mlx` diff가 비어도 이 조합은 검증되지
+않은 채로 남는다. 지금 실제로 요약을 돌리는 것은 `.venv`가 아니라 `~/.local/share/uv/tools`의
+전역 `mlx-lm`이고, 그 환경은 **Python 3.14.7 + mlx 0.32.2**다(실측). 이 Task가 고정하는
+`mlx-lm 0.31.3 + mlx 0.31.2` 조합은 이 맥에서 **한 번도 돈 적이 없다.** 회의 하나에
+요약 job을 걸어 출력이 나오는 것까지 본다.
+
+P4-C25의 문구가 "STT·요약"인데 요약 쪽은 이 Task가 보지 않으면 Part 2 P4-C11까지 아무도
+보지 않는다 — 그래서 여기서 본다.
 
 **`lens_llm_server_bin`의 기본값은 이 Task에서 바꾸지 않는다.** 그것과 그것을 읽는 코드를
 따로 커밋하면 그 사이 커밋에서 관리형 LLM 서버가 뜨지 않는다 — Part 2가 한 번에 바꾼다.
 
-**Verify:** Step 5 통과. Step 6이 필요했으면 그 결과도.
+**Verify:** Step 5 통과. Step 6의 요약 1건은 항상, 전사 1건은 diff에 변화가 있었으면.
 
 **Review:**
 - 플랫폼 마커가 기존 `mlx-whisper` 줄과 같은가.
 - `uv run`에 `--no-sync`가 있는가.
 - 복구 사본을 만들었는가.
 - `config.py`를 건드리지 않았는가.
+- **요약 검증을 diff 조건에 걸지 않았는가** — 걸면 이 조합이 검증 없이 통과한다.
 
 - [ ] **Step 7: 커밋** — `fix(worker): mlx-lm과 mlx를 매니페스트에 고정한다`
 
@@ -612,7 +691,8 @@ cat docs/superpowers/reference/electron-phase-0/ffmpeg-checksums.txt
 - [ ] **Step 2: `build-postgres.sh`의 관례를 읽는다**
 
 ```bash
-sed -n '1,60p' desktop/scripts/build-postgres.sh
+sed -n '1,60p'    desktop/scripts/build-postgres.sh   # 캐시 키·work 디렉터리
+sed -n '197,215p' desktop/scripts/build-postgres.sh   # stage() — 스테이징 관례는 여기다
 ```
 
 베낄 것: 셔뱅과 `set -euo pipefail`, 도구 존재 확인 루프, `KEY=$(… shasum …)` 캐시 키(스크립트
@@ -670,7 +750,7 @@ desktop/build/ffmpeg/bin/ffprobe -v error -show_entries stream=sample_rate,chann
 **Files:** Create `desktop/scripts/build-python.sh`, `desktop/scripts/python-checksums.txt`
 
 **Interfaces:**
-- Consumes: Task 2의 `entitlements.mac.plist`, Task 3의 `uv.lock`
+- Consumes: Task 2의 `entitlements.python.plist`(트리 서명용), Task 3의 `uv.lock`
 - Produces: `desktop/.cache/python/rt-<키>/` — 인터프리터 + 의존성 + 재배치 + 서명.
   Task 6이 복사해 worker 패키지를 얹는다.
 - 스크립트가 정의하는 함수: `relocate(tree)`, `fix_macho(tree)`, `sign_tree(tree)`,
@@ -693,7 +773,7 @@ sed -n '133,205p' docs/superpowers/reference/electron-phase-0/python-build.sh   
 | 1 | `:370-399` `LC_RPATH` | 필터는 `@*`·번들 안·`/usr/lib`·`/System` **제외 전부**. `BUILD_PREFIX`가 아니다 — Python은 아카이브 전개라 그 문자열이 트리에 없다. 실측 58건은 wheel 배포자 경로(scipy의 `/opt/homebrew` gcc 등) |
 | 2 | `:401-435` `LC_ID_DYLIB` | **`libpython3.12.dylib`만 `@executable_path/../lib/…`**, 나머지 `@rpath/<base>`. `bin/python3.12`가 그렇게 참조한다 |
 | 3 | `:301-338` `_sysconfigdata` | 파일을 regex로 긁지 말고 **런타임에게 묻는다.** 따옴표 표기가 배포본마다 달라 Phase 0에서 regex가 조용히 빈 값을 냈다 |
-| 4 | `:342-356` `direct_url.json` | 삭제. 없으면 `check-bundle.mjs`의 **기존 4번 검사**(`grep -rlF <repo> Contents`)가 잡는다 |
+| 4 | `:342-356` `direct_url.json` | 삭제. 텍스트 파일이라 `check-bundle.mjs`의 **기존 4번 검사**가 실제로 잡는 몇 안 되는 경우다 — 같은 검사가 `.pyc`·`.so`는 못 잡는다(`-a` 없음, Task 7이 고친다) |
 | 5 | 전체 | `install_name_tool` 뒤 **파일별 즉시 재서명**(`resign`) |
 | 6 | `:133-205` prune | `bin/pip*`·`2to3*`·`idle3*`·`pydoc3*`·`python*-config`, `ensurepip`, `tkinter`/`tcl`/`tk` 제거. 없으면 PBS 원본 스크립트가 남아 제한 PATH에서 `realpath: command not found`를 내고 그것이 우리 셔뱅 결함으로 오독된다 |
 
@@ -720,7 +800,7 @@ shasum -a 256 /tmp/$ASSET | awk -v a="$ASSET" '{print $1"  "a}' > desktop/script
 | 층 | 캐시 키 | 내용 |
 | --- | --- | --- |
 | `rt-*` | Python 버전·릴리스 + `checksums.txt` + `pyproject.toml`·`uv.lock` + `entitlements.plist` + 스크립트 shasum | 인터프리터 + 의존성 + prune + 재배치 + Mach-O + 서명 |
-| `wk-*` | 위 키 + `damwha_worker/` **트리 해시(경로 포함)** | `damwha_worker` 설치 (Task 6) |
+| `wk-*` | 위 키 + `damwha_worker/` **트리 해시(경로 포함, `__pycache__`·`.DS_Store` 제외)** | `damwha_worker` 설치 (Task 6) |
 
 **`BUILD_PREFIX`가 없다.** `build-postgres.sh`·`build-ffmpeg.sh`와 다른 점이다 — 그 둘은
 `./configure --prefix`로 소스에서 빌드하지만 Python은 아카이브를 풀 뿐이라 우리가 정한 prefix가
@@ -730,9 +810,15 @@ shasum -a 256 /tmp/$ASSET | awk -v a="$ASSET" '{print $1"  "a}' > desktop/script
 파일의 rename이 같은 키가 되어 모듈을 옮긴 변경이 캐시에 안 잡힌다. `.py`만 보지도 않는다 —
 패키지 안의 자원 파일도 동작을 바꾼다.
 
-의존성 설치는 `uv export --extra models --no-dev --locked`로 뽑은 목록을 쓴다:
+의존성 설치는 `uv export --extra models --no-dev --locked --no-emit-project`로 뽑은 목록을 쓴다:
 - `--no-dev` — 기본은 dev 그룹 포함이라 pytest·ruff·testcontainers가 1.5 GB 번들에 실린다.
 - `--locked` — 불일치면 실패한다. 없으면 빌드가 자기 캐시 키 입력(`uv.lock`)을 다시 쓴다.
+- `--no-emit-project` — **없으면 목록 3행에 `-e .`가 나온다**
+  (**[실행됨: 2026-09-16]**). 그대로 `uv pip install -r`에 넣으면 cwd를 editable로 깔아
+  `.pth`에 저장소 절대 경로가 박히거나(§6.7 위반), cwd에 `pyproject.toml`이 없어 실패한다.
+- `--link-mode=copy` — Phase 0 원본 `python-build.sh:31-34,127`이 그렇게 한다. 이 맥의 실측으로는
+  uv 기본(clone)에서도 공유 inode가 생기지 않고 `codesign`·`install_name_tool`이 새 inode를
+  만들어 무해했지만, **원본과 다르게 갈 근거가 없으므로 원본을 따른다.**
 
 - [ ] **Step 4: 돌린다 (수십 분)**
 
@@ -748,7 +834,8 @@ time bash desktop/scripts/build-python.sh
 - [ ] **Step 5: 재배치가 실제로 되는지 확인한다 (R-6 회귀 방지)**
 
 ```bash
-RT=$(ls -d desktop/.cache/python/rt-* | head -1)
+# 디렉터리만 고른다 — rt-<키>.complete 류 표식 파일이 같은 접두사를 가질 수 있다.
+RT=$(find desktop/.cache/python -maxdepth 1 -type d -name 'rt-*' | head -1)
 cp -R "$RT" /tmp/py-moved
 /tmp/py-moved/bin/python3.12 -c "import sys; print(sys.executable, sys.prefix)"
 ```
@@ -772,8 +859,12 @@ mv "${RT}.hidden" "$RT"
 **우리가 재작성한 스크립트만 고른다** — prune 뒤에도 PBS 원본이 남아 있으면 그것이 자기
 `realpath` 의존으로 실패하고 우리 결함으로 오독된다.
 
+**`grep -lF`에 홑따옴표다.** 겹따옴표 안에서는 `$`가 앵커로, `\*`가 그대로 넘어가 패턴이
+어긋나고 **매치 0 → `exit 1`**로 R-6 검사가 통째로 안 돈다
+(**[실행됨: 2026-09-16 — 토큰이 든 파일에 rc=1, `grep -lF '${0%/*}'`는 매치]**).
+
 ```bash
-BIN=$(grep -l "\${0%/\*}" /tmp/py-moved/bin/* 2>/dev/null | head -1)
+BIN=$(grep -lF '${0%/*}' /tmp/py-moved/bin/* 2>/dev/null | head -1)
 [ -n "$BIN" ] || { echo "재작성된 스크립트가 없다 — 셔뱅 절을 확인하라"; exit 1; }
 env -i PATH="/tmp/py-moved/bin" HOME=/tmp "$BIN" --version 2>&1 | head -3
 
@@ -788,7 +879,9 @@ rm -rf "/tmp/py spaced" /tmp/py-moved
 
 ```bash
 REPO=$(pwd)
-grep -rlF "$REPO" "$RT" | head -20        # 0건이어야 한다
+# **-a가 필수다.** BSD grep은 없으면 바이너리를 건너뛰고 .pyc·.so에 박힌 경로를 못 잡는다
+# (실측: 같은 트리에 -rlF 0건 / -ralF 448건).
+grep -ralF "$REPO" "$RT" | head -20       # 0건이어야 한다
 "$RT/bin/python3.12" -c "import sysconfig; print(sysconfig.get_config_var('prefix'))"
 ```
 
@@ -796,10 +889,15 @@ grep -rlF "$REPO" "$RT" | head -20        # 0건이어야 한다
 
 - [ ] **Step 7: 캐시 키가 변화를 잡는지 확인한다**
 
+**`| head -3`을 쓰지 않는다.** 미스면 수십 분 빌드가 시작되고 4번째 줄에서 SIGPIPE로 죽어
+`work-*`가 반쯤 남는다. 스크립트에 **`--print-key` 모드**(키를 찍고 적중 여부만 말하고 종료)를
+두고 그것을 부른다.
+
 ```bash
-touch be/worker/uv.lock && bash desktop/scripts/build-python.sh 2>&1 | head -3   # 적중 (내용 해시라 mtime 무관)
+touch be/worker/uv.lock
+bash desktop/scripts/build-python.sh --print-key   # 적중 (내용 해시라 mtime 무관)
 printf '\n# cache-key probe\n' >> be/worker/pyproject.toml
-bash desktop/scripts/build-python.sh 2>&1 | head -3                              # 미스
+bash desktop/scripts/build-python.sh --print-key   # 미스
 git checkout be/worker/pyproject.toml
 ```
 
@@ -811,7 +909,11 @@ git checkout be/worker/pyproject.toml
 - `libpython`만 `@executable_path`인가.
 - `_sysconfigdata`를 **런타임에게 묻는가.**
 - prune이 있는가 — 없으면 Step 5-b가 PBS 스크립트에 걸린다.
-- `uv export`에 `--no-dev --locked`가 있는가.
+- `uv export`에 `--no-dev --locked --no-emit-project`가 있는가 — 마지막 것이 없으면 `-e .`가 나온다.
+- `--link-mode=copy`인가 (Phase 0 원본과 같게).
+- Step 5-b의 grep이 **`-lF` + 홑따옴표**인가.
+- Step 6의 grep에 **`-a`**가 있는가.
+- Step 7이 `| head -3` 대신 `--print-key`를 쓰는가.
 - 캐시 키에 경로가 남는가.
 - Step 6의 grep이 0건인가.
 
@@ -850,10 +952,18 @@ print('  모듈 확인 OK')
 "
 ```
 
-**`find_spec`은 모듈을 찾기만 하고 실행하지 않는다.** `import`는 부작용이 있는 모듈에서
-위험하다 — `embed_service`는 Part 2가 고치기 전까지 모듈 수준에서 `load_settings()`와
+**`find_spec`은 대상 모듈을 실행하지 않는다.** `import`는 부작용이 있는 모듈에서 위험하다 —
+`embed_service`는 Part 2가 고치기 전까지 모듈 수준에서 `load_settings()`와
 `build_text_embedder()`를 부르므로(`embed_service.py:10-11`), import하면 빌드 머신이
 `DATABASE_URL`을 요구하고 bge-m3 2.2 GB를 받는다.
+
+**단, 점 표기의 `find_spec`은 부모 패키지를 import한다**
+(**[실행됨: 2026-09-16 — `pkg/__init__.py`의 print가 찍히고 `pkg in sys.modules: True`]**).
+`damwha_worker.*`가 안전한 이유는 `damwha_worker/__init__.py`가 **0바이트**이기 때문이지
+`find_spec`이 아무것도 실행하지 않아서가 아니다. `mlx_lm.server`는 `mlx_lm/__init__.py`를
+실행하고 그것은 실제 import를 담는다(`from ._version import …`, 환경 변수 설정 등) — 다운로드는
+없지만 무부작용은 아니다. 그래서 이 확인은 **`damwha_worker/__init__.py`가 비어 있음을 함께
+assert한다.** 새 모듈을 목록에 더할 때 그 패키지의 `__init__.py`를 먼저 본다.
 
 `damwha_worker.llm_entry`는 Part 2가 만든다 — 그때 이 목록에 더한다.
 
@@ -865,6 +975,24 @@ print('  모듈 확인 OK')
 **순서가 계약이다** (스펙 §6.1-b 4번). Step 2의 `find_spec`도 `importlib` 자체의 `.pyc`를 만들
 수 있으므로 **모든 python 실행 뒤에** 지운다. 스테이징 뒤로는 python을 실행하지 않는다 —
 `"$STAGED/bin/python3.12" --version`도 부르지 않는다.
+
+**빌드 안만 지우면 부족하다 — 산출물이 dev 실행 위치이기도 하다.** `desktop/build/python`은
+`pnpm desktop:dev`가 실제로 실행하는 트리다. 한 번 돌면 그 자리에 `co_filename`이
+`<저장소>/desktop/build/python/…`인 `.pyc`가 쌓이고, 다음 패키징이 캐시 적중으로 스테이징을
+건너뛰면 그 트리가 그대로 `.app`에 실린다
+(**[실행됨: 2026-09-16 — 트리의 python을 돌린 것만으로 `.pyc` 448개가 **전부** 트리 절대
+경로를 담았다]**). §6.1-b가 "최종 위치가 둘"을 규칙으로 세운 것과 같은 형태의 누락이다.
+
+그래서 둘을 한다:
+
+1. **스테이징은 캐시 적중 여부와 무관하게** `$STAGED`의 `__pycache__`를 지운다
+   (`build-postgres.sh`의 `.build-key` 관례는 "적중이면 아무것도 안 한다"인데, 여기서는
+   적중일수록 오염된 트리가 남는다).
+2. 앱이 번들 python을 부를 때 `PYTHONDONTWRITEBYTECODE=1`을 준다 — **Part 2·스펙 §6.3.**
+   packaged `.app` 안에 런타임 `.pyc`가 쌓여 서명 봉인 밖 파일이 생기는 것도 함께 막는다.
+
+**`check-bundle.mjs`가 이것을 잡아 줄 것으로 기대하지 않는다** — 그 grep에 `-a`가 없어
+바이너리를 건너뛴다(Task 7이 고친다). 스펙 §17.4가 그 검사를 안전망으로 본 것은 틀렸다.
 
 - [ ] **Step 4: 돌린다**
 
@@ -888,11 +1016,19 @@ bash desktop/scripts/build-python.sh 2>&1 | grep -E '층'
 
 - [ ] **Step 6: 설치된 코드가 저장소와 같고, 절대 경로가 없고, `__pycache__`가 0개인지 본다**
 
+**검사를 둘로 가른다.** 한 `diff`에 얹으면 둘 다 못 쓴다 — 개발 머신의 **소스** 트리에는
+worker를 한 번이라도 돌린 흔적으로 `__pycache__`와 `.DS_Store`가 있고 wheel에는 없으므로
+`diff -r`이 **항상** `Only in be/worker/damwha_worker: …`를 낸다
+(**[실행됨: 2026-09-16 — `__pycache__` 6개 + `.DS_Store` 1개]**). 코드 동일성은 그 잡음을 뺀
+`diff`가 보고, **빌드 트리의 `__pycache__` 0개는 바로 아래 `find`가 따로 판정한다.**
+
 ```bash
-# -x __pycache__ 를 **쓰지 않는다** — 그것이 B-1을 숨겼다.
-diff -r be/worker/damwha_worker desktop/build/python/lib/python3.12/site-packages/damwha_worker
-grep -rlF "$(pwd)" desktop/build/python | head              # 0건
-find desktop/build/python -name __pycache__ | head          # 0건
+# 코드 동일성 — 소스 쪽 잡음만 제외한다. 빌드 트리의 __pycache__는 아래 find가 본다.
+diff -r -x __pycache__ -x .DS_Store \
+  be/worker/damwha_worker desktop/build/python/lib/python3.12/site-packages/damwha_worker
+# **-a가 필수다.** 없으면 BSD grep이 .pyc·.so를 건너뛴다 (실측: -rlF 0건 / -ralF 448건).
+grep -ralF "$(pwd)" desktop/build/python | head             # 0건
+find desktop/build/python -name __pycache__ | head          # 0건 — 이쪽이 진짜 판정이다
 du -sh desktop/build/python desktop/build/ffmpeg
 ```
 
@@ -905,7 +1041,10 @@ du -sh desktop/build/python desktop/build/ffmpeg
 - worker 층이 `relocate`를 **다시** 부르는가 (새 콘솔 스크립트·`direct_url.json`).
 - 진입점 확인이 `find_spec`인가 (`import`가 아니라).
 - `__pycache__` 삭제가 **모든 python 실행 뒤**인가.
-- Step 6의 `diff`에 `-x __pycache__`가 **없는가.**
+- Step 6이 `diff`(코드 동일성)와 `find`(빌드 트리 `__pycache__` 0개)를 **따로** 하는가.
+- `grep`에 `-a`가 있는가 — 없으면 `.pyc`·`.so`의 경로를 못 잡는다.
+- 스테이징이 **캐시 적중일 때도** `__pycache__`를 지우는가.
+- 진입점 확인이 `damwha_worker/__init__.py`가 비어 있음을 assert하는가.
 - `ditto`를 쓰는가.
 
 - [ ] **Step 7: 커밋** — `feat(desktop): Python 빌드에 worker 층과 진입점 확인을 더한다`
@@ -917,7 +1056,7 @@ du -sh desktop/build/python desktop/build/ffmpeg
 **Files:** Modify `desktop/scripts/package.mjs`, `desktop/scripts/check-bundle.mjs`, `desktop/package.json`
 
 **Interfaces:**
-- Consumes: Task 4·5·6의 두 빌드 스크립트, Task 2의 entitlements
+- Consumes: Task 4·5·6의 두 빌드 스크립트, Task 2의 plist 둘
 - Produces: `Resources/python`·`Resources/ffmpeg`를 가진 서명된 `.app`. Part 2가 그 경로를 읽는다.
 
 - [ ] **Step 1: `package.mjs`가 두 스크립트를 부르게 한다**
@@ -925,15 +1064,35 @@ du -sh desktop/build/python desktop/build/ffmpeg
 `build-postgres.sh` 호출 **바로 아래**에 `build-python.sh`·`build-ffmpeg.sh`. 여기서 멈추는
 이유도 같다 — Python이 빠진 `.app`은 첫 실행에서야 드러난다.
 
-- [ ] **Step 2: 서명에 hardened runtime + entitlements를 준다**
+- [ ] **Step 2: 서명에 hardened runtime + entitlements를 준다 — plist 둘을 갈라 쓴다**
 
 지금은 `codesign --force --deep --sign -` 뿐이라 **plist를 만들어도 아무 일도 일어나지 않는다.**
 `Resources/python`의 제3자 wheel `.so`는 우리 신원으로 서명되지 않으므로
-`disable-library-validation`이 있어야 로드되고, JIT 매핑에는
-`allow-unsigned-executable-memory`가 필요하다.
+`disable-library-validation`이 있어야 로드되고, numba의 LLVM이 모듈 로드 시점에 실행 메모리를
+잡으므로 `allow-unsigned-executable-memory`가 필요하다.
 
-`Resources` 아래 Mach-O는 `build-python.sh`가 이미 같은 옵션으로 개별 서명했다. 여기서는
-`.app` 자신을 봉한다.
+```
+codesign --force --sign - --options runtime \
+         --entitlements build-resources/entitlements.python.plist \
+         <Resources/python 안의 Mach-O들, Resources/ffmpeg/bin/*>
+codesign --force --deep --sign - --options runtime \
+         --entitlements build-resources/entitlements.mac.plist <Damwha.app>
+```
+
+**`.app`에 `entitlements.python.plist`를 주면 앱이 죽는다** — `--deep`이 Electron Framework와
+헬퍼에도 hardened runtime을 걸고, V8이 `allow-jit` 없이 CodeRange 예약에 실패해
+`Fatal process out of memory`로 rc=133에 끝난다 (Task 2 Step 6-c 실측). 반대로 Python 트리에는
+`allow-jit`을 주지 않는다 — 안 쓰는 권한이다.
+
+**`Resources/ffmpeg/bin/*`도 여기서 서명한다.** `build-python.sh`는 Python 트리만 서명하고
+`build-ffmpeg.sh`에는 서명 단계가 없어, 이 줄이 없으면 ffmpeg는 linker ad-hoc 서명만 가진 채
+hardened runtime `.app` 안에 들어간다. `Resources/python` 아래 Mach-O는 `build-python.sh`가
+이미 같은 plist로 개별 서명했으므로 여기서의 재서명은 멱등이다.
+
+**`codesign` 종료 코드를 반드시 본다.** `package.mjs`의 `run()`은 `execFileSync`라 비0에
+throw한다(:12-15) — 그 성질에 기댄다. entitlements plist의 XML 주석에 하이픈 두 개가 연달아
+있으면 AMFI가 `Failed to parse entitlements`로 rc=1을 내는데, **그래도 `.app`은 linker-signed
+상태로 실행된다.** 실행 성공을 서명 성공으로 읽으면 거짓 통과가 난다.
 
 - [ ] **Step 3: `check-bundle.mjs`에 검사를 더한다**
 
@@ -942,13 +1101,20 @@ du -sh desktop/build/python desktop/build/ffmpeg
 | `Resources/{python,ffmpeg}` 존재, `bin/` 실행 파일 | 빌드 누락 |
 | `site-packages/damwha_worker/__main__.py`, `mlx_lm/server.py` 존재 | 트리만 있고 패키지가 없으면 첫 실행에서야 드러난다. `mlx_lm`은 §2.4의 회귀 방지 |
 | arm64 무서명 Mach-O 0건 | `codesign --verify --arch arm64` 전수. 심볼릭 링크는 건너뛴다 |
-| entitlement 실제 적용 | `codesign -d --entitlements -`가 두(또는 세) 키를 보인다 |
+| entitlement 실제 적용 | `codesign -d --entitlements -`가 `.app`에 **세 키**(`allow-jit` 포함), `Resources/python` 표본에 **두 키**를 보인다. 대상이 갈린다 |
 | `Resources/python` 아래 `__pycache__` 0개 | 스펙 §6.1-b 4번 |
-| `bin/` 셔뱅이 번들 안을 가리킨다 | **우리가 만든 것만** 본다 — 제3자 wheel 원본의 문자열은 지울 수 없고 Phase 6이 받는다 (G1 허용 목록 24건) |
+| `bin/` 셔뱅이 번들 안을 가리킨다 | **2행**의 `${0%/*}/python3.12`를 본다 — 위치 독립 형태에서 1행은 `#!/bin/sh`다. **우리가 만든 것만** 본다 — 제3자 wheel 원본의 문자열은 지울 수 없고 Phase 6이 받는다 (G1 허용 목록 24건) |
 
-**기존 4번 검사(`grep -rlF <repo> Contents`)가 Resources 전체를 훑는다.** 새 검사를 셔뱅으로
-좁혀도 그것이 먼저 잡으므로, Task 5·6의 `direct_url.json` 삭제와 `_sysconfigdata` 중립화가
-성립해야 이 Task가 초록불이다.
+**기존 4번 검사(`check-bundle.mjs:92`)에 `-a`를 더한다 — 지금은 바이너리를 건너뛴다.**
+macOS BSD grep은 `-a` 없이 바이너리 파일을 스킵하므로 `.pyc`·`.so`·`.dylib`에 박힌 경로를
+**하나도 못 잡는다** (**[실행됨: 2026-09-16 — 같은 트리에 `-rlF` 0건 / `-ralF` 448건]**).
+`direct_url.json`·`_sysconfigdata`는 텍스트라 잡히지만 `.pyc`는 안 잡힌다. **스펙 §17.4가
+이 검사를 `.pyc` 안전망으로 본 것은 틀렸고 §17.7에서 철회했다.**
+
+`-a`를 더하면 제3자 wheel이 자기 바이너리에 담은 배포자 경로가 새로 보일 수 있다 — 위반 기준은
+지금과 같이 **저장소 경로를 담은 것**만이므로 판정 기준은 바뀌지 않는다. 다만 이 변경으로
+검사가 처음으로 실제 효력을 갖게 되므로, Task 5·6의 `direct_url.json` 삭제·`_sysconfigdata`
+중립화·`__pycache__` 삭제가 **전부** 성립해야 이 Task가 초록불이다.
 
 - [ ] **Step 4: dev 스크립트도 두 빌드를 부르게 한다** — `desktop/package.json`의 `start:desktop`
 
@@ -966,10 +1132,13 @@ du -sh desktop/out/mac-arm64/Damwha.app
 
 **Review:**
 - 서명이 `--options runtime --entitlements`를 실제로 주는가.
+- **plist 둘을 갈라 쓰는가** — `.app`은 `entitlements.mac.plist`, 트리·ffmpeg는 `entitlements.python.plist`.
+- `Resources/ffmpeg/bin/*`가 서명 대상에 있는가.
 - `--arch arm64`가 있는가.
-- 금지 문자열 검사가 **우리가 만든 셔뱅만** 보는가.
+- 금지 문자열 검사에 **`-a`**가 있는가.
+- 셔뱅 검사가 **2행**을 보는가 (1행은 `#!/bin/sh`다).
 - `machOFiles`가 심볼릭 링크를 건너뛰는가.
-- `package.mjs`가 빌드 실패 시 멈추는가.
+- `package.mjs`가 빌드 실패·**서명 실패** 시 멈추는가 — 서명이 실패해도 앱은 실행된다.
 
 - [ ] **Step 6: 커밋** — `feat(desktop): Python·ffmpeg를 번들에 싣고 hardened runtime으로 서명한다`
 
@@ -981,7 +1150,8 @@ Part 2로 넘어가기 전에 셋이 참이어야 한다:
 
 1. `pnpm --filter damwha-desktop run package:desktop`이 끝까지 돌고
    `node desktop/scripts/check-bundle.mjs`가 exit 0이다.
-2. `grep -rlF <저장소> desktop/out/mac-arm64/Damwha.app/Contents` 가 **0건**이다.
+2. `grep -ralF <저장소> desktop/out/mac-arm64/Damwha.app/Contents` 가 **0건**이다
+   (`-a` 없이는 바이너리를 건너뛰어 0건이 거짓으로 나온다).
 3. Task 2의 numba 판정이 나와 있고, entitlements가 그 결과를 반영한다.
 
 **스펙 완료 기준 중 이 계획이 만드는 것:** P4-C15(번들 위생), P4-C25(mlx 정렬 회귀),
@@ -993,8 +1163,16 @@ P4-C26·C27의 기준선, P4-C28(numba). 나머지는 Part 2가 만들고 Part 2
 **1. 스펙 coverage** — §6.1(번들 계약)·§6.1-b(재배치)·§2.4(mlx-lm)·§6.8(numba)·§5(데이터 안전)가
 Task 1~7에 대응한다. §6.2 이후는 Part 2다.
 
-**2. 규칙 1 준수** — 셸 스크립트 셋(`phase4-baseline.sh`·`probe-numba.sh`·빌드 둘)은 전문을
-싣고 Step이 실행한다. 그 밖에 TypeScript·Python 구현 본문은 없다.
+**2. 규칙 1 준수** — 전문을 싣고 Step이 실행하는 것은 **`phase4-baseline.sh`와
+`probe-numba.sh` 둘뿐이고, 둘 다 실행됐다**(Task 1·2). `build-python.sh`·`build-ffmpeg.sh`는
+**전문을 싣지 않는다** — Task 4·5·6의 코드 블록은 2~10줄짜리 검증 명령이고 스크립트 본문은
+"구현 시 작성"이다. 규칙 1은 그 검증 명령들에 적용되며, 5회차에서 셋(셔뱅 grep·`diff -r`·
+`head -3`)이 실행으로 깨져 고쳤다.
+
+**그 대신 원본 대조가 규칙 1의 자리를 맡는다.** Task 5 Step 1의 표가 Phase 0
+`python-build.sh`의 다섯 지점을 줄 번호로 지목하고, README 규칙("옮긴 것이 원본과 다르면
+원본이 맞다")이 구현 시 판정 기준이 된다. 리뷰어가 그 줄 번호 다섯을 원본과 대조해 전부
+일치함을 확인했다(5회차).
 
 **3. 규칙 2 준수** — 이 계획에는 프로그램 시그니처가 `build-python.sh`의 셸 함수 일곱뿐이고
 Task 5 Interfaces 한 곳에만 적혀 있다.

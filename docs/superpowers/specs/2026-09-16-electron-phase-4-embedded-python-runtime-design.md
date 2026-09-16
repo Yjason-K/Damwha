@@ -247,7 +247,8 @@ uv tool list               → mlx-lm v0.31.3  →  ~/.local/bin/mlx_lm.server
 | `~/.local/bin/mlx_lm.server` | 검증 중 **일시 이동**(`mv`) 후 원위치 | `ls -la ~/.local/bin` | 같은 경로로 되돌린다. 검증 단계가 끝나면 즉시 |
 | `~/.local/share/uv/tools` | 건드리지 않는다 | — | — |
 
-**기준선은 첫 Task보다 먼저 뜬다.** 검증 단계(Task 20)에서 뜨면 그 앞의 변경을 못 잡는다.
+**기준선은 첫 Task보다 먼저 뜬다.** 검증 단계(Part 2 Task 12)에서 뜨면 그 앞의 변경을 못
+잡는다. (계획 분할 전에는 "Task 20"이었다.)
 
 `be/worker/.venv`는 재생성 가능한 파생물이라 이 취급이 정당하다 — `.env`(사람이 적은 값)나
 `~/.cache/huggingface`(수십 GB의 다운로드)와 성질이 다르다.
@@ -345,7 +346,7 @@ Phase 0의 `build.sh`는 **한 최종 위치에서 relocate를 한 번** 하는 
 | --- | --- | --- | --- |
 | 1 | `bin/` 콘솔 스크립트 셔뱅 | **위치 독립 형태**(`${0%/*}`, 외부 명령 없음) | 절대 경로를 쓰면 두 자리를 못 덮고 `.app`에 dev 경로가 실린다 |
 | 2 | `_sysconfigdata*.py`의 prefix | **중립 자리표시자** `/damwha-bundled-python`으로 고정 | uv가 설치 시점에 그것을 **캐시 임시 경로**로 다시 쓴다. 그 값에 저장소 경로가 들어 있어 금지 문자열 검사에 걸린다 |
-| 3 | `direct_url.json` | 삭제 | 파일 경로 설치가 남기는 절대 경로 |
+| 3 | `direct_url.json` | 삭제 | 파일 경로 설치가 남기는 절대 경로. 텍스트 파일이라 금지 문자열 검사가 실제로 잡는 몇 안 되는 경우다 |
 | 4 | `__pycache__` | **빌드의 마지막 python 실행 뒤에** 삭제 | `.pyc`가 `co_filename`으로 컴파일 시점 절대 경로를 담는다 |
 
 **2번이 왜 중립 자리표시자인가.** 실제 경로를 넣을 수 없다(둘이다). 캐시 경로는 저장소를
@@ -362,6 +363,29 @@ Phase 0의 `build.sh`는 **한 최종 위치에서 relocate를 한 번** 하는 
 만들고 그것이 그대로 실린다(실측 25개). 순서는 **모든 python 실행 → `__pycache__` 삭제 →
 스테이징**이고, `check-bundle.mjs`가 `Resources/python` 아래 `__pycache__` **0개**를 확인한다.
 
+**빌드 안만으로는 부족하다 — 산출물이 dev 실행 위치이기도 하다.** `desktop/build/python`은
+스테이징 결과이면서 dev가 실행하는 트리다. `pnpm desktop:dev`가 한 번 돌면 그 자리에
+`co_filename`이 `<저장소>/desktop/build/python/…`인 `.pyc`가 쌓이고, 다음 패키징이 캐시
+적중으로 스테이징을 건너뛰면 그 트리가 그대로 `.app`에 실린다. 실측: PBS 트리에서 python을
+돌린 것만으로 `.pyc` 448개가 **전부** 트리 절대 경로를 담았다. 그래서 규칙이 둘이다 —
+(a) 스테이징은 **캐시 적중 여부와 무관하게** 스테이징 대상의 `__pycache__`를 지운다,
+(b) 앱이 번들 python을 부를 때 `PYTHONDONTWRITEBYTECODE=1`을 준다(§6.3 env 표). (b)는 packaged
+`.app` 안에 런타임 `.pyc`가 쌓여 서명 봉인 밖 파일이 생기는 것도 함께 막는다.
+
+**`check-bundle.mjs`의 금지 문자열 검사는 이것을 잡지 못한다 — `-a`가 없다.**
+`desktop/scripts/check-bundle.mjs:92`는 `grep -rlF -- <needle> <contents>`를 부르는데 macOS
+BSD grep은 **바이너리 파일을 건너뛴다.** 실측:
+
+```
+grep -rlF  '<트리경로>' --include='*.pyc' .   → 0건
+grep -ralF '<트리경로>' --include='*.pyc' .   → 448건
+```
+
+`direct_url.json`은 텍스트라 잡히지만 `.pyc`·`.so`·`.dylib`에 박힌 경로는 **하나도 안 잡힌다.**
+Part 1 Task 7이 그 grep에 `-a`를 더한다. 계획 안의 같은 형태 셋(Task 5 Step 6, Task 6 Step 6,
+이 계획의 완료 조건 2)도 함께 고쳤다. `-a`를 더하면 제3자 wheel이 자기 바이너리에 담은 배포자 경로가 새로 잡힐 수
+있으므로, 허용 목록은 **저장소 경로**를 담은 것만 위반으로 삼는 현재 기준을 유지한다.
+
 **의존성 매니페스트.** `be/worker/pyproject.toml`의 `models` extra에 **`mlx-lm`과 `mlx`를
 `==`로 명시 고정**하고 `uv lock`을 갱신한다.
 
@@ -375,27 +399,44 @@ Phase 0의 `build.sh`는 **한 최종 위치에서 relocate를 한 번** 하는 
 **공통 규칙** (`build-postgres.sh`와 같다): `BUILD_PREFIX`는 이 머신에 없는 중립 경로,
 소스 아카이브는 체크섬 검증, 스크립트를 한 글자라도 고치면 다시 빌드.
 
-**서명과 entitlements.** `desktop/build-resources/entitlements.mac.plist`:
+**서명과 entitlements. plist는 둘이다.** 하나로 두면 `.app`이 기동하지 못한다 (2026-09-16 실측,
+§17.7 B-1).
 
-```
-com.apple.security.cs.allow-unsigned-executable-memory  true
-com.apple.security.cs.disable-library-validation        true
-```
+| 파일 | 대상 | 키 |
+| --- | --- | --- |
+| `entitlements.python.plist` | `Resources/python` 안의 Mach-O, `Resources/ffmpeg/bin/*` | `allow-unsigned-executable-memory`, `disable-library-validation` |
+| `entitlements.mac.plist` | `Damwha.app` (Electron 본체) | 위 둘 + **`allow-jit`** |
+
+**`.app`에 `allow-jit`이 없으면 V8이 CodeRange 가상 메모리 예약에 실패해
+`Fatal process out of memory: Failed to reserve virtual memory for CodeRange`로 rc=133에
+죽는다.** `--deep`이 Electron Framework와 헬퍼에도 hardened runtime을 걸기 때문이다.
+§6.8의 numba 측정은 **Python 프로세스**의 최소 집합을 정한 것이고, 그것을 `.app` 전체에
+적용하면 앱이 죽는다 — 측정의 적용 범위를 트리와 앱으로 갈라야 한다.
 
 `package.mjs`의 최종 서명을 고친다 — 지금은 `codesign --force --deep --sign -`뿐이라
 **hardened runtime도 entitlement도 적용되지 않는다.** 바꿀 형태:
 
 ```
 codesign --force --sign - --options runtime \
-         --entitlements build-resources/entitlements.mac.plist \
+         --entitlements build-resources/entitlements.python.plist \
          <Resources/python 안의 Mach-O들, Resources/ffmpeg/bin/*>
 codesign --force --deep --sign - --options runtime \
          --entitlements build-resources/entitlements.mac.plist <Damwha.app>
 ```
 
-`check-bundle.mjs`가 `codesign -d --entitlements -`로 실제 적용을 확인한다.
+`check-bundle.mjs`가 `codesign -d --entitlements -`로 실제 적용을 확인한다. 판정 대상은
+`.app` 경로(codesign이 주 실행 파일로 해석한다)와 `Resources/python` 안의 Mach-O 표본이고,
+앱 쪽은 **세 키**, 트리 쪽은 **두 키**다.
+
+**entitlements plist의 XML 주석에 하이픈 두 개를 연달아 쓰지 않는다.** AMFI 파서가
+`Failed to parse entitlements: AMFIUnserializeXML: syntax error near line N`으로 거부하고
+codesign이 rc=1로 실패한다. `plutil -lint`는 그것을 통과시키므로 lint만으로는 못 잡는다.
+서명 실패한 `.app`은 **여전히 실행되므로**(linker-signed 상태로 남는다) 실행 성공을 서명
+성공으로 읽으면 안 된다 — `codesign` 종료 코드를 봐야 한다. `package.mjs`의 `run()`은
+`execFileSync`라 비0에 throw한다(:12-15).
+
 **§6.8의 numba 측정도 이 조합으로 서명한 번들에서 한다** — 측정 조건과 제품 조건이 같아야
-측정에 의미가 있다. `allow-jit`은 §6.8이 요구할 때만 더한다.
+측정에 의미가 있다.
 
 ### 6.2 실행 계약
 
@@ -484,6 +525,7 @@ codesign --force --deep --sign - --options runtime \
 | `LENS_LLM_BASE_URL` | `http://127.0.0.1:<빈 포트>` | **새로** — `DATABASE_URL`과 함께 기본값 없는 필수 키 둘 중 하나다. Phase 3이 이미 넣는 `DATABASE_URL`과 달리 이것은 **이 Phase가 새로 넣어야 한다**. 빠뜨리면 worker가 `ValidationError`로 기동 실패 |
 | `FFMPEG_BIN`·`FFPROBE_BIN` | `<ffmpeg>/bin/ffmpeg`·`ffprobe` | **새로** (§6.6) |
 | `PYTHONPATH` | **dev만** `<repo>/be/worker` | **새로** (§6.7) |
+| `PYTHONDONTWRITEBYTECODE` | `1` | **새로** (§6.1-b) — 번들 트리에 `.pyc`가 쌓이는 것을 막는다. dev에서는 `desktop/build/python`(= 스테이징 산출물)이 저장소 절대 경로를 담은 `.pyc`로 오염돼 다음 패키징이 그것을 `.app`에 싣는 것을, packaged에서는 서명 봉인 밖 파일이 생기는 것을 막는다 |
 
 **env 위생 — 상속을 좁힌다.** 지금 `uv-launcher.ts:51-55`는 `...process.env`를 통째로
 넘긴다. Electron이 Finder에서 뜨면 그 env는 얇지만, dev 터미널에서 뜨면 개발자의 전체
@@ -717,6 +759,11 @@ numba 0.65.1 · llvmlite 0.47.0 · numpy 2.4.6만 설치하고, Mach-O 42개를
 `disable-library-validation`은 dyld 로드에서, `allow-unsigned-executable-memory`는
 **`import numba`**에서. LLVM이 호출이 아니라 모듈 로드 시점에 실행 메모리를 잡는다. 대조군이
 셋 다 통과했으므로 그 죽음은 설치 결함이 아니라 hardened runtime에 귀속된다.
+
+**이 판정의 적용 범위는 `Resources/python` 트리뿐이다.** `.app` 본체(Electron)는
+`allow-jit`이 **반드시** 필요하다 — §6.1의 표와 §17.7 B-1을 보라. 5회차 리뷰가 잡은
+blocking이 정확히 이 범위 혼동이었다. `allow-jit`을 더한 plist로 이 프로브를 다시 돌려도
+`survives`이므로(실측) 두 요구는 충돌하지 않는다. 그럼에도 트리에는 최소 집합만 준다.
 
 **word-timestamp를 끄는 것은 대안이 아니다.** `models/whisper_mlx.py:107-123`이
 `segment["words"]`만 `Word`로 변환하고 그 목록이 파이프라인의 유일한 전사 출력이다
@@ -1245,7 +1292,12 @@ Phase 4는 반대 제약을 받는다 — 한 빌드 산출물이 두 자리(dev
 
 | 지적 | 확인 | 반영 |
 | --- | --- | --- |
-| **재배치가 캐시 임시 트리에 적용돼 `.app`에 저장소 경로가 실린다** | 리뷰어가 PBS 트리로 계획 순서를 재현 — `_sysconfigdata` prefix가 `<repo>/desktop/.cache/…`로 남고 진입점 확인이 만든 `.pyc` 25개가 같은 경로를 담는다. `check-bundle.mjs:90`의 기존 4번 검사가 Resources 전체를 훑어 잡는다 | **이 스펙 §6.1-b 신설** |
+| **재배치가 캐시 임시 트리에 적용돼 `.app`에 저장소 경로가 실린다** | 리뷰어가 PBS 트리로 계획 순서를 재현 — `_sysconfigdata` prefix가 `<repo>/desktop/.cache/…`로 남고 진입점 확인이 만든 `.pyc` 25개가 같은 경로를 담는다 | **이 스펙 §6.1-b 신설** |
+
+**이 표의 "`check-bundle.mjs:90`의 기존 4번 검사가 잡는다"는 틀렸다 — 5회차에서 철회한다.**
+그 grep에 `-a`가 없어 BSD grep이 `.pyc`를 건너뛴다(§6.1-b의 실측). 4회차는 `.pyc`가 절대
+경로를 담는다는 사실은 맞혔지만, 그것을 잡아 줄 그물이 있다고 본 것이 틀렸다. `_sysconfigdata`는
+텍스트라 잡힌다.
 | 훅의 `sys.modules` 훑기가 `getattr`로 던진다 | **메인 세션 실측 — 92개 모듈이 `ModuleNotFoundError`.** transformers의 지연 모듈이 `__getattr__`에서 서브모듈을 import한다. worker·embed·`llm_entry` 셋이 기동 첫머리에서 부르므로 세 프로세스가 전부 죽는다 | 계획 — `vars(mod).get(name)`으로 |
 | `parseDamwhaProcesses` 시그니처가 네 모양으로 갈린다 | 인터페이스·테스트·구현·호출부 | 계획 — §계약 한 곳에만 정의 |
 
@@ -1271,3 +1323,52 @@ Phase 4는 반대 제약을 받는다 — 한 빌드 산출물이 두 자리(dev
 ### 17.6 메인 세션 리뷰
 
 (작성 예정.)
+
+### 17.7 외부 리뷰 — 5회차 (대상: Part 1 계획 + 이 스펙, HEAD `0f94a50`)
+
+**판정: 확정 불가 — blocking 5건.** 리뷰어가 낸 4건을 메인 세션이 전부 재확인했고 넷 다
+사실이었다. 재확인 중에 **다섯 번째를 메인 세션이 찾았다.**
+
+이번 회차는 Part 1 Task 1·2가 **실행된 뒤** 처음 받는 리뷰다. 리뷰어에게 계획에 박힌 코드를
+직접 돌리라고 지시했고, ffmpeg 9.0.1 configure·`uv lock` 격리 실행·Electron 서명 실험까지
+실제로 돌렸다.
+
+| # | 지적 | 메인 세션 재확인 | 반영 |
+| --- | --- | --- | --- |
+| B-1 | **`.app` 서명 명령이 앱을 기동 불능으로 만든다** | **재현.** Electron 44.3.0 사본 3벌 — 무서명 `RESULT JS-OK`, 최소 집합 서명 **rc=133 `Fatal process out of memory: Failed to reserve virtual memory for CodeRange`**, `allow-jit` 추가 rc=0. `--deep`이 Electron Framework에도 hardened runtime을 건다(`flags=0x10002` 확인) | **§6.1 재작성 — plist 둘로 분리.** §6.8에 적용 범위 명시 |
+| B-2 | Task 5 Step 5-b의 셔뱅 탐지 grep이 항상 실패한다 | **재현.** 겹따옴표 `grep -l "\${0%/\*}"` → rc=1 매치 0. `grep -lF '${0%/*}'` → 매치 | 계획 Task 5 Step 5-b |
+| B-3 | Task 6 Step 6의 `diff -r` 기대값이 성립하지 않는다 | **재현.** `be/worker/damwha_worker`에 `__pycache__` 6개 + `.DS_Store` 1개, wheel에는 없다 | 계획 Task 6 Step 6 — 두 검사로 분리 |
+| B-4 | dev 실행이 스테이징 트리에 절대 경로 `.pyc`를 남기고 그것이 `.app`에 실린다 | **재현.** 트리의 python을 돌린 것만으로 `.pyc` 448개가 **전부** `co_filename`에 트리 절대 경로를 담았다. 두 계획에 `PYTHONDONTWRITEBYTECODE` 참조 0건 | **§6.1-b 확장** — 스테이징의 무조건 삭제 + §6.3에 `PYTHONDONTWRITEBYTECODE` |
+| **B-5** | **(메인 세션 발견) `check-bundle.mjs`의 금지 문자열 검사가 바이너리를 건너뛴다** | `check-bundle.mjs:92`가 `grep -rlF`다. BSD grep은 `-a` 없이 바이너리를 스킵한다 — 같은 트리에 `-rlF` 0건 / `-ralF` 448건 | **§6.1-b에 실측 기록, §17.4 철회.** Task 7이 `-a`를 더한다 |
+
+**B-5가 §17.4의 판단 하나를 무너뜨린다.** 4회차는 `.pyc`가 절대 경로를 담는다는 사실을
+맞혔지만 "`check-bundle.mjs:90`의 기존 4번 검사가 잡는다"고 적어 그것을 안전망으로 삼았다.
+그 그물이 없다. 4회차 blocking 1의 해소가 §6.1-b 신설이었으므로 해소 자체는 유효하지만,
+**"틀려도 검사가 잡아 준다"는 여유는 없었다.** B-4가 만드는 오염도 같은 그물에 기대고 있었다.
+
+**B-1은 범위 혼동이었다.** Task 2의 numba 측정은 정확했고 재현된다. 틀린 것은 그 결과를
+**Python 프로세스에서 `.app` 전체로 옮겨 적은 것**이다. 스펙이 entitlement를 한 벌로 다루는
+동안 서명 대상이 둘이라는 사실이 드러나지 않았다 — §6.1-b가 "최종 위치가 둘"을 규칙으로 세운
+것과 같은 형태의 누락이고, 이번에는 "서명 대상이 둘"이었다.
+
+**메인 세션이 수정 중에 하나 더 실측했다.** entitlements plist의 XML 주석에 하이픈 두 개를
+연달아 쓰면 `codesign`이 `Failed to parse entitlements: AMFIUnserializeXML: syntax error`로
+rc=1에 실패한다. `plutil -lint`는 통과시킨다. 그리고 **서명에 실패한 `.app`도 실행된다** —
+linker-signed 상태로 남기 때문에, 실행 성공을 서명 성공으로 읽으면 안 된다. §6.1에 적었다.
+
+**important로 확인한 것 넷** (전부 메인 세션이 저장소에서 재확인):
+
+- `uv export`에 `--no-emit-project`가 없으면 `-e .`가 나온다 (계획 Task 5 Step 3).
+- `importlib.util.find_spec('pkg.mod')`는 **부모 패키지를 import한다.** `damwha_worker`는
+  `__init__.py`가 0바이트라 안전하지만 `mlx_lm/__init__.py`는 실 import가 있다.
+- 계획 Global Constraints가 `~/.cache/uv`·`~/.local/share/uv`를 절대 불변에 넣었는데 §5에는
+  없다. 같은 계획 안에서 세 판이 달랐다.
+- `uv tool`의 mlx-lm 환경은 Python 3.14.7 + **mlx 0.32.2**이고 `.venv`는 0.31.2다. 번들이
+  실을 `mlx-lm 0.31.3 + mlx 0.31.2` 조합은 이 맥에서 한 번도 돈 적이 없다 — Task 3의 회귀
+  검증에 요약 1건을 넣는다.
+
+**리뷰어가 실측으로 확인해 준 것** (변경 없음): Task 4의 라이선스 검사 설계가 맞다 —
+ffmpeg 9.0.1 configure가 `License:`를 stdout에만 쓰고(`config.log`에 0건), 비활성 키는
+`!CONFIG_GPL=yes` 형태라 `^CONFIG_(GPL|NONFREE)=yes`가 옳다. Task 3의 `uv lock`은 4초에
+해석되고 변화가 `mlx-lm` 추가 하나뿐이다. 위치 독립 셔뱅은 제한 PATH·공백 경로·상대 실행
+모두에서 산다.
