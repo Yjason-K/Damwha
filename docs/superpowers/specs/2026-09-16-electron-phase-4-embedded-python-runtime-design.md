@@ -157,7 +157,10 @@ uv tool list               → mlx-lm v0.31.3  →  ~/.local/bin/mlx_lm.server
 | `be/worker/damwha_worker/pipeline/ffmpeg.py:24,59` | `["ffmpeg", …]` 리터럴 | **호출 시점에 env에서 읽는다** (§6.6) |
 | `be/worker/damwha_worker/embed_service.py` | `main()`만 | `if __name__ == "__main__": main()` |
 | `be/worker/damwha_worker/__main__.py` | argv에 `--once`만 | `--run-id=<uuid>` 수용·전파 |
-| `be/worker/damwha_worker/llm_server.py:92,103` | `shutil.which` + 콘솔 스크립트 실행 | `[sys.executable, "-m", "mlx_lm.server", …]` |
+| `be/worker/damwha_worker/llm_server.py:92,103` | `shutil.which` + 콘솔 스크립트 실행 | `[sys.executable, "-m", "damwha_worker.llm_entry", "--run-id=…", …]` |
+| `be/worker/damwha_worker/llm_entry.py` | — | **신규** — run-id를 argv에 남기고 같은 프로세스에서 `mlx_lm.server.main()`을 부른다 |
+| `be/worker/damwha_worker/embed_service.py:10-11` | 모듈 수준 `load_settings()`·`build_text_embedder()` | 지연 초기화. import만으로 설정을 요구하거나 모델을 받지 않게 한다 |
+| `desktop/src/services/api.ts:172` | `ctx.repoRoot`를 `path.join`에 넣는다 | `repoRoot`가 nullable이 되므로 packaged/dev 분기를 타입으로 나눈다 |
 | `be/worker/damwha_worker/db/core.py` | `worker_capabilities` | `model_readiness` 추가 |
 
 **건드리지 않는 것:** `__main__.py:286`의 `--once` 자식 스폰 대상과 `capabilities.py:68`의
@@ -187,6 +190,13 @@ uv tool list               → mlx-lm v0.31.3  →  ~/.local/bin/mlx_lm.server
 14. numba 사망 지점 A/B 재측정과 그 결과에 따른 분기 (§6.8).
 15. dev 루프 — `PYTHONPATH`로 저장소 worker 소스를 앞세운다.
 16. 번들 위생 검사 확장(`check-bundle.mjs`).
+17. **`embed_service`의 import 부작용 제거** — 지금 모듈 수준에서 `load_settings()`와
+    `build_text_embedder()`를 실행해(`:10-11`) import만으로 `DATABASE_URL`을 요구하고
+    bge-m3를 받는다. 빌드의 진입점 확인이 모델을 내려받는 것을 막고, "import는 안전하다"를
+    성립시킨다.
+18. **외부 DB 디버그 모드의 공유 행 writer 차단** (`DAMWHA_SHARED_STATE`).
+19. **`api.ts`·마이그레이션 러너의 `repoRoot` nullable 전파** — §6.3이 packaged를 null로
+    만들면서 생기는 타입 변경.
 
 ### 4.2 제외
 
@@ -219,11 +229,28 @@ uv tool list               → mlx-lm v0.31.3  →  ~/.local/bin/mlx_lm.server
 
 **절대 불변 (바이트 단위로 증명한다):**
 
-1. `be/worker/.venv`, `be/worker/.env`, `be/.env`, `fe/.env`
+1. `be/worker/.env`, `be/.env`, `fe/.env`
 2. `~/.cache/huggingface` — 기존 개발 모델 캐시
-3. `~/.local/bin`, `~/.local/share/uv` — 기존 uv tool 설치
-4. Docker 볼륨 `damwha_pgdata`, `be/storage`
-5. `<userData>/storage/` — Phase 1·2가 Docker DB와 쓰던 폴더 (Phase 5가 옮긴다)
+3. Docker 볼륨 `damwha_pgdata`, `be/storage`
+4. `<userData>/storage/` — Phase 1·2가 Docker DB와 쓰던 폴더 (Phase 5가 옮긴다)
+
+**허용 변경 (이 Phase의 명시적 산출물. 절차와 복구를 여기 적는다):**
+
+초안은 `be/worker/.venv`와 `~/.local/*`를 절대 불변에 넣었는데, 이 Phase는 **그 둘을
+반드시 건드린다** — `mlx-lm`을 매니페스트에 넣으면 `.venv`를 그 잠금에 맞춰야 하고(§2.4),
+"번들 mlx-lm이 쓰이는가"는 전역 설치를 치워 봐야 증명된다. 규칙과 사실이 어긋난 채로
+두지 않는다.
+
+| 대상 | 변경 | 기준선 | 복구 |
+| --- | --- | --- | --- |
+| `be/worker/.venv` | `uv sync --extra models`로 새 `uv.lock`에 맞춘다 | **변경 전에** 버전 목록(`importlib.metadata`)과 `uv.lock` 사본을 뜬다 | 옛 `uv.lock`으로 `uv sync` 재실행 |
+| `~/.local/bin/mlx_lm.server` | 검증 중 **일시 이동**(`mv`) 후 원위치 | `ls -la ~/.local/bin` | 같은 경로로 되돌린다. 검증 단계가 끝나면 즉시 |
+| `~/.local/share/uv/tools` | 건드리지 않는다 | — | — |
+
+**기준선은 첫 Task보다 먼저 뜬다.** 검증 단계(Task 20)에서 뜨면 그 앞의 변경을 못 잡는다.
+
+`be/worker/.venv`는 재생성 가능한 파생물이라 이 취급이 정당하다 — `.env`(사람이 적은 값)나
+`~/.cache/huggingface`(수십 GB의 다운로드)와 성질이 다르다.
 
 **앱이 쓰는 영역 (기존 레코드·파일 보존으로 판정한다):**
 
@@ -342,7 +369,8 @@ codesign --force --deep --sign - --options runtime \
 <python>/bin/python3.12 -m damwha_worker               --run-id=<uuid>
 <python>/bin/python3.12 -m damwha_worker.embed_service --run-id=<uuid>
 <python>/bin/python3.12 -m damwha_worker --once        --run-id=<uuid>   (worker가 띄운다)
-<python>/bin/python3.12 -m mlx_lm.server --model … --host … --port …     (worker가 띄운다)
+<python>/bin/python3.12 -m damwha_worker.llm_entry    --run-id=<uuid> --model … --host … --port …
+                                                                        (worker가 띄운다)
 ```
 
 - **콘솔 스크립트를 부르지 않는다.** `bin/damwha-worker`·`bin/damwha-embed`·
@@ -352,17 +380,34 @@ codesign --force --deep --sign - --options runtime \
 - `embed_service.py`에 `if __name__ == "__main__": main()`을 더한다. 기존
   `[project.scripts] damwha-embed` 진입점은 그대로 둔다 (`deploy/README.md`의
   `uv tool install` 경로가 쓴다).
-- **`llm_server.py`를 고친다.** 지금은 `shutil.which(settings.lens_llm_server_bin)`으로 찾은
-  **콘솔 스크립트**를 `popen([binary, "--model", …])`로 실행한다. 이것을
-  `[sys.executable, "-m", "mlx_lm.server", "--model", …]`로 바꾼다.
-  - 셔뱅을 안 탄다.
-  - `sys.executable`이 번들 python이므로 자동으로 번들 mlx-lm을 쓴다.
-  - `LENS_LLM_SERVER_BIN` 설정은 **남기되 의미가 바뀐다** — 값이 있으면 그것을 그대로
-    실행하고(수동 운용·다른 백엔드), 없으면 위 모듈 진입이 기본이다. 기본값을 모듈로 바꾸는
-    것이므로 `lens_llm_server_bin`의 기본값을 `""`(=모듈 진입)로 내린다.
-  - `:96`의 오류 문구도 고친다 — `uv tool install mlx-lm` 안내는 이제 틀렸다.
-- **`mlx_lm.server`에는 `--run-id`를 붙이지 않는다.** upstream CLI라 모르는 인자로 죽는다.
-  소유 판정은 §6.5가 별도 규칙으로 다룬다.
+- **LLM 서버는 `damwha_worker.llm_entry`라는 얇은 진입 모듈로 감싼다.** 지금은
+  `shutil.which(settings.lens_llm_server_bin)`으로 찾은 **콘솔 스크립트**를
+  `popen([binary, "--model", …])`로 실행한다(`llm_server.py:92,103`).
+
+  `[sys.executable, "-m", "mlx_lm.server", …]`로 바꾸는 것만으로는 부족하다 — 그것은
+  upstream CLI라 `--run-id`를 주면 모르는 인자로 죽고, 안 주면 **소유 표식이 없는
+  프로세스**가 된다. 그 둘 사이에 앉을 자리가 필요하다.
+
+  `llm_entry`가 하는 일은 셋뿐이다:
+  1. `--run-id`를 **받아서 버린다** (앱이 `ps`로 읽는 것이 전부다).
+  2. 나머지 인자로 `sys.argv`를 재구성한다.
+  3. **같은 프로세스에서** `mlx_lm.server`의 `main()`을 부른다.
+
+  얻는 것:
+  - argv에 `-m damwha_worker.llm_entry --run-id=<uuid>`가 남아 §6.5의 4조건이 그대로 먹는다.
+  - **중간 프로세스가 없다.** exec 래퍼나 부모-자식 구조로 하면 §6.2가 없앤 uv 구조가
+    되살아난다.
+  - 같은 프로세스라 **HF 다운로드 훅을 걸 수 있다** — `mlx_lm.server`가 별도 프로세스였다면
+    LLM 모델의 다운로드 진행을 관측할 길이 없었다 (§6.9가 이 사실에 기댄다).
+
+  대가: `mlx_lm.server.main()`의 진입 형태에 의존한다. 그 시그니처가 바뀌면 깨지는데,
+  버전이 `uv.lock`에 고정돼 있고 §6.1의 빌드 8단계가 import를 확인하므로 **빌드에서 드러난다.**
+
+- `LENS_LLM_SERVER_BIN` 설정은 **남기되 의미가 바뀐다** — 값이 있으면 그것을 실행 파일로
+  그대로 실행하고(수동 운용·다른 백엔드), 없으면 위 모듈 진입이 기본이다.
+  `lens_llm_server_bin`의 기본값을 `""`(=모듈 진입)로 내린다. **그 탈출구로 띄운 프로세스는
+  앱이 소유를 증명할 수 없다** — 화면과 문서가 그 사실을 적는다.
+- `llm_server.py:96`의 오류 문구도 고친다 — `uv tool install mlx-lm` 안내는 이제 틀렸다.
 - **cwd.** `uv run --directory be/worker`가 하던 일을 잃는다. 앱은 cwd를 `<userData>`로 준다.
   worker는 경로를 절대값으로 받으므로 cwd에 의존하지 않는다. 다만 **`Settings`가
   `SettingsConfigDict(env_file=".env")`로 cwd의 `.env`를 읽으므로**(`config.py:9`),
@@ -415,10 +460,25 @@ codesign --force --deep --sign - --options runtime \
 | `HF_HUB_CACHE`·`TRANSFORMERS_CACHE`·`TORCH_HOME`·`XDG_CACHE_HOME` | **`HF_HOME` 하나가 모두를 이긴다는 근거가 없다.** 더 구체적인 변수가 있으면 그것이 이긴다 |
 | packaged의 `PYTHONPATH` | dev 전용이다. 새면 §6.7의 격리가 무너진다 |
 
+**금지 목록은 상속분이 아니라 최종 합성 env에 적용한다.** 이것이 초안의 구멍이었다 —
+`process.env`만 씻고 `ctx.env`를 그 뒤에 합치면, `config.json`이 임의 문자열 키를 그대로
+통과시키므로(`config.ts:299-300`) 사용자가 `PYTHONHOME`이나 `HF_HUB_CACHE`를 **다시 넣을 수
+있다.** 씻는 순서를 뒤집는다:
+
+```
+child env = sanitize( { ...process.env, ...config.json 값, ...앱이 주장하는 값 } )
+```
+
+단 **앱이 주장하는 값은 금지 목록보다 뒤**다 — `HF_HOME`·`PYTHONPATH`(dev)는 앱이 의도적으로
+넣는 것이라 씻겨 나가면 안 된다. 그래서 정확히는 "씻은 뒤 앱 값을 얹는다".
+
+`config.json`이 금지 키를 담고 있으면 **버리고 경고한다** — 조용히 무시하면 사용자는 자기가
+적은 값이 왜 안 먹는지 알 길이 없다 (`EXTRA_PATH`·`HOST`가 이미 그 규칙을 쓴다).
+
 **앱이 못 덮는 캐시가 남는지는 구현 중 실측한다.** speechbrain(ECAPA)·silero는 라이브러리가
 자체 경로를 쓸 수 있다(`models/ecapa_embed.py:27-29`가 위치를 라이브러리에 위임한다).
-**P4-C12가 판정하고**, `HF_HOME`으로 안 덮이는 것이 나오면 그 라이브러리의 전용 변수를
-§6.3 표에 추가한다.
+**P4-C13이 판정하고**, `HF_HOME`으로 안 덮이는 것이 나오면 그 라이브러리의 전용 변수를
+위 표에 추가한다.
 
 **`UV_BIN`을 지운다.** `config.ts`의 `APP_SETTING_KEYS`에서 빼고, `config.json`에 남아 있으면
 `DOCKER_BIN`과 같이 **로그에만 남기는 note**를 적는다.
@@ -466,11 +526,25 @@ codesign --force --deep --sign - --options runtime \
 
 **damwha Python 프로세스 판정 (4조건 모두):**
 
-1. argv[0] basename이 python 실행 파일이다.
-2. `-m` 다음 토큰이 `damwha_worker` 또는 `damwha_worker.embed_service`다.
-3. argv[0]의 절대 경로가 **번들 python 트리 아래**다 (`Resources/python` 또는
-   `desktop/build/python`). 저장소 `.venv`·Homebrew python이 여기서 빠진다.
+1. argv[0]이 **앱이 아는 번들 인터프리터 절대 경로**다 (`<번들>/bin/python3.12`).
+2. `-m` 다음 토큰이 `damwha_worker`, `damwha_worker.embed_service`, `damwha_worker.llm_entry`
+   중 하나다.
+3. argv[0]의 절대 경로가 **번들 python 트리 아래**다. 저장소 `.venv`·Homebrew python이
+   여기서 빠진다 (조건 1과 겹치지만, dev/packaged 두 트리를 다 받으므로 따로 둔다).
 4. `--run-id=<uuid>` 토큰이 있다.
+
+**판독 규칙 — 공백이 있는 경로를 견뎌야 한다.** `ps -axo pid,args`는 argv를 공백으로 이어
+붙인 **평탄한 문자열**이라 다시 토큰으로 쪼갤 수 없다. `/Users/x/My Apps/Damwha.app/…`처럼
+공백이 든 설치 경로는 흔하고, 단순 공백 분할은 argv[0]을 `/Users/x/My`로 잘라 **정상 프로세스를
+판정에서 누락시킨다** — 고아 정리가 조용히 생략된다. (기존 `worker-discovery.ts:78-85`도 같은
+한계를 갖는다. 이 Phase가 함께 고친다.)
+
+그래서 **아는 접두사로 먼저 자른다**: 앱은 자기 번들 인터프리터 경로를 정확히 알고 있으므로,
+`args`가 그 문자열로 시작하는지 보고 그 길이만큼 떼어 낸 나머지를 토큰으로 쪼갠다. dev와
+packaged 두 경로를 다 시험한다.
+
+**판독 실패를 "고아 없음"으로 처리하지 않는다** — `ps`가 실패했거나 출력이 잘렸으면
+§아래의 "스캔이 실패하면" 규칙을 탄다.
 
 **처분:**
 
@@ -479,7 +553,8 @@ codesign --force --deep --sign - --options runtime \
 | 4조건 만족 + run-id가 내 것 | 내 프로세스 |
 | 4조건 만족 + run-id가 다른 값 | **이전 실행의 고아. 내린다** |
 | 1·2만 만족 (번들 밖 python, run-id 없음) | 외부 `pnpm worker`. **손대지 않고 stand-down** |
-| `mlx_lm.server` | run-id가 없다 (§6.2). **부모 worker의 자손으로만 판정한다** — 고아 worker를 내릴 때 그 프로세스 트리를 함께 훑는다 |
+| `damwha_worker.llm_entry` | 다른 셋과 **같은 규칙**이다 — §6.2의 진입 모듈 덕에 run-id를 갖는다. 부모 트리에 기대지 않는다 |
+| `LENS_LLM_SERVER_BIN` 탈출구로 띄운 서버 | 표식이 없다. **앱이 소유를 증명할 수 없어 손대지 않는다.** 그 설정을 쓴 사람이 책임진다 — 화면과 문서가 그렇게 적는다 |
 
 **신호 직전에 pid 정체성을 다시 확인한다.** 스캔과 신호 사이에 pid가 재사용될 수 있다.
 `process-tree.ts`가 이미 갖춘 왕복을 쓴다.
@@ -493,23 +568,35 @@ codesign --force --deep --sign - --options runtime \
 **고아**다 — 먼저 내리고 새로 띄운다. run-id 없는 외부 embed(터미널 `pnpm embed`)만 채택한다.
 Phase 3 §5.2-2의 "고아 embed가 한 번은 채택되고 그 뒤에는 둘이 모델 메모리를 썼다"가 닫힌다.
 
-**부모 선종료 자손 회수.** Python supervisor는 **두 번째 SIGTERM에서 `--once` 자식을
-`proc.kill()`하고 `os._exit(1)`한다**(`__main__.py:268-287`). 자식은 `start_new_session=True`라
-**별도 세션**이다. 즉 부모가 먼저 사라지면 desktop의 자손 SIGKILL 단계는 훑을 트리를 잃는다.
+**종료 절차 — 서비스 핸들과 독립인 마지막 단계를 둔다.**
 
-그래서 종료 절차에 한 단계를 더한다:
+Python supervisor는 **두 번째 SIGTERM에서 `--once` 자식을 `proc.kill()`하고 `os._exit(1)`한다**
+(`__main__.py:268-287`). 자식은 `start_new_session=True`라 **별도 세션**이다. 즉 부모가 먼저
+사라지면 자손 SIGKILL 단계는 훑을 트리를 잃는다.
 
-1. SIGTERM → 유예.
-2. 자손 SIGKILL (부모가 살아 있을 때).
-3. **부모가 사라졌으면 §6.5의 4조건 + `--once` 토큰으로 남은 자식을 직접 찾아 회수한다.**
-   run-id가 내 것인 `--once` 프로세스와 그 트리의 `mlx_lm.server`가 대상이다.
+문제는 그것만이 아니다. **감독자가 죽은 서비스의 `stop()`을 아예 부르지 않는다.**
+`watchForDeath`가 `rt.result = null`로 만들고(`supervisor.ts:453`), `stopAll`은
+`if (rt.result === null || !rt.result.owned) continue`로 건너뛴다(`supervisor.ts:536`).
+그래서 **`stop()` 안에 무엇을 넣어도 이 경로에서는 실행되지 않는다.**
 
-`llm_server.py`도 `start_new_session` 여부를 확인해 같은 규칙을 적용한다.
+종료를 두 층으로 나눈다:
+
+| 층 | 무엇 | 언제 |
+| --- | --- | --- |
+| A. 서비스별 `stop()` | SIGTERM → 유예 → 자손 SIGKILL | 감독자가 핸들을 쥐고 있을 때 |
+| B. **앱 종료 회수** | §6.5의 4조건으로 `ps`를 훑어 **내 run-id를 가진 모든 프로세스**를 회수 | A가 전부 끝난 뒤, **핸들 유무와 무관하게 항상** |
+
+B층이 이 Phase의 새 계약이다. 대상은 `damwha_worker`·`embed_service`·`llm_entry`·`--once`
+전부이고, 판정 근거가 argv의 표식이라 **부모가 있든 없든, 감독자가 핸들을 쥐었든 잃었든
+똑같이 동작한다.** 기동 시 고아 정리와 같은 코드를 쓰되 대상이 "내 run-id"인 점만 다르다.
+
+B층이 무엇이든 회수했다면 그것은 A층이 놓쳤다는 뜻이므로 `supervisor.log`에 남긴다 —
+조용히 덮으면 A층의 결함이 영영 안 보인다.
 
 **supervisor가 실행 중 크래시해 재시작되면** 이전 `--once` 자식이 **같은 run-id를 갖는다** —
-기동 시 정리로는 안 잡힌다. 근본 해소는 job lease token(Phase 6)이고, 이 Phase는 **그 경계를
-명시만 한다.** 재시작 시 run-id가 같은 `--once` 자식을 회수할지는 구현 중 판단하되,
-job을 처리 중인 자식을 죽이면 그 job이 `attempts`를 소모하므로 **기본은 회수하지 않는다.**
+기동 시 정리로는 안 잡히고 B층은 종료 때만 돈다. 근본 해소는 job lease token(Phase 6)이고,
+이 Phase는 **그 경계를 명시만 한다.** 재시작 시 같은 run-id의 `--once`를 회수하지 않는 것이
+기본이다 — job을 처리 중인 자식을 죽이면 그 job이 `attempts`를 소모한다.
 
 ### 6.6 ffmpeg·모델 경로 계약
 
@@ -521,7 +608,15 @@ def _bin(name: str) -> str:
 ```
 
 `probe()`·`normalize()`가 `["ffprobe", …]` 대신 `[_bin("ffprobe"), …]`를 만든다.
-`normalize` 안의 재귀 `probe(temp_path)` 호출(`ffmpeg.py:82`)도 자동으로 따라온다.
+`normalize` 안의 재귀 `probe(temp_path)` 호출(`ffmpeg.py:82`)도 **바이너리는** 자동으로
+따라온다 — `_bin`을 그쪽에서도 다시 읽기 때문이다.
+
+**그 재귀 호출에 `runner`를 넘기는 것은 별개 변경이고, 이 Phase의 범위가 아니다.**
+넘기면 기존 테스트가 깨진다 — `tests/test_ffmpeg.py:49`·`:122`가
+`monkeypatch.setattr(ffmpeg, "probe", lambda path: …)`로 **모듈 속성을** 갈아 끼우므로,
+`probe(temp_path, runner=runner)`는 그 lambda에 `TypeError`를 낸다. 지금 그 재귀 호출이
+모듈 기본 runner를 타는 것은 **의도된 기존 동작**이고(정규화 결과를 진짜 ffprobe로 검증한다),
+이 Phase가 바꿀 이유가 없다. 바이너리 경로만 고치는 것이 이 절의 전부다.
 
 **`functools.partial` 안을 버린 이유(리뷰 지적 5).** `run_process_meeting`·
 `run_enroll_speaker`에는 `settings`가 없고, 두 함수의 기본값은 **호출 시점에**
@@ -608,7 +703,12 @@ app_setting.model_readiness = {
 - 진행 갱신은 **초당 1회 이하**로 누른다.
 - **크래시로 남은 `downloading`:** 읽는 쪽이 `updated_at`이 5분 넘게 멈춘 `downloading`을
   "중단됨"으로 보인다. writer가 정리해 주기를 기대하지 않는다.
-- **외부 DB 디버그 모드에서는 이 행을 쓰지 않는다** (§5).
+- **외부 DB 디버그 모드에서는 이 행을 쓰지 않는다** (§5). 요구만 적고 전달 경로를 안 정하면
+  구현되지 않으므로 여기서 정한다 — 앱이 `DAMWHA_SHARED_STATE=off`를 자식 env에 넣고,
+  worker가 그 값일 때 **`model_readiness`와 `worker_capabilities` 두 writer를 모두** 건너뛴다.
+  URL 모양으로 모드를 추정하지 않는다(worker는 자기가 어느 DB에 붙었는지 알 수 없다).
+  기본은 `on`이라 웹 흐름(`pnpm worker`, 이 변수 없음)의 기존 보고 동작은 그대로다 —
+  Phase 3이 남긴 "외부 DB 모드에서 worker가 capabilities 한 행을 쓴다"는 한계가 여기서 닫힌다.
 
 **DB 준비 전 구간 특례는 없다.** 초안은 "embed가 postgres와 나란히 떠서 DB 전에 받는다"고
 적었으나 **틀렸다.** 실제 기동은 `buildSpecs`의 `postgres → api → embed → worker`이고
@@ -616,14 +716,36 @@ app_setting.model_readiness = {
 서비스를 배경으로 돌린다(`supervisor.ts:495-505`). postgres·api가 gate이므로
 **embed가 시작될 때 DB는 이미 준비돼 있다.** 메모리 버퍼가 필요 없다.
 
-**준비 시간 제한을 다운로드와 분리한다.** 지금 embed의 `readyTimeoutMs`는 180초인데
-(`services/embed.ts:47`) bge-m3 첫 다운로드는 그보다 오래 걸린다. LLM 서버도 600초 제한이다
-(`config.py:54`). 규칙을 바꾼다:
+**준비 시간 제한을 다운로드와 분리한다 — 단 두 곳에서 따로 한다.**
 
-- `model_readiness`에 그 서비스의 `downloading`이 있고 `updated_at`이 **갱신되고 있으면**
-  준비 유예를 소모하지 않는다.
-- 대신 **무진행 제한**을 둔다 — 진행이 120초 멈추면 실패로 본다.
-- 이 규칙은 `readiness()`가 아니라 감독자의 유예 계산에 넣는다. 두 서비스가 같은 규칙을 쓴다.
+규칙은 하나다: **진행이 갱신되고 있으면 유예를 소모하지 않고, 무진행 120초면 실패로 본다.**
+그러나 **적용 지점이 둘로 갈린다** — 초안은 "두 서비스가 같은 규칙을 쓴다"고 적었는데 그것은
+거짓이다.
+
+| 서비스 | 제한이 어디 있나 | 누가 고치나 |
+| --- | --- | --- |
+| embed | `embed.ts:47`의 `readyTimeoutMs` 180초. **감독자의 `awaitReady()`가 센다** | 감독자 |
+| LLM | `config.py:53`의 `lens_llm_server_start_timeout_seconds` 600초. **Python `llm_server.py:_wait_ready`가 센다** | worker |
+
+**감독자는 LLM을 볼 수 없다.** 그 서버는 이미 준비된 worker의 job 자식이 띄우고, 감독자의
+`awaitReady()`는 서비스 기동 때만 돈다. 그래서 같은 규칙을 **두 자리에 각각** 넣는다:
+
+- **감독자** — `model_readiness`에 그 서비스의 `downloading`이 있고 `updated_at`이 갱신되고
+  있으면 유예 시계를 멈춘다. 고정 deadline이 아니라 **다운로드 시간을 뺀 누적**으로 센다.
+- **`_wait_ready`** — 같은 판정을 Python 쪽에서 한다. 여기서는 DB를 다시 읽을 필요가 없다.
+  §6.2의 `llm_entry`가 **같은 프로세스**라 다운로드 진행을 직접 안다.
+
+**LLM 다운로드 진행의 관측 수단이 §6.2 결정에서 나온다.** `mlx_lm.server`를 별도 프로세스로
+띄웠다면 그 안의 HF 다운로드를 볼 길이 없어 "시작·완료만 기록"이 최선이었고, 그러면 진행이
+정상인 120초 동안에도 갱신이 없어 무진행으로 오판했다. `llm_entry`가 같은 프로세스에서
+`main()`을 부르므로 **HF 훅을 걸어 다른 모델과 똑같이 바이트 진행을 올린다.**
+
+무진행 판정은 `bytes_done` 증가가 아니라 **`updated_at`** 기준이다 — `bytes_total`을 모르는
+다운로드가 있고, 그럴 때 `bytes_done`만 보면 진행 중인 것을 멈춘 것으로 본다.
+
+**어느 서비스의 다운로드인지 구별한다.** `entries`의 `writer`가 그 근거다. 다른 서비스가 받는
+모델 때문에 이 서비스의 유예가 늘어나면 안 된다 — embed가 죽어 가는 동안 worker가 whisper를
+받고 있으면 embed의 시계가 멈춘 채로 영영 안 죽는다.
 
 **읽는 쪽.** API가 기존 설정 조회 응답에 `modelReadiness`로 얹고, 앱 상태 창과 FE가 같은 값을 본다.
 
@@ -717,18 +839,20 @@ Phase 2·3의 나머지 규칙은 유지한다 — manual 실패는 자동 재�
 | P4-C6 | 다운로드 진행이 화면에 보인다 | 상태 창·FE에 `downloading`과 진행. `model_readiness` 행 확인 |
 | P4-C7 | 다운로드를 끊으면 원인이 뜨고, 회복 뒤 이어받는다 | 다운로드 중 네트워크 차단 → 화면에 사유 → 복구 → 다음 job이 **처음부터가 아니라** 이어받음 |
 | P4-C8 | 게이트 미수락 403과 토큰 무효 401을 다른 안내로 구별한다 | 수락 안 한 계정의 유효 토큰 → 수락 페이지 링크. 무효 토큰 → 재입력 안내 |
-| P4-C9 | 두 번째 실행은 모델을 다시 받지 않는다 | `models/` 크기·mtime 불변, 처리 성공. **HF 도메인으로 나가는 요청 0** (로컬 통신은 제외) |
+| P4-C9 | 두 번째 실행은 모델을 다시 받지 않는다 | `models/` 크기·mtime 불변, 처리 성공, `model_readiness`에 새 `downloading` 0건. **판정은 이 셋이다** — huggingface.co로 나가는 패킷 0건은 라이브러리가 리비전 확인 요청을 보낼 수 있어 요구하지 않는다. 오프라인에서도 되는지는 별도로 본다 (P4-C29) |
 | P4-C10 | bge-m3를 한 벌만 받는다 | `models/hub/models--BAAI--bge-m3`의 리비전 1개, `pytorch_model.bin` 부재 |
+| P4-C29 | 모델을 받아 둔 뒤에는 네트워크 없이도 처리가 된다 | 캐시가 찬 상태에서 네트워크를 끊고 업로드 1건 완주 |
 | P4-C11 | 요약·렌즈가 **번들** mlx-lm으로 돈다 | `~/.local/bin/mlx_lm.server`를 일시 격리한 상태에서 요약 job 성공. `ps -o args`가 번들 python `-m mlx_lm.server` |
 
 ### 축 C — 격리
 
 | ID | 기준 | 확인 |
 | --- | --- | --- |
-| P4-C12 | 앱의 모든 Python 프로세스가 번들 런타임을 쓴다 | worker·embed·`--once`·capabilities 프로브의 `sys.executable`·`sys.prefix`를 `supervisor.log`에 자기 보고. 전부 번들 트리 아래. **`sys.path`는 "site-packages가 번들 아래" + "packaged에 저장소 경로 0건"으로 판정한다** (cwd·dev `PYTHONPATH`는 정상 항목이다) |
+| P4-C12 | 앱의 모든 Python 프로세스가 번들 런타임을 쓴다 | worker·embed·`--once`·`llm_entry`·**capabilities 프로브**가 각자 `sys.executable`·`sys.prefix`를 로그에 자기 보고한다. 다섯 다 번들 트리 아래. capabilities 프로브는 `capabilities.py:68`의 `[sys.executable, "-c", …]`라 별도 프로세스이므로 `_PROBE_CODE`에 그 보고를 넣는다. embed는 uvicorn이 로깅을 잡기 전에 찍히지 않게 `install_logging` 뒤에 둔다. **`sys.path`는 "site-packages가 번들 아래" + "packaged에 저장소 경로 0건"으로 판정한다** (cwd·dev `PYTHONPATH`는 정상 항목이다) |
 | P4-C13 | 번들 밖 런타임·도구를 참조하지 않는다 | (a) 자식 PATH에 개발 도구 경로 0건(§6.2, 구조적 증명). (b) 처리 전 구간 `lsof -p`에 `/opt/homebrew`·`.venv`·`~/.local`·`/Library/Frameworks/Python.framework` 0건. (c) 처리 중 `ps -axo args` 주기 샘플링으로 **모든 자식 실행 경로**가 번들 아래 |
 | P4-C14 | 모델·캐시가 `.app` 밖이고 `.app`을 교체해도 재사용된다 | `.app` 지우고 다시 빌드·설치 → 모델 재다운로드 0 |
 | P4-C15 | `.app`에 arm64 무서명 Mach-O 0건, 개발 머신 경로 문자열 0건, entitlement 적용 | `check-bundle.mjs` — `codesign --verify --arch arm64` 전수, `codesign -d --entitlements -`, 금지 문자열 스캔 |
+| P4-C30 | `config.json`으로 금지 env를 다시 넣을 수 없다 | `config.json`에 `PYTHONHOME`·`HF_HUB_CACHE`를 적고 실행 → 자식 env에 없고 화면에 경고 |
 | P4-C16 | packaged가 저장소 체크아웃 없이 뜬다 | 저장소를 임시로 옮긴 뒤 `.app` 실행. 폴더 선택창이 뜨지 않고 정상 기동 |
 
 ### 축 D — 수명주기
@@ -737,10 +861,10 @@ Phase 2·3의 나머지 규칙은 유지한다 — manual 실패는 자동 재�
 | --- | --- | --- |
 | P4-C17 | ⌘Q 뒤 앱이 만든 프로세스가 하나도 안 남는다 | `mlx_lm.server`가 뜬 렌즈 job 중 ⌘Q → `ps`에 번들 python 프로세스 0건 (run-id 없는 capabilities 프로브 포함) |
 | P4-C18 | 앱 강제 종료 뒤 남은 고아를 다음 실행이 정리한다 | `kill -9` main → 고아 확인(worker·`--once`·`mlx_lm.server`) → 재실행 → 옛 run-id 전부 사라짐 |
-| P4-C19 | **부모가 먼저 죽어도** 자손이 회수된다 | worker supervisor만 `kill -9` → `--once` 자식과 LLM 서버가 남음 → 앱 종료 → 전부 사라짐 |
-| P4-C20 | 자손 SIGKILL 단계가 실제로 발화한다 | SIGTERM을 무시하는 자식으로 유예 초과 유도. Phase 2가 못 밟은 경로 |
+| P4-C19 | **부모가 먼저 죽어도** 자손이 회수된다 | (a) worker supervisor만 `kill -9` → `--once`와 `llm_entry`가 남음 → 앱 ⌘Q → 전부 사라짐. (b) supervisor와 `--once`를 **둘 다** `kill -9` → `llm_entry`만 남음 → ⌘Q → 사라짐. 둘 다 §6.5 B층이 회수하고 `supervisor.log`에 그 사실이 남는다. **감독자가 `rt.result=null`인 상태를 지나야 한다** — `watchForDeath` → `stopAll` 경로를 실제로 밟는 통합 테스트로 뒷받침한다 |
+| P4-C20 | 자손 SIGKILL 단계가 실제로 발화한다 | `signal.signal(SIGTERM, SIG_IGN)` 뒤 대기하는 **전용 fixture 프로세스**를 worker 자손 자리에 띄워 유예를 넘긴다. Phase 2가 단위 테스트로만 갖고 있던 경로 |
 | P4-C21 | 외부 `pnpm worker`는 앱이 손대지 않고 종료 뒤에도 산다 | Phase 2 P2-C6 재실행. `.venv` python이라 §6.5의 조건 3에서 빠진다 |
-| P4-C22 | 고아 스캔이 실패하면 서비스를 띄우지 않는다 | `ps`를 실패하게 주입. 단위 테스트 |
+| P4-C22 | 고아 스캔이 실패하면 서비스를 띄우지 않는다 | 스캔 러너에 `ps` 비영(非零) 종료와 빈 출력을 각각 주입 → 기동 중단 + 화면에 원인. 단위 테스트 (실앱 발화 경로가 아니다) |
 
 ### 축 E — 회귀와 데이터 보존
 
@@ -779,7 +903,9 @@ Phase 2·3의 나머지 규칙은 유지한다 — manual 실패는 자동 재�
 | `src/process/orphans.ts` | 신규 — 4조건 스캔·회수 |
 | `src/services/worker-discovery.ts` | `--run-id` 판독, 소유/외부/고아 셋 |
 | `src/services/worker.ts`·`embed.ts` | `.env`·uv 검사 제거, `-m` 진입, `--run-id`, 채택 규칙 |
-| `src/services/worker-shutdown.ts` | 부모 선종료 자손 회수 단계 |
+| `src/services/worker-shutdown.ts` | A층 정리 (핸들을 쥔 경우) |
+| `src/app/quit-flow.ts` | **B층 — 앱 종료 회수.** 핸들 유무와 무관하게 내 run-id를 전부 훑는다 |
+| `src/services/api.ts` | `repoRoot` nullable 전파 |
 | `src/services/supervisor.ts` | 다운로드 중 유예 계산, 서비스 재시작 경로 |
 | `src/config/config.ts` | `UV_BIN` 제거, `HF_TOKEN` 앱 소유 키, env 위생 |
 | `src/config/repo-root.ts`·`src/main.ts` | packaged의 저장소 게이트 제거 |
@@ -797,7 +923,10 @@ Phase 2·3의 나머지 규칙은 유지한다 — manual 실패는 자동 재�
 | `damwha_worker/pipeline/ffmpeg.py` | 호출 시점 env 읽기 |
 | `damwha_worker/embed_service.py` | `if __name__ == "__main__"` |
 | `damwha_worker/__main__.py` | `--run-id` 수용·전파, 런타임 자기 보고 로그 |
-| `damwha_worker/llm_server.py` | `-m mlx_lm.server` 진입, 오류 문구, `--run-id` 미전달 |
+| `damwha_worker/llm_server.py` | `-m damwha_worker.llm_entry` 진입, 오류 문구, `_wait_ready`의 무진행 판정 |
+| `damwha_worker/llm_entry.py` | 신규 — run-id 수용, HF 진행 훅, `mlx_lm.server.main()` 호출 |
+| `damwha_worker/embed_service.py` | import 부작용 제거(지연 초기화), `__main__` 블록, 자기 보고 |
+| `damwha_worker/capabilities.py` | `_PROBE_CODE`에 런타임 자기 보고 |
 | `damwha_worker/models/pyannote_diar.py` | 401/403 보존 |
 | `damwha_worker/models/bge_embed.py` | 리비전 고정·safetensors 단일 |
 | `damwha_worker/models/downloads.py` | 신규 — HF 진행 훅 → `model_readiness` |
@@ -955,6 +1084,41 @@ pnpm desktop:build
   그 대신 **자식 PATH에서 개발 도구를 빼는** 쪽이 더 강한 증명이다. 격리 환경을 흉내 내는
   대신 참조 경로 자체를 없앤다.
 
-### 17.2 메인 세션 리뷰
+### 17.2 Codex CLI — 2회차 (대상: 구현 계획 `9ef4b1c` + 이 스펙 `bcdca95`)
+
+계획 검증에서 나온 지적 17건(blocking 10 · important 7) 중 **스펙을 고쳐야 하는 것 여섯**을
+이 개정이 받는다. 나머지는 계획 개정이 받는다. 메인 세션이 전부 저장소 코드로 확인했다.
+
+| 지적 | 확인 | 이 스펙의 반영 |
+| --- | --- | --- |
+| Task 2의 `pnpm worker:sync`가 §5의 `.venv` 절대 불변을 임의로 완화한다 | 맞다. 계획이 스펙에 없는 해석을 썼다 | §5 — **절대 불변/허용 변경 두 부류로 나눴다.** `.venv`와 `~/.local/bin/mlx_lm.server`를 허용 변경으로 옮기고 기준선·복구를 표로 적었다. 기준선은 **첫 Task보다 먼저** 뜬다 |
+| `import damwha_worker.embed_service`가 설정을 요구하고 모델을 받는다 | 맞고 심각하다 — `embed_service.py:10-11`이 **모듈 수준**에서 `load_settings()`·`build_text_embedder()`를 부른다. 빌드 진입점 확인이 빌드 머신에 bge-m3 2.2GB를 받는다 | §4.1-17 — import 부작용 제거를 범위에 넣었다. §3 표에 대상 줄 추가 |
+| `stopAll`이 죽은 서비스의 `stop()`을 안 부른다 | 맞다. `watchForDeath`가 `rt.result=null`(supervisor.ts:453), `stopAll`이 `continue`(:536) | §6.5 — **종료를 A층(서비스별 `stop()`)·B층(앱 종료 회수)으로 나눴다.** B층은 핸들 유무와 무관하게 항상 돌고 `quit-flow.ts`에 산다 |
+| 부모와 `--once`가 둘 다 죽으면 LLM 소유를 증명할 수 없다 | 맞다. 초안 §6.2가 run-id를 안 붙이기로 하고 §6.5가 부모 트리에 기댔는데, supervisor는 2회차 신호에 `--once`를 SIGKILL한다 | §6.2 — **`damwha_worker.llm_entry` 얇은 진입 모듈.** 같은 프로세스에서 `mlx_lm.server.main()`을 부르므로 argv에 run-id가 남고 중간 프로세스가 없다. 부수 효과로 **LLM 다운로드 진행 관측이 가능해졌다**(§6.9) |
+| 공백이 든 설치 경로를 단순 공백 분할이 못 견딘다 | 맞다. 기존 `worker-discovery.ts:78-85`도 같은 한계다 | §6.5 — **아는 접두사로 먼저 자르는** 판독 규칙. 판독 실패를 "고아 없음"으로 처리하지 않는다 |
+| LLM 600초 제한은 감독자가 아니라 Python `_wait_ready`에 있다 | 맞다. 감독자의 `awaitReady()`는 서비스 기동 때만 돈다 | §6.9 — **적용 지점을 둘로 갈랐다.** 초안의 "두 서비스가 같은 규칙을 쓴다"는 거짓이었다. 서비스 구별을 위해 `writer`를 쓴다 |
+| 외부 DB 모드 writer 차단의 전달 경로가 없다 | 맞다. 요구만 있었다 | §6.9 — `DAMWHA_SHARED_STATE=off`. 두 writer 모두. URL로 추정하지 않는다 |
+| 재귀 `probe(temp_path, runner=runner)`가 기존 monkeypatch를 깬다 | 맞다. `test_ffmpeg.py:49`·`:122`가 `lambda path:`로 모듈 속성을 갈아 끼운다 | §6.6 — **그 변경을 범위에서 뺐다.** 바이너리 경로만 고친다 |
+| `repoRoot` nullable이 `api.ts:172`에서 타입 오류를 낸다 | 맞다 | §4.1-19·§3·§10에 추가 |
+| 완료 기준의 관찰 지점이 비었다 (C9·C12·C19·C20·C22) | 대부분 맞다 | 다섯 전부 다시 썼다. C19는 **두 경로**(부모만 죽음 / 부모와 `--once` 둘 다 죽음)로 쪼갰다. 새 기준 둘 추가 — C29(오프라인 처리), C30(`config.json` env 재주입 차단) |
+
+**반박 2건에 대한 재판정.**
+
+- **소유 판정 4조건으로 충분하다는 1회차 반박은 부분적으로 틀렸다.** 4조건 자체는 유효하지만
+  "부모가 모두 사라진 자손의 소유를 무엇으로 증명하나"를 답하지 못했다. 해소는 pidfile이
+  아니라 **표식을 가질 수 없던 프로세스에 표식을 주는 것**(`llm_entry`)이었다. 지적이 옳았고
+  제안한 해법(소유 실행 기록)은 채택하지 않았다.
+- **PATH 제한이 `env -i`를 대체한다는 반박은 그대로 유지하되 구멍을 막았다.** 지적대로
+  `config.json`이 임의 키를 통과시켜 `ctx.env`로 재주입할 수 있었다 — §6.3의 금지 목록을
+  **상속분이 아니라 최종 합성 env**에 적용하고, 금지 키가 파일에 있으면 버리고 경고한다.
+  P4-C30이 이것을 판정한다.
+
+**계획 개정이 받는 것** (스펙 변경 없음): 빌드 캐시 키의 경로 포함, 셔뱅 래퍼의 `dirname`
+의존 제거, numba 프로브의 잠금 버전 사용과 plist 사본 생성, 테스트 예시의 실제 시그니처
+(`managed_llm_server(model, settings, *, …)`·`stopWorkerProcess(handle, opts)`), `model_readiness`
+merge의 동시성 테스트, 토큰 교체 후 live env 갱신 경로, Task 11–13의 중간 컴파일 실패 제거
+(공존 후 삭제), 완료 기준별 구현·검증 연결표.
+
+### 17.3 메인 세션 리뷰
 
 (작성 예정.)
