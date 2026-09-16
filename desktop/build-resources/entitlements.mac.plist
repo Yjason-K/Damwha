@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Phase 0 실측 최소 집합. MLX Metal 셰이더 런타임 컴파일과 torch.jit.script는
+       hardened runtime에서 깨지지 않는다 — 깨지는 것은 numba의 LLVM MCJIT이다. -->
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <!-- 제3자 wheel의 .so는 우리 Team ID로 서명되지 않는다. dlv는 서명 주체를 안 따질 뿐
+       "서명 없음"은 허용하지 않으므로, 빌드의 전수 서명과 짝이다 (Phase 0 R-5). -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

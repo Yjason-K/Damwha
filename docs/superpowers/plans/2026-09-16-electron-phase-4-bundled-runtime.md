@@ -44,7 +44,9 @@
   (`docs/superpowers/reference/electron-phase-0/ffmpeg-fetch.sh`)을 따른다 — **다르면 원본이 맞다.**
 - **`mlx-lm` 기준값 0.31.3.** `uv.lock`이 단일 진실 원천이다.
 - **entitlement 최소 집합** — `allow-unsigned-executable-memory`, `disable-library-validation`.
-  `allow-jit`은 Task 2의 측정이 요구할 때만.
+  `allow-jit`은 Task 2의 측정이 요구할 때만. **측정 결과 요구하지 않는다** (2026-09-16) —
+  최소 집합으로 numba가 산다. 둘 다 각각 필요하다: 없으면 dyld가 SIGABRT,
+  `disable-library-validation`만 있으면 `import numba`가 SIGKILL.
 - **서명 판정은 `codesign --verify --arch arm64`.** `--arch` 없이 부르지 않는다.
 - **번들에 절대 경로를 굽지 않는다** (스펙 §6.1-b).
 - **`npm install` 금지.** 패키지를 루트에서 실행하지 않는다.
@@ -273,7 +275,8 @@ rm -rf /tmp/p4-baseline-probe /tmp/p4-baseline/later
 
 ## Task 2: numba 사망 지점 측정 — 뒤를 가르는 분기
 
-**이 결과가 Task 6의 entitlement 목록과 Phase 진행 여부를 정한다.**
+**이 결과가 Task 5·7의 entitlement 목록과 Phase 진행 여부를 정한다.** (둘이 `entitlements.mac.plist`를
+소비한다 — Task 5는 빌드 중 Mach-O 전수 서명, Task 7은 `.app` 최종 서명. Task 6은 쓰지 않는다.)
 
 **Files:** Create `desktop/scripts/probe-numba.sh`, `desktop/scripts/numba-probe/{import_only,define_only,call_it}.py`, `desktop/build-resources/entitlements.mac.plist`
 
@@ -282,7 +285,11 @@ rm -rf /tmp/p4-baseline-probe /tmp/p4-baseline/later
   Task 3보다 먼저 해도 된다** — `mlx-whisper`의 전이 의존이라 보통 있다.
 - Produces: 판정 하나 — `survives` / `dies_at: import|define|call` / `allow_jit_fixes: bool`.
 
-- [ ] **Step 1: entitlements를 만든다**
+**[실행됨: 2026-09-16 — 판정 `survives`. 최소 집합으로 산다. `allow-jit` 불필요. Step 6의
+첫 줄(plist 그대로, 다음 Task)로 간다. Task 1의 기준선이 잠금에 numba 0.65.1·llvmlite 0.47.0이
+이미 있음을 확인해 Task 3보다 먼저 돌렸다.]**
+
+- [x] **Step 1: entitlements를 만든다**
 
 `desktop/build-resources/entitlements.mac.plist`:
 
@@ -303,7 +310,7 @@ rm -rf /tmp/p4-baseline-probe /tmp/p4-baseline/later
 </plist>
 ```
 
-- [ ] **Step 2: 세 프로브를 각각 별개 파일로 쓴다**
+- [x] **Step 2: 세 프로브를 각각 별개 파일로 쓴다**
 
 한 프로세스에서 셋을 다 하면 어디서 죽었는지 구분되지 않는다 — Phase 0의 `probe.sh:391-406`이
 정확히 그 실수를 했고 그래서 이 항목이 미해결로 넘어왔다.
@@ -317,7 +324,16 @@ rm -rf /tmp/p4-baseline-probe /tmp/p4-baseline/later
 `call_it.py`가 `mlx_whisper/timing.py:47,72`와 같은 모양이다 — 지연 컴파일이라 호출에서 처음
 LLVM MCJIT을 탄다.
 
-- [ ] **Step 3: 측정 스크립트를 쓴다**
+- [x] **Step 3: 측정 스크립트를 쓴다**
+
+**[실행됨: `bash desktop/scripts/probe-numba.sh /tmp/numba-probe/python
+desktop/build-resources/entitlements.mac.plist` → Mach-O 42개 서명, 3/3 통과, rc=0]**
+
+서명 개수 가드를 더했다. 트리 경로가 틀리면 `find`가 0건을 내고 프로브가 **서명 없이** 돌아
+거짓 `survives`가 나온다 — Task 4의 `fix_macho` 0건 지적과 같은 부류다.
+
+`${signed}개`의 중괄호가 필수다. `$signed개`로 쓰면 bash가 한글을 변수명에 포함해
+`signed개: unbound variable`로 죽는다 (실행에서 드러났다).
 
 ```bash
 #!/bin/bash
@@ -341,11 +357,16 @@ echo "== hardened runtime + entitlements로 서명한다: $ENTS"
 # 하나라도 빠지면 dlv가 그것을 거부해 numba와 무관한 이유로 죽고, 그 죽음이 JIT 판정으로
 # 오독된다. **파이프 뒤 while이 아니라 프로세스 치환이다** — `find | while … exit`의 exit는
 # 파이프 서브셸만 끝내고 스크립트는 계속 진행한다.
+signed=0
 while IFS= read -r -d '' f; do
   file -b "$f" | grep -q 'Mach-O' || continue
-  codesign --force --sign - --options runtime --entitlements "$ENTS" "$f" \
+  codesign --force --sign - --options runtime --entitlements "$ENTS" "$f" 2>/dev/null \
     || { echo "서명 실패: $f" >&2; exit 3; }
+  signed=$((signed + 1))
 done < <(find "$PY_TREE" -type f \( -name '*.so' -o -name '*.dylib' -o -perm -u+x \) -print0)
+echo "== Mach-O ${signed}개를 서명했다"
+# 0건이면 프로브가 서명 없이 돌아 거짓 survives가 나온다.
+[ "$signed" -gt 0 ] || { echo "Mach-O를 하나도 못 찾았다 — 트리가 틀렸다" >&2; exit 3; }
 
 run_probe() {
   local name="$1" out rc
@@ -365,31 +386,45 @@ echo
 echo "== 판정: $VERDICT"
 ```
 
-- [ ] **Step 4: 최소 트리를 만들어 잰다**
+- [x] **Step 4: 최소 트리를 만들어 잰다**
 
 ```bash
-mkdir -p /tmp/numba-probe && cd /tmp/numba-probe
+rm -rf /tmp/numba-probe && mkdir -p /tmp/numba-probe && cd /tmp/numba-probe
 curl -fsSL -o py.tar.gz \
   "https://github.com/astral-sh/python-build-standalone/releases/download/20250818/cpython-3.12.11+20250818-aarch64-apple-darwin-install_only.tar.gz"
 tar xzf py.tar.gz          # → ./python/
 
 # **잠금 버전을 쓴다.** 최신 numba를 깔면 번들에 실릴 것과 다른 LLVM을 재게 된다.
+# numpy도 고정한다 — numba는 numpy 없이는 import부터 죽고 그 죽음이 dies_at: import로
+# 오독된다. 안 고정하면 uv가 새로 해석해 번들에 실릴 2.4.6과 다른 ABI를 잰다.
 # --frozen: 이 조회가 uv.lock을 갱신하지 않게 한다.
 uv export --directory /Users/gim-yeongjae/project/daewha/be/worker \
   --extra models --no-dev --frozen --no-hashes --no-emit-project \
-  | grep -E '^(numba|llvmlite)==' > pins.txt
+  | grep -E '^(numba|llvmlite|numpy)==' > pins.txt
 cat pins.txt
 [ -s pins.txt ] || { echo "잠금에 numba가 없다 — Task 3을 먼저"; exit 1; }
 uv pip install --python ./python/bin/python3.12 -r pins.txt
 
 cd /Users/gim-yeongjae/project/daewha
+# 대조군을 먼저 돌린다. 없으면 서명본이 죽었을 때 그것이 hardened runtime 때문인지
+# 설치가 깨진 것인지 구분할 근거가 없다.
+for p in import_only define_only call_it; do
+  /tmp/numba-probe/python/bin/python3.12 desktop/scripts/numba-probe/$p.py; echo "$p rc=$?"
+done
+
 bash desktop/scripts/probe-numba.sh /tmp/numba-probe/python desktop/build-resources/entitlements.mac.plist
 ```
 
 `install_only` 아카이브를 쓰는 이유: 재배치 조작 없이 그 자리에서 돌면 되고, 이 측정은
 재배치가 아니라 **JIT이 hardened runtime에서 사는지**를 본다.
 
-- [ ] **Step 5: 죽었으면 `allow-jit`을 더해 다시 잰다**
+**[실행됨: 2026-09-16. 잠금 3개(numba 0.65.1·llvmlite 0.47.0·numpy 2.4.6)만 설치. 대조군
+3/3 rc=0. 서명 후 3/3 통과, `flags=0x10002(adhoc,runtime)`, `codesign --verify --arch arm64`
+통과. Task 1 기준선 `verify` 8건 전부 PASS — 측정이 `/tmp`에 격리됐고 `uv.lock`·`.venv`·
+`~/.local/bin` 무변화.]**
+
+- [ ] **Step 5: 죽었으면 `allow-jit`을 더해 다시 잰다** — **돌리지 않았다.** Step 4가
+`survives`를 냈으므로 조건이 성립하지 않는다. 절차는 나중에 필요해질 때를 위해 남긴다.
 
 **사본을 먼저 만들고 키를 더한다.** 순서를 뒤집으면 PlistBuddy가 없는 파일에 쓰려다 실패하고
 `|| cp`가 **키 없는 원본**을 남겨 거짓 판정이 나온다.
@@ -404,24 +439,48 @@ done
 bash desktop/scripts/probe-numba.sh /tmp/numba-probe/python /tmp/ents-with-jit.plist
 ```
 
-- [ ] **Step 6: 판정에 따라 갈라진다**
+- [x] **Step 6: 판정에 따라 갈라진다**
 
 | 결과 | 조치 |
 | --- | --- |
-| 최소 집합으로 `survives` | plist 그대로. 다음 Task |
+| **최소 집합으로 `survives`** ← **이것이다** | plist 그대로. 다음 Task |
 | `allow-jit`을 더해야 산다 | plist에 `allow-jit` 추가. 측정 출력을 결과 문서에 |
 | `allow-jit`으로도 죽는다 | **여기서 멈춘다.** `whisper_mlx.py:107-123`이 `segment["words"]`만 쓰므로 word-timestamp를 끄면 전사가 빈다 — 대안 정렬 설계는 이 계획 밖이다. **사용자에게 알린다** |
 
+**Step 6-b: entitlement 둘이 각각 필요한지 가른다** (계획에 없던 측정. `survives`만으로는
+최소 집합이 실제로 최소인지, 아니면 프로브가 W+X 경로를 아예 안 밟는지 구분되지 않는다.)
+
+| entitlement 집합 | 결과 | 죽는 지점 |
+| --- | --- | --- |
+| 서명 없음 (대조군) | 3/3 통과 | — |
+| hardened runtime, 키 0개 | rc=134 SIGABRT | dyld 라이브러리 로드 — `code signature … not valid for use in process: mapping process and mapped file (non-platform) have different Team IDs` |
+| `disable-library-validation`만 | **rc=137 SIGKILL** | **`import numba`** — W+X 매핑 거부 |
+| 최소 집합 (둘 다) | 3/3 통과 | — |
+
+**둘 다 load-bearing이고 서로 다른 지점에서 그렇다.** 그리고 `allow-unsigned-executable-memory`가
+필요한 곳은 **호출이 아니라 import**다 — LLVM이 모듈 로드 시점에 실행 메모리를 잡는다.
+프로브가 실제 경로를 밟는다는 증거이자, 스펙 §6.1의 "Phase 0 실측 최소 집합"의 재확인이다.
+Phase 0 R-4가 적은 "메시지 없는 SIGKILL"이 그대로 재현됐다.
+
 **Verify:** 판정 한 줄이 나온다. 세 프로브가 **각각 별개 프로세스**로 돌았다.
 `codesign -d --entitlements - /tmp/numba-probe/python/bin/python3.12`가 키를 보인다.
+
+**[검증됨: 판정 `survives`. 세 프로브가 별개 `$PY` 호출. `codesign -d --entitlements -`가 키
+둘을 보이고 `codesign -dvvv`가 `flags=0x10002(adhoc,runtime)`을 보인다 — hardened runtime이
+실제로 걸렸으므로 판정이 유효하다.]**
 
 **Review:**
 - 한 프로세스에서 셋을 다 하지 않는가 (Phase 0의 실수 재발).
 - `rc=137`(SIGKILL)과 평범한 예외 종료를 구분하는가.
 - 서명 루프가 **프로세스 치환**인가 (파이프면 `exit`가 스크립트를 안 끝낸다).
 - `uv export`에 `--frozen`이 있는가.
+- 서명 0건을 `survives`로 읽지 않는가.
+- 대조군이 있는가 — 없으면 죽음의 원인을 hardened runtime에 귀속시킬 수 없다.
 
-- [ ] **Step 7: 커밋** — `chore(desktop): numba JIT이 hardened runtime에서 사는지 가르는 프로브를 더한다`
+**[리뷰 결과: 6항 전부 통과 — 2026-09-16 메인 세션. `rc=134`(SIGABRT, dyld)와
+`rc=137`(SIGKILL, W+X)이 실제로 구분되는 것을 측정으로 확인했다.]**
+
+- [x] **Step 7: 커밋** — `chore(desktop): numba JIT이 hardened runtime에서 사는지 가르는 프로브를 더한다`
 
 ---
 

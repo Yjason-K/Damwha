@@ -687,8 +687,8 @@ dev 실행만 `PYTHONPATH=<repo>/be/worker`. `sys.path`가 site-packages보다 �
 
 ### 6.8 numba 측정 계약
 
-**Task 1에서 잰다.** §6.1의 최종 서명 조합(hardened runtime + 최소 entitlement)으로 서명한
-번들 python에서, 각각 **별개 프로세스**로:
+**Part 1 Task 2에서 잰다.** §6.1의 최종 서명 조합(hardened runtime + 최소 entitlement)으로
+서명한 번들 python에서, 각각 **별개 프로세스**로:
 
 1. `import numba` 만.
 2. `@njit` 함수 **정의**만.
@@ -698,9 +698,25 @@ dev 실행만 `PYTHONPATH=<repo>/be/worker`. `sys.path`가 site-packages보다 �
 
 | 결과 | 조치 |
 | --- | --- |
-| 셋 다 산다 | entitlement 최소 집합 유지. 끝 |
+| **셋 다 산다** ← **이것이다 (2026-09-16 실측)** | entitlement 최소 집합 유지. 끝 |
 | 어디선가 죽는다 | `allow-jit`을 더해 재측정 |
 | `allow-jit`으로도 죽는다 | **스펙 리뷰로 돌아간다.** §9의 전사 기준을 충족할 수 없다 |
+
+**실측 (2026-09-16).** python-build-standalone 3.12.11(`20250818`)에 잠금 버전
+numba 0.65.1 · llvmlite 0.47.0 · numpy 2.4.6만 설치하고, Mach-O 42개를
+`--options runtime --entitlements`로 전수 서명해 쟀다(`flags=0x10002(adhoc,runtime)` 확인).
+
+| entitlement 집합 | 결과 |
+| --- | --- |
+| 서명 없음 (대조군) | 3/3 통과 |
+| hardened runtime, 키 0개 | dyld가 `libpython3.12.dylib`을 거부 — rc=134 SIGABRT, `different Team IDs` |
+| `disable-library-validation`만 | **`import numba`에서 rc=137 SIGKILL** |
+| 최소 집합 (둘 다) | **3/3 통과** |
+
+`allow-jit`은 필요 없다. **두 entitlement가 각각, 서로 다른 지점에서 load-bearing이다** —
+`disable-library-validation`은 dyld 로드에서, `allow-unsigned-executable-memory`는
+**`import numba`**에서. LLVM이 호출이 아니라 모듈 로드 시점에 실행 메모리를 잡는다. 대조군이
+셋 다 통과했으므로 그 죽음은 설치 결함이 아니라 hardened runtime에 귀속된다.
 
 **word-timestamp를 끄는 것은 대안이 아니다.** `models/whisper_mlx.py:107-123`이
 `segment["words"]`만 `Word`로 변환하고 그 목록이 파이프라인의 유일한 전사 출력이다
@@ -1028,8 +1044,8 @@ pnpm desktop:build
 
 | 항목 | 언제 정해지나 |
 | --- | --- |
-| numba 사망 지점과 `allow-jit` 필요 여부 | **Task 1의 측정.** `allow-jit`으로도 죽으면 스펙 리뷰로 돌아간다 (§6.8) |
-| `uv lock` 갱신이 해석하는 `mlx` 버전과 그 회귀 영향 | Task 2. P4-C25가 판정 |
+| ~~numba 사망 지점과 `allow-jit` 필요 여부~~ | **2026-09-16 실측으로 확정** — 최소 집합으로 셋 다 산다. `allow-jit` 불필요. 두 entitlement는 각각 dyld 로드와 `import numba`에서 필요하다 (§6.8) |
+| `uv lock` 갱신이 해석하는 `mlx` 버전과 그 회귀 영향 | Part 1 Task 3. P4-C25가 판정. 현 `.venv`는 `mlx` 0.31.2이고 `mlx-lm`은 아예 없다(실측) |
 | 자식 PATH에 `/usr/bin:/bin`이 필요한지 | 구현 중 실측 (§6.2) |
 | `HF_HOME`으로 안 덮이는 라이브러리 캐시가 있는지 | 구현 중 실측, P4-C13이 판정 (§6.3) |
 | `LENS_LLM_BASE_URL`의 포트 — 고정 vs 빈 포트 탐색 | 구현 중. embed의 `freePort()` 선례 |
