@@ -746,11 +746,29 @@ app_setting.model_readiness = {
 훅을 설치하므로 다른 모델과 똑같이 바이트 진행을 올린다. `llm_entry`는 그 보고를 위해
 **자기 DB 연결을 연다** — supervisor·`--once` 자식에 이은 세 번째 writer 프로세스다.
 
-**훅 지점은 구현 전에 확정해야 한다 (미확정 — §12).** `huggingface_hub`에 전역 진행 훅이
-없어 `snapshot_download`/`hf_hub_download`의 `tqdm_class`를 주입해야 하는데, `mlx_lm`·
-sentence-transformers·pyannote 셋 다 그 인자를 넘기지 않는다. 남는 수단은 모듈 속성 교체이고
-라이브러리 버전에 취약하다. **확정하지 못하면 바이트 진행을 포기하고 `updated_at` 하트비트만
-남긴다** — 그 경우 P4-C6을 "다운로드 중임이 화면에 보인다"로 내리고 진행률은 요구하지 않는다.
+**훅 지점 (2026-09-16 실측으로 확정).** `huggingface_hub` **1.20.1**의
+`snapshot_download`·`hf_hub_download`가 둘 다 `tqdm_class: type[base_tqdm] | None`을 받는다 —
+클래스를 주면 hub가 인스턴스화해 `update(n)`을 부른다. 바이트 진행이 **가능하다.**
+
+문제는 소비자 넷이 전부 **모듈 수준** `from huggingface_hub import …`이라는 것이다:
+
+| 소비자 | 자리 |
+| --- | --- |
+| `mlx_whisper` | `load_models.py:8` |
+| `sentence_transformers` | `util/file_io.py:7` |
+| `pyannote.audio` | `pipelines/speaker_verification.py:32` **와** `utils/hf_hub.py:27` (두 곳) |
+| `mlx_lm` | `utils.py:33` |
+
+모듈 수준 import는 **import 시점에** 이름을 바인딩한다. 그래서 훅 설치가 두 갈래여야 한다:
+
+1. **`huggingface_hub`의 원본을 먼저 바꾼다** — 아직 import되지 않은 소비자를 덮는다.
+2. **`sys.modules`를 훑어 이미 import된 소비자의 모듈 속성도 바꾼다** — 1번만으로는 늦은 경우.
+
+호출 순서가 계약이 된다: worker·embed·`llm_entry` 모두 **무거운 모듈을 import하기 전에**
+훅을 설치한다. `llm_entry`는 `from mlx_lm.server import main` 앞이다.
+
+**버전 취약성을 빌드가 막는다.** §6.1의 빌드 8단계가 두 함수에 `tqdm_class`가 있는지
+assert한다 — 라이브러리가 그 인자를 없애면 `.app`이 아니라 빌드가 깨진다.
 
 무진행 판정은 `bytes_done` 증가가 아니라 **`updated_at`** 기준이다 — `bytes_total`을 모르는
 다운로드가 있고, 그럴 때 `bytes_done`만 보면 진행 중인 것을 멈춘 것으로 본다.
@@ -980,7 +998,7 @@ pnpm desktop:build
 | `HF_HOME`으로 안 덮이는 라이브러리 캐시가 있는지 | 구현 중 실측, P4-C13이 판정 (§6.3) |
 | `LENS_LLM_BASE_URL`의 포트 — 고정 vs 빈 포트 탐색 | 구현 중. embed의 `freePort()` 선례 |
 | 모델 준비 FE 표시의 위치·형태 | 구현 중. `fe/DESIGN.md` 관례 |
-| **HF 다운로드 진행 훅의 지점** — 바이트 진행이 가능한지 | **구현 계획 Task 17 Step 5-c의 사전 조사.** 불가하면 P4-C6을 하트비트로 내리고 §6.9를 갱신한다 |
+| ~~HF 다운로드 진행 훅의 지점~~ | **2026-09-16 실측으로 확정** — `huggingface_hub 1.20.1`의 두 함수가 `tqdm_class`를 받는다. §6.9에 설치 규칙을 적었다 |
 | supervisor 크래시 재시작 시 같은 run-id `--once` 자식 처분 | 구현 중 (§6.5). 기본은 회수하지 않는다 |
 | `.app` 최종 크기 | 빌드 뒤 실측. 예상 1.6~1.8 GB |
 

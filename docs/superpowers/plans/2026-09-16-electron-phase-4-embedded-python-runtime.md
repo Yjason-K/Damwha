@@ -4493,8 +4493,9 @@ rt.result를 null로 만들고 stopAll이 그 서비스를 건너뛴다.
   - `MODEL_READINESS_KEY = "model_readiness"`
   - `def merge_model_readiness(conn, key: str, entry: dict) -> None` — **원자적 merge**
   - `def report_download(conn_factory, key: str, writer: str)` — 컨텍스트 매니저. 진입에 `downloading`, 성공에 `ready`, 예외에 `failed`.
-  - `def install_hf_progress_hook(writer: str) -> None` — **훅 지점은 Step 5-c가 정한다.**
-    `llm_entry`·`bge_embed`·`whisper_mlx`·`pyannote_diar` 넷이 부른다.
+  - `def install_hf_progress_hook(writer: str) -> None` — `huggingface_hub`의 두 함수에
+    `tqdm_class` 기본값을 끼우고 `sys.modules`의 기존 바인딩도 갱신한다. **무거운 모듈을
+    import하기 전에** `__main__`·`embed_service`·`llm_entry` 셋이 부른다.
   - `errors.classify_download(exc) -> ErrorKind` — 401·403은 PERMANENT.
   Task 19의 API·FE가 이 행을 읽는다.
 
@@ -4687,33 +4688,109 @@ Phase 3이 남긴 "외부 DB 모드에서 worker가 capabilities 한 행을 쓴�
 앱 쪽은 Task 12의 `appOwnedChildEnv`가 `databaseMode.kind === "external"`일 때
 `DAMWHA_SHARED_STATE: "off"`를 넣는다.
 
-- [ ] **Step 5-c: 훅 지점을 먼저 조사한다 — 이 결과가 P4-C6의 크기를 정한다**
+- [ ] **Step 5-c: 진행 훅을 설치한다 (지점은 2026-09-16 실측으로 확정됐다)**
 
-`huggingface_hub`에는 **전역 진행 훅이 없다.** `snapshot_download`/`hf_hub_download`의
-`tqdm_class` 인자를 넘겨야 하는데 `mlx_lm.utils._download`·sentence-transformers·pyannote
-셋 다 그것을 넘기지 않는다. 남는 수단은 모듈 속성 교체이고 라이브러리 버전에 취약하다.
+`huggingface_hub 1.20.1`의 `snapshot_download`·`hf_hub_download`가 둘 다
+`tqdm_class: type[base_tqdm] | None`을 받는다. **클래스를 주면 hub가 인스턴스화해 `update(n)`을
+부른다.**
 
-```bash
-V=$(uv export --directory be/worker --extra models --no-dev --no-hashes --no-emit-project | grep '^huggingface-hub==')
-echo "$V"
-uv run --directory be/worker python - <<'PY'
-import inspect
-from huggingface_hub import snapshot_download, hf_hub_download
-for f in (snapshot_download, hf_hub_download):
-    p = inspect.signature(f).parameters
-    print(f.__name__, "tqdm_class" in p, sorted(p)[:6])
-PY
+소비자 넷이 전부 **모듈 수준** import라 훅 설치가 두 갈래다 (스펙 §6.9):
+
+```python
+def install_hf_progress_hook(writer: str) -> None:
+    """HF 다운로드 진행을 model_readiness로 올린다 (Electron Phase 4 스펙 §6.9).
+
+    `huggingface_hub`에 전역 훅이 없다. `tqdm_class`를 주입하는 것이 유일한 공식 경로이고,
+    소비자는 아무도 그 인자를 넘기지 않으므로 우리가 기본값을 바꿔 끼운다.
+
+    **두 갈래인 이유:** 소비자 넷이 전부 모듈 수준 `from huggingface_hub import …`이다
+    (mlx_whisper/load_models.py:8, sentence_transformers/util/file_io.py:7,
+    pyannote/audio/pipelines/speaker_verification.py:32와 utils/hf_hub.py:27,
+    mlx_lm/utils.py:33). 그 import는 **바인딩 시점이 import 시점**이라, 원본만 바꾸면
+    이미 import된 모듈은 옛 함수를 계속 쥔다.
+
+    그래서 (1) 원본을 바꿔 **아직 import되지 않은** 소비자를 덮고, (2) sys.modules를 훑어
+    **이미 import된** 소비자의 속성도 바꾼다. 호출부는 무거운 모듈을 import하기 **전에**
+    이것을 부른다 — 그래도 (2)가 있어 순서가 어긋나도 동작한다.
+    """
+    import functools
+    import sys
+
+    import huggingface_hub
+    from huggingface_hub.utils import tqdm as base_tqdm
+
+    class _Reporter(base_tqdm):
+        """hub가 파일마다 하나씩 만든다. update(n)이 바이트 증분을 준다."""
+
+        def update(self, n=1):
+            _bump(writer, n)          # 초당 1회 이하로 눌러 model_readiness에 올린다
+            return super().update(n)
+
+    for name in ("snapshot_download", "hf_hub_download"):
+        orig = getattr(huggingface_hub, name)
+        if getattr(orig, "_damwha_hooked", False):
+            continue                  # 두 번 설치해도 안전하다
+        patched = functools.partial(orig, tqdm_class=_Reporter)
+        patched._damwha_hooked = True  # type: ignore[attr-defined]
+        setattr(huggingface_hub, name, patched)
+        # 이미 import된 소비자.
+        for mod in list(sys.modules.values()):
+            if mod is None or mod is huggingface_hub:
+                continue
+            if getattr(mod, name, None) is orig:
+                setattr(mod, name, patched)
 ```
 
-| 결과 | 조치 |
-| --- | --- |
-| `tqdm_class`가 둘 다 있다 | `mlx_lm.utils.snapshot_download`와 `huggingface_hub.snapshot_download`를 `functools.partial(…, tqdm_class=…)`로 교체. **빌드가 시그니처 존재를 assert한다**(build-python.sh 8단계에 한 줄) |
-| 하나만 있거나 없다 | **바이트 진행을 포기한다.** `updated_at` 하트비트만 남기고, 스펙 §6.9와 P4-C6을 "다운로드 중임이 보인다"로 내린다. 스펙 개정이 필요하므로 **사용자에게 알린다** |
+**`functools.partial`은 키워드 기본값을 주는 것이라 소비자가 `tqdm_class`를 명시하면 그쪽이
+이긴다** — 지금은 아무도 안 넘기지만, 넘기게 되면 `TypeError: got multiple values`가 아니라
+조용히 우리 훅이 무시된다. `Step 6-c`의 테스트가 그것을 잡는다.
 
-**이 조사 없이 `install_hf_progress_hook`을 구현하지 않는다.** 스펙 §12가 이것을 미확정으로
-적었다.
+- [ ] **Step 5-d: 빌드가 시그니처를 검사하게 한다**
 
-- [ ] **Step 6: `pyannote_diar.py`의 401·403을 보존한다**
+라이브러리가 `tqdm_class`를 없애면 **`.app`이 아니라 빌드가 깨져야 한다.** `build-python.sh`
+8단계의 진입점 확인에 한 줄:
+
+```python
+import inspect
+from huggingface_hub import hf_hub_download, snapshot_download
+missing = [f.__name__ for f in (snapshot_download, hf_hub_download)
+           if 'tqdm_class' not in inspect.signature(f).parameters]
+if missing:
+    print('  tqdm_class가 없다:', missing); sys.exit(1)
+```
+
+- [ ] **Step 6-c: 훅 테스트**
+
+```python
+def test_hook_covers_a_module_imported_before_install(monkeypatch):
+    """모듈 수준 import는 바인딩 시점이 import 시점이다 — 원본만 바꾸면 늦다."""
+    import types, sys, huggingface_hub
+    fake = types.ModuleType("fake_consumer")
+    fake.snapshot_download = huggingface_hub.snapshot_download   # 설치 **전에** 바인딩
+    sys.modules["fake_consumer"] = fake
+    try:
+        install_hf_progress_hook(writer="t")
+        assert fake.snapshot_download is huggingface_hub.snapshot_download
+        assert getattr(fake.snapshot_download, "_damwha_hooked", False)
+    finally:
+        del sys.modules["fake_consumer"]
+
+
+def test_hook_is_idempotent():
+    import huggingface_hub
+    install_hf_progress_hook(writer="t")
+    once = huggingface_hub.snapshot_download
+    install_hf_progress_hook(writer="t")
+    assert huggingface_hub.snapshot_download is once
+
+
+def test_caller_supplied_tqdm_class_wins_and_that_is_recorded(monkeypatch):
+    # partial의 키워드는 기본값이라 호출자가 명시하면 우리 훅이 조용히 무시된다.
+    # 지금은 아무도 안 넘기지만, 넘기기 시작하면 이 테스트가 먼저 빨개진다.
+    ...
+```
+
+- [ ] **Step 6: `pyannote_diar.py`의 401·403을 보존한다**- [ ] **Step 6: `pyannote_diar.py`의 401·403을 보존한다**
 
 ```python
     def __init__(self, model: str, hf_token: str | None, device: str) -> None:
