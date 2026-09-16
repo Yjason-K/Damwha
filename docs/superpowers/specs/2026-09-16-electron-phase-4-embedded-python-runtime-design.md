@@ -305,7 +305,7 @@ Python 트리는 **거의 안 변하는 런타임+의존성**과 **매 커밋 �
 
 | 층 | 캐시 키 | 내용 |
 | --- | --- | --- |
-| 런타임 | Python 버전 + `BUILD_PREFIX` + `checksums.txt` + **`pyproject.toml`·`uv.lock` 해시** + 스크립트 shasum | 인터프리터 + 의존성 + 재배치 + 서명 |
+| 런타임 | Python 버전 + `checksums.txt` + **`pyproject.toml`·`uv.lock` 해시** + `entitlements.plist` + 스크립트 shasum | 인터프리터 + 의존성 + 재배치 + 서명. **`BUILD_PREFIX`가 없다** — Python은 소스 빌드가 아니라 아카이브 전개라 우리가 정한 prefix가 트리에 없다 |
 | worker | 위 키 + **`be/worker/damwha_worker/` 트리 해시** | `damwha_worker` 패키지 설치 |
 
 worker 층은 런타임 층을 복사한 뒤 패키지만 덮어 설치하고 그 파일만 다시 서명한다.
@@ -318,13 +318,49 @@ worker 층은 런타임 층을 복사한 뒤 패키지만 덮어 설치하고 �
    고정 목록을 뽑아 넘긴다). 스크립트는 버전을 스스로 적지 않는다.
 3. `uv pip install --python <트리> --no-deps <repo>/be/worker` — `damwha_worker` 패키지.
    `--no-deps`인 이유: 2단계가 이미 전부 깔았고, 여기서 해석이 다시 돌면 고정이 흔들린다.
-4. **재배치 3종** — `bin/` 셔뱅 65개를 번들 상대로, `_sysconfigdata*.py`의 prefix,
-   `__pycache__` 760개 삭제. **매 빌드 반복한다.**
-5. **Mach-O 처리** — `LC_RPATH` 58건 삭제, `LC_ID_DYLIB` 64건 정규화. 멱등이다.
-6. **arm64 전수 서명** — 무서명 Mach-O에 `codesign -s - --force`.
-7. **자기 검사** — `codesign --verify --arch arm64`로 0건. `--arch` 없이 부르지 않는다.
-8. **진입점 확인** — `python3.12 -c "import mlx_lm.server, damwha_worker"`가 통과해야 한다.
-   §2.4의 결함이 다시 나면 빌드에서 잡힌다.
+4. **재배치** — §6.1-b가 넷을 정의한다. **매 빌드 반복한다.**
+5. **Mach-O 처리** — 번들 밖 `LC_RPATH` 삭제(Phase 0 실측 58건), `LC_ID_DYLIB` 정규화(64건).
+6. **arm64 전수 서명.** 무서명만이 아니라 전수다 — `install_name_tool`이 서명을 무효로 만들고,
+   무엇을 고쳤는지 추적하는 것보다 전수가 싸고 안전하다.
+7. **자기 검사** — `codesign --verify --arch arm64`로 0건. `--arch` 없이 부르지 않는다
+   (universal 파일의 x86_64 슬라이스 하나 때문에 파일 전체가 `not signed at all`로 보고된다).
+8. **진입점 확인** — `importlib.util.find_spec`으로 `damwha_worker`·`embed_service`·`llm_entry`·
+   `mlx_lm.server`를 **찾는다.** `import`하지 않는다 — 부작용이 있는 모듈이 있으면 빌드가
+   설정을 요구하거나 모델을 받는다. §2.4의 결함이 다시 나면 여기서 잡힌다.
+9. **`__pycache__` 삭제.** 8단계가 만든 것까지 지운다 (§6.1-b 4번).
+10. **스테이징** — 여기서부터 python을 실행하지 않는다.
+
+### 6.1-b 재배치 — "최종 위치가 둘"이 이 절 전체를 정한다
+
+Phase 0의 `build.sh`는 **한 최종 위치에서 relocate를 한 번** 하는 전제로 쓰였다. Phase 4는
+그 전제가 성립하지 않는다 — 한 빌드 산출물이 **dev `desktop/build/python`과 packaged
+`Resources/python` 두 자리**에 놓이고, electron-builder가 복사하는 지점에는 훅을 걸 수 없다.
+게다가 그 사이에 캐시 2층(`rt-*` → `wk-*`)을 거치므로 **빌드 도중의 트리 경로는 전부
+`<저장소>/desktop/.cache/…`**다.
+
+그래서 규칙이 하나다 — **번들 안에 어떤 절대 경로도 굽지 않는다.** 위치는 런타임이 자기
+자리에서 계산한다(`sys.prefix`·`sys.executable`이 그렇게 동작한다).
+
+| # | 대상 | 조작 | 왜 |
+| --- | --- | --- | --- |
+| 1 | `bin/` 콘솔 스크립트 셔뱅 | **위치 독립 형태**(`${0%/*}`, 외부 명령 없음) | 절대 경로를 쓰면 두 자리를 못 덮고 `.app`에 dev 경로가 실린다 |
+| 2 | `_sysconfigdata*.py`의 prefix | **중립 자리표시자** `/damwha-bundled-python`으로 고정 | uv가 설치 시점에 그것을 **캐시 임시 경로**로 다시 쓴다. 그 값에 저장소 경로가 들어 있어 금지 문자열 검사에 걸린다 |
+| 3 | `direct_url.json` | 삭제 | 파일 경로 설치가 남기는 절대 경로 |
+| 4 | `__pycache__` | **빌드의 마지막 python 실행 뒤에** 삭제 | `.pyc`가 `co_filename`으로 컴파일 시점 절대 경로를 담는다 |
+
+**2번이 왜 중립 자리표시자인가.** 실제 경로를 넣을 수 없다(둘이다). 캐시 경로는 저장소를
+담는다. PBS 원본값(`/install`)으로 되돌려도 되지만, **우리가 정한 문자열**이어야 의도된 값임이
+드러나고 금지 문자열 검사의 예외로 올릴 근거가 된다.
+
+무해한 이유: `sysconfig.get_config_var('prefix')`는 **C 확장을 빌드할 때** 헤더·라이브러리를
+찾는 값이고 우리는 런타임에 아무것도 빌드하지 않는다. 모듈 해석은 `sys.prefix`가 하고 그것은
+인터프리터가 자기 위치에서 계산한다. **그래서 P4-C12는 `sysconfig`가 아니라
+`sys.prefix`·`sys.executable`로 판정한다** — Phase 0의 P0-C8이 `sysconfig`까지 본 것은 그쪽이
+재배치 검증 자체를 목적으로 했기 때문이다.
+
+**4번의 시점이 계약이다.** `relocate()` 안에서 지우면 그 뒤의 진입점 확인이 `.pyc`를 다시
+만들고 그것이 그대로 실린다(실측 25개). 순서는 **모든 python 실행 → `__pycache__` 삭제 →
+스테이징**이고, `check-bundle.mjs`가 `Resources/python` 아래 `__pycache__` **0개**를 확인한다.
 
 **의존성 매니페스트.** `be/worker/pyproject.toml`의 `models` extra에 **`mlx-lm`과 `mlx`를
 `==`로 명시 고정**하고 `uv lock`을 갱신한다.
@@ -878,10 +914,10 @@ Phase 2·3의 나머지 규칙은 유지한다 — manual 실패는 자동 재�
 
 | ID | 기준 | 확인 |
 | --- | --- | --- |
-| P4-C12 | 앱의 모든 Python 프로세스가 번들 런타임을 쓴다 | worker·embed·`--once`·`llm_entry`·**capabilities 프로브**가 각자 `sys.executable`·`sys.prefix`를 로그에 자기 보고한다. 다섯 다 번들 트리 아래. capabilities 프로브는 `capabilities.py:68`의 `[sys.executable, "-c", …]`라 별도 프로세스이므로 `_PROBE_CODE`에 그 보고를 넣는다. embed는 uvicorn이 로깅을 잡기 전에 찍히지 않게 `install_logging` 뒤에 둔다. **`sys.path`는 "site-packages가 번들 아래" + "packaged에 저장소 경로 0건"으로 판정한다** (cwd·dev `PYTHONPATH`는 정상 항목이다) |
+| P4-C12 | 앱의 모든 Python 프로세스가 번들 런타임을 쓴다 | worker·embed·`--once`·`llm_entry`·**capabilities 프로브**가 각자 `sys.executable`·`sys.prefix`를 로그에 자기 보고한다. 다섯 다 번들 트리 아래. **`sysconfig`는 보지 않는다** — §6.1-b가 그 값을 중립 자리표시자로 고정한다. capabilities 프로브는 `capabilities.py:68`의 `[sys.executable, "-c", …]`라 별도 프로세스이므로 `_PROBE_CODE`에 그 보고를 넣는다. embed는 uvicorn이 로깅을 잡기 전에 찍히지 않게 `install_logging` 뒤에 둔다. **`sys.path`는 "site-packages가 번들 아래" + "packaged에 저장소 경로 0건"으로 판정한다** (cwd·dev `PYTHONPATH`는 정상 항목이다) |
 | P4-C13 | 번들 밖 런타임·도구를 참조하지 않는다 | (a) 자식 PATH에 개발 도구 경로 0건(§6.2, 구조적 증명). (b) 처리 전 구간 `lsof -p`에 `/opt/homebrew`·`.venv`·`~/.local`·`/Library/Frameworks/Python.framework` 0건. (c) 처리 중 `ps -axo args` 주기 샘플링으로 **모든 자식 실행 경로**가 번들 아래 |
 | P4-C14 | 모델·캐시가 `.app` 밖이고 `.app`을 교체해도 재사용된다 | `.app` 지우고 다시 빌드·설치 → 모델 재다운로드 0 |
-| P4-C15 | `.app`에 arm64 무서명 Mach-O 0건, 개발 머신 경로 문자열 0건, entitlement 적용 | `check-bundle.mjs` — `codesign --verify --arch arm64` 전수, `codesign -d --entitlements -`, 금지 문자열 스캔 |
+| P4-C15 | `.app`에 arm64 무서명 Mach-O 0건, 개발 머신 경로 문자열 0건, entitlement 적용, `Resources/python` 아래 `__pycache__` 0개 | `check-bundle.mjs` — `codesign --verify --arch arm64` 전수, `codesign -d --entitlements -`, 금지 문자열 스캔(**기존 4번 검사가 Resources 전체를 훑는다**), `find … -name __pycache__` |
 | P4-C30 | `config.json`으로 금지 env를 다시 넣을 수 없다 | `config.json`에 `PYTHONHOME`·`HF_HUB_CACHE`를 적고 실행 → 자식 env에 없고 화면에 경고 |
 | P4-C16 | packaged가 저장소 체크아웃 없이 뜬다 | 저장소를 임시로 옮긴 뒤 `.app` 실행. 폴더 선택창이 뜨지 않고 정상 기동 |
 
@@ -934,7 +970,7 @@ Phase 2·3의 나머지 규칙은 유지한다 — manual 실패는 자동 재�
 | `src/services/worker-discovery.ts` | `--run-id` 판독, 소유/외부/고아 셋 |
 | `src/services/worker.ts`·`embed.ts` | `.env`·uv 검사 제거, `-m` 진입, `--run-id`, 채택 규칙 |
 | `src/services/worker-shutdown.ts` | A층 정리 (핸들을 쥔 경우) |
-| `src/app/quit-flow.ts` | **B층 — 앱 종료 회수.** 핸들 유무와 무관하게 내 run-id를 전부 훑는다 |
+| `src/main.ts`의 `stopServices()` | **B층 — 앱 종료 회수.** 핸들 유무와 무관하게 내 run-id를 전부 훑는다. `quit-flow.ts`가 아니다 — 거기에는 `stopAll`이 없고, `main.ts:1230`의 `.catch`가 받는 "`stopServices` 자체가 거부한" 경로를 놓친다 |
 | `src/services/api.ts` | `repoRoot` nullable 전파 |
 | `src/services/supervisor.ts` | 다운로드 중 유예 계산, 서비스 재시작 경로 |
 | `src/config/config.ts` | `UV_BIN` 제거, `HF_TOKEN` 앱 소유 키, env 위생 |
@@ -1067,7 +1103,9 @@ pnpm desktop:build
 ## 16. 산출물
 
 - 이 스펙.
-- 구현 계획 `docs/superpowers/plans/2026-09-16-electron-phase-4-embedded-python-runtime.md`.
+- 구현 계획 **둘** — `plans/2026-09-16-electron-phase-4-bundled-runtime.md`(빌드·번들)과
+  `plans/2026-09-16-electron-phase-4-runtime-integration.md`(실행·앱·검증). 앞의 것이 끝나야
+  뒤가 의미 있다.
 - 결과 문서 `docs/superpowers/reports/2026-09-16-electron-phase-4-embedded-python-runtime-results.md`.
 - 제품 코드 (§10).
 - 로드맵·`desktop/CLAUDE.md`·`be/worker` 문서 갱신.
@@ -1185,6 +1223,35 @@ Phase 4는 반대 제약을 받는다 — 한 빌드 산출물이 두 자리(dev
 **`.app` 안에 dev 트리 경로가 실려** 금지 문자열 검사를 위반한다. 그래서 위치 독립 형태
 (`${0%/*}`, 외부 명령 없음)를 쓴다. 리뷰어가 제한된 PATH·공백 경로에서 동작을 실측했다.
 
-### 17.4 메인 세션 리뷰
+### 17.4 외부 리뷰 — 4회차 (스펙 `a8ab4f3` + 계획 `bcf172b`)
+
+**판정: 확정 불가 — blocking 3건.** 메인 세션이 재확인했고 셋 다 사실이었다.
+
+| 지적 | 확인 | 반영 |
+| --- | --- | --- |
+| **재배치가 캐시 임시 트리에 적용돼 `.app`에 저장소 경로가 실린다** | 리뷰어가 PBS 트리로 계획 순서를 재현 — `_sysconfigdata` prefix가 `<repo>/desktop/.cache/…`로 남고 진입점 확인이 만든 `.pyc` 25개가 같은 경로를 담는다. `check-bundle.mjs:90`의 기존 4번 검사가 Resources 전체를 훑어 잡는다 | **이 스펙 §6.1-b 신설** |
+| 훅의 `sys.modules` 훑기가 `getattr`로 던진다 | **메인 세션 실측 — 92개 모듈이 `ModuleNotFoundError`.** transformers의 지연 모듈이 `__getattr__`에서 서브모듈을 import한다. worker·embed·`llm_entry` 셋이 기동 첫머리에서 부르므로 세 프로세스가 전부 죽는다 | 계획 — `vars(mod).get(name)`으로 |
+| `parseDamwhaProcesses` 시그니처가 네 모양으로 갈린다 | 인터페이스·테스트·구현·호출부 | 계획 — §계약 한 곳에만 정의 |
+
+**§6.1-b가 이 개정의 중심이다.** 셔뱅은 §17.3에서 "최종 위치가 둘"이라는 제약을 인식해 위치
+독립 형태로 갔는데, **같은 제약을 받는 `_sysconfigdata`와 `.pyc`에는 그 사고를 적용하지
+않았다.** Phase 0의 `build.sh`가 "한 최종 위치에서 relocate 한 번"을 전제로 쓰였고, 거기에 2층
+캐시·세 번의 `mv`/`ditto`·두 최종 위치를 얹으면서 전제가 깨진 것을 스펙이 다루지 않았다.
+§6.1-b는 그것을 규칙 하나로 통일한다 — **번들 안에 어떤 절대 경로도 굽지 않는다.**
+
+### 17.5 계획 구조 변경 (2026-09-16)
+
+리뷰어의 진단을 받아들여 셋을 바꿨다. 4회차까지 blocking **11건** 중 **8건**이 "계획에 문자
+그대로 적었지만 한 번도 실행하지 않은 코드"에서 나왔다.
+
+1. **§6.1-b 신설** (위).
+2. **계획을 둘로 나눴다** — `-bundled-runtime`(Task 1–7)과 `-runtime-integration`(Task 1–12).
+   5,249줄 한 문서에서는 한 계약의 사본이 인터페이스·테스트·구현·호출부 네 곳에 흩어지고,
+   개정이 그중 하나만 고치면 나머지가 어긋났다.
+3. **두 규칙을 계획 머리에 못 박았다** — (a) 계획에 박는 코드는 확정 전에 최소 한 번 실행한
+   것만이고 `[실행됨: <명령>]`을 붙인다, (b) 시그니처는 §계약 한 곳에만 적는다. 그래서 Part 2는
+   셸 대신 **시그니처·계약·테스트 표**만 싣고 구현 본문은 "구현 시 작성"이다.
+
+### 17.6 메인 세션 리뷰
 
 (작성 예정.)
