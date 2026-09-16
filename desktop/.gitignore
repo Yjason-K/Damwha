@@ -1,3 +1,5 @@
 # pnpm deploy 산출물과 electron-builder 산출물. dist/는 루트 .gitignore가 덮는다.
 build/
 out/
+# build-postgres.sh의 소스·중간 산출물·완성 트리 캐시 (Electron Phase 3 스펙 §6.8).
+.cache/

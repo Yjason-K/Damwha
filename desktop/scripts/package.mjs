@@ -14,6 +14,11 @@ function run(cmd, args, cwd = repo, extraEnv = {}) {
   execFileSync(cmd, args, { cwd, stdio: "inherit", env: { ...process.env, ...extraEnv } });
 }
 
+// 내장 PostgreSQL 트리를 desktop/build/postgres에 스테이징한다. extraResources(from: build)가 그대로 Resources/postgres로
+// 싣는다 (Electron Phase 3 스펙 §6.8). 캐시가 있으면 복사만 한다. 번들 쪽 준비가 실패하면 여기서 멈춘다 — PG가 없는
+// .app은 첫 실행에서야 "내장 데이터베이스 실행 파일이 없어요"로 드러난다.
+run("bash", [path.join("scripts", "build-postgres.sh")], desktop);
+
 // desktop 자신을 **먼저, 깨끗하게** 컴파일한다. electron-builder는 package.json의 main(dist/main.js)과
 // dist/ 전체를 그대로 싣는데, 루트 `pnpm build`에는 desktop의 컴파일이 없다(desktop에는 build 스크립트가
 // 없고 compile만 있다). 이 줄이 없던 2026-09-13, 그날 새벽의 dist가 그대로 실려 그 뒤 소스 커밋

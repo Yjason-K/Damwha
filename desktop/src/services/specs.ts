@@ -1,12 +1,14 @@
 import { apiSpec, type ApiDeps } from "./api";
 import { embedSpec, type EmbedDeps } from "./embed";
-import { postgresSpec, type DockerRunner } from "./postgres";
 import { workerSpec, type WorkerDeps } from "./worker";
 import type { ServiceSpec } from "./types";
 
 export interface SpecDeps {
-  /** postgres가 쓸 docker 실행기. 경로는 main.ts가 붙인다. */
-  docker: DockerRunner;
+  /**
+   * 모드가 고른 postgres spec — 내장(embeddedPostgresSpec) 또는 외부 디버그(externalPostgresSpec). main.ts가 감독자를
+   * 만들 때 한 번 고른다 (Phase 3 스펙 §6.1). 이 배열의 판정(종료 순서·게이트 집합)은 어느 쪽이든 같다.
+   */
+  postgres: ServiceSpec;
   api: ApiDeps;
   embed: EmbedDeps;
   worker: WorkerDeps;
@@ -22,18 +24,18 @@ export interface SpecDeps {
  * - **§6.9 종료 순서**: 선언 순서의 **역순**이 곧 종료 순서다(supervisor.stopAll이 ordered를
  *   reverse한다). 스펙이 `worker → embed → api`를 요구하므로 여기는
  *   `postgres → api → embed → worker`여야 한다. embed가 worker보다 먼저 죽으면 worker의
- *   진행 중 job이 임베딩을 잃는다. postgres는 마지막이고 postgresSpec.stop()은 의도적으로
- *   아무것도 하지 않는다 — 컨테이너는 앱의 소유가 아니다.
+ *   진행 중 job이 임베딩을 잃는다. postgres는 마지막이다 — 내장 모드면 클라이언트가 모두
+ *   내려간 뒤 fast 종료로 끝난다.
  *
  * main.ts에 두면 어떤 테스트도 이 배열을 부를 수 없다(electron을 값으로 import하는 파일은
- * vitest가 못 불러온다 — shell-window.ts:4). 실제로 그 자리에 있는 동안 선언 순서를
+ * vitest가 못 불러온다 — shell-window.ts:1). 실제로 그 자리에 있는 동안 선언 순서를
  * `postgres → api → worker → embed`로 바꾸는 변이가 235개 초록불 아래 살아남았다
- * (Task 12 리뷰 N5). listExternalWorkers를 services/external.ts로 옮긴 것과 같은 분리다 —
- * main.ts에는 의존(docker 경로·probe·ps 왕복)을 만드는 배선만 남는다.
+ * (Task 12 리뷰 N5). listExternalWorkers를 services/worker-discovery.ts로 옮긴 것과 같은 분리다 —
+ * main.ts에는 의존(postgres 번들 경로·probe·ps 왕복)을 만드는 배선만 남는다.
  */
 export function buildSpecs(deps: SpecDeps): ServiceSpec[] {
   return [
-    postgresSpec(deps.docker),
+    deps.postgres,
     apiSpec(deps.api),
     embedSpec(deps.embed),
     workerSpec(deps.worker),

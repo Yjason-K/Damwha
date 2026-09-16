@@ -8,7 +8,7 @@
          스타일을 한 글자라도 고치면 해시를 다시 계산해야 한다 — tests/shell-html.test.ts가 어긋남을 잡는다.
          임베더가 실행하는 스크립트(main의 executeJavaScript)는 script-src를 거치지 않는다고 본다 — headless
          Chrome에서 CDP Runtime.evaluate로 이 정책 아래 렌더를 확인했고, Electron에서의 확인은 packaged 점검 몫이다. -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-JFWV4QLIr0ySLmNq+RAfLMwZvt12qeRzAxhqLHmP9vw='; style-src 'sha256-Qz7cNLlq1WfuHKTT5usxWJ+qEcq7LfPxuxtRCjG3mdU='; base-uri 'none'; form-action 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-mxYCoCGmZQmAgKDHtiq3QCO1EKiiFYmog6uEhmSJUmQ='; style-src 'sha256-Qz7cNLlq1WfuHKTT5usxWJ+qEcq7LfPxuxtRCjG3mdU='; base-uri 'none'; form-action 'none'" />
     <title>담화</title>
     <style>
       :root { color-scheme: light dark; }
@@ -48,13 +48,6 @@
         quitting: [
           "담화를 종료하고 있어요",
           "진행 중인 작업을 안전한 지점까지 마무리하는 중이에요. 몇 분이 걸릴 수 있어요 — 그동안 강제 종료하지 말아 주세요.",
-        ],
-        // 앱이 `docker compose up -d`로 Postgres를 직접 띄운다 (Phase 2). 터미널 명령을 안내하면
-        // 거짓이다. 이 상태는 원인이 Docker 데몬일 때만 온다 (status-view.ts의 shellStatusFrom, P2-C7) —
-        // DOCKER_BIN이 틀린 것 같은 다른 postgres 실패는 failed 화면으로 가고, 거기서는 해결 줄이 말한다.
-        "db-unreachable": [
-          "데이터베이스에 연결할 수 없어요",
-          "앱이 Docker로 데이터베이스를 직접 띄워요. Docker Desktop이 실행 중인지 확인해 주세요.",
         ],
         failed: ["담화를 시작하지 못했어요", "아래 내용이 원인이에요."],
       };

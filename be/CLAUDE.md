@@ -377,6 +377,7 @@ uv run --with jiwer python scripts/eval_stt.py --wav <16k.wav> --json3 <ref> --o
 
 - Follow the plan doc's task structure and the existing per-domain repository/service/controller split when adding features.
 - Migrations are plain SQL files in `src/database/migrations/` applied in filename order by `migrate.ts` (tracked in a `_migrations` table). Add new numbered files; don't edit applied ones.
+- **`migrate.ts`의 CLI 출력은 데스크톱 앱과의 계약이다.** `node dist/database/migrate.js [--status]`(dev는 `pnpm be:migrate [-- --status]`)는 stdout 마지막 줄에 `{"applied":N,"pending":[…],"unknown":[…]}`를 찍는다 — `--status`면 상태만, 인자가 없으면 적용한 **뒤의** 상태다. Electron 앱의 마이그레이션 게이트(`desktop/src/services/migration-gate.ts`)가 이 줄을 파싱할 수 있어야 통과하고, `unknown`이 비어 있지 않으면(더 새 코드가 올린 스키마) 거부한다. `runMigrations`는 한 연결에서 `pg_advisory_lock`을 쥐고 적용한다 — 앱이 죽어 살아남은 러너와 다음 실행의 러너가 겹쳐도 파일마다 한 번만 적용된다. `test/migrate-status.spec.ts`가 셋을 고정한다.
 - Enums are `text` + `CHECK` (not native Postgres enums) so values can evolve; keep the zod/pydantic contracts and CHECK lists in sync.
 - **Keep the API/worker split clean.** The ML pipeline, ffmpeg audio-integrity validation, and worker-side status transitions live in the Python worker (`worker/`), not the NestJS `src/`. Don't add ML or cloud calls to `src/`; both halves keep the privacy premise (local-only, no external network) intact.
 

@@ -9,6 +9,7 @@ per-package — read the one for the subtree you are editing before changing cod
 | --- | --- | --- |
 | `be/` | `damwha-be` | NestJS 10 API over Postgres (pgvector + pg_bigm), raw SQL, no ORM. Read [`be/CLAUDE.md`](be/CLAUDE.md). |
 | `be/worker/` | *(uv project)* | Python 3.12 ML worker. **Not** a pnpm workspace member — it has no `package.json` and is driven by uv. |
+| `desktop/` | `damwha-desktop` | Electron macOS 앱 — 번들 PostgreSQL·API·worker·embed를 감독한다. Read [`desktop/CLAUDE.md`](desktop/CLAUDE.md). |
 | `fe/` | `damwha-fe` | React 19 + Vite 8 + Tailwind 4 SPA. Read [`fe/CLAUDE.md`](fe/CLAUDE.md) and [`fe/DESIGN.md`](fe/DESIGN.md). |
 | `packages/contracts/` | `@damwha/contracts` | Wire enums both Node packages must agree on (`SUMMARY_MODELS`, `WHISPER_MODELS`, `PRESET_NAMES`, `DEVICES`). Dependency-free, value-only. |
 

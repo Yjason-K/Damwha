@@ -1,5 +1,6 @@
-import { CAUSES } from "../causes";
-import { exitCauseBlock } from "../stderr";
+import { CAUSES } from "../diagnostics/causes";
+import { exitCauseBlock } from "../diagnostics/stderr";
+import { recoveryOf } from "./failure";
 import type {
   ExternalState,
   LaunchContext,
@@ -103,9 +104,15 @@ interface Runtime {
 
 export function createSupervisor(
   specs: readonly ServiceSpec[],
-  ctx: LaunchContext,
+  baseCtx: Omit<LaunchContext, "signal">,
   hooks: SupervisorHooks,
 ) {
+  /**
+   * 기동 중단 신호 (Phase 3 스펙 §6.4). 호출자의 ctx 객체에 **제자리로** 붙인다 — main.ts는 그 객체의 env를 재시도마다
+   * 다시 채우므로(refreshEnv) 새 객체를 만들면 둘이 갈라진다.
+   */
+  const aborter = new AbortController();
+  const ctx: LaunchContext = Object.assign(baseCtx, { signal: aborter.signal });
   const ordered = orderOf(specs);
   const runtimes = new Map<ServiceId, Runtime>(
     ordered.map((spec) => [
@@ -155,12 +162,12 @@ export function createSupervisor(
 
   const applyReadiness = (id: ServiceId, r: ReadinessResult): boolean => {
     if (r.kind === "ready") {
-      set(id, { process: "running", health: "ok", detail: undefined });
+      set(id, { process: "running", health: "ok", detail: undefined, recovery: undefined });
       return true;
     }
     if (r.kind === "degraded") {
       // 재시작을 유발하지 않는다 — 재시작해도 의존이 돌아오지 않으면 같고 백오프만 태운다.
-      set(id, { process: "running", health: "degraded", detail: r.detail });
+      set(id, { process: "running", health: "degraded", detail: r.detail, recovery: undefined });
       return true;
     }
     return false;
@@ -198,12 +205,12 @@ export function createSupervisor(
       try {
         last = await rt.spec.readiness(result, ctx);
       } catch (e) {
-        // 준비 판정도 바깥 명령을 돌린다 (postgres는 docker compose ps, api는 HTTP). 그것이
+        // 준비 판정도 바깥 자원을 본다 (postgres는 postmaster.pid를 읽고 psql로 확인, api는 HTTP). 그것이
         // 던지면 bringOnce가 통째로 거부해 아래의 실패 정리 — 자식을 치우고 rt.result를 null로
         // 되돌리는 줄 — 이 건너뛰어지고, 남은 rt.result가 재진입 가드에 걸려 그 서비스의 재시도를
         // 앱이 사는 내내 막는다. 게이트면 그 거부가 runFrom을 타고 start()까지 올라간다.
         // detectExternal과 probeHealth가 이미 그렇게 하듯, 예외도 실패 판정으로 받는다.
-        last = { kind: "failed", detail: CAUSES.readinessThrew.text(reason(e)) };
+        last = { kind: "failed", detail: CAUSES.readinessThrew.text(reason(e)), recovery: recoveryOf(e) };
         log(`${rt.spec.id}: 준비 확인에서 예외 — ${reason(e)}`);
       }
       if (applyReadiness(rt.spec.id, last)) return true;
@@ -213,7 +220,8 @@ export function createSupervisor(
     }
 
     const detail = last.kind === "failed" ? last.detail : CAUSES.readyTimeout.text;
-    set(rt.spec.id, { process: "failed", health: "unknown", detail });
+    const recovery = last.kind === "failed" ? last.recovery : undefined;
+    set(rt.spec.id, { process: "failed", health: "unknown", detail, recovery });
     return false;
   }
 
@@ -339,7 +347,7 @@ export function createSupervisor(
       // 외부 탐지도 바깥 명령을 돌린다 (worker는 ps). 여기서 던지면 서비스가 화면 문구도
       // 재시작도 없이 영영 기동 전 상태에 고정된다 — launch와 같게 실패로 적는다.
       const detail = CAUSES.externalCheckFailed.text(reason(e));
-      set(spec.id, { process: "failed", health: "unknown", detail });
+      set(spec.id, { process: "failed", health: "unknown", detail, recovery: recoveryOf(e) });
       log(`${spec.id}: detectExternal 실패 — ${reason(e)}`);
       return false;
     }
@@ -351,7 +359,7 @@ export function createSupervisor(
       return true;
     }
 
-    set(spec.id, { process: "starting", health: "unknown" });
+    set(spec.id, { process: "starting", health: "unknown", recovery: undefined });
     if (external.kind === "adopt") {
       // 이미 떠 있는 외부 인스턴스를 쓴다 — launch()를 부르면 그 옆에 우리 것을 하나 더
       // 띄우는 꼴이라 "죽이지 않는다"는 약속과 어긋난다. owned를 false로 둬 stopAll이
@@ -363,7 +371,7 @@ export function createSupervisor(
         rt.result = await spec.launch(ctx);
       } catch (e) {
         const detail = reason(e);
-        set(spec.id, { process: "failed", health: "unknown", detail });
+        set(spec.id, { process: "failed", health: "unknown", detail, recovery: recoveryOf(e) });
         log(`${spec.id}: 기동 실패 — ${detail}`);
         return false;
       }
@@ -396,14 +404,15 @@ export function createSupervisor(
     // 기동 중 실패한 **게이트**에는 재시작을 걸지 않는다. start()는 이미 반환했고 창은 실패
     // 화면이므로, 백오프 뒤 이 서비스만 running이 되어도 뒤 서비스는 영원히 안 뜬다. 그
     // 경우의 복구는 메뉴의 "다시 시도"다 (스펙 §6.8) — retry()가 그 진입점이다.
-    if (!spec.gate || rt.everReady) scheduleRestart(spec, "기동 실패");
+    // manual 실패에도 걸지 않는다 — 같은 판정이 반복되고, 반복이 도구를 또 부른다 (Phase 3 스펙 §6.7).
+    if ((!spec.gate || rt.everReady) && rt.status.recovery !== "manual") scheduleRestart(spec, "기동 실패");
     return false;
   }
 
   /**
    * ready 이후에 죽으면 백오프로 다시 띄운다. 상한을 넘으면 failed로 고정하고 메뉴의 재시도를
-   * 기다린다 (스펙 §6.8). postgres는 restart가 "never"다 — compose의 restart: unless-stopped가
-   * 이미 그 일을 하고, 감독자가 둘이면 같은 컨테이너를 다툰다.
+   * 기다린다 (스펙 §6.8). postgres도 이 경로를 탄다 — 내장 어댑터의 restart가 [3s, 8s, 20s]이고,
+   * 재시작도 launch()를 거치므로 고아·낡은 락 판정을 매번 다시 한다 (Phase 3 스펙 §6.4 재시작).
    */
   function scheduleRestart(spec: ServiceSpec, why: string): void {
     if (spec.restart === "never" || stopping) return;
@@ -437,6 +446,7 @@ export function createSupervisor(
         process: "failed",
         health: "unknown",
         detail: exitedDetail(code, handle.stderrTail()),
+        recovery: undefined,
       });
       rt.result = null;
       scheduleRestart(rt.spec, `종료 (코드 ${code})`);
@@ -498,6 +508,9 @@ export function createSupervisor(
 
   async function stopAll(plan: StopPlan): Promise<StopOutcome> {
     stopping = true;
+    // 진행 중인 launch() 안의 도구를 먼저 끝낸다. 아래 pending 대기가 그것을 기다리므로, 순서가 뒤면 멈춘 도구 하나가
+    // 종료 전체를 붙잡는다 (Phase 3 스펙 §6.4).
+    aborter.abort();
     for (const t of timers) clearTimeout(t);
     timers.clear();
     // 진행 중인 bring이 아직 있을 수 있다. 기다리지 않으면 그것이 **stopAll이 반환한 뒤에**

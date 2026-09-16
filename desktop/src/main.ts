@@ -4,25 +4,25 @@ import * as fs from "fs";
 import * as net from "net";
 import * as path from "path";
 import { promisify } from "util";
-import { loadConfig, type ApiEnv } from "./config";
-import { createConfigReloader } from "./config-reload";
+import { loadConfig, withoutDbKeys, type ApiEnv, type DatabaseMode } from "./config/config";
+import { createConfigReloader } from "./config/config-reload";
 import {
   PROBE_TIMEOUT_MS,
   READY_INTERVAL_MS,
   READY_TIMEOUT_MS,
   waitForReady,
-} from "./readiness";
-import type { ApiHandle } from "./api-process";
-import { launchVite } from "./vite-process";
-import { lastMeaningfulLine } from "./stderr";
-import { createServicesWindow, showStatus, type ShellStatus } from "./shell-window";
-import { CAUSES } from "./causes";
-import { failureDetail, servicesView, shellStatusFrom } from "./status-view";
-import { createStatusWindow, mayAutoOpen } from "./status-window";
-import { applyNavigationBoundary, applyPermissionBoundary } from "./permissions";
-import { mayRenderShell } from "./shell-latch";
-import { maySpawnServices } from "./spawn-guard";
-import { decideMenuRetry, gateUp, openWindowFlow } from "./window-flow";
+} from "./process/readiness";
+import type { ProcessHandle } from "./process/handle";
+import { launchVite } from "./dev/vite-process";
+import { lastMeaningfulLine } from "./diagnostics/stderr";
+import { createServicesWindow, showStatus, type ShellStatus } from "./windows/shell-window";
+import { CAUSES } from "./diagnostics/causes";
+import { failureDetail, servicesView, shellStatusFrom } from "./windows/status-view";
+import { createStatusWindow, mayAutoOpen } from "./windows/status-window";
+import { applyNavigationBoundary, applyPermissionBoundary } from "./windows/permissions";
+import { mayRenderShell } from "./windows/shell-latch";
+import { maySpawnServices } from "./app/spawn-guard";
+import { decideMenuRetry, gateUp, openWindowFlow } from "./app/window-flow";
 import {
   createFlowLatch,
   graceExpiryPrompt,
@@ -30,26 +30,28 @@ import {
   runCloseFlow,
   runQuitFlow,
   type QuitNotice,
-} from "./quit-flow";
-import {
-  askIsRecording,
-  captureDescendants,
-  hasOnceChild,
-  stopWorkerProcess,
-} from "./shutdown";
-import { installMenu } from "./menu";
+} from "./app/quit-flow";
+import { captureDescendants, stopWorkerProcess } from "./services/worker-shutdown";
+import { askIsRecording } from "./windows/recording-bridge";
+import { installMenu } from "./windows/menu";
 import { createSupervisor } from "./services/supervisor";
-import { verifyOwnListener as checkOwnListener } from "./services/own-listener";
+import { verifyOwnListener as checkOwnListener } from "./process/own-listener";
+import { descendantPids, listenerPids } from "./process/process-tree";
 import { buildSpecs } from "./services/specs";
-import {
-  listExternalWorkers as scanExternalWorkers,
-  probeEmbedContract,
-} from "./services/external";
-import { findExecutable, searchDirs } from "./services/resolve";
+import { hasOnceChild, listExternalWorkers as scanExternalWorkers } from "./services/worker-discovery";
+import { probeEmbedContract } from "./services/embed-probe";
+import { findExecutable, searchDirs } from "./process/executables";
 import { createMigrationCheckWatch } from "./services/api";
-import { isRepoRoot } from "./repo-root";
-import { rotateIfNeeded } from "./logs";
-import { freePort } from "./port";
+import { isRepoRoot } from "./config/repo-root";
+import { rotateIfNeeded } from "./diagnostics/logs";
+import { freePort } from "./process/ports";
+import { mayAutoRetry } from "./app/retry-policy";
+import { devMigrationRunner, packagedMigrationRunner } from "./services/postgres/migration-runner";
+import { runMigrationGate } from "./services/postgres/migration-gate";
+import { DB_NAME, DB_SUPERUSER, pgBinaries, pgLayout } from "./services/postgres/layout";
+import { psInfo, spawnPostmaster, stopOrphanPostmaster } from "./services/postgres/handle";
+import { embeddedPostgresSpec, externalPostgresSpec, PG_FAST_GRACE_MS, PG_IMMEDIATE_GRACE_MS } from "./services/postgres/service";
+import { runTool } from "./process/tool-runner";
 import type {
   LaunchContext,
   LaunchResult,
@@ -96,7 +98,7 @@ const VITE_ORIGIN = "http://localhost:5173";
 
 let win: BrowserWindow | null = null;
 /** dev에서만 쓰인다. packaged는 API 자신의 origin을 로드하므로 Vite가 없다. */
-let vite: ApiHandle | null = null;
+let vite: ProcessHandle | null = null;
 /**
  * 마지막으로 Vite에 준 API base. VITE_API_BASE_URL은 Vite 기동 시점에 고정되므로,
  * 포트 폴백으로 API origin이 바뀌면 이 값과 비교해 Vite를 재기동할지 정한다.
@@ -135,16 +137,18 @@ let supervisor: ReturnType<typeof createSupervisor> | null = null;
  * 읽어 ctx.env에 얹을 때 "파일에서 온 값"과 "prepare()가 옮긴 값"을 가르는 기준이 baseline이다
  * (config.ts의 refreshEnv).
  */
-let launchCtx: { ctx: LaunchContext; baseline: ApiEnv } | null = null;
+let launchCtx: { ctx: Omit<LaunchContext, "signal">; baseline: ApiEnv; mode: DatabaseMode } | null = null;
 /**
  * "이 값은 앱을 다시 켜야 바뀌어요" 안내. 재적용기가 매번 다시 계산하므로 어긋남이 풀리면
  * 저절로 null이 된다. 화면이 이것을 말하지 않으면 사용자는 자기 수정이 왜 안 먹는지 알 길이
  * 없고, 그 침묵이 재리뷰 §4-1의 절반이었다.
  */
 let restartNotice: string | null = null;
+/** config.json이 말했지만 앱이 쓰지 않은 값의 경고(loadConfig의 warning). 화면과 상태 창의 안내 줄에 남긴다. */
+let configWarning: string | null = null;
 /**
  * 종료 전에 찍어 둔 worker 자손 pid. `undefined`와 빈 Set은 **다른 뜻**이다 —
- * shutdown.ts의 knownDescendants 주석에 있다.
+ * worker-shutdown.ts의 knownDescendants 주석에 있다.
  *
  * 이 변수가 있는 이유(이월 결함 N2): supervisor가 먼저 죽으면 그 `--once` 자식과 그것이
  * 띄운 `mlx_lm.server`는 pid 1로 재부모화되어 **그 뒤 어떤 ppid BFS에도 보이지 않는다.**
@@ -346,7 +350,7 @@ function ownWorkerHandle() {
 
 /**
  * supervisor가 아직 살아 있는 지금 자손을 찍어 둔다. 판정(살아 있을 때만 찍는다, 실패가
- * 이전 성공을 덮지 않는다)은 shutdown.ts에 있다 — 여기 두면 어떤 테스트도 부를 수 없다.
+ * 이전 성공을 덮지 않는다)은 services/worker-shutdown.ts에 있다 — 여기 두면 어떤 테스트도 부를 수 없다.
  */
 async function captureWorkerDescendants(): Promise<void> {
   const handle = ownWorkerHandle();
@@ -362,7 +366,7 @@ async function captureWorkerDescendants(): Promise<void> {
  * 분석 중인가 — 앱이 소유한 worker에 `--once` 자식이 있는가. 새 API 엔드포인트를 만들지
  * 않는다. 외부 worker가 하는 일은 우리가 소유하지 않으므로 판정 대상이 아니다 (스펙 §6.9).
  *
- * 판정 자체는 shutdown.ts의 hasOnceChild에 있다. 여기 남는 것은 ps 왕복뿐이다.
+ * 판정 자체는 services/worker-discovery.ts의 hasOnceChild에 있다. 여기 남는 것은 ps 왕복뿐이다.
  */
 async function isAnalysing(): Promise<boolean> {
   const pid = ownWorkerHandle()?.pid;
@@ -387,7 +391,7 @@ async function isAnalysing(): Promise<boolean> {
 async function isRecordingIn(target: BrowserWindow): Promise<boolean> {
   if (target.isDestroyed()) return false;
   // 상한이 없으면 봉쇄된 렌더러 하나가 ⌘Q와 ⌘W를 통째로 막는다. 그 판정(거부는 "아니오",
-  // 시간 초과는 "예")은 shutdown.ts의 askIsRecording에 있다 — 여기 두면 부를 수가 없다.
+  // 시간 초과는 "예")은 windows/recording-bridge.ts의 askIsRecording에 있다 — 여기 두면 부를 수가 없다.
   return askIsRecording(
     () => target.webContents.executeJavaScript("Boolean(window.__damwha_desktop?.isRecording?.())"),
     {
@@ -468,7 +472,7 @@ async function showQuitNotice(notice: QuitNotice): Promise<void> {
 }
 
 /**
- * 앱이 소유한 worker의 종료 절차 (스펙 §6.9). 판정은 전부 shutdown.ts에 있다.
+ * 앱이 소유한 worker의 종료 절차 (스펙 §6.9). 판정은 전부 services/worker-shutdown.ts에 있다.
  */
 function stopOwnWorker(result: LaunchResult, plan: StopPlan): Promise<StopOutcome> {
   const handle = result.handle;
@@ -630,59 +634,9 @@ function isPortOccupied(port: number): Promise<boolean> {
   });
 }
 
-/** `lsof -sTCP:LISTEN`으로 그 포트에서 실제로 LISTEN 중인 pid들을 얻는다. 매치가
- *  없으면 lsof가 exit 1을 내는데, 이는 "리스너 없음"과 같은 뜻이라 빈 배열로 다룬다. */
-async function listenerPids(port: number): Promise<number[]> {
-  try {
-    const { stdout } = await execFileAsync(
-      "/usr/sbin/lsof",
-      ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"],
-      { timeout: 1_000 },
-    );
-    return stdout
-      .split("\n")
-      .map((line) => Number(line.trim()))
-      .filter((pid) => Number.isInteger(pid) && pid > 0);
-  } catch {
-    return [];
-  }
-}
-
-/**
- * rootPid의 모든 자손 pid를 `ps`의 pid/ppid 목록에서 BFS로 모은다. 개발 모드의 자식은
- * pnpm → nest(CLI) → node(dist/main) 체인이라, 실제로 포트를 bind하는 것은 추적 중인
- * pid의 손자다 — 직계 비교만으로는 dev를 오판한다(실측: Fix round 1 보고서).
- *
- * **root 자신은 결과에 들어 있지 않다.** 부르는 쪽이 합쳐야 한다 — verifyOwnListener는
- * `pid === childPid || …`로, listExternalWorkers는 `ours.add(pid)`로 그렇게 한다.
- * export하는 이유는 Task 13의 stopWorkerProcess가 같은 조회를 쓰기 때문이다.
- */
-export async function descendantPids(rootPid: number): Promise<Set<number>> {
-  const { stdout } = await execFileAsync("/bin/ps", ["-axo", "pid,ppid"], { timeout: 1_000 });
-  const rows = stdout
-    .split("\n")
-    .slice(1)
-    .map((line) => line.trim().split(/\s+/).map(Number))
-    .filter((row): row is [number, number] => row.length === 2 && row.every(Number.isInteger));
-
-  const result = new Set<number>();
-  let frontier = [rootPid];
-  while (frontier.length > 0) {
-    const next: number[] = [];
-    for (const [pid, ppid] of rows) {
-      if (frontier.includes(ppid) && !result.has(pid)) {
-        result.add(pid);
-        next.push(pid);
-      }
-    }
-    frontier = next;
-  }
-  return result;
-}
-
 /**
  * 소유권 판정 메커니즘 (b)의 배선. 판정(우리 자식인지 보는 그 한 줄, 조회 실패를 "아니오"로
- * 닫는 규칙)은 services/own-listener.ts에 있다 — 여기 두면 electron을 값으로 import하는 이
+ * 닫는 규칙)은 process/own-listener.ts에 있다 — 여기 두면 electron을 값으로 import하는 이
  * 파일이라 어떤 테스트도 그것을 부를 수 없고, 술어를 `true`로 바꿔도 초록불이 유지된다
  * (재리뷰 N4). listExternalWorkers와 같은 분리다.
  */
@@ -691,7 +645,7 @@ function verifyOwnListener(port: number, childPid: number | undefined): Promise<
 }
 
 /**
- * 감독자에 넘기는 배선. 판정 자체(우리 것을 빼는 두 줄 포함)는 services/external.ts에
+ * 감독자에 넘기는 배선. 판정 자체(우리 것을 빼는 두 줄 포함)는 services/worker-discovery.ts에
  * 있다 — 여기 두면 electron을 값으로 import하는 이 파일이라 어떤 테스트도 그것을 부를 수
  * 없고, `ours.add(pid)`를 빠뜨려도 초록불이 유지된다.
  */
@@ -704,21 +658,19 @@ function listExternalWorkers(): Promise<number[]> {
   });
 }
 
-async function dockerRun(bin: string, args: string[]) {
-  try {
-    const { stdout, stderr } = await execFileAsync(bin, args, { timeout: 30_000 });
-    return { stdout, stderr, code: 0 };
-  } catch (e) {
-    const err = e as { stdout?: string; stderr?: string; code?: number | string };
-    // `||`이지 `??`가 아니다. 실행 파일이 없으면(DOCKER_BIN이 틀림) execFile은 stderr를 **빈
-    // 문자열**로 채워 거부하므로, `??`는 그 빈 문자열을 원인으로 넘겨 postgres가 원인 없는
-    // "실패"로 섰다. 숫자가 아닌 code("ENOENT")도 실패다 — 0이 아니면 된다.
-    return {
-      stdout: err.stdout ?? "",
-      stderr: err.stderr || String(e),
-      code: typeof err.code === "number" ? err.code : 1,
-    };
-  }
+/** 번들 PostgreSQL 트리. packaged는 Resources, dev는 build-postgres.sh가 스테이징한 자리다 (Phase 3 스펙 §6.8). */
+function pgBundleDir(): string {
+  return app.isPackaged ? path.join(process.resourcesPath, "postgres") : path.join(app.getAppPath(), "build", "postgres");
+}
+
+/** 상태 창의 postgres 줄에 싣는 디버깅 접속 명령 (스펙 §6.3). 번들 psql을 쓴다 — Homebrew psql이 없는 맥이다. */
+function debugCommand(): string {
+  const layout = pgLayout(app.getPath("userData"));
+  return `"${pgBinaries(pgBundleDir()).psql}" -h "${layout.runDir}" -U ${DB_SUPERUSER} ${DB_NAME}`;
+}
+
+function currentDatabaseMode(): DatabaseMode | null {
+  return launchCtx?.mode ?? null;
 }
 
 /**
@@ -734,7 +686,7 @@ async function resolveRepoRoot(configured: string | undefined): Promise<string |
   }
   const picked = await dialog.showOpenDialog({
     title: "담화 저장소 폴더를 골라 주세요",
-    message: "be/worker와 be/docker-compose.yml이 있는 폴더입니다.",
+    message: "be/worker가 있는 담화 저장소 폴더입니다.",
     properties: ["openDirectory"],
   });
   const dir = picked.filePaths[0];
@@ -746,14 +698,28 @@ async function resolveRepoRoot(configured: string | undefined): Promise<string |
 
 /** 감독자의 지금 상태를 셸 화면 한 장으로 접는다. 판정은 status-view.ts의 shellStatusFrom에 있다. */
 function shellStatusOf(): ShellStatus {
-  return shellStatusFrom({ statuses: supervisor?.statuses() ?? [], restartNotice, logPathOf });
+  return shellStatusFrom({
+    statuses: supervisor?.statuses() ?? [],
+    restartNotice,
+    configWarning,
+    externalDatabase: currentDatabaseMode()?.kind === "external",
+    logPathOf,
+  });
 }
 
 /** 상태 창이 그릴 재료. 판정은 status-view.ts의 servicesView에 있다. */
 function servicesViewNow() {
+  const mode = currentDatabaseMode();
   return servicesView({
     statuses: supervisor?.statuses() ?? null,
     restartNotice,
+    configWarning,
+    externalDatabase: mode?.kind === "external",
+    debugCommand: mode?.kind === "embedded" ? debugCommand() : null,
+    // 스펙 §6.7 — 상태 창의 postgres 로그 참조는 logs/postgres/ 폴더를 가리킨다. row.log는
+    // logPathOf("postgres")(기동 싱크) 그대로 두고, 이 값은 postgres 자신이 쌓는 로그의 위치를
+    // 옆에 덧붙인다. debugCommand와 같은 길 — 외부 디버그 모드에는 앱의 postgres도 로그도 없다.
+    postgresLogDir: mode?.kind === "embedded" ? pgLayout(app.getPath("userData")).logDir : null,
     logPathOf,
     migrationCheckSkipped: migrationWatch.skippedFor(supervisor?.runtimeOf("api")?.result?.handle),
   });
@@ -837,7 +803,10 @@ async function reportFailure(mine: number, what: string, e: unknown): Promise<vo
   appendSupervisorLog(`${what} — ${reasonOf(e)}`);
   const target = activeWindow(mine);
   if (target === null) return;
-  const seconds = scheduleRetry();
+  // null이 아니라 지금 감독자의 상태를 본다 — 이미 manual로 선 서비스가 있는데도 그 사실을
+  // 못 보고 auto로 읽으면(예: showShell 자체가 거부한 경우) 사람 손이 필요한 실패에 타이머를
+  // 다시 건다 (Task 12 fix round 1).
+  const seconds = mayAutoRetry(supervisor?.statuses() ?? null, e) ? scheduleRetry() : undefined;
   await showShell(target, {
     state: "failed",
     detail: failureDetail(what, reasonOf(e)),
@@ -897,7 +866,14 @@ async function startServices(mine: number): Promise<void> {
   if (!gateUp(supervisor?.statuses() ?? null)) {
     const target = activeWindow(mine);
     if (target === null) return;
-    await showShell(target, { ...shellStatusOf(), retryInSeconds: scheduleRetry() });
+    // 사람 손이 필요한 실패면 타이머를 걸지 않는다 — 마이그레이션이 20초마다 재실행되고 백업이 쌓인다 (Phase 3 스펙 §6.7).
+    const mayRetry = mayAutoRetry(supervisor?.statuses() ?? null);
+    // 이전(auto) 실패가 걸어 둔 타이머가 있으면 지운다 — 그 타이머가 그대로 남으면, 지금은
+    // manual로 선 게이트인데도 이전 타이머가 한 번 더 깨어나 재시도를 걸고 마이그레이션
+    // 게이트를 다시 돌려 백업을 하나 더 쌓는다 (Task 12 fix round 1).
+    if (!mayRetry) cancelRetry();
+    const retryInSeconds = mayRetry ? scheduleRetry() : undefined;
+    await showShell(target, { ...shellStatusOf(), retryInSeconds });
     return;
   }
   retryCount = 0;
@@ -950,11 +926,13 @@ function announceRestartNotice(mine: number, notice: string): void {
  * 한 번만 적는가)은 config-reload.ts에 있다 — 여기 두면 어떤 테스트도 그것을 부를 수 없고,
  * 실제로 그 자리에 있는 동안 결함 둘이 그 안에서 났다 (재리뷰 §4-1·§4-2).
  *
- * 자식 env만 다시 읽는다. ctx.bins(uv·docker)와 repoRoot는 여기서 갱신해도 소용이 없다 —
- * postgresSpec은 docker 경로를 클로저로 이미 붙잡고 있어 ctx를 고쳐도 옛 값을 쓴다. 그 둘을
+ * 자식 env만 다시 읽는다. ctx.bins(uv)와 repoRoot는 여기서 갱신해도 소용이 없다 —
+ * 번들 경로와 모드도 감독자 생성 때 한 번 정해진다. 그 넷을
  * 반영하려면 감독자를 다시 만들어야 하고, 그것은 첫 감독자가 쥔 자식 셋의 유일한 참조를
  * 버리는 일이라 P2-C4가 금지한다. 그러므로 실패 화면의 "값을 고치면 다시 시도합니다"가 참인
- * 범위는 DATABASE_URL·STORAGE_ROOT·PORT 같은 **자식 env 키**다.
+ * 범위는 PORT·EMBED_SERVICE_PORT 같은 **자식 env 키**다 — DATABASE_URL·STORAGE_ROOT는 여기 들지
+ * 않는다. 그 둘은 모드(cfg.databaseMode)가 정하는 값이라 baseline에서 애초에 빠져 있고
+ * (withoutDbKeys), 재시도로 config.json을 다시 읽어도 바뀌지 않는다(스펙 §6.6).
  */
 /**
  * "이 API 기동은 마이그레이션 검사를 건너뛰었다". 판정(한 기동에 한 번 적기, 꼬리에서 줄이 밀려나도
@@ -964,18 +942,20 @@ const migrationWatch = createMigrationCheckWatch(appendSupervisorLog);
 
 const reloadConfig = createConfigReloader({
   load: () => loadConfig(app.getPath("userData")),
-  live: () => (launchCtx === null ? null : { env: launchCtx.ctx.env, baseline: launchCtx.baseline }),
+  live: () => (launchCtx === null ? null : { env: launchCtx.ctx.env, baseline: launchCtx.baseline, mode: launchCtx.mode }),
   log: appendSupervisorLog,
 });
 
 /**
  * 감독자를 세운다. 세울 수 없는 이유(설정 오류)를 화면에 적었으면 false를 돌려주고,
- * 부른 쪽은 물러난다. 던지는 실패(저장소·docker 부재)는 startOnce의 catch가 받는다.
+ * 부른 쪽은 물러난다. 던지는 실패(저장소 부재)는 startOnce의 catch가 받는다.
  */
 async function createSupervisorFor(mine: number): Promise<boolean> {
   const userData = app.getPath("userData");
   const cfg = loadConfig(userData);
   if (cfg.warning !== undefined) appendSupervisorLog(cfg.warning);
+  for (const note of cfg.notes) appendSupervisorLog(note);
+  configWarning = cfg.warning ?? null;
 
   const requested = Number(cfg.env.PORT);
   /**
@@ -1009,21 +989,18 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
 
   const dirs = searchDirs(app.getPath("home"), cfg.extraPath);
   const uv = cfg.uvBin ?? findExecutable("uv", dirs);
-  const docker = cfg.dockerBin ?? findExecutable("docker", dirs);
-  // 고치는 방법(설치 · DOCKER_BIN)은 reportFailure가 failureDetail로 붙인다.
-  if (docker === null) throw new Error(CAUSES.dockerMissing.text);
 
-  const ctx: LaunchContext = {
+  const ctx: Omit<LaunchContext, "signal"> = {
     repoRoot: resolved,
     userData,
     packaged: app.isPackaged,
     env: cfg.env,
-    bins: { uv, docker },
+    bins: { uv },
     searchDirs: dirs,
     logFile: logPathOf,
   };
   // 스트림이 열린 뒤 옮기면 열린 핸들이 옮겨진 파일을 계속 가리킨다 — 띄우기 전에 돌린다.
-  for (const id of ["supervisor", "api", "worker", "embed"] as const) {
+  for (const id of ["supervisor", "api", "worker", "embed", "postgres"] as const) {
     rotateIfNeeded(logPathOf(id));
   }
 
@@ -1032,10 +1009,49 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
     dimension: Number(cfg.env.SEARCH_EMBEDDING_DIM ?? "1024"),
   };
 
+  const mode = cfg.databaseMode;
+  const layout = pgLayout(userData);
+  const binaries = pgBinaries(pgBundleDir());
+  const postgres =
+    mode.kind === "external"
+      ? externalPostgresSpec()
+      : embeddedPostgresSpec({
+          binaries,
+          layout,
+          runTool,
+          psInfo,
+          spawnPostmaster: (logFile) => spawnPostmaster({ binaries, layout, logFile, immediateGraceMs: PG_IMMEDIATE_GRACE_MS }),
+          stopOrphan: (pid) => stopOrphanPostmaster(pid, PG_FAST_GRACE_MS, PG_IMMEDIATE_GRACE_MS),
+          log: appendSupervisorLog,
+        });
+  // 러너의 env는 API와 같다 — inheritedEnv 위에 자식 env. DATABASE_URL을 **항상** 싣는다: dev의 cwd(be/)에서 dotenv가
+  // be/.env를 읽지만 이미 있는 값을 덮지 않는다 (스펙 §6.5-1).
+  const runnerEnv = (): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) if (typeof v === "string") out[k] = v;
+    return { ...out, ...ctx.env };
+  };
+  const migrationGate =
+    mode.kind === "external"
+      ? undefined
+      : (signal: AbortSignal) =>
+          runMigrationGate(
+            {
+              runner: app.isPackaged
+                ? packagedMigrationRunner({ apiDir: path.join(process.resourcesPath, "api"), env: runnerEnv() })
+                : devMigrationRunner({ repoRoot: resolved, env: runnerEnv(), runTool }),
+              runTool,
+              binaries,
+              layout,
+              log: appendSupervisorLog,
+            },
+            signal,
+          );
+
   // 자식을 띄우기 전에 한 번 더 본다. 여기까지 오는 길에는 resolveRepoRoot의 폴더 선택
   // 대화상자가 있고(packaged 첫 실행에서는 상한이 없다), 그 사이에 ⌘Q가 들어오면 stopAll()은
   // supervisor를 null로 스냅숏해 아무것도 정리하지 않고 끝난다. 그 **뒤에** 이 컨티뉴에이션이
-  // docker compose up -d와 detached 자식 둘을 띄우면 아무도 정리하지 않는 프로세스가 된다.
+  // postmaster와 detached 자식 둘을 띄우면 아무도 정리하지 않는 프로세스가 된다.
   // 감독자가 선 뒤로는 감독자 자신의 stopping/pending이 같은 일을 하므로, 구멍은 정확히
   // supervisor가 아직 null인 이 구간 하나다 — Phase 1의 runStart에 있던 검사와 같다
   // (리뷰 Important-2).
@@ -1045,12 +1061,13 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
   // 하나가 정하는데, 여기 두면 어떤 테스트도 그것을 부를 수 없다 (specs.ts의 주석).
   const created = createSupervisor(
     buildSpecs({
-      docker: (args) => dockerRun(docker, args),
+      postgres,
       api: {
         verifyOwnListener,
         isPortOccupied,
         onPendingMigrations: () => undefined,
         onMigrationCheckSkipped: (handle) => migrationWatch.skipped(handle),
+        ...(migrationGate === undefined ? {} : { migrationGate }),
       },
       embed: { probe: (url) => probeEmbedContract(url, wantEmbed), freePort },
       worker: { listExternal: listExternalWorkers, stop: stopOwnWorker },
@@ -1061,7 +1078,7 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
   // start()가 끝나기 전에 대입해야 한다 — onStatus가 그 사이에 여러 번 발화하고, shellStatusOf()는
   // supervisor에서 상태를 읽는다. 대입이 뒤면 기동 화면에 서비스 줄이 한 줄도 안 뜬다.
   supervisor = created;
-  launchCtx = { ctx, baseline: { ...cfg.env } };
+  launchCtx = { ctx, baseline: withoutDbKeys(cfg.env), mode: cfg.databaseMode };
 
   try {
     await created.start();
@@ -1140,6 +1157,7 @@ if (!app.requestSingleInstanceLock()) {
       start,
       attach: () => reattachWindow(mine),
       onFailure: (e) => reportFailure(mine, "창을 다시 붙이지 못했어요", e),
+      autoRetryAllowed: () => mayAutoRetry(supervisor?.statuses() ?? null),
     }).catch((e: unknown) => {
       // 실패 처리 자체가 거부하면 여기서 멈춘다 — void 프라미스의 거부는 Electron main의
       // uncaught exception이 되고, 하필 화면이 이미 잘못된 순간에 난다.

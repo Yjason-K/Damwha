@@ -1,10 +1,11 @@
 import * as path from "path";
-import { launchDev, launchPackaged } from "../api-process";
-import { MAX_PORT_ATTEMPTS, choosePort, isAddrInUse } from "../port";
-import { probeHealth } from "../readiness";
-import type { ProbeResult } from "../readiness";
-import { CAUSES } from "../causes";
-import { ANSI_SGR, failureBlock } from "../stderr";
+import { launchDev, launchPackaged } from "./api-process";
+import { MAX_PORT_ATTEMPTS, choosePort, isAddrInUse } from "../process/ports";
+import { probeHealth } from "../process/readiness";
+import type { ProbeResult } from "../process/readiness";
+import { CAUSES } from "../diagnostics/causes";
+import { ANSI_SGR, failureBlock } from "../diagnostics/stderr";
+import { manualUnlessTagged } from "./failure";
 import type { LaunchContext, LaunchResult, ReadinessResult, ServiceHandle, ServiceSpec } from "./types";
 
 /**
@@ -43,6 +44,11 @@ export interface ApiDeps {
    * 그것으로 한 기동에 한 번만 적고, 새 기동이면 새로 판단한다.
    */
   onMigrationCheckSkipped(handle: ServiceHandle): void;
+  /**
+   * 내장 모드의 마이그레이션 실행 게이트 (Phase 3 스펙 §6.5). 있으면 스폰 **전에** 부르고, 거부하면 launch()가 그 실패를
+   * 그대로 던진다(부류 manual). 외부 디버그 모드에서는 없다 — 그때는 Phase 2의 감지 게이트만 남는다.
+   */
+  migrationGate?: (signal: AbortSignal) => Promise<unknown>;
 }
 
 /** supervisor.log에 남기는 줄. 한 API 기동에 한 번이다. */
@@ -106,6 +112,11 @@ export async function judgeAfterProbe(
     const pending = pendingMigrations(stdoutTail);
     if (pending !== null) {
       deps.onPendingMigrations(pending);
+      // 실행 게이트를 통과했는데 API가 미적용을 말하면 러너가 본 .sql과 API가 본 .sql이 다르다. `pnpm be:migrate`를
+      // 안내하면 틀린 말이고, 자동 재시도는 같은 결과를 반복한다 (Phase 3 스펙 §6.5-5).
+      if (deps.migrationGate !== undefined) {
+        return { kind: "failed", detail: CAUSES.migrationsStillPending.text(pending.count, pending.names), recovery: "manual" };
+      }
       // "`pnpm be:migrate`를 실행하세요"는 shell-hints.ts의 안내가 붙인다.
       return { kind: "failed", detail: CAUSES.pendingMigrations.text(pending.count, pending.names) };
     }
@@ -145,6 +156,10 @@ export function apiSpec(deps: ApiDeps): ServiceSpec {
       return { kind: "absent" };
     },
     async launch(ctx): Promise<LaunchResult> {
+      // 스키마를 먼저 맞춘다. API가 뜬 뒤에 적용하면 부팅 중인 API가 빈 스키마를 본다.
+      // 게이트 자신이 manualUnlessTagged로 감싸여 있지만, 이 호출 자리에서 다시 감싼다 — 배선이
+      // 바뀌어 감싸지 않은 게이트가 들어와도 여기서 자동 재시도로 새지 않는다.
+      if (deps.migrationGate !== undefined) await manualUnlessTagged(() => deps.migrationGate!(ctx.signal));
       const requested = Number(ctx.env.PORT ?? "3000");
       const base =
         Number.isInteger(requested) && requested >= 1 && requested <= 65535 ? requested : 3000;
