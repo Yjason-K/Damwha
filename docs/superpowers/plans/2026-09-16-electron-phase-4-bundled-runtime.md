@@ -28,6 +28,10 @@
 - **TypeScript·Python은 시그니처와 테스트만 싣는다.** 구현 본문은 "구현 시 작성"이다 —
   계획이 컴파일러를 대신할 수 없다.
 - 예외로 본문을 싣는 코드에는 **`[실행됨: <명령>]`** 표시를 붙인다. 없으면 싣지 않는다.
+- **검증 명령은 `/usr/bin/grep`·`/usr/bin/find`·`/usr/bin/diff`로 실행한다.** 이 세션의 셸에서
+  셋 다 함수로 바꿔치기돼 있고(`grep`은 ugrep `-I` — 바이너리를 건너뛴다), 5회차 blocking
+  5건 중 **2건이 그 오염의 산물**이었다. `[실행됨]`은 "돌렸다"만 증명하지 **무엇으로** 돌았는지는
+  증명하지 않는다 (스펙 §17.8·§17.9).
 
 **규칙 2 — 한 계약의 사본을 여럿 두지 않는다.**
 
@@ -152,8 +156,17 @@ find "$HOME/.cache/huggingface" -type f -exec stat -f '%z %N' {} + 2>/dev/null |
 ls -la "$HOME/.local/share/uv/tools" > "$DEST/abs-uv-tools.txt" 2>/dev/null || : > "$DEST/abs-uv-tools.txt"
 # Docker 볼륨은 메타데이터로 내용 보존을 증명하지 못한다 — 행 수를 직접 센다. host psql이
 # 없는 맥이 많아 컨테이너 안의 것을 쓰고, 못 재면 **빈 파일이 아니라 "측정 불가"**를 적는다.
+# pg_stat_user_tables.n_live_tup은 **추정치**라 ANALYZE만으로 흔들려 거짓 FAIL을 낸다.
+# 정확한 count(*)를 센다 — 이 규모에서 전체가 0.1초다.
 if docker exec damwha-postgres psql -U postgres -d damwha -tAc \
-     "select relname||'='||n_live_tup from pg_stat_user_tables order by relname" \
+     "select string_agg(t||'='||c, E'\n' order by t) from (
+        select c.relname as t,
+               (xpath('/row/c/text()',
+                      query_to_xml(format('select count(*) as c from %I.%I', n.nspname, c.relname),
+                                   false, true, '')))[1]::text::bigint as c
+        from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where c.relkind = 'r' and n.nspname = 'public'
+      ) s" \
      > "$DEST/abs-docker-db-rows.txt" 2>/dev/null && [ -s "$DEST/abs-docker-db-rows.txt" ]; then
   :
 else
@@ -619,14 +632,18 @@ pnpm worker:sync          # uv sync --extra models
 
 - [ ] **Step 5: 회귀를 확인한다**
 
+기준선(`mut-venv-versions.txt`)은 **12개 패키지**를 담는다. 같은 목록으로 다시 찍어야 `diff`가
+성립한다 — 부분 집합을 찍으면 항상 차이가 난다.
+
 ```bash
 uv run --no-sync --directory be/worker python -c "
 import importlib.metadata as m
-for p in ('mlx','mlx-lm','mlx-whisper','torch','numpy'):
+for p in sorted(('torch','torchaudio','numpy','mlx','mlx-lm','mlx-whisper','faster-whisper',
+                 'pyannote.audio','speechbrain','sentence-transformers','numba','llvmlite')):
     try: print(p, m.version(p))
     except Exception: print(p, 'MISSING')
-"
-diff /tmp/p4-baseline/now/mut-venv-versions.txt <(위 출력) || true
+" > /tmp/p4-venv-after.txt
+/usr/bin/diff /tmp/p4-baseline/now/mut-venv-versions.txt /tmp/p4-venv-after.txt || true
 pnpm worker:test
 uv run --directory be/worker ruff check .
 ```
@@ -753,8 +770,23 @@ desktop/build/ffmpeg/bin/ffprobe -v error -show_entries stream=sample_rate,chann
 - Consumes: Task 2의 `entitlements.python.plist`(트리 서명용), Task 3의 `uv.lock`
 - Produces: `desktop/.cache/python/rt-<키>/` — 인터프리터 + 의존성 + 재배치 + 서명.
   Task 6이 복사해 worker 패키지를 얹는다.
-- 스크립트가 정의하는 함수: `relocate(tree)`, `fix_macho(tree)`, `sign_tree(tree)`,
+- 스크립트가 정의하는 함수 **일곱**: `relocate(tree)`, `fix_macho(tree)`, `sign_tree(tree)`,
   `verify_signatures(tree)`, `macho_list(tree)`, `resign(file)`, `purge_pycache(tree)`.
+- 스크립트가 받는 플래그: `--print-key` (캐시 키만 찍고 적중 여부를 말한 뒤 종료. Step 7이 쓴다).
+- **셔뱅 형태** — `build-python.sh`가 쓰고 `check-bundle.mjs`가 읽는 계약이라 여기 한 곳에만
+  적는다 (규칙 2). 스펙 §6.1-b 1번:
+
+```sh
+#!/bin/sh
+'''exec' "${0%/*}/python3.12" "$0" "$@"
+' '''
+```
+
+  순진한 `exec "${0%/*}/python3.12" "$0" "$@"`는 **python이 그 줄을 파싱해
+  `SyntaxError: Missing parentheses in call to 'exec'`로 죽는다**
+  (**[실행됨: 2026-09-16]**). 위 형태는 셸이 2행을 `exec`로 읽고 python은 2·3행을 문자열
+  리터럴로 읽어 무시한다. PBS 원본이 같은 폴리글랏에 `dirname`·`realpath`를 쓰는 것을
+  `${0%/*}`로 바꾼 것이다.
 
 - [ ] **Step 1: Phase 0 원본을 읽는다 — 이것이 이 Task의 절반이다**
 
@@ -772,7 +804,7 @@ sed -n '133,205p' docs/superpowers/reference/electron-phase-0/python-build.sh   
 | --- | --- | --- |
 | 1 | `:370-399` `LC_RPATH` | 필터는 `@*`·번들 안·`/usr/lib`·`/System` **제외 전부**. `BUILD_PREFIX`가 아니다 — Python은 아카이브 전개라 그 문자열이 트리에 없다. 실측 58건은 wheel 배포자 경로(scipy의 `/opt/homebrew` gcc 등) |
 | 2 | `:401-435` `LC_ID_DYLIB` | **`libpython3.12.dylib`만 `@executable_path/../lib/…`**, 나머지 `@rpath/<base>`. `bin/python3.12`가 그렇게 참조한다 |
-| 3 | `:301-338` `_sysconfigdata` | 파일을 regex로 긁지 말고 **런타임에게 묻는다.** 따옴표 표기가 배포본마다 달라 Phase 0에서 regex가 조용히 빈 값을 냈다 |
+| 3 | `:301-338` `_sysconfigdata` | 파일을 regex로 긁지 말고 **런타임에게 묻는다.** 따옴표 표기가 배포본마다 달라 Phase 0에서 regex가 조용히 빈 값을 냈다. **목표값이 다르다** — 원본은 `$root`(절대 경로)로 재작성하지만 Phase 4는 `/damwha-bundled-python`(자리표시자)이다. 그리고 tarball 전개 경로에서는 uv가 prefix에 손대지 않아 PBS 원본값 `/install`이 남는다(실측) — 스펙 §6.1-b 2번의 근거는 Phase 0의 `uv python install` 경로에서만 성립한다 |
 | 4 | `:342-356` `direct_url.json` | 삭제. 텍스트 파일이라 `check-bundle.mjs`의 **기존 4번 검사**가 실제로 잡는 몇 안 되는 경우다 — 같은 검사가 `.pyc`·`.so`는 못 잡는다(`-a` 없음, Task 7이 고친다) |
 | 5 | 전체 | `install_name_tool` 뒤 **파일별 즉시 재서명**(`resign`) |
 | 6 | `:133-205` prune | `bin/pip*`·`2to3*`·`idle3*`·`pydoc3*`·`python*-config`, `ensurepip`, `tkinter`/`tcl`/`tk` 제거. 없으면 PBS 원본 스크립트가 남아 제한 PATH에서 `realpath: command not found`를 내고 그것이 우리 셔뱅 결함으로 오독된다 |
@@ -784,12 +816,21 @@ Phase 4는 dyld 실측을 하지 않고, 반대로 **한 산출물이 두 자리
 
 - [ ] **Step 2: 체크섬 파일을 만든다**
 
+**업스트림 `SHA256SUMS`와 대조한다.** pg·ffmpeg와 달리 PBS는 릴리스에 체크섬을 배포하므로
+자기 다운로드를 해시해 적는 것보다 강한 근거가 있다.
+
 ```bash
+BASE=https://github.com/astral-sh/python-build-standalone/releases/download/20250818
 ASSET=cpython-3.12.11+20250818-aarch64-apple-darwin-install_only.tar.gz
-curl -fsSL -o /tmp/$ASSET \
-  "https://github.com/astral-sh/python-build-standalone/releases/download/20250818/$ASSET"
-shasum -a 256 /tmp/$ASSET | awk -v a="$ASSET" '{print $1"  "a}' > desktop/scripts/python-checksums.txt
+curl -fsSL -o /tmp/$ASSET "$BASE/$ASSET"
+curl -fsSL -o /tmp/SHA256SUMS "$BASE/SHA256SUMS"
+MINE=$(shasum -a 256 /tmp/$ASSET | awk '{print $1}')
+THEIRS=$(/usr/bin/grep -F " $ASSET" /tmp/SHA256SUMS | awk '{print $1}')
+[ -n "$THEIRS" ] && [ "$MINE" = "$THEIRS" ] || { echo "업스트림 체크섬과 다르다"; exit 1; }
+printf '%s  %s\n' "$MINE" "$ASSET" > desktop/scripts/python-checksums.txt
 ```
+
+**[실행됨: 2026-09-16 — `fabb5fd4…e478` 업스트림과 일치]**
 
 - [ ] **Step 3: 스크립트의 뼈대와 런타임 층을 쓴다**
 
@@ -799,7 +840,7 @@ shasum -a 256 /tmp/$ASSET | awk -v a="$ASSET" '{print $1"  "a}' > desktop/script
 
 | 층 | 캐시 키 | 내용 |
 | --- | --- | --- |
-| `rt-*` | Python 버전·릴리스 + `checksums.txt` + `pyproject.toml`·`uv.lock` + `entitlements.plist` + 스크립트 shasum | 인터프리터 + 의존성 + prune + 재배치 + Mach-O + 서명 |
+| `rt-*` | Python 버전·릴리스 + `checksums.txt` + `pyproject.toml`·`uv.lock` + **`entitlements.python.plist`** + 스크립트 shasum | 인터프리터 + 의존성 + prune + 재배치 + Mach-O + 서명 |
 | `wk-*` | 위 키 + `damwha_worker/` **트리 해시(경로 포함, `__pycache__`·`.DS_Store` 제외)** | `damwha_worker` 설치 (Task 6) |
 
 **`BUILD_PREFIX`가 없다.** `build-postgres.sh`·`build-ffmpeg.sh`와 다른 점이다 — 그 둘은
@@ -834,8 +875,10 @@ time bash desktop/scripts/build-python.sh
 - [ ] **Step 5: 재배치가 실제로 되는지 확인한다 (R-6 회귀 방지)**
 
 ```bash
-# 디렉터리만 고른다 — rt-<키>.complete 류 표식 파일이 같은 접두사를 가질 수 있다.
-RT=$(find desktop/.cache/python -maxdepth 1 -type d -name 'rt-*' | head -1)
+# 디렉터리만, 그리고 중단된 실행이 남긴 rt-*.hidden·rt-*.tmp를 뺀다.
+RT=$(/usr/bin/find desktop/.cache/python -maxdepth 1 -type d -name 'rt-*' \
+       ! -name '*.hidden' ! -name '*.tmp' | head -1)
+[ -n "$RT" ] || { echo "rt 층이 없다 — Step 4를 먼저"; exit 1; }
 cp -R "$RT" /tmp/py-moved
 /tmp/py-moved/bin/python3.12 -c "import sys; print(sys.executable, sys.prefix)"
 ```
@@ -859,9 +902,10 @@ mv "${RT}.hidden" "$RT"
 **우리가 재작성한 스크립트만 고른다** — prune 뒤에도 PBS 원본이 남아 있으면 그것이 자기
 `realpath` 의존으로 실패하고 우리 결함으로 오독된다.
 
-**`grep -lF`에 홑따옴표다.** 겹따옴표 안에서는 `$`가 앵커로, `\*`가 그대로 넘어가 패턴이
-어긋나고 **매치 0 → `exit 1`**로 R-6 검사가 통째로 안 돈다
-(**[실행됨: 2026-09-16 — 토큰이 든 파일에 rc=1, `grep -lF '${0%/*}'`는 매치]**).
+**`grep -lF`에 홑따옴표다.** 진짜 BSD grep은 겹따옴표 형태도 매치하지만
+(**[실행됨: `/usr/bin/grep -l "\${0%/\*}"` → rc=0]**), `-lF`+홑따옴표는 grep 구현과 무관하게
+문자열 그대로를 찾으므로 더 견고하다. 5회차가 "겹따옴표는 항상 실패한다"고 본 것은 셸
+함수(ugrep)를 잰 결과였다 — 스펙 §17.8.
 
 ```bash
 BIN=$(grep -lF '${0%/*}' /tmp/py-moved/bin/* 2>/dev/null | head -1)
@@ -878,11 +922,16 @@ rm -rf "/tmp/py spaced" /tmp/py-moved
 - [ ] **Step 6: 절대 경로가 안 굽혔는지 확인한다 (B-1 회귀 방지)**
 
 ```bash
+**캐시 층 안에서 python을 돌리지 않는다.** `$RT`에서 부르면 rt 층에 `.pyc`가 새로 생겨
+검증이 검증 대상을 오염시키고, 이 Step을 다시 돌리면 그 `.pyc`를 grep이 잡는다. Step 5가
+만든 사본 `/tmp/py-moved`에게 묻는다.
+
+```bash
 REPO=$(pwd)
-# **-a가 필수다.** BSD grep은 없으면 바이너리를 건너뛰고 .pyc·.so에 박힌 경로를 못 잡는다
-# (실측: 같은 트리에 -rlF 0건 / -ralF 448건).
-grep -ralF "$REPO" "$RT" | head -20       # 0건이어야 한다
-"$RT/bin/python3.12" -c "import sysconfig; print(sysconfig.get_config_var('prefix'))"
+# -a는 출력 형태만 바꾼다 — BSD grep은 없어도 바이너리를 잡는다(실측 456/456). 의도를
+# 드러내고 GNU grep에서도 안전하므로 붙인다. 셸 함수가 아닌 진짜 grep을 부른다.
+/usr/bin/grep -ralF "$REPO" "$RT" | head -20   # 0건이어야 한다
+/tmp/py-moved/bin/python3.12 -c "import sysconfig; print(sysconfig.get_config_var('prefix'))"
 ```
 
 기대: grep 0건. prefix가 `/damwha-bundled-python`(스펙 §6.1-b의 중립 자리표시자).
@@ -926,7 +975,7 @@ git checkout be/worker/pyproject.toml
 **Files:** Modify `desktop/scripts/build-python.sh`
 
 **Interfaces:**
-- Consumes: Task 5의 `$RT_OUT`·`$WK_KEY`와 여섯 함수
+- Consumes: Task 5의 `$RT_OUT`·`$WK_KEY`와 **일곱 함수**(Task 5 Interfaces)
 - Produces: `desktop/build/python/` — `bin/python3.12` + `lib/python3.12/site-packages/damwha_worker/`
 
 - [ ] **Step 1: worker 층을 이어 쓴다**
@@ -935,6 +984,8 @@ git checkout be/worker/pyproject.toml
 `--no-deps`인 이유: 런타임 층이 이미 전부 깔았고 여기서 해석이 다시 돌면 고정이 흔들린다.
 
 설치가 만든 것만 다시 손본다 — **`relocate`와 `sign_tree`를 다시 부른다.** `damwha_worker`는
+순수 Python이라 새 Mach-O가 없어 `sign_tree` 전수 호출의 결과는 "그 파일만 재서명"(스펙 §6.1)과
+같다. 전수를 부르는 편이 단순하고 멱등이다. `damwha_worker`는
 순수 Python이지만 콘솔 스크립트 둘(`damwha-worker`·`damwha-embed`)이 `bin/`에 새로 생기고 그
 셔뱅에 uv가 본 절대 경로가 박히며, `direct_url.json`도 이때 생긴다(실측:
 `{"url":"file:///Users/…/be/worker"}`).
@@ -988,11 +1039,19 @@ assert한다.** 새 모듈을 목록에 더할 때 그 패키지의 `__init__.py
 1. **스테이징은 캐시 적중 여부와 무관하게** `$STAGED`의 `__pycache__`를 지운다
    (`build-postgres.sh`의 `.build-key` 관례는 "적중이면 아무것도 안 한다"인데, 여기서는
    적중일수록 오염된 트리가 남는다).
-2. 앱이 번들 python을 부를 때 `PYTHONDONTWRITEBYTECODE=1`을 준다 — **Part 2·스펙 §6.3.**
-   packaged `.app` 안에 런타임 `.pyc`가 쌓여 서명 봉인 밖 파일이 생기는 것도 함께 막는다.
+   **`stage()`의 실행 중 프로세스 가드는 그대로 물려받는다** — `build-postgres.sh:200-202`가
+   `pgrep -f "$STAGED/bin/postgres"`로 dev 앱이 쓰는 트리를 갈아엎지 못하게 한다. 여기서는
+   `pgrep -f "$STAGED/bin/python3.12"`다. python은 모듈을 지연 로드하므로 실행 중
+   `rm -rf`(미스)나 `__pycache__` 삭제(적중)가 살아 있는 프로세스를 깨뜨린다.
+2. 앱이 번들 python을 부를 때 **`PYTHONPYCACHEPREFIX=<userData>/pycache`**를 준다 —
+   **Part 2 Task 4 Step 5**가 받는다(스펙 §6.3). packaged `.app` 안에 런타임 `.pyc`가 쌓여
+   **서명 봉인 밖 파일**이 생기는 것도 함께 막는다. `PYTHONDONTWRITEBYTECODE`가 아닌 이유는
+   import가 4.5배 느려지기 때문이다(스펙 §6.1-b 실측).
 
-**`check-bundle.mjs`가 이것을 잡아 줄 것으로 기대하지 않는다** — 그 grep에 `-a`가 없어
-바이너리를 건너뛴다(Task 7이 고친다). 스펙 §17.4가 그 검사를 안전망으로 본 것은 틀렸다.
+**`check-bundle.mjs`가 이것을 잡기는 한다** — `spawnSync`가 진짜 BSD grep을 받고 그것은
+바이너리를 건너뛰지 않는다(6회차 정정). 그래서 오염된 트리는 조용히 실리지 않고 **빌드를
+깨뜨린다.** 그편이 낫지만 여전히 결함이다 — dev를 한 번 돌리면 그 뒤 모든 패키징이 실패하고,
+실패 메시지가 원인을 가리키지 않는다.
 
 - [ ] **Step 4: 돌린다**
 
@@ -1026,8 +1085,8 @@ worker를 한 번이라도 돌린 흔적으로 `__pycache__`와 `.DS_Store`가 �
 # 코드 동일성 — 소스 쪽 잡음만 제외한다. 빌드 트리의 __pycache__는 아래 find가 본다.
 diff -r -x __pycache__ -x .DS_Store \
   be/worker/damwha_worker desktop/build/python/lib/python3.12/site-packages/damwha_worker
-# **-a가 필수다.** 없으면 BSD grep이 .pyc·.so를 건너뛴다 (실측: -rlF 0건 / -ralF 448건).
-grep -ralF "$(pwd)" desktop/build/python | head             # 0건
+# 진짜 grep을 부른다 — 이 셸의 grep은 ugrep 함수다. -a는 출력 형태만 바꾼다.
+/usr/bin/grep -ralF "$(pwd)" desktop/build/python | head    # 0건
 find desktop/build/python -name __pycache__ | head          # 0건 — 이쪽이 진짜 판정이다
 du -sh desktop/build/python desktop/build/ffmpeg
 ```
@@ -1101,20 +1160,20 @@ throw한다(:12-15) — 그 성질에 기댄다. entitlements plist의 XML 주�
 | `Resources/{python,ffmpeg}` 존재, `bin/` 실행 파일 | 빌드 누락 |
 | `site-packages/damwha_worker/__main__.py`, `mlx_lm/server.py` 존재 | 트리만 있고 패키지가 없으면 첫 실행에서야 드러난다. `mlx_lm`은 §2.4의 회귀 방지 |
 | arm64 무서명 Mach-O 0건 | `codesign --verify --arch arm64` 전수. 심볼릭 링크는 건너뛴다 |
-| entitlement 실제 적용 | `codesign -d --entitlements -`가 `.app`에 **세 키**(`allow-jit` 포함), `Resources/python` 표본에 **두 키**를 보인다. 대상이 갈린다 |
+| entitlement 실제 적용 | `codesign -d --entitlements -`가 `.app`에 **세 키**(`allow-jit` 포함), **`Resources/python/bin/python3.12`**에 **두 키**를 보인다. **표본은 실행 파일이어야 한다** — `.so`·`.dylib`은 `--entitlements`로 서명해도 키를 **0개** 보인다(실측). `.so`를 뽑으면 이 검사가 통과 불가다 |
 | `Resources/python` 아래 `__pycache__` 0개 | 스펙 §6.1-b 4번 |
 | `bin/` 셔뱅이 번들 안을 가리킨다 | **2행**의 `${0%/*}/python3.12`를 본다 — 위치 독립 형태에서 1행은 `#!/bin/sh`다. **우리가 만든 것만** 본다 — 제3자 wheel 원본의 문자열은 지울 수 없고 Phase 6이 받는다 (G1 허용 목록 24건) |
 
-**기존 4번 검사(`check-bundle.mjs:92`)에 `-a`를 더한다 — 지금은 바이너리를 건너뛴다.**
-macOS BSD grep은 `-a` 없이 바이너리 파일을 스킵하므로 `.pyc`·`.so`·`.dylib`에 박힌 경로를
-**하나도 못 잡는다** (**[실행됨: 2026-09-16 — 같은 트리에 `-rlF` 0건 / `-ralF` 448건]**).
-`direct_url.json`·`_sysconfigdata`는 텍스트라 잡히지만 `.pyc`는 안 잡힌다. **스펙 §17.4가
-이 검사를 `.pyc` 안전망으로 본 것은 틀렸고 §17.7에서 철회했다.**
+**기존 4번 검사(`check-bundle.mjs:92`)는 이미 바이너리를 잡는다.** `spawnSync("grep", …)`는
+셸을 거치지 않아 PATH의 진짜 BSD grep을 받고, 그것은 바이너리를 건너뛰지 않는다
+(**[실행됨: `/usr/bin/grep -rlF` 456건 / `-ralF` 456건]**). `-a`를 더하되 이유는 "지금 안
+잡혀서"가 아니라 **의도를 드러내고 GNU grep에서도 같게 동작하게** 하기 위해서다.
 
-`-a`를 더하면 제3자 wheel이 자기 바이너리에 담은 배포자 경로가 새로 보일 수 있다 — 위반 기준은
-지금과 같이 **저장소 경로를 담은 것**만이므로 판정 기준은 바뀌지 않는다. 다만 이 변경으로
-검사가 처음으로 실제 효력을 갖게 되므로, Task 5·6의 `direct_url.json` 삭제·`_sysconfigdata`
-중립화·`__pycache__` 삭제가 **전부** 성립해야 이 Task가 초록불이다.
+5회차는 여기서 정반대 결론을 냈고 그것은 이 세션 셸의 `grep`이 ugrep `-I` 함수여서 나온
+값이었다. 스펙 §17.7 B-5는 철회됐고 §17.4의 원래 서술이 맞다(§17.8).
+
+그러므로 Task 5·6의 `direct_url.json` 삭제·`_sysconfigdata` 중립화·`__pycache__` 삭제가
+**전부** 성립해야 이 Task가 초록불이다 — 이 검사는 처음부터 효력이 있었다.
 
 - [ ] **Step 4: dev 스크립트도 두 빌드를 부르게 한다** — `desktop/package.json`의 `start:desktop`
 
@@ -1150,8 +1209,8 @@ Part 2로 넘어가기 전에 셋이 참이어야 한다:
 
 1. `pnpm --filter damwha-desktop run package:desktop`이 끝까지 돌고
    `node desktop/scripts/check-bundle.mjs`가 exit 0이다.
-2. `grep -ralF <저장소> desktop/out/mac-arm64/Damwha.app/Contents` 가 **0건**이다
-   (`-a` 없이는 바이너리를 건너뛰어 0건이 거짓으로 나온다).
+2. `/usr/bin/grep -ralF <저장소> desktop/out/mac-arm64/Damwha.app/Contents` 가 **0건**이다
+   (셸의 `grep`은 ugrep 함수라 바이너리를 건너뛴다 — 거짓 0건이 나온다).
 3. Task 2의 numba 판정이 나와 있고, entitlements가 그 결과를 반영한다.
 
 **스펙 완료 기준 중 이 계획이 만드는 것:** P4-C15(번들 위생), P4-C25(mlx 정렬 회귀),
@@ -1174,8 +1233,9 @@ Task 1~7에 대응한다. §6.2 이후는 Part 2다.
 원본이 맞다")이 구현 시 판정 기준이 된다. 리뷰어가 그 줄 번호 다섯을 원본과 대조해 전부
 일치함을 확인했다(5회차).
 
-**3. 규칙 2 준수** — 이 계획에는 프로그램 시그니처가 `build-python.sh`의 셸 함수 일곱뿐이고
-Task 5 Interfaces 한 곳에만 적혀 있다.
+**3. 규칙 2 준수** — 이 계획의 계약은 `build-python.sh`의 셸 함수 **일곱**, 플래그
+`--print-key`, 그리고 **셔뱅 폴리글랏 3줄**이고 전부 Task 5 Interfaces 한 곳에만 적혀 있다.
+셔뱅은 `build-python.sh`가 쓰고 `check-bundle.mjs`가 읽는 양쪽 계약이라 특히 그렇다.
 
 **4. 순서** — 1(기준선) → 2(numba, `uv.lock`에 numba가 있으면 3보다 먼저 가능) → 3(매니페스트)
 → 4(ffmpeg) → 5(RT) → 6(WK) → 7(패키징). 각 Task가 자기 Verify를 통과한 상태로 끝난다.

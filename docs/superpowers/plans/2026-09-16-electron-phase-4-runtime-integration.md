@@ -479,7 +479,17 @@ electron을 import하지 않는 순수 모듈이다 — `services/postgres/layou
 - `runId` — `desktop-${randomUUID()}`. 실행마다 새 값.
 - 앱 소유 env — `HF_HOME`(=`<userData>/models`), `FFMPEG_BIN`·`FFPROBE_BIN`,
   **`LENS_LLM_BASE_URL`**(기본값 없는 필수 키 둘 중 하나. 빠뜨리면 worker가 `ValidationError`로
-  기동 실패한다), dev만 `PYTHONPATH`, 외부 DB 모드면 `DAMWHA_SHARED_STATE=off`.
+  기동 실패한다), **`PYTHONPYCACHEPREFIX`**(=`<userData>/pycache`), dev만 `PYTHONPATH`,
+  외부 DB 모드면 `DAMWHA_SHARED_STATE=off`.
+- **`PYTHONPYCACHEPREFIX`가 왜 필수인가** (스펙 §6.1-b, Part 1 Task 6 Step 3이 여기로 넘긴다).
+  번들 python이 자기 트리에 `.pyc`를 쓰면 두 가지가 깨진다 — dev에서는
+  `desktop/build/python`(스테이징 산출물이자 dev 실행 트리)이 저장소 절대 경로를 담은 `.pyc`로
+  오염돼 **그 뒤 모든 패키징이 `check-bundle.mjs`의 금지 문자열 검사에서 실패하고**, packaged
+  에서는 `.app` 안에 **서명 봉인 밖 파일**이 생겨 `codesign --verify --deep --strict`가
+  `a sealed resource is missing or invalid`로 깨진다.
+  `PYTHONDONTWRITEBYTECODE=1`도 같은 일을 하지만 `import numba` 하나가 0.14초 → 0.63초가
+  된다(4.5배, 실측). `PYTHONPYCACHEPREFIX`는 캐시를 번들 밖에 두므로 두 목표를 다 달성하면서
+  속도를 잃지 않는다.
 - cwd의 `.env` 경고 — pydantic이 cwd의 `.env`를 읽는다(`config.py:9`). 앱 env가 이기므로 실해는
   없지만 있으면 혼란의 원인이다.
 
@@ -496,6 +506,9 @@ electron을 import하지 않는 순수 모듈이다 — `services/postgres/layou
 - `saveConfigValue(… "REPO_ROOT" …)`가 사라졌는가.
 - `api.ts`·마이그레이션 러너가 `path.join`에 닿기 전에 원인을 내는가.
 - `LENS_LLM_BASE_URL`이 실제로 들어가는가.
+- **`PYTHONPYCACHEPREFIX`가 자식 env에 들어가는가** — Step 2의 위생 테스트가 assert한다.
+  worker·embed·`llm_entry` **셋 다**여야 한다. 빠지면 Part 1 Task 6이 넘긴 계약이 받는 쪽
+  없이 끊긴다 (6회차 blocking BL-1).
 
 - [ ] **Step 7: 커밋** — `feat(desktop): 자식 env를 씻고 packaged의 저장소 게이트를 지운다`
 

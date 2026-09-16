@@ -37,8 +37,17 @@ find "$HOME/.cache/huggingface" -type f -exec stat -f '%z %N' {} + 2>/dev/null |
 ls -la "$HOME/.local/share/uv/tools" > "$DEST/abs-uv-tools.txt" 2>/dev/null || : > "$DEST/abs-uv-tools.txt"
 # Docker 볼륨은 메타데이터로 내용 보존을 증명하지 못한다 — 행 수를 직접 센다. host psql이
 # 없는 맥이 많아 컨테이너 안의 것을 쓰고, 못 재면 **빈 파일이 아니라 "측정 불가"**를 적는다.
+# pg_stat_user_tables.n_live_tup은 **추정치**라 ANALYZE만으로 흔들려 거짓 FAIL을 낸다.
+# 정확한 count(*)를 센다 — 이 규모에서 전체가 0.1초다.
 if docker exec damwha-postgres psql -U postgres -d damwha -tAc \
-     "select relname||'='||n_live_tup from pg_stat_user_tables order by relname" \
+     "select string_agg(t||'='||c, E'\n' order by t) from (
+        select c.relname as t,
+               (xpath('/row/c/text()',
+                      query_to_xml(format('select count(*) as c from %I.%I', n.nspname, c.relname),
+                                   false, true, '')))[1]::text::bigint as c
+        from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where c.relkind = 'r' and n.nspname = 'public'
+      ) s" \
      > "$DEST/abs-docker-db-rows.txt" 2>/dev/null && [ -s "$DEST/abs-docker-db-rows.txt" ]; then
   :
 else

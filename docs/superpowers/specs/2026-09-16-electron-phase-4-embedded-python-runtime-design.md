@@ -306,7 +306,7 @@ Python 트리는 **거의 안 변하는 런타임+의존성**과 **매 커밋 �
 
 | 층 | 캐시 키 | 내용 |
 | --- | --- | --- |
-| 런타임 | Python 버전 + `checksums.txt` + **`pyproject.toml`·`uv.lock` 해시** + `entitlements.plist` + 스크립트 shasum | 인터프리터 + 의존성 + 재배치 + 서명. **`BUILD_PREFIX`가 없다** — Python은 소스 빌드가 아니라 아카이브 전개라 우리가 정한 prefix가 트리에 없다 |
+| 런타임 | Python 버전 + `checksums.txt` + **`pyproject.toml`·`uv.lock` 해시** + `entitlements.python.plist` + 스크립트 shasum | 인터프리터 + 의존성 + 재배치 + 서명. **`BUILD_PREFIX`가 없다** — Python은 소스 빌드가 아니라 아카이브 전개라 우리가 정한 prefix가 트리에 없다 |
 | worker | 위 키 + **`be/worker/damwha_worker/` 트리 해시** | `damwha_worker` 패키지 설치 |
 
 worker 층은 런타임 층을 복사한 뒤 패키지만 덮어 설치하고 그 파일만 다시 서명한다.
@@ -344,14 +344,37 @@ Phase 0의 `build.sh`는 **한 최종 위치에서 relocate를 한 번** 하는 
 
 | # | 대상 | 조작 | 왜 |
 | --- | --- | --- | --- |
-| 1 | `bin/` 콘솔 스크립트 셔뱅 | **위치 독립 형태**(`${0%/*}`, 외부 명령 없음) | 절대 경로를 쓰면 두 자리를 못 덮고 `.app`에 dev 경로가 실린다 |
+| 1 | `bin/` 콘솔 스크립트 셔뱅 | **위치 독립 폴리글랏**(아래 형태 그대로. `${0%/*}`, 외부 명령 없음) | 절대 경로를 쓰면 두 자리를 못 덮고 `.app`에 dev 경로가 실린다 |
 | 2 | `_sysconfigdata*.py`의 prefix | **중립 자리표시자** `/damwha-bundled-python`으로 고정 | uv가 설치 시점에 그것을 **캐시 임시 경로**로 다시 쓴다. 그 값에 저장소 경로가 들어 있어 금지 문자열 검사에 걸린다 |
 | 3 | `direct_url.json` | 삭제 | 파일 경로 설치가 남기는 절대 경로. 텍스트 파일이라 금지 문자열 검사가 실제로 잡는 몇 안 되는 경우다 |
 | 4 | `__pycache__` | **빌드의 마지막 python 실행 뒤에** 삭제 | `.pyc`가 `co_filename`으로 컴파일 시점 절대 경로를 담는다 |
 
+**1번의 형태가 계약이다.** `build-python.sh`가 쓰고 `check-bundle.mjs`가 읽으므로 한 곳에만
+적는다. 순진한 `exec "${0%/*}/python3.12" "$0" "$@"`는 **python이 그 줄을 파싱해
+`SyntaxError: Missing parentheses in call to 'exec'`로 죽는다**(실측). PBS 자신의 콘솔
+스크립트가 쓰는 폴리글랏에서 `dirname`·`realpath`만 걷어낸 형태를 쓴다:
+
+```sh
+#!/bin/sh
+'''exec' "${0%/*}/python3.12" "$0" "$@"
+' '''
+```
+
+셸은 2행을 `'''exec'` = `exec`로 읽고, python은 2·3행을 하나의 문자열 리터럴로 읽어
+무시한다. 제한 PATH(`env -i PATH=<bin만>`)·공백이 든 경로·상대 실행·PATH 검색 네 경로에서
+실측으로 동작한다. PBS 원본 스크립트는 `${0%/*}`를 담지 않으므로, 이 토큰으로 "우리가
+재작성한 것"을 골라내는 검사가 prune 전에도 PBS 것을 집지 않는다.
+
 **2번이 왜 중립 자리표시자인가.** 실제 경로를 넣을 수 없다(둘이다). 캐시 경로는 저장소를
 담는다. PBS 원본값(`/install`)으로 되돌려도 되지만, **우리가 정한 문자열**이어야 의도된 값임이
 드러나고 금지 문자열 검사의 예외로 올릴 근거가 된다.
+
+**2번의 "uv가 캐시 경로로 다시 쓴다"는 이 Phase의 절차에서는 일어나지 않는다.** 그 관찰은
+Phase 0이 `uv python install`(uv 관리 트리)을 쓴 결과다. Phase 4는 tarball을 전개하므로 uv가
+prefix에 손대지 않는다 — 실측으로 PBS 원본값 `/install`이 그대로 남고 트리 경로는 0건이다.
+조작 자체는 여전히 한다(`/install`도 "우리가 정한 값"은 아니다). 다만 **Phase 0 코드를 그대로
+옮기면 `$root`(절대 경로)로 재작성하므로**, 목표값이 `$root`가 아니라 자리표시자임을 옮길 때
+바꿔야 한다.
 
 무해한 이유: `sysconfig.get_config_var('prefix')`는 **C 확장을 빌드할 때** 헤더·라이브러리를
 찾는 값이고 우리는 런타임에 아무것도 빌드하지 않는다. 모듈 해석은 `sys.prefix`가 하고 그것은
@@ -369,22 +392,43 @@ Phase 0의 `build.sh`는 **한 최종 위치에서 relocate를 한 번** 하는 
 적중으로 스테이징을 건너뛰면 그 트리가 그대로 `.app`에 실린다. 실측: PBS 트리에서 python을
 돌린 것만으로 `.pyc` 448개가 **전부** 트리 절대 경로를 담았다. 그래서 규칙이 둘이다 —
 (a) 스테이징은 **캐시 적중 여부와 무관하게** 스테이징 대상의 `__pycache__`를 지운다,
-(b) 앱이 번들 python을 부를 때 `PYTHONDONTWRITEBYTECODE=1`을 준다(§6.3 env 표). (b)는 packaged
-`.app` 안에 런타임 `.pyc`가 쌓여 서명 봉인 밖 파일이 생기는 것도 함께 막는다.
+(b) 앱이 번들 python을 부를 때 **`PYTHONPYCACHEPREFIX=<userData>/pycache`**를 준다(§6.3 env 표).
+(b)는 packaged `.app` 안에 런타임 `.pyc`가 쌓여 **서명 봉인 밖 파일**이 생기는 것도 함께
+막는다 — 봉인 밖 `.pyc` 하나가 `codesign --verify --deep --strict`를
+`a sealed resource is missing or invalid`로 깨뜨린다.
 
-**`check-bundle.mjs`의 금지 문자열 검사는 이것을 잡지 못한다 — `-a`가 없다.**
-`desktop/scripts/check-bundle.mjs:92`는 `grep -rlF -- <needle> <contents>`를 부르는데 macOS
-BSD grep은 **바이너리 파일을 건너뛴다.** 실측:
+**`PYTHONDONTWRITEBYTECODE=1`이 아니라 `PYTHONPYCACHEPREFIX`다.** 둘 다 트리를 깨끗하게
+유지하지만 전자는 바이트코드 캐시를 통째로 버린다. 실측(`import numba`, 같은 트리):
+
+| 설정 | 1회차 | 2회차 | 트리 `.pyc` |
+| --- | --- | --- | --- |
+| 기본 (트리에 `.pyc`) | 0.41초 | **0.14초** | 377개 — 오염 |
+| `PYTHONDONTWRITEBYTECODE=1` | 0.68초 | **0.63초** | 0개 |
+| `PYTHONPYCACHEPREFIX` | 0.75초 | **0.14초** | 0개 (prefix에 377개) |
+
+`numba` 하나로 4.5배다. worker·`--once`·`llm_entry`·capabilities 프로브가 torch·transformers·
+pyannote를 매번 다시 컴파일하면 그 배율이 그대로 곱해진다. `PYTHONPYCACHEPREFIX`는 두 목표를
+다 달성하면서 캐시를 잃지 않는다.
+
+**`check-bundle.mjs`의 금지 문자열 검사는 이것을 잡는다.** `desktop/scripts/check-bundle.mjs:92`는
+`spawnSync("grep", ["-rlF", …])`이고 `spawnSync`는 셸을 거치지 않으므로 PATH의 진짜 바이너리
+(`grep (BSD grep, GNU compatible) 2.6.0-FreeBSD`)를 받는다. BSD grep은 바이너리를 건너뛰지
+않는다 — `-a`는 출력 형태(`Binary file … matches` 대신 줄 내용)를 바꿀 뿐이고 `-l`은 어느
+쪽이든 파일 이름을 낸다. 실측 (`/usr/bin/grep`, `.pyc` 456개 트리):
 
 ```
-grep -rlF  '<트리경로>' --include='*.pyc' .   → 0건
-grep -ralF '<트리경로>' --include='*.pyc' .   → 448건
+/usr/bin/grep -rlF  '<트리경로>' --include='*.pyc' .   → 456건
+/usr/bin/grep -ralF '<트리경로>' --include='*.pyc' .   → 456건
 ```
 
-`direct_url.json`은 텍스트라 잡히지만 `.pyc`·`.so`·`.dylib`에 박힌 경로는 **하나도 안 잡힌다.**
-Part 1 Task 7이 그 grep에 `-a`를 더한다. 계획 안의 같은 형태 셋(Task 5 Step 6, Task 6 Step 6,
-이 계획의 완료 조건 2)도 함께 고쳤다. `-a`를 더하면 제3자 wheel이 자기 바이너리에 담은 배포자 경로가 새로 잡힐 수
-있으므로, 허용 목록은 **저장소 경로**를 담은 것만 위반으로 삼는 현재 기준을 유지한다.
+**5회차는 여기서 정반대 결론을 냈고 그것은 측정 도구 오염이었다** (§17.8). 그래도 Task 7은
+`-a`를 더한다 — 동작이 같고 의도가 드러나며 GNU grep에서도 안전하다. 제3자 wheel이 자기
+바이너리에 담은 배포자 경로는 위반이 아니다. 판정 기준은 지금처럼 **저장소 경로·pnpm store
+경로**를 담은 것뿐이고, numpy·numba·llvmlite 트리에서 그 셋의 매치는 0건이다(실측).
+
+**그러므로 이 오염은 조용히 실리지 않고 빌드를 깨뜨린다.** 그편이 낫지만 여전히 결함이다 —
+`pnpm desktop:dev`를 한 번 돌리고 나면 그 뒤 모든 패키징이 번들 검사에서 실패하고, 실패
+메시지("저장소 경로가 있다")가 원인(dev 실행이 만든 `.pyc`)을 가리키지 않는다.
 
 **의존성 매니페스트.** `be/worker/pyproject.toml`의 `models` extra에 **`mlx-lm`과 `mlx`를
 `==`로 명시 고정**하고 `uv lock`을 갱신한다.
@@ -425,8 +469,13 @@ codesign --force --deep --sign - --options runtime \
 ```
 
 `check-bundle.mjs`가 `codesign -d --entitlements -`로 실제 적용을 확인한다. 판정 대상은
-`.app` 경로(codesign이 주 실행 파일로 해석한다)와 `Resources/python` 안의 Mach-O 표본이고,
-앱 쪽은 **세 키**, 트리 쪽은 **두 키**다.
+`.app` 경로(codesign이 주 실행 파일로 해석한다)가 **세 키**, `Resources/python/bin/python3.12`가
+**두 키**다.
+
+**표본은 반드시 실행 파일이다.** `.so`·`.dylib`은 `--entitlements`로 서명해도
+`codesign -d --entitlements -`가 **키를 하나도 보이지 않는다**(실측: `.so` 0개,
+`bin/python3.12` 2개). `flags=0x10002(adhoc,runtime)`은 붙는다. 프로세스의 entitlement는 주
+실행 파일에서 오기 때문이다 — 표본을 `.so`로 뽑으면 이 검사가 통과 불가가 된다.
 
 **entitlements plist의 XML 주석에 하이픈 두 개를 연달아 쓰지 않는다.** AMFI 파서가
 `Failed to parse entitlements: AMFIUnserializeXML: syntax error near line N`으로 거부하고
@@ -525,7 +574,7 @@ codesign이 rc=1로 실패한다. `plutil -lint`는 그것을 통과시키므로
 | `LENS_LLM_BASE_URL` | `http://127.0.0.1:<빈 포트>` | **새로** — `DATABASE_URL`과 함께 기본값 없는 필수 키 둘 중 하나다. Phase 3이 이미 넣는 `DATABASE_URL`과 달리 이것은 **이 Phase가 새로 넣어야 한다**. 빠뜨리면 worker가 `ValidationError`로 기동 실패 |
 | `FFMPEG_BIN`·`FFPROBE_BIN` | `<ffmpeg>/bin/ffmpeg`·`ffprobe` | **새로** (§6.6) |
 | `PYTHONPATH` | **dev만** `<repo>/be/worker` | **새로** (§6.7) |
-| `PYTHONDONTWRITEBYTECODE` | `1` | **새로** (§6.1-b) — 번들 트리에 `.pyc`가 쌓이는 것을 막는다. dev에서는 `desktop/build/python`(= 스테이징 산출물)이 저장소 절대 경로를 담은 `.pyc`로 오염돼 다음 패키징이 그것을 `.app`에 싣는 것을, packaged에서는 서명 봉인 밖 파일이 생기는 것을 막는다 |
+| `PYTHONPYCACHEPREFIX` | `<userData>/pycache` | **새로** (§6.1-b) — 번들 트리에 `.pyc`가 쌓이는 것을 막는다. dev에서는 `desktop/build/python`(= 스테이징 산출물)이 저장소 절대 경로를 담은 `.pyc`로 오염돼 **그 뒤 모든 패키징이 번들 검사에서 실패하는** 것을, packaged에서는 **서명 봉인 밖 파일**이 생겨 `codesign --verify --deep --strict`가 깨지는 것을 막는다. `PYTHONDONTWRITEBYTECODE`는 같은 일을 하지만 import를 4.5배 느리게 한다(§6.1-b 실측) |
 
 **env 위생 — 상속을 좁힌다.** 지금 `uv-launcher.ts:51-55`는 `...process.env`를 통째로
 넘긴다. Electron이 Finder에서 뜨면 그 env는 얇지만, dev 터미널에서 뜨면 개발자의 전체
@@ -1002,7 +1051,7 @@ Phase 2·3의 나머지 규칙은 유지한다 — manual 실패는 자동 재�
 | P4-C23 | dev에서 worker 소스 수정이 재빌드 없이 반영된다 | `__main__.py`에 로그 한 줄 추가 → `pnpm desktop:dev` 재기동 → 그 줄이 나온다 |
 | P4-C24 | 기존 웹 흐름에 회귀가 없다 | **앱 검증과 분리된 회차에서** — `pnpm build`·`test`·`lint` 통과, `pnpm worker`·`pnpm embed`가 `.venv`로 기동해 Docker DB의 job을 처리 |
 | P4-C25 | `mlx` 버전 정렬이 STT·요약 출력을 깨지 않는다 | `uv.lock` 갱신 뒤 worker 테스트 전체 + 실오디오 1건 (§6.1) |
-| P4-C26 | 절대 불변 목록이 바이트 단위로 불변이다 | §5의 5개 항목 체크섬이 기준선과 같다 |
+| P4-C26 | 절대 불변 목록이 바이트 단위로 불변이다 | §5 절대 불변 4개 줄이 만드는 **`abs-*` 8건**(`phase4-baseline.sh`)이 기준선과 같다. `verify`가 `PASS`만 내고 `SKIP`(측정 불가)이 없어야 한다 |
 | P4-C27 | 앱 데이터 영역의 기존 레코드·파일이 보존된다 | 검증 전 회의 ID·행 수·`data/storage` 파일 체크섬이 검증 뒤에도 전부 존재. 증가만 있고 소실·변경 0 |
 | P4-C28 | numba 사망 지점이 측정되고 그 결과가 문서에 있다 | §6.8 A/B 결과와 조치가 결과 문서에 |
 
@@ -1294,10 +1343,10 @@ Phase 4는 반대 제약을 받는다 — 한 빌드 산출물이 두 자리(dev
 | --- | --- | --- |
 | **재배치가 캐시 임시 트리에 적용돼 `.app`에 저장소 경로가 실린다** | 리뷰어가 PBS 트리로 계획 순서를 재현 — `_sysconfigdata` prefix가 `<repo>/desktop/.cache/…`로 남고 진입점 확인이 만든 `.pyc` 25개가 같은 경로를 담는다 | **이 스펙 §6.1-b 신설** |
 
-**이 표의 "`check-bundle.mjs:90`의 기존 4번 검사가 잡는다"는 틀렸다 — 5회차에서 철회한다.**
-그 grep에 `-a`가 없어 BSD grep이 `.pyc`를 건너뛴다(§6.1-b의 실측). 4회차는 `.pyc`가 절대
-경로를 담는다는 사실은 맞혔지만, 그것을 잡아 줄 그물이 있다고 본 것이 틀렸다. `_sysconfigdata`는
-텍스트라 잡힌다.
+**5회차가 이 표의 "`check-bundle.mjs:90`의 기존 4번 검사가 잡는다"를 철회했는데, 그 철회가
+틀렸다 — 6회차에서 되돌린다.** 4회차의 원래 서술이 맞다. `check-bundle.mjs:92`는 `spawnSync`로
+진짜 BSD grep을 부르고 그것은 바이너리를 건너뛰지 않는다(§6.1-b 실측 456/456). 5회차가 본
+"0건"은 이 세션 셸의 `grep`이 ugrep `-I`로 바꿔치기된 함수여서 나온 값이었다(§17.8).
 | 훅의 `sys.modules` 훑기가 `getattr`로 던진다 | **메인 세션 실측 — 92개 모듈이 `ModuleNotFoundError`.** transformers의 지연 모듈이 `__getattr__`에서 서브모듈을 import한다. worker·embed·`llm_entry` 셋이 기동 첫머리에서 부르므로 세 프로세스가 전부 죽는다 | 계획 — `vars(mod).get(name)`으로 |
 | `parseDamwhaProcesses` 시그니처가 네 모양으로 갈린다 | 인터페이스·테스트·구현·호출부 | 계획 — §계약 한 곳에만 정의 |
 
@@ -1336,10 +1385,10 @@ Phase 4는 반대 제약을 받는다 — 한 빌드 산출물이 두 자리(dev
 | # | 지적 | 메인 세션 재확인 | 반영 |
 | --- | --- | --- | --- |
 | B-1 | **`.app` 서명 명령이 앱을 기동 불능으로 만든다** | **재현.** Electron 44.3.0 사본 3벌 — 무서명 `RESULT JS-OK`, 최소 집합 서명 **rc=133 `Fatal process out of memory: Failed to reserve virtual memory for CodeRange`**, `allow-jit` 추가 rc=0. `--deep`이 Electron Framework에도 hardened runtime을 건다(`flags=0x10002` 확인) | **§6.1 재작성 — plist 둘로 분리.** §6.8에 적용 범위 명시 |
-| B-2 | Task 5 Step 5-b의 셔뱅 탐지 grep이 항상 실패한다 | **재현.** 겹따옴표 `grep -l "\${0%/\*}"` → rc=1 매치 0. `grep -lF '${0%/*}'` → 매치 | 계획 Task 5 Step 5-b |
+| B-2 | Task 5 Step 5-b의 셔뱅 탐지 grep이 항상 실패한다 | **진단이 틀렸다** (6회차). 재현에 쓴 `grep`이 셸 함수였다 — 진짜 BSD grep은 겹따옴표 형태도 매치한다(rc=0). 다만 `-lF`+홑따옴표가 두 구현 모두에서 매치하므로 더 견고하다 | 수정은 유지, 근거를 정정 |
 | B-3 | Task 6 Step 6의 `diff -r` 기대값이 성립하지 않는다 | **재현.** `be/worker/damwha_worker`에 `__pycache__` 6개 + `.DS_Store` 1개, wheel에는 없다 | 계획 Task 6 Step 6 — 두 검사로 분리 |
-| B-4 | dev 실행이 스테이징 트리에 절대 경로 `.pyc`를 남기고 그것이 `.app`에 실린다 | **재현.** 트리의 python을 돌린 것만으로 `.pyc` 448개가 **전부** `co_filename`에 트리 절대 경로를 담았다. 두 계획에 `PYTHONDONTWRITEBYTECODE` 참조 0건 | **§6.1-b 확장** — 스테이징의 무조건 삭제 + §6.3에 `PYTHONDONTWRITEBYTECODE` |
-| **B-5** | **(메인 세션 발견) `check-bundle.mjs`의 금지 문자열 검사가 바이너리를 건너뛴다** | `check-bundle.mjs:92`가 `grep -rlF`다. BSD grep은 `-a` 없이 바이너리를 스킵한다 — 같은 트리에 `-rlF` 0건 / `-ralF` 448건 | **§6.1-b에 실측 기록, §17.4 철회.** Task 7이 `-a`를 더한다 |
+| B-4 | dev 실행이 스테이징 트리에 절대 경로 `.pyc`를 남긴다 | **재현.** 트리의 python을 돌린 것만으로 `.pyc` 448개가 **전부** `co_filename`에 트리 절대 경로를 담았다. 단 "그것이 `.app`에 실린다"는 틀렸다 — 번들 검사가 잡아 **빌드가 깨진다**(6회차) | **§6.1-b 확장** — 스테이징의 무조건 삭제 + §6.3에 `PYTHONPYCACHEPREFIX`(6회차에 `DONTWRITEBYTECODE`에서 교체) |
+| ~~**B-5**~~ | ~~(메인 세션 발견) `check-bundle.mjs`의 금지 문자열 검사가 바이너리를 건너뛴다~~ | **6회차에서 철회 — 오진이었다.** 측정에 쓴 `grep`이 셸 함수(ugrep `-I`)였다. 진짜 BSD grep은 456/456으로 잡는다 (§17.8 BL-2) | `-a` 추가는 무해하므로 유지. **§6.1-b·§17.4의 서술은 되돌렸다** |
 
 **B-5가 §17.4의 판단 하나를 무너뜨린다.** 4회차는 `.pyc`가 절대 경로를 담는다는 사실을
 맞혔지만 "`check-bundle.mjs:90`의 기존 4번 검사가 잡는다"고 적어 그것을 안전망으로 삼았다.
@@ -1367,7 +1416,56 @@ linker-signed 상태로 남기 때문에, 실행 성공을 서명 성공으로 �
   실을 `mlx-lm 0.31.3 + mlx 0.31.2` 조합은 이 맥에서 한 번도 돈 적이 없다 — Task 3의 회귀
   검증에 요약 1건을 넣는다.
 
-**리뷰어가 실측으로 확인해 준 것** (변경 없음): Task 4의 라이선스 검사 설계가 맞다 —
+### 17.8 외부 리뷰 — 6회차 (대상: Part 1 계획 + 이 스펙, HEAD `86c74e1`)
+
+**판정: 확정 불가 — blocking 2건.** 둘 다 메인 세션이 재확인했고 둘 다 사실이었다.
+**그중 하나는 5회차 자신의 오진이다.**
+
+| # | 지적 | 재확인 | 반영 |
+| --- | --- | --- | --- |
+| BL-1 | `PYTHONPYCACHEPREFIX`(당시 `PYTHONDONTWRITEBYTECODE`)가 **두 계획 사이에 떨어졌다** | `/usr/bin/grep -c` → Part 2에 **0건**. Part 2 Task 4 Step 5의 앱 소유 env 목록에 없다 | Part 2 Task 4에 키와 assert 추가 |
+| BL-2 | **5회차의 grep 실측이 도구 오염이다** | `type grep` → Claude Code 셸 스냅숏이 심은 **함수**(`ugrep -I`, 바이너리 스킵). `/usr/bin/grep`은 `-rlF` 456건 / `-ralF` 456건 | **§6.1-b 재작성, §17.4 철회 취소, §17.7 B-5 철회·B-2 근거 정정** |
+
+**BL-2가 이 회차의 핵심이다.** 5회차의 B-5("`check-bundle.mjs`가 바이너리를 건너뛴다")는
+**통째로 틀렸다.** `check-bundle.mjs:92`는 `spawnSync("grep", …)`이고 `spawnSync`는 셸을
+거치지 않으므로 PATH의 진짜 BSD grep을 받는다 — 그것은 원래부터 `.pyc`를 잡고 있었다. 5회차
+B-2의 진단("셔뱅 grep이 항상 실패한다")도 같은 오염이었다(진짜 grep은 겹따옴표 형태도 매치).
+
+이 세션의 셸에서는 `grep`·`find`·`diff`가 전부 함수다(`type -w`로 확인). **규칙 1("실행한
+코드만 싣는다")이 도구 동일성을 전제하고 있었고 그 전제가 깨져 있었다.** 규칙에
+"검증 명령은 `/usr/bin/grep`·`/usr/bin/find`·`/usr/bin/diff`로 실행하고 `[실행됨]`에 그것을
+적는다"를 더했다. 5회차 blocking 5건 중 **2건이 이 오염의 산물**이었다.
+
+**5회차 blocking의 최종 판정:**
+
+| 5회차 | 6회차 판정 |
+| --- | --- |
+| B-1 `.app` 서명이 앱을 죽인다 | **유효.** 리뷰어가 독립 재현(rc=133 / `allow-jit` rc=0). `.app` `--deep` 재서명이 트리 서명을 덮지 않는 것도 확인 |
+| B-2 셔뱅 grep | **수정은 유효, 진단은 무효.** `-lF`+홑따옴표가 두 구현 모두에서 매치하므로 더 견고하다 |
+| B-3 `diff -r` 분리 | **유효.** 리뷰어가 4시나리오로 확인 — 내용 차이·파일 누락을 잡고, `-x`가 숨긴 빌드 `__pycache__`는 `find`가 잡는다 |
+| B-4 `.pyc` 오염 | **절반 유효.** 오염은 실재하나 "조용히 실린다"는 틀렸다 — 번들 검사가 잡아 빌드가 깨진다 |
+| B-5 grep `-a` | **무효.** 철회 |
+
+**important 여섯을 재확인해 반영했다.** (1) 캐시 키가 존재하지 않는 `entitlements.plist`를
+해시한다(rename 누락). (2) `.so`는 `codesign -d --entitlements -`가 키를 **0개** 보이므로
+entitlement 판정 표본은 `bin/python3.12`여야 한다(실측). (3) 위치 독립 셔뱅의 **형태**가 어디에도
+없었고, 순진한 형태는 `SyntaxError`로 죽는다 — §6.1-b에 폴리글랏 3줄을 박았다. (4)
+`PYTHONDONTWRITEBYTECODE`는 `import numba`를 0.14초 → 0.63초로 만든다(4.5배) —
+`PYTHONPYCACHEPREFIX`로 교체했다. (5) Task 6 스테이징이 `build-postgres.sh stage()`의
+실행 중 프로세스 가드를 물려받지 않았다. (6) §6.1-b 2번의 근거가 Phase 0의 `uv python install`
+경로에서만 성립한다.
+
+**리뷰어가 완주한 것:** ffmpeg 9.0.1을 원본 플래그로 configure·make·install까지 돌려
+(65초) LGPL 2.1·정적 링크·`LC_RPATH` 0·실오디오 변환을 확인했다. Task 4의 설계가 실측으로
+전부 성립한다. PBS 아카이브 sha256이 업스트림 `SHA256SUMS`와 일치하는 것도 확인했다.
+
+### 17.9 외부 리뷰 기록에 대한 메모
+
+5회차와 6회차가 같은 교훈을 반대 방향에서 준다. 5회차는 **계획이 단언한 것을 실행해** 셋을
+잡았고, 6회차는 **5회차가 실행했다고 적은 것을 다시 실행해** 둘이 도구 오염임을 잡았다.
+`[실행됨]` 표기는 "돌렸다"만 증명하지 그것이 **무엇으로** 돌았는지는 증명하지 않는다.
+
+**5회차 리뷰어가 실측으로 확인해 준 것** (변경 없음): Task 4의 라이선스 검사 설계가 맞다 —
 ffmpeg 9.0.1 configure가 `License:`를 stdout에만 쓰고(`config.log`에 0건), 비활성 키는
 `!CONFIG_GPL=yes` 형태라 `^CONFIG_(GPL|NONFREE)=yes`가 옳다. Task 3의 `uv lock`은 4초에
 해석되고 변화가 `mlx-lm` 추가 하나뿐이다. 위치 독립 셔뱅은 제한 PATH·공백 경로·상대 실행
