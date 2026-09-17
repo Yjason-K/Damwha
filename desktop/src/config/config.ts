@@ -196,7 +196,8 @@ export function llmBaseUrl(port: number): string {
  *
  * HF_TOKEN은 여기 없다 — 기동 게이트(app/token-gate.ts)가 Keychain에서 읽은 값을 launchEnv가 ctx.env에 싣고,
  * 합성의 `...ctx.env`가 상속분(개발자 셸의 HF_TOKEN)을 이긴다. 게이트를 지나지 않은 감독자는 없다
- * (main.ts의 createSupervisorFor). 토큰 교체는 그 ctx.env를 고친다 (Task 11).
+ * (main.ts의 createSupervisorFor). 토큰 교체는 그 ctx.env를 고친다 (Task 11). Node 자식(API·마이그레이션 러너)은
+ * 같은 ctx.env를 받지만 nodeChildEnv가 토큰을 뺀다 (PYTHON_ONLY_ENV_KEYS).
  */
 export function appOwnedChildEnv(ctx: LaunchContext): Record<string, string> {
   const out: Record<string, string> = {
@@ -239,6 +240,40 @@ export function childEnv(
   inherited: Record<string, string | undefined> = process.env,
 ): Record<string, string> {
   return { ...sanitizeChildEnv({ ...inherited, ...ctx.env }), ...appOwnedChildEnv(ctx) };
+}
+
+/**
+ * Python 자식(worker·embed와 그 자손 — capabilities 프로브·`--once`·llm_entry)**에게만** 가는 키 (R-6b, 스펙 §6.4
+ * "자식에게는 HF_TOKEN env로만 넘어간다"). 감독자의 ctx.env에는 들어 있고 childEnv가 그대로 싣지만, Node 자식
+ * (API·마이그레이션 러너)의 env에서는 nodeChildEnv가 뺀다 — 그 둘은 토큰을 쓰지 않는다.
+ */
+export const PYTHON_ONLY_ENV_KEYS: readonly string[] = ["HF_TOKEN"];
+
+/**
+ * Node 자식(API — api-process.ts의 두 런처, 마이그레이션 러너 — postgres/migration-runner.ts)에게 주는 env **전체**.
+ *
+ * ```
+ * { ...inherited, ...env } − PYTHON_ONLY_ENV_KEYS − 값이 없는 키
+ * ```
+ *
+ * 상속분을 깔아 주는 이유: 자식 env를 주면 환경이 통째로 대체된다 — PATH·HOME 없는 API가 sysctl을 못 찾았다
+ * (api-process.ts). 빼는 것은 **최종 합성**에서다: 개발자 셸에서 상속된 HF_TOKEN도 Node 자식에게 가지 않는다.
+ * 입력은 건드리지 않는다 — 감독자가 쥔 ctx.env의 토큰은 worker·embed의 몫으로 남는다.
+ *
+ * STRIPPED_CHILD_ENV_KEYS(Python 인터프리터를 흔드는 키)는 여기서 빼지 않는다 — Node 자식과는 무관하고, 지금까지
+ * 그 둘은 상속 env를 그대로 받았다.
+ */
+export function nodeChildEnv(
+  env: Record<string, string>,
+  inherited: Record<string, string | undefined> = process.env,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries({ ...inherited, ...env })) {
+    if (value === undefined) continue;
+    if (PYTHON_ONLY_ENV_KEYS.includes(key)) continue;
+    out[key] = value;
+  }
+  return out;
 }
 
 /**

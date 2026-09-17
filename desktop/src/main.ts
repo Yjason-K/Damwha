@@ -1088,19 +1088,14 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
           stopOrphan: (pid) => stopOrphanPostmaster(pid, PG_FAST_GRACE_MS, PG_IMMEDIATE_GRACE_MS),
           log: appendSupervisorLog,
         });
-  // 러너의 env는 API와 같다 — inheritedEnv 위에 자식 env. DATABASE_URL을 **항상** 싣는다: dev의 cwd(be/)에서 dotenv가
-  // be/.env를 읽지만 이미 있는 값을 덮지 않는다 (스펙 §6.5-1).
-  const runnerEnv = (): Record<string, string> => {
-    const out: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) if (typeof v === "string") out[k] = v;
-    return { ...out, ...ctx.env };
-  };
+  // 러너에는 감독자의 ctx.env를 그대로 넘긴다. 상속 env 위에 얹고 HF_TOKEN을 빼는 합성은 러너가 한다
+  // (migration-runner.ts의 nodeChildEnv, R-6b) — API와 같은 규칙이고, 이 파일에 두면 테스트가 못 본다.
   // packaged는 번들 러너라 저장소가 필요 없다. dev 러너는 저장소에서 pnpm을 부르므로, 저장소가 없으면
   // cwd에 닿기 전에 원인을 낸다 — 위에서 dev는 이미 멈췄으니 타입을 세우는 가드다.
   const migrationRunner = () => {
-    if (app.isPackaged) return packagedMigrationRunner({ apiDir: path.join(process.resourcesPath, "api"), env: runnerEnv() });
+    if (app.isPackaged) return packagedMigrationRunner({ apiDir: path.join(process.resourcesPath, "api"), env: ctx.env });
     if (resolved === null) throw new Error(CAUSES.repoRootMissing.text);
-    return devMigrationRunner({ repoRoot: resolved, env: runnerEnv(), runTool });
+    return devMigrationRunner({ repoRoot: resolved, env: ctx.env, runTool });
   };
   const migrationGate =
     mode.kind === "external"

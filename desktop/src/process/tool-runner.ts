@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "child_process";
+import type { ForkOptions, UtilityProcess } from "electron";
 
 /**
  * 외부 도구 실행기 (Phase 3 스펙 §6.4 "기동 중단"). initdb·pg_controldata·psql·createdb·pg_dump·pg_restore·마이그레이션
@@ -8,6 +9,12 @@ import { spawn, type ChildProcess, type SpawnOptions } from "child_process";
  * 던지지 않는다. 실행 파일이 없어도, 시간이 넘어도, 중단돼도 결과로 돌려준다. 부르는 쪽이 그것을 원인 문구와 부류로
  * 바꾼다.
  */
+
+/**
+ * utilityProcess.fork의 모양. packaged API(api-process.ts)와 packaged 마이그레이션 러너가 받는다 — 테스트가 스폰 env를 본다.
+ * 타입만이다: electron을 값으로 import하지 않는다.
+ */
+export type ForkFn = (modulePath: string, args: string[], options: ForkOptions) => UtilityProcess;
 
 export type SpawnFn = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
 

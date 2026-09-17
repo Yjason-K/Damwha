@@ -1,8 +1,9 @@
 import { spawn, type ChildProcess } from "child_process";
 import type { UtilityProcess } from "electron";
-import type { ApiEnv } from "../config/config";
+import { nodeChildEnv, type ApiEnv } from "../config/config";
 import type { ProcessHandle } from "../process/handle";
 import { makeSink, sinkTails } from "../process/output";
+import type { ForkFn, SpawnFn } from "../process/tool-runner";
 
 /**
  * electron을 모듈 최상단에서 값으로 import하지 않는다. 그러면 이 파일을 평범한 Node에서
@@ -21,18 +22,28 @@ export interface LaunchOptions {
   env: ApiEnv;
   /** 있으면 stdout·stderr를 여기에도 쓴다. */
   logFile?: string;
+  /** launchDev의 스폰. 없으면 child_process.spawn — 테스트가 자식이 받는 env를 본다. */
+  spawnFn?: SpawnFn;
+  /** launchPackaged의 fork. 없으면 electron utilityProcess.fork — 테스트가 자식이 받는 env를 본다. */
+  forkFn?: ForkFn;
 }
 
 /**
- * utilityProcess의 env 타입은 Record<string, string>이라 process.env를 그대로 펼칠 수
- * 없다 — 값이 undefined일 수 있다. 문자열 값만 남겨 상속 가능한 모양으로 만든다.
+ * API 자식이 받는 env **전체** — 두 런처가 이것 하나를 쓴다.
+ *
+ * - 상속 env 위에 감독자의 env를 얹고 Python 전용 키(HF_TOKEN)를 뺀다 (config.ts의 nodeChildEnv, R-6b). API는
+ *   토큰을 쓰지 않는다 — 감독자의 ctx.env에 있어도, 개발자 셸에서 상속돼도 여기서는 빠진다.
+ * - 상속분을 까는 이유: env를 주면 환경이 통째로 **대체**된다 — 예전엔 options.env만 줘서 packaged의 API 자식이
+ *   PATH·HOME·TMPDIR·LANG 없이 돌았다. 실측 결과: be/src/system/capabilities.ts의 execFile('sysctl', …)이 이름만으로
+ *   부르는데, PATH가 없으면 execvp가 /usr/bin:/bin으로 되돌아가고 /usr/sbin/sysctl은 거기 없어 ENOENT — packaged
+ *   앱만 chip: null을 보고했다. utilityProcess의 env 타입이 Record<string, string>이라 값 없는 키도 여기서 빠진다.
+ * - HOST가 **마지막**이다. config.json 한 줄로 LAN에 열리지 않는다.
  */
-function inheritedEnv(): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (typeof value === "string") out[key] = value;
-  }
-  return out;
+export function apiChildEnv(
+  env: ApiEnv,
+  inherited: Record<string, string | undefined> = process.env,
+): Record<string, string> {
+  return { ...nodeChildEnv(env, inherited), HOST: "127.0.0.1" };
 }
 
 /**
@@ -93,16 +104,12 @@ export function launchPackaged(options: LaunchOptions): ProcessHandle {
   const sink = makeSink(options.logFile);
   const exit = exitNotifier();
   // utilityProcess는 app.whenReady() 뒤에만 부를 수 있다. main.ts가 그 순서를 지킨다.
-  const child: UtilityProcess = electronUtilityProcess().fork(options.entry, [], {
+  const fork: ForkFn = options.forkFn ?? ((modulePath, args, opts) => electronUtilityProcess().fork(modulePath, args, opts));
+  const child: UtilityProcess = fork(options.entry, [], {
     cwd: options.cwd,
     stdio: "pipe",
-    // env를 주면 환경이 통째로 **대체**된다 — 예전엔 options.env만 줘서 packaged의 API
-    // 자식이 PATH·HOME·TMPDIR·LANG 없이 돌았다. 실측 결과: be/src/system/capabilities.ts의
-    // execFile('sysctl', …)이 이름만으로 부르는데, PATH가 없으면 execvp가 /usr/bin:/bin으로
-    // 되돌아가고 /usr/sbin/sysctl은 거기 없어 ENOENT — packaged 앱만 chip: null을 보고했다.
-    // launchDev와 같은 모양으로 맞춘다. options.env와 HOST가 여전히 뒤라 보장은 그대로다:
-    // HOST가 마지막이어야 config.json 한 줄로 LAN에 열리지 않는다.
-    env: { ...inheritedEnv(), ...options.env, HOST: "127.0.0.1" },
+    // 상속 env·HF_TOKEN 제외·HOST 고정 — 그 이유는 apiChildEnv에 있다. launchDev와 같은 함수다.
+    env: apiChildEnv(options.env),
   });
   // utilityProcess.pid는 fork() 직후 undefined이고 'spawn' 이벤트에서야 채워진다
   // (Fix round 2 실측). 동기로 한 번만 잡아 두면 packaged 모드에서 이 handle의 pid가
@@ -172,13 +179,14 @@ export function launchPackaged(options: LaunchOptions): ProcessHandle {
 export function launchDev(options: LaunchOptions): ProcessHandle {
   const sink = makeSink(options.logFile);
   const exit = exitNotifier();
-  const child: ChildProcess = spawn("pnpm", ["--filter", "damwha-be", "run", "dev"], {
+  const child: ChildProcess = (options.spawnFn ?? spawn)("pnpm", ["--filter", "damwha-be", "run", "dev"], {
     cwd: options.cwd,
     stdio: ["ignore", "pipe", "pipe"],
     // 필수다. detached가 없으면 자식이 부모의 프로세스 그룹에 들어가 process.kill(-pid)가
     // 그룹을 못 찾고, pnpm만 죽어 nest가 만든 손자 API가 남는다.
     detached: true,
-    env: { ...process.env, ...options.env, HOST: "127.0.0.1" },
+    // 상속 env·HF_TOKEN 제외·HOST 고정 — launchPackaged와 같은 함수다 (apiChildEnv).
+    env: apiChildEnv(options.env),
   });
   const pid = child.pid;
   child.stdout?.on("data", (b: Buffer) => sink.write(b, false));
