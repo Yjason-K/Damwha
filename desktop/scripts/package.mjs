@@ -4,6 +4,7 @@
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { machOFiles } from "./lib/macho.mjs";
 
 const desktop = path.resolve(import.meta.dirname, "..");
 const repo = path.resolve(desktop, "..");
@@ -12,33 +13,6 @@ const apiTree = path.join(desktop, "build", "api");
 function run(cmd, args, cwd = repo, extraEnv = {}) {
   console.log(`$ ${cmd} ${args.join(" ")}`);
   execFileSync(cmd, args, { cwd, stdio: "inherit", env: { ...process.env, ...extraEnv } });
-}
-
-// 트리 안 Mach-O 목록. 파일마다 file(1)을 부르면 Python 트리의 2만 파일에서 2분이 걸린다 —
-// find -print0 을 받아 file을 묶어 부르면 수 초다 (build-python.sh:151 macho_list와 같은 수법).
-// 심볼릭 링크는 따라가지 않는다(-type f): bin/python·bin/python3은 python3.12를 가리키는
-// 링크일 뿐이라, 따라가면 같은 실행 파일을 세 번 서명·검사하게 된다.
-// fat 바이너리는 file이 슬라이스마다 "<경로> (for architecture …): Mach-O …" 줄을 더 찍으므로
-// 그 꼬리표를 떼고 중복을 지운다. 붙일 곳을 못 찾은 Mach-O 줄은 조용히 흘리지 않고 던진다 —
-// 놓친 파일은 "서명 안 된 Mach-O 0건"을 거짓으로 만든다.
-function machOFiles(root) {
-  if (!fs.existsSync(root)) return [];
-  const files = execFileSync("find", [root, "-type", "f", "-print0"], { encoding: "utf8", maxBuffer: 1 << 28 })
-    .split("\0")
-    .filter((f) => f.length > 0);
-  const known = new Set(files);
-  const found = new Set();
-  for (let i = 0; i < files.length; i += 500) {
-    const out = execFileSync("file", files.slice(i, i + 500), { encoding: "utf8", maxBuffer: 1 << 28 });
-    for (const line of out.split("\n")) {
-      const m = /^(.*?):\s*Mach-O/.exec(line);
-      if (m === null) continue;
-      const p = m[1].replace(/ \(for architecture [^)]*\)$/, "");
-      if (!known.has(p)) throw new Error(`file(1) 출력을 경로에 붙이지 못했다: ${line}`);
-      found.add(p);
-    }
-  }
-  return files.filter((f) => found.has(f));
 }
 
 // 내장 PostgreSQL 트리를 desktop/build/postgres에 스테이징한다. extraResources(from: build)가 그대로 Resources/postgres로

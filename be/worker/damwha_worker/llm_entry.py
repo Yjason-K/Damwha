@@ -1,0 +1,40 @@
+"""LLM 서버 진입 모듈 — `python -m damwha_worker.llm_entry --run-id=<uuid> --model … …` (스펙 §6.2).
+
+`--once` 자식(`llm_server.managed_llm_server`)이 이 모듈로 `mlx_lm.server`를 띄운다. 콘솔 스크립트
+`mlx_lm.server`를 직접 부르지 않는 이유가 둘이다.
+
+- 셔뱅을 타면 옛 경로가 남아 있을 때 죽지 않고 조용히 다른 런타임을 실행한다 (Phase 0 R-6).
+- `python -m mlx_lm.server`는 upstream CLI라 `--run-id`를 주면 모르는 인자로 죽고, 안 주면
+  앱이 `ps`로 소유를 증명할 수 없는 프로세스가 된다. 이 모듈이 그 둘 사이에 앉는다.
+
+하는 일은 넷뿐이다: `--run-id=`로 시작하는 토큰을 버리고(앱은 이 프로세스의 argv만 읽는다),
+나머지로 `sys.argv`를 재구성하고(`argv[0]`은 argparse의 prog 이름이라 남긴다), 자기 런타임을
+stderr로 보고하고(P4-C12 — 서버가 뜨고 나면 찍을 자리가 없다), **같은 프로세스에서**
+`mlx_lm.server.main()`을 부른다. exec 래퍼나 자식을 만들면 스펙 §6.2가 없앤 uv 중간 프로세스
+구조가 되살아난다.
+
+**모듈 수준에서 `mlx_lm`을 import하지 않는다.** 빌드의 진입점 확인(`find_spec`, `-E -s -P`)과
+테스트 스위트가 이 모듈의 부모를 import하는데, 거기서 mlx를 끌어오지 않게 한다.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+
+from .runtime_report import RUN_ID_PREFIX, runtime_facts
+
+
+def main() -> None:
+    sys.argv = sys.argv[:1] + [a for a in sys.argv[1:] if not a.startswith(RUN_ID_PREFIX)]
+    print(f"runtime {json.dumps(runtime_facts())}", file=sys.stderr, flush=True)
+
+    # Task 9: HF 다운로드 진행 훅을 여기서 설치한다 — mlx_lm을 import하기 **전에** (스펙 §6.9).
+
+    from mlx_lm.server import main as server_main
+
+    server_main()
+
+
+if __name__ == "__main__":
+    main()

@@ -14,18 +14,21 @@ import json
 import logging
 import shutil
 import subprocess
+import sys
 import time
 from contextlib import contextmanager
 from urllib.parse import urlparse
 
 import httpx
 
+from . import runtime_report
 from .errors import LLM_SERVER_START_FAILED, ErrorKind, WorkerError
 
 log = logging.getLogger("damwha_worker")
 
 _READY_POLL_SECONDS = 0.5
 _KILL_GRACE_SECONDS = 5.0
+_ENTRY_MODULE = "damwha_worker.llm_entry"
 
 
 def probe_models(base_url: str, timeout_seconds: float = 5.0) -> list[str] | None:
@@ -49,6 +52,36 @@ def _host_port(base_url: str) -> tuple[str, int]:
             ErrorKind.PERMANENT,
         )
     return parsed.hostname, parsed.port
+
+
+def _server_command(server_bin: str) -> list[str]:
+    """argv의 앞부분 — 무엇을 실행하는가.
+
+    빈 값이 기본이다. 이 워커와 **같은 인터프리터**로 `-m damwha_worker.llm_entry`를 띄우고,
+    부모(`--once` 자식)가 받은 `--run-id`를 모듈 바로 뒤에 이어 붙인다 (스펙 §6.2). 콘솔
+    스크립트의 셔뱅을 타지 않으므로 번들 python이 그대로 이어지고, argv의 run-id로 앱이 이
+    프로세스의 소유를 증명한다. 부모가 run-id를 받지 않았으면 지어내지 않는다.
+
+    값이 있으면 그 실행 파일을 그대로 쓰는 탈출구다(수동 운용·다른 백엔드). `--run-id`를 붙이지
+    않는다 — 임의의 백엔드는 모르는 인자로 죽을 수 있고, 앱은 그렇게 띄운 서버를 소유한다고
+    증명할 수 없다.
+    """
+    if not server_bin:
+        command = [sys.executable, "-m", _ENTRY_MODULE]
+        run_id = runtime_report.run_id_arg(sys.argv)
+        if run_id is not None:
+            command.append(f"{runtime_report.RUN_ID_PREFIX}{run_id}")
+        return command
+    binary = shutil.which(server_bin)
+    if binary is None:
+        raise WorkerError(
+            LLM_SERVER_START_FAILED,
+            f"LENS_LLM_SERVER_BIN={server_bin!r} is not an executable file or a command on "
+            "PATH — leave LENS_LLM_SERVER_BIN empty to run the bundled `python -m "
+            f"{_ENTRY_MODULE}`, or set LENS_LLM_MANAGED=false and start the server yourself",
+            ErrorKind.PERMANENT,
+        )
+    return [binary]
 
 
 def _stop(proc, stop_timeout_seconds: float) -> None:
@@ -89,20 +122,11 @@ def managed_llm_server(
         return
 
     host, port = _host_port(base_url)
-    binary = shutil.which(settings.lens_llm_server_bin)
-    if binary is None:
-        raise WorkerError(
-            LLM_SERVER_START_FAILED,
-            f"{settings.lens_llm_server_bin!r} not found on PATH — install it with "
-            "`uv tool install mlx-lm`, or set LENS_LLM_MANAGED=false and start the "
-            "server yourself",
-            ErrorKind.PERMANENT,
-        )
-
-    log.info("starting LLM server: %s %s on %s:%s", settings.lens_llm_server_bin, model, host, port)
+    command = _server_command(settings.lens_llm_server_bin)
+    log.info("starting LLM server: %s %s on %s:%s", " ".join(command), model, host, port)
     proc = popen(
         [
-            binary,
+            *command,
             "--model",
             model,
             # 서버 기본값도 추론 off로 맞춘다 — 클라이언트도 요청마다 같은 값을 보낸다.

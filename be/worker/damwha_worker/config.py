@@ -48,7 +48,10 @@ class Settings(BaseSettings):
     # 큐가 비어 있는 동안 모델이 메모리를 쥐고 있지 않게 하는 것이 목적이다. 이미 떠
     # 있는 서버(수동 기동·SMOKE)를 발견하면 그건 남의 것이라 재사용만 하고 죽이지 않는다.
     lens_llm_managed: bool = True
-    lens_llm_server_bin: str = "mlx_lm.server"
+    # 빈 값(기본) = 이 워커와 같은 인터프리터로 `-m damwha_worker.llm_entry`를 띄운다 — 부모의
+    # `--run-id`가 argv에 남아 앱이 소유를 증명할 수 있다 (스펙 §6.2). 값을 채우면 그 실행 파일을
+    # 그대로 실행하는 탈출구다(수동 운용·다른 백엔드). 그렇게 띄운 서버에는 소유 표식이 없다.
+    lens_llm_server_bin: str = ""
     # 첫 실행은 HF 다운로드를 포함한다 — 27B는 수십 GB라 넉넉히 잡는다.
     lens_llm_server_start_timeout_seconds: float = 600.0
     lens_llm_server_stop_timeout_seconds: float = 20.0

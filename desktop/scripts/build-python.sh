@@ -160,7 +160,9 @@ macho_list() {
 # (build-postgres.sh:113)는 die다 — 재서명이 빠진 파일은 그 자리에서 실행 불가가 된다.
 #
 # **실패 사유를 버리지 않는다.** codesign은 진단을 stderr에 쓰는데 그것을 /dev/null로 보내면
-# 남는 것이 파일 이름뿐이라 고칠 수가 없다 (sign_tree도 같다).
+# 남는 것이 파일 이름뿐이라 고칠 수가 없다 (sign_tree, fix_macho의 install_name_tool 둘도 같다).
+# `local out=$(…)`로 한 줄에 쓰지 않는다 — 그러면 `||`가 보는 종료 상태가 명령의 것이 아니라
+# local의 것(항상 0)이 되어 실패가 조용히 통과한다. 선언과 대입을 가른다.
 resign() {
   local out
   out=$(codesign -f -s - "$1" 2>&1) || die "재서명 실패: $1 — ${out:-codesign이 사유를 남기지 않았다}"
@@ -293,7 +295,7 @@ relocate() {
 fix_macho() {
   local root="$1"
   root=$(cd "$root" && pwd -P)
-  local machos m rp idv base newid touched
+  local machos m rp rps idv base newid touched out
   local rn=0 rfiles=0 idn=0
   machos=$(macho_list "$root") || die "Mach-O 목록을 만들지 못했다"
   [ -n "$machos" ] || die "Mach-O가 하나도 없다 — 트리가 비었거나 file(1)이 바뀌었다"
@@ -310,19 +312,29 @@ fix_macho() {
   # Python은 아카이브 전개라 우리가 정한 prefix 문자열이 트리에 없고, BUILD_PREFIX로 걸렀으면
   # 86건을 하나도 못 잡는다. build-postgres.sh의 relocate()가 BUILD_PREFIX를 쓰는 것과 다른
   # 점이고, 여기서 갈리는 이유가 그것이다.
+  #
+  # **안쪽 루프를 프로세스 치환(`done < <(otool …)`)으로 먹이지 않는다.** macOS의 /bin/bash 3.2는
+  # 함수 안의 프로세스 치환 파이프를 함수가 끝날 때까지 닫지 않는다(실측: 반복마다 fd가 1씩 늘고
+  # 함수 반환 때 한꺼번에 닫힌다). 이 루프는 Mach-O 454개를 돌아 fd를 459까지 쌓았고, 2026-09-17
+  # Part 2 빌드에서 bash가 바로 다음 (b) 루프 입구에서 free() 안의 시그널 루프(`mfm_free` →
+  # `_sigtramp`, CPU 100%, 자식 없음)에 빠져 13분 동안 멈췄다. 같은 형태가 Part 1에서는 통과했고
+  # 따로 떼어 낸 재현은 멈추지 않았으므로 원인을 fd 누수로 **확정하지는 못했다** — 그러나 비정상
+  # 상태는 그것 하나였고, 출력을 변수에 받아 here-string으로 먹이면 fd가 쌓이지 않는다(실측 5 고정).
+  # 종료 상태는 전처럼 보지 않는다(`|| true`) — 프로세스 치환도 보지 않았고, 받은 출력은 그대로 쓴다.
   while IFS= read -r m; do
     [ -n "$m" ] || continue
     touched=0
+    rps=$(otool -l "$m" 2>/dev/null | awk '/^ *cmd LC_RPATH/{r=1;next} r&&/^ *path /{print $2; r=0}' | sort -u) || true
     while IFS= read -r rp; do
       [ -n "$rp" ] || continue
       case "$rp" in
         @*|"$root"|"$root"/*|/usr/lib|/usr/lib/*|/System/Library|/System/Library/*) continue ;;
       esac
-      install_name_tool -delete_rpath "$rp" "$m" 2>/dev/null \
-        || die "LC_RPATH 삭제 실패: ${m#"$root"/} <- $rp"
+      out=$(install_name_tool -delete_rpath "$rp" "$m" 2>&1) \
+        || die "LC_RPATH 삭제 실패: ${m#"$root"/} <- $rp — ${out:-install_name_tool이 사유를 남기지 않았다}"
       echo "  LC_RPATH 삭제: ${m#"$root"/}  <- $rp"
       rn=$((rn + 1)); touched=1
-    done < <(otool -l "$m" 2>/dev/null | awk '/^ *cmd LC_RPATH/{r=1;next} r&&/^ *path /{print $2; r=0}' | sort -u)
+    done <<< "$rps"
     # install_name_tool은 서명을 무효로 만든다 → 파일별 즉시 재서명 (Phase 0 :398).
     if [ "$touched" = 1 ]; then resign "$m"; rfiles=$((rfiles + 1)); fi
   done <<< "$machos"
@@ -352,8 +364,8 @@ fix_macho() {
       lib/libpython$PY_VERSION.dylib) newid="@executable_path/../lib/libpython$PY_VERSION.dylib" ;;
       *) newid="@rpath/$base" ;;
     esac
-    install_name_tool -id "$newid" "$m" 2>/dev/null \
-      || die "LC_ID_DYLIB 변경 실패: ${m#"$root"/} ($idv)"
+    out=$(install_name_tool -id "$newid" "$m" 2>&1) \
+      || die "LC_ID_DYLIB 변경 실패: ${m#"$root"/} ($idv) — ${out:-install_name_tool이 사유를 남기지 않았다}"
     resign "$m"
     idn=$((idn + 1))
   done <<< "$machos"
@@ -558,9 +570,10 @@ build_rt() {
 
 # 진입점 확인. **find_spec으로 "찾기"만 한다 — import하지 않는다** (스펙 §6.1 8단계).
 #
-# import가 위험한 이유: embed_service는 Part 2가 고치기 전까지 모듈 수준에서 load_settings()와
-# build_text_embedder()를 부른다(embed_service.py:10-11). import하면 빌드 머신이 DATABASE_URL을
-# 요구하고 bge-m3 2.2 GB를 받는다.
+# import를 피하는 이유: embed_service는 Part 1 시점에 모듈 수준에서 load_settings()와
+# build_text_embedder()를 불렀다 — import하면 빌드 머신이 DATABASE_URL을 요구하고 bge-m3 2.2 GB를
+# 받았다. Part 2가 그것을 지연 초기화로 바꿨지만, 진입점의 import 안전성을 빌드가 떠안을 이유는
+# 없으므로 계속 "찾기"만 한다. llm_entry도 같다 — 모듈 수준에서 mlx_lm을 import하지 않는다.
 #
 # 다만 find_spec도 무부작용은 아니다 — **점 표기는 부모 패키지를 import한다**(실측:
 # pkg/__init__.py의 print가 찍히고 `pkg in sys.modules: True`). damwha_worker.* 가 안전한 것은
@@ -573,7 +586,8 @@ build_rt() {
 # find_spec('definitely_missing_pkg_xyz.sub')). 감싸지 않으면 mlx_lm이 빠졌을 때 트레이스백으로
 # 죽어 뒤의 tqdm_class assert에 닿지 못한다 — 빌드는 어차피 멈추지만 진단이 사라진다.
 #
-# damwha_worker.llm_entry는 Part 2가 만든다 — 그때 이 목록에 더한다.
+# damwha_worker.llm_entry는 LLM 서버의 진입 모듈이다(스펙 §6.2) — `-m`으로 불리는 세 진입
+# (damwha_worker → __main__, embed_service, llm_entry)이 모두 이 목록에 있다.
 #
 # huggingface_hub만은 실제로 import한다. 다운로드 진행 훅이 snapshot_download·hf_hub_download의
 # tqdm_class 인자에 얹히므로(스펙 §6.9), 라이브러리가 그 인자를 없애면 **.app이 아니라 빌드가
@@ -608,7 +622,7 @@ check_entrypoints() {
 import importlib.util as u, inspect, os, pathlib, sys
 root = os.path.realpath(sys.argv[1])
 TARGETS = ('damwha_worker', 'damwha_worker.__main__', 'damwha_worker.embed_service',
-           'mlx_lm.server')
+           'damwha_worker.llm_entry', 'mlx_lm.server')
 missing, outside = [], []
 for m in TARGETS:
     try:
@@ -617,7 +631,7 @@ for m in TARGETS:
         spec = None
     if spec is None:
         missing.append(m); continue
-    # namespace 패키지는 origin이 None이다. 이 넷은 전부 실체가 있어야 하므로 그것도 실패다.
+    # namespace 패키지는 origin이 None이다. 이 다섯은 전부 실체가 있어야 하므로 그것도 실패다.
     origin = spec.origin
     if not origin or not os.path.realpath(origin).startswith(root + os.sep):
         outside.append(m + ' <- ' + str(origin))
@@ -735,6 +749,46 @@ stage() {
   purge_pycache "$STAGED"
 }
 
+# ---------------------------------------------------------------------------
+# 캐시 GC — 현재 키가 아닌 층을 지운다 (Part 1 결과 문서 §8.5)
+# ---------------------------------------------------------------------------
+#
+# 키가 바뀌면 옛 rt-<키>/wk-<키>가 층마다 1.3 GB씩 그대로 남는다. 이 스크립트를 한 글자 고칠
+# 때마다 두 층이 새로 생기므로 GC가 없으면 2.6 GB씩 쌓인다.
+#
+# **마지막에, 성공한 빌드에서만 돈다.** set -e라 위 어느 단계가 실패해도 여기에 닿지 않는다 —
+# 새 층을 못 만든 빌드가 옛 층까지 지우면 되돌아갈 캐시가 없어진다. 스테이징 트리와 .app은
+# ditto 사본이라 캐시를 지워도 영향이 없다.
+#
+# 대상은 이름이 **정확히** `rt-<16자리 16진수>`·`wk-<16자리 16진수>`인 디렉터리와
+# `<그 이름>.complete` 파일뿐이다. downloads/, work-<키>(실패한 빌드의 중간물), *.tmp, 그 밖의
+# 파일은 건드리지 않는다. 표식을 **먼저** 지운다 — 디렉터리 삭제가 중간에 끊겨도 반쯤 지워진
+# 트리가 "완성"으로 적중하는 일이 없게.
+gc_cache() {
+  local re_dir='^(rt|wk)-[0-9a-f]{16}$' re_done='^(rt|wk)-[0-9a-f]{16}\.complete$'
+  local keep_rt="rt-$RT_KEY" keep_wk="wk-$WK_KEY"
+  local p name n=0
+  for p in "$CACHE"/rt-*.complete "$CACHE"/wk-*.complete; do
+    [ -f "$p" ] && [ ! -L "$p" ] || continue
+    name=$(basename "$p")
+    [[ $name =~ $re_done ]] || continue
+    [ "$name" = "$keep_rt.complete" ] || [ "$name" = "$keep_wk.complete" ] && continue
+    rm -f "$p"
+    echo "  삭제: $name"
+    n=$((n + 1))
+  done
+  for p in "$CACHE"/rt-* "$CACHE"/wk-*; do
+    [ -d "$p" ] && [ ! -L "$p" ] || continue
+    name=$(basename "$p")
+    [[ $name =~ $re_dir ]] || continue
+    [ "$name" = "$keep_rt" ] || [ "$name" = "$keep_wk" ] && continue
+    rm -rf "$p"
+    echo "  삭제: $name/"
+    n=$((n + 1))
+  done
+  echo "  옛 키 항목 ${n}개 삭제 (남긴 층: $keep_rt, $keep_wk)"
+}
+
 if [ "$FRESH" = 1 ]; then
   rm -rf "$RT_WORK" "$RT_OUT" "$RT_OUT.tmp" "$RT_DONE" "$WK_OUT" "$WK_OUT.tmp" "$WK_DONE"
 fi
@@ -760,3 +814,6 @@ fi
 say "worker 층: $WK_OUT ($(du -sh "$WK_OUT" | cut -f1))"
 
 stage
+
+say "캐시 GC — 현재 키가 아닌 rt-/wk- 층"
+gc_cache
