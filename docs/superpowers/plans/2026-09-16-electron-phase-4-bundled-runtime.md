@@ -158,6 +158,8 @@ ls -la "$HOME/.local/share/uv/tools" > "$DEST/abs-uv-tools.txt" 2>/dev/null || :
 # 없는 맥이 많아 컨테이너 안의 것을 쓰고, 못 재면 **빈 파일이 아니라 "측정 불가"**를 적는다.
 # pg_stat_user_tables.n_live_tup은 **추정치**라 ANALYZE만으로 흔들려 거짓 FAIL을 낸다.
 # 정확한 count(*)를 센다 — 이 규모에서 전체가 0.1초다.
+# 빈 스키마면 string_agg가 NULL이라 출력이 개행 1바이트다 — [ -s ]를 통과해 "빈 측정"으로
+# 기록된다. 비슈퍼유저면 query_to_xml이 질의 전체를 실패시켜 UNAVAILABLE로 떨어진다.
 if docker exec damwha-postgres psql -U postgres -d damwha -tAc \
      "select string_agg(t||'='||c, E'\n' order by t) from (
         select c.relname as t,
@@ -812,7 +814,26 @@ sed -n '133,205p' docs/superpowers/reference/electron-phase-0/python-build.sh   
 **의도적으로 다르게 가는 것 하나 — 셔뱅.** 원본은 절대 경로 재작성을 쓰고 `#!/bin/sh` 트릭을
 **기각했다**(`:274-277`: "SIP가 `/bin/sh` exec에서 `DYLD_*`를 지워 dyld 실측이 끊긴다").
 Phase 4는 dyld 실측을 하지 않고, 반대로 **한 산출물이 두 자리에 놓이는** 제약을 받는다 — 근거는
-스펙 §6.1-b·§17.3. 위치 독립 형태(`${0%/*}`, 외부 명령 없음)를 쓴다.
+스펙 §6.1-b·§17.3. 위치 독립 폴리글랏(Interfaces에 3줄, `${0%/*}`, 외부 명령 없음)을 쓴다.
+
+**원본의 매처를 그대로 옮기면 안 된다 — uv가 셔뱅을 두 형태로 쓴다.** 원본
+`:285-296`의 `case` 는 `\#\!*/bin/python3.12`, 즉 **1행이 인터프리터 절대 경로인 평문 형태**만
+잡는다. uv는 그 경로가 길거나(셔뱅 127바이트 한계) 공백을 담으면 대신 폴리글랏을 쓴다:
+
+```sh
+#!/bin/sh
+'''exec' '/abs/…/bin/python3.12' "$0" "$@"
+' '''
+```
+
+1행이 `#!/bin/sh`라 원본 매처가 **건너뛴다.** 이 맥의 rt 경로는 91자라 평문 형태가 나오지만
+(**[실행됨: `/tmp/numba-probe/python/bin/numba` 1행이 평문 46자 경로]**), 체크아웃 경로가 더
+길거나 공백을 담은 머신에서는 **재작성이 조용히 0건이 되고** 절대 경로가 `bin/`에 남아 Task 7의
+금지 문자열 검사에서 원인 불명의 FAIL이 난다. Step 5-b의 `grep -lF '${0%/*}'` 선별도 그 파일들을
+아예 시험하지 않는다.
+
+그래서 셔뱅 절은 **두 형태를 모두 매치**해 1~3행을 우리 폴리글랏으로 치환한다. 스펙 §6.1-b
+1번의 규칙("콘솔 스크립트 셔뱅은 위치 독립")은 이미 둘 다 덮으므로 스펙 변경은 아니다.
 
 - [ ] **Step 2: 체크섬 파일을 만든다**
 
@@ -840,7 +861,7 @@ printf '%s  %s\n' "$MINE" "$ASSET" > desktop/scripts/python-checksums.txt
 
 | 층 | 캐시 키 | 내용 |
 | --- | --- | --- |
-| `rt-*` | Python 버전·릴리스 + `checksums.txt` + `pyproject.toml`·`uv.lock` + **`entitlements.python.plist`** + 스크립트 shasum | 인터프리터 + 의존성 + prune + 재배치 + Mach-O + 서명 |
+| `rt-*` | Python 버전·릴리스 + `checksums.txt` + **`uv export` 출력 해시** + **`entitlements.python.plist`** + 스크립트 shasum | 인터프리터 + 의존성 + prune + 재배치 + Mach-O + 서명 |
 | `wk-*` | 위 키 + `damwha_worker/` **트리 해시(경로 포함, `__pycache__`·`.DS_Store` 제외)** | `damwha_worker` 설치 (Task 6) |
 
 **`BUILD_PREFIX`가 없다.** `build-postgres.sh`·`build-ffmpeg.sh`와 다른 점이다 — 그 둘은
@@ -854,6 +875,10 @@ printf '%s  %s\n' "$MINE" "$ASSET" > desktop/scripts/python-checksums.txt
 의존성 설치는 `uv export --extra models --no-dev --locked --no-emit-project`로 뽑은 목록을 쓴다:
 - `--no-dev` — 기본은 dev 그룹 포함이라 pytest·ruff·testcontainers가 1.5 GB 번들에 실린다.
 - `--locked` — 불일치면 실패한다. 없으면 빌드가 자기 캐시 키 입력(`uv.lock`)을 다시 쓴다.
+
+**캐시 키는 `uv.lock`이 아니라 이 `uv export` 출력을 해시한다.** `uv.lock`은 dev 그룹까지
+담으므로 ruff·pytest 버전이 올라가는 것만으로 1.5 GB 런타임 층이 무효화된다. export 출력은
+실제로 설치되는 목록이라 더 정확하다.
 - `--no-emit-project` — **없으면 목록 3행에 `-e .`가 나온다**
   (**[실행됨: 2026-09-16]**). 그대로 `uv pip install -r`에 넣으면 cwd를 editable로 깔아
   `.pth`에 저장소 절대 경로가 박히거나(§6.7 위반), cwd에 `pyproject.toml`이 없어 실패한다.
@@ -914,14 +939,40 @@ env -i PATH="/tmp/py-moved/bin" HOME=/tmp "$BIN" --version 2>&1 | head -3
 
 mkdir -p "/tmp/py spaced" && ditto /tmp/py-moved "/tmp/py spaced/python"
 env -i PATH="/tmp/py spaced/python/bin" HOME=/tmp "/tmp/py spaced/python/bin/$(basename "$BIN")" --version 2>&1 | head -3
-rm -rf "/tmp/py spaced" /tmp/py-moved
+rm -rf "/tmp/py spaced"
 ```
 
 `dirname: command not found`나 `/python3.12: not found`가 나오면 셔뱅이 외부 명령에 의존한다.
 
-- [ ] **Step 6: 절대 경로가 안 굽혔는지 확인한다 (B-1 회귀 방지)**
+**`/tmp/py-moved`는 여기서 지우지 않는다** — Step 5-c·6이 그것을 쓴다. 정리는 Step 6 끝이다.
+
+- [ ] **Step 5-c: 파이프라인 모듈이 이동 트리에서 실제로 import되는지 본다**
+
+셔뱅과 `import torch`만으로는 `LC_RPATH` 삭제나 재서명이 어떤 `.so`를 깨뜨렸는지 드러나지
+않는다. 그것이 Part 2의 job 실행에서야 터지면 원인을 이 Task로 되짚기 어렵다. **이 import들은
+부작용이 없다** — 빌드 안에서 `find_spec`만 쓰기로 한 §6.1 8단계의 제약은 `embed_service`처럼
+모듈 수준에서 설정·모델을 요구하는 것에 대한 것이고, 아래 목록은 그 부류가 아니다.
 
 ```bash
+env -i PATH="/tmp/py-moved/bin" HOME=/tmp PYTHONPYCACHEPREFIX=/tmp/py-pyc \
+  /tmp/py-moved/bin/python3.12 -c "
+import sys
+sys.modules.setdefault('torchcodec', None)   # worker가 하는 것과 같다 (bge_embed.py:14)
+import torch, torchaudio, numba, mlx.core, mlx_whisper
+import pyannote.audio, speechbrain, faster_whisper, sentence_transformers
+import damwha_worker.models.audio_io
+print('PIPELINE-IMPORT-OK')
+"
+```
+
+**`torchcodec`은 번들에서 로드되지 않는다 — 그게 맞다.** 그 dylib들이 `@rpath/libavcodec.*`를
+요구하고 유일한 `LC_RPATH`가 우리가 지운 `/opt/homebrew/opt/ffmpeg/lib`다. worker는 이미
+`sys.modules.setdefault("torchcodec", None)`로 우회하고 있고(`models/bge_embed.py:14`,
+`models/audio_io.py`), 이 맥의 Homebrew ffmpeg는 libavcodec 63이라 **원래도 로드된 적이 없다.**
+사장된 dylib 5개를 번들에서 빼는 것은 이 계획의 범위 밖이고, 결과 문서에 적는다.
+
+- [ ] **Step 6: 절대 경로가 안 굽혔는지 확인한다 (B-1 회귀 방지)**
+
 **캐시 층 안에서 python을 돌리지 않는다.** `$RT`에서 부르면 rt 층에 `.pyc`가 새로 생겨
 검증이 검증 대상을 오염시키고, 이 Step을 다시 돌리면 그 `.pyc`를 grep이 잡는다. Step 5가
 만든 사본 `/tmp/py-moved`에게 묻는다.
@@ -932,6 +983,7 @@ REPO=$(pwd)
 # 드러내고 GNU grep에서도 안전하므로 붙인다. 셸 함수가 아닌 진짜 grep을 부른다.
 /usr/bin/grep -ralF "$REPO" "$RT" | head -20   # 0건이어야 한다
 /tmp/py-moved/bin/python3.12 -c "import sysconfig; print(sysconfig.get_config_var('prefix'))"
+rm -rf /tmp/py-moved /tmp/py-pyc
 ```
 
 기대: grep 0건. prefix가 `/damwha-bundled-python`(스펙 §6.1-b의 중립 자리표시자).
@@ -960,7 +1012,10 @@ git checkout be/worker/pyproject.toml
 - prune이 있는가 — 없으면 Step 5-b가 PBS 스크립트에 걸린다.
 - `uv export`에 `--no-dev --locked --no-emit-project`가 있는가 — 마지막 것이 없으면 `-e .`가 나온다.
 - `--link-mode=copy`인가 (Phase 0 원본과 같게).
+- 셔뱅 재작성이 **uv의 두 형태를 모두** 매치하는가 (평문 + `/bin/sh` 폴리글랏).
 - Step 5-b의 grep이 **`-lF` + 홑따옴표**인가.
+- Step 5-b가 `/tmp/py-moved`를 **지우지 않는가** (Step 5-c·6이 쓴다).
+- Step 5-c의 import 묶음이 있는가 — 없으면 깨진 `.so`가 Part 2에서야 드러난다.
 - Step 6의 grep에 **`-a`**가 있는가.
 - Step 7이 `| head -3` 대신 `--print-key`를 쓰는가.
 - 캐시 키에 경로가 남는가.
@@ -992,16 +1047,35 @@ git checkout be/worker/pyproject.toml
 
 - [ ] **Step 2: 진입점을 확인한다 — `import`하지 않는다**
 
+**`find_spec`은 부모 패키지가 없으면 `None`이 아니라 `ModuleNotFoundError`를 던진다**
+(**[실행됨: `find_spec('definitely_missing_pkg_xyz.sub')` → `ModuleNotFoundError: No module
+named 'definitely_missing_pkg_xyz'`]**). 감싸지 않으면 `mlx_lm`이 빠졌을 때 계획한
+`없는 모듈: …` 대신 트레이스백으로 죽어 뒤의 `tqdm_class` assert에 닿지 못한다. 빌드는 비0으로
+멈추므로 거짓 통과는 아니지만 진단이 사라진다.
+
 ```bash
 "$WK_OUT/bin/python3.12" -c "
 import importlib.util as u, sys
-missing = [m for m in ('damwha_worker', 'damwha_worker.__main__', 'damwha_worker.embed_service',
-                       'mlx_lm.server')
-           if u.find_spec(m) is None]
-if missing: print('  없는 모듈:', ', '.join(missing)); sys.exit(1)
+TARGETS = ('damwha_worker', 'damwha_worker.__main__', 'damwha_worker.embed_service',
+           'mlx_lm.server')
+missing = []
+for m in TARGETS:
+    try:
+        if u.find_spec(m) is None:
+            missing.append(m)
+    except ModuleNotFoundError:      # 부모 패키지가 없다
+        missing.append(m)
+if missing:
+    print('  없는 모듈:', ', '.join(missing)); sys.exit(1)
+# damwha_worker.* 가 안전한 것은 __init__.py 가 비어 있기 때문이다 — 그것을 못 박는다.
+import damwha_worker, pathlib
+src = pathlib.Path(damwha_worker.__file__).read_text()
+assert src.strip() == '', 'damwha_worker/__init__.py 에 부작용이 생겼다'
 print('  모듈 확인 OK')
 "
 ```
+
+**[실행됨: 2026-09-17 — 예외 경로를 격리 재현했다. 감싼 형태가 목록을 내고 종료한다.]**
 
 **`find_spec`은 대상 모듈을 실행하지 않는다.** `import`는 부작용이 있는 모듈에서 위험하다 —
 `embed_service`는 Part 2가 고치기 전까지 모듈 수준에서 `load_settings()`와
@@ -1039,10 +1113,25 @@ assert한다.** 새 모듈을 목록에 더할 때 그 패키지의 `__init__.py
 1. **스테이징은 캐시 적중 여부와 무관하게** `$STAGED`의 `__pycache__`를 지운다
    (`build-postgres.sh`의 `.build-key` 관례는 "적중이면 아무것도 안 한다"인데, 여기서는
    적중일수록 오염된 트리가 남는다).
-   **`stage()`의 실행 중 프로세스 가드는 그대로 물려받는다** — `build-postgres.sh:200-202`가
-   `pgrep -f "$STAGED/bin/postgres"`로 dev 앱이 쓰는 트리를 갈아엎지 못하게 한다. 여기서는
-   `pgrep -f "$STAGED/bin/python3.12"`다. python은 모듈을 지연 로드하므로 실행 중
-   `rm -rf`(미스)나 `__pycache__` 삭제(적중)가 살아 있는 프로세스를 깨뜨린다.
+   **`stage()`의 실행 중 프로세스 가드는 물려받되 고쳐 쓴다** — `build-postgres.sh:200-202`가
+   `pgrep -f "$STAGED/bin/postgres"`로 dev 앱이 쓰는 트리를 갈아엎지 못하게 한다. python은
+   모듈을 지연 로드하므로 실행 중 `rm -rf`(미스)나 `__pycache__` 삭제(적중)가 살아 있는
+   프로세스를 깨뜨린다 — 같은 가드가 필요하다.
+
+   **`pgrep -f`의 패턴은 ERE다.** 경로에 `+`·`(`·`[` 같은 메타문자가 있으면 매치가 어긋나
+   **가드가 조용히 꺼진다**
+   (**[실행됨: 2026-09-17 — `/tmp/…/py dir+x/bin/python3.12`를 실행 중인 상태에서
+   `pgrep -f -- "$S/bin/python3.12"` → 0건, `+` 없는 같은 구조 → 1건]**). 고정 문자열로
+   비교한다:
+
+   ```bash
+   if pgrep -lf python3.12 2>/dev/null | /usr/bin/grep -qF "$STAGED/bin/"; then
+     echo "번들 python이 실행 중이다 — 앱을 끄고 다시 하라: $STAGED" >&2; exit 1
+   fi
+   ```
+
+   `build-postgres.sh:200`도 같은 한계를 갖지만 그 파일은 이 계획의 범위 밖이다 — 결과 문서에
+   후속으로 남긴다.
 2. 앱이 번들 python을 부를 때 **`PYTHONPYCACHEPREFIX=<userData>/pycache`**를 준다 —
    **Part 2 Task 4 Step 5**가 받는다(스펙 §6.3). packaged `.app` 안에 런타임 `.pyc`가 쌓여
    **서명 봉인 밖 파일**이 생기는 것도 함께 막는다. `PYTHONDONTWRITEBYTECODE`가 아닌 이유는
@@ -1104,6 +1193,8 @@ du -sh desktop/build/python desktop/build/ffmpeg
 - `grep`에 `-a`가 있는가 — 없으면 `.pyc`·`.so`의 경로를 못 잡는다.
 - 스테이징이 **캐시 적중일 때도** `__pycache__`를 지우는가.
 - 진입점 확인이 `damwha_worker/__init__.py`가 비어 있음을 assert하는가.
+- `find_spec`을 `try/except ModuleNotFoundError`로 감쌌는가.
+- `pgrep` 가드가 **고정 문자열 비교**인가 (`-f`의 ERE가 아니라).
 - `ditto`를 쓰는가.
 
 - [ ] **Step 7: 커밋** — `feat(desktop): Python 빌드에 worker 층과 진입점 확인을 더한다`
@@ -1159,10 +1250,10 @@ throw한다(:12-15) — 그 성질에 기댄다. entitlements plist의 XML 주�
 | --- | --- |
 | `Resources/{python,ffmpeg}` 존재, `bin/` 실행 파일 | 빌드 누락 |
 | `site-packages/damwha_worker/__main__.py`, `mlx_lm/server.py` 존재 | 트리만 있고 패키지가 없으면 첫 실행에서야 드러난다. `mlx_lm`은 §2.4의 회귀 방지 |
-| arm64 무서명 Mach-O 0건 | `codesign --verify --arch arm64` 전수. 심볼릭 링크는 건너뛴다 |
+| arm64 무서명 Mach-O 0건 | `codesign --verify --arch arm64` 전수. 심볼릭 링크는 건너뛴다. **`--arch`가 필요한 이유는 반쪽 서명 fat 바이너리다** — arm64만 서명된 fat을 plain `--verify`는 `not signed at all`로 잡지만 `--arch arm64`는 통과시키고 그 반대도 성립한다(실측. 이 트리에 universal Mach-O 13개). x86_64 전용 thin 파일은 `--arch arm64`가 **`object file format unrecognized`**로 rc 1을 낸다 — 무서명과 메시지를 구분해 보고한다. Mach-O 판별은 파일별 `file` 호출 대신 `find -type f -print0 \| xargs -0 file`로 묶는다 (2만 파일에서 2분 → 수 초) |
 | entitlement 실제 적용 | `codesign -d --entitlements -`가 `.app`에 **세 키**(`allow-jit` 포함), **`Resources/python/bin/python3.12`**에 **두 키**를 보인다. **표본은 실행 파일이어야 한다** — `.so`·`.dylib`은 `--entitlements`로 서명해도 키를 **0개** 보인다(실측). `.so`를 뽑으면 이 검사가 통과 불가다 |
 | `Resources/python` 아래 `__pycache__` 0개 | 스펙 §6.1-b 4번 |
-| `bin/` 셔뱅이 번들 안을 가리킨다 | **2행**의 `${0%/*}/python3.12`를 본다 — 위치 독립 형태에서 1행은 `#!/bin/sh`다. **우리가 만든 것만** 본다 — 제3자 wheel 원본의 문자열은 지울 수 없고 Phase 6이 받는다 (G1 허용 목록 24건) |
+| `bin/` 셔뱅이 번들 안을 가리킨다 | **2행**의 `${0%/*}/python3.12`를 본다 — 위치 독립 형태에서 1행은 `#!/bin/sh`다. **평문 셔뱅(`#!<절대경로>/bin/python3.12`)이 하나라도 남아 있으면 FAIL** — 재작성이 uv의 두 번째 형태를 놓쳤다는 뜻이다. **우리가 만든 것만** 본다 — 제3자 wheel 원본의 문자열은 지울 수 없고 Phase 6이 받는다 (G1 허용 목록 24건) |
 
 **기존 4번 검사(`check-bundle.mjs:92`)는 이미 바이너리를 잡는다.** `spawnSync("grep", …)`는
 셸을 거치지 않아 PATH의 진짜 BSD grep을 받고, 그것은 바이너리를 건너뛰지 않는다

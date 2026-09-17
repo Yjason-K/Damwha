@@ -583,6 +583,7 @@ codesign이 rc=1로 실패한다. `plutil -lint`는 그것을 통과시키므로
 | 지울 키 | 이유 |
 | --- | --- |
 | `PYTHONHOME`·`PYTHONSTARTUP`·`PYTHONUSERBASE` | 번들 인터프리터의 prefix 해석을 흔든다 |
+| `PYTHONDONTWRITEBYTECODE` | 상속되면 **`PYTHONPYCACHEPREFIX`를 조용히 이긴다**(실측). 트리 오염은 없지만 import가 4.5배 느려지고, dev 터미널에 그것이 켜져 있다는 이유만으로 앱이 느려진다 |
 | `VIRTUAL_ENV`·`CONDA_PREFIX` | 다른 환경을 가리킨다 |
 | `HF_HUB_CACHE`·`TRANSFORMERS_CACHE`·`TORCH_HOME`·`XDG_CACHE_HOME` | **`HF_HOME` 하나가 모두를 이긴다는 근거가 없다.** 더 구체적인 변수가 있으면 그것이 이긴다 |
 | packaged의 `PYTHONPATH` | dev 전용이다. 새면 §6.7의 격리가 무너진다 |
@@ -1458,6 +1459,67 @@ entitlement 판정 표본은 `bin/python3.12`여야 한다(실측). (3) 위치 �
 **리뷰어가 완주한 것:** ffmpeg 9.0.1을 원본 플래그로 configure·make·install까지 돌려
 (65초) LGPL 2.1·정적 링크·`LC_RPATH` 0·실오디오 변환을 확인했다. Task 4의 설계가 실측으로
 전부 성립한다. PBS 아카이브 sha256이 업스트림 `SHA256SUMS`와 일치하는 것도 확인했다.
+
+### 17.10 외부 리뷰 — 7회차 (대상: Part 1 계획 + 이 스펙, HEAD `c9765b7`)
+
+**판정: 확정 가능 — blocking 0건, important 5건, minor 9건.** 3회차 이후 처음이다.
+
+리뷰어가 **Phase 0의 재배치 조작을 실제 의존성 전체에 처음으로 돌렸다.** PBS 3.12.11에
+`uv export` 목록 전부(130 패키지, 1.3 GB, torch 387 MB)를 설치하고 `relocate()` 프로토타입으로
+다섯 조작을 적용한 뒤, 공백이 든 경로로 `ditto`하고 원본을 숨긴 채 import를 확인했다.
+
+| 조작 | 실측 |
+| --- | --- |
+| prune | 30건 제거, 남은 `realpath` 폴리글랏 0 |
+| 셔뱅 | 46개 재작성 |
+| `_sysconfigdata` | `/install`(35회) → `/damwha-bundled-python`, 런타임 재질의로 확인 |
+| `direct_url.json` | 1건. **삭제 전 저장소 경로의 유일한 매치가 이 파일이었다** |
+| `LC_RPATH` | Mach-O **454개** 중 84개 파일에서 **86건** 삭제 — `/Users/runner/miniconda3` 64, **`/opt/homebrew/opt/ffmpeg/lib` 15(torchcodec)**, `gcc@13` 3 |
+| `LC_ID_DYLIB` | 58건. `libpython`만 `@executable_path`, 나머지 `@rpath/<base>` |
+| 전수 서명·검증 | 454/454 성공, `--verify --arch arm64` 0 실패 |
+| 금지 문자열 | 설치 경로·저장소·pnpm store·`/.pnpm/` **전부 0건** |
+
+**`LC_RPATH` 필터를 "번들 밖 전부"로 고집한 §17.3의 결정이 실측으로 정당해졌다.**
+`BUILD_PREFIX` 매칭이었다면 79건을 하나도 못 잡았다.
+
+**worker 층 재적용이 멱등이다** — rt→wk `ditto` 뒤 `uv pip install --no-deps`가
+`direct_url.json` 1개와 콘솔 스크립트 2개에 절대 경로를 다시 만들고, `relocate` 재실행이
+그것만 고친다(`LC_RPATH` 0, `LC_ID_DYLIB` 0). §2.1의 "Mach-O 처리는 멱등"과 Task 6 Step 1의
+"`relocate`를 다시 부른다"가 성립한다.
+
+**important 5건은 전부 계획 텍스트 수정으로 닫혔다.**
+
+| # | 지적 | 재확인 | 반영 |
+| --- | --- | --- | --- |
+| I-1 | **uv가 셔뱅을 두 형태로 쓰는데 Phase 0 매처는 하나만 잡는다** | 원본 `:285-296`의 `case`가 `\#\!*/bin/python3.12`뿐이고, uv는 인터프리터 경로가 길거나 공백을 담으면 1행이 `#!/bin/sh`인 폴리글랏을 쓴다. 이 맥의 rt 경로는 91자라 안 터진다 | Task 5 Step 1 — 두 형태 매치. Task 7 — 평문 셔뱅 잔존 시 FAIL |
+| I-2 | Step 5-b가 `/tmp/py-moved`를 지우고 Step 6이 그것을 쓴다 | 사실. **6회차 수정이 만든 결함이다** — 그때 sysconfig 질의를 `$RT`에서 사본으로 옮기면서 삭제 시점을 안 옮겼다. 펜스 하나가 중복돼 산문이 코드 블록에 들어가 있었다 | 삭제를 Step 6 끝으로, 펜스 정정 |
+| I-3 | `find_spec`이 부모 없을 때 `None`이 아니라 던진다 | **재현.** `ModuleNotFoundError` | `try/except`로 감싸고 `__init__.py` 공백 assert 추가 |
+| I-4 | 재배치된 트리에서 실제 파이프라인 모듈 import 검증이 없다 | 프로토타입에서 `torchcodec`과 맨 `sentence_transformers`가 실제로 **import 실패**했다 | **Step 5-c 신설** — worker의 `torchcodec` 우회를 앞세운 import 묶음 |
+| I-5 | `pgrep -f` 패턴이 ERE라 경로 메타문자에 가드가 꺼진다 | **재현.** `+`가 든 경로에서 0건, 없으면 1건 | 고정 문자열 비교로 |
+
+**I-4가 실질적 발견이다.** `torchcodec`의 dylib 5개가 `@rpath/libavcodec.{58..62}`를 요구하고
+유일한 `LC_RPATH`가 우리가 지운 `/opt/homebrew/opt/ffmpeg/lib`다. worker는 이미
+`sys.modules.setdefault("torchcodec", None)`로 우회하고 있고(`models/bge_embed.py:14`,
+`models/audio_io.py`), 이 맥의 Homebrew ffmpeg는 libavcodec **63**이라 원래도 로드된 적이 없다.
+번들에 사장된 dylib이 실리는 것은 사실이고 결과 문서에 남긴다 — 제거는 이 Phase 밖이다.
+
+**`--arch arm64` 제약이 실측으로 확인됐다.** arm64 슬라이스만 서명된 fat 바이너리를 plain
+`--verify`는 `not signed at all`로 잡지만 `--arch arm64`는 통과시킨다(반대도 성립). 이 트리에
+universal Mach-O가 13개 있다. 단 x86_64 전용 thin 파일에는 `--arch arm64`가 "무서명"이 아니라
+`object file format unrecognized`를 낸다 — 진단에서 구분한다.
+
+**torch에서도 금지 문자열 오탐이 0이다.** 6회차의 numpy·numba·llvmlite 한정 결론이 1.3 GB
+의존성 전체로 확장됐다.
+
+**minor 9건**도 반영했다 — `PYTHONDONTWRITEBYTECODE`가 상속되면 `PYTHONPYCACHEPREFIX`를
+조용히 이기므로 씻는 목록에 넣었고, 쓰기 불가 prefix가 오류 없이 무캐시로 강등되는 것,
+rt 캐시 키를 `uv.lock` 대신 `uv export` 출력으로 좁힌 것, `check-bundle`의 파일별 `file` 호출을
+`xargs`로 묶는 것(2분 → 수 초), 빈 스키마에서 행 수 질의가 "빈 측정"이 되는 것을 적었다.
+
+**리뷰어의 판단:** 3~6회차의 blocking은 "이 계획대로 하면 앱이 안 뜬다 / 검사가 항상 실패한다 /
+`.app`에 저장소 경로가 실린다"였고, 7회차의 것은 검증 Step의 순서, 환경 의존 누락, 진단 품질,
+캐시 효율이다. 거짓 통과를 만드는 것도, 데이터 안전을 건드리는 것도, 스펙으로 되돌아갈 것을
+요구하는 것도 없다. **계획이 수렴했다.**
 
 ### 17.9 외부 리뷰 기록에 대한 메모
 

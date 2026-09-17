@@ -39,6 +39,8 @@ ls -la "$HOME/.local/share/uv/tools" > "$DEST/abs-uv-tools.txt" 2>/dev/null || :
 # 없는 맥이 많아 컨테이너 안의 것을 쓰고, 못 재면 **빈 파일이 아니라 "측정 불가"**를 적는다.
 # pg_stat_user_tables.n_live_tup은 **추정치**라 ANALYZE만으로 흔들려 거짓 FAIL을 낸다.
 # 정확한 count(*)를 센다 — 이 규모에서 전체가 0.1초다.
+# 빈 스키마면 string_agg가 NULL이라 출력이 개행 1바이트다 — [ -s ]를 통과해 "빈 측정"으로
+# 기록된다. 비슈퍼유저면 query_to_xml이 질의 전체를 실패시켜 UNAVAILABLE로 떨어진다.
 if docker exec damwha-postgres psql -U postgres -d damwha -tAc \
      "select string_agg(t||'='||c, E'\n' order by t) from (
         select c.relname as t,

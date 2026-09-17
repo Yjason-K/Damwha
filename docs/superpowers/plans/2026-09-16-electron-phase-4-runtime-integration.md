@@ -490,6 +490,12 @@ electron을 import하지 않는 순수 모듈이다 — `services/postgres/layou
   `PYTHONDONTWRITEBYTECODE=1`도 같은 일을 하지만 `import numba` 하나가 0.14초 → 0.63초가
   된다(4.5배, 실측). `PYTHONPYCACHEPREFIX`는 캐시를 번들 밖에 두므로 두 목표를 다 달성하면서
   속도를 잃지 않는다.
+- **`PYTHONDONTWRITEBYTECODE`는 씻는 목록에 넣는다**(스펙 §6.3). 상속되면 prefix를 조용히
+  이겨서, dev 터미널에 그것이 켜져 있다는 이유만으로 앱이 4.5배 느려진다.
+- **prefix 디렉터리를 만들지 못하면 로그를 남긴다.** 쓰기 불가한 prefix는 오류 없이 무캐시로
+  강등되므로(실측) 조용히 느려진다. `<userData>/pycache` 생성 실패를 한 줄 남긴다.
+- 자식 스폰 3곳(`capabilities.py:67`, `__main__.py:285`, `llm_server.py:103`)이 `env=`·`-I`·`-E`
+  없이 상속하므로, 감독자가 주는 env에 한 번 넣으면 `--once`·프로브·`llm_entry`까지 덮인다.
 - cwd의 `.env` 경고 — pydantic이 cwd의 `.env`를 읽는다(`config.py:9`). 앱 env가 이기므로 실해는
   없지만 있으면 혼란의 원인이다.
 
