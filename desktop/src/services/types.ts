@@ -48,8 +48,8 @@ export interface LaunchContext {
    */
   databaseMode: DatabaseMode["kind"];
   /**
-   * config.json에서 온 값 + 앱이 이 실행에 정한 값(main.ts의 launchEnv — LENS_LLM_BASE_URL) +
-   * 어댑터들의 prepare()가 기여한 값.
+   * config.json에서 온 값 + 앱이 이 실행에 정한 값(main.ts의 launchEnv — LENS_LLM_BASE_URL, 기동 게이트의
+   * HF_TOKEN) + 어댑터들의 prepare()가 기여한 값. **통째로 로그·화면에 싣지 않는다** — 토큰이 들어 있다.
    */
   env: ApiEnv;
   /**

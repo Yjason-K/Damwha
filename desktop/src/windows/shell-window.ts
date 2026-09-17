@@ -17,7 +17,7 @@ export interface ShellStatus {
   logPath?: string;
 }
 
-function shellFileOf(name: "status.html" | "services.html"): string {
+function shellFileOf(name: "status.html" | "services.html" | "token.html"): string {
   // app.getAppPath()는 dev에서 desktop/, packaged에서 app.asar을 가리킨다.
   return path.join(app.getAppPath(), "shell", name);
 }
@@ -70,5 +70,40 @@ export function createServicesWindow(focus: boolean, onLoadError: (e: unknown) =
     else win.showInactive();
   });
   win.loadFile(shellFileOf("services.html")).catch(onLoadError);
+  return win;
+}
+
+/**
+ * 첫 실행의 토큰 창을 만든다 (잎 — 흐름은 token-window.ts의 openTokenWindow에 있다).
+ *
+ * 메인 창과 같은 webPreferences다. preload가 없다 — main이 executeJavaScript로 묻고 그린다.
+ *
+ * `parent`를 메인 창으로 둔다. 자식 창은 부모 위에 머물러 "준비 중" 화면 뒤로 숨지 않고, 부모가 닫히면 함께
+ * 닫힌다 — 토큰 창이 닫히면 앱이 종료되므로(건너뛰기가 없다) 온보딩 중에 메인 창을 닫는 것도 종료다.
+ * (실측, Electron 44: 부모를 close()하면 자식에 'close' 없이 'closed'만 온다 — 흐름은 'closed'를 듣는다.)
+ * 모달(시트)로 두지 않는 이유: 시트에는 닫기 단추가 없어 "창을 닫으면 종료"라는 출구가 사라진다.
+ *
+ * 허용 목록이 비어 있으므로 이 창은 file:// 한 장 밖으로 가지 못한다. 외부 링크는 이 창이 열지 않고
+ * main이 shell.openExternal로 연다 (origin.ts의 경계 — huggingface.co를 앱 창 안에 렌더하지 않는다).
+ */
+export function createTokenWindow(parent: BrowserWindow | null, onLoadError: (e: unknown) => void): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 560,
+    height: 600,
+    minWidth: 440,
+    minHeight: 480,
+    title: "허깅페이스 토큰",
+    show: false,
+    fullscreenable: false,
+    ...(parent !== null && !parent.isDestroyed() ? { parent } : {}),
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  applyNavigationBoundary(win, () => []);
+  win.once("ready-to-show", () => {
+    if (win.isDestroyed()) return;
+    win.show();
+    win.focus();
+  });
+  win.loadFile(shellFileOf("token.html")).catch(onLoadError);
   return win;
 }

@@ -194,7 +194,9 @@ export function llmBaseUrl(port: number): string {
  * worker와 embed가 이 한 env를 받고, worker가 띄우는 자식 셋(capabilities 프로브·`--once`·llm_entry)은
  * env= 없이 그것을 상속한다 — 여기 넣은 값이 다섯 프로세스 모두에 닿는다.
  *
- * HF_TOKEN은 아직 없다 — Keychain 토큰이 이 목록에 들어온다 (Task 11).
+ * HF_TOKEN은 여기 없다 — 기동 게이트(app/token-gate.ts)가 Keychain에서 읽은 값을 launchEnv가 ctx.env에 싣고,
+ * 합성의 `...ctx.env`가 상속분(개발자 셸의 HF_TOKEN)을 이긴다. 게이트를 지나지 않은 감독자는 없다
+ * (main.ts의 createSupervisorFor). 토큰 교체는 그 ctx.env를 고친다 (Task 11).
  */
 export function appOwnedChildEnv(ctx: LaunchContext): Record<string, string> {
   const out: Record<string, string> = {
@@ -258,17 +260,20 @@ function withAppOwned(env: ApiEnv): ApiEnv {
 }
 
 /**
- * 감독자가 쥘 env와 그 재적용 기준선(baseline). 이 실행이 정한 값 — 빈 포트로 고른 LLM 주소 — 은
- * **env에만** 얹는다.
+ * 감독자가 쥘 env와 그 재적용 기준선(baseline). 이 실행이 정한 값 — 빈 포트로 고른 LLM 주소, 기동 게이트가
+ * Keychain에서 읽은 HF 토큰 — 은 **env에만** 얹는다.
  *
  * 기준선에 들어가면 안 되는 이유: 재적용(refreshEnv)은 "기준선에 있는데 파일에 없는 키"를 살아 있는
- * env에서 지운다. LENS_LLM_BASE_URL은 config.json이 정할 수 없는 키라(APP_OWNED_KEYS) 파일에 절대
- * 없으므로, 기준선에 넣는 순간 첫 재시도가 그것을 지우고 다음 worker가 ValidationError로 죽는다.
- * 기준선에도 파일에도 없는 키는 refreshEnv가 건드리지 않는다 — prepare()의 EMBED_SERVICE_URL과 같은 자리다.
+ * env에서 지운다. 두 키 다 config.json이 정할 수 없는 키라(APP_OWNED_KEYS) 파일에 절대 없으므로, 기준선에
+ * 넣는 순간 첫 재시도가 그것을 지운다 — LLM 주소가 없으면 다음 worker가 ValidationError로 죽고, 토큰이 없으면
+ * 조건 수락 모델을 받지 못한다. 기준선에도 파일에도 없는 키는 refreshEnv가 건드리지 않는다 — prepare()의
+ * EMBED_SERVICE_URL과 같은 자리다.
+ *
+ * 토큰이 필수 인자인 이유: 게이트를 지나지 않은 감독자를 타입이 막는다.
  */
-export function launchEnv(cfg: LoadedConfig, llmPort: number): { env: ApiEnv; baseline: ApiEnv } {
+export function launchEnv(cfg: LoadedConfig, llmPort: number, hfToken: string): { env: ApiEnv; baseline: ApiEnv } {
   return {
-    env: { ...cfg.env, LENS_LLM_BASE_URL: llmBaseUrl(llmPort) },
+    env: { ...cfg.env, LENS_LLM_BASE_URL: llmBaseUrl(llmPort), HF_TOKEN: hfToken },
     baseline: withoutDbKeys(cfg.env),
   };
 }

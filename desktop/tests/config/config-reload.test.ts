@@ -335,7 +335,7 @@ describe("createConfigReloader — the LLM address this run chose (Phase 4 스�
       const file = path.join(dir, "config.json");
       fs.writeFileSync(file, JSON.stringify({ PORT: "3000", LENS_LLM_BASE_URL: "http://127.0.0.1:8000/v1" }));
       const cfg = loadConfig(dir);
-      const live = launchEnv(cfg, 51234);
+      const live = launchEnv(cfg, 51234, "hf_launchTokenValue000000000");
       expect(live.env.LENS_LLM_BASE_URL).toBe(llmBaseUrl(51234));
       expect("LENS_LLM_BASE_URL" in live.baseline).toBe(false);
 
@@ -351,6 +351,65 @@ describe("createConfigReloader — the LLM address this run chose (Phase 4 스�
       reload();
       expect(live.env.LENS_LLM_BASE_URL).toBe(llmBaseUrl(51234));
       expect(log.filter((l) => l.includes("다시 읽었어요")).join("\n")).not.toContain("LENS_LLM_BASE_URL");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("createConfigReloader — the Keychain token this run carries (Phase 4 스펙 §6.4)", () => {
+  /**
+   * HF_TOKEN은 기동 게이트가 Keychain에서 읽어 감독자의 env에 얹는다(main.ts → launchEnv). config.json은
+   * 그 키를 정할 수 없으므로(APP_OWNED_KEYS) 파일에 절대 없다 — 기준선에 들어가면 첫 재시도가 "파일에서
+   * 지운 키"로 읽고 살아 있는 env에서 지워, 백오프가 되살린 worker가 토큰 없이 뜬다. LENS_LLM_BASE_URL과
+   * 같은 자리다. 파일이 적은 값이 그것을 바꿔도 안 되고, 어느 로그에도 값이 남으면 안 된다.
+   */
+  const TOKEN = "hf_KeychainTokenValue0123456789abcd";
+
+  it("carries the token in the live env but not in the reload baseline", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-reload-"));
+    try {
+      const live = launchEnv(loadConfig(dir), 51234, TOKEN);
+      expect(live.env.HF_TOKEN).toBe(TOKEN);
+      expect("HF_TOKEN" in live.baseline).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps it through reloads whether the file names a token or not, and never logs the value", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-reload-"));
+    try {
+      const file = path.join(dir, "config.json");
+      fs.writeFileSync(file, JSON.stringify({ PORT: "3000", SUMMARY_LLM_MODEL: "a/one" }));
+      const cfg = loadConfig(dir);
+      const live = launchEnv(cfg, 51234, TOKEN);
+
+      const log: string[] = [];
+      const reload = createConfigReloader({
+        load: () => loadConfig(dir),
+        live: () => ({ env: live.env, baseline: live.baseline, mode: cfg.databaseMode }),
+        log: (line) => void log.push(line),
+      });
+
+      // 사람이 파일에 다른 토큰을 적었다 — 앱 소유 키라 버려지고 경고만 남는다.
+      fs.writeFileSync(file, JSON.stringify({ PORT: "3000", SUMMARY_LLM_MODEL: "a/two", HF_TOKEN: "hf_fromTheFile000000000000" }));
+      reload();
+      expect(live.env.HF_TOKEN).toBe(TOKEN);
+      // 같은 재적용이 다른 키는 실제로 옮겼다 — 재적용이 돌지 않아서 남은 것이 아니다.
+      expect(live.env.SUMMARY_LLM_MODEL).toBe("a/two");
+
+      // 파일에서 그 키도, 다른 키도 사라졌다.
+      fs.writeFileSync(file, JSON.stringify({ PORT: "3000" }));
+      reload();
+      expect(live.env.HF_TOKEN).toBe(TOKEN);
+      expect(live.env.SUMMARY_LLM_MODEL).toBeUndefined();
+
+      const all = log.join("\n");
+      expect(all).toContain("HF_TOKEN");
+      expect(all).not.toContain(TOKEN);
+      expect(all).not.toContain("hf_fromTheFile000000000000");
+      expect(log.filter((l) => l.includes("다시 읽었어요")).join("\n")).not.toContain("HF_TOKEN");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

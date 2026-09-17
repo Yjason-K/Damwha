@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Phase 2 스펙 §6.11 · Phase 4 스펙 §6.4. 이 페이지는 허깅페이스의 오류 문구 — 앱 밖에서 온 문자열 — 를
+         화면에 올린다. 글자로만 넣는 것(textContent)이 첫 겹이고 이것이 둘째 겹이다: 이 파일의 인라인
+         스크립트·스타일 **하나씩만** 해시로 허용하고, 그 밖의 스크립트·원격 자원·이미지·폼 전송은 전부 막는다.
+         스크립트나 스타일을 한 글자라도 고치면 해시를 다시 계산해야 한다 — tests/windows/shell-html.test.ts가
+         어긋남을 잡는다. 링크는 이 페이지가 열지 않는다: 버튼은 열쇠("accept"·"tokens")만 main에 넘기고, main이
+         고정 주소를 기본 브라우저로 연다(src/windows/token-window.ts). -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-n/KlXK1CmDJ9QsmbNJqzA3ssS2qFDWuVoAT1/yPHbZg='; style-src 'sha256-3ZsbyaDJf9xVoBk9zPXS5hbjSkAvkn2c04gIc+vGejY='; base-uri 'none'; form-action 'none'" />
+    <title>허깅페이스 토큰</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #fbfbfa; --fg: #1c1b1a; --muted: rgba(28, 27, 26, 0.6);
+        --line: rgba(28, 27, 26, 0.12); --sunken: rgba(127, 127, 127, 0.1);
+        --warn: #b7791f; --fail: #c2413b; --info: rgba(127, 127, 127, 0.55);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #191817; --fg: #e8e6e3; --muted: rgba(232, 230, 227, 0.6);
+          --line: rgba(232, 230, 227, 0.14);
+          --warn: #e0a84f; --fail: #ec6a5e;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; padding: 24px 28px 28px;
+        font: 13px/1.6 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif;
+        background: var(--bg); color: var(--fg);
+      }
+      h1 { font-size: 16px; font-weight: 600; margin: 0; }
+      .lead { margin: 6px 0 0; color: var(--muted); }
+      ol { margin: 18px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+      li { padding: 14px 0; border-bottom: 1px solid var(--line); }
+      .step { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+      .title { font-weight: 600; }
+      .note { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+      .url {
+        margin: 4px 0 0; font: 11.5px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+        color: var(--muted); overflow-wrap: anywhere; user-select: all;
+      }
+      button {
+        flex: none; font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px;
+        border: 1px solid var(--line); background: var(--sunken); color: var(--fg); cursor: default;
+      }
+      button:disabled { opacity: 0.45; }
+      .entry { display: flex; gap: 8px; margin: 8px 0 0; }
+      input {
+        flex: 1; min-width: 0; font: 12.5px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+        padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line);
+        background: var(--bg); color: var(--fg);
+      }
+      input:disabled { opacity: 0.6; }
+      #confirm { background: var(--fg); color: var(--bg); border-color: var(--fg); padding: 4px 14px; }
+      #status {
+        margin: 14px 0 0; padding: 8px 10px; border-radius: 6px; background: var(--sunken);
+        border-left: 3px solid var(--info);
+        white-space: pre-wrap; overflow-wrap: anywhere; max-height: calc(8lh + 16px); overflow-y: auto;
+      }
+      #status[data-tone="warn"] { border-left-color: var(--warn); }
+      #status[data-tone="error"] { border-left-color: var(--fail); }
+      .foot { margin: 16px 0 0; font-size: 12px; color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <h1>허깅페이스 토큰이 필요해요</h1>
+    <p class="lead">
+      담화는 화자 분리 모델을 허깅페이스에서 받아요. 이 모델은 사용 조건에 동의한 계정의 토큰으로만 받을 수 있어요.
+    </p>
+    <ol>
+      <li>
+        <div class="step">
+          <span class="title">1. 모델 사용 조건에 동의하기</span>
+          <button type="button" id="open-accept">브라우저에서 열기</button>
+        </div>
+        <p class="note">허깅페이스에 로그인한 뒤 페이지의 조건에 동의해 주세요.</p>
+        <p class="url">https://huggingface.co/pyannote/speaker-diarization-community-1</p>
+      </li>
+      <li>
+        <div class="step">
+          <span class="title">2. 토큰 만들기</span>
+          <button type="button" id="open-tokens">브라우저에서 열기</button>
+        </div>
+        <p class="note">같은 계정에서 Read 권한 토큰을 만들면 충분해요.</p>
+        <p class="url">https://huggingface.co/settings/tokens</p>
+      </li>
+      <li>
+        <span class="title">3. 토큰 붙여 넣기</span>
+        <div class="entry">
+          <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="hf_…" aria-label="허깅페이스 토큰" />
+          <button type="button" id="confirm">확인</button>
+        </div>
+      </li>
+    </ol>
+    <p id="status" role="status" hidden></p>
+    <p class="foot">
+      확인을 누르면 토큰이 맞는지 huggingface.co에 물어본 뒤, 이 맥의 키체인으로 암호화해 보관해요.
+      토큰 없이는 담화를 시작할 수 없어요 — 창을 닫으면 담화가 종료돼요.
+    </p>
+    <script>
+      // main이 executeJavaScript로 부른다 (Phase 2 스펙 §6.11 — preload도 IPC도 없다). main은 next()를 불러
+      // 사람이 무언가 할 때까지 기다리고, show()로 결과를 그린다. 이 페이지가 main을 부르는 경로는 없다 —
+      // next()의 반환값은 main이 건 호출의 결과다.
+      //
+      // show()가 받는 문구에는 허깅페이스의 응답이 들어 있다. **전부 textContent로만 넣는다.** HTML로 해석하는
+      // 싱크를 쓰지 않는다 — tests/windows/shell-html.test.ts가 그 싱크가 던지는 DOM에서 이 스크립트를 돌린다.
+      // 토큰은 next()의 답으로만 나간다. 어디에도 적지 않는다.
+      (function () {
+        const input = document.getElementById("token");
+        const confirm = document.getElementById("confirm");
+        const status = document.getElementById("status");
+        const queue = [];
+        const waiters = [];
+        let busy = false;
+
+        function emit(action) {
+          const waiter = waiters.shift();
+          if (waiter) waiter(action);
+          else queue.push(action);
+        }
+
+        function setBusy(value) {
+          busy = value;
+          input.disabled = value;
+          confirm.disabled = value;
+        }
+
+        function submit() {
+          if (busy) return;
+          // 답이 올 때까지 잠근다 — 두 번 눌러 두 번 묻지 않게.
+          setBusy(true);
+          emit({ kind: "submit", token: String(input.value) });
+        }
+
+        confirm.addEventListener("click", submit);
+        input.addEventListener("keydown", function (event) {
+          if (event.key !== "Enter" || event.isComposing) return;
+          event.preventDefault();
+          submit();
+        });
+        // 주소가 아니라 열쇠만 보낸다. 확인 중에도 열 수 있다.
+        document.getElementById("open-accept").addEventListener("click", function () {
+          emit({ kind: "open", link: "accept" });
+        });
+        document.getElementById("open-tokens").addEventListener("click", function () {
+          emit({ kind: "open", link: "tokens" });
+        });
+
+        window.__damwha_token = {
+          next: function () {
+            if (queue.length > 0) return Promise.resolve(queue.shift());
+            return new Promise(function (resolve) {
+              waiters.push(resolve);
+            });
+          },
+          show: function (state) {
+            setBusy(state.busy === true);
+            if (typeof state.message === "string" && state.message !== "") {
+              status.textContent = state.message;
+              status.dataset.tone = typeof state.tone === "string" ? state.tone : "info";
+              status.hidden = false;
+            } else {
+              status.textContent = "";
+              status.hidden = true;
+            }
+            if (!busy) input.focus();
+          },
+        };
+      })();
+    </script>
+  </body>
+</html>

@@ -22,7 +22,12 @@ class FakeNode {
   className = "";
   hidden = false;
   dataset: Record<string, string> = {};
+  /** 입력칸·버튼 (token.html). */
+  value = "";
+  disabled = false;
+  focusCount = 0;
   private ownText = "";
+  private listeners: Record<string, Array<(event: unknown) => void>> = {};
 
   constructor(
     readonly tag: string,
@@ -70,6 +75,20 @@ class FakeNode {
   /** 이 노드 아래(자신 포함)의 모든 노드. */
   all(): FakeNode[] {
     return [this, ...this.children.flatMap((c) => c.all())];
+  }
+  addEventListener(type: string, listener: (event: unknown) => void): void {
+    (this.listeners[type] ??= []).push(listener);
+  }
+  focus(): void {
+    this.focusCount += 1;
+  }
+  /** 사람의 동작을 흉내 낸다. 진짜 브라우저처럼 비활성 컨트롤은 click을 받지 않는다. 기본 동작을 막았는지 돌려준다. */
+  fire(type: string, fields: Record<string, unknown> = {}): boolean {
+    if (type === "click" && this.disabled) return false;
+    let prevented = false;
+    const event = { type, target: this, preventDefault: () => void (prevented = true), ...fields };
+    for (const l of this.listeners[type] ?? []) l(event);
+    return prevented;
   }
 }
 
@@ -297,10 +316,143 @@ describe("status.html", () => {
   });
 });
 
+describe("token.html (Phase 4 스펙 §6.4 — 첫 실행 게이트)", () => {
+  type Bridge = { next(): Promise<unknown>; show(state: unknown): void };
+  const bridgeOf = (sandbox: Record<string, unknown>) => sandbox.__damwha_token as Bridge;
+  const TOKEN = "hf_AbCdEfGhIjKlMnOpQrStUvWxYz01234567";
+
+  it("has no skip, no link element, no form, no IPC, no HTML sink, no inline handler", () => {
+    const { html } = loadPage("token.html");
+    const code = codeOf(html);
+    for (const banned of [
+      /건너뛰기|나중에|skip/i,
+      /<a\b/i,
+      /<form\b/i,
+      /\b(href|src|action)\s*=/i,
+      /ipcRenderer/,
+      /require\(/,
+      /innerHTML|outerHTML|insertAdjacentHTML|document\.write/,
+      /\son\w+\s*=/i,
+      /window\.open|location\s*=|location\.(assign|replace|href)/,
+      /console\./,
+    ]) {
+      expect(code).not.toMatch(banned);
+    }
+  });
+
+  it("has the three things the spec lists: the acceptance page, the token page, and one input with a confirm button", () => {
+    const { html, byId } = loadPage("token.html");
+    const code = codeOf(html);
+    expect([...code.matchAll(/<button\b/gi)]).toHaveLength(3);
+    expect([...code.matchAll(/<input\b/gi)]).toHaveLength(1);
+    expect(code).toMatch(/<input\b[^>]*\btype="password"/);
+    expect(byId.get("token")?.tag).toBe("input");
+    expect(byId.get("confirm")?.tag).toBe("button");
+    expect(byId.get("open-accept")?.tag).toBe("button");
+    expect(byId.get("open-tokens")?.tag).toBe("button");
+    // 어디로 가는지는 글자로 보인다. 여는 것은 main이 고정 주소로 한다(token-window.ts의 TOKEN_LINKS).
+    expect(code).toContain("huggingface.co/pyannote/speaker-diarization-community-1");
+    expect(code).toContain("huggingface.co/settings/tokens");
+    // 닫으면 종료된다는 사실을 화면이 말한다 — 건너뛰기가 없으니 다른 출구를 숨기지 않는다.
+    expect(code).toMatch(/창을 닫으면/);
+  });
+
+  it("shows HF's error text as text, character for character, and never parses it", () => {
+    const { sandbox, byId } = loadPage("token.html");
+    const message = `${CAUSES.hfTokenInvalid.text} (HTTP 401 — ${XSS})`;
+    bridgeOf(sandbox).show({ busy: false, tone: "error", message });
+    const status = byId.get("status")!;
+    expect(status.hidden).toBe(false);
+    expect(status.textContent).toBe(message);
+    expect(status.dataset.tone).toBe("error");
+    expect(status.all().some((n) => n.tag === "img")).toBe(false);
+    expect(sandbox.__pwned).toBeUndefined();
+  });
+
+  it("hides the status line when there is nothing to say", () => {
+    const { sandbox, byId } = loadPage("token.html");
+    bridgeOf(sandbox).show({ busy: false, tone: "warn", message: "토큰을 읽을 수 없어요 — 다시 입력해 주세요" });
+    expect(byId.get("status")!.hidden).toBe(false);
+    bridgeOf(sandbox).show({ busy: false, tone: null, message: null });
+    expect(byId.get("status")!.hidden).toBe(true);
+    expect(byId.get("status")!.textContent).toBe("");
+  });
+
+  it("locks the input and the confirm button while main is checking, and gives focus back after", () => {
+    const { sandbox, byId } = loadPage("token.html");
+    const input = byId.get("token")!;
+    const confirm = byId.get("confirm")!;
+    bridgeOf(sandbox).show({ busy: true, tone: "info", message: "확인하는 중" });
+    expect(input.disabled).toBe(true);
+    expect(confirm.disabled).toBe(true);
+    // 링크는 확인 중에도 열 수 있다.
+    expect(byId.get("open-accept")!.disabled).toBe(false);
+    const focusedBefore = input.focusCount;
+    bridgeOf(sandbox).show({ busy: false, tone: "error", message: "x" });
+    expect(input.disabled).toBe(false);
+    expect(confirm.disabled).toBe(false);
+    expect(input.focusCount).toBeGreaterThan(focusedBefore);
+  });
+
+  it("answers main's ask with the typed token when confirm is clicked, and locks itself at once", async () => {
+    const { sandbox, byId } = loadPage("token.html");
+    const asked = bridgeOf(sandbox).next();
+    byId.get("token")!.value = TOKEN;
+    byId.get("confirm")!.fire("click");
+    await expect(asked).resolves.toEqual({ kind: "submit", token: TOKEN });
+    expect(byId.get("confirm")!.disabled).toBe(true);
+    // 두 번 눌러도 두 번 보내지 않는다.
+    byId.get("confirm")!.disabled = false;
+    byId.get("confirm")!.fire("click");
+    const second = bridgeOf(sandbox).next();
+    let got: unknown = "pending";
+    void second.then((v) => (got = v));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(got).toBe("pending");
+  });
+
+  it("submits on Enter, but not while an input method is composing", async () => {
+    const { sandbox, byId } = loadPage("token.html");
+    const input = byId.get("token")!;
+    input.value = TOKEN;
+    input.fire("keydown", { key: "Enter", isComposing: true });
+    const asked = bridgeOf(sandbox).next();
+    let got: unknown = "pending";
+    void asked.then((v) => (got = v));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(got).toBe("pending");
+    expect(input.fire("keydown", { key: "Enter", isComposing: false })).toBe(true);
+    await expect(asked).resolves.toEqual({ kind: "submit", token: TOKEN });
+  });
+
+  it("keeps an action that happens before main asks, instead of dropping it", async () => {
+    const { sandbox, byId } = loadPage("token.html");
+    byId.get("open-tokens")!.fire("click");
+    byId.get("open-accept")!.fire("click");
+    await expect(bridgeOf(sandbox).next()).resolves.toEqual({ kind: "open", link: "tokens" });
+    await expect(bridgeOf(sandbox).next()).resolves.toEqual({ kind: "open", link: "accept" });
+  });
+
+  it("sends only a link key for the two pages — never an address", async () => {
+    const { sandbox, byId } = loadPage("token.html");
+    bridgeOf(sandbox).show({ busy: true, tone: "info", message: "확인하는 중" });
+    const asked = bridgeOf(sandbox).next();
+    byId.get("open-accept")!.fire("click");
+    await expect(asked).resolves.toEqual({ kind: "open", link: "accept" });
+  });
+});
+
 describe("Content-Security-Policy — 둘째 겹 (스펙 §6.11, Task 14 fix 1-5)", () => {
   const sha = (text: string) => `'sha256-${createHash("sha256").update(text, "utf8").digest("base64")}'`;
 
-  for (const file of ["services.html", "status.html"]) {
+  // 새 셸 페이지를 여기 더하지 않으면 그 페이지는 이 불변식을 하나도 받지 않는다. token.html은 HF의 오류
+  // 문구 — 앱 밖에서 온 문자열 — 를 화면에 올리는 페이지라 가장 필요한 자리다 (Task 6).
+  it("covers every page in shell/", () => {
+    const pages = fs.readdirSync(path.join(__dirname, "..", "..", "shell")).filter((f) => f.endsWith(".html")).sort();
+    expect(pages).toEqual(["services.html", "status.html", "token.html"]);
+  });
+
+  for (const file of ["services.html", "status.html", "token.html"]) {
     describe(file, () => {
       const html = fs.readFileSync(path.join(__dirname, "..", "..", "shell", file), "utf8");
       const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(html)?.[1] ?? "";

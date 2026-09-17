@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog } from "electron";
+import { app, BrowserWindow, dialog, safeStorage, shell } from "electron";
 import { execFile } from "child_process";
 import { randomUUID } from "crypto";
 import * as fs from "fs";
@@ -16,7 +16,11 @@ import {
 import type { ProcessHandle } from "./process/handle";
 import { launchVite } from "./dev/vite-process";
 import { lastMeaningfulLine } from "./diagnostics/stderr";
-import { createServicesWindow, showStatus, type ShellStatus } from "./windows/shell-window";
+import { createServicesWindow, createTokenWindow, showStatus, type ShellStatus } from "./windows/shell-window";
+import { makeTokenStore, tokenFilePath, verifyHfToken } from "./config/token-store";
+import { runTokenGate } from "./app/token-gate";
+import { openTokenWindow } from "./windows/token-window";
+import { ServiceFailure } from "./services/failure";
 import { CAUSES } from "./diagnostics/causes";
 import { failureDetail, servicesView, shellStatusFrom } from "./windows/status-view";
 import { createStatusWindow, mayAutoOpen } from "./windows/status-window";
@@ -165,6 +169,11 @@ let configWarning: string | null = null;
  * 보고했다. 살아 있을 때 찍어 두는 일은 모듈 밖에서만 할 수 있어서 이 자리에 있다.
  */
 let knownWorkerDescendants: ReadonlySet<number> | undefined;
+/**
+ * 기동 게이트를 지난 HF 토큰 (Phase 4 스펙 §6.4). 한 번 지나면 재시도·창 재열기가 Keychain을 다시 묻지 않는다.
+ * **로그·화면에 싣지 않는다.** 자식에게는 launchEnv가 ctx.env로만 넘긴다.
+ */
+let hfToken: string | null = null;
 
 /** 앱이 정한 API origin. 감독자의 런타임에서 읽는다 — 전역 변수를 따로 두면 갈린다. */
 function currentApiOrigin(): string | null {
@@ -945,10 +954,56 @@ const reloadConfig = createConfigReloader({
 });
 
 /**
+ * HF 토큰 게이트의 배선 (Phase 4 스펙 §6.4). 판정은 app/token-gate.ts, 창의 흐름은 windows/token-window.ts,
+ * 저장·검증은 config/token-store.ts에 있다 — 여기 남는 것은 electron 잎(safeStorage·BrowserWindow·
+ * shell.openExternal·app.quit)이다.
+ *
+ * - safeStorage를 못 쓰면 **manual** 실패로 던진다 — startOnce의 catch가 원인과 안내를 그리고 자동 재시도를 걸지
+ *   않는다. Keychain이 잠겨 있으면 재시도가 잠금 해제 요청을 20초마다 다시 띄울 수 있다. 평문 폴백은 없다.
+ * - 사람이 토큰 창을 닫았으면 null이다 — 창이 이미 app.quit()을 불렀다. 부른 쪽은 조용히 물러난다.
+ */
+async function ensureHfToken(): Promise<string | null> {
+  if (hfToken !== null) return hfToken;
+  const userData = app.getPath("userData");
+  const store = makeTokenStore(userData, safeStorage);
+  const gate = await runTokenGate({
+    store,
+    fileExists: () => fs.existsSync(tokenFilePath(userData)),
+    onboard: (notice) =>
+      openTokenWindow<BrowserWindow>({
+        notice,
+        create: (onLoadError) => createTokenWindow(win, onLoadError),
+        alive: (w) => !w.isDestroyed(),
+        onLoad: (w, listener) => w.webContents.on("did-finish-load", listener),
+        onClosed: (w, listener) => w.on("closed", listener),
+        run: (w, script) => w.webContents.executeJavaScript(script),
+        close: (w) => {
+          if (!w.isDestroyed()) w.close();
+        },
+        openExternal: (url) => shell.openExternal(url),
+        quit: () => app.quit(),
+        log: appendSupervisorLog,
+        verify: (token) => verifyHfToken(token),
+        save: (token) => store.write(token),
+      }),
+    log: appendSupervisorLog,
+  });
+  if (gate.kind === "blocked") throw new ServiceFailure(gate.detail, "manual");
+  if (gate.kind === "quit") return null;
+  hfToken = gate.token;
+  return hfToken;
+}
+
+/**
  * 감독자를 세운다. 세울 수 없는 이유(설정 오류)를 화면에 적었으면 false를 돌려주고,
  * 부른 쪽은 물러난다. 던지는 실패(저장소 부재)는 startOnce의 catch가 받는다.
  */
 async function createSupervisorFor(mine: number): Promise<boolean> {
+  // **무엇보다 먼저** — postgres를 포함해 어떤 서비스도 토큰 없이 뜨지 않는다 (스펙 §6.4 첫 실행 게이트).
+  // 토큰 창을 기다리는 동안 ⌘Q·새 기동이 끼어들 수 있다. 그 뒤의 검사(activeWindow)가 그것을 본다.
+  const token = await ensureHfToken();
+  if (token === null) return false;
+
   const userData = app.getPath("userData");
   const cfg = loadConfig(userData);
   if (cfg.warning !== undefined) appendSupervisorLog(cfg.warning);
@@ -994,7 +1049,8 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
   // 소유하지 않는다(llm_server.py) — 고정 포트(개발 .env의 8000)를 쓰면 사람이 손으로 띄운 서버를 앱의
   // worker가 그대로 쓰게 되고, 그 서버의 모델도 수명도 앱이 모른다. 실제 bind는 job 직전이라 그 사이 다른
   // 프로세스가 포트를 가져갈 수 있고, 그때는 LLM 서버 기동 실패로 드러난다.
-  const { env, baseline } = launchEnv(cfg, await freePort());
+  // 토큰은 env에만 싣는다 — 재적용의 기준선에 들어가면 첫 재시도가 지운다 (config.ts의 launchEnv).
+  const { env, baseline } = launchEnv(cfg, await freePort(), token);
 
   const ctx: Omit<LaunchContext, "signal"> = {
     repoRoot: resolved,

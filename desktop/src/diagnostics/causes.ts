@@ -22,6 +22,8 @@
  * electron을 import하지 않는 순수 모듈이다.
  */
 
+import { HF_GATED_MODEL_PAGE_URL } from "../config/token-store";
+
 export interface Cause {
   /** detail 안에서 이 원인을 알아보는 모양. 다른 원인의 문구와 겹치면 안 된다(테스트가 본다). */
   match: RegExp;
@@ -86,6 +88,31 @@ export const CAUSES = {
   repoRootMissing: {
     match: /저장소 폴더를 확인하지 못했어요/,
     text: "개발 실행인데 담화 저장소 폴더를 확인하지 못했어요.",
+    selfRecovers: false,
+  },
+  /**
+   * 기동 게이트 — `safeStorage.isEncryptionAvailable()`이 false다 (Phase 4 스펙 §6.4·§8). 서비스를 하나도 띄우지
+   * 않는다. 평문으로 저장하는 폴백은 없다. main.ts가 manual 실패로 던진다 — Keychain이 잠겨 있으면 자동 재시도가
+   * 잠금 해제 요청을 20초마다 다시 띄울 수 있다.
+   */
+  safeStorageUnavailable: {
+    match: /키체인을 쓸 수 없어 허깅페이스 토큰을/,
+    text: "macOS 키체인을 쓸 수 없어 허깅페이스 토큰을 안전하게 보관할 수 없어요. 서비스를 띄우지 않았어요.",
+    selfRecovers: false,
+  },
+  /** 토큰 검증 — HF가 401·403으로 거절했다 (스펙 §8 "토큰이 유효하지 않아요"). 토큰 화면이 사유와 함께 싣는다. */
+  hfTokenInvalid: {
+    match: /허깅페이스 토큰이 유효하지 않아요/,
+    text: "허깅페이스 토큰이 유효하지 않아요.",
+    selfRecovers: false,
+  },
+  /**
+   * 모델 다운로드 403 — 토큰의 계정이 그 모델의 사용 조건에 동의하지 않았다 (스펙 §8). 조건 수락이 필요한 모델은
+   * 화자 분리 하나라 그 수락 페이지를 싣는다. 이 원인의 소유는 Task 6이다 — 화면에 싣는 일(Task 11)은 이것을 쓴다.
+   */
+  hfGateNotAccepted: {
+    match: /사용 조건 수락이 필요해요/,
+    text: `이 모델은 사용 조건 수락이 필요해요 — ${HF_GATED_MODEL_PAGE_URL}`,
     selfRecovers: false,
   },
   /** postgres — 번들에 PG 실행 파일이 없다 (Phase 3 스펙 §6.8). */
