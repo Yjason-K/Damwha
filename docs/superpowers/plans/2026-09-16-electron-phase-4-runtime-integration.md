@@ -86,7 +86,7 @@ dev `PYTHONPATH`가 소스를 직접 읽게 만들므로 그 재빌드는 **순�
 
 `desktop/src/process/executables.ts`는 **이 계획이 고치지 않는다.** 그 파일의 `buildChildPath`
 (`executables.ts:56-60`)는 상속 PATH에 `dirs`를 앞세우는 순수 함수인데, Task 5가
-`uv-launcher.ts`를 지우면 **유일한 호출자가 사라져 죽은 코드가 된다.** Task 5 Step 5가 그것을
+`uv-launcher.ts`를 지우면 **유일한 호출자가 사라져 죽은 코드가 된다.** Task 5 Step 6이 그것을
 확인만 하고 제거는 별도 정리에 맡긴다 — 이 Phase가 그 파일의 계약을 바꾸지는 않기 때문이다.
 
 **지우는 것** — `desktop/src/process/uv-launcher.ts` + 그 테스트 (Task 5가 지운다)
@@ -320,7 +320,7 @@ Phase의 범위가 아니다** — 넘기면 `test_ffmpeg.py:49`·`:122`의 `lam
 | `--once` 자식 | **Task 2 Step 3-b** — `run_child()` 첫머리 | 자식이 **자기** 프로세스에서 찍는다 |
 | capabilities 프로브 | **Task 2 Step 4** — `_PROBE_CODE` + 부모가 `r.stderr`를 흘린다 | 아래 Step 4 |
 | embed | **Task 3 Step 2** — `main()`, **`install_logging()` 뒤** | 스펙 §9 C12 |
-| `llm_entry` | **Task 3 Step 3-4** — `main()` 호출 전 | 아래 Task 3 |
+| `llm_entry` | **Task 3 Step 3의 3번** — `main()` 호출 전 | 아래 Task 3 |
 
 연결표의 `C12` 행이 `2·3`인 이유다.
 
@@ -416,7 +416,7 @@ sed -n '60,120p' be/worker/damwha_worker/llm_server.py
 uvicorn 전에 한 번 불러 **기동 시점에** 모델을 올린다(첫 요청이 31초 걸리지 않게).
 
 `main()`에 `runtime_facts()` 보고와 `if __name__ == "__main__": main()`을 더한다.
-**보고는 `console.install_logging()` 뒤다** — 지금 `embed_service.py:38-41`의 `main()`에는
+**보고는 `console.install_logging()` 뒤다** — 지금 `embed_service.py:39`의 `main()`에는
 `install_logging()`이 아예 없고, 없이 찍으면 uvicorn이 로깅을 잡기 전에 나가 `embed.log`에
 남지 않는다. 순서는 `install_logging()` → `runtime_facts()` 보고 → 지연 초기화 → `uvicorn.run`
 (스펙 §9 P4-C12가 이 순서를 명시한다).
@@ -596,7 +596,7 @@ electron을 import하지 않는 순수 모듈이다 — `services/postgres/layou
 
 - [ ] **Step 3: `config.ts`를 고친다**
 
-- **`UV_BIN`은 여기서 빼지 않는다 — Task 5 Step 5로 옮겼다.** 이 Task가 빼고 uv 런처는 Task 5가
+- **`UV_BIN`은 여기서 빼지 않는다 — Task 5 Step 6으로 옮겼다.** 이 Task가 빼고 uv 런처는 Task 5가
   지우면, 그 한 커밋 동안 `searchDirs` 밖에 uv를 둔 개발자가 앱을 못 띄운다. **탈출구는 그것을
   쓰는 코드와 같은 커밋에서 사라져야 한다.**
 - `APP_OWNED_KEYS`에 `HF_TOKEN`을 더하되 **값을 경고 문구에 싣지 않는다** — 그 문구는 화면과
@@ -688,7 +688,7 @@ Task 번호가 밀려 연결표·상호 참조·자체 검토를 함께 고쳐�
 
 **Files:** Create `desktop/src/process/python-launcher.ts` + 테스트; Modify
 `desktop/src/services/{types,worker,embed,worker-shutdown}.ts` + 테스트, `desktop/src/main.ts`,
-`desktop/src/config/config.ts` (Step 5의 `UV_BIN`); Delete `desktop/src/process/uv-launcher.ts` + 테스트
+`desktop/src/config/config.ts` (Step 6의 `UV_BIN`); Delete `desktop/src/process/uv-launcher.ts` + 테스트
 
 **Interfaces:** 위 계약의 `python-launcher`·`LaunchContext` 절.
 
@@ -930,6 +930,7 @@ ps -axo pid,args | /usr/bin/grep -i python | head -5
 | 모르는 트리의 python | 안 잡는다 (오탐 아님) |
 | 잘린 `ps` 줄 | 안 잡는다 — "고아 없음"과의 구별은 호출부가 한다 |
 | `classify` | 내 run-id=`mine`, 다른 값=`orphan`, 없음·트리 밖=`external` |
+| `reapOrphans` 실패 | `ps` 비영 종료·빈 출력 둘 다 `{failed:true}` |
 
 **`parseDamwhaProcesses`와 `classify`의 분담이 스펙 §6.5의 네 조건과 이렇게 맞는다** (2026-09-17
 정정). 판독기는 **조건 1·2**로 목록에 넣고 — argv[0]이 절대 경로이고 basename이 `python3.12`,
@@ -938,7 +939,6 @@ ps -axo pid,args | /usr/bin/grep -i python | head -5
 `runId: string | null`이 이 분담과 같은 모양이다(판독기가 run-id 없는 줄도 담는다).
 초안은 이것을 "안 잡는다"로 적어 아래 Review 항목("저장소 `.venv` worker가 `external`인가")과
 **Task 안에서 모순이었다.** 리뷰 항목이 옳다 — P4-C21의 판정 근거가 그것이다.
-| `reapOrphans` 실패 | `ps` 비영 종료·빈 출력 둘 다 `{failed:true}` |
 
 - [ ] **Step 3: 구현한다**
 
@@ -1380,11 +1380,11 @@ Phase 2가 stand-down worker에서 정확히 그 문제를 겪었다.
 (`superpowers:verification-before-completion`).
 
 **Files:** **Modify** `docs/superpowers/reports/2026-09-16-electron-phase-4-embedded-python-runtime-results.md`
-(**이미 있다 — 아래 Step 4**), `docs/electron-migration-roadmap.md`, `desktop/CLAUDE.md`,
+(**이미 있다 — 아래 Step 5**), `docs/electron-migration-roadmap.md`, `desktop/CLAUDE.md`,
 `be/worker/SMOKE.md`, `be/CLAUDE.md`
 
 **`be/worker/CLAUDE.md`는 없다.** 그 서브트리의 문서는 `be/worker/SMOKE.md`와 상위의
-`be/CLAUDE.md` 둘뿐이다 — 아래 Step 5가 어느 쪽에 무엇을 적는지 정한다.
+`be/CLAUDE.md` 둘뿐이다 — 아래 Step 6이 어느 쪽에 무엇을 적는지 정한다.
 
 - [ ] **Step 1: 기준선을 대조할 수 있는지 먼저 본다**
 
@@ -1425,8 +1425,14 @@ bash desktop/scripts/phase4-baseline.sh retake app
 Part 1이 앱을 띄우지 않았으므로 지금 유효하지만, **그 전제를 확인하는 절차가 초안에 없었다.**
 파일 수·`ls -l`의 mtime이 기준선 이후로 움직이지 않았는지 본다.
 
+**`abs-hf-cache.txt` 하나는 mtime이 다르다 — 그것이 정상이다.** Part 1 종료 뒤
+`~/.cache/huggingface`가 Phase 4 **밖의** 요인으로 바뀌어(파일 66개·16.7 GiB 삭제, 전부 번역
+실험·Qwen3-ASR 도입 검토·옛 3.1 화자분리 스택) 2026-09-17에 `retake hf`로 그 한 파일만 다시
+떴다. 경위·삭제 목록·파이프라인 무영향 근거는 Part 1 결과 문서 §3.2-a에 있다. **나머지 `abs-*`
+7건과 `mut-*` 3건은 2026-09-16 값 그대로다** — 그것들의 mtime이 움직였으면 그건 진짜 문제다.
+
 **`/tmp/p4-baseline`의 수명을 먼저 정한다.** macOS의 `/private/tmp`는 재부팅에 날아가고
-기준선은 2026-09-16에 찍혔는데 Part 2는 12 Task 분량이다. `phase4-baseline.sh:13`의
+기준선은 2026-09-16에 찍혔는데 Part 2는 12 Task 분량이다. `phase4-baseline.sh:23`의
 `P4_BASELINE_DIR`로 영구 위치를 지정하거나, `/tmp/p4-baseline`을 통째로 영구 위치에 복사해 둔다.
 **이 판정을 Task 1 착수 전에 하고 결과를 여기 적는다** (아래 "구현 중 판정할 것" 3번).
 
@@ -1579,7 +1585,7 @@ Step 1의 재촬영 시점부터다. 두 구간이 다른 것이 이 기준의 �
 - `~/.local/bin/mlx_lm.server`가 제자리인가.
 - **결과 문서의 기존 11절이 그대로 살아 있는가** — §12만 채웠는가.
 - P4-C27의 **판정 범위**(파일과 DB 행의 구간이 다르다)를 적었는가.
-- "구현 중 판정할 것" 여섯이 전부 결론과 근거를 얻었는가.
+- "구현 중 판정할 것" 여덟이 전부 결론과 근거를 얻었는가.
 
 ---
 
@@ -1676,7 +1682,7 @@ important 1건(I-14)과 minor 1건(M-5)이다.
 | --- | --- | --- | --- |
 | 1 | **P4-C7(이어받기)·P4-C29(오프라인)를 무엇이 참으로 만드는가.** 둘 다 연결표에서 Task 9에 걸려 있으나 Task 9의 Step은 진행 훅·`model_readiness`·리비전 고정뿐이다. 실제 근거는 `huggingface_hub`의 `.incomplete` 재개와 캐시 폴백(라이브러리 기본 동작)으로 **보인다.** 확인할 것 둘 — (a) 훅으로 `tqdm_class`를 갈아 끼우는 것이 hub의 resume 경로에 영향이 없는가, (b) `HF_HUB_OFFLINE` 없이도 네트워크 단절 시 캐시 폴백이 도는가 | **Task 9 Step 6** (훅 테스트와 같은 자리) | 둘 중 하나라도 아니면 **그것을 만드는 Task가 필요하다** — Task 12에서 발견하면 늦다 |
 | 2 | **Task 9 Step 5의 "`sys.modules` 92개 모듈이 `ModuleNotFoundError`" 주장.** `[실행됨]`이 붙어 있고 근거(transformers의 지연 모듈 `__getattr__`)도 그럴듯하나 8회차가 **재현하지 않았다.** | **Task 9 Step 5** 착수 시 1분 | 처방(`vars(mod).get(name)`)은 어느 쪽이든 안전한 방향이라 **구현은 안 바뀐다.** 숫자만 정정한다 |
-| 3 | **`/tmp/p4-baseline`의 수명.** Task 12 Step 1의 유일한 게이트인데 macOS `/private/tmp`는 재부팅에 날아간다. 기준선은 2026-09-16에 찍혔고 Part 2는 12 Task 분량이다 | **Task 1 착수 전** | `P4_BASELINE_DIR`(`phase4-baseline.sh:13`)로 영구 위치를 쓰거나 지금 통째로 복사한다. **날아가면 P4-C26·C27을 판정할 수 없고 되돌릴 방법이 없다** |
+| 3 | **`/tmp/p4-baseline`의 수명.** Task 12 Step 1의 유일한 게이트인데 macOS `/private/tmp`는 재부팅에 날아간다. 기준선은 2026-09-16에 찍혔고 Part 2는 12 Task 분량이다 | **Task 1 착수 전** | `P4_BASELINE_DIR`(`phase4-baseline.sh:23`)로 영구 위치를 쓰거나 지금 통째로 복사한다. **날아가면 P4-C26·C27을 판정할 수 없고 되돌릴 방법이 없다** |
 | 4 | **P4-C25의 조건부 충족을 P4-C5가 닫는가.** Part 1 §4.1이 C25를 "충족(조건)"으로 남겼고 그 조건이 실오디오 전사 1건이다. 연결표는 그 조건을 기록하지 않았다 | **Task 12 Step 3** (축 B) | C5가 통과해도 C25의 조건이 안 닫히는 경우가 있으면 별도 회차가 필요하다 |
 | 5 | **검증 전 기준선의 유효성.** Step 4가 대조하는 `app-storage.txt`는 2026-09-17 이전 값이다. Part 1이 `.app`을 실행하지 않아 지금은 유효하지만 **그 전제를 확인하는 절차가 없었다** | **Task 12 Step 1** | 움직였으면 어디서 움직였는지를 먼저 밝힌다 — 그것 없이 대조하면 P4-C27이 거짓 통과·거짓 실패 둘 다 낼 수 있다 |
 | 6 | **Task 12 Step 2의 되돌릴 수 없는 삭제.** `<userData>/models` 비우기와 `hf-token.bin` 삭제. 스펙 §5가 허용하므로 계약 위반은 아니나 로드맵 §3의 "위험한 변경에는 실패 시 복구 방법을 포함한다"를 만족하지 않는다 | **Task 12 Step 2** (게이트 4번) | 모델은 재다운로드로 복구된다(시간만). **토큰은 사용자만 다시 낼 수 있다** — 지우기 전에 확인한다 |
