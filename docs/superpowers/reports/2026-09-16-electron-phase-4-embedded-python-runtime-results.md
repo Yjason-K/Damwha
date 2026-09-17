@@ -13,9 +13,16 @@ P4-C25(mlx 정렬 회귀), P4-C26·C27의 **기준선**, P4-C28(numba). 나머�
 Part 2의 마지막 Task가 30건을 한꺼번에 판정한다. **이 문서를 Phase 4 완료로 읽지 않는다.**
 
 이 문서는 Part 1만 다루고 Part 2의 자리(§12)를 비워 둔다. 로드맵 §6이 요구하는 네 기록 중
-스펙 리뷰·계획 검증은 스펙 §17(외부 리뷰 7회차)에 이미 있고, 이 문서는 **단계별 실행·리뷰**와
+스펙 리뷰와 **Part 1 계획 검증**은 스펙 §17에 이미 있고, 이 문서는 **단계별 실행·리뷰**와
 **Part 1 완료 조건 판정**을 담는다. **실행하지 않은 검증을 성공으로 가정하지 않는다** — 밟지
 않은 표면은 §11에 "미검증"으로 따로 적었다.
+
+**Part 2 계획의 검증은 §17에 없다.** 5·6·7회차의 대상은 제목 그대로 "Part 1 계획 + 이 스펙"이고,
+1~4회차는 **분할 이전의 통합 계획**(5,249줄)을 봤다. 분할(§17.5)은 자르기만 한 것이 아니라
+Part 2의 서술 방식을 바꿨으므로("시그니처·계약·테스트 표만 싣고 구현 본문은 구현 시 작성"),
+1~4회차가 본 텍스트와 지금의 Part 2는 같지 않다. 분할 후 Part 2 파일은 3커밋에서 20줄만
+바뀌었고 그것도 Part 1 리뷰의 파급이었다. **Part 2는 실행 전에 계획 검증을 따로 받아야 한다**
+(로드맵 §4·§5).
 
 ---
 
@@ -111,6 +118,14 @@ rc=0, 7.9초, 산출 13개). 절대 불변은 `abs-*` 8건이다 — `be/.env`·
 0이다.** 기준선을 뜰 때 `app-db-rows.txt`만 `MEASUREMENT-UNAVAILABLE (embedded psql)`로 남았는데
 (앱 내장 클러스터가 떠 있지 않았다) 그것은 앱 데이터 쪽이고 `abs-*`가 아니다.
 
+**Part 2 계획 검증이 그 파일에서 결함 둘을 더 찾았다(2026-09-17에 고쳤다).** 첫째, 측정 질의가
+`select 'meeting='||count(*) from meeting` 한 줄이라 **회의 ID를 담지 않았다** — 스펙 §9의
+P4-C27이 "회의 **ID**·행 수·체크섬"을 요구하므로 재촬영해도 ID 대조가 불가능했고, 행 수만으로는
+"하나 지우고 하나 넣었다"가 통과한다. `abs-docker-db-rows.txt`와 같은 방식의 **전체 테이블** 행
+수로 바꾸고 `app-meeting-ids.txt`를 따로 뒀다. 둘째, 한 부류만 다시 뜰 방법이 없어 `baseline`을
+재실행하면 `abs-*` 8건과 `mut-*` 3건까지 덮어썼다 — `retake <app|hf>` 모드를 더해 국한시켰다.
+산출은 13개 → **14개**다.
+
 허용 변경 둘(`be/worker/.venv`, `~/.local/bin/mlx_lm.server`)은 자동 판정하지 않고 사람이
 대조했다. 구간 전체에서 실제로 움직인 것은 **Task 3의 `uv lock`·`uv sync` 하나**다
 (`mut-uv.lock`에 `mlx`·`mlx-lm` 추가, `.venv`에 `mlx-lm 0.31.3`·`sounddevice 0.5.2` 설치).
@@ -118,6 +133,40 @@ rc=0, 7.9초, 산출 13개). 절대 불변은 `abs-*` 8건이다 — `be/.env`·
 **Docker 개발 DB에는 읽기 질의만 발행했다.** Task 3의 요약 검증이 `mtg_34`의 28발화를 SELECT로
 가져왔고, 그 뒤 `job=94`·`meeting_summary=12`가 기준선과 바이트 단위로 같음을 확인했다.
 리뷰어가 같은 두 행 수를 **직접 재질의해 독립 확인**했다.
+
+#### 3.2-a Part 1 종료 뒤 `~/.cache/huggingface`가 Phase 4 밖의 요인으로 바뀌었다 (2026-09-17)
+
+Part 2 계획 검증 중에 돌린 `verify`가 `FAIL abs-hf-cache.txt`를 냈다. 기준선 187줄 → 105줄,
+**파일 66개(lock 제외) 16.7 GiB가 사라졌고 새로 생긴 것은 0건**이다. 디스크 여유가 12 → 34 GiB로
+늘어난 것이 같은 원인이다.
+
+**Part 1의 작업이 아니다.** Part 1의 어느 Task도 이 경로에 쓰기를 하지 않았고, Task 3·4·5·6·7과
+최종 수정 파동의 끝에서 매번 돌린 `verify`가 그때마다 `abs-hf-cache` PASS를 냈다. 그 8건 PASS가
+이 변경이 Part 1 구간 **이후**임을 시간으로 가른다.
+
+사라진 모델 저장소 여덟은 **전부 평가·구세대 모델이고 프로덕션 파이프라인이 참조하지 않는다**:
+
+| 저장소 | 무엇 |
+| --- | --- |
+| `facebook/nllb-200-distilled-600M` | 번역 실험 |
+| `Helsinki-NLP/opus-mt-tc-big-en-ko` | 번역 실험 |
+| `mlx-community/Qwen3-ASR-0.6B-bf16`·`1.7B-bf16` | `be/worker/SMOKE.md`의 "Qwen3-ASR 도입 검토" (미채택) |
+| `lmstudio-community/gemma-4-E4B-it-MLX-4bit` | 대안 LLM |
+| `pyannote/speaker-diarization-3.1`·`segmentation-3.0`·`wespeaker-voxceleb-resnet34-LM` | 옛 3.1 화자분리 스택 |
+
+파이프라인이 실제로 쓰는 것은 전부 남아 있다 — `whisper-large-v3-mlx`(2.9 G),
+`BAAI/bge-m3`(4.3 G), `Qwen3.5-4B-8bit`·`9B-8bit`, `whisper-large-v3-turbo`,
+`speechbrain/spkrec-ecapa-voxceleb`(85 M), 그리고 **`pyannote/speaker-diarization-community-1`**.
+화자분리 기본값이 `community-1`인 것은 `be/worker/damwha_worker/models/pyannote_diar.py:3`이
+못 박는다 — 삭제된 `3.1` 스택은 코드 어디에서도 참조되지 않는다(`/usr/bin/grep -rn` 0건).
+
+**조치:** 사용자 판단으로 `abs-hf-cache.txt` **하나만** 다시 떴다. 그 목적의 모드를 스크립트에
+더했다 — `phase4-baseline.sh retake hf`. `baseline`을 다시 부르면 `mut-uv.lock`(Part 1이 `.venv`를
+바꾸기 **전** 사본이자 유일한 복구 경로)까지 덮어쓰기 때문이다. 재촬영 뒤 `verify`가 **8건 전부
+PASS**로 돌아왔고, 나머지 `abs-*` 7건과 `mut-*` 3건은 원래 값 그대로다.
+
+**P4-C26의 판정 기준이 이 시점부터 새 기준선이다.** Part 2가 대조하는 `~/.cache/huggingface`의
+기준은 2026-09-16이 아니라 2026-09-17의 105줄이다.
 
 ### 3.3 Task 1 — 기준선 (커밋 `db3f0a8`)
 
