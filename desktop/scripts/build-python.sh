@@ -68,7 +68,7 @@ case "${1:-}" in
   *) die "usage: build-python.sh [--fresh|--print-key]" ;;
 esac
 
-for t in curl tar shasum file otool install_name_tool codesign uv ditto pgrep; do
+for t in curl tar shasum file otool install_name_tool codesign uv ditto ps; do
   command -v "$t" >/dev/null 2>&1 || die "$t 가 없다 — Xcode Command Line Tools와 uv가 필요하다"
 done
 [ -f "$SUMS" ] || die "$SUMS 가 없다"
@@ -232,6 +232,13 @@ relocate() {
   # 전부 uv가 만든 콘솔 스크립트뿐이다.
   [ $((n_rewrote + n_already)) -gt 0 ] \
     || die "셔뱅을 하나도 재작성하지 못했다 — 매처가 uv의 두 형태를 놓쳤다"
+  # **부분 미스도 실패다.** 위 조건만으로는 worker 층을 못 지킨다 — 거기서는 런타임 층에서
+  # 물려받은 폴리글랏 62개가 n_already로 들어와 조건을 **항상** 만족시키므로, uv가 새 콘솔
+  # 스크립트 damwha-worker·damwha-embed에 제3의 셔뱅 형태를 쓰면 그 둘이 wk-<키>.tmp 절대
+  # 경로를 지닌 채 경고만 찍고 지나간다. 그 절대 경로는 Task 7의 금지 문자열 검사에서
+  # 원인 불명의 FAIL이 된다 — 여기서 형태를 밝히고 죽는 편이 낫다.
+  [ "$n_other" = 0 ] \
+    || die "셔뱅 ${n_other}개를 재작성하지 못했다 — 위 경고가 찍은 형태를 매처에 더한다"
 
   # ── (b) _sysconfigdata의 설치 시점 prefix → 중립 자리표시자 ─────────────────
   #
@@ -559,23 +566,55 @@ build_rt() {
 # huggingface_hub만은 실제로 import한다. 다운로드 진행 훅이 snapshot_download·hf_hub_download의
 # tqdm_class 인자에 얹히므로(스펙 §6.9), 라이브러리가 그 인자를 없애면 **.app이 아니라 빌드가
 # 깨져야 한다.** 이 모듈의 import는 설정을 요구하지도 모델을 받지도 않는다.
+#
+# ── 이 검사는 "번들 단독"이어야 의미가 있다 ─────────────────────────────────────
+#
+# 스펙 §6.1 8단계가 이 단계에 준 목적은 "§2.4의 결함(모듈이 번들 밖에 있음)이 다시 나면 여기서
+# 잡힌다"이다. 호출 환경으로 만족되는 검사는 그 목적을 달성하지 못한다. 셋을 뗀다 — 셋 다
+# 3.12가 지원한다.
+#
+#   -P  cwd(그리고 -c가 넣는 sys.path[0]=='')를 뺀다. 없으면 be/worker에서 빌드를 돌린 것만으로
+#       damwha_worker 세 spec이 **소스 트리**로 해석되고, 소스의 __init__.py도 0바이트라
+#       아래 assert까지 함께 통과한다 — 번들을 하나도 안 본 채 "모듈 확인 OK"가 찍힌다.
+#       이 스크립트는 아직 어느 package.json 스크립트에도 걸려 있지 않아 cwd가 개발자 셸에
+#       달려 있다.
+#   -E  PYTHONPATH·PYTHONHOME을 뗀다. 가정이 아니다 — 런타임 층에는 damwha_worker가 없어서
+#       Task 5가 정확히 PYTHONPATH로 그 모듈에 닿아 확인했다. PYTHONOPTIMIZE도 함께 무력화되는데,
+#       그것이 살아 있으면 아래 assert 둘이 통째로 사라지고도 "모듈 확인 OK"가 찍힌다.
+#   -s  user site(~/.local/lib/python3.12/site-packages)를 뗀다.
+#
+# -E는 PYTHONPYCACHEPREFIX도 무시하므로 .pyc가 트리에 쓰인다. 그것은 계약대로다 —
+# purge_pycache가 뒤에 온다.
+#
+# 셋을 떼도 **site-packages 안의 .pth는 남는다.** 저장소 경로를 sys.path에 얹는 .pth가 바로
+# 스펙 §6.7이 경계하는 형태이고(위 `uv export --no-emit-project` 주석이 그 사고를 적는다),
+# -E·-P·-s 어느 것도 그것을 막지 못한다. 그래서 찾은 spec의 origin이 번들 아래인지 함께
+# 판정한다 — root를 argv로 넘긴다(문자열 보간으로 파이썬 소스에 굽지 않는다).
 check_entrypoints() {
   local root="$1"
-  "$root/bin/python$PY_VERSION" -c "
-import importlib.util as u, inspect, sys
+  "$root/bin/python$PY_VERSION" -E -s -P -c "
+import importlib.util as u, inspect, os, pathlib, sys
+root = os.path.realpath(sys.argv[1])
 TARGETS = ('damwha_worker', 'damwha_worker.__main__', 'damwha_worker.embed_service',
            'mlx_lm.server')
-missing = []
+missing, outside = [], []
 for m in TARGETS:
     try:
-        if u.find_spec(m) is None:
-            missing.append(m)
+        spec = u.find_spec(m)
     except ModuleNotFoundError:      # 부모 패키지가 없다
-        missing.append(m)
+        spec = None
+    if spec is None:
+        missing.append(m); continue
+    # namespace 패키지는 origin이 None이다. 이 넷은 전부 실체가 있어야 하므로 그것도 실패다.
+    origin = spec.origin
+    if not origin or not os.path.realpath(origin).startswith(root + os.sep):
+        outside.append(m + ' <- ' + str(origin))
 if missing:
     print('  없는 모듈:', ', '.join(missing)); sys.exit(1)
+if outside:
+    print('  번들 밖 모듈:', ', '.join(outside)); sys.exit(1)
 # damwha_worker.* 가 안전한 것은 __init__.py 가 비어 있기 때문이다 — 그것을 못 박는다.
-import damwha_worker, pathlib
+import damwha_worker
 src = pathlib.Path(damwha_worker.__file__).read_text()
 assert src.strip() == '', 'damwha_worker/__init__.py 에 부작용이 생겼다'
 import huggingface_hub
@@ -583,7 +622,7 @@ for fn in ('snapshot_download', 'hf_hub_download'):
     params = inspect.signature(getattr(huggingface_hub, fn)).parameters
     assert 'tqdm_class' in params, 'huggingface_hub.' + fn + ' 에 tqdm_class 가 없다'
 print('  모듈 확인 OK')
-" || die "진입점 확인 실패 — 번들에 실린 모듈 집합이 기대와 다르다"
+" "$root" || die "진입점 확인 실패 — 번들에 실린 모듈 집합이 기대와 다르다"
 }
 
 build_wk() {
@@ -638,14 +677,28 @@ stage() {
   # 실행 중에 rm -rf(미스)나 __pycache__ 삭제(적중)를 하면 살아 있는 프로세스가 깨진다.
   # build-postgres.sh:200의 가드와 같은 이유다.
   #
-  # **pgrep -f의 패턴은 ERE다.** 경로에 + ( [ 같은 메타문자가 있으면 매치가 어긋나 가드가 조용히
-  # 꺼진다(실측: `+`가 든 경로에서 0건, 없는 같은 구조에서 1건). 그래서 -f를 패턴이 아니라
-  # "전체 인자열을 출력하라"로만 쓰고, 경로 비교는 고정 문자열(grep -F)로 한다.
+  # **pgrep을 쓰지 않는다.** 이 가드의 실패 형태는 "조용히 꺼짐"이라 사전 필터를 두지 않는다.
+  #   (a) `pgrep -f <패턴>`의 패턴은 ERE다 — 경로에 + ( [ 가 있으면 매치가 어긋난다
+  #       (실측: `+`가 든 경로에서 0건, 없는 같은 구조에서 1건).
+  #   (b) `pgrep -lf python3.12`로 먼저 거르는 것도 안 된다. 스테이징된 트리는 bin/python·
+  #       bin/python3을 python3.12 심볼릭 링크로 싣고, `$STAGED/bin/python3 -m damwha_worker`로
+  #       뜬 프로세스의 argv에는 "python3.12"가 없다 — 사전 필터가 먼저 침묵해 아래 고정 문자열
+  #       비교에 닿지도 못한다 (실측).
+  # 그래서 `ps -Ao command=`로 전체를 받아 경로만 고정 문자열로 비교한다.
   #
-  # grep을 절대 경로로 부르는 것도 같은 이유다. 이 줄은 가드이고 가드의 실패 형태는 "조용히
-  # 꺼짐"이라, grep이 무엇으로 풀리는지에 판정을 맡기지 않는다 (개발 머신의 셸에서 grep이
-  # 바이너리를 건너뛰는 ugrep 함수로 바뀌어 있는 경우가 있다).
-  if pgrep -lf "python$PY_VERSION" 2>/dev/null | /usr/bin/grep -qF "$STAGED/bin/"; then
+  # **파이프로 잇지 않고 변수에 받는다.** 이유가 둘이다.
+  #   (a) `ps … | grep -qF …`는 둘이 동시에 도는 탓에 ps가 **grep 자신의 argv**를 잡는다. 거기에
+  #       비교 문자열이 통째로 들어 있으므로 아무것도 안 돌 때도 매치한다 — 실측으로 가드가
+  #       거짓 양성을 냈고, 그러면 빌드가 항상 죽는다. 변수에 먼저 받으면 ps가 grep보다 앞서
+  #       끝나 자기 매치가 없다.
+  #   (b) set -o pipefail 아래에서 grep -q가 매치 즉시 끝나면 ps가 SIGPIPE로 죽어 파이프라인
+  #       rc가 141이 되고, if가 그것을 "매치 없음"으로 읽어 가드가 또 조용히 꺼진다.
+  #
+  # grep을 절대 경로로 부르는 것도 같은 이유다 — 가드의 판정을 grep이 무엇으로 풀리는지에
+  # 맡기지 않는다 (개발 머신의 셸에서 grep이 바이너리를 건너뛰는 ugrep 함수인 경우가 있다).
+  local procs
+  procs=$(ps -Ao command= 2>/dev/null) || procs=""
+  if /usr/bin/grep -qF "$STAGED/bin/" <<< "$procs"; then
     die "번들 python이 실행 중이다 — 앱을 끄고 다시 하라: $STAGED"
   fi
 
