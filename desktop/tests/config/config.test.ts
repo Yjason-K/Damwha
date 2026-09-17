@@ -239,7 +239,7 @@ describe("loadConfig — app-owned keys", () => {
   });
 
   it("ignores an EXTRA_PATH that is not a list of strings, and still keeps it out of env", () => {
-    // 배열이 아닌 값은 무시한다 — 반쯤 맞는 목록을 PATH 앞에 붙이면 uv·docker 탐색이
+    // 배열이 아닌 값은 무시한다 — 반쯤 맞는 목록을 탐색 목록 앞에 붙이면 앱의 도구 탐색이
     // 조용히 엉뚱한 곳을 본다. 문자열로 적힌 경우가 특히 중요하다: 위의 일반 경로는
     // 문자열을 그대로 env에 넣으므로, 앱 설정 분기가 먼저 가로채지 않으면 자식이
     // EXTRA_PATH를 환경변수로 받는다.
@@ -252,7 +252,7 @@ describe("loadConfig — app-owned keys", () => {
 
   it("rejects an EXTRA_PATH whose elements are not all strings, and says why", () => {
     // 섞인 배열은 Array.isArray를 통과한다. 원소 타입을 보지 않으면 ["/opt/x", 3]이
-    // searchDirs를 지나 findExecutable의 path.join(3, "uv")에서 던지고, 사용자는
+    // searchDirs를 지나 findExecutable의 path.join(3, …)에서 던지고, 사용자는
     // `앱을 시작하지 못했어요: The "path" argument must be of type string`만 본다
     // (리뷰 Minor-1 — 이 변이는 235개 초록불 아래 살아남았다).
     const dir = mkdtempSync(join(tmpdir(), "damwha-cfg-"));
@@ -264,18 +264,22 @@ describe("loadConfig — app-owned keys", () => {
     expect(c.warning).toMatch(/EXTRA_PATH/);
   });
 
-  it("reads REPO_ROOT and UV_BIN as app settings, and ignores DOCKER_BIN with a log note (Phase 3)", () => {
+  it("reads REPO_ROOT as an app setting, and drops UV_BIN (Phase 4) and DOCKER_BIN (Phase 3) with log notes only", () => {
+    // UV_BIN은 uv 런처의 탈출구였다. 런처와 같은 커밋에서 사라진다 — 파일에 남은 값은 사람이 이번에 고른 것이
+    // 아니라 옛 설정이므로 화면 경고가 아니라 로그 note다. 자식 env로 새어 들어가지도 않는다.
     fs.writeFileSync(
       path.join(dir, "config.json"),
       JSON.stringify({ REPO_ROOT: "/r", UV_BIN: "/x/uv", DOCKER_BIN: "/x/docker" }),
     );
     const c = loadConfig(dir);
     expect(c.repoRoot).toBe("/r");
-    expect(c.uvBin).toBe("/x/uv");
     expect("dockerBin" in c).toBe(false);
     for (const key of ["REPO_ROOT", "UV_BIN", "DOCKER_BIN"]) expect(key in c.env).toBe(false);
     expect(c.warning).toBeUndefined();
     expect(c.notes.join("\n")).toMatch(/DOCKER_BIN/);
+    expect(c.notes.join("\n")).toMatch(/UV_BIN은 쓰지 않아요/);
+    // 값은 어디로도 옮기지 않는다 — 할 일이 없는 옛 경로다. 설정 필드로도, env로도, note로도.
+    expect(JSON.stringify(c)).not.toContain("/x/uv");
   });
 });
 
@@ -568,7 +572,6 @@ describe("child env hygiene (Phase 4 스펙 §6.3)", () => {
     databaseMode: "embedded",
     env: { LENS_LLM_BASE_URL: llmBaseUrl(51234) },
     bins: {
-      uv: null,
       python: `${REPO}/desktop/build/python/bin/python3.12`,
       ffmpeg: `${REPO}/desktop/build/ffmpeg/bin/ffmpeg`,
       ffprobe: `${REPO}/desktop/build/ffmpeg/bin/ffprobe`,
@@ -584,7 +587,6 @@ describe("child env hygiene (Phase 4 스펙 §6.3)", () => {
       repoRoot: null,
       packaged: true,
       bins: {
-        uv: null,
         python: "/Applications/Damwha.app/Contents/Resources/python/bin/python3.12",
         ffmpeg: "/Applications/Damwha.app/Contents/Resources/ffmpeg/bin/ffmpeg",
         ffprobe: "/Applications/Damwha.app/Contents/Resources/ffmpeg/bin/ffprobe",

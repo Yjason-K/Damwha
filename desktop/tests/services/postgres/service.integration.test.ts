@@ -56,7 +56,7 @@ describe.skipIf(!HAVE_BUNDLE)("embedded postgres against the real bundle", () =>
       packaged: false,
       databaseMode: "embedded",
       env: {},
-      bins: { uv: null, python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+      bins: { python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
       runId: "desktop-test",
       searchDirs: [],
       logFile: (id) => path.join(ud, "logs", `${id}.log`),

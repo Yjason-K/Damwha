@@ -1,11 +1,14 @@
 import { exitCauseBlock } from "../diagnostics/stderr";
-import { launchWithUv } from "../process/uv-launcher";
+import { launchPython } from "../process/python-launcher";
+import type { SpawnFn } from "../process/tool-runner";
 import type { EmbedProbe } from "./embed-probe";
 import type { LaunchContext, ReadinessResult, ServiceSpec } from "./types";
 
 export interface EmbedDeps {
   probe(baseUrl: string): Promise<EmbedProbe>;
   freePort(): Promise<number>;
+  /** 테스트 주입용. launch()가 그대로 launchPython에 넘긴다 — 기본은 실제 child_process.spawn (WorkerDeps와 같은 이유). */
+  spawnFn?: SpawnFn;
 }
 
 /**
@@ -74,7 +77,8 @@ export function embedSpec(deps: EmbedDeps): ServiceSpec {
     },
     async launch(ctx) {
       if (adopted) return { handle: null, owned: false };
-      return launchWithUv({ ctx, args: ["damwha-embed"], logId: "embed" });
+      // `damwha-embed` 콘솔 스크립트가 아니라 모듈로 들어간다 — 셔뱅을 타지 않는다 (Phase 4 스펙 §6.2).
+      return launchPython({ ctx, module: "damwha_worker.embed_service", logId: "embed", spawnFn: deps.spawnFn });
     },
     async readiness(result): Promise<ReadinessResult> {
       const handle = result.handle;

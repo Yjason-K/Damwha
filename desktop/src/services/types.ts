@@ -53,15 +53,16 @@ export interface LaunchContext {
    */
   env: ApiEnv;
   /**
-   * 이 실행이 부르는 실행 파일. python·ffmpeg·ffprobe는 번들 트리 안의 절대 경로다
-   * (process/runtime-paths.ts — python은 `bin/python3.12` 실체). uv는 Task 5가 런처와 함께 지운다.
+   * 이 실행이 부르는 실행 파일. 셋 다 번들 트리 안의 절대 경로다 (process/runtime-paths.ts — python은
+   * `bin/python3.12` 실체). worker·embed는 python으로 뜨고(process/python-launcher.ts), 자식 PATH는
+   * python·ffmpeg의 `bin`뿐이다.
    */
-  bins: { uv: string | null; python: string; ffmpeg: string; ffprobe: string };
+  bins: { python: string; ffmpeg: string; ffprobe: string };
   /** 이 실행의 식별자(`desktop-<uuid>`). 자식 argv의 `--run-id=`에 실려, 앱이 ps로 자기 자식을 알아본다 (스펙 §6.5). */
   runId: string;
   /**
-   * **앱 자신의** 도구 탐색용(dev의 pnpm 등). 번들 python 자식의 PATH에는 가지 않는다 (스펙 §6.2) —
-   * 아직 이것을 자식 PATH에 앞세우는 것은 Task 5가 지울 uv 런처뿐이다.
+   * **앱 자신의** 도구 탐색용. 번들 python 자식의 PATH에는 가지 않는다 (스펙 §6.2) — launchPython은
+   * 이 값을 읽지 않는다.
    */
   searchDirs: readonly string[];
   logFile(id: ServiceId): string;

@@ -3,8 +3,8 @@ import { hasOnceChild, listExternalWorkers, parseWorkerProcesses } from "../../s
 
 // 2026-09-12 실측한 다섯 가지 모양을 한 fixture에 모았다. 첫 줄(4101)만 supervisor다.
 // 4102/4103이 핵심이다 — 둘 다 `-m damwha_worker`를 인자로 그대로 갖고 있고, 4103이
-// **앱이 자기 worker를 띄울 때 나오는 기본 모양**이다(Task 2의 findExecutable이 절대
-// 경로를 주고 Task 8의 launchWithUv가 그 경로로 spawn한다). 문자열 필터로는 못 거른다.
+// **Phase 2의 앱이 자기 worker를 띄울 때 나오던 기본 모양**이다(탐색으로 찾은 uv의 절대
+// 경로로 spawn했다). 문자열 필터로는 못 거른다.
 const PS = [
   "  PID COMMAND",
   " 4101 /Users/jason/projects/Damwha2/be/worker/.venv/bin/python3 -m damwha_worker",

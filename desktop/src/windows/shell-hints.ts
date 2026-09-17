@@ -18,14 +18,21 @@ type Hint = string | null | Partial<Record<ServiceId, string>>;
 const INSTALL_OR_CONFIGURE = "설치했는지 확인하거나, config.json의 UV_BIN에 경로를 적어 주세요.";
 
 /**
+ * worker·embed의 spawn ENOENT는 이제 번들 python이 없다는 뜻이다 (Phase 4 — process/python-launcher.ts).
+ * config.json의 UV_BIN은 더 읽지 않으므로 그것을 고치라고 말하면 틀린 안내다. 문구는 pgBundleMissing과 같은 꼴이다.
+ */
+const PYTHON_BUNDLE_MISSING =
+  "앱을 다시 설치해 주세요. 개발 중이면 `bash desktop/scripts/build-python.sh`를 실행한 뒤 다시 시도해 주세요.";
+
+/**
  * `Record<CauseId, …>`라서 causes.ts에 원인을 더하고 여기서 안내를 정하지 않으면 lint(tsc)가
  * 걸린다. 그 강제가 이 표가 "손으로 적은 목록이라 원인 하나를 조용히 빠뜨리는" 일을 막는다.
  */
 export const HINTS: Record<CauseId, Hint> = {
   uvMissing: INSTALL_OR_CONFIGURE,
-  // uv를 부르는 것은 worker·embed다. dev의 API 런처는 pnpm을 부르므로 거기에 UV_BIN을 말하면
+  // 번들 python을 부르는 것은 worker·embed다. dev의 API 런처는 pnpm을 부르므로 거기에 번들 안내를 하면
   // 틀린 안내다.
-  spawnNotFound: { worker: INSTALL_OR_CONFIGURE, embed: INSTALL_OR_CONFIGURE },
+  spawnNotFound: { worker: PYTHON_BUNDLE_MISSING, embed: PYTHON_BUNDLE_MISSING },
   workerEnvMissing: "be/worker/.env.example을 복사해 값을 채운 뒤 다시 시도해 주세요.",
   pendingMigrations: "터미널에서 `pnpm be:migrate`를 실행한 뒤 다시 시도해 주세요.",
   externalWorker:

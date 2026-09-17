@@ -126,7 +126,7 @@ export function createStatusWindow<W>(host: StatusWindowHost<W>): StatusWindow {
     const fresh = statuses.filter((s) => s.process === "failed" && !announced.has(s.id));
     if (fresh.length === 0) return;
     // 띄울 수 없는 순간이면 **표시하지 않는다.** 여기서 알린 것으로 치면 담화 화면이 붙기 직전에
-    // 넘어진 worker(uv 없음은 몇 밀리초 만에 넘어진다)가 붙은 뒤로는 영영 아무 데도 안 보인다.
+    // 넘어진 worker(번들 python이 없으면 몇 밀리초 만에 넘어진다)가 붙은 뒤로는 영영 아무 데도 안 보인다.
     if (!host.mayAutoOpen()) return;
     for (const s of fresh) announced.add(s.id);
     show(false);

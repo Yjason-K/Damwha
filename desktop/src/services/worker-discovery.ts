@@ -11,9 +11,8 @@
  *   19652 …/be/worker/.venv/bin/python3 -m damwha_worker          ← 이것만 supervisor다
  *
  * 거부 목록은 셋을 다 반환했다. 19651이 특히 나쁘다 — **앱이 자기 worker를 띄우는 기본
- * 모양**이다. Task 2의 findExecutable은 언제나 절대 경로를 돌려주고 Task 8의
- * launchWithUv는 그 절대 경로(`ctx.bins.uv`)로 spawn하므로 앱의 런처 줄은 늘
- * `/opt/homebrew/bin/uv run …`이고, `^uv\s+run` 앵커는 여기에 매치하지 않는다.
+ * 모양**이었다(Phase 2 — 앱은 uv를 탐색으로 찾은 절대 경로로 spawn했으므로 앱의 런처 줄은 늘
+ * `/opt/homebrew/bin/uv run …`이었고, `^uv\s+run` 앵커는 여기에 매치하지 않았다).
  * 19645는 커맨드 텍스트 안에 `-m damwha_worker`를 그대로 갖고 있어 문자열 기반 필터로는
  * 원리적으로 구분이 안 된다.
  *

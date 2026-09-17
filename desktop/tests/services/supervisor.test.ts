@@ -17,7 +17,7 @@ function ctx(): LaunchContext {
     packaged: false,
     databaseMode: "embedded",
     env: {},
-    bins: { uv: "/opt/homebrew/bin/uv", python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+    bins: { python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
     runId: "desktop-test",
     searchDirs: ["/opt/homebrew/bin"],
     logFile: (id) => `/u/logs/${id}.log`,
@@ -471,7 +471,7 @@ describe("supervisor.stopAll", () => {
 
 describe("supervisor.stopAll — 진행 중인 배경 기동 (C1)", () => {
   it("does not let a background bring create a process after stopAll returned", async () => {
-    // launchWithUv도 launchDev도 detached다. stopAll이 반환한 **뒤에** 만들어진 자식은
+    // launchPython도 launchDev도 detached다. stopAll이 반환한 **뒤에** 만들어진 자식은
     // Electron이 죽어도 살아남고, 그것을 가리키는 참조는 아무 데도 없다 (P2-C4).
     const live = new Set<number>();
     let launched = 0;

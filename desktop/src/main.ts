@@ -41,7 +41,7 @@ import { descendantPids, listenerPids } from "./process/process-tree";
 import { buildSpecs } from "./services/specs";
 import { hasOnceChild, listExternalWorkers as scanExternalWorkers } from "./services/worker-discovery";
 import { probeEmbedContract } from "./services/embed-probe";
-import { findExecutable, searchDirs } from "./process/executables";
+import { searchDirs } from "./process/executables";
 import { createMigrationCheckWatch } from "./services/api";
 import { resolveRepoRoot } from "./config/repo-root";
 import { ffmpegBinaries, pythonBinaries } from "./process/runtime-paths";
@@ -775,7 +775,7 @@ async function reattachWindow(mine: number): Promise<void> {
   // 화면으로 되돌린다. 붙이기 **전에** 올린다.
   attachedWindow = target;
   await target.loadURL(renderer.url);
-  // 붙기 전에 넘어진 서비스(uv가 없으면 worker는 몇 밀리초 만에 넘어진다)는 그때 실패 화면에
+  // 붙기 전에 넘어진 서비스(번들 python이 없으면 worker는 몇 밀리초 만에 넘어진다)는 그때 실패 화면에
   // 잠깐 보였을 뿐, 이제 어떤 화면에도 없다. 감독자는 더 낼 상태가 없어 onStatus도 다시 돌지
   // 않으므로, 붙인 직후 여기서 한 번 더 묻는다.
   statusWindow.reconsider();
@@ -987,7 +987,6 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
   repoRoot = resolved;
 
   const dirs = searchDirs(app.getPath("home"), cfg.extraPath);
-  const uv = cfg.uvBin ?? findExecutable("uv", dirs);
   const python = pythonBinaries(bundleDir("python"));
   const ffmpeg = ffmpegBinaries(bundleDir("ffmpeg"));
   prepareUserDataForPython(userData);
@@ -1003,7 +1002,7 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
     packaged: app.isPackaged,
     databaseMode: cfg.databaseMode.kind,
     env,
-    bins: { uv, python: python.python, ffmpeg: ffmpeg.ffmpeg, ffprobe: ffmpeg.ffprobe },
+    bins: { python: python.python, ffmpeg: ffmpeg.ffmpeg, ffprobe: ffmpeg.ffprobe },
     runId: RUN_ID,
     searchDirs: dirs,
     logFile: logPathOf,

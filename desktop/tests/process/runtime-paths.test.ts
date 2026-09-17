@@ -20,7 +20,7 @@ function ctx(over: { repoRoot: string | null; packaged: boolean; python: string 
     packaged: over.packaged,
     databaseMode: "embedded",
     env: {},
-    bins: { uv: null, python: over.python, ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+    bins: { python: over.python, ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
     runId: "desktop-test",
     searchDirs: [],
     logFile: (id) => `/u/logs/${id}.log`,

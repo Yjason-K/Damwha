@@ -515,7 +515,7 @@ export function createSupervisor(
     timers.clear();
     // 진행 중인 bring이 아직 있을 수 있다. 기다리지 않으면 그것이 **stopAll이 반환한 뒤에**
     // 프로세스를 만들고, 그 프로세스를 가리키는 유일한 참조(rt.result)는 아무도 읽지 않는다.
-    // launchWithUv도 launchDev도 detached라 그런 자식은 Electron이 죽어도 살아남는다 (P2-C4).
+    // launchPython도 launchDev도 detached라 그런 자식은 Electron이 죽어도 살아남는다 (P2-C4).
     // stopping 검사만으로는 부족하다 — launch()가 반환하고 대입되기까지의 구간이 남는다.
     //
     // 한 번의 allSettled로 끝내지 않는다. 게이트 bring이 끝나면 runFrom이 그 자리에서 다음

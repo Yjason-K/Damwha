@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import { describe, expect, it, vi } from "vitest";
 import { embedSpec } from "../../src/services/embed";
 import { BLOCK_MAX_CHARS } from "../../src/diagnostics/stderr";
 import type { LaunchContext, ServiceHandle } from "../../src/services/types";
+import { fakeChild } from "../fake-child";
 
 function ctx(env: Record<string, string> = {}): LaunchContext {
   return {
@@ -10,7 +14,7 @@ function ctx(env: Record<string, string> = {}): LaunchContext {
     packaged: true,
     databaseMode: "embedded",
     env: { EMBED_SERVICE_HOST: "127.0.0.1", EMBED_SERVICE_PORT: "8100", ...env },
-    bins: { uv: "/opt/homebrew/bin/uv", python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+    bins: { python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
     runId: "desktop-test",
     searchDirs: [],
     logFile: (id) => `/u/logs/${id}.log`,
@@ -97,10 +101,32 @@ describe("embedSpec shape", () => {
     expect(detail.endsWith("RuntimeError: boom")).toBe(true);
   });
 
-  it("refuses to launch without uv", async () => {
-    const spec = embedSpec({ probe: async () => ({ kind: "absent" }), freePort: async () => 8100 });
-    await expect(
-      spec.launch({ ...ctx(), bins: { ...ctx().bins, uv: null } }),
-    ).rejects.toThrow(/uv/);
+  it("launches the embed service by module, not the damwha-embed console script, run-id last (Phase 4 스펙 §6.2)", async () => {
+    // 콘솔 스크립트는 셔뱅을 타 옛 경로가 남아 있으면 조용히 다른 런타임을 실행한다 (Phase 0 R-6).
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-embed-"));
+    try {
+      const child = fakeChild();
+      const spawnFn = vi.fn().mockReturnValue(child);
+      const spec = embedSpec({ probe: async () => ({ kind: "absent" }), freePort: async () => 8100, spawnFn });
+      await spec.prepare!(ctx());
+      const c = { ...ctx(), logFile: (id: string) => path.join(dir, `${id}.log`) };
+      const result = await spec.launch(c);
+      expect(result.owned).toBe(true);
+      expect(spawnFn).toHaveBeenCalledTimes(1);
+      const [command, args] = spawnFn.mock.calls[0] as [string, string[]];
+      expect(command).toBe("/b/python/bin/python3.12");
+      expect(args).toEqual(["-m", "damwha_worker.embed_service", "--run-id=desktop-test"]);
+      child.emit("exit", 0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not launch anything when it adopted a matching external service", async () => {
+    const spawnFn = vi.fn();
+    const spec = embedSpec({ probe: async () => ({ kind: "match" }), freePort: async () => 8100, spawnFn });
+    await spec.prepare!(ctx());
+    expect(await spec.launch(ctx())).toEqual({ handle: null, owned: false });
+    expect(spawnFn).not.toHaveBeenCalled();
   });
 });

@@ -1,9 +1,7 @@
-import * as fs from "fs";
-import * as path from "path";
 import { CAUSES } from "../diagnostics/causes";
 import { exitCauseBlock } from "../diagnostics/stderr";
+import { launchPython } from "../process/python-launcher";
 import type { SpawnFn } from "../process/tool-runner";
-import { launchWithUv } from "../process/uv-launcher";
 import type {
   LaunchResult,
   ReadinessResult,
@@ -74,9 +72,7 @@ export function makeReadinessWatch(): ReadinessWatch {
 export interface WorkerDeps {
   /** 외부 supervisor의 pid들. Task 4의 parseWorkerProcesses가 채운다. */
   listExternal(): Promise<number[]>;
-  /** worker의 .env 존재 확인. 테스트가 주입한다. */
-  exists?(p: string): boolean;
-  /** 테스트 주입용. launch()가 그대로 launchWithUv에 넘긴다 — 기본은 실제 child_process.spawn. */
+  /** 테스트 주입용. launch()가 그대로 launchPython에 넘긴다 — 기본은 실제 child_process.spawn. */
   spawnFn?: SpawnFn;
   /**
    * 종료 절차. Task 11의 stopWorkerProcess를 main.ts가 넘긴다.
@@ -92,7 +88,6 @@ export interface WorkerDeps {
 }
 
 export function workerSpec(deps: WorkerDeps): ServiceSpec {
-  const exists = deps.exists ?? fs.existsSync;
   /**
    * 기동마다 하나. 핸들로 드는 이유는 api.ts의 createMigrationCheckWatch와 같다 — 재시작한 worker는
    * 새 핸들이라 사건을 처음부터 다시 본다. 불리언 하나로 들면 옛 기동의 ready가 새 기동에 남는다.
@@ -114,20 +109,13 @@ export function workerSpec(deps: WorkerDeps): ServiceSpec {
       return { kind: "stand-down", detail: CAUSES.externalWorker.text(pids) };
     },
     async launch(ctx) {
-      // uv 확인이 .env 확인보다 먼저다. repoRoot는 packaged 빌드마다 다르고 실제 체크아웃이
-      // 아닐 수도 있어(테스트의 "/r"처럼) .env 존재 검사가 먼저면 uv 부재와 무관하게 항상
-      // ".env 없음"으로 넘어져, uv를 못 찾은 진짜 원인이 화면에 뜨지 않는다. launchWithUv도
-      // 같은 검사를 하지만 그건 .env를 통과한 뒤라 이미 늦다.
-      if (ctx.bins.uv === null) throw new Error(CAUSES.uvMissing.text);
-      // packaged는 저장소를 모른다(repoRoot=null). 이 .env 검사는 Task 5가 지운다 — 앱이 필요한 env를 전부 넣는다.
-      if (ctx.repoRoot === null) throw new Error(CAUSES.repoRootMissing.text);
-      const envFile = path.join(ctx.repoRoot, "be", "worker", ".env");
-      if (!exists(envFile)) throw new Error(CAUSES.workerEnvMissing.text);
+      // be/worker/.env를 확인하지 않는다 (Phase 4 스펙 §6.2). 번들에는 그 파일이 없고, worker가 필요한 값은
+      // 앱이 env로 전부 넣는다(config.ts의 childEnv) — 검사를 남기면 packaged에서 항상 실패한다.
       // 감시를 spawn **전에** 만들어 onStderr로 넘긴다 — 첫 청크부터 빠짐없이 본다.
       const watch = makeReadinessWatch();
-      const result = launchWithUv({
+      const result = launchPython({
         ctx,
-        args: ["python", "-m", "damwha_worker"],
+        module: "damwha_worker",
         logId: "worker",
         spawnFn: deps.spawnFn,
         onStderr: watch.feed,

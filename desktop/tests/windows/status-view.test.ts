@@ -1,3 +1,6 @@
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import * as vm from "vm";
 import { describe, expect, it } from "vitest";
 import { CAUSES } from "../../src/diagnostics/causes";
@@ -16,6 +19,7 @@ import {
 import { judgeAfterProbe } from "../../src/services/api";
 import { workerSpec } from "../../src/services/worker";
 import type { LaunchContext, ServiceId, ServiceStatus } from "../../src/services/types";
+import { fakeChild } from "../fake-child";
 
 const st = (id: ServiceId, over: Partial<ServiceStatus> = {}): ServiceStatus => ({
   id,
@@ -347,26 +351,39 @@ describe("화면이 싣는 해결 문구 — 완료 기준 P2-C7·C8·C9 (Task 1
     packaged: true,
     databaseMode: "embedded",
     env: {},
-    bins: { uv: "/opt/homebrew/bin/uv", python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+    bins: { python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
     runId: "desktop-test",
     searchDirs: [],
     logFile: (id) => `/u/logs/${id}.log`,
     signal: new AbortController().signal,
     ...over,
   });
-  const reasonOf = async (p: Promise<unknown>) => p.then(() => "", (e: Error) => e.message);
   const failed = (id: ServiceId, detail: string): ServiceStatus =>
     st(id, { process: "failed", health: "unknown", detail });
 
-  it("P2-C8: uv not found — names what is missing and the config.json fix, on the failure screen and in the status window", async () => {
-    const detail = await reasonOf(workerSpec({ listExternal: async () => [] }).launch(ctx({ bins: { ...ctx().bins, uv: null } })));
-    const statuses = [st("postgres"), st("api"), failed("worker", detail)];
-    const shell = shellStatusFrom({ statuses, restartNotice: null, logPathOf });
-    expect(shell.detail).toContain("uv를 찾지 못했어요");
-    expect(shell.detail).toMatch(/config\.json의 UV_BIN/);
-    const row = servicesView({ statuses, restartNotice: null, logPathOf }).rows[2];
-    expect(row.cause).toContain("uv를 찾지 못했어요");
-    expect(row.hint).toMatch(/config\.json의 UV_BIN/);
+  it("P2-C8 (Phase 4): the bundled python is missing — names what is missing and the fix, on the failure screen and in the status window", async () => {
+    // Phase 2의 P2-C8은 "uv를 못 찾음 → config.json의 UV_BIN"이었다. 이제 worker는 번들 python으로 뜨고,
+    // 그것이 없으면 spawn ENOENT가 죽은 핸들의 꼬리로 올라온다. 원인은 실제 어댑터가 낸 것을 쓴다.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-sv-"));
+    try {
+      const child = fakeChild();
+      const spec = workerSpec({ listExternal: async () => [], spawnFn: () => child });
+      const c = ctx({ logFile: (id) => path.join(dir, `${id}.log`) });
+      const result = await spec.launch(c);
+      child.emit("error", Object.assign(new Error(`spawn ${c.bins.python} ENOENT`), { code: "ENOENT" }));
+      const r = await spec.readiness(result, c);
+      const detail = r.kind === "failed" ? r.detail : "";
+      const statuses = [st("postgres"), st("api"), failed("worker", detail)];
+      const shell = shellStatusFrom({ statuses, restartNotice: null, logPathOf });
+      expect(shell.detail).toContain(`spawn ${c.bins.python} ENOENT`);
+      expect(shell.detail).toMatch(/다시 설치.*build-python\.sh/);
+      expect(shell.detail).not.toMatch(/UV_BIN/);
+      const row = servicesView({ statuses, restartNotice: null, logPathOf }).rows[2];
+      expect(row.cause).toContain(`spawn ${c.bins.python} ENOENT`);
+      expect(row.hint).toMatch(/다시 설치.*build-python\.sh/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("P2-C9: pending migrations — the failure screen gives the `pnpm be:migrate` guidance", async () => {

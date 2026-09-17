@@ -12,7 +12,8 @@ import { embeddedPostgresSpec } from "../../src/services/postgres/service";
 import { PG_BINARY_NAMES, pgBinaries, pgLayout } from "../../src/services/postgres/layout";
 import { createSupervisor } from "../../src/services/supervisor";
 import { workerSpec } from "../../src/services/worker";
-import { launchWithUv } from "../../src/process/uv-launcher";
+import { launchPython } from "../../src/process/python-launcher";
+import { fakeChild } from "../fake-child";
 import type { LaunchContext, ServiceId, ServiceSpec, ServiceStatus } from "../../src/services/types";
 
 const s = (over: Partial<ServiceStatus>): ServiceStatus => ({
@@ -77,7 +78,7 @@ type ArgsOf<K extends TemplateId> = (typeof CAUSES)[K]["text"] extends (...args:
 
 /** 값이 끼는 원인의 예시 인자. 타입이 키를 전부 요구하므로 템플릿 원인을 더하면 여기서 걸린다. */
 const SAMPLE_ARGS: { [K in TemplateId]: ArgsOf<K> } = {
-  spawnNotFound: ["/nowhere/uv"],
+  spawnNotFound: ["/nowhere/python/bin/python3.12"],
   pendingMigrations: [3, "022_x.sql, 023_y.sql, 024_z.sql"],
   externalWorker: [[4101, 4102]],
   embedMismatch: ["other/model", 768, "BAAI/bge-m3", 1024],
@@ -184,7 +185,9 @@ describe("recoveryHint — 스펙 §6.12의 표가 말하는 것", () => {
   // 말을 해도 초록이다. 스펙 표의 행마다 핵심 낱말을 고정한다.
   const rows: Array<[CauseId, ServiceId, RegExp]> = [
     ["uvMissing", "worker", /config\.json의 UV_BIN/],
-    ["spawnNotFound", "worker", /UV_BIN/],
+    // Phase 4: worker·embed의 spawn ENOENT는 번들 python이 없다는 뜻이다. UV_BIN은 더 읽지 않는다.
+    ["spawnNotFound", "worker", /다시 설치.*build-python\.sh/],
+    ["spawnNotFound", "embed", /다시 설치.*build-python\.sh/],
     // Phase 4 스펙 §6.3: dev 전용 원인이 됐고 폴더 선택창이 사라졌다 — "고르라"고 말하면 없는 창을 가리킨다.
     ["repoRootMissing", "api", /desktop\/에서 앱을 띄웠는지.*config\.json의 REPO_ROOT/],
     ["workerEnvMissing", "worker", /be\/worker\/\.env\.example을 복사/],
@@ -207,8 +210,16 @@ describe("recoveryHint — 스펙 §6.12의 표가 말하는 것", () => {
     }
   });
 
-  it("does not tell the API launcher about UV_BIN when pnpm is what went missing", () => {
+  it("does not tell the API launcher about the Python bundle when pnpm is what went missing", () => {
     expect(recoveryHint(s({ id: "api", detail: CAUSES.spawnNotFound.text("pnpm") }))).toBeUndefined();
+  });
+
+  it("no longer points anyone at UV_BIN for a failure the app can still produce (Phase 4)", () => {
+    // uvMissing은 아무 어댑터도 내지 않는다(Task 11이 지운다). spawnNotFound는 여전히 난다 — 그 안내가
+    // 읽히지도 않는 설정을 고치라고 하면 사람은 고칠 수 없는 것을 고친다.
+    for (const sid of SERVICE_IDS) {
+      expect(mappedHint("spawnNotFound", sid) ?? "").not.toMatch(/UV_BIN/);
+    }
   });
 });
 
@@ -221,7 +232,7 @@ describe("recoveryHint — 실제 어댑터가 낸 원인에서", () => {
     packaged: true,
     databaseMode: "embedded",
     env: {},
-    bins: { uv: "/opt/homebrew/bin/uv", python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+    bins: { python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
     runId: "desktop-test",
     searchDirs: [],
     logFile: (id) => `/u/logs/${id}.log`,
@@ -229,25 +240,35 @@ describe("recoveryHint — 실제 어댑터가 낸 원인에서", () => {
     ...over,
   });
 
-  const thrown = async (p: Promise<unknown>): Promise<string> => {
+  it("worker: the bundled python is not there — the real adapter's dead-handle cause gets the bundle hint", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-hint-"));
     try {
-      await p;
-    } catch (e) {
-      return (e as Error).message;
+      const child = fakeChild();
+      const spec = workerSpec({ listExternal: async () => [], spawnFn: () => child });
+      const c = ctx({ logFile: (id) => path.join(dir, `${id}.log`) });
+      const result = await spec.launch(c);
+      child.emit("error", Object.assign(new Error(`spawn ${c.bins.python} ENOENT`), { code: "ENOENT" }));
+      const r = await spec.readiness(result, c);
+      const detail = r.kind === "failed" ? r.detail : "";
+      expect(detail).toContain(`spawn ${c.bins.python} ENOENT`);
+      expect(recoveryHint(s({ id: "worker", detail }))).toBe((HINTS.spawnNotFound as Record<string, string>).worker);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
-    throw new Error("던지지 않았다");
-  };
-
-  it("worker: uv missing", async () => {
-    const detail = await thrown(
-      workerSpec({ listExternal: async () => [] }).launch(ctx({ bins: { ...ctx().bins, uv: null } })),
-    );
-    expect(recoveryHint(s({ id: "worker", detail }))).toBe(HINTS.uvMissing);
   });
 
-  it("worker: be/worker/.env missing", async () => {
-    const detail = await thrown(workerSpec({ listExternal: async () => [], exists: () => false }).launch(ctx()));
-    expect(recoveryHint(s({ id: "worker", detail }))).toBe(HINTS.workerEnvMissing);
+  it("worker: launching no longer fails for a missing be/worker/.env or a missing checkout (packaged)", async () => {
+    // Phase 2의 두 거부(uv 없음·.env 없음)는 어댑터에서 사라졌다. 원인 항목 자체는 Task 11이 지운다.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-hint-"));
+    try {
+      const child = fakeChild();
+      const spec = workerSpec({ listExternal: async () => [], spawnFn: () => child });
+      const result = await spec.launch(ctx({ repoRoot: null, packaged: true, logFile: (id) => path.join(dir, `${id}.log`) }));
+      expect(result.handle).not.toBeNull();
+      child.emit("exit", 0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("worker: an external supervisor made the app stand down", async () => {
@@ -363,7 +384,7 @@ describe("recoveryHint — 실제 어댑터가 낸 원인에서", () => {
     tmp = dir;
     const child = new EventEmitter() as unknown as ChildProcess & { stderr: EventEmitter };
     Object.assign(child, { stdout: new EventEmitter(), stderr: new EventEmitter(), pid: 1, kill: () => true });
-    const spec = workerSpec({ listExternal: async () => [], exists: () => true, spawnFn: () => child });
+    const spec = workerSpec({ listExternal: async () => [], spawnFn: () => child });
     const launchCtx = ctx({ logFile: (id) => path.join(dir, `${id}.log`) });
     const result = await spec.launch(launchCtx);
     child.stderr.emit("data", Buffer.from("INFO supervisor desktop-7 ready (db connected)\nWARNING reconnect failed — retry in 2s\n"));
@@ -416,28 +437,35 @@ describe("recoveryHint — 실제 어댑터가 낸 원인에서", () => {
     tmp = undefined;
   });
 
-  it("supervisor + launchWithUv: a UV_BIN pointing nowhere fails with the UV_BIN hint (P2-C8)", async () => {
-    // cfg.uvBin은 탐색을 건너뛰고 그대로 쓰인다(main.ts). 틀린 경로면 spawn이 'error'(ENOENT)를
-    // 내고, launchWithUv가 그것을 stderr 싱크에 적고, 감독자가 죽은 핸들의 블록으로 올린다.
+  it("supervisor + launchPython: a bundled python that is not there fails with the bundle hint (P2-C8, Phase 4)", async () => {
+    // main.ts는 번들 경로를 만들 뿐 존재를 확인하지 않는다. 없으면 spawn이 'error'(ENOENT)를 내고,
+    // launchPython이 그것을 stderr 싱크에 적고, 감독자가 죽은 핸들의 블록으로 올린다.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-hint-"));
     tmp = dir;
     const spawnFn = () => {
       const child = new EventEmitter() as unknown as ChildProcess;
       Object.assign(child, { stdout: new EventEmitter(), stderr: new EventEmitter(), pid: undefined, kill: () => true });
-      setTimeout(() => child.emit("error", Object.assign(new Error("spawn /nowhere/uv ENOENT"), { code: "ENOENT" })), 0);
+      setTimeout(
+        () => child.emit("error", Object.assign(new Error("spawn /nowhere/python/bin/python3.12 ENOENT"), { code: "ENOENT" })),
+        0,
+      );
       return child;
     };
-    const launchCtx = ctx({ bins: { ...ctx().bins, uv: "/nowhere/uv" }, logFile: (id) => path.join(dir, `${id}.log`) });
+    const launchCtx = ctx({
+      bins: { ...ctx().bins, python: "/nowhere/python/bin/python3.12" },
+      logFile: (id) => path.join(dir, `${id}.log`),
+    });
     const sup = createSupervisor(
-      [workerOnly({ launch: async (c) => launchWithUv({ ctx: c, args: ["x"], logId: "worker", spawnFn }) })],
+      [workerOnly({ launch: async (c) => launchPython({ ctx: c, module: "damwha_worker", logId: "worker", spawnFn }) })],
       launchCtx,
       { readyIntervalMs: 5, readyTimeoutMs: 2_000 },
     );
     await sup.start();
     await vi.waitFor(() => expect(sup.statuses()[0].process).toBe("failed"));
     const st = sup.statuses()[0];
-    expect(st.detail).toContain("spawn /nowhere/uv ENOENT");
-    expect(recoveryHint(st)).toBe(HINTS.uvMissing);
+    expect(st.detail).toContain("spawn /nowhere/python/bin/python3.12 ENOENT");
+    expect(recoveryHint(st)).toBe((HINTS.spawnNotFound as Record<string, string>).worker);
+    expect(recoveryHint(st)).not.toMatch(/UV_BIN/);
   });
 });
 

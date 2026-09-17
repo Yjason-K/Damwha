@@ -19,8 +19,7 @@ export interface LoadedConfig {
   notes: string[];
   /** 저장소 체크아웃. dev만 읽는다 — packaged는 무시한다 (repo-root.ts의 resolveRepoRoot, Phase 4 스펙 §6.3). */
   repoRoot?: string;
-  uvBin?: string;
-  /** PATH 탐색에 앞세울 디렉터리. 기본 목록을 이긴다 (process/executables.ts). */
+  /** 앱 자신의 도구 탐색에 앞세울 디렉터리. 기본 목록을 이긴다 (process/executables.ts). 자식 PATH에는 가지 않는다. */
   extraPath: string[];
   /** 감독자를 만들 때 한 번 정한다. 실행 중에는 바꾸지 않고 재적용기가 보고만 한다 (Phase 3 스펙 §6.1). */
   databaseMode: DatabaseMode;
@@ -376,7 +375,16 @@ export function refreshEnv(
 
 /** 자식 env가 아니라 앱이 쓰는 설정. 그대로 주입하면 API·worker의 zod/pydantic이 모르는
  *  키를 받거나(무해) 배열이 문자열로 새어 들어간다(유해). */
-const APP_SETTING_KEYS = ["REPO_ROOT", "EXTRA_PATH", "UV_BIN", "DEBUG_EXTERNAL_DATABASE_URL"];
+const APP_SETTING_KEYS = ["REPO_ROOT", "EXTRA_PATH", "DEBUG_EXTERNAL_DATABASE_URL"];
+
+/**
+ * 예전 빌드가 읽던 설정. 파일에 남아 있으면 **로그에만** 적고 버린다 — 화면 경고가 아니다. 지금 앱에는 그 값으로
+ * 할 일이 없어, 화면에 띄우면 할 일 없는 안내가 된다. 자식 env로 흘리지도 않는다.
+ */
+const RETIRED_SETTING_NOTES: ReadonlyMap<string, string> = new Map([
+  ["DOCKER_BIN", "config.json의 DOCKER_BIN은 쓰지 않아요 — Phase 3부터 앱은 Docker를 부르지 않습니다."],
+  ["UV_BIN", "config.json의 UV_BIN은 쓰지 않아요 — Phase 4부터 worker·embed는 앱에 든 Python으로 실행합니다."],
+]);
 
 function reason(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -425,7 +433,7 @@ export function loadConfig(userDataDir: string): LoadedConfig {
   }
 
   const env: ApiEnv = { ...defaults };
-  const settings: { repoRoot?: string; uvBin?: string; externalUrl?: string; extraPath: string[] } = { extraPath: [] };
+  const settings: { repoRoot?: string; externalUrl?: string; extraPath: string[] } = { extraPath: [] };
   const fileDb: Partial<Record<(typeof DB_ENV_KEYS)[number], string>> = {};
   // 값을 버렸으면 왜 버렸는지 적는다. 조용히 무시하면 사용자는 자기가 적은 경로가 왜 안 먹는지
   // 알 길이 없고, 다음에 보는 화면은 엉뚱한 원인을 말한다.
@@ -445,8 +453,9 @@ export function loadConfig(userDataDir: string): LoadedConfig {
       );
       continue;
     }
-    if (key === "DOCKER_BIN") {
-      notes.push("config.json의 DOCKER_BIN은 쓰지 않아요 — Phase 3부터 앱은 Docker를 부르지 않습니다.");
+    const retired = RETIRED_SETTING_NOTES.get(key);
+    if (retired !== undefined) {
+      notes.push(retired);
       continue;
     }
     if ((DB_ENV_KEYS as readonly string[]).includes(key)) {
@@ -456,9 +465,9 @@ export function loadConfig(userDataDir: string): LoadedConfig {
     }
     if (APP_SETTING_KEYS.includes(key)) {
       if (key === "EXTRA_PATH") {
-        // 문자열 **목록만** 받는다. 반쯤 맞는 목록을 PATH 앞에 붙이면 uv·docker 탐색이 조용히
+        // 문자열 **목록만** 받는다. 반쯤 맞는 목록을 탐색 목록 앞에 붙이면 앱의 도구 탐색이 조용히
         // 엉뚱한 곳을 본다. 원소 타입까지 보는 이유는 섞인 배열이 Array.isArray를 통과한다는
-        // 것이다 — ["/opt/x", 3]은 searchDirs를 지나 findExecutable의 path.join(3, "uv")에서
+        // 것이다 — ["/opt/x", 3]은 searchDirs를 지나 findExecutable의 path.join(3, …)에서
         // 던지고(그 try는 isExecutable 호출만 감싼다, process/executables.ts:44-50), 사용자는
         // 원인이 적히지 않은 `앱을 시작하지 못했어요: The "path" argument must be of type
         // string`을 본다.
@@ -472,9 +481,8 @@ export function loadConfig(userDataDir: string): LoadedConfig {
       } else if (key === "DEBUG_EXTERNAL_DATABASE_URL") {
         if (typeof value === "string" && value.trim() !== "") settings.externalUrl = value;
         else warnings.push(`config.json의 DEBUG_EXTERNAL_DATABASE_URL은 비어 있지 않은 문자열이어야 해요. 내장 DB로 실행합니다: ${JSON.stringify(value)}`);
-      } else if (typeof value === "string") {
-        if (key === "REPO_ROOT") settings.repoRoot = value;
-        else settings.uvBin = value;
+      } else if (key === "REPO_ROOT" && typeof value === "string") {
+        settings.repoRoot = value;
       }
       continue;
     }
@@ -521,7 +529,6 @@ export function loadConfig(userDataDir: string): LoadedConfig {
     databaseMode,
     extraPath: settings.extraPath,
     ...(settings.repoRoot === undefined ? {} : { repoRoot: settings.repoRoot }),
-    ...(settings.uvBin === undefined ? {} : { uvBin: settings.uvBin }),
     ...(warnings.length > 0 ? { warning: warnings.join(" / ") } : {}),
   };
 }

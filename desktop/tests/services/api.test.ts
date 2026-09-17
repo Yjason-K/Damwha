@@ -258,7 +258,7 @@ describe("apiSpec — migration gate (Phase 3)", () => {
     packaged: false,
     databaseMode: "embedded",
     env: { PORT: "3000" },
-    bins: { uv: null, python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+    bins: { python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
     runId: "desktop-test",
     searchDirs: [],
     logFile: () => "/u/logs/api.log",
