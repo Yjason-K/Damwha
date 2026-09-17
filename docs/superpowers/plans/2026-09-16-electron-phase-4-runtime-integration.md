@@ -50,6 +50,15 @@ Part 1과 같고, 실행 쪽 셋을 더한다.
 | 전체 | `pnpm build` / `pnpm test` / `pnpm lint` |
 | dev 앱 | `pnpm --filter damwha-desktop run start:desktop` |
 | 패키징·위생 | `pnpm --filter damwha-desktop run package:desktop` / `node desktop/scripts/check-bundle.mjs` |
+| **번들 캐시 키** | `bash desktop/scripts/build-python.sh --print-key` — **읽기 전용, 0.22초** |
+
+**`--print-key`를 먼저 본다.** `desktop/package.json:13`의 `start:desktop`은 세 빌드 스크립트를
+무조건 부르고, `build-python.sh`는 `RT_KEY`에 **자기 shasum**을, `WK_KEY`에 `RT_KEY` + `damwha_worker`
+트리 해시를 넣는다(`:106`,`:118`). 그래서 **worker 소스를 한 줄 고치면 wk 층이(온난 ~130초),
+`build-python.sh`를 한 줄 고치면 rt·wk 두 층이(온난 311초) 다시 돈다.** 이 계획은 Task 1·2·3·9·10에서
+`damwha_worker`를 고치고 Task 5·6·12에서 `start:desktop`/`package:desktop`을 돌린다 — 스펙 §6.7의
+dev `PYTHONPATH`가 소스를 직접 읽게 만들므로 그 재빌드는 **순수 낭비인데 건너뛸 수 없다.**
+`--print-key`는 그 비용이 언제 발생하는지를 빌드 전에 말해 준다.
 
 ---
 
@@ -69,8 +78,16 @@ Part 1과 같고, 실행 쪽 셋을 더한다.
 | `be/worker/damwha_worker/runtime_report.py` | 런타임 자기 보고 |
 | `be/worker/damwha_worker/llm_entry.py` | LLM 진입 모듈 |
 | `be/worker/damwha_worker/models/downloads.py` | HF 진행 훅 |
+| `desktop/src/windows/apply-token-change.ts` | 토큰 교체를 live env에 반영 (Task 11) |
+| `desktop/scripts/lib/macho.mjs` | `machOFiles()` 한 벌 — Part 1 이월, Task 3 Step 7 |
 
-**고치는 것** — `desktop/src/{services/{worker,embed,worker-discovery,supervisor},config/{config,repo-root},main,windows/{status-view,shell-hints},diagnostics/causes,process/executables}.ts`, `desktop/src/services/types.ts`, `be/worker/damwha_worker/{config,__main__,llm_server,embed_service,errors,db/core,models/{pyannote_diar,bge_embed}}.py`, `be/src/system/*`, `fe/src/**`
+**고치는 것** — `desktop/src/{services/{worker,embed,worker-discovery,worker-shutdown,supervisor},config/{config,repo-root},main,windows/{status-view,shell-hints},diagnostics/causes}.ts`, `desktop/src/services/types.ts`, `be/worker/damwha_worker/{config,__main__,llm_server,embed_service,errors,capabilities,db/__init__,models/{pyannote_diar,bge_embed}}.py`, **`desktop/scripts/{build-python.sh,package.mjs,check-bundle.mjs}`** (Task 3 Step 7 — 한 파동),
+`be/src/system/*`, `fe/src/**`
+
+`desktop/src/process/executables.ts`는 **이 계획이 고치지 않는다.** 그 파일의 `buildChildPath`
+(`executables.ts:56-60`)는 상속 PATH에 `dirs`를 앞세우는 순수 함수인데, Task 5가
+`uv-launcher.ts`를 지우면 **유일한 호출자가 사라져 죽은 코드가 된다.** Task 5 Step 5가 그것을
+확인만 하고 제거는 별도 정리에 맡긴다 — 이 Phase가 그 파일의 계약을 바꾸지는 않기 때문이다.
 
 **지우는 것** — `desktop/src/process/uv-launcher.ts` + 그 테스트 (Task 5가 지운다)
 
@@ -83,6 +100,11 @@ Part 1과 같고, 실행 쪽 셋을 더한다.
 ```typescript
 // desktop/src/process/runtime-paths.ts
 export const PY_MINOR = "3.12";
+// python: `<bundleDir>/bin/python3.12` — **심볼릭 링크가 아니라 실체다.**
+//   실측: `Resources/python/bin`에 `python ⇒ python3.12`·`python3 ⇒ python3.12` 둘이 있다.
+//   그 둘로 띄우면 argv[0]이 링크 이름으로 남아 §6.5 조건 1(basename `python3.12`)에서 빠진다.
+// sitePackages: `<bundleDir>/lib/python3.12/site-packages` — P4-C12의 "site-packages가 번들
+//   아래" 판정에만 쓴다. 소비자는 Task 12 Step 3의 P4-C12 하나뿐이고 런처는 쓰지 않는다.
 export interface PythonBinaries { python: string; sitePackages: string }
 export interface FfmpegBinaries { ffmpeg: string; ffprobe: string }
 export function pythonBinaries(bundleDir: string): PythonBinaries;
@@ -107,6 +129,11 @@ export interface PythonLaunchOptions {
 export function launchPython(o: PythonLaunchOptions): LaunchResult;
 
 // desktop/src/process/orphans.ts
+// trees는 **두 벌이다** — ctx.bins는 이번 실행의 한 벌뿐이므로 거기서 둘을 만들 수 없다.
+//   Task 4가 `runtime-paths.ts`에 `knownBundleDirs(ctx): string[]`를 함께 두어 packaged·dev
+//   두 bundleDir을 모두 돌려주고(하나의 userData를 두 빌드가 공유한다), Task 7이 그 각각에
+//   `pythonBinaries()`를 적용해 `KnownTree[]`를 만든다.
+export function knownBundleDirs(ctx: LaunchContext): string[];   // [packaged, dev]
 export interface KnownTree { root: string; python: string }
 export interface DamwhaProcess {
   pid: number; module: string; runId: string | null; once: boolean; argv0: string;
@@ -152,16 +179,23 @@ export function appOwnedChildEnv(ctx: LaunchContext): Record<string, string>;
 export const STALL_MS = 120_000;
 export interface ReadinessEntry {
   key: string; state: "downloading" | "ready" | "failed";
-  bytesDone: number; bytesTotal: number; updatedAt: number;
-  writer: string; attempt: number; error: string | null;
+  bytesDone: number; bytesTotal: number; startedAt: number; updatedAt: number;
+  writer: string; attempt: number;
+  error: string | null;
+  errorKind: "PERMANENT" | "TRANSIENT" | null;   // 스펙 §6.9의 error_kind
 }
 export function parseModelReadiness(json: unknown): ReadinessEntry[];
 export function downloadInProgress(
   entries: readonly ReadinessEntry[], writer: string, now: number, stallMs: number,
 ): boolean;
 
-// desktop/src/services/supervisor.ts — 추가분
-export function restartService(id: ServiceId): Promise<void>;   // retry()와 별개 경로
+// desktop/src/services/supervisor.ts — **감독자 객체에 메서드를 더한다.**
+//   자유 함수가 아니다: 클로저의 `runtimes`·`bring`이 필요하고, 지금 반환 모양은
+//   `{ start, retry, stopAll, statuses, runtimeOf }`다(`supervisor.ts:561`).
+//   restartService(id): retry()와 별개 경로 — 살아 있는 서비스도 내린다
+export interface Supervisor {
+  /* 기존 다섯 그대로 */ restartService(id: ServiceId): Promise<void>;
+}
 
 // desktop/src/windows/apply-token-change.ts
 export interface TokenChangeDeps {
@@ -195,6 +229,14 @@ def read_model_readiness(conn) -> dict: ...
 
 # be/worker/damwha_worker/errors.py — 추가분
 def classify_download(exc: BaseException) -> ErrorKind: ...   # 401·403은 PERMANENT
+
+# be/worker/damwha_worker/llm_server.py — **이 둘은 시그니처가 바뀌지 않는다**
+#   managed_llm_server(model, settings, *, popen, probe, monotonic, sleep)   (llm_server.py:68)
+#   _wait_ready(proc, model, settings, probe, monotonic, sleep)              (llm_server.py:130)
+# Task 3은 두 함수의 **본문만** 고치고, Task 10은 `_wait_ready` 본문에서
+# `settings.database_url`로 **자기 연결을 열어** model_readiness를 읽는다 (스펙 §6.9).
+# `--once` 자식의 연결을 인자로 넘기지 않는다 — 넘기면 파급이 `dispatch.py`·`jobs.py`·
+# `__main__.py`의 호출부까지 번진다. 자기 연결이면 `llm_server.py`·`config.py` 둘에 갇힌다.
 ```
 
 ---
@@ -239,6 +281,11 @@ sed -n '118,126p' be/worker/tests/test_ffmpeg.py
 그쪽에서도 `_bin`을 다시 읽어 자동으로 따라온다. `runner`를 넘기는 것은 **별개 변경이고 이
 Phase의 범위가 아니다** — 넘기면 `test_ffmpeg.py:49`·`:122`의 `lambda path:`가 `TypeError`를 낸다.
 
+**번들 ffmpeg는 `--disable-network`·`--disable-avdevice`로 빌드돼 있다**
+(`build-ffmpeg.sh:124`, Part 1 Task 4). 이 Task가 `FFMPEG_BIN`·`FFPROBE_BIN`을 그 빌드로
+향하게 하므로, **경로가 아니라 URL을 넘기면 실패한다.** 지금 파이프라인은 로컬 파일만 넘기지만
+그 계약이 여기서 좁아지는 것을 기록해 둔다 — 장래에 원격 입력을 받으면 이 자리에서 터진다.
+
 `Settings`에도 두 필드를 둔다(문서화와 `.env` 운용 경로). pydantic이 같은 env를 읽으므로 값이
 갈리지 않는다 — **단일 진실 원천은 env이고 `Settings`는 그 사본이다.** `ffmpeg.py`가 `Settings`를
 직접 만들 수 없기 때문이다(`database_url`이 필수라 실패한다).
@@ -252,6 +299,7 @@ Phase의 범위가 아니다** — 넘기면 `test_ffmpeg.py:49`·`:122`의 `lam
 - `_bin`이 **호출 시점에** 읽는가 (모듈 상수가 아니라).
 - 재귀 `probe`에 `runner`를 **안** 넘기는가.
 - 기본값이 맨 이름이라 웹 흐름에 회귀가 없는가.
+- 번들 ffmpeg의 `--disable-network` 제약이 기록됐는가 (로컬 경로만 넘긴다).
 
 - [ ] **Step 5: 커밋** — `feat(worker): ffmpeg·ffprobe 경로를 env에서 호출 시점에 읽는다`
 
@@ -262,6 +310,19 @@ Phase의 범위가 아니다** — 넘기면 `test_ffmpeg.py:49`·`:122`의 `lam
 **Files:** Create `be/worker/damwha_worker/runtime_report.py` + `tests/test_runtime_report.py`; Modify `damwha_worker/__main__.py`, `capabilities.py`, `tests/test_worker_loop.py`
 
 **Interfaces:** 위 계약의 `runtime_report` 절. `--once` 자식이 부모의 `--run-id`를 물려받는다.
+
+**P4-C12가 요구하는 다섯 자기 보고 — 누가 만드는가.** 다섯은 전부 **별도 프로세스**라 하나의
+보고가 다른 넷을 증명하지 못한다. 어느 하나라도 빠지면 P4-C12를 판정할 수 없다.
+
+| 프로세스 | 보고를 만드는 자리 | 주의 |
+| --- | --- | --- |
+| worker supervisor | **Task 2 Step 3-b** — 기동 로그 첫 줄 | — |
+| `--once` 자식 | **Task 2 Step 3-b** — `run_child()` 첫머리 | 자식이 **자기** 프로세스에서 찍는다 |
+| capabilities 프로브 | **Task 2 Step 4** — `_PROBE_CODE` + 부모가 `r.stderr`를 흘린다 | 아래 Step 4 |
+| embed | **Task 3 Step 2** — `main()`, **`install_logging()` 뒤** | 스펙 §9 C12 |
+| `llm_entry` | **Task 3 Step 3-4** — `main()` 호출 전 | 아래 Task 3 |
+
+연결표의 `C12` 행이 `2·3`인 이유다.
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
@@ -295,7 +356,15 @@ Phase의 범위가 아니다** — 넘기면 `test_ffmpeg.py:49`·`:122`의 `lam
 `capabilities.py:68`의 `[sys.executable, "-c", _PROBE_CODE]`는 별도 프로세스다. P4-C12가 다섯
 프로세스를 요구하므로 `_PROBE_CODE`에 한 줄을 더한다.
 
-**`stdout`을 건드리면 안 된다** — 부모가 그것을 JSON으로 파싱한다. **`stderr`로** 보낸다.
+**`stdout`을 건드리면 안 된다.** 부모가 `capabilities.py:77`에서
+`{"1": True, "0": False}.get(r.stdout.strip())`로 읽으므로 **한 글자만 섞여도 `None`이 되어
+GPU 자격 판정이 조용히 "판정 불가"로 떨어진다**(JSON 파싱이 아니다). 보고는 **`stderr`로** 보낸다.
+
+**그리고 부모가 그 `stderr`를 흘려야 한다.** `capabilities.py:67-77`은
+`subprocess.run(..., capture_output=True, ...)`으로 받아 `r.stdout`만 읽고 **`r.stderr`는
+누구도 로그하지 않는다** — 프로브가 보고해도 아무 데도 남지 않아 P4-C12의 증거가 되지 못한다.
+`r.stderr`를 `log.info`로 흘리거나 프로브에 부모의 stderr를 상속시킨다(`stderr=None`).
+어느 쪽이든 `r.stdout` 파싱 경로는 건드리지 않는다.
 
 - [ ] **Step 5: 통과를 확인하고 실제 로그를 본다**
 
@@ -321,9 +390,10 @@ uv run --no-sync --directory be/worker python -m damwha_worker --run-id=probe-1 
 
 ## Task 3: worker — `llm_entry`, embed 모듈 진입, import 부작용 제거
 
-**Files:** Create `damwha_worker/llm_entry.py` + `tests/test_llm_entry.py`; Modify `embed_service.py`, `llm_server.py`, `config.py`, `tests/test_llm_server.py`
+**Files:** Create `damwha_worker/llm_entry.py` + `tests/test_llm_entry.py`, `desktop/scripts/lib/macho.mjs`; Modify `embed_service.py`, `llm_server.py`, `config.py`, `tests/test_llm_server.py`, **`desktop/scripts/build-python.sh`**, `desktop/scripts/{package.mjs,check-bundle.mjs}` (Step 7)
 
-**Interfaces:** 위 계약의 `llm_entry` 절. `lens_llm_server_bin` 기본값이 `""`(=모듈 진입)로 바뀐다.
+**Interfaces:** 위 계약의 `llm_entry`·`llm_server` 절. `lens_llm_server_bin` 기본값이 `""`(=모듈 진입)로 바뀐다.
+**두 Python 시그니처는 계약 절에만 있다** — 이 Task는 본문만 고친다 (규칙 2).
 
 - [ ] **Step 1: 지금 코드를 읽는다**
 
@@ -334,10 +404,10 @@ sed -n '60,120p' be/worker/damwha_worker/llm_server.py
 
 확인할 것 셋:
 - `embed_service.py:10-11`이 **모듈 수준**에서 `load_settings()`·`build_text_embedder()`를 부른다.
-- 실제 함수는 **`managed_llm_server(model, settings, *, popen, probe, monotonic, sleep)`**
-  (`llm_server.py:68`) — 인자 순서가 `(model, settings)`다.
-- `_wait_ready(proc, model, settings, probe, monotonic, sleep)`(`:130`)가 600초를 센다
-  (`config.py:53`).
+- `managed_llm_server`(`llm_server.py:68`)의 인자 순서가 계약 절에 적힌 그대로인지 — 특히
+  `(model, settings)` 순서. 테스트 호출부가 그것을 따른다.
+- `_wait_ready`(`:130`)가 600초를 센다(`config.py:53`). **Task 10이 이 함수의 본문을 다시
+  고친다** — 시그니처는 그때도 그대로다.
 
 - [ ] **Step 2: `embed_service.py`의 import 부작용을 없앤다**
 
@@ -346,19 +416,35 @@ sed -n '60,120p' be/worker/damwha_worker/llm_server.py
 uvicorn 전에 한 번 불러 **기동 시점에** 모델을 올린다(첫 요청이 31초 걸리지 않게).
 
 `main()`에 `runtime_facts()` 보고와 `if __name__ == "__main__": main()`을 더한다.
+**보고는 `console.install_logging()` 뒤다** — 지금 `embed_service.py:38-41`의 `main()`에는
+`install_logging()`이 아예 없고, 없이 찍으면 uvicorn이 로깅을 잡기 전에 나가 `embed.log`에
+남지 않는다. 순서는 `install_logging()` → `runtime_facts()` 보고 → 지연 초기화 → `uvicorn.run`
+(스펙 §9 P4-C12가 이 순서를 명시한다).
 `[project.scripts]`의 `damwha-embed`는 **그대로 둔다** — `deploy/README.md`가 쓴다.
 
 - [ ] **Step 3: `llm_entry.py`를 쓴다**
 
-하는 일이 셋뿐이다:
+하는 일이 넷뿐이다:
 1. `--run-id`를 **받아서 버린다** (앱이 `ps -axo args`로 읽는 것이 전부다).
 2. 나머지 인자로 `sys.argv`를 재구성한다. `argv[0]`은 남긴다 — argparse가 prog 이름으로 쓴다.
-3. **같은 프로세스에서** `mlx_lm.server.main()`을 부른다.
+3. **`runtime_facts()`를 stderr로 보고한다** — `main()`을 부르기 **전에.** `llm_entry`는 P4-C12의
+   다섯 프로세스 중 하나이고, 다른 넷의 보고가 이것을 증명하지 못한다(`--once` 자식이 `popen`한
+   **별도 프로세스**다). `mlx_lm.server`가 뜨고 나면 그 안에서는 찍을 자리가 없다.
+4. **같은 프로세스에서** `mlx_lm.server.main()`을 부른다.
 
 **[실행됨: `uv tool run --from mlx-lm python -c "..."`]** — `mlx_lm.server.main()`이
 `server.py:1751`에 있고 `:1887`에서 `parser.parse_args()`로 `sys.argv`를 읽으며, 모듈 import에
 부작용이 없다(`if __name__` 가드가 `:1899`). `sys.argv`를 재구성해 `main()`을 부르면 그 파서가
-정상 동작한다.
+정상 동작한다. **재현이 필요하면 `uv run --no-sync --directory be/worker`로 한다** — Part 1
+Task 3이 `mlx-lm==0.31.3`을 매니페스트·`.venv`·번들에 넣었으므로 그것으로 충분하고,
+`uv tool …`은 `~/.local/share/uv/tools`(절대 불변 옆)를 다시 건드린다.
+
+**설계 제약 — `llm_entry`는 번들 단독으로 import되어야 한다 (Part 1 R-10).** Step 7이 이
+모듈을 `build-python.sh`의 진입점 목록에 넣는데, `check_entrypoints`는 `-E -s -P`로 돈다 —
+cwd도 `PYTHONPATH`도 `.pth`도 없다. 그래서 `llm_entry`는 (a) 그 격리에서 import 가능해야 하고
+(b) `find_spec("damwha_worker.llm_entry").origin`이 **번들 트리 아래**여야 한다. namespace
+패키지(`origin=None`)는 실패로 센다. 모듈 수준에 `mlx_lm` import를 두지 않는 것이 여기서
+두 번째 이유를 얻는다 — `find_spec`이 부모 패키지를 실제로 import하기 때문이다.
 
 **진행 훅은 Task 9가 이 모듈에 꽂는다.** 여기서 부르면 아직 없는 모듈을 import해 Step 6이
 `ImportError`로 죽는다 — 각 Task가 초록불로 끝나야 한다(로드맵 §5). 자리만 주석으로 남긴다.
@@ -371,7 +457,8 @@ uvicorn 전에 한 번 불러 **기동 시점에** 모델을 올린다(첫 요�
 `test_llm_entry.py` — `--run-id`만 걸러내고, 없으면 그대로 두고, `--run-id`로 **시작하는**
 토큰만 뺀다(`org/run-id-model` 같은 값은 남는다).
 
-`test_llm_server.py` — **시그니처는 `managed_llm_server(model, settings, *, …)`다**:
+`test_llm_server.py` — 호출부는 **계약 절의 `managed_llm_server` 시그니처를 그대로** 쓴다
+(규칙 2 — 여기에 다시 적지 않는다):
 
 | 테스트 | 기대 |
 | --- | --- |
@@ -403,11 +490,53 @@ uv run --no-sync --directory be/worker python -m damwha_worker.llm_entry --run-i
 
 기대: 첫째 `True`, 둘째가 `mlx_lm.server`의 `--help`(run-id가 그쪽에 안 새고 argparse가 안 죽는다).
 
-- [ ] **Step 7: Part 1 Task 6의 진입점 목록에 `llm_entry`를 더한다**
+- [ ] **Step 7: `build-python.sh`를 한 파동으로 고친다 — 재빌드가 1회만 돌게**
 
-`build-python.sh`의 `find_spec` 목록에 한 줄. 이제 그 모듈이 존재한다.
+**이 스크립트를 고치면 rt·wk 두 층이 다시 빌드된다.** `RT_KEY`가 **자기 shasum**을 입력으로
+갖고(`build-python.sh:106`) `WK_KEY ⊇ RT_KEY`이므로(`:118`), 한 줄만 바꿔도 1.3 GB짜리 층 둘이
+다시 만들어진다 — **온난 311초**(`~/.cache/uv` 기준. 차가우면 수십 분), 그 뒤 스테이징까지.
+그래서 이 Task에서 그 파일에 필요한 변경을 **전부 모아 한 번에 적용한다.** Part 1이 Part 2로
+명시 이월한 둘이 같은 파일에 있어 함께 들어간다 (Part 1 결과 문서 §9·§9.1).
 
-**Verify:** Step 6·7 통과.
+| # | 변경 | 출처 |
+| --- | --- | --- |
+| 1 | `check_entrypoints`의 `TARGETS`에 `damwha_worker.llm_entry` 한 줄 (`:609-610`) | 이 Task |
+| 2 | `install_name_tool … 2>/dev/null \|\| die` 둘(`:321`,`:355`)이 **사유를 버린다** — `codesign` 2곳과 같은 형태로 고쳐 실패 사유를 남긴다 | Part 1 §9 이월 (우선순위 사유: §9.1) |
+| 3 | **캐시 GC** — 키가 바뀌면 옛 `rt-*`/`wk-*` 트리가 그대로 남는다. 현재 키가 아닌 층을 지운다 | Part 1 §8.5 이월 |
+
+**Part 1이 Part 2로 이월한 나머지 한 건은 이 파일이 아니다.** `machOFiles()`가 `package.mjs`와
+`check-bundle.mjs`에 **본문 완전 동일**로 중복돼 있어 `desktop/scripts/lib/macho.mjs`로 빼는 일이
+남았다(Part 1 §9). 그 둘은 `RT_KEY`의 입력이 아니므로 **재빌드와 무관하다** — 같은 커밋에 넣되
+위 파동의 비용에 더해지지 않는다. Files에 `desktop/scripts/{lib/macho.mjs,package.mjs,check-bundle.mjs}`를
+함께 적는다.
+
+2번이 왜 지금인가: **Part 2가 이 파일을 고치는 순간 재빌드가 돌고, 그때 사유 없는
+"서명 실패: `<파일>`"만 남는다.** Part 1 §9.1이 그 이유로 우선순위를 올렸다.
+3번이 왜 지금인가: 이 Step이 만드는 새 층 둘(2.6 GB)이 바로 옛 층을 사장시킨다.
+
+**검증 — `--print-key`가 게이트다.**
+
+```bash
+# 1) 고치기 전: 두 층이 적중인지 본다 (읽기 전용, 0.22초)
+bash desktop/scripts/build-python.sh --print-key
+# 2) 세 변경을 적용한 뒤: 두 키가 모두 **바뀌어 미스**여야 한다. 안 바뀌면 파일을 안 고친 것이다
+bash desktop/scripts/build-python.sh --print-key
+# 3) 디스크 게이트 — 새 rt·wk 층 2.6 GB가 들어갈 자리가 있는가
+df -h /
+```
+
+`[실행됨: bash desktop/scripts/build-python.sh --print-key]` — 2026-09-17, 0.22초,
+`rt f1f9748ded8fe4dc` / `wk 969845ce35fbd8f8` 둘 다 **적중**. `.app`의 `.build-key`와 일치한다.
+**`--print-key`는 읽기 전용이다** — 빌드도 스테이징도 하지 않는다.
+
+그다음 실제 빌드를 **1회** 돌리고 `모듈 확인 OK`를 확인한다. `check_entrypoints`가 실패하면
+그 실패는 **이 Task에서** 드러나야 한다 — Step 7이 검증 없이 끝나면 이 변경이 처음 도는 자리가
+Task 5 Step 7의 `start:desktop`이 되고, 거기서 터지면 "각 Task가 초록불로 끝난다"와 로드맵 §3의
+"아직 실행하지 않은 검증을 성공으로 가정하지 않는다"가 함께 깨진다.
+
+**빌드 전에 잔존 프로세스를 확인한다** — 아래 Task 5 Step 7의 `stage()` 가드와 같은 이유다.
+
+**Verify:** Step 6 통과 + Step 7의 `--print-key` 두 번(적중 → 미스)과 빌드 1회의 `모듈 확인 OK`.
 
 **Review:**
 - `embed_service` import가 **설정을 안 읽고 모델을 안 받는가** (Step 6 첫 명령이 증거).
@@ -416,6 +545,10 @@ uv run --no-sync --directory be/worker python -m damwha_worker.llm_entry --run-i
 - `--run-id`가 `mlx_lm.server`에 안 새는가.
 - 탈출구로 띄운 서버에 표식이 **없음을** 테스트가 확인하는가.
 - 진행 훅을 여기서 부르지 **않는가.**
+- `llm_entry`가 `main()` **전에** `runtime_facts()`를 stderr로 보고하는가 (P4-C12 다섯 중 하나).
+- embed의 보고가 `install_logging()` **뒤**인가.
+- Step 7의 세 변경이 **한 파동**으로 들어가 재빌드가 1회인가.
+- 빌드 뒤 `모듈 확인 OK`를 **실제로 봤는가** (가정하지 않는다).
 
 - [ ] **Step 8: 커밋** — `feat(worker): LLM 서버를 소유 표식이 남는 진입 모듈로 감싼다`
 
@@ -423,9 +556,24 @@ uv run --no-sync --directory be/worker python -m damwha_worker.llm_entry --run-i
 
 ## Task 4: desktop — 경로 모듈과 설정·env 위생
 
-**Files:** Create `desktop/src/process/runtime-paths.ts` + 테스트; Modify `desktop/src/config/{config,repo-root}.ts`, `desktop/src/main.ts`, `desktop/src/services/api.ts`, `desktop/src/diagnostics/causes.ts` + 테스트
+**Files:** Create `desktop/src/process/runtime-paths.ts` + 테스트; Modify
+`desktop/src/services/types.ts`, `desktop/src/config/{config,repo-root}.ts`, `desktop/src/main.ts`,
+`desktop/src/services/api.ts`, `desktop/src/diagnostics/causes.ts`,
+**`desktop/src/process/uv-launcher.ts`**, **`desktop/src/services/worker.ts`** (아래 Step 4의
+소비자 둘); 테스트 — `tests/config/{config,config-reload}.test.ts`,
+`tests/services/{api,worker,embed,supervisor}.test.ts`,
+`tests/services/postgres/{service,service.integration}.test.ts`,
+`tests/windows/{status-view,recovery-hint}.test.ts`
 
 **Interfaces:** 위 계약의 `runtime-paths`·`config` 절.
+
+**테스트 아홉이 왜 Files에 있는가.** `LaunchContext`에 `runId: string`을 더하고 `bins`를
+`{ python, ffmpeg, ffprobe }`로 넓히는 순간, **ctx 픽스처를 객체 리터럴로 짓는 테스트 아홉이
+전부 tsc에서 깨진다** — 실측으로 아홉 다 `bins: { uv: "/opt/homebrew/bin/uv" }` 형태다
+(`supervisor.test.ts:19`, `worker.test.ts:29`, `embed.test.ts:12`, `config-reload.test.ts:196`,
+`status-view.test.ts:349`, `recovery-hint.test.ts:222`, `postgres/service.test.ts:116`,
+`postgres/service.integration.test.ts:58`, `api.test.ts:259`). `bins.uv`는 **이 Task에서 남긴다** —
+Task 5가 런처와 함께 지운다. 아홉을 여기서 안 고치면 **이 Task의 Verify가 항상 실패한다.**
 
 - [ ] **Step 1: `runtime-paths.ts`를 테스트 먼저 만든다**
 
@@ -439,6 +587,7 @@ electron을 import하지 않는 순수 모듈이다 — `services/postgres/layou
 | 지울 키 | 이유 |
 | --- | --- |
 | `PYTHONHOME`·`PYTHONSTARTUP`·`PYTHONUSERBASE` | 번들 인터프리터의 prefix 해석을 흔든다 |
+| **`PYTHONDONTWRITEBYTECODE`** | 상속되면 **`PYTHONPYCACHEPREFIX`를 조용히 이긴다**(실측). 트리 오염은 없지만 `import numba`가 4.5배 느려진다 — dev 터미널에 켜져 있다는 이유만으로 앱이 느려진다. 스펙 §6.3이 표의 한 행으로 싣는다 |
 | `VIRTUAL_ENV`·`CONDA_PREFIX` | 다른 환경을 가리킨다 |
 | `HF_HUB_CACHE`·`TRANSFORMERS_CACHE`·`TORCH_HOME`·`XDG_CACHE_HOME` | `HF_HOME` 하나가 모두를 이긴다는 근거가 없다 |
 | packaged의 `PYTHONPATH` | dev 전용이다 |
@@ -447,8 +596,9 @@ electron을 import하지 않는 순수 모듈이다 — `services/postgres/layou
 
 - [ ] **Step 3: `config.ts`를 고친다**
 
-- `APP_SETTING_KEYS`에서 `UV_BIN`을 빼고, 파일에 있으면 `DOCKER_BIN`과 같이 **로그 note**로만
-  남긴다(화면 경고가 아니다 — 사람이 고른 적 없는 옛 값이다).
+- **`UV_BIN`은 여기서 빼지 않는다 — Task 5 Step 5로 옮겼다.** 이 Task가 빼고 uv 런처는 Task 5가
+  지우면, 그 한 커밋 동안 `searchDirs` 밖에 uv를 둔 개발자가 앱을 못 띄운다. **탈출구는 그것을
+  쓰는 코드와 같은 커밋에서 사라져야 한다.**
 - `APP_OWNED_KEYS`에 `HF_TOKEN`을 더하되 **값을 경고 문구에 싣지 않는다** — 그 문구는 화면과
   `supervisor.log`에 남는다.
 - 금지 키가 파일에 있으면 버리고 경고한다(`EXTRA_PATH`·`HOST`가 이미 그 규칙을 쓴다).
@@ -460,13 +610,21 @@ electron을 import하지 않는 순수 모듈이다 — `services/postgres/layou
 
 - [ ] **Step 4: packaged의 저장소 게이트를 지운다 — 소비자 셋을 함께 본다**
 
-`repoRoot`를 nullable로 만들면 두 소비자가 함께 깨진다.
+`repoRoot`를 nullable로 만들면 소비자 **다섯**이 함께 깨진다. 계획 초안이 셋만 셌다 —
+나머지 둘은 Task 5의 Files에만 있어 **이 Task의 tsc가 그 둘에서 깨진다.**
 
 | 자리 | 지금 | 고칠 것 |
 | --- | --- | --- |
 | `main.ts:986` `resolveRepoRoot` | `async` + 폴더 선택 대화상자 | 동기. **packaged는 null을 돌려준다.** `saveConfigValue(…, "REPO_ROOT", …)`를 지운다 — `config.json`에 앱이 쓰는 유일한 예외가 사라진다 |
 | `api.ts:172` | `const root = ctx.packaged ? … : ctx.repoRoot` → `path.join(root, …)` | packaged가 아닌데 null이면 **`path.join`에 닿기 전에** `CAUSES.repoRootMissing`으로 던진다 |
 | 마이그레이션 러너 | `resolved` 참조 | 같은 판정. packaged는 번들 러너라 `repoRoot`가 필요 없다 |
+| **`uv-launcher.ts:34`** | `path.join(ctx.repoRoot, "be", "worker")` | null이면 원인을 적어 던지는 **한 줄 가드.** Task 5가 이 파일을 통째로 지우므로 그 이상 손보지 않는다 |
+| **`worker.ts:122`** | `path.join(ctx.repoRoot, "be","worker",".env")` | 같은 가드. **Task 5 Step 4가 이 `.env` 검사 자체를 지운다** — 여기서는 컴파일만 세운다 |
+
+마지막 둘이 버려질 코드인 것은 맞다. **두 줄의 낭비가 "중간에 컴파일이 깨진 커밋"보다 싸다** —
+그 판단이 Task 5의 존재 이유와 같다. (Task 4·5를 한 Task로 묶는 길도 있으나, 묶으면 뒤의 모든
+Task 번호가 밀려 연결표·상호 참조·자체 검토를 함께 고쳐야 하고, env 위생과 런처 교체가 한
+커밋·한 리뷰 목록으로 합쳐진다. 규칙 2가 지키려는 것이 바로 그 상호 참조 정합이므로 묶지 않는다.)
 
 `CAUSES.repoRootMissing`은 **남긴다** — dev에서 저장소를 못 찾으면 API를 못 띄우는 것이
 사실이다. 문구만 dev 전용으로 고친다.
@@ -482,11 +640,14 @@ electron을 import하지 않는 순수 모듈이다 — `services/postgres/layou
   기동 실패한다), **`PYTHONPYCACHEPREFIX`**(=`<userData>/pycache`), dev만 `PYTHONPATH`,
   외부 DB 모드면 `DAMWHA_SHARED_STATE=off`.
 - **`PYTHONPYCACHEPREFIX`가 왜 필수인가** (스펙 §6.1-b, Part 1 Task 6 Step 3이 여기로 넘긴다).
-  번들 python이 자기 트리에 `.pyc`를 쓰면 두 가지가 깨진다 — dev에서는
-  `desktop/build/python`(스테이징 산출물이자 dev 실행 트리)이 저장소 절대 경로를 담은 `.pyc`로
-  오염돼 **그 뒤 모든 패키징이 `check-bundle.mjs`의 금지 문자열 검사에서 실패하고**, packaged
-  에서는 `.app` 안에 **서명 봉인 밖 파일**이 생겨 `codesign --verify --deep --strict`가
-  `a sealed resource is missing or invalid`로 깨진다.
+  번들 python이 자기 트리에 `.pyc`를 쓰면 packaged에서 `.app` 안에 **서명 봉인 밖 파일**이
+  생겨 `codesign --verify --deep --strict`가 `a sealed resource is missing or invalid`로 깨진다.
+  dev에서는 `desktop/build/python`(스테이징 산출물이자 dev 실행 트리)이 저장소 절대 경로를 담은
+  `.pyc`로 오염된다. **단 그 오염이 `.app`까지 가지는 않는다** — `build-python.sh:734-737`의
+  `stage()`가 캐시 적중 여부와 무관하게 `purge_pycache "$STAGED"`를 돌고 `package.mjs:53`이
+  패키징 전에 그 스크립트를 부르므로, 오염은 봉인에 닿기 전에 쓸린다. (초안은 "그 뒤 **모든**
+  패키징이 실패한다"였고 그것은 과장이다.) 남는 실해는 **패키징 경로 밖에서 생긴 `.pyc`**와
+  아래 Task 5 Step 7의 실행 중 프로세스 가드 둘이다.
   `PYTHONDONTWRITEBYTECODE=1`도 같은 일을 하지만 `import numba` 하나가 0.14초 → 0.63초가
   된다(4.5배, 실측). `PYTHONPYCACHEPREFIX`는 캐시를 번들 밖에 두므로 두 목표를 다 달성하면서
   속도를 잃지 않는다.
@@ -501,7 +662,10 @@ electron을 import하지 않는 순수 모듈이다 — `services/postgres/layou
 
 - [ ] **Step 6: 통과를 확인한다** — `test`·`lint` **둘 다.** 이 Task도 초록불로 끝난다.
 
-**Verify:** Step 6 통과.
+**`lint`(tsc)가 먼저 깨진다.** 위 Files의 테스트 아홉과 소비자 다섯을 전부 손본 뒤에야
+`test`가 돌기 시작한다 — 그 둘을 나눠 확인한다.
+
+**Verify:** Step 6 통과 (`test`·`lint` 둘 다 초록불).
 
 **Review:**
 - `runtime-paths.ts`가 electron을 import하지 않는가.
@@ -522,7 +686,9 @@ electron을 import하지 않는 순수 모듈이다 — `services/postgres/layou
 
 ## Task 5: desktop — 런처 교체
 
-**Files:** Create `desktop/src/process/python-launcher.ts` + 테스트; Modify `desktop/src/services/{types,worker,embed}.ts` + 테스트; Delete `desktop/src/process/uv-launcher.ts` + 테스트
+**Files:** Create `desktop/src/process/python-launcher.ts` + 테스트; Modify
+`desktop/src/services/{types,worker,embed,worker-shutdown}.ts` + 테스트, `desktop/src/main.ts`,
+`desktop/src/config/config.ts` (Step 5의 `UV_BIN`); Delete `desktop/src/process/uv-launcher.ts` + 테스트
 
 **Interfaces:** 위 계약의 `python-launcher`·`LaunchContext` 절.
 
@@ -570,26 +736,73 @@ env는 Task 4의 `sanitizeChildEnv`·`appOwnedChildEnv`를 쓴다.
 `embed.ts` — `damwha-embed` 콘솔 스크립트가 아니라 `-m damwha_worker.embed_service`.
 `EmbedDeps`에 `spawnFn?`을 더한다(테스트 주입용, `WorkerDeps`와 같은 이유).
 
-- [ ] **Step 5: 옛 런처와 `bins.uv`를 지운다**
+- [ ] **Step 5: `worker-shutdown.ts`의 uv 전제를 사실에 맞춘다**
+
+그 파일의 1·3단계는 **"`pid`는 uv이고 uv가 정확히 한 번 전달한다"**를 근거로 쓴다
+(`worker-shutdown.ts:268`, `:321`). 이 Task 뒤에 `pid`는 **Python supervisor 자신**이다.
+
+**동작은 유지된다** — 직접 SIGTERM 2회가 `_on_signal`의 count 1·2가 되어 `os._exit(1)`에
+닿고, `detached: true`라 python이 그룹 리더가 되므로 그룹 SIGTERM도 성립한다. 바뀌는 것은
+**근거이지 결과가 아니다.** 그러나 주석이 거짓이 되면 다음 사람이 그것을 근거로 고친다.
+
+- 1·3단계 주석을 "supervisor에 직접 보낸다 — 중간 전달자가 없으므로 보낸 수가 곧 받는 수다"로.
+- **`cleanUnlessOrphans`의 그룹 SIGTERM 경로를 테스트로 잠근다** (`:108-114`가 "같은 그룹에 남은
+  짧은 자식(capabilities 프로브)"을 명시한다). **P4-C17의 프로브 회수가 이 경로에만 달려 있다** —
+  프로브는 `[sys.executable, "-c", …]`라 `-m` 토큰도 `--run-id`도 없어 §6.5의 4조건 중 2·4를
+  못 만족하고, 따라서 Task 7의 `parseDamwhaProcesses`도 Task 8의 `reapOwnedOnQuit`("내 run-id만")도
+  그것을 보지 못한다.
+
+- [ ] **Step 6: 옛 런처와 `UV_BIN` 탈출구를 함께 지운다**
 
 ```bash
-grep -rn "uv-launcher\|bins\.uv\|launchWithUv\|uvBin" desktop/src desktop/tests
+/usr/bin/grep -rn "uv-launcher\|bins\.uv\|launchWithUv\|uvBin" desktop/src desktop/tests
+/usr/bin/grep -rn "buildChildPath" desktop/src desktop/tests
 ```
 
-**결과가 비어야** 지운다. `LaunchContext.bins`에서 `uv`를 빼고 `main.ts`의
+**첫 결과가 비어야** 지운다 (**삭제 게이트라 판정용이다 — `/usr/bin/grep` 절대 경로로 부른다.**
+이 셸의 `grep`은 `ugrep -I` 함수다). `LaunchContext.bins`에서 `uv`를 빼고 `main.ts`의
 `findExecutable("uv", dirs)`도 지운다.
 
-- [ ] **Step 6: 통과를 확인하고 dev에서 띄운다**
+**`UV_BIN`을 `APP_SETTING_KEYS`에서 여기서 뺀다** (Task 4 Step 3에서 옮겨 왔다). 파일에 있으면
+`DOCKER_BIN`과 같이 **로그 note**로만 남긴다 — 화면 경고가 아니다, 사람이 고른 적 없는 옛 값이다.
+탈출구와 그것을 쓰는 코드가 **같은 커밋에서** 사라진다.
+
+**둘째 grep은 삭제 게이트가 아니라 기록이다.** `buildChildPath`(`executables.ts:56-60`)의 유일한
+호출자가 `uv-launcher.ts`라 이 Step 뒤에 죽은 코드가 된다. 첫 grep의 패턴은 그것을 못 잡는다.
+제거는 이 Phase 밖이므로 **결과만 Task 12 결과 문서의 "남은 제약"에 적는다.**
+
+- [ ] **Step 7: 통과를 확인하고 dev에서 띄운다**
+
+**빌드 전에 잔존 프로세스를 확인한다.** `start:desktop`(`desktop/package.json:13`)은
+`build-python.sh`를 무조건 부르고, 그 `stage()`(`build-python.sh:711-716`)는
+
+```
+procs=$(ps -Ao command= 2>/dev/null) || procs=""
+if /usr/bin/grep -qF "$STAGED/bin/" <<< "$procs"; then
+  die "번들 python이 실행 중이다 — 앱을 끄고 다시 하라: $STAGED"
+fi
+```
+
+로 **`<repo>/desktop/build/python/bin/`을 argv에 담은 프로세스가 하나라도 있으면 빌드를
+세운다.** 이 Task부터 앱이 띄우는 worker·embed·`llm_entry`·`--once`가 정확히 그 경로이므로,
+앱을 제대로 안 끄고 다시 빌드하면 **Electron이 뜨기도 전에** 그 `die` 메시지에서 멈춘다.
+(이 가드는 Part 1 R-11이 `070ea2b`에 만든 것이라 이 계획이 쓰일 때 없었다.)
 
 ```bash
+# 0) 잔존 확인 — 있으면 kill 뒤 다시 본다
+ps -Ao command= | /usr/bin/grep -F "$PWD/desktop/build/python/bin/"
 pnpm --filter damwha-desktop run test && pnpm --filter damwha-desktop run lint
 pnpm --filter damwha-desktop run start:desktop
 ```
 
-기대: 넷이 `running/ok`. `<userData>/logs/worker.log` 첫머리의 `runtime {…}`의 `executable`이
-`desktop/build/python/bin/python3.12`.
+**worker를 고친 뒤 첫 `start:desktop`은 wk 층 재빌드 ~130초를 포함한다** — 이 Task는
+`worker.ts`만 고치지만 앞의 Task 1·2·3이 `damwha_worker`를 고쳤고 `WK_KEY`가 그 트리 해시를
+담는다(`build-python.sh:118`). 멈춘 것처럼 보이면 `--print-key`로 미스인지 먼저 본다.
 
-**Verify:** Step 6 통과.
+기대: 넷이 `running/ok`. `<userData>/logs/worker.log` 첫머리의 `runtime {…}`의 `executable`이
+`desktop/build/python/bin/python3.12` (**심볼릭 링크 `python`·`python3`가 아니라 실체**).
+
+**Verify:** Step 7 통과.
 
 **Review:**
 - `--run-id`가 argv **마지막**인가.
@@ -597,15 +810,18 @@ pnpm --filter damwha-desktop run start:desktop
 - `'error'` 리스너가 있는가.
 - stdout·stderr를 안 합치는가.
 - `.env` 검사가 완전히 사라졌는가.
-- Step 5의 grep이 0건인가.
+- Step 6의 첫 grep이 0건인가 — **`/usr/bin/grep`으로 확인했는가.**
+- `UV_BIN`이 런처와 **같은 커밋에서** 사라졌는가.
+- `worker-shutdown.ts`의 uv 전제 주석이 사실에 맞게 고쳐졌고, 그룹 SIGTERM 경로에 테스트가 있는가.
+- `runtime` 줄의 `executable`이 `python3.12` **실체 경로**인가.
 
-- [ ] **Step 7: 커밋** — `feat(desktop): worker와 embed를 번들 Python으로 띄우고 uv 런처를 지운다`
+- [ ] **Step 8: 커밋** — `feat(desktop): worker와 embed를 번들 Python으로 띄우고 uv 런처를 지운다`
 
 ---
 
 ## Task 6: desktop — 토큰 저장소와 온보딩
 
-**Files:** Create `desktop/src/config/token-store.ts` + 테스트, `desktop/src/windows/token-window.ts`, `desktop/shell/token.html`; Modify `desktop/src/main.ts`, `causes.ts`
+**Files:** Create `desktop/src/config/token-store.ts` + 테스트, `desktop/src/windows/token-window.ts`, `desktop/shell/token.html`; Modify `desktop/src/main.ts`, `causes.ts`, **`desktop/tests/windows/shell-html.test.ts`**
 
 **Interfaces:** 위 계약의 `token-store` 절. 창은 `openTokenWindow(deps): Promise<string>`.
 
@@ -639,17 +855,25 @@ electron을 값으로 import하지 않는다 — main.ts가 진짜 `safeStorage`
 외부 링크는 `shell.openExternal`로 연다 — 앱 창 안에서 huggingface.co를 열면 우리 origin 경계
 밖의 내용을 렌더한다(Phase 1 `windows/origin.ts`의 규칙).
 
+**`token.html`을 `shell-html.test.ts`의 검사 대상에 넣는다.** 그 테스트의
+`for (const file of ["services.html", "status.html"])`(`shell-html.test.ts:303`)가 **하드코딩**이라
+새 페이지는 CSP·innerHTML 싱크 불변식을 하나도 안 받는다. **토큰 창은 HF 오류 문구를 렌더한다** —
+외부에서 온 문자열을 화면에 올리는 페이지이므로 그 불변식이 가장 필요한 자리다.
+
 - [ ] **Step 4: 기동 흐름에 게이트를 넣는다**
 
 서비스를 띄우기 **전에**. `safeStorage`를 못 쓰면 **기동을 막고** 원인을 띄운다 — 평문 폴백은
 두지 않는다. 토큰이 있으면 `ctx.env.HF_TOKEN`에 넣는다.
 
 `CAUSES`에 `safeStorageUnavailable`·`hfTokenInvalid`·`hfGateNotAccepted`(그 모델의 수락 페이지
-링크 포함)를 더한다.
+링크 포함)를 더한다. **`hfGateNotAccepted`의 소유는 이 Task다** — Task 11 Step 4는 그것을 다시
+적지 않고 여기 것을 쓴다.
 
 - [ ] **Step 5: 손으로 확인한다**
 
 ```bash
+# 잔존 프로세스 먼저 — Task 5 Step 7과 같은 이유 (build-python.sh의 stage() 가드)
+ps -Ao command= | /usr/bin/grep -F "$PWD/desktop/build/python/bin/"
 rm -f ~/Library/Application\ Support/Damwha/hf-token.bin
 pnpm --filter damwha-desktop run start:desktop
 ```
@@ -683,7 +907,8 @@ pnpm --filter damwha-desktop run start:desktop
 
 ```bash
 sed -n '30,60p' desktop/src/services/worker-discovery.ts
-ps -axo pid,args | grep -i python | head -5
+sed -n '78,88p' desktop/src/services/worker-discovery.ts
+ps -axo pid,args | /usr/bin/grep -i python | head -5
 ```
 
 **대체하지 않고 확장한다.** 기존 세 조건(argv[0] basename이 python, `-m damwha_worker` 토큰 쌍,
@@ -697,14 +922,22 @@ ps -axo pid,args | grep -i python | head -5
 | 테스트 | 기대 |
 | --- | --- |
 | worker·`--once`·embed·`llm_entry` | 넷 다 잡고 `module`·`once`·`runId`가 맞다 |
-| 저장소 `.venv` worker | 안 잡는다 (트리 밖) |
+| **저장소 `.venv` worker** | **목록에 들어오고 `classify`가 `external`로 판정한다** |
 | `uv run …` 런처 줄 | 안 잡는다 |
 | `grep --run-id=… damwha_worker` / `zsh -c` | 안 잡는다 |
 | **공백 든 설치 경로** (`/Users/me/My Apps/Damwha.app/…`) | **잡는다** |
 | dev·packaged 두 트리 | 각 트리의 `root`로 판정해 둘 다 잡는다 |
 | 모르는 트리의 python | 안 잡는다 (오탐 아님) |
 | 잘린 `ps` 줄 | 안 잡는다 — "고아 없음"과의 구별은 호출부가 한다 |
-| `classify` | 내 run-id=`mine`, 다른 값=`orphan`, 없음=`external` |
+| `classify` | 내 run-id=`mine`, 다른 값=`orphan`, 없음·트리 밖=`external` |
+
+**`parseDamwhaProcesses`와 `classify`의 분담이 스펙 §6.5의 네 조건과 이렇게 맞는다** (2026-09-17
+정정). 판독기는 **조건 1·2**로 목록에 넣고 — argv[0]이 절대 경로이고 basename이 `python3.12`,
+`-m` 다음 토큰이 우리 모듈 셋 중 하나 — `classify`가 **조건 3·4**를 적용해 딱지를 붙인다.
+그래서 저장소 `.venv`의 worker는 **목록에 들어온 뒤 조건 3에서 `external`로 갈린다.** 계약의
+`runId: string | null`이 이 분담과 같은 모양이다(판독기가 run-id 없는 줄도 담는다).
+초안은 이것을 "안 잡는다"로 적어 아래 Review 항목("저장소 `.venv` worker가 `external`인가")과
+**Task 안에서 모순이었다.** 리뷰 항목이 옳다 — P4-C21의 판정 근거가 그것이다.
 | `reapOrphans` 실패 | `ps` 비영 종료·빈 출력 둘 다 `{failed:true}` |
 
 - [ ] **Step 3: 구현한다**
@@ -722,29 +955,48 @@ argv[0]을 잘라 **정상 프로세스를 판정에서 누락시킨다** — �
 **스캔이 실패하면 새 worker를 띄우지 않는다.** `ps`가 실패했는데 진행하면 고아와 새 프로세스가
 같은 job을 집는다.
 
-- [ ] **Step 4: embed 채택 규칙을 좁힌다**
+- [ ] **Step 4: 기존 `worker-discovery.ts`의 공백 경로 한계를 함께 고친다**
+
+스펙 §6.5가 이 Phase에 배정한 수정이다 — "(기존 `worker-discovery.ts:78-85`도 같은 [공백 경로]
+한계를 갖는다. **이 Phase가 함께 고친다**.)" 그 자리는 지금
+`isWorkerSupervisor(row[2].split(/\s+/))`(`worker-discovery.ts:85`)로 **단순 공백 분할**이다.
+
+**Task 5가 이것을 실제 결함으로 바꾼다.** 그 전까지 앱의 worker argv[0]은 `uv`였고 uv는
+`searchDirs` 아래(`/opt/homebrew/bin/uv`)라 공백이 없었다. Task 5 뒤에는 argv[0]이 **번들 python의
+절대 경로**이므로, 공백이 든 설치 경로(`/Users/me/My Apps/Damwha.app/…`)에서 `split(/\s+/)`가
+argv[0]을 잘라 `isWorkerSupervisor`가 **항상 거짓**이 된다 — 외부·고아 worker 탐지가 조용히 빠진다.
+
+Step 3의 접두사 절단을 그 자리에도 쓴다. 기존 세 조건의 의미는 그대로 두고 **토큰화 방법만**
+바꾼다 — 이 함수의 소비자는 "앱이 아닌 worker가 도는가"를 묻는 stand-down 판정이라 run-id를
+요구하지 않는다.
+
+- [ ] **Step 5: embed 채택 규칙을 좁힌다**
 
 `--run-id`가 있고 내 것이 아닌 embed는 채택 대상이 아니라 **고아**다 — 먼저 내리고 새로 띄운다.
 run-id 없는 외부 embed(터미널 `pnpm embed`)만 채택한다. Phase 3 §5.2-2의 "고아 embed가 한 번은
 채택되고 그 뒤에는 둘이 모델 메모리를 썼다"가 닫힌다.
 
-- [ ] **Step 5: `main.ts`에서 서비스 기동 **전에** 정리한다**
+- [ ] **Step 6: `main.ts`에서 서비스 기동 **전에** 정리한다**
 
-뒤에 하면 새로 띄운 것과 고아가 잠시 공존한다. `trees`는 Task 4의 `bins`에서 만든다 —
-packaged·dev 둘 다 담는다(하나의 userData를 두 빌드가 공유한다).
+뒤에 하면 새로 띄운 것과 고아가 잠시 공존한다.
+
+**`trees`는 `bins`에서 만들 수 없다** — `ctx.bins`는 **이번 실행의 한 벌**이고 여기 필요한 것은
+packaged·dev **두 벌**이다(하나의 userData를 두 빌드가 공유하므로 dev로 띄운 고아를 packaged가,
+또 그 반대도 만난다). 계약 절의 `knownBundleDirs(ctx)`가 두 bundleDir을 돌려주고, 각각에
+`pythonBinaries()`를 적용해 `KnownTree[]`를 만든다.
 
 **Verify:** `test`·`lint` 통과.
 
 **Review:**
-- 네 조건을 **전부** 요구하는가.
-- 판독이 **접두사 절단**인가.
-- 저장소 `.venv` worker가 `external`인가 (P4-C21의 근거).
+- 네 조건이 **전부** 적용되는가 — 판독기가 1·2, `classify`가 3·4 (스펙 §6.5).
+- 판독이 **접두사 절단**인가 — 새 `orphans.ts`와 **기존 `worker-discovery.ts:85` 둘 다.**
+- 저장소 `.venv` worker가 목록에 들어와 `external`로 판정되는가 (P4-C21의 근거).
 - 스캔 실패가 기동을 **막는가.**
 - 신호 직전 `exists` 확인이 있는가.
 - 정리가 기동 **전**인가.
 - 테스트가 계약 절의 시그니처를 그대로 쓰는가 (규칙 2).
 
-- [ ] **Step 6: 커밋** — `feat(desktop): 이전 실행이 남긴 고아 프로세스를 기동 전에 정리한다`
+- [ ] **Step 7: 커밋** — `feat(desktop): 이전 실행이 남긴 고아 프로세스를 기동 전에 정리한다`
 
 ---
 
@@ -801,7 +1053,7 @@ worker를 죽이고 `stopAll`을 부른 뒤 **`workerStopCalls === 0`**(그것�
 
 **`quit-flow.ts`가 아니다.** 거기에는 `stopAll`이 없고(`deps.stopServices()`를 부른다,
 `quit-flow.ts:233`), `stopAll`은 `main.ts:511`의 `stopServices()` 안에 있다. 그리고
-`main.ts:1230`의 `.catch`가 **`stopServices` 자체가 거부한** 경우를 받아 `quitNow()`로 가는데,
+`main.ts:1224`의 `.catch`가 **`stopServices` 자체가 거부한** 경우를 받아 `quitNow()`로 가는데,
 `runQuitFlow` 안에 두면 그 경로에서 건너뛰어진다 — B층의 존재 이유가 "A층이 놓친 경로"인데
 그중 하나를 놓친다.
 
@@ -826,7 +1078,11 @@ worker를 죽이고 `stopAll`을 부른 뒤 **`workerStopCalls === 0`**(그것�
 
 ## Task 9: worker — `model_readiness`와 HF 진행 훅
 
-**Files:** Modify `damwha_worker/db/core.py`·`__init__.py`, `errors.py`, `models/{pyannote_diar,bge_embed}.py`, `llm_entry.py`, `__main__.py`, `embed_service.py`; Create `models/downloads.py`, `tests/test_model_readiness.py`, `tests/test_downloads.py`
+**Files:** Modify `damwha_worker/db/core.py`, **`damwha_worker/db/__init__.py`**, `errors.py`, `models/{pyannote_diar,bge_embed}.py`, `llm_entry.py`, `__main__.py`, `embed_service.py`; Create `models/downloads.py`, `tests/test_model_readiness.py`, `tests/test_downloads.py`
+
+**`db/__init__.py`이지 `damwha_worker/__init__.py`가 아니다.** 후자는 **0바이트 계약**이라
+한 글자만 넣어도 `check_entrypoints`의 `assert src.strip() == ''`가 빌드를 세운다
+(Part 1 결과 문서 §10).
 
 **Interfaces:** 위 계약의 `downloads`·`db/core`·`errors` 절.
 
@@ -925,7 +1181,19 @@ supervisor·`--once` 자식에 이은 세 번째 writer 프로세스다. `DATABA
 `errors.py:62-74`가 그것을 TRANSIENT로 처리한다. 둘 다 재시도해도 안 되는 실패이고 서로 다른
 안내가 필요하다 — 401은 토큰 무효, 403은 조건 미수락.
 
-`bge_embed.py`가 리비전을 고정하고 safetensors만 받게 한다. Phase 0 실측: 같은 가중치를
+**`classify_download`의 호출부를 여기서 못 박는다.** 계약 절에 선언이 있고 Step 2에 테스트가
+있으나 **누가 그것을 부르는지가 어느 Step에도 없었다.** 경로는 하나다 —
+`errors.classify`가 다운로드 예외에 대해 `classify_download`를 타고, 그 결과가
+`merge_model_readiness`의 항목에 **`error_kind`로 실린다**(스펙 §6.9의 필드, 계약 절
+`ReadinessEntry.errorKind`). 이것이 없으면 Task 11 Step 3의 "층별 안내"와 스펙 §8의
+"403 → 수락 페이지 링크 / 401 → 재입력" 구분을 **화면이 할 근거가 사라져** 403과 네트워크 실패를
+같은 말로 적게 된다.
+
+`bge_embed.py`가 리비전을 고정하고 safetensors만 받게 한다.
+**`sys.modules.setdefault("torchcodec", None)`(`bge_embed.py:14`)을 지우지 않는다** — Part 1 §8.1이
+기록한 사장 dylib 우회다. `torchcodec`의 dylib 5개가 `@rpath/libavcodec.{58..62}`를 요구하는데
+번들에는 그 rpath가 없어(재배치가 지웠다) 진짜로 import하면 죽는다. Step 8이 같은 파일을
+건드리므로 여기서 못 박는다. Phase 0 실측: 같은 가중치를
 `pytorch_model.bin`(rev `5617a9f…`)과 `model.safetensors`(rev `9a0624b…`)로 두 벌, 리비전까지
 갈려 받아 2.1 GB를 낭비했다.
 
@@ -940,6 +1208,8 @@ supervisor·`--once` 자식에 이은 세 번째 writer 프로세스다. `DATABA
 - `unit == "B"`일 때만 바이트에 가산하는가.
 - `shared_state_enabled()`를 **두 writer 모두** 보는가.
 - 401·403이 PERMANENT인가.
+- `classify_download`의 **호출부가 실제로 있고** 그 결과가 `error_kind`로 실리는가.
+- `bge_embed.py`의 `torchcodec` 우회가 **그대로 남았는가.**
 
 - [ ] **Step 9: 커밋** — `feat(worker): 모델 다운로드 상태를 app_setting에 올린다`
 
@@ -947,9 +1217,10 @@ supervisor·`--once` 자식에 이은 세 번째 writer 프로세스다. `DATABA
 
 ## Task 10: desktop — 준비 유예와 서비스 재시작
 
-**Files:** Create `desktop/src/services/model-readiness.ts` + 테스트; Modify `desktop/src/services/supervisor.ts` + 테스트, `be/worker/damwha_worker/llm_server.py`
+**Files:** Create `desktop/src/services/model-readiness.ts` + 테스트; Modify `desktop/src/services/supervisor.ts` + 테스트, `be/worker/damwha_worker/llm_server.py`, `be/worker/damwha_worker/config.py`, `be/worker/tests/test_llm_server.py`
 
-**Interfaces:** 위 계약의 `model-readiness`·`restartService` 절.
+**Interfaces:** 위 계약의 `model-readiness`·`Supervisor` 절. **Python 쪽 시그니처는 바뀌지
+않는다** — 계약 절의 `llm_server.py` 주석이 그 사실을 적는다 (규칙 2).
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
@@ -987,13 +1258,30 @@ embed의 `readyTimeoutMs`는 180초인데(`embed.ts:47`) bge-m3 첫 다운로드
 
 **DB를 읽어야 한다.** `_wait_ready`는 **`--once` 자식**의 코드이고 `llm_entry`는 그것이 `popen`한
 **자식**이다 — 둘은 다른 프로세스다. "같은 프로세스"는 `llm_entry`와 `mlx_lm.server.main()`
-사이의 관계다. `--once` 자식은 이미 DB 연결을 갖고 있으므로 **그것을 `_wait_ready`에 넘기는
-시그니처 변경**이 따른다(Task 3의 테스트 호출부도 함께 맞춘다).
+사이의 관계다.
+
+**`_wait_ready`는 `settings.database_url`로 자기 연결을 연다** (2026-09-17 사용자 결정, 스펙 §6.9).
+`--once` 자식이 쥔 연결을 인자로 받지 않는다 — **시그니처를 바꾸지 않는다.**
+
+| | 연결을 넘긴다 | **자기 연결을 연다 (채택)** |
+| --- | --- | --- |
+| 파급 | `dispatch.py`·`jobs.py`·`__main__.py`의 호출부까지 | `llm_server.py`·`config.py` 둘 |
+| 계약 | `_wait_ready` 시그니처 변경 → 계약 절 개정 | **변경 없음** |
+| 비용 | 없음 | 폴링 주기마다 한 행을 읽는 연결 하나 |
+
+`settings`는 이미 인자로 들어와 있으므로 새로 만들 것이 없다. 연결은 **`_wait_ready` 안에서
+열고 닫는다** — 대기가 끝나면 필요 없고, 남겨 두면 `--once` 자식의 수명 동안 유휴 연결이 하나
+더 산다. **DB를 못 열어도 기다림 자체는 진행한다** — 유예 연장을 못 할 뿐이고, 못 여는 것이
+600초 실패의 사유가 되면 안 된다.
 
 - [ ] **Step 4: `restartService`를 구현한다**
 
 `retry()`의 `needsRetry`는 `rt.status.process !== "running" || rt.result === null`이라 **살아 있는
 서비스를 건너뛴다**(`supervisor.ts:490`). 토큰을 바꾼 뒤 필요한 것은 정확히 그 반대다.
+
+**감독자 객체의 메서드로 더한다.** 자유 함수로는 만들 수 없다 — 클로저의 `runtimes`·`bring`이
+필요하고, 지금 반환은 `{ start, retry, stopAll, statuses, runtimeOf }`다(`supervisor.ts:561`).
+반환 객체에 여섯 번째를 더하고 계약 절의 `Supervisor`가 그 모양이다.
 
 **앱이 소유하지 않은 것은 못 내린다** — 채택한 외부 embed(`owned:false`)와 stand-down worker에는
 이 경로를 열지 않고, 화면이 그 버튼을 비활성으로 보인다.
@@ -1001,12 +1289,15 @@ embed의 `readyTimeoutMs`는 180초인데(`embed.ts:47`) bge-m3 첫 다운로드
 **Verify:** `test`·`lint`·`pnpm worker:test` 통과.
 
 **Review:**
+- `restartService`가 **감독자 객체의 메서드**인가 (자유 함수가 아니라).
 - `restartService`가 `owned:false`·stand-down을 거부하는가.
 - 무진행 판정이 `updatedAt` 기준인가.
 - **`writer`로 서비스를 구별하는가.**
 - 감독자가 **누적**으로 세는가.
 - LLM 쪽이 **Python에** 들어갔는가.
-- `_wait_ready`가 DB를 읽는가.
+- `_wait_ready`가 **자기 연결로** DB를 읽고 **시그니처가 그대로인가.**
+- `dispatch.py`·`jobs.py`·`__main__.py`가 **안 바뀌었는가.**
+- DB를 못 열어도 기다림이 진행되는가.
 
 - [ ] **Step 5: 커밋** — `feat: 다운로드 중에는 준비 유예를 멈추고 서비스 재시작 경로를 연다`
 
@@ -1014,7 +1305,7 @@ embed의 `readyTimeoutMs`는 180초인데(`embed.ts:47`) bge-m3 첫 다운로드
 
 ## Task 11: 화면 — 모델 준비·토큰·재시도 3층
 
-**Files:** Create `desktop/src/windows/apply-token-change.ts` + 테스트; Modify `be/src/system/*`, `desktop/src/windows/{status-view,shell-hints}.ts`, `desktop/shell/*`, `desktop/src/diagnostics/causes.ts`, `fe/src/**`
+**Files:** Create `desktop/src/windows/apply-token-change.ts` + 테스트; Modify `be/src/system/*`, `desktop/src/windows/{status-view,shell-hints}.ts`, **`desktop/tests/windows/recovery-hint.test.ts`**, `desktop/shell/*`, `desktop/src/diagnostics/causes.ts`, `fe/src/**`
 
 **Interfaces:** 위 계약의 `apply-token-change` 절.
 
@@ -1041,7 +1332,9 @@ embed의 `readyTimeoutMs`는 180초인데(`embed.ts:47`) bge-m3 첫 다운로드
 - [ ] **Step 3: 상태 창에 세 가지를 더한다**
 
 1. **모델 준비** — `downloading`이면 진행(`bytesTotal`이 0이면 "받는 중"만), `failed`면 사유와
-   층별 안내.
+   층별 안내. **층을 가르는 값은 `ReadinessEntry.errorKind`다**(Task 9 Step 8이 싣는다) —
+   `PERMANENT`면 401·403의 안내로 갈라 보내고, `TRANSIENT`면 "네트워크가 돌아오면" 쪽이다.
+   `error` 문자열만 보고 문구를 고르지 않는다.
 2. **토큰** — `maskToken` 표시, 수정·삭제, "서비스 다시 시작" 버튼.
 3. **재시도 3층을 구분해 말한다:**
 
@@ -1056,10 +1349,13 @@ Phase 2가 stand-down worker에서 정확히 그 문제를 겪었다.
 
 - [ ] **Step 4: `causes.ts`에 남은 원인을 더한다**
 
-`modelDownloadFailed`·`modelDownloadStalled`·`diskFull`·`orphanScanFailed`, 그리고
-`hfGateNotAccepted`의 안내에 **그 모델의 수락 페이지 링크**.
+`modelDownloadFailed`·`modelDownloadStalled`·`diskFull`·`orphanScanFailed` 넷을 더한다.
+**`hfGateNotAccepted`는 Task 6 Step 4가 이미 수락 페이지 링크까지 넣었다** — 여기서 다시
+적지 않는다(같은 원인을 두 Task가 쓰면 문구가 갈린다).
 
-**삭제되는 원인:** `uvMissing`, `workerEnvMissing`.
+**삭제되는 원인:** `uvMissing`, `workerEnvMissing`. 참조가 **두 곳**이다 —
+`desktop/src/windows/shell-hints.ts:25,29`와 `desktop/tests/windows/recovery-hint.test.ts:186,189,242,247,437`.
+후자가 Files에 없으면 이 Task의 `test`가 깨진다.
 
 - [ ] **Step 5: FE에 모델 준비를 보인다**
 
@@ -1083,30 +1379,117 @@ Phase 2가 stand-down worker에서 정확히 그 문제를 겪었다.
 스펙 §9의 완료 기준 **30건**을 판정한다. **증거 없이 "통과"라고 쓰지 않는다**
 (`superpowers:verification-before-completion`).
 
-**Files:** Create `docs/superpowers/reports/2026-09-16-electron-phase-4-embedded-python-runtime-results.md`; Modify `docs/electron-migration-roadmap.md`, `desktop/CLAUDE.md`, `be/worker` 문서
+**Files:** **Modify** `docs/superpowers/reports/2026-09-16-electron-phase-4-embedded-python-runtime-results.md`
+(**이미 있다 — 아래 Step 4**), `docs/electron-migration-roadmap.md`, `desktop/CLAUDE.md`,
+`be/worker/SMOKE.md`, `be/CLAUDE.md`
+
+**`be/worker/CLAUDE.md`는 없다.** 그 서브트리의 문서는 `be/worker/SMOKE.md`와 상위의
+`be/CLAUDE.md` 둘뿐이다 — 아래 Step 5가 어느 쪽에 무엇을 적는지 정한다.
 
 - [ ] **Step 1: 기준선을 대조할 수 있는지 먼저 본다**
 
 ```bash
 ls /tmp/p4-baseline/now || { echo "Part 1 Task 1의 기준선이 없다 — 이 검증은 성립하지 않는다"; exit 1; }
+cat /tmp/p4-baseline/now/app-db-rows.txt
 ```
 
 없으면 **여기서 멈추고 사용자에게 알린다.**
 
-- [ ] **Step 2: packaged 앱으로 축 A~E를 순서대로 판정한다 (30건)**
+**`app-db-rows.txt`가 비어 있다 — 축 A 전에 그 한 파일만 다시 뜬다.**
+기준선을 뜬 2026-09-16에 앱 내장 클러스터가 꺼져 있어 그 파일에는
+`MEASUREMENT-UNAVAILABLE (embedded psql)`만 들어 있다(Part 1 §3.2가 기록). **P4-C27은
+"검증 전 회의 ID·행 수 … 증가만 있고 소실·변경 0"이므로 행 수 없이 판정할 수 없고**, 스펙 §9의
+그 문구를 좁히지 않는다.
+
+그래서 **축 A를 시작하기 전에, 앱을 한 번 띄워 내장 클러스터가 올라온 상태에서**
+`phase4-baseline.sh:74-76`이 쓰는 것과 같은 질의를 돌려 그 파일 하나만 채운다
+(`desktop/build/postgres/bin/psql -h "<userData>/run" -U damwha damwha -tAc "select 'meeting='||count(*) from meeting"`).
+
+- **`phase4-baseline.sh baseline`을 다시 돌리면 안 된다.** 그 모드는 `DEST="$OUT/now"`에
+  **전부** 덮어쓰므로(`:15`) 2026-09-16의 `abs-*` 8건이 사라지고 **P4-C26의 근거가 날아간다.**
+  고쳐 쓰는 것은 `app-db-rows.txt` **한 파일**이다.
+- **이 시점이 "before"가 되는 한계를 결과 문서에 적는다.** 앱을 한 번 띄운 뒤의 값이므로
+  "Part 2 코드가 한 번도 안 돈 상태"의 값이 아니다. 기동만으로 회의 행이 줄지 않는 것은
+  이 재촬영과 검증 뒤 값의 대조로 판정되고, **그 이전 구간은 `app-storage.txt`가 덮는다** —
+  그쪽은 2026-09-16 값이 유효하다(Part 1이 `.app`을 한 번도 실행하지 않았다).
+
+**나머지 기준선 파일이 아직 유효한지도 여기서 확인한다.** `app-storage.txt`는 2026-09-16 값이고
+Part 1이 앱을 띄우지 않았으므로 지금 유효하지만, **그 전제를 확인하는 절차가 초안에 없었다.**
+파일 수·`ls -l`의 mtime이 기준선 이후로 움직이지 않았는지 본다.
+
+**`/tmp/p4-baseline`의 수명을 먼저 정한다.** macOS의 `/private/tmp`는 재부팅에 날아가고
+기준선은 2026-09-16에 찍혔는데 Part 2는 12 Task 분량이다. `phase4-baseline.sh:13`의
+`P4_BASELINE_DIR`로 영구 위치를 지정하거나, `/tmp/p4-baseline`을 통째로 영구 위치에 복사해 둔다.
+**이 판정을 Task 1 착수 전에 하고 결과를 여기 적는다** (아래 "구현 중 판정할 것" 3번).
+
+- [ ] **Step 2: 착수 게이트 넷을 통과한다**
+
+```bash
+df -h /                                                   # (1) 디스크
+ps -Ao command= | /usr/bin/grep -F "$PWD/desktop/build/python/bin/"   # (2) 잔존 프로세스
+bash desktop/scripts/build-python.sh --print-key           # (3) 캐시 상태 (읽기 전용)
+```
+
+1. **디스크.** `package:desktop` 한 회차가 새 rt·wk 층 **2.6 GB**를 만들 수 있고, 축 B가
+   모델 약 **10 GB**를 내려받는다 — whisper-large-v3-mlx 2.9 G, bge-m3 4.3 G(safetensors 한
+   벌이면 ~2.2 G), Qwen3.5-4B-8bit 4.8 G, pyannote 3종 + speechbrain ~146 M.
+   **`~/.cache/huggingface`는 §5의 절대 불변이라 공간 확보에 쓸 수 없다.**
+   (2026-09-17 실측: 여유 34 GiB, `desktop/.cache/python` 2.7 G. 이번엔 여유가 있었을 뿐이다.)
+2. **잔존 프로세스.** `package:desktop`도 `build-python.sh`를 부르므로 Task 5 Step 7과 같은
+   `stage()` 가드에 걸린다. **이 Task는 P4-C18에서 `kill -9`로 고아를 일부러 만들므로** 그
+   회차 뒤 다음 빌드 전에 반드시 다시 확인한다.
+3. **두 토큰을 미리 준비한다.** 스펙 §4.3이 선행 조건으로 "수락한 계정과 수락하지 않은 계정
+   **둘**"을 요구한다. P4-C4(교체 반영)와 P4-C8(403 vs 401)이 그것 없이는 판정되지 않는다.
+4. **되돌릴 수 없는 삭제의 복구 절차를 먼저 적는다.** 이 Task는 `<userData>/models` 비우기
+   (P4-C5)와 `hf-token.bin` 삭제(P4-C1)를 한다. 스펙 §5가 허용하므로 계약 위반은 아니나
+   로드맵 §3이 "위험한 변경에는 실패 시 복구 방법을 포함한다"를 요구한다 — 모델은 재다운로드로
+   복구되고(시간 비용만), 토큰은 **사용자만 다시 낼 수 있다.** 지우기 전에 사용자가 그 토큰을
+   다시 낼 수 있는지 확인한다.
+
+- [ ] **Step 3: packaged 앱으로 축 A~E를 순서대로 판정한다 (30건)**
 
 각 기준마다 **명령과 출력**을 결과 문서에 남긴다. 축 순서를 지킨다 — A(토큰) → B(실사용) →
 C(격리) → D(수명주기) → E(회귀·보존). B가 모델을 받아 놓아야 C·D가 실제 프로세스를 본다.
 
+**첫 기동이 이 Phase에서 가장 위험한 한 걸음이다.** Part 1 §11이 미검증으로 남긴 둘이 여기서
+동시에 처음 밟힌다 — (1) hardened runtime으로 서명한 `.app`의 첫 실행(Part 1 Task 2 Step 6-c가
+잰 것은 `BrowserWindow` 없는 **맨 Electron 셸**이다), (2) **번들 트리 numba의 첫 실행**
+(`check_entrypoints`의 대상 넷에 없고, `@numba.jit` 호출부는 `mlx_whisper/timing.py`의
+word-timestamp 경로라 축 B의 전사에서 처음 돈다).
+
+**거짓 통과에 특히 주의한다** — Part 1 §3.4의 부수 실측: **서명에 실패한 `.app`도 linker-signed
+상태로 그냥 실행된다.** 실행 성공을 서명 성공으로 읽으면 안 된다.
+
+**첫 기동이 실패하면 진단 순서:**
+
+| rc | 뜻 | 다음 |
+| --- | --- | --- |
+| **137** (SIGKILL, 메시지 없음) | W+X 매핑 거부 — `allow-unsigned-executable-memory` 누락. **import 시점**에 난다 | 그 프로세스의 plist 키 셋을 본다 |
+| **134** (SIGABRT) | dyld — `mapping process and mapped file (non-platform) have different Team IDs` | 서명 누락·불일치. 전수 `codesign --verify --arch arm64` |
+| **133** | V8 `Failed to reserve virtual memory for CodeRange` | Electron 쪽에 `allow-jit`이 없다 — **`.app`용 plist를 썼는지** 확인 |
+
+```bash
+codesign -dvvv --entitlements - <.app 또는 실패한 실행 파일>
+```
+
+그리고 **Console.app의 AMFI/dyld 줄**과 **자식 프로세스의 rc**를 함께 읽는다 — 부모가 0으로
+끝나도 자식이 137이면 `supervisor.log`에만 남는다.
+
 **P4-C11의 함정:** `~/.local/bin/mlx_lm.server`를 **일시 이동**하고 요약 job이 성공해야 한다.
 검증이 끝나면 **즉시 원위치**한다 (스펙 §5의 허용 변경).
+
+**P4-C13의 (b)(c)를 재현 가능하게 적는다.** (a)는 구조적 증명이라 코드로 끝나지만 (b)(c)는
+절차다 — (b) **처리 전 구간** `lsof -p <pid>`로 `/opt/homebrew`·`.venv`·`~/.local`·
+`/Library/Frameworks/Python.framework` 0건, (c) 처리 중 `ps -axo args` **주기 샘플링**으로 모든
+자식 실행 경로가 번들 아래. **샘플링 주기와 구간(몇 초마다, 어느 job 단계부터 어디까지, pid 집합을
+어떻게 갱신하는가)을 정해 결과 문서에 적는다** — 적지 않으면 재현도 반증도 불가능하다.
 
 **P4-C20의 fixture:** `signal.signal(SIGTERM, SIG_IGN)` 뒤 대기하는 전용 프로세스를 worker 자손
 자리에 띄워 유예를 넘긴다.
 
 **P4-C24(웹 회귀)는 별도 회차다** — 앱을 끄고 Docker DB + `be/storage` + `.venv`로 돈다.
 
-- [ ] **Step 3: 기준선과 대조한다**
+- [ ] **Step 4: 기준선과 대조한다**
 
 ```bash
 pnpm db:up          # Part 1 Task 1과 **같은 조건**
@@ -1121,36 +1504,73 @@ bash desktop/scripts/phase4-baseline.sh verify
 | `mut-venv-versions.txt` | 새 `uv.lock`과 일치 |
 | `mut-local-bin.txt` | `mlx_lm.server`가 **제자리로 돌아왔는가** |
 | `app-storage.txt` | 기준선의 모든 줄이 지금도 있다. **추가만** 있고 삭제·변경 0 |
-| `app-db-rows.txt` | 회의 수가 줄지 않았다 |
+| `app-db-rows.txt` | 회의 수가 줄지 않았다. **Step 1이 다시 뜬 값과 대조한다** — 2026-09-16 값은 `MEASUREMENT-UNAVAILABLE`이라 쓸 수 없다 |
 
-- [ ] **Step 4: 결과 문서를 쓴다**
+**P4-C27의 판정 범위를 결과 문서에 그대로 적는다** — 파일은 2026-09-16 기준선부터, DB 행 수는
+Step 1의 재촬영 시점부터다. 두 구간이 다른 것이 이 기준의 한계이고, 숨기면 다음 Phase가 그것을
+전 구간 판정으로 읽는다.
 
-Phase 3 결과 문서의 절 구성을 따른다 — 1 스펙 리뷰 / 2 계획 검증 / 3 단계별 실행과 리뷰 /
-4 최종 검증 / 5 남은 제약과 후속 Phase 인계.
+- [ ] **Step 5: 결과 문서의 §12를 채운다 — 새로 쓰는 것이 아니다**
 
-**Part 1 Task 2의 numba 측정 결과와 entitlement 결정**을 §5.1 "구현 값과 근거"에 넣는다.
-**외부 리뷰 4회차의 기록**(스펙 §17)도 §1에 옮긴다.
+**그 문서는 이미 있다.** `197ab7d`가 792줄·12절로 만들었고 §12가
+`이 절은 Part 2가 끝나면 채운다`로 비어 있다. **덮어쓰면 안 된다** — 컨트롤러 룰링 14건 표(§6),
+"계획·스펙과 실제가 갈린 곳"(§7), "Part 2가 알아야 할 계약"(§10), "미검증 표면"(§11)이 전부 그
+안에 있고 **SDD 원장은 이미 삭제돼 저장소에 남은 유일한 사본이다.**
 
-- [ ] **Step 5: 로드맵과 운영 문서를 갱신한다**
+할 일은 셋이다:
+
+1. **§12를 채운다** — Part 2의 단계별 실행과 리뷰, 축 A~E 30건의 판정과 증거, 대조 결과.
+2. **제목과 §1의 상태 줄을 Phase 4 전체로 승격한다** — 지금 제목은 `… 결과 (Part 1)`이고
+   상태 줄이 "Phase 4는 미완료다"로 시작한다.
+3. **§5 "남은 제약"에 둘을 더한다** — (a) 스펙 §6.5가 "이 Phase는 **그 경계를 명시만 한다**"고
+   못 박은 것: **supervisor가 실행 중 크래시해 재시작되면 이전 `--once` 자식이 같은 run-id를
+   갖는다.** 기동 시 정리로는 안 잡히고 B층은 종료 때만 돈다 — 근본 해소는 job lease token
+   (Phase 6)이다. (b) Task 5 Step 6이 확인한 `buildChildPath`의 죽은 코드.
+
+**이관 지시 둘은 이미 끝났으므로 하지 않는다** — Part 1 Task 2의 numba 측정은 §3.4에, 외부 리뷰
+기록은 §1과 스펙 §17에 있다. 그리고 **스펙 §17은 4회차가 아니라 8회차까지다**(§17.1~§17.11).
+5회차 blocking 5건 중 2건이 6회차에 오진으로 철회된 사실(§17.8·§17.9)과, **8회차가 Part 2 계획을
+대상으로 blocking 9건을 낸 사실**(§17.11)이 그 기록에 포함된다.
+
+**P4-C25의 조건부 충족을 닫는다.** Part 1 §4.1은 C25를 "충족(조건)"으로 적었고 그 조건이
+**실오디오 전사 1건**인데, 그것이 Part 2의 P4-C5로 넘어왔다. 연결표는 C25를 "Part 1 Task 3·12"로만
+적고 그 조건을 기록하지 않는다 — **C5의 판정이 C25의 조건까지 닫는다는 것을 여기서 명시한다.**
+
+- [ ] **Step 6: 로드맵과 운영 문서를 갱신한다**
+
+**`desktop/CLAUDE.md`를 먼저 읽는다.** `197ab7d`가 48줄을 고쳐 목차를 바꿨으므로 이 계획이
+쓰일 때의 구성이 아니다(루트 `CLAUDE.md`가 "서브트리를 고치기 전에 그 패키지 문서를 읽으라"를
+규약으로 세운 자리다). **Part 2가 뒤집는 줄이 넷이다:**
+
+| 자리 | 지금 (`197ab7d`) | Part 2가 하는 일 |
+| --- | --- | --- |
+| `:3` | worker·embed가 `uv run` + 저장소 체크아웃 | **Task 5가 뒤집는다** — 번들 python `-m` |
+| `:12-24` | 명령·31건·캐시 비용 | `--print-key`와 wk 층 ~130초를 더한다 |
+| `:28-52` | "## 번들 — `Resources/` 아래 넷" | `models/`·`hf-token.bin`의 자리를 더한다 |
+| `:62` | `process/`의 "uv 런처" | **Task 5가 지운다** |
+| `:84` | `config.json` … "앱은 다시 쓰지 않는다(`REPO_ROOT` 저장 제외)" | **Task 4 Step 4가 그 예외를 없앤다** |
+
+그 위에 더할 것: 구조 표(`process/orphans.ts`·`config/token-store.ts`·`windows/token-window.ts`·
+`app/reap-on-quit.ts`), 데이터 위치(`models/`·`hf-token.bin`), 디버깅(런타임 자기 보고 줄 읽는 법).
 
 - 로드맵 — 상태 줄, Phase 4 절의 판정표, Phase 5·6 인계.
-- `desktop/CLAUDE.md` — 명령, 구조 표(`process/orphans.ts`·`config/token-store.ts`·
-  `windows/token-window.ts`·`app/reap-on-quit.ts`), 데이터 위치(`models/`·`hf-token.bin`),
-  디버깅(런타임 자기 보고 줄 읽는 법).
-- `be/worker` 문서 — `FFMPEG_BIN`·`FFPROBE_BIN`·`LENS_LLM_SERVER_BIN`의 새 의미, `mlx-lm` 편입,
-  `DAMWHA_SHARED_STATE`.
+- **`be/CLAUDE.md`** — `FFMPEG_BIN`·`FFPROBE_BIN`·`LENS_LLM_SERVER_BIN`의 새 의미, `mlx-lm` 편입,
+  `DAMWHA_SHARED_STATE`. (`be/worker/CLAUDE.md`는 없다.)
+- **`be/worker/SMOKE.md`** — 스모크 절차가 위 env의 새 의미에 걸리면 그쪽도.
 
-- [ ] **Step 6: 브랜치를 마무리한다** — `superpowers:finishing-a-development-branch`
+- [ ] **Step 7: 브랜치를 마무리한다** — `superpowers:finishing-a-development-branch`
 
 **Verify:** 30건 전부 판정되고 각각 증거가 있다. 미충족이 있으면 **Phase를 미완료로 유지한다**
 (로드맵 §6).
 
 **Review:**
 - 판정하지 않은 기준이 없는가.
-- "통과"에 명령과 출력이 붙어 있는가.
+- "통과"에 명령과 출력이 붙어 있는가. **실행 성공을 서명 성공으로 읽지 않았는가.**
 - 기준선 대조가 §5의 두 부류를 **구분해서** 했는가.
 - `~/.local/bin/mlx_lm.server`가 제자리인가.
-- numba 측정 결과가 문서에 있는가.
+- **결과 문서의 기존 11절이 그대로 살아 있는가** — §12만 채웠는가.
+- P4-C27의 **판정 범위**(파일과 DB 행의 구간이 다르다)를 적었는가.
+- "구현 중 판정할 것" 여섯이 전부 결론과 근거를 얻었는가.
 
 ---
 
@@ -1163,7 +1583,7 @@ Phase 3 결과 문서의 절 구성을 따른다 — 1 스펙 리뷰 / 2 계획 
 | §6.2 실행 계약 | 3, 4, 5 |
 | §6.3 env 주입·위생 | 4 |
 | §6.4 HF 토큰 | 6, 11 |
-| §6.5 소유·종료 | 2, 7, 8 |
+| §6.5 소유·종료 | 2, 5 (`worker-shutdown`), 7, 8 |
 | §6.6 ffmpeg·모델 경로 | 1, 9 |
 | §6.7 dev 루프 | 4 (`PYTHONPATH`) |
 | §6.9 model_readiness·유예 | 9, 10 |
@@ -1174,43 +1594,50 @@ Phase 3 결과 문서의 절 구성을 따른다 — 1 스펙 리뷰 / 2 계획 
 
 **2. 완료 기준 연결표**
 
-| ID | 만드는 Task | 판정 | 실패 재현 |
-| --- | --- | --- | --- |
-| C1~C3 토큰 게이트·평문·오타 | 6 | 12 | 토큰 파일 삭제 / 잘못된 토큰 |
-| C4 토큰 교체 반영 | **11** (Step 2) | 11·12 | 미수락 계정 → 수락 계정 |
-| C5 모델 0에서 완주 | 3·9 | 12 | `models/` 비우기 |
-| C6 진행 표시 | 9·11 | 12 | — |
-| C7 끊김·이어받기 | 9·11 | 12 | 네트워크 차단 |
-| C8 403 vs 401 | 9 (Step 8) | 12 | 미수락 계정 토큰 |
-| C9 재다운로드 없음 | 9 | 12 | — |
-| C10 bge-m3 한 벌 | 9 (Step 8) | 12 | — |
-| C11 번들 mlx-lm | Part 1 Task 3·6 + 3 | 12 | 전역 설치 일시 이동 |
-| C12 번들 런타임 | 2 | 12 | — |
-| C13 외부 미참조 | 4·5 | 12 | — |
-| C14 캐시 재사용 | 4 (`HF_HOME`) | 12 | `.app` 교체 |
-| C15 번들 위생 | **Part 1 Task 5·6·7** | Part 1 Task 7·12 | — |
-| C16 저장소 없이 기동 | 4 (Step 4) | 12 | 저장소 일시 이동 |
-| C17 ⌘Q 정리 | 5·8 | 12 | — |
-| C18 고아 정리 | 7 | 12 | `kill -9` main |
-| C19 부모 선종료 (a·b) | 8 | 8 (통합)·12 | supervisor·`--once` `kill -9` |
-| C20 자손 SIGKILL | 8 | 12 | `SIG_IGN` fixture |
-| C21 외부 worker 보존 | 7 | 12 | `pnpm worker` 동시 실행 |
-| C22 스캔 실패 시 중단 | 7 (Step 2) | 7 (단위) | `ps` 비영·빈 출력 주입 |
-| C23 dev 반영 | 4 (`PYTHONPATH`) | 12 | — |
-| C24 웹 회귀 | — | 12 (별도 회차) | — |
-| C25 mlx 정렬 회귀 | **Part 1 Task 3** | Part 1 Task 3·12 | — |
-| C26·C27 데이터 보존 | **Part 1 Task 1** | 12 | Part 1 Task 1 Step 3이 실증 |
-| C28 numba | **Part 1 Task 2** | Part 1 Task 2·12 | — |
-| C29 오프라인 처리 | 9 | 12 | 네트워크 차단 |
-| C30 env 재주입 차단 | 4 (Step 2) | 4 (단위)·12 | `config.json`에 `PYTHONHOME` |
+| ID | 만드는 Task | 판정 | 실패 재현 | 비고 |
+| --- | --- | --- | --- | --- |
+| C1~C3 토큰 게이트·평문·오타 | 6 | 12 | 토큰 파일 삭제 / 잘못된 토큰 | — |
+| C4 토큰 교체 반영 | **11** (Step 2) | 11·12 | 미수락 계정 → 수락 계정 | — |
+| C5 모델 0에서 완주 | 3·9 | 12 | `models/` 비우기 | — |
+| C6 진행 표시 | 9·11 | 12 | — | — |
+| C7 끊김·이어받기 | 9·11 | 12 | 네트워크 차단 | **무엇이 참으로 만드는지 구현 중 판정** (1번) |
+| C8 403 vs 401 | 9 (Step 8) | 12 | 미수락 계정 토큰 | — |
+| C9 재다운로드 없음 | 9 | 12 | — | — |
+| C10 bge-m3 한 벌 | 9 (Step 8) | 12 | — | — |
+| C11 번들 mlx-lm | Part 1 Task 3·6 + 3 | 12 | 전역 설치 일시 이동 | — |
+| C12 번들 런타임 | **2·3** | 12 | — | 다섯 자기 보고: supervisor·`--once`는 2, 프로브는 2(+부모의 stderr 흘리기), embed·`llm_entry`는 3 |
+| C13 외부 미참조 | 4·5 | 12 | — | — |
+| C14 캐시 재사용 | 4 (`HF_HOME`) | 12 | `.app` 교체 | — |
+| C15 번들 위생 | **Part 1 Task 5·6·7** | Part 1 Task 7·12 | — | — |
+| C16 저장소 없이 기동 | 4 (Step 4) | 12 | 저장소 일시 이동 | — |
+| C17 ⌘Q 정리 | 5 (`worker-shutdown` 그룹 SIGTERM)·8 | 12 | — | **capabilities 프로브는 8이 못 거둔다** — `-m` 토큰도 run-id도 없어 §6.5의 조건 2·4를 못 만족한다. 실제로 거두는 것은 `cleanUnlessOrphans`의 그룹 SIGTERM이고 Task 5 Step 5가 그것을 테스트로 잠근다 |
+| C18 고아 정리 | 7 | 12 | `kill -9` main | — |
+| C19 부모 선종료 (a·b) | 8 | 8 (통합)·12 | supervisor·`--once` `kill -9` | — |
+| C20 자손 SIGKILL | 8 | 12 | `SIG_IGN` fixture | — |
+| C21 외부 worker 보존 | 7 | 12 | `pnpm worker` 동시 실행 | — |
+| C22 스캔 실패 시 중단 | 7 (Step 2) | 7 (단위) | `ps` 비영·빈 출력 주입 | — |
+| C23 dev 반영 | 4 (`PYTHONPATH`) | 12 | — | — |
+| C24 웹 회귀 | — | 12 (별도 회차) | — | — |
+| C25 mlx 정렬 회귀 | **Part 1 Task 3** | Part 1 Task 3·12 | — | Part 1 §4.1이 **"충족(조건)"**으로 남겼다 — 조건은 실오디오 전사 1건이고 그것이 P4-C5다. **C5의 판정이 이 조건을 닫는다** (Task 12 Step 5) |
+| C26·C27 데이터 보존 | **Part 1 Task 1** | 12 | Part 1 Task 1 Step 3이 실증 | **C27의 `app-db-rows` 기준선이 비었다** — Task 12 Step 1이 축 A 전에 그 한 파일만 다시 뜬다. 판정 구간이 파일과 DB에서 다르다 |
+| C28 numba | **Part 1 Task 2** | Part 1 Task 2·12 | — | — |
+| C29 오프라인 처리 | 9 | 12 | 네트워크 차단 | 같은 판정 (1번) |
+| C30 env 재주입 차단 | 4 (Step 2) | 4 (단위)·12 | `config.json`에 `PYTHONHOME` | — |
 
 **단위 테스트로만 판정하는 것**(스펙 §9 비고): C22, `safeStorage` 불가, 복호화 실패, 무진행
 제한, `model_readiness` 동시 writer 역전, 훅의 지연 모듈 내성.
 
-**3. 규칙 1 준수** — 이 계획에 실행되지 않은 구현 본문이 없다. `[실행됨]` 표시가 붙은 것 둘:
-Task 3의 `mlx_lm.server.main()` 사실, Task 9의 훅 실측.
+**3. 규칙 1 준수** — 이 계획에 실행되지 않은 구현 본문이 없다. `[실행됨]` 표시가 붙은 것 셋:
+Task 3 Step 3의 `mlx_lm.server.main()` 사실, Task 3 Step 7의 `--print-key`(2026-09-17, 0.22초,
+읽기 전용), Task 9 Step 5의 훅 실측. **검증 명령은 `/usr/bin/grep`·`/usr/bin/find`·`/usr/bin/diff`를
+절대 경로로 부른다** — 이 개발 머신의 셸에서 셋 다 함수이고 `grep`은 `ugrep -I`라 바이너리를
+건너뛴다(스펙 §17.8 BL-2).
 
 **4. 규칙 2 준수** — 모든 시그니처가 §계약 한 곳에만 있다. Task 안의 테스트는 그것을 참조한다.
+**2026-09-17 정정:** 초안은 이 줄이 거짓이었다 — `managed_llm_server`가 계약 절 없이 Task 3
+Step 1·4 본문에 두 번 적혀 있었고 Task 10 Step 3이 `_wait_ready`의 시그니처를 또 바꿨다.
+둘의 최종 모양을 계약 절에 옮기고 Task 3·10이 참조하게 했다. `restartService`도 계약의 모양이
+코드(`supervisor.ts:561`)와 안 맞아 `Supervisor` 메서드로 고쳤다.
 
 **5. 순서**
 
@@ -1224,3 +1651,25 @@ Task 3의 `mlx_lm.server.main()` 사실, Task 9의 훅 실측.
   실행 순서가 일치한다.
 - 12(검증)가 마지막.
 - **모든 Task가 `test`·`lint` 통과 상태로 끝난다.**
+
+---
+
+## 구현 중 판정할 것 — 여덟
+
+**고치는 것이 아니라 판정할 것이다.** 문서만 읽어서는 참·거짓을 정할 수 없어, 그 자리에 도달한
+실행자가 **판정하고 결과를 기록한다.** 판정 결과는 Task 12 Step 5의 결과 문서에 근거와 함께
+남긴다. **"아마 될 것이다"로 넘기지 않는다.**
+
+**1~6은 8회차 검증(스펙 §17.11)의 "확인 필요" 여섯 그대로다.** 7·8은 같은 이유로 여기 옮긴
+important 1건(I-14)과 minor 1건(M-5)이다.
+
+| # | 판정할 것 | 언제 | 아니었을 때 |
+| --- | --- | --- | --- |
+| 1 | **P4-C7(이어받기)·P4-C29(오프라인)를 무엇이 참으로 만드는가.** 둘 다 연결표에서 Task 9에 걸려 있으나 Task 9의 Step은 진행 훅·`model_readiness`·리비전 고정뿐이다. 실제 근거는 `huggingface_hub`의 `.incomplete` 재개와 캐시 폴백(라이브러리 기본 동작)으로 **보인다.** 확인할 것 둘 — (a) 훅으로 `tqdm_class`를 갈아 끼우는 것이 hub의 resume 경로에 영향이 없는가, (b) `HF_HUB_OFFLINE` 없이도 네트워크 단절 시 캐시 폴백이 도는가 | **Task 9 Step 6** (훅 테스트와 같은 자리) | 둘 중 하나라도 아니면 **그것을 만드는 Task가 필요하다** — Task 12에서 발견하면 늦다 |
+| 2 | **Task 9 Step 5의 "`sys.modules` 92개 모듈이 `ModuleNotFoundError`" 주장.** `[실행됨]`이 붙어 있고 근거(transformers의 지연 모듈 `__getattr__`)도 그럴듯하나 8회차가 **재현하지 않았다.** | **Task 9 Step 5** 착수 시 1분 | 처방(`vars(mod).get(name)`)은 어느 쪽이든 안전한 방향이라 **구현은 안 바뀐다.** 숫자만 정정한다 |
+| 3 | **`/tmp/p4-baseline`의 수명.** Task 12 Step 1의 유일한 게이트인데 macOS `/private/tmp`는 재부팅에 날아간다. 기준선은 2026-09-16에 찍혔고 Part 2는 12 Task 분량이다 | **Task 1 착수 전** | `P4_BASELINE_DIR`(`phase4-baseline.sh:13`)로 영구 위치를 쓰거나 지금 통째로 복사한다. **날아가면 P4-C26·C27을 판정할 수 없고 되돌릴 방법이 없다** |
+| 4 | **P4-C25의 조건부 충족을 P4-C5가 닫는가.** Part 1 §4.1이 C25를 "충족(조건)"으로 남겼고 그 조건이 실오디오 전사 1건이다. 연결표는 그 조건을 기록하지 않았다 | **Task 12 Step 3** (축 B) | C5가 통과해도 C25의 조건이 안 닫히는 경우가 있으면 별도 회차가 필요하다 |
+| 5 | **검증 전 기준선의 유효성.** Step 4가 대조하는 `app-storage.txt`는 2026-09-17 이전 값이다. Part 1이 `.app`을 실행하지 않아 지금은 유효하지만 **그 전제를 확인하는 절차가 없었다** | **Task 12 Step 1** | 움직였으면 어디서 움직였는지를 먼저 밝힌다 — 그것 없이 대조하면 P4-C27이 거짓 통과·거짓 실패 둘 다 낼 수 있다 |
+| 6 | **Task 12 Step 2의 되돌릴 수 없는 삭제.** `<userData>/models` 비우기와 `hf-token.bin` 삭제. 스펙 §5가 허용하므로 계약 위반은 아니나 로드맵 §3의 "위험한 변경에는 실패 시 복구 방법을 포함한다"를 만족하지 않는다 | **Task 12 Step 2** (게이트 4번) | 모델은 재다운로드로 복구된다(시간만). **토큰은 사용자만 다시 낼 수 있다** — 지우기 전에 확인한다 |
+| 7 | **`desktop/CLAUDE.md`의 갱신 범위** (8회차 I-14). `197ab7d`가 48줄을 고쳐 목차를 바꿨다. Task 12 Step 6의 표가 그 다섯 자리를 짚지만, Part 2가 실제로 만든 것과 대조해야 최종 목록이 나온다 | **Task 12 Step 6** | — |
+| 8 | **`PythonBinaries.sitePackages`의 소비자** (8회차 M-5). 계약에 있으나 이 계획에서 그것을 쓰는 자리가 Task 12 Step 3의 P4-C12 판정 하나뿐이다 | **Task 4 Step 1** | 쓰는 데가 정말 없으면 계약에서 뺀다 — 안 쓰는 필드를 남기면 다음 사람이 그것의 의미를 추측한다 |

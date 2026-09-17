@@ -574,7 +574,7 @@ codesign이 rc=1로 실패한다. `plutil -lint`는 그것을 통과시키므로
 | `LENS_LLM_BASE_URL` | `http://127.0.0.1:<빈 포트>` | **새로** — `DATABASE_URL`과 함께 기본값 없는 필수 키 둘 중 하나다. Phase 3이 이미 넣는 `DATABASE_URL`과 달리 이것은 **이 Phase가 새로 넣어야 한다**. 빠뜨리면 worker가 `ValidationError`로 기동 실패 |
 | `FFMPEG_BIN`·`FFPROBE_BIN` | `<ffmpeg>/bin/ffmpeg`·`ffprobe` | **새로** (§6.6) |
 | `PYTHONPATH` | **dev만** `<repo>/be/worker` | **새로** (§6.7) |
-| `PYTHONPYCACHEPREFIX` | `<userData>/pycache` | **새로** (§6.1-b) — 번들 트리에 `.pyc`가 쌓이는 것을 막는다. dev에서는 `desktop/build/python`(= 스테이징 산출물)이 저장소 절대 경로를 담은 `.pyc`로 오염돼 **그 뒤 모든 패키징이 번들 검사에서 실패하는** 것을, packaged에서는 **서명 봉인 밖 파일**이 생겨 `codesign --verify --deep --strict`가 깨지는 것을 막는다. `PYTHONDONTWRITEBYTECODE`는 같은 일을 하지만 import를 4.5배 느리게 한다(§6.1-b 실측) |
+| `PYTHONPYCACHEPREFIX` | `<userData>/pycache` | **새로** (§6.1-b) — 번들 트리에 `.pyc`가 쌓이는 것을 막는다. packaged에서는 **서명 봉인 밖 파일**이 생겨 `codesign --verify --deep --strict`가 깨지고, dev에서는 `desktop/build/python`(= 스테이징 산출물)이 저장소 절대 경로를 담은 `.pyc`로 오염된다. **dev 오염이 `.app`까지 가지는 않는다** — `build-python.sh:734-737`의 `stage()`가 캐시 적중 여부와 무관하게 `purge_pycache "$STAGED"`를 돌고 `package.mjs:53`이 패키징 전에 그 스크립트를 부르므로 오염은 봉인 전에 쓸린다(2026-09-17 정정). 남는 실해는 **패키징 경로 밖의 `.pyc`**와 `stage()`의 실행 중 프로세스 가드다. `PYTHONDONTWRITEBYTECODE`는 같은 일을 하지만 import를 4.5배 느리게 한다(§6.1-b 실측) |
 
 **env 위생 — 상속을 좁힌다.** 지금 `uv-launcher.ts:51-55`는 `...process.env`를 통째로
 넘긴다. Electron이 Finder에서 뜨면 그 env는 얇지만, dev 터미널에서 뜨면 개발자의 전체
@@ -654,12 +654,18 @@ child env = sanitize( { ...process.env, ...config.json 값, ...앱이 주장하�
 
 **damwha Python 프로세스 판정 (4조건 모두):**
 
-1. argv[0]이 **앱이 아는 번들 인터프리터 절대 경로**다 (`<번들>/bin/python3.12`).
+1. argv[0]이 **절대 경로이고 basename이 `python3.12`**다 (셸 줄·상대 경로·맨 이름 배제).
 2. `-m` 다음 토큰이 `damwha_worker`, `damwha_worker.embed_service`, `damwha_worker.llm_entry`
    중 하나다.
-3. argv[0]의 절대 경로가 **번들 python 트리 아래**다. 저장소 `.venv`·Homebrew python이
-   여기서 빠진다 (조건 1과 겹치지만, dev/packaged 두 트리를 다 받으므로 따로 둔다).
+3. argv[0]이 **앱이 아는 두 번들 트리(dev·packaged) 중 하나 아래**다. 저장소 `.venv`·
+   Homebrew python이 여기서 빠진다.
 4. `--run-id=<uuid>` 토큰이 있다.
+
+**조건 1과 3은 하는 일이 다르다.** 1은 *이 줄이 파이썬 프로세스의 argv인가*를 보고 — 위
+문단의 `grep --run-id=…` 같은 셸 줄과 상대 경로·맨 이름 실행을 거른다 — 3은 *그 인터프리터가
+우리 트리의 것인가*를 본다. 트리 소속 판정은 조건 3의 일이고 조건 1은 거기에 관여하지
+않는다. 그래서 아래 처분표 3행의 "번들 밖 python"이 **조건 1은 만족하고 조건 3에서 빠진다** —
+목록에는 들어오고 처분에서 `external`로 갈린다.
 
 **판독 규칙 — 공백이 있는 경로를 견뎌야 한다.** `ps -axo pid,args`는 argv를 공백으로 이어
 붙인 **평탄한 문자열**이라 다시 토큰으로 쪼갤 수 없다. `/Users/x/My Apps/Damwha.app/…`처럼
@@ -886,8 +892,11 @@ app_setting.model_readiness = {
   `popen`한 **자식**이다 — 둘은 다른 프로세스다. §6.2가 말하는 "같은 프로세스"는
   `llm_entry`와 `mlx_lm.server.main()` 사이의 관계이지 `_wait_ready`와의 관계가 아니다.
   그래서 `llm_entry`가 `model_readiness`에 올린 `updated_at`을 `_wait_ready`가 주기적으로
-  읽어 유예를 민다. `--once` 자식은 이미 DB 연결을 갖고 있으므로 그것을 `_wait_ready`에
-  넘기는 시그니처 변경이 따른다.
+  읽어 유예를 민다. **`_wait_ready`는 `settings.database_url`로 자기 연결을 연다** —
+  `--once` 자식이 쥔 연결을 넘기지 않는다. (2026-09-17 결정. 넘기는 쪽은 `_wait_ready`의
+  시그니처를 바꾸고 그 파급이 `dispatch.py`·`jobs.py`·`__main__.py`의 호출부까지 번진다.
+  자기 연결이면 파급이 `llm_server.py`·`config.py` 둘에 갇힌다. 읽는 것이 폴링 주기마다
+  한 행이라 연결 하나를 더 여는 비용이 그 파급보다 싸다.)
 
 **LLM 다운로드 진행의 관측 수단이 §6.2 결정에서 나온다.** `mlx_lm.server`를 그냥 실행했다면
 그 프로세스 안의 HF 다운로드에 훅을 걸 수 없어 "시작·완료만 기록"이 최선이었고, 그러면 진행이
@@ -1532,3 +1541,63 @@ ffmpeg 9.0.1 configure가 `License:`를 stdout에만 쓰고(`config.log`에 0건
 `!CONFIG_GPL=yes` 형태라 `^CONFIG_(GPL|NONFREE)=yes`가 옳다. Task 3의 `uv lock`은 4초에
 해석되고 변화가 `mlx-lm` 추가 하나뿐이다. 위치 독립 셔뱅은 제한 PATH·공백 경로·상대 실행
 모두에서 산다.
+
+### 17.11 외부 리뷰 — 8회차 (대상: **Part 2 계획**, HEAD `95038f0`)
+
+**판정: 확정 불가 — blocking 9건, important 14건, minor 17건, 확인 필요 6건.**
+**Part 2 텍스트가 받은 첫 검증이다.** 5·6·7회차의 대상은 제목 그대로 "Part 1 계획 + 이 스펙"
+이었고, 1~4회차는 분할 이전의 통합 계획(5,249줄)을 봤다. §17.5의 분할은 자르기만 한 것이
+아니라 Part 2의 서술 방식을 바꿨으므로(시그니처·계약·테스트 표만, 구현 본문은 구현 시 작성)
+1~4회차가 본 텍스트와 지금의 Part 2는 같은 문서가 아니다. 분할 뒤 Part 2 파일은 3커밋에서
+21줄만 바뀌었고 그것도 Part 1 리뷰의 파급이었다.
+
+검증자 둘이 병렬로 읽었다 — 축 A는 로드맵 §4 기준, 축 B는 **Part 1 실행이 바꾼 전제**.
+blocking 9건 중 넷(BL-1·BL-3·BL-5·BL-7)이 축 B에서 나왔다. 계획이 쓰인 시점에 존재하지 않던
+코드가 그 사이에 생겼기 때문이다.
+
+| # | 지적 | 재확인 | 반영 |
+| --- | --- | --- | --- |
+| BL-1 | Task 12가 Part 1 결과 문서 792줄을 **덮어쓴다**(`Create`) | 그 문서는 `197ab7d`에 792줄·12절로 있고 §12가 Part 2 자리로 비어 있다. **SDD 원장은 이미 삭제돼 저장소에 남은 유일한 사본이다** | 계획 Task 12 — `Modify`로. Step 4를 "§12를 채우고 제목·§1을 승격"으로. 이미 끝난 이관 지시 둘 삭제 |
+| BL-2 | `app-db-rows.txt` 기준선이 비어 P4-C27을 판정할 수 없다 | `MEASUREMENT-UNAVAILABLE (embedded psql)` — 기준선을 뜰 때 앱 내장 클러스터가 꺼져 있었다 | **§9 C27을 좁히지 않고**, Task 12가 축 A **전에** 그 한 파일만 다시 뜬다. 전량 재촬영은 `abs-*` 기준선을 덮으므로 금지 |
+| BL-3 | Task 3 Step 7이 `build-python.sh`를 Files·검증·비용 없이 고친다 | 그 파일의 shasum이 `RT_KEY`의 입력이고 `WK_KEY ⊇ RT_KEY`라 **한 줄에 두 층 재빌드**(온난 311초) | Files·전역 목록에 추가. **I-1의 이월 3건을 한 파동으로 묶어** 재빌드를 1회로. `--print-key`(0.22초, 읽기 전용)를 게이트로 |
+| BL-4 | 디스크 | **D-2로 해소** — 2026-09-17 재측정 34 GiB, 사장 캐시 층 소멸, rt·wk 키 둘 다 적중 | 회귀 방지만: 캐시 GC를 BL-3 파동에, `df` 게이트를 Task 12에, 필요 공간을 수치로 |
+| BL-5 | dev 루프가 `stage()`의 **실행 중 가드**에 걸려 Electron 기동 전에 죽는다 | `build-python.sh:711-716`이 `$STAGED/bin/`을 argv에 담은 프로세스가 하나라도 있으면 `die`한다. Part 2가 띄우는 넷이 정확히 그 경로이고 **P4-C18은 고아를 일부러 만든다.** 이 가드는 R-11이 `070ea2b`에 만든 것이라 Part 2 작성 시점에 없었다 | Task 5·6·12에 "빌드 전 잔존 프로세스 확인·정리" 명시 |
+| BL-6 | P4-C12의 다섯 자기 보고 중 **둘이 안 만들어지고 셋째는 삼켜진다** | `llm_entry`의 보고를 만드는 Step이 없다. `capabilities.py:67-77`이 `r.stderr`를 아무도 읽지 않는다. `embed_service.py:38-41`의 `main()`에 `install_logging()`이 없다. 계획이 적은 근거("부모가 stdout을 JSON으로 파싱한다")도 사실이 아니다 — 실제는 `{"1": True, "0": False}.get(r.stdout.strip())` | 다섯을 **어느 Task·Step이 만드는지 표로** 못 박고 연결표 C12를 `2·3`으로 |
+| BL-7 | Task 4가 자기가 못 박은 "`test`·`lint` 둘 다 초록불"로 끝날 수 없다 | `bins` 모양 교체와 `runId` 추가가 ctx 픽스처 **9개**를 깨고, `repoRoot: string \| null`이 `uv-launcher.ts:34`·`worker.ts:122`를 깬다. 그 둘은 **Task 5**의 Files에만 있다 | Task 4·5를 **묶지 않고** 미기재 소스 2개·테스트 6개를 Task 4 Files에. `UV_BIN` 삭제는 uv가 죽는 Task 5로 옮겨 M-7도 닫았다 |
+| BL-8 | Task 10의 `_wait_ready` 시그니처 변경이 **계약 절 밖**이고 소비자가 Files 밖이다 | `managed_llm_server(...)`가 계약 절 없이 Task 3 Step 1·4 본문에 두 번, Task 10이 또 바꾼다 — **규칙 2 정면 위반.** 자체 검토 §4의 "모든 시그니처가 §계약 한 곳에만"은 거짓이었다 | **§6.9 수정 (D-1)** — `_wait_ready`가 자기 연결을 연다. 계획은 두 시그니처의 최종 모양을 계약 절에 한 번만 적는다 |
+| BL-9 | **§6.5 조건 1의 문구가 처분표 3행과 부딪친다** | 처분표 3행이 "1·2만 만족(번들 밖 python)"인데 조건 1이 "앱이 아는 번들 인터프리터 절대 경로"라 번들 밖 python은 조건 1을 만족할 수 없다. Task 7이 그 모호함을 물려받아 **내부에서 갈렸다** — Step 2 테스트와 Step 5 리뷰가 서로 모순 | **§6.5 수정 (D-3)** — 조건 1은 셸 줄·상대 경로·맨 이름 배제, 조건 3이 트리 소속. 계획 Task 7 Step 2 표를 그에 맞춤 |
+
+**BL-1이 이 회차에서 가장 비싼 지적이다.** 계획은 Part 1이 실행되기 전에 쓰였고, 그때는 결과
+문서가 없었으므로 `Create`가 옳았다. Part 1이 그것을 만들면서 계획의 그 한 단어가 **파괴적
+지시**로 바뀌었다. `[실행됨]` 규칙도 규칙 2도 이런 종류의 부패는 막지 못한다 — 계획 텍스트가
+틀린 게 아니라 **세계가 계획 밑에서 움직였다.** BL-3·BL-5·BL-7도 같은 형태다.
+
+**BL-9는 설계 충돌이 아니라 문구 과잉이었다.** §6.5는 조건 3을 설명하며 이미 "저장소
+`.venv`·Homebrew python이 **여기서** 빠진다"라고 적어 트리 소속 판정을 조건 3에 두고 있었는데,
+조건 1의 문구가 그것을 미리 해 버렸다. 조건 1의 실제 목적은 §6.5 머리에 있다 — "run-id 하나만
+보면 `grep --run-id=…` 같은 셸 줄이 걸린다."
+
+**사용자 결정 3건 (2026-09-17).**
+
+| # | 결정 |
+| --- | --- |
+| D-1 | `_wait_ready`는 **자기 연결을 연다**(`settings.database_url`). 파급을 `llm_server.py`·`config.py`에 가둔다. §6.9 수정 |
+| D-2 | 디스크는 먼저 비우고 진행 — 재측정에서 이미 해소(여유 34 GiB, rt `f1f9748ded8fe4dc`·wk `969845ce35fbd8f8` 둘 다 적중, `.app`의 `.build-key`와 일치). **그래도 캐시 GC와 `df` 게이트는 계획에 넣는다** |
+| D-3 | §6.5 처분표 3행 모순은 컨트롤러 판정안(BL-9)을 채택 |
+
+**검증자가 확인해 준 것 (변경 없음):** `[실행됨]` 표기 둘 다 실측과 일치했다(Task 3의
+`mlx_lm/server.py:1751`·`:1887`·`:1899`, Task 9의 `huggingface_hub 1.20.1` + 소비자 다섯 줄).
+**규칙 1은 지켜졌다** — 표기 없는 실행 가능한 구현 본문 0건. 인용 줄 번호 30여 건 중 어긋난
+것 1건(`main.ts:1230` → `:1224`). 번들 실물 대조 전부 통과. Task 1→2→3, 4→5, 7→8, 9→10→11,
+12 마지막의 순서도 옳다.
+
+**important 14건 중 13건, minor 17건 중 16건을 계획 텍스트 수정으로 닫았다.** 남긴 둘은
+I-14(Part 1이 다시 쓴 `desktop/CLAUDE.md` 목차)와 M-5(`sitePackages` 소비자)이고, 둘 다
+"구현 중 판정"으로 계획 말미에 적었다. **확인 필요 6건**도 같은 자리에 있다 — P4-C7·C29를
+무엇이 참으로 만드는가, Task 9 Step 5의 미재현 주장, `/tmp/p4-baseline`의 수명,
+P4-C25의 조건부 충족, 검증 전 기준선 재촬영, 되돌릴 수 없는 삭제의 복구 절차.
+
+**7회차와 8회차의 차이가 §17.9의 메모를 한 번 더 확인한다.** 7회차는 "계획이 수렴했다"로
+닫혔지만 그 대상은 Part 1이었다. 같은 문서 묶음의 검증받지 않은 절반이 blocking 9건을 갖고
+있었고, 그중 넷은 **7회차가 확정한 Part 1이 실행되면서 새로 생긴 것**이다. 계획 검증은
+대상과 시점을 함께 적지 않으면 그 범위를 잘못 읽힌다.
