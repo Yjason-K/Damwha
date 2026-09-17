@@ -1,19 +1,55 @@
 # desktop/ — Damwha macOS 앱 (Electron)
 
-Electron main이 네 서비스를 감독한다 — 번들 PostgreSQL, NestJS API(자식), worker·embed(`uv run`, Phase 4 전까지 저장소 체크아웃). 설계는 Phase별 스펙에 있다:
+Electron main이 네 서비스를 감독한다 — 번들 PostgreSQL, NestJS API(자식), worker·embed(`uv run`, 아직 저장소 체크아웃). Phase 4는 둘로 나뉜다: **Part 1은 번들만 만든다**(아래 "번들") — worker·embed를 번들 python으로 돌리는 배선은 Part 2다. 설계는 Phase별 스펙에 있다:
 [Phase 1](../docs/superpowers/specs/2026-09-11-electron-phase-1-app-foundation-design.md) ·
 [Phase 2](../docs/superpowers/specs/2026-09-12-electron-phase-2-service-orchestration-design.md) ·
-[Phase 3](../docs/superpowers/specs/2026-09-14-electron-phase-3-embedded-postgres-design.md).
+[Phase 3](../docs/superpowers/specs/2026-09-14-electron-phase-3-embedded-postgres-design.md) ·
+[Phase 4](../docs/superpowers/specs/2026-09-16-electron-phase-4-embedded-python-runtime-design.md).
 
 ## 명령
 
 ```bash
-pnpm desktop:dev     # build-postgres.sh(캐시) → tsc → electron .
-pnpm desktop:build   # build-postgres.sh → be·fe build → pnpm deploy → electron-builder → ad-hoc 서명 → check-bundle
-bash desktop/scripts/build-postgres.sh [--fresh]   # 내장 PG만. 캐시는 desktop/.cache/postgres (gitignore)
+pnpm desktop:dev     # build-postgres.sh·build-python.sh·build-ffmpeg.sh(셋 다 캐시) → tsc → electron .
+pnpm desktop:build   # 위 셋 → tsc → be·fe build → pnpm deploy → electron-builder
+                     #   → hardened runtime 서명(plist 둘) → check-bundle (31건)
+bash desktop/scripts/build-postgres.sh [--fresh]               # 내장 PG
+bash desktop/scripts/build-python.sh   [--fresh|--print-key]   # 내장 Python 3.12 + worker 층 (1.3 GB)
+bash desktop/scripts/build-ffmpeg.sh   [--fresh]               # 내장 ffmpeg·ffprobe
 ```
 
-루트 `pnpm build`·`pnpm dev`는 PG를 빌드하지 않고 Electron을 띄우지 않는다.
+캐시는 `desktop/.cache/{postgres,python,ffmpeg}`, 스테이징은 `desktop/build/<이름>` (둘 다 gitignore).
+
+**캐시가 비면 `desktop:dev`도 1.3 GB를 빌드한다** — Python 런타임 층 ~140초 + worker 층 ~150초
+(`~/.cache/uv`가 온난할 때). 캐시가 적중하는지 확인하려고 그냥 돌리면 미스일 때 그 자리에서
+빌드가 시작되므로, 두 층의 키와 적중 여부만 보려면 `build-python.sh --print-key`를 쓴다.
+
+루트 `pnpm build`·`pnpm dev`는 이 셋을 빌드하지 않고 Electron을 띄우지 않는다.
+
+## 번들 — `Resources/` 아래 넷
+
+`desktop/build/<이름>`에 스테이징한 것을 `electron-builder.yml`의 `extraResources: - from: build`가
+그대로 `Contents/Resources/<이름>`으로 싣는다. dev는 `desktop/build/`를 같은 자리로 본다 (Phase 4 §6.1).
+
+| `Resources/` | 만드는 것 |
+| --- | --- |
+| `api/` | `package.mjs` — `pnpm deploy` 산출물에 `dist/public`으로 SPA를 얹는다 |
+| `postgres/` | `build-postgres.sh` |
+| `python/` | `build-python.sh` — 인터프리터·의존성 층(`rt-<키>`) 위에 `damwha_worker` 층(`wk-<키>`) |
+| `ffmpeg/` | `build-ffmpeg.sh` |
+
+서명은 electron-builder가 아니라 `package.mjs`가 그 뒤에 한다(`identity: null`이 자동 탐색을 끈다).
+**plist 둘로 갈린다** — `build-resources/entitlements.python.plist`(키 둘)는 `Resources/python`의
+Mach-O 전수와 `Resources/ffmpeg/bin/*`에, `entitlements.mac.plist`(키 셋 — 둘 + `allow-jit`)는
+`.app` 본체에 `--deep`으로. 둘 다 `--options runtime`이다.
+
+- **안쪽을 먼저 서명한다.** `.app` 서명이 Resources를 해시로 봉인하므로 순서가 뒤집히면 봉인이
+  서명 전 내용을 가리키고 `codesign --verify`가 깨진다.
+- `.app`에 python plist를 주면 V8이 `allow-jit` 없이 CodeRange 예약에 실패해 rc=133으로 죽는다.
+  거꾸로 Python 트리에 `allow-jit`은 주지 않는다 — 안 쓰는 권한이다.
+- `Resources/postgres`만 runtime 플래그가 없고 **그것이 맞다** — 별개 프로세스라 자기 서명의
+  플래그로 돈다. `check-bundle.mjs`의 hardened runtime 단언은 python·ffmpeg 트리에만 건다.
+- 서명한 뒤 **번들 python을 실행하지 않는다.** `__pycache__`가 봉인 밖에 생기고, `.pyc`에는
+  빌드 머신의 절대 경로가 `co_filename`으로 박힌다 (`check-bundle.mjs`가 둘 다 잡는다).
 
 ## 구조 — `src/`는 "무슨 일을 맡는가"로 나눈다
 
