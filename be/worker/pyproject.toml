@@ -40,6 +40,14 @@ models = [
     "soundfile==0.14.0",
     "numpy==2.4.6",
     "mlx-whisper==0.4.3 ; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    # mlx는 mlx-whisper·mlx-lm의 전이 의존이지만 여기서 명시 고정한다. Electron Phase 4가
+    # 이 파일을 번들 설치의 단일 진실 원천으로 쓰기 때문이다 — 전이 해석에 맡기면 빌드마다
+    # 다른 버전이 들어가고 그것이 STT 출력을 바꿔도 아무 데도 기록이 남지 않는다.
+    "mlx==0.31.2 ; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    # 렌즈·요약의 LLM 서버. 2026-09-16까지 이 패키지는 pyproject·uv.lock·.venv 어디에도 없었고
+    # `uv tool install mlx-lm`으로 깐 ~/.local/bin/mlx_lm.server에 의존했다. 개발 도구가 없는
+    # 맥에는 그 경로가 없으므로 번들에 넣지 않으면 두 기능이 통째로 죽는다.
+    "mlx-lm==0.31.3 ; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "faster-whisper==1.2.1",
     "sentence-transformers==5.6.0",
     "fastapi==0.138.1",
