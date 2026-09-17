@@ -234,10 +234,13 @@ def test_run_child_defers_model_registry_import_until_after_claim(monkeypatch, t
 
 
 def test_child_spawn_uses_sys_executable_and_new_session():
-    src = inspect.getsource(m.run_supervisor_main)
-    assert "sys.executable" in src
-    assert "start_new_session=True" in src
-    assert '"python"' not in src  # 리터럴 python 금지
+    # Task 2: --run-id 전파를 위해 자식 argv 조립이 `_once_argv`로 빠졌다 — 스폰 자체
+    # (start_new_session=True)는 여전히 run_supervisor_main 안이다.
+    argv_src = inspect.getsource(m._once_argv)
+    assert "sys.executable" in argv_src
+    assert '"python"' not in argv_src  # 리터럴 python 금지
+    main_src = inspect.getsource(m.run_supervisor_main)
+    assert "start_new_session=True" in main_src
 
 
 def test_run_loop_removed():

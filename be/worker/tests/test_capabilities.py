@@ -1,3 +1,4 @@
+import logging
 import subprocess
 
 import pytest
@@ -80,3 +81,25 @@ def test_probe_mps_timeout_is_unknown(monkeypatch):
 
     monkeypatch.setattr(capabilities.subprocess, "run", fake_run)
     assert capabilities.probe_mps() is None
+
+
+def test_probe_mps_stderr_runtime_report_does_not_change_the_verdict(monkeypatch):
+    """프로브가 stderr에 `runtime {...}`을 얹어도 stdout 파싱 경로(GPU 판정)는 그대로다."""
+
+    def fake_run(*_a, **_k):
+        return subprocess.CompletedProcess([], 0, "1\n", 'runtime {"executable": "/x"}\n')
+
+    monkeypatch.setattr(capabilities.subprocess, "run", fake_run)
+    assert capabilities.probe_mps() is True
+
+
+def test_probe_mps_logs_the_probes_stderr_report(monkeypatch, caplog):
+    """부모가 프로브의 stderr를 흘려야 P4-C12의 다섯째 보고가 어딘가에 남는다."""
+
+    def fake_run(*_a, **_k):
+        return subprocess.CompletedProcess([], 0, "1\n", 'runtime {"executable": "/x"}\n')
+
+    monkeypatch.setattr(capabilities.subprocess, "run", fake_run)
+    with caplog.at_level(logging.INFO, logger="damwha_worker"):
+        capabilities.probe_mps()
+    assert 'runtime {"executable": "/x"}' in caplog.text

@@ -5,6 +5,7 @@ jobs.py가 type별 정책을 갖고 있다. 이 파일이 다루는 건 프로�
 시그널 2단계 처리, 자식 spawn과 exit code 분기, backoff, reaper 스레드.
 """
 
+import json
 import logging
 import os
 import signal
@@ -12,7 +13,7 @@ import subprocess
 import sys
 import threading
 
-from . import capabilities, console, db, wiring
+from . import capabilities, console, db, runtime_report, wiring
 from .config import load_settings
 from .dispatch import dispatch_claimed_job, handle_job, run_once  # noqa: F401 — 공개 진입점
 from .jobs import default_live_source
@@ -188,6 +189,7 @@ def _reconnect(connect_fn, shutdown, *, initial_delay: float = 1.0, max_delay: f
 
 def run_child(settings, shutdown: threading.Event) -> int:
     """--once 자식: 시그널 핸들러 설치 후 job 1건 처리."""
+    log.info("runtime %s", json.dumps(runtime_report.runtime_facts()))
 
     def _on_signal(signum, frame):
         log.info("signal %s received — stop at next stage boundary (send again to force)", signum)
@@ -261,8 +263,22 @@ def report_host_capabilities(settings) -> None:
         )
 
 
-def run_supervisor_main(settings, shutdown: threading.Event) -> None:
+def _once_argv(run_id: str | None) -> list[str]:
+    """`--once` 자식 spawn argv. 부모가 받은 `--run-id`를 그대로 이어 붙인다(있으면).
+
+    `sys.executable`은 그대로 승계한다 — 번들 python이 자동으로 자식에 전해진다.
+    """
+    argv = [sys.executable, "-m", "damwha_worker", "--once"]
+    if run_id is not None:
+        argv.append(f"{runtime_report.RUN_ID_PREFIX}{run_id}")
+    return argv
+
+
+def run_supervisor_main(
+    settings, shutdown: threading.Event, *, run_id: str | None = None
+) -> None:
     """부모: 2단계 시그널 핸들러 설치 후 supervisor 루프."""
+    log.info("runtime %s", json.dumps(runtime_report.runtime_facts()))
     child_holder = {"proc": None, "count": 0}
 
     def _on_signal(signum, frame):
@@ -282,10 +298,7 @@ def run_supervisor_main(settings, shutdown: threading.Event) -> None:
         signal.signal(sig, _on_signal)
 
     def _spawn():
-        return subprocess.Popen(
-            [sys.executable, "-m", "damwha_worker", "--once"],
-            start_new_session=True,
-        )
+        return subprocess.Popen(_once_argv(run_id), start_new_session=True)
 
     reaper_thread = threading.Thread(
         target=run_reaper_loop,
@@ -320,9 +333,10 @@ def main() -> None:  # pragma: no cover — 실모델 + 시그널 배선 (로컬
     console.install_logging(level=logging.INFO)
     settings = load_settings()
     shutdown = threading.Event()
+    run_id = runtime_report.run_id_arg(sys.argv[1:])
     if "--once" in sys.argv[1:]:
         sys.exit(run_child(settings, shutdown))
-    run_supervisor_main(settings, shutdown)
+    run_supervisor_main(settings, shutdown, run_id=run_id)
 
 
 if __name__ == "__main__":  # pragma: no cover
