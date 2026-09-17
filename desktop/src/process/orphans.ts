@@ -50,9 +50,10 @@ export interface KnownTree {
 /**
  * `ps` 한 줄에서 읽은 담화 Python 프로세스 (조건 1·2를 만족한 줄).
  *
- * `tree`는 계획의 계약(`pid·module·runId·once·argv0`)에 **더한** 필드다. 계약의 `classify(p, myRunId)`는
- * 트리 목록을 받지 않으므로, 트리를 아는 판독기가 "argv[0]이 어느 트리 아래인가"라는 사실을 여기
- * 적어 두어야 `classify`가 조건 3을 적용할 수 있다. 판정(조건 3)은 여전히 `classify`의 일이다.
+ * `tree`는 계획의 계약(`pid·module·runId·once·argv0`)에 **더한** 필드다(판정 R-7c). 계약의
+ * `classify(p, myRunId)`는 트리 목록을 받지 않으므로, 트리를 아는 판독기가 "argv[0]이 어느 트리의
+ * 인터프리터인가"라는 사실을 여기 적어 두어야 `classify`가 조건 3을 적용할 수 있다. 판정(조건 3)은 여전히
+ * `classify`의 일이다.
  */
 export interface DamwhaProcess {
   pid: number;
@@ -61,7 +62,11 @@ export interface DamwhaProcess {
   runId: string | null;
   once: boolean;
   argv0: string;
-  /** argv[0]이 그 아래에 있는 아는 트리의 `root`. 어느 트리 아래도 아니면 null. */
+  /**
+   * argv[0]을 **아는 접두사로 잘라** 얻었을 때(= 그 트리의 `python`과 같을 때) 그 트리의 `root`. 아니면 null.
+   * ` -m ` 앞을 추측한 argv[0]은 우연히 트리 아래 경로여도(`<root>/bin/foo bar/python3.12`) 트리에 넣지
+   * 않는다 — 추측은 소유의 증거가 아니다 (판정 R-7h).
+   */
   tree: string | null;
 }
 
@@ -163,42 +168,110 @@ function moduleOf(argv: readonly string[]): { module: string; rest: readonly str
   return null;
 }
 
-function treeOf(argv0: string, trees: readonly KnownTree[]): string | null {
-  for (const t of trees) {
-    const base = t.root.endsWith("/") ? t.root : `${t.root}/`;
-    if (argv0.startsWith(base)) return t.root;
-  }
-  return null;
+/**
+ * argv[0]이 아는 트리의 인터프리터와 **같으면** 그 트리. splitPsArgs는 아는 접두사를 먼저 보므로, argv[0]이 그
+ * 인터프리터와 같다는 것은 곧 규칙 1(접두사 절단)로 얻었다는 뜻이다.
+ */
+function treeOf(argv0: string, trees: readonly KnownTree[]): KnownTree | null {
+  return trees.find((t) => t.python === argv0) ?? null;
+}
+
+function under(root: string, p: string): boolean {
+  return p.startsWith(root.endsWith("/") ? root : `${root}/`);
+}
+
+/** `a`가 `b`의 비어 있지 않은 **진부분** 접두사인가. */
+function properPrefix(a: string, b: string): boolean {
+  return a !== "" && a !== b && b.startsWith(a);
+}
+
+/** 번들 `bin/`에 실제로 있는 링크 이름. 그것으로 연 REPL은 잘린 인터프리터 경로가 아니다. */
+const INTERPRETER_LINKS = new Set(["python", "python3"]);
+
+/** 아는 트리의 인터프리터 경로가 줄 끝에서 잘렸다 — `<root>/bin/pyth`. */
+function cutInterpreter(args: string, trees: readonly KnownTree[]): boolean {
+  return trees.some(
+    (t) => properPrefix(args, t.python) && under(t.root, args) && !INTERPRETER_LINKS.has(basename(args)),
+  );
+}
+
+/** 인터프리터 뒤가 `-m <우리 모듈>`의 앞부분에서 끝났다 — `-`, `-m`, `-m damwha_wor`. */
+function cutBeforeModule(argv: readonly string[]): boolean {
+  const rest = argv.slice(1).join(" ");
+  return DAMWHA_MODULES.some((m) => properPrefix(rest, `-m ${m}`));
+}
+
+/** 마지막 토큰이 우리 플래그의 앞부분에서 끝났다 — `--run-id`, `--on`. */
+function cutFlag(rest: readonly string[]): boolean {
+  const last = rest[rest.length - 1];
+  return last !== undefined && [RUN_ID_FLAG, "--once"].some((flag) => properPrefix(last, flag));
+}
+
+export interface DamwhaScan {
+  /** 조건 1·2를 만족하고 읽을 수 있는 줄. */
+  processes: DamwhaProcess[];
+  /**
+   * **아는 트리의 인터프리터 줄인데 읽을 수 없는 것** — 잘렸거나 망가진 줄. 조용히 빼면 그 고아가 "없음"으로
+   * 보인다(스펙 §6.5 "판독 실패를 '고아 없음'으로 처리하지 않는다"). 부르는 쪽이 스캔 실패로 다룬다 (판정 R-7f).
+   */
+  unreadable: PsRow[];
 }
 
 /**
- * `ps -axwwo pid,args` 출력에서 조건 1·2를 만족하는 줄을 모두 읽는다 — run-id가 없는 줄, 트리 밖의 줄도
- * 담는다(분류는 `classify`). 목록에 넣지 않는 것:
- *  - run-id 없는 번들 프로세스(capabilities 프로브·embed의 resource_tracker — 둘 다 `-c`)
- *  - `--run-id=` 토큰이 있는데 값이 `newRunId`의 모양이 아닌 줄 — 잘린 줄이다. 모듈이 잘린 줄은 조건 2에서
- *    빠진다. 잘린 줄이 빠져 "고아 없음"처럼 보이는 것과 스캔 실패의 구별은 `reapOrphans`가 한다.
+ * `ps -axwwo pid,args` 출력을 한 번에 판독한다. `processes`는 조건 1·2를 만족하는 줄 전부다 — run-id가 없는 줄,
+ * 트리 밖의 줄도 담는다(분류는 `classify`). run-id 없는 번들 프로세스(capabilities 프로브·embed의
+ * resource_tracker — 둘 다 `-c`)는 담지 않는다.
+ *
+ * `unreadable`에 드는 것 — 전부 **아는 트리의 인터프리터**(접두사 절단으로 얻은 argv[0]) 줄이다:
+ *  - `--run-id=` 첫 토큰의 값이 `newRunId`의 모양이 아니다 — 비었거나(`--run-id=`, 값이 다음 토큰으로 떨어진
+ *    `--run-id= <uuid>`), 잘렸거나, 망가졌다. 그대로 읽으면 잘린 run-id가 "내 것이 아닌 run-id"가 되어 이번
+ *    실행의 프로세스를 고아로 내린다.
+ *  - 인터프리터 뒤가 `-m <우리 모듈>`의 앞부분에서 끝났다, 또는 마지막 토큰이 `--run-id=`·`--once`의 앞부분이다.
+ *  - 줄 전체가 인터프리터 경로의 앞부분이다(`<root>/bin/pyth`). 링크 이름(`bin/python`·`bin/python3`)은 뺀다.
+ *
+ * 구별하지 못하는 것: 토큰 경계에서 정확히 잘려 `--run-id=` 토큰이 통째로 사라진 줄은 run-id 없는 줄과 같다
+ * (`external`, 손대지 않는다). 번들 python으로 연 REPL(`<root>/bin/python3.12` 한 줄)도 잘림으로 보지 않는다.
+ * 트리 밖 줄의 망가진 run-id는 어차피 `external`이라 목록에서만 빠진다. 실제 스캔은 `-ww`라 잘리지 않는다.
  */
-export function parseDamwhaProcesses(psText: string, trees: readonly KnownTree[]): DamwhaProcess[] {
+export function parseDamwhaScan(psText: string, trees: readonly KnownTree[]): DamwhaScan {
   const interpreters = trees.map((t) => t.python);
-  const out: DamwhaProcess[] = [];
-  for (const { pid, args } of psRows(psText)) {
-    const argv = splitPsArgs(args, interpreters, isBundledInterpreterName);
-    if (argv === null || !isBundledInterpreterName(argv[0])) continue;
+  const processes: DamwhaProcess[] = [];
+  const unreadable: PsRow[] = [];
+  for (const row of psRows(psText)) {
+    const argv = splitPsArgs(row.args, interpreters, isBundledInterpreterName);
+    if (argv === null || !isBundledInterpreterName(argv[0])) {
+      if (cutInterpreter(row.args, trees)) unreadable.push(row);
+      continue;
+    }
+    const tree = treeOf(argv[0], trees);
     const found = moduleOf(argv);
-    if (found === null) continue;
+    if (found === null) {
+      if (tree !== null && cutBeforeModule(argv)) unreadable.push(row);
+      continue;
+    }
+    // 첫 토큰만 읽는다 — worker의 run_id_arg와 같다.
     const flag = found.rest.find((t) => t.startsWith(RUN_ID_FLAG));
     const runId = flag === undefined ? null : flag.slice(RUN_ID_FLAG.length);
-    if (runId !== null && !RUN_ID_SHAPE.test(runId)) continue;
-    out.push({
-      pid,
+    const readable = runId === null ? !cutFlag(found.rest) : RUN_ID_SHAPE.test(runId);
+    if (!readable) {
+      if (tree !== null) unreadable.push(row);
+      continue;
+    }
+    processes.push({
+      pid: row.pid,
       module: found.module,
       runId,
       once: found.rest.includes("--once"),
       argv0: argv[0],
-      tree: treeOf(argv[0], trees),
+      tree: tree === null ? null : tree.root,
     });
   }
-  return out;
+  return { processes, unreadable };
+}
+
+/** 조건 1·2를 만족하고 읽을 수 있는 줄. 읽을 수 없는 우리 줄까지 봐야 하는 쪽은 `parseDamwhaScan`을 쓴다. */
+export function parseDamwhaProcesses(psText: string, trees: readonly KnownTree[]): DamwhaProcess[] {
+  return parseDamwhaScan(psText, trees).processes;
 }
 
 /**
@@ -220,15 +293,18 @@ export interface ReapDeps {
    * 이 순서를 뒤집어 자손을 부모보다 먼저 내린다.
    */
   descendantsOf(pid: number): Promise<number[]>;
-  /** SIGKILL. 신호가 닿지 않으면(ESRCH·EPERM) **던진다** — 회수 목록에 넣지 않는다. */
+  /**
+   * SIGKILL. 신호가 닿지 않으면(ESRCH·EPERM) **던진다** — 회수 목록에 넣지 않는다. SIGKILL 직전에는 `ps`를 한 번 더
+   * 읽어 첫 스캔과 args가 같은 pid에만 보낸다.
+   */
   kill(pid: number): void;
   /** 그 pid가 있는가 (신호 0). 신호 직전마다 부른다. */
   exists(pid: number): boolean;
   log(line: string): void;
   /**
-   * 계획의 계약에 **더한** 선택 항목. 있으면 SIGKILL 전에 SIGTERM을 보내고 `ORPHAN_TERM_GRACE_MS`를
+   * 계획의 계약에 **더한** 선택 항목(판정 R-7c). 있으면 SIGKILL 전에 SIGTERM을 보내고 `ORPHAN_TERM_GRACE_MS`를
    * 기다린다 — idle supervisor·LLM 서버·embed가 스스로 정리하고 끝날 기회다. 없으면 기다리지 않고 곧바로
-   * SIGKILL한다. 던지는 규칙은 `kill`과 같다.
+   * SIGKILL한다. 던지는 규칙은 `kill`과 같다. 기동 정리와 종료 회수가 모두 이 모드를 쓴다(판정 R-7e).
    */
   terminate?(pid: number): void;
   /** 유예 동안의 폴 간격 대기. 없으면 실제 타이머. 테스트가 시간을 대신 흘린다. */
@@ -251,6 +327,17 @@ function reasonOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** 로그에 싣는 args의 상한. 우리 argv에는 비밀이 없지만(토큰은 env로 간다) 한 줄이 한없이 길어지지 않게 한다. */
+const ARGS_LOG_MAX = 300;
+
+function clip(args: string): string {
+  return args.length <= ARGS_LOG_MAX ? args : `${args.slice(0, ARGS_LOG_MAX)}…`;
+}
+
+function argsByPid(psText: string): Map<number, string> {
+  return new Map(psRows(psText).map((r) => [r.pid, r.args]));
+}
+
 function label(p: DamwhaProcess): string {
   return `pid ${p.pid} ${p.module}${p.once ? " --once" : ""} (run-id ${p.runId ?? "없음"})`;
 }
@@ -259,6 +346,11 @@ function label(p: DamwhaProcess): string {
  * 고아 하나하나의 자손을 **신호 전에** 모두 찍고, 자손이 부모보다 앞서는 한 줄로 편다. 다른 고아의 자손인
  * 고아(`--once` 아래의 `llm_entry`)는 그 위 고아의 목록에서 한 번만 나온다 — 한 스냅샷 안의 BFS 순서라
  * 서로 다른 ps 호출의 순서가 섞이지 않는다.
+ *
+ * 자손은 표식이 없어도 함께 내린다 — 증명된 고아의 자손이라는 계보가 곧 소유의 증거다(A층의
+ * stopWorkerProcess도 자손을 SIGKILL한다). 스펙 §6.5 처분표의 "`LENS_LLM_SERVER_BIN` 서버는 손대지 않는다"는
+ * **맨 위에서 알아보는** 규칙이라, 고아 `--once` 아래에 뜬 그 서버는 여기서 함께 내려간다 (판정 R-7i). 판독이
+ * `mine`·`external`로 가른 pid만은 자손이어도 건드리지 않는다.
  */
 async function signalOrder(
   roots: readonly DamwhaProcess[],
@@ -292,14 +384,21 @@ async function signalOrder(
  *
  * 1. `ps`가 거부됐거나 프로세스 줄이 하나도 없으면 `{failed:true}` — 신호는 하나도 보내지 않는다. 실제
  *    `ps`는 적어도 launchd와 자기 자신을 내므로 빈 목록은 "고아 없음"이 아니라 스캔 실패다.
- * 2. `mine`은 로그만 남기고 둔다(방금 만든 run-id라 나올 수 없다). `external`은 건드리지 않는다.
- * 3. 고아마다 자손을 먼저 모두 찍는다. 하나라도 실패하면 `{failed:true}` — 이때도 신호는 없다.
- * 4. 자손 → 부모 순서로, 신호 직전마다 `exists`를 다시 보고 보낸다. 스캔 뒤 끝난 pid는 이미 남의
- *    번호일 수 있다. `terminate`가 있으면 SIGTERM 한 바퀴 → 유예 동안 폴 → 남은 것만 같은 순서로 SIGKILL.
- * 5. 신호가 한 번이라도 닿은 pid를 돌려준다. 내린 것은 하나하나 supervisor.log에 남는다.
+ * 2. 아는 트리의 줄인데 읽을 수 없는 것(`parseDamwhaScan`의 `unreadable`)이 하나라도 있으면 줄마다 로그를 남기고
+ *    `{failed:true}` — 신호 없음 (판정 R-7f).
+ * 3. `mine`은 로그만 남기고 둔다(방금 만든 run-id라 나올 수 없다). `external`은 건드리지 않는다.
+ * 4. 고아마다 자손을 먼저 모두 찍는다. 하나라도 실패하면 `{failed:true}` — 이때도 신호는 없다.
+ * 5. 자손 → 부모 순서로, 신호 직전마다 `exists`를 다시 보고 보낸다. `terminate`가 있으면 SIGTERM 한 바퀴 →
+ *    유예 동안 폴 → SIGTERM이 닿았는데 남은 것만 SIGKILL 단계로 간다.
+ * 6. **SIGKILL 단계 앞에서 `ps`를 한 번 더 읽는다** (판정 R-7g). 첫 스캔과 args가 글자 그대로 같은 pid에만
+ *    보낸다 — 유예만큼 낡은 번호를 OS가 다른 프로세스에 줬을 수 있다(worker-shutdown.ts 4단계와 같은 취지).
+ *    첫 스캔에 없던 번호(그 뒤에 생긴 자손), 다시 본 목록에 없거나 args가 달라진 번호는 로그만 남기고 건너뛴다.
+ *    두 번째 `ps`가 실패하면(또는 빈 목록이면) SIGKILL을 하나도 보내지 않고 `{failed:true}` — 살아 있는 고아를
+ *    확인하지 못한 채 기동을 이어 가지 않는다. 그 전에 보낸 SIGTERM은 로그에 있다.
+ * 7. 신호가 한 번이라도 닿은 pid를 돌려준다. 내린 것은 하나하나 supervisor.log에 남는다.
  *
- * `exists`는 존재만 본다 — 정체성까지 보지는 않는다. SIGTERM은 스캔 직후(밀리초)지만 SIGKILL은 유예
- * 뒤라 그 사이 pid 재사용 창이 유예만큼 있다. 막는 장치는 유예를 짧게 두는 것뿐이다.
+ * `exists`·args 대조로도 막지 못하는 창: 두 번째 `ps`와 SIGKILL 사이(밀리초), 그리고 같은 args로 다시 뜬
+ * 프로세스(우리 argv에는 run-id가 있어 이전 실행의 것과 같은 줄은 그 고아 자신뿐이다).
  */
 export async function reapOrphans(d: ReapDeps): Promise<{ reaped: number[] } | { failed: true }> {
   let text: string;
@@ -314,9 +413,17 @@ export async function reapOrphans(d: ReapDeps): Promise<{ reaped: number[] } | {
     return { failed: true };
   }
 
+  const scan = parseDamwhaScan(text, d.trees);
+  if (scan.unreadable.length > 0) {
+    for (const row of scan.unreadable) {
+      d.log(`이전 실행의 프로세스인지 읽을 수 없는 줄이 있어요 — pid ${row.pid}: ${clip(row.args)}`);
+    }
+    return { failed: true };
+  }
+
   const orphans: DamwhaProcess[] = [];
   const untouchable = new Set<number>();
-  for (const p of parseDamwhaProcesses(text, d.trees)) {
+  for (const p of scan.processes) {
     const kind = classify(p, d.runId);
     if (kind === "orphan") {
       orphans.push(p);
@@ -368,9 +475,31 @@ export async function reapOrphans(d: ReapDeps): Promise<{ reaped: number[] } | {
     pending = termed.filter((e) => d.exists(e.pid));
   }
 
+  if (pending.length === 0) return { reaped };
+  const first = argsByPid(text);
+  let again: Map<number, string>;
+  try {
+    again = argsByPid(await d.ps());
+  } catch (e) {
+    d.log(`SIGKILL 전에 프로세스를 다시 확인하지 못해 보내지 않았어요 — ps: ${reasonOf(e)}`);
+    return { failed: true };
+  }
+  if (again.size === 0) {
+    d.log("SIGKILL 전에 다시 읽은 ps 출력에 프로세스가 하나도 없어 보내지 않았어요.");
+    return { failed: true };
+  }
+
   const killed: number[] = [];
   const kill = d.kill.bind(d);
   for (const entry of pending) {
+    const was = first.get(entry.pid);
+    const now = again.get(entry.pid);
+    if (was === undefined || now !== was) {
+      const why =
+        was === undefined ? "첫 스캔에 없던 번호예요" : now === undefined ? "다시 본 목록에 없어요" : "그 번호의 명령이 바뀌었어요";
+      d.log(`SIGKILL을 보내지 않았어요 — pid ${entry.pid}: ${why}`);
+      continue;
+    }
     if (!send(entry.pid, "SIGKILL", kill)) continue;
     killed.push(entry.pid);
     note(entry, d.terminate === undefined ? "SIGKILL" : `${ORPHAN_TERM_GRACE_MS / 1000}초 안에 끝나지 않아 SIGKILL`);

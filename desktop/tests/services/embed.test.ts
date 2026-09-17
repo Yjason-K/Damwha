@@ -156,6 +156,16 @@ describe("embedSpec — 채택 규칙 (Phase 4 스펙 §6.5)", () => {
     expect(r.logs.join("\n")).toMatch(/Command failed/);
   });
 
+  it("does not adopt a listener whose line under a known tree cannot be read (a cut run-id)", async () => {
+    const r = await adoptedWith({
+      listenerPids: async () => [4327],
+      psArgs: async () => psWith(` 4327 ${PY} -m damwha_worker.embed_service --run-id=desktop-2222`),
+    });
+    expect(r.ext.kind).toBe("absent");
+    expect(r.env.EMBED_SERVICE_PORT).toBe("51234");
+    expect(r.logs.join("\n")).toMatch(/4327/);
+  });
+
   it("does not look up the port owner unless the contract probe matched", async () => {
     const listenerPids = vi.fn(async () => [4326]);
     const spec = embedSpec(deps({ probe: async () => ({ kind: "absent" }), freePort: async () => 8100, listenerPids }));

@@ -6,6 +6,7 @@ import {
   ORPHAN_POLL_MS,
   ORPHAN_TERM_GRACE_MS,
   parseDamwhaProcesses,
+  parseDamwhaScan,
   reapOrphans,
   splitPsArgs,
   type DamwhaProcess,
@@ -151,15 +152,68 @@ describe("parseDamwhaProcesses — 조건 1·2로 목록에 넣는다", () => {
     expect(pidsOf(parseDamwhaProcesses(ps, TREES))).toEqual([7404]);
   });
 
-  it("does not list a truncated line — a cut module, a cut run-id, a cut interpreter path", () => {
-    // 잘린 run-id를 그대로 읽으면 "내 것이 아닌 run-id"라 **내 프로세스를 고아로** 내린다.
+  it("does not list a truncated line under a known tree — it surfaces it as unreadable instead", () => {
+    // 잘린 run-id를 그대로 읽으면 "내 것이 아닌 run-id"라 **내 프로세스를 고아로** 내린다. 조용히 빼면
+    // 고아가 "없음"으로 보인다 — 스펙 §6.5 "판독 실패를 '고아 없음'으로 처리하지 않는다".
     const ps = [
       "  PID ARGS",
       ` 7501 ${DEV} -m damwha_wor`,
       ` 7502 ${DEV} -m damwha_worker --once --run-id=${MINE.slice(0, 20)}`,
       ` 7503 ${DEV_ROOT}/bin/pyth`,
+      ` 7504 ${DEV} -m`,
+      ` 7505 ${PKG} -m damwha_worker.embed_serv`,
+      ` 7506 ${DEV} -m damwha_worker --once --run-id`,
+      ` 7507 ${DEV} -m damwha_worker --on`,
     ].join("\n");
     expect(parseDamwhaProcesses(ps, TREES)).toEqual([]);
+    const scan = parseDamwhaScan(ps, TREES);
+    expect(scan.processes).toEqual([]);
+    expect(scan.unreadable.map((r) => r.pid)).toEqual([7501, 7502, 7503, 7504, 7505, 7506, 7507]);
+    expect(scan.unreadable[1].args).toContain("--run-id=desktop-1111");
+  });
+
+  it("treats an empty or detached --run-id= under a known tree as unreadable", () => {
+    const ps = [
+      "  PID ARGS",
+      ` 7511 ${DEV} -m damwha_worker --run-id=`,
+      ` 7512 ${DEV} -m damwha_worker --once --run-id= ${OLD}`,
+      ` 7513 ${DEV} -m damwha_worker.llm_entry --run-id= --model mlx-community/Qwen3-4B-4bit`,
+      ` 7514 ${DEV} -m damwha_worker.embed_service --run-id=DESKTOP-${OLD.slice(8)}`,
+    ].join("\n");
+    const scan = parseDamwhaScan(ps, TREES);
+    expect(scan.processes).toEqual([]);
+    expect(scan.unreadable.map((r) => r.pid)).toEqual([7511, 7512, 7513, 7514]);
+  });
+
+  it("does not call a readable known-tree line, or a line it cannot place in a tree, unreadable", () => {
+    const ps = [
+      "  PID ARGS",
+      // 개발자가 번들 python으로 연 REPL, run-id 없이 손으로 띄운 worker — 둘 다 잘림과 구별되는 모양이다.
+      ` 7521 ${DEV}`,
+      ` 7524 ${DEV_ROOT}/bin/python3`,
+      ` 7522 ${DEV} -m damwha_worker`,
+      // 트리 밖의 망가진 run-id는 어차피 external이라 스캔을 세우지 않는다.
+      ` 7523 ${REPO}/be/worker/.venv/bin/python3.12 -m damwha_worker --run-id=garbled`,
+    ].join("\n");
+    const scan = parseDamwhaScan(ps, TREES);
+    expect(scan.unreadable).toEqual([]);
+    expect(scan.processes.map((p) => [p.pid, p.runId])).toEqual([[7522, null]]);
+  });
+
+  it("reads the first --run-id= when there are two, as the worker does", () => {
+    const ps = `  PID ARGS\n 7531 ${DEV} -m damwha_worker --run-id=${OLD} --run-id=${MINE}`;
+    expect(parseDamwhaProcesses(ps, TREES)[0].runId).toBe(OLD);
+    const unreadableFirst = `  PID ARGS\n 7532 ${DEV} -m damwha_worker --run-id= --run-id=${MINE}`;
+    expect(parseDamwhaScan(unreadableFirst, TREES).unreadable.map((r) => r.pid)).toEqual([7532]);
+  });
+
+  it("places only an interpreter matched by the known prefix in a tree — a guessed argv[0] inside a tree is external", () => {
+    // 규칙 3(` -m ` 앞)이 추측한 argv[0]이 우연히 아는 트리 아래에 있어도 그 트리의 인터프리터가 아니다.
+    const guessed = `${DEV_ROOT}/bin/foo bar/python3.12`;
+    const ps = `  PID ARGS\n 7541 ${guessed} -m damwha_worker --run-id=${OLD}`;
+    const [p] = parseDamwhaProcesses(ps, TREES);
+    expect(p).toMatchObject({ pid: 7541, argv0: guessed, tree: null });
+    expect(classify(p, MINE)).toBe("external");
   });
 
   it("counts --once only as a whole token", () => {
@@ -369,6 +423,42 @@ describe("reapOrphans", () => {
     }
   });
 
+  it("fails without signalling anything when one of our lines cannot be read, and logs each", async () => {
+    const ps = `${PS}\n 5101 ${DEV} -m damwha_worker --once --run-id=desktop-2222\n 5102 ${PKG} -m damwha_worker --run-id=`;
+    const k = fakeKernel({ ps: async () => ps, alive: [...ALL, 5101, 5102] });
+    expect(await reapOrphans(k.deps)).toEqual({ failed: true });
+    expect(k.events).toEqual([]);
+    const log = k.logs.join("\n");
+    expect(log).toContain("5101");
+    expect(log).toContain("5102");
+  });
+
+  it("does not let a guessed argv[0] inside a known tree be reaped", async () => {
+    const ps = `  PID ARGS\n    1 /sbin/launchd\n 5201 ${DEV_ROOT}/bin/foo bar/python3.12 -m damwha_worker --run-id=${OLD}`;
+    const k = fakeKernel({ ps: async () => ps, alive: [1, 5201] });
+    expect(await reapOrphans(k.deps)).toEqual({ reaped: [] });
+    expect(k.events).toEqual([]);
+  });
+
+  it("takes down an unmarked escape-hatch LLM server when it is a descendant of a proven orphan", async () => {
+    // 스펙 §6.5의 "LENS_LLM_SERVER_BIN 서버는 손대지 않는다"는 **맨 위에서 알아보는** 규칙이다. 고아 --once의
+    // 자손이라는 계보 자체가 소유의 증명이고, A층(stopWorkerProcess)도 자손을 SIGKILL한다 (판정 R-7i).
+    const k = fakeKernel({ alive: ALL, tree: { 5002: [6005] } });
+    const out = await reapOrphans(k.deps);
+    expect(k.events).toContain("KILL 6005");
+    afterDescendants(k.events, 5002, [6005], "KILL");
+    expect("reaped" in out && out.reaped).toContain(6005);
+  });
+
+  it("does not SIGKILL a descendant the first scan never saw", async () => {
+    // 첫 스캔 뒤에 생긴 번호는 "그때와 같은 프로세스인가"를 댈 근거가 없다 (판정 R-7g).
+    const k = fakeKernel({ alive: [...ALL, 9999], tree: { 5001: [9999] } });
+    await reapOrphans(k.deps);
+    expect(k.events).not.toContain("KILL 9999");
+    expect(k.events).toContain("KILL 5001");
+    expect(k.logs.join("\n")).toMatch(/9999/);
+  });
+
   it("fails before any signal when the descendant scan fails", async () => {
     const k = fakeKernel({
       alive: ALL,
@@ -464,6 +554,56 @@ describe("reapOrphans", () => {
       expect(k.events).not.toContain("KILL 5002");
       expect(k.events).toContain("KILL 5001");
       expect("reaped" in out && out.reaped).not.toContain(5002);
+    });
+
+    it("re-reads ps before SIGKILL and spares a number whose command changed; the same command is killed", async () => {
+      // 5002·5003 둘 다 SIGTERM을 무시했다. 유예 동안 5003은 끝나고 그 번호를 전혀 다른 프로세스가 받았다.
+      const reused = PS.replace(/^ 5003 .*$/m, " 5003 /usr/bin/caffeinate -i");
+      let scans = 0;
+      const k = graceful({
+        alive: ALL,
+        ignoresTerm: [5002, 5003],
+        ps: async () => (++scans === 1 ? PS : reused),
+      });
+      await reapOrphans(k.deps);
+      expect(scans).toBe(2);
+      expect(k.events).toContain("KILL 5002");
+      expect(k.events).not.toContain("KILL 5003");
+      expect(k.logs.join("\n")).toMatch(/5003/);
+    });
+
+    it("skips a number the second scan no longer lists", async () => {
+      let scans = 0;
+      const k = graceful({
+        alive: ALL,
+        ignoresTerm: [5002],
+        ps: async () => (++scans === 1 ? PS : PS.replace(/^ 5002 .*\n/m, "")),
+      });
+      await reapOrphans(k.deps);
+      expect(k.events).not.toContain("KILL 5002");
+    });
+
+    it("sends no SIGKILL and reports failure when the second scan fails while orphans remain", async () => {
+      let scans = 0;
+      const k = graceful({
+        alive: ALL,
+        ignoresTerm: [5002],
+        ps: async () => {
+          if (++scans === 1) return PS;
+          throw new Error("Command failed: /bin/ps (second)");
+        },
+      });
+      expect(await reapOrphans(k.deps)).toEqual({ failed: true });
+      expect(k.events.filter((e) => e.startsWith("KILL"))).toEqual([]);
+      expect(k.events.filter((e) => e.startsWith("TERM"))).toHaveLength(4);
+      expect(k.logs.join("\n")).toMatch(/second/);
+    });
+
+    it("does not read ps a second time when SIGTERM was enough", async () => {
+      let scans = 0;
+      const k = graceful({ alive: ALL, ps: async () => (++scans, PS) });
+      await reapOrphans(k.deps);
+      expect(scans).toBe(1);
     });
 
     it("keeps the startup delay small", () => {

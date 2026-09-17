@@ -1,5 +1,5 @@
 import { exitCauseBlock } from "../diagnostics/stderr";
-import { knownTrees, parseDamwhaProcesses } from "../process/orphans";
+import { knownTrees, parseDamwhaScan } from "../process/orphans";
 import { launchPython } from "../process/python-launcher";
 import type { SpawnFn } from "../process/tool-runner";
 import type { EmbedProbe } from "./embed-probe";
@@ -49,11 +49,13 @@ function baseUrl(host: string, port: string): string {
  * 여기 오지 않는다. 아는 트리 밖(옮겨 설치한 앱)이라 정리가 손대지 않은 것도 채택하지 않는다 — run-id가
  * 그것이 앱의 자식이었다고 말한다.
  *
- * 이번 실행의 run-id를 단 embed는 채택한다. 감독자를 새로 세우는 경로(prepare가 도는 유일한 때)에는 앞선
- * 감독자가 embed를 띄운 적이 없어 나올 수 없고, 나오더라도 두 번째 모델을 올리는 것보다 낫다 — 종료 회수가
- * run-id로 거둔다.
+ * 이번 실행의 run-id를 단 embed는 **채택한다** (판정 R-7j). 스펙 문구("run-id 없는 외부 embed만")보다 넓은데,
+ * 그 경우는 나올 수 없다: prepare는 감독자를 새로 세울 때만 돌고, 그때 앞선 감독자는 embed를 띄운 적이 없다
+ * (start()가 거부할 수 있는 지점은 어떤 launch보다 앞선 prepare뿐이다). 그래도 나온다면 거부는 우리 embed 옆에
+ * 두 번째 모델을 올리는 일이고, 채택하면 종료 회수가 run-id로 거둔다.
  *
- * 주인을 읽지 못하면(ps 실패) 채택하지 않는다 — 고아가 아니라고 증명하지 못했다.
+ * 주인을 읽지 못하면(ps 실패, 또는 그 리스너가 아는 트리의 읽을 수 없는 줄) 채택하지 않는다 — 고아가 아니라고
+ * 증명하지 못했다.
  */
 async function refusal(deps: EmbedDeps, ctx: LaunchContext, port: string): Promise<string | null> {
   const pids = new Set(await deps.listenerPids(Number(port)));
@@ -64,9 +66,10 @@ async function refusal(deps: EmbedDeps, ctx: LaunchContext, port: string): Promi
   } catch (e) {
     return `${port} 포트의 embed가 누구인지 확인하지 못했어요 — ${e instanceof Error ? e.message : String(e)}`;
   }
-  const orphan = parseDamwhaProcesses(text, knownTrees(ctx)).find(
-    (p) => pids.has(p.pid) && p.runId !== null && p.runId !== ctx.runId,
-  );
+  const scan = parseDamwhaScan(text, knownTrees(ctx));
+  const cut = scan.unreadable.find((row) => pids.has(row.pid));
+  if (cut !== undefined) return `${port} 포트의 embed(pid ${cut.pid})의 명령줄을 읽을 수 없어요`;
+  const orphan = scan.processes.find((p) => pids.has(p.pid) && p.runId !== null && p.runId !== ctx.runId);
   if (orphan === undefined) return null;
   return `${port} 포트의 embed(pid ${orphan.pid}, run-id ${orphan.runId})는 이전 실행이 남긴 것이에요`;
 }
