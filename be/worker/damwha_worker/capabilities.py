@@ -29,6 +29,12 @@ log = logging.getLogger("damwha_worker")
 # 두 출처가 다른 문자열을 쓰면 화면에 뜨는 값이 출처마다 달라진다.
 _ARCH_ALIASES = {"x86_64": "x64", "AMD64": "x64", "aarch64": "arm64"}
 
+# 절대 경로로 부른다. 앱이 띄운 워커의 PATH는 `<번들 python>/bin:<번들 ffmpeg>/bin`뿐이라
+# (Phase 4 스펙 §6.2) `/usr/sbin`에만 있는 sysctl은 맨 이름으로 찾을 수 없다. PATH를 넓히지
+# 않는 이유: `/usr/bin`을 넣으면 `python3`(Xcode CLT shim) 같은 맨 이름이 번들 밖으로 풀려
+# "번들 외부를 참조하지 않는다"는 구조적 증명(P4-C13)이 깨진다. SIP가 보호하는 시스템
+# 바이너리라 자리가 바뀌지 않는다.
+_SYSCTL = "/usr/sbin/sysctl"
 _SYSCTL_TIMEOUT_SECONDS = 5.0
 # 대부분 torch import 시간이다. 콜드 캐시에서도 넉넉하게.
 _PROBE_TIMEOUT_SECONDS = 120.0
@@ -49,7 +55,7 @@ _PROBE_CODE = (
 def _sysctl(name: str) -> str | None:
     try:
         r = subprocess.run(
-            ["sysctl", "-n", name],
+            [_SYSCTL, "-n", name],
             capture_output=True,
             text=True,
             timeout=_SYSCTL_TIMEOUT_SECONDS,
