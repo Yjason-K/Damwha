@@ -21,6 +21,8 @@
  * 않는다**. 그래서 "supervisor란 무엇인가"를 적어 두고 그것만 통과시킨다.
  */
 
+import { psRows, splitPsArgs } from "../process/orphans";
+
 /**
  * argv[0]의 basename이 이 모양이어야 supervisor다 — `python`, `python3`, `python3.12`.
  *
@@ -30,8 +32,9 @@
  */
 const PYTHON_EXECUTABLE = /^python(\d+(?:\.\d+)*)?$/;
 
-/** `ps -axo pid,command`의 한 줄. 헤더("  PID COMMAND")와 빈 줄은 여기서 걸러진다. */
-const PS_ROW = /^\s*(\d+)\s+(\S.*?)\s*$/;
+function isPythonExecutable(argv0: string): boolean {
+  return PYTHON_EXECUTABLE.test(argv0.slice(argv0.lastIndexOf("/") + 1));
+}
 
 /**
  * supervisor 줄의 정의. 세 조건을 모두 만족해야 한다 — 위 실측 모양들과 브리프가 적은
@@ -50,7 +53,7 @@ const PS_ROW = /^\s*(\d+)\s+(\S.*?)\s*$/;
 function isWorkerSupervisor(tokens: readonly string[]): boolean {
   const argv0 = tokens[0];
   if (argv0 === undefined) return false;
-  if (!PYTHON_EXECUTABLE.test(argv0.slice(argv0.lastIndexOf("/") + 1))) return false;
+  if (!isPythonExecutable(argv0)) return false;
   if (tokens.includes("--once")) return false;
   return tokens.some((token, i) => token === "-m" && tokens[i + 1] === "damwha_worker");
 }
@@ -74,14 +77,19 @@ function isWorkerSupervisor(tokens: readonly string[]): boolean {
  * 서서 worker를 영영 안 띄운다. bringOnce가 detectExternal을 다시 도는 경로(준비 실패
  * 정리, exit/재시작 타이머)가 이 판정을 되풀이하므로 한 번 어긋나면 영구적이다.
  */
-export function parseWorkerProcesses(psOutput: string, ourPids: ReadonlySet<number>): number[] {
+export function parseWorkerProcesses(
+  psOutput: string,
+  ourPids: ReadonlySet<number>,
+  interpreters: readonly string[] = [],
+): number[] {
   const out: number[] = [];
-  for (const line of psOutput.split("\n")) {
-    const row = PS_ROW.exec(line);
-    if (row === null) continue;
-    const pid = Number(row[1]);
-    if (!Number.isInteger(pid) || pid <= 0) continue;
-    if (!isWorkerSupervisor(row[2].split(/\s+/))) continue;
+  for (const { pid, args } of psRows(psOutput)) {
+    // 토큰화만 바뀌었다 (Phase 4 스펙 §6.5). `args.split(/\s+/)`는 공백 든 설치 경로에서 argv[0]을
+    // `/Users/me/My`로 잘라 위 판정을 **항상 거짓**으로 만들었다 — Task 5 뒤로 앱 worker의 argv[0]이
+    // 번들 python의 절대 경로라서다. 아는 인터프리터로 먼저 자르고, 모르는 경로는 ` -m ` 앞을 읽는다
+    // (process/orphans.ts의 splitPsArgs — 그 규칙과 한계가 거기 있다). 셋째 조건까지 뜻은 그대로다.
+    const tokens = splitPsArgs(args, interpreters, isPythonExecutable);
+    if (tokens === null || !isWorkerSupervisor(tokens)) continue;
     if (ourPids.has(pid)) continue;
     out.push(pid);
   }
@@ -89,8 +97,13 @@ export function parseWorkerProcesses(psOutput: string, ourPids: ReadonlySet<numb
 }
 
 export interface WorkerScanDeps {
-  /** `ps -axo pid,command`의 출력. */
+  /** `ps -axwwo pid,args`의 출력 (process/process-tree.ts의 psArgs). */
   ps(): Promise<string>;
+  /**
+   * 앱이 정확히 아는 번들 인터프리터 경로들 (process/orphans.ts의 knownTrees). 공백 든 설치 경로를
+   * 접두사로 잘라 읽는 데 쓴다 — 판정은 바꾸지 않는다.
+   */
+  interpreters: readonly string[];
   /** 우리가 띄운 worker 런처의 pid. 아직 안 띄웠으면 undefined. */
   ownPid(): number | undefined;
   /** process/process-tree.ts의 descendantPids. root는 **빼고** 자손만 돌려준다. */
@@ -117,7 +130,7 @@ export async function listExternalWorkers(deps: WorkerScanDeps): Promise<number[
     ours.add(pid);
     for (const d of await deps.descendants(pid)) ours.add(d);
   }
-  return parseWorkerProcesses(await deps.ps(), ours);
+  return parseWorkerProcesses(await deps.ps(), ours, deps.interpreters);
 }
 
 /**

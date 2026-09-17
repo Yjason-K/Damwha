@@ -72,7 +72,7 @@ function stripSuffix(dir: string, parts: readonly string[]): string | null {
  * **한계:** `out/` 밖으로 옮겨 설치한 packaged 사본(예: `/Applications/Damwha.app`)은 저장소가
  * 어디인지 알 길이 없어 dev 트리를 모른다. 그 사본은 dev가 남긴 고아를 알아보지 못한다.
  */
-export function knownBundleDirs(ctx: LaunchContext): string[] {
+export function knownBundleDirs(ctx: Pick<LaunchContext, "bins" | "repoRoot">): string[] {
   const own = path.dirname(path.dirname(ctx.bins.python));
   let packaged: string | null;
   let dev: string | null;

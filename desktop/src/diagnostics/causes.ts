@@ -100,6 +100,17 @@ export const CAUSES = {
     text: "macOS 키체인을 쓸 수 없어 허깅페이스 토큰을 안전하게 보관할 수 없어요. 서비스를 띄우지 않았어요.",
     selfRecovers: false,
   },
+  /**
+   * 기동 게이트 — 이전 실행이 남긴 고아를 찾는 `ps` 스캔이 실패했다 (Phase 4 스펙 §6.5·§8, P4-C22). 서비스를
+   * 하나도 띄우지 않는다: 그대로 진행하면 고아 worker와 새 worker가 같은 job을 집는다. main.ts가 manual 실패로
+   * 던진다(app/reap-on-start.ts) — 같은 ps가 3·8·20초 뒤에 달라질 근거가 없고, 메뉴의 "다시 시도"가 스캔을
+   * 다시 돈다. 실패한 까닭(ps의 오류)은 supervisor.log에 있다.
+   */
+  orphanScanFailed: {
+    match: /이전 실행이 남긴 프로세스를 확인하지 못해/,
+    text: "이전 실행이 남긴 프로세스를 확인하지 못해 서비스를 띄우지 않았어요.",
+    selfRecovers: false,
+  },
   /** 토큰 검증 — HF가 401·403으로 거절했다 (스펙 §8 "토큰이 유효하지 않아요"). 토큰 화면이 사유와 함께 싣는다. */
   hfTokenInvalid: {
     match: /허깅페이스 토큰이 유효하지 않아요/,

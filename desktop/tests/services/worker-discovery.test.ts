@@ -107,6 +107,45 @@ describe("parseWorkerProcesses", () => {
     expect(parseWorkerProcesses("", new Set())).toEqual([]);
     expect(parseWorkerProcesses("  PID COMMAND", new Set())).toEqual([]);
   });
+
+  // Phase 4 스펙 §6.5 — ps의 args는 argv를 공백으로 이은 평탄한 문자열이다. Task 5 뒤로 앱 worker의 argv[0]은
+  // 번들 python의 절대 경로라, 공백이 든 설치 경로에서 `split(/\s+/)`는 argv[0]을 `/Users/me/My`로 잘랐고
+  // 이 판정은 **항상 거짓**이었다 — 고아·외부 worker 탐지가 조용히 빠졌다.
+  const SPACED = "/Users/me/My Apps/Damwha.app/Contents/Resources/python/bin/python3.12";
+
+  it("finds a supervisor under an install path with spaces, cutting the known interpreter first", () => {
+    const ps = `  PID ARGS\n 8101 ${SPACED} -m damwha_worker --run-id=desktop-x`;
+    expect(parseWorkerProcesses(ps, new Set(), [SPACED])).toEqual([8101]);
+    const dashed = "/Users/me/Apps - Work/Damwha.app/Contents/Resources/python/bin/python3.12";
+    const dashedPs = `  PID ARGS\n 8103 ${dashed} -m damwha_worker --run-id=desktop-x`;
+    expect(parseWorkerProcesses(dashedPs, new Set(), [dashed])).toEqual([8103]);
+    expect(parseWorkerProcesses(dashedPs, new Set())).toEqual([]);
+    // 이 소비자는 run-id를 요구하지 않는다 — "앱이 아닌 worker가 도는가"를 묻는다.
+    expect(parseWorkerProcesses(`  PID ARGS\n 8102 ${SPACED} -m damwha_worker`, new Set(), [SPACED])).toEqual([8102]);
+  });
+
+  it("finds a spaced supervisor it has no prefix for, and still skips its --once child", () => {
+    const venv = "/Users/me/My Projects/daewha/be/worker/.venv/bin/python3";
+    const ps = [
+      "  PID ARGS",
+      ` 8201 ${venv} -m damwha_worker`,
+      ` 8202 ${venv} -m damwha_worker --once`,
+      ` 8203 ${SPACED} -m damwha_worker --once --run-id=desktop-x`,
+    ].join("\n");
+    expect(parseWorkerProcesses(ps, new Set(), [SPACED])).toEqual([8201]);
+  });
+
+  it("does not let the spaced-path reading turn a shell or grep line into a supervisor", () => {
+    const ps = [
+      "  PID ARGS",
+      ` 8301 /bin/zsh -c ${SPACED} -m damwha_worker`,
+      " 8302 /bin/zsh -c /usr/bin/python3 -m damwha_worker",
+      " 8303 /usr/bin/grep /usr/bin/python3 -m damwha_worker",
+      " 8305 /bin/zsh -c .venv/bin/python -m damwha_worker",
+      ` 8304 /usr/bin/grep ${SPACED} -m damwha_worker`,
+    ].join("\n");
+    expect(parseWorkerProcesses(ps, new Set(), [SPACED])).toEqual([]);
+  });
 });
 
 describe("listExternalWorkers", () => {
@@ -122,6 +161,7 @@ describe("listExternalWorkers", () => {
       ps: async () => PS_APP_OWNED,
       ownPid: () => 5001,
       descendants: async () => new Set<number>(),
+      interpreters: [],
     });
     expect(out).toEqual([]);
   });
@@ -132,6 +172,7 @@ describe("listExternalWorkers", () => {
       ps: async () => PS,
       ownPid: () => 4103,
       descendants: async (root) => (root === 4103 ? new Set([4101]) : new Set<number>()),
+      interpreters: [],
     });
     expect(out).toEqual([]);
   });
@@ -145,10 +186,23 @@ describe("listExternalWorkers", () => {
         asked += 1;
         return new Set<number>();
       },
+      interpreters: [],
     });
     expect(out).toEqual([4101]);
     // 띄운 적이 없으면 자손을 물을 대상도 없다 — ps를 한 번 더 도는 값을 낭비하지 않는다.
     expect(asked).toBe(0);
+  });
+
+  it("reads the scan with the interpreters it is given — a spaced install path is found", async () => {
+    // ` -`가 든 폴더 이름이라 ` -m ` 앞을 읽는 추측은 거부한다 — 아는 인터프리터를 넘겨야만 읽힌다.
+    const spaced = "/Users/me/Apps - Work/Damwha.app/Contents/Resources/python/bin/python3.12";
+    const out = await listExternalWorkers({
+      ps: async () => `  PID ARGS\n 8401 ${spaced} -m damwha_worker --run-id=desktop-old`,
+      ownPid: () => undefined,
+      descendants: async () => new Set<number>(),
+      interpreters: [spaced],
+    });
+    expect(out).toEqual([8401]);
   });
 
   it("still reports a stranger while our own worker runs", async () => {
@@ -156,6 +210,7 @@ describe("listExternalWorkers", () => {
       ps: async () => `${PS_APP_OWNED}\n 4101 /usr/bin/python3 -m damwha_worker`,
       ownPid: () => 5001,
       descendants: async () => new Set<number>(),
+      interpreters: [],
     });
     expect(out).toEqual([4101]);
   });

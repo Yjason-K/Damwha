@@ -215,7 +215,13 @@ const specFakes: SpecDeps = {
     onPendingMigrations: () => undefined,
     onMigrationCheckSkipped: () => undefined,
   },
-  embed: { probe: async () => ({ kind: "absent" as const }), freePort: async () => 8100 },
+  embed: {
+    probe: async () => ({ kind: "absent" as const }),
+    freePort: async () => 8100,
+    listenerPids: async () => [],
+    psArgs: async () => "",
+    log: () => undefined,
+  },
   worker: { listExternal: async () => [] },
 };
 
@@ -244,7 +250,13 @@ describe("RESTART_ONLY_KEYS", () => {
     ];
     for (const [probe, env] of probes.flatMap((p) => shapes.map((e) => [p, e] as const))) {
       const { ctx, read } = recordingCtx(env);
-      const spec = embedSpec({ probe: async () => probe, freePort: async () => 54321 });
+      const spec = embedSpec({
+        probe: async () => probe,
+        freePort: async () => 54321,
+        listenerPids: async () => [],
+        psArgs: async () => "",
+        log: () => undefined,
+      });
       const written = await spec.prepare!(ctx);
       expect(read.size).toBeGreaterThan(0);
       for (const key of read) expect(RESTART_ONLY_KEYS).toContain(key);

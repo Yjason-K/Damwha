@@ -16,7 +16,13 @@ const fakes: SpecDeps = {
     onPendingMigrations: () => undefined,
     onMigrationCheckSkipped: () => undefined,
   },
-  embed: { probe: async () => ({ kind: "absent" as const }), freePort: async () => 8100 },
+  embed: {
+    probe: async () => ({ kind: "absent" as const }),
+    freePort: async () => 8100,
+    listenerPids: async () => [],
+    psArgs: async () => "",
+    log: () => undefined,
+  },
   worker: { listExternal: async () => [] },
 };
 

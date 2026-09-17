@@ -22,6 +22,21 @@ export async function listenerPids(port: number): Promise<number[]> {
 }
 
 /**
+ * 모든 프로세스의 `pid args` 목록 (Phase 4 스펙 §6.5의 판독 입력 — process/orphans.ts).
+ *
+ * `-ww`로 폭 제한을 끈다. 2026-09-18 실측으로는 파이프로 받으면 `-ww` 없이도 잘리지 않았지만(가장 긴 줄
+ * 1,463자), 잘림은 판독에서 run-id를 잘라 이번 실행의 프로세스를 고아로 보이게 하는 결함이라 그 실측에
+ * 기대지 않는다. 비영 종료·시간 초과는 거부로 올라온다 — 부르는 쪽이 "고아 없음"과 구별한다.
+ */
+export async function psArgs(): Promise<string> {
+  const { stdout } = await execFileAsync("/bin/ps", ["-axwwo", "pid,args"], {
+    timeout: 5_000,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  return stdout;
+}
+
+/**
  * rootPid의 모든 자손 pid를 `ps`의 pid/ppid 목록에서 BFS로 모은다. 개발 모드의 자식은
  * pnpm → nest(CLI) → node(dist/main) 체인이라, 실제로 포트를 bind하는 것은 추적 중인
  * pid의 손자다 — 직계 비교만으로는 dev를 오판한다(실측: Fix round 1 보고서).

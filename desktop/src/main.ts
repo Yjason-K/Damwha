@@ -1,6 +1,5 @@
 import { app, BrowserWindow, dialog, safeStorage, shell } from "electron";
 import { execFile } from "child_process";
-import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as net from "net";
 import * as path from "path";
@@ -41,7 +40,9 @@ import { askIsRecording } from "./windows/recording-bridge";
 import { installMenu } from "./windows/menu";
 import { createSupervisor } from "./services/supervisor";
 import { verifyOwnListener as checkOwnListener } from "./process/own-listener";
-import { descendantPids, listenerPids } from "./process/process-tree";
+import { descendantPids, listenerPids, psArgs } from "./process/process-tree";
+import { knownTrees, newRunId, type KnownTree } from "./process/orphans";
+import { reapBeforeStart, systemReapDeps } from "./app/reap-on-start";
 import { buildSpecs } from "./services/specs";
 import { hasOnceChild, listExternalWorkers as scanExternalWorkers } from "./services/worker-discovery";
 import { probeEmbedContract } from "./services/embed-probe";
@@ -73,8 +74,9 @@ const execFileAsync = promisify(execFile);
  * 이 **실행**의 식별자 (Phase 4 스펙 §6.5). 번들 python 자식의 argv `--run-id=`에 실려, 앱이 ps만으로
  * "이번 실행의 것"과 "이전 실행이 남긴 고아"를 가른다. 실행마다 새 값이고 실행 안에서는 고정이다 —
  * 재시도가 감독자를 다시 만들어도 같은 앱 프로세스의 자식은 같은 표식을 단다. config.json과 무관하다.
+ * 모양은 판독기가 읽는 모양과 한 자리에서 정한다 (process/orphans.ts의 newRunId).
  */
-const RUN_ID = `desktop-${randomUUID()}`;
+const RUN_ID = newRunId();
 
 /**
  * userData는 productName이 아니라 package.json의 name에서 나오므로, dev와 packaged가
@@ -648,14 +650,15 @@ function verifyOwnListener(port: number, childPid: number | undefined): Promise<
 /**
  * 감독자에 넘기는 배선. 판정 자체(우리 것을 빼는 두 줄 포함)는 services/worker-discovery.ts에
  * 있다 — 여기 두면 electron을 값으로 import하는 이 파일이라 어떤 테스트도 그것을 부를 수
- * 없고, `ours.add(pid)`를 빠뜨려도 초록불이 유지된다.
+ * 없고, `ours.add(pid)`를 빠뜨려도 초록불이 유지된다. `trees`는 공백 든 설치 경로를 접두사로 잘라
+ * 읽는 데만 쓴다 (Phase 4 스펙 §6.5).
  */
-function listExternalWorkers(): Promise<number[]> {
+function listExternalWorkers(trees: readonly KnownTree[]): Promise<number[]> {
   return scanExternalWorkers({
-    ps: async () =>
-      (await execFileAsync("/bin/ps", ["-axo", "pid,command"], { timeout: 2_000 })).stdout,
+    ps: psArgs,
     ownPid: () => supervisor?.runtimeOf("worker")?.result?.handle?.pid,
     descendants: descendantPids,
+    interpreters: trees.map((t) => t.python),
   });
 }
 
@@ -1068,6 +1071,14 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
     rotateIfNeeded(logPathOf(id));
   }
 
+  // 이전 실행이 남긴 고아를 **어떤 서비스보다 먼저** 내린다 (Phase 4 스펙 §6.5) — 뒤에 하면 새로 띄운 것과
+  // 잠시 공존하고, 고아 worker와 새 worker가 같은 job을 집는다. 트리는 dev·packaged 두 벌이다(하나의 userData를
+  // 두 빌드가 함께 쓴다) — ctx.bins는 이번 실행의 한 벌뿐이다. 스캔이 실패하면 manual 실패로 던지고
+  // (app/reap-on-start.ts) startOnce의 catch가 원인과 "다시 시도"를 그린다. 감독자가 아직 없으므로 아무것도
+  // 뜨지 않고, 메뉴의 "다시 시도"는 이 자리부터 다시 돈다.
+  const trees = knownTrees(ctx);
+  await reapBeforeStart(systemReapDeps({ runId: ctx.runId, trees, log: appendSupervisorLog }));
+
   const wantEmbed = {
     model: cfg.env.SEARCH_EMBEDDING_MODEL ?? "BAAI/bge-m3",
     dimension: Number(cfg.env.SEARCH_EMBEDDING_DIM ?? "1024"),
@@ -1133,8 +1144,14 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
         onMigrationCheckSkipped: (handle) => migrationWatch.skipped(handle),
         ...(migrationGate === undefined ? {} : { migrationGate }),
       },
-      embed: { probe: (url) => probeEmbedContract(url, wantEmbed), freePort },
-      worker: { listExternal: listExternalWorkers, stop: stopOwnWorker },
+      embed: {
+        probe: (url) => probeEmbedContract(url, wantEmbed),
+        freePort,
+        listenerPids,
+        psArgs,
+        log: appendSupervisorLog,
+      },
+      worker: { listExternal: () => listExternalWorkers(trees), stop: stopOwnWorker },
     }),
     ctx,
     { onStatus: renderStatus, log: appendSupervisorLog },
