@@ -2,9 +2,11 @@
 # desktop/scripts/build-python.sh
 #
 # 내장 Python 3.12 런타임 트리를 만든다 — python-build-standalone 3.12.11(20250818) +
-# be/worker의 models extra 전량. 결과는 desktop/.cache/python/rt-<키>/ 이고, 재배치·Mach-O 정규화·
-# 전수 서명까지 끝난 상태다. 그 위에 damwha_worker를 얹어 desktop/build/python/으로 스테이징하는
-# 것은 이 스크립트의 worker 층(Phase 4 Part 1 Task 6)이 이어서 한다.
+# be/worker의 models extra 전량. 런타임 층의 결과는 desktop/.cache/python/rt-<키>/ 이고,
+# 재배치·Mach-O 정규화·전수 서명까지 끝난 상태다. 그 위에 damwha_worker만 얹은 것이 worker 층
+# (desktop/.cache/python/wk-<키>/)이고, 그것을 desktop/build/python/으로 스테이징한다.
+# electron-builder의 extraResources(from: build)가 그 자리를 그대로 Resources/python/으로 싣고,
+# dev 앱도 같은 자리를 직접 쓴다 (스펙 §6.1).
 #
 # Electron Phase 0의 experiments/electron-phase-0/python/build.sh(태그
 # archive/electron-phase-0-packaging-validation, 참조 사본은
@@ -19,9 +21,9 @@
 # prefix가 트리 어디에도 없다. 그 대신 "빌드한 자리와 최종 자리가 다르다"는 성질은 work-<키>에서
 # 풀고 설치한 뒤 rt-<키>로 옮겨 재배치하는 것으로 유지한다.
 #
-#   bash desktop/scripts/build-python.sh              캐시가 있으면 아무것도 하지 않는다
+#   bash desktop/scripts/build-python.sh              캐시가 있으면 스테이징만
 #   bash desktop/scripts/build-python.sh --fresh      이 키의 캐시를 버리고 다시 빌드 (수십 분)
-#   bash desktop/scripts/build-python.sh --print-key  캐시 키와 적중 여부만 찍고 끝낸다
+#   bash desktop/scripts/build-python.sh --print-key  두 층의 캐시 키와 적중 여부만 찍고 끝낸다
 #
 # --print-key 가 따로 있는 이유: 캐시 키가 바뀌었는지 확인하려고 그냥 실행하면 미스일 때
 # 1.3 GB 빌드가 시작된다. 출력을 head로 끊으면 SIGPIPE로 죽어 work-* 가 반쯤 남는다.
@@ -51,6 +53,8 @@ ENTS="$DESKTOP/build-resources/entitlements.python.plist"
 WORKER="$REPO/be/worker"
 CACHE="$DESKTOP/.cache/python"
 DL="$CACHE/downloads"
+# 스테이징 자리. build-postgres.sh·build-ffmpeg.sh와 같은 관례다 (desktop/build/<이름>).
+STAGED="$DESKTOP/build/python"
 
 die() { echo "build-python: $*" >&2; exit 1; }
 say() { echo "== $*"; }
@@ -64,7 +68,7 @@ case "${1:-}" in
   *) die "usage: build-python.sh [--fresh|--print-key]" ;;
 esac
 
-for t in curl tar shasum file otool install_name_tool codesign uv; do
+for t in curl tar shasum file otool install_name_tool codesign uv ditto pgrep; do
   command -v "$t" >/dev/null 2>&1 || die "$t 가 없다 — Xcode Command Line Tools와 uv가 필요하다"
 done
 [ -f "$SUMS" ] || die "$SUMS 가 없다"
@@ -104,12 +108,16 @@ RT_WORK="$CACHE/work-$RT_KEY"
 RT_OUT="$CACHE/rt-$RT_KEY"
 RT_DONE="$CACHE/rt-$RT_KEY.complete"
 
-# wk 키 = rt 키 + damwha_worker 트리 해시. **worker 층(Task 6)이 쓴다** — 이 층은 읽지 않는다.
+# wk 키 = rt 키 + damwha_worker 트리 해시.
 #
 # 해시에서 경로를 버리지 않는다(`awk '{print $1}'` 금지). 버리면 내용이 같은 두 파일의 rename이
 # 같은 키가 되어 모듈을 옮긴 변경이 캐시에 안 잡힌다. .py만 보지도 않는다 — 패키지 안의 자원
 # 파일도 동작을 바꾼다. 경로는 $WORKER 기준 상대라 체크아웃 위치가 키를 흔들지 않는다.
+#
+# rt 키가 들어 있으므로 런타임 층이 다시 빌드되면 worker 층도 따라 무효가 된다.
 WK_KEY=$( { echo "$RT_KEY"; ( cd "$WORKER" && find damwha_worker -type f ! -name .DS_Store ! -path '*/__pycache__/*' -exec shasum -a 256 {} + | sort ); } | shasum -a 256 | cut -c1-16)
+WK_OUT="$CACHE/wk-$WK_KEY"
+WK_DONE="$CACHE/wk-$WK_KEY.complete"
 
 if [ "$PRINT_KEY" = 1 ]; then
   echo "rt 키: $RT_KEY"
@@ -118,11 +126,24 @@ if [ "$PRINT_KEY" = 1 ]; then
   else
     echo "rt 캐시: 미스 ($RT_OUT 없음)"
   fi
+  echo "wk 키: $WK_KEY"
+  if [ -f "$WK_DONE" ] && [ -x "$WK_OUT/bin/python$PY_VERSION" ]; then
+    echo "wk 캐시: 적중 ($WK_OUT)"
+  else
+    echo "wk 캐시: 미스 ($WK_OUT 없음)"
+  fi
   exit 0
 fi
 
 # ---------------------------------------------------------------------------
-# 재배치·서명 함수 일곱. worker 층(Task 6)이 그대로 다시 부른다.
+# 재배치·서명 함수 일곱. 아래 worker 층이 그중 넷을 그대로 다시 부르고
+# (relocate·sign_tree·verify_signatures·purge_pycache), 뒤 둘 중 sign_tree·verify_signatures가
+# macho_list를 안에서 쓴다.
+#
+# **fix_macho는 부르지 않는다** — 따라서 그것만 쓰는 resign도 worker 층 경로에는 안 걸린다.
+# damwha_worker는 순수 Python이라 새 Mach-O가 없고(실측: LC_RPATH 0건·LC_ID_DYLIB 0건), 런타임
+# 층이 이미 번들 밖 LC_RPATH를 전부 지운 트리에서 다시 부르면 fix_macho가 그 "0건"을 필터
+# 오류로 보고 die한다.
 # ---------------------------------------------------------------------------
 
 # 번들 안의 Mach-O 목록. Phase 0 python-build.sh:240-249 그대로다 — 검사기가 보는 집합과
@@ -512,8 +533,145 @@ build_rt() {
   say "런타임 층 빌드 $((SECONDS - started))초"
 }
 
+# ---------------------------------------------------------------------------
+# worker 층 빌드
+# ---------------------------------------------------------------------------
+
+# 진입점 확인. **find_spec으로 "찾기"만 한다 — import하지 않는다** (스펙 §6.1 8단계).
+#
+# import가 위험한 이유: embed_service는 Part 2가 고치기 전까지 모듈 수준에서 load_settings()와
+# build_text_embedder()를 부른다(embed_service.py:10-11). import하면 빌드 머신이 DATABASE_URL을
+# 요구하고 bge-m3 2.2 GB를 받는다.
+#
+# 다만 find_spec도 무부작용은 아니다 — **점 표기는 부모 패키지를 import한다**(실측:
+# pkg/__init__.py의 print가 찍히고 `pkg in sys.modules: True`). damwha_worker.* 가 안전한 것은
+# damwha_worker/__init__.py가 0바이트이기 때문이지 find_spec이 아무것도 실행하지 않아서가
+# 아니다. 그래서 그 파일이 비어 있음을 **함께 assert한다** — 목록에 모듈을 더할 때는 그 패키지의
+# __init__.py를 먼저 본다. mlx_lm.server는 mlx_lm/__init__.py를 실행하고 그것은 실제 import를
+# 담지만 다운로드는 없다.
+#
+# **find_spec은 부모가 없으면 None이 아니라 ModuleNotFoundError를 던진다**(실측:
+# find_spec('definitely_missing_pkg_xyz.sub')). 감싸지 않으면 mlx_lm이 빠졌을 때 트레이스백으로
+# 죽어 뒤의 tqdm_class assert에 닿지 못한다 — 빌드는 어차피 멈추지만 진단이 사라진다.
+#
+# damwha_worker.llm_entry는 Part 2가 만든다 — 그때 이 목록에 더한다.
+#
+# huggingface_hub만은 실제로 import한다. 다운로드 진행 훅이 snapshot_download·hf_hub_download의
+# tqdm_class 인자에 얹히므로(스펙 §6.9), 라이브러리가 그 인자를 없애면 **.app이 아니라 빌드가
+# 깨져야 한다.** 이 모듈의 import는 설정을 요구하지도 모델을 받지도 않는다.
+check_entrypoints() {
+  local root="$1"
+  "$root/bin/python$PY_VERSION" -c "
+import importlib.util as u, inspect, sys
+TARGETS = ('damwha_worker', 'damwha_worker.__main__', 'damwha_worker.embed_service',
+           'mlx_lm.server')
+missing = []
+for m in TARGETS:
+    try:
+        if u.find_spec(m) is None:
+            missing.append(m)
+    except ModuleNotFoundError:      # 부모 패키지가 없다
+        missing.append(m)
+if missing:
+    print('  없는 모듈:', ', '.join(missing)); sys.exit(1)
+# damwha_worker.* 가 안전한 것은 __init__.py 가 비어 있기 때문이다 — 그것을 못 박는다.
+import damwha_worker, pathlib
+src = pathlib.Path(damwha_worker.__file__).read_text()
+assert src.strip() == '', 'damwha_worker/__init__.py 에 부작용이 생겼다'
+import huggingface_hub
+for fn in ('snapshot_download', 'hf_hub_download'):
+    params = inspect.signature(getattr(huggingface_hub, fn)).parameters
+    assert 'tqdm_class' in params, 'huggingface_hub.' + fn + ' 에 tqdm_class 가 없다'
+print('  모듈 확인 OK')
+" || die "진입점 확인 실패 — 번들에 실린 모듈 집합이 기대와 다르다"
+}
+
+build_wk() {
+  local started=$SECONDS
+  rm -rf "$WK_OUT.tmp"
+
+  say "w1. 런타임 층 복사"
+  # ditto는 심볼릭 링크와 코드 서명을 그대로 옮긴다 (build-postgres.sh:205 관례).
+  ditto "$RT_OUT" "$WK_OUT.tmp" || die "런타임 층 복사 실패"
+
+  say "w2. damwha_worker 설치 (--no-deps)"
+  # --no-deps: 런타임 층이 uv export 목록으로 이미 전부 깔았다. 여기서 해석이 다시 돌면 고정이
+  # 흔들린다 (스펙 §6.1 3단계).
+  # --link-mode=copy: 런타임 층과 같은 이유 — 개발 venv와 inode를 공유하면 뒤의 서명이 그쪽
+  # 파일까지 건드린다.
+  uv pip install --python "$WK_OUT.tmp/bin/python$PY_VERSION" --link-mode=copy --no-deps \
+     "$WORKER" || die "uv pip install --no-deps 실패"
+
+  # 설치가 만든 것만 다시 손본다. damwha_worker는 순수 Python이라 새 Mach-O가 없지만
+  # 콘솔 스크립트 둘(damwha-worker·damwha-embed)이 bin/에 절대 경로 셔뱅으로 생기고
+  # direct_url.json({"url":"file:///…/be/worker"})도 이때 생긴다 — relocate가 그 셋을 고친다
+  # (실측: LC_RPATH 0건·LC_ID_DYLIB 0건이라 fix_macho는 부르지 않는다).
+  say "w3. 재배치 — 새 콘솔 스크립트 셔뱅 · sysconfig prefix · direct_url.json"
+  relocate "$WK_OUT.tmp"
+
+  # 전수 서명이 "그 파일만 재서명"(스펙 §6.1)과 같은 결과를 내면서 더 단순하고 멱등이다.
+  say "w4. 전수 서명"
+  sign_tree "$WK_OUT.tmp"
+
+  say "w5. arm64 서명 전수 확인"
+  verify_signatures "$WK_OUT.tmp"
+
+  say "w6. 진입점 확인"
+  check_entrypoints "$WK_OUT.tmp"
+
+  # relocate가 sysconfig를 물으며 두 번, 진입점 확인이 한 번 — 번들 python을 돌리는 것이
+  # 여기서 끝난다. 그 **뒤에** 지운다 (스펙 §6.1-b 4번).
+  say "w7. __pycache__ 정리"
+  purge_pycache "$WK_OUT.tmp"
+
+  rm -rf "$WK_OUT"
+  mv "$WK_OUT.tmp" "$WK_OUT"
+  say "worker 층 빌드 $((SECONDS - started))초"
+}
+
+# ---------------------------------------------------------------------------
+# 스테이징 — 여기서부터 번들 python을 실행하지 않는다 (스펙 §6.1 10단계)
+# ---------------------------------------------------------------------------
+
+stage() {
+  # dev 앱이 이 트리의 python을 쓰는 중이면 갈아엎지 않는다. python은 모듈을 지연 로드하므로
+  # 실행 중에 rm -rf(미스)나 __pycache__ 삭제(적중)를 하면 살아 있는 프로세스가 깨진다.
+  # build-postgres.sh:200의 가드와 같은 이유다.
+  #
+  # **pgrep -f의 패턴은 ERE다.** 경로에 + ( [ 같은 메타문자가 있으면 매치가 어긋나 가드가 조용히
+  # 꺼진다(실측: `+`가 든 경로에서 0건, 없는 같은 구조에서 1건). 그래서 -f를 패턴이 아니라
+  # "전체 인자열을 출력하라"로만 쓰고, 경로 비교는 고정 문자열(grep -F)로 한다.
+  #
+  # grep을 절대 경로로 부르는 것도 같은 이유다. 이 줄은 가드이고 가드의 실패 형태는 "조용히
+  # 꺼짐"이라, grep이 무엇으로 풀리는지에 판정을 맡기지 않는다 (개발 머신의 셸에서 grep이
+  # 바이너리를 건너뛰는 ugrep 함수로 바뀌어 있는 경우가 있다).
+  if pgrep -lf "python$PY_VERSION" 2>/dev/null | /usr/bin/grep -qF "$STAGED/bin/"; then
+    die "번들 python이 실행 중이다 — 앱을 끄고 다시 하라: $STAGED"
+  fi
+
+  if [ -f "$STAGED/.build-key" ] && [ "$(cat "$STAGED/.build-key")" = "$WK_KEY" ]; then
+    say "이미 스테이징됨: $STAGED ($WK_KEY)"
+  else
+    mkdir -p "$(dirname "$STAGED")"
+    rm -rf "$STAGED.tmp"
+    ditto "$WK_OUT" "$STAGED.tmp" || die "스테이징 복사 실패"
+    echo "$WK_KEY" > "$STAGED.tmp/.build-key"
+    rm -rf "$STAGED"
+    mv "$STAGED.tmp" "$STAGED"
+    say "스테이징: $STAGED ($(du -sh "$STAGED" | cut -f1))"
+  fi
+
+  # **캐시 적중 여부와 무관하게** 지운다. 이 자리는 산출물이면서 dev가 실제로 실행하는 트리라,
+  # pnpm desktop:dev가 한 번 돌면 co_filename이 <저장소>/desktop/build/python/…인 .pyc가 쌓인다
+  # (실측: 트리의 python을 한 번 돌린 것만으로 .pyc 448개가 전부 트리 절대 경로를 담았다).
+  # build-postgres.sh의 .build-key 관례는 "적중이면 아무것도 안 한다"인데 여기서는 적중일수록
+  # 오염된 트리가 남는다 (스펙 §6.1-b).
+  say "스테이징 트리 __pycache__ 정리"
+  purge_pycache "$STAGED"
+}
+
 if [ "$FRESH" = 1 ]; then
-  rm -rf "$RT_WORK" "$RT_OUT" "$RT_OUT.tmp" "$RT_DONE"
+  rm -rf "$RT_WORK" "$RT_OUT" "$RT_OUT.tmp" "$RT_DONE" "$WK_OUT" "$WK_OUT.tmp" "$WK_DONE"
 fi
 
 say "uv export — ${NPKG}개 패키지 (rt 키 $RT_KEY)"
@@ -525,3 +683,15 @@ else
   touch "$RT_DONE"
 fi
 say "런타임 층: $RT_OUT ($(du -sh "$RT_OUT" | cut -f1))"
+
+say "worker 층 (wk 키 $WK_KEY)"
+if [ -f "$WK_DONE" ] && [ -x "$WK_OUT/bin/python$PY_VERSION" ]; then
+  say "worker 층 캐시 적중: $WK_OUT"
+else
+  rm -rf "$WK_OUT" "$WK_OUT.tmp" "$WK_DONE"
+  build_wk
+  touch "$WK_DONE"
+fi
+say "worker 층: $WK_OUT ($(du -sh "$WK_OUT" | cut -f1))"
+
+stage
