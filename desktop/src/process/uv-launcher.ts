@@ -31,6 +31,8 @@ export interface UvLaunchOptions {
 export function launchWithUv(options: UvLaunchOptions): LaunchResult {
   const { ctx, args, logId } = options;
   if (ctx.bins.uv === null) throw new Error(CAUSES.uvMissing.text);
+  // packaged는 저장소를 모른다(repoRoot=null). 이 런처는 Task 5가 번들 python 런처로 갈아 끼우며 지운다.
+  if (ctx.repoRoot === null) throw new Error(CAUSES.repoRootMissing.text);
   const workerDir = path.join(ctx.repoRoot, "be", "worker");
   // stdout과 stderr를 하나로 합치지 않는다. worker의 ready 줄은 stderr에 나오고
   // (console.py:110, BarAwareStreamHandler(sys.stderr)), embed(uvicorn)의 접근 로그는

@@ -8,8 +8,10 @@ function ctx(env: Record<string, string> = {}): LaunchContext {
     repoRoot: "/r",
     userData: "/u",
     packaged: true,
+    databaseMode: "embedded",
     env: { EMBED_SERVICE_HOST: "127.0.0.1", EMBED_SERVICE_PORT: "8100", ...env },
-    bins: { uv: "/opt/homebrew/bin/uv" },
+    bins: { uv: "/opt/homebrew/bin/uv", python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+    runId: "desktop-test",
     searchDirs: [],
     logFile: (id) => `/u/logs/${id}.log`,
     signal: new AbortController().signal,
@@ -98,7 +100,7 @@ describe("embedSpec shape", () => {
   it("refuses to launch without uv", async () => {
     const spec = embedSpec({ probe: async () => ({ kind: "absent" }), freePort: async () => 8100 });
     await expect(
-      spec.launch({ ...ctx(), bins: { uv: null } }),
+      spec.launch({ ...ctx(), bins: { ...ctx().bins, uv: null } }),
     ).rejects.toThrow(/uv/);
   });
 });

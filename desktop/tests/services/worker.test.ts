@@ -25,8 +25,10 @@ function ctx(over: Partial<LaunchContext> = {}): LaunchContext {
     repoRoot: "/r",
     userData: "/u",
     packaged: true,
+    databaseMode: "embedded",
     env: { DATABASE_URL: "postgres://x", STORAGE_ROOT: "/u/storage" },
-    bins: { uv: "/opt/homebrew/bin/uv" },
+    bins: { uv: "/opt/homebrew/bin/uv", python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+    runId: "desktop-test",
     searchDirs: ["/opt/homebrew/bin"],
     logFile: (id) => `/u/logs/${id}.log`,
     signal: new AbortController().signal,
@@ -193,7 +195,7 @@ describe("workerSpec", () => {
 
   it("refuses to launch without uv and names what is missing (the fix is recoveryHint's)", async () => {
     const spec = workerSpec(deps() as never);
-    await expect(spec.launch(ctx({ bins: { uv: null } }))).rejects.toThrow(/uv/);
+    await expect(spec.launch(ctx({ bins: { ...ctx().bins, uv: null } }))).rejects.toThrow(/uv/);
   });
 
   it("refuses to launch when the worker .env is missing", async () => {

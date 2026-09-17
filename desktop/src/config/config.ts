@@ -2,7 +2,9 @@ import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { maskDatabaseUrl } from "./mask-db-url";
+import { CAUSES } from "../diagnostics/causes";
 import { embeddedDatabaseUrl, pgLayout } from "../services/postgres/layout";
+import type { LaunchContext } from "../services/types";
 
 /** 자식 API에 넣을 환경변수. 값은 항상 문자열이다. */
 export type ApiEnv = Record<string, string>;
@@ -15,7 +17,7 @@ export interface LoadedConfig {
   warning?: string;
   /** 로그에만 남기는 사실. 사람이 고른 적 없는 옛 기본값을 무시한 것처럼, 화면에 띄우면 할 일 없는 안내가 되는 것. */
   notes: string[];
-  /** 저장소 체크아웃. 없으면 main.ts가 추측하거나 사람에게 묻는다 (Phase 2 스펙 §6.4). */
+  /** 저장소 체크아웃. dev만 읽는다 — packaged는 무시한다 (repo-root.ts의 resolveRepoRoot, Phase 4 스펙 §6.3). */
   repoRoot?: string;
   uvBin?: string;
   /** PATH 탐색에 앞세울 디렉터리. 기본 목록을 이긴다 (process/executables.ts). */
@@ -73,13 +75,146 @@ export function defaultConfig(_userDataDir: string): ApiEnv {
 /** 앱이 두 서비스에 고정 주입하는 바인드 주소. 설정으로 여는 값이 아니다. */
 const LOOPBACK = "127.0.0.1";
 
+interface AppOwnedKey {
+  /** 경고 문구의 "왜". */
+  rule: string;
+  /** 값을 경고에 싣지 않는다. 그 문구는 화면과 supervisor.log에 남는다. */
+  secret?: true;
+}
+
 /**
- * HOST와 EMBED_SERVICE_HOST는 설정으로 열 수 없다 — 앱이 127.0.0.1을 고정 주입한다 (스펙 §6.6).
- * 여기서 걸러 내지 않으면 config.json 한 줄로 API가, 또는 **인증이 없는** embed 서비스가 LAN에
- * 열린다. embed 쪽은 be/worker/damwha_worker/embed_service.py:42가 이 값을
- * uvicorn.run(host=…)에 그대로 넘긴다.
+ * config.json이 정할 수 없는 자식 env 키. 파일에 적혀 있으면 버리고 **경고한다** — 조용히 무시하면
+ * 사용자는 자기가 적은 값이 왜 안 먹는지 알 길이 없다.
+ *
+ * - HOST·EMBED_SERVICE_HOST: 앱이 127.0.0.1을 고정 주입한다 (Phase 2 스펙 §6.6). 걸러 내지 않으면
+ *   config.json 한 줄로 API가, 또는 **인증이 없는** embed 서비스가 LAN에 열린다. embed 쪽은
+ *   be/worker/damwha_worker/embed_service.py가 이 값을 uvicorn.run(host=…)에 그대로 넘긴다.
+ * - 나머지: 번들 python 자식의 env를 앱이 주장한다 (Phase 4 스펙 §6.3, appOwnedChildEnv).
+ *   HF_TOKEN은 값을 싣지 않는다.
+ *
+ * Map인 이유: 객체 리터럴에 `key in`을 쓰면 `toString` 같은 키가 프로토타입에서 걸린다.
  */
-const APP_OWNED_KEYS = ["HOST", "EMBED_SERVICE_HOST"];
+const APP_OWNED_KEYS: ReadonlyMap<string, AppOwnedKey> = new Map<string, AppOwnedKey>([
+  ["HOST", { rule: `앱이 ${LOOPBACK}으로 고정합니다` }],
+  ["EMBED_SERVICE_HOST", { rule: `앱이 ${LOOPBACK}으로 고정합니다` }],
+  ["HF_TOKEN", { rule: "토큰은 앱이 따로 관리합니다", secret: true }],
+  ["LENS_LLM_BASE_URL", { rule: "LLM 서버 주소는 앱이 빈 포트를 골라 정합니다" }],
+  ["HF_HOME", { rule: "모델 캐시는 앱이 <userData>/models로 정합니다" }],
+  ["FFMPEG_BIN", { rule: "앱이 번들 ffmpeg를 씁니다" }],
+  ["FFPROBE_BIN", { rule: "앱이 번들 ffprobe를 씁니다" }],
+  ["PYTHONPYCACHEPREFIX", { rule: "바이트코드 캐시는 앱이 <userData>/pycache로 정합니다" }],
+  ["DAMWHA_SHARED_STATE", { rule: "앱이 DB 모드에 맞춰 정합니다" }],
+]);
+
+/** HOST가 쓰던 문구는 그대로 둔다 — 화면 문구가 바뀌면 사람이 찾던 줄을 못 찾는다. */
+function appOwnedWarning(key: string, owned: AppOwnedKey, value: unknown): string {
+  if (key === "HOST" || key === "EMBED_SERVICE_HOST") {
+    return `config.json의 ${key}는 ${owned.rule}. 파일 값은 무시했습니다: ${JSON.stringify(value)}`;
+  }
+  const shown = owned.secret === true ? "파일 값은 무시했습니다(값은 표시하지 않아요)." : `파일 값은 무시했습니다: ${JSON.stringify(value)}`;
+  return `config.json의 ${key} 값은 쓰지 않아요 — ${owned.rule}. ${shown}`;
+}
+
+/**
+ * 번들 python 자식의 env에서 **지우는** 키 (Phase 4 스펙 §6.3의 표).
+ *
+ * - PYTHONHOME·PYTHONSTARTUP·PYTHONUSERBASE: 번들 인터프리터의 prefix 해석을 흔든다.
+ * - PYTHONDONTWRITEBYTECODE: 상속되면 PYTHONPYCACHEPREFIX를 **조용히 이긴다**(실측). 트리 오염은 없지만
+ *   `import numba`가 4.5배 느려진다 — dev 터미널에 켜져 있다는 이유만으로 앱이 느려진다.
+ * - VIRTUAL_ENV·CONDA_PREFIX: 다른 환경을 가리킨다.
+ * - HF_HUB_CACHE·TRANSFORMERS_CACHE·TORCH_HOME·XDG_CACHE_HOME: HF_HOME 하나가 모두를 이긴다는 근거가
+ *   없다 — 더 구체적인 변수가 있으면 그것이 이긴다.
+ * - PYTHONPATH: **항상** 지운다. packaged에는 없어야 하고(§6.7의 격리), dev의 값은 appOwnedChildEnv가
+ *   씻은 뒤에 다시 얹는다 — 개발자 셸의 PYTHONPATH가 저장소 경로 앞에 끼지 않게.
+ *
+ * config.json에 적혀 있어도 버리고 경고한다 (P4-C30).
+ */
+export const STRIPPED_CHILD_ENV_KEYS: readonly string[] = [
+  "PYTHONHOME",
+  "PYTHONSTARTUP",
+  "PYTHONUSERBASE",
+  "PYTHONDONTWRITEBYTECODE",
+  "VIRTUAL_ENV",
+  "CONDA_PREFIX",
+  "HF_HUB_CACHE",
+  "TRANSFORMERS_CACHE",
+  "TORCH_HOME",
+  "XDG_CACHE_HOME",
+  "PYTHONPATH",
+];
+
+/** 금지 키와 값이 없는 키를 뺀 사본. 입력은 건드리지 않는다. 합성 규칙은 appOwnedChildEnv의 주석에 있다. */
+export function sanitizeChildEnv(env: Record<string, string | undefined>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) continue;
+    if (STRIPPED_CHILD_ENV_KEYS.includes(key)) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+/** 번들 python의 바이트코드 캐시 자리. main.ts가 기동 때 만든다 — 쓰기 불가한 prefix는 오류 없이 무캐시로 강등된다(실측). */
+export function pycachePrefix(userData: string): string {
+  return path.join(userData, "pycache");
+}
+
+/**
+ * worker가 LLM 서버를 띄울 주소. llm_server.py가 이 URL의 host:port에 서버를 bind하고(`_host_port` —
+ * 포트가 명시돼 있어야 한다), lens·summary 클라이언트가 `<base>/chat/completions`, 준비 프로브가
+ * `<base>/models`를 부른다 — mlx_lm.server의 OpenAI 경로라 `/v1`까지가 base다 (be/worker/.env.example과 같은 모양).
+ */
+export function llmBaseUrl(port: number): string {
+  return `http://${LOOPBACK}:${port}/v1`;
+}
+
+/**
+ * 번들 python 자식에게 **앱이 주장하는** env (Phase 4 스펙 §6.3). ctx만 읽는 순수 함수다.
+ *
+ * **합성 규칙 — 자식 env는 정확히 이것이다:**
+ *
+ * ```
+ * child = { ...sanitizeChildEnv({ ...process.env, ...ctx.env }), ...appOwnedChildEnv(ctx) }
+ * ```
+ *
+ * 1. **합친 뒤 씻는다.** 상속분만 씻고 ctx.env를 뒤에 합치면, config.json이 임의 문자열 키를
+ *    통과시키므로(loadConfig의 pass-through) PYTHONHOME 같은 키가 되돌아온다. loadConfig가 이제
+ *    그런 키를 버리지만 이 규칙은 그것에 기대지 않는다.
+ * 2. **앱 값은 씻은 뒤에 얹는다.** dev의 PYTHONPATH는 금지 목록에 있는 키라, 먼저 얹으면 씻겨 나간다.
+ *    얹는 값이 상속·config.json의 같은 키를 이긴다.
+ *
+ * 담는 것:
+ * - HF_HOME=<userData>/models, FFMPEG_BIN·FFPROBE_BIN=번들 ffmpeg 쌍, PYTHONPYCACHEPREFIX=<userData>/pycache
+ *   (번들 트리에 .pyc를 쌓지 않는다 — packaged는 봉인 밖 파일, dev는 저장소 경로가 박힌 .pyc).
+ * - PYTHONPATH=<repo>/be/worker — **dev만** (§6.7). dev인데 저장소가 없으면 던진다: PYTHONPATH 없는 dev
+ *   자식은 번들에 박힌 옛 damwha_worker를 오류 없이 돌린다.
+ * - DAMWHA_SHARED_STATE — 외부 DB 모드면 `off`(공유 행 두 writer를 끈다, §6.9), 아니면 `on`. 기본값도
+ *   on이지만 명시한다 — 개발자 셸에서 상속된 off가 내장 모드의 준비 상태 보고를 끄지 못하게.
+ * - LENS_LLM_BASE_URL — ctx.env에 있을 때 그 값을 그대로 다시 얹는다. main.ts가 기동 때 빈 포트로 정해
+ *   ctx.env에 넣는다(launchEnv). 주소를 지어내지 않는다 — 없으면 worker가 ValidationError로 크게 죽는
+ *   편이 엉뚱한 포트보다 낫다.
+ *
+ * worker와 embed가 이 한 env를 받고, worker가 띄우는 자식 셋(capabilities 프로브·`--once`·llm_entry)은
+ * env= 없이 그것을 상속한다 — 여기 넣은 값이 다섯 프로세스 모두에 닿는다.
+ *
+ * HF_TOKEN은 아직 없다 — Keychain 토큰이 이 목록에 들어온다 (Task 11).
+ */
+export function appOwnedChildEnv(ctx: LaunchContext): Record<string, string> {
+  const out: Record<string, string> = {
+    HF_HOME: path.join(ctx.userData, "models"),
+    FFMPEG_BIN: ctx.bins.ffmpeg,
+    FFPROBE_BIN: ctx.bins.ffprobe,
+    PYTHONPYCACHEPREFIX: pycachePrefix(ctx.userData),
+    DAMWHA_SHARED_STATE: ctx.databaseMode === "external" ? "off" : "on",
+  };
+  if (!ctx.packaged) {
+    if (ctx.repoRoot === null) throw new Error(CAUSES.repoRootMissing.text);
+    out.PYTHONPATH = path.join(ctx.repoRoot, "be", "worker");
+  }
+  const llm = ctx.env.LENS_LLM_BASE_URL;
+  if (llm !== undefined) out.LENS_LLM_BASE_URL = llm;
+  return out;
+}
 
 /**
  * 앱이 **자기 손으로** 얹는 값. 파일에서 오는 값을 걸러 내는 것만으로는 부족하다 —
@@ -97,6 +232,22 @@ const APP_OWNED_KEYS = ["HOST", "EMBED_SERVICE_HOST"];
  */
 function withAppOwned(env: ApiEnv): ApiEnv {
   return { ...env, EMBED_SERVICE_HOST: LOOPBACK, WORKER_ID: RUN_WORKER_ID };
+}
+
+/**
+ * 감독자가 쥘 env와 그 재적용 기준선(baseline). 이 실행이 정한 값 — 빈 포트로 고른 LLM 주소 — 은
+ * **env에만** 얹는다.
+ *
+ * 기준선에 들어가면 안 되는 이유: 재적용(refreshEnv)은 "기준선에 있는데 파일에 없는 키"를 살아 있는
+ * env에서 지운다. LENS_LLM_BASE_URL은 config.json이 정할 수 없는 키라(APP_OWNED_KEYS) 파일에 절대
+ * 없으므로, 기준선에 넣는 순간 첫 재시도가 그것을 지우고 다음 worker가 ValidationError로 죽는다.
+ * 기준선에도 파일에도 없는 키는 refreshEnv가 건드리지 않는다 — prepare()의 EMBED_SERVICE_URL과 같은 자리다.
+ */
+export function launchEnv(cfg: LoadedConfig, llmPort: number): { env: ApiEnv; baseline: ApiEnv } {
+  return {
+    env: { ...cfg.env, LENS_LLM_BASE_URL: llmBaseUrl(llmPort) },
+    baseline: withoutDbKeys(cfg.env),
+  };
 }
 
 /** 파일과 실행 중인 값이 다르지만 **바꾸지 않은** 키. 앱을 다시 켜야 반영된다. */
@@ -257,9 +408,16 @@ export function loadConfig(userDataDir: string): LoadedConfig {
   const warnings: string[] = [];
   const notes: string[] = [];
   for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-    if (APP_OWNED_KEYS.includes(key)) {
+    const owned = APP_OWNED_KEYS.get(key);
+    if (owned !== undefined) {
+      warnings.push(appOwnedWarning(key, owned, value));
+      continue;
+    }
+    if (STRIPPED_CHILD_ENV_KEYS.includes(key)) {
+      // P4-C30. 여기서 버리지 않으면 pass-through가 그대로 ctx.env에 싣는다. 합성 규칙(appOwnedChildEnv)이
+      // 어차피 씻지만, 조용히 씻으면 사람은 자기가 적은 값이 왜 안 먹는지 모른다.
       warnings.push(
-        `config.json의 ${key}는 앱이 ${LOOPBACK}으로 고정합니다. 파일 값은 무시했습니다: ${JSON.stringify(value)}`,
+        `config.json의 ${key} 값은 쓰지 않아요 — 번들 Python의 실행 환경을 바꾸는 키라 앱이 넘기지 않습니다. 파일 값은 무시했습니다: ${JSON.stringify(value)}`,
       );
       continue;
     }

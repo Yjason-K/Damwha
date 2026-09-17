@@ -1,6 +1,9 @@
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import { describe, expect, it } from "vitest";
 import { createConfigReloader, RESTART_ONLY_KEYS } from "../../src/config/config-reload";
-import type { ApiEnv, DatabaseMode, LoadedConfig } from "../../src/config/config";
+import { launchEnv, llmBaseUrl, loadConfig, type ApiEnv, type DatabaseMode, type LoadedConfig } from "../../src/config/config";
 import { embedSpec } from "../../src/services/embed";
 import { externalPostgresSpec } from "../../src/services/postgres/service";
 import { buildSpecs, type SpecDeps } from "../../src/services/specs";
@@ -192,8 +195,10 @@ function recordingCtx(env: Record<string, string>): { ctx: LaunchContext; read: 
       repoRoot: "/r",
       userData: "/u",
       packaged: true,
+      databaseMode: "embedded",
       env: proxy,
-      bins: { uv: "/opt/homebrew/bin/uv" },
+      bins: { uv: "/opt/homebrew/bin/uv", python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+      runId: "desktop-test",
       searchDirs: [],
       logFile: (id) => `/u/logs/${id}.log`,
       signal: new AbortController().signal,
@@ -314,5 +319,40 @@ describe("createConfigReloader — database mode (Phase 3 스펙 §6.6)", () => 
     const h = harness(live);
     h.file({ STORAGE_ROOT: "/u/data/storage" });
     expect(h.reload()).toEqual({ notice: null, isNew: false });
+  });
+});
+
+describe("createConfigReloader — the LLM address this run chose (Phase 4 스펙 §6.3)", () => {
+  /**
+   * LENS_LLM_BASE_URL은 main.ts가 빈 포트를 골라 감독자의 env에 얹는다. 기준선에 들어가면 파일에 그
+   * 키가 없다는 이유로 재시도가 **살아 있는 env에서 지운다** — worker가 다음 재시작에서
+   * ValidationError로 죽는다. 파일이 적은 값이 그것을 옮겨도 안 된다: LLM 서버가 그 주소에 뜬다.
+   * 진짜 loadConfig와 진짜 launchEnv로 본다 — 손으로 만든 live/baseline은 그 구성을 증명하지 못한다.
+   */
+  it("keeps it through a reload whether the file names another address or none", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-reload-"));
+    try {
+      const file = path.join(dir, "config.json");
+      fs.writeFileSync(file, JSON.stringify({ PORT: "3000", LENS_LLM_BASE_URL: "http://127.0.0.1:8000/v1" }));
+      const cfg = loadConfig(dir);
+      const live = launchEnv(cfg, 51234);
+      expect(live.env.LENS_LLM_BASE_URL).toBe(llmBaseUrl(51234));
+      expect("LENS_LLM_BASE_URL" in live.baseline).toBe(false);
+
+      const log: string[] = [];
+      const reload = createConfigReloader({
+        load: () => loadConfig(dir),
+        live: () => ({ env: live.env, baseline: live.baseline, mode: cfg.databaseMode }),
+        log: (line) => void log.push(line),
+      });
+      reload();
+      expect(live.env.LENS_LLM_BASE_URL).toBe(llmBaseUrl(51234));
+      fs.writeFileSync(file, JSON.stringify({ PORT: "3000" }));
+      reload();
+      expect(live.env.LENS_LLM_BASE_URL).toBe(llmBaseUrl(51234));
+      expect(log.filter((l) => l.includes("다시 읽었어요")).join("\n")).not.toContain("LENS_LLM_BASE_URL");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

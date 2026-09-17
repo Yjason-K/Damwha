@@ -78,10 +78,14 @@ export const CAUSES = {
       `모델 ${model}·차원 ${dimension}을 서빙하고 있어요 (앱은 ${wantModel}·${wantDimension}이 필요해요)`,
     selfRecovers: false,
   },
-  /** main.ts — 설정된 REPO_ROOT가 저장소가 아니고, 고른 폴더도 아니었다. */
+  /**
+   * dev 전용 (Phase 4 스펙 §6.3) — config.json의 REPO_ROOT도, 앱 폴더의 상위(`desktop/..`)도 저장소가 아니다.
+   * packaged는 저장소를 쓰지 않으므로 이 원인이 나지 않는다. dev의 API·마이그레이션 러너·worker의
+   * PYTHONPATH가 저장소를 요구하는 자리에서 path.join 전에 이것을 던진다.
+   */
   repoRootMissing: {
     match: /저장소 폴더를 확인하지 못했어요/,
-    text: "저장소 폴더를 확인하지 못했어요.",
+    text: "개발 실행인데 담화 저장소 폴더를 확인하지 못했어요.",
     selfRecovers: false,
   },
   /** postgres — 번들에 PG 실행 파일이 없다 (Phase 3 스펙 §6.8). */

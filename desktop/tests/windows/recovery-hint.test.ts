@@ -185,7 +185,8 @@ describe("recoveryHint — 스펙 §6.12의 표가 말하는 것", () => {
   const rows: Array<[CauseId, ServiceId, RegExp]> = [
     ["uvMissing", "worker", /config\.json의 UV_BIN/],
     ["spawnNotFound", "worker", /UV_BIN/],
-    ["repoRootMissing", "api", /폴더를 골라/],
+    // Phase 4 스펙 §6.3: dev 전용 원인이 됐고 폴더 선택창이 사라졌다 — "고르라"고 말하면 없는 창을 가리킨다.
+    ["repoRootMissing", "api", /desktop\/에서 앱을 띄웠는지.*config\.json의 REPO_ROOT/],
     ["workerEnvMissing", "worker", /be\/worker\/\.env\.example을 복사/],
     ["pendingMigrations", "api", /pnpm be:migrate/],
     ["externalWorker", "worker", /worker를 끄.*STORAGE_ROOT/],
@@ -218,8 +219,10 @@ describe("recoveryHint — 실제 어댑터가 낸 원인에서", () => {
     repoRoot: "/r",
     userData: "/u",
     packaged: true,
+    databaseMode: "embedded",
     env: {},
-    bins: { uv: "/opt/homebrew/bin/uv" },
+    bins: { uv: "/opt/homebrew/bin/uv", python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+    runId: "desktop-test",
     searchDirs: [],
     logFile: (id) => `/u/logs/${id}.log`,
     signal: new AbortController().signal,
@@ -237,7 +240,7 @@ describe("recoveryHint — 실제 어댑터가 낸 원인에서", () => {
 
   it("worker: uv missing", async () => {
     const detail = await thrown(
-      workerSpec({ listExternal: async () => [] }).launch(ctx({ bins: { uv: null } })),
+      workerSpec({ listExternal: async () => [] }).launch(ctx({ bins: { ...ctx().bins, uv: null } })),
     );
     expect(recoveryHint(s({ id: "worker", detail }))).toBe(HINTS.uvMissing);
   });
@@ -424,7 +427,7 @@ describe("recoveryHint — 실제 어댑터가 낸 원인에서", () => {
       setTimeout(() => child.emit("error", Object.assign(new Error("spawn /nowhere/uv ENOENT"), { code: "ENOENT" })), 0);
       return child;
     };
-    const launchCtx = ctx({ bins: { uv: "/nowhere/uv" }, logFile: (id) => path.join(dir, `${id}.log`) });
+    const launchCtx = ctx({ bins: { ...ctx().bins, uv: "/nowhere/uv" }, logFile: (id) => path.join(dir, `${id}.log`) });
     const sup = createSupervisor(
       [workerOnly({ launch: async (c) => launchWithUv({ ctx: c, args: ["x"], logId: "worker", spawnFn }) })],
       launchCtx,

@@ -1,5 +1,5 @@
 import type { ProcessHandle } from "../process/handle";
-import type { ApiEnv } from "../config/config";
+import type { ApiEnv, DatabaseMode } from "../config/config";
 
 export type ServiceId = "postgres" | "api" | "embed" | "worker";
 
@@ -33,12 +33,36 @@ export interface ServiceStatus {
 }
 
 export interface LaunchContext {
-  repoRoot: string;
+  /**
+   * 저장소 체크아웃. **dev 전용이다** — packaged는 번들 python·API로 돌아 저장소를 모르고, 항상 null이다
+   * (Phase 4 스펙 §6.3). 저장소가 필요한 소비자(dev API·dev 마이그레이션 러너·dev PYTHONPATH)는
+   * `path.join`에 닿기 전에 null을 `CAUSES.repoRootMissing`으로 바꾼다.
+   */
+  repoRoot: string | null;
   userData: string;
   packaged: boolean;
-  /** config.json에서 온 값 + 어댑터들의 prepare()가 기여한 값. */
+  /**
+   * 감독자를 만들 때 정한 DB 모드의 종류 (config.ts의 DatabaseMode). 실행 중에는 바뀌지 않는다.
+   * 자식 env의 DAMWHA_SHARED_STATE가 이것으로 갈린다 — worker는 자기가 어느 DB에 붙었는지 알 수
+   * 없고, URL 모양으로 모드를 추정하지 않는다 (스펙 §6.9). 외부 모드의 URL은 env의 DATABASE_URL에 있다.
+   */
+  databaseMode: DatabaseMode["kind"];
+  /**
+   * config.json에서 온 값 + 앱이 이 실행에 정한 값(main.ts의 launchEnv — LENS_LLM_BASE_URL) +
+   * 어댑터들의 prepare()가 기여한 값.
+   */
   env: ApiEnv;
-  bins: { uv: string | null };
+  /**
+   * 이 실행이 부르는 실행 파일. python·ffmpeg·ffprobe는 번들 트리 안의 절대 경로다
+   * (process/runtime-paths.ts — python은 `bin/python3.12` 실체). uv는 Task 5가 런처와 함께 지운다.
+   */
+  bins: { uv: string | null; python: string; ffmpeg: string; ffprobe: string };
+  /** 이 실행의 식별자(`desktop-<uuid>`). 자식 argv의 `--run-id=`에 실려, 앱이 ps로 자기 자식을 알아본다 (스펙 §6.5). */
+  runId: string;
+  /**
+   * **앱 자신의** 도구 탐색용(dev의 pnpm 등). 번들 python 자식의 PATH에는 가지 않는다 (스펙 §6.2) —
+   * 아직 이것을 자식 PATH에 앞세우는 것은 Task 5가 지울 uv 런처뿐이다.
+   */
   searchDirs: readonly string[];
   logFile(id: ServiceId): string;
   /**

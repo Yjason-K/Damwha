@@ -156,6 +156,11 @@ export function apiSpec(deps: ApiDeps): ServiceSpec {
       return { kind: "absent" };
     },
     async launch(ctx): Promise<LaunchResult> {
+      // dev는 저장소를, packaged는 번들 API(Resources/api)를 띄운다 — packaged의 repoRoot는 항상 null이다.
+      // dev인데 저장소가 없으면 **path.join에 닿기 전에** 원인을 낸다. 마이그레이션 게이트보다도 먼저다
+      // (dev 러너도 저장소에서 pnpm을 부른다).
+      const devRoot = ctx.packaged ? null : ctx.repoRoot;
+      if (!ctx.packaged && devRoot === null) throw new Error(CAUSES.repoRootMissing.text);
       // 스키마를 먼저 맞춘다. API가 뜬 뒤에 적용하면 부팅 중인 API가 빈 스키마를 본다.
       // 게이트 자신이 manualUnlessTagged로 감싸여 있지만, 이 호출 자리에서 다시 감싼다 — 배선이
       // 바뀌어 감싸지 않은 게이트가 들어와도 여기서 자동 재시도로 새지 않는다.
@@ -169,7 +174,7 @@ export function apiSpec(deps: ApiDeps): ServiceSpec {
         // 메커니즘 (a): 스폰 전 사전 점검 (Phase 1 §6.4).
         if (await deps.isPortOccupied(candidate)) continue;
 
-        const root = ctx.packaged ? path.join(process.resourcesPath, "api") : ctx.repoRoot;
+        const root = devRoot ?? path.join(process.resourcesPath, "api");
         const handle = (ctx.packaged ? launchPackaged : launchDev)({
           entry: path.join(root, "dist", "main.js"),
           cwd: root,

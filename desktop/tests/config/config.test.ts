@@ -5,8 +5,22 @@ import * as path from "path";
 import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { DB_ENV_KEYS, defaultConfig, LEGACY_DATABASE_URL, loadConfig, refreshEnv, withoutDbKeys } from "../../src/config/config";
+import {
+  appOwnedChildEnv,
+  DB_ENV_KEYS,
+  defaultConfig,
+  LEGACY_DATABASE_URL,
+  llmBaseUrl,
+  loadConfig,
+  pycachePrefix,
+  refreshEnv,
+  sanitizeChildEnv,
+  STRIPPED_CHILD_ENV_KEYS,
+  withoutDbKeys,
+} from "../../src/config/config";
+import { CAUSES } from "../../src/diagnostics/causes";
 import { embeddedDatabaseUrl, pgLayout } from "../../src/services/postgres/layout";
+import type { LaunchContext } from "../../src/services/types";
 
 let dir: string;
 
@@ -540,5 +554,204 @@ describe("loadConfig — database mode (Phase 3 스펙 §6.1)", () => {
   it("strips exactly the database keys for the reload baseline", () => {
     expect(DB_ENV_KEYS).toEqual(["DATABASE_URL", "STORAGE_ROOT"]);
     expect(withoutDbKeys({ DATABASE_URL: "a", STORAGE_ROOT: "b", PORT: "3000" })).toEqual({ PORT: "3000" });
+  });
+});
+
+describe("child env hygiene (Phase 4 스펙 §6.3)", () => {
+  const REPO = "/Users/me/daewha";
+  const USER_DATA = "/Users/me/Library/Application Support/Damwha";
+  const ctx = (over: Partial<LaunchContext> = {}): LaunchContext => ({
+    repoRoot: REPO,
+    userData: USER_DATA,
+    packaged: false,
+    databaseMode: "embedded",
+    env: { LENS_LLM_BASE_URL: llmBaseUrl(51234) },
+    bins: {
+      uv: null,
+      python: `${REPO}/desktop/build/python/bin/python3.12`,
+      ffmpeg: `${REPO}/desktop/build/ffmpeg/bin/ffmpeg`,
+      ffprobe: `${REPO}/desktop/build/ffmpeg/bin/ffprobe`,
+    },
+    runId: "desktop-test",
+    searchDirs: [],
+    logFile: (id) => `${USER_DATA}/logs/${id}.log`,
+    signal: new AbortController().signal,
+    ...over,
+  });
+  const packaged = (over: Partial<LaunchContext> = {}) =>
+    ctx({
+      repoRoot: null,
+      packaged: true,
+      bins: {
+        uv: null,
+        python: "/Applications/Damwha.app/Contents/Resources/python/bin/python3.12",
+        ffmpeg: "/Applications/Damwha.app/Contents/Resources/ffmpeg/bin/ffmpeg",
+        ffprobe: "/Applications/Damwha.app/Contents/Resources/ffmpeg/bin/ffprobe",
+      },
+      ...over,
+    });
+  /** Task 5의 런처가 쓰는 합성 규칙 그대로 — 합친 뒤 씻고, 앱 값을 그 뒤에 얹는다 (appOwnedChildEnv의 주석). */
+  const compose = (inherited: Record<string, string | undefined>, c: LaunchContext) => ({
+    ...sanitizeChildEnv({ ...inherited, ...c.env }),
+    ...appOwnedChildEnv(c),
+  });
+
+  it("strips exactly the keys of the spec table, PYTHONPATH and PYTHONDONTWRITEBYTECODE included", () => {
+    expect([...STRIPPED_CHILD_ENV_KEYS].sort()).toEqual(
+      [
+        "PYTHONHOME",
+        "PYTHONSTARTUP",
+        "PYTHONUSERBASE",
+        "PYTHONDONTWRITEBYTECODE",
+        "VIRTUAL_ENV",
+        "CONDA_PREFIX",
+        "HF_HUB_CACHE",
+        "TRANSFORMERS_CACHE",
+        "TORCH_HOME",
+        "XDG_CACHE_HOME",
+        "PYTHONPATH",
+      ].sort(),
+    );
+  });
+
+  it("sanitizeChildEnv drops every stripped key and every undefined value, keeps the rest, and leaves its input alone", () => {
+    const input: Record<string, string | undefined> = { HOME: "/Users/me", EMPTY: undefined, KEEP: "" };
+    for (const key of STRIPPED_CHILD_ENV_KEYS) input[key] = `/from/${key}`;
+    const before = { ...input };
+    expect(sanitizeChildEnv(input)).toEqual({ HOME: "/Users/me", KEEP: "" });
+    expect(input).toEqual(before);
+  });
+
+  it("claims the model cache, the bundled ffmpeg pair, the bytecode prefix and the LLM address", () => {
+    const c = ctx();
+    const owned = appOwnedChildEnv(c);
+    expect(owned.HF_HOME).toBe(path.join(USER_DATA, "models"));
+    expect(owned.FFMPEG_BIN).toBe(c.bins.ffmpeg);
+    expect(owned.FFPROBE_BIN).toBe(c.bins.ffprobe);
+    expect(owned.PYTHONPYCACHEPREFIX).toBe(pycachePrefix(USER_DATA));
+    expect(pycachePrefix(USER_DATA)).toBe(path.join(USER_DATA, "pycache"));
+    expect(owned.LENS_LLM_BASE_URL).toBe("http://127.0.0.1:51234/v1");
+  });
+
+  it("gives PYTHONPYCACHEPREFIX in every mode — worker, embed and llm_entry all inherit this one env", () => {
+    // Part 1 Task 6이 넘긴 계약(6회차 BL-1). 자식 스폰 3곳(capabilities·--once·llm_entry)은 env= 없이
+    // 상속하므로, 감독자가 주는 env에 들어 있으면 셋 다 덮인다. 빠지면 번들 트리에 .pyc가 쌓인다.
+    for (const c of [ctx(), packaged(), ctx({ databaseMode: "external" }), packaged({ databaseMode: "external" })]) {
+      const env = compose({ PYTHONDONTWRITEBYTECODE: "1" }, c);
+      expect(env.PYTHONPYCACHEPREFIX).toBe(path.join(USER_DATA, "pycache"));
+      // 상속되면 prefix를 조용히 이겨 import가 4.5배 느려진다.
+      expect("PYTHONDONTWRITEBYTECODE" in env).toBe(false);
+    }
+  });
+
+  it("points PYTHONPATH at the repo's worker in dev only", () => {
+    expect(appOwnedChildEnv(ctx()).PYTHONPATH).toBe(path.join(REPO, "be", "worker"));
+    expect("PYTHONPATH" in appOwnedChildEnv(packaged())).toBe(false);
+  });
+
+  it("refuses to build a dev env without a repo instead of silently running the bundled worker", () => {
+    // PYTHONPATH가 빠진 dev는 번들에 박힌 옛 damwha_worker를 오류 없이 돌린다.
+    expect(() => appOwnedChildEnv(ctx({ repoRoot: null }))).toThrow(CAUSES.repoRootMissing.text);
+  });
+
+  it("turns the shared-state writers off in external DB mode and asserts them on otherwise", () => {
+    expect(appOwnedChildEnv(ctx({ databaseMode: "external" })).DAMWHA_SHARED_STATE).toBe("off");
+    expect(appOwnedChildEnv(packaged({ databaseMode: "external" })).DAMWHA_SHARED_STATE).toBe("off");
+    expect(appOwnedChildEnv(ctx()).DAMWHA_SHARED_STATE).toBe("on");
+    // 상속된 off가 내장 모드의 준비 상태 보고를 끄지 못한다.
+    expect(compose({ DAMWHA_SHARED_STATE: "off" }, packaged()).DAMWHA_SHARED_STATE).toBe("on");
+  });
+
+  it("leaves LENS_LLM_BASE_URL out when the context has none — it never invents an address", () => {
+    expect("LENS_LLM_BASE_URL" in appOwnedChildEnv(ctx({ env: {} }))).toBe(false);
+  });
+
+  it("builds an LLM address the worker can bind — explicit loopback host and port, OpenAI /v1 base", () => {
+    // llm_server.py의 _host_port가 host·port를 URL에서 꺼내 서버를 그 자리에 띄우고, lens_client가
+    // `<base>/chat/completions`, probe_models가 `<base>/models`를 부른다.
+    const url = new URL(llmBaseUrl(51234));
+    expect(url.hostname).toBe("127.0.0.1");
+    expect(url.port).toBe("51234");
+    expect(url.pathname).toBe("/v1");
+  });
+
+  it("washes the final composition, so a key that came through ctx.env is stripped too", () => {
+    // 상속분만 씻으면 config.json이 임의 키를 되돌린다 (config.ts의 pass-through). loadConfig가 이제
+    // 금지 키를 버리지만, 합성 규칙은 그것에 기대지 않는다.
+    const c = packaged({ env: { PYTHONHOME: "/elsewhere", HF_HUB_CACHE: "/cache", LENS_LLM_BASE_URL: llmBaseUrl(1) } });
+    const env = compose({ PYTHONPATH: "/Users/me/src", VIRTUAL_ENV: "/Users/me/.venv", HOME: "/Users/me" }, c);
+    for (const key of STRIPPED_CHILD_ENV_KEYS) expect(key in env).toBe(false);
+    expect(env.HOME).toBe("/Users/me");
+  });
+
+  it("lays the app's values over the washed env, so what the app claims survives and wins", () => {
+    // 씻기 전에 얹으면 dev PYTHONPATH가 금지 목록에 씻겨 나간다.
+    const c = ctx({ env: { LENS_LLM_BASE_URL: llmBaseUrl(51234), HF_HOME: "/from/ctx" } });
+    const env = compose(
+      { PYTHONPATH: "/Users/me/src", HF_HOME: "/Users/me/.cache/huggingface", FFMPEG_BIN: "/opt/homebrew/bin/ffmpeg", LENS_LLM_BASE_URL: "http://127.0.0.1:8000/v1" },
+      c,
+    );
+    expect(env.PYTHONPATH).toBe(path.join(REPO, "be", "worker"));
+    expect(env.HF_HOME).toBe(path.join(USER_DATA, "models"));
+    expect(env.FFMPEG_BIN).toBe(c.bins.ffmpeg);
+    expect(env.LENS_LLM_BASE_URL).toBe("http://127.0.0.1:51234/v1");
+  });
+});
+
+describe("loadConfig — keys the child env must not take from config.json (P4-C30)", () => {
+  const write = (obj: Record<string, unknown>) => fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(obj));
+
+  it("drops every stripped key and names each one on screen", () => {
+    const file: Record<string, string> = {};
+    for (const key of STRIPPED_CHILD_ENV_KEYS) file[key] = `/from/${key}`;
+    write(file);
+    const c = loadConfig(dir);
+    for (const key of STRIPPED_CHILD_ENV_KEYS) {
+      expect(key in c.env).toBe(false);
+      expect(c.warning).toContain(key);
+    }
+  });
+
+  it("drops PYTHONHOME and HF_HUB_CACHE with a warning — the two P4-C30 names", () => {
+    write({ PYTHONHOME: "/opt/py", HF_HUB_CACHE: "/Volumes/x/hub", PORT: "3000" });
+    const c = loadConfig(dir);
+    expect(c.env.PYTHONHOME).toBeUndefined();
+    expect(c.env.HF_HUB_CACHE).toBeUndefined();
+    expect(c.warning).toMatch(/PYTHONHOME/);
+    expect(c.warning).toMatch(/HF_HUB_CACHE/);
+    expect(c.env.PORT).toBe("3000");
+  });
+
+  it("ignores HF_TOKEN from the file and never prints the token", () => {
+    // 이 문구는 화면과 supervisor.log에 남는다.
+    write({ HF_TOKEN: "hf_s3cretTokenValue" });
+    const c = loadConfig(dir);
+    expect(c.env.HF_TOKEN).toBeUndefined();
+    expect(c.warning).toMatch(/HF_TOKEN/);
+    expect(c.warning).not.toContain("hf_s3cretTokenValue");
+    expect(c.warning).not.toContain("s3cret");
+  });
+
+  it("ignores the child keys the app claims, and says so", () => {
+    const claimed = ["LENS_LLM_BASE_URL", "HF_HOME", "FFMPEG_BIN", "FFPROBE_BIN", "PYTHONPYCACHEPREFIX", "DAMWHA_SHARED_STATE"];
+    write(Object.fromEntries(claimed.map((k) => [k, "x"])));
+    const c = loadConfig(dir);
+    for (const key of claimed) {
+      expect(key in c.env).toBe(false);
+      expect(c.warning).toContain(key);
+    }
+  });
+
+  it("keeps the other LLM settings as pass-through values", () => {
+    write({ LENS_LLM_MODEL: "mlx-community/x", LENS_LLM_MANAGED: false });
+    const c = loadConfig(dir);
+    expect(c.env.LENS_LLM_MODEL).toBe("mlx-community/x");
+    expect(c.env.LENS_LLM_MANAGED).toBe("false");
+    expect(c.warning).toBeUndefined();
+  });
+
+  it("keeps the HOST wording for the loopback keys", () => {
+    write({ HOST: "0.0.0.0" });
+    expect(loadConfig(dir).warning).toBe('config.json의 HOST는 앱이 127.0.0.1으로 고정합니다. 파일 값은 무시했습니다: "0.0.0.0"');
   });
 });

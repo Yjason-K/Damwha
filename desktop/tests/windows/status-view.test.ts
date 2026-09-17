@@ -345,8 +345,10 @@ describe("화면이 싣는 해결 문구 — 완료 기준 P2-C7·C8·C9 (Task 1
     repoRoot: "/r",
     userData: "/u",
     packaged: true,
+    databaseMode: "embedded",
     env: {},
-    bins: { uv: "/opt/homebrew/bin/uv" },
+    bins: { uv: "/opt/homebrew/bin/uv", python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+    runId: "desktop-test",
     searchDirs: [],
     logFile: (id) => `/u/logs/${id}.log`,
     signal: new AbortController().signal,
@@ -357,7 +359,7 @@ describe("화면이 싣는 해결 문구 — 완료 기준 P2-C7·C8·C9 (Task 1
     st(id, { process: "failed", health: "unknown", detail });
 
   it("P2-C8: uv not found — names what is missing and the config.json fix, on the failure screen and in the status window", async () => {
-    const detail = await reasonOf(workerSpec({ listExternal: async () => [] }).launch(ctx({ bins: { uv: null } })));
+    const detail = await reasonOf(workerSpec({ listExternal: async () => [] }).launch(ctx({ bins: { ...ctx().bins, uv: null } })));
     const statuses = [st("postgres"), st("api"), failed("worker", detail)];
     const shell = shellStatusFrom({ statuses, restartNotice: null, logPathOf });
     expect(shell.detail).toContain("uv를 찾지 못했어요");

@@ -1,10 +1,11 @@
 import { app, BrowserWindow, dialog } from "electron";
 import { execFile } from "child_process";
+import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as net from "net";
 import * as path from "path";
 import { promisify } from "util";
-import { loadConfig, withoutDbKeys, type ApiEnv, type DatabaseMode } from "./config/config";
+import { launchEnv, loadConfig, pycachePrefix, type ApiEnv, type DatabaseMode } from "./config/config";
 import { createConfigReloader } from "./config/config-reload";
 import {
   PROBE_TIMEOUT_MS,
@@ -42,7 +43,8 @@ import { hasOnceChild, listExternalWorkers as scanExternalWorkers } from "./serv
 import { probeEmbedContract } from "./services/embed-probe";
 import { findExecutable, searchDirs } from "./process/executables";
 import { createMigrationCheckWatch } from "./services/api";
-import { isRepoRoot } from "./config/repo-root";
+import { resolveRepoRoot } from "./config/repo-root";
+import { ffmpegBinaries, pythonBinaries } from "./process/runtime-paths";
 import { rotateIfNeeded } from "./diagnostics/logs";
 import { freePort } from "./process/ports";
 import { mayAutoRetry } from "./app/retry-policy";
@@ -62,6 +64,13 @@ import type {
 } from "./services/types";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * 이 **실행**의 식별자 (Phase 4 스펙 §6.5). 번들 python 자식의 argv `--run-id=`에 실려, 앱이 ps만으로
+ * "이번 실행의 것"과 "이전 실행이 남긴 고아"를 가른다. 실행마다 새 값이고 실행 안에서는 고정이다 —
+ * 재시도가 감독자를 다시 만들어도 같은 앱 프로세스의 자식은 같은 표식을 단다. config.json과 무관하다.
+ */
+const RUN_ID = `desktop-${randomUUID()}`;
 
 /**
  * userData는 productName이 아니라 package.json의 name에서 나오므로, dev와 packaged가
@@ -104,7 +113,7 @@ let vite: ProcessHandle | null = null;
  * 포트 폴백으로 API origin이 바뀌면 이 값과 비교해 Vite를 재기동할지 정한다.
  */
 let viteApiBase: string | null = null;
-/** 이번 실행이 쓰는 저장소 체크아웃. resolveRepoRoot가 정하고 Vite 기동도 이것을 쓴다. */
+/** 이번 실행이 쓰는 저장소 체크아웃. dev만 갖는다 — resolveRepoRoot가 정하고 Vite 기동도 이것을 쓴다. */
 let repoRoot: string | null = null;
 /**
  * 담화 화면을 붙여 둔 창. boolean이 아니라 **창 자체**를 드는 이유는 shell-latch.ts에 있다 —
@@ -182,23 +191,6 @@ function appendSupervisorLog(line: string): void {
     fs.appendFileSync(file, `${new Date().toISOString()} ${line}\n`);
   } catch {
     // 로그를 못 쓰는 것은 앱이 죽을 이유가 아니다 (Phase 1의 makeSink와 같은 규칙).
-  }
-}
-
-/**
- * config.json에 한 키만 덧쓴다. 파일 전체를 다시 쓰지 않는 이유는 사용자가 손으로 넣은
- * 다른 키와 주석 없는 포맷을 보존하기 위해서다. 실패해도 기동을 막지 않는다 — 다음 실행에
- * 다시 물어보면 된다.
- */
-function saveConfigValue(userData: string, key: string, value: string): void {
-  const file = path.join(userData, "config.json");
-  try {
-    const raw = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "{}";
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    parsed[key] = value;
-    fs.writeFileSync(file, `${JSON.stringify(parsed, null, 2)}\n`);
-  } catch (e) {
-    appendSupervisorLog(`config.json에 ${key}를 저장하지 못했어요: ${String(e)}`);
   }
 }
 
@@ -658,15 +650,18 @@ function listExternalWorkers(): Promise<number[]> {
   });
 }
 
-/** 번들 PostgreSQL 트리. packaged는 Resources, dev는 build-postgres.sh가 스테이징한 자리다 (Phase 3 스펙 §6.8). */
-function pgBundleDir(): string {
-  return app.isPackaged ? path.join(process.resourcesPath, "postgres") : path.join(app.getAppPath(), "build", "postgres");
+/**
+ * 번들 트리 하나. packaged는 `Resources/<이름>`, dev는 build-*.sh가 스테이징한 `desktop/build/<이름>`이다
+ * (Phase 3 스펙 §6.8, Phase 4 스펙 §6.1). electron-builder의 `extraResources: - from: build`가 그 둘을 같은 모양으로 만든다.
+ */
+function bundleDir(name: "postgres" | "python" | "ffmpeg"): string {
+  return app.isPackaged ? path.join(process.resourcesPath, name) : path.join(app.getAppPath(), "build", name);
 }
 
 /** 상태 창의 postgres 줄에 싣는 디버깅 접속 명령 (스펙 §6.3). 번들 psql을 쓴다 — Homebrew psql이 없는 맥이다. */
 function debugCommand(): string {
   const layout = pgLayout(app.getPath("userData"));
-  return `"${pgBinaries(pgBundleDir()).psql}" -h "${layout.runDir}" -U ${DB_SUPERUSER} ${DB_NAME}`;
+  return `"${pgBinaries(bundleDir("postgres")).psql}" -h "${layout.runDir}" -U ${DB_SUPERUSER} ${DB_NAME}`;
 }
 
 function currentDatabaseMode(): DatabaseMode | null {
@@ -674,26 +669,24 @@ function currentDatabaseMode(): DatabaseMode | null {
 }
 
 /**
- * REPO_ROOT를 빌드 시점에 굽지 않는다 — 번들 안에 저장소 절대 경로가 들어가면 Phase 1의
- * 위생 기준(P1-C11)이 깨진다. 못 찾으면 사람에게 한 번 묻고 config.json에 적는다.
- * Phase 3·4가 번들을 넣으면 이 물음 자체가 사라진다 (스펙 §6.4).
+ * 번들 python이 쓸 userData 쪽 준비. 실패해도 기동을 막지 않고 한 줄 남긴다.
+ *
+ * - `<userData>/pycache`: PYTHONPYCACHEPREFIX의 자리(스펙 §6.1-b). 쓰기 불가한 prefix는 **오류 없이
+ *   무캐시로 강등된다**(실측) — 조용히 느려지므로 만들지 못했다는 사실을 남긴다.
+ * - `<userData>/.env`: worker의 Settings가 cwd의 .env를 읽는다(be/worker/damwha_worker/config.py).
+ *   앱이 넣는 env가 이기므로 실해는 없지만 있으면 혼란의 원인이라 알린다 (스펙 §6.2). 앱은 그 파일을 만들지 않는다.
  */
-async function resolveRepoRoot(configured: string | undefined): Promise<string | null> {
-  if (configured !== undefined && isRepoRoot(configured)) return configured;
-  if (!app.isPackaged) {
-    const guess = path.resolve(app.getAppPath(), "..");
-    if (isRepoRoot(guess)) return guess;
+function prepareUserDataForPython(userData: string): void {
+  try {
+    fs.mkdirSync(pycachePrefix(userData), { recursive: true });
+  } catch (e) {
+    appendSupervisorLog(`바이트코드 캐시 폴더를 만들지 못했어요 — Python이 캐시 없이 돌아 느려질 수 있어요: ${reasonOf(e)}`);
   }
-  const picked = await dialog.showOpenDialog({
-    title: "담화 저장소 폴더를 골라 주세요",
-    message: "be/worker가 있는 담화 저장소 폴더입니다.",
-    properties: ["openDirectory"],
-  });
-  const dir = picked.filePaths[0];
-  // 고른 폴더도 검증한다. 아무 폴더나 받으면 이후 모든 실패가 엉뚱한 원인을 말한다.
-  if (dir === undefined || !isRepoRoot(dir)) return null;
-  saveConfigValue(app.getPath("userData"), "REPO_ROOT", dir);
-  return dir;
+  if (fs.existsSync(path.join(userData, ".env"))) {
+    appendSupervisorLog(
+      `${path.join(userData, ".env")}가 있어요 — worker가 cwd의 .env를 읽지만 앱이 넣는 값이 이깁니다. 앱은 이 파일을 쓰지 않으니 지워도 됩니다.`,
+    );
+  }
 }
 
 /** 감독자의 지금 상태를 셸 화면 한 장으로 접는다. 판정은 status-view.ts의 shellStatusFrom에 있다. */
@@ -926,8 +919,8 @@ function announceRestartNotice(mine: number, notice: string): void {
  * 한 번만 적는가)은 config-reload.ts에 있다 — 여기 두면 어떤 테스트도 그것을 부를 수 없고,
  * 실제로 그 자리에 있는 동안 결함 둘이 그 안에서 났다 (재리뷰 §4-1·§4-2).
  *
- * 자식 env만 다시 읽는다. ctx.bins(uv)와 repoRoot는 여기서 갱신해도 소용이 없다 —
- * 번들 경로와 모드도 감독자 생성 때 한 번 정해진다. 그 넷을
+ * 자식 env만 다시 읽는다. ctx.bins·runId·repoRoot는 여기서 갱신해도 소용이 없다 —
+ * 번들 경로와 모드도 감독자 생성 때 한 번 정해진다. 그것들을
  * 반영하려면 감독자를 다시 만들어야 하고, 그것은 첫 감독자가 쥔 자식 셋의 유일한 참조를
  * 버리는 일이라 P2-C4가 금지한다. 그러므로 실패 화면의 "값을 고치면 다시 시도합니다"가 참인
  * 범위는 PORT·EMBED_SERVICE_PORT 같은 **자식 env 키**다 — DATABASE_URL·STORAGE_ROOT는 여기 들지
@@ -983,19 +976,30 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
     return false;
   }
 
-  const resolved = await resolveRepoRoot(cfg.repoRoot);
-  if (resolved === null) throw new Error(CAUSES.repoRootMissing.text);
+  // packaged는 항상 null이다 — 저장소를 묻지도 읽지도 않는다. dev만 못 찾으면 여기서 멈춘다 (스펙 §6.3).
+  const resolved = resolveRepoRoot({ packaged: app.isPackaged, configured: cfg.repoRoot, appPath: app.getAppPath() });
+  if (!app.isPackaged && resolved === null) throw new Error(CAUSES.repoRootMissing.text);
   repoRoot = resolved;
 
   const dirs = searchDirs(app.getPath("home"), cfg.extraPath);
   const uv = cfg.uvBin ?? findExecutable("uv", dirs);
+  const python = pythonBinaries(bundleDir("python"));
+  const ffmpeg = ffmpegBinaries(bundleDir("ffmpeg"));
+  prepareUserDataForPython(userData);
+  // LLM 서버의 주소는 앱이 빈 포트로 정한다. worker는 그 포트에 서버가 이미 있으면 **재사용만** 하고
+  // 소유하지 않는다(llm_server.py) — 고정 포트(개발 .env의 8000)를 쓰면 사람이 손으로 띄운 서버를 앱의
+  // worker가 그대로 쓰게 되고, 그 서버의 모델도 수명도 앱이 모른다. 실제 bind는 job 직전이라 그 사이 다른
+  // 프로세스가 포트를 가져갈 수 있고, 그때는 LLM 서버 기동 실패로 드러난다.
+  const { env, baseline } = launchEnv(cfg, await freePort());
 
   const ctx: Omit<LaunchContext, "signal"> = {
     repoRoot: resolved,
     userData,
     packaged: app.isPackaged,
-    env: cfg.env,
-    bins: { uv },
+    databaseMode: cfg.databaseMode.kind,
+    env,
+    bins: { uv, python: python.python, ffmpeg: ffmpeg.ffmpeg, ffprobe: ffmpeg.ffprobe },
+    runId: RUN_ID,
     searchDirs: dirs,
     logFile: logPathOf,
   };
@@ -1011,7 +1015,7 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
 
   const mode = cfg.databaseMode;
   const layout = pgLayout(userData);
-  const binaries = pgBinaries(pgBundleDir());
+  const binaries = pgBinaries(bundleDir("postgres"));
   const postgres =
     mode.kind === "external"
       ? externalPostgresSpec()
@@ -1031,15 +1035,20 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
     for (const [k, v] of Object.entries(process.env)) if (typeof v === "string") out[k] = v;
     return { ...out, ...ctx.env };
   };
+  // packaged는 번들 러너라 저장소가 필요 없다. dev 러너는 저장소에서 pnpm을 부르므로, 저장소가 없으면
+  // cwd에 닿기 전에 원인을 낸다 — 위에서 dev는 이미 멈췄으니 타입을 세우는 가드다.
+  const migrationRunner = () => {
+    if (app.isPackaged) return packagedMigrationRunner({ apiDir: path.join(process.resourcesPath, "api"), env: runnerEnv() });
+    if (resolved === null) throw new Error(CAUSES.repoRootMissing.text);
+    return devMigrationRunner({ repoRoot: resolved, env: runnerEnv(), runTool });
+  };
   const migrationGate =
     mode.kind === "external"
       ? undefined
-      : (signal: AbortSignal) =>
+      : async (signal: AbortSignal) =>
           runMigrationGate(
             {
-              runner: app.isPackaged
-                ? packagedMigrationRunner({ apiDir: path.join(process.resourcesPath, "api"), env: runnerEnv() })
-                : devMigrationRunner({ repoRoot: resolved, env: runnerEnv(), runTool }),
+              runner: migrationRunner(),
               runTool,
               binaries,
               layout,
@@ -1048,8 +1057,8 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
             signal,
           );
 
-  // 자식을 띄우기 전에 한 번 더 본다. 여기까지 오는 길에는 resolveRepoRoot의 폴더 선택
-  // 대화상자가 있고(packaged 첫 실행에서는 상한이 없다), 그 사이에 ⌘Q가 들어오면 stopAll()은
+  // 자식을 띄우기 전에 한 번 더 본다. 여기까지 오는 길에는 await가 있고(준비 화면, 빈 포트 조회 —
+  // 예전에는 상한 없는 폴더 선택 대화상자도 있었다), 그 사이에 ⌘Q가 들어오면 stopAll()은
   // supervisor를 null로 스냅숏해 아무것도 정리하지 않고 끝난다. 그 **뒤에** 이 컨티뉴에이션이
   // postmaster와 detached 자식 둘을 띄우면 아무도 정리하지 않는 프로세스가 된다.
   // 감독자가 선 뒤로는 감독자 자신의 stopping/pending이 같은 일을 하므로, 구멍은 정확히
@@ -1078,7 +1087,7 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
   // start()가 끝나기 전에 대입해야 한다 — onStatus가 그 사이에 여러 번 발화하고, shellStatusOf()는
   // supervisor에서 상태를 읽는다. 대입이 뒤면 기동 화면에 서비스 줄이 한 줄도 안 뜬다.
   supervisor = created;
-  launchCtx = { ctx, baseline: withoutDbKeys(cfg.env), mode: cfg.databaseMode };
+  launchCtx = { ctx, baseline, mode: cfg.databaseMode };
 
   try {
     await created.start();

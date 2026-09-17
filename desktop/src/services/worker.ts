@@ -119,6 +119,8 @@ export function workerSpec(deps: WorkerDeps): ServiceSpec {
       // ".env 없음"으로 넘어져, uv를 못 찾은 진짜 원인이 화면에 뜨지 않는다. launchWithUv도
       // 같은 검사를 하지만 그건 .env를 통과한 뒤라 이미 늦다.
       if (ctx.bins.uv === null) throw new Error(CAUSES.uvMissing.text);
+      // packaged는 저장소를 모른다(repoRoot=null). 이 .env 검사는 Task 5가 지운다 — 앱이 필요한 env를 전부 넣는다.
+      if (ctx.repoRoot === null) throw new Error(CAUSES.repoRootMissing.text);
       const envFile = path.join(ctx.repoRoot, "be", "worker", ".env");
       if (!exists(envFile)) throw new Error(CAUSES.workerEnvMissing.text);
       // 감시를 spawn **전에** 만들어 onStderr로 넘긴다 — 첫 청크부터 빠짐없이 본다.
