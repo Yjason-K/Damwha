@@ -49,16 +49,39 @@ function machOFiles(root) {
 // --arch arm64는 통과시키고, 그 반대도 성립한다 — 이 번들에 universal Mach-O가 13개 있다.
 // x86_64 전용 thin 파일에는 --arch arm64가 "object file format unrecognized"로 rc 1을 내는데
 // 그것은 **무서명이 아니라 arm64 슬라이스가 없다는 뜻**이라 따로 세어 보고한다.
+//
+// **--verify만으로는 계약을 못 지킨다.** linker ad-hoc 서명(flags=0x20002(adhoc,linker-signed),
+// entitlement 0개, hardened runtime 없음)도 rc 0으로 통과한다 — `desktop/build/ffmpeg/bin/ffmpeg`
+// 사본으로 실측했다. 그래서 "서명이 있는가"와 "**계약대로** 서명됐는가"를 가른다: 통과한 파일마다
+// codesign -d로 CodeDirectory의 flags를 읽어 runtime이 붙어 있는지 본다. 스펙 §6.1이 이름 붙인
+// 실패 모드 — package.mjs의 `signAll(ffmpegTargets, …)` 한 줄이 사라지면 ffmpeg는 링커 ad-hoc
+// 서명만 가진 채 hardened runtime .app 안에 들어간다 — 를 이것이 잡는다. 아래 18번의 entitlement
+// 표본은 파일 몇 개만 보므로 그물이 되지 못한다. 454개 전수로 3.4초다(실측).
+//
+// **postgres 트리에는 걸지 않는다.** 별개 프로세스라 자기 서명의 플래그로 돌고, runtime 플래그
+// 없는 ad-hoc 서명인 것이 맞다 — 위 9~14번 묶음의 postgres 서명 검사가 plain --verify인 것이 그래서다.
 function verifyArm64(files) {
   const unsigned = [];
   const noArm64 = [];
+  const noRuntime = [];
   for (const f of files) {
     const r = spawnSync("codesign", ["--verify", "--arch", "arm64", f], { encoding: "utf8" });
-    if (r.status === 0) continue;
-    const why = (r.stderr ?? "").trim();
-    (/object file format unrecognized/.test(why) ? noArm64 : unsigned).push(`${f} (${why.split("\n")[0]})`);
+    if (r.status !== 0) {
+      const why = (r.stderr ?? "").trim();
+      (/object file format unrecognized/.test(why) ? noArm64 : unsigned).push(`${f} (${why.split("\n")[0]})`);
+      continue;
+    }
+    // codesign -d는 정보를 stdout이 아니라 stderr에 쓴다 (아래 7번과 같다).
+    const d = spawnSync("codesign", ["-d", "--verbose=4", "--arch", "arm64", f], { encoding: "utf8" });
+    const m = /^CodeDirectory\b.*\bflags=(\S+)/m.exec(d.stderr ?? "");
+    if (m === null) {
+      // 플래그를 못 읽은 것을 통과로 삼지 않는다 — 검사가 조용히 무력해진다.
+      noRuntime.push(`${f} (flags 줄을 읽지 못했다: ${(d.stderr ?? "").trim().split("\n")[0] || `rc ${d.status}`})`);
+    } else if (!/\bruntime\b/.test(m[1])) {
+      noRuntime.push(`${f} (flags=${m[1]})`);
+    }
   }
-  return { unsigned, noArm64 };
+  return { unsigned, noArm64, noRuntime };
 }
 
 // codesign이 실제로 새긴 entitlement 키 목록. **표본은 실행 파일이어야 한다** — .so·.dylib은
@@ -280,11 +303,21 @@ check("site-packages carries damwha_worker and mlx_lm", missingPkgFiles.length =
 // 서명하고, .app 서명이 그 위를 리소스 해시로 봉인한다.
 const runtimeMachos = [...machOFiles(pyDir), ...machOFiles(ffDir)];
 check("python and ffmpeg trees have Mach-O files to check", runtimeMachos.length > 0, `${runtimeMachos.length}`);
-const { unsigned: rtUnsigned, noArm64: rtNoArm64 } = verifyArm64(runtimeMachos);
+const { unsigned: rtUnsigned, noArm64: rtNoArm64, noRuntime: rtNoRuntime } = verifyArm64(runtimeMachos);
 check(
   "every arm64 Mach-O in the python and ffmpeg trees is signed",
   rtUnsigned.length === 0,
   rtUnsigned.slice(0, 5).map((f) => path.relative(contents, f)).join("; "),
+);
+// 17b. 그 서명이 hardened runtime인가. 실패는 **어느 파일인지** 말해야 한다 — 3만 파일 트리에서
+// "FAIL"만으로는 못 고친다.
+const rtVerified = runtimeMachos.length - rtUnsigned.length - rtNoArm64.length;
+check(
+  "every signed arm64 Mach-O in the python and ffmpeg trees carries hardened runtime",
+  rtNoRuntime.length === 0,
+  rtNoRuntime.length === 0
+    ? `${rtVerified}/${rtVerified} flags=…(runtime)`
+    : `${rtNoRuntime.length} of ${rtVerified}: ${rtNoRuntime.slice(0, 5).map((f) => path.relative(contents, f)).join("; ")}`,
 );
 console.log(`      (${rtNoArm64.length} x86_64-only file(s) with no arm64 slice — not run on this Mac)`);
 
@@ -305,6 +338,24 @@ check(
   "bin/python3.12 carries exactly the two entitlements of entitlements.python.plist",
   pyKeys !== null && pyKeys.length === 2 && MIN.every((k) => pyKeys.includes(k)) && !pyKeys.includes(JIT),
   (pyKeys ?? ["(codesign -d failed)"]).join(", "),
+);
+// ffmpeg도 python plist다. 17b가 hardened runtime을 보증하지만 **어느 plist로** 서명됐는지는
+// 보지 않는다 — package.mjs가 ffmpeg를 python 트리와 같은 plist로 서명하는 것이 계약이다
+// (트랜스코딩 자식이라 allow-jit은 필요 없다).
+const ffKeys = entitlementKeys(path.join(ffDir, "bin", "ffmpeg"));
+check(
+  "bin/ffmpeg carries exactly the two entitlements of entitlements.python.plist",
+  ffKeys !== null && ffKeys.length === 2 && MIN.every((k) => ffKeys.includes(k)) && !ffKeys.includes(JIT),
+  (ffKeys ?? ["(codesign -d failed)"]).join(", "),
+);
+// 헬퍼는 우리가 따로 서명하지 않는다 — .app의 `--deep`이 mac plist로 같이 서명한다. 렌더러
+// 헬퍼가 V8을 돌리므로 allow-jit까지 셋을 물려받아야 하고, 그러지 못하면 앱이 rc=133으로
+// 죽는다 (2026-09-16 실측). 지금 --deep이 옳게 도는 것이 우연이 아님을 여기서 고정한다.
+const helperKeys = entitlementKeys(path.join(contents, "Frameworks", "Damwha Helper (Renderer).app"));
+check(
+  "Damwha Helper (Renderer).app inherits the three entitlements of entitlements.mac.plist",
+  helperKeys !== null && helperKeys.length === 3 && [...MIN, JIT].every((k) => helperKeys.includes(k)),
+  (helperKeys ?? ["(codesign -d failed)"]).join(", "),
 );
 
 // 19. __pycache__ 0개. 있으면 빌드 머신의 절대 경로가 co_filename으로 .pyc에 박힌 채 실려

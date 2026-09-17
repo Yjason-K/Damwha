@@ -158,7 +158,13 @@ macho_list() {
 # install_name_tool로 고친 Mach-O는 **반드시 다시 서명한다.** arm64는 서명 없는 Mach-O를
 # 실행하지 않는다 (Phase 0 :251-252). 원본은 경고만 냈지만 이 저장소의 관례
 # (build-postgres.sh:113)는 die다 — 재서명이 빠진 파일은 그 자리에서 실행 불가가 된다.
-resign() { codesign -f -s - "$1" >/dev/null 2>&1 || die "재서명 실패: $1"; }
+#
+# **실패 사유를 버리지 않는다.** codesign은 진단을 stderr에 쓰는데 그것을 /dev/null로 보내면
+# 남는 것이 파일 이름뿐이라 고칠 수가 없다 (sign_tree도 같다).
+resign() {
+  local out
+  out=$(codesign -f -s - "$1" 2>&1) || die "재서명 실패: $1 — ${out:-codesign이 사유를 남기지 않았다}"
+}
 
 # 파이썬 층 재배치 셋 — 셔뱅 · _sysconfigdata prefix · direct_url.json.
 # Mach-O는 건드리지 않는다(fix_macho의 몫). worker 층이 이 함수만 다시 부르면 되도록 갈랐다.
@@ -358,15 +364,21 @@ fix_macho() {
 #
 # 제3자 wheel의 .so는 우리 Team ID로 서명되지 않는다. disable-library-validation은 서명 주체를
 # 안 따질 뿐 "서명 없음"은 허용하지 않으므로 전수 서명과 짝이다 (Phase 0 R-5).
+#
+# **codesign의 stderr를 버리지 않는다.** entitlements plist가 AMFI의 파서를 통과하지 못하면
+# codesign은 `Failed to parse entitlements: AMFIUnserializeXML: syntax error near line N`을
+# stderr에만 쓴다. 그것을 /dev/null로 보내면 남는 것이 "서명 실패: <파일>"뿐이고, 그 메시지는
+# 무엇이 틀렸는지 한 글자도 말하지 않는다 — `plutil -lint`는 그 plist를 통과시키므로 lint로도
+# 못 잡는다. $ENTS는 rt 캐시 키의 입력이라, plist를 고치면 이 경로가 반드시 다시 돈다.
 sign_tree() {
-  local root="$1" machos m n=0
+  local root="$1" machos m out n=0
   root=$(cd "$root" && pwd -P)
   machos=$(macho_list "$root") || die "Mach-O 목록을 만들지 못했다"
   [ -n "$machos" ] || die "Mach-O가 하나도 없다"
   while IFS= read -r m; do
     [ -n "$m" ] || continue
-    codesign --force --sign - --options runtime --entitlements "$ENTS" "$m" 2>/dev/null \
-      || die "서명 실패: ${m#"$root"/}"
+    out=$(codesign --force --sign - --options runtime --entitlements "$ENTS" "$m" 2>&1) \
+      || die "서명 실패: ${m#"$root"/} — ${out:-codesign이 사유를 남기지 않았다}"
     n=$((n + 1))
   done <<< "$machos"
   echo "  서명 ${n}개 (--options runtime, $(basename "$ENTS"))"
