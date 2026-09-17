@@ -18,10 +18,32 @@ class BgeM3TextEmbedder:
         # 텍스트 임베더는 MPS를 쓰지 않는다 — 파이프라인 GPU 모델과의 메모리 경쟁
         # 회피(ECAPA가 CPU로 강제되는 것과 동일 근거). 색인은 백그라운드 job이라
         # CPU 지연이 무해하다.
-        self._model = SentenceTransformer(model_name, device="cpu")
+        # 리비전 고정 + safetensors 한정 — 아래 _PINNED_REVISIONS의 주석을 보라 (P4-C10).
+        self._model = SentenceTransformer(
+            model_name,
+            device="cpu",
+            revision=_PINNED_REVISIONS.get(model_name),
+            model_kwargs={"use_safetensors": True},
+        )
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         vecs = self._model.encode(
             texts, normalize_embeddings=True, convert_to_numpy=True, show_progress_bar=False
         )
         return [v.tolist() for v in vecs]
+
+
+# 리비전 고정 (스펙 §6.6). 위 torchcodec 우회가 14행으로 인용되므로 상수를 파일 끝에 둔다.
+# 2026-09-18 확인(HF API, 토큰 없음):
+# - `BAAI/bge-m3`의 main(`5617a9f…`)에는 `model.safetensors`가 없고 `pytorch_model.bin`만 있다.
+# - `refs/pr/130`(`9a0624b…`, SFconvertbot "Adding `safetensors` variant of this model")은 main의
+#   직계 자식이고, main의 모든 파일을 같은 oid로 가진 채 `model.safetensors`(2,271,064,456 B)
+#   하나만 더한다 — 토크나이저·설정은 main과 바이트까지 같다.
+# 고정하지 않으면 transformers가 main에서 safetensors를 못 찾아 `pytorch_model.bin`(2.1 GB)을
+# 받고, 이어서 `Thread-auto_conversion`이 그 변환 PR을 찾아 `model.safetensors`(2.1 GB)를
+# **다른 리비전으로 한 벌 더** 받는다(transformers 5.12.1 `modeling_utils.py:720-733`) — 앱
+# 캐시에 스냅샷 둘·blob 둘이 생긴 원인이다. 변환 PR 커밋을 고정하면 첫 요청에서 safetensors가
+# 잡혀 .bin도, 두 번째 리비전도 없다. `use_safetensors=True`는 safetensors가 없을 때 .bin으로
+# 내려가지 않고 실패하게 한다.
+# 표에 없는 모델은 main을 쓰되 safetensors 한정은 같다.
+_PINNED_REVISIONS = {"BAAI/bge-m3": "9a0624b896d81da7492a910ffa53731274b6cf3d"}

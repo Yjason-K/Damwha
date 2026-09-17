@@ -40,6 +40,16 @@ def conn(pg_url):
         c.close()
 
 
+@pytest.fixture
+def conn2(pg_url):
+    """두 번째 실제 연결 — 다른 프로세스의 writer를 흉내 낸다 (정리는 conn fixture가 한다)."""
+    c = psycopg.connect(pg_url, row_factory=dict_row, autocommit=True)
+    try:
+        yield c
+    finally:
+        c.close()
+
+
 def seed_meeting(
     conn, *, status="uploaded", processing_version=0, audio_key="k", current_job_id=None
 ):

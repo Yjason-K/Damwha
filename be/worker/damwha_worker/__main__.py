@@ -19,6 +19,7 @@ from .dispatch import dispatch_claimed_job, handle_job, run_once  # noqa: F401 �
 from .jobs import default_live_source
 from .llm_server import managed_llm_server
 from .llm_server import probe_models as check_lens_llm
+from .models import downloads
 from .reaper import run_reaper_loop
 from .storage import Storage
 
@@ -190,6 +191,9 @@ def _reconnect(connect_fn, shutdown, *, initial_delay: float = 1.0, max_delay: f
 def run_child(settings, shutdown: threading.Event) -> int:
     """--once 자식: 시그널 핸들러 설치 후 job 1건 처리."""
     log.info("runtime %s", json.dumps(runtime_report.runtime_facts()))
+    # HF 다운로드 진행 훅 (스펙 §6.9) — 모델 스택은 job 안에서 wiring 빌더가 import하므로 그보다
+    # 앞이다. writer는 WORKER_ID (R-9a). supervisor는 모델을 받지 않으므로 설치하지 않는다.
+    downloads.install_hf_progress_hook(settings.worker_id)
 
     def _on_signal(signum, frame):
         log.info("signal %s received — stop at next stage boundary (send again to force)", signum)

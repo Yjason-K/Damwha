@@ -222,7 +222,10 @@ def test_run_child_defers_model_registry_import_until_after_claim(monkeypatch, t
 
     monkeypatch.setattr("builtins.__import__", _import)
     monkeypatch.setattr(m, "run_single_job", lambda *args, **kwargs: 3)
+    # 다운로드 훅(Task 9)은 이 프로세스의 huggingface_hub를 전역으로 바꾼다 — 기록만 한다.
+    monkeypatch.setattr(m.downloads, "install_hf_progress_hook", lambda writer: None)
     settings = SimpleNamespace(
+        worker_id="worker-1",
         storage_root=str(tmp_path),
         database_url="postgresql://unused",
         lens_llm_base_url="http://127.0.0.1:11434/v1",

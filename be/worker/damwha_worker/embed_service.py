@@ -22,6 +22,10 @@ from .runtime_report import runtime_facts
 
 log = logging.getLogger("damwha_worker")
 
+# model_readiness의 writer (스펙 §6.9 "<WORKER_ID 또는 embed>", R-9a). 감독자가 이 값으로 embed의
+# 다운로드를 worker의 것과 구별해 준비 유예를 멈춘다 (Task 10).
+EMBED_WRITER = "embed"
+
 app = FastAPI()
 _lock = threading.Lock()
 _loaded = None  # (settings, embedder) — _service()가 채운다
@@ -70,11 +74,14 @@ def embed(req: EmbedRequest):
 def main() -> None:  # pragma: no cover — `damwha-embed` 콘솔 스크립트 / `-m` 진입
     import uvicorn
 
-    # 순서가 계약이다 (스펙 §9 P4-C12): 로깅 → 런타임 보고 → 지연 초기화 → uvicorn.
-    # 로깅을 먼저 잡지 않으면 보고가 embed.log에 남지 않는다.
+    from .models import downloads
+
+    # 순서가 계약이다 (스펙 §9 P4-C12, §6.9): 로깅 → 런타임 보고 → 다운로드 훅 → 지연 초기화 →
+    # uvicorn. 로깅을 먼저 잡지 않으면 보고가 embed.log에 남지 않는다. 훅은 sentence-transformers를
+    # import하기 **전에** 건다. 훅의 DB 연결은 처음 쓸 때 이 프로세스의 설정(DATABASE_URL)으로 연다.
     console.install_logging(level=logging.INFO)
     log.info("runtime %s", json.dumps(runtime_facts()))
-    # Task 9: HF 다운로드 진행 훅을 여기서 설치한다 — 모델을 올리기 **전에** (스펙 §6.9).
+    downloads.install_hf_progress_hook(EMBED_WRITER)
     # 기동 시점에 모델을 올린다 — 첫 /embed 요청이 적재 시간(~31초)을 떠안지 않게.
     settings, _ = _service()
     uvicorn.run(app, host=settings.embed_service_host, port=settings.embed_service_port)

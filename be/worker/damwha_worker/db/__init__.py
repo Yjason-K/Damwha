@@ -4,7 +4,15 @@
 도메인별로 갈라졌을 뿐, 이름은 하나도 옮겨가지 않았다.
 """
 
-from .core import WORKER_CAPABILITIES_KEY, connect, upsert_worker_capabilities
+from .core import (
+    MODEL_READINESS_KEY,
+    WORKER_CAPABILITIES_KEY,
+    connect,
+    merge_model_readiness,
+    read_model_readiness,
+    shared_state_enabled,
+    upsert_worker_capabilities,
+)
 from .lenses import fail_lens_extraction, mark_lens_run_running, persist_lens_extraction
 from .live import (
     LiveInputState,
@@ -31,8 +39,12 @@ from .speakers import fail_enroll, persist_enroll
 from .summaries import fail_summary, mark_summary_running, persist_summary
 
 __all__ = [
+    "MODEL_READINESS_KEY",
     "WORKER_CAPABILITIES_KEY",
     "connect",
+    "merge_model_readiness",
+    "read_model_readiness",
+    "shared_state_enabled",
     "upsert_worker_capabilities",
     "claim",
     "fail_job",

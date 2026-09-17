@@ -4,7 +4,33 @@ Implements the `Diarizer` protocol. pyannote/speaker-diarization-community-1 is 
 model — requires an accepted license + HF token (passed as `use_auth_token`).
 """
 
+from .. import errors
 from .base import DiarSegment
+
+
+def _raise_auth_failure(model: str, exc: BaseException) -> None:
+    """HF의 401·403을 서로 다른 PERMANENT로 바꿔 던진다. 그 밖의 실패는 그대로 둔다.
+
+    pyannote 4.x의 `download_from_hf_hub`는 HTTP 오류를 안내문만 찍고 다시 던진다 — 예전 코드는
+    그것을 잡지 않아 `errors.classify`가 "uncategorized" TRANSIENT로 받아 재시도만 반복했다.
+    둘은 재시도로 풀리지 않고 필요한 조치가 다르다 (스펙 §8): 401은 토큰 재입력, 403은 게이트 모델의
+    사용 조건 수락. 게이트 체인의 하위 모델도 같은 저장소 안이라 링크는 `model` 하나다.
+    """
+    status = errors.http_status(exc)
+    if status == 401:
+        raise errors.WorkerError(
+            errors.HF_TOKEN_INVALID,
+            f"Hugging Face rejected the token while loading {model!r} (401) — "
+            "the HF token is missing or invalid; enter a valid token and restart the service",
+            errors.ErrorKind.PERMANENT,
+        ) from exc
+    if status == 403:
+        raise errors.WorkerError(
+            errors.HF_GATE_NOT_ACCEPTED,
+            f"access to the gated model {model!r} was refused (403) — accept its user "
+            f"conditions at https://huggingface.co/{model} with the account that owns the token",
+            errors.ErrorKind.PERMANENT,
+        ) from exc
 
 
 class PyannoteDiarizer:
@@ -13,7 +39,11 @@ class PyannoteDiarizer:
         from pyannote.audio import Pipeline
 
         # pyannote.audio 4.x renamed the auth param: use_auth_token → token
-        pipeline = Pipeline.from_pretrained(model, token=hf_token)
+        try:
+            pipeline = Pipeline.from_pretrained(model, token=hf_token)
+        except Exception as exc:
+            _raise_auth_failure(model, exc)
+            raise
         if pipeline is None:
             # from_pretrained returns None when the license isn't accepted / token is bad
             raise RuntimeError(
