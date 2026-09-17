@@ -672,15 +672,20 @@ function currentDatabaseMode(): DatabaseMode | null {
  * 번들 python이 쓸 userData 쪽 준비. 실패해도 기동을 막지 않고 한 줄 남긴다.
  *
  * - `<userData>/pycache`: PYTHONPYCACHEPREFIX의 자리(스펙 §6.1-b). 쓰기 불가한 prefix는 **오류 없이
- *   무캐시로 강등된다**(실측) — 조용히 느려지므로 만들지 못했다는 사실을 남긴다.
+ *   무캐시로 강등된다**(실측) — 조용히 느려지므로 만들지 못했거나 이미 있는데 쓸 수 없다는 사실을 남긴다.
+ *   mkdirSync(recursive)는 이미 있는 디렉터리에 성공하므로 쓰기·탐색 권한을 따로 본다.
  * - `<userData>/.env`: worker의 Settings가 cwd의 .env를 읽는다(be/worker/damwha_worker/config.py).
  *   앱이 넣는 env가 이기므로 실해는 없지만 있으면 혼란의 원인이라 알린다 (스펙 §6.2). 앱은 그 파일을 만들지 않는다.
  */
 function prepareUserDataForPython(userData: string): void {
+  const pycache = pycachePrefix(userData);
   try {
-    fs.mkdirSync(pycachePrefix(userData), { recursive: true });
+    fs.mkdirSync(pycache, { recursive: true });
+    fs.accessSync(pycache, fs.constants.W_OK | fs.constants.X_OK);
   } catch (e) {
-    appendSupervisorLog(`바이트코드 캐시 폴더를 만들지 못했어요 — Python이 캐시 없이 돌아 느려질 수 있어요: ${reasonOf(e)}`);
+    appendSupervisorLog(
+      `바이트코드 캐시 폴더(${pycache})를 만들거나 쓸 수 없어요 — Python이 캐시 없이 돌아 느려질 수 있어요: ${reasonOf(e)}`,
+    );
   }
   if (fs.existsSync(path.join(userData, ".env"))) {
     appendSupervisorLog(

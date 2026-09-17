@@ -90,7 +90,8 @@ interface AppOwnedKey {
  *   config.json 한 줄로 API가, 또는 **인증이 없는** embed 서비스가 LAN에 열린다. embed 쪽은
  *   be/worker/damwha_worker/embed_service.py가 이 값을 uvicorn.run(host=…)에 그대로 넘긴다.
  * - 나머지: 번들 python 자식의 env를 앱이 주장한다 (Phase 4 스펙 §6.3, appOwnedChildEnv).
- *   HF_TOKEN은 값을 싣지 않는다.
+ *   HF_TOKEN은 값을 싣지 않는다. LENS_LLM_MANAGED=false는 앱이 고른 빈 포트에서 아무 서버도 띄우지 않게 해
+ *   모든 렌즈·요약 job을 죽은 포트로 보내므로 받지 않는다 — 직접 띄운 서버의 탈출구는 LENS_LLM_SERVER_BIN이다.
  *
  * Map인 이유: 객체 리터럴에 `key in`을 쓰면 `toString` 같은 키가 프로토타입에서 걸린다.
  */
@@ -99,6 +100,12 @@ const APP_OWNED_KEYS: ReadonlyMap<string, AppOwnedKey> = new Map<string, AppOwne
   ["EMBED_SERVICE_HOST", { rule: `앱이 ${LOOPBACK}으로 고정합니다` }],
   ["HF_TOKEN", { rule: "토큰은 앱이 따로 관리합니다", secret: true }],
   ["LENS_LLM_BASE_URL", { rule: "LLM 서버 주소는 앱이 빈 포트를 골라 정합니다" }],
+  [
+    "LENS_LLM_MANAGED",
+    {
+      rule: "앱이 고른 포트에는 앱이 띄운 LLM 서버만 있어 항상 true입니다. 직접 띄운 서버를 쓰려면 LENS_LLM_SERVER_BIN에 그 실행 파일을 적어 주세요",
+    },
+  ],
   ["HF_HOME", { rule: "모델 캐시는 앱이 <userData>/models로 정합니다" }],
   ["FFMPEG_BIN", { rule: "앱이 번들 ffmpeg를 씁니다" }],
   ["FFPROBE_BIN", { rule: "앱이 번들 ffprobe를 씁니다" }],
@@ -143,7 +150,7 @@ export const STRIPPED_CHILD_ENV_KEYS: readonly string[] = [
   "PYTHONPATH",
 ];
 
-/** 금지 키와 값이 없는 키를 뺀 사본. 입력은 건드리지 않는다. 합성 규칙은 appOwnedChildEnv의 주석에 있다. */
+/** 금지 키와 값이 없는 키를 뺀 사본. 입력은 건드리지 않는다. 합성 규칙은 childEnv의 주석에 있다. */
 export function sanitizeChildEnv(env: Record<string, string | undefined>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
@@ -170,18 +177,7 @@ export function llmBaseUrl(port: number): string {
 
 /**
  * 번들 python 자식에게 **앱이 주장하는** env (Phase 4 스펙 §6.3). ctx만 읽는 순수 함수다.
- *
- * **합성 규칙 — 자식 env는 정확히 이것이다:**
- *
- * ```
- * child = { ...sanitizeChildEnv({ ...process.env, ...ctx.env }), ...appOwnedChildEnv(ctx) }
- * ```
- *
- * 1. **합친 뒤 씻는다.** 상속분만 씻고 ctx.env를 뒤에 합치면, config.json이 임의 문자열 키를
- *    통과시키므로(loadConfig의 pass-through) PYTHONHOME 같은 키가 되돌아온다. loadConfig가 이제
- *    그런 키를 버리지만 이 규칙은 그것에 기대지 않는다.
- * 2. **앱 값은 씻은 뒤에 얹는다.** dev의 PYTHONPATH는 금지 목록에 있는 키라, 먼저 얹으면 씻겨 나간다.
- *    얹는 값이 상속·config.json의 같은 키를 이긴다.
+ * 자식 env 전체는 이것을 직접 합치지 말고 아래 childEnv로 만든다 — 합성 순서가 계약이다.
  *
  * 담는 것:
  * - HF_HOME=<userData>/models, FFMPEG_BIN·FFPROBE_BIN=번들 ffmpeg 쌍, PYTHONPYCACHEPREFIX=<userData>/pycache
@@ -190,6 +186,8 @@ export function llmBaseUrl(port: number): string {
  *   자식은 번들에 박힌 옛 damwha_worker를 오류 없이 돌린다.
  * - DAMWHA_SHARED_STATE — 외부 DB 모드면 `off`(공유 행 두 writer를 끈다, §6.9), 아니면 `on`. 기본값도
  *   on이지만 명시한다 — 개발자 셸에서 상속된 off가 내장 모드의 준비 상태 보고를 끄지 못하게.
+ * - LENS_LLM_MANAGED=true — 앱이 고른 빈 포트에는 앱의 worker가 띄운 서버만 있다. false가 상속되거나
+ *   ctx.env로 들어오면 worker가 서버를 띄우지 않아 모든 렌즈·요약 job이 죽은 포트를 친다.
  * - LENS_LLM_BASE_URL — ctx.env에 있을 때 그 값을 그대로 다시 얹는다. main.ts가 기동 때 빈 포트로 정해
  *   ctx.env에 넣는다(launchEnv). 주소를 지어내지 않는다 — 없으면 worker가 ValidationError로 크게 죽는
  *   편이 엉뚱한 포트보다 낫다.
@@ -206,6 +204,7 @@ export function appOwnedChildEnv(ctx: LaunchContext): Record<string, string> {
     FFPROBE_BIN: ctx.bins.ffprobe,
     PYTHONPYCACHEPREFIX: pycachePrefix(ctx.userData),
     DAMWHA_SHARED_STATE: ctx.databaseMode === "external" ? "off" : "on",
+    LENS_LLM_MANAGED: "true",
   };
   if (!ctx.packaged) {
     if (ctx.repoRoot === null) throw new Error(CAUSES.repoRootMissing.text);
@@ -214,6 +213,31 @@ export function appOwnedChildEnv(ctx: LaunchContext): Record<string, string> {
   const llm = ctx.env.LENS_LLM_BASE_URL;
   if (llm !== undefined) out.LENS_LLM_BASE_URL = llm;
   return out;
+}
+
+/**
+ * 번들 python 자식(worker·embed)에게 주는 env **전체**. 런처는 이 함수만 부른다 — 합성을 호출하는 쪽에서
+ * 다시 짜면 순서가 갈리고, 갈린 순서는 테스트가 초록인 채 dev 앱을 옛 번들 worker로 돌린다.
+ *
+ * **합성 규칙 — 정확히 이것이다:**
+ *
+ * ```
+ * { ...sanitizeChildEnv({ ...inherited, ...ctx.env }), ...appOwnedChildEnv(ctx) }
+ * ```
+ *
+ * 1. **합친 뒤 씻는다.** 상속분만 씻고 ctx.env를 뒤에 합치면, config.json이 임의 문자열 키를
+ *    통과시키므로(loadConfig의 pass-through) PYTHONHOME 같은 키가 되돌아온다. loadConfig가 이제
+ *    그런 키를 버리지만 이 규칙은 그것에 기대지 않는다.
+ * 2. **앱 값은 씻은 뒤에 얹는다.** dev의 PYTHONPATH는 금지 목록에 있는 키라, 먼저 얹으면 씻겨 나간다.
+ *    얹는 값이 상속·config.json의 같은 키를 이긴다.
+ *
+ * PATH는 여기서 정하지 않는다 — 런처가 번들 bin만으로 따로 준다 (스펙 §6.2).
+ */
+export function childEnv(
+  ctx: LaunchContext,
+  inherited: Record<string, string | undefined> = process.env,
+): Record<string, string> {
+  return { ...sanitizeChildEnv({ ...inherited, ...ctx.env }), ...appOwnedChildEnv(ctx) };
 }
 
 /**

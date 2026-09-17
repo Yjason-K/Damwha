@@ -1,3 +1,4 @@
+import * as path from "path";
 import { describe, expect, it } from "vitest";
 import { isRepoRoot, resolveRepoRoot } from "../../src/config/repo-root";
 
@@ -38,6 +39,18 @@ describe("resolveRepoRoot (Phase 4 스펙 §6.3)", () => {
   it("in dev falls back to the app's parent when REPO_ROOT is not a repo", () => {
     expect(resolveRepoRoot({ packaged: false, configured: "/nowhere", appPath: "/r/desktop" }, repo("/r"))).toBe("/r");
     expect(resolveRepoRoot({ packaged: false, configured: undefined, appPath: "/r/desktop" }, repo("/r"))).toBe("/r");
+  });
+
+  it("in dev resolves a relative REPO_ROOT to an absolute path and validates that path", () => {
+    // 이 값이 dev PYTHONPATH가 된다. 자식의 cwd가 <userData>가 되면 상대 경로는 다른 곳을 가리키고, Python은
+    // 없는 sys.path 항목을 조용히 무시한다 — 번들의 옛 worker가 돈다.
+    const abs = path.resolve("rel/repo");
+    expect(resolveRepoRoot({ packaged: false, configured: "rel/repo", appPath: "/tmp/desktop" }, repo(abs))).toBe(abs);
+    expect(path.isAbsolute(resolveRepoRoot({ packaged: false, configured: "./rel/repo", appPath: "/tmp/desktop" }, repo(abs))!)).toBe(true);
+  });
+
+  it("in dev does not read an empty REPO_ROOT as the current directory", () => {
+    expect(resolveRepoRoot({ packaged: false, configured: "", appPath: "/tmp/desktop" }, repo(process.cwd()))).toBeNull();
   });
 
   it("in dev returns null when neither is a repo — the caller reports repoRootMissing, nothing asks", () => {
