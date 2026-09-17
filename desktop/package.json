@@ -10,7 +10,7 @@
   },
   "scripts": {
     "compile": "tsc -p tsconfig.json",
-    "start:desktop": "bash scripts/build-postgres.sh && pnpm run compile && electron .",
+    "start:desktop": "bash scripts/build-postgres.sh && bash scripts/build-python.sh && bash scripts/build-ffmpeg.sh && pnpm run compile && electron .",
     "package:desktop": "node scripts/package.mjs",
     "test": "vitest run --passWithNoTests",
     "lint": "tsc -p tsconfig.lint.json"

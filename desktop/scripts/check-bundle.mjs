@@ -17,6 +17,60 @@ function check(label, ok, detail = "") {
   if (!ok) failures.push(label);
 }
 
+// 트리 안 Mach-O 목록. 파일마다 file(1)을 부르면 Resources/python의 2만 파일에서 2분이 걸린다 —
+// find -print0 을 받아 file을 묶어 부르면 수 초다 (build-python.sh:151 macho_list와 같은 수법).
+// 심볼릭 링크는 따라가지 않는다(-type f): bin/python·bin/python3은 python3.12를 가리키는 링크일
+// 뿐이고 postgres 트리도 같은 dylib을 여러 이름으로 두므로, 따라가면 같은 파일을 여러 번 센다.
+// fat 바이너리는 file이 슬라이스마다 "<경로> (for architecture …): Mach-O …" 줄을 더 찍으므로
+// 그 꼬리표를 떼고 중복을 지운다. 붙일 곳을 못 찾은 Mach-O 줄은 조용히 흘리지 않고 던진다 —
+// 놓친 파일은 "서명 안 된 Mach-O 0건"을 거짓으로 만든다.
+function machOFiles(root) {
+  if (!fs.existsSync(root)) return [];
+  const files = execFileSync("find", [root, "-type", "f", "-print0"], { encoding: "utf8", maxBuffer: 1 << 28 })
+    .split("\0")
+    .filter((f) => f.length > 0);
+  const known = new Set(files);
+  const found = new Set();
+  for (let i = 0; i < files.length; i += 500) {
+    const out = execFileSync("file", files.slice(i, i + 500), { encoding: "utf8", maxBuffer: 1 << 28 });
+    for (const line of out.split("\n")) {
+      const m = /^(.*?):\s*Mach-O/.exec(line);
+      if (m === null) continue;
+      const p = m[1].replace(/ \(for architecture [^)]*\)$/, "");
+      if (!known.has(p)) throw new Error(`file(1) 출력을 경로에 붙이지 못했다: ${line}`);
+      found.add(p);
+    }
+  }
+  return files.filter((f) => found.has(f));
+}
+
+// arm64 슬라이스 기준 서명 검증. **반드시 --arch arm64 다** (build-python.sh:378과 같은 이유).
+// arm64 슬라이스만 서명된 fat 바이너리를 plain --verify는 "not signed at all"로 잡지만
+// --arch arm64는 통과시키고, 그 반대도 성립한다 — 이 번들에 universal Mach-O가 13개 있다.
+// x86_64 전용 thin 파일에는 --arch arm64가 "object file format unrecognized"로 rc 1을 내는데
+// 그것은 **무서명이 아니라 arm64 슬라이스가 없다는 뜻**이라 따로 세어 보고한다.
+function verifyArm64(files) {
+  const unsigned = [];
+  const noArm64 = [];
+  for (const f of files) {
+    const r = spawnSync("codesign", ["--verify", "--arch", "arm64", f], { encoding: "utf8" });
+    if (r.status === 0) continue;
+    const why = (r.stderr ?? "").trim();
+    (/object file format unrecognized/.test(why) ? noArm64 : unsigned).push(`${f} (${why.split("\n")[0]})`);
+  }
+  return { unsigned, noArm64 };
+}
+
+// codesign이 실제로 새긴 entitlement 키 목록. **표본은 실행 파일이어야 한다** — .so·.dylib은
+// --entitlements로 서명해도 키를 0개 보인다(실측: .so 0개, bin/python3.12 2개). flags의
+// 0x10002(adhoc,runtime)은 그래도 붙으므로 "hardened runtime이 걸렸는가"와 "entitlement가
+// 새겨졌는가"는 다른 질문이다.
+function entitlementKeys(target) {
+  const r = spawnSync("codesign", ["-d", "--entitlements", "-", "--xml", target], { encoding: "utf8" });
+  if (r.status !== 0) return null;
+  return [...(r.stdout ?? "").matchAll(/<key>([^<]+)<\/key>/g)].map((m) => m[1]).sort();
+}
+
 // 1. desktop 패키지에 runtime 의존성이 없다
 const pkg = JSON.parse(fs.readFileSync(path.join(desktop, "package.json"), "utf8"));
 const deps = Object.keys(pkg.dependencies ?? {});
@@ -87,9 +141,14 @@ console.log(`      (${links.length} symlink(s) inside the tree — allowed)`);
 // 4. 저장소 경로와 pnpm store 경로 문자열이 없다
 // grep의 exit 1만 "매치 없음"이다. 2 이상은 권한·I/O 오류이고, 그것을 통과로 삼으면
 // 검사가 조용히 무력해진다.
+//
+// -a(바이너리도 텍스트로 본다)를 붙이는 이유: spawnSync는 셸을 거치지 않아 PATH의 진짜
+// BSD grep을 받고 그것은 -a 없이도 바이너리를 건너뛰지 않지만(실측: -rlF 456건 / -ralF 456건),
+// GNU grep은 -a 없이 바이너리 매치를 "Binary file … matches"로만 알리고 -l과 섞이면 셈이
+// 달라진다. 번들의 대부분이 바이너리(Resources/python 1.3 GB)이므로 의도를 명시해 둔다.
 for (const needle of [repo, path.join(process.env.HOME ?? "", ".pnpm-store"), "/.pnpm/"]) {
   if (needle.length < 4) continue;
-  const r = spawnSync("grep", ["-rlF", "--", needle, contents], { encoding: "utf8" });
+  const r = spawnSync("grep", ["-ralF", "--", needle, contents], { encoding: "utf8" });
   if (r.error !== undefined) {
     check(`grep ran for "${needle}"`, false, String(r.error.message));
     continue;
@@ -160,13 +219,7 @@ const extFiles = ["lib/postgresql/vector.dylib", "lib/postgresql/pg_bigm.dylib",
 const missingExt = extFiles.filter((f) => !fs.existsSync(path.join(pgDir, f)));
 check("postgres tree has pgvector and pg_bigm", missingExt.length === 0, missingExt.join(", "));
 
-// 심볼릭 링크는 따라가지 않는다 — 같은 dylib을 두 번 센다.
-const pgMachos = fs.existsSync(pgDir)
-  ? execFileSync("find", [pgDir, "-type", "f"], { encoding: "utf8" })
-      .split("\n")
-      .filter((f) => f.length > 0)
-      .filter((f) => spawnSync("file", ["-b", f], { encoding: "utf8" }).stdout.startsWith("Mach-O"))
-  : [];
+const pgMachos = machOFiles(pgDir);
 check("postgres tree has Mach-O files to check", pgMachos.length > 0, `${pgMachos.length}`);
 
 const badDeps = [];
@@ -188,6 +241,105 @@ for (const bin of ["postgres", "psql"]) {
   const r = spawnSync("env", ["-i", path.join(pgDir, "bin", bin), "--version"], { encoding: "utf8" });
   check(`env -i ${bin} --version runs from the bundle`, r.status === 0, (r.stdout || r.stderr || "").trim());
 }
+
+// 15~21. 내장 Python 런타임과 내장 ffmpeg (Electron Phase 4 스펙 §6.1)
+const pyDir = path.join(contents, "Resources", "python");
+const ffDir = path.join(contents, "Resources", "ffmpeg");
+
+// 15. 두 트리가 있고 실행 파일을 갖고 있다. 트리가 통째로 빠진 .app은 첫 실행에서야 드러난다.
+const runtimeBins = [
+  path.join(pyDir, "bin", "python3.12"),
+  path.join(ffDir, "bin", "ffmpeg"),
+  path.join(ffDir, "bin", "ffprobe"),
+];
+const missingRuntimeBins = runtimeBins.filter((b) => {
+  try {
+    fs.accessSync(b, fs.constants.X_OK);
+    return false;
+  } catch {
+    return true;
+  }
+});
+check(
+  "python and ffmpeg trees carry their executables",
+  missingRuntimeBins.length === 0,
+  missingRuntimeBins.map((b) => path.relative(contents, b)).join(", "),
+);
+
+// 16. 트리만 있고 패키지가 없는 경우를 잡는다. mlx_lm은 스펙 §2.4(mlx/mlx-lm 버전 정렬)의
+// 회귀 방지다 — 정렬이 깨지면 uv가 mlx_lm 설치를 통째로 건너뛴 트리가 나온다.
+const sitePackages = path.join(pyDir, "lib", "python3.12", "site-packages");
+const wantPkgFiles = [
+  path.join("damwha_worker", "__main__.py"),
+  path.join("mlx_lm", "server.py"),
+];
+const missingPkgFiles = wantPkgFiles.filter((f) => !fs.existsSync(path.join(sitePackages, f)));
+check("site-packages carries damwha_worker and mlx_lm", missingPkgFiles.length === 0, missingPkgFiles.join(", "));
+
+// 17. arm64 무서명 Mach-O 0건. Python 트리는 build-python.sh가, ffmpeg는 package.mjs가
+// 서명하고, .app 서명이 그 위를 리소스 해시로 봉인한다.
+const runtimeMachos = [...machOFiles(pyDir), ...machOFiles(ffDir)];
+check("python and ffmpeg trees have Mach-O files to check", runtimeMachos.length > 0, `${runtimeMachos.length}`);
+const { unsigned: rtUnsigned, noArm64: rtNoArm64 } = verifyArm64(runtimeMachos);
+check(
+  "every arm64 Mach-O in the python and ffmpeg trees is signed",
+  rtUnsigned.length === 0,
+  rtUnsigned.slice(0, 5).map((f) => path.relative(contents, f)).join("; "),
+);
+console.log(`      (${rtNoArm64.length} x86_64-only file(s) with no arm64 slice — not run on this Mac)`);
+
+// 18. entitlement가 **실제로** 새겨졌고 plist 둘이 갈라져 있다. 서명에 실패해도 .app은
+// linker-signed 상태로 실행되므로, 실행이 아니라 이걸 봐야 한다.
+const appKeys = entitlementKeys(appDir);
+const pyKeys = entitlementKeys(path.join(pyDir, "bin", "python3.12"));
+const MIN = ["com.apple.security.cs.allow-unsigned-executable-memory", "com.apple.security.cs.disable-library-validation"];
+const JIT = "com.apple.security.cs.allow-jit";
+check(
+  "the .app carries the three entitlements of entitlements.mac.plist",
+  appKeys !== null && appKeys.length === 3 && [...MIN, JIT].every((k) => appKeys.includes(k)),
+  (appKeys ?? ["(codesign -d failed)"]).join(", "),
+);
+// Python 트리에는 allow-jit을 주지 않는다 — 안 쓰는 권한이다. 거꾸로 .app에 이 최소 집합만
+// 주면 V8이 CodeRange 예약에 실패해 앱이 rc=133으로 죽는다 (2026-09-16 실측).
+check(
+  "bin/python3.12 carries exactly the two entitlements of entitlements.python.plist",
+  pyKeys !== null && pyKeys.length === 2 && MIN.every((k) => pyKeys.includes(k)) && !pyKeys.includes(JIT),
+  (pyKeys ?? ["(codesign -d failed)"]).join(", "),
+);
+
+// 19. __pycache__ 0개. 있으면 빌드 머신의 절대 경로가 co_filename으로 .pyc에 박힌 채 실려
+// 나간다 (스펙 §6.1-b 4번).
+const pycache = fs.existsSync(pyDir)
+  ? execFileSync("find", [pyDir, "-name", "__pycache__"], { encoding: "utf8", maxBuffer: 1 << 28 })
+      .split("\n")
+      .filter((l) => l.length > 0)
+  : [];
+check("no __pycache__ under Resources/python", pycache.length === 0, `${pycache.length}`);
+
+// 20. bin/의 콘솔 스크립트 셔뱅이 번들 안을 가리킨다.
+//
+// uv/pip이 만든 원래 셔뱅은 **설치 시점 인터프리터의 절대 경로**다. build-python.sh가 그것을
+// 위치 독립 폴리글랏으로 다시 쓴다 — 그래서 1행은 #!/bin/sh이고 인터프리터는 **2행**에 있다.
+// 2행을 안 보고 1행만 보면 "#!로 시작하니 통과"가 되어 검사가 통째로 무력해진다.
+//
+// 대상은 **Resources/python/bin/ 아래 파일뿐**이다. site-packages 안 제3자 wheel이 자기 데이터에
+// 담은 문자열은 위 4번(금지 문자열) 검사의 소관이고 여기서 보지 않는다.
+const POLYGLOT = '${0%/*}/python3.12';
+const binDir = path.join(pyDir, "bin");
+const binScripts = fs.existsSync(binDir)
+  ? fs
+      .readdirSync(binDir, { withFileTypes: true })
+      .filter((d) => d.isFile()) // 심볼릭 링크(python, python3)는 제외한다
+      .map((d) => path.join(binDir, d.name))
+      .filter((f) => fs.readFileSync(f).subarray(0, 2).toString("latin1") === "#!") // python3.12는 Mach-O다
+  : [];
+const badShebang = binScripts.filter((f) => {
+  const [first, second = ""] = fs.readFileSync(f).subarray(0, 512).toString("latin1").split("\n");
+  return first.trim() !== "#!/bin/sh" || !second.includes(POLYGLOT);
+});
+check("every script in Resources/python/bin has a bundle-relative shebang", binScripts.length > 0 && badShebang.length === 0,
+  binScripts.length === 0 ? "no scripts found" : badShebang.slice(0, 5).map((f) => path.basename(f)).join(", "));
+console.log(`      (${binScripts.length} console script(s) checked)`);
 
 if (failures.length > 0) {
   console.error(`\n${failures.length} bundle hygiene check(s) failed.`);

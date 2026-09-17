@@ -14,10 +14,44 @@ function run(cmd, args, cwd = repo, extraEnv = {}) {
   execFileSync(cmd, args, { cwd, stdio: "inherit", env: { ...process.env, ...extraEnv } });
 }
 
+// 트리 안 Mach-O 목록. 파일마다 file(1)을 부르면 Python 트리의 2만 파일에서 2분이 걸린다 —
+// find -print0 을 받아 file을 묶어 부르면 수 초다 (build-python.sh:151 macho_list와 같은 수법).
+// 심볼릭 링크는 따라가지 않는다(-type f): bin/python·bin/python3은 python3.12를 가리키는
+// 링크일 뿐이라, 따라가면 같은 실행 파일을 세 번 서명·검사하게 된다.
+// fat 바이너리는 file이 슬라이스마다 "<경로> (for architecture …): Mach-O …" 줄을 더 찍으므로
+// 그 꼬리표를 떼고 중복을 지운다. 붙일 곳을 못 찾은 Mach-O 줄은 조용히 흘리지 않고 던진다 —
+// 놓친 파일은 "서명 안 된 Mach-O 0건"을 거짓으로 만든다.
+function machOFiles(root) {
+  if (!fs.existsSync(root)) return [];
+  const files = execFileSync("find", [root, "-type", "f", "-print0"], { encoding: "utf8", maxBuffer: 1 << 28 })
+    .split("\0")
+    .filter((f) => f.length > 0);
+  const known = new Set(files);
+  const found = new Set();
+  for (let i = 0; i < files.length; i += 500) {
+    const out = execFileSync("file", files.slice(i, i + 500), { encoding: "utf8", maxBuffer: 1 << 28 });
+    for (const line of out.split("\n")) {
+      const m = /^(.*?):\s*Mach-O/.exec(line);
+      if (m === null) continue;
+      const p = m[1].replace(/ \(for architecture [^)]*\)$/, "");
+      if (!known.has(p)) throw new Error(`file(1) 출력을 경로에 붙이지 못했다: ${line}`);
+      found.add(p);
+    }
+  }
+  return files.filter((f) => found.has(f));
+}
+
 // 내장 PostgreSQL 트리를 desktop/build/postgres에 스테이징한다. extraResources(from: build)가 그대로 Resources/postgres로
 // 싣는다 (Electron Phase 3 스펙 §6.8). 캐시가 있으면 복사만 한다. 번들 쪽 준비가 실패하면 여기서 멈춘다 — PG가 없는
 // .app은 첫 실행에서야 "내장 데이터베이스 실행 파일이 없어요"로 드러난다.
 run("bash", [path.join("scripts", "build-postgres.sh")], desktop);
+
+// 내장 Python 런타임(worker 층까지)과 내장 ffmpeg도 같은 자리에 스테이징한다 —
+// desktop/build/python, desktop/build/ffmpeg. 여기서 멈추는 이유도 PG와 같다: Python이나
+// ffmpeg가 빠진 .app은 첫 실행에서야 드러난다 (Electron Phase 4 스펙 §6.1).
+// 둘 다 캐시가 있으면 스테이징만 하고 끝난다.
+run("bash", [path.join("scripts", "build-python.sh")], desktop);
+run("bash", [path.join("scripts", "build-ffmpeg.sh")], desktop);
 
 // desktop 자신을 **먼저, 깨끗하게** 컴파일한다. electron-builder는 package.json의 main(dist/main.js)과
 // dist/ 전체를 그대로 싣는데, 루트 `pnpm build`에는 desktop의 컴파일이 없다(desktop에는 build 스크립트가
@@ -79,6 +113,51 @@ run("pnpm", ["exec", "electron-builder", "--dir"], desktop);
 // 이 맥의 다른 무서명 Electron 앱과 마이크 권한을 공유한다. Developer ID 서명과
 // 공증은 Phase 6이고, 여기서 필요한 것은 번들이 자기 정체성을 갖는 것뿐이다.
 const appPath = path.join(desktop, "out", "mac-arm64", "Damwha.app");
-run("codesign", ["--force", "--deep", "--sign", "-", appPath], desktop);
+const resources = path.join(appPath, "Contents", "Resources");
+const pythonEnts = path.join(desktop, "build-resources", "entitlements.python.plist");
+const macEnts = path.join(desktop, "build-resources", "entitlements.mac.plist");
+
+// entitlements를 실제로 주려면 --options runtime(hardened runtime)이 있어야 한다. 그리고
+// **plist 둘을 갈라 쓴다.**
+//   - Resources/python 안의 Mach-O들과 Resources/ffmpeg/bin/* → entitlements.python.plist.
+//     제3자 wheel의 .so는 우리 신원으로 서명되지 않으므로 disable-library-validation이 있어야
+//     로드되고, numba의 LLVM이 **모듈 로드 시점에** 실행 메모리를 잡으므로
+//     allow-unsigned-executable-memory가 필요하다 (Task 2 실측: 전자가 없으면 dyld SIGABRT,
+//     후자가 없으면 import numba가 SIGKILL).
+//   - Damwha.app → entitlements.mac.plist. 위 둘에 allow-jit이 더 붙는다. .app에 python plist를
+//     주면 앱이 죽는다 — --deep이 Electron Framework와 헬퍼에도 hardened runtime을 걸고, V8이
+//     allow-jit 없이 CodeRange 가상 메모리 예약에 실패해 "Fatal process out of memory"로 rc=133에
+//     끝난다 (2026-09-16 실측). 거꾸로 Python 트리에 allow-jit은 주지 않는다 — 안 쓰는 권한이다.
+//
+// **안쪽을 먼저 서명한다.** .app 서명이 Resources를 해시로 봉인하므로, 순서가 뒤집히면 봉인이
+// 서명 전 내용을 가리켜 codesign --verify가 깨진다.
+//
+// Resources/python 아래 Mach-O는 build-python.sh가 이미 같은 plist로 개별 서명했으므로 여기서의
+// 재서명은 멱등이다. Resources/ffmpeg는 다르다 — build-ffmpeg.sh에는 서명 단계가 아예 없어서,
+// 이 줄이 없으면 ffmpeg/ffprobe는 링커 ad-hoc 서명만 가진 채 hardened runtime .app 안에 들어간다.
+function signAll(targets, entitlements, label) {
+  if (targets.length === 0) throw new Error(`서명 대상이 없다: ${label}`);
+  console.log(
+    `$ codesign --force --sign - --options runtime --entitlements ${path.relative(desktop, entitlements)}` +
+      ` — ${label} ${targets.length}개`,
+  );
+  // argv 길이 한계를 넘지 않게 끊어 부른다. execFileSync는 비0에 throw하므로 한 건이라도
+  // 서명에 실패하면 패키징이 여기서 멈춘다 — 서명이 실패해도 .app은 linker-signed 상태로
+  // 실행되기 때문에, 실행 성공을 서명 성공으로 읽지 않으려면 종료 코드를 봐야 한다.
+  for (let i = 0; i < targets.length; i += 200) {
+    execFileSync(
+      "codesign",
+      ["--force", "--sign", "-", "--options", "runtime", "--entitlements", entitlements, ...targets.slice(i, i + 200)],
+      { cwd: desktop, stdio: "inherit" },
+    );
+  }
+}
+
+const ffmpegBin = path.join(resources, "ffmpeg", "bin");
+const ffmpegTargets = fs.existsSync(ffmpegBin) ? fs.readdirSync(ffmpegBin).map((f) => path.join(ffmpegBin, f)) : [];
+signAll(machOFiles(path.join(resources, "python")), pythonEnts, "Resources/python Mach-O");
+signAll(ffmpegTargets, pythonEnts, "Resources/ffmpeg/bin");
+
+run("codesign", ["--force", "--deep", "--sign", "-", "--options", "runtime", "--entitlements", macEnts, appPath], desktop);
 
 run("node", [path.join("scripts", "check-bundle.mjs")], desktop);
