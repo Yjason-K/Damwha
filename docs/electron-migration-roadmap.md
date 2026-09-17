@@ -12,7 +12,10 @@
 **Phase 2는 2026-09-13에 구현·최종 리뷰·packaged 통합 검증을 마쳤다**(완료 기준 4개 전부 충족,
 스펙 기준 15건 전부 충족 — 아래 Phase 2 절 참조).
 **Phase 3은 2026-09-14에 구현·최종 리뷰·packaged 통합 검증을 마쳤다**(완료 기준 3개 전부 충족,
-스펙 기준 16건 전부 충족 — 아래 Phase 3 절 참조). Phase 4~6의 상세 구현 스펙·계획과 구현은 미착수.
+스펙 기준 16건 전부 충족 — 아래 Phase 3 절 참조).
+**Phase 4는 2026-09-17에 Part 1(번들 런타임)만 마쳤다 — 아직 미완료다.** Part 2(실행 통합)는 미착수이므로
+Phase 4의 완료 기준 3개는 아직 판정하지 않았다(아래 Phase 4 절 참조). Phase 5~6의 상세 구현 스펙·계획과
+구현은 미착수.
 
 ## 목표와 전제
 
@@ -229,6 +232,19 @@ Docker DB → 내장 클러스터 이전과 짝 복구 도구는 Phase 5, `pg_up
 - 개발 도구가 없는 지원 대상 맥에서 모델 준비 후 전사·화자 분리·요약·검색 성공.
 - 앱 번들 외부의 개발용 가상환경이나 도구를 참조하지 않음.
 - 모델과 캐시가 앱 패키지 외부에 저장되어 재실행 시 재사용됨.
+
+**상태 (2026-09-17): 미완료 — 구현 계획 둘 중 Part 1(번들 런타임, Task 1~7)만 완료했다.**
+구현 계획을 둘로 나눴다 — [Part 1 번들 런타임](superpowers/plans/2026-09-16-electron-phase-4-bundled-runtime.md)(빌드·번들)과
+[Part 2 실행 통합](superpowers/plans/2026-09-16-electron-phase-4-runtime-integration.md)(실행 계약·앱·검증).
+Part 1은 Python 3.12.11·ML 의존성 1.3 GB·ffmpeg 9.0.1(LGPL 2.1 정적)을 재현 가능하게 빌드해 `.app`(1.8 GB)에
+싣고, Mach-O 454개를 hardened runtime으로 전수 서명했으며, 번들에 개발 머신 경로가 하나도 굽히지 않았음을
+빌드 시점에 증명하는 검사 31건을 세웠다. `mlx-lm`이 매니페스트 밖에 있던 것(스펙 §2.4)도 `uv.lock`으로
+고정했다. **앱 코드는 아직 한 줄도 바꾸지 않았다** — 런처·env 주입·고아 처분·모델 준비·토큰 온보딩은
+Part 2다. 스펙 완료 기준 30건 중 Part 1이 만드는 것은 넷(P4-C15·C25·C28과 C26·C27의 기준선)이고 판정은
+충족이며, **나머지 26건과 위 로드맵 완료 기준 3개는 Part 2의 마지막 Task가 판정한다.** 스펙은
+[2026-09-16-electron-phase-4-embedded-python-runtime-design.md](superpowers/specs/2026-09-16-electron-phase-4-embedded-python-runtime-design.md),
+브랜치는 `feat/electron-migration-phase-4-embedded-python-runtime`, Part 1의 판정·증거·이월 항목은
+[Phase 4 Part 1 결과](superpowers/reports/2026-09-16-electron-phase-4-embedded-python-runtime-results.md)에 있다.
 
 ### Phase 5. 데이터 이전·운영 안정화
 
