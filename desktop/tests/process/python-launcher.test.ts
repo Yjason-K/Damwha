@@ -5,6 +5,7 @@ import type { SpawnOptions } from "child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { childEnv, llmBaseUrl } from "../../src/config/config";
 import { CAUSES } from "../../src/diagnostics/causes";
+import { exitedDetail } from "../../src/services/supervisor";
 import { launchPython } from "../../src/process/python-launcher";
 import type { LaunchContext } from "../../src/services/types";
 import { fakeChild } from "../fake-child";
@@ -132,15 +133,24 @@ describe("launchPython — 실행 계약 (스펙 §6.2)", () => {
     expect(spawnFn).not.toHaveBeenCalled();
   });
 
-  for (const [label, python] of [
-    ["empty", ""],
-    ["relative", "python3.12"],
+  // ffmpeg도 본다 — 런처가 PATH를 그 dirname으로 만들므로, 빈 경로는 자식 PATH에 `.`(cwd)을, 상대 경로는
+  // 상대 조각을 넣는다.
+  for (const [label, key, value, what] of [
+    ["empty python", "python", "", /Python/],
+    ["relative python", "python", "python3.12", /Python/],
+    ["empty ffmpeg", "ffmpeg", "", /ffmpeg/],
+    ["relative ffmpeg", "ffmpeg", "bin/ffmpeg", /ffmpeg/],
   ] as const) {
-    it(`refuses a ${label} python path and says why, without spawning`, () => {
+    it(`refuses a bad path (${label}) and says why, without spawning`, () => {
       const { spawnFn } = spawned();
       expect(() =>
-        launchPython({ ctx: ctx({ bins: { ...ctx().bins, python } }), module: "damwha_worker", logId: "worker", spawnFn }),
-      ).toThrow(/Python/);
+        launchPython({
+          ctx: ctx({ bins: { ...ctx().bins, [key]: value } }),
+          module: "damwha_worker",
+          logId: "worker",
+          spawnFn,
+        }),
+      ).toThrow(what);
       expect(spawnFn).not.toHaveBeenCalled();
     });
   }
@@ -226,6 +236,50 @@ describe("launchPython — 프로세스 배선", () => {
     handle.onExit((c) => late.push(c));
     expect(late).toEqual([3]);
     expect(handle.alive()).toBe(false);
+  });
+
+  for (const [sig, code] of [
+    ["SIGKILL", 137],
+    ["SIGABRT", 134],
+    ["SIGSEGV", 139],
+  ] as const) {
+    it(`reports a death by ${sig} as a nonzero code (${code}) and says so in the stderr tail — never as code 0`, () => {
+      // Node는 신호로 죽은 자식에 exit(null, "<SIG>")를 준다. 이것을 0으로 접으면 감독자가 "프로세스가 종료됐어요
+      // (코드 0)."을 적는다 — torch/MPS abort나 메모리 압박 SIGKILL은 stderr에 아무것도 안 남기므로, 코드와 이 한
+      // 줄이 사람이 볼 수 있는 원인의 전부다.
+      const { child, spawnFn } = spawned();
+      const { handle } = launchPython({ ctx: ctx(), module: "damwha_worker", logId: "worker", spawnFn });
+      if (handle === null) throw new Error("handle이 없다");
+      const seen: number[] = [];
+      handle.onExit((c) => seen.push(c));
+      child.emit("exit", null, sig);
+      expect(handle.exitCode()).toBe(code);
+      expect(seen).toEqual([code]);
+      expect(handle.alive()).toBe(false);
+      expect(handle.stderrTail()).toContain(`terminated by ${sig}`);
+      expect(exitedDetail(handle.exitCode(), handle.stderrTail())).toContain(`(코드 ${code})`);
+      expect(exitedDetail(handle.exitCode(), handle.stderrTail())).toContain(`terminated by ${sig}`);
+    });
+  }
+
+  it("keeps a real exit code as is, including 0, and adds no signal line", () => {
+    for (const code of [0, 1]) {
+      const { child, spawnFn } = spawned();
+      const { handle } = launchPython({ ctx: ctx(), module: "damwha_worker", logId: "worker", spawnFn });
+      if (handle === null) throw new Error("handle이 없다");
+      child.emit("exit", code, null);
+      expect(handle.exitCode()).toBe(code);
+      expect(handle.stderrTail()).not.toContain("terminated by");
+    }
+  });
+
+  it("does not report an exit with neither a code nor a signal as a clean 0", () => {
+    const { child, spawnFn } = spawned();
+    const { handle } = launchPython({ ctx: ctx(), module: "damwha_worker", logId: "worker", spawnFn });
+    if (handle === null) throw new Error("handle이 없다");
+    child.emit("exit", null, null);
+    expect(handle.exitCode()).not.toBe(0);
+    expect(handle.exitCode()).not.toBeNull();
   });
 
   it("stop() sends one SIGTERM straight to the python pid — no forwarder in between, no group", async () => {

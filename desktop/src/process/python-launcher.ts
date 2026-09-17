@@ -1,4 +1,5 @@
 import { spawn } from "child_process";
+import * as os from "os";
 import * as path from "path";
 import { childEnv } from "../config/config";
 import type { LaunchContext, LaunchResult } from "../services/types";
@@ -106,7 +107,23 @@ export function launchPython(options: PythonLaunchOptions): LaunchResult {
     sink.write(b, true);
     options.onStderr?.(b.toString());
   });
-  child.on("exit", (c) => settle(c ?? 0));
+  child.on("exit", (c: number | null, sig: NodeJS.Signals | null) => {
+    if (c !== null) {
+      settle(c);
+      return;
+    }
+    // 신호로 죽었다(Node는 exit(null, "<SIG>")를 준다). 코드 0으로 접지 않는다 — 감독자가 "프로세스가
+    // 종료됐어요 (코드 0)."을 적게 된다. torch/MPS의 abort나 메모리 압박의 SIGKILL은 stderr에 아무것도
+    // 남기지 않으므로, 셸 관례의 128+번호와 꼬리의 한 줄이 사람이 볼 수 있는 원인의 전부다.
+    // (postgres/handle.ts는 같은 자리에서 `c ?? 1`을 쓴다.)
+    if (sig === null) {
+      sink.write("terminated without an exit code or signal\n", true);
+      settle(1);
+      return;
+    }
+    sink.write(`terminated by ${sig}\n`, true);
+    settle(128 + (os.constants.signals[sig] ?? 0));
+  });
   // spawn 실패(번들 python이 없다 → ENOENT)는 'exit'가 아니라 'error'로 온다. 리스너가 없으면 Electron main이
   // 통째로 죽는다. 싱크에 적은 문구를 감독자가 죽은 핸들의 꼬리에서 원인으로 올린다(causes.ts의 spawnNotFound).
   child.on("error", (e: Error) => {
@@ -119,7 +136,10 @@ export function launchPython(options: PythonLaunchOptions): LaunchResult {
    * **python의 pid로 직접 보낸다.** 중간 전달자가 없으므로 보낸 수가 곧 받는 수다 — worker supervisor의
    * `_on_signal`은 받은 수를 세어 두 번째를 강제로 읽는다. 그룹(-pid)이 아닌 이유: worker의 그룹에는
    * supervisor가 세션 분리 없이 띄운 capabilities 프로브가 함께 있고, 그것을 거두는 자리는 supervisor가 끝난
-   * 뒤의 worker-shutdown.ts 한 곳이다. embed의 그룹에는 uvicorn python 하나뿐이라 어느 쪽이든 같다 — 한
+   * 뒤의 worker-shutdown.ts 한 곳이다. embed의 그룹에는 uvicorn python 말고도 그 프로세스가 띄운
+   * `multiprocessing.resource_tracker`(`-c …main(fd)`, run-id 없음)가 함께 있다(2026-09-17 dev 실측). 그것은
+   * SIGTERM을 무시하고(번들 `lib/python3.12/multiprocessing/resource_tracker.py:237-238`의 `main`이
+   * SIG_IGN을 건다) 부모가 끝나 파이프가 닫히면 스스로 끝나므로, 그룹에 보내도 더 거둘 것이 없다 — 한
    * 런처가 두 서비스에 같은 규칙을 쓴다. 프로덕션 worker는 이 경로가 아니라 main.ts의 stopOwnWorker →
    * worker-shutdown.ts로 내린다.
    */
