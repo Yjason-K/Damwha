@@ -328,7 +328,8 @@ const KILL_CHECKS = 10;
 
 const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-function reasonOf(e: unknown): string {
+/** 예외를 로그 한 줄의 까닭으로. 종료 회수(app/reap-on-quit.ts)도 이것을 쓴다. */
+export function reasonOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 

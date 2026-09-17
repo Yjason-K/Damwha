@@ -1,12 +1,15 @@
+import { CAUSES } from "../diagnostics/causes";
 import {
   clipArgs,
   processLabel,
   reapByKind,
+  reasonOf,
   type DamwhaProcess,
   type KnownTree,
   type ReapDeps,
   type ReapEntry,
   type ReapPlan,
+  type ReapRun,
 } from "../process/orphans";
 import type { StopOutcome } from "../services/types";
 import { STOP_DETAIL } from "../services/worker-shutdown";
@@ -62,10 +65,6 @@ const QUIT_PLAN: ReapPlan = {
   },
 };
 
-function reasonOf(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
-
 /** 로그를 못 써도 종료를 막지 않는다. */
 function say(d: ReapDeps, line: string): void {
   try {
@@ -76,21 +75,17 @@ function say(d: ReapDeps, line: string): void {
 }
 
 /**
- * 이번 실행의 run-id를 단 프로세스를 전부 내린다. `stopAll`이 끝난 **뒤에**, 핸들 유무와 무관하게 항상 부른다.
- *
- * - 돌려주는 `reaped`는 신호가 실제로 한 번이라도 닿은 담화 프로세스다(신호 순서 — 자손이 먼저). 표식 없는
- *   자손(탈출구 LLM 서버 등)도 함께 내리지만 `DamwhaProcess`가 아니라 여기 담지 않는다 — 로그에는 남는다.
- * - **던지지 않는다.** 종료를 막지 않는 것이 먼저다. `ps` 실패·빈 출력·읽을 수 없는 줄·자손 조회 실패는
- *   한 줄을 남기고 신호 없이 끝난다. 도중에 의존이 던지면 한 줄을 남기고 그때까지 보낸 것을 돌려준다.
- * - 아무것도 찾지 못했으면 아무것도 적지 않는다. 무엇이든 내렸으면 프로세스마다 줄(pid·모듈·`--once`·run-id)과
- *   "A층이 놓쳤다"는 요약 한 줄을 남긴다 — 조용히 덮으면 A층의 결함이 영영 안 보인다.
+ * B층 한 판의 전체 결과 — 신호를 보낸 칸 전부(표식 없는 자손 포함)와 스캔을 끝냈는가. 종료 화면의 판정은
+ * 이것으로 내린다(`stopThenReap`). 도중에 의존이 던지면 한 줄을 남기고 **실패**로 돌려준다 — 끝까지 보지 못했다.
  */
-export async function reapOwnedOnQuit(d: ReapDeps): Promise<{ reaped: DamwhaProcess[] }> {
+async function reapOwned(d: ReapDeps): Promise<ReapRun> {
   const signalled: ReapEntry[] = [];
+  let run: ReapRun;
   try {
-    await reapByKind(d, QUIT_PLAN, signalled);
+    run = await reapByKind(d, QUIT_PLAN, signalled);
   } catch (e) {
     say(d, `도중에 멈췄어요 — ${reasonOf(e)}`);
+    run = { failed: true, signalled };
   }
   if (signalled.length > 0) {
     say(
@@ -99,6 +94,23 @@ export async function reapOwnedOnQuit(d: ReapDeps): Promise<{ reaped: DamwhaProc
         `pid ${signalled.map((e) => e.pid).join(", ")}. 서비스 정지 절차가 무엇을 놓쳤는지 확인해야 해요.`,
     );
   }
+  return run;
+}
+
+/**
+ * 이번 실행의 run-id를 단 프로세스를 전부 내린다. `stopAll`이 끝난 **뒤에**, 핸들 유무와 무관하게 항상 부른다.
+ *
+ * - 돌려주는 `reaped`는 신호가 실제로 한 번이라도 닿은 담화 프로세스다(신호 순서 — 자손이 먼저). 표식 없는
+ *   자손(탈출구 LLM 서버 등)도 함께 내리지만 `DamwhaProcess`가 아니라 여기 담지 않는다 — 로그에는 남고, 종료
+ *   화면의 판정(`stopThenReap`)은 그것까지 센다.
+ * - **던지지 않는다.** 종료를 막지 않는 것이 먼저다. `ps` 실패·빈 출력·읽을 수 없는 줄·자손 조회 실패는
+ *   한 줄을 남기고 신호 없이 끝난다. 도중에 의존이 던지면 한 줄을 남기고 그때까지 보낸 것을 돌려준다.
+ *   스캔 실패는 이 반환값에 없다 — 화면에 싣는 쪽은 `stopThenReap`이다.
+ * - 아무것도 찾지 못했으면 아무것도 적지 않는다. 무엇이든 내렸으면 프로세스마다 줄(pid·모듈·`--once`·run-id)과
+ *   "A층이 놓쳤다"는 요약 한 줄을 남긴다 — 조용히 덮으면 A층의 결함이 영영 안 보인다.
+ */
+export async function reapOwnedOnQuit(d: ReapDeps): Promise<{ reaped: DamwhaProcess[] }> {
+  const { signalled } = await reapOwned(d);
   return { reaped: signalled.flatMap((e) => (e.root === null ? [] : [e.root])) };
 }
 
@@ -118,55 +130,92 @@ export function quitReapDeps(target: QuitReapTarget | null, log: (line: string) 
   return systemReapDeps({ runId: target.runId, trees: target.trees, log });
 }
 
-/** 화면에 싣는 B층의 사유. */
-function reapedDetail(reaped: readonly DamwhaProcess[]): string {
-  return `서비스를 하나씩 멈추는 단계가 놓친 담화 프로세스 ${reaped.length}개를 종료 마지막 단계에서 찾아 내렸어요 (pid ${reaped
-    .map((p) => p.pid)
+/** 화면에 싣는 B층의 사유. 표식 없는 자손도 센다. */
+function reapedDetail(signalled: readonly ReapEntry[]): string {
+  return `서비스를 하나씩 멈추는 단계가 놓친 프로세스 ${signalled.length}개를 종료 마지막 단계에서 찾아 내렸어요 (pid ${signalled
+    .map((e) => e.pid)
     .join(", ")}).`;
+}
+
+/**
+ * A층의 사유 중 **남은 것이 있다는 말**. 그 pid가 이제 없으면 거짓이 된다. 한 줄에 다른 사유와 공백으로 이어져
+ * 올 수 있으므로(worker-shutdown.ts의 verdict) 줄이 아니라 문장을 지운다.
+ *  - `STOP_DETAIL.orphans`·`diedFirst`는 어느 pid의 말인지 모르므로 A층의 `leaked`가 **전부** 없어졌을 때만.
+ *  - postgres의 `pgStopLeaked`는 pid를 실으므로 그 pid가 없어졌을 때마다.
+ */
+function freshReasons(out: StopOutcome, gone: readonly number[], allGone: boolean): string[] {
+  if (out.detail === undefined) return [];
+  const stale = [
+    ...(allGone ? [STOP_DETAIL.orphans, STOP_DETAIL.diedFirst] : []),
+    ...gone.map((pid) => CAUSES.pgStopLeaked.text(pid)),
+  ];
+  return out.detail
+    .split("\n")
+    .map((line) => stale.reduce((rest, sentence) => rest.split(sentence).join(" "), line).replace(/\s+/g, " ").trim())
+    .filter((line) => line !== "");
 }
 
 /**
  * B층의 결과를 A층의 `StopOutcome`에 합친다 — 이 값이 runQuitFlow(quit-flow.ts)의 "남은 것" 판정
  * (`!out.stopped` → `leftoverNotice`)으로 간다.
  *
- * B층이 무엇이든 내렸으면 A층이 `stopped: true`라고 했어도 깨끗하지 않았다. `leaked`에는 내린 것 중 **아직
- * 있는** pid만 더한다 — 신호로 끝난 것을 "살아 있을 수 있다"고 적으면 거짓이다. A층이 사유 없이 깨끗하지
- * 않았으면 화면이 원래 적었을 말(`STOP_DETAIL.unverifiable`, leftoverNotice의 기본값)을 지킨다.
+ * 1. **A층의 `leaked`를 다시 본다.** 이제 없는 pid는 뺀다 — A층이 남겼다고 한 `llm_entry`(자기 세션이라 그룹
+ *    SIGTERM이 닿지 않는다)를 B층이 방금 내렸는데 화면이 "살아 있을 수 있다"고 하면 거짓이다. 그 pid에 대한
+ *    "남았다"는 사유도 함께 지운다(`freshReasons`). 그러고도 사유가 남지 않으면 A층은 깨끗했던 것과 같다.
+ *    사유 없이 깨끗하지 않았던 A층(`{stopped:false, leaked:[]}`)은 화면이 원래 적었을 말
+ *    (`STOP_DETAIL.unverifiable`, leftoverNotice의 기본값)을 지킨다.
+ * 2. **B층이 신호를 하나라도 보냈으면** — 표식 없는 자손에게만 갔어도 — 깨끗하지 않았다. `leaked`에는 보낸 것 중
+ *    아직 있는 pid만 더한다.
+ * 3. **B층이 스캔을 끝내지 못했으면**(`run.failed`) 깨끗하다고 하지 않는다 — 스펙 §6.5 "판독 실패를 '고아
+ *    없음'으로 처리하지 않는다". 사유는 `STOP_DETAIL.unverifiable`.
+ * 4. B층이 내렸고, 스캔을 끝냈고, A층이 (1) 뒤에 깨끗하고, 남은 pid가 하나도 없으면 `cleanedUp` — 화면은
+ *    "정리했다"고 적는다.
+ * B층이 아무것도 보내지 않고 스캔을 끝냈으면 A층의 판정(1을 거친 것)이 그대로 결과다. 바뀐 것이 없으면 같은
+ * 객체를 돌려준다.
  */
-export function withReaped(
-  out: StopOutcome,
-  reaped: readonly DamwhaProcess[],
-  exists: (pid: number) => boolean,
-): StopOutcome {
-  if (reaped.length === 0) return out;
-  const survivors = reaped.map((p) => p.pid).filter((pid) => !out.leaked.includes(pid) && exists(pid));
-  const aReason = out.detail ?? (out.stopped ? undefined : STOP_DETAIL.unverifiable);
-  return {
-    stopped: false,
-    leaked: [...out.leaked, ...survivors],
-    detail: [aReason, reapedDetail(reaped)].filter((line): line is string => line !== undefined).join("\n"),
-  };
+export function withReaped(out: StopOutcome, run: ReapRun, exists: (pid: number) => boolean): StopOutcome {
+  const aLeft = out.leaked.filter((pid) => exists(pid));
+  const gone = out.leaked.filter((pid) => !aLeft.includes(pid));
+  const allGone = out.leaked.length > 0 && aLeft.length === 0;
+  const aReasons = freshReasons(out, gone, allGone);
+  const aClean = out.stopped || (allGone && aReasons.length === 0);
+  const acted = run.signalled.length > 0;
+
+  if (!acted && !run.failed) {
+    if (aClean) return out.stopped ? out : { stopped: true, leaked: [] };
+    if (gone.length === 0) return out;
+  }
+
+  const lines = aClean ? [] : aReasons.length > 0 ? aReasons : [STOP_DETAIL.unverifiable];
+  if (acted) lines.push(reapedDetail(run.signalled));
+  if (run.failed && !lines.includes(STOP_DETAIL.unverifiable)) lines.push(STOP_DETAIL.unverifiable);
+  const bLeft = run.signalled.map((e) => e.pid).filter((pid) => !aLeft.includes(pid) && exists(pid));
+  const leaked = [...aLeft, ...bLeft];
+  const cleanedUp = acted && !run.failed && aClean && leaked.length === 0;
+  return cleanedUp
+    ? { stopped: false, leaked, detail: lines.join("\n"), cleanedUp: true }
+    : { stopped: false, leaked, detail: lines.join("\n") };
 }
 
 /**
- * main.ts `stopServices()`의 순서. A층(`stop` — 감독자 역순 종료와 dev의 Vite)이 **끝난 뒤에** B층을 돈다.
+ * main.ts `stopServices()`의 순서. A층(`stop` — 감독자 역순 종료)이 **끝난 뒤에** B층을 돈다.
  *
  * - A층이 도는 동안에는 B층을 시작하지 않는다. worker의 정중한 정지(유예 90초, P2-C5) 한가운데에 B층의
  *   SIGTERM → 3초 → SIGKILL이 끼면 그 정지가 깨진다.
  * - **A층이 던져도 B층은 돈다.** 그 뒤 A층의 예외를 그대로 다시 던진다 — main.ts의 `.catch`가 그것을 받아
  *   `quitNow()`로 간다. B층의 존재 이유가 "A층이 놓친 경로"인데 그중 하나를 놓치면 안 된다.
- * - `deps`가 null이면(이번 실행이 트리를 계산하기 전) B층을 건너뛴다.
- * - A층이 값을 돌려줬으면 B층의 결과를 합친다(`withReaped`).
+ * - `deps`가 null이면(이번 실행이 트리를 계산하기 전) B층을 건너뛰고 A층의 값을 그대로 돌려준다.
+ * - A층이 값을 돌려줬으면 B층의 전체 결과(스캔 실패 포함)를 합친다(`withReaped`).
  */
 export async function stopThenReap(stop: () => Promise<StopOutcome>, deps: ReapDeps | null): Promise<StopOutcome> {
   let out: StopOutcome;
   try {
     out = await stop();
   } catch (e) {
-    if (deps !== null) await reapOwnedOnQuit(deps);
+    if (deps !== null) await reapOwned(deps);
     throw e;
   }
   if (deps === null) return out;
-  const { reaped } = await reapOwnedOnQuit(deps);
-  return withReaped(out, reaped, (pid) => deps.exists(pid));
+  const run = await reapOwned(deps);
+  return withReaped(out, run, (pid) => deps.exists(pid));
 }

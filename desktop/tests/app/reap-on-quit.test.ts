@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { leftoverNotice, runQuitFlow, type QuitFlowDeps, type QuitNotice } from "../../src/app/quit-flow";
 import { quitReapDeps, reapOwnedOnQuit, stopThenReap, withReaped } from "../../src/app/reap-on-quit";
+import { CAUSES } from "../../src/diagnostics/causes";
 import {
   ORPHAN_POLL_MS,
   ORPHAN_TERM_GRACE_MS,
   type DamwhaProcess,
   type KnownTree,
   type ReapDeps,
+  type ReapRun,
 } from "../../src/process/orphans";
 import type { StopOutcome } from "../../src/services/types";
 import { STOP_DETAIL } from "../../src/services/worker-shutdown";
@@ -315,21 +317,154 @@ describe("stopThenReap — main.ts stopServices()의 순서 (A층 → B층)", ()
     expect(k.alive.has(8003)).toBe(false);
   });
 
-  it("turns A's clean verdict into not-clean when B had to reap something", async () => {
+  it("turns A's clean verdict into not-clean when B had to reap something — and says it cleaned up once all is gone", async () => {
     const k = kernel({ ps: table(MY.llm), alive: [1, 8003] });
     const out = await stopThenReap(async () => ({ stopped: true, leaked: [] }), k.d);
     expect(out.stopped).toBe(false);
     expect(out.detail).toMatch(/8003/);
     // SIGTERM으로 끝났으니 남은 것은 없다 — 화면이 "살아 있을 수 있다"고 말하지 않는다.
     expect(out.leaked).toEqual([]);
+    expect(out.cleanedUp).toBe(true);
+    expect(leftoverNotice(out).message).toBe("종료하면서 남아 있던 프로세스를 정리했어요.");
   });
 
-  it("keeps A's verdict untouched when B found nothing", async () => {
+  it("drops a pid A leaked once B has taken it down — and A's stale 'still alive' reason with it (fix 1)", async () => {
+    // ⌘Q + "지금 강제 종료": supervisor가 --once를 죽이고 나가고, 그룹 SIGTERM은 자기 세션의 llm_entry에 닿지 않는다.
+    // A는 {stopped:false, leaked:[8003], detail: orphans}를 낸다. B가 8003을 SIGTERM으로 내렸다.
+    const k = kernel({ ps: table(MY.llm), alive: [1, 8003] });
+    const a: StopOutcome = { stopped: false, leaked: [8003], detail: STOP_DETAIL.orphans };
+    const out = await stopThenReap(async () => a, k.d);
+    expect(k.alive.has(8003)).toBe(false);
+    expect(out.leaked).not.toContain(8003);
+    expect(out.leaked).toEqual([]);
+    expect(out.detail).not.toContain(STOP_DETAIL.orphans);
+    expect(out.cleanedUp).toBe(true);
+    const notice = leftoverNotice(out);
+    expect(notice.message).not.toContain("살아 있을 수 있는");
+    expect(notice.detail).not.toContain("8003 —");
+  });
+
+  it("drops the stale sentence even when A joined it with another reason on one line, and keeps the other", async () => {
+    // worker-shutdown.ts의 verdict는 사유를 공백으로 잇는다.
+    const k = kernel({ ps: table(MY.llm), alive: [1, 8003] });
+    const a: StopOutcome = {
+      stopped: false,
+      leaked: [8003],
+      detail: `${STOP_DETAIL.orphans} ${STOP_DETAIL.unverifiable}\napi: 종료 중 예외 — boom`,
+    };
+    const out = await stopThenReap(async () => a, k.d);
+    expect(out.leaked).toEqual([]);
+    expect(out.detail).not.toContain(STOP_DETAIL.orphans);
+    expect(out.detail).toContain(STOP_DETAIL.unverifiable);
+    expect(out.detail).toContain("boom");
+    // 확인하지 못한 것이 남았으니 "정리했다"고 말하지 않는다.
+    expect(out.cleanedUp).toBeUndefined();
+    expect(leftoverNotice(out).message).toBe("정리가 끝났는지 확인하지 못했어요.");
+  });
+
+  it("keeps A's leftover and its reason while it is still alive", async () => {
+    // B가 못 찾은(내 run-id가 아닌) 남은 pid — 예: 유예를 넘긴 postmaster.
+    const k = kernel({ ps: table(MY.llm), alive: [1, 8003, 4242] });
+    const a: StopOutcome = { stopped: false, leaked: [4242], detail: STOP_DETAIL.orphans };
+    const out = await stopThenReap(async () => a, k.d);
+    expect(out.leaked).toEqual([4242]);
+    expect(out.detail).toContain(STOP_DETAIL.orphans);
+    expect(out.cleanedUp).toBeUndefined();
+    expect(leftoverNotice(out).message).toBe("아직 살아 있을 수 있는 프로세스가 있어요.");
+  });
+
+  it("drops a pid A leaked that ended on its own when B found nothing — nothing is left to warn about", async () => {
     const k = kernel({ ps: table(), alive: [1] });
+    const out = await stopThenReap(async () => ({ stopped: false, leaked: [4242], detail: STOP_DETAIL.diedFirst }), k.d);
+    expect(out).toEqual({ stopped: true, leaked: [] });
+  });
+
+  it("keeps A's verdict untouched when B found nothing and A's leftovers still exist", async () => {
+    const k = kernel({ ps: table(), alive: [1, 42] });
     const clean: StopOutcome = { stopped: true, leaked: [] };
-    expect(await stopThenReap(async () => clean, k.d)).toEqual(clean);
+    expect(await stopThenReap(async () => clean, k.d)).toBe(clean);
     const dirty: StopOutcome = { stopped: false, leaked: [42], detail: "아직 살아 있어요." };
     expect(await stopThenReap(async () => dirty, k.d)).toEqual(dirty);
+    const unproven: StopOutcome = { stopped: false, leaked: [], detail: STOP_DETAIL.diedUnseen };
+    expect(await stopThenReap(async () => unproven, k.d)).toEqual(unproven);
+  });
+
+  it.each([
+    ["ps exits non-zero", { ps: async () => Promise.reject(new Error("ps timed out after 5000ms")) }],
+    ["one of our lines cannot be read", { ps: table(` 8101 ${PY} -m damwha_worker --run-id=desktop-1111`) }],
+  ] as Array<[string, { ps: string | (() => Promise<string>) }]>)(
+    "does not call a clean A clean when B could not scan — %s (fix 2)",
+    async (_name, o) => {
+      const k = kernel({ ...o, alive: [1, 8101] });
+      const out = await stopThenReap(async () => ({ stopped: true, leaked: [] }), k.d);
+      expect(k.events).toEqual([]);
+      expect(out).toEqual({ stopped: false, leaked: [], detail: STOP_DETAIL.unverifiable });
+      expect(leftoverNotice(out).message).toBe("정리가 끝났는지 확인하지 못했어요.");
+    },
+  );
+
+  it("does not call a clean A clean when B's descendant lookup failed (fix 2)", async () => {
+    const k = kernel({ ps: table(MY.worker), alive: [1, 8001] });
+    k.d.descendantsOf = async () => {
+      throw new Error("ps timed out");
+    };
+    const out = await stopThenReap(async () => ({ stopped: true, leaked: [] }), k.d);
+    expect(out.stopped).toBe(false);
+    expect(out.detail).toBe(STOP_DETAIL.unverifiable);
+    // 확인하지 못한 채 살아 있는 내 프로세스를 "없다"고 하지 않는다 — pid는 모른다(스캔이 실패했다).
+    expect(out.cleanedUp).toBeUndefined();
+  });
+
+  it("does not say it cleaned up when a dependency threw half-way through B (fix 2)", async () => {
+    // embed(8004)에 SIGTERM을 보낸 뒤 worker(8001)의 존재 확인이 던졌다 — 8001은 끝까지 보지 못했다.
+    const k = kernel({ ps: table(MY.embed, MY.worker), alive: [1, 8001, 8004] });
+    const exists = k.d.exists;
+    k.d.exists = (pid) => {
+      if (pid === 8001) throw new Error("kernel said no");
+      return exists(pid);
+    };
+    const out = await stopThenReap(async () => ({ stopped: true, leaked: [] }), k.d);
+    expect(out.stopped).toBe(false);
+    expect(out.detail).toMatch(/8004/);
+    expect(out.detail).toContain(STOP_DETAIL.unverifiable);
+    expect(out.cleanedUp).toBeUndefined();
+  });
+
+  it("reports both what B sent and that it could not finish when the re-read before SIGKILL fails", async () => {
+    let scans = 0;
+    const k = kernel({
+      ps: async () => {
+        if (++scans === 1) return table(MY.once);
+        throw new Error("second ps failed");
+      },
+      alive: [1, 8002],
+      ignoresTerm: [8002],
+    });
+    const out = await stopThenReap(async () => ({ stopped: true, leaked: [] }), k.d);
+    expect(out.stopped).toBe(false);
+    expect(out.leaked).toEqual([8002]);
+    expect(out.detail).toMatch(/8002/);
+    expect(out.detail).toContain(STOP_DETAIL.unverifiable);
+    expect(out.cleanedUp).toBeUndefined();
+  });
+
+  it("calls the stop not clean when B's only signal went to an unmarked descendant (fix 3)", async () => {
+    // --once(8002)의 자손(9100, 표식 없음)에 SIGTERM이 닿자 --once가 스스로 끝났다 — 뿌리에는 신호가 가지 않았다.
+    const k = kernel({ ps: table(MY.once), alive: [1, 8002, 9100], tree: { 8002: [9100] } });
+    const terminate = k.d.terminate!;
+    k.d.terminate = (pid) => {
+      terminate(pid);
+      if (pid === 9100) k.alive.delete(8002);
+    };
+    expect(await reapOwnedOnQuit(k.d)).toEqual({ reaped: [] });
+    k.alive.add(8002);
+    k.alive.add(9100);
+    k.events.length = 0;
+    const out = await stopThenReap(async () => ({ stopped: true, leaked: [] }), k.d);
+    expect(signalled(k.events)).toEqual(["TERM 9100"]);
+    expect(out.stopped).toBe(false);
+    expect(out.detail).toMatch(/9100/);
+    expect(out.cleanedUp).toBe(true);
   });
 
   it("skips B when this run never got as far as its trees (quit during onboarding)", async () => {
@@ -385,25 +520,52 @@ describe("withReaped — B층의 결과를 A층의 판정에 합친다", () => {
     tree: ROOT,
     ...over,
   });
+  const run = (roots: DamwhaProcess[], over: Partial<ReapRun> = {}): ReapRun => ({
+    failed: false,
+    signalled: roots.map((root) => ({ pid: root.pid, root })),
+    ...over,
+  });
 
-  it("returns A's outcome as is when B reaped nothing", () => {
+  it("returns A's outcome as is when B sent nothing and scanned fine", () => {
     const out: StopOutcome = { stopped: true, leaked: [] };
-    expect(withReaped(out, [], () => true)).toBe(out);
+    expect(withReaped(out, run([]), () => true)).toBe(out);
   });
 
   it("lists only the reaped processes that still exist as leftovers, without duplicating A's", () => {
-    const merged = withReaped({ stopped: false, leaked: [8002, 111], detail: "A의 사유" }, [p(8001), p(8002)], (pid) => pid !== 8001);
+    const merged = withReaped(
+      { stopped: false, leaked: [8002, 111], detail: "A의 사유" },
+      run([p(8001), p(8002)]),
+      (pid) => pid !== 8001,
+    );
     expect(merged.stopped).toBe(false);
     expect(merged.leaked).toEqual([8002, 111]);
     expect(merged.detail?.split("\n")[0]).toBe("A의 사유");
     expect(merged.detail).toMatch(/8001/);
+    expect(merged.cleanedUp).toBeUndefined();
   });
 
   it("keeps what the screen would have said for a not-clean A without its own reason", () => {
     // leftoverNotice는 detail이 없으면 STOP_DETAIL.unverifiable을 쓴다. B의 줄이 그 자리를 빼앗으면 A의 사유가 사라진다.
-    const merged = withReaped({ stopped: false, leaked: [] }, [p(8003, { module: "damwha_worker.llm_entry" })], () => false);
+    const merged = withReaped({ stopped: false, leaked: [] }, run([p(8003, { module: "damwha_worker.llm_entry" })]), () => false);
     expect(merged.detail).toContain(STOP_DETAIL.unverifiable);
+    expect(merged.cleanedUp).toBeUndefined();
     expect(leftoverNotice(merged).detail).toContain("8003");
+  });
+
+  it("drops a postgres leftover reason for a pid that has since ended, and keeps it for one still alive", () => {
+    const a: StopOutcome = {
+      stopped: false,
+      leaked: [300, 301],
+      detail: `${CAUSES.pgStopLeaked.text(300)}\n${CAUSES.pgStopLeaked.text(301)}`,
+    };
+    const merged = withReaped(a, run([]), (pid) => pid === 301);
+    expect(merged.leaked).toEqual([301]);
+    expect(merged.detail).toBe(CAUSES.pgStopLeaked.text(301));
+  });
+
+  it("does not repeat the unverifiable reason when A already gave it", () => {
+    const merged = withReaped({ stopped: false, leaked: [], detail: STOP_DETAIL.unverifiable }, run([], { failed: true }), () => false);
+    expect(merged.detail).toBe(STOP_DETAIL.unverifiable);
   });
 });
 

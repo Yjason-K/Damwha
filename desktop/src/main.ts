@@ -515,28 +515,23 @@ function stopOwnWorker(result: LaunchResult, plan: StopPlan): Promise<StopOutcom
 }
 
 /**
- * 앱 종료의 서비스 정지 — A층(아래 stopServicesByHandle) 뒤에 B층(핸들과 무관한 종료 회수)을 붙인다
- * (Phase 4 스펙 §6.5 "종료 절차"). 순서·던진 경로·판정 합치기는 app/reap-on-quit.ts의 stopThenReap에 있다.
+ * 앱 종료의 서비스 정지. 감독자 역순 종료(A층) 뒤에 핸들과 무관한 종료 회수(B층)를 붙이고, dev의 Vite를 나란히 내린다
+ * (Phase 4 스펙 §6.5 "종료 절차"). A층 → B층의 순서·던진 경로·판정 합치기는 app/reap-on-quit.ts의 stopThenReap에 있다.
  *
  * **quit-flow.ts가 아니라 여기다.** runQuitFlow는 이 함수를 부를 뿐이고, 이 함수 자체가 거부하면 before-quit의
  * `.catch`가 quitNow()로 간다 — B층이 runQuitFlow 안에 있으면 그 경로에서 건너뛰어진다. B층이 합친 결과는
  * runQuitFlow의 "남은 것" 판정(`!out.stopped` → leftoverNotice)으로 그대로 간다.
+ *
+ * Vite는 감독자가 모르는 자식이라 여기서 직접 내린다. B층의 대상(번들 python)이 아니므로 A층·B층 사슬 **밖에서**
+ * 나란히 돌고, 합치기는 사슬이 끝난 뒤에 한다 — B층이 A층의 남은 pid를 다시 보고 사유를 고칠 때 Vite의 줄이
+ * 섞이지 않게. 유예 안에 안 끝난 Vite도 결과에 실어 보낸다 — P2-C4가 세는 "앱이 만든 프로세스"에는 그 node도
+ * 들어간다.
+ *
+ * 둘이 **모두 끝난 뒤에** 반환한다(allSettled). Promise.all이면 Vite가 먼저 거부하는 순간 반환해, stopAll이 worker의
+ * 정중한 정지(유예 90초) 한가운데인데 runQuitFlow가 앱을 끝내 버린다. 거부는 그 뒤에 그대로 던진다 — 감독자 쪽 거부를
+ * 먼저 본다.
  */
 async function stopServices(): Promise<StopOutcome> {
-  return stopThenReap(stopServicesByHandle, quitReapDeps(quitReapTarget, appendSupervisorLog));
-}
-
-/**
- * 역순 종료 + dev의 Vite. Vite는 감독자가 모르는 자식이라 여기서 직접 내린다.
- *
- * 유예 안에 안 끝난 Vite도 결과에 실어 보낸다 — P2-C4가 세는 "앱이 만든 프로세스"에는
- * 그 node도 들어간다. 감독자의 결과만 돌려주면 dev에서 남은 Vite는 아무 데도 안 적힌다.
- *
- * 둘이 **모두 끝난 뒤에** 반환한다(allSettled). Promise.all이면 한쪽이 먼저 거부하는 순간 반환해, stopAll이
- * worker의 정중한 정지(유예 90초) 한가운데인데 B층이 SIGTERM → 3초 → SIGKILL을 걸거나 앱이 끝나 버린다.
- * 거부는 그 뒤에 그대로 던진다 — 감독자 쪽 거부를 먼저 본다.
- */
-async function stopServicesByHandle(): Promise<StopOutcome> {
   const v = vite;
   vite = null;
   viteApiBase = null;
@@ -547,9 +542,13 @@ async function stopServicesByHandle(): Promise<StopOutcome> {
       await v.stop(STOP_GRACE_MS);
       return v.alive() && v.pid !== undefined ? [v.pid] : [];
     })(),
-    sup === null
-      ? Promise.resolve<StopOutcome>({ stopped: true, leaked: [] })
-      : sup.stopAll({ graceMs: STOP_GRACE_MS, onGraceExpired: askGraceExpired }),
+    stopThenReap(
+      () =>
+        sup === null
+          ? Promise.resolve<StopOutcome>({ stopped: true, leaked: [] })
+          : sup.stopAll({ graceMs: STOP_GRACE_MS, onGraceExpired: askGraceExpired }),
+      quitReapDeps(quitReapTarget, appendSupervisorLog),
+    ),
   ]);
   if (supSettled.status === "rejected") throw supSettled.reason;
   if (viteSettled.status === "rejected") throw viteSettled.reason;

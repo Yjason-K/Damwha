@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { reapOwnedOnQuit } from "../../src/app/reap-on-quit";
-import { knownTrees } from "../../src/process/orphans";
+import { leftoverNotice } from "../../src/app/quit-flow";
+import { stopThenReap } from "../../src/app/reap-on-quit";
+import { knownTrees, type ReapDeps } from "../../src/process/orphans";
 import { judgeAfterProbe } from "../../src/services/api";
 import { ServiceFailure } from "../../src/services/failure";
 import { createSupervisor, orderOf } from "../../src/services/supervisor";
@@ -10,6 +11,7 @@ import type {
   ReadinessResult,
   ServiceId,
   ServiceSpec,
+  StopOutcome,
 } from "../../src/services/types";
 
 function ctx(): LaunchContext {
@@ -472,9 +474,10 @@ describe("supervisor.stopAll", () => {
 });
 
 describe("supervisor.stopAll → 종료 회수 (B층, P4-C19)", () => {
-  it("never calls a dead worker's stop() — and B still reaps the --once and llm_entry it left behind", async () => {
+  it("never calls a dead worker's stop() — and the quit chain still reaps what it left and turns A's clean into not-clean", async () => {
     // 스펙 §6.5: watchForDeath가 rt.result를 null로 만들고 stopAll이 그 서비스를 건너뛴다. 그래서 stop() 안에
-    // 무엇을 넣어도 이 경로에서는 돌지 않는다 — B층이 따로 있는 이유다. 그 경로를 흉내 내지 않고 실제로 밟는다.
+    // 무엇을 넣어도 이 경로에서는 돌지 않는다 — B층이 따로 있는 이유다. 그 경로를 흉내 내지 않고 실제로 밟고,
+    // main.ts의 stopServices()가 쓰는 사슬(stopThenReap: stopAll 뒤 B층, 판정 합치기)을 그대로 돌린다.
     const RUN = "desktop-33333333-3333-4333-8333-333333333333";
     const c: LaunchContext = { ...ctx(), runId: RUN };
     const py = c.bins.python;
@@ -487,16 +490,9 @@ describe("supervisor.stopAll → 종료 회수 (B층, P4-C19)", () => {
           // 실제 worker처럼 재시작 정책이 있다. 재시작 타이머는 stopAll이 치운다.
           restart: { maxAttempts: 3, backoffMs: [60_000] },
           launch: async () => ({
-            handle: {
-              pid: 7001,
-              alive: () => true,
-              stderrTail: () => "",
-              exitCode: () => null,
-              onExit: (l: (code: number) => void) => {
-                die = l;
-              },
-              stop: async () => undefined,
-            } as never,
+            handle: fakeHandle((listener) => {
+              die = listener;
+            }),
             owned: true,
           }),
           stop: async () => {
@@ -511,16 +507,10 @@ describe("supervisor.stopAll → 종료 회수 (B층, P4-C19)", () => {
     await s.start();
     expect(s.runtimeOf("worker")!.result).not.toBeNull();
 
-    // Python supervisor(7001)만 kill -9. start_new_session=True인 --once(7002)와 그 아래 llm_entry(7003)는
+    // Python supervisor만 kill -9. start_new_session=True인 --once(7002)와 그 아래 llm_entry(7003)는
     // 이번 실행의 run-id를 단 채 launchd 아래로 재부모화돼 산다 (P4-C19 a).
     die!(137);
     expect(s.runtimeOf("worker")!.result).toBeNull();
-
-    const out = await s.stopAll({ graceMs: 10 });
-    expect(workerStopCalls).toBe(0);
-    // A층은 깨끗하다고 보고한다 — 핸들이 없으니 볼 것이 없었다.
-    expect(out).toEqual({ stopped: true, leaked: [] });
-    expect(s.statuses()[0].process).toBe("failed");
 
     const alive = new Set([1, 7002, 7003]);
     const events: string[] = [];
@@ -531,10 +521,13 @@ describe("supervisor.stopAll → 종료 회수 (B층, P4-C19)", () => {
       ` 7002 ${py} -m damwha_worker --once --run-id=${RUN}`,
       ` 7003 ${py} -m damwha_worker.llm_entry --run-id=${RUN} --model mlx-community/Qwen3-4B-4bit --port 51234`,
     ].join("\n");
-    const { reaped } = await reapOwnedOnQuit({
+    const deps: ReapDeps = {
       runId: c.runId,
       trees: knownTrees(c),
-      ps: async () => ps,
+      ps: async () => {
+        events.push("B:ps");
+        return ps;
+      },
       descendantsOf: async (pid) => (pid === 7002 && alive.has(7003) ? [7003] : []),
       kill: (pid) => {
         events.push(`KILL ${pid}`);
@@ -547,11 +540,30 @@ describe("supervisor.stopAll → 종료 회수 (B층, P4-C19)", () => {
       exists: (pid) => alive.has(pid),
       log: (line) => logs.push(line),
       sleep: async () => undefined,
-    });
-    expect(reaped.map((p) => p.pid)).toEqual([7003, 7002]);
-    expect(events).toEqual(["TERM 7003", "TERM 7002"]);
-    expect(events).not.toContain("TERM 7001");
+    };
+
+    let layerA: StopOutcome | null = null;
+    const out = await stopThenReap(async () => {
+      events.push("A:stopAll");
+      layerA = await s.stopAll({ graceMs: 10 });
+      events.push("A:done");
+      return layerA;
+    }, deps);
+
+    expect(workerStopCalls).toBe(0);
+    // A층은 깨끗하다고 보고한다 — 핸들이 없으니 볼 것이 없었다. status는 failed로 남는다(건너뛰었다).
+    expect(layerA).toEqual({ stopped: true, leaked: [] });
+    expect(s.statuses()[0].process).toBe("failed");
+    // B층은 A층이 끝난 뒤에, 자손 먼저 내린다. launchd(1)와 죽은 supervisor에는 신호가 없다.
+    expect(events).toEqual(["A:stopAll", "A:done", "B:ps", "TERM 7003", "TERM 7002"]);
     expect(alive).toEqual(new Set([1]));
+    // clean → not clean. 내린 것이 모두 끝났으니 화면은 "정리했다"고 말한다.
+    expect(out.stopped).toBe(false);
+    expect(out.leaked).toEqual([]);
+    expect(out.cleanedUp).toBe(true);
+    expect(out.detail).toMatch(/7002/);
+    expect(out.detail).toMatch(/7003/);
+    expect(leftoverNotice(out).message).toBe("종료하면서 남아 있던 프로세스를 정리했어요.");
     expect(logs.join("\n")).toMatch(/놓친/);
   });
 });

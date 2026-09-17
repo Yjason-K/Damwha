@@ -118,6 +118,12 @@ export interface StopOutcome {
    * 실패로 적으면 거짓말이 된다.
    */
   detail?: string;
+  /**
+   * 앱 종료의 B층(app/reap-on-quit.ts)이 서비스별 정지가 놓친 프로세스를 내렸고, 그 뒤 **남은 것이 없음을
+   * 확인했다.** `stopped:false`는 서비스별 정지가 깨끗하지 않았다는 사실 그대로이고, 종료 대화상자는 이 표시를
+   * 보고 "확인하지 못했다" 대신 "정리했다"고 적는다(quit-flow.ts의 leftoverNotice). 서비스 어댑터는 채우지 않는다.
+   */
+  cleanedUp?: true;
 }
 
 export interface ServiceSpec {
