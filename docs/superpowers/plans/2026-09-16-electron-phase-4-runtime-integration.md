@@ -1401,13 +1401,21 @@ cat /tmp/p4-baseline/now/app-db-rows.txt
 "검증 전 회의 ID·행 수 … 증가만 있고 소실·변경 0"이므로 행 수 없이 판정할 수 없고**, 스펙 §9의
 그 문구를 좁히지 않는다.
 
-그래서 **축 A를 시작하기 전에, 앱을 한 번 띄워 내장 클러스터가 올라온 상태에서**
-`phase4-baseline.sh:74-76`이 쓰는 것과 같은 질의를 돌려 그 파일 하나만 채운다
-(`desktop/build/postgres/bin/psql -h "<userData>/run" -U damwha damwha -tAc "select 'meeting='||count(*) from meeting"`).
+그래서 **축 A를 시작하기 전에, 앱을 한 번 띄워 내장 클러스터가 올라온 상태에서** 앱 데이터
+기준선만 다시 뜬다:
+
+```bash
+bash desktop/scripts/phase4-baseline.sh retake app
+```
 
 - **`phase4-baseline.sh baseline`을 다시 돌리면 안 된다.** 그 모드는 `DEST="$OUT/now"`에
-  **전부** 덮어쓰므로(`:15`) 2026-09-16의 `abs-*` 8건이 사라지고 **P4-C26의 근거가 날아간다.**
-  고쳐 쓰는 것은 `app-db-rows.txt` **한 파일**이다.
+  **전부** 덮어쓰므로 2026-09-16의 `abs-*` 8건과 `mut-*` 3건이 사라진다 — **P4-C26의 근거와
+  `mut-uv.lock`(Part 1이 `.venv`를 바꾸기 전 사본이자 유일한 복구 경로)이 함께 날아간다.**
+  `retake app`은 `app-*`만 쓴다.
+- **`app-db-rows.txt`는 이제 `meeting` 한 줄이 아니라 전체 테이블 행 수이고, 회의 ID는
+  `app-meeting-ids.txt`가 따로 담는다**(커밋 `3955790`). 초안이 기대한 `meeting=<수>` 한 줄은
+  더 이상 그 파일의 형태가 아니다 — P4-C27의 "회의 **ID**"를 행 수만으로는 판정할 수 없어서
+  고쳤다. 대조는 두 파일을 함께 본다.
 - **이 시점이 "before"가 되는 한계를 결과 문서에 적는다.** 앱을 한 번 띄운 뒤의 값이므로
   "Part 2 코드가 한 번도 안 돈 상태"의 값이 아니다. 기동만으로 회의 행이 줄지 않는 것은
   이 재촬영과 검증 뒤 값의 대조로 판정되고, **그 이전 구간은 `app-storage.txt`가 덮는다** —
@@ -1504,7 +1512,8 @@ bash desktop/scripts/phase4-baseline.sh verify
 | `mut-venv-versions.txt` | 새 `uv.lock`과 일치 |
 | `mut-local-bin.txt` | `mlx_lm.server`가 **제자리로 돌아왔는가** |
 | `app-storage.txt` | 기준선의 모든 줄이 지금도 있다. **추가만** 있고 삭제·변경 0 |
-| `app-db-rows.txt` | 회의 수가 줄지 않았다. **Step 1이 다시 뜬 값과 대조한다** — 2026-09-16 값은 `MEASUREMENT-UNAVAILABLE`이라 쓸 수 없다 |
+| `app-db-rows.txt` | 전체 테이블 행 수가 **줄지 않았다**(증가만). **Step 1의 `retake app`이 뜬 값과 대조한다** — 2026-09-16 값은 `MEASUREMENT-UNAVAILABLE`이라 쓸 수 없다 |
+| `app-meeting-ids.txt` | 기준선의 **모든 회의 ID가 지금도 있다.** 추가만 있고 소실 0 — 행 수만 보면 "하나 지우고 하나 넣었다"가 통과하므로 이 대조가 P4-C27의 "회의 ID" 절반을 맡는다 |
 
 **P4-C27의 판정 범위를 결과 문서에 그대로 적는다** — 파일은 2026-09-16 기준선부터, DB 행 수는
 Step 1의 재촬영 시점부터다. 두 구간이 다른 것이 이 기준의 한계이고, 숨기면 다음 Phase가 그것을
