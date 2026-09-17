@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     # 첫 실행은 HF 다운로드를 포함한다 — 27B는 수십 GB라 넉넉히 잡는다.
     lens_llm_server_start_timeout_seconds: float = 600.0
     lens_llm_server_stop_timeout_seconds: float = 20.0
+    # 단일 진실 원천은 env(FFMPEG_BIN/FFPROBE_BIN) — pipeline/ffmpeg.py가 호출 시점에
+    # 직접 읽는다. 여기 두 필드는 문서화·.env 운용 경로용 사본이다.
+    ffmpeg_bin: str = "ffmpeg"
+    ffprobe_bin: str = "ffprobe"
 
     @field_validator("default_speaker_prefix")
     @classmethod

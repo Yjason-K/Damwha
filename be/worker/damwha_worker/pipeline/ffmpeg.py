@@ -15,13 +15,19 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True)
 
 
+def _bin(name: str) -> str:
+    # 호출 시점에 읽는다 — 데스크톱 앱이 번들 ffmpeg 경로를 env로 넘길 수 있게.
+    # 번들 ffmpeg는 --disable-network 빌드라 URL이 아니라 로컬 경로만 받는다.
+    return os.environ.get(f"{name.upper()}_BIN") or name
+
+
 @dataclass
 class ProbeResult:
     duration_ms: int
 
 
 def probe(path: str, runner: Runner = _run) -> ProbeResult:
-    cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", path]
+    cmd = [_bin("ffprobe"), "-v", "error", "-show_entries", "format=duration", "-of", "json", path]
     proc = runner(cmd)
     if proc.returncode != 0:
         raise WorkerError(PROBE_FAILED, f"ffprobe failed: {proc.stderr!r}", ErrorKind.PERMANENT)
@@ -56,7 +62,7 @@ def normalize(src_path: str, dst_path: str, runner: Runner = _run) -> None:
         # 고르고(측정: 39.3MB vs s16 19.6MB), 그러면 s16 WAV 대비 1%밖에 안 줄어든다.
         # -f 명시 필수 — temp_path가 .tmp 접미사라 확장자 추론이 안 된다.
         cmd = [
-            "ffmpeg",
+            _bin("ffmpeg"),
             "-y",
             "-i",
             src_path,
