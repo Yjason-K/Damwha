@@ -43,6 +43,7 @@ import { verifyOwnListener as checkOwnListener } from "./process/own-listener";
 import { descendantPids, listenerPids, psArgs } from "./process/process-tree";
 import { knownTrees, newRunId, type KnownTree } from "./process/orphans";
 import { reapBeforeStart, systemReapDeps } from "./app/reap-on-start";
+import { quitReapDeps, stopThenReap, type QuitReapTarget } from "./app/reap-on-quit";
 import { buildSpecs } from "./services/specs";
 import { hasOnceChild, listExternalWorkers as scanExternalWorkers } from "./services/worker-discovery";
 import { probeEmbedContract } from "./services/embed-probe";
@@ -153,6 +154,14 @@ let supervisor: ReturnType<typeof createSupervisor> | null = null;
  * (config.ts의 refreshEnv).
  */
 let launchCtx: { ctx: Omit<LaunchContext, "signal">; baseline: ApiEnv; mode: DatabaseMode } | null = null;
+/**
+ * 종료 회수(B층, app/reap-on-quit.ts)가 볼 이번 실행의 run-id와 트리. createSupervisorFor가 트리를 계산하는 자리 —
+ * 어떤 자식보다 먼저 — 에서 채우고 **지우지 않는다.** launchCtx·supervisor와 수명을 같이하지 않는 것이 요점이다:
+ * B층은 핸들도 감독자 상태도 보지 않아야 A층이 놓친 것을 찾는다. 재시도가 다시 채우면 최신 것이 이긴다(run-id는
+ * 실행 내내 같고, 자식을 띄우는 자기 트리도 같다). null이면 — 토큰 온보딩 중 종료처럼 여기까지 오지 못했으면 —
+ * 이번 실행의 자식이 있을 수 없어 B층을 건너뛴다.
+ */
+let quitReapTarget: QuitReapTarget | null = null;
 /**
  * "이 값은 앱을 다시 켜야 바뀌어요" 안내. 재적용기가 매번 다시 계산하므로 어긋남이 풀리면
  * 저절로 null이 된다. 화면이 이것을 말하지 않으면 사용자는 자기 수정이 왜 안 먹는지 알 길이
@@ -506,17 +515,33 @@ function stopOwnWorker(result: LaunchResult, plan: StopPlan): Promise<StopOutcom
 }
 
 /**
+ * 앱 종료의 서비스 정지 — A층(아래 stopServicesByHandle) 뒤에 B층(핸들과 무관한 종료 회수)을 붙인다
+ * (Phase 4 스펙 §6.5 "종료 절차"). 순서·던진 경로·판정 합치기는 app/reap-on-quit.ts의 stopThenReap에 있다.
+ *
+ * **quit-flow.ts가 아니라 여기다.** runQuitFlow는 이 함수를 부를 뿐이고, 이 함수 자체가 거부하면 before-quit의
+ * `.catch`가 quitNow()로 간다 — B층이 runQuitFlow 안에 있으면 그 경로에서 건너뛰어진다. B층이 합친 결과는
+ * runQuitFlow의 "남은 것" 판정(`!out.stopped` → leftoverNotice)으로 그대로 간다.
+ */
+async function stopServices(): Promise<StopOutcome> {
+  return stopThenReap(stopServicesByHandle, quitReapDeps(quitReapTarget, appendSupervisorLog));
+}
+
+/**
  * 역순 종료 + dev의 Vite. Vite는 감독자가 모르는 자식이라 여기서 직접 내린다.
  *
  * 유예 안에 안 끝난 Vite도 결과에 실어 보낸다 — P2-C4가 세는 "앱이 만든 프로세스"에는
  * 그 node도 들어간다. 감독자의 결과만 돌려주면 dev에서 남은 Vite는 아무 데도 안 적힌다.
+ *
+ * 둘이 **모두 끝난 뒤에** 반환한다(allSettled). Promise.all이면 한쪽이 먼저 거부하는 순간 반환해, stopAll이
+ * worker의 정중한 정지(유예 90초) 한가운데인데 B층이 SIGTERM → 3초 → SIGKILL을 걸거나 앱이 끝나 버린다.
+ * 거부는 그 뒤에 그대로 던진다 — 감독자 쪽 거부를 먼저 본다.
  */
-async function stopServices(): Promise<StopOutcome> {
+async function stopServicesByHandle(): Promise<StopOutcome> {
   const v = vite;
   vite = null;
   viteApiBase = null;
   const sup = supervisor;
-  const [viteLeaked, out] = await Promise.all([
+  const [viteSettled, supSettled] = await Promise.allSettled([
     (async (): Promise<number[]> => {
       if (v === null) return [];
       await v.stop(STOP_GRACE_MS);
@@ -526,6 +551,10 @@ async function stopServices(): Promise<StopOutcome> {
       ? Promise.resolve<StopOutcome>({ stopped: true, leaked: [] })
       : sup.stopAll({ graceMs: STOP_GRACE_MS, onGraceExpired: askGraceExpired }),
   ]);
+  if (supSettled.status === "rejected") throw supSettled.reason;
+  if (viteSettled.status === "rejected") throw viteSettled.reason;
+  const out = supSettled.value;
+  const viteLeaked = viteSettled.value;
   if (viteLeaked.length === 0) return out;
   return {
     stopped: false,
@@ -1077,6 +1106,7 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
   // (app/reap-on-start.ts) startOnce의 catch가 원인과 "다시 시도"를 그린다. 감독자가 아직 없으므로 아무것도
   // 뜨지 않고, 메뉴의 "다시 시도"는 이 자리부터 다시 돈다.
   const trees = knownTrees(ctx);
+  quitReapTarget = { runId: ctx.runId, trees };
   await reapBeforeStart(systemReapDeps({ runId: ctx.runId, trees, log: appendSupervisorLog }));
 
   const wantEmbed = {

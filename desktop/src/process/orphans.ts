@@ -13,6 +13,9 @@ import { knownBundleDirs, pythonBinaries, PY_MINOR } from "./runtime-paths";
  *  - `classify`가 **조건 3·4**로 딱지를 붙인다 — argv[0]이 앱이 아는 트리 아래인가, run-id가 있는가.
  *    그래서 저장소 `.venv`의 worker는 목록에 들어온 뒤 조건 3에서 `external`로 갈린다 (P4-C21).
  *
+ * 회수 절차는 한 벌(`reapByKind`)이고, 두 단계가 대상 딱지만 달리해 쓴다 — 기동 전 정리(`reapOrphans`,
+ * `orphan`)와 앱 종료 회수(app/reap-on-quit.ts, `mine`).
+ *
  * electron을 import하지 않는다. `ps` 왕복 같은 실제 의존은 부르는 쪽이 넣는다(app/reap-on-start.ts).
  */
 
@@ -274,11 +277,13 @@ export function parseDamwhaProcesses(psText: string, trees: readonly KnownTree[]
   return parseDamwhaScan(psText, trees).processes;
 }
 
+export type ProcessKind = "mine" | "orphan" | "external";
+
 /**
  * 조건 3·4. `mine`은 이번 실행의 것, `orphan`은 아는 트리에서 다른 run-id를 단 것(이전 실행이 남겼다),
  * `external`은 run-id가 없거나 트리 밖의 것(터미널 `pnpm worker`, Homebrew python, 옮겨 설치한 앱).
  */
-export function classify(p: DamwhaProcess, myRunId: string): "mine" | "orphan" | "external" {
+export function classify(p: DamwhaProcess, myRunId: string): ProcessKind {
   if (p.tree === null || p.runId === null) return "external";
   return p.runId === myRunId ? "mine" : "orphan";
 }
@@ -330,7 +335,7 @@ function reasonOf(e: unknown): string {
 /** 로그에 싣는 args의 상한. 우리 argv에는 비밀이 없지만(토큰은 env로 간다) 한 줄이 한없이 길어지지 않게 한다. */
 const ARGS_LOG_MAX = 300;
 
-function clip(args: string): string {
+export function clipArgs(args: string): string {
   return args.length <= ARGS_LOG_MAX ? args : `${args.slice(0, ARGS_LOG_MAX)}…`;
 }
 
@@ -338,8 +343,15 @@ function argsByPid(psText: string): Map<number, string> {
   return new Map(psRows(psText).map((r) => [r.pid, r.args]));
 }
 
-function label(p: DamwhaProcess): string {
+/** 로그 한 줄에 싣는 프로세스의 정체 — pid·모듈·`--once`·run-id. */
+export function processLabel(p: DamwhaProcess): string {
   return `pid ${p.pid} ${p.module}${p.once ? " --once" : ""} (run-id ${p.runId ?? "없음"})`;
+}
+
+/** 신호 순서의 한 칸. `root`는 그 pid가 판독된 담화 프로세스일 때 그것, 표식 없는 자손이면 null. */
+export interface ReapEntry {
+  pid: number;
+  root: DamwhaProcess | null;
 }
 
 /**
@@ -350,18 +362,18 @@ function label(p: DamwhaProcess): string {
  * 자손은 표식이 없어도 함께 내린다 — 증명된 고아의 자손이라는 계보가 곧 소유의 증거다(A층의
  * stopWorkerProcess도 자손을 SIGKILL한다). 스펙 §6.5 처분표의 "`LENS_LLM_SERVER_BIN` 서버는 손대지 않는다"는
  * **맨 위에서 알아보는** 규칙이라, 고아 `--once` 아래에 뜬 그 서버는 여기서 함께 내려간다 (판정 R-7i). 판독이
- * `mine`·`external`로 가른 pid만은 자손이어도 건드리지 않는다.
+ * 대상과 다른 딱지로 가른 pid만은 자손이어도 건드리지 않는다.
  */
 async function signalOrder(
   roots: readonly DamwhaProcess[],
   d: ReapDeps,
   untouchable: ReadonlySet<number>,
-): Promise<Array<{ pid: number; root: DamwhaProcess | null }>> {
+): Promise<ReapEntry[]> {
   const trees = new Map<number, number[]>();
   for (const r of roots) trees.set(r.pid, await d.descendantsOf(r.pid));
   const covered = new Set<number>();
   for (const desc of trees.values()) for (const pid of desc) covered.add(pid);
-  const order: Array<{ pid: number; root: DamwhaProcess | null }> = [];
+  const order: ReapEntry[] = [];
   const seen = new Set<number>();
   const push = (pid: number, root: DamwhaProcess | null) => {
     if (seen.has(pid) || untouchable.has(pid) || pid <= 1) return;
@@ -380,94 +392,123 @@ async function signalOrder(
 }
 
 /**
- * 이전 실행이 남긴 고아를 내린다. **서비스 기동 전에** 부른다 (§6.5 — 뒤에 하면 새로 띄운 것과 잠시 공존한다).
+ * 회수 한 판을 로그에 **어떤 말로** 적는가. 절차는 기동 정리와 종료 회수가 같고(스펙 §6.5 "같은 코드를 쓰되
+ * 대상이 '내 run-id'인 점만 다르다"), 말만 다르다 — 종료 회수의 줄을 "이전 실행이 남긴"으로 적으면 거짓이다.
+ */
+export interface ReapWords {
+  /** 모든 줄의 머리. 같은 supervisor.log에 두 단계의 줄이 섞이므로 종료 회수는 자기 이름을 붙인다. */
+  prefix: string;
+  /** 확인·신호 실패 줄의 주어("이전 실행의 프로세스"). 뒤에 "를"·"에"가 붙는다. */
+  subject: string;
+  /** 아는 트리의 읽을 수 없는 줄(스캔 실패)을 적는 줄들. 신호는 하나도 가지 않는다. */
+  unreadable(rows: readonly PsRow[]): string[];
+  /** 대상이 아닌 담화 프로세스를 적을 줄. 적지 않으면 null. */
+  bystander(p: DamwhaProcess, kind: ProcessKind): string | null;
+  /** 신호 한 번(`how` = SIGTERM, SIGKILL…)을 적는 줄. `root`가 null이면 표식 없는 자손이다. */
+  sent(entry: ReapEntry, how: string): string;
+}
+
+/** 무엇을 내리는가. 나머지 딱지(`mine`·`orphan`·`external` 중 대상이 아닌 것)는 자손이어도 건드리지 않는다. */
+export interface ReapPlan {
+  target: Exclude<ProcessKind, "external">;
+  words: ReapWords;
+}
+
+export interface ReapRun {
+  /** 스캔(첫 `ps`·판독·자손 조회·SIGKILL 전 재확인)을 끝내지 못해 멈췄다. 이유는 로그에 있다. */
+  failed: boolean;
+  /** 신호가 한 번이라도 닿은 칸 — 첫 신호의 순서대로, pid마다 한 번. */
+  signalled: ReapEntry[];
+}
+
+/**
+ * 기동 정리(`reapOrphans`, 대상 `orphan`)와 종료 회수(`reapOwnedOnQuit`, 대상 `mine`)가 함께 쓰는 한 판.
  *
- * 1. `ps`가 거부됐거나 프로세스 줄이 하나도 없으면 `{failed:true}` — 신호는 하나도 보내지 않는다. 실제
- *    `ps`는 적어도 launchd와 자기 자신을 내므로 빈 목록은 "고아 없음"이 아니라 스캔 실패다.
- * 2. 아는 트리의 줄인데 읽을 수 없는 것(`parseDamwhaScan`의 `unreadable`)이 하나라도 있으면 줄마다 로그를 남기고
- *    `{failed:true}` — 신호 없음 (판정 R-7f).
- * 3. `mine`은 로그만 남기고 둔다(방금 만든 run-id라 나올 수 없다). `external`은 건드리지 않는다.
- * 4. 고아마다 자손을 먼저 모두 찍는다. 하나라도 실패하면 `{failed:true}` — 이때도 신호는 없다.
+ * 1. `ps`가 거부됐거나 프로세스 줄이 하나도 없으면 실패 — 신호는 하나도 보내지 않는다. 실제 `ps`는 적어도
+ *    launchd와 자기 자신을 내므로 빈 목록은 "대상 없음"이 아니라 스캔 실패다.
+ * 2. 아는 트리의 줄인데 읽을 수 없는 것(`parseDamwhaScan`의 `unreadable`)이 하나라도 있으면 실패 — 신호 없음
+ *    (판정 R-7f). 어떻게 적을지는 `words.unreadable`이 정한다.
+ * 3. `plan.target` 딱지만 대상이다. 나머지는 `untouchable` — 대상의 자손이어도 신호를 받지 않는다.
+ * 4. 대상마다 자손을 먼저 모두 찍는다. 하나라도 실패하면 실패 — 이때도 신호는 없다.
  * 5. 자손 → 부모 순서로, 신호 직전마다 `exists`를 다시 보고 보낸다. `terminate`가 있으면 SIGTERM 한 바퀴 →
  *    유예 동안 폴 → SIGTERM이 닿았는데 남은 것만 SIGKILL 단계로 간다.
  * 6. **SIGKILL 단계 앞에서 `ps`를 한 번 더 읽는다** (판정 R-7g). 첫 스캔과 args가 글자 그대로 같은 pid에만
  *    보낸다 — 유예만큼 낡은 번호를 OS가 다른 프로세스에 줬을 수 있다(worker-shutdown.ts 4단계와 같은 취지).
  *    첫 스캔에 없던 번호(그 뒤에 생긴 자손), 다시 본 목록에 없거나 args가 달라진 번호는 로그만 남기고 건너뛴다.
- *    두 번째 `ps`가 실패하면(또는 빈 목록이면) SIGKILL을 하나도 보내지 않고 `{failed:true}` — 살아 있는 고아를
- *    확인하지 못한 채 기동을 이어 가지 않는다. 그 전에 보낸 SIGTERM은 로그에 있다.
- * 7. 신호가 한 번이라도 닿은 pid를 돌려준다. 내린 것은 하나하나 supervisor.log에 남는다.
+ *    두 번째 `ps`가 실패하면(또는 빈 목록이면) SIGKILL을 하나도 보내지 않고 실패 — 그 전에 보낸 SIGTERM은
+ *    `signalled`와 로그에 있다.
+ * 7. 신호가 한 번이라도 닿은 칸을 `signalled`에 쌓는다. 신호마다 `words.sent`의 줄이 남는다.
+ *
+ * `signalled`를 부르는 쪽이 넘기면 이 함수가 도중에 던져도 그때까지 보낸 것이 거기 남는다 — 던지지 않아야 하는
+ * 종료 회수가 "보낸 것"을 잃지 않게 한다.
  *
  * `exists`·args 대조로도 막지 못하는 창: 두 번째 `ps`와 SIGKILL 사이(밀리초), 그리고 같은 args로 다시 뜬
- * 프로세스(우리 argv에는 run-id가 있어 이전 실행의 것과 같은 줄은 그 고아 자신뿐이다).
+ * 프로세스(우리 argv에는 run-id가 있어 같은 줄은 그 프로세스 자신뿐이다).
  */
-export async function reapOrphans(d: ReapDeps): Promise<{ reaped: number[] } | { failed: true }> {
+export async function reapByKind(d: ReapDeps, plan: ReapPlan, signalled: ReapEntry[] = []): Promise<ReapRun> {
+  const { words } = plan;
+  const say = (line: string) => d.log(`${words.prefix}${line}`);
+  const failed = (): ReapRun => ({ failed: true, signalled });
+
   let text: string;
   try {
     text = await d.ps();
   } catch (e) {
-    d.log(`이전 실행의 프로세스를 확인하지 못했어요 — ps: ${reasonOf(e)}`);
-    return { failed: true };
+    say(`${words.subject}를 확인하지 못했어요 — ps: ${reasonOf(e)}`);
+    return failed();
   }
   if (psRows(text).length === 0) {
-    d.log("이전 실행의 프로세스를 확인하지 못했어요 — ps 출력에 프로세스가 하나도 없어요.");
-    return { failed: true };
+    say(`${words.subject}를 확인하지 못했어요 — ps 출력에 프로세스가 하나도 없어요.`);
+    return failed();
   }
 
   const scan = parseDamwhaScan(text, d.trees);
   if (scan.unreadable.length > 0) {
-    for (const row of scan.unreadable) {
-      d.log(`이전 실행의 프로세스인지 읽을 수 없는 줄이 있어요 — pid ${row.pid}: ${clip(row.args)}`);
-    }
-    return { failed: true };
+    for (const line of words.unreadable(scan.unreadable)) say(line);
+    return failed();
   }
 
-  const orphans: DamwhaProcess[] = [];
+  const targets: DamwhaProcess[] = [];
   const untouchable = new Set<number>();
   for (const p of scan.processes) {
     const kind = classify(p, d.runId);
-    if (kind === "orphan") {
-      orphans.push(p);
+    if (kind === plan.target) {
+      targets.push(p);
       continue;
     }
     untouchable.add(p.pid);
-    if (kind === "mine") d.log(`이번 실행의 프로세스가 이미 있어요 — ${label(p)}. 건드리지 않았어요.`);
+    const line = words.bystander(p, kind);
+    if (line !== null) say(line);
   }
-  if (orphans.length === 0) return { reaped: [] };
+  if (targets.length === 0) return { failed: false, signalled };
 
-  let order: Array<{ pid: number; root: DamwhaProcess | null }>;
+  let order: ReapEntry[];
   try {
-    order = await signalOrder(orphans, d, untouchable);
+    order = await signalOrder(targets, d, untouchable);
   } catch (e) {
-    d.log(`이전 실행의 프로세스를 확인하지 못했어요 — 자손 조회: ${reasonOf(e)}`);
-    return { failed: true };
+    say(`${words.subject}를 확인하지 못했어요 — 자손 조회: ${reasonOf(e)}`);
+    return failed();
   }
 
-  const reaped: number[] = [];
-  const send = (pid: number, how: "SIGTERM" | "SIGKILL", signal: (pid: number) => void): boolean => {
-    if (!d.exists(pid)) return false;
+  const send = (entry: ReapEntry, how: "SIGTERM" | "SIGKILL", signal: (pid: number) => void): boolean => {
+    if (!d.exists(entry.pid)) return false;
     try {
-      signal(pid);
+      signal(entry.pid);
     } catch (e) {
-      d.log(`이전 실행의 프로세스에 ${how}을 보내지 못했어요 — pid ${pid}: ${reasonOf(e)}`);
+      say(`${words.subject}에 ${how}을 보내지 못했어요 — pid ${entry.pid}: ${reasonOf(e)}`);
       return false;
     }
-    if (!reaped.includes(pid)) reaped.push(pid);
+    if (!signalled.some((s) => s.pid === entry.pid)) signalled.push(entry);
     return true;
   };
-  const note = (entry: { pid: number; root: DamwhaProcess | null }, how: string) =>
-    d.log(
-      entry.root === null
-        ? `이전 실행이 남긴 프로세스의 자손을 내려요 (${how}) — pid ${entry.pid}`
-        : `이전 실행이 남긴 프로세스를 내려요 (${how}) — ${label(entry.root)}`,
-    );
 
   const sleep = d.sleep ?? realSleep;
   let pending = order;
   if (d.terminate !== undefined) {
     const terminate = d.terminate.bind(d);
     // SIGTERM이 닿은 것만 뒤를 잇는다. 그때 이미 없던 번호가 유예 중에 살아 있다면 그것은 재사용된 남의 번호다.
-    const termed = order.filter((entry) => send(entry.pid, "SIGTERM", terminate));
-    for (const entry of termed) note(entry, "SIGTERM");
+    const termed = order.filter((entry) => send(entry, "SIGTERM", terminate));
+    for (const entry of termed) say(words.sent(entry, "SIGTERM"));
     for (let i = 0; i < ORPHAN_TERM_GRACE_MS / ORPHAN_POLL_MS; i++) {
       if (!termed.some((e) => d.exists(e.pid))) break;
       await sleep(ORPHAN_POLL_MS);
@@ -475,18 +516,18 @@ export async function reapOrphans(d: ReapDeps): Promise<{ reaped: number[] } | {
     pending = termed.filter((e) => d.exists(e.pid));
   }
 
-  if (pending.length === 0) return { reaped };
+  if (pending.length === 0) return { failed: false, signalled };
   const first = argsByPid(text);
   let again: Map<number, string>;
   try {
     again = argsByPid(await d.ps());
   } catch (e) {
-    d.log(`SIGKILL 전에 프로세스를 다시 확인하지 못해 보내지 않았어요 — ps: ${reasonOf(e)}`);
-    return { failed: true };
+    say(`SIGKILL 전에 프로세스를 다시 확인하지 못해 보내지 않았어요 — ps: ${reasonOf(e)}`);
+    return failed();
   }
   if (again.size === 0) {
-    d.log("SIGKILL 전에 다시 읽은 ps 출력에 프로세스가 하나도 없어 보내지 않았어요.");
-    return { failed: true };
+    say("SIGKILL 전에 다시 읽은 ps 출력에 프로세스가 하나도 없어 보내지 않았어요.");
+    return failed();
   }
 
   const killed: number[] = [];
@@ -497,16 +538,46 @@ export async function reapOrphans(d: ReapDeps): Promise<{ reaped: number[] } | {
     if (was === undefined || now !== was) {
       const why =
         was === undefined ? "첫 스캔에 없던 번호예요" : now === undefined ? "다시 본 목록에 없어요" : "그 번호의 명령이 바뀌었어요";
-      d.log(`SIGKILL을 보내지 않았어요 — pid ${entry.pid}: ${why}`);
+      say(`SIGKILL을 보내지 않았어요 — pid ${entry.pid}: ${why}`);
       continue;
     }
-    if (!send(entry.pid, "SIGKILL", kill)) continue;
+    if (!send(entry, "SIGKILL", kill)) continue;
     killed.push(entry.pid);
-    note(entry, d.terminate === undefined ? "SIGKILL" : `${ORPHAN_TERM_GRACE_MS / 1000}초 안에 끝나지 않아 SIGKILL`);
+    say(words.sent(entry, d.terminate === undefined ? "SIGKILL" : `${ORPHAN_TERM_GRACE_MS / 1000}초 안에 끝나지 않아 SIGKILL`));
   }
   if (d.terminate !== undefined && killed.length > 0) {
     for (let i = 0; i < KILL_CHECKS && killed.some((pid) => d.exists(pid)); i++) await sleep(ORPHAN_POLL_MS);
-    for (const pid of killed.filter((p) => d.exists(p))) d.log(`SIGKILL 뒤에도 남아 있어요 — pid ${pid}`);
+    for (const pid of killed.filter((p) => d.exists(p))) say(`SIGKILL 뒤에도 남아 있어요 — pid ${pid}`);
   }
-  return { reaped };
+  return { failed: false, signalled };
+}
+
+/** 기동 정리의 말. 이 문구들은 Task 7이 정한 그대로다. */
+const ORPHAN_PLAN: ReapPlan = {
+  target: "orphan",
+  words: {
+    prefix: "",
+    subject: "이전 실행의 프로세스",
+    unreadable: (rows) =>
+      rows.map((row) => `이전 실행의 프로세스인지 읽을 수 없는 줄이 있어요 — pid ${row.pid}: ${clipArgs(row.args)}`),
+    // 방금 만든 run-id라 나올 수 없다. 나왔다면 적어 둔다.
+    bystander: (p, kind) =>
+      kind === "mine" ? `이번 실행의 프로세스가 이미 있어요 — ${processLabel(p)}. 건드리지 않았어요.` : null,
+    sent: (entry, how) =>
+      entry.root === null
+        ? `이전 실행이 남긴 프로세스의 자손을 내려요 (${how}) — pid ${entry.pid}`
+        : `이전 실행이 남긴 프로세스를 내려요 (${how}) — ${processLabel(entry.root)}`,
+  },
+};
+
+/**
+ * 이전 실행이 남긴 고아를 내린다. **서비스 기동 전에** 부른다 (§6.5 — 뒤에 하면 새로 띄운 것과 잠시 공존한다).
+ *
+ * 절차는 `reapByKind`에 있다(대상 `orphan`). 스캔이 실패하면 `{failed:true}` — 부르는 쪽(reap-on-start.ts)이
+ * 기동을 멈춘다. `mine`은 로그만 남기고 두고, `external`은 건드리지 않는다. 신호가 한 번이라도 닿은 pid를
+ * 돌려준다. 내린 것은 하나하나 supervisor.log에 남는다.
+ */
+export async function reapOrphans(d: ReapDeps): Promise<{ reaped: number[] } | { failed: true }> {
+  const run = await reapByKind(d, ORPHAN_PLAN);
+  return run.failed ? { failed: true } : { reaped: run.signalled.map((e) => e.pid) };
 }
