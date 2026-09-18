@@ -112,15 +112,31 @@ app_psql app-meeting-ids.txt "select id from meeting order by id"
 # 행 수는 abs-docker-db-rows.txt와 같은 방식으로 **전체 테이블**을 센다. meeting 하나만
 # 세면 utterance·summary가 사라져도 보이지 않는다. 빈 스키마면 string_agg가 NULL이라
 # 출력이 개행 1바이트다 — 그 경우도 "빈 측정"으로 기록된다.
-app_psql app-db-rows.txt \
-  "select string_agg(t||'='||c, E'\n' order by t) from (
-     select c.relname as t,
-            (xpath('/row/c/text()',
-                   query_to_xml(format('select count(*) as c from %I.%I', n.nspname, c.relname),
-                                false, true, '')))[1]::text::bigint as c
-     from pg_class c join pg_namespace n on n.oid = c.relnamespace
-     where c.relkind = 'r' and n.nspname = 'public'
-   ) s"
+# 앱 클러스터는 `query_to_xml`을 쓸 수 없다 — 내장 postgres 빌드에 libxml이 없어
+# "unsupported XML feature"로 질의 전체가 실패한다(2026-09-18 실측. Docker 이미지에는 있다).
+# 그래서 테이블 목록을 먼저 받고 테이블마다 count(*)를 센다. 출력 형태는
+# `abs-docker-db-rows.txt`와 같은 `<테이블>=<행 수>` 줄이고 테이블 이름으로 정렬한다.
+# reltuples 추정치는 쓰지 않는다 — ANALYZE만으로 흔들려 거짓 FAIL을 낸다.
+app_db_rows() {
+  local tables out=""
+  if ! tables=$("$PSQL" -h "$APP/run" -U damwha damwha -tAc \
+        "select relname from pg_class c join pg_namespace n on n.oid = c.relnamespace
+         where c.relkind = 'r' and n.nspname = 'public' order by relname" 2>/dev/null); then
+    echo "MEASUREMENT-UNAVAILABLE (embedded psql)" > "$DEST/app-db-rows.txt"
+    return
+  fi
+  local t c
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    if ! c=$("$PSQL" -h "$APP/run" -U damwha damwha -tAc "select count(*) from public.\"$t\"" 2>/dev/null); then
+      echo "MEASUREMENT-UNAVAILABLE (embedded psql)" > "$DEST/app-db-rows.txt"
+      return
+    fi
+    out+="$t=$c"$'\n'
+  done <<< "$tables"
+  printf '%s' "$out" > "$DEST/app-db-rows.txt"
+}
+app_db_rows
 fi
 
 echo "== $MODE${2:+ $2} → $DEST"
