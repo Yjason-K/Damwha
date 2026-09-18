@@ -417,3 +417,74 @@ describe("화면이 싣는 해결 문구 — 완료 기준 P2-C7·C8·C9 (Task 1
     expect(causeWithFix("원인", undefined)).toBe("원인");
   });
 });
+
+/**
+ * 판정 R-10c — 감독자가 "서비스 다시 시작"을 거부하는 동안 화면이 그것을 말해야 한다.
+ * 그 서비스의 실제 모양은 `running`·`ok`·`owned`라, 고치기 전에는 평범한 초록 "실행 중"
+ * 한 줄이었다(원인도 안내도 없이).
+ */
+describe("정리 중인 서비스 (R-10c)", () => {
+  /** 이 원인의 안내는 서비스별이다 (worker 90초 · embed 모델 마무리). 좁히면서 그 모양을 단언한다. */
+  const wait = (id: ServiceId): string => {
+    const h = HINTS.restartStopFailed;
+    if (h === null || typeof h === "string") throw new Error("restartStopFailed는 서비스별 안내여야 한다");
+    return h[id]!;
+  };
+
+  const cleaning = (id: ServiceId = "worker") =>
+    st(id, {
+      cleaningUp: true,
+      detail: `${CAUSES.restartStopFailed.text(id)}\n강제 종료 여부를 물을 수 있는 사람이 없어서 그대로 두었어요.`,
+    });
+
+  it("is not a plain green 실행 중 row", () => {
+    const view = servicesView({ statuses: [cleaning()], restartNotice: null, logPathOf });
+    const row = view.rows[0];
+    expect(row.tone).toBe("warn");
+    expect(row.state).toBe("실행 중 · 정리 중");
+  });
+
+  it("carries the cause and the per-service wait onto the row", () => {
+    const row = servicesView({ statuses: [cleaning()], restartNotice: null, logPathOf }).rows[0];
+    expect(row.cause).toContain("내리는 중이에요");
+    expect(row.hint).toBe(wait("worker"));
+    expect(row.hint).not.toContain("다시 시작");
+  });
+
+  it("marks the row so the restart button can disable itself", () => {
+    const row = servicesView({ statuses: [cleaning()], restartNotice: null, logPathOf }).rows[0];
+    expect(row.restartRefused).toBe(true);
+  });
+
+  it("marks an adopted and a stand-down row the same way, and leaves an owned healthy one alone", () => {
+    const view = servicesView({
+      statuses: [st("embed", { owned: false }), st("worker", { owned: false, detail: "외부 worker" }), st("api")],
+      restartNotice: null,
+      logPathOf,
+    });
+    expect(view.rows.map((r) => [r.id, r.restartRefused])).toEqual([
+      ["embed", true],
+      ["worker", true],
+      ["api", undefined],
+    ]);
+  });
+
+  it("tells the shell line too", () => {
+    const line = statusLine(cleaning());
+    expect(line).toContain("내리는 중");
+    expect(line).toContain("내리는 중이에요");
+    expect(line).toContain(wait("worker"));
+  });
+
+  it("goes back to a plain row once the process really exits", () => {
+    // watchForDeath가 표시를 지운 뒤의 모양 — 그때는 failed라 평소의 실패 줄이다.
+    const row = servicesView({
+      statuses: [st("worker", { process: "failed", health: "unknown", owned: false, detail: "프로세스가 종료됐어요 (코드 0)." })],
+      restartNotice: null,
+      logPathOf,
+    }).rows[0];
+    expect(row.tone).toBe("fail");
+    expect(row.state).toBe("실패");
+    expect(row.restartRefused).toBeUndefined();
+  });
+});

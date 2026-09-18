@@ -132,21 +132,32 @@ function hintOf(cause: CauseId, id: ServiceId | undefined): string | undefined {
 }
 
 /**
- * 이 상태에서 사람에게 보여줄 원인. 실패·degraded·외부 인스턴스에 밀려 서지 않은 경우뿐이다.
+ * 이 상태에서 사람에게 보여줄 원인. 실패·degraded·외부 인스턴스에 밀려 서지 않은 경우, 그리고
+ * **정리 중**인 경우다.
  *
  * `starting`/`stopped`의 detail은 **지난** 실패의 것이다 — 감독자는 상태를 덧대기만 해서
  * 재기동이 시작돼도 detail이 지워지지 않는다. 그것을 원인으로 읽으면 다시 뜨는 중인 서비스에
  * 방금 고친 실패의 안내를 붙이게 된다.
+ *
+ * **`cleaningUp`이 여기 있는 것이 그 상태의 유일한 관문이다** (판정 R-10c). 그 서비스는
+ * `running`·`ok`·`owned`라 아래 세 줄 중 어느 것에도 걸리지 않는데, 감독자는 그동안 "서비스 다시
+ * 시작"을 전부 거부한다. 원인이 화면에 닿지 않으면 사람은 초록색 "실행 중" 한 줄을 보면서 왜
+ * 버튼이 안 먹는지 알 길이 없다. 이 판정을 다른 렌더러가 다시 적지 않는다 — statusLine·
+ * servicesView 둘 다 이 함수를 거친다.
  */
 export function causeOf(status: ServiceStatus): string | undefined {
   if (status.detail === undefined || status.detail === "") return undefined;
+  if (status.cleaningUp === true) return status.detail;
   if (status.process === "failed" || status.health === "degraded") return status.detail;
   if (status.process === "running" && !status.owned) return status.detail;
   return undefined;
 }
 
 export function recoveryHint(status: ServiceStatus): string | undefined {
-  if (status.process === "running" && status.health === "ok") return undefined;
+  // 정리 중인 서비스는 running·ok인 채로 안내가 있어야 한다 — 이 줄이 그것을 먼저 빼 준다.
+  if (status.cleaningUp !== true && status.process === "running" && status.health === "ok") {
+    return undefined;
+  }
   const detail = causeOf(status);
   const cause = detail === undefined ? undefined : causeIn(detail);
   if (cause === undefined) return undefined;

@@ -5,7 +5,7 @@ import { EventEmitter } from "events";
 import type { ChildProcess } from "child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CAUSES, CAUSE_IDS, causeIn, type CauseId } from "../../src/diagnostics/causes";
-import { DEGRADED_HINT, HINTS, hintForDetail, recoveryHint } from "../../src/windows/shell-hints";
+import { causeOf, DEGRADED_HINT, HINTS, hintForDetail, recoveryHint } from "../../src/windows/shell-hints";
 import { judgeAfterProbe } from "../../src/services/api";
 import { probeEmbedContract } from "../../src/services/embed-probe";
 import { embeddedPostgresSpec } from "../../src/services/postgres/service";
@@ -516,5 +516,64 @@ describe("Phase 3 causes", () => {
     const status = s({ id: "postgres", process: "running", health: "degraded", detail: CAUSES.notAnswering.text });
     expect(recoveryHint(status)).not.toBe(DEGRADED_HINT);
     expect(recoveryHint(status) ?? "").not.toMatch(/자동으로/);
+  });
+});
+
+/**
+ * 판정 R-10c — 정리 중인 서비스가 **실제로 갖는 모양**으로 본다. `running`·`ok`·`owned`라
+ * 기존 관문 셋(failed·degraded·stand-down) 중 어느 것에도 걸리지 않는다. 합성한 `failed`로
+ * 검사하면 그 사실을 영영 못 본다.
+ */
+describe("causeOf·recoveryHint — 정리 중 (R-10c)", () => {
+  /**
+   * 이 원인의 안내는 **서비스별**이어야 한다 — 기다리는 시간의 근거가 worker(job 마무리 90초)와
+   * embed(받던 모델)에서 다르다. 좁히는 이 함수가 그 모양을 단언한다.
+   */
+  const wait = (id: ServiceId): string => {
+    const h = HINTS.restartStopFailed;
+    if (h === null || typeof h === "string") throw new Error("restartStopFailed는 서비스별 안내여야 한다");
+    return h[id]!;
+  };
+
+  /** restartOnce가 실패한 정지 뒤에 세우는 그 상태 그대로. */
+  const cleaning = (id: ServiceId, detail: string): ServiceStatus => ({
+    id,
+    process: "running",
+    health: "ok",
+    owned: true,
+    restarts: 0,
+    cleaningUp: true,
+    detail,
+  });
+
+  it("shows the cause even though the service is running, ok and owned", () => {
+    const status = cleaning("worker", CAUSES.restartStopFailed.text("worker"));
+    expect(causeOf(status)).toBe(CAUSES.restartStopFailed.text("worker"));
+  });
+
+  it("gives each service its own wait — the text is not worker-only", () => {
+    expect(recoveryHint(cleaning("worker", CAUSES.restartStopFailed.text("worker")))).toBe(
+      wait("worker"),
+    );
+    expect(recoveryHint(cleaning("embed", CAUSES.restartStopFailed.text("embed")))).toBe(
+      wait("embed"),
+    );
+  });
+
+  it("never invites the second press — that signal is a kill for the worker", () => {
+    const hint = recoveryHint(cleaning("worker", CAUSES.restartStopFailed.text("worker")));
+    expect(hint).not.toContain("다시 시작");
+    expect(hint).not.toContain("다시 시도");
+  });
+
+  it("still says nothing for a healthy owned service", () => {
+    expect(causeOf(s({ process: "running", health: "ok", detail: "지난 실패" }))).toBeUndefined();
+    expect(recoveryHint(s({ process: "running", health: "ok", detail: "지난 실패" }))).toBeUndefined();
+  });
+
+  it("carries the adapter's own words that restartOnce appended under the cause head", () => {
+    const detail = `${CAUSES.restartStopFailed.text("worker")}\n강제 종료 여부를 물을 수 있는 사람이 없어서 그대로 두었어요.`;
+    expect(causeOf(cleaning("worker", detail))).toBe(detail);
+    expect(recoveryHint(cleaning("worker", detail))).toBe(wait("worker"));
   });
 });

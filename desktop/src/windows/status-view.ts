@@ -1,4 +1,5 @@
 import { CAUSES } from "../diagnostics/causes";
+import { restartRefused } from "../services/supervisor";
 import { causeOf, hintForDetail, recoveryHint } from "./shell-hints";
 import type { ShellStatus } from "./shell-window";
 import type { ProcessState, ServiceId, ServiceStatus } from "../services/types";
@@ -71,9 +72,13 @@ export function statusLine(s: ServiceStatus, externalDatabase = false): string {
         : " (앱이 띄우지 않음)"
       : "";
   const degraded = s.health === "degraded" ? " — 동작이 제한돼요" : "";
-  const shown = s.detail !== undefined && (s.process === "failed" || s.health === "degraded");
-  const why = shown ? `\n    ${indent(causeWithFix(s.detail ?? "", recoveryHint(s)), "    ")}` : "";
-  return `${SERVICE_LABELS[s.id]}: ${PROCESS_LABELS[s.process]}${adopted}${degraded}${why}`;
+  const winding = s.cleaningUp === true ? " — 내리는 중" : "";
+  // 어느 상태에 원인을 보일지는 causeOf 하나가 정한다. 여기서 조건을 다시 적으면 정리 중 같은
+  // 새 상태가 생길 때마다 두 곳이 갈린다 (판정 R-10c). stand-down은 `adopted` 꼬리가 이미
+  // 말하므로 그 줄만 따로 뺀다.
+  const cause = s.process === "running" && !s.owned && s.cleaningUp !== true ? undefined : causeOf(s);
+  const why = cause === undefined ? "" : `\n    ${indent(causeWithFix(cause, recoveryHint(s)), "    ")}`;
+  return `${SERVICE_LABELS[s.id]}: ${PROCESS_LABELS[s.process]}${adopted}${degraded}${winding}${why}`;
 }
 
 export interface ShellInput {
@@ -124,6 +129,12 @@ export interface ServiceRow {
   hint?: string;
   /** 실패는 아니지만 사람이 알아야 하는 것 — 검사를 건너뛴 게이트. */
   warning?: string;
+  /**
+   * 이 줄의 "서비스 다시 시작"이 **안 되는가** (스펙 §6.10 2층). 감독자의 `restartRefused`가
+   * 그대로 실린다 — 채택한 외부 인스턴스·stand-down·정리 중 셋이 여기 걸린다. Task 11의 버튼이
+   * 이 값으로 비활성을 정한다.
+   */
+  restartRefused?: true;
   log: string;
   /** 실행 중인 내장 DB에 붙는 디버깅 접속 명령 (스펙 §6.3). 렌더러는 글자로만 넣는다. */
   command?: string;
@@ -158,6 +169,9 @@ export interface ServicesInput {
 function toneOf(s: ServiceStatus, cause: string | undefined): Tone {
   if (s.process === "failed") return "fail";
   if (s.process !== "running") return "idle";
+  // 정리 중은 초록이 아니다. 프로세스는 아직 답하지만 앱은 그것이 끝나기를 기다리는 중이고,
+  // 그동안 "서비스 다시 시작"은 거부된다 — 평범한 "실행 중"으로 보이면 안 된다 (판정 R-10c).
+  if (s.cleaningUp === true) return "warn";
   if (s.health === "degraded") return "warn";
   // 외부에 밀려 서지 않은 worker(stand-down)는 원인이 있다 — 앱의 업로드가 처리되지 않을 수
   // 있다는 경고다. 원인 없는 채택(이미 떠 있던 컨테이너·embed)은 정상이다.
@@ -186,11 +200,17 @@ export function servicesView(input: ServicesInput): ServicesView {
     const row: ServiceRow = {
       id: s.id,
       name: SERVICE_LABELS[s.id],
-      state: `${PROCESS_LABELS[s.process]}${s.health === "degraded" ? " · 동작 제한" : ""}`,
+      state: `${PROCESS_LABELS[s.process]}${s.health === "degraded" ? " · 동작 제한" : ""}${
+        s.cleaningUp === true ? " · 정리 중" : ""
+      }`,
       tone: toneOf(s, cause),
       notes,
       log: input.logPathOf(s.id),
     };
+    // "서비스 다시 시작" 버튼의 활성 여부 (스펙 §6.10 2층, Task 11이 쓴다). 술어는 감독자의
+    // `restartRefused` **하나**다 — 화면이 자기 조건을 따로 적으면 버튼이 켜져 있는데 눌러도
+    // 아무 일이 없는 상태가 생긴다.
+    if (restartRefused(s)) row.restartRefused = true;
     const hint = recoveryHint(s);
     if (cause !== undefined) row.cause = cause;
     if (hint !== undefined) row.hint = hint;
