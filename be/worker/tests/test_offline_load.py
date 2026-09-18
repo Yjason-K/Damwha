@@ -28,6 +28,25 @@ def uninstall():
     downloads._uninstall()
 
 
+@pytest.fixture
+def hook_writes(monkeypatch):
+    """훅의 지연 연결을 가짜로 바꾼다 — **이 파일은 DB를 쓰지 않는다.**
+
+    훅을 설치하면 `_STATE.writer`가 서고, 캐시 적재 성공이 `_mark_ready`로 이어져 훅이 자기
+    연결을 연다. 그 연결을 주입하지 않으면 주소가 `be/worker/.env`의 개발 DB가 된다 —
+    실제로 그렇게 새 행 하나가 개발 DB에 들어갔다(`conftest.no_ambient_database` 참고).
+    """
+    writes = []
+
+    class _Recorder:
+        def execute(self, *args, **kwargs):
+            writes.append(args)
+            return None
+
+    monkeypatch.setattr(downloads, "_open_connection", lambda: _Recorder())
+    return writes
+
+
 def _miss() -> Exception:
     return hub_errors.LocalEntryNotFoundError("nothing cached")
 
@@ -85,7 +104,7 @@ def test_cache_first_falls_back_on_a_wrapped_cache_miss():
     assert seen == [True, False]
 
 
-def test_cache_first_injects_local_files_only_into_hub_calls(uninstall, monkeypatch):
+def test_cache_first_injects_local_files_only_into_hub_calls(uninstall, hook_writes, monkeypatch):
     """로더가 `local_files_only`를 자기 인자로 못 받아도 오프라인이 된다 (pyannote·speechbrain)."""
     from huggingface_hub import file_download
 
@@ -103,6 +122,8 @@ def test_cache_first_injects_local_files_only_into_hub_calls(uninstall, monkeypa
 
     assert downloads.load_cache_first("org/m", load) == "/cache/f"
     assert calls[-1]["local_files_only"] is True
+    # R-9d의 `ready` 쓰기는 **주입된** 연결로만 간다
+    assert len(hook_writes) == 1
 
 
 # ── 로더 다섯 ─────────────────────────────────────────────────────────

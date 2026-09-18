@@ -141,6 +141,18 @@ class _Report:
         with self._lock:
             self._abandoned = True
 
+    def touch(self) -> None:
+        """바이트는 아니지만 **무언가 움직였다** — 무진행 시계만 민다. DB에는 쓰지 않는다.
+
+        `last_progress`가 바이트 바에서만 움직이면, 바이트가 안 흐르는 정상 구간(파일 수 바가
+        도는 메타데이터 훑기 등)이 '무진행'으로 보인다. 진행 **보고**의 계약은 그대로다 —
+        `unit == "B"`가 아닌 바는 여전히 바이트로 세지 않고 항목도 쓰지 않는다.
+        """
+        with self._lock:
+            if self._abandoned:
+                return
+            self.last_progress = _clock()
+
     def progress(self, n: int, total: int | None = None) -> None:
         """바이트 `n`이 더 왔다(음수면 되감기). 첫 바이트는 즉시, 이후는 초당 1회 이하로 쓴다."""
         with self._lock:
@@ -310,7 +322,12 @@ class _State:
         self.patched: list[tuple[dict, str, object]] = []
         self.conn = _HookConnection()
         self.limits = None
-        self.client_factory = None  # 상한을 걸기 전의 hub 팩토리 (테스트의 `_uninstall`이 되돌린다)
+        # 상한을 걸기 **전**의 전역 상태. 테스트의 `_uninstall`이 이 셋을 되돌린다 —
+        # `apply_hf_limits`는 프로세스 전역(env·hub 상수·hub 팩토리)을 고치므로, 되돌리지 않으면
+        # 한 테스트가 고른 값이 스위트 끝까지 남는다.
+        self.client_factory = None
+        self.env_before: dict[str, str | None] | None = None
+        self.hub_timeouts_before: tuple[int, int] | None = None
         # 0이면 감시가 꺼진다 — `apply_hf_limits`가 아직 안 돌았다는 뜻이고, 그때는 상한도
         # 안 섰으므로 감시만 혼자 도는 것이 오히려 이상하다.
         self.stall_seconds = 0.0
@@ -424,6 +441,8 @@ def _progress_class(report: _Report):
         def update(self, n=1):
             if self.unit == "B" and n:
                 report.progress(n, self.total)
+            elif n:
+                report.touch()  # 바이트가 아닌 진행도 '멈춤 아님'의 증거다
             return super().update(n)
 
     return _DamwhaProgress
@@ -466,6 +485,10 @@ def _run_watched(original, args, kwargs, report, key: str):
     그래서 **호출자를 풀어 주고 스레드는 버린다.** 버려진 스레드는 daemon이라 인터프리터 종료를
     막지 않고, 세 소비자 모두 이 예외 직후에 프로세스가 끝난다(`--once` 자식은 job을 큐로
     돌려보내고, embed·llm_entry는 적재 실패로 죽어 감독자가 다시 띄운다).
+
+    **이미 끝난 다운로드를 죽이지 않는다.** `wait()`가 False를 돌려준 뒤 판정까지의 사이에 스레드가
+    끝날 수 있으므로 `done.is_set()`을 함께 본다 — 그것 없이는 성공한 `box["value"]`를 버리고
+    TRANSIENT를 던지는 경합이 남는다.
     """
     limit = _STATE.stall_seconds
     if limit <= 0:
@@ -485,7 +508,7 @@ def _run_watched(original, args, kwargs, report, key: str):
     threading.Thread(target=_run, name=f"damwha-hf-{key}", daemon=True).start()
     while not done.wait(_WATCHDOG_TICK_SECONDS):
         idle = _clock() - report.last_progress
-        if idle >= limit:
+        if idle >= limit and not done.is_set():
             report.abandon()
             raise errors.WorkerError(
                 errors.MODEL_DOWNLOAD_FAILED,
@@ -591,6 +614,8 @@ def apply_hf_limits(limits=None) -> None:
             limits.request_timeout,
             limits.retry_max_duration,
         )
+        if _STATE.env_before is None:
+            _STATE.env_before = {n: os.environ.get(n) for n in HF_LIMIT_ENV_KEYS}
         for name, value in zip(HF_LIMIT_ENV_KEYS, values, strict=True):
             os.environ.setdefault(name, str(int(value)))
         _apply_hub_limits(limits)
@@ -607,6 +632,11 @@ def _apply_hub_limits(limits) -> None:
     except ImportError:
         return  # models extra 없음 — env만으로 충분하다
 
+    if _STATE.hub_timeouts_before is None:
+        _STATE.hub_timeouts_before = (
+            hub_constants.HF_HUB_ETAG_TIMEOUT,
+            hub_constants.HF_HUB_DOWNLOAD_TIMEOUT,
+        )
     hub_constants.HF_HUB_ETAG_TIMEOUT = int(os.environ["HF_HUB_ETAG_TIMEOUT"])
     hub_constants.HF_HUB_DOWNLOAD_TIMEOUT = int(os.environ["HF_HUB_DOWNLOAD_TIMEOUT"])
 
@@ -728,21 +758,41 @@ def _forget() -> None:
     _STATE.conn = _HookConnection()
 
 
-def _restore_client_factory() -> None:
-    if _STATE.client_factory is None:
-        return
-    with contextlib.suppress(Exception):
-        from huggingface_hub.utils import set_client_factory
+def _restore_limits() -> None:
+    """`apply_hf_limits`가 고친 **전역 상태**를 되돌린다 — env 다섯, hub 상수 둘, hub 팩토리."""
+    if _STATE.env_before is not None:
+        for name, previous in _STATE.env_before.items():
+            if previous is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = previous
+        _STATE.env_before = None
+    if _STATE.hub_timeouts_before is not None:
+        with contextlib.suppress(Exception):
+            from huggingface_hub import constants as hub_constants
 
-        set_client_factory(_STATE.client_factory)
-    _STATE.client_factory = None
+            etag, download = _STATE.hub_timeouts_before
+            hub_constants.HF_HUB_ETAG_TIMEOUT = etag
+            hub_constants.HF_HUB_DOWNLOAD_TIMEOUT = download
+        _STATE.hub_timeouts_before = None
+    if _STATE.client_factory is not None:
+        with contextlib.suppress(Exception):
+            from huggingface_hub.utils import set_client_factory
+
+            set_client_factory(_STATE.client_factory)
+        _STATE.client_factory = None
+    _STATE.limits = None
+    _STATE.stall_seconds = 0.0
 
 
 def _uninstall() -> None:
-    """테스트 전용 — 설치가 바꾼 모든 이름을 원래 값으로 되돌린다."""
+    """테스트 전용 — 설치가 바꾼 **모든 전역 상태**를 원래 값으로 되돌린다.
+
+    이름 바인딩(`_restore`)만으로는 모자란다. `apply_hf_limits`가 env 다섯 개와 hub의 타임아웃
+    상수 둘, hub의 클라이언트 팩토리까지 고치므로 그것도 함께 되돌린다 — 안 그러면 한 테스트가
+    고른 값이 스위트의 나머지 전체에 남는다.
+    """
     with _STATE.lock:
         _restore()
-        _restore_client_factory()
-        _STATE.limits = None
-        _STATE.stall_seconds = 0.0
+        _restore_limits()
         _forget()

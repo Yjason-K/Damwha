@@ -954,3 +954,106 @@ def test_an_explicit_none_timeout_is_bounded_again(clear_hf_env, uninstall):
     bound = request.extensions["timeout"]
     assert bound["read"] is not None and bound["read"] > 0
     assert bound["connect"] is not None and bound["connect"] > 0
+
+
+# ── 수정 1회차: 개발 DB 차단 · 워치독 경합 · 전역 복원 ────────────────
+
+
+def test_a_hook_write_cannot_reach_an_ambient_database(uninstall, monkeypatch):
+    """훅의 지연 연결은 **주입된 것**이어야 한다.
+
+    실제로 그렇지 않았다: `test_offline_load.py`가 연결을 주입하지 않은 채 훅을 설치해,
+    R-9d의 `ready` 쓰기가 `be/worker/.env`의 `DATABASE_URL`(= Docker 개발 DB, 절대 불변)로
+    연결을 열고 `app_setting`에 `model_readiness` 한 행을 썼다. `downloads.py`가 DB 오류를
+    전부 삼키므로 테스트는 통과했고 아무 신호도 없었다. `conftest`의 autouse 가드 둘이 막는다.
+    """
+    opened = []
+    monkeypatch.setattr(core, "connect", lambda url, **kw: opened.append(url))
+    downloads.install_hf_progress_hook("w1")
+
+    downloads.load_cache_first("org/m", lambda **_: "loaded")  # _mark_ready가 쓰려 한다
+
+    assert opened == []
+
+
+def test_the_suite_never_carries_a_reachable_database_url():
+    """`conftest.no_ambient_database`가 env를 닿을 수 없는 주소로 고정한다."""
+    from tests.conftest import UNREACHABLE_DSN
+
+    assert downloads._database_url() == UNREACHABLE_DSN
+
+
+def test_the_watchdog_does_not_kill_a_download_that_just_finished(uninstall, monkeypatch):
+    """`wait()`가 False를 돌려준 뒤 판정까지의 사이에 스레드가 끝날 수 있다.
+
+    그 경합에서 감시가 발화하면 성공한 결과를 버리고 TRANSIENT를 던진다. 아래 `report`는
+    `last_progress`를 **읽는 순간** 작업 스레드를 끝내고 기다려, 정확히 그 창을 재현한다.
+    """
+    monkeypatch.setattr(downloads, "_WATCHDOG_TICK_SECONDS", 0.01)
+    downloads.apply_hf_limits()
+    downloads._STATE.stall_seconds = 0.05
+    release, finished = threading.Event(), threading.Event()
+
+    class _RacyReport:
+        abandoned = False
+
+        @property
+        def last_progress(self):
+            release.set()  # 작업 스레드를 풀어 주고
+            finished.wait(5)  # 그것이 끝난 뒤에 값을 돌려준다
+            return 0.0  # 무한히 오래된 진행 → idle >= limit
+
+        def abandon(self):
+            type(self).abandoned = True
+
+    def original():
+        release.wait(5)
+        try:
+            return "done"
+        finally:
+            finished.set()
+
+    got = downloads._run_watched(lambda: original(), (), {}, _RacyReport(), "org/m")
+
+    assert got == "done"
+    assert _RacyReport.abandoned is False
+
+
+def test_non_byte_progress_still_counts_as_movement(stub_download, hook_db, conn):
+    """바이트가 안 흐르는 정상 구간(파일 수 바)을 '무진행'으로 보지 않는다 — 다만 바이트로
+    세지도, 항목을 쓰지도 않는다 (Task 9의 계약 그대로)."""
+    _, script = stub_download
+    seen = {}
+
+    def run(cls):
+        bar = cls(total=3, initial=0, unit="it", desc="files", disable=True)
+        seen["before"] = downloads._clock()
+        time.sleep(0.02)
+        bar.update(1)
+        bar.close()
+
+    script["run"] = run
+    downloads.install_hf_progress_hook("w1")
+
+    hub.hf_hub_download("org/m", "f.bin")
+
+    assert _row(conn) is None  # 바이트가 아니므로 아무것도 안 쓴다
+
+
+def test_uninstall_restores_the_global_limits(clear_hf_env, monkeypatch):
+    """`apply_hf_limits`는 프로세스 전역(env·hub 상수·hub 팩토리)을 고친다 — 되돌리지 않으면
+    한 테스트가 고른 값이 스위트 끝까지 남는다."""
+    import os
+
+    monkeypatch.setenv("HF_HUB_DOWNLOAD_TIMEOUT", "9")
+    etag_before = hub_constants.HF_HUB_ETAG_TIMEOUT
+    download_before = hub_constants.HF_HUB_DOWNLOAD_TIMEOUT
+
+    downloads.apply_hf_limits()
+    assert os.environ["HF_HUB_ETAG_TIMEOUT"] != ""
+    downloads._uninstall()
+
+    assert "HF_HUB_ETAG_TIMEOUT" not in os.environ  # 없던 것은 없던 대로
+    assert os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] == "9"  # 있던 것은 그대로
+    assert hub_constants.HF_HUB_ETAG_TIMEOUT == etag_before
+    assert hub_constants.HF_HUB_DOWNLOAD_TIMEOUT == download_before
