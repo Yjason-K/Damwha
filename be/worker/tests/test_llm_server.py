@@ -15,6 +15,9 @@ from damwha_worker.errors import ErrorKind, WorkerError
 
 MODEL = "mlx-community/Qwen3.5-4B-8bit"
 _REAL_WHICH = shutil.which
+# 아래 autouse 가드가 덮기 **전의** 진짜 함수. 공유 행 스위치를 쥐고 있는 것이 이 함수 자신이라
+# (`shared_state_enabled()` 검사가 그 안에 있다) 그것을 검사하는 테스트는 이쪽을 돌려놔야 한다.
+_REAL_OPEN_READINESS = ls._open_readiness_connection
 _SERVER_ARGS = [
     "--model",
     MODEL,
@@ -515,23 +518,74 @@ def test_wait_ready_closes_its_connection_when_the_server_comes_up():
     assert conn.closed
 
 
+def _connect_spy(monkeypatch):
+    """`core.connect` 대역. **진짜** `_open_readiness_connection`을 태운 채 호출을 기록한다.
+
+    가드를 검사하려면 가드를 쥔 함수를 대역으로 바꾸면 안 된다 — `shared_state_enabled()` 검사가
+    `_open_readiness_connection` **안**에 있어서, 그 함수를 통째로 대역으로 바꾼 테스트는 가드를
+    지워도 똑같이 통과한다 (리뷰 1회차 Important-2). 그래서 한 겹 아래인 `core.connect`를 본다.
+    실제 연결은 절대 열리지 않는다 — 이 대역이 그 자리를 막는다.
+    """
+    calls = []
+
+    def connect(url, **kwargs):
+        calls.append(url)
+        # 10번 읽는 동안 받는 중이고 그 뒤로 멈춘다 — 대기가 유한하게 끝나야 테스트가 돈다.
+        fresh = [_downloading("worker-1") for _ in range(10)]
+        stale = _downloading("worker-1", age_seconds=READINESS_STALL_SECONDS + 10)
+        return FakeReadinessConn([*fresh, stale])
+
+    monkeypatch.setattr(ls, "_open_readiness_connection", _REAL_OPEN_READINESS)
+    monkeypatch.setattr(ls.core, "connect", connect)
+    return calls
+
+
 def test_wait_ready_does_not_read_in_external_database_mode(monkeypatch):
-    """`DAMWHA_SHARED_STATE=off`면 앱이 소유하지 않은 DB다 — 읽지도 않는다 (스펙 §6.9)."""
+    """`DAMWHA_SHARED_STATE=off`면 앱이 소유하지 않은 DB다 — 연결을 **열지도** 않는다 (§6.9)."""
     monkeypatch.setenv("DAMWHA_SHARED_STATE", "off")
+    calls = _connect_spy(monkeypatch)
     clock = FakeClock()
 
-    def _must_not_open(_settings_):
-        raise AssertionError("_wait_ready opened a connection in external-DB mode")
+    with pytest.raises(WorkerError) as exc:
+        with ls.managed_llm_server(
+            MODEL,
+            _settings(lens_llm_server_start_timeout_seconds=3.0),
+            popen=lambda *a, **kw: FakeProc(),
+            probe=lambda *a, **kw: None,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        ):
+            pass
+
+    assert calls == []  # 한 번도 열지 않았다
+    assert exc.value.kind is ErrorKind.TRANSIENT
+    assert clock.now == pytest.approx(3.0)  # 유예 연장 없이 평소대로 끝난다
+
+
+def test_wait_ready_opens_one_connection_to_the_configured_url_when_shared_state_is_on(monkeypatch):
+    """위 테스트의 짝 — 스위치가 켜져 있으면 `settings.database_url`로 **한 번** 연다.
+
+    둘이 함께 있어야 위 테스트가 뜻을 갖는다. 이것이 없으면 "아무것도 안 열었다"가 가드 덕분인지
+    애초에 여는 길이 없어서인지 구별되지 않는다.
+    """
+    monkeypatch.delenv("DAMWHA_SHARED_STATE", raising=False)
+    calls = _connect_spy(monkeypatch)
+    clock = FakeClock()
 
     with pytest.raises(WorkerError):
-        _wait_with(
+        with ls.managed_llm_server(
+            MODEL,
             _settings(lens_llm_server_start_timeout_seconds=3.0),
-            lambda *a, **kw: None,
-            _must_not_open,
-            clock,
-        )
+            popen=lambda *a, **kw: FakeProc(),
+            probe=lambda *a, **kw: None,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        ):
+            pass
 
-    assert clock.now == pytest.approx(3.0)
+    assert calls == ["postgresql://x/y"]
+    # 받는 중인 항목이 있으므로(대역의 행) 3초 예산을 소모하지 않았다 — 읽은 값이 실제로 쓰였다.
+    assert clock.now > 3.0
 
 
 def test_the_two_public_signatures_do_not_change():

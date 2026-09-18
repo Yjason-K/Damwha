@@ -87,6 +87,7 @@ const SAMPLE_ARGS: { [K in TemplateId]: ArgsOf<K> } = {
   readinessThrew: ["boom"],
   healthProbeThrew: ["boom"],
   externalCheckFailed: ["ps를 못 돌렸어요"],
+  restartStopFailed: ["worker"],
   pgBundleMissing: [["initdb", "psql"]],
   pgSocketPathTooLong: ["/x/run/.s.PGSQL.5432", 120],
   pgPairingRefused: ["파일 저장소가 다른 데이터베이스의 것이에요", "/u/data/postgres", "/u/data/storage"],

@@ -94,6 +94,10 @@ export const HINTS: Record<CauseId, Hint> = {
   },
   readinessThrew: null,
   externalCheckFailed: null,
+  // 서비스는 계속 살아 있고 앱은 다시 띄우지 않았다 — 사람이 할 일은 기다렸다 다시 누르는 것뿐이다.
+  // worker는 job 하나를 마치는 데 최대 90초를 쓴다 (main.ts의 WORKER_GRACE_MS).
+  restartStopFailed:
+    "처리 중인 일이 끝나면 내려갑니다. 잠시 뒤 \"서비스 다시 시작\"을 한 번 더 눌러 주세요.",
 };
 
 /**

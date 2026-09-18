@@ -60,8 +60,26 @@ const DEFAULT_READINESS_POLL_MS = 2_000;
  * `EMBED_WRITER`가 원본이다.
  */
 const EMBED_WRITER = "embed";
-/** restartService가 자식을 내릴 때 주는 유예. 사람이 버튼을 누르고 기다리는 시간이다. */
+/**
+ * restartService가 **plan에 싣는** 유예. 실제로 기다리는 시간이 이것이라는 뜻은 아니다 —
+ * 어댑터가 자기 값을 쓰면 그쪽이 이긴다. worker가 그렇다: `stopOwnWorker`가
+ * `Math.max(plan.graceMs, WORKER_GRACE_MS)`로 90초까지 올린다(`main.ts`). embed는 이 값을
+ * 그대로 써서 SIGTERM 뒤 이만큼만 폴링한다(`python-launcher.ts`의 handle.stop).
+ *
+ * 그래서 이 상수는 "얼마나 기다리는가"가 아니라 "최소한 이만큼은 준다"이고, 유예 안에 안
+ * 내려간 서비스는 restartService가 **다시 띄우지 않는다**(아래 restartOnce).
+ */
 const RESTART_GRACE_MS = 5_000;
+
+/**
+ * 이 상태의 서비스에 "서비스 다시 시작"이 **안 되는가** (스펙 §6.10 2층).
+ *
+ * 감독자의 `canRestart`가 이것을 그대로 쓰고, 상태 창도 `statuses()`의 한 줄을 그대로 넣는다 —
+ * 판정처가 하나라 버튼의 활성 여부와 감독자의 거부가 갈릴 수 없다. 근거는 `canRestart`의 주석.
+ */
+export function restartRefused(s: ServiceStatus): boolean {
+  return !s.owned && (s.process === "running" || s.process === "starting");
+}
 
 /**
  * 자식이 죽었을 때의 원인: 종료 코드와 그 자식의 stderr 블록 (스펙 §8).
@@ -121,6 +139,12 @@ interface Runtime {
   /** 안정 창이 지나면 재시작 예산을 돌려주는 타이머. */
   budgetTimer: NodeJS.Timeout | null;
   /**
+   * 예약된 백오프 재시작. restartService가 이것도 끈다 — 사람이 지금 다시 띄우는데 몇 초 뒤
+   * 백오프가 한 번 더 깨어나면 그 bring은 단일 비행에 막혀 아무 일도 안 하지만, 그때마다
+   * 로그에 "N회차 재시작"이 찍혀 사람이 읽는 기록이 거짓이 된다.
+   */
+  restartTimer: NodeJS.Timeout | null;
+  /**
    * 진행 중인 bring(). 한 값이 두 가지를 막는다 — 같은 서비스에 두 번째 bring이 겹쳐 들어와
    * 프로세스를 두 벌 만드는 것, 그리고 bring 진입부터 rt.result 대입까지의 구간이 stopAll의
    * 시야 밖으로 새는 것. 둘 다 "아직 rt.result가 없는 동안"이라는 같은 창에서 벌어진다.
@@ -150,6 +174,7 @@ export function createSupervisor(
         everReady: false,
         healthTimer: null,
         budgetTimer: null,
+        restartTimer: null,
         inFlight: null,
       },
     ]),
@@ -510,7 +535,8 @@ export function createSupervisor(
     const delay = spec.restart.backoffMs[Math.min(attempt, spec.restart.backoffMs.length - 1)];
     set(spec.id, { restarts: attempt + 1 });
     log(`${spec.id}: ${why} — ${Math.round(delay / 1000)}초 뒤 재시작 (${attempt + 1}회차)`);
-    arm(delay, () => {
+    rt.restartTimer = arm(delay, () => {
+      rt.restartTimer = null;
       if (stopping) return;
       background(spec);
     });
@@ -582,20 +608,27 @@ export function createSupervisor(
   }
 
   /**
-   * 앱이 이 서비스를 **내릴 수 있나** (스펙 §6.10 2층). 거부하는 둘:
+   * 앱이 이 서비스를 **내릴 수 없나** (스펙 §6.10 2층). 감독자 안팎이 **이 한 함수**를 쓴다 —
+   * 상태 창은 `statuses()`의 한 줄로 버튼의 활성 여부를 정하고(Task 11), restartService는
+   * 같은 판정으로 거부한다. 둘을 따로 적으면 버튼이 켜져 있는데 눌러도 아무 일이 없는 상태가
+   * 생긴다.
    *
-   * - 채택한 외부 인스턴스 (`result.owned === false`) — 앱이 만들지 않은 프로세스다 (§5).
-   * - stand-down (결과 없이 `running`) — 외부 worker에 밀려 서지 않은 상태라 내릴 것이 없고,
-   *   여기서 bring을 걸면 살아 있는 외부 worker 옆에 우리 것을 하나 더 띄운다.
+   * 거부하는 것은 **앱이 소유하지 않는데 이미 판에 올라와 있는** 서비스다:
    *
-   * 바깥에서 같은 판정은 `status.process === "running" && !status.owned`다 — statuses()만 보고
-   * 상태 창이 "서비스 다시 시작" 버튼을 비활성으로 그릴 수 있게 두 표현이 일치한다. 아직 뜨지
-   * 않은(failed·stopped) 서비스는 여기서 막지 않는다. 그건 소유의 문제가 아니라 "띄운 적이
-   * 없다"이고, restartService는 그것을 그냥 띄운다.
+   * - 채택한 외부 인스턴스 — 앱이 만들지 않은 프로세스다 (§5).
+   * - stand-down — 외부 worker에 밀려 서지 않은 상태라 내릴 것이 없고, 여기서 bring을 걸면
+   *   살아 있는 외부 worker 옆에 우리 것을 하나 더 띄운다. 그 길은 `retry()`의 것이다.
+   *
+   * `starting`을 함께 보는 이유: 채택은 `detectExternal` 직후에 정해지는데 그 서비스가 ready에
+   * 닿기 전까지 상태는 `{starting, owned:false}`다. `running`만 보면 그 구간에 버튼이 켜지고,
+   * 눌러도 감독자가 거부한다.
+   *
+   * 아직 뜨지 않은(failed·stopped) 서비스는 막지 않는다 — 그건 소유의 문제가 아니라 "띄운 적이
+   * 없다"이고, restartService는 그것을 그냥 띄운다. 앱이 띄우는 중인 서비스도 막지 않는다
+   * (`owned:true`), restartOnce가 진행 중인 bring을 먼저 기다린다.
    */
   function canRestart(rt: Runtime): boolean {
-    if (rt.result !== null) return rt.result.owned;
-    return rt.status.process !== "running";
+    return !restartRefused(rt.status);
   }
 
   /**
@@ -610,21 +643,42 @@ export function createSupervisor(
    * 거부는 던지지 않는다. Task 11의 applyTokenChange가 그것을 `skipped`로 적어야 하고, 예외로
    * 올리면 토큰 교체 전체가 한 서비스 때문에 실패한다. 까닭은 supervisor.log에 남는다.
    */
-  async function restartService(id: ServiceId): Promise<void> {
+  function restartService(id: ServiceId): Promise<void> {
+    const p = restartOnce(id);
+    // pending에 넣는다. 정지를 기다리는 구간은 bring 밖이라 등록이 없으면 그 창의 ⌘Q가
+    // stopAll의 역순 루프보다 먼저 지나가고, 그러면 rt.result가 null인 서비스를 건너뛴 채
+    // `stopped: true`로 보고한다 — 아직 신호를 받는 중인 자식이 있는데 종료 안내가 "깨끗하다"고
+    // 적는다. Task 8이 그 정직함에 한 번 고쳐 낸 자리다.
+    const tracked = p.catch(() => undefined);
+    pending.add(tracked);
+    void tracked.finally(() => pending.delete(tracked));
+    return p;
+  }
+
+  async function restartOnce(id: ServiceId): Promise<void> {
     const rt = runtimes.get(id)!;
+    const refuse = (): boolean => {
+      if (canRestart(rt)) return false;
+      log(`${id}: 앱이 소유하지 않은 인스턴스라 다시 시작하지 않는다 — ${rt.status.detail ?? "외부 인스턴스"}`);
+      return true;
+    };
     if (stopping) return;
+    // **기다리기 전에** 한 번 본다. 버튼이 보는 것과 같은 판정이므로, 거부할 것이면 그 자리에서
+    // 거부해야 한다 — 채택한 서비스의 bring은 ready까지 수십 초가 걸리고, 그 뒤에 거부하면
+    // 사람은 버튼을 누른 뒤 아무 일도 안 일어나는 시간을 그만큼 본다.
+    if (refuse()) return;
     // 진행 중인 bring을 먼저 끝낸다. 그 사이에 만들어지는 자식의 유일한 참조가 rt.result인데,
     // 그것을 우리가 먼저 지우면 아무도 그 프로세스를 못 찾는다 (stopAll이 pending을 기다리는 것과 같은 까닭).
     if (rt.inFlight !== null) await rt.inFlight.catch(() => undefined);
     if (stopping) return;
-    if (!canRestart(rt)) {
-      log(`${id}: 앱이 소유하지 않은 인스턴스라 다시 시작하지 않는다 — ${rt.status.detail ?? "외부 인스턴스"}`);
-      return;
-    }
+    // 기다리는 동안 채택·stand-down이 정해졌을 수 있다. 같은 판정을 다시 본다.
+    if (refuse()) return;
     disarm(rt.healthTimer);
     rt.healthTimer = null;
     disarm(rt.budgetTimer);
     rt.budgetTimer = null;
+    disarm(rt.restartTimer);
+    rt.restartTimer = null;
 
     const result = rt.result;
     // 참조를 **먼저** 끊는다. 두 가지가 여기에 걸려 있다 — bringOnce의 재진입 가드
@@ -633,21 +687,44 @@ export function createSupervisor(
     rt.result = null;
     if (result !== null) {
       log(`${id}: 다시 시작한다 — 내리는 중`);
+      const out = await specStop(id, result);
+      if (out === null || !out.stopped) {
+        // **안 내려갔으면 다시 띄우지 않는다.** 띄우면 두 가지가 한꺼번에 깨진다 —
+        //  - worker: bring의 detectExternal이 `listExternalWorkers`를 부르는데, 그것이 "우리 것"을
+        //    빼는 근거는 `runtimeOf("worker").result.handle.pid`다(main.ts의 ownPid). rt.result가
+        //    null인 지금 **죽어 가는 우리 worker가 외부 worker로 보여** stand-down이 되고,
+        //    owned:false가 박혀 이 버튼이 스스로 영영 비활성이 된다. 토큰 교체(P4-C4)의 길이 거기서 끊긴다.
+        //  - embed: 옛 자식이 포트를 쥔 채 유일한 참조를 잃고, 새 자식은 그 포트에서 bind에 넘어진다.
+        // 그래서 참조를 되돌리고 상태는 살아 있는 그대로 둔 채 까닭만 싣는다. 사람이 다시 누를 수 있다.
+        rt.result = result;
+        const why = out?.detail ?? CAUSES.restartStopFailed.text(id);
+        const leaked = out?.leaked ?? [];
+        set(id, { detail: leaked.length === 0 ? why : `${why}\n남은 pid: ${leaked.join(", ")}` });
+        log(`${id}: 내려가지 않아 다시 띄우지 않는다 — ${why}`);
+        // 우리가 끈 감시를 되돌린다. 서비스는 계속 살아 있으므로 계속 지켜봐야 한다.
+        if (rt.spec.healthIntervalMs !== undefined) scheduleHealthProbe(rt, rt.spec.healthIntervalMs);
+        scheduleBudgetReset(rt);
+        return;
+      }
       set(id, { process: "stopped", health: "unknown", owned: false, detail: undefined, recovery: undefined });
-      await specStop(id, result);
     }
+    if (stopping) return;
     // 사람이 명시적으로 부른 재시작이다. 예산도 새로 준다 (runFrom이 재시도에 하는 것과 같다).
     set(id, { restarts: 0 });
     await bring(rt.spec);
   }
 
-  /** restartService의 정지 한 줄. 예외를 삼켜 재기동까지 가게 한다 — 안 내려갔으면 bring이 그것을 본다. */
-  async function specStop(id: ServiceId, result: LaunchResult): Promise<void> {
+  /**
+   * restartOnce의 정지 한 줄. 던지면 null이다 — 예외도 "안 내려갔다"의 한 모양이고, 호출부는
+   * 그 둘을 같게 다룬다(되돌리고 다시 띄우지 않는다).
+   */
+  async function specStop(id: ServiceId, result: LaunchResult): Promise<StopOutcome | null> {
     const rt = runtimes.get(id)!;
     try {
-      await rt.spec.stop(result, { graceMs: RESTART_GRACE_MS });
+      return await rt.spec.stop(result, { graceMs: RESTART_GRACE_MS });
     } catch (e) {
       log(`${id}: 다시 시작 중 정지에서 예외 — ${reason(e)}`);
+      return null;
     }
   }
 

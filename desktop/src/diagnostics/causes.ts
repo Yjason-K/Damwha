@@ -330,6 +330,16 @@ export const CAUSES = {
     text: (reason: string) => `외부 인스턴스 확인이 실패했어요 — ${reason}`,
     selfRecovers: false,
   },
+  /**
+   * 감독자 — "서비스 다시 시작"이 그 서비스를 내리지 못했다 (스펙 §6.10 2층). 어댑터가 까닭을
+   * 주지 않았을 때의 기본 문구다(worker의 `unattended`처럼 detail이 있으면 그쪽이 실린다).
+   * 서비스는 **계속 살아 있고** 앱이 다시 띄우지도 않았다 — 다시 누를 수 있다는 것이 안내의 핵심이다.
+   */
+  restartStopFailed: {
+    match: /를 내리지 못해 다시 띄우지 않았어요/,
+    text: (id: string) => `${id}를 내리지 못해 다시 띄우지 않았어요. 잠시 뒤 다시 시도해 주세요.`,
+    selfRecovers: false,
+  },
 } as const satisfies Record<string, Cause>;
 
 export type CauseId = keyof typeof CAUSES;
