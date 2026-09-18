@@ -15,15 +15,28 @@ class BgeM3TextEmbedder:
 
         from sentence_transformers import SentenceTransformer
 
+        from .downloads import load_cache_first
+
         # 텍스트 임베더는 MPS를 쓰지 않는다 — 파이프라인 GPU 모델과의 메모리 경쟁
         # 회피(ECAPA가 CPU로 강제되는 것과 동일 근거). 색인은 백그라운드 job이라
         # CPU 지연이 무해하다.
         # 리비전 고정 + safetensors 한정 — 아래 _PINNED_REVISIONS의 주석을 보라 (P4-C10).
-        self._model = SentenceTransformer(
+        #
+        # 캐시 우선 (스펙 §6.6-b). 이 로더가 오프라인에서 **유일하게 죽던** 자리다: hub의
+        # `_http_backoff_base`가 `ConnectError`에 공유 클라이언트를 닫고 같은 객체로 재시도해
+        # `RuntimeError: client has been closed`를 내는데, 그 타입은 hub·transformers의 캐시 폴백
+        # `except`에 걸리지 않는다. 발화 조건이 "캐시에 없는 파일 + ConnectError"이고 transformers가
+        # 저장소에 없는 선택 파일(adapter_config.json)을 매번 묻기 때문에 정상 경로에서 터진다.
+        # `local_files_only=True`면 그 HTTP 시도 자체가 없다 — 실측 2.1 GB 캐시에서 1.1초.
+        self._model = load_cache_first(
             model_name,
-            device="cpu",
-            revision=_PINNED_REVISIONS.get(model_name),
-            model_kwargs={"use_safetensors": True},
+            lambda local_files_only: SentenceTransformer(
+                model_name,
+                device="cpu",
+                revision=_PINNED_REVISIONS.get(model_name),
+                model_kwargs={"use_safetensors": True},
+                local_files_only=local_files_only,
+            ),
         )
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:

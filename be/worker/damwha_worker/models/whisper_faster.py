@@ -22,6 +22,22 @@ _MODEL = {
 }
 
 
+def _repo_id(size: str) -> str:
+    """faster-whisper가 그 크기 이름으로 내려받는 HF 저장소 — `model_readiness`의 key다.
+
+    이름→저장소 표를 여기에 베끼지 않는다. `large-v3-turbo`는 `Systran/…`이 아니라
+    `mobiuslabsgmbh/…`이고, 그런 예외를 손으로 옮기면 조용히 갈린다. 표를 못 읽으면(모듈 없음 ·
+    상수 이름 변경) 크기 이름 그대로를 쓴다 — 보고의 key가 덜 정확할 뿐 적재는 그대로 돈다.
+    """
+    if "/" in size:
+        return size
+    try:
+        from faster_whisper.utils import _MODELS
+    except ImportError:
+        return size
+    return _MODELS.get(size, size)
+
+
 def _clipped_done_ms(spans: list[SpeechSpan], position_ms: int) -> int:
     """오디오 절대 시각을 '처리한 clip 오디오 누적 ms'로 환산한다.
 
@@ -44,10 +60,22 @@ class FasterWhisper:
     def __init__(self, whisper_model: str, device: str) -> None:
         from faster_whisper import WhisperModel
 
+        from .downloads import load_cache_first
+
         size = _MODEL.get(whisper_model, whisper_model)
         compute_type = "float16" if device == "cuda" else "int8"
-        self._model = WhisperModel(
-            size, device="cuda" if device == "cuda" else "cpu", compute_type=compute_type
+        # 캐시 우선 (스펙 §6.6-b). `download_model`이 자기 `tqdm_class`(disabled_tqdm)를 넘기므로
+        # 이 경로는 훅의 진행 보고에서 빠지고 무진행 감시도 안 붙는다(알려진 한계) — 그래서
+        # 캐시 우선이 더 중요하다. 캐시가 차 있으면 네트워크 호출이 0건이라 먹통 네트워크에서도
+        # 멈추지 않는다.
+        self._model = load_cache_first(
+            _repo_id(size),
+            lambda local_files_only: WhisperModel(
+                size,
+                device="cuda" if device == "cuda" else "cpu",
+                compute_type=compute_type,
+                local_files_only=local_files_only,
+            ),
         )
 
     def transcribe(

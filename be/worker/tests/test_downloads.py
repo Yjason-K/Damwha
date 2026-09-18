@@ -11,6 +11,7 @@ import io
 import re
 import sys
 import threading
+import time
 import types
 from types import SimpleNamespace
 
@@ -764,3 +765,192 @@ def test_other_embedding_models_are_not_pinned_but_stay_safetensors_only(
 
     assert fake_sentence_transformers["revision"] is None
     assert fake_sentence_transformers["model_kwargs"] == {"use_safetensors": True}
+
+
+# ── 유한 타임아웃 (스펙 §6.6-b) ───────────────────────────────────────
+
+
+@pytest.fixture
+def clear_hf_env(monkeypatch):
+    for name in downloads.HF_LIMIT_ENV_KEYS:
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_apply_hf_limits_puts_a_finite_bound_on_every_layer(clear_hf_env, uninstall):
+    import os
+
+    downloads.apply_hf_limits()
+
+    values = {name: os.environ.get(name) for name in downloads.HF_LIMIT_ENV_KEYS}
+    assert all(v is not None and int(v) > 0 for v in values.values()), values
+    # 라이브러리 기본값과 달라야 hub가 호출자의 etag_timeout을 이 값으로 덮는다
+    # (file_download.py:959-961).
+    assert hub_constants.HF_HUB_ETAG_TIMEOUT != hub_constants.DEFAULT_ETAG_TIMEOUT
+    assert hub_constants.HF_HUB_ETAG_TIMEOUT == int(values["HF_HUB_ETAG_TIMEOUT"])
+    assert hub_constants.HF_HUB_DOWNLOAD_TIMEOUT == int(values["HF_HUB_DOWNLOAD_TIMEOUT"])
+
+
+def test_apply_hf_limits_bounds_the_shared_client(clear_hf_env, uninstall):
+    """`snapshot_download`의 `repo_info`에는 방어가 없다 — 공유 클라이언트가 유일한 상한이다."""
+    downloads.apply_hf_limits()
+
+    timeout = hub.get_session().timeout
+    assert timeout.read is not None and timeout.read > 0
+    assert timeout.connect is not None and timeout.connect > 0
+
+
+def test_installing_the_hook_applies_the_limits(clear_hf_env, stub_download, hook_db):
+    import os
+
+    downloads.install_hf_progress_hook("w1")
+
+    assert os.environ["HF_HUB_ETAG_TIMEOUT"] == str(downloads._STATE.limits.etag_timeout)
+    assert downloads._STATE.stall_seconds > 0
+
+
+def test_an_env_value_from_outside_wins(clear_hf_env, uninstall, monkeypatch):
+    """앱이나 운영자가 명시한 값을 덮지 않는다 — 워커 설정은 그 자리가 빌 때의 진실 원천이다."""
+    import os
+
+    monkeypatch.setenv("HF_HUB_ETAG_TIMEOUT", "7")
+    downloads.apply_hf_limits()
+
+    assert os.environ["HF_HUB_ETAG_TIMEOUT"] == "7"
+    assert hub_constants.HF_HUB_ETAG_TIMEOUT == 7
+
+
+# ── 무진행 감시 (스펙 §6.9 무진행 규칙, R4-15) ────────────────────────
+
+
+def test_a_stalled_download_ends_as_transient(stub_download, hook_db, conn, monkeypatch):
+    """진행이 멈춘 다운로드는 유한 시간에 TRANSIENT 실패로 끝나 `--once` 자식을 풀어 준다."""
+    _, script = stub_download
+    release = threading.Event()
+    script["run"] = lambda cls: release.wait(10)
+    monkeypatch.setattr(downloads, "_WATCHDOG_TICK_SECONDS", 0.01)
+    downloads.install_hf_progress_hook("w1")
+    downloads._STATE.stall_seconds = 0.2
+
+    with pytest.raises(errors.WorkerError) as raised:
+        hub.hf_hub_download("org/m", "f.bin")
+    release.set()
+
+    assert raised.value.kind is ErrorKind.TRANSIENT
+    assert raised.value.code == errors.MODEL_DOWNLOAD_FAILED
+    entry = _entry(conn)
+    assert entry["state"] == "failed"
+    assert entry["error_kind"] == ErrorKind.TRANSIENT.value
+
+
+def test_a_progressing_download_is_left_alone(stub_download, hook_db, conn, monkeypatch):
+    """감시 기준은 Task 9의 훅이 올리는 진행이다 — 흐르고 있으면 발화하지 않는다."""
+    _, script = stub_download
+
+    def run(cls):
+        bar = cls(total=50, initial=0, unit="B", desc="f", disable=True)
+        for _ in range(5):
+            time.sleep(0.1)
+            bar.update(10)
+        bar.close()
+
+    script["run"] = run
+    monkeypatch.setattr(downloads, "_WATCHDOG_TICK_SECONDS", 0.01)
+    downloads.install_hf_progress_hook("w1")
+    downloads._STATE.stall_seconds = 0.4
+
+    assert hub.hf_hub_download("org/m", "f.bin") == script["result"]
+    entry = _entry(conn)
+    assert entry["state"] == "ready" and entry["bytes_done"] == 50
+
+
+def test_a_late_progress_update_cannot_revive_a_stalled_entry(
+    stub_download, hook_db, conn, monkeypatch
+):
+    """감시가 끝낸 다운로드의 스레드는 버려진다 — 뒤늦은 진행이 `failed`를 되돌리면 안 된다."""
+    _, script = stub_download
+    seen = {}
+    release = threading.Event()
+
+    def run(cls):
+        seen["bar"] = cls(total=50, initial=0, unit="B", desc="f", disable=True)
+        release.wait(10)
+        seen["bar"].update(10)
+
+    script["run"] = run
+    monkeypatch.setattr(downloads, "_WATCHDOG_TICK_SECONDS", 0.01)
+    downloads.install_hf_progress_hook("w1")
+    downloads._STATE.stall_seconds = 0.2
+
+    with pytest.raises(errors.WorkerError):
+        hub.hf_hub_download("org/m", "f.bin")
+    release.set()
+    time.sleep(0.1)
+
+    assert _entry(conn)["state"] == "failed"
+
+
+# ── R-9d: 캐시로 적재에 성공하면 `ready`를 적는다 ─────────────────────
+
+
+def test_a_cache_first_load_clears_a_stale_failure(conn, clean, hook_db, stub_download):
+    """Task 9의 훅은 바이트가 오간 다운로드만 `ready`를 쓴다(R-9b). 그래서 옛 `failed`가 캐시로
+    잘 뜨는 모델에 붙어 있게 되고 화면이 거짓 실패를 보인다 — 로더가 통째로 적재에 성공한
+    이 자리가 그것을 지운다."""
+    downloads.install_hf_progress_hook("w1")
+    core.merge_model_readiness(
+        conn, "org/m", {"state": "failed", "error": "boom", "error_kind": "TRANSIENT"}, "w1"
+    )
+
+    downloads.load_cache_first("org/m", lambda **_: "loaded")
+
+    entry = _entry(conn)
+    assert entry["state"] == "ready"
+    assert entry["error"] is None and entry["error_kind"] is None
+    assert entry["writer"] == "w1"
+
+
+def test_a_cache_first_load_writes_nothing_without_a_hook(conn, clean):
+    downloads.load_cache_first("org/m", lambda **_: "loaded")
+
+    assert _row(conn) is None
+
+
+def test_a_cache_first_load_writes_nothing_when_shared_state_is_off(
+    conn, clean, hook_db, stub_download, monkeypatch
+):
+    downloads.install_hf_progress_hook("w1")
+    monkeypatch.setenv("DAMWHA_SHARED_STATE", "off")
+
+    downloads.load_cache_first("org/m", lambda **_: "loaded")
+
+    assert _row(conn) is None
+
+
+def test_the_online_fallback_leaves_the_entry_to_the_hook(conn, clean, hook_db, stub_download):
+    """캐시 미스는 `ready`가 아니다 — 그 뒤의 실제 다운로드가 훅을 통해 상태를 쓴다."""
+    _, script = stub_download
+    downloads.install_hf_progress_hook("w1")
+    script["run"] = lambda cls: _bytes_bar(cls, 20, [20]) if cls is not None else None
+
+    def load(*, local_files_only):
+        if local_files_only:
+            raise hub_errors.LocalEntryNotFoundError("nothing cached")
+        return hub.hf_hub_download("org/m", "f.bin")
+
+    downloads.load_cache_first("org/m", load)
+
+    entry = _entry(conn)
+    assert entry["state"] == "ready" and entry["bytes_done"] == 20
+
+
+def test_an_explicit_none_timeout_is_bounded_again(clear_hf_env, uninstall):
+    """hub의 `model_info`는 `timeout=None`을 명시해 넘긴다 (`hf_api.py:3311`) — httpx에서 그것은
+    '상한 없음'이라 클라이언트 기본값을 끈다. 실측: 이 방어가 없으면 먹통 엔드포인트에서
+    `snapshot_download`가 300초를 넘겨도 끝나지 않았다."""
+    downloads.apply_hf_limits()
+
+    request = hub.get_session().build_request("GET", "https://example.invalid/x", timeout=None)
+
+    bound = request.extensions["timeout"]
+    assert bound["read"] is not None and bound["read"] > 0
+    assert bound["connect"] is not None and bound["connect"] > 0

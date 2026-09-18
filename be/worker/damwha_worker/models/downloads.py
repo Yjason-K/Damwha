@@ -39,6 +39,23 @@ P4-C9의 "두 번째 실행에 새 downloading 0건". 바가 파일 수에도 �
 **key와 writer.** key는 호출의 `repo_id`(스펙 §6.9 "실제로 건드린 모델만"). writer는 설치 때 받은
 값 — worker 쪽 프로세스는 WORKER_ID, embed는 `"embed"`(R-9a). supervisor는 모델을 받지 않으므로
 설치하지 않는다.
+
+──────────────────────────────────────────────────────────────────────
+
+**스펙 §6.6-b — 캐시 우선·유한 상한·무진행 감시.** 위의 진행 보고와 같은 자리에 붙는 세 층이다.
+셋 다 "캐시가 차 있으면 네트워크와 무관하게 적재되고, 어떤 HF 호출도 무한히 멈추지 않는다"는
+한 요구를 나눠 진다.
+
+1. **캐시 우선 적재** — `load_cache_first(key, load)`. 로더를 `local_files_only=True`로 **먼저**
+   부르고, 캐시 미스일 때만 네트워크로 내려간다. 로더가 그 인자를 자기 API로 못 받아도
+   (pyannote·speechbrain) 이 컨텍스트 동안 훅이 **모든 hub 호출에** 그 값을 끼워 넣는다. 성공하면
+   그 모델을 `ready`로 적는다 (R-9d — 아래 `_mark_ready`).
+2. **유한 상한** — `apply_hf_limits()`. 값은 `config.py`가 정한다(단일 진실 원천). 메타데이터·
+   다운로드·공유 클라이언트·xet 네 곳에 각각 유한한 값을 준다.
+3. **무진행 감시** — 보고되는 다운로드는 별도 스레드에서 돌리고, 훅이 올리는 진행이 제한
+   시간(`config.HF_STALL_SECONDS`) 동안 없으면 호출자 스레드에서 TRANSIENT `WorkerError`를
+   던진다. 막힌 호출 자체는 파이썬에서 끊을 수 없다(xet은 Rust 안에서 멈춘다) — 그래서 **호출자를
+   풀어 주고 스레드는 버린다.** `--once` 자식은 그 예외로 job을 큐에 돌려보내고 끝난다 (R4-15).
 """
 
 from __future__ import annotations
@@ -63,6 +80,25 @@ _NAMES = ("hf_hub_download", "snapshot_download")
 _MISSING = object()
 _clock = time.monotonic
 
+# 감시가 진행을 들여다보는 주기. 판정 자체는 `report.last_progress` 하나로 한다.
+_WATCHDOG_TICK_SECONDS = 1.0
+
+# `apply_hf_limits`가 채우는 env 이름들. hub 둘은 파이썬 쪽 상수로도 반영하고, xet 셋은
+# Rust 쪽이 **자기 프로세스의 env만** 읽으므로 env가 유일한 경로다.
+HF_LIMIT_ENV_KEYS = (
+    "HF_HUB_ETAG_TIMEOUT",
+    "HF_HUB_DOWNLOAD_TIMEOUT",
+    "HF_XET_CLIENT_CONNECT_TIMEOUT",
+    "HF_XET_CLIENT_READ_TIMEOUT",
+    "HF_XET_CLIENT_RETRY_MAX_DURATION",
+)
+
+# 캐시 미스의 이름들. hub는 `local_files_only=True`에 캐시가 없으면 `LocalEntryNotFoundError`를
+# 던지고(`file_download.py:1795-1799`), `HF_HUB_OFFLINE`이 켜져 있으면 `OfflineModeIsEnabled`가
+# 사슬에 남는다. **이 둘만** 온라인 폴백의 조건이다 — 다른 실패를 삼켜 네트워크 재시도로 감추면
+# 깨진 캐시나 잘못된 설정이 매번 다운로드로 둔갑한다.
+_CACHE_MISS_NAMES = ("LocalEntryNotFoundError", "OfflineModeIsEnabled")
+
 # ── 보고자 ────────────────────────────────────────────────────────────
 
 
@@ -86,15 +122,31 @@ class _Report:
         self._started_at: str | None = None
         self._attempt = 1
         self._last_write = 0.0
+        self._abandoned = False
+        # 무진행 감시의 유일한 판정 근거. 호출이 시작된 순간부터 센다 — 바이트가 **한 번도**
+        # 오지 않는 멈춤(메타데이터 단계의 먹통 네트워크)도 같은 규칙으로 잡히게.
+        self.last_progress = _clock()
         self.benign_if = None  # 호출별 추가 판정 (감싼 함수가 채운다)
 
     @property
     def transferred(self) -> bool:
         return self._started_at is not None
 
+    def abandon(self) -> None:
+        """감시가 이 다운로드를 끝냈다 — 버려진 스레드의 뒤늦은 진행을 무시한다.
+
+        막힌 호출은 파이썬에서 끊을 수 없어 스레드를 버리는데, 그 스레드가 나중에 깨어나
+        `downloading`을 쓰면 방금 적은 `failed`가 되살아난다.
+        """
+        with self._lock:
+            self._abandoned = True
+
     def progress(self, n: int, total: int | None = None) -> None:
         """바이트 `n`이 더 왔다(음수면 되감기). 첫 바이트는 즉시, 이후는 초당 1회 이하로 쓴다."""
         with self._lock:
+            if self._abandoned:
+                return
+            self.last_progress = _clock()
             self.done = max(0, self.done + int(n))
             if total:
                 self.total = max(self.total, int(total))
@@ -126,7 +178,9 @@ class _Report:
             if not self.transferred:
                 self._started_at = core.readiness_now()
                 self._attempt = self._next_attempt()
-            w = errors.download_error(exc)
+            # 무진행 감시는 이미 판정이 끝난 `WorkerError`를 던진다 — 그것을 다시 분류하면
+            # `WorkerError: model_download_failed: …`라는 겹친 문구가 화면에 남는다.
+            w = exc if isinstance(exc, errors.WorkerError) else errors.download_error(exc)
             self._write(
                 {
                     "state": "failed",
@@ -255,9 +309,106 @@ class _State:
         self.base_tqdm = None
         self.patched: list[tuple[dict, str, object]] = []
         self.conn = _HookConnection()
+        self.limits = None
+        self.client_factory = None  # 상한을 걸기 전의 hub 팩토리 (테스트의 `_uninstall`이 되돌린다)
+        # 0이면 감시가 꺼진다 — `apply_hf_limits`가 아직 안 돌았다는 뜻이고, 그때는 상한도
+        # 안 섰으므로 감시만 혼자 도는 것이 오히려 이상하다.
+        self.stall_seconds = 0.0
 
 
 _STATE = _State()
+
+
+# ── 캐시 우선 적재 (스펙 §6.6-b) ──────────────────────────────────────
+
+_CACHE_FIRST = threading.local()
+
+
+class _Attempt:
+    """한 번의 캐시 우선 시도. 훅이 여기에 캐시 미스를 적어 둔다."""
+
+    __slots__ = ("misses",)
+
+    def __init__(self) -> None:
+        self.misses = 0
+
+
+def _current_attempt() -> _Attempt | None:
+    return getattr(_CACHE_FIRST, "attempt", None)
+
+
+def cache_first_active() -> bool:
+    """지금 이 스레드가 캐시 우선 시도 안에 있는가. 로더가 자기 인자로 못 넘길 때의 판정용."""
+    return _current_attempt() is not None
+
+
+@contextlib.contextmanager
+def _cache_first_attempt():
+    previous = _current_attempt()
+    attempt = _Attempt()
+    _CACHE_FIRST.attempt = attempt
+    try:
+        yield attempt
+    finally:
+        _CACHE_FIRST.attempt = previous
+
+
+def is_cache_miss(exc: BaseException) -> bool:
+    """사슬 어딘가가 "캐시에 없다"인가. 호출자가 hub 예외를 감싸 던지므로 원인까지 본다."""
+    for e in errors._chain(exc):
+        if any(cls.__name__ in _CACHE_MISS_NAMES for cls in type(e).__mro__):
+            return True
+    return False
+
+
+def load_cache_first(key: str, load):
+    """모델 적재를 **캐시 먼저** 시도한다 (스펙 §6.6-b). `load`는 `local_files_only=`로 불린다.
+
+    로더 다섯이 공유하는 하나의 헬퍼다 — 로더마다 복제하지 않는다. 자기 API로 그 인자를 받는
+    로더(sentence-transformers·faster-whisper)는 그대로 넘기고, 못 받는 로더(pyannote·speechbrain·
+    mlx)는 무시해도 된다: 이 컨텍스트 동안 훅이 **모든 hub 호출에** `local_files_only=True`를 끼워
+    넣는다.
+
+    온라인으로 내려가는 조건은 **캐시 미스 하나뿐이다**(`is_cache_miss`). 그 밖의 예외는 그대로
+    올려 보낸다 — 삼켜서 네트워크 재시도로 감추면 오프라인에서 1.1초에 끝날 일이 매번 다운로드가
+    되고, 진짜 원인(깨진 캐시·잘못된 리비전)이 영영 안 보인다.
+
+    캐시로 적재에 성공하면 그 key를 `ready`로 적는다 (R-9d, `_mark_ready`).
+    """
+    with _cache_first_attempt() as attempt:
+        try:
+            loaded = load(local_files_only=True)
+        except Exception as exc:
+            if not (attempt.misses or is_cache_miss(exc)):
+                raise
+            log.info(
+                "%s is not fully cached (%s) — falling back to the network",
+                key,
+                type(exc).__name__,
+            )
+        else:
+            _mark_ready(key)
+            return loaded
+    return load(local_files_only=False)
+
+
+def _mark_ready(key: str) -> None:
+    """캐시만으로 적재에 성공한 모델을 `ready`로 적는다 (R-9d).
+
+    Task 9의 훅은 **바이트가 실제로 오간** 다운로드에만 `ready`를 쓴다(R-9b) — 파일 하나의 캐시
+    적중은 "그 모델이 멀쩡하다"의 증거가 아니기 때문이다. 그 결과 옛 `failed` 항목이 이제는 캐시로
+    잘 뜨는 모델에 그대로 붙어 있고, 화면(Task 11)이 거짓 실패를 보인다. **모델 하나가 통째로
+    적재된 이 자리**는 그 증거가 되는 유일한 지점이라 여기서만 적는다.
+
+    바이트 수는 0이다 — 이번 적재가 옮긴 바이트가 정말로 없다 (§6.9는 모르는 구간을 0으로 둔다).
+    """
+    writer = _STATE.writer
+    if writer is None:
+        return  # 훅이 없는 프로세스(테스트·스크립트)는 보고할 곳도 없다
+    try:
+        core.merge_model_readiness(_STATE.conn, key, {"state": "ready"}, writer)
+    except Exception:  # noqa: BLE001 — 보고 실패가 적재를 깨지 않는다
+        log.warning("model_readiness ready-mark failed for %s", key, exc_info=True)
 
 
 def _progress_class(report: _Report):
@@ -307,9 +458,61 @@ def _known_missing(repo_id: str, args: tuple, kwargs: dict, exc: BaseException) 
     return found is _CACHED_NO_EXIST
 
 
+def _run_watched(original, args, kwargs, report, key: str):
+    """다운로드를 별도 스레드에서 돌리고 무진행을 감시한다 (스펙 §6.9 무진행 규칙, R4-15).
+
+    막힌 호출 자체는 끊을 수 없다 — xet은 GIL을 놓은 채 Rust 안에서 멈추므로 파이썬 예외도
+    시그널도 닿지 않는다(2026-09-18 실측: 끊긴 xet 전송이 600초를 예외 없이 멈춰 있었다).
+    그래서 **호출자를 풀어 주고 스레드는 버린다.** 버려진 스레드는 daemon이라 인터프리터 종료를
+    막지 않고, 세 소비자 모두 이 예외 직후에 프로세스가 끝난다(`--once` 자식은 job을 큐로
+    돌려보내고, embed·llm_entry는 적재 실패로 죽어 감독자가 다시 띄운다).
+    """
+    limit = _STATE.stall_seconds
+    if limit <= 0:
+        return original(*args, **kwargs)
+
+    box: dict = {}
+    done = threading.Event()
+
+    def _run() -> None:
+        try:
+            box["value"] = original(*args, **kwargs)
+        except BaseException as exc:  # noqa: BLE001 — 호출자 스레드에서 그대로 다시 던진다
+            box["error"] = exc
+        finally:
+            done.set()
+
+    threading.Thread(target=_run, name=f"damwha-hf-{key}", daemon=True).start()
+    while not done.wait(_WATCHDOG_TICK_SECONDS):
+        idle = _clock() - report.last_progress
+        if idle >= limit:
+            report.abandon()
+            raise errors.WorkerError(
+                errors.MODEL_DOWNLOAD_FAILED,
+                f"download of {key!r} made no progress for {int(idle)}s — ending it so the job "
+                "returns to the queue",
+                errors.ErrorKind.TRANSIENT,
+            )
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
 def _wrap(original):
     @functools.wraps(original)
     def hooked(*args, **kwargs):
+        # 캐시 우선 시도 안이면 모든 호출을 오프라인으로 돌린다 (스펙 §6.6-b). 폴백은 로더 자리의
+        # `load_cache_first`가 한 번만 한다 — 호출마다 따로 내려가면 bge-m3가 오프라인에서
+        # 죽는 hub 버그(닫힌 클라이언트 재사용)를 그대로 만난다.
+        attempt = _current_attempt()
+        if attempt is not None:
+            try:
+                return original(*args, **{**kwargs, "local_files_only": True})
+            except Exception as exc:
+                if is_cache_miss(exc):
+                    attempt.misses += 1
+                raise
+
         writer = _STATE.writer
         repo_id = args[0] if args else kwargs.get("repo_id")
         if (
@@ -323,7 +526,13 @@ def _wrap(original):
         with report_download(_STATE.conn, repo_id, writer) as report:
             report.benign_if = functools.partial(_known_missing, repo_id, args, kwargs)
             # transformers는 tqdm_class=None을 명시해 넘긴다 — 덮어써야 중복 키가 안 된다
-            return original(*args, **{**kwargs, "tqdm_class": _progress_class(report)})
+            return _run_watched(
+                original,
+                args,
+                {**kwargs, "tqdm_class": _progress_class(report)},
+                report,
+                repo_id,
+            )
 
     hooked.__damwha_original__ = original
     return hooked
@@ -345,6 +554,95 @@ def _bind(ns: dict, name: str, value) -> None:
     ns[name] = value
 
 
+def apply_hf_limits(limits=None) -> None:
+    """모든 HF 요청에 유한한 상한을 준다 (스펙 §6.6-b). **던지지 않는다.**
+
+    값의 단일 진실 원천은 `config.py`다 — 앱이 env로 따로 주지 않으므로 웹 흐름(`pnpm worker`)과
+    앱이 같은 값으로 돈다. 이미 **명시된 env는 덮지 않는다**: 운영자가 `.env`나 셸에서 정한 값이
+    있으면 그쪽이 이긴다.
+
+    네 층에 각각 준다.
+    - `HF_HUB_ETAG_TIMEOUT` — 메타데이터 HEAD. 라이브러리 기본값과 다른 값이어야 hub가
+      호출자의 `etag_timeout`까지 이 값으로 덮는다 (`file_download.py:959-961`).
+    - `HF_HUB_DOWNLOAD_TIMEOUT` — 스트리밍 중 바이트 사이 간격.
+    - **공유 httpx 클라이언트** — `timeout=None`이 기본이라 `repo_info`처럼 per-call 방어가 없는
+      호출이 영원히 멈춘다. `set_client_factory`는 hub의 공개 API다. 클라이언트 기본값만으로는
+      부족하다: `HfApi.model_info`가 `timeout=None`을 **명시해** 넘겨(`hf_api.py:3311`) 그 기본값을
+      끈다. 그래서 팩토리가 내주는 클라이언트는 명시된 `None`을 우리 값으로 되돌린다
+      (`_BoundedClient`). 2026-09-18 실측: 이것 없이는 먹통 엔드포인트에서 `snapshot_download`가
+      300초를 넘겨도 끝나지 않는다.
+    - xet 셋 — Rust 쪽은 자기 프로세스의 env만 읽는다. 다만 2026-09-18 실측에서 hf_xet가 끊긴
+      전송에 자기 기본값조차 지키지 않았으므로 **이 셋은 보증이 아니다** — 보증은 무진행 감시다.
+
+    호출 시점이 계약이다: `huggingface_hub.constants`는 **import 시점에** env를 읽으므로 무거운
+    import 전에 불러야 한다. 이미 import된 뒤라도 상수 둘은 직접 갈아 끼운다(hub가 호출 시점에
+    모듈 속성으로 읽는다).
+    """
+    try:
+        from ..config import hf_limits
+
+        limits = limits or hf_limits()
+        _STATE.limits = limits
+        _STATE.stall_seconds = float(limits.stall_seconds)
+        values = (
+            limits.etag_timeout,
+            limits.download_timeout,
+            limits.connect_timeout,
+            limits.request_timeout,
+            limits.retry_max_duration,
+        )
+        for name, value in zip(HF_LIMIT_ENV_KEYS, values, strict=True):
+            os.environ.setdefault(name, str(int(value)))
+        _apply_hub_limits(limits)
+    except Exception:  # noqa: BLE001 — 상한을 못 걸어도 프로세스는 뜬다 (감시가 남는다)
+        log.warning("hf limits not applied — requests keep the library defaults", exc_info=True)
+
+
+def _apply_hub_limits(limits) -> None:
+    try:
+        import httpx
+        from huggingface_hub import constants as hub_constants
+        from huggingface_hub.utils import _http as hub_http
+        from huggingface_hub.utils import set_client_factory
+    except ImportError:
+        return  # models extra 없음 — env만으로 충분하다
+
+    hub_constants.HF_HUB_ETAG_TIMEOUT = int(os.environ["HF_HUB_ETAG_TIMEOUT"])
+    hub_constants.HF_HUB_DOWNLOAD_TIMEOUT = int(os.environ["HF_HUB_DOWNLOAD_TIMEOUT"])
+
+    if _STATE.client_factory is None:
+        _STATE.client_factory = hub_http._GLOBAL_CLIENT_FACTORY
+    timeout = httpx.Timeout(float(limits.request_timeout), connect=float(limits.connect_timeout))
+
+    class _BoundedClient(httpx.Client):
+        """명시된 `timeout=None`을 유한한 값으로 되돌린다.
+
+        httpx에서 `timeout=None`은 "상한 없음"이지 "클라이언트 기본값"이 아니다. hub의
+        `model_info`·`dataset_info`·`space_info`가 그 값을 그대로 넘기므로, 클라이언트 기본값만
+        고쳐서는 `snapshot_download`의 `repo_info`가 여전히 무한히 기다린다.
+        """
+
+        def build_request(self, *args, **kwargs):
+            if "timeout" in kwargs and kwargs["timeout"] is None:
+                kwargs["timeout"] = timeout
+            return super().build_request(*args, **kwargs)
+
+    def _factory():
+        # 기본 팩토리에서 훅·리다이렉트 설정을 그대로 가져온다 — 요청 id 이벤트 훅을 여기에
+        # 다시 적으면 hub가 그것을 바꿀 때 조용히 갈린다.
+        base = hub_http.default_client_factory()
+        try:
+            return _BoundedClient(
+                event_hooks=base.event_hooks,
+                follow_redirects=base.follow_redirects,
+                timeout=timeout,
+            )
+        finally:
+            base.close()
+
+    set_client_factory(_factory)
+
+
 def install_hf_progress_hook(writer: str) -> None:
     """이 프로세스의 HF 다운로드를 `writer` 이름으로 보고한다. 무거운 import **전에** 부른다.
 
@@ -354,6 +652,9 @@ def install_hf_progress_hook(writer: str) -> None:
     전의 `--once` 자식과 gate 서비스인 embed가 죽는다. 그래서 호출부에는 try가 없다.
     """
     with _STATE.lock:
+        # 상한을 먼저 건다 — 아래 `_install`이 `huggingface_hub`를 import하고, 그 모듈의
+        # `constants`는 import 시점에 env를 읽는다.
+        apply_hf_limits()
         fresh = _STATE.originals is None
         mark = len(_STATE.patched)
         try:
@@ -427,8 +728,21 @@ def _forget() -> None:
     _STATE.conn = _HookConnection()
 
 
+def _restore_client_factory() -> None:
+    if _STATE.client_factory is None:
+        return
+    with contextlib.suppress(Exception):
+        from huggingface_hub.utils import set_client_factory
+
+        set_client_factory(_STATE.client_factory)
+    _STATE.client_factory = None
+
+
 def _uninstall() -> None:
     """테스트 전용 — 설치가 바꾼 모든 이름을 원래 값으로 되돌린다."""
     with _STATE.lock:
         _restore()
+        _restore_client_factory()
+        _STATE.limits = None
+        _STATE.stall_seconds = 0.0
         _forget()

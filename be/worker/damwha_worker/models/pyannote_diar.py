@@ -38,9 +38,16 @@ class PyannoteDiarizer:
         import torch
         from pyannote.audio import Pipeline
 
+        from .downloads import load_cache_first
+
         # pyannote.audio 4.x renamed the auth param: use_auth_token → token
+        # 캐시 우선 (스펙 §6.6-b). `from_pretrained`에도 `local_files_only`가 없다 — 훅이 hub
+        # 호출에 끼워 넣는다. 게이트 체인의 하위 모델까지 같은 컨텍스트 안에서 적재되므로
+        # 한 번의 시도로 3-모델 체인 전체가 오프라인이 된다.
         try:
-            pipeline = Pipeline.from_pretrained(model, token=hf_token)
+            pipeline = load_cache_first(
+                model, lambda **_: Pipeline.from_pretrained(model, token=hf_token)
+            )
         except Exception as exc:
             _raise_auth_failure(model, exc)
             raise
