@@ -9,6 +9,7 @@ import threading
 
 import httpx
 import pytest
+from psycopg.types.json import Jsonb
 
 from damwha_worker import db, errors
 from damwha_worker.db import core
@@ -29,7 +30,7 @@ def _clean_rows(conn, monkeypatch):
 def _stamps(monkeypatch, *values):
     """merge가 찍는 시각을 순서대로 고정한다 — '늦게 도착한 옛 쓰기'를 결정적으로 만든다."""
     it = iter(values)
-    monkeypatch.setattr(core, "_iso_now", lambda: next(it))
+    monkeypatch.setattr(core, "readiness_now", lambda: next(it))
 
 
 def _row(conn):
@@ -85,6 +86,19 @@ def test_read_without_row_is_empty(conn):
     assert db.read_model_readiness(conn) == {"updated_at": None, "entries": {}}
 
 
+@pytest.mark.parametrize("stored", [None, "wat", 7, [1, 2], {"entries": "nope"}, {"entries": None}])
+def test_read_tolerates_a_value_that_is_not_the_expected_object(conn, stored):
+    """R-9c-c — 읽는 쪽(`llm_server._wait_ready`)이 대기 중에 부른다. 남이 넣은 값 하나가
+    기다림을 예외로 끝내면 안 된다."""
+    conn.execute(
+        "INSERT INTO app_setting(key, value) VALUES (%s, %s) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        (KEY, Jsonb(stored)),
+    )
+
+    assert db.read_model_readiness(conn) == {"updated_at": None, "entries": {}}
+
+
 def test_writer_and_updated_at_are_stamped_by_the_function(conn, monkeypatch):
     """호출자가 준 writer·updated_at은 무시된다 — 비교 기준을 호출자에게 맡기지 않는다."""
     _stamps(monkeypatch, "2026-09-18T00:00:01.000000Z")
@@ -100,7 +114,7 @@ def test_writer_and_updated_at_are_stamped_by_the_function(conn, monkeypatch):
 
 def test_timestamps_are_fixed_precision_and_strictly_increasing():
     """사전순 = 시간순이려면 자릿수가 고정이어야 한다 ('…20Z' < '…20.5Z'는 거짓)."""
-    stamps = [core._iso_now() for _ in range(2000)]
+    stamps = [db.readiness_now() for _ in range(2000)]
     assert len({len(s) for s in stamps}) == 1
     assert all(s.endswith("Z") and len(s) == len("2026-09-18T00:00:00.000000Z") for s in stamps)
     assert stamps == sorted(stamps)

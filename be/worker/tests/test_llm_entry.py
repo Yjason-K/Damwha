@@ -151,18 +151,6 @@ def test_installs_the_download_hook_before_importing_mlx_lm(monkeypatch, fake_se
     assert "pid" in fake_server
 
 
-def test_hook_failure_does_not_stop_the_server(monkeypatch, fake_server, capsys):
-    def broken(writer):
-        raise RuntimeError("could not install")
-
-    monkeypatch.setattr(downloads, "install_hf_progress_hook", broken)
-
-    _run(monkeypatch, ["/b/llm_entry.py", "--run-id=r"])
-
-    assert fake_server["pid"] == os.getpid()
-    assert "download progress hook not installed" in fake_server["stderr_before"]
-
-
 def test_writer_falls_back_to_the_settings_default(monkeypatch, tmp_path):
     """env에도 `.env`에도 WORKER_ID가 없으면 Settings의 기본값 — 값을 두 곳에 적지 않는다."""
     from damwha_worker.config import Settings

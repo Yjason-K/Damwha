@@ -16,7 +16,7 @@ stderr로 보고하고(P4-C12 — 서버가 뜨고 나면 찍을 자리가 없�
 **훅은 `mlx_lm`을 import하기 전에 건다** — `mlx_lm/utils.py`가 모듈 수준에서
 `snapshot_download`를 묶는다. 이 프로세스는 supervisor·`--once` 자식에 이은 세 번째 writer라
 보고용 DB 연결을 스스로 연다(처음 쓸 때, 물려받은 `DATABASE_URL`로). 훅 설치나 DB가 실패해도
-서버는 뜬다 — 진행 보고가 없을 뿐이다.
+서버는 뜬다 — `install_hf_progress_hook`이 스스로 삼키므로 진행 보고만 없어진다.
 
 **모듈 수준에서 `mlx_lm`도, DB도 import하지 않는다.** 빌드의 진입점 확인(`find_spec`,
 `-E -s -P`)과 테스트 스위트가 이 모듈의 부모를 import하는데, 거기서 mlx를 끌어오지 않게 한다.
@@ -48,21 +48,14 @@ def _worker_id() -> str:
         return Settings.model_fields["worker_id"].default
 
 
-def _install_download_hook() -> None:
-    try:
-        from .models import downloads
-
-        downloads.install_hf_progress_hook(_worker_id())
-    except Exception as exc:  # noqa: BLE001 — 보고 실패가 서버 기동을 막지 않는다
-        print(f"download progress hook not installed: {exc!r}", file=sys.stderr, flush=True)
-
-
 def main() -> None:
     sys.argv = sys.argv[:1] + [a for a in sys.argv[1:] if not a.startswith(RUN_ID_PREFIX)]
     print(f"runtime {json.dumps(runtime_facts())}", file=sys.stderr, flush=True)
 
-    # 스펙 §6.9 — mlx_lm을 import하기 **전에**.
-    _install_download_hook()
+    # 스펙 §6.9 — mlx_lm을 import하기 **전에**. 설치는 스스로 실패를 삼키므로 여기서 감싸지 않는다.
+    from .models import downloads
+
+    downloads.install_hf_progress_hook(_worker_id())
 
     from mlx_lm.server import main as server_main
 

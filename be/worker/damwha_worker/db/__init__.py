@@ -10,6 +10,7 @@ from .core import (
     connect,
     merge_model_readiness,
     read_model_readiness,
+    readiness_now,
     shared_state_enabled,
     upsert_worker_capabilities,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "connect",
     "merge_model_readiness",
     "read_model_readiness",
+    "readiness_now",
     "shared_state_enabled",
     "upsert_worker_capabilities",
     "claim",

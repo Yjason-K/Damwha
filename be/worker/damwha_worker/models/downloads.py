@@ -63,12 +63,6 @@ _NAMES = ("hf_hub_download", "snapshot_download")
 _MISSING = object()
 _clock = time.monotonic
 
-# 이 프로세스가 ready가 아닌 상태로 남긴 key. 같은 key의 다음 성공이 (바이트가 없어도) ready로
-# 되돌린다 — 호출자가 삼킨 실패가 이미 적재된 모델을 failed로 남기지 않게.
-_DIRTY: set[str] = set()
-_DIRTY_LOCK = threading.Lock()
-
-
 # ── 보고자 ────────────────────────────────────────────────────────────
 
 
@@ -107,7 +101,7 @@ class _Report:
             if not self.transferred:
                 if n <= 0:
                     return
-                self._started_at = core._iso_now()
+                self._started_at = core.readiness_now()
                 self._attempt = self._next_attempt()
             elif _clock() - self._last_write < PROGRESS_INTERVAL_SECONDS:
                 return
@@ -115,29 +109,31 @@ class _Report:
             self._write({"state": "downloading"})
 
     def finish(self) -> None:
+        """바이트가 오간 호출만 `ready`를 쓴다 (R-9b, R-9c-e).
+
+        캐시 적중은 아무것도 안 쓴다. 이 프로세스가 앞서 같은 key를 `failed`로 적었더라도
+        마찬가지다 — 0바이트 적중은 "그 모델이 이제 멀쩡하다"의 증거가 아니라 "이 파일 하나가
+        캐시에 있다"일 뿐이고, 그것으로 `ready`를 쓰면 곧 실패할 job과 화면이 어긋난다.
+        남은 `failed`는 그 key를 **실제로 다시 받는** 다음 다운로드가 덮는다.
+        """
         with self._lock:
-            with _DIRTY_LOCK:
-                dirty = self.key in _DIRTY
-            if not (self.transferred or dirty):
-                return  # 캐시 적중 — R-9b
-            if self._write({"state": "ready", "bytes_total": max(self.total, self.done)}):
-                with _DIRTY_LOCK:
-                    _DIRTY.discard(self.key)
+            if not self.transferred:
+                return
+            self._write({"state": "ready", "bytes_total": max(self.total, self.done)})
 
     def fail(self, exc: BaseException) -> None:
         with self._lock:
             if not self.transferred:
-                self._started_at = core._iso_now()
+                self._started_at = core.readiness_now()
                 self._attempt = self._next_attempt()
             w = errors.download_error(exc)
-            entry = {
-                "state": "failed",
-                "error": f"{w.code}: {w.message}"[:500],
-                "error_kind": w.kind.value,
-            }
-            with _DIRTY_LOCK:
-                _DIRTY.add(self.key)
-            self._write(entry)
+            self._write(
+                {
+                    "state": "failed",
+                    "error": f"{w.code}: {w.message}"[:500],
+                    "error_kind": w.kind.value,
+                }
+            )
 
     def _next_attempt(self) -> int:
         """직전 항목이 ready가 아니면(실패·중단) 이어서 센다.
@@ -186,8 +182,7 @@ class _Report:
 def report_download(conn, key: str, writer: str):
     """`key` 다운로드 하나를 `model_readiness`에 싣는다. 보고자를 내준다(`.progress(n, total)`).
 
-    - 정상 종료: 바이트가 오갔으면 `ready`. 캐시 적중이면 아무것도 안 쓴다(R-9b) — 단 이
-      프로세스가 이 key를 실패로 남겼다면 `ready`로 되돌린다.
+    - 정상 종료: 바이트가 오갔으면 `ready`. 캐시 적중이면 아무것도 안 쓴다(R-9b·R-9c-e).
     - 예외: `failed` + `error`(`<code>: <message>`) + `error_kind`(`errors.classify_download`)를
       쓰고 **다시 던진다.** 허브에 없는 파일을 물은 404는 실패로 적지 않는다.
     - `KeyboardInterrupt`·`SystemExit`는 적지 않는다 — 죽는 중인 프로세스이고, 읽는 쪽이
@@ -353,8 +348,28 @@ def _bind(ns: dict, name: str, value) -> None:
 def install_hf_progress_hook(writer: str) -> None:
     """이 프로세스의 HF 다운로드를 `writer` 이름으로 보고한다. 무거운 import **전에** 부른다.
 
-    멱등이다(세 진입점이 각자 부른다). huggingface_hub가 없으면(models extra 없음) 아무것도 안 한다.
+    멱등이다(세 진입점이 각자 부른다). **어떤 이유로도 던지지 않는다** (R-9c-b): huggingface_hub가
+    없거나(models extra 없음), 그 내부 구조가 바뀌어 붙일 자리가 사라져도 경고만 남기고 **원본을
+    되돌린 채** 돌아온다. 진행 보고는 편의 기능이지 기동 조건이 아니다 — 여기서 던지면 job을 집기도
+    전의 `--once` 자식과 gate 서비스인 embed가 죽는다. 그래서 호출부에는 try가 없다.
     """
+    with _STATE.lock:
+        fresh = _STATE.originals is None
+        mark = len(_STATE.patched)
+        try:
+            _install(writer)
+        except Exception:  # noqa: BLE001 — 보고 기능의 실패가 프로세스를 죽이지 않는다
+            _restore(mark)
+            if fresh:
+                _forget()
+            log.warning(
+                "download progress hook not installed — downloads still work, "
+                "but model_readiness will not show their progress",
+                exc_info=True,
+            )
+
+
+def _install(writer: str) -> None:
     try:
         import huggingface_hub
         from huggingface_hub import _snapshot_download, file_download
@@ -363,51 +378,57 @@ def install_hf_progress_hook(writer: str) -> None:
         log.info("huggingface_hub is not installed — no download progress hook")
         return
 
-    with _STATE.lock:
-        _STATE.writer = writer
-        if _STATE.originals is None:
-            originals = {
-                "hf_hub_download": file_download.hf_hub_download,
-                "snapshot_download": _snapshot_download.snapshot_download,
-            }
-            originals = {n: getattr(f, "__damwha_original__", f) for n, f in originals.items()}
-            _STATE.originals = originals
-            _STATE.wrappers = {n: _wrap(f) for n, f in originals.items()}
-            _STATE.base_tqdm = hub_tqdm
-        originals, wrappers = _STATE.originals, _STATE.wrappers
+    _STATE.writer = writer
+    if _STATE.originals is None:
+        originals = {
+            "hf_hub_download": file_download.hf_hub_download,
+            "snapshot_download": _snapshot_download.snapshot_download,
+        }
+        originals = {n: getattr(f, "__damwha_original__", f) for n, f in originals.items()}
+        _STATE.originals = originals
+        _STATE.wrappers = {n: _wrap(f) for n, f in originals.items()}
+        _STATE.base_tqdm = hub_tqdm
+    originals, wrappers = _STATE.originals, _STATE.wrappers
 
-        # 갈래 1 — 원본 자리. 이후에 import되는 소비자는 여기서 묶는다.
-        _bind(vars(file_download), "hf_hub_download", wrappers["hf_hub_download"])
-        _bind(vars(_snapshot_download), "snapshot_download", wrappers["snapshot_download"])
+    # 갈래 1 — 원본 자리. 이후에 import되는 소비자는 여기서 묶는다.
+    _bind(vars(file_download), "hf_hub_download", wrappers["hf_hub_download"])
+    _bind(vars(_snapshot_download), "snapshot_download", wrappers["snapshot_download"])
+    for name in _NAMES:
+        _bind(vars(huggingface_hub), name, wrappers[name])
+
+    # 갈래 2 — 이미 import된 소비자. 원본과 같은 객체를 묶은 이름만 바꾼다.
+    rebound = 0
+    for mod in list(sys.modules.values()):
+        ns = _namespace(mod)
+        if ns is None:
+            continue
         for name in _NAMES:
-            _bind(vars(huggingface_hub), name, wrappers[name])
-
-        # 갈래 2 — 이미 import된 소비자. 원본과 같은 객체를 묶은 이름만 바꾼다.
-        rebound = 0
-        for mod in list(sys.modules.values()):
-            ns = _namespace(mod)
-            if ns is None:
-                continue
-            for name in _NAMES:
-                if ns.get(name) is originals[name]:
-                    _bind(ns, name, wrappers[name])
-                    rebound += 1
+            if ns.get(name) is originals[name]:
+                _bind(ns, name, wrappers[name])
+                rebound += 1
     log.info("hf download progress hook installed (writer=%s, rebound=%d)", writer, rebound)
+
+
+def _restore(mark: int = 0) -> None:
+    """`_STATE.patched[mark:]`가 바꾼 이름을 역순으로 되돌린다."""
+    while len(_STATE.patched) > mark:
+        ns, name, previous = _STATE.patched.pop()
+        if previous is _MISSING:
+            ns.pop(name, None)
+        else:
+            ns[name] = previous
+
+
+def _forget() -> None:
+    _STATE.writer = None
+    _STATE.originals = None
+    _STATE.wrappers = None
+    _STATE.base_tqdm = None
+    _STATE.conn = _HookConnection()
 
 
 def _uninstall() -> None:
     """테스트 전용 — 설치가 바꾼 모든 이름을 원래 값으로 되돌린다."""
     with _STATE.lock:
-        for ns, name, previous in reversed(_STATE.patched):
-            if previous is _MISSING:
-                ns.pop(name, None)
-            else:
-                ns[name] = previous
-        _STATE.patched.clear()
-        _STATE.writer = None
-        _STATE.originals = None
-        _STATE.wrappers = None
-        _STATE.base_tqdm = None
-        _STATE.conn = _HookConnection()
-    with _DIRTY_LOCK:
-        _DIRTY.clear()
+        _restore()
+        _forget()

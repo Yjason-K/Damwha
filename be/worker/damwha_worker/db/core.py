@@ -72,8 +72,11 @@ _stamp_lock = threading.Lock()
 _last_stamp: datetime | None = None
 
 
-def _iso_now() -> str:
-    """이 프로세스 안에서 **순증가**하는 UTC 시각 문자열.
+def readiness_now() -> str:
+    """`model_readiness`가 쓰는, 이 프로세스 안에서 **순증가**하는 UTC 시각 문자열.
+
+    `models/downloads.py`가 항목의 `started_at`을 이 함수로 찍는다 — merge가 찍는 `updated_at`과
+    같은 형식·같은 순서 보장을 쓰기 위해서다. 그래서 모듈 밖에서도 부르는 공개 이름이다 (R-9c-d).
 
     벽시계가 같은 마이크로초를 두 번 주거나(연속 쓰기) 뒤로 가도(NTP) 한 프로세스의 쓰기가 서로를
     동률로 지우지 않게 직전 값보다 최소 1µs 뒤로 민다. 프로세스 사이의 동률은 설계대로 먼저 쓴
@@ -131,7 +134,7 @@ def merge_model_readiness(conn, key: str, entry: dict, writer: str) -> None:
         raise ValueError(
             f"model_readiness state must be one of {sorted(_READINESS_STATES)}: {state!r}"
         )
-    ts = _iso_now()
+    ts = readiness_now()
     full = {
         "bytes_done": 0,
         "bytes_total": 0,
@@ -150,12 +153,24 @@ def merge_model_readiness(conn, key: str, entry: dict, writer: str) -> None:
 
 
 def read_model_readiness(conn) -> dict:
-    """`{"updated_at": str | None, "entries": {repo_id: entry}}`. 행이 없으면 빈 맵."""
+    """`{"updated_at": str | None, "entries": {repo_id: entry}}`. 행이 없으면 빈 맵.
+
+    저장된 jsonb가 객체가 아니어도(손으로 넣은 `null`·스칼라·배열) 빈 모양을 돌려준다 —
+    읽는 쪽(`llm_server._wait_ready`, 훅의 attempt 계산)이 대기 중에 부르므로, 남이 넣은 값 하나가
+    기다림을 예외로 끝내면 안 된다 (R-9c-c). `entries`의 항목 값은 여기서 검사하지 않는다.
+    """
     row = conn.execute(
         "SELECT value FROM app_setting WHERE key = %s", (MODEL_READINESS_KEY,)
     ).fetchone()
-    value = row["value"] if row is not None else {}
-    return {"updated_at": value.get("updated_at"), "entries": dict(value.get("entries") or {})}
+    value = row["value"] if row is not None else None
+    if not isinstance(value, dict):
+        return {"updated_at": None, "entries": {}}
+    entries = value.get("entries")
+    updated_at = value.get("updated_at")
+    return {
+        "updated_at": updated_at if isinstance(updated_at, str) else None,
+        "entries": dict(entries) if isinstance(entries, dict) else {},
+    }
 
 
 class _Abort(Exception):

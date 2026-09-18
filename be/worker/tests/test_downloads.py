@@ -35,9 +35,7 @@ SHA = "a" * 40
 def clean(conn, monkeypatch):
     monkeypatch.delenv("DAMWHA_SHARED_STATE", raising=False)
     conn.execute("DELETE FROM app_setting WHERE key=%s", (KEY,))
-    downloads._DIRTY.clear()
     yield
-    downloads._DIRTY.clear()
     conn.execute("DELETE FROM app_setting WHERE key=%s", (KEY,))
 
 
@@ -207,6 +205,44 @@ def test_install_without_huggingface_hub_is_a_no_op(monkeypatch, uninstall):
     monkeypatch.setitem(sys.modules, "huggingface_hub", None)  # import → ImportError
 
     downloads.install_hf_progress_hook("w1")  # 던지지 않는다
+
+
+def test_install_failure_is_swallowed_and_leaves_the_originals_alone(
+    monkeypatch, uninstall, caplog
+):
+    """R-9c-b — hub 내부가 바뀌어 붙일 자리가 사라져도, 보고 기능의 실패가 `--once` 자식(아직 job을
+    집기 전)이나 gate 서비스인 embed를 죽이면 안 된다. 부분적으로 바꾼 이름은 되돌린다."""
+    original_file = file_download.hf_hub_download
+    original_snap = _snapshot_download.snapshot_download
+    consumer = types.ModuleType("fake_consumer_install_failure")
+    consumer.hf_hub_download = original_file
+    monkeypatch.setitem(sys.modules, consumer.__name__, consumer)
+
+    def boom(mod):  # 갈래 2(sys.modules 훑기) 도중에 터진다 — 갈래 1은 이미 바꾼 뒤다
+        raise RuntimeError("huggingface_hub moved the download functions")
+
+    monkeypatch.setattr(downloads, "_namespace", boom)
+
+    downloads.install_hf_progress_hook("w1")  # 던지지 않는다
+
+    assert file_download.hf_hub_download is original_file
+    assert _snapshot_download.snapshot_download is original_snap
+    assert consumer.hf_hub_download is original_file
+    assert "hf_hub_download" not in vars(hub)  # 지연 속성 자리도 원래대로
+    assert downloads._STATE.writer is None
+    assert "download progress hook not installed" in caplog.text
+
+
+def test_downloads_still_work_after_a_failed_install(stub_download, hook_db, conn, monkeypatch):
+    calls, script = stub_download
+    monkeypatch.setattr(downloads, "_namespace", lambda mod: 1 / 0)
+    script["run"] = lambda cls: _bytes_bar(cls, 10, [10]) if cls is not None else None
+
+    downloads.install_hf_progress_hook("w1")
+
+    assert hub.hf_hub_download("org/m", "f.bin") == script["result"]
+    assert calls[-1]["tqdm_class"] is None  # 훅이 없으니 원본 그대로 돈다
+    assert _row(conn) is None
 
 
 # ── 호출 경로 ─────────────────────────────────────────────────────────
@@ -593,18 +629,32 @@ def test_report_download_records_failure_and_reraises(conn, clean):
     assert "disk full" in entry["error"]
 
 
-def test_report_download_clears_its_own_failure_on_a_later_success(conn, clean):
-    """같은 프로세스가 남긴 failed는 같은 key의 다음 성공이 ready로 되돌린다 — 호출자가 삼킨
-    실패가 이미 적재된 모델을 failed로 남기지 않게."""
+def test_zero_byte_cache_hit_never_overwrites_an_earlier_failure(conn, clean):
+    """R-9c-e — 삼켜진 실패 뒤의 0바이트 적중이 `ready`를 쓰면, 곧 실패할 job과 화면이 어긋난다.
+
+    적중은 "이 파일이 캐시에 있다"일 뿐 "그 모델이 멀쩡하다"가 아니다. 남은 `failed`는 그 key를
+    **실제로 다시 받는** 다음 다운로드만 덮는다.
+    """
     with pytest.raises(OSError):
-        with downloads.report_download(conn, "org/dirty", "embed"):
-            raise OSError("boom")
-    assert _entry(conn, "org/dirty")["state"] == "failed"
+        with downloads.report_download(conn, "org/half", "embed"):
+            raise OSError("weights download died")
+    failed = _entry(conn, "org/half")
+    assert failed["state"] == "failed"
 
-    with downloads.report_download(conn, "org/dirty", "embed"):
-        pass  # 캐시 적중
+    with downloads.report_download(conn, "org/half", "embed"):
+        pass  # 다른 파일이 캐시에 있었다 — 바이트 0
 
-    assert _entry(conn, "org/dirty")["state"] == "ready"
+    after = _entry(conn, "org/half")
+    assert after["state"] == "failed"
+    assert after["error"] == failed["error"]
+    assert after["bytes_done"] == 0
+
+    with downloads.report_download(conn, "org/half", "embed") as report:
+        report.progress(40, 40)  # 진짜로 다시 받았다
+
+    recovered = _entry(conn, "org/half")
+    assert (recovered["state"], recovered["bytes_done"]) == ("ready", 40)
+    assert recovered["attempt"] == 2  # 실패 뒤의 재시도로 센다
 
 
 # ── 설치 지점 ────────────────────────────────────────────────────────
@@ -626,6 +676,21 @@ def test_once_child_installs_the_hook_before_the_job(monkeypatch, tmp_path):
 
     assert worker_main.run_child(settings, threading.Event()) == 3
     assert order == [("hook", "worker-9"), "job"]
+
+
+def test_the_three_call_sites_are_plain(monkeypatch):
+    """가드는 훅 안에 있다 (R-9c-b). 호출부가 다시 `try`로 감싸이면 "실패는 훅이 삼킨다"는 계약이
+    두 곳으로 갈리고, 되돌아가도 아무 테스트가 깨지지 않는다 — 실제로 한 번 그렇게 되돌아갔다."""
+    import inspect
+
+    from damwha_worker import __main__ as worker_main
+    from damwha_worker import embed_service, llm_entry
+
+    pytest.importorskip("fastapi")
+    for fn in (worker_main.run_child, embed_service.main, llm_entry.main):
+        src = inspect.getsource(fn)
+        assert "install_hf_progress_hook" in src, fn
+        assert "try" not in src, fn
 
 
 def test_embed_main_installs_the_hook_before_loading_the_model(monkeypatch):
