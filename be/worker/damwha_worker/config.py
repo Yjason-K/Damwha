@@ -35,6 +35,18 @@ HF_CONNECT_TIMEOUT_SECONDS = 10
 HF_RETRY_MAX_DURATION_SECONDS = 60
 HF_STALL_SECONDS = 90.0
 
+# 준비 유예를 멈춰 주는 무진행 상한 (스펙 §6.9 — "무진행 120초면 실패로 본다").
+#
+# **감시가 아니라 판정이다.** 위 `HF_STALL_SECONDS`는 다운로드를 **끝내는** 감시이고(Task 9b),
+# 이것은 기다리는 쪽이 "저쪽이 아직 받고 있나"를 묻는 기준이다. 쓰는 곳이 둘 — `llm_server`의
+# `_wait_ready`(같은 파일), 그리고 앱 감독자의 `desktop/src/services/model-readiness.ts`의
+# `STALL_MS`(같은 120초). 두 곳에 각각 두는 까닭은 §6.9의 "두 곳에서 따로"에 있다.
+#
+# 90 < 120이 계약이다: 멈춘 다운로드는 **워커 자신의 감시가 먼저** TRANSIENT로 끝내고, 그 30초
+# 여유 안에 job이 큐로 돌아가 자식이 끝난다. 이 판정이 더 짧으면 같은 다운로드를 양쪽이 두 번
+# 죽인다 — 기다리는 쪽이 먼저 포기해 서버를 내리고, 감시는 이미 없는 자식에게 발화한다.
+READINESS_STALL_SECONDS = 120.0
+
 
 @dataclass(frozen=True)
 class HfLimits:

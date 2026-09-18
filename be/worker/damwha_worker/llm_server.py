@@ -17,11 +17,14 @@ import subprocess
 import sys
 import time
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 import httpx
 
 from . import runtime_report
+from .config import READINESS_STALL_SECONDS
+from .db import core
 from .errors import LLM_SERVER_START_FAILED, ErrorKind, WorkerError
 
 log = logging.getLogger("damwha_worker")
@@ -29,6 +32,10 @@ log = logging.getLogger("damwha_worker")
 _READY_POLL_SECONDS = 0.5
 _KILL_GRACE_SECONDS = 5.0
 _ENTRY_MODULE = "damwha_worker.llm_entry"
+# 진행 보고를 읽는 연결의 상한. 이 연결은 **기다리는 동안만** 살아 있고, 못 열거나 멈춰도
+# 기다림 자체를 깨지 않는다 — downloads.py의 훅 연결과 같은 값이다.
+_CONNECT_KWARGS = {"connect_timeout": 5, "options": "-c statement_timeout=5000"}
+_ISO_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 
 def probe_models(base_url: str, timeout_seconds: float = 5.0) -> list[str] | None:
@@ -151,25 +158,125 @@ def managed_llm_server(
         _stop(proc, settings.lens_llm_server_stop_timeout_seconds)
 
 
+def _open_readiness_connection(settings):
+    """진행 보고를 읽을 **자기** 연결 (스펙 §6.9, 2026-09-17 결정).
+
+    `--once` 자식이 쥔 연결을 인자로 받지 않는다 — 받으면 `_wait_ready`의 시그니처가 바뀌고
+    파급이 `dispatch.py`·`jobs.py`·`__main__.py`의 호출부까지 번진다. 자기 연결이면 파급이
+    `llm_server.py`·`config.py` 둘에 갇히고, 읽는 것은 폴링 주기마다 한 행이다.
+
+    외부 DB 모드(`DAMWHA_SHARED_STATE=off`)에서는 열지 않는다 — 앱이 소유하지 않은 DB이고
+    writer들도 그 모드에서는 이 행을 쓰지 않는다. 테스트는 이 이름을 대역으로 덮는다
+    (`models/downloads.py`의 `_open_connection`과 같은 이음매).
+    """
+    if not core.shared_state_enabled():
+        return None
+    return core.connect(settings.database_url, **_CONNECT_KWARGS)
+
+
+def _parse_stamp(value):
+    """`model_readiness`의 고정 정밀도 UTC 문자열 → datetime. 알아볼 수 없으면 None."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.strptime(value, _ISO_FORMAT).replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+def _download_in_progress(conn, writer: str) -> bool:
+    """`writer`가 **지금** 모델을 받고 있나 (스펙 §6.9).
+
+    앱 감독자의 `desktop/src/services/model-readiness.ts::downloadInProgress`와 같은 규칙이다 —
+    판정은 `bytes_done` 증가가 아니라 `updated_at`이고(총량을 모르는 다운로드가 있다), `writer`로
+    서비스를 구별한다(다른 서비스가 받는 모델이 이쪽 유예를 늘리면 안 된다).
+
+    읽기가 실패하면 False다. 못 읽는 것이 유예를 **늘리는** 사유가 되면 안 된다.
+    """
+    if conn is None:
+        return False
+    try:
+        entries = core.read_model_readiness(conn)["entries"]
+    except Exception:  # noqa: BLE001 — DB 오류가 기다림을 끝내지 않는다
+        log.debug("model_readiness read failed — the ready wait continues", exc_info=True)
+        return False
+    now = datetime.now(UTC)
+    for entry in entries.values():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("state") != "downloading" or entry.get("writer") != writer:
+            continue
+        stamp = _parse_stamp(entry.get("updated_at"))
+        if stamp is not None and (now - stamp).total_seconds() <= READINESS_STALL_SECONDS:
+            return True
+    return False
+
+
 def _wait_ready(proc, model, settings, probe, monotonic, sleep) -> None:
-    """서버가 /models에 응답할 때까지 기다린다. 조기 종료는 그 자리에서 실패."""
-    deadline = monotonic() + settings.lens_llm_server_start_timeout_seconds
-    while True:
-        code = proc.poll()
-        if code is not None:
-            raise WorkerError(
-                LLM_SERVER_START_FAILED,
-                f"LLM server for {model} exited with code {code} before becoming ready",
-                ErrorKind.TRANSIENT,
-            )
-        if probe(settings.lens_llm_base_url) is not None:
-            return
-        if monotonic() >= deadline:
-            raise WorkerError(
-                LLM_SERVER_START_FAILED,
-                "LLM server did not become ready within "
-                f"{settings.lens_llm_server_start_timeout_seconds}s at "
-                f"{settings.lens_llm_base_url}",
-                ErrorKind.TRANSIENT,
-            )
-        sleep(_READY_POLL_SECONDS)
+    """서버가 /models에 응답할 때까지 기다린다. 조기 종료는 그 자리에서 실패.
+
+    **모델을 받는 동안에는 유예를 소모하지 않는다** (스펙 §6.9). 첫 실행의 27B는 수십 GB라
+    600초(`config.py`의 `lens_llm_server_start_timeout_seconds`)로는 못 받고, 그 제한에 걸려
+    죽이면 받다 만 것을 버리고 처음부터 다시 받는 고리가 된다. 진행을 올리는 것은 이 프로세스가
+    아니라 `llm_entry`(= popen한 자식)이므로 **DB를 읽어야** 안다.
+
+    고정 deadline이 아니라 **소모한 시간의 누적**으로 센다 — 남은 시간을 빼는 방식이면 다운로드가
+    끝난 순간 남은 유예가 0이라 곧바로 실패한다.
+
+    연결은 여기서 열고 여기서 닫는다. 대기가 끝나면 필요 없고, 남겨 두면 `--once` 자식의 수명
+    동안 유휴 연결이 하나 더 산다. **못 열어도 기다림은 진행한다** — 유예 연장을 못 할 뿐이고,
+    못 여는 것이 600초 실패의 사유가 되면 안 된다.
+    """
+    budget = settings.lens_llm_server_start_timeout_seconds
+    writer = settings.worker_id
+    spent = 0.0
+    last_tick = monotonic()
+    conn = None
+    opened = False
+    try:
+        while True:
+            code = proc.poll()
+            if code is not None:
+                raise WorkerError(
+                    LLM_SERVER_START_FAILED,
+                    f"LLM server for {model} exited with code {code} before becoming ready",
+                    ErrorKind.TRANSIENT,
+                )
+            if probe(settings.lens_llm_base_url) is not None:
+                return
+            if not opened:
+                # 처음 기다릴 때 한 번만 연다. 실패하면 다시 시도하지 않는다 — 폴링마다 다시 열면
+                # 닿지 않는 DB가 이 루프를 연결 시도로 채운다.
+                opened = True
+                try:
+                    conn = _open_readiness_connection(settings)
+                except Exception:  # noqa: BLE001 — 유예 연장만 없어진다
+                    log.warning(
+                        "could not open a connection for model_readiness — the ready wait "
+                        "continues without the download grace",
+                        exc_info=True,
+                    )
+                    conn = None
+            now = monotonic()
+            downloading = _download_in_progress(conn, writer)
+            # last_tick은 **조건 없이** 민다. 다운로드 중일 때만 멈춰 두면 그동안 흐른 시간이
+            # 다운로드가 끝나는 순간 한꺼번에 들어와 유예를 즉시 태운다.
+            delta = now - last_tick
+            last_tick = now
+            if not downloading:
+                spent += delta
+            if spent >= budget:
+                raise WorkerError(
+                    LLM_SERVER_START_FAILED,
+                    "LLM server did not become ready within "
+                    f"{settings.lens_llm_server_start_timeout_seconds}s at "
+                    f"{settings.lens_llm_base_url}",
+                    ErrorKind.TRANSIENT,
+                )
+            sleep(_READY_POLL_SECONDS)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001 — 닫기 실패가 결과를 바꾸지 않는다
+                log.debug("closing the model_readiness connection failed", exc_info=True)

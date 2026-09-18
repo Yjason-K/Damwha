@@ -1,6 +1,7 @@
 import { CAUSES } from "../diagnostics/causes";
 import { exitCauseBlock } from "../diagnostics/stderr";
 import { recoveryOf } from "./failure";
+import { downloadInProgress, parseModelReadiness, STALL_MS } from "./model-readiness";
 import type {
   ExternalState,
   LaunchContext,
@@ -22,6 +23,21 @@ export interface SupervisorHooks {
   readyIntervalMs?: number;
   /** 재시작 예산을 돌려주는 안정 창. 기본값은 분 단위라 테스트가 줄이려고 열어 둔다. */
   stableResetMs?: number;
+  /**
+   * `app_setting.model_readiness` 행을 **날것 그대로** 돌려준다 (스펙 §6.9). 배선은 main.ts가
+   * 번들 psql로 한다 — 감독자는 Task 11의 API를 몰라야 하고(판정 R-P8), DB에 닿는 방법을
+   * 여기서 정하면 이 파일이 vitest에서 안 돈다.
+   *
+   * 없으면 준비 유예는 Phase 3까지와 똑같이 흐른다. 외부 DB 모드가 그 경우다 — 그 모드에서는
+   * worker가 이 행을 아예 쓰지 않는다 (§6.9의 `DAMWHA_SHARED_STATE=off`).
+   */
+  readModelReadiness?(): Promise<unknown>;
+  /**
+   * 그 행을 다시 읽는 최소 간격. 기본 2초다 — 리더가 `psql` 프로세스 하나라 준비 폴링 주기
+   * (기본 400ms)마다 부르면 180초 동안 450번 띄운다. writer는 진행을 **초당 1회 이하**로
+   * 누르므로(스펙 §6.9) 2초 간격이 놓치는 상태 변화는 없다. 테스트가 0으로 줄이려고 열어 둔다.
+   */
+  readinessPollMs?: number;
 }
 
 const DEFAULT_READY_TIMEOUT_MS = 60_000;
@@ -36,6 +52,16 @@ const DEFAULT_READY_INTERVAL_MS = 400;
 const DEFAULT_STABLE_RESET_MS = 60_000;
 /** bring()이 준비 못 한 자식을 치울 때 주는 유예. */
 const CLEANUP_GRACE_MS = 5_000;
+/** model_readiness를 다시 읽는 최소 간격. 근거는 SupervisorHooks.readinessPollMs. */
+const DEFAULT_READINESS_POLL_MS = 2_000;
+/**
+ * `model_readiness.entries[*].writer`가 embed의 다운로드에 다는 이름. worker 쪽 writer는
+ * `WORKER_ID`인데(R-9a) embed만 이 고정 문자열이다 — `be/worker/damwha_worker/embed_service.py`의
+ * `EMBED_WRITER`가 원본이다.
+ */
+const EMBED_WRITER = "embed";
+/** restartService가 자식을 내릴 때 주는 유예. 사람이 버튼을 누르고 기다리는 시간이다. */
+const RESTART_GRACE_MS = 5_000;
 
 /**
  * 자식이 죽었을 때의 원인: 종료 코드와 그 자식의 stderr 블록 (스펙 §8).
@@ -174,15 +200,64 @@ export function createSupervisor(
   };
 
   /**
+   * 이 서비스의 다운로드를 `model_readiness`에서 알아보는 이름 (스펙 §6.9, 판정 R-9a).
+   *
+   * worker 쪽 writer는 **이번 실행의 `WORKER_ID`**다. 그 값을 자식 env에 싣는 것도 `ctx.env`이고
+   * (config.ts의 `childEnv`가 `{...ctx.env}`로 펼친다 — 값 자체는 `withAppOwned`의 `RUN_WORKER_ID`),
+   * 여기서도 같은 자리에서 읽는다. 두 곳이 갈리면 감독자가 자기 worker의 다운로드를 남의 것으로 본다.
+   *
+   * postgres·api는 모델을 받지 않으므로 null이다 — 리더를 부르지도 않는다.
+   */
+  function readinessWriter(id: ServiceId): string | null {
+    if (id === "embed") return EMBED_WRITER;
+    if (id === "worker") return ctx.env.WORKER_ID ?? null;
+    return null;
+  }
+
+  /** 리더가 고장 났다는 말은 한 번만 적는다 — 준비 폴링마다 적으면 로그가 그것으로 찬다. */
+  let readerFailureLogged = false;
+
+  /**
+   * `writer`가 지금 모델을 받고 있나. 리더가 없거나 던지면 **false**다 — 못 읽는 것이 유예를
+   * 늘리는 사유가 되면 안 된다(그러면 리더 고장이 곧 영원한 기동 대기가 된다).
+   */
+  async function downloading(writer: string): Promise<boolean> {
+    const read = hooks.readModelReadiness;
+    if (read === undefined || stopping) return false;
+    try {
+      return downloadInProgress(parseModelReadiness(await read()), writer, Date.now(), STALL_MS);
+    } catch (e) {
+      if (!readerFailureLogged) {
+        readerFailureLogged = true;
+        log(`모델 준비 상태를 읽지 못했다 — ${reason(e)} (준비 유예는 평소대로 흐른다)`);
+      }
+      return false;
+    }
+  }
+
+  /**
    * Phase 1의 waitForReady를 쓰지 않는다. 그 함수의 결과 어휘는 API 하나를 위한 것
    * ("ready" / "db-unreachable" / "child-exited" / "timeout")이라 ReadinessResult 넷을
    * 그대로 실어 나를 수 없고, `failed`를 "db-unreachable"에 태워 조기 탈출시키는 식으로
    * 우회하면 다음 사람이 그 값을 DB 이야기로 읽는다. 폴링은 여기 여덟 줄이면 된다.
+   *
+   * **유예는 고정 deadline이 아니라 누적이다** (스펙 §6.9). 이 서비스의 모델이 받아지는 동안에는
+   * 시계를 멈춘다 — embed의 180초(`embed.ts:89`)는 bge-m3 첫 다운로드보다 짧고, 그 제한에 걸려
+   * 재시작하면 받다 만 것을 버리고 처음부터 다시 받는 고리가 된다. 남은 시간을 빼는 방식(고정
+   * deadline + 연장)이 아니라 **소모한 시간을 더하는** 방식인 이유: 다운로드가 끝난 순간 남은
+   * 유예가 0이면 곧바로 실패하고, 그러면 "다운로드 중에는 죽이지 않는다"가 "다운로드 직후에
+   * 죽인다"가 된다.
    */
   async function awaitReady(rt: Runtime): Promise<boolean> {
     const timeoutMs = rt.spec.readyTimeoutMs ?? hooks.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS;
     const intervalMs = hooks.readyIntervalMs ?? DEFAULT_READY_INTERVAL_MS;
-    const deadline = Date.now() + timeoutMs;
+    const pollMs = hooks.readinessPollMs ?? DEFAULT_READINESS_POLL_MS;
+    const writer = readinessWriter(rt.spec.id);
+    /** 유예를 **실제로 소모한** 시간의 누적. 다운로드 중인 구간은 여기 들어오지 않는다. */
+    let spent = 0;
+    let lastTick = Date.now();
+    let downloadingNow = false;
+    let checkedAt = Number.NEGATIVE_INFINITY;
     let last: ReadinessResult = { kind: "not-ready" };
 
     for (;;) {
@@ -215,7 +290,17 @@ export function createSupervisor(
       }
       if (applyReadiness(rt.spec.id, last)) return true;
       if (last.kind === "failed") break;
-      if (Date.now() >= deadline) break;
+      const now = Date.now();
+      if (writer !== null && now - checkedAt >= pollMs) {
+        downloadingNow = await downloading(writer);
+        checkedAt = now;
+      }
+      // lastTick은 **조건 없이** 민다. 다운로드 중일 때만 멈춰 두면 그동안 흐른 시간이 다운로드가
+      // 끝나는 순간 한 번에 delta로 들어와 유예를 즉시 태운다.
+      const delta = now - lastTick;
+      lastTick = now;
+      if (!downloadingNow) spent += delta;
+      if (spent >= timeoutMs) break;
       await new Promise((r) => setTimeout(r, intervalMs));
     }
 
@@ -437,6 +522,11 @@ export function createSupervisor(
     if (handle === null || handle === undefined) return;
     handle.onExit((code) => {
       if (stopping) return;
+      // **지금 쥔** 핸들의 죽음만 다룬다. restartService가 내린 옛 자식의 종료 이벤트는 우리가
+      // 그 자식을 놓은 뒤에 도착하고(신호와 이벤트 사이에 await가 둘 있다), 그것을 그대로 처리하면
+      // 이 아래 세 줄이 **새 인스턴스**를 failed로 적고 그 유일한 참조(rt.result)를 지운 뒤 백오프
+      // 재시작까지 건다 — 사람이 부른 재시작 한 번이 아무도 못 찾는 자식 하나를 남긴다.
+      if (rt.result?.handle !== handle) return;
       // 죽은 프로세스에 계속 물어볼 이유가 없다. 재기동한 bring이 새로 건다.
       disarm(rt.healthTimer);
       rt.healthTimer = null;
@@ -489,6 +579,76 @@ export function createSupervisor(
    */
   function needsRetry(rt: Runtime): boolean {
     return rt.status.process !== "running" || rt.result === null;
+  }
+
+  /**
+   * 앱이 이 서비스를 **내릴 수 있나** (스펙 §6.10 2층). 거부하는 둘:
+   *
+   * - 채택한 외부 인스턴스 (`result.owned === false`) — 앱이 만들지 않은 프로세스다 (§5).
+   * - stand-down (결과 없이 `running`) — 외부 worker에 밀려 서지 않은 상태라 내릴 것이 없고,
+   *   여기서 bring을 걸면 살아 있는 외부 worker 옆에 우리 것을 하나 더 띄운다.
+   *
+   * 바깥에서 같은 판정은 `status.process === "running" && !status.owned`다 — statuses()만 보고
+   * 상태 창이 "서비스 다시 시작" 버튼을 비활성으로 그릴 수 있게 두 표현이 일치한다. 아직 뜨지
+   * 않은(failed·stopped) 서비스는 여기서 막지 않는다. 그건 소유의 문제가 아니라 "띄운 적이
+   * 없다"이고, restartService는 그것을 그냥 띄운다.
+   */
+  function canRestart(rt: Runtime): boolean {
+    if (rt.result !== null) return rt.result.owned;
+    return rt.status.process !== "running";
+  }
+
+  /**
+   * 한 서비스만 내렸다가 다시 띄운다 (스펙 §6.10의 2층 — 상태 창의 "서비스 다시 시작").
+   *
+   * `retry()`로는 안 된다. 그쪽의 needsRetry는 `process !== "running" || result === null`이라
+   * **살아 있는 서비스를 건너뛴다**. 토큰을 바꾼 뒤 필요한 것은 정확히 그 반대다 — HF_TOKEN은
+   * 자식 env로만 들어가므로(config.ts) 살아 있는 worker·embed는 옛 토큰을 쥔 채로 계속 돈다.
+   *
+   * 감독자 객체의 **메서드**다. 자유 함수로 만들 수 없다 — 클로저의 runtimes·bring이 필요하다.
+   *
+   * 거부는 던지지 않는다. Task 11의 applyTokenChange가 그것을 `skipped`로 적어야 하고, 예외로
+   * 올리면 토큰 교체 전체가 한 서비스 때문에 실패한다. 까닭은 supervisor.log에 남는다.
+   */
+  async function restartService(id: ServiceId): Promise<void> {
+    const rt = runtimes.get(id)!;
+    if (stopping) return;
+    // 진행 중인 bring을 먼저 끝낸다. 그 사이에 만들어지는 자식의 유일한 참조가 rt.result인데,
+    // 그것을 우리가 먼저 지우면 아무도 그 프로세스를 못 찾는다 (stopAll이 pending을 기다리는 것과 같은 까닭).
+    if (rt.inFlight !== null) await rt.inFlight.catch(() => undefined);
+    if (stopping) return;
+    if (!canRestart(rt)) {
+      log(`${id}: 앱이 소유하지 않은 인스턴스라 다시 시작하지 않는다 — ${rt.status.detail ?? "외부 인스턴스"}`);
+      return;
+    }
+    disarm(rt.healthTimer);
+    rt.healthTimer = null;
+    disarm(rt.budgetTimer);
+    rt.budgetTimer = null;
+
+    const result = rt.result;
+    // 참조를 **먼저** 끊는다. 두 가지가 여기에 걸려 있다 — bringOnce의 재진입 가드
+    // (`rt.result !== null`)가 아래 bring을 막지 않게 하는 것, 그리고 곧 도착할 옛 자식의 종료
+    // 이벤트가 watchForDeath의 핸들 대조에서 걸러지게 하는 것.
+    rt.result = null;
+    if (result !== null) {
+      log(`${id}: 다시 시작한다 — 내리는 중`);
+      set(id, { process: "stopped", health: "unknown", owned: false, detail: undefined, recovery: undefined });
+      await specStop(id, result);
+    }
+    // 사람이 명시적으로 부른 재시작이다. 예산도 새로 준다 (runFrom이 재시도에 하는 것과 같다).
+    set(id, { restarts: 0 });
+    await bring(rt.spec);
+  }
+
+  /** restartService의 정지 한 줄. 예외를 삼켜 재기동까지 가게 한다 — 안 내려갔으면 bring이 그것을 본다. */
+  async function specStop(id: ServiceId, result: LaunchResult): Promise<void> {
+    const rt = runtimes.get(id)!;
+    try {
+      await rt.spec.stop(result, { graceMs: RESTART_GRACE_MS });
+    } catch (e) {
+      log(`${id}: 다시 시작 중 정지에서 예외 — ${reason(e)}`);
+    }
   }
 
   /** 기동 시퀀스 본문. 게이트 의미(실패하면 뒤를 띄우지 않는다)는 여기 한 곳에만 있다. */
@@ -558,5 +718,5 @@ export function createSupervisor(
       : { stopped, leaked, detail: details.join("\n") };
   }
 
-  return { start, retry, stopAll, statuses, runtimeOf: (id: ServiceId) => runtimes.get(id) };
+  return { start, retry, restartService, stopAll, statuses, runtimeOf: (id: ServiceId) => runtimes.get(id) };
 }

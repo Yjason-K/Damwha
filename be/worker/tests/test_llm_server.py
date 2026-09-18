@@ -1,3 +1,4 @@
+import inspect
 import json
 import os
 import shutil
@@ -8,7 +9,8 @@ import sys
 import pytest
 
 from damwha_worker import llm_server as ls
-from damwha_worker.config import Settings
+from damwha_worker.config import READINESS_STALL_SECONDS, Settings
+from damwha_worker.db import core
 from damwha_worker.errors import ErrorKind, WorkerError
 
 MODEL = "mlx-community/Qwen3.5-4B-8bit"
@@ -92,6 +94,68 @@ def _probe_after(n_failures, models=(MODEL,)):
 @pytest.fixture(autouse=True)
 def _which_found(monkeypatch):
     monkeypatch.setattr(ls.shutil, "which", lambda name: f"/usr/local/bin/{name}")
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_readiness_connection(monkeypatch):
+    """`_wait_ready`의 연결은 **주입된 것**이어야 한다 (conftest의 훅 가드와 같은 규칙).
+
+    기본은 "DB를 못 열었다" — 유예 연장만 없어지고 기다림은 그대로 돈다. 그 경로를 쓰는
+    테스트는 이 이름을 자기 대역으로 다시 덮는다.
+    """
+    monkeypatch.setattr(ls, "_open_readiness_connection", lambda _settings: None)
+
+
+class FakeReadinessConn:
+    """`read_model_readiness`가 읽을 한 행을 내주는 연결 대역. 닫힘 여부를 기록한다."""
+
+    def __init__(self, rows):
+        self._rows = list(rows)
+        self.reads = 0
+        self.closed = False
+
+    def execute(self, *_args, **_kwargs):
+        value = self._rows[min(self.reads, len(self._rows) - 1)]
+        self.reads += 1
+        return _FetchOne({"value": value})
+
+    def close(self):
+        self.closed = True
+
+
+class _FetchOne:
+    def __init__(self, row):
+        self._row = row
+
+    def fetchone(self):
+        return self._row
+
+
+def _downloading(writer, *, age_seconds=0.0, state="downloading"):
+    """`model_readiness` 한 행 — `age_seconds`만큼 **오래된** updated_at을 단다."""
+    stamp = core.readiness_now() if age_seconds == 0.0 else _aged(age_seconds)
+    return {
+        "updated_at": stamp,
+        "entries": {
+            MODEL: {
+                "state": state,
+                "bytes_done": 1,
+                "bytes_total": 0,
+                "writer": writer,
+                "attempt": 1,
+                "started_at": stamp,
+                "updated_at": stamp,
+                "error": None,
+                "error_kind": None,
+            }
+        },
+    }
+
+
+def _aged(seconds):
+    from datetime import UTC, datetime, timedelta
+
+    return (datetime.now(UTC) - timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def test_managed_disabled_does_not_spawn():
@@ -329,3 +393,173 @@ def test_base_url_without_port_is_permanent():
 
     assert exc.value.code == ls.LLM_SERVER_START_FAILED
     assert exc.value.kind is ErrorKind.PERMANENT
+
+
+# ── 준비 유예와 model_readiness (Task 10, 스펙 §6.9) ──────────────────────
+#
+# `_wait_ready`는 `--once` 자식의 코드이고 `llm_entry`는 그것이 popen한 **자식**이다. 진행 보고는
+# 그 자식이 DB에 올리므로, 여기서 유예를 밀려면 DB를 읽어야 한다.
+
+
+def _wait_with(settings, probe, conn_factory, clock=None):
+    """managed_llm_server를 태워 `_wait_ready`를 돌린다. 연결 팩토리는 주입한다."""
+    clock = clock or FakeClock()
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(ls, "_open_readiness_connection", conn_factory)
+        with ls.managed_llm_server(
+            MODEL,
+            settings,
+            popen=lambda *a, **kw: FakeProc(),
+            probe=probe,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        ):
+            pass
+    return clock
+
+
+def test_wait_ready_does_not_spend_grace_while_this_writer_downloads():
+    """진행이 갱신되는 동안에는 600초 예산을 쓰지 않는다 — 멈춘 뒤에야 쓰기 시작한다."""
+    clock = FakeClock()
+    fresh = [_downloading("worker-1") for _ in range(20)]
+    stalled = _downloading("worker-1", age_seconds=READINESS_STALL_SECONDS + 10)
+    conn = FakeReadinessConn([*fresh, stalled])
+
+    with pytest.raises(WorkerError) as exc:
+        _wait_with(
+            _settings(lens_llm_server_start_timeout_seconds=3.0),
+            lambda *a, **kw: None,
+            lambda _s: conn,
+            clock,
+        )
+
+    assert exc.value.kind is ErrorKind.TRANSIENT
+    # 예산은 3초인데 12.5초를 기다렸다 — 앞의 10초는 다운로드가 진행 중이라 소모되지 않았다.
+    assert clock.now == pytest.approx(12.5)
+    assert conn.reads > 20
+    assert conn.closed
+
+
+def test_wait_ready_ignores_another_writers_download():
+    """embed가 모델을 받는 동안 LLM의 시계가 멈추면 안 된다 (스펙 §6.9의 writer 구별)."""
+    clock = FakeClock()
+    # 20번째 읽기부터 멈춘 것으로 바뀐다 — writer 구별이 무너져도 이 테스트가 **빨리** 실패하게.
+    fresh = [_downloading("embed") for _ in range(20)]
+    stale = _downloading("embed", age_seconds=READINESS_STALL_SECONDS + 10)
+    conn = FakeReadinessConn([*fresh, stale])
+
+    with pytest.raises(WorkerError) as exc:
+        _wait_with(
+            _settings(lens_llm_server_start_timeout_seconds=3.0),
+            lambda *a, **kw: None,
+            lambda _s: conn,
+            clock,
+        )
+
+    assert exc.value.kind is ErrorKind.TRANSIENT
+    assert clock.now == pytest.approx(3.0)
+    assert conn.closed
+
+
+def test_wait_ready_proceeds_when_the_database_cannot_be_opened():
+    """DB를 못 열어도 기다림은 진행한다 — 유예 연장만 없고, 그것이 실패의 사유가 되지 않는다."""
+    clock = FakeClock()
+    opens = {"n": 0}
+
+    def _refuse(_settings_):
+        opens["n"] += 1
+        raise RuntimeError("connection refused")
+
+    with pytest.raises(WorkerError) as exc:
+        _wait_with(
+            _settings(lens_llm_server_start_timeout_seconds=3.0),
+            lambda *a, **kw: None,
+            _refuse,
+            clock,
+        )
+
+    assert exc.value.kind is ErrorKind.TRANSIENT
+    assert "3.0" in exc.value.message  # 평소의 타임아웃 문구 그대로
+    assert clock.now == pytest.approx(3.0)
+    assert opens["n"] == 1  # 폴링마다 다시 열지 않는다
+
+
+def test_wait_ready_survives_a_read_that_raises():
+    clock = FakeClock()
+
+    class Broken:
+        closed = False
+
+        def execute(self, *a, **kw):
+            raise RuntimeError("server closed the connection unexpectedly")
+
+        def close(self):
+            self.closed = True
+
+    broken = Broken()
+    with pytest.raises(WorkerError):
+        _wait_with(
+            _settings(lens_llm_server_start_timeout_seconds=3.0),
+            lambda *a, **kw: None,
+            lambda _s: broken,
+            clock,
+        )
+
+    assert clock.now == pytest.approx(3.0)
+    assert broken.closed
+
+
+def test_wait_ready_closes_its_connection_when_the_server_comes_up():
+    conn = FakeReadinessConn([_downloading("worker-1")])
+    _wait_with(_settings(), _probe_after(2), lambda _s: conn)
+    assert conn.closed
+
+
+def test_wait_ready_does_not_read_in_external_database_mode(monkeypatch):
+    """`DAMWHA_SHARED_STATE=off`면 앱이 소유하지 않은 DB다 — 읽지도 않는다 (스펙 §6.9)."""
+    monkeypatch.setenv("DAMWHA_SHARED_STATE", "off")
+    clock = FakeClock()
+
+    def _must_not_open(_settings_):
+        raise AssertionError("_wait_ready opened a connection in external-DB mode")
+
+    with pytest.raises(WorkerError):
+        _wait_with(
+            _settings(lens_llm_server_start_timeout_seconds=3.0),
+            lambda *a, **kw: None,
+            _must_not_open,
+            clock,
+        )
+
+    assert clock.now == pytest.approx(3.0)
+
+
+def test_the_two_public_signatures_do_not_change():
+    """계약 절이 못 박은 것 — Task 10은 본문만 고친다."""
+    assert list(inspect.signature(ls.managed_llm_server).parameters) == [
+        "model",
+        "settings",
+        "popen",
+        "probe",
+        "monotonic",
+        "sleep",
+    ]
+    assert list(inspect.signature(ls._wait_ready).parameters) == [
+        "proc",
+        "model",
+        "settings",
+        "probe",
+        "monotonic",
+        "sleep",
+    ]
+
+
+def test_the_supervisor_judgment_fires_after_the_worker_watchdog():
+    """Task 9b의 무진행 90초가 이 판정 120초보다 **먼저** 끝난다.
+
+    같은 다운로드를 양쪽이 두 번 죽이지 않게 하는 관계다 (config.py의 두 상수 주석).
+    """
+    from damwha_worker.config import HF_STALL_SECONDS
+
+    assert READINESS_STALL_SECONDS == 120.0
+    assert HF_STALL_SECONDS < READINESS_STALL_SECONDS

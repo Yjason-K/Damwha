@@ -56,7 +56,8 @@ import { freePort } from "./process/ports";
 import { mayAutoRetry } from "./app/retry-policy";
 import { devMigrationRunner, packagedMigrationRunner } from "./services/postgres/migration-runner";
 import { runMigrationGate } from "./services/postgres/migration-gate";
-import { DB_NAME, DB_SUPERUSER, pgBinaries, pgLayout } from "./services/postgres/layout";
+import { DB_NAME, DB_SUPERUSER, pgBinaries, pgLayout, pgToolEnv, type PgBinaries, type PgLayout } from "./services/postgres/layout";
+import { MODEL_READINESS_KEY } from "./services/model-readiness";
 import { psInfo, spawnPostmaster, stopOrphanPostmaster } from "./services/postgres/handle";
 import { embeddedPostgresSpec, externalPostgresSpec, PG_FAST_GRACE_MS, PG_IMMEDIATE_GRACE_MS } from "./services/postgres/service";
 import { runTool } from "./process/tool-runner";
@@ -698,6 +699,35 @@ function bundleDir(name: "postgres" | "python" | "ffmpeg"): string {
   return app.isPackaged ? path.join(process.resourcesPath, name) : path.join(app.getAppPath(), "build", name);
 }
 
+/** model_readiness 한 행을 읽는 psql의 상한. 로컬 소켓 SELECT 하나라 넉넉하고, ⌘Q가 이만큼만 늦는다. */
+const MODEL_READINESS_QUERY_MS = 5_000;
+
+/**
+ * 감독자의 준비 유예가 읽는 `app_setting.model_readiness` (스펙 §6.9, 판정 R-P8).
+ *
+ * 번들 `psql`로 **읽기만** 한다 — Phase 3의 클러스터 판정과 같은 도구·같은 env이고, 앱에는 pg
+ * 클라이언트 의존이 없다(desktop/package.json의 dependencies는 비어 있다). 감독자에 Task 11의
+ * API를 물리지 않는 것이 이 배선의 요점이다.
+ *
+ * 돌려주는 것은 **psql이 찍은 텍스트 그대로**다. 해석은 services/model-readiness.ts가 한다 —
+ * 이 파일은 vitest가 부르지 못하므로 여기서 JSON.parse까지 하면 아무도 그것을 검사할 수 없다.
+ * 못 읽으면 null이고, 감독자는 그것을 "받는 중인 모델 없음"으로 읽는다.
+ */
+function modelReadinessReader(binaries: PgBinaries, layout: PgLayout): () => Promise<unknown> {
+  return async () => {
+    const r = await runTool(
+      binaries.psql,
+      // prettier-ignore
+      ["-X", "-A", "-t", "-h", layout.runDir, "-U", DB_SUPERUSER, "-d", DB_NAME,
+       "-c", `SELECT value FROM app_setting WHERE key = '${MODEL_READINESS_KEY}'`],
+      { env: pgToolEnv(), deadlineMs: MODEL_READINESS_QUERY_MS },
+    );
+    if (r.code !== 0) return null;
+    const out = r.stdout.trim();
+    return out === "" ? null : out;
+  };
+}
+
 /** 상태 창의 postgres 줄에 싣는 디버깅 접속 명령 (스펙 §6.3). 번들 psql을 쓴다 — Homebrew psql이 없는 맥이다. */
 function debugCommand(): string {
   const layout = pgLayout(app.getPath("userData"));
@@ -1183,7 +1213,13 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
       worker: { listExternal: () => listExternalWorkers(trees), stop: stopOwnWorker },
     }),
     ctx,
-    { onStatus: renderStatus, log: appendSupervisorLog },
+    {
+      onStatus: renderStatus,
+      log: appendSupervisorLog,
+      // 외부 DB 모드에서는 걸지 않는다 — 그 모드의 worker는 이 행을 아예 쓰지 않고(스펙 §6.9의
+      // DAMWHA_SHARED_STATE=off), 내장 클러스터의 소켓도 없어 psql이 매번 헛돈다.
+      ...(mode.kind === "external" ? {} : { readModelReadiness: modelReadinessReader(binaries, layout) }),
+    },
   );
   // start()가 끝나기 전에 대입해야 한다 — onStatus가 그 사이에 여러 번 발화하고, shellStatusOf()는
   // supervisor에서 상태를 읽는다. 대입이 뒤면 기동 화면에 서비스 줄이 한 줄도 안 뜬다.
