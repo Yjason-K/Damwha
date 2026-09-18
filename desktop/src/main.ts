@@ -204,6 +204,12 @@ let modelReadiness: readonly ReadinessEntry[] = [];
 let readModelReadiness: (() => Promise<unknown>) | null = null;
 /** 지금 "서비스 다시 시작"이 도는 중인 서비스. 버튼이 죽은 것처럼 보이지 않게 화면이 진행을 보인다. */
 const restartingServices = new Set<ServiceId>();
+/**
+ * 토큰 창이나 삭제 확인이 떠 있다. 재시작의 `restartingServices`와 같은 일을 토큰 두 버튼에 한다 —
+ * 묻는 고리는 그동안 막혀 있는데, 감독자의 상태 변화가 화면을 다시 그리면 페이지가 스스로 건
+ * 잠금이 풀리고 두 번째 클릭이 큐에 쌓인다(그 창이 닫히자마자 두 번째 창이 열린다).
+ */
+let tokenBusy = false;
 /** 상태 창에서 방금 누른 것의 결과 한 줄. 다음 동작이 덮는다. */
 let actionNotice: string | null = null;
 
@@ -613,6 +619,13 @@ const statusWindow = createStatusWindow<BrowserWindow>({
       rendererAttached: win !== null && !win.isDestroyed() && !mayRenderShell(attachedWindow, win),
     }),
   onAction: (action) => handleServicesAction(action),
+  // 묻는 고리가 끝났다 — 창은 떠 있는데 버튼이 죽었다. 로그에만 적으면 사람은 그 사실을 알 길이
+  // 없다. 화면이 마지막으로 그려질 때 이 줄을 얹는다.
+  onAskFailed: (reason) => {
+    actionNotice = reason;
+    appendSupervisorLog(reason);
+    statusWindow.refresh();
+  },
   log: appendSupervisorLog,
 });
 
@@ -842,6 +855,7 @@ function servicesViewNow() {
     modelReadiness,
     restarting: [...restartingServices],
     maskedToken: hfToken === null ? null : maskToken(hfToken),
+    tokenBusy,
     actionNotice,
   });
 }
@@ -1116,9 +1130,24 @@ async function ensureHfToken(): Promise<string | null> {
  */
 async function handleServicesAction(action: ServicesAction): Promise<void> {
   try {
-    if (action.kind === "restart") await restartFromStatusWindow(action.service);
-    else if (action.op === "change") await changeHfToken();
-    else await clearHfToken();
+    if (action.kind === "restart") {
+      await restartFromStatusWindow(action.service);
+    } else {
+      // 화면의 잠금만으로는 모자란다(tokenBusy의 주석). 큐에 쌓였다가 늦게 도착한 두 번째 요청은
+      // 여기서 막는다 — 첫 창이 닫히자마자 두 번째 창이 열리는 것을 화면 타이밍에 기대지 않는다.
+      if (tokenBusy) {
+        appendSupervisorLog("토큰 요청이 이미 진행 중이라 이 요청은 무시했어요.");
+        return;
+      }
+      tokenBusy = true;
+      statusWindow.refresh();
+      try {
+        if (action.op === "change") await changeHfToken();
+        else await clearHfToken();
+      } finally {
+        tokenBusy = false;
+      }
+    }
   } catch (e) {
     actionNotice = `요청을 처리하지 못했어요 — ${reasonOf(e)}`;
     appendSupervisorLog(actionNotice);
@@ -1251,7 +1280,8 @@ async function clearHfToken(): Promise<void> {
     cancelId: 1,
     message: "저장된 허깅페이스 토큰을 지울까요?",
     detail:
-      "지금 도는 서비스는 옛 토큰으로 계속 돌아요. 앱을 다시 켜면 토큰 화면이 다시 떠요.",
+      "지금 도는 서비스는 옛 토큰으로 계속 돌아요. 하지만 그 서비스가 다시 뜨면 — 자동 재시도나 " +
+      "“서비스 다시 시작” — 토큰 없이 떠서 모델을 받지 못해요. 앱을 다시 켜면 토큰 화면이 다시 떠요.",
   });
   if (answer.response !== 0) {
     actionNotice = "토큰을 지우지 않았어요.";
@@ -1261,7 +1291,8 @@ async function clearHfToken(): Promise<void> {
   hfToken = null;
   if (launchCtx !== null) delete launchCtx.ctx.env.HF_TOKEN;
   actionNotice =
-    "토큰을 지웠어요. 지금 도는 서비스는 옛 토큰으로 계속 돌고, 앱을 다시 켜면 토큰 화면이 다시 떠요.";
+    "토큰을 지웠어요. 지금 도는 서비스는 옛 토큰으로 계속 돌지만, 그 서비스가 한 번이라도 다시 뜨면 " +
+    "(자동 재시도·“서비스 다시 시작”) 토큰 없이 떠서 모델을 받지 못해요. 앱을 다시 켜면 토큰 화면이 다시 떠요.";
   appendSupervisorLog(actionNotice);
 }
 

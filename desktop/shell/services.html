@@ -13,7 +13,7 @@
          둘 다 여기여야 하기 때문이다(Phase 2의 "표시 전용"은 그 전 스펙의 것이다). **그래도 렌더러 → main
          채널은 만들지 않는다**: preload도 IPC도 없고, 버튼은 token.html과 같은 방식으로 main이 거는 next()
          호출의 **반환값**으로만 밖에 나간다. 입력칸은 여전히 없다 — 토큰 입력은 token.html 하나가 맡는다. -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-apX35+XlYT8zVrr9Z0DFPWm+/A/1wG9w5l6CSF8yZuk='; style-src 'sha256-UE41rOjItHtg06HE5/Th7GzRD0gRbVAGU7Xn4cv3AqU='; base-uri 'none'; form-action 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-U4ArEBeaumpajpNbevnAM7TWtzqIX2SO33vHWyOVwJ0='; style-src 'sha256-UE41rOjItHtg06HE5/Th7GzRD0gRbVAGU7Xn4cv3AqU='; base-uri 'none'; form-action 'none'" />
     <title>서비스 상태</title>
     <style>
       :root {
@@ -234,7 +234,9 @@
           const token = view.token || { masked: null, note: "", canClear: false };
           tokenValue.textContent = token.masked === null ? "없음" : token.masked;
           tokenNote.textContent = token.note;
-          tokenChange.disabled = false;
+          // main이 정한 잠금을 그대로 따른다. 여기서 무조건 풀면, 토큰 창이 떠 있는 동안 감독자가
+          // 일으킨 다시 그리기가 버튼을 되살려 두 번째 창이 열린다.
+          tokenChange.disabled = token.busy === true;
           tokenClear.disabled = token.canClear !== true;
           // 창이 살아 있는지 사람이 알 수 있게 한다 — degraded가 ok로 돌아오기를 기다리는 사람은
           // "안 바뀐 것"과 "안 갱신된 것"을 구분해야 한다.

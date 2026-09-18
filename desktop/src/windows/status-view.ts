@@ -197,6 +197,15 @@ export interface TokenView {
   note: string;
   /** 지울 것이 있나. 없으면 삭제 버튼을 비활성으로 그린다. */
   canClear: boolean;
+  /**
+   * 토큰 창이나 삭제 확인이 **지금 떠 있나**. 두 버튼을 모두 잠근다.
+   *
+   * 페이지가 누른 순간 스스로 잠그지만 그것만으로는 모자란다: 묻는 고리는 `handleServicesAction`이
+   * 끝날 때까지(= 토큰 창이 닫힐 때까지) 막혀 있는데, 그 사이 감독자의 상태 변화가 화면을 다시
+   * 그리면 잠금이 풀린다. 그때의 두 번째 클릭은 큐에 쌓였다가 첫 창이 닫히자마자 **두 번째 토큰
+   * 창**을 연다. 재시작 버튼은 `restartingServices`가 같은 일을 한다.
+   */
+  busy: boolean;
 }
 
 export interface ServicesView {
@@ -238,6 +247,8 @@ export interface ServicesInput {
   restarting?: readonly ServiceId[];
   /** 저장된 HF 토큰의 **가린** 모양. 없으면 null (스펙 §6.4). 원문은 여기 오지 않는다. */
   maskedToken?: string | null;
+  /** 토큰 창·삭제 확인이 떠 있다. 두 버튼을 잠근다 (TokenView.busy). */
+  tokenBusy?: boolean;
   /**
    * 방금 이 창에서 누른 것의 결과 — "토큰을 바꿨어요. 작업 처리기를 다시 시작했어요." 같은 한 줄.
    * 버튼이 무슨 일을 했는지(또는 못 했는지) 말하지 않으면 사람은 눌렀는데 아무 일도 안 났다고 읽는다.
@@ -354,6 +365,21 @@ export function modelRows(
     return s === undefined ? undefined : restartButton(s, restarting);
   };
 
+  /**
+   * 2층의 안내와 버튼은 **함께 있거나 함께 없다.**
+   *
+   * 감독자가 아직(또는 더는) 없으면 `buttonFor`가 undefined다 — 거부된 기동 뒤 `supervisor`가
+   * null인데 마지막 `model_readiness` 스냅숏은 남아 있는 창이 그렇다. 그때도 "이 줄의
+   * 서비스 다시 시작을 눌러 주세요"라고 적으면 화면에 없는 버튼을 가리킨다. 그 경우의 길은
+   * 메뉴의 다시 시도 하나뿐이고, `NO_SERVICES_YET`이 이미 그 말을 한다.
+   */
+  const layerTwo = (writer: string): { hint: string; restart?: RestartButton } => {
+    const restart = buttonFor(writer);
+    return restart === undefined
+      ? { hint: NO_SERVICES_YET }
+      : { hint: RETRY_LAYERS.service, restart };
+  };
+
   return entries.map((e): ModelRow => {
     const notes = [
       // 조사를 붙이지 않는다 — "검색 임베딩이"와 "작업 처리기가"가 갈려 라벨마다 규칙이 달라진다.
@@ -373,8 +399,7 @@ export function modelRows(
         tone: "warn",
         notes: [downloadProgress(e), ...notes],
         cause: CAUSES.modelDownloadStalled.text(e.key),
-        hint: RETRY_LAYERS.service,
-        ...withButton(buttonFor(e.writer)),
+        ...layerTwo(e.writer),
       };
     }
 
@@ -420,23 +445,20 @@ export function modelRows(
       tone: "fail",
       notes,
       cause: CAUSES.modelDownloadFailed.text(e.key, message),
-      hint: RETRY_LAYERS.service,
-      ...withButton(buttonFor(e.writer)),
+      ...layerTwo(e.writer),
     };
   });
 }
 
-function withButton(restart: RestartButton | undefined): { restart?: RestartButton } {
-  return restart === undefined ? {} : { restart };
-}
-
 /** 토큰 절 (스펙 §6.4). 원문은 이 함수에 들어오지 않는다 — 부르는 쪽이 이미 `maskToken`을 지났다. */
-export function tokenView(masked: string | null | undefined): TokenView {
+export function tokenView(masked: string | null | undefined, busy = false): TokenView {
   const value = masked ?? null;
   return {
     masked: value,
     note: value === null ? NO_TOKEN_NOTE : TOKEN_NOTE,
-    canClear: value !== null,
+    // 창이 떠 있는 동안에는 지울 것이 있어도 지우지 못한다 — 그 창이 바로 그 값을 바꾸는 중이다.
+    canClear: value !== null && !busy,
+    busy,
   };
 }
 
@@ -502,7 +524,7 @@ export function servicesView(input: ServicesInput): ServicesView {
       input.now ?? Date.now(),
       input.restarting ?? [],
     ),
-    token: tokenView(input.maskedToken),
+    token: tokenView(input.maskedToken, input.tokenBusy === true),
     notices,
   };
 }

@@ -20,6 +20,7 @@ import {
   parseServicesAction,
   renderCall,
   servicesView,
+  tokenView,
   shellStatusFrom,
   statusLine,
   type ServicesView,
@@ -44,7 +45,12 @@ const ALL_OK = [st("postgres"), st("api"), st("embed"), st("worker")];
 
 /** 서비스도 모델도 토큰도 없는 빈 한 장. renderCall의 모양만 보는 자리에서 쓴다. */
 function emptyView(notices: string[] = []): ServicesView {
-  return { rows: [], models: [], token: { masked: null, note: "", canClear: false }, notices };
+  return {
+    rows: [],
+    models: [],
+    token: { masked: null, note: "", canClear: false, busy: false },
+    notices,
+  };
 }
 
 describe("servicesView", () => {
@@ -343,7 +349,7 @@ describe("renderCall — main이 렌더러에서 실행하는 식", () => {
       ],
       // 모델 줄도 적대적인 문자열을 싣는다 — key는 HF repo id이고 cause에는 worker의 원문이 온다.
       models: [{ key: text, state: "실패", tone: "fail", notes: [text], cause: text, hint: text }],
-      token: { masked: text, note: text, canClear: true },
+      token: { masked: text, note: text, canClear: true, busy: false },
       notices: [text],
     };
     const { calls, sandbox } = run(renderCall(view));
@@ -720,7 +726,7 @@ describe("토큰 절 (스펙 §6.4)", () => {
 
   it("토큰이 없으면 지울 것도 없다", () => {
     const view = servicesView({ statuses: ALL_OK, restartNotice: null, logPathOf });
-    expect(view.token).toEqual({ masked: null, note: NO_TOKEN_NOTE, canClear: false });
+    expect(view.token).toEqual({ masked: null, note: NO_TOKEN_NOTE, canClear: false, busy: false });
   });
 });
 
@@ -750,5 +756,103 @@ describe("parseServicesAction — 페이지에서 오는 값", () => {
     ]) {
       expect(parseServicesAction(bad)).toBeNull();
     }
+  });
+});
+
+/**
+ * Task 11 fix 1 — 토큰 버튼의 잠금과, 버튼 없는 2층의 안내.
+ */
+describe("토큰 버튼의 잠금 (fix 1)", () => {
+  const TOKEN = "hf_AbCdEfGhIjKlMnOpQrStUvWxYz01234567";
+  const view = (tokenBusy: boolean) =>
+    servicesView({
+      statuses: ALL_OK,
+      restartNotice: null,
+      logPathOf,
+      maskedToken: maskToken(TOKEN),
+      tokenBusy,
+    });
+
+  it("토큰 창이 떠 있는 동안 두 버튼을 모두 잠근다", () => {
+    const token = view(true).token;
+    expect(token.busy).toBe(true);
+    // 지울 것이 있어도 지우지 못한다 — 그 창이 바로 그 값을 바꾸는 중이다.
+    expect(token.canClear).toBe(false);
+  });
+
+  it("평소에는 잠기지 않는다", () => {
+    const token = view(false).token;
+    expect(token.busy).toBe(false);
+    expect(token.canClear).toBe(true);
+  });
+
+  it("기본값은 잠기지 않음이다 — 재시작의 restarting과 같은 모양", () => {
+    expect(tokenView(maskToken(TOKEN)).busy).toBe(false);
+  });
+});
+
+describe("버튼이 없으면 버튼을 가리키지 않는다 (fix 3)", () => {
+  const NOW = 1_800_000_000_000;
+  const stalled: ReadinessEntry = {
+    key: "BAAI/bge-m3",
+    state: "downloading",
+    bytesDone: 0,
+    bytesTotal: 0,
+    startedAt: NOW - 300_000,
+    updatedAt: NOW - STALL_MS - 1,
+    writer: "embed",
+    attempt: 1,
+    error: null,
+    errorKind: null,
+  };
+  const failed: ReadinessEntry = {
+    ...stalled,
+    state: "failed",
+    error: "model_download_failed: boom",
+    errorKind: "PERMANENT",
+    updatedAt: NOW - 1_000,
+  };
+  /** 감독자가 없는 창 — 거부된 기동 뒤 statuses는 비었는데 마지막 스냅숏은 남아 있다. */
+  const orphaned = (entries: ReadinessEntry[]) =>
+    servicesView({ statuses: [], restartNotice: null, logPathOf, modelReadiness: entries, now: NOW });
+
+  it("중단됨 — 감독자가 그 서비스를 모르면 안내가 메뉴의 다시 시도로 간다", () => {
+    const row = orphaned([stalled]).models[0];
+    expect(row.restart).toBeUndefined();
+    expect(row.hint).toBe(NO_SERVICES_YET);
+    expect(row.hint).not.toBe(RETRY_LAYERS.service);
+  });
+
+  it("일반 PERMANENT 실패도 같다", () => {
+    const row = orphaned([failed]).models[0];
+    expect(row.restart).toBeUndefined();
+    expect(row.hint).toBe(NO_SERVICES_YET);
+  });
+
+  it("어떤 모델 줄도 버튼 없이 '이 줄의 서비스 다시 시작'을 말하지 않는다", () => {
+    for (const entries of [[stalled], [failed]]) {
+      for (const statuses of [[], ALL_OK]) {
+        const row = servicesView({
+          statuses,
+          restartNotice: null,
+          logPathOf,
+          modelReadiness: entries,
+          now: NOW,
+        }).models[0];
+        if (row.hint === RETRY_LAYERS.service) expect(row.restart).toBeDefined();
+      }
+    }
+  });
+
+  it("감독자가 있으면 그대로 2층 버튼과 그 안내다", () => {
+    const row = servicesView({
+      statuses: ALL_OK,
+      restartNotice: null,
+      logPathOf,
+      modelReadiness: [stalled],
+      now: NOW,
+    }).models[0];
+    expect(row.hint).toBe(RETRY_LAYERS.service);
+    expect(row.restart?.service).toBe("embed");
   });
 });

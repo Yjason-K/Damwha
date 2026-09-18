@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { createStatusWindow, mayAutoOpen, type StatusWindowHost } from "../../src/windows/status-window";
+import {
+  ASK_RETRY_LIMIT,
+  createStatusWindow,
+  mayAutoOpen,
+  type StatusWindowHost,
+} from "../../src/windows/status-window";
 import {
   renderCall,
   SERVICES_ASK_SCRIPT,
@@ -10,7 +15,12 @@ import type { ServiceId, ServiceStatus } from "../../src/services/types";
 
 /** 서비스도 모델도 토큰도 없는 빈 한 장. 이 테스트들이 보는 것은 안내 줄과 호출 모양뿐이다. */
 function emptyView(notices: string[] = []): ServicesView {
-  return { rows: [], models: [], token: { masked: null, note: "", canClear: false }, notices };
+  return {
+    rows: [],
+    models: [],
+    token: { masked: null, note: "", canClear: false, busy: false },
+    notices,
+  };
 }
 
 /** 가짜 창. 파괴·로드·닫힘을 테스트가 직접 일으킨다. */
@@ -41,6 +51,8 @@ function harness(
   const wins: FakeWin[] = [];
   const logs: string[] = [];
   const actions: ServicesAction[] = [];
+  /** 묻는 고리가 끝났다고 배선에 알린 사유. */
+  const askFailures: string[] = [];
   /** 묻는 호출이 차례로 돌려줄 값. 다 떨어지면 null이라 고리가 멈춘다(다리 없음과 같은 길). */
   const answers = [...(opts.answers ?? [])];
   let view: ServicesView = emptyView(["처음"]);
@@ -74,6 +86,7 @@ function harness(
     onAction: (a) => {
       actions.push(a);
     },
+    onAskFailed: (reason) => askFailures.push(reason),
     log: (line) => logs.push(line),
   };
   const sw = createStatusWindow(host);
@@ -82,6 +95,7 @@ function harness(
     wins,
     logs,
     actions,
+    askFailures,
     setView: (v: ServicesView) => (view = v),
     setStatuses: (s: ServiceStatus[]) => (statuses = s),
     setAutoOpen: (v: boolean) => (autoOpen = v),
@@ -366,5 +380,60 @@ describe("상태 창의 버튼 — 묻는 고리", () => {
     await flush();
     // 두 세대가 함께 돌면 한 번 누른 것이 두 번 처리된다. 옛 세대(clear)는 물러나고 새 것만 남는다.
     expect(h.actions).toEqual([{ kind: "token", op: "change" }]);
+  });
+});
+
+/**
+ * Task 11 fix 1 — 묻는 고리가 **조용히** 죽지 않는다.
+ *
+ * 창은 떠 있고 버튼도 그대로 보이므로, 고리가 끝난 것을 로그에만 적으면 사람은 앱이 멈춘 줄 안다.
+ */
+describe("묻는 고리가 끝날 때", () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it("살아 있는 창의 거부는 ASK_RETRY_LIMIT번까지 다시 건다", async () => {
+    const h = harness({ runRejects: new Error("Script failed to execute") });
+    h.sw.open();
+    h.load(h.wins[0]);
+    await flush();
+    expect(h.wins[0].asks).toBe(ASK_RETRY_LIMIT);
+  });
+
+  it("그 한계를 넘으면 화면에 올릴 사유를 배선에 넘긴다 — 로그로 끝내지 않는다", async () => {
+    const h = harness({ runRejects: new Error("Script failed to execute") });
+    h.sw.open();
+    h.load(h.wins[0]);
+    await flush();
+    expect(h.askFailures).toHaveLength(1);
+    expect(h.askFailures[0]).toContain("응답하지 않아요");
+    expect(h.askFailures[0]).toContain("⌘R");
+  });
+
+  it("한 번이라도 답이 오면 거부 횟수가 0으로 돌아간다", async () => {
+    // 답 하나 → null(다리 없음)로 끝. 거부가 없었으므로 재시도 한계와 무관하게 한 번에 멈춘다.
+    const h = harness({ answers: [{ kind: "token", op: "change" }] });
+    h.sw.open();
+    h.load(h.wins[0]);
+    await flush();
+    expect(h.actions).toHaveLength(1);
+    expect(h.wins[0].asks).toBe(2);
+  });
+
+  it("다리가 없을 때도 화면에 올릴 사유를 넘긴다", async () => {
+    const h = harness();
+    h.sw.open();
+    h.load(h.wins[0]);
+    await flush();
+    expect(h.askFailures).toHaveLength(1);
+    expect(h.askFailures[0]).toContain("스크립트가 돌지 않아");
+  });
+
+  it("창이 닫힌 뒤의 거부는 알리지 않는다 — 예상된 일이다", async () => {
+    const h = harness({ runRejects: new Error("Object has been destroyed") });
+    h.sw.open();
+    h.close(h.wins[0]);
+    h.load(h.wins[0]);
+    await flush();
+    expect(h.askFailures).toEqual([]);
   });
 });

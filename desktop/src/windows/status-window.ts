@@ -44,6 +44,13 @@ export interface StatusWindowHost<W> {
    * 묻는 고리가 끊겨 그 뒤의 버튼이 전부 죽는다. 배선(main.ts)이 자기 실패를 화면과 로그로 바꾼다.
    */
   onAction(action: ServicesAction): Promise<void> | void;
+  /**
+   * 묻는 고리가 끝났다 — 이 창의 버튼은 이제 눌러도 아무 일도 안 일어난다 (아래 `ask`).
+   *
+   * 로그 한 줄로는 모자라다: 창은 멀쩡히 떠 있고 버튼도 그대로 보이므로, 사람은 앱이 멈춘 줄
+   * 알거나 자기가 잘못 눌렀다고 여긴다. 배선이 이것을 화면의 안내 줄로 바꾼다.
+   */
+  onAskFailed(reason: string): void;
   log(line: string): void;
 }
 
@@ -85,6 +92,12 @@ export interface StatusWindow {
    */
   isOpen(): boolean;
 }
+
+/**
+ * 묻는 호출이 연달아 거부돼도 다시 거는 횟수. 셋이면 한 번의 우연(새로 고침·렌더러가 잠깐 바쁨)은
+ * 넘기고, 진짜로 죽은 페이지에는 바쁜 고리를 만들지 않는다.
+ */
+export const ASK_RETRY_LIMIT = 3;
 
 export function createStatusWindow<W>(host: StatusWindowHost<W>): StatusWindow {
   let current: W | null = null;
@@ -153,23 +166,35 @@ export function createStatusWindow<W>(host: StatusWindowHost<W>): StatusWindow {
    * 사람이 누를 때까지 끝나지 않는 호출을 걸고, 답이 오면 처리하고, 다시 건다.
    *
    * - 창이 죽었거나 새 페이지가 로드됐으면(세대가 오르면) 조용히 물러난다.
-   * - 다리가 없으면(스크립트가 안 돌았다) **한 번만 적고 멈춘다.** 여기서 계속 물으면 몇
-   *   밀리초마다 executeJavaScript를 거는 바쁜 고리가 된다.
+   * - 다리가 없으면(스크립트가 안 돌았다) **멈춘다.** 여기서 계속 물으면 몇 밀리초마다
+   *   executeJavaScript를 거는 바쁜 고리가 된다. 그 사실은 화면에도 올린다.
+   * - 호출 자체가 거부되면 **ASK_RETRY_LIMIT번까지 다시 건다.** 살아 있는 창에서의 한 번의
+   *   거부(렌더러가 잠깐 바빴다, 새로 고침과 겹쳤다)로 버튼을 영영 죽이면, 사람이 볼 수 있는
+   *   것은 멀쩡해 보이는 창과 안 먹는 버튼뿐이고 고치는 길은 ⌘R 하나뿐이다.
    * - 모르는 모양은 버리고 계속 묻는다 — 한 번 이상한 값이 왔다고 버튼 전체를 죽이지 않는다.
    */
   const ask = async (win: W, mine: number) => {
+    /** 연달아 거부된 횟수. 한 번이라도 답이 오면 0으로 돌아간다. */
+    let refusals = 0;
     while (mine === page && host.alive(win)) {
       let raw: unknown;
       try {
         raw = await host.run(win, SERVICES_ASK_SCRIPT);
+        refusals = 0;
       } catch (e) {
         // 새로 고침이 진행 중인 호출을 끊을 수 있다 — 새 페이지의 로드가 다시 묻는다.
-        if (mine === page && host.alive(win)) host.log(`상태 창에 묻지 못했어요 — ${reasonOf(e)}`);
+        if (mine !== page || !host.alive(win)) return;
+        refusals += 1;
+        const why = reasonOf(e);
+        host.log(`상태 창에 묻지 못했어요 (${refusals}/${ASK_RETRY_LIMIT}) — ${why}`);
+        if (refusals < ASK_RETRY_LIMIT) continue;
+        host.onAskFailed(`상태 창의 버튼이 응답하지 않아요 (${why}). ⌘R로 이 창을 새로 고쳐 주세요.`);
         return;
       }
       if (mine !== page || !host.alive(win)) return;
       if (raw === null || raw === undefined) {
         host.log("상태 창의 스크립트가 돌지 않아 버튼을 쓸 수 없어요.");
+        host.onAskFailed("상태 창의 스크립트가 돌지 않아 버튼을 쓸 수 없어요. ⌘R로 이 창을 새로 고쳐 주세요.");
         return;
       }
       const action = parseServicesAction(raw);

@@ -393,6 +393,32 @@ describe("services.html", () => {
       await expect(bridgeOf(sandbox).next()).resolves.toEqual({ kind: "token", op: "clear" });
     });
 
+    it("토큰 창이 떠 있는 동안에는 다시 그려도 버튼이 풀리지 않는다 (fix 1)", async () => {
+      // 묻는 고리는 토큰 창이 닫힐 때까지 막혀 있다. 그 사이 감독자가 일으킨 다시 그리기가 잠금을
+      // 풀면, 두 번째 클릭이 큐에 쌓였다가 첫 창이 닫히자마자 **두 번째 토큰 창**을 연다.
+      const { sandbox, byId } = loadPage("services.html");
+      const render = sandbox.__damwha_render as (v: unknown) => void;
+      const token = "hf_AbCdEfGhIjKlMnOpQrStUvWxYz01234567";
+      render(view({ maskedToken: maskToken(token) }));
+      byId.get("token-change")!.fire("click");
+      await expect(bridgeOf(sandbox).next()).resolves.toEqual({ kind: "token", op: "change" });
+
+      render(view({ maskedToken: maskToken(token), tokenBusy: true }));
+      expect(byId.get("token-change")!.disabled).toBe(true);
+      expect(byId.get("token-clear")!.disabled).toBe(true);
+      // 잠긴 버튼은 클릭을 받지 않는다 — 두 번째 요청이 큐에 쌓이지 않는다.
+      expect(byId.get("token-change")!.fire("click")).toBe(false);
+      let got: unknown = "pending";
+      void bridgeOf(sandbox).next().then((v) => (got = v));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(got).toBe("pending");
+
+      // 창이 닫히면 다시 열린다.
+      render(view({ maskedToken: maskToken(token) }));
+      expect(byId.get("token-change")!.disabled).toBe(false);
+      expect(byId.get("token-clear")!.disabled).toBe(false);
+    });
+
     it("토큰이 없으면 삭제를 누를 수 없다", () => {
       const { sandbox, byId } = loadPage("services.html");
       (sandbox.__damwha_render as (v: unknown) => void)(view());
