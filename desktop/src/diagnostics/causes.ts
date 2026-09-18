@@ -47,18 +47,11 @@ export interface Cause {
 }
 
 export const CAUSES = {
-  /** worker·embed — config.json에도 탐색 목록에도 uv가 없다. */
-  uvMissing: {
-    match: /uv를 찾지 못했어요/,
-    text: "uv를 찾지 못했어요.",
-    selfRecovers: false,
-  },
-  /** worker — be/worker/.env가 없다. */
-  workerEnvMissing: {
-    match: /\.env가 없어요/,
-    text: "be/worker/.env가 없어요.",
-    selfRecovers: false,
-  },
+  // Phase 4가 지운 둘: `uvMissing`·`workerEnvMissing` (스펙 §8). 앱은 uv를 부르지 않고
+  // (`process/python-launcher.ts`가 번들 python을 직접 띄운다) worker의 `.env`도 읽지 않는다
+  // (`config/config.ts`가 자식 env를 전부 합성한다) — 두 원인은 어떤 어댑터도 더 이상 내지 않는다.
+  // 남겨 두면 "고칠 수 없는 것을 고치라"는 안내가 화면에 남는다.
+
   /** api — 기동 로그의 미적용 마이그레이션 경고 (스펙 §6.7 게이트). */
   pendingMigrations: {
     match: /적용되지 않은 마이그레이션이/,
@@ -124,6 +117,49 @@ export const CAUSES = {
   hfGateNotAccepted: {
     match: /사용 조건 수락이 필요해요/,
     text: `이 모델은 사용 조건 수락이 필요해요 — ${HF_GATED_MODEL_PAGE_URL}`,
+    selfRecovers: false,
+  },
+  /**
+   * 모델 다운로드가 실패했다 (스펙 §6.9·§8). `app_setting.model_readiness`의 `failed` 항목에서
+   * 온다 — 원문은 worker의 `errors.download_error`가 만든 `"<code>: <message>"`다.
+   *
+   * **401·403은 이 원인이 아니다.** 그 둘은 code(`hf_token_invalid`·`hf_gate_not_accepted`)로 갈려
+   * 위의 `hfTokenInvalid`·`hfGateNotAccepted`로 간다(판정 R-11a). 여기 오는 것은 나머지 —
+   * 네트워크·타임아웃·5xx·오프라인 캐시 미스, 그리고 code를 알아볼 수 없는 경우다.
+   *
+   * 층은 이 원인이 정하지 않는다. `errorKind`가 TRANSIENT면 1층(기다린다), 그 밖이면 2층(다시
+   * 시작)이고, 그 판정은 화면(status-view.ts의 modelRows)에 있다 — 여기 문구는 **무엇이**
+   * 실패했는지만 말한다.
+   */
+  modelDownloadFailed: {
+    match: /모델을 받지 못했어요/,
+    text: (key: string, reason: string) => `모델을 받지 못했어요 (${key}) — ${reason}`,
+    selfRecovers: false,
+  },
+  /**
+   * 받는 중이라고 적혀 있는데 진행이 멈췄다 (스펙 §6.9 — 읽는 쪽이 `updated_at`이 멈춘
+   * `downloading`을 "중단됨"으로 보인다, §8 — "진행이 멈췄어요" + 서비스 다시 시작).
+   *
+   * writer가 정리해 주기를 기대하지 않는다: 프로세스가 크래시하면 그 `downloading`은 영원히 남는다.
+   * 판정은 `services/model-readiness.ts`의 `STALL_MS` 하나를 쓴다 — 규칙의 사본을 두지 않는다.
+   */
+  modelDownloadStalled: {
+    match: /진행이 멈췄어요/,
+    text: (key: string) => `모델을 받는 중인데 진행이 멈췄어요 (${key}).`,
+    selfRecovers: false,
+  },
+  /**
+   * 디스크가 찼다 (스펙 §8 — "남은 용량과 필요한 용량"). 모델 한 벌이 수 GB라 받는 도중에 이것이
+   * 난다.
+   *
+   * **이 Phase에는 이 문구를 내는 어댑터가 아직 없다** — 남은 용량을 재는 자리가 없기 때문이다.
+   * 목록에 두는 이유는 그 자리가 생겼을 때 문구와 안내가 갈리지 않게 하기 위해서다(이 파일의 머리
+   * 주석 — "원인의 종류를 셀 수 있게").
+   */
+  diskFull: {
+    match: /디스크 공간이 부족해요/,
+    text: (free: string, needed: string) =>
+      `디스크 공간이 부족해요 — 남은 용량 ${free}, 필요한 용량 ${needed}.`,
     selfRecovers: false,
   },
   /** postgres — 번들에 PG 실행 파일이 없다 (Phase 3 스펙 §6.8). */

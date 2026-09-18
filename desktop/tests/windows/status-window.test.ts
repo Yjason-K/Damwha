@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { createStatusWindow, mayAutoOpen, type StatusWindowHost } from "../../src/windows/status-window";
-import { renderCall, type ServicesView } from "../../src/windows/status-view";
+import {
+  renderCall,
+  SERVICES_ASK_SCRIPT,
+  type ServicesAction,
+  type ServicesView,
+} from "../../src/windows/status-view";
 import type { ServiceId, ServiceStatus } from "../../src/services/types";
+
+/** 서비스도 모델도 토큰도 없는 빈 한 장. 이 테스트들이 보는 것은 안내 줄과 호출 모양뿐이다. */
+function emptyView(notices: string[] = []): ServicesView {
+  return { rows: [], models: [], token: { masked: null, note: "", canClear: false }, notices };
+}
 
 /** 가짜 창. 파괴·로드·닫힘을 테스트가 직접 일으킨다. */
 interface FakeWin {
@@ -11,7 +21,9 @@ interface FakeWin {
   focused: number;
   loads: Array<() => void>;
   closes: Array<() => void>;
+  /** 렌더 호출만. 묻는 호출(SERVICES_ASK_SCRIPT)은 asks로 따로 샌다. */
   scripts: string[];
+  asks: number;
 }
 
 const st = (id: ServiceId, process: ServiceStatus["process"], over: Partial<ServiceStatus> = {}): ServiceStatus => ({
@@ -23,16 +35,21 @@ const st = (id: ServiceId, process: ServiceStatus["process"], over: Partial<Serv
   ...over,
 });
 
-function harness(opts: { autoOpen?: boolean; runRejects?: unknown; createThrows?: boolean } = {}) {
+function harness(
+  opts: { autoOpen?: boolean; runRejects?: unknown; createThrows?: boolean; answers?: unknown[] } = {},
+) {
   const wins: FakeWin[] = [];
   const logs: string[] = [];
-  let view: ServicesView = { rows: [], notices: ["처음"] };
+  const actions: ServicesAction[] = [];
+  /** 묻는 호출이 차례로 돌려줄 값. 다 떨어지면 null이라 고리가 멈춘다(다리 없음과 같은 길). */
+  const answers = [...(opts.answers ?? [])];
+  let view: ServicesView = emptyView(["처음"]);
   let statuses: ServiceStatus[] = [];
   let autoOpen = opts.autoOpen ?? true;
   const host: StatusWindowHost<FakeWin> = {
     create: (focus) => {
       if (opts.createThrows) throw new Error("BrowserWindow를 못 만들었어요");
-      const w: FakeWin = { n: wins.length, focus, destroyed: false, focused: 0, loads: [], closes: [], scripts: [] };
+      const w: FakeWin = { n: wins.length, focus, destroyed: false, focused: 0, loads: [], closes: [], scripts: [], asks: 0 };
       wins.push(w);
       return w;
     },
@@ -43,12 +60,20 @@ function harness(opts: { autoOpen?: boolean; runRejects?: unknown; createThrows?
     onLoad: (w, l) => w.loads.push(l),
     onClosed: (w, l) => w.closes.push(l),
     run: (w, script) => {
+      if (script === SERVICES_ASK_SCRIPT) {
+        w.asks += 1;
+        if (opts.runRejects !== undefined) return Promise.reject(opts.runRejects);
+        return Promise.resolve(answers.length > 0 ? answers.shift() : null);
+      }
       w.scripts.push(script);
       return opts.runRejects === undefined ? Promise.resolve(undefined) : Promise.reject(opts.runRejects);
     },
     view: () => view,
     statuses: () => statuses,
     mayAutoOpen: () => autoOpen,
+    onAction: (a) => {
+      actions.push(a);
+    },
     log: (line) => logs.push(line),
   };
   const sw = createStatusWindow(host);
@@ -56,6 +81,7 @@ function harness(opts: { autoOpen?: boolean; runRejects?: unknown; createThrows?
     sw,
     wins,
     logs,
+    actions,
     setView: (v: ServicesView) => (view = v),
     setStatuses: (s: ServiceStatus[]) => (statuses = s),
     setAutoOpen: (v: boolean) => (autoOpen = v),
@@ -85,7 +111,7 @@ describe("createStatusWindow — 메뉴로 열기", () => {
     h.sw.open();
     expect(h.wins[0].scripts).toEqual([]);
     h.load(h.wins[0]);
-    expect(h.wins[0].scripts).toEqual([renderCall({ rows: [], notices: ["처음"] })]);
+    expect(h.wins[0].scripts).toEqual([renderCall(emptyView(["처음"]))]);
   });
 
   it("draws again after a reload (⌘R), not only after the first load", () => {
@@ -117,13 +143,13 @@ describe("createStatusWindow — 실시간 갱신", () => {
     const h = harness();
     h.sw.open();
     h.load(h.wins[0]);
-    h.setView({ rows: [], notices: ["degraded"] });
+    h.setView(emptyView(["degraded"]));
     h.sw.onStatus([st("api", "running", { health: "degraded" })]);
-    h.setView({ rows: [], notices: ["ok"] });
+    h.setView(emptyView(["ok"]));
     h.sw.onStatus([st("api", "running")]);
     expect(h.wins[0].scripts.slice(-2)).toEqual([
-      renderCall({ rows: [], notices: ["degraded"] }),
-      renderCall({ rows: [], notices: ["ok"] }),
+      renderCall(emptyView(["degraded"])),
+      renderCall(emptyView(["ok"])),
     ]);
   });
 
@@ -131,9 +157,9 @@ describe("createStatusWindow — 실시간 갱신", () => {
     const h = harness();
     h.sw.open();
     h.load(h.wins[0]);
-    h.setView({ rows: [], notices: ["다시 켜야 바뀌어요"] });
+    h.setView(emptyView(["다시 켜야 바뀌어요"]));
     h.sw.refresh();
-    expect(h.wins[0].scripts.at(-1)).toBe(renderCall({ rows: [], notices: ["다시 켜야 바뀌어요"] }));
+    expect(h.wins[0].scripts.at(-1)).toBe(renderCall(emptyView(["다시 켜야 바뀌어요"])));
   });
 
   it("sends nothing to a closed window", () => {
@@ -280,5 +306,65 @@ describe("mayAutoOpen", () => {
     expect(mayAutoOpen({ quitting: false, hasWindow: true, rendererAttached: false })).toBe(false);
     expect(mayAutoOpen({ quitting: false, hasWindow: false, rendererAttached: true })).toBe(false);
     expect(mayAutoOpen({ quitting: true, hasWindow: true, rendererAttached: true })).toBe(false);
+  });
+});
+
+/**
+ * Task 11 — 버튼이 main에 닿는 길 (스펙 §6.4·§6.10 2층). 채널이 아니라 **묻기**다: main이 건 호출이
+ * 사람이 누를 때까지 안 끝나고, 답이 곧 동작이다.
+ */
+describe("상태 창의 버튼 — 묻는 고리", () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it("로드가 끝나면 묻기 시작하고, 답을 배선으로 넘긴다", async () => {
+    const h = harness({
+      answers: [{ kind: "restart", service: "worker" }, { kind: "token", op: "change" }],
+    });
+    h.sw.open();
+    h.load(h.wins[0]);
+    await flush();
+    expect(h.actions).toEqual([
+      { kind: "restart", service: "worker" },
+      { kind: "token", op: "change" },
+    ]);
+  });
+
+  it("모르는 모양은 버리고 계속 묻는다 — 한 번의 이상한 값이 버튼 전체를 죽이지 않는다", async () => {
+    const h = harness({ answers: [{ kind: "restart", service: "감독자" }, { kind: "token", op: "clear" }] });
+    h.sw.open();
+    h.load(h.wins[0]);
+    await flush();
+    expect(h.actions).toEqual([{ kind: "token", op: "clear" }]);
+    expect(h.logs.some((l) => l.includes("알 수 없는 요청"))).toBe(true);
+  });
+
+  it("다리가 없으면 한 번만 적고 멈춘다 — 바쁜 고리를 만들지 않는다", async () => {
+    const h = harness();
+    h.sw.open();
+    h.load(h.wins[0]);
+    await flush();
+    expect(h.wins[0].asks).toBe(1);
+    expect(h.logs.filter((l) => l.includes("스크립트가 돌지 않아"))).toHaveLength(1);
+  });
+
+  it("창이 닫히면 더 묻지 않는다", async () => {
+    const h = harness({ answers: [{ kind: "token", op: "change" }] });
+    h.sw.open();
+    h.load(h.wins[0]);
+    h.close(h.wins[0]);
+    await flush();
+    expect(h.actions).toEqual([]);
+  });
+
+  it("⌘R 뒤에는 새 페이지가 묻고, 옛 페이지의 답은 버린다", async () => {
+    const h = harness({
+      answers: [{ kind: "token", op: "clear" }, { kind: "token", op: "change" }],
+    });
+    h.sw.open();
+    h.load(h.wins[0]);
+    h.load(h.wins[0]);
+    await flush();
+    // 두 세대가 함께 돌면 한 번 누른 것이 두 번 처리된다. 옛 세대(clear)는 물러나고 새 것만 남는다.
+    expect(h.actions).toEqual([{ kind: "token", op: "change" }]);
   });
 });

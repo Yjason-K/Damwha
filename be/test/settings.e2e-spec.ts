@@ -45,6 +45,61 @@ describe('settings', () => {
     expect(res.body.whisper_model).toBe('large-v3-turbo');
   });
 
+  // Phase 4 스펙 §6.9 — worker·embed가 쓰고 API는 읽기만 하는 두 번째 공유 행.
+  it('GET → model_readiness가 없으면 빈 modelReadiness를 얹는다', async () => {
+    const res = await request(srv()).get('/settings/processing');
+    expect(res.body.modelReadiness).toEqual({ updatedAt: null, entries: [] });
+  });
+
+  it('GET → worker가 쓴 행을 camelCase로 펴서 얹는다. API는 그 행을 쓰지 않는다', async () => {
+    await db.pool.query(
+      `INSERT INTO app_setting(key, value) VALUES('model_readiness', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [
+        JSON.stringify({
+          updated_at: '2026-09-18T01:02:03.456789Z',
+          entries: {
+            'BAAI/bge-m3': {
+              state: 'downloading',
+              bytes_done: 1024,
+              bytes_total: 4096,
+              writer: 'embed',
+              attempt: 1,
+              started_at: '2026-09-18T01:00:00.000000Z',
+              updated_at: '2026-09-18T01:02:03.456789Z',
+              error: null,
+              error_kind: null,
+            },
+          },
+        }),
+      ],
+    );
+    const res = await request(srv()).get('/settings/processing');
+    expect(res.body.modelReadiness.entries).toEqual([
+      {
+        key: 'BAAI/bge-m3',
+        state: 'downloading',
+        bytesDone: 1024,
+        bytesTotal: 4096,
+        writer: 'embed',
+        attempt: 1,
+        startedAt: '2026-09-18T01:00:00.000000Z',
+        updatedAt: '2026-09-18T01:02:03.456789Z',
+        error: null,
+        errorKind: null,
+      },
+    ]);
+    // 읽기 전용이다 — 조회가 그 행을 건드리지 않았다.
+    const after = await db.pool.query(`SELECT value FROM app_setting WHERE key='model_readiness'`);
+    expect(after.rows[0].value.entries['BAAI/bge-m3'].bytes_done).toBe(1024);
+  });
+
+  it('PUT 응답에는 modelReadiness가 없다 — 쓰기의 결과는 저장된 설정뿐이다', async () => {
+    const res = await request(srv()).put('/settings/processing').send({ preset: 'light', language: 'ko' });
+    expect(res.status).toBe(200);
+    expect(res.body).not.toHaveProperty('modelReadiness');
+  });
+
   it('PUT 이름 프리셋 → resolved 반환, DB엔 이름만', async () => {
     const res = await request(srv()).put('/settings/processing').send({ preset: 'light', language: 'ko' });
     expect(res.status).toBe(200);

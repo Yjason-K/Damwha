@@ -84,6 +84,14 @@ export interface TokenWindowDeps<W> {
   openExternal(url: string): Promise<void>;
   /** 앱을 끝낸다 (app.quit). */
   quit(): void;
+  /**
+   * 창을 닫으면 앱이 끝나는가. 기본은 true — **첫 실행 게이트**에는 건너뛰기가 없다.
+   *
+   * 상태 창의 "토큰 바꾸기"(Task 11)는 false로 연다. 그쪽은 이미 토큰이 있고 서비스가 돌고 있어
+   * "닫았다"가 "그만두겠다"이지 "앱을 끝내겠다"가 아니다 — 둘을 한 값으로 두면 설정 창을 닫은
+   * 사람의 앱이 꺼진다.
+   */
+  closeQuitsApp?: boolean;
   log(line: string): void;
   /** HF에 묻는다 (verifyHfToken). */
   verify(token: string): Promise<TokenVerdict>;
@@ -145,8 +153,12 @@ export function openTokenWindow<W>(d: TokenWindowDeps<W>): Promise<string> {
       if (settled) return;
       settled = true;
       // 사람이 닫았거나 종료(⌘Q)가 닫았다 — 둘 다 여기로 온다. 앞의 경우 quit()이 종료를 시작하고, 뒤의 경우 이미 도는 종료에 겹쳐 무해하다.
-      d.log("토큰 창이 닫혔어요 — 토큰 없이는 시작하지 않으므로 앱을 종료합니다.");
-      d.quit();
+      if (d.closeQuitsApp === false) {
+        d.log("토큰 창을 닫았어요 — 토큰을 바꾸지 않았습니다.");
+      } else {
+        d.log("토큰 창이 닫혔어요 — 토큰 없이는 시작하지 않으므로 앱을 종료합니다.");
+        d.quit();
+      }
       reject(new TokenWindowClosed());
     });
 

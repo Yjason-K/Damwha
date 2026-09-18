@@ -46,6 +46,8 @@ type CommandBarProps = {
   onQueryChange?: (query: string) => void;
   placeholder?: string;
   facets?: React.ReactNode;
+  /** 결과 위에 붙는 한 줄 — 지금 검색이 왜 이런지를 말하는 자리. */
+  notice?: React.ReactNode;
   groups?: CommandGroup[];
   onSelect?: (item: CommandItem) => void;
 };
@@ -57,6 +59,7 @@ function CommandBar({
   onQueryChange,
   placeholder = "회의 · 발언 · 참석자 검색…",
   facets,
+  notice,
   groups = [],
   onSelect,
 }: CommandBarProps) {
@@ -128,6 +131,12 @@ function CommandBar({
                 필터
               </span>
               {facets}
+            </div>
+          )}
+
+          {notice && (
+            <div className="border-b border-[color:var(--border-subtle)] bg-warning-bg px-3.5 py-2 text-xs text-warning-text">
+              {notice}
             </div>
           )}
 

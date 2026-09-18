@@ -5,6 +5,9 @@ import * as vm from "vm";
 import { describe, expect, it } from "vitest";
 import { CAUSES } from "../../src/diagnostics/causes";
 import { servicesView } from "../../src/windows/status-view";
+import { RETRY_LAYERS } from "../../src/windows/shell-hints";
+import { maskToken } from "../../src/config/token-store";
+import { STALL_MS, type ReadinessEntry } from "../../src/services/model-readiness";
 import type { ServiceStatus } from "../../src/services/types";
 
 /**
@@ -154,11 +157,13 @@ describe("services.html", () => {
     detail: `${XSS}\n${ZOD}`,
   };
 
-  it("has no button, form, input, link, IPC, or HTML sink — the display-only contract (스펙 §6.11)", () => {
+  it("has no form, input, link, IPC, or HTML sink — 버튼은 생겼지만 채널은 여전히 없다 (스펙 §6.11 · §6.4 · §6.10)", () => {
+    // Phase 2의 "버튼 0개"는 이 창에 사람이 할 일이 없던 때의 계약이다. Phase 4는 토큰 설정(§6.4)과
+    // "서비스 다시 시작"(§6.10 2층)을 **여기** 두라고 정한다. 바뀌지 않은 것은 그 아래다: 입력칸도
+    // 폼도 링크도 IPC도 없고, 동작은 main이 거는 next()의 반환값으로만 나간다(token.html과 같다).
     const { html } = loadPage("services.html");
     const code = codeOf(html);
     for (const banned of [
-      /<button\b/i,
       /<form\b/i,
       /<input\b/i,
       /<a\b/i,
@@ -166,6 +171,9 @@ describe("services.html", () => {
       /require\(/,
       /innerHTML|outerHTML|insertAdjacentHTML|document\.write/,
       /\son\w+\s*=/i,
+      // 주소를 페이지가 고르지 않는다 — token.html과 같은 규칙.
+      /\b(href|src|action)\s*=/i,
+      /window\.open|location\s*=|location\.(assign|replace|href)/,
     ]) {
       expect(code).not.toMatch(banned);
     }
@@ -192,7 +200,7 @@ describe("services.html", () => {
     const view = servicesView({
       statuses: [
         { id: "postgres", process: "running", health: "ok", owned: false, restarts: 0 },
-        { ...failed, id: "worker", detail: "uv를 찾지 못했어요." },
+        { ...failed, id: "worker", detail: CAUSES.modelDownloadStalled.text("BAAI/bge-m3") },
       ],
       restartNotice: null,
       logPathOf: (id) => `/l/${id}.log`,
@@ -205,9 +213,9 @@ describe("services.html", () => {
     expect(rows[0].textContent).toContain("앱이 띄우지 않음");
     expect(rows[0].textContent).toContain("로그: /l/postgres.log");
     expect(rows[1].dataset.tone).toBe("fail");
-    expect(rows[1].textContent).toContain("uv를 찾지 못했어요.");
+    expect(rows[1].textContent).toContain("진행이 멈췄어요");
     expect(rows[1].textContent).toContain("해결: ");
-    expect(rows[1].textContent).toContain("config.json");
+    expect(rows[1].textContent).toContain("서비스 다시 시작");
     // 안내가 없으면 notices 목록은 숨는다.
     expect(byId.get("notices")!.hidden).toBe(true);
   });
@@ -276,6 +284,136 @@ describe("services.html", () => {
     const rows = byId.get("rows")!;
     expect(JSON.stringify(rows)).toContain("<img src=x onerror=alert(1)>");
     expect(JSON.stringify(rows)).toMatch(/디버깅 접속/);
+  });
+
+  /**
+   * Task 11 — 이 창이 사람에게 주는 세 가지: 모델 준비, 토큰, 그리고 **층이 갈린** 재시도.
+   * 페이지가 그 셋을 실제로 그리고, 누른 것이 main의 next()로 나가는지를 본다.
+   */
+  describe("Task 11 — 모델 준비·토큰·재시도 2층 버튼", () => {
+    type Bridge = { next(): Promise<unknown> };
+    const bridgeOf = (sandbox: Record<string, unknown>) => sandbox.__damwha_services as Bridge;
+    const NOW = 1_800_000_000_000;
+    const entry = (over: Partial<ReadinessEntry> = {}): ReadinessEntry => ({
+      key: "BAAI/bge-m3",
+      state: "downloading",
+      bytesDone: 1024,
+      bytesTotal: 4096,
+      startedAt: NOW - 10_000,
+      updatedAt: NOW - 1_000,
+      writer: "embed",
+      attempt: 1,
+      error: null,
+      errorKind: null,
+      ...over,
+    });
+    const view = (over: Partial<Parameters<typeof servicesView>[0]> = {}) =>
+      servicesView({
+        statuses: [{ id: "embed", process: "running", health: "ok", owned: true, restarts: 0 }],
+        restartNotice: null,
+        logPathOf: (id) => `/l/${id}.log`,
+        now: NOW,
+        ...over,
+      });
+
+    it("받는 중인 모델과 진행을 보인다 (P4-C6)", () => {
+      const { sandbox, byId } = loadPage("services.html");
+      (sandbox.__damwha_render as (v: unknown) => void)(view({ modelReadiness: [entry()] }));
+      expect(byId.get("models")!.hidden).toBe(false);
+      expect(byId.get("models-title")!.hidden).toBe(false);
+      const text = byId.get("models")!.textContent;
+      expect(text).toContain("BAAI/bge-m3");
+      expect(text).toContain("받는 중");
+      expect(text).toContain("25%");
+    });
+
+    it("받는 모델이 없으면 그 절을 접는다", () => {
+      const { sandbox, byId } = loadPage("services.html");
+      (sandbox.__damwha_render as (v: unknown) => void)(view());
+      expect(byId.get("models")!.hidden).toBe(true);
+      expect(byId.get("models-title")!.hidden).toBe(true);
+    });
+
+    it("1층에는 버튼이 없고, 2층에는 있다 — 뭉치지 않는다 (스펙 §6.10)", () => {
+      const buttonsIn = (v: unknown) => {
+        const { sandbox, byId } = loadPage("services.html");
+        (sandbox.__damwha_render as (x: unknown) => void)(v);
+        return byId.get("models")!.all().filter((n) => n.tag === "button");
+      };
+      const transient = view({
+        modelReadiness: [
+          entry({ state: "failed", error: "model_download_failed: ReadTimeout", errorKind: "TRANSIENT" }),
+        ],
+      });
+      expect(buttonsIn(transient)).toHaveLength(0);
+      expect(transient.models[0].hint).toBe(RETRY_LAYERS.download);
+
+      const stalled = view({ modelReadiness: [entry({ updatedAt: NOW - STALL_MS - 1 })] });
+      const buttons = buttonsIn(stalled);
+      expect(buttons).toHaveLength(1);
+      expect(buttons[0].textContent).toBe("서비스 다시 시작");
+    });
+
+    it("서비스 줄의 다시 시작을 누르면 그 서비스가 next()로 나간다", async () => {
+      const { sandbox, byId } = loadPage("services.html");
+      (sandbox.__damwha_render as (v: unknown) => void)(view());
+      const asked = bridgeOf(sandbox).next();
+      const button = byId.get("rows")!.all().find((n) => n.tag === "button")!;
+      button.fire("click");
+      await expect(asked).resolves.toEqual({ kind: "restart", service: "embed" });
+      // 두 번 눌러도 두 번 나가지 않는다 — worker에게 두 번째 종료 신호는 강제 종료다.
+      expect(button.disabled).toBe(true);
+    });
+
+    it("앱이 소유하지 않은 서비스의 버튼은 눌리지 않고 까닭이 화면에 있다", async () => {
+      const { sandbox, byId } = loadPage("services.html");
+      const adopted = view({
+        statuses: [{ id: "embed", process: "running", health: "ok", owned: false, restarts: 0 }],
+      });
+      (sandbox.__damwha_render as (v: unknown) => void)(adopted);
+      const button = byId.get("rows")!.all().find((n) => n.tag === "button")!;
+      expect(button.disabled).toBe(true);
+      expect(button.fire("click")).toBe(false);
+      expect(byId.get("rows")!.textContent).toContain("앱이 내릴 수 없어요");
+      let got: unknown = "pending";
+      void bridgeOf(sandbox).next().then((v) => (got = v));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(got).toBe("pending");
+    });
+
+    it("토큰을 가린 모양으로 보이고, 두 버튼이 main으로 나간다 (스펙 §6.4)", async () => {
+      const { sandbox, byId } = loadPage("services.html");
+      const token = "hf_AbCdEfGhIjKlMnOpQrStUvWxYz01234567";
+      (sandbox.__damwha_render as (v: unknown) => void)(view({ maskedToken: maskToken(token) }));
+      expect(byId.get("token-value")!.textContent).toBe("hf_****…****4567");
+      expect(byId.get("token")!.textContent).not.toContain(token);
+      byId.get("token-change")!.fire("click");
+      byId.get("token-clear")!.fire("click");
+      await expect(bridgeOf(sandbox).next()).resolves.toEqual({ kind: "token", op: "change" });
+      await expect(bridgeOf(sandbox).next()).resolves.toEqual({ kind: "token", op: "clear" });
+    });
+
+    it("토큰이 없으면 삭제를 누를 수 없다", () => {
+      const { sandbox, byId } = loadPage("services.html");
+      (sandbox.__damwha_render as (v: unknown) => void)(view());
+      expect(byId.get("token-value")!.textContent).toBe("없음");
+      expect(byId.get("token-clear")!.disabled).toBe(true);
+      expect(byId.get("token-change")!.disabled).toBe(false);
+    });
+
+    it("worker의 실패 문구도 글자로만 넣는다 — 그것은 HF가 보낸 남의 문자열이다", () => {
+      const { sandbox, byId } = loadPage("services.html");
+      (sandbox.__damwha_render as (v: unknown) => void)(
+        view({
+          modelReadiness: [
+            entry({ state: "failed", error: `model_download_failed: ${XSS}`, errorKind: "PERMANENT" }),
+          ],
+        }),
+      );
+      const cause = byId.get("models")!.all().find((n) => n.className === "cause")!;
+      expect(cause.textContent).toContain(XSS);
+      expect(sandbox.__pwned).toBeUndefined();
+    });
   });
 
   it("keeps line breaks in the cause and bounds its height", () => {

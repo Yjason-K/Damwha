@@ -5,7 +5,7 @@ import { EventEmitter } from "events";
 import type { ChildProcess } from "child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CAUSES, CAUSE_IDS, causeIn, type CauseId } from "../../src/diagnostics/causes";
-import { causeOf, DEGRADED_HINT, HINTS, hintForDetail, recoveryHint } from "../../src/windows/shell-hints";
+import { causeOf, DEGRADED_HINT, HINTS, RETRY_LAYERS, hintForDetail, recoveryHint } from "../../src/windows/shell-hints";
 import { judgeAfterProbe } from "../../src/services/api";
 import { probeEmbedContract } from "../../src/services/embed-probe";
 import { embeddedPostgresSpec } from "../../src/services/postgres/service";
@@ -26,19 +26,14 @@ const s = (over: Partial<ServiceStatus>): ServiceStatus => ({
 });
 
 describe("recoveryHint", () => {
-  it("tells the user where to put the uv path", () => {
-    expect(recoveryHint(s({ id: "worker", detail: "uv를 찾지 못했어요." })))
-      .toMatch(/config\.json/);
-  });
-
   it("tells the user to run the migration command", () => {
     expect(recoveryHint(s({ detail: "적용되지 않은 마이그레이션이 3개 있어요" })))
       .toMatch(/pnpm be:migrate/);
   });
 
-  it("tells the user to copy the worker env example", () => {
-    expect(recoveryHint(s({ id: "worker", detail: "be/worker/.env가 없어요." })))
-      .toMatch(/\.env\.example/);
+  it("tells a worker that died mid-download to use the restart button — not a bare 다시 시도 (스펙 §6.10 2층)", () => {
+    expect(recoveryHint(s({ id: "worker", detail: CAUSES.modelDownloadFailed.text("BAAI/bge-m3", "timeout") })))
+      .toBe(RETRY_LAYERS.service);
   });
 
   it("explains an external worker in terms of STORAGE_ROOT", () => {
@@ -88,6 +83,9 @@ const SAMPLE_ARGS: { [K in TemplateId]: ArgsOf<K> } = {
   healthProbeThrew: ["boom"],
   externalCheckFailed: ["ps를 못 돌렸어요"],
   restartStopFailed: ["worker"],
+  modelDownloadFailed: ["BAAI/bge-m3", "ReadTimeout: huggingface.co"],
+  modelDownloadStalled: ["BAAI/bge-m3"],
+  diskFull: ["1.2 GB", "4.0 GB"],
   pgBundleMissing: [["initdb", "psql"]],
   pgSocketPathTooLong: ["/x/run/.s.PGSQL.5432", 120],
   pgPairingRefused: ["파일 저장소가 다른 데이터베이스의 것이에요", "/u/data/postgres", "/u/data/storage"],
@@ -185,13 +183,14 @@ describe("recoveryHint — 스펙 §6.12의 표가 말하는 것", () => {
   // 원인별 안내의 **내용**. 위의 매핑 검사는 "표가 정한 대로 나오는가"만 보므로 표 자체가 틀린
   // 말을 해도 초록이다. 스펙 표의 행마다 핵심 낱말을 고정한다.
   const rows: Array<[CauseId, ServiceId, RegExp]> = [
-    ["uvMissing", "worker", /config\.json의 UV_BIN/],
     // Phase 4: worker·embed의 spawn ENOENT는 번들 python이 없다는 뜻이다. UV_BIN은 더 읽지 않는다.
     ["spawnNotFound", "worker", /다시 설치.*build-python\.sh/],
     ["spawnNotFound", "embed", /다시 설치.*build-python\.sh/],
     // Phase 4 스펙 §6.3: dev 전용 원인이 됐고 폴더 선택창이 사라졌다 — "고르라"고 말하면 없는 창을 가리킨다.
     ["repoRootMissing", "api", /desktop\/에서 앱을 띄웠는지.*config\.json의 REPO_ROOT/],
-    ["workerEnvMissing", "worker", /be\/worker\/\.env\.example을 복사/],
+    // Phase 4 스펙 §8 — 다운로드가 멈춘 것은 서비스 다시 시작(2층)이다.
+    ["modelDownloadStalled", "embed", /서비스 다시 시작/],
+    ["diskFull", "worker", /공간을 만든 뒤/],
     ["pendingMigrations", "api", /pnpm be:migrate/],
     ["externalWorker", "worker", /worker를 끄.*STORAGE_ROOT/],
     ["embedMismatch", "embed", /embed/],
@@ -216,7 +215,7 @@ describe("recoveryHint — 스펙 §6.12의 표가 말하는 것", () => {
   });
 
   it("no longer points anyone at UV_BIN for a failure the app can still produce (Phase 4)", () => {
-    // uvMissing은 아무 어댑터도 내지 않는다(Task 11이 지운다). spawnNotFound는 여전히 난다 — 그 안내가
+    // uvMissing은 Task 11이 지웠다. spawnNotFound는 여전히 난다 — 그 안내가
     // 읽히지도 않는 설정을 고치라고 하면 사람은 고칠 수 없는 것을 고친다.
     for (const sid of SERVICE_IDS) {
       expect(mappedHint("spawnNotFound", sid) ?? "").not.toMatch(/UV_BIN/);

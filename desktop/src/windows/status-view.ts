@@ -1,6 +1,15 @@
 import { CAUSES } from "../diagnostics/causes";
+import {
+  HF_GATE_NOT_ACCEPTED_CODE,
+  HF_TOKEN_INVALID_CODE,
+  isStalled,
+  readinessErrorCode,
+  readinessErrorMessage,
+  STALL_MS,
+  type ReadinessEntry,
+} from "../services/model-readiness";
 import { restartRefused } from "../services/supervisor";
-import { causeOf, hintForDetail, recoveryHint } from "./shell-hints";
+import { causeOf, hintForDetail, HINTS, recoveryHint, RETRY_LAYERS } from "./shell-hints";
 import type { ShellStatus } from "./shell-window";
 import type { ProcessState, ServiceId, ServiceStatus } from "../services/types";
 
@@ -135,13 +144,66 @@ export interface ServiceRow {
    * 이 값으로 비활성을 정한다.
    */
   restartRefused?: true;
+  /** 이 줄의 "서비스 다시 시작" 버튼 (스펙 §6.10 2층). 판정은 `restartButton` 하나가 한다. */
+  restart: RestartButton;
   log: string;
   /** 실행 중인 내장 DB에 붙는 디버깅 접속 명령 (스펙 §6.3). 렌더러는 글자로만 넣는다. */
   command?: string;
 }
 
+/**
+ * 화면의 "서비스 다시 시작" 버튼 하나 (스펙 §6.10 **2층**). 서비스 줄과 모델 줄이 같은 모양을 쓴다 —
+ * 모델 다운로드가 멈췄을 때 사람이 눌러야 하는 것도 결국 그 모델을 받던 서비스다.
+ *
+ * `disabled`의 근거는 감독자의 `restartRefused` 하나이고, `note`가 **왜** 회색인지를 말한다. 이유를
+ * 말하지 않는 회색 버튼은 "앱이 멈췄다"로 읽힌다 (판정 R-10c가 `cleaningUp`을 화면에 올린 것과 같은
+ * 까닭).
+ */
+export interface RestartButton {
+  service: ServiceId;
+  label: string;
+  disabled: boolean;
+  note?: string;
+}
+
+/**
+ * 모델 준비 한 줄 (스펙 §6.9). `app_setting.model_readiness`의 항목 하나가 여기로 온다.
+ *
+ * **층을 가르는 값은 `errorKind`다** — `TRANSIENT`면 1층(기다린다, 버튼 없음), 그 밖이면 2층이거나
+ * 3층이다. `error` 문자열만 보고 문구를 고르지 않는다(판정 R-11a).
+ */
+export interface ModelRow {
+  /** HF repo id. */
+  key: string;
+  state: string;
+  tone: Tone;
+  /** 진행·시도 횟수·어느 서비스가 받는가. */
+  notes: string[];
+  cause?: string;
+  hint?: string;
+  /** 2층일 때만 있다. 1층(기다린다)과 3층(회의 재처리)에는 누를 것이 없다. */
+  restart?: RestartButton;
+}
+
+/**
+ * 상태 창의 토큰 항목 (스펙 §6.4 — "마스킹 표시, 수정·삭제 가능").
+ *
+ * **원문은 어디에도 싣지 않는다.** 이 객체는 `renderCall`이 JSON으로 렌더러에 넘기고 로그에도 남을 수
+ * 있으므로 `maskToken`을 지난 값만 들어온다.
+ */
+export interface TokenView {
+  /** 가린 모양(`hf_****…****abcd`). 저장된 토큰이 없으면 null. */
+  masked: string | null;
+  note: string;
+  /** 지울 것이 있나. 없으면 삭제 버튼을 비활성으로 그린다. */
+  canClear: boolean;
+}
+
 export interface ServicesView {
   rows: ServiceRow[];
+  /** 모델 준비 (스펙 §6.9). 받은 적도 받는 중도 아니면 빈 목록이고, 화면은 그 절을 접는다. */
+  models: ModelRow[];
+  token: TokenView;
   /** 서비스 한 줄에 속하지 않는 안내 — 재시작이 필요한 설정, 아직 띄우지 않음. */
   notices: string[];
 }
@@ -164,6 +226,58 @@ export interface ServicesInput {
    * 외부 디버그 모드에서는 null이다.
    */
   postgresLogDir?: string | null;
+  /**
+   * `app_setting.model_readiness`를 푼 것 (스펙 §6.9). 감독자의 리더가 읽어 온 같은 값이고, 해석은
+   * `services/model-readiness.ts` 하나가 한다 — 화면이 두 번째 해석을 두면 "화면에는 받는 중인데
+   * 감독자는 실패로 적었다"가 생긴다. 없으면(외부 DB 모드·읽기 실패) 모델 절을 아예 그리지 않는다.
+   */
+  modelReadiness?: readonly ReadinessEntry[] | null;
+  /** 무진행 판정의 기준 시각. 테스트가 고정하려고 열어 둔다. */
+  now?: number;
+  /** 지금 "서비스 다시 시작"이 도는 중인 서비스. 버튼이 죽은 것처럼 보이지 않게 진행을 보인다. */
+  restarting?: readonly ServiceId[];
+  /** 저장된 HF 토큰의 **가린** 모양. 없으면 null (스펙 §6.4). 원문은 여기 오지 않는다. */
+  maskedToken?: string | null;
+  /**
+   * 방금 이 창에서 누른 것의 결과 — "토큰을 바꿨어요. 작업 처리기를 다시 시작했어요." 같은 한 줄.
+   * 버튼이 무슨 일을 했는지(또는 못 했는지) 말하지 않으면 사람은 눌렀는데 아무 일도 안 났다고 읽는다.
+   */
+  actionNotice?: string | null;
+}
+
+/** 아직 토큰을 넣지 않았거나 파일을 못 읽었다. 기동 게이트가 다음 실행에 다시 묻는다. */
+export const NO_TOKEN_NOTE =
+  "저장된 토큰이 없어요. 다음 실행에 토큰 화면이 다시 떠요.";
+/** 토큰이 있을 때. 바꾸면 무슨 일이 일어나는지를 누르기 **전에** 말한다 (스펙 §6.4 → §6.10 2층). */
+export const TOKEN_NOTE =
+  "토큰을 바꾸면 작업 처리기와 검색 임베딩을 다시 시작해 새 토큰으로 돌려요.";
+
+export const RESTART_LABEL = "서비스 다시 시작";
+export const RESTART_BUSY_LABEL = "다시 시작하는 중…";
+/** 앱이 만들지 않은 프로세스는 앱이 내릴 수 없다 (스펙 §5·§6.10 2층). */
+export const RESTART_NOT_OURS_NOTE = "앱이 띄운 서비스가 아니라 앱이 내릴 수 없어요.";
+/** 두 번째 종료 신호는 정리가 아니라 강제 종료다 (causes.ts의 restartStopFailed). */
+export const RESTART_CLEANING_NOTE = "내려가는 중이라 지금은 다시 시작할 수 없어요. 끝나면 앱이 다시 띄웁니다.";
+
+/**
+ * 한 서비스의 버튼. **판정처는 여기 하나다** — 감독자의 `restartRefused`가 비활성을 정하고, 진행 중인
+ * 재시작이 글자를 바꾼다. 화면이 자기 조건을 따로 적으면 버튼이 켜져 있는데 눌러도 아무 일이 없는
+ * 상태가 생긴다 (스펙 §6.10이 "다시 시도 하나로 뭉치지 않는다"로 막으려는 바로 그것).
+ */
+export function restartButton(
+  s: ServiceStatus,
+  restarting: readonly ServiceId[] = [],
+): RestartButton {
+  if (restarting.includes(s.id)) {
+    return { service: s.id, label: RESTART_BUSY_LABEL, disabled: true };
+  }
+  if (!restartRefused(s)) return { service: s.id, label: RESTART_LABEL, disabled: false };
+  return {
+    service: s.id,
+    label: RESTART_LABEL,
+    disabled: true,
+    note: s.cleaningUp === true ? RESTART_CLEANING_NOTE : RESTART_NOT_OURS_NOTE,
+  };
 }
 
 function toneOf(s: ServiceStatus, cause: string | undefined): Tone {
@@ -179,10 +293,159 @@ function toneOf(s: ServiceStatus, cause: string | undefined): Tone {
   return "ok";
 }
 
+/**
+ * `model_readiness.entries[*].writer`가 가리키는 서비스 (스펙 §6.9, 판정 R-9a). embed만 고정
+ * 문자열이고 worker 쪽(worker·`--once` 자식·`llm_entry`)은 전부 `WORKER_ID`다 — 그래서 "embed가
+ * 아니면 worker"가 맞다.
+ */
+const EMBED_WRITER = "embed";
+function serviceOfWriter(writer: string): ServiceId {
+  return writer === EMBED_WRITER ? "embed" : "worker";
+}
+
+const UNITS = ["B", "KB", "MB", "GB", "TB"];
+/** 사람이 읽는 크기. 소수 한 자리면 충분하다 — 이 줄은 진행을 느끼라고 있는 것이지 감사 기록이 아니다. */
+export function humanBytes(n: number): string {
+  let value = n;
+  let unit = 0;
+  while (value >= 1024 && unit < UNITS.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${unit === 0 ? Math.round(value) : value.toFixed(1)}${UNITS[unit]}`;
+}
+
+/**
+ * 받는 중 한 줄의 진행. **`bytesTotal`이 0이면 "받는 중"만 말한다** (스펙 §6.9) — 모르는 총량을
+ * 0으로 두고 퍼센트를 계산하면 화면이 "0%"에 영영 붙어 있는다.
+ */
+export function downloadProgress(e: ReadinessEntry): string {
+  if (e.bytesTotal <= 0) return "받는 중";
+  const pct = Math.min(100, Math.floor((e.bytesDone / e.bytesTotal) * 100));
+  return `${pct}% · ${humanBytes(e.bytesDone)} / ${humanBytes(e.bytesTotal)}`;
+}
+
+/**
+ * 모델 준비 줄들 (스펙 §6.9·§6.10). **세 층이 여기서 갈린다.**
+ *
+ * | 항목 | 화면 | 버튼 |
+ * | --- | --- | --- |
+ * | `ready` | "준비됨" | 없음 |
+ * | `downloading`, 진행 중 | "받는 중" + 진행 | 없음 |
+ * | `downloading`, 무진행 `STALL_MS` 초과 | "중단됨" + `modelDownloadStalled` | **2층** |
+ * | `failed`, `TRANSIENT` | "실패" + 사유 | 없음 — **1층**(다음 처리가 이어받는다) |
+ * | `failed`, 401(`hf_token_invalid`) | 토큰 재입력 안내 | 없음 — 토큰 절의 "토큰 바꾸기"가 2층이다 |
+ * | `failed`, 403(`hf_gate_not_accepted`) | 수락 페이지 + **3층**(회의 재처리) | 없음 |
+ * | `failed`, 그 밖·코드 없음 | 일반 PERMANENT 문구 | **2층** |
+ *
+ * 순서는 `errorKind` → code다 (판정 R-11a). 그 반대로 하면 TRANSIENT로 분류된 네트워크 실패의
+ * 메시지에 "403"이 섞였을 때 수락 페이지를 띄운다.
+ */
+export function modelRows(
+  entries: readonly ReadinessEntry[],
+  statuses: readonly ServiceStatus[],
+  now: number,
+  restarting: readonly ServiceId[] = [],
+): ModelRow[] {
+  const buttonFor = (writer: string): RestartButton | undefined => {
+    const id = serviceOfWriter(writer);
+    const s = statuses.find((x) => x.id === id);
+    // 감독자가 그 서비스를 모르면 누를 것이 없다 — 없는 런타임에 restartService를 걸 수 없다.
+    return s === undefined ? undefined : restartButton(s, restarting);
+  };
+
+  return entries.map((e): ModelRow => {
+    const notes = [
+      // 조사를 붙이지 않는다 — "검색 임베딩이"와 "작업 처리기가"가 갈려 라벨마다 규칙이 달라진다.
+      `받는 서비스: ${SERVICE_LABELS[serviceOfWriter(e.writer)]}`,
+      ...(e.attempt > 1 ? [`${e.attempt}번째 시도`] : []),
+    ];
+    if (e.state === "ready") {
+      return { key: e.key, state: "준비됨", tone: "ok", notes: [] };
+    }
+    if (e.state === "downloading") {
+      if (!isStalled(e, now, STALL_MS)) {
+        return { key: e.key, state: "받는 중", tone: "idle", notes: [downloadProgress(e), ...notes] };
+      }
+      return {
+        key: e.key,
+        state: "중단됨",
+        tone: "warn",
+        notes: [downloadProgress(e), ...notes],
+        cause: CAUSES.modelDownloadStalled.text(e.key),
+        hint: RETRY_LAYERS.service,
+        ...withButton(buttonFor(e.writer)),
+      };
+    }
+
+    // failed. 층은 errorKind가 **먼저** 정한다.
+    const message = readinessErrorMessage(e.error);
+    if (e.errorKind === "TRANSIENT") {
+      return {
+        key: e.key,
+        state: "실패",
+        tone: "warn",
+        notes,
+        cause: CAUSES.modelDownloadFailed.text(e.key, message),
+        // 1층. 버튼을 주지 않는다 — 서비스는 살아 있고 눌러 봐야 같은 자리다.
+        hint: RETRY_LAYERS.download,
+      };
+    }
+    const code = readinessErrorCode(e.error);
+    if (code === HF_TOKEN_INVALID_CODE) {
+      return {
+        key: e.key,
+        state: "실패",
+        tone: "fail",
+        notes,
+        cause: `${CAUSES.hfTokenInvalid.text} (${e.key})`,
+        hint: `${HINTS.hfTokenInvalid as string} 아래 “허깅페이스 토큰”에서 바꾸면 두 서비스가 다시 시작돼요.`,
+      };
+    }
+    if (code === HF_GATE_NOT_ACCEPTED_CODE) {
+      return {
+        key: e.key,
+        state: "실패",
+        tone: "fail",
+        notes,
+        cause: `${CAUSES.hfGateNotAccepted.text} (${e.key})`,
+        // 3층. Task 6이 이미 수락 페이지와 "그 회의를 다시 처리해 주세요"를 한 문장에 넣었다 —
+        // 여기서 다시 적지 않는다(같은 원인을 두 곳이 쓰면 문구가 갈린다).
+        hint: HINTS.hfGateNotAccepted as string,
+      };
+    }
+    return {
+      key: e.key,
+      state: "실패",
+      tone: "fail",
+      notes,
+      cause: CAUSES.modelDownloadFailed.text(e.key, message),
+      hint: RETRY_LAYERS.service,
+      ...withButton(buttonFor(e.writer)),
+    };
+  });
+}
+
+function withButton(restart: RestartButton | undefined): { restart?: RestartButton } {
+  return restart === undefined ? {} : { restart };
+}
+
+/** 토큰 절 (스펙 §6.4). 원문은 이 함수에 들어오지 않는다 — 부르는 쪽이 이미 `maskToken`을 지났다. */
+export function tokenView(masked: string | null | undefined): TokenView {
+  const value = masked ?? null;
+  return {
+    masked: value,
+    note: value === null ? NO_TOKEN_NOTE : TOKEN_NOTE,
+    canClear: value !== null,
+  };
+}
+
 /** 상태 창 한 장의 재료. services.html의 `window.__damwha_render`가 받는 모양이다. */
 export function servicesView(input: ServicesInput): ServicesView {
   const notices = [
     ...(input.statuses === null ? [NO_SERVICES_YET] : []),
+    // 방금 누른 것의 결과를 맨 위에 둔다 — 그것이 지금 사람이 찾고 있는 한 줄이다.
+    ...(input.actionNotice === undefined || input.actionNotice === null ? [] : [input.actionNotice]),
     ...(input.restartNotice === null ? [] : [input.restartNotice]),
     ...(input.configWarning === undefined || input.configWarning === null ? [] : [input.configWarning]),
   ];
@@ -205,6 +468,7 @@ export function servicesView(input: ServicesInput): ServicesView {
       }`,
       tone: toneOf(s, cause),
       notes,
+      restart: restartButton(s, input.restarting ?? []),
       log: input.logPathOf(s.id),
     };
     // "서비스 다시 시작" 버튼의 활성 여부 (스펙 §6.10 2층, Task 11이 쓴다). 술어는 감독자의
@@ -229,8 +493,56 @@ export function servicesView(input: ServicesInput): ServicesView {
     }
     return row;
   });
-  return { rows, notices };
+  const statuses = input.statuses ?? [];
+  return {
+    rows,
+    models: modelRows(
+      input.modelReadiness ?? [],
+      statuses,
+      input.now ?? Date.now(),
+      input.restarting ?? [],
+    ),
+    token: tokenView(input.maskedToken),
+    notices,
+  };
 }
+
+/** 상태 창이 main에게 보내는 것 — **이 둘뿐이다** (parseServicesAction이 그것을 강제한다). */
+export type ServicesAction =
+  | { kind: "restart"; service: ServiceId }
+  | { kind: "token"; op: "change" | "clear" };
+
+const TOKEN_OPS: readonly string[] = ["change", "clear"];
+
+/**
+ * 페이지가 보낸 값. **렌더러 데이터이므로 모양을 확인하고, 모르는 것은 null이다** —
+ * `windows/token-window.ts`의 `parseAction`과 같은 규칙이고 같은 이유다: 상태 창에서 오는 값이
+ * 서비스 id가 되어 감독자에게 그대로 들어가면 안 된다.
+ */
+export function parseServicesAction(raw: unknown): ServicesAction | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as { kind?: unknown; service?: unknown; op?: unknown };
+  if (r.kind === "restart") {
+    return typeof r.service === "string" &&
+      Object.prototype.hasOwnProperty.call(SERVICE_LABELS, r.service)
+      ? { kind: "restart", service: r.service as ServiceId }
+      : null;
+  }
+  if (r.kind === "token") {
+    return typeof r.op === "string" && TOKEN_OPS.includes(r.op)
+      ? { kind: "token", op: r.op as "change" | "clear" }
+      : null;
+  }
+  return null;
+}
+
+/**
+ * 페이지에 다음 동작을 묻는 식. 다리가 없으면(스크립트가 안 돌았다) null이다 — token-window.ts의
+ * `ASK_SCRIPT`와 같은 모양이고, 같은 이유로 **렌더러 → main 채널이 아니다**: 반환값은 main이 건
+ * 호출의 결과다 (스펙 §6.11 — preload도 IPC도 없다).
+ */
+export const SERVICES_ASK_SCRIPT =
+  "window.__damwha_services ? window.__damwha_services.next() : null";
 
 /**
  * main → 상태 창의 한 방향 호출문 (스펙 §6.11). 재로드가 아니라 함수 호출이라 갱신마다 창이

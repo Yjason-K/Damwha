@@ -16,12 +16,20 @@ import type { ProcessHandle } from "./process/handle";
 import { launchVite } from "./dev/vite-process";
 import { lastMeaningfulLine } from "./diagnostics/stderr";
 import { createServicesWindow, createTokenWindow, showStatus, type ShellStatus } from "./windows/shell-window";
-import { makeTokenStore, tokenFilePath, verifyHfToken } from "./config/token-store";
+import { makeTokenStore, maskToken, tokenFilePath, verifyHfToken } from "./config/token-store";
 import { runTokenGate } from "./app/token-gate";
-import { openTokenWindow } from "./windows/token-window";
+import { openTokenWindow, TokenWindowClosed } from "./windows/token-window";
 import { ServiceFailure } from "./services/failure";
 import { CAUSES } from "./diagnostics/causes";
-import { failureDetail, servicesView, shellStatusFrom } from "./windows/status-view";
+import {
+  failureDetail,
+  NO_SERVICES_YET,
+  SERVICE_LABELS,
+  servicesView,
+  shellStatusFrom,
+  type ServicesAction,
+} from "./windows/status-view";
+import { applyTokenChange, ownedByStatus, TOKEN_SERVICES } from "./windows/apply-token-change";
 import { createStatusWindow, mayAutoOpen } from "./windows/status-window";
 import { applyNavigationBoundary, applyPermissionBoundary } from "./windows/permissions";
 import { mayRenderShell } from "./windows/shell-latch";
@@ -57,7 +65,7 @@ import { mayAutoRetry } from "./app/retry-policy";
 import { devMigrationRunner, packagedMigrationRunner } from "./services/postgres/migration-runner";
 import { runMigrationGate } from "./services/postgres/migration-gate";
 import { DB_NAME, DB_SUPERUSER, pgBinaries, pgLayout, pgToolEnv, type PgBinaries, type PgLayout } from "./services/postgres/layout";
-import { MODEL_READINESS_KEY } from "./services/model-readiness";
+import { MODEL_READINESS_KEY, parseModelReadiness, type ReadinessEntry } from "./services/model-readiness";
 import { psInfo, spawnPostmaster, stopOrphanPostmaster } from "./services/postgres/handle";
 import { embeddedPostgresSpec, externalPostgresSpec, PG_FAST_GRACE_MS, PG_IMMEDIATE_GRACE_MS } from "./services/postgres/service";
 import { runTool } from "./process/tool-runner";
@@ -186,6 +194,18 @@ let knownWorkerDescendants: ReadonlySet<number> | undefined;
  * **로그·화면에 싣지 않는다.** 자식에게는 launchEnv가 ctx.env로만 넘긴다.
  */
 let hfToken: string | null = null;
+/**
+ * 상태 창이 그리는 `app_setting.model_readiness`의 마지막 스냅숏 (스펙 §6.9). 감독자의 준비 유예가 쓰는
+ * 것과 **같은 리더·같은 해석**이다 — 화면이 두 번째 경로로 읽으면 "화면에는 받는 중인데 감독자는 실패로
+ * 적었다"가 생긴다. 창이 떠 있는 동안에만 새로 읽는다(refreshReadiness).
+ */
+let modelReadiness: readonly ReadinessEntry[] = [];
+/** 그 행을 읽는 방법. createSupervisorFor가 채운다. 외부 DB 모드에서는 null이다(그 모드는 이 행이 없다). */
+let readModelReadiness: (() => Promise<unknown>) | null = null;
+/** 지금 "서비스 다시 시작"이 도는 중인 서비스. 버튼이 죽은 것처럼 보이지 않게 화면이 진행을 보인다. */
+const restartingServices = new Set<ServiceId>();
+/** 상태 창에서 방금 누른 것의 결과 한 줄. 다음 동작이 덮는다. */
+let actionNotice: string | null = null;
 
 /** 앱이 정한 API origin. 감독자의 런타임에서 읽는다 — 전역 변수를 따로 두면 갈린다. */
 function currentApiOrigin(): string | null {
@@ -592,8 +612,36 @@ const statusWindow = createStatusWindow<BrowserWindow>({
       hasWindow: win !== null && !win.isDestroyed(),
       rendererAttached: win !== null && !win.isDestroyed() && !mayRenderShell(attachedWindow, win),
     }),
+  onAction: (action) => handleServicesAction(action),
   log: appendSupervisorLog,
 });
+
+/** 모델 준비 행을 다시 읽는 간격. 감독자의 폴링과 같은 근거다 (writer가 초당 1회 이하로 누른다). */
+const READINESS_REFRESH_MS = 2_000;
+
+/**
+ * 상태 창이 떠 있는 동안에만 `model_readiness`를 다시 읽는다 (스펙 §6.9 — "상태 창과 FE가 같은 값을
+ * 본다"). 리더가 psql 프로세스 하나라 닫힌 창을 위해 2초마다 띄우지 않는다.
+ *
+ * 값이 그대로면 다시 그리지 않는다 — 갱신 시각만 바뀌는 렌더는 사람에게 아무것도 알리지 않는다.
+ */
+async function refreshReadiness(): Promise<void> {
+  const reader = readModelReadiness;
+  if (reader === null || !statusWindow.isOpen()) return;
+  let raw: unknown;
+  try {
+    raw = await reader();
+  } catch {
+    return; // 못 읽는 것은 화면이 멈출 이유가 아니다 — 다음 주기에 다시 읽는다.
+  }
+  const next = parseModelReadiness(raw);
+  if (JSON.stringify(next) === JSON.stringify(modelReadiness)) return;
+  modelReadiness = next;
+  statusWindow.refresh();
+}
+
+// unref: 이 타이머 하나 때문에 이벤트 루프가 살아 있지 않게 한다 (종료가 이것을 기다리지 않는다).
+setInterval(() => void refreshReadiness(), READINESS_REFRESH_MS).unref?.();
 
 /**
  * dev에서 렌더러가 볼 주소. Vite를 이 시점에 띄우고 첫 서빙까지 기다린다.
@@ -790,6 +838,11 @@ function servicesViewNow() {
     postgresLogDir: mode?.kind === "embedded" ? pgLayout(app.getPath("userData")).logDir : null,
     logPathOf,
     migrationCheckSkipped: migrationWatch.skippedFor(supervisor?.runtimeOf("api")?.result?.handle),
+    // 스펙 §6.9·§6.4 — 모델 준비와 토큰. 토큰은 **가린 모양만** 간다.
+    modelReadiness,
+    restarting: [...restartingServices],
+    maskedToken: hfToken === null ? null : maskToken(hfToken),
+    actionNotice,
   });
 }
 
@@ -1056,6 +1109,163 @@ async function ensureHfToken(): Promise<string | null> {
 }
 
 /**
+ * 상태 창에서 사람이 누른 것 (스펙 §6.4 토큰 설정 · §6.10 2층 "서비스 다시 시작").
+ *
+ * **던지지 않는다.** 이 호출이 거부되면 묻는 고리가 끊겨 그 뒤의 버튼이 전부 죽는다
+ * (windows/status-window.ts의 ask). 실패는 화면의 한 줄과 supervisor.log로 바뀐다.
+ */
+async function handleServicesAction(action: ServicesAction): Promise<void> {
+  try {
+    if (action.kind === "restart") await restartFromStatusWindow(action.service);
+    else if (action.op === "change") await changeHfToken();
+    else await clearHfToken();
+  } catch (e) {
+    actionNotice = `요청을 처리하지 못했어요 — ${reasonOf(e)}`;
+    appendSupervisorLog(actionNotice);
+  }
+  statusWindow.refresh();
+}
+
+/**
+ * 한 서비스를 내렸다가 다시 띄운다 (2층). `retry()`가 아니다 — 그쪽은 살아 있는 서비스를 건너뛴다.
+ *
+ * 도는 동안 버튼이 진행을 보이게 `restartingServices`에 넣는다. 감독자의 `restartService`는 진행 중인
+ * bring을 먼저 기다리므로 수십 초가 걸릴 수 있고, 그동안 버튼이 평범한 모습이면 죽은 것으로 읽힌다.
+ */
+async function restartFromStatusWindow(id: ServiceId): Promise<void> {
+  const sup = supervisor;
+  if (sup === null) {
+    actionNotice = NO_SERVICES_YET;
+    return;
+  }
+  await trackRestart(id, () => sup.restartService(id));
+  actionNotice = `다시 시작 · ${SERVICE_LABELS[id]} — 끝났어요. 위 상태 줄을 확인해 주세요.`;
+}
+
+/** 진행 표시를 켜고 끄며 재시작 하나를 돌린다. 실패해도 표시는 반드시 꺼진다. */
+async function trackRestart(id: ServiceId, run: () => Promise<void>): Promise<void> {
+  restartingServices.add(id);
+  actionNotice = `다시 시작 · ${SERVICE_LABELS[id]} — 진행 중이에요.`;
+  statusWindow.refresh();
+  try {
+    await run();
+  } finally {
+    restartingServices.delete(id);
+  }
+}
+
+/** 상태 창에서 연 토큰 창의 첫 안내. 누르기 **전에** 무슨 일이 일어나는지 말한다. */
+function tokenChangeNotice(): string {
+  const now = hfToken === null ? "없음" : maskToken(hfToken);
+  return `지금 토큰: ${now}. 새 토큰을 확인하면 ${TOKEN_SERVICES.map((id) => SERVICE_LABELS[id]).join("·")}를 다시 시작해요.`;
+}
+
+/**
+ * 토큰 교체 (스펙 §6.4 → §6.10 2층, 완료 기준 P4-C4).
+ *
+ * 창은 온보딩과 **같은 창**이다 — 확인(whoami)·저장·마스킹이 이미 거기 있고, 두 번째 입력 화면을
+ * 만들면 그 셋이 갈린다. 다른 점은 닫았을 때뿐이다: 여기서는 앱을 끝내지 않는다(closeQuitsApp).
+ *
+ * 저장 뒤의 일(다시 읽어 증명 → live env·캐시 → 소유한 서비스만 재시작)은
+ * `windows/apply-token-change.ts`가 한다.
+ */
+async function changeHfToken(): Promise<void> {
+  const userData = app.getPath("userData");
+  const store = makeTokenStore(userData, safeStorage);
+  if (!store.available()) {
+    actionNotice = CAUSES.safeStorageUnavailable.text;
+    return;
+  }
+  let token: string;
+  try {
+    token = await openTokenWindow<BrowserWindow>({
+      notice: tokenChangeNotice(),
+      closeQuitsApp: false,
+      create: (onLoadError) => createTokenWindow(win, onLoadError),
+      alive: (w) => !w.isDestroyed(),
+      onLoad: (w, listener) => w.webContents.on("did-finish-load", listener),
+      onClosed: (w, listener) => w.on("closed", listener),
+      run: (w, script) => w.webContents.executeJavaScript(script),
+      close: (w) => {
+        if (!w.isDestroyed()) w.close();
+      },
+      openExternal: (url) => shell.openExternal(url),
+      quit: () => app.quit(),
+      log: appendSupervisorLog,
+      verify: (t) => verifyHfToken(t),
+      save: (t) => store.write(t),
+    });
+  } catch (e) {
+    actionNotice =
+      e instanceof TokenWindowClosed
+        ? "토큰을 바꾸지 않았어요."
+        : `토큰 화면을 띄우지 못했어요 — ${reasonOf(e)}`;
+    return;
+  }
+
+  const result = await applyTokenChange(
+    {
+      store,
+      // 감독자가 없으면 얹을 live env가 없다. 그래도 저장·캐시는 해 두어야 다음 기동이 새 값을 쓴다.
+      liveEnv: launchCtx?.ctx.env ?? {},
+      // 감독자가 없으면 owned가 이미 전부 false라 여기까지 오지 않는다. 그래도 !를 쓰지 않는다 —
+      // 그 불변식이 깨지는 날 화면이 TypeError 대신 skipped를 보여야 한다.
+      restartService: (id) =>
+        trackRestart(id, async () => {
+          const sup = supervisor;
+          if (sup === null) throw new Error(NO_SERVICES_YET);
+          await sup.restartService(id);
+        }),
+      owned: ownedByStatus(supervisor?.statuses() ?? []),
+      // Task 6 인계 — live env와 **같은 순간** 모듈 전역 캐시를 갱신한다. 하나만 바꾸면 실패한
+      // start() 뒤의 감독자 재생성이 옛 토큰을 되살린다.
+      cacheToken: (t) => {
+        hfToken = t;
+      },
+    },
+    token,
+  );
+  const labels = (ids: readonly ServiceId[]) => ids.map((id) => SERVICE_LABELS[id]).join(", ");
+  const parts = [
+    result.restarted.length > 0 ? `다시 시작: ${labels(result.restarted)}` : null,
+    result.skipped.length > 0
+      ? `다시 시작하지 못함: ${labels(result.skipped)} (앱이 띄운 서비스가 아니거나 내려가는 중이에요)`
+      : null,
+  ].filter((line): line is string => line !== null);
+  actionNotice = `토큰을 바꿨어요. ${parts.join(" · ")}`.trim();
+  appendSupervisorLog(`허깅페이스 토큰을 바꿨어요 — ${actionNotice}`);
+}
+
+/**
+ * 토큰 삭제 (스펙 §6.4 "수정·삭제 가능").
+ *
+ * **서비스를 다시 시작하지 않는다.** 토큰 없이 다시 띄우면 지금 잘 도는 것까지 못 뜨고, 앱에는
+ * 토큰 없이 도는 모드가 없다(§6.4 첫 실행 게이트). 지금 도는 자식은 옛 토큰을 쥔 채로 두고,
+ * 다음 실행이 토큰 화면으로 다시 묻는다. 그 사실을 화면이 말한다.
+ */
+async function clearHfToken(): Promise<void> {
+  const answer = await dialog.showMessageBox({
+    type: "warning",
+    buttons: ["삭제", "취소"],
+    defaultId: 1,
+    cancelId: 1,
+    message: "저장된 허깅페이스 토큰을 지울까요?",
+    detail:
+      "지금 도는 서비스는 옛 토큰으로 계속 돌아요. 앱을 다시 켜면 토큰 화면이 다시 떠요.",
+  });
+  if (answer.response !== 0) {
+    actionNotice = "토큰을 지우지 않았어요.";
+    return;
+  }
+  makeTokenStore(app.getPath("userData"), safeStorage).clear();
+  hfToken = null;
+  if (launchCtx !== null) delete launchCtx.ctx.env.HF_TOKEN;
+  actionNotice =
+    "토큰을 지웠어요. 지금 도는 서비스는 옛 토큰으로 계속 돌고, 앱을 다시 켜면 토큰 화면이 다시 떠요.";
+  appendSupervisorLog(actionNotice);
+}
+
+/**
  * 감독자를 세운다. 세울 수 없는 이유(설정 오류)를 화면에 적었으면 false를 돌려주고,
  * 부른 쪽은 물러난다. 던지는 실패(저장소 부재)는 startOnce의 catch가 받는다.
  */
@@ -1146,6 +1356,10 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
   const mode = cfg.databaseMode;
   const layout = pgLayout(userData);
   const binaries = pgBinaries(bundleDir("postgres"));
+  // 감독자의 준비 유예와 상태 창이 **같은** 리더를 쓴다 (스펙 §6.9 — 같은 값을 본다). 외부 DB
+  // 모드에서는 worker가 이 행을 아예 쓰지 않으므로 리더를 두지 않는다.
+  readModelReadiness = mode.kind === "external" ? null : modelReadinessReader(binaries, layout);
+  if (readModelReadiness === null) modelReadiness = [];
   const postgres =
     mode.kind === "external"
       ? externalPostgresSpec()
@@ -1218,7 +1432,7 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
       log: appendSupervisorLog,
       // 외부 DB 모드에서는 걸지 않는다 — 그 모드의 worker는 이 행을 아예 쓰지 않고(스펙 §6.9의
       // DAMWHA_SHARED_STATE=off), 내장 클러스터의 소켓도 없어 psql이 매번 헛돈다.
-      ...(mode.kind === "external" ? {} : { readModelReadiness: modelReadinessReader(binaries, layout) }),
+      ...(readModelReadiness === null ? {} : { readModelReadiness }),
     },
   );
   // start()가 끝나기 전에 대입해야 한다 — onStatus가 그 사이에 여러 번 발화하고, shellStatusOf()는

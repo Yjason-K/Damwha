@@ -24,6 +24,7 @@ import type {
   WireUtterance,
 } from "@/features/meeting/api/types";
 import type { LensWireItem } from "@/features/lens/model/types";
+import type { ModelReadiness } from "@/features/settings/api/types";
 
 /**
  * 회의 셸(/meetings/:id) 통합 테스트 — mock 코퍼스 제거 후 HTTP 레이어(`apiClient`)를
@@ -360,6 +361,12 @@ const fx = vi.hoisted(() => {
     searchIndex = v;
   };
 
+  // 모델 준비 상태 — GET /settings/processing이 얹어 주는 곁가지 (Phase 4 스펙 §6.9).
+  let modelReadiness: ModelReadiness = { updatedAt: null, entries: [] };
+  const setModelReadiness = (v: ModelReadiness) => {
+    modelReadiness = v;
+  };
+
   const speakers: WireSpeaker[] = [
     {
       id: "sp_1",
@@ -555,6 +562,7 @@ const fx = vi.hoisted(() => {
           whisper_model: "large-v3-turbo",
           devices: { diarization: "gpu", stt: "gpu" },
           summary_model: "mlx-community/Qwen3.5-9B-8bit",
+          modelReadiness,
         },
       });
     if (url === "/lenses/extraction-status")
@@ -608,6 +616,7 @@ const fx = vi.hoisted(() => {
     deletedIds.clear();
     detailOverrides.clear();
     searchIndex = null;
+    modelReadiness = { updatedAt: null, entries: [] };
     releaseListFetches();
   };
 
@@ -668,6 +677,7 @@ const fx = vi.hoisted(() => {
     reset,
     setDetailOverride,
     setSearchIndex,
+    setModelReadiness,
     blockListFetches,
     releaseListFetches,
   };
@@ -1059,6 +1069,38 @@ test("전사가 아직 없는 처리 중 회의에서는 플레이바를 그리�
   renderShell("/meetings/m3");
   expect(await screen.findByText(/회의를 처리하고 있어요/)).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "재생" })).toBeNull();
+});
+
+test("처리 중 모델을 받고 있으면 배너가 그 사실을 말한다 (P4-C6)", async () => {
+  // 첫 처리는 모델을 받느라 한참 멈춘 것처럼 보인다. 이유를 말하지 않으면 사람이 취소를 누른다.
+  fx.setModelReadiness({
+    updatedAt: new Date().toISOString(),
+    entries: [
+      {
+        key: "mlx-community/whisper-large-v3-turbo",
+        state: "downloading",
+        bytesDone: 512,
+        bytesTotal: 2048,
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        writer: "worker-1",
+        attempt: 1,
+        error: null,
+        errorKind: null,
+      },
+    ],
+  });
+  renderShell("/meetings/m3");
+  await screen.findByText(/회의를 처리하고 있어요/);
+  expect(
+    await screen.findByText(/mlx-community\/whisper-large-v3-turbo 25%/),
+  ).toBeInTheDocument();
+});
+
+test("받는 모델이 없으면 배너에 그 줄이 없다", async () => {
+  renderShell("/meetings/m3");
+  await screen.findByText(/회의를 처리하고 있어요/);
+  expect(screen.queryByText(/모델을 받는 중/)).toBeNull();
 });
 
 test("처리 중 배너의 취소 버튼은 POST /meetings/:id/cancel을 부른다", async () => {

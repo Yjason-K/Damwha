@@ -7,8 +7,13 @@
          (주입된 onerror= 같은 인라인 핸들러 포함)·원격 자원·이미지·폼 전송은 전부 막는다. 스크립트나
          스타일을 한 글자라도 고치면 해시를 다시 계산해야 한다 — tests/shell-html.test.ts가 어긋남을 잡는다.
          임베더가 실행하는 스크립트(main의 executeJavaScript)는 script-src를 거치지 않는다고 본다 — headless
-         Chrome에서 CDP Runtime.evaluate로 이 정책 아래 렌더를 확인했고, Electron에서의 확인은 packaged 점검 몫이다. -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-+qvQ6dB2lpaKyI5lQdzM6HwRl+h8hm3qCU0aBYBt4hE='; style-src 'sha256-szehwUGx7i9KoyQU04lhTIci3H3kgGHhV26usBYdQxY='; base-uri 'none'; form-action 'none'" />
+         Chrome에서 CDP Runtime.evaluate로 이 정책 아래 렌더를 확인했고, Electron에서의 확인은 packaged 점검 몫이다.
+
+         Phase 4(Task 11)부터 이 창에 버튼이 있다 — 스펙 §6.4의 토큰 설정과 §6.10 2층의 "서비스 다시 시작"이
+         둘 다 여기여야 하기 때문이다(Phase 2의 "표시 전용"은 그 전 스펙의 것이다). **그래도 렌더러 → main
+         채널은 만들지 않는다**: preload도 IPC도 없고, 버튼은 token.html과 같은 방식으로 main이 거는 next()
+         호출의 **반환값**으로만 밖에 나간다. 입력칸은 여전히 없다 — 토큰 입력은 token.html 하나가 맡는다. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-apX35+XlYT8zVrr9Z0DFPWm+/A/1wG9w5l6CSF8yZuk='; style-src 'sha256-UE41rOjItHtg06HE5/Th7GzRD0gRbVAGU7Xn4cv3AqU='; base-uri 'none'; form-action 'none'" />
     <title>서비스 상태</title>
     <style>
       :root {
@@ -32,6 +37,10 @@
       }
       header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
       h1 { font-size: 15px; font-weight: 600; margin: 0; }
+      h2 {
+        margin: 20px 0 0; font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+        text-transform: uppercase; color: var(--muted);
+      }
       .meta { margin: 0; font-size: 12px; color: var(--muted); }
       #notices { margin: 14px 0 0; padding: 0; list-style: none; }
       #notices li {
@@ -39,7 +48,7 @@
         font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere;
       }
       #notices li + li { margin-top: 6px; }
-      #rows { margin: 14px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+      #rows, #models { margin: 8px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
       .row { padding: 12px 0; border-bottom: 1px solid var(--line); }
       .head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
       .name { font-weight: 600; }
@@ -49,6 +58,12 @@
       .row[data-tone="warn"] .dot { background: var(--warn); }
       .row[data-tone="fail"] .dot { background: var(--fail); }
       .notes { font-size: 12px; color: var(--muted); }
+      button {
+        flex: none; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 6px;
+        border: 1px solid var(--line); background: var(--sunken); color: var(--fg); cursor: default;
+      }
+      button:disabled { opacity: 0.45; }
+      .act { margin-left: auto; display: inline-flex; gap: 6px; }
       /* 원인은 여러 줄이다(zod 검증 실패, 파이썬 트레이스백). 줄바꿈을 살리되 긴 줄은 접고,
          화면을 다 먹지 않게 높이를 묶는다 — 전문은 로그 파일에 있다. */
       .cause {
@@ -63,6 +78,9 @@
       .command { margin: 6px 0 0; font-size: 12px; }
       .command code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; user-select: all; }
       .log { margin: 4px 0 0; font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+      #token { padding: 12px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-top: 8px; }
+      #token-value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; user-select: all; }
+      #token-note { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
       .foot { margin: 14px 0 0; font-size: 12px; color: var(--muted); }
     </style>
   </head>
@@ -73,22 +91,72 @@
     </header>
     <ul id="notices" hidden></ul>
     <ul id="rows"></ul>
+    <h2 id="models-title" hidden>모델 준비</h2>
+    <ul id="models" hidden></ul>
+    <h2>허깅페이스 토큰</h2>
+    <div id="token">
+      <div class="head">
+        <span id="token-value">확인하는 중…</span>
+        <span class="act">
+          <button type="button" id="token-change">토큰 바꾸기</button>
+          <button type="button" id="token-clear">삭제</button>
+        </span>
+      </div>
+      <p id="token-note"></p>
+    </div>
     <p class="foot">
-      이 창은 보기 전용이에요. 멈춘 서비스는 메뉴의 서비스 &gt; 다시 시도로 다시 띄울 수 있어요.
+      멈춘 서비스는 이 창의 “서비스 다시 시작”이나 메뉴의 서비스 &gt; 다시 시도로 다시 띄울 수 있어요.
     </p>
     <script>
-      // main이 executeJavaScript로 부른다 (스펙 §6.11 — main → 렌더러 한 방향). 여기서 main을
-      // 부를 경로는 없다: preload도 IPC도 없고, 이 페이지에는 버튼도 폼도 없다.
+      // main이 executeJavaScript로 부른다 (스펙 §6.11 — main → 렌더러 한 방향). 이 페이지가 main을
+      // 부르는 경로는 없다: preload도 IPC도 없고, 버튼이 만든 동작은 main이 건 next()의 **반환값**으로만
+      // 나간다 (token.html과 같은 다리).
       //
       // 받는 문자열에는 서브프로세스 stderr가 들어 있다. **전부 textContent로만 넣는다.**
       // HTML로 해석하는 싱크(innerHTML·insertAdjacentHTML·outerHTML·document.write)를 쓰지
       // 않는다 — tests/shell-html.test.ts가 이 파일의 스크립트를 그 싱크가 던지는 DOM에서 돌린다.
       (function () {
+        const queue = [];
+        const waiters = [];
+
+        function emit(action) {
+          const waiter = waiters.shift();
+          if (waiter) waiter(action);
+          else queue.push(action);
+        }
+
         function el(tag, className, text) {
           const node = document.createElement(tag);
           if (className) node.className = className;
           if (text !== undefined) node.textContent = text;
           return node;
+        }
+
+        /** 한 번 누르면 잠근다. 다음 렌더가 main이 정한 모양으로 다시 그린다. */
+        function button(label, disabled, action) {
+          const b = el("button", "", label);
+          b.disabled = disabled === true;
+          b.addEventListener("click", function () {
+            if (b.disabled) return;
+            b.disabled = true;
+            emit(action);
+          });
+          return b;
+        }
+
+        function explain(item, r) {
+          if (typeof r.cause === "string") item.append(el("pre", "cause", r.cause));
+          if (typeof r.hint === "string") item.append(el("p", "hint", "해결: " + r.hint));
+          if (typeof r.warning === "string") item.append(el("p", "warning", "주의: " + r.warning));
+        }
+
+        /** 버튼과, 비활성일 때 그 까닭. 회색 버튼만 두면 "앱이 멈췄다"로 읽힌다. */
+        function restartInto(head, item, restart) {
+          if (!restart) return;
+          const act = el("span", "act");
+          act.append(button(restart.label, restart.disabled, { kind: "restart", service: restart.service }));
+          head.append(act);
+          if (typeof restart.note === "string") item.append(el("p", "notes", restart.note));
         }
 
         function row(r) {
@@ -100,10 +168,9 @@
           badge.append(el("span", "dot"), el("span", "state", r.state));
           head.append(badge);
           if (r.notes.length > 0) head.append(el("span", "notes", r.notes.join(" · ")));
+          restartInto(head, item, r.restart);
           item.append(head);
-          if (typeof r.cause === "string") item.append(el("pre", "cause", r.cause));
-          if (typeof r.hint === "string") item.append(el("p", "hint", "해결: " + r.hint));
-          if (typeof r.warning === "string") item.append(el("p", "warning", "주의: " + r.warning));
+          explain(item, r);
           if (typeof r.command === "string") {
             const p = el("p", "command", "디버깅 접속: ");
             p.append(el("code", "", r.command));
@@ -113,11 +180,62 @@
           return item;
         }
 
+        function model(m) {
+          const item = el("li", "row");
+          item.dataset.tone = m.tone;
+          const head = el("div", "head");
+          head.append(el("span", "name", m.key));
+          const badge = el("span", "badge");
+          badge.append(el("span", "dot"), el("span", "state", m.state));
+          head.append(badge);
+          if (m.notes.length > 0) head.append(el("span", "notes", m.notes.join(" · ")));
+          restartInto(head, item, m.restart);
+          item.append(head);
+          explain(item, m);
+          return item;
+        }
+
+        const tokenValue = document.getElementById("token-value");
+        const tokenNote = document.getElementById("token-note");
+        const tokenChange = document.getElementById("token-change");
+        const tokenClear = document.getElementById("token-clear");
+        tokenChange.addEventListener("click", function () {
+          if (tokenChange.disabled) return;
+          tokenChange.disabled = true;
+          emit({ kind: "token", op: "change" });
+        });
+        tokenClear.addEventListener("click", function () {
+          if (tokenClear.disabled) return;
+          tokenClear.disabled = true;
+          emit({ kind: "token", op: "clear" });
+        });
+
+        window.__damwha_services = {
+          next: function () {
+            if (queue.length > 0) return Promise.resolve(queue.shift());
+            return new Promise(function (resolve) {
+              waiters.push(resolve);
+            });
+          },
+        };
+
         window.__damwha_render = function (view) {
           const notices = document.getElementById("notices");
           notices.replaceChildren(...view.notices.map((text) => el("li", "", text)));
           notices.hidden = view.notices.length === 0;
           document.getElementById("rows").replaceChildren(...view.rows.map(row));
+
+          const models = view.models || [];
+          const list = document.getElementById("models");
+          list.replaceChildren(...models.map(model));
+          list.hidden = models.length === 0;
+          document.getElementById("models-title").hidden = models.length === 0;
+
+          const token = view.token || { masked: null, note: "", canClear: false };
+          tokenValue.textContent = token.masked === null ? "없음" : token.masked;
+          tokenNote.textContent = token.note;
+          tokenChange.disabled = false;
+          tokenClear.disabled = token.canClear !== true;
           // 창이 살아 있는지 사람이 알 수 있게 한다 — degraded가 ok로 돌아오기를 기다리는 사람은
           // "안 바뀐 것"과 "안 갱신된 것"을 구분해야 한다.
           document.getElementById("updated").textContent =

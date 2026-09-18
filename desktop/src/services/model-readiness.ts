@@ -131,3 +131,42 @@ export function downloadInProgress(
     (e) => e.state === "downloading" && e.writer === writer && now - e.updatedAt <= stallMs,
   );
 }
+
+/**
+ * 이 항목이 **받는 중이라고 적혀 있는데 멈췄나** (스펙 §6.9 — 읽는 쪽이 그런 항목을 "중단됨"으로
+ * 보인다. writer가 정리해 주기를 기대하지 않는다).
+ *
+ * 규칙의 사본을 만들지 않으려고 `downloadInProgress`를 그대로 되쓴다 — 무진행의 기준(`updatedAt`,
+ * `<= stallMs`)이 한 식에만 있어야 감독자의 유예와 화면의 "중단됨"이 같은 순간에 뒤집힌다.
+ */
+export function isStalled(e: ReadinessEntry, now: number, stallMs: number = STALL_MS): boolean {
+  return e.state === "downloading" && !downloadInProgress([e], e.writer, now, stallMs);
+}
+
+/**
+ * worker가 `error`의 머리에 다는 코드 (`be/worker/damwha_worker/errors.py`). **401과 403을 가르는
+ * 유일한 근거다** (판정 R-11a).
+ *
+ * 스펙 §6.9의 스키마에는 코드 칸이 없어 Task 9가 `error = "<code>: <message>"`로 실었다. 화면은 그
+ * 머리만 읽는다 — **자유 문구를 보고 문구를 고르지 않는다.** HF의 메시지는 번역·개정되고, 거기에
+ * "403"이 들어 있다는 이유로 수락 페이지를 띄우면 엉뚱한 실패에 엉뚱한 안내가 붙는다.
+ */
+export const HF_TOKEN_INVALID_CODE = "hf_token_invalid";
+export const HF_GATE_NOT_ACCEPTED_CODE = "hf_gate_not_accepted";
+
+/** 코드 모양 — worker의 상수는 전부 소문자·밑줄이다. 그 밖의 머리는 코드가 아니라 문장이다. */
+const CODE_SHAPE = /^([a-z][a-z0-9_]{0,63}): (.*)$/s;
+
+/**
+ * `error`에서 코드만. 모양이 아니면 `null`이다 — 그때 읽는 쪽은 일반 PERMANENT 문구로 간다(R-11a).
+ */
+export function readinessErrorCode(error: string | null): string | null {
+  if (error === null) return null;
+  return CODE_SHAPE.exec(error)?.[1] ?? null;
+}
+
+/** `error`에서 사람이 읽을 부분. 코드가 없으면 원문 그대로다. */
+export function readinessErrorMessage(error: string | null): string {
+  if (error === null) return "";
+  return CODE_SHAPE.exec(error)?.[2] ?? error;
+}

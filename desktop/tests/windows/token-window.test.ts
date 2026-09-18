@@ -263,6 +263,23 @@ describe("openTokenWindow", () => {
     expect(h.saved).toEqual([]);
   });
 
+  it("closeQuitsApp가 false면 창을 닫아도 앱을 끝내지 않는다 — 설정에서 연 교체 창 (Task 11)", () => {
+    // 첫 실행 게이트와 같은 창을 쓰되 닫힘의 뜻만 다르다. 한 값으로 두면 설정 창을 닫은 사람의 앱이 꺼진다.
+    const h = harness({ closeQuitsApp: false });
+    const result = outcome(openTokenWindow(h.deps));
+    return (async () => {
+      await h.load();
+      await h.userClose();
+      const got = await result;
+      expect("error" in got && got.error).toBeInstanceOf(TokenWindowClosed);
+      expect(h.quits()).toBe(0);
+      expect(h.saved).toEqual([]);
+      // 로그도 "앱을 종료합니다"라고 적지 않는다.
+      expect(h.log.join("\n")).not.toContain("종료합니다");
+      expect(h.log.join("\n")).toContain("바꾸지 않았습니다");
+    })();
+  });
+
   it("drops a verdict that arrives after the window was closed", async () => {
     const h = harness();
     let release: (v: TokenVerdict) => void = () => undefined;

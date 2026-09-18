@@ -4,12 +4,20 @@ import * as path from "path";
 import * as vm from "vm";
 import { describe, expect, it } from "vitest";
 import { CAUSES } from "../../src/diagnostics/causes";
-import { DEGRADED_HINT, HINTS } from "../../src/windows/shell-hints";
+import { DEGRADED_HINT, HINTS, RETRY_LAYERS } from "../../src/windows/shell-hints";
+import { HF_GATED_MODEL_PAGE_URL, maskToken } from "../../src/config/token-store";
+import { STALL_MS, type ReadinessEntry } from "../../src/services/model-readiness";
 import {
   HINT_PREFIX,
   causeWithFix,
   NO_SERVICES_YET,
+  NO_TOKEN_NOTE,
+  RESTART_BUSY_LABEL,
+  RESTART_CLEANING_NOTE,
+  RESTART_LABEL,
+  RESTART_NOT_OURS_NOTE,
   failureDetail,
+  parseServicesAction,
   renderCall,
   servicesView,
   shellStatusFrom,
@@ -33,6 +41,11 @@ const st = (id: ServiceId, over: Partial<ServiceStatus> = {}): ServiceStatus => 
 const logPathOf = (id: ServiceId | "supervisor") => `/logs/${id}.log`;
 
 const ALL_OK = [st("postgres"), st("api"), st("embed"), st("worker")];
+
+/** 서비스도 모델도 토큰도 없는 빈 한 장. renderCall의 모양만 보는 자리에서 쓴다. */
+function emptyView(notices: string[] = []): ServicesView {
+  return { rows: [], models: [], token: { masked: null, note: "", canClear: false }, notices };
+}
 
 describe("servicesView", () => {
   it("shows all four services in the order the supervisor reports them", () => {
@@ -321,7 +334,16 @@ describe("renderCall — main이 렌더러에서 실행하는 식", () => {
 
   it.each(hostile)("delivers %j to the render function unchanged and runs nothing else", (text) => {
     const view: ServicesView = {
-      rows: [{ id: "api", name: "API", state: "실패", tone: "fail", notes: [text], cause: text, hint: text, log: text }],
+      rows: [
+        {
+          id: "api", name: "API", state: "실패", tone: "fail", notes: [text],
+          cause: text, hint: text, log: text,
+          restart: { service: "api", label: text, disabled: false, note: text },
+        },
+      ],
+      // 모델 줄도 적대적인 문자열을 싣는다 — key는 HF repo id이고 cause에는 worker의 원문이 온다.
+      models: [{ key: text, state: "실패", tone: "fail", notes: [text], cause: text, hint: text }],
+      token: { masked: text, note: text, canClear: true },
       notices: [text],
     };
     const { calls, sandbox } = run(renderCall(view));
@@ -331,12 +353,12 @@ describe("renderCall — main이 렌더러에서 실행하는 식", () => {
 
   it("does nothing when the page has not defined the render function yet (still loading)", () => {
     const sandbox: Record<string, unknown> = { window: {} };
-    expect(() => vm.runInNewContext(renderCall({ rows: [], notices: [] }), sandbox)).not.toThrow();
+    expect(() => vm.runInNewContext(renderCall(emptyView()), sandbox)).not.toThrow();
   });
 
   it("evaluates to undefined so executeJavaScript has nothing to serialise", () => {
     const sandbox = { window: { __damwha_render: () => ({ node: "not cloneable" }) } };
-    expect(vm.runInNewContext(renderCall({ rows: [], notices: [] }), sandbox)).toBeUndefined();
+    expect(vm.runInNewContext(renderCall(emptyView()), sandbox)).toBeUndefined();
   });
 });
 
@@ -486,5 +508,247 @@ describe("정리 중인 서비스 (R-10c)", () => {
     expect(row.tone).toBe("fail");
     expect(row.state).toBe("실패");
     expect(row.restartRefused).toBeUndefined();
+  });
+});
+
+/**
+ * Task 11 — 화면이 **세 층을 구분해** 말한다 (스펙 §6.9·§6.10, 판정 R-11a).
+ *
+ * 한 줄로 뭉친 "다시 시도"가 금지된 이유가 여기 있다: 같은 `failed`라도 사람이 할 일이 셋으로
+ * 갈리고, 그중 둘에는 누를 것이 아예 없다.
+ */
+describe("모델 준비 줄 (스펙 §6.9)", () => {
+  const NOW = 1_800_000_000_000;
+  const entry = (over: Partial<ReadinessEntry> = {}): ReadinessEntry => ({
+    key: "BAAI/bge-m3",
+    state: "downloading",
+    bytesDone: 0,
+    bytesTotal: 0,
+    startedAt: NOW - 10_000,
+    updatedAt: NOW - 1_000,
+    writer: "embed",
+    attempt: 1,
+    error: null,
+    errorKind: null,
+    ...over,
+  });
+  const view = (entries: ReadinessEntry[], over: Partial<Parameters<typeof servicesView>[0]> = {}) =>
+    servicesView({
+      statuses: ALL_OK,
+      restartNotice: null,
+      logPathOf,
+      modelReadiness: entries,
+      now: NOW,
+      ...over,
+    });
+
+  it("행이 없으면 모델 절이 비어 있다 — 받은 적도 받는 중도 아니다", () => {
+    expect(servicesView({ statuses: ALL_OK, restartNotice: null, logPathOf }).models).toEqual([]);
+  });
+
+  it("받는 중이면 진행을 보인다", () => {
+    const row = view([entry({ bytesDone: 512 * 1024 * 1024, bytesTotal: 2 * 1024 ** 3 })]).models[0];
+    expect(row.state).toBe("받는 중");
+    expect(row.notes[0]).toBe("25% · 512.0MB / 2.0GB");
+    expect(row.notes).toContain("받는 서비스: 검색 임베딩");
+    expect(row.restart).toBeUndefined();
+    expect(row.cause).toBeUndefined();
+  });
+
+  it("총량을 모르면 퍼센트를 지어내지 않고 '받는 중'만 말한다 (스펙 §6.9)", () => {
+    const row = view([entry({ bytesDone: 123, bytesTotal: 0 })]).models[0];
+    expect(row.notes[0]).toBe("받는 중");
+    expect(row.notes[0]).not.toContain("%");
+  });
+
+  it("ready는 초록 한 줄이다", () => {
+    const row = view([entry({ state: "ready", bytesDone: 10, bytesTotal: 10 })]).models[0];
+    expect(row).toEqual({ key: "BAAI/bge-m3", state: "준비됨", tone: "ok", notes: [] });
+  });
+
+  it("진행이 STALL_MS 넘게 멈춘 downloading은 '중단됨'이고 2층 버튼을 준다", () => {
+    const row = view([entry({ updatedAt: NOW - STALL_MS - 1 })]).models[0];
+    expect(row.state).toBe("중단됨");
+    expect(row.tone).toBe("warn");
+    expect(row.cause).toBe(CAUSES.modelDownloadStalled.text("BAAI/bge-m3"));
+    expect(row.hint).toBe(RETRY_LAYERS.service);
+    expect(row.restart).toEqual({ service: "embed", label: RESTART_LABEL, disabled: false });
+  });
+
+  it("무진행 판정의 경계는 감독자와 같은 STALL_MS 하나다", () => {
+    expect(view([entry({ updatedAt: NOW - STALL_MS })]).models[0].state).toBe("받는 중");
+    expect(view([entry({ updatedAt: NOW - STALL_MS - 1 })]).models[0].state).toBe("중단됨");
+  });
+
+  it("1층 — TRANSIENT 실패에는 버튼이 없고 기다리라고 말한다", () => {
+    const row = view([
+      entry({ state: "failed", error: "model_download_failed: ReadTimeout", errorKind: "TRANSIENT" }),
+    ]).models[0];
+    expect(row.hint).toBe(RETRY_LAYERS.download);
+    expect(row.restart).toBeUndefined();
+    expect(row.cause).toBe(CAUSES.modelDownloadFailed.text("BAAI/bge-m3", "ReadTimeout"));
+  });
+
+  it("1층이 2층을 이긴다 — TRANSIENT면 메시지에 403이 섞여 있어도 수락 페이지로 보내지 않는다", () => {
+    const row = view([
+      entry({ state: "failed", error: "model_download_failed: proxy said 403", errorKind: "TRANSIENT" }),
+    ]).models[0];
+    expect(row.hint).toBe(RETRY_LAYERS.download);
+    expect(row.cause).not.toContain(HF_GATED_MODEL_PAGE_URL);
+  });
+
+  it("401 — 코드가 hf_token_invalid면 토큰 재입력으로 보낸다 (P4-C8)", () => {
+    const row = view([
+      entry({
+        state: "failed",
+        error: "hf_token_invalid: Hugging Face rejected the token (401)",
+        errorKind: "PERMANENT",
+      }),
+    ]).models[0];
+    expect(row.cause).toContain(CAUSES.hfTokenInvalid.text);
+    expect(row.hint).toContain(HINTS.hfTokenInvalid as string);
+    expect(row.hint).toContain("허깅페이스 토큰");
+    // 수락 페이지로 보내지 않는다 — 401과 403은 다른 안내다.
+    expect(row.cause).not.toContain(HF_GATED_MODEL_PAGE_URL);
+  });
+
+  it("403 — 코드가 hf_gate_not_accepted면 수락 페이지와 3층(회의 재처리)으로 보낸다 (P4-C8)", () => {
+    const row = view([
+      entry({
+        key: "pyannote/speaker-diarization-community-1",
+        state: "failed",
+        error: "hf_gate_not_accepted: Hugging Face refused access (403)",
+        errorKind: "PERMANENT",
+        writer: "worker-1",
+      }),
+    ]).models[0];
+    expect(row.cause).toContain(HF_GATED_MODEL_PAGE_URL);
+    // Task 6의 문구를 그대로 쓴다 — 같은 원인을 두 곳이 적으면 갈린다.
+    expect(row.hint).toBe(HINTS.hfGateNotAccepted);
+    expect(row.hint).toContain("다시 처리");
+    expect(row.restart).toBeUndefined();
+  });
+
+  it("코드를 알아볼 수 없으면 일반 PERMANENT 문구로 간다 (R-11a 폴백)", () => {
+    for (const error of ["그냥 문장입니다", "Something: went wrong", null]) {
+      const row = view([entry({ state: "failed", error, errorKind: "PERMANENT" })]).models[0];
+      expect(row.cause).toContain("모델을 받지 못했어요");
+      expect(row.hint).toBe(RETRY_LAYERS.service);
+      expect(row.restart?.service).toBe("embed");
+    }
+  });
+
+  it("errorKind가 없으면 스스로 풀린다고 약속하지 않는다", () => {
+    const row = view([entry({ state: "failed", error: "x: y", errorKind: null })]).models[0];
+    expect(row.hint).toBe(RETRY_LAYERS.service);
+  });
+
+  it("writer로 어느 서비스의 버튼인지 가른다 (판정 R-9a)", () => {
+    const stalled = { updatedAt: NOW - STALL_MS - 1 };
+    expect(view([entry({ ...stalled, writer: "embed" })]).models[0].restart?.service).toBe("embed");
+    expect(view([entry({ ...stalled, writer: "worker-abc" })]).models[0].restart?.service).toBe("worker");
+  });
+
+  it("앱이 소유하지 않은 서비스의 버튼은 비활성이고 그 까닭을 말한다", () => {
+    const statuses = [st("embed", { owned: false })];
+    const row = view([entry({ updatedAt: NOW - STALL_MS - 1 })], { statuses }).models[0];
+    expect(row.restart).toEqual({
+      service: "embed",
+      label: RESTART_LABEL,
+      disabled: true,
+      note: RESTART_NOT_OURS_NOTE,
+    });
+  });
+
+  it("재시작이 도는 중이면 버튼이 진행을 보인다 — 죽은 것처럼 보이지 않게", () => {
+    const row = view([entry({ updatedAt: NOW - STALL_MS - 1 })], { restarting: ["embed"] }).models[0];
+    expect(row.restart).toEqual({ service: "embed", label: RESTART_BUSY_LABEL, disabled: true });
+  });
+
+  it("시도 횟수는 1보다 클 때만 말한다", () => {
+    expect(view([entry({ state: "failed", attempt: 1 })]).models[0].notes).not.toContain("1번째 시도");
+    expect(view([entry({ state: "failed", attempt: 3 })]).models[0].notes).toContain("3번째 시도");
+  });
+});
+
+describe("서비스 줄의 다시 시작 버튼 (스펙 §6.10 2층)", () => {
+  it("앱이 띄운 서비스에는 눌리는 버튼이 있다", () => {
+    const rows = servicesView({ statuses: ALL_OK, restartNotice: null, logPathOf }).rows;
+    for (const row of rows) {
+      expect(row.restart).toEqual({ service: row.id, label: RESTART_LABEL, disabled: false });
+    }
+  });
+
+  it("채택한 인스턴스·정리 중은 비활성이고, 그 판정은 restartRefused 하나다", () => {
+    const adopted = st("embed", { owned: false });
+    const cleaning = st("worker", { cleaningUp: true });
+    const view = servicesView({ statuses: [adopted, cleaning], restartNotice: null, logPathOf });
+    expect(view.rows[0].restart.disabled).toBe(true);
+    expect(view.rows[0].restart.note).toBe(RESTART_NOT_OURS_NOTE);
+    expect(view.rows[0].restartRefused).toBe(true);
+    expect(view.rows[1].restart.disabled).toBe(true);
+    expect(view.rows[1].restart.note).toBe(RESTART_CLEANING_NOTE);
+    // 버튼의 비활성과 감독자의 거부가 같은 술어에서 나온다.
+    for (const row of view.rows) expect(row.restart.disabled).toBe(row.restartRefused === true);
+  });
+
+  it("아직 뜨지 않은 서비스는 막지 않는다 — 소유의 문제가 아니라 '띄운 적이 없다'이다", () => {
+    const view = servicesView({
+      statuses: [st("worker", { process: "failed", owned: false })],
+      restartNotice: null,
+      logPathOf,
+    });
+    expect(view.rows[0].restart.disabled).toBe(false);
+  });
+});
+
+describe("토큰 절 (스펙 §6.4)", () => {
+  it("가린 모양만 싣고 원문은 어디에도 없다", () => {
+    const token = "hf_AbCdEfGhIjKlMnOpQrStUvWxYz01234567";
+    const view = servicesView({
+      statuses: ALL_OK,
+      restartNotice: null,
+      logPathOf,
+      maskedToken: maskToken(token),
+    });
+    expect(view.token.masked).toBe("hf_****…****4567");
+    expect(JSON.stringify(view)).not.toContain(token);
+    expect(view.token.canClear).toBe(true);
+    // 누르기 전에 무슨 일이 일어나는지 말한다.
+    expect(view.token.note).toContain("다시 시작");
+  });
+
+  it("토큰이 없으면 지울 것도 없다", () => {
+    const view = servicesView({ statuses: ALL_OK, restartNotice: null, logPathOf });
+    expect(view.token).toEqual({ masked: null, note: NO_TOKEN_NOTE, canClear: false });
+  });
+});
+
+describe("parseServicesAction — 페이지에서 오는 값", () => {
+  it("아는 두 모양만 통과시킨다", () => {
+    expect(parseServicesAction({ kind: "restart", service: "worker" })).toEqual({
+      kind: "restart",
+      service: "worker",
+    });
+    expect(parseServicesAction({ kind: "token", op: "change" })).toEqual({ kind: "token", op: "change" });
+    expect(parseServicesAction({ kind: "token", op: "clear" })).toEqual({ kind: "token", op: "clear" });
+  });
+
+  it("모르는 것은 전부 null이다 — 렌더러 값이 감독자에게 그대로 들어가지 않는다", () => {
+    for (const bad of [
+      null,
+      undefined,
+      "restart",
+      7,
+      [],
+      { kind: "restart" },
+      { kind: "restart", service: "postgres!" },
+      { kind: "restart", service: "toString" },
+      { kind: "token" },
+      { kind: "token", op: "drop" },
+      { kind: "quit" },
+    ]) {
+      expect(parseServicesAction(bad)).toBeNull();
+    }
   });
 });

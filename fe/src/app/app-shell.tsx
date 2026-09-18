@@ -11,6 +11,8 @@ import { env } from "@/shared/config/env";
 import { formatClock } from "@/features/meeting/api/mappers";
 import { useMeetings } from "@/features/meeting/api/meetings";
 import { useSearch } from "@/features/meeting/api/search";
+import { useProcessingSettings } from "@/features/settings/api/settings";
+import { searchIsKeywordOnly } from "@/features/settings/lib/model-readiness";
 import type { MeetingFilter } from "@/features/meeting/model/types";
 import { Icon } from "@/features/meeting/ui/icons";
 import { LeftNav } from "@/features/meeting/ui/left-nav";
@@ -56,6 +58,10 @@ export function AppShell() {
 
   const { data: meetings } = useMeetings();
   const { data: hits = [] } = useSearch(cmdQuery, cmdOpen);
+  // 검색이 왜 키워드로만 도는지 (Phase 4 스펙 §6.9). 임베딩 모델이 없으면 의미 검색이 서지
+  // 않는데, 그 말을 안 하면 사용자는 검색이 나빠졌다고 읽는다.
+  const { data: settings } = useProcessingSettings();
+  const keywordOnly = searchIsKeywordOnly(settings?.modelReadiness);
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -119,6 +125,11 @@ export function AppShell() {
         onOpenChange={setCmdOpen}
         query={cmdQuery}
         onQueryChange={setCmdQuery}
+        notice={
+          keywordOnly
+            ? "검색 임베딩 모델을 아직 받는 중이라 지금은 단어가 그대로 들어간 발언만 찾아요. 모델이 준비되면 뜻이 비슷한 발언까지 찾아요."
+            : undefined
+        }
         groups={cmdGroups}
         onSelect={(item) => {
           if (!item.id) return;
