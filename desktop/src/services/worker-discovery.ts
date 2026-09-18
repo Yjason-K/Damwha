@@ -19,16 +19,35 @@
  * 오탐의 대가가 비대칭이라 방향을 이렇게 잡는다: 이 함수가 하나라도 반환하면 호출부는
  * "외부 supervisor가 있다"는 부울 판정으로 서고, 앱은 자기 worker를 **영영 띄우지
  * 않는다**. 그래서 "supervisor란 무엇인가"를 적어 두고 그것만 통과시킨다.
+ *
+ * 2026-09-19(P4-C21) 실측이 **반대 방향의 대가**도 재 봤다. 놓치면 앱이 외부 worker 옆에
+ * 자기 worker를 띄워 **두 supervisor가 같은 job 큐를 문다** — 그쪽이 더 비싸다. 그래서
+ * 허용 목록의 축을 **이름에서 구조로** 옮겼다(아래 `isWorkerSupervisor`): argv[0]의 이름은
+ * 보지 않고, `-m damwha_worker`가 argv[0] **바로 뒤**에 오는가만 본다. 위 세 모양은 그
+ * 구조 조건에서 똑같이 갈린다.
+ *
+ * **이 완화는 이 파일에만 있다.** process/orphans.ts의 조건 1(basename `python3.12`)은 그대로다 —
+ * 그쪽 소비자는 **죽이는** 쪽이라, 넓히면 앱이 손댈 의향이 있는 프로세스의 범위가 넓어진다.
+ * 여기 소비자는 "우리 것이 아닌 worker가 도는가"만 묻고 신호를 하나도 보내지 않는다 (판정 R-12b).
  */
 
 import { psRows, splitPsArgs } from "../process/orphans";
 
 /**
- * argv[0]의 basename이 이 모양이어야 supervisor다 — `python`, `python3`, `python3.12`.
+ * argv[0]의 basename이 python 실행 파일의 이름인가 — `python`, `python3`, `python3.12`.
  *
- * Phase 4 주의: 번들 Python 런타임이 venv의 python을 대체하면 그 실행 파일 이름도
- * 반드시 `python*`이어야 한다. 이름이 바뀌는 순간 이 감지는 supervisor를 하나도 못
- * 알아보고, 앱은 외부 worker가 이미 돌고 있는데도 그 옆에 두 번째 worker를 띄운다.
+ * **이것은 더 이상 판정 조건이 아니다.** 아래 `READINGS`에서 argv[0]의 경계를 찾는 **판독**에만
+ * 쓴다(가장 정확한 판독이라 맨 먼저 시도한다). 이름이 다른 인터프리터는 뒤의 두 판독이 받는다.
+ *
+ * 조건에서 내린 까닭 — 2026-09-19 Task 12 P4-C21 실측. 문서가 적은 웹 흐름대로 터미널에서
+ * `pnpm worker`를 띄우면 `ps`의 argv[0]이 이렇게 나온다:
+ *
+ *   /opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/
+ *     Resources/Python.app/Contents/MacOS/Python -m damwha_worker
+ *
+ * `be/worker/.venv/bin/python3`이 **심볼릭 링크**라 커널이 argv[0]에 해결된 실체를 적고, 그 실체의
+ * basename은 `Python`(대문자)이다. 이름 규칙은 이 줄을 목록에서 빼 버렸고, 앱은 외부 worker가
+ * 이미 큐를 물고 있는데도 자기 worker를 띄웠다 (P2-C6·스펙 §6.5 처분표 3행 위반).
  */
 const PYTHON_EXECUTABLE = /^python(\d+(?:\.\d+)*)?$/;
 
@@ -37,14 +56,37 @@ function isPythonExecutable(argv0: string): boolean {
 }
 
 /**
- * supervisor 줄의 정의. 세 조건을 모두 만족해야 한다 — 위 실측 모양들과 브리프가 적은
- * 두 모양(`/opt/homebrew/bin/python3.12 -m damwha_worker`, `… --once`) 전부 대조했다.
+ * 조건 1을 대신하는 **구조** 조건. `-m damwha_worker`가 argv[0] **바로 뒤**에 와야 한다 —
+ * 사이에는 인터프리터 옵션 플래그(`-E -s -u` 같은 것)만 올 수 있다.
  *
- *  - argv[0]의 basename이 python 실행 파일이다. uv 런처(`…/uv run … python -m …`)와
- *    텍스트로만 모듈을 언급하는 셸 줄(`/bin/zsh -c … damwha_worker …`)이 여기서 빠진다.
- *    둘 다 인자로 `-m damwha_worker`를 그대로 갖고 있어 다른 조건으로는 못 거른다.
- *  - `-m damwha_worker`가 **토큰 쌍**으로 있다. `grep damwha_worker`처럼 모듈 이름만
- *    언급하는 줄이 빠진다.
+ * 이름 규칙이 하던 일을 그대로 받는다. 이름은 `/bin/zsh -c …`·`…/uv run … python -m …`처럼
+ * **인자로** 모듈 토큰을 갖고 있는 줄을 거르려고 있었는데, 그 줄들은 argv[0] 바로 뒤가
+ * 옵션 플래그가 아니라는 점에서도 똑같이 갈린다:
+ *
+ *   /bin/zsh              -c …                → `-c`는 스크립트를 받는다. 그 뒤는 인터프리터 인자가 아니다.
+ *   /opt/homebrew/bin/uv  run --directory …   → `run`은 플래그가 아니다.
+ *   /usr/bin/grep         -rn damwha_worker … → 패턴 인자가 플래그가 아니다.
+ *   /usr/bin/python3      tool.py -m damwha_worker → 스크립트 뒤의 `-m`은 우리 모듈 실행이 아니다.
+ *
+ * `-c`가 든 플래그 묶음(`-c`, `-sc`)을 거부하는 것과 `-m`을 만나면 그 자리에서 판정하는 것이
+ * 이 규칙의 전부다. process/orphans.ts의 `moduleOf`와 같은 뜻인데, 그쪽은 모듈 셋을 보고
+ * 여기는 supervisor 모듈 하나만 본다 — **저쪽은 죽이는 경로**라 사본을 합치지 않는다.
+ */
+function runsWorkerModule(tokens: readonly string[]): boolean {
+  for (let i = 1; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token === "-m") return tokens[i + 1] === "damwha_worker";
+    if (!/^-[A-Za-z]+$/.test(token) || /[cm]/.test(token)) return false;
+  }
+  return false;
+}
+
+/**
+ * supervisor 줄의 정의. 세 조건을 모두 만족해야 한다.
+ *
+ *  - argv[0]이 비어 있지 않다. **이름은 보지 않는다** (위 PYTHON_EXECUTABLE 주석 — P4-C21).
+ *  - `-m damwha_worker`가 argv[0] 바로 뒤의 **토큰 쌍**으로 있다(`runsWorkerModule`). 모듈 이름만
+ *    언급하는 줄(`grep damwha_worker`)과 그것을 인자로 나르는 셸·uv 줄이 여기서 빠진다.
  *  - `--once` 토큰이 없다. __main__.py:279가 자식을
  *    `[sys.executable, "-m", "damwha_worker", "--once"]`로 띄우므로, 이것을 상시
  *    supervisor로 세면 job 하나를 처리 중인 자식 때문에 앱이 영영 안 띄운다.
@@ -52,10 +94,39 @@ function isPythonExecutable(argv0: string): boolean {
  */
 function isWorkerSupervisor(tokens: readonly string[]): boolean {
   const argv0 = tokens[0];
-  if (argv0 === undefined) return false;
-  if (!isPythonExecutable(argv0)) return false;
+  if (argv0 === undefined || argv0 === "") return false;
   if (tokens.includes("--once")) return false;
-  return tokens.some((token, i) => token === "-m" && tokens[i + 1] === "damwha_worker");
+  return runsWorkerModule(tokens);
+}
+
+/**
+ * `ps`의 평탄한 args 한 줄을 argv로 되돌리는 **판독 셋**. `splitPsArgs`에 넘기는 술어만 다르고,
+ * 순서는 정확한 것 → 넓은 것이다. 하나라도 supervisor로 읽히면 supervisor다 (`readsAsSupervisor`).
+ *
+ *  1. `isPythonExecutable` — 지금까지의 판독 그대로. 아는 번들 접두사(규칙 1)와 공백 든 python* 경로
+ *     (규칙 3)가 여기서 정확히 잘린다.
+ *  2. `argv0.includes(" ")` — 공백 든 경로인데 이름이 python*이 **아닌** 경우. 술어가 공백 없는
+ *     후보를 물리치므로 `splitPsArgs`의 규칙 2가 비켜서고 규칙 3(` -m ` 앞을 읽는다)이 돈다.
+ *     규칙 3의 자체 가드(절대 경로여야 하고 ` /`·` -`를 품으면 거부)가 셸·uv·grep 줄을 그대로 막는다.
+ *  3. `() => true` — 첫 토큰이 통째로 argv[0]인 줄(공백 없는 경로). **실측한 `…/MacOS/Python`이 여기서
+ *     읽힌다.** 이름을 보지 않으므로 어떤 이름의 인터프리터든 들어오고, 걸러 내는 일은 전부
+ *     `isWorkerSupervisor`의 구조 조건이 한다.
+ *
+ * 2번을 3번보다 먼저 두는 이유: 3번은 늘 성공하므로(첫 토큰이 곧 argv[0]) 뒤에 두지 않으면 공백 든
+ * 경로가 `/Users/me/My`에서 잘려 영영 안 읽힌다 — 이 판독 규칙이 애초에 생긴 결함이다.
+ */
+const READINGS: readonly ((argv0: string) => boolean)[] = [
+  isPythonExecutable,
+  (argv0) => argv0.includes(" "),
+  () => true,
+];
+
+function readsAsSupervisor(args: string, interpreters: readonly string[]): boolean {
+  for (const isInterpreter of READINGS) {
+    const tokens = splitPsArgs(args, interpreters, isInterpreter);
+    if (tokens !== null && isWorkerSupervisor(tokens)) return true;
+  }
+  return false;
 }
 
 /**
@@ -84,12 +155,11 @@ export function parseWorkerProcesses(
 ): number[] {
   const out: number[] = [];
   for (const { pid, args } of psRows(psOutput)) {
-    // 토큰화만 바뀌었다 (Phase 4 스펙 §6.5). `args.split(/\s+/)`는 공백 든 설치 경로에서 argv[0]을
-    // `/Users/me/My`로 잘라 위 판정을 **항상 거짓**으로 만들었다 — Task 5 뒤로 앱 worker의 argv[0]이
-    // 번들 python의 절대 경로라서다. 아는 인터프리터로 먼저 자르고, 모르는 경로는 ` -m ` 앞을 읽는다
-    // (process/orphans.ts의 splitPsArgs — 그 규칙과 한계가 거기 있다). 셋째 조건까지 뜻은 그대로다.
-    const tokens = splitPsArgs(args, interpreters, isPythonExecutable);
-    if (tokens === null || !isWorkerSupervisor(tokens)) continue;
+    // 토큰화는 `READINGS` 셋이 한다 (Phase 4 스펙 §6.5). `args.split(/\s+/)`는 공백 든 설치 경로에서
+    // argv[0]을 `/Users/me/My`로 잘라 판정을 **항상 거짓**으로 만들었다 — Task 5 뒤로 앱 worker의
+    // argv[0]이 번들 python의 절대 경로라서다. 아는 인터프리터로 먼저 자르고, 모르는 경로는 ` -m `
+    // 앞을 읽는다 (process/orphans.ts의 splitPsArgs — 그 규칙과 한계가 거기 있다).
+    if (!readsAsSupervisor(args, interpreters)) continue;
     if (ourPids.has(pid)) continue;
     out.push(pid);
   }

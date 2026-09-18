@@ -141,6 +141,23 @@ describe("parseDamwhaProcesses — 조건 1·2로 목록에 넣는다", () => {
     expect(parseDamwhaProcesses(ps, TREES)).toEqual([]);
   });
 
+  it("keeps condition 1 strict for the kill path — the P4-C21 argv stays invisible here", () => {
+    // 2026-09-19 P4-C21의 실측 argv. services/worker-discovery.ts는 이 줄을 보라고 이름 조건을
+    // 풀었지만(그쪽은 신호를 하나도 보내지 않고 stand-down만 한다), **이 파일은 죽이는 경로**라
+    // 조건 1을 그대로 둔다 — 넓히면 앱이 SIGTERM·SIGKILL을 보낼 의향이 있는 범위가 넓어진다
+    // (판정 R-12b). 트리 밖이라 어차피 `external`로 갈리지만, 목록에조차 들이지 않는 것이 계약이다.
+    const measured =
+      "/opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python";
+    const ps = [
+      "  PID ARGS",
+      ` 7601 ${measured} -m damwha_worker`,
+      ` 7602 ${measured} -m damwha_worker --run-id=${OLD}`,
+    ].join("\n");
+    const scan = parseDamwhaScan(ps, TREES);
+    expect(scan.processes).toEqual([]);
+    expect(scan.unreadable).toEqual([]);
+  });
+
   it("wants the module right after -m, and only one of the three", () => {
     const ps = [
       "  PID ARGS",
