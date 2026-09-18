@@ -248,6 +248,26 @@ describe("statusLine / shellStatusFrom", () => {
   it("keeps the Phase 1 line for a healthy or adopted service", () => {
     expect(statusLine(st("api"))).toBe("API: 실행 중");
     expect(statusLine(st("embed", { owned: false }))).toBe("검색 임베딩: 실행 중 (앱이 띄우지 않음)");
+    // stand-down worker는 그대로 꼬리 한 줄이다 — 원인을 다시 적지 않는다(좁힌 조건이 이것을 지킨다).
+    expect(statusLine(st("worker", { owned: false, detail: CAUSES.externalWorker.text([4101]) }))).toBe(
+      "작업 처리기: 실행 중 (앱이 띄우지 않음)",
+    );
+  });
+
+  it("still shows the cause and the fix when an adopted service goes degraded (최종 리뷰)", () => {
+    // 채택한 embed는 핸들이 없어도 `rt.result`가 있어 재프로브를 받는다(supervisor.ts의 probeHealth) —
+    // stand-down은 런타임이 없어 여기까지 오지 못하므로 `running && !owned && degraded`는 채택뿐이다.
+    // 셸 줄이 그 원인을 삼키면 "동작이 제한돼요"만 남고, 같은 상태를 조건 없이 causeOf에 넘기는
+    // 상태 창과 갈린다 — 이 파일 머리가 금지하는 바로 그것이다.
+    const detail = CAUSES.embedMismatch.text("bge-small", 384, "bge-m3", 1024);
+    const s = st("embed", { owned: false, health: "degraded", detail });
+    const line = statusLine(s);
+    const row = servicesView({ statuses: [s], restartNotice: null, logPathOf }).rows[0];
+    expect(row.cause).toBe(detail);
+    expect(row.hint).toBe(HINTS.embedMismatch as string);
+    expect(line).toBe(
+      `검색 임베딩: 실행 중 (앱이 띄우지 않음) — 동작이 제한돼요\n    ${row.cause}\n    ${HINT_PREFIX}${row.hint}`,
+    );
   });
 
   it("always uses the plain failure screen for a postgres failure, with the server's own log (Phase 3)", () => {

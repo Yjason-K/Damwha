@@ -84,8 +84,15 @@ export function statusLine(s: ServiceStatus, externalDatabase = false): string {
   const winding = s.cleaningUp === true ? " — 내리는 중" : "";
   // 어느 상태에 원인을 보일지는 causeOf 하나가 정한다. 여기서 조건을 다시 적으면 정리 중 같은
   // 새 상태가 생길 때마다 두 곳이 갈린다 (판정 R-10c). stand-down은 `adopted` 꼬리가 이미
-  // 말하므로 그 줄만 따로 뺀다.
-  const cause = s.process === "running" && !s.owned && s.cleaningUp !== true ? undefined : causeOf(s);
+  // 말하므로 그 줄만 따로 뺀다 — **그 빼기는 health가 ok일 때만이다.** 채택한 embed는 핸들이
+  // 없어도 rt.result가 있어 재프로브를 받고(supervisor.ts의 probeHealth), 거기서 degraded가 되면
+  // "앱이 띄우지 않음"이 아니라 모델·차원이 어긋났다는 원인이 사람이 읽어야 할 것이다.
+  // 이 줄이 넓으면 셸은 원인도 `해결:`도 없이 "동작이 제한돼요"만 적고, 같은 상태를 조건 없이
+  // causeOf에 넘기는 servicesView는 둘 다 적어 두 화면이 갈린다 (이 파일 머리의 계약).
+  const cause =
+    s.process === "running" && !s.owned && s.health !== "degraded" && s.cleaningUp !== true
+      ? undefined
+      : causeOf(s);
   const why = cause === undefined ? "" : `\n    ${indent(causeWithFix(cause, recoveryHint(s)), "    ")}`;
   return `${SERVICE_LABELS[s.id]}: ${PROCESS_LABELS[s.process]}${adopted}${degraded}${winding}${why}`;
 }

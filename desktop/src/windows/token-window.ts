@@ -102,6 +102,18 @@ export interface TokenWindowDeps<W> {
 const MAX_TOKEN_INPUT = 4096;
 
 const EMPTY_MESSAGE = "토큰을 붙여 넣은 뒤 확인을 눌러 주세요.";
+/**
+ * `parseAction`이 null을 돌려줬다 — 지금 실제로 사람이 여기 닿는 길은 **하나**다: `MAX_TOKEN_INPUT`을
+ * 넘긴 붙여넣기. token.html의 submit()은 입력에 무엇이 들었든 `{kind:"submit", token}`으로 보내고,
+ * 길이 상한은 여기서만 본다.
+ *
+ * 그래서 이 경우에도 반드시 그려야 한다. 페이지는 누른 순간 `setBusy(true)`로 입력과 버튼을 잠그고
+ * 그것을 푸는 것은 `show()` 하나뿐이다(token.html의 submit·show). 조용히 넘어가면 토큰 화면이
+ * 영영 비활성으로 남고, 첫 실행 게이트에서는 창을 닫는 것이 곧 앱 종료라 회복 수단이 ⌘R뿐이다.
+ */
+const UNKNOWN_REQUEST_MESSAGE =
+  `토큰을 읽지 못했어요 — 붙여 넣은 값이 너무 길거나(${MAX_TOKEN_INPUT}자까지) 모양이 올바르지 않아요. ` +
+  "토큰만 다시 붙여 넣은 뒤 확인을 눌러 주세요.";
 const CHECKING_MESSAGE = "허깅페이스에서 토큰을 확인하고 있어요…";
 const SAVE_FAILED_MESSAGE =
   "토큰은 확인했지만 키체인에 저장하지 못했어요. 키체인 잠금을 확인한 뒤 다시 확인을 눌러 주세요.";
@@ -123,6 +135,7 @@ function nameOf(e: unknown): string {
  * - 저장(save)이 던지면 창을 닫지 않는다 — 원래 예외 문구는 화면에도 로그에도 옮기지 않는다.
  * - 사람이 창을 닫으면 `quit()` 후 TokenWindowClosed로 거부한다. 확인 중에 닫혀도 늦게 온 결과는 버린다.
  * - 페이지를 못 띄우거나 다리가 없으면(null) 창을 닫고 **종료하지 않고** 거부한다 — 실패 화면과 "다시 시도"의 몫이다.
+ * - 두 모양 중 어느 것도 아닌 값(상한을 넘긴 붙여넣기)은 무시하되 **화면의 잠금을 푼다** — 페이지가 스스로 건 잠금이다.
  * - 새로 고침(⌘R)하면 새 페이지에 지금 상태를 다시 그리고 새로 묻는다. 옛 페이지의 답은 버린다.
  * - 토큰은 페이지로 되돌려 보내지도, 로그에 적지도 않는다. 저장한 사실은 가린 모양으로 적는다.
  */
@@ -243,6 +256,8 @@ export function openTokenWindow<W>(d: TokenWindowDeps<W>): Promise<string> {
         const action = parseAction(raw);
         if (action === null) {
           d.log("토큰 화면에서 알 수 없는 요청이 와서 무시했어요.");
+          // 무시하되 **화면은 되돌린다** — 페이지가 스스로 건 잠금을 푸는 것은 show()뿐이다.
+          setState({ busy: false, tone: "error", message: UNKNOWN_REQUEST_MESSAGE });
           continue;
         }
         await handle(action);

@@ -640,7 +640,11 @@ const READINESS_REFRESH_MS = 2_000;
  */
 async function refreshReadiness(): Promise<void> {
   const reader = readModelReadiness;
-  if (reader === null || !statusWindow.isOpen()) return;
+  // 종료가 시작되면(beginQuit) 더는 묻지 않는다. 이 리더는 **번들 psql 프로세스**를 새로 띄우고,
+  // ⌘Q 뒤에 뜬 psql은 stopAll이 postgres에 fast-shutdown을 건 것과 겹쳐 돌다가 종료 후 `ps`
+  // 훑기에 남은 프로세스로 잡힌다 (P4-C17·C19). 아래에서 타이머 자체도 끄지만, 이 줄은 이미
+  // 깨어나 여기 닿은 한 번을 막는다 — cancelRetry와 scheduleRetry의 quitting 가드와 같은 짝이다.
+  if (reader === null || quitting || !statusWindow.isOpen()) return;
   let raw: unknown;
   try {
     raw = await reader();
@@ -653,8 +657,14 @@ async function refreshReadiness(): Promise<void> {
   statusWindow.refresh();
 }
 
-// unref: 이 타이머 하나 때문에 이벤트 루프가 살아 있지 않게 한다 (종료가 이것을 기다리지 않는다).
-setInterval(() => void refreshReadiness(), READINESS_REFRESH_MS).unref?.();
+/**
+ * unref: 이 타이머 하나 때문에 이벤트 루프가 살아 있지 않게 한다 (종료가 이것을 기다리지 않는다).
+ *
+ * **unref는 멈추는 것이 아니다** — 루프를 붙잡지 않을 뿐 프로세스가 사는 동안 2초마다 계속 깨어난다.
+ * 그래서 종료의 되돌릴 수 없는 지점(beginQuit)이 이것을 `clearInterval`로 끈다.
+ */
+const readinessTimer: NodeJS.Timeout = setInterval(() => void refreshReadiness(), READINESS_REFRESH_MS);
+readinessTimer.unref?.();
 
 /**
  * dev에서 렌더러가 볼 주소. Vite를 이 시점에 띄우고 첫 서빙까지 기다린다.
@@ -1595,6 +1605,9 @@ if (!app.requestSingleInstanceLock()) {
       beginQuit: () => {
         quitting = true;
         cancelRetry();
+        // 모델 준비 리더도 여기서 끈다 — 이 타이머가 번들 psql을 새로 띄우는 유일한 주기다.
+        // 끄지 않으면 stopAll의 fast-shutdown과 겹친 psql이 종료 뒤까지 남는다 (P4-C17·C19).
+        clearInterval(readinessTimer);
       },
       // activeWindow를 쓰지 않는다 — quitting이 이미 참이라 그것은 항상 null을 돌려준다
       // (spawn-guard). 여기서 보고 싶은 것은 "지금 창이 있는가"뿐이다.

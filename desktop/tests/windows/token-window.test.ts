@@ -252,6 +252,27 @@ describe("openTokenWindow", () => {
     expect(h.asks).toHaveLength(junk.length + 1);
   });
 
+  it("clears the page's own lock when the paste was too long to parse (최종 리뷰)", async () => {
+    // token.html의 submit()은 보내기 **전에** setBusy(true)로 입력과 버튼을 잠그고, 그 잠금을 푸는
+    // 것은 show() 하나뿐이다. 상한(4096자)을 넘긴 붙여넣기는 parseAction이 null로 떨어뜨리는데,
+    // 그때 아무것도 그리지 않으면 토큰 화면이 영영 비활성으로 남는다 — 첫 실행 게이트에서는 창을
+    // 닫는 것이 곧 앱 종료라(TokenWindowClosed → quit) 회복 수단이 ⌘R뿐이다.
+    const h = harness();
+    void openTokenWindow(h.deps);
+    await h.load();
+    const drawn = h.states.length;
+    await h.act({ kind: "submit", token: "x".repeat(5_000) });
+    expect(h.states).toHaveLength(drawn + 1);
+    expect(h.last()).toMatchObject({ busy: false, tone: "error" });
+    expect(h.last().message).toContain("4096");
+    // 붙여 넣은 값 자체는 화면에도 로그에도 옮기지 않는다.
+    expect(h.last().message).not.toContain("xxxx");
+    expect(h.log.join("\n")).not.toContain("xxxx");
+    expect(h.verified).toEqual([]);
+    expect(h.saved).toEqual([]);
+    expect(h.asks).toHaveLength(2);
+  });
+
   it("quits the app when the person closes the window — there is no skipping", async () => {
     const h = harness();
     const result = outcome(openTokenWindow(h.deps));
