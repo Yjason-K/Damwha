@@ -76,8 +76,13 @@ const RESTART_GRACE_MS = 5_000;
  *
  * 감독자의 `canRestart`가 이것을 그대로 쓰고, 상태 창도 `statuses()`의 한 줄을 그대로 넣는다 —
  * 판정처가 하나라 버튼의 활성 여부와 감독자의 거부가 갈릴 수 없다. 근거는 `canRestart`의 주석.
+ *
+ * 거부하는 것은 둘이다. 하나는 **앱이 소유하지 않은** 인스턴스이고, 다른 하나는 **정리 중인**
+ * 서비스다(`cleaningUp`) — 그쪽은 신호를 이미 보냈고, 한 번 더 보내는 것이 worker에게는
+ * 강제 종료다 (ServiceStatus.cleaningUp의 주석).
  */
 export function restartRefused(s: ServiceStatus): boolean {
+  if (s.cleaningUp === true) return true;
   return !s.owned && (s.process === "running" || s.process === "starting");
 }
 
@@ -150,6 +155,12 @@ interface Runtime {
    * 시야 밖으로 새는 것. 둘 다 "아직 rt.result가 없는 동안"이라는 같은 창에서 벌어진다.
    */
   inFlight: Promise<boolean> | null;
+  /**
+   * 진행 중인 restartService. `inFlight`와 따로 둔다 — 그쪽은 bring 하나의 겹침을 막고, 이것은
+   * **정지까지 포함한** 재시작 전체의 겹침을 막는다. 없으면 버튼 두 번 클릭이 `specStop`을 두 번
+   * 불러 같은 pid에 신호를 두 번 보낸다(두 번째는 worker에게 강제 종료다 — ServiceStatus.cleaningUp).
+   */
+  restartInFlight: Promise<void> | null;
 }
 
 export function createSupervisor(
@@ -176,6 +187,7 @@ export function createSupervisor(
         budgetTimer: null,
         restartTimer: null,
         inFlight: null,
+        restartInFlight: null,
       },
     ]),
   );
@@ -563,6 +575,10 @@ export function createSupervisor(
         health: "unknown",
         detail: exitedDetail(code, handle.stderrTail()),
         recovery: undefined,
+        // 기다리던 끝이 왔다. 이제 신호를 다시 보내도 파괴적이지 않다 — 받을 프로세스가 없다.
+        // 아래 scheduleRestart가 보통은 스스로 다시 띄우지만, 예산을 다 썼으면 사람이 버튼으로
+        // 마저 한다. 그래서 이 표시는 여기서 **반드시** 풀린다.
+        cleaningUp: undefined,
       });
       rt.result = null;
       scheduleRestart(rt.spec, `종료 (코드 ${code})`);
@@ -644,14 +660,26 @@ export function createSupervisor(
    * 올리면 토큰 교체 전체가 한 서비스 때문에 실패한다. 까닭은 supervisor.log에 남는다.
    */
   function restartService(id: ServiceId): Promise<void> {
+    const rt = runtimes.get(id)!;
+    // 겹치면 **두 번째는 그 첫 번째를 기다린다.** 두 번 부르는 것은 버튼 두 번 클릭이고, 둘 다
+    // 통과시키면 `specStop`이 두 번 돌아 같은 pid에 신호를 두 번 보낸다 — worker에게 그 두 번째는
+    // 처리 중인 job을 requeue 없이 버리는 강제 종료다 (ServiceStatus.cleaningUp의 주석, P2-C5).
+    if (rt.restartInFlight !== null) {
+      log(`${id}: 이미 다시 시작하는 중이라 이 요청은 그것을 기다린다`);
+      return rt.restartInFlight;
+    }
     const p = restartOnce(id);
+    rt.restartInFlight = p;
     // pending에 넣는다. 정지를 기다리는 구간은 bring 밖이라 등록이 없으면 그 창의 ⌘Q가
     // stopAll의 역순 루프보다 먼저 지나가고, 그러면 rt.result가 null인 서비스를 건너뛴 채
     // `stopped: true`로 보고한다 — 아직 신호를 받는 중인 자식이 있는데 종료 안내가 "깨끗하다"고
     // 적는다. Task 8이 그 정직함에 한 번 고쳐 낸 자리다.
     const tracked = p.catch(() => undefined);
     pending.add(tracked);
-    void tracked.finally(() => pending.delete(tracked));
+    void tracked.finally(() => {
+      if (rt.restartInFlight === p) rt.restartInFlight = null;
+      pending.delete(tracked);
+    });
     return p;
   }
 
@@ -659,6 +687,12 @@ export function createSupervisor(
     const rt = runtimes.get(id)!;
     const refuse = (): boolean => {
       if (canRestart(rt)) return false;
+      if (rt.status.cleaningUp === true) {
+        // 두 번째 신호는 정리가 아니라 강제 종료다. 그 프로세스가 끝날 때까지 기다린다 —
+        // watchForDeath가 끝을 보면 이 표시를 지우고 버튼이 다시 열린다.
+        log(`${id}: 아직 내려가는 중이라 다시 시작하지 않는다 — 두 번째 종료 신호는 강제 종료다`);
+        return true;
+      }
       log(`${id}: 앱이 소유하지 않은 인스턴스라 다시 시작하지 않는다 — ${rt.status.detail ?? "외부 인스턴스"}`);
       return true;
     };
@@ -695,14 +729,28 @@ export function createSupervisor(
         //    null인 지금 **죽어 가는 우리 worker가 외부 worker로 보여** stand-down이 되고,
         //    owned:false가 박혀 이 버튼이 스스로 영영 비활성이 된다. 토큰 교체(P4-C4)의 길이 거기서 끊긴다.
         //  - embed: 옛 자식이 포트를 쥔 채 유일한 참조를 잃고, 새 자식은 그 포트에서 bind에 넘어진다.
-        // 그래서 참조를 되돌리고 상태는 살아 있는 그대로 둔 채 까닭만 싣는다. 사람이 다시 누를 수 있다.
+        // 그래서 참조를 되돌리고 상태는 살아 있는 그대로 둔 채 까닭만 싣는다.
         rt.result = result;
-        const why = out?.detail ?? CAUSES.restartStopFailed.text(id);
+        // 원인 문구를 **머리로** 쓴다. 어댑터의 detail만 실으면 causeOf가 이 원인을 못 찾아
+        // 화면의 안내가 사라진다 (exitedDetail이 같은 모양으로 머리 + 블록을 쓴다).
+        const lines = [CAUSES.restartStopFailed.text(id)];
+        if (out?.detail !== undefined) lines.push(out.detail);
         const leaked = out?.leaked ?? [];
-        set(id, { detail: leaked.length === 0 ? why : `${why}\n남은 pid: ${leaked.join(", ")}` });
-        log(`${id}: 내려가지 않아 다시 띄우지 않는다 — ${why}`);
-        // 우리가 끈 감시를 되돌린다. 서비스는 계속 살아 있으므로 계속 지켜봐야 한다.
-        if (rt.spec.healthIntervalMs !== undefined) scheduleHealthProbe(rt, rt.spec.healthIntervalMs);
+        if (leaked.length !== 0) lines.push(`남은 pid: ${leaked.join(", ")}`);
+        // **정리 중 표시.** 신호는 이미 갔다. 여기서 다시 누르게 두면 두 번째 신호가 가고,
+        // worker는 그것을 강제 종료로 해석해 처리 중인 job을 requeue 없이 버린다
+        // (ServiceStatus.cleaningUp의 주석, P2-C5). 프로세스가 실제로 끝나면 watchForDeath가 지운다.
+        // 끝을 볼 핸들이 없으면(컨테이너처럼 프로세스가 아닌 것) 표시하지 않는다 — 지워 줄 사건이
+        // 없어 영영 잠기고, 신호를 누적해 세는 것은 우리가 쥔 자식의 이야기다.
+        const watchable = result.handle !== null;
+        set(id, { detail: lines.join("\n"), ...(watchable ? { cleaningUp: true as const } : {}) });
+        log(`${id}: 내려가지 않아 다시 띄우지 않는다 — ${lines.join(" / ")}`);
+        // 끝을 지켜볼 수 있으면 그 사건 하나만 기다린다. 프로브를 다시 걸면 그것이 ready를 받아
+        // 방금 실은 안내를 지운다(applyReadiness가 detail을 비운다). 지켜볼 수 없으면 서비스는
+        // 평소대로 살아 있으므로 감시를 되돌린다.
+        if (!watchable && rt.spec.healthIntervalMs !== undefined) {
+          scheduleHealthProbe(rt, rt.spec.healthIntervalMs);
+        }
         scheduleBudgetReset(rt);
         return;
       }
@@ -788,7 +836,7 @@ export function createSupervisor(
         log(why);
       }
       rt.result = null;
-      set(spec.id, { process: "stopped", health: "unknown", owned: false });
+      set(spec.id, { process: "stopped", health: "unknown", owned: false, cleaningUp: undefined });
     }
     return details.length === 0
       ? { stopped, leaked }

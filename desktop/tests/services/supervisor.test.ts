@@ -2069,3 +2069,144 @@ describe("supervisor.restartService — 예약된 백오프와 종료 가시성 
     expect(out.leaked).toEqual([99]);
   });
 });
+
+/**
+ * 리뷰 2회차 (R-10b) — 1회차가 **닿을 수 있게 만든** 파괴적 경로.
+ *
+ * worker의 supervisor는 신호를 자기 수명 전체에 걸쳐 누적해 센다
+ * (`be/worker/damwha_worker/__main__.py`의 `child_holder["count"]`): 첫 신호는 `proc.terminate()`로
+ * `--once` 자식이 안전한 지점에서 job을 큐로 돌려놓게 하지만, 두 번째부터는 `proc.kill()` +
+ * `os._exit(1)`이라 처리 중인 job이 requeue 없이 버려진다 (P2-C5).
+ */
+describe("supervisor.restartService — 정리 중에는 두 번째 신호를 보내지 않는다 (fix 2-1)", () => {
+  /** 신호를 받아도 유예 안에 안 끝나는 자식. stop 호출을 신호 발송으로 센다. */
+  function stubbornSpec(signals: string[], over: Partial<ServiceSpec> = {}): ServiceSpec {
+    const exits: ((code: number) => void)[] = [];
+    const s = spec("worker", {
+      gate: false,
+      launch: async () => ({ handle: fakeHandle((l) => exits.push(l)), owned: true }),
+      stop: async () => {
+        signals.push("SIGTERM");
+        return { stopped: false, leaked: [4242], detail: "아직 일하는 중" };
+      },
+      restart: { maxAttempts: 3, backoffMs: [5, 5, 5] },
+      ...over,
+    });
+    (s as ServiceSpec & { exits: typeof exits }).exits = exits;
+    return s;
+  }
+
+  it("sends no second signal when the button is pressed again while the worker winds down", async () => {
+    const signals: string[] = [];
+    const log: string[] = [];
+    const s = createSupervisor([stubbornSpec(signals)], ctx(), {
+      readyTimeoutMs: 100,
+      readyIntervalMs: 5,
+      log: (l) => void log.push(l),
+    });
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+
+    await s.restartService("worker");
+    expect(signals).toEqual(["SIGTERM"]);
+    // 화면이 "정리 중"으로 잠긴다 — 버튼도 감독자도 같은 판정을 본다.
+    const st = s.statuses()[0];
+    expect(st.cleaningUp).toBe(true);
+    expect(restartRefused(st)).toBe(true);
+    expect(st.detail).toContain("내리는 중이에요");
+    expect(st.detail).not.toContain("다시 시도");
+
+    await s.restartService("worker");
+    await s.restartService("worker");
+
+    expect(signals).toEqual(["SIGTERM"]); // 두 번째·세 번째 요청은 신호를 보내지 않았다
+    expect(log.some((l) => l.includes("두 번째 종료 신호는 강제 종료다"))).toBe(true);
+    await s.stopAll({ graceMs: 5 });
+  });
+
+  it("runs one stop — and one bring — for two concurrent presses", async () => {
+    // 겹친 두 번째 요청이 통과하면 두 가지가 벌어진다: 같은 pid에 두 번째 신호가 가거나(강제
+    // 종료), 첫 번째가 rt.result를 이미 비운 뒤라 정지를 **건너뛰고** 곧장 bring해 아직 내려가는
+    // 중인 자식 옆에 두 번째 인스턴스를 띄운다. 둘 다 여기서 막힌다.
+    const signals: string[] = [];
+    let launches = 0;
+    const gate: { release?: () => void } = {};
+    const s = createSupervisor(
+      [
+        stubbornSpec(signals, {
+          launch: async () => {
+            launches += 1;
+            return { handle: fakeHandle(() => undefined), owned: true };
+          },
+          stop: async () => {
+            signals.push("SIGTERM");
+            // 첫 번째만 붙잡는다 — 뒤의 stopAll까지 막으면 테스트가 스스로 교착한다.
+            if (signals.length === 1) await new Promise<void>((r) => (gate.release = r));
+            return { stopped: false, leaked: [4242], detail: "아직 일하는 중" };
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+    expect(launches).toBe(1);
+
+    const first = s.restartService("worker");
+    const second = s.restartService("worker");
+    await vi.waitFor(() => expect(signals).toEqual(["SIGTERM"]));
+    gate.release?.();
+    await Promise.all([first, second]);
+
+    expect(signals).toEqual(["SIGTERM"]);
+    expect(launches).toBe(1);
+    expect(s.statuses()[0].cleaningUp).toBe(true);
+    await s.stopAll({ graceMs: 5 });
+  });
+
+  it("allows a restart again once the process really exits", async () => {
+    const signals: string[] = [];
+    const spec0 = stubbornSpec(signals);
+    const exits = (spec0 as ServiceSpec & { exits: ((code: number) => void)[] }).exits;
+    const s = createSupervisor([spec0], ctx(), { readyTimeoutMs: 100, readyIntervalMs: 5 });
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+
+    await s.restartService("worker");
+    expect(s.statuses()[0].cleaningUp).toBe(true);
+
+    // 늦게 끝났다 — worker가 job을 마치고 스스로 내려간 것이다.
+    exits[0]?.(0);
+
+    await vi.waitFor(() => expect(s.statuses()[0].cleaningUp).toBeUndefined());
+    expect(restartRefused(s.statuses()[0])).toBe(false);
+    // 보통은 평소의 사망 경로가 알아서 다시 띄운다.
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+    expect(signals).toEqual(["SIGTERM"]);
+    await s.stopAll({ graceMs: 5 });
+  });
+
+  it("does not lock a service whose exit it could not watch", async () => {
+    // 핸들이 없으면 표시를 지워 줄 사건이 없다 — 영영 잠기는 대신 잠그지 않는다.
+    const s = createSupervisor(
+      [
+        spec("postgres", {
+          gate: false,
+          launch: async () => ({ handle: null, owned: true }),
+          stop: async () => ({ stopped: false, leaked: [] }),
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+
+    await s.restartService("postgres");
+
+    expect(s.statuses()[0].cleaningUp).toBeUndefined();
+    expect(restartRefused(s.statuses()[0])).toBe(false);
+    await s.stopAll({ graceMs: 5 });
+  });
+});

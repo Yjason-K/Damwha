@@ -331,13 +331,17 @@ export const CAUSES = {
     selfRecovers: false,
   },
   /**
-   * 감독자 — "서비스 다시 시작"이 그 서비스를 내리지 못했다 (스펙 §6.10 2층). 어댑터가 까닭을
-   * 주지 않았을 때의 기본 문구다(worker의 `unattended`처럼 detail이 있으면 그쪽이 실린다).
-   * 서비스는 **계속 살아 있고** 앱이 다시 띄우지도 않았다 — 다시 누를 수 있다는 것이 안내의 핵심이다.
+   * 감독자 — "서비스 다시 시작"이 유예 안에 그 서비스를 내리지 못했다 (스펙 §6.10 2층).
+   * 어댑터의 까닭이 있으면 이 문구 **뒤에** 함께 실린다.
+   *
+   * **"다시 시도해 주세요"라고 말하지 않는다.** 그 서비스에는 이미 종료 신호가 갔고, 두 번째
+   * 신호는 worker에게 강제 종료다 — 처리 중이던 job이 requeue 없이 버려진다
+   * (`be/worker/damwha_worker/__main__.py`의 누적 카운트, P2-C5). 그래서 감독자가 그 프로세스가
+   * 끝날 때까지 재시작을 막고(`ServiceStatus.cleaningUp`), 화면도 기다리라고만 말한다.
    */
   restartStopFailed: {
-    match: /를 내리지 못해 다시 띄우지 않았어요/,
-    text: (id: string) => `${id}를 내리지 못해 다시 띄우지 않았어요. 잠시 뒤 다시 시도해 주세요.`,
+    match: /를 내리는 중이에요/,
+    text: (id: string) => `${id}를 내리는 중이에요. 아직 끝나지 않아 다시 띄우지 않았어요.`,
     selfRecovers: false,
   },
 } as const satisfies Record<string, Cause>;

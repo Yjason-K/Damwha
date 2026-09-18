@@ -30,6 +30,17 @@ export interface ServiceStatus {
   restarts: number;
   /** failed일 때만 뜻이 있다. 감독자가 실패의 부류를 여기로 옮기고, 다시 뜨거나 ready가 되면 지운다. */
   recovery?: Recovery;
+  /**
+   * 앱이 이 서비스에 **종료 신호를 보냈는데 아직 안 끝났다** (스펙 §6.10 2층). 프로세스가 실제로
+   * 끝나면 감독자가 지운다.
+   *
+   * 이 표시가 있는 동안 "서비스 다시 시작"은 거부된다 — 두 번째 신호가 파괴적이기 때문이다.
+   * worker의 supervisor는 **자기 수명 전체에 걸쳐** 신호를 누적해 센다
+   * (`be/worker/damwha_worker/__main__.py`의 `child_holder["count"]`): 첫 신호는 `proc.terminate()`로
+   * `--once` 자식이 안전한 지점에서 job을 큐로 돌려놓게 하지만, **두 번째부터는** `proc.kill()` +
+   * `os._exit(1)`이라 처리 중이던 job이 graceful requeue 없이 버려진다 (P2-C5).
+   */
+  cleaningUp?: true;
 }
 
 export interface LaunchContext {

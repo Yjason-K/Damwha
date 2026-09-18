@@ -94,10 +94,18 @@ export const HINTS: Record<CauseId, Hint> = {
   },
   readinessThrew: null,
   externalCheckFailed: null,
-  // 서비스는 계속 살아 있고 앱은 다시 띄우지 않았다 — 사람이 할 일은 기다렸다 다시 누르는 것뿐이다.
-  // worker는 job 하나를 마치는 데 최대 90초를 쓴다 (main.ts의 WORKER_GRACE_MS).
-  restartStopFailed:
-    "처리 중인 일이 끝나면 내려갑니다. 잠시 뒤 \"서비스 다시 시작\"을 한 번 더 눌러 주세요.",
+  /**
+   * **다시 누르라고 말하지 않는다.** 그 서비스에는 이미 종료 신호가 갔고, 두 번째 신호는
+   * worker에게 강제 종료다(처리 중인 job이 requeue 없이 버려진다 — P2-C5). 감독자도 그동안
+   * 버튼을 잠근다(`ServiceStatus.cleaningUp`). 사람이 할 일은 기다리는 것뿐이다.
+   *
+   * 서비스마다 기다리는 시간의 근거가 달라 id별로 적는다 — worker는 job 하나를 마치는 데 최대
+   * 90초를 쓰고(main.ts의 WORKER_GRACE_MS), embed는 받던 모델을 마무리한다.
+   */
+  restartStopFailed: {
+    worker: "처리 중인 작업을 안전한 지점까지 마치고 내려갑니다. 최대 90초가 걸릴 수 있어요.",
+    embed: "받던 모델을 마무리하고 내려갑니다. 끝나면 앱이 다시 띄웁니다.",
+  },
 };
 
 /**
