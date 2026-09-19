@@ -1,4 +1,5 @@
 import { CAUSES, causeIn, type CauseId } from "../diagnostics/causes";
+import { HF_TOKENS_PAGE_URL } from "../config/token-store";
 import type { ServiceId, ServiceStatus } from "../services/types";
 
 /**
@@ -15,23 +16,66 @@ import type { ServiceId, ServiceStatus } from "../services/types";
  */
 type Hint = string | null | Partial<Record<ServiceId, string>>;
 
-const INSTALL_OR_CONFIGURE = "설치했는지 확인하거나, config.json의 UV_BIN에 경로를 적어 주세요.";
+/**
+ * worker·embed의 spawn ENOENT는 이제 번들 python이 없다는 뜻이다 (Phase 4 — process/python-launcher.ts).
+ * config.json의 UV_BIN은 더 읽지 않으므로 그것을 고치라고 말하면 틀린 안내다. 문구는 pgBundleMissing과 같은 꼴이다.
+ */
+const PYTHON_BUNDLE_MISSING =
+  "앱을 다시 설치해 주세요. 개발 중이면 `bash desktop/scripts/build-python.sh`를 실행한 뒤 다시 시도해 주세요.";
+
+/**
+ * **재시도 3층** (스펙 §6.10). 층마다 사람이 할 일이 다르고, 화면은 그것을 **구분해** 말한다.
+ *
+ * "다시 시도" 하나로 뭉치지 않는다 — 뭉치면 눌러도 아무 일도 안 일어나는 경우가 생긴다. Phase 2가
+ * stand-down worker에서 정확히 그 문제를 겪었다.
+ *
+ * | 층 | 무엇이 실패했나 | 화면 |
+ * | --- | --- | --- |
+ * | 1 | 다운로드만. 서비스는 살아 있다 | 이 문구. **버튼이 없다** — worker가 다음 job에서 다시 받는다 |
+ * | 2 | 서비스가 죽었거나 토큰을 바꿨다 | 그 줄의 "서비스 다시 시작" 버튼 |
+ * | 3 | job이 이미 `failed`다 | 기존 재처리 경로. 새 경로를 만들지 않는다 |
+ */
+export const RETRY_LAYERS = {
+  /**
+   * 1층. 버튼을 주지 않는 것이 요점이다: 서비스는 멀쩡히 돌고 있고 눌러 봐야 같은 자리로 돌아온다.
+   * TRANSIENT로 분류된 다운로드 실패는 job이 `queued`로 돌아가 다음 차례에 다시 받는다.
+   */
+  download: "네트워크가 돌아오면 다음 처리에서 이어받아요. 지금 누를 것은 없어요.",
+  /** 2층. 버튼은 그 서비스 줄에 있고, 앱이 소유하지 않은 서비스에서는 비활성이다(restartRefused). */
+  service: "이 줄의 “서비스 다시 시작”을 눌러 주세요.",
+  /** 3층. `POST /meetings/:id/reprocess` — 담화 화면의 기존 재처리다. 상태 창은 길만 알려 준다. */
+  job: "담화 화면에서 그 회의를 열어 “이 회의를 다시 처리하기”를 눌러 주세요.",
+} as const;
 
 /**
  * `Record<CauseId, …>`라서 causes.ts에 원인을 더하고 여기서 안내를 정하지 않으면 lint(tsc)가
  * 걸린다. 그 강제가 이 표가 "손으로 적은 목록이라 원인 하나를 조용히 빠뜨리는" 일을 막는다.
  */
 export const HINTS: Record<CauseId, Hint> = {
-  uvMissing: INSTALL_OR_CONFIGURE,
-  // uv를 부르는 것은 worker·embed다. dev의 API 런처는 pnpm을 부르므로 거기에 UV_BIN을 말하면
+  // 번들 python을 부르는 것은 worker·embed다. dev의 API 런처는 pnpm을 부르므로 거기에 번들 안내를 하면
   // 틀린 안내다.
-  spawnNotFound: { worker: INSTALL_OR_CONFIGURE, embed: INSTALL_OR_CONFIGURE },
-  workerEnvMissing: "be/worker/.env.example을 복사해 값을 채운 뒤 다시 시도해 주세요.",
+  spawnNotFound: { worker: PYTHON_BUNDLE_MISSING, embed: PYTHON_BUNDLE_MISSING },
   pendingMigrations: "터미널에서 `pnpm be:migrate`를 실행한 뒤 다시 시도해 주세요.",
   externalWorker:
     "터미널의 worker를 끄고 다시 시도하거나, 그 worker의 STORAGE_ROOT가 앱과 같은지 확인해 주세요.",
   embedMismatch: "외부 embed 서비스를 끄면 앱이 직접 띄웁니다.",
-  repoRootMissing: "be/worker가 있는 담화 저장소 폴더를 골라 주세요.",
+  // dev 전용 원인이다 — 폴더를 고르는 창은 없다. 저장소 안의 desktop/에서 띄우면 앱이 스스로 찾는다.
+  repoRootMissing:
+    "담화 저장소 안의 desktop/에서 앱을 띄웠는지 확인하거나, config.json의 REPO_ROOT에 be/worker가 있는 저장소 폴더를 적어 주세요.",
+  // 평문 저장을 권하지 않는다 — 앱에 그런 경로가 없다 (스펙 §6.4).
+  safeStorageUnavailable:
+    "키체인 접근 앱에서 로그인 키체인의 잠금을 해제한 뒤 메뉴의 서비스 > 다시 시도를 눌러 주세요.",
+  orphanScanFailed: "logs/supervisor.log에서 까닭을 확인한 뒤 메뉴의 서비스 > 다시 시도를 눌러 주세요.",
+  hfTokenInvalid: `${HF_TOKENS_PAGE_URL} 에서 토큰을 확인하거나 새로 만든 뒤 다시 입력해 주세요.`,
+  hfGateNotAccepted: "위 페이지에서 토큰을 만든 계정으로 사용 조건에 동의한 뒤 그 회의를 다시 처리해 주세요.",
+  /**
+   * **서비스 줄**에 이 원인이 실렸을 때의 안내다 — 그 서비스는 모델을 받다 죽었으므로 2층이다.
+   * 모델 줄(status-view.ts의 modelRows)은 `errorKind`를 보고 1층·2층을 스스로 고른다: 같은 원인
+   * 문구라도 살아 있는 서비스의 TRANSIENT 실패는 기다리는 일이고, 여기 오는 것은 죽은 서비스다.
+   */
+  modelDownloadFailed: RETRY_LAYERS.service,
+  modelDownloadStalled: RETRY_LAYERS.service,
+  diskFull: "다른 파일을 정리해 공간을 만든 뒤 “서비스 다시 시작”을 눌러 주세요.",
   pgBundleMissing:
     "앱을 다시 설치해 주세요. 개발 중이면 `bash desktop/scripts/build-postgres.sh`를 실행한 뒤 다시 시도해 주세요.",
   pgSocketPathTooLong: "지금 macOS 계정에서는 내장 데이터베이스를 열 수 없어요. 계정 이름이 짧은 계정에서 실행해 주세요.",
@@ -78,6 +122,18 @@ export const HINTS: Record<CauseId, Hint> = {
   },
   readinessThrew: null,
   externalCheckFailed: null,
+  /**
+   * **다시 누르라고 말하지 않는다.** 그 서비스에는 이미 종료 신호가 갔고, 두 번째 신호는
+   * worker에게 강제 종료다(처리 중인 job이 requeue 없이 버려진다 — P2-C5). 감독자도 그동안
+   * 버튼을 잠근다(`ServiceStatus.cleaningUp`). 사람이 할 일은 기다리는 것뿐이다.
+   *
+   * 서비스마다 기다리는 시간의 근거가 달라 id별로 적는다 — worker는 job 하나를 마치는 데 최대
+   * 90초를 쓰고(main.ts의 WORKER_GRACE_MS), embed는 받던 모델을 마무리한다.
+   */
+  restartStopFailed: {
+    worker: "처리 중인 작업을 안전한 지점까지 마치고 내려갑니다. 최대 90초가 걸릴 수 있어요.",
+    embed: "받던 모델을 마무리하고 내려갑니다. 끝나면 앱이 다시 띄웁니다.",
+  },
 };
 
 /**
@@ -104,21 +160,32 @@ function hintOf(cause: CauseId, id: ServiceId | undefined): string | undefined {
 }
 
 /**
- * 이 상태에서 사람에게 보여줄 원인. 실패·degraded·외부 인스턴스에 밀려 서지 않은 경우뿐이다.
+ * 이 상태에서 사람에게 보여줄 원인. 실패·degraded·외부 인스턴스에 밀려 서지 않은 경우, 그리고
+ * **정리 중**인 경우다.
  *
  * `starting`/`stopped`의 detail은 **지난** 실패의 것이다 — 감독자는 상태를 덧대기만 해서
  * 재기동이 시작돼도 detail이 지워지지 않는다. 그것을 원인으로 읽으면 다시 뜨는 중인 서비스에
  * 방금 고친 실패의 안내를 붙이게 된다.
+ *
+ * **`cleaningUp`이 여기 있는 것이 그 상태의 유일한 관문이다** (판정 R-10c). 그 서비스는
+ * `running`·`ok`·`owned`라 아래 세 줄 중 어느 것에도 걸리지 않는데, 감독자는 그동안 "서비스 다시
+ * 시작"을 전부 거부한다. 원인이 화면에 닿지 않으면 사람은 초록색 "실행 중" 한 줄을 보면서 왜
+ * 버튼이 안 먹는지 알 길이 없다. 이 판정을 다른 렌더러가 다시 적지 않는다 — statusLine·
+ * servicesView 둘 다 이 함수를 거친다.
  */
 export function causeOf(status: ServiceStatus): string | undefined {
   if (status.detail === undefined || status.detail === "") return undefined;
+  if (status.cleaningUp === true) return status.detail;
   if (status.process === "failed" || status.health === "degraded") return status.detail;
   if (status.process === "running" && !status.owned) return status.detail;
   return undefined;
 }
 
 export function recoveryHint(status: ServiceStatus): string | undefined {
-  if (status.process === "running" && status.health === "ok") return undefined;
+  // 정리 중인 서비스는 running·ok인 채로 안내가 있어야 한다 — 이 줄이 그것을 먼저 빼 준다.
+  if (status.cleaningUp !== true && status.process === "running" && status.health === "ok") {
+    return undefined;
+  }
   const detail = causeOf(status);
   const cause = detail === undefined ? undefined : causeIn(detail);
   if (cause === undefined) return undefined;

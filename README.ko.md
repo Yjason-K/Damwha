@@ -156,7 +156,7 @@ MLX/torch가 잡은 GPU 메모리를 OS가 매번 회수한다 — 쌓여서 OOM
 | Docker | Postgres 이미지(pgvector + pg_bigm), 그리고 jest/pytest 스위트(testcontainers) | Docker Desktop |
 | [uv](https://docs.astral.sh/uv/) | Python 워커의 환경 + 락파일 | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | **ffmpeg** (`PATH`에) | 모든 오디오 job이 업로드 정규화로 시작한다(`pipeline/ffmpeg.py`). 바이너리가 없으면 기동이 아니라 job이 실패한다 | `brew install ffmpeg` |
-| **mlx-lm** (`PATH`에) | 렌즈/요약 LLM을 서빙한다. 워커 venv **바깥에** 설치할 것 — 워커는 `mlx_lm`을 import하지 않고 `mlx_lm.server` 바이너리를 spawn한다 | `uv tool install mlx-lm` |
+| **mlx-lm** — 따로 설치 안 함 | 렌즈/요약 LLM을 서빙한다. `mlx-lm==0.31.3`이 워커의 `models` extra에 고정돼 있고(Apple Silicon 한정), 워커가 `PATH`의 바이너리가 아니라 `python -m damwha_worker.llm_entry`로 띄운다 | `uv sync --extra models`에 포함 |
 | Hugging Face 계정 + 토큰 | pyannote 화자 분리는 **게이트 걸린** 모델이다 | [ML 모델](#ml-모델--게이트-걸림-용량-큼) 참고 |
 
 Apple Silicon이 상정한 타깃이다. STT는 `mlx-whisper`, LLM은 MLX로 돈다.

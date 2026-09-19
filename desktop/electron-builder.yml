@@ -14,8 +14,8 @@ files:
 # from은 build/api가 아니라 build다 (실측으로 확정) — app-builder-lib의 파일 필터가
 # `from` 바로 아래 자식이 정확히 "node_modules"면 그 디렉터리를 통째로 건너뛴다
 # (asar로 패키징되는 메인 앱 자신의 의존성만 염두에 둔 하드코딩이라, extraResources에도
-# 무차별 적용된다). build/에는 이제 api/·postgres/ 둘이 있고, 한 단계 위에서 복사하면
-# "api/node_modules"가 되어 그 규칙을 피하면서도 결과는 똑같이 Resources/api·Resources/postgres다.
+# 무차별 적용된다). build/에는 이제 api/·postgres/·python/·ffmpeg/ 넷이 있고, 한 단계 위에서
+# 복사하면 "api/node_modules"가 되어 그 규칙을 피하면서도 결과는 똑같이 Resources/<이름> 넷이다.
 extraResources:
   - from: build
 mac:

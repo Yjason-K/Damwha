@@ -1,13 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
+import { leftoverNotice } from "../../src/app/quit-flow";
+import { stopThenReap } from "../../src/app/reap-on-quit";
+import { knownTrees, type ReapDeps } from "../../src/process/orphans";
 import { judgeAfterProbe } from "../../src/services/api";
 import { ServiceFailure } from "../../src/services/failure";
-import { createSupervisor, orderOf } from "../../src/services/supervisor";
+import { STALL_MS } from "../../src/services/model-readiness";
+import { createSupervisor, orderOf, restartRefused } from "../../src/services/supervisor";
 import type {
   LaunchContext,
   LaunchResult,
   ReadinessResult,
   ServiceId,
   ServiceSpec,
+  StopOutcome,
 } from "../../src/services/types";
 
 function ctx(): LaunchContext {
@@ -15,8 +20,10 @@ function ctx(): LaunchContext {
     repoRoot: "/r",
     userData: "/u",
     packaged: false,
+    databaseMode: "embedded",
     env: {},
-    bins: { uv: "/opt/homebrew/bin/uv" },
+    bins: { python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+    runId: "desktop-test",
     searchDirs: ["/opt/homebrew/bin"],
     logFile: (id) => `/u/logs/${id}.log`,
     signal: new AbortController().signal,
@@ -467,9 +474,104 @@ describe("supervisor.stopAll", () => {
   });
 });
 
+describe("supervisor.stopAll → 종료 회수 (B층, P4-C19)", () => {
+  it("never calls a dead worker's stop() — and the quit chain still reaps what it left and turns A's clean into not-clean", async () => {
+    // 스펙 §6.5: watchForDeath가 rt.result를 null로 만들고 stopAll이 그 서비스를 건너뛴다. 그래서 stop() 안에
+    // 무엇을 넣어도 이 경로에서는 돌지 않는다 — B층이 따로 있는 이유다. 그 경로를 흉내 내지 않고 실제로 밟고,
+    // main.ts의 stopServices()가 쓰는 사슬(stopThenReap: stopAll 뒤 B층, 판정 합치기)을 그대로 돌린다.
+    const RUN = "desktop-33333333-3333-4333-8333-333333333333";
+    const c: LaunchContext = { ...ctx(), runId: RUN };
+    const py = c.bins.python;
+    let workerStopCalls = 0;
+    let die: ((code: number) => void) | null = null;
+    const s = createSupervisor(
+      [
+        spec("worker", {
+          gate: true,
+          // 실제 worker처럼 재시작 정책이 있다. 재시작 타이머는 stopAll이 치운다.
+          restart: { maxAttempts: 3, backoffMs: [60_000] },
+          launch: async () => ({
+            handle: fakeHandle((listener) => {
+              die = listener;
+            }),
+            owned: true,
+          }),
+          stop: async () => {
+            workerStopCalls += 1;
+            return { stopped: true, leaked: [] };
+          },
+        }),
+      ],
+      c,
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    expect(s.runtimeOf("worker")!.result).not.toBeNull();
+
+    // Python supervisor만 kill -9. start_new_session=True인 --once(7002)와 그 아래 llm_entry(7003)는
+    // 이번 실행의 run-id를 단 채 launchd 아래로 재부모화돼 산다 (P4-C19 a).
+    die!(137);
+    expect(s.runtimeOf("worker")!.result).toBeNull();
+
+    const alive = new Set([1, 7002, 7003]);
+    const events: string[] = [];
+    const logs: string[] = [];
+    const ps = [
+      "  PID ARGS",
+      "    1 /sbin/launchd",
+      ` 7002 ${py} -m damwha_worker --once --run-id=${RUN}`,
+      ` 7003 ${py} -m damwha_worker.llm_entry --run-id=${RUN} --model mlx-community/Qwen3-4B-4bit --port 51234`,
+    ].join("\n");
+    const deps: ReapDeps = {
+      runId: c.runId,
+      trees: knownTrees(c),
+      ps: async () => {
+        events.push("B:ps");
+        return ps;
+      },
+      descendantsOf: async (pid) => (pid === 7002 && alive.has(7003) ? [7003] : []),
+      kill: (pid) => {
+        events.push(`KILL ${pid}`);
+        alive.delete(pid);
+      },
+      terminate: (pid) => {
+        events.push(`TERM ${pid}`);
+        alive.delete(pid);
+      },
+      exists: (pid) => alive.has(pid),
+      log: (line) => logs.push(line),
+      sleep: async () => undefined,
+    };
+
+    let layerA: StopOutcome | null = null;
+    const out = await stopThenReap(async () => {
+      events.push("A:stopAll");
+      layerA = await s.stopAll({ graceMs: 10 });
+      events.push("A:done");
+      return layerA;
+    }, deps);
+
+    expect(workerStopCalls).toBe(0);
+    // A층은 깨끗하다고 보고한다 — 핸들이 없으니 볼 것이 없었다. status는 failed로 남는다(건너뛰었다).
+    expect(layerA).toEqual({ stopped: true, leaked: [] });
+    expect(s.statuses()[0].process).toBe("failed");
+    // B층은 A층이 끝난 뒤에, 자손 먼저 내린다. launchd(1)와 죽은 supervisor에는 신호가 없다.
+    expect(events).toEqual(["A:stopAll", "A:done", "B:ps", "TERM 7003", "TERM 7002"]);
+    expect(alive).toEqual(new Set([1]));
+    // clean → not clean. 내린 것이 모두 끝났으니 화면은 "정리했다"고 말한다.
+    expect(out.stopped).toBe(false);
+    expect(out.leaked).toEqual([]);
+    expect(out.cleanedUp).toBe(true);
+    expect(out.detail).toMatch(/7002/);
+    expect(out.detail).toMatch(/7003/);
+    expect(leftoverNotice(out).message).toBe("종료하면서 남아 있던 프로세스를 정리했어요.");
+    expect(logs.join("\n")).toMatch(/놓친/);
+  });
+});
+
 describe("supervisor.stopAll — 진행 중인 배경 기동 (C1)", () => {
   it("does not let a background bring create a process after stopAll returned", async () => {
-    // launchWithUv도 launchDev도 detached다. stopAll이 반환한 **뒤에** 만들어진 자식은
+    // launchPython도 launchDev도 detached다. stopAll이 반환한 **뒤에** 만들어진 자식은
     // Electron이 죽어도 살아남고, 그것을 가리키는 참조는 아무 데도 없다 (P2-C4).
     const live = new Set<number>();
     let launched = 0;
@@ -1327,5 +1429,784 @@ describe("supervisor — recovery class and launch abort (Phase 3)", () => {
     expect(stopped).toBe("stopped");
     expect(box.signal?.aborted).toBe(true);
     await starting;
+  });
+});
+
+/**
+ * 스펙 §6.9 — "진행이 갱신되고 있으면 유예를 소모하지 않는다". 감독자 쪽 적용 지점은 embed의
+ * `readyTimeoutMs`(180초)이고, 그 제한은 bge-m3 첫 다운로드보다 짧다.
+ */
+describe("supervisor — 다운로드 중에는 준비 유예를 멈춘다 (Task 10)", () => {
+  /** worker가 쓰는 고정 정밀도 UTC 문자열 (db/core.py의 `_ISO_FORMAT`). */
+  const iso = (ms: number) => new Date(ms).toISOString().replace("Z", "000Z");
+
+  /** `model_readiness` 한 행. 리더 dep이 돌려주는 raw jsonb 모양 그대로다. */
+  function readinessRow(writer: string, updatedAt: number, state = "downloading") {
+    return {
+      updated_at: iso(updatedAt),
+      entries: {
+        "BAAI/bge-m3": {
+          state,
+          bytes_done: 1,
+          bytes_total: 0,
+          writer,
+          attempt: 1,
+          started_at: iso(updatedAt),
+          updated_at: iso(updatedAt),
+          error: null,
+          error_kind: null,
+        },
+      },
+    };
+  }
+
+  it("does not let the grace expire while this service's model is downloading", async () => {
+    let ready = false;
+    const s = createSupervisor(
+      [spec("embed", { gate: false, readiness: async () => (ready ? { kind: "ready" } : { kind: "not-ready" }) })],
+      ctx(),
+      {
+        readyTimeoutMs: 40,
+        readyIntervalMs: 5,
+        readinessPollMs: 0,
+        readModelReadiness: async () => readinessRow("embed", Date.now()),
+      },
+    );
+    await s.start();
+    // 유예(40ms)의 다섯 배를 기다려도 실패하지 않는다 — 진행이 갱신되고 있다.
+    await new Promise((r) => setTimeout(r, 200));
+    expect(s.statuses()[0].process).toBe("starting");
+    ready = true;
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+    await s.stopAll({ graceMs: 5 });
+  });
+
+  it("lets the grace expire once the progress has stood still past the stall limit", async () => {
+    const s = createSupervisor(
+      [spec("embed", { gate: false, readiness: async () => ({ kind: "not-ready" }) })],
+      ctx(),
+      {
+        readyTimeoutMs: 40,
+        readyIntervalMs: 5,
+        readinessPollMs: 0,
+        readModelReadiness: async () => readinessRow("embed", Date.now() - STALL_MS - 1_000),
+      },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("failed"));
+    await s.stopAll({ graceMs: 5 });
+  });
+
+  it("does not stop this service's clock for another writer's download", async () => {
+    // embed가 죽어 가는 동안 worker가 whisper를 받고 있으면 embed의 유예가 영영 안 끝난다.
+    const s = createSupervisor(
+      [spec("embed", { gate: false, readiness: async () => ({ kind: "not-ready" }) })],
+      ctx(),
+      {
+        readyTimeoutMs: 40,
+        readyIntervalMs: 5,
+        readinessPollMs: 0,
+        readModelReadiness: async () => readinessRow("desktop-other", Date.now()),
+      },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("failed"));
+    await s.stopAll({ graceMs: 5 });
+  });
+
+  it("knows the worker's own download by this run's WORKER_ID", async () => {
+    const c = ctx();
+    c.env.WORKER_ID = "desktop-run-77";
+    let ready = false;
+    const s = createSupervisor(
+      [spec("worker", { gate: false, readiness: async () => (ready ? { kind: "ready" } : { kind: "not-ready" }) })],
+      c,
+      {
+        readyTimeoutMs: 40,
+        readyIntervalMs: 5,
+        readinessPollMs: 0,
+        readModelReadiness: async () => readinessRow("desktop-run-77", Date.now()),
+      },
+    );
+    await s.start();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(s.statuses()[0].process).toBe("starting");
+    ready = true;
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+    await s.stopAll({ graceMs: 5 });
+  });
+
+  it("counts cumulatively — a finished download does not leave zero grace behind", async () => {
+    // 고정 deadline이면 다운로드가 끝난 순간 남은 유예가 0이라 곧바로 실패한다 (스펙 §6.9).
+    let downloading = true;
+    const s = createSupervisor(
+      [spec("embed", { gate: false, readiness: async () => ({ kind: "not-ready" }) })],
+      ctx(),
+      {
+        readyTimeoutMs: 80,
+        readyIntervalMs: 5,
+        readinessPollMs: 0,
+        readModelReadiness: async () =>
+          downloading ? readinessRow("embed", Date.now()) : readinessRow("embed", Date.now(), "ready"),
+      },
+    );
+    await s.start();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(s.statuses()[0].process).toBe("starting");
+    const flipped = Date.now();
+    downloading = false;
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("failed"), { timeout: 2_000 });
+    // 다운로드가 끝난 **뒤에** 유예를 쓰기 시작한다. 즉시 실패면 누적이 아니라 고정 deadline이다.
+    expect(Date.now() - flipped).toBeGreaterThanOrEqual(60);
+    await s.stopAll({ graceMs: 5 });
+  });
+
+  it("burns the grace as before when no reader is wired (external DB mode)", async () => {
+    const s = createSupervisor(
+      [spec("embed", { gate: false, readiness: async () => ({ kind: "not-ready" }) })],
+      ctx(),
+      { readyTimeoutMs: 30, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("failed"));
+    await s.stopAll({ graceMs: 5 });
+  });
+
+  it("treats a reader failure as 'nothing is downloading' instead of throwing", async () => {
+    const log: string[] = [];
+    const s = createSupervisor(
+      [spec("embed", { gate: false, readiness: async () => ({ kind: "not-ready" }) })],
+      ctx(),
+      {
+        readyTimeoutMs: 30,
+        readyIntervalMs: 5,
+        readinessPollMs: 0,
+        readModelReadiness: async () => {
+          throw new Error("psql이 죽었어요");
+        },
+        log: (l) => void log.push(l),
+      },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("failed"));
+    expect(log.some((l) => l.includes("psql이 죽었어요"))).toBe(true);
+    await s.stopAll({ graceMs: 5 });
+  });
+});
+
+/** 스펙 §6.10 2층 — 살아 있는 서비스도 내리는 재시작. `retry()`와 별도 경로다. */
+describe("supervisor.restartService (Task 10)", () => {
+  it("is a method on the supervisor object", () => {
+    const s = createSupervisor([spec("embed")], ctx(), {});
+    expect(typeof s.restartService).toBe("function");
+  });
+
+  it("takes down a running service the app owns and brings it back", async () => {
+    let launches = 0;
+    const stops: number[] = [];
+    const s = createSupervisor(
+      [
+        spec("embed", {
+          gate: false,
+          launch: async () => {
+            launches += 1;
+            return { handle: null, owned: true };
+          },
+          stop: async () => {
+            stops.push(launches);
+            return { stopped: true, leaked: [] };
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+    expect(launches).toBe(1);
+
+    await s.restartService("embed");
+
+    expect(stops).toEqual([1]);
+    expect(launches).toBe(2);
+    expect(s.statuses()[0]).toMatchObject({ process: "running", owned: true });
+    await s.stopAll({ graceMs: 5 });
+  });
+
+  it("refuses an adopted external instance — the app cannot take down what it does not own", async () => {
+    const log: string[] = [];
+    let launches = 0;
+    const stops: string[] = [];
+    const s = createSupervisor(
+      [
+        spec("embed", {
+          gate: false,
+          detectExternal: async () => ({ kind: "adopt", detail: "이미 실행 중인 embed" }),
+          launch: async () => {
+            launches += 1;
+            return { handle: null, owned: true };
+          },
+          stop: async () => {
+            stops.push("stopped");
+            return { stopped: true, leaked: [] };
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5, log: (l) => void log.push(l) },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0]).toMatchObject({ process: "running", owned: false }));
+
+    await s.restartService("embed");
+
+    expect(launches).toBe(0);
+    expect(stops).toEqual([]);
+    expect(s.statuses()[0]).toMatchObject({ process: "running", owned: false });
+    expect(log.some((l) => l.includes("소유"))).toBe(true);
+    await s.stopAll({ graceMs: 5 });
+  });
+
+  it("refuses a stand-down service — the external worker is not ours to restart", async () => {
+    // 재탐지조차 하지 않는다. 그 길은 retry()의 것이고(외부 worker를 끄고 "다시 시도"),
+    // 이 버튼은 **앱이 쥔** 프로세스를 갈아 끼우는 길이다 (스펙 §6.10 2층).
+    let launches = 0;
+    let detects = 0;
+    const s = createSupervisor(
+      [
+        spec("worker", {
+          gate: false,
+          detectExternal: async () => {
+            detects += 1;
+            return { kind: "stand-down", detail: "외부 worker" };
+          },
+          launch: async () => {
+            launches += 1;
+            return { handle: null, owned: true };
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0]).toMatchObject({ process: "running", owned: false }));
+    expect(detects).toBe(1);
+
+    await s.restartService("worker");
+
+    expect(launches).toBe(0);
+    expect(detects).toBe(1);
+    expect(s.statuses()[0]).toMatchObject({ process: "running", owned: false, detail: "외부 worker" });
+    await s.stopAll({ graceMs: 5 });
+  });
+
+  it("ignores the late death of the instance it just took down", async () => {
+    // 신호와 종료 이벤트 사이에는 await가 둘 있다 — 옛 자식의 onExit은 **새 자식이 뜬 뒤에**
+    // 도착할 수 있다. 그것을 그대로 처리하면 새 인스턴스가 failed로 적히고 그 유일한 참조가
+    // 지워져(rt.result = null) 아무도 못 찾는 자식이 남는다.
+    let launches = 0;
+    const stops: string[] = [];
+    const exits: ((code: number) => void)[] = [];
+    const s = createSupervisor(
+      [
+        spec("embed", {
+          gate: false,
+          launch: async () => {
+            launches += 1;
+            return { handle: fakeHandle((l) => exits.push(l)), owned: true };
+          },
+          stop: async () => {
+            stops.push(`stop${launches}`);
+            // 실제 핸들처럼 **나중에** 알린다.
+            setTimeout(() => exits[0]?.(0), 10);
+            return { stopped: true, leaked: [] };
+          },
+          restart: { maxAttempts: 3, backoffMs: [1, 1, 1] },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+
+    await s.restartService("embed");
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(launches).toBe(2);
+    expect(s.statuses()[0]).toMatchObject({ process: "running", restarts: 0 });
+    // 새 인스턴스를 앱이 여전히 쥐고 있다 — 종료가 그것을 내릴 수 있어야 한다.
+    await s.stopAll({ graceMs: 5 });
+    expect(stops).toEqual(["stop1", "stop2"]);
+  });
+
+  it("brings up a service that is not running at all (failed → running)", async () => {
+    let fail = true;
+    const s = createSupervisor(
+      [
+        spec("embed", {
+          gate: false,
+          launch: async () => {
+            if (fail) throw new Error("포트가 막혔어요");
+            return { handle: null, owned: true };
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 50, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("failed"));
+
+    fail = false;
+    await s.restartService("embed");
+
+    expect(s.statuses()[0]).toMatchObject({ process: "running", owned: true });
+    await s.stopAll({ graceMs: 5 });
+  });
+
+  it("does nothing once the app is shutting down", async () => {
+    let launches = 0;
+    const s = createSupervisor(
+      [
+        spec("embed", {
+          gate: false,
+          launch: async () => {
+            launches += 1;
+            return { handle: null, owned: true };
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 50, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+    await s.stopAll({ graceMs: 5 });
+
+    await s.restartService("embed");
+    expect(launches).toBe(1);
+  });
+});
+
+/**
+ * 리뷰 1회차 Important-1 — 내려가지 않은 서비스를 다시 띄우면 두 가지가 깨진다.
+ * worker는 영구 stand-down(버튼이 스스로 비활성)이 되고, embed는 포트를 쥔 옛 자식이 참조를 잃는다.
+ */
+describe("supervisor.restartService — 내려가지 않으면 다시 띄우지 않는다 (fix 1)", () => {
+  /** worker 어댑터의 실제 모양: 유예 안에 안 끝나고 물어볼 사람이 없으면 unattended. */
+  function stubbornWorker(counters: { launches: number; brings: number }): Partial<ServiceSpec> {
+    return {
+      gate: false,
+      detectExternal: async () => {
+        counters.brings += 1;
+        return { kind: "absent" as const };
+      },
+      launch: async () => {
+        counters.launches += 1;
+        return { handle: null, owned: true };
+      },
+      stop: async () => ({ stopped: false, leaked: [4242], detail: "worker가 아직 일을 끝내지 않았어요" }),
+    };
+  }
+
+  it("keeps the handle, refuses, and never re-detects when the worker did not go down", async () => {
+    const counters = { launches: 0, brings: 0 };
+    const log: string[] = [];
+    const s = createSupervisor([spec("worker", stubbornWorker(counters))], ctx(), {
+      readyTimeoutMs: 100,
+      readyIntervalMs: 5,
+      log: (l) => void log.push(l),
+    });
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+    expect(counters).toEqual({ launches: 1, brings: 1 });
+
+    await s.restartService("worker");
+
+    // 다시 띄우지 않았다 — detectExternal조차 다시 돌지 않는다(그 길에서 stand-down이 나온다).
+    expect(counters).toEqual({ launches: 1, brings: 1 });
+    // 앱이 여전히 쥐고 있다. ownPid()가 이것을 읽어 "우리 것"을 외부 목록에서 뺀다.
+    expect(s.runtimeOf("worker")?.result).not.toBeNull();
+    const st = s.statuses()[0];
+    expect(st).toMatchObject({ process: "running", owned: true });
+    expect(st.detail).toContain("아직 일을 끝내지 않았어요");
+    expect(st.detail).toContain("4242");
+    expect(log.some((l) => l.includes("다시 띄우지 않는다"))).toBe(true);
+    // 버튼은 계속 켜져 있다 — 사람이 잠시 뒤 다시 누를 수 있다.
+    expect(restartRefused(st)).toBe(false);
+    await s.stopAll({ graceMs: 5 });
+  });
+
+  it("stops the still-running service on quit — the refusal did not lose the reference", async () => {
+    const counters = { launches: 0, brings: 0 };
+    const stops: string[] = [];
+    const s = createSupervisor(
+      [
+        spec("worker", {
+          ...stubbornWorker(counters),
+          stop: async () => {
+            stops.push("stop");
+            return { stopped: false, leaked: [4242], detail: "아직 일하는 중" };
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+    await s.restartService("worker");
+
+    const out = await s.stopAll({ graceMs: 5 });
+    expect(stops).toEqual(["stop", "stop"]); // 종료도 같은 결과를 본다
+    expect(out.leaked).toEqual([4242]);
+    expect(out.stopped).toBe(false);
+  });
+
+  it("refuses when an embed that is stuck mid-download outlives the grace", async () => {
+    let launches = 0;
+    const s = createSupervisor(
+      [
+        spec("embed", {
+          gate: false,
+          launch: async () => {
+            launches += 1;
+            return { handle: null, owned: true };
+          },
+          // python-launcher의 handle.stop은 SIGTERM 뒤 폴링만 한다 — 안 죽으면 그대로 돌아온다.
+          stop: async () => ({ stopped: false, leaked: [777] }),
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+
+    await s.restartService("embed");
+
+    expect(launches).toBe(1); // 포트를 쥔 옛 자식 옆에 두 번째를 띄우지 않는다
+    expect(s.runtimeOf("embed")?.result).not.toBeNull();
+    await s.stopAll({ graceMs: 5 });
+  });
+
+  it("treats a throwing stop the same way — keeps the reference, does not bring", async () => {
+    let launches = 0;
+    const s = createSupervisor(
+      [
+        spec("embed", {
+          gate: false,
+          launch: async () => {
+            launches += 1;
+            return { handle: null, owned: true };
+          },
+          stop: async () => {
+            throw new Error("kill: EPERM");
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+
+    await s.restartService("embed");
+
+    expect(launches).toBe(1);
+    expect(s.runtimeOf("embed")?.result).not.toBeNull();
+    expect(s.statuses()[0].detail).toContain("다시 띄우지 않았어요");
+  });
+
+  it("keeps watching the service it failed to take down", async () => {
+    // 감시 타이머를 껐다가 되돌리지 않으면 살아 있는 서비스가 그 뒤로 관측되지 않는다.
+    let probes = 0;
+    const s = createSupervisor(
+      [
+        spec("embed", {
+          gate: false,
+          healthIntervalMs: 5,
+          readiness: async () => {
+            probes += 1;
+            return { kind: "ready" };
+          },
+          stop: async () => ({ stopped: false, leaked: [777] }),
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+    await s.restartService("embed");
+    const after = probes;
+
+    await vi.waitFor(() => expect(probes).toBeGreaterThan(after));
+    await s.stopAll({ graceMs: 5 });
+  });
+});
+
+describe("restartRefused — 버튼과 감독자가 같은 판정을 쓴다 (fix 3)", () => {
+  it("refuses an adopted service that has not reached ready yet", () => {
+    // 채택은 detectExternal 직후에 정해지고 ready까지는 starting이다. running만 보면 그 구간에
+    // 버튼이 켜지고, 눌러도 감독자가 거부한다.
+    expect(restartRefused({ id: "embed", process: "starting", health: "unknown", owned: false, restarts: 0 })).toBe(true);
+    expect(restartRefused({ id: "embed", process: "running", health: "ok", owned: false, restarts: 0 })).toBe(true);
+  });
+
+  it("allows what the app owns and what is not up at all", () => {
+    expect(restartRefused({ id: "embed", process: "running", health: "ok", owned: true, restarts: 0 })).toBe(false);
+    expect(restartRefused({ id: "embed", process: "failed", health: "unknown", owned: false, restarts: 0 })).toBe(false);
+    expect(restartRefused({ id: "embed", process: "stopped", health: "unknown", owned: false, restarts: 0 })).toBe(false);
+  });
+
+  it("agrees with the supervisor while an adopted service is still starting", async () => {
+    // 채택한 embed의 readiness를 붙잡아 starting에 머무르게 한 뒤, 그 상태의 statuses()와
+    // 실제 restartService의 거부가 같은 답을 내는지 본다.
+    let ready = false;
+    let launches = 0;
+    const s = createSupervisor(
+      [
+        spec("embed", {
+          gate: false,
+          detectExternal: async () => ({ kind: "adopt", detail: "이미 실행 중인 embed" }),
+          launch: async () => {
+            launches += 1;
+            return { handle: null, owned: true };
+          },
+          readiness: async () => (ready ? { kind: "ready" } : { kind: "not-ready" }),
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 5_000, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("starting"));
+    expect(restartRefused(s.statuses()[0])).toBe(true);
+
+    await s.restartService("embed");
+    expect(launches).toBe(0);
+
+    ready = true;
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+    await s.stopAll({ graceMs: 5 });
+  });
+});
+
+describe("supervisor.restartService — 예약된 백오프와 종료 가시성 (fix 4·5)", () => {
+  it("disarms a pending backoff restart so it cannot log a phantom attempt", async () => {
+    const log: string[] = [];
+    let launches = 0;
+    const box: { exit?: (code: number) => void } = {};
+    const s = createSupervisor(
+      [
+        spec("embed", {
+          gate: false,
+          launch: async () => {
+            launches += 1;
+            return { handle: fakeHandle((l) => (box.exit = l)), owned: true };
+          },
+          restart: { maxAttempts: 3, backoffMs: [30, 30, 30] },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5, log: (l) => void log.push(l) },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+    // 자식이 죽어 백오프가 예약된다.
+    box.exit?.(1);
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("failed"));
+    expect(s.runtimeOf("embed")?.restartTimer).not.toBeNull();
+
+    await s.restartService("embed");
+    expect(s.runtimeOf("embed")?.restartTimer).toBeNull();
+    const attempts = log.filter((l) => l.includes("회차")).length;
+    await new Promise((r) => setTimeout(r, 60));
+
+    expect(launches).toBe(2);
+    expect(log.filter((l) => l.includes("회차")).length).toBe(attempts);
+    await s.stopAll({ graceMs: 5 });
+  });
+
+  it("is visible to stopAll while it is stopping the old child", async () => {
+    // 등록이 없으면 이 창의 ⌘Q가 rt.result가 null인 서비스를 건너뛰고 'stopped: true'로 적는다.
+    // 클로저 안에서 대입하는 let은 TS가 null로 좁혀 버린다 — 상자에 담는다.
+    const gate: { release?: () => void } = {};
+    const stops: string[] = [];
+    const s = createSupervisor(
+      [
+        spec("embed", {
+          gate: false,
+          launch: async () => ({ handle: null, owned: true }),
+          stop: async () => {
+            stops.push("stop");
+            // 첫 번째(재시작이 부른 것)만 붙잡는다. 종료가 부르는 두 번째까지 막으면 테스트가
+            // 스스로 교착한다 — 종료는 그 정지를 기다리는 쪽이다.
+            if (stops.length === 1) await new Promise<void>((r) => (gate.release = r));
+            return { stopped: false, leaked: [99] };
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+
+    const restarting = s.restartService("embed");
+    await vi.waitFor(() => expect(stops).toEqual(["stop"]));
+    const quitting = s.stopAll({ graceMs: 5 });
+    await new Promise((r) => setTimeout(r, 10));
+    gate.release?.();
+
+    const out = await quitting;
+    await restarting;
+    // 종료가 그 정지를 기다렸고, 남은 pid를 정직하게 싣는다.
+    expect(out.stopped).toBe(false);
+    expect(out.leaked).toEqual([99]);
+  });
+});
+
+/**
+ * 리뷰 2회차 (R-10b) — 1회차가 **닿을 수 있게 만든** 파괴적 경로.
+ *
+ * worker의 supervisor는 신호를 자기 수명 전체에 걸쳐 누적해 센다
+ * (`be/worker/damwha_worker/__main__.py`의 `child_holder["count"]`): 첫 신호는 `proc.terminate()`로
+ * `--once` 자식이 안전한 지점에서 job을 큐로 돌려놓게 하지만, 두 번째부터는 `proc.kill()` +
+ * `os._exit(1)`이라 처리 중인 job이 requeue 없이 버려진다 (P2-C5).
+ */
+describe("supervisor.restartService — 정리 중에는 두 번째 신호를 보내지 않는다 (fix 2-1)", () => {
+  /** 신호를 받아도 유예 안에 안 끝나는 자식. stop 호출을 신호 발송으로 센다. */
+  function stubbornSpec(signals: string[], over: Partial<ServiceSpec> = {}): ServiceSpec {
+    const exits: ((code: number) => void)[] = [];
+    const s = spec("worker", {
+      gate: false,
+      launch: async () => ({ handle: fakeHandle((l) => exits.push(l)), owned: true }),
+      stop: async () => {
+        signals.push("SIGTERM");
+        return { stopped: false, leaked: [4242], detail: "아직 일하는 중" };
+      },
+      restart: { maxAttempts: 3, backoffMs: [5, 5, 5] },
+      ...over,
+    });
+    (s as ServiceSpec & { exits: typeof exits }).exits = exits;
+    return s;
+  }
+
+  it("sends no second signal when the button is pressed again while the worker winds down", async () => {
+    const signals: string[] = [];
+    const log: string[] = [];
+    const s = createSupervisor([stubbornSpec(signals)], ctx(), {
+      readyTimeoutMs: 100,
+      readyIntervalMs: 5,
+      log: (l) => void log.push(l),
+    });
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+
+    await s.restartService("worker");
+    expect(signals).toEqual(["SIGTERM"]);
+    // 화면이 "정리 중"으로 잠긴다 — 버튼도 감독자도 같은 판정을 본다.
+    const st = s.statuses()[0];
+    expect(st.cleaningUp).toBe(true);
+    expect(restartRefused(st)).toBe(true);
+    expect(st.detail).toContain("내리는 중이에요");
+    expect(st.detail).not.toContain("다시 시도");
+
+    await s.restartService("worker");
+    await s.restartService("worker");
+
+    expect(signals).toEqual(["SIGTERM"]); // 두 번째·세 번째 요청은 신호를 보내지 않았다
+    expect(log.some((l) => l.includes("두 번째 종료 신호는 강제 종료다"))).toBe(true);
+    await s.stopAll({ graceMs: 5 });
+  });
+
+  it("runs one stop — and one bring — for two concurrent presses", async () => {
+    // 겹친 두 번째 요청이 통과하면 두 가지가 벌어진다: 같은 pid에 두 번째 신호가 가거나(강제
+    // 종료), 첫 번째가 rt.result를 이미 비운 뒤라 정지를 **건너뛰고** 곧장 bring해 아직 내려가는
+    // 중인 자식 옆에 두 번째 인스턴스를 띄운다. 둘 다 여기서 막힌다.
+    const signals: string[] = [];
+    let launches = 0;
+    const gate: { release?: () => void } = {};
+    const s = createSupervisor(
+      [
+        stubbornSpec(signals, {
+          launch: async () => {
+            launches += 1;
+            return { handle: fakeHandle(() => undefined), owned: true };
+          },
+          stop: async () => {
+            signals.push("SIGTERM");
+            // 첫 번째만 붙잡는다 — 뒤의 stopAll까지 막으면 테스트가 스스로 교착한다.
+            if (signals.length === 1) await new Promise<void>((r) => (gate.release = r));
+            return { stopped: false, leaked: [4242], detail: "아직 일하는 중" };
+          },
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+    expect(launches).toBe(1);
+
+    const first = s.restartService("worker");
+    const second = s.restartService("worker");
+    await vi.waitFor(() => expect(signals).toEqual(["SIGTERM"]));
+    gate.release?.();
+    await Promise.all([first, second]);
+
+    expect(signals).toEqual(["SIGTERM"]);
+    expect(launches).toBe(1);
+    expect(s.statuses()[0].cleaningUp).toBe(true);
+    await s.stopAll({ graceMs: 5 });
+  });
+
+  it("allows a restart again once the process really exits", async () => {
+    const signals: string[] = [];
+    const spec0 = stubbornSpec(signals);
+    const exits = (spec0 as ServiceSpec & { exits: ((code: number) => void)[] }).exits;
+    const s = createSupervisor([spec0], ctx(), { readyTimeoutMs: 100, readyIntervalMs: 5 });
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+
+    await s.restartService("worker");
+    expect(s.statuses()[0].cleaningUp).toBe(true);
+
+    // 늦게 끝났다 — worker가 job을 마치고 스스로 내려간 것이다.
+    exits[0]?.(0);
+
+    await vi.waitFor(() => expect(s.statuses()[0].cleaningUp).toBeUndefined());
+    expect(restartRefused(s.statuses()[0])).toBe(false);
+    // 보통은 평소의 사망 경로가 알아서 다시 띄운다.
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+    expect(signals).toEqual(["SIGTERM"]);
+    await s.stopAll({ graceMs: 5 });
+  });
+
+  it("does not lock a service whose exit it could not watch", async () => {
+    // 핸들이 없으면 표시를 지워 줄 사건이 없다 — 영영 잠기는 대신 잠그지 않는다.
+    const s = createSupervisor(
+      [
+        spec("postgres", {
+          gate: false,
+          launch: async () => ({ handle: null, owned: true }),
+          stop: async () => ({ stopped: false, leaked: [] }),
+        }),
+      ],
+      ctx(),
+      { readyTimeoutMs: 100, readyIntervalMs: 5 },
+    );
+    await s.start();
+    await vi.waitFor(() => expect(s.statuses()[0].process).toBe("running"));
+
+    await s.restartService("postgres");
+
+    expect(s.statuses()[0].cleaningUp).toBeUndefined();
+    expect(restartRefused(s.statuses()[0])).toBe(false);
+    await s.stopAll({ graceMs: 5 });
   });
 });

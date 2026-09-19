@@ -27,12 +27,26 @@ def claim(conn, worker_id: str) -> dict | None:
 
 
 def mark_processing(conn, meeting_id: str, job_id: str, processing_version: int) -> int:
+    """회의를 `processing`으로 올린다. meeting 가드 **와** job 가드를 함께 건다.
+
+    job 가드가 없던 동안 취소와 경합했다: 취소는 job.status 와 meeting.status 만 바꾸고
+    `current_job_id`·`processing_version` 은 그대로 두므로 meeting 가드를 그냥 통과했고,
+    그러면 이 UPDATE 가 `markCancelled` 가 쓴 `failed` 를 `processing` 으로 되돌렸다.
+    그 뒤 회의는 **도달 불가**가 된다 — 취소는 409(진행 중인 job 이 없다), 재처리도
+    409(status 가 done/failed 가 아니다). 창이 넓은 이유는 `jobs.py` 의 `build_models()`
+    가 이 호출보다 앞이라, 모델을 받아야 하면 claim~여기가 분 단위로 벌어지기 때문이다.
+
+    `set_stage`·`heartbeat` 가 이미 같은 규칙(`status='running'`)을 쓴다 — 이것만 빠져 있었다.
+    worker_id 대신 job.status 를 보는 이유는 이 호출부가 worker_id 를 들고 있지 않고,
+    취소·reaper·재처리 셋 다 job 을 `running` 밖으로 내보내기 때문이다.
+    """
     cur = conn.execute(
         """
         UPDATE meeting SET status='processing'
         WHERE id=%s AND current_job_id=%s AND processing_version=%s
+          AND EXISTS (SELECT 1 FROM job WHERE id=%s AND status='running')
         """,
-        (meeting_id, job_id, processing_version),
+        (meeting_id, job_id, processing_version, job_id),
     )
     return cur.rowcount
 

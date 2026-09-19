@@ -1,5 +1,5 @@
 import type { ProcessHandle } from "../process/handle";
-import type { ApiEnv } from "../config/config";
+import type { ApiEnv, DatabaseMode } from "../config/config";
 
 export type ServiceId = "postgres" | "api" | "embed" | "worker";
 
@@ -30,15 +30,51 @@ export interface ServiceStatus {
   restarts: number;
   /** failed일 때만 뜻이 있다. 감독자가 실패의 부류를 여기로 옮기고, 다시 뜨거나 ready가 되면 지운다. */
   recovery?: Recovery;
+  /**
+   * 앱이 이 서비스에 **종료 신호를 보냈는데 아직 안 끝났다** (스펙 §6.10 2층). 프로세스가 실제로
+   * 끝나면 감독자가 지운다.
+   *
+   * 이 표시가 있는 동안 "서비스 다시 시작"은 거부된다 — 두 번째 신호가 파괴적이기 때문이다.
+   * worker의 supervisor는 **자기 수명 전체에 걸쳐** 신호를 누적해 센다
+   * (`be/worker/damwha_worker/__main__.py`의 `child_holder["count"]`): 첫 신호는 `proc.terminate()`로
+   * `--once` 자식이 안전한 지점에서 job을 큐로 돌려놓게 하지만, **두 번째부터는** `proc.kill()` +
+   * `os._exit(1)`이라 처리 중이던 job이 graceful requeue 없이 버려진다 (P2-C5).
+   */
+  cleaningUp?: true;
 }
 
 export interface LaunchContext {
-  repoRoot: string;
+  /**
+   * 저장소 체크아웃. **dev 전용이다** — packaged는 번들 python·API로 돌아 저장소를 모르고, 항상 null이다
+   * (Phase 4 스펙 §6.3). 저장소가 필요한 소비자(dev API·dev 마이그레이션 러너·dev PYTHONPATH)는
+   * `path.join`에 닿기 전에 null을 `CAUSES.repoRootMissing`으로 바꾼다.
+   */
+  repoRoot: string | null;
   userData: string;
   packaged: boolean;
-  /** config.json에서 온 값 + 어댑터들의 prepare()가 기여한 값. */
+  /**
+   * 감독자를 만들 때 정한 DB 모드의 종류 (config.ts의 DatabaseMode). 실행 중에는 바뀌지 않는다.
+   * 자식 env의 DAMWHA_SHARED_STATE가 이것으로 갈린다 — worker는 자기가 어느 DB에 붙었는지 알 수
+   * 없고, URL 모양으로 모드를 추정하지 않는다 (스펙 §6.9). 외부 모드의 URL은 env의 DATABASE_URL에 있다.
+   */
+  databaseMode: DatabaseMode["kind"];
+  /**
+   * config.json에서 온 값 + 앱이 이 실행에 정한 값(main.ts의 launchEnv — LENS_LLM_BASE_URL, 기동 게이트의
+   * HF_TOKEN) + 어댑터들의 prepare()가 기여한 값. **통째로 로그·화면에 싣지 않는다** — 토큰이 들어 있다.
+   */
   env: ApiEnv;
-  bins: { uv: string | null };
+  /**
+   * 이 실행이 부르는 실행 파일. 셋 다 번들 트리 안의 절대 경로다 (process/runtime-paths.ts — python은
+   * `bin/python3.12` 실체). worker·embed는 python으로 뜨고(process/python-launcher.ts), 자식 PATH는
+   * python·ffmpeg의 `bin`뿐이다.
+   */
+  bins: { python: string; ffmpeg: string; ffprobe: string };
+  /** 이 실행의 식별자(`desktop-<uuid>`). 자식 argv의 `--run-id=`에 실려, 앱이 ps로 자기 자식을 알아본다 (스펙 §6.5). */
+  runId: string;
+  /**
+   * **앱 자신의** 도구 탐색용. 번들 python 자식의 PATH에는 가지 않는다 (스펙 §6.2) — launchPython은
+   * 이 값을 읽지 않는다.
+   */
   searchDirs: readonly string[];
   logFile(id: ServiceId): string;
   /**
@@ -93,6 +129,12 @@ export interface StopOutcome {
    * 실패로 적으면 거짓말이 된다.
    */
   detail?: string;
+  /**
+   * 앱 종료의 B층(app/reap-on-quit.ts)이 서비스별 정지가 놓친 프로세스를 내렸고, 그 뒤 **남은 것이 없음을
+   * 확인했다.** `stopped:false`는 서비스별 정지가 깨끗하지 않았다는 사실 그대로이고, 종료 대화상자는 이 표시를
+   * 보고 "확인하지 못했다" 대신 "정리했다"고 적는다(quit-flow.ts의 leftoverNotice). 서비스 어댑터는 채우지 않는다.
+   */
+  cleanedUp?: true;
 }
 
 export interface ServiceSpec {

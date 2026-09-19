@@ -47,6 +47,10 @@ import {
 import { PlayerBar } from "@/features/meeting/ui/player-bar";
 import { TranscriptPane } from "@/features/meeting/ui/transcript-pane";
 import { useProcessingSettings } from "@/features/settings/api/settings";
+import {
+  downloadingNow,
+  modelProgressLabel,
+} from "@/features/settings/lib/model-readiness";
 import type { SummaryModel } from "@/features/settings/api/types";
 
 /**
@@ -73,6 +77,15 @@ function ProcessingBanner({
   status: MeetingStatusResponse | undefined;
 }) {
   const cancel = useCancelProcessing();
+  // 이 응답은 모델을 받는 동안에만 다시 읽힌다 (useProcessingSettings의 refetchInterval).
+  // 무진행 판정의 기준 시각은 `dataUpdatedAt` — **이 값이 도착한 순간**이다. 렌더에서 Date.now()를
+  // 부르면 같은 데이터가 리렌더마다 다른 답을 내고(React Compiler가 그것을 막는다), 폴링이
+  // 멈춘 동안 시계만 흘러 멀쩡한 진행이 조용히 사라진다.
+  const settings = useProcessingSettings();
+  const downloading = downloadingNow(
+    settings.data?.modelReadiness,
+    settings.dataUpdatedAt,
+  );
 
   if (meeting.status === "failed") {
     // 운영자 취소도 failed로 저장된다(reprocess 가드를 그대로 타기 위해) — 문구만 가른다.
@@ -130,6 +143,13 @@ function ProcessingBanner({
         {stageLabel}
         {pct != null ? ` · ${pct}%` : ""}
       </span>
+      {/* 첫 처리는 모델을 받느라 한참 멈춘 것처럼 보인다 (Phase 4 스펙 §6.9, 완료 기준 P4-C6).
+          이유를 말하지 않으면 멈춘 것으로 읽히고, 사람이 취소를 누른다. */}
+      {downloading.length > 0 ? (
+        <span className="min-w-0 truncate text-[color:var(--text-muted)]">
+          모델을 받는 중 · {downloading.map(modelProgressLabel).join(", ")}
+        </span>
+      ) : null}
       <Button
         variant="secondary"
         size="sm"

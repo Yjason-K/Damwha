@@ -9,7 +9,7 @@ const RESET = "\x1b[39m";
 
 /** fs.WriteStream.write는 비동기라 close() 직후 바로 읽으면 아직 디스크에 없을 수 있다.
  *  실제 스트림 객체를 makeSink가 밖으로 안 내놓으므로 'finish'를 직접 못 걸고, 내용이
- *  나타날 때까지 짧게 폴링한다 — uv-launcher.ts의 stop() 폴링과 같은 방식이다. */
+ *  나타날 때까지 짧게 폴링한다 — python-launcher.ts의 stop() 폴링과 같은 방식이다. */
 async function waitForContent(file: string, timeoutMs = 2_000): Promise<string> {
   const start = Date.now();
   for (;;) {

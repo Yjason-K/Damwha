@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeReadinessWatch, workerSpec } from "../../src/services/worker";
 import { BLOCK_MAX_CHARS } from "../../src/diagnostics/stderr";
 import type { LaunchContext, ServiceHandle } from "../../src/services/types";
@@ -25,8 +25,10 @@ function ctx(over: Partial<LaunchContext> = {}): LaunchContext {
     repoRoot: "/r",
     userData: "/u",
     packaged: true,
+    databaseMode: "embedded",
     env: { DATABASE_URL: "postgres://x", STORAGE_ROOT: "/u/storage" },
-    bins: { uv: "/opt/homebrew/bin/uv" },
+    bins: { python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+    runId: "desktop-test",
     searchDirs: ["/opt/homebrew/bin"],
     logFile: (id) => `/u/logs/${id}.log`,
     signal: new AbortController().signal,
@@ -79,19 +81,21 @@ afterEach(() => {
 });
 
 /**
- * 진짜 launch() 경로로 띄운다 — spawn만 가짜다. readiness가 무엇을 읽는지는 launchWithUv의
+ * 진짜 launch() 경로로 띄운다 — spawn만 가짜다. readiness가 무엇을 읽는지는 launchPython의
  * stderr 리스너에서 readiness()까지의 배선 전체가 정하므로, 손으로 만든 handle로는 그 배선을 볼 수 없다.
  */
-async function launched() {
+async function launched(over: Partial<LaunchContext> = {}) {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-worker-"));
   const dir = tmpDir;
   const child = fakeChild();
-  const spec = workerSpec({ listExternal: async () => [], exists: () => true, spawnFn: () => child });
-  const launchCtx = ctx({ logFile: (id) => path.join(dir, `${id}.log`) });
+  const spawnFn = vi.fn().mockReturnValue(child);
+  const spec = workerSpec({ listExternal: async () => [], spawnFn });
+  const launchCtx = ctx({ logFile: (id) => path.join(dir, `${id}.log`), ...over });
   const result = await spec.launch(launchCtx);
   const h = result.handle;
   if (h === null) throw new Error("handle이 없다");
   return {
+    spawnFn,
     handle: h,
     stderr: (text: string) => child.stderr.emit("data", Buffer.from(text)),
     exit: (code: number) => child.emit("exit", code),
@@ -191,16 +195,22 @@ describe("workerSpec", () => {
     expect((await workerSpec(deps() as never).detectExternal(ctx())).kind).toBe("absent");
   });
 
-  it("refuses to launch without uv and names what is missing (the fix is recoveryHint's)", async () => {
-    const spec = workerSpec(deps() as never);
-    await expect(spec.launch(ctx({ bins: { uv: null } }))).rejects.toThrow(/uv/);
+  it("launches the supervisor by module with the bundled python, run-id last (Phase 4 스펙 §6.2)", async () => {
+    const w = await launched();
+    expect(w.spawnFn).toHaveBeenCalledTimes(1);
+    const [command, args] = w.spawnFn.mock.calls[0] as [string, string[]];
+    expect(command).toBe("/b/python/bin/python3.12");
+    expect(args).toEqual(["-m", "damwha_worker", "--run-id=desktop-test"]);
+    w.exit(0);
   });
 
-  it("refuses to launch when the worker .env is missing", async () => {
-    // be/.gitignore:7이 be/worker/.env를 무시하므로 새 체크아웃에는 없다. 없으면
-    // LENS_LLM_BASE_URL이 비어 worker가 로그 한 줄 전에 죽는다 (config.py:34-39).
-    const spec = workerSpec(deps({ exists: () => false }) as never);
-    await expect(spec.launch(ctx())).rejects.toThrow(/\.env/);
+  it("launches without a checkout and without looking for be/worker/.env — the bundle has neither", async () => {
+    // Phase 2의 worker는 be/worker/.env가 없으면 띄우지 않았다. 번들에는 그 파일이 없고 앱이 필요한 값을
+    // env로 전부 넣으므로(childEnv), 그 검사가 남으면 packaged에서 항상 실패한다.
+    const w = await launched({ repoRoot: null, packaged: true });
+    expect(w.spawnFn).toHaveBeenCalledTimes(1);
+    expect(w.handle.alive()).toBe(true);
+    w.exit(0);
   });
 
   it("keeps watching health after it is ready", () => {

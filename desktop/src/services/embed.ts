@@ -1,11 +1,21 @@
 import { exitCauseBlock } from "../diagnostics/stderr";
-import { launchWithUv } from "../process/uv-launcher";
+import { knownTrees, parseDamwhaScan } from "../process/orphans";
+import { launchPython } from "../process/python-launcher";
+import type { SpawnFn } from "../process/tool-runner";
 import type { EmbedProbe } from "./embed-probe";
 import type { LaunchContext, ReadinessResult, ServiceSpec } from "./types";
 
 export interface EmbedDeps {
   probe(baseUrl: string): Promise<EmbedProbe>;
   freePort(): Promise<number>;
+  /** 그 포트에서 LISTEN 중인 pid (process/process-tree.ts의 listenerPids — lsof 실패는 빈 배열). */
+  listenerPids(port: number): Promise<number[]>;
+  /** `ps -axwwo pid,args` (process/process-tree.ts의 psArgs). 채택 후보가 누구인지 읽는다. */
+  psArgs(): Promise<string>;
+  /** 채택하지 않은 까닭 — supervisor.log. 화면에는 오르지 않는 판단이라 여기 남기지 않으면 흔적이 없다. */
+  log(line: string): void;
+  /** 테스트 주입용. launch()가 그대로 launchPython에 넘긴다 — 기본은 실제 child_process.spawn (WorkerDeps와 같은 이유). */
+  spawnFn?: SpawnFn;
 }
 
 /**
@@ -32,6 +42,38 @@ function baseUrl(host: string, port: string): string {
   return `http://${host}:${port}`;
 }
 
+/**
+ * 계약 프로브가 맞은 그 포트의 주인을 채택해도 되는가 (Phase 4 스펙 §6.5). 채택은 **run-id 없는 외부 embed**
+ * (터미널 `pnpm embed`)의 몫이다. `--run-id`가 있고 내 것이 아닌 embed는 이전 실행의 고아다 — 한 번 채택하면
+ * 그 뒤로 둘이 모델 메모리를 썼다(Phase 3 §5.2-2). 기동 전 정리(app/reap-on-start.ts)가 먼저 내리므로 보통은
+ * 여기 오지 않는다. 아는 트리 밖(옮겨 설치한 앱)이라 정리가 손대지 않은 것도 채택하지 않는다 — run-id가
+ * 그것이 앱의 자식이었다고 말한다.
+ *
+ * 이번 실행의 run-id를 단 embed는 **채택한다** (판정 R-7j). 스펙 문구("run-id 없는 외부 embed만")보다 넓은데,
+ * 그 경우는 나올 수 없다: prepare는 감독자를 새로 세울 때만 돌고, 그때 앞선 감독자는 embed를 띄운 적이 없다
+ * (start()가 거부할 수 있는 지점은 어떤 launch보다 앞선 prepare뿐이다). 그래도 나온다면 거부는 우리 embed 옆에
+ * 두 번째 모델을 올리는 일이고, 채택하면 종료 회수가 run-id로 거둔다.
+ *
+ * 주인을 읽지 못하면(ps 실패, 또는 그 리스너가 아는 트리의 읽을 수 없는 줄) 채택하지 않는다 — 고아가 아니라고
+ * 증명하지 못했다.
+ */
+async function refusal(deps: EmbedDeps, ctx: LaunchContext, port: string): Promise<string | null> {
+  const pids = new Set(await deps.listenerPids(Number(port)));
+  if (pids.size === 0) return null;
+  let text: string;
+  try {
+    text = await deps.psArgs();
+  } catch (e) {
+    return `${port} 포트의 embed가 누구인지 확인하지 못했어요 — ${e instanceof Error ? e.message : String(e)}`;
+  }
+  const scan = parseDamwhaScan(text, knownTrees(ctx));
+  const cut = scan.unreadable.find((row) => pids.has(row.pid));
+  if (cut !== undefined) return `${port} 포트의 embed(pid ${cut.pid})의 명령줄을 읽을 수 없어요`;
+  const orphan = scan.processes.find((p) => pids.has(p.pid) && p.runId !== null && p.runId !== ctx.runId);
+  if (orphan === undefined) return null;
+  return `${port} 포트의 embed(pid ${orphan.pid}, run-id ${orphan.runId})는 이전 실행이 남긴 것이에요`;
+}
+
 export function embedSpec(deps: EmbedDeps): ServiceSpec {
   let adopted = false;
   let url = "";
@@ -55,12 +97,15 @@ export function embedSpec(deps: EmbedDeps): ServiceSpec {
 
       // /health가 아니라 /embed 계약으로 판정한다 — /health는 {"status":"ok"}만 주므로
       // 다른 모델·차원도 200을 준다 (스펙 §6.5).
-      if (probe.kind === "match") {
+      const refused = probe.kind === "match" ? await refusal(deps, ctx, wanted) : null;
+      if (probe.kind === "match" && refused === null) {
         adopted = true;
         url = baseUrl(host, wanted);
         return { EMBED_SERVICE_PORT: wanted, EMBED_SERVICE_URL: url };
       }
-      const port = probe.kind === "mismatch" ? String(await deps.freePort()) : wanted;
+      // 채택하지 않은 주인은 그 포트를 아직 쥐고 있다 — 같은 자리에 띄우면 bind에서 넘어진다.
+      if (refused !== null) deps.log(`${refused}. 채택하지 않고 빈 포트로 새로 띄워요.`);
+      const port = probe.kind === "absent" ? wanted : String(await deps.freePort());
       adopted = false;
       url = baseUrl(host, port);
       // API는 EMBED_SERVICE_URL을, worker/embed는 HOST/PORT를 읽는다. 한 값에서 둘을
@@ -74,7 +119,8 @@ export function embedSpec(deps: EmbedDeps): ServiceSpec {
     },
     async launch(ctx) {
       if (adopted) return { handle: null, owned: false };
-      return launchWithUv({ ctx, args: ["damwha-embed"], logId: "embed" });
+      // `damwha-embed` 콘솔 스크립트가 아니라 모듈로 들어간다 — 셔뱅을 타지 않는다 (Phase 4 스펙 §6.2).
+      return launchPython({ ctx, module: "damwha_worker.embed_service", logId: "embed", spawnFn: deps.spawnFn });
     },
     async readiness(result): Promise<ReadinessResult> {
       const handle = result.handle;

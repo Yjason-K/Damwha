@@ -8,6 +8,7 @@ import {
   pendingMigrations,
 } from "../../src/services/api";
 import type { ApiDeps } from "../../src/services/api";
+import { CAUSES } from "../../src/diagnostics/causes";
 import { ServiceFailure } from "../../src/services/failure";
 import type { LaunchContext, ServiceHandle } from "../../src/services/types";
 
@@ -255,8 +256,10 @@ describe("apiSpec — migration gate (Phase 3)", () => {
     repoRoot: "/r",
     userData: "/u",
     packaged: false,
+    databaseMode: "embedded",
     env: { PORT: "3000" },
-    bins: { uv: null },
+    bins: { python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+    runId: "desktop-test",
     searchDirs: [],
     logFile: () => "/u/logs/api.log",
     signal: new AbortController().signal,
@@ -282,6 +285,17 @@ describe("apiSpec — migration gate (Phase 3)", () => {
     expect(order[0]).toBe("gate");
     expect(order[1]).toBe("port");
     expect(seen).toBe(c.signal);
+  });
+
+  it("names the missing repo in dev before the gate, the port search or any path is built (Phase 4 스펙 §6.3)", async () => {
+    // packaged의 repoRoot는 항상 null이고 dev만 저장소를 쓴다. dev인데 null이면 path.join(null, …)의 TypeError가
+    // 아니라 원인이 화면에 올라야 한다. 게이트(dev 러너도 저장소에서 pnpm을 부른다)보다 먼저다.
+    const migrationGate = vi.fn(async () => undefined);
+    const isPortOccupied = vi.fn(async () => false);
+    const spec = apiSpec(baseDeps({ migrationGate, isPortOccupied }));
+    await expect(spec.launch({ ...ctx(), repoRoot: null })).rejects.toThrow(CAUSES.repoRootMissing.text);
+    expect(migrationGate).not.toHaveBeenCalled();
+    expect(isPortOccupied).not.toHaveBeenCalled();
   });
 
   it("does not spawn the API when the gate refuses, and keeps the manual class", async () => {

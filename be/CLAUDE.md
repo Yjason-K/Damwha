@@ -146,7 +146,11 @@ Separate Python project under `worker/` (uv + ruff + pytest + pydantic v2 + psyc
 - **The LLM server's lifetime is owned by the job, not by the operator.**
   `llm_server.py::managed_llm_server` wraps the `extract_lenses` /
   `summarize_meeting` handlers (`jobs.py`): the one-job child starts
-  `mlx_lm.server` on the `LENS_LLM_BASE_URL` host:port with the **payload's**
+  `mlx_lm.server` on the `LENS_LLM_BASE_URL` host:port — **as
+  `<this interpreter> -m damwha_worker.llm_entry`, not a `PATH` binary**, so the
+  bundled runtime carries through and the parent's `--run-id` rides in argv
+  (Electron Phase 4 spec §6.2); `LENS_LLM_SERVER_BIN` is an opt-in escape hatch
+  that drops that ownership marker — with the **payload's**
   `model` (both LLM payloads carry it, so `peek_queued` stays a bare bool and
   no model swap happens), waits for `GET /models`, and SIGTERMs it in a
   `finally` — SIGKILL if it ignores that. The point is memory: an idle 8-bit

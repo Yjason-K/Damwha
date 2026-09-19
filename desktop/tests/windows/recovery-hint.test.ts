@@ -5,14 +5,15 @@ import { EventEmitter } from "events";
 import type { ChildProcess } from "child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CAUSES, CAUSE_IDS, causeIn, type CauseId } from "../../src/diagnostics/causes";
-import { DEGRADED_HINT, HINTS, hintForDetail, recoveryHint } from "../../src/windows/shell-hints";
+import { causeOf, DEGRADED_HINT, HINTS, RETRY_LAYERS, hintForDetail, recoveryHint } from "../../src/windows/shell-hints";
 import { judgeAfterProbe } from "../../src/services/api";
 import { probeEmbedContract } from "../../src/services/embed-probe";
 import { embeddedPostgresSpec } from "../../src/services/postgres/service";
 import { PG_BINARY_NAMES, pgBinaries, pgLayout } from "../../src/services/postgres/layout";
 import { createSupervisor } from "../../src/services/supervisor";
 import { workerSpec } from "../../src/services/worker";
-import { launchWithUv } from "../../src/process/uv-launcher";
+import { launchPython } from "../../src/process/python-launcher";
+import { fakeChild } from "../fake-child";
 import type { LaunchContext, ServiceId, ServiceSpec, ServiceStatus } from "../../src/services/types";
 
 const s = (over: Partial<ServiceStatus>): ServiceStatus => ({
@@ -25,19 +26,14 @@ const s = (over: Partial<ServiceStatus>): ServiceStatus => ({
 });
 
 describe("recoveryHint", () => {
-  it("tells the user where to put the uv path", () => {
-    expect(recoveryHint(s({ id: "worker", detail: "uv를 찾지 못했어요." })))
-      .toMatch(/config\.json/);
-  });
-
   it("tells the user to run the migration command", () => {
     expect(recoveryHint(s({ detail: "적용되지 않은 마이그레이션이 3개 있어요" })))
       .toMatch(/pnpm be:migrate/);
   });
 
-  it("tells the user to copy the worker env example", () => {
-    expect(recoveryHint(s({ id: "worker", detail: "be/worker/.env가 없어요." })))
-      .toMatch(/\.env\.example/);
+  it("tells a worker that died mid-download to use the restart button — not a bare 다시 시도 (스펙 §6.10 2층)", () => {
+    expect(recoveryHint(s({ id: "worker", detail: CAUSES.modelDownloadFailed.text("BAAI/bge-m3", "timeout") })))
+      .toBe(RETRY_LAYERS.service);
   });
 
   it("explains an external worker in terms of STORAGE_ROOT", () => {
@@ -77,7 +73,7 @@ type ArgsOf<K extends TemplateId> = (typeof CAUSES)[K]["text"] extends (...args:
 
 /** 값이 끼는 원인의 예시 인자. 타입이 키를 전부 요구하므로 템플릿 원인을 더하면 여기서 걸린다. */
 const SAMPLE_ARGS: { [K in TemplateId]: ArgsOf<K> } = {
-  spawnNotFound: ["/nowhere/uv"],
+  spawnNotFound: ["/nowhere/python/bin/python3.12"],
   pendingMigrations: [3, "022_x.sql, 023_y.sql, 024_z.sql"],
   externalWorker: [[4101, 4102]],
   embedMismatch: ["other/model", 768, "BAAI/bge-m3", 1024],
@@ -86,6 +82,10 @@ const SAMPLE_ARGS: { [K in TemplateId]: ArgsOf<K> } = {
   readinessThrew: ["boom"],
   healthProbeThrew: ["boom"],
   externalCheckFailed: ["ps를 못 돌렸어요"],
+  restartStopFailed: ["worker"],
+  modelDownloadFailed: ["BAAI/bge-m3", "ReadTimeout: huggingface.co"],
+  modelDownloadStalled: ["BAAI/bge-m3"],
+  diskFull: ["1.2 GB", "4.0 GB"],
   pgBundleMissing: [["initdb", "psql"]],
   pgSocketPathTooLong: ["/x/run/.s.PGSQL.5432", 120],
   pgPairingRefused: ["파일 저장소가 다른 데이터베이스의 것이에요", "/u/data/postgres", "/u/data/storage"],
@@ -183,10 +183,14 @@ describe("recoveryHint — 스펙 §6.12의 표가 말하는 것", () => {
   // 원인별 안내의 **내용**. 위의 매핑 검사는 "표가 정한 대로 나오는가"만 보므로 표 자체가 틀린
   // 말을 해도 초록이다. 스펙 표의 행마다 핵심 낱말을 고정한다.
   const rows: Array<[CauseId, ServiceId, RegExp]> = [
-    ["uvMissing", "worker", /config\.json의 UV_BIN/],
-    ["spawnNotFound", "worker", /UV_BIN/],
-    ["repoRootMissing", "api", /폴더를 골라/],
-    ["workerEnvMissing", "worker", /be\/worker\/\.env\.example을 복사/],
+    // Phase 4: worker·embed의 spawn ENOENT는 번들 python이 없다는 뜻이다. UV_BIN은 더 읽지 않는다.
+    ["spawnNotFound", "worker", /다시 설치.*build-python\.sh/],
+    ["spawnNotFound", "embed", /다시 설치.*build-python\.sh/],
+    // Phase 4 스펙 §6.3: dev 전용 원인이 됐고 폴더 선택창이 사라졌다 — "고르라"고 말하면 없는 창을 가리킨다.
+    ["repoRootMissing", "api", /desktop\/에서 앱을 띄웠는지.*config\.json의 REPO_ROOT/],
+    // Phase 4 스펙 §8 — 다운로드가 멈춘 것은 서비스 다시 시작(2층)이다.
+    ["modelDownloadStalled", "embed", /서비스 다시 시작/],
+    ["diskFull", "worker", /공간을 만든 뒤/],
     ["pendingMigrations", "api", /pnpm be:migrate/],
     ["externalWorker", "worker", /worker를 끄.*STORAGE_ROOT/],
     ["embedMismatch", "embed", /embed/],
@@ -206,8 +210,16 @@ describe("recoveryHint — 스펙 §6.12의 표가 말하는 것", () => {
     }
   });
 
-  it("does not tell the API launcher about UV_BIN when pnpm is what went missing", () => {
+  it("does not tell the API launcher about the Python bundle when pnpm is what went missing", () => {
     expect(recoveryHint(s({ id: "api", detail: CAUSES.spawnNotFound.text("pnpm") }))).toBeUndefined();
+  });
+
+  it("no longer points anyone at UV_BIN for a failure the app can still produce (Phase 4)", () => {
+    // uvMissing은 Task 11이 지웠다. spawnNotFound는 여전히 난다 — 그 안내가
+    // 읽히지도 않는 설정을 고치라고 하면 사람은 고칠 수 없는 것을 고친다.
+    for (const sid of SERVICE_IDS) {
+      expect(mappedHint("spawnNotFound", sid) ?? "").not.toMatch(/UV_BIN/);
+    }
   });
 });
 
@@ -218,33 +230,45 @@ describe("recoveryHint — 실제 어댑터가 낸 원인에서", () => {
     repoRoot: "/r",
     userData: "/u",
     packaged: true,
+    databaseMode: "embedded",
     env: {},
-    bins: { uv: "/opt/homebrew/bin/uv" },
+    bins: { python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+    runId: "desktop-test",
     searchDirs: [],
     logFile: (id) => `/u/logs/${id}.log`,
     signal: new AbortController().signal,
     ...over,
   });
 
-  const thrown = async (p: Promise<unknown>): Promise<string> => {
+  it("worker: the bundled python is not there — the real adapter's dead-handle cause gets the bundle hint", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-hint-"));
     try {
-      await p;
-    } catch (e) {
-      return (e as Error).message;
+      const child = fakeChild();
+      const spec = workerSpec({ listExternal: async () => [], spawnFn: () => child });
+      const c = ctx({ logFile: (id) => path.join(dir, `${id}.log`) });
+      const result = await spec.launch(c);
+      child.emit("error", Object.assign(new Error(`spawn ${c.bins.python} ENOENT`), { code: "ENOENT" }));
+      const r = await spec.readiness(result, c);
+      const detail = r.kind === "failed" ? r.detail : "";
+      expect(detail).toContain(`spawn ${c.bins.python} ENOENT`);
+      expect(recoveryHint(s({ id: "worker", detail }))).toBe((HINTS.spawnNotFound as Record<string, string>).worker);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
-    throw new Error("던지지 않았다");
-  };
-
-  it("worker: uv missing", async () => {
-    const detail = await thrown(
-      workerSpec({ listExternal: async () => [] }).launch(ctx({ bins: { uv: null } })),
-    );
-    expect(recoveryHint(s({ id: "worker", detail }))).toBe(HINTS.uvMissing);
   });
 
-  it("worker: be/worker/.env missing", async () => {
-    const detail = await thrown(workerSpec({ listExternal: async () => [], exists: () => false }).launch(ctx()));
-    expect(recoveryHint(s({ id: "worker", detail }))).toBe(HINTS.workerEnvMissing);
+  it("worker: launching no longer fails for a missing be/worker/.env or a missing checkout (packaged)", async () => {
+    // Phase 2의 두 거부(uv 없음·.env 없음)는 어댑터에서 사라졌다. 원인 항목 자체는 Task 11이 지운다.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-hint-"));
+    try {
+      const child = fakeChild();
+      const spec = workerSpec({ listExternal: async () => [], spawnFn: () => child });
+      const result = await spec.launch(ctx({ repoRoot: null, packaged: true, logFile: (id) => path.join(dir, `${id}.log`) }));
+      expect(result.handle).not.toBeNull();
+      child.emit("exit", 0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("worker: an external supervisor made the app stand down", async () => {
@@ -360,7 +384,7 @@ describe("recoveryHint — 실제 어댑터가 낸 원인에서", () => {
     tmp = dir;
     const child = new EventEmitter() as unknown as ChildProcess & { stderr: EventEmitter };
     Object.assign(child, { stdout: new EventEmitter(), stderr: new EventEmitter(), pid: 1, kill: () => true });
-    const spec = workerSpec({ listExternal: async () => [], exists: () => true, spawnFn: () => child });
+    const spec = workerSpec({ listExternal: async () => [], spawnFn: () => child });
     const launchCtx = ctx({ logFile: (id) => path.join(dir, `${id}.log`) });
     const result = await spec.launch(launchCtx);
     child.stderr.emit("data", Buffer.from("INFO supervisor desktop-7 ready (db connected)\nWARNING reconnect failed — retry in 2s\n"));
@@ -413,28 +437,35 @@ describe("recoveryHint — 실제 어댑터가 낸 원인에서", () => {
     tmp = undefined;
   });
 
-  it("supervisor + launchWithUv: a UV_BIN pointing nowhere fails with the UV_BIN hint (P2-C8)", async () => {
-    // cfg.uvBin은 탐색을 건너뛰고 그대로 쓰인다(main.ts). 틀린 경로면 spawn이 'error'(ENOENT)를
-    // 내고, launchWithUv가 그것을 stderr 싱크에 적고, 감독자가 죽은 핸들의 블록으로 올린다.
+  it("supervisor + launchPython: a bundled python that is not there fails with the bundle hint (P2-C8, Phase 4)", async () => {
+    // main.ts는 번들 경로를 만들 뿐 존재를 확인하지 않는다. 없으면 spawn이 'error'(ENOENT)를 내고,
+    // launchPython이 그것을 stderr 싱크에 적고, 감독자가 죽은 핸들의 블록으로 올린다.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-hint-"));
     tmp = dir;
     const spawnFn = () => {
       const child = new EventEmitter() as unknown as ChildProcess;
       Object.assign(child, { stdout: new EventEmitter(), stderr: new EventEmitter(), pid: undefined, kill: () => true });
-      setTimeout(() => child.emit("error", Object.assign(new Error("spawn /nowhere/uv ENOENT"), { code: "ENOENT" })), 0);
+      setTimeout(
+        () => child.emit("error", Object.assign(new Error("spawn /nowhere/python/bin/python3.12 ENOENT"), { code: "ENOENT" })),
+        0,
+      );
       return child;
     };
-    const launchCtx = ctx({ bins: { uv: "/nowhere/uv" }, logFile: (id) => path.join(dir, `${id}.log`) });
+    const launchCtx = ctx({
+      bins: { ...ctx().bins, python: "/nowhere/python/bin/python3.12" },
+      logFile: (id) => path.join(dir, `${id}.log`),
+    });
     const sup = createSupervisor(
-      [workerOnly({ launch: async (c) => launchWithUv({ ctx: c, args: ["x"], logId: "worker", spawnFn }) })],
+      [workerOnly({ launch: async (c) => launchPython({ ctx: c, module: "damwha_worker", logId: "worker", spawnFn }) })],
       launchCtx,
       { readyIntervalMs: 5, readyTimeoutMs: 2_000 },
     );
     await sup.start();
     await vi.waitFor(() => expect(sup.statuses()[0].process).toBe("failed"));
     const st = sup.statuses()[0];
-    expect(st.detail).toContain("spawn /nowhere/uv ENOENT");
-    expect(recoveryHint(st)).toBe(HINTS.uvMissing);
+    expect(st.detail).toContain("spawn /nowhere/python/bin/python3.12 ENOENT");
+    expect(recoveryHint(st)).toBe((HINTS.spawnNotFound as Record<string, string>).worker);
+    expect(recoveryHint(st)).not.toMatch(/UV_BIN/);
   });
 });
 
@@ -484,5 +515,64 @@ describe("Phase 3 causes", () => {
     const status = s({ id: "postgres", process: "running", health: "degraded", detail: CAUSES.notAnswering.text });
     expect(recoveryHint(status)).not.toBe(DEGRADED_HINT);
     expect(recoveryHint(status) ?? "").not.toMatch(/자동으로/);
+  });
+});
+
+/**
+ * 판정 R-10c — 정리 중인 서비스가 **실제로 갖는 모양**으로 본다. `running`·`ok`·`owned`라
+ * 기존 관문 셋(failed·degraded·stand-down) 중 어느 것에도 걸리지 않는다. 합성한 `failed`로
+ * 검사하면 그 사실을 영영 못 본다.
+ */
+describe("causeOf·recoveryHint — 정리 중 (R-10c)", () => {
+  /**
+   * 이 원인의 안내는 **서비스별**이어야 한다 — 기다리는 시간의 근거가 worker(job 마무리 90초)와
+   * embed(받던 모델)에서 다르다. 좁히는 이 함수가 그 모양을 단언한다.
+   */
+  const wait = (id: ServiceId): string => {
+    const h = HINTS.restartStopFailed;
+    if (h === null || typeof h === "string") throw new Error("restartStopFailed는 서비스별 안내여야 한다");
+    return h[id]!;
+  };
+
+  /** restartOnce가 실패한 정지 뒤에 세우는 그 상태 그대로. */
+  const cleaning = (id: ServiceId, detail: string): ServiceStatus => ({
+    id,
+    process: "running",
+    health: "ok",
+    owned: true,
+    restarts: 0,
+    cleaningUp: true,
+    detail,
+  });
+
+  it("shows the cause even though the service is running, ok and owned", () => {
+    const status = cleaning("worker", CAUSES.restartStopFailed.text("worker"));
+    expect(causeOf(status)).toBe(CAUSES.restartStopFailed.text("worker"));
+  });
+
+  it("gives each service its own wait — the text is not worker-only", () => {
+    expect(recoveryHint(cleaning("worker", CAUSES.restartStopFailed.text("worker")))).toBe(
+      wait("worker"),
+    );
+    expect(recoveryHint(cleaning("embed", CAUSES.restartStopFailed.text("embed")))).toBe(
+      wait("embed"),
+    );
+  });
+
+  it("never invites the second press — that signal is a kill for the worker", () => {
+    const hint = recoveryHint(cleaning("worker", CAUSES.restartStopFailed.text("worker")));
+    expect(hint).not.toContain("다시 시작");
+    expect(hint).not.toContain("다시 시도");
+  });
+
+  it("still says nothing for a healthy owned service", () => {
+    expect(causeOf(s({ process: "running", health: "ok", detail: "지난 실패" }))).toBeUndefined();
+    expect(recoveryHint(s({ process: "running", health: "ok", detail: "지난 실패" }))).toBeUndefined();
+  });
+
+  it("carries the adapter's own words that restartOnce appended under the cause head", () => {
+    const detail = `${CAUSES.restartStopFailed.text("worker")}\n강제 종료 여부를 물을 수 있는 사람이 없어서 그대로 두었어요.`;
+    expect(causeOf(cleaning("worker", detail))).toBe(detail);
+    expect(recoveryHint(cleaning("worker", detail))).toBe(wait("worker"));
   });
 });

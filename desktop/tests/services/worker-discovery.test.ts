@@ -3,8 +3,8 @@ import { hasOnceChild, listExternalWorkers, parseWorkerProcesses } from "../../s
 
 // 2026-09-12 실측한 다섯 가지 모양을 한 fixture에 모았다. 첫 줄(4101)만 supervisor다.
 // 4102/4103이 핵심이다 — 둘 다 `-m damwha_worker`를 인자로 그대로 갖고 있고, 4103이
-// **앱이 자기 worker를 띄울 때 나오는 기본 모양**이다(Task 2의 findExecutable이 절대
-// 경로를 주고 Task 8의 launchWithUv가 그 경로로 spawn한다). 문자열 필터로는 못 거른다.
+// **Phase 2의 앱이 자기 worker를 띄울 때 나오던 기본 모양**이다(탐색으로 찾은 uv의 절대
+// 경로로 spawn했다). 문자열 필터로는 못 거른다.
 const PS = [
   "  PID COMMAND",
   " 4101 /Users/jason/projects/Damwha2/be/worker/.venv/bin/python3 -m damwha_worker",
@@ -107,6 +107,119 @@ describe("parseWorkerProcesses", () => {
     expect(parseWorkerProcesses("", new Set())).toEqual([]);
     expect(parseWorkerProcesses("  PID COMMAND", new Set())).toEqual([]);
   });
+
+  // Phase 4 스펙 §6.5 — ps의 args는 argv를 공백으로 이은 평탄한 문자열이다. Task 5 뒤로 앱 worker의 argv[0]은
+  // 번들 python의 절대 경로라, 공백이 든 설치 경로에서 `split(/\s+/)`는 argv[0]을 `/Users/me/My`로 잘랐고
+  // 이 판정은 **항상 거짓**이었다 — 고아·외부 worker 탐지가 조용히 빠졌다.
+  const SPACED = "/Users/me/My Apps/Damwha.app/Contents/Resources/python/bin/python3.12";
+
+  it("finds a supervisor under an install path with spaces, cutting the known interpreter first", () => {
+    const ps = `  PID ARGS\n 8101 ${SPACED} -m damwha_worker --run-id=desktop-x`;
+    expect(parseWorkerProcesses(ps, new Set(), [SPACED])).toEqual([8101]);
+    const dashed = "/Users/me/Apps - Work/Damwha.app/Contents/Resources/python/bin/python3.12";
+    const dashedPs = `  PID ARGS\n 8103 ${dashed} -m damwha_worker --run-id=desktop-x`;
+    expect(parseWorkerProcesses(dashedPs, new Set(), [dashed])).toEqual([8103]);
+    expect(parseWorkerProcesses(dashedPs, new Set())).toEqual([]);
+    // 이 소비자는 run-id를 요구하지 않는다 — "앱이 아닌 worker가 도는가"를 묻는다.
+    expect(parseWorkerProcesses(`  PID ARGS\n 8102 ${SPACED} -m damwha_worker`, new Set(), [SPACED])).toEqual([8102]);
+  });
+
+  it("finds a spaced supervisor it has no prefix for, and still skips its --once child", () => {
+    const venv = "/Users/me/My Projects/daewha/be/worker/.venv/bin/python3";
+    const ps = [
+      "  PID ARGS",
+      ` 8201 ${venv} -m damwha_worker`,
+      ` 8202 ${venv} -m damwha_worker --once`,
+      ` 8203 ${SPACED} -m damwha_worker --once --run-id=desktop-x`,
+    ].join("\n");
+    expect(parseWorkerProcesses(ps, new Set(), [SPACED])).toEqual([8201]);
+  });
+
+  it("does not let the spaced-path reading turn a shell or grep line into a supervisor", () => {
+    const ps = [
+      "  PID ARGS",
+      ` 8301 /bin/zsh -c ${SPACED} -m damwha_worker`,
+      " 8302 /bin/zsh -c /usr/bin/python3 -m damwha_worker",
+      " 8303 /usr/bin/grep /usr/bin/python3 -m damwha_worker",
+      " 8305 /bin/zsh -c .venv/bin/python -m damwha_worker",
+      ` 8304 /usr/bin/grep ${SPACED} -m damwha_worker`,
+    ].join("\n");
+    expect(parseWorkerProcesses(ps, new Set(), [SPACED])).toEqual([]);
+  });
+});
+
+// 2026-09-19 Task 12 P4-C21 실측. 문서가 적은 웹 흐름대로 터미널에서 `pnpm worker`를 띄우고
+// `ps -axwwo pid,args`로 읽은 argv[0] 원문이다. `be/worker/.venv/bin/python3`은 **심볼릭 링크**라
+// 커널이 argv[0]에 해결된 실체를 적고, 그 실체의 basename은 `python3.12`도 `python3`도 아닌
+// **`Python`**(대문자)이다 — Homebrew의 framework 번들 안쪽 실행 파일 이름.
+const MEASURED_PYTHON =
+  "/opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python";
+
+describe("parseWorkerProcesses — 인터프리터 이름을 가리지 않는다 (P4-C21)", () => {
+  it("finds the external worker whose argv[0] basename is `Python` (the measured argv)", () => {
+    // 이 한 줄이 P4-C21의 결함이다. 이름 기반 조건 1이 이 줄을 목록에서 빼는 바람에
+    // detectExternal이 `absent`를 답했고, 앱은 외부 worker 옆에 자기 worker를 띄웠다 —
+    // 같은 job 큐를 두 supervisor가 물었다 (P2-C6 위반, 스펙 §6.5 처분표 3행).
+    const ps = `  PID ARGS\n 30201 ${MEASURED_PYTHON} -m damwha_worker`;
+    expect(parseWorkerProcesses(ps, new Set())).toEqual([30201]);
+  });
+
+  it("finds the venv-symlink form as well", () => {
+    // 링크를 타지 않고 뜬 같은 worker. 이름 규칙이 살아 있어도 잡히던 모양이라 회귀 방지용이다.
+    const ps = "  PID ARGS\n 30202 /Users/me/daewha/be/worker/.venv/bin/python3 -m damwha_worker";
+    expect(parseWorkerProcesses(ps, new Set())).toEqual([30202]);
+  });
+
+  it("never stands down for a `--once` child, whatever the interpreter is called", () => {
+    // __main__.py가 job 하나를 처리할 자식을 `-m damwha_worker --once`로 띄운다. 이름 규칙을
+    // 풀었다고 이것까지 세면 앱은 job 처리 중인 외부 worker 때문에 영영 안 뜬다.
+    const ps = [
+      "  PID ARGS",
+      ` 30211 ${MEASURED_PYTHON} -m damwha_worker --once`,
+      ` 30212 ${MEASURED_PYTHON} -m damwha_worker --once --job 17`,
+    ].join("\n");
+    expect(parseWorkerProcesses(ps, new Set())).toEqual([]);
+  });
+
+  it("still excludes shell, grep/rg and `uv run` lines that merely carry the module token", () => {
+    // 이름 규칙이 하던 일을 **구조**가 대신한다: `-m damwha_worker`는 argv[0] **바로 뒤**여야 하고
+    // 그 사이에는 인터프리터 옵션 플래그만 올 수 있다. 셸은 `-c`에서, uv는 `run`에서,
+    // grep/rg는 패턴 인자에서 막힌다.
+    const ps = [
+      "  PID ARGS",
+      ` 30301 /bin/zsh -c ${MEASURED_PYTHON} -m damwha_worker`,
+      ` 30302 /usr/bin/grep ${MEASURED_PYTHON} -m damwha_worker`,
+      ` 30303 /opt/homebrew/bin/uv run --directory /r/be/worker ${MEASURED_PYTHON} -m damwha_worker`,
+      " 30304 /opt/homebrew/bin/rg -n damwha_worker desktop/src",
+      " 30305 /usr/bin/grep -m 5 damwha_worker",
+      " 30306 /bin/zsh -c 'pnpm worker' # damwha_worker",
+    ].join("\n");
+    expect(parseWorkerProcesses(ps, new Set())).toEqual([]);
+  });
+
+  it("reads a spaced install path whose interpreter is not called python*", () => {
+    // 공백 든 경로 판독(` -m ` 앞을 읽는 규칙)도 이름을 보지 않는다 — 같은 결함을 두 번 두지 않는다.
+    const spaced = "/Users/me/My Apps/Damwha.app/Contents/Resources/python/bin/Python";
+    expect(parseWorkerProcesses(`  PID ARGS\n 30401 ${spaced} -m damwha_worker`, new Set())).toEqual([30401]);
+    // 아는 접두사로 자르는 길(규칙 1)도 그대로다.
+    expect(parseWorkerProcesses(`  PID ARGS\n 30402 ${spaced} -m damwha_worker`, new Set(), [spaced])).toEqual(
+      [30402],
+    );
+  });
+
+  it("keeps the module token adjacent to argv[0] — a script's own `-m` is not ours", () => {
+    // `python3.12 tool.py -m damwha_worker`는 우리 모듈 실행이 아니다. orphans.ts의 조건 2와 같은 뜻이다.
+    const ps = [
+      "  PID ARGS",
+      " 30501 /usr/bin/python3 /Users/me/tool.py -m damwha_worker",
+      " 30502 /usr/bin/python3 -c import damwha_worker -m damwha_worker",
+    ].join("\n");
+    expect(parseWorkerProcesses(ps, new Set())).toEqual([]);
+    // 인터프리터 옵션만 사이에 있는 것은 우리 모듈 실행이다.
+    expect(
+      parseWorkerProcesses("  PID ARGS\n 30503 /usr/bin/python3 -E -s -m damwha_worker", new Set()),
+    ).toEqual([30503]);
+  });
 });
 
 describe("listExternalWorkers", () => {
@@ -122,6 +235,7 @@ describe("listExternalWorkers", () => {
       ps: async () => PS_APP_OWNED,
       ownPid: () => 5001,
       descendants: async () => new Set<number>(),
+      interpreters: [],
     });
     expect(out).toEqual([]);
   });
@@ -132,6 +246,7 @@ describe("listExternalWorkers", () => {
       ps: async () => PS,
       ownPid: () => 4103,
       descendants: async (root) => (root === 4103 ? new Set([4101]) : new Set<number>()),
+      interpreters: [],
     });
     expect(out).toEqual([]);
   });
@@ -145,10 +260,23 @@ describe("listExternalWorkers", () => {
         asked += 1;
         return new Set<number>();
       },
+      interpreters: [],
     });
     expect(out).toEqual([4101]);
     // 띄운 적이 없으면 자손을 물을 대상도 없다 — ps를 한 번 더 도는 값을 낭비하지 않는다.
     expect(asked).toBe(0);
+  });
+
+  it("reads the scan with the interpreters it is given — a spaced install path is found", async () => {
+    // ` -`가 든 폴더 이름이라 ` -m ` 앞을 읽는 추측은 거부한다 — 아는 인터프리터를 넘겨야만 읽힌다.
+    const spaced = "/Users/me/Apps - Work/Damwha.app/Contents/Resources/python/bin/python3.12";
+    const out = await listExternalWorkers({
+      ps: async () => `  PID ARGS\n 8401 ${spaced} -m damwha_worker --run-id=desktop-old`,
+      ownPid: () => undefined,
+      descendants: async () => new Set<number>(),
+      interpreters: [spaced],
+    });
+    expect(out).toEqual([8401]);
   });
 
   it("still reports a stranger while our own worker runs", async () => {
@@ -156,8 +284,57 @@ describe("listExternalWorkers", () => {
       ps: async () => `${PS_APP_OWNED}\n 4101 /usr/bin/python3 -m damwha_worker`,
       ownPid: () => 5001,
       descendants: async () => new Set<number>(),
+      interpreters: [],
     });
     expect(out).toEqual([4101]);
+  });
+
+  // Phase 4의 번들 worker는 argv에 `--run-id=<이번 실행>`을 싣는다(python-launcher.ts). 이름 규칙을
+  // 푼 뒤로 그 줄도 당연히 판독되므로, **우리 것을 우리가 외부로 보지 않는가**를 여기서 잠근다.
+  const BUNDLE_PY = "/Applications/Damwha.app/Contents/Resources/python/bin/python3.12";
+  const MY_RUN_ID = "desktop-1f0a2b3c-4d5e-6f70-8192-a3b4c5d6e7f8";
+
+  it("does not report our own bundled worker carrying this run's run-id", async () => {
+    const out = await listExternalWorkers({
+      ps: async () => `  PID ARGS\n 5101 ${BUNDLE_PY} -m damwha_worker --run-id=${MY_RUN_ID}`,
+      ownPid: () => 5101,
+      descendants: async () => new Set<number>(),
+      interpreters: [BUNDLE_PY],
+    });
+    expect(out).toEqual([]);
+  });
+
+  it("does not report our own bundled `--once` child either", async () => {
+    const out = await listExternalWorkers({
+      ps: async () =>
+        [
+          "  PID ARGS",
+          ` 5101 ${BUNDLE_PY} -m damwha_worker --run-id=${MY_RUN_ID}`,
+          ` 5102 ${BUNDLE_PY} -m damwha_worker --once --run-id=${MY_RUN_ID}`,
+        ].join("\n"),
+      ownPid: () => 5101,
+      descendants: async () => new Set([5102]),
+      interpreters: [BUNDLE_PY],
+    });
+    expect(out).toEqual([]);
+  });
+
+  it("**현재 동작**: 다른 run-id를 단 번들 프로세스도 외부로 센다 — 기동 전 회수가 그 앞을 막는다", async () => {
+    // 스펙 §6.5 처분표에서 이것은 `external`이 아니라 **고아**(1·2·3 만족, run-id가 다른 값)이고,
+    // 처분은 stand-down이 아니라 `reapOrphans`의 회수다. 그런데 이 소비자는 run-id를 보지 않는다 —
+    // "앱이 아닌 worker가 도는가"만 묻기 때문이고, 기존 테스트 둘(8101·8401)이 그 계약을 못 박고 있다.
+    //
+    // 그래도 안전한 이유: 고아 회수(app/reap-on-start.ts의 reapOrphans)는 **서비스 기동 전에** 돌고,
+    // 스캔이 실패하면 앱이 기동을 아예 멈춘다. 그래서 worker의 detectExternal이 고아를 보는 일은
+    // 없다. 만에 하나 본다면 발화하는 것은 stand-down이고, 그것은 "두 supervisor가 같은 job 큐를
+    // 문다"보다 안전한 쪽으로 틀린다. R-12b는 조건 1만 완화하라고 했으므로 여기서 바꾸지 않는다.
+    const out = await listExternalWorkers({
+      ps: async () => `  PID ARGS\n 5201 ${BUNDLE_PY} -m damwha_worker --run-id=desktop-old`,
+      ownPid: () => undefined,
+      descendants: async () => new Set<number>(),
+      interpreters: [BUNDLE_PY],
+    });
+    expect(out).toEqual([5201]);
   });
 });
 

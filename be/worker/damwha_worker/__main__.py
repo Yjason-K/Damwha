@@ -5,6 +5,7 @@ jobs.py가 type별 정책을 갖고 있다. 이 파일이 다루는 건 프로�
 시그널 2단계 처리, 자식 spawn과 exit code 분기, backoff, reaper 스레드.
 """
 
+import json
 import logging
 import os
 import signal
@@ -12,12 +13,13 @@ import subprocess
 import sys
 import threading
 
-from . import capabilities, console, db, wiring
+from . import capabilities, console, db, runtime_report, wiring
 from .config import load_settings
 from .dispatch import dispatch_claimed_job, handle_job, run_once  # noqa: F401 — 공개 진입점
 from .jobs import default_live_source
 from .llm_server import managed_llm_server
 from .llm_server import probe_models as check_lens_llm
+from .models import downloads
 from .reaper import run_reaper_loop
 from .storage import Storage
 
@@ -188,6 +190,10 @@ def _reconnect(connect_fn, shutdown, *, initial_delay: float = 1.0, max_delay: f
 
 def run_child(settings, shutdown: threading.Event) -> int:
     """--once 자식: 시그널 핸들러 설치 후 job 1건 처리."""
+    log.info("runtime %s", json.dumps(runtime_report.runtime_facts()))
+    # HF 다운로드 진행 훅 (스펙 §6.9) — 모델 스택은 job 안에서 wiring 빌더가 import하므로 그보다
+    # 앞이다. writer는 WORKER_ID (R-9a). supervisor는 모델을 받지 않으므로 설치하지 않는다.
+    downloads.install_hf_progress_hook(settings.worker_id)
 
     def _on_signal(signum, frame):
         log.info("signal %s received — stop at next stage boundary (send again to force)", signum)
@@ -261,8 +267,51 @@ def report_host_capabilities(settings) -> None:
         )
 
 
-def run_supervisor_main(settings, shutdown: threading.Event) -> None:
+def _once_argv(run_id: str | None) -> list[str]:
+    """`--once` 자식 spawn argv. 부모가 받은 `--run-id`를 그대로 이어 붙인다(있으면).
+
+    `sys.executable`은 그대로 승계한다 — 번들 python이 자동으로 자식에 전해진다.
+    """
+    argv = [sys.executable, "-m", "damwha_worker", "--once"]
+    if run_id is not None:
+        argv.append(f"{runtime_report.RUN_ID_PREFIX}{run_id}")
+    return argv
+
+
+def _kill_child_group(proc, *, killpg=os.killpg) -> None:
+    """2차 신호 — `--once` 자식의 **프로세스 그룹**을 통째로 SIGKILL한다.
+
+    자식만 `proc.kill()`하면 자식이 즉사해 `managed_llm_server`의
+    `finally: _stop(proc)`(terminate→wait→kill)가 영영 안 돈다 — 그 자식이 띄운 LLM 서버는
+    pid 1로 재부모화돼 남는다. P4-C20(2026-09-18, 2회 재현)이 실측한 고아가 정확히 그것이다.
+
+    자식은 `_spawn`이 `start_new_session=True`로 띄우므로 세션이자 프로세스 그룹의
+    리더이고(pgid == pid), 그 자식이 띄운 것들은 같은 그룹에 있다. 그래서 `killpg(자식 pid)`는
+    **우리가 만든 그 세션에만** 닿는다 — supervisor 자신의 그룹도, 남의 그룹도 아니다.
+
+    그룹이 이미 비었거나(ESRCH) 신호를 못 보내면 자식만이라도 죽인다. 여기서 예외가 새면
+    신호 핸들러가 터져 supervisor가 `os._exit`까지 못 간다.
+
+    **먼저 `poll()`로 이미 죽은 자식을 거른다.** `proc.kill()`은 `Popen.send_signal`을 거치고
+    그 안에 이 가드가 있다(bpo-38630) — `os.killpg`는 그것을 우회한다. "우리 그룹에만 닿는다"는
+    위의 근거는 자식이 **아직 거둬지지 않았을 때만** 성립한다: 거둬진 순간 그 번호는 재배정될
+    수 있고, `run_supervisor`가 자식을 거두는 자리(`_wait_child`)와 `child_holder`를 비우는
+    자리 사이의 창에 신호가 들어오면 남의 그룹을 때린다. 창은 바이트코드 몇 개지만 가드는 공짜다.
+    `poll()`은 `_waitpid_lock`을 non-blocking으로 잡으므로 신호 핸들러에서 불러도 교착하지 않는다.
+    """
+    if proc.poll() is not None:
+        return
+    try:
+        killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        proc.kill()
+
+
+def run_supervisor_main(
+    settings, shutdown: threading.Event, *, run_id: str | None = None
+) -> None:
     """부모: 2단계 시그널 핸들러 설치 후 supervisor 루프."""
+    log.info("runtime %s", json.dumps(runtime_report.runtime_facts()))
     child_holder = {"proc": None, "count": 0}
 
     def _on_signal(signum, frame):
@@ -274,18 +323,15 @@ def run_supervisor_main(settings, shutdown: threading.Event) -> None:
                 log.info("signal %s — forwarding SIGTERM to child (send again to kill)", signum)
                 proc.terminate()
             else:
-                log.info("signal %s again — killing child and exiting", signum)
-                proc.kill()
+                log.info("signal %s again — killing child process group and exiting", signum)
+                _kill_child_group(proc)
                 os._exit(1)
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, _on_signal)
 
     def _spawn():
-        return subprocess.Popen(
-            [sys.executable, "-m", "damwha_worker", "--once"],
-            start_new_session=True,
-        )
+        return subprocess.Popen(_once_argv(run_id), start_new_session=True)
 
     reaper_thread = threading.Thread(
         target=run_reaper_loop,
@@ -315,14 +361,45 @@ def run_supervisor_main(settings, shutdown: threading.Event) -> None:
     log.info("supervisor %s stopped", settings.worker_id)
 
 
+def _flush_streams() -> None:
+    """os._exit 직전에 우리가 쓴 것을 내보낸다. os._exit은 버퍼도 atexit도 건드리지 않는다."""
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+    sys.stdout.flush()
+    sys.stderr.flush()
+
+
+def _hard_exit(code: int, *, flush_fn=_flush_streams, exit_fn=os._exit) -> None:
+    """`--once` 자식을 **인터프리터 finalize 없이** 끝낸다.
+
+    P4-C7 실측(2026-09-19): 무진행 90초로 다운로드를 끊은 자식이 job 을 재큐까지 끝내
+    놓고 죽지 않았다. 메인 스레드가 `Py_FinalizeEx → wait_for_thread_shutdown →
+    threading._shutdown() → Thread.join()` 에서 영구 대기였다 — `_run_watched` 가 버린
+    다운로드는 **파이썬 스레드로는 daemon** 이지만 `hf_xet` 이 남긴 네이티브 스레드
+    여덟과 non-daemon 파이썬 스레드가 finalize 를 붙잡는다. 감독자는 `os_waitpid` 에서
+    돌아오지 못해 다시 peek 하지 않았고, 재큐된 job 을 **아무도 집지 않았다**(11분 관측;
+    그 자식을 kill -9 하자 8초 만에 재claim).
+
+    한 건만 처리하고 끝나는 프로세스라 finalize 에 걸 것이 없다 — DB 연결은
+    `run_single_job` 이 닫고, 남은 것은 우리가 쓴 로그뿐이라 그것만 먼저 내보낸다.
+    flush 가 터져도 반드시 끝낸다: 여기서 예외가 새면 고치려던 그 멈춤이 되돌아온다.
+    """
+    try:
+        flush_fn()
+    except Exception:  # noqa: BLE001 — 끝내는 것이 flush 보다 중요하다
+        pass
+    exit_fn(code)
+
+
 def main() -> None:  # pragma: no cover — 실모델 + 시그널 배선 (로컬 실행)
     # 진행 바와 로그가 같은 stderr를 쓴다 — 핸들러가 바를 지웠다 다시 그려야 섞이지 않는다
     console.install_logging(level=logging.INFO)
     settings = load_settings()
     shutdown = threading.Event()
+    run_id = runtime_report.run_id_arg(sys.argv[1:])
     if "--once" in sys.argv[1:]:
-        sys.exit(run_child(settings, shutdown))
-    run_supervisor_main(settings, shutdown)
+        _hard_exit(run_child(settings, shutdown))
+    run_supervisor_main(settings, shutdown, run_id=run_id)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -27,10 +27,10 @@ describe("stopWorkerProcess", () => {
       descendants: async () => new Set<number>(),
       onGraceExpired: async () => true,
     });
-    // supervisor에게는 정확히 한 번, **uv의 pid(양수)** 로. 그룹(-4242)이면 uv가 받은 것을 한 번 더
-    // 전달해 supervisor가 두 번 받고, 두 번째를 강제로 읽어 --once 자식을 kill한다 (스펙 §6.9 1단계).
+    // supervisor에게는 정확히 한 번, **supervisor의 pid(양수)** 로 직접 — 전달자가 없어 보낸 수가 곧 받는
+    // 수이고, supervisor는 두 번째를 강제로 읽어 --once 자식을 kill한다 (스펙 §6.9 1단계).
     // 뒤의 그룹 신호는 supervisor가 **끝난 뒤** 같은 그룹의 남은 자식을 거두는 것이라 받을 supervisor가
-    // 없다 — 순서 자체는 아래 "reaps uv's process group only after…" 두 테스트가 잠근다.
+    // 없다 — 순서 자체는 아래 "reaps the supervisor's process group only after…" 두 테스트가 잠근다.
     expect(signals).toEqual([
       [4242, "SIGTERM"],
       [-4242, "SIGTERM"],
@@ -38,10 +38,11 @@ describe("stopWorkerProcess", () => {
     expect(out).toEqual({ stopped: true, leaked: [] });
   });
 
-  it("reaps uv's process group only after the supervisor has exited — never while it is alive (after stage 1)", async () => {
-    // 그룹 신호가 supervisor가 살아 있을 때 나가면 그것이 곧 I-1의 이중 배달이다(uv가 받은 것을 전달하고
-    // 커널이 그룹에도 배달한다). 그래서 신호마다 **그 순간** 루트가 살아 있었는지를 함께 적는다.
-    // 루트는 uv pid에 SIGTERM을 받은 뒤 다음 틱에 끝난다.
+  it("reaps the supervisor's process group only after the supervisor has exited — never while it is alive (after stage 1)", async () => {
+    // 살아 있는 supervisor의 그룹에는 그것이 아직 관리하는 짧은 자식(capabilities 프로브)이 있다 — 그것을
+    // 거두는 자리는 supervisor가 끝난 뒤뿐이다(worker-shutdown.ts 1단계 주석; uv 런처 시절에는 이것이 곧
+    // I-1의 이중 배달이기도 했다). 그래서 신호마다 **그 순간** 루트가 살아 있었는지를 함께 적는다.
+    // 루트는 supervisor pid에 SIGTERM을 받은 뒤 다음 틱에 끝난다.
     let exited = false;
     const events: Array<[number, string, boolean]> = [];
     const out = await stopWorkerProcess(
@@ -71,7 +72,7 @@ describe("stopWorkerProcess", () => {
     expect(out).toEqual({ stopped: true, leaked: [] });
   });
 
-  it("reaps uv's process group only after the supervisor has exited — never while it is alive (after the forced stage 3)", async () => {
+  it("reaps the supervisor's process group only after the supervisor has exited — never while it is alive (after the forced stage 3)", async () => {
     let exited = false;
     let terms = 0;
     const events: Array<[number, string, boolean]> = [];
@@ -148,9 +149,9 @@ describe("stopWorkerProcess", () => {
   }
 
   it("does not report a same-group leftover (the capabilities probe) as leaked once the group is reaped, and gives the signal time to land", async () => {
-    // capabilities.probe_mps는 supervisor가 start_new_session 없이 subprocess.run으로 띄운다 — uv의 그룹
-    // 구성원이다. 1단계가 uv pid로만 보내므로 그것은 신호를 받지 않고 supervisor보다 오래 산다(장난감
-    // 실측 1/1). 기동 직후 ⌘Q가 그 pid를 누수로 보고하면 P2-C4("남은 프로세스 0개")가 깨진다.
+    // capabilities.probe_mps는 supervisor가 start_new_session 없이 subprocess.run으로 띄운다 — supervisor
+    // 그룹의 구성원이다. 1단계가 supervisor pid로만 보내므로 그것은 신호를 받지 않고 supervisor보다 오래
+    // 산다(장난감 실측 1/1). 기동 직후 ⌘Q가 그 pid를 누수로 보고하면 P2-C4("남은 프로세스 0개")가 깨진다.
     //
     // 가짜의 생존 답은 실측을 따른다: 그룹 신호 **직후**의 확인에서는 아직 보이고(5/5), 그다음 확인에서
     // 사라진다(200ms 안, 5/5). 그래서 이 테스트는 두 가지를 함께 잠근다 — 그룹 신호가 나가는가, 그리고
@@ -187,11 +188,69 @@ describe("stopWorkerProcess", () => {
     expect(out).toEqual({ stopped: true, leaked: [] });
   });
 
-  it("never signals a process group while the supervisor is alive — in the polite (1) or forced (3) SIGTERM, uv forwards each one, so a group signal arrives twice", async () => {
-    // 2026-09-13 실측: `process.kill(-uvPid, "SIGTERM")` 한 번에 uv 아래 Python의 SIGTERM 핸들러가
-    // 두 번 불렸다(5/5) — 한 번은 같은 그룹이라 커널이, 한 번은 uv가 전달해서. supervisor의
-    // 2단계 핸들러는 두 번째에서 --once 자식을 proc.kill()하고 os._exit(1)하므로, 그룹 신호는
-    // "정중한" 1단계를 곧바로 강제로 만들고 requeue_for_shutdown을 건너뛴다 (P2-C5).
+  it("reaps the capabilities probe only through the group SIGTERM after the supervisor exits — nothing else can find it (P4-C17)", async () => {
+    // 작은 커널 모형. launchPython의 `detached: true`로 supervisor(4242)가 그룹 리더이고(pgid 4242),
+    // capabilities 프로브(5001)는 supervisor가 start_new_session 없이 띄워 같은 그룹이다. --once 자식(6001)은
+    // start_new_session이라 자기 그룹(6001)이다 — 이 테스트에서는 job이 없어 이미 끝났다고 둔다.
+    //
+    // 프로브는 `[sys.executable, "-c", …]`라 `-m` 토큰도 `--run-id`도 없다. 스펙 §6.5의 argv 표식으로 훑는
+    // 고아 정리(Task 7)도 앱 종료 회수(Task 8, "내 run-id만")도 그것을 보지 못한다 — 회수가 이 한 경로뿐이다.
+    // cleanUnlessOrphans의 `opts.signal(-pid, "SIGTERM")`를 지우면 프로브가 살아남아 이 테스트가 깨진다.
+    const pgid = new Map<number, number>([
+      [4242, 4242],
+      [5001, 4242],
+    ]);
+    const alive = new Set<number>([4242, 5001]);
+    const sent: Array<[number, string]> = [];
+    const received: Array<[number, string]> = [];
+    const signal = (target: number, sig: NodeJS.Signals) => {
+      sent.push([target, sig]);
+      const members = target < 0 ? [...alive].filter((p) => pgid.get(p) === -target) : alive.has(target) ? [target] : [];
+      for (const p of members) {
+        received.push([p, sig]);
+        // 받으면 다음 틱에 끝난다(둘 다 SIGTERM에 기본 동작으로 죽는다).
+        setTimeout(() => alive.delete(p), 1);
+      }
+    };
+    const out = await stopWorkerProcess(
+      {
+        pid: 4242,
+        alive: () => alive.has(4242),
+        stderrTail: () => "",
+        exitCode: () => null,
+        onExit: () => undefined,
+        stop: async () => undefined,
+      } as never,
+      {
+        graceMs: 50,
+        pollMs: 5,
+        signal,
+        // supervisor가 살아 있는 동안의 ppid BFS — 프로브 하나가 보인다.
+        descendants: async (root) => new Set([...alive].filter((p) => p !== root)),
+        onGraceExpired: async () => true,
+        stillAlive: async (pids) => pids.filter((p) => alive.has(p)),
+      },
+    );
+    // 보낸 것: supervisor에 직접 한 번, 끝난 뒤 그 그룹에 한 번. 프로브를 **직접** 겨냥한 신호는 없다.
+    expect(sent).toEqual([
+      [4242, "SIGTERM"],
+      [-4242, "SIGTERM"],
+    ]);
+    // 받은 것: supervisor는 정확히 한 번(전달자가 없다), 프로브는 그룹 신호로 한 번.
+    expect(received).toEqual([
+      [4242, "SIGTERM"],
+      [5001, "SIGTERM"],
+    ]);
+    expect(alive.size).toBe(0);
+    expect(out).toEqual({ stopped: true, leaked: [] });
+  });
+
+  it("never signals a process group while the supervisor is alive — the polite (1) and forced (3) SIGTERMs go to the supervisor pid itself", async () => {
+    // supervisor의 핸들러는 받은 SIGTERM을 센다 — 두 번째에서 --once 자식을 proc.kill()하고 os._exit(1)하므로,
+    // 한 단계에 두 번 닿으면 "정중한" 1단계가 곧바로 강제가 되고 requeue_for_shutdown을 건너뛴다 (P2-C5).
+    // 전달자가 없는 지금 그룹 신호는 supervisor에 한 번만 닿지만, 살아 있는 동안에는 그 그룹의 프로브까지
+    // 건드린다. (2026-09-13 uv 런처 실측: `process.kill(-uvPid, "SIGTERM")` 한 번에 핸들러가 두 번 불렸다
+    // (5/5) — 커널 한 번, uv 전달 한 번. 전달자가 다시 끼면 이 테스트가 그 회귀도 막는다.)
     //
     // 두 SIGTERM이 모두 나오는 경로(사람이 강제를 고른다)를 끝까지 돌리고, SIGTERM 전부가
     // 핸들의 pid 그 자체로 갔는지를 본다. 음수가 하나라도 있으면 실패한다 — 1단계든 3단계든.
@@ -250,8 +309,8 @@ describe("stopWorkerProcess", () => {
     );
     expect(asked).toBe(2);
     // 기다리겠다는 답에 두 번째 SIGTERM을 보내면 안 된다 — 그것이 곧 강제(3단계)다. 이 한 번도
-    // uv의 pid(양수)로 간다: 그룹이면 이 한 번이 supervisor에게는 이미 두 번이다. 뒤의 그룹 신호는
-    // supervisor가 스스로 끝난 **뒤**의 거두기라 supervisor에게 가는 두 번째 신호가 아니다.
+    // supervisor의 pid(양수)로 간다. 뒤의 그룹 신호는 supervisor가 스스로 끝난 **뒤**의 거두기라
+    // supervisor에게 가는 두 번째 신호가 아니다.
     expect(signals).toEqual([
       [4242, "SIGTERM"],
       [-4242, "SIGTERM"],
@@ -345,6 +404,52 @@ describe("stopWorkerProcess", () => {
     });
     expect(signals[0]).toBe("SIGTERM");
     expect(signals[1]).toBe("SIGTERM");
+  });
+
+  it("SIGKILLs surviving descendants even when the supervisor obeys the second SIGTERM", async () => {
+    // P4-C20 실측(2026-09-18, 2회 재현). supervisor의 2차 핸들러는 `proc.kill()` 뒤
+    // `os._exit(1)`이라 **두 번째 SIGTERM에 반드시 즉시 죽는다**. 예전 3단계는 그때 곧장
+    // cleanUnlessOrphans로 반환했고, 그래서 4단계(자손 SIGKILL)는 프로덕션에서 한 번도
+    // 돌지 않는 죽은 코드였다 — SIGTERM을 무시하는 자손이 "후보 pid"로 보고만 되고
+    // 살아남았다(fixture가 196초+ 생존, ppid=1).
+    //
+    // 같은 커밋의 worker 쪽 수정(2차 신호가 `--once` 자식의 **그룹**을 죽인다)이 그 자식의
+    // 세션 안을 거두므로, 이 단계가 맡는 것은 그 세션 **밖으로 나간** 자손이다 — 스스로
+    // `setsid`하는 탈출구 바이너리, 그리고 그룹 킬이 없던 옛 worker가 남긴 것들.
+    //
+    // alive() 예산 다섯: 진입 가드(1) + 1단계 대기(2회 폴 + 마지막 확인 = 3) + 대화상자
+    // 직후의 생존 확인(1). 여섯 번째 — 3단계 대기의 첫 확인 — 에서 처음 false가 나와
+    // "supervisor가 2차 SIGTERM에 순순히 죽었다"를 흉내 낸다.
+    const signals: Array<[number, string]> = [];
+    let walks = 0;
+    const out = await stopWorkerProcess(handle(5), {
+      graceMs: 10,
+      pollMs: 5,
+      signal: (p, sig) => signals.push([p, sig]),
+      descendants: async () => {
+        walks += 1;
+        // 3단계의 걷기에서 **처음 보이는** 자손을 하나 더 넣는다(7002). worker의 --once
+        // 자식은 job마다 새로 뜨므로 앞선 두 스냅샷에 없던 자손이 실제로 있을 수 있고,
+        // 그것이 capturedDescendants 합치기가 하는 일이다 — 합치지 않으면 7002는
+        // SIGKILL은 받되 cleanUnlessOrphans의 판정에서 빠져 화면이 "깨끗함"을 말한다.
+        return walks >= 3 ? new Set([7001, 7002]) : new Set([7001]);
+      },
+      onGraceExpired: async () => true,
+      maxWaits: 2,
+      // 자손은 2차 SIGTERM에도 살아남는다 (SIG_IGN fixture). supervisor는 죽었다.
+      stillAlive: async (pids) => pids.filter((p) => p !== 4242),
+    });
+    expect(signals).toContainEqual([7001, "SIGKILL"]);
+    expect(signals).toContainEqual([7002, "SIGKILL"]);
+    // 죽어서 이미 거둬진 supervisor에는 SIGKILL을 보내지 않는다 — 그 번호는 재사용될 수 있다.
+    expect(signals).not.toContainEqual([4242, "SIGKILL"]);
+    // 3단계의 트리 걷기는 2차 SIGTERM **직전**이다. supervisor가 살아 있는 마지막 순간이라
+    // ppid BFS가 유효하고 pid가 가장 신선하다 — 진입(1) + 유예 직후(2) + 여기(3).
+    // supervisor가 죽었으므로 4단계는 다시 걷지 않는다(죽은 뒤의 BFS는 재부모화된 자손을 못 본다).
+    expect(walks).toBe(3);
+    expect(out.stopped).toBe(false);
+    // 3단계에서 처음 본 7002도 판정에 든다.
+    expect([...out.leaked].sort((a, b) => a - b)).toEqual([7001, 7002]);
   });
 
   it("SIGKILLs the tree it just walked, not the snapshots it captured two graces ago", async () => {
@@ -851,7 +956,7 @@ describe("stopWorkerProcess", () => {
     // (a) BFS의 루트는 언제나 **양수** pid다. 음수는 "프로세스 그룹"이라는 뜻이고
     //     ps의 ppid 열에는 음수가 없다.
     expect(events.filter((e) => e[0] === "descendants").map((e) => e[1])).toEqual([
-      4242, 4242, 4242,
+      4242, 4242, 4242, 4242,
     ]);
 
     const names = events.map((e) => e[0]);
@@ -862,14 +967,19 @@ describe("stopWorkerProcess", () => {
     //     재사용된 pid(=남의 프로세스)를 capturedDescendants에 합칠 수 있다.
     expect(names.slice(0, 4)).toEqual(["descendants", "signal", "descendants", "ask"]);
 
-    // 전체 순서도 함께 못 박는다. 4단계의 세 번째 걷기는 SIGKILL **직전**이어야 한다 —
-    // 낡은 스냅샷을 죽이지 않고 그 자리에서 다시 걸은 트리를 죽이는 것이 그 이유다.
-    // 두 SIGTERM의 대상은 uv의 pid(양수)다 — 그룹이면 uv의 전달과 겹쳐 supervisor가 두 번 받는다.
+    // 전체 순서도 함께 못 박는다. 걷기가 **두 자리에** 있는 것이 요점이다.
+    // 세 번째는 2차 SIGTERM **직전** — 그 신호를 받은 supervisor가 `os._exit`로 반드시
+    // 죽으므로(P4-C20) 자손이 pid 1로 재부모화되기 전의 마지막 유효한 BFS다.
+    // 네 번째는 SIGKILL **직전** — 여기서는 supervisor가 아직 살아 있고(handle(999)),
+    // 세 번째 트리는 유예 하나만큼(프로덕션 90초) 낡았다. 죽이는 대상은 언제나 가장
+    // 신선한 트리여야 한다.
+    // 두 SIGTERM의 대상은 supervisor의 pid(양수)다 — 살아 있는 동안에는 그룹에 보내지 않는다.
     expect(events).toEqual([
       ["descendants", 4242],
       ["signal", 4242, "SIGTERM"],
       ["descendants", 4242],
       ["ask"],
+      ["descendants", 4242],
       ["signal", 4242, "SIGTERM"],
       ["descendants", 4242],
       ["signal", 4242, "SIGKILL"],

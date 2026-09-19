@@ -1,0 +1,8 @@
+# build-python.sh가 내려받는 아카이브의 sha256. shasum -a 256 -c 로 대조한다.
+#
+# postgres·ffmpeg와 달리 python-build-standalone은 릴리스마다 SHA256SUMS를 함께 배포한다
+# (https://github.com/astral-sh/python-build-standalone/releases/download/20250818/SHA256SUMS).
+# 그래서 이 값은 "내가 받은 바이트를 적어 둔 것"이 아니라 **배포처 공개 체크섬과 대조해 일치를
+# 확인한 것**이다 — ffmpeg-checksums.txt·postgres-checksums.txt가 감수한 한계가 여기에는 없다.
+# 2026-09-17 대조: 내려받은 값과 업스트림 SHA256SUMS의 값이 같았다.
+fabb5fd4de54c68ce7e70d19fb08127549da5787cd38a34d00000749f4fde478  cpython-3.12.11+20250818-aarch64-apple-darwin-install_only.tar.gz

@@ -130,7 +130,7 @@ DATABASE_URL=postgres://postgres:postgres@localhost:15433/damwha   # DB 포트�
 | GPU 프리셋이 전부 잠김 / job이 `gpu_unavailable` | 워커가 MPS를 못 찾았다. `make health`의 `gpu_probe`를 본다 — `mps_unavailable`이면 Rosetta python이 유력하다(`uv python list`로 arm64 확인) |
 | 업로드가 `gpu is not available on this machine` 400 | compose의 `CAPABILITIES_PLATFORM/ARCH`가 지워졌다 — 원본 그대로 써야 한다 |
 | 화자 분리 실패 / 401 | `HF_TOKEN` 비었거나 라이선스 3개 중 하나 미수락. `make check`가 어느 쪽인지 알려 준다 → [HUGGINGFACE.md](HUGGINGFACE.md) |
-| 렌즈/요약이 `llm_server_start_failed` | `mlx_lm.server`가 PATH에 없음 → `make tools` |
+| 렌즈/요약이 `llm_server_start_failed` | 워커 환경에 mlx-lm이 없다(`models` extra 없이 깔았다) → `make tools`. PATH의 `mlx_lm.server`를 찾지 않는다 — 워커가 `-m damwha_worker.llm_entry`로 자기 인터프리터에서 띄운다. `.env`에 `LENS_LLM_SERVER_BIN`을 채워 뒀다면 그 경로를 먼저 의심한다(탈출구다 — 비워 두는 게 기본) |
 | "녹음 시작"을 눌러도 아무 일도 안 일어남 | 첫 클릭은 마이크 점검 단계다 — 한 번 더 누른다. 그래도 안 되면 브라우저가 마이크 권한을 거부한 것이다(주소창의 자물쇠 → 마이크 허용). 이 경우 회의가 **안 만들어지는 게 정상**이다 |
 | 녹음한 회의에 `capture_error=preview_worker_lost` | 녹음 중 워커가 죽었다. 실시간 자막만 잃었고 **녹음과 정식 처리는 온전하다** — 워커를 다시 띄우면 전사가 끝난다 |
 | 녹음이 `capture_error=producer_abandoned` | 브라우저가 90초 넘게 오디오를 안 보냈다(탭을 닫았거나 네트워크 끊김). 그때까지 확정된 오디오는 보존되고 정식 처리가 이어진다 |

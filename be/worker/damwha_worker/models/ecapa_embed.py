@@ -20,12 +20,20 @@ class EcapaEmbedder:
     def __init__(self, model: str, device: str) -> None:
         from speechbrain.inference.speaker import EncoderClassifier
 
+        from .downloads import load_cache_first
+
         # ECAPA is tiny; run it on CPU even when the pipeline device is 'mps' —
         # SpeechBrain's MPS op-coverage is unreliable and the speedup here is
         # marginal. pyannote (diarization) and mlx-whisper still use the GPU.
         run_device = "cpu" if device == "mps" else device
-        self._encoder = EncoderClassifier.from_hparams(
-            source=model, run_opts={"device": run_device}
+        # 캐시 우선 (스펙 §6.6-b). `from_hparams`에는 `local_files_only` 같은 인자가 없다 —
+        # 훅이 이 컨텍스트 동안 hub 호출에 끼워 넣는다. speechbrain은 파일 10개를 각각
+        # `hf_hub_download`로 묻는데, 먹통 네트워크에서 그것이 파일당 대기로 쌓인다(실측 101.8초).
+        self._encoder = load_cache_first(
+            model,
+            lambda **_: EncoderClassifier.from_hparams(
+                source=model, run_opts={"device": run_device}
+            ),
         )
         # 마지막으로 로드한 파형 캐시. align의 임베딩 판정자가 짧은 스팬마다 embed를
         # 부르는데, 매번 전체 파일을 디코딩하지 않기 위함 — 한 job은 한 파일만 다루고

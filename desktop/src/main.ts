@@ -1,10 +1,10 @@
-import { app, BrowserWindow, dialog } from "electron";
+import { app, BrowserWindow, dialog, safeStorage, shell } from "electron";
 import { execFile } from "child_process";
 import * as fs from "fs";
 import * as net from "net";
 import * as path from "path";
 import { promisify } from "util";
-import { loadConfig, withoutDbKeys, type ApiEnv, type DatabaseMode } from "./config/config";
+import { launchEnv, loadConfig, pycachePrefix, type ApiEnv, type DatabaseMode } from "./config/config";
 import { createConfigReloader } from "./config/config-reload";
 import {
   PROBE_TIMEOUT_MS,
@@ -15,9 +15,21 @@ import {
 import type { ProcessHandle } from "./process/handle";
 import { launchVite } from "./dev/vite-process";
 import { lastMeaningfulLine } from "./diagnostics/stderr";
-import { createServicesWindow, showStatus, type ShellStatus } from "./windows/shell-window";
+import { createServicesWindow, createTokenWindow, showStatus, type ShellStatus } from "./windows/shell-window";
+import { makeTokenStore, maskToken, tokenFilePath, verifyHfToken } from "./config/token-store";
+import { runTokenGate } from "./app/token-gate";
+import { openTokenWindow, TokenWindowClosed } from "./windows/token-window";
+import { ServiceFailure } from "./services/failure";
 import { CAUSES } from "./diagnostics/causes";
-import { failureDetail, servicesView, shellStatusFrom } from "./windows/status-view";
+import {
+  failureDetail,
+  NO_SERVICES_YET,
+  SERVICE_LABELS,
+  servicesView,
+  shellStatusFrom,
+  type ServicesAction,
+} from "./windows/status-view";
+import { applyTokenChange, ownedByStatus, TOKEN_SERVICES } from "./windows/apply-token-change";
 import { createStatusWindow, mayAutoOpen } from "./windows/status-window";
 import { applyNavigationBoundary, applyPermissionBoundary } from "./windows/permissions";
 import { mayRenderShell } from "./windows/shell-latch";
@@ -36,19 +48,24 @@ import { askIsRecording } from "./windows/recording-bridge";
 import { installMenu } from "./windows/menu";
 import { createSupervisor } from "./services/supervisor";
 import { verifyOwnListener as checkOwnListener } from "./process/own-listener";
-import { descendantPids, listenerPids } from "./process/process-tree";
+import { descendantPids, listenerPids, psArgs } from "./process/process-tree";
+import { knownTrees, newRunId, type KnownTree } from "./process/orphans";
+import { reapBeforeStart, systemReapDeps } from "./app/reap-on-start";
+import { quitReapDeps, stopThenReap, type QuitReapTarget } from "./app/reap-on-quit";
 import { buildSpecs } from "./services/specs";
 import { hasOnceChild, listExternalWorkers as scanExternalWorkers } from "./services/worker-discovery";
 import { probeEmbedContract } from "./services/embed-probe";
-import { findExecutable, searchDirs } from "./process/executables";
+import { searchDirs } from "./process/executables";
 import { createMigrationCheckWatch } from "./services/api";
-import { isRepoRoot } from "./config/repo-root";
+import { resolveRepoRoot } from "./config/repo-root";
+import { ffmpegBinaries, pythonBinaries } from "./process/runtime-paths";
 import { rotateIfNeeded } from "./diagnostics/logs";
 import { freePort } from "./process/ports";
 import { mayAutoRetry } from "./app/retry-policy";
 import { devMigrationRunner, packagedMigrationRunner } from "./services/postgres/migration-runner";
 import { runMigrationGate } from "./services/postgres/migration-gate";
-import { DB_NAME, DB_SUPERUSER, pgBinaries, pgLayout } from "./services/postgres/layout";
+import { DB_NAME, DB_SUPERUSER, pgBinaries, pgLayout, pgToolEnv, type PgBinaries, type PgLayout } from "./services/postgres/layout";
+import { MODEL_READINESS_KEY, parseModelReadiness, type ReadinessEntry } from "./services/model-readiness";
 import { psInfo, spawnPostmaster, stopOrphanPostmaster } from "./services/postgres/handle";
 import { embeddedPostgresSpec, externalPostgresSpec, PG_FAST_GRACE_MS, PG_IMMEDIATE_GRACE_MS } from "./services/postgres/service";
 import { runTool } from "./process/tool-runner";
@@ -62,6 +79,14 @@ import type {
 } from "./services/types";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * 이 **실행**의 식별자 (Phase 4 스펙 §6.5). 번들 python 자식의 argv `--run-id=`에 실려, 앱이 ps만으로
+ * "이번 실행의 것"과 "이전 실행이 남긴 고아"를 가른다. 실행마다 새 값이고 실행 안에서는 고정이다 —
+ * 재시도가 감독자를 다시 만들어도 같은 앱 프로세스의 자식은 같은 표식을 단다. config.json과 무관하다.
+ * 모양은 판독기가 읽는 모양과 한 자리에서 정한다 (process/orphans.ts의 newRunId).
+ */
+const RUN_ID = newRunId();
 
 /**
  * userData는 productName이 아니라 package.json의 name에서 나오므로, dev와 packaged가
@@ -104,7 +129,7 @@ let vite: ProcessHandle | null = null;
  * 포트 폴백으로 API origin이 바뀌면 이 값과 비교해 Vite를 재기동할지 정한다.
  */
 let viteApiBase: string | null = null;
-/** 이번 실행이 쓰는 저장소 체크아웃. resolveRepoRoot가 정하고 Vite 기동도 이것을 쓴다. */
+/** 이번 실행이 쓰는 저장소 체크아웃. dev만 갖는다 — resolveRepoRoot가 정하고 Vite 기동도 이것을 쓴다. */
 let repoRoot: string | null = null;
 /**
  * 담화 화면을 붙여 둔 창. boolean이 아니라 **창 자체**를 드는 이유는 shell-latch.ts에 있다 —
@@ -139,6 +164,14 @@ let supervisor: ReturnType<typeof createSupervisor> | null = null;
  */
 let launchCtx: { ctx: Omit<LaunchContext, "signal">; baseline: ApiEnv; mode: DatabaseMode } | null = null;
 /**
+ * 종료 회수(B층, app/reap-on-quit.ts)가 볼 이번 실행의 run-id와 트리. createSupervisorFor가 트리를 계산하는 자리 —
+ * 어떤 자식보다 먼저 — 에서 채우고 **지우지 않는다.** launchCtx·supervisor와 수명을 같이하지 않는 것이 요점이다:
+ * B층은 핸들도 감독자 상태도 보지 않아야 A층이 놓친 것을 찾는다. 재시도가 다시 채우면 최신 것이 이긴다(run-id는
+ * 실행 내내 같고, 자식을 띄우는 자기 트리도 같다). null이면 — 토큰 온보딩 중 종료처럼 여기까지 오지 못했으면 —
+ * 이번 실행의 자식이 있을 수 없어 B층을 건너뛴다.
+ */
+let quitReapTarget: QuitReapTarget | null = null;
+/**
  * "이 값은 앱을 다시 켜야 바뀌어요" 안내. 재적용기가 매번 다시 계산하므로 어긋남이 풀리면
  * 저절로 null이 된다. 화면이 이것을 말하지 않으면 사용자는 자기 수정이 왜 안 먹는지 알 길이
  * 없고, 그 침묵이 재리뷰 §4-1의 절반이었다.
@@ -156,6 +189,29 @@ let configWarning: string | null = null;
  * 보고했다. 살아 있을 때 찍어 두는 일은 모듈 밖에서만 할 수 있어서 이 자리에 있다.
  */
 let knownWorkerDescendants: ReadonlySet<number> | undefined;
+/**
+ * 기동 게이트를 지난 HF 토큰 (Phase 4 스펙 §6.4). 한 번 지나면 재시도·창 재열기가 Keychain을 다시 묻지 않는다.
+ * **로그·화면에 싣지 않는다.** 자식에게는 launchEnv가 ctx.env로만 넘긴다.
+ */
+let hfToken: string | null = null;
+/**
+ * 상태 창이 그리는 `app_setting.model_readiness`의 마지막 스냅숏 (스펙 §6.9). 감독자의 준비 유예가 쓰는
+ * 것과 **같은 리더·같은 해석**이다 — 화면이 두 번째 경로로 읽으면 "화면에는 받는 중인데 감독자는 실패로
+ * 적었다"가 생긴다. 창이 떠 있는 동안에만 새로 읽는다(refreshReadiness).
+ */
+let modelReadiness: readonly ReadinessEntry[] = [];
+/** 그 행을 읽는 방법. createSupervisorFor가 채운다. 외부 DB 모드에서는 null이다(그 모드는 이 행이 없다). */
+let readModelReadiness: (() => Promise<unknown>) | null = null;
+/** 지금 "서비스 다시 시작"이 도는 중인 서비스. 버튼이 죽은 것처럼 보이지 않게 화면이 진행을 보인다. */
+const restartingServices = new Set<ServiceId>();
+/**
+ * 토큰 창이나 삭제 확인이 떠 있다. 재시작의 `restartingServices`와 같은 일을 토큰 두 버튼에 한다 —
+ * 묻는 고리는 그동안 막혀 있는데, 감독자의 상태 변화가 화면을 다시 그리면 페이지가 스스로 건
+ * 잠금이 풀리고 두 번째 클릭이 큐에 쌓인다(그 창이 닫히자마자 두 번째 창이 열린다).
+ */
+let tokenBusy = false;
+/** 상태 창에서 방금 누른 것의 결과 한 줄. 다음 동작이 덮는다. */
+let actionNotice: string | null = null;
 
 /** 앱이 정한 API origin. 감독자의 런타임에서 읽는다 — 전역 변수를 따로 두면 갈린다. */
 function currentApiOrigin(): string | null {
@@ -182,23 +238,6 @@ function appendSupervisorLog(line: string): void {
     fs.appendFileSync(file, `${new Date().toISOString()} ${line}\n`);
   } catch {
     // 로그를 못 쓰는 것은 앱이 죽을 이유가 아니다 (Phase 1의 makeSink와 같은 규칙).
-  }
-}
-
-/**
- * config.json에 한 키만 덧쓴다. 파일 전체를 다시 쓰지 않는 이유는 사용자가 손으로 넣은
- * 다른 키와 주석 없는 포맷을 보존하기 위해서다. 실패해도 기동을 막지 않는다 — 다음 실행에
- * 다시 물어보면 된다.
- */
-function saveConfigValue(userData: string, key: string, value: string): void {
-  const file = path.join(userData, "config.json");
-  try {
-    const raw = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "{}";
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    parsed[key] = value;
-    fs.writeFileSync(file, `${JSON.stringify(parsed, null, 2)}\n`);
-  } catch (e) {
-    appendSupervisorLog(`config.json에 ${key}를 저장하지 못했어요: ${String(e)}`);
   }
 }
 
@@ -503,26 +542,45 @@ function stopOwnWorker(result: LaunchResult, plan: StopPlan): Promise<StopOutcom
 }
 
 /**
- * 역순 종료 + dev의 Vite. Vite는 감독자가 모르는 자식이라 여기서 직접 내린다.
+ * 앱 종료의 서비스 정지. 감독자 역순 종료(A층) 뒤에 핸들과 무관한 종료 회수(B층)를 붙이고, dev의 Vite를 나란히 내린다
+ * (Phase 4 스펙 §6.5 "종료 절차"). A층 → B층의 순서·던진 경로·판정 합치기는 app/reap-on-quit.ts의 stopThenReap에 있다.
  *
- * 유예 안에 안 끝난 Vite도 결과에 실어 보낸다 — P2-C4가 세는 "앱이 만든 프로세스"에는
- * 그 node도 들어간다. 감독자의 결과만 돌려주면 dev에서 남은 Vite는 아무 데도 안 적힌다.
+ * **quit-flow.ts가 아니라 여기다.** runQuitFlow는 이 함수를 부를 뿐이고, 이 함수 자체가 거부하면 before-quit의
+ * `.catch`가 quitNow()로 간다 — B층이 runQuitFlow 안에 있으면 그 경로에서 건너뛰어진다. B층이 합친 결과는
+ * runQuitFlow의 "남은 것" 판정(`!out.stopped` → leftoverNotice)으로 그대로 간다.
+ *
+ * Vite는 감독자가 모르는 자식이라 여기서 직접 내린다. B층의 대상(번들 python)이 아니므로 A층·B층 사슬 **밖에서**
+ * 나란히 돌고, 합치기는 사슬이 끝난 뒤에 한다 — B층이 A층의 남은 pid를 다시 보고 사유를 고칠 때 Vite의 줄이
+ * 섞이지 않게. 유예 안에 안 끝난 Vite도 결과에 실어 보낸다 — P2-C4가 세는 "앱이 만든 프로세스"에는 그 node도
+ * 들어간다.
+ *
+ * 둘이 **모두 끝난 뒤에** 반환한다(allSettled). Promise.all이면 Vite가 먼저 거부하는 순간 반환해, stopAll이 worker의
+ * 정중한 정지(유예 90초) 한가운데인데 runQuitFlow가 앱을 끝내 버린다. 거부는 그 뒤에 그대로 던진다 — 감독자 쪽 거부를
+ * 먼저 본다.
  */
 async function stopServices(): Promise<StopOutcome> {
   const v = vite;
   vite = null;
   viteApiBase = null;
   const sup = supervisor;
-  const [viteLeaked, out] = await Promise.all([
+  const [viteSettled, supSettled] = await Promise.allSettled([
     (async (): Promise<number[]> => {
       if (v === null) return [];
       await v.stop(STOP_GRACE_MS);
       return v.alive() && v.pid !== undefined ? [v.pid] : [];
     })(),
-    sup === null
-      ? Promise.resolve<StopOutcome>({ stopped: true, leaked: [] })
-      : sup.stopAll({ graceMs: STOP_GRACE_MS, onGraceExpired: askGraceExpired }),
+    stopThenReap(
+      () =>
+        sup === null
+          ? Promise.resolve<StopOutcome>({ stopped: true, leaked: [] })
+          : sup.stopAll({ graceMs: STOP_GRACE_MS, onGraceExpired: askGraceExpired }),
+      quitReapDeps(quitReapTarget, appendSupervisorLog),
+    ),
   ]);
+  if (supSettled.status === "rejected") throw supSettled.reason;
+  if (viteSettled.status === "rejected") throw viteSettled.reason;
+  const out = supSettled.value;
+  const viteLeaked = viteSettled.value;
   if (viteLeaked.length === 0) return out;
   return {
     stopped: false,
@@ -560,8 +618,53 @@ const statusWindow = createStatusWindow<BrowserWindow>({
       hasWindow: win !== null && !win.isDestroyed(),
       rendererAttached: win !== null && !win.isDestroyed() && !mayRenderShell(attachedWindow, win),
     }),
+  onAction: (action) => handleServicesAction(action),
+  // 묻는 고리가 끝났다 — 창은 떠 있는데 버튼이 죽었다. 로그에만 적으면 사람은 그 사실을 알 길이
+  // 없다. 화면이 마지막으로 그려질 때 이 줄을 얹는다.
+  onAskFailed: (reason) => {
+    actionNotice = reason;
+    appendSupervisorLog(reason);
+    statusWindow.refresh();
+  },
   log: appendSupervisorLog,
 });
+
+/** 모델 준비 행을 다시 읽는 간격. 감독자의 폴링과 같은 근거다 (writer가 초당 1회 이하로 누른다). */
+const READINESS_REFRESH_MS = 2_000;
+
+/**
+ * 상태 창이 떠 있는 동안에만 `model_readiness`를 다시 읽는다 (스펙 §6.9 — "상태 창과 FE가 같은 값을
+ * 본다"). 리더가 psql 프로세스 하나라 닫힌 창을 위해 2초마다 띄우지 않는다.
+ *
+ * 값이 그대로면 다시 그리지 않는다 — 갱신 시각만 바뀌는 렌더는 사람에게 아무것도 알리지 않는다.
+ */
+async function refreshReadiness(): Promise<void> {
+  const reader = readModelReadiness;
+  // 종료가 시작되면(beginQuit) 더는 묻지 않는다. 이 리더는 **번들 psql 프로세스**를 새로 띄우고,
+  // ⌘Q 뒤에 뜬 psql은 stopAll이 postgres에 fast-shutdown을 건 것과 겹쳐 돌다가 종료 후 `ps`
+  // 훑기에 남은 프로세스로 잡힌다 (P4-C17·C19). 아래에서 타이머 자체도 끄지만, 이 줄은 이미
+  // 깨어나 여기 닿은 한 번을 막는다 — cancelRetry와 scheduleRetry의 quitting 가드와 같은 짝이다.
+  if (reader === null || quitting || !statusWindow.isOpen()) return;
+  let raw: unknown;
+  try {
+    raw = await reader();
+  } catch {
+    return; // 못 읽는 것은 화면이 멈출 이유가 아니다 — 다음 주기에 다시 읽는다.
+  }
+  const next = parseModelReadiness(raw);
+  if (JSON.stringify(next) === JSON.stringify(modelReadiness)) return;
+  modelReadiness = next;
+  statusWindow.refresh();
+}
+
+/**
+ * unref: 이 타이머 하나 때문에 이벤트 루프가 살아 있지 않게 한다 (종료가 이것을 기다리지 않는다).
+ *
+ * **unref는 멈추는 것이 아니다** — 루프를 붙잡지 않을 뿐 프로세스가 사는 동안 2초마다 계속 깨어난다.
+ * 그래서 종료의 되돌릴 수 없는 지점(beginQuit)이 이것을 `clearInterval`로 끈다.
+ */
+const readinessTimer: NodeJS.Timeout = setInterval(() => void refreshReadiness(), READINESS_REFRESH_MS);
+readinessTimer.unref?.();
 
 /**
  * dev에서 렌더러가 볼 주소. Vite를 이 시점에 띄우고 첫 서빙까지 기다린다.
@@ -647,26 +750,59 @@ function verifyOwnListener(port: number, childPid: number | undefined): Promise<
 /**
  * 감독자에 넘기는 배선. 판정 자체(우리 것을 빼는 두 줄 포함)는 services/worker-discovery.ts에
  * 있다 — 여기 두면 electron을 값으로 import하는 이 파일이라 어떤 테스트도 그것을 부를 수
- * 없고, `ours.add(pid)`를 빠뜨려도 초록불이 유지된다.
+ * 없고, `ours.add(pid)`를 빠뜨려도 초록불이 유지된다. `trees`는 공백 든 설치 경로를 접두사로 잘라
+ * 읽는 데만 쓴다 (Phase 4 스펙 §6.5).
  */
-function listExternalWorkers(): Promise<number[]> {
+function listExternalWorkers(trees: readonly KnownTree[]): Promise<number[]> {
   return scanExternalWorkers({
-    ps: async () =>
-      (await execFileAsync("/bin/ps", ["-axo", "pid,command"], { timeout: 2_000 })).stdout,
+    ps: psArgs,
     ownPid: () => supervisor?.runtimeOf("worker")?.result?.handle?.pid,
     descendants: descendantPids,
+    interpreters: trees.map((t) => t.python),
   });
 }
 
-/** 번들 PostgreSQL 트리. packaged는 Resources, dev는 build-postgres.sh가 스테이징한 자리다 (Phase 3 스펙 §6.8). */
-function pgBundleDir(): string {
-  return app.isPackaged ? path.join(process.resourcesPath, "postgres") : path.join(app.getAppPath(), "build", "postgres");
+/**
+ * 번들 트리 하나. packaged는 `Resources/<이름>`, dev는 build-*.sh가 스테이징한 `desktop/build/<이름>`이다
+ * (Phase 3 스펙 §6.8, Phase 4 스펙 §6.1). electron-builder의 `extraResources: - from: build`가 그 둘을 같은 모양으로 만든다.
+ */
+function bundleDir(name: "postgres" | "python" | "ffmpeg"): string {
+  return app.isPackaged ? path.join(process.resourcesPath, name) : path.join(app.getAppPath(), "build", name);
+}
+
+/** model_readiness 한 행을 읽는 psql의 상한. 로컬 소켓 SELECT 하나라 넉넉하고, ⌘Q가 이만큼만 늦는다. */
+const MODEL_READINESS_QUERY_MS = 5_000;
+
+/**
+ * 감독자의 준비 유예가 읽는 `app_setting.model_readiness` (스펙 §6.9, 판정 R-P8).
+ *
+ * 번들 `psql`로 **읽기만** 한다 — Phase 3의 클러스터 판정과 같은 도구·같은 env이고, 앱에는 pg
+ * 클라이언트 의존이 없다(desktop/package.json의 dependencies는 비어 있다). 감독자에 Task 11의
+ * API를 물리지 않는 것이 이 배선의 요점이다.
+ *
+ * 돌려주는 것은 **psql이 찍은 텍스트 그대로**다. 해석은 services/model-readiness.ts가 한다 —
+ * 이 파일은 vitest가 부르지 못하므로 여기서 JSON.parse까지 하면 아무도 그것을 검사할 수 없다.
+ * 못 읽으면 null이고, 감독자는 그것을 "받는 중인 모델 없음"으로 읽는다.
+ */
+function modelReadinessReader(binaries: PgBinaries, layout: PgLayout): () => Promise<unknown> {
+  return async () => {
+    const r = await runTool(
+      binaries.psql,
+      // prettier-ignore
+      ["-X", "-A", "-t", "-h", layout.runDir, "-U", DB_SUPERUSER, "-d", DB_NAME,
+       "-c", `SELECT value FROM app_setting WHERE key = '${MODEL_READINESS_KEY}'`],
+      { env: pgToolEnv(), deadlineMs: MODEL_READINESS_QUERY_MS },
+    );
+    if (r.code !== 0) return null;
+    const out = r.stdout.trim();
+    return out === "" ? null : out;
+  };
 }
 
 /** 상태 창의 postgres 줄에 싣는 디버깅 접속 명령 (스펙 §6.3). 번들 psql을 쓴다 — Homebrew psql이 없는 맥이다. */
 function debugCommand(): string {
   const layout = pgLayout(app.getPath("userData"));
-  return `"${pgBinaries(pgBundleDir()).psql}" -h "${layout.runDir}" -U ${DB_SUPERUSER} ${DB_NAME}`;
+  return `"${pgBinaries(bundleDir("postgres")).psql}" -h "${layout.runDir}" -U ${DB_SUPERUSER} ${DB_NAME}`;
 }
 
 function currentDatabaseMode(): DatabaseMode | null {
@@ -674,26 +810,29 @@ function currentDatabaseMode(): DatabaseMode | null {
 }
 
 /**
- * REPO_ROOT를 빌드 시점에 굽지 않는다 — 번들 안에 저장소 절대 경로가 들어가면 Phase 1의
- * 위생 기준(P1-C11)이 깨진다. 못 찾으면 사람에게 한 번 묻고 config.json에 적는다.
- * Phase 3·4가 번들을 넣으면 이 물음 자체가 사라진다 (스펙 §6.4).
+ * 번들 python이 쓸 userData 쪽 준비. 실패해도 기동을 막지 않고 한 줄 남긴다.
+ *
+ * - `<userData>/pycache`: PYTHONPYCACHEPREFIX의 자리(스펙 §6.1-b). 쓰기 불가한 prefix는 **오류 없이
+ *   무캐시로 강등된다**(실측) — 조용히 느려지므로 만들지 못했거나 이미 있는데 쓸 수 없다는 사실을 남긴다.
+ *   mkdirSync(recursive)는 이미 있는 디렉터리에 성공하므로 쓰기·탐색 권한을 따로 본다.
+ * - `<userData>/.env`: worker의 Settings가 cwd의 .env를 읽는다(be/worker/damwha_worker/config.py).
+ *   앱이 넣는 env가 이기므로 실해는 없지만 있으면 혼란의 원인이라 알린다 (스펙 §6.2). 앱은 그 파일을 만들지 않는다.
  */
-async function resolveRepoRoot(configured: string | undefined): Promise<string | null> {
-  if (configured !== undefined && isRepoRoot(configured)) return configured;
-  if (!app.isPackaged) {
-    const guess = path.resolve(app.getAppPath(), "..");
-    if (isRepoRoot(guess)) return guess;
+function prepareUserDataForPython(userData: string): void {
+  const pycache = pycachePrefix(userData);
+  try {
+    fs.mkdirSync(pycache, { recursive: true });
+    fs.accessSync(pycache, fs.constants.W_OK | fs.constants.X_OK);
+  } catch (e) {
+    appendSupervisorLog(
+      `바이트코드 캐시 폴더(${pycache})를 만들거나 쓸 수 없어요 — Python이 캐시 없이 돌아 느려질 수 있어요: ${reasonOf(e)}`,
+    );
   }
-  const picked = await dialog.showOpenDialog({
-    title: "담화 저장소 폴더를 골라 주세요",
-    message: "be/worker가 있는 담화 저장소 폴더입니다.",
-    properties: ["openDirectory"],
-  });
-  const dir = picked.filePaths[0];
-  // 고른 폴더도 검증한다. 아무 폴더나 받으면 이후 모든 실패가 엉뚱한 원인을 말한다.
-  if (dir === undefined || !isRepoRoot(dir)) return null;
-  saveConfigValue(app.getPath("userData"), "REPO_ROOT", dir);
-  return dir;
+  if (fs.existsSync(path.join(userData, ".env"))) {
+    appendSupervisorLog(
+      `${path.join(userData, ".env")}가 있어요 — worker가 cwd의 .env를 읽지만 앱이 넣는 값이 이깁니다. 앱은 이 파일을 쓰지 않으니 지워도 됩니다.`,
+    );
+  }
 }
 
 /** 감독자의 지금 상태를 셸 화면 한 장으로 접는다. 판정은 status-view.ts의 shellStatusFrom에 있다. */
@@ -722,6 +861,12 @@ function servicesViewNow() {
     postgresLogDir: mode?.kind === "embedded" ? pgLayout(app.getPath("userData")).logDir : null,
     logPathOf,
     migrationCheckSkipped: migrationWatch.skippedFor(supervisor?.runtimeOf("api")?.result?.handle),
+    // 스펙 §6.9·§6.4 — 모델 준비와 토큰. 토큰은 **가린 모양만** 간다.
+    modelReadiness,
+    restarting: [...restartingServices],
+    maskedToken: hfToken === null ? null : maskToken(hfToken),
+    tokenBusy,
+    actionNotice,
   });
 }
 
@@ -777,7 +922,7 @@ async function reattachWindow(mine: number): Promise<void> {
   // 화면으로 되돌린다. 붙이기 **전에** 올린다.
   attachedWindow = target;
   await target.loadURL(renderer.url);
-  // 붙기 전에 넘어진 서비스(uv가 없으면 worker는 몇 밀리초 만에 넘어진다)는 그때 실패 화면에
+  // 붙기 전에 넘어진 서비스(번들 python이 없으면 worker는 몇 밀리초 만에 넘어진다)는 그때 실패 화면에
   // 잠깐 보였을 뿐, 이제 어떤 화면에도 없다. 감독자는 더 낼 상태가 없어 onStatus도 다시 돌지
   // 않으므로, 붙인 직후 여기서 한 번 더 묻는다.
   statusWindow.reconsider();
@@ -926,8 +1071,8 @@ function announceRestartNotice(mine: number, notice: string): void {
  * 한 번만 적는가)은 config-reload.ts에 있다 — 여기 두면 어떤 테스트도 그것을 부를 수 없고,
  * 실제로 그 자리에 있는 동안 결함 둘이 그 안에서 났다 (재리뷰 §4-1·§4-2).
  *
- * 자식 env만 다시 읽는다. ctx.bins(uv)와 repoRoot는 여기서 갱신해도 소용이 없다 —
- * 번들 경로와 모드도 감독자 생성 때 한 번 정해진다. 그 넷을
+ * 자식 env만 다시 읽는다. ctx.bins·runId·repoRoot는 여기서 갱신해도 소용이 없다 —
+ * 번들 경로와 모드도 감독자 생성 때 한 번 정해진다. 그것들을
  * 반영하려면 감독자를 다시 만들어야 하고, 그것은 첫 감독자가 쥔 자식 셋의 유일한 참조를
  * 버리는 일이라 P2-C4가 금지한다. 그러므로 실패 화면의 "값을 고치면 다시 시도합니다"가 참인
  * 범위는 PORT·EMBED_SERVICE_PORT 같은 **자식 env 키**다 — DATABASE_URL·STORAGE_ROOT는 여기 들지
@@ -947,10 +1092,230 @@ const reloadConfig = createConfigReloader({
 });
 
 /**
+ * HF 토큰 게이트의 배선 (Phase 4 스펙 §6.4). 판정은 app/token-gate.ts, 창의 흐름은 windows/token-window.ts,
+ * 저장·검증은 config/token-store.ts에 있다 — 여기 남는 것은 electron 잎(safeStorage·BrowserWindow·
+ * shell.openExternal·app.quit)이다.
+ *
+ * - safeStorage를 못 쓰면 **manual** 실패로 던진다 — startOnce의 catch가 원인과 안내를 그리고 자동 재시도를 걸지
+ *   않는다. Keychain이 잠겨 있으면 재시도가 잠금 해제 요청을 20초마다 다시 띄울 수 있다. 평문 폴백은 없다.
+ * - 사람이 토큰 창을 닫았으면 null이다 — 창이 이미 app.quit()을 불렀다. 부른 쪽은 조용히 물러난다.
+ */
+async function ensureHfToken(): Promise<string | null> {
+  if (hfToken !== null) return hfToken;
+  const userData = app.getPath("userData");
+  const store = makeTokenStore(userData, safeStorage);
+  const gate = await runTokenGate({
+    store,
+    fileExists: () => fs.existsSync(tokenFilePath(userData)),
+    onboard: (notice) =>
+      openTokenWindow<BrowserWindow>({
+        notice,
+        create: (onLoadError) => createTokenWindow(win, onLoadError),
+        alive: (w) => !w.isDestroyed(),
+        onLoad: (w, listener) => w.webContents.on("did-finish-load", listener),
+        onClosed: (w, listener) => w.on("closed", listener),
+        run: (w, script) => w.webContents.executeJavaScript(script),
+        close: (w) => {
+          if (!w.isDestroyed()) w.close();
+        },
+        openExternal: (url) => shell.openExternal(url),
+        quit: () => app.quit(),
+        log: appendSupervisorLog,
+        verify: (token) => verifyHfToken(token),
+        save: (token) => store.write(token),
+      }),
+    log: appendSupervisorLog,
+  });
+  if (gate.kind === "blocked") throw new ServiceFailure(gate.detail, "manual");
+  if (gate.kind === "quit") return null;
+  hfToken = gate.token;
+  return hfToken;
+}
+
+/**
+ * 상태 창에서 사람이 누른 것 (스펙 §6.4 토큰 설정 · §6.10 2층 "서비스 다시 시작").
+ *
+ * **던지지 않는다.** 이 호출이 거부되면 묻는 고리가 끊겨 그 뒤의 버튼이 전부 죽는다
+ * (windows/status-window.ts의 ask). 실패는 화면의 한 줄과 supervisor.log로 바뀐다.
+ */
+async function handleServicesAction(action: ServicesAction): Promise<void> {
+  try {
+    if (action.kind === "restart") {
+      await restartFromStatusWindow(action.service);
+    } else {
+      // 화면의 잠금만으로는 모자란다(tokenBusy의 주석). 큐에 쌓였다가 늦게 도착한 두 번째 요청은
+      // 여기서 막는다 — 첫 창이 닫히자마자 두 번째 창이 열리는 것을 화면 타이밍에 기대지 않는다.
+      if (tokenBusy) {
+        appendSupervisorLog("토큰 요청이 이미 진행 중이라 이 요청은 무시했어요.");
+        return;
+      }
+      tokenBusy = true;
+      statusWindow.refresh();
+      try {
+        if (action.op === "change") await changeHfToken();
+        else await clearHfToken();
+      } finally {
+        tokenBusy = false;
+      }
+    }
+  } catch (e) {
+    actionNotice = `요청을 처리하지 못했어요 — ${reasonOf(e)}`;
+    appendSupervisorLog(actionNotice);
+  }
+  statusWindow.refresh();
+}
+
+/**
+ * 한 서비스를 내렸다가 다시 띄운다 (2층). `retry()`가 아니다 — 그쪽은 살아 있는 서비스를 건너뛴다.
+ *
+ * 도는 동안 버튼이 진행을 보이게 `restartingServices`에 넣는다. 감독자의 `restartService`는 진행 중인
+ * bring을 먼저 기다리므로 수십 초가 걸릴 수 있고, 그동안 버튼이 평범한 모습이면 죽은 것으로 읽힌다.
+ */
+async function restartFromStatusWindow(id: ServiceId): Promise<void> {
+  const sup = supervisor;
+  if (sup === null) {
+    actionNotice = NO_SERVICES_YET;
+    return;
+  }
+  await trackRestart(id, () => sup.restartService(id));
+  actionNotice = `다시 시작 · ${SERVICE_LABELS[id]} — 끝났어요. 위 상태 줄을 확인해 주세요.`;
+}
+
+/** 진행 표시를 켜고 끄며 재시작 하나를 돌린다. 실패해도 표시는 반드시 꺼진다. */
+async function trackRestart(id: ServiceId, run: () => Promise<void>): Promise<void> {
+  restartingServices.add(id);
+  actionNotice = `다시 시작 · ${SERVICE_LABELS[id]} — 진행 중이에요.`;
+  statusWindow.refresh();
+  try {
+    await run();
+  } finally {
+    restartingServices.delete(id);
+  }
+}
+
+/** 상태 창에서 연 토큰 창의 첫 안내. 누르기 **전에** 무슨 일이 일어나는지 말한다. */
+function tokenChangeNotice(): string {
+  const now = hfToken === null ? "없음" : maskToken(hfToken);
+  return `지금 토큰: ${now}. 새 토큰을 확인하면 ${TOKEN_SERVICES.map((id) => SERVICE_LABELS[id]).join("·")}를 다시 시작해요.`;
+}
+
+/**
+ * 토큰 교체 (스펙 §6.4 → §6.10 2층, 완료 기준 P4-C4).
+ *
+ * 창은 온보딩과 **같은 창**이다 — 확인(whoami)·저장·마스킹이 이미 거기 있고, 두 번째 입력 화면을
+ * 만들면 그 셋이 갈린다. 다른 점은 닫았을 때뿐이다: 여기서는 앱을 끝내지 않는다(closeQuitsApp).
+ *
+ * 저장 뒤의 일(다시 읽어 증명 → live env·캐시 → 소유한 서비스만 재시작)은
+ * `windows/apply-token-change.ts`가 한다.
+ */
+async function changeHfToken(): Promise<void> {
+  const userData = app.getPath("userData");
+  const store = makeTokenStore(userData, safeStorage);
+  if (!store.available()) {
+    actionNotice = CAUSES.safeStorageUnavailable.text;
+    return;
+  }
+  let token: string;
+  try {
+    token = await openTokenWindow<BrowserWindow>({
+      notice: tokenChangeNotice(),
+      closeQuitsApp: false,
+      create: (onLoadError) => createTokenWindow(win, onLoadError),
+      alive: (w) => !w.isDestroyed(),
+      onLoad: (w, listener) => w.webContents.on("did-finish-load", listener),
+      onClosed: (w, listener) => w.on("closed", listener),
+      run: (w, script) => w.webContents.executeJavaScript(script),
+      close: (w) => {
+        if (!w.isDestroyed()) w.close();
+      },
+      openExternal: (url) => shell.openExternal(url),
+      quit: () => app.quit(),
+      log: appendSupervisorLog,
+      verify: (t) => verifyHfToken(t),
+      save: (t) => store.write(t),
+    });
+  } catch (e) {
+    actionNotice =
+      e instanceof TokenWindowClosed
+        ? "토큰을 바꾸지 않았어요."
+        : `토큰 화면을 띄우지 못했어요 — ${reasonOf(e)}`;
+    return;
+  }
+
+  const result = await applyTokenChange(
+    {
+      store,
+      // 감독자가 없으면 얹을 live env가 없다. 그래도 저장·캐시는 해 두어야 다음 기동이 새 값을 쓴다.
+      liveEnv: launchCtx?.ctx.env ?? {},
+      // 감독자가 없으면 owned가 이미 전부 false라 여기까지 오지 않는다. 그래도 !를 쓰지 않는다 —
+      // 그 불변식이 깨지는 날 화면이 TypeError 대신 skipped를 보여야 한다.
+      restartService: (id) =>
+        trackRestart(id, async () => {
+          const sup = supervisor;
+          if (sup === null) throw new Error(NO_SERVICES_YET);
+          await sup.restartService(id);
+        }),
+      owned: ownedByStatus(supervisor?.statuses() ?? []),
+      // Task 6 인계 — live env와 **같은 순간** 모듈 전역 캐시를 갱신한다. 하나만 바꾸면 실패한
+      // start() 뒤의 감독자 재생성이 옛 토큰을 되살린다.
+      cacheToken: (t) => {
+        hfToken = t;
+      },
+    },
+    token,
+  );
+  const labels = (ids: readonly ServiceId[]) => ids.map((id) => SERVICE_LABELS[id]).join(", ");
+  const parts = [
+    result.restarted.length > 0 ? `다시 시작: ${labels(result.restarted)}` : null,
+    result.skipped.length > 0
+      ? `다시 시작하지 못함: ${labels(result.skipped)} (앱이 띄운 서비스가 아니거나 내려가는 중이에요)`
+      : null,
+  ].filter((line): line is string => line !== null);
+  actionNotice = `토큰을 바꿨어요. ${parts.join(" · ")}`.trim();
+  appendSupervisorLog(`허깅페이스 토큰을 바꿨어요 — ${actionNotice}`);
+}
+
+/**
+ * 토큰 삭제 (스펙 §6.4 "수정·삭제 가능").
+ *
+ * **서비스를 다시 시작하지 않는다.** 토큰 없이 다시 띄우면 지금 잘 도는 것까지 못 뜨고, 앱에는
+ * 토큰 없이 도는 모드가 없다(§6.4 첫 실행 게이트). 지금 도는 자식은 옛 토큰을 쥔 채로 두고,
+ * 다음 실행이 토큰 화면으로 다시 묻는다. 그 사실을 화면이 말한다.
+ */
+async function clearHfToken(): Promise<void> {
+  const answer = await dialog.showMessageBox({
+    type: "warning",
+    buttons: ["삭제", "취소"],
+    defaultId: 1,
+    cancelId: 1,
+    message: "저장된 허깅페이스 토큰을 지울까요?",
+    detail:
+      "지금 도는 서비스는 옛 토큰으로 계속 돌아요. 하지만 그 서비스가 다시 뜨면 — 자동 재시도나 " +
+      "“서비스 다시 시작” — 토큰 없이 떠서 모델을 받지 못해요. 앱을 다시 켜면 토큰 화면이 다시 떠요.",
+  });
+  if (answer.response !== 0) {
+    actionNotice = "토큰을 지우지 않았어요.";
+    return;
+  }
+  makeTokenStore(app.getPath("userData"), safeStorage).clear();
+  hfToken = null;
+  if (launchCtx !== null) delete launchCtx.ctx.env.HF_TOKEN;
+  actionNotice =
+    "토큰을 지웠어요. 지금 도는 서비스는 옛 토큰으로 계속 돌지만, 그 서비스가 한 번이라도 다시 뜨면 " +
+    "(자동 재시도·“서비스 다시 시작”) 토큰 없이 떠서 모델을 받지 못해요. 앱을 다시 켜면 토큰 화면이 다시 떠요.";
+  appendSupervisorLog(actionNotice);
+}
+
+/**
  * 감독자를 세운다. 세울 수 없는 이유(설정 오류)를 화면에 적었으면 false를 돌려주고,
  * 부른 쪽은 물러난다. 던지는 실패(저장소 부재)는 startOnce의 catch가 받는다.
  */
 async function createSupervisorFor(mine: number): Promise<boolean> {
+  // **무엇보다 먼저** — postgres를 포함해 어떤 서비스도 토큰 없이 뜨지 않는다 (스펙 §6.4 첫 실행 게이트).
+  // 토큰 창을 기다리는 동안 ⌘Q·새 기동이 끼어들 수 있다. 그 뒤의 검사(activeWindow)가 그것을 본다.
+  const token = await ensureHfToken();
+  if (token === null) return false;
+
   const userData = app.getPath("userData");
   const cfg = loadConfig(userData);
   if (cfg.warning !== undefined) appendSupervisorLog(cfg.warning);
@@ -983,19 +1348,30 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
     return false;
   }
 
-  const resolved = await resolveRepoRoot(cfg.repoRoot);
-  if (resolved === null) throw new Error(CAUSES.repoRootMissing.text);
+  // packaged는 항상 null이다 — 저장소를 묻지도 읽지도 않는다. dev만 못 찾으면 여기서 멈춘다 (스펙 §6.3).
+  const resolved = resolveRepoRoot({ packaged: app.isPackaged, configured: cfg.repoRoot, appPath: app.getAppPath() });
+  if (!app.isPackaged && resolved === null) throw new Error(CAUSES.repoRootMissing.text);
   repoRoot = resolved;
 
   const dirs = searchDirs(app.getPath("home"), cfg.extraPath);
-  const uv = cfg.uvBin ?? findExecutable("uv", dirs);
+  const python = pythonBinaries(bundleDir("python"));
+  const ffmpeg = ffmpegBinaries(bundleDir("ffmpeg"));
+  prepareUserDataForPython(userData);
+  // LLM 서버의 주소는 앱이 빈 포트로 정한다. worker는 그 포트에 서버가 이미 있으면 **재사용만** 하고
+  // 소유하지 않는다(llm_server.py) — 고정 포트(개발 .env의 8000)를 쓰면 사람이 손으로 띄운 서버를 앱의
+  // worker가 그대로 쓰게 되고, 그 서버의 모델도 수명도 앱이 모른다. 실제 bind는 job 직전이라 그 사이 다른
+  // 프로세스가 포트를 가져갈 수 있고, 그때는 LLM 서버 기동 실패로 드러난다.
+  // 토큰은 env에만 싣는다 — 재적용의 기준선에 들어가면 첫 재시도가 지운다 (config.ts의 launchEnv).
+  const { env, baseline } = launchEnv(cfg, await freePort(), token);
 
   const ctx: Omit<LaunchContext, "signal"> = {
     repoRoot: resolved,
     userData,
     packaged: app.isPackaged,
-    env: cfg.env,
-    bins: { uv },
+    databaseMode: cfg.databaseMode.kind,
+    env,
+    bins: { python: python.python, ffmpeg: ffmpeg.ffmpeg, ffprobe: ffmpeg.ffprobe },
+    runId: RUN_ID,
     searchDirs: dirs,
     logFile: logPathOf,
   };
@@ -1004,6 +1380,15 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
     rotateIfNeeded(logPathOf(id));
   }
 
+  // 이전 실행이 남긴 고아를 **어떤 서비스보다 먼저** 내린다 (Phase 4 스펙 §6.5) — 뒤에 하면 새로 띄운 것과
+  // 잠시 공존하고, 고아 worker와 새 worker가 같은 job을 집는다. 트리는 dev·packaged 두 벌이다(하나의 userData를
+  // 두 빌드가 함께 쓴다) — ctx.bins는 이번 실행의 한 벌뿐이다. 스캔이 실패하면 manual 실패로 던지고
+  // (app/reap-on-start.ts) startOnce의 catch가 원인과 "다시 시도"를 그린다. 감독자가 아직 없으므로 아무것도
+  // 뜨지 않고, 메뉴의 "다시 시도"는 이 자리부터 다시 돈다.
+  const trees = knownTrees(ctx);
+  quitReapTarget = { runId: ctx.runId, trees };
+  await reapBeforeStart(systemReapDeps({ runId: ctx.runId, trees, log: appendSupervisorLog }));
+
   const wantEmbed = {
     model: cfg.env.SEARCH_EMBEDDING_MODEL ?? "BAAI/bge-m3",
     dimension: Number(cfg.env.SEARCH_EMBEDDING_DIM ?? "1024"),
@@ -1011,7 +1396,11 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
 
   const mode = cfg.databaseMode;
   const layout = pgLayout(userData);
-  const binaries = pgBinaries(pgBundleDir());
+  const binaries = pgBinaries(bundleDir("postgres"));
+  // 감독자의 준비 유예와 상태 창이 **같은** 리더를 쓴다 (스펙 §6.9 — 같은 값을 본다). 외부 DB
+  // 모드에서는 worker가 이 행을 아예 쓰지 않으므로 리더를 두지 않는다.
+  readModelReadiness = mode.kind === "external" ? null : modelReadinessReader(binaries, layout);
+  if (readModelReadiness === null) modelReadiness = [];
   const postgres =
     mode.kind === "external"
       ? externalPostgresSpec()
@@ -1024,22 +1413,22 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
           stopOrphan: (pid) => stopOrphanPostmaster(pid, PG_FAST_GRACE_MS, PG_IMMEDIATE_GRACE_MS),
           log: appendSupervisorLog,
         });
-  // 러너의 env는 API와 같다 — inheritedEnv 위에 자식 env. DATABASE_URL을 **항상** 싣는다: dev의 cwd(be/)에서 dotenv가
-  // be/.env를 읽지만 이미 있는 값을 덮지 않는다 (스펙 §6.5-1).
-  const runnerEnv = (): Record<string, string> => {
-    const out: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) if (typeof v === "string") out[k] = v;
-    return { ...out, ...ctx.env };
+  // 러너에는 감독자의 ctx.env를 그대로 넘긴다. 상속 env 위에 얹고 HF_TOKEN을 빼는 합성은 러너가 한다
+  // (migration-runner.ts의 nodeChildEnv, R-6b) — API와 같은 규칙이고, 이 파일에 두면 테스트가 못 본다.
+  // packaged는 번들 러너라 저장소가 필요 없다. dev 러너는 저장소에서 pnpm을 부르므로, 저장소가 없으면
+  // cwd에 닿기 전에 원인을 낸다 — 위에서 dev는 이미 멈췄으니 타입을 세우는 가드다.
+  const migrationRunner = () => {
+    if (app.isPackaged) return packagedMigrationRunner({ apiDir: path.join(process.resourcesPath, "api"), env: ctx.env });
+    if (resolved === null) throw new Error(CAUSES.repoRootMissing.text);
+    return devMigrationRunner({ repoRoot: resolved, env: ctx.env, runTool });
   };
   const migrationGate =
     mode.kind === "external"
       ? undefined
-      : (signal: AbortSignal) =>
+      : async (signal: AbortSignal) =>
           runMigrationGate(
             {
-              runner: app.isPackaged
-                ? packagedMigrationRunner({ apiDir: path.join(process.resourcesPath, "api"), env: runnerEnv() })
-                : devMigrationRunner({ repoRoot: resolved, env: runnerEnv(), runTool }),
+              runner: migrationRunner(),
               runTool,
               binaries,
               layout,
@@ -1048,8 +1437,8 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
             signal,
           );
 
-  // 자식을 띄우기 전에 한 번 더 본다. 여기까지 오는 길에는 resolveRepoRoot의 폴더 선택
-  // 대화상자가 있고(packaged 첫 실행에서는 상한이 없다), 그 사이에 ⌘Q가 들어오면 stopAll()은
+  // 자식을 띄우기 전에 한 번 더 본다. 여기까지 오는 길에는 await가 있고(준비 화면, 빈 포트 조회 —
+  // 예전에는 상한 없는 폴더 선택 대화상자도 있었다), 그 사이에 ⌘Q가 들어오면 stopAll()은
   // supervisor를 null로 스냅숏해 아무것도 정리하지 않고 끝난다. 그 **뒤에** 이 컨티뉴에이션이
   // postmaster와 detached 자식 둘을 띄우면 아무도 정리하지 않는 프로세스가 된다.
   // 감독자가 선 뒤로는 감독자 자신의 stopping/pending이 같은 일을 하므로, 구멍은 정확히
@@ -1069,16 +1458,28 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
         onMigrationCheckSkipped: (handle) => migrationWatch.skipped(handle),
         ...(migrationGate === undefined ? {} : { migrationGate }),
       },
-      embed: { probe: (url) => probeEmbedContract(url, wantEmbed), freePort },
-      worker: { listExternal: listExternalWorkers, stop: stopOwnWorker },
+      embed: {
+        probe: (url) => probeEmbedContract(url, wantEmbed),
+        freePort,
+        listenerPids,
+        psArgs,
+        log: appendSupervisorLog,
+      },
+      worker: { listExternal: () => listExternalWorkers(trees), stop: stopOwnWorker },
     }),
     ctx,
-    { onStatus: renderStatus, log: appendSupervisorLog },
+    {
+      onStatus: renderStatus,
+      log: appendSupervisorLog,
+      // 외부 DB 모드에서는 걸지 않는다 — 그 모드의 worker는 이 행을 아예 쓰지 않고(스펙 §6.9의
+      // DAMWHA_SHARED_STATE=off), 내장 클러스터의 소켓도 없어 psql이 매번 헛돈다.
+      ...(readModelReadiness === null ? {} : { readModelReadiness }),
+    },
   );
   // start()가 끝나기 전에 대입해야 한다 — onStatus가 그 사이에 여러 번 발화하고, shellStatusOf()는
   // supervisor에서 상태를 읽는다. 대입이 뒤면 기동 화면에 서비스 줄이 한 줄도 안 뜬다.
   supervisor = created;
-  launchCtx = { ctx, baseline: withoutDbKeys(cfg.env), mode: cfg.databaseMode };
+  launchCtx = { ctx, baseline, mode: cfg.databaseMode };
 
   try {
     await created.start();
@@ -1204,6 +1605,9 @@ if (!app.requestSingleInstanceLock()) {
       beginQuit: () => {
         quitting = true;
         cancelRetry();
+        // 모델 준비 리더도 여기서 끈다 — 이 타이머가 번들 psql을 새로 띄우는 유일한 주기다.
+        // 끄지 않으면 stopAll의 fast-shutdown과 겹친 psql이 종료 뒤까지 남는다 (P4-C17·C19).
+        clearInterval(readinessTimer);
       },
       // activeWindow를 쓰지 않는다 — quitting이 이미 참이라 그것은 항상 null을 돌려준다
       // (spawn-guard). 여기서 보고 싶은 것은 "지금 창이 있는가"뿐이다.

@@ -37,7 +37,11 @@ def test_set_stage_guarded_by_ownership(conn):
 
 def test_mark_processing_guarded_by_meeting(conn):
     mid = seed_meeting(conn, processing_version=2)
-    jid = seed_job(conn, meeting_id=mid)
+    seed_job(conn, meeting_id=mid)
+    # 실제로 mark_processing은 **claim한 자식**만 부른다. job 가드가 생긴 뒤로는
+    # queued인 채로 두면 meeting 가드를 보기도 전에 0이 나와, 이 테스트가 재려던
+    # processing_version 불일치를 못 재게 된다.
+    jid = db.claim(conn, "w1")["id"]
     conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
     assert db.mark_processing(conn, mid, jid, 2) == 1
     assert db.mark_processing(conn, mid, jid, 1) == 0  # version mismatch → stale
@@ -282,3 +286,32 @@ def test_worker_capabilities_upsert_overwrites(conn):
         "SELECT value FROM app_setting WHERE key=%s", (db.WORKER_CAPABILITIES_KEY,)
     ).fetchone()
     assert row["value"] == {"worker_id": "w2", "gpu_eligible": False}
+
+
+def test_mark_processing_refuses_when_the_job_is_no_longer_running(conn, pg_url):
+    # P4-C7 회차 실측: 취소가 claim과 mark_processing 사이에 들어오면, 취소는 job과
+    # meeting.status만 바꾸고 `current_job_id`·`processing_version`은 그대로 두므로
+    # meeting 가드를 그냥 통과한다 → mark_processing이 meeting을 `processing`으로
+    # 되돌려 놓는다. 그러면 취소는 409(진행 중인 게 없다), 재처리도 409(done/failed가
+    # 아니다)라 **회의가 도달 불가 상태로 굳는다**. 같은 파일의 set_stage·heartbeat는
+    # 둘 다 job 가드를 건다 — 이것만 빠져 있었다.
+    mid = seed_meeting(conn, status="failed")
+    jid = seed_job(conn, meeting_id=mid, status="failed")
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    conn.commit()
+
+    assert db.mark_processing(conn, mid, jid, 0) == 0
+    row = conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()
+    assert row["status"] == "failed"
+
+
+def test_mark_processing_still_marks_a_running_job(conn, pg_url):
+    # 정상 경로는 그대로다 — 가드를 너무 좁히면 모든 처리가 lost_ownership이 된다.
+    mid = seed_meeting(conn, status="uploaded")
+    jid = seed_job(conn, meeting_id=mid, status="running")
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    conn.commit()
+
+    assert db.mark_processing(conn, mid, jid, 0) == 1
+    row = conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()
+    assert row["status"] == "processing"

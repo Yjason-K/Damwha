@@ -277,6 +277,14 @@ export function graceExpiryPrompt(analysing: boolean): DialogCopy {
  */
 export function leftoverNotice(out: StopOutcome): QuitNotice {
   const why = out.detail ?? STOP_DETAIL.unverifiable;
+  // 종료 회수(B층)가 서비스별 정지가 놓친 것을 내렸고, 내린 것이 모두 끝난 것을 확인했다. 넷째 상태다 — "확인하지
+  // 못했다"도 "살아 있을 수 있다"도 거짓이고, 사람이 터미널에서 할 일도 없다. 놓쳤다는 사실만은 알린다.
+  if (out.cleanedUp === true && out.leaked.length === 0) {
+    return {
+      message: "종료하면서 남아 있던 프로세스를 정리했어요.",
+      detail: `${why}\n\n내린 프로세스가 모두 끝난 것을 확인했어요. 자세한 내용은 supervisor.log에 있습니다.`,
+    };
+  }
   const pids =
     out.leaked.length > 0
       ? `pid ${out.leaked.join(", ")} — 이 목록은 후보이지 증거가 아니에요. 그 사이 끝난 pid를 다른 프로그램이 이미 쓰고 있을 수 있으니, 터미널에서 무엇인지 확인한 뒤에 정리해 주세요.`

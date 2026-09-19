@@ -89,9 +89,12 @@ function processExists(pid: number): boolean {
 }
 
 /**
- * worker를 SIGKILL로 먼저 죽이면 안 된다. __main__.py:279가 --once 자식을
+ * worker를 SIGKILL로 먼저 죽이면 안 된다. __main__.py의 `_spawn`이 --once 자식을
  * start_new_session=True로 띄우므로 프로세스 그룹 kill이 그 자식에 닿지 않고, supervisor를
- * 죽이면 자식과 그것이 띄운 mlx_lm.server가 고아로 남는다 (스펙 §6.9).
+ * 죽이면 자식과 그것이 띄운 LLM 서버(llm_entry)가 고아로 남는다 (스펙 §6.9).
+ *
+ * `handle.pid`는 **Python supervisor 자신**이다 (Phase 4 — process/python-launcher.ts). 중간 전달자가
+ * 없고, launchPython이 `detached: true`로 띄우므로 supervisor가 자기 그룹의 리더다(pgid = pid).
  *
  * 0. 진입할 때, 그리고 1단계 유예가 지난 직후(사람에게 묻기 **전**)에 자손 집합을 찍어
  *    둔다 — 둘 다 방금 alive()로 supervisor 생존을 읽은 시점이다. 아래 어느 단계에서
@@ -99,17 +102,21 @@ function processExists(pid: number): boolean {
  *    죽으면 그 자손은 pid 1로 재부모화되어 사후 BFS로는 보이지 않는다. worker의 --once
  *    자식은 job마다 새로 뜨므로 진입 스냅샷 하나만으로는 그 사이 새로 뜬 자식을 놓친다.
  * 1. SIGTERM 1회 — supervisor가 자식에 전달하고 자식은 stage boundary에서 멈춰
- *    requeue_for_shutdown을 부른다. 그 경로가 attempts를 되돌린다. **uv의 pid로 보낸다,
- *    그룹이 아니라.** 이유는 본문의 1단계 주석에 있다.
+ *    requeue_for_shutdown을 부른다. 그 경로가 attempts를 되돌린다. **supervisor의 pid로 직접
+ *    보낸다, 그룹이 아니라.** 이유는 본문의 1단계 주석에 있다.
  * 2. 유예 초과 → 사람에게 묻는다. "계속 기다리기"면 유예를 한 번 더 주고 **다시 묻는다** —
  *    끝나는 길은 프로세스가 스스로 끝나거나 사람이 강제를 고르는 것뿐이다.
- * 3. 강제 → SIGTERM 2회차(역시 uv의 pid). supervisor가 자식을 kill하고 os._exit한다.
- * 4. 그래도 남으면 자손 집합에 SIGKILL. start_new_session은 세션만 바꾸고 부모-자식
- *    관계는 그대로라 ps의 ppid BFS가 여전히 찾아낸다.
+ * 3. 강제 → **트리를 한 번 더 걷고** SIGTERM 2회차(역시 supervisor의 pid). supervisor가 자식의
+ *    프로세스 그룹을 kill하고 os._exit한다. 걷기가 신호보다 앞인 이유: 그 신호를 받은
+ *    supervisor는 os._exit로 **반드시** 즉시 죽고, 그 뒤의 BFS는 재부모화된 자손을 못 본다.
+ * 4. 방금 걸은 트리에서 살아 있는 것에 SIGKILL. start_new_session은 세션만 바꾸고 부모-자식
+ *    관계는 그대로라 ps의 ppid BFS가 여전히 찾아낸다. **supervisor가 2회차에 죽었어도 돈다** —
+ *    예전에는 죽으면 여기 오기 전에 반환했고, 2차 핸들러가 os._exit라 그 분기가 항상 참이라
+ *    이 단계가 프로덕션에서 한 번도 돌지 않았다(P4-C20). 루트는 살아 있을 때만 때린다.
  * 5. 그래도 남으면 pid를 돌려준다. 정리 실패를 조용히 넘기지 않는다.
  *
- * 1·2·3단계의 기다림에서 supervisor가 **끝나면**, 그 자리에서 uv의 그룹에 SIGTERM을 한 번
- * 보내 같은 그룹에 남은 짧은 자식(capabilities 프로브)을 거둔 뒤 판정한다 (cleanUnlessOrphans).
+ * 1·2·3단계의 기다림에서 supervisor가 **끝나면**, 그 자리에서 supervisor의 그룹(-pid)에 SIGTERM을
+ * 한 번 보내 같은 그룹에 남은 짧은 자식(capabilities 프로브)을 거둔 뒤 판정한다 (cleanUnlessOrphans).
  * 살아 있는 동안에는 절대 그룹에 보내지 않는다.
  */
 /**
@@ -224,20 +231,27 @@ export async function stopWorkerProcess(
   };
 
   /**
-   * supervisor(uv)가 **방금** 끝났다 — 이 호출 안에서 alive()가 false를 읽은 직후에만 온다.
+   * supervisor가 **방금** 끝났다 — 이 호출 안에서 alive()가 false를 읽은 직후에만 온다.
    *
-   * 먼저 uv의 **프로세스 그룹**에 SIGTERM을 한 번 보내 같은 그룹에 남은 것을 거둔다. supervisor는
-   * `start_new_session` 없이도 짧은 자식을 띄운다 — `capabilities.probe_mps`가 데몬 스레드에서
-   * `subprocess.run`으로 torch를 import하는 프로브(수십 초, 상한 120초)다. 1·3단계가 uv의 pid로만
-   * 보내므로 그 자식은 신호를 받지 않고 supervisor보다 오래 살아, 기동 직후의 ⌘Q가 그것을 누수로
-   * 보고했다(P2-C4는 남은 프로세스 0개를 요구한다). 2026-09-13 장난감 실측: uv가 끝난 뒤 그룹
-   * SIGTERM → 같은 그룹의 자식은 200ms 안에 사라졌고(5/5), `start_new_session` 자식은 그대로였다(1/1).
+   * 먼저 supervisor의 **프로세스 그룹**(-pid — launchPython의 `detached: true`로 supervisor가 그룹
+   * 리더다)에 SIGTERM을 한 번 보내 같은 그룹에 남은 것을 거둔다. supervisor는 `start_new_session`
+   * 없이도 짧은 자식을 띄운다 — `capabilities.probe_mps`가 데몬 스레드에서 `subprocess.run`으로
+   * torch를 import하는 프로브(수십 초, 상한 120초)다. 1·3단계가 supervisor pid로만 보내므로 그 자식은
+   * 신호를 받지 않고 supervisor보다 오래 살아, 기동 직후의 ⌘Q가 그것을 누수로 보고했다(P2-C4는 남은
+   * 프로세스 0개를 요구한다). 2026-09-13 장난감 실측(당시 그룹 리더는 uv였다 — 그룹 신호의 커널
+   * 의미는 리더가 누구든 같다): 리더가 끝난 뒤 그룹 SIGTERM → 같은 그룹의 자식은 200ms 안에
+   * 사라졌고(5/5), `start_new_session` 자식은 그대로였다(1/1).
+   *
+   * **P4-C17의 프로브 회수는 이 신호 하나에 달려 있다.** 프로브는 `[sys.executable, "-c", …]`라 `-m`
+   * 토큰도 `--run-id`도 없다 — 스펙 §6.5의 네 조건 중 둘(모듈·run-id)을 못 채워, argv 표식으로 훑는
+   * 기동 시 고아 정리도 앱 종료 회수(B층, "내 run-id만")도 그것을 보지 못한다. 이 신호를 지우면
+   * 프로브가 ⌘Q 뒤에 남는다 (tests/services/worker-shutdown.test.ts가 잠근다).
    *
    * 이 신호가 안전한 이유 셋.
    * - **이중 배달이 없다.** supervisor는 이미 끝났으므로 이것을 "두 번째"로 읽을 프로세스가 없다.
    *   살아 있는 동안 그룹에 보내면 안 되는 이유(1단계 주석)가 여기서는 성립하지 않는다.
    * - **우리 것에만 닿는다.** 그룹에 구성원이 하나라도 남아 있는 동안 그 번호는 새 pid로 배정되지
-   *   않고, `kill(-pgid)`는 그 그룹 구성원 — 우리가 띄운 uv의 자손 중 setsid하지 않은 것 — 에만
+   *   않고, `kill(-pgid)`는 그 그룹 구성원 — 우리가 띄운 supervisor의 자손 중 setsid하지 않은 것 — 에만
    *   닿는다. `--once` 자식(`start_new_session=True`)은 닿지 않으므로 아래의 보고 전용 경로가 그대로
    *   다룬다. 그룹이 이미 비었으면 신호는 ESRCH이고, 그 번호가 풀린 뒤 신호까지의 창은 폴 한 번
    *   (`pollMs`)을 넘지 않는다.
@@ -265,14 +279,18 @@ export async function stopWorkerProcess(
     return !handle.alive();
   };
 
-  // 1단계. **양수 pid — uv 하나에만 보낸다.** 그룹(-pid)으로 보내면 정중한 종료가 강제 종료가
-  // 된다. `pid`는 uv이고 Python supervisor는 uv와 같은 그룹이라, 그룹 신호는 커널이 supervisor에
-  // 한 번 배달하고 uv가 받은 것을 **또 한 번** 전달한다(uv run은 SIGTERM을 무조건 자식에 넘긴다).
-  // 2026-09-13 실측: 그룹 SIGTERM 1회 → Python 핸들러 2회 호출(5/5), uv pid 1회 → 1회(2/2).
-  // supervisor의 핸들러(__main__.py:_on_signal)는 두 번째를 "강제"로 읽어 --once 자식을
-  // proc.kill()하고 os._exit(1)한다 — job이 돌고 있으면 requeue_for_shutdown이 영영 안 돌아
-  // P2-C5가 결정적으로 깨진다. uv의 그룹에서 이 신호가 닿아야 할 것은 supervisor뿐이다: --once
-  // 자식은 start_new_session이라 원래 그룹 밖이고, mlx_lm.server는 그 자식의 세션에 있다.
+  // 1단계. **양수 pid — supervisor에 직접 보낸다.** 중간 전달자가 없으므로 보낸 수가 곧 받는 수다.
+  // 그 수가 뜻을 갖는다: supervisor의 핸들러(__main__.py:_on_signal)는 받은 SIGTERM을 세어 첫 번째는
+  // --once 자식에 terminate를 전달하고(→ stage boundary에서 requeue_for_shutdown), 두 번째는 "강제"로
+  // 읽어 자식을 proc.kill()하고 os._exit(1)한다 — 이 한 번이 두 번이 되면 job이 돌고 있을 때 requeue가
+  // 영영 안 돌아 P2-C5가 결정적으로 깨진다.
+  //
+  // 그룹(-pid)으로 보내지 않는다. supervisor가 살아 있는 동안 그 그룹에는 supervisor가 세션 분리 없이
+  // 띄운 짧은 자식(capabilities 프로브)이 함께 있고, 그것을 거두는 자리는 supervisor가 **끝난 뒤**의
+  // cleanUnlessOrphans 한 곳이다. --once 자식은 start_new_session이라 원래 그룹 밖이고, LLM 서버는 그
+  // 자식의 세션에 있다 — 그룹 신호가 여기서 더 닿게 해 주는 것은 없다.
+  // (Phase 2의 uv 런처 시절에는 `pid`가 uv였고, 그룹 신호는 커널이 한 번, uv가 전달해 또 한 번 —
+  // supervisor에 두 번 닿았다(2026-09-13 실측 5/5). 전달자가 다시 끼면 그 이유가 되살아난다.)
   opts.signal(pid, "SIGTERM");
   if (await waitForExit(opts.graceMs)) return cleanUnlessOrphans();
 
@@ -318,21 +336,52 @@ export async function stopWorkerProcess(
     if (await waitForExit(opts.graceMs)) return cleanUnlessOrphans();
   }
 
-  // 3단계. SIGKILL이 아니라 두 번째 SIGTERM이다. 1단계와 같은 이유로 uv의 pid로 보낸다 —
-  // uv가 정확히 한 번 전달하므로 supervisor가 받는 것이 "두 번째"다(그룹이면 셋째·넷째가 된다).
-  opts.signal(pid, "SIGTERM");
-  if (await waitForExit(opts.graceMs)) return cleanUnlessOrphans();
-
-  // 4단계. 세션이 다른 자손까지 ppid BFS로 찾아 직접 죽인다. 여기서 죽일 대상은 방금 다시
-  // 걸은 트리다 — 스냅샷들은 유예만큼 낡아서, 그 사이 끝난 pid를 OS가 재사용했다면 SIGKILL이
-  // 남의 프로세스로 간다. 스냅샷은 "죽었나"를 읽는 데만 쓰고 죽이지는 않는다.
+  // 3단계. SIGKILL이 아니라 두 번째 SIGTERM이다. 1단계와 같이 supervisor에 직접 보낸다 — 중간 전달자가
+  // 없으므로 보낸 수가 곧 받는 수이고, supervisor가 받는 것이 정확히 "두 번째"다.
+  //
+  // 그 신호를 보내기 **직전**에 트리를 한 번 더 걷는다. 지금이 supervisor가 살아 있는 마지막
+  // 순간이기 때문이다 — 2차 SIGTERM을 받은 supervisor는 자식을 죽이고 `os._exit(1)`하므로
+  // **반드시** 즉시 끝나고, 그 뒤의 ppid BFS는 pid 1로 재부모화된 자손을 영영 못 본다.
+  // 이 자리가 4단계가 죽일 수 있는 가장 신선한 집합이고, 낡기는 유예(graceMs) 한 번만큼이다.
   const tree = await snapshotDescendants();
-  for (const target of [pid, ...tree]) opts.signal(target, "SIGKILL");
+  // 판정에도 쓰인다 — cleanUnlessOrphans는 capturedDescendants만 되보므로, 합치지 않으면
+  // 여기서 처음 본 자손이 "깨끗함" 판정에서 빠진다.
+  capturedDescendants = new Set([...capturedDescendants, ...tree]);
+  opts.signal(pid, "SIGTERM");
+  const exited = await waitForExit(opts.graceMs);
+
+  // 4단계. 세션이 다른 자손까지 ppid BFS로 찾아 직접 죽인다. 여기서 죽일 대상은 **방금 걸은**
+  // 트리다 — 그보다 앞선 스냅샷들은 유예 두 번과 (시간 제한 없는) 대화상자만큼 낡아서, 그
+  // 사이 끝난 pid를 OS가 재사용했다면 SIGKILL이 남의 프로세스로 간다. 낡은 스냅샷은
+  // "죽었나"를 읽는 데만 쓰고 죽이지는 않는다.
+  //
+  // 그래서 **어느 트리가 신선한가가 분기마다 다르다.** supervisor가 2차 SIGTERM에 죽었으면
+  // 위에서 걸은 `tree`가 마지막으로 유효한 BFS 결과다(죽은 뒤에는 자손이 pid 1로 재부모화돼
+  // 안 보인다). 아직 살아 있으면 그 `tree`는 유예 하나만큼(worker는 90초 — main.ts의
+  // WORKER_GRACE_MS) 낡았고, supervisor가 살아 있으니 지금 다시 걷는 것이 유효하고 공짜다.
+  //
+  // **supervisor가 2차 SIGTERM에 죽었어도 이 단계를 건너뛰지 않는다.** 예전에는 이 자리가
+  // `if (await waitForExit(...)) return cleanUnlessOrphans();`였는데, supervisor의 2차
+  // 핸들러가 `os._exit`라 그 분기가 **항상** 참이었다 — 4단계는 프로덕션에서 한 번도 돌지
+  // 않는 죽은 코드였고, P4-C20이 그것을 실측했다(SIGTERM 무시 자손이 196초+ 생존, ppid=1,
+  // 화면에는 "후보 pid"로 보고만 됐다). 같은 커밋의 worker 쪽 수정(2차 신호가 `--once`
+  // 자식의 **그룹**을 죽인다)이 그 자식의 세션 안에 있는 것들을 거두므로, 이 단계가 맡는 것은
+  // 그 세션 밖으로 나간 자손 — 스스로 `setsid`하는 탈출구 바이너리나, 그룹 킬이 없던 옛
+  // worker가 남긴 것들 — 이다.
+  //
+  // 루트는 **살아 있을 때만** 때린다. 죽은 뒤에는 Node가 이미 거둬들였고 그 번호는 재사용될 수 있다.
+  const fresh = exited ? tree : await snapshotDescendants();
+  if (!exited) capturedDescendants = new Set([...capturedDescendants, ...fresh]);
+  for (const target of exited ? [...fresh] : [pid, ...fresh]) opts.signal(target, "SIGKILL");
+
+  // supervisor가 끝났으면 그룹 신호로 같은 그룹의 짧은 자식(capabilities 프로브)까지 거두고
+  // 판정한다 — 위 스윕이 세션 밖 자손을 맡고, 이쪽이 그룹 안을 맡는다 (P4-C17).
+  if (exited) return cleanUnlessOrphans();
 
   // 5단계. 지금까지 찍어 둔 스냅샷들도 후보에 넣는다 — 그때 우리 자손이었는데 끝까지
   // 살아 있다면 그 사이 부모를 잃어 BFS에서 사라졌더라도 여전히 우리가 남긴 프로세스다.
   // **한 번만 보지 않는다** — SIGKILL도 반영과 거둬들임에 시간이 든다 (settle 주석).
-  return verdict(await settle([...new Set([pid, ...tree, ...capturedDescendants])]));
+  return verdict(await settle([...new Set([pid, ...fresh, ...capturedDescendants])]));
 }
 
 /**

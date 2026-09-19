@@ -196,3 +196,28 @@ URL만 돌려준다(Worker를 생성하지 않는다 — `AudioWorkletNode`가 �
 아니다). 검증은 `pnpm fe build` 후 `dist/assets/`에 실제 `.js` 파일이 나오는지로 했다.
 `fe/src/features/meeting/lib/pcm-worklet.ts`는 `addModule()`로 로드되는 별도 컨텍스트라 앱 번들의
 import를 쓸 수 없다는 제약도 같이 걸려 있다 — 상수를 복제해 유지한다.
+
+---
+
+## 큐 — 취소와 `mark_processing`의 경합 (등록 2026-09-19, **고쳐서 출하됨**)
+
+Electron Phase 4 Part 2의 통합 검증(P4-C7) 중에 실측한 결함이다. **Phase 4 범위 밖의
+웹 흐름 결함**이라 여기에 남긴다 — 고친 커밋은 `0859727`(`be/worker/damwha_worker/db/queue.py`).
+
+`mark_processing`에 job 가드가 없었다. 취소가 `claim()`과 이 호출 사이에 들어오면, 취소는
+`job.status`와 `meeting.status`만 바꾸고 `current_job_id`·`processing_version`은 그대로 두므로
+meeting 가드(`id=%s AND current_job_id=%s AND processing_version=%s`)를 그냥 통과했다. 그러면
+이 UPDATE가 `markCancelled`가 쓴 `failed`를 `processing`으로 되돌린다.
+
+- **그 뒤 회의는 도달 불가다.** 취소는 409(진행 중인 job이 없다), 재처리도 409(status가
+  done/failed가 아니다). 사람이 화면에서 빠져나올 길이 없다.
+- **창이 넓다.** `jobs.py`의 `build_models()`가 이 호출보다 앞이라, 모델을 받아야 하면
+  claim~`mark_processing` 사이가 분 단위로 벌어진다.
+- 수정은 같은 파일의 `set_stage`·`heartbeat`가 이미 쓰는 규칙을 그대로 건 것이다 —
+  `AND EXISTS (SELECT 1 FROM job WHERE id=%s AND status='running')`. `worker_id` 대신
+  `job.status`를 보는 이유는 이 호출부가 `worker_id`를 들고 있지 않고, 취소·reaper·재처리
+  셋 다 job을 `running` 밖으로 내보내기 때문이다.
+
+**후속으로 볼 것:** 같은 경합이 취소 쪽에도 있다 — 취소가 `current_job_id`를 비우지 않으므로,
+job을 `running` 밖으로 내보내는 다른 경로(reaper·재처리)와 meeting 가드만 보는 다른 UPDATE가
+있는지 한 번 훑을 값이 있다.

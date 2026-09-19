@@ -22,6 +22,8 @@
  * electron을 import하지 않는 순수 모듈이다.
  */
 
+import { HF_GATED_MODEL_PAGE_URL } from "../config/token-store";
+
 export interface Cause {
   /** detail 안에서 이 원인을 알아보는 모양. 다른 원인의 문구와 겹치면 안 된다(테스트가 본다). */
   match: RegExp;
@@ -45,18 +47,11 @@ export interface Cause {
 }
 
 export const CAUSES = {
-  /** worker·embed — config.json에도 탐색 목록에도 uv가 없다. */
-  uvMissing: {
-    match: /uv를 찾지 못했어요/,
-    text: "uv를 찾지 못했어요.",
-    selfRecovers: false,
-  },
-  /** worker — be/worker/.env가 없다. */
-  workerEnvMissing: {
-    match: /\.env가 없어요/,
-    text: "be/worker/.env가 없어요.",
-    selfRecovers: false,
-  },
+  // Phase 4가 지운 둘: `uvMissing`·`workerEnvMissing` (스펙 §8). 앱은 uv를 부르지 않고
+  // (`process/python-launcher.ts`가 번들 python을 직접 띄운다) worker의 `.env`도 읽지 않는다
+  // (`config/config.ts`가 자식 env를 전부 합성한다) — 두 원인은 어떤 어댑터도 더 이상 내지 않는다.
+  // 남겨 두면 "고칠 수 없는 것을 고치라"는 안내가 화면에 남는다.
+
   /** api — 기동 로그의 미적용 마이그레이션 경고 (스펙 §6.7 게이트). */
   pendingMigrations: {
     match: /적용되지 않은 마이그레이션이/,
@@ -78,10 +73,93 @@ export const CAUSES = {
       `모델 ${model}·차원 ${dimension}을 서빙하고 있어요 (앱은 ${wantModel}·${wantDimension}이 필요해요)`,
     selfRecovers: false,
   },
-  /** main.ts — 설정된 REPO_ROOT가 저장소가 아니고, 고른 폴더도 아니었다. */
+  /**
+   * dev 전용 (Phase 4 스펙 §6.3) — config.json의 REPO_ROOT도, 앱 폴더의 상위(`desktop/..`)도 저장소가 아니다.
+   * packaged는 저장소를 쓰지 않으므로 이 원인이 나지 않는다. dev의 API·마이그레이션 러너·worker의
+   * PYTHONPATH가 저장소를 요구하는 자리에서 path.join 전에 이것을 던진다.
+   */
   repoRootMissing: {
     match: /저장소 폴더를 확인하지 못했어요/,
-    text: "저장소 폴더를 확인하지 못했어요.",
+    text: "개발 실행인데 담화 저장소 폴더를 확인하지 못했어요.",
+    selfRecovers: false,
+  },
+  /**
+   * 기동 게이트 — `safeStorage.isEncryptionAvailable()`이 false다 (Phase 4 스펙 §6.4·§8). 서비스를 하나도 띄우지
+   * 않는다. 평문으로 저장하는 폴백은 없다. main.ts가 manual 실패로 던진다 — Keychain이 잠겨 있으면 자동 재시도가
+   * 잠금 해제 요청을 20초마다 다시 띄울 수 있다.
+   */
+  safeStorageUnavailable: {
+    match: /키체인을 쓸 수 없어 허깅페이스 토큰을/,
+    text: "macOS 키체인을 쓸 수 없어 허깅페이스 토큰을 안전하게 보관할 수 없어요. 서비스를 띄우지 않았어요.",
+    selfRecovers: false,
+  },
+  /**
+   * 기동 게이트 — 이전 실행이 남긴 고아를 찾는 `ps` 스캔이 실패했다 (Phase 4 스펙 §6.5·§8, P4-C22). 서비스를
+   * 하나도 띄우지 않는다: 그대로 진행하면 고아 worker와 새 worker가 같은 job을 집는다. main.ts가 manual 실패로
+   * 던진다(app/reap-on-start.ts) — 같은 ps가 3·8·20초 뒤에 달라질 근거가 없고, 메뉴의 "다시 시도"가 스캔을
+   * 다시 돈다. 실패한 까닭(ps의 오류)은 supervisor.log에 있다.
+   */
+  orphanScanFailed: {
+    match: /이전 실행이 남긴 프로세스를 확인하지 못해/,
+    text: "이전 실행이 남긴 프로세스를 확인하지 못해 서비스를 띄우지 않았어요.",
+    selfRecovers: false,
+  },
+  /** 토큰 검증 — HF가 401·403으로 거절했다 (스펙 §8 "토큰이 유효하지 않아요"). 토큰 화면이 사유와 함께 싣는다. */
+  hfTokenInvalid: {
+    match: /허깅페이스 토큰이 유효하지 않아요/,
+    text: "허깅페이스 토큰이 유효하지 않아요.",
+    selfRecovers: false,
+  },
+  /**
+   * 모델 다운로드 403 — 토큰의 계정이 그 모델의 사용 조건에 동의하지 않았다 (스펙 §8). 조건 수락이 필요한 모델은
+   * 화자 분리 하나라 그 수락 페이지를 싣는다. 이 원인의 소유는 Task 6이다 — 화면에 싣는 일(Task 11)은 이것을 쓴다.
+   */
+  hfGateNotAccepted: {
+    match: /사용 조건 수락이 필요해요/,
+    text: `이 모델은 사용 조건 수락이 필요해요 — ${HF_GATED_MODEL_PAGE_URL}`,
+    selfRecovers: false,
+  },
+  /**
+   * 모델 다운로드가 실패했다 (스펙 §6.9·§8). `app_setting.model_readiness`의 `failed` 항목에서
+   * 온다 — 원문은 worker의 `errors.download_error`가 만든 `"<code>: <message>"`다.
+   *
+   * **401·403은 이 원인이 아니다.** 그 둘은 code(`hf_token_invalid`·`hf_gate_not_accepted`)로 갈려
+   * 위의 `hfTokenInvalid`·`hfGateNotAccepted`로 간다(판정 R-11a). 여기 오는 것은 나머지 —
+   * 네트워크·타임아웃·5xx·오프라인 캐시 미스, 그리고 code를 알아볼 수 없는 경우다.
+   *
+   * 층은 이 원인이 정하지 않는다. `errorKind`가 TRANSIENT면 1층(기다린다), 그 밖이면 2층(다시
+   * 시작)이고, 그 판정은 화면(status-view.ts의 modelRows)에 있다 — 여기 문구는 **무엇이**
+   * 실패했는지만 말한다.
+   */
+  modelDownloadFailed: {
+    match: /모델을 받지 못했어요/,
+    text: (key: string, reason: string) => `모델을 받지 못했어요 (${key}) — ${reason}`,
+    selfRecovers: false,
+  },
+  /**
+   * 받는 중이라고 적혀 있는데 진행이 멈췄다 (스펙 §6.9 — 읽는 쪽이 `updated_at`이 멈춘
+   * `downloading`을 "중단됨"으로 보인다, §8 — "진행이 멈췄어요" + 서비스 다시 시작).
+   *
+   * writer가 정리해 주기를 기대하지 않는다: 프로세스가 크래시하면 그 `downloading`은 영원히 남는다.
+   * 판정은 `services/model-readiness.ts`의 `STALL_MS` 하나를 쓴다 — 규칙의 사본을 두지 않는다.
+   */
+  modelDownloadStalled: {
+    match: /진행이 멈췄어요/,
+    text: (key: string) => `모델을 받는 중인데 진행이 멈췄어요 (${key}).`,
+    selfRecovers: false,
+  },
+  /**
+   * 디스크가 찼다 (스펙 §8 — "남은 용량과 필요한 용량"). 모델 한 벌이 수 GB라 받는 도중에 이것이
+   * 난다.
+   *
+   * **이 Phase에는 이 문구를 내는 어댑터가 아직 없다** — 남은 용량을 재는 자리가 없기 때문이다.
+   * 목록에 두는 이유는 그 자리가 생겼을 때 문구와 안내가 갈리지 않게 하기 위해서다(이 파일의 머리
+   * 주석 — "원인의 종류를 셀 수 있게").
+   */
+  diskFull: {
+    match: /디스크 공간이 부족해요/,
+    text: (free: string, needed: string) =>
+      `디스크 공간이 부족해요 — 남은 용량 ${free}, 필요한 용량 ${needed}.`,
     selfRecovers: false,
   },
   /** postgres — 번들에 PG 실행 파일이 없다 (Phase 3 스펙 §6.8). */
@@ -189,16 +267,16 @@ export const CAUSES = {
     selfRecovers: false,
   },
   /**
-   * 경로는 있었는데 그 자리에 실행 파일이 없다 — config.json의 UV_BIN이 틀린 경우다
-   * (탐색은 존재하는 파일만 돌려준다). 이 문구는 **앱이 쓰지 않는다.** Node의 `spawn <경로> ENOENT`
-   * 이고, launchWithUv가 싱크에 적는 `spawn failed: <e.message>`를 감독자가 죽은 자식의
-   * 블록으로 올린다(worker·embed).
+   * worker·embed — 번들 python(`ctx.bins.python`)이 그 자리에 없다. main.ts는 번들 경로를 만들 뿐
+   * 존재를 확인하지 않는다(process/runtime-paths.ts). 이 문구는 **앱이 쓰지 않는다.** Node의
+   * `spawn <경로> ENOENT`이고, launchPython이 싱크에 적는 `spawn failed: <e.message>`를 감독자가
+   * 죽은 자식의 블록으로 올린다.
    *
    * 위 Phase 3 원인들(pgInitdbFailed·pgControldataFailed·pgCreatedbFailed·pgQueryFailed·
    * migrationStatusFailed·backupFailed·migrationFailed) **뒤**에 둔다. 그 원인들은 도구 실행
    * 자체가 spawn ENOENT로 실패한 경우를 describeToolFailure의 "실행하지 못했어요 (spawn … ENOENT)"로
    * 자기 block 안에 그대로 옮겨 담는데, 이 원인이 그 앞에 있으면 CAUSE_IDS.find가 여기서 먼저
-   * 걸려 "마이그레이션 러너를 실행하지 못했어요" 같은 Phase 3 실패가 엉뚱하게 UV_BIN 안내를 받는다
+   * 걸려 "마이그레이션 러너를 실행하지 못했어요" 같은 Phase 3 실패가 엉뚱하게 worker·embed의 안내를 받는다
    * (한 자리 리뷰). Phase 3 원인의 정규식은 모두 자기 문구의 맨 앞 한국어로 시작해 매칭되므로,
    * 순서만 뒤로 미뤄도 그쪽이 먼저 잡는다.
    */
@@ -286,6 +364,20 @@ export const CAUSES = {
   externalCheckFailed: {
     match: /외부 인스턴스 확인이 실패했어요 — /,
     text: (reason: string) => `외부 인스턴스 확인이 실패했어요 — ${reason}`,
+    selfRecovers: false,
+  },
+  /**
+   * 감독자 — "서비스 다시 시작"이 유예 안에 그 서비스를 내리지 못했다 (스펙 §6.10 2층).
+   * 어댑터의 까닭이 있으면 이 문구 **뒤에** 함께 실린다.
+   *
+   * **"다시 시도해 주세요"라고 말하지 않는다.** 그 서비스에는 이미 종료 신호가 갔고, 두 번째
+   * 신호는 worker에게 강제 종료다 — 처리 중이던 job이 requeue 없이 버려진다
+   * (`be/worker/damwha_worker/__main__.py`의 누적 카운트, P2-C5). 그래서 감독자가 그 프로세스가
+   * 끝날 때까지 재시작을 막고(`ServiceStatus.cleaningUp`), 화면도 기다리라고만 말한다.
+   */
+  restartStopFailed: {
+    match: /를 내리는 중이에요/,
+    text: (id: string) => `${id}를 내리는 중이에요. 아직 끝나지 않아 다시 띄우지 않았어요.`,
     selfRecovers: false,
   },
 } as const satisfies Record<string, Cause>;

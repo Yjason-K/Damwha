@@ -433,6 +433,25 @@ describe("leftoverNotice", () => {
     const n = leftoverNotice({ stopped: false, leaked: [] });
     expect(n.detail).toContain(STOP_DETAIL.unverifiable);
   });
+
+  it("says the app cleaned up when the quit-time reaper took down what the services missed and nothing is left", () => {
+    // 종료 회수(B층)가 내린 것이 모두 끝난 것을 확인했다. "확인하지 못했다 — 없다는 뜻이 아니다"는 거짓이 되고,
+    // 터미널에서 직접 보라는 안내도 할 일이 없다.
+    const why = "서비스를 하나씩 멈추는 단계가 놓친 프로세스 1개를 종료 마지막 단계에서 찾아 내렸어요 (pid 8003).";
+    const n = leftoverNotice({ stopped: false, leaked: [], detail: why, cleanedUp: true });
+    expect(n.message).toBe("종료하면서 남아 있던 프로세스를 정리했어요.");
+    expect(n.detail).toContain(why);
+    expect(n.detail).toContain("supervisor.log");
+    expect(n.detail).not.toContain("터미널");
+    expect(n.detail).not.toContain("없다는 뜻이 아닙니다");
+    expect(n.detail).not.toContain("후보이지 증거가 아니");
+  });
+
+  it("keeps the leftover wording whenever a pid is still listed, cleaned-up flag or not", () => {
+    const n = leftoverNotice({ stopped: false, leaked: [8002], detail: "x", cleanedUp: true });
+    expect(n.message).toBe("아직 살아 있을 수 있는 프로세스가 있어요.");
+    expect(n.detail).toContain("터미널");
+  });
 });
 
 
