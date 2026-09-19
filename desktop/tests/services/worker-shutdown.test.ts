@@ -406,6 +406,44 @@ describe("stopWorkerProcess", () => {
     expect(signals[1]).toBe("SIGTERM");
   });
 
+  it("SIGKILLs surviving descendants even when the supervisor obeys the second SIGTERM", async () => {
+    // P4-C20 실측(2026-09-18, 2회 재현). supervisor의 2차 핸들러는 `proc.kill()` 뒤
+    // `os._exit(1)`이라 **두 번째 SIGTERM에 반드시 즉시 죽는다**. 예전 3단계는 그때 곧장
+    // cleanUnlessOrphans로 반환했고, 그래서 4단계(자손 SIGKILL)는 프로덕션에서 한 번도
+    // 돌지 않는 죽은 코드였다 — SIGTERM을 무시하는 자손이 "후보 pid"로 보고만 되고
+    // 살아남았다(fixture가 196초+ 생존, ppid=1).
+    //
+    // 그 자손을 거둘 사람이 여기뿐인 이유: supervisor가 2차 신호에서 `--once` 자식을
+    // SIGKILL하므로 worker 자신의 정리(`managed_llm_server`의 finally → `_stop`)도 안 돈다.
+    //
+    // alive() 예산 다섯: 진입 가드(1) + 1단계 대기(2회 폴 + 마지막 확인 = 3) + 대화상자
+    // 직후의 생존 확인(1). 여섯 번째 — 3단계 대기의 첫 확인 — 에서 처음 false가 나와
+    // "supervisor가 2차 SIGTERM에 순순히 죽었다"를 흉내 낸다.
+    const signals: Array<[number, string]> = [];
+    let walks = 0;
+    const out = await stopWorkerProcess(handle(5), {
+      graceMs: 10,
+      pollMs: 5,
+      signal: (p, sig) => signals.push([p, sig]),
+      descendants: async () => {
+        walks += 1;
+        return new Set([7001]);
+      },
+      onGraceExpired: async () => true,
+      maxWaits: 2,
+      // 자손은 2차 SIGTERM에도 살아남는다 (SIG_IGN fixture). supervisor는 죽었다.
+      stillAlive: async (pids) => pids.filter((p) => p === 7001),
+    });
+    expect(signals).toContainEqual([7001, "SIGKILL"]);
+    // 죽어서 이미 거둬진 supervisor에는 SIGKILL을 보내지 않는다 — 그 번호는 재사용될 수 있다.
+    expect(signals).not.toContainEqual([4242, "SIGKILL"]);
+    // 3단계의 트리 걷기는 2차 SIGTERM **직전**이다. supervisor가 살아 있는 마지막 순간이라
+    // ppid BFS가 유효하고 pid가 가장 신선하다 — 진입(1) + 유예 직후(2) + 여기(3).
+    expect(walks).toBe(3);
+    expect(out.stopped).toBe(false);
+    expect(out.leaked).toEqual([7001]);
+  });
+
   it("SIGKILLs the tree it just walked, not the snapshots it captured two graces ago", async () => {
     // --once 자식은 start_new_session이라 그룹 kill에 안 잡히지만 부모-자식 관계는
     // 그대로라 ps의 ppid BFS가 찾는다 (스펙 §6.9 4단계).
@@ -921,16 +959,18 @@ describe("stopWorkerProcess", () => {
     //     재사용된 pid(=남의 프로세스)를 capturedDescendants에 합칠 수 있다.
     expect(names.slice(0, 4)).toEqual(["descendants", "signal", "descendants", "ask"]);
 
-    // 전체 순서도 함께 못 박는다. 4단계의 세 번째 걷기는 SIGKILL **직전**이어야 한다 —
-    // 낡은 스냅샷을 죽이지 않고 그 자리에서 다시 걸은 트리를 죽이는 것이 그 이유다.
+    // 전체 순서도 함께 못 박는다. 세 번째 걷기는 **2차 SIGTERM 직전**이어야 한다 —
+    // 낡은 스냅샷을 죽이지 않고 그 자리에서 다시 걸은 트리를 죽이는 것이 그 이유이고,
+    // 그 걷기가 2차 SIGTERM 뒤로 가면 안 되는 이유는 supervisor가 그 신호에 `os._exit`로
+    // **반드시** 죽어(P4-C20) 자손이 pid 1로 재부모화돼 BFS에서 사라지기 때문이다.
     // 두 SIGTERM의 대상은 supervisor의 pid(양수)다 — 살아 있는 동안에는 그룹에 보내지 않는다.
     expect(events).toEqual([
       ["descendants", 4242],
       ["signal", 4242, "SIGTERM"],
       ["descendants", 4242],
       ["ask"],
-      ["signal", 4242, "SIGTERM"],
       ["descendants", 4242],
+      ["signal", 4242, "SIGTERM"],
       ["signal", 4242, "SIGKILL"],
     ]);
     expect(out).toEqual({ stopped: true, leaked: [] });

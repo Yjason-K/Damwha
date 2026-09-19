@@ -1,5 +1,6 @@
 import inspect
 import logging
+import signal
 import sys
 import threading
 from types import SimpleNamespace
@@ -299,3 +300,54 @@ def test_supervisor_logs_ready_again_after_reconnect(conn, pg_url, monkeypatch, 
 
     ready_lines = [r for r in caplog.records if "ready (db connected)" in r.getMessage()]
     assert len(ready_lines) == 2  # 최초 접속 + peek 예외 후 재접속
+
+
+# ── P4-C20: 2차 신호는 자식의 **그룹**을 죽인다 ──────────────────────────────
+
+
+class _KillSpy:
+    """`--once` 자식 대역. 자기 자신이 kill됐는지만 기록한다."""
+
+    def __init__(self, pid: int):
+        self.pid = pid
+        self.killed = False
+        self.terminated = False
+
+    def terminate(self):
+        self.terminated = True
+
+    def kill(self):
+        self.killed = True
+
+
+def test_second_signal_kills_the_childs_process_group_not_just_the_child():
+    # P4-C20 실측: 2차 신호가 `proc.kill()`이면 자식이 SIGKILL로 즉사해
+    # `managed_llm_server`의 `finally: _stop(proc)`가 **안 돈다** → 그 자식이 띄운 LLM
+    # 서버가 pid 1로 재부모화돼 남는다. 자식은 `start_new_session=True`라 세션·그룹
+    # 리더(pgid == pid)이고 LLM 서버는 같은 그룹에 있으므로, 그룹째 죽이면 한 번에 거둬진다.
+    calls = []
+    proc = _KillSpy(4242)
+    m._kill_child_group(proc, killpg=lambda pgid, sig: calls.append((pgid, sig)))
+    assert calls == [(4242, signal.SIGKILL)]
+    # 그룹이 자식을 포함하므로 자식만 따로 때릴 이유가 없다.
+    assert proc.killed is False
+
+
+def test_kill_child_group_falls_back_to_the_child_when_the_group_is_gone():
+    # 그룹이 이미 비었거나(ESRCH) 권한이 없으면 자식만이라도 반드시 죽인다 —
+    # 여기서 예외가 새면 신호 핸들러가 터지고 supervisor가 `os._exit`에 못 간다.
+    proc = _KillSpy(4242)
+
+    def _boom(pgid, sig):
+        raise ProcessLookupError
+
+    m._kill_child_group(proc, killpg=_boom)
+    assert proc.killed is True
+
+
+def test_supervisor_second_signal_is_wired_to_the_group_kill():
+    # 핸들러는 `run_supervisor_main` 안의 클로저라 직접 호출할 이음매가 없다.
+    # 배선이 끊기면 위 두 테스트가 초록불인 채로 고아가 되살아난다.
+    src = inspect.getsource(m.run_supervisor_main)
+    assert "_kill_child_group(proc)" in src
+    assert "proc.kill()" not in src

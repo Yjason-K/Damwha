@@ -106,9 +106,13 @@ function processExists(pid: number): boolean {
  *    보낸다, 그룹이 아니라.** 이유는 본문의 1단계 주석에 있다.
  * 2. 유예 초과 → 사람에게 묻는다. "계속 기다리기"면 유예를 한 번 더 주고 **다시 묻는다** —
  *    끝나는 길은 프로세스가 스스로 끝나거나 사람이 강제를 고르는 것뿐이다.
- * 3. 강제 → SIGTERM 2회차(역시 supervisor의 pid). supervisor가 자식을 kill하고 os._exit한다.
- * 4. 그래도 남으면 자손 집합에 SIGKILL. start_new_session은 세션만 바꾸고 부모-자식
- *    관계는 그대로라 ps의 ppid BFS가 여전히 찾아낸다.
+ * 3. 강제 → **트리를 한 번 더 걷고** SIGTERM 2회차(역시 supervisor의 pid). supervisor가 자식의
+ *    프로세스 그룹을 kill하고 os._exit한다. 걷기가 신호보다 앞인 이유: 그 신호를 받은
+ *    supervisor는 os._exit로 **반드시** 즉시 죽고, 그 뒤의 BFS는 재부모화된 자손을 못 본다.
+ * 4. 방금 걸은 트리에서 살아 있는 것에 SIGKILL. start_new_session은 세션만 바꾸고 부모-자식
+ *    관계는 그대로라 ps의 ppid BFS가 여전히 찾아낸다. **supervisor가 2회차에 죽었어도 돈다** —
+ *    예전에는 죽으면 여기 오기 전에 반환했고, 2차 핸들러가 os._exit라 그 분기가 항상 참이라
+ *    이 단계가 프로덕션에서 한 번도 돌지 않았다(P4-C20). 루트는 살아 있을 때만 때린다.
  * 5. 그래도 남으면 pid를 돌려준다. 정리 실패를 조용히 넘기지 않는다.
  *
  * 1·2·3단계의 기다림에서 supervisor가 **끝나면**, 그 자리에서 supervisor의 그룹(-pid)에 SIGTERM을
@@ -334,14 +338,37 @@ export async function stopWorkerProcess(
 
   // 3단계. SIGKILL이 아니라 두 번째 SIGTERM이다. 1단계와 같이 supervisor에 직접 보낸다 — 중간 전달자가
   // 없으므로 보낸 수가 곧 받는 수이고, supervisor가 받는 것이 정확히 "두 번째"다.
-  opts.signal(pid, "SIGTERM");
-  if (await waitForExit(opts.graceMs)) return cleanUnlessOrphans();
-
-  // 4단계. 세션이 다른 자손까지 ppid BFS로 찾아 직접 죽인다. 여기서 죽일 대상은 방금 다시
-  // 걸은 트리다 — 스냅샷들은 유예만큼 낡아서, 그 사이 끝난 pid를 OS가 재사용했다면 SIGKILL이
-  // 남의 프로세스로 간다. 스냅샷은 "죽었나"를 읽는 데만 쓰고 죽이지는 않는다.
+  //
+  // 그 신호를 보내기 **직전**에 트리를 한 번 더 걷는다. 지금이 supervisor가 살아 있는 마지막
+  // 순간이기 때문이다 — 2차 SIGTERM을 받은 supervisor는 자식을 죽이고 `os._exit(1)`하므로
+  // **반드시** 즉시 끝나고, 그 뒤의 ppid BFS는 pid 1로 재부모화된 자손을 영영 못 본다.
+  // 이 자리가 4단계가 죽일 수 있는 가장 신선한 집합이고, 낡기는 유예(graceMs) 한 번만큼이다.
   const tree = await snapshotDescendants();
-  for (const target of [pid, ...tree]) opts.signal(target, "SIGKILL");
+  // 판정에도 쓰인다 — cleanUnlessOrphans는 capturedDescendants만 되보므로, 합치지 않으면
+  // 여기서 처음 본 자손이 "깨끗함" 판정에서 빠진다.
+  capturedDescendants = new Set([...capturedDescendants, ...tree]);
+  opts.signal(pid, "SIGTERM");
+  const exited = await waitForExit(opts.graceMs);
+
+  // 4단계. 세션이 다른 자손까지 ppid BFS로 찾아 직접 죽인다. 여기서 죽일 대상은 방금 걸은
+  // 트리다 — 그보다 앞선 스냅샷들은 유예 두 번과 (시간 제한 없는) 대화상자만큼 낡아서, 그
+  // 사이 끝난 pid를 OS가 재사용했다면 SIGKILL이 남의 프로세스로 간다. 낡은 스냅샷은
+  // "죽었나"를 읽는 데만 쓰고 죽이지는 않는다.
+  //
+  // **supervisor가 2차 SIGTERM에 죽었어도 건너뛰지 않는다.** 예전에는 이 자리가
+  // `if (await waitForExit(...)) return cleanUnlessOrphans();`였는데, supervisor의 2차
+  // 핸들러가 `os._exit`라 그 분기가 **항상** 참이었다 — 4단계는 프로덕션에서 한 번도 돌지
+  // 않는 죽은 코드였고, P4-C20이 그것을 실측했다(SIGTERM 무시 자손이 196초+ 생존, ppid=1,
+  // 화면에는 "후보 pid"로 보고만 됐다). 그 자손을 거둘 사람이 여기뿐인 이유는 supervisor가
+  // 2차 신호에서 `--once` 자식을 SIGKILL하기 때문이다 — 자식이 즉사하면 worker 자신의 정리
+  // (`managed_llm_server`의 finally → `_stop`: terminate→wait→kill)가 안 돈다.
+  //
+  // 루트는 **살아 있을 때만** 때린다. 죽은 뒤에는 Node가 이미 거둬들였고 그 번호는 재사용될 수 있다.
+  for (const target of exited ? [...tree] : [pid, ...tree]) opts.signal(target, "SIGKILL");
+
+  // supervisor가 끝났으면 그룹 신호로 같은 그룹의 짧은 자식(capabilities 프로브)까지 거두고
+  // 판정한다 — 위 스윕이 세션 밖 자손을 맡고, 이쪽이 그룹 안을 맡는다 (P4-C17).
+  if (exited) return cleanUnlessOrphans();
 
   // 5단계. 지금까지 찍어 둔 스냅샷들도 후보에 넣는다 — 그때 우리 자손이었는데 끝까지
   // 살아 있다면 그 사이 부모를 잃어 BFS에서 사라졌더라도 여전히 우리가 남긴 프로세스다.

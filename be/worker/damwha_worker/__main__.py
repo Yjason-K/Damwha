@@ -278,6 +278,26 @@ def _once_argv(run_id: str | None) -> list[str]:
     return argv
 
 
+def _kill_child_group(proc, *, killpg=os.killpg) -> None:
+    """2차 신호 — `--once` 자식의 **프로세스 그룹**을 통째로 SIGKILL한다.
+
+    자식만 `proc.kill()`하면 자식이 즉사해 `managed_llm_server`의
+    `finally: _stop(proc)`(terminate→wait→kill)가 영영 안 돈다 — 그 자식이 띄운 LLM 서버는
+    pid 1로 재부모화돼 남는다. P4-C20(2026-09-18, 2회 재현)이 실측한 고아가 정확히 그것이다.
+
+    자식은 `_spawn`이 `start_new_session=True`로 띄우므로 세션이자 프로세스 그룹의
+    리더이고(pgid == pid), 그 자식이 띄운 것들은 같은 그룹에 있다. 그래서 `killpg(자식 pid)`는
+    **우리가 만든 그 세션에만** 닿는다 — supervisor 자신의 그룹도, 남의 그룹도 아니다.
+
+    그룹이 이미 비었거나(ESRCH) 신호를 못 보내면 자식만이라도 죽인다. 여기서 예외가 새면
+    신호 핸들러가 터져 supervisor가 `os._exit`까지 못 간다.
+    """
+    try:
+        killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        proc.kill()
+
+
 def run_supervisor_main(
     settings, shutdown: threading.Event, *, run_id: str | None = None
 ) -> None:
@@ -294,8 +314,8 @@ def run_supervisor_main(
                 log.info("signal %s — forwarding SIGTERM to child (send again to kill)", signum)
                 proc.terminate()
             else:
-                log.info("signal %s again — killing child and exiting", signum)
-                proc.kill()
+                log.info("signal %s again — killing child process group and exiting", signum)
+                _kill_child_group(proc)
                 os._exit(1)
 
     for sig in (signal.SIGINT, signal.SIGTERM):
