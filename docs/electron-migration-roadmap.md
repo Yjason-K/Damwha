@@ -13,9 +13,9 @@
 스펙 기준 15건 전부 충족 — 아래 Phase 2 절 참조).
 **Phase 3은 2026-09-14에 구현·최종 리뷰·packaged 통합 검증을 마쳤다**(완료 기준 3개 전부 충족,
 스펙 기준 16건 전부 충족 — 아래 Phase 3 절 참조).
-**Phase 4는 2026-09-17에 Part 1(번들 런타임)만 마쳤다 — 아직 미완료다.** Part 2(실행 통합)는 미착수이므로
-Phase 4의 완료 기준 3개는 아직 판정하지 않았다(아래 Phase 4 절 참조). Phase 5~6의 상세 구현 스펙·계획과
-구현은 미착수.
+**Phase 4는 2026-09-19에 Part 1(번들 런타임)·Part 2(실행 통합)를 모두 마쳤다**(완료 기준 3개 전부 충족,
+스펙 기준 30건 중 29건 판정 완료·미충족 0 — 남은 하나는 토큰 문자열 전수 grep으로, 토큰 원문을
+쥔 사용자만 실행할 수 있다. 아래 Phase 4 절 참조). Phase 5~6의 상세 구현 스펙·계획과 구현은 미착수.
 
 ## 목표와 전제
 
@@ -233,18 +233,31 @@ Docker DB → 내장 클러스터 이전과 짝 복구 도구는 Phase 5, `pg_up
 - 앱 번들 외부의 개발용 가상환경이나 도구를 참조하지 않음.
 - 모델과 캐시가 앱 패키지 외부에 저장되어 재실행 시 재사용됨.
 
-**상태 (2026-09-17): 미완료 — 구현 계획 둘 중 Part 1(번들 런타임, Task 1~7)만 완료했다.**
+**상태 (2026-09-19): 완료 — 구현 계획 둘(Part 1 번들 런타임, Part 2 실행 통합)을 모두 마쳤다.**
 구현 계획을 둘로 나눴다 — [Part 1 번들 런타임](superpowers/plans/2026-09-16-electron-phase-4-bundled-runtime.md)(빌드·번들)과
 [Part 2 실행 통합](superpowers/plans/2026-09-16-electron-phase-4-runtime-integration.md)(실행 계약·앱·검증).
-Part 1은 Python 3.12.11·ML 의존성 1.3 GB·ffmpeg 9.0.1(LGPL 2.1 정적)을 재현 가능하게 빌드해 `.app`(1.8 GB)에
-싣고, Mach-O 454개를 hardened runtime으로 전수 서명했으며, 번들에 개발 머신 경로가 하나도 굽히지 않았음을
-빌드 시점에 증명하는 검사 31건을 세웠다. `mlx-lm`이 매니페스트 밖에 있던 것(스펙 §2.4)도 `uv.lock`으로
-고정했다. **앱 코드는 아직 한 줄도 바꾸지 않았다** — 런처·env 주입·고아 처분·모델 준비·토큰 온보딩은
-Part 2다. 스펙 완료 기준 30건 중 Part 1이 만드는 것은 넷(P4-C15·C25·C28과 C26·C27의 기준선)이고 판정은
-충족이며, **나머지 26건과 위 로드맵 완료 기준 3개는 Part 2의 마지막 Task가 판정한다.** 스펙은
-[2026-09-16-electron-phase-4-embedded-python-runtime-design.md](superpowers/specs/2026-09-16-electron-phase-4-embedded-python-runtime-design.md),
-브랜치는 `feat/electron-migration-phase-4-embedded-python-runtime`, Part 1의 판정·증거·이월 항목은
-[Phase 4 Part 1 결과](superpowers/reports/2026-09-16-electron-phase-4-embedded-python-runtime-results.md)에 있다.
+
+| 완료 기준 | 판정 | 근거와 남은 것 |
+| --- | --- | --- |
+| 개발 도구가 없는 지원 대상 맥에서 모델 준비 후 전사·화자 분리·요약·검색 성공 | **충족** | 모델 0에서 시작해 실오디오 1건이 전사·화자분리·요약·검색까지 완주했다(P4-C5). 캐시가 찬 뒤에는 **네트워크를 끊은 채로도** 업로드 1건이 완주하고 검색이 계속 200/201을 냈다(P4-C29). 게이트 걸린 모델의 403과 무효 토큰의 401을 다른 안내로 가른다(P4-C8). **한계:** 같은 job의 재시도 3회가 ~3분에 다 타므로 그보다 긴 끊김은 사람이 재처리를 눌러야 한다(결과 문서 §12.6-12) |
+| 앱 번들 외부의 개발용 가상환경이나 도구를 참조하지 않음 | **충족** | 다섯 프로세스(worker·embed·`--once`·`llm_entry`·capabilities 프로브)가 전부 번들 트리에서 자기 런타임을 보고한다(P4-C12). 자식 PATH가 번들 둘뿐이라 맨 이름이 개발 도구로 풀릴 자리가 없다(P4-C13). `check-bundle.mjs` 31건이 번들 위생을 빌드마다 막는다(P4-C15). **저장소 체크아웃을 디스크에서 치운 상태로도 21초에 정상 기동한다**(P4-C16). 외부 `pnpm worker`에는 신호를 보내지 않고 자기 worker를 띄우지도 않는다(P4-C21) |
+| 모델과 캐시가 앱 패키지 외부에 저장되어 재실행 시 재사용됨 | **충족** | `.app`을 **통째로 지우고 다시 빌드·설치해도** `<userData>/models/hub` 47파일이 크기·경로·mtime까지 그대로고 새 다운로드가 0건이다(P4-C14). 두 번째 실행도 재다운로드가 없다(P4-C9). bge-m3는 리비전 1개만 받는다(P4-C10) |
+
+스펙 완료 기준 **30건 중 29건 판정 완료·미충족 0**이다. 남은 하나는 P4-C2의 절반(토큰 문자열
+전수 grep)으로 **토큰 원문을 쥔 사용자만 실행할 수 있다.** 통합 검증이 리뷰가 못 잡은 결함 넷을
+실측으로 잡아 고쳤다 — 외부 worker stand-down이 심볼릭 링크를 놓친 것(`b97b6ba`), 종료 4단계가
+프로덕션에서 도달 불가능한 죽은 코드였던 것(`0bcf4c9`·`c00d6b8`), 끊긴 다운로드가 워커를 멈추거나
+부분 캐시를 완전한 캐시로 속인 것(`0859727`). 마지막 커밋에는 **Phase 4 범위 밖** 수정 하나가
+얹혀 있다(취소와 `mark_processing`의 경합 — `be/docs/backlog.md`에 남겼다).
+
+**Phase 5~6으로 넘기는 것**(결과 문서 §12.6): 끊긴 다운로드의 바이트 이어받기(스펙 §15, 2026-09-18
+개정으로 P4-C7에서 뺐다), `model_readiness`의 두 writer 키 충돌(스키마 변경 필요), 고아 회수의
+pid 재사용 잔여 위험, `llm_entry`의 캐시 우선 미적용, 재시도 백오프가 3분 안에 소진되는 것.
+
+스펙은 [2026-09-16-electron-phase-4-embedded-python-runtime-design.md](superpowers/specs/2026-09-16-electron-phase-4-embedded-python-runtime-design.md),
+브랜치는 `feat/electron-migration-phase-4-embedded-python-runtime`, 판정·증거·이월 항목 전부는
+[Phase 4 결과](superpowers/reports/2026-09-16-electron-phase-4-embedded-python-runtime-results.md)에 있다
+(§1~§11이 Part 1, §12가 Part 2).
 
 ### Phase 5. 데이터 이전·운영 안정화
 

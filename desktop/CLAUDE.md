@@ -1,6 +1,6 @@
 # desktop/ — Damwha macOS 앱 (Electron)
 
-Electron main이 네 서비스를 감독한다 — 번들 PostgreSQL, NestJS API(자식), worker·embed(`uv run`, 아직 저장소 체크아웃). Phase 4는 둘로 나뉜다: **Part 1은 번들만 만든다**(아래 "번들") — worker·embed를 번들 python으로 돌리는 배선은 Part 2다. 설계는 Phase별 스펙에 있다:
+Electron main이 네 서비스를 감독한다 — 번들 PostgreSQL, NestJS API(자식), worker·embed. **packaged는 번들 python(`Resources/python/bin/python3.12 -m …`)으로 돌고 저장소 체크아웃을 모른다**(Phase 4 Part 2). dev만 `uv run`과 저장소를 쓴다. 설계는 Phase별 스펙에 있다:
 [Phase 1](../docs/superpowers/specs/2026-09-11-electron-phase-1-app-foundation-design.md) ·
 [Phase 2](../docs/superpowers/specs/2026-09-12-electron-phase-2-service-orchestration-design.md) ·
 [Phase 3](../docs/superpowers/specs/2026-09-14-electron-phase-3-embedded-postgres-design.md) ·
@@ -59,7 +59,7 @@ Mach-O 전수와 `Resources/ffmpeg/bin/*`에, `entitlements.mac.plist`(키 셋 �
 | `app/` | 앱 전체의 시작·복구·종료 흐름 — 종료·창 닫기 흐름(`quit-flow`), 창 재열기(`window-flow`), 재시도 정책, 스폰 가드 |
 | `windows/` | 창과 화면 — 셸·상태 창, 화면 판정(`shell-url`·`status-view`), 메뉴, 권한·출처 경계, 렌더러 왕복(`recording-bridge`) |
 | `services/` | 서비스별 정책과 감독 — `supervisor`, api·worker·embed 스펙, `postgres/`(레이아웃·핸들·페어링·마이그레이션) |
-| `process/` | 서비스들이 함께 쓰는 실행·조회 도구 — 핸들 타입, 출력 싱크, uv 런처, 도구 러너, 프로세스 트리·포트·실행 파일 탐색, 준비 프로브 |
+| `process/` | 서비스들이 함께 쓰는 실행·조회 도구 — 핸들 타입, 출력 싱크, python 런처(`python-launcher`: packaged는 번들 python, dev는 `uv run`), 번들 경로 판정(`runtime-paths`), 고아 회수(`orphans`), 도구 러너, 프로세스 트리·포트·실행 파일 탐색, 준비 프로브 |
 | `config/` | `config.json` 읽기·재로딩, DB URL 마스킹, 저장소 루트 판정 |
 | `diagnostics/` | 로그 회전, stderr 요약, 원인 목록(`causes`) |
 | `dev/` | dev 전용 — Vite 자식 |

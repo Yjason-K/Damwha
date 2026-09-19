@@ -167,7 +167,7 @@ before you record.
 | Docker | Postgres image (pgvector + pg_bigm), and the jest/pytest suites (testcontainers) | Docker Desktop |
 | [uv](https://docs.astral.sh/uv/) | the Python worker's env + lockfile | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | **ffmpeg** on `PATH` | every audio job starts by normalizing the upload (`pipeline/ffmpeg.py`); a missing binary fails the job, not startup | `brew install ffmpeg` |
-| **mlx-lm** on `PATH` | serves the lens/summary LLM. Install it **outside** the worker venv — the worker never imports `mlx_lm`, it spawns the `mlx_lm.server` binary | `uv tool install mlx-lm` |
+| **mlx-lm** — no separate install | serves the lens/summary LLM. `mlx-lm==0.31.3` is pinned in the worker's `models` extra (Apple Silicon only), and the worker launches it in-process as `python -m damwha_worker.llm_entry`, not through a `PATH` binary | comes with `uv sync --extra models` |
 | Hugging Face account + token | pyannote diarization is a **gated** model | see [ML models](#ml-models-gated-heavy) |
 
 Apple Silicon is the intended target: STT runs `mlx-whisper` and the LLM runs MLX.

@@ -176,8 +176,9 @@ fetch:
 # 고정하지 않으면 지원 범위 밖 인터프리터에 ML 스택이 깔린다.
 tools:
 	@test -n "$(VER)" || { echo "DAMWHA_VERSION이 비었다 — make setup 먼저"; exit 1; }
-	@# 워커가 mlx_lm.server 바이너리를 실행한다 — 워커 venv 안이 아니라 PATH에 있어야 한다.
-	uv tool install mlx-lm
+	@# mlx-lm은 따로 깔지 않는다 — 아래 `damwha-worker[models]`가 mlx-lm 0.31.3을 고정하고,
+	@# 워커는 PATH의 바이너리가 아니라 자기 인터프리터로 `-m damwha_worker.llm_entry`를 띄운다
+	@# (Electron Phase 4 스펙 §6.2). 전역 `uv tool install mlx-lm`은 이제 쓰이지 않는다.
 	@# 릴리스 wheel · 레포 클론의 소스 · 릴리스 다운로드 순으로 찾는다.
 	@if [ -f "$(WHEEL)" ]; then \
 	  echo "wheel: $(WHEEL)"; \
