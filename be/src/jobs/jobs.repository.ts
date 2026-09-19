@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { JobRow, JobType, Queryable } from './jobs.types';
+import { APP_WORKER_PREFIX } from './worker-identity';
 
 @Injectable()
 export class JobsRepository {
@@ -95,6 +96,31 @@ export class JobsRepository {
       `UPDATE job SET status='failed', error=$2::jsonb, updated_at=now() WHERE id=$1`,
       [jobId, JSON.stringify(error)],
     );
+  }
+
+  /**
+   * 앞 실행이 남긴 `running` job을 되돌린다. 기동 시 1회만 부른다 (ReaperService).
+   *
+   * `attempts`는 **되돌리지 않는다.** claim이 +1 하고 여기서 -1 하면 앱을 죽이는 job이
+   * `attempts >= max_attempts` 분기에 영영 닿지 못한다 — 무한 재시도가 된다.
+   * 정상 종료의 attempts 복원은 worker의 `requeue_for_shutdown`이 따로 한다.
+   */
+  async reclaimOrphaned(
+    exec: Queryable,
+    workerId: string,
+  ): Promise<{ requeued: number; failedLive: number }> {
+    const { rows } = await exec.query<{ requeued: string }>(
+      `UPDATE job
+          SET status='queued',
+              locked_by=NULL, locked_at=NULL, next_attempt_at=NULL, updated_at=now()
+        WHERE status='running'
+          AND locked_by LIKE $1 || '%'
+          AND locked_by <> $2
+          AND type <> 'live_session'
+        RETURNING id`,
+      [APP_WORKER_PREFIX, workerId],
+    );
+    return { requeued: rows.length, failedLive: 0 };
   }
 
   async reapStale(
