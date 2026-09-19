@@ -109,18 +109,43 @@ export class JobsRepository {
     exec: Queryable,
     workerId: string,
   ): Promise<{ requeued: number; failedLive: number }> {
-    const { rows } = await exec.query<{ requeued: string }>(
-      `UPDATE job
-          SET status='queued',
-              locked_by=NULL, locked_at=NULL, next_attempt_at=NULL, updated_at=now()
-        WHERE status='running'
-          AND locked_by LIKE $1 || '%'
-          AND locked_by <> $2
-          AND type <> 'live_session'
-        RETURNING id`,
+    const { rows } = await exec.query<{ kind: string }>(
+      `WITH requeued AS (
+         UPDATE job
+            SET status='queued',
+                locked_by=NULL, locked_at=NULL, next_attempt_at=NULL, updated_at=now()
+          WHERE status='running'
+            AND locked_by LIKE $1 || '%'
+            AND locked_by <> $2
+            AND type <> 'live_session'
+          RETURNING id
+       ),
+       -- 끊긴 라이브는 재queue하지 않는다 (기존 reaper와 같은 규칙). job만 닫는다 —
+       -- 회의·확정·봉인 경계·파일은 건드리지 않고, 봉인과 마무리는 LiveOrphanService가
+       -- 한다(live-orphan.service.ts). 이 회수가 하는 일은 그 경로를 30분 reaper 대신
+       -- 즉시 여는 것뿐이다.
+       failed_live AS (
+         UPDATE job j
+            SET status='failed', updated_at=now(),
+                error = jsonb_build_object(
+                  'code','app_restarted',
+                  'message','the app restarted while this live session was running',
+                  'stage', j.stage)
+          WHERE j.status='running'
+            AND j.locked_by LIKE $1 || '%'
+            AND j.locked_by <> $2
+            AND j.type='live_session'
+          RETURNING id
+       )
+       SELECT 'requeued' AS kind FROM requeued
+       UNION ALL
+       SELECT 'failed_live' AS kind FROM failed_live`,
       [APP_WORKER_PREFIX, workerId],
     );
-    return { requeued: rows.length, failedLive: 0 };
+    return {
+      requeued: rows.filter((r) => r.kind === 'requeued').length,
+      failedLive: rows.filter((r) => r.kind === 'failed_live').length,
+    };
   }
 
   async reapStale(
