@@ -1057,3 +1057,69 @@ def test_uninstall_restores_the_global_limits(clear_hf_env, monkeypatch):
     assert os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] == "9"  # 있던 것은 그대로
     assert hub_constants.HF_HUB_ETAG_TIMEOUT == etag_before
     assert hub_constants.HF_HUB_DOWNLOAD_TIMEOUT == download_before
+
+
+# ── P4-C7: 버려진 다운로드가 남긴 부분 캐시 ────────────────────────────────
+
+
+def test_cache_first_is_skipped_after_an_abandoned_download(conn, clean, hook_db, stub_download):
+    """P4-C7 실측(2026-09-19): 무진행 90초로 다운로드를 끊으면 hub 캐시에 `refs/main`과
+    snapshot 디렉터리는 남고 가중치만 `.incomplete`(0바이트)로 남는다. 그 상태에서
+    `local_files_only=True`는 **성공한다** — 파일 목록을 검사하지 않기 때문이다. 그래서
+    로더가 없는 가중치를 읽다 터지고(`[load_npz] Input must be a zip file…`), 그 예외는
+    캐시 미스가 아니라 그대로 올라가 재시도 3회가 전부 같은 자리에서 죽었다. 네트워크가
+    돌아와도 아무도 다시 받지 않는다 — C7의 "복구 뒤 다음 job 완주"가 여기서 깨졌다.
+
+    `model_readiness`가 이미 그 사실을 들고 있다(감시가 `failed` + `model_download_failed`를
+    적는다). 그 행을 보고 캐시 우선을 건너뛴다."""
+    downloads.install_hf_progress_hook("w1")
+    core.merge_model_readiness(
+        conn,
+        "org/m",
+        {
+            "state": "failed",
+            "error": "model_download_failed: download of 'org/m' made no progress for 90s",
+            "error_kind": "TRANSIENT",
+        },
+        "w1",
+    )
+
+    seen = []
+
+    def load(*, local_files_only):
+        seen.append(local_files_only)
+        return "loaded"
+
+    assert downloads.load_cache_first("org/m", load) == "loaded"
+    # 캐시를 아예 안 물어본다 — 물어보면 "있다"는 거짓말을 듣는다.
+    assert seen == [False]
+
+
+def test_cache_first_still_runs_after_an_unrelated_failure(conn, clean, hook_db, stub_download):
+    """건너뛰기는 **버려진 다운로드**에만 걸린다. 다른 이유의 옛 실패까지 건너뛰면
+    오프라인에서 1.1초에 끝날 적재가 매번 네트워크로 내려간다(§6.6-b가 막는 바로 그것)."""
+    downloads.install_hf_progress_hook("w1")
+    core.merge_model_readiness(
+        conn, "org/m", {"state": "failed", "error": "boom", "error_kind": "TRANSIENT"}, "w1"
+    )
+
+    seen = []
+
+    def load(*, local_files_only):
+        seen.append(local_files_only)
+        return "loaded"
+
+    assert downloads.load_cache_first("org/m", load) == "loaded"
+    assert seen == [True]
+
+
+def test_cache_first_runs_normally_without_a_hook(conn, clean):
+    """훅이 없는 프로세스(테스트·스크립트)는 읽을 행도 연결도 없다 — 지금 동작 그대로."""
+    seen = []
+
+    def load(*, local_files_only):
+        seen.append(local_files_only)
+        return "loaded"
+
+    assert downloads.load_cache_first("org/m", load) == "loaded"
+    assert seen == [True]

@@ -378,6 +378,32 @@ def is_cache_miss(exc: BaseException) -> bool:
     return False
 
 
+def _last_attempt_was_abandoned(key: str) -> bool:
+    """이 key의 직전 시도가 **감시에 버려진 다운로드**였나 (P4-C7).
+
+    판정은 `model_readiness` 한 행이다 — 감시가 끊을 때 `state='failed'`와
+    `model_download_failed: …`를 그 자리에 적어 두고, 그것이 프로세스를 건너 사는 유일한 기록이다
+    (자식은 job마다 새로 뜨므로 메모리에 남길 수 없다). 코드 접두사로 좁히는 이유는 **다른 이유의
+    옛 실패까지 건너뛰면** 오프라인에서 1.1초에 끝날 적재가 매번 네트워크로 내려가기 때문이다
+    (§6.6-b가 막는 바로 그것).
+
+    못 읽으면 False다 — 못 읽는 것이 캐시 우선을 포기하는 사유가 되면 안 된다. 훅이 없는
+    프로세스(테스트·스크립트)와 `DAMWHA_SHARED_STATE=off`도 같은 길로 떨어진다.
+    """
+    if _STATE.writer is None:
+        return False
+    try:
+        entry = core.read_model_readiness(_STATE.conn)["entries"].get(key)
+    except Exception:  # noqa: BLE001 — 읽기 실패가 적재를 바꾸지 않는다
+        log.debug(
+            "model_readiness read failed for %s — 캐시 우선을 그대로 쓴다", key, exc_info=True
+        )
+        return False
+    if not isinstance(entry, dict) or entry.get("state") != "failed":
+        return False
+    return str(entry.get("error") or "").startswith(f"{errors.MODEL_DOWNLOAD_FAILED}:")
+
+
 def load_cache_first(key: str, load):
     """모델 적재를 **캐시 먼저** 시도한다 (스펙 §6.6-b). `load`는 `local_files_only=`로 불린다.
 
@@ -391,7 +417,16 @@ def load_cache_first(key: str, load):
     되고, 진짜 원인(깨진 캐시·잘못된 리비전)이 영영 안 보인다.
 
     캐시로 적재에 성공하면 그 key를 `ready`로 적는다 (R-9d, `_mark_ready`).
+
+    **예외 하나: 직전 시도가 감시에 버려진 다운로드면 캐시를 아예 안 물어본다.** 무진행으로
+    끊긴 다운로드는 hub 캐시에 `refs/main`과 snapshot 디렉터리를 남기고 가중치만
+    `.incomplete`로 남기는데, `local_files_only=True`는 파일 목록을 검사하지 않아 **성공한다**.
+    그 뒤 로더가 없는 가중치를 읽다 터지고, 그 예외는 캐시 미스가 아니므로 위 규칙대로 그대로
+    올라간다 — 재시도가 전부 같은 자리에서 죽고 네트워크로 영영 안 돌아간다 (P4-C7 실측).
     """
+    if _last_attempt_was_abandoned(key):
+        log.info("%s: 직전 다운로드가 버려졌다 — 캐시 우선을 건너뛰고 다시 받는다", key)
+        return load(local_files_only=False)
     with _cache_first_attempt() as attempt:
         try:
             loaded = load(local_files_only=True)

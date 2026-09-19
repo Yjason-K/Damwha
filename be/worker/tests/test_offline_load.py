@@ -122,8 +122,11 @@ def test_cache_first_injects_local_files_only_into_hub_calls(uninstall, hook_wri
 
     assert downloads.load_cache_first("org/m", load) == "/cache/f"
     assert calls[-1]["local_files_only"] is True
-    # R-9d의 `ready` 쓰기는 **주입된** 연결로만 간다
-    assert len(hook_writes) == 1
+    # R-9d의 `ready` 쓰기는 **주입된** 연결로만 간다. 연산 수가 아니라 쓰기 수를 센다 —
+    # P4-C7 수정이 같은 연결로 `model_readiness`를 한 번 **읽어** 직전 다운로드가 버려졌는지
+    # 보므로, 전체 연산을 세면 그 읽기가 쓰기로 오인된다.
+    writes = [sql for sql, _ in hook_writes if "INSERT" in sql or "UPDATE" in sql]
+    assert len(writes) == 1
 
 
 # ── 로더 다섯 ─────────────────────────────────────────────────────────

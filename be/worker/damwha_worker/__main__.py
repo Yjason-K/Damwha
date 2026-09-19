@@ -361,6 +361,36 @@ def run_supervisor_main(
     log.info("supervisor %s stopped", settings.worker_id)
 
 
+def _flush_streams() -> None:
+    """os._exit 직전에 우리가 쓴 것을 내보낸다. os._exit은 버퍼도 atexit도 건드리지 않는다."""
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+    sys.stdout.flush()
+    sys.stderr.flush()
+
+
+def _hard_exit(code: int, *, flush_fn=_flush_streams, exit_fn=os._exit) -> None:
+    """`--once` 자식을 **인터프리터 finalize 없이** 끝낸다.
+
+    P4-C7 실측(2026-09-19): 무진행 90초로 다운로드를 끊은 자식이 job 을 재큐까지 끝내
+    놓고 죽지 않았다. 메인 스레드가 `Py_FinalizeEx → wait_for_thread_shutdown →
+    threading._shutdown() → Thread.join()` 에서 영구 대기였다 — `_run_watched` 가 버린
+    다운로드는 **파이썬 스레드로는 daemon** 이지만 `hf_xet` 이 남긴 네이티브 스레드
+    여덟과 non-daemon 파이썬 스레드가 finalize 를 붙잡는다. 감독자는 `os_waitpid` 에서
+    돌아오지 못해 다시 peek 하지 않았고, 재큐된 job 을 **아무도 집지 않았다**(11분 관측;
+    그 자식을 kill -9 하자 8초 만에 재claim).
+
+    한 건만 처리하고 끝나는 프로세스라 finalize 에 걸 것이 없다 — DB 연결은
+    `run_single_job` 이 닫고, 남은 것은 우리가 쓴 로그뿐이라 그것만 먼저 내보낸다.
+    flush 가 터져도 반드시 끝낸다: 여기서 예외가 새면 고치려던 그 멈춤이 되돌아온다.
+    """
+    try:
+        flush_fn()
+    except Exception:  # noqa: BLE001 — 끝내는 것이 flush 보다 중요하다
+        pass
+    exit_fn(code)
+
+
 def main() -> None:  # pragma: no cover — 실모델 + 시그널 배선 (로컬 실행)
     # 진행 바와 로그가 같은 stderr를 쓴다 — 핸들러가 바를 지웠다 다시 그려야 섞이지 않는다
     console.install_logging(level=logging.INFO)
@@ -368,7 +398,7 @@ def main() -> None:  # pragma: no cover — 실모델 + 시그널 배선 (로컬
     shutdown = threading.Event()
     run_id = runtime_report.run_id_arg(sys.argv[1:])
     if "--once" in sys.argv[1:]:
-        sys.exit(run_child(settings, shutdown))
+        _hard_exit(run_child(settings, shutdown))
     run_supervisor_main(settings, shutdown, run_id=run_id)
 
 

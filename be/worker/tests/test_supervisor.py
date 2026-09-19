@@ -375,3 +375,44 @@ def test_supervisor_second_signal_is_wired_to_the_group_kill():
     src = inspect.getsource(m.run_supervisor_main)
     assert "_kill_child_group(proc)" in src
     assert "proc.kill()" not in src
+
+
+# ── P4-C7: stall-kill 뒤 `--once` 자식이 반드시 끝난다 ──────────────────────
+
+
+def test_hard_exit_flushes_then_exits_without_finalizing():
+    # P4-C7 실측(2026-09-19): 무진행 90초로 다운로드를 끊은 `--once` 자식이 job을 재큐까지
+    # 끝내 놓고 **죽지 않았다**. 메인 스레드 스택이 `Py_FinalizeEx → wait_for_thread_shutdown
+    # → threading._shutdown() → Thread.join()`에서 영구 대기였다 — `_run_watched`가 버린
+    # 다운로드는 파이썬 스레드로는 daemon이지만 `hf_xet`이 남긴 네이티브 스레드 8개와
+    # non-daemon 파이썬 스레드가 finalize를 붙잡는다. 감독자는 `os_waitpid`에서 안 돌아와
+    # 다시 peek하지 않았고, 재큐된 job을 **아무도 집지 않았다**(11분 관측, 자식을 kill -9
+    # 하자 8초 만에 재claim). 한 건만 처리하고 끝나는 프로세스라 finalize에 걸 것이 없다.
+    order = []
+    m._hard_exit(
+        3,
+        flush_fn=lambda: order.append("flush"),
+        exit_fn=lambda c: order.append(f"exit{c}"),
+    )
+    # flush가 먼저다 — os._exit는 atexit도 버퍼도 비우지 않는다.
+    assert order == ["flush", "exit3"]
+
+
+def test_hard_exit_still_exits_when_flushing_raises():
+    # 닫힌 stderr로 flush가 터져도 프로세스는 반드시 끝나야 한다 — 여기서 예외가 새면
+    # 고치려던 그 멈춤이 그대로 돌아온다.
+    order = []
+
+    def _boom():
+        raise ValueError("closed")
+
+    m._hard_exit(1, flush_fn=_boom, exit_fn=lambda c: order.append(f"exit{c}"))
+    assert order == ["exit1"]
+
+
+def test_once_child_path_is_wired_to_hard_exit():
+    # `main()`은 pragma: no cover라 직접 부를 수 없다. 배선이 끊기면 위 두 테스트가
+    # 초록불인 채로 워커가 다시 통째로 멈춘다.
+    src = inspect.getsource(m.main)
+    assert "_hard_exit(run_child(" in src
+    assert "sys.exit(run_child(" not in src
