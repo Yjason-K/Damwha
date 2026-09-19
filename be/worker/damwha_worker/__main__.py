@@ -291,7 +291,16 @@ def _kill_child_group(proc, *, killpg=os.killpg) -> None:
 
     그룹이 이미 비었거나(ESRCH) 신호를 못 보내면 자식만이라도 죽인다. 여기서 예외가 새면
     신호 핸들러가 터져 supervisor가 `os._exit`까지 못 간다.
+
+    **먼저 `poll()`로 이미 죽은 자식을 거른다.** `proc.kill()`은 `Popen.send_signal`을 거치고
+    그 안에 이 가드가 있다(bpo-38630) — `os.killpg`는 그것을 우회한다. "우리 그룹에만 닿는다"는
+    위의 근거는 자식이 **아직 거둬지지 않았을 때만** 성립한다: 거둬진 순간 그 번호는 재배정될
+    수 있고, `run_supervisor`가 자식을 거두는 자리(`_wait_child`)와 `child_holder`를 비우는
+    자리 사이의 창에 신호가 들어오면 남의 그룹을 때린다. 창은 바이트코드 몇 개지만 가드는 공짜다.
+    `poll()`은 `_waitpid_lock`을 non-blocking으로 잡으므로 신호 핸들러에서 불러도 교착하지 않는다.
     """
+    if proc.poll() is not None:
+        return
     try:
         killpg(proc.pid, signal.SIGKILL)
     except OSError:

@@ -350,21 +350,29 @@ export async function stopWorkerProcess(
   opts.signal(pid, "SIGTERM");
   const exited = await waitForExit(opts.graceMs);
 
-  // 4단계. 세션이 다른 자손까지 ppid BFS로 찾아 직접 죽인다. 여기서 죽일 대상은 방금 걸은
+  // 4단계. 세션이 다른 자손까지 ppid BFS로 찾아 직접 죽인다. 여기서 죽일 대상은 **방금 걸은**
   // 트리다 — 그보다 앞선 스냅샷들은 유예 두 번과 (시간 제한 없는) 대화상자만큼 낡아서, 그
   // 사이 끝난 pid를 OS가 재사용했다면 SIGKILL이 남의 프로세스로 간다. 낡은 스냅샷은
   // "죽었나"를 읽는 데만 쓰고 죽이지는 않는다.
   //
-  // **supervisor가 2차 SIGTERM에 죽었어도 건너뛰지 않는다.** 예전에는 이 자리가
+  // 그래서 **어느 트리가 신선한가가 분기마다 다르다.** supervisor가 2차 SIGTERM에 죽었으면
+  // 위에서 걸은 `tree`가 마지막으로 유효한 BFS 결과다(죽은 뒤에는 자손이 pid 1로 재부모화돼
+  // 안 보인다). 아직 살아 있으면 그 `tree`는 유예 하나만큼(worker는 90초 — main.ts의
+  // WORKER_GRACE_MS) 낡았고, supervisor가 살아 있으니 지금 다시 걷는 것이 유효하고 공짜다.
+  //
+  // **supervisor가 2차 SIGTERM에 죽었어도 이 단계를 건너뛰지 않는다.** 예전에는 이 자리가
   // `if (await waitForExit(...)) return cleanUnlessOrphans();`였는데, supervisor의 2차
   // 핸들러가 `os._exit`라 그 분기가 **항상** 참이었다 — 4단계는 프로덕션에서 한 번도 돌지
   // 않는 죽은 코드였고, P4-C20이 그것을 실측했다(SIGTERM 무시 자손이 196초+ 생존, ppid=1,
-  // 화면에는 "후보 pid"로 보고만 됐다). 그 자손을 거둘 사람이 여기뿐인 이유는 supervisor가
-  // 2차 신호에서 `--once` 자식을 SIGKILL하기 때문이다 — 자식이 즉사하면 worker 자신의 정리
-  // (`managed_llm_server`의 finally → `_stop`: terminate→wait→kill)가 안 돈다.
+  // 화면에는 "후보 pid"로 보고만 됐다). 같은 커밋의 worker 쪽 수정(2차 신호가 `--once`
+  // 자식의 **그룹**을 죽인다)이 그 자식의 세션 안에 있는 것들을 거두므로, 이 단계가 맡는 것은
+  // 그 세션 밖으로 나간 자손 — 스스로 `setsid`하는 탈출구 바이너리나, 그룹 킬이 없던 옛
+  // worker가 남긴 것들 — 이다.
   //
   // 루트는 **살아 있을 때만** 때린다. 죽은 뒤에는 Node가 이미 거둬들였고 그 번호는 재사용될 수 있다.
-  for (const target of exited ? [...tree] : [pid, ...tree]) opts.signal(target, "SIGKILL");
+  const fresh = exited ? tree : await snapshotDescendants();
+  if (!exited) capturedDescendants = new Set([...capturedDescendants, ...fresh]);
+  for (const target of exited ? [...fresh] : [pid, ...fresh]) opts.signal(target, "SIGKILL");
 
   // supervisor가 끝났으면 그룹 신호로 같은 그룹의 짧은 자식(capabilities 프로브)까지 거두고
   // 판정한다 — 위 스윕이 세션 밖 자손을 맡고, 이쪽이 그룹 안을 맡는다 (P4-C17).
@@ -373,7 +381,7 @@ export async function stopWorkerProcess(
   // 5단계. 지금까지 찍어 둔 스냅샷들도 후보에 넣는다 — 그때 우리 자손이었는데 끝까지
   // 살아 있다면 그 사이 부모를 잃어 BFS에서 사라졌더라도 여전히 우리가 남긴 프로세스다.
   // **한 번만 보지 않는다** — SIGKILL도 반영과 거둬들임에 시간이 든다 (settle 주석).
-  return verdict(await settle([...new Set([pid, ...tree, ...capturedDescendants])]));
+  return verdict(await settle([...new Set([pid, ...fresh, ...capturedDescendants])]));
 }
 
 /**

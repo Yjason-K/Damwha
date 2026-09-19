@@ -1,5 +1,6 @@
 import inspect
 import logging
+import os
 import signal
 import sys
 import threading
@@ -308,10 +309,14 @@ def test_supervisor_logs_ready_again_after_reconnect(conn, pg_url, monkeypatch, 
 class _KillSpy:
     """`--once` 자식 대역. 자기 자신이 kill됐는지만 기록한다."""
 
-    def __init__(self, pid: int):
+    def __init__(self, pid: int, returncode=None):
         self.pid = pid
+        self.returncode = returncode
         self.killed = False
         self.terminated = False
+
+    def poll(self):
+        return self.returncode
 
     def terminate(self):
         self.terminated = True
@@ -343,6 +348,25 @@ def test_kill_child_group_falls_back_to_the_child_when_the_group_is_gone():
 
     m._kill_child_group(proc, killpg=_boom)
     assert proc.killed is True
+
+
+def test_kill_child_group_skips_a_child_that_is_already_reaped():
+    # `proc.kill()`은 `Popen.send_signal`을 거치고 그 안에 pid 재사용 가드가 있다(bpo-38630).
+    # `os.killpg`는 그것을 우회하므로 여기서 직접 세운다 — 자식이 거둬진 뒤 그 번호는
+    # 재배정될 수 있고, `run_supervisor`가 자식을 거두는 자리와 `child_holder`를 비우는
+    # 자리 사이의 창에 신호가 들어오면 남의 그룹을 때린다.
+    calls = []
+    proc = _KillSpy(4242, returncode=0)
+    m._kill_child_group(proc, killpg=lambda pgid, sig: calls.append((pgid, sig)))
+    assert calls == []
+    assert proc.killed is False
+
+
+def test_kill_child_group_defaults_to_killpg_not_kill():
+    # 기본 인자를 `os.kill`로 바꾸면 P4-C20의 원래 결함(자식만 SIGKILL → LLM 서버 고아)이
+    # 그대로 되살아나는데, 위 테스트들은 전부 `killpg`를 주입하거나 소스 텍스트를 읽어서
+    # 초록불인 채로 남는다. 기본 결선 자체를 잠근다.
+    assert inspect.signature(m._kill_child_group).parameters["killpg"].default is os.killpg
 
 
 def test_supervisor_second_signal_is_wired_to_the_group_kill():
