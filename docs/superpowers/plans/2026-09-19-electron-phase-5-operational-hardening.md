@@ -36,8 +36,12 @@
 | `be/src/meetings/meetings.repository.ts` (수정) | `findStatus`에 `retry` 객체 | 7 |
 | `fe/src/features/meeting/api/types.ts` (수정) | `RetryStatus` 타입 | 7 |
 | `fe/src/pages/meeting.tsx` (수정) | 재시도 대기 문구 | 7 |
-| `desktop/src/process/orphans.ts` (수정) | `ReapPlan.only` 필터 | 8 |
-| `desktop/src/services/supervisor.ts` (수정) | `restartOnce`가 worker 재시작 전 `--once` 스캔 | 8 |
+| `desktop/src/process/orphans.ts` (수정) | `ReapPlan.only` 필터, `reapOwnOnceChildren` | 8 |
+| `desktop/src/services/supervisor.ts` (수정) | `reapOwnOnce` 훅 — **크래시 재시작 타이머**와 `restartOnce` 둘 다 | 8 |
+| `desktop/src/config/config.ts` (수정) | `APP_WORKER_PREFIX` export (BE 상수와 같은 문자열) | 8 |
+| `desktop/src/main.ts` (수정) | `reapOwnOnce` 훅 배선 | 8 |
+| `be/test/jobs.repository.spec.ts` (수정) | 기본값 3을 기대하던 단언을 5로 | 5 |
+| `be/test/reclaim-bootstrap.e2e-spec.ts` (신규) | AppModule 기동 뒤 행 불변 (P5-C2) | 4 |
 
 ---
 
@@ -77,14 +81,49 @@ ls -la /Volumes/DamwhaDiskFull/Damwha
 
 앱을 끄고, 기존 `data/storage`를 볼륨으로 옮긴 뒤 심볼릭 링크를 건다. **원본은 지우지 않는다 — 옮기고 링크만 건다.**
 
+**데이터를 옮기는 절차다. 복구를 셸 설명에 맡기지 않고 `trap`으로 건다** — 중단·마운트 실패·앱 기동 실패 어디서 끊겨도 원본이 제자리로 돌아와야 한다.
+
 ```bash
+cat > /tmp/diskfull-candidate2.sh <<'SH'
+set -euo pipefail
 UD="$HOME/Library/Application Support/Damwha"
-ditto "$UD/data/storage" /Volumes/DamwhaDiskFull/storage
-mv "$UD/data/storage" "$UD/data/storage.probe-backup"
-ln -s /Volumes/DamwhaDiskFull/storage "$UD/data/storage"
+SRC="$UD/data/storage"
+BACKUP="$UD/data/storage.probe-backup"
+
+restore() {
+  # 링크를 먼저 지운다 — 남아 있으면 mv가 링크 안으로 들어간다.
+  [ -L "$SRC" ] && rm -f "$SRC"
+  if [ -d "$BACKUP" ] && [ ! -d "$SRC" ]; then
+    mv "$BACKUP" "$SRC"
+    echo "restored: $SRC"
+  fi
+  [ -d "$SRC" ] || echo "RESTORE FAILED — $SRC 가 없다. $BACKUP 를 손으로 되돌려라"
+}
+trap restore EXIT INT TERM
+
+test -d /Volumes/DamwhaDiskFull || { echo "볼륨이 없다"; exit 1; }
+test -d "$SRC" || { echo "$SRC 가 없다"; exit 1; }
+test -e "$BACKUP" && { echo "$BACKUP 가 이미 있다 — 앞 회차가 안 끝났다"; exit 1; }
+
+ditto "$SRC" /Volumes/DamwhaDiskFull/storage
+mv "$SRC" "$BACKUP"
+ln -s /Volumes/DamwhaDiskFull/storage "$SRC"
+echo "링크 걸었다. 지금 앱을 켜서 기동이 거부되는지 본 뒤 이 창에서 Enter를 눌러라."
+read -r _
+SH
+bash /tmp/diskfull-candidate2.sh
 ```
 
-앱을 켜고 기동이 거부되는지 본다(`.damwha-cluster` 마커 페어링). 거부되면 **후보 2도 탈락**이다. 어느 쪽이든 끝나면 링크를 지우고 `storage.probe-backup`을 제자리로 되돌린다.
+앱을 켜고 기동이 거부되는지 본다(`.damwha-cluster` 마커 페어링). 거부되면 **후보 2도 탈락**이다. 스크립트가 끝나거나 죽으면 `trap`이 링크를 지우고 원본을 되돌린다.
+
+- [ ] **Step 3b: 원본이 제자리에 있는지 눈으로 확인한다**
+
+```bash
+UD="$HOME/Library/Application Support/Damwha"
+ls -ld "$UD/data/storage"; ls -d "$UD/data/storage.probe-backup" 2>/dev/null || echo "backup 없음 (정상)"
+```
+
+기대: `data/storage`가 **디렉터리**(`d`로 시작, `l` 아님)이고 `storage.probe-backup`은 없다. 아니면 다음 Step으로 넘어가지 않는다.
 
 - [ ] **Step 4: 결과 문서를 만들고 §1에 판정을 적는다**
 
@@ -427,9 +466,10 @@ git commit -m "feat(be): 앞 실행의 라이브 세션을 닫아 봉인 경로�
 **Files:**
 - Modify: `be/src/jobs/reaper.service.ts`
 - Create: `be/test/reclaim-bootstrap.spec.ts`
+- Create: `be/test/reclaim-bootstrap.e2e-spec.ts` (P5-C2 — AppModule을 실제로 띄운다)
 
 **Interfaces:**
-- Consumes: `JobsRepository.reclaimOrphaned` (Task 2·3), `loadEnv()` — `be/src/config/env.ts`
+- Consumes: `JobsRepository.reclaimOrphaned` (Task 2·3), `isAppWorkerId` (Task 2), `loadEnv()` — `be/src/config/env.ts`
 - Produces: `ReaperService implements OnApplicationBootstrap`; `onApplicationBootstrap()`이 `WORKER_ID`가 있을 때만 회수를 부른다.
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
@@ -464,6 +504,16 @@ describe('ReaperService.onApplicationBootstrap', () => {
     expect(jobs.reclaimOrphaned).not.toHaveBeenCalled();
   });
 
+  it('does nothing when WORKER_ID is not an app worker id', async () => {
+    // 경계를 한 군데(`isAppWorkerId`)에서만 정한다. 터미널 worker의 신분으로 뜬 API가
+    // 앱이 남긴 desktop-* 행을 건드리지 않는다.
+    process.env.WORKER_ID = 'worker-1';
+    const jobs = { reclaimOrphaned: jest.fn() };
+    const svc = new ReaperService(db, jobs as never);
+    await svc.onApplicationBootstrap();
+    expect(jobs.reclaimOrphaned).not.toHaveBeenCalled();
+  });
+
   it('does not stop startup when the reclaim query fails', async () => {
     process.env.WORKER_ID = 'desktop-abc';
     const jobs = { reclaimOrphaned: jest.fn().mockRejectedValue(new Error('boom')) };
@@ -489,6 +539,7 @@ import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { DatabaseService } from '../database/database.service';
 import { JobsRepository } from './jobs.repository';
+import { isAppWorkerId } from './worker-identity';
 import { loadEnv } from '../config/env';
 
 @Injectable()
@@ -505,7 +556,9 @@ export class ReaperService implements OnApplicationBootstrap {
    */
   async onApplicationBootstrap(): Promise<void> {
     const workerId = loadEnv().WORKER_ID;
-    if (workerId === undefined) return;
+    // 값이 있어도 **앱이 띄운 신분일 때만** 돈다. 회수 SQL도 `desktop-` 행만 고르지만,
+    // 경계를 한 군데서만 정해야 나중에 접두사가 바뀔 때 두 곳이 갈라지지 않는다.
+    if (workerId === undefined || !isAppWorkerId(workerId)) return;
     try {
       const res = await this.jobs.reclaimOrphaned(this.db.pool, workerId);
       if (res.requeued || res.failedLive) {
@@ -531,15 +584,65 @@ export class ReaperService implements OnApplicationBootstrap {
 Run: `pnpm be test -- reclaim-bootstrap.spec.ts`
 Expected: PASS (3 tests)
 
-- [ ] **Step 5: 앱 전체 스위트로 회귀를 본다**
+- [ ] **Step 5: API 기동이 실제 DB 행에 하는 일을 고정한다 (P5-C2)**
+
+`be/test/reclaim-bootstrap.e2e-spec.ts` — 목이 아니라 **AppModule을 실제로 띄워** 행을 본다. `app.init()`이 `onApplicationBootstrap`을 부른다.
+
+```ts
+import { Test } from '@nestjs/testing';
+import { INestApplication } from '@nestjs/common';
+import { startTestDb, StartedTestDb } from './db';
+import { AppModule } from '../src/app.module';
+
+describe('reclaim on API bootstrap', () => {
+  let db: StartedTestDb;
+  let app: INestApplication;
+  let ids: { orphan: string; mine: string; external: string };
+
+  beforeAll(async () => {
+    db = await startTestDb();
+    const mk = async (lockedBy: string) => {
+      const m = await db.pool.query(
+        `INSERT INTO meeting(audio_key, status) VALUES('k','processing') RETURNING id`);
+      const j = await db.pool.query(
+        `INSERT INTO job(type, meeting_id, payload, status, locked_by, locked_at, attempts, max_attempts)
+         VALUES('process_meeting',$1,'{}','running',$2, now(), 1, 5) RETURNING id`,
+        [m.rows[0].id, lockedBy]);
+      return j.rows[0].id as string;
+    };
+    ids = { orphan: await mk('desktop-old'), mine: await mk('desktop-new'), external: await mk('worker-1') };
+
+    process.env.WORKER_ID = 'desktop-new';
+    const mod = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    app = mod.createNestApplication();
+    await app.init();
+  });
+  afterAll(async () => { delete process.env.WORKER_ID; await app?.close(); await db?.stop(); });
+
+  it('requeues the previous run’s job, leaves this run’s and the external one', async () => {
+    const { rows } = await db.pool.query(
+      'SELECT id, status, locked_by FROM job WHERE id = ANY($1)',
+      [[ids.orphan, ids.mine, ids.external]]);
+    const by = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(by[ids.orphan]).toMatchObject({ status: 'queued', locked_by: null });
+    expect(by[ids.mine]).toMatchObject({ status: 'running', locked_by: 'desktop-new' });
+    expect(by[ids.external]).toMatchObject({ status: 'running', locked_by: 'worker-1' });
+  });
+});
+```
+
+Run: `pnpm be test -- reclaim-bootstrap.e2e-spec.ts`
+Expected: PASS
+
+- [ ] **Step 6: 앱 전체 스위트로 회귀를 본다**
 
 Run: `pnpm be test`
 Expected: PASS
 
-- [ ] **Step 6: 커밋**
+- [ ] **Step 7: 커밋**
 
 ```bash
-git add be/src/jobs/reaper.service.ts be/test/reclaim-bootstrap.spec.ts
+git add be/src/jobs/reaper.service.ts be/test/reclaim-bootstrap.spec.ts be/test/reclaim-bootstrap.e2e-spec.ts
 git commit -m "feat(be): 기동 시 한 번 앞 실행의 job을 회수한다"
 ```
 
@@ -555,6 +658,7 @@ git commit -m "feat(be): 기동 시 한 번 앞 실행의 job을 회수한다"
 - Create: `be/src/database/migrations/025_job_retry_policy.sql`
 - Modify: `be/worker/damwha_worker/db/queue.py` (`requeue`의 백오프 식)
 - Modify: `be/src/jobs/jobs.repository.ts:12` 주석의 숫자
+- Modify: `be/test/jobs.repository.spec.ts:121-127` — `expect(def.max_attempts).toBe(3)`이 기본값을 명시적으로 기대한다. **이것을 고치지 않으면 `pnpm be test`가 실패한다.** `reaper.spec.ts`처럼 행에 `max_attempts`를 직접 넣는 테스트는 기존 행 동작이라 그대로 둔다
 - Modify: `be/worker/tests/test_db_lifecycle.py` (백오프 테스트 추가)
 - Create: `be/test/retry-policy.spec.ts`
 
@@ -675,7 +779,13 @@ Expected: FAIL — 실제 값 1초
 Run: `pnpm worker:test -- -k "requeue"`
 Expected: PASS
 
-- [ ] **Step 9: 주석의 숫자를 맞춘다**
+- [ ] **Step 9: 기본값 3을 기대하던 기존 테스트와 주석을 맞춘다**
+
+`be/test/jobs.repository.spec.ts`의 `enqueue honors maxAttempts and leaves the column default otherwise`에서:
+
+```ts
+    expect(def.max_attempts).toBe(5);
+```
 
 `be/src/jobs/jobs.repository.ts:12`의 `// maxAttempts를 안 주면 컬럼 DEFAULT(3)를 그대로 쓴다` 에서 `(3)`을 `(5)`로.
 
@@ -688,7 +798,8 @@ Expected: PASS
 
 ```bash
 git add be/src/database/migrations/025_job_retry_policy.sql be/worker/damwha_worker/db/queue.py \
-        be/worker/tests/test_db_lifecycle.py be/test/retry-policy.spec.ts be/src/jobs/jobs.repository.ts
+        be/worker/tests/test_db_lifecycle.py be/test/retry-policy.spec.ts be/test/jobs.repository.spec.ts \
+        be/src/jobs/jobs.repository.ts
 git commit -m "feat: 재시도가 3분보다 긴 끊김을 넘기게 백오프와 상한을 올린다"
 ```
 
@@ -707,7 +818,9 @@ git commit -m "feat: 재시도가 3분보다 긴 끊김을 넘기게 백오프�
 
 **Interfaces:**
 - Consumes: 없음
-- Produces: `db.mark_processing(conn, meeting_id, job_id, processing_version, worker_id) -> int` — **인자가 하나 늘어난다.** 다른 호출부는 없다(`process_meeting.py` 하나).
+- Produces: `db.mark_processing(conn, meeting_id, job_id, processing_version, worker_id) -> int` — **인자가 하나 늘어난다.**
+- 프로덕션 호출부는 `process_meeting.py:66` 하나이고, 그 함수(`run_process_meeting`)는 **이미 `worker_id`를 키워드 인자로 받는다**(`process_meeting.py:41`). `jobs.py`가 `ctx.worker_id`로 넘기므로 상위 시그니처는 바뀌지 않는다.
+- 테스트 호출부는 `be/worker/tests/test_db_lifecycle.py`의 **네 곳**: L46, L47, L303, L315. 하나라도 빠지면 pytest 전체가 `TypeError`로 죽는다.
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
@@ -773,12 +886,14 @@ EXISTS 절을 바꾼다.
     if db.mark_processing(conn, meeting_id, job_id, payload.processing_version, worker_id) == 0:
 ```
 
-그 함수가 `worker_id`를 인자로 갖고 있지 않으면, 같은 파일에서 이미 `ctx`나 상위 호출이 들고 있는 값을 따라 내려보낸다. `dispatch.handle_job`이 `worker_id`를 받으므로 거기서부터 잇는다 — 새 전역이나 기본값을 만들지 않는다.
+`worker_id`는 `run_process_meeting`의 키워드 인자로 **이미 스코프에 있다**(같은 파일 L41). 새 전역·기본값·상위 시그니처 변경은 없다.
 
 - [ ] **Step 5: 통과를 확인한다**
 
+먼저 기존 네 호출(L46·L47·L303·L315)에 신분을 더한다 — 그 테스트들이 만든 job의 `locked_by` 값과 같아야 한다. 픽스처가 `locked_by`를 안 넣고 있으면 넣는다.
+
 Run: `pnpm worker:test`
-Expected: PASS — 기존 `test_mark_processing_*` 셋도 함께 통과해야 한다(시그니처가 바뀌었으므로 그 테스트들도 인자를 더해야 한다).
+Expected: PASS — 새 둘과 기존 넷이 모두 통과한다.
 
 - [ ] **Step 6: 커밋**
 
@@ -789,7 +904,7 @@ git commit -m "fix(worker): 소유권을 잃은 워커가 회의를 processing�
 
 **Verify:** `pnpm worker:test` 전체 통과.
 
-**Review:** `worker_id`가 새 전역이나 기본 인자(`worker_id=None`)로 들어오지 않았는가 — 기본값을 주면 가드가 조용히 꺼진다. 기존 세 `mark_processing` 테스트가 전부 새 인자를 쓰는가.
+**Review:** `worker_id`가 새 전역이나 기본 인자(`worker_id=None`)로 들어오지 않았는가 — 기본값을 주면 가드가 조용히 꺼진다. `grep -n "mark_processing(" be/worker/tests be/worker/damwha_worker`로 남은 4인자 호출이 0인지 확인했는가.
 
 ---
 
@@ -900,6 +1015,15 @@ test("재시도 대기 중이면 배너가 회차와 남은 시간을 말한다"
   expect(await screen.findByText(/재시도 대기/)).toBeTruthy();
   expect(screen.getByText(/2\/5회차/)).toBeTruthy();
 });
+
+test("모델을 받는 중이면 재시도 문구 대신 다운로드 문구만 뜬다", async () => {
+  // 같은 status에 model_readiness의 다운로드 중 항목을 함께 준다. 이 파일이 이미 쓰는
+  // ModelReadiness 픽스처를 그대로 쓴다.
+  renderMeetingWithStatusAndDownloading(status, [downloadingModelFixture]);
+
+  expect(await screen.findByText(/모델을 받는 중/)).toBeTruthy();
+  expect(screen.queryByText(/재시도 대기/)).toBeNull();
+});
 ```
 
 `renderMeetingWithStatus`가 그 파일에 없으면 새로 만들지 말고, 기존 "처리 중 뱃지" 테스트가 쓰는 렌더 절차를 그대로 복사해 이 테스트 안에 편다.
@@ -931,10 +1055,13 @@ export type RetryStatus = {
   // 정상 재시도와 worker 미기동·DB 장애가 한 얼굴이 된다.
   const retryAt = status?.retry?.next_attempt_at ?? null;
   const retryMs = retryAt === null ? null : new Date(retryAt).getTime() - Date.now();
+  // 다운로드 문구가 이긴다. 그쪽은 stageLabel과 **독립된 span**이라(아래 downloading 분기),
+  // 여기서 막지 않으면 "재시도 대기"와 "모델을 받는 중"이 같이 뜬다.
+  const showRetry = downloading.length === 0 && retryMs !== null && retryMs > 0;
   const stageLabel = status?.stage
     ? (STAGE_LABELS[status.stage] ?? "처리 중")
-    : retryMs !== null && retryMs > 0
-      ? `재시도 대기 · ${status!.retry!.attempts}/${status!.retry!.max_attempts}회차 · 약 ${Math.max(1, Math.round(retryMs / 60000))}분 뒤`
+    : showRetry
+      ? `재시도 대기 · ${status!.retry!.attempts}/${status!.retry!.max_attempts}회차 · 약 ${Math.max(1, Math.round(retryMs! / 60000))}분 뒤`
       : "대기 중";
 ```
 
@@ -962,66 +1089,61 @@ git commit -m "feat: 재시도 대기를 화면이 회차와 남은 시간으로
 
 ---
 
-## Task 8: supervisor 재시작 시 `--once` 고아 회수
+## Task 8: worker 재시작이 이전 `--once` 자식을 거둔다
+
+**배선 지점이 중요하다.** supervisor가 크래시하면 `watchForDeath`(`supervisor.ts:557`)가
+`scheduleRestart`를 부르고, 그 타이머가 `background(spec)`를 부른다(`supervisor.ts:539-554`).
+`restartOnce`(`supervisor.ts:686`)는 **사람이 버튼을 눌렀을 때만** 지난다. P5-C7이 재현하는 것은
+크래시 경로이므로 **둘 다** 거쳐야 한다.
 
 **Files:**
-- Modify: `desktop/src/process/orphans.ts` (`ReapPlan`에 `only`, `reapByKind`의 분류 루프, 새 `reapOwnOnceChildren`)
-- Modify: `desktop/src/services/supervisor.ts` (`restartOnce`가 worker에 한해 스캔)
+- Modify: `desktop/src/process/orphans.ts` (`ReapPlan.only`, `reapOwnOnceChildren`)
+- Modify: `desktop/src/services/supervisor.ts` (`SupervisorHooks.reapOwnOnce`, 자동 재시작 타이머 + `restartOnce`)
+- Modify: `desktop/src/config/config.ts` (`APP_WORKER_PREFIX` 상수를 export, `RUN_WORKER_ID`를 그 상수로 만든다)
+- Modify: `desktop/src/main.ts` (hook 배선 — `readModelReadiness`를 넘기는 자리와 같은 곳)
 - Modify: `desktop/tests/process/orphans.test.ts`
+- Modify: `desktop/tests/services/supervisor.test.ts`
 - Create: `desktop/tests/config/worker-id-shape.test.ts`
 
 **Interfaces:**
-- Consumes: `reapByKind(d: ReapDeps, plan: ReapPlan, signalled?: ReapEntry[])`, `DamwhaProcess.once: boolean`
+- Consumes: `reapByKind(d: ReapDeps, plan: ReapPlan, signalled?: ReapEntry[])`, `classify`, `DamwhaProcess.once`, 테스트 헬퍼 `fakeKernel({alive, ps, runId, kill})`(`orphans.test.ts:317`), `ctx()`·`spec(id, over)`(`supervisor.test.ts:18`·`33`)
 - Produces:
   - `ReapPlan.only?: (p: DamwhaProcess) => boolean`
   - `reapOwnOnceChildren(d: ReapDeps): Promise<{ reaped: number[] } | { failed: true }>`
+  - `SupervisorHooks.reapOwnOnce?(): Promise<{ reaped: number[] } | { failed: true }>`
+  - `APP_WORKER_PREFIX = "desktop-"` — `desktop/src/config/config.ts`
 
-- [ ] **Step 1: 실패하는 테스트를 쓴다**
+- [ ] **Step 1: orphans 쪽 실패하는 테스트를 쓴다**
 
-`desktop/tests/process/orphans.test.ts`에 추가한다. 이 파일의 기존 테스트가 쓰는 가짜 `ReapDeps`와 `ps` 텍스트 픽스처를 그대로 쓴다.
+`desktop/tests/process/orphans.test.ts`에 추가한다. 이 파일의 `fakeKernel`과 `PS`·`TREES`·`MINE`
+상수를 그대로 쓴다 — 새 픽스처 형식을 만들지 않는다.
 
 ```ts
 test("reapOwnOnceChildren는 이번 실행의 --once 자식만 내린다", async () => {
-  const runId = "desktop-11111111-1111-1111-1111-111111111111";
   const ps = [
-    "  101 /tree/bin/python3.12 -m damwha_worker --run-id=" + runId,
-    "  102 /tree/bin/python3.12 -m damwha_worker --run-id=" + runId + " --once",
-    "  103 /tree/bin/python3.12 -m damwha_worker --run-id=desktop-other --once",
+    `  101 /b/python/bin/python3.12 -m damwha_worker --run-id=${MINE}`,
+    `  102 /b/python/bin/python3.12 -m damwha_worker --run-id=${MINE} --once`,
+    `  103 /b/python/bin/python3.12 -m damwha_worker --run-id=desktop-other --once`,
   ].join("\n");
-  const killed: number[] = [];
-  const d = makeDeps({ runId, ps, kill: (pid) => killed.push(pid) });
+  const k = fakeKernel({ alive: [101, 102, 103], ps: async () => ps });
 
-  const out = await reapOwnOnceChildren(d);
+  const out = await reapOwnOnceChildren(k.deps);
 
   expect(out).toEqual({ reaped: [102] });
-  expect(killed).toEqual([102]);
+  expect(k.alive.has(101)).toBe(true);
+  expect(k.alive.has(103)).toBe(true);
 });
 ```
 
-`makeDeps`·픽스처 이름이 그 파일에서 다르면 기존 테스트가 쓰는 이름을 그대로 따른다. `ps` 줄의 형식(`pid args`)도 기존 픽스처를 복사한다 — 새 형식을 만들지 않는다.
-
-`desktop/tests/config/worker-id-shape.test.ts` (스펙 §4.4의 "접두사를 unit이 고정한다"):
-
-```ts
-import { expect, test } from "vitest";
-import { childEnvForTest } from "../../src/config/config";
-
-test("이 실행의 WORKER_ID는 BE의 회수가 아는 접두사를 쓴다", () => {
-  // be/src/jobs/worker-identity.ts의 APP_WORKER_PREFIX와 같은 문자열이어야 한다.
-  // 둘 중 하나가 바뀌면 기동 회수가 조용히 아무것도 하지 않게 된다.
-  const env = childEnvForTest();
-  expect(env.WORKER_ID.startsWith("desktop-")).toBe(true);
-});
-```
-
-`config.ts`가 `WORKER_ID`를 관측할 수 있는 export를 갖고 있지 않으면, 테스트가 볼 수 있는 가장 좁은 것 하나만 새로 export한다(예: `export const RUN_WORKER_ID`). 그 파일의 기존 주석이 이유를 설명하고 있으므로 주석을 지우지 않는다.
+`PS` 픽스처의 줄 모양(경로·인터프리터 이름)이 위와 다르면 **그 파일의 모양을 따른다.** 여기서
+중요한 것은 세 줄의 구성(내 run-id supervisor / 내 run-id `--once` / 다른 run-id `--once`)이다.
 
 - [ ] **Step 2: 실패를 확인한다**
 
-Run: `pnpm desktop test`
+Run: `pnpm desktop test -- orphans`
 Expected: FAIL — `reapOwnOnceChildren is not exported`
 
-- [ ] **Step 3: `ReapPlan`에 `only`를 더한다**
+- [ ] **Step 3: `ReapPlan.only`를 더한다**
 
 `desktop/src/process/orphans.ts`:
 
@@ -1030,15 +1152,15 @@ export interface ReapPlan {
   target: Exclude<ProcessKind, "external">;
   words: ReapWords;
   /**
-   * 딱지가 맞아도 이 술어가 거짓이면 **건드리지 않는다**(untouchable). supervisor 재시작이
+   * 딱지가 맞아도 이 술어가 거짓이면 **건드리지 않는다**(untouchable). worker 재시작이
    * 이번 실행의 `--once` 자식만 거두기 위한 좁힘이다 — 같은 run-id의 supervisor 자신과
-   * embed는 재시작이 따로 다룬다.
+   * embed는 재시작 절차가 따로 다룬다.
    */
   only?(p: DamwhaProcess): boolean;
 }
 ```
 
-`reapByKind`의 분류 루프에서 `if (kind === plan.target)`을 바꾼다.
+`reapByKind`의 분류 루프에서:
 
 ```ts
     if (kind === plan.target && (plan.only === undefined || plan.only(p))) {
@@ -1072,11 +1194,11 @@ const OWN_ONCE_PLAN: ReapPlan = {
 };
 
 /**
- * supervisor를 다시 띄우기 **전에** 이번 실행의 `--once` 자식을 거둔다 (Phase 5 스펙 §8).
+ * worker를 다시 띄우기 **전에** 이번 실행의 `--once` 자식을 거둔다 (Phase 5 스펙 §8).
  *
- * 크래시로 재시작되는 supervisor는 앞 supervisor의 `--once` 자식을 추적하지 않는다 —
- * 그 자식은 `start_new_session=True`라 부모가 사라지면 훑을 트리가 없다(Phase 2 이월).
- * 스캔이 실패해도 재시작을 막지 않는다 — 부르는 쪽이 로그만 남기고 계속한다.
+ * 크래시로 사라진 supervisor의 `--once` 자식은 아무도 추적하지 않는다 — `start_new_session=True`라
+ * 부모가 먼저 사라지면 자손 SIGKILL이 훑을 트리가 없다(Phase 2 이월). run-id는 **이번 실행**이므로
+ * 기동 정리(`reapOrphans`, 대상 `orphan`)는 이 프로세스를 보지 않는다.
  */
 export async function reapOwnOnceChildren(d: ReapDeps): Promise<{ reaped: number[] } | { failed: true }> {
   const run = await reapByKind(d, OWN_ONCE_PLAN);
@@ -1086,160 +1208,356 @@ export async function reapOwnOnceChildren(d: ReapDeps): Promise<{ reaped: number
 
 - [ ] **Step 5: 통과를 확인한다**
 
-Run: `pnpm desktop test`
-Expected: PASS
+Run: `pnpm desktop test -- orphans`
+Expected: PASS — 기존 `reapOrphans`·`reapOwnedOnQuit` 테스트도 그대로 통과한다(`only`가 없으면 동작이 같다).
 
-- [ ] **Step 6: `restartOnce`에 배선한다**
+- [ ] **Step 6: 감독자 쪽 실패하는 테스트를 쓴다 — 크래시 경로가 먼저다**
 
-`desktop/src/services/supervisor.ts`의 `restartOnce`에서 옛 자식을 내린 **뒤**, 새로 띄우기 **전** 자리에 넣는다. `id === "worker"`일 때만 돈다.
+`desktop/tests/services/supervisor.test.ts`에 추가한다. 이 파일의 `ctx()`·`spec()`을 쓰고,
+재시작을 다루는 기존 테스트(`restart: { maxAttempts: 2, backoffMs: [5] }`를 쓰는 것들)가 핸들을
+어떻게 흉내 내는지 그대로 따른다.
 
 ```ts
-    if (id === "worker") {
-      // 앞 supervisor가 크래시로 사라졌으면 그 `--once` 자식은 아무도 추적하지 않는다.
-      // 스캔 실패는 재시작을 막지 않는다 (Phase 5 스펙 §8).
-      try {
-        const out = await deps.reapOwnOnce();
-        if ("failed" in out) log("worker: --once 자식 스캔에 실패했어요 — 재시작은 계속해요");
-        else if (out.reaped.length > 0) log(`worker: 앞 실행의 --once 자식 ${out.reaped.length}개를 거뒀어요`);
-      } catch (e) {
-        log(`worker: --once 자식 스캔이 던졌어요 — 재시작은 계속해요: ${String(e)}`);
-      }
+it("worker가 크래시로 재시작되면 다시 띄우기 전에 --once 자식을 거둔다", async () => {
+  const order: string[] = [];
+  let exit: ((code: number | null) => void) | null = null;
+  const handle = {
+    pid: 1234,
+    onExit: (cb: (code: number | null) => void) => { exit = cb; },
+    stderrTail: () => "",
+  };
+  const s = createSupervisor(
+    [
+      spec("worker", {
+        restart: { maxAttempts: 2, backoffMs: [0] },
+        launch: async () => { order.push("launch"); return { handle: handle as never, owned: true }; },
+      }),
+    ],
+    ctx(),
+    { reapOwnOnce: async () => { order.push("reap"); return { reaped: [102] }; } },
+  );
+  await s.start();
+  exit!(1); // 크래시 — watchForDeath → scheduleRestart
+
+  await vi.waitFor(() => expect(order).toEqual(["launch", "reap", "launch"]));
+});
+
+it("사람이 누른 재시작도 같은 회수를 지난다", async () => {
+  const order: string[] = [];
+  const s = createSupervisor(
+    [spec("worker", { launch: async () => { order.push("launch"); return { handle: null, owned: true }; } })],
+    ctx(),
+    { reapOwnOnce: async () => { order.push("reap"); return { reaped: [] }; } },
+  );
+  await s.start();
+  await s.restartService("worker");
+  expect(order).toEqual(["launch", "reap", "launch"]);
+});
+
+it("스캔이 실패해도 재시작을 막지 않는다", async () => {
+  const order: string[] = [];
+  const s = createSupervisor(
+    [spec("worker", { launch: async () => { order.push("launch"); return { handle: null, owned: true }; } })],
+    ctx(),
+    { reapOwnOnce: async () => { order.push("reap"); return { failed: true as const }; } },
+  );
+  await s.start();
+  await s.restartService("worker");
+  expect(order).toEqual(["launch", "reap", "launch"]);
+});
+
+it("worker가 아닌 서비스의 재시작은 회수를 부르지 않는다", async () => {
+  const calls: string[] = [];
+  const s = createSupervisor(
+    [spec("embed")],
+    ctx(),
+    { reapOwnOnce: async () => { calls.push("reap"); return { reaped: [] }; } },
+  );
+  await s.start();
+  await s.restartService("embed");
+  expect(calls).toEqual([]);
+});
+```
+
+핸들 모양(`onExit`·`stderrTail`)이 이 파일의 기존 가짜와 다르면 **기존 것을 쓴다.** 첫 테스트가
+고정하려는 것은 `onExit → 예약된 재시작` 경로에서 회수가 `launch`보다 **먼저** 불린다는 것이다.
+
+- [ ] **Step 7: 실패를 확인한다**
+
+Run: `pnpm desktop test -- supervisor`
+Expected: FAIL — `order`에 `"reap"`이 없다
+
+- [ ] **Step 8: 감독자에 배선한다**
+
+`SupervisorHooks`에 (`readModelReadiness` 옆):
+
+```ts
+  /**
+   * worker를 다시 띄우기 전에 이번 실행의 `--once` 자식을 거둔다 (Phase 5 스펙 §8).
+   * 배선은 main.ts가 한다 — 감독자는 `ps`에 닿는 방법을 몰라야 vitest에서 돈다
+   * (`readModelReadiness`와 같은 이유).
+   */
+  reapOwnOnce?(): Promise<{ reaped: number[] } | { failed: true }>;
+```
+
+`createSupervisor` 안에, `scheduleRestart`보다 **위에**:
+
+```ts
+  /**
+   * 자동 재시작(크래시)과 사람이 누른 재시작 둘 다 여기를 지난다. worker에만 돈다 —
+   * `--once` 자식은 worker만 만든다. 스캔 실패·예외는 재시작을 막지 않는다.
+   */
+  async function reapOwnOnceBefore(id: ServiceId): Promise<void> {
+    if (id !== "worker" || hooks.reapOwnOnce === undefined) return;
+    try {
+      const out = await hooks.reapOwnOnce();
+      if ("failed" in out) log(`${id}: --once 자식 스캔에 실패했어요 — 재시작은 계속해요`);
+      else if (out.reaped.length > 0) log(`${id}: 앞 실행의 --once 자식 ${out.reaped.length}개를 거뒀어요`);
+    } catch (e) {
+      log(`${id}: --once 자식 스캔이 던졌어요 — 재시작은 계속해요: ${reason(e)}`);
     }
+  }
 ```
 
-`deps.reapOwnOnce`는 감독자를 만들 때 주입한다 — `main.ts`가 `systemReapDeps({runId, trees, log})`로 만든 `ReapDeps`를 `() => reapOwnOnceChildren(d)`로 싸서 넘긴다. 테스트가 가짜를 넣을 수 있게 **옵션 의존**으로 두고, 없으면 이 블록을 건너뛴다.
-
-- [ ] **Step 7: 감독자 테스트로 배선을 고정한다**
-
-`desktop/tests/services/` 아래 supervisor 재시작을 다루는 기존 테스트 파일에 케이스를 더한다(없으면 `desktop/tests/services/restart-reap.test.ts`를 새로 만든다).
+`scheduleRestart`의 타이머를 바꾼다 (`supervisor.ts:549-553`):
 
 ```ts
-test("worker 재시작은 다시 띄우기 전에 --once 자식을 거둔다", async () => {
-  const calls: string[] = [];
-  const sup = makeSupervisor({
-    reapOwnOnce: async () => { calls.push("reap"); return { reaped: [102] }; },
-    onBring: () => calls.push("bring"),
-  });
-  await sup.restartService("worker");
-  expect(calls).toEqual(["reap", "bring"]);
-});
+    rt.restartTimer = arm(delay, () => {
+      rt.restartTimer = null;
+      if (stopping) return;
+      void reapOwnOnceBefore(spec.id).then(() => {
+        // 스캔 동안 종료가 시작됐을 수 있다. 종료가 치운 것을 되살리지 않는다.
+        if (stopping) return;
+        background(spec);
+      });
+    });
+```
 
-test("스캔이 실패해도 재시작을 막지 않는다", async () => {
-  const calls: string[] = [];
-  const sup = makeSupervisor({
-    reapOwnOnce: async () => { calls.push("reap"); return { failed: true as const }; },
-    onBring: () => calls.push("bring"),
-  });
-  await sup.restartService("worker");
-  expect(calls).toEqual(["reap", "bring"]);
+`restartOnce`에서는 옛 자식을 내린 **뒤**, 새로 띄우는 `bring` 호출 **바로 앞**에 한 줄:
+
+```ts
+    await reapOwnOnceBefore(id);
+```
+
+`specStop`이 실패해 **다시 띄우지 않고 돌아가는 경로**보다 뒤에 둔다 — 띄우지 않을 것이면 거둘
+이유도 없다.
+
+- [ ] **Step 9: 통과를 확인한다**
+
+Run: `pnpm desktop test -- supervisor`
+Expected: PASS (4 tests)
+
+- [ ] **Step 10: 접두사를 두 패키지가 같이 쓰는지 고정한다**
+
+`desktop/src/config/config.ts`에서 상수를 꺼내고 `RUN_WORKER_ID`가 그것을 쓰게 한다.
+
+```ts
+/**
+ * 앱이 띄운 worker의 신분 접두사. BE의 `be/src/jobs/worker-identity.ts`가 같은 문자열로
+ * 기동 회수의 경계를 긋는다 — 한쪽만 바꾸면 회수가 조용히 아무것도 하지 않게 된다.
+ */
+export const APP_WORKER_PREFIX = "desktop-";
+
+const RUN_WORKER_ID = `${APP_WORKER_PREFIX}${randomUUID()}`;
+```
+
+`desktop/tests/config/worker-id-shape.test.ts`:
+
+```ts
+import { expect, test } from "vitest";
+import { APP_WORKER_PREFIX, childEnv } from "../../src/config/config";
+import type { LaunchContext } from "../../src/services/types";
+
+function ctx(): LaunchContext {
+  return {
+    repoRoot: "/r", userData: "/u", packaged: false, databaseMode: "embedded", env: {},
+    bins: { python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+    runId: "desktop-test", searchDirs: [], logFile: (id) => `/u/logs/${id}.log`,
+    signal: new AbortController().signal,
+  };
+}
+
+test("자식 env의 WORKER_ID는 BE의 회수가 아는 접두사를 쓴다", () => {
+  // be/src/jobs/worker-identity.ts의 APP_WORKER_PREFIX와 같은 문자열이어야 한다.
+  expect(APP_WORKER_PREFIX).toBe("desktop-");
+  const env = childEnv(ctx(), {});
+  expect(env.WORKER_ID.startsWith(APP_WORKER_PREFIX)).toBe(true);
 });
 ```
 
-그 파일의 기존 감독자 생성 헬퍼 이름·시그니처를 그대로 따른다.
+`ctx()`는 `supervisor.test.ts:18`의 것과 같은 모양이다 — 그 파일에서 복사한다.
 
-- [ ] **Step 8: 통과를 확인한다**
+- [ ] **Step 11: main.ts에 hook을 배선한다**
+
+`main.ts`가 감독자를 만들며 `readModelReadiness`를 넘기는 곳에 같이 넣는다. `runId`·`trees`·로그는
+`reapBeforeStart`를 부를 때 이미 만들어 둔 것을 쓴다(`systemReapDeps`).
+
+```ts
+    reapOwnOnce: () => reapOwnOnceChildren(systemReapDeps({ runId, trees, log })),
+```
+
+이름이 그 자리에서 다르면 **그 자리의 이름을 쓴다** — 새 `ReapDeps`를 따로 만들지 않는다.
+
+- [ ] **Step 12: 전부 돌린다**
 
 Run: `pnpm desktop test && pnpm desktop lint`
 Expected: PASS
 
-- [ ] **Step 9: 커밋**
+- [ ] **Step 13: 커밋**
 
 ```bash
-git add desktop/src/process/orphans.ts desktop/src/services/supervisor.ts desktop/tests/
+git add desktop/src/process/orphans.ts desktop/src/services/supervisor.ts \
+        desktop/src/config/config.ts desktop/src/main.ts desktop/tests/
 git commit -m "fix(desktop): worker 재시작이 앞 supervisor의 --once 자식을 거둔다"
 ```
 
-**Verify:** `pnpm desktop test && pnpm desktop lint` 통과.
+**Verify:** `pnpm desktop test && pnpm desktop lint` 통과. 크래시 경로 테스트가 `["launch","reap","launch"]`를 본다.
 
-**Review:** `only`가 없는 기존 두 계획(`ORPHAN_PLAN`·`QUIT_PLAN`)의 동작이 그대로인가 — `plan.only === undefined`가 참이어야 한다. `reapOwnOnceChildren`이 supervisor 자신(`once === false`)을 대상에 넣지 않는가. 스캔 실패가 재시작을 막지 않는가.
+**Review:** 회수가 **크래시 경로**(`scheduleRestart`의 타이머)에도 붙었는가 — `restartOnce`에만 붙이면 P5-C7이 재현하는 `kill -9` 회차에서 한 번도 돌지 않는다. `only`가 없는 기존 두 계획(`ORPHAN_PLAN`·`QUIT_PLAN`)의 동작이 그대로인가. `reapOwnOnceChildren`이 supervisor 자신(`once === false`)을 대상에 넣지 않는가. 스캔 실패가 재시작을 막지 않는가. `stopping`을 await 뒤에 다시 보는가.
 
 ---
 
-## Task 9: 회수·claim·취소 경합 회귀 테스트 (P5-C11)
+## Task 9: 회수·claim·취소·재처리 경합 회귀 테스트 (P5-C11)
 
 **Files:**
 - Create: `be/test/reclaim-races.spec.ts`
 
 **Interfaces:**
-- Consumes: `JobsRepository.reclaimOrphaned`·`claim`, `MeetingsService`의 취소 경로(없으면 SQL로 대체)
+- Consumes: `JobsRepository.reclaimOrphaned`·`claim`·`cancel`·`JobsRepository.cancelledError`(정적), `MeetingsRepository.markCancelled`·`bumpVersionForReprocess`·`setCurrentJob`·`enqueue`, `pg`의 `Client`
 - Produces: 없음 (회귀 고정만)
+
+**실제 경로를 쓴다.** `locked_by`를 손으로 `UPDATE`해 claim을 흉내 내지 않는다 — 그러면 행 잠금
+직렬화를 전혀 시험하지 않는다.
 
 - [ ] **Step 1: 테스트를 쓴다**
 
 `be/test/reclaim-races.spec.ts`:
 
 ```ts
+import { Client } from 'pg';
 import { startTestDb, StartedTestDb } from './db';
 import { JobsRepository } from '../src/jobs/jobs.repository';
+import { MeetingsRepository } from '../src/meetings/meetings.repository';
 
 describe('reclaimOrphaned races', () => {
   let db: StartedTestDb;
-  let repo: JobsRepository;
-  beforeAll(async () => { db = await startTestDb(); repo = new JobsRepository(); });
+  let jobs: JobsRepository;
+  let meetings: MeetingsRepository;
+  beforeAll(async () => {
+    db = await startTestDb();
+    jobs = new JobsRepository();
+    meetings = new MeetingsRepository();
+  });
   afterEach(async () => { await db.reset(); });
   afterAll(async () => { await db.stop(); });
 
   async function orphanJob() {
     const m = await db.pool.query(
       `INSERT INTO meeting(audio_key, status) VALUES('k','processing') RETURNING id`);
-    const mid = m.rows[0].id as string;
+    const meetingId = m.rows[0].id as string;
     const j = await db.pool.query(
       `INSERT INTO job(type, meeting_id, payload, status, locked_by, locked_at, attempts, max_attempts)
-       VALUES('process_meeting',$1,'{}','running','desktop-old', now(), 1, 5) RETURNING id`, [mid]);
-    const jid = j.rows[0].id as string;
-    await db.pool.query(`UPDATE meeting SET current_job_id=$1 WHERE id=$2`, [jid, mid]);
-    return { jobId: jid, meetingId: mid };
+       VALUES('process_meeting',$1,'{}','running','desktop-old', now(), 1, 5) RETURNING id`,
+      [meetingId]);
+    const jobId = j.rows[0].id as string;
+    await db.pool.query(`UPDATE meeting SET current_job_id=$1 WHERE id=$2`, [jobId, meetingId]);
+    return { jobId, meetingId };
   }
 
-  it('reclaim → claim: the new worker owns the job exactly once', async () => {
+  it('reclaim → claim: the new worker owns it once, attempts advances by one', async () => {
     const { jobId } = await orphanJob();
-    await repo.reclaimOrphaned(db.pool, 'desktop-new');
-    const claimed = await repo.claim(db.pool, 'desktop-new');
+    await jobs.reclaimOrphaned(db.pool, 'desktop-new');
+    const claimed = await jobs.claim(db.pool, 'desktop-new');
     expect(claimed?.id).toBe(jobId);
     const { rows } = await db.pool.query(
       'SELECT status, locked_by, attempts FROM job WHERE id=$1', [jobId]);
     expect(rows[0]).toMatchObject({ status: 'running', locked_by: 'desktop-new', attempts: 2 });
   });
 
-  it('claim → reclaim: a job already taken by this run is left alone', async () => {
+  it('a claim racing an open reclaim transaction converges on one owner', async () => {
     const { jobId } = await orphanJob();
-    // 앞 실행의 행을 이번 실행이 먼저 가져간 상황을 직접 만든다.
-    await db.pool.query(`UPDATE job SET locked_by='desktop-new' WHERE id=$1`, [jobId]);
-    const res = await repo.reclaimOrphaned(db.pool, 'desktop-new');
-    expect(res.requeued).toBe(0);
-    const { rows } = await db.pool.query('SELECT status FROM job WHERE id=$1', [jobId]);
-    expect(rows[0].status).toBe('running');
+    const a = new Client({ connectionString: db.url });
+    const b = new Client({ connectionString: db.url });
+    await a.connect(); await b.connect();
+    try {
+      await a.query('BEGIN');
+      await jobs.reclaimOrphaned(a, 'desktop-new');   // 행을 잠근 채 열어 둔다
+      const claiming = jobs.claim(b, 'desktop-new');  // 같은 행을 노린다
+      await a.query('COMMIT');
+      const claimed = await claiming;
+
+      const { rows } = await db.pool.query(
+        'SELECT status, locked_by FROM job WHERE id=$1', [jobId]);
+      // claim이 SKIP LOCKED로 건너뛰었으면 queued, 잡았으면 running — 둘 중 하나로
+      // **수렴**해야 한다. running인데 locked_by가 옛 신분이거나, queued인데 잠긴 채
+      // 남는 상태는 없어야 한다.
+      if (claimed === null) expect(rows[0]).toMatchObject({ status: 'queued', locked_by: null });
+      else expect(rows[0]).toMatchObject({ status: 'running', locked_by: 'desktop-new' });
+    } finally { await a.end(); await b.end(); }
   });
 
   it('cancel → reclaim: a cancelled job is not resurrected', async () => {
     const { jobId, meetingId } = await orphanJob();
-    await db.pool.query(
-      `UPDATE job SET status='failed', error=jsonb_build_object('code','cancelled') WHERE id=$1`, [jobId]);
-    await db.pool.query(`UPDATE meeting SET status='failed' WHERE id=$1`, [meetingId]);
-    const res = await repo.reclaimOrphaned(db.pool, 'desktop-new');
+    const error = JobsRepository.cancelledError(null);
+    await jobs.cancel(db.pool, jobId, error);            // 실제 취소 경로
+    await meetings.markCancelled(db.pool, meetingId, error);
+
+    const res = await jobs.reclaimOrphaned(db.pool, 'desktop-new');
+
     expect(res.requeued).toBe(0);
-    const { rows } = await db.pool.query('SELECT status, error FROM job WHERE id=$1', [jobId]);
-    expect(rows[0]).toMatchObject({ status: 'failed' });
-    expect(rows[0].error.code).toBe('cancelled');
+    const job = await db.pool.query('SELECT status, error FROM job WHERE id=$1', [jobId]);
+    expect(job.rows[0].status).toBe('failed');
+    expect(job.rows[0].error.code).toBe(error.code);
+    const mt = await db.pool.query('SELECT status FROM meeting WHERE id=$1', [meetingId]);
+    expect(mt.rows[0].status).toBe('failed');
+  });
+
+  it('reprocess → reclaim: the new queued job is untouched and the old one is not revived', async () => {
+    const { jobId: oldJobId, meetingId } = await orphanJob();
+    const error = JobsRepository.cancelledError(null);
+    await jobs.cancel(db.pool, oldJobId, error);
+    await meetings.markCancelled(db.pool, meetingId, error);
+
+    // 실제 재처리 경로 — 버전 bump → enqueue → current_job 교체
+    const version = await meetings.bumpVersionForReprocess(db.pool, meetingId);
+    const fresh = await jobs.enqueue(db.pool, {
+      type: 'process_meeting', meetingId, payload: { processing_version: version },
+    });
+    await meetings.setCurrentJob(db.pool, meetingId, fresh.id);
+
+    const res = await jobs.reclaimOrphaned(db.pool, 'desktop-new');
+
+    expect(res.requeued).toBe(0);
+    const { rows } = await db.pool.query(
+      'SELECT status, locked_by, attempts FROM job WHERE id=$1', [fresh.id]);
+    expect(rows[0]).toMatchObject({ status: 'queued', locked_by: null, attempts: 0 });
+    const old = await db.pool.query('SELECT status FROM job WHERE id=$1', [oldJobId]);
+    expect(old.rows[0].status).toBe('failed');
   });
 });
 ```
 
+`reclaimOrphaned`·`claim`이 `Queryable`을 받으므로 `pg.Client`를 그대로 넘길 수 있다. 타입이
+맞지 않으면 `as never`로 덮지 말고 `Queryable`이 요구하는 모양을 확인한다.
+
 - [ ] **Step 2: 돌린다**
 
 Run: `pnpm be test -- reclaim-races.spec.ts`
-Expected: PASS (3 tests) — Task 2·3이 옳게 구현됐으면 그대로 통과한다. 하나라도 실패하면 **구현이 틀린 것이지 테스트가 틀린 것이 아니다.**
+Expected: PASS (4 tests) — Task 2·3이 옳게 구현됐으면 그대로 통과한다. 하나라도 실패하면
+**구현이 틀린 것이지 테스트가 틀린 것이 아니다.**
 
 - [ ] **Step 3: 커밋**
 
 ```bash
 git add be/test/reclaim-races.spec.ts
-git commit -m "test(be): 회수와 claim·취소의 경합을 고정한다"
+git commit -m "test(be): 회수와 claim·취소·재처리의 경합을 고정한다"
 ```
 
-**Verify:** `pnpm be test` 전체 통과.
+**Verify:** `pnpm be test` 전체 통과. 두 연결을 쓰는 테스트가 커넥션을 반드시 닫는다(`finally`).
 
-**Review:** 세 순서가 전부 **최종 상태**를 단언하는가(중간 반환값만 보지 않는가). `cancel → reclaim`이 `error.code`까지 보는가 — 상태만 보면 회수가 덮어써도 통과한다.
+**Review:** claim을 흉내 내지 않고 **실제 `claim`**을 쓰는가. 취소·재처리도 실제 repository 메서드를
+쓰는가. 경합 테스트가 두 결과(SKIP LOCKED / 잡음)를 모두 허용하되 **어느 쪽이든 정합**임을
+단언하는가 — 한쪽만 허용하면 스케줄 운에 따라 깜빡인다.
 
 ---
 
@@ -1371,6 +1689,25 @@ git commit -m "docs(phase5): 통합 검증 결과와 운영 문서를 실제와 
 
 ## Self-Review 기록
 
-- **스펙 coverage:** §4(A)→Task 2·3·4, §5(B)→Task 5, §6(C)→Task 7, §7(D)→Task 6, §8(E)→Task 8, §10·§11→Task 10, §11의 P5-C11→Task 9, P5-C12→Task 6, §12→Task 1. 빠진 절 없음.
+- **스펙 coverage:** §4(A)→Task 2·3·4, §5(B)→Task 5, §6(C)→Task 7, §7(D)→Task 6, §8(E)→Task 8, §10·§11→Task 10, §11의 P5-C2→Task 4 Step 5(e2e), P5-C11→Task 9, P5-C12→Task 6, §12→Task 1. 빠진 절 없음.
 - **Placeholder:** 없음. Task 1의 결과 문서 템플릿 안 `<...>`는 실행자가 실제 관찰로 채울 자리이고, 채우는 방법이 같은 Step에 있다.
 - **Type consistency:** `reclaimOrphaned`는 Task 2에서 `{ requeued, failedLive }`로 정의하고 Task 3·4·9가 같은 이름을 쓴다. `mark_processing`의 다섯 번째 인자 `worker_id`는 Task 6에서만 바뀌고 Task 5의 헬퍼(`_meeting_with_running_job`)를 Task 6이 이어 쓴다. `retry`는 BE·FE 양쪽에서 `{ attempts, max_attempts, next_attempt_at }`로 같다.
+
+---
+
+## 리뷰 기록
+
+**계획 검증 1차 — 코덱스 (`gpt-5.6-terra`, effort medium, 읽기 전용), 대상 `1f0dcef`.**
+
+| 지적 | 판정 | 조치 |
+| --- | --- | --- |
+| Blocker — Task 8의 배선 지점이 크래시 재시작 경로가 아니다. 크래시는 `watchForDeath`→`scheduleRestart`→타이머→`background(spec)`이고 `restartOnce`는 사람이 누를 때만 지난다 | **유효** — `supervisor.ts:539-585`·`662-686` 확인 | Task 8을 다시 썼다. `reapOwnOnceBefore`를 타이머와 `restartOnce` **둘 다**에 붙이고, 크래시 경로(`onExit`→예약 재시작)를 재현하는 테스트를 첫 케이스로 두었다 |
+| Blocker — Task 7의 코드가 "다운로드 문구가 이긴다"를 구현하지 않는다. 다운로드 표시는 `stageLabel`과 독립된 span이다 | **유효** | `showRetry`에 `downloading.length === 0`을 넣고, 둘이 같이 뜨지 않는지 보는 FE 테스트를 더했다 |
+| Blocker — P5-C11이 실제 경로를 쓰지 않는다(claim을 `UPDATE`로 흉내, 취소·재처리 미검증, 동시 트랜잭션 없음) | **유효** | Task 9를 다시 썼다. 실제 `claim`·`cancel`·`bumpVersionForReprocess`를 쓰고, 두 `pg.Client`로 열린 회수 트랜잭션과 claim을 경합시킨다 |
+| Important — `max_attempts` 기본값 변경이 `jobs.repository.spec.ts:121-127`을 깨는데 Task 5가 누락 | **유효** — 그 테스트가 `toBe(3)`을 단언한다 | Task 5의 Files·Step 9·커밋에 그 파일을 넣었다 |
+| Important — Task 6이 `mark_processing` 테스트 호출을 셋으로 셌다. 실제 넷(L46·L47·L303·L315) | **유효** | 네 줄을 번호로 적고, 남은 4인자 호출이 0인지 grep으로 확인하는 Review 항목을 더했다. `run_process_meeting`이 이미 `worker_id`를 받는다는 사실도 적었다 |
+| Important — Task 4가 `isAppWorkerId`를 만들고 쓰지 않는다 | **유효** | 부트스트랩 가드를 `isAppWorkerId`로 바꾸고 `WORKER_ID=worker-1` 케이스를 더했다 |
+| Important — P5-C2가 API 기동 + 행 불변을 함께 보지 않는다 | **유효** | Task 4에 `reclaim-bootstrap.e2e-spec.ts`를 더했다. `AppModule`을 실제로 띄우고 세 행(앞 실행·이번 실행·외부)을 한 번에 본다 |
+| Minor — Task 8의 테스트가 없는 이름을 쓴다(`childEnvForTest`·`makeDeps`), `RUN_WORKER_ID`는 private, `config.ts`가 Files에 없다 | **유효** | 실제 이름으로 고쳤다 — `fakeKernel`(`orphans.test.ts:317`), `childEnv(ctx, inherited)`. `APP_WORKER_PREFIX`를 export하고 `config.ts`·`main.ts`를 Files에 넣었다 |
+| Minor — Task 1의 복구가 중단 안전하지 않다 | **유효** | `trap restore EXIT INT TERM` 스크립트로 바꾸고, 원본이 디렉터리로 돌아왔는지 눈으로 보는 Step 3b를 더했다 |
+| `recorded_at` 픽스처·명령 인자 전달 가정은 문제 없다 | **확인** | 그대로 둔다 |
