@@ -964,11 +964,11 @@ R-5a(`<userData>/data` 151 MB ditto 백업)다.
 | ID | 판정 | 증거 |
 | --- | --- | --- |
 | C1 | 충족 | 토큰 없는 packaged 첫 기동 — `"토큰 창을 띄웁니다. 서비스는 아직 띄우지 않았어요"`, 번들 python 0·postgres 0·소켓 0·3000/8100 리슨 0, Electron만 생존 |
-| C2 | **충족(부분)** | `hf-token.bin`은 51바이트 바이너리(0600). **남은 절반은 토큰 문자열 전수 grep이고 사용자만 실행할 수 있다** — 에이전트가 토큰 원문을 받지 않는 것이 절차 규칙이다 |
+| C2 | **충족(부분)** | `hf-token.bin`은 51바이트 바이너리(0600). 상태 창은 토큰을 **마스킹해** 보인다(`hf_****_****wLlQ`) — 화면 어디에도 평문이 없다(2026-09-19 관측). **남은 절반은 토큰 문자열 전수 grep이고 사용자만 실행할 수 있다** — 에이전트가 토큰 원문을 받지 않는 것이 절차 규칙이다 |
 | C3 | 충족 | 아무 문자열 → `"허깅페이스 토큰이 유효하지 않아요. (HTTP 401 …)"`, 토큰 원문·원본 예외 노출 없음, 파일 미생성 |
 | C4 | 충족 | 토큰 A로 교체 → 재시작(run-id `8b48…`→`b126…`→`a30c…`, 옛 run-id 프로세스 0) → 403 해소, pyannote·whisper·speechbrain ready, job_8·job_9 done |
 | C5 | 충족 | `models/` 비움(4.3G → 0, 승인) 뒤 서비스 4개 기동 → 실오디오 1건이 전사·화자분리·요약·검색까지 완주(job_8·job_9 done) |
-| C6 | 충족(부분) | `model_readiness`의 bge-m3가 `state=ready, writer=embed, bytes=2,271,064,456 = bytes_total`, started/updated 기록 — **진행이 실제로 올라왔다.** 화면 관찰 기록은 없다 |
+| C6 | 충족(부분) | `model_readiness`의 bge-m3가 `state=ready, writer=embed, bytes=2,271,064,456 = bytes_total`, started/updated 기록 — **진행이 실제로 올라왔다.** 화면도 확인했다(2026-09-19 관측 회차): 상태 창의 **"모델 준비"** 절이 다섯 모델을 각각 한 줄로 그리고 전부 `● 준비됨`이다(`BAAI/bge-m3`·`mlx-community/Qwen3.5-4B-8bit`·`speechbrain/spkrec-ecapa-voxceleb`·`mlx-community/whisper-large-v3-turbo`·`pyannote/speaker-diarization-community-1`). **다운로드 중의 진행 표시는 여전히 미관측**이다 — 그 화면은 받는 중이어야 뜬다 |
 | C7 | 충족(**기준 좁힘**) | 좁힘(사용자 결정 D-B, 스펙 개정 `1952305`): *"사유가 뜨고 복구 뒤 **다음 job**이 완주한다"* — 바이트 이어받기는 Phase 5로. 재판정: 마지막 진행 08:06:12 → 08:07:42 failed = **무진행 90초 정확**, `kind=TRANSIENT`, job_42 queued → **5초 만에 자동 재claim**(1차에서는 11분 방치였다), 복구 뒤 job_43 done(attempts=1, 1759MB) |
 | C8 | 충족 | pyannote 항목 `kind=PERMANENT`, `error="hf_gate_not_accepted: … (403) — accept the model's user conditions…"`, job 오류 payload에 코드·수락 URL, 전사 전 단계에서 멈춰 utterance 0. 401 절반의 문구는 C3가 보인다 |
 | C9 | 충족 | 두 번째 실행에 새 `downloading` **0건**(R-9b — 실제 바이트 전송에만 쓴다). C14·C29가 같은 사실을 파일 목록 diff로 재확인 |
@@ -978,7 +978,7 @@ R-5a(`<userData>/data` 151 MB ditto 백업)다.
 | C13 | 충족 | **구조적 증명**: 자식 PATH가 `<python>/bin:<ffmpeg>/bin`뿐이라 맨 이름이 개발 도구로 풀릴 자리가 없다(R-5c). `capabilities.py`가 `/usr/sbin/sysctl`을 절대 경로로 부르는 것이 그 대가다 |
 | C14 | 충족 | `out/mac-arm64`(+`.tmp`) 디렉터리째 삭제 → 재빌드 `PACKAGE_RC=0`·`CHECKBUNDLE_RC=0`·**31 PASS/0 FAIL**, wk 키 `bafc8282af270b36` 동일, 기동 15.5초. **`<userData>/models/hub` 47파일의 크기·경로·mtime이 `diff` 0건, 8.8G 불변, 새 `downloading` 0건** |
 | C15 | 충족 | `check-bundle.mjs` **31건 PASS** — 패키징 회차마다 재확인(C14 회차 포함) |
-| C16 | 충족 | 저장소를 rename해 **디스크에서 사라진 상태**로 사본 실행 — 21초에 네 서비스 running/ok, 저장소 경로 참조 0건, 실행 python 3개 전부 사본 트리, `health=200`, **`config.json` 무변**(옛 `REPO_ROOT`가 적혀 있어도 packaged는 읽지 않는다 — `repo-root.ts`의 `if (q.packaged) return null`) |
+| C16 | 충족 | 저장소를 rename해 **디스크에서 사라진 상태**로 사본 실행 — 21초에 네 서비스 running/ok, 저장소 경로 참조 0건, 실행 python 3개 전부 사본 트리, `health=200`, **`config.json` 무변**(옛 `REPO_ROOT`가 적혀 있어도 packaged는 읽지 않는다 — `repo-root.ts`의 `if (q.packaged) return null`). **화면도 확인했다**(2026-09-19 관측 회차, 저장소를 다시 치운 상태로 재기동해 10초에 네 서비스 running/ok): 폴더 선택창 없이 메인 창이 뜨고 회의 목록·전사·요약이 그려졌으며, 상태 창의 디버깅 접속 경로가 **`/Users/gim-yeongjae/Applications/Damwha.app/Contents/Resources/postgres/bin/psql`** — 저장소 밖 사본이다(저장소가 제자리일 때의 같은 줄은 `project/daewha/desktop/out/…`였다) |
 | C17 | 충족 | ⌘Q 뒤 번들 python 0·postgres 0·psql 0·Electron 0. **run-id 없는 capabilities 프로브와 `resource_tracker`도 사라졌다** |
 | C18 | 충족 | main을 `kill -9` → 고아 4개 + 고아 postmaster → 재실행이 전부 정리(옛 pid 전멸), `"고아 postmaster(pid 49921) 종료 결과 — fast"` |
 | C19-a | 충족 | supervisor만 `kill -9` → `"worker: 종료 (코드 137)"`(Task 5 수정 실증 — 전에는 코드 0), `--once`·`llm_entry`가 부모 없이 생존 → ⌘Q에 전부 사라짐 |
@@ -1101,12 +1101,13 @@ R-5a(`<userData>/data` 151 MB ditto 백업)다.
    `error_kind=TRANSIENT`이고, 화면은 그 값을 그리는 코드 경로다.
 3. **C7 1단계의 전제(버려진 다운로드 표식)는 `app_setting`에 시뮬레이션해 넣은 것**이다(R-12g).
    2단계에서 실제 끊김으로 다시 확인했다.
-4. **C16의 화면을 직접 보지 않았다** — computer-use 권한(손쉬운 사용·화면 기록) 미승인. "폴더
-   선택창 없음"은 그 대화상자가 코드에 없다는 사실(`repo-root.ts`)과 기동이 막히지 않았다는 실측이다.
+4. ~~C16의 화면을 직접 보지 않았다~~ — **2026-09-19에 관측했다.** 저장소를 다시 치운 상태로
+   사본을 띄워 폴더 선택창 없는 기동과, 상태 창의 psql 경로가 저장소 밖 사본을 가리키는 것을
+   화면으로 확인했다(§12.4의 C16 행).
 5. **C11의 `~/.local/bin/mlx_lm.server` 일시 격리 회차는 돌리지 않았다.** 증거는 argv가 번들
    python의 `-m damwha_worker.llm_entry`라는 것이고, 기본 경로가 PATH를 보지 않는다는 것은 코드다.
 6. **C13의 `lsof` 전 구간 샘플링 기록이 없다.** 판정은 구조적 증명(자식 PATH에 개발 도구가 없다)이다.
-7. **C6는 DB 증거뿐이다** — 화면의 진행 표시를 관찰한 기록이 없다.
+7. **C6의 다운로드 진행 표시는 여전히 미관측이다.** 준비 완료 상태(다섯 모델 `● 준비됨`)는 화면으로 확인했지만(§12.4), 진행 막대·바이트는 받는 중이어야 떠서 이 회차에 볼 수 없었다.
 8. **`semantic=false`를 화면이 어떻게 말하는지 확인하지 않았다**(§12.6-14).
 
 ### 12.9 사용자에게 남은 숙제
