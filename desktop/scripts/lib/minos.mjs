@@ -22,6 +22,42 @@ export function compareVersion(a, b) {
 }
 
 /**
+ * `xcrun vtool -show-build`의 출력을 파싱해 macOS minos 값을 모두 뽑는다. 로드 커맨드
+ * 블록을 추적하는 상태 기계다 — 블록을 무시하고 키워드만 보면 안 된다.
+ *
+ * **함정:** `LC_BUILD_VERSION` 블록 안에는 `minos`(우리가 원하는 값) 말고도 `tool`
+ * 서브레코드의 `version`(링커 버전, 예: `27037.1`)이 같이 찍힌다. 옛 `/^\s*(?:minos|version)/`
+ * 정규식은 이 둘을 구별하지 않아 fat-슬라이스 최대값 규칙이 `27037.1`을 minos로 골랐다 —
+ * 실측(2026-09-20, `/bin/echo`): `27.0`이어야 할 값이 `27037.1`로 나왔다.
+ * 진짜 `version` 필드는 **다른 로드 커맨드**(`LC_VERSION_MIN_MACOSX`, 옛 바이너리 전용)에
+ * 있고, 같은 키워드 `version`을 쓰지만 뜻이 다르다 — 그래서 키워드 하나만으로는 못 가르고
+ * 지금 어느 블록 안에 있는지를 따라가야 한다.
+ *
+ * `LC_VERSION_MIN_IPHONEOS`·`TVOS`·`WATCHOS` 같은 다른 플랫폼 블록은 이 함수가 찾는 두
+ * 블록 이름 어느 것에도 걸리지 않으므로 조용히 건너뛴다 — macOS 바닥만 본다.
+ */
+export function parseMinos(vtoolOutput) {
+  const found = [];
+  let block = null;
+  for (const line of vtoolOutput.split("\n")) {
+    const cmd = /^\s*cmd\s+(\S+)\s*$/.exec(line);
+    if (cmd !== null) {
+      block = cmd[1];
+      continue;
+    }
+    if (block === "LC_BUILD_VERSION") {
+      const m = /^\s*minos\s+(\d+(?:\.\d+)*)\s*$/.exec(line);
+      if (m !== null) found.push(m[1]);
+    } else if (block === "LC_VERSION_MIN_MACOSX") {
+      const m = /^\s*version\s+(\d+(?:\.\d+)*)\s*$/.exec(line);
+      if (m !== null) found.push(m[1]);
+    }
+  }
+  if (found.length === 0) return null;
+  return found.reduce((hi, v) => (compareVersion(v, hi) > 0 ? v : hi));
+}
+
+/**
  * 파일의 minos. Mach-O가 아니거나 빌드 버전 로드 커맨드가 없으면 null.
  *
  * fat 바이너리는 슬라이스마다 한 블록씩 나오므로 **가장 높은 값**을 쓴다 — 낮은 쪽만 보면
@@ -30,9 +66,5 @@ export function compareVersion(a, b) {
 export function readMinos(file) {
   const r = spawnSync("xcrun", ["vtool", "-show-build", file], { encoding: "utf8" });
   if (r.status !== 0) return null;
-  const out = r.stdout ?? "";
-  const found = [];
-  for (const m of out.matchAll(/^\s*(?:minos|version)\s+(\d+(?:\.\d+)*)\s*$/gm)) found.push(m[1]);
-  if (found.length === 0) return null;
-  return found.reduce((hi, v) => (compareVersion(v, hi) > 0 ? v : hi));
+  return parseMinos(r.stdout ?? "");
 }
