@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { machOFiles } from "./lib/macho.mjs";
+import { MAX_MINOS, compareVersion, readMinos } from "./lib/minos.mjs";
 
 const desktop = path.resolve(import.meta.dirname, "..");
 const repo = path.resolve(desktop, "..");
@@ -111,6 +112,18 @@ if (fs.existsSync(asarPath)) {
   } finally {
     fs.rmSync(fresh, { recursive: true, force: true });
   }
+}
+
+// 2c. app.asar 안에 Mach-O가 없다. 아래 minos 전수 검사는 파일시스템 트리만 훑으므로
+// asar 안은 보지 못한다 — 네이티브 모듈이 들어오면 "전수"가 거짓이 된다. 지금은 열 것이
+// 없지만(desktop에 runtime 의존성 0개, 위 2번이 node_modules 부재를 단언한다) 그 성질이
+// 유지되는지는 따로 물어야 한다 (Phase 6a 스펙 §5.4).
+if (fs.existsSync(asarPath)) {
+  const nativeExt = [".node", ".dylib", ".so"];
+  const native = asar
+    .listPackage(asarPath, { isPack: false })
+    .filter((e) => nativeExt.some((x) => e.endsWith(x)));
+  check("app.asar has no native modules", native.length === 0, native.join(", "));
 }
 
 // 3. API 트리 밖을 가리키는 심볼릭 링크가 없다
@@ -365,6 +378,21 @@ const badShebang = binScripts.filter((f) => {
 check("every script in Resources/python/bin has a bundle-relative shebang", binScripts.length > 0 && badShebang.length === 0,
   binScripts.length === 0 ? "no scripts found" : badShebang.slice(0, 5).map((f) => path.basename(f)).join(", "));
 console.log(`      (${binScripts.length} console script(s) checked)`);
+
+// 22. 번들 Mach-O 전수의 minos가 MAX_MINOS 이하다 (Phase 6a 스펙 §5.4, P6a-C1).
+// 이 하나가 최소 macOS 바닥 전체의 회귀 방지다. 대상은 Contents/ 전부 — Resources의 세 트리와
+// Electron 프레임워크·헬퍼까지.
+const overMinos = [];
+for (const f of machOFiles(contents)) {
+  const v = readMinos(f);
+  if (v !== null && compareVersion(v, MAX_MINOS) > 0) overMinos.push(`${path.relative(contents, f)}=${v}`);
+}
+check(
+  `every Mach-O in the bundle targets macOS ${MAX_MINOS} or lower`,
+  overMinos.length === 0,
+  // 전부 보고한다 — 하나만 보이면 원인 패키지를 못 찾는다.
+  overMinos.join(", "),
+);
 
 if (failures.length > 0) {
   console.error(`\n${failures.length} bundle hygiene check(s) failed.`);
