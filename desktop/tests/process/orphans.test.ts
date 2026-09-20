@@ -8,6 +8,7 @@ import {
   parseDamwhaProcesses,
   parseDamwhaScan,
   reapOrphans,
+  reapOwnOnceChildren,
   splitPsArgs,
   type DamwhaProcess,
   type KnownTree,
@@ -627,5 +628,23 @@ describe("reapOrphans", () => {
       expect(ORPHAN_TERM_GRACE_MS).toBeLessThanOrEqual(5_000);
       expect(ORPHAN_TERM_GRACE_MS % ORPHAN_POLL_MS).toBe(0);
     });
+  });
+});
+
+describe("reapOwnOnceChildren", () => {
+  it("reapOwnOnceChildren는 이번 실행의 --once 자식만 내린다", async () => {
+    const ps = [
+      "  PID ARGS",
+      `  101 ${DEV} -m damwha_worker --run-id=${MINE}`,
+      `  102 ${DEV} -m damwha_worker --run-id=${MINE} --once`,
+      `  103 ${DEV} -m damwha_worker --run-id=${OLD} --once`,
+    ].join("\n");
+    const k = fakeKernel({ alive: [101, 102, 103], ps: async () => ps });
+
+    const out = await reapOwnOnceChildren(k.deps);
+
+    expect(out).toEqual({ reaped: [102] });
+    expect(k.alive.has(101)).toBe(true);
+    expect(k.alive.has(103)).toBe(true);
   });
 });

@@ -57,7 +57,14 @@ export function withoutDbKeys(env: ApiEnv): ApiEnv {
  * (be/worker/damwha_worker/db/queue.py). 그 빌드가 남긴 파일의 WORKER_ID 키는 아래
  * withAppOwned가 덮어 무효로 만든다 — 앱이 적었던 값이라 경고하지 않는다.
  */
-const RUN_WORKER_ID = `desktop-${randomUUID()}`;
+
+/**
+ * 앱이 띄운 worker의 신분 접두사. BE의 `be/src/jobs/worker-identity.ts`가 같은 문자열로
+ * 기동 회수의 경계를 긋는다 — 한쪽만 바꾸면 회수가 조용히 아무것도 하지 않게 된다.
+ */
+export const APP_WORKER_PREFIX = "desktop-";
+
+const RUN_WORKER_ID = `${APP_WORKER_PREFIX}${randomUUID()}`;
 
 /**
  * 앱이 기본값을 갖는 키. 첫 실행의 config.json이 **그대로 이것**이다. DATABASE_URL·STORAGE_ROOT는 여기 없다 —

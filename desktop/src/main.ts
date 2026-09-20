@@ -49,7 +49,7 @@ import { installMenu } from "./windows/menu";
 import { createSupervisor } from "./services/supervisor";
 import { verifyOwnListener as checkOwnListener } from "./process/own-listener";
 import { descendantPids, listenerPids, psArgs } from "./process/process-tree";
-import { knownTrees, newRunId, type KnownTree } from "./process/orphans";
+import { knownTrees, newRunId, reapOwnOnceChildren, type KnownTree } from "./process/orphans";
 import { reapBeforeStart, systemReapDeps } from "./app/reap-on-start";
 import { quitReapDeps, stopThenReap, type QuitReapTarget } from "./app/reap-on-quit";
 import { buildSpecs } from "./services/specs";
@@ -1474,6 +1474,10 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
       // 외부 DB 모드에서는 걸지 않는다 — 그 모드의 worker는 이 행을 아예 쓰지 않고(스펙 §6.9의
       // DAMWHA_SHARED_STATE=off), 내장 클러스터의 소켓도 없어 psql이 매번 헛돈다.
       ...(readModelReadiness === null ? {} : { readModelReadiness }),
+      // worker 재시작(크래시·사람이 누른 재시작 둘 다) 전에 앞 supervisor의 --once 자식을 거둔다
+      // (Phase 5 스펙 §8). runId·trees·log는 위 reapBeforeStart와 같은 것을 쓴다 — 별도 ReapDeps를
+      // 만들지 않는다.
+      reapOwnOnce: () => reapOwnOnceChildren(systemReapDeps({ runId: ctx.runId, trees, log: appendSupervisorLog })),
     },
   );
   // start()가 끝나기 전에 대입해야 한다 — onStatus가 그 사이에 여러 번 발화하고, shellStatusOf()는

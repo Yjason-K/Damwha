@@ -413,6 +413,12 @@ export interface ReapWords {
 export interface ReapPlan {
   target: Exclude<ProcessKind, "external">;
   words: ReapWords;
+  /**
+   * 딱지가 맞아도 이 술어가 거짓이면 **건드리지 않는다**(untouchable). worker 재시작이
+   * 이번 실행의 `--once` 자식만 거두기 위한 좁힘이다 — 같은 run-id의 supervisor 자신과
+   * embed는 재시작 절차가 따로 다룬다.
+   */
+  only?(p: DamwhaProcess): boolean;
 }
 
 export interface ReapRun {
@@ -473,7 +479,7 @@ export async function reapByKind(d: ReapDeps, plan: ReapPlan, signalled: ReapEnt
   const untouchable = new Set<number>();
   for (const p of scan.processes) {
     const kind = classify(p, d.runId);
-    if (kind === plan.target) {
+    if (kind === plan.target && (plan.only === undefined || plan.only(p))) {
       targets.push(p);
       continue;
     }
@@ -580,5 +586,36 @@ const ORPHAN_PLAN: ReapPlan = {
  */
 export async function reapOrphans(d: ReapDeps): Promise<{ reaped: number[] } | { failed: true }> {
   const run = await reapByKind(d, ORPHAN_PLAN);
+  return run.failed ? { failed: true } : { reaped: run.signalled.map((e) => e.pid) };
+}
+
+const OWN_ONCE_PLAN: ReapPlan = {
+  target: "mine",
+  only: (p) => p.once,
+  words: {
+    prefix: "worker 재시작 — ",
+    subject: "이번 실행의 --once 자식",
+    unreadable: (rows) => [
+      `이번 실행의 --once 자식인지 읽을 수 없는 줄이 있어 아무것도 내리지 않았어요 — ${rows
+        .map((row) => `pid ${row.pid}: ${clipArgs(row.args)}`)
+        .join(" / ")}`,
+    ],
+    bystander: () => null,
+    sent: (entry, how) =>
+      entry.root === null
+        ? `앞 supervisor의 --once 자손을 내려요 (${how}) — pid ${entry.pid}`
+        : `앞 supervisor의 --once 자식을 내려요 (${how}) — ${processLabel(entry.root)}`,
+  },
+};
+
+/**
+ * worker를 다시 띄우기 **전에** 이번 실행의 `--once` 자식을 거둔다 (Phase 5 스펙 §8).
+ *
+ * 크래시로 사라진 supervisor의 `--once` 자식은 아무도 추적하지 않는다 — `start_new_session=True`라
+ * 부모가 먼저 사라지면 자손 SIGKILL이 훑을 트리가 없다(Phase 2 이월). run-id는 **이번 실행**이므로
+ * 기동 정리(`reapOrphans`, 대상 `orphan`)는 이 프로세스를 보지 않는다.
+ */
+export async function reapOwnOnceChildren(d: ReapDeps): Promise<{ reaped: number[] } | { failed: true }> {
+  const run = await reapByKind(d, OWN_ONCE_PLAN);
   return run.failed ? { failed: true } : { reaped: run.signalled.map((e) => e.pid) };
 }
