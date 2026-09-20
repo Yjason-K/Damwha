@@ -352,8 +352,12 @@ DB(`damwha_pgdata`)와 `be/storage`를 새 앱으로 옮길 필요가 없다고 
 
 **업데이트 방식은 결정됐다 (2026-09-20).** "자동 업데이트의 포함 여부와 배포 채널을 해당 Phase
 스펙에서 결정"이라고 남겨 뒀던 자리다. **알림만 한다** — 앱이
-`GET https://api.github.com/repos/Yjason-K/Damwha/releases/latest`를 읽어 새 버전과 다운로드
-링크를 말하고, 설치는 사람이 한다. electron-updater의 자동 다운로드·설치는 넣지 않는다:
+`GET https://api.github.com/repos/Yjason-K/Damwha/releases`를 읽어 새 버전과 다운로드 링크를
+말하고, 설치는 사람이 한다. **`/releases/latest`가 아니다** — `v<version>` 태그는
+`deploy/release.sh`의 셀프호스팅 웹 배포가 이미 쓰고 있어서(`v0.1.1`~`v0.2.3`, 자산은 tarball과
+wheel이며 DMG가 없다) `latest`가 제품을 가리지 못한다. 웹 릴리스를 나중에 내면 데스크톱 앱이
+"새 버전이 있어요"라며 tarball을 가리킨다. **데스크톱 태그는 `desktop-v<version>`으로 가르고**
+목록에서 그 접두사로 거른다. 6a 스펙 리뷰가 잡아낸 것이다(6a 스펙 §4·§14). electron-updater의 자동 다운로드·설치는 넣지 않는다:
 번들이 1.3 GB Python 트리를 포함한 수 GB라 delta 없이는 매 판올림이 전체 재다운로드다.
 원천을 손으로 쓰는 `latest.json`이 아니라 Releases API로 고른 이유는 **릴리스 자체가 진실의
 원천이라 드리프트가 없기** 때문이다(태그·DMG·노트가 한 몸). 저장소가 public이라 비인증 60회/시간
