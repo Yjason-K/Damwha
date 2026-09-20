@@ -235,7 +235,7 @@ RT_KEY=$( { echo "$PY_FULL $PBS_RELEASE $MACOSX_DEPLOYMENT_TARGET"; \
 
 ```bash
 MLX_PIN_VERSION=$(sed -n 's/^VERSION=//p' "$MLX_PIN")
-MLX_LOCK_VERSION=$(sed -n 's/.*"mlx==\([0-9.]*\)".*/\1/p' "$WORKER/pyproject.toml" | head -1)
+MLX_LOCK_VERSION=$(sed -n 's/.*"mlx==\([0-9.]*\).*/\1/p' "$WORKER/pyproject.toml" | head -1)
 [ -n "$MLX_PIN_VERSION" ] || die "mlx-pin.txt에 VERSION= 줄이 없다"
 [ "$MLX_PIN_VERSION" = "$MLX_LOCK_VERSION" ] \
   || die "mlx-pin.txt는 $MLX_PIN_VERSION, pyproject.toml은 $MLX_LOCK_VERSION — 핀을 맞춰라"
@@ -2019,7 +2019,8 @@ Task 8 (업로드 507) ────┘                                          
 
 | 무엇 | 되돌리기 |
 | --- | --- |
-| Task 1·2의 빌드 | 옛 캐시 트리(`pg-<옛키>`·`ffmpeg-<옛키>`·`rt-<옛키>`)가 `.cache`에 남아 있다. 스크립트를 되돌리면 옛 키가 다시 적중한다 |
+| Task 1의 빌드 | 옛 `pg-<옛키>`·`ffmpeg-<옛키>`가 `.cache`에 남아 있다. 스크립트를 되돌리면 옛 키가 다시 적중한다 |
+| Task 2의 빌드 | **옛 층은 없다.** `build-python.sh:785`의 캐시 GC가 "현재 키가 아닌 층"을 지운다 — 없으면 빌드마다 2.6 GB가 쌓이기 때문이고, Part 1이 그렇게 정했다. 되돌리려면 5분 재빌드를 다시 해야 한다 |
 | Task 5의 서명 전환 | `signing.json`을 지우면 빌드가 멈춘다(ad-hoc으로 조용히 안 떨어진다). 되돌리려면 커밋을 revert |
 | Task 5 뒤 토큰 무효 | 되돌릴 것이 아니다. 온보딩에서 다시 넣는다. 옛 `hf-token.bin`은 지워지지 않고 남는다 |
 | Task 6의 DMG | 산출물일 뿐이다. `rm -rf desktop/out`. 발행하지 않았으므로 밖으로 나간 것이 없다 |
