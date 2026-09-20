@@ -71,7 +71,8 @@ def test_requeue_sets_delay_from_claimed_attempt(conn):
     row = conn.execute(
         "SELECT next_attempt_at - now() AS delay FROM job WHERE id=%s", (jid,)
     ).fetchone()
-    assert 0.5 <= row["delay"].total_seconds() <= 1.5
+    # claim이 attempts를 0→1로 올린 뒤 requeue한다 → 30 * 2^0 = 30초 (025 백오프).
+    assert 29 <= row["delay"].total_seconds() <= 31
 
 
 def test_requeue_for_shutdown_restores_attempts(conn):
@@ -277,6 +278,39 @@ def test_reap_stale_never_requeues_a_live_session(conn):
     assert job["status"] == "failed"
     meeting = conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()
     assert meeting["status"] == "recording"
+
+
+def _meeting_with_running_job(conn, *, worker_id):
+    """회의는 아직 processing으로 넘어가기 전 — job만 claim되어 실행 중인 상태를 재현한다.
+
+    Task 6의 mark_processing worker_id 가드도 이 헬퍼를 그대로 쓴다.
+    """
+    mid = seed_meeting(conn, status="uploaded", processing_version=1)
+    jid = seed_job(conn, meeting_id=mid, status="running", locked_by=worker_id, attempts=1)
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    return mid, jid
+
+
+def test_requeue_backs_off_thirty_seconds_on_the_first_retry(conn):
+    mid, jid = _meeting_with_running_job(conn, worker_id="w")
+    assert db.requeue(conn, jid, "w") == 1
+    row = conn.execute(
+        "SELECT extract(epoch from (next_attempt_at - now())) AS secs FROM job WHERE id=%s",
+        (jid,),
+    ).fetchone()
+    # attempts=1 → 30 * 2^0 = 30초. 앞뒤 1초는 실행 시간이다.
+    assert 29 <= row["secs"] <= 31
+
+
+def test_requeue_backoff_is_capped_at_fifteen_minutes(conn):
+    mid, jid = _meeting_with_running_job(conn, worker_id="w")
+    conn.execute("UPDATE job SET attempts=20 WHERE id=%s", (jid,))
+    assert db.requeue(conn, jid, "w") == 1
+    row = conn.execute(
+        "SELECT extract(epoch from (next_attempt_at - now())) AS secs FROM job WHERE id=%s",
+        (jid,),
+    ).fetchone()
+    assert 899 <= row["secs"] <= 901
 
 
 def test_worker_capabilities_upsert_overwrites(conn):

@@ -74,10 +74,13 @@ def heartbeat(conn, job_id: str, worker_id: str) -> int:
 
 
 def requeue(conn, job_id: str, worker_id: str) -> int:
+    # 30초 기준·15분 상한. 1·2초였을 때는 세 번이 3초에 다 타서 3분짜리 네트워크 끊김이
+    # job을 영구 실패로 만들었다 (Phase 4 결과 §12.6-12). max_attempts 기본값 5(025)와 함께
+    # 시도 시각이 0 · 30s · 90s · 210s · 450s가 된다.
     cur = conn.execute(
         """
         UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL,
-               next_attempt_at=now() + least(power(2, attempts - 1), 60) * interval '1 second',
+               next_attempt_at=now() + least(30 * power(2, attempts - 1), 900) * interval '1 second',
                updated_at=now()
         WHERE id=%s AND locked_by=%s AND status='running'
         """,

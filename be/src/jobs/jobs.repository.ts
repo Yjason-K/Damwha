@@ -10,7 +10,7 @@ export class JobsRepository {
     exec: Queryable,
     args: { type: JobType; meetingId: string | null; payload: unknown; maxAttempts?: number },
   ): Promise<JobRow> {
-    // maxAttempts를 안 주면 컬럼 DEFAULT(3)를 그대로 쓴다 — 상수를 여기 복제하지 않는다.
+    // maxAttempts를 안 주면 컬럼 DEFAULT(5)를 그대로 쓴다 — 상수를 여기 복제하지 않는다.
     const { rows } = args.maxAttempts === undefined
       ? await exec.query<JobRow>(
           `INSERT INTO job(type, meeting_id, payload)
