@@ -589,3 +589,86 @@ C8의 서비스 장애와 C9의 녹음 중 `kill -9`를 모두 겪은 뒤, 그 �
   순서로 내려가는 것을 찍었다. 이후 `ps`에 남은 `damwha` 프로세스 0개.
 - 이번 라운드가 만든 것은 `mtg_39`(C8 probe, `failed`)와 `mtg_73`(녹음, `done`) 둘이다. 기존 회의와
   저장소 파일은 건드리지 않았다.
+
+## 6. P5-C8 결함 수정과 packaged 재검증 (2026-09-20)
+
+§5가 미충족으로 남긴 결함을 고치고, **같은 시나리오를 packaged로 다시 돌려** 고쳐진 것을 확인했다.
+
+### 고친 것 — 회수의 네 번째 층 (`6303d53`)
+
+`db.reap_own_orphans(conn, worker_id)`를 추가했다. `reap_stale`과 회수 계약(live_session은
+`failed`, 재시도를 다 쓴 행도 `failed`, 딸린 `meeting`·요약·렌즈 run·화자까지 함께 닫기)이 같아서
+**CTE는 한 벌로 합쳤고** `stale`의 선택자만 시간 기반/소유자 기반으로 갈린다 — 두 벌로 두면 한쪽만
+고쳐질 자리다.
+
+supervisor는 자식을 한 번에 하나만 띄우고 `_wait_child`로 거둔다. 그래서 "지금 내 `--once` 자식은
+하나도 살아 있지 않다"가 참인 순간이 셋이고, 그 셋에서 부른다.
+
+| 호출 자리 | 덮는 경우 |
+| --- | --- |
+| 기동 직후 | supervisor만 재시작 — `WORKER_ID`는 앱 실행 단위라 앱이 죽인 앞 자식의 행이 같은 신분으로 남는다 |
+| 자식을 거둔 직후(크래시) | DB는 멀쩡한 OOM·SIGKILL |
+| DB 재접속 직후 | §5가 관측한 바로 그 경로 |
+
+회수 실패는 로그만 남기고 폴링을 계속한다 — 큐를 멈출 이유가 아니다.
+
+테스트 7개를 먼저 쓰고 전부 실패를 확인한 뒤 고쳤다(db 계층 4개 `AttributeError`, supervisor 3개
+`'running' != 'queued'`). 전부 testcontainers의 실제 Postgres를 쓴다.
+
+```
+$ uv run --directory be/worker pytest -q
+694 passed, 3 warnings in 46.95s
+$ uv run --directory be/worker ruff check . && ruff format --check .
+All checks passed!   131 files already formatted
+```
+
+### packaged 재검증 — §5와 같은 시나리오
+
+`rm -rf desktop/out/mac-arm64` 뒤 `pnpm desktop:build`(exit 0, 번들 위생 전부 통과)로 다시 빌드했다.
+**새 빌드가 adhoc 서명을 새로 받아 §2가 적은 Keychain 승인 창이 다시 떴다** — 사용자가 "항상 허용"을
+눌러 통과시켰다. 이 세션이 암호를 대신 입력하지는 않았다.
+
+이번 실행의 `WORKER_ID=desktop-a7a900b8-619c-4baa-b6a8-d12d102ab9ac`.
+
+```bash
+curl -s -X POST http://127.0.0.1:3000/api/meetings \
+  -F "audio=@/tmp/damwha-probe/c1-upload.m4a;type=audio/mp4" -F "title=C8 refix probe" \
+  -F "defer_lens=true" -F "defer_summary=true"          # → mtg_74 / job_161
+
+curl -s .../api/meetings/mtg_74/status                   # processing / diarize / 35%
+pgrep -f "damwha_worker.*--once" | wc -l                 # 1 — 자식이 살아 있다
+kill -QUIT "$(pgrep -f 'Resources/postgres/bin/postgres -D')"   # 19:23:50
+```
+
+`supervisor.log`:
+
+```
+19:23:50 상태 postgres=failed/unknown api=running/ok embed=running/ok worker=running/ok
+19:23:50 postgres: 종료 (코드 0) — 3초 뒤 재시작 (1회차)
+19:23:54 postgres: 준비됨
+```
+
+`worker.log` — **§5에 없던 줄이 여기 있다**:
+
+```
+psycopg.OperationalError: the connection is closed
+INFO:damwha_worker:supervisor desktop-a7a900b8-… ready (db connected)
+WARNING:damwha_worker:reclaimed own orphans: requeued=1 failed=0
+INFO:damwha_worker:runtime {...}                     ← 새 --once 자식
+INFO:damwha_worker:hf download progress hook installed (writer=desktop-a7a900b8-…, rebound=1)
+```
+
+| | §5 (고치기 전) | §6 (고친 뒤) |
+| --- | --- | --- |
+| `--once` 자식 | 없음 | 새로 떠서 같은 job을 물었다 |
+| `job.status` | `running`으로 **4분 30초 이상 동결** | 즉시 `queued` → 새 자식이 재claim |
+| `attempts` | 1 (그대로) | 1 → **2** (회수는 되돌리지 않는다 — §4.1) |
+| `stage` | `diarize` 35%에서 멈춤 | `diarize` → `stt`로 전진 |
+| 화면 | "처리하고 있어요 · 35%" — 거짓 | 같은 문구가 **사실**이다 |
+| 회수까지 | 30분 reaper뿐 | postgres `준비됨` 직후 |
+
+정합성 질의 넷(§2와 같은 것, 이번 실행 `WORKER_ID` 기준)도 **전부 0**이다.
+
+**판정: P5-C8 충족.** 화면 절반은 §5가 이미 확인했고(embed `코드 143`·postgres `코드 0`의 사유와
+해결 안내, API의 `데이터베이스에 연결할 수 없어요` 연쇄, 26초·8초 회복), 깨져 있던 job 절반이
+이 수정으로 채워졌다 — job이 "진행"으로 정직해졌다.
