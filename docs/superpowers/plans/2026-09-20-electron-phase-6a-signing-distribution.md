@@ -210,14 +210,24 @@ mlx https://files.pythonhosted.org/packages/08/e7/a851a451b1327af9fb4df3991b9ae8
 mlx-metal https://files.pythonhosted.org/packages/4f/5d/4c690d5b93c30ba002656c37363159d978705bf8eb801b8481840fb942c2/mlx_metal-0.31.2-py3-none-macosx_15_0_arm64.whl e9d4e5fce6ca10a87a0e388597f99519ad594d09e674708b5312bd8bd4f5997d
 ```
 
-- [ ] **Step 2: `RT_KEY`에 핀 파일을 넣는다**
+- [ ] **Step 2: `build-target.sh`를 source하고 `RT_KEY`에 둘을 넣는다**
 
-`build-python.sh:106`을 고친다 — 핀이 바뀌면 런타임 층이 새로 나야 한다.
+`build-python.sh:106`의 `RT_KEY=` **앞에** 넣는다. **이 스크립트는 `set -euo pipefail`이다**(31행) — source 없이 `$MACOSX_DEPLOYMENT_TARGET`을 쓰면 unbound variable로 그 자리에서 죽는다.
 
 ```bash
+TARGET_LIB="$DESKTOP/scripts/lib/build-target.sh"
 MLX_PIN="$DESKTOP/scripts/mlx-pin.txt"
-RT_KEY=$( { echo "$PY_FULL $PBS_RELEASE"; shasum -a 256 "$SUMS" "$SCRIPT" "$ENTS" "$REQS" "$MLX_PIN" | awk '{print $1}'; } | shasum -a 256 | cut -c1-16)
+[ -f "$TARGET_LIB" ] || die "$TARGET_LIB 가 없다"
+[ -f "$MLX_PIN" ] || die "$MLX_PIN 이 없다"
+# shellcheck source=lib/build-target.sh
+. "$TARGET_LIB"
+
+RT_KEY=$( { echo "$PY_FULL $PBS_RELEASE $MACOSX_DEPLOYMENT_TARGET"; \
+            shasum -a 256 "$SUMS" "$SCRIPT" "$ENTS" "$REQS" "$TARGET_LIB" "$MLX_PIN" | awk '{print $1}'; } \
+          | shasum -a 256 | cut -c1-16)
 ```
+
+핀이나 배포 타깃이 바뀌면 런타임 층이 새로 난다.
 
 - [ ] **Step 3: 핀 버전이 `pyproject.toml`과 같은지 단언한다**
 
@@ -779,6 +789,12 @@ codesign(signing.identity, macEnts, [appPath], ["--deep"]);
 
 - [ ] **Step 6: `check-bundle.mjs`의 서명 단언을 identity까지 올린다**
 
+**머리의 import에 먼저 더한다.** 이 파일은 지금 `./lib/macho.mjs`의 `machOFiles`만 들여온다 — 없으면 `ReferenceError: loadSigning is not defined`로 패키징이 막힌다.
+
+```javascript
+import { loadSigning } from "./lib/signing.mjs";
+```
+
 기존 7번(Identifier) 단언 뒤에 더한다:
 
 ```javascript
@@ -850,7 +866,7 @@ token-store의 read()가 복호화 실패에 파일을 지우지 않고 null을 
 
 ---
 
-## Task 6: 공증·스테이플·DMG·릴리스
+## Task 6: 공증·스테이플·DMG (발행 제외)
 
 **Files:**
 - Modify: `desktop/scripts/package.mjs`
@@ -859,7 +875,7 @@ token-store의 read()가 복호화 실패에 파일을 지우지 않고 null을 
 
 **Interfaces:**
 - Consumes: Task 5의 `loadSigning`, 서명된 `out/mac-arm64/Damwha.app`
-- Produces: `desktop/out/Damwha-0.3.0-arm64.dmg`(서명·공증·스테이플됨) + `.sha256`. Task 7이 이 파일을 두 번째 맥으로 옮긴다.
+- Produces: `desktop/out/Damwha-0.3.0-arm64.dmg`(서명·공증·스테이플됨) + `.sha256`, 그리고 그것을 만드는 `--release` 기구. **발행은 하지 않는다** — Task 11이 모든 코드가 커밋된 뒤 다시 만들어 올린다.
 
 **순서가 계약이다.** 지금 구조는 `electron-builder --dir` → 손 서명이다. `mac.target`을 `dmg`로 바꾸고 `--dir`을 떼면 **electron-builder가 서명 전 `.app`을 DMG에 담는다** — 뒤의 서명은 `out/mac-arm64`의 사본만 고치고 DMG 안은 링커 ad-hoc인 채 남는다. 그래서 DMG는 서명이 끝난 `.app`에서 `--prepackaged`로 따로 만든다.
 
@@ -933,6 +949,10 @@ if (RELEASE) {
   notarize(appZip, ".app");
   fs.rmSync(appZip, { force: true });
   run("xcrun", ["stapler", "staple", appPath], desktop);
+
+  // 스테이플이 .app 안에 티켓 파일을 넣는다. 번들 위생과 서명이 그 뒤에도 성립하는지 다시 묻는다
+  // (스펙 §7 공통 규칙). 여기서 지면 DMG를 만들지 않는다 — 깨진 앱을 담은 DMG가 더 나쁘다.
+  run("node", [path.join("scripts", "check-bundle.mjs")], desktop);
 }
 ```
 
@@ -993,28 +1013,11 @@ if (RELEASE) {
 "package:release": "node scripts/package.mjs --release"
 ```
 
-- [ ] **Step 8: 릴리스 발행 단계**
+- [ ] **Step 8: 발행은 여기서 하지 않는다**
 
-Step 6 뒤에:
+**`gh release create`를 `package.mjs`에 넣지 않는다.** Task 7~9가 디스크 부족 처리를 아직 안 넣었으므로, 여기서 릴리스를 내면 **그 처리가 빠진 DMG가 배포된다.** 발행은 모든 코드가 들어가고 packaged 검증까지 끝난 뒤(Task 11)에 한다.
 
-```javascript
-if (RELEASE) {
-  // deploy/release.sh를 고치지 않는다 — 그 스크립트는 be/worker/pyproject.toml 버전에
-  // 태그를 묶고 있어서, 한 스크립트에 합치면 웹 배포의 단언이 데스크톱 버전까지 묶는다.
-  run("gh", ["release", "create", expectedTag, dmgPath, `${dmgPath}.sha256`,
-    "--target", execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim(),
-    "--title", expectedTag,
-    "--notes", [
-      `macOS ${MAX_MINOS} 이상, Apple Silicon.`,
-      "",
-      "설치 후 첫 실행에서 Hugging Face 토큰을 한 번 넣어야 해요.",
-      "이전 버전에서 올라오는 경우 토큰을 한 번 다시 넣어야 합니다 — 앱 서명 방식이 바뀌었어요.",
-    ].join("\n"),
-  ], repo);
-}
-```
-
-`MAX_MINOS`를 `./lib/minos.mjs`에서 import한다.
+이 Task가 만드는 것은 **발행 직전까지의 산출물** — 서명·공증·스테이플된 `.app`과 DMG, 그리고 `.sha256`. Task 11이 그것을 그대로 올린다.
 
 - [ ] **Step 9: dev 경로가 안 깨졌는지 먼저 본다**
 
@@ -1026,17 +1029,23 @@ pnpm run package:desktop 2>&1 | tail -20
 
 기대: 지금과 같다 — `.app`만 만들고 DMG·공증·릴리스 없음. `check-bundle` 통과. **`--release` 경로가 개발 루프를 건드리지 않았음을 이것이 보인다.**
 
-- [ ] **Step 10: 릴리스 경로를 돌린다**
+- [ ] **Step 10: 코드를 먼저 커밋하고, 그 커밋에 태그를 찍은 뒤 돌린다**
+
+**순서가 중요하다.** 태그는 산출물을 만든 코드를 가리켜야 한다. 미커밋 작업트리에서 빌드하고 나중에 커밋하면 태그가 그 코드를 안 가리켜 릴리스를 재현할 수 없다.
 
 ```bash
 cd /Users/gim-yeongjae/project/daewha
+git add desktop/scripts/package.mjs desktop/scripts/check-bundle.mjs desktop/package.json
+git commit -m "build(phase6a): 공증·스테이플·DMG를 --release에 넣는다"   # 본문은 Step 12
 git tag desktop-v0.3.0
 cd desktop
 rm -rf out
 pnpm run package:release 2>&1 | tail -60
 ```
 
-기대: 서명 → check-bundle → `.app` 공증(수 분) → 스테이플 → DMG 생성 → DMG 서명·공증·스테이플 → 마운트 확인 → GitHub Release 생성. 공증 두 번이라 10~20분.
+기대: 서명 → check-bundle → `.app` 공증(수 분) → 스테이플 → check-bundle 재실행 → DMG 생성 → DMG 서명·공증·스테이플 → 마운트 확인. 공증 두 번이라 10~20분. **릴리스는 만들지 않는다**(Task 11).
+
+**여기서 찍은 태그는 임시다.** Task 7~9가 코드를 더 넣으므로 Task 11이 태그를 옮긴다(`git tag -f`). 이 단계의 목적은 기구가 도는지 보는 것이지 최종 산출물을 내는 것이 아니다.
 
 - [ ] **Step 10b: 태그 대조가 실제로 막는지 시험한다 (P6a-C5)**
 
@@ -1052,7 +1061,7 @@ cd .. && git tag -d desktop-v9.9.9 && git tag desktop-v0.3.0   # 되돌린다
 
 기대: 비영 종료 + `태그가 desktop-v9.9.9인데 package.json은 0.3.0이다`. **electron-builder가 돌기 전에** 멈춰야 한다 — 두 시간짜리 빌드 끝에서 알면 늦다.
 
-- [ ] **Step 11: 산출물을 손으로 확인 (P6a-C4·C14)**
+- [ ] **Step 11: 산출물을 손으로 확인 (P6a-C4)**
 
 ```bash
 cd /Users/gim-yeongjae/project/daewha/desktop/out
@@ -1060,22 +1069,17 @@ cd /Users/gim-yeongjae/project/daewha/desktop/out
 spctl --assess --type execute -vv mac-arm64/Damwha.app
 xcrun stapler validate mac-arm64/Damwha.app
 xcrun stapler validate Damwha-0.3.0-arm64.dmg
-# P6a-C14 — 릴리스와 태그 네임스페이스
 shasum -a 256 -c Damwha-0.3.0-arm64.dmg.sha256
-gh release view desktop-v0.3.0 --json tagName,assets -q '.tagName, (.assets[]|.name)'
-gh release list --limit 5
 ```
 
-기대(C4): `accepted / source=Notarized Developer ID`, `stapler validate`가 `.app`·DMG 둘 다 통과.
-
-기대(C14): sha256 `OK`, 릴리스에 자산 둘(DMG와 `.sha256`), 태그가 `desktop-v0.3.0`. **`gh release list`에 `v0.2.3`(웹 배포)이 그대로 있고 건드려지지 않았는지도 본다** — 네임스페이스를 가른 이유가 그것이다.
+기대: `accepted / source=Notarized Developer ID`, `stapler validate`가 `.app`·DMG 둘 다 통과, sha256 `OK`. (C14는 Task 11이 판정한다 — 아직 릴리스를 내지 않았다.)
 
 - [ ] **Step 12: 커밋**
 
 ```bash
 cd /Users/gim-yeongjae/project/daewha
 git add desktop/scripts/package.mjs desktop/scripts/check-bundle.mjs desktop/package.json
-git commit -m "build(phase6a): 공증·스테이플·DMG·릴리스를 --release에 넣는다
+git commit -m "build(phase6a): 공증·스테이플·DMG를 --release에 넣는다
 
 DMG를 서명이 끝난 .app에서 --prepackaged로 따로 만든다. mac.target을 dmg로
 바꾸고 --dir을 떼면 electron-builder가 서명 전 앱을 담고, 뒤의 서명과 스테이플이
@@ -1089,12 +1093,15 @@ DMG 내부 사본에 닿지 않는다 — 검증을 통과한 .app과 배포되�
 배포가 이미 쓰고 있고, 섞으면 6b의 릴리스 조회가 웹 배포를 가리켜 앱이
 사용자에게 tarball을 권한다.
 
---release 없이는 지금과 같다. 개발 루프에 공증 몇 분과 DMG 압축을 물리지 않는다."
+--release 없이는 지금과 같다. 개발 루프에 공증 몇 분과 DMG 압축을 물리지 않는다.
+
+발행은 여기서 하지 않는다. Task 7~9가 디스크 부족 처리를 아직 안 넣었으므로 지금
+내면 그 처리가 빠진 DMG가 배포된다."
 ```
 
-**Verify:** Step 9(dev 경로 무변) + Step 11 전부. 특히 DMG 마운트 검증(P6a-C13).
+**Verify:** Step 9(dev 경로 무변) + Step 10b(태그 대조가 막는다) + Step 11 전부. 특히 DMG 마운트 검증(P6a-C13).
 
-**Review:** `--release` 없는 경로가 정말 안 바뀌었는지 (Step 9로 확인). `--prepackaged`가 쓰였는지. `.app`과 DMG 둘 다 공증·스테이플되는지. 공증 실패가 `notarytool log`를 뱉고 멈추는지. `hdiutil detach`가 `finally`에 있는지. `deploy/release.sh`를 안 건드렸는지.
+**Review:** `--release` 없는 경로가 정말 안 바뀌었는지 (Step 9로 확인). `--prepackaged`가 쓰였는지. 스테이플 뒤 `check-bundle`이 다시 도는지. `.app`과 DMG 둘 다 공증·스테이플되는지. 공증 실패가 `notarytool log`를 뱉고 멈추는지. `hdiutil detach`가 `finally`에 있는지. **`gh release create`가 이 Task에 남아 있지 않은지** — 남아 있으면 Task 7~9 없는 DMG가 배포된다.
 
 ---
 
@@ -1251,9 +1258,32 @@ uv run --directory be/worker pytest tests/test_disk.py -v
 
 기대: PASS 6건.
 
-- [ ] **Step 6: 다운로드 훅에 끼운다**
+- [ ] **Step 6: 다운로드 훅에 끼운다 — `_run_watched`가 아니라 `hooked`다**
 
-`downloads.py`의 `_run_watched`(515행 근처 — 실제 다운로드를 감싸는 자리)에서, 다운로드를 부르기 **전에** 점검한다. 저장소 크기는 `huggingface_hub`의 `HfApi().model_info(repo_id, files_metadata=True)`로 얻고, **못 얻으면 `None`을 넘겨 건너뛴다.**
+**`_run_watched`에 두면 다운로드의 일부만 덮는다.** `_wrap`의 `hooked`는 `writer is None`이거나 `tqdm_class`가 주어졌거나 `local_files_only`·`dry_run`이거나 `repo_id`가 문자열이 아니면 **`_run_watched`를 건너뛰고 원본을 바로 부른다**(`downloads.py:574-583`). 같은 파일의 머리 주석(19-24행)이 faster-whisper 등이 `tqdm_class`를 넘겨 진행 감시에서 빠진다고 적어 뒀다. 그 경로들도 디스크는 똑같이 쓴다.
+
+그래서 점검은 **`hooked` 안, 캐시 우선 분기 뒤·우회 분기 앞**에 둔다. 캐시 우선(`attempt is not None`)은 `local_files_only=True`로 돌아 아무것도 받지 않으므로 그 앞은 아니다.
+
+```python
+        # (attempt 블록 뒤, `writer = _STATE.writer` 앞)
+        #
+        # **여기가 맞는 자리다**: 아래 우회 분기(tqdm_class·writer None·repo_id 비문자열)가
+        # _run_watched를 건너뛰므로 거기 두면 다운로드의 일부만 덮는다. 진행 보고와 달리
+        # 디스크는 모든 경로가 똑같이 쓴다.
+        #
+        # local_files_only·dry_run은 받지 않으므로 건너뛴다.
+        _repo = args[0] if args else kwargs.get("repo_id")
+        if isinstance(_repo, str) and not kwargs.get("local_files_only") and not kwargs.get("dry_run"):
+            from huggingface_hub import constants as hub_constants
+
+            from .disk import check_free_space
+
+            check_free_space(hub_constants.HF_HUB_CACHE, _needed_bytes(_repo))
+```
+
+**`install_hf_progress_hook`의 "던지지 않는다" 계약은 깨지 않는다.** 그 계약은 훅 **설치**에 대한 것이고(`downloads.py:714`), 여기는 훅이 감싼 **호출**이다 — 그 호출은 원래도 던진다.
+
+아래는 `_needed_bytes`다. `_wrap` 옆 모듈 수준에 둔다. 저장소 크기는 `huggingface_hub`의 `HfApi().model_info(repo_id, files_metadata=True)`로 얻고, **못 얻으면 `None`을 넘겨 건너뛴다.**
 
 ```python
 def _needed_bytes(repo_id: str) -> int | None:
@@ -1271,24 +1301,11 @@ def _needed_bytes(repo_id: str) -> int | None:
     return int(total * 1.2)
 ```
 
-그리고 `_run_watched` 안에서:
-
-```python
-    # 받기 전에 잰다. 수 GB를 다 받고 마지막에 ENOSPC로 지면 받은 것도 버린다.
-    from huggingface_hub import constants as hub_constants
-
-    from .disk import check_free_space
-
-    check_free_space(hub_constants.HF_HUB_CACHE, _needed_bytes(key))
-```
-
-**캐시 경로를 여기서 새로 계산하지 않는다.** `downloads.py`가 이미 `apply_hf_limits()`로
+**캐시 경로를 새로 계산하지 않는다.** `downloads.py`가 이미 `apply_hf_limits()`로
 `huggingface_hub.constants`를 이 프로세스의 env에 맞춰 놓았고(`downloads.py:664-666`),
 `HF_HUB_CACHE`가 그 결과다. 따로 재면 앱이 실제로 쓰는 볼륨과 다른 곳을 잴 수 있다.
 
-**점검을 훅 설치가 아니라 다운로드 실행 자리에 둔다.** `install_hf_progress_hook`은
-"어떤 이유로도 던지지 않는다"가 계약이다(`downloads.py:714`) — 거기서 던지면 job을 집기도 전의
-`--once` 자식과 gate 서비스인 embed가 죽는다.
+받기 전에 재는 이유: 수 GB를 다 받고 마지막에 ENOSPC로 지면 받은 것도 버린다.
 
 - [ ] **Step 7: 워커 테스트 전체**
 
@@ -1343,7 +1360,8 @@ PERMANENT다 — 디스크가 그대로인 채 재시도해 봐야 같은 자리
 `be/test/disk-full.filter.spec.ts`:
 
 ```typescript
-import { ArgumentsHost, HttpStatus } from '@nestjs/common';
+import { ArgumentsHost, HttpStatus, NotFoundException } from '@nestjs/common';
+import { HttpAdapterHost } from '@nestjs/core';
 import { DiskFullFilter } from '../src/storage/disk-full.filter';
 
 function hostWith(): { host: ArgumentsHost; sent: { status?: number; body?: unknown } } {
@@ -1380,10 +1398,22 @@ describe('DiskFullFilter', () => {
     expect(JSON.stringify(sent.body)).not.toContain('/var/folders');
   });
 
-  it('ENOSPC가 아닌 오류는 다시 던진다 — 삼키면 500이 200이 된다', () => {
+  it('ENOSPC가 아닌 오류는 기본 처리로 넘긴다 — 다시 던지면 응답이 없다', () => {
     const { host } = hostWith();
     const err = Object.assign(new Error('boom'), { code: 'EACCES' });
-    expect(() => new DiskFullFilter().catch(err, host)).toThrow('boom');
+    const filter = new DiskFullFilter(new HttpAdapterHost().httpAdapter);
+    const spy = jest.spyOn(Object.getPrototypeOf(Object.getPrototypeOf(filter)), 'catch').mockImplementation(() => undefined);
+    filter.catch(err, host);
+    expect(spy).toHaveBeenCalledWith(err, host);
+    spy.mockRestore();
+  });
+
+  it('HttpException의 상태 코드가 보존된다', () => {
+    const { host, sent } = hostWith();
+    const filter = new DiskFullFilter(new HttpAdapterHost().httpAdapter);
+    // BaseExceptionFilter에 위임하면 404가 404로 나간다. 다시 던졌다면 응답이 아예 없다.
+    expect(() => filter.catch(new NotFoundException('없어요'), host)).not.toThrow();
+    expect(sent.status === undefined || sent.status === 404).toBe(true);
   });
 });
 ```
@@ -1402,7 +1432,8 @@ pnpm be test -- disk-full.filter
 `be/src/storage/disk-full.filter.ts`:
 
 ```typescript
-import { ArgumentsHost, Catch, ExceptionFilter, HttpStatus, Logger } from '@nestjs/common';
+import { ArgumentsHost, Catch, HttpStatus, Logger } from '@nestjs/common';
+import { BaseExceptionFilter } from '@nestjs/core';
 import * as fs from 'fs';
 import * as os from 'os';
 
@@ -1416,13 +1447,22 @@ import * as os from 'os';
  *
  * 이 시점에는 meeting·job 행이 아직 없다. 그래서 여기서 정리할 DB 상태도 없다 —
  * 지워야 할 것은 multer가 남긴 임시 파일뿐이다.
+ *
+ * **`BaseExceptionFilter`를 상속한다.** 이 앱에는 전역 예외 필터가 하나도 없어서(app.module.ts의
+ * providers에 APP_FILTER가 없다) 이것이 유일한 필터가 된다. 필터 안에서 `throw`하면 Nest가
+ * 그것을 **다시 처리하지 않는다** — ENOSPC가 아닌 모든 오류의 응답이 사라진다. 기본 동작은
+ * `super.catch()`로 넘겨야 보존된다.
  */
 @Catch()
-export class DiskFullFilter implements ExceptionFilter {
+export class DiskFullFilter extends BaseExceptionFilter {
   private readonly log = new Logger(DiskFullFilter.name);
 
   catch(exception: unknown, host: ArgumentsHost): void {
-    if (!isNoSpace(exception)) throw exception;
+    if (!isNoSpace(exception)) {
+      // 우리 것이 아니면 Nest 기본 처리로. 여기서 throw하면 응답이 아예 나가지 않는다.
+      super.catch(exception, host);
+      return;
+    }
 
     // multer가 반쯤 쓴 임시 파일을 지운다. 디스크가 찬 판에 남겨 두면 다음 시도도 진다.
     const file = tempFileOf(exception);
@@ -1486,11 +1526,16 @@ pnpm be test -- disk-full.filter
 `be/src/app.module.ts`의 `providers`에 더한다:
 
 ```typescript
-import { APP_FILTER } from '@nestjs/core';
+import { APP_FILTER, HttpAdapterHost } from '@nestjs/core';
 import { DiskFullFilter } from './storage/disk-full.filter';
 
-// providers 배열에:
-    { provide: APP_FILTER, useClass: DiskFullFilter },
+// providers 배열에. BaseExceptionFilter는 httpAdapter를 생성자로 받는다 —
+// useClass로 걸면 그것이 주입되지 않아 super.catch()가 런타임에 죽는다.
+    {
+      provide: APP_FILTER,
+      inject: [HttpAdapterHost],
+      useFactory: (host: HttpAdapterHost) => new DiskFullFilter(host.httpAdapter),
+    },
 ```
 
 - [ ] **Step 6: 전체 테스트**
@@ -1520,9 +1565,24 @@ meetings와 speakers 두 컨트롤러가 같은 업로드 옵션을 쓰므로 �
 응답에 원본 메시지를 싣지 않는다(경로와 스택이 담긴다)."
 ```
 
-**Verify:** Step 4·6. ENOSPC가 아닌 오류가 다시 던져지는지가 회귀 위험이 가장 큰 자리다.
+- [ ] **Step 6b: 기존 오류 응답이 안 깨졌는지 실제로 확인한다**
 
-**Review:** `@Catch()`(전체)로 잡고 아닌 것을 다시 던지는 방식이 이 코드베이스의 기존 필터 관례와 맞는지 — 맞지 않으면 `@Catch(Error)`로 좁히거나 multer 전용 래퍼로 바꾼다. 응답 본문에 경로가 안 들어가는지. `statfsSync`가 이 Node 버전에 있는지(22 이상, `engines`가 `>=22 <23`).
+단위 테스트는 위임을 확인할 뿐 실제 HTTP 응답을 보지 않는다. 이 필터가 앱의 **유일한** 전역 필터가 되므로 종단간으로 한 번 본다.
+
+```bash
+cd /Users/gim-yeongjae/project/daewha
+pnpm db:up && pnpm be start:dev &   # 또는 기존 dev 기동 방식
+sleep 15
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/api/meetings/99999999   # 없는 회의
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/api/no-such-route
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/api/health
+```
+
+기대: `404`, `404`, `200`. **하나라도 빈 응답이거나 타임아웃이면 위임이 안 된 것이다** — 그것이 이 Task의 유일한 진짜 위험이다.
+
+**Verify:** Step 4·6·6b. 특히 6b — 다시 던지기와 위임의 차이는 단위 테스트에 잘 안 잡히고 실제 응답에서만 드러난다.
+
+**Review:** `BaseExceptionFilter`를 상속하고 `super.catch()`로 넘기는지(`throw`가 남아 있지 않은지). `APP_FILTER`가 `useFactory`로 `httpAdapter`를 주입받는지 — `useClass`면 생성자 인자가 없어 `super.catch()`가 런타임에 죽는다. 응답 본문에 경로가 안 들어가는지. `statfsSync`가 이 Node 버전에 있는지(`engines`가 `>=22 <23`).
 
 ---
 
@@ -1665,20 +1725,34 @@ hdiutil attach tiny.sparseimage -mountpoint /Volumes/DamwhaTiny
 df -h /Volumes/DamwhaTiny | tail -1
 ```
 
-앱을 `TMPDIR=/Volumes/DamwhaTiny`로 띄우고 20 MB보다 큰 오디오를 올린다.
+`TMPDIR`을 그 볼륨으로 돌려 앱을 띄운다. **`open`은 환경을 물려주지 않는다** — 실행 파일을 직접 부른다.
 
-기대: 507 + 화면에 `디스크 공간이 부족해요 — 남은 용량 …`. 실패하면 후보를 내려 `os.tmpdir()`를 바꿀 다른 길을 찾는다.
+```bash
+APP=/Users/gim-yeongjae/project/daewha/desktop/out/mac-arm64/Damwha.app
+TMPDIR=/Volumes/DamwhaTiny "$APP/Contents/MacOS/Damwha" &
+```
+
+앱이 뜨면 20 MB보다 큰 오디오를 업로드한다.
+
+기대: 507 + 화면에 `디스크 공간이 부족해요 — 남은 용량 …`. `os.tmpdir()`가 `TMPDIR`을 따르는지는 Node의 문서화된 동작이지만, 안 먹으면 후보를 내려 다른 길을 찾는다.
 
 - [ ] **Step 2: 업로드 실패가 아무것도 안 남겼는지 (P6a-C7)**
 
+`psql`은 번들 것을 쓴다. 소켓은 userData의 `run/`이다(`desktop/CLAUDE.md`의 "데이터 위치").
+
 ```bash
-PSQL="$(ls -d ~/Library/Application\ Support/Damwha)"
-"<번들>/bin/psql" -h "$PSQL/run" -U damwha damwha -c \
-  "select count(*) from meeting where created_at > now() - interval '5 minutes';"
+APP=/Users/gim-yeongjae/project/daewha/desktop/out/mac-arm64/Damwha.app
+UD="$HOME/Library/Application Support/Damwha"
+PSQL="$APP/Contents/Resources/postgres/bin/psql"
+
+"$PSQL" -h "$UD/run" -U damwha damwha -c \
+  "select count(*) as new_meetings from meeting where created_at > now() - interval '5 minutes';"
+"$PSQL" -h "$UD/run" -U damwha damwha -c \
+  "select count(*) as new_jobs from job where created_at > now() - interval '5 minutes';"
 ls /Volumes/DamwhaTiny | grep dw-upload || echo "임시 파일 0개"
 ```
 
-기대: 새 `meeting` 0행, 임시 파일 0개.
+기대: `new_meetings` 0, `new_jobs` 0, 임시 파일 0개.
 
 - [ ] **Step 3: 모델 다운로드 디스크 부족을 재현한다 (P6a-C6·C8b)**
 
@@ -1715,7 +1789,99 @@ rm -f tiny.sparseimage
 
 ---
 
-## Task 11: 두 번째 맥 종단간 검증
+## Task 11: 릴리스 발행
+
+**Files:** 없음 (발행 전용). 태그와 GitHub Release가 산출물.
+
+**Interfaces:**
+- Consumes: Task 6의 발행 기구, Task 1~10의 **모든 코드가 커밋된 상태**
+- Produces: `desktop-v0.3.0` 태그와 그 릴리스(DMG + `.sha256`). Task 12가 두 번째 맥에서 그것을 받는다.
+
+**왜 여기인가:** Task 6에서 발행하면 Task 7~9의 디스크 부족 처리가 **빠진 DMG**가 배포된다. 그리고 태그는 산출물을 만든 코드를 가리켜야 하므로 코드가 전부 커밋된 뒤여야 한다. 이 Task는 **되돌리기 어려운 유일한 자리**다 — 공개 릴리스는 지워도 받아 간 사람에게서 사라지지 않는다.
+
+- [ ] **Step 1: 모든 코드가 커밋됐는지 확인한다**
+
+```bash
+cd /Users/gim-yeongjae/project/daewha
+git status --short
+git log --oneline dev..HEAD
+```
+
+기대: 작업트리가 깨끗하고, Task 1~9의 커밋이 전부 보인다. **더러우면 여기서 멈춘다** — 미커밋 코드로 만든 DMG는 재현할 수 없다.
+
+- [ ] **Step 2: 태그를 지금 커밋으로 옮긴다**
+
+Task 6 Step 10이 임시로 찍은 태그가 Task 7~9 코드를 안 가리킨다.
+
+```bash
+cd /Users/gim-yeongjae/project/daewha
+git tag -f desktop-v0.3.0
+git describe --tags --exact-match --match 'desktop-v*'
+```
+
+기대: `desktop-v0.3.0`이 지금 HEAD를 가리킨다.
+
+- [ ] **Step 3: 최종 산출물을 처음부터 다시 만든다**
+
+Task 6 Step 10의 DMG는 Task 7~9 코드가 없다. **재사용하지 않는다.**
+
+```bash
+cd /Users/gim-yeongjae/project/daewha/desktop
+rm -rf out
+pnpm run package:release 2>&1 | tail -60
+```
+
+기대: 서명 → check-bundle → `.app` 공증 → 스테이플 → check-bundle 재실행 → DMG → DMG 서명·공증·스테이플 → 마운트 확인. 10~20분.
+
+- [ ] **Step 4: 발행한다 (P6a-C14)**
+
+`package.mjs`에 넣지 않고 손으로 한 번 부른다 — 되돌리기 어려운 동작이라 스크립트에 숨기지 않는다. **`deploy/release.sh`를 고치지 않는다**: 그 스크립트는 태그를 `be/worker/pyproject.toml` 버전에 묶고 있어, 한 스크립트에 합치면 웹 배포의 단언이 데스크톱 버전까지 묶는다.
+
+```bash
+cd /Users/gim-yeongjae/project/daewha/desktop/out
+DMG=$(ls *.dmg)
+gh release create desktop-v0.3.0 "$DMG" "$DMG.sha256" \
+  --repo Yjason-K/Damwha \
+  --target "$(git -C /Users/gim-yeongjae/project/daewha rev-parse HEAD)" \
+  --title "Damwha 0.3.0 (macOS)" \
+  --notes "$(cat <<'NOTES'
+macOS 15.0 이상, Apple Silicon.
+
+설치 후 첫 실행에서 Hugging Face 토큰을 한 번 넣어야 해요.
+이전 버전에서 올라오는 경우에도 토큰을 한 번 다시 넣어야 합니다 — 앱 서명 방식이 바뀌었어요.
+
+`shasum -a 256 -c Damwha-0.3.0-arm64.dmg.sha256`으로 받은 파일을 확인할 수 있어요.
+NOTES
+)"
+```
+
+- [ ] **Step 5: 발행 결과와 네임스페이스를 확인한다 (P6a-C14)**
+
+```bash
+gh release view desktop-v0.3.0 --repo Yjason-K/Damwha --json tagName,assets -q '.tagName, (.assets[]|.name)'
+gh release list --repo Yjason-K/Damwha --limit 6
+```
+
+기대: 태그가 `desktop-v0.3.0`, 자산 둘(DMG와 `.sha256`). **`v0.2.3`(셀프호스팅 웹 배포)이 그대로 있고 건드려지지 않았다** — 네임스페이스를 가른 이유가 그것이다.
+
+- [ ] **Step 6: 태그를 푸시한다**
+
+```bash
+cd /Users/gim-yeongjae/project/daewha
+git push origin desktop-v0.3.0
+```
+
+(`gh release create`가 이미 원격에 태그를 만들었으면 이 단계는 no-op이다.)
+
+**Verify:** Step 5. 그리고 받은 DMG의 sha256이 자산의 값과 같은지 — Task 12 Step 3이 다른 맥에서 그것을 다시 본다.
+
+**Review:** Step 1이 깨끗한 트리에서 돌았는지. Step 3이 **새로** 만든 DMG인지(Task 6의 것을 재사용하지 않았는지). 릴리스 노트에 최소 macOS와 토큰 재입력 안내가 있는지. `v*` 태그를 건드리지 않았는지.
+
+**되돌리기:** `gh release delete desktop-v0.3.0 --repo Yjason-K/Damwha --yes && git push --delete origin desktop-v0.3.0 && git tag -d desktop-v0.3.0`. **이미 받아 간 사람에게서는 사라지지 않는다.**
+
+---
+
+## Task 12: 두 번째 맥 종단간 검증
 
 **Files:** 없음 (검증 전용).
 
@@ -1785,7 +1951,7 @@ Wi-Fi를 켜고, 토큰 창에 HF 토큰을 넣는다. 마이크 대화상자가
 
 ---
 
-## Task 12: 결과 문서와 로드맵 갱신
+## Task 13: 결과 문서와 로드맵 갱신
 
 **Files:**
 - Create: `docs/superpowers/reports/2026-09-20-electron-phase-6a-signing-distribution-results.md`
@@ -1835,18 +2001,20 @@ gh pr create --base dev --title "Phase 6a — 서명·배포" --body-file docs/s
 
 ```
 Task 1 (postgres·ffmpeg 15.0) ─┐
-Task 2 (mlx 15.0) ─────────────┼→ Task 4 (plist·종단간) → Task 5 (Developer ID) → Task 6 (공증·DMG·릴리스) ─┐
-Task 3 (minos 판독기·단언) ────┘                                                                              │
-                                                                                                              ├→ Task 11 (두 번째 맥)
-Task 7 (worker 디스크) ─┬→ Task 9 (화면) → Task 10 (packaged 검증) ───────────────────────────────────────────┘
-Task 8 (업로드 507) ────┘                                                                                     │
-                                                                                                              └→ Task 12 (결과·로드맵)
+Task 2 (mlx 15.0) ─────────────┼→ Task 4 (plist) → Task 5 (Developer ID) → Task 6 (공증·DMG 기구) ─┐
+Task 3 (minos 판독기·단언) ────┘                                                                    │
+                                                                                                    ├→ Task 10 (packaged 검증)
+Task 7 (worker 디스크) ─┬→ Task 9 (화면) ───────────────────────────────────────────────────────────┘
+Task 8 (업로드 507) ────┘                                                                            │
+                                                                                                    ↓
+                                                              Task 11 (릴리스 발행) → Task 12 (두 번째 맥) → Task 13 (결과·로드맵)
 ```
 
 - **Task 1·2·3은 서로 독립이다.** 병렬 가능하지만 1·2는 각각 5~10분 빌드를 물고 같은 `.cache`를 쓰므로 순차가 안전하다.
 - **Task 7·8은 서명 갈래와 완전히 독립이다.** 다른 세션에서 병행할 수 있다.
 - **Task 5 뒤에는 토큰을 한 번 다시 넣어야 한다**(예고된 퇴행). Task 10의 packaged 회차 전에 해 둔다 — 스펙 §12-5.
-- **Task 6이 실제 GitHub Release를 만든다.** 되돌리려면 `gh release delete desktop-v0.3.0 --yes && git tag -d desktop-v0.3.0 && git push --delete origin desktop-v0.3.0`.
+- **발행은 Task 11 하나뿐이고, 모든 코드가 커밋되고 packaged 검증이 끝난 뒤다.** Task 6에서 내면 Task 7~9의 디스크 부족 처리가 빠진 DMG가 배포되고, 태그가 산출물을 만든 코드를 안 가리킨다.
+- **Task 6의 태그는 임시다.** 기구가 도는지 보려고 찍는 것이고 Task 11이 `git tag -f`로 옮긴다.
 
 ## 되돌리는 법
 
@@ -1855,6 +2023,7 @@ Task 8 (업로드 507) ────┘                                          
 | Task 1·2의 빌드 | 옛 캐시 트리(`pg-<옛키>`·`ffmpeg-<옛키>`·`rt-<옛키>`)가 `.cache`에 남아 있다. 스크립트를 되돌리면 옛 키가 다시 적중한다 |
 | Task 5의 서명 전환 | `signing.json`을 지우면 빌드가 멈춘다(ad-hoc으로 조용히 안 떨어진다). 되돌리려면 커밋을 revert |
 | Task 5 뒤 토큰 무효 | 되돌릴 것이 아니다. 온보딩에서 다시 넣는다. 옛 `hf-token.bin`은 지워지지 않고 남는다 |
-| Task 6의 릴리스 | 위 `gh release delete` + 태그 삭제 |
+| Task 6의 DMG | 산출물일 뿐이다. `rm -rf desktop/out`. 발행하지 않았으므로 밖으로 나간 것이 없다 |
+| Task 11의 릴리스 | `gh release delete desktop-v0.3.0 --repo Yjason-K/Damwha --yes` + `git push --delete origin desktop-v0.3.0` + `git tag -d desktop-v0.3.0`. **이미 받아 간 사람에게서는 사라지지 않는다** — 이것이 계획에서 유일하게 되돌리기 어려운 자리다 |
 | 두 번째 맥의 설치 | `/Applications/Damwha.app`과 `~/Library/Application Support/Damwha` 삭제. 그 계정 전용이라 첫 맥에 영향 없음 |
 | 전체 | 브랜치를 버린다. `dev`는 손대지 않았다 |
