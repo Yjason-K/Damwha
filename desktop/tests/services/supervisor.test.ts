@@ -358,6 +358,64 @@ describe("supervisor restart policy", () => {
     await new Promise((r) => setTimeout(r, 40));
     expect(launches).toBe(1);
   });
+
+  it("worker가 크래시로 재시작되면 다시 띄우기 전에 --once 자식을 거둔다", async () => {
+    const order: string[] = [];
+    let exit: ((code: number) => void) | null = null;
+    const s = createSupervisor(
+      [
+        spec("worker", {
+          restart: { maxAttempts: 2, backoffMs: [0] },
+          launch: async () => {
+            order.push("launch");
+            return { handle: fakeHandle((l) => { exit = l; }), owned: true };
+          },
+        }),
+      ],
+      ctx(),
+      { reapOwnOnce: async () => { order.push("reap"); return { reaped: [102] }; } },
+    );
+    await s.start();
+    exit!(1); // 크래시 — watchForDeath → scheduleRestart
+
+    await vi.waitFor(() => expect(order).toEqual(["launch", "reap", "launch"]));
+  });
+
+  it("사람이 누른 재시작도 같은 회수를 지난다", async () => {
+    const order: string[] = [];
+    const s = createSupervisor(
+      [spec("worker", { launch: async () => { order.push("launch"); return { handle: null, owned: true }; } })],
+      ctx(),
+      { reapOwnOnce: async () => { order.push("reap"); return { reaped: [] }; } },
+    );
+    await s.start();
+    await s.restartService("worker");
+    expect(order).toEqual(["launch", "reap", "launch"]);
+  });
+
+  it("스캔이 실패해도 재시작을 막지 않는다", async () => {
+    const order: string[] = [];
+    const s = createSupervisor(
+      [spec("worker", { launch: async () => { order.push("launch"); return { handle: null, owned: true }; } })],
+      ctx(),
+      { reapOwnOnce: async () => { order.push("reap"); return { failed: true as const }; } },
+    );
+    await s.start();
+    await s.restartService("worker");
+    expect(order).toEqual(["launch", "reap", "launch"]);
+  });
+
+  it("worker가 아닌 서비스의 재시작은 회수를 부르지 않는다", async () => {
+    const calls: string[] = [];
+    const s = createSupervisor(
+      [spec("embed")],
+      ctx(),
+      { reapOwnOnce: async () => { calls.push("reap"); return { reaped: [] }; } },
+    );
+    await s.start();
+    await s.restartService("embed");
+    expect(calls).toEqual([]);
+  });
 });
 
 describe("supervisor.stopAll", () => {

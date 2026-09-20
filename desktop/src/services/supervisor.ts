@@ -38,6 +38,12 @@ export interface SupervisorHooks {
    * 누르므로(스펙 §6.9) 2초 간격이 놓치는 상태 변화는 없다. 테스트가 0으로 줄이려고 열어 둔다.
    */
   readinessPollMs?: number;
+  /**
+   * worker를 다시 띄우기 전에 이번 실행의 `--once` 자식을 거둔다 (Phase 5 스펙 §8).
+   * 배선은 main.ts가 한다 — 감독자는 `ps`에 닿는 방법을 몰라야 vitest에서 돈다
+   * (`readModelReadiness`와 같은 이유).
+   */
+  reapOwnOnce?(): Promise<{ reaped: number[] } | { failed: true }>;
 }
 
 const DEFAULT_READY_TIMEOUT_MS = 60_000;
@@ -532,6 +538,21 @@ export function createSupervisor(
   }
 
   /**
+   * 자동 재시작(크래시)과 사람이 누른 재시작 둘 다 여기를 지난다. worker에만 돈다 —
+   * `--once` 자식은 worker만 만든다. 스캔 실패·예외는 재시작을 막지 않는다.
+   */
+  async function reapOwnOnceBefore(id: ServiceId): Promise<void> {
+    if (id !== "worker" || hooks.reapOwnOnce === undefined) return;
+    try {
+      const out = await hooks.reapOwnOnce();
+      if ("failed" in out) log(`${id}: --once 자식 스캔에 실패했어요 — 재시작은 계속해요`);
+      else if (out.reaped.length > 0) log(`${id}: 앞 실행의 --once 자식 ${out.reaped.length}개를 거뒀어요`);
+    } catch (e) {
+      log(`${id}: --once 자식 스캔이 던졌어요 — 재시작은 계속해요: ${reason(e)}`);
+    }
+  }
+
+  /**
    * ready 이후에 죽으면 백오프로 다시 띄운다. 상한을 넘으면 failed로 고정하고 메뉴의 재시도를
    * 기다린다 (스펙 §6.8). postgres도 이 경로를 탄다 — 내장 어댑터의 restart가 [3s, 8s, 20s]이고,
    * 재시작도 launch()를 거치므로 고아·낡은 락 판정을 매번 다시 한다 (Phase 3 스펙 §6.4 재시작).
@@ -550,7 +571,11 @@ export function createSupervisor(
     rt.restartTimer = arm(delay, () => {
       rt.restartTimer = null;
       if (stopping) return;
-      background(spec);
+      void reapOwnOnceBefore(spec.id).then(() => {
+        // 스캔 동안 종료가 시작됐을 수 있다. 종료가 치운 것을 되살리지 않는다.
+        if (stopping) return;
+        background(spec);
+      });
     });
   }
 
@@ -759,6 +784,7 @@ export function createSupervisor(
     if (stopping) return;
     // 사람이 명시적으로 부른 재시작이다. 예산도 새로 준다 (runFrom이 재시도에 하는 것과 같다).
     set(id, { restarts: 0 });
+    await reapOwnOnceBefore(id);
     await bring(rt.spec);
   }
 

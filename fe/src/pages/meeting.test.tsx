@@ -346,13 +346,19 @@ const fx = vi.hoisted(() => {
     return m1Detail;
   };
 
-  const status: MeetingStatusResponse = {
+  const defaultStatus: MeetingStatusResponse = {
     status: "processing",
     stage: "stt",
     progress: 0.5,
     error: null,
     summary: null,
     search_index: null,
+    retry: null,
+  };
+  // 재시도 배너 테스트가 stage/progress/retry를 함께 덮어쓴다 — 다른 필드는 기본값 그대로.
+  let status: MeetingStatusResponse = defaultStatus;
+  const setStatus = (patch: Partial<MeetingStatusResponse>) => {
+    status = { ...status, ...patch };
   };
 
   // 색인(search_index) 상태는 테스트별로 덮어쓴다 — reset()이 원복.
@@ -616,6 +622,7 @@ const fx = vi.hoisted(() => {
     deletedIds.clear();
     detailOverrides.clear();
     searchIndex = null;
+    status = defaultStatus;
     modelReadiness = { updatedAt: null, entries: [] };
     releaseListFetches();
   };
@@ -677,6 +684,7 @@ const fx = vi.hoisted(() => {
     reset,
     setDetailOverride,
     setSearchIndex,
+    setStatus,
     setModelReadiness,
     blockListFetches,
     releaseListFetches,
@@ -1101,6 +1109,87 @@ test("받는 모델이 없으면 배너에 그 줄이 없다", async () => {
   renderShell("/meetings/m3");
   await screen.findByText(/회의를 처리하고 있어요/);
   expect(screen.queryByText(/모델을 받는 중/)).toBeNull();
+});
+
+test("재시도 대기 중이면 배너가 회차와 남은 시간을 말한다", async () => {
+  // 백오프가 30초·90초·210초·450초로 길어져(Phase 5) job이 몇 분씩 queued로 남을 수 있다 —
+  // stage가 없는 그 구간을 "대기 중"과 구분해서 말해야 한다.
+  fx.setStatus({
+    stage: null,
+    progress: null,
+    retry: {
+      attempts: 2,
+      max_attempts: 5,
+      next_attempt_at: new Date(Date.now() + 90_000).toISOString(),
+      error: null,
+    },
+  });
+  renderShell("/meetings/m3");
+  await screen.findByText(/회의를 처리하고 있어요/);
+
+  expect(await screen.findByText(/재시도 대기/)).toBeInTheDocument();
+  expect(screen.getByText(/2\/5회차/)).toBeInTheDocument();
+});
+
+test("재시도 대기 배너가 마지막 오류 코드를 함께 말한다", async () => {
+  // 스펙 §6 — 회차·남은 시간만으로는 "왜 기다리는지"를 말하지 못한다. 회의의 error는
+  // 재시도 대기 중 null이므로 job이 남긴 오류가 유일한 근거다.
+  fx.setStatus({
+    stage: null,
+    progress: null,
+    error: null,
+    retry: {
+      attempts: 3,
+      max_attempts: 5,
+      next_attempt_at: new Date(Date.now() + 210_000).toISOString(),
+      error: { code: "model_download_failed", message: "connection reset" },
+    },
+  });
+  renderShell("/meetings/m3");
+  await screen.findByText(/회의를 처리하고 있어요/);
+
+  expect(
+    await screen.findByText(/마지막 오류: model_download_failed/),
+  ).toBeInTheDocument();
+  // 스택트레이스·메시지 전문은 배너에 넣지 않는다.
+  expect(screen.queryByText(/connection reset/)).toBeNull();
+});
+
+test("모델을 받는 중이면 재시도 문구 대신 다운로드 문구만 뜬다", async () => {
+  fx.setStatus({
+    stage: null,
+    progress: null,
+    retry: {
+      attempts: 2,
+      max_attempts: 5,
+      next_attempt_at: new Date(Date.now() + 90_000).toISOString(),
+      error: null,
+    },
+  });
+  fx.setModelReadiness({
+    updatedAt: new Date().toISOString(),
+    entries: [
+      {
+        key: "mlx-community/whisper-large-v3-turbo",
+        state: "downloading",
+        bytesDone: 512,
+        bytesTotal: 2048,
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        writer: "worker-1",
+        attempt: 1,
+        error: null,
+        errorKind: null,
+      },
+    ],
+  });
+  renderShell("/meetings/m3");
+  await screen.findByText(/회의를 처리하고 있어요/);
+
+  expect(
+    await screen.findByText(/mlx-community\/whisper-large-v3-turbo 25%/),
+  ).toBeInTheDocument();
+  expect(screen.queryByText(/재시도 대기/)).toBeNull();
 });
 
 test("처리 중 배너의 취소 버튼은 POST /meetings/:id/cancel을 부른다", async () => {
