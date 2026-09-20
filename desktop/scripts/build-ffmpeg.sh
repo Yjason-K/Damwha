@@ -47,9 +47,14 @@ for t in curl tar make cc otool shasum ditto sysctl; do
   command -v "$t" >/dev/null 2>&1 || die "$t 가 없다 — Xcode Command Line Tools가 필요하다"
 done
 
-# 캐시 키 = 버전·prefix·체크섬 파일·이 스크립트 자신. 조작을 고치고 옛 산출물을 쓰는 것이 가장 조용한
-# 실패라, 스크립트를 한 글자라도 고치면 다시 빌드한다.
-KEY=$( { echo "$FFMPEG_VERSION $BUILD_PREFIX"; shasum -a 256 "$SUMS" "$SCRIPT" | awk '{print $1}'; } | shasum -a 256 | cut -c1-16)
+TARGET_LIB="$DESKTOP/scripts/lib/build-target.sh"
+# shellcheck source=lib/build-target.sh
+. "$TARGET_LIB"
+
+# 캐시 키 = 버전·prefix·체크섬 파일·이 스크립트 자신·최소 배포 타깃 파일. 조작을 고치고 옛 산출물을
+# 쓰는 것이 가장 조용한 실패라, 스크립트를 한 글자라도 고치면 다시 빌드한다.
+KEY=$( { echo "$FFMPEG_VERSION $BUILD_PREFIX $MACOSX_DEPLOYMENT_TARGET"; \
+         shasum -a 256 "$SUMS" "$SCRIPT" "$TARGET_LIB" | awk '{print $1}'; } | shasum -a 256 | cut -c1-16)
 WORK="$CACHE/work-$KEY"
 OUT="$CACHE/ffmpeg-$KEY"
 DONE="$CACHE/ffmpeg-$KEY.complete"
