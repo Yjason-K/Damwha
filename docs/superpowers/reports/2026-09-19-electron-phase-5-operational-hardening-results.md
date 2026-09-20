@@ -672,3 +672,101 @@ INFO:damwha_worker:hf download progress hook installed (writer=desktop-a7a900b8-
 **판정: P5-C8 충족.** 화면 절반은 §5가 이미 확인했고(embed `코드 143`·postgres `코드 0`의 사유와
 해결 안내, API의 `데이터베이스에 연결할 수 없어요` 연쇄, 26초·8초 회복), 깨져 있던 job 절반이
 이 수정으로 채워졌다 — job이 "진행"으로 정직해졌다.
+
+## 7. P5-C4·C5 — 미판정·미실행 둘을 채운다 (2026-09-20)
+
+§2가 권한 때문에 남긴 둘을 돌렸다. **둘 다 검증 세션 자신의 연결을 끊는 동작이라**(Wi-Fi 차단은
+API 연결을, `pmset sleepnow`는 세션 전체를) 끊는 행위만 사용자가 직접 하고 관측은 이 세션이 했다.
+
+### P5-C4 — 3분 끊김
+
+Wi-Fi를 끄는 대신 **huggingface만 막았다.** 그래야 검증 세션의 연결이 살아 있어 화면 배너를
+실시간으로 볼 수 있다 — §2가 못 본 바로 그 절반이다. `/etc/hosts`는 sudo가 필요해 **사용자가
+자기 터미널에서 직접 실행했고, 이 세션은 암호를 입력하지 않았다.**
+
+```bash
+# 준비 — 다운로드를 강제한다 (삭제가 아니라 이름만 바꾼다)
+mv "<userData>/models/hub/models--pyannote--speaker-diarization-community-1"{,.c4-aside}
+
+# 차단 (사용자가 Terminal에서)
+sudo cp -p /etc/hosts /tmp/hosts.damwha-c4.bak
+sudo sh -c 'printf "\n# damwha C4 probe\n127.0.0.1 huggingface.co\n127.0.0.1 hf.co\n127.0.0.1 cdn-lfs.huggingface.co\n127.0.0.1 cdn-lfs-us-1.hf.co\n" >> /etc/hosts'
+sudo dscacheutil -flushcache
+# 확인: curl: (7) Failed to connect to huggingface.co port 443 after 2 ms
+```
+
+`T0=19:46:27`에 업로드 → `mtg_107` / `job_195`. `worker.log`가 차단을 그대로 찍었다:
+
+```
+'[Errno 61] Connection refused' thrown while requesting HEAD
+  https://huggingface.co/pyannote/speaker-diarization-community-1/resolve/main/config.yaml
+WARNING:huggingface_hub.utils._http:Retrying in 1s [Retry 1/5].
+WARNING:damwha_worker:uncategorized exception treated as TRANSIENT: RuntimeError(...)
+WARNING:damwha_worker:job job_195 type=process_meeting failed: code=uncategorized kind=TRANSIENT attempt=2/5
+INFO:damwha_worker:job job_195 type=process_meeting → requeued
+```
+
+**화면 — 관측했다.** 백오프 창에서 상단 배너가 이렇게 말했다:
+
+```
+회의를 처리하고 있어요   재시도 대기 · 2/5회차 · 약 1분 뒤 · 0%
+```
+
+관측한 `next_attempt_at`은 `19:48:08`(attempts=2) · `19:50:14`(attempts=3) · `19:54:19`(attempts=4)로,
+실패 시각을 빼면 간격이 **60 · 120 · 240초**다. `claim`이 `attempts`를 먼저 올리므로 1회차 실패 뒤
+30초가 앞에 붙어 누적이 `0 · 30초 · 90초 · 210초 · 450초` — **문서와 정확히 일치한다.**
+
+차단 해제는 복구 명령을 주고받는 왕복 때문에 3분이 아니라 **약 6분 30초 뒤**에 이뤄졌다. 그래서
+4회차(19:50:14)까지 차단에 걸렸고 **5회차(19:54:19)가 성공**했다 — 모델을 새로 받아
+`models--pyannote--speaker-diarization-community-1`이 다시 생겼다.
+
+```sql
+SELECT id,type,status,stage,progress,attempts FROM job WHERE meeting_id='mtg_107';
+-- job_195 | process_meeting | done | persist | 100 | 5
+-- job_196 | index_meeting   | done | embed   | 100 | 1
+SELECT id,status FROM meeting WHERE id='mtg_107';   -- done
+SELECT count(*) FROM utterance WHERE meeting_id='mtg_107';  -- 1
+```
+
+**판정: 충족.** 같은 job이 사람의 앱 조작 없이 완주했고 `attempts=5 ≤ 5`, 그 사이 화면이 "재시도
+대기 · N/5회차 · 약 M분 뒤"를 말했다. 기준이 요구한 3분보다 **두 배 긴 끊김**을 넘긴 것이므로
+기준을 넘어선다 — 다만 그 대가로 재시도를 다 썼다. 3분이었다면 4회차(+210초)에서 끝났을 것이다.
+
+`/etc/hosts`는 백업본으로 되돌렸고(`jenkins slave` 항목 보존 확인), 차단 해제 뒤
+`curl https://huggingface.co`가 200이다.
+
+### P5-C5 — 잠자기 10분
+
+`pmset sleepnow`는 이 세션도 재우므로, 잠들기 전에 **5초 간격 샘플러를 분리 실행**해 두고 깨어난
+뒤 그 로그를 읽었다. 샘플러는 잠자기 동안 함께 멈췄다가 기상과 함께 이어 쓴다 — 로그의 시각 공백이
+곧 잠자기 구간이다.
+
+12분짜리 오디오를 올려(`mtg_108`/`job_197`) `stt` 76%에서 재웠다. 잠자기·기상은 `pmset -g log`로
+확정했다:
+
+```
+2026-09-20 19:59:26  Sleep   Entering Sleep state due to 'Software Sleep pid=16049'
+2026-09-20 20:00:17  Sleep   Entering Sleep state due to 'Maintenance Sleep'      (중간 DarkWake 뒤)
+2026-09-20 20:09:22  DarkWake
+2026-09-20 20:11:14  Wake    Wake from Deep Idle … pwrbtn        ← 사람이 깨운 시각
+```
+
+잠든 시간은 **11분 48초**다. 샘플러 로그의 공백도 같은 것을 말한다 — `20:00:17` 다음 행이
+`20:09:25`로 **548초**를 건너뛴다.
+
+전체 기상(`20:11:14`) 뒤 60초 창:
+
+```
+20:11:14 job=running|stt|76|1|-  meeting=processing once=1
+20:11:35 job=running|stt|77|1|-  meeting=processing once=1     ← +21초, 전진
+20:12:11 job=running|stt|78|1|-  meeting=processing once=1     ← +57초, 또 전진
+```
+
+`attempts`는 1에서 변하지 않았고, `--once` 자식도 잠자기 전후로 계속 1개다 — 회수가 돌 일 자체가
+없었다. `supervisor.log`에 잠자기 전후 **서비스 재시작이 0건**이다(마지막 재시작은 §6의 C8 회차).
+
+화면은 같은 순간 `회의를 처리하고 있어요 · 받아쓰기 · 77%`였다 — `meeting.status='processing'`,
+`job.stage='stt'`와 같은 말이다.
+
+**판정: 충족.** 기준의 세 갈래 중 (a) — `running`이며 `stage`가 더 나아감 — 으로 **21초**에
+정착했고, 화면 문구와 `meeting.status`가 일치했다.
