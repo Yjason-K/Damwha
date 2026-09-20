@@ -80,11 +80,52 @@ Mach-O 전수와 `Resources/ffmpeg/bin/*`에, `entitlements.mac.plist`(키 셋 �
 | `run/` | 소켓 디렉터리(0700). TCP는 열지 않는다 |
 | `backups/` | 데이터가 있는 DB에 마이그레이션을 적용하기 전의 `pg_dump -Fc`, 최근 5개 |
 | `logs/` | `supervisor.log`·`api.log`·`worker.log`·`embed.log`·`postgres.log`(초기 stderr), `postgres/`(서버 로그) |
-| `storage/` | Phase 1·2가 Docker DB와 쓴 파일. 앱은 읽지도 쓰지도 않는다 (Phase 5가 옮긴다) |
+| `storage/` | Phase 1·2가 Docker DB와 쓴 파일. 앱은 읽지도 쓰지도 않는다 (Phase 5가 데이터 이전을 범위에서 뺐다 — 옮기는 주체가 없다) |
 | `config.json` | 사람이 고치는 설정. 앱은 다시 쓰지 않는다(`REPO_ROOT` 저장 제외). 손으로 고친 뒤 JSON이 유효한지 확인한다 |
 
 파괴적인 실험(DB 삭제·`PG_VERSION` 변경 등)은 앱을 끄고 `ditto data data.<이름>-backup`으로 통째로 복사한 뒤에만 한다 —
 dev와 packaged가 같은 클러스터라 버려도 되는 "dev 클러스터"가 따로 없다.
+
+## 중단된 작업의 회수 — 층이 셋
+
+앱은 job을 직접 처리하지 않지만 **중단을 셋으로 나눠 거둔다** (Phase 5 스펙 §4·§8). 대상도 주체도
+달라서 하나가 다른 하나를 대신하지 않는다.
+
+| 층 | 언제 | 무엇을 | 어디 |
+| --- | --- | --- | --- |
+| 기동 회수 | API 기동 1회 (`onApplicationBootstrap`) | **앞 실행**이 남긴 `running` job — `locked_by`가 `desktop-`으로 시작하고 이번 실행 신분이 아닌 행 | `be/src/jobs/reaper.service.ts` → `JobsRepository.reclaimOrphaned` |
+| 시간 기반 reaper | 5분 크론 | `locked_at`이 30분(`REAPER_STALE_MINUTES`)보다 오래된 `running` job — **이번 실행 중에** 죽은 것 | 같은 `ReaperService`, 그리고 worker의 같은 CTE |
+| `--once` 스캔 | worker를 다시 띄우기 **직전** (크래시 재시작·사람이 누른 재시작 둘 다) | **프로세스** — 이번 실행 run-id를 단 `--once` 자식 | `services/supervisor.ts`의 `reapOwnOnceBefore` → `process/orphans.ts`의 `reapOwnOnceChildren` |
+
+- **신분은 `RUN_WORKER_ID`(`desktop-<uuid>`)이고 앱 실행마다 새로 발급된다.** `withAppOwned`가 모든
+  자식 env에 `WORKER_ID`로 얹는다. 터미널 `pnpm worker`(`worker-1`)와 웹 배포판은 접두사에 걸리지
+  않아 **앱이 그 job을 건드리지 않는다** — Phase 2의 "외부 서비스와 앱 소유를 구분한다"와 같은 결이다.
+- 기동 회수는 `attempts`를 **되돌리지 않고** 세 갈래로 간다: 남은 재시도가 있는 비-live는 `queued`로,
+  다 쓴 비-live는 `failed`(`app_restarted`)로 — 딸린 `meeting`·요약·렌즈 run·화자까지 함께 닫는다 —
+  `live_session`은 언제나 `failed`로. 앱을 다섯 번 강제 종료하면 그 job은 실패한다. 그것이 정직하다
+  (그 job이 앱을 죽이고 있을 수 있다). 라이브의 봉인·마무리는 회수가 아니라 API의
+  `LiveOrphanService`가 한다 — 회수는 그 경로를 30분 기다리지 않고 여는 것뿐이다.
+- **회수도 스캔도 기동·재시작을 막지 않는다.** 회수 SQL은 `FOR UPDATE SKIP LOCKED`라 남이 쥔 행을
+  기다리지 않고(기동 훅은 HTTP 리슨 **전에** 대기한다 — 잠금 대기는 예외가 아니라 try/catch가
+  못 잡는다), 실패하면 로그만 남긴다. `--once` 스캔 실패도 재시작을 계속한다.
+- 기동 시 **프로세스** 고아 정리(`app/reap-on-start.ts` → `reapOrphans`)는 이 셋과 다른 일이다 —
+  그쪽은 앞 실행 run-id의 프로세스, 기동 회수는 DB 행이다. `--once` 스캔이 보는 것은 **이번 실행**
+  run-id라 기동 정리가 보지 않는 사각이다.
+
+## 재시도 — 0 · 30초 · 90초 · 210초 · 450초
+
+worker가 TRANSIENT 실패를 requeue할 때 `next_attempt_at = now() + least(30 * 2^(attempts-1), 900)초`다
+(`be/worker/damwha_worker/db/queue.py`). `job.max_attempts` 컬럼 기본값은 **5**(마이그레이션 `025`)라
+claim 직후 실패를 기준으로 시도 시각이 0 · 30초 · 90초 · 210초 · 450초가 된다 — **4회차가 3.5분에
+닿으므로 3분짜리 끊김(모델 다운로드 등)을 사람 개입 없이 같은 job이 넘긴다.**
+
+- 앱이 보기에 그 구간은 `queued`다. 화면은 "재시도 대기 · N/M회차 · 약 M분 뒤"와 마지막 오류 코드로
+  말한다 — 그 문구가 없으면 정상 백오프와 worker 미기동·DB 장애가 한 얼굴이 된다.
+- 마이그레이션 `025` **전에 만들어진 job은 그대로 `max_attempts=3`**이다. 새 기본값은 그 뒤에
+  enqueue된 job에만 붙는다.
+- `live_session`은 `maxAttempts: 1`을 명시해 이 기본값을 타지 않는다. 라이브 오류는 전부 PERMANENT다.
+- **강제 종료 N번은 재시도 5회 중 N회를 먹는다** — `attempts` 한 컬럼이 크래시 회수와 일시 실패를
+  함께 센다. 나누려면 스키마 변경이 필요해 Phase 6이 받는다.
 
 ## 디버깅
 

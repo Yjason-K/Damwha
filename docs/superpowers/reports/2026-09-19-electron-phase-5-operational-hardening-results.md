@@ -281,6 +281,9 @@ ls "$PROBE/data/storage/meetings/mtg_73"     # 빈 디렉터리 (파일 없음) 
 빈 `mtg_73` 디렉터리가 파일시스템에 남았다(작은 잔재이지 데이터 손실은 아니다).
 "화면에 뜬다"를 볼 수 없었으므로 이 기준을 충족으로 적지 않는다.
 
+**추가 (2026-09-20 최종 리뷰): 이 기준은 Phase 6으로 이관한다.** 관측 권한의 문제가 아니라
+**이 Phase의 코드가 디스크 부족 사유를 만들지 않기 때문**이다 — §4.1에 근거와 결정을 적었다.
+
 정리: probe 프로세스 종료 → `hdiutil detach -force` → `rm` 로 이미지 삭제 확인,
 실 `hf-token.bin`·`models`·`data/storage`는 mtime 불변(아래 "정리 확인" 참고).
 
@@ -346,7 +349,10 @@ postgres: 종료 (코드 0) — 3초 뒤 재시작 (1회차)
 curl -s http://127.0.0.1:3000/api/health   # {"status":"ok","db":"ok"}
 ```
 
-**판정: 충족 — 다만 "화면이 사유를 말한다"는 보지 못했다.** embed·postgres 둘 다
+**판정: 부분 충족 — DB·로그로만 확인했고 화면 문구는 미관측이다.** (2026-09-20 최종 리뷰에서
+"충족"에서 내렸다. 기준의 절반은 "화면에 사유로 뜬다"인데 그것을 못 본 채로 충족이라 적으면,
+같은 이유로 C6을 미판정으로 남긴 판단과 기준이 갈린다. 판정 기준은 회차마다 같아야 한다.)
+embed·postgres 둘 다
 60초 안에 `ok`로 돌아오는 것은 `supervisor.log`와 `/api/health`로 직접 확인했다.
 상태 창이 그 사유(예: "embed: 종료… 재시작")를 화면에 실제로 렌더링하는지는 이
 세션에 화면 제어 권한이 없어 보지 못했다 — `supervisor.log`가 같은 문구를 담고
@@ -398,3 +404,65 @@ SELECT count(*) FROM job WHERE status='running' AND locked_by LIKE 'desktop-%'
   `job_53`)이 회수·재claim을 거쳐 최종 `done`으로 정착하는 것까지 확인한 뒤,
   `Damwha` 프로세스를 전부 종료해 이 라운드를 시작하기 전 상태(앱 미기동)로
   되돌렸다 — `ps -ef | grep -i damwha`가 빈 결과.
+
+## 3. 단위 검증 — P5-C2·C3·C11·C12 (2026-09-20 최종 리뷰)
+
+스펙 §11이 **환경을 `unit`으로 적은 기준 넷**이다. 통합 검증(§2)은 이 넷을 다루지 않았고
+판정 줄도 없었다. 아래는 각 기준을 지고 있는 테스트와 실행 결과다 — 이 회차에 전부 다시 돌렸다.
+
+| ID | 기준 | 판정 | 그 기준을 지는 테스트 |
+| --- | --- | --- | --- |
+| P5-C2 | 회수가 외부 worker(`worker-1`) 소유 `running` 행을 건드리지 않는다 | **충족**(unit) | `be/test/reclaim.spec.ts` — `leaves an external terminal worker’s job alone`, `leaves an external live session alone`. 부트스트랩까지 태운 판은 `be/test/reclaim-bootstrap.e2e-spec.ts` — `requeues the previous run’s job, leaves this run’s and the external one` |
+| P5-C3 | `WORKER_ID` 없는 환경에서 회수가 SQL을 발행하지 않는다 | **충족**(unit) | `be/test/reclaim-bootstrap.spec.ts` — `does nothing when WORKER_ID is absent (web deployment)`, `does nothing when WORKER_ID is not an app worker id` (repository 호출 0회를 단언한다) |
+| P5-C11 | 회수와 claim·취소·재처리의 경합이 어느 순서에서도 한 상태로 수렴한다 | **충족**(unit) | `be/test/reclaim-races.spec.ts` 네 개 — `reclaim → claim`, `a claim racing an open reclaim transaction`(열린 트랜잭션이 행을 쥔 채 claim이 달려든다), `cancel → reclaim`, `reprocess → reclaim` |
+| P5-C12 | 이전 worker의 늦은 `mark_processing`이 0행이다 | **충족**(unit) | `be/worker/tests/test_db_lifecycle.py` — `test_mark_processing_refuses_a_worker_that_no_longer_owns_the_job`(0행 + 회의 상태 불변), 짝은 `test_mark_processing_accepts_the_owning_worker` |
+
+```
+$ pnpm be test -- reclaim.spec.ts status-retry.spec.ts reclaim-races.spec.ts
+Test Suites: 3 passed, 3 total
+Tests:       19 passed, 19 total
+
+$ pnpm be test -- reclaim-bootstrap.spec.ts
+Tests:       4 passed, 4 total
+
+$ pnpm be test -- reclaim-bootstrap.e2e-spec.ts
+Tests:       1 passed, 1 total
+
+$ uv run --directory be/worker pytest tests/test_db_lifecycle.py -q
+29 passed in 6.61s
+```
+
+`unit` 판정이 packaged 회차를 대신하지 않는다는 점은 스펙이 이미 정해 뒀다 — §11의 환경 칸이
+이 넷만 `unit`(C2는 `dev + unit`)으로 적었고, 나머지는 packaged다.
+
+## 4. 범위 변경과 이월 (2026-09-20 최종 리뷰)
+
+### 4.1 P5-C6(디스크 부족)을 Phase 6으로 옮긴다
+
+**결정: 범위 변경.** §2의 C6은 "화면을 볼 수 없어 미판정"으로 남았지만, 코드를 읽으면 관측
+권한이 있었더라도 이 기준은 성립하지 않는다.
+
+- `desktop/src/diagnostics/causes.ts`의 `diskFull` 항목은 문구만 있고, 같은 파일의 주석이
+  **"이 Phase에는 이 문구를 내는 어댑터가 아직 없다 — 남은 용량을 재는 자리가 없기 때문이다"**
+  라고 스스로 적고 있다(`causes.ts:155`).
+- 업로드 경로에도 ENOSPC 처리가 없다. §2의 실측이 그대로 보여준다 — 디스크가 찬 73번째 업로드는
+  처리되지 않은 500과 `ENOSPC` 스택트레이스로 끝났고, `supervisor.log`에 디스크 부족을 지목하는
+  줄은 없었다.
+
+즉 **어떻게 관측하든 이 코드로는 "원인·복구가 화면에 뜬다"를 채울 수 없다.** 관측 방법의 문제가
+아니라 기능의 부재이므로, 판정을 기다리는 대신 범위 변경으로 처리한다. 로드맵 Phase 6의 범위에
+백업·복원 항목과 나란히 적었다. Phase 6이 받는 일은 둘이다 — 남은 용량을 재는 자리, 그리고
+업로드 경로의 ENOSPC 처리(현재는 잔재로 빈 `meetings/<id>/` 디렉터리가 남는다).
+
+기준의 나머지 절반(데이터 보존)은 이 회차에 실측으로 확인됐다는 사실은 남긴다: 이미 성공한 72개
+`meeting` 행과 저장소 파일이 그대로였고 고아 DB 행도 생기지 않았다.
+
+### 4.2 `attempts` 한 컬럼이 두 가지를 센다 — Phase 6으로 이월
+
+`attempts`는 **크래시 회수와 일시 실패 재시도를 구분하지 않는다.** claim이 +1 하고 회수는 그것을
+되돌리지 않으므로(스펙 §4.1), 앱을 N번 강제 종료하면 그 job은 5회 재시도 중 N회를 잃은 채로 남는다.
+P5-C1의 실측이 그 모양 그대로다 — `kill -9` 한 번에 `attempts`가 1에서 2가 됐다.
+
+이것은 결함이 아니라 **선택**이다. 되돌리면 앱을 죽이는 job이 상한에 영영 닿지 못해 무한 재시도가
+된다(스펙 §4.1의 근거). 둘 다 만족하려면 "이 시도가 왜 소모됐는가"를 세는 컬럼이 따로 있어야 하고,
+그것은 스키마 변경이다 — 스펙 §2.2가 이 Phase에서 뺀 종류의 작업이다. Phase 6으로 넘긴다.
