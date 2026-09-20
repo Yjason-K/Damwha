@@ -100,6 +100,22 @@ def _wait_child(proc) -> int:
             continue
 
 
+def _reap_own_orphans(conn, settings) -> None:
+    """내 신분으로 잠긴 `running` 행을 되돌린다 — **내 `--once` 자식이 하나도 없을 때만**.
+
+    부모는 자식을 한 번에 하나만 띄우고 `_wait_child`로 거두므로, 그 보장이 서는 자리는 셋이다:
+    기동 직후(자식을 아직 안 띄웠다), 자식을 거둔 직후, DB 재접속 직후(그 앞에서 자식을 이미
+    거뒀다). 회수 실패는 로그만 남기고 루프를 계속한다 — 큐를 멈출 이유가 아니다.
+    """
+    try:
+        requeued, failed = db.reap_own_orphans(conn, settings.worker_id)
+    except Exception:  # noqa: BLE001 — 회수 실패가 폴링을 멈춰선 안 된다
+        log.exception("own-orphan reclaim failed")
+        return
+    if requeued or failed:
+        log.warning("reclaimed own orphans: requeued=%s failed=%s", requeued, failed)
+
+
 def run_supervisor(settings, shutdown, *, connect_fn, spawn_fn, child_holder) -> None:
     """부모: peek → job 있으면 자식 spawn → 종료 대기 → exit code 분기.
 
@@ -113,6 +129,7 @@ def run_supervisor(settings, shutdown, *, connect_fn, spawn_fn, child_holder) ->
     # 잘못된 DATABASE_URL이면 그 줄만 남고 여기 백오프 루프에 무기한 머문다 — 화면은
     # "준비됨"인데 큐는 영원히 안 돈다. 이 줄만이 "실제로 붙었다"를 뜻한다.
     log.info("supervisor %s ready (db connected)", settings.worker_id)
+    _reap_own_orphans(conn, settings)
     consecutive_failures = 0
     while not shutdown.is_set():
         try:
@@ -129,6 +146,9 @@ def run_supervisor(settings, shutdown, *, connect_fn, spawn_fn, child_holder) ->
             # 재접속에서도 같은 줄을 찍는다. 한 번만 찍으면 degraded에서 ok로 돌아온 것을
             # 앱이 관찰할 수 없다 (스펙 §6.6).
             log.info("supervisor %s ready (db connected)", settings.worker_id)
+            # DB가 죽으면 그 job을 쥔 자식도 함께 죽는다. 그 행을 여기서 되돌리지 않으면
+            # 회수 세 층이 모두 비켜 가 30분 reaper까지 `running`으로 얼어 있다 (P5-C8).
+            _reap_own_orphans(conn, settings)
             consecutive_failures = 0  # DB 재접속은 자식 크래시가 아니다
             continue
         if not has_job:
@@ -156,6 +176,8 @@ def run_supervisor(settings, shutdown, *, connect_fn, spawn_fn, child_holder) ->
                 break
         else:
             consecutive_failures += 1
+            # 크래시한 자식이 쥐고 있던 행도 고아다 (DB는 멀쩡한 OOM·SIGKILL 경로).
+            _reap_own_orphans(conn, settings)
             delay = min(
                 settings.poll_interval_seconds * (2 ** (consecutive_failures - 1)),
                 _MAX_BACKOFF_SECONDS,
@@ -307,9 +329,7 @@ def _kill_child_group(proc, *, killpg=os.killpg) -> None:
         proc.kill()
 
 
-def run_supervisor_main(
-    settings, shutdown: threading.Event, *, run_id: str | None = None
-) -> None:
+def run_supervisor_main(settings, shutdown: threading.Event, *, run_id: str | None = None) -> None:
     """부모: 2단계 시그널 핸들러 설치 후 supervisor 루프."""
     log.info("runtime %s", json.dumps(runtime_report.runtime_facts()))
     child_holder = {"proc": None, "count": 0}

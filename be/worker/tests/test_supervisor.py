@@ -416,3 +416,100 @@ def test_once_child_path_is_wired_to_hard_exit():
     src = inspect.getsource(m.main)
     assert "_hard_exit(run_child(" in src
     assert "sys.exit(run_child(" not in src
+
+
+def _seed_own_orphan(conn):
+    """이 워커(`w1`) 신분으로 잠긴 채 남은 `running` 행 — 죽은 `--once` 자식이 쥐던 것."""
+    mid = seed_meeting(conn, status="processing")
+    jid = seed_job(
+        conn,
+        meeting_id=mid,
+        status="running",
+        locked_by="w1",
+        attempts=1,
+        max_attempts=5,
+        locked_minutes_ago=0,
+    )
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    return jid
+
+
+def test_supervisor_reclaims_its_own_running_job_after_reconnect(conn, pg_url, monkeypatch):
+    """DB가 죽으면 자식도 함께 죽는다 — 부모는 재접속 직후 자기 고아를 되돌려야 한다.
+
+    이게 없으면 그 행은 30분 reaper까지 `running`으로 얼어 있고 화면은 "처리하고 있어요"를
+    계속 말한다 (Phase 5 결과 §5, P5-C8).
+    """
+    jid = _seed_own_orphan(conn)
+
+    peek_calls = {"count": 0}
+    real_peek = db.peek_queued
+
+    def _flaky_peek(c):
+        peek_calls["count"] += 1
+        if peek_calls["count"] == 1:
+            raise RuntimeError("simulated db blip")
+        return real_peek(c)
+
+    monkeypatch.setattr(db, "peek_queued", _flaky_peek)
+
+    shutdown = threading.Event()
+    monkeypatch.setattr(shutdown, "wait", lambda t: (shutdown.set(), True)[1])
+
+    run_supervisor(
+        _peek_settings(),
+        shutdown,
+        connect_fn=lambda: db.connect(pg_url),
+        spawn_fn=lambda: (shutdown.set(), _StubProc(3))[1],
+        child_holder={"proc": None, "count": 0},
+    )
+
+    row = conn.execute("SELECT status, locked_by FROM job WHERE id=%s", (jid,)).fetchone()
+    assert row["status"] == "queued"
+    assert row["locked_by"] is None
+
+
+def test_supervisor_reclaims_its_own_running_job_after_a_child_crash(conn, pg_url, monkeypatch):
+    """DB가 멀쩡한데 자식만 죽은 경우(OOM·SIGKILL)도 같은 구멍이다."""
+    jid = _seed_own_orphan(conn)
+    # 큐에 한 건 있어야 부모가 자식을 띄운다.
+    mid = seed_meeting(conn, status="done", processing_version=0)
+    seed_job(conn, type="index_meeting", meeting_id=mid, payload={"schema_version": 1})
+
+    shutdown = threading.Event()
+    monkeypatch.setattr(shutdown, "wait", lambda t: (shutdown.set(), True)[1])
+
+    run_supervisor(
+        _peek_settings(),
+        shutdown,
+        connect_fn=lambda: db.connect(pg_url),
+        spawn_fn=lambda: _StubProc(1),  # 크래시
+        child_holder={"proc": None, "count": 0},
+    )
+
+    row = conn.execute("SELECT status, locked_by FROM job WHERE id=%s", (jid,)).fetchone()
+    assert row["status"] == "queued"
+    assert row["locked_by"] is None
+
+
+def test_supervisor_reclaims_its_own_running_job_at_startup(conn, pg_url, monkeypatch):
+    """supervisor만 재시작한 경우 — 앱은 앞 supervisor의 `--once` 자식을 **죽이지만**
+    그 행은 같은 `WORKER_ID`로 잠긴 채 남는다(신분은 앱 실행 단위라 supervisor 재시작으로
+    바뀌지 않는다). 새 supervisor가 붙는 순간 자기 자식은 아직 하나도 없으므로 그 행은 고아다.
+    """
+    jid = _seed_own_orphan(conn)
+
+    shutdown = threading.Event()
+    monkeypatch.setattr(shutdown, "wait", lambda t: (shutdown.set(), True)[1])
+
+    run_supervisor(
+        _peek_settings(),
+        shutdown,
+        connect_fn=lambda: db.connect(pg_url),
+        spawn_fn=lambda: (shutdown.set(), _StubProc(3))[1],
+        child_holder={"proc": None, "count": 0},
+    )
+
+    row = conn.execute("SELECT status, locked_by FROM job WHERE id=%s", (jid,)).fetchone()
+    assert row["status"] == "queued"
+    assert row["locked_by"] is None

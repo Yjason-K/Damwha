@@ -364,3 +364,86 @@ def test_mark_processing_refuses_a_worker_that_no_longer_owns_the_job(conn):
 def test_mark_processing_accepts_the_owning_worker(conn):
     mid, jid = _meeting_with_running_job(conn, worker_id="desktop-new")
     assert db.mark_processing(conn, mid, jid, 1, "desktop-new") == 1
+
+
+def test_reap_own_orphans_requeues_this_workers_running_job_without_waiting(conn):
+    """`--once` 자식이 죽으면 그 행은 30분을 기다리지 않고 바로 돌아와야 한다.
+
+    `locked_at`이 방금인데도 회수된다 — 부모가 "내 자식은 없다"를 알고 부르는 자리다.
+    """
+    mid = seed_meeting(conn, status="processing")
+    jid = seed_job(
+        conn,
+        meeting_id=mid,
+        status="running",
+        locked_by="w1",
+        attempts=1,
+        max_attempts=5,
+        locked_minutes_ago=0,
+    )
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+
+    assert db.reap_own_orphans(conn, "w1") == (1, 0)
+    row = conn.execute(
+        "SELECT status, locked_by, next_attempt_at FROM job WHERE id=%s", (jid,)
+    ).fetchone()
+    assert row["status"] == "queued"
+    assert row["locked_by"] is None
+    assert row["next_attempt_at"] is None
+
+
+def test_reap_own_orphans_leaves_another_workers_job_alone(conn):
+    mid = seed_meeting(conn, status="processing")
+    jid = seed_job(
+        conn,
+        meeting_id=mid,
+        status="running",
+        locked_by="w2",
+        attempts=1,
+        max_attempts=5,
+        locked_minutes_ago=0,
+    )
+
+    assert db.reap_own_orphans(conn, "w1") == (0, 0)
+    row = conn.execute("SELECT status, locked_by FROM job WHERE id=%s", (jid,)).fetchone()
+    assert row["status"] == "running"
+    assert row["locked_by"] == "w2"
+
+
+def test_reap_own_orphans_fails_live_session_instead_of_requeueing(conn):
+    mid = seed_meeting(conn, status="recording")
+    jid = seed_job(
+        conn,
+        type="live_session",
+        meeting_id=mid,
+        status="running",
+        locked_by="w1",
+        attempts=1,
+        max_attempts=5,
+        locked_minutes_ago=0,
+    )
+
+    assert db.reap_own_orphans(conn, "w1") == (0, 1)
+    row = conn.execute("SELECT status, error FROM job WHERE id=%s", (jid,)).fetchone()
+    assert row["status"] == "failed"
+    assert row["error"]["code"] == "stale_worker"
+
+
+def test_reap_own_orphans_fails_a_job_that_has_no_retries_left(conn):
+    mid = seed_meeting(conn, status="processing")
+    jid = seed_job(
+        conn,
+        meeting_id=mid,
+        status="running",
+        locked_by="w1",
+        attempts=5,
+        max_attempts=5,
+        locked_minutes_ago=0,
+    )
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+
+    assert db.reap_own_orphans(conn, "w1") == (0, 1)
+    job = conn.execute("SELECT status FROM job WHERE id=%s", (jid,)).fetchone()
+    assert job["status"] == "failed"
+    meeting = conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()
+    assert meeting["status"] == "failed"
