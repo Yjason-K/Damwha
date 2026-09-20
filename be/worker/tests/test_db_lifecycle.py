@@ -43,8 +43,8 @@ def test_mark_processing_guarded_by_meeting(conn):
     # processing_version 불일치를 못 재게 된다.
     jid = db.claim(conn, "w1")["id"]
     conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
-    assert db.mark_processing(conn, mid, jid, 2) == 1
-    assert db.mark_processing(conn, mid, jid, 1) == 0  # version mismatch → stale
+    assert db.mark_processing(conn, mid, jid, 2, "w1") == 1
+    assert db.mark_processing(conn, mid, jid, 1, "w1") == 0  # version mismatch → stale
     assert (
         conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()["status"]
         == "processing"
@@ -334,7 +334,7 @@ def test_mark_processing_refuses_when_the_job_is_no_longer_running(conn, pg_url)
     conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
     conn.commit()
 
-    assert db.mark_processing(conn, mid, jid, 0) == 0
+    assert db.mark_processing(conn, mid, jid, 0, "w1") == 0
     row = conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()
     assert row["status"] == "failed"
 
@@ -342,10 +342,25 @@ def test_mark_processing_refuses_when_the_job_is_no_longer_running(conn, pg_url)
 def test_mark_processing_still_marks_a_running_job(conn, pg_url):
     # 정상 경로는 그대로다 — 가드를 너무 좁히면 모든 처리가 lost_ownership이 된다.
     mid = seed_meeting(conn, status="uploaded")
-    jid = seed_job(conn, meeting_id=mid, status="running")
+    jid = seed_job(conn, meeting_id=mid, status="running", locked_by="w1")
     conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
     conn.commit()
 
-    assert db.mark_processing(conn, mid, jid, 0) == 1
+    assert db.mark_processing(conn, mid, jid, 0, "w1") == 1
     row = conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()
     assert row["status"] == "processing"
+
+
+def test_mark_processing_refuses_a_worker_that_no_longer_owns_the_job(conn):
+    # 회수(기동 시) → 새 worker의 재claim → **뒤늦게 도착한 이전 worker**의 mark_processing.
+    # status='running'만 보면 이 호출이 통과해 자기 것이 아닌 job의 상태를 옮긴다.
+    mid, jid = _meeting_with_running_job(conn, worker_id="desktop-old")
+    conn.execute("UPDATE job SET locked_by='desktop-new' WHERE id=%s", (jid,))
+    assert db.mark_processing(conn, mid, jid, 1, "desktop-old") == 0
+    row = conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()
+    assert row["status"] != "processing"
+
+
+def test_mark_processing_accepts_the_owning_worker(conn):
+    mid, jid = _meeting_with_running_job(conn, worker_id="desktop-new")
+    assert db.mark_processing(conn, mid, jid, 1, "desktop-new") == 1

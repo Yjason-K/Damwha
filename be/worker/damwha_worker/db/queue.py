@@ -26,7 +26,9 @@ def claim(conn, worker_id: str) -> dict | None:
     ).fetchone()
 
 
-def mark_processing(conn, meeting_id: str, job_id: str, processing_version: int) -> int:
+def mark_processing(
+    conn, meeting_id: str, job_id: str, processing_version: int, worker_id: str
+) -> int:
     """회의를 `processing`으로 올린다. meeting 가드 **와** job 가드를 함께 건다.
 
     job 가드가 없던 동안 취소와 경합했다: 취소는 job.status 와 meeting.status 만 바꾸고
@@ -36,17 +38,18 @@ def mark_processing(conn, meeting_id: str, job_id: str, processing_version: int)
     409(status 가 done/failed 가 아니다). 창이 넓은 이유는 `jobs.py` 의 `build_models()`
     가 이 호출보다 앞이라, 모델을 받아야 하면 claim~여기가 분 단위로 벌어지기 때문이다.
 
-    `set_stage`·`heartbeat` 가 이미 같은 규칙(`status='running'`)을 쓴다 — 이것만 빠져 있었다.
-    worker_id 대신 job.status 를 보는 이유는 이 호출부가 worker_id 를 들고 있지 않고,
-    취소·reaper·재처리 셋 다 job 을 `running` 밖으로 내보내기 때문이다.
+    소유권 가드가 늦게 붙었다. status='running'만 보던 동안, 기동 회수가 앞 실행의 job을
+    되돌리고 새 worker가 같은 job을 재claim한 뒤 **이전 worker의 늦은 호출**이 도착하면
+    그대로 통과했다 — 자기 것이 아닌 job의 상태 전이다. set_stage·heartbeat와 같은 가드를
+    쓴다. 0행이면 이 워커는 더 쓸 것이 없다.
     """
     cur = conn.execute(
         """
         UPDATE meeting SET status='processing'
         WHERE id=%s AND current_job_id=%s AND processing_version=%s
-          AND EXISTS (SELECT 1 FROM job WHERE id=%s AND status='running')
+          AND EXISTS (SELECT 1 FROM job WHERE id=%s AND status='running' AND locked_by=%s)
         """,
-        (meeting_id, job_id, processing_version, job_id),
+        (meeting_id, job_id, processing_version, job_id, worker_id),
     )
     return cur.rowcount
 
