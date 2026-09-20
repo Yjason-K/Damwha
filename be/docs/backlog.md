@@ -221,3 +221,40 @@ meeting 가드(`id=%s AND current_job_id=%s AND processing_version=%s`)를 그�
 **후속으로 볼 것:** 같은 경합이 취소 쪽에도 있다 — 취소가 `current_job_id`를 비우지 않으므로,
 job을 `running` 밖으로 내보내는 다른 경로(reaper·재처리)와 meeting 가드만 보는 다른 UPDATE가
 있는지 한 번 훑을 값이 있다.
+
+## Phase 5 통합 검증이 남긴 미확인 둘 (등록 2026-09-20)
+
+둘 다 Phase 5의 완료 기준이 아니다 — 검증 회차에서 **관측만 되고 원인을 못 밝힌 것**이라
+여기에 남긴다. 증거는 [Phase 5 결과 §5](../../docs/superpowers/reports/2026-09-19-electron-phase-5-operational-hardening-results.md)에 있다.
+
+### 누가 누르지 않은 취소가 날아갔다 (P2)
+
+P5-C9 회차 도중 `api.log`에 이 줄이 찍혔다.
+
+```
+[Nest] 48675  - 09/20/2026, 4:11:26 PM  LOG [HTTP] POST /api/meetings/mtg_39/cancel 200 5ms
+```
+
+그 시각 화면 조작은 **녹음 대기뿐**이었고 취소 버튼을 누르지 않았다. 그 결과 `job_118`이
+`failed`/`error.code='cancelled'`, `mtg_39`가 `failed`가 됐다.
+
+- 그 시점 `mtg_39`는 §5가 찾아낸 **얼어붙은 job**(postgres가 죽어 `--once` 자식이 같이 죽고
+  행만 `running`으로 남은 상태)이었다. 얼어붙음 자체는 `6303d53`으로 고쳤지만, **취소가 왜
+  날아갔는지는 그것과 별개로 미확인이다.**
+- 화면이 보고 있던 회의는 `mtg_39`가 아니라 새로 만든 라이브 회의(`mtg_73`)였다. 즉 **직전에
+  보던 회의의 id로 취소가 갔다**는 모양이다.
+- FE 쪽 취소 호출은 전부 `onClick`이다 — `fe/src/pages/meeting.tsx`의 `cancel.mutate`,
+  `cancelLive.mutate`와 `live-banner.tsx`의 `onCancel` prop. 코드에서 자동 경로는 보이지 않았다.
+
+**볼 것:** 라이브 녹음으로 전환할 때 직전 회의를 가리키던 mutation이나 핸들러가 살아남는지.
+재현은 "처리 중인 회의를 연 채 새 실시간 녹음을 시작"으로 시도한다.
+
+### 라이브 회의의 제목이 버려진다 (P3)
+
+"새 회의 기록하기 → 실시간 녹음" 대화상자의 제목 칸에 `C9 probe`를 넣고 시작하면 사이드바는
+그 제목을 보여주지만, 실제로 생성된 행의 제목은 폴백인 `녹음 2026-09-20 16:10`이었다.
+
+같은 회차에서 **서버 쪽 세션이 녹음 시작보다 약 55초 늦게 생기는 것**도 함께 관측됐다
+(`POST /api/meetings/live` → `enqueued job ... type=live_session`). 그 전까지 화면은
+"첫 발화를 기다리고 있어요"였고 DB에는 회의 행도 `live_session` 행도 없었다. 제목이 그
+지연 생성 경로에서 떨어지는지 같이 본다.
