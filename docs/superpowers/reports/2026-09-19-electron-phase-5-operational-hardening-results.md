@@ -466,3 +466,126 @@ P5-C1의 실측이 그 모양 그대로다 — `kill -9` 한 번에 `attempts`�
 이것은 결함이 아니라 **선택**이다. 되돌리면 앱을 죽이는 job이 상한에 영영 닿지 못해 무한 재시도가
 된다(스펙 §4.1의 근거). 둘 다 만족하려면 "이 시도가 왜 소모됐는가"를 세는 컬럼이 따로 있어야 하고,
 그것은 스키마 변경이다 — 스펙 §2.2가 이 Phase에서 뺀 종류의 작업이다. Phase 6으로 넘긴다.
+
+## 5. 화면 관측 라운드 — P5-C8·C9 (2026-09-20, computer-use)
+
+앞선 라운드들이 "화면 제어 권한이 없어 못 봤다"로 남긴 절반을 이번에 실제로 봤다. 화면 제어
+(computer-use)로 상태 창과 회의 화면을 직접 관측했고, DB는 번들 `psql`로 같이 확인했다.
+`desktop/out/mac-arm64/Damwha.app`을 재빌드하지 않고 그대로 썼다.
+
+이번 실행의 신분: `WORKER_ID=desktop-00eaef54-8553-4ae1-873b-1e295828b4fa`(C8 회차),
+재기동 뒤 `desktop-fc79b01f-be58-47ff-900c-4dcb6ea39193`(C9 회차).
+
+### 먼저 — `WORKER_ID`와 `--run-id`는 다른 값이다
+
+`ps`에 보이는 `--run-id=desktop-14d3f031-…`은 supervisor의 **실행 id**고, `job.locked_by`에
+들어가는 것은 `config.ts:67`의 `RUN_WORKER_ID`가 env로 실린 **`WORKER_ID`**다
+(`desktop-00eaef54-…`). 둘 다 `desktop-` 접두사를 쓰고 같은 실행 안에서도 값이 다르다.
+P5-C10의 질의 ④에 넣을 값은 `WORKER_ID` 쪽이며, `worker.log`의
+`supervisor <id> ready (db connected)` 줄에서 읽는 것이 가장 확실하다. §2의 C10은 `job.locked_by`를
+그대로 읽어 썼으므로 결과는 옳다 — 다만 "상태 창이나 supervisor.log에서 읽는다"는 계획의 안내는
+`--run-id`를 집어올 여지가 있다.
+
+### P5-C8 — 처리 중 서비스 장애
+
+12분짜리 오디오를 올려(`mtg_39`/`job_118`) `stage=diarize`, `progress=35`인 상태에서 둘을 차례로
+죽였다.
+
+```bash
+pkill -f "damwha_worker.embed_service"          # 16:04:28
+kill -QUIT "$(pgrep -f 'Resources/postgres/bin/postgres -D')"   # 16:05:14
+```
+
+**화면 절반 — 확인.** 상태 창이 사유를 실제로 렌더링한다.
+
+| 관측 시각 | 화면 |
+| --- | --- |
+| 16:04:28 | 검색 임베딩 ● **실패** · 재시작 1회, 사유 박스 `프로세스가 종료됐어요 (코드 143).` |
+| 16:04:54 | 검색 임베딩 ● 실행 중 · 재시작 1회 — **26초** |
+| 16:05:14 | 데이터베이스 ● **실패** · 재시작 2회, `프로세스가 종료됐어요 (코드 0).` + `해결: logs/postgres/ 폴더의 최근 로그를 확인한 뒤 다시 시도해 주세요.` 그리고 **연쇄까지** — API ● **동작 제한**, `데이터베이스에 연결할 수 없어요.` + `해결: 의존하는 서비스가 돌아오면 자동으로 복구됩니다. 앱을 다시 시작하지 않아도 됩니다.` |
+| 16:05:22 | postgres `준비됨` — **8초**(`supervisor.log`), 상태 창은 16:05:34에 ● 실행 중 |
+
+`supervisor.log`도 같은 것을 말한다: `상태 postgres=failed/unknown api=running/degraded …` →
+`postgres: 준비됨` → `embed: 60초 동안 안정적이라 재시작 예산을 되돌린다`.
+
+**job 절반 — 깨진다. 판정: 미충족.**
+
+postgres에 `SIGQUIT`을 보내자 그 순간 job을 쥐고 있던 **`--once` 자식이 같이 죽었다**
+(`worker.log`에 `psycopg.OperationalError: consuming input failed: server closed the connection
+unexpectedly`). supervisor 부모는 재연결에 성공해 `준비됨`으로 돌아왔지만, 죽은 자식이 쥐고 있던
+행은 그대로 남았다:
+
+```sql
+SELECT id,status,stage,progress,attempts,next_attempt_at,now()-updated_at AS age
+FROM job WHERE id='job_118';
+-- job_118 | running | diarize | 35 | 1 | (null) | 00:04:30
+```
+
+`pgrep -f damwha_worker`에는 supervisor와 embed뿐 — `--once` 자식이 없다. 그동안 회의 화면은
+스피너와 함께 **"회의를 처리하고 있어요 · 화자 분리 · 35%"**를 계속 말했고, 목록에도 ● 처리 중으로
+떴다. 진행 중도 아니고 재시도 대기도 아니다(`next_attempt_at`이 없다) — 화면이 사실이 아닌 것을
+말한 것이다.
+
+스펙 §11의 P5-C8은 "상태 창이 `degraded` 사유를 말하고 이후 `ok`로 돌아온다. **job은 진행 또는
+재시도 대기로 정직하다**"를 함께 요구한다. 앞은 충족, 뒤는 미충족이므로 기준 전체는 **미충족**이다.
+
+**남은 일(이 Phase 범위).** 회수 세 층 중 어느 것도 이 구멍을 60초 안에 덮지 않는다 — 기동 회수는
+*앞 실행*의 행만 보고, supervisor 재시작 `--once` 스캔은 supervisor가 재시작해야 돌며, 여기서는
+supervisor가 살아남아 재연결만 했다. 남는 것은 **30분 reaper**(`REAPER_STALE_MINUTES=30`)뿐이다.
+필요한 것은 "DB 재연결 직후, 같은 `WORKER_ID`가 쥔 `running` 행 중 살아 있는 `--once` 자식이 없는
+것을 되돌린다"는 네 번째 경로다.
+
+### P5-C9 — 녹음 중 강제 종료
+
+컨트롤러가 회차 도중 "녹음 관련 테스트는 넘어가자"고 해서 **중단했다.** 다만 중단 시점까지
+기준 네 항목의 증거가 모두 모였으므로 관측한 것을 그대로 남긴다.
+
+내장 마이크로 실시간 녹음을 시작했다. 녹음 시작 약 55초 뒤에야 서버 쪽 세션이 생겼다 —
+`POST /api/meetings/live` → `enqueued job job_156 type=live_session meeting=mtg_73`(16:10:49).
+그 전까지 화면은 "첫 발화를 기다리고 있어요"였고 DB에는 `live_session` 행도 회의 행도 없었다.
+
+```bash
+# 16:11:41, 죽이기 직전
+# job_156 | live_session | mtg_73 | running | committed_bytes=1409024
+stat -f %z .../mtg_73/live.wav     # 1671212
+pkill -9 -f "Damwha.app/Contents/MacOS/Damwha"
+rm -f "<userData>/SingletonLock" "<userData>/Cookies" "<userData>/Cookies-journal"
+open .../Damwha.app                # 16:11:51
+```
+
+| 기준(스펙 §11) | 관측 |
+| --- | --- |
+| 파일이 남아 있고 길이 ≥ `committed_bytes` | `live.wav` 1,671,212 B ≥ 1,409,024 B |
+| live job이 `failed` | 재기동 직후 `job_156` `failed`, `error.code='app_restarted'` |
+| 2분 안에 `sealed_bytes`가 채워진다 | `sealed_bytes=1671168` = `committed_bytes`(재기동 뒤 갱신값) |
+| 회의가 마무리로 넘어간다 | `mtg_73` `recording` → `processing` → 최종 `done` |
+
+`api.log`에 `[ReaperService] reclaim: requeued=0 failedLive=1`이 찍혀 회수 경로가 live 세션을
+닫은 것도 확인된다. `live.wav`와 `committed_bytes`의 44바이트 차이는 WAV 헤더다.
+
+**판정: 충족(증거상).** 회차를 사용자 지시로 중단했으므로 "정식 회차"로 적지는 않되, 위 네 항목은
+전부 직접 관측한 값이다.
+
+### 이번 라운드가 남긴 미확인 둘
+
+1. **누르지 않은 취소.** `api.log`에 `POST /api/meetings/mtg_39/cancel 200`이 16:11:26에 찍혔다.
+   그 시각 조작은 녹음 대기뿐이었고 취소 버튼을 누르지 않았다. 그 뒤 `job_118`은
+   `failed`/`error.code='cancelled'`, `mtg_39`는 `failed`가 됐다. `fe/src/pages/meeting.tsx`의
+   취소 호출은 전부 `onClick`이라 코드에서 자동 경로는 보이지 않는다. **원인 미확인** — 얼어붙은
+   job(위 C8)과 겹친 시점이라 따로 재현해 볼 가치가 있다.
+2. **live 회의의 제목이 버려진다.** 녹음 시작 대화상자에 `C9 probe`를 입력했고 사이드바도 그렇게
+   보여줬지만, 실제로 생성된 행의 제목은 폴백인 `녹음 2026-09-20 16:10`이었다. 세션이 55초 늦게
+   생기는 것과 같은 경로로 보인다. 작은 불일치이고 이 Phase의 기준은 아니다.
+
+### 이번 라운드 뒤 정합성 질의 넷
+
+C8의 서비스 장애와 C9의 녹음 중 `kill -9`를 모두 겪은 뒤, 그 회차의 실제
+`WORKER_ID=desktop-fc79b01f-be58-47ff-900c-4dcb6ea39193`로 §2와 같은 네 질의를 돌렸다 — **넷 다 0**.
+`mtg_73`은 `done`, 실행 중이거나 대기 중인 job은 0건.
+
+### 정리 확인
+
+- 앱은 `kill -9`이 아니라 `SIGTERM`으로 정상 종료했고, `supervisor.log`가 worker→embed→api→postgres
+  순서로 내려가는 것을 찍었다. 이후 `ps`에 남은 `damwha` 프로세스 0개.
+- 이번 라운드가 만든 것은 `mtg_39`(C8 probe, `failed`)와 `mtg_73`(녹음, `done`) 둘이다. 기존 회의와
+  저장소 파일은 건드리지 않았다.

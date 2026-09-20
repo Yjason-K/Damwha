@@ -111,6 +111,16 @@ dev와 packaged가 같은 클러스터라 버려도 되는 "dev 클러스터"가
 - 기동 시 **프로세스** 고아 정리(`app/reap-on-start.ts` → `reapOrphans`)는 이 셋과 다른 일이다 —
   그쪽은 앞 실행 run-id의 프로세스, 기동 회수는 DB 행이다. `--once` 스캔이 보는 것은 **이번 실행**
   run-id라 기동 정리가 보지 않는 사각이다.
+- **세 층이 함께 놓치는 구멍이 하나 있다 (P5-C8 미충족, 2026-09-20 실측).** postgres가 죽으면 그 job을
+  쥔 `--once` 자식도 연결이 끊겨 죽는데, supervisor 부모는 재연결에 성공해 살아남는다. 그러면 기동
+  회수는 **앞 실행**의 행만 보고, `--once` 스캔은 supervisor가 재시작해야 도는데 재시작이 없었으므로
+  둘 다 걸리지 않는다. 남는 것은 30분 reaper뿐이고, 그동안 그 행은 `running`인 채 얼어 있으며 화면은
+  "회의를 처리하고 있어요 · 35%"를 계속 말한다. 필요한 네 번째 경로는 **DB 재연결 직후, 같은
+  `WORKER_ID`가 쥔 `running` 행 중 살아 있는 `--once` 자식이 없는 것을 되돌리는 것**이다.
+
+`WORKER_ID`와 `ps`에 보이는 `--run-id`는 **같은 실행 안에서도 값이 다르다** — 전자는 `config.ts`의
+`RUN_WORKER_ID`로 `job.locked_by`에 들어가고, 후자는 supervisor의 실행 id다. 둘 다 `desktop-` 접두사를
+쓰므로 정합성 질의에 넣을 값은 `worker.log`의 `supervisor <id> ready (db connected)` 줄에서 읽는다.
 
 ## 재시도 — 0 · 30초 · 90초 · 210초 · 450초
 
