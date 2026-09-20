@@ -86,9 +86,9 @@ Mach-O 전수와 `Resources/ffmpeg/bin/*`에, `entitlements.mac.plist`(키 셋 �
 파괴적인 실험(DB 삭제·`PG_VERSION` 변경 등)은 앱을 끄고 `ditto data data.<이름>-backup`으로 통째로 복사한 뒤에만 한다 —
 dev와 packaged가 같은 클러스터라 버려도 되는 "dev 클러스터"가 따로 없다.
 
-## 중단된 작업의 회수 — 층이 셋
+## 중단된 작업의 회수 — 층이 넷
 
-앱은 job을 직접 처리하지 않지만 **중단을 셋으로 나눠 거둔다** (Phase 5 스펙 §4·§8). 대상도 주체도
+앱은 job을 직접 처리하지 않지만 **중단을 넷으로 나눠 거둔다** (Phase 5 스펙 §4·§8). 대상도 주체도
 달라서 하나가 다른 하나를 대신하지 않는다.
 
 | 층 | 언제 | 무엇을 | 어디 |
@@ -96,6 +96,7 @@ dev와 packaged가 같은 클러스터라 버려도 되는 "dev 클러스터"가
 | 기동 회수 | API 기동 1회 (`onApplicationBootstrap`) | **앞 실행**이 남긴 `running` job — `locked_by`가 `desktop-`으로 시작하고 이번 실행 신분이 아닌 행 | `be/src/jobs/reaper.service.ts` → `JobsRepository.reclaimOrphaned` |
 | 시간 기반 reaper | 5분 크론 | `locked_at`이 30분(`REAPER_STALE_MINUTES`)보다 오래된 `running` job — **이번 실행 중에** 죽은 것 | 같은 `ReaperService`, 그리고 worker의 같은 CTE |
 | `--once` 스캔 | worker를 다시 띄우기 **직전** (크래시 재시작·사람이 누른 재시작 둘 다) | **프로세스** — 이번 실행 run-id를 단 `--once` 자식 | `services/supervisor.ts`의 `reapOwnOnceBefore` → `process/orphans.ts`의 `reapOwnOnceChildren` |
+| 자기 고아 회수 | worker supervisor가 **자기 자식이 하나도 없는 순간** — 기동 직후·자식을 거둔 직후·DB 재접속 직후 | 자기 `WORKER_ID`로 잠긴 `running` job, **시간 조건 없이** | `be/worker/damwha_worker/__main__.py`의 `_reap_own_orphans` → `db/queue.py`의 `reap_own_orphans`
 
 - **신분은 `RUN_WORKER_ID`(`desktop-<uuid>`)이고 앱 실행마다 새로 발급된다.** `withAppOwned`가 모든
   자식 env에 `WORKER_ID`로 얹는다. 터미널 `pnpm worker`(`worker-1`)와 웹 배포판은 접두사에 걸리지
@@ -111,6 +112,20 @@ dev와 packaged가 같은 클러스터라 버려도 되는 "dev 클러스터"가
 - 기동 시 **프로세스** 고아 정리(`app/reap-on-start.ts` → `reapOrphans`)는 이 셋과 다른 일이다 —
   그쪽은 앞 실행 run-id의 프로세스, 기동 회수는 DB 행이다. `--once` 스캔이 보는 것은 **이번 실행**
   run-id라 기동 정리가 보지 않는 사각이다.
+- **네 번째 층이 왜 있나 (P5-C8, 2026-09-20 실측).** postgres가 죽으면 그 job을 쥔 `--once` 자식도
+  연결이 끊겨 죽는데, supervisor 부모는 재연결에 성공해 살아남는다. 그러면 앞의 셋이 모두 비켜 간다 —
+  기동 회수는 **앞 실행**의 행만 보고, `--once` 스캔은 supervisor가 재시작해야 도는데 재시작이 없었다.
+  남는 것이 30분 reaper뿐이라 그 행은 `running`인 채 얼어 있었고(실측 4분 30초) 화면은 "회의를
+  처리하고 있어요 · 35%"라는 거짓을 계속 말했다. 자기 고아 회수가 그 자리를 메운다. 성립 근거는
+  **부모가 자식을 한 번에 하나만 띄우고 `_wait_child`로 거둔다**는 것 — 그래서 저 세 순간에는 자기
+  신분으로 잠긴 행이 전부 고아다. 시간 조건이 없어도 남의 행을 건드리지 않는다.
+- 자기 고아 회수도 `attempts`를 **되돌리지 않고** 기동 회수와 같은 갈래로 간다(재시도가 남은 비-live는
+  `queued`, 소진했거나 `live_session`이면 `failed` — `reap_stale`과 SQL 한 벌을 공유한다). 재현
+  회차에서 `attempts`가 1에서 2가 되고 새 `--once` 자식이 같은 job을 이어받았다.
+
+`WORKER_ID`와 `ps`에 보이는 `--run-id`는 **같은 실행 안에서도 값이 다르다** — 전자는 `config.ts`의
+`RUN_WORKER_ID`로 `job.locked_by`에 들어가고, 후자는 supervisor의 실행 id다. 둘 다 `desktop-` 접두사를
+쓰므로 정합성 질의에 넣을 값은 `worker.log`의 `supervisor <id> ready (db connected)` 줄에서 읽는다.
 
 ## 재시도 — 0 · 30초 · 90초 · 210초 · 450초
 

@@ -106,14 +106,13 @@ def requeue_for_shutdown(conn, job_id: str, worker_id: str) -> int:
     return cur.rowcount
 
 
-def reap_stale(conn, stale_minutes: float) -> tuple[int, int]:
-    row = conn.execute(
-        """
+# 회수 계약은 한 벌이고 `stale`의 **선택자만** 다르다 — 시간 기반(reap_stale)과 소유자 기반
+# (reap_own_orphans). 두 벌로 두면 live_session·소진·딸린 행 정리 중 한쪽만 고쳐질 자리다.
+_REAP_SQL = """
         WITH stale AS (
           SELECT id, type, meeting_id, attempts, max_attempts, stage
           FROM job
-          WHERE status='running'
-            AND locked_at < now() - (%s || ' minutes')::interval
+          WHERE {selector}
           FOR UPDATE SKIP LOCKED
         ),
         -- live_session은 재queue 대상이 아니다 (설계 §2.2·§4.2). 다시 claim해 봐야 다음
@@ -174,10 +173,35 @@ def reap_stale(conn, stale_minutes: float) -> tuple[int, int]:
         )
         SELECT (SELECT count(*) FROM requeued) AS requeued,
                (SELECT count(*) FROM failed) AS failed
-        """,
-        (str(stale_minutes),),
-    ).fetchone()
+"""
+
+
+def _reap(conn, selector: str, params: tuple) -> tuple[int, int]:
+    row = conn.execute(_REAP_SQL.format(selector=selector), params).fetchone()
     return int(row["requeued"]), int(row["failed"])
+
+
+def reap_stale(conn, stale_minutes: float) -> tuple[int, int]:
+    return _reap(
+        conn,
+        "status='running' AND locked_at < now() - (%s || ' minutes')::interval",
+        (str(stale_minutes),),
+    )
+
+
+def reap_own_orphans(conn, worker_id: str) -> tuple[int, int]:
+    """자기 신분으로 잠긴 `running` 행을 **시간을 기다리지 않고** 되돌린다.
+
+    부르는 쪽이 "지금 내 `--once` 자식은 하나도 살아 있지 않다"를 보장할 때만 옳다.
+    supervisor는 자식을 한 번에 하나만 띄우고 `_wait_child`로 회수하므로 그 자리가 셋이다 —
+    기동 직후, 자식을 거둔 직후, DB 재접속 직후. 그 순간 내 신분으로 잠긴 행은 전부 고아다.
+
+    이것이 없으면 DB가 죽어 자식이 함께 죽었을 때 회수 세 층이 모두 비켜 간다 — 기동
+    회수는 **앞 실행**의 행만 보고, supervisor의 `--once` 스캔은 supervisor가 재시작해야
+    돌기 때문이다. 남는 것은 30분 reaper뿐이고 그동안 화면은 "처리하고 있어요"라는
+    거짓을 말한다 (Phase 5 결과 §5, P5-C8).
+    """
+    return _reap(conn, "status='running' AND locked_by=%s", (worker_id,))
 
 
 def fail_job(conn, job_id: str, worker_id: str, error: dict) -> bool:
