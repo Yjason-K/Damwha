@@ -881,11 +881,10 @@ token-store의 read()가 복호화 실패에 파일을 지우지 않고 null을 
 
 - [ ] **Step 1: `--release` 플래그와 태그 대조를 넣는다**
 
-`package.mjs` 머리 근처. **`spawnSync`와 `MAX_MINOS` import를 함께 더한다** — 이 Task가 둘 다 쓰는데 지금 파일에는 `execFileSync`만 있다.
+`package.mjs` 머리 근처. **`spawnSync` import를 함께 고친다** — 이 Task가 쓰는데 지금 파일에는 `execFileSync`만 있다. (`MAX_MINOS`는 들여오지 않는다 — 발행이 Task 11로 빠지면서 이 파일에서 쓸 곳이 없어졌다. 죽은 import는 lint가 잡는다.)
 
 ```javascript
 import { execFileSync, spawnSync } from "node:child_process";
-import { MAX_MINOS } from "./lib/minos.mjs";
 
 const RELEASE = process.argv.includes("--release");
 
