@@ -72,9 +72,11 @@ const STAGE_LABELS: Record<string, string> = {
 function ProcessingBanner({
   meeting,
   status,
+  statusUpdatedAt,
 }: {
   meeting: Meeting;
   status: MeetingStatusResponse | undefined;
+  statusUpdatedAt: number;
 }) {
   const cancel = useCancelProcessing();
   // 이 응답은 모델을 받는 동안에만 다시 읽힌다 (useProcessingSettings의 refetchInterval).
@@ -119,9 +121,21 @@ function ProcessingBanner({
     );
   }
 
+  // 백오프가 30초·90초·210초·450초로 길어졌다 (Phase 5 스펙 §5). 그동안 "대기 중"만 쓰면
+  // 정상 재시도와 worker 미기동·DB 장애가 한 얼굴이 된다.
+  // 기준 시각은 status가 도착한 순간(statusUpdatedAt) — 위 downloading과 같은 이유로
+  // 렌더에서 Date.now()를 부르면 안 된다(react-hooks/purity, 같은 함수 안의 downloadingNow 호출 참고).
+  const retryAt = status?.retry?.next_attempt_at ?? null;
+  const retryMs =
+    retryAt === null ? null : new Date(retryAt).getTime() - statusUpdatedAt;
+  // 다운로드 문구가 이긴다. 그쪽은 stageLabel과 **독립된 span**이라(아래 downloading 분기),
+  // 여기서 막지 않으면 "재시도 대기"와 "모델을 받는 중"이 같이 뜬다.
+  const showRetry = downloading.length === 0 && retryMs !== null && retryMs > 0;
   const stageLabel = status?.stage
     ? (STAGE_LABELS[status.stage] ?? "처리 중")
-    : "대기 중";
+    : showRetry
+      ? `재시도 대기 · ${status!.retry!.attempts}/${status!.retry!.max_attempts}회차 · 약 ${Math.max(1, Math.round(retryMs! / 60000))}분 뒤`
+      : "대기 중";
   const raw = status?.progress ?? null;
   const pct = raw == null ? null : Math.round(raw <= 1 ? raw * 100 : raw);
 
@@ -303,7 +317,8 @@ function MeetingView({
   // done 회의도 색인 실패를 봐야 하므로 meeting이 있으면 조회한다 —
   // 폴링 지속 여부는 useMeetingStatus의 refetchInterval이 상태를 보고 결정.
   const statusEnabled = !!meeting || summaryPending;
-  const { data: procStatus } = useMeetingStatus(meetingId, statusEnabled);
+  const { data: procStatus, dataUpdatedAt: procStatusUpdatedAt } =
+    useMeetingStatus(meetingId, statusEnabled);
 
   // 라이브 미리보기 — recording에서는 1초, 처리 중엔 3초, failed는 한 번, done은 안 본다.
   const { data: liveState } = useLiveUtterances(meetingId, meeting?.status);
@@ -612,7 +627,11 @@ function MeetingView({
             failed={recorderStatus?.failed}
           />
         ) : meeting && meeting.status !== "done" ? (
-          <ProcessingBanner meeting={meeting} status={procStatus} />
+          <ProcessingBanner
+            meeting={meeting}
+            status={procStatus}
+            statusUpdatedAt={procStatusUpdatedAt}
+          />
         ) : null}
         {meeting && meeting.status === "done" ? (
           <CaptureErrorNotice error={meeting.captureError} />

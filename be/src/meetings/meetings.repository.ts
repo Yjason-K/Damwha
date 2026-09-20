@@ -123,6 +123,11 @@ export class MeetingsRepository {
   async findStatus(exec: Queryable, id: string) {
     const { rows } = await exec.query(
       `SELECT m.status, j.stage, j.progress, m.error, m.capture_error,
+              CASE WHEN j.id IS NULL THEN NULL ELSE jsonb_build_object(
+                'attempts', j.attempts,
+                'max_attempts', j.max_attempts,
+                'next_attempt_at', j.next_attempt_at
+              ) END AS retry,
               CASE WHEN ler.id IS NULL THEN NULL ELSE jsonb_build_object(
                 'status', ler.status,
                 'model', ler.model,

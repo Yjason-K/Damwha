@@ -183,6 +183,13 @@ export type SummaryGenerationStatus = {
   error: JsonError | null;
 };
 
+/** 재시도 대기 상태. job이 없으면 null. */
+export type RetryStatus = {
+  attempts: number;
+  max_attempts: number;
+  next_attempt_at: string | null;
+};
+
 export type MeetingStatusResponse = {
   status: MeetingStatus;
   stage: string | null;
@@ -190,6 +197,7 @@ export type MeetingStatusResponse = {
   error: JsonError | null;
   summary: SummaryGenerationStatus | null;
   search_index: SearchIndexStatus | null;
+  retry: RetryStatus | null;
 };
 
 /** POST /meetings/:id/clusters/:clusterId/resolve 요청 — 정확히 하나만. */
