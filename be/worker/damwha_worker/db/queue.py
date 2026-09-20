@@ -83,7 +83,8 @@ def requeue(conn, job_id: str, worker_id: str) -> int:
     cur = conn.execute(
         """
         UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL,
-               next_attempt_at=now() + least(30 * power(2, attempts - 1), 900) * interval '1 second',
+               next_attempt_at=now()
+                 + least(30 * power(2, attempts - 1), 900) * interval '1 second',
                updated_at=now()
         WHERE id=%s AND locked_by=%s AND status='running'
         """,
