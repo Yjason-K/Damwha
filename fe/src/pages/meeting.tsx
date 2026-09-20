@@ -131,10 +131,13 @@ function ProcessingBanner({
   // 다운로드 문구가 이긴다. 그쪽은 stageLabel과 **독립된 span**이라(아래 downloading 분기),
   // 여기서 막지 않으면 "재시도 대기"와 "모델을 받는 중"이 같이 뜬다.
   const showRetry = downloading.length === 0 && retryMs !== null && retryMs > 0;
+  // 마지막 시도가 남긴 **job의** 오류 코드 (스펙 §6 — "마지막 오류 요약"). meeting.error는
+  // 재시도 대기 중에 null이라 대신 쓸 수 없다. 코드 한 토큰만 붙인다 — 배너는 한 줄이다.
+  const retryErrorCode = status?.retry?.error?.code ?? null;
   const stageLabel = status?.stage
     ? (STAGE_LABELS[status.stage] ?? "처리 중")
     : showRetry
-      ? `재시도 대기 · ${status!.retry!.attempts}/${status!.retry!.max_attempts}회차 · 약 ${Math.max(1, Math.round(retryMs! / 60000))}분 뒤`
+      ? `재시도 대기 · ${status!.retry!.attempts}/${status!.retry!.max_attempts}회차 · 약 ${Math.max(1, Math.round(retryMs! / 60000))}분 뒤${retryErrorCode ? ` · 마지막 오류: ${retryErrorCode}` : ""}`
       : "대기 중";
   const raw = status?.progress ?? null;
   const pct = raw == null ? null : Math.round(raw <= 1 ? raw * 100 : raw);

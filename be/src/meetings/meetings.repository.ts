@@ -123,10 +123,14 @@ export class MeetingsRepository {
   async findStatus(exec: Queryable, id: string) {
     const { rows } = await exec.query(
       `SELECT m.status, j.stage, j.progress, m.error, m.capture_error,
+              -- j.error는 m.error와 다른 사실이다 (스펙 §6). 재시도 대기 중인 회의는
+              -- 아직 실패하지 않았으므로 m.error가 null이고, 화면이 "왜 기다리는지"를
+              -- 말하려면 마지막 시도가 남긴 job 쪽 오류가 필요하다.
               CASE WHEN j.id IS NULL THEN NULL ELSE jsonb_build_object(
                 'attempts', j.attempts,
                 'max_attempts', j.max_attempts,
-                'next_attempt_at', j.next_attempt_at
+                'next_attempt_at', j.next_attempt_at,
+                'error', j.error
               ) END AS retry,
               CASE WHEN ler.id IS NULL THEN NULL ELSE jsonb_build_object(
                 'status', ler.status,

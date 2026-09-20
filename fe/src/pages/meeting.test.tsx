@@ -1121,6 +1121,7 @@ test("재시도 대기 중이면 배너가 회차와 남은 시간을 말한다"
       attempts: 2,
       max_attempts: 5,
       next_attempt_at: new Date(Date.now() + 90_000).toISOString(),
+      error: null,
     },
   });
   renderShell("/meetings/m3");
@@ -1128,6 +1129,30 @@ test("재시도 대기 중이면 배너가 회차와 남은 시간을 말한다"
 
   expect(await screen.findByText(/재시도 대기/)).toBeInTheDocument();
   expect(screen.getByText(/2\/5회차/)).toBeInTheDocument();
+});
+
+test("재시도 대기 배너가 마지막 오류 코드를 함께 말한다", async () => {
+  // 스펙 §6 — 회차·남은 시간만으로는 "왜 기다리는지"를 말하지 못한다. 회의의 error는
+  // 재시도 대기 중 null이므로 job이 남긴 오류가 유일한 근거다.
+  fx.setStatus({
+    stage: null,
+    progress: null,
+    error: null,
+    retry: {
+      attempts: 3,
+      max_attempts: 5,
+      next_attempt_at: new Date(Date.now() + 210_000).toISOString(),
+      error: { code: "model_download_failed", message: "connection reset" },
+    },
+  });
+  renderShell("/meetings/m3");
+  await screen.findByText(/회의를 처리하고 있어요/);
+
+  expect(
+    await screen.findByText(/마지막 오류: model_download_failed/),
+  ).toBeInTheDocument();
+  // 스택트레이스·메시지 전문은 배너에 넣지 않는다.
+  expect(screen.queryByText(/connection reset/)).toBeNull();
 });
 
 test("모델을 받는 중이면 재시도 문구 대신 다운로드 문구만 뜬다", async () => {
@@ -1138,6 +1163,7 @@ test("모델을 받는 중이면 재시도 문구 대신 다운로드 문구만 
       attempts: 2,
       max_attempts: 5,
       next_attempt_at: new Date(Date.now() + 90_000).toISOString(),
+      error: null,
     },
   });
   fx.setModelReadiness({
