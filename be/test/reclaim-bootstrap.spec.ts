@@ -12,7 +12,7 @@ describe('ReaperService.onApplicationBootstrap', () => {
 
   it('reclaims with this run’s worker id when the app launched the API', async () => {
     process.env.WORKER_ID = 'desktop-abc';
-    const jobs = { reclaimOrphaned: jest.fn().mockResolvedValue({ requeued: 2, failedLive: 1 }) };
+    const jobs = { reclaimOrphaned: jest.fn().mockResolvedValue({ requeued: 2, failedLive: 1, failedSpent: 0 }) };
     const svc = new ReaperService(db, jobs as never);
     await svc.onApplicationBootstrap();
     expect(jobs.reclaimOrphaned).toHaveBeenCalledWith(pool, 'desktop-abc');
