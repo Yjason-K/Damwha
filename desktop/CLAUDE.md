@@ -46,8 +46,15 @@ Mach-O 전수와 `Resources/ffmpeg/bin/*`에, `entitlements.mac.plist`(키 셋 �
   서명 전 내용을 가리키고 `codesign --verify`가 깨진다.
 - `.app`에 python plist를 주면 V8이 `allow-jit` 없이 CodeRange 예약에 실패해 rc=133으로 죽는다.
   거꾸로 Python 트리에 `allow-jit`은 주지 않는다 — 안 쓰는 권한이다.
-- `Resources/postgres`만 runtime 플래그가 없고 **그것이 맞다** — 별개 프로세스라 자기 서명의
-  플래그로 돈다. `check-bundle.mjs`의 hardened runtime 단언은 python·ffmpeg 트리에만 건다.
+- `Resources/postgres`도 hardened runtime을 진다(Ruling R12, Task 6) — entitlements는 주지 않는다.
+  원래는 "별개 프로세스라 자기 서명의 플래그로 돈다"며 runtime을 걸지 않았으나, Apple 공증이 번들 안
+  실행 파일에 hardened runtime을 요구한다(실측: 제출 id 88197b1f-daae-41bc-aa68-e62176a321de가
+  `postgres/bin`의 실행 파일 32개 전부를 "hardened runtime 없음"으로 거절했다, task-6-report.md).
+  entitlements를 안 주는 이유는 그대로다 — postgres 트리 전체(pgvector·pg_bigm 포함)가 이미 같은
+  Team ID로 서명돼 있어 hardened runtime의 library validation이 disable-library-validation 없이도
+  통과한다(2026-09-21 실측: 재빌드한 앱을 띄워 postgres가 pgvector 0.8.6·pg_bigm 1.2를 로드하며
+  뜨는 것과 api·worker의 DB 연결을 확인했다). `check-bundle.mjs`의 hardened runtime 단언은 이제
+  postgres·python·ffmpeg 트리 전부에 건다.
 - 서명한 뒤 **번들 python을 실행하지 않는다.** `__pycache__`가 봉인 밖에 생기고, `.pyc`에는
   빌드 머신의 절대 경로가 `co_filename`으로 박힌다 (`check-bundle.mjs`가 둘 다 잡는다).
 

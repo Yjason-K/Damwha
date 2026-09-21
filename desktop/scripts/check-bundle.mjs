@@ -34,12 +34,16 @@ function check(label, ok, detail = "") {
 // 서명만 가진 채 hardened runtime .app 안에 들어간다 — 를 이것이 잡는다. 아래 18번의 entitlement
 // 표본은 파일 몇 개만 보므로 그물이 되지 못한다. 454개 전수로 3.4초다(실측).
 //
-// **postgres 트리는 이 함수로 검사하지 않는다** — 위 9~14번 묶음의 postgres 서명 검사가
-// plain --verify인 것이 그래서다. package.mjs는 Task 6부터 postgres 트리에도 hardened runtime을
-// 건다(Ruling R12: Apple 공증이 번들 안 실행 파일에 이를 요구한다고 실측됐다 — 제출 id
-// 88197b1f-daae-41bc-aa68-e62176a321de, task-6-report.md). 그래도 이 함수를 postgres에 걸지
-// 않는 이유는 바뀌지 않았다 — 9~14번이 이미 그 트리의 서명 상태(identity·의존성)를 다른 방식으로
-// 본다.
+// **postgres 트리에도 이 함수를 건다 — 아래 14b.** package.mjs는 Task 6부터 postgres 트리에도
+// hardened runtime을 건다(Ruling R12: Apple 공증이 번들 안 실행 파일에 이를 요구한다고 실측됐다 —
+// 제출 id 88197b1f-daae-41bc-aa68-e62176a321de가 32개 실행 파일 전부를 "hardened runtime
+// 없음"으로 거절했다, task-6-report.md). 그 플래그를 잃는 회귀는 위 9~14번 묶음(`:262-301`) 중
+// 어느 것도 잡지 못한다 — 거기는 바이너리 존재, pgvector/pg_bigm 존재, Mach-O 개수, `otool -L`
+// 의존성, 맨 `codesign --verify`(플래그를 읽지 않는다), `env -i … --version`만 본다. 그래서
+// `signAll(pgTargets, …, { runtime: … })`의 그 인자 하나가 조용히 `false`로 되돌아가도 이
+// 파일은 계속 초록일 뻔했다 — 이 함수의 noRuntime 부분만 postgres에도 걸어 그 구멍을 막는다.
+// unsigned·noArm64 부분은 postgres에 대해서는 쓰지 않는다(그 둘은 9~14번이 이미 다른 방식으로
+// 덮는다) — 14b가 `noRuntime`만 뽑아 쓰는 이유다.
 function verifyArm64(files) {
   const unsigned = [];
   const noArm64 = [];
@@ -298,6 +302,21 @@ for (const bin of ["postgres", "psql"]) {
   const r = spawnSync("env", ["-i", path.join(pgDir, "bin", bin), "--version"], { encoding: "utf8" });
   check(`env -i ${bin} --version runs from the bundle`, r.status === 0, (r.stdout || r.stderr || "").trim());
 }
+
+// 14b. postgres 트리도 hardened runtime을 진다(Ruling R12). 위 unsigned 검사(:293-294)는 arch를
+// 지정하지 않는 plain --verify라 CodeDirectory의 flags를 읽지 않는다 — `signAll(pgTargets, …,
+// { runtime: … })`의 그 인자가 조용히 false로 되돌아가도 지금까지는 아무 것도 이것을 잡지
+// 못했다(제출 id 88197b1f-daae-41bc-aa68-e62176a321de가 32개 실행 파일 전부를 "hardened runtime
+// 없음"으로 거절한 것이 그 증거). verifyArm64()의 noRuntime 부분만 빌려 쓴다 — unsigned·noArm64는
+// 위 293-294행과 279-280행이 이미 다른 방식으로 덮는다.
+const { noRuntime: pgNoRuntime } = verifyArm64(pgMachos);
+check(
+  "every Mach-O in the postgres tree carries hardened runtime",
+  pgNoRuntime.length === 0,
+  pgNoRuntime.length === 0
+    ? `${pgMachos.length}/${pgMachos.length} flags=…(runtime)`
+    : `${pgNoRuntime.length} of ${pgMachos.length}: ${pgNoRuntime.slice(0, 5).map((f) => path.relative(pgDir, f)).join("; ")}`,
+);
 
 // 15~21. 내장 Python 런타임과 내장 ffmpeg (Electron Phase 4 스펙 §6.1)
 const pyDir = path.join(contents, "Resources", "python");

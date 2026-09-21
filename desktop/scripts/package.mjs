@@ -201,22 +201,35 @@ function notarize(target, label) {
   const out = r.stdout ?? "";
   console.log(out);
   let parsed = {};
-  try { parsed = JSON.parse(out); } catch { /* 출력이 JSON이 아니면 아래 status 검사가 잡는다 */ }
+  try { parsed = JSON.parse(out); } catch { /* 출력이 JSON이 아니면 아래에서 id를 정규식으로 건진다 */ }
   if (parsed.status !== "Accepted") {
+    // 끊김·타임아웃(534MB 업로드가 --wait --timeout 30m을 채우는 경우)이면 out이 빈 문자열이거나
+    // JSON이 아닌 채로 남아 parsed.id가 없다. 그래도 제출 자체는 Apple에 접수됐을 수 있어 원시
+    // 텍스트에 UUID가 한 번은 찍혀 있을 수 있다 — 정규식으로 마지막 기회를 준다. 이것까지 실패하면
+    // notarytool log로 이어 볼 방법이 없다(브리프의 "끊긴 뒤 되찾을 수 있어야 한다"가 요구하는 지점).
+    const id = parsed.id ?? /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/.exec(out)?.[0];
     // 거절 사유는 목록이라 요약하면 원인을 잃는다. 로그를 통째로 뱉고 멈춘다.
-    if (parsed.id !== undefined) {
-      spawnSync("xcrun", ["notarytool", "log", parsed.id, "--keychain-profile", signing.notaryProfile], { stdio: "inherit" });
-      console.error(`제출 id ${parsed.id} — 나중에 notarytool log로 이어 볼 수 있다`);
+    if (id !== undefined) {
+      spawnSync("xcrun", ["notarytool", "log", id, "--keychain-profile", signing.notaryProfile], { stdio: "inherit" });
+      console.error(`제출 id ${id} — 나중에 notarytool log로 이어 볼 수 있다`);
     }
-    throw new Error(`공증 실패 (${label}): status=${parsed.status ?? "unknown"}`);
+    // spawn 자체가 실패했거나(xcrun을 못 찾음 등) 비정상 종료했으면 그 원인도 그대로 던진다 —
+    // status=unknown만 던지면 끊김·타임아웃과 "그냥 이상한 응답"을 구별할 수 없다.
+    const cause = r.error !== undefined ? `spawn error: ${r.error.message}` : `exit ${r.status}`;
+    throw new Error(`공증 실패 (${label}): status=${parsed.status ?? "unknown"} (${cause})`);
   }
 }
 
 if (RELEASE) {
   const appZip = path.join(desktop, "out", "Damwha.zip");
   run("ditto", ["-c", "-k", "--keepParent", appPath, appZip], desktop);
-  notarize(appZip, ".app");
-  fs.rmSync(appZip, { force: true });
+  // notarize()가 거절로 throw해도 534MB짜리 zip을 out에 남기지 않는다 — Task 7~9가 다루는
+  // 디스크 부족 문제 바로 옆에 알려진 누수를 두지 않는다 (Ruling R14).
+  try {
+    notarize(appZip, ".app");
+  } finally {
+    fs.rmSync(appZip, { force: true });
+  }
   run("xcrun", ["stapler", "staple", appPath], desktop);
 
   // 스테이플이 .app 안에 티켓 파일을 넣는다. 번들 위생과 서명이 그 뒤에도 성립하는지 다시 묻는다
