@@ -31,3 +31,7 @@ mac:
   extendInfo:
     # 없으면 macOS가 마이크 요청 시 앱을 죽인다 (스펙 §6.6).
     NSMicrophoneUsageDescription: 담화가 회의를 녹음하려면 마이크를 사용해요. 녹음과 처리는 이 맥 안에서만 일어나요.
+    # 번들 Mach-O의 minos 최대값과 **같은 값**이어야 한다 (Phase 6a 스펙 §5.4).
+    # scripts/lib/build-target.sh·scripts/lib/minos.mjs의 MAX_MINOS가 같은 값을 든다.
+    # 이것만 낮추면 Finder는 실행을 허용하고 dyld가 죽인다.
+    LSMinimumSystemVersion: "15.0"

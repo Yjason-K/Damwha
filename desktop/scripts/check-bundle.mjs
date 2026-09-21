@@ -193,6 +193,28 @@ try {
 }
 check("Info.plist carries NSMicrophoneUsageDescription", usage.length > 0, usage);
 
+// Info.plist에서 문자열 값 하나. PlistBuddy는 없을 수 있으므로 plutil로 JSON을 떠서 읽는다.
+let infoPlistJson = null;
+function plistValue(key) {
+  if (infoPlistJson === null) {
+    const r = spawnSync("plutil", ["-convert", "json", "-o", "-", path.join(contents, "Info.plist")], { encoding: "utf8" });
+    infoPlistJson = r.status === 0 ? JSON.parse(r.stdout) : {};
+  }
+  const v = infoPlistJson[key];
+  return typeof v === "string" ? v : "";
+}
+
+// 6b. 최소 macOS 선언이 번들의 실제 바닥과 같다 (P6a-C2). 셋이 한 값이어야 한다 —
+// 이 plist 키, scripts/lib/build-target.sh, minos.mjs의 MAX_MINOS.
+const lsMin = plistValue("LSMinimumSystemVersion");
+check(`Info.plist LSMinimumSystemVersion is ${MAX_MINOS}`, lsMin === MAX_MINOS, lsMin || "(not found)");
+
+// 6c. 앱 버전이 package.json과 같다 (P6a-C2). 어긋나면 6b의 업데이트 알림이
+// 자기보다 낮은 버전을 "새 버전"이라 말한다.
+const shortVersion = plistValue("CFBundleShortVersionString");
+check("Info.plist CFBundleShortVersionString equals package.json version", shortVersion === pkg.version,
+  `plist=${shortVersion || "(none)"} package.json=${pkg.version}`);
+
 // 7. 재서명 후 앱이 Electron 프리빌트가 아니라 자기 identifier를 갖는다
 // codesign -dv는 정보를 stdout이 아니라 stderr에 쓴다.
 const codesignInfo = spawnSync("codesign", ["-dv", "--verbose=2", appDir], { encoding: "utf8" });
