@@ -9,7 +9,8 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, test, vi } from "vitest";
 
-import { apiClient } from "@/shared/api/client";
+import { apiClient, ApiError } from "@/shared/api/client";
+import { Toaster } from "@/shared/ui/toaster";
 import { NewMeetingDialog } from "./new-meeting-dialog";
 
 afterEach(() => {
@@ -262,4 +263,34 @@ test("같은 모달을 닫고 다시 열면 입력은 비우고 선택한 탭은
   selectSource("오디오 파일");
   expect(screen.getByText("선택된 파일이 없어요")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "업로드 시작" })).toBeDisabled();
+});
+
+test("업로드가 507(디스크 부족)로 실패하면 사유가 토스트에 뜬다 — client.ts의 diskFullMessage가 화면까지 닿는지 확인", async () => {
+  const diskFullError = new ApiError(
+    507,
+    "디스크 공간이 부족해요 — 남은 용량 1.2 GB. 다른 파일을 정리해 공간을 만든 뒤 다시 올려 주세요.",
+    "DISK_FULL",
+  );
+  vi.spyOn(apiClient, "post").mockRejectedValue(diskFullError);
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <Toaster />
+      <NewMeetingDialog open onOpenChange={() => {}} onCreated={() => {}} />
+    </QueryClientProvider>,
+  );
+  const fileInput = document.querySelector(
+    'input[type="file"]',
+  ) as HTMLInputElement;
+  fireEvent.change(fileInput, {
+    target: { files: [new File(["a"], "a.m4a", { type: "audio/mp4" })] },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "업로드 시작" }));
+
+  expect(
+    await screen.findByText(
+      "디스크 공간이 부족해요 — 남은 용량 1.2 GB. 다른 파일을 정리해 공간을 만든 뒤 다시 올려 주세요.",
+    ),
+  ).toBeInTheDocument();
+  expect(screen.getByText("업로드 실패")).toBeInTheDocument();
 });
