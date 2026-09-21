@@ -29,6 +29,12 @@
 인증서 발급·검증을 마쳤고(`L5Y9SZHGRN`), 스펙을 쓰며 **현재 번들이 `minos 27.0`이라 이 맥 밖에서는
 뜨지 않는다**는 것을 실측으로 잡았다. Phase 0의 P0-C11이 "미정"으로 남긴 자리가 실제 배포 차단
 결함이었다. 최소 macOS는 **15.0**으로 정했다 (아래 Phase 6 절).
+**Phase 6a는 2026-09-21에 구현 Task 10개(T1~T10)를 완료·리뷰 clean까지 마쳤다** — 서명·공증
+기구가 실제로 통과했고(공증 제출 둘 다 Accepted), P5-C6(디스크 부족)이 worker job·embed·LLM
+세 경로 전부에서 닫혔다. **공증 제출 직후 스펙의 전역 제약 하나가 뒤집혔다**(postgres도
+hardened runtime을 건다 — 실측이 그렇게 요구했다, 아래 Phase 6a 절). 릴리스 발행(T11)과 두 번째
+맥 검증(T12)은 되돌리기 어렵거나 사람이 직접 하는 일이라 사용자 결정을 기다리며 **진행 전**으로
+남아 있다 — 결과는 [Phase 6a 결과 문서](superpowers/reports/2026-09-20-electron-phase-6a-signing-distribution-results.md).
 
 ## 목표와 전제
 
@@ -86,7 +92,7 @@
 | --- | --- |
 | 개발자의 기존 PATH·가상환경·Homebrew에 의존하지 않는 환경에서 DB 검색과 실제 음성 처리·임베딩 실행 성공 | **충족** |
 | 가능한 패키징 방식, 검증 환경, 남은 제약을 문서로 기록 | **충족** |
-| 후속 Phase에서 사용할 실행 환경 제공 방식을 결정 | **부분** — 세 런타임의 제공 방식은 실측으로 정해졌고, 최소 macOS 버전과 모델 배포 조건이 미결이다 |
+| 후속 Phase에서 사용할 실행 환경 제공 방식을 결정 | **부분** — 세 런타임의 제공 방식은 실측으로 정해졌고, 최소 macOS 버전(P0-C11)과 모델 배포 조건이 미결이었다. **P0-C11은 Phase 6a에서 15.0으로 닫혔다**(실측: 소스 빌드 postgres·ffmpeg가 `MACOSX_DEPLOYMENT_TARGET` 없이 호스트 SDK 27.0을 상속하고 mlx가 26.0 휠을 집어 번들이 이 맥 밖에서는 뜨지 않던 결함이었다 — 아래 Phase 6a 절 참조) |
 
 확정된 제공 방식: PostgreSQL 16.15 **소스 빌드**(+pgvector·pg_bigm, 21 MB), Python
 **python-build-standalone 3.12.11 + `uv pip install --python`**(1509 MiB), ffmpeg **LGPL 2.1
@@ -383,9 +389,11 @@ wheel이며 DMG가 없다) `latest`가 제품을 가리지 못한다. 웹 릴리
 - 개발 환경이 없는 지원 대상 맥에 배포 산출물을 설치하고 실제 처리 성공.
 - 재빌드·재설치 후에도 마이크 권한과 토큰이 유지됨(Developer ID DR의 종단간 증명).
 
-**상태 (2026-09-20): 스펙 작성 완료, 리뷰 전.** Developer ID 인증서는 발급·검증을 마쳤다 —
+**상태 (2026-09-21): 구현 Task 10개(T1~T10) 완료, 리뷰 clean(전부 최소 1회 수정 라운드 거침).
+릴리스 발행(T11)·두 번째 맥 검증(T12)은 진행 전.** Developer ID 인증서는 발급·검증을 마쳤다 —
 `Developer ID Application: Youngjae Kim (L5Y9SZHGRN)`, notarytool 프로필 `damwha` 인증 확인.
 스펙은 [2026-09-20-electron-phase-6a-signing-distribution-design.md](superpowers/specs/2026-09-20-electron-phase-6a-signing-distribution-design.md),
+결과는 [2026-09-20-electron-phase-6a-signing-distribution-results.md](superpowers/reports/2026-09-20-electron-phase-6a-signing-distribution-results.md),
 브랜치는 `feat/electron-migration-phase-6a-signing-distribution`.
 
 **스펙을 쓰며 잡은 결함 하나.** `xcrun vtool -show-build` 전수 실측 결과 **현재 번들은
@@ -393,7 +401,31 @@ wheel이며 DMG가 없다) `latest`가 제품을 가리지 못한다. 웹 릴리
 `MACOSX_DEPLOYMENT_TARGET` 없이 호스트 SDK를 상속한 것이 원인의 절반이고, 나머지 절반은 uv가
 호스트(27.0)에 맞춰 집은 `mlx`·`mlx-metal`의 26.0 휠이다. P0-C11이 "미정"으로 남겨 둔 자리가
 실제 배포 차단 결함이었다. 15.0은 **핀을 하나도 내리지 않고** 닿는다 — mlx가 15.0 휠을 내고
-나머지 PyPI 휠은 14.0 이하이며 Electron은 13.0이다.
+나머지 PyPI 휠은 14.0 이하이며 Electron은 13.0이다. T1~T4가 이 값을 세 갈래(소스 빌드 둘·mlx
+휠·`check-bundle`의 minos 전수 단언)로 강제해 닫았다.
+
+**구현하며 스펙의 전역 제약 하나가 실측으로 뒤집혔다.** "`Resources/postgres`에는 hardened
+runtime을 걸지 않는다"는 원래 제약이었으나, 첫 공증 제출(`88197b1f-daae-41bc-aa68-e62176a321de`)이
+postgres 실행 파일 32개 전부를 hardened runtime 미적용으로 거절했다 — 공증이 번들 안 모든
+실행 파일에 그것을 요구한다는 사실을 이 Phase가 처음 실측했다(Ruling R12). postgres도 identity만
+확인하던 것에서 hardened runtime까지 걸도록 바꿨고, entitlements 없이(같은 Team ID 서명 트리라
+library validation 통과) 재제출이 Accepted로 통과했다 — 재빌드한 앱에서 pgvector 0.8.6·pg_bigm
+1.2 적재까지 확인했다. 스펙·계획 본문에 이 판정을 가리키는 정정 포인터를 달았다.
+
+**P5-C6(디스크 부족)이 이 Phase에서 완전히 닫혔다.** worker 모델 다운로드 사전 점검(T7),
+업로드 ENOSPC → 507(T8), 화면 표시(T9)까지 세 조각이 갖춰진 뒤, packaged 통합 검증(T10)에서
+LLM 기동 경로만 디스크 부족을 5분 뒤 거짓 사유(`llm_request_failed`)로 표면화하는 결함이
+드러났다. 계획에 없던 수정이라 사용자 승인을 받아 Phase 6a 안에서 고쳤다(Ruling R16) —
+`mlx_lm.server` 요청 스레드에서 삼켜지던 `DISK_FULL`을 감시해 job을 4.88초 만에 정직한 사유로
+실패시킨다. worker job·embed·LLM·업로드 네 경로 모두 실측으로 확인됐다(업로드 화면 렌더링
+자체는 이 세션의 GUI 권한 부재로 계약 레벨까지만 — 결과 문서 §2 P6a-C6 참고).
+
+릴리스 발행(T11)·두 번째 맥 검증(P6a-C9~C11, T12)은 되돌리기 어렵거나 사람이 직접 하는 일이라
+사용자 결정을 기다리며 **진행 전**으로 남아 있다. 스펙 §10의 완료 기준(`C1~C14` + `C8b`, 15행)
+중 8건(P6a-C1·C2·C3·C5·C6·C7·C8·C8b) 충족, 2건(C4·C13)은 T6에서 메커니즘까지 확인했으나
+최종 발행판 재확인이 T11 소관, 1건(C12)은 예고된 퇴행이 실측에서 일어나지 않아 미판정,
+3건(C9·C10·C11)은 T12 소관, 1건(C14)은 T11 소관으로 각각 진행 전이다 — 상세 판정표와 근거는
+결과 문서 §2.
 
 #### Phase 6b. 업데이트
 

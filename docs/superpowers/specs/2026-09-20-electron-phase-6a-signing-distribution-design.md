@@ -51,8 +51,15 @@ Phase 6은 6a·6b로 나눈다(2026-09-20 결정). **6a의 산출물(서명·공
    `Resources/python`의 Mach-O 전수와 `Resources/ffmpeg/bin/*`에, `entitlements.mac.plist`(키 셋,
    `allow-jit` 추가)를 `.app`에 `--deep`으로. 순서가 뒤집히면 `.app` 서명의 Resources 봉인이
    서명 전 내용을 가리켜 `--verify`가 깨진다. `.app`에 python plist를 주면 V8이 rc=133으로 죽는다.
-3. **`Resources/postgres`만 hardened runtime이 없고 그것이 맞다** — 별개 프로세스라 자기 서명의
-   플래그로 돈다. `check-bundle.mjs`의 runtime 단언은 python·ffmpeg 트리에만 건다.
+3. ~~**`Resources/postgres`만 hardened runtime이 없고 그것이 맞다** — 별개 프로세스라 자기 서명의
+   플래그로 돈다. `check-bundle.mjs`의 runtime 단언은 python·ffmpeg 트리에만 건다.~~
+   > **뒤집힘 (Task 6, Ruling R12, 2026-09-21).** 첫 공증 제출(`88197b1f-daae-41bc-aa68-e62176a321de`)이
+   > status=Invalid, 오류 32건 전부 `Resources/postgres/bin/*`의 "hardened runtime enabled 아님"이었다.
+   > 공증이 실행 파일에 hardened runtime을 요구한다는 사실이 이 스펙이 몰랐던 사실로 실측됐다 —
+   > postgres도 이제 `--options runtime`으로 서명하고 `check-bundle.mjs` §14b가 66/66 전수 단언한다.
+   > entitlements는 여전히 주지 않는다(같은 Team ID 서명 트리라 library validation을 통과, 재제출
+   > `54dd2674…`·`cd12be62…` 둘 다 Accepted, pgvector 0.8.6·pg_bigm 1.2 적재까지 확인). 근거는
+   > [결과 문서](../reports/2026-09-20-electron-phase-6a-signing-distribution-results.md) Ruling R12 절.
 4. **서명 뒤 번들 python을 실행하지 않는다.** `__pycache__`가 봉인 밖에 생기고 `.pyc`에 빌드
    머신의 절대 경로가 박힌다. `check-bundle.mjs`가 둘 다 잡는다.
 5. **`check-bundle.mjs`는 31건을 판정하고 실패하면 `exit 1`이다**(373줄). `check(label, ok, detail)`
@@ -189,10 +196,12 @@ uv pip install --python <interp> --link-mode=copy --reinstall --no-deps \
 - 지문은 `desktop/scripts/signing.json`(gitignore 아님, 비밀이 아니다)에 두고 스크립트가 읽는다.
   없거나 키체인에서 찾을 수 없으면 **패키징을 멈춘다** — ad-hoc으로 조용히 떨어지지 않는다.
 - `--timestamp`를 더한다. 공증의 선행 조건이고, 인증서 만료 뒤에도 서명이 유효하게 한다.
-- **plist 둘·순서·postgres 예외는 그대로다**(§3-2·§3-3). 바뀌는 것은 identity와 타임스탬프뿐이다.
+- **plist 둘·순서는 그대로다**(§3-2). ~~postgres 예외도 그대로다(§3-3).~~ **postgres 예외는 Task 6,
+  Ruling R12(2026-09-21)로 뒤집혔다 — §3-3의 정정 참고.** 바뀌는 것은 identity와 타임스탬프뿐이다.
 - `check-bundle.mjs`의 서명 단언을 **"서명이 있고 runtime 플래그가 붙었다"에서 "Authority가
-  Developer ID Application이고 TeamIdentifier가 `L5Y9SZHGRN`이다"까지** 올린다. postgres 트리도
-  identity는 확인한다(runtime 플래그만 예외다).
+  Developer ID Application이고 TeamIdentifier가 `L5Y9SZHGRN`이다"까지** 올린다. ~~postgres 트리도
+  identity는 확인한다(runtime 플래그만 예외다).~~ **postgres 트리도 R12 이후로는 runtime 플래그까지
+  확인한다(§14b) — entitlements는 여전히 안 준다.**
 
 **ad-hoc 산출물과 섞이지 않게 한다.** 전환 후 첫 빌드 전에 `desktop/out`을 통째로 지운다 —
 파일만 지우면 `.DS_Store` 때문에 `ENOTEMPTY`가 난다.
@@ -319,7 +328,7 @@ uv pip install --python <interp> --link-mode=copy --reinstall --no-deps \
 | --- | --- | --- | --- |
 | P6a-C1 | 번들 Mach-O 전수의 `minos` 최대값이 15.0 이하다 | static | `vtool -show-build` 전수. 초과 파일 0개. 실패 시 경로·값 전부 보고. **`app.asar` 안에 Mach-O가 0개임도 함께 단언**(§5.4) |
 | P6a-C2 | `Info.plist`의 `LSMinimumSystemVersion`이 `15.0`이고 `CFBundleShortVersionString`이 `package.json`의 `version`과 같다 | static | plist 읽기 |
-| P6a-C3 | `.app`·DMG의 모든 서명이 Developer ID Application `L5Y9SZHGRN`이고, python·ffmpeg 트리에 hardened runtime 플래그가 붙어 있다 | static | `codesign -dv --verbose=2` 전수. Authority 3단(leaf → Developer ID CA → Apple Root), postgres 트리는 identity만 |
+| P6a-C3 | `.app`·DMG의 모든 서명이 Developer ID Application `L5Y9SZHGRN`이고, python·ffmpeg 트리에 hardened runtime 플래그가 붙어 있다 | static | `codesign -dv --verbose=2` 전수. Authority 3단(leaf → Developer ID CA → Apple Root), ~~postgres 트리는 identity만~~ **postgres 트리도 R12(각주 §3-3) 이후 runtime 플래그까지 66/66 확인 — entitlements는 없음** |
 | P6a-C4 | 공증을 통과하고 스테이플이 붙었다 | static (`--release`) | `spctl --assess --type execute -vv`가 `accepted, source=Notarized Developer ID`. `stapler validate` 통과. DMG와 그 안의 `.app` 양쪽 |
 | P6a-C5 | 릴리스 빌드에서 태그와 `package.json` 버전이 어긋나면 빌드가 멈춘다 | static | 일부러 어긋나게 하고 `--release`로 실행 → 비영(非零) 종료 |
 | P6a-C6 | 디스크 부족에서 원인과 복구 안내가 화면에 뜬다 | packaged | §11-2의 주입 절차. **세 주체 전부**(worker job·embed 기동·LLM 기동, §8.1의 표)와 업로드(8.2)에서 관찰. 화면에 `디스크 공간이 부족해요 — 남은 용량 …, 필요한 용량 …`과 안내 문구. worker job은 회의 카드에, embed·LLM은 상태 창에 뜬다 |

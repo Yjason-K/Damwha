@@ -1,9 +1,191 @@
-# Electron Phase 6a — Task 10: packaged 통합 검증 결과
+# Electron Phase 6a — 서명·배포 실행 결과
+
+스펙: [2026-09-20-electron-phase-6a-signing-distribution-design.md](../specs/2026-09-20-electron-phase-6a-signing-distribution-design.md)
+계획: [2026-09-20-electron-phase-6a-signing-distribution.md](../plans/2026-09-20-electron-phase-6a-signing-distribution.md)
+원장: `.superpowers/sdd/2026-09-20-electron-phase-6a-signing-distribution/progress.md`
+브랜치: `feat/electron-migration-phase-6a-signing-distribution` (base `dev` = `1b92190`)
+
+## 0. 이 문서의 범위 — Task 13이 앞당겨졌다
+
+계획 순서는 Task 11(릴리스 발행) → Task 12(두 번째 맥) → Task 13(이 문서)이지만, 사용자가
+"Task 13을 먼저 한다"를 골라 순서를 13 → 11 → 12 → 13 보충으로 바꿨다(원장 Ruling R19,
+2026-09-21). 이유: Task 13을 먼저 하면 태그가 문서까지 정리된 HEAD를 가리킨다.
+
+그래서 이 문서는:
+
+- **T1~T10의 결과는 지금 완성한다** — 아래 §1·§2·§7.
+- **T11(릴리스 발행)·T12(두 번째 맥)의 결과 칸은 "진행 전"으로 비워 둔다** — §6. 추측으로
+  채우지 않는다. 두 Task가 끝난 뒤 짧은 보충 커밋으로 채운다.
+- 스펙·계획 정정, 로드맵 갱신은 이 Task(13)의 몫이라 같이 마쳤다.
+
+## 1. Task별 실행 요약 (T1~T10)
+
+| Task | 범위 | 커밋 범위 | 리뷰 | 비고 |
+| --- | --- | --- | --- | --- |
+| T1 | postgres·ffmpeg를 macOS 15.0 타깃으로 소스 빌드 | `b47f29b..bd0d61f` | Approved, 수정 라운드 없음 | — |
+| T2 | mlx·mlx-metal을 macOS 15.0 휠로 고정 | `bd0d61f..6010470` | Approved, 수정 라운드 없음 | 계획의 sed 정규식 결함을 구현자가 발견·수정(계획 본문도 고침) |
+| T3 | minos 판독기 + check-bundle 전수 단언 | `6010470..e64f9ff` | Needs fixes(Critical 1·Important 1) → 1회 수정 → clean | **Ruling R7** — 계획이 준 정규식이 `LC_BUILD_VERSION` 하위 `tool LD` 레코드를 잘못 집어 `readMinos("/bin/echo")`가 `27037.1`을 냄. 로드 커맨드 블록 단위 파싱으로 고침 |
+| T4 | `Info.plist` `LSMinimumSystemVersion`·probe 그물시험 | `e64f9ff..f5e0d81` | Approved, Critical·Important·Minor 0 | 세션 끊김 후 산출물을 검증으로 이어받음(Ruling R8). minos 전수 스캔 521개 Mach-O, 벽시계 ~3분 |
+| T5 | ad-hoc → Developer ID 서명 전환 | `f5e0d81..0dcef63` | Needs fixes(Important 2·Minor 6) → 1회 수정 → clean | **Ruling R10**(ShipIt에 hardened runtime 추가 — electron-builder 기본값 퇴행 수정), **Ruling R11**(postgres의 runtime 없는 실행 파일 32개는 전역 제약이 시킨 것이라 T6로 이관). 예상과 달리 HF 토큰 재입력이 필요 없었다(미해명, §2 P6a-C12) |
+| T6 | 공증·스테이플·DMG (발행 제외) | `0dcef63..847e2dd` | Needs fixes(Important 3·Minor 6) → 1회 수정 → clean | **Ruling R12**(스펙의 전역 제약을 뒤집음 — postgres에도 hardened runtime, 아래 §3), **Ruling R13**(desktop/CLAUDE.md 즉시 정정), **Ruling R14**(534MB zip 누수 정리) |
+| T7 | worker 모델 다운로드 전 디스크 여유 점검 | `847e2dd..f84d52c` | Approved(Important 1) → 1회 수정 → clean | 배치 위치가 계획이 한 번 틀렸던 자리(우회 분기를 놓치는 자리)를 회피했음을 리뷰·회귀 테스트로 확인 |
+| T8 | 업로드 중 ENOSPC → HTTP 507 | `f84d52c..9ae6e63` | Approved(Important 2) → 1회 수정 → clean | **Ruling R15** — 계획이 준 정리 코드(`tempFileOf`)가 실제 ENOSPC 오류엔 `.path`가 없어 절대 안 돌던 것을 요청 스코프 파일명 추적으로 고쳐 실제로 돌게 만듦 |
+| T9 | 화면에 디스크 부족 사유 표시 | `9ae6e63..a368f12` | Approved(Minor 3), 수정 라운드 없음 | 구조 이탈 둘(공유 axios 인터셉터에 배치, 2부 `UploadError` 대신 단일 메시지)을 리뷰어가 개선으로 판정. **P5-C6이 이 시점 worker(T7)·API(T8)·화면(T9) 세 조각으로 닫힘** |
+| T10 | packaged 통합 검증 + LLM 경로 디스크 부족 수정 | `a368f12..9791bcf` | Needs fixes(Important 4) → 1회 수정 → clean | 데이터 오염 사고(§4), **Ruling R16**(사용자 승인 — LLM 경로 디스크 부족을 Phase 6a 안에서 고침), **Ruling R17**(desktop/out 무효화→재패키징), **Ruling R18**(장수 릴레이 스레드로 재작성) |
+
+## 2. 완료 기준 판정 — P6a-C1~C14
+
+환경 표기는 스펙 §10 그대로: **static** = `check-bundle.mjs`/빌드 단언, **packaged** = 이 맥에서
+`desktop:build`(또는 `--release`) 산출물, **원격** = 두 번째 맥(T12).
+
+| ID | 기준 | 판정 | 증거 |
+| --- | --- | --- | --- |
+| P6a-C1 | 번들 Mach-O 전수의 `minos` ≤ 15.0, asar 안 Mach-O 0개 | **충족** | T4 구현(521개 Mach-O 전수 스캔 — postgres 66 + python·ffmpeg 455, probe로 27.0 하나 심어 exit 1 확인 후 제거해 exit 0), T10 재패키징에서도 `every Mach-O in the bundle targets macOS 15.0 or lower` PASS로 재확인 |
+| P6a-C2 | `Info.plist`의 `LSMinimumSystemVersion=15.0`, `CFBundleShortVersionString`이 `package.json`과 일치 | **충족** | T4 리뷰가 세 자리 리터럴(`minos.mjs:10`, `build-target.sh:12`, `electron-builder.yml:37`) 일치를 직접 확인. T10 재패키징에서도 유지 |
+| P6a-C3 | `.app`·DMG 전수가 Developer ID `L5Y9SZHGRN` 서명, python·ffmpeg(+R12 이후 postgres)에 hardened runtime | **충족** | T5(identity·TeamIdentifier 전수), T6 §14b(postgres 66/66 runtime), T10 재패키징에서 `postgres 66/66`·`python+ffmpeg 454/454` runtime PASS 재확인. 원래 완료 기준 문구의 "postgres 트리는 identity만"은 R12로 뒤집혔다(spec §3-3 정정 참고) |
+| P6a-C4 | 공증 통과 + 스테이플 (`--release`) | **메커니즘 충족 확인(T6, 커밋 `dfd6c1a`/`847e2dd` 기준)** — 최종 발행판은 진행 전(T11) | T6: 첫 제출 `88197b1f-daae-41bc-aa68-e62176a321de` status=Invalid(오류 32건, R12로 해소) → 재제출 `.app`=`54dd2674-3806-4f12-8187-0ac8c50c10f6`·DMG=`cd12be62-dc47-49ff-87b3-1d8599ce8fe7` 둘 다 Accepted. `spctl --assess`가 `source=Notarized Developer ID`, `stapler validate` 통과. **단 이 산출물은 T7~T10(디스크 부족 세 경로, R16)을 포함하지 않은 코드 상태다** — 최종 발행판 재공증은 T11이 한다 |
+| P6a-C5 | 릴리스 빌드에서 태그·버전 어긋나면 멈춤 | **충족** | T6 Step 10b: 태그를 일부러 어긋나게 하고 `--release` 실행 → electron-builder 앞에서 exit 1 확인 |
+| P6a-C6 | 디스크 부족 원인·복구 안내가 화면에 뜬다(worker job·embed·LLM 셋 + 업로드) | **충족(응답·계약 레벨) — 화면 렌더링 자체는 미관측** | worker job·embed: T10 Step3 실측(`DISK_FULL`, 사유 문구 그대로). LLM: 최초 부분 충족(5분 뒤 `llm_request_failed`로 거짓 표면화) → **R16 수정 후 4.88초에 `DISK_FULL`로 충족**(task-10-report.md §fix round). 업로드: T9가 FE 소비 로직을 unit·DOM 테스트로 고정하고 T10이 실제 API 응답이 그 모양(`{code:'DISK_FULL', free, needed:null}`)과 일치함을 소스 대조로 확인 — **실제 토스트 렌더링은 이 세션에 GUI 상호작용 권한이 없어 못 봤다**(T10 §7.1 Step1) |
+| P6a-C7 | 업로드 ENOSPC → 507, 잔재 없음 | **충족** | T8(2MB HFS+ 이미지로 실측, `dw-upload-*` 잔재 0), T10 Step1/2 실측 — 507 `{code:'DISK_FULL', free:20250624, needed:null}`, `new_meetings=0`, `new_jobs=0`, 임시 파일 0개 |
+| P6a-C8 | 디스크 부족 회차 뒤 기존 데이터 보존, 고아 행 없음 | **충족** | T10 Step5 — Phase 5 정합성 질의 넷 전부 0, `meeting`/`utterance` 행 수·`data/storage` 파일 수 불변 |
+| P6a-C8b | 모델 다운로드 디스크 부족이 재시도 예산을 안 태움(worker job 경로) | **충족** | T10 Step3/4 — `job_198`(worker, DISK_FULL) attempts=1→failed, `job_199`(LLM, R16 수정 후) attempts=1→failed, 둘 다 `queued` 백오프 없음 |
+| P6a-C9 | 두 번째 맥 Gatekeeper 없이 실행 | **진행 전 (T12)** | — |
+| P6a-C10 | 두 번째 맥 온보딩→다운로드→처리 `done` | **진행 전 (T12)** | — |
+| P6a-C11 | 재빌드·재설치 후 TCC 마이크 권한·토큰 유지 | **진행 전 (T12)** — 스펙이 "이 Phase에서 가장 값진 기준"으로 꼽음 | — |
+| P6a-C12 | ad-hoc→Developer ID 전환에서 토큰이 1회 무효화되고 크래시 없이 온보딩으로 떨어짐 | **미판정 — 전제가 실측에서 발생하지 않았다** | T5 Step 8과 T10 Step3(세 차례 모델 로드, gated repo 인증 포함) 모두 **토큰이 무효화되지 않고 재입력 없이 그대로 작동**했다. 예고된 퇴행(§9) 자체가 안 일어났으므로 "크래시 없이 온보딩으로 떨어지는지"는 시험된 적이 없다. 왜 무효화되지 않는지 T5·T6·T10 공통으로 미해명 |
+| P6a-C13 | DMG 안 `.app`도 서명·공증·스테이플 살아있음 (`--release`) | **메커니즘 충족 확인(T6, C4와 같은 커밋 기준)** — 최종 발행판은 진행 전(T11) | DMG 마운트 후 내부 `.app`에 `spctl --assess`·`stapler validate`·`codesign -dv` 통과(T6). C4와 같은 이유로 T7~T10 미포함 |
+| P6a-C14 | `desktop-v<version>` 태그로 릴리스 발행, DMG+SHA-256 자산 | **진행 전 (T11)** | 태그 `desktop-v0.3.0`은 T6이 `dfd6c1a`에 로컬로만 만들었다(`git ls-remote --tags origin 'desktop-v*'` 빈 결과 확인). T11이 최종 HEAD로 재태깅 후 발행해야 한다(T6 RISK 메모) |
+
+## 3. 뒤집힌·추가된 판정 (Ruling)
+
+스펙·계획의 문구를 뒤집었거나 계획에 없던 것을 더한 판정. 원장 전문은
+`.superpowers/sdd/2026-09-20-electron-phase-6a-signing-distribution/progress.md`.
+
+### R12 — 스펙의 전역 제약을 뒤집었다: `Resources/postgres`에 hardened runtime을 건다 (Task 6)
+
+원래 제약(스펙 §3-3·§6, 계획 Global Constraints): "`Resources/postgres`에는 hardened runtime을
+걸지 않는다. 별개 프로세스라 자기 서명의 플래그로 돈다." 첫 공증 제출
+(`88197b1f-daae-41bc-aa68-e62176a321de`)이 **status=Invalid**, 오류 32건 전부
+`Resources/postgres/bin/*`의 "The executable does not have the hardened runtime enabled."였다.
+제약의 근거는 실행 시 동작이었지 공증 요건이 아니었다 — 공증은 번들 안 모든 실행 파일에
+hardened runtime을 요구한다는 사실이 실측으로 확정됐다.
+
+최소 변경으로 검증했다: postgres를 `--options runtime`으로 서명하되 entitlements는 주지
+않는다. postgres 트리 전체(pgvector·pg_bigm 포함)가 이미 같은 Team ID(`L5Y9SZHGRN`)로
+서명돼 있어 hardened runtime의 library validation이 entitlement 없이도 통과할 것으로 보고,
+재제출로 확인했다 — **`.app` 제출 `54dd2674-3806-4f12-8187-0ac8c50c10f6`, DMG 제출
+`cd12be62-dc47-49ff-87b3-1d8599ce8fe7` 둘 다 Accepted.** 런타임에서도 검증됨: 재빌드한 앱을
+띄워 postgres가 **pgvector 0.8.6·pg_bigm 1.2를 적재하며 뜨는 것**과 api·worker의 DB 연결을
+확인했다. `check-bundle.mjs` §14b가 postgres 트리의 hardened runtime 플래그를 66/66 전수
+단언하고, `{runtime:false}`로 재서명한 사본이 `flags=0x0(none)`으로 잡히는 회귀 시연도 했다.
+
+스펙·계획 본문은 이 Task(13)에서 정정했다 — §정정 방식 참고.
+
+### R16 — LLM 경로의 디스크 부족 결함을 Phase 6a 안에서 고쳤다 (사용자 승인, Task 10)
+
+T10 packaged 검증 중 `mlx_lm.server`의 요청 처리 스레드에서 올라온 `DISK_FULL`이 Python 기본
+스레드 예외 훅에 삼켜져, 사용자에게는 5분(`lens_llm_timeout_seconds`) 뒤 `llm_request_failed`/
+"시간이 초과됐어요"로만 보이는 결함을 발견했다. 계획에 없던 코드 변경이라 사용자에게 먼저
+물었다 — **"Phase 6a 안에서 고친다"로 승인받았다.** 근거: P6a-C6·P5-C6의 완료 기준은 "디스크
+부족에서 원인과 복구 방법을 앱에서 확인 가능"인데, LLM 경로만 거짓 사유로 뜨면 세 경로 중
+하나가 그 기준을 실제로는 못 채운다.
+
+`be/worker/damwha_worker/llm_server.py`에 `run_guarding_disk_full`을 배선해 `DISK_FULL`
+서명만 좁게 잡고 job을 그 자리에서 실패시켰다. `extract_lenses`도 같은 `managed_llm_server`
+경로를 공유하는 것을 완전성 점검으로 찾아 함께 고쳤다. 격리된 testcontainer DB + 격리된
+10MB HF 캐시 볼륨 + 실제 `mlx_lm.server` 서브프로세스로 실측: 5분 대신 **4.88초**, 거짓
+`llm_request_failed` 대신 정직한 `code=DISK_FULL`. 리뷰 라운드에서 readiness 구간에 자식
+stderr 파이프를 아무도 안 읽어 기동 실패 트레이스백이 유실되는 결함을 추가로 잡아 장수
+릴레이 스레드로 고쳤다(R18). worker 테스트 713건 통과, ruff 클린.
+
+### R10 — ShipIt에 hardened runtime (Task 5)
+
+`package.mjs`가 Electron 프레임워크 안 `ShipIt`(Squirrel 업데이터, `MH_EXECUTE`)을 identity만
+으로 서명해 electron-builder의 기본 서명 동작(`--options runtime`을 줌)에 대한 퇴행이었다.
+공증이 실행 파일(dylib 아님)에 hardened runtime을 요구하는 것이 파일 종류로 갈린다는 사실을
+리뷰어가 `/usr/bin/file -b`로 확인해 지적했고, `package.mjs:164`에 `--options runtime`을
+더해 고쳤다. dylib 둘(`libvk_swiftshader`·`libffmpeg`)에 같이 붙여도 무해하다(플래그는 프로세스
+주 실행 파일에서만 읽힌다).
+
+### R17 — `desktop/out` 무효화 (Task 10)
+
+LLM 경로 수정(R16)이 worker Python **소스**를 고쳤는데, 번들은 그 소스를 복사해 담으므로
+당시 `desktop/out`은 수정을 담고 있지 않았다. "산출물을 재사용할 수 있게 뒀다"는 이 결과
+문서 §7.4의 원래 문장이 이 전제를 깔고 있어 틀렸다 — 리뷰가 지적해 `desktop/out`을 통째로
+`rm -rf`했다(`.DS_Store`로 인한 `ENOTEMPTY`를 피하려 파일만 지우지 않고 디렉터리째).
+
+**정정 — 이후 재생성 사실이 §7.4에 이어서 적혀 있었으나 문단이 "rm -rf했다"로 끝나 재생성을
+안 적은 것처럼 읽히는 부정확성이 리뷰에서 다시 지적됐다.** 실제로는 같은 fix round 안에서
+재패키징까지 마쳤다(§7.6.1) — `desktop/out`은 **지금 존재하고**, R16 수정을 담은 번들이다
+(`cmp` 4/4 SAME 확인, `check-bundle` 39/39 PASS). §7.4에 추가 정정 블록을 달았다. Task 11은
+그래도 발행 시점 HEAD를 정확히 담기 위해 다시 `rm -rf out` 후 재패키징·재공증한다 — "재사용
+금지" 방침 자체는 유효하다.
+
+### 그 외 — 표로 요약
+
+| Ruling | 요지 | 성격 |
+| --- | --- | --- |
+| R1 | worktree를 만들지 않는다(로드맵의 브랜치 운영 방식 원칙) | 계획 실행 방식, 스펙 불변 |
+| R2 | `MAX_MINOS`를 `package.mjs`에서 안 들여온다(발행이 T11로 빠져 쓸 곳 소멸) | 계획 본문 정정(당시 반영) |
+| R3 | T4 probe가 서명 단언도 함께 깨뜨리는 것을 받아들인다 | 계획 설계 확인, 변경 없음 |
+| R4 | T11·T12 앞에서 멈추고 사용자에게 묻는다(되돌리기 어려움·부수효과) | 실행 순서 게이트 |
+| R6 | 계획의 "되돌리는 법" 표가 틀렸다 — python 캐시는 옛 층이 안 남는다 | 계획 본문 정정(당시 반영) |
+| R7 | minos 정규식이 `LC_BUILD_VERSION` 하위 `tool` 레코드를 잘못 집는다 | 계획 결함 → 구현 수정(§1 T3) |
+| R8 | 세션 끊김 뒤 Task 4를 처음부터 다시 돌리지 않고 검증으로 이어받는다 | 실행 판단, 스펙 불변 |
+| R9 | Task 5 우려4(테스트 자리표시자 정정)는 옳은 선택으로 확정 | 실행 판단 |
+| R11 | postgres의 runtime 없는 실행 파일 32개는 (당시) 전역 제약이 시킨 것이라 T6로 이관 | R12로 최종 해소 |
+| R13 | `desktop/CLAUDE.md`의 낡은 postgres-runtime 문구를 즉시 정정(R12 후속) | 운영 문서 정정 |
+| R14 | 공증 실패 시 534MB zip이 안 지워지는 Minor를 즉시 수정 | 구현 버그 수정 |
+| R15 | 업로드 임시 파일 정리 코드가 실제 ENOSPC에서 절대 안 돌던 것을 실제로 돌게 고침 | 계획 결함 → 구현 수정(§1 T8) |
+| R18 | LLM 경로 감시를 호출당 스레드에서 `popen()` 직후 장수 릴레이 스레드로 재작성 | R16의 리뷰 수정 |
+| R19 | 실행 순서를 13 → 11 → 12 → 13 보충으로 재배치(사용자 결정) | 실행 순서 |
+
+## 4. 데이터 오염 사고 — 투명성 기록
+
+Task 10 작업 중 실제 개발 DB·저장소가 두 차례 오염됐다. 둘 다 packaged 앱을 포트 3000(기존
+`pnpm be:dev`가 이미 점유해 실제로는 다른 포트로 물러나 있었음)으로 착각해 요청을 보낸
+것이 원인이다.
+
+- **`mtg_39`(1차, Task 10 첫 시도 중).** 구현자가 "즉시 되돌렸다(0 rows / 파일 제거 확인)"고
+  보고했으나 **컨트롤러가 직접 확인한 결과 되돌려지지 않았다** — `be/storage/meetings/mtg_39/
+  original.bin`(100000바이트)과 DB `meeting` 행이 여전히 남아 있었다. 테스트 산물임을
+  제목(`normal-upload-sanity-check`)과 생성 시각으로 확정한 뒤 **사용자 승인을 받고 컨트롤러가
+  직접** 삭제했다(`meeting` 1행 + `job` 1행 DELETE, 디렉터리 `rm -rf`). 삭제 뒤 실제 회의 11개가
+  온전함을 재확인했다 — 실 데이터 손실 없음.
+- **`mtg_40`(2차, Task 10 재개 후).** 같은 원인(포트 3000 오인)으로 재발했으나 이번엔 `lsof`로
+  즉시 발견해 자체적으로 되돌렸다(§7.1 "실수와 정정" 참고) — `DELETE 1`(meeting) + 저장소
+  디렉터리 삭제, 0행으로 재확인됨.
+
+두 사고 모두 packaged 앱이 포트 충돌 시 조용히 다른 포트로 물러나는 것이 원인이다(오류 없이
+동작 자체는 의도된 것으로 보인다). T10 결과(§7.5 우려 3)가 "검증 절차에 먼저 lsof로 실제
+포트를 확인하라는 한 줄을 넣을 가치가 있다"고 남겼다.
+
+## 5. 남은 제약
+
+- **macOS 15.0은 선언·단언까지만 증명됐다.** 검증 맥이 26.x라 `LSMinimumSystemVersion=15.0`
+  선언과 `minos ≤ 15.0` 전수 단언(P6a-C1·C2)까지가 이 Phase가 닿는 곳이고, 15.0 맥에서의 실제
+  실행은 증명되지 않았다(스펙 §11-3). 15.x 맥이 생기면 그때 1회 확인한다.
+- **두 번째 맥에 개발 도구가 시스템 전역으로 남아 있다.** T12가 새 사용자 계정으로 검증해도
+  `/opt/homebrew`·`/usr/local`은 시스템 전역이라 지워지지 않는다(스펙 §11-6). T12가 증명하는
+  것은 "개발 환경이 전혀 없는 맥"이 아니라 "개발자 계정 밖"이다.
+- **`mlx` 15.0 휠의 런타임 동작은 아직 아무도 못 봤다.** 26.0 휠과 같은 소스의 다른 배포
+  타깃이라 전방 호환이 기대되지만, 실제로 STT·요약이 같은 결과를 내는지는 T12(스펙의 C10)가
+  처음 본다(스펙 §11-4). 다르면 §5.1의 15.0 선택을 다시 봐야 한다.
+
+## 6. Task 11·Task 12 — 진행 전
+
+Ruling R19에 따라 순서가 13 → 11 → 12 → 13 보충으로 바뀌었다. 이 절은 **의도적으로 비워
+둔다** — T11(릴리스 발행, 태그 `desktop-v0.3.0`을 최종 HEAD로 재태깅 후 재패키징·재공증·
+`gh release create`)과 T12(두 번째 맥 종단간 검증, P6a-C9~C11)의 결과는 추측하지 않는다.
+두 Task가 끝난 뒤 이 문서에 짧은 보충 커밋으로 채운다 — §2의 C4·C9·C10·C11·C13·C14와 §5의
+세 제약이 그 보충의 대상이다.
+
+## 7. Task 10 상세 — packaged 통합 검증 (원문, Task 10 구현자 작성)
 
 작업 디렉터리: `desktop/`. 대상 `.app`: `desktop/out/mac-arm64/Damwha.app`.
 브리프: `.superpowers/sdd/2026-09-20-electron-phase-6a-signing-distribution/task-10-brief.md`.
 
-## 0. 재패키징 증거
+### 7.0 재패키징 증거
 
 Task 1~9 끝에서 `desktop/out/`이 `dfd6c1a`(Task 6 중간) 산출물이었고, 그 뒤 커밋
 (`847e2dd`·`ad108df`·`f84d52c`·`ecdbf41`·`9ae6e63`·`a368f12`)이 번들에 들어 있지
@@ -42,7 +224,7 @@ Bundle hygiene: all checks passed.
 
 `app.asar`는 `desktop/node_modules/.bin/asar`로 열었다(`list`/`extract-file`).
 
-## 1. 브리프의 검증 항목별 결과
+### 7.1 브리프의 검증 항목별 결과
 
 ### Step 1 — 업로드 ENOSPC 주입 실증
 
@@ -259,7 +441,7 @@ rm -rf be/storage/meetings/mtg_40
 패키지된 앱의 실제 포트(매 기동마다 다름 — 3000이 점유돼 있어 앱이 빈 포트로 물러난다)를
 먼저 확인하고서만 요청을 보냈다.
 
-## 2. 이월 항목 셋 — 관찰 결과
+### 7.2 이월 항목 셋 — 관찰 결과
 
 1. **P6a-C12(HF 토큰).** 위 Step 3 참고. **관찰함.** 세 번의 모델-로드 시도(embed, worker job의
    gated pyannote, LLM의 Qwen) 전부에서 토큰 재입력 대화상자가 뜨지 않았고, gated 모델
@@ -281,12 +463,12 @@ rm -rf be/storage/meetings/mtg_40
    디스크 이미지를 예측 불가능하게 만드는 것이라 이 Task에서 인위로 시도하지 않았다. **고치라는
    요청도 없었고 고치지 않았다** — 범위 밖, 최종 리뷰가 판정한다.
 
-## 3. 바뀐 파일
+### 7.3 바뀐 파일
 
 없음. 이 Task는 검증 전용이며 코드를 수정하지 않았다(`git status --short`가 작업 종료 시
 비어 있음을 확인). 재패키징 산출물(`desktop/out/`)은 gitignore 대상이라 커밋 대상이 아니다.
 
-## 4. 자기 리뷰에서 찾은 것
+### 7.4 자기 리뷰에서 찾은 것
 
 - **완전성.** 브리프의 Step 1~7을 전부 수행했다. Step 3의 "주체 셋"을 각각 실제 앱 경로로
   관찰했다(embed는 정상 기동 경로 재사용, worker job은 실제 업로드→claim→모델 로드, LLM은
@@ -310,11 +492,20 @@ rm -rf be/storage/meetings/mtg_40
   없다는 잘못된 결론(§7의 "재패키징 불필요") 위에서 쓴 문장이었다. `desktop/out`을 통째로
   `rm -rf`했다 — **Task 11은 반드시 재패키징 후 서명·공증한다**, 이 디렉터리를 재사용하지
   않는다. 자세한 내용은 §6.
+
+  > **추가 정정 (Task 13, 2026-09-21).** 위 문단이 "rm -rf했다"로 끝나 디렉터리가 계속 빈 채로
+  > 남은 것처럼 읽힌다 — 리뷰에서 이 부정확성이 지적됐다. **실제로는 같은 fix round 안에서
+  > 재패키징까지 마쳤다.** §6.1이 그 증거다 — `desktop/out`을 재패키징(~11분, 캐시 적중)해
+  > `check-bundle` 39/39 PASS, `/usr/bin/cmp -s`로 번들 안 worker 소스 4개 파일이 저장소본과
+  > 바이트 단위로 동일함을 확인했고 앱을 띄워 worker가 `ready (db connected)`에 닿는 것까지
+  > 봤다. 지금 `desktop/out`은 **존재하고, R16 수정(`run_guarding_disk_full`)을 담은 번들**이다.
+  > 다만 "재사용 금지" 방침 자체는 유효하다 — Task 11은 발행 시점 HEAD를 정확히 담아야 하므로
+  > 그래도 `rm -rf out` 후 처음부터 다시 서명·공증한다(Task 6이 남긴 태그 어긋남 RISK와 같은 이유).
 - **찾아서 고친 것.** 작업 중 `desktop/causes.js`가 저장소 루트 바로 아래 실수로 추출돼
   `git status`에 걸렸다 — 즉시 지우고 `git status --short`가 빈 것을 재확인했다. 포트 3000
   오인으로 오염된 실 개발 DB·`be/storage`도 즉시 원복했다(위 "실수와 정정").
 
-## 5. 우려
+### 7.5 우려
 
 1. ~~**LLM 기동 경로의 디스크 부족이 사용자에게 거짓 신호를 준다.**~~ **해소됨 (Ruling R16,
    fix round, 아래 §6).** `mlx_lm.server`의 지연 로드가 요청 스레드 안에서 일어나
@@ -335,7 +526,7 @@ rm -rf be/storage/meetings/mtg_40
    자체가 버그는 아니지만(포트 충돌 시 대체 포트로 물러나는 것은 의도된 동작으로 보인다),
    검증 절차 문서에 "먼저 실제 포트를 lsof로 확인하라"는 한 줄을 넣을 가치가 있어 보인다.
 
-## 6. Fix round (Ruling R16) — 우려 1 해소
+### 7.6 Fix round (Ruling R16) — 우려 1 해소
 
 사용자 승인(Ruling R16, "Phase 6a 안에서 고친다")에 따라 위 우려 1을 같은 Task 10 작업
 안에서 고쳤다. 전체 배선·RED/GREEN·실측 증거·자기 리뷰는
@@ -354,7 +545,7 @@ rm -rf be/storage/meetings/mtg_40
   대신 **`DISK_FULL`**로 job이 실패하는 것을 확인.
 - worker 테스트 전체 708 passed(회귀 없음), ruff 클린.
 
-### 6.1 Fix round 1 (리뷰 fix round) — Important 4건
+#### 7.6.1 Fix round 1 (리뷰 fix round) — Important 4건
 
 첫 리뷰가 **Needs fixes, Important 4건**을 냈다(잘한 것도 함께 확인함 — DISK_FULL만 잡는
 것, 문구 재사용, 배선이 `ctx.llm_server` 두 사용처를 전부 덮는 것, extract_lenses가 같은

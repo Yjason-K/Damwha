@@ -19,7 +19,8 @@
 - **Team ID는 `L5Y9SZHGRN`.** notarytool 키체인 프로필 이름은 `damwha`.
 - **안쪽을 먼저 서명한다.** `.app` 서명이 Resources를 해시로 봉인하므로 순서가 뒤집히면 `codesign --verify`가 깨진다.
 - **plist는 둘로 갈린다.** `build-resources/entitlements.python.plist`(키 둘) → `Resources/python`의 Mach-O 전수 + `Resources/ffmpeg/bin/*`. `build-resources/entitlements.mac.plist`(키 셋, `allow-jit` 추가) → `.app`에 `--deep`. **`.app`에 python plist를 주면 V8이 `allow-jit` 없이 rc=133으로 죽는다.**
-- **`Resources/postgres`에는 hardened runtime을 걸지 않는다.** 별개 프로세스라 자기 서명의 플래그로 돈다. identity는 확인하되 runtime 플래그는 단언하지 않는다.
+- ~~**`Resources/postgres`에는 hardened runtime을 걸지 않는다.** 별개 프로세스라 자기 서명의 플래그로 돈다. identity는 확인하되 runtime 플래그는 단언하지 않는다.~~
+  **뒤집힘 (Task 6, Ruling R12, 2026-09-21).** 공증 첫 제출(`88197b1f-daae-41bc-aa68-e62176a321de`)이 status=Invalid, 오류 32건 전부 `Resources/postgres/bin/*`의 "hardened runtime enabled 아님"이었다. 이 제약의 근거("별개 프로세스라 자기 플래그로 돈다")는 실행 시 동작에 대한 것이었지 공증 요건이 아니었다 — 공증은 번들 안 모든 실행 파일에 hardened runtime을 요구한다. 이제 postgres도 `--options runtime`으로 서명한다. **entitlements는 여전히 주지 않는다** — pgvector·pg_bigm을 포함한 postgres 트리 전체가 같은 Team ID(`L5Y9SZHGRN`)로 서명돼 있어 library validation을 그대로 통과했다(재제출 `.app`=`54dd2674-3806-4f12-8187-0ac8c50c10f6`·DMG=`cd12be62-dc47-49ff-87b3-1d8599ce8fe7` 둘 다 Accepted, 런타임에 pgvector 0.8.6·pg_bigm 1.2 적재도 확인). `check-bundle.mjs` §14b가 postgres 트리의 runtime 플래그를 66/66 전수 단언한다. 근거: [결과 문서](../reports/2026-09-20-electron-phase-6a-signing-distribution-results.md) Ruling R12 절.
 - **서명한 뒤 번들 python을 실행하지 않는다.** `__pycache__`가 봉인 밖에 생기고 `.pyc`에 빌드 머신의 절대 경로가 박힌다.
 - **데스크톱 태그는 `desktop-v<version>`이다.** `deploy/release.sh`가 쓰는 `v<version>`과 섞지 않는다 — 그 스크립트는 태그 버전이 `be/worker/pyproject.toml`과 다르면 거절하고, 섞으면 6b의 릴리스 조회가 웹 배포를 가리킨다.
 - **버전의 단일 진실 원천은 `desktop/package.json`의 `version`이다.** 이 Phase가 내는 값은 `0.3.0`.
