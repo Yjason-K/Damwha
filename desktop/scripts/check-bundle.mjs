@@ -263,6 +263,30 @@ if (codesignVerify.error !== undefined) {
   check("codesign --verify --deep --strict passes", codesignVerify.status === 0, (codesignVerify.stderr ?? "").trim());
 }
 
+// 8b. Contents/Frameworks도 hardened runtime을 진다 (Ruling R10, 최종 리뷰 I3). package.mjs가 이
+// 트리를 `signAll(…, null, …, { runtime: true })`로 따로 서명한다 — `.app --deep`이 Squirrel의
+// ShipIt(MH_EXECUTE) 같은 느슨한 실행 파일을 건너뛰기 때문이다(R10 실측). 그 인자가 빠지거나
+// false가 되면 ShipIt이 runtime 없이 나가는데, 이 단언 전에는 로컬의 어느 것도 그것을 못 잡았다 —
+// 7c는 팀만, 8은 서명의 온전함만, 14b·17b는 Resources의 세 트리만 본다. 공증 제출 뒤 Apple이
+// 거절해야 알았다(T6 Important 1이 postgres에서 닫은 것과 같은 구멍).
+// **트리 전수에 건다.** 공증이 요구하는 것은 실행 파일이지만 dylib에 붙은 플래그는 무해하고(R10),
+// package.mjs가 트리 전체를 runtime으로 서명하므로 전수가 그 서명의 계약 그대로다. 파일 종류로
+// 가르지 않으니 file(1) 분류를 한 벌 더 둘 필요도 없다. 2026-09-21 번들 12/12 통과(실행 파일
+// 6 — 헬퍼 넷·chrome_crashpad_handler·ShipIt, dylib 6).
+const fwDir = path.join(contents, "Frameworks");
+const fwMachos = machOFiles(fwDir);
+const fw = verifyArm64(fwMachos);
+const fwGaps = [...fw.unsigned, ...fw.noArm64, ...fw.noRuntime];
+check(
+  "every Mach-O in Contents/Frameworks carries hardened runtime",
+  fwMachos.length > 0 && fwGaps.length === 0,
+  fwMachos.length === 0
+    ? "no Mach-O found"
+    : fwGaps.length === 0
+      ? `${fwMachos.length}/${fwMachos.length} flags=…(runtime)`
+      : `${fwGaps.length} of ${fwMachos.length}: ${fwGaps.slice(0, 5).map((f) => path.relative(fwDir, f)).join("; ")}`,
+);
+
 // 9~14. 내장 PostgreSQL 트리 (Electron Phase 3 스펙 §6.9)
 const pgDir = path.join(contents, "Resources", "postgres");
 const pgBins = ["postgres", "initdb", "pg_controldata", "createdb", "psql", "pg_dump", "pg_restore"];

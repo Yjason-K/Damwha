@@ -138,9 +138,11 @@ const macEnts = path.join(desktop, "build-resources", "entitlements.mac.plist");
 // 재서명은 멱등이다. Resources/ffmpeg는 다르다 — build-ffmpeg.sh에는 서명 단계가 아예 없어서,
 // 이 줄이 없으면 ffmpeg/ffprobe는 링커 ad-hoc 서명만 가진 채 hardened runtime .app 안에 들어간다.
 //
-// Resources/postgres와 Contents/Frameworks도 같은 함수로 맡는다 — entitlements가 없으면
-// (`lib/signing.mjs`의 `codesign()` 기본값대로) hardened runtime도 꺼지므로, 이 트리들은
-// `opts.runtime`으로 명시해 뒤집는다:
+// Resources/postgres와 Contents/Frameworks도 같은 함수로 맡는다 — entitlements 없이, hardened
+// runtime은 켠 채로. runtime은 `lib/signing.mjs`의 `codesign()`과 여기 `signAll`이 **기본으로
+// 켠다**(최종 리뷰 I3 — 옛 기본값은 "entitlements가 없으면 끔"이었고 R12가 그 전제를 뒤집었다).
+// 아래 두 줄의 `{ runtime: true }`는 이제 기본값과 같지만 두 트리가 왜 runtime을 지는지의 표시로
+// 남긴다:
 //   - Resources/postgres: runtime **있음**, entitlements 없음 (Ruling R12, Task 6 실측 뒤집음).
 //     원래 제약("별개 프로세스라 자기 서명의 플래그로 돈다")은 *실행 시 동작*을 근거로 hardened
 //     runtime이 없어도 무해하다고 봤을 뿐 있어야 한다는 근거는 아니었다. 그런데 Apple 공증은 번들
@@ -164,7 +166,7 @@ const macEnts = path.join(desktop, "build-resources", "entitlements.mac.plist");
 // entitlements로 덮어써 최종 상태가 같다(멱등).
 function signAll(targets, entitlements, label, opts = {}) {
   if (targets.length === 0) throw new Error(`서명 대상이 없다: ${label}`);
-  const runtime = opts.runtime ?? entitlements !== null;
+  const runtime = opts.runtime ?? true; // 기본은 켬 — `codesign()`과 같은 규칙(R12)
   console.log(
     `$ codesign --sign ${signing.identity}${runtime ? " --options runtime" : ""} --timestamp` +
       `${entitlements !== null ? ` --entitlements ${path.relative(desktop, entitlements)}` : ""} — ${label} ${targets.length}개`,

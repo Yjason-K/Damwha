@@ -37,15 +37,22 @@ export function assertIdentityInKeychain(identity) {
 }
 
 /**
- * codesign 한 번. `entitlements`가 `null`이면 `--entitlements`를 빼고, `runtime`도 그 유무를
- * 따라간다(entitlements가 있으면 켜짐, 없으면 꺼짐) — plist가 필요 없는 트리(예: 별개
- * 프로세스라 자기 서명의 플래그로 도는 Resources/postgres)의 기본이 hardened runtime 없이
- * identity만 새로 얹는 것이기 때문이다. entitlements 없이 hardened runtime은 있어야 하는
- * 경우(예: `.app --deep`이 건너뛰는 Contents/Frameworks의 느슨한 MH_EXECUTE — 리뷰 실측:
- * runtime 없이 나가면 Apple 공증이 거절한다)는 `{ runtime: true }`로 명시해 뒤집는다.
+ * codesign 한 번. `entitlements`가 `null`이면 `--entitlements`만 뺀다 — **hardened runtime은
+ * 기본으로 켠다**(`runtime = true`). Apple 공증은 번들 안의 **모든** 실행 파일에 hardened runtime을
+ * 요구한다(Ruling R12, Task 6 실측: 제출 88197b1f-daae-41bc-aa68-e62176a321de가 entitlements 없이
+ * 서명된 `Resources/postgres/bin/*` 32개 전부를 "hardened runtime 없음"으로 거절했다). 그래서
+ * entitlements가 없다는 것은 runtime을 끌 이유가 아니다. dylib에는 플래그가 붙어도 무해하다
+ * (R10 — 프로세스의 주 실행 파일에서만 읽힌다).
+ *
+ * 옛 기본값은 `runtime = entitlements !== null`이었다 — "별개 프로세스라 자기 서명의 플래그로
+ * 도는 Resources/postgres"를 위한 것이었고 R12가 그 전제를 뒤집었다. 그 기본값이 남아 있으면 새
+ * 트리를 entitlements 없이 서명할 때 runtime이 **조용히** 빠지고, 로컬은 초록인 채 공증에서야
+ * 드러난다. `runtime: false`는 필요한 곳에서 명시한다 — 지금 이 저장소에는 그런 호출이 없다(DMG는
+ * 이 함수를 거치지 않고 따로 서명한다, `package.mjs`).
+ *
  * `--timestamp`는 공증의 선행 조건이고 인증서 만료 뒤에도 서명을 유효하게 하므로 항상 붙는다.
  */
-export function codesign(identity, entitlements, targets, { runtime = entitlements !== null, extra = [] } = {}) {
+export function codesign(identity, entitlements, targets, { runtime = true, extra = [] } = {}) {
   const args = ["--force", "--sign", identity];
   if (runtime) args.push("--options", "runtime");
   args.push("--timestamp");
