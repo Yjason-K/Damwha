@@ -1,7 +1,7 @@
 import threading
 from types import SimpleNamespace
 
-from damwha_worker import db
+from damwha_worker import db, llm_server
 from damwha_worker.__main__ import _reconnect, dispatch_claimed_job, handle_job, run_once
 from damwha_worker.contracts import LensCandidate
 from damwha_worker.errors import ErrorKind, WorkerError
@@ -714,11 +714,17 @@ def test_summarize_meeting_runs_inside_llm_server_for_the_payload_model(conn, tm
 
 
 class _StderrProc:
-    """워커가 띄운 LLM 서버 대역 — `terminate()`와 감시 대상 `.stderr`만 흉내 낸다."""
+    """워커가 띄운 LLM 서버 대역 — `terminate()`와 감시 대상 `.stderr`만 흉내 낸다.
+
+    실제 `managed_llm_server`가 `popen()` 직후 하는 일(Ruling R18)을 그대로 재현한다 —
+    생성 즉시 `_start_stderr_relay`를 붙여, `run_guarding_disk_full`이 감시할 래치가
+    이미 서 있게 한다.
+    """
 
     def __init__(self, lines):
         self.stderr = iter(lines)
         self.terminated = False
+        llm_server._start_stderr_relay(self)
 
     def terminate(self):
         self.terminated = True

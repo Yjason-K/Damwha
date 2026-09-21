@@ -303,6 +303,13 @@ rm -rf be/storage/meetings/mtg_40
   python을 검증자가 직접 실행한 적은 없다(check-bundle의 `__pycache__` 0건이 그 증거).
   `desktop/out`을 다시 `rm -rf`하지 않았다(이미 브리프 요구 이상이라 판단, 산출물은 그대로
   둬 다음 Task가 재사용할 수 있게 했다).
+
+  **정정 (Ruling R17, fix round 1).** 위 문단의 전제가 틀렸다 — `desktop/out`의 번들은 worker
+  파이썬 **소스를 복사해** 담으므로, fix round가 `be/worker/damwha_worker/*.py`를 고친 뒤에는
+  이 산출물이 **그 수정을 담고 있지 않았다.** "재사용할 수 있게 했다"는 재패키징이 필요
+  없다는 잘못된 결론(§7의 "재패키징 불필요") 위에서 쓴 문장이었다. `desktop/out`을 통째로
+  `rm -rf`했다 — **Task 11은 반드시 재패키징 후 서명·공증한다**, 이 디렉터리를 재사용하지
+  않는다. 자세한 내용은 §6.
 - **찾아서 고친 것.** 작업 중 `desktop/causes.js`가 저장소 루트 바로 아래 실수로 추출돼
   `git status`에 걸렸다 — 즉시 지우고 `git status --short`가 빈 것을 재확인했다. 포트 3000
   오인으로 오염된 실 개발 DB·`be/storage`도 즉시 원복했다(위 "실수와 정정").
@@ -346,3 +353,37 @@ rm -rf be/storage/meetings/mtg_40
   실측: 5분(`lens_llm_timeout_seconds`) 대신 **4.88초**, `llm_request_failed`/"timed out"
   대신 **`DISK_FULL`**로 job이 실패하는 것을 확인.
 - worker 테스트 전체 708 passed(회귀 없음), ruff 클린.
+
+### 6.1 Fix round 1 (리뷰 fix round) — Important 4건
+
+첫 리뷰가 **Needs fixes, Important 4건**을 냈다(잘한 것도 함께 확인함 — DISK_FULL만 잡는
+것, 문구 재사용, 배선이 `ctx.llm_server` 두 사용처를 전부 덮는 것, extract_lenses가 같은
+버그를 공유한다는 발견, 버려진 스레드가 `conn`을 안 만진다는 추론, 환경 정리 주장 전부
+사실 확인됨). 전체 대응은 `.superpowers/sdd/2026-09-20-electron-phase-6a-signing-distribution/task-10-report.md`의
+fix round 1 절에 있다. 요지:
+
+- **Important 1 (Ruling R17) — `desktop/out`이 이 수정을 담지 않았다.** §5(위 문단)의
+  "재패키징 불필요"가 **틀린 전제**였다 — 번들은 worker 파이썬 **소스를 복사해** 담는다.
+  `desktop/out`을 통째로 `rm -rf`했다(정정한 문장 참고). Task 11은 반드시 재패키징 후
+  서명·공증한다.
+- **Important 2 (Ruling R18) — readiness 대기 구간에 `proc.stderr` 파이프를 아무도 안
+  읽었다.** `run_guarding_disk_full`이 자기 감시 스레드를 새로 띄우는 대신, `managed_llm_server`가
+  `popen()` 직후(= `_wait_ready`보다 먼저) **장수 릴레이 스레드 하나**(`_start_stderr_relay`)를
+  띄워 `proc`의 수명 내내 stderr를 미러+감시한다. `run_guarding_disk_full`은 그 릴레이가
+  붙인 `Event`만 기다린다. 이러면 (a) readiness 단계에 서버가 죽어도 자식 트레이스백이
+  `_stop`에 버려지지 않고, (b) 파이프가 안 비워져 자식이 write에서 막히는 위험이 없어지고,
+  (c) 같은 `proc`에 두 번 불러도 스트림을 나눠 먹지 않는다(이전 Minor 5). 검사를 미러보다
+  먼저 하도록 순서도 바꿨다(이전 Minor 6 — 미러 실패가 탐지를 죽이지 않는다).
+- **Important 3 — `stderr=subprocess.PIPE`가 popen에 실제로 전달되는지 테스트가 없었다.**
+  `test_managed_llm_server_passes_stderr_pipe_to_popen`을 추가해 그 kwarg가 빠지면 실패하게
+  고정했다.
+- **Important 4 — 서명 문자열이 실제 `WorkerError` 포맷에 안 묶여 있었다.**
+  `test_disk_full_marker_matches_the_real_worker_error_traceback_line`이
+  `traceback.format_exception_only`로 만든 **실제** 예외 문자열이 `_DISK_FULL_MARKER`로
+  시작하는지 직접 확인한다 — 손으로 적은 테스트 리터럴을 되읽지 않는다.
+
+**검증.** worker 테스트 전체 713 passed(708 + 새 테스트 5), 경고 3건은 모두
+`tests/test_eval_diarization.py`의 pyannote UEM 근사 경고(이 fix round와 무관, 기존부터
+있던 것)로 확인했다. ruff check/format 클린. `desktop/out`을 재패키징하고(백그라운드,
+로그 파일) 번들 소스에 `run_guarding_disk_full`이 실제로 들어갔는지, 앱이 떠서 worker가
+준비에 닿는지 값싸게 확인했다 — 상세는 task-10-report.md.

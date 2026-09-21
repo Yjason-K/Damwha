@@ -145,11 +145,17 @@ def managed_llm_server(
             "--port",
             str(port),
         ],
-        # stderr을 파이프로 받는다 — run_guarding_disk_full이 DISK_FULL 서명을 감시할 수
-        # 있게(Ruling R16). 감시자가 읽은 줄은 그대로 우리 stderr로 다시 쓰므로(그 함수
-        # 참고) 로그 가시성은 그대로다. 대역 popen은 이 kwarg를 무시한다.
+        # stderr을 파이프로 받는다 — 아래 _start_stderr_relay가 DISK_FULL 서명을 감시할 수
+        # 있게(Ruling R16). 감시자가 읽은 줄은 그대로 우리 stderr로 다시 쓰므로 로그 가시성은
+        # 그대로다. 대역 popen은 이 kwarg를 무시한다.
         stderr=subprocess.PIPE,
     )
+    # popen 직후, _wait_ready가 돌기 **전에** 시작한다 (Ruling R18, 2026-09-21 리뷰 fix
+    # round 1) — readiness 대기 구간에도 이 프로세스가 유일한 stderr 파이프 독자여야 한다.
+    # 그 구간에만 아무도 안 읽으면 (a) 서버가 준비되기 전에 죽었을 때 _stop이 파이프에 쌓인
+    # 자식 트레이스백을 그냥 버리고, (b) 다운로드 유예로 최대 600초까지 늘어나는 대기 동안
+    # 파이프가 차 자식이 stderr write에서 막힐 수 있다.
+    _start_stderr_relay(proc)
     try:
         _wait_ready(proc, model, settings, probe, monotonic, sleep)
     except BaseException:
@@ -291,10 +297,61 @@ _DISK_FULL_MARKER = f"damwha_worker.errors.WorkerError: {DISK_FULL}: "
 _DISK_FULL_WATCH_POLL_SECONDS = 0.1
 
 
+def _start_stderr_relay(proc) -> None:
+    """`proc.stderr`을 미러+감시하는 장수 스레드 **하나**를 `proc`의 수명 동안 띄운다
+    (Ruling R18, 2026-09-21 리뷰 fix round 1).
+
+    **`popen()` 직후, `_wait_ready`가 돌기 전에 불러야 한다.** 이전 라운드는 이 감시를
+    `run_guarding_disk_full`이 불릴 때만(= readiness를 통과한 **뒤**) 시작했다 — 그 구간
+    (최대 `lens_llm_server_start_timeout_seconds`, 다운로드 유예를 받으면 600초까지)에는
+    아무도 stderr 파이프를 읽지 않았다. 두 가지 대가가 있었다: (a) 서버가 준비 전에 죽으면
+    `_stop`이 파이프에 쌓인 자식 트레이스백(`LLM_SERVER_START_FAILED`의 사유)을 그냥
+    버렸고, (b) 파이프가 OS 버퍼(16~64KiB)를 넘게 차면 자식이 stderr write에서 막힐 수
+    있었다.
+
+    이제는 `proc` 하나당 이 스레드 하나만 산다 — `run_guarding_disk_full`을 같은 `proc`로
+    몇 번을 불러도(또는 readiness 구간에 터진 DISK_FULL이라도) 새 스레드가 이터레이터를
+    나눠 먹는 일이 없다(이전 라운드의 Minor 5). `proc`에 `damwha_disk_full_event`(Event)와
+    `damwha_disk_full_box`(잡은 메시지)를 붙인다 — `run_guarding_disk_full`은 그 둘만
+    기다린다.
+
+    `proc.stderr`이 없으면(대역 popen, 파이프 안 받음) 감시할 것이 없어 아무 것도 안 한다.
+    """
+    stderr = getattr(proc, "stderr", None)
+    if stderr is None:
+        return
+
+    event = threading.Event()
+    box: dict = {}
+    proc.damwha_disk_full_event = event
+    proc.damwha_disk_full_box = box
+
+    def _relay() -> None:
+        try:
+            for raw in stderr:
+                line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+                # 검사를 먼저, 미러를 나중에(이전 라운드의 Minor 6) — 아래 쓰기가 던져도
+                # 서명 탐지는 이미 끝나 있다. 거꾸로 하면 미러 실패가 감시 자체를 죽인다.
+                if _DISK_FULL_MARKER in line and "message" not in box:
+                    box["message"] = line.split(_DISK_FULL_MARKER, 1)[1].rstrip("\r\n")
+                    event.set()
+                # 감시하는 동안에도 로그 가시성은 그대로 둔다 — 읽은 줄을 그대로 우리
+                # stderr에 되쓴다(`--once` 자식의 stderr이고, 감독자가 그것을 캡처한다).
+                try:
+                    sys.stderr.write(line)
+                    sys.stderr.flush()
+                except (ValueError, OSError):  # noqa: BLE001 — 미러 실패가 감시를 막지 않는다
+                    pass
+        except (ValueError, OSError):  # noqa: BLE001 — 파이프 자체가 닫히면 그냥 끝난다
+            pass
+
+    threading.Thread(target=_relay, daemon=True, name="damwha-llm-stderr-relay").start()
+
+
 def run_guarding_disk_full(proc, fn):
-    """`fn()`을 돌리되, 워커가 띄운 LLM 서버(`proc`)의 stderr에 DISK_FULL이 보이면
-    `fn`의 응답을 기다리지 않고 그 자리에서 같은 사유로 실패시킨다 (Ruling R16, 2026-09-21
-    task-10 정정).
+    """`fn()`을 돌리되, 워커가 띄운 LLM 서버(`proc`)의 stderr에서 `_start_stderr_relay`가
+    이미 잡아 둔 DISK_FULL 래치가 보이면 `fn`의 응답을 기다리지 않고 그 자리에서 같은
+    사유로 실패시킨다 (Ruling R16, 2026-09-21 task-10 정정 / Ruling R18로 감시 방식 개편).
 
     **왜 필요한가.** `mlx_lm.server`의 모델 지연 로드는 요청을 처리하는 스레드 안에서
     일어난다. `models/downloads.py`의 `check_free_space`가 그 스레드 안에서
@@ -306,59 +363,54 @@ def run_guarding_disk_full(proc, fn):
 
     **그 스레드를 끊을 수는 없다** — `models/downloads.py`의 `_run_watched`와 같은
     이유다(막힌 호출 자체를 파이썬에서 끊을 수단이 없다). 그래서 `fn`을 별도 스레드에서
-    돌리고 서버 stderr를 동시에 감시해, DISK_FULL 서명이 보이면 그 자리에서 실패시키고
-    `fn`을 돌리던 스레드는 daemon으로 버린다 — 인터프리터 종료를 막지 않고, 어차피
-    job은 이 실패로 끝난다.
+    돌리고 `_start_stderr_relay`가 유지하는 래치를 동시에 기다려, DISK_FULL이 보이면 그
+    자리에서 실패시키고 `fn`을 돌리던 스레드는 daemon으로 버린다 — 인터프리터 종료를
+    막지 않고, 어차피 job은 이 실패로 끝난다.
 
-    **DISK_FULL만 잡는다.** stderr에서 그 서명을 못 찾으면 `fn`이 정상적으로 끝나거나
-    던질 때까지 평소대로 기다린다 — 다른 실패 경로(타임아웃·연결 오류 등)는 이 함수가
-    생기기 전과 똑같이 `fn`을 통해 그대로 올라온다. 사유를 넓게 걸면 정확한 사유가
-    부정확해지고 기존 동작이 바뀐다.
+    **stderr을 이 함수가 직접 읽지 않는다.** 그건 `_start_stderr_relay`(`managed_llm_server`가
+    `popen()` 직후 시작)의 몫이다 — 같은 `proc`로 이 함수를 여러 번 불러도 스트림을 두
+    번 소비하지 않는다(이전 라운드의 Minor 5).
+
+    **DISK_FULL만 잡는다.** 래치가 안 서면 `fn`이 정상적으로 끝나거나 던질 때까지 평소대로
+    기다린다 — 다른 실패 경로(타임아웃·연결 오류 등)는 이 함수가 생기기 전과 똑같이 `fn`을
+    통해 그대로 올라온다. 사유를 넓게 걸면 정확한 사유가 부정확해지고 기존 동작이 바뀐다.
 
     **문구를 짓지 않는다.** 잡은 메시지는 `damwha_worker.errors.WorkerError` 트레이스백
     줄에서 그대로 잘라낸 것이다 — `models/disk.py::check_free_space`가 이미
     `desktop/src/diagnostics/causes.ts`의 `diskFull` 모양대로 만든 문자열이므로, 여기서는
     그것을 한 글자도 새로 짓지 않고 그대로 다시 쓴다.
 
-    `proc`가 없거나(외부 서버 재사용) `.stderr`가 없으면(파이프를 안 받은 대역) 감시할
-    것이 없으니 `fn()`을 그 자리에서 그대로 돌린다 — 동작이 이 함수가 생기기 전과 같다.
+    `proc`가 없거나(외부 서버 재사용) 래치가 안 붙어 있으면(`_start_stderr_relay`가 안
+    불렸거나 `proc.stderr`가 없는 대역) 감시할 것이 없으니 `fn()`을 그 자리에서 그대로
+    돌린다 — 동작이 이 함수가 생기기 전과 같다.
     """
-    stderr = getattr(proc, "stderr", None)
-    if proc is None or stderr is None:
+    event = getattr(proc, "damwha_disk_full_event", None)
+    if proc is None or event is None:
         return fn()
+    box = proc.damwha_disk_full_box
 
-    box: dict = {}
     done = threading.Event()
-    disk_full = threading.Event()
+    result: dict = {}
 
     def _run() -> None:
         try:
-            box["value"] = fn()
+            result["value"] = fn()
         except BaseException as exc:  # noqa: BLE001 — 호출자 스레드에서 그대로 다시 던진다
-            box["error"] = exc
+            result["error"] = exc
         finally:
             done.set()
 
-    def _watch() -> None:
-        try:
-            for raw in stderr:
-                line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
-                # 감시하는 동안에도 로그 가시성은 그대로 둔다 — 우리가 읽은 줄을 그대로
-                # 우리 stderr에 되쓴다(`--once` 자식의 stderr이고, 감독자가 그것을 캡처한다).
-                sys.stderr.write(line)
-                sys.stderr.flush()
-                if _DISK_FULL_MARKER in line and "message" not in box:
-                    box["message"] = line.split(_DISK_FULL_MARKER, 1)[1].rstrip("\r\n")
-                    disk_full.set()
-        except (ValueError, OSError):  # noqa: BLE001 — 파이프가 닫히면 그냥 끝난다
-            pass
-
     threading.Thread(target=_run, daemon=True, name="damwha-llm-request").start()
-    threading.Thread(target=_watch, daemon=True, name="damwha-llm-stderr-watch").start()
 
-    while not done.wait(_DISK_FULL_WATCH_POLL_SECONDS):
-        if disk_full.is_set() and not done.is_set():
-            raise WorkerError(DISK_FULL, box["message"], ErrorKind.PERMANENT)
-    if "error" in box:
-        raise box["error"]
-    return box["value"]
+    # event를 done보다 먼저 검사한다 — readiness 대기 구간에 이미 터진 DISK_FULL처럼
+    # `fn`을 부르기 전부터 래치가 서 있는 경우, fn이 (드물게) 폴링 주기 안에 끝나 버려도
+    # 래치를 놓치지 않는다. done만 보고 있었으면 그 경합에서 진짜 실패를 숨기고 fn의
+    # 결과를 그대로 돌려줄 뻔했다.
+    while True:
+        if event.is_set():
+            raise WorkerError(DISK_FULL, box.get("message"), ErrorKind.PERMANENT)
+        if done.wait(_DISK_FULL_WATCH_POLL_SECONDS):
+            break
+    if "error" in result:
+        raise result["error"]
+    return result["value"]
