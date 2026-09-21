@@ -154,7 +154,9 @@ export const CAUSES = {
    *
    * **내는 곳이 둘이다** (Phase 6a 스펙 §8):
    *   - worker의 `models/disk.py`가 다운로드 전에 재고 `DISK_FULL`(PERMANENT)로 던진다.
-   *     job 경로면 회의 카드에, embed·LLM 기동이면 상태 창에 뜬다.
+   *     job 경로면 회의 카드에, embed 기동이면 상태 창에 뜬다. LLM은 상태 창이 아니다 — 모델을
+   *     요청 스레드에서 받으므로 `llm_server.py`의 `run_guarding_disk_full`이 그 job을 실패시키고
+   *     (R16) 요약 카드에 뜬다. 렌즈 칸은 사유를 그리지 않는다(최종 리뷰 M3).
    *   - API의 `storage/disk-full.filter.ts`가 업로드 ENOSPC를 507 + `code: "DISK_FULL"`로 바꾼다.
    *     업로드 시점에는 "필요한 용량"을 모르므로 화면은 남은 용량만 말한다.
    *

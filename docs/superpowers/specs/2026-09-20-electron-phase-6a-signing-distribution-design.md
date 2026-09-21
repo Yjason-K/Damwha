@@ -370,9 +370,18 @@ uv pip install --python <interp> --link-mode=copy --reinstall --no-deps \
 
 ## 12. 기술 위험
 
-1. **개인 키를 잃으면 업데이트 연속성이 끊긴다.** 인증서는 재발급되지만 새 키는 다른
-   identity가 되고, 그러면 **기존 사용자의 TCC 권한과 `safeStorage` 토큰이 전부 무효**가 된다.
+1. ~~**개인 키를 잃으면 업데이트 연속성이 끊긴다.** 인증서는 재발급되지만 새 키는 다른
+   identity가 되고, 그러면 **기존 사용자의 TCC 권한과 `safeStorage` 토큰이 전부 무효**가 된다.~~
    완화: `.p12` 백업이 이미 있고(§3-7), 이 맥 밖에 한 벌 더 두는 것을 결과 문서에 남긴다.
+   > **정정 (최종 리뷰 M1, 2026-09-21).** 과장이었다. 앱의 designated requirement는 인증서가 아니라
+   > Team ID에 묶인다 — `codesign -d -r-`: `identifier "kr.damwha.app" and anchor apple generic and
+   > certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13]
+   > and certificate leaf[subject.OU] = L5Y9SZHGRN`. 인증서 해시도 공개 키도 없으므로 같은 팀으로 새
+   > Developer ID Application 인증서를 받아 서명한 앱도 이 요구 조건을 만족하고, TCC·키체인 연속성이
+   > 유지된다(§3-7이 적은 "DR이 identity 기반으로 바뀌었다"의 귀결이다). 키 분실은 폐기·재발급의
+   > 불편이지 연속성 파괴가 아니다. 백업은 여전히 권한다. 재발급을 실제로 해 보지는 않았다 — DR
+   > 판독에서 내린 결론이다. 근거는
+   > [결과 문서](../reports/2026-09-20-electron-phase-6a-signing-distribution-results.md) §9.
 2. **공증이 빌드를 Apple 서버에 묶는다.** 장애·심사 지연이 배포를 막는다. 완화: 개발 루프가
    `--release` 없이 돌아 공증을 타지 않고, 릴리스 쪽은 타임아웃과 제출 id 기록으로 재개 가능하게
    한다(§7-2).

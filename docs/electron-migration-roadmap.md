@@ -32,9 +32,14 @@
 **Phase 6a는 2026-09-21에 구현 Task 10개(T1~T10)를 완료·리뷰 clean까지 마쳤다** — 서명·공증
 기구가 실제로 통과했고(공증 제출 둘 다 Accepted), P5-C6(디스크 부족)이 worker job·embed·LLM
 세 경로 전부에서 닫혔다. **공증 제출 직후 스펙의 전역 제약 하나가 뒤집혔다**(postgres도
-hardened runtime을 건다 — 실측이 그렇게 요구했다, 아래 Phase 6a 절). 릴리스 발행(T11)과 두 번째
-맥 검증(T12)은 되돌리기 어렵거나 사람이 직접 하는 일이라 사용자 결정을 기다리며 **진행 전**으로
-남아 있다 — 결과는 [Phase 6a 결과 문서](superpowers/reports/2026-09-20-electron-phase-6a-signing-distribution-results.md).
+hardened runtime을 건다 — 실측이 그렇게 요구했다, 아래 Phase 6a 절). **같은 날 릴리스를
+발행했다(T11)** — `desktop-v0.3.0`,
+<https://github.com/Yjason-K/Damwha/releases/tag/desktop-v0.3.0>. 발행 직후 그 릴리스가 저장소
+"Latest"를 차지해 셀프호스팅 웹 배포의 버전 조회가 깨지는 부작용이 나서 `v0.2.3`을 Latest로
+되돌렸고, `deploy/Makefile`을 `v*` 태그만 보게 고쳤다. 최종 리뷰가 그 수정이 이미 나가 있는 웹
+설치에는 닿지 않는다는 것과 모델 다운로드 디스크 점검의 과대 산정(발행본에 들어감 — 다음 릴리스가
+필요하다)을 찾아 병합 전에 고쳤다. 두 번째 맥 검증(T12)은 사람이 직접 하는 일이라 **진행 전**이다
+— 결과는 [Phase 6a 결과 문서](superpowers/reports/2026-09-20-electron-phase-6a-signing-distribution-results.md).
 
 ## 목표와 전제
 
@@ -390,7 +395,9 @@ wheel이며 DMG가 없다) `latest`가 제품을 가리지 못한다. 웹 릴리
 - 재빌드·재설치 후에도 마이크 권한과 토큰이 유지됨(Developer ID DR의 종단간 증명).
 
 **상태 (2026-09-21): 구현 Task 10개(T1~T10) 완료, 리뷰 clean(전부 최소 1회 수정 라운드 거침).
-릴리스 발행(T11)·두 번째 맥 검증(T12)은 진행 전.** Developer ID 인증서는 발급·검증을 마쳤다 —
+릴리스 발행(T11) 완료 — `desktop-v0.3.0`
+(<https://github.com/Yjason-K/Damwha/releases/tag/desktop-v0.3.0>). 두 번째 맥 검증(T12)은 진행
+전.** Developer ID 인증서는 발급·검증을 마쳤다 —
 `Developer ID Application: Youngjae Kim (L5Y9SZHGRN)`, notarytool 프로필 `damwha` 인증 확인.
 스펙은 [2026-09-20-electron-phase-6a-signing-distribution-design.md](superpowers/specs/2026-09-20-electron-phase-6a-signing-distribution-design.md),
 결과는 [2026-09-20-electron-phase-6a-signing-distribution-results.md](superpowers/reports/2026-09-20-electron-phase-6a-signing-distribution-results.md),
@@ -412,7 +419,7 @@ postgres 실행 파일 32개 전부를 hardened runtime 미적용으로 거절�
 library validation 통과) 재제출이 Accepted로 통과했다 — 재빌드한 앱에서 pgvector 0.8.6·pg_bigm
 1.2 적재까지 확인했다. 스펙·계획 본문에 이 판정을 가리키는 정정 포인터를 달았다.
 
-**P5-C6(디스크 부족)이 이 Phase에서 완전히 닫혔다.** worker 모델 다운로드 사전 점검(T7),
+**P5-C6(디스크 부족)이 이 Phase에서 닫혔다 — 두 가지 단서가 붙는다(아래 최종 리뷰).** worker 모델 다운로드 사전 점검(T7),
 업로드 ENOSPC → 507(T8), 화면 표시(T9)까지 세 조각이 갖춰진 뒤, packaged 통합 검증(T10)에서
 LLM 기동 경로만 디스크 부족을 5분 뒤 거짓 사유(`llm_request_failed`)로 표면화하는 결함이
 드러났다. 계획에 없던 수정이라 사용자 승인을 받아 Phase 6a 안에서 고쳤다(Ruling R16) —
@@ -420,12 +427,28 @@ LLM 기동 경로만 디스크 부족을 5분 뒤 거짓 사유(`llm_request_fai
 실패시킨다. worker job·embed·LLM·업로드 네 경로 모두 실측으로 확인됐다(업로드 화면 렌더링
 자체는 이 세션의 GUI 권한 부재로 계약 레벨까지만 — 결과 문서 §2 P6a-C6 참고).
 
-릴리스 발행(T11)·두 번째 맥 검증(P6a-C9~C11, T12)은 되돌리기 어렵거나 사람이 직접 하는 일이라
-사용자 결정을 기다리며 **진행 전**으로 남아 있다. 스펙 §10의 완료 기준(`C1~C14` + `C8b`, 15행)
-중 8건(P6a-C1·C2·C3·C5·C6·C7·C8·C8b) 충족, 2건(C4·C13)은 T6에서 메커니즘까지 확인했으나
-최종 발행판 재확인이 T11 소관, 1건(C12)은 예고된 퇴행이 실측에서 일어나지 않아 미판정,
-3건(C9·C10·C11)은 T12 소관, 1건(C14)은 T11 소관으로 각각 진행 전이다 — 상세 판정표와 근거는
-결과 문서 §2.
+**릴리스 발행(T11)은 끝났다.** 최종 HEAD에 태그를 달아 재패키징·재공증(`.app`·DMG 둘 다
+Accepted)한 뒤 `desktop-v0.3.0`으로 냈다. **발행이 저장소 "Latest"를 빼앗았다** — GitHub이 새
+릴리스를 자동으로 Latest로 지정했고, 셀프호스팅 웹 배포의 `deploy/Makefile`이 태그 없는
+`gh release view`로 Latest를 읽어 `.env`의 `DAMWHA_VERSION`을 `desktop-v0.3.0`으로 덮게 됐다.
+즉시 `gh release edit v0.2.3 --latest`로 되돌렸고, `deploy/Makefile`을 `v*` 태그 중 최신만 고르게
+고쳤다(`7799dd6`). 최종 리뷰가 그 수정이 **새 클론과 앞으로의 tarball에만** 닿는다는 것을
+짚었다 — 이미 나가 있는 설치(v0.2.1~v0.2.3 tarball의 Makefile)는 여전히 Latest를 읽고, 그
+`make upgrade`는 `compose down` 뒤 없는 이미지를 당기다 실패해 스택을 내린 채 남는다. 그 설치들을
+지키는 것은 발행 때의 `--latest=false` 하나뿐이라, 그것을 사람 손에서 빼 발행 스크립트
+(`desktop/scripts/publish.sh`)에 넣고 발행 뒤 Latest를 다시 확인하게 했다.
+
+**최종 리뷰(2026-09-21)가 병합 전 수정 셋을 냈고 이 브랜치에서 고쳤다** — 결과 문서 §9. 그중
+하나는 **발행된 0.3.0에 들어가 있다**: 모델 다운로드 전 디스크 점검이 호출이 실제로 받는 파일이
+아니라 저장소 전체(그것도 main 리비전)를 세어, embed가 "필요한 용량 5.5 GB"로 막혔다(실제로
+받는 것은 2.3 GB). 이 브랜치는 호출이 받는 파일만, 그 리비전에서, 캐시에 없는 것만 센다 —
+**0.3.0 사용자에게 닿으려면 다음 릴리스가 필요하다.** 또 하나는 기록만 했다 — 렌즈만 다시 돌린
+경우 디스크 부족 사유가 화면에 안 뜬다(API가 `extraction_status`만 준다, P6a-C6의 한계).
+
+두 번째 맥 검증(P6a-C9~C11, T12)은 사람이 직접 하는 일이라 **진행 전**이다. 스펙 §10의 완료
+기준(`C1~C14` + `C8b`, 15행) 중 11건(P6a-C1~C8·C8b·C13·C14 — C4·C13·C14는 T11의 최종 발행판,
+C6은 렌즈 경로 한계 명시) 충족, 1건(C12)은 예고된 퇴행이 실측에서 일어나지 않아 미판정,
+3건(C9·C10·C11)은 T12 소관으로 진행 전이다 — 상세 판정표와 근거는 결과 문서 §2.
 
 #### Phase 6b. 업데이트
 

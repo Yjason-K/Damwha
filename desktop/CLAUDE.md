@@ -11,10 +11,11 @@ Electron main이 네 서비스를 감독한다 — 번들 PostgreSQL, NestJS API
 ```bash
 pnpm desktop:dev     # build-postgres.sh·build-python.sh·build-ffmpeg.sh(셋 다 캐시) → tsc → electron .
 pnpm desktop:build   # 위 셋 → tsc → be·fe build → pnpm deploy → electron-builder
-                     #   → hardened runtime 서명(plist 둘) → check-bundle (31건)
+                     #   → hardened runtime 서명(plist 둘) → check-bundle (40건, 2026-09-21)
 bash desktop/scripts/build-postgres.sh [--fresh]               # 내장 PG
 bash desktop/scripts/build-python.sh   [--fresh|--print-key]   # 내장 Python 3.12 + worker 층 (1.3 GB)
 bash desktop/scripts/build-ffmpeg.sh   [--fresh]               # 내장 ffmpeg·ffprobe
+bash desktop/scripts/publish.sh --notes-file <파일>            # 릴리스 발행 — 공개 동작, 아래 "서명·배포"
 ```
 
 캐시는 `desktop/.cache/{postgres,python,ffmpeg}`, 스테이징은 `desktop/build/<이름>` (둘 다 gitignore).
@@ -54,7 +55,9 @@ Mach-O 전수와 `Resources/ffmpeg/bin/*`에, `entitlements.mac.plist`(키 셋 �
   Team ID로 서명돼 있어 hardened runtime의 library validation이 disable-library-validation 없이도
   통과한다(2026-09-21 실측: 재빌드한 앱을 띄워 postgres가 pgvector 0.8.6·pg_bigm 1.2를 로드하며
   뜨는 것과 api·worker의 DB 연결을 확인했다). `check-bundle.mjs`의 hardened runtime 단언은 이제
-  postgres·python·ffmpeg 트리 전부에 건다.
+  postgres·python·ffmpeg 트리와 `Contents/Frameworks`(8b — Squirrel의 ShipIt, 최종 리뷰 I3) 전부에
+  건다. `lib/signing.mjs`의 `codesign()`과 `package.mjs`의 `signAll()`은 runtime을 **기본으로
+  켠다** — entitlements가 없다는 것은 runtime을 끌 이유가 아니다(R12).
 - 서명한 뒤 **번들 python을 실행하지 않는다.** `__pycache__`가 봉인 밖에 생기고, `.pyc`에는
   빌드 머신의 절대 경로가 `co_filename`으로 박힌다 (`check-bundle.mjs`가 둘 다 잡는다).
 
@@ -69,29 +72,45 @@ Developer ID로 서명하고 공증까지 마친 DMG로 배포한다. ad-hoc은 
   `iPhone Distribution` 항목이 넷 있고, 2026-09-13에 이름 중복이 `codesign`을 `ambiguous`로
   실패시킨 적이 있다.
 - **개인 키·`.p12` 백업은 `~/Documents/damwha-signing`**(0700, 저장소 밖·커밋 안 함) —
-  `signing.mjs:35`가 신원을 못 찾으면 이 경로에서 import하라고 바로 안내한다. **잃으면**:
-  인증서는 재발급되지만 새 키는 다른 identity가 되므로 기존 사용자의 TCC 마이크 권한과
-  `safeStorage` 토큰이 전부 무효가 된다 — Phase 1이 경고한 "재빌드마다 권한 무효화"가 그대로
-  돌아온다(스펙 §12 위험 1). **스펙 §3-7은 "이 맥 밖에 한 벌 더 둔다"고 적었으나, 실제로 그렇게
-  됐는지는 확인된 적이 없다 — 위치 미기재, 사용자 확인 필요.**
+  `signing.mjs:35`가 신원을 못 찾으면 이 경로에서 import하라고 바로 안내한다. **잃어도 업데이트와
+  TCC·`safeStorage` 연속성은 끊기지 않는다.** 앱의 designated requirement가 인증서가 아니라 팀에
+  묶여 있다 — `codesign -d -r- out/mac-arm64/Damwha.app`(2026-09-21): `identifier "kr.damwha.app"
+  and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate
+  leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = L5Y9SZHGRN`. 인증서
+  해시도 공개 키도 없다. 같은 팀으로 새 Developer ID Application 인증서를 발급받아 서명한 앱도
+  이 요구 조건을 만족하므로, TCC와 키체인은 그것을 같은 앱으로 본다. 키를 잃은 비용은 폐기·
+  재발급과 `signing.json`의 지문 교체이고, 그동안 릴리스를 못 낸다 — 그래서 백업은 여전히 둔다.
+  (재발급을 실제로 해 보지는 않았다. DR 판독에서 내린 결론이다. 옛 문장 "재발급하면 다른
+  identity가 돼 전부 무효"는 과장이었다 — 최종 리뷰 M1.) **스펙 §3-7은 "이 맥 밖에 한 벌 더
+  둔다"고 적었으나, 실제로 그렇게 됐는지는 확인된 적이 없다 — 위치 미기재, 사용자 확인 필요.**
 - **`--release`가 유일한 새 플래그다**(`pnpm run package:release` = `package.mjs --release`).
   없으면(`pnpm desktop:build`가 쓰는 `package:desktop`) 지금까지와 같은 `--dir`뿐 — 공증·DMG가
   전혀 안 돌아 개발 루프 시간이 늘지 않는다. `--release`일 때만: 태그가 버전과 맞는지 확인(어긋나면
   electron-builder 앞에서 멈춤) → `.app` 공증·스테이플 → `check-bundle` 재확인 → `--prepackaged`로
   DMG 생성(재서명하지 않고 이미 서명·스테이플된 바이트를 그대로 담는다) → DMG 서명·공증·스테이플·
   `sha256` → 마운트해 안의 `.app`도 재검증. **`gh release create`는 여기 없다** — 자산 발행은
-  별도 단계다(`package.mjs`에 grep해도 없다).
+  별도 스크립트 `scripts/publish.sh`다(아래). 되돌리기 어려운 공개 동작을 빌드에 숨기지 않는다.
 - **태그 네임스페이스는 `desktop-v<version>`**이고 `deploy/release.sh`가 쓰는 `v<version>`
   (셀프호스팅 웹 배포, `v0.1.1`~`v0.2.3` 실재)과 다르다. 섞으면 그 스크립트가 태그 버전을
   `be/worker/pyproject.toml`과 대조해 거절하고, 6b의 업데이트 조회가 웹 배포를 가리켜 앱이
   사용자에게 tarball을 권하게 된다.
-- **데스크톱 릴리스는 `gh release create ... --latest=false`로 낸다.** 저장소의 "Latest"는
-  웹 배포의 것이다 — `--latest=false` 없이 내면 데스크톱 릴리스가 Latest를 빼앗고,
-  `deploy/Makefile`의 `setup`(태그 없는 `gh release view`로 저장소 Latest를 읽어 웹 배포의
-  `.env`에 `DAMWHA_VERSION`을 채운다)이 `desktop-v<version>`을 그대로 웹 배포 버전으로
-  써 버린다. 2026-09-21 `desktop-v0.3.0` 발행 때 실제로 이 일이 일어나 웹 배포가 존재하지
-  않는 이미지 태그를 가리켰고, `gh release edit v0.2.3 --latest`로 되돌려야 했다
-  (`deploy/Makefile`도 `v*` 태그만 고르도록 근본 수정했지만, 이중 방어로 여기서도 막는다).
+- **데스크톱 릴리스는 `bash desktop/scripts/publish.sh --notes-file <파일>`로 낸다 — 손으로
+  `gh release create`를 치지 않는다.** 스크립트는 gh를 부르기 전에 작업 트리가 깨끗한지, 태그
+  `desktop-v<version>`이 HEAD를 가리키고 원격(origin)에도 같은 커밋으로 있는지(R22 — 없으면
+  `--verify-tag`가 거절한다), `out/`의 DMG가 `.sha256`과 맞는지 보고, 하나라도 어긋나면 아무것도
+  내지 않는다. 태그 푸시는 하지 않는다 — 사람이 먼저 한다. 발행은 `--verify-tag --latest=false`로
+  하고, **발행 뒤 태그 없는 `gh release view`(= 저장소 Latest)가 여전히 `v*`인지 다시 본다.**
+  아니면 되돌리는 명령(`gh release edit <최신 v*> --latest`)을 출력하고 실패한다 — 자동으로
+  되돌리지는 않는다. 노트에는 최소 macOS(15.0)를 적는다(스펙 §7.1).
+- **저장소의 "Latest"는 웹 배포의 것이고, 이미 나가 있는 웹 설치를 지키는 것은
+  `--latest=false` 하나뿐이다.** v0.2.1~v0.2.3 tarball에 든 `deploy/Makefile`(`deploy/release.sh`가
+  tarball에 복사한다. v0.2.0 이전에는 Makefile이 없다)은 태그 없는 `gh release view`로 Latest를
+  읽어 `.env`의 `DAMWHA_VERSION`에 쓴다. 그 Makefile의 `make upgrade`는 `compose down` →
+  `setup` → `compose pull` 순이라, Latest가 `desktop-v*`면 없는 이미지 태그를 당기다 실패해
+  **스택을 내린 채 남는다.** 2026-09-21 `desktop-v0.3.0` 발행 때 Latest를 실제로 빼앗겼고
+  `gh release edit v0.2.3 --latest`로 되돌렸다. 저장소의 `deploy/Makefile`은 그 뒤 `v*` 태그만
+  고르도록 고쳤지만(`7799dd6`) 그 수정은 **새 클론과 앞으로의 tarball에만** 닿는다 — "이중
+  방어"는 그 새 설치에만 성립한다(최종 리뷰 I2).
 - **최소 macOS 15.0을 세 자리가 같은 값으로 강제한다** — `scripts/lib/build-target.sh`의
   `MACOSX_DEPLOYMENT_TARGET`(postgres·ffmpeg 소스 빌드가 source), `electron-builder.yml`의
   `LSMinimumSystemVersion`, `scripts/lib/minos.mjs`의 `MAX_MINOS`(`check-bundle`이 번들 Mach-O
@@ -107,9 +126,9 @@ Developer ID로 서명하고 공증까지 마친 DMG로 배포한다. ad-hoc은 
 
 | 경로 | 어디서 잡나 | 화면 |
 | --- | --- | --- |
-| worker 모델 다운로드(job·embed·LLM 기동 셋 다 공통) | `models/disk.py` + `downloads.py`의 `hooked`(HF 진행 훅 설치 지점, 우회 분기 앞·캐시 우선 분기 뒤) | job은 회의 카드, embed·LLM은 상태 창에 `DISK_FULL` 사유 |
+| worker 모델 다운로드(job·embed·LLM 셋 다 공통) | `models/disk.py` + `downloads.py`의 `hooked`(HF 진행 훅 설치 지점, 우회 분기 앞·캐시 우선 분기 뒤). 필요량은 그 호출이 **실제로 받을** 파일만 — 호출의 리비전에서, 캐시에 이미 있는 blob은 빼고, snapshot의 안쪽 파일은 다시 재지 않는다(최종 리뷰 I1) | job은 회의 카드, embed는 상태 창에 `DISK_FULL` 사유. LLM은 모델을 요청 스레드에서 받으므로 세 번째 줄을 거쳐 **그 job의 실패**가 된다 — 상태 창이 아니다 |
 | 업로드(회의 생성·화자 등록) | `be/src/storage/disk-full.filter.ts` — ENOSPC를 507로 | `meeting`·`job` 행이 생기기 전에 507 — multer가 컨트롤러 진입 전에 쓴다 |
-| LLM 서버 요청 스레드 | `llm_server.py`의 `run_guarding_disk_full` + `_start_stderr_relay`(`popen()` 직후부터 자식 stderr를 장수 스레드로 감시) | `lens_llm_timeout_seconds`(기본 300초)를 기다리지 않고 그 자리에서 `DISK_FULL`로 job 실패 |
+| LLM 서버 요청 스레드 | `llm_server.py`의 `run_guarding_disk_full` + `_start_stderr_relay`(`popen()` 직후부터 자식 stderr를 장수 스레드로 감시) | `lens_llm_timeout_seconds`(기본 300초)를 기다리지 않고 그 자리에서 `DISK_FULL`로 job 실패. 요약은 요약 카드에 사유가 뜬다. **렌즈는 사유가 안 뜬다** — API가 `extraction_status`만 주고 화면은 "할 일과 결정을 찾지 못했어요."만 그린다(최종 리뷰 M3, 알려진 한계) |
 
 세 번째 줄은 Phase 6a 안에서 나중에 더해졌다(Ruling R16) — `mlx_lm.server`의 요청 처리 스레드
 안에서 올라온 예외가 Python 기본 스레드 예외 훅에 삼켜져, 고치기 전에는 5분 뒤 거짓 사유

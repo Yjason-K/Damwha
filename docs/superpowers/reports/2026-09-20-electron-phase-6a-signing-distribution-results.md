@@ -45,7 +45,7 @@
 | P6a-C3 | `.app`·DMG 전수가 Developer ID `L5Y9SZHGRN` 서명, python·ffmpeg(+R12 이후 postgres)에 hardened runtime | **충족** | T5(identity·TeamIdentifier 전수), T6 §14b(postgres 66/66 runtime), T10 재패키징에서 `postgres 66/66`·`python+ffmpeg 454/454` runtime PASS 재확인. 원래 완료 기준 문구의 "postgres 트리는 identity만"은 R12로 뒤집혔다(spec §3-3 정정 참고) |
 | P6a-C4 | 공증 통과 + 스테이플 (`--release`) | **충족 (T11, 최종 발행판)** | T6은 T7~T10(디스크 부족 세 경로, R16)을 포함하지 않은 중간 산출물로 메커니즘만 확인(`.app`=`54dd2674-3806-4f12-8187-0ac8c50c10f6`·DMG=`cd12be62-dc47-49ff-87b3-1d8599ce8fe7`). **T11이 태그 `desktop-v0.3.0`(SHA `1a1a90e1db74d4808b413c9c46c8768b675400cd`)의 최종 HEAD로 재패키징·재공증** — `.app`=`e466e580-fddd-44de-bdbe-47c0953e8f79`·DMG=`2151eb74-a49d-449b-a2e8-63228a41bdfb` 둘 다 Accepted |
 | P6a-C5 | 릴리스 빌드에서 태그·버전 어긋나면 멈춤 | **충족** | T6 Step 10b: 태그를 일부러 어긋나게 하고 `--release` 실행 → electron-builder 앞에서 exit 1 확인 |
-| P6a-C6 | 디스크 부족 원인·복구 안내가 화면에 뜬다(worker job·embed·LLM 셋 + 업로드) | **충족(응답·계약 레벨) — 화면 렌더링 자체는 미관측** | worker job·embed: T10 Step3 실측(`DISK_FULL`, 사유 문구 그대로). LLM: 최초 부분 충족(5분 뒤 `llm_request_failed`로 거짓 표면화) → **R16 수정 후 4.88초에 `DISK_FULL`로 충족**(task-10-report.md §fix round). 업로드: T9가 FE 소비 로직을 unit·DOM 테스트로 고정하고 T10이 실제 API 응답이 그 모양(`{code:'DISK_FULL', free, needed:null}`)과 일치함을 소스 대조로 확인 — **실제 토스트 렌더링은 이 세션에 GUI 상호작용 권한이 없어 못 봤다**(T10 §7.1 Step1) |
+| P6a-C6 | 디스크 부족 원인·복구 안내가 화면에 뜬다(worker job·embed·LLM 셋 + 업로드) | **충족(응답·계약 레벨) — 화면 렌더링 자체는 미관측. 단서 둘(최종 리뷰, §9): 렌즈 재추출 경로는 사유 미표시, 발행된 0.3.0의 "필요한 용량"은 과대 산정** | worker job·embed: T10 Step3 실측(`DISK_FULL`, 사유 문구 그대로). LLM: 최초 부분 충족(5분 뒤 `llm_request_failed`로 거짓 표면화) → **R16 수정 후 4.88초에 `DISK_FULL`로 충족**(task-10-report.md §fix round) — 그 실측은 요약(`summarize_meeting`) 경로이고 요약 카드가 `error.message`를 그린다. **렌즈(`extract_lenses`)만 다시 돌린 경우는 원인이 화면에 안 뜬다** — job에는 `DISK_FULL`이 남지만 API는 `extraction_status`만 주고 `insight-pane.tsx:380`은 "할 일과 결정을 찾지 못했어요."만 그린다(M3, API·FE 변경이 필요해 이 Phase 밖). **원인은 맞지만 숫자가 틀렸다** — 발행된 0.3.0은 저장소 전체를 세어 embed에 "필요한 용량 5.5 GB"를 냈다(embed가 실제로 받는 것은 2.3 GB, 고친 계산은 여유 계수를 포함해 2.7 GB — I1). 이 브랜치에서 고쳤고 사용자에게는 다음 릴리스로 닿는다. 업로드: T9가 FE 소비 로직을 unit·DOM 테스트로 고정하고 T10이 실제 API 응답이 그 모양(`{code:'DISK_FULL', free, needed:null}`)과 일치함을 소스 대조로 확인 — **실제 토스트 렌더링은 이 세션에 GUI 상호작용 권한이 없어 못 봤다**(T10 §7.1 Step1) |
 | P6a-C7 | 업로드 ENOSPC → 507, 잔재 없음 | **충족** | T8(2MB HFS+ 이미지로 실측, `dw-upload-*` 잔재 0), T10 Step1/2 실측 — 507 `{code:'DISK_FULL', free:20250624, needed:null}`, `new_meetings=0`, `new_jobs=0`, 임시 파일 0개 |
 | P6a-C8 | 디스크 부족 회차 뒤 기존 데이터 보존, 고아 행 없음 | **충족** | T10 Step5 — Phase 5 정합성 질의 넷 전부 0, `meeting`/`utterance` 행 수·`data/storage` 파일 수 불변 |
 | P6a-C8b | 모델 다운로드 디스크 부족이 재시도 예산을 안 태움(worker job 경로) | **충족** | T10 Step3/4 — `job_198`(worker, DISK_FULL) attempts=1→failed, `job_199`(LLM, R16 수정 후) attempts=1→failed, 둘 다 `queued` 백오프 없음 |
@@ -174,9 +174,12 @@ Task 10 작업 중 실제 개발 DB·저장소가 두 차례 오염됐다. 둘 �
 - **개인 서명 키의 이 맥 밖 추가 백업이 됐는지 확인된 적이 없다.** 스펙 §3-7은 `.p12` 백업이
   `~/Documents/damwha-signing`(0700, 저장소 밖)에 있다고 적었고, §12 위험 1은 "이 맥 밖에 한
   벌 더 두는 것을 결과 문서에 남긴다"고 완화책을 적었다. 이 Phase의 어떤 Task 보고서·원장에도
-  그 오프사이트 복사가 실제로 됐다는 기록이 없다 — **위치 미기재, 사용자 확인 필요.** 잃으면
+  그 오프사이트 복사가 실제로 됐다는 기록이 없다 — **위치 미기재, 사용자 확인 필요.** ~~잃으면
   재발급 인증서가 다른 identity가 돼 기존 사용자의 TCC 마이크 권한·`safeStorage` 토큰이 전부
-  무효화된다(같은 §12).
+  무효화된다(같은 §12).~~ **정정(최종 리뷰 M1):** 잃어도 연속성은 끊기지 않는다 — 앱의 DR이
+  인증서가 아니라 Team ID(`certificate leaf[subject.OU] = L5Y9SZHGRN`)에 묶여, 같은 팀으로
+  재발급한 인증서로 서명한 앱도 같은 앱이다(§9). 잃은 비용은 폐기·재발급과 그동안 릴리스를 못
+  내는 것이다. 백업은 여전히 권한다.
 
 ## 6. Task 11·Task 12
 
@@ -613,6 +616,14 @@ Latest가 `desktop-v0.3.0`이 되자 `latest="desktop-v0.3.0"` → `$${latest#v}
 값이라 — 존재하지 않는 태그를 가리켜 웹 배포가 깨진다. `.env`가 이미 있는 설치에도 이 줄은
 매번 돌므로, 기존 설치도 `make setup`을 다시 돌리면 덮어써진다.
 
+**정정 (최종 리뷰 I2) — 더 나쁜 경로를 빠뜨렸다.** 위 문단은 `make setup`만 적었다. 기존 웹
+설치는 저장소의 `deploy/Makefile`이 아니라 **자기가 받은 tarball의 Makefile**로 돈다
+(`deploy/release.sh:38`이 tarball에 복사한다). 그 Makefile은 v0.2.1~v0.2.3에 들어 있고(v0.2.0
+이전 태그에는 `deploy/Makefile`이 없다), 거기서 `make upgrade`는
+`$(COMPOSE) down` → `$(SUBMAKE) setup` → `$(COMPOSE) pull` 순이다(v0.2.3 `deploy/Makefile:271-273`).
+Latest가 `desktop-v*`면 setup이 `.env`를 덮고, pull이 없는 이미지 태그
+(`ghcr.io/yjason-k/damwha-api:desktop-v0.3.0`)에서 실패한다 — **그때 스택은 이미 내려가 있다.**
+
 ### 8.2 왜 계획·리뷰가 못 봤나
 
 웹 배포(`v<version>`)와 데스크톱 배포(`desktop-v<version>`)를 다른 태그 네임스페이스로 가른
@@ -644,10 +655,190 @@ Latest로 되돌렸다. 지금은 `make setup`이 정상 동작한다. 하지만
 2. **`desktop/CLAUDE.md`** — 데스크톱 릴리스 발행 절차에 `gh release create ... --latest=false`를
    더하고, 이유(저장소의 Latest는 웹 배포의 것 — Latest를 빼앗으면 웹 쪽 조회가 흔들린다;
    2026-09-21 `desktop-v0.3.0` 발행 때 실제로 일어나 `v0.2.3`을 Latest로 되돌렸다)를 적었다.
-   Makefile 수정이 웹 쪽을 이미 지키더라도 둘 다 둔다 — 이중 방어다.
+   ~~Makefile 수정이 웹 쪽을 이미 지키더라도 둘 다 둔다 — 이중 방어다.~~ **정정(최종 리뷰 I2):**
+   이중 방어는 새 클론과 앞으로의 tarball로 설치한 곳에만 성립한다. 아래 마지막 문단의 정정.
 3. **이 결과 문서** — §8(지금 이 절)과 §2·§6의 T11 결과 갱신.
 
 이번 릴리스(`desktop-v0.3.0`)의 공개 상태는 건드리지 않았다 — `v0.2.3`이 여전히 Latest이고,
 `desktop-v0.3.0`은 여전히 발행된 상태 그대로다. 다음 데스크톱 릴리스부터 `--latest=false`로
-내면(2번) 애초에 Latest를 빼앗지 않고, 설령 실수로 빼앗기더라도 Makefile의 `v*` 필터(1번)가
-웹 배포 조회를 지킨다.
+내면(2번) 애초에 Latest를 빼앗지 않고, ~~설령 실수로 빼앗기더라도 Makefile의 `v*` 필터(1번)가
+웹 배포 조회를 지킨다.~~
+
+**정정 (최종 리뷰 I2).** 지운 문장은 **기존 설치에 대해 거짓이다.** 1번은 저장소의
+`deploy/Makefile`을 고쳤고, 그것은 새 클론과 앞으로 나올 tarball에만 닿는다. 이미 나가 있는
+설치(v0.2.1~v0.2.3 tarball의 Makefile)는 여전히 태그 없는 `gh release view`로 Latest를 읽고,
+§8.1 정정의 `make upgrade` 경로로 스택을 내린 채 남을 수 있다. **그 설치들을 지키는 방어는
+발행 때의 `--latest=false` 하나뿐이다.** 그래서 그 플래그를 사람 손에 두지 않고 발행
+스크립트(`desktop/scripts/publish.sh`)에 넣고, 발행 뒤 Latest가 여전히 `v*`인지 다시 확인하게
+했다(§9 I2).
+
+## 9. 최종 리뷰와 수정 (2026-09-21)
+
+최종 whole-branch 리뷰(range `1b92190..7799dd6`, 26커밋)의 판정은 **With fixes** — Critical 0,
+Important 3, Minor 9. 원장 Ruling R25에 따라 Important 셋(I1·I2·I3)과 판정끼리 어긋나는 문서
+Minor 넷(M1·M2·M3 기록·M8)을 **병합 전에** 한 번에 고쳤다. 나머지 Minor(M4~M7·M9)와 Task별
+deferred 항목은 원장의 트리아지표대로 병합 뒤로 넘겼다.
+
+**I1은 이미 발행된 `desktop-v0.3.0`에 들어 있다.** 이 절의 수정은 0.3.0 사용자에게 닿지 않는다 —
+**다음 릴리스가 필요하다**(§9.6).
+
+### 9.1 I1 — 모델 다운로드 디스크 점검이 필요량을 과대 산정했다 (발행본 영향)
+
+`downloads.py`의 `_needed_bytes`가 `sum(저장소의 모든 파일) × 1.2`를 여유와 비교했다. 세 가지가
+틀렸고, 고치며 넷째를 찾았다.
+
+- **(a) 호출이 받는 파일만 세지 않았다.** `hf_hub_download(filename=…)`은 파일 하나를,
+  `snapshot_download(allow_patterns=…)`는 걸린 파일만 받는데 저장소 전체를 셌다.
+- **(b) 캐시에 이미 있는 바이트를 빼지 않았다.** 큰 모델을 반쯤 받다 끊긴 재시도가 전체를 새로
+  요구했다.
+- **(c) snapshot 안쪽 파일마다 다시 쟀다.** 설치가 `_snapshot_download.hf_hub_download`를 훅으로
+  다시 묶으므로 `thread_map` 워커가 파일마다 메타데이터를 다시 받고, 채우는 중인 여유를 전체
+  요구량과 다시 비교했다 — 경계 여유면 다운로드 **도중에** `DISK_FULL`.
+- **(d) 리비전을 무시했다** (고치며 찾음). 호출의 `revision` 없이 main을 쟀다. embed는 main에 없는
+  `model.safetensors`를 고정 리비전(`bge_embed._PINNED_REVISIONS`)에서 받는다.
+
+**T10의 "필요한 용량 5.5 GB"가 정확히 재현된다.** 2026-09-21 HF API로 bge-m3 main의 30개 파일
+합이 4,587,317,404 B, × 1.2 = **5,504,780,884 B = 5.5 GB**다. 새 테스트를 옛 코드에 돌린 RED가
+그 값을 그대로 냈다. embed가 실제로 받는 스냅샷은 11개 파일 2,293,250,249 B다.
+
+**고친 것** (`be/worker/damwha_worker/models/downloads.py`):
+
+- 호출이 받는 파일로 좁힌다 — `filename`이면 `subfolder/filename` 하나, snapshot이면
+  `allow_patterns`·`ignore_patterns`를 **hub가 쓰는 그 함수**(`huggingface_hub.utils.filter_repo_objects`,
+  고정 버전 1.20.1에서 시그니처 확인)로 거른다. 메타데이터는 호출의 `revision`·`repo_type`·`token`으로
+  받는다.
+- 캐시에 있는 blob은 뺀다 — hub는 `blobs/<etag>`가 있으면 받지 않는다(`_hf_hub_download_to_cache_dir`).
+  etag는 LFS면 `lfs.sha256`, 아니면 `blob_id`다. **이 맥의 실제 캐시로 확인했다** — bge-m3 12개·
+  Qwen3.5-4B 10개, blob 22개 전부가 이 규칙으로 sibling에 맞았고 크기도 같았다. **받다 끊긴 임시
+  파일은 빼지 않는다** — 1.20.1은 이어 받지 않는다. 다운로드마다 새 임시 파일
+  (`<etag>.<uuid>.incomplete`)에 받고 실패하면 지운다(`_download_to_tmp_and_move`). 빼면 과소
+  산정이다. `force_download`·`local_dir`면 캐시를 보지 않고 전부 센다.
+- snapshot 안쪽 호출은 건너뛴다. **표시는 스레드 로컬이 아니라 인자다** — 안쪽 호출은
+  `thread_map` 워커에서 돌고 바깥 호출부터 무진행 감시 스레드에서 돌므로, 바깥 훅이 세운 스레드
+  로컬은 거기서 안 보인다. hub가 안쪽 호출에만 넘기는 `tqdm_class`(`snapshot_download.<locals>._AggregatedTqdm`)는
+  호출과 함께 스레드를 건넌다. 그 이름이 바뀌면 건너뛰기만 멈추고 안쪽 호출은 자기 파일 하나를
+  재게 된다 — 위험한 방향이 아니다. 테스트가 그 전제도 고정한다.
+- 1.2배 계수는 그대로 두고 주석만 고쳤다. "`.incomplete`와 최종 파일이 함께 있다"는 옛 근거는 1.20.1에서
+  사실이 아니다 — 같은 `blobs/` 안에서 rename한다.
+
+**새 숫자** (새 `_needed_bytes`를 실제 HF 메타데이터로 돌림 — 네트워크 읽기만, 다운로드 없음):
+
+| 호출 | 옛 계산 | 새 계산 |
+| --- | --- | --- |
+| embed `hf_hub_download("model.safetensors", revision=고정)`, 빈 캐시 | 5.5 GB | **2.7 GB** (2,725,277,347 B) |
+| embed가 부르는 11개 호출 각각의 합(참고), 빈 캐시 | 호출마다 5.5 GB | 2.8 GB |
+| 같은 호출, 이 맥의 캐시(다 받아 둠) | 5.5 GB | 점검 없음(받을 것 없음) |
+| LLM `snapshot_download("Qwen3.5-27B-8bit", mlx_lm 기본 패턴)`, 빈 캐시 | 35.4 GB | 35.4 GB (패턴이 거의 전부를 받는다) |
+| LLM `snapshot_download("Qwen3.5-4B-8bit")`, 이 맥의 캐시(다 받아 둠) | 6.2 GB | 점검 없음 |
+
+**테스트** — `be/worker/tests/test_downloads.py` 끝의 7건. `_needed_bytes`를 monkeypatch로 빼지 않고
+훅을 지나 **진짜 계산**을 탄다. 가짜는 hub의 경계 둘(`HfApi`, 바이트를 옮기는 `hf_hub_download` 원본)뿐이고
+캐시는 `tmp_path`다. 실제 `snapshot_download`(1.20.1)와 실제 `thread_map`이 돈다.
+① 파일 하나만 센다(bge-m3 실측 크기) ② 없는 선택 파일은 점검하지 않는다 ③ 패턴으로 거른 snapshot
+④ 캐시에 있는 blob은 뺀다 ⑤ **과소 산정 경계** — 실제 `snapshot_download`가 받으라고 한 파일과
+계산이 센 파일을 맞댄다 ⑥ 캐시처럼 보일 뿐인 것(끊긴 임시 파일·옛 리비전·`force_download`)은 센다
+⑦ snapshot 안쪽 호출은 다른 스레드에서 오고 다시 재지 않는다. 옛 코드에서 7건 전부 RED(①은
+`[5504780884, …] != [2725277347, 824, 2720184729]`, ⑦은 점검 13회 `!= 1`), 고친 뒤 GREEN. Task 7의
+배치 회귀 테스트 둘은 그대로 통과한다 — `_needed_bytes`를 빼는 람다의 인자 모양만 새 시그니처에 맞췄다.
+
+**남는 한계.** 점검은 호출 단위다. transformers는 파일을 하나씩 받으므로 막힌 호출의 파일 크기가
+"필요한 용량"으로 뜬다 — 여유가 10 MB면 먼저 `tokenizer.json`(20.5 MB)에서 막히고, 비운 뒤 다시
+`model.safetensors`(2.7 GB)에서 막힐 수 있다. 모델 전체의 합을 알려면 소비자가 받을 파일 목록을
+미리 알아야 한다. 또 크기 없는 sibling과 1,000개 넘는 저장소(hub가 목록을 따로 받는다)는 하한으로
+센다 — 쓰는 모델 중 해당하는 것은 없다.
+
+### 9.2 I2 — 웹 배포 Latest 방어는 새 설치에만 이중이다
+
+§8.1·§8.4의 정정이 사실관계다. 기존 웹 설치는 자기 tarball의 Makefile로 돌고, 그 `make upgrade`가
+Latest를 읽은 뒤 스택을 내린 채 남을 수 있다. 리뷰 원문은 "v0.1.1~v0.2.3 tarball"이라 했는데
+`git show <tag>:deploy/Makefile`로 보니 **v0.2.0 이전 태그에는 Makefile이 없다** — 그 조회를
+가진 설치는 v0.2.1~v0.2.3이다.
+
+**발행 스크립트 `desktop/scripts/publish.sh`를 만들었다** (스펙 §7.1의 "별도 스크립트" 쪽 — 되돌리기
+어려운 동작을 빌드에 숨기지 않는다). gh를 부르기 전에 작업 트리·태그(HEAD와 원격 둘 다, R22)·DMG
+sha256을 보고, `gh release create … --verify-tag --latest=false`로 낸 뒤 **태그 없는
+`gh release view`가 여전히 `v*`인지** 다시 본다. 아니면 되돌리는 명령을 출력하고 실패한다 —
+자동으로 되돌리지 않는다. **실행하지 않았다**(실행은 공개 발행이다). `bash -n` 통과. 검증은 격리
+환경의 드라이런이다 — scratch 저장소 + 로컬 bare `origin` + `PATH` 앞의 가짜 `gh`(받은 인자를 파일에
+적기만 한다):
+
+| 시나리오 | 결과 | 가짜 gh가 받은 호출 |
+| --- | --- | --- |
+| A. 정상, 가벼운 태그, Latest `v0.2.3` | exit 0 | `release create … --verify-tag --latest=false --title Damwha 0.3.0 (macOS) --notes-file …`, `release view` |
+| B. 발행 뒤 Latest가 `desktop-v0.3.0` | **exit 1**, `gh release edit v0.2.3 -R Yjason-K/Damwha --latest` 출력 | create, view, list — `edit`은 없다 |
+| C. 정상, 주석 태그 | exit 0 | A와 같음 |
+| D. 태그가 원격에 없다 | exit 1 | 없음 |
+| E. 추적 안 된 파일 | exit 1 | 없음 |
+| F. DMG sha256 불일치 | exit 1 | 없음 |
+| G. 태그가 HEAD가 아니다 | exit 1 | 없음 |
+| H. 원격 태그가 다른 커밋 | exit 1 | 없음 |
+
+드라이런이 결함 둘을 잡아 고쳤다. (1) macOS `/bin/bash` 3.2가 `$TAG가`에서 한글 첫 바이트까지 변수
+이름으로 읽어 `unbound variable`로 죽었다 — 문구 안 변수를 전부 `${…}`로 감쌌다. (2) 주석 태그는
+`git ls-remote`에 이름 하나만 주면 태그 객체 sha만 와서 HEAD와 어긋났다 — `^{}` 패턴을 함께 준다.
+
+### 9.3 I3 — runtime 기본값과 Frameworks 단언
+
+- **`lib/signing.mjs`의 `codesign()` 기본값을 `runtime = true`로 바꿨다**(`package.mjs`의 `signAll()`도
+  `opts.runtime ?? true`). 필수 인자로 만들지 않은 이유: R12가 확정한 사실은 "공증이 번들 안 모든
+  실행 파일에 hardened runtime을 요구한다"이고 이 저장소에 `false`가 옳은 호출이 없다(DMG는 이 함수를
+  거치지 않고 따로 서명한다). 기본값 `true`는 틀려도 무해한 쪽으로 실패하고(dylib은 플래그를 무시한다,
+  R10), 옛 기본값은 조용히 실패해 공증에서야 드러났다. docstring을 R12의 사실로 고쳤다.
+- **호출부 동작은 그대로다** — 서명 호출 다섯 곳 전부 옛 값과 새 값이 같다:
+
+  | 호출 | 옛 runtime | 새 runtime |
+  | --- | --- | --- |
+  | `signAll(python, pythonEnts, …)` | true(기본, ents 있음) | true(기본) |
+  | `signAll(ffmpeg, pythonEnts, …)` | true(기본, ents 있음) | true(기본) |
+  | `signAll(postgres, null, …, { runtime: true })` | true(명시) | true(명시) |
+  | `signAll(Frameworks, null, …, { runtime: true })` | true(명시) | true(명시) |
+  | `codesign(id, macEnts, [app], { extra: ["--deep"] })` | true(기본, ents 있음) | true(기본) |
+
+  리뷰는 "이 기본값에 기대는 호출은 0"이라 했는데, 마지막 `.app` 서명은 기본값에 기댄다 — 두 기본값
+  아래서 모두 `true`라 동작은 같다.
+- **`check-bundle.mjs`에 8b를 더했다** — `Contents/Frameworks`의 Mach-O 전수에 hardened runtime을
+  단언한다. 파일 종류로 가르지 않고 트리 전수에 건다 — `package.mjs`가 트리 전체를 runtime으로 서명하므로
+  그것이 서명의 계약 그대로고, 14b(postgres)·17b(python·ffmpeg)와 같은 모양이다. 현재 번들(0.3.0
+  발행본과 같은 서명 상태)에서 **12/12 통과**(실행 파일 6 — 헬퍼 넷·`chrome_crashpad_handler`·ShipIt,
+  dylib 6), `check-bundle` 전체 **40/40 PASS**(39 → 40).
+- **8b가 실제로 막는지** — 번들을 건드리지 않고 `Frameworks`를 APFS 클론으로 scratch에 떠, 그 사본의
+  ShipIt만 `codesign(…, null, …, { runtime: false })`로 재서명하고 바깥 `Squirrel.framework`를 다시
+  봉인했다(`.app --deep`이 하는 일). `check-bundle.mjs`의 `verifyArm64` **원문을 소스에서 잘라** 같은
+  판정식으로 돌렸다: 원본 `PASS 12/12`, 사본
+  `FAIL 1 of 12: Squirrel.framework/Versions/A/Resources/ShipIt (flags=0x0(none))`.
+- **vitest 3건**(`tests/scripts/signing.test.ts`) — `codesign()`의 인자만 본다. 옛 `signing.mjs`에서
+  "entitlements 없이도 runtime" 1건 RED(`--options runtime`이 빠짐), 고친 뒤 7/7.
+
+### 9.4 문서 정확성 — M1·M2·M3·M8
+
+- **M1 — 키를 잃어도 연속성은 끊기지 않는다.** `codesign -d -r- desktop/out/mac-arm64/Damwha.app`
+  (2026-09-21): `designated => identifier "kr.damwha.app" and anchor apple generic and certificate
+  1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13]
+  /* exists */ and certificate leaf[subject.OU] = L5Y9SZHGRN`. 인증서 해시도 공개 키도 없다 — 같은
+  팀으로 새 Developer ID Application 인증서를 받아 서명한 앱도 이 요구 조건을 만족한다. 키 분실은
+  폐기·재발급의 불편이지 연속성 파괴가 아니다. 재발급을 실제로 해 보지는 않았다 — DR 판독에서 내린
+  결론이다. `desktop/CLAUDE.md`, 이 문서 §5, 스펙 §12-1(취소선 + 정정 블록)을 고쳤다.
+- **M2 — LLM의 `DISK_FULL`은 상태 창이 아니다.** R16 뒤로는 `run_guarding_disk_full`이 그 job을
+  실패시키고 요약 카드에 뜬다. `causes.ts`의 주석(동작·문구 불변)과 `desktop/CLAUDE.md`의 표를 고쳤다.
+- **M3 — 기록만 했다.** 렌즈만 다시 돌린 경우 사유가 화면에 안 뜬다. §2 C6 판정에 단서로 적었다.
+  고치려면 API가 렌즈 실행의 오류를 내주고 `insight-pane.tsx`가 그것을 그려야 한다 — 이 Phase 밖이다.
+- **M8 — 로드맵.** T11 발행 완료(URL), Latest 사고와 완화·수정, 최종 리뷰와 다음 릴리스의 필요를
+  적었다. T12는 여전히 진행 전이다.
+
+### 9.5 검증
+
+- worker: `pnpm worker:test` 720건 통과(713 + 새 7건, 56.97초, 경고 3건은 `test_eval_diarization`의 pyannote UserWarning — 무관). `ruff check`·`ruff format --check` 통과.
+- desktop vitest: 55 파일 1,087건 통과(1,084 + 새 3건). `tsc -p tsconfig.lint.json` 통과.
+- `check-bundle.mjs`: 40/40 PASS. **`causes.ts` 주석을 고치기 전에 돌렸다.** tsc가 주석을 JS에 남기므로
+  그 뒤로는 2b("app.asar desktop code equals a fresh compile")가 지금 `out/`에 대해 어긋난다 —
+  `causes.js` 한 파일을 직접 대조해 확인했다. `out/`은 0.3.0 발행본이고 이 브랜치의 worker 수정(I1)도
+  담고 있지 않으므로 어차피 다시 패키징해야 한다(R17과 같은 이유).
+- 공개 상태·번들·DB는 건드리지 않았다 — 태그·릴리스 변경 없음, 발행 스크립트 미실행, 재패키징·
+  재공증 없음, 번들 사본은 scratch의 APFS 클론에서만 재서명했다.
+
+### 9.6 다음 릴리스가 필요하다
+
+I1은 `desktop-v0.3.0`에 들어 있다. 0.3.0을 받은 사용자는 여유가 2.7~5.5 GB일 때 embed가 막히고
+틀린 숫자를 본다. 이 수정이 닿으려면 **다시 패키징·공증한 다음 릴리스**가 필요하다 — Task 12
+Step 7의 0.3.1 빌드(R24)가 이 수정 뒤에 오므로 두 번째 맥 시험이 I1 수정까지 함께 본다. 발행은
+`desktop/scripts/publish.sh`로 한다.
