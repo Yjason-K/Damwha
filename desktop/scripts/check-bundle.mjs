@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { machOFiles } from "./lib/macho.mjs";
 import { MAX_MINOS, compareVersion, readMinos } from "./lib/minos.mjs";
+import { loadSigning } from "./lib/signing.mjs";
 
 const desktop = path.resolve(import.meta.dirname, "..");
 const repo = path.resolve(desktop, "..");
@@ -225,6 +226,25 @@ if (codesignInfo.error !== undefined) {
   const identifier = identifierLine ? identifierLine[1].trim() : "";
   check("codesign Identifier is kr.damwha.app (not Electron)", identifier === "kr.damwha.app", identifier || "(not found)");
 }
+
+// 7b. 서명이 Developer ID이고 팀이 우리 팀이다 (P6a-C3). "서명이 있다"와 "**우리** 서명이다"는
+// 다른 질문이다 — ad-hoc도 --verify를 통과한다.
+const sig = loadSigning(desktop);
+const authority = /^Authority=(.+)$/m.exec(codesignInfo.stderr ?? "");
+check("app is signed by Developer ID Application", (authority?.[1] ?? "").startsWith("Developer ID Application:"),
+  authority?.[1] ?? "(not found)");
+const teamLine = /^TeamIdentifier=(.+)$/m.exec(codesignInfo.stderr ?? "");
+check(`app TeamIdentifier is ${sig.teamId}`, (teamLine?.[1] ?? "").trim() === sig.teamId, teamLine?.[1] ?? "(not found)");
+
+// 7c. 번들 Mach-O 전수가 같은 팀으로 서명됐다. postgres 트리도 포함한다 — 그쪽은 hardened
+// runtime 플래그만 예외이지 identity는 같아야 한다 (Phase 6a 스펙 §6).
+const wrongTeam = [];
+for (const f of machOFiles(contents)) {
+  const r = spawnSync("codesign", ["-dv", "--verbose=2", f], { encoding: "utf8" });
+  const t = /^TeamIdentifier=(.+)$/m.exec(r.stderr ?? "");
+  if ((t?.[1] ?? "").trim() !== sig.teamId) wrongTeam.push(`${path.relative(contents, f)}=${t?.[1]?.trim() ?? "none"}`);
+}
+check(`every Mach-O carries TeamIdentifier ${sig.teamId}`, wrongTeam.length === 0, wrongTeam.slice(0, 10).join(", "));
 
 // 8. 서명된 리소스가 온전하다 — 재서명이 앱을 깨뜨리지 않았는지
 const codesignVerify = spawnSync("codesign", ["--verify", "--deep", "--strict", appDir], { encoding: "utf8" });

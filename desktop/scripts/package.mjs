@@ -5,10 +5,15 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { machOFiles } from "./lib/macho.mjs";
+import { assertIdentityInKeychain, codesign, loadSigning } from "./lib/signing.mjs";
 
 const desktop = path.resolve(import.meta.dirname, "..");
 const repo = path.resolve(desktop, "..");
 const apiTree = path.join(desktop, "build", "api");
+
+// 서명 신원을 **빌드 전에** 확인한다. 뒤에서 알면 그때까지의 시간이 날아간다.
+const signing = loadSigning(desktop);
+assertIdentityInKeychain(signing.identity);
 
 function run(cmd, args, cwd = repo, extraEnv = {}) {
   console.log(`$ ${cmd} ${args.join(" ")}`);
@@ -84,8 +89,9 @@ run("pnpm", ["exec", "electron-builder", "--dir"], desktop);
 // electron-builder는 target: dir + 서명 설정 없음이면 번들을 재서명하지 않는다.
 // 그러면 Electron 프리빌트의 링커 서명이 남아 Identifier가 Electron이 되고,
 // Info.plist가 서명에 묶이지 않는다. 그 상태의 앱은 자기 이름의 TCC 주체가 아니라
-// 이 맥의 다른 무서명 Electron 앱과 마이크 권한을 공유한다. Developer ID 서명과
-// 공증은 Phase 6이고, 여기서 필요한 것은 번들이 자기 정체성을 갖는 것뿐이다.
+// 이 맥의 다른 무서명 Electron 앱과 마이크 권한을 공유한다. 아래에서 Developer ID로
+// 직접 재서명한다 — 공증과 DMG는 Task 6이고, 여기서 필요한 것은 번들이 자기 정체성과
+// 우리 팀의 서명을 갖는 것이다.
 const appPath = path.join(desktop, "out", "mac-arm64", "Damwha.app");
 const resources = path.join(appPath, "Contents", "Resources");
 const pythonEnts = path.join(desktop, "build-resources", "entitlements.python.plist");
@@ -112,18 +118,13 @@ const macEnts = path.join(desktop, "build-resources", "entitlements.mac.plist");
 function signAll(targets, entitlements, label) {
   if (targets.length === 0) throw new Error(`서명 대상이 없다: ${label}`);
   console.log(
-    `$ codesign --force --sign - --options runtime --entitlements ${path.relative(desktop, entitlements)}` +
-      ` — ${label} ${targets.length}개`,
+    `$ codesign --sign ${signing.identity} --options runtime --timestamp` +
+      ` --entitlements ${path.relative(desktop, entitlements)} — ${label} ${targets.length}개`,
   );
   // argv 길이 한계를 넘지 않게 끊어 부른다. execFileSync는 비0에 throw하므로 한 건이라도
-  // 서명에 실패하면 패키징이 여기서 멈춘다 — 서명이 실패해도 .app은 linker-signed 상태로
-  // 실행되기 때문에, 실행 성공을 서명 성공으로 읽지 않으려면 종료 코드를 봐야 한다.
+  // 서명에 실패하면 패키징이 여기서 멈춘다.
   for (let i = 0; i < targets.length; i += 200) {
-    execFileSync(
-      "codesign",
-      ["--force", "--sign", "-", "--options", "runtime", "--entitlements", entitlements, ...targets.slice(i, i + 200)],
-      { cwd: desktop, stdio: "inherit" },
-    );
+    codesign(signing.identity, entitlements, targets.slice(i, i + 200));
   }
 }
 
@@ -132,6 +133,40 @@ const ffmpegTargets = fs.existsSync(ffmpegBin) ? fs.readdirSync(ffmpegBin).map((
 signAll(machOFiles(path.join(resources, "python")), pythonEnts, "Resources/python Mach-O");
 signAll(ffmpegTargets, pythonEnts, "Resources/ffmpeg/bin");
 
-run("codesign", ["--force", "--deep", "--sign", "-", "--options", "runtime", "--entitlements", macEnts, appPath], desktop);
+// Resources/postgres: identity만 우리 것으로 올린다. build-postgres.sh가 이미 ad-hoc(`-s -`)으로
+// 서명해 뒀지만(캐시가 그 상태로 굳어 있다), check-bundle의 7c(팀 식별자 전수 일치, P6a-C3/스펙
+// §6)는 이 트리도 포함한다 — "서명이 있다"가 아니라 "**우리** 서명이다"를 본다. **hardened
+// runtime은 걸지 않는다** — 별개 프로세스라 자기 서명의 플래그로 돌고, entitlements도 안 쓴다
+// (allow-jit 등은 이 트리가 쓰지 않는 권한이다).
+const pgMachos = machOFiles(path.join(resources, "postgres"));
+console.log(`$ codesign --sign ${signing.identity} --timestamp — Resources/postgres Mach-O ${pgMachos.length}개`);
+for (let i = 0; i < pgMachos.length; i += 200) {
+  execFileSync(
+    "codesign",
+    ["--force", "--sign", signing.identity, "--timestamp", ...pgMachos.slice(i, i + 200)],
+    { cwd: desktop, stdio: "inherit" },
+  );
+}
+
+// Contents/Frameworks 아래 "번들도, 번들의 메인 실행 파일도 아닌" 느슨한 Mach-O는 .app --deep이
+// 건너뛴다 — 실측(2026-09-21): Electron Framework의 Libraries/libvk_swiftshader.dylib·
+// libffmpeg.dylib, Squirrel.framework의 ShipIt 셋이 .app --deep 뒤에도 adhoc(TeamIdentifier=not
+// set)으로 남았다(--deep은 중첩 번들 자체는 재서명하지만 그 Resources 서브디렉터리에 흩어진
+// 개별 파일까지 전수로 훑지는 않는다). hardened runtime이나 entitlements는 주지 않는다 — 지금까지
+// ad-hoc(런타임 플래그 없음)으로 무탈했던 파일들이고, Task 5의 범위는 identity 전환이지 새 제약을
+// 얹는 것이 아니다. .app보다 먼저 둔다 — --deep이 다시 다루는 중첩 번들(Helper.app 등)은 뒤에서
+// 올바른 entitlements로 덮어써 최종 상태가 같다(멱등).
+console.log(`$ codesign --sign ${signing.identity} --timestamp — Contents/Frameworks Mach-O 전수 (identity만)`);
+const frameworksMachos = machOFiles(path.join(appPath, "Contents", "Frameworks"));
+for (let i = 0; i < frameworksMachos.length; i += 200) {
+  execFileSync(
+    "codesign",
+    ["--force", "--sign", signing.identity, "--timestamp", ...frameworksMachos.slice(i, i + 200)],
+    { cwd: desktop, stdio: "inherit" },
+  );
+}
+
+// .app은 --deep으로. plist는 mac 쪽이다 — python plist를 주면 V8이 allow-jit 없이 rc=133으로 죽는다.
+codesign(signing.identity, macEnts, [appPath], ["--deep"]);
 
 run("node", [path.join("scripts", "check-bundle.mjs")], desktop);
