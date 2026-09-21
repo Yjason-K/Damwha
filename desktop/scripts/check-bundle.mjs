@@ -34,8 +34,12 @@ function check(label, ok, detail = "") {
 // 서명만 가진 채 hardened runtime .app 안에 들어간다 — 를 이것이 잡는다. 아래 18번의 entitlement
 // 표본은 파일 몇 개만 보므로 그물이 되지 못한다. 454개 전수로 3.4초다(실측).
 //
-// **postgres 트리에는 걸지 않는다.** 별개 프로세스라 자기 서명의 플래그로 돌고, runtime 플래그
-// 없는 ad-hoc 서명인 것이 맞다 — 위 9~14번 묶음의 postgres 서명 검사가 plain --verify인 것이 그래서다.
+// **postgres 트리는 이 함수로 검사하지 않는다** — 위 9~14번 묶음의 postgres 서명 검사가
+// plain --verify인 것이 그래서다. package.mjs는 Task 6부터 postgres 트리에도 hardened runtime을
+// 건다(Ruling R12: Apple 공증이 번들 안 실행 파일에 이를 요구한다고 실측됐다 — 제출 id
+// 88197b1f-daae-41bc-aa68-e62176a321de, task-6-report.md). 그래도 이 함수를 postgres에 걸지
+// 않는 이유는 바뀌지 않았다 — 9~14번이 이미 그 트리의 서명 상태(identity·의존성)를 다른 방식으로
+// 본다.
 function verifyArm64(files) {
   const unsigned = [];
   const noArm64 = [];
@@ -236,8 +240,9 @@ check("app is signed by Developer ID Application", (authority?.[1] ?? "").starts
 const teamLine = /^TeamIdentifier=(.+)$/m.exec(codesignInfo.stderr ?? "");
 check(`app TeamIdentifier is ${sig.teamId}`, (teamLine?.[1] ?? "").trim() === sig.teamId, teamLine?.[1] ?? "(not found)");
 
-// 7c. 번들 Mach-O 전수가 같은 팀으로 서명됐다. postgres 트리도 포함한다 — 그쪽은 hardened
-// runtime 플래그만 예외이지 identity는 같아야 한다 (Phase 6a 스펙 §6).
+// 7c. 번들 Mach-O 전수가 같은 팀으로 서명됐다. postgres 트리도 포함한다(Phase 6a 스펙 §6) —
+// Task 6부터는 hardened runtime도 postgres에 걸리므로(Ruling R12) identity뿐 아니라 그 플래그도
+// python·ffmpeg 트리와 같아졌다.
 const wrongTeam = [];
 for (const f of machOFiles(contents)) {
   const r = spawnSync("codesign", ["-dv", "--verbose=2", f], { encoding: "utf8" });

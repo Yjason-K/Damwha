@@ -141,10 +141,17 @@ const macEnts = path.join(desktop, "build-resources", "entitlements.mac.plist");
 // Resources/postgres와 Contents/Frameworks도 같은 함수로 맡는다 — entitlements가 없으면
 // (`lib/signing.mjs`의 `codesign()` 기본값대로) hardened runtime도 꺼지므로, 이 트리들은
 // `opts.runtime`으로 명시해 뒤집는다:
-//   - Resources/postgres: runtime 없음. 별개 프로세스라 자기 서명의 플래그로 돈다(Global
-//     Constraints) — build-postgres.sh가 이미 ad-hoc(`-s -`)으로 서명해 뒀지만, check-bundle의
-//     7c(팀 식별자 전수 일치, P6a-C3/스펙 §6)는 이 트리도 포함한다. "서명이 있다"가 아니라
-//     "**우리** 서명이다"를 본다.
+//   - Resources/postgres: runtime **있음**, entitlements 없음 (Ruling R12, Task 6 실측 뒤집음).
+//     원래 제약("별개 프로세스라 자기 서명의 플래그로 돈다")은 *실행 시 동작*을 근거로 hardened
+//     runtime이 없어도 무해하다고 봤을 뿐 있어야 한다는 근거는 아니었다. 그런데 Apple 공증은 번들
+//     안 실행 파일에 hardened runtime을 요구한다 — 실측(2026-09-21, 제출 id
+//     88197b1f-daae-41bc-aa68-e62176a321de): `Resources/postgres/bin/` 아래 32개 실행 파일 전부가
+//     "The executable does not have the hardened runtime enabled."로 거절됐다(자세한 로그는
+//     task-6-report.md). entitlements는 여전히 주지 않는다 — hardened runtime의 library
+//     validation은 같은 Team ID로 서명된 라이브러리를 허용하는데 postgres 트리 전체가 이미
+//     `signing.identity`로 서명돼 있으므로(check-bundle의 7c가 전수 단언) disable-library-validation
+//     없이 성립할 것으로 본다 — 앱을 띄워 postgres 기동과 pgvector·pg_bigm 로드를 실측 확인했다
+    // (task-6-report.md, R12 재검증).
 //   - Contents/Frameworks: runtime 있음, entitlements 없음. "번들도, 번들의 메인 실행 파일도
 //     아닌" 느슨한 Mach-O를 .app --deep이 건너뛴다 — 실측(2026-09-21): Electron Framework의
 //     Libraries/libvk_swiftshader.dylib·libffmpeg.dylib, Squirrel.framework의 ShipIt 셋이
@@ -173,7 +180,7 @@ const ffmpegBin = path.join(resources, "ffmpeg", "bin");
 const ffmpegTargets = fs.existsSync(ffmpegBin) ? fs.readdirSync(ffmpegBin).map((f) => path.join(ffmpegBin, f)) : [];
 signAll(machOFiles(path.join(resources, "python")), pythonEnts, "Resources/python Mach-O");
 signAll(ffmpegTargets, pythonEnts, "Resources/ffmpeg/bin");
-signAll(machOFiles(path.join(resources, "postgres")), null, "Resources/postgres Mach-O", { runtime: false });
+signAll(machOFiles(path.join(resources, "postgres")), null, "Resources/postgres Mach-O", { runtime: true });
 signAll(machOFiles(path.join(appPath, "Contents", "Frameworks")), null, "Contents/Frameworks Mach-O", { runtime: true });
 
 // .app은 --deep으로. plist는 mac 쪽이다 — python plist를 주면 V8이 allow-jit 없이 rc=133으로 죽는다.
