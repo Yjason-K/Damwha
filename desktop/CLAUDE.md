@@ -58,6 +58,56 @@ Mach-O 전수와 `Resources/ffmpeg/bin/*`에, `entitlements.mac.plist`(키 셋 �
 - 서명한 뒤 **번들 python을 실행하지 않는다.** `__pycache__`가 봉인 밖에 생기고, `.pyc`에는
   빌드 머신의 절대 경로가 `co_filename`으로 박힌다 (`check-bundle.mjs`가 둘 다 잡는다).
 
+## 서명·배포 (Phase 6a)
+
+Developer ID로 서명하고 공증까지 마친 DMG로 배포한다. ad-hoc은 더 없다 — `signing.json`이
+없거나 그 신원이 키체인에 없으면 패키징이 그 자리에서 죽는다(`scripts/lib/signing.mjs`).
+
+- **신원은 `desktop/scripts/signing.json`**(gitignore 아님, 비밀이 아니다) — `identity`(sha1
+  지문 `C35965CC0997E3897DED5C0975B4064D8AA4E27A`), `teamId`(`L5Y9SZHGRN`), `notaryProfile`
+  (`damwha`, 키체인 앱 암호 프로필 이름). **이름이 아니라 지문을 쓴다** — 이 키체인에 동명
+  `iPhone Distribution` 항목이 넷 있고, 2026-09-13에 이름 중복이 `codesign`을 `ambiguous`로
+  실패시킨 적이 있다.
+- **개인 키·`.p12` 백업은 `~/Documents/damwha-signing`**(0700, 저장소 밖·커밋 안 함) —
+  `signing.mjs:35`가 신원을 못 찾으면 이 경로에서 import하라고 바로 안내한다. **잃으면**:
+  인증서는 재발급되지만 새 키는 다른 identity가 되므로 기존 사용자의 TCC 마이크 권한과
+  `safeStorage` 토큰이 전부 무효가 된다 — Phase 1이 경고한 "재빌드마다 권한 무효화"가 그대로
+  돌아온다(스펙 §12 위험 1). **스펙 §3-7은 "이 맥 밖에 한 벌 더 둔다"고 적었으나, 실제로 그렇게
+  됐는지는 확인된 적이 없다 — 위치 미기재, 사용자 확인 필요.**
+- **`--release`가 유일한 새 플래그다**(`pnpm run package:release` = `package.mjs --release`).
+  없으면(`pnpm desktop:build`가 쓰는 `package:desktop`) 지금까지와 같은 `--dir`뿐 — 공증·DMG가
+  전혀 안 돌아 개발 루프 시간이 늘지 않는다. `--release`일 때만: 태그가 버전과 맞는지 확인(어긋나면
+  electron-builder 앞에서 멈춤) → `.app` 공증·스테이플 → `check-bundle` 재확인 → `--prepackaged`로
+  DMG 생성(재서명하지 않고 이미 서명·스테이플된 바이트를 그대로 담는다) → DMG 서명·공증·스테이플·
+  `sha256` → 마운트해 안의 `.app`도 재검증. **`gh release create`는 여기 없다** — 자산 발행은
+  별도 단계다(`package.mjs`에 grep해도 없다).
+- **태그 네임스페이스는 `desktop-v<version>`**이고 `deploy/release.sh`가 쓰는 `v<version>`
+  (셀프호스팅 웹 배포, `v0.1.1`~`v0.2.3` 실재)과 다르다. 섞으면 그 스크립트가 태그 버전을
+  `be/worker/pyproject.toml`과 대조해 거절하고, 6b의 업데이트 조회가 웹 배포를 가리켜 앱이
+  사용자에게 tarball을 권하게 된다.
+- **최소 macOS 15.0을 세 자리가 같은 값으로 강제한다** — `scripts/lib/build-target.sh`의
+  `MACOSX_DEPLOYMENT_TARGET`(postgres·ffmpeg 소스 빌드가 source), `electron-builder.yml`의
+  `LSMinimumSystemVersion`, `scripts/lib/minos.mjs`의 `MAX_MINOS`(`check-bundle`이 번들 Mach-O
+  전수의 `vtool -show-build` 값을 이 상한과 비교해 초과하면 exit 1). mlx·mlx-metal은
+  `scripts/mlx-pin.txt`로 15.0 휠을 직접 URL 고정한다 — uv의 플랫폼 태그로는 못 고른다.
+
+## 디스크 부족 — 진입점 셋 (Phase 6a)
+
+디스크가 부족할 때 원인·복구 안내가 화면에 뜨는 경로가 셋이다. 문구 원천은
+`desktop/src/diagnostics/causes.ts`의 `diskFull` 하나뿐이고, worker·API·FE는 서로 다른
+런타임(파이썬·Node·별개 워크스페이스)이라 import를 못 해 바이트 단위로 재현한다 — 그 파일의
+머리 주석이 새 사본 만들기를 금한다.
+
+| 경로 | 어디서 잡나 | 화면 |
+| --- | --- | --- |
+| worker 모델 다운로드(job·embed·LLM 기동 셋 다 공통) | `models/disk.py` + `downloads.py`의 `hooked`(HF 진행 훅 설치 지점, 우회 분기 앞·캐시 우선 분기 뒤) | job은 회의 카드, embed·LLM은 상태 창에 `DISK_FULL` 사유 |
+| 업로드(회의 생성·화자 등록) | `be/src/storage/disk-full.filter.ts` — ENOSPC를 507로 | `meeting`·`job` 행이 생기기 전에 507 — multer가 컨트롤러 진입 전에 쓴다 |
+| LLM 서버 요청 스레드 | `llm_server.py`의 `run_guarding_disk_full` + `_start_stderr_relay`(`popen()` 직후부터 자식 stderr를 장수 스레드로 감시) | `lens_llm_timeout_seconds`(기본 300초)를 기다리지 않고 그 자리에서 `DISK_FULL`로 job 실패 |
+
+세 번째 줄은 Phase 6a 안에서 나중에 더해졌다(Ruling R16) — `mlx_lm.server`의 요청 처리 스레드
+안에서 올라온 예외가 Python 기본 스레드 예외 훅에 삼켜져, 고치기 전에는 5분 뒤 거짓 사유
+(`llm_request_failed`/"시간이 초과됐어요")로만 보였다.
+
 ## 구조 — `src/`는 "무슨 일을 맡는가"로 나눈다
 
 | 경로 | 맡는 일 |
