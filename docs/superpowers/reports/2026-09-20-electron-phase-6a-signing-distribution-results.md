@@ -43,7 +43,7 @@
 | P6a-C1 | 번들 Mach-O 전수의 `minos` ≤ 15.0, asar 안 Mach-O 0개 | **충족** | T4 구현(521개 Mach-O 전수 스캔 — postgres 66 + python·ffmpeg 455, probe로 27.0 하나 심어 exit 1 확인 후 제거해 exit 0), T10 재패키징에서도 `every Mach-O in the bundle targets macOS 15.0 or lower` PASS로 재확인 |
 | P6a-C2 | `Info.plist`의 `LSMinimumSystemVersion=15.0`, `CFBundleShortVersionString`이 `package.json`과 일치 | **충족** | T4 리뷰가 세 자리 리터럴(`minos.mjs:10`, `build-target.sh:12`, `electron-builder.yml:37`) 일치를 직접 확인. T10 재패키징에서도 유지 |
 | P6a-C3 | `.app`·DMG 전수가 Developer ID `L5Y9SZHGRN` 서명, python·ffmpeg(+R12 이후 postgres)에 hardened runtime | **충족** | T5(identity·TeamIdentifier 전수), T6 §14b(postgres 66/66 runtime), T10 재패키징에서 `postgres 66/66`·`python+ffmpeg 454/454` runtime PASS 재확인. 원래 완료 기준 문구의 "postgres 트리는 identity만"은 R12로 뒤집혔다(spec §3-3 정정 참고) |
-| P6a-C4 | 공증 통과 + 스테이플 (`--release`) | **메커니즘 충족 확인(T6, 커밋 `dfd6c1a`/`847e2dd` 기준)** — 최종 발행판은 진행 전(T11) | T6: 첫 제출 `88197b1f-daae-41bc-aa68-e62176a321de` status=Invalid(오류 32건, R12로 해소) → 재제출 `.app`=`54dd2674-3806-4f12-8187-0ac8c50c10f6`·DMG=`cd12be62-dc47-49ff-87b3-1d8599ce8fe7` 둘 다 Accepted. `spctl --assess`가 `source=Notarized Developer ID`, `stapler validate` 통과. **단 이 산출물은 T7~T10(디스크 부족 세 경로, R16)을 포함하지 않은 코드 상태다** — 최종 발행판 재공증은 T11이 한다 |
+| P6a-C4 | 공증 통과 + 스테이플 (`--release`) | **충족 (T11, 최종 발행판)** | T6은 T7~T10(디스크 부족 세 경로, R16)을 포함하지 않은 중간 산출물로 메커니즘만 확인(`.app`=`54dd2674-3806-4f12-8187-0ac8c50c10f6`·DMG=`cd12be62-dc47-49ff-87b3-1d8599ce8fe7`). **T11이 태그 `desktop-v0.3.0`(SHA `1a1a90e1db74d4808b413c9c46c8768b675400cd`)의 최종 HEAD로 재패키징·재공증** — `.app`=`e466e580-fddd-44de-bdbe-47c0953e8f79`·DMG=`2151eb74-a49d-449b-a2e8-63228a41bdfb` 둘 다 Accepted |
 | P6a-C5 | 릴리스 빌드에서 태그·버전 어긋나면 멈춤 | **충족** | T6 Step 10b: 태그를 일부러 어긋나게 하고 `--release` 실행 → electron-builder 앞에서 exit 1 확인 |
 | P6a-C6 | 디스크 부족 원인·복구 안내가 화면에 뜬다(worker job·embed·LLM 셋 + 업로드) | **충족(응답·계약 레벨) — 화면 렌더링 자체는 미관측** | worker job·embed: T10 Step3 실측(`DISK_FULL`, 사유 문구 그대로). LLM: 최초 부분 충족(5분 뒤 `llm_request_failed`로 거짓 표면화) → **R16 수정 후 4.88초에 `DISK_FULL`로 충족**(task-10-report.md §fix round). 업로드: T9가 FE 소비 로직을 unit·DOM 테스트로 고정하고 T10이 실제 API 응답이 그 모양(`{code:'DISK_FULL', free, needed:null}`)과 일치함을 소스 대조로 확인 — **실제 토스트 렌더링은 이 세션에 GUI 상호작용 권한이 없어 못 봤다**(T10 §7.1 Step1) |
 | P6a-C7 | 업로드 ENOSPC → 507, 잔재 없음 | **충족** | T8(2MB HFS+ 이미지로 실측, `dw-upload-*` 잔재 0), T10 Step1/2 실측 — 507 `{code:'DISK_FULL', free:20250624, needed:null}`, `new_meetings=0`, `new_jobs=0`, 임시 파일 0개 |
@@ -53,8 +53,8 @@
 | P6a-C10 | 두 번째 맥 온보딩→다운로드→처리 `done` | **진행 전 (T12)** | — |
 | P6a-C11 | 재빌드·재설치 후 TCC 마이크 권한·토큰 유지 | **진행 전 (T12)** — 스펙이 "이 Phase에서 가장 값진 기준"으로 꼽음 | — |
 | P6a-C12 | ad-hoc→Developer ID 전환에서 토큰이 1회 무효화되고 크래시 없이 온보딩으로 떨어짐 | **미판정 — 전제가 실측에서 발생하지 않았다** | T5 Step 8과 T10 Step3(세 차례 모델 로드, gated repo 인증 포함) 모두 **토큰이 무효화되지 않고 재입력 없이 그대로 작동**했다. 예고된 퇴행(§9) 자체가 안 일어났으므로 "크래시 없이 온보딩으로 떨어지는지"는 시험된 적이 없다. 왜 무효화되지 않는지 T5·T6·T10 공통으로 미해명 |
-| P6a-C13 | DMG 안 `.app`도 서명·공증·스테이플 살아있음 (`--release`) | **메커니즘 충족 확인(T6, C4와 같은 커밋 기준)** — 최종 발행판은 진행 전(T11) | DMG 마운트 후 내부 `.app`에 `spctl --assess`·`stapler validate`·`codesign -dv` 통과(T6). C4와 같은 이유로 T7~T10 미포함 |
-| P6a-C14 | `desktop-v<version>` 태그로 릴리스 발행, DMG+SHA-256 자산 | **진행 전 (T11)** | 태그 `desktop-v0.3.0`은 T6이 `dfd6c1a`에 로컬로만 만들었다(`git ls-remote --tags origin 'desktop-v*'` 빈 결과 확인). T11이 최종 HEAD로 재태깅 후 발행해야 한다(T6 RISK 메모) |
+| P6a-C13 | DMG 안 `.app`도 서명·공증·스테이플 살아있음 (`--release`) | **충족 (T11, 최종 발행판)** | T6은 C4와 같은 이유로 중간 산출물만 확인. T11의 최종 DMG(SHA-256 `4b38d343a075628f93b5ee0a4f6e4f86160d81ecc9e1695bd99593d25011db92`)를 마운트해 안의 `.app`까지 재검증 — 공증 Accepted 둘 다(위 C4) |
+| P6a-C14 | `desktop-v<version>` 태그로 릴리스 발행, DMG+SHA-256 자산 | **충족 (T11)** | 태그 `desktop-v0.3.0`을 최종 HEAD(SHA `1a1a90e1db74d4808b413c9c46c8768b675400cd`)로 재태깅 후 `gh release create`로 발행 — `https://github.com/Yjason-K/Damwha/releases/tag/desktop-v0.3.0`. DMG(sha256 `4b38d343a075628f93b5ee0a4f6e4f86160d81ecc9e1695bd99593d25011db92`) + `.sha256` 자산 첨부, 원격 `.sha256` 자산이 로컬 계산값과 일치함을 컨트롤러가 확인. **발행 직후 부작용 발견 — §8** |
 
 ## 3. 뒤집힌·추가된 판정 (Ruling)
 
@@ -178,13 +178,19 @@ Task 10 작업 중 실제 개발 DB·저장소가 두 차례 오염됐다. 둘 �
   재발급 인증서가 다른 identity가 돼 기존 사용자의 TCC 마이크 권한·`safeStorage` 토큰이 전부
   무효화된다(같은 §12).
 
-## 6. Task 11·Task 12 — 진행 전
+## 6. Task 11·Task 12
 
-Ruling R19에 따라 순서가 13 → 11 → 12 → 13 보충으로 바뀌었다. 이 절은 **의도적으로 비워
-둔다** — T11(릴리스 발행, 태그 `desktop-v0.3.0`을 최종 HEAD로 재태깅 후 재패키징·재공증·
-`gh release create`)과 T12(두 번째 맥 종단간 검증, P6a-C9~C11)의 결과는 추측하지 않는다.
-두 Task가 끝난 뒤 이 문서에 짧은 보충 커밋으로 채운다 — §2의 C4·C9·C10·C11·C13·C14와 §5의
-세 제약이 그 보충의 대상이다.
+Ruling R19에 따라 순서가 13 → 11 → 12 → 13 보충으로 바뀌었다.
+
+**T11(릴리스 발행)은 끝났다.** 태그 `desktop-v0.3.0`을 최종 HEAD(SHA
+`1a1a90e1db74d4808b413c9c46c8768b675400cd`)로 재태깅 후 재패키징·재공증·`gh release create`로
+발행했다 — 결과는 위 §2의 C4·C13·C14. **발행 직후 부작용이 하나 발견됐다** — 이 릴리스가
+저장소의 "Latest"를 차지해 셀프호스팅 웹 배포의 버전 조회(`deploy/Makefile`)가 깨지는
+사이드 이펙트다. 사실관계·완화·근본 수정은 §8.
+
+**T12(두 번째 맥 종단간 검증, P6a-C9~C11)는 여전히 진행 전이다** — 이 절은 그 결과를
+추측하지 않는다. 끝난 뒤 이 문서에 짧은 보충 커밋으로 채운다 — §2의 C9·C10·C11과 §5의 세
+제약이 그 보충의 대상이다.
 
 ## 7. Task 10 상세 — packaged 통합 검증 (원문, Task 10 구현자 작성)
 
@@ -584,3 +590,64 @@ fix round 1 절에 있다. 요지:
 있던 것)로 확인했다. ruff check/format 클린. `desktop/out`을 재패키징하고(백그라운드,
 로그 파일) 번들 소스에 `run_guarding_disk_full`이 실제로 들어갔는지, 앱이 떠서 worker가
 준비에 닿는지 값싸게 확인했다 — 상세는 task-10-report.md.
+
+## 8. T11 부작용 — 데스크톱 릴리스가 저장소 Latest를 차지해 웹 배포 버전 조회가 깨짐
+
+### 8.1 무엇이 깨졌나
+
+`desktop-v0.3.0`을 `gh release create`로 발행하자(§6·§2 C14) — 이 릴리스는 drafts·prerelease가
+아니므로 GitHub이 자동으로 저장소의 "Latest" 릴리스로 지정했다. `deploy/Makefile`의 `setup`
+타깃(151행 근처)은 `.env`의 `DAMWHA_VERSION`을 최신 버전으로 맞추는 로직에서
+`gh release view -R $(REPO)` — **태그 없이** — 를 부른다. 이 호출은 "저장소의 Latest"를 받는다.
+
+```
+@if command -v gh >/dev/null && latest=$$(gh release view -R $(REPO) --json tagName -q .tagName 2>/dev/null); then \
+  latest=$${latest#v}; cur=$$(sed -n 's/^DAMWHA_VERSION=//p' .env | tail -1); \
+  if [ "$$cur" != "$$latest" ]; then \
+    sed -i.bak "s/^DAMWHA_VERSION=.*/DAMWHA_VERSION=$$latest/" .env && rm -f .env.bak; \
+```
+
+Latest가 `desktop-v0.3.0`이 되자 `latest="desktop-v0.3.0"` → `$${latest#v}`는 **맨 앞의** `v` 하나만
+떼는 셸 파라미터 확장이라 문자열이 그대로 남는다 → `.env`에
+`DAMWHA_VERSION=desktop-v0.3.0`이 쓰인다. 이 값은 셀프호스팅 웹 배포가 이미지 태그로 쓰는
+값이라 — 존재하지 않는 태그를 가리켜 웹 배포가 깨진다. `.env`가 이미 있는 설치에도 이 줄은
+매번 돌므로, 기존 설치도 `make setup`을 다시 돌리면 덮어써진다.
+
+### 8.2 왜 계획·리뷰가 못 봤나
+
+웹 배포(`v<version>`)와 데스크톱 배포(`desktop-v<version>`)를 다른 태그 네임스페이스로 가른
+이유는 desktop/CLAUDE.md(Task 13, §61 서명·배포 절)에 이미 적혀 있었다 — "섞으면
+`deploy/release.sh`가 태그 버전을 `be/worker/pyproject.toml`과 대조해 거절하고, 6b의 자동
+업데이트 조회가 웹 배포를 가리켜 앱이 사용자에게 tarball을 권하게 된다." 이 문장은 **데스크톱
+쪽 조회가 웹 릴리스에 흔들리는 방향**만 봤다. 반대 방향 — **웹 쪽 조회(`deploy/Makefile`)가
+데스크톱 릴리스에 흔들리는 방향** — 은 계획·스펙·리뷰 어디에도 없었다. `deploy/Makefile`은
+Phase 6a(데스크톱 서명·배포)의 변경 범위 밖이라 이번 Task들의 리뷰 대상이 아니었고, 첫
+데스크톱 릴리스가 나기 전에는 "저장소 Latest"가 항상 웹 배포였으므로 실제로 문제가 드러난
+적도 없었다.
+
+### 8.3 즉시 완화
+
+컨트롤러가 `gh release edit v0.2.3 -R Yjason-K/Damwha --latest` 로 `v0.2.3`을 다시 저장소
+Latest로 되돌렸다. 지금은 `make setup`이 정상 동작한다. 하지만 이 완화는 **다음 데스크톱
+릴리스가 나오면 그대로 재발한다** — 근본 원인(태그 없는 `gh release view`가 네임스페이스를
+가리지 않는다)이 그대로이기 때문이다.
+
+### 8.4 근본 수정 (이 커밋)
+
+세 곳을 고쳤다.
+
+1. **`deploy/Makefile`** — `setup` 타깃의 버전 조회를 저장소 Latest에 기대지 않고, `gh release
+   list`로 받은 태그 목록에서 `v`로 시작하는 것만 걸러 그중 가장 최신(목록의 첫 줄 — 정렬이
+   최신 먼저임을 실측으로 확인, §T11b 보고서 참고)을 쓰도록 바꿨다. `desktop-v0.3.0`은 `v`로
+   시작하지 않으므로 걸러진다. 기존 동작(`gh release view`는 draft·prerelease를 Latest로 안
+   준다)과 맞추기 위해 `--exclude-drafts --exclude-pre-releases`도 유지했다.
+2. **`desktop/CLAUDE.md`** — 데스크톱 릴리스 발행 절차에 `gh release create ... --latest=false`를
+   더하고, 이유(저장소의 Latest는 웹 배포의 것 — Latest를 빼앗으면 웹 쪽 조회가 흔들린다;
+   2026-09-21 `desktop-v0.3.0` 발행 때 실제로 일어나 `v0.2.3`을 Latest로 되돌렸다)를 적었다.
+   Makefile 수정이 웹 쪽을 이미 지키더라도 둘 다 둔다 — 이중 방어다.
+3. **이 결과 문서** — §8(지금 이 절)과 §2·§6의 T11 결과 갱신.
+
+이번 릴리스(`desktop-v0.3.0`)의 공개 상태는 건드리지 않았다 — `v0.2.3`이 여전히 Latest이고,
+`desktop-v0.3.0`은 여전히 발행된 상태 그대로다. 다음 데스크톱 릴리스부터 `--latest=false`로
+내면(2번) 애초에 Latest를 빼앗지 않고, 설령 실수로 빼앗기더라도 Makefile의 `v*` 필터(1번)가
+웹 배포 조회를 지킨다.

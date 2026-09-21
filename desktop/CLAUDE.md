@@ -85,6 +85,13 @@ Developer ID로 서명하고 공증까지 마친 DMG로 배포한다. ad-hoc은 
   (셀프호스팅 웹 배포, `v0.1.1`~`v0.2.3` 실재)과 다르다. 섞으면 그 스크립트가 태그 버전을
   `be/worker/pyproject.toml`과 대조해 거절하고, 6b의 업데이트 조회가 웹 배포를 가리켜 앱이
   사용자에게 tarball을 권하게 된다.
+- **데스크톱 릴리스는 `gh release create ... --latest=false`로 낸다.** 저장소의 "Latest"는
+  웹 배포의 것이다 — `--latest=false` 없이 내면 데스크톱 릴리스가 Latest를 빼앗고,
+  `deploy/Makefile`의 `setup`(태그 없는 `gh release view`로 저장소 Latest를 읽어 웹 배포의
+  `.env`에 `DAMWHA_VERSION`을 채운다)이 `desktop-v<version>`을 그대로 웹 배포 버전으로
+  써 버린다. 2026-09-21 `desktop-v0.3.0` 발행 때 실제로 이 일이 일어나 웹 배포가 존재하지
+  않는 이미지 태그를 가리켰고, `gh release edit v0.2.3 --latest`로 되돌려야 했다
+  (`deploy/Makefile`도 `v*` 태그만 고르도록 근본 수정했지만, 이중 방어로 여기서도 막는다).
 - **최소 macOS 15.0을 세 자리가 같은 값으로 강제한다** — `scripts/lib/build-target.sh`의
   `MACOSX_DEPLOYMENT_TARGET`(postgres·ffmpeg 소스 빌드가 source), `electron-builder.yml`의
   `LSMinimumSystemVersion`, `scripts/lib/minos.mjs`의 `MAX_MINOS`(`check-bundle`이 번들 Mach-O
