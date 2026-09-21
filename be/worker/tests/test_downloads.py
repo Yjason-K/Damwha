@@ -21,7 +21,7 @@ import pytest
 from damwha_worker import db, errors
 from damwha_worker.db import core
 from damwha_worker.errors import ErrorKind
-from damwha_worker.models import downloads
+from damwha_worker.models import disk, downloads
 
 hub = pytest.importorskip("huggingface_hub")
 from huggingface_hub import _snapshot_download, file_download  # noqa: E402
@@ -292,6 +292,49 @@ def test_local_files_only_calls_pass_through(stub_download, hook_db, conn):
 
     assert calls[-1]["tqdm_class"] is None
     assert hook_db == []
+
+
+def test_disk_check_runs_even_when_tqdm_class_bypasses_progress_watching(
+    stub_download, hook_db, conn, monkeypatch
+):
+    """`tqdm_class`를 명시한 호출은 진행 감시(`_run_watched`)를 건너뛰지만 디스크는 똑같이 쓴다
+    (Task 7 브리프, faster-whisper의 `disabled_tqdm`이 실제 예). 점검이 그 우회 분기 아래로
+    밀리면 이 호출에서는 다시는 불리지 않는다."""
+    calls, _ = stub_download
+    checked = []
+    monkeypatch.setattr(downloads, "_needed_bytes", lambda repo_id: 1)
+    monkeypatch.setattr(
+        disk, "check_free_space", lambda dest, needed: checked.append((dest, needed))
+    )
+    downloads.install_hf_progress_hook("w1")
+
+    class Mine:
+        def __init__(self, *a, **kw):
+            pass
+
+        def update(self, n=1):
+            pass
+
+        def close(self):
+            pass
+
+    hub.hf_hub_download("org/m", "f.bin", tqdm_class=Mine)
+
+    assert calls[-1]["tqdm_class"] is Mine  # 여전히 우회된다 — 점검만 추가로 불렸는지 본다
+    assert checked == [(hub_constants.HF_HUB_CACHE, 1)]
+
+
+def test_disk_check_is_skipped_for_local_files_only(stub_download, hook_db, conn, monkeypatch):
+    """오프라인 호출(`local_files_only=True`)은 디스크를 안 쓰므로 점검하지 않는다."""
+    checked = []
+    monkeypatch.setattr(
+        disk, "check_free_space", lambda dest, needed: checked.append((dest, needed))
+    )
+    downloads.install_hf_progress_hook("w1")
+
+    hub.hf_hub_download("org/m", "f.bin", local_files_only=True)
+
+    assert checked == []
 
 
 def test_bytes_are_counted_only_for_byte_bars(stub_download, hook_db, conn):
