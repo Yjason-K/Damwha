@@ -1,12 +1,18 @@
 import { ArgumentsHost, NotFoundException } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { DiskFullFilter } from '../src/storage/disk-full.filter';
+import { UPLOAD_TEMP_FILENAME_KEY } from '../src/storage/upload-options';
 
 // @nestjs/common 10.4.x의 HttpStatus enum에는 507(INSUFFICIENT_STORAGE)이 없다
 // (이 패키지의 enums/http-status.enum.d.ts를 확인). 필터 쪽도 같은 이유로 숫자 리터럴을 쓴다.
 const INSUFFICIENT_STORAGE = 507;
 
-function hostWith(): { host: ArgumentsHost; sent: { status?: number; body?: unknown } } {
+// req는 정리 로직(tempFileOf)이 읽는 요청 스코프 값을 흉내낸다 — 기본은 빈 객체
+// (=업로드 경로가 아닌 요청, 심어 둔 파일명이 없다).
+function hostWith(req: Record<string, unknown> = {}): { host: ArgumentsHost; sent: { status?: number; body?: unknown } } {
   const sent: { status?: number; body?: unknown } = {};
   const res = {
     status(code: number) { sent.status = code; return this; },
@@ -16,7 +22,7 @@ function hostWith(): { host: ArgumentsHost; sent: { status?: number; body?: unkn
   // getArgByIndex(1)로 응답 객체를 얻는다 (@nestjs/core 10.4.x 실제 구현 확인).
   // 델리게이션을 실제로 도는 테스트(HttpException 케이스)를 위해 둘 다 채운다.
   const host = {
-    switchToHttp: () => ({ getResponse: () => res }),
+    switchToHttp: () => ({ getResponse: () => res, getRequest: () => req }),
     getArgByIndex: (i: number) => (i === 1 ? res : undefined),
   } as unknown as ArgumentsHost;
   return { host, sent };
@@ -40,7 +46,9 @@ describe('DiskFullFilter', () => {
     const err = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
     new DiskFullFilter().catch(err, host);
     expect(sent.status).toBe(INSUFFICIENT_STORAGE);
-    expect((sent.body as { code: string }).code).toBe('DISK_FULL');
+    // 리뷰 라운드 1(Important 2): code만 보면 Task 9가 기대는 needed===null 계약이
+    // CI로 안 잡힌다 — 응답 바디 전체 모양을 고정한다.
+    expect(sent.body).toEqual({ code: 'DISK_FULL', free: expect.any(Number), needed: null });
   });
 
   it('multer가 감싼 ENOSPC도 잡는다 — code가 cause에 있다', () => {
@@ -95,5 +103,53 @@ describe('DiskFullFilter', () => {
     adapterHost.httpAdapter = fakeHttpAdapter as never; // createNestApplication()이 나중에 채운다
     expect(() => filter.catch(new NotFoundException('없어요'), host)).not.toThrow();
     expect(sent.status === undefined || sent.status === 404).toBe(true);
+  });
+
+  // 리뷰 라운드 1(Important 1, Ruling R15): 브리프의 tempFileOf(exception)는 exception.path를
+  // 봤는데, 2MB HFS+ 이미지로 재현한 실제 ENOSPC 에러는 {errno, code, syscall}만 들고
+  // .path가 없어(open()류 에러에만 붙는다) 정리가 절대 안 도는 죽은 코드였다. multer의
+  // filename 콜백이 쓰기 시작 전에 req[UPLOAD_TEMP_FILENAME_KEY]에 파일명을 심어 두는
+  // 방식으로 고쳤다 — 이 테스트가 그 경로를 고정한다. 살아있는 서버 + 가득 찬 디스크
+  // 장치로도 재확인했다(task-8-report.md fix report 참고).
+  it('예외의 .path가 아니라 요청에 심어 둔 파일명으로 임시 파일을 지운다', () => {
+    const filename = `dw-upload-${process.pid}-${Date.now()}`;
+    const filepath = path.join(os.tmpdir(), filename);
+    fs.writeFileSync(filepath, 'partial upload bytes');
+    const { host, sent } = hostWith({ [UPLOAD_TEMP_FILENAME_KEY]: filename });
+    // 실제 ENOSPC 에러 모양 그대로 — .path가 없다.
+    const err = Object.assign(new Error('ENOSPC: no space left on device, write'), {
+      errno: -28,
+      code: 'ENOSPC',
+      syscall: 'write',
+    });
+    expect(fs.existsSync(filepath)).toBe(true);
+    new DiskFullFilter().catch(err, host);
+    expect(fs.existsSync(filepath)).toBe(false);
+    expect(sent.status).toBe(INSUFFICIENT_STORAGE);
+  });
+
+  it('요청에 심어 둔 파일명이 없으면 정리를 건너뛴다 (예: 실패가 업로드 경로 밖에서 났을 때)', () => {
+    const { host, sent } = hostWith(); // 기본값: req에 UPLOAD_TEMP_FILENAME_KEY 없음
+    const err = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    expect(() => new DiskFullFilter().catch(err, host)).not.toThrow();
+    expect(sent.status).toBe(INSUFFICIENT_STORAGE);
+  });
+
+  it('요청에 심어 둔 파일만 지우고, tmpdir의 다른 파일은 건드리지 않는다', () => {
+    const ownName = `dw-upload-${process.pid}-${Date.now()}-own`;
+    const otherName = `dw-upload-${process.pid}-${Date.now()}-other`;
+    const ownPath = path.join(os.tmpdir(), ownName);
+    const otherPath = path.join(os.tmpdir(), otherName);
+    fs.writeFileSync(ownPath, '이 요청의 부분 업로드');
+    fs.writeFileSync(otherPath, '다른 요청의 파일 — 지워지면 안 된다');
+    try {
+      const { host } = hostWith({ [UPLOAD_TEMP_FILENAME_KEY]: ownName });
+      const err = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+      new DiskFullFilter().catch(err, host);
+      expect(fs.existsSync(ownPath)).toBe(false);
+      expect(fs.existsSync(otherPath)).toBe(true);
+    } finally {
+      fs.rmSync(otherPath, { force: true });
+    }
   });
 });

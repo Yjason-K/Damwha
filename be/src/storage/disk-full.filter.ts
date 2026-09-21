@@ -2,6 +2,8 @@ import { ArgumentsHost, Catch, Logger } from '@nestjs/common';
 import { BaseExceptionFilter, HttpAdapterHost } from '@nestjs/core';
 import * as fs from 'fs';
 import * as os from 'os';
+import * as path from 'path';
+import { UPLOAD_TEMP_FILENAME_KEY } from './upload-options';
 
 /**
  * 업로드 중 디스크가 찬 것(ENOSPC)을 507로 바꾼다 (Electron Phase 6a 스펙 §8.2).
@@ -21,6 +23,20 @@ import * as os from 'os';
  *
  * **507을 숫자 리터럴로 쓴다.** 설치된 @nestjs/common(10.4.x)의 `HttpStatus` enum에
  * `INSUFFICIENT_STORAGE`가 없다 (enums/http-status.enum.d.ts 확인 — 505까지만 있다).
+ *
+ * **임시 파일 정리는 예외의 `.path`가 아니라 요청 스코프에 심어 둔 파일명을 쓴다.**
+ * 2MB HFS+ 이미지로 실제 ENOSPC를 재현해 보면(디스크가 찬 채 `write()` 실패) 그 fs
+ * 에러는 `{errno, code, syscall}`만 들고 있고 `.path`가 없다 — `.path`는 `open()`류
+ * 에러에만 붙는다(Node 소스·실측 둘 다 확인). `upload-options.ts`의 `filename` 콜백이
+ * (쓰기가 시작되기 **전**, 그래서 ENOSPC보다 항상 먼저) `req[UPLOAD_TEMP_FILENAME_KEY]`에
+ * 그 요청의 임시 파일명을 심어 두고, 여기서 그걸 읽어 `os.tmpdir()`과 합쳐 경로를
+ * 되살린다 — 이름이 `crypto.randomUUID()`로 유일해서 다른 요청의 파일을 지울 일이 없다.
+ *
+ * 리뷰 라운드 1(Important 1, Ruling R15): 처음엔 브리프의 `.path` 기반 코드를 그대로
+ * 옮겼는데, 위 실측으로 그게 **이 필터가 존재하는 바로 그 시나리오에서 절대 안 도는
+ * 죽은 코드**라는 게 드러났다 — 디스크가 찬 채 실패한 업로드마다 `dw-upload-*`가
+ * `os.tmpdir()`에 쌓이는 채로 방치될 뻔했다. 요청 스코프 방식으로 바꾸고, 같은 2MB
+ * 장치로 파일이 실제로 안 남는 것까지 재확인했다(task-8-report.md 참고).
  *
  * **생성자가 `HttpAdapterHost` 그 자체를 받아 `this.httpAdapterHost`에 저장한다 —
  * `.httpAdapter` 값을 미리 꺼내 저장하지 않는다.** `app.module.ts`의 `useFactory`는
@@ -62,7 +78,7 @@ export class DiskFullFilter extends BaseExceptionFilter {
     }
 
     // multer가 반쯤 쓴 임시 파일을 지운다. 디스크가 찬 판에 남겨 두면 다음 시도도 진다.
-    const file = tempFileOf(exception);
+    const file = tempFileOf(host);
     if (file !== null) {
       try {
         fs.rmSync(file, { force: true });
@@ -94,10 +110,15 @@ function isNoSpace(e: unknown): boolean {
   return code(e) === 'ENOSPC' || code((e as { cause?: unknown }).cause) === 'ENOSPC';
 }
 
-function tempFileOf(e: unknown): string | null {
-  if (e === null || typeof e !== 'object') return null;
-  const p = (e as { path?: unknown }).path;
-  return typeof p === 'string' && p.includes('dw-upload-') ? p : null;
+/** 요청 스코프에 심어 둔 파일명으로 되살린다 — 예외의 `.path`는 실제 ENOSPC엔 없다(위 주석). */
+function tempFileOf(host: ArgumentsHost): string | null {
+  try {
+    const req = host.switchToHttp().getRequest<Record<string, unknown>>();
+    const name = req?.[UPLOAD_TEMP_FILENAME_KEY];
+    return typeof name === 'string' ? path.join(os.tmpdir(), name) : null;
+  } catch {
+    return null;
+  }
 }
 
 function freeBytes(dir: string): number {
