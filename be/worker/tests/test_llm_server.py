@@ -608,6 +608,90 @@ def test_the_two_public_signatures_do_not_change():
     ]
 
 
+# ── DISK_FULL이 요청 스레드 안에서 삼켜지는 것을 막는다 (Ruling R16, task-10 정정) ──
+#
+# `mlx_lm.server`의 모델 지연 로드는 요청 처리 스레드 안에서 일어난다. `check_free_space`가
+# 거기서 WorkerError(DISK_FULL, ...)를 던져도 파이썬 기본 스레드 예외 처리기가 stderr에
+# 찍고 삼킨다 — fn(HTTP 클라이언트의 블로킹 호출)에는 닿지 않고, job은
+# `lens_llm_timeout_seconds`(5분)를 다 기다린 뒤에야 `llm_request_failed`로 실패한다
+# (2026-09-21 task-10 packaged 실측). `run_guarding_disk_full`이 그 자리를 메운다.
+
+
+class _LineStderr:
+    """`proc.stderr`처럼 줄 단위로 이터레이트되는 대역. `feed()`로 나중에 채울 수 있다."""
+
+    def __init__(self, lines: list[str] | None = None):
+        self._lines = list(lines or [])
+
+    def __iter__(self):
+        return iter(self._lines)
+
+
+_DISK_FULL_TRACEBACK_LINE = (
+    "damwha_worker.errors.WorkerError: DISK_FULL: "
+    "디스크 공간이 부족해요 — 남은 용량 8.0 MB, 필요한 용량 6.2 GB.\n"
+)
+
+
+class _ProcWithStderr:
+    def __init__(self, lines: list[str] | None = None):
+        self.stderr = _LineStderr(lines)
+
+
+def test_run_guarding_disk_full_returns_the_result_when_nothing_matches():
+    proc = _ProcWithStderr(["INFO: some ordinary startup line\n"])
+    assert ls.run_guarding_disk_full(proc, lambda: "ok") == "ok"
+
+
+def test_run_guarding_disk_full_falls_back_to_calling_fn_directly_without_a_proc():
+    """외부 서버 재사용(proc=None)이나 stderr 없는 대역이면 감시 없이 fn을 그대로 돈다."""
+    calls = []
+    assert ls.run_guarding_disk_full(None, lambda: calls.append(1) or "ok") == "ok"
+    assert calls == [1]
+
+    class _NoStderrProc:
+        pass
+
+    assert ls.run_guarding_disk_full(_NoStderrProc(), lambda: "ok2") == "ok2"
+
+
+def test_run_guarding_disk_full_propagates_other_errors_unchanged():
+    """DISK_FULL이 아닌 실패는 이 함수가 생기기 전과 똑같이 fn을 통해 그대로 올라온다."""
+    proc = _ProcWithStderr(["INFO: normal log line\n"])
+    original = WorkerError("llm_request_failed", "timed out", ErrorKind.PERMANENT)
+
+    def _boom():
+        raise original
+
+    with pytest.raises(WorkerError) as exc:
+        ls.run_guarding_disk_full(proc, _boom)
+    assert exc.value is original  # 새 경로로 갈아치우지 않는다
+
+
+def test_run_guarding_disk_full_raises_disk_full_without_waiting_for_fn():
+    """fn이 응답을 영원히 기다리는 동안에도, stderr의 DISK_FULL 서명이 보이면 즉시 실패한다."""
+    import threading as _threading
+    import time as _time
+
+    proc = _ProcWithStderr([_DISK_FULL_TRACEBACK_LINE])
+    never = _threading.Event()
+
+    def _hangs_forever():
+        never.wait(30)  # 실제 httpx 요청이 5분 타임아웃까지 기다리는 것과 같은 모양
+        return "should never get here"
+
+    start = _time.monotonic()
+    with pytest.raises(WorkerError) as exc:
+        ls.run_guarding_disk_full(proc, _hangs_forever)
+    elapsed = _time.monotonic() - start
+
+    assert exc.value.code == "DISK_FULL"
+    assert exc.value.kind is ErrorKind.PERMANENT
+    # 문구를 새로 짓지 않는다 — 트레이스백 줄에서 그대로 잘라낸 것과 바이트 단위로 같다.
+    assert exc.value.message == "디스크 공간이 부족해요 — 남은 용량 8.0 MB, 필요한 용량 6.2 GB."
+    assert elapsed < 3.0  # 30초 대기 중 즉시 — 5분 타임아웃을 기다리지 않는다
+
+
 def test_the_supervisor_judgment_fires_after_the_worker_watchdog():
     """Task 9b의 무진행 90초가 이 판정 120초보다 **먼저** 끝난다.
 

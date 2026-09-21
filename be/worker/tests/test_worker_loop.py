@@ -713,6 +713,124 @@ def test_summarize_meeting_runs_inside_llm_server_for_the_payload_model(conn, tm
     assert spy.entered == spy.exited == 1
 
 
+class _StderrProc:
+    """워커가 띄운 LLM 서버 대역 — `terminate()`와 감시 대상 `.stderr`만 흉내 낸다."""
+
+    def __init__(self, lines):
+        self.stderr = iter(lines)
+        self.terminated = False
+
+    def terminate(self):
+        self.terminated = True
+
+
+def test_summarize_meeting_fails_fast_on_disk_full_swallowed_in_the_request_thread(conn, tmp_path):
+    """Ruling R16 회귀 (task-10 정정, 2026-09-21).
+
+    `mlx_lm.server`가 요청 스레드 안에서 삼킨 DISK_FULL도 `lens_llm_timeout_seconds`(5분)를
+    기다리지 않고 그 자리에서 DISK_FULL로 실패해야 한다 — 이 테스트가 고치기 전에는
+    `Client.summarize`가 응답 없이 계속 기다리는 동안 `handle_job`도 똑같이 멈춰 있었다.
+    """
+    import time as _time
+
+    from damwha_worker.contracts import SummaryResponse
+
+    _seed_summary_job(conn)
+    job = db.claim(conn, "w1")
+    disk_full_line = (
+        "damwha_worker.errors.WorkerError: DISK_FULL: "
+        "디스크 공간이 부족해요 — 남은 용량 8.0 MB, 필요한 용량 6.2 GB.\n"
+    )
+    proc = _StderrProc([disk_full_line])
+    spy = _SpyLlmServerWithProc(proc)
+    never = threading.Event()
+
+    class Client:
+        def summarize(self, *, model, utterances, validate=None):
+            never.wait(20)  # 삼켜진 요청 스레드처럼 응답 없이 계속 기다린다
+            return SummaryResponse()
+
+    start = _time.monotonic()
+    outcome = handle_job(
+        conn,
+        job,
+        Storage(str(tmp_path)),
+        "w1",
+        build_summary_client=lambda: Client(),
+        llm_server=spy,
+    )
+    elapsed = _time.monotonic() - start
+
+    assert outcome == "failed"
+    assert elapsed < 5.0  # 20초 대기 중 즉시 — 5분 타임아웃을 기다리지 않는다
+    row = conn.execute("SELECT error FROM job WHERE id=%s", (job["id"],)).fetchone()
+    assert row["error"]["code"] == "DISK_FULL"
+    assert "디스크 공간이 부족해요" in row["error"]["message"]
+
+
+def test_extract_lenses_fails_fast_on_disk_full_swallowed_in_the_request_thread(conn, tmp_path):
+    """Ruling R16 회귀, extract_lenses 쪽 (task-10 정정, 2026-09-21).
+
+    extract_lenses도 summarize_meeting과 같은 `managed_llm_server`/`mlx_lm.server`를 거치고
+    같은 요청 스레드 안 지연 로드를 겪는다 — 완전성 확인: `jobs.py`의 두 LLM 호출 지점
+    (`ExtractLensesHandler`·`SummarizeMeetingHandler`) 중 하나만 고치면 이 job type은 여전히
+    5분을 기다린다.
+    """
+    import time as _time
+
+    mid = seed_meeting(conn, status="done", processing_version=0)
+    conn.execute(
+        """INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,text,status,
+                                  order_index,processing_version)
+           VALUES (%s,'S0',0,1000,'extract this','ok',0,0)""",
+        (mid,),
+    )
+    run_id = conn.execute(
+        """INSERT INTO lens_extraction_run(meeting_id,processing_version,status,model)
+           VALUES (%s,0,'queued','repo/lens-a') RETURNING id""",
+        (mid,),
+    ).fetchone()["id"]
+    payload = {
+        "schema_version": 1,
+        "meeting_id": mid,
+        "processing_version": 0,
+        "extraction_run_id": run_id,
+        "model": "repo/lens-a",
+    }
+    jid = seed_job(conn, type="extract_lenses", meeting_id=mid, payload=payload)
+    conn.execute("UPDATE lens_extraction_run SET job_id=%s WHERE id=%s", (jid, run_id))
+    job = db.claim(conn, "w1")
+    disk_full_line = (
+        "damwha_worker.errors.WorkerError: DISK_FULL: "
+        "디스크 공간이 부족해요 — 남은 용량 8.0 MB, 필요한 용량 40.4 MB.\n"
+    )
+    proc = _StderrProc([disk_full_line])
+    spy = _SpyLlmServerWithProc(proc)
+    never = threading.Event()
+
+    class Client:
+        def extract(self, *, model, utterances, meeting_date=None):
+            never.wait(20)  # 삼켜진 요청 스레드처럼 응답 없이 계속 기다린다
+            return []
+
+    start = _time.monotonic()
+    outcome = handle_job(
+        conn,
+        job,
+        Storage(str(tmp_path)),
+        "w1",
+        build_lens_client=lambda: Client(),
+        llm_server=spy,
+    )
+    elapsed = _time.monotonic() - start
+
+    assert outcome == "failed"
+    assert elapsed < 5.0  # 20초 대기 중 즉시 — 5분 타임아웃을 기다리지 않는다
+    row = conn.execute("SELECT error FROM job WHERE id=%s", (job["id"],)).fetchone()
+    assert row["error"]["code"] == "DISK_FULL"
+    assert "디스크 공간이 부족해요" in row["error"]["message"]
+
+
 def test_process_meeting_never_starts_the_llm_server(conn, tmp_path, monkeypatch):
     _stub_ffmpeg(monkeypatch)
     _enqueue_pm(conn)

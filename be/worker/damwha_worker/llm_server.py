@@ -15,6 +15,7 @@ import logging
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -25,7 +26,7 @@ import httpx
 from . import runtime_report
 from .config import READINESS_STALL_SECONDS
 from .db import core
-from .errors import LLM_SERVER_START_FAILED, ErrorKind, WorkerError
+from .errors import DISK_FULL, LLM_SERVER_START_FAILED, ErrorKind, WorkerError
 
 log = logging.getLogger("damwha_worker")
 
@@ -143,7 +144,11 @@ def managed_llm_server(
             host,
             "--port",
             str(port),
-        ]
+        ],
+        # stderr을 파이프로 받는다 — run_guarding_disk_full이 DISK_FULL 서명을 감시할 수
+        # 있게(Ruling R16). 감시자가 읽은 줄은 그대로 우리 stderr로 다시 쓰므로(그 함수
+        # 참고) 로그 가시성은 그대로다. 대역 popen은 이 kwarg를 무시한다.
+        stderr=subprocess.PIPE,
     )
     try:
         _wait_ready(proc, model, settings, probe, monotonic, sleep)
@@ -280,3 +285,80 @@ def _wait_ready(proc, model, settings, probe, monotonic, sleep) -> None:
                 conn.close()
             except Exception:  # noqa: BLE001 — 닫기 실패가 결과를 바꾸지 않는다
                 log.debug("closing the model_readiness connection failed", exc_info=True)
+
+
+_DISK_FULL_MARKER = f"damwha_worker.errors.WorkerError: {DISK_FULL}: "
+_DISK_FULL_WATCH_POLL_SECONDS = 0.1
+
+
+def run_guarding_disk_full(proc, fn):
+    """`fn()`을 돌리되, 워커가 띄운 LLM 서버(`proc`)의 stderr에 DISK_FULL이 보이면
+    `fn`의 응답을 기다리지 않고 그 자리에서 같은 사유로 실패시킨다 (Ruling R16, 2026-09-21
+    task-10 정정).
+
+    **왜 필요한가.** `mlx_lm.server`의 모델 지연 로드는 요청을 처리하는 스레드 안에서
+    일어난다. `models/downloads.py`의 `check_free_space`가 그 스레드 안에서
+    `WorkerError(DISK_FULL, ...)`를 던져도 파이썬 기본 스레드 예외 처리기가 stderr에
+    찍고 삼킬 뿐 `fn`(HTTP 클라이언트의 블로킹 호출)에는 닿지 않는다 — packaged 실측:
+    job이 `lens_llm_timeout_seconds`(5분)를 다 기다린 뒤에야 `llm_request_failed`/
+    "timed out"으로 실패했고, 화면은 디스크 부족이 아니라 알 수 없는 타임아웃을 5분
+    보여줬다.
+
+    **그 스레드를 끊을 수는 없다** — `models/downloads.py`의 `_run_watched`와 같은
+    이유다(막힌 호출 자체를 파이썬에서 끊을 수단이 없다). 그래서 `fn`을 별도 스레드에서
+    돌리고 서버 stderr를 동시에 감시해, DISK_FULL 서명이 보이면 그 자리에서 실패시키고
+    `fn`을 돌리던 스레드는 daemon으로 버린다 — 인터프리터 종료를 막지 않고, 어차피
+    job은 이 실패로 끝난다.
+
+    **DISK_FULL만 잡는다.** stderr에서 그 서명을 못 찾으면 `fn`이 정상적으로 끝나거나
+    던질 때까지 평소대로 기다린다 — 다른 실패 경로(타임아웃·연결 오류 등)는 이 함수가
+    생기기 전과 똑같이 `fn`을 통해 그대로 올라온다. 사유를 넓게 걸면 정확한 사유가
+    부정확해지고 기존 동작이 바뀐다.
+
+    **문구를 짓지 않는다.** 잡은 메시지는 `damwha_worker.errors.WorkerError` 트레이스백
+    줄에서 그대로 잘라낸 것이다 — `models/disk.py::check_free_space`가 이미
+    `desktop/src/diagnostics/causes.ts`의 `diskFull` 모양대로 만든 문자열이므로, 여기서는
+    그것을 한 글자도 새로 짓지 않고 그대로 다시 쓴다.
+
+    `proc`가 없거나(외부 서버 재사용) `.stderr`가 없으면(파이프를 안 받은 대역) 감시할
+    것이 없으니 `fn()`을 그 자리에서 그대로 돌린다 — 동작이 이 함수가 생기기 전과 같다.
+    """
+    stderr = getattr(proc, "stderr", None)
+    if proc is None or stderr is None:
+        return fn()
+
+    box: dict = {}
+    done = threading.Event()
+    disk_full = threading.Event()
+
+    def _run() -> None:
+        try:
+            box["value"] = fn()
+        except BaseException as exc:  # noqa: BLE001 — 호출자 스레드에서 그대로 다시 던진다
+            box["error"] = exc
+        finally:
+            done.set()
+
+    def _watch() -> None:
+        try:
+            for raw in stderr:
+                line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+                # 감시하는 동안에도 로그 가시성은 그대로 둔다 — 우리가 읽은 줄을 그대로
+                # 우리 stderr에 되쓴다(`--once` 자식의 stderr이고, 감독자가 그것을 캡처한다).
+                sys.stderr.write(line)
+                sys.stderr.flush()
+                if _DISK_FULL_MARKER in line and "message" not in box:
+                    box["message"] = line.split(_DISK_FULL_MARKER, 1)[1].rstrip("\r\n")
+                    disk_full.set()
+        except (ValueError, OSError):  # noqa: BLE001 — 파이프가 닫히면 그냥 끝난다
+            pass
+
+    threading.Thread(target=_run, daemon=True, name="damwha-llm-request").start()
+    threading.Thread(target=_watch, daemon=True, name="damwha-llm-stderr-watch").start()
+
+    while not done.wait(_DISK_FULL_WATCH_POLL_SECONDS):
+        if disk_full.is_set() and not done.is_set():
+            raise WorkerError(DISK_FULL, box["message"], ErrorKind.PERMANENT)
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
