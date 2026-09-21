@@ -556,6 +556,21 @@ def _run_watched(original, args, kwargs, report, key: str):
     return box["value"]
 
 
+def _needed_bytes(repo_id: str) -> int | None:
+    """저장소 전체 크기 × 여유 계수. 못 얻으면 None — 추정으로 막지 않는다."""
+    try:
+        from huggingface_hub import HfApi
+
+        info = HfApi().model_info(repo_id, files_metadata=True)
+        total = sum(s.size for s in (info.siblings or []) if s.size is not None)
+    except Exception:  # noqa: BLE001 — 크기를 모르는 것은 실패가 아니다
+        return None
+    if total <= 0:
+        return None
+    # 1.2배: 받는 동안 .incomplete 파일과 최종 파일이 잠깐 함께 있는다.
+    return int(total * 1.2)
+
+
 def _wrap(original):
     @functools.wraps(original)
     def hooked(*args, **kwargs):
@@ -570,6 +585,22 @@ def _wrap(original):
                 if is_cache_miss(exc):
                     attempt.misses += 1
                 raise
+
+        # (attempt 블록 뒤, `writer = _STATE.writer` 앞)
+        #
+        # **여기가 맞는 자리다**: 아래 우회 분기(tqdm_class·writer None·repo_id 비문자열)가
+        # _run_watched를 건너뛰므로 거기 두면 다운로드의 일부만 덮는다. 진행 보고와 달리
+        # 디스크는 모든 경로가 똑같이 쓴다.
+        #
+        # local_files_only·dry_run은 받지 않으므로 건너뛴다.
+        _repo = args[0] if args else kwargs.get("repo_id")
+        _skip_check = kwargs.get("local_files_only") or kwargs.get("dry_run")
+        if isinstance(_repo, str) and not _skip_check:
+            from huggingface_hub import constants as hub_constants
+
+            from .disk import check_free_space
+
+            check_free_space(hub_constants.HF_HUB_CACHE, _needed_bytes(_repo))
 
         writer = _STATE.writer
         repo_id = args[0] if args else kwargs.get("repo_id")
