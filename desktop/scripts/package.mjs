@@ -115,16 +115,35 @@ const macEnts = path.join(desktop, "build-resources", "entitlements.mac.plist");
 // Resources/python 아래 Mach-O는 build-python.sh가 이미 같은 plist로 개별 서명했으므로 여기서의
 // 재서명은 멱등이다. Resources/ffmpeg는 다르다 — build-ffmpeg.sh에는 서명 단계가 아예 없어서,
 // 이 줄이 없으면 ffmpeg/ffprobe는 링커 ad-hoc 서명만 가진 채 hardened runtime .app 안에 들어간다.
-function signAll(targets, entitlements, label) {
+//
+// Resources/postgres와 Contents/Frameworks도 같은 함수로 맡는다 — entitlements가 없으면
+// (`lib/signing.mjs`의 `codesign()` 기본값대로) hardened runtime도 꺼지므로, 이 트리들은
+// `opts.runtime`으로 명시해 뒤집는다:
+//   - Resources/postgres: runtime 없음. 별개 프로세스라 자기 서명의 플래그로 돈다(Global
+//     Constraints) — build-postgres.sh가 이미 ad-hoc(`-s -`)으로 서명해 뒀지만, check-bundle의
+//     7c(팀 식별자 전수 일치, P6a-C3/스펙 §6)는 이 트리도 포함한다. "서명이 있다"가 아니라
+//     "**우리** 서명이다"를 본다.
+//   - Contents/Frameworks: runtime 있음, entitlements 없음. "번들도, 번들의 메인 실행 파일도
+//     아닌" 느슨한 Mach-O를 .app --deep이 건너뛴다 — 실측(2026-09-21): Electron Framework의
+//     Libraries/libvk_swiftshader.dylib·libffmpeg.dylib, Squirrel.framework의 ShipIt 셋이
+//     .app --deep 뒤에도 adhoc(TeamIdentifier=not set)으로 남았다(--deep은 중첩 번들 자체는
+//     재서명해도 그 Resources 서브디렉터리에 흩어진 개별 파일까지 전수로 훑지는 않는다).
+//     ShipIt은 MH_EXECUTE라 runtime 없이 나가면 Apple 공증이 거절한다(리뷰 실측: `codesign -dv`
+//     flags=0x0(none)) — dylib 둘(MH_DYLIB)은 runtime을 같이 받아도 무해하다(hardened runtime
+//     플래그는 프로세스의 주 실행 파일에서 읽힌다), 그래서 파일별로 가르지 않는다.
+// 어느 쪽도 .app보다 먼저 둔다 — --deep이 다시 다루는 중첩 번들(Helper.app 등)은 뒤에서 올바른
+// entitlements로 덮어써 최종 상태가 같다(멱등).
+function signAll(targets, entitlements, label, opts = {}) {
   if (targets.length === 0) throw new Error(`서명 대상이 없다: ${label}`);
+  const runtime = opts.runtime ?? entitlements !== null;
   console.log(
-    `$ codesign --sign ${signing.identity} --options runtime --timestamp` +
-      ` --entitlements ${path.relative(desktop, entitlements)} — ${label} ${targets.length}개`,
+    `$ codesign --sign ${signing.identity}${runtime ? " --options runtime" : ""} --timestamp` +
+      `${entitlements !== null ? ` --entitlements ${path.relative(desktop, entitlements)}` : ""} — ${label} ${targets.length}개`,
   );
   // argv 길이 한계를 넘지 않게 끊어 부른다. execFileSync는 비0에 throw하므로 한 건이라도
   // 서명에 실패하면 패키징이 여기서 멈춘다.
   for (let i = 0; i < targets.length; i += 200) {
-    codesign(signing.identity, entitlements, targets.slice(i, i + 200));
+    codesign(signing.identity, entitlements, targets.slice(i, i + 200), { runtime });
   }
 }
 
@@ -132,41 +151,10 @@ const ffmpegBin = path.join(resources, "ffmpeg", "bin");
 const ffmpegTargets = fs.existsSync(ffmpegBin) ? fs.readdirSync(ffmpegBin).map((f) => path.join(ffmpegBin, f)) : [];
 signAll(machOFiles(path.join(resources, "python")), pythonEnts, "Resources/python Mach-O");
 signAll(ffmpegTargets, pythonEnts, "Resources/ffmpeg/bin");
-
-// Resources/postgres: identity만 우리 것으로 올린다. build-postgres.sh가 이미 ad-hoc(`-s -`)으로
-// 서명해 뒀지만(캐시가 그 상태로 굳어 있다), check-bundle의 7c(팀 식별자 전수 일치, P6a-C3/스펙
-// §6)는 이 트리도 포함한다 — "서명이 있다"가 아니라 "**우리** 서명이다"를 본다. **hardened
-// runtime은 걸지 않는다** — 별개 프로세스라 자기 서명의 플래그로 돌고, entitlements도 안 쓴다
-// (allow-jit 등은 이 트리가 쓰지 않는 권한이다).
-const pgMachos = machOFiles(path.join(resources, "postgres"));
-console.log(`$ codesign --sign ${signing.identity} --timestamp — Resources/postgres Mach-O ${pgMachos.length}개`);
-for (let i = 0; i < pgMachos.length; i += 200) {
-  execFileSync(
-    "codesign",
-    ["--force", "--sign", signing.identity, "--timestamp", ...pgMachos.slice(i, i + 200)],
-    { cwd: desktop, stdio: "inherit" },
-  );
-}
-
-// Contents/Frameworks 아래 "번들도, 번들의 메인 실행 파일도 아닌" 느슨한 Mach-O는 .app --deep이
-// 건너뛴다 — 실측(2026-09-21): Electron Framework의 Libraries/libvk_swiftshader.dylib·
-// libffmpeg.dylib, Squirrel.framework의 ShipIt 셋이 .app --deep 뒤에도 adhoc(TeamIdentifier=not
-// set)으로 남았다(--deep은 중첩 번들 자체는 재서명하지만 그 Resources 서브디렉터리에 흩어진
-// 개별 파일까지 전수로 훑지는 않는다). hardened runtime이나 entitlements는 주지 않는다 — 지금까지
-// ad-hoc(런타임 플래그 없음)으로 무탈했던 파일들이고, Task 5의 범위는 identity 전환이지 새 제약을
-// 얹는 것이 아니다. .app보다 먼저 둔다 — --deep이 다시 다루는 중첩 번들(Helper.app 등)은 뒤에서
-// 올바른 entitlements로 덮어써 최종 상태가 같다(멱등).
-console.log(`$ codesign --sign ${signing.identity} --timestamp — Contents/Frameworks Mach-O 전수 (identity만)`);
-const frameworksMachos = machOFiles(path.join(appPath, "Contents", "Frameworks"));
-for (let i = 0; i < frameworksMachos.length; i += 200) {
-  execFileSync(
-    "codesign",
-    ["--force", "--sign", signing.identity, "--timestamp", ...frameworksMachos.slice(i, i + 200)],
-    { cwd: desktop, stdio: "inherit" },
-  );
-}
+signAll(machOFiles(path.join(resources, "postgres")), null, "Resources/postgres Mach-O", { runtime: false });
+signAll(machOFiles(path.join(appPath, "Contents", "Frameworks")), null, "Contents/Frameworks Mach-O", { runtime: true });
 
 // .app은 --deep으로. plist는 mac 쪽이다 — python plist를 주면 V8이 allow-jit 없이 rc=133으로 죽는다.
-codesign(signing.identity, macEnts, [appPath], ["--deep"]);
+codesign(signing.identity, macEnts, [appPath], { extra: ["--deep"] });
 
 run("node", [path.join("scripts", "check-bundle.mjs")], desktop);

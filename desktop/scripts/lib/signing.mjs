@@ -36,12 +36,20 @@ export function assertIdentityInKeychain(identity) {
   }
 }
 
-/** codesign 한 번. --timestamp는 공증의 선행 조건이고 인증서 만료 뒤에도 서명을 유효하게 한다. */
-export function codesign(identity, entitlements, targets, extraArgs = []) {
-  execFileSync(
-    "codesign",
-    ["--force", "--sign", identity, "--options", "runtime", "--timestamp",
-     "--entitlements", entitlements, ...extraArgs, ...targets],
-    { stdio: "inherit" },
-  );
+/**
+ * codesign 한 번. `entitlements`가 `null`이면 `--entitlements`를 빼고, `runtime`도 그 유무를
+ * 따라간다(entitlements가 있으면 켜짐, 없으면 꺼짐) — plist가 필요 없는 트리(예: 별개
+ * 프로세스라 자기 서명의 플래그로 도는 Resources/postgres)의 기본이 hardened runtime 없이
+ * identity만 새로 얹는 것이기 때문이다. entitlements 없이 hardened runtime은 있어야 하는
+ * 경우(예: `.app --deep`이 건너뛰는 Contents/Frameworks의 느슨한 MH_EXECUTE — 리뷰 실측:
+ * runtime 없이 나가면 Apple 공증이 거절한다)는 `{ runtime: true }`로 명시해 뒤집는다.
+ * `--timestamp`는 공증의 선행 조건이고 인증서 만료 뒤에도 서명을 유효하게 하므로 항상 붙는다.
+ */
+export function codesign(identity, entitlements, targets, { runtime = entitlements !== null, extra = [] } = {}) {
+  const args = ["--force", "--sign", identity];
+  if (runtime) args.push("--options", "runtime");
+  args.push("--timestamp");
+  if (entitlements !== null) args.push("--entitlements", entitlements);
+  args.push(...extra, ...targets);
+  execFileSync("codesign", args, { stdio: "inherit" });
 }
