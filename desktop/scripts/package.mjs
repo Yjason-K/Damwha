@@ -1,7 +1,7 @@
 // desktop/scripts/package.mjs
 // 순서: be build → fe build → pnpm deploy → SPA 복사 → electron-builder.
 // pnpm deploy 뒤에 SPA를 넣는 이유: nest build가 dist를 비울 수 있다 (스펙 R1-3).
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { machOFiles } from "./lib/macho.mjs";
@@ -10,6 +10,28 @@ import { assertIdentityInKeychain, codesign, loadSigning } from "./lib/signing.m
 const desktop = path.resolve(import.meta.dirname, "..");
 const repo = path.resolve(desktop, "..");
 const apiTree = path.join(desktop, "build", "api");
+
+const RELEASE = process.argv.includes("--release");
+
+// DMG 경로는 Step 5가 정하고 Step 6·8이 쓴다. if (RELEASE) 블록 밖에 두지 않으면 스코프가 끊긴다.
+let dmgPath = null;
+
+// 릴리스에서만 태그를 본다. 개발 중 패키징이 잦아 태그 없는 커밋에서 자주 돈다.
+//
+// **태그는 desktop-v<version>이다** (Phase 6a 스펙 §4): v<version>은 deploy/release.sh가
+// 셀프호스팅 웹 배포에 이미 쓰고 있고(v0.1.1~v0.2.3 실재, 자산은 tarball과 wheel), 그 스크립트는
+// 태그 버전이 be/worker/pyproject.toml과 다르면 거절한다. 섞으면 6b의 릴리스 조회가 웹 배포를
+// 가리켜 앱이 사용자에게 tarball을 권한다.
+const desktopPkg = JSON.parse(fs.readFileSync(path.join(desktop, "package.json"), "utf8"));
+const expectedTag = `desktop-v${desktopPkg.version}`;
+if (RELEASE) {
+  const tag = execFileSync("git", ["describe", "--tags", "--exact-match", "--match", "desktop-v*"], {
+    cwd: repo, encoding: "utf8",
+  }).trim();
+  if (tag !== expectedTag) {
+    throw new Error(`태그가 ${tag}인데 package.json은 ${desktopPkg.version}이다 — ${expectedTag}여야 한다`);
+  }
+}
 
 // 서명 신원을 **빌드 전에** 확인한다. 뒤에서 알면 그때까지의 시간이 날아간다.
 const signing = loadSigning(desktop);
@@ -158,3 +180,76 @@ signAll(machOFiles(path.join(appPath, "Contents", "Frameworks")), null, "Content
 codesign(signing.identity, macEnts, [appPath], { extra: ["--deep"] });
 
 run("node", [path.join("scripts", "check-bundle.mjs")], desktop);
+
+// notarytool은 디렉터리를 받지 않는다. ditto로 zip을 떠서 제출하고, 통과하면 **zip이 아니라
+// 원본 .app에** 스테이플한다 — DMG 밖으로 꺼낸 .app이 오프라인에서도 통과하려면 필요하다.
+function notarize(target, label) {
+  console.log(`$ notarytool submit ${label}`);
+  const r = spawnSync("xcrun", [
+    "notarytool", "submit", target,
+    "--keychain-profile", signing.notaryProfile,
+    "--wait", "--timeout", "30m",
+    "--output-format", "json",
+  ], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
+  const out = r.stdout ?? "";
+  console.log(out);
+  let parsed = {};
+  try { parsed = JSON.parse(out); } catch { /* 출력이 JSON이 아니면 아래 status 검사가 잡는다 */ }
+  if (parsed.status !== "Accepted") {
+    // 거절 사유는 목록이라 요약하면 원인을 잃는다. 로그를 통째로 뱉고 멈춘다.
+    if (parsed.id !== undefined) {
+      spawnSync("xcrun", ["notarytool", "log", parsed.id, "--keychain-profile", signing.notaryProfile], { stdio: "inherit" });
+      console.error(`제출 id ${parsed.id} — 나중에 notarytool log로 이어 볼 수 있다`);
+    }
+    throw new Error(`공증 실패 (${label}): status=${parsed.status ?? "unknown"}`);
+  }
+}
+
+if (RELEASE) {
+  const appZip = path.join(desktop, "out", "Damwha.zip");
+  run("ditto", ["-c", "-k", "--keepParent", appPath, appZip], desktop);
+  notarize(appZip, ".app");
+  fs.rmSync(appZip, { force: true });
+  run("xcrun", ["stapler", "staple", appPath], desktop);
+
+  // 스테이플이 .app 안에 티켓 파일을 넣는다. 번들 위생과 서명이 그 뒤에도 성립하는지 다시 묻는다
+  // (스펙 §7 공통 규칙). 여기서 지면 DMG를 만들지 않는다 — 깨진 앱을 담은 DMG가 더 나쁘다.
+  run("node", [path.join("scripts", "check-bundle.mjs")], desktop);
+}
+
+if (RELEASE) {
+  // --prepackaged: 이미 서명·스테이플된 그 바이트를 그대로 담는다. 재빌드하지 않는다.
+  // 이것이 없으면 electron-builder가 서명 전 앱을 다시 만들어 담는다.
+  run("pnpm", ["exec", "electron-builder", "--prepackaged", appPath, "--mac", "dmg"], desktop);
+}
+
+if (RELEASE) {
+  const dmgs = fs.readdirSync(path.join(desktop, "out")).filter((f) => f.endsWith(".dmg"));
+  if (dmgs.length !== 1) throw new Error(`out에 DMG가 정확히 하나여야 한다: ${dmgs.join(", ") || "(없음)"}`);
+  dmgPath = path.join(desktop, "out", dmgs[0]);   // Step 1에서 선언한 것에 담는다 — Step 6·8이 쓴다
+
+  // DMG 자신도 서명한다. entitlements는 주지 않는다 — 디스크 이미지는 실행 파일이 아니다.
+  run("codesign", ["--force", "--sign", signing.identity, "--timestamp", dmgPath], desktop);
+  notarize(dmgPath, "DMG");
+  run("xcrun", ["stapler", "staple", dmgPath], desktop);
+
+  // 받은 것이 우리가 낸 것인지 사용자가 확인할 수 있어야 한다.
+  const sha = execFileSync("shasum", ["-a", "256", dmgs[0]], { cwd: path.join(desktop, "out"), encoding: "utf8" });
+  fs.writeFileSync(`${dmgPath}.sha256`, sha);
+  console.log(sha.trim());
+}
+
+if (RELEASE) {
+  // 3·4번이 의도대로 이어졌는지는 마운트해서 보는 것만이 증명한다 (P6a-C13).
+  // out/mac-arm64의 .app이 통과하는 것과 DMG 안의 .app이 통과하는 것은 다른 질문이다.
+  const mnt = execFileSync("hdiutil", ["attach", dmgPath, "-nobrowse", "-readonly"], { encoding: "utf8" })
+    .split("\n").map((l) => l.split("\t").pop()?.trim()).filter((p) => p?.startsWith("/Volumes/")).pop();
+  if (mnt === undefined) throw new Error("DMG 마운트 지점을 찾지 못했다");
+  try {
+    const inner = path.join(mnt, "Damwha.app");
+    run("spctl", ["--assess", "--type", "execute", "-vv", inner], desktop);
+    run("xcrun", ["stapler", "validate", inner], desktop);
+  } finally {
+    spawnSync("hdiutil", ["detach", mnt, "-quiet"]);
+  }
+}
