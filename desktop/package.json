@@ -1,7 +1,7 @@
 {
   "name": "damwha-desktop",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.3.1",
   "license": "MIT",
   "description": "Damwha macOS desktop shell. Runs the NestJS API as a child process and loads the SPA it serves.",
   "main": "dist/main.js",
