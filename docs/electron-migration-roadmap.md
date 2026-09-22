@@ -31,15 +31,16 @@
 결함이었다. 최소 macOS는 **15.0**으로 정했다 (아래 Phase 6 절).
 **Phase 6a는 2026-09-21에 구현 Task 10개(T1~T10)를 완료·리뷰 clean까지 마쳤다** — 서명·공증
 기구가 실제로 통과했고(공증 제출 둘 다 Accepted), P5-C6(디스크 부족)이 worker job·embed·LLM
-세 경로 전부에서 닫혔다. **공증 제출 직후 스펙의 전역 제약 하나가 뒤집혔다**(postgres도
-hardened runtime을 건다 — 실측이 그렇게 요구했다, 아래 Phase 6a 절). **같은 날 릴리스를
-발행했다(T11)** — `desktop-v0.3.0`,
+세 경로 전부에서 닫혔다(**단서 둘** — 렌즈만 다시 돌린 경로는 사유가 화면에 안 뜨고, 발행된
+0.3.0의 필요 용량 산정은 과대했다. 아래 Phase 6a 절 참조). **공증 제출 직후 스펙의 전역 제약
+하나가 뒤집혔다**(postgres도 hardened runtime을 건다 — 실측이 그렇게 요구했다, 아래 Phase 6a
+절). **같은 날 릴리스를 발행했다(T11)** — `desktop-v0.3.0`,
 <https://github.com/Yjason-K/Damwha/releases/tag/desktop-v0.3.0>. 발행 직후 그 릴리스가 저장소
 "Latest"를 차지해 셀프호스팅 웹 배포의 버전 조회가 깨지는 부작용이 나서 `v0.2.3`을 Latest로
 되돌렸고, `deploy/Makefile`을 `v*` 태그만 보게 고쳤다. 최종 리뷰가 그 수정이 이미 나가 있는 웹
 설치에는 닿지 않는다는 것과 모델 다운로드 디스크 점검의 과대 산정(발행본에 들어감 — 다음 릴리스가
-필요하다)을 찾아 병합 전에 고쳤다. 두 번째 맥 검증(T12)은 사람이 직접 하는 일이라 **진행 전**이다
-— 결과는 [Phase 6a 결과 문서](superpowers/reports/2026-09-20-electron-phase-6a-signing-distribution-results.md).
+필요하다)을 찾아 병합 전에 고쳤다. **두 번째 맥 검증(T12)도 2026-09-22에 사용자가 직접 두
+대에서 마쳤다** — 결과는 [Phase 6a 결과 문서](superpowers/reports/2026-09-20-electron-phase-6a-signing-distribution-results.md).
 
 ## 목표와 전제
 
@@ -394,10 +395,13 @@ wheel이며 DMG가 없다) `latest`가 제품을 가리지 못한다. 웹 릴리
 - 개발 환경이 없는 지원 대상 맥에 배포 산출물을 설치하고 실제 처리 성공.
 - 재빌드·재설치 후에도 마이크 권한과 토큰이 유지됨(Developer ID DR의 종단간 증명).
 
-**상태 (2026-09-21): 구현 Task 10개(T1~T10) 완료, 리뷰 clean(전부 최소 1회 수정 라운드 거침).
+**상태 (2026-09-22): 구현 Task 10개(T1~T10) 완료, 리뷰 clean(전부 최소 1회 수정 라운드 거침).
 릴리스 발행(T11) 완료 — `desktop-v0.3.0`
-(<https://github.com/Yjason-K/Damwha/releases/tag/desktop-v0.3.0>). 두 번째 맥 검증(T12)은 진행
-전.** Developer ID 인증서는 발급·검증을 마쳤다 —
+(<https://github.com/Yjason-K/Damwha/releases/tag/desktop-v0.3.0>). 두 번째 맥 검증(T12)도 완료 —
+두 맥(macOS 26.x) 모두 Gatekeeper 무대화·오프라인 실행(C9)·실오디오 처리 정상(C10). 재빌드·
+재설치 뒤 권한·토큰 유지는 깨끗한 설치 경로에서 충족(C11) — 6a 이전 ad-hoc 빌드 이력이 남은
+맥은 키체인 암호를 1회 묻는다(한계, 표본 1). 상세는 결과 문서 §2·§5.** Developer ID 인증서는
+발급·검증을 마쳤다 —
 `Developer ID Application: Youngjae Kim (L5Y9SZHGRN)`, notarytool 프로필 `damwha` 인증 확인.
 스펙은 [2026-09-20-electron-phase-6a-signing-distribution-design.md](superpowers/specs/2026-09-20-electron-phase-6a-signing-distribution-design.md),
 결과는 [2026-09-20-electron-phase-6a-signing-distribution-results.md](superpowers/reports/2026-09-20-electron-phase-6a-signing-distribution-results.md),
@@ -445,10 +449,12 @@ Accepted)한 뒤 `desktop-v0.3.0`으로 냈다. **발행이 저장소 "Latest"�
 **0.3.0 사용자에게 닿으려면 다음 릴리스가 필요하다.** 또 하나는 기록만 했다 — 렌즈만 다시 돌린
 경우 디스크 부족 사유가 화면에 안 뜬다(API가 `extraction_status`만 준다, P6a-C6의 한계).
 
-두 번째 맥 검증(P6a-C9~C11, T12)은 사람이 직접 하는 일이라 **진행 전**이다. 스펙 §10의 완료
-기준(`C1~C14` + `C8b`, 15행) 중 11건(P6a-C1~C8·C8b·C13·C14 — C4·C13·C14는 T11의 최종 발행판,
-C6은 렌즈 경로 한계 명시) 충족, 1건(C12)은 예고된 퇴행이 실측에서 일어나지 않아 미판정,
-3건(C9·C10·C11)은 T12 소관으로 진행 전이다 — 상세 판정표와 근거는 결과 문서 §2.
+두 번째 맥 검증(P6a-C9~C11, T12)도 2026-09-22에 끝났다. 스펙 §10의 완료 기준(`C1~C14` + `C8b`,
+15행 — C1~C8(8) + C8b(1) + C9~C11(3) + C12(1) + C13~C14(2)) 중 14건 충족(C1~C8·C8b·C13·C14는
+앞서 충족 — C4·C13·C14는 T11의 최종 발행판, C6은 렌즈 경로 한계 명시. C9~C11도 T12로 충족 —
+C11은 깨끗한 설치 경로 한정이고 6a 이전 빌드 이력이 남은 맥에서 키체인 창이 1회 뜨는 한계가
+붙는다), 1건(C12)은 예고된 퇴행이 실측에서 일어나지 않아 여전히 미판정이다 — 상세 판정표와
+근거는 결과 문서 §2.
 
 #### Phase 6b. 업데이트
 

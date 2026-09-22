@@ -37,7 +37,7 @@ function check(label, ok, detail = "") {
 // **postgres 트리에도 이 함수를 건다 — 아래 14b.** package.mjs는 Task 6부터 postgres 트리에도
 // hardened runtime을 건다(Ruling R12: Apple 공증이 번들 안 실행 파일에 이를 요구한다고 실측됐다 —
 // 제출 id 88197b1f-daae-41bc-aa68-e62176a321de가 32개 실행 파일 전부를 "hardened runtime
-// 없음"으로 거절했다, task-6-report.md). 그 플래그를 잃는 회귀는 위 9~14번 묶음(`:262-301`) 중
+// 없음"으로 거절했다, task-6-report.md). 그 플래그를 잃는 회귀는 아래 9~14번 묶음 중
 // 어느 것도 잡지 못한다 — 거기는 바이너리 존재, pgvector/pg_bigm 존재, Mach-O 개수, `otool -L`
 // 의존성, 맨 `codesign --verify`(플래그를 읽지 않는다), `env -i … --version`만 본다. 그래서
 // `signAll(pgTargets, …, { runtime: … })`의 그 인자 하나가 조용히 `false`로 되돌아가도 이
@@ -327,12 +327,14 @@ for (const bin of ["postgres", "psql"]) {
   check(`env -i ${bin} --version runs from the bundle`, r.status === 0, (r.stdout || r.stderr || "").trim());
 }
 
-// 14b. postgres 트리도 hardened runtime을 진다(Ruling R12). 위 unsigned 검사(:293-294)는 arch를
-// 지정하지 않는 plain --verify라 CodeDirectory의 flags를 읽지 않는다 — `signAll(pgTargets, …,
-// { runtime: … })`의 그 인자가 조용히 false로 되돌아가도 지금까지는 아무 것도 이것을 잡지
-// 못했다(제출 id 88197b1f-daae-41bc-aa68-e62176a321de가 32개 실행 파일 전부를 "hardened runtime
-// 없음"으로 거절한 것이 그 증거). verifyArm64()의 noRuntime 부분만 빌려 쓴다 — unsigned·noArm64는
-// 위 293-294행과 279-280행이 이미 다른 방식으로 덮는다.
+// 14b. postgres 트리도 hardened runtime을 진다(Ruling R12). 바로 위(9~14번 묶음)의
+// "postgres Mach-O files carry a valid signature" 검사는 arch를 지정하지 않는 plain --verify라
+// CodeDirectory의 flags를 읽지 않는다 — `signAll(pgTargets, …, { runtime: … })`의 그 인자가
+// 조용히 false로 되돌아가도 지금까지는 아무 것도 이것을 잡지 못했다(제출 id
+// 88197b1f-daae-41bc-aa68-e62176a321de가 32개 실행 파일 전부를 "hardened runtime 없음"으로
+// 거절한 것이 그 증거). verifyArm64()의 noRuntime 부분만 빌려 쓴다 — unsigned·noArm64는
+// 9~14번 묶음의 서명 검사가 이미 다른 방식으로 덮는다(줄 번호 대신 절 이름으로 가리킨다 — 8b가
+// 나중에 끼어들며 옛 줄 번호가 밀렸었다).
 const { noRuntime: pgNoRuntime } = verifyArm64(pgMachos);
 check(
   "every Mach-O in the postgres tree carries hardened runtime",
