@@ -7,6 +7,7 @@ transformers의 지연 모듈이 서브모듈을 import하다 던진다. 테스�
 본다.
 """
 
+import hashlib
 import io
 import re
 import sys
@@ -21,7 +22,7 @@ import pytest
 from damwha_worker import db, errors
 from damwha_worker.db import core
 from damwha_worker.errors import ErrorKind
-from damwha_worker.models import downloads
+from damwha_worker.models import disk, downloads
 
 hub = pytest.importorskip("huggingface_hub")
 from huggingface_hub import _snapshot_download, file_download  # noqa: E402
@@ -292,6 +293,49 @@ def test_local_files_only_calls_pass_through(stub_download, hook_db, conn):
 
     assert calls[-1]["tqdm_class"] is None
     assert hook_db == []
+
+
+def test_disk_check_runs_even_when_tqdm_class_bypasses_progress_watching(
+    stub_download, hook_db, conn, monkeypatch
+):
+    """`tqdm_class`를 명시한 호출은 진행 감시(`_run_watched`)를 건너뛰지만 디스크는 똑같이 쓴다
+    (Task 7 브리프, faster-whisper의 `disabled_tqdm`이 실제 예). 점검이 그 우회 분기 아래로
+    밀리면 이 호출에서는 다시는 불리지 않는다."""
+    calls, _ = stub_download
+    checked = []
+    monkeypatch.setattr(downloads, "_needed_bytes", lambda repo_id, args, kwargs: 1)
+    monkeypatch.setattr(
+        disk, "check_free_space", lambda dest, needed: checked.append((dest, needed))
+    )
+    downloads.install_hf_progress_hook("w1")
+
+    class Mine:
+        def __init__(self, *a, **kw):
+            pass
+
+        def update(self, n=1):
+            pass
+
+        def close(self):
+            pass
+
+    hub.hf_hub_download("org/m", "f.bin", tqdm_class=Mine)
+
+    assert calls[-1]["tqdm_class"] is Mine  # 여전히 우회된다 — 점검만 추가로 불렸는지 본다
+    assert checked == [(hub_constants.HF_HUB_CACHE, 1)]
+
+
+def test_disk_check_is_skipped_for_local_files_only(stub_download, hook_db, conn, monkeypatch):
+    """오프라인 호출(`local_files_only=True`)은 디스크를 안 쓰므로 점검하지 않는다."""
+    checked = []
+    monkeypatch.setattr(
+        disk, "check_free_space", lambda dest, needed: checked.append((dest, needed))
+    )
+    downloads.install_hf_progress_hook("w1")
+
+    hub.hf_hub_download("org/m", "f.bin", local_files_only=True)
+
+    assert checked == []
 
 
 def test_bytes_are_counted_only_for_byte_bars(stub_download, hook_db, conn):
@@ -1123,3 +1167,264 @@ def test_cache_first_runs_normally_without_a_hook(conn, clean):
 
     assert downloads.load_cache_first("org/m", load) == "loaded"
     assert seen == [True]
+
+
+# ── 디스크 필요량 — 실제 계산 (최종 리뷰 I1) ─────────────────────────────
+#
+# 여기서는 `_needed_bytes`를 **빼지 않는다.** 가짜는 hub의 경계 둘뿐이다 — 저장소 메타데이터
+# (`HfApi`)와 실제로 바이트를 옮기는 `hf_hub_download` 원본. 계산은 진짜 코드가 한다.
+
+BGE = "BAAI/bge-m3"
+BGE_PIN = "9a0624b896d81da7492a910ffa53731274b6cf3d"  # bge_embed._PINNED_REVISIONS
+
+# 2026-09-21 HF API(`model_info(files_metadata=True)`) 실측. main(`5617a9f…`)의 30개 전부 —
+# 옛 계산이 "필요한 용량 5.5 GB"를 낸 입력이다(합 4,587,317,404 B × 1.2). (이름, 크기, LFS 여부)
+_BGE_MAIN_FILES = (
+    (".gitattributes", 1627, False),
+    ("1_Pooling/config.json", 191, False),
+    ("README.md", 15822, False),
+    ("colbert_linear.pt", 2100674, True),
+    ("config.json", 687, False),
+    ("config_sentence_transformers.json", 123, False),
+    ("imgs/.DS_Store", 6148, False),
+    ("imgs/bm25.jpg", 131849, False),
+    ("imgs/long.jpg", 485432, False),
+    ("imgs/miracl.jpg", 576482, False),
+    ("imgs/mkqa.jpg", 608027, False),
+    ("imgs/nqa.jpg", 158358, False),
+    ("imgs/others.webp", 20984, False),
+    ("long.jpg", 126894, False),
+    ("modules.json", 349, False),
+    ("onnx/Constant_7_attr__value", 65552, False),
+    ("onnx/config.json", 698, False),
+    ("onnx/model.onnx", 724923, True),
+    ("onnx/model.onnx_data", 2266820608, True),
+    ("onnx/sentencepiece.bpe.model", 5069051, True),
+    ("onnx/special_tokens_map.json", 964, False),
+    ("onnx/tokenizer.json", 17082821, True),
+    ("onnx/tokenizer_config.json", 1173, False),
+    ("pytorch_model.bin", 2271145830, True),
+    ("sentence_bert_config.json", 54, False),
+    ("sentencepiece.bpe.model", 5069051, True),
+    ("sparse_linear.pt", 3516, True),
+    ("special_tokens_map.json", 964, False),
+    ("tokenizer.json", 17098108, True),
+    ("tokenizer_config.json", 444, False),
+)
+# 고정 리비전은 main의 모든 파일에 `model.safetensors` 하나를 더한다 (bge_embed.py 주석).
+_BGE_PIN_FILES = (*_BGE_MAIN_FILES, ("model.safetensors", 2271064456, True))
+BGE_SIZES = {name: size for name, size, _ in _BGE_PIN_FILES}
+
+
+def _etag(name: str, lfs: bool) -> str:
+    """가짜 etag. 실제 hub는 LFS면 내용의 sha256(64자), 아니면 git blob sha1(40자)이다."""
+    digest = hashlib.sha256 if lfs else hashlib.sha1
+    return digest(name.encode()).hexdigest()
+
+
+def _siblings(files):
+    from huggingface_hub.hf_api import BlobLfsInfo, RepoSibling
+
+    return [
+        RepoSibling(
+            rfilename=name,
+            size=size,
+            blob_id=_etag(name, False),
+            lfs=BlobLfsInfo(size=size, sha256=_etag(name, True), pointer_size=134) if lfs else None,
+        )
+        for name, size, lfs in files
+    ]
+
+
+def _put_blob(cache, repo, name, size, lfs, *, suffix=""):
+    """hub가 끝까지 받은 파일을 두는 자리 — `<cache>/models--<org>--<name>/blobs/<etag>`."""
+    blobs = cache / f"models--{repo.replace('/', '--')}" / "blobs"
+    blobs.mkdir(parents=True, exist_ok=True)
+    (blobs / (_etag(name, lfs) + suffix)).write_bytes(b"\0" * size)
+
+
+@pytest.fixture
+def measured(monkeypatch, tmp_path, uninstall):
+    """진짜 `_needed_bytes`가 훅 안에서 돈다. 디스크 판정은 받은 `needed`만 적는다.
+
+    `_snapshot_download.hf_hub_download`도 같은 가짜로 바꿔 둔다 — 설치가 그 이름을 **다시 묶는
+    것**이 실제 앱에서 일어나는 일이고(최종 리뷰 I1-c), 그래야 안쪽 호출이 훅을 지난다.
+    """
+    monkeypatch.setenv("DAMWHA_SHARED_STATE", "off")  # 보고 행을 안 쓴다 — DB 없이 돈다
+    cache = tmp_path / "hub"
+    monkeypatch.setattr(hub_constants, "HF_HUB_CACHE", str(cache))
+    repos, checked, requested, api_calls = {}, [], [], []
+
+    class FakeApi:
+        """리비전마다 sibling 목록을 준다. 옛 계산의 `model_info`, 새 계산의 `repo_info`, 실제
+        `snapshot_download`의 `repo_info`가 모두 이것을 본다."""
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def repo_info(self, repo_id, *, revision=None, files_metadata=False, **kwargs):
+            api_calls.append((repo_id, revision))
+            sha, files = repos[(repo_id, revision or "main")]
+            return SimpleNamespace(sha=sha, siblings=_siblings(files))
+
+        model_info = repo_info
+
+    def fake_hf_hub_download(repo_id, filename, *, tqdm_class=None, **kwargs):
+        requested.append(
+            SimpleNamespace(
+                filename=filename, tqdm_class=tqdm_class, thread=threading.current_thread()
+            )
+        )
+        return f"/fake/{filename}"
+
+    monkeypatch.setattr(file_download, "hf_hub_download", fake_hf_hub_download)
+    monkeypatch.setattr(_snapshot_download, "hf_hub_download", fake_hf_hub_download)
+    monkeypatch.setattr(hub, "HfApi", FakeApi)
+    monkeypatch.setattr(_snapshot_download, "HfApi", FakeApi)
+    monkeypatch.setattr(disk, "check_free_space", lambda dest, needed: checked.append(needed))
+    downloads.install_hf_progress_hook("w1")
+    return SimpleNamespace(
+        repos=repos, checked=checked, requested=requested, api_calls=api_calls, cache=cache
+    )
+
+
+def _bge(measured):
+    measured.repos[(BGE, "main")] = ("5617a9f61b028005a4858fdac845db406aefb181", _BGE_MAIN_FILES)
+    measured.repos[(BGE, BGE_PIN)] = (BGE_PIN, _BGE_PIN_FILES)
+
+
+def test_a_single_file_call_counts_only_that_file(measured):
+    """`hf_hub_download(filename=…)`은 그 파일 하나를 받는다 — 저장소 전체가 아니다.
+
+    Task 10 실측: embed가 "필요한 용량 5.5 GB"로 막혔는데 실제 bge-m3 캐시는 2.1 GB다. 옛 계산은
+    리비전도 무시했다 — main에는 `model.safetensors`가 없고, embed는 고정 리비전에서 받는다.
+    """
+    _bge(measured)
+
+    hub.hf_hub_download(BGE, "model.safetensors", revision=BGE_PIN)
+    hub.hf_hub_download(BGE, "config.json", revision=BGE_PIN)
+    hub.hf_hub_download(BGE, "model.onnx_data", subfolder="onnx", revision=BGE_PIN)
+
+    assert measured.checked == [
+        int(2271064456 * 1.2),
+        int(687 * 1.2),
+        int(2266820608 * 1.2),
+    ]
+    assert disk.format_bytes(measured.checked[0]) == "2.7 GB"  # 옛 숫자는 5.5 GB
+
+
+def test_a_file_the_repo_does_not_have_is_not_checked(measured):
+    """transformers는 없는 선택 파일(`adapter_config.json` …)을 매번 묻는다 — 받을 것이 없다."""
+    _bge(measured)
+
+    hub.hf_hub_download(BGE, "adapter_config.json", revision=BGE_PIN)
+
+    assert measured.checked == [None]
+
+
+def test_a_filtered_snapshot_counts_only_the_files_it_matches(measured):
+    """`allow_patterns`·`ignore_patterns`는 hub가 거르는 그 함수로 거른다. bge-m3 모양 —
+    safetensors와 설정만 받고 `pytorch_model.bin`·onnx는 받지 않는다. sentence-transformers의
+    `load_dir_path`가 넘기는 문자열 하나짜리 패턴(`1_Pooling/**`)도."""
+    _bge(measured)
+
+    hub.snapshot_download(
+        BGE,
+        revision=BGE_PIN,
+        allow_patterns=["*.safetensors", "*.json"],
+        ignore_patterns=["onnx/*"],
+    )
+    hub.snapshot_download(BGE, revision=BGE_PIN, allow_patterns="1_Pooling/**")
+
+    wanted = [
+        "model.safetensors",
+        "1_Pooling/config.json",
+        "config.json",
+        "config_sentence_transformers.json",
+        "modules.json",
+        "sentence_bert_config.json",
+        "special_tokens_map.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+    ]
+    assert measured.checked == [
+        int(sum(BGE_SIZES[n] for n in wanted) * 1.2),
+        int(191 * 1.2),
+    ]
+
+
+def test_bytes_already_in_the_cache_are_not_counted_again(measured):
+    """hub는 `blobs/<etag>`가 있으면 받지 않는다(`_hf_hub_download_to_cache_dir`). etag는 LFS면
+    `lfs.sha256`, 아니면 `blob_id`다. 큰 모델을 반쯤 받다 끊긴 재시도가 전체를 새로 요구하면
+    안 된다 — 끝까지 받은 샤드는 이미 디스크에 있다."""
+    files = (
+        ("model-00001-of-00002.safetensors", 3000, True),
+        ("model-00002-of-00002.safetensors", 5000, True),
+        ("config.json", 100, False),
+    )
+    measured.repos[("org/m", "main")] = (SHA, files)
+    _put_blob(measured.cache, "org/m", *files[0])  # 끝까지 받은 첫 샤드
+    _put_blob(measured.cache, "org/m", *files[2])
+
+    hub.snapshot_download("org/m")
+    hub.hf_hub_download("org/m", "model-00001-of-00002.safetensors")  # 통째로 캐시에 있다
+
+    assert measured.checked == [int(5000 * 1.2), None]
+
+
+def test_every_file_the_snapshot_will_fetch_is_counted(measured):
+    """**과소 산정 경계.** 과소는 과대보다 위험하다 — 점검을 통과시킨 뒤 다운로드 도중 진짜
+    ENOSPC가 난다. 그래서 **실제 `snapshot_download`가 받으라고 한 파일**과 계산이 센 파일을
+    맞대 본다 — 중첩 경로·LFS 아닌 파일·같은 blob을 가리키는 두 경로까지 전부."""
+    _bge(measured)
+
+    hub.snapshot_download(
+        BGE, revision=BGE_PIN, allow_patterns=["*.json", "*.model", "*.safetensors"]
+    )
+
+    fetched = [r.filename for r in measured.requested]
+    assert {"1_Pooling/config.json", "onnx/tokenizer.json", "model.safetensors"} <= set(fetched)
+    assert measured.checked == [int(sum(BGE_SIZES[n] for n in fetched) * 1.2)]
+
+
+def test_bytes_that_only_look_cached_are_still_counted(measured):
+    """빼도 되는 것은 hub가 **정말로 안 받을** blob뿐이다 (과소 산정 경계).
+
+    - 받다 끊긴 임시 파일 — 1.20.1은 이어 받지 않는다. 다운로드마다 새 임시 파일
+      (`<etag>.<uuid>.incomplete`)에 받고 실패하면 지운다(`_download_to_tmp_and_move`).
+    - 옛 리비전의 같은 이름 — 내용이 바뀌었으면 etag가 달라 hub가 다시 받는다.
+    - `force_download=True` — 있는 blob도 다시 받는다.
+    """
+    files = (("a.safetensors", 3000, True), ("b.safetensors", 5000, True))
+    measured.repos[("org/m", "main")] = (SHA, files)
+    _put_blob(measured.cache, "org/m", "a.safetensors", 3000, True)
+    _put_blob(measured.cache, "org/m", "b.safetensors", 2000, True, suffix=".1a2b3c4d.incomplete")
+    _put_blob(measured.cache, "org/m", "b.safetensors-옛-리비전", 5000, True)
+
+    hub.snapshot_download("org/m")
+    hub.snapshot_download("org/m", force_download=True)
+
+    assert measured.checked == [int(5000 * 1.2), int(8000 * 1.2)]
+
+
+def test_the_files_inside_a_snapshot_are_not_measured_again(measured):
+    """바깥 `snapshot_download`가 받을 전체를 한 번 쟀다. 안쪽 파일마다 다시 재면 파일마다
+    메타데이터 요청이 더 나가고, 채우는 중인 여유를 전체 요구량과 다시 비교해 경계 여유에서
+    다운로드 **중간에** DISK_FULL을 던진다 (최종 리뷰 I1-c).
+
+    안쪽 호출은 **다른 스레드**다 — hub의 `thread_map` 워커이고, 바깥 호출부터 무진행 감시
+    스레드에서 돈다. 스레드 로컬 표시는 거기서 안 보인다. 스레드를 건너 오는 표시는 hub가 안쪽
+    호출에만 **인자로** 넘기는 `_AggregatedTqdm`이다 — 그 전제도 여기서 고정한다.
+    """
+    _bge(measured)
+
+    hub.snapshot_download(BGE, revision=BGE_PIN, allow_patterns=["*.json"])
+
+    inner = measured.requested
+    assert len(inner) > 1
+    assert all(r.thread is not threading.current_thread() for r in inner)
+    assert {r.tqdm_class.__qualname__ for r in inner} == {
+        "snapshot_download.<locals>._AggregatedTqdm"
+    }
+    assert len(measured.checked) == 1  # 바깥 한 번
+    assert len(measured.api_calls) == 2  # snapshot 자신 한 번 + 바깥 점검 한 번, 안쪽 0

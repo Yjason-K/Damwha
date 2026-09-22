@@ -556,6 +556,106 @@ def _run_watched(original, args, kwargs, report, key: str):
     return box["value"]
 
 
+# 여유 계수. 받는 동안 두 벌이 겹치지는 않는다 — 1.20.1은 같은 `blobs/` 안의 임시 파일에 받아
+# rename한다(`_download_to_tmp_and_move`). 계수는 크기를 모르는 sibling과 같은 볼륨의 다른
+# 쓰기에 대한 완충이다.
+_DISK_MARGIN = 1.2
+
+# `snapshot_download`가 안쪽 파일마다 `hf_hub_download`에 넘기는 진행 클래스 (1.20.1
+# `_snapshot_download.py:403`). 호출마다 새로 만드는 지역 클래스라 객체로는 못 비교하고
+# 이름으로 본다.
+_SNAPSHOT_INNER_TQDM = (
+    "huggingface_hub._snapshot_download",
+    "snapshot_download.<locals>._AggregatedTqdm",
+)
+
+
+def _is_snapshot_inner(kwargs: dict) -> bool:
+    """`snapshot_download`가 안쪽 파일마다 부른 `hf_hub_download`인가 (최종 리뷰 I1-c).
+
+    바깥 호출이 받을 전체를 이미 한 번 쟀다. 안쪽에서 다시 재면 파일마다 메타데이터 요청이 더
+    나가고, 채우는 중인 여유를 요구량과 다시 비교해 경계 여유에서 **다운로드 중간에** 막는다.
+
+    표시는 **인자**다. 안쪽 호출은 hub의 `thread_map` 워커에서 돌고, 바깥 호출부터 무진행 감시
+    스레드(`_run_watched`)에서 돈다 — 바깥 훅이 세운 스레드 로컬은 거기서 안 보인다. hub가 안쪽
+    호출에만 넘기는 `tqdm_class`는 호출과 함께 스레드를 건넌다.
+    """
+    cls = kwargs.get("tqdm_class")
+    return (getattr(cls, "__module__", None), getattr(cls, "__qualname__", None)) == (
+        _SNAPSHOT_INNER_TQDM
+    )
+
+
+def _needed_bytes(repo_id: str, args: tuple, kwargs: dict) -> int | None:
+    """이 호출이 **새로 받을** 바이트 × 여유 계수. 못 얻으면 None — 추정으로 막지 않는다.
+
+    세 가지로 좁힌다 (최종 리뷰 I1). 저장소 전체를 세던 옛 계산은 bge-m3에 "필요한 용량
+    5.5 GB"를 냈다 — embed가 실제로 받는 스냅샷은 11개 파일 2,293,250,249 B(2.3 GB, `du`로는
+    2.1 GiB)다.
+
+    - **호출이 받는 파일만.** `hf_hub_download`면 `subfolder/filename` 하나, `snapshot_download`면
+      `allow_patterns`·`ignore_patterns`를 hub가 쓰는 그 함수(`filter_repo_objects`)로 거른 것.
+    - **호출의 리비전에서.** embed는 main에 없는 `model.safetensors`를 고정 리비전에서 받는다
+      (`bge_embed.py`) — main을 재면 받지도 않을 `pytorch_model.bin`·onnx를 센다.
+    - **캐시에 이미 있는 blob은 뺀다.** hub는 `blobs/<etag>`가 있으면 받지 않는다
+      (`_hf_hub_download_to_cache_dir`). etag는 LFS면 `lfs.sha256`, 아니면 `blob_id`다 —
+      2026-09-21 이 맥의 bge-m3·Qwen3.5-4B 캐시 blob 22개가 전부 이 규칙으로 sibling에 맞았다.
+      **받다 끊긴 임시 파일은 빼지 않는다** — 1.20.1은 이어 받지 않는다. 다운로드마다 새 임시
+      파일에 받고 실패하면 지운다(`_download_to_tmp_and_move`). `force_download`·`local_dir`면
+      캐시를 보지 않고 전부 센다.
+
+    크기 없는 sibling은 셀 수 없어 빠진다 — 그 몫은 하한이 된다. 과대 산정은 받을 수 있는 것을
+    막고, 과소 산정은 다운로드 도중 진짜 ENOSPC를 부른다. 둘 다 피하는 기준이 "hub가 실제로 받을
+    파일"이다.
+    """
+    filename = args[1] if len(args) > 1 else kwargs.get("filename")
+    try:
+        from huggingface_hub import HfApi
+        from huggingface_hub import constants as hub_constants
+        from huggingface_hub.file_download import repo_folder_name
+        from huggingface_hub.utils import filter_repo_objects
+
+        info = HfApi(endpoint=kwargs.get("endpoint")).repo_info(
+            repo_id,
+            revision=kwargs.get("revision"),
+            repo_type=kwargs.get("repo_type"),
+            files_metadata=True,
+            token=kwargs.get("token"),
+        )
+        siblings = list(info.siblings or [])
+        if isinstance(filename, str):  # hf_hub_download — 파일 하나
+            subfolder = kwargs.get("subfolder")
+            path = f"{subfolder}/{filename}" if subfolder else filename
+            wanted = [s for s in siblings if s.rfilename == path]
+        else:  # snapshot_download — hub와 같은 거르기
+            wanted = list(
+                filter_repo_objects(
+                    siblings,
+                    allow_patterns=kwargs.get("allow_patterns"),
+                    ignore_patterns=kwargs.get("ignore_patterns"),
+                    key=lambda s: s.rfilename,
+                )
+            )
+        blobs = None
+        if not kwargs.get("force_download") and kwargs.get("local_dir") is None:
+            cache_dir = kwargs.get("cache_dir") or hub_constants.HF_HUB_CACHE
+            folder = repo_folder_name(repo_id=repo_id, repo_type=kwargs.get("repo_type") or "model")
+            blobs = os.path.join(str(cache_dir), folder, "blobs")
+        total = 0
+        for s in wanted:
+            if s.size is None:
+                continue
+            etag = s.lfs.sha256 if s.lfs else s.blob_id
+            if blobs is not None and etag and os.path.exists(os.path.join(blobs, etag)):
+                continue  # hub가 받지 않는다
+            total += s.size
+    except Exception:  # noqa: BLE001 — 크기를 모르는 것은 실패가 아니다
+        return None
+    if total <= 0:
+        return None
+    return int(total * _DISK_MARGIN)
+
+
 def _wrap(original):
     @functools.wraps(original)
     def hooked(*args, **kwargs):
@@ -570,6 +670,25 @@ def _wrap(original):
                 if is_cache_miss(exc):
                     attempt.misses += 1
                 raise
+
+        # (attempt 블록 뒤, `writer = _STATE.writer` 앞)
+        #
+        # **여기가 맞는 자리다**: 아래 우회 분기(tqdm_class·writer None·repo_id 비문자열)가
+        # _run_watched를 건너뛰므로 거기 두면 다운로드의 일부만 덮는다. 진행 보고와 달리
+        # 디스크는 모든 경로가 똑같이 쓴다.
+        #
+        # local_files_only·dry_run은 받지 않으므로 건너뛴다. snapshot의 안쪽 파일은 바깥 호출이
+        # 이미 쟀다(`_is_snapshot_inner`).
+        _repo = args[0] if args else kwargs.get("repo_id")
+        _skip_check = (
+            kwargs.get("local_files_only") or kwargs.get("dry_run") or _is_snapshot_inner(kwargs)
+        )
+        if isinstance(_repo, str) and not _skip_check:
+            from huggingface_hub import constants as hub_constants
+
+            from .disk import check_free_space
+
+            check_free_space(hub_constants.HF_HUB_CACHE, _needed_bytes(_repo, args, kwargs))
 
         writer = _STATE.writer
         repo_id = args[0] if args else kwargs.get("repo_id")

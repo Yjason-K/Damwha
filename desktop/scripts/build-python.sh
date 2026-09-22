@@ -103,7 +103,16 @@ NPKG=$(grep -cE '^[a-zA-Z0-9]' "$REQS" || true)
 #
 # 조작을 고치고 옛 산출물을 쓰는 것이 가장 조용한 실패라, 스크립트를 한 글자라도 고치면 다시
 # 빌드한다. entitlement가 키에 드는 것도 같은 이유다 — 서명 내용이 바뀌면 트리가 달라진다.
-RT_KEY=$( { echo "$PY_FULL $PBS_RELEASE"; shasum -a 256 "$SUMS" "$SCRIPT" "$ENTS" "$REQS" | awk '{print $1}'; } | shasum -a 256 | cut -c1-16)
+TARGET_LIB="$DESKTOP/scripts/lib/build-target.sh"
+MLX_PIN="$DESKTOP/scripts/mlx-pin.txt"
+[ -f "$TARGET_LIB" ] || die "$TARGET_LIB 가 없다"
+[ -f "$MLX_PIN" ] || die "$MLX_PIN 이 없다"
+# shellcheck source=lib/build-target.sh
+. "$TARGET_LIB"
+
+RT_KEY=$( { echo "$PY_FULL $PBS_RELEASE $MACOSX_DEPLOYMENT_TARGET"; \
+            shasum -a 256 "$SUMS" "$SCRIPT" "$ENTS" "$REQS" "$TARGET_LIB" "$MLX_PIN" | awk '{print $1}'; } \
+          | shasum -a 256 | cut -c1-16)
 RT_WORK="$CACHE/work-$RT_KEY"
 RT_OUT="$CACHE/rt-$RT_KEY"
 RT_DONE="$CACHE/rt-$RT_KEY.complete"
@@ -533,8 +542,31 @@ build_rt() {
   # 캐시는 개발 venv(be/worker/.venv)에도 걸려 있다. 뒤에서 install_name_tool로 Mach-O를 고치는
   # 순간 **개발 venv의 같은 파일이 함께 바뀐다.** Phase 0 :31-34,127이 같은 이유로 그렇게 한다.
   cp "$REQS" "$RT_WORK/requirements.txt"
+
+  MLX_PIN_VERSION=$(sed -n 's/^VERSION=//p' "$MLX_PIN")
+  MLX_LOCK_VERSION=$(sed -n 's/.*"mlx==\([0-9.]*\).*/\1/p' "$WORKER/pyproject.toml" | head -1)
+  [ -n "$MLX_PIN_VERSION" ] || die "mlx-pin.txt에 VERSION= 줄이 없다"
+  [ "$MLX_PIN_VERSION" = "$MLX_LOCK_VERSION" ] \
+    || die "mlx-pin.txt는 $MLX_PIN_VERSION, pyproject.toml은 $MLX_LOCK_VERSION — 핀을 맞춰라"
+
   uv pip install --python "$RT_WORK/python/bin/python$PY_VERSION" --link-mode=copy \
      -r "$RT_WORK/requirements.txt" || die "uv pip install 실패"
+
+  # macOS 15.0 휠로 갈아 끼운다. 위 uv pip install은 호스트(27.0)에 맞춰 26.0 휠을 집는다.
+  # --no-deps: 의존성 해석을 다시 돌리지 않는다. --reinstall: 같은 버전이라 그냥은 안 바꾼다.
+  say "3b. mlx를 macOS ${MACOSX_DEPLOYMENT_TARGET} 휠로 고정"
+  MLX_URLS=$(awk '$1=="mlx"||$1=="mlx-metal"{print $2}' "$MLX_PIN")
+  [ "$(echo "$MLX_URLS" | wc -l)" -eq 2 ] || die "mlx-pin.txt에 휠 URL이 둘이 아니다"
+  # shellcheck disable=SC2086
+  uv pip install --python "$RT_WORK/python/bin/python$PY_VERSION" --link-mode=copy \
+     --reinstall --no-deps $MLX_URLS || die "mlx 15.0 휠 고정 실패"
+
+  # 받은 것이 핀의 그 바이트인지 확인한다. URL만 맞고 내용이 다를 수 있다.
+  while read -r name url sha; do
+    case "$name" in ''|'#'*|VERSION=*) continue;; esac
+    got=$(curl -sL "$url" | shasum -a 256 | awk '{print $1}')
+    [ "$got" = "$sha" ] || die "$name 휠의 sha256이 다르다: $got != $sha"
+  done < "$MLX_PIN"
 
   say "4. 가지치기"
   prune "$RT_WORK/python"

@@ -5,6 +5,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { machOFiles } from "./lib/macho.mjs";
+import { MAX_MINOS, compareVersion, readMinos } from "./lib/minos.mjs";
+import { loadSigning } from "./lib/signing.mjs";
 
 const desktop = path.resolve(import.meta.dirname, "..");
 const repo = path.resolve(desktop, "..");
@@ -32,8 +34,16 @@ function check(label, ok, detail = "") {
 // 서명만 가진 채 hardened runtime .app 안에 들어간다 — 를 이것이 잡는다. 아래 18번의 entitlement
 // 표본은 파일 몇 개만 보므로 그물이 되지 못한다. 454개 전수로 3.4초다(실측).
 //
-// **postgres 트리에는 걸지 않는다.** 별개 프로세스라 자기 서명의 플래그로 돌고, runtime 플래그
-// 없는 ad-hoc 서명인 것이 맞다 — 위 9~14번 묶음의 postgres 서명 검사가 plain --verify인 것이 그래서다.
+// **postgres 트리에도 이 함수를 건다 — 아래 14b.** package.mjs는 Task 6부터 postgres 트리에도
+// hardened runtime을 건다(Ruling R12: Apple 공증이 번들 안 실행 파일에 이를 요구한다고 실측됐다 —
+// 제출 id 88197b1f-daae-41bc-aa68-e62176a321de가 32개 실행 파일 전부를 "hardened runtime
+// 없음"으로 거절했다, task-6-report.md). 그 플래그를 잃는 회귀는 아래 9~14번 묶음 중
+// 어느 것도 잡지 못한다 — 거기는 바이너리 존재, pgvector/pg_bigm 존재, Mach-O 개수, `otool -L`
+// 의존성, 맨 `codesign --verify`(플래그를 읽지 않는다), `env -i … --version`만 본다. 그래서
+// `signAll(pgTargets, …, { runtime: … })`의 그 인자 하나가 조용히 `false`로 되돌아가도 이
+// 파일은 계속 초록일 뻔했다 — 이 함수의 noRuntime 부분만 postgres에도 걸어 그 구멍을 막는다.
+// unsigned·noArm64 부분은 postgres에 대해서는 쓰지 않는다(그 둘은 9~14번이 이미 다른 방식으로
+// 덮는다) — 14b가 `noRuntime`만 뽑아 쓰는 이유다.
 function verifyArm64(files) {
   const unsigned = [];
   const noArm64 = [];
@@ -113,6 +123,18 @@ if (fs.existsSync(asarPath)) {
   }
 }
 
+// 2c. app.asar 안에 Mach-O가 없다. 아래 minos 전수 검사는 파일시스템 트리만 훑으므로
+// asar 안은 보지 못한다 — 네이티브 모듈이 들어오면 "전수"가 거짓이 된다. 지금은 열 것이
+// 없지만(desktop에 runtime 의존성 0개, 위 2번이 node_modules 부재를 단언한다) 그 성질이
+// 유지되는지는 따로 물어야 한다 (Phase 6a 스펙 §5.4).
+if (fs.existsSync(asarPath)) {
+  const nativeExt = [".node", ".dylib", ".so"];
+  const native = asar
+    .listPackage(asarPath, { isPack: false })
+    .filter((e) => nativeExt.some((x) => e.endsWith(x)));
+  check("app.asar has no native modules", native.length === 0, native.join(", "));
+}
+
 // 3. API 트리 밖을 가리키는 심볼릭 링크가 없다
 const realApi = fs.realpathSync(apiDir);
 const links = execFileSync("find", [apiDir, "-type", "l"], { encoding: "utf8" })
@@ -180,6 +202,28 @@ try {
 }
 check("Info.plist carries NSMicrophoneUsageDescription", usage.length > 0, usage);
 
+// Info.plist에서 문자열 값 하나. PlistBuddy는 없을 수 있으므로 plutil로 JSON을 떠서 읽는다.
+let infoPlistJson = null;
+function plistValue(key) {
+  if (infoPlistJson === null) {
+    const r = spawnSync("plutil", ["-convert", "json", "-o", "-", path.join(contents, "Info.plist")], { encoding: "utf8" });
+    infoPlistJson = r.status === 0 ? JSON.parse(r.stdout) : {};
+  }
+  const v = infoPlistJson[key];
+  return typeof v === "string" ? v : "";
+}
+
+// 6b. 최소 macOS 선언이 번들의 실제 바닥과 같다 (P6a-C2). 셋이 한 값이어야 한다 —
+// 이 plist 키, scripts/lib/build-target.sh, minos.mjs의 MAX_MINOS.
+const lsMin = plistValue("LSMinimumSystemVersion");
+check(`Info.plist LSMinimumSystemVersion is ${MAX_MINOS}`, lsMin === MAX_MINOS, lsMin || "(not found)");
+
+// 6c. 앱 버전이 package.json과 같다 (P6a-C2). 어긋나면 6b의 업데이트 알림이
+// 자기보다 낮은 버전을 "새 버전"이라 말한다.
+const shortVersion = plistValue("CFBundleShortVersionString");
+check("Info.plist CFBundleShortVersionString equals package.json version", shortVersion === pkg.version,
+  `plist=${shortVersion || "(none)"} package.json=${pkg.version}`);
+
 // 7. 재서명 후 앱이 Electron 프리빌트가 아니라 자기 identifier를 갖는다
 // codesign -dv는 정보를 stdout이 아니라 stderr에 쓴다.
 const codesignInfo = spawnSync("codesign", ["-dv", "--verbose=2", appDir], { encoding: "utf8" });
@@ -191,6 +235,26 @@ if (codesignInfo.error !== undefined) {
   check("codesign Identifier is kr.damwha.app (not Electron)", identifier === "kr.damwha.app", identifier || "(not found)");
 }
 
+// 7b. 서명이 Developer ID이고 팀이 우리 팀이다 (P6a-C3). "서명이 있다"와 "**우리** 서명이다"는
+// 다른 질문이다 — ad-hoc도 --verify를 통과한다.
+const sig = loadSigning(desktop);
+const authority = /^Authority=(.+)$/m.exec(codesignInfo.stderr ?? "");
+check("app is signed by Developer ID Application", (authority?.[1] ?? "").startsWith("Developer ID Application:"),
+  authority?.[1] ?? "(not found)");
+const teamLine = /^TeamIdentifier=(.+)$/m.exec(codesignInfo.stderr ?? "");
+check(`app TeamIdentifier is ${sig.teamId}`, (teamLine?.[1] ?? "").trim() === sig.teamId, teamLine?.[1] ?? "(not found)");
+
+// 7c. 번들 Mach-O 전수가 같은 팀으로 서명됐다. postgres 트리도 포함한다(Phase 6a 스펙 §6) —
+// Task 6부터는 hardened runtime도 postgres에 걸리므로(Ruling R12) identity뿐 아니라 그 플래그도
+// python·ffmpeg 트리와 같아졌다.
+const wrongTeam = [];
+for (const f of machOFiles(contents)) {
+  const r = spawnSync("codesign", ["-dv", "--verbose=2", f], { encoding: "utf8" });
+  const t = /^TeamIdentifier=(.+)$/m.exec(r.stderr ?? "");
+  if ((t?.[1] ?? "").trim() !== sig.teamId) wrongTeam.push(`${path.relative(contents, f)}=${t?.[1]?.trim() ?? "none"}`);
+}
+check(`every Mach-O carries TeamIdentifier ${sig.teamId}`, wrongTeam.length === 0, wrongTeam.slice(0, 10).join(", "));
+
 // 8. 서명된 리소스가 온전하다 — 재서명이 앱을 깨뜨리지 않았는지
 const codesignVerify = spawnSync("codesign", ["--verify", "--deep", "--strict", appDir], { encoding: "utf8" });
 if (codesignVerify.error !== undefined) {
@@ -198,6 +262,30 @@ if (codesignVerify.error !== undefined) {
 } else {
   check("codesign --verify --deep --strict passes", codesignVerify.status === 0, (codesignVerify.stderr ?? "").trim());
 }
+
+// 8b. Contents/Frameworks도 hardened runtime을 진다 (Ruling R10, 최종 리뷰 I3). package.mjs가 이
+// 트리를 `signAll(…, null, …, { runtime: true })`로 따로 서명한다 — `.app --deep`이 Squirrel의
+// ShipIt(MH_EXECUTE) 같은 느슨한 실행 파일을 건너뛰기 때문이다(R10 실측). 그 인자가 빠지거나
+// false가 되면 ShipIt이 runtime 없이 나가는데, 이 단언 전에는 로컬의 어느 것도 그것을 못 잡았다 —
+// 7c는 팀만, 8은 서명의 온전함만, 14b·17b는 Resources의 세 트리만 본다. 공증 제출 뒤 Apple이
+// 거절해야 알았다(T6 Important 1이 postgres에서 닫은 것과 같은 구멍).
+// **트리 전수에 건다.** 공증이 요구하는 것은 실행 파일이지만 dylib에 붙은 플래그는 무해하고(R10),
+// package.mjs가 트리 전체를 runtime으로 서명하므로 전수가 그 서명의 계약 그대로다. 파일 종류로
+// 가르지 않으니 file(1) 분류를 한 벌 더 둘 필요도 없다. 2026-09-21 번들 12/12 통과(실행 파일
+// 6 — 헬퍼 넷·chrome_crashpad_handler·ShipIt, dylib 6).
+const fwDir = path.join(contents, "Frameworks");
+const fwMachos = machOFiles(fwDir);
+const fw = verifyArm64(fwMachos);
+const fwGaps = [...fw.unsigned, ...fw.noArm64, ...fw.noRuntime];
+check(
+  "every Mach-O in Contents/Frameworks carries hardened runtime",
+  fwMachos.length > 0 && fwGaps.length === 0,
+  fwMachos.length === 0
+    ? "no Mach-O found"
+    : fwGaps.length === 0
+      ? `${fwMachos.length}/${fwMachos.length} flags=…(runtime)`
+      : `${fwGaps.length} of ${fwMachos.length}: ${fwGaps.slice(0, 5).map((f) => path.relative(fwDir, f)).join("; ")}`,
+);
 
 // 9~14. 내장 PostgreSQL 트리 (Electron Phase 3 스펙 §6.9)
 const pgDir = path.join(contents, "Resources", "postgres");
@@ -238,6 +326,23 @@ for (const bin of ["postgres", "psql"]) {
   const r = spawnSync("env", ["-i", path.join(pgDir, "bin", bin), "--version"], { encoding: "utf8" });
   check(`env -i ${bin} --version runs from the bundle`, r.status === 0, (r.stdout || r.stderr || "").trim());
 }
+
+// 14b. postgres 트리도 hardened runtime을 진다(Ruling R12). 바로 위(9~14번 묶음)의
+// "postgres Mach-O files carry a valid signature" 검사는 arch를 지정하지 않는 plain --verify라
+// CodeDirectory의 flags를 읽지 않는다 — `signAll(pgTargets, …, { runtime: … })`의 그 인자가
+// 조용히 false로 되돌아가도 지금까지는 아무 것도 이것을 잡지 못했다(제출 id
+// 88197b1f-daae-41bc-aa68-e62176a321de가 32개 실행 파일 전부를 "hardened runtime 없음"으로
+// 거절한 것이 그 증거). verifyArm64()의 noRuntime 부분만 빌려 쓴다 — unsigned·noArm64는
+// 9~14번 묶음의 서명 검사가 이미 다른 방식으로 덮는다(줄 번호 대신 절 이름으로 가리킨다 — 8b가
+// 나중에 끼어들며 옛 줄 번호가 밀렸었다).
+const { noRuntime: pgNoRuntime } = verifyArm64(pgMachos);
+check(
+  "every Mach-O in the postgres tree carries hardened runtime",
+  pgNoRuntime.length === 0,
+  pgNoRuntime.length === 0
+    ? `${pgMachos.length}/${pgMachos.length} flags=…(runtime)`
+    : `${pgNoRuntime.length} of ${pgMachos.length}: ${pgNoRuntime.slice(0, 5).map((f) => path.relative(pgDir, f)).join("; ")}`,
+);
 
 // 15~21. 내장 Python 런타임과 내장 ffmpeg (Electron Phase 4 스펙 §6.1)
 const pyDir = path.join(contents, "Resources", "python");
@@ -365,6 +470,21 @@ const badShebang = binScripts.filter((f) => {
 check("every script in Resources/python/bin has a bundle-relative shebang", binScripts.length > 0 && badShebang.length === 0,
   binScripts.length === 0 ? "no scripts found" : badShebang.slice(0, 5).map((f) => path.basename(f)).join(", "));
 console.log(`      (${binScripts.length} console script(s) checked)`);
+
+// 22. 번들 Mach-O 전수의 minos가 MAX_MINOS 이하다 (Phase 6a 스펙 §5.4, P6a-C1).
+// 이 하나가 최소 macOS 바닥 전체의 회귀 방지다. 대상은 Contents/ 전부 — Resources의 세 트리와
+// Electron 프레임워크·헬퍼까지.
+const overMinos = [];
+for (const f of machOFiles(contents)) {
+  const v = readMinos(f);
+  if (v !== null && compareVersion(v, MAX_MINOS) > 0) overMinos.push(`${path.relative(contents, f)}=${v}`);
+}
+check(
+  `every Mach-O in the bundle targets macOS ${MAX_MINOS} or lower`,
+  overMinos.length === 0,
+  // 전부 보고한다 — 하나만 보이면 원인 패키지를 못 찾는다.
+  overMinos.join(", "),
+);
 
 if (failures.length > 0) {
   console.error(`\n${failures.length} bundle hygiene check(s) failed.`);

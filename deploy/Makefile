@@ -148,7 +148,13 @@ setup:
 	  cp .env.example .env; echo ".env 생성 (.env.example 복사)"; \
 	fi
 	@# DAMWHA_VERSION: .env.example의 값은 릴리스마다 낡는다. gh가 있으면 최신 태그로 맞춘다.
-	@if command -v gh >/dev/null && latest=$$(gh release view -R $(REPO) --json tagName -q .tagName 2>/dev/null); then \
+	@# `gh release view`(태그 없이)는 저장소의 "Latest"를 준다 — 이 레포는 desktop-v<ver> 태그로
+	@# 데스크톱 릴리스도 내므로, 데스크톱 릴리스가 Latest가 되면 여기 .env가 desktop-v* 태그로
+	@# 덮인다(2026-09-21 desktop-v0.3.0 발행 때 실제로 겪었다 — 존재하지 않는 이미지 태그가 됨).
+	@# 그래서 Latest에 기대지 않고 v* 태그 중 가장 최신을 직접 고른다: `gh release list`는
+	@# 최신이 먼저 오고(실측 확인), draft·prerelease는 `gh release view`의 기존 동작과 맞추려고
+	@# --exclude-drafts --exclude-pre-releases로 뺀다. `grep '^v'`가 desktop-v*를 걸러낸다.
+	@if command -v gh >/dev/null && latest=$$(gh release list -R $(REPO) --exclude-drafts --exclude-pre-releases --json tagName -q '.[].tagName' 2>/dev/null | grep '^v' | head -1); then \
 	  latest=$${latest#v}; cur=$$(sed -n 's/^DAMWHA_VERSION=//p' .env | tail -1); \
 	  if [ "$$cur" != "$$latest" ]; then \
 	    sed -i.bak "s/^DAMWHA_VERSION=.*/DAMWHA_VERSION=$$latest/" .env && rm -f .env.bak; \

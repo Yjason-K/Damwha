@@ -608,6 +608,180 @@ def test_the_two_public_signatures_do_not_change():
     ]
 
 
+# ── DISK_FULL이 요청 스레드 안에서 삼켜지는 것을 막는다 (Ruling R16, task-10 정정) ──
+#
+# `mlx_lm.server`의 모델 지연 로드는 요청 처리 스레드 안에서 일어난다. `check_free_space`가
+# 거기서 WorkerError(DISK_FULL, ...)를 던져도 파이썬 기본 스레드 예외 처리기가 stderr에
+# 찍고 삼킨다 — fn(HTTP 클라이언트의 블로킹 호출)에는 닿지 않고, job은
+# `lens_llm_timeout_seconds`(5분)를 다 기다린 뒤에야 `llm_request_failed`로 실패한다
+# (2026-09-21 task-10 packaged 실측). `run_guarding_disk_full`이 그 자리를 메운다.
+
+
+class _LineStderr:
+    """`proc.stderr`처럼 줄 단위로 이터레이트되는 대역. `feed()`로 나중에 채울 수 있다."""
+
+    def __init__(self, lines: list[str] | None = None):
+        self._lines = list(lines or [])
+
+    def __iter__(self):
+        return iter(self._lines)
+
+
+_DISK_FULL_TRACEBACK_LINE = (
+    "damwha_worker.errors.WorkerError: DISK_FULL: "
+    "디스크 공간이 부족해요 — 남은 용량 8.0 MB, 필요한 용량 6.2 GB.\n"
+)
+
+
+class _ProcWithStderr:
+    def __init__(self, lines: list[str] | None = None):
+        self.stderr = _LineStderr(lines)
+
+
+def _relayed(proc):
+    """실제 `managed_llm_server`가 `popen()` 직후 하는 일을 재현한다 — 테스트가
+    `run_guarding_disk_full`을 부르기 전에 감시를 먼저 붙인다(Ruling R18)."""
+    ls._start_stderr_relay(proc)
+    return proc
+
+
+def test_run_guarding_disk_full_returns_the_result_when_nothing_matches():
+    proc = _relayed(_ProcWithStderr(["INFO: some ordinary startup line\n"]))
+    assert ls.run_guarding_disk_full(proc, lambda: "ok") == "ok"
+
+
+def test_run_guarding_disk_full_falls_back_to_calling_fn_directly_without_a_proc():
+    """외부 서버 재사용(proc=None)이나 stderr 없는 대역(감시가 안 붙어 있음)이면 감시 없이
+    fn을 그대로 돈다."""
+    calls = []
+    assert ls.run_guarding_disk_full(None, lambda: calls.append(1) or "ok") == "ok"
+    assert calls == [1]
+
+    class _NoStderrProc:
+        pass
+
+    no_stderr = _NoStderrProc()
+    ls._start_stderr_relay(no_stderr)  # stderr가 없으니 아무 것도 안 붙는다
+    assert ls.run_guarding_disk_full(no_stderr, lambda: "ok2") == "ok2"
+
+
+def test_run_guarding_disk_full_propagates_other_errors_unchanged():
+    """DISK_FULL이 아닌 실패는 이 함수가 생기기 전과 똑같이 fn을 통해 그대로 올라온다."""
+    proc = _relayed(_ProcWithStderr(["INFO: normal log line\n"]))
+    original = WorkerError("llm_request_failed", "timed out", ErrorKind.PERMANENT)
+
+    def _boom():
+        raise original
+
+    with pytest.raises(WorkerError) as exc:
+        ls.run_guarding_disk_full(proc, _boom)
+    assert exc.value is original  # 새 경로로 갈아치우지 않는다
+
+
+def test_run_guarding_disk_full_raises_disk_full_without_waiting_for_fn():
+    """fn이 응답을 영원히 기다리는 동안에도, stderr의 DISK_FULL 서명이 보이면 즉시 실패한다."""
+    import threading as _threading
+    import time as _time
+
+    proc = _relayed(_ProcWithStderr([_DISK_FULL_TRACEBACK_LINE]))
+    never = _threading.Event()
+
+    def _hangs_forever():
+        never.wait(30)  # 실제 httpx 요청이 5분 타임아웃까지 기다리는 것과 같은 모양
+        return "should never get here"
+
+    start = _time.monotonic()
+    with pytest.raises(WorkerError) as exc:
+        ls.run_guarding_disk_full(proc, _hangs_forever)
+    elapsed = _time.monotonic() - start
+
+    assert exc.value.code == "DISK_FULL"
+    assert exc.value.kind is ErrorKind.PERMANENT
+    # 문구를 새로 짓지 않는다 — 트레이스백 줄에서 그대로 잘라낸 것과 바이트 단위로 같다.
+    assert exc.value.message == "디스크 공간이 부족해요 — 남은 용량 8.0 MB, 필요한 용량 6.2 GB."
+    assert elapsed < 3.0  # 30초 대기 중 즉시 — 5분 타임아웃을 기다리지 않는다
+
+
+def test_run_guarding_disk_full_catches_a_latch_set_before_it_was_called():
+    """readiness 대기 구간(managed_llm_server가 아직 run_guarding_disk_full을 부르기 전)에
+    DISK_FULL이 떴어도 감시가 놓치지 않는다 — 이게 Ruling R18이 고친 것의 핵심이다. 이전
+    라운드는 `run_guarding_disk_full`이 불릴 때만 감시를 시작해 이 경로를 놓쳤다.
+    """
+    proc = _ProcWithStderr([_DISK_FULL_TRACEBACK_LINE])
+    ls._start_stderr_relay(proc)  # popen 직후처럼, run_guarding_disk_full보다 먼저
+    proc.damwha_disk_full_event.wait(3.0)  # 릴레이가 그 한 줄을 처리할 시간을 준다
+    assert proc.damwha_disk_full_event.is_set()  # 이 시점에 이미 래치가 서 있다
+
+    with pytest.raises(WorkerError) as exc:
+        ls.run_guarding_disk_full(proc, lambda: "should never get here")
+    assert exc.value.code == "DISK_FULL"
+
+
+def test_run_guarding_disk_full_can_be_called_twice_on_the_same_proc():
+    """이전 라운드의 Minor 5 회귀 — 같은 proc로 두 번 불러도(예: 같은 job 안에서 재시도)
+    두 번째 호출이 stderr 이터레이터를 새로 열지 않으므로 첫 감시와 경합하지 않는다."""
+    proc = _relayed(_ProcWithStderr([_DISK_FULL_TRACEBACK_LINE]))
+    proc.damwha_disk_full_event.wait(3.0)
+
+    for _ in range(2):
+        with pytest.raises(WorkerError) as exc:
+            ls.run_guarding_disk_full(proc, lambda: "should never get here")
+        assert exc.value.code == "DISK_FULL"
+
+
+def test_stderr_relay_detects_the_signature_even_when_mirroring_the_line_fails():
+    """이전 라운드의 Minor 6 — 검사를 미러보다 먼저 한다. `sys.stderr.write`가 던져도
+    (예: 캡처된 stderr가 닫힘) 탐지 자체는 죽지 않는다."""
+    import unittest.mock
+
+    class _BrokenStderr:
+        def write(self, _s):
+            raise OSError("stderr closed")
+
+        def flush(self):
+            pass
+
+    proc = _ProcWithStderr([_DISK_FULL_TRACEBACK_LINE])
+    broken = _BrokenStderr()
+    with unittest.mock.patch.object(sys, "stderr", broken):
+        ls._start_stderr_relay(proc)
+        proc.damwha_disk_full_event.wait(3.0)
+
+    assert proc.damwha_disk_full_event.is_set()
+    assert proc.damwha_disk_full_box["message"] == (
+        "디스크 공간이 부족해요 — 남은 용량 8.0 MB, 필요한 용량 6.2 GB."
+    )
+
+
+def test_managed_llm_server_passes_stderr_pipe_to_popen():
+    """R16 전체가 이 kwarg 하나에 기댄다 — `stderr=subprocess.PIPE`가 빠지면
+    `_start_stderr_relay`가 아무 것도 감시하지 못한 채 조용히 no-op이 되고, 708건이 그대로
+    통과한 채 5분짜리 거짓 사유 버그가 되돌아온다(리뷰 Important 3). 이 테스트가 그 연결을
+    고정한다."""
+    captured = {}
+
+    def popen(argv, **kwargs):
+        captured["kwargs"] = kwargs
+        return FakeProc()
+
+    with ls.managed_llm_server(MODEL, _settings(), popen=popen, probe=_probe_after(1)):
+        pass
+
+    assert captured["kwargs"].get("stderr") is subprocess.PIPE
+
+
+def test_disk_full_marker_matches_the_real_worker_error_traceback_line():
+    """`_DISK_FULL_MARKER`는 `WorkerError`의 모듈 경로·클래스 이름·`__init__` 포맷에
+    기대어 손으로 적은 문자열이다(리뷰 Important 4) — 테스트들이 그 리터럴을 도로 먹이면
+    `WorkerError`를 옮기거나 이름을 바꿔도 초록으로 남는다. 이 테스트는 **실제** 예외를
+    포맷해 그 문자열이 정말 이 서명으로 시작하는지 직접 확인한다."""
+    import traceback
+
+    exc = WorkerError(ls.DISK_FULL, "x", ErrorKind.PERMANENT)
+    formatted = traceback.format_exception_only(type(exc), exc)[-1]
+    assert formatted.startswith(ls._DISK_FULL_MARKER)
+
+
 def test_the_supervisor_judgment_fires_after_the_worker_watchdog():
     """Task 9b의 무진행 90초가 이 판정 120초보다 **먼저** 끝난다.
 

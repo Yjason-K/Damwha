@@ -63,6 +63,10 @@ HF_TOKEN_INVALID = "hf_token_invalid"  # 401: 토큰이 없거나 무효
 HF_GATE_NOT_ACCEPTED = "hf_gate_not_accepted"  # 403: 게이트 모델의 조건 미수락
 MODEL_DOWNLOAD_FAILED = "model_download_failed"  # 그 밖 — 네트워크·타임아웃·오프라인 캐시 미스·5xx
 
+# 디스크 부족. PERMANENT인 이유: 디스크가 그대로인 채 재시도해 봐야 같은 자리에서 진다.
+# Phase 5가 만든 백오프 5회를 여기에 태우지 않는다 (Phase 6a 스펙 §8.1).
+DISK_FULL = "DISK_FULL"
+
 _AUTH_STATUSES = (401, 403)
 _CHAIN_LIMIT = 8
 

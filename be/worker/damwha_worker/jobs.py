@@ -249,6 +249,7 @@ class ExtractLensesHandler(JobHandler):
                 worker_id=ctx.worker_id,
                 shutdown_event=ctx.shutdown_event,
                 meeting_timezone=ctx.meeting_timezone,
+                proc=proc,
             )
 
     def on_failure(self, conn, job, ctx, error, *, retry):
@@ -281,6 +282,7 @@ class SummarizeMeetingHandler(JobHandler):
                 summary_client,
                 worker_id=ctx.worker_id,
                 shutdown_event=ctx.shutdown_event,
+                proc=proc,
             )
 
     def on_failure(self, conn, job, ctx, error, *, retry):

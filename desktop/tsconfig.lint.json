@@ -11,6 +11,6 @@
   // 루트의 `*.ts`(vitest.config.ts)도 넣는다. 어느 설정에도 안 들어가 있던 자리라, 거기의
   // 타입 오류는 `pnpm lint`도 `vitest run`도(vite가 타입을 벗겨 실행한다) 잡지 못했다.
   "extends": "./tsconfig.json",
-  "compilerOptions": { "noEmit": true, "rootDir": "." },
+  "compilerOptions": { "noEmit": true, "rootDir": ".", "allowJs": true },
   "include": ["src/**/*.ts", "tests/**/*.ts", "*.ts"]
 }

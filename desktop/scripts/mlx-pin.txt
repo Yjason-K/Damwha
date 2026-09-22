@@ -1,0 +1,14 @@
+# desktop/scripts/mlx-pin.txt
+# macOS 15.0용 mlx 휠. build-python.sh가 uv pip install 뒤에 이 둘로 갈아 끼운다.
+#
+# **왜 있나** (Phase 6a 스펙 §5.3): uv는 호스트의 macOS 버전(27.0)에 맞는 가장 높은 태그의
+# 휠을 집는다. mlx는 macosx_14_0 / 15_0 / 26_0 셋을 내므로 이 맥에서 그냥 깔면 26.0이 들어와
+# 번들 전체의 바닥이 26.0이 된다. uv의 --python-platform으로는 "macOS 15"를 표현할 수 없다
+# (값 목록에 버전 knob이 없고, aarch64-apple-darwin은 macosx_13_0으로 내려가 mlx 해석이
+# unsatisfiable이 된다 — 2026-09-20 실측).
+#
+# **핀을 올릴 때**: be/worker/pyproject.toml의 mlx 버전과 아래 VERSION이 같아야 한다.
+# 스크립트가 다르면 멈춘다. 새 URL은 PyPI의 그 버전 JSON에서 macosx_15_0_arm64 휠을 찾는다.
+VERSION=0.31.2
+mlx https://files.pythonhosted.org/packages/08/e7/a851a451b1327af9fb4df3991b9ae87d066b6f6630e854af55c288b0995a/mlx-0.31.2-cp312-cp312-macosx_15_0_arm64.whl edb9797db7d852477ca1c99708058654ee860d4148fe5765f0d55528e2b1aa22
+mlx-metal https://files.pythonhosted.org/packages/4f/5d/4c690d5b93c30ba002656c37363159d978705bf8eb801b8481840fb942c2/mlx_metal-0.31.2-py3-none-macosx_15_0_arm64.whl e9d4e5fce6ca10a87a0e388597f99519ad594d09e674708b5312bd8bd4f5997d
