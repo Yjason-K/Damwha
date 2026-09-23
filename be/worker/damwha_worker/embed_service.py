@@ -1,8 +1,9 @@
 """쿼리 임베딩 전용 로컬 서비스. API가 localhost로만 호출. ML은 src/ 밖 유지.
 
 진입: `python -m damwha_worker.embed_service [--run-id=<uuid>]` (스펙 §6.2) 또는 `damwha-embed`
-콘솔 스크립트(`deploy/README.md`의 `uv tool install` 경로). `--run-id`는 앱이 `ps`로 읽는 소유
-표식일 뿐 여기서는 읽지 않는다 — uvicorn도 `sys.argv`를 보지 않는다.
+콘솔 스크립트(`uv tool install` 경로 — 걷어낸 셀프호스팅 배포가 쓰던 진입점, `pyproject.toml`
+참고). `--run-id`는 앱이 `ps`로 읽는 소유 표식일 뿐 여기서는 읽지 않는다 — uvicorn도
+`sys.argv`를 보지 않는다.
 
 **import만으로는 설정을 읽지도 모델을 받지도 않는다.** 설정과 임베더는 `_service()`가 처음
 불릴 때 만든다. 빌드의 진입점 확인과 테스트가 이 모듈을 import하는데, 모듈 수준에서 만들면

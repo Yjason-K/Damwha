@@ -18,10 +18,9 @@ let dmgPath = null;
 
 // 릴리스에서만 태그를 본다. 개발 중 패키징이 잦아 태그 없는 커밋에서 자주 돈다.
 //
-// **태그는 desktop-v<version>이다** (Phase 6a 스펙 §4): v<version>은 deploy/release.sh가
-// 셀프호스팅 웹 배포에 이미 쓰고 있고(v0.1.1~v0.2.3 실재, 자산은 tarball과 wheel), 그 스크립트는
-// 태그 버전이 be/worker/pyproject.toml과 다르면 거절한다. 섞으면 6b의 릴리스 조회가 웹 배포를
-// 가리켜 앱이 사용자에게 tarball을 권한다.
+// **태그는 desktop-v<version>이다** (Phase 6a 스펙 §4). v<version>은 이제 걷어낸 셀프호스팅
+// 웹 배포가 쓰던 네임스페이스다(v0.1.1~v0.2.3 실재, 과거 기록으로만 남는다) — 구분해 두는 것은
+// 여전히 유효하다: 앱의 (미래) 자동 업데이트 조회가 desktop-v*를 찾는다.
 const desktopPkg = JSON.parse(fs.readFileSync(path.join(desktop, "package.json"), "utf8"));
 const expectedTag = `desktop-v${desktopPkg.version}`;
 if (RELEASE) {

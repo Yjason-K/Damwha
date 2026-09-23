@@ -95,27 +95,25 @@ Developer ID로 서명하고 공증까지 마친 DMG로 배포한다. ad-hoc은 
   DMG 생성(재서명하지 않고 이미 서명·스테이플된 바이트를 그대로 담는다) → DMG 서명·공증·스테이플·
   `sha256` → 마운트해 안의 `.app`도 재검증. **`gh release create`는 여기 없다** — 자산 발행은
   별도 스크립트 `scripts/publish.sh`다(아래). 되돌리기 어려운 공개 동작을 빌드에 숨기지 않는다.
-- **태그 네임스페이스는 `desktop-v<version>`**이고 `deploy/release.sh`가 쓰는 `v<version>`
-  (셀프호스팅 웹 배포, `v0.1.1`~`v0.2.3` 실재)과 다르다. 섞으면 그 스크립트가 태그 버전을
-  `be/worker/pyproject.toml`과 대조해 거절하고, 6b의 업데이트 조회가 웹 배포를 가리켜 앱이
-  사용자에게 tarball을 권하게 된다.
+- **정책(2026-09-23~): Damwha는 데스크톱 앱으로만 배포한다.** 셀프호스팅 웹 배포(`v<version>`
+  태그, `deploy/release.sh`·`deploy/Makefile`)는 걷어냈다 — `v0.1.1`~`v0.2.3` 태그는 과거 기록으로만
+  남는다. 저장소의 "Latest"는 이제 데스크톱 릴리스다.
+- **태그 네임스페이스는 그래도 `desktop-v<version>`을 유지한다** — 걷어낸 웹 배포가 쓰던
+  `v<version>`과 구분해 둔 것이고, 앱의 (미래) 자동 업데이트 조회가 `desktop-v*`를 찾는다.
 - **데스크톱 릴리스는 `bash desktop/scripts/publish.sh --notes-file <파일>`로 낸다 — 손으로
   `gh release create`를 치지 않는다.** 스크립트는 gh를 부르기 전에 작업 트리가 깨끗한지, 태그
   `desktop-v<version>`이 HEAD를 가리키고 원격(origin)에도 같은 커밋으로 있는지(R22 — 없으면
   `--verify-tag`가 거절한다), `out/`의 DMG가 `.sha256`과 맞는지 보고, 하나라도 어긋나면 아무것도
-  내지 않는다. 태그 푸시는 하지 않는다 — 사람이 먼저 한다. 발행은 `--verify-tag --latest=false`로
-  하고, **발행 뒤 태그 없는 `gh release view`(= 저장소 Latest)가 여전히 `v*`인지 다시 본다.**
-  아니면 되돌리는 명령(`gh release edit <최신 v*> --latest`)을 출력하고 실패한다 — 자동으로
-  되돌리지는 않는다. 노트에는 최소 macOS(15.0)를 적는다(스펙 §7.1).
-- **저장소의 "Latest"는 웹 배포의 것이고, 이미 나가 있는 웹 설치를 지키는 것은
-  `--latest=false` 하나뿐이다.** v0.2.1~v0.2.3 tarball에 든 `deploy/Makefile`(`deploy/release.sh`가
-  tarball에 복사한다. v0.2.0 이전에는 Makefile이 없다)은 태그 없는 `gh release view`로 Latest를
-  읽어 `.env`의 `DAMWHA_VERSION`에 쓴다. 그 Makefile의 `make upgrade`는 `compose down` →
-  `setup` → `compose pull` 순이라, Latest가 `desktop-v*`면 없는 이미지 태그를 당기다 실패해
-  **스택을 내린 채 남는다.** 2026-09-21 `desktop-v0.3.0` 발행 때 Latest를 실제로 빼앗겼고
-  `gh release edit v0.2.3 --latest`로 되돌렸다. 저장소의 `deploy/Makefile`은 그 뒤 `v*` 태그만
-  고르도록 고쳤지만(`7799dd6`) 그 수정은 **새 클론과 앞으로의 tarball에만** 닿는다 — "이중
-  방어"는 그 새 설치에만 성립한다(최종 리뷰 I2).
+  내지 않는다. 태그 푸시는 하지 않는다 — 사람이 먼저 한다. 발행은 `--verify-tag --latest`로
+  하고(데스크톱 릴리스가 저장소 Latest가 된다), **발행 뒤 태그 없는 `gh release view`(= 저장소
+  Latest)가 방금 낸 태그와 같은지 다시 본다.** 다르면 고치는 명령(`gh release edit desktop-v<ver>
+  --repo Yjason-K/Damwha --latest`)을 출력하고 실패한다 — 자동으로 고치지는 않는다. 노트에는
+  최소 macOS(15.0)를 적는다(스펙 §7.1).
+  - 이 스크립트는 과거(6a 초기)에는 `--latest=false`로 발행했다 — 당시 저장소 Latest는 웹 배포의
+    것이었고, 이미 나가 있는 웹 설치(v0.2.1~v0.2.3 tarball의 `make upgrade`)가 그 값을 읽어 없는
+    이미지 태그를 당기다 실패하는 사고가 실제로 났다(2026-09-21, `desktop-v0.3.0` 발행 때 Latest를
+    빼앗겼다가 `gh release edit v0.2.3 --latest`로 되돌렸다). 웹 배포 자체가 걷힌 지금은 그 위험이
+    없다.
 - **최소 macOS 15.0을 세 자리가 같은 값으로 강제한다** — `scripts/lib/build-target.sh`의
   `MACOSX_DEPLOYMENT_TARGET`(postgres·ffmpeg 소스 빌드가 source), `electron-builder.yml`의
   `LSMinimumSystemVersion`, `scripts/lib/minos.mjs`의 `MAX_MINOS`(`check-bundle`이 번들 Mach-O

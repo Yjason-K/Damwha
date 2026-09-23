@@ -14,9 +14,10 @@ dependencies = [
     "psycopg[binary]==3.3.4",
 ]
 
-# `uv tool install 'damwha-worker[models] @ <wheel>'`로 소스 없이 쓰는 팀원용 진입점
-# (deploy/README.md). 워커는 `python -m damwha_worker`와 같은 main이고, embed는 uvicorn
-# 래퍼다 — uv tool은 entry point만 PATH에 노출하므로 uvicorn 바이너리가 안 보인다.
+# `uv tool install 'damwha-worker[models] @ <wheel>'`로 소스 없이 쓰는 진입점 — 걷어낸
+# 셀프호스팅 배포가 쓰던 경로다(지금은 데스크톱 앱이 번들 python으로 대신한다). 워커는
+# `python -m damwha_worker`와 같은 main이고, embed는 uvicorn 래퍼다 — uv tool은 entry point만
+# PATH에 노출하므로 uvicorn 바이너리가 안 보인다.
 [project.scripts]
 damwha-worker = "damwha_worker.__main__:main"
 damwha-embed = "damwha_worker.embed_service:main"
