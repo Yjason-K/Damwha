@@ -208,3 +208,20 @@ export function subscribeLiveStatus(
 export function clearLiveCapture(meetingId: string): void {
   if (active?.meetingId === meetingId) active = null;
 }
+
+/**
+ * 데스크톱 앱의 종료 handshake가 쓴다. 창을 닫으면 렌더러가 파괴돼 stop()이 아예 불리지
+ * 않으므로(이 코드베이스에 beforeunload 훅이 없다), main이 종료 전에 이것을 물어본다.
+ */
+export function hasLiveCapture(): boolean {
+  return active !== null && isLiveCapture(active);
+}
+
+/**
+ * 활성 녹음을 화면의 종료 버튼과 **같은 경로**로 중지한다. 별도 종료 경로를 만들면 둘이
+ * 갈라져, 화면으로 끝낸 녹음과 앱 종료로 끝낸 녹음의 마감이 달라진다.
+ */
+export async function stopActiveLiveCapture(): Promise<void> {
+  if (active === null || !isLiveCapture(active)) return;
+  await active.recorder.stop();
+}

@@ -1,0 +1,117 @@
+/**
+ * API 자식 stderr에서 사람에게 보여줄 원인 한 줄을 뽑는다. electron을 import하지
+ * 않는 순수 모듈이다 — shell-window.ts는 electron을 값으로 import해 vitest가 못
+ * 불러오므로, 테스트 대상 로직을 여기로 뺐다 (Fix round 1, 스펙 §6.5/§8).
+ */
+
+// NestJS Logger는 stderr가 TTY가 아니어도 ANSI 색상 escape를 쓴다. textContent로
+// 넣으면 그 제어문자가 글자 그대로 남아, 원인을 알려 주는 화면이 깨져 보인다.
+// eslint-disable-next-line no-control-regex
+export const ANSI_SGR = /\x1b\[[0-9;]*m/g;
+
+/** be/src/main.ts의 fail-fast 계약: 부팅 실패는 항상 `startup failed: <message>` 한
+ *  줄로 시작한다(main.ts의 bootstrap().catch). <message>가 zod 에러처럼 여러 줄
+ *  (JSON.stringify pretty-print)이면 그 뒤로 원본 JSON이 그대로 이어지고 마지막
+ *  줄은 닫는 대괄호 `]`뿐이다 — "마지막 줄"을 고르면 원인이 사라진다. */
+const STARTUP_FAILED = "startup failed:";
+
+/** 최소한 글자나 숫자 하나는 있어야 "의미 있는 줄"로 친다. zod pretty-print의 `]`,
+ *  `},`, `[` 같은 순수 괄호/구두점 줄은 원인을 설명하지 못한다. 유니코드 인식이라
+ *  한글도 "글자"로 잡는다. */
+const HAS_CONTENT = /[\p{L}\p{N}]/u;
+
+/**
+ * API stderr에서 사람에게 보여줄 마지막 의미 있는 줄.
+ *
+ * 1순위: `startup failed:`를 담은 마지막 줄 — 우리 자신의 에러 계약이 찍는 줄이라
+ *        가장 신뢰할 수 있다(한 줄짜리 원인이든, 여러 줄 메시지의 첫 줄이든).
+ * 2순위: 그 줄이 없으면 괄호·구두점뿐인 줄을 건너뛰고 글자/숫자가 있는 마지막 줄.
+ * 3순위: 그마저 없으면(입력이 비었거나 공백뿐이면) 빈 문자열.
+ */
+export function lastMeaningfulLine(stderr: string): string {
+  const lines = stderr
+    .replace(ANSI_SGR, "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (lines[i].includes(STARTUP_FAILED)) return lines[i];
+  }
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (HAS_CONTENT.test(lines[i])) return lines[i];
+  }
+  return "";
+}
+
+/** 원인 블록의 기본 상한. 화면이 감당할 수 있는 줄 수이고, 전문은 로그 파일에 있다. */
+const BLOCK_LIMIT = 24;
+
+/**
+ * 원인 블록의 글자 상한. 줄 수만 묶으면 줄바꿈 없는 한 줄(JSON 로그, 진행 바의 `\r` 덩어리)이
+ * stderr 꼬리 8KB를 통째로 화면과 실패 화면의 URL 쿼리에 싣는다. 전문은 로그 파일에 있다.
+ */
+export const BLOCK_MAX_CHARS = 3_000;
+
+/** 잘렸다는 표시. 잘린 쪽에 붙는다. */
+const ELIDED = "…";
+
+function headOf(text: string): string {
+  return text.length <= BLOCK_MAX_CHARS ? text : `${text.slice(0, BLOCK_MAX_CHARS)}${ELIDED}`;
+}
+
+function tailOf(text: string): string {
+  return text.length <= BLOCK_MAX_CHARS ? text : `${ELIDED}${text.slice(-BLOCK_MAX_CHARS)}`;
+}
+
+/**
+ * `startup failed:`부터 끝까지를 블록으로 돌려준다.
+ *
+ * lastMeaningfulLine은 한 줄만 고르므로 zod 검증 실패처럼 여러 줄인 원인이 화면에
+ * `startup failed: [`까지만 보였다(Phase 1 결과의 남은 한계). 원인 문장은 로그에만 있었다.
+ * 그 줄부터 끝까지를 상한 안에서 그대로 올린다.
+ */
+export function failureBlock(stderr: string, maxLines: number = BLOCK_LIMIT): string {
+  const lines = stderr
+    .replace(ANSI_SGR, "")
+    .split("\n")
+    .map((l) => l.trimEnd())
+    .filter((l) => l.trim().length > 0);
+
+  let start = -1;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (lines[i].includes("startup failed:")) {
+      start = i;
+      break;
+    }
+  }
+  // 원인은 `startup failed:` 줄부터 시작하므로 넘치면 뒤를 자른다.
+  if (start < 0) return tailOf(lastMeaningfulLine(stderr));
+  return headOf(lines.slice(start, start + maxLines).join("\n"));
+}
+
+/** 죽은 자식의 원인 블록에서 `startup failed:`가 없을 때 올리는 꼬리 줄 수. */
+const EXIT_TAIL_LINES = 12;
+
+/**
+ * 죽은 자식이 남긴 원인 블록 (스펙 §8 "ready 신호 전에 죽음 → stderr 블록과 종료 코드").
+ *
+ * `startup failed:`가 있으면 failureBlock — API의 fail-fast 계약이 원인을 그 줄부터 적는다.
+ * 없으면 마지막 몇 줄이다. failureBlock의 대체 경로(마지막 의미 있는 줄 **하나**)를 쓰지 않는
+ * 이유는 worker·embed가 파이썬이라서다: 트레이스백의 마지막 줄은 예외 이름뿐이고, 어느 모듈의
+ * 어느 호출에서 났는지는 그 위 줄들에 있다. worker/embed 어댑터의 readiness가 이미 12줄을 쓴다.
+ *
+ * 감독자가 이것을 부른다 — 그래야 failureBlock이 사용자가 보는 화면에 닿는다. 전에는 api
+ * 어댑터의 readiness만 불렀는데, 감독자의 "핸들이 죽었나" 검사가 readiness보다 먼저 돌아
+ * packaged에서 죽은 API의 zod 원인은 한 번도 화면에 오르지 못했다.
+ */
+export function exitCauseBlock(stderr: string, maxLines: number = EXIT_TAIL_LINES): string {
+  const lines = stderr
+    .replace(ANSI_SGR, "")
+    .split("\n")
+    .map((l) => l.trimEnd())
+    .filter((l) => l.trim().length > 0);
+  if (lines.some((l) => l.includes(STARTUP_FAILED))) return failureBlock(stderr);
+  // 트레이스백은 끝에 원인이 있으므로 넘치면 앞을 자른다.
+  return tailOf(lines.slice(-maxLines).join("\n"));
+}

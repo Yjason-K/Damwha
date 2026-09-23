@@ -63,7 +63,7 @@ def run_process_meeting(
     log.info("%s process_meeting start pv=%s", ctx, payload.processing_version)
 
     # mark processing (meeting guard); 0-row → lost ownership
-    if db.mark_processing(conn, meeting_id, job_id, payload.processing_version) == 0:
+    if db.mark_processing(conn, meeting_id, job_id, payload.processing_version, worker_id) == 0:
         log.info("%s process_meeting lost ownership at mark_processing", ctx)
         return "lost"
 

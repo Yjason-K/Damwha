@@ -127,3 +127,54 @@ def test_normalize_repairs_a_streaming_wav_header_before_ffmpeg(monkeypatch, tmp
     )
     assert calls[0] == ("repair", "/in/live.wav")
     assert calls[1][0] == "ffmpeg"
+
+
+def test_probe_uses_ffprobe_bin_env(monkeypatch):
+    monkeypatch.setenv("FFPROBE_BIN", "/custom/path/ffprobe")
+    captured = {}
+
+    def runner(cmd):
+        captured["cmd"] = cmd
+        return ok_proc(stdout=b'{"format": {"duration": "1.0"}}')
+
+    ffmpeg.probe("/x/a.m4a", runner=runner)
+    assert captured["cmd"][0] == "/custom/path/ffprobe"
+
+
+def test_normalize_uses_ffmpeg_bin_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("FFMPEG_BIN", "/custom/path/ffmpeg")
+    # 재귀 probe(temp_path)는 모듈 기본 runner를 탄다(기존 동작) — 실제 ffprobe를
+    # 부르지 않도록 스텁한다.
+    monkeypatch.setattr(ffmpeg, "probe", lambda path: ffmpeg.ProbeResult(1))
+    captured = {}
+
+    def runner(cmd):
+        captured["cmd"] = cmd
+        return ok_proc()
+
+    ffmpeg.normalize("/in/a.m4a", str(tmp_path / "n.flac"), runner=runner)
+    assert captured["cmd"][0] == "/custom/path/ffmpeg"
+
+
+def test_bins_default_to_plain_names_without_env(monkeypatch, tmp_path):
+    monkeypatch.delenv("FFPROBE_BIN", raising=False)
+    monkeypatch.delenv("FFMPEG_BIN", raising=False)
+
+    probe_captured = {}
+
+    def probe_runner(cmd):
+        probe_captured["cmd"] = cmd
+        return ok_proc(stdout=b'{"format": {"duration": "1.0"}}')
+
+    ffmpeg.probe("/x/a.m4a", runner=probe_runner)
+    assert probe_captured["cmd"][0] == "ffprobe"
+
+    monkeypatch.setattr(ffmpeg, "probe", lambda path: ffmpeg.ProbeResult(1))
+    normalize_captured = {}
+
+    def normalize_runner(cmd):
+        normalize_captured["cmd"] = cmd
+        return ok_proc()
+
+    ffmpeg.normalize("/in/a.m4a", str(tmp_path / "n.flac"), runner=normalize_runner)
+    assert normalize_captured["cmd"][0] == "ffmpeg"

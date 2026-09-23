@@ -105,6 +105,14 @@ The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by 
   목록 조회)이고 두 번째가 실제 시작이다. 자동화로 이 흐름을 몰 때 이걸 모르면 “아무 일도 안
   일어난다”로 보인다.
 
+- **데스크톱 앱이 녹음 중 종료를 위해 `window.__damwha_desktop`을 부른다** (`lib/desktop-bridge.ts`, `main.tsx`에서
+  한 번 설치). `isRecording()`과 `stopLiveRecording()` 둘뿐이고, 후자는 화면의 중지 버튼과 **같은**
+  `stopActiveLiveCapture()`를 탄다 — 종료 경로를 따로 만들면 둘이 갈라진다. Electron main이 ⌘Q에서
+  `executeJavaScript`로 이것을 불러 확인 대화상자를 띄울지 정하고, 승인하면 렌더러의 중지(flush·마지막
+  청크·`POST /live/stop`)를 완주시킨 뒤 창을 닫는다(Phase 2 스펙 §6.9, P2-C13). 이름은 main.ts에
+  문자열로만 적혀 있어 **이름을 바꾸면 데스크톱의 확인과 handshake가 조용히 건너뛰어진다.** 웹 배포에서는
+  아무도 부르지 않아 무해하다.
+
 - **Worklet 종료는 flush ACK로 끝난다** (`lib/pcm-worklet.ts`, `lib/pcm-worklet-protocol.ts`).
   메시지는 메인→Worklet `begin`/`flush`, Worklet→메인 `ready`/`begun`/`pcm`/`flushed` 넷뿐이고
   타입은 `pcm-worklet-protocol.ts` 한 곳에만 있다(양쪽이 값을 복제하지 않는다). 종료 시 그냥

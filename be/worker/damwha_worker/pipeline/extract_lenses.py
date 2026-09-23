@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 
 from .. import db
 from ..contracts import ExtractLensesPayload
+from ..llm_server import run_guarding_disk_full
 from .stage import enter_stage
 from .timing import timed_stage
 
@@ -16,6 +17,7 @@ def run_extract_lenses(
     worker_id: str,
     shutdown_event: threading.Event | None = None,
     meeting_timezone: str = "Asia/Seoul",
+    proc=None,
 ) -> str:
     outcome = db.mark_lens_run_running(
         conn,
@@ -48,12 +50,18 @@ def run_extract_lenses(
         # 보이는 uncategorized TRANSIENT 경고가 로그에 남는다.
         return "lost"
     meeting_date = row["recorded_at"].astimezone(ZoneInfo(meeting_timezone)).date()
-    # LLM 호출은 긴 회의에서 수 분 — timed_stage가 진행 중 tick과 완료 시간을 남긴다
+    # LLM 호출은 긴 회의에서 수 분 — timed_stage가 진행 중 tick과 완료 시간을 남긴다.
+    # `run_guarding_disk_full`로 감싸는 이유는 summarize_meeting과 같다(Ruling R16) —
+    # extract_lenses도 같은 managed_llm_server를 통해 같은 mlx_lm.server를 띄우고, 같은
+    # 요청 스레드 안 지연 로드에서 DISK_FULL이 삼켜지는 경로를 그대로 공유한다.
     with timed_stage("extract_lenses", f"job={job['id']} meeting={payload.meeting_id}") as t:
-        candidates = client.extract(
-            model=payload.model,
-            utterances=[dict(row) for row in rows],
-            meeting_date=meeting_date,
+        candidates = run_guarding_disk_full(
+            proc,
+            lambda: client.extract(
+                model=payload.model,
+                utterances=[dict(row) for row in rows],
+                meeting_date=meeting_date,
+            ),
         )
         t["detail"] = f"utterances={len(rows)} candidates={len(candidates)}"
     enter_stage(conn, job["id"], worker_id, "persist_lenses", 80, shutdown_event)

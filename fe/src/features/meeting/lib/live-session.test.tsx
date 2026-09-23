@@ -10,8 +10,10 @@ import {
   cancelLivePreparation,
   clearLiveCapture,
   getLiveRecorder,
+  hasLiveCapture,
   LiveCaptureBusy,
   prepareLiveRecorder,
+  stopActiveLiveCapture,
   subscribeLiveStatus,
 } from "./live-session";
 
@@ -328,5 +330,108 @@ describe("live-session registry", () => {
     mic.endDevice(); // 이미 실패한 뒤 다시 이벤트가 와도(예: 리스너 중복) 한 번만.
     await new Promise((r) => setTimeout(r, 0));
     expect(screen.getAllByText("녹음이 중단됐어요")).toHaveLength(1);
+  });
+
+  /**
+   * 데스크톱 종료 handshake(desktop-bridge.ts)가 쓰는 두 함수. desktop-bridge.test.ts는
+   * live-session 자체를 모킹하므로, 이 파일이 실제 registry·isLiveCapture 판정을
+   * 검증하는 유일한 자리다.
+   */
+  it("hasLiveCapture는 활성 녹음이 있을 때만 true다", async () => {
+    stubMic();
+    expect(hasLiveCapture()).toBe(false);
+    await startCapture("m1");
+    expect(hasLiveCapture()).toBe(true);
+  });
+
+  /**
+   * R9와 같은 함정 — meetingId만 보면 서버가 스스로 봉인한 뒤에도 "녹음 중"으로 남는다.
+   * hasLiveCapture가 isLiveCapture 판정을 그대로 쓰는지는 이 테스트로만 드러난다.
+   */
+  it("서버가 스스로 봉인한 캡처는 registry에 남아 있어도 hasLiveCapture가 false다", async () => {
+    stubMic();
+    vi.spyOn(apiClient, "post").mockResolvedValue({
+      status: 409,
+      data: { expected_offset: 460800000, code: "duration_limit" },
+    } as never);
+    const sealed = await startCapture("m1");
+    sealed.recorder.enqueue(new Uint8Array(CHUNK_BYTES));
+    await sealed.recorder.drain();
+    expect(sealed.recorder.status.sealed).toBe("duration_limit");
+    expect(hasLiveCapture()).toBe(false);
+  });
+
+  it("stopActiveLiveCapture는 화면의 종료 버튼과 같은 recorder.stop() 경로로 중지한다", async () => {
+    stubMic();
+    const post = vi.spyOn(apiClient, "post").mockResolvedValue({
+      status: 200,
+      data: { meeting_id: "m1", job_id: "job_1", outcome: "stopping" },
+    } as never);
+    const capture = await startCapture("m1");
+    await stopActiveLiveCapture();
+    expect(capture.recorder.status.phase).toBe("stopped");
+    expect(post).toHaveBeenCalledWith(
+      "/meetings/m1/live/stop",
+      expect.any(Uint8Array),
+      expect.anything(),
+    );
+  });
+
+  it("stopActiveLiveCapture는 활성 녹음이 없으면 아무 것도 하지 않는다", async () => {
+    await expect(stopActiveLiveCapture()).resolves.toBeUndefined();
+  });
+
+  /**
+   * 가드가 `isLiveCapture(active)`에서 느슨한 `active.meetingId !== null`로 좁아지면
+   * 벌어지는 일 — 서버가 4시간 상한에서 스스로 봉인한 캡처(R9와 같은 duration_limit
+   * 픽스처)에도 `recorder.stop()`이 다시 불려 `/live/stop`이 한 번 더 나간다. 이 캡처는
+   * `.stop()`을 아직 한 번도 부른 적이 없어(봉인은 `endCapture`를 타지 `stop()`을 타지
+   * 않는다) 그 재요청은 캐시된 게 아니라 진짜 새 POST다. 서버는 sealed===final일 때만
+   * 멱등하게 답하므로 이 재요청은 `missing_chunk` 409를 받고, 데스크톱 종료 handshake는
+   * 그 409를 "녹음을 정상 중지하지 못했어요"로 사용자에게 보여준다 — 실제로는 이미
+   * 깨끗이 끝난 녹음인데도. `isLiveCapture`의 `sealed === null` 조건을 이 테스트가 고정한다.
+   */
+  it("stopActiveLiveCapture는 서버가 스스로 봉인한 캡처엔 다시 손대지 않는다", async () => {
+    stubMic();
+    const post = vi.spyOn(apiClient, "post").mockResolvedValue({
+      status: 409,
+      data: { expected_offset: 460800000, code: "duration_limit" },
+    } as never);
+    const sealed = await startCapture("m1");
+    sealed.recorder.enqueue(new Uint8Array(CHUNK_BYTES));
+    await sealed.recorder.drain();
+    expect(sealed.recorder.status.sealed).toBe("duration_limit");
+
+    await stopActiveLiveCapture();
+
+    expect(
+      post.mock.calls.filter(([url]) => url === "/meetings/m1/live/stop"),
+    ).toHaveLength(0);
+  });
+
+  /**
+   * 봉인이 아니라 `phase`만으로 죽은 문 — 종료 mutation이 실패해 `clearLiveCapture`가
+   * 불리지 않으면(기존 "종료된 캡처가 registry에 남아 있어도…" 테스트와 같은 상태)
+   * registry엔 meetingId가 그대로 남는다. `recorder.stop()` 자신은 이미 멱등해서(같은
+   * 인스턴스에 두 번째로 불러도 캐시된 Promise만 돌려줄 뿐 새 POST는 없다) 네트워크
+   * 호출 수로는 가드가 있는지 없는지 구별이 안 된다 — 그래서 `stop()` 메서드 자체가
+   * 다시 불리는지를 스파이로 본다. `isLiveCapture`의 `phase !== "stopped"` 조건을 이
+   * 테스트가 고정한다.
+   */
+  it("stopActiveLiveCapture는 이미 stopped로 수렴한 캡처의 stop()을 다시 부르지 않는다", async () => {
+    stubMic();
+    vi.spyOn(apiClient, "post").mockResolvedValue({
+      status: 200,
+      data: { meeting_id: "m1", job_id: "job_1", outcome: "stopping" },
+    } as never);
+    const finished = await startCapture("m1");
+    await finished.recorder.stop();
+    expect(finished.recorder.status.phase).toBe("stopped");
+    expect(finished.recorder.status.sealed).toBeNull();
+    // clearLiveCapture를 일부러 부르지 않는다 — 종료 요청이 실패한 탭의 상태다.
+
+    const stopSpy = vi.spyOn(finished.recorder, "stop");
+    await stopActiveLiveCapture();
+    expect(stopSpy).not.toHaveBeenCalled();
   });
 });

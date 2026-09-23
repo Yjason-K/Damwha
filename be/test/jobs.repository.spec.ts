@@ -123,7 +123,7 @@ describe('JobsRepository', () => {
     const one = await repo.enqueue(db.pool, { type: 'live_session', meetingId: mid, payload: {}, maxAttempts: 1 });
     const def = await repo.enqueue(db.pool, { type: 'process_meeting', meetingId: mid, payload: {} });
     expect(one.max_attempts).toBe(1);
-    expect(def.max_attempts).toBe(3);
+    expect(def.max_attempts).toBe(5);
     expect(one.stop_requested_at).toBeNull();
   });
 

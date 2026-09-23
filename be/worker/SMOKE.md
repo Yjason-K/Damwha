@@ -188,8 +188,13 @@ JSON-string 필드 / reprocess JSON body로 job별 오버라이드.)
 요약 모델명은 카탈로그(`src/contracts/model-catalog.ts`)로 고정돼 있고, 그 값이
 `mlx_lm.server`가 그대로 받는 **HF repo id**다.
 
+mlx-lm은 **따로 깔지 않는다.** `mlx-lm==0.31.3`이 워커의 `models` extra에 고정돼 있고
+(Apple Silicon 한정), 워커는 PATH의 `mlx_lm.server` 콘솔 스크립트가 아니라 자기
+인터프리터로 `-m damwha_worker.llm_entry`를 띄운다(Electron Phase 4 스펙 §6.2 — 그
+모듈이 `--run-id` 토큰을 걷어내고 같은 프로세스에서 `mlx_lm.server.main()`을 부른다).
+
 ```bash
-uv tool install mlx-lm      # 워커 venv 밖에 설치 — 워커는 mlx_lm을 import하지 않는다
+uv sync --extra models      # mlx-lm·mlx·mlx-whisper가 여기 들어 있다
 ```
 
 **기본값(`LENS_LLM_MANAGED=true`)에서는 서버를 직접 띄울 필요가 없다.** 렌즈/요약
@@ -252,8 +257,10 @@ watch -n1 'pgrep -fl mlx_lm.server'
 managed=false에서 서버가 없을 때의 실패 경로: `httpx.RequestError` →
 `llm_request_failed`(TRANSIENT) → 지수 백오프로 requeue → `max_attempts`(기본 3)
 소진 후 job `failed`. 회의는 `done`을 유지한다. managed=true에서 서버를 못 띄우면
-`llm_server_start_failed` — 바이너리가 PATH에 없거나 base URL에 포트가 없으면
-PERMANENT(즉시 실패), 기동 타임아웃·조기 종료면 TRANSIENT(재시도)다.
+`llm_server_start_failed` — base URL에 포트가 없거나, `LENS_LLM_SERVER_BIN`을 채웠는데
+그 값이 PATH에도 파일로도 없으면 PERMANENT(즉시 실패). 기동 타임아웃·조기 종료면
+TRANSIENT(재시도)다. 비워 둔 기본값에서는 PATH를 보지 않는다 — 같은 인터프리터로
+`-m damwha_worker.llm_entry`를 띄우므로, 이 실패가 나면 그 환경에 mlx-lm이 없는 것이다.
 
 함정 다섯:
 
@@ -636,10 +643,10 @@ pnpm dev               # 별 터미널
    `capture_error='preview_worker_lost'`가 붙는다. 워커를 다시 띄우면 정본 처리가 이어지고,
    그때 `meeting.error`는 NULL이 되지만 **`capture_error`는 남아 있어야 한다** — 이 필드가
    `error`와 따로 있는 이유가 그것이다.
-10. **배포 형상(API 컨테이너 + 호스트 워커)을 따로 본다.** 개발은 API·워커가 같은 호스트에서
-   같은 디렉터리를 보지만, 배포는 컨테이너가 쓴 파일을 호스트 워커가 bind mount로 읽는다
-   (`deploy/docker-compose.yml`의 `./storage:/repo/be/storage`). 확인할 것은 컨테이너의 append가
-   확정한 prefix를 호스트가 **제때** 보는가다 — `deploy/README.md`의 유지보수 절차 참고.
+10. **(retired) 배포 형상(API 컨테이너 + 호스트 워커)을 따로 봤다.** 개발은 API·워커가 같은
+   호스트에서 같은 디렉터리를 보지만, 걷어낸 셀프호스팅 배포는 컨테이너가 쓴 파일을 호스트
+   워커가 bind mount로 읽었다. 확인할 것은 컨테이너의 append가 확정한 prefix를 호스트가
+   **제때** 보는가였다 — 그 배포 자체가 없어졌으므로 지금은 항목 기록으로만 남긴다.
 
 - 로그의 `latency_ms=`가 세그먼트 끝 → `live_utterance` INSERT 지연이다. 실측(날짜, 머신, 값)을 아래에 적는다.
 - 식별 결합 기준은 `suggest_threshold`(0.6)다. bind(0.8)와의 적중률 비교는 `eval_speaker_id.py`

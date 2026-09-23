@@ -37,10 +37,14 @@ def test_set_stage_guarded_by_ownership(conn):
 
 def test_mark_processing_guarded_by_meeting(conn):
     mid = seed_meeting(conn, processing_version=2)
-    jid = seed_job(conn, meeting_id=mid)
+    seed_job(conn, meeting_id=mid)
+    # 실제로 mark_processing은 **claim한 자식**만 부른다. job 가드가 생긴 뒤로는
+    # queued인 채로 두면 meeting 가드를 보기도 전에 0이 나와, 이 테스트가 재려던
+    # processing_version 불일치를 못 재게 된다.
+    jid = db.claim(conn, "w1")["id"]
     conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
-    assert db.mark_processing(conn, mid, jid, 2) == 1
-    assert db.mark_processing(conn, mid, jid, 1) == 0  # version mismatch → stale
+    assert db.mark_processing(conn, mid, jid, 2, "w1") == 1
+    assert db.mark_processing(conn, mid, jid, 1, "w1") == 0  # version mismatch → stale
     assert (
         conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()["status"]
         == "processing"
@@ -67,7 +71,8 @@ def test_requeue_sets_delay_from_claimed_attempt(conn):
     row = conn.execute(
         "SELECT next_attempt_at - now() AS delay FROM job WHERE id=%s", (jid,)
     ).fetchone()
-    assert 0.5 <= row["delay"].total_seconds() <= 1.5
+    # claim이 attempts를 0→1로 올린 뒤 requeue한다 → 30 * 2^0 = 30초 (025 백오프).
+    assert 29 <= row["delay"].total_seconds() <= 31
 
 
 def test_requeue_for_shutdown_restores_attempts(conn):
@@ -275,6 +280,39 @@ def test_reap_stale_never_requeues_a_live_session(conn):
     assert meeting["status"] == "recording"
 
 
+def _meeting_with_running_job(conn, *, worker_id):
+    """회의는 아직 processing으로 넘어가기 전 — job만 claim되어 실행 중인 상태를 재현한다.
+
+    Task 6의 mark_processing worker_id 가드도 이 헬퍼를 그대로 쓴다.
+    """
+    mid = seed_meeting(conn, status="uploaded", processing_version=1)
+    jid = seed_job(conn, meeting_id=mid, status="running", locked_by=worker_id, attempts=1)
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    return mid, jid
+
+
+def test_requeue_backs_off_thirty_seconds_on_the_first_retry(conn):
+    mid, jid = _meeting_with_running_job(conn, worker_id="w")
+    assert db.requeue(conn, jid, "w") == 1
+    row = conn.execute(
+        "SELECT extract(epoch from (next_attempt_at - now())) AS secs FROM job WHERE id=%s",
+        (jid,),
+    ).fetchone()
+    # attempts=1 → 30 * 2^0 = 30초. 앞뒤 1초는 실행 시간이다.
+    assert 29 <= row["secs"] <= 31
+
+
+def test_requeue_backoff_is_capped_at_fifteen_minutes(conn):
+    mid, jid = _meeting_with_running_job(conn, worker_id="w")
+    conn.execute("UPDATE job SET attempts=20 WHERE id=%s", (jid,))
+    assert db.requeue(conn, jid, "w") == 1
+    row = conn.execute(
+        "SELECT extract(epoch from (next_attempt_at - now())) AS secs FROM job WHERE id=%s",
+        (jid,),
+    ).fetchone()
+    assert 899 <= row["secs"] <= 901
+
+
 def test_worker_capabilities_upsert_overwrites(conn):
     db.upsert_worker_capabilities(conn, {"worker_id": "w1", "gpu_eligible": True})
     db.upsert_worker_capabilities(conn, {"worker_id": "w2", "gpu_eligible": False})
@@ -282,3 +320,130 @@ def test_worker_capabilities_upsert_overwrites(conn):
         "SELECT value FROM app_setting WHERE key=%s", (db.WORKER_CAPABILITIES_KEY,)
     ).fetchone()
     assert row["value"] == {"worker_id": "w2", "gpu_eligible": False}
+
+
+def test_mark_processing_refuses_when_the_job_is_no_longer_running(conn, pg_url):
+    # P4-C7 회차 실측: 취소가 claim과 mark_processing 사이에 들어오면, 취소는 job과
+    # meeting.status만 바꾸고 `current_job_id`·`processing_version`은 그대로 두므로
+    # meeting 가드를 그냥 통과한다 → mark_processing이 meeting을 `processing`으로
+    # 되돌려 놓는다. 그러면 취소는 409(진행 중인 게 없다), 재처리도 409(done/failed가
+    # 아니다)라 **회의가 도달 불가 상태로 굳는다**. 같은 파일의 set_stage·heartbeat는
+    # 둘 다 job 가드를 건다 — 이것만 빠져 있었다.
+    mid = seed_meeting(conn, status="failed")
+    jid = seed_job(conn, meeting_id=mid, status="failed")
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    conn.commit()
+
+    assert db.mark_processing(conn, mid, jid, 0, "w1") == 0
+    row = conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()
+    assert row["status"] == "failed"
+
+
+def test_mark_processing_still_marks_a_running_job(conn, pg_url):
+    # 정상 경로는 그대로다 — 가드를 너무 좁히면 모든 처리가 lost_ownership이 된다.
+    mid = seed_meeting(conn, status="uploaded")
+    jid = seed_job(conn, meeting_id=mid, status="running", locked_by="w1")
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    conn.commit()
+
+    assert db.mark_processing(conn, mid, jid, 0, "w1") == 1
+    row = conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()
+    assert row["status"] == "processing"
+
+
+def test_mark_processing_refuses_a_worker_that_no_longer_owns_the_job(conn):
+    # 회수(기동 시) → 새 worker의 재claim → **뒤늦게 도착한 이전 worker**의 mark_processing.
+    # status='running'만 보면 이 호출이 통과해 자기 것이 아닌 job의 상태를 옮긴다.
+    mid, jid = _meeting_with_running_job(conn, worker_id="desktop-old")
+    conn.execute("UPDATE job SET locked_by='desktop-new' WHERE id=%s", (jid,))
+    assert db.mark_processing(conn, mid, jid, 1, "desktop-old") == 0
+    row = conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()
+    assert row["status"] != "processing"
+
+
+def test_mark_processing_accepts_the_owning_worker(conn):
+    mid, jid = _meeting_with_running_job(conn, worker_id="desktop-new")
+    assert db.mark_processing(conn, mid, jid, 1, "desktop-new") == 1
+
+
+def test_reap_own_orphans_requeues_this_workers_running_job_without_waiting(conn):
+    """`--once` 자식이 죽으면 그 행은 30분을 기다리지 않고 바로 돌아와야 한다.
+
+    `locked_at`이 방금인데도 회수된다 — 부모가 "내 자식은 없다"를 알고 부르는 자리다.
+    """
+    mid = seed_meeting(conn, status="processing")
+    jid = seed_job(
+        conn,
+        meeting_id=mid,
+        status="running",
+        locked_by="w1",
+        attempts=1,
+        max_attempts=5,
+        locked_minutes_ago=0,
+    )
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+
+    assert db.reap_own_orphans(conn, "w1") == (1, 0)
+    row = conn.execute(
+        "SELECT status, locked_by, next_attempt_at FROM job WHERE id=%s", (jid,)
+    ).fetchone()
+    assert row["status"] == "queued"
+    assert row["locked_by"] is None
+    assert row["next_attempt_at"] is None
+
+
+def test_reap_own_orphans_leaves_another_workers_job_alone(conn):
+    mid = seed_meeting(conn, status="processing")
+    jid = seed_job(
+        conn,
+        meeting_id=mid,
+        status="running",
+        locked_by="w2",
+        attempts=1,
+        max_attempts=5,
+        locked_minutes_ago=0,
+    )
+
+    assert db.reap_own_orphans(conn, "w1") == (0, 0)
+    row = conn.execute("SELECT status, locked_by FROM job WHERE id=%s", (jid,)).fetchone()
+    assert row["status"] == "running"
+    assert row["locked_by"] == "w2"
+
+
+def test_reap_own_orphans_fails_live_session_instead_of_requeueing(conn):
+    mid = seed_meeting(conn, status="recording")
+    jid = seed_job(
+        conn,
+        type="live_session",
+        meeting_id=mid,
+        status="running",
+        locked_by="w1",
+        attempts=1,
+        max_attempts=5,
+        locked_minutes_ago=0,
+    )
+
+    assert db.reap_own_orphans(conn, "w1") == (0, 1)
+    row = conn.execute("SELECT status, error FROM job WHERE id=%s", (jid,)).fetchone()
+    assert row["status"] == "failed"
+    assert row["error"]["code"] == "stale_worker"
+
+
+def test_reap_own_orphans_fails_a_job_that_has_no_retries_left(conn):
+    mid = seed_meeting(conn, status="processing")
+    jid = seed_job(
+        conn,
+        meeting_id=mid,
+        status="running",
+        locked_by="w1",
+        attempts=5,
+        max_attempts=5,
+        locked_minutes_ago=0,
+    )
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+
+    assert db.reap_own_orphans(conn, "w1") == (0, 1)
+    job = conn.execute("SELECT status FROM job WHERE id=%s", (jid,)).fetchone()
+    assert job["status"] == "failed"
+    meeting = conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()
+    assert meeting["status"] == "failed"

@@ -35,6 +35,43 @@ export type ProcessingConfig = {
 };
 
 /**
+ * 모델 준비 상태 한 항목 — `app_setting.model_readiness`의 entries 하나 (Phase 4 스펙 §6.9).
+ * worker·embed가 쓰고 API는 읽기만 한다. 앱 상태 창과 이 화면이 **같은 값**을 본다.
+ */
+export type ModelReadinessEntry = {
+  /** HF repo id. */
+  key: string;
+  state: "downloading" | "ready" | "failed";
+  bytesDone: number;
+  /** 모르는 구간은 0이다 — 그때는 퍼센트를 보이지 않는다. */
+  bytesTotal: number;
+  startedAt: string | null;
+  /** ISO8601. 무진행("중단됨") 판정의 유일한 근거다. */
+  updatedAt: string | null;
+  /** 어느 프로세스가 받는가 — 검색 임베딩은 `"embed"`, 나머지는 워커 id다. */
+  writer: string;
+  attempt: number;
+  error: string | null;
+  errorKind: "PERMANENT" | "TRANSIENT" | null;
+};
+
+export type ModelReadiness = {
+  updatedAt: string | null;
+  entries: ModelReadinessEntry[];
+};
+
+/**
+ * `GET /settings/processing`의 실제 응답 — resolved 뷰 **+ 모델 준비 상태**.
+ *
+ * `ProcessingConfig`를 넓히지 않고 교차 타입으로 둔다: 그 타입은 업로드·재처리의 오버라이드와
+ * 프리셋 폼이 쓰는 "설정" 그 자체이고, 준비 상태는 같은 응답에 함께 오는 곁가지다.
+ * `PUT` 응답에는 없다.
+ */
+export type ProcessingSettings = ProcessingConfig & {
+  modelReadiness: ModelReadiness;
+};
+
+/**
  * PUT /settings/processing — 이름 프리셋은 이름+언어만, custom은 전 필드.
  * language가 `SttLanguage`인 건 쓰기 경로라서다 — 위 `ProcessingConfig`는 카탈로그
  * 도입 전 저장값을 그대로 돌려받을 수 있어 `string`으로 남는다(BE와 같은 비대칭).

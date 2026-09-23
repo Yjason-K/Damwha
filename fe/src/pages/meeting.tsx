@@ -47,6 +47,10 @@ import {
 import { PlayerBar } from "@/features/meeting/ui/player-bar";
 import { TranscriptPane } from "@/features/meeting/ui/transcript-pane";
 import { useProcessingSettings } from "@/features/settings/api/settings";
+import {
+  downloadingNow,
+  modelProgressLabel,
+} from "@/features/settings/lib/model-readiness";
 import type { SummaryModel } from "@/features/settings/api/types";
 
 /**
@@ -68,11 +72,22 @@ const STAGE_LABELS: Record<string, string> = {
 function ProcessingBanner({
   meeting,
   status,
+  statusUpdatedAt,
 }: {
   meeting: Meeting;
   status: MeetingStatusResponse | undefined;
+  statusUpdatedAt: number;
 }) {
   const cancel = useCancelProcessing();
+  // 이 응답은 모델을 받는 동안에만 다시 읽힌다 (useProcessingSettings의 refetchInterval).
+  // 무진행 판정의 기준 시각은 `dataUpdatedAt` — **이 값이 도착한 순간**이다. 렌더에서 Date.now()를
+  // 부르면 같은 데이터가 리렌더마다 다른 답을 내고(React Compiler가 그것을 막는다), 폴링이
+  // 멈춘 동안 시계만 흘러 멀쩡한 진행이 조용히 사라진다.
+  const settings = useProcessingSettings();
+  const downloading = downloadingNow(
+    settings.data?.modelReadiness,
+    settings.dataUpdatedAt,
+  );
 
   if (meeting.status === "failed") {
     // 운영자 취소도 failed로 저장된다(reprocess 가드를 그대로 타기 위해) — 문구만 가른다.
@@ -106,9 +121,24 @@ function ProcessingBanner({
     );
   }
 
+  // 백오프가 30초·90초·210초·450초로 길어졌다 (Phase 5 스펙 §5). 그동안 "대기 중"만 쓰면
+  // 정상 재시도와 worker 미기동·DB 장애가 한 얼굴이 된다.
+  // 기준 시각은 status가 도착한 순간(statusUpdatedAt) — 위 downloading과 같은 이유로
+  // 렌더에서 Date.now()를 부르면 안 된다(react-hooks/purity, 같은 함수 안의 downloadingNow 호출 참고).
+  const retryAt = status?.retry?.next_attempt_at ?? null;
+  const retryMs =
+    retryAt === null ? null : new Date(retryAt).getTime() - statusUpdatedAt;
+  // 다운로드 문구가 이긴다. 그쪽은 stageLabel과 **독립된 span**이라(아래 downloading 분기),
+  // 여기서 막지 않으면 "재시도 대기"와 "모델을 받는 중"이 같이 뜬다.
+  const showRetry = downloading.length === 0 && retryMs !== null && retryMs > 0;
+  // 마지막 시도가 남긴 **job의** 오류 코드 (스펙 §6 — "마지막 오류 요약"). meeting.error는
+  // 재시도 대기 중에 null이라 대신 쓸 수 없다. 코드 한 토큰만 붙인다 — 배너는 한 줄이다.
+  const retryErrorCode = status?.retry?.error?.code ?? null;
   const stageLabel = status?.stage
     ? (STAGE_LABELS[status.stage] ?? "처리 중")
-    : "대기 중";
+    : showRetry
+      ? `재시도 대기 · ${status!.retry!.attempts}/${status!.retry!.max_attempts}회차 · 약 ${Math.max(1, Math.round(retryMs! / 60000))}분 뒤${retryErrorCode ? ` · 마지막 오류: ${retryErrorCode}` : ""}`
+      : "대기 중";
   const raw = status?.progress ?? null;
   const pct = raw == null ? null : Math.round(raw <= 1 ? raw * 100 : raw);
 
@@ -130,6 +160,13 @@ function ProcessingBanner({
         {stageLabel}
         {pct != null ? ` · ${pct}%` : ""}
       </span>
+      {/* 첫 처리는 모델을 받느라 한참 멈춘 것처럼 보인다 (Phase 4 스펙 §6.9, 완료 기준 P4-C6).
+          이유를 말하지 않으면 멈춘 것으로 읽히고, 사람이 취소를 누른다. */}
+      {downloading.length > 0 ? (
+        <span className="min-w-0 truncate text-[color:var(--text-muted)]">
+          모델을 받는 중 · {downloading.map(modelProgressLabel).join(", ")}
+        </span>
+      ) : null}
       <Button
         variant="secondary"
         size="sm"
@@ -283,7 +320,8 @@ function MeetingView({
   // done 회의도 색인 실패를 봐야 하므로 meeting이 있으면 조회한다 —
   // 폴링 지속 여부는 useMeetingStatus의 refetchInterval이 상태를 보고 결정.
   const statusEnabled = !!meeting || summaryPending;
-  const { data: procStatus } = useMeetingStatus(meetingId, statusEnabled);
+  const { data: procStatus, dataUpdatedAt: procStatusUpdatedAt } =
+    useMeetingStatus(meetingId, statusEnabled);
 
   // 라이브 미리보기 — recording에서는 1초, 처리 중엔 3초, failed는 한 번, done은 안 본다.
   const { data: liveState } = useLiveUtterances(meetingId, meeting?.status);
@@ -592,7 +630,11 @@ function MeetingView({
             failed={recorderStatus?.failed}
           />
         ) : meeting && meeting.status !== "done" ? (
-          <ProcessingBanner meeting={meeting} status={procStatus} />
+          <ProcessingBanner
+            meeting={meeting}
+            status={procStatus}
+            statusUpdatedAt={procStatusUpdatedAt}
+          />
         ) : null}
         {meeting && meeting.status === "done" ? (
           <CaptureErrorNotice error={meeting.captureError} />

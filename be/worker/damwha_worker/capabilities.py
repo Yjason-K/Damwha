@@ -17,26 +17,45 @@ API의 `detectCapabilities()`는 platform/arch를 env(`CAPABILITIES_*`)로 받�
 
 from __future__ import annotations
 
+import logging
 import os
 import platform
 import subprocess
 import sys
 
+log = logging.getLogger("damwha_worker")
+
 # Node의 process.arch 어휘로 맞춘다 — 같은 필드를 API가 자기 추정으로도 채우므로
 # 두 출처가 다른 문자열을 쓰면 화면에 뜨는 값이 출처마다 달라진다.
 _ARCH_ALIASES = {"x86_64": "x64", "AMD64": "x64", "aarch64": "arm64"}
 
+# 절대 경로로 부른다. 앱이 띄운 워커의 PATH는 `<번들 python>/bin:<번들 ffmpeg>/bin`뿐이라
+# (Phase 4 스펙 §6.2) `/usr/sbin`에만 있는 sysctl은 맨 이름으로 찾을 수 없다. PATH를 넓히지
+# 않는 이유: `/usr/bin`을 넣으면 `python3`(Xcode CLT shim) 같은 맨 이름이 번들 밖으로 풀려
+# "번들 외부를 참조하지 않는다"는 구조적 증명(P4-C13)이 깨진다. SIP가 보호하는 시스템
+# 바이너리라 자리가 바뀌지 않는다.
+_SYSCTL = "/usr/sbin/sysctl"
 _SYSCTL_TIMEOUT_SECONDS = 5.0
 # 대부분 torch import 시간이다. 콜드 캐시에서도 넉넉하게.
 _PROBE_TIMEOUT_SECONDS = 120.0
 
-_PROBE_CODE = "from damwha_worker.models.device import mps_available; print(int(mps_available()))"
+# P4-C12는 이 프로브도 별도 프로세스라 자기 런타임을 스스로 보고할 것을 요구한다.
+# 보고는 stderr로 보낸다 — stdout은 부모가 GPU 판정으로 파싱하는 자리라 한 글자도
+# 섞이면 안 된다(JSON 파싱이 아니라 {"1": True, "0": False}.get(...)이라 조용히
+# None이 된다).
+_PROBE_CODE = (
+    "import json, sys\n"
+    "from damwha_worker.runtime_report import runtime_facts\n"
+    "print('runtime ' + json.dumps(runtime_facts()), file=sys.stderr)\n"
+    "from damwha_worker.models.device import mps_available\n"
+    "print(int(mps_available()))\n"
+)
 
 
 def _sysctl(name: str) -> str | None:
     try:
         r = subprocess.run(
-            ["sysctl", "-n", name],
+            [_SYSCTL, "-n", name],
             capture_output=True,
             text=True,
             timeout=_SYSCTL_TIMEOUT_SECONDS,
@@ -72,6 +91,10 @@ def probe_mps() -> bool | None:
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
+    # 프로브의 자기 보고(stderr)를 흘린다 — 안 남기면 P4-C12의 다섯째 프로세스
+    # 보고가 아무 데도 증거로 남지 않는다. stdout 파싱(GPU 판정) 경로는 손대지 않는다.
+    if r.stderr:
+        log.info("capabilities probe: %s", r.stderr.strip())
     if r.returncode != 0:
         return None
     return {"1": True, "0": False}.get(r.stdout.strip())

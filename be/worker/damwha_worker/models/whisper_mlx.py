@@ -34,6 +34,17 @@ class MlxWhisper:
             )
         self._repo = _REPO[whisper_model]
 
+    def _snapshot(self, local_files_only: bool) -> str:
+        """저장소를 로컬 스냅샷 디렉터리로 푼다 — `load_model`이 하는 것과 같은 호출이다.
+
+        `mlx_whisper.transcribe(path_or_hf_repo=...)`에는 `local_files_only`가 없고,
+        `load_models.load_model`은 경로가 존재하지 않을 때만 `snapshot_download(repo_id=...)`를
+        부른다. 그래서 우리가 먼저 풀어 **경로를** 넘긴다 — 경로면 hub를 아예 타지 않는다.
+        """
+        from huggingface_hub import snapshot_download
+
+        return snapshot_download(repo_id=self._repo, local_files_only=local_files_only)
+
     def transcribe(
         self,
         wav_path: str,
@@ -52,6 +63,12 @@ class MlxWhisper:
         import mlx.core as mx
         import mlx_whisper
         from mlx_whisper.audio import load_audio
+
+        from .downloads import load_cache_first
+
+        # 캐시 우선 (스펙 §6.6-b). mlx-whisper의 `snapshot_download`는 먹통 네트워크에서 캐시가
+        # 차 있어도 무한 대기한다(실측 900초 초과) — 캐시가 있으면 그 호출 자체를 없앤다.
+        model_path = load_cache_first(self._repo, self._snapshot)
 
         # job 내부 GPU 피크 억제: MLX active 메모리 상한(물리 메모리의 절반).
         # subprocess 격리는 job '간' 누적만 막고, 단독 process_meeting의 내부 피크는
@@ -77,7 +94,7 @@ class MlxWhisper:
             nonlocal lang
             result = mlx_whisper.transcribe(
                 audio,
-                path_or_hf_repo=self._repo,
+                path_or_hf_repo=model_path,
                 language=lang,
                 word_timestamps=True,
                 condition_on_previous_text=_CONDITION_ON_PREVIOUS_TEXT,

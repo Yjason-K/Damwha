@@ -156,7 +156,7 @@ MLX/torch가 잡은 GPU 메모리를 OS가 매번 회수한다 — 쌓여서 OOM
 | Docker | Postgres 이미지(pgvector + pg_bigm), 그리고 jest/pytest 스위트(testcontainers) | Docker Desktop |
 | [uv](https://docs.astral.sh/uv/) | Python 워커의 환경 + 락파일 | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | **ffmpeg** (`PATH`에) | 모든 오디오 job이 업로드 정규화로 시작한다(`pipeline/ffmpeg.py`). 바이너리가 없으면 기동이 아니라 job이 실패한다 | `brew install ffmpeg` |
-| **mlx-lm** (`PATH`에) | 렌즈/요약 LLM을 서빙한다. 워커 venv **바깥에** 설치할 것 — 워커는 `mlx_lm`을 import하지 않고 `mlx_lm.server` 바이너리를 spawn한다 | `uv tool install mlx-lm` |
+| **mlx-lm** — 따로 설치 안 함 | 렌즈/요약 LLM을 서빙한다. `mlx-lm==0.31.3`이 워커의 `models` extra에 고정돼 있고(Apple Silicon 한정), 워커가 `PATH`의 바이너리가 아니라 `python -m damwha_worker.llm_entry`로 띄운다 | `uv sync --extra models`에 포함 |
 | Hugging Face 계정 + 토큰 | pyannote 화자 분리는 **게이트 걸린** 모델이다 | [ML 모델](#ml-모델--게이트-걸림-용량-큼) 참고 |
 
 Apple Silicon이 상정한 타깃이다. STT는 `mlx-whisper`, LLM은 MLX로 돈다.
@@ -309,14 +309,17 @@ mlx_lm.server --model mlx-community/Qwen3.5-4B-8bit \
 
 ## 다른 맥에 설치하기
 
-`deploy/`는 API + SPA를 Docker 이미지 하나로, 워커를 wheel로 묶어서 받는 쪽이 소스를
-체크아웃하지 않아도 되게 한다. `deploy/release.sh <버전>`이 arm64 이미지 두 개를
-GHCR로 올리고, wheel과 실행 폴더 tarball을 GitHub Release에 붙인다. 받는 사람용
-안내는 [`deploy/README.md`](deploy/README.md). 워커는 여전히 호스트에서 돈다 —
-MLX에는 Apple Silicon이 필요하고 Docker의 리눅스 VM은 그걸 못 준다.
+Damwha는 macOS 앱 한 벌로 배포된다 — 소스 체크아웃도, Docker도, 손으로 하는 Postgres
+설정도 필요 없다. [GitHub Releases](https://github.com/Yjason-K/Damwha/releases/latest)에서
+최신 DMG를 받아 열고 Damwha를 Applications로 끌어다 놓으면 된다. **macOS 15.0 이상,
+Apple Silicon**이 필요하다.
 
-공개 데모는 **별개 릴리스**다. 이미지도 시드 데이터도 따로다 —
-내보내는 쪽은 [`deploy/demo/README.md`](deploy/demo/README.md),
+처음 실행하면 Hugging Face 토큰을 물어본다 — 화자 분리 모델이 게이트 걸려 있어서다.
+토큰 발급과 모델 라이선스 수락 방법은 [`docs/HUGGINGFACE.md`](docs/HUGGINGFACE.md)
+(5분이면 끝나고 승인 대기도 없다).
+
+공개 데모는 위 설치 경로와는 **별개**인, 읽기 전용 웹 배포다. 이미지도 시드 데이터도
+따로다 — 내보내는 쪽은 [`deploy/demo/README.md`](deploy/demo/README.md),
 그 안에 무엇이 들었는지는 [`demo/README.md`](demo/README.md).
 
 ## 자주 쓰는 명령
@@ -348,5 +351,5 @@ API나 워커를 건드리기 전에 [`be/CLAUDE.md`](be/CLAUDE.md)를 읽는다
 라이선스가 덮는 것은 이 저장소의 소스뿐이다. 워커가 돌리는 ML 모델은 설치 시점에
 **각자의 약관**으로 내려받는 것이고 여기에 벤더링되지도 재배포되지도 않는다 —
 pyannote 화자 분리는 게이트 걸린 Hugging Face 모델이라 사용자가 각자 수락해야 하고
-([`deploy/HUGGINGFACE.md`](deploy/HUGGINGFACE.md) 참고), `ffmpeg`는 직접 설치한
+([`docs/HUGGINGFACE.md`](docs/HUGGINGFACE.md) 참고), `ffmpeg`는 직접 설치한
 외부 바이너리를 호출해 쓴다.

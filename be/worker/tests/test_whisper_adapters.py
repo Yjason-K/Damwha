@@ -43,14 +43,22 @@ def _install_fake_mlx(monkeypatch, calls, loads=None):
     monkeypatch.setitem(sys.modules, "mlx.core", fake_core)
     monkeypatch.setitem(sys.modules, "mlx_whisper", fake_whisper)
     monkeypatch.setitem(sys.modules, "mlx_whisper.audio", fake_audio)
+    # 스냅샷 해석은 캐시 우선 헬퍼를 타고 진짜 hub 캐시를 읽는다 (스펙 §6.6-b) — 이 계약
+    # 테스트는 그 자리를 대신하고, 어댑터가 **경로를** 넘기는지만 본다.
+    from damwha_worker.models.whisper_mlx import MlxWhisper
+
+    monkeypatch.setattr(
+        MlxWhisper, "_snapshot", lambda self, local_files_only: f"/snapshots/{self._repo}"
+    )
 
 
 def _install_fake_faster(monkeypatch, calls, segment_ends=(0.9,)):
     fake_fw = types.ModuleType("faster_whisper")
 
     class WhisperModel:
-        def __init__(self, size, device=None, compute_type=None):
-            pass
+        def __init__(self, size, device=None, compute_type=None, local_files_only=False):
+            # 캐시 우선 (스펙 §6.6-b) — 첫 시도는 언제나 오프라인이다.
+            assert local_files_only is True
 
         def transcribe(self, wav_path, **kwargs):
             calls.append(kwargs)

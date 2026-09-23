@@ -183,6 +183,18 @@ export type SummaryGenerationStatus = {
   error: JsonError | null;
 };
 
+/** 재시도 대기 상태. job이 없으면 null. */
+export type RetryStatus = {
+  attempts: number;
+  max_attempts: number;
+  next_attempt_at: string | null;
+  /**
+   * 마지막 시도가 남긴 **job의** 오류. `MeetingStatusResponse.error`(회의의 오류)와 다른
+   * 사실이다 — 재시도 대기 중인 회의는 아직 실패하지 않아 그쪽이 null이다.
+   */
+  error: JsonError | null;
+};
+
 export type MeetingStatusResponse = {
   status: MeetingStatus;
   stage: string | null;
@@ -190,6 +202,7 @@ export type MeetingStatusResponse = {
   error: JsonError | null;
   summary: SummaryGenerationStatus | null;
   search_index: SearchIndexStatus | null;
+  retry: RetryStatus | null;
 };
 
 /** POST /meetings/:id/clusters/:clusterId/resolve 요청 — 정확히 하나만. */

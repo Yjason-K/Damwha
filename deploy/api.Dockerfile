@@ -1,12 +1,11 @@
 # API + SPA in one image. Build context is the REPO ROOT (pnpm workspace):
 #   docker build -f deploy/api.Dockerfile -t ghcr.io/yjason-k/damwha-api:<ver> .
 # The worker is NOT in here — it needs Apple Silicon (MLX) and runs on the host
-# from a wheel. See deploy/README.md.
+# from a wheel. Serves the public demo (deploy/demo/) — see deploy/demo/README.md.
 #
-# Public-demo variant (deploy/demo/): --build-arg VITE_DEMO_MODE=true bakes the
+# Demo build args: --build-arg VITE_DEMO_MODE=true bakes the
 # read-only SPA, --build-arg DEMO_SEED=true bakes demo/seed storage into
-# ./storage so the image needs no volume. Both default off; the self-hosted image
-# is unchanged.
+# ./storage so the image needs no volume. Both default off.
 ARG VITE_DEMO_MODE=false
 ARG DEMO_SEED=false
 ARG VITE_DEMO_TOUR_MEETING_ID=
@@ -61,7 +60,7 @@ COPY --from=build /repo/packages/contracts/dist ./packages/contracts/dist
 COPY --from=build /repo/be/dist ./be/dist
 # main.ts serves dist/public as the SPA when it exists
 COPY --from=build /repo/fe/dist ./be/dist/public
-# Demo seed audio (empty unless DEMO_SEED=true); the self-hosted compose mounts a volume over it
+# Demo seed audio (empty unless DEMO_SEED=true) — the demo compose serves it straight from the image
 COPY --from=seed /seed ./be/storage
 
 # cwd = be/ so STORAGE_ROOT=./storage resolves like the dev setup

@@ -167,7 +167,7 @@ before you record.
 | Docker | Postgres image (pgvector + pg_bigm), and the jest/pytest suites (testcontainers) | Docker Desktop |
 | [uv](https://docs.astral.sh/uv/) | the Python worker's env + lockfile | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | **ffmpeg** on `PATH` | every audio job starts by normalizing the upload (`pipeline/ffmpeg.py`); a missing binary fails the job, not startup | `brew install ffmpeg` |
-| **mlx-lm** on `PATH` | serves the lens/summary LLM. Install it **outside** the worker venv — the worker never imports `mlx_lm`, it spawns the `mlx_lm.server` binary | `uv tool install mlx-lm` |
+| **mlx-lm** — no separate install | serves the lens/summary LLM. `mlx-lm==0.31.3` is pinned in the worker's `models` extra (Apple Silicon only), and the worker launches it in-process as `python -m damwha_worker.llm_entry`, not through a `PATH` binary | comes with `uv sync --extra models` |
 | Hugging Face account + token | pyannote diarization is a **gated** model | see [ML models](#ml-models-gated-heavy) |
 
 Apple Silicon is the intended target: STT runs `mlx-whisper` and the LLM runs MLX.
@@ -319,14 +319,17 @@ checks, and the quality-measurement tooling live in [`be/worker/SMOKE.md`](be/wo
 
 ## Installing it elsewhere
 
-`deploy/` packages the API + SPA as one Docker image and the worker as a wheel so a
-teammate needs no source checkout: `deploy/release.sh <version>` pushes the two
-arm64 images to GHCR and attaches the wheel plus a tarball of the run folder to a
-GitHub Release. The teammate-facing instructions are [`deploy/README.md`](deploy/README.md).
-The worker still runs on the host — MLX needs Apple Silicon, which Docker's Linux VM
-can't provide.
+Damwha ships as a self-contained macOS app — no source checkout, no Docker, no
+Postgres to set up by hand. Download the latest DMG from
+[GitHub Releases](https://github.com/Yjason-K/Damwha/releases/latest), open it, and
+drag Damwha into Applications. Requires **macOS 15.0+ on Apple Silicon**.
 
-The public demo is a **separate** release with its own images and its own seed data:
+On first run the app asks for a Hugging Face token — the speaker-diarization model
+is gated and needs one. See [`docs/HUGGINGFACE.md`](docs/HUGGINGFACE.md) for how to
+get a token and accept the model licenses (5 minutes, no approval wait).
+
+The public demo is a **separate**, read-only web deployment with its own images and
+its own seed data — it is not the install path above:
 [`deploy/demo/README.md`](deploy/demo/README.md) ships it, [`demo/README.md`](demo/README.md)
 describes what's inside it.
 
@@ -360,5 +363,5 @@ the monorepo map.
 The license covers this repository's source only. The ML models the worker runs
 are downloaded at setup time under **their own** terms and are neither vendored
 nor redistributed here — pyannote diarization is a gated Hugging Face model that
-each user accepts separately (see [`deploy/HUGGINGFACE.md`](deploy/HUGGINGFACE.md)),
+each user accepts separately (see [`docs/HUGGINGFACE.md`](docs/HUGGINGFACE.md)),
 and `ffmpeg` is invoked as an external binary you install yourself.

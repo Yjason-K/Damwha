@@ -454,7 +454,7 @@ stateDiagram-v2
 | Permanent | 손상 음원, 지원하지 않는 형식, ffprobe 실패, 지원하지 않는 payload version, 모델 package import 실패, `gpu_unavailable`(MPS 없음), 임베딩 불가할 만큼 짧은 등록 샘플(`sample_too_short`), LLM 4xx·잘못된 응답(`llm_invalid_response`), 검증 실패 lens 후보(`invalid_lens_candidate`) | 즉시 fail |
 | Transient | OOM, 분류되지 않은 runtime 오류, LLM 연결 실패·timeout·5xx·408/429(`llm_request_failed`), 기타 일시 장애 | attempts가 남으면 delayed requeue, 아니면 fail |
 
-`job.next_attempt_at`은 transient retry를 지연한다. claim 후 attempt 수에 따라 `min(2^(attempts-1), 60)`초 뒤로 설정되며, claim은 그 시각이 지난 job만 선택한다. 따라서 poison job이 즉시 재claim되어 FIFO 전체를 막지 않는다. transient requeue는 자식의 정상 outcome이라 자식은 `exit 0`으로 종료하고, 부모는 다음 실행 가능한 job을 peek→spawn한다. graceful shutdown과 stale reaper recovery는 `next_attempt_at=NULL`으로 즉시 실행 가능하게 만든다.
+`job.next_attempt_at`은 transient retry를 지연한다. claim 후 attempt 수에 따라 `least(30 * 2^(attempts-1), 900)`초 뒤로 설정되며(마이그레이션 `025`, 기존 `min(2^(attempts-1), 60)`초는 1·2초뿐이라 재시도 3회가 3초 안에 다 타서 3분짜리 장애도 job을 영구 실패로 만들었다), claim은 그 시각이 지난 job만 선택한다. `job.max_attempts` 기본값도 같은 마이그레이션에서 3에서 5로 올라, claim 이후 시도 시각이 0s·30s·90s·210s·450s가 된다. 따라서 poison job이 즉시 재claim되어 FIFO 전체를 막지 않는다. transient requeue는 자식의 정상 outcome이라 자식은 `exit 0`으로 종료하고, 부모는 다음 실행 가능한 job을 peek→spawn한다. graceful shutdown과 stale reaper recovery는 `next_attempt_at=NULL`으로 즉시 실행 가능하게 만든다.
 
 ## 11. 일관성 모델과 안전장치
 

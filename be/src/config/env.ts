@@ -3,10 +3,16 @@ import { SUMMARY_MODELS } from '../contracts/model-catalog';
 
 const EnvSchema = z.object({
   PORT: z.coerce.number().default(3000),
+  // 기본값이 0.0.0.0인 것은 의도다 — deploy/api.Dockerfile의 컨테이너는 외부에서
+  // 접근해야 한다. 데스크톱 앱만 127.0.0.1을 주입해 loopback으로 좁힌다.
+  HOST: z.string().default('0.0.0.0'),
   DATABASE_URL: z.string(),
   STORAGE_ROOT: z.string().default('./storage'),
   MAX_UPLOAD_BYTES: z.coerce.number().default(1_073_741_824),
   REAPER_STALE_MINUTES: z.coerce.number().default(30),
+  // 앱(Electron)이 자식 env에 얹는 이번 실행의 worker 신분. 기본값을 두지 않는다 —
+  // **없음이 곧 "앱이 띄운 API가 아니다"**라는 신호이고, 그때 기동 회수는 돌지 않는다.
+  WORKER_ID: z.string().optional(),
   WHISPER_MODEL: z.enum(['large-v3-turbo', 'large-v3']).default('large-v3-turbo'),
   WHISPER_DEVICE: z.enum(['mps', 'cpu', 'cuda']).default('mps'),
   STT_LANGUAGE: z.string().default('ko'),

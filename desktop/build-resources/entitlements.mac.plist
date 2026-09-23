@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- .app 본체(Electron) 전용. codesign의 deep 옵션이 Electron Framework와 헬퍼에도
+       hardened runtime을 걸기 때문에, 이 셋이 .app 전체에 적용된다.
+       번들 Python 트리는 entitlements.python.plist(최소 집합 둘)로 따로 서명한다.
+       주의: XML 주석 안에 하이픈 두 개를 연달아 쓰면 AMFI 파서가 거부하고
+       codesign이 "Failed to parse entitlements"로 실패한다. plutil은 통과시킨다. -->
+
+  <!-- 없으면 앱이 기동하지 못한다. V8이 CodeRange 가상 메모리 예약에 실패해
+       "Fatal process out of memory: Failed to reserve virtual memory for CodeRange"로
+       rc=133에 죽는다 (2026-09-16 Electron 44.3.0 실측). Task 2의 numba 측정은 Python
+       프로세스에 대한 것이고, 그 최소 집합을 .app에 그대로 적용하면 앱이 죽는다. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

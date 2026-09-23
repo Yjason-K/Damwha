@@ -26,13 +26,30 @@ def claim(conn, worker_id: str) -> dict | None:
     ).fetchone()
 
 
-def mark_processing(conn, meeting_id: str, job_id: str, processing_version: int) -> int:
+def mark_processing(
+    conn, meeting_id: str, job_id: str, processing_version: int, worker_id: str
+) -> int:
+    """회의를 `processing`으로 올린다. meeting 가드 **와** job 가드를 함께 건다.
+
+    job 가드가 없던 동안 취소와 경합했다: 취소는 job.status 와 meeting.status 만 바꾸고
+    `current_job_id`·`processing_version` 은 그대로 두므로 meeting 가드를 그냥 통과했고,
+    그러면 이 UPDATE 가 `markCancelled` 가 쓴 `failed` 를 `processing` 으로 되돌렸다.
+    그 뒤 회의는 **도달 불가**가 된다 — 취소는 409(진행 중인 job 이 없다), 재처리도
+    409(status 가 done/failed 가 아니다). 창이 넓은 이유는 `jobs.py` 의 `build_models()`
+    가 이 호출보다 앞이라, 모델을 받아야 하면 claim~여기가 분 단위로 벌어지기 때문이다.
+
+    소유권 가드가 늦게 붙었다. status='running'만 보던 동안, 기동 회수가 앞 실행의 job을
+    되돌리고 새 worker가 같은 job을 재claim한 뒤 **이전 worker의 늦은 호출**이 도착하면
+    그대로 통과했다 — 자기 것이 아닌 job의 상태 전이다. set_stage·heartbeat와 같은 가드를
+    쓴다. 0행이면 이 워커는 더 쓸 것이 없다.
+    """
     cur = conn.execute(
         """
         UPDATE meeting SET status='processing'
         WHERE id=%s AND current_job_id=%s AND processing_version=%s
+          AND EXISTS (SELECT 1 FROM job WHERE id=%s AND status='running' AND locked_by=%s)
         """,
-        (meeting_id, job_id, processing_version),
+        (meeting_id, job_id, processing_version, job_id, worker_id),
     )
     return cur.rowcount
 
@@ -60,10 +77,14 @@ def heartbeat(conn, job_id: str, worker_id: str) -> int:
 
 
 def requeue(conn, job_id: str, worker_id: str) -> int:
+    # 30초 기준·15분 상한. 1·2초였을 때는 세 번이 3초에 다 타서 3분짜리 네트워크 끊김이
+    # job을 영구 실패로 만들었다 (Phase 4 결과 §12.6-12). max_attempts 기본값 5(025)와 함께
+    # 시도 시각이 0 · 30s · 90s · 210s · 450s가 된다.
     cur = conn.execute(
         """
         UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL,
-               next_attempt_at=now() + least(power(2, attempts - 1), 60) * interval '1 second',
+               next_attempt_at=now()
+                 + least(30 * power(2, attempts - 1), 900) * interval '1 second',
                updated_at=now()
         WHERE id=%s AND locked_by=%s AND status='running'
         """,
@@ -85,14 +106,13 @@ def requeue_for_shutdown(conn, job_id: str, worker_id: str) -> int:
     return cur.rowcount
 
 
-def reap_stale(conn, stale_minutes: float) -> tuple[int, int]:
-    row = conn.execute(
-        """
+# 회수 계약은 한 벌이고 `stale`의 **선택자만** 다르다 — 시간 기반(reap_stale)과 소유자 기반
+# (reap_own_orphans). 두 벌로 두면 live_session·소진·딸린 행 정리 중 한쪽만 고쳐질 자리다.
+_REAP_SQL = """
         WITH stale AS (
           SELECT id, type, meeting_id, attempts, max_attempts, stage
           FROM job
-          WHERE status='running'
-            AND locked_at < now() - (%s || ' minutes')::interval
+          WHERE {selector}
           FOR UPDATE SKIP LOCKED
         ),
         -- live_session은 재queue 대상이 아니다 (설계 §2.2·§4.2). 다시 claim해 봐야 다음
@@ -153,10 +173,35 @@ def reap_stale(conn, stale_minutes: float) -> tuple[int, int]:
         )
         SELECT (SELECT count(*) FROM requeued) AS requeued,
                (SELECT count(*) FROM failed) AS failed
-        """,
-        (str(stale_minutes),),
-    ).fetchone()
+"""
+
+
+def _reap(conn, selector: str, params: tuple) -> tuple[int, int]:
+    row = conn.execute(_REAP_SQL.format(selector=selector), params).fetchone()
     return int(row["requeued"]), int(row["failed"])
+
+
+def reap_stale(conn, stale_minutes: float) -> tuple[int, int]:
+    return _reap(
+        conn,
+        "status='running' AND locked_at < now() - (%s || ' minutes')::interval",
+        (str(stale_minutes),),
+    )
+
+
+def reap_own_orphans(conn, worker_id: str) -> tuple[int, int]:
+    """자기 신분으로 잠긴 `running` 행을 **시간을 기다리지 않고** 되돌린다.
+
+    부르는 쪽이 "지금 내 `--once` 자식은 하나도 살아 있지 않다"를 보장할 때만 옳다.
+    supervisor는 자식을 한 번에 하나만 띄우고 `_wait_child`로 회수하므로 그 자리가 셋이다 —
+    기동 직후, 자식을 거둔 직후, DB 재접속 직후. 그 순간 내 신분으로 잠긴 행은 전부 고아다.
+
+    이것이 없으면 DB가 죽어 자식이 함께 죽었을 때 회수 세 층이 모두 비켜 간다 — 기동
+    회수는 **앞 실행**의 행만 보고, supervisor의 `--once` 스캔은 supervisor가 재시작해야
+    돌기 때문이다. 남는 것은 30분 reaper뿐이고 그동안 화면은 "처리하고 있어요"라는
+    거짓을 말한다 (Phase 5 결과 §5, P5-C8).
+    """
+    return _reap(conn, "status='running' AND locked_by=%s", (worker_id,))
 
 
 def fail_job(conn, job_id: str, worker_id: str, error: dict) -> bool:
