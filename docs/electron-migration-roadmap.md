@@ -494,9 +494,13 @@ C11은 깨끗한 설치 경로 한정이고 6a 이전 빌드 이력이 남은 �
 `desktop-v0.3.0`·`desktop-v0.3.1`은 그대로 두고, 조회는 `v*`와 옛 `desktop-v*`를 함께 읽는다.
 `/releases/latest`에는 여전히 기대지 않는다 — Latest는 사람이 손으로 바꿀 수 있는 값이다.
 
-**상태 (2026-09-23): 6b-1 스펙 작성·코덱스 리뷰 반영, 구현 계획 작성·코덱스 계획 검증 반영.** 스펙은
-[2026-09-23-electron-phase-6b-update-notice-design.md](superpowers/specs/2026-09-23-electron-phase-6b-update-notice-design.md),
-브랜치는 `feat/electron-migration-phase-6b-update-notice`. 6b-2·6b-3은 미착수.
+**상태 (2026-09-23): 6b-1 완료 — 구현 9개 Task·리뷰 clean, 변이 17/17, packaged 실측 C1~C10 전부 충족.**
+스펙은 [2026-09-23-electron-phase-6b-update-notice-design.md](superpowers/specs/2026-09-23-electron-phase-6b-update-notice-design.md),
+결과는 [2026-09-23-electron-phase-6b-update-notice-results.md](superpowers/reports/2026-09-23-electron-phase-6b-update-notice-results.md),
+브랜치는 `feat/electron-migration-phase-6b-update-notice`. 앱은 GitHub Releases에서 `v*`·옛 `desktop-v*` 중
+최대를 골라 네이티브 대화상자로 알리고(자동: packaged에서 붙음 뒤 1회 + 24시간, 수동: 앱 메뉴 "업데이트 확인…"),
+릴리스 태그는 다음 판부터 `v<version>`이다. 이 기능은 그것이 담긴 첫 릴리스부터 작동한다 — 0.3.x 사용자는
+한 번은 손으로 받아야 한다. 6b-2·6b-3은 미착수.
 
 서명 관련 위험 검증은 Phase 0부터 진행하며, 배포 검증을 6a에서, 업데이트 검증을 6b에서 완성한다.
 
