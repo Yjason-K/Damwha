@@ -42,6 +42,13 @@
 필요하다)을 찾아 병합 전에 고쳤다. **두 번째 맥 검증(T12)도 2026-09-22에 사용자가 직접 두
 대에서 마쳤다** — 결과는 [Phase 6a 결과 문서](superpowers/reports/2026-09-20-electron-phase-6a-signing-distribution-results.md).
 
+**2026-09-23: 셀프호스팅 웹 배포를 걷어냈다.** Damwha는 이제 데스크톱 앱(`desktop-v<ver>`
+GitHub Release)으로만 배포한다 — `deploy/` 아래 Docker 이미지·`deploy/release.sh`·
+`v<version>` 태그로 내던 셀프호스팅 설치는 중단이고, `v0.1.1`~`v0.2.3` 태그는 과거 기록으로만
+남는다. 공개 데모(`deploy/demo/`)는 그대로 유지한다. 저장소 "Latest"는 `desktop-v0.3.1`로
+넘어갔다 — 위 T11의 사고(발행이 웹 배포의 Latest를 빼앗은 것) 이후 처음으로, 이제는 되돌릴
+웹 배포가 없으므로 데스크톱 릴리스가 Latest여도 된다.
+
 ## 목표와 전제
 
 앱 아이콘 하나로 담화를 실행하고, DB·API·worker·embed의 시작과 종료를 앱이 관리한다. 최종적으로 Python·uv·Homebrew·Docker를 별도로 설치하지 않아도 사용하는 macOS 앱을 제공한다.

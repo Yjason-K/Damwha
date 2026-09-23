@@ -643,10 +643,10 @@ pnpm dev               # 별 터미널
    `capture_error='preview_worker_lost'`가 붙는다. 워커를 다시 띄우면 정본 처리가 이어지고,
    그때 `meeting.error`는 NULL이 되지만 **`capture_error`는 남아 있어야 한다** — 이 필드가
    `error`와 따로 있는 이유가 그것이다.
-10. **배포 형상(API 컨테이너 + 호스트 워커)을 따로 본다.** 개발은 API·워커가 같은 호스트에서
-   같은 디렉터리를 보지만, 배포는 컨테이너가 쓴 파일을 호스트 워커가 bind mount로 읽는다
-   (`deploy/docker-compose.yml`의 `./storage:/repo/be/storage`). 확인할 것은 컨테이너의 append가
-   확정한 prefix를 호스트가 **제때** 보는가다 — `deploy/README.md`의 유지보수 절차 참고.
+10. **(retired) 배포 형상(API 컨테이너 + 호스트 워커)을 따로 봤다.** 개발은 API·워커가 같은
+   호스트에서 같은 디렉터리를 보지만, 걷어낸 셀프호스팅 배포는 컨테이너가 쓴 파일을 호스트
+   워커가 bind mount로 읽었다. 확인할 것은 컨테이너의 append가 확정한 prefix를 호스트가
+   **제때** 보는가였다 — 그 배포 자체가 없어졌으므로 지금은 항목 기록으로만 남긴다.
 
 - 로그의 `latency_ms=`가 세그먼트 끝 → `live_utterance` INSERT 지연이다. 실측(날짜, 머신, 값)을 아래에 적는다.
 - 식별 결합 기준은 `suggest_threshold`(0.6)다. bind(0.8)와의 적중률 비교는 `eval_speaker_id.py`

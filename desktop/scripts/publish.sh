@@ -3,8 +3,7 @@
 #
 # 공증·스테이플까지 끝난 DMG를 GitHub Release `desktop-v<version>`으로 낸다 (Phase 6a 스펙 §7.1).
 # 빌드(`pnpm run package:release`)와 따로 둔다 — 되돌리기 어려운 공개 동작을 빌드에 숨기지 않는다
-# (Task 11 브리프). `deploy/release.sh`(웹 배포, `v<version>`)와도 합치지 않는다 — 그 스크립트의
-# 버전 단언이 데스크톱 버전까지 묶는다.
+# (Task 11 브리프).
 #
 #   bash desktop/scripts/publish.sh --notes-file <릴리스 노트 파일>
 #
@@ -16,15 +15,11 @@
 #      하지 않는다. 그것도 공개 동작이라 사람이 먼저 한다.
 #   4. `out/Damwha-<version>-arm64.dmg`와 그 `.sha256`이 있고 해시가 맞는다.
 #
-# **`--latest=false`가 이 스크립트가 있는 이유다.** 저장소의 "Latest"는 웹 배포의 것이다. 이미
-# 나가 있는 웹 설치(v0.2.1~v0.2.3 tarball에 든 Makefile)는 태그 없는 `gh release view`로 Latest를
-# 읽는다. 그 Makefile의 `make upgrade`는 `compose down` → `setup`(Latest 조회) → `compose pull`
-# 순이라, Latest가 데스크톱 릴리스면 없는 이미지 태그를 당기다 실패해 스택을 내린 채 남는다.
-# 그 설치들을 지키는 것은 이 플래그 하나뿐이다 — 저장소의 `deploy/Makefile` 수정(`v*`만 고른다)은
-# 새 클론과 앞으로의 tarball에만 닿는다.
-#
-# 발행 뒤에 Latest가 여전히 `v*`인지 다시 본다. 아니면 되돌리는 명령을 출력하고 실패한다.
-# **자동으로 되돌리지 않는다** — 되돌리기도 공개 상태를 바꾸는 일이라 사람이 보고 한다.
+# **정책(2026-09-23~): Damwha는 데스크톱 앱으로만 배포한다.** 셀프호스팅 웹 배포(`v<version>`
+# 태그, `deploy/release.sh`)는 걷어냈다 — `v*` 릴리스는 과거 기록으로만 남는다. 그래서 이제
+# 데스크톱 릴리스를 저장소의 "Latest"로 낸다(`--latest`). 발행 뒤에는 태그 없는 `gh release view`
+# (= 저장소 Latest)가 방금 낸 태그와 같은지 다시 본다 — 다르면 되돌리는 명령을 출력하고 실패한다.
+# **자동으로 고치지 않는다** — Latest를 바꾸는 것도 공개 상태를 바꾸는 일이라 사람이 보고 한다.
 #
 # 문구 안의 변수는 `${…}`로 감싼다. macOS의 /bin/bash 3.2는 `$TAG가`에서 한글의 첫 바이트까지
 # 변수 이름으로 읽어 `unbound variable`로 죽는다(2026-09-21 드라이런에서 실제로 났다).
@@ -89,41 +84,29 @@ listed="$(awk '{ print $2; exit }' "$OUT/$DMG.sha256")"
   die "sha256이 맞지 않는다 — 해시를 쓴 뒤 DMG가 바뀌었다"
 
 # 5. 발행
-echo "== gh release create ${TAG} --latest=false"
+echo "== gh release create ${TAG} --latest"
 gh release create "$TAG" "$OUT/$DMG" "$OUT/$DMG.sha256" \
   --repo "$REPO" \
   --verify-tag \
-  --latest=false \
+  --latest \
   --title "Damwha $VERSION (macOS)" \
   --notes-file "$NOTES"
 
-# 6. 사후 단언 — 태그 없는 조회가 곧 저장소 Latest다(옛 Makefile이 읽는 바로 그 값).
+# 6. 사후 단언 — 태그 없는 조회가 곧 저장소 Latest다. 방금 낸 태그와 같아야 한다.
 latest="$(gh release view -R "$REPO" --json tagName -q .tagName)" ||
   die "발행은 됐지만 저장소 Latest를 확인하지 못했다." \
-    "손으로 확인할 것: gh release view -R ${REPO} --json tagName -q .tagName 이 v* 여야 한다."
-case "$latest" in
-  v*)
-    echo "Latest는 그대로 ${latest} — 웹 배포의 버전 조회에 영향 없음."
-    echo "발행: https://github.com/${REPO}/releases/tag/${TAG}"
-    ;;
-  *)
-    web="$(gh release list -R "$REPO" --exclude-drafts --exclude-pre-releases \
-      --json tagName -q '.[].tagName' 2>/dev/null | grep '^v' | head -1 || true)"
-    {
-      echo
-      echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-      echo "publish: 저장소 Latest가 '${latest}'다 — v* 가 아니다."
-      echo "이미 나가 있는 웹 설치(v0.2.1~v0.2.3 Makefile)가 이것을 웹 배포 버전으로 읽는다."
-      echo "그 설치의 make upgrade는 compose down 뒤 없는 이미지를 당기다 실패해 스택을 내린 채 남는다."
-      echo "자동으로 되돌리지 않았다. 지금 손으로 되돌린다:"
-      if [ -n "$web" ]; then
-        echo "  gh release edit ${web} -R ${REPO} --latest"
-      else
-        echo "  (v* 릴리스를 찾지 못했다 — gh release list -R ${REPO} 에서 웹 배포의 최신을 골라)"
-        echo "  gh release edit <그 태그> -R ${REPO} --latest"
-      fi
-      echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-    } >&2
-    exit 1
-    ;;
-esac
+    "손으로 확인할 것: gh release view -R ${REPO} --json tagName -q .tagName 이 ${TAG} 여야 한다."
+if [ "$latest" = "$TAG" ]; then
+  echo "Latest = ${latest}"
+  echo "발행: https://github.com/${REPO}/releases/tag/${TAG}"
+else
+  {
+    echo
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    echo "publish: 저장소 Latest가 '${latest}'다 — 방금 낸 ${TAG}가 아니다."
+    echo "자동으로 고치지 않았다. 지금 손으로 고친다:"
+    echo "  gh release edit ${TAG} --repo ${REPO} --latest"
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+  } >&2
+  exit 1
+fi
