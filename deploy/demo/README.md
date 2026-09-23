@@ -1,7 +1,7 @@
 # 공개 데모 배포
 
 읽기 전용 데모(설계 §3.6)를 홈 서버(arm64)에 올리고 Cloudflare Tunnel로 노출한다.
-Damwha 본체는 데스크톱 앱(Electron, `desktop-v<ver>` GitHub Release)으로만 배포되며,
+Damwha 본체는 데스크톱 앱(Electron, `v<ver>` GitHub Release)으로만 배포되며,
 이 데모는 그와 **이미지 이름부터 다른 별개 릴리스**다.
 
 여기는 **데모를 내보내는 방법**이다. 이미지에 실리는 오디오·덤프·시드 스크립트는

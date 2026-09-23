@@ -98,15 +98,18 @@ Developer ID로 서명하고 공증까지 마친 DMG로 배포한다. ad-hoc은 
 - **정책(2026-09-23~): Damwha는 데스크톱 앱으로만 배포한다.** 셀프호스팅 웹 배포(`v<version>`
   태그, `deploy/release.sh`·`deploy/Makefile`)는 걷어냈다 — `v0.1.1`~`v0.2.3` 태그는 과거 기록으로만
   남는다. 저장소의 "Latest"는 이제 데스크톱 릴리스다.
-- **태그 네임스페이스는 그래도 `desktop-v<version>`을 유지한다** — 걷어낸 웹 배포가 쓰던
-  `v<version>`과 구분해 둔 것이고, 앱의 (미래) 자동 업데이트 조회가 `desktop-v*`를 찾는다.
+- **태그는 `v<version>`이다 (2026-09-23~, Phase 6b-1 스펙 §3-2).** 6a는 웹 배포의 `v<version>`과
+  구분하려고 `desktop-v<version>`을 썼고, 웹 배포를 걷어낸 뒤 관례대로 되돌렸다. 이미 나간
+  `desktop-v0.3.0`·`desktop-v0.3.1`은 이름을 바꾸지 않는다(공유된 링크). 앱의 새 버전 조회
+  (`src/update/release-check.ts`)는 `v*`와 옛 `desktop-v*`를 다 읽는다. 규칙은
+  `scripts/lib/release-tag.mjs` 한 곳에 있다.
 - **데스크톱 릴리스는 `bash desktop/scripts/publish.sh --notes-file <파일>`로 낸다 — 손으로
   `gh release create`를 치지 않는다.** 스크립트는 gh를 부르기 전에 작업 트리가 깨끗한지, 태그
-  `desktop-v<version>`이 HEAD를 가리키고 원격(origin)에도 같은 커밋으로 있는지(R22 — 없으면
+  `v<version>`이 HEAD를 가리키고 원격(origin)에도 같은 커밋으로 있는지(R22 — 없으면
   `--verify-tag`가 거절한다), `out/`의 DMG가 `.sha256`과 맞는지 보고, 하나라도 어긋나면 아무것도
   내지 않는다. 태그 푸시는 하지 않는다 — 사람이 먼저 한다. 발행은 `--verify-tag --latest`로
   하고(데스크톱 릴리스가 저장소 Latest가 된다), **발행 뒤 태그 없는 `gh release view`(= 저장소
-  Latest)가 방금 낸 태그와 같은지 다시 본다.** 다르면 고치는 명령(`gh release edit desktop-v<ver>
+  Latest)가 방금 낸 태그와 같은지 다시 본다.** 다르면 고치는 명령(`gh release edit v<ver>
   --repo Yjason-K/Damwha --latest`)을 출력하고 실패한다 — 자동으로 고치지는 않는다. 노트에는
   최소 macOS(15.0)를 적는다(스펙 §7.1).
   - 이 스크립트는 과거(6a 초기)에는 `--latest=false`로 발행했다 — 당시 저장소 Latest는 웹 배포의

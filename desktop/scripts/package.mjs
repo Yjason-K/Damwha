@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { machOFiles } from "./lib/macho.mjs";
 import { assertIdentityInKeychain, codesign, loadSigning } from "./lib/signing.mjs";
+import { assertReleaseTag, describeReleaseTag } from "./lib/release-tag.mjs";
 
 const desktop = path.resolve(import.meta.dirname, "..");
 const repo = path.resolve(desktop, "..");
@@ -17,19 +18,10 @@ const RELEASE = process.argv.includes("--release");
 let dmgPath = null;
 
 // 릴리스에서만 태그를 본다. 개발 중 패키징이 잦아 태그 없는 커밋에서 자주 돈다.
-//
-// **태그는 desktop-v<version>이다** (Phase 6a 스펙 §4). v<version>은 이제 걷어낸 셀프호스팅
-// 웹 배포가 쓰던 네임스페이스다(v0.1.1~v0.2.3 실재, 과거 기록으로만 남는다) — 구분해 두는 것은
-// 여전히 유효하다: 앱의 (미래) 자동 업데이트 조회가 desktop-v*를 찾는다.
+// 태그 규칙(v<version>)과 그 이유는 lib/release-tag.mjs에 있다 (Phase 6b-1 스펙 §3-2).
 const desktopPkg = JSON.parse(fs.readFileSync(path.join(desktop, "package.json"), "utf8"));
-const expectedTag = `desktop-v${desktopPkg.version}`;
 if (RELEASE) {
-  const tag = execFileSync("git", ["describe", "--tags", "--exact-match", "--match", "desktop-v*"], {
-    cwd: repo, encoding: "utf8",
-  }).trim();
-  if (tag !== expectedTag) {
-    throw new Error(`태그가 ${tag}인데 package.json은 ${desktopPkg.version}이다 — ${expectedTag}여야 한다`);
-  }
+  assertReleaseTag(describeReleaseTag(repo), desktopPkg.version);
 }
 
 // 서명 신원을 **빌드 전에** 확인한다. 뒤에서 알면 그때까지의 시간이 날아간다.
