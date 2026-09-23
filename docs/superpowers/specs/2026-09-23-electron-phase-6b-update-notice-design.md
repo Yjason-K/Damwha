@@ -16,7 +16,8 @@
 
 ### 2.1 포함
 
-- GitHub Releases API로 최신 `desktop-v*` 릴리스를 찾아 설치된 버전과 비교한다.
+- **릴리스 태그를 `v<version>`으로 되돌린다** (§3-2). 발행 도구(`package.mjs`·`publish.sh`)와 문서를 고친다.
+- GitHub Releases API로 최신 데스크톱 릴리스를 찾아 설치된 버전과 비교한다.
 - 자동 확인 — 담화 화면이 처음 붙은 뒤 1회, 그 뒤 24시간마다. packaged 빌드에서만.
 - 수동 확인 — 앱 메뉴 "업데이트 확인…". dev·packaged 둘 다.
 - 새 버전이 있으면 네이티브 대화상자: 다운로드 페이지 열기 / 나중에 / 이 버전 건너뛰기.
@@ -37,17 +38,22 @@
 
 1. **렌더러에서 main을 부를 경로가 없다** (`desktop/src/windows/menu.ts:4`). main이 사람에게
    말하는 길은 메뉴·네이티브 대화상자·main이 연 창뿐이다. 이 기능은 메뉴와 대화상자만 쓴다.
-2. **태그 네임스페이스는 6a가 갈라 뒀다** — 데스크톱은 `desktop-v<major>.<minor>.<patch>`
-   (6a 스펙 §4), 옛 웹 배포는 `v0.1.1`~`v0.2.3`. 6a 스펙 §11-1이 "6b는 `/releases/latest`가
-   아니라 `GET /releases`를 받아 접두사로 거른다"고 정했다.
-   **전제 하나가 바뀌었다(2026-09-23)** — 웹 배포를 걷어내 저장소 Latest가 `desktop-v0.3.1`로
-   넘어갔다(PR #28 기록 기준 — 이 스펙을 쓰며 라이브 값을 따로 조회하지는 않았다). 그래도 접두사
-   필터를 유지한다: 옛 `v*` 릴리스가 남아 있고, Latest 지정은 사람이 손으로 바꿀 수 있는 값이라
-   계약이 못 된다.
-3. **버전 단일화는 6a가 끝냈다** — 태그 `desktop-v0.3.1`, `package.json`·`app.getVersion()`의
-   `0.3.1`, DMG `Damwha-0.3.1-arm64.dmg`(`desktop/scripts/publish.sh:53`)는 **문자열은 다르고
+2. **태그를 `v<version>`으로 되돌린다 (2026-09-23 결정).** 6a는 셀프호스팅 웹 배포의 `v<version>`과
+   겹치지 않게 데스크톱을 `desktop-v<version>`으로 갈랐다(6a 스펙 §4·§11-1). 웹 배포를 걷어낸 지금
+   (PR #28) 그 구분의 이유가 사라졌고, 앞으로 데스크톱만 낸다 — 관례대로 `v0.4.0`을 쓴다.
+   - 실측(2026-09-23 `gh release list`): Latest = `desktop-v0.3.1`. 그 밖에 `desktop-v0.3.0`과
+     옛 웹 `v0.1.1`~`v0.2.3`(자산은 tarball·wheel, DMG 없음)이 있다.
+   - **이미 나간 `desktop-v0.3.0`·`desktop-v0.3.1`은 이름을 바꾸지 않는다** — 공유된 링크가 깨지고,
+     두 버전에는 이 알림이 없어 새 형식을 읽을 일도 없다.
+   - **조회는 두 형식을 다 읽는다** — `v<x.y.z>`와 옛 `desktop-v<x.y.z>`. 새로 내는 것은 `v*`뿐이지만,
+     옛 형식을 읽어야 발행 전 실측(0.3.0 빌드 → 실제 0.3.1 알림)이 실제 데스크톱 릴리스를 상대로 된다.
+     옛 웹 `v0.2.x`도 후보에 들어오지만 버전이 낮아 비교에 영향이 없다.
+   - `/releases/latest`는 쓰지 않는다 — Latest는 사람이 손으로 바꿀 수 있는 값이라 계약이 못 되고,
+     목록에서 최대를 고르면 draft·prerelease 처리도 한 곳에서 끝난다.
+3. **버전 단일화는 6a가 끝냈다** — 태그 `v0.4.0`(옛 `desktop-v0.3.1`), `package.json`·`app.getVersion()`의
+   `0.4.0`, DMG `Damwha-0.4.0-arm64.dmg`(`desktop/scripts/publish.sh:53`)는 **문자열은 다르고
    숫자 셋이 같다.** 파서는 둘로 나눈다 — 설치 버전용(`^\d+\.\d+\.\d+$`)과 태그용
-   (`^desktop-v\d+\.\d+\.\d+$`).
+   (`^(?:desktop-)?v\d+\.\d+\.\d+$`).
 4. **외부 HTTP 호출의 선례가 있다** — `desktop/src/config/token-store.ts`의 HF 토큰 검증이
    주입 가능한 `fetch`, 본문 읽기까지 덮는 상한, undici `cause.code` 추출을 이미 갖고 있다.
    같은 모양을 따른다.
@@ -106,7 +112,7 @@ function checkForUpdate(current: string, deps: { fetch: FetchLike; now(): number
 - **상한**: 전체 조회(모든 페이지의 요청·본문) 10초.
 - **후보 조건** — 전부 통과해야 한다:
   - `draft === false`, `prerelease === false` (**엄격한 불리언** — 누락·문자열이면 후보 아님)
-  - `tag_name`이 `^desktop-v(\d+)\.(\d+)\.(\d+)$`
+  - `tag_name`이 `^(?:desktop-)?v(\d+)\.(\d+)\.(\d+)$`
 - **URL은 응답에서 받지 않고 만든다**: `https://github.com/Yjason-K/Damwha/releases/tag/<tag_name>`.
   태그가 정규식을 통과했으므로 경로에 넣을 수 있는 문자만 있다. `openExternal`에 외부 응답의 문자열이
   닿지 않는다.
@@ -286,9 +292,11 @@ function createUpdateFlow(deps: UpdateFlowDeps, current: string): {
 | 그 밖의 비200 | `failed/http` |
 | 본문이 배열 아님·JSON 아님, 페이지 상한 초과 | `failed/malformed` |
 | 항목 하나 모양 불량 (`draft` 누락 포함) | 그 항목만 버림 |
-| 유효한 `desktop-v*` 후보 없음 | `failed/no_release` — "최신"이라 말하지 않음 |
+| 유효한 후보(`v*`·`desktop-v*`) 없음 | `failed/no_release` — "최신"이라 말하지 않음 |
 | 설치 버전 ≥ 최신 릴리스 (발행 전 로컬 빌드) | `current` |
-| prerelease·`v0.2.3`·`desktop-v0.4.0-rc1` | 후보 아님 |
+| prerelease·`v0.4.0-rc1`·`desktop-v0.4.0-rc1`·`web-v1.0.0`·`0.4.0` | 후보 아님 |
+| 옛 웹 `v0.2.3` | 후보지만 낮아서 영향 없음 |
+| 같은 버전이 두 형식으로 있음 (`v0.3.1`·`desktop-v0.3.1`) | 버전이 같으면 `v*` 쪽 태그로 URL을 만든다 |
 | 첫 페이지 밖에 있는 데스크톱 릴리스 | `Link: next`를 따라가 찾음 |
 | dev 실행 | 자동 확인 없음, 수동 메뉴는 동작 |
 | 녹음 중 (또는 렌더러가 상한 안에 무응답) | 자동: 보류 → 다음 주기. 수동: 띄움 |
@@ -362,7 +370,7 @@ function createUpdateFlow(deps: UpdateFlowDeps, current: string): {
 
 **격리 절차 (모든 시나리오 공통):** 실행 중인 담화를 전부 종료하고(dev 포함 — §3-9), 시험할 `.app`의
 경로와 `app.getVersion()`을 기록하고, `<userData>/update-state.json`만 지운다. 각 시나리오 시작 시
-`curl -s https://api.github.com/repos/Yjason-K/Damwha/releases | jq '[.[] | select(.tag_name|startswith("desktop-v")) | {tag_name, prerelease, draft}]'`
+`curl -s https://api.github.com/repos/Yjason-K/Damwha/releases | jq '[.[] | select(.tag_name|test("^(desktop-)?v[0-9]")) | {tag_name, prerelease, draft}]'`
 결과를 기록한다 — 라이브 값이 기대의 근거다.
 
 임시 버전 빌드는 `package:desktop`(비-release)로 만든다 — `--release`는 태그 일치를 강제한다
@@ -397,12 +405,27 @@ function createUpdateFlow(deps: UpdateFlowDeps, current: string): {
 | P6b1-C7 | 앱 메뉴가 기존 항목을 모두 유지하고 종료가 기존 흐름을 탐 | §8.2-6 |
 | P6b1-C8 | 단위 테스트 초록, §8.1의 변이 13종 전부 빨간불(동치 변이는 사유 기록) | §8.1 |
 | P6b1-C9 | `pnpm desktop test`·`pnpm desktop lint` 초록 | static |
+| P6b1-C10 | `package.mjs --release`가 `v<version>` 태그를 요구하고 `desktop-v<version>`만 있으면 거절 | static (§10a) |
 
 ## 10. 로드맵 변경
 
 - Phase 6b를 6b-1(알림)·6b-2(백업·복원·실패 복구)·6b-3(`attempts` 분리)으로 나눈다. 6b-1은 앞의
   둘과 독립이라 먼저 낸다. 6b-3의 마이그레이션이 v1→v2 검증의 시험체라는 원래 판단은 그대로다.
-- 로드맵 Phase 6 절의 "`/releases/latest`가 아니다" 문단에 §3-2의 전제 변화를 덧붙인다.
+- 로드맵 Phase 6 절의 "`/releases/latest`가 아니다"·"데스크톱 태그는 `desktop-v<version>`으로 가르고" 문단에 §3-2의 결정(태그를 `v<version>`으로 되돌림, 조회는 두 형식)을 덧붙인다.
+
+## 10a. 발행 도구 변경 — 태그 `v<version>`
+
+| 파일 | 변경 |
+| --- | --- |
+| `desktop/scripts/package.mjs:21-27` | `expectedTag = \`v${version}\``, `git describe --match 'v*'`. 주석의 `desktop-v` 근거를 §3-2로 교체 |
+| `desktop/scripts/publish.sh:4·12·54` | `TAG="v$VERSION"`, 주석 |
+| `desktop/CLAUDE.md:101-114` | 태그 네임스페이스 문단을 새 결정으로 교체(옛 `desktop-v0.3.x`는 그대로 남는다는 것 포함). 2026-09-21 Latest 사고 기록은 역사로 유지 |
+| `deploy/demo/README.md:4` | `desktop-v<ver>` → `v<ver>` |
+
+`publish.sh`의 "발행 뒤 Latest가 방금 낸 태그인가" 단언은 그대로 둔다 — 알림은 Latest에 기대지 않지만,
+저장소 첫 화면의 Latest가 최신 DMG를 가리켜야 하는 것은 여전하다.
+
+완료 기준 추가: **P6b1-C10** — `package.mjs --release`가 `v<version>` 태그를 요구하고 `desktop-v<version>`만 있으면 거절한다(static, 임시 태그로 확인 후 삭제).
 
 ## 11. 리뷰 기록
 
@@ -435,5 +458,10 @@ function createUpdateFlow(deps: UpdateFlowDeps, current: string): {
 | 19 | 보류 표시가 아무 데도 안 쓰임, "불가능"이 아니라 범위 선택 | 유효 | 보류 표시 삭제, §2.2에 범위 선택으로 기록 |
 | 20 | 버전 "같다"는 문자열 동일이 아님 | 유효 | §3-3 정정, 파서 둘 |
 
-코덱스가 라이브 Latest 값을 조회하지 못했다고 보고했고, 이 스펙도 조회하지 않았다 — §3-2에 명시하고
-§8.2의 격리 절차가 시나리오마다 라이브 응답을 기록하게 했다.
+코덱스가 라이브 Latest 값을 조회하지 못했다고 보고했다 — 이후 `gh release list`로 `desktop-v0.3.1`임을
+확인했고(§3-2), §8.2의 격리 절차가 시나리오마다 라이브 응답을 기록하게 했다.
+
+### 11.2 사용자 결정 (2026-09-23)
+
+태그를 `desktop-v<version>`에서 `v<version>`으로 되돌린다 — "계속 데스크톱 앱으로 갈 것"이라 구분의
+이유가 사라졌다. 조회가 옛 형식도 읽는 것은 발행 전 실측을 위해 이 스펙이 정한 것이다(§3-2).
