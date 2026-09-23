@@ -127,7 +127,10 @@ export function createUpdateFlow(deps: UpdateFlowDeps, current: string): UpdateF
       }
       // 기다리는 사이 다른 확인이 이 버전을 이미 띄웠거나(수동·다른 자동) 건너뛰기가 저장됐을 수 있다.
       // presenting만 보면 먼저 띄운 대화상자가 **닫힌 뒤** 도착한 쪽이 같은 버전을 또 띄운다 (계획 검증 #3).
-      if (presenting || shown.has(r.version) || r.version === deps.loadSkipped()) return;
+      if (presenting || shown.has(r.version) || r.version === deps.loadSkipped()) {
+        deps.log(`업데이트 알림 버림: 이미 처리됨 (${r.version})`);
+        return;
+      }
 
       presenting = true;
       try {

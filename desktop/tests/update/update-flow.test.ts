@@ -204,6 +204,7 @@ describe("조회 공유와 표시 잠금", () => {
     answers[1].resolve(false);
     await a2;
     expect(h.deps.showNewer).toHaveBeenCalledTimes(1);
+    expect(h.log.join("\n")).toContain("업데이트 알림 버림: 이미 처리됨 (0.4.0)");
   });
 
   it("자동이 녹음 답을 기다리는 사이 수동이 띄웠으면 자동은 다시 띄우지 않는다", async () => {

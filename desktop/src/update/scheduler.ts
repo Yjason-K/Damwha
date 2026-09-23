@@ -50,7 +50,7 @@ export function createUpdateScheduler(opts: {
       first = setTimeout(() => {
         first = null;
         opts.run();
-        every = setInterval(() => opts.run(), interval);
+        if (!disposed) every = setInterval(() => opts.run(), interval);
       }, parsed.kind === "ok" ? interval : 0);
     },
     dispose() {

@@ -77,4 +77,16 @@ describe("createUpdateScheduler", () => {
     vi.advanceTimersByTime(2 * DEFAULT_INTERVAL_MS);
     expect(run).not.toHaveBeenCalled();
   });
+
+  it("반복 주기가 돌기 시작한 뒤에 해제해도 더는 발화하지 않는다", () => {
+    const { run, s } = make(true);
+    s.onAttached();
+    vi.advanceTimersByTime(0);
+    expect(run).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(DEFAULT_INTERVAL_MS);
+    expect(run).toHaveBeenCalledTimes(2);
+    s.dispose();
+    vi.advanceTimersByTime(2 * DEFAULT_INTERVAL_MS);
+    expect(run).toHaveBeenCalledTimes(2);
+  });
 });
