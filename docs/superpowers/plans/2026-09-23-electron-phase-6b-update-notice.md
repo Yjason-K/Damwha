@@ -2317,6 +2317,13 @@ APP_CUR="$BUILDS/Damwha-0.3.1.app"
      | jq '[.[] | select(.tag_name|test("^(desktop-)?v[0-9]")) | {tag_name, prerelease, draft}]'
    ```
    Expected: `desktop-v0.3.1`(prerelease false, draft false)이 있다. 결과 문서 §2에 붙인다.
+   한도도 함께 본다(계정 없이 도는 확인이므로 카운트되지 않는 엔드포인트를 쓴다):
+   ```bash
+   curl -s https://api.github.com/rate_limit | jq .rate
+   ```
+   `remaining`이 15 미만이면 `reset`(epoch초)까지 기다린다 — 비인증 한도는 IP당 60회/시간이고 짧은
+   env 주기(60초)의 자동 확인과 격리 curl이 모두 여기서 깎인다. 한도에 걸리면 Step 4가
+   `보류: 녹음 중` 대신 `업데이트 확인 실패 (rate_limited)`를 찍어 기능 실패처럼 보인다.
 
 - [ ] **Step 1: 두 버전 빌드를 따로 보관한다**
 

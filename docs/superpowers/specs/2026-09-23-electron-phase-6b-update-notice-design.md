@@ -323,6 +323,8 @@ function createUpdateFlow(deps: UpdateFlowDeps, current: string): {
   수동 메뉴가 언제든 대안이다.
 - 공유 IP(사무실 NAT) 뒤에서 한도에 걸리면 그 주기는 조용히 넘어간다.
 - 업데이트 대화상자와 종료 확인 대화상자가 동시에 뜰 수 있다(§4.3-8). 둘 다 동작은 정확하다.
+- 조회는 Node 전역 fetch(undici)라 macOS 시스템 프록시 설정을 따르지 않는다 — 인증 프록시 뒤의
+  사용자는 늘 `offline`으로 끝난다. 이 조각의 범위 밖이다(필요해지면 Electron `net.fetch`로 바꾼다).
 
 ## 8. 테스트·검증
 
