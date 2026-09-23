@@ -23,7 +23,7 @@
 - 건너뛴 버전 파일 `<userData>/update-state.json`, 모양 `{ "skippedVersion": "x.y.z" }`. `config.json`에 넣지 않는다.
 - `src/update/*`와 `src/windows/menu-template.ts`는 electron을 **값으로** import하지 않는다(`import type`만).
 - 새 의존성 없음 (semver 라이브러리 금지).
-- 명령은 저장소 루트에서: `pnpm desktop test`, `pnpm desktop lint`. 단일 파일은 `pnpm desktop exec vitest run <path>`.
+- 명령은 저장소 루트에서: `pnpm desktop test`, `pnpm desktop lint`. 단일 파일은 `pnpm --filter damwha-desktop exec vitest run <path>`. **`pnpm desktop exec …`를 쓰지 않는다** — 루트의 `desktop` 스크립트는 `run`으로 펼쳐져 `None of the selected packages has a "exec" script`를 찍고 **exit 0**으로 끝난다(테스트를 하나도 돌리지 않는 거짓 초록불, 계획 검증 #1).
 - 커밋 메시지는 기존 관례: `feat(desktop): …`, `test(desktop): …`, `build(release): …`, `docs(phase6b): …`, 한국어 본문.
 
 ---
@@ -55,7 +55,7 @@
 **Files:**
 - Create: `desktop/scripts/lib/release-tag.mjs`
 - Modify: `desktop/scripts/package.mjs:18-33`
-- Modify: `desktop/scripts/publish.sh:4,12,54`
+- Modify: `desktop/scripts/publish.sh:4,12,18-19,54`
 - Modify: `desktop/CLAUDE.md:101-102` (태그 네임스페이스 문단), `desktop/CLAUDE.md:103-110`의 `desktop-v<version>`·`desktop-v<ver>` 표기
 - Modify: `deploy/demo/README.md:4`
 - Test: `desktop/tests/scripts/release-tag.test.ts`
@@ -123,7 +123,7 @@ describe("assertReleaseTag", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm desktop exec vitest run tests/scripts/release-tag.test.ts`
+Run: `pnpm --filter damwha-desktop exec vitest run tests/scripts/release-tag.test.ts`
 Expected: FAIL — `Failed to resolve import "../../scripts/lib/release-tag.mjs"`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -187,6 +187,7 @@ if (RELEASE) {
 - 4행 주석: `` `desktop-v<version>` `` → `` `v<version>` ``
 - 12행 주석: `` 태그 `desktop-v<version>`이 `` → `` 태그 `v<version>`이 ``
 - 54행: `TAG="desktop-v$VERSION"` → `TAG="v$VERSION"`
+- 18-19행 주석 `` — `v*` 릴리스는 과거 기록으로만 남는다. `` → `` — 웹 배포의 `v0.1.1`~`v0.2.3`은 과거 기록으로만 남고, 2026-09-23부터 데스크톱이 `v<version>` 태그를 쓴다(lib/release-tag.mjs). ``
 - 확인: `grep -n "desktop-v" desktop/scripts/publish.sh` 결과가 비어야 한다.
 
 `desktop/CLAUDE.md:101-102`의 문단을 바꾼다:
@@ -205,7 +206,7 @@ if (RELEASE) {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pnpm desktop exec vitest run tests/scripts/release-tag.test.ts`
+Run: `pnpm --filter damwha-desktop exec vitest run tests/scripts/release-tag.test.ts`
 Expected: PASS (7 tests)
 
 Run: `node -e "import('./desktop/scripts/lib/release-tag.mjs').then(m => { m.assertReleaseTag(m.describeReleaseTag('.'), '0.3.1') })"`
@@ -436,6 +437,16 @@ describe("checkForUpdate — 실패", () => {
     });
   });
 
+  it("터무니없는 한도 값은 기본 대기로 — 영원히 막지 않는다", async () => {
+    expect(await single({ status: 403, headers: { "Retry-After": "9".repeat(400) }, body: "{}" })).toMatchObject({
+      reason: "rate_limited",
+      retryAfterMs: DEFAULT_RATE_LIMIT_WAIT_MS,
+    });
+    expect(
+      await single({ status: 403, headers: { "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "99999999999" }, body: "{}" }),
+    ).toMatchObject({ reason: "rate_limited", retryAfterMs: DEFAULT_RATE_LIMIT_WAIT_MS });
+  });
+
   it("네트워크 오류는 offline이고 오류 코드만 싣는다", async () => {
     const fetch: ReleaseFetch = async () => {
       throw Object.assign(new TypeError("fetch failed secret-header"), { cause: { code: "ENOTFOUND" } });
@@ -464,7 +475,7 @@ describe("checkForUpdate — 실패", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm desktop exec vitest run tests/update/release-check.test.ts`
+Run: `pnpm --filter damwha-desktop exec vitest run tests/update/release-check.test.ts`
 Expected: FAIL — `Failed to resolve import "../../src/update/release-check"`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -582,14 +593,19 @@ function nextPage(link: string | null): NextPage {
   return { kind: "none" };
 }
 
+/** 대기 시간이 말이 되는가 — 양의 안전 정수이고 24시간 이하. 아니면 기본 60분 (스펙 §4.1 "없거나 이상하면"). */
+const MAX_RATE_LIMIT_WAIT_MS = 24 * 60 * 60_000;
+function saneWait(ms: number): number {
+  return Number.isSafeInteger(ms) && ms > 0 && ms <= MAX_RATE_LIMIT_WAIT_MS ? ms : DEFAULT_RATE_LIMIT_WAIT_MS;
+}
+
 /** 403·429 중 한도로 읽히는 것의 대기 시간. 한도가 아니면 null. */
 function rateLimitWaitMs(status: number, headers: ReleaseFetchResponse["headers"], now: number): number | null {
   if (status !== 403 && status !== 429) return null;
   const retryAfter = headers.get("retry-after")?.trim() ?? null;
-  if (retryAfter !== null && /^\d+$/.test(retryAfter)) return Number(retryAfter) * 1000;
+  if (retryAfter !== null && /^\d+$/.test(retryAfter)) return saneWait(Number(retryAfter) * 1000);
   if (headers.get("x-ratelimit-remaining")?.trim() === "0") {
-    const wait = Number(headers.get("x-ratelimit-reset")) * 1000 - now;
-    return Number.isFinite(wait) && wait > 0 ? wait : DEFAULT_RATE_LIMIT_WAIT_MS;
+    return saneWait(Math.round(Number(headers.get("x-ratelimit-reset")) * 1000 - now));
   }
   if (retryAfter !== null) return DEFAULT_RATE_LIMIT_WAIT_MS;
   return null;
@@ -699,8 +715,8 @@ function errorCode(e: unknown): string | null {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pnpm desktop exec vitest run tests/update/release-check.test.ts`
-Expected: PASS (21 tests)
+Run: `pnpm --filter damwha-desktop exec vitest run tests/update/release-check.test.ts`
+Expected: PASS (22 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -790,7 +806,7 @@ describe("makeUpdateStateStore", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm desktop exec vitest run tests/update/update-state.test.ts`
+Run: `pnpm --filter damwha-desktop exec vitest run tests/update/update-state.test.ts`
 Expected: FAIL — `Failed to resolve import "../../src/update/update-state"`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -857,7 +873,7 @@ export function makeUpdateStateStore(userData: string, log: (line: string) => vo
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pnpm desktop exec vitest run tests/update/update-state.test.ts`
+Run: `pnpm --filter damwha-desktop exec vitest run tests/update/update-state.test.ts`
 Expected: PASS (5 tests)
 
 - [ ] **Step 5: Commit**
@@ -949,7 +965,7 @@ describe("failureMessage", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm desktop exec vitest run tests/update/dialogs.test.ts`
+Run: `pnpm --filter damwha-desktop exec vitest run tests/update/dialogs.test.ts`
 Expected: FAIL — `Failed to resolve import "../../src/update/dialogs"`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1023,7 +1039,7 @@ export function failureMessage(r: Extract<CheckResult, { kind: "failed" }>): str
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pnpm desktop exec vitest run tests/update/dialogs.test.ts`
+Run: `pnpm --filter damwha-desktop exec vitest run tests/update/dialogs.test.ts`
 Expected: PASS (5 tests)
 
 - [ ] **Step 5: Commit**
@@ -1251,7 +1267,7 @@ describe("manualCheck", () => {
 });
 
 describe("조회 공유와 표시 잠금", () => {
-  it("동시에 들어온 자동·수동은 조회를 한 번만 하고, 수동이 띄운다", async () => {
+  it("동시에 들어온 자동·수동은 조회를 한 번만 하고 한 번만 띄운다", async () => {
     const d = deferred<CheckResult>();
     const h = harness({ check: vi.fn(() => d.promise) });
     const a = h.flow.autoCheck();
@@ -1259,6 +1275,31 @@ describe("조회 공유와 표시 잠금", () => {
     d.resolve(newer());
     await Promise.all([a, m]);
     expect(h.deps.check).toHaveBeenCalledTimes(1);
+    expect(h.deps.showNewer).toHaveBeenCalledTimes(1);
+  });
+
+  it("녹음 답이 엇갈려 온 두 자동 확인이 같은 버전을 두 번 띄우지 않는다", async () => {
+    const answers = [deferred<boolean>(), deferred<boolean>()];
+    const pending = [...answers];
+    const h = harness({ isRecording: vi.fn(() => pending.shift()!.promise) });
+    const a1 = h.flow.autoCheck();
+    const a2 = h.flow.autoCheck();
+    await vi.waitFor(() => expect(h.deps.isRecording).toHaveBeenCalledTimes(2));
+    answers[0].resolve(false);
+    await a1;
+    answers[1].resolve(false);
+    await a2;
+    expect(h.deps.showNewer).toHaveBeenCalledTimes(1);
+  });
+
+  it("자동이 녹음 답을 기다리는 사이 수동이 띄웠으면 자동은 다시 띄우지 않는다", async () => {
+    const rec = deferred<boolean>();
+    const h = harness({ isRecording: vi.fn(() => rec.promise) });
+    const a = h.flow.autoCheck();
+    await vi.waitFor(() => expect(h.deps.isRecording).toHaveBeenCalledTimes(1));
+    await h.flow.manualCheck();
+    rec.resolve(false);
+    await a;
     expect(h.deps.showNewer).toHaveBeenCalledTimes(1);
   });
 
@@ -1372,7 +1413,7 @@ describe("한도 쿨다운", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm desktop exec vitest run tests/update/update-flow.test.ts`
+Run: `pnpm --filter damwha-desktop exec vitest run tests/update/update-flow.test.ts`
 Expected: FAIL — `Failed to resolve import "../../src/update/update-flow"`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1507,7 +1548,9 @@ export function createUpdateFlow(deps: UpdateFlowDeps, current: string): UpdateF
         deps.log(`업데이트 알림 보류: ${after} (${r.version})`);
         return;
       }
-      if (presenting) return;
+      // 기다리는 사이 다른 확인이 이 버전을 이미 띄웠거나(수동·다른 자동) 건너뛰기가 저장됐을 수 있다.
+      // presenting만 보면 먼저 띄운 대화상자가 **닫힌 뒤** 도착한 쪽이 같은 버전을 또 띄운다 (계획 검증 #3).
+      if (presenting || shown.has(r.version) || r.version === deps.loadSkipped()) return;
 
       presenting = true;
       try {
@@ -1540,8 +1583,8 @@ export function createUpdateFlow(deps: UpdateFlowDeps, current: string): UpdateF
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pnpm desktop exec vitest run tests/update/update-flow.test.ts`
-Expected: PASS (27 tests)
+Run: `pnpm --filter damwha-desktop exec vitest run tests/update/update-flow.test.ts`
+Expected: PASS (29 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -1701,7 +1744,7 @@ describe("createModalTracker", () => {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pnpm desktop exec vitest run tests/update/scheduler.test.ts tests/update/modal-tracker.test.ts`
+Run: `pnpm --filter damwha-desktop exec vitest run tests/update/scheduler.test.ts tests/update/modal-tracker.test.ts`
 Expected: FAIL — 두 import 모두 해석 실패
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1804,7 +1847,7 @@ export function createModalTracker(): ModalTracker {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `pnpm desktop exec vitest run tests/update/scheduler.test.ts tests/update/modal-tracker.test.ts`
+Run: `pnpm --filter damwha-desktop exec vitest run tests/update/scheduler.test.ts tests/update/modal-tracker.test.ts`
 Expected: PASS (7 + 3 tests)
 
 - [ ] **Step 5: Commit**
@@ -1820,8 +1863,9 @@ git commit -m "feat(desktop): 업데이트 확인 타이머를 한 번만 무장
 
 **Files:**
 - Create: `desktop/src/windows/menu-template.ts`
-- Modify: `desktop/src/windows/menu.ts` (전체)
 - Test: `desktop/tests/windows/menu-template.test.ts`
+
+`menu.ts`를 이 템플릿으로 바꾸는 것은 **Task 8**이다 — `MenuHandlers`에 필수 필드가 늘어 `main.ts`의 `installMenu` 호출이 같은 커밋에서 바뀌어야 하고, 그 핸들러가 부를 `updateFlow`는 Task 8에서 생긴다. 이 Task에서 `main.ts`를 건드리면 `updateFlow`가 한 번도 대입되지 않아 `never`로 좁혀져 lint가 깨진다(계획 검증 #2).
 
 **Interfaces:**
 - Produces:
@@ -1829,7 +1873,7 @@ git commit -m "feat(desktop): 업데이트 확인 타이머를 한 번만 무장
   export interface MenuHandlers { onRetry(): void; onShowStatus(): void; onCheckForUpdates(): void }
   export function buildMenuTemplate(handlers: MenuHandlers, appName: string): MenuItemConstructorOptions[];
   ```
-  `menu.ts`는 `MenuHandlers`를 다시 내보내고 `installMenu(handlers: MenuHandlers): void`를 유지한다.
+  (Task 8에서 `menu.ts`가 `MenuHandlers`를 다시 내보내고 `installMenu(handlers: MenuHandlers): void`를 유지한다.)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1881,7 +1925,7 @@ describe("buildMenuTemplate", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm desktop exec vitest run tests/windows/menu-template.test.ts`
+Run: `pnpm --filter damwha-desktop exec vitest run tests/windows/menu-template.test.ts`
 Expected: FAIL — `Failed to resolve import "../../src/windows/menu-template"`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1949,52 +1993,19 @@ export function buildMenuTemplate(handlers: MenuHandlers, appName: string): Menu
 }
 ```
 
-`desktop/src/windows/menu.ts` 전체를 바꾼다:
-
-```ts
-import { app, Menu } from "electron";
-import { buildMenuTemplate, type MenuHandlers } from "./menu-template";
-
-export type { MenuHandlers };
-
-/** 템플릿과 그 이유는 menu-template.ts에 있다. 여기는 electron에 닿는 잎뿐이다. */
-export function installMenu(handlers: MenuHandlers): void {
-  Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate(handlers, app.name)));
-}
-```
-
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pnpm desktop exec vitest run tests/windows/menu-template.test.ts`
+Run: `pnpm --filter damwha-desktop exec vitest run tests/windows/menu-template.test.ts`
 Expected: PASS (3 tests)
 
-`MenuHandlers`에 필수 필드가 늘었으므로 `main.ts`의 `installMenu` 호출도 이 Task에서 고친다 — 그래야 이 커밋이 혼자 lint를 통과한다.
-
-`desktop/src/main.ts`의 `installMenu({ … onShowStatus: () => statusWindow.open(), })` 안, `onShowStatus` 줄 다음에 더한다:
-
-```ts
-      onCheckForUpdates: () => {
-        void updateFlow?.manualCheck().catch((e: unknown) => {
-          appendSupervisorLog(`업데이트 확인 중 예외 — ${reasonOf(e)}`);
-        });
-      },
-```
-
-그리고 `let quitting = false;`(main.ts:143 근처) 다음 줄에 선언을 더한다:
-
-```ts
-/** 새 버전 알림 (Phase 6b-1). 단일 인스턴스 분기 안에서 만든다 — 아래 whenReady. */
-let updateFlow: import("./update/update-flow").UpdateFlow | null = null;
-```
-
 Run: `pnpm desktop lint`
-Expected: PASS
+Expected: PASS (`menu-template.ts`는 아직 아무도 import하지 않는다)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add desktop/src/windows/menu-template.ts desktop/src/windows/menu.ts desktop/src/main.ts desktop/tests/windows/menu-template.test.ts
-git commit -m "feat(desktop): 앱 메뉴에 업데이트 확인을 더하고 appMenu 항목을 그대로 재현한다"
+git add desktop/src/windows/menu-template.ts desktop/tests/windows/menu-template.test.ts
+git commit -m "feat(desktop): 업데이트 확인을 담은 앱 메뉴 템플릿 — appMenu 항목을 그대로 재현한다"
 ```
 
 ---
@@ -2002,11 +2013,12 @@ git commit -m "feat(desktop): 앱 메뉴에 업데이트 확인을 더하고 app
 ### Task 8: `main.ts` 배선
 
 **Files:**
-- Modify: `desktop/src/main.ts` — import 블록(1-72행), 전역 선언(140-160행), `showShell`(353-356행), `ask`(463-469행), `announceRestartNotice`(1051-1066행), `ensureHfToken`의 `onboard`(1110행), 토큰 바꾸기의 `openTokenWindow`(1220행), `reattachWindow`(923-925행), `whenReady` 안(1517행 이후), `beginQuit`(1609-1614행)
+- Modify: `desktop/src/windows/menu.ts` (전체 — Task 7의 템플릿으로)
+- Modify: `desktop/src/main.ts` — import 블록(1-72행), 전역 선언(`let quitting = false;` 144행 다음), `showShell`(353-356행), `ask`(463-469행), `announceRestartNotice`(1051-1066행), `ensureHfToken`의 `onboard`(1110행), 토큰 바꾸기의 `openTokenWindow`(1220행), `clearHfToken`의 확인 대화상자(1287행), `reattachWindow`(923-925행), `whenReady` 안(1517행 이후, `installMenu` 호출 포함), `beginQuit`(1609-1614행)
 - Modify: `desktop/CLAUDE.md` — 새 절 "새 버전 알림 (Phase 6b-1)"
 
 **Interfaces:**
-- Consumes: Task 2 `checkForUpdate`; Task 3 `makeUpdateStateStore`; Task 4 `newerDialogOptions`, `newerChoice`, `currentDialogOptions`, `failedDialogOptions`; Task 5 `createUpdateFlow`, `UpdateFlow`; Task 6 `createUpdateScheduler`, `UpdateScheduler`, `createModalTracker`.
+- Consumes: Task 7 `buildMenuTemplate`, `MenuHandlers`; Task 2 `checkForUpdate`; Task 3 `makeUpdateStateStore`; Task 4 `newerDialogOptions`, `newerChoice`, `currentDialogOptions`, `failedDialogOptions`; Task 5 `createUpdateFlow`, `UpdateFlow`; Task 6 `createUpdateScheduler`, `UpdateScheduler`, `createModalTracker`.
 
 이 Task는 electron 잎이라 단위 테스트가 없다 — 판정은 모두 Task 2~7의 순수 모듈에 있고, 여기는 `lint`·기존 테스트·Task 10 실측이 확인한다.
 
@@ -2023,7 +2035,7 @@ import { createUpdateScheduler, type UpdateScheduler } from "./update/scheduler"
 import { createModalTracker } from "./update/modal-tracker";
 ```
 
-Task 7에서 넣은 `let updateFlow: import("./update/update-flow").UpdateFlow | null = null;`을 다음으로 바꾼다:
+`let quitting = false;`(main.ts:144) 다음 줄에 더한다:
 
 ```ts
 /**
@@ -2071,7 +2083,7 @@ function showShell(target: BrowserWindow, status: ShellStatus): Promise<void> {
 
 - [ ] **Step 3: 다른 모달 세기**
 
-`ask()`(main.ts:463-469)의 반환 줄:
+`ask()`(main.ts:463-469) 본문의 **두 줄 전체**(`const target = …`와 `return target === null ? …`, 467-468행)를 다음 두 줄로 바꾼다 — 반환 줄만 바꾸면 `const target`이 두 번 선언된다:
 
 ```ts
   const target = parent !== null && !parent.isDestroyed() ? parent : null;
@@ -2088,7 +2100,37 @@ function showShell(target: BrowserWindow, status: ShellStatus): Promise<void> {
 
 토큰 바꾸기의 `token = await openTokenWindow<BrowserWindow>({ … });`를 `token = await modals.track(openTokenWindow<BrowserWindow>({ … }));`로 감싼다.
 
-- [ ] **Step 4: 흐름과 스케줄러 생성**
+`clearHfToken`(main.ts:1286-1287)의 `const answer = await dialog.showMessageBox({`를 `const answer = await modals.track(dialog.showMessageBox({`로 바꾸고 그 호출의 닫는 `})`를 `}))`로 바꾼다 — 토큰 삭제 확인 위에 자동 알림이 겹치지 않게(계획 검증 #4).
+
+확인: `grep -n "dialog.showMessageBox" desktop/src/main.ts` — 남은 호출은 `modals.track(` 안이거나 `showUpdateBox` 안이어야 한다. 그 밖의 것이 나오면 같은 방식으로 감싸고 결과 문서에 적는다.
+
+- [ ] **Step 4: 메뉴 설치를 템플릿으로**
+
+`desktop/src/windows/menu.ts` 전체를 바꾼다:
+
+```ts
+import { app, Menu } from "electron";
+import { buildMenuTemplate, type MenuHandlers } from "./menu-template";
+
+export type { MenuHandlers };
+
+/** 템플릿과 그 이유는 menu-template.ts에 있다. 여기는 electron에 닿는 잎뿐이다. */
+export function installMenu(handlers: MenuHandlers): void {
+  Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate(handlers, app.name)));
+}
+```
+
+`main.ts`의 `installMenu({ … })` 안, `onShowStatus: () => statusWindow.open(),` 다음 줄에 더한다:
+
+```ts
+      onCheckForUpdates: () => {
+        void updateFlow?.manualCheck().catch((e: unknown) => {
+          appendSupervisorLog(`업데이트 확인 중 예외 — ${reasonOf(e)}`);
+        });
+      },
+```
+
+- [ ] **Step 5: 흐름과 스케줄러 생성**
 
 `app.whenReady().then(async () => {` 안, `applyPermissionBoundary(allowedOrigins);` **앞**에:
 
@@ -2135,7 +2177,7 @@ function showShell(target: BrowserWindow, status: ShellStatus): Promise<void> {
     });
 ```
 
-- [ ] **Step 5: lint와 전체 테스트**
+- [ ] **Step 6: lint와 전체 테스트**
 
 Run: `pnpm desktop lint`
 Expected: PASS — 실패하면 `fetch`의 타입 불일치일 가능성이 크다. `fetch: (url, init) => fetch(url, init)`에서 Node의 `Response`는 `ReleaseFetchResponse`를 구조적으로 만족한다(`status`, `headers.get`, `text()`). 불일치가 나면 오류 문구를 그대로 기록하고 어댑터(`async (u, i) => { const r = await fetch(u, i); return { status: r.status, headers: r.headers, text: () => r.text() }; }`)로 바꾼다.
@@ -2146,7 +2188,7 @@ Expected: PASS — 기존 테스트 전부 + Task 1~7의 새 테스트.
 Run: `grep -n "updateScheduler?.dispose\|clearInterval(readinessTimer)" desktop/src/main.ts`
 Expected: 두 줄이 `beginQuit` 블록 안에 나란히 있다. `before-quit` 핸들러 본문(`const gate = flows.quit.press();` 근처)에는 `updateScheduler`가 **없어야** 한다.
 
-- [ ] **Step 6: desktop/CLAUDE.md에 절 추가**
+- [ ] **Step 7: desktop/CLAUDE.md에 절 추가**
 
 `desktop/CLAUDE.md`의 릴리스 절 뒤에 추가한다:
 
@@ -2165,10 +2207,10 @@ Expected: 두 줄이 `beginQuit` 블록 안에 나란히 있다. `before-quit` �
 - 새 버전 대화상자는 `cancelId: 1` — 빼면 Escape가 "다운로드 페이지 열기"를 고를 수 있다.
 ```
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add desktop/src/main.ts desktop/CLAUDE.md
+git add desktop/src/main.ts desktop/src/windows/menu.ts desktop/CLAUDE.md
 git commit -m "feat(desktop): 새 버전 알림을 main에 배선한다 — 붙음 뒤 무장, beginQuit에서 해제"
 ```
 
@@ -2199,13 +2241,14 @@ git commit -m "feat(desktop): 새 버전 알림을 main에 배선한다 — 붙�
 | M9 | 같음 | `manualCheck`의 `if (r.kind === "newer") await presentNewer(r);` 앞에 `if (r.kind === "newer" && r.version === deps.loadSkipped()) return;` 추가 | 같음 |
 | M10 | 같음 | `check()`의 `if (now < blockedUntil) { … }` 블록 삭제 | 같음 |
 | M11 | 같음 | `autoCheck`의 `finally { presenting = false; }`를 없애고 `presenting = false;`를 `await presentNewer(r);` 다음 줄로 옮김 | 같음 |
+| M14 | `src/update/update-flow.ts` | `if (presenting \|\| shown.has(r.version) \|\| r.version === deps.loadSkipped()) return;`를 `if (presenting) return;`으로 | `tests/update/update-flow.test.ts` |
 | M12 | `src/update/dialogs.ts` | `cancelId: 1,` 삭제 | `tests/update/dialogs.test.ts` |
 | M13 | `src/update/scheduler.ts` | `\|\| ms > DEFAULT_INTERVAL_MS` 삭제 | `tests/update/scheduler.test.ts` |
 
 각 줄마다:
 
 ```bash
-pnpm desktop exec vitest run <테스트 파일>   # Expected: FAIL (1개 이상)
+pnpm --filter damwha-desktop exec vitest run <테스트 파일>   # Expected: FAIL (1개 이상)
 git checkout -- desktop/<변이한 파일>
 ```
 
@@ -2231,13 +2274,13 @@ Expected: `desktop/src` 변경 없음, 전부 PASS
 | M1 | … | (실제 실패한 테스트 이름) | 잡힘 |
 ```
 
-표의 16행을 실제 결과로 채운다. 살아남아 테스트를 보강한 변이는 "보강 후 잡힘"과 추가한 테스트 이름을 적는다.
+표의 17행을 실제 결과로 채운다. 살아남아 테스트를 보강한 변이는 "보강 후 잡힘"과 추가한 테스트 이름을 적는다.
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add docs/superpowers/reports/2026-09-23-electron-phase-6b-update-notice-results.md desktop/tests
-git commit -m "test(desktop): 새 버전 알림의 변이 16종을 돌려 기록한다"
+git commit -m "test(desktop): 새 버전 알림의 변이 17종을 돌려 기록한다"
 ```
 
 ---
@@ -2248,61 +2291,82 @@ git commit -m "test(desktop): 새 버전 알림의 변이 16종을 돌려 기록
 - Modify: `docs/superpowers/reports/2026-09-23-electron-phase-6b-update-notice-results.md` (§2 실측, §3 판정표)
 - Modify: `docs/electron-migration-roadmap.md` (Phase 6b 절 상태)
 
-GUI 조작(버튼 클릭·Escape·녹음 시작/중지·네트워크 차단)은 **사용자가 직접** 한다. 세션은 빌드·로그 관측·API 응답 기록을 맡고, 사용자가 보고한 것 이상을 기록하지 않는다.
+GUI 조작(버튼 클릭·Escape·녹음 시작/중지·Wi-Fi·⌘Q)은 **사용자가 직접** 한다. 세션은 빌드·로그 관측·API 응답 기록을 맡고, 사용자가 보고한 것 이상을 기록하지 않는다. **모든 명령은 저장소 루트에서 돌린다** — `cd`하지 않는다(계획 검증 #11).
 
-- [ ] **Step 1: 공통 격리**
-
-```bash
-pkill -f "Damwha.app/Contents/MacOS" ; pkill -f "electron \." ; sleep 2
-pgrep -fl "Damwha|electron" || echo "none running"
-UD="$HOME/Library/Application Support/damwha-desktop"
-ls "$UD" >/dev/null && rm -f "$UD/update-state.json"
-curl -s https://api.github.com/repos/Yjason-K/Damwha/releases \
-  | jq '[.[] | select(.tag_name|test("^(desktop-)?v[0-9]")) | {tag_name, prerelease, draft}]'
-```
-
-Expected: `none running`, API 목록에 `desktop-v0.3.1`(prerelease false, draft false)이 있다. 목록을 결과 문서 §2에 붙인다. `userData` 경로가 다르면 `main.ts:92` 주석의 규칙대로 찾아 기록한다.
-
-- [ ] **Step 2: 0.3.0 빌드**
+공통 변수(각 셸에서 다시 정의한다):
 
 ```bash
-cd desktop && node -e "const f='package.json',p=require('./'+f);p.version='0.3.0';require('fs').writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
-pnpm run package:desktop
-git checkout -- package.json
+UD="$HOME/Library/Application Support/Damwha"   # main.ts:98 app.setName("Damwha") — dev·packaged 공용
+LOG="$UD/logs/supervisor.log"
+BUILDS=/private/tmp/claude-501/-Users-jason-projects-Damwha2/a4d35242-6d3b-40aa-9037-64a8d07f3ec4/scratchpad/builds
+APP_OLD="$BUILDS/Damwha-0.3.0.app"
+APP_CUR="$BUILDS/Damwha-0.3.1.app"
 ```
 
-Expected: `out/` 아래 `.app`. 그 경로와 `defaults read "<.app>/Contents/Info.plist" CFBundleShortVersionString` = `0.3.0`을 기록한다.
+**격리 절차 (매 시나리오 시작 전):**
 
-- [ ] **Step 3: C1·C2 — 자동 알림과 버튼**
+1. 사용자가 실행 중인 담화를 ⌘Q로 끈다(녹음 중이면 확인에서 종료).
+2. 세션이 남은 프로세스가 없는지 확인한다 — 하나라도 나오면 시작하지 않는다:
+   ```bash
+   pgrep -fl "Damwha.app/Contents/MacOS|Electron.app/Contents/MacOS/Electron|electron/cli.js" || echo "none running"
+   ```
+3. `rm -f "$UD/update-state.json"`
+4. 사용자가 Wi-Fi가 켜져 있다고 확인하고, 세션이 API 응답을 기록한다:
+   ```bash
+   curl -s https://api.github.com/repos/Yjason-K/Damwha/releases \
+     | jq '[.[] | select(.tag_name|test("^(desktop-)?v[0-9]")) | {tag_name, prerelease, draft}]'
+   ```
+   Expected: `desktop-v0.3.1`(prerelease false, draft false)이 있다. 결과 문서 §2에 붙인다.
 
-사용자가 0.3.0 `.app`을 연다 → 담화 화면이 붙은 뒤 "새 버전 0.3.1이 나왔어요" 대화상자. 다음을 차례로(매번 Step 1의 격리 후 재실행):
-1. 열기 → 브라우저가 `https://github.com/Yjason-K/Damwha/releases/tag/desktop-v0.3.1`을 연다.
-2. Escape → 닫힘. `DAMWHA_UPDATE_CHECK_INTERVAL_MS=60000 open -a "<.app>"`로 다시 실행해 **두 번째 주기**(첫 주기 60초 뒤 알림, 거기서 Escape, 다음 60초)에 다시 뜨지 않는다.
-3. 이 버전 건너뛰기 → `cat "$UD/update-state.json"`이 `{"skippedVersion":"0.3.1"}`. 앱 재실행 → 자동 대화상자 없음. 앱 메뉴 "업데이트 확인…" → 0.3.1 대화상자가 뜬다.
+- [ ] **Step 1: 두 버전 빌드를 따로 보관한다**
 
-- [ ] **Step 4: C3·C4 — 최신·실패**
+두 빌드가 같은 `desktop/out/mac-arm64/Damwha.app`에 나오므로(`package.mjs:116`) 빌드마다 복사해 둔다.
 
-1. 원래 버전(0.3.1)으로 `pnpm run package:desktop` → 메뉴 "업데이트 확인…" → "최신 버전을 쓰고 있어요 / 담화 0.3.1".
-2. 사용자가 Wi-Fi를 끈다 → 메뉴 확인 → "업데이트를 확인하지 못했어요" + 인터넷 문구.
-3. Wi-Fi를 끈 채 0.3.0 `.app`을 `DAMWHA_UPDATE_CHECK_INTERVAL_MS=60000`으로 실행, 70초 기다림 → 화면에 아무것도 없고 `grep "업데이트 확인 실패" "$UD/logs/supervisor.log"`에 한 줄.
+```bash
+mkdir -p "$BUILDS"
+node -e "const f='desktop/package.json',p=JSON.parse(require('fs').readFileSync(f));p.version='0.3.0';require('fs').writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
+pnpm desktop package:desktop
+rm -rf "$APP_OLD" && cp -R desktop/out/mac-arm64/Damwha.app "$APP_OLD"
+git checkout -- desktop/package.json
+pnpm desktop package:desktop
+rm -rf "$APP_CUR" && cp -R desktop/out/mac-arm64/Damwha.app "$APP_CUR"
+defaults read "$APP_OLD/Contents/Info.plist" CFBundleShortVersionString   # Expected: 0.3.0
+defaults read "$APP_CUR/Contents/Info.plist" CFBundleShortVersionString   # Expected: 0.3.1
+git status --short desktop/package.json                                    # Expected: 비어 있음
+```
 
-- [ ] **Step 5: C5 — 녹음 중 보류**
+- [ ] **Step 2: C1·C2 — 자동 알림과 버튼**
 
-Step 1 격리 → 0.3.0 `.app`을 `DAMWHA_UPDATE_CHECK_INTERVAL_MS=60000`으로 실행 → 담화 화면이 붙자마자 사용자가 라이브 녹음 시작 → 60초 뒤 대화상자 없음, `grep "업데이트 알림 보류: 녹음 중" "$UD/logs/supervisor.log"` 한 줄 → 사용자가 녹음 중지 → 다음 60초 안에 대화상자가 뜬다.
+각 항목 앞에 격리 절차.
+1. `open -n "$APP_OLD"` → 담화 화면이 붙은 뒤 "새 버전 0.3.1이 나왔어요". 사용자가 **열기** → 브라우저가 `https://github.com/Yjason-K/Damwha/releases/tag/desktop-v0.3.1`을 연다.
+2. `DAMWHA_UPDATE_CHECK_INTERVAL_MS=60000 open -n "$APP_OLD"` → 60초 뒤 대화상자, 사용자가 **Escape** → 다음 60초 뒤 대화상자가 **다시 뜨지 않고** `grep "업데이트 확인: 0.3.1 (이번 실행에서 이미 알림)" "$LOG"`가 한 줄 늘어난다.
+3. 같은 방식으로 **나중에** → 2와 같은 판정.
+4. `open -n "$APP_OLD"` → **이 버전 건너뛰기** → `cat "$UD/update-state.json"` = `{"skippedVersion":"0.3.1"}`. 사용자가 ⌘Q 후(격리 3번은 **건너뛴다**) 다시 `open -n "$APP_OLD"` → 자동 대화상자 없음, `grep "업데이트 확인: 0.3.1 (건너뛴 버전)" "$LOG"`. 앱 메뉴 "업데이트 확인…" → 0.3.1 대화상자가 뜬다.
 
-- [ ] **Step 6: C6 — 종료 취소 뒤 타이머 생존**
+- [ ] **Step 3: C3·C4 — 최신·실패**
 
-Step 1 격리 → 0.3.0 `.app`을 `DAMWHA_UPDATE_CHECK_INTERVAL_MS=60000`으로 실행 → 첫 알림에서 "나중에" → 사용자가 녹음을 시작하고 ⌘Q → 종료 확인에서 "취소" → 녹음 중지 → 1~2분 기다림. 판정: `grep "업데이트 확인: 0.3.1 (이번 실행에서 이미 알림)" "$UD/logs/supervisor.log"`의 타임스탬프가 **취소 뒤에도** 새로 찍힌다(Task 5가 조용한 갈래에도 로그를 남긴다).
+1. 격리 → `open -n "$APP_CUR"` → 메뉴 "업데이트 확인…" → "최신 버전을 쓰고 있어요 / 담화 0.3.1".
+2. 사용자가 Wi-Fi를 끈다 → 메뉴 확인 → "업데이트를 확인하지 못했어요" + "인터넷에 연결되어 있지 않은 것 같아요."
+3. 격리(Wi-Fi는 끈 채 — 4번 확인은 건너뛴다) → `DAMWHA_UPDATE_CHECK_INTERVAL_MS=60000 open -n "$APP_OLD"`, 70초 → 화면에 아무것도 없고 `grep "업데이트 확인 실패 (offline)" "$LOG"` 한 줄.
+4. **사용자가 Wi-Fi를 다시 켠다.** 세션이 격리 4번의 `curl`로 연결을 확인한다 — 다음 Step의 전제다(계획 검증 #10).
 
-- [ ] **Step 7: C7 — 메뉴**
+- [ ] **Step 4: C5 — 녹음 중 보류**
 
-사용자가 앱 메뉴를 열어 About · 업데이트 확인… · Services ▸ · Hide · Hide Others · Show All · Quit에 해당하는 항목을 확인하고(role 항목의 라벨은 시스템 언어를 따른다), 메뉴의 종료와 ⌘Q가 각각 기존 종료 확인 흐름을 탄다(녹음 중이면 확인을 묻는다).
+격리 → `DAMWHA_UPDATE_CHECK_INTERVAL_MS=60000 open -n "$APP_OLD"` → 담화 화면이 붙자마자 사용자가 라이브 녹음 시작 → 60초 뒤 대화상자 없음, `grep "업데이트 알림 보류: 녹음 중 (0.3.1)" "$LOG"` → 사용자가 녹음 중지 → 다음 60초 안에 대화상자가 뜬다. 판정은 로그(받았고 보류했다) + 사용자 보고(중지 뒤 떴다).
 
-- [ ] **Step 8: 결과 문서 §2·§3과 로드맵**
+- [ ] **Step 5: C6 — 종료 취소 뒤 타이머 생존**
 
-결과 문서에 §2(시나리오별 관측 — 사용자가 보고한 문장과 세션이 본 로그를 구분해서), §3(P6b1-C1~C10 판정표)을 쓴다. `docs/electron-migration-roadmap.md`의 Phase 6b 절 `**상태 (2026-09-23): 6b-1 스펙 작성·코덱스 리뷰 반영.**` 문단을 실제 상태(구현·변이·실측 결과, 결과 문서 링크)로 갱신한다.
+격리 → `DAMWHA_UPDATE_CHECK_INTERVAL_MS=60000 open -n "$APP_OLD"` → 첫 알림에서 "나중에" → 사용자가 녹음을 시작하고 ⌘Q → 종료 확인에서 "취소" → 녹음 중지 → 2분 기다림. 판정: `grep "업데이트 확인: 0.3.1 (이번 실행에서 이미 알림)" "$LOG"`의 타임스탬프가 **취소 시각 뒤에도** 새로 찍힌다.
 
-- [ ] **Step 9: graphify와 커밋**
+- [ ] **Step 6: C7 — 메뉴**
+
+`open -n "$APP_CUR"` → 사용자가 앱 메뉴에서 About · 업데이트 확인… · Services ▸ · Hide · Hide Others · Show All · Quit에 해당하는 항목을 확인하고(role 항목의 라벨은 시스템 언어를 따른다), 메뉴의 종료와 ⌘Q가 각각 기존 종료 확인 흐름을 탄다(녹음 중이면 확인을 묻는다).
+
+- [ ] **Step 7: 결과 문서 §2·§3과 로드맵**
+
+결과 문서에 §2(시나리오별 관측 — 사용자가 보고한 문장과 세션이 본 로그를 구분해서), §3(P6b1-C1~C10 판정표)을 쓴다. `docs/electron-migration-roadmap.md`의 Phase 6b 절 `**상태 (2026-09-23): …**` 문단을 실제 상태(구현·변이·실측 결과, 결과 문서 링크)로 갱신한다.
+
+- [ ] **Step 8: graphify와 커밋**
 
 ```bash
 graphify update .
@@ -2314,6 +2378,27 @@ git commit -m "docs(phase6b): 6b-1 packaged 실측 결과를 기록한다"
 
 ## Self-Review
 
-- **스펙 커버리지:** §2.1 태그 전환 → T1. §4.1 → T2. §4.2 → T3. §5 문구 → T4. §4.3 → T5. §4.4 스케줄러·env·해제 → T6·T8, 모달 → T6·T8, 메뉴 → T7, 붙음 기록·부모 → T8. §6 경계 사례 → T2·T5·T6 테스트. §8.1 변이 13종(보류 조건 4개로 펼쳐 16행) → T9. §8.2·§9 C1~C7 → T10, C8 → T9, C9 → T8 Step 5, C10 → T1 Step 4. §10 로드맵 → T10 Step 8.
+- **스펙 커버리지:** §2.1 태그 전환 → T1. §4.1 → T2. §4.2 → T3. §5 문구 → T4. §4.3 → T5. §4.4 스케줄러·env·해제 → T6·T8, 모달 → T6·T8, 메뉴 → T7, 붙음 기록·부모 → T8. §6 경계 사례 → T2·T5·T6 테스트. §8.1 변이 13종(보류 조건 4개로 펼치고 계획 검증 #3의 재확인 M14를 더해 17행) → T9. §8.2·§9 C1~C7 → T10(Step 2~6), C8 → T9, C9 → T8 Step 6, C10 → T1 Step 4. §10 로드맵 → 계획 검증 커밋(태그 결정 문단)과 T10 Step 7(상태).
 - **스펙과 다른 점 하나:** 스펙 §4.4는 대화상자 부모를 "자동 = `updateAttached`, 수동 = `win`"으로 나눴다. 계획은 흐름이 자동/수동을 잎에 알리지 않으므로 `updateAttached → win → 부모 없음` 순서 하나로 합쳤다. 자동은 `isAttached()`를 통과한 뒤에만 띄우므로 그때 `updateAttached`가 살아 있고 결과는 같다.
+- **스펙보다 좁힌 것:** env 주기는 10진 숫자열만 받는다(`"1e5"`는 범위 안의 정수여도 거절 — `scheduler.test.ts`가 고정). 한도 대기는 24시간을 넘으면 이상한 값으로 보고 60분으로 대체한다(스펙의 "없거나 이상하면"을 구체화).
 - **스펙에 없던 것 하나:** 자동 확인이 조용히 끝나는 갈래(최신·건너뜀·이미 알림)에도 로그 한 줄을 남긴다(T5). 화면은 그대로 조용하고, C2·C6을 로그로 판정하기 위해서다.
+
+## 계획 검증 기록 (코덱스, 2026-09-23)
+
+13건(blocker 2, should-fix 10, nit 1). 코덱스는 순수 테스트 본문 66개를 메모리 하네스로 돌려 전부 통과를 보고했고, 16개 변이가 모두 잡힌다고 보고했다. #1·#4·#7은 세션이 재현해 확인했다(`pnpm desktop exec` → exit 0·테스트 0개, `main.ts:1287`의 추적 안 되는 대화상자, `main.ts:98`의 `app.setName("Damwha")`).
+
+| # | 지적 | 반영 |
+| --- | --- | --- |
+| 1 | `pnpm desktop exec vitest`가 아무것도 안 돌리고 exit 0 (blocker) | 전부 `pnpm --filter damwha-desktop exec vitest run`, Global Constraints에 금지 명시 |
+| 2 | Task 7 커밋이 lint 실패 — `updateFlow`가 `never` (blocker) | `menu.ts`·`main.ts` 변경을 Task 8로 이동 |
+| 3 | 녹음 답이 엇갈린 두 확인이 같은 버전을 두 번 띄움 | 표시 직전 `shown`·건너뛰기 재확인, 테스트 2개, 변이 M14 |
+| 4 | `clearHfToken` 대화상자가 모달 카운터 밖 | Task 8 Step 3에서 감쌈 + 남은 호출 grep |
+| 5 | `ask()` 반환 줄만 바꾸면 `const target` 중복 | 두 줄 교체로 명시 |
+| 6 | 거대한 `Retry-After`가 `Infinity` 대기 | `saneWait`(양의 안전 정수, 24시간 이하), 테스트 1개 |
+| 7 | userData 경로가 `damwha-desktop`이 아니라 `Damwha` | T10 `UD` 수정 |
+| 8 | 종료 확인 패턴이 dev 실행을 놓침 | 격리 절차의 `pgrep` 패턴·⌘Q 확인 |
+| 9 | 0.3.1 빌드가 0.3.0 `.app`을 덮음 | 버전별 복사본 `$APP_OLD`·`$APP_CUR` |
+| 10 | Wi-Fi를 끈 채 C5로 넘어감 | Step 3-4에서 복구·확인 |
+| 11 | `cd desktop`이 뒤 명령의 경로를 깸 | 루트 기준 명령만, `pnpm desktop package:desktop` |
+| 12 | 로드맵·`publish.sh:19`에 옛 태그 정책이 남음 | 로드맵은 이 커밋에서 고침, `publish.sh`는 Task 1 |
+| 13 | env 파싱이 스펙보다 좁음 (nit) | Self-Review에 명시 |
