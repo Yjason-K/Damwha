@@ -123,6 +123,19 @@ Developer ID로 서명하고 공증까지 마친 DMG로 배포한다. ad-hoc은 
   전수의 `vtool -show-build` 값을 이 상한과 비교해 초과하면 exit 1). mlx·mlx-metal은
   `scripts/mlx-pin.txt`로 15.0 휠을 직접 URL 고정한다 — uv의 플랫폼 태그로는 못 고른다.
 
+## 새 버전 알림 (Phase 6b-1)
+
+- `src/update/`는 electron을 값으로 import하지 않는다. 조회(`release-check.ts`)·건너뛴 버전
+  (`update-state.ts`, `<userData>/update-state.json`)·대화상자 옵션(`dialogs.ts`)·정책
+  (`update-flow.ts`)·타이머(`scheduler.ts`)·모달 카운터(`modal-tracker.ts`). `main.ts`는 잎만 준다.
+- 조회는 `GET /repos/Yjason-K/Damwha/releases`의 모든 페이지에서 `v*`·옛 `desktop-v*` 중 최대를
+  고른다. `/releases/latest`에 기대지 않는다. 다운로드 URL은 응답이 아니라 태그로 만든다.
+- 자동 확인은 packaged에서만, 담화 화면이 처음 **실제로** 붙은 뒤(`updateAttached`, loadURL 성공 뒤)
+  1회 + 24시간. 타이머 해제는 `beginQuit` — `before-quit`이 아니다(종료 취소 뒤에도 살아야 한다).
+- 실측용 env `DAMWHA_UPDATE_CHECK_INTERVAL_MS`(60,000~86,400,000): 주기를 줄이고 첫 확인도 한 주기
+  뒤로 민다.
+- 새 버전 대화상자는 `cancelId: 1` — 빼면 Escape가 "다운로드 페이지 열기"를 고를 수 있다.
+
 ## 디스크 부족 — 진입점 셋 (Phase 6a)
 
 디스크가 부족할 때 원인·복구 안내가 화면에 뜨는 경로가 셋이다. 문구 원천은

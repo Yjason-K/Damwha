@@ -46,6 +46,12 @@ import {
 import { captureDescendants, stopWorkerProcess } from "./services/worker-shutdown";
 import { askIsRecording } from "./windows/recording-bridge";
 import { installMenu } from "./windows/menu";
+import { checkForUpdate } from "./update/release-check";
+import { makeUpdateStateStore } from "./update/update-state";
+import { currentDialogOptions, failedDialogOptions, newerChoice, newerDialogOptions } from "./update/dialogs";
+import { createUpdateFlow, type UpdateFlow } from "./update/update-flow";
+import { createUpdateScheduler, type UpdateScheduler } from "./update/scheduler";
+import { createModalTracker } from "./update/modal-tracker";
 import { createSupervisor } from "./services/supervisor";
 import { verifyOwnListener as checkOwnListener } from "./process/own-listener";
 import { descendantPids, listenerPids, psArgs } from "./process/process-tree";
@@ -142,6 +148,16 @@ let lastStatusLine = "";
 let retryCount = 0;
 let retryTimer: NodeJS.Timeout | null = null;
 let quitting = false;
+/**
+ * 새 버전 알림 (Phase 6b-1 스펙 §4.4). 셋 다 단일 인스턴스 분기 안(whenReady)에서 한 번 만든다.
+ * - updateAttached: 담화 화면이 **실제로** 붙은 창. attachedWindow는 loadURL 전에 서므로 그 증거가
+ *   못 된다(스펙 §3-6) — loadURL이 성공한 뒤에만 여기 둔다. showShell이 둘을 함께 지운다.
+ * - modals: 다른 앱 모달(ask·재시작 안내·토큰 창). 자동 알림이 그 위에 겹치지 않게 한다.
+ */
+let updateFlow: UpdateFlow | null = null;
+let updateScheduler: UpdateScheduler | null = null;
+let updateAttached: BrowserWindow | null = null;
+const modals = createModalTracker();
 /**
  * ⌘Q의 흐름과 ⌘W의 흐름이 **공유하는** 래치 한 벌. 둘은 같은 창·같은 녹음을 상대하므로 도는
  * 흐름은 언제나 0개 아니면 1개다 — 판정과 수명은 quit-flow.ts의 createFlowLatch에 있다.
@@ -353,6 +369,7 @@ function openWindow(): BrowserWindow {
  */
 function showShell(target: BrowserWindow, status: ShellStatus): Promise<void> {
   attachedWindow = null;
+  updateAttached = null;
   return showStatus(target, status);
 }
 
@@ -465,7 +482,7 @@ function ask(
   parent: BrowserWindow | null = win,
 ): Promise<Electron.MessageBoxReturnValue> {
   const target = parent !== null && !parent.isDestroyed() ? parent : null;
-  return target === null ? dialog.showMessageBox(options) : dialog.showMessageBox(target, options);
+  return modals.track(target === null ? dialog.showMessageBox(options) : dialog.showMessageBox(target, options));
 }
 
 /** 종료 확인. 문구(무엇이 진행 중이고 무엇을 약속하는가)는 decideQuit이 만든다. */
@@ -922,6 +939,12 @@ async function reattachWindow(mine: number): Promise<void> {
   // 화면으로 되돌린다. 붙이기 **전에** 올린다.
   attachedWindow = target;
   await target.loadURL(renderer.url);
+  // 새 버전 알림이 "붙었다"로 읽는 것은 여기서부터다 — loadURL이 성공했고, 그 사이 showShell이
+  // 이 창을 준비 화면으로 되돌리지 않았을 때만 (Phase 6b-1 스펙 §3-6).
+  if (attachedWindow === target) {
+    updateAttached = target;
+    updateScheduler?.onAttached();
+  }
   // 붙기 전에 넘어진 서비스(번들 python이 없으면 worker는 몇 밀리초 만에 넘어진다)는 그때 실패 화면에
   // 잠깐 보였을 뿐, 이제 어떤 화면에도 없다. 감독자는 더 낼 상태가 없어 onStatus도 다시 돌지
   // 않으므로, 붙인 직후 여기서 한 번 더 묻는다.
@@ -1059,7 +1082,7 @@ function announceRestartNotice(mine: number, notice: string): void {
     appendSupervisorLog(`재시작 안내를 띄울 창이 없어요 — ${notice}`);
     return;
   }
-  const shown = dialog.showMessageBox(target, options);
+  const shown = modals.track(dialog.showMessageBox(target, options));
   void shown.catch((e: unknown) => {
     appendSupervisorLog(`재시작 안내를 띄우지 못했어요 — ${reasonOf(e)}`);
   });
@@ -1108,22 +1131,24 @@ async function ensureHfToken(): Promise<string | null> {
     store,
     fileExists: () => fs.existsSync(tokenFilePath(userData)),
     onboard: (notice) =>
-      openTokenWindow<BrowserWindow>({
-        notice,
-        create: (onLoadError) => createTokenWindow(win, onLoadError),
-        alive: (w) => !w.isDestroyed(),
-        onLoad: (w, listener) => w.webContents.on("did-finish-load", listener),
-        onClosed: (w, listener) => w.on("closed", listener),
-        run: (w, script) => w.webContents.executeJavaScript(script),
-        close: (w) => {
-          if (!w.isDestroyed()) w.close();
-        },
-        openExternal: (url) => shell.openExternal(url),
-        quit: () => app.quit(),
-        log: appendSupervisorLog,
-        verify: (token) => verifyHfToken(token),
-        save: (token) => store.write(token),
-      }),
+      modals.track(
+        openTokenWindow<BrowserWindow>({
+          notice,
+          create: (onLoadError) => createTokenWindow(win, onLoadError),
+          alive: (w) => !w.isDestroyed(),
+          onLoad: (w, listener) => w.webContents.on("did-finish-load", listener),
+          onClosed: (w, listener) => w.on("closed", listener),
+          run: (w, script) => w.webContents.executeJavaScript(script),
+          close: (w) => {
+            if (!w.isDestroyed()) w.close();
+          },
+          openExternal: (url) => shell.openExternal(url),
+          quit: () => app.quit(),
+          log: appendSupervisorLog,
+          verify: (token) => verifyHfToken(token),
+          save: (token) => store.write(token),
+        }),
+      ),
     log: appendSupervisorLog,
   });
   if (gate.kind === "blocked") throw new ServiceFailure(gate.detail, "manual");
@@ -1217,23 +1242,25 @@ async function changeHfToken(): Promise<void> {
   }
   let token: string;
   try {
-    token = await openTokenWindow<BrowserWindow>({
-      notice: tokenChangeNotice(),
-      closeQuitsApp: false,
-      create: (onLoadError) => createTokenWindow(win, onLoadError),
-      alive: (w) => !w.isDestroyed(),
-      onLoad: (w, listener) => w.webContents.on("did-finish-load", listener),
-      onClosed: (w, listener) => w.on("closed", listener),
-      run: (w, script) => w.webContents.executeJavaScript(script),
-      close: (w) => {
-        if (!w.isDestroyed()) w.close();
-      },
-      openExternal: (url) => shell.openExternal(url),
-      quit: () => app.quit(),
-      log: appendSupervisorLog,
-      verify: (t) => verifyHfToken(t),
-      save: (t) => store.write(t),
-    });
+    token = await modals.track(
+      openTokenWindow<BrowserWindow>({
+        notice: tokenChangeNotice(),
+        closeQuitsApp: false,
+        create: (onLoadError) => createTokenWindow(win, onLoadError),
+        alive: (w) => !w.isDestroyed(),
+        onLoad: (w, listener) => w.webContents.on("did-finish-load", listener),
+        onClosed: (w, listener) => w.on("closed", listener),
+        run: (w, script) => w.webContents.executeJavaScript(script),
+        close: (w) => {
+          if (!w.isDestroyed()) w.close();
+        },
+        openExternal: (url) => shell.openExternal(url),
+        quit: () => app.quit(),
+        log: appendSupervisorLog,
+        verify: (t) => verifyHfToken(t),
+        save: (t) => store.write(t),
+      }),
+    );
   } catch (e) {
     actionNotice =
       e instanceof TokenWindowClosed
@@ -1283,7 +1310,7 @@ async function changeHfToken(): Promise<void> {
  * 다음 실행이 토큰 화면으로 다시 묻는다. 그 사실을 화면이 말한다.
  */
 async function clearHfToken(): Promise<void> {
-  const answer = await dialog.showMessageBox({
+  const answer = await modals.track(dialog.showMessageBox({
     type: "warning",
     buttons: ["삭제", "취소"],
     defaultId: 1,
@@ -1292,7 +1319,7 @@ async function clearHfToken(): Promise<void> {
     detail:
       "지금 도는 서비스는 옛 토큰으로 계속 돌아요. 하지만 그 서비스가 다시 뜨면 — 자동 재시도나 " +
       "“서비스 다시 시작” — 토큰 없이 떠서 모델을 받지 못해요. 앱을 다시 켜면 토큰 화면이 다시 떠요.",
-  });
+  }));
   if (answer.response !== 0) {
     actionNotice = "토큰을 지우지 않았어요.";
     return;
@@ -1514,6 +1541,46 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(async () => {
+    const updateState = makeUpdateStateStore(app.getPath("userData"), appendSupervisorLog);
+    /** 알림을 붙일 창 — 붙은 창, 없으면 전역 창, 없으면 부모 없이(ask()와 같다). */
+    const updateParent = (): BrowserWindow | null => {
+      for (const w of [updateAttached, win]) if (w !== null && !w.isDestroyed()) return w;
+      return null;
+    };
+    const showUpdateBox = (options: Electron.MessageBoxOptions) => {
+      const parent = updateParent();
+      return parent === null ? dialog.showMessageBox(options) : dialog.showMessageBox(parent, options);
+    };
+    updateFlow = createUpdateFlow(
+      {
+        check: () => checkForUpdate(app.getVersion(), { fetch: (url, init) => fetch(url, init), now: Date.now }),
+        now: Date.now,
+        isAttached: () => updateAttached !== null && !updateAttached.isDestroyed() && updateAttached === attachedWindow,
+        isRecording: () => (updateAttached === null ? Promise.resolve(false) : isRecordingIn(updateAttached)),
+        isShuttingDown: () => quitting || flows.running() !== null,
+        isOtherModalOpen: () => modals.isOpen(),
+        loadSkipped: () => updateState.loadSkipped(),
+        saveSkipped: (v) => updateState.saveSkipped(v),
+        showNewer: async ({ current, latest }) =>
+          newerChoice((await showUpdateBox(newerDialogOptions(current, latest))).response),
+        showInfo: async (info) => {
+          await showUpdateBox(info.kind === "current" ? currentDialogOptions(info.current) : failedDialogOptions(info.detail));
+        },
+        openExternal: (url) => shell.openExternal(url),
+        log: appendSupervisorLog,
+      },
+      app.getVersion(),
+    );
+    updateScheduler = createUpdateScheduler({
+      packaged: app.isPackaged,
+      override: process.env.DAMWHA_UPDATE_CHECK_INTERVAL_MS,
+      run: () => {
+        void updateFlow?.autoCheck().catch((e: unknown) => {
+          appendSupervisorLog(`자동 업데이트 확인 중 예외 — ${reasonOf(e)}`);
+        });
+      },
+      log: appendSupervisorLog,
+    });
     applyPermissionBoundary(allowedOrigins);
     installMenu({
       onRetry: () => {
@@ -1526,6 +1593,11 @@ if (!app.requestSingleInstanceLock()) {
         void start();
       },
       onShowStatus: () => statusWindow.open(),
+      onCheckForUpdates: () => {
+        void updateFlow?.manualCheck().catch((e: unknown) => {
+          appendSupervisorLog(`업데이트 확인 중 예외 — ${reasonOf(e)}`);
+        });
+      },
     });
     openWindow();
     await start();
@@ -1612,6 +1684,9 @@ if (!app.requestSingleInstanceLock()) {
         // 모델 준비 리더도 여기서 끈다 — 이 타이머가 번들 psql을 새로 띄우는 유일한 주기다.
         // 끄지 않으면 stopAll의 fast-shutdown과 겹친 psql이 종료 뒤까지 남는다 (P4-C17·C19).
         clearInterval(readinessTimer);
+        // 업데이트 확인 타이머도 여기서 끈다. before-quit이 아니다 — 종료 확인에서 "취소"하면 앱은
+        // 계속 살고, 그때 타이머가 죽어 있으면 자동 확인이 영영 돌지 않는다 (Phase 6b-1 스펙 §3-7).
+        updateScheduler?.dispose();
       },
       // activeWindow를 쓰지 않는다 — quitting이 이미 참이라 그것은 항상 null을 돌려준다
       // (spawn-guard). 여기서 보고 싶은 것은 "지금 창이 있는가"뿐이다.
