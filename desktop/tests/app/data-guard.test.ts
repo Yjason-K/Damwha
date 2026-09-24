@@ -99,6 +99,23 @@ describe("runDataGuard — snapshots", () => {
     expect(fs.existsSync(layout.generationFile)).toBe(false);
     expect(fs.readdirSync(layout.snapshots)).toEqual([]);
   });
+  it("prune protects the snapshot just taken even when clock skew sorts its id oldest", async () => {
+    makeCluster();
+    const mk = (at: string, b: string) =>
+      takeSnapshot({ layout, clone: makeClone(runTool), readControldata: async () => CONTROL, now: () => new Date(at), log: () => undefined },
+        { fromBuild: null, toBuild: b, fromRecord: b }, signal);
+    await mk("2026-09-25T00:00:00.000Z", "b1");
+    await mk("2026-09-26T00:00:00.000Z", "b2");
+    await mk("2026-09-27T00:00:00.000Z", "b3");
+    // 시계가 뒤로 가 있다 — 새 스냅샷의 id가 셋 중 가장 오래된 것으로 정렬된다
+    const out = await runDataGuard(deps({ now: () => new Date("2026-09-20T00:00:00.000Z") }), signal);
+    const sid = out.kind === "proceed" ? out.snapshot!.id : "";
+    expect(sid).toBe("20260920T000000Z");
+    expect(listCompleteSnapshots(layout.snapshots).map((s) => s.id)).toContain(sid);
+    const rec = readGeneration(layout.generationFile);
+    expect(rec?.snapshot).toBe(sid);
+    expect(fs.existsSync(path.join(layout.snapshots, rec!.snapshot!))).toBe(true);
+  });
   it("crash between snapshot rename and record write: reuses that snapshot instead of taking another", async () => {
     makeCluster();
     await takeSnapshot({ layout, clone: makeClone(runTool), readControldata: async () => CONTROL, now: () => new Date("2026-09-24T08:49:33.000Z"), log: () => undefined },

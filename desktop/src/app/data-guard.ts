@@ -163,7 +163,8 @@ export function runDataGuard(d: DataGuardDeps, signal: AbortSignal): Promise<Gua
     } catch (e) {
       throw new ServiceFailure(CAUSES.snapshotFailed.text(reasonOf(e), layout.snapshots), "manual");
     }
-    pruneSnapshots(layout.snapshots, protectedIds(layout), d.log);
+    // 방금 뜬 스냅샷도 지킨다 — 시계가 뒤로 가 있으면 그 id가 가장 오래된 것으로 정렬돼 상한 밖으로 밀린다.
+    pruneSnapshots(layout.snapshots, new Set([...protectedIds(layout), snapshot.id]), d.log);
     return { kind: "proceed", snapshot, notice };
   });
 }
