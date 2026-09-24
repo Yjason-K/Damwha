@@ -12,12 +12,15 @@ from damwha_worker import db
 from tests.conftest import seed_job, seed_meeting
 
 GRID = json.loads(
-    (Path(__file__).resolve().parents[2] / "test" / "fixtures" / "job-reap" / "grid.json").read_text()
+    (Path(__file__).resolve().parents[2] / "test" / "fixtures" / "job-reap" / "grid.json")
+    .read_text()
 )
 
 
 def _seed(conn, c, *, locked_by, locked_minutes_ago):
-    meeting_status = {"live_session": "recording", "process_meeting": "processing"}.get(c["type"], "done")
+    meeting_status = {"live_session": "recording", "process_meeting": "processing"}.get(
+        c["type"], "done"
+    )
     mid = seed_meeting(conn, status=meeting_status)
     jid = seed_job(
         conn,
@@ -40,13 +43,14 @@ def _seed(conn, c, *, locked_by, locked_minutes_ago):
         )
     elif c["type"] == "extract_lenses":
         conn.execute(
-            "INSERT INTO lens_extraction_run(meeting_id, processing_version, status, model, job_id) "
-            "VALUES (%s, 0, 'running', 'model', %s)",
+            "INSERT INTO lens_extraction_run(meeting_id, processing_version, status, model, "
+            "job_id) VALUES (%s, 0, 'running', 'model', %s)",
             (mid, jid),
         )
     elif c["type"] == "enroll_speaker":
         conn.execute(
-            "INSERT INTO speaker(name, enrollment_status, current_job_id) VALUES ('s','provisional',%s)",
+            "INSERT INTO speaker(name, enrollment_status, current_job_id) "
+            "VALUES ('s','provisional',%s)",
             (jid,),
         )
     return jid, mid
@@ -54,7 +58,9 @@ def _seed(conn, c, *, locked_by, locked_minutes_ago):
 
 def _dependent(conn, c, jid, mid):
     if c["type"] == "summarize_meeting":
-        return conn.execute("SELECT status FROM meeting_summary WHERE job_id=%s", (jid,)).fetchone()["status"]
+        return conn.execute(
+            "SELECT status FROM meeting_summary WHERE job_id=%s", (jid,)
+        ).fetchone()["status"]
     if c["type"] == "extract_lenses":
         return conn.execute(
             "SELECT status FROM lens_extraction_run WHERE job_id=%s", (jid,)
@@ -101,7 +107,10 @@ from damwha_worker.dispatch import failures  # noqa: E402
 )
 def test_retry_grid_failures_and_backoff(conn, c):
     """failures()와 requeue의 백오프가 같은 식인지 (스펙 §4.3). requeue는 running 행에서 부른다."""
-    assert failures({"attempts": c["attempts"], "interruptions": c["interruptions"]}) == c["failures"]
+    assert (
+        failures({"attempts": c["attempts"], "interruptions": c["interruptions"]})
+        == c["failures"]
+    )
     assert (failures(c) < c["max_attempts"]) == c["retry"]
 
     mid = seed_meeting(conn)

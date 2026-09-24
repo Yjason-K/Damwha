@@ -479,7 +479,9 @@ def test_reap_stale_requeues_a_job_whose_retry_budget_is_spent(conn):
     )
     conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
     assert db.reap_stale(conn, 30) == (1, 0)
-    row = conn.execute("SELECT status, attempts, interruptions FROM job WHERE id=%s", (jid,)).fetchone()
+    row = conn.execute(
+        "SELECT status, attempts, interruptions FROM job WHERE id=%s", (jid,)
+    ).fetchone()
     assert (row["status"], row["attempts"], row["interruptions"]) == ("queued", 3, 1)
 
 
@@ -493,8 +495,13 @@ def test_reap_stale_leaves_a_meeting_whose_current_job_is_newer(conn):
     newer = seed_job(conn, meeting_id=mid)
     conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (newer, mid))
     assert db.reap_stale(conn, 30) == (0, 1)
-    assert conn.execute("SELECT status FROM job WHERE id=%s", (old,)).fetchone()["status"] == "failed"
-    assert conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()["status"] == "processing"
+    assert (
+        conn.execute("SELECT status FROM job WHERE id=%s", (old,)).fetchone()["status"] == "failed"
+    )
+    assert (
+        conn.execute("SELECT status FROM meeting WHERE id=%s", (mid,)).fetchone()["status"]
+        == "processing"
+    )
 
 
 def _counters(conn, jid):
@@ -509,7 +516,8 @@ def _counters(conn, jid):
 
 
 def test_transitions_keep_the_counter_invariants(conn):
-    """도달 가능한 전이만으로: claim → 회수 → claim → 정상 반납 → claim → 회수 → claim → 회수(소진)."""
+    """도달 가능한 전이만으로: claim → 회수 → claim → 정상 반납 → claim → 회수 →
+    claim → 회수(소진)."""
     mid = seed_meeting(conn, status="processing")
     jid = seed_job(conn, meeting_id=mid, max_attempts=5)
     conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
