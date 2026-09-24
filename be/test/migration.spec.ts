@@ -551,4 +551,53 @@ describe('migration', () => {
       { table_name: 'meeting', column_name: 'capture_error', data_type: 'jsonb' },
     ]);
   });
+
+  it('026 adds interruptions (default 0) and max_interruptions (default 3) with CHECKs', async () => {
+    const cols = await db.pool.query(
+      `SELECT column_name, column_default, is_nullable FROM information_schema.columns
+        WHERE table_name='job' AND column_name IN ('interruptions','max_interruptions')
+        ORDER BY column_name`,
+    );
+    expect(cols.rows).toEqual([
+      { column_name: 'interruptions', column_default: '0', is_nullable: 'NO' },
+      { column_name: 'max_interruptions', column_default: '3', is_nullable: 'NO' },
+    ]);
+    const m = (await db.pool.query(`INSERT INTO meeting(audio_key) VALUES('k') RETURNING id`)).rows[0].id;
+    await expect(db.pool.query(
+      `INSERT INTO job(type, meeting_id, payload, interruptions) VALUES('process_meeting',$1,'{}',-1)`, [m],
+    )).rejects.toThrow(/check constraint/i);
+    await expect(db.pool.query(
+      `INSERT INTO job(type, meeting_id, payload, max_interruptions) VALUES('process_meeting',$1,'{}',0)`, [m],
+    )).rejects.toThrow(/check constraint/i);
+  });
+
+  it('026 keeps rows that pre-date it: attempts and max_attempts untouched, counters defaulted', async () => {
+    // 0.3.1 → 새 판 업그레이드의 모양 — 025까지 적용된 DB에 행이 있고 그 위에 026이 온다.
+    const legacy = await new PostgreSqlContainer('damwha/postgres-bigm:pg16').start();
+    const pool = new Pool({ connectionString: legacy.getConnectionUri() });
+    try {
+      const dir = path.join(__dirname, '..', 'src', 'database', 'migrations');
+      const files = fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
+      for (const f of files.filter((f) => f < '026')) {
+        await pool.query(fs.readFileSync(path.join(dir, f), 'utf8'));
+      }
+      const m = (await pool.query(`INSERT INTO meeting(audio_key) VALUES('k') RETURNING id`)).rows[0].id;
+      const j = (await pool.query(
+        `INSERT INTO job(type, meeting_id, payload, status, attempts, max_attempts, next_attempt_at)
+         VALUES('process_meeting',$1,'{}','queued',2,3, now() + interval '1 minute') RETURNING id`, [m],
+      )).rows[0].id;
+
+      await pool.query(fs.readFileSync(path.join(dir, '026_job_interruptions.sql'), 'utf8'));
+
+      const row = (await pool.query(
+        `SELECT status, attempts, max_attempts, interruptions, max_interruptions FROM job WHERE id=$1`, [j],
+      )).rows[0];
+      expect(row).toEqual({
+        status: 'queued', attempts: 2, max_attempts: 3, interruptions: 0, max_interruptions: 3,
+      });
+    } finally {
+      await pool.end();
+      await legacy.stop();
+    }
+  });
 });
