@@ -1118,7 +1118,8 @@ test("재시도 대기 중이면 배너가 회차와 남은 시간을 말한다"
     stage: null,
     progress: null,
     retry: {
-      attempts: 2,
+      failures: 2,
+      interruptions: 0,
       max_attempts: 5,
       next_attempt_at: new Date(Date.now() + 90_000).toISOString(),
       error: null,
@@ -1139,7 +1140,8 @@ test("재시도 대기 배너가 마지막 오류 코드를 함께 말한다", a
     progress: null,
     error: null,
     retry: {
-      attempts: 3,
+      failures: 3,
+      interruptions: 0,
       max_attempts: 5,
       next_attempt_at: new Date(Date.now() + 210_000).toISOString(),
       error: { code: "model_download_failed", message: "connection reset" },
@@ -1160,7 +1162,8 @@ test("모델을 받는 중이면 재시도 문구 대신 다운로드 문구만 
     stage: null,
     progress: null,
     retry: {
-      attempts: 2,
+      failures: 2,
+      interruptions: 0,
       max_attempts: 5,
       next_attempt_at: new Date(Date.now() + 90_000).toISOString(),
       error: null,
@@ -1190,6 +1193,101 @@ test("모델을 받는 중이면 재시도 문구 대신 다운로드 문구만 
     await screen.findByText(/mlx-community\/whisper-large-v3-turbo 25%/),
   ).toBeInTheDocument();
   expect(screen.queryByText(/재시도 대기/)).toBeNull();
+});
+
+test("모델을 받는 중이면 재시도 문구 대신 다운로드 문구만 뜬다 — stage가 있어도", async () => {
+  fx.setStatus({
+    stage: "stt",
+    progress: null,
+    retry: {
+      failures: 2,
+      interruptions: 0,
+      max_attempts: 5,
+      next_attempt_at: new Date(Date.now() + 90_000).toISOString(),
+      error: null,
+    },
+  });
+  fx.setModelReadiness({
+    updatedAt: new Date().toISOString(),
+    entries: [
+      {
+        key: "mlx-community/whisper-large-v3-turbo",
+        state: "downloading",
+        bytesDone: 512,
+        bytesTotal: 2048,
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        writer: "worker-1",
+        attempt: 1,
+        error: null,
+        errorKind: null,
+      },
+    ],
+  });
+  renderShell("/meetings/m3");
+  await screen.findByText(/회의를 처리하고 있어요/);
+
+  expect(
+    await screen.findByText(/mlx-community\/whisper-large-v3-turbo 25%/),
+  ).toBeInTheDocument();
+  expect(screen.queryByText(/재시도 대기/)).toBeNull();
+});
+
+test("중단이 있었으면 재시도 배너 끝에 중단 횟수를 붙인다", async () => {
+  fx.setStatus({
+    stage: null,
+    progress: null,
+    retry: {
+      failures: 1,
+      max_attempts: 5,
+      interruptions: 2,
+      next_attempt_at: new Date(Date.now() + 30_000).toISOString(),
+      error: null,
+    },
+  });
+  renderShell("/meetings/m3");
+  await screen.findByText(/회의를 처리하고 있어요/);
+  expect(await screen.findByText(/1\/5회차/)).toBeInTheDocument();
+  expect(screen.getByText(/중단 2회/)).toBeInTheDocument();
+});
+
+test("중단이 없으면 중단 문구를 붙이지 않는다", async () => {
+  fx.setStatus({
+    stage: null,
+    progress: null,
+    retry: {
+      failures: 2,
+      max_attempts: 5,
+      interruptions: 0,
+      next_attempt_at: new Date(Date.now() + 90_000).toISOString(),
+      error: null,
+    },
+  });
+  renderShell("/meetings/m3");
+  await screen.findByText(/재시도 대기/);
+  // "녹음이 중단됐어요" 같은 다른 문구와 겹치지 않게 모양까지 본다.
+  expect(screen.queryByText(/중단 \d+회/)).toBeNull();
+});
+
+test("앞 시도의 stage가 남아 있어도 재시도 대기가 이긴다 (스펙 §6.2)", async () => {
+  // requeue는 stage를 지우지 않는다 — 전사 도중의 일시 실패는 재시도 대기 내내 stage='stt'다.
+  fx.setStatus({
+    stage: "stt",
+    progress: 40,
+    retry: {
+      failures: 1,
+      max_attempts: 5,
+      interruptions: 0,
+      next_attempt_at: new Date(Date.now() + 30_000).toISOString(),
+      error: { code: "model_download_failed", message: "reset" },
+    },
+  });
+  renderShell("/meetings/m3");
+  await screen.findByText(/회의를 처리하고 있어요/);
+  expect(await screen.findByText(/재시도 대기/)).toBeInTheDocument();
+  expect(
+    screen.getByText(/마지막 오류: model_download_failed/),
+  ).toBeInTheDocument();
 });
 
 test("처리 중 배너의 취소 버튼은 POST /meetings/:id/cancel을 부른다", async () => {
