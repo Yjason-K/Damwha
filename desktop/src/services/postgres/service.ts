@@ -38,6 +38,11 @@ export interface EmbeddedPostgresDeps {
   spawnPostmaster(logFile: string): ServiceHandle;
   stopOrphan(pid: number): Promise<PostmasterStopResult>;
   log(line: string): void;
+  /**
+   * launch의 맨 앞, 어떤 판정·파일 작업보다 먼저 (Phase 6b-2 스펙 §5.2). main이 데이터 가드를 건다 — 첫 기동·다시 시도·
+   * 상태 창 재시작이 모두 이 한 곳을 지난다. 던지면 launch가 거부로 끝난다.
+   */
+  preLaunch?(signal: AbortSignal): Promise<void>;
 }
 
 const REASON_TEXT: Record<Exclude<ClusterRefusal, "version-mismatch" | "controldata-failed"> | DatabaseRefusal, string> = {
@@ -198,6 +203,7 @@ export function embeddedPostgresSpec(deps: EmbeddedPostgresDeps): ServiceSpec {
     },
     launch(ctx: LaunchContext): Promise<LaunchResult> {
       return manualUnlessTagged(async () => {
+        await deps.preLaunch?.(ctx.signal);
         const missing = PG_BINARY_NAMES.filter((n) => !isExecutable(path.join(binaries.dir, "bin", n)));
         if (missing.length > 0) refuse(CAUSES.pgBundleMissing.text(missing));
         const tooLong = socketPathTooLong(layout);

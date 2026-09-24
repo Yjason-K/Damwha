@@ -248,6 +248,35 @@ describe("embeddedPostgresSpec.launch — refusals change nothing", () => {
     const t = setup({ runTool: async () => { throw new Error("EACCES"); } });
     await refusal(t.spec.launch(t.ctx));
   });
+
+  it("calls preLaunch before anything else and refuses without creating anything when it throws", async () => {
+    const order: string[] = [];
+    let seen: AbortSignal | undefined;
+    const t = setup({
+      preLaunch: async (signal) => {
+        seen = signal;
+        order.push("preLaunch");
+        throw new ServiceFailure("guard said no", "manual");
+      },
+    });
+    // 번들 확인보다 앞이어야 한다 — 번들이 모자라도 가드의 거부가 먼저 나온다.
+    fs.rmSync(t.deps.binaries.pgDump);
+    const e = await refusal(t.spec.launch(t.ctx));
+    expect(e.message).toMatch(/guard said no/);
+    expect(order).toEqual(["preLaunch"]);
+    expect(seen).toBe(t.ctx.signal);
+    expect(tools(t.world)).toEqual([]);
+    expect(fs.existsSync(t.layout.dataDir)).toBe(false);
+    expect(fs.existsSync(t.layout.runDir)).toBe(false);
+  });
+
+  it("goes on to launch when preLaunch resolves", async () => {
+    const order: string[] = [];
+    const t = setup({ preLaunch: async () => void order.push("preLaunch") });
+    await t.spec.launch(t.ctx);
+    expect(order).toEqual(["preLaunch"]);
+    expect(t.handles).toHaveLength(1);
+  });
 });
 
 describe("embeddedPostgresSpec.launch — the lock left by a previous run", () => {

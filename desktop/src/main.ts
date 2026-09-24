@@ -45,7 +45,21 @@ import {
 } from "./app/quit-flow";
 import { captureDescendants, stopWorkerProcess } from "./services/worker-shutdown";
 import { askIsRecording } from "./windows/recording-bridge";
-import { installMenu } from "./windows/menu";
+import { installMenu, type MenuHandlers } from "./windows/menu";
+import {
+  afterIo,
+  confirmRestoreDialog,
+  createIoTracker,
+  holdDialog,
+  parsePauseStep,
+  RELEASES_PAGE_URL,
+  restoreMenuEnabled,
+} from "./app/restore-flow";
+import { releaseHold, runDataGuard, type GuardOutcome } from "./app/data-guard";
+import { makeClone } from "./process/clone";
+import { restorableSnapshots } from "./services/postgres/snapshot";
+import { chooseRestoreId, readJournal, writeJournalAtomic } from "./services/postgres/restore-journal";
+import { buildIdOf, parseBuildInfo, readGeneration } from "./services/postgres/generation";
 import { checkForUpdate } from "./update/release-check";
 import { makeUpdateStateStore } from "./update/update-state";
 import { currentDialogOptions, failedDialogOptions, newerChoice, newerDialogOptions } from "./update/dialogs";
@@ -70,11 +84,11 @@ import { freePort } from "./process/ports";
 import { mayAutoRetry } from "./app/retry-policy";
 import { devMigrationRunner, packagedMigrationRunner } from "./services/postgres/migration-runner";
 import { runMigrationGate } from "./services/postgres/migration-gate";
-import { DB_NAME, DB_SUPERUSER, pgBinaries, pgLayout, pgToolEnv, type PgBinaries, type PgLayout } from "./services/postgres/layout";
+import { DB_NAME, DB_SUPERUSER, PG_MAJOR, pgBinaries, pgLayout, pgToolEnv, type PgBinaries, type PgLayout } from "./services/postgres/layout";
 import { MODEL_READINESS_KEY, parseModelReadiness, type ReadinessEntry } from "./services/model-readiness";
 import { psInfo, spawnPostmaster, stopOrphanPostmaster } from "./services/postgres/handle";
-import { embeddedPostgresSpec, externalPostgresSpec, PG_FAST_GRACE_MS, PG_IMMEDIATE_GRACE_MS } from "./services/postgres/service";
-import { runTool } from "./process/tool-runner";
+import { embeddedPostgresSpec, externalPostgresSpec, PG_FAST_GRACE_MS, PG_IMMEDIATE_GRACE_MS, PG_TOOL_DEADLINES } from "./services/postgres/service";
+import { describeToolFailure, runTool, toolOk } from "./process/tool-runner";
 import type {
   LaunchContext,
   LaunchResult,
@@ -230,6 +244,47 @@ let tokenBusy = false;
 let actionNotice: string | null = null;
 
 /** 앱이 정한 API origin. 감독자의 런타임에서 읽는다 — 전역 변수를 따로 두면 갈린다. */
+/** 데이터 가드의 파일 I/O. stopServices가 기다린다 (Phase 6b-2 스펙 §5.2). */
+const guardIo = createIoTracker();
+/** 감독자 없이 던진 마지막 기동 실패. 창 재열기가 manual 실패를 자동 재시도하지 않게 한다 (§5.2 "가드 실패의 상태"). */
+let lastStartFailure: unknown = null;
+/** 메뉴에서 고른 되돌리기. before-quit의 commit이 저널을 쓰고, quit이 relaunch한다 (§6.2·§7.2). */
+let pendingRestore: { snapshot: string } | null = null;
+let restoreCommitted = false;
+let menuHandlers: MenuHandlers | null = null;
+/**
+ * config.json으로 정해진 DB 모드. `launchCtx`는 감독자를 만든 **뒤**에야 대입되므로(currentDatabaseMode) 가드 직후의
+ * 메뉴 판정에는 쓸 수 없다 — 모드를 모르면 되돌리기를 막는다(계획 검증 [3]).
+ */
+let knownDbMode: "embedded" | "external" | null = null;
+
+function currentBuildId(): string | null {
+  if (!app.isPackaged) return null;
+  try {
+    const info = parseBuildInfo(fs.readFileSync(path.join(process.resourcesPath, "build-info.json"), "utf8"));
+    return info === null ? null : buildIdOf(info);
+  } catch {
+    return null;
+  }
+}
+
+const localTime = (iso: string) => new Date(iso).toLocaleString("ko-KR", { dateStyle: "medium", timeStyle: "short" });
+
+function restoreAllowedNow(): boolean {
+  if (knownDbMode === null) return false;
+  const layout = pgLayout(app.getPath("userData"));
+  return restoreMenuEnabled({
+    external: knownDbMode === "external",
+    restorable: restorableSnapshots(layout.snapshots, PG_MAJOR),
+    journalPresent: readJournal(layout.restoreJournal).kind !== "none",
+  });
+}
+
+function refreshMenu(): void {
+  if (menuHandlers === null) return;
+  installMenu(menuHandlers, { restoreEnabled: restoreAllowedNow() });
+}
+
 function currentApiOrigin(): string | null {
   return supervisor?.runtimeOf("api")?.result?.origin ?? null;
 }
@@ -575,7 +630,7 @@ function stopOwnWorker(result: LaunchResult, plan: StopPlan): Promise<StopOutcom
  * 정중한 정지(유예 90초) 한가운데인데 runQuitFlow가 앱을 끝내 버린다. 거부는 그 뒤에 그대로 던진다 — 감독자 쪽 거부를
  * 먼저 본다.
  */
-async function stopServices(): Promise<StopOutcome> {
+async function stopServicesNow(): Promise<StopOutcome> {
   const v = vite;
   vite = null;
   viteApiBase = null;
@@ -606,6 +661,11 @@ async function stopServices(): Promise<StopOutcome> {
       .filter((line): line is string => line !== undefined)
       .join("\n"),
   };
+}
+
+/** 감독자가 없어도 가드의 /bin/cp가 돌고 있을 수 있다 — 끝나기 전에 앱이 나가면 .partial·staging에 계속 쓴다 (스펙 §5.2). */
+function stopServices(): Promise<StopOutcome> {
+  return afterIo(guardIo, stopServicesNow);
 }
 
 /**
@@ -860,6 +920,7 @@ function shellStatusOf(): ShellStatus {
     configWarning,
     externalDatabase: currentDatabaseMode()?.kind === "external",
     logPathOf,
+    restoreAvailable: restoreAllowedNow(),
   });
 }
 
@@ -996,7 +1057,9 @@ async function startOnce(): Promise<void> {
   const mine = generation;
   try {
     await startServices(mine);
+    lastStartFailure = null;
   } catch (e) {
+    if (supervisor === null) lastStartFailure = e;
     await reportFailure(mine, "앱을 시작하지 못했어요", e);
   }
 }
@@ -1333,6 +1396,76 @@ async function clearHfToken(): Promise<void> {
   appendSupervisorLog(actionNotice);
 }
 
+/** 데이터 가드 한 번 (스펙 §5.2). 파일 I/O 전체를 guardIo에 등록한다 — 보류 대화상자는 밖에서 띄운다. */
+function guardOnce(layout: PgLayout, binaries: PgBinaries, external: boolean, signal: AbortSignal): Promise<GuardOutcome> {
+  const pause = parsePauseStep(process.env.DAMWHA_RESTORE_PAUSE_AFTER_STEP);
+  const env = pgToolEnv();
+  return guardIo.track(
+    runDataGuard(
+      {
+        packaged: app.isPackaged,
+        external,
+        currentBuild: currentBuildId(),
+        buildInfoFile: path.join(process.resourcesPath, "build-info.json"),
+        layout,
+        readControldata: async (pgdata, sig) => {
+          const r = await runTool(binaries.pgControldata, ["-D", pgdata], { env, deadlineMs: PG_TOOL_DEADLINES.controldata, signal: sig });
+          if (!toolOk(r)) throw new Error(describeToolFailure("pg_controldata", r));
+          return r.stdout;
+        },
+        lock: {
+          layout,
+          psInfo,
+          stopOrphan: (pid) => stopOrphanPostmaster(pid, PG_FAST_GRACE_MS, PG_IMMEDIATE_GRACE_MS),
+          log: appendSupervisorLog,
+        },
+        clone: makeClone(runTool),
+        now: () => new Date(),
+        log: appendSupervisorLog,
+        pauseAfterStep:
+          pause === null
+            ? undefined
+            : async (step) => {
+                if (step !== pause) return;
+                appendSupervisorLog(`되돌리기: 실측용 대기 60초 — ${step}`);
+                await new Promise((resolve) => setTimeout(resolve, 60_000));
+              },
+      },
+      signal,
+    ),
+  );
+}
+
+/**
+ * 가드를 돌리고 보류면 사람에게 묻는다 (스펙 §7.3). true = 기동을 잇는다, false = 종료로 간다.
+ * [이 판으로 계속]은 저널을 지우고 가드를 다시 돌린다 — 그때 새 스냅샷이 뜬다.
+ */
+async function passDataGuard(mine: number, layout: PgLayout, binaries: PgBinaries, external: boolean): Promise<boolean> {
+  for (;;) {
+    const out = await guardOnce(layout, binaries, external, new AbortController().signal);
+    if (out.kind === "proceed") {
+      refreshMenu();
+      if (out.notice !== null) {
+        const target = activeWindow(mine);
+        const opts = { type: "info" as const, message: out.notice, buttons: ["확인"], defaultId: 0, cancelId: 0 };
+        void modals.track(target === null ? dialog.showMessageBox(opts) : dialog.showMessageBox(target, opts));
+      }
+      return true;
+    }
+    const d = holdDialog(out, localTime);
+    const target = activeWindow(mine);
+    const { response } = await modals.track(target === null ? dialog.showMessageBox(d.options) : dialog.showMessageBox(target, d.options));
+    const choice = d.choices[response] ?? "quit";
+    if (choice === "continue") {
+      releaseHold(layout);
+      continue;
+    }
+    if (choice === "download") await shell.openExternal(RELEASES_PAGE_URL).catch(() => undefined);
+    app.quit();
+    return false;
+  }
+}
+
 /**
  * 감독자를 세운다. 세울 수 없는 이유(설정 오류)를 화면에 적었으면 false를 돌려주고,
  * 부른 쪽은 물러난다. 던지는 실패(저장소 부재)는 startOnce의 catch가 받는다.
@@ -1424,6 +1557,12 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
   const mode = cfg.databaseMode;
   const layout = pgLayout(userData);
   const binaries = pgBinaries(bundleDir("postgres"));
+  // 데이터 가드 (Phase 6b-2 스펙 §5.2) — 감독자가 postgres를 launch하기 전에 반드시 통과한다. 고아를 내린 뒤라
+  // 스토리지에 쓰는 앱 소유 프로세스가 없다(reapBeforeStart가 생존자를 거부한다). layout·binaries·mode가
+  // reapBeforeStart보다 뒤에 정의되므로 그 바로 다음, 감독자 조립(embeddedPostgresSpec) 전에 둔다.
+  // knownDbMode를 가드 **전에** 채운다 — 가드 안의 refreshMenu()가 외부 모드를 알아야 한다.
+  knownDbMode = mode.kind;
+  if (!(await passDataGuard(mine, layout, binaries, mode.kind === "external"))) return false;
   // 감독자의 준비 유예와 상태 창이 **같은** 리더를 쓴다 (스펙 §6.9 — 같은 값을 본다). 외부 DB
   // 모드에서는 worker가 이 행을 아예 쓰지 않으므로 리더를 두지 않는다.
   readModelReadiness = mode.kind === "external" ? null : modelReadinessReader(binaries, layout);
@@ -1439,6 +1578,14 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
           spawnPostmaster: (logFile) => spawnPostmaster({ binaries, layout, logFile, immediateGraceMs: PG_IMMEDIATE_GRACE_MS }),
           stopOrphan: (pid) => stopOrphanPostmaster(pid, PG_FAST_GRACE_MS, PG_IMMEDIATE_GRACE_MS),
           log: appendSupervisorLog,
+          // 첫 기동·"다시 시도"·상태 창 재시작이 모두 launch를 지난다 — 모든 postgres launch가 가드를 거친다 (§5.2).
+          preLaunch: async (signal) => {
+            const out = await guardOnce(layout, binaries, false, signal);
+            // 보류는 첫 기동의 passDataGuard만 사람에게 묻는다. 여기(다시 시도·재시작)에서 보류를 만나는 것은 앱이 떠 있는
+            // 동안 저널이 생긴 경우뿐이라 다시 시작하라고만 말한다.
+            if (out.kind === "hold") throw new ServiceFailure(CAUSES.restoreIncomplete.text("되돌리기가 보류 중이에요 — 앱을 다시 시작해 주세요."), "manual");
+            refreshMenu();
+          },
         });
   // 러너에는 감독자의 ctx.env를 그대로 넘긴다. 상속 env 위에 얹고 HF_TOKEN을 빼는 합성은 러너가 한다
   // (migration-runner.ts의 nodeChildEnv, R-6b) — API와 같은 규칙이고, 이 파일에 두면 테스트가 못 본다.
@@ -1460,6 +1607,7 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
               binaries,
               layout,
               log: appendSupervisorLog,
+              generation: () => readGeneration(layout.generationFile)?.snapshot ?? null,
             },
             signal,
           );
@@ -1582,7 +1730,7 @@ if (!app.requestSingleInstanceLock()) {
       log: appendSupervisorLog,
     });
     applyPermissionBoundary(allowedOrigins);
-    installMenu({
+    menuHandlers = {
       onRetry: () => {
         // 판정(종료 중이면 무시, 창이 없으면 창부터)은 window-flow.ts의 decideMenuRetry에 있다.
         const plan = decideMenuRetry({ quitting, hasWindow: win !== null && !win.isDestroyed() });
@@ -1598,8 +1746,23 @@ if (!app.requestSingleInstanceLock()) {
           appendSupervisorLog(`업데이트 확인 중 예외 — ${reasonOf(e)}`);
         });
       },
-      onRestore: () => undefined, // Task 8에서 배선
-    });
+      onRestore: () => {
+        void (async () => {
+          const layout = pgLayout(app.getPath("userData"));
+          // 메뉴 활성과 **같은** 판정을 다시 본다 — 메뉴를 그린 뒤 상태가 바뀌었을 수 있다.
+          if (!restoreAllowedNow()) return;
+          const snaps = restorableSnapshots(layout.snapshots, PG_MAJOR);
+          const d = confirmRestoreDialog(snaps, localTime);
+          const target = win !== null && !win.isDestroyed() ? win : null;
+          const { response } = await modals.track(target === null ? dialog.showMessageBox(d.options) : dialog.showMessageBox(target, d.options));
+          const sid = d.choices[response] ?? null;
+          if (sid === null) return;
+          pendingRestore = { snapshot: sid };
+          app.quit();
+        })().catch((e: unknown) => appendSupervisorLog(`되돌리기 시작 중 예외 — ${reasonOf(e)}`));
+      },
+    };
+    refreshMenu();
     openWindow();
     await start();
   });
@@ -1630,12 +1793,19 @@ if (!app.requestSingleInstanceLock()) {
     // 순서와 실패 경로는 window-flow.ts가 정한다. 잎(loadFile·loadURL·대화상자)만 여기 있다.
     // 감독자가 없는 경우(기동이 감독자를 세우기 전에 접혔다)의 복구도 거기서 정한다.
     void openWindowFlow({
-      showShell: () => showShell(opened, shellStatusOf()),
+      // 감독자 없이 던진 실패(가드 거부 등)는 shellStatusOf가 빈 "준비 중"으로 그린다 — 원인과 "다시 시도" 안내를 다시 그린다.
+      showShell: () =>
+        showShell(
+          opened,
+          supervisor === null && lastStartFailure !== null
+            ? { state: "failed", detail: failureDetail("앱을 시작하지 못했어요", reasonOf(lastStartFailure)), logPath: logPathOf("supervisor") }
+            : shellStatusOf(),
+        ),
       readyToAttach: () => gateUp(supervisor?.statuses() ?? null),
       start,
       attach: () => reattachWindow(mine),
       onFailure: (e) => reportFailure(mine, "창을 다시 붙이지 못했어요", e),
-      autoRetryAllowed: () => mayAutoRetry(supervisor?.statuses() ?? null),
+      autoRetryAllowed: () => mayAutoRetry(supervisor?.statuses() ?? null, lastStartFailure ?? undefined),
     }).catch((e: unknown) => {
       // 실패 처리 자체가 거부하면 여기서 멈춘다 — void 프라미스의 거부는 Electron main의
       // uncaught exception이 되고, 하필 화면이 이미 잘못된 순간에 난다.
@@ -1704,7 +1874,34 @@ if (!app.requestSingleInstanceLock()) {
       stopServices,
       log: appendSupervisorLog,
       warn: showQuitNotice,
-      quit: quitNow,
+      // 메뉴의 되돌리기 (스펙 §6.2). 종료가 확정된 뒤·beginQuit 전에 저널을 쓴다 — 쓰지 못하면 사람에게 알리고 종료하지 않는다.
+      commit:
+        pendingRestore === null
+          ? undefined
+          : async () => {
+              const layout = pgLayout(app.getPath("userData"));
+              const sid = pendingRestore!.snapshot;
+              try {
+                writeJournalAtomic(layout.restoreJournal, {
+                  id: chooseRestoreId(layout, new Date()),
+                  snapshot: sid,
+                  step: "requested",
+                  requestedAt: new Date().toISOString(),
+                  completedAt: null,
+                });
+                restoreCommitted = true;
+                appendSupervisorLog(`되돌리기: 예약했다 — 스냅샷 ${sid}`);
+              } catch (e) {
+                pendingRestore = null;
+                const opts = { type: "error" as const, message: "되돌리기를 예약하지 못했어요", detail: reasonOf(e), buttons: ["확인"], defaultId: 0, cancelId: 0 };
+                void modals.track(dialog.showMessageBox(opts));
+                throw e;
+              }
+            },
+      quit: () => {
+        if (restoreCommitted) app.relaunch();
+        quitNow();
+      },
     }).catch((e: unknown) => {
       // preventDefault로 이번 종료를 막았으므로 app.quit()이 반드시 다시 불려야 한다 —
       // 여기서 삼키면 앱이 창도 없이 남아 첫 ⌘Q 뒤로 영영 끝나지 않는다 (Phase 1이 값을
@@ -1722,6 +1919,8 @@ if (!app.requestSingleInstanceLock()) {
         // 올려 둔 채로 두면 사용자가 앱을 영영 끌 수 없다. 흐름이 실제로 종료로 끝났으면
         // quitAllowed가 이미 올라가 있어 이 하강은 판정에 닿지 못한다.
         flows.quit.settle();
+        // 녹음 확인에서 "취소"하면 다음 ⌘Q가 되돌리기로 이어지지 않게 한다.
+        if (!quitting) pendingRestore = null;
       });
   });
 }
