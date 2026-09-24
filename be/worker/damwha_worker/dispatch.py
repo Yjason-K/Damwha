@@ -16,6 +16,15 @@ from .storage import Storage
 log = logging.getLogger("damwha_worker")
 
 
+def failures(job: dict) -> int:
+    """재시도 예산 소비량 = attempts − interruptions (Phase 6b-3 스펙 §4.1).
+
+    "스스로 낸 실패 수"가 아니다 — 실행 중이면 지금 실행을, 성공했으면 그 실행을 포함한다.
+    회수(크래시·heartbeat 부재)로 끝난 실행만 빠진다. db.requeue의 백오프 지수와 같은 식이다.
+    """
+    return job["attempts"] - job["interruptions"]
+
+
 def run_job(conn, job: dict, ctx: JobContext) -> str:
     """job 1건 처리. 성공/실패/반납 어느 쪽이든 outcome 문자열로 끝난다 — 예외는 밖으로
     나가지 않는다. 호출자(run_single_job)는 이 값을 로그로만 쓴다."""
@@ -32,16 +41,18 @@ def run_job(conn, job: dict, ctx: JobContext) -> str:
     except Exception as exc:  # noqa: BLE001 — 분류해서 requeue/fail
         werr = classify(exc)
         error_json = werr.to_json(stage=job.get("stage"))
+        spent = failures(job)
         log.warning(
-            "job %s type=%s failed: code=%s kind=%s attempt=%s/%s",
+            "job %s type=%s failed: code=%s kind=%s attempt=%s/%s interruptions=%s",
             job["id"],
             job["type"],
             werr.code,
             werr.kind.value,
-            job["attempts"],
+            spent,
             job["max_attempts"],
+            job["interruptions"],
         )
-        retry = werr.kind is ErrorKind.TRANSIENT and job["attempts"] < job["max_attempts"]
+        retry = werr.kind is ErrorKind.TRANSIENT and spent < job["max_attempts"]
         return handler.on_failure(conn, job, ctx, error_json, retry=retry)
 
 

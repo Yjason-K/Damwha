@@ -91,3 +91,26 @@ def test_reap_own_orphans_grid(conn, c):
     jid, mid = _seed(conn, c, locked_by="w1", locked_minutes_ago=0)
     db.reap_own_orphans(conn, "w1")
     _check(conn, c, jid, mid)
+
+
+from damwha_worker.dispatch import failures  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "c", GRID["retry"], ids=[f"a{c['attempts']}-i{c['interruptions']}" for c in GRID["retry"]]
+)
+def test_retry_grid_failures_and_backoff(conn, c):
+    """failures()와 requeue의 백오프가 같은 식인지 (스펙 §4.3). requeue는 running 행에서 부른다."""
+    assert failures({"attempts": c["attempts"], "interruptions": c["interruptions"]}) == c["failures"]
+    assert (failures(c) < c["max_attempts"]) == c["retry"]
+
+    mid = seed_meeting(conn)
+    jid = seed_job(
+        conn, meeting_id=mid, status="running", locked_by="w1", attempts=c["attempts"],
+        max_attempts=c["max_attempts"], interruptions=c["interruptions"], locked_minutes_ago=0,
+    )
+    assert db.requeue(conn, jid, "w1", {"code": "x", "kind": "TRANSIENT", "stage": None}) == 1
+    row = conn.execute(
+        "SELECT extract(epoch FROM next_attempt_at - updated_at) AS s FROM job WHERE id=%s", (jid,)
+    ).fetchone()
+    assert round(float(row["s"])) == c["backoff_seconds"]

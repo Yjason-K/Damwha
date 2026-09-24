@@ -76,19 +76,26 @@ def heartbeat(conn, job_id: str, worker_id: str) -> int:
     return cur.rowcount
 
 
-def requeue(conn, job_id: str, worker_id: str) -> int:
+def requeue(conn, job_id: str, worker_id: str, error: dict) -> int:
     # 30초 기준·15분 상한. 1·2초였을 때는 세 번이 3초에 다 타서 3분짜리 네트워크 끊김이
     # job을 영구 실패로 만들었다 (Phase 4 결과 §12.6-12). max_attempts 기본값 5(025)와 함께
     # 시도 시각이 0 · 30s · 90s · 210s · 450s가 된다.
+    #
+    # 지수는 재시도 예산 소비량(attempts − interruptions) − 1이다 — 크래시 회수가 백오프를
+    # 부풀리지 않는다 (Phase 6b-3 스펙 §4.3). dispatch.failures()와 같은 식이고
+    # be/test/fixtures/job-reap/grid.json의 retry 격자가 둘을 함께 고정한다.
+    #
+    # error를 함께 쓴다 — 재시도 대기 중 화면의 "마지막 오류"가 여기서 온다(스펙 §6.3).
+    # 다음 claim은 지우지 않는다: 재시도 중인 job의 마지막 오류로 남는다.
     cur = conn.execute(
         """
-        UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL,
+        UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL, error=%s,
                next_attempt_at=now()
-                 + least(30 * power(2, attempts - 1), 900) * interval '1 second',
+                 + least(30 * power(2, attempts - interruptions - 1), 900) * interval '1 second',
                updated_at=now()
         WHERE id=%s AND locked_by=%s AND status='running'
         """,
-        (job_id, worker_id),
+        (Jsonb(error), job_id, worker_id),
     )
     return cur.rowcount
 

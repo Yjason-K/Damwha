@@ -55,7 +55,7 @@ def test_requeue_clears_lock(conn):
     mid = seed_meeting(conn)
     seed_job(conn, meeting_id=mid)
     j = db.claim(conn, "w1")
-    assert db.requeue(conn, j["id"], "w1") == 1
+    assert db.requeue(conn, j["id"], "w1", {"code": "x", "kind": "TRANSIENT", "stage": None}) == 1
     row = conn.execute(
         "SELECT status, locked_by, locked_at FROM job WHERE id=%s", (j["id"],)
     ).fetchone()
@@ -67,12 +67,31 @@ def test_requeue_sets_delay_from_claimed_attempt(conn):
     jid = seed_job(conn, meeting_id=mid)
     db.claim(conn, "w1")
 
-    assert db.requeue(conn, jid, "w1") == 1
+    assert db.requeue(conn, jid, "w1", {"code": "x", "kind": "TRANSIENT", "stage": None}) == 1
     row = conn.execute(
         "SELECT next_attempt_at - now() AS delay FROM job WHERE id=%s", (jid,)
     ).fetchone()
     # claim이 attempts를 0→1로 올린 뒤 requeue한다 → 30 * 2^0 = 30초 (025 백오프).
     assert 29 <= row["delay"].total_seconds() <= 31
+
+
+def test_requeue_stores_the_error_it_retries_for(conn):
+    """스펙 §6.3 — 재시도 대기 중 "마지막 오류"의 원천. 지금까지는 쓰지 않았다."""
+    mid = seed_meeting(conn)
+    jid = seed_job(conn, meeting_id=mid)
+    db.claim(conn, "w1")
+    err = {"code": "model_download_failed", "kind": "TRANSIENT", "stage": "stt", "message": "reset"}
+    assert db.requeue(conn, jid, "w1", err) == 1
+    assert conn.execute("SELECT error FROM job WHERE id=%s", (jid,)).fetchone()["error"] == err
+
+
+def test_requeue_is_still_guarded_by_ownership(conn):
+    mid = seed_meeting(conn)
+    jid = seed_job(conn, meeting_id=mid)
+    db.claim(conn, "w1")
+    assert db.requeue(conn, jid, "w2", {"code": "x"}) == 0
+    row = conn.execute("SELECT status, error FROM job WHERE id=%s", (jid,)).fetchone()
+    assert row["status"] == "running" and row["error"] is None
 
 
 def test_requeue_for_shutdown_restores_attempts(conn):
@@ -294,7 +313,7 @@ def _meeting_with_running_job(conn, *, worker_id):
 
 def test_requeue_backs_off_thirty_seconds_on_the_first_retry(conn):
     mid, jid = _meeting_with_running_job(conn, worker_id="w")
-    assert db.requeue(conn, jid, "w") == 1
+    assert db.requeue(conn, jid, "w", {"code": "x", "kind": "TRANSIENT", "stage": None}) == 1
     row = conn.execute(
         "SELECT extract(epoch from (next_attempt_at - now())) AS secs FROM job WHERE id=%s",
         (jid,),
@@ -306,7 +325,7 @@ def test_requeue_backs_off_thirty_seconds_on_the_first_retry(conn):
 def test_requeue_backoff_is_capped_at_fifteen_minutes(conn):
     mid, jid = _meeting_with_running_job(conn, worker_id="w")
     conn.execute("UPDATE job SET attempts=20 WHERE id=%s", (jid,))
-    assert db.requeue(conn, jid, "w") == 1
+    assert db.requeue(conn, jid, "w", {"code": "x", "kind": "TRANSIENT", "stage": None}) == 1
     row = conn.execute(
         "SELECT extract(epoch from (next_attempt_at - now())) AS secs FROM job WHERE id=%s",
         (jid,),
