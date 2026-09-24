@@ -500,7 +500,29 @@ C11은 깨끗한 설치 경로 한정이고 6a 이전 빌드 이력이 남은 �
 브랜치는 `feat/electron-migration-phase-6b-update-notice`. 앱은 GitHub Releases에서 `v*`·옛 `desktop-v*` 중
 최대를 골라 네이티브 대화상자로 알리고(자동: packaged에서 붙음 뒤 1회 + 24시간, 수동: 앱 메뉴 "업데이트 확인…"),
 릴리스 태그는 다음 판부터 `v<version>`이다. 이 기능은 그것이 담긴 첫 릴리스부터 작동한다 — 0.3.x 사용자는
-한 번은 손으로 받아야 한다. 6b-2·6b-3은 미착수.
+한 번은 손으로 받아야 한다. **6b-2·6b-3의 착수 순서는 아래 6b-3 상태 문단을 본다 — 6b-3을 먼저 마쳤다.**
+
+**상태 (2026-09-24): 6b-3 완료 — 구현 8개 Task·packaged 실측·최종 whole-branch 리뷰 완료.**
+`job.attempts` 한 컬럼이 크래시 회수와 일시 실패 재시도를 함께 세던 것을 마이그레이션
+`026_job_interruptions.sql`로 나눴다 — 회수 셋(API 기동 `reclaimOrphaned`·API 5분 `reapStale`·worker
+`_REAP_SQL`)만 `interruptions`를 올리고 그것으로 상한(`max_interruptions`, 기본 3)을 판정하며,
+재시도 예산은 `failures = attempts − interruptions`로 따로 센다. 같은 참에 코덱스 스펙 리뷰가 찾은
+기존 결함 셋(회수의 회의 전파에 `current_job_id` 가드, 재시도 대기가 옛 stage를 이기게, TRANSIENT
+requeue가 오류를 저장하게)도 함께 고쳤다. 구현 8개 Task(마이그레이션·공유 격자와 TS 회수·Python
+회수·requeue·API 응답·화면 배너·문서·전 패키지 변이 21종)와 packaged 실측(Task 9)까지 리뷰
+clean이다. 변이 21/21 빨간불(동치 없음), packaged 완료 기준 C1(업그레이드 보존)·C2(중단이 재시도
+예산을 안 먹음)·C4(되돌림 거부) **충족**, C3(일시 실패 재시도)는 실데이터 위에서 TRANSIENT 실패를
+재현할 안전한 수단이 없어 **실측을 생략**하고 단위 테스트(§8.1)로 대신 증명했다. 최종
+whole-branch 리뷰는 "With fixes"(Critical 0, Important 2)였고 둘 다 이 브랜치에서 고쳤다
+(`ab53aeb`, `064830e`) — 상세는 결과 문서 §5. 스펙은
+[2026-09-24-electron-phase-6b-attempts-split-design.md](superpowers/specs/2026-09-24-electron-phase-6b-attempts-split-design.md),
+결과는 [2026-09-24-electron-phase-6b-attempts-split-results.md](superpowers/reports/2026-09-24-electron-phase-6b-attempts-split-results.md),
+브랜치는 `feat/electron-migration-phase-6b-attempts`.
+
+**순서 결정 (2026-09-24): 6b-3을 먼저 마쳤고, 6b-2는 이 병합 뒤 새 브랜치에서 한다.** 이유는 6b-3
+스펙 §1 — 0.3.1과 `dev`는 둘 다 마이그레이션 `025`에서 끝나므로, `026`이 없으면 6b-2가 시험할
+실제 스키마 변경(백업·복원 대상)이 없었다. 이제 `026`이 그 시험체다. **0.4.0은 6b-2까지 병합된
+뒤에 낸다.**
 
 서명 관련 위험 검증은 Phase 0부터 진행하며, 배포 검증을 6a에서, 업데이트 검증을 6b에서 완성한다.
 
