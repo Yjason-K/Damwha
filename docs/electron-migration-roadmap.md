@@ -524,6 +524,21 @@ whole-branch 리뷰는 "With fixes"(Critical 0, Important 2)였고 둘 다 이 �
 실제 스키마 변경(백업·복원 대상)이 없었다. 이제 `026`이 그 시험체다. **0.4.0은 6b-2까지 병합된
 뒤에 낸다.**
 
+**상태 (2026-09-24): 6b-2 완료 — 구현 10개 Task·최종 whole-branch 리뷰·packaged 실측 완료. 6b 전체가 끝났다.**
+packaged 판올림 때 postmaster를 띄우기 전에 `data/`(postgres·storage)를 APFS clone으로 떠 두고(`<userData>/snapshots/`,
+최근 2개, 빌드 식별자 `Resources/build-info.json` vs `data/.damwha-generation`), 앱 메뉴 "업데이트 전으로 되돌리기…" →
+저널 → 재시작 → 기동 초기 교체 → 보류 대화상자로 업데이트 직전 상태(0.3.1 포함)로 돌아간다. 교체는 어느 단계에서
+끊겨도 다음 기동이 이어서 마치며 `initdb`로 빠지지 않는다. 마이그레이션 게이트는 업그레이드 시도마다 첫 덤프를
+고정 보존한다. 앱이 메뉴까지 못 가면 [`docs/RESTORE.md`](RESTORE.md)의 수동 절차. 스파이크가 짝(마커)·oid·시퀀스·파일을
+한 시점으로 묶는 단위가 `data/` 통째 clone임을 실측으로 정했다(덤프 복원은 시퀀스를 되감아 녹음 번호가 충돌한다).
+**완료 기준 두 번째 줄("업데이트 실패 시 정의된 복구 절차로 데이터와 실행 상태 복구 가능")이 채워졌다** — 앱 안의
+절차(되돌리기 왕복 뒤 0.3.1 기준선 54줄 동일, 교체 중 크래시 두 지점에서 복구)와 수동 절차 둘 다 실데이터에서 0.3.1
+기동까지 닿았다. 변이 24/24 빨간불. 최종 리뷰의 Important 2(가드 훅이 앱이 떠 있는 채로 교체할 수 있던 경로, 수동
+복원 뒤 옛 스냅샷 재사용)를 고쳐 실측으로 확인했다. 스펙은
+[2026-09-24-electron-phase-6b-restore-design.md](superpowers/specs/2026-09-24-electron-phase-6b-restore-design.md),
+결과는 [2026-09-24-electron-phase-6b-restore-results.md](superpowers/reports/2026-09-24-electron-phase-6b-restore-results.md),
+브랜치는 `feat/electron-migration-phase-6b-restore`. **이제 v0.4.0을 낼 수 있다** — 버전 올리기·발행은 이 브랜치 병합 뒤 따로.
+
 서명 관련 위험 검증은 Phase 0부터 진행하며, 배포 검증을 6a에서, 업데이트 검증을 6b에서 완성한다.
 
 ## 진행 순서와 중간 목표
