@@ -98,6 +98,12 @@ export const HINTS: Record<CauseId, Hint> = {
   migrationFailed:
     "원인을 고친 앱으로 다시 실행해 주세요. 적용 전 데이터는 위 백업에 있어요. 러너의 전체 출력은 logs/supervisor.log에 있어요.",
   migrationsStillPending: "앱을 다시 만들어 주세요 — 마이그레이션 러너와 API가 서로 다른 파일을 보고 있어요.",
+  writersAlive: "활성 상태 보기에서 그 pid를 종료한 뒤 다시 시도해 주세요. 앱은 아무것도 복사하거나 옮기지 않았어요.",
+  buildInfoMissing: "앱을 다시 설치해 주세요.",
+  snapshotFailed: "디스크 여유 공간을 확인한 뒤 다시 시도해 주세요.",
+  restoreJournalUnreadable: "docs/RESTORE.md의 수동 절차를 따르거나, 기록 파일을 확인한 뒤 다시 시도해 주세요. 앱은 아무것도 옮기지 않았어요.",
+  restoreIncomplete: "위 세 폴더를 옮기거나 지우지 말고 다시 시도해 주세요. 계속 실패하면 docs/RESTORE.md의 수동 절차를 따르세요.",
+  restoreAborted: null,
   externalDatabase: null,
   // 스스로 풀리는 원인이다(causes.ts의 selfRecovers). degraded면 recoveryHint가 DEGRADED_HINT를
   // 붙이고, 사람이 할 일이 없으므로 여기는 null이어야 한다 — 테스트가 본다.

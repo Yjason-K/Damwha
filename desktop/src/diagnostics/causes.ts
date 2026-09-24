@@ -273,6 +273,42 @@ export const CAUSES = {
     text: (count: number, names: string) => `마이그레이션을 실행했는데 ${count}개가 여전히 적용되지 않았어요 (${names}).`,
     selfRecovers: false,
   },
+  /** 데이터 가드 — 앞 실행의 앱 소유 Python이 회수 뒤에도 살아 있다 (Phase 6b-2 스펙 §5.2-2). 쓰는 중일 수 있어 스냅샷·교체를 하지 않는다. */
+  writersAlive: {
+    match: /이전 실행의 처리 프로세스가 아직 남아 있어요/,
+    text: (pids: readonly number[]) => `이전 실행의 처리 프로세스가 아직 남아 있어요 (pid ${pids.join(", ")}).`,
+    selfRecovers: false,
+  },
+  /** 데이터 가드 — packaged인데 빌드 식별자가 없다 (§4). 번들 결함이다. */
+  buildInfoMissing: {
+    match: /앱의 빌드 정보를 읽지 못했어요/,
+    text: (file: string) => `앱의 빌드 정보를 읽지 못했어요 (${file}).`,
+    selfRecovers: false,
+  },
+  /** 데이터 가드 — 판올림 스냅샷 실패 (§5.4). 기동하지 않는다. */
+  snapshotFailed: {
+    match: /업데이트 전 스냅샷을 만들지 못해 시작하지 않았어요/,
+    text: (reason: string, dir: string) => `업데이트 전 스냅샷을 만들지 못해 시작하지 않았어요 (${dir}).\n${reason}`,
+    selfRecovers: false,
+  },
+  /** 데이터 가드 — 되돌리기 저널을 읽을 수 없다 (§6.3). 아무것도 옮기지 않았다. */
+  restoreJournalUnreadable: {
+    match: /되돌리기 기록을 읽을 수 없어요/,
+    text: (file: string, why: string) => `되돌리기 기록을 읽을 수 없어요 (${file}): ${why}`,
+    selfRecovers: false,
+  },
+  /** 데이터 가드 — 교체를 이어 갈 수 없다 (§6.3 "그 밖의 조합"·rename 실패·신원 불일치). */
+  restoreIncomplete: {
+    match: /업데이트 전 데이터로 되돌리는 작업을 마치지 못했어요/,
+    text: (detail: string) => `업데이트 전 데이터로 되돌리는 작업을 마치지 못했어요.\n${detail}`,
+    selfRecovers: false,
+  },
+  /** 데이터 가드 — 되돌리기를 시작 전에 취소했다 (§6.3 requested 실패). 실패가 아니라 알림이다. */
+  restoreAborted: {
+    match: /되돌리기를 취소했어요/,
+    text: (reason: string) => `되돌리기를 취소했어요. 지금 데이터는 그대로예요.\n${reason}`,
+    selfRecovers: false,
+  },
   /**
    * worker·embed — 번들 python(`ctx.bins.python`)이 그 자리에 없다. main.ts는 번들 경로를 만들 뿐
    * 존재를 확인하지 않는다(process/runtime-paths.ts). 이 문구는 **앱이 쓰지 않는다.** Node의

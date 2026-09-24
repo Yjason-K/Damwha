@@ -66,6 +66,17 @@ describe("reapBeforeStart — 스캔이 실패하면 기동하지 않는다", ()
     await expect(reapBeforeStart(d)).resolves.toEqual([4001]);
     expect(killed).toEqual([4001]);
   });
+
+  it("refuses to start when an orphan survives the reap (writersAlive)", async () => {
+    const line = `  PID ARGS\n    1 /sbin/launchd\n 4001 ${ROOT}/bin/python3.12 -m damwha_worker --run-id=${OLD}`;
+    const { d } = deps(async () => line);
+    // SIGKILL이 닿지 않은 경우(EPERM) — 던지고, 프로세스는 남는다.
+    d.kill = () => { throw Object.assign(new Error("EPERM"), { code: "EPERM" }); };
+    await expect(reapBeforeStart(d)).rejects.toMatchObject({
+      recovery: "manual",
+      message: expect.stringMatching(/이전 실행의 처리 프로세스가 아직 남아 있어요 \(pid 4001\)/),
+    });
+  });
 });
 
 describe("systemReapDeps", () => {

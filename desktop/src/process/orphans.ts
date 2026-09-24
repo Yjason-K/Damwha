@@ -589,6 +589,17 @@ export async function reapOrphans(d: ReapDeps): Promise<{ reaped: number[] } | {
   return run.failed ? { failed: true } : { reaped: run.signalled.map((e) => e.pid) };
 }
 
+/**
+ * 회수 **뒤** 다시 스캔해 아직 남은 앞 실행의 앱 소유 프로세스 (Phase 6b-2 스펙 §5.2-2). reapOrphans는 SIGKILL 뒤
+ * 생존자를 로그로만 남긴다. `exists`로 한 번 더 거른다 — 방금 죽인 pid가 스캔과 신호 사이에 남아 보이는 것을 빼고,
+ * 정말 살아 있는 것만 센다.
+ */
+export async function survivingOrphans(d: Pick<ReapDeps, "ps" | "trees" | "runId" | "exists">): Promise<number[]> {
+  return parseDamwhaProcesses(await d.ps(), d.trees)
+    .filter((p) => classify(p, d.runId) === "orphan" && d.exists(p.pid))
+    .map((p) => p.pid);
+}
+
 const OWN_ONCE_PLAN: ReapPlan = {
   target: "mine",
   only: (p) => p.once,
