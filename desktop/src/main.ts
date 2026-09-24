@@ -243,7 +243,6 @@ let tokenBusy = false;
 /** 상태 창에서 방금 누른 것의 결과 한 줄. 다음 동작이 덮는다. */
 let actionNotice: string | null = null;
 
-/** 앱이 정한 API origin. 감독자의 런타임에서 읽는다 — 전역 변수를 따로 두면 갈린다. */
 /** 데이터 가드의 파일 I/O. stopServices가 기다린다 (Phase 6b-2 스펙 §5.2). */
 const guardIo = createIoTracker();
 /** 감독자 없이 던진 마지막 기동 실패. 창 재열기가 manual 실패를 자동 재시도하지 않게 한다 (§5.2 "가드 실패의 상태"). */
@@ -285,6 +284,7 @@ function refreshMenu(): void {
   installMenu(menuHandlers, { restoreEnabled: restoreAllowedNow() });
 }
 
+/** 앱이 정한 API origin. 감독자의 런타임에서 읽는다 — 전역 변수를 따로 두면 갈린다. */
 function currentApiOrigin(): string | null {
   return supervisor?.runtimeOf("api")?.result?.origin ?? null;
 }
@@ -1059,7 +1059,7 @@ async function startOnce(): Promise<void> {
     await startServices(mine);
     lastStartFailure = null;
   } catch (e) {
-    if (supervisor === null) lastStartFailure = e;
+    lastStartFailure = supervisor === null ? e : null;
     await reportFailure(mine, "앱을 시작하지 못했어요", e);
   }
 }
@@ -1575,6 +1575,8 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
   // knownDbMode를 가드 **전에** 채운다 — 가드 안의 refreshMenu()가 외부 모드를 알아야 한다.
   knownDbMode = mode.kind;
   if (!(await passDataGuard(mine, layout, binaries, mode.kind === "external"))) return false;
+  // 가드를 기다리는 동안 종료(stopServices)나 새 기동이 끼었으면 감독자를 세우지 않는다.
+  if (quitting || mine !== generation) return false;
   // 감독자의 준비 유예와 상태 창이 **같은** 리더를 쓴다 (스펙 §6.9 — 같은 값을 본다). 외부 DB
   // 모드에서는 worker가 이 행을 아예 쓰지 않으므로 리더를 두지 않는다.
   readModelReadiness = mode.kind === "external" ? null : modelReadinessReader(binaries, layout);
