@@ -97,6 +97,17 @@ const apiNodeModules = path.join(apiTree, "node_modules");
 run("find", [apiNodeModules, "-name", ".bin", "-type", "d", "-prune", "-exec", "rm", "-rf", "{}", "+"], desktop);
 fs.rmSync(path.join(apiNodeModules, ".pnpm", "lock.yaml"), { force: true });
 
+// 빌드 식별자 (Phase 6b-2 스펙 §4). extraResources(from: build)가 Resources/build-info.json으로 싣는다.
+// 앱은 이것을 data/.damwha-generation과 비교해 판올림을 알아챈다 — package.json 버전만으로는 개발 빌드와
+// 발행판이 같은 값을 말한다. 작업 트리가 더러우면 -dirty를 붙인다(같은 커밋의 다른 코드를 구별한다).
+const commit = spawnSync("git", ["rev-parse", "--short=12", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout.trim();
+const dirty = spawnSync("git", ["status", "--porcelain", "--", "desktop", "be", "fe", "packages"], { cwd: repo, encoding: "utf8" }).stdout.trim() !== "";
+if (!/^[0-9a-f]{12}$/.test(commit)) throw new Error(`git 커밋을 읽지 못했어요: ${JSON.stringify(commit)}`);
+fs.writeFileSync(
+  path.join(desktop, "build", "build-info.json"),
+  `${JSON.stringify({ version: desktopPkg.version, commit: dirty ? `${commit}-dirty` : commit })}\n`,
+);
+
 run("pnpm", ["exec", "electron-builder", "--dir"], desktop);
 
 // electron-builder는 target: dir + 서명 설정 없음이면 번들을 재서명하지 않는다.

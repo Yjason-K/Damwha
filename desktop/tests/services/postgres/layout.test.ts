@@ -24,6 +24,14 @@ describe("pgLayout", () => {
     // Phase 1·2가 Docker DB와 쓴 <userData>/storage는 이 배치의 어느 경로와도 같지 않다 (스펙 §6.2).
     expect(Object.values(l)).not.toContain(path.join(UD, "storage"));
   });
+
+  it("places snapshot, staging, journal next to data/ and the generation record inside it", () => {
+    const l = pgLayout("/U");
+    expect(l.snapshots).toBe("/U/snapshots");
+    expect(l.restoreStaging).toBe("/U/restore-staging");
+    expect(l.restoreJournal).toBe("/U/restore-journal.json");
+    expect(l.generationFile).toBe("/U/data/.damwha-generation");
+  });
 });
 
 describe("socketPathTooLong", () => {
