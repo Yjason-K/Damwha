@@ -110,7 +110,7 @@ def requeue_for_shutdown(conn, job_id: str, worker_id: str) -> int:
 # (reap_own_orphans). 두 벌로 두면 live_session·소진·딸린 행 정리 중 한쪽만 고쳐질 자리다.
 _REAP_SQL = """
         WITH stale AS (
-          SELECT id, type, meeting_id, attempts, max_attempts, stage
+          SELECT id, type, meeting_id, interruptions, max_interruptions, stage
           FROM job
           WHERE {selector}
           FOR UPDATE SKIP LOCKED
@@ -119,21 +119,26 @@ _REAP_SQL = """
         -- 워커는 이미 지나간 오디오를 앞에서부터 다시 전사한다. max_attempts=1이 보통
         -- 그것을 보장하지만, 남는 attempts를 가진 라이브 행이 생겨도 여기서 failed로 간다 —
         -- 두 집합이 정확히 반대라야 stale live job이 running에 영원히 남지 않는다.
+        -- 회수는 중단 한 번이다 (Phase 6b-3 스펙 §4.2). interruptions를 +1 하고 그것으로
+        -- 상한을 판정한다. attempts는 읽지도 바꾸지도 않는다 — 실행 중이던 job은 재시도
+        -- 예산이 남아 있다(다 썼다면 dispatch가 이미 failed로 닫았다).
         requeued AS (
-          UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL,
-                 next_attempt_at=NULL, updated_at=now()
+          UPDATE job SET status='queued', interruptions = interruptions + 1,
+                 locked_by=NULL, locked_at=NULL, next_attempt_at=NULL, updated_at=now()
           WHERE id IN (
-            SELECT id FROM stale WHERE attempts < max_attempts AND type <> 'live_session'
+            SELECT id FROM stale
+             WHERE interruptions + 1 < max_interruptions AND type <> 'live_session'
           )
           RETURNING id
         ),
         failed AS (
-          UPDATE job j SET status='failed', updated_at=now(),
+          UPDATE job j SET status='failed', interruptions = j.interruptions + 1, updated_at=now(),
             error = jsonb_build_object('code','stale_worker',
                                        'message','worker lock expired',
                                        'stage', j.stage)
           WHERE id IN (
-            SELECT id FROM stale WHERE attempts >= max_attempts OR type = 'live_session'
+            SELECT id FROM stale
+             WHERE interruptions + 1 >= max_interruptions OR type = 'live_session'
           )
           RETURNING id, type, meeting_id, error
         ),
@@ -155,12 +160,12 @@ _REAP_SQL = """
         -- OOM/SIGKILL 행). 여기서 회의를 failed로 만들면 아직 업로드 중인 멀쩡한 녹음을
         -- 죽인다. job은 그대로 failed가 되고, 마무리는 stop이나 orphan 스위퍼가 API
         -- 경로로 맡는다. TypeScript의 JobsRepository.reapStale과 같은 계약이다.
+        -- current_job_id 가드: 밀려난 옛 job이 새 실행의 회의를 덮지 않는다 (스펙 §6.1).
         fail_meetings AS (
           UPDATE meeting m SET status='failed',
             error = jsonb_build_object('code','stale_worker','message','processing worker lost')
-          WHERE m.id IN (
-            SELECT meeting_id FROM failed WHERE type = 'process_meeting'
-          )
+          FROM failed f
+          WHERE m.id = f.meeting_id AND m.current_job_id = f.id AND f.type = 'process_meeting'
           RETURNING m.id
         ),
         fail_speakers AS (
