@@ -162,7 +162,8 @@ function ProcessingBanner({
       </span>
       <span className="text-[color:var(--text-secondary)]">
         {stageLabel}
-        {pct != null ? ` · ${pct}%` : ""}
+        {/* requeue는 progress를 지우지 않는다 — 재시도 대기 문구가 이겼으면 옛 진행률을 덧붙이지 않는다. */}
+        {!showRetry && pct != null ? ` · ${pct}%` : ""}
       </span>
       {/* 첫 처리는 모델을 받느라 한참 멈춘 것처럼 보인다 (Phase 4 스펙 §6.9, 완료 기준 P4-C6).
           이유를 말하지 않으면 멈춘 것으로 읽히고, 사람이 취소를 누른다. */}

@@ -1077,6 +1077,8 @@ test("전사가 아직 없는 처리 중 회의에서는 플레이바를 그리�
   renderShell("/meetings/m3");
   expect(await screen.findByText(/회의를 처리하고 있어요/)).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "재생" })).toBeNull();
+  // 재시도 대기가 아닌 정상 진행 중에는 진행률이 그대로 보여야 한다.
+  expect(screen.getByText(/50%/)).toBeInTheDocument();
 });
 
 test("처리 중 모델을 받고 있으면 배너가 그 사실을 말한다 (P4-C6)", async () => {
@@ -1288,6 +1290,8 @@ test("앞 시도의 stage가 남아 있어도 재시도 대기가 이긴다 (스
   expect(
     screen.getByText(/마지막 오류: model_download_failed/),
   ).toBeInTheDocument();
+  // requeue는 progress를 지우지 않는다 — 재시도 대기 문구가 이겼으면 옛 40%가 덧붙으면 안 된다.
+  expect(screen.queryByText(/40%/)).toBeNull();
 });
 
 test("처리 중 배너의 취소 버튼은 POST /meetings/:id/cancel을 부른다", async () => {
