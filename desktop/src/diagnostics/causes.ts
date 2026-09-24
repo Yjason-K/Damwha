@@ -303,6 +303,15 @@ export const CAUSES = {
     text: (detail: string) => `업데이트 전 데이터로 되돌리는 작업을 마치지 못했어요.\n${detail}`,
     selfRecovers: false,
   },
+  /**
+   * 데이터 가드 — postgres preLaunch 훅(자동 재시작·상태 창 재시작)이 저널을 만났다 (§5.2). 앱이 떠 있는 동안에는 교체하지
+   * 않는다 — 저널은 다음 첫 기동의 가드가 잇는다. 아무것도 옮기지 않았다.
+   */
+  restorePending: {
+    match: /업데이트 전으로 되돌리는 작업이 기다리고 있어요/,
+    text: () => "업데이트 전으로 되돌리는 작업이 기다리고 있어요.",
+    selfRecovers: false,
+  },
   /** 데이터 가드 — 되돌리기를 시작 전에 취소했다 (§6.3 requested 실패). 실패가 아니라 알림이다. */
   restoreAborted: {
     match: /되돌리기를 취소했어요/,

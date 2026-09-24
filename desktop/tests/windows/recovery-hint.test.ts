@@ -108,6 +108,7 @@ const SAMPLE_ARGS: { [K in TemplateId]: ArgsOf<K> } = {
   restoreJournalUnreadable: ["/u/restore-journal.json", "형식이 맞지 않아요"],
   restoreIncomplete: ["교체를 이어 갈 수 없는 상태예요 (data/ 있음, 보관본 있음, 임시 사본 있음)"],
   restoreAborted: ["되돌릴 스냅샷을 찾지 못했어요 (20260924T084933Z)"],
+  restorePending: [],
 };
 
 /** 실패한 서비스에 이 원인이 받아야 하는 안내 — HINTS 표를 그대로 읽는다. */

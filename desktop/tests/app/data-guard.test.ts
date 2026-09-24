@@ -35,6 +35,7 @@ function deps(over: Partial<DataGuardDeps> = {}): DataGuardDeps & { events: stri
   return {
     packaged: true,
     external: false,
+    journal: "advance",
     currentBuild: BUILD,
     buildInfoFile: "/R/build-info.json",
     layout,
@@ -193,6 +194,14 @@ describe("runDataGuard — journal", () => {
     expect(out.kind === "proceed" && out.notice).toMatch(/되돌리기를 취소했어요/);
     expect(fs.existsSync(replacedDirOf(layout, "20260925T010203Z"))).toBe(false);
   });
+  it("an unexpected throw after staged becomes restoreIncomplete and the journal stays at staged", async () => {
+    await snapshotThenRequest();
+    await expect(
+      runDataGuard(deps({ pauseAfterStep: async (s) => { if (s === "staged") throw new Error("crash"); } }), signal),
+    ).rejects.toMatchObject({ recovery: "manual", message: expect.stringMatching(/되돌리는 작업을 마치지 못했어요/) });
+    expect(fs.existsSync(layout.restoreJournal)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(layout.restoreJournal, "utf8")).step).toBe("staged");
+  });
   it("prune never deletes the snapshot a journal points at", async () => {
     const sid = await snapshotThenRequest();
     // 저널이 있는 동안 두 번 더 판올림이 일어난 것처럼 스냅샷을 쌓는다
@@ -200,5 +209,54 @@ describe("runDataGuard — journal", () => {
     await takeSnapshot({ layout, clone: makeClone(runTool), readControldata: async () => CONTROL, now: () => new Date("2026-09-27T00:00:00.000Z"), log: () => undefined }, { fromBuild: null, toBuild: "b3", fromRecord: "y" }, signal);
     await runDataGuard(deps(), signal);
     expect(listCompleteSnapshots(layout.snapshots).map((s) => s.id)).toContain(sid);
+  });
+});
+
+describe("runDataGuard — journal: \"refuse\" (preLaunch hook)", () => {
+  function lockSpy(): { lock: DataGuardDeps["lock"]; calls: () => number } {
+    let n = 0;
+    return { lock: { layout, psInfo: async () => { n += 1; return null; }, stopOrphan: async () => "fast", log: () => undefined }, calls: () => n };
+  }
+  function entries(): string[] {
+    return fs.readdirSync(layout.userData).sort();
+  }
+  it("requested journal: refuses manual with restorePending and touches nothing", async () => {
+    makeCluster();
+    const out = await runDataGuard(deps(), signal);
+    const sid = out.kind === "proceed" ? out.snapshot!.id : "";
+    writeJournalAtomic(layout.restoreJournal, { id: "20260925T010203Z", snapshot: sid, step: "requested", requestedAt: "t", completedAt: null });
+    // 락 확인이 불리면 알 수 있게 postmaster.pid를 둔다
+    fs.writeFileSync(path.join(layout.pgdata, "postmaster.pid"), ["4242", layout.pgdata, "0", "5432", layout.runDir, "", "", "ready   ", ""].join("\n"));
+    const before = fs.readFileSync(layout.restoreJournal);
+    const beforeEntries = entries();
+    const spy = lockSpy();
+    await expect(runDataGuard(deps({ journal: "refuse", lock: spy.lock }), signal)).rejects.toMatchObject({
+      recovery: "manual",
+      message: expect.stringMatching(/되돌리는 작업이 기다리고 있어요/),
+    });
+    expect(fs.existsSync(path.join(layout.pgdata, "PG_VERSION"))).toBe(true);
+    expect(fs.existsSync(path.join(layout.pgdata, "postmaster.pid"))).toBe(true);
+    expect(fs.existsSync(replacedDirOf(layout, "20260925T010203Z"))).toBe(false);
+    expect(fs.existsSync(layout.restoreStaging)).toBe(false);
+    expect(entries()).toEqual(beforeEntries);
+    expect(fs.readFileSync(layout.restoreJournal).equals(before)).toBe(true);
+    expect(spy.calls()).toBe(0);
+  });
+  it("unreadable journal: the same refusal, journal untouched", async () => {
+    makeCluster();
+    fs.writeFileSync(layout.restoreJournal, "{");
+    const spy = lockSpy();
+    await expect(runDataGuard(deps({ journal: "refuse", lock: spy.lock }), signal)).rejects.toMatchObject({
+      recovery: "manual",
+      message: expect.stringMatching(/되돌리는 작업이 기다리고 있어요/),
+    });
+    expect(fs.readFileSync(layout.restoreJournal, "utf8")).toBe("{");
+    expect(fs.existsSync(layout.restoreStaging)).toBe(false);
+    expect(spy.calls()).toBe(0);
+  });
+  it("no journal: refuse mode runs the guard normally", async () => {
+    makeCluster();
+    const out = await runDataGuard(deps({ journal: "refuse" }), signal);
+    expect(out.kind === "proceed" && out.snapshot?.manifest.toBuild).toBe(BUILD);
   });
 });

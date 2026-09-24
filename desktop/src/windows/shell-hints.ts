@@ -104,6 +104,7 @@ export const HINTS: Record<CauseId, Hint> = {
   restoreJournalUnreadable: "docs/RESTORE.md의 수동 절차를 따르거나, 기록 파일을 확인한 뒤 다시 시도해 주세요. 앱은 아무것도 옮기지 않았어요.",
   restoreIncomplete: "위 세 폴더를 옮기거나 지우지 말고 다시 시도해 주세요. 계속 실패하면 docs/RESTORE.md의 수동 절차를 따르세요.",
   restoreAborted: null,
+  restorePending: "앱을 종료한 뒤 다시 열어 주세요. 다시 열 때 되돌리기를 마저 해요.",
   externalDatabase: null,
   // 스스로 풀리는 원인이다(causes.ts의 selfRecovers). degraded면 recoveryHint가 DEGRADED_HINT를
   // 붙이고, 사람이 할 일이 없으므로 여기는 null이어야 한다 — 테스트가 본다.

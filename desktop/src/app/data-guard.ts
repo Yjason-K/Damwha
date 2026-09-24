@@ -36,6 +36,12 @@ import {
 export interface DataGuardDeps {
   packaged: boolean;
   external: boolean;
+  /**
+   * 저널을 만났을 때. "advance" = 이어서 교체한다(첫 기동의 명시적 가드만). "refuse" = 아무것도 건드리지 않고
+   * restorePending으로 거부한다 — postgres preLaunch 훅(자동 재시작·상태 창 재시작)은 API·worker가 떠 있을 수 있어
+   * 그 자리에서 data/를 바꾸면 안 된다 (§3.1·§5.2).
+   */
+  journal: "advance" | "refuse";
   /** packaged에서 `Resources/build-info.json`을 읽은 값. dev·읽기 실패는 null. */
   currentBuild: string | null;
   buildInfoFile: string;
@@ -81,6 +87,8 @@ export function runDataGuard(d: DataGuardDeps, signal: AbortSignal): Promise<Gua
 
     let notice: string | null = null;
     const jr = readJournal(layout.restoreJournal);
+    // 락 정리·파일 조작보다 **먼저** — 거부 경로는 아무것도 만들거나 지우지 않는다.
+    if (d.journal === "refuse" && jr.kind !== "none") throw new ServiceFailure(CAUSES.restorePending.text(), "manual");
     if (jr.kind === "unreadable") throw new ServiceFailure(CAUSES.restoreJournalUnreadable.text(layout.restoreJournal, jr.why), "manual");
     if (jr.kind === "ok") {
       await clearPostmasterLock(d.lock);

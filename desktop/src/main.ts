@@ -1397,7 +1397,13 @@ async function clearHfToken(): Promise<void> {
 }
 
 /** 데이터 가드 한 번 (스펙 §5.2). 파일 I/O 전체를 guardIo에 등록한다 — 보류 대화상자는 밖에서 띄운다. */
-function guardOnce(layout: PgLayout, binaries: PgBinaries, external: boolean, signal: AbortSignal): Promise<GuardOutcome> {
+function guardOnce(
+  layout: PgLayout,
+  binaries: PgBinaries,
+  external: boolean,
+  journal: "advance" | "refuse",
+  signal: AbortSignal,
+): Promise<GuardOutcome> {
   const pause = parsePauseStep(process.env.DAMWHA_RESTORE_PAUSE_AFTER_STEP);
   const env = pgToolEnv();
   return guardIo.track(
@@ -1405,6 +1411,7 @@ function guardOnce(layout: PgLayout, binaries: PgBinaries, external: boolean, si
       {
         packaged: app.isPackaged,
         external,
+        journal,
         currentBuild: currentBuildId(),
         buildInfoFile: path.join(process.resourcesPath, "build-info.json"),
         layout,
@@ -1442,9 +1449,14 @@ function guardOnce(layout: PgLayout, binaries: PgBinaries, external: boolean, si
  */
 async function passDataGuard(mine: number, layout: PgLayout, binaries: PgBinaries, external: boolean): Promise<boolean> {
   for (;;) {
-    const out = await guardOnce(layout, binaries, external, new AbortController().signal);
-    if (out.kind === "proceed") {
+    let out: GuardOutcome;
+    try {
+      out = await guardOnce(layout, binaries, external, "advance", new AbortController().signal);
+    } finally {
+      // 거부로 끝나도 메뉴를 새로 그린다 (§7.1) — 저널이 남았으면 되돌리기를 막아야 한다.
       refreshMenu();
+    }
+    if (out.kind === "proceed") {
       if (out.notice !== null) {
         const target = activeWindow(mine);
         const opts = { type: "info" as const, message: out.notice, buttons: ["확인"], defaultId: 0, cancelId: 0 };
@@ -1579,12 +1591,16 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
           stopOrphan: (pid) => stopOrphanPostmaster(pid, PG_FAST_GRACE_MS, PG_IMMEDIATE_GRACE_MS),
           log: appendSupervisorLog,
           // 첫 기동·"다시 시도"·상태 창 재시작이 모두 launch를 지난다 — 모든 postgres launch가 가드를 거친다 (§5.2).
+          // 훅은 저널을 **잇지 않는다**("refuse") — 자동 재시작·상태 창 재시작 때는 API·worker가 떠 있을 수 있어 그 자리에서
+          // data/를 바꾸면 안 된다 (§3.1). 저널을 만나면 restorePending으로 거부하고, 교체는 다음 첫 기동의 가드가 한다.
           preLaunch: async (signal) => {
-            const out = await guardOnce(layout, binaries, false, signal);
-            // 보류는 첫 기동의 passDataGuard만 사람에게 묻는다. 여기(다시 시도·재시작)에서 보류를 만나는 것은 앱이 떠 있는
-            // 동안 저널이 생긴 경우뿐이라 다시 시작하라고만 말한다.
-            if (out.kind === "hold") throw new ServiceFailure(CAUSES.restoreIncomplete.text("되돌리기가 보류 중이에요 — 앱을 다시 시작해 주세요."), "manual");
-            refreshMenu();
+            try {
+              const out = await guardOnce(layout, binaries, false, "refuse", signal);
+              // "refuse"에서는 보류가 나올 수 없다 — 타입을 좁히는 가드다.
+              if (out.kind === "hold") throw new ServiceFailure(CAUSES.restorePending.text(), "manual");
+            } finally {
+              refreshMenu();
+            }
           },
         });
   // 러너에는 감독자의 ctx.env를 그대로 넘긴다. 상속 env 위에 얹고 HF_TOKEN을 빼는 합성은 러너가 한다
