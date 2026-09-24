@@ -372,10 +372,14 @@ userData(`~/Library/Application Support/Damwha`)를 dev와 packaged가 **함께 
   `reap_own_orphans` 줄과 재claim 뒤 값으로 두 단계를 각각 확인한다.
 - **2b. 앱 전체 강제 종료 → 기동 회수 1회.** 처리 중 worker 자식들을 먼저, 그다음 main을 `kill -9`
   (`pkill -9 -f "Damwha.app/Contents/Resources/python"` 뒤 `pkill -9 -f "Damwha.app/Contents/MacOS/Damwha"`).
-  **postmaster에는 SIGKILL을 보내지 않는다**(`desktop/CLAUDE.md` "지키는 것"). main만 죽이면 worker 자식이
-  살아남아 다음 기동의 정리가 SIGTERM으로 **정상 반납**시키므로 중단으로 세지지 않는다 — 그래서 자식부터
-  죽인다. 재기동 뒤 `supervisor.log`·API 로그의 기동 회수 줄과 `interruptions` +1, `attempts` 불변(재claim
-  전 기준).
+  **postmaster에는 SIGKILL을 보내지 않는다**(`desktop/CLAUDE.md` "지키는 것"). **정정(2026-09-24, 최종
+  리뷰):** main만 죽여도 남은 `--once` 자식은 stage boundary까지 SIGTERM을 미루므로
+  (`desktop/src/process/orphans.ts:318-322`) 다음 기동의 고아 정리가 주는 `ORPHAN_TERM_GRACE_MS`(3초)
+  안에 거의 끝나지 않고 SIGKILL로 죽으며, 그 job은 정상 반납이 아니라 회수되어 `interruptions`가 오른다
+  — main만 죽였을 때의 추가 중단 1회는 실패가 아니라 정상이다. 그래도 자식부터 죽이는 순서는 유지한다:
+  그래야 이 단계가 프로세스 정리의 타이밍에 기대지 않고, 살아 있는 프로세스가 없는 job 행의 기동
+  회수만 깨끗하게 잰다. 재기동 뒤 `supervisor.log`·API 로그의 기동 회수 줄과 `interruptions` +1,
+  `attempts` 불변(재claim 전 기준).
 
 **3. 일시 실패 재시도 (C3).** 2a의 1회차 뒤 이어지는 실행에서 TRANSIENT를 일으킬 수 있으면(P5-C4의
 Wi-Fi 차단) worker 로그의 `attempt=1/5 … interruptions=1`, `next_attempt_at − updated_at ≈ 30초`, 화면의
