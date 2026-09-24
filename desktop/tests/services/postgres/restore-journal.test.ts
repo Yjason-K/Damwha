@@ -142,6 +142,15 @@ describe("advanceJournal — refusals move nothing", () => {
     ["staged with both D and R", "staged", () => { makeData(R(), "stray"); makeData(S(), "snapshot"); }],
     ["moved-aside with neither D nor S", "moved-aside", () => { fs.renameSync(layout.dataDir, R()); }],
     ["moved-aside with D, R and S all present", "moved-aside", () => { makeData(R(), "stray"); makeData(S(), "snapshot"); }],
+    [
+      "staged with D already matching the snapshot's identity and R present, no staging",
+      "staged",
+      () => {
+        fs.rmSync(layout.dataDir, { recursive: true, force: true });
+        makeData(layout.dataDir, "snapshot", "111");
+        makeData(R(), "stray");
+      },
+    ],
   ])("%s", async (_n, step, arrange) => {
     arrange();
     const snapshotOf = (p: string) => (fs.existsSync(p) ? tagOf(p) : null);
