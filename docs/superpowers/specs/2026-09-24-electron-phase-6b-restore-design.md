@@ -136,10 +136,13 @@
 launch하기 **전에** 반드시 한 번 통과해야 하는 단계다. 호출 지점은 둘이다:
 
 - 첫 기동: `createSupervisorFor` 안, `reapBeforeStart` **뒤**, 감독자 생성 **전**.
-- "다시 시도": `existing.retry()` **전**, postgres가 `running`이 아닐 때. 첫 가드가 판정표 1 거부로
-  스냅샷을 건너뛴 뒤 감독자가 만들어지고, 사람이 마커를 고친 다음 "다시 시도"를 누르면 가드 없이
-  마이그레이션까지 가는 경로가 있었다(`main.ts:1012`, 코덱스 스펙 리뷰 [2]). 가드가 통과해야
-  postgres launch로 넘어간다.
+- **모든 postgres launch**: postgres 어댑터 `launch()`의 맨 앞에서 부르는 `preLaunch` 훅. "다시 시도"
+  (`existing.retry()`, `main.ts:1012`)와 상태 창의 "postgres 다시 시작"(`restartOnce` → `bring` → `launch`)은
+  둘 다 `createSupervisorFor`를 건너뛴다. 첫 가드가 판정표 1 거부로 스냅샷을 건너뛴 뒤 사람이 마커를 고치고
+  둘 중 하나를 누르면 가드 없이 마이그레이션까지 가는 경로가 있었다(코덱스 스펙 리뷰 [2], 계획 검증 [4]).
+  훅에서 보류를 만나면(앱이 떠 있는 동안 저널이 생긴 경우뿐) 다시 시작하라는 `manual` 실패로 멈춘다 — 보류
+  대화상자는 첫 기동의 명시 호출만 띄운다. 첫 기동에서는 명시 호출 뒤 훅이 한 번 더 도는데, 이미 기록이 있어
+  비용이 없다.
 
 순서:
 
@@ -359,7 +362,9 @@ I/O**(clone·rename·저널 쓰기)는 종료 흐름에 등록해 `stopServices`
 2. `ls ~/Library/Application\ Support/Damwha/snapshots/*/manifest.json`로 스냅샷과 `fromBuild` 확인.
 3. `mv data data.replaced-manual-<날짜>` → `cp -c -R snapshots/<sid>/data data`.
 4. 이전 판 설치 → 기동.
-5. 최후 수단: 스냅샷이 없고 덤프만 있을 때 — 번들 `postgres`를 띄워 §3 P2d의 한 트랜잭션 복원.
+5. 최후 수단: 스냅샷이 없고 덤프만 있을 때 — 번들 `postgres`를 띄워 §3 P2d의 한 트랜잭션 복원. 단
+   **파이프가 아니라 SQL 파일을 먼저 만들어 성공을 확인한 뒤 `psql -1 -f`로 적용한다** — 파이프면 `pg_restore`가
+   도중에 실패해도 `psql`이 잘린 입력을 커밋해 스키마만 지워진 채로 남을 수 있다(계획 검증 [5]).
    시퀀스가 되감기므로 백업 뒤 생긴 `data/storage/meetings/mtg_N`을 먼저 다른 곳으로 옮기라는 경고를
    함께 적는다.
 
