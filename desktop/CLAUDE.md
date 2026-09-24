@@ -138,7 +138,7 @@ Developer ID로 서명하고 공증까지 마친 DMG로 배포한다. ad-hoc은 
 
 ## 업데이트 전 스냅샷·되돌리기 (Phase 6b-2)
 
-- 데이터 가드(`app/data-guard.ts`의 `runDataGuard`)는 첫 기동에서 `reapBeforeStart` 뒤 명시적으로(보류 대화상자를 띄운다), "다시 시도"·상태 창 재시작에서는 postgres 어댑터의 `preLaunch` 훅(`launch()` 맨 앞)으로 돈다.
+- 데이터 가드(`app/data-guard.ts`의 `runDataGuard`)는 첫 기동에서 `reapBeforeStart` 뒤 명시적으로(보류 대화상자를 띄운다), "다시 시도"·상태 창 재시작에서는 postgres 어댑터의 `preLaunch` 훅(`launch()` 맨 앞)으로 돈다. 저널을 잇는 것은 첫 기동의 명시 호출(`journal: "advance"`)뿐이다 — 훅은 `journal: "refuse"`로 돌아, 저널을 만나면 아무것도 건드리지 않고 `restorePending`(`manual`)으로 거부한다. 자동 재시작은 API·worker가 떠 있는 동안에도 오므로 거기서 `data/`를 바꾸면 안 된다.
 - 스냅샷은 packaged에서만, 빌드 식별자(`Resources/build-info.json` vs `data/.damwha-generation`)가 다를 때만 뜬다. 사본은 `/bin/cp -c -R`(`process/clone.ts`) — Node `fs.cp`는 macOS에서 clone하지 않는다.
 - 되돌리기: 메뉴 "업데이트 전으로 되돌리기…" → 종료 흐름 `commit`이 `restore-journal.json`을 쓰고 → relaunch → 데이터 가드가 `data/` ↔ `restore-staging/<rid>`를 교체 → 보류 대화상자. 실측용 env `DAMWHA_RESTORE_PAUSE_AFTER_STEP`.
 - 메뉴가 안 뜰 때의 수동 절차는 [`docs/RESTORE.md`](../docs/RESTORE.md).
@@ -274,6 +274,6 @@ claim 직후 실패를 기준으로 시도 시각이 0 · 30초 · 90초 · 210�
 
 - postmaster에는 SIGINT(fast)·SIGQUIT(immediate)만. `services/postgres/handle.ts`의 신호 타입이 SIGKILL을 막는다.
 - 앱이 지우는 것은 데이터 영역(`data/`·`snapshots/`·`backups/`·`restore-staging/`)에서 여덟 가지뿐 — `data/postgres.initdb-*`, 증명한 낡은 락, 5개 초과 백업(단 세대별 첫 덤프는 고정), `*.dump.partial`, 보존 상한(2)을 넘은 완료 스냅샷, 미완료 스냅샷, `restore-staging/<rid>`, 그 백업의 sidecar(덤프와 함께). `data.replaced-*`는 지우지 않는다. 거부 경로는 아무것도 만들거나 지우지 않는다.
-- 마이그레이션 실패·페어링 거부 같은 `manual` 실패는 자동 재시도하지 않는다(`app/retry-policy.ts`, 창 재열기도 재시도하지 않는다 — `app/window-flow.ts`). `writersAlive`·`snapshotFailed`·`restoreIncomplete`·`restoreJournalUnreadable`(Phase 6b-2, 데이터 가드)도 같은 `manual`이다. 감독자를 세우기 전에 던진 실패는 main이 `lastStartFailure`로 보존해, 감독자 없이 창을 다시 열어도 자동 재시도하지 않는다. 메뉴의 "다시 시도"만 다시 돈다.
+- 마이그레이션 실패·페어링 거부 같은 `manual` 실패는 자동 재시도하지 않는다(`app/retry-policy.ts`, 창 재열기도 재시도하지 않는다 — `app/window-flow.ts`). `writersAlive`·`snapshotFailed`·`restoreIncomplete`·`restoreJournalUnreadable`·`restorePending`(Phase 6b-2, 데이터 가드)도 같은 `manual`이다. 감독자를 세우기 전에 던진 실패는 main이 `lastStartFailure`로 보존해, 감독자 없이 창을 다시 열어도 자동 재시도하지 않는다. 메뉴의 "다시 시도"만 다시 돈다.
 - `desktop/package.json`의 `dependencies`는 비어 있다(번들 위생). DB에는 번들 `psql`·`pg_controldata`와 `migrate.js`로만 묻는다.
 - `main.ts`는 electron을 값으로 import해 vitest가 부를 수 없다. 판단은 테스트 가능한 모듈로 빼고 `main.ts`에는 배선만 남긴다.
