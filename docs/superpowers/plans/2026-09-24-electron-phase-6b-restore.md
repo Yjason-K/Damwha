@@ -304,11 +304,11 @@ fs.writeFileSync(
 
 `spawnSync`가 import돼 있지 않으면 파일 머리의 `child_process` import에 더한다(`grep -n "child_process" desktop/scripts/package.mjs`로 확인). `desktopPkg`는 파일 위쪽(`assertReleaseTag(... desktopPkg.version)`)에서 이미 쓰는 변수다.
 
-- [ ] **Step 9: check-bundle 단언** — `desktop/scripts/check-bundle.mjs`에서 `check("SPA is inside the api tree", …)` 다음 줄에:
+- [ ] **Step 9: check-bundle 단언** — `desktop/scripts/check-bundle.mjs`에서 `check("SPA is inside the api tree", …)` 다음 줄에(이 위치는 `const pkg`(82행) 뒤라 `pkg`를 쓸 수 있다. 스크립트에는 `resources` 변수가 없다 — `contents`(15행)를 쓴다):
 
 ```js
 // Phase 6b-2 스펙 §4 — 판올림 판정의 빌드 식별자. 없으면 packaged 앱이 기동을 거부한다(buildInfoMissing).
-const buildInfoPath = path.join(resources, "build-info.json");
+const buildInfoPath = path.join(contents, "Resources", "build-info.json");
 let buildInfo = null;
 try {
   buildInfo = JSON.parse(fs.readFileSync(buildInfoPath, "utf8"));
@@ -322,7 +322,6 @@ check(
 );
 ```
 
-`resources`·`pkg` 변수 이름은 파일에서 실제 이름을 확인해 맞춘다(`grep -n "const resources\|const pkg" desktop/scripts/check-bundle.mjs`). 없으면 같은 방식으로 `path.join(appPath, "Contents", "Resources")`를 만든다.
 
 - [ ] **Step 10: 스크립트 테스트가 있으면 돌린다** — `ls desktop/tests/scripts/`; check-bundle·package를 다루는 테스트가 있으면 `pnpm --filter damwha-desktop exec vitest run tests/scripts` → PASS. 이어서 `pnpm --filter damwha-desktop exec tsc --noEmit -p tsconfig.json` → 오류 없음.
 
@@ -1768,6 +1767,34 @@ describe("runDataGuard — journal", () => {
     expect(out.kind === "proceed" && out.snapshot?.id).not.toBe(sid);
     expect(out.kind === "proceed" && out.snapshot?.manifest.fromRecord).toMatch(/restoredFrom/);
   });
+  it("staging whose pg_controldata id differs from the manifest is refused (aborted, data/ untouched)", async () => {
+    await snapshotThenRequest();
+    const other = "Database system identifier:           999\nDatabase cluster state:               shut down\n";
+    const out = await runDataGuard(deps({ readControldata: async (p) => (p.includes("restore-staging") ? other : CONTROL) }), signal);
+    expect(out.kind).toBe("proceed");
+    expect(out.kind === "proceed" && out.notice).toMatch(/되돌리기를 취소했어요/);
+    expect(fs.existsSync(replacedDirOf(layout, "20260925T010203Z"))).toBe(false);
+  });
+  it("data/ already swapped in but with a different pg_controldata id → restoreIncomplete", async () => {
+    await snapshotThenRequest();
+    await runDataGuard(deps({ pauseAfterStep: async (s) => { if (s === "moved-aside") throw new Error("crash"); } }), signal).catch(() => undefined);
+    // moved-aside 기록 직후(D→R 뒤, S→D 전) 끊겼다. 다음 기동이 S→D를 한 뒤 data/의 신원을 보는데, 그 pg_controldata id가
+    // manifest와 다르다 — 마커만 보는 검사라면 통과해 버리는 경우다.
+    const other = "Database system identifier:           999\nDatabase cluster state:               shut down\n";
+    await expect(runDataGuard(deps({ readControldata: async (p) => (p === layout.pgdata ? other : CONTROL) }), signal)).rejects.toMatchObject({
+      recovery: "manual",
+      message: expect.stringMatching(/되돌리는 작업을 마치지 못했어요/),
+    });
+  });
+  it("a journal pointing at a snapshot of another PG major is not restored", async () => {
+    await snapshotThenRequest();
+    const snapDir = listCompleteSnapshots(layout.snapshots)[0].dir;
+    const m = JSON.parse(fs.readFileSync(path.join(snapDir, "manifest.json"), "utf8"));
+    fs.writeFileSync(path.join(snapDir, "manifest.json"), JSON.stringify({ ...m, pgVersion: "15" }));
+    const out = await runDataGuard(deps(), signal);
+    expect(out.kind === "proceed" && out.notice).toMatch(/되돌리기를 취소했어요/);
+    expect(fs.existsSync(replacedDirOf(layout, "20260925T010203Z"))).toBe(false);
+  });
   it("prune never deletes the snapshot a journal points at", async () => {
     const sid = await snapshotThenRequest();
     // 저널이 있는 동안 두 번 더 판올림이 일어난 것처럼 스냅샷을 쌓는다
@@ -1852,6 +1879,8 @@ function protectedIds(layout: PgLayout): Set<string> {
 
 async function verifyIdentity(d: DataGuardDeps, dir: string, m: SnapshotManifest, signal: AbortSignal): Promise<boolean> {
   try {
+    // 번들 메이저가 아니면 이 postgres로 열 수 없다 (§6.1). manifest가 아니라 사본의 실제 파일을 본다.
+    if (fs.readFileSync(path.join(dir, "postgres", "PG_VERSION"), "utf8").trim() !== PG_MAJOR) return false;
     const id = parseControldataClusterId(await d.readControldata(path.join(dir, "postgres"), signal));
     const marker = parseMarker(fs.readFileSync(path.join(dir, "storage", ".damwha-cluster"), "utf8"));
     return id === m.clusterId && marker !== null && marker.clusterId === m.clusterId && marker.databaseOid === m.databaseOid;
@@ -1875,7 +1904,9 @@ export function runDataGuard(d: DataGuardDeps, signal: AbortSignal): Promise<Gua
           {
             layout,
             clone: d.clone,
-            findSnapshot: (id) => listCompleteSnapshots(layout.snapshots).find((s) => s.id === id) ?? null,
+            // §6.1 조건을 저널 경로에서도 다시 본다 — 손상되거나 오래된 저널이 메이저가 다른 스냅샷을 가리킬 수 있다.
+            // restorableSnapshots(최신 2개)를 쓰지 않는 이유: 저널이 보호하는 스냅샷은 상한 밖(3번째)일 수 있다.
+            findSnapshot: (id) => listCompleteSnapshots(layout.snapshots).find((s) => s.id === id && s.manifest.pgVersion === PG_MAJOR) ?? null,
             verifyIdentity: (dir, m, sig) => verifyIdentity(d, dir, m, sig),
             now: d.now,
             log: d.log,
@@ -2066,6 +2097,14 @@ describe("upgrade-start dump pinning (Phase 6b-2 §8)", () => {
 
 `setup()`의 `deps`가 `const`로 layout을 고정하면(`pgLayout(path.join(root, "ud"))`) 위처럼 재대입이 필요 없다 — 모든 `setup()`이 같은 `root/ud`를 쓰므로 `t.deps.layout = …` 줄은 지워도 된다. 실제 `setup` 본문을 보고 맞춘다. `fail`로 러너가 실패해도 `status`는 매번 새로 불리므로 반복 호출이 재시도를 흉내 낸다.
 
+**기존 테스트 하나를 함께 고친다** — `migration-gate.test.ts:140`의 `expect(fs.readdirSync(t.layout.backups)).toEqual([path.basename(final)]);`는 sidecar가 생기면 깨진다. 이렇게 바꾼다(판정은 그대로 — 덤프는 하나, 옆에 sidecar 하나):
+
+```ts
+    expect(fs.readdirSync(t.layout.backups).sort()).toEqual([path.basename(final), `${path.basename(final)}.json`]);
+```
+
+같은 파일에서 `readdirSync(…backups)`로 목록 전체를 단언하는 다른 줄이 있으면(`grep -n "readdirSync" desktop/tests/services/postgres/migration-gate.test.ts`) 같은 방식으로 `.dump`만 거르거나 sidecar를 포함하게 고친다 — **덤프 개수 판정은 바꾸지 않는다.**
+
 - [ ] **Step 2: 실패 확인** — `pnpm --filter damwha-desktop exec vitest run tests/services/postgres/migration-gate.test.ts` → 새 테스트 FAIL.
 
 - [ ] **Step 3: 구현** — `migration-gate.ts`:
@@ -2143,7 +2182,7 @@ Claude-Session: https://claude.ai/code/session_01Xi7Npsqivj5cdfRxTukz77"
 - Consumes: `SnapshotInfo`·`SnapshotManifest`(Task 2), `RestoreJournal`·`JournalStep`(Task 4), `GuardOutcome`(Task 5)
 - Produces:
   - `QuitFlowDeps.commit?(): Promise<void>` — 확인 뒤·`beginQuit` 전. 던지면 로그 한 줄 남기고 종료하지 않는다.
-  - `restore-flow.ts`: `RELEASES_PAGE_URL`, `restoreMenuEnabled(s: { external: boolean; restorable: readonly SnapshotInfo[]; journalPresent: boolean }): boolean`, `versionOfBuild(build: string | null): string | null`, `snapshotLine(m: SnapshotManifest, fmt: (iso: string) => string): string`, `confirmRestoreDialog(snaps: readonly SnapshotInfo[], fmt): { options: MessageBoxOptions; choices: (string | null)[] }`, `type HoldChoice = "quit" | "download" | "continue"`, `holdDialog(h: { journal: RestoreJournal; snapshot: SnapshotInfo | null; replacedDir: string }, fmt): { options: MessageBoxOptions; choices: HoldChoice[] }`, `parsePauseStep(v: string | undefined): JournalStep | null`, `createIoTracker(): { track<T>(p: Promise<T>): Promise<T>; settled(): Promise<void> }`
+  - `restore-flow.ts`: `RELEASES_PAGE_URL`, `restoreMenuEnabled(s: { external: boolean; restorable: readonly SnapshotInfo[]; journalPresent: boolean }): boolean`, `versionOfBuild(build: string | null): string | null`, `snapshotLine(m: SnapshotManifest, fmt: (iso: string) => string): string`, `confirmRestoreDialog(snaps: readonly SnapshotInfo[], fmt): { options: MessageBoxOptions; choices: (string | null)[] }`, `type HoldChoice = "quit" | "download" | "continue"`, `holdDialog(h: { journal: RestoreJournal; snapshot: SnapshotInfo | null; replacedDir: string }, fmt): { options: MessageBoxOptions; choices: HoldChoice[] }`, `parsePauseStep(v: string | undefined): JournalStep | null`, `createIoTracker(): { track<T>(p: Promise<T>): Promise<T>; settled(): Promise<void> }`, `afterIo<T>(io: { settled(): Promise<void> }, stop: () => Promise<T>): Promise<T>`
   - `MenuHandlers.onRestore(): void`; `buildMenuTemplate(handlers, appName, opts?: { restoreEnabled: boolean })`; `installMenu(handlers, opts?)`
   - `ShellInput.restoreAvailable?: boolean`; `RESTORE_MENU_NOTE` (status-view.ts export)
 
@@ -2207,6 +2246,7 @@ describe("commit step (Phase 6b-2 §6.2)", () => {
 ```ts
 import { describe, expect, it } from "vitest";
 import {
+  afterIo,
   confirmRestoreDialog,
   createIoTracker,
   holdDialog,
@@ -2282,6 +2322,13 @@ describe("pause env and io tracker", () => {
     expect(parsePauseStep("moved-aside")).toBe("moved-aside");
     expect(parsePauseStep("bogus")).toBeNull();
     expect(parsePauseStep(undefined)).toBeNull();
+  });
+  it("afterIo does not start stopping services until a tracked clone has finished", async () => {
+    const t = createIoTracker();
+    const order: string[] = [];
+    void t.track(new Promise<void>((resolve) => setTimeout(() => { order.push("clone done"); resolve(); }, 20)));
+    await afterIo(t, async () => { order.push("stop services"); });
+    expect(order).toEqual(["clone done", "stop services"]);
   });
   it("settled waits for tracked work, including rejected work", async () => {
     const t = createIoTracker();
@@ -2387,6 +2434,12 @@ export function parsePauseStep(v: string | undefined): JournalStep | null {
  * 데이터 가드의 파일 I/O를 종료 흐름이 기다리게 한다 (스펙 §5.2 "종료와의 관계"). 감독자가 없으면 stopServices가 곧바로
  * 끝나 `/bin/cp`가 Electron 뒤에 남는다. 대화상자(보류)는 넣지 않는다 — 종료가 사람의 선택을 기다리면 순환이다.
  */
+/** 종료의 서비스 정지를 가드 I/O가 끝난 **뒤에** 부른다. main의 stopServices가 이것으로 감싼다 — 배선을 테스트하려고 뺐다. */
+export async function afterIo<T>(io: { settled(): Promise<void> }, stop: () => Promise<T>): Promise<T> {
+  await io.settled();
+  return stop();
+}
+
 export function createIoTracker(): { track<T>(p: Promise<T>): Promise<T>; settled(): Promise<void> } {
   const pending = new Set<Promise<unknown>>();
   return {
@@ -2509,6 +2562,11 @@ let lastStartFailure: unknown = null;
 let pendingRestore: { snapshot: string } | null = null;
 let restoreCommitted = false;
 let menuHandlers: MenuHandlers | null = null;
+/**
+ * config.json으로 정해진 DB 모드. `launchCtx`는 감독자를 만든 **뒤**에야 대입되므로(currentDatabaseMode) 가드 직후의
+ * 메뉴 판정에는 쓸 수 없다 — 모드를 모르면 되돌리기를 막는다(계획 검증 [3]).
+ */
+let knownDbMode: "embedded" | "external" | null = null;
 
 function currentBuildId(): string | null {
   if (!app.isPackaged) return null;
@@ -2522,16 +2580,19 @@ function currentBuildId(): string | null {
 
 const localTime = (iso: string) => new Date(iso).toLocaleString("ko-KR", { dateStyle: "medium", timeStyle: "short" });
 
+function restoreAllowedNow(): boolean {
+  if (knownDbMode === null) return false;
+  const layout = pgLayout(app.getPath("userData"));
+  return restoreMenuEnabled({
+    external: knownDbMode === "external",
+    restorable: restorableSnapshots(layout.snapshots, PG_MAJOR),
+    journalPresent: readJournal(layout.restoreJournal).kind !== "none",
+  });
+}
+
 function refreshMenu(): void {
   if (menuHandlers === null) return;
-  const layout = pgLayout(app.getPath("userData"));
-  installMenu(menuHandlers, {
-    restoreEnabled: restoreMenuEnabled({
-      external: currentDatabaseMode()?.kind === "external",
-      restorable: restorableSnapshots(layout.snapshots, PG_MAJOR),
-      journalPresent: readJournal(layout.restoreJournal).kind !== "none",
-    }),
-  });
+  installMenu(menuHandlers, { restoreEnabled: restoreAllowedNow() });
 }
 ```
 
@@ -2615,8 +2676,11 @@ async function passDataGuard(mine: number, layout: PgLayout, binaries: PgBinarie
 ```ts
   // 데이터 가드 (Phase 6b-2 스펙 §5.2) — 감독자가 postgres를 launch하기 전에 반드시 통과한다. 고아를 내린 뒤라
   // 스토리지에 쓰는 앱 소유 프로세스가 없다(reapBeforeStart가 생존자를 거부한다).
+  knownDbMode = mode.kind;
   if (!(await passDataGuard(mine, layout, binaries, mode.kind === "external"))) return false;
 ```
+
+`knownDbMode`를 가드 **전에** 채운다 — 가드 안의 `refreshMenu()`가 외부 모드를 알아야 한다. 외부 모드면 메뉴가 비활성으로 선다.
 
 `layout`·`binaries`·`mode` 정의가 `reapBeforeStart`보다 뒤에 있으면 가드 호출을 그 정의들 바로 다음으로 둔다(순서: reap → layout/binaries/mode 정의 → 가드 → 감독자 조립).
 
@@ -2689,12 +2753,16 @@ async function passDataGuard(mine: number, layout: PgLayout, binaries: PgBinarie
 
 (`failureDetail`은 `windows/status-view.ts`에서 이미 import돼 있다 — `reportFailure`가 쓴다.)
 
-- [ ] **Step 6: stopServices가 가드 I/O를 기다린다** — `async function stopServices(): Promise<StopOutcome>`의 **첫 줄**에:
+- [ ] **Step 6: stopServices가 가드 I/O를 기다린다** — 기존 `async function stopServices(): Promise<StopOutcome>`의 이름을 `stopServicesNow`로 바꾸고, 그 자리에:
 
 ```ts
-  // 감독자가 없어도 가드의 /bin/cp가 돌고 있을 수 있다 — 끝나기 전에 앱이 나가면 .partial·staging에 계속 쓴다 (스펙 §5.2).
-  await guardIo.settled();
+/** 감독자가 없어도 가드의 /bin/cp가 돌고 있을 수 있다 — 끝나기 전에 앱이 나가면 .partial·staging에 계속 쓴다 (스펙 §5.2). */
+function stopServices(): Promise<StopOutcome> {
+  return afterIo(guardIo, stopServicesNow);
+}
 ```
+
+순서 판정은 Task 7의 `afterIo does not start stopping services until a tracked clone has finished`가 지킨다. `afterIo`를 import한다.
 
 - [ ] **Step 7: 메뉴 핸들러와 되돌리기 시작** — `installMenu({ … })` 호출을 `menuHandlers = { … }; refreshMenu();`로 바꾸고 handlers에 추가:
 
@@ -2702,8 +2770,9 @@ async function passDataGuard(mine: number, layout: PgLayout, binaries: PgBinarie
       onRestore: () => {
         void (async () => {
           const layout = pgLayout(app.getPath("userData"));
+          // 메뉴 활성과 **같은** 판정을 다시 본다 — 메뉴를 그린 뒤 상태가 바뀌었을 수 있다.
+          if (!restoreAllowedNow()) return;
           const snaps = restorableSnapshots(layout.snapshots, PG_MAJOR);
-          if (snaps.length === 0 || currentDatabaseMode()?.kind === "external" || readJournal(layout.restoreJournal).kind !== "none") return;
           const d = confirmRestoreDialog(snaps, localTime);
           const target = win !== null && !win.isDestroyed() ? win : null;
           const { response } = await modals.track(target === null ? dialog.showMessageBox(d.options) : dialog.showMessageBox(target, d.options));
@@ -2757,14 +2826,7 @@ async function passDataGuard(mine: number, layout: PgLayout, binaries: PgBinarie
 - [ ] **Step 9: 실패 화면 안내** — `shellStatusOf()`의 `shellStatusFrom({ … })`에:
 
 ```ts
-    restoreAvailable: (() => {
-      const layout = pgLayout(app.getPath("userData"));
-      return restoreMenuEnabled({
-        external: currentDatabaseMode()?.kind === "external",
-        restorable: restorableSnapshots(layout.snapshots, PG_MAJOR),
-        journalPresent: readJournal(layout.restoreJournal).kind !== "none",
-      });
-    })(),
+    restoreAvailable: restoreAllowedNow(),
 ```
 
 - [ ] **Step 10: 마이그레이션 게이트에 세대 연결** — API 스펙 조립부에서 `runMigrationGate`에 넘기는 deps(`grep -n "runMigrationGate\|MigrationGateDeps" src/main.ts src/services/api.ts`)에 `generation: () => readGeneration(layout.generationFile)?.snapshot ?? null`을 더한다. 게이트 deps를 `api.ts`가 조립하면 `api.ts`의 deps 타입에 선택 필드로 통과시킨다.
@@ -2927,6 +2989,8 @@ Claude-Session: https://claude.ai/code/session_01Xi7Npsqivj5cdfRxTukz77"
 | M19 | `app/restore-flow.ts` | `restoreMenuEnabled`의 `!s.journalPresent &&` 삭제 | `tests/app/restore-flow.test.ts` |
 | M20 | `windows/status-view.ts` | `input.restoreAvailable === true &&` 삭제 | `tests/windows/status-view.test.ts` |
 | M21 | `services/postgres/service.ts` | `await deps.preLaunch?.(ctx.signal);` 삭제 | `tests/services/postgres/service.test.ts` |
+| M23 | `app/restore-flow.ts` | `afterIo`의 `await io.settled();` 삭제 | `tests/app/restore-flow.test.ts` |
+| M24 | `app/data-guard.ts` | `verifyIdentity`의 `id === m.clusterId &&` 삭제 | `tests/app/data-guard.test.ts` |
 | M22 | `process/orphans.ts` | `survivingOrphans`의 `&& d.exists(p.pid)` 삭제 | `tests/app/reap-on-start.test.ts` (기존 `resolves with what it reaped…`) |
 
 - [ ] **Step 1: 변이를 차례로 돌린다** — 변이마다: 편집 → `pnpm --filter damwha-desktop exec vitest run <테스트>` → 결과(빨강/초록, 실패한 테스트 이름) 기록 → `git checkout -- <file>`.
@@ -2936,7 +3000,7 @@ Claude-Session: https://claude.ai/code/session_01Xi7Npsqivj5cdfRxTukz77"
 
 ```bash
 git add docs/superpowers/reports/2026-09-24-electron-phase-6b-restore-mutations.md
-git commit -m "test(phase6b): 6b-2 변이 M1~M22를 돌려 기록한다
+git commit -m "test(phase6b): 6b-2 변이 M1~M24를 돌려 기록한다
 
 Claude-Session: https://claude.ai/code/session_01Xi7Npsqivj5cdfRxTukz77"
 ```
