@@ -158,8 +158,11 @@ launch하기 **전에** 반드시 한 번 통과해야 하는 단계다. 호출 
    기존 `pgLockUnprovable`·`pgOrphanStuck`로 거부한다. 뒤이은 postgres 어댑터의 `handleLock()`은 이미
    정리된 상태를 보고 그냥 지나간다.
 6. §5.1의 조건 4를 보고 스냅샷이 필요 없으면 7~10을 건너뛴다.
-7. **미기록 완료 스냅샷 재사용**: `manifest.toBuild`가 지금 빌드이고 `complete`인 스냅샷이 이미 있으면
-   (앞 기동이 9의 기록 전에 끊겼다) 새로 뜨지 않고 그것으로 9로 간다. 없으면 8. 재시도마다 같은
+7. **미기록 완료 스냅샷 재사용**: `manifest.toBuild`가 지금 빌드이고 **`manifest.fromRecord`가 지금
+   `.damwha-generation`의 원문(없으면 null)과 같은** 완료 스냅샷이 있으면(앞 기동이 10의 기록 전에 끊겼다)
+   새로 뜨지 않고 그것으로 10으로 간다. `fromRecord` 조건이 없으면, 스냅샷 A로 되돌린 뒤 [이 판으로 계속]을
+   고를 때 A(`toBuild`가 같다)가 재사용돼 그 사이 이전 판에서 쓴 데이터가 복원점에서 빠진다 — 교체가
+   들여놓은 `data/`의 기록에 `restoredFrom`을 적으므로(§6.3) 기록 원문이 반드시 달라진다. 없으면 8. 재시도마다 같은
    데이터의 완료 스냅샷이 쌓여 보존 상한(2)이 서로 다른 과거 복원점을 밀어내는 것을 막는다(코덱스
    스펙 리뷰 [5]).
 8. **clone**: `snapshots/<sid>.partial/`가 **없음을 확인하고**(있으면 지운 뒤) 만든 다음
@@ -169,6 +172,7 @@ launch하기 **전에** 반드시 한 번 통과해야 하는 단계다. 호출 
    `pg_controldata`를 다시 읽어(락 처리 뒤의 실제 상태 — 코덱스 스펙 리뷰 [12]) manifest를 쓴다:
    ```json
    {"id":"20260924T084933Z","createdAt":"…","fromBuild":"0.3.1+…"|null,"toBuild":"0.4.0+…",
+    "fromRecord":"<스냅샷 당시 .damwha-generation 원문>"|null,
     "pgVersion":"16","clusterId":"7687238228739395787","databaseOid":16384|null,
     "clusterState":"shut down"|"in production"|…,"complete":true}
    ```
@@ -257,8 +261,8 @@ I/O**(clone·rename·저널 쓰기)는 종료 흐름에 등록해 `stopServices`
 | `requested` | R 있음 | 거부(`restoreIncomplete`) — 요청 시 없던 R이 있다 | — |
 | `staged` | D 있음·R 없음·S 있음 | `D → R` rename | `moved-aside` |
 | `staged` | D 없음·R 있음·S 있음 | (앞 기동이 rename 뒤 step 기록 전에 끊김) 건너뜀 | `moved-aside` |
-| `moved-aside` | D 없음·R 있음·S 있음 | `S → D` rename | (신원 확인 뒤) `hold` |
-| `moved-aside` | D 있음·R 있음·S 없음 | (앞 기동이 rename 뒤 끊김) D **신원 확인**이 맞으면 건너뜀 | `hold` |
+| `moved-aside` | D 없음·R 있음·S 있음 | `S → D` rename. 신원 확인 뒤 D의 `.damwha-generation`에 `restoredFrom: <rid>`를 더해 쓴다(원래 `build`·`snapshot`은 보존, 파일이 없었으면 둘 다 null) | `hold` |
+| `moved-aside` | D 있음·R 있음·S 없음 | (앞 기동이 rename 뒤 끊김) D **신원 확인**이 맞으면 rename은 건너뛰고 `restoredFrom` 기록만 한다(멱등) | `hold` |
 | `hold` | — | 아무것도 옮기지 않는다. `completedAt`이 null이면 채운다. §7.3 보류 대화상자 | (사람의 선택) |
 | 그 밖의 모든 조합 | — | **거부**(`restoreIncomplete`, 세 경로의 존재 여부를 보인다). 다음 step을 쓰지 않고 아무것도 옮기지 않는다 | — |
 
