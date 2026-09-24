@@ -76,6 +76,12 @@ export function parseControldataClusterId(stdout: string): string | null {
   return m === null ? null : m[1];
 }
 
+/** `LC_ALL=C pg_controldata`의 `Database cluster state:` 줄 (Phase 6b-2 스펙 §5.2-8). */
+export function parseControldataState(stdout: string): string | null {
+  const m = /^Database cluster state:\s+(.+?)\s*$/m.exec(stdout);
+  return m === null ? null : m[1];
+}
+
 export interface ClusterFacts {
   pgdataExists: boolean;
   /** PG_VERSION의 내용. 없거나 못 읽으면 null. */

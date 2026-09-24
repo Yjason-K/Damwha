@@ -6,6 +6,7 @@ import {
   decideCluster,
   decideDatabase,
   parseControldataClusterId,
+  parseControldataState,
   parseMarker,
   readStorageFacts,
   serializeMarker,
@@ -144,4 +145,13 @@ describe("decideDatabase — 판정표 2 (스펙 §6.2)", () => {
   it("refuses a recreated database", () => {
     expect(decideDatabase({ oid: 20000, marker: m(16384), storageHasFiles: false })).toMatchObject({ kind: "refuse", reason: "database-recreated" });
   });
+});
+
+describe("parseControldataState", () => {
+  it("reads the cluster state line", () => {
+    const out = "Database system identifier:           7687238228739395787\nDatabase cluster state:               shut down\n";
+    expect(parseControldataState(out)).toBe("shut down");
+    expect(parseControldataState("Database cluster state:               in production\n")).toBe("in production");
+  });
+  it("returns null without the line", () => expect(parseControldataState("nothing")).toBeNull());
 });
