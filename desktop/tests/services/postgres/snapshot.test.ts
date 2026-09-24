@@ -1,9 +1,11 @@
+import { execFileSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeClone, type CloneFn } from "../../../src/process/clone";
 import { runTool } from "../../../src/process/tool-runner";
+import { parseGeneration, readGenerationText } from "../../../src/services/postgres/generation";
 import { pgLayout, type PgLayout } from "../../../src/services/postgres/layout";
 import { serializeMarker } from "../../../src/services/postgres/pairing";
 import {
@@ -119,6 +121,24 @@ describe("listing, reuse and retention", () => {
     fakeSnapshot("20260924T000000Z", { toBuild: "0.4.0+0123456789ab", fromRecord: null });
     expect(findUnrecorded(layout.snapshots, "0.4.0+0123456789ab", '{"build":null,"snapshot":null,"restoredFrom":"R"}')).toBeNull();
     expect(findUnrecorded(layout.snapshots, "0.4.1+ba9876543210", null)).toBeNull();
+  });
+  it("a manually restored record (docs/RESTORE.md §3) parses and never matches a fromRecord:null snapshot", () => {
+    const text = '{"build":null,"snapshot":null,"restoredFrom":"manual-20260925010203"}\n';
+    expect(parseGeneration(text)).toEqual({ build: null, snapshot: null, restoredFrom: "manual-20260925010203" });
+    fakeSnapshot("20260924T000000Z", { toBuild: "0.4.0+0123456789ab", fromRecord: null });
+    expect(findUnrecorded(layout.snapshots, "0.4.0+0123456789ab", text)).toBeNull();
+  });
+  it("the printf line in docs/RESTORE.md §3 writes that record", () => {
+    const doc = fs.readFileSync(path.join(__dirname, "../../../../docs/RESTORE.md"), "utf8");
+    const line = doc.split("\n").find((l) => l.startsWith("printf ") && l.includes(".damwha-generation"));
+    expect(line).toBeDefined();
+    const D = path.join(root, "D");
+    fs.mkdirSync(path.join(D, "data"), { recursive: true });
+    execFileSync("/bin/sh", ["-c", line!], { env: { ...process.env, D } });
+    const text = readGenerationText(path.join(D, "data", ".damwha-generation"));
+    expect(parseGeneration(text!)?.restoredFrom).toMatch(/^manual-\d{14}$/);
+    fakeSnapshot("20260924T000000Z", { toBuild: "0.4.0+0123456789ab", fromRecord: null });
+    expect(findUnrecorded(layout.snapshots, "0.4.0+0123456789ab", text)).toBeNull();
   });
   it("removeIncompleteSnapshots deletes .partial and manifest-less dirs only", () => {
     fakeSnapshot("20260920T000000Z");

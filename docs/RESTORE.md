@@ -37,7 +37,10 @@ for m in "$D"/snapshots/*/manifest.json; do echo "$m"; cat "$m"; echo; done
 SID=20260924T084933Z          # 2에서 고른 id
 mv "$D/data" "$D/data.replaced-manual-$(date +%Y%m%d%H%M%S)"
 cp -c -R "$D/snapshots/$SID/data" "$D/data"
+printf '{"build":null,"snapshot":null,"restoredFrom":"manual-%s"}\n' "$(date +%Y%m%d%H%M%S)" > "$D/data/.damwha-generation"
 ```
+
+마지막 줄은 이 데이터를 "되돌린 데이터"로 표시한다 — 그래야 나중에 새 판을 다시 열 때 앱이 옛 스냅샷을 재사용하지 않고 새로 뜬다.
 
 `cp -c`는 복사본을 거의 공간 없이 만든다. 옮겨 둔 `data.replaced-…`는 지우지 않는 한 그대로 남는다.
 `restore-journal.json`이 있으면 지운다(앱의 되돌리기가 중간에 멈췄던 흔적이다 — 이 절차가 그 일을 대신했다):
