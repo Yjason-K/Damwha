@@ -203,9 +203,11 @@ dev와 packaged가 같은 클러스터라 버려도 되는 "dev 클러스터"가
 - **신분은 `RUN_WORKER_ID`(`desktop-<uuid>`)이고 앱 실행마다 새로 발급된다.** `withAppOwned`가 모든
   자식 env에 `WORKER_ID`로 얹는다. 터미널 `pnpm worker`(`worker-1`)와 웹 배포판은 접두사에 걸리지
   않아 **앱이 그 job을 건드리지 않는다** — Phase 2의 "외부 서비스와 앱 소유를 구분한다"와 같은 결이다.
-- 기동 회수는 `attempts`를 **되돌리지 않고** 세 갈래로 간다: 남은 재시도가 있는 비-live는 `queued`로,
-  다 쓴 비-live는 `failed`(`app_restarted`)로 — 딸린 `meeting`·요약·렌즈 run·화자까지 함께 닫는다 —
-  `live_session`은 언제나 `failed`로. 앱을 다섯 번 강제 종료하면 그 job은 실패한다. 그것이 정직하다
+- 회수는 **중단을 센다** — `job.interruptions`를 +1 하고 그것으로 상한을 판정한다(마이그레이션 `026`,
+  Phase 6b-3 스펙 §4.2). `attempts`는 읽지도 바꾸지도 않는다. 세 갈래: 중단 예산이 남은 비-live는
+  `queued`로, 다 쓴(`interruptions + 1 >= max_interruptions`, 기본 3) 비-live는 `failed`(`app_restarted`)로 —
+  딸린 `meeting`·요약·렌즈 run·화자까지 함께 닫되 **회의는 그 job이 아직 `current_job_id`일 때만** —
+  `live_session`은 언제나 `failed`로. 앱을 세 번 강제 종료하면 그 job은 실패한다. 그것이 정직하다
   (그 job이 앱을 죽이고 있을 수 있다). 라이브의 봉인·마무리는 회수가 아니라 API의
   `LiveOrphanService`가 한다 — 회수는 그 경로를 30분 기다리지 않고 여는 것뿐이다.
 - **회수도 스캔도 기동·재시작을 막지 않는다.** 회수 SQL은 `FOR UPDATE SKIP LOCKED`라 남이 쥔 행을
@@ -221,9 +223,9 @@ dev와 packaged가 같은 클러스터라 버려도 되는 "dev 클러스터"가
   처리하고 있어요 · 35%"라는 거짓을 계속 말했다. 자기 고아 회수가 그 자리를 메운다. 성립 근거는
   **부모가 자식을 한 번에 하나만 띄우고 `_wait_child`로 거둔다**는 것 — 그래서 저 세 순간에는 자기
   신분으로 잠긴 행이 전부 고아다. 시간 조건이 없어도 남의 행을 건드리지 않는다.
-- 자기 고아 회수도 `attempts`를 **되돌리지 않고** 기동 회수와 같은 갈래로 간다(재시도가 남은 비-live는
-  `queued`, 소진했거나 `live_session`이면 `failed` — `reap_stale`과 SQL 한 벌을 공유한다). 재현
-  회차에서 `attempts`가 1에서 2가 되고 새 `--once` 자식이 같은 job을 이어받았다.
+- 자기 고아 회수도 같은 규칙이다(`reap_stale`과 SQL 한 벌을 공유한다) — `interruptions` +1, 상한이면
+  `failed`. 재현 회차(Phase 5)에서는 옛 규칙이라 `attempts`가 1에서 2가 됐다. 지금은 `attempts`가 claim의
+  +1로만 오르고 회수는 `interruptions`만 올린다.
 
 `WORKER_ID`와 `ps`에 보이는 `--run-id`는 **같은 실행 안에서도 값이 다르다** — 전자는 `config.ts`의
 `RUN_WORKER_ID`로 `job.locked_by`에 들어가고, 후자는 supervisor의 실행 id다. 둘 다 `desktop-` 접두사를
@@ -231,7 +233,7 @@ dev와 packaged가 같은 클러스터라 버려도 되는 "dev 클러스터"가
 
 ## 재시도 — 0 · 30초 · 90초 · 210초 · 450초
 
-worker가 TRANSIENT 실패를 requeue할 때 `next_attempt_at = now() + least(30 * 2^(attempts-1), 900)초`다
+worker가 TRANSIENT 실패를 requeue할 때 `next_attempt_at = now() + least(30 * 2^(attempts − interruptions − 1), 900)초`다
 (`be/worker/damwha_worker/db/queue.py`). `job.max_attempts` 컬럼 기본값은 **5**(마이그레이션 `025`)라
 claim 직후 실패를 기준으로 시도 시각이 0 · 30초 · 90초 · 210초 · 450초가 된다 — **4회차가 3.5분에
 닿으므로 3분짜리 끊김(모델 다운로드 등)을 사람 개입 없이 같은 job이 넘긴다.**
@@ -241,8 +243,13 @@ claim 직후 실패를 기준으로 시도 시각이 0 · 30초 · 90초 · 210�
 - 마이그레이션 `025` **전에 만들어진 job은 그대로 `max_attempts=3`**이다. 새 기본값은 그 뒤에
   enqueue된 job에만 붙는다.
 - `live_session`은 `maxAttempts: 1`을 명시해 이 기본값을 타지 않는다. 라이브 오류는 전부 PERMANENT다.
-- **강제 종료 N번은 재시도 5회 중 N회를 먹는다** — `attempts` 한 컬럼이 크래시 회수와 일시 실패를
-  함께 센다. 나누려면 스키마 변경이 필요해 Phase 6이 받는다.
+- **강제 종료는 재시도 예산을 먹지 않는다** (Phase 6b-3). 재시도 판정은 `attempts − interruptions`
+  (재시도 예산 소비량 — 성공한 실행도 1이다) `< max_attempts`이고, 회수는 `interruptions`만 올린다.
+  두 한도(재시도 5, 중단 3)는 독립이고 먼저 닿는 쪽이 job을 끝낸다. 30분 reaper가 보는 것은 "30분간
+  heartbeat 성공 없음"이다 — 긴 job은 heartbeat가 살아 있는 한 회수되지 않는다.
+- 화면의 재시도 문구는 stage보다 앞선다 — `requeue`가 stage를 지우지 않아서다. `· 중단 N회`는
+  중단이 있을 때만. "마지막 오류"는 `requeue`가 쓰는 `job.error`다(6b-3 전에는 비어 있었다).
+- `026` 전에 만들어진 job은 `interruptions=0`이다 — 그 전에 크래시로 먹은 시도는 예산 소비로 남는다.
 
 ## 디버깅
 
