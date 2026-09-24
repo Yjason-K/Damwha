@@ -34,8 +34,8 @@ describe('reclaimOrphaned races', () => {
     const claimed = await jobs.claim(db.pool, 'desktop-new');
     expect(claimed?.id).toBe(jobId);
     const { rows } = await db.pool.query(
-      'SELECT status, locked_by, attempts FROM job WHERE id=$1', [jobId]);
-    expect(rows[0]).toMatchObject({ status: 'running', locked_by: 'desktop-new', attempts: 2 });
+      'SELECT status, locked_by, attempts, interruptions FROM job WHERE id=$1', [jobId]);
+    expect(rows[0]).toMatchObject({ status: 'running', locked_by: 'desktop-new', attempts: 2, interruptions: 1 });
   });
 
   it('a claim racing an open reclaim transaction converges on one owner', async () => {
@@ -97,5 +97,25 @@ describe('reclaimOrphaned races', () => {
     expect(rows[0]).toMatchObject({ status: 'queued', locked_by: null, attempts: 0 });
     const old = await db.pool.query('SELECT status FROM job WHERE id=$1', [oldJobId]);
     expect(old.rows[0].status).toBe('failed');
+  });
+
+  it('reclaim and the stale reaper racing on one row count one interruption', async () => {
+    const { jobId } = await orphanJob();
+    await db.pool.query(`UPDATE job SET locked_at = now() - interval '45 minutes' WHERE id=$1`, [jobId]);
+    const a = new Client({ connectionString: db.url });
+    const b = new Client({ connectionString: db.url });
+    await a.connect(); await b.connect();
+    try {
+      await a.query('BEGIN');
+      await jobs.reclaimOrphaned(a, 'desktop-new');          // 행을 잠근 채 열어 둔다
+      const reaping = jobs.reapStale(b, 30);                 // SKIP LOCKED — 기다리지 않는다
+      const reaped = await reaping;
+      await a.query('COMMIT');
+      expect(reaped).toEqual({ requeued: 0, failed: 0 });
+      const again = await jobs.reapStale(db.pool, 30);       // 커밋 뒤: running이 아니다
+      expect(again).toEqual({ requeued: 0, failed: 0 });
+      const { rows } = await db.pool.query('SELECT status, interruptions FROM job WHERE id=$1', [jobId]);
+      expect(rows[0]).toEqual({ status: 'queued', interruptions: 1 });
+    } finally { await a.end(); await b.end(); }
   });
 });

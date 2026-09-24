@@ -20,6 +20,10 @@ export interface JobRow {
   progress: number;
   attempts: number;
   max_attempts: number;
+  /** 회수(기동 회수·reaper·worker 자기 고아 회수)가 센 중단 횟수 (마이그레이션 026). */
+  interruptions: number;
+  /** 중단 한도. 기본 3 — 이 횟수째 중단에서 failed (마이그레이션 026). */
+  max_interruptions: number;
   locked_by: string | null;
   locked_at: Date | null;
   next_attempt_at: Date | null;

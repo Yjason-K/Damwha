@@ -135,10 +135,11 @@ class JobHandler:
     def on_failure(self, conn, job: dict, ctx: JobContext, error: dict, *, retry: bool) -> str:
         """기본: 재시도 여지가 있으면 반납, 없으면 job만 failed로 닫는다.
 
-        `retry`는 dispatch가 계산한다 — TRANSIENT이면서 attempts가 max에 못 미칠 때만 참.
+        `retry`는 dispatch가 계산한다 — TRANSIENT이면서 재시도 예산 소비량
+        (attempts − interruptions)이 max에 못 미칠 때만 참.
         """
         if retry:
-            return "requeued" if db.requeue(conn, job["id"], ctx.worker_id) else "lost"
+            return "requeued" if db.requeue(conn, job["id"], ctx.worker_id, error) else "lost"
         return "failed" if db.fail_job(conn, job["id"], ctx.worker_id, error) else "lost"
 
     def on_shutdown(self, conn, job: dict, ctx: JobContext) -> str:
@@ -148,10 +149,10 @@ class JobHandler:
         return "requeued_shutdown" if ok else "lost"
 
 
-def _requeue_or(conn, job, ctx, *, retry: bool, close) -> str:
-    """`retry`면 반납하고, 아니면 `close`가 정한 방식으로 닫는다."""
+def _requeue_or(conn, job, ctx, error, *, retry: bool, close) -> str:
+    """`retry`면 반납하고(마지막 오류를 남긴다), 아니면 `close`가 정한 방식으로 닫는다."""
     if retry:
-        return "requeued" if db.requeue(conn, job["id"], ctx.worker_id) else "lost"
+        return "requeued" if db.requeue(conn, job["id"], ctx.worker_id, error) else "lost"
     return close()
 
 
@@ -189,7 +190,7 @@ class ProcessMeetingHandler(JobHandler):
             ok = db.fail_process_meeting(conn, job["id"], ctx.worker_id, job["meeting_id"], error)
             return "failed" if ok else "lost"
 
-        return _requeue_or(conn, job, ctx, retry=retry, close=close)
+        return _requeue_or(conn, job, ctx, error, retry=retry, close=close)
 
 
 class EnrollSpeakerHandler(JobHandler):
@@ -214,7 +215,7 @@ class EnrollSpeakerHandler(JobHandler):
             ok = db.fail_enroll(conn, job["id"], ctx.worker_id, speaker_id, error)
             return "failed" if ok else "lost"
 
-        return _requeue_or(conn, job, ctx, retry=retry, close=close)
+        return _requeue_or(conn, job, ctx, error, retry=retry, close=close)
 
 
 class IndexMeetingHandler(JobHandler):
@@ -264,7 +265,7 @@ class ExtractLensesHandler(JobHandler):
                 error,
             )
 
-        return _requeue_or(conn, job, ctx, retry=retry, close=close)
+        return _requeue_or(conn, job, ctx, error, retry=retry, close=close)
 
 
 class SummarizeMeetingHandler(JobHandler):
@@ -290,6 +291,7 @@ class SummarizeMeetingHandler(JobHandler):
             conn,
             job,
             ctx,
+            error,
             retry=retry,
             close=lambda: db.fail_summary(conn, job["id"], ctx.worker_id, error),
         )

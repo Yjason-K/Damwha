@@ -98,9 +98,9 @@ describe('JobsRepository', () => {
     const meetingId = await seedMeeting();
     const { rows: jobRows } = await db.pool.query<{ id: string }>(
       `INSERT INTO job(type, meeting_id, payload, status, locked_by, locked_at,
-                       attempts, max_attempts)
+                       attempts, max_attempts, interruptions)
        VALUES ('summarize_meeting', $1, '{}'::jsonb, 'running', 'w',
-               now() - interval '30 minutes', 3, 3)
+               now() - interval '30 minutes', 3, 3, 2)
        RETURNING id`,
       [meetingId],
     );

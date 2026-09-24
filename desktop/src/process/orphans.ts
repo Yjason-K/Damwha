@@ -319,7 +319,7 @@ export interface ReapDeps {
 /**
  * SIGTERM 뒤 SIGKILL까지의 유예. 기동을 붙잡는 시간이라 짧게 둔다 — 고아가 있을 때만(앱이 강제
  * 종료된 다음 실행) 든다. 일하던 `--once` 자식은 stage boundary까지 SIGTERM을 미루므로 이 안에 거의
- * 끝나지 않는다. 그 job은 attempts를 소모하는데, 살려 두면 새 worker와 같은 job을 두고 겹친다(§6.5 처분).
+ * 끝나지 않는다. 그 job은 회수되며 interruptions를 소모하는데, 살려 두면 새 worker와 같은 job을 두고 겹친다(§6.5 처분).
  */
 export const ORPHAN_TERM_GRACE_MS = 3_000;
 export const ORPHAN_POLL_MS = 100;

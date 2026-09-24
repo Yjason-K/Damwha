@@ -113,19 +113,26 @@ def seed_job(
     attempts=0,
     max_attempts=3,
     locked_minutes_ago=None,
+    interruptions=0,
+    max_interruptions=None,
 ):
     locked_at = (
         None if locked_minutes_ago is None else f"now() - interval '{locked_minutes_ago} minutes'"
     )
+    cols = "type, meeting_id, payload, status, locked_by, attempts, max_attempts, interruptions"
+    vals = "%s,%s,%s,%s,%s,%s,%s,%s"
+    params = [type, meeting_id, Jsonb(payload or {}), status, locked_by, attempts, max_attempts,
+              interruptions]
+    # None이면 컬럼을 빼 DEFAULT(026의 3)를 탄다 — 격자의 "한도 생략" 케이스가 그 값을 고정한다.
+    if max_interruptions is not None:
+        cols += ", max_interruptions"
+        vals += ",%s"
+        params.append(max_interruptions)
     sql = (
-        "INSERT INTO job(type, meeting_id, payload, status, locked_by, "
-        "attempts, max_attempts, locked_at) "
-        f"VALUES (%s,%s,%s,%s,%s,%s,%s,{locked_at or 'NULL'}) RETURNING id"
+        f"INSERT INTO job({cols}, locked_at) "
+        f"VALUES ({vals},{locked_at or 'NULL'}) RETURNING id"
     )
-    row = conn.execute(
-        sql, (type, meeting_id, Jsonb(payload or {}), status, locked_by, attempts, max_attempts)
-    ).fetchone()
-    return row["id"]
+    return conn.execute(sql, params).fetchone()["id"]
 
 
 def seed_speaker(conn, *, name="t", enrollment_status="ready", current_job_id=None):

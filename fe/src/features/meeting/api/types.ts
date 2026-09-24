@@ -185,8 +185,11 @@ export type SummaryGenerationStatus = {
 
 /** 재시도 대기 상태. job이 없으면 null. */
 export type RetryStatus = {
-  attempts: number;
+  /** 재시도 예산 소비량 = attempts − interruptions (Phase 6b-3 스펙 §4.1). */
+  failures: number;
   max_attempts: number;
+  /** 크래시·강제 종료·heartbeat 부재로 회수된 횟수. 재시도 예산과 따로 센다. */
+  interruptions: number;
   next_attempt_at: string | null;
   /**
    * 마지막 시도가 남긴 **job의** 오류. `MeetingStatusResponse.error`(회의의 오류)와 다른

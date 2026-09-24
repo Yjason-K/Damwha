@@ -134,10 +134,14 @@ function ProcessingBanner({
   // 마지막 시도가 남긴 **job의** 오류 코드 (스펙 §6 — "마지막 오류 요약"). meeting.error는
   // 재시도 대기 중에 null이라 대신 쓸 수 없다. 코드 한 토큰만 붙인다 — 배너는 한 줄이다.
   const retryErrorCode = status?.retry?.error?.code ?? null;
-  const stageLabel = status?.stage
-    ? (STAGE_LABELS[status.stage] ?? "처리 중")
-    : showRetry
-      ? `재시도 대기 · ${status!.retry!.attempts}/${status!.retry!.max_attempts}회차 · 약 ${Math.max(1, Math.round(retryMs! / 60000))}분 뒤${retryErrorCode ? ` · 마지막 오류: ${retryErrorCode}` : ""}`
+  const retryInterruptions = status?.retry?.interruptions ?? 0;
+  // 재시도 대기가 stage보다 앞선다 (Phase 6b-3 스펙 §6.2). requeue는 stage를 지우지 않으므로
+  // stage를 먼저 쓰면 전사 도중의 일시 실패가 재시도 대기 내내 "전사 중"으로 보였다.
+  // 다운로드 문구는 여전히 이긴다 — showRetry가 이미 그 조건을 담고 있다.
+  const stageLabel = showRetry
+    ? `재시도 대기 · ${status!.retry!.failures}/${status!.retry!.max_attempts}회차 · 약 ${Math.max(1, Math.round(retryMs! / 60000))}분 뒤${retryErrorCode ? ` · 마지막 오류: ${retryErrorCode}` : ""}${retryInterruptions > 0 ? ` · 중단 ${retryInterruptions}회` : ""}`
+    : status?.stage
+      ? (STAGE_LABELS[status.stage] ?? "처리 중")
       : "대기 중";
   const raw = status?.progress ?? null;
   const pct = raw == null ? null : Math.round(raw <= 1 ? raw * 100 : raw);
@@ -158,7 +162,8 @@ function ProcessingBanner({
       </span>
       <span className="text-[color:var(--text-secondary)]">
         {stageLabel}
-        {pct != null ? ` · ${pct}%` : ""}
+        {/* requeue는 progress를 지우지 않는다 — 재시도 대기 문구가 이겼으면 옛 진행률을 덧붙이지 않는다. */}
+        {!showRetry && pct != null ? ` · ${pct}%` : ""}
       </span>
       {/* 첫 처리는 모델을 받느라 한참 멈춘 것처럼 보인다 (Phase 4 스펙 §6.9, 완료 기준 P4-C6).
           이유를 말하지 않으면 멈춘 것으로 읽히고, 사람이 취소를 누른다. */}

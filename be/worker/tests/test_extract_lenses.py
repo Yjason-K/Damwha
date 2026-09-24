@@ -232,7 +232,7 @@ def test_mark_running_and_transient_requeue_leaves_run_running(conn, extraction_
         )
         == "running"
     )
-    assert db.requeue(conn, job["id"], "w") == 1
+    assert db.requeue(conn, job["id"], "w", {"code": "x", "kind": "TRANSIENT", "stage": None}) == 1
     assert (
         _one(conn, "SELECT status FROM lens_extraction_run WHERE id=%s", (ids["run_id"],))["status"]
         == "running"
