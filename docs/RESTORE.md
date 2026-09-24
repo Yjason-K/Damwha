@@ -46,6 +46,13 @@ cp -c -R "$D/snapshots/$SID/data" "$D/data"
 rm -f "$D/restore-journal.json"
 ```
 
+`restore-staging/`도 남아 있을 수 있다(중단된 앱 내 되돌리기가 쓰던 사본). 지우지 않아도 앱 동작에는
+지장이 없지만(다음 되돌리기가 새 이름을 쓴다), 공간이 아까우면 손으로 지운다:
+
+```bash
+rm -rf "$D/restore-staging"
+```
+
 ## 4. 이전 판을 설치하고 연다
 
 [릴리스 페이지](https://github.com/Yjason-K/Damwha/releases)에서 `fromBuild`의 판을 받아 설치한다.
@@ -57,17 +64,25 @@ rm -f "$D/restore-journal.json"
 
 ```bash
 mkdir -p "$D/storage-after-dump"
-# 덤프 뒤에 생긴 회의 폴더(meetings/mtg_N)를 옮긴다 — 어느 것이 뒤에 생겼는지 모르면 전부 옮긴다
-mv "$D/data/storage/meetings/"* "$D/storage-after-dump/" 2>/dev/null
+# 덤프 뒤에 생긴 회의 폴더(meetings/mtg_N)를 옮긴다 — 어느 것이 뒤에 생겼는지 모르면 전부 옮긴다.
+# stderr를 죽이지 않는다 — mv가 뭐라도 말하면 거기서 멈추고 원인을 본다. 빈 폴더면 그냥 건너뛴다.
+if [ -n "$(ls -A "$D/data/storage/meetings" 2>/dev/null)" ]; then
+  mv "$D/data/storage/meetings/"* "$D/storage-after-dump/"
+fi
 B=/Applications/Damwha.app/Contents/Resources/postgres/bin
 SQL="$HOME/damwha-restore-$(date +%Y%m%d%H%M%S).sql"
 # 먼저 SQL 파일을 만들고 성공했는지 확인한다. 파이프로 바로 넘기면 pg_restore가 도중에 실패해도 psql이 잘린 입력을
-# 커밋할 수 있다 — 그러면 스키마만 지워진 채로 남는다.
-{ echo "drop schema public cascade; create schema public authorization pg_database_owner; grant usage on schema public to public;";
-  "$B/pg_restore" -f - "$D/backups/<파일>.dump" || { echo "pg_restore 실패" >&2; exit 1; }; } > "$SQL" && echo "SQL 준비됨: $SQL"
-"$B/pg_ctl" -D "$D/data/postgres" -o "-c listen_addresses= -c unix_socket_directories=$D/run" -w start
-"$B/psql" -h "$D/run" -U damwha damwha -X -q -1 -v ON_ERROR_STOP=1 -f "$SQL"
+# 커밋할 수 있다 — 그러면 스키마만 지워진 채로 남는다. 괄호 서브셸을 쓴다 — 중괄호 `{ …; exit 1; }`는 pg_restore가
+# 실패하면 이 터미널 세션 자체를 닫는다.
+( echo "drop schema public cascade; create schema public authorization pg_database_owner; grant usage on schema public to public;";
+  "$B/pg_restore" -f - "$D/backups/<파일>.dump" || { echo "pg_restore 실패" >&2; exit 1; } ) > "$SQL" && echo "SQL 준비됨: $SQL"
+# 소켓 디렉터리는 공백 없는 임시 경로를 쓴다 — pg_ctl -o는 값을 공백으로 다시 쪼개므로, "Application Support"의
+# 공백이 든 $D/run을 그대로 주면 postgres가 "invalid argument"로 기동을 거부한다.
+SOCK="$(mktemp -d /tmp/damwha-restore.XXXXXX)"
+"$B/pg_ctl" -D "$D/data/postgres" -o "-c listen_addresses= -c unix_socket_directories=$SOCK" -w start
+"$B/psql" -h "$SOCK" -U damwha damwha -X -q -1 -v ON_ERROR_STOP=1 -f "$SQL"
 "$B/pg_ctl" -D "$D/data/postgres" -m fast stop
+rmdir "$SOCK"
 ```
 
 "SQL 준비됨"이 찍히지 않았으면 멈춘다. `psql -1 -f`는 파일 전체를 한 트랜잭션으로 돌려, 도중에 실패하면 아무것도 바뀌지 않는다. 이 방식은 데이터베이스와 짝 표시를 그대로 둔다
