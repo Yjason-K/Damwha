@@ -1598,6 +1598,7 @@ if (!app.requestSingleInstanceLock()) {
           appendSupervisorLog(`업데이트 확인 중 예외 — ${reasonOf(e)}`);
         });
       },
+      onRestore: () => undefined, // Task 8에서 배선
     });
     openWindow();
     await start();
