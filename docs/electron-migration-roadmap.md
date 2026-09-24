@@ -47,7 +47,9 @@ GitHub Release)으로만 배포한다 — `deploy/` 아래 Docker 이미지·`de
 `v<version>` 태그로 내던 셀프호스팅 설치는 중단이고, `v0.1.1`~`v0.2.3` 태그는 과거 기록으로만
 남는다. 공개 데모(`deploy/demo/`)는 그대로 유지한다. 저장소 "Latest"는 `desktop-v0.3.1`로
 넘어갔다 — 위 T11의 사고(발행이 웹 배포의 Latest를 빼앗은 것) 이후 처음으로, 이제는 되돌릴
-웹 배포가 없으므로 데스크톱 릴리스가 Latest여도 된다.
+웹 배포가 없으므로 데스크톱 릴리스가 Latest여도 된다. **같은 날 태그도 `v<version>`으로 되돌리기로
+했다** — 다음 릴리스부터 `v0.4.0` 형식이고, 이미 나간 `desktop-v0.3.0`·`desktop-v0.3.1`은 그대로 둔다
+(아래 Phase 6b 절, 6b-1 스펙 §3-2).
 
 ## 목표와 전제
 
@@ -376,7 +378,9 @@ DB(`damwha_pgdata`)와 `be/storage`를 새 앱으로 옮길 필요가 없다고 
 `deploy/release.sh`의 셀프호스팅 웹 배포가 이미 쓰고 있어서(`v0.1.1`~`v0.2.3`, 자산은 tarball과
 wheel이며 DMG가 없다) `latest`가 제품을 가리지 못한다. 웹 릴리스를 나중에 내면 데스크톱 앱이
 "새 버전이 있어요"라며 tarball을 가리킨다. **데스크톱 태그는 `desktop-v<version>`으로 가르고**
-목록에서 그 접두사로 거른다. 6a 스펙 리뷰가 잡아낸 것이다(6a 스펙 §4·§14). electron-updater의 자동 다운로드·설치는 넣지 않는다:
+목록에서 그 접두사로 거른다. 6a 스펙 리뷰가 잡아낸 것이다(6a 스펙 §4·§14). **2026-09-23에 뒤집혔다**
+— 웹 배포를 걷어내 구분의 이유가 사라졌고 태그를 `v<version>`으로 되돌렸다. 조회는 `v*`와 옛
+`desktop-v*`를 함께 읽고 최대를 고른다(6b-1 스펙 §3-2). electron-updater의 자동 다운로드·설치는 넣지 않는다:
 번들이 1.3 GB Python 트리를 포함한 수 GB라 delta 없이는 매 판올림이 전체 재다운로드다.
 원천을 손으로 쓰는 `latest.json`이 아니라 Releases API로 고른 이유는 **릴리스 자체가 진실의
 원천이라 드리프트가 없기** 때문이다(태그·DMG·노트가 한 몸). 저장소가 public이라 비인증 60회/시간
@@ -483,8 +487,20 @@ C11은 깨끗한 설치 경로 한정이고 6a 이전 빌드 이력이 남은 �
 - 이전 버전에서 업데이트해도 회의 기록과 설정 유지.
 - 업데이트 실패 시 정의된 복구 절차로 데이터와 실행 상태 복구 가능.
 
-**상태: 미착수.** 6a가 병합된 뒤 착수한다 — 6a의 산출물(서명·공증된 v1이 두 번째 맥에 설치된
-상태)이 이 Phase의 선행 조건이다.
+**분할 (2026-09-23).** 6b-1(새 버전 알림)·6b-2(백업·복원·실패 복구)·6b-3(`attempts` 분리)으로
+나눈다. 알림은 나머지 둘과 독립이고 0.3.0 설치자에게 0.3.1을 알릴 길이 지금 없어 먼저 낸다.
+6b-3의 마이그레이션이 v1→v2 검증의 시험체라는 판단은 그대로다. **태그를 `v<version>`으로
+되돌린다** — 웹 배포 퇴역(PR #28)으로 `desktop-v` 구분의 이유가 사라졌다. 이미 나간
+`desktop-v0.3.0`·`desktop-v0.3.1`은 그대로 두고, 조회는 `v*`와 옛 `desktop-v*`를 함께 읽는다.
+`/releases/latest`에는 여전히 기대지 않는다 — Latest는 사람이 손으로 바꿀 수 있는 값이다.
+
+**상태 (2026-09-23): 6b-1 완료 — 구현 9개 Task·리뷰 clean, 변이 17/17, packaged 실측 C1~C10 전부 충족.**
+스펙은 [2026-09-23-electron-phase-6b-update-notice-design.md](superpowers/specs/2026-09-23-electron-phase-6b-update-notice-design.md),
+결과는 [2026-09-23-electron-phase-6b-update-notice-results.md](superpowers/reports/2026-09-23-electron-phase-6b-update-notice-results.md),
+브랜치는 `feat/electron-migration-phase-6b-update-notice`. 앱은 GitHub Releases에서 `v*`·옛 `desktop-v*` 중
+최대를 골라 네이티브 대화상자로 알리고(자동: packaged에서 붙음 뒤 1회 + 24시간, 수동: 앱 메뉴 "업데이트 확인…"),
+릴리스 태그는 다음 판부터 `v<version>`이다. 이 기능은 그것이 담긴 첫 릴리스부터 작동한다 — 0.3.x 사용자는
+한 번은 손으로 받아야 한다. 6b-2·6b-3은 미착수.
 
 서명 관련 위험 검증은 Phase 0부터 진행하며, 배포 검증을 6a에서, 업데이트 검증을 6b에서 완성한다.
 

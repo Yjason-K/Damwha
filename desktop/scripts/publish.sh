@@ -1,7 +1,7 @@
 #!/bin/bash
 # desktop/scripts/publish.sh
 #
-# 공증·스테이플까지 끝난 DMG를 GitHub Release `desktop-v<version>`으로 낸다 (Phase 6a 스펙 §7.1).
+# 공증·스테이플까지 끝난 DMG를 GitHub Release `v<version>`으로 낸다 (Phase 6a 스펙 §7.1).
 # 빌드(`pnpm run package:release`)와 따로 둔다 — 되돌리기 어려운 공개 동작을 빌드에 숨기지 않는다
 # (Task 11 브리프).
 #
@@ -9,14 +9,13 @@
 #
 # gh를 부르기 전에 넷을 본다. 하나라도 어긋나면 아무것도 내지 않고 멈춘다.
 #   1. 작업 트리가 깨끗하다(추적 안 된 파일 포함).
-#   2. 태그 `desktop-v<version>`이 HEAD를 가리킨다 — `package.mjs --release`가 빌드 때 본 조건과 같다.
+#   2. 태그 `v<version>`이 HEAD를 가리킨다 — `package.mjs --release`가 빌드 때 본 조건과 같다.
 #   3. 그 태그가 원격(origin)에도 같은 커밋으로 있다. 없으면 `--verify-tag`가 발행을 거절한다
 #      (Ruling R22 — HEAD가 원격에 없으면 `--target`도 해석되지 않는다). 태그 푸시는 이 스크립트가
 #      하지 않는다. 그것도 공개 동작이라 사람이 먼저 한다.
 #   4. `out/Damwha-<version>-arm64.dmg`와 그 `.sha256`이 있고 해시가 맞는다.
 #
-# **정책(2026-09-23~): Damwha는 데스크톱 앱으로만 배포한다.** 셀프호스팅 웹 배포(`v<version>`
-# 태그, `deploy/release.sh`)는 걷어냈다 — `v*` 릴리스는 과거 기록으로만 남는다. 그래서 이제
+# **정책(2026-09-23~): Damwha는 데스크톱 앱으로만 배포한다.** 셀프호스팅 웹 배포의 `v0.1.1`~`v0.2.3`은 과거 기록으로만 남고, 2026-09-23부터 데스크톱이 `v<version>` 태그를 쓴다(lib/release-tag.mjs). 그래서 이제
 # 데스크톱 릴리스를 저장소의 "Latest"로 낸다(`--latest`). 발행 뒤에는 태그 없는 `gh release view`
 # (= 저장소 Latest)가 방금 낸 태그와 같은지 다시 본다 — 다르면 되돌리는 명령을 출력하고 실패한다.
 # **자동으로 고치지 않는다** — Latest를 바꾸는 것도 공개 상태를 바꾸는 일이라 사람이 보고 한다.
@@ -51,7 +50,7 @@ done
 command -v gh >/dev/null || die "gh가 없다"
 
 VERSION="$(node -p 'require(process.argv[1]).version' "$DESKTOP/package.json")"
-TAG="desktop-v$VERSION"
+TAG="v$VERSION"
 DMG="Damwha-$VERSION-arm64.dmg"
 ROOT="$(git -C "$DESKTOP" rev-parse --show-toplevel)"
 HEAD_SHA="$(git -C "$ROOT" rev-parse HEAD)"
