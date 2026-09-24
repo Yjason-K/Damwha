@@ -930,6 +930,8 @@ def test_requeue_for_shutdown_leaves_interruptions_alone(conn):
 
 `be/worker/tests/test_summarize_meeting.py`의 `test_reaper_fails_summary_row_when_worker_lock_expires`: `seed_job`에 `interruptions=2`를 더한다.
 
+`be/worker/tests/test_db_lifecycle.py:432`의 `test_reap_own_orphans_fails_a_job_that_has_no_retries_left`: 이름을 `test_reap_own_orphans_fails_on_the_third_interruption`으로 바꾸고 `seed_job`에 `interruptions=2`를 더한다(attempts=5, max_attempts=5 그대로). 이것을 빠뜨리면 새 규칙에서 `(1, 0)`이 나와 Task 3 커밋이 빨간불이다(계획 검증 #2).
+
 - [ ] **Step 7: worker 전체를 돌린다**
 
 Run: `pnpm worker:test`
@@ -953,7 +955,7 @@ graphify update .
 - Modify: `be/worker/damwha_worker/db/queue.py:79-93` (`requeue`)
 - Modify: `be/worker/damwha_worker/jobs.py:135-155` (`on_failure`·`_requeue_or`) 및 `_requeue_or` 호출처 넷(`:192`, `:217`, `:267`, `:289`)
 - Modify: `be/worker/tests/test_reap_grid.py` (끝에 `retry` 격자)
-- Modify: `be/worker/tests/test_db_lifecycle.py:54-76`, `be/worker/tests/test_worker_loop.py:71-80`
+- Modify: `be/worker/tests/test_db_lifecycle.py:54-76`·`:296`·`:308`, `be/worker/tests/test_extract_lenses.py:235`, `be/worker/tests/test_worker_loop.py:71-80`
 
 **Interfaces:**
 - Consumes: Task 3의 `seed_job(interruptions=…)`, grid의 `retry` 배열.
@@ -987,7 +989,7 @@ def test_retry_grid_failures_and_backoff(conn, c):
 
 (`next_attempt_at`과 `updated_at`은 같은 문장의 `now()`라 DB 시각 기준 간격이 정확히 백오프다.)
 
-`be/worker/tests/test_db_lifecycle.py`의 `test_requeue_clears_lock`·`test_requeue_sets_delay_from_claimed_attempt`는 `db.requeue(conn, j["id"], "w1")` → `db.requeue(conn, j["id"], "w1", {"code": "x", "kind": "TRANSIENT", "stage": None})`로. 그리고:
+기존 `db.requeue` 호출 다섯에 넷째 인자 `{"code": "x", "kind": "TRANSIENT", "stage": None}`를 더한다 — 앞 세 인자(job id 식·worker id)는 그대로: `test_db_lifecycle.py:58`(`test_requeue_clears_lock`), `:70`(`test_requeue_sets_delay_from_claimed_attempt`), `:296`(`test_requeue_backs_off_thirty_seconds_on_the_first_retry`), `:308`(`test_requeue_backoff_is_capped_at_fifteen_minutes`), `test_extract_lenses.py:235`. `grep -rn "db.requeue(" be/worker/tests`로 다섯 모두 바뀐 것을 확인한다(계획 검증 #1). 그리고:
 
 ```python
 def test_requeue_stores_the_error_it_retries_for(conn):
@@ -1125,7 +1127,20 @@ def _requeue_or(conn, job, ctx, error, *, retry: bool, close) -> str:
     return close()
 ```
 
-호출처 넷(`ProcessMeetingHandler`·`EnrollSpeakerHandler`·`IndexMeetingHandler`(:267)·`SummarizeMeetingHandler`(:289))은 모두 `on_failure(self, conn, job, ctx, error, *, retry)` 안이다. 각각 `_requeue_or(conn, job, ctx, retry=…` → `_requeue_or(conn, job, ctx, error, retry=…`로 바꾼다. `grep -n "_requeue_or(" be/worker/damwha_worker/jobs.py`로 넷 모두 바뀐 것을 확인한다. `grep -rn "db.requeue(\|\.requeue(" be/worker/damwha_worker be/worker/tests`에 인자 셋짜리 호출이 남지 않아야 한다.
+호출처 넷(`ProcessMeetingHandler`(:192)·`EnrollSpeakerHandler`(:217)·`ExtractLensesHandler`(:267)·`SummarizeMeetingHandler`(:289))은 모두 `on_failure(self, conn, job, ctx, error, *, retry)` 안이다. `IndexMeetingHandler`는 기반 클래스의 `on_failure`를 물려받으므로 위 기반 수정으로 끝난다. 한 줄짜리 셋은 `_requeue_or(conn, job, ctx, retry=…` → `_requeue_or(conn, job, ctx, error, retry=…`로, `SummarizeMeetingHandler`의 여러 줄 호출은 `ctx,` 다음 줄에 `error,`를 넣는다:
+
+```python
+        return _requeue_or(
+            conn,
+            job,
+            ctx,
+            error,
+            retry=retry,
+            close=lambda: db.fail_summary(conn, job["id"], ctx.worker_id, error),
+        )
+```
+
+ `grep -n "_requeue_or(" be/worker/damwha_worker/jobs.py`로 넷 모두 바뀐 것을 확인한다. `grep -rn "db.requeue(\|\.requeue(" be/worker/damwha_worker be/worker/tests`에 인자 셋짜리 호출이 남지 않아야 한다.
 
 - [ ] **Step 6: 통과를 확인한다**
 
@@ -1136,7 +1151,8 @@ Expected: PASS.
 
 ```bash
 git add be/worker/damwha_worker/dispatch.py be/worker/damwha_worker/db/queue.py be/worker/damwha_worker/jobs.py \
-  be/worker/tests/test_reap_grid.py be/worker/tests/test_db_lifecycle.py be/worker/tests/test_worker_loop.py
+  be/worker/tests/test_reap_grid.py be/worker/tests/test_db_lifecycle.py be/worker/tests/test_worker_loop.py \
+  be/worker/tests/test_extract_lenses.py
 git commit -m "feat(worker): 재시도 판정·백오프를 attempts − interruptions로, requeue가 마지막 오류를 남긴다"
 graphify update .
 ```
@@ -1320,7 +1336,7 @@ test("앞 시도의 stage가 남아 있어도 재시도 대기가 이긴다 (스
 Run: `pnpm --filter damwha-fe exec vitest run src/pages/meeting.test.tsx`
 Expected: FAIL — "N/5회차"가 `undefined/5회차`, 중단 문구 없음, stage 케이스는 "전사" 라벨이 이김. (`pnpm fe exec tsc --noEmit` 대신 vitest가 타입 오류로 실패할 수도 있다 — 어느 쪽이든 빨간불.)
 
-- [ ] **Step 4: 배너를 고친다** — `fe/src/pages/meeting.tsx`. `retryErrorCode` 정의 다음부터 `stageLabel`까지를 바꾼다:
+- [ ] **Step 4: 배너를 고친다** — `fe/src/pages/meeting.tsx`. `const retryErrorCode = …` 선언을 **포함해** `stageLabel` 선언의 마지막 세미콜론까지를 아래로 바꾼다(선언이 두 번 생기지 않게 — 계획 검증 #3):
 
 ```tsx
   const retryErrorCode = status?.retry?.error?.code ?? null;
@@ -1444,29 +1460,29 @@ Expected: 셋 다 exit 0. 출력에서 be·fe 테스트 수가 0이 아닌지 �
 
 | # | 파일·변이 | 돌릴 것 |
 | --- | --- | --- |
-| M1 | `jobs.repository.ts` `reclaimOrphaned`의 `requeued` WHERE `interruptions + 1 < max_interruptions` → `<=` | `jest test/reap-grid.spec.ts` |
-| M2 | `reapStale`의 같은 자리 `<` → `<=` | 같음 |
-| M3 | `queue.py` `_REAP_SQL`의 같은 자리 `<` → `<=` | `pytest tests/test_reap_grid.py` |
-| M4a | `reclaimOrphaned` `requeued`의 `interruptions = interruptions + 1` 삭제 | `jest test/reap-grid.spec.ts test/reclaim.spec.ts` |
-| M4b | `reapStale` `requeued`의 같은 삭제 | `jest test/reap-grid.spec.ts test/reaper.spec.ts` |
-| M4c | `_REAP_SQL` `requeued`의 같은 삭제 | `pytest tests/test_reap_grid.py tests/test_db_lifecycle.py` |
-| M5a | `reclaimOrphaned` 판정 둘을 `attempts < max_attempts`/`>=`로 되돌림(`orphaned`에 `attempts, max_attempts`를 다시 SELECT) | `jest test/reap-grid.spec.ts` |
-| M5b | `reapStale` 같은 되돌림 | 같음 |
-| M5c | `_REAP_SQL` 같은 되돌림 | `pytest tests/test_reap_grid.py` |
-| M6 | `failed_interrupted`(TS)의 `interruptions = j.interruptions + 1` 삭제 | `jest test/reap-grid.spec.ts` |
-| M7 | `dispatch.py` 재시도 판정 `spent < …` → `job["attempts"] < …` | `pytest tests/test_worker_loop.py` |
-| M8 | `requeue` 백오프의 `- interruptions` 삭제 | `pytest tests/test_reap_grid.py` |
-| M9 | `requeue_for_shutdown`에 `interruptions = greatest(interruptions - 1, 0),` 추가 | `pytest tests/test_db_lifecycle.py` |
-| M10 | `findStatus`의 `'failures', j.attempts - j.interruptions` → `'failures', j.attempts` | `jest test/status-retry.spec.ts` |
-| M11 | 배너의 `retryInterruptions > 0 ?` 조건 제거(항상 붙임) | `vitest run src/pages/meeting.test.tsx` |
-| M12 | `026`의 `DEFAULT 3` → `DEFAULT 5` | `jest test/migration.spec.ts test/reap-grid.spec.ts` |
-| M13a | `reclaimOrphaned` `fail_meetings`의 `AND m.current_job_id = f.id` 삭제 | `jest test/reclaim.spec.ts` |
-| M13b | `reapStale` 같은 삭제 | `jest test/reaper.spec.ts` |
-| M13c | `_REAP_SQL` 같은 삭제 | `pytest tests/test_db_lifecycle.py` |
-| M14 | 배너 삼항을 stage 먼저로 되돌림 | `vitest run src/pages/meeting.test.tsx` |
-| M15 | `requeue`의 `error=%s,` 삭제(인자 튜플도 맞춘다) | `pytest tests/test_db_lifecycle.py tests/test_worker_loop.py` |
+| M1 | `jobs.repository.ts` `reclaimOrphaned`의 `requeued` WHERE `interruptions + 1 < max_interruptions` → `<=` | `pnpm --filter damwha-be exec jest --runInBand test/reap-grid.spec.ts` |
+| M2 | `reapStale`의 같은 자리 `<` → `<=` | `pnpm --filter damwha-be exec jest --runInBand test/reap-grid.spec.ts` |
+| M3 | `queue.py` `_REAP_SQL`의 같은 자리 `<` → `<=` | `uv run --directory be/worker pytest tests/test_reap_grid.py` |
+| M4a | `reclaimOrphaned` `requeued`의 `interruptions = interruptions + 1` 삭제 | `pnpm --filter damwha-be exec jest --runInBand test/reap-grid.spec.ts test/reclaim.spec.ts` |
+| M4b | `reapStale` `requeued`의 같은 삭제 | `pnpm --filter damwha-be exec jest --runInBand test/reap-grid.spec.ts test/reaper.spec.ts` |
+| M4c | `_REAP_SQL` `requeued`의 같은 삭제 | `uv run --directory be/worker pytest tests/test_reap_grid.py tests/test_db_lifecycle.py` |
+| M5a | `reclaimOrphaned` 판정 둘을 `attempts < max_attempts`/`>=`로 되돌림(`orphaned`에 `attempts, max_attempts`를 다시 SELECT) | `pnpm --filter damwha-be exec jest --runInBand test/reap-grid.spec.ts` |
+| M5b | `reapStale` 같은 되돌림 | `pnpm --filter damwha-be exec jest --runInBand test/reap-grid.spec.ts` |
+| M5c | `_REAP_SQL` 같은 되돌림 | `uv run --directory be/worker pytest tests/test_reap_grid.py` |
+| M6 | `failed_interrupted`(TS)의 `interruptions = j.interruptions + 1` 삭제 | `pnpm --filter damwha-be exec jest --runInBand test/reap-grid.spec.ts` |
+| M7 | `dispatch.py` 재시도 판정 `spent < …` → `job["attempts"] < …` | `uv run --directory be/worker pytest tests/test_worker_loop.py` |
+| M8 | `requeue` 백오프의 `- interruptions` 삭제 | `uv run --directory be/worker pytest tests/test_reap_grid.py` |
+| M9 | `requeue_for_shutdown`에 `interruptions = greatest(interruptions - 1, 0),` 추가 | `uv run --directory be/worker pytest tests/test_db_lifecycle.py` |
+| M10 | `findStatus`의 `'failures', j.attempts - j.interruptions` → `'failures', j.attempts` | `pnpm --filter damwha-be exec jest --runInBand test/status-retry.spec.ts` |
+| M11 | 배너의 `retryInterruptions > 0 ?` 조건 제거(항상 붙임) | `pnpm --filter damwha-fe exec vitest run src/pages/meeting.test.tsx` |
+| M12 | `026`의 `DEFAULT 3` → `DEFAULT 5` | `pnpm --filter damwha-be exec jest --runInBand test/migration.spec.ts test/reap-grid.spec.ts` |
+| M13a | `reclaimOrphaned` `fail_meetings`의 `AND m.current_job_id = f.id` 삭제 | `pnpm --filter damwha-be exec jest --runInBand test/reclaim.spec.ts` |
+| M13b | `reapStale` 같은 삭제 | `pnpm --filter damwha-be exec jest --runInBand test/reaper.spec.ts` |
+| M13c | `_REAP_SQL` 같은 삭제 | `uv run --directory be/worker pytest tests/test_db_lifecycle.py` |
+| M14 | 배너 삼항을 stage 먼저로 되돌림 | `pnpm --filter damwha-fe exec vitest run src/pages/meeting.test.tsx` |
+| M15 | `requeue`의 `error=%s,` 삭제(인자 튜플도 맞춘다) | `uv run --directory be/worker pytest tests/test_db_lifecycle.py tests/test_worker_loop.py` |
 
-변이가 초록이면 **테스트 결손이다** — 그 변이를 잡는 테스트를 더해 커밋한 뒤 다시 돌린다(규칙은 고치지 않는다). 동치 변이로 판정하면 사유를 적는다.
+명령은 저장소 루트에서 표 그대로 돌린다. **"빨간불"은 명령의 exit≠0이 아니라 표에 적힌 테스트가 단언 실패로 떨어진 것**이다 — 도구 오류·컨테이너 기동 실패·수집 0건은 빨간불로 치지 않고 다시 돌린다(계획 검증 #6). 변이가 초록이면 **테스트 결손이다** — 그 변이를 잡는 테스트를 더해 커밋한 뒤 다시 돌린다(규칙은 고치지 않는다). 동치 변이로 판정하면 사유를 적는다.
 
 - [ ] **Step 3: 결과 문서를 쓴다** — `docs/superpowers/reports/2026-09-24-electron-phase-6b-attempts-split-results.md`
 
@@ -1523,7 +1539,8 @@ SELECT count(*) FROM information_schema.columns
 SELECT id, status, processing_version, audio_key FROM meeting ORDER BY id;
 SELECT meeting_id, md5(string_agg(id || ':' || coalesce(text,'') || ':' || coalesce(speaker_id,''), '|' ORDER BY id))
   FROM utterance GROUP BY meeting_id ORDER BY meeting_id;
-SELECT meeting_id, md5(content::text) FROM meeting_summary ORDER BY meeting_id;   -- 컬럼 이름은 \d meeting_summary로 확인
+SELECT meeting_id, md5(jsonb_build_object('topics', topics, 'segments', segments)::text)
+  FROM meeting_summary ORDER BY meeting_id;                                      -- 017: topics·segments
 SELECT id, name FROM speaker ORDER BY id;
 SELECT value FROM app_setting WHERE key='processing_defaults';
 SELECT id, type, status, attempts, max_attempts FROM job ORDER BY id;
@@ -1539,7 +1556,7 @@ pgrep -fl "damwha_worker.*--once"
 
 회차마다 `SELECT status, attempts, interruptions, error->>'code' FROM job WHERE id='<id>'`를 kill 직후·재claim 뒤 두 번 기록. 2b는 `pkill -9 -f "Damwha.app/Contents/Resources/python"` 뒤 `pkill -9 -f "Damwha.app/Contents/MacOS/Damwha"` — **postgres에는 보내지 않는다.**
 - [ ] **Step 4: C3** — 스펙 §8.2-3. 할 수 없으면 생략 사유를 기록.
-- [ ] **Step 5: C4 되돌림 거부** — 스펙 §8.2-4. `ls backups` 전후 동일, `supervisor.log`의 `migrationUnknown` 줄, 새 판 재설치 뒤 정상 기동.
+- [ ] **Step 5: C4 되돌림 거부** — 스펙 §8.2-4. **판을 바꿀 때마다** ⌘Q로 끄고 Step 1-1의 `pgrep`이 빈 것을 확인한 뒤에 `/Applications/Damwha.app`을 바꾸고 띄운다 — 단일 인스턴스 잠금(`main.ts:1532`)이 살아 있는 옛 판에 초점만 넘기면 게이트가 아예 돌지 않는다(계획 검증 #5). 기록: `ls "$HOME/Library/Application Support/Damwha/backups"` 전후 동일, 0.3.1 기동 **뒤에 쓰인** `supervisor.log` 줄 중 `더 새 버전의 앱이 이 데이터를 업데이트했어요 (026_job_interruptions.sql).`(식별자 `migrationUnknown`은 로그에 찍히지 않는다 — `causes.ts:252`), 새 판 재설치 뒤 정상 기동.
 - [ ] **Step 6: 정리** — 스펙 §8.2-5. 사용자에게 묻고 그대로 한다.
 - [ ] **Step 7: 결과 문서 §2 판정표** — P6b3-C1~C8 각 행에 충족/미충족/한계와 근거(명령 출력 인용·로그 줄·시각). 로드맵의 Phase 6b 절에 6b-3 상태 문단(스펙·결과·브랜치 링크, "6b-3 먼저, 6b-2는 그 병합 뒤" 결정)을 더한다.
 
@@ -1556,6 +1573,20 @@ git commit -m "docs(phase6b): 6b-3 packaged 실측 결과를 기록하고 로드
 - **자리표시자.** 결과 문서의 표 행은 실행 결과로 채우라는 지시이고 추정값을 적지 말라는 제약이다.
 - **이름 일치.** `failedInterrupted`(Task 2·7), `failures()`(Task 4), `requeue(conn, job_id, worker_id, error)`(Task 4 전역), `seed_job(interruptions=, max_interruptions=)`(Task 3·4), grid 키 `reap`/`retry`(Task 2·3·4), `retry.failures`/`retry.interruptions`(Task 5·6).
 
-## 계획 검증 기록 (코덱스)
+## 계획 검증 기록 (코덱스, 2026-09-24)
 
-(검증 뒤 채운다.)
+열린 탐색 과제로 넘겼다(판정 요청 아님): 계획의 코드가 실제 스키마·코드에서 돌아가는지, 빠진 호출처·테스트,
+명령, 격자 손계산, Task 순서의 중간 빨간불, 변이가 정말 잡히는지, 실측 명령. 8건을 냈고 전부 코드에서
+직접 확인했다. 격자 값·스키마(`speaker.enrollment_status='provisional'`, 요약·렌즈 행의 fixture 정리)는
+문제없다고 했다.
+
+| # | 지적 | 판정 | 반영 |
+| --- | --- | --- | --- |
+| 1 | P1 — `db.requeue` 세 인자 호출이 `test_db_lifecycle.py:296`·`:308`, `test_extract_lenses.py:235`에 더 있고 Task 4의 `git add`에 빠짐 | 유효 | Task 4 Files·Step 1·커밋에 다섯 호출처 명시 |
+| 2 | P1 — `test_reap_own_orphans_fails_a_job_that_has_no_retries_left`(`:432`)가 새 규칙에서 빨간불 | 유효 | Task 3 Step 6에 이름·시드 변경 |
+| 3 | P1 — 배너 교체 범위가 `retryErrorCode` 선언을 두 번 만듦 | 유효 | Task 6 Step 4 범위를 "선언 포함"으로 |
+| 4 | P1 — `meeting_summary`에 `content` 컬럼이 없음(017: `topics`·`segments`) | 유효 | Task 9 기준선 SQL 교체 |
+| 5 | P1 — C4에서 판을 바꿀 때 종료 경계가 없어 단일 인스턴스 잠금이 게이트를 건너뛰게 함 | 유효 | Task 9 Step 5에 ⌘Q·`pgrep` 경계 |
+| 6 | P1 — 변이 표의 `jest`/`pytest`/`vitest` 맨 명령은 루트에서 안 돈다 | 유효 | 전 행을 루트 명령으로, "빨간불 = 단언 실패" 정의 |
+| 7 | P2 — 로그에 `migrationUnknown` 식별자가 없고 `backups` 경로가 상대 | 유효 | 실제 한국어 문구와 절대 경로 |
+| 8 | P2 — `:267`은 `IndexMeetingHandler`가 아니라 `ExtractLensesHandler` | 유효 | 핸들러 이름 정정, 여러 줄 호출 코드 명시 |
