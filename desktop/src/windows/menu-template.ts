@@ -17,15 +17,22 @@ export interface MenuHandlers {
   onShowStatus(): void;
   /** 새 버전을 지금 확인한다 (update/update-flow.ts의 manualCheck). */
   onCheckForUpdates(): void;
+  /** 업데이트 전으로 되돌리기 (Phase 6b-2 스펙 §7.1). */
+  onRestore(): void;
 }
 
-export function buildMenuTemplate(handlers: MenuHandlers, appName: string): MenuItemConstructorOptions[] {
+export function buildMenuTemplate(
+  handlers: MenuHandlers,
+  appName: string,
+  opts: { restoreEnabled: boolean } = { restoreEnabled: false },
+): MenuItemConstructorOptions[] {
   return [
     {
       label: appName,
       submenu: [
         { role: "about" },
         { label: "업데이트 확인…", click: () => handlers.onCheckForUpdates() },
+        { label: "업데이트 전으로 되돌리기…", enabled: opts.restoreEnabled, click: () => handlers.onRestore() },
         { type: "separator" },
         { role: "services" },
         { type: "separator" },

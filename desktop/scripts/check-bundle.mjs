@@ -189,6 +189,20 @@ for (const needle of [repo, path.join(process.env.HOME ?? "", ".pnpm-store"), "/
 // 5. SPA가 API 트리에 들어갔다
 check("SPA is inside the api tree", fs.existsSync(path.join(apiDir, "dist", "public", "index.html")));
 
+// Phase 6b-2 스펙 §4 — 판올림 판정의 빌드 식별자. 없으면 packaged 앱이 기동을 거부한다(buildInfoMissing).
+const buildInfoPath = path.join(contents, "Resources", "build-info.json");
+let buildInfo = null;
+try {
+  buildInfo = JSON.parse(fs.readFileSync(buildInfoPath, "utf8"));
+} catch {
+  buildInfo = null;
+}
+check(
+  "Resources/build-info.json carries this version and a 12-char commit",
+  buildInfo !== null && buildInfo.version === pkg.version && /^[0-9a-f]{12}(-dirty)?$/.test(String(buildInfo.commit)),
+  JSON.stringify(buildInfo),
+);
+
 // 6. 마이크 사용 설명이 Info.plist에 있다
 let usage = "";
 try {

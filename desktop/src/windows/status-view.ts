@@ -1,4 +1,4 @@
-import { CAUSES } from "../diagnostics/causes";
+import { CAUSES, causeIn } from "../diagnostics/causes";
 import {
   HF_GATE_NOT_ACCEPTED_CODE,
   HF_TOKEN_INVALID_CODE,
@@ -103,7 +103,13 @@ export interface ShellInput {
   logPathOf(id: ServiceId | "supervisor"): string;
   externalDatabase?: boolean;
   configWarning?: string | null;
+  /** 지금 "업데이트 전으로 되돌리기" 메뉴가 실제로 눌리는가 (Phase 6b-2 스펙 §7.1). */
+  restoreAvailable?: boolean;
 }
+
+/** 업데이트와 관계된 실패에서, 되돌리기가 실제로 가능할 때만 덧붙인다 (Phase 6b-2 스펙 §7.1). */
+export const RESTORE_MENU_NOTE = "앱 메뉴 → 업데이트 전으로 되돌리기…로 업데이트 전 데이터로 돌아갈 수 있어요.";
+const RESTORE_RELEVANT = new Set(["migrationFailed", "migrationsStillPending"]);
 
 /** 감독자의 지금 상태를 셸 화면 한 장으로 접는다. 실패가 있으면 그 원인을 머리에 세운다. */
 export function shellStatusFrom(input: ShellInput): ShellStatus {
@@ -118,7 +124,12 @@ export function shellStatusFrom(input: ShellInput): ShellStatus {
   if (failed === undefined) return { state: "starting", detail: lines.join("\n") };
   // Phase 2의 db-unreachable 화면("Docker Desktop이 실행 중인지 확인해 주세요")은 없다 — 앱이 Docker를 부르지 않는다.
   // 어떤 실패든 일반 실패 화면이 원인과 해결 줄을 그대로 보인다.
-  return { state: "failed", detail: lines.join("\n"), logPath: input.logPathOf(failed.id) };
+  const failedCause = failed.detail === undefined ? undefined : causeIn(failed.detail);
+  const note =
+    input.restoreAvailable === true && failedCause !== undefined && RESTORE_RELEVANT.has(failedCause)
+      ? [RESTORE_MENU_NOTE]
+      : [];
+  return { state: "failed", detail: [...lines, ...note].join("\n"), logPath: input.logPathOf(failed.id) };
 }
 
 /**

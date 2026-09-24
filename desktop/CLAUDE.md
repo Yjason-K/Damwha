@@ -136,6 +136,14 @@ Developer ID로 서명하고 공증까지 마친 DMG로 배포한다. ad-hoc은 
   뒤로 민다.
 - 새 버전 대화상자는 `cancelId: 1` — 빼면 Escape가 "다운로드 페이지 열기"를 고를 수 있다.
 
+## 업데이트 전 스냅샷·되돌리기 (Phase 6b-2)
+
+- 데이터 가드(`app/data-guard.ts`의 `runDataGuard`)는 첫 기동에서 `reapBeforeStart` 뒤 명시적으로(보류 대화상자를 띄운다), "다시 시도"·상태 창 재시작에서는 postgres 어댑터의 `preLaunch` 훅(`launch()` 맨 앞)으로 돈다. 저널을 잇는 것은 첫 기동의 명시 호출(`journal: "advance"`)뿐이다 — 훅은 `journal: "refuse"`로 돌아, 저널을 만나면 아무것도 건드리지 않고 `restorePending`(`manual`)으로 거부한다. 자동 재시작은 API·worker가 떠 있는 동안에도 오므로 거기서 `data/`를 바꾸면 안 된다.
+- 스냅샷은 packaged에서만, 빌드 식별자(`Resources/build-info.json` vs `data/.damwha-generation`)가 다를 때만 뜬다. 사본은 `/bin/cp -c -R`(`process/clone.ts`) — Node `fs.cp`는 macOS에서 clone하지 않는다.
+- 되돌리기: 메뉴 "업데이트 전으로 되돌리기…" → 종료 흐름 `commit`이 `restore-journal.json`을 쓰고 → relaunch → 데이터 가드가 `data/` ↔ `restore-staging/<rid>`를 교체 → 보류 대화상자. 실측용 env `DAMWHA_RESTORE_PAUSE_AFTER_STEP`.
+- 메뉴가 안 뜰 때의 수동 절차는 [`docs/RESTORE.md`](../docs/RESTORE.md).
+- 스펙: [Phase 6b-2](../docs/superpowers/specs/2026-09-24-electron-phase-6b-restore-design.md).
+
 ## 디스크 부족 — 진입점 셋 (Phase 6a)
 
 디스크가 부족할 때 원인·복구 안내가 화면에 뜨는 경로가 셋이다. 문구 원천은
@@ -179,8 +187,13 @@ Developer ID로 서명하고 공증까지 마친 DMG로 배포한다. ad-hoc은 
 | --- | --- |
 | `data/postgres/` | 내장 클러스터 (PGDATA) |
 | `data/storage/` | 그 클러스터와 짝인 파일 저장소. `.damwha-cluster` 마커가 짝을 증명한다 — 지우거나 옮기면 앱이 기동을 거부한다 |
+| `data/.damwha-generation` | 이 `data/`를 마지막으로 연 packaged 빌드 식별자(Phase 6b-2). 되돌리기가 `data/`와 함께 되감는다 |
 | `run/` | 소켓 디렉터리(0700). TCP는 열지 않는다 |
 | `backups/` | 데이터가 있는 DB에 마이그레이션을 적용하기 전의 `pg_dump -Fc`, 최근 5개 |
+| `snapshots/` | 판올림 스냅샷(Phase 6b-2), 최근 2개 |
+| `restore-journal.json` | 되돌리기 진행 상태(Phase 6b-2) |
+| `restore-staging/` | 되돌리기 교체용 임시 사본(Phase 6b-2) |
+| `data.replaced-*` | 되돌리기가 옮겨 둔 그때의 `data/`(Phase 6b-2) — **앱은 지우지 않는다** |
 | `logs/` | `supervisor.log`·`api.log`·`worker.log`·`embed.log`·`postgres.log`(초기 stderr), `postgres/`(서버 로그) |
 | `storage/` | Phase 1·2가 Docker DB와 쓴 파일. 앱은 읽지도 쓰지도 않는다 (Phase 5가 데이터 이전을 범위에서 뺐다 — 옮기는 주체가 없다) |
 | `config.json` | 사람이 고치는 설정. 앱은 다시 쓰지 않는다(`REPO_ROOT` 저장 제외). 손으로 고친 뒤 JSON이 유효한지 확인한다 |
@@ -260,7 +273,7 @@ claim 직후 실패를 기준으로 시도 시각이 0 · 30초 · 90초 · 210�
 ## 지키는 것
 
 - postmaster에는 SIGINT(fast)·SIGQUIT(immediate)만. `services/postgres/handle.ts`의 신호 타입이 SIGKILL을 막는다.
-- 앱이 지우는 것은 넷뿐 — `data/postgres.initdb-*`, 증명한 낡은 락, 5개 초과 백업, `*.dump.partial`. 거부 경로는 아무것도 만들거나 지우지 않는다.
-- 마이그레이션 실패·페어링 거부 같은 `manual` 실패는 자동 재시도하지 않는다(`app/retry-policy.ts`, 창 재열기도 재시도하지 않는다 — `app/window-flow.ts`). 메뉴의 "다시 시도"만 다시 돈다.
+- 앱이 지우는 것은 데이터 영역(`data/`·`snapshots/`·`backups/`·`restore-staging/`)에서 여덟 가지뿐 — `data/postgres.initdb-*`, 증명한 낡은 락, 5개 초과 백업(단 세대별 첫 덤프는 고정), `*.dump.partial`, 보존 상한(2)을 넘은 완료 스냅샷, 미완료 스냅샷, `restore-staging/<rid>`, 그 백업의 sidecar(덤프와 함께). `data.replaced-*`는 지우지 않는다. 거부 경로는 아무것도 만들거나 지우지 않는다.
+- 마이그레이션 실패·페어링 거부 같은 `manual` 실패는 자동 재시도하지 않는다(`app/retry-policy.ts`, 창 재열기도 재시도하지 않는다 — `app/window-flow.ts`). `writersAlive`·`snapshotFailed`·`restoreIncomplete`·`restoreJournalUnreadable`·`restorePending`(Phase 6b-2, 데이터 가드)도 같은 `manual`이다. 감독자를 세우기 전에 던진 실패는 main이 `lastStartFailure`로 보존해, 감독자 없이 창을 다시 열어도 자동 재시도하지 않는다. 메뉴의 "다시 시도"만 다시 돈다.
 - `desktop/package.json`의 `dependencies`는 비어 있다(번들 위생). DB에는 번들 `psql`·`pg_controldata`와 `migrate.js`로만 묻는다.
 - `main.ts`는 electron을 값으로 import해 vitest가 부를 수 없다. 판단은 테스트 가능한 모듈로 빼고 `main.ts`에는 배선만 남긴다.

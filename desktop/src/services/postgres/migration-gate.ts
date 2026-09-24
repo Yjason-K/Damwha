@@ -55,12 +55,15 @@ export interface MigrationGateDeps {
   layout: PgLayout;
   log(line: string): void;
   now?: () => Date;
+  /** 그때 data/.damwha-generation의 snapshot (Phase 6b-2 스펙 §8). 없으면 null. */
+  generation?: () => string | null;
 }
 
 export type GateOutcome = { kind: "up-to-date" } | { kind: "migrated"; applied: string[]; backup: string | null };
 
 const DUMP_NAME = /^\d{8}T\d{6}Z-before-[A-Za-z0-9._-]+\.dump$/;
 const PARTIAL_NAME = /^\d{8}T\d{6}Z-before-[A-Za-z0-9._-]+\.dump\.partial$/;
+const SIDECAR_NAME = /^\d{8}T\d{6}Z-before-[A-Za-z0-9._-]+\.dump\.json$/;
 
 export function backupStamp(d: Date): string {
   return d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
@@ -122,7 +125,17 @@ function removeOwned(file: string, pattern: RegExp, log: (line: string) => void)
   log(`마이그레이션 게이트: 지웠다 — ${file}`);
 }
 
-async function backup(deps: MigrationGateDeps, firstPending: string, signal: AbortSignal): Promise<string> {
+/** sidecar의 generation. 없거나 못 읽거나 null이면 null — 그 덤프는 고정 대상이 아니다. */
+function sidecarGeneration(file: string): string | null {
+  try {
+    const v = JSON.parse(fs.readFileSync(file, "utf8")) as { generation?: unknown };
+    return typeof v.generation === "string" ? v.generation : null;
+  } catch {
+    return null;
+  }
+}
+
+async function backup(deps: MigrationGateDeps, firstPending: string, applied: number, signal: AbortSignal): Promise<string> {
   const dir = deps.layout.backups;
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   for (const name of fs.readdirSync(dir)) removeOwned(path.join(dir, name), PARTIAL_NAME, deps.log);
@@ -140,12 +153,28 @@ async function backup(deps: MigrationGateDeps, firstPending: string, signal: Abo
   if (!toolOk(list)) throw new ServiceFailure(CAUSES.backupFailed.text(describeToolFailure("pg_restore --list", list)), "manual");
   fs.renameSync(partial, final);
 
-  // 새 백업이 검증된 **뒤에만** 오래된 것을 지운다. 후보에서 방금 만든 파일 자신은 뺀다 — stamp가
-  // 기존 파일들보다 이르면(시계가 되돌아갔거나 스텁 now()) 사전순 정렬에서 자신이 가장 오래된
-  // 것으로 잡혀, 검증까지 마친 새 백업이 그 자리에서 지워진다.
+  const generation = deps.generation?.() ?? null;
+  fs.writeFileSync(`${final}.json`, `${JSON.stringify({ firstPending, applied, generation })}\n`, { mode: 0o600 });
+
+  // 새 백업이 검증된 **뒤에만** 오래된 것을 지운다. 방금 만든 파일 자신은 후보에서 뺀다(시계가 되돌아간 경우).
+  // 세대(스냅샷 id)마다 **가장 오래된 덤프 하나**는 지우지 않는다 — 업그레이드 시작 덤프다. 부분 성공하는 재시도는
+  // 매번 firstPending이 달라져 덤프가 5개를 넘고, 고정이 없으면 시작 덤프가 밀려난다 (Phase 6b-2 스펙 §8).
+  // 스냅샷 디렉터리가 더 없는 세대는 고정을 푼다 — 묶음마다 하나씩 영원히 쌓이지 않게.
   const finalName = path.basename(final);
   const dumps = fs.readdirSync(dir).filter((n) => DUMP_NAME.test(n) && n !== finalName).sort();
-  for (const name of dumps.slice(0, Math.max(0, dumps.length - (KEEP_BACKUPS - 1)))) removeOwned(path.join(dir, name), DUMP_NAME, deps.log);
+  const pinned = new Set<string>();
+  const seen = new Set<string>();
+  for (const name of dumps) {
+    const gen = sidecarGeneration(path.join(dir, `${name}.json`));
+    if (gen === null || seen.has(gen)) continue;
+    seen.add(gen);
+    if (fs.existsSync(path.join(deps.layout.snapshots, gen))) pinned.add(name);
+  }
+  const candidates = dumps.filter((n) => !pinned.has(n));
+  for (const name of candidates.slice(0, Math.max(0, candidates.length - (KEEP_BACKUPS - 1)))) {
+    removeOwned(path.join(dir, name), DUMP_NAME, deps.log);
+    removeOwned(path.join(dir, `${name}.json`), SIDECAR_NAME, deps.log);
+  }
   deps.log(`마이그레이션 게이트: 적용 전 백업 — ${final}`);
   return final;
 }
@@ -166,7 +195,7 @@ export function runMigrationGate(deps: MigrationGateDeps, signal: AbortSignal): 
     if (status.unknown.length > 0) throw new ServiceFailure(CAUSES.migrationUnknown.text(status.unknown), "manual");
     if (status.pending.length === 0) return { kind: "up-to-date" };
 
-    const backupPath = status.applied > 0 ? await backup(deps, status.pending[0], signal) : null;
+    const backupPath = status.applied > 0 ? await backup(deps, status.pending[0], status.applied, signal) : null;
     deps.log(`마이그레이션 게이트: ${status.pending.length}개 적용 — ${status.pending.join(", ")}`);
     const r = await deps.runner.run(signal);
     if (!toolOk(r)) {

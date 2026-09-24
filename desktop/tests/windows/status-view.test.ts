@@ -16,6 +16,7 @@ import {
   RESTART_CLEANING_NOTE,
   RESTART_LABEL,
   RESTART_NOT_OURS_NOTE,
+  RESTORE_MENU_NOTE,
   failureDetail,
   parseServicesAction,
   renderCall,
@@ -322,6 +323,22 @@ describe("statusLine / shellStatusFrom", () => {
     const shell = shellStatusFrom({ statuses: ALL_OK, restartNotice: "다시 켜야 바뀌어요", logPathOf });
     expect(shell.state).toBe("starting");
     expect(shell.detail?.split("\n").at(-1)).toBe("다시 켜야 바뀌어요");
+  });
+
+  it("appends the restore note only for update failures and only when restorable (Phase 6b-2 §7.1)", () => {
+    const failedApi = (detail: string) => st("api", { process: "failed", health: "unknown", recovery: "manual", detail });
+    const mig = CAUSES.migrationFailed.text("마이그레이션 러너: error: boom", null);
+    const on = shellStatusFrom({ statuses: [failedApi(mig)], restartNotice: null, logPathOf, restoreAvailable: true });
+    const off = shellStatusFrom({ statuses: [failedApi(mig)], restartNotice: null, logPathOf, restoreAvailable: false });
+    const other = shellStatusFrom({
+      statuses: [failedApi(CAUSES.portInUse.text)],
+      restartNotice: null,
+      logPathOf,
+      restoreAvailable: true,
+    });
+    expect(on.detail).toContain(RESTORE_MENU_NOTE);
+    expect(off.detail).not.toContain(RESTORE_MENU_NOTE);
+    expect(other.detail).not.toContain(RESTORE_MENU_NOTE);
   });
 });
 

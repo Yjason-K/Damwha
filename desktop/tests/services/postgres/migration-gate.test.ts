@@ -137,7 +137,7 @@ describe("runMigrationGate", () => {
     const final = path.join(t.layout.backups, "20260914T101500Z-before-025_x.sql.dump");
     expect(out).toEqual({ kind: "migrated", applied: ["025_x.sql"], backup: final });
     expect(actions(t.events)).toEqual(["status", "pg_dump", "pg_restore", "run"]);
-    expect(fs.readdirSync(t.layout.backups)).toEqual([path.basename(final)]);
+    expect(fs.readdirSync(t.layout.backups).sort()).toEqual([path.basename(final), `${path.basename(final)}.json`]);
     expect(t.signals.every((s) => s === signal)).toBe(true);
   });
 
@@ -315,5 +315,85 @@ describe("runner 실패의 원인 줄과 전체 로그 (스펙 §6.5-4)", () => 
     expect(logged).toHaveLength(401);
     expect(logged[399]).toBe("마이그레이션 러너 stderr: line 399");
     expect(logged[400]).toMatch(/50줄 더 생략/);
+  });
+});
+
+describe("upgrade-start dump pinning (Phase 6b-2 §8)", () => {
+  const dumpsIn = (dir: string) => fs.readdirSync(dir).filter((n) => n.endsWith(".dump")).sort();
+
+  it("writes a sidecar next to each dump", async () => {
+    const t = setup(ok(statusLine(25, ["026_x.sql"])), ok(statusLine(26, [])));
+    t.deps.generation = () => "20260924T084933Z";
+    await runMigrationGate(t.deps, new AbortController().signal);
+    const dump = dumpsIn(t.deps.layout.backups)[0];
+    expect(JSON.parse(fs.readFileSync(path.join(t.deps.layout.backups, `${dump}.json`), "utf8"))).toEqual({
+      firstPending: "026_x.sql",
+      applied: 25,
+      generation: "20260924T084933Z",
+    });
+  });
+
+  it("keeps the first dump of a generation through six partial-success retries", async () => {
+    const gen = "20260924T084933Z";
+    const files = ["026_a.sql", "027_b.sql", "028_c.sql", "029_d.sql", "030_e.sql", "031_f.sql", "032_g.sql"];
+    let first: string | null = null;
+    for (let i = 0; i < 7; i += 1) {
+      // 매 재시도마다 한 파일이 더 성공하고 다음 파일에서 실패한다
+      const t = setup(ok(statusLine(25 + i, files.slice(i))), fail(1, "error: boom"));
+      fs.mkdirSync(path.join(t.deps.layout.snapshots, gen), { recursive: true });
+      t.deps.generation = () => gen;
+      t.deps.now = () => new Date(Date.UTC(2026, 8, 24, 10, i, 0));
+      await runMigrationGate(t.deps, new AbortController().signal).catch(() => undefined);
+      if (first === null) first = dumpsIn(t.deps.layout.backups)[0];
+    }
+    const left = dumpsIn(pgLayout(path.join(root, "ud")).backups);
+    expect(left).toContain(first);
+    expect(left.length).toBe(KEEP_BACKUPS + 1);
+  });
+
+  it("same failing file five times also keeps the first dump", async () => {
+    const gen = "20260924T084933Z";
+    let first: string | null = null;
+    for (let i = 0; i < 6; i += 1) {
+      const t = setup(ok(statusLine(25, ["026_x.sql"])), fail(1, "error: boom"));
+      fs.mkdirSync(path.join(t.deps.layout.snapshots, gen), { recursive: true });
+      t.deps.generation = () => gen;
+      t.deps.now = () => new Date(Date.UTC(2026, 8, 24, 11, i, 0));
+      await runMigrationGate(t.deps, new AbortController().signal).catch(() => undefined);
+      if (first === null) first = dumpsIn(t.deps.layout.backups)[0];
+    }
+    expect(dumpsIn(pgLayout(path.join(root, "ud")).backups)).toContain(first);
+  });
+
+  it("null generation and sidecar-less dumps follow the plain 5-dump rule", async () => {
+    for (let i = 0; i < 7; i += 1) {
+      const t = setup(ok(statusLine(25, ["026_x.sql"])), fail(1, "error: boom"));
+      t.deps.generation = () => null;
+      t.deps.now = () => new Date(Date.UTC(2026, 8, 24, 12, i, 0));
+      await runMigrationGate(t.deps, new AbortController().signal).catch(() => undefined);
+    }
+    expect(dumpsIn(pgLayout(path.join(root, "ud")).backups).length).toBe(KEEP_BACKUPS);
+  });
+
+  it("unpins a generation whose snapshot no longer exists", async () => {
+    for (let i = 0; i < 7; i += 1) {
+      const t = setup(ok(statusLine(25, ["026_x.sql"])), fail(1, "error: boom"));
+      t.deps.generation = () => "20200101T000000Z"; // snapshots/ 아래에 없음
+      t.deps.now = () => new Date(Date.UTC(2026, 8, 24, 13, i, 0));
+      await runMigrationGate(t.deps, new AbortController().signal).catch(() => undefined);
+    }
+    expect(dumpsIn(pgLayout(path.join(root, "ud")).backups).length).toBe(KEEP_BACKUPS);
+  });
+
+  it("deletes a pruned dump's sidecar with it", async () => {
+    for (let i = 0; i < 7; i += 1) {
+      const t = setup(ok(statusLine(25, ["026_x.sql"])), fail(1, "error: boom"));
+      t.deps.generation = () => null;
+      t.deps.now = () => new Date(Date.UTC(2026, 8, 24, 14, i, 0));
+      await runMigrationGate(t.deps, new AbortController().signal).catch(() => undefined);
+    }
+    const dir = pgLayout(path.join(root, "ud")).backups;
+    const sidecars = fs.readdirSync(dir).filter((n) => n.endsWith(".dump.json"));
+    expect(sidecars.sort()).toEqual(dumpsIn(dir).map((n) => `${n}.json`));
   });
 });
