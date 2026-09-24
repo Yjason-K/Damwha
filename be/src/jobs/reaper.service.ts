@@ -24,9 +24,9 @@ export class ReaperService implements OnApplicationBootstrap {
     if (workerId === undefined || !isAppWorkerId(workerId)) return;
     try {
       const res = await this.jobs.reclaimOrphaned(this.db.pool, workerId);
-      if (res.requeued || res.failedLive || res.failedSpent) {
+      if (res.requeued || res.failedLive || res.failedInterrupted) {
         this.logger.warn(
-          `reclaim: requeued=${res.requeued} failedLive=${res.failedLive} failedSpent=${res.failedSpent}`,
+          `reclaim: requeued=${res.requeued} failedLive=${res.failedLive} failedInterrupted=${res.failedInterrupted}`,
         );
       }
     } catch (e) {

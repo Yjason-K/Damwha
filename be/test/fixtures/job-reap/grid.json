@@ -1,0 +1,35 @@
+{
+  "reap": [
+    { "name": "first interruption requeues", "type": "process_meeting", "attempts": 1, "max_attempts": 5, "interruptions": 0,
+      "expect": { "status": "queued", "interruptions": 1, "dependent": "processing" } },
+    { "name": "spent attempts no longer decide a reclaim", "type": "process_meeting", "attempts": 5, "max_attempts": 5, "interruptions": 0,
+      "expect": { "status": "queued", "interruptions": 1, "dependent": "processing" } },
+    { "name": "second interruption requeues", "type": "process_meeting", "attempts": 2, "max_attempts": 5, "interruptions": 1,
+      "expect": { "status": "queued", "interruptions": 2, "dependent": "processing" } },
+    { "name": "third interruption fails under the default limit", "type": "process_meeting", "attempts": 3, "max_attempts": 5, "interruptions": 2,
+      "expect": { "status": "failed", "interruptions": 3, "dependent": "failed" } },
+    { "name": "an explicit higher limit keeps requeueing", "type": "process_meeting", "attempts": 3, "max_attempts": 5, "interruptions": 2, "max_interruptions": 5,
+      "expect": { "status": "queued", "interruptions": 3, "dependent": "processing" } },
+    { "name": "limit 1 fails on the first interruption", "type": "process_meeting", "attempts": 1, "max_attempts": 5, "interruptions": 0, "max_interruptions": 1,
+      "expect": { "status": "failed", "interruptions": 1, "dependent": "failed" } },
+    { "name": "summary requeues with its row untouched", "type": "summarize_meeting", "attempts": 1, "max_attempts": 3, "interruptions": 0,
+      "expect": { "status": "queued", "interruptions": 1, "dependent": "running" } },
+    { "name": "summary exhausted fails its row", "type": "summarize_meeting", "attempts": 3, "max_attempts": 3, "interruptions": 2,
+      "expect": { "status": "failed", "interruptions": 3, "dependent": "failed" } },
+    { "name": "lens exhausted fails its run", "type": "extract_lenses", "attempts": 3, "max_attempts": 5, "interruptions": 2,
+      "expect": { "status": "failed", "interruptions": 3, "dependent": "failed" } },
+    { "name": "enroll exhausted fails the speaker", "type": "enroll_speaker", "attempts": 3, "max_attempts": 5, "interruptions": 2,
+      "expect": { "status": "failed", "interruptions": 3, "dependent": "failed" } },
+    { "name": "live always fails and leaves the meeting recording", "type": "live_session", "attempts": 1, "max_attempts": 1, "interruptions": 0,
+      "expect": { "status": "failed", "interruptions": 1, "dependent": "recording" } }
+  ],
+  "retry": [
+    { "attempts": 1, "interruptions": 0, "max_attempts": 5, "failures": 1, "retry": true,  "backoff_seconds": 30 },
+    { "attempts": 2, "interruptions": 0, "max_attempts": 5, "failures": 2, "retry": true,  "backoff_seconds": 60 },
+    { "attempts": 3, "interruptions": 1, "max_attempts": 5, "failures": 2, "retry": true,  "backoff_seconds": 60 },
+    { "attempts": 4, "interruptions": 1, "max_attempts": 5, "failures": 3, "retry": true,  "backoff_seconds": 120 },
+    { "attempts": 5, "interruptions": 0, "max_attempts": 5, "failures": 5, "retry": false, "backoff_seconds": 480 },
+    { "attempts": 5, "interruptions": 1, "max_attempts": 5, "failures": 4, "retry": true,  "backoff_seconds": 240 },
+    { "attempts": 7, "interruptions": 1, "max_attempts": 9, "failures": 6, "retry": true,  "backoff_seconds": 900 }
+  ]
+}
