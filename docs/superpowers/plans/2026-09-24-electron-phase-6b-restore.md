@@ -1472,7 +1472,7 @@ Claude-Session: https://claude.ai/code/session_01Xi7Npsqivj5cdfRxTukz77"
 - Consumes: Task 1~4 전부. `decideCluster`·`readStorageFacts`·`parseControldataClusterId`(`pairing.ts`), `PG_MAJOR`(`layout.ts`), `manualUnlessTagged`·`ServiceFailure`
 - Produces:
   - `CAUSES.writersAlive.text(pids: readonly number[])`, `CAUSES.buildInfoMissing.text(file: string)`, `CAUSES.snapshotFailed.text(reason: string, dir: string)`, `CAUSES.restoreJournalUnreadable.text(file: string, why: string)`, `CAUSES.restoreIncomplete.text(detail: string)`, `CAUSES.restoreAborted.text(reason: string)`
-  - `survivingOrphans(d: Pick<ReapDeps, "ps" | "trees" | "runId">): Promise<number[]>`
+  - `survivingOrphans(d: Pick<ReapDeps, "ps" | "trees" | "runId" | "exists">): Promise<number[]>`
   - `interface DataGuardDeps { packaged: boolean; external: boolean; currentBuild: string | null; buildInfoFile: string; layout: PgLayout; readControldata(pgdata: string, signal: AbortSignal): Promise<string>; lock: LockDeps; clone: CloneFn; now(): Date; log(line: string): void; pauseAfterStep?(step: JournalStep): Promise<void> }`
   - `type GuardOutcome = { kind: "proceed"; snapshot: SnapshotInfo | null; notice: string | null } | { kind: "hold"; journal: RestoreJournal; snapshot: SnapshotInfo | null; replacedDir: string }`
   - `runDataGuard(d: DataGuardDeps, signal: AbortSignal): Promise<GuardOutcome>` — 실패는 모두 `ServiceFailure(…, "manual")`
@@ -1530,31 +1530,47 @@ Claude-Session: https://claude.ai/code/session_01Xi7Npsqivj5cdfRxTukz77"
   restoreAborted: null,
 ```
 
-- [ ] **Step 2: 원인·안내 테스트** — `grep -rn "CAUSE_IDS\|HINTS" desktop/tests | head`로 원인 카탈로그를 도는 기존 테스트를 찾는다. 그 테스트는 모든 원인을 돌며 match 겹침·안내 존재를 본다 — 새 항목이 자동으로 들어간다. 그것을 돌린다: `pnpm --filter damwha-desktop exec vitest run tests/diagnostics tests/windows` → PASS. 실패하면 문구가 기존 원인과 겹치는 것이니 문구를 고친다(테스트를 고치지 않는다).
+- [ ] **Step 2: 원인·안내 테스트** — 원인 카탈로그를 도는 테스트는 `desktop/tests/windows/recovery-hint.test.ts`다. 그 파일의 `SAMPLE_ARGS`(타입이 템플릿 원인 **전부**를 요구한다 — 빠지면 타입 오류)에 새 템플릿 원인 여섯의 예시 인자를 더한다:
 
-- [ ] **Step 3: 생존자 재스캔 테스트** — `desktop/tests/app/reap-on-start.test.ts`에 추가. 기존 파일의 가짜 `ReapDeps` 빌더를 재사용한다(`grep -n "function\|const .*ReapDeps" desktop/tests/app/reap-on-start.test.ts`):
+```ts
+  writersAlive: [[7777]],
+  buildInfoMissing: ["/Applications/Damwha.app/Contents/Resources/build-info.json"],
+  snapshotFailed: ["cp -c -R: 종료 코드 1\nNo space left on device", "/u/snapshots"],
+  restoreJournalUnreadable: ["/u/restore-journal.json", "형식이 맞지 않아요"],
+  restoreIncomplete: ["교체를 이어 갈 수 없는 상태예요 (data/ 있음, 보관본 있음, 임시 사본 있음)"],
+  restoreAborted: ["되돌릴 스냅샷을 찾지 못했어요 (20260924T084933Z)"],
+```
+
+그 테스트는 모든 원인을 돌며 match 겹침·안내 매핑을 본다. 돌린다: `pnpm --filter damwha-desktop exec vitest run tests/windows tests/diagnostics` → PASS. 실패하면 문구가 기존 원인과 겹치는 것이니 문구를 고친다(테스트의 판정을 고치지 않는다). 이 파일을 Step 10 커밋에 더한다.
+
+- [ ] **Step 3: 생존자 재스캔 테스트** — `desktop/tests/app/reap-on-start.test.ts`. 기존 `deps(ps)` 도우미(파일 14~32행)는 `ps`가 **정적**이고 `kill`이 `alive`에서 pid를 지운다. 그래서 재스캔은 `ps` 결과를 `exists`로 한 번 더 걸러야 기존 테스트 `resolves with what it reaped when the scan works`가 계속 초록이다(실제 커널에서는 `ps`가 새로 읽혀 이미 없다). 추가:
 
 ```ts
 it("refuses to start when an orphan survives the reap (writersAlive)", async () => {
-  // ps가 회수 뒤에도 같은 고아 줄을 돌려준다 — SIGKILL이 닿지 않은 경우.
-  const d = fakeReapDeps({ psText: orphanPsLine(7777), killThrows: true });
-  await expect(reapBeforeStart(d)).rejects.toMatchObject({ recovery: "manual", message: expect.stringMatching(/이전 실행의 처리 프로세스가 아직 남아 있어요 \(pid 7777\)/) });
-});
-it("starts when the reap leaves no orphan", async () => {
-  const d = fakeReapDeps({ psText: orphanPsLine(7777), vanishAfterKill: true });
-  await expect(reapBeforeStart(d)).resolves.toEqual([7777]);
+  const line = `  PID ARGS\n    1 /sbin/launchd\n 4001 ${ROOT}/bin/python3.12 -m damwha_worker --run-id=${OLD}`;
+  const { d } = deps(async () => line);
+  // SIGKILL이 닿지 않은 경우(EPERM) — 던지고, 프로세스는 남는다.
+  d.kill = () => { throw Object.assign(new Error("EPERM"), { code: "EPERM" }); };
+  await expect(reapBeforeStart(d)).rejects.toMatchObject({
+    recovery: "manual",
+    message: expect.stringMatching(/이전 실행의 처리 프로세스가 아직 남아 있어요 \(pid 4001\)/),
+  });
 });
 ```
 
-`fakeReapDeps`·`orphanPsLine`이 기존 파일에 없으면 이 파일 안에 만든다: `ps()`는 `psText`(고아 한 줄 — 형식은 `tests/process/orphans.test.ts`의 고아 픽스처를 복사)를, `vanishAfterKill`이면 kill 뒤 빈 문자열을 돌려주고, `exists`는 그에 맞춰 답한다.
+기존 `resolves with what it reaped…` 테스트는 **수정하지 않는다** — 재스캔이 있어도 초록이어야 한다(회귀 방지).
 
 - [ ] **Step 4: 구현** — `orphans.ts`에:
 
 ```ts
-/** 회수 **뒤** 다시 스캔해 아직 남은 앞 실행의 앱 소유 프로세스 (Phase 6b-2 스펙 §5.2-2). reapOrphans는 SIGKILL 뒤 생존자를 로그로만 남긴다. */
-export async function survivingOrphans(d: Pick<ReapDeps, "ps" | "trees" | "runId">): Promise<number[]> {
+/**
+ * 회수 **뒤** 다시 스캔해 아직 남은 앞 실행의 앱 소유 프로세스 (Phase 6b-2 스펙 §5.2-2). reapOrphans는 SIGKILL 뒤
+ * 생존자를 로그로만 남긴다. `exists`로 한 번 더 거른다 — 방금 죽인 pid가 스캔과 신호 사이에 남아 보이는 것을 빼고,
+ * 정말 살아 있는 것만 센다.
+ */
+export async function survivingOrphans(d: Pick<ReapDeps, "ps" | "trees" | "runId" | "exists">): Promise<number[]> {
   return parseDamwhaProcesses(await d.ps(), d.trees)
-    .filter((p) => classify(p, d.runId) === "orphan")
+    .filter((p) => classify(p, d.runId) === "orphan" && d.exists(p.pid))
     .map((p) => p.pid);
 }
 ```
@@ -1941,7 +1957,7 @@ export function releaseHold(layout: PgLayout): void {
 - [ ] **Step 10: 커밋**
 
 ```bash
-git add desktop/src/diagnostics/causes.ts desktop/src/windows/shell-hints.ts desktop/src/app/data-guard.ts desktop/src/app/reap-on-start.ts desktop/src/process/orphans.ts desktop/tests/app/data-guard.test.ts desktop/tests/app/reap-on-start.test.ts
+git add desktop/src/diagnostics/causes.ts desktop/src/windows/shell-hints.ts desktop/src/app/data-guard.ts desktop/src/app/reap-on-start.ts desktop/src/process/orphans.ts desktop/tests/app/data-guard.test.ts desktop/tests/app/reap-on-start.test.ts desktop/tests/windows/recovery-hint.test.ts
 git commit -m "feat(desktop): 데이터 가드와 되돌리기·스냅샷 원인 문구를 더한다
 
 Claude-Session: https://claude.ai/code/session_01Xi7Npsqivj5cdfRxTukz77"
@@ -2525,7 +2541,7 @@ import를 더한다: `MenuHandlers`(type), `createIoTracker`·`confirmRestoreDia
 
 ```ts
 /** 데이터 가드 한 번 (스펙 §5.2). 파일 I/O 전체를 guardIo에 등록한다 — 보류 대화상자는 밖에서 띄운다. */
-function guardOnce(layout: PgLayout, binaries: PgBinaries, external: boolean): Promise<GuardOutcome> {
+function guardOnce(layout: PgLayout, binaries: PgBinaries, external: boolean, signal: AbortSignal): Promise<GuardOutcome> {
   const pause = parsePauseStep(process.env.DAMWHA_RESTORE_PAUSE_AFTER_STEP);
   const env = pgToolEnv();
   return guardIo.track(
@@ -2556,7 +2572,7 @@ function guardOnce(layout: PgLayout, binaries: PgBinaries, external: boolean): P
           await new Promise((resolve) => setTimeout(resolve, 60_000));
         },
       },
-      new AbortController().signal,
+      signal,
     ),
   );
 }
@@ -2567,7 +2583,7 @@ function guardOnce(layout: PgLayout, binaries: PgBinaries, external: boolean): P
  */
 async function passDataGuard(mine: number, layout: PgLayout, binaries: PgBinaries, external: boolean): Promise<boolean> {
   for (;;) {
-    const out = await guardOnce(layout, binaries, external);
+    const out = await guardOnce(layout, binaries, external, new AbortController().signal);
     if (out.kind === "proceed") {
       refreshMenu();
       if (out.notice !== null) {
@@ -2604,18 +2620,47 @@ async function passDataGuard(mine: number, layout: PgLayout, binaries: PgBinarie
 
 `layout`·`binaries`·`mode` 정의가 `reapBeforeStart`보다 뒤에 있으면 가드 호출을 그 정의들 바로 다음으로 둔다(순서: reap → layout/binaries/mode 정의 → 가드 → 감독자 조립).
 
-- [ ] **Step 4: "다시 시도" 호출 지점** — `startServices`의 `else` 분기(`existing.retry()` 호출 전, config 재적용 코드 뒤)에:
+- [ ] **Step 4: 모든 postgres launch가 가드를 거친다 — `preLaunch` 훅** — "다시 시도"(`existing.retry()`)와 상태 창의 "postgres 다시 시작"(`restartOnce` → `bring` → `launch`, `supervisor.ts:711~`)은 둘 다 `createSupervisorFor`를 건너뛰고 postgres `launch()`로 곧장 간다. 첫 가드가 판정표 거부로 스냅샷을 건너뛴 뒤 사람이 마커를 고치고 둘 중 하나를 누르면 스냅샷 없이 마이그레이션까지 간다(코덱스 스펙 리뷰 [2], 계획 검증 [4]). 호출 지점을 늘리는 대신 **어댑터가 launch 맨 앞에서 훅을 부르게** 한다.
 
-```ts
-    // "다시 시도"도 postgres가 떠 있지 않으면 가드를 거친다 — 첫 가드가 판정표 거부로 스냅샷을 건너뛴 뒤 사람이 원인을
-    // 고치고 누르면, 가드 없이 마이그레이션까지 가는 경로가 있었다 (코덱스 스펙 리뷰 [2]).
-    const pg = existing.statuses().find((s) => s.id === "postgres");
-    if (pg?.process !== "running") {
-      const mode = currentDatabaseMode();
-      const layout = pgLayout(app.getPath("userData"));
-      if (!(await passDataGuard(mine, layout, pgBinaries(bundleDir("postgres")), mode?.kind === "external"))) return;
-    }
-```
+  1. `desktop/src/services/postgres/service.ts`의 `EmbeddedPostgresDeps`에:
+
+  ```ts
+  /**
+   * launch의 맨 앞, 어떤 판정·파일 작업보다 먼저 (Phase 6b-2 스펙 §5.2). main이 데이터 가드를 건다 — 첫 기동·다시 시도·
+   * 상태 창 재시작이 모두 이 한 곳을 지난다. 던지면 launch가 거부로 끝난다.
+   */
+  preLaunch?(signal: AbortSignal): Promise<void>;
+  ```
+
+  `launch(ctx)`의 `manualUnlessTagged(async () => {` 바로 안, 번들 확인보다 **앞**에 `await deps.preLaunch?.(ctx.signal);`.
+
+  2. 테스트 — `desktop/tests/services/postgres/service.test.ts`에(기존 `setup()` 사용):
+
+  ```ts
+  it("calls preLaunch before anything else and refuses without creating anything when it throws", async () => {
+    const order: string[] = [];
+    const t = setup({ preLaunch: async () => { order.push("preLaunch"); throw new ServiceFailure("guard said no", "manual"); } });
+    await expect(t.spec.launch(t.ctx)).rejects.toThrow(/guard said no/);
+    expect(order).toEqual(["preLaunch"]);
+    expect(fs.existsSync(t.deps.layout.dataDir)).toBe(false);
+  });
+  ```
+
+  `setup()`의 인자·반환 모양(`t.spec`·`t.ctx`·`t.deps`)은 파일에서 확인해 맞춘다. 돌린다: `pnpm --filter damwha-desktop exec vitest run tests/services/postgres/service.test.ts` → PASS.
+
+  3. main.ts — `embeddedPostgresSpec({ … })` 조립에 훅을 넣는다:
+
+  ```ts
+          preLaunch: async (signal) => {
+            const out = await guardOnce(layout, binaries, false, signal);
+            // 보류는 첫 기동의 passDataGuard만 사람에게 묻는다. 여기(다시 시도·재시작)에서 보류를 만나는 것은 앱이 떠 있는
+            // 동안 저널이 생긴 경우뿐이라 다시 시작하라고만 말한다.
+            if (out.kind === "hold") throw new ServiceFailure(CAUSES.restoreIncomplete.text("되돌리기가 보류 중이에요 — 앱을 다시 시작해 주세요."), "manual");
+            refreshMenu();
+          },
+  ```
+
+  (`guardOnce`는 Step 2에서 이미 `signal`을 받는다.) 첫 기동은 Step 3의 명시 호출(보류 대화상자) 뒤 이 훅이 한 번 더 도는데, 이미 기록이 있어 스냅샷은 뜨지 않고 락도 비어 있어 비용이 없다. `ServiceFailure`·`CAUSES` import를 확인한다.
 
 - [ ] **Step 5: 실패 보존과 창 재열기** — `startOnce`:
 
@@ -2629,11 +2674,20 @@ async function passDataGuard(mine: number, layout: PgLayout, binaries: PgBinarie
   }
 ```
 
-창 재열기의 `autoRetryAllowed`(현재 `mayAutoRetry(supervisor?.statuses() ?? null)`)를:
+창 재열기(`openWindowFlow` deps, `main.ts:1632` 부근)를 둘 다 바꾼다 — 재시도를 막기만 하면 감독자가 없는 상태의 `shellStatusOf()`가 빈 "준비 중" 화면을 그려, 사람은 원인도 "다시 시도" 안내도 없이 멈춘 화면을 본다(계획 검증 [3]):
 
 ```ts
+      showShell: () =>
+        showShell(
+          opened,
+          supervisor === null && lastStartFailure !== null
+            ? { state: "failed", detail: failureDetail("앱을 시작하지 못했어요", reasonOf(lastStartFailure)), logPath: logPathOf("supervisor") }
+            : shellStatusOf(),
+        ),
       autoRetryAllowed: () => mayAutoRetry(supervisor?.statuses() ?? null, lastStartFailure ?? undefined),
 ```
+
+(`failureDetail`은 `windows/status-view.ts`에서 이미 import돼 있다 — `reportFailure`가 쓴다.)
 
 - [ ] **Step 6: stopServices가 가드 I/O를 기다린다** — `async function stopServices(): Promise<StopOutcome>`의 **첫 줄**에:
 
@@ -2730,7 +2784,7 @@ Expected: 타입 오류 0, 테스트 전부 PASS, lint 0 error. `pnpm lint`가 d
 - [ ] **Step 13: 커밋·graphify**
 
 ```bash
-git add desktop/src/main.ts desktop/src/services/api.ts
+git add desktop/src/main.ts desktop/src/services/api.ts desktop/src/services/postgres/service.ts desktop/tests/services/postgres/service.test.ts
 git commit -m "feat(desktop): 데이터 가드·되돌리기 흐름을 main에 배선한다
 
 Claude-Session: https://claude.ai/code/session_01Xi7Npsqivj5cdfRxTukz77"
@@ -2812,13 +2866,17 @@ mkdir -p "$D/storage-after-dump"
 # 덤프 뒤에 생긴 회의 폴더(meetings/mtg_N)를 옮긴다 — 어느 것이 뒤에 생겼는지 모르면 전부 옮긴다
 mv "$D/data/storage/meetings/"* "$D/storage-after-dump/" 2>/dev/null
 B=/Applications/Damwha.app/Contents/Resources/postgres/bin
-"$B/pg_ctl" -D "$D/data/postgres" -o "-c listen_addresses= -c unix_socket_directories=$D/run" -w start
+SQL="$HOME/damwha-restore-$(date +%Y%m%d%H%M%S).sql"
+# 먼저 SQL 파일을 만들고 성공했는지 확인한다. 파이프로 바로 넘기면 pg_restore가 도중에 실패해도 psql이 잘린 입력을
+# 커밋할 수 있다 — 그러면 스키마만 지워진 채로 남는다.
 { echo "drop schema public cascade; create schema public authorization pg_database_owner; grant usage on schema public to public;";
-  "$B/pg_restore" -f - "$D/backups/<파일>.dump"; } | "$B/psql" -h "$D/run" -U damwha damwha -X -q -1 -v ON_ERROR_STOP=1
+  "$B/pg_restore" -f - "$D/backups/<파일>.dump" || { echo "pg_restore 실패" >&2; exit 1; }; } > "$SQL" && echo "SQL 준비됨: $SQL"
+"$B/pg_ctl" -D "$D/data/postgres" -o "-c listen_addresses= -c unix_socket_directories=$D/run" -w start
+"$B/psql" -h "$D/run" -U damwha damwha -X -q -1 -v ON_ERROR_STOP=1 -f "$SQL"
 "$B/pg_ctl" -D "$D/data/postgres" -m fast stop
 ```
 
-한 트랜잭션이라 도중에 실패하면 아무것도 바뀌지 않는다. 이 방식은 데이터베이스와 짝 표시를 그대로 둔다
+"SQL 준비됨"이 찍히지 않았으면 멈춘다. `psql -1 -f`는 파일 전체를 한 트랜잭션으로 돌려, 도중에 실패하면 아무것도 바뀌지 않는다. 이 방식은 데이터베이스와 짝 표시를 그대로 둔다
 (`DROP DATABASE`로 지우고 다시 만들면 앱이 "다시 만든 데이터베이스"로 보고 기동을 거부한다).
 ````
 
@@ -2868,6 +2926,8 @@ Claude-Session: https://claude.ai/code/session_01Xi7Npsqivj5cdfRxTukz77"
 | M18 | `app/restore-flow.ts` | `confirmRestoreDialog`의 `cancelId: buttons.length - 1`을 `cancelId: 0`으로 | `tests/app/restore-flow.test.ts` |
 | M19 | `app/restore-flow.ts` | `restoreMenuEnabled`의 `!s.journalPresent &&` 삭제 | `tests/app/restore-flow.test.ts` |
 | M20 | `windows/status-view.ts` | `input.restoreAvailable === true &&` 삭제 | `tests/windows/status-view.test.ts` |
+| M21 | `services/postgres/service.ts` | `await deps.preLaunch?.(ctx.signal);` 삭제 | `tests/services/postgres/service.test.ts` |
+| M22 | `process/orphans.ts` | `survivingOrphans`의 `&& d.exists(p.pid)` 삭제 | `tests/app/reap-on-start.test.ts` (기존 `resolves with what it reaped…`) |
 
 - [ ] **Step 1: 변이를 차례로 돌린다** — 변이마다: 편집 → `pnpm --filter damwha-desktop exec vitest run <테스트>` → 결과(빨강/초록, 실패한 테스트 이름) 기록 → `git checkout -- <file>`.
 - [ ] **Step 2: 살아남은 변이가 있으면** 테스트를 더하고 그 Task의 테스트 파일로 커밋한 뒤 그 변이만 다시 돌린다.
@@ -2876,7 +2936,7 @@ Claude-Session: https://claude.ai/code/session_01Xi7Npsqivj5cdfRxTukz77"
 
 ```bash
 git add docs/superpowers/reports/2026-09-24-electron-phase-6b-restore-mutations.md
-git commit -m "test(phase6b): 6b-2 변이 M1~M20을 돌려 기록한다
+git commit -m "test(phase6b): 6b-2 변이 M1~M22를 돌려 기록한다
 
 Claude-Session: https://claude.ai/code/session_01Xi7Npsqivj5cdfRxTukz77"
 ```
