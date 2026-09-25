@@ -77,6 +77,44 @@ test("renders HF's message as text, never as markup", () => {
   expect(document.querySelector("img")).toBeNull();
 });
 
+test("Finding 3: a second submit before any state update from main does not send twice", () => {
+  const send = vi.fn();
+  render(<HfTokenForm state={base} send={send} />);
+  fireEvent.change(screen.getByLabelText("허깅페이스 토큰"), {
+    target: { value: TOKEN },
+  });
+  const button = screen.getByRole("button", { name: "확인" });
+  fireEvent.click(button);
+  fireEvent.click(button);
+  expect(send).toHaveBeenCalledTimes(1);
+});
+
+test("Finding 3: clears the typed value once masked changes to a new value (successful replace)", () => {
+  const send = vi.fn();
+  const { rerender } = render(
+    <HfTokenForm
+      state={{ ...base, status: "present", masked: "hf_****…****0000" }}
+      send={send}
+    />,
+  );
+  const input = screen.getByLabelText("허깅페이스 토큰") as HTMLInputElement;
+  fireEvent.change(input, { target: { value: TOKEN } });
+  fireEvent.click(screen.getByRole("button", { name: "확인" }));
+  rerender(
+    <HfTokenForm
+      state={{
+        ...base,
+        status: "present",
+        masked: "hf_****…****4567",
+        account: "jason",
+        message: { tone: "info", text: "토큰을 저장했어요 — 계정 jason." },
+      }}
+      send={send}
+    />,
+  );
+  expect(input.value).toBe("");
+});
+
 test("shows the keychain guidance instead of an input when unavailable", () => {
   render(
     <HfTokenForm state={{ ...base, status: "unavailable" }} send={vi.fn()} />,

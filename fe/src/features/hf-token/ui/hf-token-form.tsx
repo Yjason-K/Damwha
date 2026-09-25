@@ -31,6 +31,25 @@ export function HfTokenForm({
 }) {
   const [value, setValue] = React.useState("");
 
+  // 두 번째 submit이 main의 다음 상태 갱신 전에 끼어들지 않게 한다 — main이 busy:true를 밀어
+  // 넣기까지는 IPC 왕복이 걸리므로, 그 틈에 겹친 Enter·클릭 둘 다 state.busy로는 못 막는다.
+  // main의 상태 객체는 push(set())마다 새로 만들어지므로 identity 변화 하나로 busy·message
+  // 갱신을 전부 아우른다. effect가 아니라 렌더 중 보정으로 한다 — hf-token-gate.tsx와 같은 패턴.
+  const [prevState, setPrevState] = React.useState(state);
+  const [sent, setSent] = React.useState(false);
+  if (state !== prevState) {
+    setPrevState(state);
+    if (sent) setSent(false);
+  }
+
+  // 성공적으로 갈아 끼운 뒤(=masked가 새 값으로 바뀐 뒤)에만 입력값을 지운다. 실패했을 때는
+  // masked가 그대로라 지우지 않는다 — 한 글자만 고쳐 다시 보낼 수 있어야 한다(Review Focus 3).
+  const [prevMasked, setPrevMasked] = React.useState(state.masked);
+  if (state.masked !== prevMasked) {
+    setPrevMasked(state.masked);
+    if (value !== "") setValue("");
+  }
+
   if (state.status === "unavailable") {
     return (
       <p className="text-sm text-[color:var(--text-secondary)]">
@@ -41,7 +60,8 @@ export function HfTokenForm({
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (state.busy || value.trim() === "") return;
+    if (state.busy || sent || value.trim() === "") return;
+    setSent(true);
     send({ kind: "submit", token: value });
   };
 
@@ -79,14 +99,14 @@ export function HfTokenForm({
           spellCheck={false}
           placeholder="hf_…"
           value={value}
-          disabled={state.busy}
+          disabled={state.busy || sent}
           onChange={(e) => setValue(e.target.value)}
           containerClassName="flex-1"
         />
         <Button
           type="submit"
-          disabled={state.busy || value.trim() === ""}
-          loading={state.busy}
+          disabled={state.busy || sent || value.trim() === ""}
+          loading={state.busy || sent}
         >
           {submitLabel}
         </Button>

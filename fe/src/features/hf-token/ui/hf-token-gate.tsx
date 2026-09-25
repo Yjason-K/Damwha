@@ -51,6 +51,16 @@ export function HfTokenGateProvider({
     if (allowed) setOpen(false);
   }
 
+  // present인 채로 토큰을 갈아 끼우면(실패 배너에서 취소된 토큰을 바꿀 때) allowed는 이미
+  // true라 위 전환이 안 잡는다 — masked가 새 값으로 바뀌는 전환을 따로 본다. null로 바뀌는
+  // 쪽(clear)은 닫지 않는다 — 지운다고 열려 있던 교체 다이얼로그가 저절로 닫힐 이유는 없다.
+  const masked = view.kind === "ready" ? view.state.masked : null;
+  const [prevMasked, setPrevMasked] = React.useState(masked);
+  if (masked !== prevMasked) {
+    setPrevMasked(masked);
+    if (masked !== null) setOpen(false);
+  }
+
   const value = React.useMemo<GateContext>(
     () => ({ view, send, openDialog: () => setOpen(true) }),
     [view, send],

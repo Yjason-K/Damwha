@@ -172,6 +172,36 @@ test("useHfTokenDialog().open() shows the dialog even while a token is present, 
   expect(screen.getByRole("dialog")).toBeInTheDocument();
 });
 
+test("Finding 4: closes when replacing a present token succeeds while open (masked changes to a new value)", () => {
+  const send = vi.fn();
+  const presentState1 = {
+    ...base,
+    status: "present" as const,
+    masked: "hf_****…****0000",
+  };
+  const { rerender } = render(
+    <HfTokenGateProvider view={{ kind: "ready", state: presentState1 }} send={send}>
+      <ReplaceProbe />
+    </HfTokenGateProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "토큰 교체" }));
+  expect(
+    screen.getByRole("dialog", { name: "허깅페이스 토큰이 필요해요" }),
+  ).toBeInTheDocument();
+
+  const presentState2 = {
+    ...base,
+    status: "present" as const,
+    masked: "hf_****…****4567",
+  };
+  rerender(
+    <HfTokenGateProvider view={{ kind: "ready", state: presentState2 }} send={send}>
+      <ReplaceProbe />
+    </HfTokenGateProvider>,
+  );
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
 test("outside the provider the gate passes (unit tests render nav pieces alone)", () => {
   const onOpen = vi.fn();
   render(<Probe onOpen={onOpen} />);
