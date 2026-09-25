@@ -26,7 +26,7 @@
 - 시간 상한: `STAGING_TIMEOUT_MS = 600_000`, `INSTALL_QUIT_TIMEOUT_MS = 30_000`(Task 19 C10 실측으로 조정). 디스크 여유 `MARGIN = 0.1`.
 - `src/update/*`·`src/app/*`는 electron·electron-updater를 **값으로** import하지 않는다(`import type`만). 그 둘을 값으로 쓰는 새 코드는 `src/platform/updater-port.ts`와 `src/main.ts`뿐.
 - 명령은 저장소 루트(**worktree `/Users/jason/projects/Damwha2-6c`**)에서: `pnpm desktop test`, `pnpm desktop lint`. 단일 파일은 `pnpm --filter damwha-desktop exec vitest run <path>`(경로는 `desktop/` 기준). **`pnpm desktop exec …`를 쓰지 않는다** — `run exec`로 펼쳐져 테스트 0개로 exit 0이 난다.
-- `tsconfig`의 `include`는 `src/**`뿐이라 테스트는 타입 검사를 받지 않는다. 테스트의 가짜 deps는 필드를 빠뜨리지 않는다.
+- **`pnpm desktop lint`는 `tsconfig.lint.json`으로 `tests/**`까지 타입 검사한다** — 인터페이스에 필드를 더하거나 시그니처를 바꾸면 그 타입을 쓰는 **기존 테스트 fixture도 같은 Task에서** 고친다(각 Task의 Files에 적었다). 매 Task 끝에 lint가 초록이어야 한다.
 - 커밋 메시지 관례: `feat(desktop): …`, `test(desktop): …`, `build(desktop): …`, `build(release): …`, `docs(phase6c): …`, 한국어 본문, 끝에 세션 줄.
 
 ## Review Focus
@@ -250,7 +250,7 @@ Claude-Session: https://claude.ai/code/session_01Xi7Npsqivj5cdfRxTukz77"
 
 **Files:**
 - Create: `desktop/src/app/build-identity.ts`
-- Modify: `desktop/src/main.ts:260-268` (`currentBuildId`), `desktop/src/main.ts:~1410` (`runDataGuard` 호출부)
+- Modify: `desktop/src/main.ts:260-268` (`currentBuildId`), `desktop/src/main.ts` `guardOnce`(약 1400줄)
 - Test: `desktop/tests/app/build-identity.test.ts`
 
 **Interfaces:**
@@ -372,12 +372,12 @@ import 추가: `import { createBuildIdentity } from "./app/build-identity";`
 
 `app.whenReady().then(async () => {` 블록의 **첫 줄**에 `buildIdentity.running();`을 넣어 기동 시점에 고정한다(주석: `// 기동 시점의 빌드를 고정한다 — 뒤에서 처음 읽으면 그 사이 교체된 판을 읽을 수 있다.`).
 
-`runDataGuard(` 호출(약 1410줄) 바로 앞에:
+`function guardOnce(…)` 안, `return guardIo.track(` **바로 앞 줄**에(`runDataGuard(`는 `guardIo.track(`의 인자라 그 앞에 문장을 넣으면 문법 오류다):
 
 ```ts
-    if (buildIdentity.changedOnDisk()) {
-      appendSupervisorLog("앱 파일이 실행 중에 바뀌었어요 — 새 판은 앱을 다시 시작해야 적용돼요.");
-    }
+  if (buildIdentity.changedOnDisk()) {
+    appendSupervisorLog("앱 파일이 실행 중에 바뀌었어요 — 새 판은 앱을 다시 시작해야 적용돼요.");
+  }
 ```
 
 - [ ] **Step 6: 전체 확인**
@@ -404,7 +404,8 @@ Claude-Session: https://claude.ai/code/session_01Xi7Npsqivj5cdfRxTukz77"
 **Files:**
 - Modify: `desktop/src/app/quit-flow.ts` (`QuitFlowDeps.quit` → `finish`, `runQuitFlow` 반환)
 - Modify: `desktop/src/main.ts` (before-quit의 `quit:` 잎 → `finish:`)
-- Test: `desktop/tests/app/quit-flow.test.ts`
+- Modify: `desktop/tests/app/reap-on-quit.test.ts:504` (`quit:` → `finish:`)
+- Test: `desktop/tests/app/quit-flow.test.ts` (recorder·기존 단언 3개·새 테스트)
 
 **Interfaces:**
 - Produces:
@@ -427,6 +428,10 @@ Claude-Session: https://claude.ai/code/session_01Xi7Npsqivj5cdfRxTukz77"
 ```
 
 `recorder` 함수 첫머리에 `const finished: Array<{ kind: string }> = [];`를 두고 `return { log, lines, warned, asked, deps, finished };`로 바꾼다. 기존 테스트의 `"quit"` 단언은 그대로 유효하다.
+
+**반환값이 생겨 깨지는 기존 단언 셋**(210·243·259줄 `await expect(runQuitFlow(r.deps)).resolves.toBeUndefined();`)을 `.resolves.toEqual({ kind: "prepared" })`로 바꾼다 — 셋 다 정지가 `stopped:true`인 경로다. 먼저 `grep -n "toBeUndefined" desktop/tests/app/quit-flow.test.ts`로 줄을 확인한다.
+
+`desktop/tests/app/reap-on-quit.test.ts` 504줄 근처 `quit: () => undefined,`를 `finish: () => undefined,`로 바꾼다(lint가 알 수 없는 속성으로 거절한다).
 
 `describe("runQuitFlow", …)` 안 끝에 더한다:
 
@@ -586,13 +591,13 @@ before-quit의 `runQuitFlow({ … })` 인자에서 `quit: () => { if (restoreCom
 
 - [ ] **Step 5: Run tests**
 
-Run: `pnpm --filter damwha-desktop exec vitest run tests/app/quit-flow.test.ts && pnpm desktop lint && pnpm desktop test`
+Run: `pnpm --filter damwha-desktop exec vitest run tests/app/quit-flow.test.ts tests/app/reap-on-quit.test.ts && pnpm desktop lint && pnpm desktop test`
 Expected: PASS. 기존 "quits even when stopping the services throws"의 `rejects.toBe(boom)`도 그대로 초록.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add desktop/src/app/quit-flow.ts desktop/tests/app/quit-flow.test.ts desktop/src/main.ts
+git add desktop/src/app/quit-flow.ts desktop/tests/app/quit-flow.test.ts desktop/tests/app/reap-on-quit.test.ts desktop/src/main.ts
 git commit -m "refactor(desktop): 종료 흐름이 결과를 돌려주고 마지막 잎이 그것을 받는다
 
 runQuitFlow가 cancelled/prepared/cleanup-failed를 돌려주고 finish(outcome)를 부른다. 성공은
@@ -1296,6 +1301,7 @@ Claude-Session: https://claude.ai/code/session_01Xi7Npsqivj5cdfRxTukz77"
 **Files:**
 - Modify: `desktop/src/update/release-check.ts`
 - Modify: `desktop/tests/update/release-check.test.ts:62,67`
+- Modify: `desktop/tests/update/update-flow.test.ts:7-11` (`newer()` fixture — `CheckResult`의 새 필드, lint)
 - Test: `desktop/tests/update/release-check.test.ts` (추가)
 
 **Interfaces:**
@@ -1400,6 +1406,19 @@ describe("macOS 버전 (Phase 6c §5.5)", () => {
     expect(macosSatisfies("15.10", "15.9")).toBe(true);
     expect(macosSatisfies("x", "15.0")).toBeNull();
   });
+});
+```
+
+`desktop/tests/update/update-flow.test.ts`의 `newer()`를 새 필드를 가진 모양으로 바꾼다(`CheckResult` 타입이 바뀌어 lint가 fixture를 거절한다):
+
+```ts
+const newer = (version = "0.4.0", autoInstall = false): CheckResult => ({
+  kind: "newer",
+  version,
+  url: `https://github.com/Yjason-K/Damwha/releases/tag/v${version}`,
+  tag: `v${version}`,
+  releaseId: 1,
+  autoInstall,
 });
 ```
 
@@ -1510,7 +1529,7 @@ Expected: PASS (update-flow 테스트의 가짜 `newer`는 새 필드가 없어 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add desktop/src/update/release-check.ts desktop/tests/update/release-check.test.ts
+git add desktop/src/update/release-check.ts desktop/tests/update/release-check.test.ts desktop/tests/update/update-flow.test.ts
 git commit -m "feat(desktop): 조회 결과에 실제 태그·릴리스 ID·자동 설치 가능 여부를 싣는다
 
 feed URL을 실제 태그로 만들고(desktop-v*도 그대로), macOS 버전 비교와 개발용 저장소 env를 더한다
@@ -2146,6 +2165,29 @@ describe("start → downloaded", () => {
     expect(h.flow.state()).toMatchObject({ kind: "downloaded", job: { jobId: "job-2" } });
   });
 
+  it("abandons while resolving and never downloads (Review Focus 1)", async () => {
+    const gate = deferred<{ available: boolean; info: unknown }>();
+    const h = harness({}, { resolve: () => gate.promise });
+    const run = h.flow.start(TARGET);
+    await flush();
+    h.flow.abandon();
+    gate.resolve({ available: true, info: INFO });
+    await run;
+    expect(h.flow.state()).toEqual({ kind: "idle" });
+    expect(h.calls).not.toContain("download");
+  });
+
+  it("reports the held version while downloading (Review Focus 3)", async () => {
+    const gate = deferred();
+    const h = harness({}, { download: async () => { await gate.promise; } });
+    const run = h.flow.start(TARGET);
+    await flush();
+    expect(h.flow.state().kind).toBe("downloading");
+    expect(h.flow.heldVersion()).toBe("0.6.0");
+    gate.resolve();
+    await run;
+  });
+
   it("drops late download events after abandon (Review Focus 1)", async () => {
     const gate = deferred();
     let progress: ((p: number) => void) | null = null;
@@ -2451,7 +2493,6 @@ function withTimeout(
 
 export function createInstallFlow(deps: InstallFlowDeps): InstallFlow {
   let st: InstallState = { kind: "idle" };
-  let stagedOnce = false;
 
   const set = (next: InstallState) => {
     const prev = st;
@@ -2515,7 +2556,8 @@ export function createInstallFlow(deps: InstallFlowDeps): InstallFlow {
         if (live(job)) fail(job, classifyDownloadError(e), reasonOf(e));
         return;
       }
-      if (!live(job) || st.kind !== "downloading") return;
+      // 위의 `if (st.kind !== "idle" && st.kind !== "failed") return`이 await를 건너 st를 좁혀 둔다 — 다시 읽는다(TS2367).
+      if (!live(job) || (st as InstallState).kind !== "downloading") return;
       set({ kind: "downloaded", job, manifest: m });
     },
 
@@ -2544,8 +2586,9 @@ export function createInstallFlow(deps: InstallFlowDeps): InstallFlow {
     },
 
     async proceed(q) {
-      if (st.kind !== "committing" || stagedOnce) {
-        deps.log(`업데이트: 설치할 상태가 아니에요(${st.kind}${stagedOnce ? ", 이미 한 번 준비함" : ""}) — 일반 종료`);
+      // staging 뒤로는 committing으로 돌아오는 전이가 없다 — 그래서 이 한 줄이 "한 실행에 준비 한 번"을 지킨다(C5).
+      if (st.kind !== "committing") {
+        deps.log(`업데이트: 설치할 상태가 아니에요(${st.kind}) — 일반 종료`);
         q.quitNow();
         return;
       }
@@ -2599,7 +2642,6 @@ export function createInstallFlow(deps: InstallFlowDeps): InstallFlow {
         q.quitNow();
       };
 
-      stagedOnce = true;
       set({ kind: "staging", job, manifest });
       const staged = await withTimeout(() => deps.port.stage(), STAGING_TIMEOUT_MS, deps.setTimer);
       if (!staged.ok) return unknown(`준비 실패 (${staged.why})`);
@@ -2743,18 +2785,7 @@ describe("자동 설치 (Phase 6c §5.5)", () => {
 
 `desktop/tests/update/update-flow.test.ts`:
 
-`newer()`를 새 필드를 가진 모양으로 바꾼다:
-
-```ts
-const newer = (version = "0.4.0", autoInstall = false): CheckResult => ({
-  kind: "newer",
-  version,
-  url: `https://github.com/Yjason-K/Damwha/releases/tag/v${version}`,
-  tag: `v${version}`,
-  releaseId: 1,
-  autoInstall,
-});
-```
+`newer()`는 Task 7에서 이미 새 모양이다.
 
 `harness`의 `state`에 `held: null as string | null, can: true, downloadedAnswer: "later" as "restart" | "later", failedAnswer: "ok" as "open" | "ok"`를 더하고 `deps`에 더한다:
 
@@ -2848,6 +2879,21 @@ describe("앱 안 설치 (Phase 6c §5.5)", () => {
     });
     await h.flow.announceDownloaded("0.4.0");
     expect(h.deps.requestRestart).not.toHaveBeenCalled();
+  });
+
+  it("drops a failure notice while another update dialog is up, and while quitting", async () => {
+    const gate = deferred<NewerChoice>();
+    const h = harness({ showNewer: vi.fn(() => gate.promise) });
+    const manual = h.flow.manualCheck();
+    await new Promise((r) => setTimeout(r, 0));
+    await h.flow.announceFailed({ version: "0.4.0", detail: "끊겼어요", url: URL_040 });
+    expect(h.deps.showInstallFailed).not.toHaveBeenCalled();
+    gate.resolve("later");
+    await manual;
+
+    const h2 = harness({ isShuttingDown: () => true });
+    await h2.flow.announceFailed({ version: "0.4.0", detail: "끊겼어요", url: URL_040 });
+    expect(h2.deps.showInstallFailed).not.toHaveBeenCalled();
   });
 
   it("says a failure and opens the page when asked", async () => {
@@ -3095,6 +3141,7 @@ export function createUpdateFlow(deps: UpdateFlowDeps, current: string): UpdateF
         deps.log(`업데이트 확인 실패 (${r.reason}) — ${r.detail}`);
         return;
       }
+      // 조용히 끝나는 갈래도 한 줄 남긴다 — 실측이 "타이머가 돌았다"를 로그로 판정한다(6b-1 계획 T10).
       if (r.kind === "current") {
         deps.log(`업데이트 확인: 최신 (${r.latest})`);
         return;
@@ -3108,6 +3155,8 @@ export function createUpdateFlow(deps: UpdateFlowDeps, current: string): UpdateF
         return;
       }
       if (await heldBack("업데이트 알림", r.version)) return;
+      // 기다리는 사이 다른 확인이 이 버전을 이미 띄웠거나(수동·다른 자동) 건너뛰기가 저장됐을 수 있다.
+      // presenting만 보면 먼저 띄운 대화상자가 **닫힌 뒤** 도착한 쪽이 같은 버전을 또 띄운다(6b-1 계획 검증 #3).
       if (presenting || shown.has(r.version) || r.version === deps.loadSkipped()) {
         deps.log(`업데이트 알림 버림: 이미 처리됨 (${r.version})`);
         return;
@@ -3247,7 +3296,7 @@ Claude-Session: https://claude.ai/code/session_01Xi7Npsqivj5cdfRxTukz77"
 
 - [ ] **Step 1: Write the failing tests**
 
-`desktop/tests/windows/menu-template.test.ts`의 `handlers()`에 `onInstallUpdate: vi.fn(), onClearInstallAttempt: vi.fn()`를 더하고 끝에:
+`desktop/tests/windows/menu-template.test.ts`의 `handlers()`에 `onInstallUpdate: vi.fn(), onClearInstallAttempt: vi.fn()`를 더하고, 44줄 근처 `restoreHandlers()`의 객체에도 `onInstallUpdate: () => undefined, onClearInstallAttempt: () => undefined,`를 더한다(`MenuHandlers` 타입 — lint). 끝에:
 
 ```ts
 describe("업데이트 항목 (Phase 6c)", () => {
@@ -3293,7 +3342,9 @@ describe("updateMenuItemOf", () => {
     expect(updateMenuItemOf({ kind: "resolving", job }, null, false)).toEqual({ kind: "progress", version: "0.6.0", percent: 0 });
     expect(updateMenuItemOf({ kind: "downloading", job, manifest, percent: 42 }, null, false)).toEqual({ kind: "progress", version: "0.6.0", percent: 42 });
     expect(updateMenuItemOf({ kind: "downloaded", job, manifest }, null, false)).toEqual({ kind: "restart", version: "0.6.0" });
-    expect(updateMenuItemOf({ kind: "staging", job, manifest }, null, false)).toEqual({ kind: "notice", text: "업데이트를 준비하고 있어요…" });
+    for (const kind of ["committing", "staging", "installing"] as const) {
+      expect(updateMenuItemOf({ kind, job, manifest }, null, false)).toEqual({ kind: "notice", text: "업데이트를 준비하고 있어요…" });
+    }
     expect(updateMenuItemOf({ kind: "idle" }, "업데이트가 적용되지 않았어요", false)).toEqual({ kind: "notice", text: "업데이트가 적용되지 않았어요" });
   });
 });
@@ -3434,7 +3485,7 @@ Claude-Session: https://claude.ai/code/session_01Xi7Npsqivj5cdfRxTukz77"
 - Modify: `desktop/scripts/package.mjs:100-111` (build-info 옆에 `app-update.yml`, electron-builder 호출)
 - Modify: `desktop/scripts/package.mjs:~247` (`--prepackaged` 호출)
 - Modify: `desktop/scripts/check-bundle.mjs:80-91` (1·2번 단언)
-- Modify: `desktop/electron-builder.yml:6-7` (주석)
+- Modify: `desktop/electron-builder.yml:6-7` (주석), 최상위 `publish: null`
 
 **Interfaces:**
 - Produces: `Resources/app-update.yml`(`updaterCacheDirName: damwha-desktop-updater`), `app.asar/node_modules` = electron-updater prod 폐포.
@@ -3519,7 +3570,15 @@ check(
 
 (기존 코드가 `const pkg`·`const asarPath`를 이미 선언했다면 중복 선언을 지운다 — 위 블록이 그 둘을 대신한다. 2b는 그대로 둔다.)
 
-`desktop/electron-builder.yml`의 주석 `# asar 안에는 컴파일된 main과 셸 화면만 들어간다. desktop에는 dependencies가 없으므로 electron-builder가 훑을 prod 의존성이 없다 (스펙 P1-C11).`을:
+`desktop/electron-builder.yml` 최상위(`appId:` 아래)에 더한다:
+
+```yaml
+# electron-builder의 발행 자동 감지를 끈다 (Phase 6c 스펙 §6.1). 끄지 않으면 GH_TOKEN이 환경에 있을 때 github 발행을 스스로
+# 잡아 app-update.yml·latest-mac.yml을 제 방식으로 쓴다 — 우리 것은 package.mjs가 쓰고 publish.sh가 올린다.
+publish: null
+```
+
+그리고 주석 `# asar 안에는 컴파일된 main과 셸 화면만 들어간다. desktop에는 dependencies가 없으므로 electron-builder가 훑을 prod 의존성이 없다 (스펙 P1-C11).`을:
 
 ```yaml
 # asar 안에는 컴파일된 main과 셸 화면, 그리고 유일한 런타임 의존성 electron-updater(6.8.9)의 prod 폐포가 들어간다
@@ -3777,7 +3836,7 @@ import { manifestYaml, releaseIdentityProblems, zipNameFor } from "./lib/update-
 
 `let dmgPath = null;` 옆에 `let zipPath = null;`.
 
-스테이플·check-bundle 블록(`run("node", [path.join("scripts", "check-bundle.mjs")], desktop); }`로 끝나는 `if (RELEASE)`) **바로 뒤**, DMG 블록 앞에 새 블록:
+**파일 끝** — DMG를 만들고 마운트해 재검증하는 마지막 `if (RELEASE)` 블록 **뒤**에 새 블록을 둔다. DMG 단계(electron-builder `--prepackaged … dmg`)보다 뒤여야 `out/latest-mac.yml`을 무엇도 덮어쓰지 못한다(계획 검증 — `GH_TOKEN`이 환경에 있으면 electron-builder가 github 발행을 스스로 잡아 damwha 필드 없는 yml을 쓴다. Task 13의 `publish: null`이 그 자동 감지를 끄고, 이 위치가 한 겹 더 막는다):
 
 ```js
 if (RELEASE) {
@@ -4124,14 +4183,93 @@ Claude-Session: https://claude.ai/code/session_01Xi7Npsqivj5cdfRxTukz77"
 ### Task 16: 배선 — `updater-port.ts`와 `main.ts` (§5.1~§5.8)
 
 **Files:**
+- Create: `desktop/src/app/install-quit.ts`
 - Create: `desktop/src/platform/updater-port.ts`
 - Modify: `desktop/src/main.ts`
+- Test: `desktop/tests/app/install-quit.test.ts`
 
 **Interfaces:**
 - Consumes: Task 2~15의 전부.
-- Produces: `createUpdaterPort(log: (line: string) => void): UpdaterPort`. main 전역 `installFlow`, `attemptStore`, `maintenance`, `pendingInstall`, `staleAttempt`, `installNotice`.
+- Produces: `planFinish(s: { outcome: FinishOutcome; pendingInstall: boolean; installAvailable: boolean; restoreCommitted: boolean }): "install" | "relaunch-then-quit" | "quit"`,
+  `installRequestIgnored(s: { hasFlow: boolean; quitting: boolean; pendingInstall: boolean; flowRunning: boolean }): boolean`,
+  `createUpdaterPort(log: (line: string) => void): UpdaterPort`. main 전역 `installFlow`, `attemptStore`, `maintenance`, `pendingInstall`, `staleAttempt`, `installNotice`.
 
-main.ts는 electron을 값으로 쓰므로 vitest로 부를 수 없다. 이 Task의 판정은 lint·기존 테스트·dev 실행·Task 19의 packaged 실측이다. **새 판단을 여기 쓰지 않는다** — 판단이 필요하면 순수 모듈로 옮기고 그쪽에 테스트를 단다.
+main.ts는 electron을 값으로 쓰므로 vitest로 부를 수 없다. 이 Task의 판정은 lint·기존 테스트·dev 실행·Task 19의 packaged 실측이다. **새 판단을 여기 쓰지 않는다** — main.ts에 필요한 판단 둘(설치로 갈 것인가, "재시작하여 업데이트" 요청을 무시할 것인가)은 Step 0에서 순수 함수로 뺀다(스펙 §11.1 "`cleanup-failed`에서 설치 경로의 `finish`가 일반 종료로 감").
+
+- [ ] **Step 0: main.ts의 판단 둘을 순수 함수로 (TDD)**
+
+`desktop/tests/app/install-quit.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { installRequestIgnored, planFinish } from "../../src/app/install-quit";
+
+describe("planFinish", () => {
+  const base = { pendingInstall: true, installAvailable: true, restoreCommitted: false };
+  it("installs only when an install was requested and the quit prepared cleanly", () => {
+    expect(planFinish({ ...base, outcome: { kind: "prepared" } })).toBe("install");
+  });
+  it("quits plainly after a cleanup failure even when an install was requested", () => {
+    expect(planFinish({ ...base, outcome: { kind: "cleanup-failed" } })).toBe("quit");
+  });
+  it("quits plainly without a request or without an install flow (dev)", () => {
+    expect(planFinish({ ...base, pendingInstall: false, outcome: { kind: "prepared" } })).toBe("quit");
+    expect(planFinish({ ...base, installAvailable: false, outcome: { kind: "prepared" } })).toBe("quit");
+  });
+  it("relaunches for a committed restore", () => {
+    expect(planFinish({ ...base, pendingInstall: false, restoreCommitted: true, outcome: { kind: "prepared" } })).toBe("relaunch-then-quit");
+  });
+});
+
+describe("installRequestIgnored", () => {
+  const ok = { hasFlow: true, quitting: false, pendingInstall: false, flowRunning: false };
+  it("accepts a fresh request", () => {
+    expect(installRequestIgnored(ok)).toBe(false);
+  });
+  it.each<[string, Partial<typeof ok>]>([
+    ["no install flow (dev)", { hasFlow: false }],
+    ["already quitting", { quitting: true }],
+    ["a second click (Review Focus 2)", { pendingInstall: true }],
+    ["a close or quit flow is running — app.quit() would be ignored and leave the request armed", { flowRunning: true }],
+  ])("ignores %s", (_l, over) => {
+    expect(installRequestIgnored({ ...ok, ...over })).toBe(true);
+  });
+});
+```
+
+Run: `pnpm --filter damwha-desktop exec vitest run tests/app/install-quit.test.ts` → FAIL(module not found).
+
+`desktop/src/app/install-quit.ts`:
+
+```ts
+import type { FinishOutcome } from "./quit-flow";
+
+/**
+ * 종료 흐름의 마지막 동작과 설치 요청의 판정 (Phase 6c 스펙 §5.3). electron을 import하지 않는다 — main.ts는 결과만 따른다.
+ *
+ * - 설치는 `prepared`일 때만. 정리에 실패했으면(`cleanup-failed`) 설치 요청이 있어도 일반 종료다 — 서비스가 남은 채
+ *   번들을 바꾸지 않는다.
+ * - 창 닫기·종료 흐름이 도는 중의 요청은 무시한다. 그때의 `app.quit()`은 before-quit 게이트가 `"ignore"`로 버리므로,
+ *   받아들이면 `pendingInstall`만 남아 **다음 평범한 ⌘Q가 설치로 이어진다**(계획 검증).
+ */
+export type FinishPlan = "install" | "relaunch-then-quit" | "quit";
+
+export function planFinish(s: {
+  outcome: FinishOutcome;
+  pendingInstall: boolean;
+  installAvailable: boolean;
+  restoreCommitted: boolean;
+}): FinishPlan {
+  if (s.pendingInstall && s.outcome.kind === "prepared" && s.installAvailable) return "install";
+  return s.restoreCommitted ? "relaunch-then-quit" : "quit";
+}
+
+export function installRequestIgnored(s: { hasFlow: boolean; quitting: boolean; pendingInstall: boolean; flowRunning: boolean }): boolean {
+  return !s.hasFlow || s.quitting || s.pendingInstall || s.flowRunning;
+}
+```
+
+Run: `pnpm --filter damwha-desktop exec vitest run tests/app/install-quit.test.ts` → PASS.
 
 - [ ] **Step 1: `updater-port.ts`**
 
@@ -4217,6 +4355,8 @@ import에 더한다:
 ```ts
 import { execFileSync } from "child_process";
 import { randomUUID } from "crypto";
+import * as os from "os";
+import { installRequestIgnored, planFinish } from "./app/install-quit";
 import { createMaintenanceLock, installBlockedByRestore } from "./app/maintenance";
 import { createUpdaterPort } from "./platform/updater-port";
 import { makeAttemptStore, clearsRecord, judgeAttempt, verdictLine, type AttemptStore } from "./update/install-attempt";
@@ -4245,6 +4385,8 @@ let staleAttempt = false;
 /** 다음 기동 판정의 한 줄(미적용·다른 빌드). 메뉴에 비활성 항목으로 보인다. */
 let installNotice: string | null = null;
 let lastMenuPercent = -1;
+/** electron-updater의 캐시 루트(`getAppCacheDir`와 같은 값). Electron 44의 `app.getPath`에는 "cache"가 없다. */
+const cacheRoot = (): string => path.join(os.homedir(), "Library", "Caches");
 ```
 
 - [ ] **Step 3: main.ts — 잎 함수**
@@ -4292,7 +4434,7 @@ function sizeOf(p: string): number {
 function updateBudget(stage: "download" | "commit", m: Manifest): string | null {
   const userData = app.getPath("userData");
   const layout = pgLayout(userData);
-  const cacheDir = app.getPath("cache");
+  const cacheDir = cacheRoot();
   const el = eligibilityNow();
   if (!el.ok) throw new Error(el.reason);
   const ref = (dir: string, vol: VolumeInfo | null): VolumeRef => {
@@ -4360,7 +4502,7 @@ function refreshMenu(): void {
     if (verdict.kind === "not-applied" || verdict.kind === "other-build") installNotice = verdictText;
 
     // 받아 둔 판이 쓸모없어졌으면 pending/만 비운다 — 루트 update.zip은 다음 차분의 기준이다 (스펙 §5.7).
-    const pendingDir = path.join(app.getPath("cache"), UPDATER_CACHE_NAME, "pending");
+    const pendingDir = path.join(cacheRoot(), UPDATER_CACHE_NAME, "pending");
     try {
       const running = parseInstalledVersion(app.getVersion());
       const skipped = updateState.loadSkipped();
@@ -4425,7 +4567,11 @@ function refreshMenu(): void {
 ```ts
     /** 받아 둔 판을 설치한다 — 되돌리기와 배제하고, 종료 흐름을 거친다 (Phase 6c 스펙 §5.1·§5.4). */
     const requestInstallRestart = (): void => {
-      if (installFlow === null || quitting) return;
+      if (installRequestIgnored({ hasFlow: installFlow !== null, quitting, pendingInstall, flowRunning: flows.running() !== null })) {
+        appendSupervisorLog("업데이트 설치 요청을 무시했어요 — 이미 요청했거나 종료·창 닫기가 진행 중이에요");
+        return;
+      }
+      if (installFlow === null) return;
       if (!maintenance.take("install")) {
         void showUpdateBox(installBlockedDialogOptions("되돌리기를 준비하는 중이에요. 끝난 뒤 다시 시도해 주세요."));
         return;
@@ -4537,7 +4683,8 @@ Task 3의 `finish: () => { … }`를:
 ```ts
       // 설치 경로는 prepared일 때만. 그 밖(정리 실패·설치 아님)은 일반 종료 (Phase 6c 스펙 §5.3).
       finish: (outcome) => {
-        if (pendingInstall && outcome.kind === "prepared" && installFlow !== null) {
+        const plan = planFinish({ outcome, pendingInstall, installAvailable: installFlow !== null, restoreCommitted });
+        if (plan === "install" && installFlow !== null) {
           return installFlow.proceed({
             destroyWindows: () => {
               for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.destroy();
@@ -4546,7 +4693,7 @@ Task 3의 `finish: () => { … }`를:
             quitNow,
           });
         }
-        if (restoreCommitted) app.relaunch();
+        if (plan === "relaunch-then-quit") app.relaunch();
         quitNow();
       },
 ```
@@ -4576,7 +4723,7 @@ Task 3의 `finish: () => { … }`를:
         }
 ```
 
-(설치 경로에서 `finish`가 돌려준 프라미스를 `runQuitFlow`가 기다리므로, `staging`·`installing` 동안 이 `settle`은 아직 불리지 않는다 — 스펙 §5.3의 불변식.)
+(설치 경로에서 `finish`가 돌려준 프라미스를 `runQuitFlow`가 기다리므로, **`staging` 동안** 이 `settle`은 아직 불리지 않는다 — 스펙 §5.3의 불변식. `installing`에 들어가면 `install()`이 동기로 돌아와 `proceed`가 끝나고 곧바로 `settle`이 불리지만, 그 전에 `allow()`가 올라가 있어 게이트 판정에는 닿지 않는다 — `quit-flow.test.ts`의 "settle 뒤의 press도 let-it-quit" 테스트가 그 전제를 잠근다.)
 
 - [ ] **Step 7: 확인**
 
@@ -4590,7 +4737,7 @@ Expected: lint·test 초록. dev 앱에서: 앱 메뉴에 업데이트 항목이
 - [ ] **Step 8: Commit**
 
 ```bash
-git add desktop/src/platform/updater-port.ts desktop/src/main.ts
+git add desktop/src/app/install-quit.ts desktop/tests/app/install-quit.test.ts desktop/src/platform/updater-port.ts desktop/src/main.ts
 git commit -m "feat(desktop): 앱 안 업데이트를 배선한다
 
 electron-updater·내장 autoUpdater 잎, 기동 때 설치 기록 판정과 pending 정리, 되돌리기 배제,
@@ -4697,7 +4844,7 @@ Claude-Session: https://claude.ai/code/session_01Xi7Npsqivj5cdfRxTukz77"
 | M3 | 같음 | 취소 경로의 `return { kind: "cancelled" };`를 `return { kind: "prepared" };`로 | 같음 |
 | M4 | `src/update/install-flow.ts` | `proceed`에서 `deps.attempts.write(attempt);`를 감싼 try/catch를 통째로 삭제 (기록 없이 준비) | `tests/update/install-flow.test.ts` |
 | M5 | 같음 | `q.allowQuit();`를 `q.destroyWindows();` 앞으로 옮기고 그 사이에 `await Promise.resolve();` | 같음 |
-| M6 | 같음 | `if (st.kind !== "committing" \|\| stagedOnce)`에서 `\|\| stagedOnce` 삭제 | 같음 |
+| M6 | 같음 | `start`에서 `resolve` 뒤의 `if (!live(job)) return;` 삭제 | 같음 |
 | M7 | 같음 | `start`의 `if (!resolved.available \|\| m.version !== t.version)`을 `if (!resolved.available)`로 | 같음 |
 | M8 | 같음 | `macosSatisfies(...) !== true`를 `=== false`로 (판정 불가를 통과시킴) | 같음 |
 | M9 | 같음 | `download` 콜백의 `if (!live(job) \|\| st.kind !== "downloading") return;` 삭제 | 같음 |
@@ -4886,6 +5033,17 @@ Claude-Session: https://claude.ai/code/session_01Xi7Npsqivj5cdfRxTukz77"
 ```
 
 ---
+
+## 계획 검증 기록
+
+**2026-09-25, Claude 서브에이전트(코덱스 사용 한도로 대체).** Task 2~16의 코드 블록을 복사본에 순서대로 넣어 매 Task vitest·lint를 돌렸다
+(끝 상태: lint 통과, 테스트 1399 통과), 변이 M1~M27 + 추가 9종. 반영한 것: 테스트도 lint의 타입 검사를 받는다(Global Constraints),
+Task 2 삽입 위치(`guardOnce`), Task 3의 기존 단언 3개·`reap-on-quit.test.ts`, Task 7로 옮긴 `newer()` fixture, Task 10의 TS2367·
+죽은 `stagedOnce` 제거·resolving 중 abandon·받는 중 heldVersion 테스트, Task 11 실패 알림 잠금·종료 중 테스트와 6b-1 주석 복원,
+Task 12 `restoreHandlers`, Task 13 `publish: null`, Task 14 블록 위치(DMG 뒤), Task 16 `app.getPath("cache")` → `~/Library/Caches`·
+판단 둘을 `app/install-quit.ts`로(요청 무시 가드 — 창 닫기 흐름 중 요청이 무장된 채 남던 경로)·settle 주석. 확인만 한 것: electron-updater
+6.8.9 타입, pnpm에서 `app-builder-lib` blockmap 해석, `pnpm list --prod` 모양(16개), gh의 draft 태그 조회(`shared.FetchRelease`의
+GraphQL 대체). 앞선 코덱스 1회차(중단)는 Task 19 공개 순서를 짚었다(`075512e`). **16:37 이후 코덱스 검증을 한 번 더 한다.**
 
 ## Self-Review
 
