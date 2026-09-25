@@ -563,6 +563,24 @@ worker 부모가 **시작 시와 `--once` 자식이 끝날 때마다** 캐시 �
   테스트": `worker:sync:test` 가상환경에는 mlx_lm이 없어 대조 테스트를 항상 실패로 둘 수 없다. **skip하되
   이유를 `-ra`에 남기고, D1 계획 Task 8에서 `pnpm worker:sync` 가상환경으로 skip 0을 확인**한다 — 대조가 반드시
   한 번은 돈다는 의도를 지킨다.
+- **2026-09-25 (D1 최종 리뷰)** 캐시로만 적재해도 `_mark_ready`가 readiness `updated_at`을 새로 찍어, 지문이
+  그대로면 inventory가 5분 동안 다시 쓰이지 않고 `pending`이 참으로 남았다. §5.1의 `pending` 규칙은 두고,
+  **inventory 루프가 readiness 행의 `updated_at`이 바뀌어도 다시 스캔**하게 했다(§4.2 트리거 추가).
+- **2026-09-25 (D1 실측, desktop dev · 앱 데이터 디렉터리)** 전부 통과.
+  - D1-C1: 저장소 5개 모두 `yes`, 크기가 `du`와 1000 기준으로 일치, 합계 9.2 GB. 카드 요약 "large-v3-turbo · GPU /
+    요약·렌즈 추출 qwen3.5 4B / 기본 모두 받음 · 2.4 GB".
+  - D1-C2: "가볍게" 저장 직후 요약이 "small · CPU · 안 받음 · 처음 회의를 처리할 때 받아요 (약 486.2 MB)"로, 배지가
+    small로 옮겨 가고 turbo는 "· GPU용" 행으로 남았다. 설정은 원래 값으로 되돌렸다.
+  - D1-C3: 회의 재처리 대신(기존 회의 결과를 덮어쓰지 않으려고) worker와 **같은 다운로드 훅**을 설치한 프로세스로
+    mlx `small`을 받아 확인했다. 받는 중 "받는 중 0% · 3.9 MB / 481.3 MB", 끝난 뒤 "받음 · 481.3 MB", `pending`
+    false. 자동화 브라우저 탭이 `hidden`이라 TanStack Query가 주기 재조회를 멈춰(라이브러리 기본값) 보이는 창에서의
+    3초 갱신은 직접 보지 못했다 — 단위 테스트가 덮는다.
+  - D1-C4: mlx 전사(turbo)·faster 전사(tiny, 명세로 새로 받음)·요약(4B)·화자 분리·화자 식별·검색 임베딩 6종이
+    `HF_HUB_OFFLINE=1`에서 실제 로더로 적재됐고, 스캔이 모두 `complete=True`. `pnpm worker:sync` 뒤
+    `test_model_specs.py` 10 passed, skip 0. **D2 받기 handler의 전제(명세로 받으면 로더가 다시 받지 않는다)가 섰다.**
+  - D1-C5: faster tiny 폴더를 옮기자 약 1초 만에 API에서 사라졌고, 설정을 다시 열자 목록에서 빠졌다(합계 9.8 → 9.7 GB).
+- **2026-09-25 (D1 계획 Task 8)** 계획은 실측 결과를 `docs/electron-migration-roadmap.md`에도 적으라고 했지만, 그
+  문서는 Phase 단위만 기록하고 P2 항목(A·B·C)은 Notion이 관리해 왔다 — 로드맵은 고치지 않고 이 절과 Notion에 적는다.
 
 ## 12. 리뷰 반영 (2026-09-25, 서브에이전트 2건 — 주요 주장은 코드로 재확인)
 
