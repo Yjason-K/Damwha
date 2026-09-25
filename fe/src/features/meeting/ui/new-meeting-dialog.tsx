@@ -77,10 +77,9 @@ function readSource(): MeetingSource {
 type CaptureGate = { reason: CaptureBlock } | { devices: MediaDeviceInfo[] };
 
 const CAPTURE_GATE_MESSAGE: Record<CaptureBlock, string> = {
-  insecure:
-    "HTTPS에서만 녹음할 수 있어요. localhost 또는 인증서가 있는 주소로 접속해 주세요.",
+  insecure: "이 화면에서는 마이크를 쓸 수 없어요. 담화 앱에서 녹음해 주세요.",
   denied:
-    "마이크 권한이 거부돼 있어요. 브라우저의 사이트 설정에서 허용해 주세요.",
+    "마이크 권한이 꺼져 있어요. 시스템 설정 › 개인정보 보호 및 보안 › 마이크에서 담화를 허용한 뒤 다시 확인해 주세요.",
   no_device: "입력 장치를 찾지 못했어요.",
   unavailable:
     "마이크를 열지 못했어요. 다른 앱이 쓰고 있는지 확인한 뒤 다시 시도해 주세요.",
@@ -577,8 +576,7 @@ export function NewMeetingDialog({
             <TabsContent value="live" className="flex flex-col gap-3">
               <div>
                 <p className="text-sm text-[color:var(--text-secondary)]">
-                  이 브라우저의 마이크로 녹음해요. 지금 보고 있는 기기의
-                  마이크를 사용합니다.
+                  이 Mac의 마이크로 녹음해요.
                 </p>
                 <p className="mt-2 text-sm text-[color:var(--text-muted)]">
                   녹음 시작을 누르면 발화가 실시간으로 표시되고, 종료 후 화자
@@ -597,8 +595,8 @@ export function NewMeetingDialog({
               ) : null}
               {gateChecking ? (
                 <p className="text-sm text-[color:var(--text-muted)]">
-                  마이크를 확인하고 있어요. 브라우저가 권한을 물어보면 허용해
-                  주세요.
+                  마이크를 확인하고 있어요. macOS가 마이크 권한을 물어보면
+                  허용해 주세요.
                 </p>
               ) : null}
               {gate && "reason" in gate ? (
