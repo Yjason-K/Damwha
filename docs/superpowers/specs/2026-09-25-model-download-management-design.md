@@ -581,6 +581,13 @@ worker 부모가 **시작 시와 `--once` 자식이 끝날 때마다** 캐시 �
   - D1-C5: faster tiny 폴더를 옮기자 약 1초 만에 API에서 사라졌고, 설정을 다시 열자 목록에서 빠졌다(합계 9.8 → 9.7 GB).
 - **2026-09-25 (D1 계획 Task 8)** 계획은 실측 결과를 `docs/electron-migration-roadmap.md`에도 적으라고 했지만, 그
   문서는 Phase 단위만 기록하고 P2 항목(A·B·C)은 Notion이 관리해 왔다 — 로드맵은 고치지 않고 이 절과 Notion에 적는다.
+- **2026-09-25 (D2 계획)** §6.4의 디스크 부족 코드는 `disk_full`이 아니라 worker 상수 `errors.DISK_FULL` =
+  `"DISK_FULL"`이다 — 계획과 구현은 실제 값을 쓴다.
+- **2026-09-25 (D2 계획)** §6.4의 "approx_bytes가 남은 용량보다 크면 경고"에 쓸 남은 용량이 API에 없었다.
+  inventory(§4.2)에 `free_bytes`(worker가 캐시 볼륨을 `disk.free_bytes`로 잰 값)를 더하고 `GET /models`가
+  `freeBytes`로 싣는다.
+- **2026-09-25 (D2 계획)** §5.4 `model_job_refs`는 렌즈 모델을 `p_lens_models text[]` 하나로 받는다(BE·worker 값을
+  함께 넘긴다 — 판정은 같고 호출이 한 번).
 
 ## 12. 리뷰 반영 (2026-09-25, 서브에이전트 2건 — 주요 주장은 코드로 재확인)
 
