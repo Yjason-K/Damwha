@@ -215,7 +215,7 @@ export interface ModelRow {
 }
 
 /**
- * 상태 창의 토큰 항목 (스펙 §6.4 — "마스킹 표시, 수정·삭제 가능").
+ * 상태 창의 토큰 항목 — **표시 전용**이다(스펙 2026-09-25 §5.4). 입력·교체·삭제는 담화 화면이 맡는다.
  *
  * **원문은 어디에도 싣지 않는다.** 이 객체는 `renderCall`이 JSON으로 렌더러에 넘기고 로그에도 남을 수
  * 있으므로 `maskToken`을 지난 값만 들어온다.
@@ -224,17 +224,6 @@ export interface TokenView {
   /** 가린 모양(`hf_****…****abcd`). 저장된 토큰이 없으면 null. */
   masked: string | null;
   note: string;
-  /** 지울 것이 있나. 없으면 삭제 버튼을 비활성으로 그린다. */
-  canClear: boolean;
-  /**
-   * 토큰 창이나 삭제 확인이 **지금 떠 있나**. 두 버튼을 모두 잠근다.
-   *
-   * 페이지가 누른 순간 스스로 잠그지만 그것만으로는 모자란다: 묻는 고리는 `handleServicesAction`이
-   * 끝날 때까지(= 토큰 창이 닫힐 때까지) 막혀 있는데, 그 사이 감독자의 상태 변화가 화면을 다시
-   * 그리면 잠금이 풀린다. 그때의 두 번째 클릭은 큐에 쌓였다가 첫 창이 닫히자마자 **두 번째 토큰
-   * 창**을 연다. 재시작 버튼은 `restartingServices`가 같은 일을 한다.
-   */
-  busy: boolean;
 }
 
 export interface ServicesView {
@@ -276,8 +265,6 @@ export interface ServicesInput {
   restarting?: readonly ServiceId[];
   /** 저장된 HF 토큰의 **가린** 모양. 없으면 null (스펙 §6.4). 원문은 여기 오지 않는다. */
   maskedToken?: string | null;
-  /** 토큰 창·삭제 확인이 떠 있다. 두 버튼을 잠근다 (TokenView.busy). */
-  tokenBusy?: boolean;
   /**
    * 방금 이 창에서 누른 것의 결과 — "토큰을 바꿨어요. 작업 처리기를 다시 시작했어요." 같은 한 줄.
    * 버튼이 무슨 일을 했는지(또는 못 했는지) 말하지 않으면 사람은 눌렀는데 아무 일도 안 났다고 읽는다.
@@ -285,12 +272,11 @@ export interface ServicesInput {
   actionNotice?: string | null;
 }
 
-/** 아직 토큰을 넣지 않았거나 파일을 못 읽었다. 기동 게이트가 다음 실행에 다시 묻는다. */
+/** 토큰이 없을 때 (스펙 2026-09-25 §5.4 — 입력은 담화 화면이 맡는다). */
 export const NO_TOKEN_NOTE =
-  "저장된 토큰이 없어요. 다음 실행에 토큰 화면이 다시 떠요.";
-/** 토큰이 있을 때. 바꾸면 무슨 일이 일어나는지를 누르기 **전에** 말한다 (스펙 §6.4 → §6.10 2층). */
-export const TOKEN_NOTE =
-  "토큰을 바꾸면 작업 처리기와 검색 임베딩을 다시 시작해 새 토큰으로 돌려요.";
+  "저장된 토큰이 없어요. 화자 분리에 필요해요 — 담화 설정의 “허깅페이스 토큰”에서 넣을 수 있어요.";
+/** 토큰이 있을 때. */
+export const TOKEN_NOTE = "담화 설정의 “허깅페이스 토큰”에서 바꾸거나 지울 수 있어요.";
 
 export const RESTART_LABEL = "서비스 다시 시작";
 export const RESTART_BUSY_LABEL = "다시 시작하는 중…";
@@ -374,7 +360,7 @@ export function downloadProgress(e: ReadinessEntry): string {
  * | `downloading`, 진행 중 | "받는 중" + 진행 | 없음 |
  * | `downloading`, 무진행 `STALL_MS` 초과 | "중단됨" + `modelDownloadStalled` | **2층** |
  * | `failed`, `TRANSIENT` | "실패" + 사유 | 없음 — **1층**(다음 처리가 이어받는다) |
- * | `failed`, 401(`hf_token_invalid`) | 토큰 재입력 안내 | 없음 — 토큰 절의 "토큰 바꾸기"가 2층이다 |
+ * | `failed`, 401(`hf_token_invalid`) | 토큰 재입력 안내 | 없음 — 담화 설정의 "허깅페이스 토큰"에서 바꾼다 |
  * | `failed`, 403(`hf_gate_not_accepted`) | 수락 페이지 + **3층**(회의 재처리) | 없음 |
  * | `failed`, 그 밖·코드 없음 | 일반 PERMANENT 문구 | **2층** |
  *
@@ -453,7 +439,7 @@ export function modelRows(
         tone: "fail",
         notes,
         cause: `${CAUSES.hfTokenInvalid.text} (${e.key})`,
-        hint: `${HINTS.hfTokenInvalid as string} 아래 “허깅페이스 토큰”에서 바꾸면 두 서비스가 다시 시작돼요.`,
+        hint: `${HINTS.hfTokenInvalid as string} 담화 설정의 “허깅페이스 토큰”에서 바꾸면 두 서비스가 다시 시작돼요.`,
       };
     }
     if (code === HF_GATE_NOT_ACCEPTED_CODE) {
@@ -479,16 +465,10 @@ export function modelRows(
   });
 }
 
-/** 토큰 절 (스펙 §6.4). 원문은 이 함수에 들어오지 않는다 — 부르는 쪽이 이미 `maskToken`을 지났다. */
-export function tokenView(masked: string | null | undefined, busy = false): TokenView {
+/** 토큰 절. 원문은 이 함수에 들어오지 않는다 — 부르는 쪽이 이미 `maskToken`을 지났다. */
+export function tokenView(masked: string | null | undefined): TokenView {
   const value = masked ?? null;
-  return {
-    masked: value,
-    note: value === null ? NO_TOKEN_NOTE : TOKEN_NOTE,
-    // 창이 떠 있는 동안에는 지울 것이 있어도 지우지 못한다 — 그 창이 바로 그 값을 바꾸는 중이다.
-    canClear: value !== null && !busy,
-    busy,
-  };
+  return { masked: value, note: value === null ? NO_TOKEN_NOTE : TOKEN_NOTE };
 }
 
 /** 상태 창 한 장의 재료. services.html의 `window.__damwha_render`가 받는 모양이다. */
@@ -553,43 +533,34 @@ export function servicesView(input: ServicesInput): ServicesView {
       input.now ?? Date.now(),
       input.restarting ?? [],
     ),
-    token: tokenView(input.maskedToken, input.tokenBusy === true),
+    token: tokenView(input.maskedToken),
     notices,
   };
 }
 
-/** 상태 창이 main에게 보내는 것 — **이 둘뿐이다** (parseServicesAction이 그것을 강제한다). */
-export type ServicesAction =
-  | { kind: "restart"; service: ServiceId }
-  | { kind: "token"; op: "change" | "clear" };
-
-const TOKEN_OPS: readonly string[] = ["change", "clear"];
+/** 상태 창이 main에게 보내는 것 — **이것 하나뿐이다** (parseServicesAction이 그것을 강제한다). */
+export type ServicesAction = { kind: "restart"; service: ServiceId };
 
 /**
  * 페이지가 보낸 값. **렌더러 데이터이므로 모양을 확인하고, 모르는 것은 null이다** —
- * `windows/token-window.ts`의 `parseAction`과 같은 규칙이고 같은 이유다: 상태 창에서 오는 값이
+ * `windows/token-bridge.ts`의 `parseHfTokenAction`과 같은 규칙이고 같은 이유다: 상태 창에서 오는 값이
  * 서비스 id가 되어 감독자에게 그대로 들어가면 안 된다.
  */
 export function parseServicesAction(raw: unknown): ServicesAction | null {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const r = raw as { kind?: unknown; service?: unknown; op?: unknown };
+  const r = raw as { kind?: unknown; service?: unknown };
   if (r.kind === "restart") {
     return typeof r.service === "string" &&
       Object.prototype.hasOwnProperty.call(SERVICE_LABELS, r.service)
       ? { kind: "restart", service: r.service as ServiceId }
       : null;
   }
-  if (r.kind === "token") {
-    return typeof r.op === "string" && TOKEN_OPS.includes(r.op)
-      ? { kind: "token", op: r.op as "change" | "clear" }
-      : null;
-  }
   return null;
 }
 
 /**
- * 페이지에 다음 동작을 묻는 식. 다리가 없으면(스크립트가 안 돌았다) null이다 — token-window.ts의
- * `ASK_SCRIPT`와 같은 모양이고, 같은 이유로 **렌더러 → main 채널이 아니다**: 반환값은 main이 건
+ * 페이지에 다음 동작을 묻는 식. 다리가 없으면(스크립트가 안 돌았다) null이다 — token-bridge.ts의
+ * `HF_TOKEN_ASK_SCRIPT`와 같은 모양이고, 같은 이유로 **렌더러 → main 채널이 아니다**: 반환값은 main이 건
  * 호출의 결과다 (스펙 §6.11 — preload도 IPC도 없다).
  */
 export const SERVICES_ASK_SCRIPT =
