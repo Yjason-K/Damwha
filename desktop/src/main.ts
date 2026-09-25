@@ -166,7 +166,7 @@ let quitting = false;
  * 새 버전 알림 (Phase 6b-1 스펙 §4.4). 셋 다 단일 인스턴스 분기 안(whenReady)에서 한 번 만든다.
  * - updateAttached: 담화 화면이 **실제로** 붙은 창. attachedWindow는 loadURL 전에 서므로 그 증거가
  *   못 된다(스펙 §3-6) — loadURL이 성공한 뒤에만 여기 둔다. showShell이 둘을 함께 지운다.
- * - modals: 다른 앱 모달(ask·재시작 안내·토큰 창). 자동 알림이 그 위에 겹치지 않게 한다.
+ * - modals: 다른 앱 모달(ask·재시작 안내). 자동 알림이 그 위에 겹치지 않게 한다.
  */
 let updateFlow: UpdateFlow | null = null;
 let updateScheduler: UpdateScheduler | null = null;

@@ -226,7 +226,8 @@ export function createTokenBridge<W>(d: TokenBridgeDeps<W>): TokenBridge<W> {
     try {
       result = await d.apply(token);
     } catch (e) {
-      // 원래 예외 문구는 apply-token-change.ts의 고정 문구다 — 토큰이 담기지 않는다.
+      // 원래 예외 문구는 apply-token-change.ts의 고정 문구이거나, 그 안의 store.write가 다시 던진
+      // 원본 fs 오류(경로 등)다 — 어느 쪽이든 토큰 원문은 담기지 않는다.
       const why = e instanceof Error ? e.message : nameOf(e);
       d.log(`허깅페이스 토큰을 저장하지 못했어요 — ${why}`);
       set({ busy: false, message: { tone: "error", text: `토큰을 저장하지 못했어요 — ${why}` } });
@@ -238,6 +239,9 @@ export function createTokenBridge<W>(d: TokenBridgeDeps<W>): TokenBridge<W> {
       status: "present",
       masked: maskToken(token),
       account: verdict.name,
+      // 이번 실행에서 토큰을 이미 다뤘다 — 다음에 absent로 돌아가도(설정에서 지움) 온보딩이
+      // Settings 위로 저절로 뜨면 안 된다. 다음 실행에는 새 브리지가 서므로 여전히 false다.
+      onboardingDismissed: true,
       busy: false,
       message: {
         tone: result.skipped.length > 0 ? "warn" : "info",
@@ -261,7 +265,14 @@ export function createTokenBridge<W>(d: TokenBridgeDeps<W>): TokenBridge<W> {
             return;
           }
           d.log("허깅페이스 토큰을 지웠어요 — 서비스는 다시 시작하지 않았어요.");
-          set({ status: "absent", masked: null, account: null, message: { tone: "info", text: CLEARED_MESSAGE } });
+          set({
+            status: "absent",
+            masked: null,
+            account: null,
+            // submit과 같은 이유 — 방금 지운 사람에게 Settings 위로 온보딩이 곧바로 다시 뜨면 안 된다.
+            onboardingDismissed: true,
+            message: { tone: "info", text: CLEARED_MESSAGE },
+          });
         });
         return;
       case "dismissOnboarding":

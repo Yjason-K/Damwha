@@ -198,7 +198,7 @@ export function llmBaseUrl(port: number): string {
  *   ctx.env에 넣는다(launchEnv). 주소를 지어내지 않는다 — 없으면 worker가 ValidationError로 크게 죽는
  *   편이 엉뚱한 포트보다 낫다.
  *
- * worker와 embed가 이 한 env를 받고, worker가 띄우는 자식 셋(capabilities 프로브·`--once`·llm_entry),
+ * worker와 embed가 이 한 env를 받고, worker가 띄우는 자식 셋(capabilities 프로브·`--once`·llm_entry)은
  * env= 없이 그것을 상속한다 — 여기 넣은 값이 다섯 프로세스 모두에 닿는다.
  *
  * HF_TOKEN은 여기 없다 — 기동 때 Keychain에서 읽은 값(app/token-boot.ts)을 launchEnv가 ctx.env에 싣는다.

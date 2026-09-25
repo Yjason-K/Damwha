@@ -1,6 +1,9 @@
+import * as fs from "fs";
+import * as path from "path";
 import { describe, expect, it, vi } from "vitest";
 import {
   createTokenBridge,
+  hfTokenShowCall,
   HF_TOKEN_ASK_SCRIPT,
   MAX_TOKEN_INPUT,
   parseHfTokenAction,
@@ -194,6 +197,38 @@ describe("createTokenBridge", () => {
     expect(last(page)).toMatchObject({ status: "absent", masked: null, account: null });
   });
 
+  it("clear: marks onboarding dismissed so it does not pop over Settings this run (Finding 1)", async () => {
+    const page = fakePage();
+    const b = createTokenBridge(deps(page, { clear: () => undefined }));
+    b.boot("present", "hf_****…****4567");
+    b.attach(page.win);
+    page.act({ kind: "clear" });
+    await flush();
+    expect(last(page)).toMatchObject({ status: "absent", onboardingDismissed: true });
+  });
+
+  it("submit: a successful save also marks onboarding dismissed — clearing it later must not re-pop the onboarding dialog over Settings (Finding 1)", async () => {
+    const page = fakePage();
+    const b = createTokenBridge(deps(page));
+    b.boot("absent", null);
+    b.attach(page.win);
+    page.act({ kind: "submit", token: TOKEN });
+    await flush();
+    await flush();
+    expect(last(page)).toMatchObject({ status: "present", onboardingDismissed: true });
+  });
+
+  it("submit: a failed verify does not mark onboarding dismissed", async () => {
+    const page = fakePage();
+    const b = createTokenBridge(deps(page, { verify: async () => ({ ok: false, kind: "invalid", detail: "HTTP 401" }) }));
+    b.boot("absent", null);
+    b.attach(page.win);
+    page.act({ kind: "submit", token: TOKEN });
+    await flush();
+    await flush();
+    expect(last(page)).toMatchObject({ status: "absent", onboardingDismissed: false });
+  });
+
   it("dismissOnboarding: remembered for this run only — the bridge holds it in memory", async () => {
     const page = fakePage();
     const b = createTokenBridge(deps(page));
@@ -331,6 +366,41 @@ describe("createTokenBridge", () => {
     page.act({ kind: "dismissOnboarding" });
     await flush();
     expect(b.state().onboardingDismissed).toBe(true);
+  });
+});
+
+/**
+ * fe/src/features/meeting/lib/desktop-bridge.ts가 이 파일과 같은 이름으로 다리를 놓는지 (Finding 6).
+ * 두 패키지는 import를 나눌 수 없어(fe는 electron을, desktop은 fe를 모른다) 이름이 손으로만 맞는다 —
+ * fe 쪽이 `hfToken`을 다른 이름으로 바꾸거나 `__damwha_desktop`에 안 걸면 HF_TOKEN_ASK_SCRIPT의
+ * `window.__damwha_desktop?.hfToken`도, hfTokenShowCall의 `.show(...)`도 조용히 no-op이 된다.
+ * shell-html.test.ts가 fe/src/index.css를 텍스트로 읽어 값이 갈리는 날을 잡는 것과 같은 방식 —
+ * fe를 실행하지 않고 소스를 텍스트로만 읽는다(desktop 테스트 환경에 electron 없는 fe 모듈을 끌어오지 않는다).
+ */
+describe("fe/desktop-bridge.ts installs the same __damwha_desktop.hfToken name this file asks for (cross-package contract)", () => {
+  it("HF_TOKEN_ASK_SCRIPT/hfTokenShowCall's global.property name is installed by fe", () => {
+    const asked = /window\.(\w+)\?\.(\w+)\s*\?/.exec(HF_TOKEN_ASK_SCRIPT);
+    expect(asked).not.toBeNull();
+    const [, globalName, propName] = asked!;
+    expect(globalName).toBe("__damwha_desktop");
+    expect(propName).toBe("hfToken");
+
+    const showCall = hfTokenShowCall({
+      status: "absent",
+      masked: null,
+      account: null,
+      onboardingDismissed: false,
+      busy: false,
+      message: null,
+    });
+    expect(showCall).toContain(`window.${globalName}?.${propName}?.show(`);
+
+    const feSource = fs.readFileSync(
+      path.join(__dirname, "..", "..", "..", "fe", "src", "features", "meeting", "lib", "desktop-bridge.ts"),
+      "utf8",
+    );
+    expect(feSource).toMatch(new RegExp(`\\bw\\.${globalName}\\s*=`));
+    expect(feSource).toMatch(new RegExp(`\\b${propName}\\s*:\\s*hfTokenStore\\.bridge\\b`));
   });
 });
 
