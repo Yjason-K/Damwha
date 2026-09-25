@@ -6,6 +6,7 @@ import {
   IndexMeetingPayloadSchema,
   SummarizeMeetingPayloadSchema,
   LiveSessionPayloadSchema,
+  ModelJobPayloadSchema,
 } from '../src/contracts/job-payload.schema';
 
 const dir = path.join(__dirname, 'fixtures', 'job-payloads');
@@ -126,5 +127,12 @@ describe('contract fixtures (shared with pydantic worker)', () => {
     const bad = read('live_session.valid.json');
     bad.source = 'system';
     expect(() => LiveSessionPayloadSchema.parse(bad)).toThrow();
+  });
+
+  it('model_job: 전사는 backend 필수, 그 밖은 backend 금지', () => {
+    expect(ModelJobPayloadSchema.parse(read('model_job.stt.valid.json')).backend).toBe('faster');
+    expect(ModelJobPayloadSchema.parse(read('model_job.summary.valid.json')).role).toBe('summary');
+    expect(() => ModelJobPayloadSchema.parse(read('model_job.summary_with_backend.invalid.json'))).toThrow();
+    expect(() => ModelJobPayloadSchema.parse(read('model_job.stt_without_backend.invalid.json'))).toThrow();
   });
 });

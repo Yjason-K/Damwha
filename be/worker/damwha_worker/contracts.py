@@ -14,6 +14,8 @@ SUPPORTED_SCHEMA_VERSIONS: dict[str, frozenset[int]] = {
     "extract_lenses": frozenset({1}),
     "summarize_meeting": frozenset({1}),
     "live_session": frozenset({1}),
+    "download_model": frozenset({1}),
+    "delete_model": frozenset({1}),
 }
 
 MeetingId = Annotated[str, StringConstraints(pattern=r"^mtg_[1-9][0-9]*$")]
@@ -386,6 +388,30 @@ class LiveSessionPayload(BaseModel):
     process_wire: dict
 
 
+ModelRole = Literal["stt", "summary", "diarization", "speaker_embedding", "search_embedding"]
+
+
+class ModelJobPayload(BaseModel):
+    """download_model·delete_model payload v1 (모델 다운로드 관리 스펙 §4.4).
+
+    식별자는 논리 키(role·name·backend)다. backend는 전사에만 있고 그 밖에서는 없어야 한다 —
+    zod(`ModelJobPayloadSchema`)와 같은 판정.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1]
+    role: ModelRole
+    name: NonEmptyString
+    backend: Literal["mlx", "faster"] | None = None
+
+    @model_validator(mode="after")
+    def _backend_only_for_stt(self):
+        if (self.role == "stt") != (self.backend is not None):
+            raise ValueError('backend is required for role "stt" and forbidden otherwise')
+        return self
+
+
 def _parse_live_session(data: dict) -> LiveSessionPayload:
     wire = LiveSessionPayloadWire.model_validate(data)
     return LiveSessionPayload(
@@ -486,4 +512,6 @@ def parse_payload(job_type: str, data: dict):
         return _parse_live_session(data)
     if job_type == "summarize_meeting":
         return SummarizeMeetingPayload.model_validate(data)
+    if job_type in ("download_model", "delete_model"):
+        return ModelJobPayload.model_validate(data)
     return ExtractLensesPayload.model_validate(data)
