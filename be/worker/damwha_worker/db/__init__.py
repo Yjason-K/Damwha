@@ -26,6 +26,7 @@ from .live import (
     insert_live_utterance,
 )
 from .meetings import fail_process_meeting, persist_process_meeting
+from .model_jobs import complete_job, model_job_refs, remove_model_readiness_key, stop_requested
 from .queue import (
     claim,
     fail_job,
@@ -73,6 +74,10 @@ __all__ = [
     "fail_lens_extraction",
     "mark_lens_run_running",
     "persist_lens_extraction",
+    "complete_job",
+    "model_job_refs",
+    "remove_model_readiness_key",
+    "stop_requested",
     "persist_index_meeting",
     "LiveInputState",
     "delete_live_utterances",

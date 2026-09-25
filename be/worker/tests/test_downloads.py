@@ -1428,3 +1428,49 @@ def test_the_files_inside_a_snapshot_are_not_measured_again(measured):
     }
     assert len(measured.checked) == 1  # 바깥 한 번
     assert len(measured.api_calls) == 2  # snapshot 자신 한 번 + 바깥 점검 한 번, 안쪽 0
+
+
+# ── 받기 취소 (모델 다운로드 관리 스펙 §7.2) ───────────────────────────
+
+
+def test_cancel_when_releases_caller_and_is_not_recorded_as_failed(monkeypatch):
+    """취소 술어가 참이 되면 호출자를 풀고 DownloadCancelled를 던진다.
+
+    readiness에 failed를 남기지 않는다.
+    """
+    import threading
+
+    from damwha_worker.models import downloads
+
+    monkeypatch.setattr(downloads._STATE, "stall_seconds", 60.0)
+    monkeypatch.setattr(downloads, "_WATCHDOG_TICK_SECONDS", 0.01)
+    gate = threading.Event()
+    report = downloads._Report(conn=None, key="org/m", writer="w")
+    failed = []
+    monkeypatch.setattr(report, "fail", lambda exc: failed.append(exc))
+    flag = {"stop": False}
+
+    def blocked(**_kw):
+        gate.wait(5)
+        return "late"
+
+    def cancel_soon():
+        flag["stop"] = True
+
+    threading.Timer(0.05, cancel_soon).start()
+    with downloads.cancel_when(lambda: flag["stop"]):
+        with pytest.raises(downloads.DownloadCancelled):
+            with downloads.report_download(None, "org/m", "w") as r:
+                r.fail = report.fail
+                downloads._run_watched(blocked, (), {}, r, "org/m")
+    gate.set()
+    assert failed == []
+
+
+def test_cancel_when_is_thread_local_and_restores():
+    from damwha_worker.models import downloads
+
+    assert downloads._current_cancel() is None
+    with downloads.cancel_when(lambda: False):
+        assert downloads._current_cancel() is not None
+    assert downloads._current_cancel() is None
