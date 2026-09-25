@@ -14,6 +14,7 @@ from damwha_worker.db import core
 from damwha_worker.models import downloads
 from damwha_worker.pipeline import model_jobs
 from tests.conftest import seed_job
+from tests.test_cache_scan import make_repo
 
 W = "w-test"
 _STT_TINY_MLX = {"schema_version": 1, "role": "stt", "name": "tiny", "backend": "mlx"}
@@ -211,3 +212,69 @@ def test_handler_cancel_closes_as_cancelled_without_retry(conn):
     # 취소도 최종 실패와 같은 정리를 받는다 — readiness에 failed가 남으면 desktop 상태 창이
     # 선택 기능의 실패에 "다시 시작"을 권한다 (스펙 §7.4).
     assert "mlx-community/whisper-tiny" not in core.read_model_readiness(conn)["entries"]
+
+
+def _del(conn, tmp_path, payload, *, lens=("mlx-community/Qwen3.5-4B-8bit",), job=None):
+    job = job or _running(conn, "delete_model", payload)
+    return job, model_jobs.run_delete_model(
+        conn, job, _p(**{k: v for k, v in payload.items() if k != "schema_version"}),
+        worker_id=W, lens_models=list(lens), summary_fallback="mlx-community/Qwen3.5-4B-8bit",
+        cache_root=str(tmp_path),
+    )
+
+
+def test_delete_removes_repo_dir_and_readiness_key(conn, tmp_path):
+    make_repo(tmp_path, "mlx-community/whisper-small-mlx", {"config.json": b"{}"})
+    core.merge_model_readiness(conn, "mlx-community/whisper-small-mlx", {"state": "ready"}, W)
+    job, out = _del(
+        conn, tmp_path, {"schema_version": 1, "role": "stt", "name": "small", "backend": "mlx"}
+    )
+    assert out == "committed"
+    assert not (tmp_path / "models--mlx-community--whisper-small-mlx").exists()
+    assert "mlx-community/whisper-small-mlx" not in core.read_model_readiness(conn)["entries"]
+    assert _status(conn, job["id"])["status"] == "done"
+
+
+def test_delete_refuses_fixed_role(conn, tmp_path):
+    with pytest.raises(errors.WorkerError) as ei:
+        _del(conn, tmp_path, {"schema_version": 1, "role": "diarization",
+                              "name": "pyannote/speaker-diarization-community-1"})
+    assert ei.value.code == errors.MODEL_NOT_DELETABLE
+
+
+def test_delete_refuses_model_used_by_queued_job_and_keeps_files(conn, tmp_path):
+    make_repo(tmp_path, "mlx-community/whisper-small-mlx", {"config.json": b"{}"})
+    seed_job(conn, type="process_meeting", payload={
+        "schema_version": 5,
+        "models": {"whisper_model": "small", "devices": {"diarization": "gpu", "stt": "gpu"},
+                   "summary_model": "mlx-community/Qwen3.5-9B-8bit"},
+        "followups": {"lens": True, "summary": True},
+    })
+    with pytest.raises(errors.WorkerError) as ei:
+        _del(
+            conn, tmp_path,
+            {"schema_version": 1, "role": "stt", "name": "small", "backend": "mlx"},
+        )
+    assert ei.value.code == errors.MODEL_IN_USE
+    assert (tmp_path / "models--mlx-community--whisper-small-mlx").exists()
+
+
+def test_delete_excludes_itself_and_missing_dir_is_fine(conn, tmp_path):
+    _job, out = _del(conn, tmp_path, {"schema_version": 1, "role": "summary",
+                                      "name": "mlx-community/Qwen3.5-27B-8bit"})
+    assert out == "committed"  # 폴더가 이미 없어도 성공 — 결과(없음)가 같다
+
+
+def test_delete_refuses_lens_model(conn, tmp_path):
+    seed_job(conn, type="process_meeting", payload={
+        "schema_version": 5,
+        "models": {"whisper_model": "small", "devices": {"diarization": "gpu", "stt": "gpu"},
+                   "summary_model": "mlx-community/Qwen3.5-9B-8bit"},
+        "followups": {"lens": True, "summary": True},
+    })
+    with pytest.raises(errors.WorkerError) as ei:
+        _del(
+            conn, tmp_path,
+            {"schema_version": 1, "role": "summary", "name": "mlx-community/Qwen3.5-4B-8bit"},
+        )
+    assert ei.value.code == errors.MODEL_IN_USE

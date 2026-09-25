@@ -14,12 +14,12 @@ import sys
 import threading
 
 from . import capabilities, console, db, inventory, runtime_report, wiring
-from .config import load_settings
+from .config import HF_STALL_SECONDS, load_settings
 from .dispatch import dispatch_claimed_job, handle_job, run_once  # noqa: F401 — 공개 진입점
 from .jobs import default_live_source
 from .llm_server import managed_llm_server
 from .llm_server import probe_models as check_lens_llm
-from .models import downloads
+from .models import cache_scan, downloads
 from .reaper import run_reaper_loop
 from .storage import Storage
 
@@ -116,6 +116,16 @@ def _reap_own_orphans(conn, settings) -> None:
         log.warning("reclaimed own orphans: requeued=%s failed=%s", requeued, failed)
 
 
+def _clean_stale_downloads() -> None:
+    """버려진 다운로드 임시 파일을 치운다 (모델 다운로드 관리 스펙 §7.5). 실패는 로그만."""
+    try:
+        n = cache_scan.clean_stale_incomplete(cache_scan.hub_cache_dir(), 2 * HF_STALL_SECONDS)
+        if n:
+            log.info("removed %d stale download temp file(s)", n)
+    except Exception:  # noqa: BLE001
+        log.warning("stale download cleanup failed", exc_info=True)
+
+
 def run_supervisor(settings, shutdown, *, connect_fn, spawn_fn, child_holder) -> None:
     """부모: peek → job 있으면 자식 spawn → 종료 대기 → exit code 분기.
 
@@ -130,6 +140,7 @@ def run_supervisor(settings, shutdown, *, connect_fn, spawn_fn, child_holder) ->
     # "준비됨"인데 큐는 영원히 안 돈다. 이 줄만이 "실제로 붙었다"를 뜻한다.
     log.info("supervisor %s ready (db connected)", settings.worker_id)
     _reap_own_orphans(conn, settings)
+    _clean_stale_downloads()
     consecutive_failures = 0
     while not shutdown.is_set():
         try:
@@ -163,6 +174,7 @@ def run_supervisor(settings, shutdown, *, connect_fn, spawn_fn, child_holder) ->
         child_holder["proc"] = proc
         code = _wait_child(proc)
         child_holder["proc"] = None
+        _clean_stale_downloads()
 
         if shutdown.is_set():
             # shutdown 중 자식 종료는 크래시로 분류하지 않는다(핸들러 설치 전

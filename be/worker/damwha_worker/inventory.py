@@ -53,7 +53,19 @@ def build_inventory(root: str, *, lens_model: str | None, summary_fallback: str 
         # 렌즈 자동 추출·옛 payload의 요약 대체값은 worker env를 쓴다(dispatch.py) — API는 BE env만
         # 알므로 여기서 알려 준다.
         "worker_llm": {"lens_model": lens_model, "summary_fallback": summary_fallback},
+        # 남은 디스크 — 받기 전 "여유보다 큰 모델" 경고용(스펙 §6.4). 정확한 판정은
+        # 받을 때 훅이 한다.
+        "free_bytes": _free_bytes(root),
     }
+
+
+def _free_bytes(root: str) -> int | None:
+    from .models import disk  # 표준 라이브러리만 쓴다(shutil) — 부모 경량 규칙을 지킨다
+
+    try:
+        return disk.free_bytes(root)
+    except OSError:
+        return None
 
 
 def run_inventory_loop(

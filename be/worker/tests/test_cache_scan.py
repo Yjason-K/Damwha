@@ -186,3 +186,20 @@ def test_fingerprint_sees_blob_and_repo_changes(tmp_path):
 
 def test_fingerprint_of_missing_root_is_empty(tmp_path):
     assert cache_scan.fingerprint(str(tmp_path / "nope")) == ()
+
+
+def test_clean_stale_incomplete_removes_only_old_ones(tmp_path):
+    base = make_repo(tmp_path, "org/m", {"config.json": b"{}"},
+                     blobs_extra=[("a.11111111.incomplete", b"x"), ("b.22222222.incomplete", b"y")])
+    old = base / "blobs" / "a.11111111.incomplete"
+    os.utime(old, (1000, 1000))
+    fresh = base / "blobs" / "b.22222222.incomplete"
+    os.utime(fresh, (1_000_000, 1_000_000))
+    n = cache_scan.clean_stale_incomplete(str(tmp_path), 180, now=1_000_100)
+    assert n == 1
+    assert not old.exists() and fresh.exists()
+    assert (base / "snapshots").exists()  # 임시 파일 말고는 건드리지 않는다
+
+
+def test_clean_stale_incomplete_missing_root(tmp_path):
+    assert cache_scan.clean_stale_incomplete(str(tmp_path / "nope"), 180) == 0

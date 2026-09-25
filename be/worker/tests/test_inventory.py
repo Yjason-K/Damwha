@@ -204,3 +204,11 @@ def test_supervisor_main_starts_inventory_thread(monkeypatch):
 
     main_mod.run_supervisor_main(S(), threading.Event(), run_id=None)
     assert inventory.run_inventory_loop in started
+
+
+def test_build_inventory_reports_free_bytes(tmp_path, monkeypatch):
+    from damwha_worker.models import disk
+
+    monkeypatch.setattr(disk, "free_bytes", lambda _p: 123_456)
+    value = inventory.build_inventory(str(tmp_path), lens_model=None, summary_fallback=None)
+    assert value["free_bytes"] == 123_456

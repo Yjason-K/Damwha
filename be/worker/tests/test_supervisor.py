@@ -493,6 +493,35 @@ def test_supervisor_reclaims_its_own_running_job_after_a_child_crash(conn, pg_ur
     assert row["locked_by"] is None
 
 
+def test_supervisor_cleans_stale_incomplete_after_each_child(conn, pg_url, monkeypatch):
+    from damwha_worker import __main__ as main_mod
+
+    calls = []
+    monkeypatch.setattr(main_mod.cache_scan, "clean_stale_incomplete",
+                        lambda root, age, **_: calls.append((root, age)) or 0)
+
+    mid = seed_meeting(conn, status="done", processing_version=0)
+    conn.execute(
+        "INSERT INTO job(type, meeting_id, payload) VALUES('index_meeting', %s, %s)",
+        (mid, '{"schema_version": 1}'),
+    )
+    shutdown = threading.Event()
+
+    def _spawn():
+        # 첫 spawn 후 shutdown → 루프 1회로 종료 (기존 spawn_when_job_queued와 같은 방식)
+        shutdown.set()
+        return _StubProc(0)
+
+    run_supervisor(
+        _peek_settings(),
+        shutdown,
+        connect_fn=lambda: db.connect(pg_url),
+        spawn_fn=_spawn,
+        child_holder={"proc": None, "count": 0},
+    )
+    assert len(calls) >= 2  # 시작 1회 + 자식 종료 뒤 1회
+
+
 def test_supervisor_reclaims_its_own_running_job_at_startup(conn, pg_url, monkeypatch):
     """supervisor만 재시작한 경우 — 앱은 앞 supervisor의 `--once` 자식을 **죽이지만**
     그 행은 같은 `WORKER_ID`로 잠긴 채 남는다(신분은 앱 실행 단위라 supervisor 재시작으로

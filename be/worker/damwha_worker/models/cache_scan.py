@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 
 from .specs import ModelSpec
@@ -187,3 +188,39 @@ def fingerprint(root: str) -> tuple[tuple[str, int], ...]:
                     if m is not None:
                         items.append((os.path.relpath(path, root), m))
     return tuple(items)
+
+
+def clean_stale_incomplete(
+    root: str, older_than_seconds: float, *, now: float | None = None
+) -> int:
+    """`blobs/*.incomplete` 중 mtime이 `older_than_seconds`보다 오래된 것을 지운다 (스펙 §7.5).
+
+    받는 중인 임시 파일은 계속 쓰여 mtime이 새롭다. 오래된 것은 무진행 감시·취소·강제 종료가 버린
+    스레드의 잔해다 — hub 1.20.1은 이어 받지 않으므로 남겨도 쓸모가 없고 디스크만 먹는다.
+    complete 판정은 `.incomplete`를 보지 않으므로 inventory와 무관한 디스크 정리다.
+    """
+    now = time.time() if now is None else now
+    removed = 0
+    try:
+        folders = os.listdir(root)
+    except OSError:
+        return 0
+    for folder in folders:
+        blobs = os.path.join(root, folder, "blobs")
+        if not folder.startswith(_PREFIX) or not os.path.isdir(blobs):
+            continue
+        try:
+            names = os.listdir(blobs)
+        except OSError:
+            continue
+        for name in names:
+            if not name.endswith(".incomplete"):
+                continue
+            path = os.path.join(blobs, name)
+            try:
+                if now - os.stat(path).st_mtime >= older_than_seconds:
+                    os.remove(path)
+                    removed += 1
+            except OSError:
+                continue
+    return removed

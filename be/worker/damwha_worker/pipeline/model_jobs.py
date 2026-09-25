@@ -9,12 +9,18 @@ from __future__ import annotations
 
 import errno
 import logging
+import os
+import shutil
 
 from .. import db, errors
-from ..models import downloads, specs
+from ..models import cache_scan, downloads, specs
 from .stage import enter_stage
 
 log = logging.getLogger("damwha_worker")
+
+#: 삭제 가능한 역할 (스펙 §7.3) — 고정 역할(diarization·speaker_embedding·search_embedding)은
+#: 받기만 된다.
+_DELETABLE = ("stt", "summary")
 
 
 def _snapshot(**kwargs):
@@ -51,4 +57,32 @@ def run_download_model(conn, job, payload, *, worker_id, hf_token, snapshot=None
                 errors.ErrorKind.PERMANENT,
             ) from exc
         raise
+    return "committed" if db.complete_job(conn, job_id, worker_id) else "lost"
+
+
+def run_delete_model(conn, job, payload, *, worker_id, lens_models, summary_fallback,
+                     cache_root=None) -> str:
+    """전사·요약 모델 하나를 캐시에서 지운다 (스펙 §7.3). 재시도 없음 — 실패는 PERMANENT."""
+    job_id = job["id"]
+    if payload.role not in _DELETABLE:
+        raise errors.WorkerError(
+            errors.MODEL_NOT_DELETABLE, f"role {payload.role!r} cannot be deleted",
+            errors.ErrorKind.PERMANENT,
+        )
+    enter_stage(conn, job_id, worker_id, "delete_model", 0)
+    # API가 넣을 때 검사했어도 그 사이 새 job이 들어올 수 있다 — 지우기 직전에 같은
+    # 함수로 다시 본다.
+    users = db.model_job_refs(conn, payload.role, payload.name, payload.backend,
+                              lens_models, summary_fallback, job_id)
+    if users:
+        raise errors.WorkerError(
+            errors.MODEL_IN_USE, f"in use by {', '.join(users)}", errors.ErrorKind.PERMANENT,
+        )
+    spec = specs.spec_for(payload.role, payload.name, payload.backend)
+    repo = spec.repo_id if spec is not None else payload.name
+    root = cache_root or cache_scan.hub_cache_dir()
+    path = os.path.join(root, cache_scan.repo_folder(repo))
+    if os.path.isdir(path):  # 없으면 성공이다 — 결과(없음)가 같다
+        shutil.rmtree(path)
+    db.remove_model_readiness_key(conn, repo)
     return "committed" if db.complete_job(conn, job_id, worker_id) else "lost"

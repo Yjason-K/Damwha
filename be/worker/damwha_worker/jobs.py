@@ -23,7 +23,7 @@ from .pipeline.enroll_speaker import run_enroll_speaker
 from .pipeline.extract_lenses import run_extract_lenses
 from .pipeline.index_meeting import run_index_meeting
 from .pipeline.live_session import run_live_session
-from .pipeline.model_jobs import run_download_model
+from .pipeline.model_jobs import run_delete_model, run_download_model
 from .pipeline.process_meeting import run_process_meeting
 from .pipeline.summarize_meeting import run_summarize_meeting
 from .storage import Storage
@@ -388,6 +388,20 @@ class DownloadModelHandler(JobHandler):
         return "failed" if ok else "lost"
 
 
+class DeleteModelHandler(JobHandler):
+    """전사·요약 모델 삭제 (스펙 §7.3). 재시도하지 않는다 — 기본 on_failure가 retry=False면
+    닫는다."""
+
+    type = "delete_model"
+
+    def run(self, conn, job, payload, ctx):
+        return run_delete_model(
+            conn, job, payload, worker_id=ctx.worker_id,
+            lens_models=[m for m in (ctx.lens_llm_model,) if m],
+            summary_fallback=ctx.summary_llm_model,
+        )
+
+
 def _repo_of(job) -> str | None:
     p = job.get("payload") or {}
     spec = specs.spec_for(p.get("role"), p.get("name"), p.get("backend"))
@@ -449,6 +463,7 @@ HANDLERS: dict[str, JobHandler] = {
         SummarizeMeetingHandler(),
         LiveSessionHandler(),
         DownloadModelHandler(),
+        DeleteModelHandler(),
     )
 }
 
