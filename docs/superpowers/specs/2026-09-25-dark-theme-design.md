@@ -148,8 +148,8 @@
 
 ### 4.3 저장소와 훅 (`fe/src/shared/lib/theme.ts`)
 
-- 모듈 수준 저장소: `getPreference()`, `setPreference(p)`, `subscribe(fn)`. `setPreference`는 저장 →
-  `<html>` 적용 → 구독자 알림.
+- 모듈 수준 저장소: `getSnapshot()`(`{ preference, resolved }`), `setPreference(p)`, `subscribe(fn)`,
+  `start()`. `setPreference`는 저장 → `<html>` 적용 → 구독자 알림.
 - `useTheme()` = `useSyncExternalStore` 위에서 `{ preference, resolved, setPreference }`.
 - `"system"`일 때 `matchMedia`의 `change`를 구독해 macOS 전환을 실시간으로 따른다.
 - `window`의 `storage` 이벤트(`key === "damwha:theme"`)로 다른 탭의 변경을 따른다.

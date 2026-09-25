@@ -287,10 +287,12 @@ transition 대상을 `all`로 두지 말고 바뀌는 속성만 나열한다.
   경우에만 쓴다 — 대부분은 `.dark` 블록에 토큰 값을 더하는 것이 답이다.
   잉크(`--accent-solid`) 면 위 글자는 `text-white`가 아니라
   `--text-on-accent`다: 다크에서 잉크가 밝아진다(`design-tokens.test.ts`가
-  잡는다).
+  `.tsx`의 `text-white`뿐 아니라 컴포넌트 `.css`의 흰 글자색 리터럴도
+  같은 규칙 블록 안에서 잡는다).
 - **raw hex나 임의 색값을 쓰지 말 것.** `bg-[#4F46E5]` ✗.
   토큰을 감싼 `bg-[var(--accent-solid)]`는 관례이므로 허용한다.
-  예외는 `brand-mark.tsx` 하나다(`design-tokens.test.ts`가 나머지를 잡는다).
+  예외는 `brand-mark.tsx` 하나다(`design-tokens.test.ts`가 `.ts`/`.tsx`뿐 아니라
+  컴포넌트 `.css`까지 훑어 나머지를 잡는다 — 토큰 정의 자체인 `index.css`는 제외).
   예전 예외 3곳(danger hover, 토스트 아이콘 두 색)은 토큰으로 옮겼다.
 - **평면 카드에 그림자를 쓰지 말 것.** 위계는 border로 만든다.
   `--shadow-md` / `--shadow-lg`는 실제로 떠 있는 레이어 — dialog,
