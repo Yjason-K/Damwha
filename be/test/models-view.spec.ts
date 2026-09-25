@@ -24,6 +24,7 @@ function inv(over: Partial<ModelInventory> = {}): ModelInventory {
     resolved: RESOLVED,
     approx: { 'mlx/large-v3': 3083522487 },
     workerLlm: { lensModel: 'mlx-community/Qwen3.5-4B-8bit', summaryFallback: 'mlx-community/Qwen3.5-4B-8bit' },
+    freeBytes: null,
     ...over,
   };
 }
@@ -36,6 +37,8 @@ function input(over: Partial<ModelsViewInput> = {}): ModelsViewInput {
     inventory: inv(),
     readiness: EMPTY_MODEL_READINESS,
     now: NOW,
+    modelJobs: [],
+    modelRefs: new Set(),
     ...over,
   };
 }
@@ -158,6 +161,32 @@ describe('buildModelsView', () => {
     } }) }));
     expect(v.totalBytes).toBe(1500);
     expect(v.models.some((m) => m.repoId === 'someone/old-model')).toBe(false);
+  });
+
+  it('job — 같은 논리 키의 마지막 모델 job을 행에 싣고, 활성이면 pending', () => {
+    const v = buildModelsView(input({
+      modelJobs: [
+        { id: 'job_1', type: 'download_model', status: 'failed', role: 'stt', name: 'large-v3', backend: 'mlx',
+          error: { code: 'DISK_FULL', message: '디스크 공간이 부족해요' } },
+        { id: 'job_2', type: 'download_model', status: 'queued', role: 'summary', name: 'mlx-community/Qwen3.5-27B-8bit',
+          backend: null, error: null },
+      ],
+    }));
+    expect(find(v, 'stt', 'large-v3', 'mlx')?.job).toEqual({
+      id: 'job_1', type: 'download_model', status: 'failed', error: { code: 'DISK_FULL', message: '디스크 공간이 부족해요' },
+    });
+    expect(v.pending).toBe(true);
+    expect(find(v, 'stt', 'small', 'mlx')?.job).toBeNull();
+  });
+
+  it('deletable — queued/running job이 쓰는 모델도 삭제 불가', () => {
+    const v = buildModelsView(input({ modelRefs: new Set(['stt:small:mlx']) }));
+    expect(find(v, 'stt', 'small', 'mlx')?.deletable).toBe(false);
+  });
+
+  it('freeBytes — inventory free_bytes를 싣는다', () => {
+    expect(buildModelsView(input({ inventory: inv({ freeBytes: 5_000 }) })).freeBytes).toBe(5_000);
+    expect(buildModelsView(input({ inventory: null })).freeBytes).toBeNull();
   });
 
   it('멈춤 상수는 fe·desktop과 같은 값이다', () => {

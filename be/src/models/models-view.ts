@@ -20,6 +20,20 @@ export const MODEL_STALL_MS = 120_000;
 export type InUse = 'stt' | 'summary' | 'lens' | 'fixed';
 export type Installed = 'yes' | 'no' | 'partial' | 'unknown';
 
+/** (D2) 행이 싣는, 그 논리 키의 가장 최근 모델 job (모델 다운로드 관리 스펙 §5.1·§5.2). */
+export interface ModelJobRef {
+  id: string;
+  type: 'download_model' | 'delete_model';
+  status: 'queued' | 'running' | 'done' | 'failed';
+  error: { code: string; message: string } | null;
+}
+/** 서비스가 `job` 테이블에서 논리 키마다 하나씩 골라 넘기는 입력 행. */
+export interface ModelJobRow extends ModelJobRef {
+  role: ModelRole;
+  name: string;
+  backend: SttBackend | null;
+}
+
 export interface ModelRow {
   role: ModelRole;
   name: string;
@@ -31,6 +45,8 @@ export interface ModelRow {
   approxBytes: number | null;
   downloading: { bytesDone: number; bytesTotal: number } | null;
   deletable: boolean;
+  /** (D2) 이 논리 키의 마지막 받기·삭제 job. 없으면 null. */
+  job: ModelJobRef | null;
 }
 
 export interface ModelsView {
@@ -38,7 +54,12 @@ export interface ModelsView {
   totalBytes: number | null;
   pending: boolean;
   models: ModelRow[];
+  /** (D2) worker가 잰 남은 용량. 못 읽었거나 아직 없으면 null. */
+  freeBytes: number | null;
 }
+
+/** 논리 키 — 받기·삭제·job 참조의 공통 식별자 (모델 다운로드 관리 스펙 §5.2). */
+export const modelKey = (role: string, name: string, backend: string | null) => `${role}:${name}:${backend ?? ''}`;
 
 export interface ModelsViewInput {
   config: Pick<ProcessingConfig, 'whisper_model' | 'devices' | 'summary_model'>;
@@ -48,6 +69,10 @@ export interface ModelsViewInput {
   inventory: ModelInventory | null;
   readiness: ModelReadiness;
   now: number;
+  /** (D2) 논리 키마다 가장 최근 job 하나 — 서비스가 고른다. */
+  modelJobs: ModelJobRow[];
+  /** (D2) queued/running job이 쓰는 모델의 논리 키 — 서비스가 `model_job_refs`로 채운다. */
+  modelRefs: Set<string>;
 }
 
 export function isDownloadingNow(e: ModelReadinessEntry, now: number): boolean {
@@ -60,10 +85,11 @@ export function isDownloadingNow(e: ModelReadinessEntry, now: number): boolean {
 const backendOf = (stt: 'cpu' | 'gpu'): SttBackend => (stt === 'gpu' ? 'mlx' : 'faster');
 
 export function buildModelsView(input: ModelsViewInput): ModelsView {
-  const { config, fixed, inventory, readiness, now } = input;
+  const { config, fixed, inventory, readiness, now, modelJobs, modelRefs } = input;
   const current = backendOf(config.devices.stt);
   const lensModels = [...new Set([input.lensModel, inventory?.workerLlm.lensModel].filter((x): x is string => !!x))];
   const readinessByKey = new Map(readiness.entries.map((e) => [e.key, e]));
+  const jobByKey = new Map(modelJobs.map((j) => [modelKey(j.role, j.name, j.backend), j]));
 
   const resolve = (name: string, backend: SttBackend): string | null =>
     inventory?.resolved.find((r) => r.name === name && r.backend === backend)?.repoId ?? null;
@@ -73,6 +99,8 @@ export function buildModelsView(input: ModelsViewInput): ModelsView {
     const installed: Installed =
       !inventory || !repoId ? 'unknown' : !repo ? 'no' : repo.complete ? 'yes' : 'partial';
     const r = repoId ? readinessByKey.get(repoId) : undefined;
+    const key = modelKey(role, name, backend);
+    const j = jobByKey.get(key);
     return {
       role,
       name,
@@ -83,7 +111,8 @@ export function buildModelsView(input: ModelsViewInput): ModelsView {
       sizeBytes: repo ? repo.sizeBytes : null,
       approxBytes: repoId ? inventory?.approx[repoId] ?? null : null,
       downloading: r && isDownloadingNow(r, now) ? { bytesDone: r.bytesDone, bytesTotal: r.bytesTotal } : null,
-      deletable: (DELETABLE_ROLES as readonly string[]).includes(role) && inUseFor.length === 0,
+      deletable: (DELETABLE_ROLES as readonly string[]).includes(role) && inUseFor.length === 0 && !modelRefs.has(key),
+      job: j ? { id: j.id, type: j.type, status: j.status, error: j.error } : null,
     };
   };
 
@@ -121,7 +150,8 @@ export function buildModelsView(input: ModelsViewInput): ModelsView {
   return {
     scannedAt: inventory?.scannedAt ?? null,
     totalBytes: inventory ? Object.values(inventory.repos).reduce((s, r) => s + r.sizeBytes, 0) : null,
-    pending: models.some((m) => m.downloading !== null) || settling,
+    pending: models.some((m) => m.downloading !== null) || settling || modelJobs.some((j) => j.status === 'queued' || j.status === 'running'),
     models,
+    freeBytes: inventory?.freeBytes ?? null,
   };
 }

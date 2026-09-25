@@ -17,6 +17,8 @@ export interface ModelInventory {
   resolved: Array<{ role: 'stt'; name: string; backend: (typeof STT_BACKENDS)[number]; repoId: string }>;
   approx: Record<string, number>;
   workerLlm: { lensModel: string | null; summaryFallback: string | null };
+  /** worker가 캐시 볼륨을 잰 남은 용량 (모델 다운로드 관리 스펙 §4.2). 못 읽으면 null. */
+  freeBytes: number | null;
 }
 
 const RepoSchema = z.object({
@@ -41,6 +43,7 @@ const RowSchema = z.object({
     })
     .catch({ lens_model: null, summary_fallback: null })
     .default({ lens_model: null, summary_fallback: null }),
+  free_bytes: z.number().finite().nonnegative().nullable().catch(null).default(null),
 });
 
 export function fromInventoryRow(raw: unknown): ModelInventory | null {
@@ -69,5 +72,6 @@ export function fromInventoryRow(raw: unknown): ModelInventory | null {
       lensModel: row.data.worker_llm.lens_model,
       summaryFallback: row.data.worker_llm.summary_fallback,
     },
+    freeBytes: row.data.free_bytes,
   };
 }
