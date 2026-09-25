@@ -4,6 +4,7 @@ import { Badge } from "@/shared/ui/badge";
 import { Card } from "@/shared/ui/card";
 import { useModels } from "../api/models";
 import type { ModelRow } from "../api/types";
+import { rowAction } from "../lib/actions";
 import { formatBytes } from "../lib/format";
 import {
   ROLE_TITLES,
@@ -13,6 +14,7 @@ import {
   statusText,
   summaryLines,
 } from "../lib/rows";
+import { DownloadNowButton, ModelRowActions } from "./model-row-actions";
 
 const GROUPS: { title: string; roles: ModelRole[] }[] = [
   { title: ROLE_TITLES.stt, roles: ["stt"] },
@@ -24,11 +26,13 @@ const GROUPS: { title: string; roles: ModelRole[] }[] = [
 ];
 
 /**
- * 설정 › "모델" 카드 (모델 다운로드 관리 스펙 §6). D1은 읽기 전용이다 — 받기·삭제 버튼은 D2가 행에 붙인다.
+ * 설정 › "모델" 카드 (모델 다운로드 관리 스펙 §6). 목록 행에는 `ModelRowActions`(받기·취소·삭제),
+ * 요약의 안 받은 줄에는 `DownloadNowButton`("미리 받기")이 붙는다(D2, §6.4).
  */
 export function ModelsCard() {
   const { data, isError } = useModels();
   const [expanded, setExpanded] = useState(false);
+  const current = data ? currentSttBackend(data.models) : null;
 
   return (
     <Card className="flex flex-col gap-4">
@@ -66,21 +70,30 @@ export function ModelsCard() {
               지금 설정에서 쓰는 모델
             </span>
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
-              {summaryLines(data).map((l) => (
-                <div key={`${l.label}:${l.value}`} className="contents">
-                  <dt className="text-[color:var(--text-muted)]">{l.label}</dt>
-                  <dd className="flex flex-wrap justify-between gap-x-3 text-foreground">
-                    <span>{l.value}</span>
-                    <span className="text-[color:var(--text-secondary)]">
-                      {l.status}
-                    </span>
-                  </dd>
-                </div>
-              ))}
+              {summaryLines(data).map((l) => {
+                const canDownloadNow = l.row !== undefined && rowAction(l.row).kind === "download";
+                return (
+                  <div key={`${l.label}:${l.value}`} className="contents">
+                    <dt className="text-[color:var(--text-muted)]">{l.label}</dt>
+                    <dd className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-foreground">
+                      <span>{l.value}</span>
+                      <span className="flex flex-wrap items-center gap-2">
+                        <span className="text-[color:var(--text-secondary)]">
+                          {l.status}
+                        </span>
+                        {canDownloadNow && l.row && (
+                          <DownloadNowButton row={l.row} label={rowLabel(l.row, current)} />
+                        )}
+                      </span>
+                    </dd>
+                  </div>
+                );
+              })}
             </dl>
           </section>
           <ModelList
             models={data.models}
+            freeBytes={data.freeBytes}
             expanded={expanded}
             onToggle={() => setExpanded((v) => !v)}
           />
@@ -92,10 +105,12 @@ export function ModelsCard() {
 
 function ModelList({
   models,
+  freeBytes,
   expanded,
   onToggle,
 }: {
   models: ModelRow[];
+  freeBytes: number | null;
   expanded: boolean;
   onToggle: () => void;
 }) {
@@ -140,8 +155,11 @@ function ModelList({
                       <Badge variant="accent">사용 중</Badge>
                     )}
                   </span>
-                  <span className="text-[color:var(--text-secondary)]">
-                    {statusText(m)}
+                  <span className="flex items-center gap-3">
+                    <span className="text-[color:var(--text-secondary)]">
+                      {statusText(m)}
+                    </span>
+                    <ModelRowActions row={m} freeBytes={freeBytes} label={rowLabel(m, current)} />
                   </span>
                 </li>
               ))}

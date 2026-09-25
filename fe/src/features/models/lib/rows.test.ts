@@ -68,7 +68,7 @@ describe("summaryLines", () => {
   const lens4 = row({ role: "summary", name: "mlx-community/Qwen3.5-4B-8bit", backend: null, inUseFor: ["lens"], sizeBytes: 5_163_524_489 });
 
   test("전사·요약·렌즈 추출·기본 — 안 받은 줄은 처음 처리 때 받는다고 말한다", () => {
-    expect(summaryLines(view([stt, sum9, lens4, ...FIXED]))).toEqual([
+    expect(summaryLines(view([stt, sum9, lens4, ...FIXED]))).toMatchObject([
       { label: "전사", value: "large-v3-turbo · GPU", status: "받음 · 1.6 GB" },
       { label: "요약", value: "qwen3.5 9B", status: "안 받음 · 처음 회의를 처리할 때 받아요 (약 10.5 GB)" },
       { label: "렌즈 추출", value: "qwen3.5 4B", status: "받음 · 5.2 GB" },
@@ -85,7 +85,7 @@ describe("summaryLines", () => {
   test("기본 모델 중 안 받은 것은 풀어 쓴다", () => {
     const fixed = [FIXED[0], { ...FIXED[1], installed: "no" as const, sizeBytes: null }, FIXED[2]];
     const last = summaryLines(view([stt, ...fixed])).at(-1);
-    expect(last).toEqual({ label: "기본", value: "화자 분리 · 화자 식별 · 검색 임베딩", status: "화자 식별 모델 안 받음" });
+    expect(last).toMatchObject({ label: "기본", value: "화자 분리 · 화자 식별 · 검색 임베딩", status: "화자 식별 모델 안 받음" });
   });
 
   test("렌즈 모델이 둘이면(BE·worker 값이 다름) 두 줄이 따로 나온다", () => {

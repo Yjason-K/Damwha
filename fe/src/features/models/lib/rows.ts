@@ -74,6 +74,8 @@ export interface SummaryLine {
   label: string;
   value: string;
   status: string;
+  /** (D2) 전사·요약·렌즈 줄이 대응하는 행 — 안 받았으면 카드가 여기 "미리 받기"를 붙인다. */
+  row?: ModelRow;
 }
 
 /** 요약 줄의 상태 — 안 받은 사용 중 모델은 "처음 회의를 처리할 때 받아요"를 덧붙인다. */
@@ -93,6 +95,7 @@ export function summaryLines(view: ModelsView): SummaryLine[] {
       label: "전사",
       value: `${modelShortLabel("stt", stt.name)} · ${stt.backend === "mlx" ? "GPU" : "CPU"}`,
       status: inUseStatus(stt),
+      row: stt,
     });
   }
   for (const r of view.models.filter((m) => m.role === "summary")) {
@@ -103,6 +106,7 @@ export function summaryLines(view: ModelsView): SummaryLine[] {
       label: s && l ? "요약·렌즈 추출" : s ? "요약" : "렌즈 추출",
       value: modelShortLabel("summary", r.name),
       status: inUseStatus(r),
+      row: r,
     });
   }
   // "요약"이 "렌즈 추출"보다 먼저 오게 — 같은 우선순위 안에서는 카탈로그 순서.

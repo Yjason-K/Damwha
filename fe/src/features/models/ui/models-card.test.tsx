@@ -3,11 +3,14 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, test, vi } from "vitest";
-import { apiClient } from "@/shared/api/client";
+import { ApiError, apiClient } from "@/shared/api/client";
+import { HfTokenGateProvider } from "@/features/hf-token/ui/hf-token-gate";
+import type { HfTokenState } from "@/features/hf-token/model/types";
 import type { ModelRow, ModelsView } from "../api/types";
 import { ModelsCard } from "./models-card";
 
@@ -159,4 +162,132 @@ test("아직 스캔 전이면 안내 문구만", async () => {
     ),
   ).toBeTruthy();
   expect(screen.queryByRole("region", { name: "받아 둔 모델" })).toBeNull();
+});
+
+test("안 받은 모델에 받기 → POST /models/download", async () => {
+  const post = vi.spyOn(apiClient, "post").mockResolvedValue({ data: { job: { id: "job_9" } } } as never);
+  renderCard({ ...VIEW, freeBytes: null, models: [...VIEW.models, row({ name: "medium", installed: "no", sizeBytes: null, approxBytes: 1_524_927_044, job: null })] });
+  fireEvent.click(await screen.findByRole("button", { name: "모든 모델 보기" }));
+  fireEvent.click(screen.getByRole("button", { name: "medium 받기" }));
+  await waitFor(() => expect(post).toHaveBeenCalledWith("/models/download", { role: "stt", name: "medium", backend: "mlx" }));
+});
+
+test("받는 중이면 취소 → POST /models/cancel", async () => {
+  const post = vi.spyOn(apiClient, "post").mockResolvedValue({ data: {} } as never);
+  renderCard({ ...VIEW, freeBytes: null, models: [row({ name: "small", installed: "no", sizeBytes: null, downloading: { bytesDone: 1, bytesTotal: 10 }, job: { id: "job_3", type: "download_model", status: "running", error: null } }), ...VIEW.models.slice(1)] });
+  fireEvent.click(await screen.findByRole("button", { name: "small 받기 취소" }));
+  await waitFor(() => expect(post).toHaveBeenCalledWith("/models/cancel", { jobId: "job_3" }));
+});
+
+test("삭제는 확인을 거친다", async () => {
+  const post = vi.spyOn(apiClient, "post").mockResolvedValue({ data: {} } as never);
+  renderCard({ ...VIEW, freeBytes: null, models: [...VIEW.models, row({ role: "summary", name: "mlx-community/Qwen3.5-27B-8bit", backend: null, sizeBytes: 29_528_168_817, installed: "yes", deletable: true, job: null })] });
+  fireEvent.click(await screen.findByRole("button", { name: "qwen3.5 27B 삭제" }));
+  expect(screen.getByText("qwen3.5 27B를 지울까요? 29.5 GB가 비워져요. 다시 쓰려면 다시 받아야 해요.")).toBeTruthy();
+  expect(post).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "지우기" }));
+  await waitFor(() => expect(post).toHaveBeenCalledWith("/models/delete", { role: "summary", name: "mlx-community/Qwen3.5-27B-8bit" }));
+});
+
+test("사용 중인 모델은 삭제 버튼 없이 이유만", async () => {
+  renderCard({ ...VIEW, freeBytes: null });
+  const list = await screen.findByRole("region", { name: "받아 둔 모델" });
+  expect(within(list).queryByRole("button", { name: /large-v3-turbo 삭제/ })).toBeNull();
+  expect(within(list).getAllByText("지금 설정에서 쓰고 있어요").length).toBeGreaterThan(0);
+});
+
+test("실패한 받기는 코드별 문구, 취소는 표시 없음", async () => {
+  renderCard({ ...VIEW, freeBytes: null, models: [...VIEW.models,
+    row({ name: "medium", installed: "no", sizeBytes: null, job: { id: "j", type: "download_model", status: "failed", error: { code: "DISK_FULL", message: "디스크 공간이 부족해요 — 남은 용량 1.0 GB, 필요한 용량 3.0 GB." } } }),
+    row({ name: "base", installed: "no", sizeBytes: null, job: { id: "k", type: "download_model", status: "failed", error: { code: "download_cancelled", message: "" } } }),
+  ] });
+  fireEvent.click(await screen.findByRole("button", { name: "모든 모델 보기" }));
+  expect(screen.getByText("디스크 공간이 부족해요 — 남은 용량 1.0 GB, 필요한 용량 3.0 GB.")).toBeTruthy();
+  expect(screen.queryByText(/취소/)).toBeNull();
+});
+
+test("409는 행 아래 한 줄로 보인다", async () => {
+  vi.spyOn(apiClient, "post").mockRejectedValue(new ApiError(409, "지금 설정에서 쓰고 있어요.", "model_in_use_by_settings"));
+  renderCard({ ...VIEW, freeBytes: null, models: [...VIEW.models, row({ name: "small", installed: "yes", deletable: true, job: null })] });
+  fireEvent.click(await screen.findByRole("button", { name: "small 삭제" }));
+  fireEvent.click(screen.getByRole("button", { name: "지우기" }));
+  expect(await screen.findByText("지금 설정에서 쓰고 있어요. 다른 모델로 바꾼 뒤 지울 수 있어요.")).toBeTruthy();
+});
+
+test("남은 용량보다 큰 모델은 받기 옆에 경고", async () => {
+  // VIEW.models[1]("large-v3", 안 받음, approxBytes 3.08 GB)도 freeBytes 1 GB보다 커서 같은 경고
+  // 문구를 낸다 — 브리프대로 그 행을 그대로 두고 같은 이름·용량의 행을 하나 더 얹으면(원문
+  // 그대로) 경고가 두 번 나와 getByText가 항상 실패한다(구현과 무관). 그 행을 빼고 새 행 하나만
+  // 넣어 경고가 정확히 한 번 뜨는지를 본다 — 검증 내용(문구·용량)은 브리프와 같다.
+  renderCard({ ...VIEW, freeBytes: 1_000_000_000, models: [VIEW.models[0], ...VIEW.models.slice(2), row({ name: "medium", installed: "no", sizeBytes: null, approxBytes: 3_083_522_487, job: null })] });
+  fireEvent.click(await screen.findByRole("button", { name: "모든 모델 보기" }));
+  expect(screen.getByText("남은 용량(1.0 GB)보다 커요")).toBeTruthy();
+});
+
+test("요약의 안 받은 줄에 미리 받기", async () => {
+  const post = vi.spyOn(apiClient, "post").mockResolvedValue({ data: {} } as never);
+  renderCard({ ...VIEW, freeBytes: null, models: [row({ name: "small", installed: "no", sizeBytes: null, inUseFor: ["stt"], deletable: false, job: null }), ...VIEW.models.slice(1)] });
+  const summary = await screen.findByRole("region", { name: "지금 설정에서 쓰는 모델" });
+  fireEvent.click(within(summary).getByRole("button", { name: "small 미리 받기" }));
+  await waitFor(() => expect(post).toHaveBeenCalledWith("/models/download", { role: "stt", name: "small", backend: "mlx" }));
+});
+
+const HF_ABSENT: HfTokenState = {
+  status: "absent",
+  masked: null,
+  account: null,
+  onboardingDismissed: false,
+  busy: false,
+  message: null,
+};
+
+function diarizationRow(over: Partial<ModelRow> = {}): ModelRow {
+  return row({
+    role: "diarization",
+    name: "pyannote/speaker-diarization-community-1",
+    backend: null,
+    inUseFor: ["fixed"],
+    installed: "no",
+    sizeBytes: null,
+    approxBytes: 32_800_000,
+    deletable: false,
+    job: null,
+    ...over,
+  });
+}
+
+function renderCardWithGate(view: ModelsView, tokenState: HfTokenState) {
+  vi.spyOn(apiClient, "get").mockResolvedValue({ data: view } as never);
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <HfTokenGateProvider view={{ kind: "ready", state: tokenState }} send={vi.fn()}>
+        <ModelsCard />
+      </HfTokenGateProvider>
+    </QueryClientProvider>,
+  );
+}
+
+test("화자 분리 모델 받기는 토큰 게이트를 거친다 (토큰 없으면 요청 없이 다이얼로그)", async () => {
+  const post = vi.spyOn(apiClient, "post").mockResolvedValue({ data: {} } as never);
+  renderCardWithGate(
+    { ...VIEW, freeBytes: null, models: [...VIEW.models.slice(0, 3), diarizationRow(), ...VIEW.models.slice(4)] },
+    HF_ABSENT,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "화자 분리 모델 받기" }));
+  expect(post).not.toHaveBeenCalled();
+  expect(screen.getByRole("dialog", { name: "허깅페이스 토큰이 필요해요" })).toBeInTheDocument();
+});
+
+test("토큰이 있으면 화자 분리 모델 받기는 바로 요청한다", async () => {
+  const post = vi.spyOn(apiClient, "post").mockResolvedValue({ data: {} } as never);
+  renderCardWithGate(
+    { ...VIEW, freeBytes: null, models: [...VIEW.models.slice(0, 3), diarizationRow(), ...VIEW.models.slice(4)] },
+    { ...HF_ABSENT, status: "present", masked: "hf_****…****4567" },
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "화자 분리 모델 받기" }));
+  await waitFor(() =>
+    expect(post).toHaveBeenCalledWith("/models/download", { role: "diarization", name: "pyannote/speaker-diarization-community-1" }),
+  );
+  expect(post).toHaveBeenCalledTimes(1);
 });
