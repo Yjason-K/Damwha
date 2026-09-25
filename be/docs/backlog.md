@@ -234,3 +234,29 @@ Phase 5 통합 검증 회차에서 관측했다 — 완료 기준은 아니다. 
 (`POST /api/meetings/live` → `enqueued job ... type=live_session`). 그 전까지 화면은
 "첫 발화를 기다리고 있어요"였고 DB에는 회의 행도 `live_session` 행도 없었다. 제목이 그
 지연 생성 경로에서 떨어지는지 같이 본다.
+
+## 재처리의 상태 확인이 트랜잭션 밖이다 (등록 2026-09-24, P3)
+
+Phase 6b-3 코덱스 스펙 리뷰 #1의 앞 절반. `MeetingsService.reprocess`
+(`be/src/meetings/meetings.service.ts:223`)는 회의가 `done`/`failed`인지 트랜잭션 **밖에서** 보고,
+`bumpVersionForReprocess`(`meetings.repository.ts:215`)는 상태를 다시 보지 않는다. 재처리 요청 둘이
+동시에 들어오면 job 둘이 enqueue되고 늦은 쪽이 `current_job_id`가 된다. 밀려난 job은 끝까지 돈다.
+
+- 6b-3이 막은 것은 그 경합의 **끝** 하나다 — 밀려난 job이 중단 한도를 태울 때 회수가 새 실행의
+  회의를 `failed`로 덮던 것(세 벌의 `fail_meetings`에 `current_job_id` 가드, 스펙 §6.1).
+- 남은 것: 중복 enqueue 자체, 밀려난 job의 결과 쓰기(`processing_version` 가드가 막는지 확인 필요).
+- 고칠 방향: 트랜잭션 안에서 `SELECT … FOR UPDATE`로 상태를 다시 보거나, `bumpVersionForReprocess`가
+  `WHERE status IN ('done','failed')`를 걸고 0행이면 409.
+
+## `--once` 스캔이 실패해도 worker를 재시작한다 — 같은 신분의 자식 둘 (등록 2026-09-24, P3)
+
+Phase 6b-3 코덱스 스펙 리뷰 #2. `desktop/src/services/supervisor.ts:544`의 `reapOwnOnceBefore`는 스캔
+실패·예외에도 재시작을 계속한다(Phase 5의 의도 — 스캔은 재시작을 막지 않는다). `WORKER_ID`는 앱 실행
+내내 같으므로(`config.ts`의 `RUN_WORKER_ID`), 옛 supervisor의 `--once` 자식이 살아남은 채 새
+supervisor가 뜨면 새 supervisor의 자기 고아 회수(`__main__.py:132`)가 그 자식의 job을 거둔다
+(`interruptions` +1). 새 자식이 재claim한 뒤 옛 자식의 늦은 heartbeat·stage·실패·반납은 신분이 같아
+소유권 가드(`locked_by=%s AND status='running'`)를 통과한다.
+
+- 6b-3이 키우지 않았다 — 옛 규칙에서도 같은 겹침이 `attempts`를 먹었다.
+- 고칠 방향: 스캔 실패 시 재시작을 막거나(가용성 비용), 실행별 펜싱(claim이 발급하는 토큰을 모든 소유권
+  가드에 더한다).

@@ -8,24 +8,31 @@ describe('findStatus retry', () => {
   afterEach(async () => { await db.reset(); });
   afterAll(async () => { await db.stop(); });
 
-  async function queuedRetry(error?: object) {
+  async function queuedRetry(error?: object, interruptions = 0) {
     const m = await db.pool.query(
       `INSERT INTO meeting(audio_key, status) VALUES('k','processing') RETURNING id`);
     const mid = m.rows[0].id as string;
     const j = await db.pool.query(
-      `INSERT INTO job(type, meeting_id, payload, status, attempts, max_attempts, next_attempt_at, error)
-       VALUES('process_meeting',$1,'{}','queued',2,5, now() + interval '90 seconds', $2::jsonb) RETURNING id`,
-      [mid, error === undefined ? null : JSON.stringify(error)],
+      `INSERT INTO job(type, meeting_id, payload, status, attempts, max_attempts, interruptions, next_attempt_at, error)
+       VALUES('process_meeting',$1,'{}','queued',2,5,$3, now() + interval '90 seconds', $2::jsonb) RETURNING id`,
+      [mid, error === undefined ? null : JSON.stringify(error), interruptions],
     );
     await db.pool.query(`UPDATE meeting SET current_job_id=$1 WHERE id=$2`, [j.rows[0].id, mid]);
     return mid;
   }
 
-  it('reports attempts, max_attempts and the next attempt time', async () => {
+  it('reports failures (attempts − interruptions), max_attempts, interruptions and the next attempt time', async () => {
+    const mid = await queuedRetry(undefined, 1);   // attempts 2, interruptions 1
+    const row = await repo.findStatus(db.pool, mid);
+    expect(row.retry).toMatchObject({ failures: 1, max_attempts: 5, interruptions: 1 });
+    expect(row.retry).not.toHaveProperty('attempts');
+    expect(row.retry.next_attempt_at).not.toBeNull();
+  });
+
+  it('reports zero interruptions for a job that was never reclaimed', async () => {
     const mid = await queuedRetry();
     const row = await repo.findStatus(db.pool, mid);
-    expect(row.retry).toMatchObject({ attempts: 2, max_attempts: 5 });
-    expect(row.retry.next_attempt_at).not.toBeNull();
+    expect(row.retry).toMatchObject({ failures: 2, interruptions: 0 });
   });
 
   /**

@@ -16,7 +16,8 @@ import {
   type ClusterRefusal,
   type DatabaseRefusal,
 } from "./pairing";
-import { classifyLockOwner, parsePostmasterPid, type ProcessInfo } from "./pidfile";
+import { clearPostmasterLock } from "./lock";
+import { parsePostmasterPid, type ProcessInfo } from "./pidfile";
 import { describeToolFailure, toolOk, type ToolOptions, type ToolResult } from "../../process/tool-runner";
 import type { LaunchContext, LaunchResult, ReadinessResult, ServiceHandle, ServiceSpec } from "../types";
 
@@ -37,6 +38,11 @@ export interface EmbeddedPostgresDeps {
   spawnPostmaster(logFile: string): ServiceHandle;
   stopOrphan(pid: number): Promise<PostmasterStopResult>;
   log(line: string): void;
+  /**
+   * launch의 맨 앞, 어떤 판정·파일 작업보다 먼저 (Phase 6b-2 스펙 §5.2). main이 데이터 가드를 건다 — 첫 기동·다시 시도·
+   * 상태 창 재시작이 모두 이 한 곳을 지난다. 던지면 launch가 거부로 끝난다.
+   */
+  preLaunch?(signal: AbortSignal): Promise<void>;
 }
 
 const REASON_TEXT: Record<Exclude<ClusterRefusal, "version-mismatch" | "controldata-failed"> | DatabaseRefusal, string> = {
@@ -141,38 +147,6 @@ export function embeddedPostgresSpec(deps: EmbeddedPostgresDeps): ServiceSpec {
     deps.log(`postgres: 새 클러스터를 만들었다 — ${layout.pgdata} (id ${c.id})`);
   }
 
-  async function handleLock(): Promise<void> {
-    const pidPath = path.join(layout.pgdata, "postmaster.pid");
-    const text = readIfExists(pidPath);
-    const pidfile = text === null ? null : parsePostmasterPid(text);
-    if (pidfile === null) return;
-    let info: ProcessInfo | null;
-    try {
-      info = await deps.psInfo(pidfile.pid);
-    } catch (e) {
-      refuse(CAUSES.pgLockUnprovable.text(pidfile.pid, pidPath, reasonOf(e)));
-    }
-    const owner = classifyLockOwner(layout.pgdata, info, pidfile.pid);
-    if (owner.kind === "none") return;
-    if (owner.kind === "orphan") {
-      deps.log(`postgres: 이전 실행이 남긴 postmaster(pid ${owner.pid})를 내린다 — 채택하지 않는다(옛 바이너리일 수 있다)`);
-      const how = await deps.stopOrphan(owner.pid);
-      deps.log(`postgres: 고아 postmaster(pid ${owner.pid}) 종료 결과 — ${how}`);
-      if (how === "leaked") refuse(CAUSES.pgOrphanStuck.text(owner.pid));
-      return;
-    }
-    // pid가 재사용됐다. 그 pid가 우리 postgres가 아님을 확인했으므로 락은 낡았다 (§5 두 번째 삭제).
-    for (const lock of [pidPath, `${layout.socketFile}.lock`]) {
-      try {
-        if (!fs.lstatSync(lock).isFile()) continue;
-      } catch {
-        continue;
-      }
-      fs.rmSync(lock);
-      deps.log(`postgres: 낡은 락을 지웠다 — ${lock} (pid ${owner.pid}는 ${info?.comm ?? "?"})`);
-    }
-  }
-
   /** "retry"는 서버가 아직 접속을 받지 않는다는 뜻이다(psql exit 2). 준비 유예가 상한이다. */
   async function queryDatabaseOid(signal: AbortSignal): Promise<number | null | "retry"> {
     const r = await tool(
@@ -229,6 +203,7 @@ export function embeddedPostgresSpec(deps: EmbeddedPostgresDeps): ServiceSpec {
     },
     launch(ctx: LaunchContext): Promise<LaunchResult> {
       return manualUnlessTagged(async () => {
+        await deps.preLaunch?.(ctx.signal);
         const missing = PG_BINARY_NAMES.filter((n) => !isExecutable(path.join(binaries.dir, "bin", n)));
         if (missing.length > 0) refuse(CAUSES.pgBundleMissing.text(missing));
         const tooLong = socketPathTooLong(layout);
@@ -251,14 +226,14 @@ export function embeddedPostgresSpec(deps: EmbeddedPostgresDeps): ServiceSpec {
           if (decision.reason === "controldata-failed") refuse(CAUSES.pgControldataFailed.text(controldataFailure ?? layout.pgdata));
           refuse(pairing(decision.reason));
         }
-        // 락 판정(handleLock)도 거부할 수 있다 — ps가 실패하거나 고아가 안 내려가면. 그 거부가 §5를 어기지 않도록
-        // "start" 경로는 handleLock을 먼저 끝내고서야 디렉터리를 만들고 initdb 임시물을 지운다.
+        // 락 판정(clearPostmasterLock)도 거부할 수 있다 — ps가 실패하거나 고아가 안 내려가면. 그 거부가 §5를 어기지
+        // 않도록 "start" 경로는 clearPostmasterLock을 먼저 끝내고서야 디렉터리를 만들고 initdb 임시물을 지운다.
         if (decision.kind === "initdb") {
           ensureDirs();
           removeInitdbLeftovers();
           await initCluster(ctx.signal);
         } else {
-          await handleLock();
+          await clearPostmasterLock(deps);
           ensureDirs();
           removeInitdbLeftovers();
         }

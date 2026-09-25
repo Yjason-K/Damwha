@@ -319,7 +319,7 @@ export interface ReapDeps {
 /**
  * SIGTERM 뒤 SIGKILL까지의 유예. 기동을 붙잡는 시간이라 짧게 둔다 — 고아가 있을 때만(앱이 강제
  * 종료된 다음 실행) 든다. 일하던 `--once` 자식은 stage boundary까지 SIGTERM을 미루므로 이 안에 거의
- * 끝나지 않는다. 그 job은 attempts를 소모하는데, 살려 두면 새 worker와 같은 job을 두고 겹친다(§6.5 처분).
+ * 끝나지 않는다. 그 job은 회수되며 interruptions를 소모하는데, 살려 두면 새 worker와 같은 job을 두고 겹친다(§6.5 처분).
  */
 export const ORPHAN_TERM_GRACE_MS = 3_000;
 export const ORPHAN_POLL_MS = 100;
@@ -587,6 +587,17 @@ const ORPHAN_PLAN: ReapPlan = {
 export async function reapOrphans(d: ReapDeps): Promise<{ reaped: number[] } | { failed: true }> {
   const run = await reapByKind(d, ORPHAN_PLAN);
   return run.failed ? { failed: true } : { reaped: run.signalled.map((e) => e.pid) };
+}
+
+/**
+ * 회수 **뒤** 다시 스캔해 아직 남은 앞 실행의 앱 소유 프로세스 (Phase 6b-2 스펙 §5.2-2). reapOrphans는 SIGKILL 뒤
+ * 생존자를 로그로만 남긴다. `exists`로 한 번 더 거른다 — 방금 죽인 pid가 스캔과 신호 사이에 남아 보이는 것을 빼고,
+ * 정말 살아 있는 것만 센다.
+ */
+export async function survivingOrphans(d: Pick<ReapDeps, "ps" | "trees" | "runId" | "exists">): Promise<number[]> {
+  return parseDamwhaProcesses(await d.ps(), d.trees)
+    .filter((p) => classify(p, d.runId) === "orphan" && d.exists(p.pid))
+    .map((p) => p.pid);
 }
 
 const OWN_ONCE_PLAN: ReapPlan = {

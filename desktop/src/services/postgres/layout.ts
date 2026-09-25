@@ -27,6 +27,14 @@ export interface PgLayout {
   backups: string;
   /** logging_collector가 쓰는 디렉터리. 앱이 죽어도 서버가 계속 기록한다. */
   logDir: string;
+  /** 판올림 스냅샷 (Phase 6b-2 스펙 §4). data/와 같은 볼륨의 형제다 — 안에 두면 clone과 교체의 경계가 꼬인다. */
+  snapshots: string;
+  /** 되돌리기 교체용 임시 clone (§6.3). */
+  restoreStaging: string;
+  /** 되돌리기 저널 (§6.2). */
+  restoreJournal: string;
+  /** 이 data/를 마지막으로 연 packaged 빌드 (§5.1). data/ **안**이라 되돌리기가 함께 되감는다. */
+  generationFile: string;
 }
 
 export function pgLayout(userData: string): PgLayout {
@@ -42,6 +50,10 @@ export function pgLayout(userData: string): PgLayout {
     socketFile: path.join(runDir, `.s.PGSQL.${PG_SOCKET_PORT}`),
     backups: path.join(userData, "backups"),
     logDir: path.join(userData, "logs", "postgres"),
+    snapshots: path.join(userData, "snapshots"),
+    restoreStaging: path.join(userData, "restore-staging"),
+    restoreJournal: path.join(userData, "restore-journal.json"),
+    generationFile: path.join(dataDir, ".damwha-generation"),
   };
 }
 

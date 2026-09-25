@@ -1,5 +1,5 @@
 import { CAUSES } from "../diagnostics/causes";
-import { reapOrphans, type KnownTree, type ReapDeps } from "../process/orphans";
+import { reapOrphans, survivingOrphans, type KnownTree, type ReapDeps } from "../process/orphans";
 import { descendantPids, psArgs } from "../process/process-tree";
 import { ServiceFailure } from "../services/failure";
 import { processExists } from "../services/postgres/handle";
@@ -17,6 +17,15 @@ import { processExists } from "../services/postgres/handle";
 export async function reapBeforeStart(d: ReapDeps): Promise<number[]> {
   const out = await reapOrphans(d);
   if ("failed" in out) throw new ServiceFailure(CAUSES.orphanScanFailed.text, "manual");
+  // 회수가 성공을 돌려도 SIGKILL 뒤 생존자는 로그로만 남는다 (orphans.ts의 reapByKind 끝). 그 프로세스가 스토리지에
+  // 쓰는 중일 수 있으므로, 데이터 가드가 스냅샷·교체를 하기 전에 여기서 멈춘다 (Phase 6b-2 스펙 §5.2-2).
+  let alive: number[];
+  try {
+    alive = await survivingOrphans(d);
+  } catch {
+    throw new ServiceFailure(CAUSES.orphanScanFailed.text, "manual");
+  }
+  if (alive.length > 0) throw new ServiceFailure(CAUSES.writersAlive.text(alive), "manual");
   return out.reaped;
 }
 

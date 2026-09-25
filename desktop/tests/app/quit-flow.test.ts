@@ -378,6 +378,42 @@ describe("runQuitFlow", () => {
   });
 });
 
+describe("commit step (Phase 6b-2 §6.2)", () => {
+  it("runs commit after the decision and before beginQuit", async () => {
+    const r = recorder({ commit: async () => void r.log.push("commit") });
+    await runQuitFlow(r.deps);
+    expect(r.log.indexOf("commit")).toBeLessThan(r.log.indexOf("begin"));
+  });
+
+  it("a throwing commit starts no quit: no beginQuit, no stopServices, no quit", async () => {
+    const r = recorder({
+      commit: async () => {
+        throw new Error("ENOSPC");
+      },
+    });
+    await runQuitFlow(r.deps);
+    expect(r.log).not.toContain("begin");
+    expect(r.log.some((l) => l.startsWith("stop"))).toBe(false);
+    expect(r.log).not.toContain("quit");
+    expect(r.lines.join("\n")).toMatch(/ENOSPC/);
+  });
+
+  it("cancelling the recording confirm never reaches commit", async () => {
+    let committed = false;
+    const r = recorder(
+      {
+        commit: async () => {
+          committed = true;
+        },
+        confirm: async () => false,
+      },
+      { recording: true, analysing: false },
+    );
+    await runQuitFlow(r.deps);
+    expect(committed).toBe(false);
+  });
+});
+
 describe("graceExpiryPrompt", () => {
   it("tells someone whose analysis is progressing that it is progressing", async () => {
     // 31분 오디오의 STT 한가운데는 분 단위로 걸린다. 그 사람의 올바른 선택은 기다리는

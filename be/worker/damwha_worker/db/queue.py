@@ -76,19 +76,26 @@ def heartbeat(conn, job_id: str, worker_id: str) -> int:
     return cur.rowcount
 
 
-def requeue(conn, job_id: str, worker_id: str) -> int:
+def requeue(conn, job_id: str, worker_id: str, error: dict) -> int:
     # 30초 기준·15분 상한. 1·2초였을 때는 세 번이 3초에 다 타서 3분짜리 네트워크 끊김이
     # job을 영구 실패로 만들었다 (Phase 4 결과 §12.6-12). max_attempts 기본값 5(025)와 함께
     # 시도 시각이 0 · 30s · 90s · 210s · 450s가 된다.
+    #
+    # 지수는 재시도 예산 소비량(attempts − interruptions) − 1이다 — 크래시 회수가 백오프를
+    # 부풀리지 않는다 (Phase 6b-3 스펙 §4.3). dispatch.failures()와 같은 식이고
+    # be/test/fixtures/job-reap/grid.json의 retry 격자가 둘을 함께 고정한다.
+    #
+    # error를 함께 쓴다 — 재시도 대기 중 화면의 "마지막 오류"가 여기서 온다(스펙 §6.3).
+    # 다음 claim은 지우지 않는다: 재시도 중인 job의 마지막 오류로 남는다.
     cur = conn.execute(
         """
-        UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL,
+        UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL, error=%s,
                next_attempt_at=now()
-                 + least(30 * power(2, attempts - 1), 900) * interval '1 second',
+                 + least(30 * power(2, attempts - interruptions - 1), 900) * interval '1 second',
                updated_at=now()
         WHERE id=%s AND locked_by=%s AND status='running'
         """,
-        (job_id, worker_id),
+        (Jsonb(error), job_id, worker_id),
     )
     return cur.rowcount
 
@@ -110,7 +117,7 @@ def requeue_for_shutdown(conn, job_id: str, worker_id: str) -> int:
 # (reap_own_orphans). 두 벌로 두면 live_session·소진·딸린 행 정리 중 한쪽만 고쳐질 자리다.
 _REAP_SQL = """
         WITH stale AS (
-          SELECT id, type, meeting_id, attempts, max_attempts, stage
+          SELECT id, type, meeting_id, interruptions, max_interruptions, stage
           FROM job
           WHERE {selector}
           FOR UPDATE SKIP LOCKED
@@ -119,21 +126,26 @@ _REAP_SQL = """
         -- 워커는 이미 지나간 오디오를 앞에서부터 다시 전사한다. max_attempts=1이 보통
         -- 그것을 보장하지만, 남는 attempts를 가진 라이브 행이 생겨도 여기서 failed로 간다 —
         -- 두 집합이 정확히 반대라야 stale live job이 running에 영원히 남지 않는다.
+        -- 회수는 중단 한 번이다 (Phase 6b-3 스펙 §4.2). interruptions를 +1 하고 그것으로
+        -- 상한을 판정한다. attempts는 읽지도 바꾸지도 않는다 — 실행 중이던 job은 재시도
+        -- 예산이 남아 있다(다 썼다면 dispatch가 이미 failed로 닫았다).
         requeued AS (
-          UPDATE job SET status='queued', locked_by=NULL, locked_at=NULL,
-                 next_attempt_at=NULL, updated_at=now()
+          UPDATE job SET status='queued', interruptions = interruptions + 1,
+                 locked_by=NULL, locked_at=NULL, next_attempt_at=NULL, updated_at=now()
           WHERE id IN (
-            SELECT id FROM stale WHERE attempts < max_attempts AND type <> 'live_session'
+            SELECT id FROM stale
+             WHERE interruptions + 1 < max_interruptions AND type <> 'live_session'
           )
           RETURNING id
         ),
         failed AS (
-          UPDATE job j SET status='failed', updated_at=now(),
+          UPDATE job j SET status='failed', interruptions = j.interruptions + 1, updated_at=now(),
             error = jsonb_build_object('code','stale_worker',
                                        'message','worker lock expired',
                                        'stage', j.stage)
           WHERE id IN (
-            SELECT id FROM stale WHERE attempts >= max_attempts OR type = 'live_session'
+            SELECT id FROM stale
+             WHERE interruptions + 1 >= max_interruptions OR type = 'live_session'
           )
           RETURNING id, type, meeting_id, error
         ),
@@ -155,12 +167,12 @@ _REAP_SQL = """
         -- OOM/SIGKILL 행). 여기서 회의를 failed로 만들면 아직 업로드 중인 멀쩡한 녹음을
         -- 죽인다. job은 그대로 failed가 되고, 마무리는 stop이나 orphan 스위퍼가 API
         -- 경로로 맡는다. TypeScript의 JobsRepository.reapStale과 같은 계약이다.
+        -- current_job_id 가드: 밀려난 옛 job이 새 실행의 회의를 덮지 않는다 (스펙 §6.1).
         fail_meetings AS (
           UPDATE meeting m SET status='failed',
             error = jsonb_build_object('code','stale_worker','message','processing worker lost')
-          WHERE m.id IN (
-            SELECT meeting_id FROM failed WHERE type = 'process_meeting'
-          )
+          FROM failed f
+          WHERE m.id = f.meeting_id AND m.current_job_id = f.id AND f.type = 'process_meeting'
           RETURNING m.id
         ),
         fail_speakers AS (

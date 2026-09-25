@@ -98,15 +98,18 @@ Developer ID로 서명하고 공증까지 마친 DMG로 배포한다. ad-hoc은 
 - **정책(2026-09-23~): Damwha는 데스크톱 앱으로만 배포한다.** 셀프호스팅 웹 배포(`v<version>`
   태그, `deploy/release.sh`·`deploy/Makefile`)는 걷어냈다 — `v0.1.1`~`v0.2.3` 태그는 과거 기록으로만
   남는다. 저장소의 "Latest"는 이제 데스크톱 릴리스다.
-- **태그 네임스페이스는 그래도 `desktop-v<version>`을 유지한다** — 걷어낸 웹 배포가 쓰던
-  `v<version>`과 구분해 둔 것이고, 앱의 (미래) 자동 업데이트 조회가 `desktop-v*`를 찾는다.
+- **태그는 `v<version>`이다 (2026-09-23~, Phase 6b-1 스펙 §3-2).** 6a는 웹 배포의 `v<version>`과
+  구분하려고 `desktop-v<version>`을 썼고, 웹 배포를 걷어낸 뒤 관례대로 되돌렸다. 이미 나간
+  `desktop-v0.3.0`·`desktop-v0.3.1`은 이름을 바꾸지 않는다(공유된 링크). 앱의 새 버전 조회
+  (`src/update/release-check.ts`)는 `v*`와 옛 `desktop-v*`를 다 읽는다. 규칙은
+  `scripts/lib/release-tag.mjs` 한 곳에 있다.
 - **데스크톱 릴리스는 `bash desktop/scripts/publish.sh --notes-file <파일>`로 낸다 — 손으로
   `gh release create`를 치지 않는다.** 스크립트는 gh를 부르기 전에 작업 트리가 깨끗한지, 태그
-  `desktop-v<version>`이 HEAD를 가리키고 원격(origin)에도 같은 커밋으로 있는지(R22 — 없으면
+  `v<version>`이 HEAD를 가리키고 원격(origin)에도 같은 커밋으로 있는지(R22 — 없으면
   `--verify-tag`가 거절한다), `out/`의 DMG가 `.sha256`과 맞는지 보고, 하나라도 어긋나면 아무것도
   내지 않는다. 태그 푸시는 하지 않는다 — 사람이 먼저 한다. 발행은 `--verify-tag --latest`로
   하고(데스크톱 릴리스가 저장소 Latest가 된다), **발행 뒤 태그 없는 `gh release view`(= 저장소
-  Latest)가 방금 낸 태그와 같은지 다시 본다.** 다르면 고치는 명령(`gh release edit desktop-v<ver>
+  Latest)가 방금 낸 태그와 같은지 다시 본다.** 다르면 고치는 명령(`gh release edit v<ver>
   --repo Yjason-K/Damwha --latest`)을 출력하고 실패한다 — 자동으로 고치지는 않는다. 노트에는
   최소 macOS(15.0)를 적는다(스펙 §7.1).
   - 이 스크립트는 과거(6a 초기)에는 `--latest=false`로 발행했다 — 당시 저장소 Latest는 웹 배포의
@@ -119,6 +122,27 @@ Developer ID로 서명하고 공증까지 마친 DMG로 배포한다. ad-hoc은 
   `LSMinimumSystemVersion`, `scripts/lib/minos.mjs`의 `MAX_MINOS`(`check-bundle`이 번들 Mach-O
   전수의 `vtool -show-build` 값을 이 상한과 비교해 초과하면 exit 1). mlx·mlx-metal은
   `scripts/mlx-pin.txt`로 15.0 휠을 직접 URL 고정한다 — uv의 플랫폼 태그로는 못 고른다.
+
+## 새 버전 알림 (Phase 6b-1)
+
+- `src/update/`는 electron을 값으로 import하지 않는다. 조회(`release-check.ts`)·건너뛴 버전
+  (`update-state.ts`, `<userData>/update-state.json`)·대화상자 옵션(`dialogs.ts`)·정책
+  (`update-flow.ts`)·타이머(`scheduler.ts`)·모달 카운터(`modal-tracker.ts`). `main.ts`는 잎만 준다.
+- 조회는 `GET /repos/Yjason-K/Damwha/releases`의 모든 페이지에서 `v*`·옛 `desktop-v*` 중 최대를
+  고른다. `/releases/latest`에 기대지 않는다. 다운로드 URL은 응답이 아니라 태그로 만든다.
+- 자동 확인은 packaged에서만, 담화 화면이 처음 **실제로** 붙은 뒤(`updateAttached`, loadURL 성공 뒤)
+  1회 + 24시간. 타이머 해제는 `beginQuit` — `before-quit`이 아니다(종료 취소 뒤에도 살아야 한다).
+- 실측용 env `DAMWHA_UPDATE_CHECK_INTERVAL_MS`(60,000~86,400,000): 주기를 줄이고 첫 확인도 한 주기
+  뒤로 민다.
+- 새 버전 대화상자는 `cancelId: 1` — 빼면 Escape가 "다운로드 페이지 열기"를 고를 수 있다.
+
+## 업데이트 전 스냅샷·되돌리기 (Phase 6b-2)
+
+- 데이터 가드(`app/data-guard.ts`의 `runDataGuard`)는 첫 기동에서 `reapBeforeStart` 뒤 명시적으로(보류 대화상자를 띄운다), "다시 시도"·상태 창 재시작에서는 postgres 어댑터의 `preLaunch` 훅(`launch()` 맨 앞)으로 돈다. 저널을 잇는 것은 첫 기동의 명시 호출(`journal: "advance"`)뿐이다 — 훅은 `journal: "refuse"`로 돌아, 저널을 만나면 아무것도 건드리지 않고 `restorePending`(`manual`)으로 거부한다. 자동 재시작은 API·worker가 떠 있는 동안에도 오므로 거기서 `data/`를 바꾸면 안 된다.
+- 스냅샷은 packaged에서만, 빌드 식별자(`Resources/build-info.json` vs `data/.damwha-generation`)가 다를 때만 뜬다. 사본은 `/bin/cp -c -R`(`process/clone.ts`) — Node `fs.cp`는 macOS에서 clone하지 않는다.
+- 되돌리기: 메뉴 "업데이트 전으로 되돌리기…" → 종료 흐름 `commit`이 `restore-journal.json`을 쓰고 → relaunch → 데이터 가드가 `data/` ↔ `restore-staging/<rid>`를 교체 → 보류 대화상자. 실측용 env `DAMWHA_RESTORE_PAUSE_AFTER_STEP`.
+- 메뉴가 안 뜰 때의 수동 절차는 [`docs/RESTORE.md`](../docs/RESTORE.md).
+- 스펙: [Phase 6b-2](../docs/superpowers/specs/2026-09-24-electron-phase-6b-restore-design.md).
 
 ## 디스크 부족 — 진입점 셋 (Phase 6a)
 
@@ -163,8 +187,13 @@ Developer ID로 서명하고 공증까지 마친 DMG로 배포한다. ad-hoc은 
 | --- | --- |
 | `data/postgres/` | 내장 클러스터 (PGDATA) |
 | `data/storage/` | 그 클러스터와 짝인 파일 저장소. `.damwha-cluster` 마커가 짝을 증명한다 — 지우거나 옮기면 앱이 기동을 거부한다 |
+| `data/.damwha-generation` | 이 `data/`를 마지막으로 연 packaged 빌드 식별자(Phase 6b-2). 되돌리기가 `data/`와 함께 되감는다 |
 | `run/` | 소켓 디렉터리(0700). TCP는 열지 않는다 |
 | `backups/` | 데이터가 있는 DB에 마이그레이션을 적용하기 전의 `pg_dump -Fc`, 최근 5개 |
+| `snapshots/` | 판올림 스냅샷(Phase 6b-2), 최근 2개 |
+| `restore-journal.json` | 되돌리기 진행 상태(Phase 6b-2) |
+| `restore-staging/` | 되돌리기 교체용 임시 사본(Phase 6b-2) |
+| `data.replaced-*` | 되돌리기가 옮겨 둔 그때의 `data/`(Phase 6b-2) — **앱은 지우지 않는다** |
 | `logs/` | `supervisor.log`·`api.log`·`worker.log`·`embed.log`·`postgres.log`(초기 stderr), `postgres/`(서버 로그) |
 | `storage/` | Phase 1·2가 Docker DB와 쓴 파일. 앱은 읽지도 쓰지도 않는다 (Phase 5가 데이터 이전을 범위에서 뺐다 — 옮기는 주체가 없다) |
 | `config.json` | 사람이 고치는 설정. 앱은 다시 쓰지 않는다(`REPO_ROOT` 저장 제외). 손으로 고친 뒤 JSON이 유효한지 확인한다 |
@@ -187,9 +216,11 @@ dev와 packaged가 같은 클러스터라 버려도 되는 "dev 클러스터"가
 - **신분은 `RUN_WORKER_ID`(`desktop-<uuid>`)이고 앱 실행마다 새로 발급된다.** `withAppOwned`가 모든
   자식 env에 `WORKER_ID`로 얹는다. 터미널 `pnpm worker`(`worker-1`)와 웹 배포판은 접두사에 걸리지
   않아 **앱이 그 job을 건드리지 않는다** — Phase 2의 "외부 서비스와 앱 소유를 구분한다"와 같은 결이다.
-- 기동 회수는 `attempts`를 **되돌리지 않고** 세 갈래로 간다: 남은 재시도가 있는 비-live는 `queued`로,
-  다 쓴 비-live는 `failed`(`app_restarted`)로 — 딸린 `meeting`·요약·렌즈 run·화자까지 함께 닫는다 —
-  `live_session`은 언제나 `failed`로. 앱을 다섯 번 강제 종료하면 그 job은 실패한다. 그것이 정직하다
+- 회수는 **중단을 센다** — `job.interruptions`를 +1 하고 그것으로 상한을 판정한다(마이그레이션 `026`,
+  Phase 6b-3 스펙 §4.2). `attempts`는 읽지도 바꾸지도 않는다. 세 갈래: 중단 예산이 남은 비-live는
+  `queued`로, 다 쓴(`interruptions + 1 >= max_interruptions`, 기본 3) 비-live는 `failed`(`app_restarted`)로 —
+  딸린 `meeting`·요약·렌즈 run·화자까지 함께 닫되 **회의는 그 job이 아직 `current_job_id`일 때만** —
+  `live_session`은 언제나 `failed`로. 앱을 세 번 강제 종료하면 그 job은 실패한다. 그것이 정직하다
   (그 job이 앱을 죽이고 있을 수 있다). 라이브의 봉인·마무리는 회수가 아니라 API의
   `LiveOrphanService`가 한다 — 회수는 그 경로를 30분 기다리지 않고 여는 것뿐이다.
 - **회수도 스캔도 기동·재시작을 막지 않는다.** 회수 SQL은 `FOR UPDATE SKIP LOCKED`라 남이 쥔 행을
@@ -205,9 +236,9 @@ dev와 packaged가 같은 클러스터라 버려도 되는 "dev 클러스터"가
   처리하고 있어요 · 35%"라는 거짓을 계속 말했다. 자기 고아 회수가 그 자리를 메운다. 성립 근거는
   **부모가 자식을 한 번에 하나만 띄우고 `_wait_child`로 거둔다**는 것 — 그래서 저 세 순간에는 자기
   신분으로 잠긴 행이 전부 고아다. 시간 조건이 없어도 남의 행을 건드리지 않는다.
-- 자기 고아 회수도 `attempts`를 **되돌리지 않고** 기동 회수와 같은 갈래로 간다(재시도가 남은 비-live는
-  `queued`, 소진했거나 `live_session`이면 `failed` — `reap_stale`과 SQL 한 벌을 공유한다). 재현
-  회차에서 `attempts`가 1에서 2가 되고 새 `--once` 자식이 같은 job을 이어받았다.
+- 자기 고아 회수도 같은 규칙이다(`reap_stale`과 SQL 한 벌을 공유한다) — `interruptions` +1, 상한이면
+  `failed`. 재현 회차(Phase 5)에서는 옛 규칙이라 `attempts`가 1에서 2가 됐다. 지금은 `attempts`가 claim의
+  +1로만 오르고 회수는 `interruptions`만 올린다.
 
 `WORKER_ID`와 `ps`에 보이는 `--run-id`는 **같은 실행 안에서도 값이 다르다** — 전자는 `config.ts`의
 `RUN_WORKER_ID`로 `job.locked_by`에 들어가고, 후자는 supervisor의 실행 id다. 둘 다 `desktop-` 접두사를
@@ -215,7 +246,7 @@ dev와 packaged가 같은 클러스터라 버려도 되는 "dev 클러스터"가
 
 ## 재시도 — 0 · 30초 · 90초 · 210초 · 450초
 
-worker가 TRANSIENT 실패를 requeue할 때 `next_attempt_at = now() + least(30 * 2^(attempts-1), 900)초`다
+worker가 TRANSIENT 실패를 requeue할 때 `next_attempt_at = now() + least(30 * 2^(attempts − interruptions − 1), 900)초`다
 (`be/worker/damwha_worker/db/queue.py`). `job.max_attempts` 컬럼 기본값은 **5**(마이그레이션 `025`)라
 claim 직후 실패를 기준으로 시도 시각이 0 · 30초 · 90초 · 210초 · 450초가 된다 — **4회차가 3.5분에
 닿으므로 3분짜리 끊김(모델 다운로드 등)을 사람 개입 없이 같은 job이 넘긴다.**
@@ -225,8 +256,13 @@ claim 직후 실패를 기준으로 시도 시각이 0 · 30초 · 90초 · 210�
 - 마이그레이션 `025` **전에 만들어진 job은 그대로 `max_attempts=3`**이다. 새 기본값은 그 뒤에
   enqueue된 job에만 붙는다.
 - `live_session`은 `maxAttempts: 1`을 명시해 이 기본값을 타지 않는다. 라이브 오류는 전부 PERMANENT다.
-- **강제 종료 N번은 재시도 5회 중 N회를 먹는다** — `attempts` 한 컬럼이 크래시 회수와 일시 실패를
-  함께 센다. 나누려면 스키마 변경이 필요해 Phase 6이 받는다.
+- **강제 종료는 재시도 예산을 먹지 않는다** (Phase 6b-3). 재시도 판정은 `attempts − interruptions`
+  (재시도 예산 소비량 — 성공한 실행도 1이다) `< max_attempts`이고, 회수는 `interruptions`만 올린다.
+  두 한도(재시도 5, 중단 3)는 독립이고 먼저 닿는 쪽이 job을 끝낸다. 30분 reaper가 보는 것은 "30분간
+  heartbeat 성공 없음"이다 — 긴 job은 heartbeat가 살아 있는 한 회수되지 않는다.
+- 화면의 재시도 문구는 stage보다 앞선다 — `requeue`가 stage를 지우지 않아서다. `· 중단 N회`는
+  중단이 있을 때만. "마지막 오류"는 `requeue`가 쓰는 `job.error`다(6b-3 전에는 비어 있었다).
+- `026` 전에 만들어진 job은 `interruptions=0`이다 — 그 전에 크래시로 먹은 시도는 예산 소비로 남는다.
 
 ## 디버깅
 
@@ -237,7 +273,7 @@ claim 직후 실패를 기준으로 시도 시각이 0 · 30초 · 90초 · 210�
 ## 지키는 것
 
 - postmaster에는 SIGINT(fast)·SIGQUIT(immediate)만. `services/postgres/handle.ts`의 신호 타입이 SIGKILL을 막는다.
-- 앱이 지우는 것은 넷뿐 — `data/postgres.initdb-*`, 증명한 낡은 락, 5개 초과 백업, `*.dump.partial`. 거부 경로는 아무것도 만들거나 지우지 않는다.
-- 마이그레이션 실패·페어링 거부 같은 `manual` 실패는 자동 재시도하지 않는다(`app/retry-policy.ts`, 창 재열기도 재시도하지 않는다 — `app/window-flow.ts`). 메뉴의 "다시 시도"만 다시 돈다.
+- 앱이 지우는 것은 데이터 영역(`data/`·`snapshots/`·`backups/`·`restore-staging/`)에서 여덟 가지뿐 — `data/postgres.initdb-*`, 증명한 낡은 락, 5개 초과 백업(단 세대별 첫 덤프는 고정), `*.dump.partial`, 보존 상한(2)을 넘은 완료 스냅샷, 미완료 스냅샷, `restore-staging/<rid>`, 그 백업의 sidecar(덤프와 함께). `data.replaced-*`는 지우지 않는다. 거부 경로는 아무것도 만들거나 지우지 않는다.
+- 마이그레이션 실패·페어링 거부 같은 `manual` 실패는 자동 재시도하지 않는다(`app/retry-policy.ts`, 창 재열기도 재시도하지 않는다 — `app/window-flow.ts`). `writersAlive`·`snapshotFailed`·`restoreIncomplete`·`restoreJournalUnreadable`·`restorePending`(Phase 6b-2, 데이터 가드)도 같은 `manual`이다. 감독자를 세우기 전에 던진 실패는 main이 `lastStartFailure`로 보존해, 감독자 없이 창을 다시 열어도 자동 재시도하지 않는다. 메뉴의 "다시 시도"만 다시 돈다.
 - `desktop/package.json`의 `dependencies`는 비어 있다(번들 위생). DB에는 번들 `psql`·`pg_controldata`와 `migrate.js`로만 묻는다.
 - `main.ts`는 electron을 값으로 import해 vitest가 부를 수 없다. 판단은 테스트 가능한 모듈로 빼고 `main.ts`에는 배선만 남긴다.

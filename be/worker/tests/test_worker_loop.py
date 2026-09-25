@@ -79,6 +79,27 @@ def test_transient_error_requeues_when_attempts_left(conn, tmp_path, monkeypatch
     assert (
         conn.execute("SELECT status FROM job WHERE id=%s", (jid,)).fetchone()["status"] == "queued"
     )
+    err = conn.execute("SELECT error FROM job WHERE id=%s", (jid,)).fetchone()["error"]
+    assert err["code"] == "io_error" and err["kind"] == "TRANSIENT"
+
+
+def test_transient_error_requeues_when_only_interruptions_used_the_budget(
+    conn, tmp_path, monkeypatch
+):
+    """attempts=max여도 그중 중단이 있으면 재시도 예산이 남는다 (스펙 §4.3, 변이 M7)."""
+    _stub_ffmpeg(monkeypatch)
+    mid, jid = _enqueue_pm(conn)
+    conn.execute("UPDATE job SET attempts=2, max_attempts=3, interruptions=1 WHERE id=%s", (jid,))
+    job = db.claim(conn, "w1")  # attempts 3, interruptions 1 → failures 2 < 3
+    boom = _models()
+    boom.diarizer = _RaisingDiarizer(WorkerError("io_error", "x", ErrorKind.TRANSIENT))
+    out = handle_job(conn, job, Storage(str(tmp_path)), "w1", build_models=lambda: boom)
+    assert out == "requeued"
+    row = conn.execute(
+        "SELECT attempts - interruptions AS failures, interruptions, error FROM job WHERE id=%s",
+        (jid,),
+    ).fetchone()
+    assert row["failures"] == 2 and row["interruptions"] == 1 and row["error"]["code"] == "io_error"
 
 
 def test_permanent_error_fails(conn, tmp_path, monkeypatch):

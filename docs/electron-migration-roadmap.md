@@ -47,7 +47,14 @@ GitHub Release)으로만 배포한다 — `deploy/` 아래 Docker 이미지·`de
 `v<version>` 태그로 내던 셀프호스팅 설치는 중단이고, `v0.1.1`~`v0.2.3` 태그는 과거 기록으로만
 남는다. 공개 데모(`deploy/demo/`)는 그대로 유지한다. 저장소 "Latest"는 `desktop-v0.3.1`로
 넘어갔다 — 위 T11의 사고(발행이 웹 배포의 Latest를 빼앗은 것) 이후 처음으로, 이제는 되돌릴
-웹 배포가 없으므로 데스크톱 릴리스가 Latest여도 된다.
+웹 배포가 없으므로 데스크톱 릴리스가 Latest여도 된다. **같은 날 태그도 `v<version>`으로 되돌리기로
+했다** — 다음 릴리스부터 `v0.4.0` 형식이고, 이미 나간 `desktop-v0.3.0`·`desktop-v0.3.1`은 그대로 둔다
+(아래 Phase 6b 절, 6b-1 스펙 §3-2).
+
+**2026-09-25: Phase 6b 전체(6b-1·6b-3·6b-2)를 마치고 `v0.4.0`을 발행했다** —
+<https://github.com/Yjason-K/Damwha/releases/tag/v0.4.0>, 저장소 Latest. **로드맵의 Phase 0~6이 모두 끝났다.**
+남은 미결은 Phase 4의 토큰 문자열 전수 grep(토큰 원문을 쥔 사용자만 실행 가능)과 Phase 6a의 C12(예고된 퇴행이
+일어나지 않아 미판정) 둘이다. 발행 기록은 아래 Phase 6b 절 마지막 상태 문단.
 
 ## 목표와 전제
 
@@ -376,7 +383,9 @@ DB(`damwha_pgdata`)와 `be/storage`를 새 앱으로 옮길 필요가 없다고 
 `deploy/release.sh`의 셀프호스팅 웹 배포가 이미 쓰고 있어서(`v0.1.1`~`v0.2.3`, 자산은 tarball과
 wheel이며 DMG가 없다) `latest`가 제품을 가리지 못한다. 웹 릴리스를 나중에 내면 데스크톱 앱이
 "새 버전이 있어요"라며 tarball을 가리킨다. **데스크톱 태그는 `desktop-v<version>`으로 가르고**
-목록에서 그 접두사로 거른다. 6a 스펙 리뷰가 잡아낸 것이다(6a 스펙 §4·§14). electron-updater의 자동 다운로드·설치는 넣지 않는다:
+목록에서 그 접두사로 거른다. 6a 스펙 리뷰가 잡아낸 것이다(6a 스펙 §4·§14). **2026-09-23에 뒤집혔다**
+— 웹 배포를 걷어내 구분의 이유가 사라졌고 태그를 `v<version>`으로 되돌렸다. 조회는 `v*`와 옛
+`desktop-v*`를 함께 읽고 최대를 고른다(6b-1 스펙 §3-2). electron-updater의 자동 다운로드·설치는 넣지 않는다:
 번들이 1.3 GB Python 트리를 포함한 수 GB라 delta 없이는 매 판올림이 전체 재다운로드다.
 원천을 손으로 쓰는 `latest.json`이 아니라 Releases API로 고른 이유는 **릴리스 자체가 진실의
 원천이라 드리프트가 없기** 때문이다(태그·DMG·노트가 한 몸). 저장소가 public이라 비인증 60회/시간
@@ -483,8 +492,70 @@ C11은 깨끗한 설치 경로 한정이고 6a 이전 빌드 이력이 남은 �
 - 이전 버전에서 업데이트해도 회의 기록과 설정 유지.
 - 업데이트 실패 시 정의된 복구 절차로 데이터와 실행 상태 복구 가능.
 
-**상태: 미착수.** 6a가 병합된 뒤 착수한다 — 6a의 산출물(서명·공증된 v1이 두 번째 맥에 설치된
-상태)이 이 Phase의 선행 조건이다.
+**분할 (2026-09-23).** 6b-1(새 버전 알림)·6b-2(백업·복원·실패 복구)·6b-3(`attempts` 분리)으로
+나눈다. 알림은 나머지 둘과 독립이고 0.3.0 설치자에게 0.3.1을 알릴 길이 지금 없어 먼저 낸다.
+6b-3의 마이그레이션이 v1→v2 검증의 시험체라는 판단은 그대로다. **태그를 `v<version>`으로
+되돌린다** — 웹 배포 퇴역(PR #28)으로 `desktop-v` 구분의 이유가 사라졌다. 이미 나간
+`desktop-v0.3.0`·`desktop-v0.3.1`은 그대로 두고, 조회는 `v*`와 옛 `desktop-v*`를 함께 읽는다.
+`/releases/latest`에는 여전히 기대지 않는다 — Latest는 사람이 손으로 바꿀 수 있는 값이다.
+
+**상태 (2026-09-23): 6b-1 완료 — 구현 9개 Task·리뷰 clean, 변이 17/17, packaged 실측 C1~C10 전부 충족.**
+스펙은 [2026-09-23-electron-phase-6b-update-notice-design.md](superpowers/specs/2026-09-23-electron-phase-6b-update-notice-design.md),
+결과는 [2026-09-23-electron-phase-6b-update-notice-results.md](superpowers/reports/2026-09-23-electron-phase-6b-update-notice-results.md),
+브랜치는 `feat/electron-migration-phase-6b-update-notice`. 앱은 GitHub Releases에서 `v*`·옛 `desktop-v*` 중
+최대를 골라 네이티브 대화상자로 알리고(자동: packaged에서 붙음 뒤 1회 + 24시간, 수동: 앱 메뉴 "업데이트 확인…"),
+릴리스 태그는 다음 판부터 `v<version>`이다. 이 기능은 그것이 담긴 첫 릴리스부터 작동한다 — 0.3.x 사용자는
+한 번은 손으로 받아야 한다. **6b-2·6b-3의 착수 순서는 아래 6b-3 상태 문단을 본다 — 6b-3을 먼저 마쳤다.**
+
+**상태 (2026-09-24): 6b-3 완료 — 구현 8개 Task·packaged 실측·최종 whole-branch 리뷰 완료.**
+`job.attempts` 한 컬럼이 크래시 회수와 일시 실패 재시도를 함께 세던 것을 마이그레이션
+`026_job_interruptions.sql`로 나눴다 — 회수 셋(API 기동 `reclaimOrphaned`·API 5분 `reapStale`·worker
+`_REAP_SQL`)만 `interruptions`를 올리고 그것으로 상한(`max_interruptions`, 기본 3)을 판정하며,
+재시도 예산은 `failures = attempts − interruptions`로 따로 센다. 같은 참에 코덱스 스펙 리뷰가 찾은
+기존 결함 셋(회수의 회의 전파에 `current_job_id` 가드, 재시도 대기가 옛 stage를 이기게, TRANSIENT
+requeue가 오류를 저장하게)도 함께 고쳤다. 구현 8개 Task(마이그레이션·공유 격자와 TS 회수·Python
+회수·requeue·API 응답·화면 배너·문서·전 패키지 변이 21종)와 packaged 실측(Task 9)까지 리뷰
+clean이다. 변이 21/21 빨간불(동치 없음), packaged 완료 기준 C1(업그레이드 보존)·C2(중단이 재시도
+예산을 안 먹음)·C4(되돌림 거부) **충족**, C3(일시 실패 재시도)는 실데이터 위에서 TRANSIENT 실패를
+재현할 안전한 수단이 없어 **실측을 생략**하고 단위 테스트(§8.1)로 대신 증명했다. 최종
+whole-branch 리뷰는 "With fixes"(Critical 0, Important 2)였고 둘 다 이 브랜치에서 고쳤다
+(`ab53aeb`, `064830e`) — 상세는 결과 문서 §5. 스펙은
+[2026-09-24-electron-phase-6b-attempts-split-design.md](superpowers/specs/2026-09-24-electron-phase-6b-attempts-split-design.md),
+결과는 [2026-09-24-electron-phase-6b-attempts-split-results.md](superpowers/reports/2026-09-24-electron-phase-6b-attempts-split-results.md),
+브랜치는 `feat/electron-migration-phase-6b-attempts`.
+
+**순서 결정 (2026-09-24): 6b-3을 먼저 마쳤고, 6b-2는 이 병합 뒤 새 브랜치에서 한다.** 이유는 6b-3
+스펙 §1 — 0.3.1과 `dev`는 둘 다 마이그레이션 `025`에서 끝나므로, `026`이 없으면 6b-2가 시험할
+실제 스키마 변경(백업·복원 대상)이 없었다. 이제 `026`이 그 시험체다. **0.4.0은 6b-2까지 병합된
+뒤에 낸다.**
+
+**상태 (2026-09-24): 6b-2 완료 — 구현 10개 Task·최종 whole-branch 리뷰·packaged 실측 완료. 6b 전체가 끝났다.**
+packaged 판올림 때 postmaster를 띄우기 전에 `data/`(postgres·storage)를 APFS clone으로 떠 두고(`<userData>/snapshots/`,
+최근 2개, 빌드 식별자 `Resources/build-info.json` vs `data/.damwha-generation`), 앱 메뉴 "업데이트 전으로 되돌리기…" →
+저널 → 재시작 → 기동 초기 교체 → 보류 대화상자로 업데이트 직전 상태(0.3.1 포함)로 돌아간다. 교체는 어느 단계에서
+끊겨도 다음 기동이 이어서 마치며 `initdb`로 빠지지 않는다. 마이그레이션 게이트는 업그레이드 시도마다 첫 덤프를
+고정 보존한다. 앱이 메뉴까지 못 가면 [`docs/RESTORE.md`](RESTORE.md)의 수동 절차. 스파이크가 짝(마커)·oid·시퀀스·파일을
+한 시점으로 묶는 단위가 `data/` 통째 clone임을 실측으로 정했다(덤프 복원은 시퀀스를 되감아 녹음 번호가 충돌한다).
+**완료 기준 두 번째 줄("업데이트 실패 시 정의된 복구 절차로 데이터와 실행 상태 복구 가능")이 채워졌다** — 앱 안의
+절차(되돌리기 왕복 뒤 0.3.1 기준선 54줄 동일, 교체 중 크래시 두 지점에서 복구)와 수동 절차 둘 다 실데이터에서 0.3.1
+기동까지 닿았다. 변이 24/24 빨간불. 최종 리뷰의 Important 2(가드 훅이 앱이 떠 있는 채로 교체할 수 있던 경로, 수동
+복원 뒤 옛 스냅샷 재사용)를 고쳐 실측으로 확인했다. 스펙은
+[2026-09-24-electron-phase-6b-restore-design.md](superpowers/specs/2026-09-24-electron-phase-6b-restore-design.md),
+결과는 [2026-09-24-electron-phase-6b-restore-results.md](superpowers/reports/2026-09-24-electron-phase-6b-restore-results.md),
+브랜치는 `feat/electron-migration-phase-6b-restore`. **이제 v0.4.0을 낼 수 있다** — 버전 올리기·발행은 이 브랜치 병합 뒤 따로.
+
+**상태 (2026-09-25): v0.4.0 발행 — Phase 6b 전체가 담긴 첫 릴리스이자 `v<version>` 태그의 첫 데스크톱 릴리스.**
+<https://github.com/Yjason-K/Damwha/releases/tag/v0.4.0>, 저장소 Latest. `dev`의 `bc077ca`(desktop 0.4.0)에 태그를
+달고 `package:release` → `publish.sh`로 냈다 — `.app` 공증 `3dfe1649-40b8-41f2-9c86-155fbc0b5e06`·DMG 공증
+`d3043214-9131-4c6a-8d4b-8394140a6fbf` 둘 다 Accepted, 마운트한 DMG 안 `.app`의 `spctl` = Notarized Developer ID,
+`Damwha-0.4.0-arm64.dmg` sha256 `1ab151109e32dccdc2554b844091ff99667f0ec95d9fb0862d87f20c5722456b`. 앱과 같은
+`GET /releases` 조회에서 `v0.4.0`이 옛 `desktop-v0.3.1`보다 위에 온다. `main` 병합은 PR #33. 발행 중 드러난 것
+둘: **키체인에서 notarytool 프로필 `damwha`가 사라져 있었다**(6a에서 인증 확인했던 것, 원인 미상) — 첫 빌드가
+`.app` 공증 제출에서 `No Keychain password item found`로 멈췄고 사용자가 `store-credentials`로 다시 등록했다. 다음
+릴리스 전에 `xcrun notarytool history --keychain-profile damwha`로 먼저 확인한다. 그리고 be e2e는 3회 중 1회만
+552/552였다 — 나머지는 파일마다 다른 testcontainers 포트 바인딩(`No host port found`)과 기존 `socket hang up`
+플레이크다. **0.3.x 사용자에게는 새 버전 알림이 없으므로 이번 한 번은 손으로 받아야 하고, 6b-2의 스냅샷·되돌리기는
+0.3.x → 0.4.0 판올림부터 작동한다.**
 
 서명 관련 위험 검증은 Phase 0부터 진행하며, 배포 검증을 6a에서, 업데이트 검증을 6b에서 완성한다.
 

@@ -9,14 +9,16 @@ describe('reapStale', () => {
   afterAll(async () => { await db.stop(); });
 
   // helper: create a running job whose lock is `minutesAgo` old, with given attempts
-  async function runningJob(opts: { minutesAgo: number; attempts: number; maxAttempts: number }) {
+  async function runningJob(
+    opts: { minutesAgo: number; attempts: number; maxAttempts: number; interruptions?: number },
+  ) {
     const m = await db.pool.query(`INSERT INTO meeting(audio_key, status) VALUES('k','processing') RETURNING id`);
     const mid = m.rows[0].id;
     const j = await db.pool.query(
-      `INSERT INTO job(type, meeting_id, payload, status, locked_by, locked_at, attempts, max_attempts)
+      `INSERT INTO job(type, meeting_id, payload, status, locked_by, locked_at, attempts, max_attempts, interruptions)
        VALUES('process_meeting',$1,'{}','running','w',
-              now() - ($2 || ' minutes')::interval, $3, $4) RETURNING id`,
-      [mid, String(opts.minutesAgo), opts.attempts, opts.maxAttempts],
+              now() - ($2 || ' minutes')::interval, $3, $4, $5) RETURNING id`,
+      [mid, String(opts.minutesAgo), opts.attempts, opts.maxAttempts, opts.interruptions ?? 0],
     );
     await db.pool.query(`UPDATE meeting SET current_job_id=$1 WHERE id=$2`, [j.rows[0].id, mid]);
     return { jobId: j.rows[0].id as string, meetingId: mid as string };
@@ -41,8 +43,8 @@ describe('reapStale', () => {
     expect(rows[0]).toMatchObject({ status: 'queued', next_attempt_at: null });
   });
 
-  it('fails a stale job out of attempts and marks the meeting failed', async () => {
-    const { jobId, meetingId } = await runningJob({ minutesAgo: 45, attempts: 3, maxAttempts: 3 });
+  it('fails a stale job on its third interruption and marks the meeting failed', async () => {
+    const { jobId, meetingId } = await runningJob({ minutesAgo: 45, attempts: 3, maxAttempts: 3, interruptions: 2 });
     const res = await repo.reapStale(db.pool, 30);
     expect(res.failed).toBe(1);
     const job = await db.pool.query('SELECT status, error FROM job WHERE id=$1', [jobId]);
@@ -52,14 +54,35 @@ describe('reapStale', () => {
     expect(mt.rows[0].status).toBe('failed');
   });
 
+  it('requeues a stale job whose retry budget is spent but whose interruptions are not', async () => {
+    const { jobId } = await runningJob({ minutesAgo: 45, attempts: 3, maxAttempts: 3 });
+    expect(await repo.reapStale(db.pool, 30)).toEqual({ requeued: 1, failed: 0 });
+    const { rows } = await db.pool.query('SELECT status, attempts, interruptions FROM job WHERE id=$1', [jobId]);
+    expect(rows[0]).toEqual({ status: 'queued', attempts: 3, interruptions: 1 });
+  });
+
+  it('does not fail a meeting whose current job is a newer one (spec §6.1)', async () => {
+    const { jobId, meetingId } = await runningJob({ minutesAgo: 45, attempts: 3, maxAttempts: 5, interruptions: 2 });
+    const newer = await db.pool.query(
+      `INSERT INTO job(type, meeting_id, payload, status) VALUES('process_meeting',$1,'{}','queued') RETURNING id`,
+      [meetingId]);
+    await db.pool.query(`UPDATE meeting SET current_job_id=$1 WHERE id=$2`, [newer.rows[0].id, meetingId]);
+
+    expect(await repo.reapStale(db.pool, 30)).toEqual({ requeued: 0, failed: 1 });
+    const job = await db.pool.query('SELECT status FROM job WHERE id=$1', [jobId]);
+    expect(job.rows[0].status).toBe('failed');
+    const mt = await db.pool.query('SELECT status FROM meeting WHERE id=$1', [meetingId]);
+    expect(mt.rows[0].status).toBe('processing');
+  });
+
   it('fails the linked lens extraction run when an exhausted extract job is stale', async () => {
     const m = await db.pool.query(
       `INSERT INTO meeting(audio_key, status) VALUES('lens-stale','done') RETURNING id`,
     );
     const meetingId = m.rows[0].id as string;
     const job = await db.pool.query(
-      `INSERT INTO job(type, meeting_id, payload, status, locked_by, locked_at, attempts, max_attempts)
-       VALUES('extract_lenses',$1,'{}','running','w', now() - interval '45 minutes', 3, 3)
+      `INSERT INTO job(type, meeting_id, payload, status, locked_by, locked_at, attempts, max_attempts, interruptions)
+       VALUES('extract_lenses',$1,'{}','running','w', now() - interval '45 minutes', 3, 3, 2)
        RETURNING id`,
       [meetingId],
     );

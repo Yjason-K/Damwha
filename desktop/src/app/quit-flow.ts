@@ -74,6 +74,11 @@ export interface QuitFlowDeps {
   /** 되돌릴 수 없는 지점 — quitting 래치를 올리고 재시도 타이머를 끈다. */
   beginQuit(): void;
   /**
+   * 종료를 되돌릴 수 없게 만들기 **전에** 끝나야 하는 기록 (Phase 6b-2 스펙 §6.2 — 되돌리기 저널). beginQuit은 동기이고
+   * 정리용 try/finally 밖이라 거기서 던지면 서비스 정지를 건너뛴다. 던지면 이번 종료를 시작하지 않는다.
+   */
+  commit?(): Promise<void>;
+  /**
    * "종료 중" 화면을 건다. 창이 없으면 아무것도 하지 않는다.
    *
    * worker의 유예는 90초다(31분 오디오의 STT stage boundary가 분 단위일 수 있다). 그동안
@@ -182,6 +187,15 @@ export async function runQuitFlow(deps: QuitFlowDeps): Promise<void> {
     );
   }
   if (!decision.quit) return;
+
+  if (deps.commit !== undefined) {
+    try {
+      await deps.commit();
+    } catch (e) {
+      deps.log(`종료 전 기록을 남기지 못해 종료하지 않았어요 — ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+  }
 
   deps.beginQuit();
   try {

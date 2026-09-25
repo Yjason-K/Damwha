@@ -235,6 +235,7 @@ def test_reaper_fails_summary_row_when_worker_lock_expires(conn):
         locked_by="w",
         attempts=3,
         max_attempts=3,
+        interruptions=2,
         locked_minutes_ago=30,
         payload={
             "schema_version": 1,
