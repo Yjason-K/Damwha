@@ -136,7 +136,9 @@ def scan_cache(root: str, specs_by_repo: dict[str, ModelSpec]) -> dict[str, Repo
             complete = (
                 _complete_with_spec(repo_dir, spec) if spec else _complete_generic(repo_dir)
             )
-        except OSError:
+        except Exception:  # noqa: BLE001
+            # 저장소 하나를 읽다 난 예외(깨진 UTF-8 refs, weight_map 값이 문자열이 아닌 경우 등)는
+            # 그 저장소만 partial로 두고 나머지는 계속 스캔한다(스펙 §4.2).
             complete = False
         out[repo] = RepoScan(size_bytes=size, complete=complete)
     return out

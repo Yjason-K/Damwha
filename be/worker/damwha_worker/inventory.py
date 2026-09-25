@@ -9,6 +9,15 @@ worker **부모**의 daemon 스레드에서 돈다(`report_host_capabilities`와
 embed, `llm_entry`, 사용자의 수동 삭제를 트리거 배선 없이 이 한 규칙이 잡는다. 5분 무조건 스캔은
 지문이 놓친 경우의 안전망이다.
 
+또 하나의 트리거: `model_readiness`의 최상위 `updated_at`이 지난 주기와 다르면(캐시 지문·5분과
+무관하게) 다시 스캔한다. 캐시 히트로 적재된 모델은 파일이 이미 있어 지문이 안 바뀌므로, 이게
+없으면 받기가 끝난 뒤에도 최대 5분간 `pending`이 참으로 남는다(스펙 §5.1의 pending 두 번째
+조건). readiness 스탬프도 지문처럼 **스캔 전에** 읽고, 다음 비교 기준으로 남기는 것은 쓰기가
+성공했을 때뿐이다.
+
+`DAMWHA_SHARED_STATE=off`(외장 DB 모드)면 이 루프는 아무것도 하지 않고 즉시 돌아온다 — 앱이
+소유하지 않은 DB에 쓰지 않는 것과 같은 이유로, 쓰지도 않을 지문 계산·캐시 스캔조차 하지 않는다.
+
 **실패.** 스캔이 던지면(권한 등) 쓰지 않고 다음 주기에 다시 본다 — 한 번의 실패로 모든 모델이
 "안 받음"으로 깜빡이지 않게. 캐시 루트가 없는 첫 실행은 실패가 아니라 빈 `repos`다(`scan_cache`).
 DB 오류도 로그만 남긴다.
@@ -58,28 +67,40 @@ def run_inventory_loop(
     clock=time.monotonic,
     connect=None,
 ) -> None:
+    if not core.shared_state_enabled():
+        log.info("DAMWHA_SHARED_STATE=off — inventory 루프를 시작하지 않는다")
+        return
     root = root or cache_scan.hub_cache_dir()
     interval = settings.poll_interval_seconds if interval is None else interval
     connect = connect or db.connect
     last_fp = None
     last_write: float | None = None
+    last_readiness_at: str | None = None
     while not shutdown.is_set():
         try:
             fp = cache_scan.fingerprint(root)
             now = clock()
-            due = last_write is None or fp != last_fp or now - last_write >= full_rescan_seconds
-            if due:
-                value = build_inventory(
-                    root,
-                    lens_model=settings.lens_llm_model,
-                    summary_fallback=settings.summary_llm_model,
+            conn = connect(database_url)
+            try:
+                # readiness 스탬프도 지문처럼 스캔 **전에** 읽는다 — 스캔 도중 바뀐 것은
+                # 다음 주기가 잡는다(모듈 docstring).
+                readiness_at = db.read_model_readiness(conn)["updated_at"]
+                due = (
+                    last_write is None
+                    or fp != last_fp
+                    or now - last_write >= full_rescan_seconds
+                    or readiness_at != last_readiness_at
                 )
-                conn = connect(database_url)
-                try:
+                if due:
+                    value = build_inventory(
+                        root,
+                        lens_model=settings.lens_llm_model,
+                        summary_fallback=settings.summary_llm_model,
+                    )
                     db.write_model_inventory(conn, value)
-                finally:
-                    conn.close()
-                last_fp, last_write = fp, now
+                    last_fp, last_write, last_readiness_at = fp, now, readiness_at
+            finally:
+                conn.close()
         except Exception:  # noqa: BLE001 — 다음 주기가 다시 본다
             log.warning("model inventory scan/write failed — retrying next cycle", exc_info=True)
         if shutdown.wait(interval):

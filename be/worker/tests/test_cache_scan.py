@@ -126,6 +126,36 @@ def test_repo_id_with_dashes_round_trips(tmp_path):
     assert "mlx-community/Qwen3.5-4B-8bit" in cache_scan.scan_cache(str(tmp_path), {})
 
 
+def test_refs_with_invalid_utf8_is_partial_other_repos_still_scanned(tmp_path):
+    """스펙 §4.2 리뷰 반영 — 저장소 하나를 읽다 난 예외(OSError가 아니어도)는 그 저장소만
+    partial로 두고 나머지는 계속 스캔한다."""
+    base = make_repo(tmp_path, "org/bad", {"config.json": b"{}"})
+    (base / "refs" / "main").write_bytes(b"\xff\xfe\x00garbage")  # 깨진 UTF-8 — read()가 던진다
+    make_repo(tmp_path, "org/ok", {"config.json": b"{}"})
+    out = cache_scan.scan_cache(
+        str(tmp_path),
+        {"org/bad": _spec("org/bad", ["config.json"]), "org/ok": _spec("org/ok", ["config.json"])},
+    )
+    assert out["org/bad"].complete is False
+    assert out["org/ok"].complete is True
+
+
+def test_index_with_non_string_shard_values_is_partial_other_repos_still_scanned(tmp_path):
+    """weight_map 값이 문자열이 아니면(TypeError) 그 저장소만 partial."""
+    index = json.dumps({"weight_map": {"a": 1, "b": 2}}).encode()
+    spec = _spec("org/badshard", ["config.json", "model.safetensors.index.json"])
+    make_repo(
+        tmp_path, "org/badshard",
+        {"config.json": b"{}", "model.safetensors.index.json": index},
+    )
+    make_repo(tmp_path, "org/ok2", {"config.json": b"{}"})
+    out = cache_scan.scan_cache(
+        str(tmp_path), {"org/badshard": spec, "org/ok2": _spec("org/ok2", ["config.json"])}
+    )
+    assert out["org/badshard"].complete is False
+    assert out["org/ok2"].complete is True
+
+
 def _bump(path):
     """mtime_ns를 확실히 바꾼다 — 같은 틱 안의 두 쓰기가 같은 mtime을 갖는 파일시스템이 있다."""
     t = time.time() + 10

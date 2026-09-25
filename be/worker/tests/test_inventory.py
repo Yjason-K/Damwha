@@ -83,7 +83,13 @@ def _run(conn, root, *, ticks, clock, writes, fp_seq=None, monkeypatch=None):
     def connect(_url):
         class _C:
             def execute(self, *a, **k):
-                writes.append(a[1][1].obj if hasattr(a[1][1], "obj") else a[1][1])
+                # write_model_inventory는 (key, Jsonb(value)) 두 인자를 넘긴다 — inventory 스캔
+                # 값만 `writes`에 담는다. read_model_readiness의 SELECT는 인자가 하나뿐이라
+                # 그냥 실제 conn에 그대로 흘려보낸다(진짜 읽기).
+                params = a[1] if len(a) > 1 else ()
+                if len(params) > 1:
+                    value = params[1]
+                    writes.append(value.obj if hasattr(value, "obj") else value)
                 return conn.execute(*a, **k)
 
             def close(self):
@@ -128,6 +134,47 @@ def test_loop_writes_real_row(conn, tmp_path):
     row = _row(conn)
     assert row["repos"]["BAAI/bge-m3"] == {"size_bytes": 2, "complete": False}
     assert row["worker_llm"]["lens_model"] == "L"
+
+
+def test_loop_writes_when_readiness_updated_at_changes_between_ticks(conn, tmp_path, monkeypatch):
+    """스펙 §5.1의 pending 두 번째 조건 — 캐시 지문·5분 무관하게 model_readiness의 최상위
+    updated_at이 바뀌면(받기가 끝났다는 신호) 다시 스캔해 쓴다."""
+    writes = []
+    stamps = iter(["r1", "r2"])
+
+    def _readiness(_c):
+        return {"updated_at": next(stamps), "entries": {}}
+
+    monkeypatch.setattr(db, "read_model_readiness", _readiness)
+    _run(conn, tmp_path, ticks=2, clock=lambda: 0.0, writes=writes,
+         fp_seq=[("a",), ("a",)], monkeypatch=monkeypatch)
+    assert len(writes) == 2  # t=0 시작(무조건), 다음 틱은 readiness 갱신으로 씀
+
+
+def test_loop_skips_write_when_readiness_updated_at_unchanged(conn, tmp_path, monkeypatch):
+    writes = []
+    monkeypatch.setattr(
+        db, "read_model_readiness", lambda _c: {"updated_at": "same", "entries": {}}
+    )
+    _run(conn, tmp_path, ticks=2, clock=lambda: 0.0, writes=writes,
+         fp_seq=[("a",), ("a",)], monkeypatch=monkeypatch)
+    assert len(writes) == 1  # t=0 시작만 — 지문·시계·readiness 모두 불변
+
+
+def test_loop_returns_immediately_when_shared_state_off(monkeypatch, tmp_path):
+    monkeypatch.setenv("DAMWHA_SHARED_STATE", "off")
+    monkeypatch.setattr(
+        inventory, "build_inventory",
+        lambda *a, **k: pytest.fail("shared state off인데 스캔이 돌았다"),
+    )
+
+    def _refuse_connect(_url):
+        pytest.fail("shared state off인데 DB에 연결했다")
+
+    inventory.run_inventory_loop(
+        "unused", _Settings(), _StopAfter(1), root=str(tmp_path), interval=0,
+        clock=lambda: 0.0, connect=_refuse_connect,
+    )
 
 
 def test_supervisor_main_starts_inventory_thread(monkeypatch):
