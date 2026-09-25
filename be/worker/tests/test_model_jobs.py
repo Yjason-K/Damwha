@@ -4,6 +4,7 @@
 """
 
 import errno
+import threading
 
 import pytest
 
@@ -93,6 +94,44 @@ def test_download_already_cancelled_at_start(conn):
         )
 
 
+def test_download_cancels_mid_download_via_stop_requested(conn, conn2, monkeypatch):
+    """호출자 스레드가 훅과 같은 방식(`_run_watched`)으로 `job.stop_requested_at`을 감시한다
+    (스펙 §7.2). `cancel_when`에 넘기는 술어를 `lambda: False` 같은 것으로 바꾸면 이 테스트가
+    빨개져야 한다 — `snapshot`이 그 술어를 실제로 읽는 `_run_watched`를 통과하게 만든다."""
+    monkeypatch.setenv("DAMWHA_SHARED_STATE", "off")
+    monkeypatch.setattr(downloads, "_WATCHDOG_TICK_SECONDS", 0.01)
+    monkeypatch.setattr(downloads._STATE, "stall_seconds", 1.0)
+
+    job = _running(conn, "download_model", _STT_TINY_MLX)
+    gate = threading.Event()
+
+    def blocked(**_kw):
+        gate.wait(5)
+        return "late"
+
+    def fake_snapshot(**kwargs):
+        repo_id = kwargs["repo_id"]
+        report = downloads._Report(conn=None, key=repo_id, writer="w")
+        return downloads._run_watched(blocked, (), {}, report, repo_id)
+
+    def flip_stop_requested():
+        conn2.execute("UPDATE job SET stop_requested_at=now() WHERE id=%s", (job["id"],))
+
+    threading.Timer(0.05, flip_stop_requested).start()
+    try:
+        with pytest.raises(downloads.DownloadCancelled):
+            model_jobs.run_download_model(
+                conn,
+                job,
+                _p(role="stt", name="tiny", backend="mlx"),
+                worker_id=W,
+                hf_token=None,
+                snapshot=fake_snapshot,
+            )
+    finally:
+        gate.set()  # 감시가 버린 백그라운드 스레드를 풀어 스위트에 남기지 않는다
+
+
 def test_download_enospc_is_disk_full(conn):
     job = _running(conn, "download_model", _STT_TINY_MLX)
 
@@ -161,6 +200,7 @@ def test_handler_cancel_closes_as_cancelled_without_retry(conn):
     from damwha_worker.jobs import DownloadModelHandler, JobContext
 
     job = _running(conn, "download_model", _STT_TINY_MLX)
+    core.merge_model_readiness(conn, "mlx-community/whisper-tiny", {"state": "failed"}, W)
     err = downloads.DownloadCancelled("mlx-community/whisper-tiny").to_json()
     out = DownloadModelHandler().on_failure(
         conn, job, JobContext(storage=None, worker_id=W), err, retry=True
@@ -168,3 +208,6 @@ def test_handler_cancel_closes_as_cancelled_without_retry(conn):
     assert out == "failed"
     row = _status(conn, job["id"])
     assert row["status"] == "failed" and row["error"]["code"] == errors.DOWNLOAD_CANCELLED
+    # 취소도 최종 실패와 같은 정리를 받는다 — readiness에 failed가 남으면 desktop 상태 창이
+    # 선택 기능의 실패에 "다시 시작"을 권한다 (스펙 §7.4).
+    assert "mlx-community/whisper-tiny" not in core.read_model_readiness(conn)["entries"]

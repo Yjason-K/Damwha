@@ -1474,3 +1474,51 @@ def test_cancel_when_is_thread_local_and_restores():
     with downloads.cancel_when(lambda: False):
         assert downloads._current_cancel() is not None
     assert downloads._current_cancel() is None
+
+
+def test_run_watched_honors_cancel_even_when_stall_watch_is_off(monkeypatch):
+    """`_STATE.stall_seconds<=0`(무진행 감시가 꺼짐)이어도 취소 술어가 있으면 감시 루프를 켠다
+    — Step 4의 판정 순서 변경(`limit <= 0 and cancel is None`)이 지키는 계약이다."""
+    import threading
+
+    from damwha_worker.models import downloads
+
+    monkeypatch.setattr(downloads._STATE, "stall_seconds", 0.0)
+    monkeypatch.setattr(downloads, "_WATCHDOG_TICK_SECONDS", 0.01)
+    gate = threading.Event()
+    flag = {"stop": False}
+
+    def blocked(**_kw):
+        gate.wait(5)
+        return "late"
+
+    threading.Timer(0.05, lambda: flag.__setitem__("stop", True)).start()
+    report = downloads._Report(conn=None, key="org/m", writer="w")
+    try:
+        with downloads.cancel_when(lambda: flag["stop"]):
+            with pytest.raises(downloads.DownloadCancelled):
+                downloads._run_watched(blocked, (), {}, report, "org/m")
+    finally:
+        gate.set()
+
+
+def test_run_watched_with_no_cancel_and_no_stall_watch_calls_original_directly(monkeypatch):
+    """감시도 취소도 없으면 스레드를 띄우지 않고 호출자 스레드에서 바로 부른다(짧아진 경로)."""
+    import threading
+
+    from damwha_worker.models import downloads
+
+    monkeypatch.setattr(downloads._STATE, "stall_seconds", 0.0)
+    assert downloads._current_cancel() is None
+    seen = {}
+
+    def original():
+        seen["thread"] = threading.current_thread()
+        return "direct"
+
+    report = downloads._Report(conn=None, key="org/m", writer="w")
+
+    result = downloads._run_watched(original, (), {}, report, "org/m")
+
+    assert result == "direct"
+    assert seen["thread"] is threading.current_thread()
