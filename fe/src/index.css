@@ -8,7 +8,7 @@
 
 /* ============================================================
  * Damwha Design System (codename "Timbre")
- * Mintlify-toned · light-first reading UI.
+ * Mintlify-toned · light-first reading UI, with a full dark token set below.
  *
  * Raw scales + semantic aliases live in :root. shadcn's token contract is
  * mapped onto those Timbre semantics at the bottom of this block, so
@@ -118,6 +118,24 @@
   --accent-bg-hover: var(--accent-3);
   --focus-ring: 0 0 0 2px var(--gray-0), 0 0 0 4px var(--accent-6);
 
+  /* --- Floating layers (tooltip · toast) ---
+   * Light keeps them deliberately dark so they pop off a light page. Dark
+   * mode lifts them one step above the card instead of inverting them —
+   * a bright slab on a dark reading screen glares. */
+  --surface-floating: var(--gray-12);
+  --border-floating: transparent;
+  --text-on-floating: var(--gray-1);
+  --text-on-floating-muted: var(--gray-7);
+  /* Toast icons sit on the floating surface, which is dark in BOTH themes,
+   * so the two values do not change with the theme. */
+  --toast-success: #5fe3ad;
+  --toast-danger: #f58c8c;
+
+  /* --- One-off states that used to be raw values in components --- */
+  --red-9-hover: #b03d3d;
+  --overlay-hover: rgba(10, 10, 10, 0.06);
+  --surface-scrim-soft: rgba(20, 23, 28, 0.28);
+
   /* --- Typography helpers (font sizes live in the @theme block below) --- */
   --weight-regular: 400;
   --weight-medium: 500;
@@ -198,6 +216,92 @@
   --sidebar-accent-foreground: var(--accent-text);
   --sidebar-border: var(--border-subtle);
   --sidebar-ring: var(--accent-9);
+}
+
+/* ============================================================
+ * Dark theme — toggled by `class="dark"` on <html> (see
+ * src/shared/lib/theme.ts and the inline script in index.html).
+ *
+ * Raw scales keep their NAMES and ROLES and only change value: --gray-0 is
+ * still "the card surface" and --gray-12 still "body text". That is why the
+ * components that reach for raw scales directly still land right.
+ * Neutral black (not brand-ink blue) so speaker hues and mint stay true.
+ * The primary button inverts to light ink; mint stays the signal colour.
+ * Speaker -solid values are NOT redefined: they carry white initials in
+ * both themes. Every value here comes from the 2026-09-25 dark-theme spec.
+ * Must come after :root — same specificity, so source order decides.
+ * ============================================================ */
+.dark {
+  --gray-0: #18181a;
+  --gray-1: #111113;
+  --gray-2: #0c0c0d;
+  --gray-3: #232326;
+  --gray-4: #2a2a2e;
+  --gray-5: #37373c;
+  --gray-6: #4a4a50;
+  --gray-7: #6e6e75;
+  --gray-8: #8b8b92;
+  --gray-9: #a8a8ae;
+  --gray-10: #c8c8cc;
+  --gray-11: #e2e2e4;
+  --gray-12: #ededed;
+
+  --accent-1: #0d1f1a;
+  --accent-2: #0f2a23;
+  --accent-3: #133a30;
+  --accent-6: #2fdcae;
+  --accent-9: #ededed;
+  --accent-10: #d4d4d8;
+  --accent-11: #4fe0b9;
+  --accent-12: #a6f2dd;
+
+  --green-bg: #0f2417;
+  --green-9: #3fae66;
+  --green-text: #6fd394;
+  --amber-bg: #2a1f0a;
+  --amber-9: #d99a2b;
+  --amber-text: #f0bd5e;
+  --red-bg: #2c1414;
+  --red-text: #f28b8b;
+
+  --spk-1-bg: #1c2340;
+  --spk-1-text: #9fb1f5;
+  --spk-2-bg: #13291a;
+  --spk-2-text: #7fd497;
+  --spk-3-bg: #2b2210;
+  --spk-3-text: #e7b95e;
+  --spk-4-bg: #321a24;
+  --spk-4-text: #f09bbb;
+  --spk-5-bg: #251d3d;
+  --spk-5-text: #bea5f3;
+  --spk-6-bg: #1f2714;
+  --spk-6-text: #aed17c;
+  --spk-7-bg: #10262e;
+  --spk-7-text: #7cc9e2;
+  --spk-8-bg: #2f1c16;
+  --spk-8-text: #f2a38b;
+
+  --text-on-accent: #0a0a0a;
+  --surface-overlay: rgba(0, 0, 0, 0.6);
+
+  --surface-floating: #26262a;
+  --border-floating: #34343a;
+  --text-on-floating: #ededed;
+  --text-on-floating-muted: #a8a8ae;
+  --overlay-hover: rgba(255, 255, 255, 0.08);
+  --surface-scrim-soft: rgba(0, 0, 0, 0.5);
+
+  /* Faint shadows vanish on dark surfaces — same shapes, heavier black,
+   * plus a hairline light ring on the floating ones. */
+  --shadow-xs: 0 1px 1px rgba(0, 0, 0, 0.3);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35), 0 1px 1px rgba(0, 0, 0, 0.25);
+  --shadow-md:
+    0 6px 16px rgba(0, 0, 0, 0.5), 0 2px 5px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(255, 255, 255, 0.04);
+  --shadow-lg:
+    0 16px 40px rgba(0, 0, 0, 0.6), 0 6px 14px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(255, 255, 255, 0.05);
+  --shadow-inset: inset 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 
 /* shadcn color contract + Timbre extras → Tailwind utilities (theming-aware) */

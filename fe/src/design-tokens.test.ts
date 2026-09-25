@@ -49,4 +49,42 @@ describe("디자인 토큰", () => {
 
     expect(missing).toEqual([]);
   });
+
+  it(".dark 블록은 :root에 있는 변수만 덮는다 — 없는 이름을 덮으면 조용히 무시된다", () => {
+    const css = readFileSync(join(SRC, "index.css"), "utf8");
+    const block = (selector: RegExp) => {
+      const m = selector.exec(css);
+      expect(m, String(selector)).not.toBeNull();
+      return new Set(
+        [...m![1].matchAll(/^\s*(--[a-z0-9-]+)\s*:/gm)].map((x) => x[1]),
+      );
+    };
+    const root = block(/^:root\s*\{([^}]*)\}/m);
+    const dark = block(/^\.dark\s*\{([^}]*)\}/m);
+    expect(dark.size).toBeGreaterThan(40);
+    expect([...dark].filter((t) => !root.has(t))).toEqual([]);
+  });
+
+  it("다크에서 뒤집히는 역할 토큰은 .dark가 모두 다시 정의한다", () => {
+    const css = readFileSync(join(SRC, "index.css"), "utf8");
+    const dark = /^\.dark\s*\{([^}]*)\}/m.exec(css)![1];
+    for (const token of [
+      "--gray-0",
+      "--gray-12",
+      "--accent-9",
+      "--accent-11",
+      "--text-on-accent",
+      "--surface-floating",
+      "--text-on-floating",
+      "--text-on-floating-muted",
+      "--overlay-hover",
+      "--surface-scrim-soft",
+      "--surface-overlay",
+      "--shadow-md",
+      "--spk-1-bg",
+      "--spk-8-text",
+    ]) {
+      expect(dark, token).toMatch(new RegExp(`^\\s*${token}\\s*:`, "m"));
+    }
+  });
 });
