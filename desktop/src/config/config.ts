@@ -198,13 +198,12 @@ export function llmBaseUrl(port: number): string {
  *   ctx.env에 넣는다(launchEnv). 주소를 지어내지 않는다 — 없으면 worker가 ValidationError로 크게 죽는
  *   편이 엉뚱한 포트보다 낫다.
  *
- * worker와 embed가 이 한 env를 받고, worker가 띄우는 자식 셋(capabilities 프로브·`--once`·llm_entry)은
+ * worker와 embed가 이 한 env를 받고, worker가 띄우는 자식 셋(capabilities 프로브·`--once`·llm_entry),
  * env= 없이 그것을 상속한다 — 여기 넣은 값이 다섯 프로세스 모두에 닿는다.
  *
- * HF_TOKEN은 여기 없다 — 기동 게이트(app/token-gate.ts)가 Keychain에서 읽은 값을 launchEnv가 ctx.env에 싣고,
- * 합성의 `...ctx.env`가 상속분(개발자 셸의 HF_TOKEN)을 이긴다. 게이트를 지나지 않은 감독자는 없다
- * (main.ts의 createSupervisorFor). 토큰 교체는 그 ctx.env를 고친다 (Task 11). Node 자식(API·마이그레이션 러너)은
- * 같은 ctx.env를 받지만 nodeChildEnv가 토큰을 뺀다 (PYTHON_ONLY_ENV_KEYS).
+ * HF_TOKEN은 여기 없다 — 기동 때 Keychain에서 읽은 값(app/token-boot.ts)을 launchEnv가 ctx.env에 싣는다.
+ * 없으면 싣지 않고, childEnv가 상속분(개발자 셸의 HF_TOKEN)도 버린다. 토큰 교체·삭제는 그 ctx.env를 고친다
+ * (windows/token-bridge.ts). Node 자식(API·마이그레이션 러너)은 nodeChildEnv가 토큰을 뺀다 (PYTHON_ONLY_ENV_KEYS).
  */
 export function appOwnedChildEnv(ctx: LaunchContext): Record<string, string> {
   const out: Record<string, string> = {
@@ -246,7 +245,11 @@ export function childEnv(
   ctx: LaunchContext,
   inherited: Record<string, string | undefined> = process.env,
 ): Record<string, string> {
-  return { ...sanitizeChildEnv({ ...inherited, ...ctx.env }), ...appOwnedChildEnv(ctx) };
+  // 토큰의 출처는 앱 하나다. 셸에서 물려받은 HF_TOKEN을 깔면, 앱이 "토큰 없음"이라 말하는 동안 worker는
+  // 셸 토큰으로 화자 분리에 성공한다 — 게이트와 실제가 갈린다(스펙 2026-09-25 §5.1).
+  const rest = { ...inherited };
+  delete rest.HF_TOKEN;
+  return { ...sanitizeChildEnv({ ...rest, ...ctx.env }), ...appOwnedChildEnv(ctx) };
 }
 
 /**
@@ -311,13 +314,17 @@ function withAppOwned(env: ApiEnv): ApiEnv {
  * 조건 수락 모델을 받지 못한다. 기준선에도 파일에도 없는 키는 refreshEnv가 건드리지 않는다 — prepare()의
  * EMBED_SERVICE_URL과 같은 자리다.
  *
- * 토큰이 필수 인자인 이유: 게이트를 지나지 않은 감독자를 타입이 막는다.
+ * 토큰이 null이면 HF_TOKEN을 싣지 않는다 — 토큰 없이도 앱은 뜬다(2026-09-25 스펙 §5.1). 그때 worker는 화자
+ * 분리 모델을 받지 못하고, fe의 게이트가 그 job을 애초에 만들지 않는다.
  */
-export function launchEnv(cfg: LoadedConfig, llmPort: number, hfToken: string): { env: ApiEnv; baseline: ApiEnv } {
-  return {
-    env: { ...cfg.env, LENS_LLM_BASE_URL: llmBaseUrl(llmPort), HF_TOKEN: hfToken },
-    baseline: withoutDbKeys(cfg.env),
-  };
+export function launchEnv(
+  cfg: LoadedConfig,
+  llmPort: number,
+  hfToken: string | null,
+): { env: ApiEnv; baseline: ApiEnv } {
+  const env: ApiEnv = { ...cfg.env, LENS_LLM_BASE_URL: llmBaseUrl(llmPort) };
+  if (hfToken !== null) env.HF_TOKEN = hfToken;
+  return { env, baseline: withoutDbKeys(cfg.env) };
 }
 
 /** 파일과 실행 중인 값이 다르지만 **바꾸지 않은** 키. 앱을 다시 켜야 반영된다. */
