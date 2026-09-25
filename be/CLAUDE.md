@@ -16,7 +16,7 @@ Read the spec before changing data model / pipeline semantics — many decisions
 
 ## Architecture: two runtimes joined by one table
 
-The system is a **polyglot** split that communicates **only through Postgres** — never HTTP between them. The `job` table is the whole contract in both directions; the other shared `app_setting` rows are `worker_capabilities`, which the worker writes and the API only reads (see Processing settings below), and `model_inventory`, written solely by the worker parent's inventory thread (`be/worker/damwha_worker/inventory.py`) and read-only for the API (see `GET /models` below):
+The system is a **polyglot** split that communicates **only through Postgres** — never HTTP between them. The `job` table is the whole contract in both directions; the other shared `app_setting` rows are `worker_capabilities`, which the worker writes and the API only reads (see Processing settings below); `model_readiness`, written by the worker, embed and `llm_entry` (per-model download progress); and `model_inventory`, written solely by the worker parent's inventory thread (`be/worker/damwha_worker/inventory.py`) and read-only for the API (see `GET /models` below):
 
 - **NestJS API (`src/`, TypeScript)** — HTTP only, knows nothing about ML. Stores audio, CRUDs metadata, enqueues jobs, serves status/results.
 - **Python ML worker (`worker/`, Python)** — a supervisor process polls `job` and spawns a one-job child that runs ffmpeg normalize+probe → VAD → diarization → speaker ID → STT → align, writing `utterance`/`meeting_cluster`/`voiceprint` rows. No HTTP. **Implemented** (Plan 2); see the worker section below.
