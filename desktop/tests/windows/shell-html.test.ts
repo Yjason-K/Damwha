@@ -526,6 +526,16 @@ describe("design tokens — fe/src/index.css와 같은 값 (Notion P2-B)", () =>
     depth > 10
       ? value
       : value.replace(/var\(--([\w-]+)\)/g, (_, name: string) => resolve(fe.get(name) ?? `<fe에 없음: --${name}>`, depth + 1));
+  // fe의 .dark 블록 — 다크에서는 거기 있는 이름이 :root 값을 덮는다.
+  const feDark = declsOf(/^\.dark\s*\{([^}]*)\}/m.exec(feCss)![1]);
+  const resolveDark = (value: string, depth = 0): string =>
+    depth > 10
+      ? value
+      : value.replace(/var\(--([\w-]+)\)/g, (_, name: string) =>
+          resolveDark(feDark.get(name) ?? fe.get(name) ?? `<fe에 없음: --${name}>`, depth + 1),
+        );
+  const DARK_MEDIA = /@media\s*\(prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{([^}]*)\}\s*\}/;
+  const isColour = (v: string) => /^#|^rgba?\(/.test(v);
 
   for (const file of ["services.html", "status.html"]) {
     describe(file, () => {
@@ -533,6 +543,8 @@ describe("design tokens — fe/src/index.css와 같은 값 (Notion P2-B)", () =>
       const style = /<style>([\s\S]*?)<\/style>/.exec(html)![1].replace(/\/\*[\s\S]*?\*\//g, "");
       const rootBlock = /:root\s*\{([^}]*)\}/.exec(style)![1];
       const shell = declsOf(rootBlock);
+      const darkBlock = DARK_MEDIA.exec(style)?.[1] ?? "";
+      const shellDark = declsOf(darkBlock);
 
       it("copies each token with the same name and the value fe resolves it to", () => {
         expect(shell.size).toBeGreaterThan(0);
@@ -540,13 +552,22 @@ describe("design tokens — fe/src/index.css와 같은 값 (Notion P2-B)", () =>
       });
 
       it("writes no colour outside :root and uses only tokens it declares", () => {
-        const rest = style.replace(/:root\s*\{[^}]*\}/, "");
+        const rest = style.replace(DARK_MEDIA, "").replace(/:root\s*\{[^}]*\}/, "");
         expect(rest).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(/);
         for (const m of rest.matchAll(/var\(--([\w-]+)\)/g)) expect(shell.has(m[1]), `--${m[1]}`).toBe(true);
       });
 
-      it("stays light — fe has no dark mode, so following the system would flash on attach", () => {
-        expect(style).not.toMatch(/prefers-color-scheme/);
+      it("follows macOS dark with the colour tokens fe resolves under .dark", () => {
+        expect(darkBlock, "@media (prefers-color-scheme: dark) { :root { … } } 블록").not.toBe("");
+        expect(darkBlock).toMatch(/color-scheme:\s*dark;/);
+        const colourNames = [...shell].filter(([, v]) => isColour(v)).map(([n]) => n).sort();
+        expect([...shellDark.keys()].sort()).toEqual(colourNames);
+        for (const [name, value] of shellDark) {
+          expect({ name, value }).toEqual({ name, value: resolveDark(`var(--${name})`) });
+        }
+      });
+
+      it("declares light as the base scheme — the dark block only overrides", () => {
         expect(rootBlock).toMatch(/color-scheme:\s*light;/);
       });
     });

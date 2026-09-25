@@ -1,7 +1,8 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, nativeTheme } from "electron";
 import * as path from "path";
 import { applyNavigationBoundary } from "./permissions";
 import { isSameShellPage } from "./shell-url";
+import { windowBackground } from "./window-background";
 
 // electron을 값으로 import하는 이 파일은 vitest가 못 불러온다. lastMeaningfulLine()의
 // 순수 로직은 desktop/src/diagnostics/stderr.ts에 있다 — 여기서는 기존 호출부를 위해 재노출만 한다.
@@ -59,6 +60,7 @@ export function createServicesWindow(focus: boolean, onLoadError: (e: unknown) =
     minHeight: 320,
     title: "서비스 상태",
     show: false,
+    backgroundColor: windowBackground(nativeTheme.shouldUseDarkColors),
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   // 이 창은 file:// 한 장만 쓴다. 허용 목록이 비어 있으므로 사용자가 끌어다 놓은 링크·파일로도

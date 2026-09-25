@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, safeStorage, shell } from "electron";
+import { app, BrowserWindow, dialog, nativeTheme, safeStorage, shell } from "electron";
 import { execFile } from "child_process";
 import * as fs from "fs";
 import * as net from "net";
@@ -16,6 +16,7 @@ import type { ProcessHandle } from "./process/handle";
 import { launchVite } from "./dev/vite-process";
 import { lastMeaningfulLine } from "./diagnostics/stderr";
 import { createServicesWindow, showStatus, type ShellStatus } from "./windows/shell-window";
+import { windowBackground } from "./windows/window-background";
 import { makeTokenStore, maskToken, tokenFilePath, verifyHfToken } from "./config/token-store";
 import { readBootToken } from "./app/token-boot";
 import { createTokenBridge } from "./windows/token-bridge";
@@ -311,6 +312,7 @@ function createWindow(): BrowserWindow {
     width: 1280,
     height: 860,
     title: "담화",
+    backgroundColor: windowBackground(nativeTheme.shouldUseDarkColors),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
