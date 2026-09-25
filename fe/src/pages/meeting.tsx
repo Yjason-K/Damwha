@@ -25,6 +25,8 @@ import type {
   MeetingStatusResponse,
   SearchIndexStatus,
 } from "@/features/meeting/api/types";
+import { hfFailureCopy } from "@/features/hf-token/lib/failure-copy";
+import { HfFailureAction } from "@/features/hf-token/ui/hf-failure-action";
 import type { RecorderStatus } from "@/features/meeting/lib/live-recorder";
 import {
   clearLiveCapture,
@@ -93,6 +95,7 @@ function ProcessingBanner({
     // 운영자 취소도 failed로 저장된다(reprocess 가드를 그대로 타기 위해) — 문구만 가른다.
     const cancelled = meeting.error?.code === "cancelled";
     const noMic = meeting.error?.code === "audio_device_failed";
+    const hf = cancelled ? null : hfFailureCopy(meeting.error?.code);
     return (
       <div
         role="alert"
@@ -106,17 +109,22 @@ function ProcessingBanner({
         <span className="font-semibold text-[color:var(--red-text)]">
           {cancelled
             ? "처리를 취소했어요"
-            : noMic
-              ? "마이크를 열지 못했어요"
-              : "처리에 실패했어요"}
+            : hf !== null
+              ? hf.title
+              : noMic
+                ? "마이크를 열지 못했어요"
+                : "처리에 실패했어요"}
         </span>
         <span className="text-[color:var(--text-secondary)]">
           {cancelled
             ? "재처리로 다시 시작할 수 있어요."
-            : noMic
-              ? "시스템 설정 › 개인정보 보호 및 보안 › 마이크에서 담화를 허용한 뒤 다시 녹음해 주세요."
-              : "다시 업로드하거나 잠시 후 시도해 주세요."}
+            : hf !== null
+              ? hf.body
+              : noMic
+                ? "시스템 설정 › 개인정보 보호 및 보안 › 마이크에서 담화를 허용한 뒤 다시 녹음해 주세요."
+                : "다시 업로드하거나 잠시 후 시도해 주세요."}
         </span>
+        {hf !== null ? <HfFailureAction action={hf.action} /> : null}
       </div>
     );
   }
