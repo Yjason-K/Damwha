@@ -230,13 +230,16 @@ export function appOwnedChildEnv(ctx: LaunchContext): Record<string, string> {
  * **합성 규칙 — 정확히 이것이다:**
  *
  * ```
- * { ...sanitizeChildEnv({ ...inherited, ...ctx.env }), ...appOwnedChildEnv(ctx) }
+ * { ...sanitizeChildEnv({ ...(inherited − HF_TOKEN), ...ctx.env }), ...appOwnedChildEnv(ctx) }
  * ```
  *
- * 1. **합친 뒤 씻는다.** 상속분만 씻고 ctx.env를 뒤에 합치면, config.json이 임의 문자열 키를
+ * 1. **상속분에서 HF_TOKEN을 제거한다.** 토큰의 출처는 앱 하나다 (스펙 2026-09-25 §5.1).
+ *    셸에서 물려받은 HF_TOKEN을 합성에 남기면, 앱이 "토큰 없음"이라 말하는 동안 worker는
+ *    셸 토큰으로 화자 분리에 성공한다 — 게이트와 실제가 갈린다.
+ * 2. **합친 뒤 씻는다.** 상속분만 씻고 ctx.env를 뒤에 합치면, config.json이 임의 문자열 키를
  *    통과시키므로(loadConfig의 pass-through) PYTHONHOME 같은 키가 되돌아온다. loadConfig가 이제
  *    그런 키를 버리지만 이 규칙은 그것에 기대지 않는다.
- * 2. **앱 값은 씻은 뒤에 얹는다.** dev의 PYTHONPATH는 금지 목록에 있는 키라, 먼저 얹으면 씻겨 나간다.
+ * 3. **앱 값은 씻은 뒤에 얹는다.** dev의 PYTHONPATH는 금지 목록에 있는 키라, 먼저 얹으면 씻겨 나간다.
  *    얹는 값이 상속·config.json의 같은 키를 이긴다.
  *
  * PATH는 여기서 정하지 않는다 — 런처가 번들 bin만으로 따로 준다 (스펙 §6.2).
