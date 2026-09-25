@@ -90,17 +90,41 @@ describe("디자인 토큰", () => {
 
   it("컴포넌트는 raw 색(hex·rgba)을 쓰지 않는다 — brand-mark만 예외", () => {
     // 브랜드 마크는 테마를 따르지 않는 고정 색이다 (DESIGN.md §2).
+    // index.css는 토큰 정의 자체이므로 제외 — 그 외 .ts/.tsx/.css를 모두 훑는다.
     const ALLOWED = new Set(["shared/ui/brand-mark.tsx"]);
     const hits: string[] = [];
     for (const file of walk(SRC)) {
-      if (!file.endsWith(".tsx") && !file.endsWith(".ts")) continue;
+      if (file.endsWith("index.css")) continue;
       const rel = file.slice(SRC.length + 1);
       if (ALLOWED.has(rel)) continue;
       readFileSync(file, "utf8")
         .split("\n")
         .forEach((line, i) => {
-          if (/#[0-9a-fA-F]{3,8}\b|rgba?\(/.test(line)) hits.push(`${rel}:${i + 1}`);
+          if (/#[0-9a-fA-F]{3,8}\b|rgba?\(/.test(line))
+            hits.push(`${rel}:${i + 1}`);
         });
+    }
+    expect(hits).toEqual([]);
+  });
+
+  it("CSS 규칙 블록 안에서 잉크(--accent-solid)와 흰 글자색 리터럴이 함께 오지 않는다", () => {
+    // tour.css 같은 컴포넌트 CSS가 driver.js 기본값을 흰 글자로 덮는 실수를 잡는다 —
+    // 다크에서 --accent-solid가 밝아지므로 흰 글자와 같이 쓰면 흰 바탕에 흰 글자가 된다.
+    const hits: string[] = [];
+    for (const file of walk(SRC)) {
+      if (!file.endsWith(".css") || file.endsWith("index.css")) continue;
+      const rel = file.slice(SRC.length + 1);
+      const css = readFileSync(file, "utf8");
+      for (const m of css.matchAll(/\{([^{}]*)\}/g)) {
+        const block = m[1];
+        if (
+          /var\(\s*--accent-solid\s*\)/.test(block) &&
+          /color:\s*(#fff\b|#ffffff\b|white\b)/i.test(block)
+        ) {
+          const line = css.slice(0, m.index).split("\n").length;
+          hits.push(`${rel}:${line}`);
+        }
+      }
     }
     expect(hits).toEqual([]);
   });
@@ -113,7 +137,10 @@ describe("디자인 토큰", () => {
       readFileSync(file, "utf8")
         .split("\n")
         .forEach((line, i) => {
-          if (/var\(--accent-solid\)/.test(line) && /\btext-white\b/.test(line)) {
+          if (
+            /var\(--accent-solid\)/.test(line) &&
+            /\btext-white\b/.test(line)
+          ) {
             hits.push(`${rel}:${i + 1}`);
           }
         });
