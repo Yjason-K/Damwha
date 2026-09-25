@@ -87,6 +87,13 @@ describe("summaryLines", () => {
     expect(last).toEqual({ label: "기본", value: "화자 분리 · 화자 식별 · 검색 임베딩", status: "화자 식별 모델 안 받음" });
   });
 
+  test("렌즈 모델이 둘이면(BE·worker 값이 다름) 두 줄이 따로 나온다", () => {
+    const lensBe = row({ role: "summary", name: "mlx-community/Qwen3.5-4B-8bit", backend: null, inUseFor: ["lens"], sizeBytes: 5_163_524_489 });
+    const lensWorker = row({ role: "summary", name: "mlx-community/Qwen3.5-9B-8bit", backend: null, inUseFor: ["lens"], installed: "no", sizeBytes: null, approxBytes: 10_453_442_419 });
+    const lines = summaryLines(view([stt, lensBe, lensWorker, ...FIXED]));
+    expect(lines.filter((l) => l.label === "렌즈 추출")).toHaveLength(2);
+  });
+
   test("CPU 전사", () => {
     const cpu = row({ backend: "faster", inUseFor: ["stt"] });
     expect(summaryLines(view([cpu, ...FIXED]))[0].value).toBe("large-v3-turbo · CPU");

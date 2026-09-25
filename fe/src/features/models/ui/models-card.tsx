@@ -27,7 +27,7 @@ const GROUPS: { title: string; roles: ModelRole[] }[] = [
  * 설정 › "모델" 카드 (모델 다운로드 관리 스펙 §6). D1은 읽기 전용이다 — 받기·삭제 버튼은 D2가 행에 붙인다.
  */
 export function ModelsCard() {
-  const { data } = useModels();
+  const { data, isError } = useModels();
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -44,7 +44,11 @@ export function ModelsCard() {
         회의를 처리할 때 쓰는 모델이에요. 처음 쓸 때 받고, 받은 뒤에는 이 Mac에
         남아요.
       </p>
-      {!data ? (
+      {isError ? (
+        <p className="text-sm text-[color:var(--red-text)]">
+          모델 상태를 불러오지 못했어요.
+        </p>
+      ) : !data ? (
         <p role="status" className="text-sm text-[color:var(--text-muted)]">
           모델 상태를 불러오는 중…
         </p>
@@ -63,7 +67,7 @@ export function ModelsCard() {
             </span>
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
               {summaryLines(data).map((l) => (
-                <div key={l.label} className="contents">
+                <div key={`${l.label}:${l.value}`} className="contents">
                   <dt className="text-[color:var(--text-muted)]">{l.label}</dt>
                   <dd className="flex flex-wrap justify-between gap-x-3 text-foreground">
                     <span>{l.value}</span>

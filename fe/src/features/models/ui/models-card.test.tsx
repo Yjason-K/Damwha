@@ -119,6 +119,30 @@ test("고정 모델은 기본 모델 묶음에 사용자 이름으로 나온다"
   expect(within(list).queryByText(/pyannote|speechbrain|bge/i)).toBeNull();
 });
 
+test("불러오는 동안 안내 문구를 보인다", () => {
+  vi.spyOn(apiClient, "get").mockReturnValue(new Promise(() => {}));
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <ModelsCard />
+    </QueryClientProvider>,
+  );
+  expect(screen.getByText("모델 상태를 불러오는 중…")).toBeTruthy();
+});
+
+test("조회에 실패하면 오류 문구를 보인다", async () => {
+  vi.spyOn(apiClient, "get").mockRejectedValue(new Error("network"));
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <ModelsCard />
+    </QueryClientProvider>,
+  );
+  expect(
+    await screen.findByText("모델 상태를 불러오지 못했어요."),
+  ).toBeTruthy();
+});
+
 test("아직 스캔 전이면 안내 문구만", async () => {
   renderCard({
     scannedAt: null,
