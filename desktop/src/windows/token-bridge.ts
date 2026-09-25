@@ -17,8 +17,13 @@ import type { ServiceId } from "../services/types";
  * 그 호출이 답으로 끝난다. 상태는 `hfToken.show(state)` 한 방향으로 밀어 넣는다. 페이지가 보내는 것은 네 모양뿐이고
  * (parseHfTokenAction), 링크는 **열쇠**만 보낸다 — 어느 주소를 열지는 main이 고정 표(LINKS)로 정한다.
  *
- * 동작은 **한 번에 하나씩** 처리한다 — 고리가 handle을 기다린 뒤에 다음을 묻는다. 그래서 확인·저장·재시작 중에 온
- * 두 번째 요청은 페이지 쪽 대기열에서 기다리고, 두 교체가 겹치지 않는다(옛 tokenBusy의 자리).
+ * **submit·clear는 겹치지 않는다** (스펙 §4.2). 고리 하나가 handle을 기다린 뒤 다음을 묻는 것만으로는
+ * 모자란다 — ⌘R로 재부착하면 옛 고리가 아직 handle 안(예: verify·apply를 기다리는 중)에 있는 채로 새 고리가
+ * 함께 돌 수 있고, 그러면 두 고리가 동시에 저장·재시작을 부를 수 있다(두 번의 applyTokenChange가 worker·embed를
+ * 동시에 재시작하거나, 한쪽의 재시작 도중 다른 쪽이 clear로 파일을 지우는 식). 그래서 두 동작은 **브리지 전체가
+ * 공유하는 진행 중 표시(mutating)** 하나로 막는다 — 진행 중일 때 온 새 submit·clear는 실행하지 않고 그 자리에서
+ * message로만 알린다(옛 tokenBusy의 자리, 이번에는 고리가 아니라 브리지 수준). handle에서 던진 예외도 고리를
+ * 끝내지 않는다 — 잡아서 message로 알리고 다음 요청을 계속 받는다.
  */
 
 export type HfTokenStatus = BootTokenStatus;
@@ -90,6 +95,10 @@ const CHECKING_MESSAGE = "허깅페이스에서 토큰을 확인하고 있어요
 const RECORDING_MESSAGE = "녹음을 마친 뒤 바꿔 주세요.";
 const CLEARED_MESSAGE =
   "토큰을 지웠어요. 지금 도는 작업 처리기는 옛 토큰으로 계속 돌지만, 다시 시작하면 토큰 없이 떠요.";
+/** 스펙 §4.2 — 진행 중인 submit·clear가 있을 때 온 새 요청. 실행하지 않고 알리기만 한다. */
+const BUSY_MESSAGE = "토큰 요청을 처리하는 중이에요. 끝난 뒤 다시 시도해 주세요.";
+/** handle이 예외를 던졌을 때 — 고리를 끝내지 않고 알리기만 한다. */
+const HANDLE_FAILED_MESSAGE = "토큰 요청을 처리하지 못했어요. 다시 시도해 주세요.";
 
 function verdictMessage(v: Extract<TokenVerdict, { ok: false }>): string {
   if (v.kind === "invalid") return `${CAUSES.hfTokenInvalid.text} (${v.detail}) 토큰을 확인하고 다시 입력해 주세요.`;
@@ -134,6 +143,11 @@ export function createTokenBridge<W>(d: TokenBridgeDeps<W>): TokenBridge<W> {
   let current: W | null = null;
   /** 페이지 세대. attach마다 오른다 — 그 전 세대의 묻기는 낡았다(status-window.ts의 page와 같은 장치). */
   let page = 0;
+  /**
+   * submit·clear 진행 중 표시 (스펙 §4.2). 고리(page 세대)가 아니라 **브리지** 수준이다 — ⌘R로 두 고리가
+   * 동시에 도는 동안에도 이 하나만 본다. `withMutation`만 건드린다.
+   */
+  let mutating = false;
   let state: HfTokenState = {
     status: "absent",
     masked: null,
@@ -162,6 +176,24 @@ export function createTokenBridge<W>(d: TokenBridgeDeps<W>): TokenBridge<W> {
     state = { ...state, ...next };
     push();
     d.onChange?.();
+  };
+
+  /**
+   * submit·clear를 겹치지 않게 한다 (스펙 §4.2). 진행 중이면 새 요청은 **실행하지 않고** message로만
+   * 알린다 — 그때 busy는 건드리지 않는다(진행 중인 쪽의 busy:true가 그대로 맞다). run이 던지든 말든
+   * mutating은 finally에서 반드시 내린다 — 다음 요청이 영영 막히지 않는다.
+   */
+  const withMutation = async (run: () => Promise<void>): Promise<void> => {
+    if (mutating) {
+      set({ message: { tone: "warn", text: BUSY_MESSAGE } });
+      return;
+    }
+    mutating = true;
+    try {
+      await run();
+    } finally {
+      mutating = false;
+    }
   };
 
   const submit = async (raw: string) => {
@@ -217,18 +249,20 @@ export function createTokenBridge<W>(d: TokenBridgeDeps<W>): TokenBridge<W> {
   const handle = async (action: HfTokenAction) => {
     switch (action.kind) {
       case "submit":
-        await submit(action.token);
+        await withMutation(() => submit(action.token));
         return;
       case "clear":
-        try {
-          d.clear();
-        } catch (e) {
-          d.log(`허깅페이스 토큰을 지우지 못했어요 (${nameOf(e)}).`);
-          set({ message: { tone: "error", text: "토큰을 지우지 못했어요. 다시 시도해 주세요." } });
-          return;
-        }
-        d.log("허깅페이스 토큰을 지웠어요 — 서비스는 다시 시작하지 않았어요.");
-        set({ status: "absent", masked: null, account: null, message: { tone: "info", text: CLEARED_MESSAGE } });
+        await withMutation(async () => {
+          try {
+            d.clear();
+          } catch (e) {
+            d.log(`허깅페이스 토큰을 지우지 못했어요 (${nameOf(e)}).`);
+            set({ message: { tone: "error", text: "토큰을 지우지 못했어요. 다시 시도해 주세요." } });
+            return;
+          }
+          d.log("허깅페이스 토큰을 지웠어요 — 서비스는 다시 시작하지 않았어요.");
+          set({ status: "absent", masked: null, account: null, message: { tone: "info", text: CLEARED_MESSAGE } });
+        });
         return;
       case "dismissOnboarding":
         set({ onboardingDismissed: true });
@@ -261,7 +295,14 @@ export function createTokenBridge<W>(d: TokenBridgeDeps<W>): TokenBridge<W> {
         set({ busy: false, message: { tone: "error", text: UNKNOWN_REQUEST_MESSAGE } });
         continue;
       }
-      await handle(action);
+      try {
+        await handle(action);
+      } catch (e) {
+        // handle이 던지면(예: isRecording 거부) 고리를 끝내지 않는다 — 페이지가 영영 busy로 잠기면 안 된다.
+        // 원문(페이로드)은 싣지 않는다 — nameOf만.
+        d.log(`허깅페이스 토큰 요청을 처리하지 못했어요 (${nameOf(e)}).`);
+        set({ busy: false, message: { tone: "error", text: HANDLE_FAILED_MESSAGE } });
+      }
     }
   };
 

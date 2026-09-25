@@ -276,6 +276,62 @@ describe("createTokenBridge", () => {
     await flush();
     expect(run.mock.calls.filter((c) => c[1] === HF_TOKEN_ASK_SCRIPT)).toHaveLength(1);
   });
+
+  it("submit: a concurrent submit while one is in-flight is refused with a warn message, not run (spec §4.2)", async () => {
+    const page = fakePage();
+    let resolveVerify!: (v: { ok: true; name: string }) => void;
+    const verify = vi.fn(() => new Promise((resolve) => {
+      resolveVerify = resolve;
+    }));
+    const apply = vi.fn(async () => ({ restarted: ["worker", "embed"], skipped: [] }));
+    const b = createTokenBridge(deps(page, { verify: verify as never, apply: apply as never }));
+    b.boot("absent", null);
+    b.attach(page.win);
+    // 첫 submit — verify가 걸린 채(hang) 멈춘다.
+    page.act({ kind: "submit", token: TOKEN });
+    await flush();
+    expect(last(page)).toMatchObject({ busy: true });
+
+    // ⌘R — 옛 고리가 아직 verify를 기다리는 중인데 새 고리가 함께 돈다.
+    b.attach(page.win);
+    await flush();
+    // 새 고리에서 온 둘째 submit — 진행 중이므로 실행하지 않고 경고만 남긴다.
+    page.act({ kind: "submit", token: TOKEN });
+    await flush();
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(apply).not.toHaveBeenCalled();
+    expect(last(page).message).toEqual({ tone: "warn", text: "토큰 요청을 처리하는 중이에요. 끝난 뒤 다시 시도해 주세요." });
+    // 진행 중이던 쪽의 busy:true를 건드리지 않는다.
+    expect(last(page).busy).toBe(true);
+
+    // 첫 verify를 풀어 준다 — 그제서야 저장까지 끝난다.
+    resolveVerify({ ok: true, name: "jason" });
+    await flush();
+    await flush();
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(last(page)).toMatchObject({ status: "present", account: "jason", busy: false });
+  });
+
+  it("an exception inside handle (e.g. isRecording rejecting) unlocks the page instead of killing the loop", async () => {
+    const page = fakePage();
+    const isRecording = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    const b = createTokenBridge(deps(page, { isRecording }));
+    b.boot("absent", null);
+    b.attach(page.win);
+    page.act({ kind: "submit", token: TOKEN });
+    await flush();
+    await flush();
+    expect(last(page)).toMatchObject({
+      busy: false,
+      message: { tone: "error", text: "토큰 요청을 처리하지 못했어요. 다시 시도해 주세요." },
+    });
+    // 고리가 죽지 않았다 — 다음 요청도 그대로 처리된다.
+    page.act({ kind: "dismissOnboarding" });
+    await flush();
+    expect(b.state().onboardingDismissed).toBe(true);
+  });
 });
 
 // 타입만 쓰는 import가 사용되지 않았다는 lint를 피한다.
