@@ -13,75 +13,92 @@
          둘 다 여기여야 하기 때문이다(Phase 2의 "표시 전용"은 그 전 스펙의 것이다). **그래도 렌더러 → main
          채널은 만들지 않는다**: preload도 IPC도 없고, 버튼은 token.html과 같은 방식으로 main이 거는 next()
          호출의 **반환값**으로만 밖에 나간다. 입력칸은 여전히 없다 — 토큰 입력은 token.html 하나가 맡는다. -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-U4ArEBeaumpajpNbevnAM7TWtzqIX2SO33vHWyOVwJ0='; style-src 'sha256-UE41rOjItHtg06HE5/Th7GzRD0gRbVAGU7Xn4cv3AqU='; base-uri 'none'; form-action 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-U4ArEBeaumpajpNbevnAM7TWtzqIX2SO33vHWyOVwJ0='; style-src 'sha256-Qma+b2becdVss+Vzq24X2+Mfr/2D1Bad97TtrR478+o='; base-uri 'none'; form-action 'none'" />
     <title>서비스 상태</title>
     <style>
+      /* 색·서체는 fe/src/index.css의 토큰을 **같은 이름으로** 옮겨 적는다(셸 페이지는 CSP상 fe의 CSS를
+         불러올 수 없다). 값이 어긋나면 tests/windows/shell-html.test.ts가 잡는다 — :root 밖에 색을 직접
+         적지 않는다. fe에 다크 모드가 없으므로 라이트로 고정한다(status.html과 같은 이유). */
       :root {
-        color-scheme: light dark;
-        --bg: #fbfbfa; --fg: #1c1b1a; --muted: rgba(28, 27, 26, 0.6);
-        --line: rgba(28, 27, 26, 0.1); --sunken: rgba(127, 127, 127, 0.1);
-        --ok: #2f9e6f; --warn: #b7791f; --fail: #c2413b; --idle: rgba(127, 127, 127, 0.55);
-      }
-      @media (prefers-color-scheme: dark) {
-        :root {
-          --bg: #191817; --fg: #e8e6e3; --muted: rgba(232, 230, 227, 0.6);
-          --line: rgba(232, 230, 227, 0.12);
-          --ok: #4cc38a; --warn: #e0a84f; --fail: #ec6a5e;
-        }
+        color-scheme: light;
+        --surface-app: #f7f7f7;
+        --surface-card: #ffffff;
+        --surface-hover: #ededed;
+        --text-primary: #0a0a0a;
+        --text-secondary: #5a5a5c;
+        --text-faint: #a8a8aa;
+        --text-on-accent: #ffffff;
+        --border-default: #e5e5e5;
+        --border-strong: #d4d4d4;
+        --accent-solid: #0a0a0a;
+        --accent-solid-hover: #1c1c1e;
+        --accent-6: #00d4a4;
+        --gray-0: #ffffff;
+        --gray-2: #f7f7f7;
+        --green-9: #2c8a4c;
+        --amber-9: #c37d0d;
+        --red-9: #c94a4a;
+        --radius-sm: 6px;
+        --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        --font-mono: "Geist Mono", ui-monospace, "SF Mono", "Menlo", monospace;
       }
       * { box-sizing: border-box; }
       body {
         margin: 0; padding: 20px 24px 24px;
-        font: 13px/1.55 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif;
-        background: var(--bg); color: var(--fg);
+        font: 13px/1.55 var(--font-sans);
+        background: var(--surface-app); color: var(--text-primary);
+        -webkit-font-smoothing: antialiased;
       }
       header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
       h1 { font-size: 15px; font-weight: 600; margin: 0; }
       h2 {
         margin: 20px 0 0; font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
-        text-transform: uppercase; color: var(--muted);
+        text-transform: uppercase; color: var(--text-secondary);
       }
-      .meta { margin: 0; font-size: 12px; color: var(--muted); }
+      .meta { margin: 0; font-size: 12px; color: var(--text-secondary); }
       #notices { margin: 14px 0 0; padding: 0; list-style: none; }
       #notices li {
-        padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px;
+        padding: 8px 10px; border: 1px solid var(--border-default); border-radius: var(--radius-sm);
         font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere;
       }
       #notices li + li { margin-top: 6px; }
-      #rows, #models { margin: 8px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
-      .row { padding: 12px 0; border-bottom: 1px solid var(--line); }
+      #rows, #models { margin: 8px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--border-default); }
+      .row { padding: 12px 0; border-bottom: 1px solid var(--border-default); }
       .head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
       .name { font-weight: 600; }
       .badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
-      .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--idle); flex: none; }
-      .row[data-tone="ok"] .dot { background: var(--ok); }
-      .row[data-tone="warn"] .dot { background: var(--warn); }
-      .row[data-tone="fail"] .dot { background: var(--fail); }
-      .notes { font-size: 12px; color: var(--muted); }
+      .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); flex: none; }
+      .row[data-tone="ok"] .dot { background: var(--green-9); }
+      .row[data-tone="warn"] .dot { background: var(--amber-9); }
+      .row[data-tone="fail"] .dot { background: var(--red-9); }
+      .notes { font-size: 12px; color: var(--text-secondary); }
       button {
-        flex: none; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 6px;
-        border: 1px solid var(--line); background: var(--sunken); color: var(--fg); cursor: default;
+        flex: none; font: inherit; font-size: 12px; font-weight: 500; padding: 3px 10px;
+        border-radius: var(--radius-sm); border: 1px solid var(--border-default);
+        background: var(--surface-card); color: var(--text-primary); cursor: default; outline: none;
       }
+      button:hover:not(:disabled) { border-color: var(--border-strong); background: var(--gray-2); }
+      button:focus-visible, input:focus-visible { box-shadow: 0 0 0 2px var(--gray-0), 0 0 0 4px var(--accent-6); }
       button:disabled { opacity: 0.45; }
       .act { margin-left: auto; display: inline-flex; gap: 6px; }
       /* 원인은 여러 줄이다(zod 검증 실패, 파이썬 트레이스백). 줄바꿈을 살리되 긴 줄은 접고,
          화면을 다 먹지 않게 높이를 묶는다 — 전문은 로그 파일에 있다. */
       .cause {
-        margin: 8px 0 0; padding: 8px 10px; border-radius: 6px; background: var(--sunken);
-        font: 11.5px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+        margin: 8px 0 0; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--surface-hover);
+        font: 11.5px/1.5 var(--font-mono);
         white-space: pre-wrap; overflow-wrap: anywhere;
         max-height: calc(16lh + 16px); overflow-y: auto;
       }
       .hint { margin: 6px 0 0; font-size: 12px; }
       .warning { margin: 6px 0 0; font-size: 12px; }
-      .warning::before { content: ""; display: inline-block; width: 3px; height: 0.9em; margin-right: 6px; background: var(--warn); vertical-align: -1px; }
+      .warning::before { content: ""; display: inline-block; width: 3px; height: 0.9em; margin-right: 6px; background: var(--amber-9); vertical-align: -1px; }
       .command { margin: 6px 0 0; font-size: 12px; }
-      .command code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; user-select: all; }
-      .log { margin: 4px 0 0; font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
-      #token { padding: 12px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-top: 8px; }
-      #token-value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; user-select: all; }
-      #token-note { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
-      .foot { margin: 14px 0 0; font-size: 12px; color: var(--muted); }
+      .command code { font-family: var(--font-mono); user-select: all; }
+      .log { margin: 4px 0 0; font-size: 11.5px; color: var(--text-secondary); overflow-wrap: anywhere; }
+      #token { padding: 12px 0; border-top: 1px solid var(--border-default); border-bottom: 1px solid var(--border-default); margin-top: 8px; }
+      #token-value { font-family: var(--font-mono); user-select: all; }
+      #token-note { margin: 6px 0 0; font-size: 12px; color: var(--text-secondary); }
+      .foot { margin: 14px 0 0; font-size: 12px; color: var(--text-secondary); }
     </style>
   </head>
   <body>

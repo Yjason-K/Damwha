@@ -8,53 +8,103 @@
          스타일을 한 글자라도 고치면 해시를 다시 계산해야 한다 — tests/shell-html.test.ts가 어긋남을 잡는다.
          임베더가 실행하는 스크립트(main의 executeJavaScript)는 script-src를 거치지 않는다고 본다 — headless
          Chrome에서 CDP Runtime.evaluate로 이 정책 아래 렌더를 확인했고, Electron에서의 확인은 packaged 점검 몫이다. -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-mxYCoCGmZQmAgKDHtiq3QCO1EKiiFYmog6uEhmSJUmQ='; style-src 'sha256-Qz7cNLlq1WfuHKTT5usxWJ+qEcq7LfPxuxtRCjG3mdU='; base-uri 'none'; form-action 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-0YOMukGislengrDJJiU7sM6dejH5noQhiXSF9UtC0mU='; style-src 'sha256-LlncsAJ3Akk5Ga8yD0A4vMXs9dATH7Dk6bxgNuyqr4c='; base-uri 'none'; form-action 'none'" />
     <title>담화</title>
     <style>
-      :root { color-scheme: light dark; }
+      /* 색·서체는 fe/src/index.css의 토큰을 **같은 이름으로** 옮겨 적는다. 셸 페이지는 CSP상 fe의 CSS를
+         불러올 수 없어서다. 값이 어긋나면 tests/windows/shell-html.test.ts가 잡는다 — 여기 :root 밖에 색을
+         직접 적지 않는다. fe에 다크 모드가 없으므로 라이트로 고정한다: 따라가면 다크 모드 맥에서 이 화면이
+         어두웠다가 담화 화면이 붙는 순간 밝게 번쩍인다. */
+      :root {
+        color-scheme: light;
+        --surface-app: #f7f7f7;
+        --surface-card: #ffffff;
+        --text-primary: #0a0a0a;
+        --text-secondary: #5a5a5c;
+        --text-muted: #888888;
+        --border-subtle: #ededed;
+        --border-default: #e5e5e5;
+        --accent-6: #00d4a4;
+        --radius-md: 8px;
+        --radius-full: 9999px;
+        --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        --font-mono: "Geist Mono", ui-monospace, "SF Mono", "Menlo", monospace;
+      }
       body {
         margin: 0; height: 100vh;
         display: flex; flex-direction: column;
         align-items: center; justify-content: center; gap: 12px;
-        font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif;
-        background: #fbfbfa; color: #1c1b1a;
+        font: 14px/1.5 var(--font-sans);
+        -webkit-font-smoothing: antialiased;
+        background: var(--surface-app); color: var(--text-primary);
       }
-      @media (prefers-color-scheme: dark) { body { background: #191817; color: #e8e6e3; } }
-      h1 { font-size: 15px; font-weight: 600; margin: 0; }
-      p { margin: 0; opacity: 0.72; max-width: 46ch; text-align: center; }
+      .mark { width: 48px; height: 48px; margin-bottom: 4px; }
+      h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.008em; margin: 0; }
+      p { margin: 0; color: var(--text-secondary); max-width: 46ch; text-align: center; }
+      /* 진행 표시. 몇 초면 끝나는 기다림이라 퍼센트가 없다 — 멈추지 않았다는 것만 말한다. */
+      .progress {
+        width: 120px; height: 3px; margin-top: 8px; overflow: hidden;
+        border-radius: var(--radius-full); background: var(--border-default);
+      }
+      .progress::before {
+        content: ""; display: block; width: 40%; height: 100%;
+        border-radius: var(--radius-full); background: var(--accent-6);
+        animation: slide 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+      }
+      @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+      @media (prefers-reduced-motion: reduce) {
+        .progress::before { animation: none; width: 100%; opacity: 0.5; }
+      }
       /* 원인은 여러 줄이다 — zod 검증 실패는 `startup failed: [`부터 JSON 블록이 이어지고, 해결
          안내가 그 아래 붙는다. Phase 1은 한 줄을 가정해 가로 스크롤 한 줄로 보였다. 줄바꿈을 살리고
          긴 줄은 접되, 창을 다 먹지 않게 높이를 묶는다 — 전문은 로그 파일에 있다. */
       pre {
-        margin: 0; padding: 10px 12px; width: min(70ch, calc(100vw - 48px));
-        font-size: 12px; border-radius: 6px;
-        background: rgba(127, 127, 127, 0.12);
+        margin: 4px 0 0; padding: 10px 12px; width: min(70ch, calc(100vw - 48px));
+        font: 12px/1.55 var(--font-mono); color: var(--text-primary);
+        border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+        background: var(--surface-card);
         white-space: pre-wrap; overflow-wrap: anywhere;
         max-height: calc(24lh + 20px); overflow-y: auto;
       }
-      .hint { font-size: 12px; opacity: 0.56; }
+      .hint { font-size: 12px; color: var(--text-muted); }
     </style>
   </head>
   <body>
+    <!-- 브랜드 마크 — fe/public/favicon.svg와 같은 도형이다(fe/DESIGN.md "마크는 여섯 군데"의 여섯째 줄).
+         인라인 SVG라 CSP의 이미지 차단과 무관하다. -->
+    <svg class="mark" viewBox="0 0 128 128" aria-hidden="true">
+      <rect width="128" height="128" rx="30" fill="#0F161E" />
+      <g fill="#1DDCA5"><rect x="52" y="46" width="51" height="48" rx="12" /><path d="M103 75v33L58 94z" /></g>
+      <g fill="#fff"><rect x="27" y="26" width="65" height="68" rx="14" /><path d="M27 80v30L52 95z" /></g>
+      <g fill="#0F161E">
+        <rect x="40" y="43" width="37" height="6.5" rx="3.25" />
+        <rect x="40" y="56.5" width="37" height="6.5" rx="3.25" />
+        <rect x="40" y="70" width="23" height="6.5" rx="3.25" />
+      </g>
+    </svg>
     <h1 id="headline">담화를 준비하고 있어요</h1>
     <p id="body"></p>
+    <div class="progress" id="progress" role="progressbar" aria-label="진행 중"></div>
     <pre id="detail" hidden></pre>
     <p class="hint" id="hint" hidden></p>
     <script>
       const q = new URLSearchParams(location.search);
       const state = q.get("state") ?? "starting";
       const copy = {
-        starting: ["담화를 준비하고 있어요", "서비스가 뜨기를 기다리고 있어요."],
+        starting: ["담화를 준비하고 있어요", "잠시만 기다려 주세요."],
         quitting: [
           "담화를 종료하고 있어요",
           "진행 중인 작업을 안전한 지점까지 마무리하는 중이에요. 몇 분이 걸릴 수 있어요 — 그동안 강제 종료하지 말아 주세요.",
         ],
         failed: ["담화를 시작하지 못했어요", "아래 내용이 원인이에요."],
       };
-      const entry = Object.prototype.hasOwnProperty.call(copy, state) ? copy[state] : copy.failed;
-      const [headline, body] = entry;
+      const known = Object.prototype.hasOwnProperty.call(copy, state);
+      const [headline, body] = known ? copy[state] : copy.failed;
+      const failed = !known || state === "failed";
       document.getElementById("headline").textContent = headline;
       document.getElementById("body").textContent = body;
+      // 기다리는 화면(준비·종료)에만 진행 표시를 둔다. 실패 화면에서 움직이면 아직 뭔가 되고 있다고 읽힌다.
+      document.getElementById("progress").hidden = failed;
 
       const detail = q.get("detail");
       if (detail) {
@@ -63,17 +113,19 @@
         el.hidden = false;
       }
 
-      const parts = [];
-      const retry = q.get("retryInSeconds");
-      if (retry) parts.push(`${retry}초 뒤에 다시 시도해요.`);
-      const log = q.get("logPath");
-      if (log) parts.push(`로그: ${log}`);
-      // 종료 중에는 재시도 안내를 붙이지 않는다. 지금 할 일은 기다리는 것뿐이고, 그 줄은
-      // 사람을 메뉴로 보내 방금 시작한 종료를 방해하게 만든다.
-      if (state !== "quitting") parts.push("메뉴의 서비스 > 다시 시도로 지금 재시도할 수 있어요.");
-      const hint = document.getElementById("hint");
-      hint.textContent = parts.join(" ");
-      hint.hidden = false;
+      // 재시도 안내는 실패 화면에만 붙인다. 준비 중에는 기다리면 되는 일이라 사람을 메뉴로 보낼 이유가
+      // 없고, 종료 중에는 그 줄이 방금 시작한 종료를 방해하게 만든다.
+      if (failed) {
+        const parts = [];
+        const retry = q.get("retryInSeconds");
+        if (retry) parts.push(`${retry}초 뒤에 다시 시도해요.`);
+        const log = q.get("logPath");
+        if (log) parts.push(`로그: ${log}`);
+        parts.push("메뉴의 서비스 > 다시 시도로 지금 재시도할 수 있어요.");
+        const hint = document.getElementById("hint");
+        hint.textContent = parts.join(" ");
+        hint.hidden = false;
+      }
     </script>
   </body>
 </html>

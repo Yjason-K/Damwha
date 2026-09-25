@@ -921,6 +921,7 @@ function shellStatusOf(): ShellStatus {
     externalDatabase: currentDatabaseMode()?.kind === "external",
     logPathOf,
     restoreAvailable: restoreAllowedNow(),
+    packaged: app.isPackaged,
   });
 }
 

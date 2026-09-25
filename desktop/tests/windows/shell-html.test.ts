@@ -478,6 +478,24 @@ describe("status.html", () => {
     const { html } = loadPage("status.html");
     expect(codeOf(html)).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|document\.write|<button\b|<form\b/);
   });
+
+  it("shows progress and no retry hint while starting or quitting (Notion P2-B)", () => {
+    for (const state of ["starting", "quitting"]) {
+      const { byId } = loadPage("status.html", `?state=${state}`);
+      expect(byId.get("progress")!.hidden).toBe(false);
+      expect(byId.get("hint")!.hidden).toBe(true);
+    }
+  });
+
+  it("stops the progress and offers the retry path on failure — also for an unknown state", () => {
+    for (const state of ["failed", "bogus"]) {
+      const { byId } = loadPage("status.html", `?${new URLSearchParams({ state, logPath: "/logs/api.log" })}`);
+      expect(byId.get("progress")!.hidden).toBe(true);
+      expect(byId.get("hint")!.hidden).toBe(false);
+      expect(byId.get("hint")!.textContent).toContain("/logs/api.log");
+      expect(byId.get("hint")!.textContent).toContain("다시 시도");
+    }
+  });
 });
 
 describe("token.html (Phase 4 스펙 §6.4 — 첫 실행 게이트)", () => {
@@ -647,6 +665,49 @@ describe("Content-Security-Policy — 둘째 겹 (스펙 §6.11, Task 14 fix 1-5
         expect(at).toBeGreaterThan(-1);
         expect(at).toBeLessThan(html.indexOf("<style>"));
         expect(at).toBeLessThan(html.indexOf("<script>"));
+      });
+    });
+  }
+});
+
+describe("design tokens — fe/src/index.css와 같은 값 (Notion P2-B)", () => {
+  // 셸 페이지는 CSP상 fe의 CSS를 불러올 수 없어 토큰을 같은 이름으로 옮겨 적는다. 옮겨 적은 값은 fe가
+  // 토큰을 바꾸는 날 조용히 뒤처진다 — 이 테스트가 그날을 잡는다.
+  const feCss = fs.readFileSync(path.join(__dirname, "..", "..", "..", "fe", "src", "index.css"), "utf8");
+  const declsOf = (css: string) => {
+    const out = new Map<string, string>();
+    for (const m of css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/--([\w-]+)\s*:\s*([^;]+);/g)) {
+      if (!out.has(m[1])) out.set(m[1], m[2].replace(/\s+/g, " ").trim());
+    }
+    return out;
+  };
+  const fe = declsOf(feCss);
+  const resolve = (value: string, depth = 0): string =>
+    depth > 10
+      ? value
+      : value.replace(/var\(--([\w-]+)\)/g, (_, name: string) => resolve(fe.get(name) ?? `<fe에 없음: --${name}>`, depth + 1));
+
+  for (const file of ["services.html", "status.html", "token.html"]) {
+    describe(file, () => {
+      const html = fs.readFileSync(path.join(__dirname, "..", "..", "shell", file), "utf8");
+      const style = /<style>([\s\S]*?)<\/style>/.exec(html)![1].replace(/\/\*[\s\S]*?\*\//g, "");
+      const rootBlock = /:root\s*\{([^}]*)\}/.exec(style)![1];
+      const shell = declsOf(rootBlock);
+
+      it("copies each token with the same name and the value fe resolves it to", () => {
+        expect(shell.size).toBeGreaterThan(0);
+        for (const [name, value] of shell) expect({ name, value }).toEqual({ name, value: resolve(`var(--${name})`) });
+      });
+
+      it("writes no colour outside :root and uses only tokens it declares", () => {
+        const rest = style.replace(/:root\s*\{[^}]*\}/, "");
+        expect(rest).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(/);
+        for (const m of rest.matchAll(/var\(--([\w-]+)\)/g)) expect(shell.has(m[1]), `--${m[1]}`).toBe(true);
+      });
+
+      it("stays light — fe has no dark mode, so following the system would flash on attach", () => {
+        expect(style).not.toMatch(/prefers-color-scheme/);
+        expect(rootBlock).toMatch(/color-scheme:\s*light;/);
       });
     });
   }

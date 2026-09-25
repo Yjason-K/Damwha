@@ -8,60 +8,77 @@
          스크립트나 스타일을 한 글자라도 고치면 해시를 다시 계산해야 한다 — tests/windows/shell-html.test.ts가
          어긋남을 잡는다. 링크는 이 페이지가 열지 않는다: 버튼은 열쇠("accept"·"tokens")만 main에 넘기고, main이
          고정 주소를 기본 브라우저로 연다(src/windows/token-window.ts). -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-n/KlXK1CmDJ9QsmbNJqzA3ssS2qFDWuVoAT1/yPHbZg='; style-src 'sha256-3ZsbyaDJf9xVoBk9zPXS5hbjSkAvkn2c04gIc+vGejY='; base-uri 'none'; form-action 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-n/KlXK1CmDJ9QsmbNJqzA3ssS2qFDWuVoAT1/yPHbZg='; style-src 'sha256-bFv5sS9f/YGEfzLcJqCNOXoRqomQXyuRejCTzEtXFb8='; base-uri 'none'; form-action 'none'" />
     <title>허깅페이스 토큰</title>
     <style>
+      /* 색·서체는 fe/src/index.css의 토큰을 **같은 이름으로** 옮겨 적는다(셸 페이지는 CSP상 fe의 CSS를
+         불러올 수 없다). 값이 어긋나면 tests/windows/shell-html.test.ts가 잡는다 — :root 밖에 색을 직접
+         적지 않는다. fe에 다크 모드가 없으므로 라이트로 고정한다(status.html과 같은 이유). */
       :root {
-        color-scheme: light dark;
-        --bg: #fbfbfa; --fg: #1c1b1a; --muted: rgba(28, 27, 26, 0.6);
-        --line: rgba(28, 27, 26, 0.12); --sunken: rgba(127, 127, 127, 0.1);
-        --warn: #b7791f; --fail: #c2413b; --info: rgba(127, 127, 127, 0.55);
-      }
-      @media (prefers-color-scheme: dark) {
-        :root {
-          --bg: #191817; --fg: #e8e6e3; --muted: rgba(232, 230, 227, 0.6);
-          --line: rgba(232, 230, 227, 0.14);
-          --warn: #e0a84f; --fail: #ec6a5e;
-        }
+        color-scheme: light;
+        --surface-app: #f7f7f7;
+        --surface-card: #ffffff;
+        --surface-hover: #ededed;
+        --text-primary: #0a0a0a;
+        --text-secondary: #5a5a5c;
+        --text-faint: #a8a8aa;
+        --text-on-accent: #ffffff;
+        --border-default: #e5e5e5;
+        --border-strong: #d4d4d4;
+        --accent-solid: #0a0a0a;
+        --accent-solid-hover: #1c1c1e;
+        --accent-6: #00d4a4;
+        --gray-0: #ffffff;
+        --gray-2: #f7f7f7;
+        --amber-9: #c37d0d;
+        --red-9: #c94a4a;
+        --radius-sm: 6px;
+        --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        --font-mono: "Geist Mono", ui-monospace, "SF Mono", "Menlo", monospace;
       }
       * { box-sizing: border-box; }
       body {
         margin: 0; padding: 24px 28px 28px;
-        font: 13px/1.6 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif;
-        background: var(--bg); color: var(--fg);
+        font: 13px/1.6 var(--font-sans);
+        background: var(--surface-app); color: var(--text-primary);
+        -webkit-font-smoothing: antialiased;
       }
       h1 { font-size: 16px; font-weight: 600; margin: 0; }
-      .lead { margin: 6px 0 0; color: var(--muted); }
-      ol { margin: 18px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
-      li { padding: 14px 0; border-bottom: 1px solid var(--line); }
+      .lead { margin: 6px 0 0; color: var(--text-secondary); }
+      ol { margin: 18px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--border-default); }
+      li { padding: 14px 0; border-bottom: 1px solid var(--border-default); }
       .step { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
       .title { font-weight: 600; }
-      .note { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+      .note { margin: 2px 0 0; font-size: 12px; color: var(--text-secondary); }
       .url {
-        margin: 4px 0 0; font: 11.5px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
-        color: var(--muted); overflow-wrap: anywhere; user-select: all;
+        margin: 4px 0 0; font: 11.5px/1.5 var(--font-mono);
+        color: var(--text-secondary); overflow-wrap: anywhere; user-select: all;
       }
       button {
-        flex: none; font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px;
-        border: 1px solid var(--line); background: var(--sunken); color: var(--fg); cursor: default;
+        flex: none; font: inherit; font-size: 12px; font-weight: 500; padding: 3px 10px;
+        border-radius: var(--radius-sm); border: 1px solid var(--border-default);
+        background: var(--surface-card); color: var(--text-primary); cursor: default; outline: none;
       }
+      button:hover:not(:disabled) { border-color: var(--border-strong); background: var(--gray-2); }
+      button:focus-visible, input:focus-visible { box-shadow: 0 0 0 2px var(--gray-0), 0 0 0 4px var(--accent-6); }
       button:disabled { opacity: 0.45; }
       .entry { display: flex; gap: 8px; margin: 8px 0 0; }
       input {
-        flex: 1; min-width: 0; font: 12.5px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
-        padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line);
-        background: var(--bg); color: var(--fg);
+        flex: 1; min-width: 0; font: 12.5px/1.4 var(--font-mono);
+        padding: 6px 8px; border-radius: var(--radius-sm); border: 1px solid var(--border-default);
+        background: var(--surface-card); color: var(--text-primary);
       }
       input:disabled { opacity: 0.6; }
-      #confirm { background: var(--fg); color: var(--bg); border-color: var(--fg); padding: 4px 14px; }
+      #confirm { background: var(--accent-solid); color: var(--text-on-accent); border-color: var(--accent-solid); padding: 4px 14px; }
+      #confirm:hover:not(:disabled) { background: var(--accent-solid-hover); border-color: var(--accent-solid-hover); }
       #status {
-        margin: 14px 0 0; padding: 8px 10px; border-radius: 6px; background: var(--sunken);
-        border-left: 3px solid var(--info);
+        margin: 14px 0 0; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--surface-hover);
+        border-left: 3px solid var(--text-faint);
         white-space: pre-wrap; overflow-wrap: anywhere; max-height: calc(8lh + 16px); overflow-y: auto;
       }
-      #status[data-tone="warn"] { border-left-color: var(--warn); }
-      #status[data-tone="error"] { border-left-color: var(--fail); }
-      .foot { margin: 16px 0 0; font-size: 12px; color: var(--muted); }
+      #status[data-tone="warn"] { border-left-color: var(--amber-9); }
+      #status[data-tone="error"] { border-left-color: var(--red-9); }
+      .foot { margin: 16px 0 0; font-size: 12px; color: var(--text-secondary); }
     </style>
   </head>
   <body>

@@ -271,6 +271,36 @@ describe("statusLine / shellStatusFrom", () => {
     );
   });
 
+  it("lists every service on the starting screen in dev", () => {
+    const shell = shellStatusFrom({
+      statuses: [st("postgres"), st("api", { process: "starting", health: "unknown" })],
+      restartNotice: null,
+      logPathOf,
+    });
+    expect(shell).toEqual({ state: "starting", detail: "데이터베이스: 실행 중\nAPI: 준비 중" });
+  });
+
+  it("hides the service lines on the packaged starting screen but keeps notices (Notion P2-B)", () => {
+    const statuses = [st("postgres"), st("api", { process: "starting", health: "unknown" })];
+    expect(shellStatusFrom({ statuses, restartNotice: null, logPathOf, packaged: true })).toEqual({ state: "starting" });
+    const warning = "내장 DB 모드에서는 config.json의 DATABASE_URL를 쓰지 않아요";
+    expect(
+      shellStatusFrom({ statuses, restartNotice: "재시작 안내", logPathOf, configWarning: warning, packaged: true }),
+    ).toEqual({ state: "starting", detail: `재시작 안내\n${warning}` });
+  });
+
+  it("still shows the cause on the packaged failure screen", () => {
+    const detail = CAUSES.pgVersionMismatch.text("15", "16");
+    const shell = shellStatusFrom({
+      statuses: [st("postgres", { process: "failed", health: "unknown", detail })],
+      restartNotice: null,
+      logPathOf,
+      packaged: true,
+    });
+    expect(shell.state).toBe("failed");
+    expect(shell.detail).toContain(detail);
+  });
+
   it("always uses the plain failure screen for a postgres failure, with the server's own log (Phase 3)", () => {
     const detail = CAUSES.pgVersionMismatch.text("15", "16");
     const shell = shellStatusFrom({

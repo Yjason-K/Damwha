@@ -75,7 +75,8 @@ Airbnb 같은 소비자 앱 미학도 아니다. 장식은 정보를 밀어내�
   도형을, `public/favicon.ico`와 `public/apple-touch-icon.png`가 거기서 뽑은
   래스터를, `index.html`의 `theme-color`가 바탕 색조를 들고 있다. 여섯째는
   데스크톱 앱 아이콘 `desktop/build-resources/icon.svg`(같은 도형을 macOS 아이콘
-  규격 — 1024 캔버스의 824 본체 — 로 옮긴 것)와 거기서 뽑은 `icon.icns`다. **하나를
+  규격 — 1024 캔버스의 824 본체 — 로 옮긴 것)와 거기서 뽑은 `icon.icns`, 그리고
+  시작 화면 `desktop/shell/status.html`의 인라인 사본이다. **하나를
   고치면 여섯 다 고친다** — 실제로 래스터 두 개가 한 번 뒤처진 적이 있다. **톤을 통째로 갈아엎을
   때도 마크는 대상이 아니다** — 2026-08 리톤은 `index.html`의 `theme-color`
   까지 포함해 마크를 손대지 않았다

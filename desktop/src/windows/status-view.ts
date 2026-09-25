@@ -105,6 +105,12 @@ export interface ShellInput {
   configWarning?: string | null;
   /** 지금 "업데이트 전으로 되돌리기" 메뉴가 실제로 눌리는가 (Phase 6b-2 스펙 §7.1). */
   restoreAvailable?: boolean;
+  /**
+   * packaged 앱인가. 그렇다면 **시작 중** 화면에서 서비스 줄을 뺀다 — 사용자에게 필요한 것은 "준비 중"
+   * 하나이고, 서비스 이름표는 개발자의 정보다. 실패 화면은 packaged에서도 원인 줄을 그대로 보인다
+   * (그때는 그 줄이 사용자가 할 일을 말한다). 서비스 상태 창은 이 값과 무관하다.
+   */
+  packaged?: boolean;
 }
 
 /** 업데이트와 관계된 실패에서, 되돌리기가 실제로 가능할 때만 덧붙인다 (Phase 6b-2 스펙 §7.1). */
@@ -115,13 +121,18 @@ const RESTORE_RELEVANT = new Set(["migrationFailed", "migrationsStillPending"]);
 export function shellStatusFrom(input: ShellInput): ShellStatus {
   // 화면이 "값을 고치면 다시 시도합니다"라고 적는 이상, 고쳐도 반영되지 않는 값은 화면이
   // 말해야 한다. 조용히 어긋난 채로 두는 것이 재리뷰 §4-1이 지적한 결함의 절반이다.
-  const lines = [
-    ...input.statuses.map((s) => statusLine(s, input.externalDatabase === true)),
+  const serviceLines = input.statuses.map((s) => statusLine(s, input.externalDatabase === true));
+  // 재시작 안내와 설정 경고는 packaged에서도 남긴다 — 서비스 진행 상황이 아니라 사람이 알아야 할 사실이다.
+  const notices = [
     ...(input.restartNotice === null ? [] : [input.restartNotice]),
     ...(input.configWarning === undefined || input.configWarning === null ? [] : [input.configWarning]),
   ];
+  const lines = [...serviceLines, ...notices];
   const failed = input.statuses.find((s) => s.process === "failed");
-  if (failed === undefined) return { state: "starting", detail: lines.join("\n") };
+  if (failed === undefined) {
+    const shown = input.packaged === true ? notices : lines;
+    return shown.length === 0 ? { state: "starting" } : { state: "starting", detail: shown.join("\n") };
+  }
   // Phase 2의 db-unreachable 화면("Docker Desktop이 실행 중인지 확인해 주세요")은 없다 — 앱이 Docker를 부르지 않는다.
   // 어떤 실패든 일반 실패 화면이 원인과 해결 줄을 그대로 보인다.
   const failedCause = failed.detail === undefined ? undefined : causeIn(failed.detail);
