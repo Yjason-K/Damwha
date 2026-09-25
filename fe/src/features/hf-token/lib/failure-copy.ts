@@ -11,15 +11,15 @@ export interface HfFailureCopy {
 export function hfFailureCopy(code: string | undefined): HfFailureCopy | null {
   if (code === "hf_token_invalid") {
     return {
-      title: "화자 분리를 하지 못했어요",
+      title: "회의를 처리하지 못했어요",
       body: "허깅페이스 토큰이 없거나 맞지 않아요. 토큰을 넣은 뒤 재처리해 주세요.",
       action: "token",
     };
   }
   if (code === "hf_gate_not_accepted") {
     return {
-      title: "화자 분리를 하지 못했어요",
-      body: "이 토큰의 계정이 화자 분리 모델의 사용 조건에 동의하지 않았어요. 동의한 뒤 재처리해 주세요.",
+      title: "회의를 처리하지 못했어요",
+      body: "이 토큰의 계정이 모델 사용 조건에 동의하지 않았어요. 동의한 뒤 재처리해 주세요.",
       action: "accept",
     };
   }

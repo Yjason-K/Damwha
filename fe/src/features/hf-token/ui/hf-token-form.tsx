@@ -69,7 +69,7 @@ export function HfTokenForm({
     <form className="flex flex-col gap-3" onSubmit={submit}>
       <ol className="flex flex-col gap-2 text-sm">
         <li className="flex items-center justify-between gap-3">
-          <span>1. 화자 분리 모델의 사용 조건에 동의하기</span>
+          <span>1. 허깅페이스에서 모델 사용 조건에 동의하기</span>
           <Button
             type="button"
             variant="secondary"
@@ -80,7 +80,7 @@ export function HfTokenForm({
           </Button>
         </li>
         <li className="flex items-center justify-between gap-3">
-          <span>2. 같은 계정에서 Read 권한 토큰 만들기</span>
+          <span>2. 같은 계정에서 토큰 만들기 (Read 권한)</span>
           <Button
             type="button"
             variant="secondary"

@@ -17,7 +17,7 @@ import type { HfTokenAction, HfTokenView } from "../model/types";
 import { HfTokenForm } from "./hf-token-form";
 
 const CLEAR_DETAIL =
-  "지금 도는 작업 처리기는 옛 토큰으로 계속 돌아요. 하지만 다시 시작하면 토큰 없이 떠서 화자 분리를 하지 못해요. 새 회의와 재처리도 다시 막혀요.";
+  "지금 도는 작업 처리기는 옛 토큰으로 계속 돌아요. 하지만 다시 시작하면 토큰 없이 떠서 회의를 처리하지 못해요. 새 회의와 재처리도 다시 막혀요.";
 
 /** 설정의 "허깅페이스 토큰" 섹션 (스펙 2026-09-25 §3.4). 웹에서는 그리지 않는다. */
 export function HfTokenSettingsSection({
@@ -40,7 +40,7 @@ export function HfTokenSettingsSection({
           허깅페이스 토큰
         </span>
         <span className="text-sm text-[color:var(--text-muted)]">
-          화자 분리 모델을 받는 데 써요.
+          회의를 기록하고 처리하는 데 필요해요.
         </span>
       </div>
       {view.kind === "pending" ? (

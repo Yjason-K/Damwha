@@ -46,11 +46,11 @@ export function HfTokenOnboarding({
     <Dialog open={wanted} onOpenChange={(open) => (open ? undefined : later())}>
       <DialogContent className="max-w-[520px]">
         <DialogHeader>
-          <DialogTitle>화자 분리를 쓰려면 토큰이 필요해요</DialogTitle>
+          <DialogTitle>담화를 쓰려면 허깅페이스 토큰이 필요해요</DialogTitle>
           <DialogDescription>
             {state.status === "unreadable"
               ? "저장된 토큰을 읽을 수 없어요 — 다시 입력해 주세요."
-              : "담화는 누가 말했는지 나누는 모델을 허깅페이스에서 받아요. 이 모델은 사용 조건에 동의한 계정의 토큰으로만 받을 수 있어요. 토큰 없이도 회의 보기·검색은 쓸 수 있어요."}
+              : "담화를 사용하려면 허깅페이스에서 모델 사용 조건에 동의하고, 같은 계정의 토큰을 넣어 주세요. 토큰 없이도 회의 보기·검색은 쓸 수 있어요."}
           </DialogDescription>
         </DialogHeader>
         <HfTokenForm state={state} send={send} />

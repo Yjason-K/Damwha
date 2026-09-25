@@ -75,8 +75,8 @@ export function HfTokenGateProvider({
             <DialogHeader>
               <DialogTitle>허깅페이스 토큰이 필요해요</DialogTitle>
               <DialogDescription>
-                화자 분리 모델을 받으려면 허깅페이스 토큰이 있어야 해요. 넣은 뒤
-                하던 동작을 다시 눌러 주세요.
+                회의를 기록하고 처리하려면 모델 사용 조건 동의와 허깅페이스
+                토큰이 필요해요. 넣은 뒤 하던 동작을 다시 눌러 주세요.
               </DialogDescription>
             </DialogHeader>
             <HfTokenForm state={view.state} send={send} />

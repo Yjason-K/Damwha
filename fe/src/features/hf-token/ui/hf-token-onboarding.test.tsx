@@ -18,7 +18,7 @@ const ready = (state: HfTokenState) => ({ kind: "ready" as const, state });
 test("shows on a first run without a token", () => {
   render(<HfTokenOnboarding view={ready(base)} send={vi.fn()} />);
   expect(
-    screen.getByRole("dialog", { name: "화자 분리를 쓰려면 토큰이 필요해요" }),
+    screen.getByRole("dialog", { name: "담화를 쓰려면 허깅페이스 토큰이 필요해요" }),
   ).toBeInTheDocument();
 });
 
