@@ -48,8 +48,14 @@ export function parseModelKey(
   return { role: role as ModelRole, name, backend: null };
 }
 
-/** 모델 job 네임스페이스 — 마이그레이션 lock(`migrate.ts`의 bigint 키)과 공간을 나눈다. */
-const MODEL_JOB_LOCK_NS = 72_031;
+/**
+ * 모델 job 네임스페이스 — 마이그레이션 lock(`migrate.ts`의 bigint 키)과 공간을 나눈다.
+ * export하는 이유: e2e(`models-jobs.e2e-spec.ts`)가 별도 pg 클라이언트로 같은 lock을
+ * 직접 잡아, `download()`가 그 lock을 실제로 기다리는지(대기자로 `pg_locks`에 나타나는지)
+ * 결정적으로 검증한다 — `Promise.all` 경합만으로는 이 프로세스 하나·컨테이너 하나 환경에서
+ * lock 없이도 우연히 통과할 수 있다(브리프 우려대로 실측됨, task-5-report.md 참고).
+ */
+export const MODEL_JOB_LOCK_NS = 72_031;
 
 export async function lockModelKey(c: PoolClient, k: ModelKey): Promise<void> {
   await c.query('SELECT pg_advisory_xact_lock($1::int, hashtext($2))', [MODEL_JOB_LOCK_NS, modelKey(k.role, k.name, k.backend)]);

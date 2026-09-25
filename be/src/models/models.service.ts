@@ -192,12 +192,28 @@ export class ModelsService {
     if (t.rows[0]?.type !== 'download_model') {
       throw new BadRequestException({ statusCode: 400, code: 'invalid_job', message: 'only download_model jobs can be cancelled' });
     }
+    // 스펙 §5.3의 "queued면 바로 failed" 규칙은 **한 번도 안 돈**(attempts=0) job에만 안전하다.
+    // attempts>0인 queued는 TRANSIENT로 한 번 이상 재queue된 job이다 — worker가 이미 이 repo의
+    // model_readiness 항목을 썼을 수 있고, 그 키를 지우는 것은 worker/embed/llm_entry만 하는
+    // app_setting 단일 writer 계약이다(§4.2, be/CLAUDE.md). 여기서 API가 바로 failed로 닫으면
+    // readiness에 남은 항목이 desktop 상태 창에 "다시 시작"을 계속 띄운다(§7.4 — 최종 실패로
+    // 닫힐 때 그 key를 지우는 것은 handler뿐이다). 그래서 stop_requested_at만 찍고
+    // next_attempt_at을 지워 worker가 백오프를 기다리지 않고 바로 다시 claim하게 한다 — worker는
+    // §7.1의 "시작 시 stop_requested_at 확인" 규칙으로 스스로 download_cancelled로 닫고
+    // readiness key를 지운다(§7.2).
     const error = { code: 'download_cancelled', message: '받기를 취소했어요', kind: 'PERMANENT', stage: null };
-    const q = await this.db.query(
-      `UPDATE job SET status='failed', error=$2::jsonb, updated_at=now() WHERE id=$1 AND status='queued' RETURNING id, type, status`,
+    const closed = await this.db.query(
+      `UPDATE job SET status='failed', error=$2::jsonb, updated_at=now()
+        WHERE id=$1 AND status='queued' AND attempts=0 RETURNING id, type, status`,
       [jobId, JSON.stringify(error)],
     );
-    if (q.rows[0]) return { job: q.rows[0] };
+    if (closed.rows[0]) return { job: closed.rows[0] };
+    const handoff = await this.db.query(
+      `UPDATE job SET stop_requested_at=now(), next_attempt_at=NULL, updated_at=now()
+        WHERE id=$1 AND status='queued' AND attempts > 0 RETURNING id, type, status`,
+      [jobId],
+    );
+    if (handoff.rows[0]) return { job: handoff.rows[0] };
     // 그 사이 claim됐거나 이미 running — 끝내는 것은 worker다 (스펙 §5.3).
     const r = await this.db.query(
       `UPDATE job SET stop_requested_at=now(), updated_at=now() WHERE id=$1 AND status='running' RETURNING id, type, status`,
