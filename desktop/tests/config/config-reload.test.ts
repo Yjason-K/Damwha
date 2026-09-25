@@ -389,6 +389,18 @@ describe("createConfigReloader — the Keychain token this run carries (Phase 4 
     }
   });
 
+  it("launchEnv without a token leaves HF_TOKEN out of env entirely", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-reload-"));
+    try {
+      const cfg = loadConfig(tempDir);
+      const live = launchEnv(cfg, 51234, null);
+      expect("HF_TOKEN" in live.env).toBe(false);
+      expect("HF_TOKEN" in live.baseline).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps it through reloads whether the file names a token or not, and never logs the value", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-reload-"));
     try {

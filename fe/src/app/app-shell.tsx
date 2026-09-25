@@ -16,6 +16,8 @@ import { searchIsKeywordOnly } from "@/features/settings/lib/model-readiness";
 import type { MeetingFilter } from "@/features/meeting/model/types";
 import { Icon } from "@/features/meeting/ui/icons";
 import { LeftNav } from "@/features/meeting/ui/left-nav";
+import { HfTokenGateProvider } from "@/features/hf-token/ui/hf-token-gate";
+import { HfTokenOnboarding } from "@/features/hf-token/ui/hf-token-onboarding";
 
 const TourNavigationGuard = React.lazy(() =>
   import("@/features/demo/ui/tour-navigation-guard").then((m) => ({
@@ -116,35 +118,42 @@ export function AppShell() {
   ].filter((g) => g.items.length > 0);
 
   return (
-    <div className="grid h-screen min-w-[1260px] grid-cols-[var(--rail-nav)_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] bg-[var(--surface-app)] text-foreground">
-      <LeftNav filter={filter} onFilter={setFilter} onOpenSearch={openSearch} />
-      <Outlet />
+    <HfTokenGateProvider>
+      <div className="grid h-screen min-w-[1260px] grid-cols-[var(--rail-nav)_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] bg-[var(--surface-app)] text-foreground">
+        <LeftNav
+          filter={filter}
+          onFilter={setFilter}
+          onOpenSearch={openSearch}
+        />
+        <Outlet />
 
-      <CommandBar
-        open={cmdOpen}
-        onOpenChange={setCmdOpen}
-        query={cmdQuery}
-        onQueryChange={setCmdQuery}
-        notice={
-          keywordOnly
-            ? "검색 임베딩 모델을 아직 받는 중이라 지금은 단어가 그대로 들어간 발언만 찾아요. 모델이 준비되면 뜻이 비슷한 발언까지 찾아요."
-            : undefined
-        }
-        groups={cmdGroups}
-        onSelect={(item) => {
-          if (!item.id) return;
-          setCmdOpen(false);
-          const [kind, mid, uid] = item.id.split(":");
-          if (kind === "u") navigate(`/meetings/${mid}?u=${uid}`);
-          else if (kind === "m") navigate(`/meetings/${mid}`);
-        }}
-      />
+        <CommandBar
+          open={cmdOpen}
+          onOpenChange={setCmdOpen}
+          query={cmdQuery}
+          onQueryChange={setCmdQuery}
+          notice={
+            keywordOnly
+              ? "검색 임베딩 모델을 아직 받는 중이라 지금은 단어가 그대로 들어간 발언만 찾아요. 모델이 준비되면 뜻이 비슷한 발언까지 찾아요."
+              : undefined
+          }
+          groups={cmdGroups}
+          onSelect={(item) => {
+            if (!item.id) return;
+            setCmdOpen(false);
+            const [kind, mid, uid] = item.id.split(":");
+            if (kind === "u") navigate(`/meetings/${mid}?u=${uid}`);
+            else if (kind === "m") navigate(`/meetings/${mid}`);
+          }}
+        />
 
-      {env.demoMode ? (
-        <React.Suspense fallback={null}>
-          <TourNavigationGuard />
-        </React.Suspense>
-      ) : null}
-    </div>
+        {env.demoMode ? (
+          <React.Suspense fallback={null}>
+            <TourNavigationGuard />
+          </React.Suspense>
+        ) : null}
+      </div>
+      <HfTokenOnboarding />
+    </HfTokenGateProvider>
   );
 }

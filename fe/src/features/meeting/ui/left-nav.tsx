@@ -9,6 +9,8 @@ import { SidebarItem } from "@/shared/ui/sidebar-item";
 import { cn } from "@/shared/lib/utils";
 import { env } from "@/shared/config/env";
 
+import { useDiarizationGate } from "@/features/hf-token/ui/hf-token-gate";
+
 import { useMeetings } from "../api/meetings";
 import type { MeetingFilter, MeetingStatus } from "../model/types";
 import { Icon } from "./icons";
@@ -34,13 +36,20 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-function NewMeetingItem({ onClick }: { onClick?: () => void }) {
+function NewMeetingItem({
+  onClick,
+  disabled,
+}: {
+  onClick?: () => void;
+  disabled?: boolean;
+}) {
   return (
     <button
       type="button"
       data-tour="new-meeting"
       onClick={onClick}
-      className="flex w-full cursor-pointer items-center gap-[9px] rounded-sm border border-[color:var(--accent-6)] bg-[var(--accent-1)] px-2.5 py-2 text-left text-sm font-semibold text-[color:var(--accent-text)] outline-none transition-colors duration-[80ms] hover:bg-[var(--accent-2)] focus-visible:[box-shadow:var(--focus-ring)]"
+      disabled={disabled}
+      className="flex w-full cursor-pointer items-center gap-[9px] rounded-sm border border-[color:var(--accent-6)] bg-[var(--accent-1)] px-2.5 py-2 text-left text-sm font-semibold text-[color:var(--accent-text)] outline-none transition-colors duration-[80ms] hover:bg-[var(--accent-2)] focus-visible:[box-shadow:var(--focus-ring)] disabled:cursor-default disabled:opacity-60"
     >
       <Icon name="plus" size={16} />
       <span className="flex-1">새 회의 기록하기</span>
@@ -123,6 +132,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
   const speakersMatch = useMatch("/speakers");
   const settingsMatch = useMatch("/settings");
   const [newMeetingOpen, setNewMeetingOpen] = React.useState(false);
+  const gate = useDiarizationGate();
   const { data: meetings, isLoading, isError } = useMeetings();
   const filtered = (meetings ?? []).filter((m) =>
     filter === "fav" ? m.fav : true,
@@ -149,7 +159,10 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
             shortcut={<Kbd keys={["⌘", "K"]} />}
           />
         </div>
-        <NewMeetingItem onClick={() => setNewMeetingOpen(true)} />
+        <NewMeetingItem
+          onClick={() => gate.run(() => setNewMeetingOpen(true))}
+          disabled={gate.locked}
+        />
 
         <div className="mt-3.5 flex flex-col gap-0.5">
           <SidebarItem

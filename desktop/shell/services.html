@@ -9,11 +9,10 @@
          임베더가 실행하는 스크립트(main의 executeJavaScript)는 script-src를 거치지 않는다고 본다 — headless
          Chrome에서 CDP Runtime.evaluate로 이 정책 아래 렌더를 확인했고, Electron에서의 확인은 packaged 점검 몫이다.
 
-         Phase 4(Task 11)부터 이 창에 버튼이 있다 — 스펙 §6.4의 토큰 설정과 §6.10 2층의 "서비스 다시 시작"이
-         둘 다 여기여야 하기 때문이다(Phase 2의 "표시 전용"은 그 전 스펙의 것이다). **그래도 렌더러 → main
-         채널은 만들지 않는다**: preload도 IPC도 없고, 버튼은 token.html과 같은 방식으로 main이 거는 next()
-         호출의 **반환값**으로만 밖에 나간다. 입력칸은 여전히 없다 — 토큰 입력은 token.html 하나가 맡는다. -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-U4ArEBeaumpajpNbevnAM7TWtzqIX2SO33vHWyOVwJ0='; style-src 'sha256-Qma+b2becdVss+Vzq24X2+Mfr/2D1Bad97TtrR478+o='; base-uri 'none'; form-action 'none'" />
+         버튼은 "서비스 다시 시작" 하나다(Phase 4 스펙 §6.10 2층). **그래도 렌더러 → main 채널은 만들지 않는다**:
+         preload도 IPC도 없고, 버튼은 main이 거는 next() 호출의 **반환값**으로만 밖에 나간다. 토큰은 표시만
+         한다 — 입력·교체·삭제는 담화 화면(fe의 features/hf-token)이 맡는다(스펙 2026-09-25 §5.4). -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-OutN0rUwVPO4KkRcAyRtTaOTZqDaYeJpJZ8gnzd1Wq0='; style-src 'sha256-Qma+b2becdVss+Vzq24X2+Mfr/2D1Bad97TtrR478+o='; base-uri 'none'; form-action 'none'" />
     <title>서비스 상태</title>
     <style>
       /* 색·서체는 fe/src/index.css의 토큰을 **같은 이름으로** 옮겨 적는다(셸 페이지는 CSP상 fe의 CSS를
@@ -114,10 +113,6 @@
     <div id="token">
       <div class="head">
         <span id="token-value">확인하는 중…</span>
-        <span class="act">
-          <button type="button" id="token-change">토큰 바꾸기</button>
-          <button type="button" id="token-clear">삭제</button>
-        </span>
       </div>
       <p id="token-note"></p>
     </div>
@@ -127,7 +122,7 @@
     <script>
       // main이 executeJavaScript로 부른다 (스펙 §6.11 — main → 렌더러 한 방향). 이 페이지가 main을
       // 부르는 경로는 없다: preload도 IPC도 없고, 버튼이 만든 동작은 main이 건 next()의 **반환값**으로만
-      // 나간다 (token.html과 같은 다리).
+      // 나간다.
       //
       // 받는 문자열에는 서브프로세스 stderr가 들어 있다. **전부 textContent로만 넣는다.**
       // HTML로 해석하는 싱크(innerHTML·insertAdjacentHTML·outerHTML·document.write)를 쓰지
@@ -214,18 +209,6 @@
 
         const tokenValue = document.getElementById("token-value");
         const tokenNote = document.getElementById("token-note");
-        const tokenChange = document.getElementById("token-change");
-        const tokenClear = document.getElementById("token-clear");
-        tokenChange.addEventListener("click", function () {
-          if (tokenChange.disabled) return;
-          tokenChange.disabled = true;
-          emit({ kind: "token", op: "change" });
-        });
-        tokenClear.addEventListener("click", function () {
-          if (tokenClear.disabled) return;
-          tokenClear.disabled = true;
-          emit({ kind: "token", op: "clear" });
-        });
 
         window.__damwha_services = {
           next: function () {
@@ -248,13 +231,9 @@
           list.hidden = models.length === 0;
           document.getElementById("models-title").hidden = models.length === 0;
 
-          const token = view.token || { masked: null, note: "", canClear: false };
+          const token = view.token || { masked: null, note: "" };
           tokenValue.textContent = token.masked === null ? "없음" : token.masked;
           tokenNote.textContent = token.note;
-          // main이 정한 잠금을 그대로 따른다. 여기서 무조건 풀면, 토큰 창이 떠 있는 동안 감독자가
-          // 일으킨 다시 그리기가 버튼을 되살려 두 번째 창이 열린다.
-          tokenChange.disabled = token.busy === true;
-          tokenClear.disabled = token.canClear !== true;
           // 창이 살아 있는지 사람이 알 수 있게 한다 — degraded가 ok로 돌아오기를 기다리는 사람은
           // "안 바뀐 것"과 "안 갱신된 것"을 구분해야 한다.
           document.getElementById("updated").textContent =

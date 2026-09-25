@@ -62,9 +62,9 @@ export const HINTS: Record<CauseId, Hint> = {
   // dev 전용 원인이다 — 폴더를 고르는 창은 없다. 저장소 안의 desktop/에서 띄우면 앱이 스스로 찾는다.
   repoRootMissing:
     "담화 저장소 안의 desktop/에서 앱을 띄웠는지 확인하거나, config.json의 REPO_ROOT에 be/worker가 있는 저장소 폴더를 적어 주세요.",
-  // 평문 저장을 권하지 않는다 — 앱에 그런 경로가 없다 (스펙 §6.4).
+  // 평문 저장을 권하지 않는다 — 앱에 그런 경로가 없다.
   safeStorageUnavailable:
-    "키체인 접근 앱에서 로그인 키체인의 잠금을 해제한 뒤 메뉴의 서비스 > 다시 시도를 눌러 주세요.",
+    "키체인 접근 앱에서 로그인 키체인의 잠금을 해제한 뒤 담화를 다시 켜 주세요.",
   orphanScanFailed: "logs/supervisor.log에서 까닭을 확인한 뒤 메뉴의 서비스 > 다시 시도를 눌러 주세요.",
   hfTokenInvalid: `${HF_TOKENS_PAGE_URL} 에서 토큰을 확인하거나 새로 만든 뒤 다시 입력해 주세요.`,
   hfGateNotAccepted: "위 페이지에서 토큰을 만든 계정으로 사용 조건에 동의한 뒤 그 회의를 다시 처리해 주세요.",

@@ -15,10 +15,10 @@ import {
 import type { ProcessHandle } from "./process/handle";
 import { launchVite } from "./dev/vite-process";
 import { lastMeaningfulLine } from "./diagnostics/stderr";
-import { createServicesWindow, createTokenWindow, showStatus, type ShellStatus } from "./windows/shell-window";
+import { createServicesWindow, showStatus, type ShellStatus } from "./windows/shell-window";
 import { makeTokenStore, maskToken, tokenFilePath, verifyHfToken } from "./config/token-store";
-import { runTokenGate } from "./app/token-gate";
-import { openTokenWindow, TokenWindowClosed } from "./windows/token-window";
+import { readBootToken } from "./app/token-boot";
+import { createTokenBridge } from "./windows/token-bridge";
 import { ServiceFailure } from "./services/failure";
 import { CAUSES } from "./diagnostics/causes";
 import {
@@ -29,7 +29,7 @@ import {
   shellStatusFrom,
   type ServicesAction,
 } from "./windows/status-view";
-import { applyTokenChange, ownedByStatus, TOKEN_SERVICES } from "./windows/apply-token-change";
+import { applyTokenChange, ownedByStatus, type TokenChangeResult } from "./windows/apply-token-change";
 import { createStatusWindow, mayAutoOpen } from "./windows/status-window";
 import { applyNavigationBoundary, applyPermissionBoundary } from "./windows/permissions";
 import { mayRenderShell } from "./windows/shell-latch";
@@ -166,7 +166,7 @@ let quitting = false;
  * 새 버전 알림 (Phase 6b-1 스펙 §4.4). 셋 다 단일 인스턴스 분기 안(whenReady)에서 한 번 만든다.
  * - updateAttached: 담화 화면이 **실제로** 붙은 창. attachedWindow는 loadURL 전에 서므로 그 증거가
  *   못 된다(스펙 §3-6) — loadURL이 성공한 뒤에만 여기 둔다. showShell이 둘을 함께 지운다.
- * - modals: 다른 앱 모달(ask·재시작 안내·토큰 창). 자동 알림이 그 위에 겹치지 않게 한다.
+ * - modals: 다른 앱 모달(ask·재시작 안내). 자동 알림이 그 위에 겹치지 않게 한다.
  */
 let updateFlow: UpdateFlow | null = null;
 let updateScheduler: UpdateScheduler | null = null;
@@ -220,8 +220,8 @@ let configWarning: string | null = null;
  */
 let knownWorkerDescendants: ReadonlySet<number> | undefined;
 /**
- * 기동 게이트를 지난 HF 토큰 (Phase 4 스펙 §6.4). 한 번 지나면 재시도·창 재열기가 Keychain을 다시 묻지 않는다.
- * **로그·화면에 싣지 않는다.** 자식에게는 launchEnv가 ctx.env로만 넘긴다.
+ * 이번 실행이 읽었거나 담화 화면에서 받은 HF 토큰 (스펙 2026-09-25 §5.1). 한 번 읽으면 재시도·창
+ * 재열기가 Keychain을 다시 묻지 않는다. **로그·화면에 싣지 않는다.** 자식에게는 launchEnv가 ctx.env로만 넘긴다.
  */
 let hfToken: string | null = null;
 /**
@@ -234,12 +234,6 @@ let modelReadiness: readonly ReadinessEntry[] = [];
 let readModelReadiness: (() => Promise<unknown>) | null = null;
 /** 지금 "서비스 다시 시작"이 도는 중인 서비스. 버튼이 죽은 것처럼 보이지 않게 화면이 진행을 보인다. */
 const restartingServices = new Set<ServiceId>();
-/**
- * 토큰 창이나 삭제 확인이 떠 있다. 재시작의 `restartingServices`와 같은 일을 토큰 두 버튼에 한다 —
- * 묻는 고리는 그동안 막혀 있는데, 감독자의 상태 변화가 화면을 다시 그리면 페이지가 스스로 건
- * 잠금이 풀리고 두 번째 클릭이 큐에 쌓인다(그 창이 닫히자마자 두 번째 창이 열린다).
- */
-let tokenBusy = false;
 /** 상태 창에서 방금 누른 것의 결과 한 줄. 다음 동작이 덮는다. */
 let actionNotice: string | null = null;
 
@@ -324,6 +318,12 @@ function createWindow(): BrowserWindow {
     },
   });
   applyNavigationBoundary(created, allowedOrigins);
+  // ⌘R 뒤의 새 문서는 새 __damwha_desktop을 갖는다 — 다시 붙여야 토큰 폼이 "확인 중"에 멈추지 않는다.
+  // 첫 로드는 reattachWindow가 붙인다(그때는 아직 updateAttached가 서기 전이라 여기서는 건너뛴다).
+  // 셸 화면(file://)으로 돌아간 창은 showShell이 updateAttached를 null로 내리므로 붙지 않는다.
+  created.webContents.on("did-finish-load", () => {
+    if (updateAttached === created && !created.isDestroyed()) tokenBridge.attach(created);
+  });
   return created;
 }
 
@@ -706,6 +706,69 @@ const statusWindow = createStatusWindow<BrowserWindow>({
   log: appendSupervisorLog,
 });
 
+/**
+ * 담화 화면의 HF 토큰 (스펙 2026-09-25 §4). 흐름은 windows/token-bridge.ts에 있다 — 여기는 잎이다.
+ * 붙는 자리는 둘이다: 담화 화면이 처음 붙을 때(reattachWindow)와 ⌘R로 다시 로드될 때(createWindow의 did-finish-load).
+ */
+const tokenBridge = createTokenBridge<BrowserWindow>({
+  run: (w, script) => w.webContents.executeJavaScript(script),
+  alive: (w) => !w.isDestroyed(),
+  isRecording: () => (updateAttached === null ? Promise.resolve(false) : isRecordingIn(updateAttached)),
+  verify: (token) => verifyHfToken(token),
+  // trackRestart가 진행 중에 actionNotice를 "다시 시작 · … — 진행 중이에요."로 세우는데, 재시작
+  // 버튼(restartFromStatusWindow)과 달리 여기서는 그것을 덮는 마무리 줄이 없었다 — 상태 창이 토큰을
+  // 바꾼 뒤에도 영원히 "진행 중이에요."에 멈춰 있었다. 옛 changeHfToken의 마무리 문구를 그대로 쓴다.
+  apply: async (token) => {
+    let result: TokenChangeResult;
+    try {
+      result = await applyTokenChange(
+        {
+          store: makeTokenStore(app.getPath("userData"), safeStorage),
+          // 감독자가 없으면 얹을 live env가 없다. 그래도 저장·캐시는 해 두어야 다음 기동이 새 값을 쓴다.
+          liveEnv: launchCtx?.ctx.env ?? {},
+          restartService: (id) =>
+            trackRestart(id, async () => {
+              const sup = supervisor;
+              if (sup === null) throw new Error(NO_SERVICES_YET);
+              await sup.restartService(id);
+            }),
+          owned: ownedByStatus(supervisor?.statuses() ?? []),
+          // live env와 **같은 순간** 모듈 전역 캐시를 갱신한다 — 하나만 바꾸면 감독자 재생성이 옛 값을 되살린다.
+          cacheToken: (t) => {
+            hfToken = t;
+          },
+        },
+        token,
+      );
+    } catch (e) {
+      // 저장·증명이 실패하면 서비스는 하나도 다시 시작되지 않았다 — "진행 중이에요."를 그대로 두면
+      // 안 끝난 것처럼 보인다. 다리(token-bridge.ts)가 이 예외로 자기 화면에도 알리도록 다시 던진다.
+      actionNotice = "토큰을 바꾸지 못했어요 — 서비스는 다시 시작하지 않았어요.";
+      statusWindow.refresh();
+      throw e;
+    }
+    const labels = (ids: readonly ServiceId[]) => ids.map((id) => SERVICE_LABELS[id]).join(", ");
+    const parts = [
+      result.restarted.length > 0 ? `다시 시작: ${labels(result.restarted)}` : null,
+      result.skipped.length > 0
+        ? `다시 시작하지 못함: ${labels(result.skipped)} (앱이 띄운 서비스가 아니거나 내려가는 중이에요)`
+        : null,
+    ].filter((line): line is string => line !== null);
+    actionNotice = ["토큰을 바꿨어요", ...parts].join(" · ");
+    statusWindow.refresh();
+    return result;
+  },
+  clear: () => {
+    makeTokenStore(app.getPath("userData"), safeStorage).clear();
+    hfToken = null;
+    if (launchCtx !== null) delete launchCtx.ctx.env.HF_TOKEN;
+  },
+  openExternal: (url) => shell.openExternal(url),
+  labels: (ids) => ids.map((id) => SERVICE_LABELS[id]).join(", "),
+  log: appendSupervisorLog,
+  onChange: () => statusWindow.refresh(),
+});
+
 /** 모델 준비 행을 다시 읽는 간격. 감독자의 폴링과 같은 근거다 (writer가 초당 1회 이하로 누른다). */
 const READINESS_REFRESH_MS = 2_000;
 
@@ -944,7 +1007,9 @@ function servicesViewNow() {
     modelReadiness,
     restarting: [...restartingServices],
     maskedToken: hfToken === null ? null : maskToken(hfToken),
-    tokenBusy,
+    // 다리(token-bridge.ts)가 쥔 상태를 그대로 넘긴다 — unavailable·unreadable도 화면이 구분해야
+    // "없음"으로 보이는데 담화 설정에서 넣어도 저장되지 않는 악순환이 생기지 않는다 (스펙 §5.4).
+    tokenStatus: tokenBridge.state().status,
     actionNotice,
   });
 }
@@ -1006,6 +1071,7 @@ async function reattachWindow(mine: number): Promise<void> {
   if (attachedWindow === target) {
     updateAttached = target;
     updateScheduler?.onAttached();
+    tokenBridge.attach(target);
   }
   // 붙기 전에 넘어진 서비스(번들 python이 없으면 worker는 몇 밀리초 만에 넘어진다)는 그때 실패 화면에
   // 잠깐 보였을 뿐, 이제 어떤 화면에도 없다. 감독자는 더 낼 상태가 없어 onStatus도 다시 돌지
@@ -1179,74 +1245,14 @@ const reloadConfig = createConfigReloader({
 });
 
 /**
- * HF 토큰 게이트의 배선 (Phase 4 스펙 §6.4). 판정은 app/token-gate.ts, 창의 흐름은 windows/token-window.ts,
- * 저장·검증은 config/token-store.ts에 있다 — 여기 남는 것은 electron 잎(safeStorage·BrowserWindow·
- * shell.openExternal·app.quit)이다.
- *
- * - safeStorage를 못 쓰면 **manual** 실패로 던진다 — startOnce의 catch가 원인과 안내를 그리고 자동 재시도를 걸지
- *   않는다. Keychain이 잠겨 있으면 재시도가 잠금 해제 요청을 20초마다 다시 띄울 수 있다. 평문 폴백은 없다.
- * - 사람이 토큰 창을 닫았으면 null이다 — 창이 이미 app.quit()을 불렀다. 부른 쪽은 조용히 물러난다.
- */
-async function ensureHfToken(): Promise<string | null> {
-  if (hfToken !== null) return hfToken;
-  const userData = app.getPath("userData");
-  const store = makeTokenStore(userData, safeStorage);
-  const gate = await runTokenGate({
-    store,
-    fileExists: () => fs.existsSync(tokenFilePath(userData)),
-    onboard: (notice) =>
-      modals.track(
-        openTokenWindow<BrowserWindow>({
-          notice,
-          create: (onLoadError) => createTokenWindow(win, onLoadError),
-          alive: (w) => !w.isDestroyed(),
-          onLoad: (w, listener) => w.webContents.on("did-finish-load", listener),
-          onClosed: (w, listener) => w.on("closed", listener),
-          run: (w, script) => w.webContents.executeJavaScript(script),
-          close: (w) => {
-            if (!w.isDestroyed()) w.close();
-          },
-          openExternal: (url) => shell.openExternal(url),
-          quit: () => app.quit(),
-          log: appendSupervisorLog,
-          verify: (token) => verifyHfToken(token),
-          save: (token) => store.write(token),
-        }),
-      ),
-    log: appendSupervisorLog,
-  });
-  if (gate.kind === "blocked") throw new ServiceFailure(gate.detail, "manual");
-  if (gate.kind === "quit") return null;
-  hfToken = gate.token;
-  return hfToken;
-}
-
-/**
- * 상태 창에서 사람이 누른 것 (스펙 §6.4 토큰 설정 · §6.10 2층 "서비스 다시 시작").
+ * 상태 창에서 사람이 누른 것 (§6.10 2층 "서비스 다시 시작").
  *
  * **던지지 않는다.** 이 호출이 거부되면 묻는 고리가 끊겨 그 뒤의 버튼이 전부 죽는다
  * (windows/status-window.ts의 ask). 실패는 화면의 한 줄과 supervisor.log로 바뀐다.
  */
 async function handleServicesAction(action: ServicesAction): Promise<void> {
   try {
-    if (action.kind === "restart") {
-      await restartFromStatusWindow(action.service);
-    } else {
-      // 화면의 잠금만으로는 모자란다(tokenBusy의 주석). 큐에 쌓였다가 늦게 도착한 두 번째 요청은
-      // 여기서 막는다 — 첫 창이 닫히자마자 두 번째 창이 열리는 것을 화면 타이밍에 기대지 않는다.
-      if (tokenBusy) {
-        appendSupervisorLog("토큰 요청이 이미 진행 중이라 이 요청은 무시했어요.");
-        return;
-      }
-      tokenBusy = true;
-      statusWindow.refresh();
-      try {
-        if (action.op === "change") await changeHfToken();
-        else await clearHfToken();
-      } finally {
-        tokenBusy = false;
-      }
-    }
+    await restartFromStatusWindow(action.service);
   } catch (e) {
     actionNotice = `요청을 처리하지 못했어요 — ${reasonOf(e)}`;
     appendSupervisorLog(actionNotice);
@@ -1280,121 +1286,6 @@ async function trackRestart(id: ServiceId, run: () => Promise<void>): Promise<vo
   } finally {
     restartingServices.delete(id);
   }
-}
-
-/** 상태 창에서 연 토큰 창의 첫 안내. 누르기 **전에** 무슨 일이 일어나는지 말한다. */
-function tokenChangeNotice(): string {
-  const now = hfToken === null ? "없음" : maskToken(hfToken);
-  return `지금 토큰: ${now}. 새 토큰을 확인하면 ${TOKEN_SERVICES.map((id) => SERVICE_LABELS[id]).join("·")}를 다시 시작해요.`;
-}
-
-/**
- * 토큰 교체 (스펙 §6.4 → §6.10 2층, 완료 기준 P4-C4).
- *
- * 창은 온보딩과 **같은 창**이다 — 확인(whoami)·저장·마스킹이 이미 거기 있고, 두 번째 입력 화면을
- * 만들면 그 셋이 갈린다. 다른 점은 닫았을 때뿐이다: 여기서는 앱을 끝내지 않는다(closeQuitsApp).
- *
- * 저장 뒤의 일(다시 읽어 증명 → live env·캐시 → 소유한 서비스만 재시작)은
- * `windows/apply-token-change.ts`가 한다.
- */
-async function changeHfToken(): Promise<void> {
-  const userData = app.getPath("userData");
-  const store = makeTokenStore(userData, safeStorage);
-  if (!store.available()) {
-    actionNotice = CAUSES.safeStorageUnavailable.text;
-    return;
-  }
-  let token: string;
-  try {
-    token = await modals.track(
-      openTokenWindow<BrowserWindow>({
-        notice: tokenChangeNotice(),
-        closeQuitsApp: false,
-        create: (onLoadError) => createTokenWindow(win, onLoadError),
-        alive: (w) => !w.isDestroyed(),
-        onLoad: (w, listener) => w.webContents.on("did-finish-load", listener),
-        onClosed: (w, listener) => w.on("closed", listener),
-        run: (w, script) => w.webContents.executeJavaScript(script),
-        close: (w) => {
-          if (!w.isDestroyed()) w.close();
-        },
-        openExternal: (url) => shell.openExternal(url),
-        quit: () => app.quit(),
-        log: appendSupervisorLog,
-        verify: (t) => verifyHfToken(t),
-        save: (t) => store.write(t),
-      }),
-    );
-  } catch (e) {
-    actionNotice =
-      e instanceof TokenWindowClosed
-        ? "토큰을 바꾸지 않았어요."
-        : `토큰 화면을 띄우지 못했어요 — ${reasonOf(e)}`;
-    return;
-  }
-
-  const result = await applyTokenChange(
-    {
-      store,
-      // 감독자가 없으면 얹을 live env가 없다. 그래도 저장·캐시는 해 두어야 다음 기동이 새 값을 쓴다.
-      liveEnv: launchCtx?.ctx.env ?? {},
-      // 감독자가 없으면 owned가 이미 전부 false라 여기까지 오지 않는다. 그래도 !를 쓰지 않는다 —
-      // 그 불변식이 깨지는 날 화면이 TypeError 대신 skipped를 보여야 한다.
-      restartService: (id) =>
-        trackRestart(id, async () => {
-          const sup = supervisor;
-          if (sup === null) throw new Error(NO_SERVICES_YET);
-          await sup.restartService(id);
-        }),
-      owned: ownedByStatus(supervisor?.statuses() ?? []),
-      // Task 6 인계 — live env와 **같은 순간** 모듈 전역 캐시를 갱신한다. 하나만 바꾸면 실패한
-      // start() 뒤의 감독자 재생성이 옛 토큰을 되살린다.
-      cacheToken: (t) => {
-        hfToken = t;
-      },
-    },
-    token,
-  );
-  const labels = (ids: readonly ServiceId[]) => ids.map((id) => SERVICE_LABELS[id]).join(", ");
-  const parts = [
-    result.restarted.length > 0 ? `다시 시작: ${labels(result.restarted)}` : null,
-    result.skipped.length > 0
-      ? `다시 시작하지 못함: ${labels(result.skipped)} (앱이 띄운 서비스가 아니거나 내려가는 중이에요)`
-      : null,
-  ].filter((line): line is string => line !== null);
-  actionNotice = `토큰을 바꿨어요. ${parts.join(" · ")}`.trim();
-  appendSupervisorLog(`허깅페이스 토큰을 바꿨어요 — ${actionNotice}`);
-}
-
-/**
- * 토큰 삭제 (스펙 §6.4 "수정·삭제 가능").
- *
- * **서비스를 다시 시작하지 않는다.** 토큰 없이 다시 띄우면 지금 잘 도는 것까지 못 뜨고, 앱에는
- * 토큰 없이 도는 모드가 없다(§6.4 첫 실행 게이트). 지금 도는 자식은 옛 토큰을 쥔 채로 두고,
- * 다음 실행이 토큰 화면으로 다시 묻는다. 그 사실을 화면이 말한다.
- */
-async function clearHfToken(): Promise<void> {
-  const answer = await modals.track(dialog.showMessageBox({
-    type: "warning",
-    buttons: ["삭제", "취소"],
-    defaultId: 1,
-    cancelId: 1,
-    message: "저장된 허깅페이스 토큰을 지울까요?",
-    detail:
-      "지금 도는 서비스는 옛 토큰으로 계속 돌아요. 하지만 그 서비스가 다시 뜨면 — 자동 재시도나 " +
-      "“서비스 다시 시작” — 토큰 없이 떠서 모델을 받지 못해요. 앱을 다시 켜면 토큰 화면이 다시 떠요.",
-  }));
-  if (answer.response !== 0) {
-    actionNotice = "토큰을 지우지 않았어요.";
-    return;
-  }
-  makeTokenStore(app.getPath("userData"), safeStorage).clear();
-  hfToken = null;
-  if (launchCtx !== null) delete launchCtx.ctx.env.HF_TOKEN;
-  actionNotice =
-    "토큰을 지웠어요. 지금 도는 서비스는 옛 토큰으로 계속 돌지만, 그 서비스가 한 번이라도 다시 뜨면 " +
-    "(자동 재시도·“서비스 다시 시작”) 토큰 없이 떠서 모델을 받지 못해요. 앱을 다시 켜면 토큰 화면이 다시 떠요.";
-  appendSupervisorLog(actionNotice);
 }
 
 /** 데이터 가드 한 번 (스펙 §5.2). 파일 I/O 전체를 guardIo에 등록한다 — 보류 대화상자는 밖에서 띄운다. */
@@ -1484,12 +1375,20 @@ async function passDataGuard(mine: number, layout: PgLayout, binaries: PgBinarie
  * 부른 쪽은 물러난다. 던지는 실패(저장소 부재)는 startOnce의 catch가 받는다.
  */
 async function createSupervisorFor(mine: number): Promise<boolean> {
-  // **무엇보다 먼저** — postgres를 포함해 어떤 서비스도 토큰 없이 뜨지 않는다 (스펙 §6.4 첫 실행 게이트).
-  // 토큰 창을 기다리는 동안 ⌘Q·새 기동이 끼어들 수 있다. 그 뒤의 검사(activeWindow)가 그것을 본다.
-  const token = await ensureHfToken();
-  if (token === null) return false;
-
   const userData = app.getPath("userData");
+  // 토큰은 **읽기만** 한다 — 없어도 기동한다 (스펙 2026-09-25 §5.1, Phase 4 §6.4의 첫 실행 게이트를 대체한다).
+  // 이미 이번 실행에서 읽었거나 넣었으면(hfToken) 다시 읽지 않는다 — "다시 시도"가 방금 넣은 토큰을 잃지 않게.
+  const boot =
+    hfToken !== null
+      ? { status: "present" as const, token: hfToken }
+      : readBootToken({
+          store: makeTokenStore(userData, safeStorage),
+          fileExists: () => fs.existsSync(tokenFilePath(userData)),
+          log: appendSupervisorLog,
+        });
+  hfToken = boot.token;
+  tokenBridge.boot(boot.status, boot.token === null ? null : maskToken(boot.token));
+
   const cfg = loadConfig(userData);
   if (cfg.warning !== undefined) appendSupervisorLog(cfg.warning);
   for (const note of cfg.notes) appendSupervisorLog(note);
@@ -1535,7 +1434,7 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
   // worker가 그대로 쓰게 되고, 그 서버의 모델도 수명도 앱이 모른다. 실제 bind는 job 직전이라 그 사이 다른
   // 프로세스가 포트를 가져갈 수 있고, 그때는 LLM 서버 기동 실패로 드러난다.
   // 토큰은 env에만 싣는다 — 재적용의 기준선에 들어가면 첫 재시도가 지운다 (config.ts의 launchEnv).
-  const { env, baseline } = launchEnv(cfg, await freePort(), token);
+  const { env, baseline } = launchEnv(cfg, await freePort(), hfToken);
 
   const ctx: Omit<LaunchContext, "signal"> = {
     repoRoot: resolved,
