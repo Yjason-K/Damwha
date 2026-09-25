@@ -83,6 +83,14 @@ def run_delete_model(conn, job, payload, *, worker_id, lens_models, summary_fall
     root = cache_root or cache_scan.hub_cache_dir()
     path = os.path.join(root, cache_scan.repo_folder(repo))
     if os.path.isdir(path):  # 없으면 성공이다 — 결과(없음)가 같다
-        shutil.rmtree(path)
+        try:
+            shutil.rmtree(path)
+        except OSError as exc:
+            # errors.classify에 맡기면 uncategorized TRANSIENT로 떨어진다 — 권한 등은
+            # 재시도해도 같은 자리에서 진다(스펙 §7.3·§8). readiness key는 성공했을 때만
+            # 지운다 — 여기서 건드리지 않는다.
+            raise errors.WorkerError(
+                errors.MODEL_DELETE_FAILED, f"{repo}: {exc}", errors.ErrorKind.PERMANENT,
+            ) from exc
     db.remove_model_readiness_key(conn, repo)
     return "committed" if db.complete_job(conn, job_id, worker_id) else "lost"

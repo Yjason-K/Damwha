@@ -278,3 +278,26 @@ def test_delete_refuses_lens_model(conn, tmp_path):
             {"schema_version": 1, "role": "summary", "name": "mlx-community/Qwen3.5-4B-8bit"},
         )
     assert ei.value.code == errors.MODEL_IN_USE
+
+
+def test_delete_rmtree_permission_error_is_permanent_and_keeps_readiness_key(
+    conn, tmp_path, monkeypatch
+):
+    """스펙 §7.3·§8 — 삭제 도중 실패(권한 등)는 PERMANENT다. rmtree가 그대로 던지면
+    `errors.classify`가 uncategorized TRANSIENT로 잘못 분류한다(리뷰 지적, fix round 1)."""
+    make_repo(tmp_path, "mlx-community/whisper-small-mlx", {"config.json": b"{}"})
+    core.merge_model_readiness(conn, "mlx-community/whisper-small-mlx", {"state": "ready"}, W)
+
+    def _boom(_path):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(model_jobs.shutil, "rmtree", _boom)
+    with pytest.raises(errors.WorkerError) as ei:
+        _del(
+            conn, tmp_path,
+            {"schema_version": 1, "role": "stt", "name": "small", "backend": "mlx"},
+        )
+    assert ei.value.code == errors.MODEL_DELETE_FAILED
+    assert ei.value.kind is errors.ErrorKind.PERMANENT
+    # 실패했으니 readiness key는 그대로 남아야 한다 — 성공했을 때만 지운다.
+    assert "mlx-community/whisper-small-mlx" in core.read_model_readiness(conn)["entries"]
