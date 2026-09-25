@@ -10,6 +10,7 @@ import { cn } from "@/shared/lib/utils";
 import { env } from "@/shared/config/env";
 
 import { useDiarizationGate } from "@/features/hf-token/ui/hf-token-gate";
+import { ThemeMenu } from "@/features/theme/ui/theme-menu";
 
 import { useMeetings } from "../api/meetings";
 import type { MeetingFilter, MeetingStatus } from "../model/types";
@@ -249,6 +250,10 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
           <TourLaunchButton />
         </React.Suspense>
       ) : null}
+
+      <div className="flex shrink-0 items-center border-t border-[color:var(--border-subtle)] px-3 py-1.5">
+        <ThemeMenu />
+      </div>
 
       <NewMeetingDialog
         open={newMeetingOpen}
