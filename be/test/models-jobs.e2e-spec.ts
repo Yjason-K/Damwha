@@ -59,6 +59,16 @@ describe('POST /models/*', () => {
   it('download은 advisory lock을 실제로 기다린다 (결정적 검증)', async () => {
     const key = modelKey('summary', 'mlx-community/Qwen3.5-27B-8bit', null);
     const lockClient = await db.pool.connect();
+    let committed = false;
+    // sawWaiter 단언(또는 그 밖의 무엇)이 COMMIT 전에 던지면, 이 커넥션은 트랜잭션이 열린 채
+    // — advisory lock과 아직 커밋 안 된 INSERT를 쥔 채 — 아래 finally로 온다. node-postgres는
+    // release()에서 자동 롤백하지 않으므로, 그냥 release()하면 "idle in transaction" 커넥션이
+    // 풀에 그대로 돌아가 이 lock을 다음에 요청하는 모든 것(이 download() 포함, 뒤이은 pending도
+    // 포함)을 영원히 막는다 — 정확히 이 테스트가 잡으려는 회귀와 같은 모양으로 스위트 전체가
+    // 멈춘다. 그래서 실패 경로에서는 커밋 여부를 보고 ROLLBACK(그 자체가 실패하면 커넥션이
+    // 이미 못 쓰게 됐다고 보고 release(true)로 버린다)한 뒤에만 release한다.
+    let pending: Promise<request.Response> | undefined;
+    let destroyConnection = false;
     try {
       await lockClient.query('BEGIN');
       await lockClient.query('SELECT pg_advisory_xact_lock($1::int, hashtext($2))', [MODEL_JOB_LOCK_NS, key]);
@@ -70,7 +80,7 @@ describe('POST /models/*', () => {
 
       // supertest의 Test는 thenable이라 .then()/.end()를 부르기 전엔 실제로 요청을 보내지
       // 않는다 — 여기서 await하지 않고도 즉시 실행을 걸기 위해 .then()으로 dispatch만 강제한다.
-      const pending = request(srv())
+      pending = request(srv())
         .post('/models/download')
         .send({ role: 'summary', name: 'mlx-community/Qwen3.5-27B-8bit' })
         .then((r) => r);
@@ -89,12 +99,25 @@ describe('POST /models/*', () => {
       expect(sawWaiter).toBe(true);
 
       await lockClient.query('COMMIT');
+      committed = true;
       const res = await pending;
       expect(res.status).toBe(200);
       expect(res.body.job.id).toBe(seededId);
       expect(await jobs()).toHaveLength(1);
     } finally {
-      lockClient.release();
+      if (!committed) {
+        // lock을 풀어야 막혀 있던 pending download()가 풀려 응답을 낸다 — 그래야 아래에서
+        // 드레인할 수 있다. 롤백 자체가 실패하면(커넥션이 이미 끊어졌다면) 재사용하지 않는다.
+        try {
+          await lockClient.query('ROLLBACK');
+        } catch {
+          destroyConnection = true;
+        }
+      }
+      // 실패 경로에서 아직 await하지 않은 pending이 있으면 반드시 드레인한다 — 안 그러면
+      // 이 요청이 다음 테스트들이 도는 동안에도 살아 있다가 뒤늦게 끼어들 수 있다.
+      if (pending) await pending.catch(() => {});
+      lockClient.release(destroyConnection);
     }
   }, 10000);
 
