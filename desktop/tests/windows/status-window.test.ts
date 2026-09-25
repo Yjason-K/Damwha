@@ -18,7 +18,7 @@ function emptyView(notices: string[] = []): ServicesView {
   return {
     rows: [],
     models: [],
-    token: { masked: null, note: "", canClear: false, busy: false },
+    token: { masked: null, note: "" },
     notices,
   };
 }
@@ -332,23 +332,23 @@ describe("상태 창의 버튼 — 묻는 고리", () => {
 
   it("로드가 끝나면 묻기 시작하고, 답을 배선으로 넘긴다", async () => {
     const h = harness({
-      answers: [{ kind: "restart", service: "worker" }, { kind: "token", op: "change" }],
+      answers: [{ kind: "restart", service: "worker" }, { kind: "restart", service: "embed" }],
     });
     h.sw.open();
     h.load(h.wins[0]);
     await flush();
     expect(h.actions).toEqual([
       { kind: "restart", service: "worker" },
-      { kind: "token", op: "change" },
+      { kind: "restart", service: "embed" },
     ]);
   });
 
   it("모르는 모양은 버리고 계속 묻는다 — 한 번의 이상한 값이 버튼 전체를 죽이지 않는다", async () => {
-    const h = harness({ answers: [{ kind: "restart", service: "감독자" }, { kind: "token", op: "clear" }] });
+    const h = harness({ answers: [{ kind: "restart", service: "감독자" }, { kind: "restart", service: "worker" }] });
     h.sw.open();
     h.load(h.wins[0]);
     await flush();
-    expect(h.actions).toEqual([{ kind: "token", op: "clear" }]);
+    expect(h.actions).toEqual([{ kind: "restart", service: "worker" }]);
     expect(h.logs.some((l) => l.includes("알 수 없는 요청"))).toBe(true);
   });
 
@@ -362,7 +362,7 @@ describe("상태 창의 버튼 — 묻는 고리", () => {
   });
 
   it("창이 닫히면 더 묻지 않는다", async () => {
-    const h = harness({ answers: [{ kind: "token", op: "change" }] });
+    const h = harness({ answers: [{ kind: "restart", service: "worker" }] });
     h.sw.open();
     h.load(h.wins[0]);
     h.close(h.wins[0]);
@@ -372,14 +372,14 @@ describe("상태 창의 버튼 — 묻는 고리", () => {
 
   it("⌘R 뒤에는 새 페이지가 묻고, 옛 페이지의 답은 버린다", async () => {
     const h = harness({
-      answers: [{ kind: "token", op: "clear" }, { kind: "token", op: "change" }],
+      answers: [{ kind: "restart", service: "worker" }, { kind: "restart", service: "embed" }],
     });
     h.sw.open();
     h.load(h.wins[0]);
     h.load(h.wins[0]);
     await flush();
-    // 두 세대가 함께 돌면 한 번 누른 것이 두 번 처리된다. 옛 세대(clear)는 물러나고 새 것만 남는다.
-    expect(h.actions).toEqual([{ kind: "token", op: "change" }]);
+    // 두 세대가 함께 돌면 한 번 누른 것이 두 번 처리된다. 옛 세대(worker)는 물러나고 새 것만 남는다.
+    expect(h.actions).toEqual([{ kind: "restart", service: "embed" }]);
   });
 });
 
@@ -411,7 +411,7 @@ describe("묻는 고리가 끝날 때", () => {
 
   it("한 번이라도 답이 오면 거부 횟수가 0으로 돌아간다", async () => {
     // 답 하나 → null(다리 없음)로 끝. 거부가 없었으므로 재시도 한계와 무관하게 한 번에 멈춘다.
-    const h = harness({ answers: [{ kind: "token", op: "change" }] });
+    const h = harness({ answers: [{ kind: "restart", service: "worker" }] });
     h.sw.open();
     h.load(h.wins[0]);
     await flush();
