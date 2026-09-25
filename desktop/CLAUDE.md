@@ -271,12 +271,16 @@ claim 직후 실패를 기준으로 시도 시각이 0 · 30초 · 90초 · 210�
 - 거부·실패 사유: 기동(`launch`) 실패는 `supervisor.log`에 `기동 실패 — …`로 남는다. 준비 판정(판정표 2) 거부는 화면에만 뜨고 로그에는 상태 줄만 남는다. 마이그레이션 러너의 출력 전체는 `supervisor.log`에 있다.
 - Docker 개발 DB에 붙여 재현: `config.json`에 `"DEBUG_EXTERNAL_DATABASE_URL": "postgres://postgres:postgres@localhost:5432/damwha"`. 내장 PG를 띄우지 않고, 마이그레이션은 **감지만** 하며, 상태 창에 `외부 DB(디버깅)`이 상시 뜬다. 모드 변경은 앱을 다시 켜야 반영된다. 이 모드에서도 worker는 기동하며 `app_setting.worker_capabilities`를 그 DB에 쓴다.
 
+## 창 배경과 셸 페이지 — 다크 모드
+
+**Window background and shell pages follow macOS dark, not the in-app theme.** `src/windows/window-background.ts` picks `backgroundColor` from `nativeTheme.shouldUseDarkColors`; its two values must equal fe's light and dark `--gray-2` (`tests/windows/window-background.test.ts`). `shell/*.html` add an `@media (prefers-color-scheme: dark)` block that `tests/windows/shell-html.test.ts` checks against fe's `.dark` values — any edit to a shell `<style>` also changes its CSP `style-src` hash. Syncing the title bar to the in-app choice would need a renderer → main channel, which the one-way desktop-bridge contract rules out.
+
 ## 지키는 것
 
 - postmaster에는 SIGINT(fast)·SIGQUIT(immediate)만. `services/postgres/handle.ts`의 신호 타입이 SIGKILL을 막는다.
 - 앱이 지우는 것은 데이터 영역(`data/`·`snapshots/`·`backups/`·`restore-staging/`)에서 여덟 가지뿐 — `data/postgres.initdb-*`, 증명한 낡은 락, 5개 초과 백업(단 세대별 첫 덤프는 고정), `*.dump.partial`, 보존 상한(2)을 넘은 완료 스냅샷, 미완료 스냅샷, `restore-staging/<rid>`, 그 백업의 sidecar(덤프와 함께). `data.replaced-*`는 지우지 않는다. 거부 경로는 아무것도 만들거나 지우지 않는다.
 - 마이그레이션 실패·페어링 거부 같은 `manual` 실패는 자동 재시도하지 않는다(`app/retry-policy.ts`, 창 재열기도 재시도하지 않는다 — `app/window-flow.ts`). `writersAlive`·`snapshotFailed`·`restoreIncomplete`·`restoreJournalUnreadable`·`restorePending`(Phase 6b-2, 데이터 가드)도 같은 `manual`이다. 감독자를 세우기 전에 던진 실패는 main이 `lastStartFailure`로 보존해, 감독자 없이 창을 다시 열어도 자동 재시도하지 않는다. 메뉴의 "다시 시도"만 다시 돈다.
 - `desktop/package.json`의 `dependencies`는 비어 있다(번들 위생). DB에는 번들 `psql`·`pg_controldata`와 `migrate.js`로만 묻는다.
-- 셸 페이지(`shell/*.html`)는 fe 토큰을 **같은 이름으로** 옮겨 적고 라이트로 고정한다 — CSP상 fe의 CSS를 못 불러오고, fe에 다크 모드가 없어 따라가면 담화 화면이 붙을 때 번쩍인다. `:root` 밖에 색을 적지 않는다. `tests/windows/shell-html.test.ts`가 값이 `fe/src/index.css`와 같은지 본다. 시작 화면은 packaged에서 서비스 줄을 숨긴다(`shellStatusFrom`의 `packaged`) — 진행 상황은 상태 창 몫이다.
+- 셸 페이지(`shell/*.html`)는 fe 토큰을 **같은 이름으로** 옮겨 적고, macOS 다크를 `@media (prefers-color-scheme: dark)` 블록으로 따른다(fe의 `.dark` 값 사용) — CSP상 fe의 CSS를 못 불러오고, localStorage를 못 읽어 앱 안 테마 선택은 반영되지 않는다. 색은 `:root`와 다크 `@media` 블록의 `:root`에만 나타나고, 그 밖에는 없다. `tests/windows/shell-html.test.ts`가 값이 `fe/src/index.css`와 같은지 본다. 시작 화면은 packaged에서 서비스 줄을 숨긴다(`shellStatusFrom`의 `packaged`) — 진행 상황은 상태 창 몫이다.
 - **HF 토큰은 기동을 막지 않는다** (스펙 2026-09-25, Phase 4 §6.4의 첫 실행 게이트를 대체). 기동은 `app/token-boot.ts`로 읽기만 하고, 없으면 `HF_TOKEN` 없이 띄운다 — `childEnv`는 셸에서 물려받은 `HF_TOKEN`도 버린다. 입력·교체·삭제는 담화 화면이 `window.__damwha_desktop.hfToken`(main이 묻는 다리, `windows/token-bridge.ts`)으로 한다. 상태 창은 토큰을 **표시만** 한다. `token.html`은 없다.
 - `main.ts`는 electron을 값으로 import해 vitest가 부를 수 없다. 판단은 테스트 가능한 모듈로 빼고 `main.ts`에는 배선만 남긴다.

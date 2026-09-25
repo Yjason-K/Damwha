@@ -163,7 +163,7 @@ The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by 
 
 ## Styling & design system
 
-**Read [`DESIGN.md`](DESIGN.md) before creating or modifying any UI.** It holds the design intent, the "situation → token" index, interaction-state requirements, and the hard Don'ts (light-only, no raw hex, no shadows on flat cards, no ad-hoc tokens). Don't re-derive visual decisions per screen — DESIGN.md is what keeps them consistent.
+**Read [`DESIGN.md`](DESIGN.md) before creating or modifying any UI.** It holds the design intent, the "situation → token" index, interaction-state requirements, and the hard Don'ts (check both themes, no raw hex, no shadows on flat cards, no ad-hoc tokens). Don't re-derive visual decisions per screen — DESIGN.md is what keeps them consistent.
 
 Division of labor: `DESIGN.md` = how it should look and why · `src/index.css` = the actual values (single SoT) · `src/shared/ui/` = the implementation. **Never copy token values into `DESIGN.md`** — it names tokens only, so the two can't drift.
 
@@ -172,6 +172,7 @@ Division of labor: `DESIGN.md` = how it should look and why · `src/index.css` =
 - `:root` holds the Damwha (Timbre) design tokens: raw scales (`--gray-*`, `--accent-*`, speaker palette `--spk-N-*`) and **semantic aliases** (`--surface-*`, `--text-*`, `--border-*`). Reference the semantic aliases in components, not raw scales.
 - The **shadcn token contract** (`--background`, `--primary`, `--sidebar-*`, …) is mapped _onto_ those Timbre semantics at the bottom of the `:root` block, so shadcn components render on-brand automatically. Caveat: shadcn's `--accent` means "hover/subtle surface", and the primary button's ink is `--primary` (not `--accent`).
 - **The accent scale is split by role, on purpose.** `--accent-9/10` are the neutral ink pair behind `--accent-solid` (primary button surface); `--accent-1/2/3/6/11/12` are the mint ramp behind `--accent-bg` / `--accent-text` / `--focus-ring` (selection, links, focus). Making the whole scale neutral would collapse "selected row" into "hovered row" — both grey. `--accent-11` doubles as `--text-link`, so it has to clear 4.5:1 on `--surface-app`.
+- **`.dark` (right after `:root`) is the dark token set**, switched by `class="dark"` on `<html>`. Raw scales keep their names and roles and only change value, so components that reach for `--gray-*` directly still land right. The switch is decided twice: `index.html`'s inline script before first paint (it cannot import modules) and `src/shared/lib/theme.ts` (`themeStore`) afterwards, with `useTheme()` in `src/shared/lib/use-theme.ts`. The two copies of the rule are pinned together by `src/app/theme-inline-script.test.ts` — change one, change both. Speaker `-solid` values are not redefined in `.dark`.
 - `@theme inline` / `@theme` blocks expose these as Tailwind utilities (`bg-primary`, `text-spk-1-text`, `rounded-md`, dense `text-*` scale, Inter + Geist Mono).
 - **Speaker `-solid` values carry white initials** (`shared/ui/avatar.tsx`), so any new `--spk-N-solid` must clear 3.5:1 against white. `-bg` is the pale utterance surface and `-text` the ink on it.
 

@@ -10,6 +10,7 @@ import { cn } from "@/shared/lib/utils";
 import { env } from "@/shared/config/env";
 
 import { useDiarizationGate } from "@/features/hf-token/ui/hf-token-gate";
+import { ThemeMenu } from "@/features/theme/ui/theme-menu";
 
 import { useMeetings } from "../api/meetings";
 import type { MeetingFilter, MeetingStatus } from "../model/types";
@@ -106,7 +107,7 @@ function FilterPills({
             className={cn(
               "cursor-pointer rounded-full px-[11px] py-[5px] text-xs font-medium outline-none transition-colors duration-[80ms] focus-visible:[box-shadow:var(--focus-ring)]",
               active
-                ? "bg-[var(--accent-solid)] text-white"
+                ? "bg-[var(--accent-solid)] text-[color:var(--text-on-accent)]"
                 : "text-[color:var(--text-secondary)] hover:bg-[var(--surface-hover)]",
             )}
           >
@@ -249,6 +250,10 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
           <TourLaunchButton />
         </React.Suspense>
       ) : null}
+
+      <div className="flex shrink-0 items-center border-t border-[color:var(--border-subtle)] px-3 py-1.5">
+        <ThemeMenu />
+      </div>
 
       <NewMeetingDialog
         open={newMeetingOpen}

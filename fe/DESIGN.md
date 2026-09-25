@@ -50,10 +50,12 @@ Airbnb 같은 소비자 앱 미학도 아니다. 장식은 정보를 밀어내�
 
 ## 2. 시각 방향
 
-- **라이트 전용.** 다크 모드는 구현되어 있지 않다 (9장 참조). 참조 계열에
-  있는 어두운 히어로 밴드·어두운 코드 블록 같은 면은 **가져오지 않는다** —
-  어두운 면 위에서 쓸 시맨틱 토큰 세트가 아직 없다(9장의 예외 3곳이 그
-  구멍이다)
+- **라이트가 기준, 다크는 같은 역할을 뒤집은 한 벌이다.** `<html class="dark">`가
+  스위치이고 `src/index.css`의 `.dark` 블록이 값을 다시 정한다. 원시 스케일은
+  이름과 역할을 지킨다 — `--gray-0`은 두 테마 모두 "카드 면", `--gray-12`는
+  "본문 글자"다. 주 버튼은 다크에서 밝은 잉크로 뒤집히고, 민트는 두 테마 모두
+  신호 전용이다. 바탕은 무채색이다 — 브랜드 잉크의 푸른 기를 깔면 화자 색이
+  물든다. 선택은 사이드바 하단 메뉴(시스템 / 라이트 / 다크, 기본 시스템)
 - **위계는 border로 만든다.** 그림자는 실제로 떠 있는 레이어에만
 - **강조는 두 역할로 나뉘고, 그 분리가 의도다.** 주 버튼의 면은 무채색
   잉크(`--accent-solid`)이고, **선택·링크·포커스 신호는 민트**
@@ -104,6 +106,9 @@ Tailwind 유틸리티가 있으면 그것을 쓰고(`bg-card`), 없으면 CSS �
 | hover 시 얹히는 면            | `--surface-hover`   | `bg-accent`              |
 | 선택된 항목의 면              | `--surface-active`  | `bg-sidebar-accent`      |
 | 모달 뒤 스크림                | `--surface-overlay` | —                        |
+| 명령 팔레트 뒤 옅은 스크림    | `--surface-scrim-soft` | —                     |
+| 떠 있는 층 (툴팁 · 토스트)    | `--surface-floating` + `--border-floating` | — |
+| 색 있는 면 위 hover 덧칠      | `--overlay-hover`   | —                        |
 
 > **주의:** shadcn 계약에서 `--accent`는 **hover용 옅은 면**을 뜻하지
 > 강조색이 아니다. 주 버튼의 면은 `--primary`(= `--accent-solid`)다.
@@ -121,6 +126,7 @@ Tailwind 유틸리티가 있으면 그것을 쓰고(`bg-card`), 없으면 CSS �
 | 거의 안 보여도 되는 힌트 | `--text-faint`     | —                         |
 | 강조색 면 위의 글자      | `--text-on-accent` | `text-primary-foreground` |
 | 링크                     | `--text-link`      | —                         |
+| 떠 있는 층 위의 글자     | `--text-on-floating` · `--text-on-floating-muted` | — |
 
 ### 경계선
 
@@ -143,6 +149,8 @@ Tailwind 유틸리티가 있으면 그것을 쓰고(`bg-card`), 없으면 CSS �
 | 경고                          | —                      | `bg-warning-bg` `text-warning-text` |
 | 위험·오류                     | —                      | `bg-danger-bg` `text-danger-text`   |
 | 위험 버튼 면                  | `--red-9`              | `bg-destructive`                    |
+| 위험 버튼 hover               | `--red-9-hover`        | —                                   |
+| 토스트 아이콘 (성공 · 오류)   | `--toast-success` · `--toast-danger` | —                     |
 
 ### 화자 (1..8)
 
@@ -274,15 +282,18 @@ transition 대상을 `all`로 두지 말고 바뀌는 속성만 나열한다.
 
 ### Don't
 
-- **다크 모드 대응을 추가하지 말 것.** 현재 라이트 전용이며 `.dark`
-  토큰 블록이 존재하지 않는다. `@custom-variant dark`는 선언만 되어
-  있어서 `dark:` 접두사는 지금 아무 효과가 없다 — 붙이면 "대응했다"는
-  착각만 남는다. 다크 모드는 토큰 세트를 통째로 정의하는 별도 작업이다.
+- **한 테마에서만 보고 끝내지 말 것.** 색은 토큰으로만 고르고, 새 화면은
+  라이트와 다크 둘 다 띄워 본다. `dark:` 접두사는 토큰으로 표현할 수 없는
+  경우에만 쓴다 — 대부분은 `.dark` 블록에 토큰 값을 더하는 것이 답이다.
+  잉크(`--accent-solid`) 면 위 글자는 `text-white`가 아니라
+  `--text-on-accent`다: 다크에서 잉크가 밝아진다(`design-tokens.test.ts`가
+  `.tsx`의 `text-white`뿐 아니라 컴포넌트 `.css`의 흰 글자색 리터럴도
+  같은 규칙 블록 안에서 잡는다).
 - **raw hex나 임의 색값을 쓰지 말 것.** `bg-[#4F46E5]` ✗.
   토큰을 감싼 `bg-[var(--accent-solid)]`는 관례이므로 허용한다.
-  (기존 예외 3곳: `button.tsx`의 danger hover, `toaster.tsx`의 아이콘
-  두 색. 토스트는 어두운 면 위에 얹히는데 어두운 면용 시맨틱 토큰이
-  아직 없어서 생긴 구멍이다. 늘리지 말 것.)
+  예외는 `brand-mark.tsx` 하나다(`design-tokens.test.ts`가 `.ts`/`.tsx`뿐 아니라
+  컴포넌트 `.css`까지 훑어 나머지를 잡는다 — 토큰 정의 자체인 `index.css`는 제외).
+  예전 예외 3곳(danger hover, 토스트 아이콘 두 색)은 토큰으로 옮겼다.
 - **평면 카드에 그림자를 쓰지 말 것.** 위계는 border로 만든다.
   `--shadow-md` / `--shadow-lg`는 실제로 떠 있는 레이어 — dialog,
   popover, select, tooltip, toast, command-bar — 전용이다.
