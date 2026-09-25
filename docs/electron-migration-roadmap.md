@@ -398,6 +398,11 @@ wheel이며 DMG가 없다) `latest`가 제품을 가리지 못한다. 웹 릴리
 2026-09-25 현재 v44.4.5·v45.0.0-alpha.12 모두 미포함. 스펙은
 [2026-09-25-electron-phase-6c-auto-update-design.md](superpowers/specs/2026-09-25-electron-phase-6c-auto-update-design.md),
 브랜치는 `feat/electron-migration-phase-6c-auto-update`.
+**상태 (2026-09-25): 스펙 2판·구현 계획 확정, 착수 조건 대기.** 스펙은 코덱스 설계 검토(C1~C16)와 스펙 리뷰(R1~R17)를 거쳤고,
+계획([2026-09-25-electron-phase-6c-auto-update.md](superpowers/plans/2026-09-25-electron-phase-6c-auto-update.md), Task 1~19)은
+Claude 서브에이전트가 Task 2~16의 코드를 복사본에서 실제로 돌려 검증했다(lint 통과·테스트 1399 통과). Task 1이 착수 조건
+판정(`desktop/scripts/check-squirrel-fix.sh`)과 Electron 업그레이드, 호출 계약 실측이다 — **Squirrel.Mac #335를 담은 Electron이
+나오기 전에는 시작하지 않는다.**
 
 #### Phase 6a. 서명·배포
 

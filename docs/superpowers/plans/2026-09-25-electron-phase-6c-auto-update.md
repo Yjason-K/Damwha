@@ -5043,7 +5043,7 @@ Task 2 삽입 위치(`guardOnce`), Task 3의 기존 단언 3개·`reap-on-quit.t
 Task 12 `restoreHandlers`, Task 13 `publish: null`, Task 14 블록 위치(DMG 뒤), Task 16 `app.getPath("cache")` → `~/Library/Caches`·
 판단 둘을 `app/install-quit.ts`로(요청 무시 가드 — 창 닫기 흐름 중 요청이 무장된 채 남던 경로)·settle 주석. 확인만 한 것: electron-updater
 6.8.9 타입, pnpm에서 `app-builder-lib` blockmap 해석, `pnpm list --prod` 모양(16개), gh의 draft 태그 조회(`shared.FetchRelease`의
-GraphQL 대체). 앞선 코덱스 1회차(중단)는 Task 19 공개 순서를 짚었다(`075512e`). **16:37 이후 코덱스 검증을 한 번 더 한다.**
+GraphQL 대체). 앞선 코덱스 1회차(중단)는 Task 19 공개 순서를 짚었다(`075512e`). **2026-09-25 사용자가 이 판으로 계획을 확정했다** — 코덱스 재검증은 하지 않는다.
 
 ## Self-Review
 
