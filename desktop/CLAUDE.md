@@ -271,6 +271,10 @@ claim 직후 실패를 기준으로 시도 시각이 0 · 30초 · 90초 · 210�
 - 거부·실패 사유: 기동(`launch`) 실패는 `supervisor.log`에 `기동 실패 — …`로 남는다. 준비 판정(판정표 2) 거부는 화면에만 뜨고 로그에는 상태 줄만 남는다. 마이그레이션 러너의 출력 전체는 `supervisor.log`에 있다.
 - Docker 개발 DB에 붙여 재현: `config.json`에 `"DEBUG_EXTERNAL_DATABASE_URL": "postgres://postgres:postgres@localhost:5432/damwha"`. 내장 PG를 띄우지 않고, 마이그레이션은 **감지만** 하며, 상태 창에 `외부 DB(디버깅)`이 상시 뜬다. 모드 변경은 앱을 다시 켜야 반영된다. 이 모드에서도 worker는 기동하며 `app_setting.worker_capabilities`를 그 DB에 쓴다.
 
+## 창 배경과 셸 페이지 — 다크 모드
+
+**Window background and shell pages follow macOS dark, not the in-app theme.** `src/windows/window-background.ts` picks `backgroundColor` from `nativeTheme.shouldUseDarkColors`; its two values must equal fe's light and dark `--gray-2` (`tests/windows/window-background.test.ts`). `shell/*.html` add an `@media (prefers-color-scheme: dark)` block that `tests/windows/shell-html.test.ts` checks against fe's `.dark` values — any edit to a shell `<style>` also changes its CSP `style-src` hash. Syncing the title bar to the in-app choice would need a renderer → main channel, which the one-way desktop-bridge contract rules out.
+
 ## 지키는 것
 
 - postmaster에는 SIGINT(fast)·SIGQUIT(immediate)만. `services/postgres/handle.ts`의 신호 타입이 SIGKILL을 막는다.

@@ -157,13 +157,14 @@
 
 ## 5. 사이드바 테마 버튼
 
-- 위치: `left-nav.tsx` 맨 아래, 회의 목록(`flex-1`) 뒤에 고정되는 하단 줄. 기존 `icon-button`·`popover`를
-  쓴다.
-- 아이콘: 선택에 따라 시스템 ◐ / 라이트 ☀ / 다크 ☾(`Icon` 세트에 없으면 인라인 SVG를 `icon.tsx` 관례대로
-  추가).
-- 팝오버: 세 항목, 현재 선택에 체크. `role="menu"` 안의 `role="menuitemradio"` + `aria-checked`. 고르면
-  `setPreference` 후 닫힌다.
-- 버튼 `aria-label`: `화면 테마: 시스템`처럼 현재 선택을 담는다. 툴팁도 같은 문구.
+- 위치: `left-nav.tsx` 맨 아래, 회의 목록(`flex-1`)·데모 투어 버튼 뒤에 고정되는 하단 줄(`border-t`).
+- 구현: `features/theme/ui/theme-menu.tsx`. 기존 `IconButton`을 트리거로, **Radix DropdownMenu의
+  RadioGroup**을 메뉴로 쓴다 — 팝오버에 role을 손으로 달면 화살표 키 이동·Esc·포커스 복귀를 다시 만들어야
+  한다. (설계 대화에서는 "popover"라고 불렀다.)
+- 아이콘: 선택에 따라 시스템 `monitor` / 라이트 `sun` / 다크 `moon`(`features/meeting/ui/icons.tsx`에 추가).
+- 메뉴: "화면 테마" 라벨 + 세 항목(시스템 설정 따르기 / 라이트 / 다크), 현재 선택에 체크.
+  `menuitemradio` + `aria-checked`는 Radix가 붙인다. 고르면 `setPreference` 후 닫힌다.
+- 버튼 이름: `화면 테마: 시스템`처럼 현재 선택을 담는다(`IconButton`이 `title`로도 쓴다).
 - 데모 투어의 `data-tour` 대상은 건드리지 않는다.
 
 ## 6. 하드코딩 색 정리
