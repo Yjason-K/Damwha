@@ -17,6 +17,7 @@ import type { MeetingFilter } from "@/features/meeting/model/types";
 import { Icon } from "@/features/meeting/ui/icons";
 import { LeftNav } from "@/features/meeting/ui/left-nav";
 import { HfTokenGateProvider } from "@/features/hf-token/ui/hf-token-gate";
+import { HfTokenOnboarding } from "@/features/hf-token/ui/hf-token-onboarding";
 
 const TourNavigationGuard = React.lazy(() =>
   import("@/features/demo/ui/tour-navigation-guard").then((m) => ({
@@ -152,6 +153,7 @@ export function AppShell() {
           </React.Suspense>
         ) : null}
       </div>
+      <HfTokenOnboarding />
     </HfTokenGateProvider>
   );
 }

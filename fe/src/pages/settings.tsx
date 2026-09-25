@@ -2,6 +2,7 @@ import { Card } from "@/shared/ui/card";
 import { useCapabilities } from "@/features/settings/api/settings";
 import { PRESET_META } from "@/features/settings/lib/presets";
 import { ProcessingSettingsForm } from "@/features/settings/ui/processing-settings-form";
+import { HfTokenSettingsSection } from "@/features/hf-token/ui/hf-token-settings-section";
 
 /** /settings — 처리 설정. 감지 스펙 카드 + 전역 처리 설정 폼. */
 export function SettingsPage() {
@@ -47,6 +48,7 @@ export function SettingsPage() {
         </Card>
 
         <ProcessingSettingsForm />
+        <HfTokenSettingsSection />
       </div>
     </main>
   );
