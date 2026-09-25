@@ -16,6 +16,7 @@ bash desktop/scripts/build-postgres.sh [--fresh]               # 내장 PG
 bash desktop/scripts/build-python.sh   [--fresh|--print-key]   # 내장 Python 3.12 + worker 층 (1.3 GB)
 bash desktop/scripts/build-ffmpeg.sh   [--fresh]               # 내장 ffmpeg·ffprobe
 bash desktop/scripts/publish.sh --notes-file <파일>            # 릴리스 발행 — 공개 동작, 아래 "서명·배포"
+bash desktop/scripts/build-icon.sh                             # build-resources/icon.svg → icon.icns (결과 커밋, 마크를 고쳤을 때만)
 ```
 
 캐시는 `desktop/.cache/{postgres,python,ffmpeg}`, 스테이징은 `desktop/build/<이름>` (둘 다 gitignore).
