@@ -51,6 +51,11 @@ GitHub Release)으로만 배포한다 — `deploy/` 아래 Docker 이미지·`de
 했다** — 다음 릴리스부터 `v0.4.0` 형식이고, 이미 나간 `desktop-v0.3.0`·`desktop-v0.3.1`은 그대로 둔다
 (아래 Phase 6b 절, 6b-1 스펙 §3-2).
 
+**2026-09-25: Phase 6b 전체(6b-1·6b-3·6b-2)를 마치고 `v0.4.0`을 발행했다** —
+<https://github.com/Yjason-K/Damwha/releases/tag/v0.4.0>, 저장소 Latest. **로드맵의 Phase 0~6이 모두 끝났다.**
+남은 미결은 Phase 4의 토큰 문자열 전수 grep(토큰 원문을 쥔 사용자만 실행 가능)과 Phase 6a의 C12(예고된 퇴행이
+일어나지 않아 미판정) 둘이다. 발행 기록은 아래 Phase 6b 절 마지막 상태 문단.
+
 ## 목표와 전제
 
 앱 아이콘 하나로 담화를 실행하고, DB·API·worker·embed의 시작과 종료를 앱이 관리한다. 최종적으로 Python·uv·Homebrew·Docker를 별도로 설치하지 않아도 사용하는 macOS 앱을 제공한다.
@@ -538,6 +543,19 @@ packaged 판올림 때 postmaster를 띄우기 전에 `data/`(postgres·storage)
 [2026-09-24-electron-phase-6b-restore-design.md](superpowers/specs/2026-09-24-electron-phase-6b-restore-design.md),
 결과는 [2026-09-24-electron-phase-6b-restore-results.md](superpowers/reports/2026-09-24-electron-phase-6b-restore-results.md),
 브랜치는 `feat/electron-migration-phase-6b-restore`. **이제 v0.4.0을 낼 수 있다** — 버전 올리기·발행은 이 브랜치 병합 뒤 따로.
+
+**상태 (2026-09-25): v0.4.0 발행 — Phase 6b 전체가 담긴 첫 릴리스이자 `v<version>` 태그의 첫 데스크톱 릴리스.**
+<https://github.com/Yjason-K/Damwha/releases/tag/v0.4.0>, 저장소 Latest. `dev`의 `bc077ca`(desktop 0.4.0)에 태그를
+달고 `package:release` → `publish.sh`로 냈다 — `.app` 공증 `3dfe1649-40b8-41f2-9c86-155fbc0b5e06`·DMG 공증
+`d3043214-9131-4c6a-8d4b-8394140a6fbf` 둘 다 Accepted, 마운트한 DMG 안 `.app`의 `spctl` = Notarized Developer ID,
+`Damwha-0.4.0-arm64.dmg` sha256 `1ab151109e32dccdc2554b844091ff99667f0ec95d9fb0862d87f20c5722456b`. 앱과 같은
+`GET /releases` 조회에서 `v0.4.0`이 옛 `desktop-v0.3.1`보다 위에 온다. `main` 병합은 PR #33. 발행 중 드러난 것
+둘: **키체인에서 notarytool 프로필 `damwha`가 사라져 있었다**(6a에서 인증 확인했던 것, 원인 미상) — 첫 빌드가
+`.app` 공증 제출에서 `No Keychain password item found`로 멈췄고 사용자가 `store-credentials`로 다시 등록했다. 다음
+릴리스 전에 `xcrun notarytool history --keychain-profile damwha`로 먼저 확인한다. 그리고 be e2e는 3회 중 1회만
+552/552였다 — 나머지는 파일마다 다른 testcontainers 포트 바인딩(`No host port found`)과 기존 `socket hang up`
+플레이크다. **0.3.x 사용자에게는 새 버전 알림이 없으므로 이번 한 번은 손으로 받아야 하고, 6b-2의 스냅샷·되돌리기는
+0.3.x → 0.4.0 판올림부터 작동한다.**
 
 서명 관련 위험 검증은 Phase 0부터 진행하며, 배포 검증을 6a에서, 업데이트 검증을 6b에서 완성한다.
 
