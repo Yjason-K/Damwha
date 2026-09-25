@@ -1,6 +1,10 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import { HfTokenGateProvider, useDiarizationGate } from "./hf-token-gate";
+import {
+  HfTokenGateProvider,
+  useDiarizationGate,
+  useHfTokenDialog,
+} from "./hf-token-gate";
 import type { HfTokenState, HfTokenView } from "../model/types";
 
 afterEach(cleanup);
@@ -23,6 +27,15 @@ function Probe({ onOpen }: { onOpen: () => void }) {
       onClick={() => gate.run(onOpen)}
     >
       새 회의
+    </button>
+  );
+}
+
+function ReplaceProbe() {
+  const dialog = useHfTokenDialog();
+  return (
+    <button type="button" onClick={dialog.open}>
+      토큰 교체
     </button>
   );
 }
@@ -90,6 +103,73 @@ test("the dialog closes by itself once the token is saved — the person clicks 
   );
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(onOpen).not.toHaveBeenCalled();
+});
+
+test("the dialog does not pop back up on its own once the token is cleared again", () => {
+  const onOpen = vi.fn();
+  const send = vi.fn();
+  const { rerender } = render(
+    <HfTokenGateProvider view={{ kind: "ready", state: base }} send={send}>
+      <Probe onOpen={onOpen} />
+    </HfTokenGateProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "새 회의" }));
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+  const presentState = {
+    ...base,
+    status: "present" as const,
+    masked: "hf_****…****4567",
+  };
+  rerender(
+    <HfTokenGateProvider
+      view={{ kind: "ready", state: presentState }}
+      send={send}
+    >
+      <Probe onOpen={onOpen} />
+    </HfTokenGateProvider>,
+  );
+  expect(screen.queryByRole("dialog")).toBeNull();
+
+  // 토큰이 다시 지워져도(예: 만료·삭제) 다이얼로그가 클릭 없이 저절로 뜨면 안 된다.
+  rerender(
+    <HfTokenGateProvider view={{ kind: "ready", state: base }} send={send}>
+      <Probe onOpen={onOpen} />
+    </HfTokenGateProvider>,
+  );
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("useHfTokenDialog().open() shows the dialog even while a token is present, to replace a revoked one", () => {
+  const send = vi.fn();
+  const presentState = {
+    ...base,
+    status: "present" as const,
+    masked: "hf_****…****4567",
+  };
+  const { rerender } = render(
+    <HfTokenGateProvider
+      view={{ kind: "ready", state: presentState }}
+      send={send}
+    >
+      <ReplaceProbe />
+    </HfTokenGateProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "토큰 교체" }));
+  expect(
+    screen.getByRole("dialog", { name: "허깅페이스 토큰이 필요해요" }),
+  ).toBeInTheDocument();
+
+  // 같은 present 상태로 다시 그려도(예: 다른 필드 갱신) 열어 둔 다이얼로그가 닫히면 안 된다.
+  rerender(
+    <HfTokenGateProvider
+      view={{ kind: "ready", state: presentState }}
+      send={send}
+    >
+      <ReplaceProbe />
+    </HfTokenGateProvider>,
+  );
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
 });
 
 test("outside the provider the gate passes (unit tests render nav pieces alone)", () => {

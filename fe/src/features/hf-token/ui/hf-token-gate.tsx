@@ -39,9 +39,17 @@ export function HfTokenGateProvider({
   const view = fixedView ?? live;
   const [open, setOpen] = React.useState(false);
 
-  // 저장에 성공하면 닫는다 — effect로 setState하지 않고, 렌더 중에 닫힘 상태를 그냥 계산한다.
+  // false→true로 바뀌는 "저장 성공" 전환에서만 닫는다 — effect로 setState하지 않고
+  // 렌더 중에 state를 보정하는 React의 공식 패턴을 쓴다. present가 유지되는 동안은
+  // open을 건드리지 않으므로, 토큰을 지운 뒤(allowed가 다시 false가 돼도) 다이얼로그가
+  // 저절로 뜨지 않고, present 상태에서도 useHfTokenDialog().open()으로 다시 열어
+  // 토큰을 교체할 수 있다.
   const allowed = canDiarize(view);
-  const dialogOpen = open && !allowed;
+  const [prevAllowed, setPrevAllowed] = React.useState(allowed);
+  if (allowed !== prevAllowed) {
+    setPrevAllowed(allowed);
+    if (allowed) setOpen(false);
+  }
 
   const value = React.useMemo<GateContext>(
     () => ({ view, send, openDialog: () => setOpen(true) }),
@@ -52,7 +60,7 @@ export function HfTokenGateProvider({
     <Ctx.Provider value={value}>
       {children}
       {view.kind === "ready" ? (
-        <Dialog open={dialogOpen} onOpenChange={setOpen}>
+        <Dialog open={open} onOpenChange={setOpen}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>허깅페이스 토큰이 필요해요</DialogTitle>
