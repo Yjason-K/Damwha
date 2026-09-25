@@ -75,6 +75,16 @@ describe('buildModelsView', () => {
     const cpu = buildModelsView(input({ config: { whisper_model: 'large-v3-turbo', devices: { diarization: 'gpu', stt: 'cpu' }, summary_model: 'mlx-community/Qwen3.5-9B-8bit' } }));
     expect(find(cpu, 'stt', 'large-v3-turbo', 'faster')?.inUseFor).toEqual(['stt']);
     expect(find(cpu, 'stt', 'large-v3-turbo', 'mlx')).toBeUndefined(); // 다른 백엔드·안 받음 → 행 없음
+
+    // 이름은 같아도 받아 둔 백엔드가 다르면 "쓰는 중"이 아니다 — 현재는 gpu(mlx)인데
+    // large-v3-turbo를 faster로도 받아 뒀다면, 그 행은 실사용과 무관하니 지울 수 있어야 한다.
+    const gpuWithFasterTurbo = buildModelsView(input({
+      inventory: inv({ repos: { 'fw/large-v3-turbo': { sizeBytes: 1, complete: true } } }),
+    }));
+    expect(find(gpuWithFasterTurbo, 'stt', 'large-v3-turbo', 'faster')).toMatchObject({
+      inUseFor: [],
+      deletable: true,
+    });
   });
 
   it('inUseFor — 요약·렌즈, 둘이 같으면 한 행에 둘 다', () => {
