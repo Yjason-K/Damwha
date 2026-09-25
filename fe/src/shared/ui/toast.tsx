@@ -5,7 +5,7 @@ import { cn } from "@/shared/lib/utils";
 
 /**
  * Toast primitives — Radix Toast (radix-ui) re-skinned with Timbre tokens
- * (dark --gray-12 surface). Radix handles aria-live announcements, swipe,
+ * (--surface-floating). Radix handles aria-live announcements, swipe,
  * and auto-dismiss. Use together with `Toaster` + `toast()` (see toaster.tsx
  * / use-toast.ts) for imperative toasts.
  */
@@ -40,7 +40,7 @@ function Toast({
     <ToastPrimitive.Root
       data-slot="toast"
       className={cn(
-        "relative box-border flex min-w-[280px] items-start gap-2.5 rounded-md bg-[var(--gray-12)] p-3.5 text-[color:var(--gray-1)] [box-shadow:var(--shadow-lg)] data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-right-5 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[swipe=end]:animate-out data-[swipe=end]:fade-out-0 data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)] data-[swipe=cancel]:translate-x-0 data-[swipe=cancel]:transition-transform",
+        "relative box-border flex min-w-[280px] items-start gap-2.5 rounded-md border border-[color:var(--border-floating)] bg-[var(--surface-floating)] p-3.5 text-[color:var(--text-on-floating)] [box-shadow:var(--shadow-lg)] data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-right-5 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[swipe=end]:animate-out data-[swipe=end]:fade-out-0 data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)] data-[swipe=cancel]:translate-x-0 data-[swipe=cancel]:transition-transform",
         className,
       )}
       {...props}
@@ -85,7 +85,7 @@ function ToastAction({
     <ToastPrimitive.Action
       data-slot="toast-action"
       className={cn(
-        "shrink-0 cursor-pointer rounded-xs px-1 py-0.5 text-xs font-semibold text-[color:var(--accent-6)] outline-none transition-colors hover:text-white focus-visible:[box-shadow:var(--focus-ring)]",
+        "shrink-0 cursor-pointer rounded-xs px-1 py-0.5 text-xs font-semibold text-[color:var(--accent-6)] outline-none transition-colors hover:text-[color:var(--text-on-floating)] focus-visible:[box-shadow:var(--focus-ring)]",
         className,
       )}
       {...props}
@@ -102,7 +102,7 @@ function ToastClose({
       data-slot="toast-close"
       aria-label="닫기"
       className={cn(
-        "shrink-0 cursor-pointer rounded-xs text-[color:var(--gray-7)] outline-none transition-colors hover:text-white focus-visible:[box-shadow:var(--focus-ring)] [&_svg]:size-3.5",
+        "shrink-0 cursor-pointer rounded-xs text-[color:var(--text-on-floating-muted)] outline-none transition-colors hover:text-[color:var(--text-on-floating)] focus-visible:[box-shadow:var(--focus-ring)] [&_svg]:size-3.5",
         className,
       )}
       {...props}

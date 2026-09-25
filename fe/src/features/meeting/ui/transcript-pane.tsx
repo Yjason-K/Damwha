@@ -100,7 +100,7 @@ function renderFindText(
         className={cn(
           "rounded-[2px]",
           isCurrent
-            ? "bg-[var(--accent-solid)] text-white"
+            ? "bg-[var(--accent-solid)] text-[color:var(--text-on-accent)]"
             : "bg-[var(--accent-2)] text-[color:var(--accent-text)]",
         )}
       >

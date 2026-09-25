@@ -87,4 +87,37 @@ describe("디자인 토큰", () => {
       expect(dark, token).toMatch(new RegExp(`^\\s*${token}\\s*:`, "m"));
     }
   });
+
+  it("컴포넌트는 raw 색(hex·rgba)을 쓰지 않는다 — brand-mark만 예외", () => {
+    // 브랜드 마크는 테마를 따르지 않는 고정 색이다 (DESIGN.md §2).
+    const ALLOWED = new Set(["shared/ui/brand-mark.tsx"]);
+    const hits: string[] = [];
+    for (const file of walk(SRC)) {
+      if (!file.endsWith(".tsx") && !file.endsWith(".ts")) continue;
+      const rel = file.slice(SRC.length + 1);
+      if (ALLOWED.has(rel)) continue;
+      readFileSync(file, "utf8")
+        .split("\n")
+        .forEach((line, i) => {
+          if (/#[0-9a-fA-F]{3,8}\b|rgba?\(/.test(line)) hits.push(`${rel}:${i + 1}`);
+        });
+    }
+    expect(hits).toEqual([]);
+  });
+
+  it("잉크(--accent-solid) 면 위 글자는 text-white가 아니라 --text-on-accent다 — 다크에서 잉크가 밝아진다", () => {
+    const hits: string[] = [];
+    for (const file of walk(SRC)) {
+      if (!file.endsWith(".tsx")) continue;
+      const rel = file.slice(SRC.length + 1);
+      readFileSync(file, "utf8")
+        .split("\n")
+        .forEach((line, i) => {
+          if (/var\(--accent-solid\)/.test(line) && /\btext-white\b/.test(line)) {
+            hits.push(`${rel}:${i + 1}`);
+          }
+        });
+    }
+    expect(hits).toEqual([]);
+  });
 });

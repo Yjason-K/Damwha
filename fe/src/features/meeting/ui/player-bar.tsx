@@ -156,7 +156,7 @@ export function PlayerBar({
             type="button"
             onClick={onToggle}
             aria-label={playing ? "일시정지" : "재생"}
-            className="inline-flex size-10 cursor-pointer items-center justify-center rounded-full bg-[var(--accent-solid)] text-white outline-none transition-colors hover:bg-[var(--accent-solid-hover)] focus-visible:[box-shadow:var(--focus-ring)] [box-shadow:var(--shadow-sm)]"
+            className="inline-flex size-10 cursor-pointer items-center justify-center rounded-full bg-[var(--accent-solid)] text-[color:var(--text-on-accent)] outline-none transition-colors hover:bg-[var(--accent-solid-hover)] focus-visible:[box-shadow:var(--focus-ring)] [box-shadow:var(--shadow-sm)]"
           >
             <Icon
               name={playing ? "pause" : "play"}

@@ -106,7 +106,7 @@ function FilterPills({
             className={cn(
               "cursor-pointer rounded-full px-[11px] py-[5px] text-xs font-medium outline-none transition-colors duration-[80ms] focus-visible:[box-shadow:var(--focus-ring)]",
               active
-                ? "bg-[var(--accent-solid)] text-white"
+                ? "bg-[var(--accent-solid)] text-[color:var(--text-on-accent)]"
                 : "text-[color:var(--text-secondary)] hover:bg-[var(--surface-hover)]",
             )}
           >

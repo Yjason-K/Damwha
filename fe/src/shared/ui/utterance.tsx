@@ -247,7 +247,7 @@ function Utterance({
             className={cn(
               "pointer-events-auto inline-flex size-6 items-center justify-center rounded-xs border outline-none disabled:cursor-wait disabled:opacity-60 focus-visible:[box-shadow:var(--focus-ring)] [&_svg]:size-[14px]",
               saved
-                ? "border-[color:var(--accent-solid)] bg-[var(--accent-solid)] text-white hover:bg-[color:var(--accent-text)]"
+                ? "border-[color:var(--accent-solid)] bg-[var(--accent-solid)] text-[color:var(--text-on-accent)] hover:bg-[color:var(--accent-text)]"
                 : "border-border bg-card text-[color:var(--accent-text)] hover:border-[color:var(--accent-6)] hover:bg-[var(--accent-1)]",
             )}
           >
