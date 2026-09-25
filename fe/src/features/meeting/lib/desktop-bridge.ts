@@ -1,8 +1,11 @@
 import { hasLiveCapture, stopActiveLiveCapture } from "./live-session";
+import { hfTokenStore, type HfTokenBridge } from "@/features/hf-token/lib/bridge-store";
 
 export interface DesktopBridge {
   isRecording(): boolean;
   stopLiveRecording(): Promise<{ stopped: boolean; reason?: string }>;
+  /** HF 토큰 (스펙 2026-09-25 §4). main의 token-bridge.ts가 이 이름으로 부른다 — 이름을 바꾸면 조용히 끊긴다. */
+  hfToken: HfTokenBridge;
 }
 
 declare global {
@@ -35,5 +38,6 @@ export function installDesktopBridge(w: Window = window): void {
         };
       }
     },
+    hfToken: hfTokenStore.bridge,
   };
 }

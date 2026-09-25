@@ -11,6 +11,7 @@ vi.mock("./live-session", () => live);
 type Bridge = {
   isRecording(): boolean;
   stopLiveRecording(): Promise<{ stopped: boolean; reason?: string }>;
+  hfToken?: unknown;
 };
 
 function install(): Bridge {
@@ -65,5 +66,12 @@ describe("installDesktopBridge", () => {
     const first = w.__damwha_desktop;
     installDesktopBridge(w);
     expect(w.__damwha_desktop).toBe(first);
+  });
+
+  it("carries the HF token bridge main asks (스펙 2026-09-25 §4)", () => {
+    const w = {} as Window & { __damwha_desktop?: { hfToken?: { show: unknown; next: unknown } } };
+    installDesktopBridge(w);
+    expect(typeof w.__damwha_desktop!.hfToken!.show).toBe("function");
+    expect(typeof w.__damwha_desktop!.hfToken!.next).toBe("function");
   });
 });
