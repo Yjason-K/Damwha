@@ -12,6 +12,7 @@ function row(over: Partial<ModelRow>): ModelRow {
   return {
     role: "stt", name: "large-v3-turbo", backend: "mlx", repoId: "r", inUseFor: [],
     installed: "yes", sizeBytes: 1_613_979_758, approxBytes: null, downloading: null, deletable: true,
+    job: null,
     ...over,
   };
 }
@@ -23,7 +24,7 @@ const FIXED: ModelRow[] = [
 ];
 
 function view(models: ModelRow[]): ModelsView {
-  return { scannedAt: "t", totalBytes: 1, pending: false, models };
+  return { scannedAt: "t", totalBytes: 1, pending: false, models, freeBytes: null };
 }
 
 describe("statusText", () => {

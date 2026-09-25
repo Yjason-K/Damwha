@@ -1,6 +1,11 @@
-import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import { apiClient } from "@/shared/api/client";
-import type { ModelsView } from "./types";
+import type { ModelKey, ModelsView } from "./types";
 
 export const MODELS_QUERY_KEY = ["models"] as const;
 
@@ -23,3 +28,26 @@ export function useModels(): UseQueryResult<ModelsView> {
     refetchInterval: (query) => (query.state.data?.pending ? PENDING_POLL_MS : false),
   });
 }
+
+/** 요청 본문 — backend가 null이면 필드 자체를 뺀다(스펙 §5.2, 논리 키는 role:name:backend). */
+function body(k: ModelKey) {
+  return k.backend === null
+    ? { role: k.role, name: k.name }
+    : { role: k.role, name: k.name, backend: k.backend };
+}
+
+/** 받기·삭제·취소 공통: 성공하면 `["models"]`을 무효화해 새 job·상태를 즉시 반영한다. */
+function useModelMutation<T>(fn: (v: T) => Promise<unknown>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => qc.invalidateQueries({ queryKey: MODELS_QUERY_KEY }),
+  });
+}
+
+export const useDownloadModel = () =>
+  useModelMutation((k: ModelKey) => apiClient.post("/models/download", body(k)));
+export const useDeleteModel = () =>
+  useModelMutation((k: ModelKey) => apiClient.post("/models/delete", body(k)));
+export const useCancelModelJob = () =>
+  useModelMutation((jobId: string) => apiClient.post("/models/cancel", { jobId }));

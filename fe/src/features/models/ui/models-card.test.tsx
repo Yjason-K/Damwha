@@ -28,6 +28,7 @@ function row(over: Partial<ModelRow>): ModelRow {
     approxBytes: null,
     downloading: null,
     deletable: true,
+    job: null,
     ...over,
   };
 }
@@ -36,6 +37,7 @@ const VIEW: ModelsView = {
   scannedAt: "2026-09-25T10:00:00.000000Z",
   totalBytes: 9_200_000_000,
   pending: false,
+  freeBytes: null,
   models: [
     row({ inUseFor: ["stt"], deletable: false }),
     row({
@@ -148,6 +150,7 @@ test("아직 스캔 전이면 안내 문구만", async () => {
     scannedAt: null,
     totalBytes: null,
     pending: false,
+    freeBytes: null,
     models: VIEW.models,
   });
   expect(
