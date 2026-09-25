@@ -389,8 +389,12 @@ class DownloadModelHandler(JobHandler):
 
 
 class DeleteModelHandler(JobHandler):
-    """전사·요약 모델 삭제 (스펙 §7.3). 재시도하지 않는다 — 기본 on_failure가 retry=False면
-    닫는다."""
+    """전사·요약 모델 삭제 (스펙 §7.3). `on_failure`를 덮어쓰지 않는다 — 기본 정책 그대로
+    TRANSIENT 실패는 재시도된다(D2 최종 리뷰. 이전 docstring은 "재시도 없음"이라 적었지만
+    틀렸다). 삭제는 멱등이다: 실패한 디렉터리 삭제는 다시 지우면 그만이고, 재시도마다
+    `model_job_refs`를 다시 검사하므로 안전하다. API가 이 job을 `max_attempts=1`로 넣어
+    지금은 실질적으로 재시도가 거의 안 일어나지만, 그건 job 설정이지 이 handler의 계약이
+    아니다 — max_attempts가 바뀌면 이 경로가 실제로 쓰인다."""
 
     type = "delete_model"
 
