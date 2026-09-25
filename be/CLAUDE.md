@@ -64,10 +64,10 @@ Separate Python project under `worker/` (uv + ruff + pytest + pydantic v2 + psyc
 - **Ownership guards (the safety model).** Every worker write to shared state is guarded; 0 affected rows = lost ownership → discard local result. Two distinct guards, both needed: **job guard** (`locked_by = worker AND status='running'` — catches a same-job requeue+reclaim) and **meeting guard** (`processing_version = payload_pv AND current_job_id = job.id` — catches a newer reprocess). `persist` applies both in one short TX → returns `committed` / `discarded` (stale: job marked `done`+reason, meeting untouched) / `lost`.
 - **Failure classification and retry timing.** `errors.ErrorKind` is PERMANENT vs TRANSIENT (uncategorized → TRANSIENT). PERMANENT → fail immediately; TRANSIENT → requeue if `attempts − interruptions < max_attempts` (Phase 6b-3 split this from the reclaim/`interruptions` budget above — the two caps are independent, and whichever is hit first ends the job). Retries **are** time-gated: migration `015` added `job.next_attempt_at`, and `db.requeue` sets it to `now() + least(30 * power(2, attempts - interruptions - 1), 900) * interval '1 second'` (30s-based backoff capped at 900s/15min, keyed off the retry-budget quantity `attempts − interruptions` rather than raw `attempts` — migration `025` raised the base from the original `least(power(2, attempts - 1), 60)`, whose 1s/2s steps burned all retries in ~3s). `requeue` also writes `job.error` — that's where the retry banner's "last error" comes from (`failures`/`max_attempts`/`interruptions`/`next_attempt_at`/`error` make up the API's `retry` object). With `job.max_attempts` defaulting to 5 (also `025`, up from 3), attempt timing after claim (no interruptions) is 0s / 30s / 90s / 210s / 450s. Both `claim` implementations (`src/jobs/jobs.repository.ts`, `worker/damwha_worker/db/queue.py`) filter on `next_attempt_at IS NULL OR <= now()` and order by `next_attempt_at NULLS FIRST, created_at`; claim clears it. The two other paths back to `queued` deliberately do **not** back off: reclaim (worker already dead — see the job queue bullet above; it bumps `interruptions`, never `attempts`, and its `queued` branch leaves `error` untouched — only a reclaim that exhausts `max_interruptions` and fails the job stamps `error`, and the code differs by which of the three SQL bodies does it: the boot-time `reclaimOrphaned` stamps `app_restarted`, while `reapStale`/the worker's `reap_stale`/`reap_own_orphans` stamp `stale_worker`) and `requeue_for_shutdown`, which **decrements `attempts`** so a graceful restart doesn't burn a retry. Heartbeat runs on its own DB connection in a daemon thread and survives a transient DB error.
 - **pyannote.audio resolves to 4.x** (the spec named the 3.1 *model*; the *library* major bumped). 4.x renamed `use_auth_token` → `token` and the pipeline returns a `DiarizeOutput` (use `.speaker_diarization`). The diarization pipeline pulls a **3-model gated HF chain** — see `worker/SMOKE.md`. ECAPA runs on **CPU** even on Apple Silicon (SpeechBrain MPS support is unreliable; the model is tiny); pyannote and mlx-whisper use the GPU.
-- **Tests vs smoke.** All deterministic glue (db guards, align, identify, persist, poll loop) is tested with **fake models + real Postgres** (testcontainers) and runs in CI. The **real models are verified only by a local smoke** (`worker/SMOKE.md`, `scripts/smoke_process_meeting.py`) — gated/heavy, never in CI.
+- **Tests vs smoke.** All deterministic glue (db guards, align, identify, persist, poll loop) is tested with **fake models + real Postgres** (testcontainers) and is CI-safe — the repo has no CI, so run it locally. The **real models are verified only by a local smoke** (`worker/SMOKE.md`, `scripts/smoke_process_meeting.py`) — gated/heavy, never in CI.
 - **Lens extraction is a third job type.** `extract_lenses` (`pipeline/extract_lenses.py`) reads the meeting's `status='ok'` utterances at the payload's `processing_version`, calls a **local OpenAI-compatible LLM** (`lens_client.py`; `lens_llm_base_url` defaults to `http://127.0.0.1:8000/v1`, model `mlx-community/Qwen3.5-4B-8bit`), and only persists candidates that pass pydantic validation. Failure marks the run/job — the meeting stays `done`. The LLM endpoint is loopback-local like the embed service, so the no-external-network premise holds. The client is **runtime-agnostic — there is no Ollama dependency**; the local runtime is `mlx_lm.server`, which serves an HF repo directly and validates the request's `model` field as a repo id with no way to alias it — which is why the summary catalog holds repo ids rather than Ollama tags (setup + five gotchas in `worker/SMOKE.md`). Because `response_format` is advisory for local runtimes, the LLM-response contract must tolerate an omitted nullable field — `LensCandidate.assignee_speaker_id`/`due_at` default to `None`; `extra="forbid"` still rejects invented fields. That contract is **worker-only** (no TS counterpart), unlike the job payload.
   **The prompt is a `Speakers:` roster (`<speaker_id> <name>`, one line per
-  speaker) followed by `<utterance_id> <speaker name>: <text>` lines**, not the
+  speaker) followed by `<index> <speaker name>: <text>` lines**, not the
   DB rows —
   `json.dumps` of the raw rows put `speaker_id`/`start_ms`/`end_ms` on every
   utterance, none of which a lens item can use (there is no time field, and
@@ -90,8 +90,10 @@ Separate Python project under `worker/` (uv + ruff + pytest + pydantic v2 + psyc
   a `transcribe_failed` row excluded from the prompt — so mtg_1's whole
   extraction died as `invalid_lens_candidate`, permanently, since
   `temperature=0` replays the same reply. Consecutive integers land on a real
-  utterance even when interpolated. An out-of-range index is rejected in the
-  client as PERMANENT `llm_invalid_response` naming the valid range.
+  utterance even when interpolated. An out-of-range `primary_index` drops only
+  that item (logged); out-of-range `supporting_indexes` are removed and the item
+  kept. Indexes are never clamped here — a primary is a claim that *this*
+  utterance is the evidence, and clamping would pin it to an unrelated one.
 - **Conversation summary is a fourth job type.** `summarize_meeting`
   (`pipeline/summarize_meeting.py`) reads the same `status='ok'` utterances as
   `extract_lenses` and calls the same local LLM through `summary_client.py`,
@@ -106,7 +108,7 @@ Separate Python project under `worker/` (uv + ruff + pytest + pydantic v2 + psyc
   returns `409` if a different model is already in flight for that meeting.
   The two jobs are queued together in the `persist` transaction and are
   otherwise **independent** — a summary failure leaves lens items untouched
-  and vice versa. **The LLM supplies only boundary `utterance_id`s; `start_ms`/`end_ms`
+  and vice versa. **The LLM supplies only boundary indexes (the client maps them to `utterance_id`s); `start_ms`/`end_ms`
   are derived from the DB rows** (`_resolve_segments`), so a model cannot
   invent timestamps. **The prompt carries only `<index> <speaker>: <text>`
   lines** — not the DB rows. Sending each utterance as a JSON object with
@@ -121,9 +123,11 @@ Separate Python project under `worker/` (uv + ruff + pytest + pydantic v2 + psyc
   not move it. The line format is 13.5k tokens for the same meeting.
   Utterance-internal newlines are folded so one utterance stays one line;
   a nameless speaker falls back to `speaker_id` rather than dropping the turn's
-  attribution. Validation is all-or-nothing: an unknown utterance,
-  reversed boundaries, or out-of-order segments raise a PERMANENT
-  `WorkerError` and nothing is stored. The summary is **read-only** — there is
+  attribution. Boundaries are normalized, not rejected: `summary_client`
+  clamps out-of-range indexes into `1..N`, and `_resolve_segments` swaps
+  reversed boundaries, sorts segments, and trims or merges overlaps without
+  dropping a bullet. The one PERMANENT reject left is a boundary outside the
+  meeting, which the index mapping makes unreachable in practice. The summary is **read-only** — there is
   no per-item edit path, no `source` column, and no merge; regeneration
   replaces the row wholesale. `summary_client.py` sends an explicit
   `max_tokens` (`lens_llm_max_tokens`, default 8192) because the server default
@@ -387,22 +391,7 @@ uv run --with jiwer python scripts/eval_stt.py --wav <16k.wav> --json3 <ref> --o
 
 ---
 
-## Working guidelines (general)
+## Working guidelines
 
-> Behavioral guidelines to reduce common LLM coding mistakes. Adapted from
-> [multica-ai/andrej-karpathy-skills](https://github.com/multica-ai/andrej-karpathy-skills/blob/main/CLAUDE.md).
-> They bias toward caution over speed; for trivial tasks, use judgment.
-
-### 1. Think before coding
-**Don't assume. Don't hide confusion. Surface tradeoffs.** Before implementing: state assumptions explicitly (ask if uncertain); if multiple interpretations exist, present them rather than picking silently; if a simpler approach exists, say so and push back when warranted; if something is unclear, stop, name what's confusing, and ask.
-
-### 2. Simplicity first
-**Minimum code that solves the problem. Nothing speculative.** No features beyond what was asked; no abstractions for single-use code; no "flexibility"/"configurability" that wasn't requested; no error handling for impossible scenarios. If you write 200 lines and it could be 50, rewrite it. Test: "Would a senior engineer call this overcomplicated?"
-
-### 3. Surgical changes
-**Touch only what you must. Clean up only your own mess.** Don't "improve" adjacent code/comments/formatting; don't refactor what isn't broken; match existing style even if you'd do it differently; if you spot unrelated dead code, mention it — don't delete it. Remove imports/variables/functions that *your* changes orphaned, but leave pre-existing dead code unless asked. Every changed line should trace directly to the request.
-
-### 4. Goal-driven execution
-**Define success criteria. Loop until verified.** Turn tasks into verifiable goals ("Add validation" → "write tests for invalid inputs, then make them pass"; "Fix the bug" → "write a test that reproduces it, then make it pass"; "Refactor X" → "ensure tests pass before and after"). For multi-step work, state a brief plan with a verify check per step. Strong success criteria let you loop independently; weak ones ("make it work") force constant clarification.
-
-**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites from overcomplication, and clarifying questions come before implementation rather than after mistakes.
+- Keep diffs scoped to the request. If you notice unrelated dead code, mention it rather than deleting it.
+- For a bug fix, first write a test that reproduces the bug, then make it pass.
