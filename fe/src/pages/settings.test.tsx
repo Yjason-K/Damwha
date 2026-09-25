@@ -35,6 +35,10 @@ test("설정 페이지가 감지 스펙 카드와 처리 설정 폼을 렌더한
           summary_model: "mlx-community/Qwen3.5-9B-8bit",
         },
       } as never;
+    if (url === "/models")
+      return {
+        data: { scannedAt: null, totalBytes: null, pending: false, models: [] },
+      } as never;
     throw new Error(`unexpected GET ${url}`);
   });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -48,4 +52,5 @@ test("설정 페이지가 감지 스펙 카드와 처리 설정 폼을 렌더한
   expect(await screen.findByText("Apple M2 Pro")).toBeTruthy();
   expect(screen.getByText(/메모리 32\s*GB/)).toBeTruthy();
   expect(await screen.findByRole("radio", { name: /표준/ })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "모델" })).toBeTruthy();
 });
