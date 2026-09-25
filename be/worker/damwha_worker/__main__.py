@@ -13,7 +13,7 @@ import subprocess
 import sys
 import threading
 
-from . import capabilities, console, db, runtime_report, wiring
+from . import capabilities, console, db, inventory, runtime_report, wiring
 from .config import load_settings
 from .dispatch import dispatch_claimed_job, handle_job, run_once  # noqa: F401 — 공개 진입점
 from .jobs import default_live_source
@@ -365,6 +365,12 @@ def run_supervisor_main(settings, shutdown: threading.Event, *, run_id: str | No
     )
     reaper_thread.start()
     threading.Thread(target=report_host_capabilities, args=(settings,), daemon=True).start()
+    # 받아 둔 모델 목록 (모델 다운로드 관리 스펙 §4.2). writer는 부모의 이 스레드 하나다.
+    threading.Thread(
+        target=inventory.run_inventory_loop,
+        args=(settings.database_url, settings, shutdown),
+        daemon=True,
+    ).start()
     log_lens_llm_health(settings.lens_llm_base_url, managed=settings.lens_llm_managed)
     log.info("supervisor %s started", settings.worker_id)
     try:
