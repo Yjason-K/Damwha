@@ -391,6 +391,14 @@ wheel이며 DMG가 없다) `latest`가 제품을 가리지 못한다. 웹 릴리
 원천이라 드리프트가 없기** 때문이다(태그·DMG·노트가 한 몸). 저장소가 public이라 비인증 60회/시간
 한도로 충분하고, 한도·네트워크 실패는 조용히 무시한다(로컬 처리 앱이라 오프라인이 정상 상태다).
 
+**2026-09-25: 자동 다운로드·설치를 6c로 되살렸다 — 스펙만, 구현은 조건부.** 위 "수 GB라 전체 재다운로드"는 실측과 달랐다 —
+압축하면 DMG 490 MB·zip 516 MB이고(DMG로 받는 지금도 같은 양), blockmap 차분은 두 번째 업데이트부터 25%(129 MB)다.
+사람이 누를 때만 받고, "재시작하여 업데이트"를 누른 순간에만 Squirrel.Mac에 준비시키며, "나중에"는 캐시만 남긴다.
+**구현은 Squirrel.Mac PR #335(설치 중단이 앱을 망가뜨리는 결함의 수정)를 담은 Electron이 나온 뒤에 시작한다** —
+2026-09-25 현재 v44.4.5·v45.0.0-alpha.12 모두 미포함. 스펙은
+[2026-09-25-electron-phase-6c-auto-update-design.md](superpowers/specs/2026-09-25-electron-phase-6c-auto-update-design.md),
+브랜치는 `feat/electron-migration-phase-6c-auto-update`.
+
 #### Phase 6a. 서명·배포
 
 **목표:** 이 맥 밖에서도 뜨고, 뜬 것이 위조가 아님을 macOS가 확인할 수 있는 설치물을 만든다.
