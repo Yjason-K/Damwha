@@ -54,6 +54,8 @@ export function useUpdateProcessingSettings() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["processing-settings"] });
+      // "사용 중"과 요약이 저장 직후 옮겨 가게 (모델 다운로드 관리 스펙 §6.3).
+      queryClient.invalidateQueries({ queryKey: ["models"] });
     },
   });
 }

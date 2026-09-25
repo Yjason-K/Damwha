@@ -90,6 +90,21 @@ export const SUMMARY_MODEL_OPTIONS: { value: SummaryModel; label: string }[] =
     label: SUMMARY_MODEL_LABELS[value],
   }));
 
+/**
+ * 모델 카드(`features/models`)가 쓰는 짧은 이름 — 셀렉트 라벨의 " — " 앞부분이다. 라벨 Record를
+ * 베끼지 않으려고 여기서 파생한다. 카탈로그 밖(렌즈 env 값 등)은 repo id의 마지막 조각이다.
+ */
+export function modelShortLabel(role: string, name: string): string {
+  const label =
+    role === "stt"
+      ? WHISPER_MODEL_LABELS[name as WhisperModel]
+      : role === "summary"
+        ? SUMMARY_MODEL_LABELS[name as SummaryModel]
+        : undefined;
+  if (label) return label.split(" — ")[0];
+  return name.split("/").pop() ?? name;
+}
+
 const STT_LANGUAGE_LABELS: Record<SttLanguage, string> = {
   auto: "자동 감지",
   ko: "한국어",

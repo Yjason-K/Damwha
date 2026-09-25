@@ -54,6 +54,7 @@ test("useUpdateProcessingSettings가 PUT 후 설정 쿼리를 무효화한다", 
   expect(invalidate).toHaveBeenCalledWith({
     queryKey: ["processing-settings"],
   });
+  expect(invalidate).toHaveBeenCalledWith({ queryKey: ["models"] });
 });
 
 test("useCapabilities가 GET /system/capabilities를 조회한다", async () => {
