@@ -167,9 +167,9 @@ describe('buildModelsView', () => {
     const v = buildModelsView(input({
       modelJobs: [
         { id: 'job_1', type: 'download_model', status: 'failed', role: 'stt', name: 'large-v3', backend: 'mlx',
-          error: { code: 'DISK_FULL', message: '디스크 공간이 부족해요' } },
+          error: { code: 'DISK_FULL', message: '디스크 공간이 부족해요' }, updatedAt: '2026-09-25T09:00:00.000000Z' },
         { id: 'job_2', type: 'download_model', status: 'queued', role: 'summary', name: 'mlx-community/Qwen3.5-27B-8bit',
-          backend: null, error: null },
+          backend: null, error: null, updatedAt: '2026-09-25T10:00:05.000000Z' },
       ],
     }));
     expect(find(v, 'stt', 'large-v3', 'mlx')?.job).toEqual({
@@ -177,6 +177,36 @@ describe('buildModelsView', () => {
     });
     expect(v.pending).toBe(true);
     expect(find(v, 'stt', 'small', 'mlx')?.job).toBeNull();
+  });
+
+  it('pending — 끝난(done/failed) 모델 job이 마지막 스캔보다 새로우면 참 (삭제·최종 실패로 readiness key가 지워져도 폴링을 이어간다)', () => {
+    // 삭제 완료: 활성 job 없음, readiness에 그 key 없음(삭제가 지웠다) — job.updatedAt만 남은 유일한 신호.
+    const deletedAfterScan = buildModelsView(input({
+      modelJobs: [
+        { id: 'job_3', type: 'delete_model', status: 'done', role: 'stt', name: 'small', backend: 'mlx',
+          error: null, updatedAt: '2026-09-25T10:00:20.000000Z' },
+      ],
+    }));
+    expect(deletedAfterScan.pending).toBe(true);
+
+    // 같은 상황이지만 job이 스캔보다 오래됐다 — inventory가 이미 그 뒤를 반영했다고 본다.
+    const deletedBeforeScan = buildModelsView(input({
+      modelJobs: [
+        { id: 'job_4', type: 'delete_model', status: 'done', role: 'stt', name: 'small', backend: 'mlx',
+          error: null, updatedAt: '2026-09-25T09:59:00.000000Z' },
+      ],
+    }));
+    expect(deletedBeforeScan.pending).toBe(false);
+
+    // 받기 최종 실패·취소도 readiness key를 지운다 — inventory가 없을 때도(스캔 전) 참으로 본다.
+    const failedNoInventory = buildModelsView(input({
+      inventory: null,
+      modelJobs: [
+        { id: 'job_5', type: 'download_model', status: 'failed', role: 'stt', name: 'small', backend: 'mlx',
+          error: { code: 'download_cancelled', message: '받기를 취소했어요' }, updatedAt: '2026-09-25T10:00:20.000000Z' },
+      ],
+    }));
+    expect(failedNoInventory.pending).toBe(true);
   });
 
   it('deletable — queued/running job이 쓰는 모델도 삭제 불가', () => {

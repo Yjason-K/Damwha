@@ -32,6 +32,12 @@ export interface ModelJobRow extends ModelJobRef {
   role: ModelRole;
   name: string;
   backend: SttBackend | null;
+  /**
+   * (D2 최종 리뷰) 이 job이 마지막으로 갱신된 시각. `pending` 판정에만 쓰고 fe로는 보내지 않는다
+   * (`ModelJobRef`에는 없다) — 끝난(done/failed) job이 마지막 inventory 스캔보다 새로우면, 삭제·
+   * 최종 실패로 그 repo의 readiness key가 지워진 뒤라도 화면이 계속 폴링하게 한다(§5.1).
+   */
+  updatedAt: string;
 }
 
 export interface ModelRow {
@@ -146,11 +152,24 @@ export function buildModelsView(input: ModelsViewInput): ModelsView {
       const t = Date.parse(e.updatedAt);
       return !Number.isNaN(t) && t > scanned;
     });
+  // (D2 최종 리뷰) 삭제·최종 실패는 그 repo의 readiness key를 지운다 — 그러면 위 settling 조건이
+  // 볼 신호가 없어져, 삭제 직후 활성 job도 없고 downloading도 없는 채로 pending이 꺼져 버린다
+  // (fe useModels가 폴링을 멈추고 행이 옛 상태에 굳는다). job.updated_at을 대신 본다.
+  const finishedJobSettling = modelJobs.some((j) => {
+    if (j.status !== 'done' && j.status !== 'failed') return false;
+    if (!inventory) return true;
+    const t = Date.parse(j.updatedAt);
+    return !Number.isNaN(t) && t > scanned;
+  });
 
   return {
     scannedAt: inventory?.scannedAt ?? null,
     totalBytes: inventory ? Object.values(inventory.repos).reduce((s, r) => s + r.sizeBytes, 0) : null,
-    pending: models.some((m) => m.downloading !== null) || settling || modelJobs.some((j) => j.status === 'queued' || j.status === 'running'),
+    pending:
+      models.some((m) => m.downloading !== null) ||
+      settling ||
+      modelJobs.some((j) => j.status === 'queued' || j.status === 'running') ||
+      finishedJobSettling,
     models,
     freeBytes: inventory?.freeBytes ?? null,
   };

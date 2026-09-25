@@ -72,7 +72,7 @@ export class ModelsService {
     try {
       const r = await this.db.pool.query(
         `SELECT DISTINCT ON (payload->>'role', payload->>'name', COALESCE(payload->>'backend',''))
-                id, type, status, error, payload->>'role' AS role, payload->>'name' AS name, payload->>'backend' AS backend
+                id, type, status, error, updated_at, payload->>'role' AS role, payload->>'name' AS name, payload->>'backend' AS backend
            FROM job WHERE type IN ('download_model','delete_model')
           ORDER BY payload->>'role', payload->>'name', COALESCE(payload->>'backend',''), created_at DESC`,
       );
@@ -83,6 +83,8 @@ export class ModelsService {
         role: row.role,
         name: row.name,
         backend: row.backend ?? null,
+        // (D2 최종 리뷰) fe로는 안 보낸다 — buildModelsView의 pending 판정에만 쓴다(models-view.ts).
+        updatedAt: new Date(row.updated_at).toISOString(),
         error:
           row.error && typeof row.error === 'object' && typeof row.error.code === 'string'
             ? { code: row.error.code, message: String(row.error.message ?? '') }
