@@ -23,6 +23,7 @@ import {
   useSavedUtteranceIds,
   useSaveUtterance,
 } from "@/features/saved-utterance/api/saved-utterances";
+import { useDiarizationGate } from "@/features/hf-token/ui/hf-token-gate";
 
 import {
   useDeleteMeeting,
@@ -345,6 +346,7 @@ export function TranscriptPane({
   const [resolveOpen, setResolveOpen] = React.useState(false);
   const [reprocessOpen, setReprocessOpen] = React.useState(false);
   const [exportOpen, setExportOpen] = React.useState(false);
+  const gate = useDiarizationGate();
   const savedIds = useSavedUtteranceIds(meeting.id);
   const saveUtterance = useSaveUtterance();
   const removeSavedUtterance = useRemoveSavedUtterance();
@@ -551,7 +553,8 @@ export function TranscriptPane({
             <IconButton
               label="회의 재처리"
               size="sm"
-              onClick={() => setReprocessOpen(true)}
+              onClick={() => gate.run(() => setReprocessOpen(true))}
+              disabled={gate.locked}
             >
               <Icon name="rotateCcw" size={16} />
             </IconButton>
