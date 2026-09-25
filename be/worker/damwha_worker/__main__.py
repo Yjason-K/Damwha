@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 
 from . import capabilities, console, db, inventory, runtime_report, wiring
 from .config import HF_STALL_SECONDS, load_settings
@@ -116,17 +117,27 @@ def _reap_own_orphans(conn, settings) -> None:
         log.warning("reclaimed own orphans: requeued=%s failed=%s", requeued, failed)
 
 
-def _clean_stale_downloads() -> None:
+def _stale_download_age(settings) -> float:
+    """청소 age = 2 × 무진행 상한. `settings.hf_stall_seconds`를 따르되, 0 같은 설정값이
+    "받는 중인 파일까지 전부 지운다"가 되지 않도록 워커 상수 `HF_STALL_SECONDS`를 바닥으로 둔다
+    (모델 다운로드 관리 스펙 §7.5, D2 최종 리뷰)."""
+    return 2 * max(settings.hf_stall_seconds, HF_STALL_SECONDS)
+
+
+def _clean_stale_downloads(settings) -> None:
     """버려진 다운로드 임시 파일을 치운다 (모델 다운로드 관리 스펙 §7.5). 실패는 로그만."""
     try:
-        n = cache_scan.clean_stale_incomplete(cache_scan.hub_cache_dir(), 2 * HF_STALL_SECONDS)
+        age = _stale_download_age(settings)
+        n = cache_scan.clean_stale_incomplete(cache_scan.hub_cache_dir(), age)
         if n:
             log.info("removed %d stale download temp file(s)", n)
     except Exception:  # noqa: BLE001
         log.warning("stale download cleanup failed", exc_info=True)
 
 
-def run_supervisor(settings, shutdown, *, connect_fn, spawn_fn, child_holder) -> None:
+def run_supervisor(
+    settings, shutdown, *, connect_fn, spawn_fn, child_holder, monotonic=time.monotonic
+) -> None:
     """부모: peek → job 있으면 자식 spawn → 종료 대기 → exit code 분기.
 
     자식 exit code: 0=처리 완료(즉시 재peek), 3=no job(poll sleep),
@@ -140,7 +151,8 @@ def run_supervisor(settings, shutdown, *, connect_fn, spawn_fn, child_holder) ->
     # "준비됨"인데 큐는 영원히 안 돈다. 이 줄만이 "실제로 붙었다"를 뜻한다.
     log.info("supervisor %s ready (db connected)", settings.worker_id)
     _reap_own_orphans(conn, settings)
-    _clean_stale_downloads()
+    _clean_stale_downloads(settings)
+    last_stale_clean = monotonic()
     consecutive_failures = 0
     while not shutdown.is_set():
         try:
@@ -163,6 +175,11 @@ def run_supervisor(settings, shutdown, *, connect_fn, spawn_fn, child_holder) ->
             consecutive_failures = 0  # DB 재접속은 자식 크래시가 아니다
             continue
         if not has_job:
+            # 취소 뒤 다음 job이 안 돌면 청소가 자식 종료 시점에만 걸려 임시 파일이 그대로
+            # 남는다(D2 최종 리뷰) — idle에서도 청소하되, 2×stall마다 한 번으로 묶는다.
+            if monotonic() - last_stale_clean >= _stale_download_age(settings):
+                _clean_stale_downloads(settings)
+                last_stale_clean = monotonic()
             if shutdown.wait(settings.poll_interval_seconds):
                 break
             continue
@@ -174,7 +191,8 @@ def run_supervisor(settings, shutdown, *, connect_fn, spawn_fn, child_holder) ->
         child_holder["proc"] = proc
         code = _wait_child(proc)
         child_holder["proc"] = None
-        _clean_stale_downloads()
+        _clean_stale_downloads(settings)
+        last_stale_clean = monotonic()
 
         if shutdown.is_set():
             # shutdown 중 자식 종료는 크래시로 분류하지 않는다(핸들러 설치 전
