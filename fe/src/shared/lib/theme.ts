@@ -116,7 +116,8 @@ export function createThemeStore(env: ThemeEnv) {
 
 export function browserThemeEnv(w: Window = window): ThemeEnv {
   // jsdom과 일부 WebView에는 matchMedia가 없다 — 그때는 시스템이 라이트라고 본다.
-  const mq = typeof w.matchMedia === "function" ? w.matchMedia(DARK_QUERY) : null;
+  const mq =
+    typeof w.matchMedia === "function" ? w.matchMedia(DARK_QUERY) : null;
   return {
     readStored: () => w.localStorage.getItem(THEME_STORAGE_KEY),
     writeStored: (v) => w.localStorage.setItem(THEME_STORAGE_KEY, v),

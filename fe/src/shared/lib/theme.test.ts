@@ -93,7 +93,10 @@ describe("createThemeStore", () => {
   it("저장값이 없으면 system이고, 시스템 설정으로 해석한다", () => {
     const f = fakeEnv({ systemDark: true });
     const store = createThemeStore(f.env);
-    expect(store.getSnapshot()).toEqual({ preference: "system", resolved: "dark" });
+    expect(store.getSnapshot()).toEqual({
+      preference: "system",
+      resolved: "dark",
+    });
   });
 
   it("start()는 현재 해석을 한 번 적용한다", () => {
@@ -107,7 +110,10 @@ describe("createThemeStore", () => {
     const f = fakeEnv({ stored: "dark", systemDark: false });
     f.failReads();
     const store = createThemeStore(f.env);
-    expect(store.getSnapshot()).toEqual({ preference: "system", resolved: "light" });
+    expect(store.getSnapshot()).toEqual({
+      preference: "system",
+      resolved: "light",
+    });
   });
 
   it("오염된 저장값은 system으로 본다", () => {
@@ -124,7 +130,10 @@ describe("createThemeStore", () => {
     expect(f.stored).toBe("dark");
     expect(f.applied).toEqual(["dark"]);
     expect(listener).toHaveBeenCalledTimes(1);
-    expect(store.getSnapshot()).toEqual({ preference: "dark", resolved: "dark" });
+    expect(store.getSnapshot()).toEqual({
+      preference: "dark",
+      resolved: "dark",
+    });
   });
 
   it("쓰기가 던져도 이번 세션에는 고른 테마가 적용된다", () => {
@@ -161,7 +170,10 @@ describe("createThemeStore", () => {
     const store = createThemeStore(f.env);
     store.start();
     f.setSystemDark(true);
-    expect(store.getSnapshot()).toEqual({ preference: "light", resolved: "light" });
+    expect(store.getSnapshot()).toEqual({
+      preference: "light",
+      resolved: "light",
+    });
     expect(f.applied).toEqual(["light"]);
   });
 
@@ -178,7 +190,10 @@ describe("createThemeStore", () => {
     const store = createThemeStore(f.env);
     store.start();
     f.otherTabWrites(null, null);
-    expect(store.getSnapshot()).toEqual({ preference: "system", resolved: "light" });
+    expect(store.getSnapshot()).toEqual({
+      preference: "system",
+      resolved: "light",
+    });
   });
 
   it("다른 키의 storage 이벤트는 무시한다", () => {

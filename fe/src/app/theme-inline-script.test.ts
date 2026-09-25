@@ -39,7 +39,10 @@ function run(c: Case) {
       },
     },
     document: {
-      documentElement: { classList: { add: (n: string) => classes.add(n) }, style },
+      documentElement: {
+        classList: { add: (n: string) => classes.add(n) },
+        style,
+      },
     },
   };
   if (!c.noMatchMedia) {
