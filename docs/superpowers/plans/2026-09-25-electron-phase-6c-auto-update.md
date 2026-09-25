@@ -4784,7 +4784,10 @@ gh repo create Yjason-K/Damwha-update-test --public --description "Damwha Phase 
 git remote add updtest https://github.com/Yjason-K/Damwha-update-test.git
 ```
 
-시험 판은 `v0.90.0`·`v0.90.1`·`v0.90.2`. 각 판마다(이 브랜치의 HEAD에서, 버전만 바꾼 커밋):
+시험 판은 `v0.90.0`·`v0.90.1`·`v0.90.2`. **공개 순서가 시험의 일부다** — 앱은 공개된 판 중 최대를 고르므로(`pickLatest`),
+셋을 먼저 다 공개하면 C1의 첫 조회가 0.90.1을 건너뛰고 0.90.2를 고른다. 그래서 이 Step에서는 **0.90.0·0.90.1만** 빌드·공개하고,
+0.90.2는 Step 3 첫머리에서 빌드·공개한다(빌드는 미리 해 둬도 되지만 `publish.sh`는 그때 돌린다). 각 판마다(이 브랜치의 HEAD에서,
+버전만 바꾼 커밋):
 
 ```bash
 sed -i '' 's/"version": "[^"]*"/"version": "0.90.N"/' desktop/package.json   # N = 0, 1, 2
@@ -4795,7 +4798,7 @@ DAMWHA_PUBLISH_REPO=Yjason-K/Damwha-update-test DAMWHA_PUBLISH_REMOTE=updtest \
   bash desktop/scripts/publish.sh --notes-file <(printf 'Phase 6c 실측용 시험 판. macOS 15.0 이상.\n')
 ```
 
-(`v0.90.1`을 발행할 때 **C9**를 같이 본다 — Step 9.) 세 판을 다 낸 뒤 버전 커밋 셋을 이 브랜치에서 되돌린다 — 이미 시험 저장소에 푸시했으므로 reset이 아니라 revert다:
+(`v0.90.1`을 발행할 때 **C9**를 같이 본다 — Step 9.) 세 판을 다 낸 뒤(Step 3 이후) 버전 커밋 셋을 이 브랜치에서 되돌린다 — 이미 시험 저장소에 푸시했으므로 reset이 아니라 revert다:
 `git revert --no-edit HEAD~3..HEAD` (그 사이 다른 커밋이 없어야 한다 — `git log --oneline -4`로 먼저 본다).
 
 - [ ] **Step 2: C1 — 0.90.0 → 0.90.1 자동 업데이트**
@@ -4811,7 +4814,7 @@ Expected: 앱이 꺼졌다 `0.90.1`로 다시 뜬다. supervisor.log에 `업데�
 
 - [ ] **Step 3: C2 — 실제 재기동 뒤 0.90.1 → 0.90.2의 차분**
 
-Step 2의 `0.90.1`을 **한 번 종료하고 다시 띄운 뒤** 같은 흐름으로 `0.90.2`를 받는다.
+먼저 Step 1의 절차로 `v0.90.2`를 빌드·공개한다. 그다음 Step 2의 `0.90.1`을 **한 번 종료하고 다시 띄운 뒤** 같은 흐름으로 `0.90.2`를 받는다.
 Expected: supervisor.log의 electron-updater 줄에 차분 다운로드(`Download block maps` 또는 `differential download`)가 있고,
 전체 다운로드로 떨어졌다는 줄(`falling back to full download`)이 없다. 받은 바이트(로그 또는 `nettop`)를 zip 크기와 함께 적는다.
 
