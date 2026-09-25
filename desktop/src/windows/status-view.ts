@@ -226,6 +226,13 @@ export interface TokenView {
   note: string;
 }
 
+/**
+ * 저장된 토큰의 상태 (스펙 2026-09-25 §5.4 "상태·마스킹 값"). `app/token-boot.ts`의 `BootTokenStatus`,
+ * `windows/token-bridge.ts`의 `HfTokenStatus`와 같은 네 값이다 — 여기서 다시 적는 이유는 이 파일이
+ * `windows/`고 그 둘은 `app/`이기 때문이다(교차 import를 만들지 않는다).
+ */
+export type TokenStatus = "present" | "absent" | "unreadable" | "unavailable";
+
 export interface ServicesView {
   rows: ServiceRow[];
   /** 모델 준비 (스펙 §6.9). 받은 적도 받는 중도 아니면 빈 목록이고, 화면은 그 절을 접는다. */
@@ -266,6 +273,12 @@ export interface ServicesInput {
   /** 저장된 HF 토큰의 **가린** 모양. 없으면 null (스펙 §6.4). 원문은 여기 오지 않는다. */
   maskedToken?: string | null;
   /**
+   * 토큰 저장소의 상태 (스펙 2026-09-25 §5.4). `tokenBridge.state().status`가 그대로 온다 — `unavailable`·
+   * `unreadable`을 화면에 올리지 않으면 "없음"으로만 보여, 키체인을 못 쓰는데도 "담화 설정에서 넣으세요"라고
+   * 말하게 된다(사람이 몇 번을 넣어도 안 되는 악순환). 없으면(옛 호출부·테스트) masked 값만으로 판정한다.
+   */
+  tokenStatus?: TokenStatus;
+  /**
    * 방금 이 창에서 누른 것의 결과 — "토큰을 바꿨어요. 작업 처리기를 다시 시작했어요." 같은 한 줄.
    * 버튼이 무슨 일을 했는지(또는 못 했는지) 말하지 않으면 사람은 눌렀는데 아무 일도 안 났다고 읽는다.
    */
@@ -277,6 +290,14 @@ export const NO_TOKEN_NOTE =
   "저장된 토큰이 없어요. 화자 분리에 필요해요 — 담화 설정의 “허깅페이스 토큰”에서 넣을 수 있어요.";
 /** 토큰이 있을 때. */
 export const TOKEN_NOTE = "담화 설정의 “허깅페이스 토큰”에서 바꾸거나 지울 수 있어요.";
+/** 파일은 있는데 못 풀었을 때(status.unreadable) — 파일은 그대로 두고 다시 넣기를 안내한다. */
+export const UNREADABLE_TOKEN_NOTE =
+  "저장된 토큰을 읽을 수 없어요. 담화 설정의 “허깅페이스 토큰”에서 다시 넣어 주세요.";
+/**
+ * safeStorage를 못 쓸 때(status.unavailable). "없음"으로만 보이면 담화 설정에서 아무리 넣어도
+ * 저장되지 않는 악순환이 된다 — 키체인 안내(causes.ts·shell-hints.ts)가 이 화면에도 닿아야 한다.
+ */
+export const TOKEN_UNAVAILABLE_NOTE = `${CAUSES.safeStorageUnavailable.text} ${HINTS.safeStorageUnavailable as string}`;
 
 export const RESTART_LABEL = "서비스 다시 시작";
 export const RESTART_BUSY_LABEL = "다시 시작하는 중…";
@@ -465,10 +486,30 @@ export function modelRows(
   });
 }
 
-/** 토큰 절. 원문은 이 함수에 들어오지 않는다 — 부르는 쪽이 이미 `maskToken`을 지났다. */
-export function tokenView(masked: string | null | undefined): TokenView {
+/**
+ * 토큰 절. 원문은 이 함수에 들어오지 않는다 — 부르는 쪽이 이미 `maskToken`을 지났다.
+ *
+ * `status`가 없으면(옛 호출부·테스트) `masked`만으로 있음/없음을 가른다 — `unreadable`·`unavailable`은
+ * `status`가 있어야만 구분된다.
+ */
+export function tokenView(masked: string | null | undefined, status?: TokenStatus): TokenView {
   const value = masked ?? null;
-  return { masked: value, note: value === null ? NO_TOKEN_NOTE : TOKEN_NOTE };
+  return { masked: value, note: tokenNoteFor(status, value) };
+}
+
+function tokenNoteFor(status: TokenStatus | undefined, masked: string | null): string {
+  switch (status) {
+    case "unavailable":
+      return TOKEN_UNAVAILABLE_NOTE;
+    case "unreadable":
+      return UNREADABLE_TOKEN_NOTE;
+    case "present":
+      return TOKEN_NOTE;
+    case "absent":
+      return NO_TOKEN_NOTE;
+    default:
+      return masked === null ? NO_TOKEN_NOTE : TOKEN_NOTE;
+  }
 }
 
 /** 상태 창 한 장의 재료. services.html의 `window.__damwha_render`가 받는 모양이다. */
@@ -533,7 +574,7 @@ export function servicesView(input: ServicesInput): ServicesView {
       input.now ?? Date.now(),
       input.restarting ?? [],
     ),
-    token: tokenView(input.maskedToken),
+    token: tokenView(input.maskedToken, input.tokenStatus),
     notices,
   };
 }

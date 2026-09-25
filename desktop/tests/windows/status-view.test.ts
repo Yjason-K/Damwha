@@ -18,6 +18,8 @@ import {
   RESTART_NOT_OURS_NOTE,
   RESTORE_MENU_NOTE,
   TOKEN_NOTE,
+  TOKEN_UNAVAILABLE_NOTE,
+  UNREADABLE_TOKEN_NOTE,
   failureDetail,
   parseServicesAction,
   renderCall,
@@ -785,6 +787,34 @@ describe("토큰 절 (스펙 2026-09-25 §5.4)", () => {
     expect(TOKEN_NOTE).toContain("담화 설정");
     expect(servicesView({ statuses: [], restartNotice: null, logPathOf }).token).toEqual({ masked: null, note: NO_TOKEN_NOTE });
     expect(NO_TOKEN_NOTE).toContain("담화 설정");
+  });
+
+  it("shows a note for all four token statuses (스펙 §5.4 '상태·마스킹 값') — never the raw token", () => {
+    const token = "hf_AbCdEfGhIjKlMnOpQrStUvWxYz01234567";
+    const masked = maskToken(token);
+
+    const present = servicesView({ statuses: [], restartNotice: null, logPathOf, maskedToken: masked, tokenStatus: "present" });
+    expect(present.token).toEqual({ masked, note: TOKEN_NOTE });
+
+    const absent = servicesView({ statuses: [], restartNotice: null, logPathOf, tokenStatus: "absent" });
+    expect(absent.token).toEqual({ masked: null, note: NO_TOKEN_NOTE });
+
+    // unreadable: 파일은 있는데 못 풀었다 — masked는 여전히 null(원문을 들고 있지 않다)이지만
+    // "없음"과 같은 안내를 주면 안 된다. 키체인 실패가 아니므로 담화 설정에서 다시 넣으라고 말한다.
+    const unreadable = servicesView({ statuses: [], restartNotice: null, logPathOf, tokenStatus: "unreadable" });
+    expect(unreadable.token).toEqual({ masked: null, note: UNREADABLE_TOKEN_NOTE });
+    expect(UNREADABLE_TOKEN_NOTE).toContain("담화 설정");
+
+    // unavailable: safeStorage를 못 쓴다 — "담화 설정에서 넣으세요"는 거짓 안내다(넣어도 저장되지
+    // 않는다). 키체인 안내(causes.ts·shell-hints.ts)가 이 화면에도 닿아야 한다.
+    const unavailable = servicesView({ statuses: [], restartNotice: null, logPathOf, tokenStatus: "unavailable" });
+    expect(unavailable.token).toEqual({ masked: null, note: TOKEN_UNAVAILABLE_NOTE });
+    expect(TOKEN_UNAVAILABLE_NOTE).toContain(CAUSES.safeStorageUnavailable.text);
+    expect(TOKEN_UNAVAILABLE_NOTE).toContain("키체인");
+
+    for (const view of [present, absent, unreadable, unavailable]) {
+      expect(JSON.stringify(view)).not.toContain(token);
+    }
   });
 });
 

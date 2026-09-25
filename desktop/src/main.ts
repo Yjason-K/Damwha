@@ -29,7 +29,7 @@ import {
   shellStatusFrom,
   type ServicesAction,
 } from "./windows/status-view";
-import { applyTokenChange, ownedByStatus } from "./windows/apply-token-change";
+import { applyTokenChange, ownedByStatus, type TokenChangeResult } from "./windows/apply-token-change";
 import { createStatusWindow, mayAutoOpen } from "./windows/status-window";
 import { applyNavigationBoundary, applyPermissionBoundary } from "./windows/permissions";
 import { mayRenderShell } from "./windows/shell-latch";
@@ -715,26 +715,49 @@ const tokenBridge = createTokenBridge<BrowserWindow>({
   alive: (w) => !w.isDestroyed(),
   isRecording: () => (updateAttached === null ? Promise.resolve(false) : isRecordingIn(updateAttached)),
   verify: (token) => verifyHfToken(token),
-  apply: (token) =>
-    applyTokenChange(
-      {
-        store: makeTokenStore(app.getPath("userData"), safeStorage),
-        // 감독자가 없으면 얹을 live env가 없다. 그래도 저장·캐시는 해 두어야 다음 기동이 새 값을 쓴다.
-        liveEnv: launchCtx?.ctx.env ?? {},
-        restartService: (id) =>
-          trackRestart(id, async () => {
-            const sup = supervisor;
-            if (sup === null) throw new Error(NO_SERVICES_YET);
-            await sup.restartService(id);
-          }),
-        owned: ownedByStatus(supervisor?.statuses() ?? []),
-        // live env와 **같은 순간** 모듈 전역 캐시를 갱신한다 — 하나만 바꾸면 감독자 재생성이 옛 값을 되살린다.
-        cacheToken: (t) => {
-          hfToken = t;
+  // trackRestart가 진행 중에 actionNotice를 "다시 시작 · … — 진행 중이에요."로 세우는데, 재시작
+  // 버튼(restartFromStatusWindow)과 달리 여기서는 그것을 덮는 마무리 줄이 없었다 — 상태 창이 토큰을
+  // 바꾼 뒤에도 영원히 "진행 중이에요."에 멈춰 있었다. 옛 changeHfToken의 마무리 문구를 그대로 쓴다.
+  apply: async (token) => {
+    let result: TokenChangeResult;
+    try {
+      result = await applyTokenChange(
+        {
+          store: makeTokenStore(app.getPath("userData"), safeStorage),
+          // 감독자가 없으면 얹을 live env가 없다. 그래도 저장·캐시는 해 두어야 다음 기동이 새 값을 쓴다.
+          liveEnv: launchCtx?.ctx.env ?? {},
+          restartService: (id) =>
+            trackRestart(id, async () => {
+              const sup = supervisor;
+              if (sup === null) throw new Error(NO_SERVICES_YET);
+              await sup.restartService(id);
+            }),
+          owned: ownedByStatus(supervisor?.statuses() ?? []),
+          // live env와 **같은 순간** 모듈 전역 캐시를 갱신한다 — 하나만 바꾸면 감독자 재생성이 옛 값을 되살린다.
+          cacheToken: (t) => {
+            hfToken = t;
+          },
         },
-      },
-      token,
-    ),
+        token,
+      );
+    } catch (e) {
+      // 저장·증명이 실패하면 서비스는 하나도 다시 시작되지 않았다 — "진행 중이에요."를 그대로 두면
+      // 안 끝난 것처럼 보인다. 다리(token-bridge.ts)가 이 예외로 자기 화면에도 알리도록 다시 던진다.
+      actionNotice = "토큰을 바꾸지 못했어요 — 서비스는 다시 시작하지 않았어요.";
+      statusWindow.refresh();
+      throw e;
+    }
+    const labels = (ids: readonly ServiceId[]) => ids.map((id) => SERVICE_LABELS[id]).join(", ");
+    const parts = [
+      result.restarted.length > 0 ? `다시 시작: ${labels(result.restarted)}` : null,
+      result.skipped.length > 0
+        ? `다시 시작하지 못함: ${labels(result.skipped)} (앱이 띄운 서비스가 아니거나 내려가는 중이에요)`
+        : null,
+    ].filter((line): line is string => line !== null);
+    actionNotice = ["토큰을 바꿨어요", ...parts].join(" · ");
+    statusWindow.refresh();
+    return result;
+  },
   clear: () => {
     makeTokenStore(app.getPath("userData"), safeStorage).clear();
     hfToken = null;
@@ -984,6 +1007,9 @@ function servicesViewNow() {
     modelReadiness,
     restarting: [...restartingServices],
     maskedToken: hfToken === null ? null : maskToken(hfToken),
+    // 다리(token-bridge.ts)가 쥔 상태를 그대로 넘긴다 — unavailable·unreadable도 화면이 구분해야
+    // "없음"으로 보이는데 담화 설정에서 넣어도 저장되지 않는 악순환이 생기지 않는다 (스펙 §5.4).
+    tokenStatus: tokenBridge.state().status,
     actionNotice,
   });
 }
