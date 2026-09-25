@@ -588,6 +588,20 @@ worker 부모가 **시작 시와 `--once` 자식이 끝날 때마다** 캐시 �
   `freeBytes`로 싣는다.
 - **2026-09-25 (D2 계획)** §5.4 `model_job_refs`는 렌즈 모델을 `p_lens_models text[]` 하나로 받는다(BE·worker 값을
   함께 넘긴다 — 판정은 같고 호출이 한 번).
+- **2026-09-25 (D2 구현)** `model_job_refs`는 `followups.summary`가 false인 job을 요약 모델 사용자로 세지 않는다
+  (스펙 §5.4에 없던 규칙; 그 job은 실제로 요약 모델을 쓰지 않는다). `followups.*`가 boolean이 아니면 참으로
+  본다(jsonb_typeof 가드).
+- **2026-09-25 (D2 구현)** payload v1: zod·pydantic 모두 `name`을 trim한 뒤 1자 이상, 전사 밖에서 명시적
+  `backend: null`은 양쪽 모두 거부 — 같은 판정을 공유 픽스처로 고정한다.
+- **2026-09-25 (D2 구현)** 삭제 중 파일 시스템 오류는 새 코드 `model_delete_failed`(PERMANENT) — 분류 없이 두면
+  TRANSIENT로 떨어졌다(§7.3·§8).
+- **2026-09-25 (D2 구현)** §5.3 cancel: `attempts > 0`인 queued job은 바로 닫지 않고 `stop_requested_at`·
+  `next_attempt_at=NULL`만 찍는다(위 D2 job 참조 규칙 항목의 이유 — 그 repo의 `model_readiness` key를 지우는
+  건 worker뿐이다).
+- **2026-09-25 (D2 구현)** API의 요약 대체값은 inventory가 없으면 BE env `SUMMARY_LLM_MODEL`(계획의
+  `LENS_LLM_MODEL`이 아니라).
+- **2026-09-25 (D2 구현)** fe: 회의 처리가 받는 중이라 job이 없는 행은 취소 버튼을 그리지 않는다(취소 API는
+  `download_model` job이 필요). "사용 조건 페이지 열기"는 기존 `HfFailureAction`을 쓴다.
 
 ## 12. 리뷰 반영 (2026-09-25, 서브에이전트 2건 — 주요 주장은 코드로 재확인)
 
