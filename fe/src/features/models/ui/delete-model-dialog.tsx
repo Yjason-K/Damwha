@@ -19,12 +19,15 @@ export function DeleteModelDialog({
   row,
   label,
   onError,
+  onSuccess,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   row: ModelRow;
   label: string;
   onError: (e: unknown) => void;
+  /** 삭제 성공 시(다이얼로그를 닫기 전) 호출 — 오래된 충돌 문구를 지우는 용도. */
+  onSuccess?: () => void;
 }) {
   const del = useDeleteModel();
   const freed = row.sizeBytes !== null ? `${formatBytes(row.sizeBytes)}가 비워져요. ` : "";
@@ -48,7 +51,10 @@ export function DeleteModelDialog({
               del.mutate(
                 { role: row.role, name: row.name, backend: row.backend },
                 {
-                  onSuccess: () => onOpenChange(false),
+                  onSuccess: () => {
+                    onOpenChange(false);
+                    onSuccess?.();
+                  },
                   onError: (e) => {
                     onOpenChange(false);
                     onError(e);

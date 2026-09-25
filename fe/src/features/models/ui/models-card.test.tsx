@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -11,6 +12,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { ApiError, apiClient } from "@/shared/api/client";
 import { HfTokenGateProvider } from "@/features/hf-token/ui/hf-token-gate";
 import type { HfTokenState } from "@/features/hf-token/model/types";
+import { MODELS_QUERY_KEY } from "../api/models";
 import type { ModelRow, ModelsView } from "../api/types";
 import { ModelsCard } from "./models-card";
 
@@ -214,6 +216,51 @@ test("409는 행 아래 한 줄로 보인다", async () => {
   expect(await screen.findByText("지금 설정에서 쓰고 있어요. 다른 모델로 바꾼 뒤 지울 수 있어요.")).toBeTruthy();
 });
 
+test("409 문구는 그 행 상태가 바뀌면(성공적 삭제 등) 저절로 사라진다", async () => {
+  // 회귀: 이전에는 삭제·취소·받기가 하나의 conflict state를 공유하지 않고 자기 액션이 끝나도
+  // 지워지지 않아, 행이 이미 다른 상태로 바뀐 뒤에도 낡은 409 문구가 남았다. 지금은 오류를 그
+  // 당시 행 상태({installed, job.id})와 함께 담아 두고, 렌더마다 지금 행의 그 값과 비교한다 —
+  // 클릭 없이 캐시만 바뀌어도(다른 탭·폴링에서 온 갱신) 낡은 문구는 렌더 중 파생으로 사라진다.
+  vi.spyOn(apiClient, "post").mockRejectedValue(new ApiError(409, "지금 설정에서 쓰고 있어요.", "model_in_use_by_settings"));
+  const modelsWithSmall = [...VIEW.models, row({ name: "small", installed: "yes", deletable: true, job: null })];
+  vi.spyOn(apiClient, "get").mockResolvedValue({ data: { ...VIEW, freeBytes: null, models: modelsWithSmall } } as never);
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <ModelsCard />
+    </QueryClientProvider>,
+  );
+
+  fireEvent.click(await screen.findByRole("button", { name: "small 삭제" }));
+  fireEvent.click(screen.getByRole("button", { name: "지우기" }));
+  expect(await screen.findByText("지금 설정에서 쓰고 있어요. 다른 모델로 바꾼 뒤 지울 수 있어요.")).toBeTruthy();
+
+  // installed는 그대로 "yes"로 둬(행이 목록에서 사라져 마운트 해제되는 우연이 아니게) job만 새로
+  // 생겼다고 캐시를 바꾼다 — sig(`installed:job.id`)가 달라지므로, 같은 컴포넌트가 계속 떠 있는
+  // 채로도 오래된 409 문구는 렌더 중 파생으로 사라져야 한다.
+  act(() => {
+    qc.setQueryData(MODELS_QUERY_KEY, (prev: ModelsView | undefined) =>
+      prev && {
+        ...prev,
+        models: prev.models.map((m) =>
+          m.name === "small"
+            ? {
+                ...m,
+                job: { id: "job_after", type: "download_model" as const, status: "running" as const, error: null },
+              }
+            : m,
+        ),
+      },
+    );
+  });
+  // 행이 마운트 해제된 게 아니라 여전히 같은 행임을 보인다 — installed는 계속 yes라 행은 남고,
+  // 새 job이 진행 중이라 이제 "취소" 버튼이 뜬다.
+  expect(await screen.findByRole("button", { name: "small 받기 취소" })).toBeTruthy();
+  expect(
+    screen.queryByText("지금 설정에서 쓰고 있어요. 다른 모델로 바꾼 뒤 지울 수 있어요."),
+  ).toBeNull();
+});
+
 test("남은 용량보다 큰 모델은 받기 옆에 경고", async () => {
   // VIEW.models[1]("large-v3", 안 받음, approxBytes 3.08 GB)도 freeBytes 1 GB보다 커서 같은 경고
   // 문구를 낸다 — 브리프대로 그 행을 그대로 두고 같은 이름·용량의 행을 하나 더 얹으면(원문
@@ -275,8 +322,14 @@ test("화자 분리 모델 받기는 토큰 게이트를 거친다 (토큰 없�
     HF_ABSENT,
   );
   fireEvent.click(await screen.findByRole("button", { name: "화자 분리 모델 받기" }));
+  await waitFor(() =>
+    expect(screen.getByRole("dialog", { name: "허깅페이스 토큰이 필요해요" })).toBeInTheDocument(),
+  );
+  // mutate()는 TanStack Query 내부에서 비동기로 mutationFn을 부른다 — 클릭 직후 동기 단언은
+  // 게이트를 우회해 다이얼로그도 뜨고 요청도 나가는 회귀를 못 잡는다(펜딩 마이크로태스크가 아직
+  // 안 돌아서). 한 틱 흘려보낸 뒤에 "요청 없음"을 확인해야 "다이얼로그 + 요청"을 함께 잡는다.
+  await new Promise((r) => setTimeout(r, 0));
   expect(post).not.toHaveBeenCalled();
-  expect(screen.getByRole("dialog", { name: "허깅페이스 토큰이 필요해요" })).toBeInTheDocument();
 });
 
 test("토큰이 있으면 화자 분리 모델 받기는 바로 요청한다", async () => {
@@ -290,4 +343,30 @@ test("토큰이 있으면 화자 분리 모델 받기는 바로 요청한다", a
     expect(post).toHaveBeenCalledWith("/models/download", { role: "diarization", name: "pyannote/speaker-diarization-community-1" }),
   );
   expect(post).toHaveBeenCalledTimes(1);
+});
+
+test("모델 사용 조건에 동의해야 하면 문구와 기존 사용 조건 페이지 열기 동작을 보인다", async () => {
+  renderCardWithGate(
+    {
+      ...VIEW,
+      freeBytes: null,
+      models: [
+        ...VIEW.models.slice(0, 3),
+        diarizationRow({
+          job: {
+            id: "g1",
+            type: "download_model",
+            status: "failed",
+            error: { code: "hf_gate_not_accepted", message: "" },
+          },
+        }),
+        ...VIEW.models.slice(4),
+      ],
+    },
+    HF_ABSENT,
+  );
+  // 기존 HfFailureAction(action="accept")을 그대로 재사용한다 — 손으로 다시 짠 "사용 조건 페이지
+  // 열기" 버튼을 두지 않는다. 이 컴포넌트는 게이트 Provider가 "ready"일 때만 스스로를 보인다.
+  expect(await screen.findByText("모델 사용 조건에 동의해야 받을 수 있어요.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "사용 조건 페이지 열기" })).toBeTruthy();
 });
