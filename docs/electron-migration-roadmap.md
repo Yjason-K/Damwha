@@ -403,6 +403,7 @@ wheel이며 DMG가 없다) `latest`가 제품을 가리지 못한다. 웹 릴리
 Claude 서브에이전트가 Task 2~16의 코드를 복사본에서 실제로 돌려 검증했다(lint 통과·테스트 1399 통과). Task 1이 착수 조건
 판정(`desktop/scripts/check-squirrel-fix.sh`)과 Electron 업그레이드, 호출 계약 실측이다 — **Squirrel.Mac #335를 담은 Electron이
 나오기 전에는 시작하지 않는다.**
+재개할 때는 [재개 안내](superpowers/handoffs/2026-09-25-electron-phase-6c-auto-update-handoff.md)부터 읽는다 — 멈춘 이유(2026-09-25 판정표), 조건 확인 명령, 재개 전 점검, 새 세션 프롬프트가 있다.
 
 #### Phase 6a. 서명·배포
 
