@@ -280,7 +280,7 @@ export const ModelJobPayloadSchema = z
   .object({
     schema_version: z.literal(1),
     role: z.enum(MODEL_ROLES),
-    name: z.string().min(1),
+    name: z.string().trim().min(1),
     backend: z.enum(STT_BACKENDS).optional(),
   })
   .strict()

@@ -405,6 +405,17 @@ class ModelJobPayload(BaseModel):
     name: NonEmptyString
     backend: Literal["mlx", "faster"] | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_explicit_null_backend(cls, data):
+        # backend는 없거나(전사가 아닌 역할) 실제 값이어야(전사) 한다 — 명시적
+        # null은 둘 중 어느 쪽도 아니므로 거부한다. zod(`ModelJobPayloadSchema`)는
+        # backend를 `.optional()`(undefined만 허용, null 불허)로 선언해 같은 판정을
+        # 이미 낸다; 여기서는 필드가 nullable Literal이라 별도로 막아야 한다.
+        if isinstance(data, dict) and "backend" in data and data["backend"] is None:
+            raise ValueError("backend must be absent, not null")
+        return data
+
     @model_validator(mode="after")
     def _backend_only_for_stt(self):
         if (self.role == "stt") != (self.backend is not None):

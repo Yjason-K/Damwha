@@ -134,5 +134,7 @@ describe('contract fixtures (shared with pydantic worker)', () => {
     expect(ModelJobPayloadSchema.parse(read('model_job.summary.valid.json')).role).toBe('summary');
     expect(() => ModelJobPayloadSchema.parse(read('model_job.summary_with_backend.invalid.json'))).toThrow();
     expect(() => ModelJobPayloadSchema.parse(read('model_job.stt_without_backend.invalid.json'))).toThrow();
+    expect(() => ModelJobPayloadSchema.parse(read('model_job.blank_name.invalid.json'))).toThrow();
+    expect(() => ModelJobPayloadSchema.parse(read('model_job.null_backend.invalid.json'))).toThrow();
   });
 });

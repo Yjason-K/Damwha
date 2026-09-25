@@ -25,7 +25,12 @@ def test_valid_fixtures_parse(job_type):
 
 @pytest.mark.parametrize(
     "name",
-    ["model_job.summary_with_backend.invalid.json", "model_job.stt_without_backend.invalid.json"],
+    [
+        "model_job.summary_with_backend.invalid.json",
+        "model_job.stt_without_backend.invalid.json",
+        "model_job.blank_name.invalid.json",
+        "model_job.null_backend.invalid.json",
+    ],
 )
 def test_invalid_fixtures_rejected(name):
     with pytest.raises(ValueError):
