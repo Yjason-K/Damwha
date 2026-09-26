@@ -4,7 +4,6 @@ import { Badge } from "@/shared/ui/badge";
 import { Card } from "@/shared/ui/card";
 import { useModels } from "../api/models";
 import type { ModelRow } from "../api/types";
-import { rowAction } from "../lib/actions";
 import { formatBytes } from "../lib/format";
 import {
   ROLE_TITLES,
@@ -12,9 +11,8 @@ import {
   isVisibleByDefault,
   rowLabel,
   statusText,
-  summaryLines,
 } from "../lib/rows";
-import { DownloadNowButton, ModelRowActions } from "./model-row-actions";
+import { ModelRowActions } from "./model-row-actions";
 
 const GROUPS: { title: string; roles: ModelRole[] }[] = [
   { title: ROLE_TITLES.stt, roles: ["stt"] },
@@ -26,13 +24,13 @@ const GROUPS: { title: string; roles: ModelRole[] }[] = [
 ];
 
 /**
- * 설정 › "모델" 카드 (모델 다운로드 관리 스펙 §6). 목록 행에는 `ModelRowActions`(받기·취소·삭제),
- * 요약의 안 받은 줄에는 `DownloadNowButton`("미리 받기")이 붙는다(D2, §6.4).
+ * 설정 › "모델" 카드 (모델 다운로드 관리 스펙 §6) — 이 Mac의 보관함: 받아 둔 모델, 합계, 받기·취소·삭제
+ * (`ModelRowActions`). "지금 쓰는 모델" 요약은 처리 방식 섹션의 `ModelsInUse`가 맡는다(스펙 §11,
+ * 2026-09-26) — 고르는 곳과 결과가 한 섹션에 있어야 저장 전에도 무엇이 쓰일지 보인다.
  */
 export function ModelsCard() {
   const { data, isError } = useModels();
   const [expanded, setExpanded] = useState(false);
-  const current = data ? currentSttBackend(data.models) : null;
 
   return (
     <section aria-labelledby="settings-models">
@@ -51,8 +49,8 @@ export function ModelsCard() {
           )}
         </header>
         <p className="text-sm text-[color:var(--text-muted)]">
-          회의를 처리할 때 쓰는 모델이에요. 처음 쓸 때 받고, 받은 뒤에는 이
-          Mac에 남아요.
+          이 Mac에 받아 둔 모델이에요. 처음 쓸 때 받고, 받은 뒤에는 남아요. 필요
+          없는 전사·요약 모델은 지울 수 있어요.
         </p>
         {isError ? (
           <p className="text-sm text-[color:var(--red-text)]">
@@ -68,41 +66,6 @@ export function ModelsCard() {
           </p>
         ) : (
           <>
-            <section
-              aria-label="지금 설정에서 쓰는 모델"
-              className="flex flex-col gap-2 rounded-md border border-[color:var(--border-subtle)] p-3"
-            >
-              <span className="text-sm font-medium text-[color:var(--text-secondary)]">
-                지금 설정에서 쓰는 모델
-              </span>
-              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
-                {summaryLines(data).map((l) => {
-                  const canDownloadNow =
-                    l.row !== undefined && rowAction(l.row).kind === "download";
-                  return (
-                    <div key={`${l.label}:${l.value}`} className="contents">
-                      <dt className="text-[color:var(--text-muted)]">
-                        {l.label}
-                      </dt>
-                      <dd className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-foreground">
-                        <span>{l.value}</span>
-                        <span className="flex flex-wrap items-center gap-2">
-                          <span className="text-[color:var(--text-secondary)]">
-                            {l.status}
-                          </span>
-                          {canDownloadNow && l.row && (
-                            <DownloadNowButton
-                              row={l.row}
-                              label={rowLabel(l.row, current)}
-                            />
-                          )}
-                        </span>
-                      </dd>
-                    </div>
-                  );
-                })}
-              </dl>
-            </section>
             <ModelList
               models={data.models}
               freeBytes={data.freeBytes}

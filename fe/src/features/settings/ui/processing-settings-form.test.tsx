@@ -162,7 +162,11 @@ test("고급에서 요약 모델을 바꾸면 custom으로 전환된다", async 
   trigger.focus();
   fireEvent.keyDown(trigger, { key: "ArrowDown" });
   fireEvent.click(await screen.findByRole("option", { name: /27B/ }));
-  expect(screen.getByText(/사용자 지정 설정을 쓰고 있어요/)).toBeTruthy();
+  expect(
+    screen
+      .getByRole("radio", { name: /사용자 지정/ })
+      .getAttribute("aria-checked"),
+  ).toBe("true");
 });
 
 test("전사 언어를 바꾸면 custom으로 전환되고 저장 시 그 언어를 보낸다", async () => {
@@ -179,7 +183,11 @@ test("전사 언어를 바꾸면 custom으로 전환되고 저장 시 그 언어
   fireEvent.keyDown(trigger, { key: "ArrowDown" });
   fireEvent.click(await screen.findByRole("option", { name: /영어/ }));
 
-  expect(screen.getByText(/사용자 지정 설정을 쓰고 있어요/)).toBeTruthy();
+  expect(
+    screen
+      .getByRole("radio", { name: /사용자 지정/ })
+      .getAttribute("aria-checked"),
+  ).toBe("true");
   fireEvent.click(screen.getByRole("button", { name: "저장" }));
   await waitFor(() =>
     expect(put).toHaveBeenCalledWith("/settings/processing", {
@@ -357,4 +365,81 @@ test("고급 설정의 모델 라벨은 화면 용어만 쓴다", async () => {
   expect(screen.getByText("전사 모델")).toBeTruthy();
   expect(screen.getByText("요약 모델")).toBeTruthy();
   expect(screen.queryByText(/Whisper|LLM/)).toBeNull();
+});
+
+test("사용자 지정도 카드로 선택된 채 보이고, 지금 값(모델·CPU 단계)을 적는다", async () => {
+  mockApi({
+    ...CONFIG,
+    preset: "custom",
+    preset_revision: null,
+    whisper_model: "large-v3-turbo",
+    devices: { diarization: "gpu", stt: "cpu" },
+    summary_model: "mlx-community/Qwen3.5-4B-8bit",
+  });
+  renderForm();
+  const custom = await screen.findByRole("radio", { name: /사용자 지정/ });
+  expect(custom.getAttribute("aria-checked")).toBe("true");
+  expect(custom.textContent).toContain("전사 large-v3-turbo");
+  expect(custom.textContent).toContain("요약 qwen3.5 4B");
+  expect(custom.textContent).toContain("전사는 CPU로 처리해요");
+  for (const name of [/가볍게/, /표준/, /고품질/]) {
+    expect(
+      screen.getByRole("radio", { name }).getAttribute("aria-checked"),
+    ).toBe("false");
+  }
+});
+
+test("사용자 지정 카드를 누르면 지금 값 그대로 사용자 지정이 되고 고급 설정이 펼쳐진다", async () => {
+  mockApi();
+  renderForm();
+  fireEvent.click(await screen.findByRole("radio", { name: /사용자 지정/ }));
+  expect(
+    screen
+      .getByRole("radio", { name: /사용자 지정/ })
+      .getAttribute("aria-checked"),
+  ).toBe("true");
+  expect(screen.getByLabelText("전사 모델")).toBeTruthy();
+  expect(
+    (screen.getByRole("button", { name: "저장" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(false);
+});
+
+test("이 설정으로 쓰는 모델은 저장 전에도 고른 프리셋을 따라간다", async () => {
+  mockApiWithModels(
+    [
+      M({ inUseFor: ["stt"] }),
+      M({
+        role: "summary",
+        name: "mlx-community/Qwen3.5-9B-8bit",
+        backend: null,
+        inUseFor: ["summary"],
+      }),
+      M({
+        name: "large-v3",
+        installed: "no",
+        sizeBytes: null,
+        approxBytes: 3_083_522_487,
+      }),
+      M({
+        role: "summary",
+        name: "mlx-community/Qwen3.5-27B-8bit",
+        backend: null,
+        installed: "no",
+        sizeBytes: null,
+        approxBytes: 29_528_168_817,
+      }),
+    ],
+    null,
+  );
+  renderForm();
+  const box = await screen.findByRole("region", {
+    name: "이 설정으로 쓰는 모델",
+  });
+  expect(box.textContent).toContain("qwen3.5 9B");
+  fireEvent.click(screen.getByRole("radio", { name: /고품질/ }));
+  const after = screen.getByRole("region", { name: "이 설정으로 쓰는 모델" });
+  expect(after.textContent).toContain("large-v3 · GPU");
+  expect(after.textContent).toContain("qwen3.5 27B");
+  expect(after.textContent).not.toContain("qwen3.5 9B");
 });

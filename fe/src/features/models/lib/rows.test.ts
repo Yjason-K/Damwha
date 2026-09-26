@@ -101,6 +101,48 @@ test("currentSttBackend — 사용 중 전사 행의 백엔드", () => {
   expect(currentSttBackend([row({})])).toBeNull();
 });
 
+describe("summaryLines — 고르는 중인 값(pick)으로", () => {
+  // 저장된 설정: 전사 turbo(GPU) · 요약·렌즈 4B
+  const turbo = row({ inUseFor: ["stt"] });
+  const v3 = row({ name: "large-v3", installed: "no", sizeBytes: null, approxBytes: 3_083_522_487 });
+  const q4 = row({ role: "summary", name: "mlx-community/Qwen3.5-4B-8bit", backend: null, inUseFor: ["summary", "lens"], sizeBytes: 5_163_524_489 });
+  const q27 = row({ role: "summary", name: "mlx-community/Qwen3.5-27B-8bit", backend: null, installed: "no", sizeBytes: null, approxBytes: 29_528_168_817 });
+  const models = [turbo, v3, q4, q27, ...FIXED];
+
+  test("전사·요약은 고른 값, 렌즈 추출은 서버가 정한 값 그대로", () => {
+    const lines = summaryLines(view(models), {
+      whisper_model: "large-v3",
+      devices: { stt: "gpu" },
+      summary_model: "mlx-community/Qwen3.5-27B-8bit",
+    });
+    expect(lines).toMatchObject([
+      { label: "전사", value: "large-v3 · GPU", status: "안 받음 · 처음 회의를 처리할 때 받아요 (약 3.1 GB)", row: v3 },
+      { label: "요약", value: "qwen3.5 27B", row: q27 },
+      { label: "렌즈 추출", value: "qwen3.5 4B", status: "받음 · 5.2 GB" },
+      { label: "기본" },
+    ]);
+  });
+
+  test("고른 요약 모델이 렌즈 모델과 같으면 한 줄", () => {
+    const lines = summaryLines(view(models), {
+      whisper_model: "large-v3-turbo",
+      devices: { stt: "gpu" },
+      summary_model: "mlx-community/Qwen3.5-4B-8bit",
+    });
+    expect(lines.map((l) => l.label)).toEqual(["전사", "요약·렌즈 추출", "기본"]);
+  });
+
+  test("목록에 없는 모델(받아 둔 적 없는 CPU 전사)은 '안 받음' 행을 만들어 준다 — 미리 받기를 붙일 수 있게", () => {
+    const lines = summaryLines(view(models), {
+      whisper_model: "small",
+      devices: { stt: "cpu" },
+      summary_model: "mlx-community/Qwen3.5-4B-8bit",
+    });
+    expect(lines[0]).toMatchObject({ label: "전사", value: "small · CPU", status: "안 받음 · 처음 회의를 처리할 때 받아요" });
+    expect(lines[0].row).toMatchObject({ role: "stt", name: "small", backend: "faster", installed: "no" });
+  });
+});
+
 describe("summaryLines", () => {
   const stt = row({ inUseFor: ["stt"] });
   const sum9 = row({ role: "summary", name: "mlx-community/Qwen3.5-9B-8bit", backend: null, inUseFor: ["summary"], installed: "no", sizeBytes: null, approxBytes: 10_453_442_419 });

@@ -96,15 +96,11 @@ function renderCard(view: ModelsView) {
   );
 }
 
-test("요약 영역에 지금 설정에서 쓰는 모델과 합계를 보인다", async () => {
+test("모델 카드는 보관함만 — 합계와 목록을 보이고, 지금 쓰는 모델 요약은 처리 방식 섹션이 맡는다", async () => {
   renderCard(VIEW);
-  const summary = await screen.findByRole("region", {
-    name: "지금 설정에서 쓰는 모델",
-  });
-  expect(within(summary).getByText("large-v3-turbo · GPU")).toBeTruthy();
-  expect(within(summary).getByText("요약·렌즈 추출")).toBeTruthy();
-  expect(within(summary).getByText(/모두 받음/)).toBeTruthy();
-  expect(screen.getByText("받은 모델 합계 9.2 GB")).toBeTruthy();
+  expect(await screen.findByText("받은 모델 합계 9.2 GB")).toBeTruthy();
+  expect(screen.getByRole("region", { name: "받아 둔 모델" })).toBeTruthy();
+  expect(screen.queryByRole("region", { name: /쓰는 모델/ })).toBeNull();
 });
 
 test("목록은 기본으로 사용 중·받은 것만, 펼치면 나머지", async () => {
@@ -270,14 +266,6 @@ test("남은 용량보다 큰 모델은 받기 옆에 경고", async () => {
   renderCard({ ...VIEW, freeBytes: 1_000_000_000, models: [VIEW.models[0], ...VIEW.models.slice(2), row({ name: "medium", installed: "no", sizeBytes: null, approxBytes: 3_083_522_487, job: null })] });
   fireEvent.click(await screen.findByRole("button", { name: "모든 모델 보기" }));
   expect(screen.getByText("남은 용량(1.0 GB)보다 커요")).toBeTruthy();
-});
-
-test("요약의 안 받은 줄에 미리 받기", async () => {
-  const post = vi.spyOn(apiClient, "post").mockResolvedValue({ data: {} } as never);
-  renderCard({ ...VIEW, freeBytes: null, models: [row({ name: "small", installed: "no", sizeBytes: null, inUseFor: ["stt"], deletable: false, job: null }), ...VIEW.models.slice(1)] });
-  const summary = await screen.findByRole("region", { name: "지금 설정에서 쓰는 모델" });
-  fireEvent.click(within(summary).getByRole("button", { name: "small 미리 받기" }));
-  await waitFor(() => expect(post).toHaveBeenCalledWith("/models/download", { role: "stt", name: "small", backend: "mlx" }));
 });
 
 const HF_ABSENT: HfTokenState = {

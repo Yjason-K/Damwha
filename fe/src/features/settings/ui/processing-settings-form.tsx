@@ -17,6 +17,7 @@ import { cn } from "@/shared/lib/utils";
 import { useModels } from "@/features/models/api/models";
 import { formatBytes } from "@/features/models/lib/format";
 import { presetDownloadNeed } from "@/features/models/lib/preset-need";
+import { ModelsInUse } from "@/features/models/ui/models-in-use";
 
 import {
   useCapabilities,
@@ -78,6 +79,60 @@ function sameForm(a: FormState, b: FormState): boolean {
   );
 }
 
+/** 처리 방식 카드(프리셋 셋 + 사용자 지정)의 공통 모양 — 선택은 민트 면, 나머지는 hover 면. */
+function choiceCardClass(checked: boolean, disabled: boolean): string {
+  return cn(
+    "flex flex-col gap-1 rounded-md border p-3 text-left outline-none transition-colors duration-[80ms] focus-visible:[box-shadow:var(--focus-ring)]",
+    disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer",
+    checked
+      ? "border-[color:var(--accent-6)] bg-[var(--accent-1)]"
+      : "border-border hover:bg-[var(--surface-hover)]",
+  );
+}
+
+/**
+ * "사용자 지정" 카드 — 프리셋과 나란히 두어 지금 무엇을 쓰는지가 늘 카드 하나로 보이게 한다. 카드에는 지금
+ * 폼의 값을 적고, 누르면 그 값 그대로 사용자 지정이 되며 고급 설정이 펼쳐진다.
+ */
+function CustomRadio({
+  checked,
+  form,
+  onSelect,
+}: {
+  checked: boolean;
+  form: FormState;
+  onSelect: () => void;
+}) {
+  const cpuNote = cpuStagesNote(form.devices);
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={checked}
+      onClick={onSelect}
+      className={choiceCardClass(checked, false)}
+    >
+      <span className="text-sm font-semibold text-foreground">사용자 지정</span>
+      <span className="text-xs text-[color:var(--text-muted)]">
+        {checked ? "고급 설정에서 고른 값이에요" : "모델과 GPU를 직접 골라요"}
+      </span>
+      {checked && (
+        <>
+          <span className="flex flex-col text-xs text-[color:var(--text-secondary)]">
+            <span>전사 {form.whisper_model}</span>
+            <span>요약 {modelShortLabel("summary", form.summary_model)}</span>
+          </span>
+          {cpuNote !== null && (
+            <span className="text-xs text-[color:var(--text-muted)]">
+              {cpuNote}
+            </span>
+          )}
+        </>
+      )}
+    </button>
+  );
+}
+
 function PresetRadio({
   name,
   checked,
@@ -110,13 +165,7 @@ function PresetRadio({
           : undefined
       }
       onClick={onSelect}
-      className={cn(
-        "flex flex-1 flex-col gap-1 rounded-md border p-3 text-left outline-none transition-colors duration-[80ms] focus-visible:[box-shadow:var(--focus-ring)]",
-        disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer",
-        checked
-          ? "border-[color:var(--accent-6)] bg-[var(--accent-1)]"
-          : "border-border hover:bg-[var(--surface-hover)]",
-      )}
+      className={choiceCardClass(checked, disabled)}
     >
       <span className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
         {meta.label}
@@ -274,7 +323,11 @@ export function ProcessingSettingsForm() {
           </p>
         )}
 
-      <div role="radiogroup" aria-label="처리 프리셋" className="flex gap-2.5">
+      <div
+        role="radiogroup"
+        aria-label="처리 프리셋"
+        className="grid grid-cols-2 gap-2.5"
+      >
         {PRESET_ORDER.map((name) => (
           <PresetRadio
             key={name}
@@ -291,13 +344,16 @@ export function ProcessingSettingsForm() {
             onSelect={() => selectPreset(name)}
           />
         ))}
+        <CustomRadio
+          checked={form.preset === "custom"}
+          form={form}
+          onSelect={() => {
+            setForm({ ...form, preset: "custom" });
+            setAdvancedOpen(true);
+          }}
+        />
       </div>
-      {form.preset === "custom" && (
-        <p className="text-xs text-[color:var(--text-muted)]">
-          사용자 지정 설정을 쓰고 있어요. 프리셋을 누르면 해당 값으로
-          되돌아가요.
-        </p>
-      )}
+      <ModelsInUse pick={form} />
 
       <div className="flex flex-col gap-3">
         <button

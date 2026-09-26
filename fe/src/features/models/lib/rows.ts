@@ -102,9 +102,48 @@ function inUseStatus(r: ModelRow): string {
   return statusText(r);
 }
 
-export function summaryLines(view: ModelsView): SummaryLine[] {
+/**
+ * 처리 방식 섹션이 넘기는 "고르는 중인" 전사·요약 모델. 주면 저장된 값(`inUseFor`) 대신 이것으로 줄을
+ * 만든다 — 프리셋을 누르는 순간, 저장하기 전에도 결과와 받음 상태가 보이게.
+ */
+export interface ModelPick {
+  whisper_model: string;
+  devices: { stt: "gpu" | "cpu" };
+  summary_model: string;
+}
+
+/**
+ * 목록에 없는 고른 모델의 자리 — 다른 백엔드 전사 행은 받아 둔 게 있을 때만 오므로, 없으면 안 받은 것이다.
+ * "미리 받기"가 논리 키만으로 동작하므로 이 행으로도 받을 수 있다.
+ */
+function missingRow(
+  view: ModelsView,
+  key: Pick<ModelRow, "role" | "name" | "backend">,
+): ModelRow {
+  return {
+    ...key,
+    repoId: null,
+    inUseFor: [],
+    installed: view.scannedAt === null ? "unknown" : "no",
+    sizeBytes: null,
+    approxBytes: null,
+    downloading: null,
+    deletable: false,
+    job: null,
+  };
+}
+
+export function summaryLines(view: ModelsView, pick?: ModelPick): SummaryLine[] {
   const lines: SummaryLine[] = [];
-  const stt = view.models.find((m) => m.role === "stt" && m.inUseFor.includes("stt"));
+  let stt: ModelRow | undefined;
+  if (pick) {
+    const backend = pick.devices.stt === "gpu" ? "mlx" : "faster";
+    stt =
+      view.models.find((m) => m.role === "stt" && m.name === pick.whisper_model && m.backend === backend) ??
+      missingRow(view, { role: "stt", name: pick.whisper_model, backend });
+  } else {
+    stt = view.models.find((m) => m.role === "stt" && m.inUseFor.includes("stt"));
+  }
   if (stt) {
     lines.push({
       label: "전사",
@@ -113,8 +152,15 @@ export function summaryLines(view: ModelsView): SummaryLine[] {
       row: stt,
     });
   }
-  for (const r of view.models.filter((m) => m.role === "summary")) {
-    const s = r.inUseFor.includes("summary");
+  // 요약은 고른 값(pick) 또는 저장된 값, 렌즈 추출은 늘 서버가 정한 값(inUseFor "lens" — 설정이 바꾸지 않는다).
+  const usesSummary = (m: ModelRow) =>
+    pick ? m.name === pick.summary_model : m.inUseFor.includes("summary");
+  const summaryRows = view.models.filter((m) => m.role === "summary");
+  if (pick && !summaryRows.some(usesSummary)) {
+    summaryRows.push(missingRow(view, { role: "summary", name: pick.summary_model, backend: null }));
+  }
+  for (const r of summaryRows) {
+    const s = usesSummary(r);
     const l = r.inUseFor.includes("lens");
     if (!s && !l) continue;
     lines.push({
