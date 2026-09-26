@@ -619,6 +619,22 @@ worker 부모가 **시작 시와 `--once` 자식이 끝날 때마다** 캐시 �
   백엔드는 진행률을 안 준다) queued/running `download_model`은 "받기 대기 중"/"받는 중", queued/running
   `delete_model`은 "지우는 중"을 보인다. "모든 모델 보기"를 접어도 대기·진행 중인 job이 있는 행은
   계속 보인다.
+- **2026-09-26 (D2 실측, desktop dev · 앱 데이터 디렉터리)** C1~C5 통과, C6은 사용자 참여가 필요해 남겼다.
+  - D2-C1: mlx `base`는 대기 → "받는 중 0→69%" → "받음", faster `base`도 진행률이 보였다(§10.2의 "faster는 진행을
+    보고하지 않는다"는 이 경로에서는 틀렸다 — 미리 받기는 `snapshot_download` 훅을 탄다). 두 모델을
+    `HF_HUB_OFFLINE=1`로 실제 로더(`FasterWhisper`·`MlxWhisper.transcribe`)에 적재했고 `blobs/` 8개 파일의
+    목록·mtime·크기가 전후 같았다 — 다시 받지 않는다.
+  - D2-C2: 9B를 약 520 MB 받은 시점에 취소 → job `failed(download_cancelled)`, 화면 오류 없음("일부만 받음 ·
+    26.8 MB [다시 받기]"), readiness에 키 없음, 남은 `.incomplete` 2개는 supervisor의 유휴 청소가 지웠다(worker
+    로그 `removed 2 stale download temp file(s)`). 이 청소와 inventory 재스캔이 약 50분 늦었는데 원인은 Mac의
+    유휴 잠자기(`pmset` DarkWake from Deep Idle)였다 — 코드 문제가 아니다. 이후 실측은 `caffeinate` 아래서 했다.
+  - D2-C3: 현재 전사 모델·렌즈 모델(4B)은 버튼 없이 "지금 설정에서 쓰고 있어요", API 직접 호출도 409
+    `model_in_use_by_settings`, 고정 모델은 409 `model_not_deletable`.
+  - D2-C4: mlx `small` 삭제 → 폴더·readiness 키가 사라지고 여유 공간이 약 482 MB 늘었고 행이 "안 받음 · 약
+    481.3 MB [받기]". 화면에서의 삭제(확인 "base를 지울까요? 143.7 MB가 비워져요. …" → 지우기)도 끝까지 됐다.
+  - D2-C5: 여유 15.0 GB에서 27B 받기 → 받기 전에 실패, 행에 "남은 용량(15.0 GB)보다 커요"와 "디스크 공간이
+    부족해요 — 남은 용량 15.0 GB, 필요한 용량 35.4 GB.", readiness 키·저장소 폴더 없음.
+  - 실측으로 받은 모델은 지우고 `small`은 백업에서 되돌렸다. 처리 설정은 바꾸지 않았다(백업과 동일).
 
 ## 12. 리뷰 반영 (2026-09-25, 서브에이전트 2건 — 주요 주장은 코드로 재확인)
 
