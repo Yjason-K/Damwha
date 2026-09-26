@@ -1,3 +1,4 @@
+import pytest
 from psycopg.types.json import Jsonb
 
 from damwha_worker import db
@@ -308,6 +309,7 @@ def test_persist_enqueues_index_and_linked_lens_extraction_run_on_commit(conn):
         index_search_model="BAAI/bge-m3",
         index_search_dim=1024,
         lens_llm_model="qwen",
+        output_language="transcript",
     )
     assert out == "committed"
     jobs = conn.execute(
@@ -324,11 +326,12 @@ def test_persist_enqueues_index_and_linked_lens_extraction_run_on_commit(conn):
     assert run["model"] == "qwen"
     assert run["job_id"] == extraction_job["id"]
     assert extraction_job["payload"] == {
-        "schema_version": 1,
+        "schema_version": 2,
         "meeting_id": str(mid),
         "processing_version": 0,
         "extraction_run_id": run["id"],
         "model": "qwen",
+        "output_language": "transcript",
     }
 
 
@@ -377,6 +380,7 @@ def test_persist_discarded_enqueues_no_index_or_lens_extraction_run(conn):
         index_search_model="BAAI/bge-m3",
         index_search_dim=1024,
         lens_llm_model="qwen",
+        output_language="transcript",
     )
     assert out == "discarded"
     assert (
@@ -401,6 +405,7 @@ def test_persist_enqueues_summarize_job_and_queued_row_on_commit(conn):
         utterances=[],
         clusters=[],
         summary_llm_model="model",
+        output_language="transcript",
     )
     assert out == "committed"
     jobs = conn.execute(
@@ -408,10 +413,11 @@ def test_persist_enqueues_summarize_job_and_queued_row_on_commit(conn):
     ).fetchall()
     assert len(jobs) == 1
     assert jobs[0]["payload"] == {
-        "schema_version": 1,
+        "schema_version": 2,
         "meeting_id": str(mid),
         "processing_version": 0,
         "model": "model",
+        "output_language": "transcript",
     }
     row = conn.execute(
         "SELECT status, job_id FROM meeting_summary WHERE meeting_id=%s", (mid,)
@@ -461,6 +467,7 @@ def test_persist_reprocess_resets_summary_row_via_on_conflict(conn):
         utterances=[],
         clusters=[],
         summary_llm_model="model",
+        output_language="transcript",
     )
     first_job_id = conn.execute(
         "SELECT id FROM job WHERE type='summarize_meeting' AND meeting_id=%s", (mid,)
@@ -492,6 +499,7 @@ def test_persist_reprocess_resets_summary_row_via_on_conflict(conn):
         utterances=[],
         clusters=[],
         summary_llm_model="model",
+        output_language="transcript",
     )
     assert out == "committed"
     second_job_id = conn.execute(
@@ -766,3 +774,43 @@ def test_persist_deletes_the_meetings_live_utterances(conn):
         "SELECT count(*) c FROM live_utterance WHERE meeting_id=%s", (m,)
     ).fetchone()["c"]
     assert count(mid) == 0 and count(other) == 1
+
+
+def _persist_with_followups(conn, mid, jid, **kw):
+    return db.persist_process_meeting(
+        conn,
+        job_id=jid,
+        worker_id="w1",
+        meeting_id=mid,
+        processing_version=0,
+        normalized_key="k",
+        duration_ms=1,
+        utterances=[],
+        clusters=[],
+        lens_llm_model="qwen",
+        summary_llm_model="model",
+        **kw,
+    )
+
+
+def test_follow_up_jobs_carry_output_language(conn):
+    mid, jid = _claimed_pm_job(conn, pv=0)
+    assert _persist_with_followups(conn, mid, jid, output_language="en") == "committed"
+    rows = conn.execute(
+        "SELECT type, payload FROM job WHERE meeting_id=%s "
+        "AND type IN ('extract_lenses','summarize_meeting')",
+        (mid,),
+    ).fetchall()
+    assert {
+        r["type"]: (r["payload"]["schema_version"], r["payload"]["output_language"]) for r in rows
+    } == {"extract_lenses": (2, "en"), "summarize_meeting": (2, "en")}
+
+
+def test_follow_up_jobs_require_output_language(conn):
+    mid, jid = _claimed_pm_job(conn, pv=0)
+    with pytest.raises(ValueError, match="output_language"):
+        _persist_with_followups(conn, mid, jid)
+    # 트랜잭션에 들어가기 전에 멈췄다 — 아무것도 쓰지 않았다
+    assert conn.execute(
+        "SELECT count(*) c FROM job WHERE meeting_id=%s AND type<>'process_meeting'", (mid,)
+    ).fetchone()["c"] == 0

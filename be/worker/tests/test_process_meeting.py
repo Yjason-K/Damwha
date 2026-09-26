@@ -98,6 +98,60 @@ def _payload_v5(meeting_id, audio_key, *, lens, summary, pv=0):
     )
 
 
+def _payload_v6(meeting_id, audio_key, *, summary_language, pv=0):
+    return parse_payload(
+        "process_meeting",
+        {
+            "schema_version": 6,
+            "meeting_id": str(meeting_id),
+            "audio_key": audio_key,
+            "processing_version": pv,
+            "reprocess": pv > 0,
+            "models": {
+                "whisper_model": "large-v3-turbo",
+                "language": "ko",
+                "devices": {"diarization": "cpu", "stt": "cpu"},
+                "preset": "standard",
+                "preset_revision": "2026-08-12.3",
+                "summary_model": "mlx-community/Qwen3.5-27B-8bit",
+                "summary_language": summary_language,
+                "diarization": {"model": "d", "min_speakers": None, "max_speakers": None},
+                "embedding": {"model": "speechbrain/spkrec-ecapa-voxceleb", "dimension": 192},
+            },
+            "identify": {"threshold": 0.7, "suggest_threshold": 0.5},
+            "followups": {"lens": True, "summary": True},
+        },
+    )
+
+
+def _run_with_followups(conn, tmp_path, payload_for):
+    mid = seed_meeting(
+        conn, status="processing", processing_version=0, audio_key="meetings/m/original.m4a"
+    )
+    jid = seed_job(conn, meeting_id=mid, payload={})
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    db.claim(conn, "w1")
+    out = run_process_meeting(
+        conn,
+        conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
+        payload_for(mid),
+        _models(),
+        Storage(str(tmp_path)),
+        worker_id="w1",
+        normalize_fn=lambda s, d: None,
+        probe_fn=lambda p: ProbeResult(2000),
+        lens_llm_model="worker-env-model",
+        summary_llm_model="worker-env-model",
+    )
+    assert out == "committed"
+    rows = conn.execute(
+        "SELECT type, payload FROM job WHERE meeting_id=%s "
+        "AND type IN ('extract_lenses','summarize_meeting')",
+        (mid,),
+    ).fetchall()
+    return {r["type"]: r["payload"]["output_language"] for r in rows}
+
+
 def test_full_pipeline_with_identification(conn, tmp_path):
     # known speaker matches SPEAKER_00's centroid direction
     sid = seed_speaker(conn, enrollment_status="ready")
@@ -681,6 +735,22 @@ def test_v5_deferred_followups_are_not_queued(conn, tmp_path, lens, summary):
 
     assert (lens_jobs, lens_runs) == ((1, 1) if lens else (0, 0))
     assert (summary_jobs, summary_rows) == ((1, 1) if summary else (0, 0))
+
+
+def test_v6_followups_inherit_summary_language(conn, tmp_path):
+    got = _run_with_followups(
+        conn, tmp_path,
+        lambda mid: _payload_v6(mid, "meetings/m/original.m4a", summary_language="en"),
+    )
+    assert got == {"extract_lenses": "en", "summarize_meeting": "en"}
+
+
+def test_v5_followups_are_transcript(conn, tmp_path):
+    got = _run_with_followups(
+        conn, tmp_path,
+        lambda mid: _payload_v5(mid, "meetings/m/original.m4a", lens=True, summary=True),
+    )
+    assert got == {"extract_lenses": "transcript", "summarize_meeting": "transcript"}
 
 
 def test_stt_progress_logged_and_written_between_stage_bounds(conn, tmp_path, caplog, monkeypatch):

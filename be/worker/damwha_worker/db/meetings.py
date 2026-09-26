@@ -46,7 +46,13 @@ def persist_process_meeting(
     index_search_dim=None,
     lens_llm_model=None,
     summary_llm_model=None,
+    output_language: str | None = None,
 ) -> str:
+    # 후속 job은 process payload의 요약 언어를 그대로 잇는다 (다국어 스펙 §5.2). 기본값으로
+    # 떨어지면 "고른 적 없는 언어로 요약"이 되므로, 후속을 넣는데 언어가 없으면 조용히
+    # transcript로 가지 않고 멈춘다.
+    if (lens_llm_model is not None or summary_llm_model is not None) and output_language is None:
+        raise ValueError("output_language is required when enqueuing follow-up jobs")
     try:
         with conn.transaction():
             # (1) job ownership
@@ -245,11 +251,12 @@ def persist_process_meeting(
                         meeting_id,
                         Jsonb(
                             {
-                                "schema_version": 1,
+                                "schema_version": 2,
                                 "meeting_id": str(meeting_id),
                                 "processing_version": processing_version,
                                 "extraction_run_id": str(run_id),
                                 "model": lens_llm_model,
+                                "output_language": output_language,
                             }
                         ),
                     ),
@@ -269,10 +276,11 @@ def persist_process_meeting(
                         meeting_id,
                         Jsonb(
                             {
-                                "schema_version": 1,
+                                "schema_version": 2,
                                 "meeting_id": str(meeting_id),
                                 "processing_version": processing_version,
                                 "model": summary_llm_model,
+                                "output_language": output_language,
                             }
                         ),
                     ),
