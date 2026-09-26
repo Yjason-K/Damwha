@@ -1,7 +1,7 @@
 # 다국어(한국어·영어) 설계
 
 **작성일:** 2026-09-26
-**상태:** 설계 초안 — 사용자 리뷰 대기
+**상태:** 설계 초안 — codex 리뷰(gpt-5.6-terra) 반영, 사용자 리뷰 대기
 **범위:** 화면 언어(FE·desktop)와 요약 언어(BE·worker) — 언어 결정 규칙, 저장, desktop↔FE 전달,
 job 계약, 문구 이전, 번역, 테스트, 작업 순서
 
@@ -96,7 +96,8 @@ export function pickUiLanguage(locales: readonly string[]): UiLanguage;
 main 쪽 문구는 모두 이 값으로 사전을 찾는다.
 
 **첫 화면 — 깜빡임 없이.** 담화 화면의 `loadURL`에 `?lang=<current>`를 붙인다(`windows/shell-url.ts`).
-FE는 첫 렌더 **전에** 이 값을 동기로 읽어 i18n을 초기화한다. 페이지 로드 뒤에 밀어 넣으면 한국어가
+문자열 이어 붙이기가 아니라 `new URL()`·`searchParams`로 만든다 — API origin(packaged)과 Vite origin(dev)
+양쪽이다. 쿼리는 origin을 바꾸지 않으므로 `applyNavigationBoundary`의 origin 검사는 그대로 통과한다. FE는 첫 렌더 **전에** 이 값을 동기로 읽어 i18n을 초기화한다. 페이지 로드 뒤에 밀어 넣으면 한국어가
 한 프레임 보였다가 바뀐다.
 
 **바꾸기 — 렌더러→main 채널 없이.** desktop은 렌더러→main 채널을 만들지 않는다(Phase 2 스펙 §6.11,
@@ -110,9 +111,16 @@ main이 `uiLanguage.next()`를 **묻는다**. 사람이 설정에서 언어를 �
    이전 값으로 되돌리는 길이 이것이다),
 5. 다시 `next()`를 묻는다.
 
-고리의 수명·재부착(⌘R)·동시 요청은 token-bridge의 규칙을 그대로 따른다: 붙는 자리는 담화 화면이 처음 붙을
-때와 `did-finish-load`, 옛 고리는 새 고리가 서면 끝난다. 언어 변경은 멱등이라 hfToken의 `mutating` 같은
-직렬화는 필요 없다 — 마지막 값이 이긴다.
+token-bridge를 복사하거나 확장하지 않는다 — 그 파일은 토큰 전용 동작(submit·clear), `mutating` 직렬화,
+토큰 문구가 얽혀 있다. **묻는 고리 패턴만 빌린** 작은 `windows/language-bridge.ts`를 새로 둔다(electron을
+import하지 않고 잎을 주입받는 같은 나눔). 규칙:
+
+- 붙는 자리는 tokenBridge와 같은 두 곳이다 — `reattachWindow`의 첫 부착(`main.ts`, `tokenBridge.attach(target)`
+  옆)과 ⌘R 뒤 `did-finish-load`(`main.ts`, `created.webContents.on("did-finish-load", …)` 안). 두 호출을
+  나란히 둔다.
+- **페이지 세대 표시**: attach마다 세대 번호를 올리고, 옛 세대의 고리는 답을 받아도 버린다 — ⌘R 전의 고리가
+  늦게 끝나 새 페이지에 옛 값을 `show`하거나 두 고리가 서로 되묻는 반복을 막는다.
+- 언어 변경은 멱등이라 `mutating` 같은 직렬화는 필요 없다 — 마지막 값이 이긴다.
 
 **FE가 desktop 밖인가.** `window.__damwha_desktop`이 없으면 브라우저 단독이다(§4.2).
 
@@ -168,8 +176,13 @@ main 쪽 문구는 복수형이 거의 없어 i18next를 들이지 않는다. `d
 - **쓰기**(`PutProcessingValueSchema`): 두 모양 모두 **필수**. 그래서 사람이 처리 설정을 한 번 저장하면
   그 시점에 보이던 요약 언어로 고정된다(화면에 보이던 값과 같으므로 보이는 변화는 없다 — OS 언어를 나중에
   바꿨을 때만 차이가 난다). "기기 언어 따름"을 별도 선택지로 두는 것은 YAGNI.
-- `ProcessingConfig`(`presets.ts`)에 `summary_language`를 더하고 `resolvePreset(name, language, summaryLanguage)`.
-  `GET /settings/processing`의 resolved 뷰에도 나온다.
+- `ProcessingConfig`(`presets.ts`)에 `summary_language`를 **필수 필드로** 더하고
+  `resolvePreset(name, language, summaryLanguage)`. `GET /settings/processing`의 resolved 뷰에도 나온다.
+- **회의별 override 해석**(`resolve-processing.ts` `resolveProcessingConfig`): override는 이 필드를 받지 않지만,
+  override가 프리셋을 고르는 분기(`resolvePreset(override.preset, …)`)와 개별 노브 분기(custom 재조립) **모두**
+  `global.summary_language`를 이어받아야 한다. 필드가 필수이므로 빠뜨리면 `tsc`가 잡는다 — optional로 두면
+  override가 있는 업로드·재처리·라이브만 조용히 기본값으로 떨어진다. override 스키마(`ProcessingOverrideSchema`,
+  `.strict()`)에는 넣지 않는다.
 - `PRESET_REVISION`은 올리지 않는다 — 프리셋 정의(모델·장치)가 바뀐 게 아니다.
 
 ### 5.2 job 계약
@@ -189,7 +202,13 @@ main 쪽 문구는 복수형이 거의 없어 i18next를 들이지 않는다. `d
   안 된다. 옛 버전을 `transcript`로 읽는 것은 "그 job이 만들어질 때의 실제 동작"이다.
 - worker의 후속 job 삽입은 process payload의 `models.summary_language`를 `output_language`로 복사한다.
 - API의 다시 만들기는 **현재 설정값**(`resolveProcessing`)을 읽어 넣는다.
-- 라이브 세션의 최종 process_meeting은 `live_session.process`를 그대로 쓰므로(기존 구조) 언어도 따라간다.
+- 라이브 세션의 최종 process_meeting은 `live_session.process`를 **그대로 복사**해 넣는다. 그 경로는 둘이다 —
+  worker가 마무리할 때(`db/live.py`)와 worker를 잃어 API가 마무리할 때(`live.service.ts`
+  `finalizeWithoutWorker`, `fresh.payload.process`를 그대로 enqueue). 둘 다 **변환하지 않고** 복사한다.
+  그래서 v1 live_session 안의 process v5는 v5 그대로 큐에 들어가고, worker의 process_meeting 파서가 v5를
+  `transcript`로 읽는다. 이것이 성립하려면 **worker는 process_meeting v1–v6을 계속 받아야 한다**(이 설계의
+  불변식) — 옛 버전 지원을 걷어내는 변경은 두 복사 경로를 먼저 고쳐야 한다. 두 경로 각각에 v1 live_session →
+  v5 process → `transcript` 요약 테스트를 둔다.
 - 양쪽 스키마: zod(`job-payload.schema.ts`)와 pydantic(`contracts.py`, `SUPPORTED` 버전 집합). 내부 정규형
   `ModelsConfig`에 `summary_language: str = "transcript"`.
 - API와 worker는 desktop 앱 안에서 함께 배포되므로 "새 API + 옛 worker" 조합은 없다. 남는 것은 **큐에 남은
@@ -209,8 +228,16 @@ main 쪽 문구는 복수형이 거의 없어 i18next를 들이지 않는다. `d
 `en`으로 요약해 출력 언어를 눈으로 확인한다(모델 목록 `SUMMARY_MODELS` 각각). 따르지 않는 모델이 있으면
 그 결과를 이 절에 적는다 — 추가 검증기(출력 언어 감지 후 재시도)는 그때 판단한다.
 
-렌즈의 `quote` 등 **원문 인용** 필드는 번역하지 않는다 — 발화를 가리키는 증거다. 번역 대상은 렌즈의 서술
-필드뿐이고, 어느 필드인지는 `lens_client.py`의 스키마를 보고 구현 때 확정해 여기 적는다.
+**호출 사슬.** 지금 두 클라이언트는 언어 인자를 받지 않는다(`summary_client.py`의 요약 함수,
+`lens_client.py`의 추출 함수). `output_language: SummaryLanguage`를 두 클라이언트 API의 **필수 키워드 인자**로
+더하고, 파싱된 payload에서 `pipeline/summarize_meeting.py`·`pipeline/extract_lenses.py`를 거쳐 넘긴다.
+문장 선택은 두 클라이언트가 공유하는 함수 하나(`output_language_instruction(lang) -> str`)로 둔다.
+
+**렌즈에서 무엇이 바뀌나.** `LensCandidate`(`contracts.py`)에 원문 인용 필드는 없다. 서술인 `text`만 출력
+언어를 따르고, 나머지 — `kind`, `assignee_speaker_id`, `due_at`, `primary_utterance_id`·
+`supporting_utterance_ids`(증거 발화 ID) — 는 언어와 무관하다. 출력 글을 녹취와 비교하는 검증기는 없고
+(증거 ID가 입력 범위 안인지만 본다), 그래서 출력 언어가 녹취와 달라도 검증에서 떨어지지 않는다. 요약도
+같다 — `topics`·`title`·`bullets`가 서술이고 `start_index`·`end_index`는 인덱스다.
 
 ### 5.4 desktop의 기기 기본값
 
@@ -225,6 +252,12 @@ env를 덮지 않으므로 `be/.env`에 값이 있어도 desktop이 넣은 값�
 아래에 한 줄: "이미 만든 요약은 바뀌지 않아요. 다음 처리나 '다시 만들기'부터 적용돼요."
 프리셋 선택과 무관하게 항상 보인다. `PUT` 본문에 항상 싣는다.
 
+PUT 필수화 때문에 폼 한 곳이 아니라 이 사슬 전체가 바뀐다 — 하나라도 빠지면 이름 프리셋 저장이 400이 된다:
+`features/settings/api/types.ts`의 `ProcessingSettingsUpdate`(이름 프리셋 모양 `{preset, language}`에도),
+폼의 `FormState`·`fromConfig`·`sameForm`(더티 판정)·프리셋 선택 핸들러·제출 본문(이름 프리셋과 custom 양쪽),
+그리고 BE `namedPresetSchema`·custom 스키마 두 팔. 테스트는 "이름 프리셋으로 바꿔 저장", "custom으로 저장",
+"요약 언어만 바꿔 저장(더티 판정)"을 명시적으로 둔다.
+
 ## 6. 에러 문구
 
 - FE `ApiError`는 이미 서버의 `code`를 싣고 화면이 code로 문구를 고른다(`fe/src/shared/api/client.ts`).
@@ -234,7 +267,20 @@ env를 덮지 않으므로 `be/.env`에 값이 있어도 desktop이 넣은 값�
   영어로 바꾼다.
 - `client.ts`의 fallback("알 수 없는 오류가 발생했어요.", "서버에 연결할 수 없어요.", `diskFullMessage`)은
   사전으로 옮긴다. axios 인터셉터는 React 밖이므로 `i18n.t`를 직접 부른다.
-- worker 에러 코드(`errors.py`)는 이미 코드다 — FE의 기존 code→문구 매핑을 사전으로 옮기기만 한다.
+- worker 에러 코드(`errors.py`)는 이미 코드다 — FE의 기존 code→문구 매핑을 사전으로 옮긴다.
+- **worker가 한국어 문구를 쓰는 곳**이 있고 그것이 화면까지 간다: `DISK_FULL`의 message
+  (`pipeline/model_jobs.py`의 받기 중 ENOSPC, `models/disk.py`의 사전 용량 검사)는 한국어이고,
+  `models/downloads.py`가 `<code>: <message>`로 `app_setting.model_readiness`에 적는다. 그것을 desktop 상태 창
+  (`status-view.ts`의 `readinessErrorMessage`)과 FE 모델 화면(`features/models/lib/actions.ts`의
+  `DISK_FULL` 분기, `j.error.message`를 그대로 표시)이 **원문 그대로** 그린다. 고친다:
+  - worker 문구는 영어로 바꾼다(로그·알 수 없는 소비자용). 화면은 이 문구를 쓰지 않는다.
+  - `DISK_FULL`은 FE·desktop 둘 다 **code로 사전 문구**를 고른다. 남은 용량 같은 수치가 필요하면 message를
+    파싱하지 않는다 — 그 수치를 문구에 넣지 않는 일반 문구("디스크 공간이 부족해요 …")로 시작하고, 수치가
+    필요해지면 job error에 구조화된 필드를 더하는 별도 변경으로 한다.
+  - desktop의 `readinessErrorMessage`도 code를 먼저 보고 사전에 있으면 그것을, 없으면 message를 쓴다.
+  - 구현 첫 단계의 전수 확인에 worker를 포함한다: `WorkerError(...)`의 message 중 `model_readiness`·
+    `job.error`를 거쳐 화면에 닿는 것 전부. 이미 영어인 message(예: `llm_request_failed`)는 한국어 화면에 영어로
+    새는 기존 문제이므로 같은 code 매핑으로 함께 덮는다.
 - BE 전역에서 사람에게 보일 수 있는 한글 `message`가 더 있는지 구현 첫 단계에서 전수 확인한다
   (`HttpException` 계열 + zod 에러 포맷터).
 
@@ -280,6 +326,12 @@ env를 덮지 않으므로 `be/.env`에 값이 있어도 desktop이 넣은 값�
 - **하드코딩 가드.** `scripts/check-hangul.mjs` — 지정한 패키지의 `.ts`/`.tsx`에서 사전·테스트·주석을 뺀 한글
   문자열 리터럴·JSX 텍스트를 찾으면 실패. 허용 목록(로그 원문 등)은 파일 안에서 명시적으로 표시한다
   (`// i18n-allow: log`). 패키지의 이전이 끝나는 PR에서 그 패키지의 `lint`에 연결한다.
+- **job 계약 픽스처.** `be/test/fixtures/job-payloads/`는 zod(`be/test/contract-fixtures.spec.ts`)와
+  pydantic(`be/worker/tests/test_contracts.py`)이 **함께** 읽는다. 기존 v1–v5·v1 픽스처는 **손대지 않는다**
+  (변환 테스트의 입력이다). process_meeting v6, summarize_meeting·extract_lenses v2, live_session v2 픽스처를
+  더한다. v5를 정확히 가정하는 단정(`be/test/job-payload.spec.ts`의 빌더 결과, `be/worker/tests/
+  test_contracts_live.py`, `be/worker/tests/test_db_persist.py`의 후속 job 삽입)은 v6/v2로 옮긴다 —
+  "기존 테스트는 거의 그대로"는 FE 문구 테스트에 대한 말이고, 계약 테스트는 이 단계에서 상당수 바뀐다.
 - **요약 언어.**
   - zod·pydantic 양쪽: v1–v5 process_meeting, v1 summarize/extract, v1 live_session이 `transcript`로
     변환되는가; v6/v2가 필드 없이 오면 거부되는가.
@@ -316,3 +368,18 @@ env를 덮지 않으므로 `be/.env`에 값이 있어도 desktop이 넣은 값�
   한국어 문구 개선은 별도 PR.
 - **FE 테스트가 `ko` 고정에 기대는 것** — 영어 경로는 유출 테스트와 수동 확인이 덮는다. 영어 전용 동작
   (복수형, `Intl` 포맷)은 개별 단위 테스트를 둔다.
+
+## 11. 리뷰 기록
+
+**codex (gpt-5.6-terra, reasoning medium), 2026-09-26.** 8건, 모두 코드에서 재현 확인 후 반영했다.
+
+| # | codex 심각도 | 지적 | 반영 |
+| --- | --- | --- | --- |
+| 1 | P1 → **P2로 낮춤** | API의 라이브 마무리 경로(`finalizeWithoutWorker`)가 누락 | §5.2. 옛 process v5를 그대로 넣어도 worker가 v5를 `transcript`로 읽으므로 잘못된 결과는 나지 않는다 — 누락된 것은 그 **불변식의 명시**와 테스트였다 |
+| 2 | P1 | worker의 한국어 `DISK_FULL` 문구가 `model_readiness`를 거쳐 영어 화면에 샌다 | §6 |
+| 3 | P2 | 요약·렌즈 클라이언트가 언어 인자를 받지 않는다 — 호출 사슬 미기술 | §5.3 |
+| 4 | P2 | 렌즈에 `quote` 필드는 없다(사실 오류) | §5.3 |
+| 5 | P2 | PUT 필수화가 FE 타입·폼 상태·더티 판정·BE 두 스키마까지 바꾼다 | §5.5 |
+| 6 | P2 | 회의별 override 해석이 필드를 떨어뜨릴 수 있다 | §5.1 |
+| 7 | P2 | 계약 픽스처·v5 단정 테스트의 이전 범위 누락 | §8 |
+| 8 | P3 | token-bridge를 그대로 쓸 수 없다 — 별도 language-bridge, 세대 표시, `new URL()` | §4.1 |
