@@ -15,6 +15,10 @@ import type {
  * 프리셋 카드 표시용 메타 — 값의 진실원은 BE(`be/src/settings/presets.ts`,
  * PRESET_REVISION 2026-08-12.3). 여기 값은 카드 요약 표시 전용이며, 저장 시엔
  * 프리셋 이름만 보내고 서버가 resolve한다. BE 프리셋 변경 시 함께 갱신할 것.
+ *
+ * `desc`의 램 구간은 서버의 추천 규칙(`be/src/system/capabilities.ts` — 16GB 미만 light,
+ * 48GB 미만 standard, 그 이상 quality)과 같게 둔다. 예전 문구("64GB+")는 추천 규칙과 달라
+ * 48GB Mac에 "고품질 · 권장"과 "64GB+ 램에 알맞아요"가 함께 떴다.
  */
 export const PRESET_META: Record<
   PresetName,
@@ -28,21 +32,21 @@ export const PRESET_META: Record<
 > = {
   light: {
     label: "가볍게",
-    desc: "8GB 램에 알맞아요",
+    desc: "16GB 미만 램에 알맞아요",
     whisper_model: "small",
     devices: { diarization: "gpu", stt: "cpu" },
     summary_model: "mlx-community/Qwen3.5-4B-8bit",
   },
   standard: {
     label: "표준",
-    desc: "16–32GB 램에 알맞아요",
+    desc: "16–48GB 램에 알맞아요",
     whisper_model: "large-v3-turbo",
     devices: { diarization: "gpu", stt: "gpu" },
     summary_model: "mlx-community/Qwen3.5-9B-8bit",
   },
   quality: {
     label: "고품질",
-    desc: "64GB+ 램에 알맞아요",
+    desc: "48GB 이상 램에 알맞아요",
     whisper_model: "large-v3",
     devices: { diarization: "gpu", stt: "gpu" },
     summary_model: "mlx-community/Qwen3.5-27B-8bit",
@@ -80,8 +84,8 @@ export const WHISPER_MODEL_OPTIONS: { value: WhisperModel; label: string }[] =
 
 const SUMMARY_MODEL_LABELS: Record<SummaryModel, string> = {
   "mlx-community/Qwen3.5-4B-8bit": "qwen3.5 4B — 가장 빠름, 8GB 램",
-  "mlx-community/Qwen3.5-9B-8bit": "qwen3.5 9B — 균형, 16–32GB 램",
-  "mlx-community/Qwen3.5-27B-8bit": "qwen3.5 27B — 가장 정확, 64GB+ 램",
+  "mlx-community/Qwen3.5-9B-8bit": "qwen3.5 9B — 균형, 16GB+ 램",
+  "mlx-community/Qwen3.5-27B-8bit": "qwen3.5 27B — 가장 정확, 48GB+ 램",
 };
 
 export const SUMMARY_MODEL_OPTIONS: { value: SummaryModel; label: string }[] =

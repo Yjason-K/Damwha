@@ -14,6 +14,9 @@ import {
 import { Switch } from "@/shared/ui/switch";
 import { toast } from "@/shared/ui/use-toast";
 import { cn } from "@/shared/lib/utils";
+import { useModels } from "@/features/models/api/models";
+import { formatBytes } from "@/features/models/lib/format";
+import { presetDownloadNeed } from "@/features/models/lib/preset-need";
 
 import {
   useCapabilities,
@@ -30,6 +33,7 @@ import type {
 import {
   deviceSummary,
   isSttLanguage,
+  modelShortLabel,
   PRESET_META,
   PRESET_META_REVISION,
   PRESET_ORDER,
@@ -67,12 +71,17 @@ function PresetRadio({
   checked,
   recommended,
   disabled,
+  need,
+  freeBytes,
   onSelect,
 }: {
   name: PresetName;
   checked: boolean;
   recommended: boolean;
   disabled: boolean;
+  /** 이 프리셋을 고르면 새로 받아야 할 대략 용량. 모르면 null(줄을 그리지 않는다). */
+  need: { bytes: number; exceedsFree: boolean } | null;
+  freeBytes: number | null;
   onSelect: () => void;
 }) {
   const meta = PRESET_META[name];
@@ -107,8 +116,25 @@ function PresetRadio({
         {meta.whisper_model} · {deviceSummary(meta.devices)}
       </span>
       <span className="text-xs text-[color:var(--text-muted)]">
-        요약 {meta.summary_model}
+        요약 {modelShortLabel("summary", meta.summary_model)}
       </span>
+      {need !== null && (
+        <span
+          className={cn(
+            "text-xs",
+            need.exceedsFree
+              ? "text-[color:var(--red-text)]"
+              : "text-[color:var(--text-muted)]",
+          )}
+        >
+          {need.bytes === 0
+            ? "모델 모두 받음"
+            : `받을 모델 약 ${formatBytes(need.bytes)}`}
+          {need.exceedsFree &&
+            freeBytes !== null &&
+            ` · 남은 용량(${formatBytes(freeBytes)})보다 커요`}
+        </span>
+      )}
     </button>
   );
 }
@@ -117,6 +143,7 @@ export function ProcessingSettingsForm() {
   const settings = useProcessingSettings();
   const capabilities = useCapabilities();
   const update = useUpdateProcessingSettings();
+  const models = useModels();
 
   const [form, setForm] = React.useState<FormState | null>(null);
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
@@ -234,6 +261,12 @@ export function ProcessingSettingsForm() {
             checked={form.preset === name}
             recommended={caps?.recommended_preset === name}
             disabled={presetsDisabled}
+            need={
+              models.data
+                ? presetDownloadNeed(models.data, PRESET_META[name])
+                : null
+            }
+            freeBytes={models.data?.freeBytes ?? null}
             onSelect={() => selectPreset(name)}
           />
         ))}
@@ -365,8 +398,7 @@ export function ProcessingSettingsForm() {
       </div>
 
       <p className="text-xs text-[color:var(--text-faint)]">
-        새 모델을 처음 선택하면 첫 처리에서 모델 다운로드로 시간이 오래 걸릴 수
-        있어요.
+        모델은 처음 쓸 때 받아요. 아래 ‘모델’에서 미리 받아 둘 수 있어요.
       </p>
 
       {!isSttLanguage(form.language) && (

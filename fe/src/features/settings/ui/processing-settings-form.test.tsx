@@ -142,14 +142,6 @@ test("capabilities 로딩 전에는 프리셋 카드가 비활성이다 (보수�
   expect((standard as HTMLButtonElement).disabled).toBe(true);
 });
 
-test("프리셋 카드에 요약 모델을 보여준다", async () => {
-  mockApi();
-  renderForm();
-  expect(
-    await screen.findByText(/mlx-community\/Qwen3\.5-9B-8bit/),
-  ).toBeTruthy();
-});
-
 test("고급에서 요약 모델을 바꾸면 custom으로 전환된다", async () => {
   mockApi();
   renderForm();
@@ -222,4 +214,90 @@ test("카탈로그 밖 언어인 채로는 저장을 막고 이유를 알려준�
       .disabled,
   ).toBe(true);
   expect(screen.getByText(/목록에서 언어를 골라/)).toBeTruthy();
+});
+
+function mockApiWithModels(models: unknown[], freeBytes: number | null) {
+  vi.spyOn(apiClient, "get").mockImplementation(async (url) => {
+    if (url === "/settings/processing") return { data: CONFIG } as never;
+    if (url === "/system/capabilities") return { data: CAPS } as never;
+    if (url === "/models")
+      return {
+        data: {
+          scannedAt: "t",
+          totalBytes: 1,
+          pending: false,
+          models,
+          freeBytes,
+        },
+      } as never;
+    throw new Error(`unexpected GET ${url}`);
+  });
+}
+
+const M = (over: Record<string, unknown>) => ({
+  role: "stt",
+  name: "large-v3-turbo",
+  backend: "mlx",
+  repoId: "r",
+  inUseFor: [],
+  installed: "yes",
+  sizeBytes: 1,
+  approxBytes: null,
+  downloading: null,
+  deletable: false,
+  job: null,
+  ...over,
+});
+
+test("프리셋 카드는 요약 모델을 짧은 이름으로 보인다 (저장소 이름을 드러내지 않는다)", async () => {
+  mockApi();
+  renderForm();
+  const standard = await screen.findByRole("radio", { name: /표준/ });
+  expect(standard.textContent).toContain("요약 qwen3.5 9B");
+  expect(standard.textContent).not.toContain("mlx-community");
+});
+
+test("프리셋 카드는 받아야 할 용량과, 남은 용량보다 크면 그 사실을 보인다", async () => {
+  mockApiWithModels(
+    [
+      M({}),
+      M({
+        role: "summary",
+        name: "mlx-community/Qwen3.5-9B-8bit",
+        backend: null,
+      }),
+      M({
+        name: "large-v3",
+        installed: "no",
+        sizeBytes: null,
+        approxBytes: 3_083_522_487,
+      }),
+      M({
+        role: "summary",
+        name: "mlx-community/Qwen3.5-27B-8bit",
+        backend: null,
+        installed: "no",
+        sizeBytes: null,
+        approxBytes: 29_528_168_817,
+      }),
+    ],
+    15_000_000_000,
+  );
+  renderForm();
+  const quality = await screen.findByRole("radio", { name: /고품질/ });
+  await waitFor(() =>
+    expect(quality.textContent).toContain("받을 모델 약 32.6 GB"),
+  );
+  expect(quality.textContent).toContain("남은 용량(15.0 GB)보다 커요");
+  const standard = screen.getByRole("radio", { name: /표준/ });
+  expect(standard.textContent).toContain("모델 모두 받음");
+});
+
+test("다운로드 안내는 아래 모델 섹션에서 미리 받을 수 있다고 말한다", async () => {
+  mockApi();
+  renderForm();
+  await screen.findByRole("radio", { name: /표준/ });
+  expect(
+    screen.getByText(/아래 ‘모델’에서 미리 받아 둘 수 있어요/),
+  ).toBeTruthy();
 });
