@@ -1,11 +1,12 @@
 import { Card } from "@/shared/ui/card";
 import { useCapabilities } from "@/features/settings/api/settings";
 import { ProcessingSettingsForm } from "@/features/settings/ui/processing-settings-form";
+import { GeneralSettingsSection } from "@/features/settings/ui/general-settings-section";
 import { HfTokenSettingsSection } from "@/features/hf-token/ui/hf-token-settings-section";
 import { ModelsCard } from "@/features/models/ui/models-card";
 
 /**
- * /settings — 처리 설정. 섹션 셋(처리 방식 · 모델 · 허깅페이스 토큰)은 같은 틀을 쓴다: 카드 한 장,
+ * /settings — 처리 설정. 섹션 넷(일반 · 처리 방식 · 모델 · 허깅페이스 토큰)은 같은 틀을 쓴다: 카드 한 장,
  * `h2` 제목(`text-h2`), 한 줄 설명. 내 머신은 프리셋을 고르는 근거라 처리 방식 섹션 안의 한 줄이다.
  */
 export function SettingsPage() {
@@ -21,6 +22,8 @@ export function SettingsPage() {
             회의를 처리하는 방식과 거기에 쓰는 모델을 관리해요.
           </p>
         </header>
+
+        <GeneralSettingsSection />
 
         <section aria-labelledby="settings-processing">
           <Card className="flex flex-col gap-5">
