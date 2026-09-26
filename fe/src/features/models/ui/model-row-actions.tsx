@@ -116,7 +116,7 @@ export function ModelRowActions({
 
   return (
     <div className="flex flex-col items-end gap-1">
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-20 items-center justify-end gap-2">
         {(action.kind === "download" || action.kind === "redownload") && (
           <>
             {exceedsFreeSpace(row, freeBytes) && freeBytes !== null && (

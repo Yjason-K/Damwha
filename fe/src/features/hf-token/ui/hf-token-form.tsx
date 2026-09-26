@@ -120,8 +120,8 @@ export function HfTokenForm({
         </p>
       ) : null}
       <p className="text-xs text-[color:var(--text-muted)]">
-        확인을 누르면 huggingface.co에 토큰이 맞는지 물어본 뒤, 이 맥의
-        키체인으로 암호화해 보관해요.
+        보낸 토큰은 huggingface.co에 맞는지 물어본 뒤, 이 맥의 키체인으로
+        암호화해 보관해요.
       </p>
     </form>
   );

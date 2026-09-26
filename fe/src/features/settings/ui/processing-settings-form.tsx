@@ -66,6 +66,18 @@ function fromConfig(c: ProcessingConfig): FormState {
   };
 }
 
+/** 저장된 값과 폼이 같은가 — 저장 버튼을 켤지, "저장하지 않은 변경"을 알릴지 정한다. */
+function sameForm(a: FormState, b: FormState): boolean {
+  return (
+    a.preset === b.preset &&
+    a.language === b.language &&
+    a.whisper_model === b.whisper_model &&
+    a.devices.diarization === b.devices.diarization &&
+    a.devices.stt === b.devices.stt &&
+    a.summary_model === b.summary_model
+  );
+}
+
 function PresetRadio({
   name,
   checked,
@@ -150,12 +162,15 @@ export function ProcessingSettingsForm() {
   const models = useModels();
 
   const [form, setForm] = React.useState<FormState | null>(null);
+  // 서버가 확인해 준 마지막 값 — 폼과 비교해 변경 여부를 판단한다.
+  const [saved, setSaved] = React.useState<FormState | null>(null);
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
 
   // 서버 값이 처음 도착하면 폼을 초기화 (렌더 중 조정 패턴 — effect 불필요).
   // 이후 로컬 편집을 보존하고, 저장 성공 시 mutation 응답으로 재동기화한다.
   if (form === null && settings.data) {
     setForm(fromConfig(settings.data));
+    setSaved(fromConfig(settings.data));
   }
 
   if (settings.isLoading || form === null) {
@@ -173,6 +188,7 @@ export function ProcessingSettingsForm() {
     );
   }
 
+  const dirty = saved === null || !sameForm(form, saved);
   const caps = capabilities.data;
   // 보수적 기본값(리뷰 #3): 조회 전/실패 시 GPU 불허 — 로딩 중엔 GPU 관련
   // 컨트롤(프리셋 카드 + GPU 스위치)을 잠시 비활성화한다.
@@ -225,6 +241,7 @@ export function ProcessingSettingsForm() {
     update.mutate(body, {
       onSuccess: (resolved) => {
         setForm(fromConfig(resolved));
+        setSaved(fromConfig(resolved));
         toast({ variant: "success", title: "처리 설정을 저장했어요." });
       },
       onError: (error) => {
@@ -296,7 +313,7 @@ export function ProcessingSettingsForm() {
           <div className="flex flex-col gap-4 rounded-md border border-[color:var(--border-subtle)] p-4">
             <div className="flex flex-col gap-1.5">
               <span className="text-sm font-medium text-[color:var(--text-secondary)]">
-                전사(Whisper) 모델
+                전사 모델
               </span>
               <Select
                 value={form.whisper_model}
@@ -319,7 +336,7 @@ export function ProcessingSettingsForm() {
 
             <div className="flex flex-col gap-1.5">
               <span className="text-sm font-medium text-[color:var(--text-secondary)]">
-                요약(LLM) 모델
+                요약 모델
               </span>
               <Select
                 value={form.summary_model}
@@ -412,14 +429,19 @@ export function ProcessingSettingsForm() {
         </p>
       )}
 
-      <div>
+      <div className="flex items-center gap-3">
         <Button
           onClick={handleSave}
           loading={update.isPending}
-          disabled={update.isPending || !isSttLanguage(form.language)}
+          disabled={update.isPending || !dirty || !isSttLanguage(form.language)}
         >
           저장
         </Button>
+        {dirty && !update.isPending && (
+          <span className="text-sm text-[color:var(--text-muted)]">
+            저장하지 않은 변경이 있어요
+          </span>
+        )}
       </div>
     </div>
   );

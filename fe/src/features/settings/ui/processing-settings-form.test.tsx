@@ -26,6 +26,15 @@ const CONFIG: ProcessingConfig = {
   summary_model: "mlx-community/Qwen3.5-9B-8bit",
 };
 
+const PRESET_LIGHT_RESOLVED: ProcessingConfig = {
+  preset: "light",
+  preset_revision: "2026-08-12.3",
+  language: "ko",
+  whisper_model: "small",
+  devices: { diarization: "gpu", stt: "cpu" },
+  summary_model: "mlx-community/Qwen3.5-4B-8bit",
+};
+
 const CAPS: Capabilities = {
   platform: "darwin",
   arch: "arm64",
@@ -311,4 +320,41 @@ test("프리셋 카드는 전사·요약 모델을 보이고, 장치는 GPU가 �
   expect(standard.textContent).not.toContain("GPU");
   const light = screen.getByRole("radio", { name: /가볍게/ });
   expect(light.textContent).toContain("전사는 CPU로 처리해요");
+});
+
+test("바뀐 것이 없으면 저장이 꺼져 있고, 바꾸면 켜지며 저장하지 않은 변경을 알린다", async () => {
+  mockApi();
+  const put = vi
+    .spyOn(apiClient, "put")
+    .mockResolvedValue({ data: PRESET_LIGHT_RESOLVED } as never);
+  renderForm();
+  const save = () =>
+    screen.getByRole("button", { name: "저장" }) as HTMLButtonElement;
+  await screen.findByRole("radio", { name: /표준/ });
+  expect(save().disabled).toBe(true);
+  expect(screen.queryByText("저장하지 않은 변경이 있어요")).toBeNull();
+
+  fireEvent.click(screen.getByRole("radio", { name: /가볍게/ }));
+  expect(save().disabled).toBe(false);
+  expect(screen.getByText("저장하지 않은 변경이 있어요")).toBeTruthy();
+
+  // 원래 프리셋으로 되돌리면 다시 변경 없음
+  fireEvent.click(screen.getByRole("radio", { name: /표준/ }));
+  expect(save().disabled).toBe(true);
+
+  fireEvent.click(screen.getByRole("radio", { name: /가볍게/ }));
+  fireEvent.click(save());
+  await waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(save().disabled).toBe(true));
+  expect(screen.queryByText("저장하지 않은 변경이 있어요")).toBeNull();
+});
+
+test("고급 설정의 모델 라벨은 화면 용어만 쓴다", async () => {
+  mockApi();
+  renderForm();
+  await screen.findByRole("radio", { name: /표준/ });
+  fireEvent.click(screen.getByRole("button", { name: /고급 설정/ }));
+  expect(screen.getByText("전사 모델")).toBeTruthy();
+  expect(screen.getByText("요약 모델")).toBeTruthy();
+  expect(screen.queryByText(/Whisper|LLM/)).toBeNull();
 });

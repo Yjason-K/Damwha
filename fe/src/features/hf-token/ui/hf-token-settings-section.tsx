@@ -30,6 +30,18 @@ export function HfTokenSettingsSection({
   const live = useHfToken();
   const view = fixedView ?? live;
   const [confirming, setConfirming] = React.useState(false);
+  // 토큰이 있으면 입력 폼은 접어 둔다 — "토큰 바꾸기"로 펼친다. 펼친 순간의 메시지는 지난 일(예: 지난번
+  // "토큰을 저장했어요")이라 폼에 넘기지 않고, 그 뒤에 온 메시지(바꾸는 중의 오류)만 보인다.
+  const [replacing, setReplacing] = React.useState<{
+    staleMessage: unknown;
+  } | null>(null);
+  const masked = view.kind === "ready" ? view.state.masked : null;
+  const [prevMasked, setPrevMasked] = React.useState(masked);
+  if (masked !== prevMasked) {
+    // 새 토큰으로 바뀌었다 — 바꾸기가 끝났으니 다시 접는다(렌더 중 보정, effect 없이).
+    setPrevMasked(masked);
+    if (replacing !== null) setReplacing(null);
+  }
 
   if (view.kind === "web") return null;
 
@@ -66,25 +78,49 @@ export function HfTokenSettingsSection({
                     </span>
                   ) : null}
                 </span>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => setConfirming(true)}
-                >
-                  토큰 지우기
-                </Button>
+                <span className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() =>
+                      setReplacing(
+                        replacing === null
+                          ? { staleMessage: view.state.message }
+                          : null,
+                      )
+                    }
+                  >
+                    {replacing === null ? "토큰 바꾸기" : "취소"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setConfirming(true)}
+                  >
+                    토큰 지우기
+                  </Button>
+                </span>
               </div>
             ) : view.state.status === "unreadable" ? (
               <p className="text-sm text-[color:var(--amber-text)]">
                 토큰을 읽을 수 없어요 — 다시 입력해 주세요.
               </p>
             ) : null}
-            <HfTokenForm
-              state={view.state}
-              send={send}
-              submitLabel={view.state.status === "present" ? "바꾸기" : "확인"}
-            />
+            {view.state.status !== "present" ? (
+              <HfTokenForm state={view.state} send={send} submitLabel="확인" />
+            ) : replacing !== null ? (
+              <HfTokenForm
+                state={
+                  view.state.message === replacing.staleMessage
+                    ? { ...view.state, message: null }
+                    : view.state
+                }
+                send={send}
+                submitLabel="바꾸기"
+              />
+            ) : null}
             <Dialog open={confirming} onOpenChange={setConfirming}>
               <DialogContent>
                 <DialogHeader>

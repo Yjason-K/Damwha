@@ -191,11 +191,12 @@ test("삭제는 확인을 거친다", async () => {
   await waitFor(() => expect(post).toHaveBeenCalledWith("/models/delete", { role: "summary", name: "mlx-community/Qwen3.5-27B-8bit" }));
 });
 
-test("사용 중인 모델은 삭제 버튼 없이 이유만", async () => {
+test("사용 중인 모델은 삭제 버튼 없이 '사용 중' 배지만 — 같은 뜻의 사유를 겹쳐 적지 않는다", async () => {
   renderCard({ ...VIEW, freeBytes: null });
   const list = await screen.findByRole("region", { name: "받아 둔 모델" });
   expect(within(list).queryByRole("button", { name: /large-v3-turbo 삭제/ })).toBeNull();
-  expect(within(list).getAllByText("지금 설정에서 쓰고 있어요").length).toBeGreaterThan(0);
+  expect(within(list).getAllByText("사용 중").length).toBeGreaterThan(0);
+  expect(within(list).queryByText("지금 설정에서 쓰고 있어요")).toBeNull();
 });
 
 test("실패한 받기는 코드별 문구, 취소는 표시 없음", async () => {

@@ -29,7 +29,8 @@ describe("rowAction", () => {
   });
 
   test("사용 중이라 못 지우면 이유를 준다, 고정 모델은 이유 없음", () => {
-    expect(rowAction(row({ installed: "yes", deletable: false, inUseFor: ["stt"] })).reason).toBe("지금 설정에서 쓰고 있어요");
+    // 설정에서 쓰는 모델은 행의 "사용 중" 배지가 이미 말한다 — 같은 뜻의 사유를 한 번 더 적지 않는다.
+    expect(rowAction(row({ installed: "yes", deletable: false, inUseFor: ["stt"] })).reason).toBeNull();
     expect(rowAction(row({ installed: "yes", deletable: false, inUseFor: [] })).reason).toBe("처리 중인 작업이 쓰고 있어요");
     expect(rowAction(row({ installed: "yes", deletable: false, role: "search_embedding", backend: null, inUseFor: ["fixed"] })).reason).toBeNull();
   });

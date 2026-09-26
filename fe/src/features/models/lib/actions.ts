@@ -15,11 +15,10 @@ export function rowAction(r: ModelRow): { kind: RowActionKind; reason: string | 
   if (r.installed === "partial") return { kind: "redownload", reason: null };
   if (r.installed !== "yes") return { kind: null, reason: null };
   if (r.deletable) return { kind: "delete", reason: null };
-  if (r.inUseFor.includes("fixed")) return { kind: null, reason: null };
-  return {
-    kind: null,
-    reason: r.inUseFor.length > 0 ? "지금 설정에서 쓰고 있어요" : "처리 중인 작업이 쓰고 있어요",
-  };
+  // 설정에서 쓰는 모델(과 고정 모델)은 행의 배지가 이미 이유를 말한다 — 사유를 겹쳐 적지 않는다.
+  // 배지로는 알 수 없는 경우(처리 중인 작업이 쓰는 모델)만 흐린 사유를 붙인다.
+  if (r.inUseFor.length > 0) return { kind: null, reason: null };
+  return { kind: null, reason: "처리 중인 작업이 쓰고 있어요" };
 }
 
 export function jobErrorText(r: ModelRow): { text: string; accept: boolean } | null {
