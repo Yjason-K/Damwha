@@ -120,6 +120,25 @@ describe("language-bridge", () => {
     expect(page.asking).toBe(1); // 고리는 계속 돈다
   });
 
+  it("onChange 실패 → current는 새 값, 새 값을 show한다, 되돌렸다고는 안 한다, 고리는 계속 돈다", async () => {
+    const page = fakePage();
+    const { b, saved, logs } = make(page, {
+      onChange: () => {
+        throw new Error("MENU_FAIL");
+      },
+    });
+    b.attach(page.win);
+    await flush();
+    page.pick("en");
+    await flush();
+    expect(saved).toEqual(["en"]);
+    expect(b.current()).toBe("en");
+    expect(page.shown).toEqual(["ko", "en"]);
+    expect(logs.join("\n")).toMatch(/MENU_FAIL|Error/);
+    expect(logs.join("\n")).not.toMatch(/되돌렸어요/);
+    expect(page.asking).toBe(1); // 고리는 계속 돈다
+  });
+
   it("모르는 값은 버리고 계속 묻는다", async () => {
     const page = fakePage();
     const { b, saved } = make(page);

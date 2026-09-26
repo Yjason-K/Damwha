@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useTranslation } from "react-i18next";
-import { SUMMARY_LANGUAGES } from "@damwha/contracts";
+import { isSummaryLanguage, SUMMARY_LANGUAGES } from "@damwha/contracts";
 
 import { isDemoBlocked } from "@/shared/api/demo-read-only";
 import { isApiError } from "@/shared/api/client";
@@ -494,9 +494,9 @@ export function ProcessingSettingsForm() {
         <Select
           value={form.summary_language}
           // 프리셋과 무관한 값 — setKnob(custom 전환)을 쓰지 않는다 (다국어 스펙 §5.1).
-          onValueChange={(v) =>
-            setForm({ ...form, summary_language: v as SummaryLanguage })
-          }
+          onValueChange={(v) => {
+            if (isSummaryLanguage(v)) setForm({ ...form, summary_language: v });
+          }}
         >
           <SelectTrigger aria-label={t("processing.summaryLanguage.label")}>
             <SelectValue />

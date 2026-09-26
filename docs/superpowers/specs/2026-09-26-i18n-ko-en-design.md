@@ -145,7 +145,8 @@ localStorage에 쓴다. localStorage 접근은 try/catch로 감싼다. desktop �
   react-i18next의 타입 확장(`CustomTypeOptions`)으로 `t('meeting.title')`의 키도 타입 검사한다.
 - 네임스페이스는 feature 단위(`meeting`, `lens`, `speaker`, `settings`, `models`, `hfToken`, `demo`,
   `common`, `errors`). 한 파일이 900줄이 되지 않게 locale 폴더 안에서 namespace별 파일로 나눈다.
-- 복수형은 i18next plural(`_one`/`_other`). 한국어는 `_other`만 둔다.
+- 복수형은 i18next plural(`_one`/`_other`). 한국어도 `_one`·`_other`를 **둘 다** 두고 같은 문장을 넣는다 —
+  `LocaleShape` 검사가 `en`과 같은 모양을 요구해서다(한국어는 수사에 복수형이 없어 값만 같을 뿐이다).
 - 날짜·숫자는 `Intl`에 현재 언어를 넘기는 `shared/i18n/format.ts` 한 곳을 거친다(현재 `Intl`/`toLocale`
   사용처는 1곳).
 - `<html lang>`은 언어가 바뀔 때마다 갱신한다(`fe/index.html`의 고정 `lang="ko"`는 초기값으로만 남는다).
@@ -258,7 +259,8 @@ env를 덮지 않으므로 `be/.env`에 값이 있어도 desktop이 넣은 값�
 
 ### 5.5 FE
 
-처리 설정 폼(`processing-settings-form.tsx`)에 "요약 언어" 셀렉트(`녹취 언어 따름` / `한국어` / `English`).
+처리 설정 폼(`processing-settings-form.tsx`)에 "요약 언어" 셀렉트 — 화면 언어별로 자기 언어로 적는다
+(ko: `녹취 언어 따름` / `한국어` / `영어`, en: `Same as the recording` / `Korean` / `English`).
 아래에 한 줄: "이미 만든 요약은 바뀌지 않아요. 다음 처리나 '다시 만들기'부터 적용돼요."
 프리셋 선택과 무관하게 항상 보인다. `PUT` 본문에 항상 싣는다.
 

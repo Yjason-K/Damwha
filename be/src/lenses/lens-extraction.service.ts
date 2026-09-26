@@ -34,6 +34,8 @@ export class LensExtractionService {
       }
 
       const active = await this.extractions.findActiveRun(exec, meeting.id, meeting.processing_version);
+      // 진행 중 추출이 다른 언어로 큐잉됐어도 그것을 돌려준다 — lens_extraction_run에 언어 열이
+      // 없다. 끝난 뒤 다시 요청하면 새 언어로 만든다.
       if (active) return this.response(active);
 
       const run = await this.extractions.createQueuedRun(exec, {

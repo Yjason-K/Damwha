@@ -9,9 +9,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { apiClient } from "@/shared/api/client";
-// 전역 i18next 인스턴스를 만드는 부수효과 — 앱에서는 main.tsx가 먼저 임포트해 두지만,
-// 이 컴포넌트만 단독 렌더하는 테스트에서는 아무도 만들지 않아 t()가 키 문자열을 그대로 낸다.
-import "@/shared/i18n";
 import type { Capabilities, ProcessingConfig } from "../api/types";
 import { ProcessingSettingsForm } from "./processing-settings-form";
 

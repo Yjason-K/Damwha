@@ -313,9 +313,18 @@ function withAppOwned(env: ApiEnv): ApiEnv {
  * Keychain에서 읽은 HF 토큰, 기기 언어로 정한 요약 언어 기본값 — 은 **env에만** 얹는다.
  *
  * 기준선에 들어가면 안 되는 이유: 재적용(refreshEnv)은 "기준선에 있는데 파일에 없는 키"를 살아 있는
- * env에서 지운다. 세 키 다 config.json이 정할 수 없는 키라(APP_OWNED_KEYS) 파일에 절대 없으므로, 기준선에
- * 넣는 순간 첫 재시도가 그것을 지운다 — LLM 주소가 없으면 다음 worker가 ValidationError로 죽고, 토큰이 없으면
- * 조건 수락 모델을 받지 못한다. 기준선에도 파일에도 없는 키는 refreshEnv가 건드리지 않는다 — prepare()의
+ * env에서 지운다. LLM 주소와 HF 토큰은 config.json이 정할 수 없는 키라(APP_OWNED_KEYS) 파일에 절대
+ * 없으므로, 기준선에 넣는 순간 첫 재시도가 그것을 지운다 — LLM 주소가 없으면 다음 worker가
+ * ValidationError로 죽고, 토큰이 없으면 조건 수락 모델을 받지 못한다.
+ *
+ * 요약 언어 기본값은 다르다 — SUMMARY_LANGUAGE는 APP_OWNED_KEYS가 아니라 config.json이 실제로 정할 수
+ * 있는 키다(바로 아래 "사람이 적은 값이 이긴다"). 여기서 기준선에 넣지 않는 것은 그 값을 지키기 위해서가
+ * 아니라, 파일에 없던 키를 기준선에 몰래 추가하지 않기 위해서다(파일 내용의 정직한 사본이어야 한다).
+ * 그 대가는 디버깅 한정이다: 파일에 SUMMARY_LANGUAGE가 없어 이 기본값이 얹힌 채로 뜬 뒤, 사람이
+ * config.json에 그 키를 새로 적어도 재시도(refreshEnv)는 얹지 못한다(prepare()가 옮긴 값과 같은 자리 —
+ * 기준선과 실행 값이 이미 달라서다) — 앱을 다시 켜야 반영된다. 반대로 **이미 파일에 적어 뒀던** 값을
+ * 사람이 지우면, 재시도가 그 키를 기준선과 함께 살아 있는 env에서 지운다 — 다음 worker는 재시작 전까지
+ * SUMMARY_LANGUAGE 없이 뜬다. 기준선에도 파일에도 없는 키는 refreshEnv가 건드리지 않는다 — prepare()의
  * EMBED_SERVICE_URL과 같은 자리다.
  *
  * 토큰이 null이면 HF_TOKEN을 싣지 않는다 — 토큰 없이도 앱은 뜬다(2026-09-25 스펙 §5.1). 그때 worker는 화자

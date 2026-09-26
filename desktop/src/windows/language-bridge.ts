@@ -67,12 +67,20 @@ export function createLanguageBridge<W>(d: LanguageBridgeDeps<W>): LanguageBridg
         continue;
       }
       if (raw !== current()) {
+        // save 실패는 값 자체가 안 바뀐 것 — 이전 값으로 되돌렸다고 말해도 맞다.
+        // onChange 실패는 값은 이미 바뀌었고 메뉴 재구성만 못한 것 — 다른 원인, 다른 문구.
         try {
           d.save(raw);
           value = raw;
-          d.onChange(raw);
         } catch (e) {
           d.log(`화면 언어를 저장하지 못해 이전 값으로 되돌렸어요 (${nameOf(e)}).`);
+        }
+        if (value === raw) {
+          try {
+            d.onChange(raw);
+          } catch (e) {
+            d.log(`화면 언어는 바꿨지만 메뉴를 다시 만들지 못했어요 (${nameOf(e)}).`);
+          }
         }
       }
       push(win);
