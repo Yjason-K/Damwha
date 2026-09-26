@@ -311,7 +311,7 @@ def test_extract_routes_to_lens_client_only(conn, tmp_path):
     calls = []
 
     class Client:
-        def extract(self, *, model, utterances, meeting_date=None):
+        def extract(self, *, model, utterances, meeting_date=None, output_language="transcript"):
             calls.append(utterances)
             return [
                 LensCandidate(
@@ -363,7 +363,7 @@ def test_extract_terminal_llm_failure_after_version_advance_is_discarded(conn, t
     job = db.claim(conn, "w1")
 
     class Client:
-        def extract(self, *, model, utterances, meeting_date=None):
+        def extract(self, *, model, utterances, meeting_date=None, output_language="transcript"):
             conn.execute("UPDATE meeting SET processing_version=1 WHERE id=%s", (mid,))
             raise WorkerError("llm_invalid_response", "invalid", ErrorKind.PERMANENT)
 
@@ -678,7 +678,7 @@ def test_extract_lenses_runs_inside_llm_server_for_the_payload_model(conn, tmp_p
     spy = _SpyLlmServer()
 
     class Client:
-        def extract(self, *, model, utterances):
+        def extract(self, *, model, utterances, output_language="transcript"):
             assert spy.entered == 1 and spy.exited == 0  # LLM 호출 시점엔 서버가 살아 있다
             return []
 
@@ -720,7 +720,7 @@ def test_summarize_meeting_runs_inside_llm_server_for_the_payload_model(conn, tm
     spy = _SpyLlmServer()
 
     class Client:
-        def summarize(self, *, model, utterances):
+        def summarize(self, *, model, utterances, output_language="transcript"):
             assert spy.entered == 1 and spy.exited == 0
             return SummaryResponse()
 
@@ -775,7 +775,7 @@ def test_summarize_meeting_fails_fast_on_disk_full_swallowed_in_the_request_thre
     never = threading.Event()
 
     class Client:
-        def summarize(self, *, model, utterances, validate=None):
+        def summarize(self, *, model, utterances, validate=None, output_language="transcript"):
             never.wait(20)  # 삼켜진 요청 스레드처럼 응답 없이 계속 기다린다
             return SummaryResponse()
 
@@ -838,7 +838,7 @@ def test_extract_lenses_fails_fast_on_disk_full_swallowed_in_the_request_thread(
     never = threading.Event()
 
     class Client:
-        def extract(self, *, model, utterances, meeting_date=None):
+        def extract(self, *, model, utterances, meeting_date=None, output_language="transcript"):
             never.wait(20)  # 삼켜진 요청 스레드처럼 응답 없이 계속 기다린다
             return []
 
@@ -925,7 +925,7 @@ def test_summarize_meeting_arms_llm_abort_hook_while_the_server_runs(conn, tmp_p
     hooks = []
 
     class Client:
-        def summarize(self, *, model, utterances, validate=None):
+        def summarize(self, *, model, utterances, validate=None, output_language="transcript"):
             # LLM 호출 중엔 abort 훅이 걸려 있고, 부르면 워커가 띄운 서버를 내린다
             assert hooks and hooks[-1] is not None
             hooks[-1]()
@@ -953,7 +953,7 @@ def test_no_abort_hook_when_llm_server_is_not_worker_managed(conn, tmp_path):
     hooks = []
 
     class Client:
-        def summarize(self, *, model, utterances, validate=None):
+        def summarize(self, *, model, utterances, validate=None, output_language="transcript"):
             return SummaryResponse()
 
     handle_job(
@@ -986,7 +986,7 @@ def test_dispatch_wires_heartbeat_on_lost_to_llm_abort(conn, tmp_path):
     cm = HeartbeatSpy()
 
     class Client:
-        def summarize(self, *, model, utterances, validate=None):
+        def summarize(self, *, model, utterances, validate=None, output_language="transcript"):
             assert cm.hooks and cm.hooks[-1] is not None
             return SummaryResponse()
 

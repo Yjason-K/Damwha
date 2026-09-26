@@ -4,19 +4,20 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from .contracts import NonEmptyText, SummaryResponse, SummarySegmentCandidate
+from .contracts import NonEmptyText, SummaryLanguage, SummaryResponse, SummarySegmentCandidate
 from .errors import (
     LLM_INVALID_RESPONSE,
     LLM_REQUEST_FAILED,
     ErrorKind,
     WorkerError,
 )
+from .output_language import output_language_instruction
 
 # 모델은 utterance id가 아니라 1-based index로 경계를 지목한다. 4B급 로컬 모델은
 # "utt_5626" 같은 id 수백 개를 그대로 복사하다 프롬프트에 없는 id를 지어내곤 한다
 # (숫자 보간) — 작은 정수는 그 실패 모드가 없고 프롬프트도 짧아진다. 실제 id로의
 # 역매핑은 이 클라이언트가 한다.
-_SUMMARY_SYSTEM_PROMPT = (
+_SUMMARY_SYSTEM_PROMPT_BASE = (
     "You are given a meeting transcript. Each line is one utterance, formatted as "
     "`<index> <speaker>: <text>`, in chronological order. "
     "Return a JSON object with exactly two keys: topics and segments. topics is an "
@@ -27,9 +28,14 @@ _SUMMARY_SYSTEM_PROMPT = (
     "not overlap: each segment starts after the previous one ends, and no index "
     "appears in two segments. "
     "bullets are short sentences restating what was said in that segment. Do not "
-    "output timestamps. Do not speculate. Write topics, title, and bullets in the "
-    "language of the transcript."
+    "output timestamps. Do not speculate. "
 )
+
+
+def _summary_system_prompt(output_language: SummaryLanguage) -> str:
+    return _SUMMARY_SYSTEM_PROMPT_BASE + output_language_instruction(
+        "topics, title, and bullets", output_language
+    )
 
 
 class _LlmSegment(BaseModel):
@@ -129,10 +135,16 @@ class SummaryClient:
         self._timeout_seconds = timeout_seconds
         self._max_tokens = max_tokens
 
-    def summarize(self, *, model: str, utterances: list[dict[str, Any]]) -> SummaryResponse:
+    def summarize(
+        self,
+        *,
+        model: str,
+        utterances: list[dict[str, Any]],
+        output_language: SummaryLanguage,
+    ) -> SummaryResponse:
         ids = [u["id"] for u in utterances]
         messages: list[dict[str, str]] = [
-            {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
+            {"role": "system", "content": _summary_system_prompt(output_language)},
             {"role": "user", "content": _render_transcript(utterances)},
         ]
         content, finish_reason = self._request(model=model, messages=messages)

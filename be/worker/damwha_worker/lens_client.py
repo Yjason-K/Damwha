@@ -6,17 +6,18 @@ from typing import Annotated, Any, Literal
 import httpx
 from pydantic import BaseModel, BeforeValidator, ConfigDict, ValidationError
 
-from .contracts import LensCandidate, NonEmptyText, SpeakerId
+from .contracts import LensCandidate, NonEmptyText, SpeakerId, SummaryLanguage
 from .errors import (
     LLM_INVALID_RESPONSE,
     LLM_REQUEST_FAILED,
     ErrorKind,
     WorkerError,
 )
+from .output_language import output_language_instruction
 
 log = logging.getLogger("damwha_worker")
 
-_EXTRACTION_SYSTEM_PROMPT = (
+_EXTRACTION_SYSTEM_PROMPT_BASE = (
     "You are given a meeting transcript. The Speakers section lists one speaker per "
     "line as `<speaker_id> <name>`. After it, each transcript line is one utterance, "
     "formatted as `<index> <speaker name>: <text>`, in chronological order. "
@@ -30,8 +31,13 @@ _EXTRACTION_SYSTEM_PROMPT = (
     'states a relative deadline ("today", "next Thursday"), resolve it against '
     "the Meeting date line at the top of the transcript; if it cannot be resolved, "
     "use null. Do not "
-    "speculate or return duplicates. Write text in the language of the transcript."
+    "speculate or return duplicates. "
 )
+
+
+def _extraction_system_prompt(output_language: SummaryLanguage) -> str:
+    return _EXTRACTION_SYSTEM_PROMPT_BASE + output_language_instruction("text", output_language)
+
 
 # 프롬프트에 싣는 것은 인덱스, 화자, 발화문뿐이다. DB 행을 통째로
 # json.dumps 하던 예전 형식은 회의록 자체보다 스캐폴딩이 훨씬 컸다 — mtg_10(778
@@ -214,6 +220,7 @@ class LensClient:
         model: str,
         utterances: list[dict[str, Any]],
         meeting_date: date | None = None,
+        output_language: SummaryLanguage,
     ) -> list[LensCandidate]:
         ids = [u["id"] for u in utterances]
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
@@ -222,7 +229,7 @@ class LensClient:
             "messages": [
                 {
                     "role": "system",
-                    "content": _EXTRACTION_SYSTEM_PROMPT,
+                    "content": _extraction_system_prompt(output_language),
                 },
                 {"role": "user", "content": _render_prompt(utterances, meeting_date)},
             ],
