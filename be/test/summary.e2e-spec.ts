@@ -232,7 +232,8 @@ describe('요약 API', () => {
   it('body 없음 → 전역 설정의 summary_model로 큐잉된다', async () => {
     const meetingId = await seedMeeting({ status: 'done', processingVersion: 0 });
     await request(app.getHttpServer())
-      .put('/settings/processing').send({ preset: 'quality', language: 'ko' }).expect(200);
+      .put('/settings/processing')
+      .send({ preset: 'quality', language: 'ko', summary_language: 'transcript' }).expect(200);
 
     await request(app.getHttpServer())
       .post(`/meetings/${meetingId}/summary/generate`).expect(202);
@@ -250,7 +251,8 @@ describe('요약 API', () => {
   it('body override → 그 모델로 큐잉되고 전역 설정은 바뀌지 않는다', async () => {
     const meetingId = await seedMeeting({ status: 'done', processingVersion: 0 });
     await request(app.getHttpServer())
-      .put('/settings/processing').send({ preset: 'light', language: 'ko' }).expect(200);
+      .put('/settings/processing')
+      .send({ preset: 'light', language: 'ko', summary_language: 'transcript' }).expect(200);
 
     await request(app.getHttpServer())
       .post(`/meetings/${meetingId}/summary/generate`)

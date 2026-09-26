@@ -30,7 +30,7 @@ describe('job payload contract', () => {
     const p = buildProcessMeetingPayload({
       meetingId: 'mtg_1', audioKey: 'meetings/x/original.wav',
       processingVersion: 2, reprocess: true,
-      processing: resolvePreset('standard', 'ko'),
+      processing: resolvePreset('standard', 'ko', 'transcript'),
       followups: { lens: true, summary: true },
     });
     expect(p.schema_version).toBe(5);
@@ -48,7 +48,7 @@ describe('job payload contract', () => {
     const p = buildProcessMeetingPayload({
       meetingId: 'mtg_1', audioKey: 'meetings/x/original.wav',
       processingVersion: 0, reprocess: false,
-      processing: resolvePreset('standard', 'ko'),
+      processing: resolvePreset('standard', 'ko', 'transcript'),
       followups: { lens: true, summary: true },
       speakers: { min: 2, max: 5 },
     });
@@ -60,7 +60,7 @@ describe('job payload contract', () => {
     const base = {
       meetingId: 'mtg_1', audioKey: 'meetings/x/original.wav',
       processingVersion: 0, reprocess: false,
-      processing: resolvePreset('standard', 'ko'),
+      processing: resolvePreset('standard', 'ko', 'transcript'),
       followups: { lens: true, summary: true },
     };
     expect(buildProcessMeetingPayload(base).models.diarization)
@@ -88,7 +88,7 @@ describe('job payload contract', () => {
       audioKey: 'meetings/x/original.wav',
       processingVersion: 2,
       reprocess: true,
-      processing: resolvePreset('standard', 'ko'),
+      processing: resolvePreset('standard', 'ko', 'transcript'),
       followups: { lens: true, summary: true },
     });
     expect(p.schema_version).toBe(5);
@@ -101,7 +101,7 @@ describe('job payload contract', () => {
       audioKey: 'meetings/x/original.wav',
       processingVersion: 0,
       reprocess: false,
-      processing: resolvePreset('standard', 'ko'),
+      processing: resolvePreset('standard', 'ko', 'transcript'),
       followups: { lens: false, summary: false },
     });
     expect(p.followups).toEqual({ lens: false, summary: false });
@@ -219,7 +219,7 @@ describe('job payload contract', () => {
   it('rejects UUID, zero, and unicode-digit ids', () => {
     const base = buildProcessMeetingPayload({
       meetingId: 'mtg_1', audioKey: 'meetings/mtg_1/o.wav', processingVersion: 0, reprocess: false,
-      processing: resolvePreset('standard', 'ko'),
+      processing: resolvePreset('standard', 'ko', 'transcript'),
       followups: { lens: true, summary: true },
     });
     for (const bad of ['ca8e8f66-6e2b-4c4f-8d0b-7d432a7a6aca', 'mtg_0', 'mtg_1٢']) { // 마지막은 유니코드 숫자
@@ -230,7 +230,7 @@ describe('job payload contract', () => {
   it('builds a live_session payload whose process block is the v5 process_meeting payload', () => {
     const p = buildLiveSessionPayload({
       meetingId: 'mtg_7', audioKey: 'meetings/mtg_7/original.wav',
-      processing: resolvePreset('standard', 'ko'),
+      processing: resolvePreset('standard', 'ko', 'transcript'),
       followups: { lens: false, summary: true },
       speakers: { min: 2 },
     });
@@ -252,7 +252,7 @@ describe('job payload contract', () => {
     expect(
       buildLiveSessionPayload({
         meetingId: 'mtg_7', audioKey: 'meetings/mtg_7/live.wav',
-        processing: resolvePreset('standard', 'ko'),
+        processing: resolvePreset('standard', 'ko', 'transcript'),
         followups: { lens: true, summary: true },
       }).source,
     ).toBe('browser');
@@ -261,7 +261,7 @@ describe('job payload contract', () => {
   it('live_session accepts both mic and browser sources', () => {
     const base = buildLiveSessionPayload({
       meetingId: 'mtg_7', audioKey: 'meetings/mtg_7/original.wav',
-      processing: resolvePreset('standard', 'ko'),
+      processing: resolvePreset('standard', 'ko', 'transcript'),
       followups: { lens: true, summary: true },
     });
     expect(LiveSessionPayloadSchema.parse({ ...base, source: 'mic' }).source).toBe('mic');

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { SUMMARY_MODELS } from '../contracts/model-catalog';
+import { SUMMARY_LANGUAGES } from '@damwha/contracts';
 
 const EnvSchema = z.object({
   PORT: z.coerce.number().default(3000),
@@ -50,6 +51,11 @@ const EnvSchema = z.object({
   // 목록 밖 값이면 API가 시작에 실패한다 — 의도된 breaking change (spec §2).
   // 조용히 목록 안 값으로 강등하면 "고른 적 없는 모델로 요약"이 된다.
   SUMMARY_LLM_MODEL: z.enum(SUMMARY_MODELS).default('mlx-community/Qwen3.5-4B-8bit'),
+  // 요약·렌즈 출력 언어의 기본값(다국어 스펙 §3.2·§5.1). 저장된 처리 설정에 값이 없을 때만 쓴다.
+  // desktop이 API를 띄울 때 기기 언어(ko/en)를 넣는다 — 그래서 사람이 고르기 전에는 기기 언어를 따른다.
+  // desktop 없이 띄우면 transcript(녹취 언어 따름) — 이 설정이 생기기 전의 동작이다.
+  // 목록 밖 값이면 기동 실패(SUMMARY_LLM_MODEL과 같은 이유).
+  SUMMARY_LANGUAGE: z.enum(SUMMARY_LANGUAGES).default('transcript'),
   // 공개 데모 읽기 전용 스위치(설계 §3.6). 가드는 process.env를 직접 읽는다 — 여기는 문서화용.
   DEMO_READ_ONLY: z.enum(['true', 'false']).default('false'),
 });

@@ -325,7 +325,8 @@ describe('meetings', () => {
   });
 
   it('POST /meetings — payload가 v5이고 전역 설정(프리셋)을 따른다', async () => {
-    await request(srv()).put('/settings/processing').send({ preset: 'light', language: 'ko' });
+    await request(srv()).put('/settings/processing')
+      .send({ preset: 'light', language: 'ko', summary_language: 'transcript' });
     const res = await request(srv()).post('/meetings')
       .attach('audio', Buffer.from('a'), { filename: 'a.m4a', contentType: 'audio/mp4' });
     const job = await db.pool.query('SELECT payload FROM job WHERE id=$1', [res.body.current_job_id]);

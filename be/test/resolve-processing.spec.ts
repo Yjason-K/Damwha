@@ -1,7 +1,7 @@
 import { resolveProcessingConfig, ProcessingOverrideSchema } from '../src/settings/resolve-processing';
 import { resolvePreset } from '../src/settings/presets';
 
-const global_ = resolvePreset('standard', 'ko');
+const global_ = resolvePreset('standard', 'ko', 'en');
 
 describe('resolveProcessingConfig', () => {
   it('override 없음 → 전역 그대로', () => {
@@ -67,5 +67,16 @@ describe('resolveProcessingConfig', () => {
   it('스키마: 카탈로그 language 허용 (auto 포함)', () => {
     expect(ProcessingOverrideSchema.safeParse({ language: 'en' }).success).toBe(true);
     expect(ProcessingOverrideSchema.safeParse({ language: 'auto' }).success).toBe(true);
+  });
+
+  it('프리셋 override도 전역 summary_language를 이어받는다', () => {
+    expect(resolveProcessingConfig(global_, { preset: 'light' }, true).summary_language).toBe('en');
+  });
+  it('개별 노브 override도 전역 summary_language를 이어받는다', () => {
+    expect(resolveProcessingConfig(global_, { whisper_model: 'medium' }, true).summary_language).toBe('en');
+    expect(resolveProcessingConfig(global_, { preset: 'light', language: 'ja' }, true).summary_language).toBe('en');
+  });
+  it('override 스키마는 summary_language를 받지 않는다 — 회의별 요약 언어는 없다', () => {
+    expect(ProcessingOverrideSchema.safeParse({ summary_language: 'ko' }).success).toBe(false);
   });
 });

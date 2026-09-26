@@ -93,7 +93,7 @@ describe('system', () => {
     try {
       const res = await request(rosetta.getHttpServer())
         .put('/settings/processing')
-        .send({ preset: 'standard', language: 'ko' });
+        .send({ preset: 'standard', language: 'ko', summary_language: 'transcript' });
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/gpu is not available/);
     } finally {

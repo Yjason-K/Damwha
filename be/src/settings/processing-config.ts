@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { STT_LANGUAGES } from '@damwha/contracts';
+import { STT_LANGUAGES, SUMMARY_LANGUAGES } from '@damwha/contracts';
 import { DeviceSchema, WHISPER_MODELS } from '../contracts/job-payload.schema';
 import { SUMMARY_MODELS } from '../contracts/model-catalog';
 import { loadEnv } from '../config/env';
@@ -14,12 +14,17 @@ const log = new Logger('ProcessingConfig');
 // 전에 저장된 행과 env `STT_LANGUAGE`(자유값)를 400/파싱 실패로 만들지 않는다.
 const storedLanguageSchema = z.string().trim().min(1);
 const putLanguageSchema = z.enum(STT_LANGUAGES);
+// 요약 언어는 처음부터 카탈로그로 조인다 — language와 달리 조이기 전에 저장된 자유값이 없다.
+const summaryLanguageSchema = z.enum(SUMMARY_LANGUAGES);
 
 const devicesSchema = z.object({ diarization: DeviceSchema, stt: DeviceSchema }).strict();
-const namedPresetSchema = (language: z.ZodTypeAny) =>
+const namedPresetSchema = <L extends z.ZodTypeAny, S extends z.ZodTypeAny>(
+  language: L, summaryLanguage: S,
+) =>
   z.object({
     preset: z.enum(['light', 'standard', 'quality']),
     language,
+    summary_language: summaryLanguage,
   }).strict();
 
 // 읽기(저장값 파싱) — summary_model은 optional. 이 필드가 없던 시절에 저장된
@@ -31,12 +36,14 @@ export const StoredProcessingValueSchema = z.union([
     whisper_model: z.enum(WHISPER_MODELS),
     devices: devicesSchema,
     summary_model: z.enum(SUMMARY_MODELS).optional(),
+    // summary_language 부재 = "이 행이 쓰일 당시엔 이 설정이 없었다" → env (summary_model과 같은 규칙).
+    summary_language: summaryLanguageSchema.optional(),
   }).strict(),
-  namedPresetSchema(storedLanguageSchema),
+  namedPresetSchema(storedLanguageSchema, summaryLanguageSchema.optional()),
 ]);
 export type StoredProcessingValue = z.infer<typeof StoredProcessingValueSchema>;
 
-// 쓰기(PUT body) — custom은 전 필드 필수. 이름 프리셋은 이름+언어만(개별 노브 혼입 400).
+// 쓰기(PUT body) — custom은 전 필드 필수. 이름 프리셋은 이름+언어+요약 언어만(개별 노브 혼입 400).
 export const PutProcessingValueSchema = z.union([
   z.object({
     preset: z.literal('custom'),
@@ -44,8 +51,9 @@ export const PutProcessingValueSchema = z.union([
     whisper_model: z.enum(WHISPER_MODELS),
     devices: devicesSchema,
     summary_model: z.enum(SUMMARY_MODELS),
+    summary_language: summaryLanguageSchema,
   }).strict(),
-  namedPresetSchema(putLanguageSchema),
+  namedPresetSchema(putLanguageSchema, summaryLanguageSchema),
 ]);
 export type PutProcessingValue = z.infer<typeof PutProcessingValueSchema>;
 
@@ -58,10 +66,12 @@ export function envFallbackProcessingConfig(): ProcessingConfig {
     preset: 'custom', preset_revision: null, language: env.STT_LANGUAGE,
     whisper_model: env.WHISPER_MODEL, devices: { diarization: dev, stt: dev },
     summary_model: env.SUMMARY_LLM_MODEL,
+    summary_language: env.SUMMARY_LANGUAGE,
   };
 }
 
 export function resolveStoredValue(value: StoredProcessingValue): ProcessingConfig {
+  const summaryLanguage = value.summary_language ?? loadEnv().SUMMARY_LANGUAGE;
   if (value.preset === 'custom') {
     return {
       preset: 'custom', preset_revision: null, language: value.language,
@@ -69,7 +79,8 @@ export function resolveStoredValue(value: StoredProcessingValue): ProcessingConf
       // 필드 부재는 "이 행이 쓰일 당시엔 env가 진실이었다"는 뜻 (spec §2).
       // 저장된 값이 있으면 언제나 그 값이 진실이다.
       summary_model: value.summary_model ?? loadEnv().SUMMARY_LLM_MODEL,
+      summary_language: summaryLanguage,
     };
   }
-  return resolvePreset(value.preset, value.language);
+  return resolvePreset(value.preset, value.language, summaryLanguage);
 }
