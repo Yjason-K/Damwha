@@ -602,6 +602,23 @@ worker 부모가 **시작 시와 `--once` 자식이 끝날 때마다** 캐시 �
   `LENS_LLM_MODEL`이 아니라).
 - **2026-09-25 (D2 구현)** fe: 회의 처리가 받는 중이라 job이 없는 행은 취소 버튼을 그리지 않는다(취소 API는
   `download_model` job이 필요). "사용 조건 페이지 열기"는 기존 `HfFailureAction`을 쓴다.
+- **2026-09-26 (D2 최종 리뷰)** §5.1 `pending`: 삭제·미리 받기 최종 실패는 그 repo의 `model_readiness` key를
+  지운다(§7.3·§7.4) — 그러면 D1의 settling 규칙(readiness가 scannedAt보다 새로움)이 볼 신호가 없어져,
+  활성 job도 downloading도 없는 순간 `pending`이 바로 꺼진다. 끝난(done/failed) 모델 job의 `updated_at`이
+  마지막 inventory 스캔보다 새로우면(또는 inventory가 아직 없으면) `pending`도 참으로 본다.
+- **2026-09-26 (D2 최종 리뷰)** §7.5 청소 age는 고정 `HF_STALL_SECONDS`가 아니라 설정값
+  `settings.hf_stall_seconds`를 따르되, 0 같은 설정이 "받는 중인 파일까지 전부 지운다"가 되지 않도록
+  워커 상수를 바닥으로 둔다. 취소 뒤 다음 job이 안 돌면 청소가 자식 종료 시점에만 걸려 임시 파일이
+  그대로 남으므로, supervisor의 idle poll 경로에서도(2×stall마다 한 번으로 스로틀) 청소한다.
+- **2026-09-26 (D2 최종 리뷰)** §7.3 `delete_model`은 `on_failure`를 덮어쓰지 않아 TRANSIENT 실패가
+  기본 정책대로 재시도된다 — 계획 문서와 이전 구현 docstring의 "재시도 없음"과 반대다. 지금은 API가
+  이 job을 `max_attempts=1`로 넣어 실질적으로 재시도가 거의 안 일어나지만, 그건 job 설정이지 handler의
+  계약이 아니다. 삭제는 멱등(재시도마다 `model_job_refs` 재검사, 이미 지운 디렉터리는 다시 지워도 그만)
+  이라 재시도돼도 안전하다.
+- **2026-09-26 (D2 최종 리뷰)** §6.3 행 상태 문구가 `job`을 무시했다 — `downloading`이 없어도(예: CPU
+  백엔드는 진행률을 안 준다) queued/running `download_model`은 "받기 대기 중"/"받는 중", queued/running
+  `delete_model`은 "지우는 중"을 보인다. "모든 모델 보기"를 접어도 대기·진행 중인 job이 있는 행은
+  계속 보인다.
 
 ## 12. 리뷰 반영 (2026-09-25, 서브에이전트 2건 — 주요 주장은 코드로 재확인)
 
