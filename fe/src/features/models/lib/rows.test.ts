@@ -41,6 +41,32 @@ describe("statusText", () => {
   });
 });
 
+describe("statusText — 대기·진행 중인 모델 job", () => {
+  test.each([
+    [
+      row({ installed: "no", job: { id: "j1", type: "download_model", status: "queued", error: null } }),
+      "받기 대기 중",
+    ],
+    [
+      // CPU 백엔드는 진행률을 안 주기도 한다 — downloading이 null이어도 running이면 "받는 중".
+      row({ installed: "no", job: { id: "j1", type: "download_model", status: "running", error: null } }),
+      "받는 중",
+    ],
+    [row({ job: { id: "j1", type: "delete_model", status: "queued", error: null } }), "지우는 중"],
+    [row({ job: { id: "j1", type: "delete_model", status: "running", error: null } }), "지우는 중"],
+  ])("%#", (r, text) => {
+    expect(statusText(r)).toBe(text);
+  });
+
+  test("downloading이 있으면 job 문구보다 우선한다", () => {
+    const withJob = row({
+      downloading: { bytesDone: 4_100_000_000, bytesTotal: 9_800_000_000 },
+      job: { id: "j1", type: "download_model", status: "running", error: null },
+    });
+    expect(statusText(withJob)).toBe("받는 중 41% · 4.1 GB / 9.8 GB");
+  });
+});
+
 test("rowLabel — 다른 백엔드 전사 모델에 CPU용/GPU용", () => {
   expect(rowLabel(row({ name: "small", backend: "faster" }), "mlx")).toBe("small · CPU용");
   expect(rowLabel(row({ name: "small", backend: "mlx" }), "faster")).toBe("small · GPU용");
@@ -55,6 +81,19 @@ test("isVisibleByDefault — 사용 중·받음·일부·받는 중·고정만",
   expect(isVisibleByDefault(row({ installed: "partial" }))).toBe(true);
   expect(isVisibleByDefault(row({ installed: "no", downloading: { bytesDone: 1, bytesTotal: 2 } }))).toBe(true);
   expect(isVisibleByDefault(row({ installed: "unknown", role: "diarization", backend: null }))).toBe(true);
+});
+
+test("isVisibleByDefault — 대기·진행 중인 모델 job이 있으면 '모든 모델 보기'를 접어도 보인다", () => {
+  expect(
+    isVisibleByDefault(row({ installed: "no", job: { id: "j1", type: "download_model", status: "queued", error: null } })),
+  ).toBe(true);
+  expect(
+    isVisibleByDefault(row({ installed: "no", job: { id: "j1", type: "download_model", status: "running", error: null } })),
+  ).toBe(true);
+  // 끝난 job은 이 규칙 대상이 아니다(installed 상태로 판단).
+  expect(
+    isVisibleByDefault(row({ installed: "no", job: { id: "j1", type: "download_model", status: "done", error: null } })),
+  ).toBe(false);
 });
 
 test("currentSttBackend — 사용 중 전사 행의 백엔드", () => {
@@ -98,5 +137,14 @@ describe("summaryLines", () => {
   test("CPU 전사", () => {
     const cpu = row({ backend: "faster", inUseFor: ["stt"] });
     expect(summaryLines(view([cpu, ...FIXED]))[0].value).toBe("large-v3-turbo · CPU");
+  });
+
+  test("미리 받기가 대기·진행 중이면 '처음 회의를 처리할 때 받아요' 대신 job 문구를 쓴다", () => {
+    const queued = row({
+      ...sum9,
+      job: { id: "j1", type: "download_model", status: "queued", error: null },
+    });
+    const lines = summaryLines(view([stt, queued, lens4, ...FIXED]));
+    expect(lines.find((l) => l.label === "요약")?.status).toBe("받기 대기 중");
   });
 });
