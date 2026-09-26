@@ -10,7 +10,7 @@
  * The repos were separate then, so there was nowhere to put a shared type.
  * They are one workspace now, so the list lives here and both sides import it.
  *
- * Keep this package dependency-free and value-only. It is imported by a NestJS
+ * Keep this package dependency-free: values and pure helpers only. It is imported by a NestJS
  * CommonJS build and by a Vite ESM build, so anything runtime-specific in here
  * breaks one of them.
  */
@@ -79,3 +79,41 @@ export const DELETABLE_ROLES = ['stt', 'summary'] as const;
 /** 전사 백엔드 — `devices.stt`가 gpu면 mlx, cpu면 faster (worker `models/registry.py`). */
 export const STT_BACKENDS = ['mlx', 'faster'] as const;
 export type SttBackend = (typeof STT_BACKENDS)[number];
+
+/**
+ * 화면 언어 (다국어 스펙 2026-09-26 §3.1). FE와 desktop이 같은 규칙으로 기기 언어에서 고른다.
+ * desktop은 런타임 의존성이 없어 `desktop/src/i18n/locale.ts`에 사본을 두고, 그쪽 테스트가
+ * 이 함수와 같은 답을 내는지 확인한다 — 여기를 고치면 그쪽도 고친다.
+ */
+export const UI_LANGUAGES = ['ko', 'en'] as const;
+export type UiLanguage = (typeof UI_LANGUAGES)[number];
+
+/**
+ * 요약·렌즈 출력 언어 (스펙 §5). `transcript`는 녹취 언어를 따른다 — 이 설정이 생기기 전의 동작이고,
+ * 옛 job 버전은 이 값으로 읽힌다.
+ */
+export const SUMMARY_LANGUAGES = ['transcript', 'ko', 'en'] as const;
+export type SummaryLanguage = (typeof SUMMARY_LANGUAGES)[number];
+
+export function isUiLanguage(v: unknown): v is UiLanguage {
+  return (UI_LANGUAGES as readonly unknown[]).includes(v);
+}
+
+export function isSummaryLanguage(v: unknown): v is SummaryLanguage {
+  return (SUMMARY_LANGUAGES as readonly unknown[]).includes(v);
+}
+
+/**
+ * 선호 언어 목록(BCP 47, `navigator.languages`·`app.getPreferredSystemLanguages()`)에서 앞에서부터
+ * 처음 걸리는 ko/en. 없으면 en — 한국어도 영어도 아닌 사람에게는 영어가 더 읽힐 가능성이 높다.
+ * 접두 비교는 구분자까지 본다: `kok`(콘칸어)는 `ko`가 아니다.
+ */
+export function pickUiLanguage(locales: readonly string[]): UiLanguage {
+  for (const raw of locales) {
+    const tag = raw.trim().toLowerCase();
+    for (const lang of UI_LANGUAGES) {
+      if (tag === lang || tag.startsWith(`${lang}-`) || tag.startsWith(`${lang}_`)) return lang;
+    }
+  }
+  return 'en';
+}
