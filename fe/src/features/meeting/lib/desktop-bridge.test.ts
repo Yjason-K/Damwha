@@ -74,4 +74,11 @@ describe("installDesktopBridge", () => {
     expect(typeof w.__damwha_desktop!.hfToken!.show).toBe("function");
     expect(typeof w.__damwha_desktop!.hfToken!.next).toBe("function");
   });
+
+  it("uiLanguage 브리지를 건다 — main이 이 이름으로 부른다", () => {
+    const w = {} as Window;
+    installDesktopBridge(w);
+    expect(typeof w.__damwha_desktop?.uiLanguage.next).toBe("function");
+    expect(typeof w.__damwha_desktop?.uiLanguage.show).toBe("function");
+  });
 });

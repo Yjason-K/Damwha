@@ -1,11 +1,15 @@
 import { hasLiveCapture, stopActiveLiveCapture } from "./live-session";
 import { hfTokenStore, type HfTokenBridge } from "@/features/hf-token/lib/bridge-store";
+import { languageStore } from "@/shared/i18n";
+import type { UiLanguageBridge } from "@/shared/i18n/language-store";
 
 export interface DesktopBridge {
   isRecording(): boolean;
   stopLiveRecording(): Promise<{ stopped: boolean; reason?: string }>;
   /** HF 토큰 (스펙 2026-09-25 §4). main의 token-bridge.ts가 이 이름으로 부른다 — 이름을 바꾸면 조용히 끊긴다. */
   hfToken: HfTokenBridge;
+  /** 화면 언어 (다국어 스펙 §4.1). main의 language-bridge.ts가 이 이름으로 부른다 — 이름을 바꾸면 조용히 끊긴다. */
+  uiLanguage: UiLanguageBridge;
 }
 
 declare global {
@@ -39,5 +43,6 @@ export function installDesktopBridge(w: Window = window): void {
       }
     },
     hfToken: hfTokenStore.bridge,
+    uiLanguage: languageStore.bridge,
   };
 }
