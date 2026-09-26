@@ -59,7 +59,7 @@ def test_rejects_unknown_source_and_future_version():
     data["source"] = "system"
     with pytest.raises(ValidationError):
         parse_payload("live_session", data)
-    data = load("live_session.valid.json") | {"schema_version": 2}
+    data = load("live_session.valid.json") | {"schema_version": 3}
     with pytest.raises(UnsupportedPayloadVersion):
         parse_payload("live_session", data)
 

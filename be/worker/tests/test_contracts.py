@@ -34,7 +34,7 @@ def test_missing_schema_version_defaults_to_1():
 
 
 def test_rejects_future_schema_version():
-    data = load("process_meeting.valid.json") | {"schema_version": 6}
+    data = load("process_meeting.valid.json") | {"schema_version": 7}
     with pytest.raises(UnsupportedPayloadVersion):
         parse_payload("process_meeting", data)
 
