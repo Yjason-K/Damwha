@@ -30,7 +30,8 @@ NonEmptyString = Annotated[str, StringConstraints(strip_whitespace=True, min_len
 WhisperModel = Literal["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
 Device = Literal["cpu", "gpu"]
 
-# 요약·렌즈 출력 언어 (다국어 스펙 §5). transcript = 녹취 언어 따름 — 옛 버전 job은 이 값으로 읽는다.
+# 요약·렌즈 출력 언어 (다국어 스펙 §5). transcript = 녹취 언어 따름 —
+# 옛 버전 job은 이 값으로 읽는다.
 # 값의 진실원은 @damwha/contracts의 SUMMARY_LANGUAGES.
 SummaryLanguage = Literal["transcript", "ko", "en"]
 
@@ -419,7 +420,10 @@ class SummaryResponse(BaseModel):
 
 
 class LiveSessionPayloadWire(BaseModel):
-    """wire v1(process v5)·v2(process v6). process는 API가 완전히 해석한 process_meeting payload 그대로다."""
+    """wire v1(process v5)·v2(process v6).
+
+    process는 API가 완전히 해석한 process_meeting payload 그대로다.
+    """
 
     model_config = ConfigDict(extra="forbid")
 

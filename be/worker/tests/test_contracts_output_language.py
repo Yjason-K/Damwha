@@ -50,8 +50,10 @@ def test_v6_rejects_unknown_summary_language():
 
 
 def test_summarize_v1_is_transcript_and_v2_carries_language():
-    assert parse_payload("summarize_meeting", load("summarize-meeting-v1.json")).output_language == "transcript"
-    assert parse_payload("summarize_meeting", load("summarize-meeting-v2.json")).output_language == "ko"
+    v1 = parse_payload("summarize_meeting", load("summarize-meeting-v1.json"))
+    assert v1.output_language == "transcript"
+    v2 = parse_payload("summarize_meeting", load("summarize-meeting-v2.json"))
+    assert v2.output_language == "ko"
 
 
 def test_summarize_version_and_field_must_agree():
@@ -65,8 +67,10 @@ def test_summarize_version_and_field_must_agree():
 
 
 def test_extract_v1_is_transcript_and_v2_carries_language():
-    assert parse_payload("extract_lenses", load("extract_lenses.v1.valid.json")).output_language == "transcript"
-    assert parse_payload("extract_lenses", load("extract_lenses.v2.valid.json")).output_language == "en"
+    v1 = parse_payload("extract_lenses", load("extract_lenses.v1.valid.json"))
+    assert v1.output_language == "transcript"
+    v2 = parse_payload("extract_lenses", load("extract_lenses.v2.valid.json"))
+    assert v2.output_language == "en"
 
 
 def test_extract_version_and_field_must_agree():
