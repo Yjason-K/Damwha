@@ -1458,7 +1458,7 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
   // worker가 그대로 쓰게 되고, 그 서버의 모델도 수명도 앱이 모른다. 실제 bind는 job 직전이라 그 사이 다른
   // 프로세스가 포트를 가져갈 수 있고, 그때는 LLM 서버 기동 실패로 드러난다.
   // 토큰은 env에만 싣는다 — 재적용의 기준선에 들어가면 첫 재시도가 지운다 (config.ts의 launchEnv).
-  const { env, baseline } = launchEnv(cfg, await freePort(), hfToken);
+  const { env, baseline } = launchEnv(cfg, await freePort(), hfToken, pickUiLanguage(app.getPreferredSystemLanguages()));
 
   const ctx: Omit<LaunchContext, "signal"> = {
     repoRoot: resolved,

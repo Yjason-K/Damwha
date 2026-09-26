@@ -5,6 +5,7 @@ import { maskDatabaseUrl } from "./mask-db-url";
 import { CAUSES } from "../diagnostics/causes";
 import { embeddedDatabaseUrl, pgLayout } from "../services/postgres/layout";
 import type { LaunchContext } from "../services/types";
+import type { UiLanguage } from "../i18n/locale";
 
 /** 자식 API에 넣을 환경변수. 값은 항상 문자열이다. */
 export type ApiEnv = Record<string, string>;
@@ -309,10 +310,10 @@ function withAppOwned(env: ApiEnv): ApiEnv {
 
 /**
  * 감독자가 쥘 env와 그 재적용 기준선(baseline). 이 실행이 정한 값 — 빈 포트로 고른 LLM 주소, 기동 게이트가
- * Keychain에서 읽은 HF 토큰 — 은 **env에만** 얹는다.
+ * Keychain에서 읽은 HF 토큰, 기기 언어로 정한 요약 언어 기본값 — 은 **env에만** 얹는다.
  *
  * 기준선에 들어가면 안 되는 이유: 재적용(refreshEnv)은 "기준선에 있는데 파일에 없는 키"를 살아 있는
- * env에서 지운다. 두 키 다 config.json이 정할 수 없는 키라(APP_OWNED_KEYS) 파일에 절대 없으므로, 기준선에
+ * env에서 지운다. 세 키 다 config.json이 정할 수 없는 키라(APP_OWNED_KEYS) 파일에 절대 없으므로, 기준선에
  * 넣는 순간 첫 재시도가 그것을 지운다 — LLM 주소가 없으면 다음 worker가 ValidationError로 죽고, 토큰이 없으면
  * 조건 수락 모델을 받지 못한다. 기준선에도 파일에도 없는 키는 refreshEnv가 건드리지 않는다 — prepare()의
  * EMBED_SERVICE_URL과 같은 자리다.
@@ -324,9 +325,14 @@ export function launchEnv(
   cfg: LoadedConfig,
   llmPort: number,
   hfToken: string | null,
+  deviceLanguage: UiLanguage,
 ): { env: ApiEnv; baseline: ApiEnv } {
   const env: ApiEnv = { ...cfg.env, LENS_LLM_BASE_URL: llmBaseUrl(llmPort) };
   if (hfToken !== null) env.HF_TOKEN = hfToken;
+  // 요약 언어의 기기 기본값 (다국어 스펙 §5.4). 저장된 처리 설정에 요약 언어가 없을 때만 API가 쓴다 — 그래서
+  // 사람이 고르기 전에는 기기 언어를 따른다. 화면 언어의 저장값이 아니라 **OS 언어**다: 두 설정은 독립이다.
+  // config.json에 사람이 적은 값이 있으면 그것이 이긴다(디버깅). 기준선에는 넣지 않는다 — LLM 주소와 같은 자리.
+  if (env.SUMMARY_LANGUAGE === undefined) env.SUMMARY_LANGUAGE = deviceLanguage;
   return { env, baseline: withoutDbKeys(cfg.env) };
 }
 
