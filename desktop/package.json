@@ -17,6 +17,7 @@
     "lint": "tsc -p tsconfig.lint.json"
   },
   "devDependencies": {
+    "@damwha/contracts": "workspace:*",
     "@electron/asar": "^4.0.1",
     "@types/node": "^22.20.0",
     "electron": "44.3.0",
