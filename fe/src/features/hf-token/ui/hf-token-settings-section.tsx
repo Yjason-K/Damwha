@@ -34,77 +34,85 @@ export function HfTokenSettingsSection({
   if (view.kind === "web") return null;
 
   return (
-    <Card className="flex flex-col gap-3">
-      <div className="flex flex-col gap-1">
-        <span className="text-sm font-medium text-[color:var(--text-secondary)]">
-          허깅페이스 토큰
-        </span>
-        <span className="text-sm text-[color:var(--text-muted)]">
-          회의를 기록하고 처리하는 데 필요해요.
-        </span>
-      </div>
-      {view.kind === "pending" ? (
-        <span role="status" className="text-sm text-[color:var(--text-muted)]">
-          확인하는 중…
-        </span>
-      ) : (
-        <>
-          {view.state.status === "present" ? (
-            <div className="flex items-center justify-between gap-3">
-              <span className="flex flex-col">
-                <span className="font-mono text-sm">{view.state.masked}</span>
-                {view.state.account !== null ? (
-                  <span className="text-xs text-[color:var(--text-muted)]">
-                    계정 {view.state.account}
-                  </span>
-                ) : null}
-              </span>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => setConfirming(true)}
-              >
-                토큰 지우기
-              </Button>
-            </div>
-          ) : view.state.status === "unreadable" ? (
-            <p className="text-sm text-[color:var(--amber-text)]">
-              토큰을 읽을 수 없어요 — 다시 입력해 주세요.
-            </p>
-          ) : null}
-          <HfTokenForm
-            state={view.state}
-            send={send}
-            submitLabel={view.state.status === "present" ? "바꾸기" : "확인"}
-          />
-          <Dialog open={confirming} onOpenChange={setConfirming}>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>저장된 허깅페이스 토큰을 지울까요?</DialogTitle>
-                <DialogDescription>{CLEAR_DETAIL}</DialogDescription>
-              </DialogHeader>
-              <DialogFooter>
-                <DialogClose asChild>
-                  <Button type="button" variant="secondary">
-                    취소
-                  </Button>
-                </DialogClose>
+    <section aria-labelledby="settings-hf-token">
+      <Card className="flex flex-col gap-3">
+        <header className="flex flex-col gap-1">
+          <h2
+            id="settings-hf-token"
+            className="text-h2 font-semibold text-foreground"
+          >
+            허깅페이스 토큰
+          </h2>
+          <p className="text-sm text-[color:var(--text-muted)]">
+            회의를 기록하고 처리하는 데 필요해요.
+          </p>
+        </header>
+        {view.kind === "pending" ? (
+          <span
+            role="status"
+            className="text-sm text-[color:var(--text-muted)]"
+          >
+            확인하는 중…
+          </span>
+        ) : (
+          <>
+            {view.state.status === "present" ? (
+              <div className="flex items-center justify-between gap-3">
+                <span className="flex flex-col">
+                  <span className="font-mono text-sm">{view.state.masked}</span>
+                  {view.state.account !== null ? (
+                    <span className="text-xs text-[color:var(--text-muted)]">
+                      계정 {view.state.account}
+                    </span>
+                  ) : null}
+                </span>
                 <Button
                   type="button"
-                  variant="danger"
-                  onClick={() => {
-                    setConfirming(false);
-                    send({ kind: "clear" });
-                  }}
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setConfirming(true)}
                 >
-                  지우기
+                  토큰 지우기
                 </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        </>
-      )}
-    </Card>
+              </div>
+            ) : view.state.status === "unreadable" ? (
+              <p className="text-sm text-[color:var(--amber-text)]">
+                토큰을 읽을 수 없어요 — 다시 입력해 주세요.
+              </p>
+            ) : null}
+            <HfTokenForm
+              state={view.state}
+              send={send}
+              submitLabel={view.state.status === "present" ? "바꾸기" : "확인"}
+            />
+            <Dialog open={confirming} onOpenChange={setConfirming}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>저장된 허깅페이스 토큰을 지울까요?</DialogTitle>
+                  <DialogDescription>{CLEAR_DETAIL}</DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                  <DialogClose asChild>
+                    <Button type="button" variant="secondary">
+                      취소
+                    </Button>
+                  </DialogClose>
+                  <Button
+                    type="button"
+                    variant="danger"
+                    onClick={() => {
+                      setConfirming(false);
+                      send({ kind: "clear" });
+                    }}
+                  >
+                    지우기
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </>
+        )}
+      </Card>
+    </section>
   );
 }

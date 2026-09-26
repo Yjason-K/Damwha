@@ -47,7 +47,9 @@ test("absent and unreadable show the input; unavailable shows the keychain guida
   const { unmount } = render(
     <HfTokenSettingsSection view={ready(base)} send={vi.fn()} />,
   );
-  expect(screen.getByLabelText("허깅페이스 토큰")).toBeInTheDocument();
+  expect(
+    screen.getByLabelText("허깅페이스 토큰", { selector: "input" }),
+  ).toBeInTheDocument();
   unmount();
   const u = render(
     <HfTokenSettingsSection
@@ -63,6 +65,8 @@ test("absent and unreadable show the input; unavailable shows the keychain guida
       send={vi.fn()}
     />,
   );
-  expect(screen.queryByLabelText("허깅페이스 토큰")).toBeNull();
+  expect(
+    screen.queryByLabelText("허깅페이스 토큰", { selector: "input" }),
+  ).toBeNull();
   expect(screen.getByText(/키체인/)).toBeInTheDocument();
 });

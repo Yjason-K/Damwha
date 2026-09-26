@@ -11,7 +11,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-test("설정 페이지가 감지 스펙 카드와 처리 설정 폼을 렌더한다", async () => {
+test("설정 페이지는 같은 단계 제목의 섹션으로 나뉘고, 내 머신은 처리 방식 안에 있다", async () => {
   vi.spyOn(apiClient, "get").mockImplementation(async (url) => {
     if (url === "/system/capabilities")
       return {
@@ -49,8 +49,18 @@ test("설정 페이지가 감지 스펙 카드와 처리 설정 폼을 렌더한
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  expect(await screen.findByText("Apple M2 Pro")).toBeTruthy();
-  expect(screen.getByText(/메모리 32\s*GB/)).toBeTruthy();
+  expect(
+    screen.getByRole("heading", { level: 1, name: "처리 설정" }),
+  ).toBeTruthy();
+  // 섹션은 같은 단계의 제목을 가진다 — 내 머신은 처리 방식 섹션 안의 한 줄이다.
+  const processing = await screen.findByRole("heading", {
+    level: 2,
+    name: "처리 방식",
+  });
+  expect(
+    await screen.findByRole("heading", { level: 2, name: "모델" }),
+  ).toBeTruthy();
+  const section = processing.closest("section")!;
+  expect(section.textContent).toMatch(/Apple M2 Pro · 메모리 32\s*GB/);
   expect(await screen.findByRole("radio", { name: /표준/ })).toBeTruthy();
-  expect(await screen.findByRole("heading", { name: "모델" })).toBeTruthy();
 });

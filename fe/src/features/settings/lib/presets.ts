@@ -140,6 +140,21 @@ export function sttLanguageOptions(
 }
 
 /** 디바이스 요약 문자열 — 카드/고급 요약에 사용. */
+/**
+ * 프리셋 카드의 장치 안내 — GPU가 아닌 단계만 적는다. 세 프리셋 모두 화자 분리는 GPU라, 매 카드에
+ * "화자 분리 GPU · 전사 GPU"를 되풀이하면 다른 점(가볍게의 CPU 전사)이 묻히고 카드만 줄바꿈된다.
+ */
+export function cpuStagesNote(devices: {
+  diarization: Device;
+  stt: Device;
+}): string | null {
+  const cpu = [
+    devices.diarization === "cpu" ? "화자 분리" : null,
+    devices.stt === "cpu" ? "전사" : null,
+  ].filter((x) => x !== null);
+  return cpu.length === 0 ? null : `${cpu.join("·")}는 CPU로 처리해요`;
+}
+
 export function deviceSummary(devices: {
   diarization: Device;
   stt: Device;

@@ -301,3 +301,14 @@ test("다운로드 안내는 아래 모델 섹션에서 미리 받을 수 있다
     screen.getByText(/아래 ‘모델’에서 미리 받아 둘 수 있어요/),
   ).toBeTruthy();
 });
+
+test("프리셋 카드는 전사·요약 모델을 보이고, 장치는 GPU가 아닌 것만 적는다", async () => {
+  mockApi();
+  renderForm();
+  const standard = await screen.findByRole("radio", { name: /표준/ });
+  expect(standard.textContent).toContain("전사 large-v3-turbo");
+  expect(standard.textContent).toContain("요약 qwen3.5 9B");
+  expect(standard.textContent).not.toContain("GPU");
+  const light = screen.getByRole("radio", { name: /가볍게/ });
+  expect(light.textContent).toContain("전사는 CPU로 처리해요");
+});

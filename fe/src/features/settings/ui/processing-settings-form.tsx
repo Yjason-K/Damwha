@@ -31,7 +31,7 @@ import type {
   WhisperModel,
 } from "../api/types";
 import {
-  deviceSummary,
+  cpuStagesNote,
   isSttLanguage,
   modelShortLabel,
   PRESET_META,
@@ -85,6 +85,7 @@ function PresetRadio({
   onSelect: () => void;
 }) {
   const meta = PRESET_META[name];
+  const cpuNote = cpuStagesNote(meta.devices);
   return (
     <button
       type="button"
@@ -112,12 +113,15 @@ function PresetRadio({
       <span className="text-xs text-[color:var(--text-muted)]">
         {meta.desc}
       </span>
-      <span className="text-xs text-[color:var(--text-secondary)]">
-        {meta.whisper_model} · {deviceSummary(meta.devices)}
+      <span className="flex flex-col text-xs text-[color:var(--text-secondary)]">
+        <span>전사 {meta.whisper_model}</span>
+        <span>요약 {modelShortLabel("summary", meta.summary_model)}</span>
       </span>
-      <span className="text-xs text-[color:var(--text-muted)]">
-        요약 {modelShortLabel("summary", meta.summary_model)}
-      </span>
+      {cpuNote !== null && (
+        <span className="text-xs text-[color:var(--text-muted)]">
+          {cpuNote}
+        </span>
+      )}
       {need !== null && (
         <span
           className={cn(
