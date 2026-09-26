@@ -47,6 +47,10 @@ import {
 import { captureDescendants, stopWorkerProcess } from "./services/worker-shutdown";
 import { askIsRecording } from "./windows/recording-bridge";
 import { installMenu, type MenuHandlers } from "./windows/menu";
+import { makeUiLanguageStore } from "./config/ui-language-store";
+import { pickUiLanguage } from "./i18n/locale";
+import { createLanguageBridge } from "./windows/language-bridge";
+import { withUiLanguage } from "./windows/renderer-url";
 import {
   afterIo,
   confirmRestoreDialog,
@@ -276,7 +280,7 @@ function restoreAllowedNow(): boolean {
 
 function refreshMenu(): void {
   if (menuHandlers === null) return;
-  installMenu(menuHandlers, { restoreEnabled: restoreAllowedNow() });
+  installMenu(menuHandlers, { restoreEnabled: restoreAllowedNow(), language: languageBridge.current() });
 }
 
 /** 앱이 정한 API origin. 감독자의 런타임에서 읽는다 — 전역 변수를 따로 두면 갈린다. */
@@ -324,7 +328,10 @@ function createWindow(): BrowserWindow {
   // 첫 로드는 reattachWindow가 붙인다(그때는 아직 updateAttached가 서기 전이라 여기서는 건너뛴다).
   // 셸 화면(file://)으로 돌아간 창은 showShell이 updateAttached를 null로 내리므로 붙지 않는다.
   created.webContents.on("did-finish-load", () => {
-    if (updateAttached === created && !created.isDestroyed()) tokenBridge.attach(created);
+    if (updateAttached === created && !created.isDestroyed()) {
+      tokenBridge.attach(created);
+      languageBridge.attach(created);
+    }
   });
   return created;
 }
@@ -709,6 +716,20 @@ const statusWindow = createStatusWindow<BrowserWindow>({
 });
 
 /**
+ * 담화 화면의 화면 언어 (다국어 스펙 §4.1). 흐름은 windows/language-bridge.ts — 여기는 잎이다.
+ * 붙는 자리는 tokenBridge와 같은 둘이다(reattachWindow의 첫 부착, ⌘R 뒤 did-finish-load).
+ */
+const languageBridge = createLanguageBridge<BrowserWindow>({
+  run: (w, script) => w.webContents.executeJavaScript(script),
+  alive: (w) => !w.isDestroyed(),
+  initial: () =>
+    makeUiLanguageStore(app.getPath("userData")).read() ?? pickUiLanguage(app.getPreferredSystemLanguages()),
+  save: (lang) => makeUiLanguageStore(app.getPath("userData")).write(lang),
+  onChange: () => refreshMenu(),
+  log: appendSupervisorLog,
+});
+
+/**
  * 담화 화면의 HF 토큰 (스펙 2026-09-25 §4). 흐름은 windows/token-bridge.ts에 있다 — 여기는 잎이다.
  * 붙는 자리는 둘이다: 담화 화면이 처음 붙을 때(reattachWindow)와 ⌘R로 다시 로드될 때(createWindow의 did-finish-load).
  */
@@ -1067,13 +1088,14 @@ async function reattachWindow(mine: number): Promise<void> {
   // loadURL이 끝난 뒤에 올리면 그 사이에 들어온 상태 갱신이 방금 붙인 앱 화면을 준비
   // 화면으로 되돌린다. 붙이기 **전에** 올린다.
   attachedWindow = target;
-  await target.loadURL(renderer.url);
+  await target.loadURL(withUiLanguage(renderer.url, languageBridge.current()));
   // 새 버전 알림이 "붙었다"로 읽는 것은 여기서부터다 — loadURL이 성공했고, 그 사이 showShell이
   // 이 창을 준비 화면으로 되돌리지 않았을 때만 (Phase 6b-1 스펙 §3-6).
   if (attachedWindow === target) {
     updateAttached = target;
     updateScheduler?.onAttached();
     tokenBridge.attach(target);
+    languageBridge.attach(target);
   }
   // 붙기 전에 넘어진 서비스(번들 python이 없으면 worker는 몇 밀리초 만에 넘어진다)는 그때 실패 화면에
   // 잠깐 보였을 뿐, 이제 어떤 화면에도 없다. 감독자는 더 낼 상태가 없어 onStatus도 다시 돌지
