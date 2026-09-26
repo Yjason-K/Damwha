@@ -38,6 +38,19 @@ export function rowLabel(r: ModelRow, current: SttBackend | null): string {
   return base;
 }
 
+/**
+ * 아직 이 Mac에 없는 모델인가(받는 중·대기도 아님) — 그 상태 문구("약 3.1 GB")를 흐리게 그려, 받아 둔 모델의
+ * 용량("1.6 GB")과 한눈에 가른다. 받은 모델은 단어 없이 용량만 보이므로 이 구분이 둘을 나누는 유일한 표시다.
+ */
+export function awaitingDownload(r: ModelRow): boolean {
+  return r.installed === "no" && r.downloading === null && !hasActiveJob(r);
+}
+
+/**
+ * 행의 상태 문구. 받아 둔 모델은 단어 없이 **용량만** 보인다 — "받음" 같은 상태어를 매 줄 되풀이하지 않고,
+ * 단어는 예외 상태(일부만 받음·받는 중·대기·지우는 중·확인 중)에만 남긴다. 안 받은 모델은 받기 전 추정치라
+ * "약 X"이고(크기를 모르면 "안 받음"), 화면이 `awaitingDownload`로 흐리게 그린다.
+ */
 export function statusText(r: ModelRow): string {
   if (r.downloading) {
     const { bytesDone, bytesTotal } = r.downloading;
@@ -53,11 +66,11 @@ export function statusText(r: ModelRow): string {
   }
   switch (r.installed) {
     case "yes":
-      return `받음 · ${formatBytes(r.sizeBytes ?? 0)}`;
+      return formatBytes(r.sizeBytes ?? 0);
     case "partial":
       return `일부만 받음 · ${formatBytes(r.sizeBytes ?? 0)}`;
     case "no":
-      return r.approxBytes ? `안 받음 · 약 ${formatBytes(r.approxBytes)}` : "안 받음";
+      return r.approxBytes ? `약 ${formatBytes(r.approxBytes)}` : "안 받음";
     default:
       return "확인 중";
   }
@@ -90,14 +103,14 @@ export interface SummaryLine {
   row?: ModelRow;
 }
 
-/** 요약 줄의 상태 — 안 받은 사용 중 모델은 "처음 회의를 처리할 때 받아요"를 덧붙인다. */
+/** 요약 줄의 상태 — 안 받은 모델은 "처음 쓸 때 받아요"를 덧붙인다(옆에 "미리 받기"가 붙는다). */
 function inUseStatus(r: ModelRow): string {
-  // (D2 최종 리뷰) 이미 받기 job이 대기·진행 중이면 "처음 회의를 처리할 때 받아요"가 아니라
-  // statusText의 job 문구("받기 대기 중"/"받는 중")를 그대로 보인다 — 안 그러면 이미 받고
-  // 있다는 사실을 감추고 아직 시작 안 한 것처럼 읽힌다.
-  if (r.installed === "no" && !r.downloading && !hasActiveJob(r)) {
-    const approx = r.approxBytes ? ` (약 ${formatBytes(r.approxBytes)})` : "";
-    return `안 받음 · 처음 회의를 처리할 때 받아요${approx}`;
+  // (D2 최종 리뷰) 이미 받기 job이 대기·진행 중이면 statusText의 job 문구("받기 대기 중"/"받는 중")를
+  // 그대로 보인다 — 안 그러면 이미 받고 있다는 사실을 감추고 아직 시작 안 한 것처럼 읽힌다.
+  if (awaitingDownload(r)) {
+    return r.approxBytes
+      ? `약 ${formatBytes(r.approxBytes)} · 처음 쓸 때 받아요`
+      : "안 받음 · 처음 쓸 때 받아요";
   }
   return statusText(r);
 }
@@ -182,8 +195,11 @@ export function summaryLines(view: ModelsView, pick?: ModelPick): SummaryLine[] 
       value: fixed.map((r) => FIXED_SHORT[r.role] ?? ROLE_TITLES[r.role]).join(" · "),
       status:
         missing.length === 0
-          ? `모두 받음 · ${formatBytes(fixed.reduce((s, r) => s + (r.sizeBytes ?? 0), 0))}`
-          : missing.map((r) => `${ROLE_TITLES[r.role]} ${statusText(r)}`).join(" · "),
+          ? formatBytes(fixed.reduce((s, r) => s + (r.sizeBytes ?? 0), 0))
+          : // 빠진 것만 풀어 쓴다 — 여기서는 "약 89 MB"만으로는 무엇이 빠졌는지 안 읽히므로 "안 받음"을 적는다.
+            missing
+              .map((r) => `${ROLE_TITLES[r.role]} ${awaitingDownload(r) ? "안 받음" : statusText(r)}`)
+              .join(" · "),
     });
   }
   return [...head, ...rest];

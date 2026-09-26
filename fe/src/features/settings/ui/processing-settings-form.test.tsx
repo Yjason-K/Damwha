@@ -307,7 +307,7 @@ test("프리셋 카드는 받아야 할 용량과, 남은 용량보다 크면 �
   );
   expect(quality.textContent).toContain("남은 용량(15.0 GB)보다 커요");
   const standard = screen.getByRole("radio", { name: /표준/ });
-  expect(standard.textContent).toContain("모델 모두 받음");
+  expect(standard.textContent).toContain("받을 모델 없음");
 });
 
 test("다운로드 안내는 아래 모델 섹션에서 미리 받을 수 있다고 말한다", async () => {

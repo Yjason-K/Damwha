@@ -31,9 +31,9 @@ describe("statusText", () => {
   test.each([
     [row({ downloading: { bytesDone: 4_100_000_000, bytesTotal: 9_800_000_000 } }), "받는 중 41% · 4.1 GB / 9.8 GB"], // 41.8% → 내림
     [row({ downloading: { bytesDone: 5, bytesTotal: 0 } }), "받는 중"],
-    [row({}), "받음 · 1.6 GB"],
+    [row({}), "1.6 GB"],
     [row({ installed: "partial", sizeBytes: 1_100_000_000 }), "일부만 받음 · 1.1 GB"],
-    [row({ installed: "no", sizeBytes: null, approxBytes: 3_083_522_487 }), "안 받음 · 약 3.1 GB"],
+    [row({ installed: "no", sizeBytes: null, approxBytes: 3_083_522_487 }), "약 3.1 GB"],
     [row({ installed: "no", sizeBytes: null, approxBytes: null }), "안 받음"],
     [row({ installed: "unknown", sizeBytes: null }), "확인 중"],
   ])("%#", (r, text) => {
@@ -116,9 +116,9 @@ describe("summaryLines — 고르는 중인 값(pick)으로", () => {
       summary_model: "mlx-community/Qwen3.5-27B-8bit",
     });
     expect(lines).toMatchObject([
-      { label: "전사", value: "large-v3 · GPU", status: "안 받음 · 처음 회의를 처리할 때 받아요 (약 3.1 GB)", row: v3 },
+      { label: "전사", value: "large-v3 · GPU", status: "약 3.1 GB · 처음 쓸 때 받아요", row: v3 },
       { label: "요약", value: "qwen3.5 27B", row: q27 },
-      { label: "렌즈 추출", value: "qwen3.5 4B", status: "받음 · 5.2 GB" },
+      { label: "렌즈 추출", value: "qwen3.5 4B", status: "5.2 GB" },
       { label: "기본" },
     ]);
   });
@@ -138,7 +138,7 @@ describe("summaryLines — 고르는 중인 값(pick)으로", () => {
       devices: { stt: "cpu" },
       summary_model: "mlx-community/Qwen3.5-4B-8bit",
     });
-    expect(lines[0]).toMatchObject({ label: "전사", value: "small · CPU", status: "안 받음 · 처음 회의를 처리할 때 받아요" });
+    expect(lines[0]).toMatchObject({ label: "전사", value: "small · CPU", status: "안 받음 · 처음 쓸 때 받아요" });
     expect(lines[0].row).toMatchObject({ role: "stt", name: "small", backend: "faster", installed: "no" });
   });
 });
@@ -150,10 +150,10 @@ describe("summaryLines", () => {
 
   test("전사·요약·렌즈 추출·기본 — 안 받은 줄은 처음 처리 때 받는다고 말한다", () => {
     expect(summaryLines(view([stt, sum9, lens4, ...FIXED]))).toMatchObject([
-      { label: "전사", value: "large-v3-turbo · GPU", status: "받음 · 1.6 GB" },
-      { label: "요약", value: "qwen3.5 9B", status: "안 받음 · 처음 회의를 처리할 때 받아요 (약 10.5 GB)" },
-      { label: "렌즈 추출", value: "qwen3.5 4B", status: "받음 · 5.2 GB" },
-      { label: "기본", value: "화자 분리 · 화자 식별 · 검색 임베딩", status: "모두 받음 · 2.4 GB" },
+      { label: "전사", value: "large-v3-turbo · GPU", status: "1.6 GB" },
+      { label: "요약", value: "qwen3.5 9B", status: "약 10.5 GB · 처음 쓸 때 받아요" },
+      { label: "렌즈 추출", value: "qwen3.5 4B", status: "5.2 GB" },
+      { label: "기본", value: "화자 분리 · 화자 식별 · 검색 임베딩", status: "2.4 GB" },
     ]);
   });
 

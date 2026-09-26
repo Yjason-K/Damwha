@@ -193,7 +193,7 @@ function PresetRadio({
           )}
         >
           {need.bytes === 0
-            ? "모델 모두 받음"
+            ? "받을 모델 없음"
             : `받을 모델 약 ${formatBytes(need.bytes)}`}
           {need.exceedsFree &&
             freeBytes !== null &&

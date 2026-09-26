@@ -88,7 +88,7 @@ test("고른 값으로 쓰는 모델과 받음 상태를 보인다 — 렌즈 �
   expect(within(box).getByText("large-v3-turbo · GPU")).toBeTruthy();
   expect(within(box).getByText("qwen3.5 27B")).toBeTruthy();
   expect(within(box).getByText("렌즈 추출")).toBeTruthy();
-  expect(within(box).getByText(/모두 받음/)).toBeTruthy();
+  expect(within(box).getByText("32.8 MB")).toBeTruthy();
 });
 
 test("안 받은 고른 모델에 미리 받기 — 목록에 없던 CPU 전사도 논리 키로 받는다", async () => {

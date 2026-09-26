@@ -110,7 +110,7 @@ test("목록은 기본으로 사용 중·받은 것만, 펼치면 나머지", as
   expect(within(list).getAllByText("사용 중").length).toBeGreaterThan(0);
   fireEvent.click(screen.getByRole("button", { name: "모든 모델 보기" }));
   expect(within(list).getByText("large-v3")).toBeTruthy();
-  expect(within(list).getByText("안 받음 · 약 3.1 GB")).toBeTruthy();
+  expect(within(list).getByText("약 3.1 GB")).toBeTruthy();
   expect(screen.getByRole("button", { name: "접기" })).toBeTruthy();
 });
 

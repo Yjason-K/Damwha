@@ -1,6 +1,7 @@
 import { useModels } from "../api/models";
 import { rowAction } from "../lib/actions";
 import {
+  awaitingDownload,
   currentSttBackend,
   rowLabel,
   summaryLines,
@@ -37,7 +38,13 @@ export function ModelsInUse({ pick }: { pick: ModelPick }) {
               <dd className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-foreground">
                 <span>{l.value}</span>
                 <span className="flex flex-wrap items-center gap-2">
-                  <span className="text-[color:var(--text-secondary)]">
+                  <span
+                    className={
+                      l.row && awaitingDownload(l.row)
+                        ? "text-[color:var(--text-muted)]"
+                        : "text-[color:var(--text-secondary)]"
+                    }
+                  >
                     {l.status}
                   </span>
                   {canDownloadNow && l.row && (

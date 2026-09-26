@@ -7,6 +7,7 @@ import type { ModelRow } from "../api/types";
 import { formatBytes } from "../lib/format";
 import {
   ROLE_TITLES,
+  awaitingDownload,
   currentSttBackend,
   isVisibleByDefault,
   rowLabel,
@@ -132,7 +133,13 @@ function ModelList({
                     )}
                   </span>
                   <span className="flex items-center gap-3">
-                    <span className="text-[color:var(--text-secondary)]">
+                    <span
+                      className={
+                        awaitingDownload(m)
+                          ? "text-[color:var(--text-muted)]"
+                          : "text-[color:var(--text-secondary)]"
+                      }
+                    >
                       {statusText(m)}
                     </span>
                     <ModelRowActions
