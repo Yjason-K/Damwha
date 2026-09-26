@@ -1,7 +1,7 @@
 # 다국어(한국어·영어) 설계
 
 **작성일:** 2026-09-26
-**상태:** 설계 초안 — codex 리뷰(gpt-5.6-terra) 반영, 사용자 리뷰 대기
+**상태:** 설계 초안 — codex 리뷰(gpt-5.6-terra) 반영, 사용자 리뷰 대기. 구현 계획(§9) 1·2단계(기반, 요약 언어)는 구현 완료.
 **범위:** 화면 언어(FE·desktop)와 요약 언어(BE·worker) — 언어 결정 규칙, 저장, desktop↔FE 전달,
 job 계약, 문구 이전, 번역, 테스트, 작업 순서
 
@@ -69,6 +69,10 @@ export function pickUiLanguage(locales: readonly string[]): UiLanguage;
 매칭은 대소문자 무시, 접두 비교다: `ko`, `ko-KR`, `ko_KR` → `ko`; `en-US`, `en-GB` → `en`.
 `['ja-JP', 'en-US']` → `en`(두 번째에서 걸림), `['ja-JP']` → `en`(기본값), `[]` → `en`.
 
+desktop은 contracts를 런타임에 import하지 않는다 — `desktop/src/i18n/locale.ts`의 사본과 대조 테스트
+(`desktop/tests/i18n/locale.test.ts`). 이유: desktop에는 런타임 dependencies가 없고 asar에는 컴파일된
+main만 들어간다.
+
 ### 3.2 "기기 언어를 따르다가, 고르면 고정"
 
 두 설정 모두 **저장값 부재 = 기기 언어를 따른다**, **저장값 존재 = 그 값**이다. 첫 실행에 값을 저장하지
@@ -130,8 +134,9 @@ import하지 않고 잎을 주입받는 같은 나눔). 규칙:
 
 ### 4.2 브라우저 단독
 
-`?lang` → localStorage `damwha.uiLanguage` → `pickUiLanguage(navigator.languages)` 순. 설정에서 고르면
-localStorage에 쓴다. localStorage 접근은 try/catch로 감싼다.
+`?lang` → localStorage `damwha:ui-language` → `pickUiLanguage(navigator.languages)` 순. 설정에서 고르면
+localStorage에 쓴다. localStorage 접근은 try/catch로 감싼다. desktop 안의 FE는 main이 준 값(show)도 이
+키에 캐시한다 — ⌘R로 `?lang` 없는 URL이 다시 떠도 같은 언어로 뜨게.
 
 ### 4.3 FE 인프라
 
@@ -239,12 +244,17 @@ main 쪽 문구는 복수형이 거의 없어 i18next를 들이지 않는다. `d
 (증거 ID가 입력 범위 안인지만 본다), 그래서 출력 언어가 녹취와 달라도 검증에서 떨어지지 않는다. 요약도
 같다 — `topics`·`title`·`bullets`가 서술이고 `start_index`·`end_index`는 인덱스다.
 
+- 실측 대기 (2026-09-26): 요약 모델별 영어·한국어 지시 준수는 앱에서 직접 확인한다 — 구현 계획 Task 18
+  Step 2의 절차.
+
 ### 5.4 desktop의 기기 기본값
 
-`services/api-process.ts`의 `apiChildEnv`가 `SUMMARY_LANGUAGE=<pickUiLanguage(app.getPreferredSystemLanguages())>`를
+`config/config.ts`의 `launchEnv`가 `SUMMARY_LANGUAGE=<pickUiLanguage(app.getPreferredSystemLanguages())>`를
 얹는다. 화면 언어의 저장값이 아니라 **OS 언어**다 — 두 설정은 독립이다(화면은 한국어, 요약은 기기 언어인 영어,
 가 가능해야 한다). dev 런처(`launchDev`)도 같은 함수를 쓰므로 desktop dev에서도 같다. dotenv는 이미 있는
-env를 덮지 않으므로 `be/.env`에 값이 있어도 desktop이 넣은 값이 이긴다 — 의도한 동작이다.
+env를 덮지 않으므로 `be/.env`에 값이 있어도 desktop이 넣은 값이 이긴다 — 의도한 동작이다. `apiChildEnv`가
+아니라 `launchEnv`인 이유: 이 실행이 정한 값을 얹는 자리라 기준선(baseline) 밖에 두어 재적용이 지우지
+않고, config.json에 사람이 적은 값이 있으면 그것이 이긴다.
 
 ### 5.5 FE
 
@@ -340,7 +350,7 @@ PUT 필수화 때문에 폼 한 곳이 아니라 이 사슬 전체가 바뀐다 
   - 처리 설정: 부재 → env, env 부재 → `transcript`, PUT 필수.
   - 변이로 검증한다 — 복사 한 줄, 변환 기본값 하나를 바꿨을 때 테스트가 실패하는지 확인한다.
 - **desktop.** `pickUiLanguage` 표 테스트, 언어 저장소(없음·깨짐·범위 밖·정상), 브리지 흐름(next → 저장 →
-  메뉴 → show → 재질문, 저장 실패 시 이전 값 show, ⌘R 재부착), `apiChildEnv`가 `SUMMARY_LANGUAGE`를 싣는가.
+  메뉴 → show → 재질문, 저장 실패 시 이전 값 show, ⌘R 재부착), `launchEnv`가 `SUMMARY_LANGUAGE`를 싣는가.
   `pnpm --filter damwha-desktop exec vitest`로 돌린다(`pnpm desktop exec`는 0개 실행·exit 0).
 - **수동.** 영어 OS 계정(또는 `defaults write kr.damwha.app AppleLanguages '("en-US")'`)으로 패키징 앱을 첫
   실행해 메뉴·상태 창·담화 화면·요약이 모두 영어인지, 설정에서 한국어로 바꾸면 메뉴까지 바뀌는지 본다.
@@ -383,3 +393,5 @@ PUT 필수화 때문에 폼 한 곳이 아니라 이 사슬 전체가 바뀐다 
 | 6 | P2 | 회의별 override 해석이 필드를 떨어뜨릴 수 있다 | §5.1 |
 | 7 | P2 | 계약 픽스처·v5 단정 테스트의 이전 범위 누락 | §8 |
 | 8 | P3 | token-bridge를 그대로 쓸 수 없다 — 별도 language-bridge, 세대 표시, `new URL()` | §4.1 |
+
+구현 계획 `docs/superpowers/plans/2026-09-26-i18n-ko-en-foundation.md`가 위 세 가지를 바꿨다.
