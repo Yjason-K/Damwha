@@ -33,7 +33,7 @@ describe('job payload contract', () => {
       processing: resolvePreset('standard', 'ko', 'transcript'),
       followups: { lens: true, summary: true },
     });
-    expect(p.schema_version).toBe(5);
+    expect(p.schema_version).toBe(6);
     expect(p.identify).toEqual({ threshold: 0.8, suggest_threshold: 0.6 });
     expect(p.followups).toEqual({ lens: true, summary: true });
     expect(p.models.whisper_model).toBe('large-v3-turbo');
@@ -41,6 +41,7 @@ describe('job payload contract', () => {
     expect(p.models.preset).toBe('standard');
     expect(p.models.embedding.dimension).toBe(192);
     expect(p.models.summary_model).toBe('mlx-community/Qwen3.5-9B-8bit');
+    expect(p.models.summary_language).toBe('transcript');
     expect(() => ProcessMeetingPayloadSchema.parse(p)).not.toThrow();
   });
 
@@ -82,7 +83,7 @@ describe('job payload contract', () => {
     expect(p.embedding.dimension).toBe(192);
   });
 
-  it('stamps schema_version=5 on process_meeting payload', () => {
+  it('stamps schema_version=6 on process_meeting payload', () => {
     const p = buildProcessMeetingPayload({
       meetingId: 'mtg_1',
       audioKey: 'meetings/x/original.wav',
@@ -91,7 +92,7 @@ describe('job payload contract', () => {
       processing: resolvePreset('standard', 'ko', 'transcript'),
       followups: { lens: true, summary: true },
     });
-    expect(p.schema_version).toBe(5);
+    expect(p.schema_version).toBe(6);
     expect(() => ProcessMeetingPayloadSchema.parse(p)).not.toThrow();
   });
 
@@ -106,6 +107,42 @@ describe('job payload contract', () => {
     });
     expect(p.followups).toEqual({ lens: false, summary: false });
     expect(() => ProcessMeetingPayloadSchema.parse(p)).not.toThrow();
+  });
+
+  it('처리 설정의 summary_language를 models에 싣는다', () => {
+    const p = buildProcessMeetingPayload({
+      meetingId: 'mtg_1', audioKey: 'meetings/x/original.wav',
+      processingVersion: 0, reprocess: false,
+      processing: resolvePreset('standard', 'ko', 'en'),
+      followups: { lens: true, summary: true },
+    });
+    expect(p.models.summary_language).toBe('en');
+  });
+
+  it('summarize/extract 빌더는 v2와 output_language를 싣는다', () => {
+    const s = buildSummarizeMeetingPayload({ meetingId: 'mtg_1', processingVersion: 0, model: 'm', outputLanguage: 'ko' });
+    expect(s).toEqual({ schema_version: 2, meeting_id: 'mtg_1', processing_version: 0, model: 'm', output_language: 'ko' });
+    expect(() => SummarizeMeetingPayloadSchema.parse(s)).not.toThrow();
+    const e = buildExtractLensesPayload({ meetingId: 'mtg_1', processingVersion: 0, extractionRunId: 'ler_1', model: 'm', outputLanguage: 'en' });
+    expect(e.schema_version).toBe(2);
+    // e/l의 선언 반환 타입은 v1|v2 판별 합집합이라 narrowing 없이는 v2 전용 필드에
+    // 접근할 수 없다 (contract-fixtures.spec.ts와 같은 패턴).
+    if (e.schema_version === 2) expect(e.output_language).toBe('en');
+    expect(() => ExtractLensesPayloadSchema.parse(e)).not.toThrow();
+  });
+
+  it('live_session 빌더는 v2이고 process는 v6이다', () => {
+    const l = buildLiveSessionPayload({
+      meetingId: 'mtg_1', audioKey: 'meetings/x/original.wav',
+      processing: resolvePreset('standard', 'ko', 'ko'),
+      followups: { lens: true, summary: true },
+    });
+    expect(l.schema_version).toBe(2);
+    if (l.schema_version === 2) {
+      expect(l.process.schema_version).toBe(6);
+      if (l.process.schema_version === 6) expect(l.process.models.summary_language).toBe('ko');
+    }
+    expect(() => LiveSessionPayloadSchema.parse(l)).not.toThrow();
   });
 
   it('defaults missing schema_version to 1', () => {
@@ -173,13 +210,15 @@ describe('job payload contract', () => {
       processingVersion: 0,
       extractionRunId: 'ler_1',
       model: 'qwen2.5:14b-instruct',
+      outputLanguage: 'transcript',
     });
     expect(payload).toEqual({
-      schema_version: 1,
+      schema_version: 2,
       meeting_id: 'mtg_1',
       processing_version: 0,
       extraction_run_id: 'ler_1',
       model: 'qwen2.5:14b-instruct',
+      output_language: 'transcript',
     });
   });
 
@@ -188,12 +227,14 @@ describe('job payload contract', () => {
       meetingId: 'mtg_1',
       processingVersion: 0,
       model: 'mlx-community/Qwen3.5-4B-8bit',
+      outputLanguage: 'transcript',
     });
     expect(payload).toEqual({
-      schema_version: 1,
+      schema_version: 2,
       meeting_id: 'mtg_1',
       processing_version: 0,
       model: 'mlx-community/Qwen3.5-4B-8bit',
+      output_language: 'transcript',
     });
     expect(() => SummarizeMeetingPayloadSchema.parse(payload)).not.toThrow();
   });
@@ -227,7 +268,7 @@ describe('job payload contract', () => {
     }
   });
 
-  it('builds a live_session payload whose process block is the v5 process_meeting payload', () => {
+  it('builds a live_session payload whose process block is the v6 process_meeting payload', () => {
     const p = buildLiveSessionPayload({
       meetingId: 'mtg_7', audioKey: 'meetings/mtg_7/original.wav',
       processing: resolvePreset('standard', 'ko', 'transcript'),
@@ -235,10 +276,10 @@ describe('job payload contract', () => {
       speakers: { min: 2 },
     });
     expect(p).toMatchObject({
-      schema_version: 1, meeting_id: 'mtg_7', audio_key: 'meetings/mtg_7/original.wav', source: 'browser',
+      schema_version: 2, meeting_id: 'mtg_7', audio_key: 'meetings/mtg_7/original.wav', source: 'browser',
     });
     expect(p.process).toMatchObject({
-      schema_version: 5, meeting_id: 'mtg_7', audio_key: 'meetings/mtg_7/original.wav',
+      schema_version: 6, meeting_id: 'mtg_7', audio_key: 'meetings/mtg_7/original.wav',
       processing_version: 0, reprocess: false, followups: { lens: false, summary: true },
     });
     expect(p.process.models.diarization.min_speakers).toBe(2);

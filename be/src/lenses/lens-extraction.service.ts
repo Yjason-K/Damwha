@@ -3,6 +3,7 @@ import { buildExtractLensesPayload } from '../contracts/job-payload.schema';
 import { loadEnv } from '../config/env';
 import { DatabaseService } from '../database/database.service';
 import { JobsRepository } from '../jobs/jobs.repository';
+import { SettingsService } from '../settings/settings.service';
 import { LensExtractionRepository, LensExtractionRunRow } from './lens-extraction.repository';
 
 export interface LensExtractionRequest {
@@ -18,10 +19,13 @@ export class LensExtractionService {
     private readonly db: DatabaseService,
     private readonly jobs: JobsRepository,
     private readonly extractions: LensExtractionRepository,
+    private readonly settings: SettingsService,
   ) {}
 
   async request(meetingId: string): Promise<LensExtractionRequest> {
     const model = loadEnv().LENS_LLM_MODEL;
+    // 설정 로드는 트랜잭션 전에 (summary.service.ts와 같은 순서).
+    const outputLanguage = (await this.settings.getProcessingConfig()).summary_language;
     return this.db.withTransaction(async (exec) => {
       const meeting = await this.extractions.lockMeeting(exec, meetingId);
       if (!meeting) throw new NotFoundException('meeting not found');
@@ -40,6 +44,7 @@ export class LensExtractionService {
         processingVersion: meeting.processing_version,
         extractionRunId: run.id,
         model,
+        outputLanguage,
       });
       const job = await this.jobs.enqueue(exec, {
         type: 'extract_lenses', meetingId: meeting.id, payload,

@@ -260,6 +260,25 @@ describe('live orphan sweeper', () => {
     expect(next).toHaveLength(1);
   });
 
+  it('API 마무리는 옛 v1 세션의 process v5를 그대로 넣는다 — 워커가 v5를 transcript로 읽는다', async () => {
+    const { body: m } = await start().expect(201);
+    // 이 세션을 업그레이드 전에 만들어진 v1로 되돌린다(process v5, summary_language 없음).
+    await db.pool.query(
+      `UPDATE job SET payload = jsonb_set(
+         jsonb_set(payload, '{schema_version}', '1'),
+         '{process}', (payload->'process') #- '{models,summary_language}' || '{"schema_version":5}'::jsonb)
+       WHERE id=(SELECT current_job_id FROM meeting WHERE id=$1)`, [m.id]);
+    await claim(m.id);
+    await send(m.id, 0, chunk(1)).expect(200);
+    await stop(m.id, CHUNK, CHUNK).expect(200);
+    await reap(m.id);
+    expect(await orphans.sweep()).toBe(1);
+    const { rows } = await db.pool.query(
+      `SELECT payload FROM job WHERE meeting_id=$1 AND type='process_meeting'`, [m.id]);
+    expect(rows[0].payload.schema_version).toBe(5);
+    expect(rows[0].payload.models.summary_language).toBeUndefined();
+  });
+
   // 봉인은 됐는데 job이 아직 queued인 세션 — 4시간 상한을 걸친 append가 prefix만 봉인하고
   // finalize 없이 끝냈을 때의 상태다 (설계 §4.2). 이 job을 끝낼 워커는 존재하지 않으므로
   // 스위퍼가 후보로 집어야 한다. findOrphanCandidates의 (b) 갈래가 'failed'가 아니라

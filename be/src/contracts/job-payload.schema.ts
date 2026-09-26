@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { WHISPER_MODELS, MODEL_ROLES, STT_BACKENDS } from '@damwha/contracts';
-import type { ModelRole, SttBackend } from '@damwha/contracts';
+import { WHISPER_MODELS, MODEL_ROLES, STT_BACKENDS, SUMMARY_LANGUAGES } from '@damwha/contracts';
+import type { ModelRole, SttBackend, SummaryLanguage } from '@damwha/contracts';
 import { loadEnv } from '../config/env';
 import { SUMMARY_MODELS } from './model-catalog';
 // 타입 전용 import — 런타임 배출 없음(에러 소거). presets.ts는 WHISPER_MODELS(값)를
@@ -53,6 +53,22 @@ export const ModelsSchemaV3 = z
   })
   .strict();
 
+// v4 = v3 + 요약·렌즈 출력 언어 (다국어 스펙 §5.2). 필수 — v3의 summary_model과 같은 이유:
+// job이 기록한 결정이 워커 기본값에 좌우되면 안 된다. 옛 버전은 워커가 transcript로 읽는다.
+export const ModelsSchemaV4 = z
+  .object({
+    whisper_model: z.enum(WHISPER_MODELS),
+    language: z.string(),
+    devices: z.object({ diarization: DeviceSchema, stt: DeviceSchema }),
+    preset: z.enum(['light', 'standard', 'quality', 'custom']),
+    preset_revision: z.string().nullable(),
+    summary_model: z.enum(SUMMARY_MODELS),
+    summary_language: z.enum(SUMMARY_LANGUAGES),
+    diarization: DiarizationSchema,
+    embedding: EmbeddingSchema,
+  })
+  .strict();
+
 const processMeetingCommon = {
   meeting_id: z.string().regex(/^mtg_[1-9][0-9]*$/),
   audio_key: z.string().min(1),
@@ -95,6 +111,11 @@ export const ProcessMeetingPayloadV5Schema = z.object({
   schema_version: z.literal(5), ...processMeetingCommon,
   models: ModelsSchemaV3, identify: IdentifySchemaV4, followups: FollowupsSchemaV5,
 });
+// v6 = v5 + models.summary_language (ModelsSchemaV4).
+export const ProcessMeetingPayloadV6Schema = z.object({
+  schema_version: z.literal(6), ...processMeetingCommon,
+  models: ModelsSchemaV4, identify: IdentifySchemaV4, followups: FollowupsSchemaV5,
+});
 
 // zod discriminatedUnion은 child의 .default()를 discriminator 선택 전에 적용하지
 // 않으므로, version 누락 payload는 preprocess로 v1에 귀속시킨다 (spec §4).
@@ -109,6 +130,7 @@ export const ProcessMeetingPayloadSchema = z.preprocess(
     ProcessMeetingPayloadV3Schema,
     ProcessMeetingPayloadV4Schema,
     ProcessMeetingPayloadV5Schema,
+    ProcessMeetingPayloadV6Schema,
   ]),
 );
 
@@ -126,43 +148,67 @@ export const IndexMeetingPayloadSchema = z.object({
   search_embedding: z.object({ model: z.string(), dimension: z.literal(1024) }),
 });
 
-export const ExtractLensesPayloadSchema = z.object({
+const ExtractLensesPayloadV1Schema = z.object({
   schema_version: z.literal(1),
   meeting_id: z.string().regex(/^mtg_[1-9][0-9]*$/),
   processing_version: z.number().int().nonnegative(),
   extraction_run_id: z.string().regex(/^ler_[1-9][0-9]*$/),
   model: z.string().min(1),
 }).strict();
+// v2 = v1 + output_language. 필수 — process_meeting v6과 같은 이유.
+const ExtractLensesPayloadV2Schema = ExtractLensesPayloadV1Schema.extend({
+  schema_version: z.literal(2),
+  output_language: z.enum(SUMMARY_LANGUAGES),
+}).strict();
+export const ExtractLensesPayloadSchema = z.discriminatedUnion('schema_version', [
+  ExtractLensesPayloadV1Schema, ExtractLensesPayloadV2Schema,
+]);
 
 // 렌즈와 달리 extraction_run_id가 없다 — meeting_summary는 회의당 1행이라
 // meeting_id가 곧 키이고 별도 run 엔티티가 필요 없다.
-export const SummarizeMeetingPayloadSchema = z.object({
+const SummarizeMeetingPayloadV1Schema = z.object({
   schema_version: z.literal(1),
   meeting_id: z.string().regex(/^mtg_[1-9][0-9]*$/),
   processing_version: z.number().int().nonnegative(),
   model: z.string().min(1),
 }).strict();
+const SummarizeMeetingPayloadV2Schema = SummarizeMeetingPayloadV1Schema.extend({
+  schema_version: z.literal(2),
+  output_language: z.enum(SUMMARY_LANGUAGES),
+}).strict();
+export const SummarizeMeetingPayloadSchema = z.discriminatedUnion('schema_version', [
+  SummarizeMeetingPayloadV1Schema, SummarizeMeetingPayloadV2Schema,
+]);
 
-// 라이브 세션(실시간 녹음). process는 API가 시작 시점에 완전히 해석한 v5
-// process_meeting payload 그대로다 — 워커는 여기서 whisper/ECAPA/임계값을 읽고,
-// 종료 시 이 블록을 그대로 최종 job의 payload로 넣는다. 설정을 두 번 풀지 않고
-// 라이브 패스와 최종 패스가 같은 모델로 돈다는 것이 구조로 보장된다.
+// 라이브 세션(실시간 녹음). process는 API가 시작 시점에 완전히 해석한 process_meeting
+// payload 그대로다 — 워커는 여기서 whisper/ECAPA/임계값을 읽고, 종료 시 이 블록을
+// 그대로 최종 job의 payload로 넣는다. 설정을 두 번 풀지 않고 라이브 패스와 최종
+// 패스가 같은 모델로 돈다는 것이 구조로 보장된다.
 // source는 나중에 시스템 오디오를 붙일 자리 (설계 §2.1).
-export const LiveSessionPayloadSchema = z.object({
-  schema_version: z.literal(1),
+const liveSessionCommon = {
   meeting_id: z.string().regex(/^mtg_[1-9][0-9]*$/),
   audio_key: z.string().min(1),
   // source는 오디오를 누가 잡는가다. 'browser'가 기본 경로이고, 'mic'은 나중에 시스템
   // 오디오 구현체가 들어올 자리의 참조 구현으로 남는다 (설계 §2.1).
   source: z.enum(['mic', 'browser']),
-  process: ProcessMeetingPayloadV5Schema,
+};
+const LiveSessionPayloadV1Schema = z.object({
+  schema_version: z.literal(1), ...liveSessionCommon, process: ProcessMeetingPayloadV5Schema,
 }).strict();
+const LiveSessionPayloadV2Schema = z.object({
+  schema_version: z.literal(2), ...liveSessionCommon, process: ProcessMeetingPayloadV6Schema,
+}).strict();
+export const LiveSessionPayloadSchema = z.discriminatedUnion('schema_version', [
+  LiveSessionPayloadV1Schema, LiveSessionPayloadV2Schema,
+]);
+// v2는 process가 v6이다. v1(process v5)은 큐에 남은 세션을 위해 계속 받는다.
 
 export type ProcessMeetingPayloadV1 = z.infer<typeof ProcessMeetingPayloadV1Schema>;
 export type ProcessMeetingPayloadV2 = z.infer<typeof ProcessMeetingPayloadV2Schema>;
 export type ProcessMeetingPayloadV3 = z.infer<typeof ProcessMeetingPayloadV3Schema>;
 export type ProcessMeetingPayloadV4 = z.infer<typeof ProcessMeetingPayloadV4Schema>;
 export type ProcessMeetingPayloadV5 = z.infer<typeof ProcessMeetingPayloadV5Schema>;
+export type ProcessMeetingPayloadV6 = z.infer<typeof ProcessMeetingPayloadV6Schema>;
 export type Followups = z.infer<typeof FollowupsSchemaV5>;
 export type ProcessMeetingPayload = z.infer<typeof ProcessMeetingPayloadSchema>;
 export type EnrollSpeakerPayload = z.infer<typeof EnrollSpeakerPayloadSchema>;
@@ -175,11 +221,11 @@ export function buildProcessMeetingPayload(args: {
   meetingId: string; audioKey: string; processingVersion: number; reprocess: boolean;
   processing: ProcessingConfig; followups: Followups;
   speakers?: { min?: number; max?: number };
-}): ProcessMeetingPayloadV5 {
+}): ProcessMeetingPayloadV6 {
   const env = loadEnv();
   const p = args.processing;
   return {
-    schema_version: 5,
+    schema_version: 6,
     meeting_id: args.meetingId,
     audio_key: args.audioKey,
     processing_version: args.processingVersion,
@@ -191,6 +237,7 @@ export function buildProcessMeetingPayload(args: {
       preset: p.preset,
       preset_revision: p.preset_revision,
       summary_model: p.summary_model,
+      summary_language: p.summary_language,
       diarization: {
         model: env.DIARIZATION_MODEL,
         min_speakers: args.speakers?.min ?? null,
@@ -232,24 +279,28 @@ export function buildIndexMeetingPayload(args: {
 
 export function buildExtractLensesPayload(args: {
   meetingId: string; processingVersion: number; extractionRunId: string; model: string;
+  outputLanguage: SummaryLanguage;
 }): ExtractLensesPayload {
   return {
-    schema_version: 1,
+    schema_version: 2,
     meeting_id: args.meetingId,
     processing_version: args.processingVersion,
     extraction_run_id: args.extractionRunId,
     model: args.model,
+    output_language: args.outputLanguage,
   };
 }
 
 export function buildSummarizeMeetingPayload(args: {
   meetingId: string; processingVersion: number; model: string;
+  outputLanguage: SummaryLanguage;
 }): SummarizeMeetingPayload {
   return {
-    schema_version: 1,
+    schema_version: 2,
     meeting_id: args.meetingId,
     processing_version: args.processingVersion,
     model: args.model,
+    output_language: args.outputLanguage,
   };
 }
 
@@ -259,7 +310,7 @@ export function buildLiveSessionPayload(args: {
   speakers?: { min?: number; max?: number };
 }): LiveSessionPayload {
   return {
-    schema_version: 1,
+    schema_version: 2,
     meeting_id: args.meetingId,
     audio_key: args.audioKey,
     // 실제로 이 값을 시작하는 곳은 LiveService.start() 하나뿐이고, 그 오디오는 항상

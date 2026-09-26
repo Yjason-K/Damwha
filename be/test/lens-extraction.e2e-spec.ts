@@ -52,9 +52,21 @@ describe('manual lens extraction', () => {
     const { rows: [job] } = await db.pool.query('SELECT * FROM job WHERE id=$1', [first.body.job_id]);
     expect(job).toMatchObject({ type: 'extract_lenses', meeting_id: meetingId, status: 'queued' });
     expect(job.payload).toMatchObject({
-      schema_version: 1, meeting_id: meetingId, processing_version: 0,
+      schema_version: 2, meeting_id: meetingId, processing_version: 0,
       extraction_run_id: first.body.run_id, model: 'mlx-community/Qwen3.5-4B-8bit',
+      output_language: 'transcript',
     });
+  });
+
+  it('재추출은 현재 설정의 요약 언어를 output_language로 싣는다', async () => {
+    const meetingId = await createMeeting();
+    await request(app.getHttpServer())
+      .put('/settings/processing')
+      .send({ preset: 'light', language: 'ko', summary_language: 'ko' }).expect(200);
+    const res = await request(app.getHttpServer())
+      .post(`/meetings/${meetingId}/lenses/extract`).expect(202);
+    const { rows: [job] } = await db.pool.query('SELECT payload FROM job WHERE id=$1', [res.body.job_id]);
+    expect(job.payload).toMatchObject({ schema_version: 2, output_language: 'ko' });
   });
 
   it('cancel fails the active run and its job with a cancelled error', async () => {
