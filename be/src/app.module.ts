@@ -9,6 +9,7 @@ import { SpeakersModule } from './speakers/speakers.module';
 import { SearchModule } from './search/search.module';
 import { SettingsModule } from './settings/settings.module';
 import { SystemModule } from './system/system.module';
+import { ModelsModule } from './models/models.module';
 import { LensesModule } from './lenses/lenses.module';
 import { SummaryModule } from './summary/summary.module';
 import { SavedUtterancesModule } from './saved-utterances/saved-utterances.module';
@@ -30,6 +31,7 @@ import { DiskFullFilter } from './storage/disk-full.filter';
     SearchModule,
     SettingsModule,
     SystemModule,
+    ModelsModule,
     LensesModule,
     SummaryModule,
     SavedUtterancesModule,

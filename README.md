@@ -328,6 +328,9 @@ On first run the app asks for a Hugging Face token — the speaker-diarization m
 is gated and needs one. See [`docs/HUGGINGFACE.md`](docs/HUGGINGFACE.md) for how to
 get a token and accept the model licenses (5 minutes, no approval wait).
 
+[`docs/MODELS.md`](docs/MODELS.md) — Models: where they are stored, sizes, checking
+status in Settings.
+
 The public demo is a **separate**, read-only web deployment with its own images and
 its own seed data — it is not the install path above:
 [`deploy/demo/README.md`](deploy/demo/README.md) ships it, [`demo/README.md`](demo/README.md)

@@ -9,21 +9,12 @@ reserved knob for splitting very long files in a future pass.
 
 from ..pipeline.stt_repetition import drop_repetition_loops
 from .base import ProgressFn, SpeechSpan, Word, whisper_language
+from .specs import MLX_WHISPER_REPOS as _REPO
 
 # 환각 방어(스펙 §1.3): 창 간 오류 전파(반복 루프) 차단 + 2초+ 무음 구간의 환각 의심
 # 단어 제거. word_timestamps=True가 전제. 값 변경 = 코드 변경(payload 재현성).
 _CONDITION_ON_PREVIOUS_TEXT = False
 _HALLUCINATION_SILENCE_S = 2.0
-
-# payload whisper_model → MLX-converted HF repo (mlx-community)
-_REPO = {
-    "tiny": "mlx-community/whisper-tiny",
-    "base": "mlx-community/whisper-base-mlx",
-    "small": "mlx-community/whisper-small-mlx",
-    "medium": "mlx-community/whisper-medium-mlx",
-    "large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
-    "large-v3": "mlx-community/whisper-large-v3-mlx",
-}
 
 
 class MlxWhisper:

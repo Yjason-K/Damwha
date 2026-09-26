@@ -121,3 +121,13 @@ test("부모가 value를 리셋하면 섹션이 닫힌다", () => {
   );
   expect(screen.queryByLabelText("이번 작업 프리셋")).toBeNull();
 });
+
+test("현재 전역 요약 모델은 짧은 이름으로 보인다 (저장소 이름을 드러내지 않는다)", async () => {
+  renderSection(undefined, () => {});
+  fireEvent.click(
+    screen.getByRole("button", { name: /이번 작업만 다른 설정/ }),
+  );
+  const line = await screen.findByText(/현재 전역:.*large-v3-turbo/);
+  expect(line.textContent).toContain("요약 qwen3.5 9B");
+  expect(line.textContent).not.toContain("mlx-community");
+});

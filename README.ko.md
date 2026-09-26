@@ -318,6 +318,8 @@ Apple Silicon**이 필요하다.
 토큰 발급과 모델 라이선스 수락 방법은 [`docs/HUGGINGFACE.md`](docs/HUGGINGFACE.md)
 (5분이면 끝나고 승인 대기도 없다).
 
+[`docs/MODELS.md`](docs/MODELS.md) — 모델: 저장 위치, 용량, 설정에서 상태 확인.
+
 공개 데모는 위 설치 경로와는 **별개**인, 읽기 전용 웹 배포다. 이미지도 시드 데이터도
 따로다 — 내보내는 쪽은 [`deploy/demo/README.md`](deploy/demo/README.md),
 그 안에 무엇이 들었는지는 [`demo/README.md`](demo/README.md).

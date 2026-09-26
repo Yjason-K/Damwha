@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { WHISPER_MODELS } from '@damwha/contracts';
+import { WHISPER_MODELS, MODEL_ROLES, STT_BACKENDS } from '@damwha/contracts';
+import type { ModelRole, SttBackend } from '@damwha/contracts';
 import { loadEnv } from '../config/env';
 import { SUMMARY_MODELS } from './model-catalog';
 // 타입 전용 import — 런타임 배출 없음(에러 소거). presets.ts는 WHISPER_MODELS(값)를
@@ -271,4 +272,27 @@ export function buildLiveSessionPayload(args: {
       processing: args.processing, followups: args.followups, speakers: args.speakers,
     }),
   };
+}
+
+// 모델 받기·삭제 (모델 다운로드 관리 스펙 §4.4). 식별자는 논리 키 — 저장소는 worker가 받기 명세로 푼다.
+// backend는 전사(stt)에만 있고, 그 밖의 역할에 있으면 거부한다(같은 모델을 두 키로 부르지 않게).
+export const ModelJobPayloadSchema = z
+  .object({
+    schema_version: z.literal(1),
+    role: z.enum(MODEL_ROLES),
+    name: z.string().trim().min(1),
+    backend: z.enum(STT_BACKENDS).optional(),
+  })
+  .strict()
+  .refine((p) => (p.role === 'stt') === (p.backend !== undefined), {
+    message: 'backend is required for role "stt" and forbidden otherwise',
+  });
+export type ModelJobPayload = z.infer<typeof ModelJobPayloadSchema>;
+
+export function buildModelJobPayload(k: {
+  role: ModelRole; name: string; backend: SttBackend | null;
+}): ModelJobPayload {
+  return k.backend === null
+    ? { schema_version: 1, role: k.role, name: k.name }
+    : { schema_version: 1, role: k.role, name: k.name, backend: k.backend };
 }

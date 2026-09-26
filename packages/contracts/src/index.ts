@@ -59,3 +59,23 @@ export type Device = (typeof DEVICES)[number];
  */
 export const STT_LANGUAGES = ['auto', 'ko', 'en', 'ja', 'zh'] as const;
 export type SttLanguage = (typeof STT_LANGUAGES)[number];
+
+/**
+ * 모델 역할 (모델 다운로드 관리 스펙 §4.3). 모델 목록 자체는 `WHISPER_MODELS`·`SUMMARY_MODELS`이고,
+ * 고정 역할(화자 분리·화자 식별·검색 임베딩)의 모델 이름은 BE env가 정한다.
+ */
+export const MODEL_ROLES = [
+  'stt',
+  'summary',
+  'diarization',
+  'speaker_embedding',
+  'search_embedding',
+] as const;
+export type ModelRole = (typeof MODEL_ROLES)[number];
+
+/** 지울 수 있는 역할. 고정 역할은 미리 받기만 된다 (Notion P2-D). */
+export const DELETABLE_ROLES = ['stt', 'summary'] as const;
+
+/** 전사 백엔드 — `devices.stt`가 gpu면 mlx, cpu면 faster (worker `models/registry.py`). */
+export const STT_BACKENDS = ['mlx', 'faster'] as const;
+export type SttBackend = (typeof STT_BACKENDS)[number];

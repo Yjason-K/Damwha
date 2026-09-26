@@ -4,8 +4,9 @@
 `with conn.transaction()` 블록을 롤백시키고, 바깥에서 잡아 outcome으로 번역한다. 예외를
 쓰는 이유는 psycopg의 트랜잭션 컨텍스트가 정상 반환을 곧 커밋으로 보기 때문이다.
 
-job 테이블 계약 밖의 공유 행 둘도 여기 둔다 — 워커(와 embed)가 쓰고 API가 읽기만 한다.
-`worker_capabilities`(머신 스펙)와 `model_readiness`(모델 다운로드 상태, 스펙 §6.9)다.
+job 테이블 계약 밖의 공유 행 셋도 여기 둔다 — 워커 쪽(와 embed·`llm_entry`)이 쓰고 API가 읽기만
+한다. `worker_capabilities`(머신 스펙), `model_readiness`(모델 다운로드 상태, 스펙 §6.9),
+`model_inventory`(받아 둔 모델 목록, 모델 다운로드 관리 스펙 §4.2)다.
 """
 
 import os
@@ -171,6 +172,29 @@ def read_model_readiness(conn) -> dict:
         "updated_at": updated_at if isinstance(updated_at, str) else None,
         "entries": dict(entries) if isinstance(entries, dict) else {},
     }
+
+
+# ── model_inventory (모델 다운로드 관리 스펙 §4.2) ─────────────────────
+
+MODEL_INVENTORY_KEY = "model_inventory"
+
+
+def write_model_inventory(conn, value: dict) -> None:
+    """캐시 스캔 스냅샷으로 행 전체를 덮어쓴다.
+
+    writer는 worker 부모의 inventory 스레드 **하나**다(embed·`llm_entry`는 쓰지 않는다). 그래서
+    merge가 필요 없고 `worker_capabilities`와 같은 덮어쓰기다. 외부 DB 모드
+    (`DAMWHA_SHARED_STATE=off`)에서는 쓰지 않는다.
+    """
+    if not shared_state_enabled():
+        return
+    conn.execute(
+        """
+        INSERT INTO app_setting(key, value) VALUES(%s, %s)
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+        """,
+        (MODEL_INVENTORY_KEY, Jsonb(value)),
+    )
 
 
 class _Abort(Exception):

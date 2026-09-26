@@ -15,6 +15,10 @@ import type {
  * 프리셋 카드 표시용 메타 — 값의 진실원은 BE(`be/src/settings/presets.ts`,
  * PRESET_REVISION 2026-08-12.3). 여기 값은 카드 요약 표시 전용이며, 저장 시엔
  * 프리셋 이름만 보내고 서버가 resolve한다. BE 프리셋 변경 시 함께 갱신할 것.
+ *
+ * `desc`의 램 구간은 서버의 추천 규칙(`be/src/system/capabilities.ts` — 16GB 미만 light,
+ * 48GB 미만 standard, 그 이상 quality)과 같게 둔다. 예전 문구("64GB+")는 추천 규칙과 달라
+ * 48GB Mac에 "고품질 · 권장"과 "64GB+ 램에 알맞아요"가 함께 떴다.
  */
 export const PRESET_META: Record<
   PresetName,
@@ -28,21 +32,21 @@ export const PRESET_META: Record<
 > = {
   light: {
     label: "가볍게",
-    desc: "8GB 램에 알맞아요",
+    desc: "16GB 미만 램에 알맞아요",
     whisper_model: "small",
     devices: { diarization: "gpu", stt: "cpu" },
     summary_model: "mlx-community/Qwen3.5-4B-8bit",
   },
   standard: {
     label: "표준",
-    desc: "16–32GB 램에 알맞아요",
+    desc: "16–48GB 램에 알맞아요",
     whisper_model: "large-v3-turbo",
     devices: { diarization: "gpu", stt: "gpu" },
     summary_model: "mlx-community/Qwen3.5-9B-8bit",
   },
   quality: {
     label: "고품질",
-    desc: "64GB+ 램에 알맞아요",
+    desc: "48GB 이상 램에 알맞아요",
     whisper_model: "large-v3",
     devices: { diarization: "gpu", stt: "gpu" },
     summary_model: "mlx-community/Qwen3.5-27B-8bit",
@@ -80,8 +84,8 @@ export const WHISPER_MODEL_OPTIONS: { value: WhisperModel; label: string }[] =
 
 const SUMMARY_MODEL_LABELS: Record<SummaryModel, string> = {
   "mlx-community/Qwen3.5-4B-8bit": "qwen3.5 4B — 가장 빠름, 8GB 램",
-  "mlx-community/Qwen3.5-9B-8bit": "qwen3.5 9B — 균형, 16–32GB 램",
-  "mlx-community/Qwen3.5-27B-8bit": "qwen3.5 27B — 가장 정확, 64GB+ 램",
+  "mlx-community/Qwen3.5-9B-8bit": "qwen3.5 9B — 균형, 16GB+ 램",
+  "mlx-community/Qwen3.5-27B-8bit": "qwen3.5 27B — 가장 정확, 48GB+ 램",
 };
 
 export const SUMMARY_MODEL_OPTIONS: { value: SummaryModel; label: string }[] =
@@ -89,6 +93,21 @@ export const SUMMARY_MODEL_OPTIONS: { value: SummaryModel; label: string }[] =
     value,
     label: SUMMARY_MODEL_LABELS[value],
   }));
+
+/**
+ * 모델 카드(`features/models`)가 쓰는 짧은 이름 — 셀렉트 라벨의 " — " 앞부분이다. 라벨 Record를
+ * 베끼지 않으려고 여기서 파생한다. 카탈로그 밖(렌즈 env 값 등)은 repo id의 마지막 조각이다.
+ */
+export function modelShortLabel(role: string, name: string): string {
+  const label =
+    role === "stt"
+      ? WHISPER_MODEL_LABELS[name as WhisperModel]
+      : role === "summary"
+        ? SUMMARY_MODEL_LABELS[name as SummaryModel]
+        : undefined;
+  if (label) return label.split(" — ")[0];
+  return name.split("/").pop() ?? name;
+}
 
 const STT_LANGUAGE_LABELS: Record<SttLanguage, string> = {
   auto: "자동 감지",
@@ -121,6 +140,21 @@ export function sttLanguageOptions(
 }
 
 /** 디바이스 요약 문자열 — 카드/고급 요약에 사용. */
+/**
+ * 프리셋 카드의 장치 안내 — GPU가 아닌 단계만 적는다. 세 프리셋 모두 화자 분리는 GPU라, 매 카드에
+ * "화자 분리 GPU · 전사 GPU"를 되풀이하면 다른 점(가볍게의 CPU 전사)이 묻히고 카드만 줄바꿈된다.
+ */
+export function cpuStagesNote(devices: {
+  diarization: Device;
+  stt: Device;
+}): string | null {
+  const cpu = [
+    devices.diarization === "cpu" ? "화자 분리" : null,
+    devices.stt === "cpu" ? "전사" : null,
+  ].filter((x) => x !== null);
+  return cpu.length === 0 ? null : `${cpu.join("·")}는 CPU로 처리해요`;
+}
+
 export function deviceSummary(devices: {
   diarization: Device;
   stt: Device;

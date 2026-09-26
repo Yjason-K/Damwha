@@ -14,6 +14,10 @@ import {
 import { Switch } from "@/shared/ui/switch";
 import { toast } from "@/shared/ui/use-toast";
 import { cn } from "@/shared/lib/utils";
+import { useModels } from "@/features/models/api/models";
+import { formatBytes } from "@/features/models/lib/format";
+import { presetDownloadNeed } from "@/features/models/lib/preset-need";
+import { ModelsInUse } from "@/features/models/ui/models-in-use";
 
 import {
   useCapabilities,
@@ -28,8 +32,9 @@ import type {
   WhisperModel,
 } from "../api/types";
 import {
-  deviceSummary,
+  cpuStagesNote,
   isSttLanguage,
+  modelShortLabel,
   PRESET_META,
   PRESET_META_REVISION,
   PRESET_ORDER,
@@ -62,20 +67,92 @@ function fromConfig(c: ProcessingConfig): FormState {
   };
 }
 
+/** 저장된 값과 폼이 같은가 — 저장 버튼을 켤지, "저장하지 않은 변경"을 알릴지 정한다. */
+function sameForm(a: FormState, b: FormState): boolean {
+  return (
+    a.preset === b.preset &&
+    a.language === b.language &&
+    a.whisper_model === b.whisper_model &&
+    a.devices.diarization === b.devices.diarization &&
+    a.devices.stt === b.devices.stt &&
+    a.summary_model === b.summary_model
+  );
+}
+
+/** 처리 방식 카드(프리셋 셋 + 사용자 지정)의 공통 모양 — 선택은 민트 면, 나머지는 hover 면. */
+function choiceCardClass(checked: boolean, disabled: boolean): string {
+  return cn(
+    "flex flex-col gap-1 rounded-md border p-3 text-left outline-none transition-colors duration-[80ms] focus-visible:[box-shadow:var(--focus-ring)]",
+    disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer",
+    checked
+      ? "border-[color:var(--accent-6)] bg-[var(--accent-1)]"
+      : "border-border hover:bg-[var(--surface-hover)]",
+  );
+}
+
+/**
+ * "사용자 지정" 카드 — 프리셋과 나란히 두어 지금 무엇을 쓰는지가 늘 카드 하나로 보이게 한다. 카드에는 지금
+ * 폼의 값을 적고, 누르면 그 값 그대로 사용자 지정이 되며 고급 설정이 펼쳐진다.
+ */
+function CustomRadio({
+  checked,
+  form,
+  onSelect,
+}: {
+  checked: boolean;
+  form: FormState;
+  onSelect: () => void;
+}) {
+  const cpuNote = cpuStagesNote(form.devices);
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={checked}
+      onClick={onSelect}
+      className={choiceCardClass(checked, false)}
+    >
+      <span className="text-sm font-semibold text-foreground">사용자 지정</span>
+      <span className="text-xs text-[color:var(--text-muted)]">
+        {checked ? "고급 설정에서 고른 값이에요" : "모델과 GPU를 직접 골라요"}
+      </span>
+      {checked && (
+        <>
+          <span className="flex flex-col text-xs text-[color:var(--text-secondary)]">
+            <span>전사 {form.whisper_model}</span>
+            <span>요약 {modelShortLabel("summary", form.summary_model)}</span>
+          </span>
+          {cpuNote !== null && (
+            <span className="text-xs text-[color:var(--text-muted)]">
+              {cpuNote}
+            </span>
+          )}
+        </>
+      )}
+    </button>
+  );
+}
+
 function PresetRadio({
   name,
   checked,
   recommended,
   disabled,
+  need,
+  freeBytes,
   onSelect,
 }: {
   name: PresetName;
   checked: boolean;
   recommended: boolean;
   disabled: boolean;
+  /** 이 프리셋을 고르면 새로 받아야 할 대략 용량. 모르면 null(줄을 그리지 않는다). */
+  need: { bytes: number; exceedsFree: boolean } | null;
+  freeBytes: number | null;
   onSelect: () => void;
 }) {
   const meta = PRESET_META[name];
+  const cpuNote = cpuStagesNote(meta.devices);
   return (
     <button
       type="button"
@@ -88,13 +165,7 @@ function PresetRadio({
           : undefined
       }
       onClick={onSelect}
-      className={cn(
-        "flex flex-1 flex-col gap-1 rounded-md border p-3 text-left outline-none transition-colors duration-[80ms] focus-visible:[box-shadow:var(--focus-ring)]",
-        disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer",
-        checked
-          ? "border-[color:var(--accent-6)] bg-[var(--accent-1)]"
-          : "border-border hover:bg-[var(--surface-hover)]",
-      )}
+      className={choiceCardClass(checked, disabled)}
     >
       <span className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
         {meta.label}
@@ -103,12 +174,32 @@ function PresetRadio({
       <span className="text-xs text-[color:var(--text-muted)]">
         {meta.desc}
       </span>
-      <span className="text-xs text-[color:var(--text-secondary)]">
-        {meta.whisper_model} · {deviceSummary(meta.devices)}
+      <span className="flex flex-col text-xs text-[color:var(--text-secondary)]">
+        <span>전사 {meta.whisper_model}</span>
+        <span>요약 {modelShortLabel("summary", meta.summary_model)}</span>
       </span>
-      <span className="text-xs text-[color:var(--text-muted)]">
-        요약 {meta.summary_model}
-      </span>
+      {cpuNote !== null && (
+        <span className="text-xs text-[color:var(--text-muted)]">
+          {cpuNote}
+        </span>
+      )}
+      {need !== null && (
+        <span
+          className={cn(
+            "text-xs",
+            need.exceedsFree
+              ? "text-[color:var(--red-text)]"
+              : "text-[color:var(--text-muted)]",
+          )}
+        >
+          {need.bytes === 0
+            ? "받을 모델 없음"
+            : `받을 모델 약 ${formatBytes(need.bytes)}`}
+          {need.exceedsFree &&
+            freeBytes !== null &&
+            ` · 남은 용량(${formatBytes(freeBytes)})보다 커요`}
+        </span>
+      )}
     </button>
   );
 }
@@ -117,14 +208,18 @@ export function ProcessingSettingsForm() {
   const settings = useProcessingSettings();
   const capabilities = useCapabilities();
   const update = useUpdateProcessingSettings();
+  const models = useModels();
 
   const [form, setForm] = React.useState<FormState | null>(null);
+  // 서버가 확인해 준 마지막 값 — 폼과 비교해 변경 여부를 판단한다.
+  const [saved, setSaved] = React.useState<FormState | null>(null);
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
 
   // 서버 값이 처음 도착하면 폼을 초기화 (렌더 중 조정 패턴 — effect 불필요).
   // 이후 로컬 편집을 보존하고, 저장 성공 시 mutation 응답으로 재동기화한다.
   if (form === null && settings.data) {
     setForm(fromConfig(settings.data));
+    setSaved(fromConfig(settings.data));
   }
 
   if (settings.isLoading || form === null) {
@@ -142,6 +237,7 @@ export function ProcessingSettingsForm() {
     );
   }
 
+  const dirty = saved === null || !sameForm(form, saved);
   const caps = capabilities.data;
   // 보수적 기본값(리뷰 #3): 조회 전/실패 시 GPU 불허 — 로딩 중엔 GPU 관련
   // 컨트롤(프리셋 카드 + GPU 스위치)을 잠시 비활성화한다.
@@ -194,6 +290,7 @@ export function ProcessingSettingsForm() {
     update.mutate(body, {
       onSuccess: (resolved) => {
         setForm(fromConfig(resolved));
+        setSaved(fromConfig(resolved));
         toast({ variant: "success", title: "처리 설정을 저장했어요." });
       },
       onError: (error) => {
@@ -226,7 +323,11 @@ export function ProcessingSettingsForm() {
           </p>
         )}
 
-      <div role="radiogroup" aria-label="처리 프리셋" className="flex gap-2.5">
+      <div
+        role="radiogroup"
+        aria-label="처리 프리셋"
+        className="grid grid-cols-2 gap-2.5"
+      >
         {PRESET_ORDER.map((name) => (
           <PresetRadio
             key={name}
@@ -234,16 +335,25 @@ export function ProcessingSettingsForm() {
             checked={form.preset === name}
             recommended={caps?.recommended_preset === name}
             disabled={presetsDisabled}
+            need={
+              models.data
+                ? presetDownloadNeed(models.data, PRESET_META[name])
+                : null
+            }
+            freeBytes={models.data?.freeBytes ?? null}
             onSelect={() => selectPreset(name)}
           />
         ))}
+        <CustomRadio
+          checked={form.preset === "custom"}
+          form={form}
+          onSelect={() => {
+            setForm({ ...form, preset: "custom" });
+            setAdvancedOpen(true);
+          }}
+        />
       </div>
-      {form.preset === "custom" && (
-        <p className="text-xs text-[color:var(--text-muted)]">
-          사용자 지정 설정을 쓰고 있어요. 프리셋을 누르면 해당 값으로
-          되돌아가요.
-        </p>
-      )}
+      <ModelsInUse pick={form} />
 
       <div className="flex flex-col gap-3">
         <button
@@ -259,7 +369,7 @@ export function ProcessingSettingsForm() {
           <div className="flex flex-col gap-4 rounded-md border border-[color:var(--border-subtle)] p-4">
             <div className="flex flex-col gap-1.5">
               <span className="text-sm font-medium text-[color:var(--text-secondary)]">
-                전사(Whisper) 모델
+                전사 모델
               </span>
               <Select
                 value={form.whisper_model}
@@ -282,7 +392,7 @@ export function ProcessingSettingsForm() {
 
             <div className="flex flex-col gap-1.5">
               <span className="text-sm font-medium text-[color:var(--text-secondary)]">
-                요약(LLM) 모델
+                요약 모델
               </span>
               <Select
                 value={form.summary_model}
@@ -365,8 +475,7 @@ export function ProcessingSettingsForm() {
       </div>
 
       <p className="text-xs text-[color:var(--text-faint)]">
-        새 모델을 처음 선택하면 첫 처리에서 모델 다운로드로 시간이 오래 걸릴 수
-        있어요.
+        모델은 처음 쓸 때 받아요. 아래 ‘모델’에서 미리 받아 둘 수 있어요.
       </p>
 
       {!isSttLanguage(form.language) && (
@@ -376,14 +485,19 @@ export function ProcessingSettingsForm() {
         </p>
       )}
 
-      <div>
+      <div className="flex items-center gap-3">
         <Button
           onClick={handleSave}
           loading={update.isPending}
-          disabled={update.isPending || !isSttLanguage(form.language)}
+          disabled={update.isPending || !dirty || !isSttLanguage(form.language)}
         >
           저장
         </Button>
+        {dirty && !update.isPending && (
+          <span className="text-sm text-[color:var(--text-muted)]">
+            저장하지 않은 변경이 있어요
+          </span>
+        )}
       </div>
     </div>
   );

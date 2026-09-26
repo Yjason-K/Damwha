@@ -14,6 +14,8 @@ SUPPORTED_SCHEMA_VERSIONS: dict[str, frozenset[int]] = {
     "extract_lenses": frozenset({1}),
     "summarize_meeting": frozenset({1}),
     "live_session": frozenset({1}),
+    "download_model": frozenset({1}),
+    "delete_model": frozenset({1}),
 }
 
 MeetingId = Annotated[str, StringConstraints(pattern=r"^mtg_[1-9][0-9]*$")]
@@ -386,6 +388,41 @@ class LiveSessionPayload(BaseModel):
     process_wire: dict
 
 
+ModelRole = Literal["stt", "summary", "diarization", "speaker_embedding", "search_embedding"]
+
+
+class ModelJobPayload(BaseModel):
+    """download_model·delete_model payload v1 (모델 다운로드 관리 스펙 §4.4).
+
+    식별자는 논리 키(role·name·backend)다. backend는 전사에만 있고 그 밖에서는 없어야 한다 —
+    zod(`ModelJobPayloadSchema`)와 같은 판정.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1]
+    role: ModelRole
+    name: NonEmptyString
+    backend: Literal["mlx", "faster"] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_explicit_null_backend(cls, data):
+        # backend는 없거나(전사가 아닌 역할) 실제 값이어야(전사) 한다 — 명시적
+        # null은 둘 중 어느 쪽도 아니므로 거부한다. zod(`ModelJobPayloadSchema`)는
+        # backend를 `.optional()`(undefined만 허용, null 불허)로 선언해 같은 판정을
+        # 이미 낸다; 여기서는 필드가 nullable Literal이라 별도로 막아야 한다.
+        if isinstance(data, dict) and "backend" in data and data["backend"] is None:
+            raise ValueError("backend must be absent, not null")
+        return data
+
+    @model_validator(mode="after")
+    def _backend_only_for_stt(self):
+        if (self.role == "stt") != (self.backend is not None):
+            raise ValueError('backend is required for role "stt" and forbidden otherwise')
+        return self
+
+
 def _parse_live_session(data: dict) -> LiveSessionPayload:
     wire = LiveSessionPayloadWire.model_validate(data)
     return LiveSessionPayload(
@@ -486,4 +523,6 @@ def parse_payload(job_type: str, data: dict):
         return _parse_live_session(data)
     if job_type == "summarize_meeting":
         return SummarizeMeetingPayload.model_validate(data)
+    if job_type in ("download_model", "delete_model"):
+        return ModelJobPayload.model_validate(data)
     return ExtractLensesPayload.model_validate(data)
