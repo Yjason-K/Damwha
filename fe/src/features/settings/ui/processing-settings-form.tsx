@@ -1,4 +1,6 @@
 import * as React from "react";
+import { useTranslation } from "react-i18next";
+import { SUMMARY_LANGUAGES } from "@damwha/contracts";
 
 import { isDemoBlocked } from "@/shared/api/demo-read-only";
 import { isApiError } from "@/shared/api/client";
@@ -28,6 +30,7 @@ import type {
   Device,
   PresetName,
   ProcessingConfig,
+  SummaryLanguage,
   SummaryModel,
   WhisperModel,
 } from "../api/types";
@@ -46,7 +49,7 @@ import {
 /**
  * ProcessingSettingsForm — 전역 처리 설정 편집. 프리셋 라디오(권장 배지) +
  * 고급 펼침(whisper 모델/단계별 GPU). 고급 값 수정 시 custom 전환, 이름
- * 프리셋 저장은 이름+언어만 전송(서버가 resolve).
+ * 프리셋 저장은 이름+언어+요약 언어만 전송(서버가 resolve).
  */
 
 type FormState = {
@@ -55,6 +58,7 @@ type FormState = {
   whisper_model: WhisperModel;
   devices: { diarization: Device; stt: Device };
   summary_model: SummaryModel;
+  summary_language: SummaryLanguage;
 };
 
 function fromConfig(c: ProcessingConfig): FormState {
@@ -64,6 +68,7 @@ function fromConfig(c: ProcessingConfig): FormState {
     whisper_model: c.whisper_model,
     devices: { ...c.devices },
     summary_model: c.summary_model,
+    summary_language: c.summary_language,
   };
 }
 
@@ -75,7 +80,8 @@ function sameForm(a: FormState, b: FormState): boolean {
     a.whisper_model === b.whisper_model &&
     a.devices.diarization === b.devices.diarization &&
     a.devices.stt === b.devices.stt &&
-    a.summary_model === b.summary_model
+    a.summary_model === b.summary_model &&
+    a.summary_language === b.summary_language
   );
 }
 
@@ -205,6 +211,7 @@ function PresetRadio({
 }
 
 export function ProcessingSettingsForm() {
+  const { t } = useTranslation("settings");
   const settings = useProcessingSettings();
   const capabilities = useCapabilities();
   const update = useUpdateProcessingSettings();
@@ -267,6 +274,7 @@ export function ProcessingSettingsForm() {
       whisper_model: source.whisper_model,
       devices: { ...source.devices },
       summary_model: source.summary_model,
+      summary_language: form.summary_language,
     });
   };
 
@@ -285,8 +293,13 @@ export function ProcessingSettingsForm() {
             whisper_model: form.whisper_model,
             devices: form.devices,
             summary_model: form.summary_model,
+            summary_language: form.summary_language,
           }
-        : { preset: form.preset, language: form.language };
+        : {
+            preset: form.preset,
+            language: form.language,
+            summary_language: form.summary_language,
+          };
     update.mutate(body, {
       onSuccess: (resolved) => {
         setForm(fromConfig(resolved));
@@ -472,6 +485,33 @@ export function ProcessingSettingsForm() {
             </div>
           </div>
         )}
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <span className="text-sm font-medium text-[color:var(--text-secondary)]">
+          {t("processing.summaryLanguage.label")}
+        </span>
+        <Select
+          value={form.summary_language}
+          // 프리셋과 무관한 값 — setKnob(custom 전환)을 쓰지 않는다 (다국어 스펙 §5.1).
+          onValueChange={(v) =>
+            setForm({ ...form, summary_language: v as SummaryLanguage })
+          }
+        >
+          <SelectTrigger aria-label={t("processing.summaryLanguage.label")}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {SUMMARY_LANGUAGES.map((lang) => (
+              <SelectItem key={lang} value={lang}>
+                {t(`processing.summaryLanguage.options.${lang}`)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-[color:var(--text-muted)]">
+          {t("processing.summaryLanguage.hint")}
+        </p>
       </div>
 
       <p className="text-xs text-[color:var(--text-faint)]">

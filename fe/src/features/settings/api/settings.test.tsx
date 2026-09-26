@@ -20,6 +20,7 @@ const CONFIG: ProcessingConfig = {
   whisper_model: "large-v3-turbo",
   devices: { diarization: "gpu", stt: "gpu" },
   summary_model: "mlx-community/Qwen3.5-9B-8bit",
+  summary_language: "transcript",
 };
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -46,10 +47,15 @@ test("useUpdateProcessingSettings가 PUT 후 설정 쿼리를 무효화한다", 
       <QueryClientProvider client={qc}>{children}</QueryClientProvider>
     ),
   });
-  await result.current.mutateAsync({ preset: "light", language: "ko" });
+  await result.current.mutateAsync({
+    preset: "light",
+    language: "ko",
+    summary_language: "transcript",
+  });
   expect(apiClient.put).toHaveBeenCalledWith("/settings/processing", {
     preset: "light",
     language: "ko",
+    summary_language: "transcript",
   });
   expect(invalidate).toHaveBeenCalledWith({
     queryKey: ["processing-settings"],

@@ -9,6 +9,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { apiClient } from "@/shared/api/client";
+// 전역 i18next 인스턴스를 만드는 부수효과 — 앱에서는 main.tsx가 먼저 임포트해 두지만,
+// 이 컴포넌트만 단독 렌더하는 테스트에서는 아무도 만들지 않아 t()가 키 문자열을 그대로 낸다.
+import "@/shared/i18n";
 import type { Capabilities, ProcessingConfig } from "../api/types";
 import { ProcessingSettingsForm } from "./processing-settings-form";
 
@@ -24,6 +27,7 @@ const CONFIG: ProcessingConfig = {
   whisper_model: "large-v3-turbo",
   devices: { diarization: "gpu", stt: "gpu" },
   summary_model: "mlx-community/Qwen3.5-9B-8bit",
+  summary_language: "transcript",
 };
 
 const PRESET_LIGHT_RESOLVED: ProcessingConfig = {
@@ -33,6 +37,7 @@ const PRESET_LIGHT_RESOLVED: ProcessingConfig = {
   whisper_model: "small",
   devices: { diarization: "gpu", stt: "cpu" },
   summary_model: "mlx-community/Qwen3.5-4B-8bit",
+  summary_language: "transcript",
 };
 
 const CAPS: Capabilities = {
@@ -89,10 +94,11 @@ test("고급에서 모델을 바꾸면 custom으로 전환되고 저장 시 전 
     whisper_model: "large-v3-turbo",
     devices: { diarization: "gpu", stt: "cpu" },
     summary_model: "mlx-community/Qwen3.5-9B-8bit",
+    summary_language: "transcript",
   });
 });
 
-test("이름 프리셋 저장은 이름+언어만 보낸다", async () => {
+test("이름 프리셋 저장은 이름+언어+요약 언어만 보낸다", async () => {
   mockApi();
   const put = vi
     .spyOn(apiClient, "put")
@@ -104,6 +110,7 @@ test("이름 프리셋 저장은 이름+언어만 보낸다", async () => {
     expect(put).toHaveBeenCalledWith("/settings/processing", {
       preset: "light",
       language: "ko",
+      summary_language: "transcript",
     }),
   );
 });
@@ -196,6 +203,7 @@ test("전사 언어를 바꾸면 custom으로 전환되고 저장 시 그 언어
       whisper_model: "large-v3-turbo",
       devices: { diarization: "gpu", stt: "gpu" },
       summary_model: "mlx-community/Qwen3.5-9B-8bit",
+      summary_language: "transcript",
     }),
   );
 });
@@ -442,4 +450,58 @@ test("이 설정으로 쓰는 모델은 저장 전에도 고른 프리셋을 따
   expect(after.textContent).toContain("large-v3 · GPU");
   expect(after.textContent).toContain("qwen3.5 27B");
   expect(after.textContent).not.toContain("qwen3.5 9B");
+});
+
+test("요약 언어는 프리셋과 무관하다 — 바꿔도 프리셋이 유지되고, 저장하면 함께 보낸다", async () => {
+  mockApi();
+  const put = vi
+    .spyOn(apiClient, "put")
+    .mockResolvedValue({
+      data: { ...CONFIG, summary_language: "en" },
+    } as never);
+  renderForm();
+  await screen.findByRole("radio", { name: /표준/ });
+
+  const trigger = screen.getByLabelText("요약 언어");
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("option", { name: "영어" }));
+
+  expect(
+    screen.getByRole("radio", { name: /표준/ }).getAttribute("aria-checked"),
+  ).toBe("true");
+  expect(screen.getByText("저장하지 않은 변경이 있어요")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "저장" }));
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith("/settings/processing", {
+      preset: "standard",
+      language: "ko",
+      summary_language: "en",
+    }),
+  );
+});
+
+test("요약 언어 아래에 이미 만든 요약은 바뀌지 않는다고 알린다", async () => {
+  mockApi();
+  renderForm();
+  expect(
+    await screen.findByText(/이미 만든 요약은 바뀌지 않아요/),
+  ).toBeTruthy();
+});
+
+test("프리셋을 바꿔도 고른 요약 언어는 남는다", async () => {
+  mockApi({ ...CONFIG, summary_language: "ko" });
+  const put = vi
+    .spyOn(apiClient, "put")
+    .mockResolvedValue({ data: CONFIG } as never);
+  renderForm();
+  fireEvent.click(await screen.findByRole("radio", { name: /가볍게/ }));
+  fireEvent.click(screen.getByRole("button", { name: "저장" }));
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith("/settings/processing", {
+      preset: "light",
+      language: "ko",
+      summary_language: "ko",
+    }),
+  );
 });

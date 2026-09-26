@@ -10,4 +10,15 @@ export const settings = {
       hint: "The language used for menus and screens.",
     },
   },
+  processing: {
+    summaryLanguage: {
+      label: "Summary language",
+      hint: "Existing summaries stay as they are. The new language applies from the next processing run or when you regenerate.",
+      options: {
+        transcript: "Same as the recording",
+        ko: "Korean",
+        en: "English",
+      },
+    },
+  },
 } satisfies LocaleShape<typeof ko>;
