@@ -30,6 +30,9 @@
     "desktop": "pnpm --filter damwha-desktop run",
     "desktop:dev": "pnpm --filter damwha-desktop run start:desktop",
     "desktop:build": "pnpm --filter damwha-desktop run package:desktop",
+    "site": "pnpm --filter damwha-site run",
+    "site:dev": "pnpm --filter damwha-site run start",
+    "site:build": "pnpm --filter damwha-site run build",
     "worker": "uv run --directory be/worker python -m damwha_worker",
     "embed": "uv run --directory be/worker damwha-embed",
     "worker:sync": "uv sync --directory be/worker --extra models",
@@ -43,6 +46,7 @@
     "ignoredBuiltDependencies": [
       "@nestjs/core",
       "cpu-features",
+      "esbuild",
       "protobufjs",
       "ssh2"
     ]
