@@ -153,15 +153,26 @@ Utterance, Speaker, Lens, Enroll speaker, 프리셋 Light / Standard / Quality(�
 - **색 토큰** — 무채색 잉크 + 민트 신호, `.dark` 한 벌. 화자 팔레트(`--spk-*`)는 사이트에서도
   화자를 표시할 때만 쓴다.
 - **서체** — Inter + Geist Mono. 한국어는 `fe`와 같은 시스템 폴백.
-- **브랜드 마크** — `fe/public/favicon.svg`·`favicon.ico`·`apple-touch-icon.png`를 그대로 복사한다.
-  `fe/DESIGN.md` §2가 말하는 "마크가 흩어진 여섯 군데"에 **일곱째로 `site/public/`을 더하고** 그 문장을 고친다.
+- **브랜드 마크** — `fe/public/favicon.svg`·`favicon.ico`·`apple-touch-icon.png`를 쓴다. 토큰과 같은
+  스크립트가 빌드 때 `site/public/`으로 복사하고(gitignore), 커밋하는 사본은 없다. 그래서 `fe/DESIGN.md` §2의
+  "마크가 흩어진 여섯 군데"는 늘지 않는다. §0에 더하는 한 줄에 "마크 래스터도 빌드 때 가져간다"를 함께 적는다.
 - 평면, hairline 경계, 그라디언트·글래스 없음은 그대로다. 본문 16px 이상, 섹션 간격은 넓게 둔다.
 
 **색 토큰의 단일 출처를 유지한다.** 지금은 `fe/src/index.css`의 `:root`/`.dark` 블록(22–307행)이
-유일한 출처다. 이 두 블록을 `fe/src/styles/tokens.css`로 옮기고 `index.css`가 그것을 `@import`한다.
-사이트는 같은 파일을 상대 경로로 import한다. 값을 복사하지 않는다. `fe/DESIGN.md` §0 표의 "실제 값"
-칸을 `src/styles/tokens.css`(색) + `src/index.css`(나머지)로 고친다.
-이 이동은 선택자·값을 바꾸지 않는 순수 이동이다. `pnpm fe test`와 `pnpm fe build`로 확인한다.
+유일한 출처다. **사이트는 이 파일을 건드리지 않고 빌드 때 두 블록을 뽑아 쓴다.**
+`site/scripts/sync-from-fe.mjs`가 `fe/src/index.css`를 읽어 `:root { … }`와 `.dark { … }`만 떼어
+`site/src/styles/tokens.generated.css`(gitignore)에 쓰고, `site.css`가 그것을 import한다. `dev`·`build`
+스크립트가 이 추출을 먼저 돌린다. 값을 복사해 커밋하지 않는다.
+
+- 블록을 찾는 정규식은 `fe/src/design-tokens.test.ts`가 쓰는 것과 같다(`/^:root\s*\{([^}]*)\}/m`,
+  `/^\.dark\s*\{([^}]*)\}/m`). 블록 안에 `}`가 없다는 전제를 그 테스트가 이미 지키고 있다.
+- 둘 중 하나라도 못 찾거나 변수가 40개 미만이면 추출이 실패하고 빌드가 멈춘다. 조용히 빈 토큰으로
+  배포되는 것을 막는다.
+- **토큰을 별도 파일로 옮기지 않는 이유:** `fe/src/design-tokens.test.ts`와 desktop의
+  `tests/windows/window-background.test.ts`가 `fe/src/index.css`를 직접 읽고, `desktop/shell/*.html`의
+  주석도 이 파일을 원본으로 가리킨다. 옮기면 사이트 하나 때문에 fe·desktop 테스트 두 곳과 문서를 고쳐야 한다.
+- `fe/DESIGN.md` §0 표 아래에 "제품 사이트(`site/`)는 빌드 때 `:root`/`.dark`를 뽑아 쓴다 — 두 블록의
+  선택자를 바꾸면 사이트 빌드가 멈춘다"는 한 줄을 더한다.
 
 사이트의 다크 모드는 `fe/index.html`과 같은 방식이다. `<head>` 인라인 스크립트가
 `prefers-color-scheme`을 읽어 `<html class="dark">`를 붙인다. 토글이 없으므로 localStorage는 읽지 않는다.
@@ -239,7 +250,7 @@ site/
   package.json            # name: damwha-site, scripts: dev / build / preview / check
   astro.config.mjs        # site URL, i18n, sitemap 통합, @tailwindcss/vite
   public/
-    favicon.svg · favicon.ico · apple-touch-icon.png   # fe/public 복사 (§3.8)
+    favicon.svg · favicon.ico · apple-touch-icon.png   # sync-from-fe.mjs가 복사, gitignore (§3.8)
     og-en.png · og-ko.png                              # 1200×630 (§6)
     media/utterance-jump.<lang>.{mp4,webm} · utterance-jump-poster.<lang>.jpg   # §7
     robots.txt
@@ -258,8 +269,10 @@ site/
       index.astro         # <Landing lang="en" />
       ko/index.astro      # <Landing lang="ko" />
       404.astro
-    styles/site.css       # @import "tailwindcss"; @import "../../../fe/src/styles/tokens.css"; 사이트 전용 규칙
+    styles/site.css       # @import "tailwindcss"; @import "./tokens.generated.css"; 사이트 전용 규칙
+    styles/tokens.generated.css   # sync-from-fe.mjs 산출물, gitignore (§3.8)
   scripts/
+    sync-from-fe.mjs            # 토큰 추출 + 마크 복사 (§3.8)
     record-utterance-jump.mjs   # §7
     verify-seo.mjs              # §8
 ```
@@ -374,7 +387,7 @@ site/
 | Build command | `pnpm install --frozen-lockfile --filter damwha-site... && pnpm --filter damwha-site build` |
 | Output directory | `site/dist` |
 | 환경변수 | `SKIP_DEPENDENCY_INSTALL=1`, `NODE_VERSION=22` |
-| Build watch paths | 포함: `site/**`, `fe/src/styles/tokens.css`, `pnpm-lock.yaml` |
+| Build watch paths | 포함: `site/**`, `fe/src/index.css`, `fe/public/favicon*`, `pnpm-lock.yaml` |
 | Custom domain | `damwha.0kimjae.dev` |
 | Deploy hook | 만들어서 URL을 로컬 `DAMWHA_SITE_DEPLOY_HOOK`에 둔다(§3.7) |
 
@@ -429,6 +442,6 @@ site/
 | 앱 번역이 끝났는데 사이트 문구와 캡처가 그대로 남는다 | 다국어 설계 §9의 3·4단계가 들어간 릴리스에서 사이트 사전의 두 줄(요구사항·FAQ)을 고치고, 영어 캡처·영상으로 바꾼다. 다국어 설계 §9 6단계(문서)의 체크리스트에 이 사이트를 한 줄 더한다 |
 | GitHub API rate limit(비인증 60회/시) | 빌드당 1회 호출이라 닿지 않는다. 닿아도 §3.7 폴백 |
 | Pages 빌드 환경에서 pnpm·Node 버전이 어긋난다 | §8.1 첫 배포 로그 확인 항목 |
-| 토큰 파일 이동이 `fe` 스타일을 깨뜨린다 | 순수 이동이다. `fe` 테스트·빌드와 `/showcase` 라우트를 라이트·다크로 눈으로 확인 |
+| `fe/src/index.css`의 블록 구조가 바뀌어 사이트 토큰이 빈다 | 추출이 못 찾으면 빌드가 실패한다(§3.8). 조용한 빈 배포는 없다 |
 | 데모 시드가 바뀌어 영상 장면이 사라진다 | 영상은 커밋된 산출물이라 깨지지 않는다. 시드 갱신 체크리스트(`deploy/demo/README.md`)에 "영상 재녹화 여부" 한 줄을 더한다 |
 | 초기 색인이 느리다 | Search Console 색인 요청 + README·GitHub About 백링크. 브랜드명 검색은 보통 며칠 안에 잡힌다 |
