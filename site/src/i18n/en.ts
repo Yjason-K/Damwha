@@ -2,7 +2,7 @@ export const en = {
   meta: {
     title: "Damwha — Private, speaker-attributed conversation search for Mac",
     description:
-      "Record conversations and search every utterance by speaker and moment, one click from the original audio. Transcription, speaker ID and summaries run entirely on your Mac.",
+      "Record conversations, search who said what, and jump to that moment in the original audio. Transcription, speaker ID and summaries run entirely on your Mac.",
     ogImage: "/og-en.png",
     ogImageAlt: "Damwha — Find the moment it was said.",
     ogLocale: "en_US",
@@ -12,7 +12,7 @@ export const en = {
   hero: {
     eyebrow: "Free and open source · macOS",
     title: "Find the moment it was said.",
-    lede: "Damwha records your conversations and turns them into speaker-attributed, searchable utterances — every line one click from the original audio. Everything runs on your Mac.",
+    lede: "Record a conversation, search who said what, and jump straight to that moment in the original audio. Everything runs on your Mac.",
     download: "Download for Mac",
     downloadFallback: "Download from GitHub",
     demo: "Try the live demo",
@@ -23,7 +23,7 @@ export const en = {
   },
   problem: {
     title: "Conversations pile up. Finding what was said doesn't get easier.",
-    body: "Memory fades, transcripts are long, and most transcription tools make you rename “Speaker 1” every time. Damwha treats each utterance as the unit — tied to who said it, when, the original text and audio, and the turns around it.",
+    body: "Memory fades, transcripts are long, and most transcription tools make you rename “Speaker 1” every time. Damwha keeps every line tied to who said it, when, the original audio, and the turns around it.",
   },
   jump: {
     title: "Utterance jump",
