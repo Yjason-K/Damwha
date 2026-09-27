@@ -6,15 +6,15 @@ export const ko = {
     description:
       "대화를 녹음하면 누가·언제·무슨 말을 했는지 발화 단위로 정리하고 어떤 줄이든 한 번에 원본 음성으로 이어 줘요. 전사·화자 식별·요약이 모두 내 Mac 안에서 돌아요.",
     ogImage: "/og-ko.png",
-    ogImageAlt: "담화 — 그 말, 그 순간으로.",
+    ogImageAlt: "담화 — 그때 누가 뭐라고 했더라?",
     ogLocale: "ko_KR",
     ogLocaleAlt: "en_US",
   },
   nav: { home: "담화 홈", langSwitch: "English", langSwitchLabel: "View in English", github: "GitHub" },
   hero: {
     eyebrow: "무료 · 오픈소스 · macOS",
-    title: "그 말, 그 순간으로.",
-    lede: "담화는 대화를 녹음해 누가·언제·무슨 말을 했는지 발화 단위로 정리해요. 어떤 줄이든 한 번에 원본 음성으로 이어지고 모든 처리는 내 Mac 안에서 끝나요.",
+    title: "그때 누가 뭐라고 했더라?",
+    lede: "대화를 녹음하면 담화가 누가·언제·무슨 말을 했는지 정리해 둬요. 검색하면 그 말을 한 순간의 원본 음성으로 바로 가요.",
     download: "Mac용 다운로드",
     downloadFallback: "GitHub에서 받기",
     demo: "데모 써보기",

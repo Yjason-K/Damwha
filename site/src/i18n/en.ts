@@ -4,15 +4,15 @@ export const en = {
     description:
       "Record conversations, search who said what, and jump to that moment in the original audio. Transcription, speaker ID and summaries run entirely on your Mac.",
     ogImage: "/og-en.png",
-    ogImageAlt: "Damwha — Find the moment it was said.",
+    ogImageAlt: "Damwha — Wait, who said that?",
     ogLocale: "en_US",
     ogLocaleAlt: "ko_KR",
   },
   nav: { home: "Damwha home", langSwitch: "한국어", langSwitchLabel: "한국어로 보기", github: "GitHub" },
   hero: {
     eyebrow: "Free and open source · macOS",
-    title: "Find the moment it was said.",
-    lede: "Record a conversation, search who said what, and jump straight to that moment in the original audio. Everything runs on your Mac.",
+    title: "Wait, who said that?",
+    lede: "Record a conversation and Damwha keeps track of who said what, and when. Search for it and jump straight to that moment in the original audio.",
     download: "Download for Mac",
     downloadFallback: "Download from GitHub",
     demo: "Try the live demo",

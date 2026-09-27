@@ -34,6 +34,12 @@
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
   }
+  /* 한국어는 어절 단위로 줄을 바꾼다 — 기본값(break-all류)이면 "했더/라?"처럼 단어 중간이 끊긴다.
+     긴 URL·경로가 넘치지 않게 overflow-wrap을 함께 둔다. */
+  :lang(ko) {
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+  }
   :focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);

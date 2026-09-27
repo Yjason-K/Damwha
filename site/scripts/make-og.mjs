@@ -11,8 +11,8 @@ const siteRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const hero = `data:image/png;base64,${readFileSync(join(siteRoot, "src/assets/00-hero.png")).toString("base64")}`;
 const mark = readFileSync(join(siteRoot, "../fe/public/favicon.svg"), "utf8");
 const TITLES = {
-  en: { title: "Find the moment it was said.", sub: "Private, speaker-attributed conversation search for Mac" },
-  ko: { title: "그 말, 그 순간으로.", sub: "내 Mac에서 도는 화자별 대화 기록·검색" },
+  en: { title: "Wait, who said that?", sub: "Private, speaker-attributed conversation search for Mac" },
+  ko: { title: "그때 누가 뭐라고 했더라?", sub: "내 Mac에서 도는 화자별 대화 기록·검색" },
 };
 
 const html = ({ title, sub }) => `<!doctype html><html><head><meta charset="utf-8"><style>
@@ -20,8 +20,8 @@ const html = ({ title, sub }) => `<!doctype html><html><head><meta charset="utf-
   .text{position:absolute;left:72px;top:72px;width:560px}
   .brand{display:flex;align-items:center;gap:14px;font-size:28px;font-weight:600}
   .brand svg{width:44px;height:44px}
-  h1{font-size:60px;line-height:1.08;letter-spacing:-0.02em;margin:56px 0 0;font-weight:650}
-  p{font-size:24px;line-height:1.35;color:#9AA4AF;margin:24px 0 0}
+  h1{word-break:keep-all;font-size:60px;line-height:1.08;letter-spacing:-0.02em;margin:56px 0 0;font-weight:650}
+  p{word-break:keep-all;font-size:24px;line-height:1.35;color:#9AA4AF;margin:24px 0 0}
   img{position:absolute;left:640px;top:96px;width:720px}
 </style></head><body>
   <div class="text"><div class="brand">${mark}Damwha</div><h1>${title}</h1><p>${sub}</p></div>

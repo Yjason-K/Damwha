@@ -209,13 +209,10 @@ Hero(`00-hero`)와 같은 화면이라 쓰지 않는다. 발화 점프의 포스
 
 ### 4.1 문구 초안
 
-**Hero**
+**Hero** (2026-09-27 개정 — 첫 방문자가 바로 공감하는 질문으로 시작한다)
 
-- EN — *Find the moment it was said.* / Damwha records your conversations and turns them into
-  speaker-attributed, searchable utterances — every line one click from the original audio.
-  Runs entirely on your Mac.
-- KO — *그 말, 그 순간으로.* / 담화는 대화를 녹음해 누가·언제·무슨 말을 했는지 발화 단위로
-  정리합니다. 어떤 줄이든 한 번에 원본 음성으로. 모든 처리는 내 Mac 안에서.
+- EN — *Wait, who said that?* / Record a conversation and Damwha keeps track of who said what, and when. Search for it and jump straight to that moment in the original audio.
+- KO — *그때 누가 뭐라고 했더라?* / 대화를 녹음하면 담화가 누가·언제·무슨 말을 했는지 정리해 둬요. 검색하면 그 말을 한 순간의 원본 음성으로 바로 가요.
 - 버튼: `Download for Mac` / `Mac용 다운로드`, `Try the live demo` / `데모 써보기`
 - 버튼 아래: `v0.4.1 · Apple Silicon · macOS 15+`(§3.7 빌드 값, 여기 적은 것은 예시)
 
