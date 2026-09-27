@@ -25,7 +25,7 @@ export const en = {
   },
   problem: {
     title: "Conversations pile up. Finding what was said doesn't get easier.",
-    body: "Memory fades, transcripts are long, and most transcription tools make you rename “Speaker 1” every time. Damwha keeps every line tied to who said it, when, the original audio, and the turns around it.",
+    body: "Memory fades, and finding one line in a long recording is hard. Damwha tells speakers apart by their voices, and once it knows someone, it recognizes them in every other conversation too. Every line is saved with its text, audio and the turns around it.",
   },
   jump: {
     title: "Utterance jump",
