@@ -10,7 +10,7 @@ const links = [
 ] as const;
 ---
 <footer class="border-line border-t">
-  <div class="text-ink-3 mx-auto flex max-w-6xl flex-col gap-4 px-4 py-10 text-sm sm:flex-row sm:items-center sm:justify-between sm:px-6">
+  <div class="text-ink-2 mx-auto flex max-w-6xl flex-col gap-4 px-4 py-10 text-sm sm:flex-row sm:items-center sm:justify-between sm:px-6">
     <p>Damwha · {t.footer.tagline}</p>
     <ul class="flex flex-wrap gap-x-5 gap-y-2">
       {links.map(([label, href]) => <li><a class="hover:text-ink" href={href}>{label}</a></li>)}

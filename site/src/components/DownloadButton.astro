@@ -13,8 +13,8 @@ const label = release.kind === "asset" ? t.hero.download : t.hero.downloadFallba
     <svg aria-hidden="true" viewBox="0 0 16 16" class="size-4" fill="currentColor"><path d="M8 1.5a.75.75 0 0 1 .75.75v7.19l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 0 1 1.06-1.06l2.22 2.22V2.25A.75.75 0 0 1 8 1.5ZM2.75 13a.75.75 0 0 0 0 1.5h10.5a.75.75 0 0 0 0-1.5H2.75Z"/></svg>
     {label}
   </a>
-  <span class="text-ink-3 font-mono text-xs">
+  <span class="text-ink-2 font-mono text-[13px]">
     {release.kind === "asset" && <>v{release.version} · {t.hero.appSize(formatSize(release.sizeBytes))} · </>}{t.hero.requirements}
   </span>
-  <span class="text-ink-3 text-xs">{t.hero.modelsNote}</span>
+  <span class="text-ink-2 text-[13px]">{t.hero.modelsNote}</span>
 </div>
