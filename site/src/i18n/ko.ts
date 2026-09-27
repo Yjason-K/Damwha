@@ -20,7 +20,9 @@ export const ko = {
     demo: "데모 써보기",
     demoUrl: "https://damwha-demo.0kimjae.dev/?lang=ko",
     demoNote: "읽기 전용 데모 · 가입 없이 바로",
-    requirements: "Apple Silicon · macOS 15 이상",
+    requirements: "Apple Silicon(M1 이상) · macOS 15 이상",
+    appSize: (size: string) => `앱 ${size}`,
+    modelsNote: "모델 8–40 GB는 처음 쓸 때 따로 받아요",
     imageAlt: "담화의 전사 화면: 회의 목록, 화자별 색으로 나뉜 발화, 인사이트 패널",
   },
   problem: {

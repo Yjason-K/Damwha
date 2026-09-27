@@ -14,6 +14,7 @@ const label = release.kind === "asset" ? t.hero.download : t.hero.downloadFallba
     {label}
   </a>
   <span class="text-ink-3 font-mono text-xs">
-    {release.kind === "asset" && <>v{release.version} · {formatSize(release.sizeBytes)} · </>}{t.hero.requirements}
+    {release.kind === "asset" && <>v{release.version} · {t.hero.appSize(formatSize(release.sizeBytes))} · </>}{t.hero.requirements}
   </span>
+  <span class="text-ink-3 text-xs">{t.hero.modelsNote}</span>
 </div>

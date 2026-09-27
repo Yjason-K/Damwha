@@ -18,7 +18,9 @@ export const en = {
     demo: "Try the live demo",
     demoUrl: "https://damwha-demo.0kimjae.dev/?lang=en",
     demoNote: "Read-only demo · sample conversations are in Korean",
-    requirements: "Apple Silicon · macOS 15+",
+    requirements: "Apple Silicon (M1+) · macOS 15+",
+    appSize: (size: string) => `${size} app`,
+    modelsNote: "Plus 8–40 GB of models, downloaded on first use",
     imageAlt: "Damwha's transcript view: conversation list, speaker-colored transcript and insight panel",
   },
   problem: {
