@@ -14,7 +14,7 @@
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](be/worker/pyproject.toml)
 [![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-MLX-000000?logo=apple&logoColor=white)](#ml-모델--게이트-걸림-용량-큼)
 
-### [▶ 공개 데모 열기](https://damwha-demo.0kimjae.dev)
+### [제품 사이트](https://damwha.0kimjae.dev/ko/) · [▶ 공개 데모 열기](https://damwha-demo.0kimjae.dev)
 
 [English](README.md) · **한국어**
 
