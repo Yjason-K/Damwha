@@ -46,7 +46,10 @@ const page = await context.newPage();
 const t0 = Date.now();
 
 await page.goto(`${DEMO}/meetings/mtg_7?lang=${lang}`, { waitUntil: "load" });
-await page.waitForTimeout(2500);
+// 23분짜리 투어 회의는 고정 대기로는 스피너가 남는다 — 영상 첫 프레임이 빈 화면이 됐다(2026-09-27).
+// 데모 투어가 쓰는 앵커(data-tour="player-bar")가 뜰 때까지 기다린다.
+await page.locator('[data-tour="player-bar"]').waitFor({ state: "visible", timeout: 30_000 });
+await page.waitForTimeout(1200);
 if ((await page.getByRole("dialog").count()) > 0) throw new Error("첫 방문 모달이 떠 있다 — tour-state 키가 바뀌었나?");
 
 const clipStart = (Date.now() - t0) / 1000 - 0.8;
@@ -77,7 +80,9 @@ const ff = (...args) => execFileSync("ffmpeg", ["-hide_banner", "-loglevel", "er
 
 ff("-ss", ss, "-t", dur, "-i", raw, "-an", "-vf", vf, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "26", "-preset", "slow", "-movflags", "+faststart", `${base}.mp4`);
 ff("-ss", ss, "-t", dur, "-i", raw, "-an", "-vf", vf, "-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "38", "-row-mt", "1", `${base}.webm`);
-ff("-ss", ss, "-i", raw, "-frames:v", "1", "-vf", `scale=${width}:-2`, "-q:v", "3", join(outDir, `utterance-jump-poster.${lang}.jpg`));
+// 포스터는 도착한 뒤의 장면이다 — 첫 프레임은 회의를 불러오는 중인 빈 화면이라, 영상이 로드되기 전이나
+// reduced-motion 방문자에게 기능을 전혀 보여 주지 못했다(2026-09-27 코덱스 리뷰 #1).
+ff("-sseof", "-0.4", "-i", `${base}.mp4`, "-frames:v", "1", "-q:v", "3", join(outDir, `utterance-jump-poster.${lang}.jpg`));
 
 rmSync(rawDir, { recursive: true, force: true });
 for (const ext of ["mp4", "webm"]) {

@@ -203,7 +203,7 @@ Utterance, Speaker, Lens, Enroll speaker, 프리셋 Light / Standard / Quality(�
 
 Features 그리드는 네 칸이고 이미지는 칸마다 하나씩이다: 화자 식별 `app-05-speakers`, 검색 `app-02-search`,
 렌즈 `app-04-lenses`, "내 Mac에 맞춘 처리(프리셋 추천·요약 언어)" `app-06-settings`. `app-01-transcript`는
-Hero(`00-hero`)와 같은 화면이라 쓰지 않는다. 발화 점프의 포스터는 §7의 첫 프레임이다. 영상과 어긋나지 않게
+Hero(`00-hero`)와 같은 화면이라 쓰지 않는다. 발화 점프의 포스터는 §7의 도착 장면(마지막 프레임)이다. 영상과 어긋나지 않게
 하려는 것이라 `app-03`은 쓰지 않는다. 표의 4번째 칸 설명은 "요약 언어·프리셋 추천"으로 읽는다. 실시간
 녹음은 Features 밖 FAQ에서 다룬다.
 
@@ -368,7 +368,8 @@ site/
 
 - `utterance-jump.<lang>.mp4` — H.264, `yuv420p`, `+faststart`, 오디오 없음, 1440 폭
 - `utterance-jump.<lang>.webm` — VP9, 같은 크기
-- `utterance-jump-poster.<lang>.jpg` — 첫 프레임
+- `utterance-jump-poster.<lang>.jpg` — 마지막 프레임(발화에 도착해 강조된 장면). 첫 프레임은 로딩 중인 빈 화면이라
+  영상이 로드되기 전과 reduced-motion 방문자에게 아무것도 보여 주지 못한다(2026-09-27 코덱스 리뷰)
 - 목표 크기는 각 2 MB 이하다. 넘으면 폭을 1280으로 줄인다.
 
 **재생:** `<video muted loop playsinline preload="none" poster=…>`에 `<source>` 두 개를 둔다.
