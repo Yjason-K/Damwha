@@ -145,3 +145,19 @@ test("녹음 중인 회의에는 '녹음 중' 뱃지가 붙는다", async () => 
   );
   expect(await screen.findByText("녹음 중")).toBeInTheDocument();
 });
+
+test("사이드바 맨 아래에 화면 테마 버튼이 있다", () => {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={["/"]}>
+        <LeftNav filter="all" onFilter={() => {}} onOpenSearch={() => {}} />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  const nav = screen.getByRole("navigation", { name: "주 탐색" });
+  const button = screen.getByRole("button", { name: /^화면 테마: / });
+  expect(nav).toContainElement(button);
+});

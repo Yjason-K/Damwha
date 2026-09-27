@@ -111,7 +111,12 @@ def run_summarize_meeting(
     with timed_stage("summarize_meeting", f"job={job['id']} meeting={payload.meeting_id}") as t:
         row_dicts = [dict(row) for row in rows]
         response = run_guarding_disk_full(
-            proc, lambda: client.summarize(model=payload.model, utterances=row_dicts)
+            proc,
+            lambda: client.summarize(
+                model=payload.model,
+                utterances=row_dicts,
+                output_language=payload.output_language,
+            ),
         )
         segments = _resolve_segments(response.segments, row_dicts)
         t["detail"] = f"utterances={len(rows)} segments={len(segments)}"

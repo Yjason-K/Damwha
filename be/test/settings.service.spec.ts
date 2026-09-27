@@ -34,6 +34,7 @@ describe('SettingsService.getProcessingConfig', () => {
       preset: 'light', preset_revision: PRESET_REVISION, language: 'ko',
       whisper_model: 'small', devices: { diarization: 'gpu', stt: 'cpu' },
       summary_model: 'mlx-community/Qwen3.5-4B-8bit',
+      summary_language: 'transcript',
     });
     const row = await db.pool.query(`SELECT value FROM app_setting WHERE key='processing_defaults'`);
     expect(row.rows[0].value).toEqual({ preset: 'light', language: 'ko' }); // 이름만 저장 — 개별 값 스냅샷 없음

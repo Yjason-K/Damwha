@@ -420,9 +420,12 @@ const appKeys = entitlementKeys(appDir);
 const pyKeys = entitlementKeys(path.join(pyDir, "bin", "python3.12"));
 const MIN = ["com.apple.security.cs.allow-unsigned-executable-memory", "com.apple.security.cs.disable-library-validation"];
 const JIT = "com.apple.security.cs.allow-jit";
+// 마이크. 없으면 hardened runtime이 마이크를 조용히 막아 라이브 녹음이 0만 담긴다 (entitlements.mac.plist).
+const MIC = "com.apple.security.device.audio-input";
+const APP_KEYS = [...MIN, JIT, MIC];
 check(
-  "the .app carries the three entitlements of entitlements.mac.plist",
-  appKeys !== null && appKeys.length === 3 && [...MIN, JIT].every((k) => appKeys.includes(k)),
+  "the .app carries the four entitlements of entitlements.mac.plist",
+  appKeys !== null && appKeys.length === APP_KEYS.length && APP_KEYS.every((k) => appKeys.includes(k)),
   (appKeys ?? ["(codesign -d failed)"]).join(", "),
 );
 // Python 트리에는 allow-jit을 주지 않는다 — 안 쓰는 권한이다. 거꾸로 .app에 이 최소 집합만
@@ -442,12 +445,12 @@ check(
   (ffKeys ?? ["(codesign -d failed)"]).join(", "),
 );
 // 헬퍼는 우리가 따로 서명하지 않는다 — .app의 `--deep`이 mac plist로 같이 서명한다. 렌더러
-// 헬퍼가 V8을 돌리므로 allow-jit까지 셋을 물려받아야 하고, 그러지 못하면 앱이 rc=133으로
+// 헬퍼가 V8을 돌리므로 allow-jit까지 물려받아야 하고, 그러지 못하면 앱이 rc=133으로
 // 죽는다 (2026-09-16 실측). 지금 --deep이 옳게 도는 것이 우연이 아님을 여기서 고정한다.
 const helperKeys = entitlementKeys(path.join(contents, "Frameworks", "Damwha Helper (Renderer).app"));
 check(
-  "Damwha Helper (Renderer).app inherits the three entitlements of entitlements.mac.plist",
-  helperKeys !== null && helperKeys.length === 3 && [...MIN, JIT].every((k) => helperKeys.includes(k)),
+  "Damwha Helper (Renderer).app inherits the four entitlements of entitlements.mac.plist",
+  helperKeys !== null && helperKeys.length === APP_KEYS.length && APP_KEYS.every((k) => helperKeys.includes(k)),
   (helperKeys ?? ["(codesign -d failed)"]).join(", "),
 );
 

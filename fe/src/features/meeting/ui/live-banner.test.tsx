@@ -40,7 +40,7 @@ test("job이 아직 queued면 워커를 기다린다고 알리고 버튼은 취�
       now={() => T0}
     />,
   );
-  expect(screen.getByRole("status")).toHaveTextContent("워커를 기다리는 중");
+  expect(screen.getByRole("status")).toHaveTextContent("작업 처리기를 기다리는 중");
   fireEvent.click(screen.getByRole("button", { name: "취소" }));
   expect(onStop).toHaveBeenCalled();
 });
@@ -81,7 +81,7 @@ test("heartbeat가 박동 주기의 세 배 넘게 멈추면 신호 끊김으로
       now={() => T0 + 120_000}
     />,
   );
-  expect(screen.getByRole("alert")).toHaveTextContent("워커 신호가 끊겼어요");
+  expect(screen.getByRole("alert")).toHaveTextContent("작업 처리기 신호가 끊겼어요");
 });
 
 // 워커가 죽은 상태에서 stop은 아무 일도 하지 않는다 — 플래그를 읽어 줄 워커가 없다.

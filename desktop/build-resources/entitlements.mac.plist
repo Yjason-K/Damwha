@@ -18,5 +18,12 @@
   <true/>
   <key>com.apple.security.cs.disable-library-validation</key>
   <true/>
+
+  <!-- 없으면 라이브 녹음이 전부 무음이 된다. hardened runtime 아래서 이 키가 없으면 macOS가
+       권한 프롬프트 없이 마이크를 거부하고, getUserMedia는 성공한 채 0만 담긴 샘플을 흘린다 —
+       오류가 어디에도 나지 않는다 (2026-09-26 실측: mtg_14의 38.5초 PCM 전 구간이 0,
+       VAD spans=0). Info.plist의 NSMicrophoneUsageDescription만으로는 부족하다. -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
 </dict>
 </plist>

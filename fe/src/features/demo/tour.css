@@ -35,11 +35,19 @@
 .driver-popover.damwha-tour .driver-popover-next-btn {
   background: var(--accent-solid);
   border-color: var(--accent-solid);
-  color: #fff;
+  color: var(--text-on-accent);
 }
 .driver-popover.damwha-tour .driver-popover-next-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+/* driver.css 기본값은 close 버튼 hover/focus 글자색을 라이트 전용 진회색으로 고정해 다크 카드에서 사라진다. */
+.driver-popover.damwha-tour .driver-popover-close-btn {
+  color: var(--text-faint);
+}
+.driver-popover.damwha-tour .driver-popover-close-btn:hover,
+.driver-popover.damwha-tour .driver-popover-close-btn:focus {
+  color: var(--text-primary);
 }
 .driver-popover.damwha-tour .driver-popover-arrow-side-left.driver-popover-arrow { border-left-color: var(--surface-card); }
 .driver-popover.damwha-tour .driver-popover-arrow-side-right.driver-popover-arrow { border-right-color: var(--surface-card); }

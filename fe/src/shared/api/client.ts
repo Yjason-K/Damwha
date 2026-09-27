@@ -98,7 +98,9 @@ apiClient.interceptors.response.use(
         : error.response
           ? error.message || "알 수 없는 오류가 발생했어요."
           : "서버에 연결할 수 없어요.";
-    return Promise.reject(new ApiError(status, message));
+    // 서버가 붙인 기계용 code는 항상 싣는다 — 화면이 code로 문구를 고른다(모델 받기·삭제 409 등).
+    const code = typeof data?.code === "string" ? data.code : undefined;
+    return Promise.reject(new ApiError(status, message, code));
   },
 );
 

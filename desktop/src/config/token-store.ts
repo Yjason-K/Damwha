@@ -45,7 +45,7 @@ export type FetchLike = (url: string, init: FetchLikeInit) => Promise<FetchLikeR
 
 export const TOKEN_FILE_NAME = "hf-token.bin";
 export const HF_WHOAMI_URL = "https://huggingface.co/api/whoami-v2";
-/** 온보딩 화면의 두 링크. 여는 것은 main이다(windows/token-window.ts) — 렌더러는 주소를 고르지 않는다. */
+/** 담화 화면의 두 링크. 여는 것은 main이다(windows/token-bridge.ts) — 렌더러는 주소를 고르지 않는다. */
 export const HF_TOKENS_PAGE_URL = "https://huggingface.co/settings/tokens";
 /** 앱이 받는 모델 중 조건 수락이 필요한 것은 화자 분리 하나다 (worker의 PyannoteDiarizer). */
 export const HF_GATED_MODEL_PAGE_URL = "https://huggingface.co/pyannote/speaker-diarization-community-1";
@@ -163,7 +163,7 @@ class VerifyTimeout extends Error {}
  * | 네트워크 실패·리다이렉트·시간 초과 | offline | "지금은 확인할 수 없어요" |
  * | 헤더에 못 싣는 토큰(빈 값·공백·비ASCII) | invalid | 요청하지 않는다 |
  *
- * **ok가 아니면 저장하지 않는다** — 부르는 쪽(token-window.ts)의 규칙이다.
+ * **ok가 아니면 저장하지 않는다** — 부르는 쪽(token-bridge.ts)의 규칙이다.
  *
  * 실패의 detail에는 HTTP 상태와 HF 응답 문구만 싣는다. **원본 예외 메시지를 옮기지 않는다** — 네트워크
  * 스택이 요청 헤더를 메시지에 담는 경우가 있고, 그러면 토큰이 화면과 로그에 샌다. 네트워크 실패는

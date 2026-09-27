@@ -1,7 +1,7 @@
 {
   "name": "damwha-desktop",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.4.1",
   "license": "MIT",
   "description": "Damwha macOS desktop shell. Runs the NestJS API as a child process and loads the SPA it serves.",
   "main": "dist/main.js",
@@ -17,6 +17,7 @@
     "lint": "tsc -p tsconfig.lint.json"
   },
   "devDependencies": {
+    "@damwha/contracts": "workspace:*",
     "@electron/asar": "^4.0.1",
     "@types/node": "^22.20.0",
     "electron": "44.3.0",

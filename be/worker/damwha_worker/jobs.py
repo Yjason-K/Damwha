@@ -16,12 +16,14 @@ from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 
-from . import db
+from . import db, errors
 from .errors import AUDIO_DEVICE_FAILED, ErrorKind, WorkerError
+from .models import specs
 from .pipeline.enroll_speaker import run_enroll_speaker
 from .pipeline.extract_lenses import run_extract_lenses
 from .pipeline.index_meeting import run_index_meeting
 from .pipeline.live_session import run_live_session
+from .pipeline.model_jobs import run_delete_model, run_download_model
 from .pipeline.process_meeting import run_process_meeting
 from .pipeline.summarize_meeting import run_summarize_meeting
 from .storage import Storage
@@ -70,6 +72,8 @@ class JobContext:
     default_speaker_prefix: str = "Speaker"
     lens_llm_model: str | None = None
     summary_llm_model: str | None = None
+    #: 모델 받기가 게이트 모델(화자 분리)을 받을 때 쓴다
+    hf_token: str | None = None
     meeting_timezone: str = "Asia/Seoul"
     live_max_minutes: float = 240.0
 
@@ -358,6 +362,56 @@ class LiveSessionHandler(JobHandler):
         return "failed" if ok else "lost"
 
 
+class DownloadModelHandler(JobHandler):
+    """모델 미리 받기 (모델 다운로드 관리 스펙 §7.1·§7.2·§7.4)."""
+
+    type = "download_model"
+
+    def run(self, conn, job, payload, ctx):
+        return run_download_model(
+            conn, job, payload, worker_id=ctx.worker_id, hf_token=ctx.hf_token
+        )
+
+    def on_failure(self, conn, job, ctx, error, *, retry):
+        cancelled = error.get("code") == errors.DOWNLOAD_CANCELLED
+        if retry and not cancelled:
+            return "requeued" if db.requeue(conn, job["id"], ctx.worker_id, error) else "lost"
+        ok = db.fail_job(conn, job["id"], ctx.worker_id, error)
+        # 최종 실패·취소 — 사유는 job.error에 있고 설정 화면이 그것을 보인다. readiness의 failed를
+        # 남기면 desktop 상태 창이 선택 기능의 실패에 "다시 시작"을 권한다 (스펙 §7.4).
+        repo = _repo_of(job)
+        if repo is not None:
+            try:
+                db.remove_model_readiness_key(conn, repo)
+            except Exception:  # noqa: BLE001 — 정리 실패가 job 마무리를 깨지 않는다
+                log.warning("could not clear model_readiness for %s", repo, exc_info=True)
+        return "failed" if ok else "lost"
+
+
+class DeleteModelHandler(JobHandler):
+    """전사·요약 모델 삭제 (스펙 §7.3). `on_failure`를 덮어쓰지 않는다 — 기본 정책 그대로
+    TRANSIENT 실패는 재시도된다(D2 최종 리뷰. 이전 docstring은 "재시도 없음"이라 적었지만
+    틀렸다). 삭제는 멱등이다: 실패한 디렉터리 삭제는 다시 지우면 그만이고, 재시도마다
+    `model_job_refs`를 다시 검사하므로 안전하다. API가 이 job을 `max_attempts=1`로 넣어
+    지금은 실질적으로 재시도가 거의 안 일어나지만, 그건 job 설정이지 이 handler의 계약이
+    아니다 — max_attempts가 바뀌면 이 경로가 실제로 쓰인다."""
+
+    type = "delete_model"
+
+    def run(self, conn, job, payload, ctx):
+        return run_delete_model(
+            conn, job, payload, worker_id=ctx.worker_id,
+            lens_models=[m for m in (ctx.lens_llm_model,) if m],
+            summary_fallback=ctx.summary_llm_model,
+        )
+
+
+def _repo_of(job) -> str | None:
+    p = job.get("payload") or {}
+    spec = specs.spec_for(p.get("role"), p.get("name"), p.get("backend"))
+    return spec.repo_id if spec is not None else p.get("name")
+
+
 def is_browser_live(job: dict) -> bool:
     """이 job이 브라우저가 캡처하는 라이브 세션인가.
 
@@ -412,6 +466,8 @@ HANDLERS: dict[str, JobHandler] = {
         ExtractLensesHandler(),
         SummarizeMeetingHandler(),
         LiveSessionHandler(),
+        DownloadModelHandler(),
+        DeleteModelHandler(),
     )
 }
 

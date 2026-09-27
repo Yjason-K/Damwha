@@ -236,14 +236,14 @@ test("기본 제목은 '녹음 YYYY-MM-DD HH:mm'이다", () => {
 // jsdom의 기본 상태가 정확히 그 상태라 아무것도 stub하지 않는다.
 test("insecure context에서는 녹음을 막고 회의를 만들지 않는다", async () => {
   const { post } = renderDialog();
-  expect(await screen.findByText(/HTTPS/)).toBeInTheDocument();
+  expect(await screen.findByText(/마이크를 쓸 수 없어요/)).toBeInTheDocument();
   expect(startCalls(post)).toHaveLength(0);
 });
 
 test("마이크 권한이 거부됐으면 녹음을 막는다", async () => {
   stubCapture({ permission: "denied" });
   const { post } = renderDialog();
-  expect(await screen.findByText(/마이크 권한/)).toBeInTheDocument();
+  expect(await screen.findByText(/마이크 권한이 꺼져/)).toBeInTheDocument();
   expect(startCalls(post)).toHaveLength(0);
 });
 
@@ -336,7 +336,7 @@ test("게이트의 권한 프롬프트를 거부하면 안내하고 녹음 시�
   });
   const { post } = renderDialog();
 
-  expect(await screen.findByText(/마이크 권한/)).toBeInTheDocument();
+  expect(await screen.findByText(/마이크 권한이 꺼져/)).toBeInTheDocument();
   expect(screen.queryByLabelText("마이크")).toBeNull();
   expect(screen.getByRole("button", { name: "녹음 시작" })).toBeDisabled();
   expect(startCalls(post)).toHaveLength(0);

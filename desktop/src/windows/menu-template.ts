@@ -1,4 +1,6 @@
 import type { MenuItemConstructorOptions } from "electron";
+import type { UiLanguage } from "../i18n/locale";
+import { t } from "../i18n/dictionary";
 
 /**
  * 앱 메뉴 템플릿 — 순수 함수라 시험할 수 있다. 설치는 menu.ts가 한다.
@@ -10,6 +12,8 @@ import type { MenuItemConstructorOptions } from "electron";
  * 앱 메뉴는 `{ role: "appMenu" }` 대신 명시 템플릿이다 — "업데이트 확인…"을 넣을 자리가 필요해서다.
  * Electron 44.3.0의 appMenu가 내던 항목(about·services·hide·hideOthers·unhide·quit과 구분선)을
  * 그대로 재현한다 (Phase 6b-1 스펙 §4.4). `quit` role은 app.quit()을 거쳐 before-quit 흐름에 닿는다.
+ *
+ * role 항목(about·hide·quit·editMenu…)의 이름은 macOS가 시스템 언어로 붙인다 — 화면 언어를 따르지 않는다.
  */
 export interface MenuHandlers {
   onRetry(): void;
@@ -24,15 +28,16 @@ export interface MenuHandlers {
 export function buildMenuTemplate(
   handlers: MenuHandlers,
   appName: string,
-  opts: { restoreEnabled: boolean } = { restoreEnabled: false },
+  opts: { restoreEnabled: boolean; language?: UiLanguage } = { restoreEnabled: false },
 ): MenuItemConstructorOptions[] {
+  const lang = opts.language ?? "ko";
   return [
     {
       label: appName,
       submenu: [
         { role: "about" },
-        { label: "업데이트 확인…", click: () => handlers.onCheckForUpdates() },
-        { label: "업데이트 전으로 되돌리기…", enabled: opts.restoreEnabled, click: () => handlers.onRestore() },
+        { label: t(lang, "menu.checkForUpdates"), click: () => handlers.onCheckForUpdates() },
+        { label: t(lang, "menu.restore"), enabled: opts.restoreEnabled, click: () => handlers.onRestore() },
         { type: "separator" },
         { role: "services" },
         { type: "separator" },
@@ -44,15 +49,15 @@ export function buildMenuTemplate(
       ],
     },
     {
-      label: "서비스",
+      label: t(lang, "menu.services"),
       submenu: [
         {
-          label: "서비스 상태",
+          label: t(lang, "menu.serviceStatus"),
           accelerator: "CmdOrCtrl+Alt+S",
           click: () => handlers.onShowStatus(),
         },
         {
-          label: "다시 시도",
+          label: t(lang, "menu.retry"),
           accelerator: "CmdOrCtrl+Alt+R",
           click: () => handlers.onRetry(),
         },

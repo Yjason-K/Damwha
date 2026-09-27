@@ -23,19 +23,13 @@ _MODEL = {
 
 
 def _repo_id(size: str) -> str:
-    """faster-whisper가 그 크기 이름으로 내려받는 HF 저장소 — `model_readiness`의 key다.
+    """faster-whisper가 그 크기 이름으로 받는 HF 저장소 — `model_readiness`의 key다.
 
-    이름→저장소 표를 여기에 베끼지 않는다. `large-v3-turbo`는 `Systran/…`이 아니라
-    `mobiuslabsgmbh/…`이고, 그런 예외를 손으로 옮기면 조용히 갈린다. 표를 못 읽으면(모듈 없음 ·
-    상수 이름 변경) 크기 이름 그대로를 쓴다 — 보고의 key가 덜 정확할 뿐 적재는 그대로 돈다.
+    풀이는 `specs.faster_repo_id` 하나가 한다(소스에서 표를 읽음, 베끼지 않음).
     """
-    if "/" in size:
-        return size
-    try:
-        from faster_whisper.utils import _MODELS
-    except ImportError:
-        return size
-    return _MODELS.get(size, size)
+    from .specs import faster_repo_id
+
+    return faster_repo_id(size)
 
 
 def _clipped_done_ms(spans: list[SpeechSpan], position_ms: int) -> int:

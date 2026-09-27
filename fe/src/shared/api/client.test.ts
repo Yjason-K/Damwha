@@ -53,3 +53,33 @@ test("바이트 단위 기준은 1000이다 — worker의 format_bytes와 같은
     expect(e.message).toContain("남은 용량 999 B");
   });
 });
+
+/** DISK_FULL 밖의 실패도 흉내 내는 axios 어댑터 — `{ statusCode, code, message }` 모양(DemoReadOnlyGuard와 같음). */
+function errorAdapter(status: number, code: string, message: string) {
+  return vi.fn(async (config) =>
+    Promise.reject({
+      isAxiosError: true,
+      message: `Request failed with status code ${status}`,
+      response: {
+        status,
+        statusText: "Error",
+        data: { statusCode: status, code, message },
+        headers: {},
+        config,
+      },
+      config,
+      toJSON: () => ({}),
+    }),
+  );
+}
+
+test("오류 본문의 code를 ApiError에 싣는다 (DISK_FULL 밖에서도)", async () => {
+  const adapter = errorAdapter(409, "model_busy", "이 모델에 대한 다른 작업이 진행 중이에요.");
+  const promise = apiClient.post("/models/delete", { role: "stt", name: "small" }, { adapter });
+  await expect(promise).rejects.toBeInstanceOf(ApiError);
+  await promise.catch((e: ApiError) => {
+    expect(e.statusCode).toBe(409);
+    expect(e.code).toBe("model_busy");
+    expect(e.message).toBe("이 모델에 대한 다른 작업이 진행 중이에요.");
+  });
+});

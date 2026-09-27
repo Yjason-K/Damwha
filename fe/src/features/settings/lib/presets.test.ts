@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import {
+  modelShortLabel,
   PRESET_META,
   PRESET_META_REVISION,
   PRESET_ORDER,
@@ -30,4 +31,12 @@ describe("PRESET_META — 요약 모델", () => {
   it("BE 프리셋 revision과 맞춘다", () => {
     expect(PRESET_META_REVISION).toBe("2026-08-12.3");
   });
+});
+
+test("modelShortLabel — 셀렉트 라벨의 ' — ' 앞부분, 목록 밖은 repo 마지막 조각", () => {
+  expect(modelShortLabel("stt", "large-v3-turbo")).toBe("large-v3-turbo");
+  expect(modelShortLabel("stt", "tiny")).toBe("tiny");
+  expect(modelShortLabel("summary", "mlx-community/Qwen3.5-9B-8bit")).toBe("qwen3.5 9B");
+  expect(modelShortLabel("summary", "org/custom-lens")).toBe("custom-lens");
+  expect(modelShortLabel("diarization", "pyannote/x")).toBe("x");
 });

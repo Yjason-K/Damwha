@@ -302,6 +302,35 @@ def test_pipeline_sends_payload_model_and_utterance_rows(conn, summary_job):
     assert [u["id"] for u in captured["utterances"]] == [ids["utt_1"], ids["utt_2"]]
 
 
+def test_pipeline_passes_payload_output_language(conn, summary_job):
+    job, _ids = summary_job
+    job = {**job, "payload": {**job["payload"], "schema_version": 2, "output_language": "en"}}
+    captured = {}
+
+    def summarize(**kwargs):
+        captured.update(kwargs)
+        return _response([])
+
+    run_summarize_meeting(
+        conn, job, _payload(job), SimpleNamespace(summarize=summarize), worker_id="w"
+    )
+    assert captured["output_language"] == "en"
+
+
+def test_pipeline_reads_v1_payload_as_transcript(conn, summary_job):
+    job, _ids = summary_job  # 픽스처의 payload는 v1이다
+    captured = {}
+
+    def summarize(**kwargs):
+        captured.update(kwargs)
+        return _response([])
+
+    run_summarize_meeting(
+        conn, job, _payload(job), SimpleNamespace(summarize=summarize), worker_id="w"
+    )
+    assert captured["output_language"] == "transcript"
+
+
 def test_pipeline_rejects_segment_with_unknown_utterance(conn, summary_job):
     job, _ids = summary_job
     client = SimpleNamespace(summarize=lambda **_kw: _response([_segment("utt_999", "utt_998")]))

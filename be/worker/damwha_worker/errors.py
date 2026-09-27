@@ -67,6 +67,13 @@ MODEL_DOWNLOAD_FAILED = "model_download_failed"  # 그 밖 — 네트워크·타
 # Phase 5가 만든 백오프 5회를 여기에 태우지 않는다 (Phase 6a 스펙 §8.1).
 DISK_FULL = "DISK_FULL"
 
+# 모델 받기·삭제 job (모델 다운로드 관리 스펙 §7). 넷 다 PERMANENT로 쓰인다 — 다시 해도 같다.
+DOWNLOAD_CANCELLED = "download_cancelled"  # 사용자가 받기를 취소했다 (화면에 오류로 보이지 않는다)
+MODEL_IN_USE = "model_in_use"  # 지우려는 모델을 queued/running job이 쓴다
+MODEL_NOT_DELETABLE = "model_not_deletable"  # 고정 역할 — 받기만 된다
+# 캐시 디렉터리 삭제 중 OSError(권한 등) — 재시도해도 같은 자리에서 진다.
+MODEL_DELETE_FAILED = "model_delete_failed"
+
 _AUTH_STATUSES = (401, 403)
 _CHAIN_LIMIT = 8
 

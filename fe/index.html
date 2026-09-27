@@ -3,6 +3,26 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 첫 페인트 전 테마. 모듈을 기다리면 다크 사용자가 흰 화면을 한 번 본다.
+         규칙은 src/shared/lib/theme.ts(parsePreference·resolveTheme)와 같아야 한다 —
+         src/app/theme-inline-script.test.ts가 둘을 묶는다. -->
+    <script>
+      (function () {
+        var pref = "system";
+        try {
+          pref = localStorage.getItem("damwha:theme");
+        } catch (e) {}
+        if (pref !== "light" && pref !== "dark") pref = "system";
+        var dark =
+          pref === "dark" ||
+          (pref === "system" &&
+            typeof matchMedia === "function" &&
+            matchMedia("(prefers-color-scheme: dark)").matches);
+        var root = document.documentElement;
+        if (dark) root.classList.add("dark");
+        root.style.colorScheme = dark ? "dark" : "light";
+      })();
+    </script>
     <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />

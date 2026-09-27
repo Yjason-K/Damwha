@@ -141,6 +141,20 @@ def test_extract_uses_payload_model_and_speaker_display_name(conn, extraction_jo
     ]
 
 
+def test_extract_passes_payload_output_language(conn, extraction_job, fake_client):
+    job, _ids = extraction_job
+    job = {**job, "payload": {**job["payload"], "schema_version": 2, "output_language": "ko"}}
+    captured = {}
+
+    def extract(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    fake_client.extract = extract
+    run_extract_lenses(conn, job, _payload(job), fake_client, worker_id="w")
+    assert captured["output_language"] == "ko"
+
+
 def test_foreign_candidate_rolls_back_every_candidate(conn, extraction_job, fake_client):
     job, ids = extraction_job
     fake_client.extract = lambda **_kwargs: [

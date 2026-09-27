@@ -5,7 +5,9 @@ import {
   EnrollSpeakerPayloadSchema,
   IndexMeetingPayloadSchema,
   SummarizeMeetingPayloadSchema,
+  ExtractLensesPayloadSchema,
   LiveSessionPayloadSchema,
+  ModelJobPayloadSchema,
 } from '../src/contracts/job-payload.schema';
 
 const dir = path.join(__dirname, 'fixtures', 'job-payloads');
@@ -126,5 +128,54 @@ describe('contract fixtures (shared with pydantic worker)', () => {
     const bad = read('live_session.valid.json');
     bad.source = 'system';
     expect(() => LiveSessionPayloadSchema.parse(bad)).toThrow();
+  });
+
+  it('validates process_meeting.v6.valid.json', () => {
+    const p = ProcessMeetingPayloadSchema.parse(read('process_meeting.v6.valid.json'));
+    expect(p.schema_version).toBe(6);
+    if (p.schema_version === 6) expect(p.models.summary_language).toBe('en');
+  });
+  it('rejects v6 payload missing summary_language (워커 기본값 폴백 금지)', () => {
+    const v6 = read('process_meeting.v6.valid.json');
+    delete v6.models.summary_language;
+    expect(() => ProcessMeetingPayloadSchema.parse(v6)).toThrow();
+  });
+  it('rejects v5 payload carrying summary_language (v5 models는 strict)', () => {
+    const v5 = read('process_meeting.v5.valid.json');
+    v5.models.summary_language = 'en';
+    expect(() => ProcessMeetingPayloadSchema.parse(v5)).toThrow();
+  });
+  it('summarize_meeting: v1은 output_language 없이, v2는 필수', () => {
+    expect(SummarizeMeetingPayloadSchema.parse(read('summarize-meeting-v1.json')).schema_version).toBe(1);
+    const v2 = SummarizeMeetingPayloadSchema.parse(read('summarize-meeting-v2.json'));
+    expect(v2.schema_version === 2 && v2.output_language).toBe('ko');
+    const bad = read('summarize-meeting-v2.json');
+    delete bad.output_language;
+    expect(() => SummarizeMeetingPayloadSchema.parse(bad)).toThrow();
+    expect(() => SummarizeMeetingPayloadSchema.parse({ ...read('summarize-meeting-v1.json'), output_language: 'ko' })).toThrow();
+  });
+  it('extract_lenses: v1은 output_language 없이, v2는 필수', () => {
+    expect(ExtractLensesPayloadSchema.parse(read('extract_lenses.v1.valid.json')).schema_version).toBe(1);
+    const v2 = ExtractLensesPayloadSchema.parse(read('extract_lenses.v2.valid.json'));
+    expect(v2.schema_version === 2 && v2.output_language).toBe('en');
+    const bad = read('extract_lenses.v2.valid.json');
+    bad.output_language = 'ja';
+    expect(() => ExtractLensesPayloadSchema.parse(bad)).toThrow();
+  });
+  it('live_session v2는 process v6을, v1은 process v5를 싣는다', () => {
+    expect(LiveSessionPayloadSchema.parse(read('live_session.v2.valid.json')).process.schema_version).toBe(6);
+    expect(LiveSessionPayloadSchema.parse(read('live_session.valid.json')).process.schema_version).toBe(5);
+    const mixed = read('live_session.v2.valid.json');
+    mixed.process = read('live_session.valid.json').process;
+    expect(() => LiveSessionPayloadSchema.parse(mixed)).toThrow();
+  });
+
+  it('model_job: 전사는 backend 필수, 그 밖은 backend 금지', () => {
+    expect(ModelJobPayloadSchema.parse(read('model_job.stt.valid.json')).backend).toBe('faster');
+    expect(ModelJobPayloadSchema.parse(read('model_job.summary.valid.json')).role).toBe('summary');
+    expect(() => ModelJobPayloadSchema.parse(read('model_job.summary_with_backend.invalid.json'))).toThrow();
+    expect(() => ModelJobPayloadSchema.parse(read('model_job.stt_without_backend.invalid.json'))).toThrow();
+    expect(() => ModelJobPayloadSchema.parse(read('model_job.blank_name.invalid.json'))).toThrow();
+    expect(() => ModelJobPayloadSchema.parse(read('model_job.null_backend.invalid.json'))).toThrow();
   });
 });

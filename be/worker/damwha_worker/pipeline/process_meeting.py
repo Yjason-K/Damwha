@@ -222,6 +222,7 @@ def run_process_meeting(
             index_search_dim=search_embedding_dim,
             lens_llm_model=lens_model,
             summary_llm_model=summary_model,
+            output_language=payload.models.summary_language,
         )
         t["detail"] = (
             f"utterances={len(utterance_rows)} clusters={len(cluster_rows)} outcome={outcome}"

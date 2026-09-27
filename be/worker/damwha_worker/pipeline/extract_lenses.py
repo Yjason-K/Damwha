@@ -61,6 +61,7 @@ def run_extract_lenses(
                 model=payload.model,
                 utterances=[dict(row) for row in rows],
                 meeting_date=meeting_date,
+                output_language=payload.output_language,
             ),
         )
         t["detail"] = f"utterances={len(rows)} candidates={len(candidates)}"

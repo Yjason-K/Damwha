@@ -162,7 +162,7 @@ export function LiveBanner({
           className="shrink-0 text-[color:var(--red-text)]"
         />
         <span className="font-semibold text-[color:var(--red-text)]">
-          워커 신호가 끊겼어요
+          작업 처리기 신호가 끊겼어요
         </span>
         <span className="text-[color:var(--text-secondary)]">
           녹음 파일은 디스크에 남아 있어요. 지금 취소하면 파일을 그대로 둔 채
@@ -206,7 +206,7 @@ export function LiveBanner({
         {finishing
           ? "녹음을 마무리하는 중"
           : queued
-            ? "워커를 기다리는 중"
+            ? "작업 처리기를 기다리는 중"
             : "녹음 중"}
       </span>
       {/* 마무리 중에는 경과 시계를 아예 지운다. 녹음은 이미 봉인돼 길이가 정해졌는데
@@ -224,7 +224,7 @@ export function LiveBanner({
         {finishing
           ? "마지막 오디오를 저장하고 있어요. 곧 처리로 넘어가요."
           : queued
-            ? "브라우저가 녹음하고 있어요. 워커가 붙으면 발화가 흘러와요."
+            ? "녹음은 계속되고 있어요. 작업 처리기가 준비되면 실시간 자막이 나타나요."
             : formatClock(elapsed)}
       </span>
       {!queued && !finishing && backlogMs > BACKLOG_WARN_MS ? (
@@ -262,7 +262,7 @@ export function LiveBanner({
  * 동시에 CaptureErrorCode에 사유가 하나 늘면 문구를 빠뜨린 채로는 컴파일되지 않아야 한다.
  */
 const CAPTURE_ERROR_MESSAGE: Record<string, string> = {
-  producer_abandoned: "브라우저 연결이 끊겨 여기까지 녹음됐어요.",
+  producer_abandoned: "녹음하던 화면과 연결이 끊겨 여기까지 녹음됐어요.",
   device_ended: "마이크 연결이 끊겨 여기까지 녹음됐어요.",
   buffer_overflow: "업로드가 너무 밀려 여기까지만 녹음됐어요.",
   upload_failed: "업로드가 거절돼 여기까지만 녹음됐어요.",
@@ -271,7 +271,7 @@ const CAPTURE_ERROR_MESSAGE: Record<string, string> = {
   capture_failed: "녹음이 중간에 멈춰 여기까지만 녹음됐어요.",
   capture_gap: "녹음 중 일부 구간이 기록되지 않았어요.",
   preview_worker_lost:
-    "실시간 자막 서버가 끊겨 자막 없이 녹음됐어요. 녹음 자체는 온전해요.",
+    "실시간 자막 처리가 멈춰 자막 없이 녹음됐어요. 녹음 자체는 온전해요.",
 } satisfies Record<CaptureErrorCode, string>;
 
 /**

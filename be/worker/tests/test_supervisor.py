@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from damwha_worker import __main__ as m
 from damwha_worker import db
 from damwha_worker.__main__ import run_single_job, run_supervisor
+from damwha_worker.config import HF_STALL_SECONDS
 from damwha_worker.storage import Storage
 from tests.conftest import seed_job, seed_meeting
 from tests.fakes import FakeEmbedder, FakeTextEmbedder
@@ -24,6 +25,7 @@ def _settings_stub(pg_url):
         default_speaker_prefix = "Speaker"
         lens_llm_model = "qwen2.5:14b-instruct"
         summary_llm_model = "qwen2.5:14b-instruct"
+        hf_token = None
         meeting_timezone = "Asia/Seoul"
         live_max_minutes = 240.0
 
@@ -96,6 +98,7 @@ def _peek_settings():
     class S:
         worker_id = "w1"
         poll_interval_seconds = 0.01
+        hf_stall_seconds = HF_STALL_SECONDS
 
     return S()
 
@@ -490,6 +493,93 @@ def test_supervisor_reclaims_its_own_running_job_after_a_child_crash(conn, pg_ur
     row = conn.execute("SELECT status, locked_by FROM job WHERE id=%s", (jid,)).fetchone()
     assert row["status"] == "queued"
     assert row["locked_by"] is None
+
+
+def test_supervisor_cleans_stale_incomplete_after_each_child(conn, pg_url, monkeypatch):
+    from damwha_worker import __main__ as main_mod
+
+    calls = []
+    monkeypatch.setattr(main_mod.cache_scan, "clean_stale_incomplete",
+                        lambda root, age, **_: calls.append((root, age)) or 0)
+
+    mid = seed_meeting(conn, status="done", processing_version=0)
+    conn.execute(
+        "INSERT INTO job(type, meeting_id, payload) VALUES('index_meeting', %s, %s)",
+        (mid, '{"schema_version": 1}'),
+    )
+    shutdown = threading.Event()
+
+    def _spawn():
+        # 첫 spawn 후 shutdown → 루프 1회로 종료 (기존 spawn_when_job_queued와 같은 방식)
+        shutdown.set()
+        return _StubProc(0)
+
+    run_supervisor(
+        _peek_settings(),
+        shutdown,
+        connect_fn=lambda: db.connect(pg_url),
+        spawn_fn=_spawn,
+        child_holder={"proc": None, "count": 0},
+    )
+    assert len(calls) >= 2  # 시작 1회 + 자식 종료 뒤 1회
+
+
+def test_clean_stale_downloads_uses_configured_stall_with_floor(monkeypatch):
+    """(D2 최종 리뷰) 고정 HF_STALL_SECONDS가 아니라 설정값을 따르되, 0 같은 설정이
+    "전부 지운다"가 되지 않도록 워커 상수를 바닥으로 둔다."""
+    calls = []
+    monkeypatch.setattr(
+        m.cache_scan, "clean_stale_incomplete", lambda root, age, **_: calls.append(age) or 0
+    )
+
+    m._clean_stale_downloads(SimpleNamespace(hf_stall_seconds=500.0))
+    assert calls[-1] == 1000.0  # 2 * 500
+
+    m._clean_stale_downloads(SimpleNamespace(hf_stall_seconds=0.0))
+    assert calls[-1] == 2 * HF_STALL_SECONDS  # 0은 바닥(HF_STALL_SECONDS)으로 올린다
+
+
+def test_supervisor_idle_loop_cleans_stale_downloads_throttled(conn, pg_url, monkeypatch):
+    """(D2 최종 리뷰) 취소 뒤 다음 job이 안 돌면 §7.5 청소가 자식 종료 시점에만 걸려 임시
+    파일이 그대로 남는다 — idle(peek에 job 없음)에서도 청소하되, 2×stall마다 한 번으로 묶는다."""
+    calls = []
+    monkeypatch.setattr(
+        m.cache_scan, "clean_stale_incomplete", lambda root, age, **_: calls.append(age) or 0
+    )
+
+    clock = {"t": 0.0}
+    waits = {"n": 0}
+    shutdown = threading.Event()
+
+    def fake_wait(timeout):
+        waits["n"] += 1
+        if waits["n"] == 1:
+            clock["t"] += 1.0  # 인터벌(2*stall) 안 — 청소 없이 그냥 흐른 시간
+            return False
+        if waits["n"] == 2:
+            clock["t"] += 10_000.0  # 인터벌을 넘긴다
+            return False
+        shutdown.set()
+        return True
+
+    monkeypatch.setattr(shutdown, "wait", fake_wait)
+
+    class S:
+        worker_id = "w1"
+        poll_interval_seconds = 0.01
+        hf_stall_seconds = 90.0
+
+    run_supervisor(
+        S(),
+        shutdown,
+        connect_fn=lambda: db.connect(pg_url),
+        spawn_fn=lambda: (_ for _ in ()).throw(AssertionError("빈 큐인데 spawn하면 안 된다")),
+        child_holder={"proc": None, "count": 0},
+        monotonic=lambda: clock["t"],
+    )
+
+    # 시작 시 1회 + 인터벌을 넘긴 뒤 idle에서 1회 = 2회. 인터벌 안에서는 추가 호출이 없다.
+    assert calls == [180.0, 180.0]
 
 
 def test_supervisor_reclaims_its_own_running_job_at_startup(conn, pg_url, monkeypatch):

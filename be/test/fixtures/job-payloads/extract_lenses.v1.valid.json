@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "meeting_id": "mtg_1",
+  "processing_version": 0,
+  "extraction_run_id": "ler_1",
+  "model": "mlx-community/Qwen3.5-4B-8bit"
+}

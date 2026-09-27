@@ -7,7 +7,9 @@ export type JobType =
   | 'index_meeting'
   | 'extract_lenses'
   | 'summarize_meeting'
-  | 'live_session';
+  | 'live_session'
+  | 'download_model'
+  | 'delete_model';
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed';
 
 export interface JobRow {

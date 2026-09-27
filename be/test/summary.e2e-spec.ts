@@ -232,7 +232,8 @@ describe('요약 API', () => {
   it('body 없음 → 전역 설정의 summary_model로 큐잉된다', async () => {
     const meetingId = await seedMeeting({ status: 'done', processingVersion: 0 });
     await request(app.getHttpServer())
-      .put('/settings/processing').send({ preset: 'quality', language: 'ko' }).expect(200);
+      .put('/settings/processing')
+      .send({ preset: 'quality', language: 'ko', summary_language: 'transcript' }).expect(200);
 
     await request(app.getHttpServer())
       .post(`/meetings/${meetingId}/summary/generate`).expect(202);
@@ -247,10 +248,23 @@ describe('요약 API', () => {
     expect(job.rows[0].payload.model).toBe('mlx-community/Qwen3.5-27B-8bit');
   });
 
+  it('재생성은 현재 설정의 요약 언어를 output_language로 싣는다', async () => {
+    const meetingId = await seedMeeting({ status: 'done', processingVersion: 0 });
+    await request(app.getHttpServer())
+      .put('/settings/processing')
+      .send({ preset: 'light', language: 'ko', summary_language: 'en' }).expect(200);
+    await request(app.getHttpServer()).post(`/meetings/${meetingId}/summary/generate`).expect(202);
+    const job = await db.pool.query(
+      `SELECT payload FROM job WHERE meeting_id=$1 AND type='summarize_meeting'`, [meetingId],
+    );
+    expect(job.rows[0].payload).toMatchObject({ schema_version: 2, output_language: 'en' });
+  });
+
   it('body override → 그 모델로 큐잉되고 전역 설정은 바뀌지 않는다', async () => {
     const meetingId = await seedMeeting({ status: 'done', processingVersion: 0 });
     await request(app.getHttpServer())
-      .put('/settings/processing').send({ preset: 'light', language: 'ko' }).expect(200);
+      .put('/settings/processing')
+      .send({ preset: 'light', language: 'ko', summary_language: 'transcript' }).expect(200);
 
     await request(app.getHttpServer())
       .post(`/meetings/${meetingId}/summary/generate`)

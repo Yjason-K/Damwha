@@ -59,4 +59,4 @@ class BgeM3TextEmbedder:
 # 잡혀 .bin도, 두 번째 리비전도 없다. `use_safetensors=True`는 safetensors가 없을 때 .bin으로
 # 내려가지 않고 실패하게 한다.
 # 표에 없는 모델은 main을 쓰되 safetensors 한정은 같다.
-_PINNED_REVISIONS = {"BAAI/bge-m3": "9a0624b896d81da7492a910ffa53731274b6cf3d"}
+from .specs import PINNED_REVISIONS as _PINNED_REVISIONS  # noqa: E402 — 위 주석이 인용 대상이다

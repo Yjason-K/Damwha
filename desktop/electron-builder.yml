@@ -28,6 +28,8 @@ mac:
   # null이 자동 탐색을 끄는 문서화된 값이다. Developer ID 서명·공증은 Phase 6.
   identity: null
   category: public.app-category.productivity
+  # buildResources 기준이다. 원본은 icon.svg이고 scripts/build-icon.sh가 이 파일을 만든다.
+  icon: icon.icns
   extendInfo:
     # 없으면 macOS가 마이크 요청 시 앱을 죽인다 (스펙 §6.6).
     NSMicrophoneUsageDescription: 담화가 회의를 녹음하려면 마이크를 사용해요. 녹음과 처리는 이 맥 안에서만 일어나요.
@@ -35,3 +37,7 @@ mac:
     # scripts/lib/build-target.sh·scripts/lib/minos.mjs의 MAX_MINOS가 같은 값을 든다.
     # 이것만 낮추면 Finder는 실행을 허용하고 dyld가 죽인다.
     LSMinimumSystemVersion: "15.0"
+dmg:
+  # 마운트한 볼륨의 아이콘 — 앱 아이콘과 같은 파일로 명시한다.
+  # 창 배경은 정하지 않았다(Notion P2: 앱 아이콘과 별개로 간다).
+  icon: icon.icns

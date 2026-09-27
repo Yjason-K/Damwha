@@ -324,12 +324,13 @@ describe('meetings', () => {
     } finally { holder.release(); }
   });
 
-  it('POST /meetings — payload가 v5이고 전역 설정(프리셋)을 따른다', async () => {
-    await request(srv()).put('/settings/processing').send({ preset: 'light', language: 'ko' });
+  it('POST /meetings — payload가 v6이고 전역 설정(프리셋)을 따른다', async () => {
+    await request(srv()).put('/settings/processing')
+      .send({ preset: 'light', language: 'ko', summary_language: 'transcript' });
     const res = await request(srv()).post('/meetings')
       .attach('audio', Buffer.from('a'), { filename: 'a.m4a', contentType: 'audio/mp4' });
     const job = await db.pool.query('SELECT payload FROM job WHERE id=$1', [res.body.current_job_id]);
-    expect(job.rows[0].payload.schema_version).toBe(5);
+    expect(job.rows[0].payload.schema_version).toBe(6);
     expect(job.rows[0].payload.models.whisper_model).toBe('small');
     expect(job.rows[0].payload.models.preset).toBe('light');
     expect(job.rows[0].payload.models.summary_model).toBe('mlx-community/Qwen3.5-4B-8bit');

@@ -31,9 +31,9 @@ function CloseIcon() {
 function ToastIcon({ variant }: { variant: ToastVariant }) {
   const tone =
     variant === "success"
-      ? "text-[#5fe3ad]"
+      ? "text-[color:var(--toast-success)]"
       : variant === "error"
-        ? "text-[#f58c8c]"
+        ? "text-[color:var(--toast-danger)]"
         : "text-[color:var(--accent-6)]";
   return (
     <span className={`mt-px inline-flex shrink-0 ${tone} [&_svg]:size-4`}>

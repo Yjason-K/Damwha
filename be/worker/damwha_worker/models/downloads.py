@@ -104,7 +104,9 @@ _CACHE_MISS_NAMES = ("LocalEntryNotFoundError", "OfflineModeIsEnabled")
 
 def _is_benign(exc: BaseException) -> bool:
     """허브에 **없는** 파일을 물은 것 — transformers가 선택 파일(adapter_config.json …)마다 그렇게
-    묻고 404를 삼킨다. 받을 것이 없었으므로 모델의 실패가 아니다."""
+    묻고 404를 삼킨다. 받을 것이 없었으므로 모델의 실패가 아니다. 사용자의 취소도 실패가 아니다."""
+    if isinstance(exc, DownloadCancelled):
+        return True
     return any(cls.__name__ == "RemoteEntryNotFoundError" for cls in type(exc).__mro__)
 
 
@@ -370,6 +372,42 @@ def _cache_first_attempt():
         _CACHE_FIRST.attempt = previous
 
 
+# ── 받기 취소 (모델 다운로드 관리 스펙 §7.2) ───────────────────────────
+#
+# `_run_watched`는 handler가 아니라 훅(`hooked`)이 부른다 — handler가 술어를 인자로 넘길 길이 없다.
+# 그래서 캐시 우선 시도(`_CACHE_FIRST`)와 같은 스레드 로컬로 건다. `snapshot_download`의 바깥 호출은
+# 이 스레드에서 훅을 지나고, 감시 루프도 이 스레드에서 돈다.
+
+_CANCEL = threading.local()
+
+
+class DownloadCancelled(errors.WorkerError):
+    """사용자가 받기를 취소했다. PERMANENT — 재시도하지 않는다. readiness에 `failed`로 적지
+    않는다."""
+
+    def __init__(self, key: str) -> None:
+        super().__init__(
+            errors.DOWNLOAD_CANCELLED,
+            f"download of {key!r} was cancelled",
+            errors.ErrorKind.PERMANENT,
+        )
+
+
+def _current_cancel():
+    return getattr(_CANCEL, "predicate", None)
+
+
+@contextlib.contextmanager
+def cancel_when(predicate):
+    """이 스레드의 다운로드를 `predicate()`가 참이 되는 순간 끝낸다(감시 주기마다 한 번 부른다)."""
+    previous = _current_cancel()
+    _CANCEL.predicate = predicate
+    try:
+        yield
+    finally:
+        _CANCEL.predicate = previous
+
+
 def is_cache_miss(exc: BaseException) -> bool:
     """사슬 어딘가가 "캐시에 없다"인가. 호출자가 hub 예외를 감싸 던지므로 원인까지 본다."""
     for e in errors._chain(exc):
@@ -526,7 +564,8 @@ def _run_watched(original, args, kwargs, report, key: str):
     TRANSIENT를 던지는 경합이 남는다.
     """
     limit = _STATE.stall_seconds
-    if limit <= 0:
+    cancel = _current_cancel()
+    if limit <= 0 and cancel is None:
         return original(*args, **kwargs)
 
     box: dict = {}
@@ -542,8 +581,16 @@ def _run_watched(original, args, kwargs, report, key: str):
 
     threading.Thread(target=_run, name=f"damwha-hf-{key}", daemon=True).start()
     while not done.wait(_WATCHDOG_TICK_SECONDS):
+        if cancel is not None and not done.is_set():
+            try:
+                stop = cancel()
+            except Exception:  # noqa: BLE001 — 술어의 DB 오류가 다운로드를 깨지 않는다
+                stop = False
+            if stop:
+                report.abandon()
+                raise DownloadCancelled(key)
         idle = _clock() - report.last_progress
-        if idle >= limit and not done.is_set():
+        if limit > 0 and idle >= limit and not done.is_set():
             report.abandon()
             raise errors.WorkerError(
                 errors.MODEL_DOWNLOAD_FAILED,

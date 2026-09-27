@@ -36,6 +36,8 @@ export default defineConfig([
             "cardVariants",
             "iconButtonVariants",
             "isHeartbeatStale",
+            "useDiarizationGate",
+            "useHfTokenDialog",
           ],
         },
       ],

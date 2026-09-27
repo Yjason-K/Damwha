@@ -38,8 +38,10 @@ export class SummaryService {
       throw new BadRequestException(parsed.error.issues.map((i) => i.message).join('; '));
     }
     // 설정 로드(DB)는 트랜잭션 진입 전에 — spec §5의 순서 원칙.
-    const model =
-      parsed.data.summary_model ?? (await this.settings.getProcessingConfig()).summary_model;
+    const processing = await this.settings.getProcessingConfig();
+    const model = parsed.data.summary_model ?? processing.summary_model;
+    // 요약 언어는 재생성 body로 덮지 않는다 — 회의별 요약 언어는 없다 (다국어 스펙 §2).
+    const outputLanguage = processing.summary_language;
 
     return this.db.withTransaction(async (exec) => {
       const meeting = await this.summaries.lockMeeting(exec, meetingId);
@@ -49,6 +51,8 @@ export class SummaryService {
       }
 
       const active = await this.summaries.findActive(exec, meeting.id, meeting.processing_version);
+      // 진행 중 요약이 다른 언어로 큐잉됐어도 그것을 돌려준다 — meeting_summary에 언어 열이
+      // 없다. 끝난 뒤 다시 요청하면 새 언어로 만든다.
       if (active) {
         if (active.model !== model) {
           // 큐에 든 job의 payload는 불변이라 모델을 갈아끼울 수 없다. 조용히
@@ -69,6 +73,7 @@ export class SummaryService {
         meetingId: meeting.id,
         processingVersion: meeting.processing_version,
         model,
+        outputLanguage,
       });
       const job = await this.jobs.enqueue(exec, {
         type: 'summarize_meeting', meetingId: meeting.id, payload,

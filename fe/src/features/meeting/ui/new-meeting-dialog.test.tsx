@@ -75,6 +75,7 @@ test("오버라이드 프리셋 선택 시 multipart에 processing JSON이 실�
       preset_revision: null,
       language: "ko",
       whisper_model: "large-v3-turbo",
+      summary_model: "mlx-community/Qwen3.5-9B-8bit",
       devices: { diarization: "gpu", stt: "gpu" },
     },
   } as never);

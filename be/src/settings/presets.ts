@@ -1,5 +1,6 @@
 import { Device, WHISPER_MODELS } from '../contracts/job-payload.schema';
 import { SummaryModel } from '../contracts/model-catalog';
+import type { SummaryLanguage } from '@damwha/contracts';
 
 export const PRESET_REVISION = '2026-08-12.3'; // 프리셋 정의 변경 시 갱신 (spec §2)
 export type PresetName = 'light' | 'standard' | 'quality';
@@ -12,6 +13,8 @@ export interface ProcessingConfig {
   whisper_model: WhisperModel;
   devices: { diarization: Device; stt: Device };
   summary_model: SummaryModel;
+  // 프리셋과 무관 — language처럼 이름 프리셋과 custom 양쪽에 있다 (다국어 스펙 §5.1).
+  summary_language: SummaryLanguage;
 }
 
 const PRESETS: Record<
@@ -35,7 +38,9 @@ const PRESETS: Record<
   },
 };
 
-export function resolvePreset(name: PresetName, language: string): ProcessingConfig {
+export function resolvePreset(
+  name: PresetName, language: string, summaryLanguage: SummaryLanguage,
+): ProcessingConfig {
   return {
     preset: name,
     preset_revision: PRESET_REVISION,
@@ -43,5 +48,6 @@ export function resolvePreset(name: PresetName, language: string): ProcessingCon
     whisper_model: PRESETS[name].whisper_model,
     devices: { ...PRESETS[name].devices },
     summary_model: PRESETS[name].summary_model,
+    summary_language: summaryLanguage,
   };
 }

@@ -11,14 +11,16 @@ per-package — read the one for the subtree you are editing before changing cod
 | `be/worker/` | *(uv project)* | Python 3.12 ML worker. **Not** a pnpm workspace member — it has no `package.json` and is driven by uv. |
 | `desktop/` | `damwha-desktop` | Electron macOS 앱 — 번들 PostgreSQL·API·worker·embed를 감독한다. Read [`desktop/CLAUDE.md`](desktop/CLAUDE.md). |
 | `fe/` | `damwha-fe` | React 19 + Vite 8 + Tailwind 4 SPA. Read [`fe/CLAUDE.md`](fe/CLAUDE.md) and [`fe/DESIGN.md`](fe/DESIGN.md). |
-| `packages/contracts/` | `@damwha/contracts` | Wire enums both Node packages must agree on (`SUMMARY_MODELS`, `WHISPER_MODELS`, `PRESET_NAMES`, `DEVICES`). Dependency-free, value-only. |
+| `packages/contracts/` | `@damwha/contracts` | Wire enums and pure helpers both Node packages must agree on (`SUMMARY_MODELS`, `WHISPER_MODELS`, `PRESET_NAMES`, `DEVICES`, `UI_LANGUAGES`, `SUMMARY_LANGUAGES`, `pickUiLanguage`). Dependency-free. |
 
 The API and the worker communicate **only** through Postgres — never over HTTP.
 The `job` table is the contract in both directions (zod on the TypeScript side,
-pydantic on the Python side); the one other shared row is
-`app_setting.worker_capabilities`, written by the worker and read-only for the
-API, which is how the API reports the host Mac's spec instead of its own
-container's.
+pydantic on the Python side); the other shared rows are three `app_setting` keys, all
+written on the worker side and read-only for the API: `worker_capabilities` (the
+worker — how the API reports the host Mac's spec instead of its own container's),
+`model_readiness` (worker, embed and `llm_entry` — per-model download progress) and
+`model_inventory` (the worker supervisor's inventory thread — which models are
+in the HF cache and how big they are).
 
 `@damwha/contracts` exists because `be` and `fe` were separate repos until the
 2026-08 merge, so any list both sides had to agree on was kept twice by hand.

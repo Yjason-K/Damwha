@@ -188,6 +188,7 @@ def context_from_settings(
         default_speaker_prefix=settings.default_speaker_prefix,
         lens_llm_model=settings.lens_llm_model,
         summary_llm_model=settings.summary_llm_model,
+        hf_token=settings.hf_token,
         meeting_timezone=settings.meeting_timezone,
         live_max_minutes=settings.live_max_minutes,
         shutdown_event=shutdown_event,

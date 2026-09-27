@@ -12,7 +12,7 @@ def test_client_posts_openai_chat_completion_with_bearer(httpx_mock):
     client = LensClient("http://localhost:11434/v1", "secret", 12.0, 8192)
     httpx_mock.add_response(json={"choices": [{"message": {"content": '{"items": []}'}}]})
 
-    assert client.extract(model="job-model", utterances=[]) == []
+    assert client.extract(output_language="transcript", model="job-model", utterances=[]) == []
 
     request = httpx_mock.get_request()
     assert request.url == "http://localhost:11434/v1/chat/completions"
@@ -28,7 +28,7 @@ def test_client_caps_generation_with_max_tokens(httpx_mock):
     httpx_mock.add_response(json={"choices": [{"message": {"content": '{"items": []}'}}]})
 
     LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-        model="job-model", utterances=[]
+        output_language="transcript", model="job-model", utterances=[]
     )
 
     assert json.loads(httpx_mock.get_request().content)["max_tokens"] == 8192
@@ -38,7 +38,7 @@ def test_client_sends_no_auth_header_without_api_key(httpx_mock):
     httpx_mock.add_response(json={"choices": [{"message": {"content": '{"items": []}'}}]})
 
     LensClient("http://localhost:11434/v1/", None, 12.0, 8192).extract(
-        model="job-model", utterances=[]
+        output_language="transcript", model="job-model", utterances=[]
     )
 
     assert "Authorization" not in httpx_mock.get_request().headers
@@ -50,7 +50,7 @@ def test_client_maps_retryable_http_status_to_transient_error(httpx_mock, status
 
     with pytest.raises(WorkerError) as raised:
         LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-            model="job-model", utterances=[]
+            output_language="transcript", model="job-model", utterances=[]
         )
 
     assert raised.value.kind is ErrorKind.TRANSIENT
@@ -61,7 +61,7 @@ def test_client_maps_invalid_llm_json_to_permanent_error(httpx_mock):
 
     with pytest.raises(WorkerError) as raised:
         LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-            model="job-model", utterances=[]
+            output_language="transcript", model="job-model", utterances=[]
         )
 
     assert raised.value.kind is ErrorKind.PERMANENT
@@ -72,7 +72,7 @@ def test_client_maps_transport_errors_to_transient_error(httpx_mock):
 
     with pytest.raises(WorkerError) as raised:
         LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-            model="job-model", utterances=[]
+            output_language="transcript", model="job-model", utterances=[]
         )
 
     assert raised.value.kind is ErrorKind.TRANSIENT
@@ -92,7 +92,7 @@ def test_client_sends_the_lens_extraction_contract_prompt_and_utterances(httpx_m
     ]
 
     LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-        model="job-model", utterances=utterances
+        output_language="transcript", model="job-model", utterances=utterances
     )
 
     body = json.loads(httpx_mock.get_request().content)
@@ -146,7 +146,7 @@ def test_client_prompt_omits_ids_and_timestamps_the_model_cannot_use(httpx_mock)
     ]
 
     LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-        model="job-model", utterances=utterances
+        output_language="transcript", model="job-model", utterances=utterances
     )
 
     sent = json.loads(httpx_mock.get_request().content)["messages"][1]["content"]
@@ -170,7 +170,7 @@ def test_client_lists_each_speaker_once_in_order_of_first_appearance(httpx_mock)
     ]
 
     LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-        model="job-model", utterances=utterances
+        output_language="transcript", model="job-model", utterances=utterances
     )
 
     sent = json.loads(httpx_mock.get_request().content)["messages"][1]["content"]
@@ -182,7 +182,7 @@ def test_client_omits_the_speakers_section_when_no_utterance_has_a_speaker(httpx
     httpx_mock.add_response(json={"choices": [{"message": {"content": '{"items": []}'}}]})
 
     LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-        model="job-model", utterances=[{"id": "utt_1", "text": "가"}]
+        output_language="transcript", model="job-model", utterances=[{"id": "utt_1", "text": "가"}]
     )
 
     sent = json.loads(httpx_mock.get_request().content)["messages"][1]["content"]
@@ -194,7 +194,7 @@ def test_client_treats_a_timeout_as_permanent(httpx_mock):
     httpx_mock.add_exception(httpx.TimeoutException("timed out"))
     with pytest.raises(WorkerError) as exc:
         LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-            model="job-model", utterances=[]
+            output_language="transcript", model="job-model", utterances=[]
         )
     assert exc.value.kind is ErrorKind.PERMANENT
     assert exc.value.code == LLM_REQUEST_FAILED
@@ -205,7 +205,7 @@ def test_client_treats_a_connection_error_as_transient(httpx_mock):
     httpx_mock.add_exception(httpx.ConnectError("connection refused"))
     with pytest.raises(WorkerError) as exc:
         LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-            model="job-model", utterances=[]
+            output_language="transcript", model="job-model", utterances=[]
         )
     assert exc.value.kind is ErrorKind.TRANSIENT
 
@@ -221,7 +221,7 @@ def test_client_names_the_budget_when_the_reply_is_truncated(httpx_mock):
     )
     with pytest.raises(WorkerError) as exc:
         LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-            model="job-model", utterances=[]
+            output_language="transcript", model="job-model", utterances=[]
         )
     assert exc.value.kind is ErrorKind.PERMANENT
     assert "max_tokens" in exc.value.message
@@ -240,7 +240,7 @@ def test_client_parses_a_response_wrapped_in_a_markdown_code_fence(httpx_mock, c
 
     assert (
         LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-            model="job-model", utterances=[]
+            output_language="transcript", model="job-model", utterances=[]
         )
         == []
     )
@@ -250,7 +250,7 @@ def test_client_disables_model_reasoning(httpx_mock):
     httpx_mock.add_response(json={"choices": [{"message": {"content": '{"items": []}'}}]})
 
     LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-        model="job-model", utterances=[]
+        output_language="transcript", model="job-model", utterances=[]
     )
 
     assert json.loads(httpx_mock.get_request().content)["reasoning_effort"] == "none"
@@ -270,7 +270,7 @@ def test_client_sends_non_ascii_utterance_text_unescaped(httpx_mock):
     ]
 
     LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-        model="job-model", utterances=utterances
+        output_language="transcript", model="job-model", utterances=utterances
     )
 
     user_message = json.loads(httpx_mock.get_request().content)["messages"][1]["content"]
@@ -294,7 +294,7 @@ def test_client_accepts_a_bare_items_array(httpx_mock):
     httpx_mock.add_response(json={"choices": [{"message": {"content": content}}]})
 
     items = LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-        model="job-model", utterances=[{"id": "utt_1", "text": "가"}]
+        output_language="transcript", model="job-model", utterances=[{"id": "utt_1", "text": "가"}]
     )
 
     assert [item.primary_utterance_id for item in items] == ["utt_1"]
@@ -322,7 +322,7 @@ def test_client_maps_indexes_back_to_real_utterance_ids(httpx_mock):
     ]
 
     items = LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-        model="job-model", utterances=utterances
+        output_language="transcript", model="job-model", utterances=utterances
     )
 
     assert items[0].primary_utterance_id == "utt_9"
@@ -350,7 +350,7 @@ def test_client_drops_the_item_whose_primary_index_is_out_of_range(httpx_mock):
     httpx_mock.add_response(json={"choices": [{"message": {"content": content}}]})
 
     items = LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-        model="job-model", utterances=[{"id": "utt_1", "text": "가"}]
+        output_language="transcript", model="job-model", utterances=[{"id": "utt_1", "text": "가"}]
     )
     assert [item.text for item in items] == ["살아남을 것"]
     assert items[0].primary_utterance_id == "utt_1"
@@ -373,7 +373,7 @@ def test_client_drops_only_the_out_of_range_supporting_indexes(httpx_mock):
     httpx_mock.add_response(json={"choices": [{"message": {"content": content}}]})
 
     items = LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-        model="job-model",
+        output_language="transcript", model="job-model",
         utterances=[{"id": "utt_1", "text": "가"}, {"id": "utt_2", "text": "나"}],
     )
     assert items[0].primary_utterance_id == "utt_1"
@@ -387,7 +387,9 @@ def test_client_returns_no_items_when_every_index_is_out_of_range(httpx_mock):
 
     assert (
         LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-            model="job-model", utterances=[{"id": "utt_1", "text": "가"}]
+            output_language="transcript",
+            model="job-model",
+            utterances=[{"id": "utt_1", "text": "가"}],
         )
         == []
     )
@@ -399,7 +401,7 @@ def test_client_prompt_states_the_index_range(httpx_mock):
     httpx_mock.add_response(json={"choices": [{"message": {"content": '{"items": []}'}}]})
 
     LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-        model="job-model",
+        output_language="transcript", model="job-model",
         utterances=[{"id": "utt_1", "text": "가"}, {"id": "utt_2", "text": "나"}],
     )
     sent = json.loads(httpx_mock.get_requests()[0].content)["messages"][1]["content"]
@@ -456,7 +458,9 @@ def test_client_drops_an_unparseable_due_at_but_keeps_the_item(httpx_mock):
     )
 
     items = LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-        model="job-model", utterances=[{"id": "utt_1", "text": "오늘까지 보내주세요."}]
+        output_language="transcript",
+        model="job-model",
+        utterances=[{"id": "utt_1", "text": "오늘까지 보내주세요."}],
     )
 
     # 모델은 날짜 대신 ISO datetime을 내는 일이 잦다 — date.fromisoformat이
@@ -483,7 +487,10 @@ def test_client_puts_the_meeting_date_at_the_top_of_the_prompt(httpx_mock):
     ]
 
     LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-        model="job-model", utterances=utterances, meeting_date=date(2026, 9, 2)
+        output_language="transcript",
+        model="job-model",
+        utterances=utterances,
+        meeting_date=date(2026, 9, 2),
     )
 
     user = json.loads(httpx_mock.get_request().content)["messages"][1]["content"]
@@ -497,7 +504,7 @@ def test_client_omits_the_meeting_date_line_when_it_is_unknown(httpx_mock):
     httpx_mock.add_response(json={"choices": [{"message": {"content": '{"items": []}'}}]})
 
     LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
-        model="job-model", utterances=[{"id": "utt_1", "text": "hi"}]
+        output_language="transcript", model="job-model", utterances=[{"id": "utt_1", "text": "hi"}]
     )
 
     user = json.loads(httpx_mock.get_request().content)["messages"][1]["content"]

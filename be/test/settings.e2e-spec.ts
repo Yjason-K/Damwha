@@ -95,13 +95,15 @@ describe('settings', () => {
   });
 
   it('PUT 응답에는 modelReadiness가 없다 — 쓰기의 결과는 저장된 설정뿐이다', async () => {
-    const res = await request(srv()).put('/settings/processing').send({ preset: 'light', language: 'ko' });
+    const res = await request(srv()).put('/settings/processing')
+      .send({ preset: 'light', language: 'ko', summary_language: 'transcript' });
     expect(res.status).toBe(200);
     expect(res.body).not.toHaveProperty('modelReadiness');
   });
 
   it('PUT 이름 프리셋 → resolved 반환, DB엔 이름만', async () => {
-    const res = await request(srv()).put('/settings/processing').send({ preset: 'light', language: 'ko' });
+    const res = await request(srv()).put('/settings/processing')
+      .send({ preset: 'light', language: 'ko', summary_language: 'transcript' });
     expect(res.status).toBe(200);
     expect(res.body.whisper_model).toBe('small');
     expect(res.body.preset_revision).toBe(PRESET_REVISION);
@@ -109,23 +111,25 @@ describe('settings', () => {
 
   it('PUT 이름 프리셋 + 개별 노브 혼합 → 400 (spec §3)', async () => {
     const res = await request(srv()).put('/settings/processing')
-      .send({ preset: 'light', language: 'ko', whisper_model: 'medium' });
+      .send({ preset: 'light', language: 'ko', summary_language: 'transcript', whisper_model: 'medium' });
     expect(res.status).toBe(400);
   });
 
   it('PUT custom 필드 누락 → 400', async () => {
-    const res = await request(srv()).put('/settings/processing').send({ preset: 'custom', language: 'ko' });
+    const res = await request(srv()).put('/settings/processing')
+      .send({ preset: 'custom', language: 'ko', summary_language: 'transcript' });
     expect(res.status).toBe(400);
   });
 
   it('PUT 빈 language → 400', async () => {
-    const res = await request(srv()).put('/settings/processing').send({ preset: 'light', language: '  ' });
+    const res = await request(srv()).put('/settings/processing')
+      .send({ preset: 'light', language: '  ', summary_language: 'transcript' });
     expect(res.status).toBe(400);
   });
 
   it('gpu_eligible=false면 gpu 포함 custom PUT → 400', async () => {
     const res = await request(srvNoGpu()).put('/settings/processing').send({
-      preset: 'custom', language: 'ko', whisper_model: 'small',
+      preset: 'custom', language: 'ko', summary_language: 'transcript', whisper_model: 'small',
       devices: { diarization: 'gpu', stt: 'cpu' },
     });
     expect(res.status).toBe(400);
@@ -133,13 +137,13 @@ describe('settings', () => {
 
   it('gpu_eligible=false면 이름 프리셋 PUT도 400 — light도 diarization gpu 포함 (spec §3)', async () => {
     const res = await request(srvNoGpu()).put('/settings/processing')
-      .send({ preset: 'light', language: 'ko' });
+      .send({ preset: 'light', language: 'ko', summary_language: 'transcript' });
     expect(res.status).toBe(400);
   });
 
   it('PUT custom에 summary_model 누락 → 400', async () => {
     const res = await request(srv()).put('/settings/processing').send({
-      preset: 'custom', language: 'ko', whisper_model: 'small',
+      preset: 'custom', language: 'ko', summary_language: 'transcript', whisper_model: 'small',
       devices: { diarization: 'gpu', stt: 'cpu' },
     });
     expect(res.status).toBe(400);
@@ -147,8 +151,18 @@ describe('settings', () => {
 
   it('PUT 이름 프리셋에 summary_model 혼입 → 400', async () => {
     const res = await request(srv()).put('/settings/processing').send({
-      preset: 'light', language: 'ko', summary_model: 'mlx-community/Qwen3.5-4B-8bit',
+      preset: 'light', language: 'ko', summary_language: 'transcript',
+      summary_model: 'mlx-community/Qwen3.5-4B-8bit',
     });
     expect(res.status).toBe(400);
+  });
+
+  it('PUT에 summary_language가 없으면 400, 있으면 저장되고 GET에 나온다', async () => {
+    await request(srv())
+      .put('/settings/processing').send({ preset: 'light', language: 'ko' }).expect(400);
+    await request(srv())
+      .put('/settings/processing').send({ preset: 'light', language: 'ko', summary_language: 'en' }).expect(200);
+    const res = await request(srv()).get('/settings/processing').expect(200);
+    expect(res.body.summary_language).toBe('en');
   });
 });

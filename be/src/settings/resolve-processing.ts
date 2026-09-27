@@ -24,7 +24,9 @@ export function resolveProcessingConfig(
   global: ProcessingConfig, override: ProcessingOverride | undefined, gpuEligible: boolean,
 ): ProcessingConfig {
   let cfg = global;
-  if (override?.preset) cfg = resolvePreset(override.preset, override.language ?? global.language);
+  if (override?.preset) {
+    cfg = resolvePreset(override.preset, override.language ?? global.language, global.summary_language);
+  }
   const individual = override && (override.whisper_model !== undefined ||
     override.devices !== undefined || override.language !== undefined ||
     override.summary_model !== undefined);
@@ -39,6 +41,8 @@ export function resolveProcessingConfig(
         stt: override.devices?.stt ?? cfg.devices.stt,
       },
       summary_model: override.summary_model ?? cfg.summary_model,
+      // 회의별 요약 언어는 없다 — 전역 값을 그대로 잇는다 (다국어 스펙 §5.1).
+      summary_language: cfg.summary_language,
     };
   }
   if (!gpuEligible && (cfg.devices.diarization === 'gpu' || cfg.devices.stt === 'gpu')) {

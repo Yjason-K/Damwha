@@ -16,6 +16,7 @@ import type {
 } from "../api/types";
 import {
   deviceSummary,
+  modelShortLabel,
   PRESET_META,
   PRESET_ORDER,
   SUMMARY_MODEL_OPTIONS,
@@ -81,7 +82,7 @@ export function OverrideSection({ value, onChange }: OverrideSectionProps) {
           <span className="text-xs text-[color:var(--text-muted)]">
             현재 전역:{" "}
             {global
-              ? `${global.whisper_model} · ${deviceSummary(global.devices)} · 요약 ${global.summary_model}`
+              ? `${global.whisper_model} · ${deviceSummary(global.devices)} · 요약 ${modelShortLabel("summary", global.summary_model)}`
               : "불러오는 중…"}
           </span>
           <Select

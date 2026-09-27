@@ -17,11 +17,13 @@ import {
   RESTART_LABEL,
   RESTART_NOT_OURS_NOTE,
   RESTORE_MENU_NOTE,
+  TOKEN_NOTE,
+  TOKEN_UNAVAILABLE_NOTE,
+  UNREADABLE_TOKEN_NOTE,
   failureDetail,
   parseServicesAction,
   renderCall,
   servicesView,
-  tokenView,
   shellStatusFrom,
   statusLine,
   type ServicesView,
@@ -49,7 +51,7 @@ function emptyView(notices: string[] = []): ServicesView {
   return {
     rows: [],
     models: [],
-    token: { masked: null, note: "", canClear: false, busy: false },
+    token: { masked: null, note: "" },
     notices,
   };
 }
@@ -271,6 +273,36 @@ describe("statusLine / shellStatusFrom", () => {
     );
   });
 
+  it("lists every service on the starting screen in dev", () => {
+    const shell = shellStatusFrom({
+      statuses: [st("postgres"), st("api", { process: "starting", health: "unknown" })],
+      restartNotice: null,
+      logPathOf,
+    });
+    expect(shell).toEqual({ state: "starting", detail: "데이터베이스: 실행 중\nAPI: 준비 중" });
+  });
+
+  it("hides the service lines on the packaged starting screen but keeps notices (Notion P2-B)", () => {
+    const statuses = [st("postgres"), st("api", { process: "starting", health: "unknown" })];
+    expect(shellStatusFrom({ statuses, restartNotice: null, logPathOf, packaged: true })).toEqual({ state: "starting" });
+    const warning = "내장 DB 모드에서는 config.json의 DATABASE_URL를 쓰지 않아요";
+    expect(
+      shellStatusFrom({ statuses, restartNotice: "재시작 안내", logPathOf, configWarning: warning, packaged: true }),
+    ).toEqual({ state: "starting", detail: `재시작 안내\n${warning}` });
+  });
+
+  it("still shows the cause on the packaged failure screen", () => {
+    const detail = CAUSES.pgVersionMismatch.text("15", "16");
+    const shell = shellStatusFrom({
+      statuses: [st("postgres", { process: "failed", health: "unknown", detail })],
+      restartNotice: null,
+      logPathOf,
+      packaged: true,
+    });
+    expect(shell.state).toBe("failed");
+    expect(shell.detail).toContain(detail);
+  });
+
   it("always uses the plain failure screen for a postgres failure, with the server's own log (Phase 3)", () => {
     const detail = CAUSES.pgVersionMismatch.text("15", "16");
     const shell = shellStatusFrom({
@@ -386,7 +418,7 @@ describe("renderCall — main이 렌더러에서 실행하는 식", () => {
       ],
       // 모델 줄도 적대적인 문자열을 싣는다 — key는 HF repo id이고 cause에는 worker의 원문이 온다.
       models: [{ key: text, state: "실패", tone: "fail", notes: [text], cause: text, hint: text }],
-      token: { masked: text, note: text, canClear: true, busy: false },
+      token: { masked: text, note: text },
       notices: [text],
     };
     const { calls, sandbox } = run(renderCall(view));
@@ -651,6 +683,7 @@ describe("모델 준비 줄 (스펙 §6.9)", () => {
     expect(row.cause).toContain(CAUSES.hfTokenInvalid.text);
     expect(row.hint).toContain(HINTS.hfTokenInvalid as string);
     expect(row.hint).toContain("허깅페이스 토큰");
+    expect(row.hint).toContain("담화 설정");
     // 수락 페이지로 보내지 않는다 — 401과 403은 다른 안내다.
     expect(row.cause).not.toContain(HF_GATED_MODEL_PAGE_URL);
   });
@@ -745,36 +778,54 @@ describe("서비스 줄의 다시 시작 버튼 (스펙 §6.10 2층)", () => {
   });
 });
 
-describe("토큰 절 (스펙 §6.4)", () => {
-  it("가린 모양만 싣고 원문은 어디에도 없다", () => {
+describe("토큰 절 (스펙 2026-09-25 §5.4)", () => {
+  it("shows only the masked token and points to the Damwha settings — no buttons here any more", () => {
     const token = "hf_AbCdEfGhIjKlMnOpQrStUvWxYz01234567";
-    const view = servicesView({
-      statuses: ALL_OK,
-      restartNotice: null,
-      logPathOf,
-      maskedToken: maskToken(token),
-    });
-    expect(view.token.masked).toBe("hf_****…****4567");
+    const view = servicesView({ statuses: [], restartNotice: null, logPathOf, maskedToken: maskToken(token) });
+    expect(view.token).toEqual({ masked: "hf_****…****4567", note: TOKEN_NOTE });
     expect(JSON.stringify(view)).not.toContain(token);
-    expect(view.token.canClear).toBe(true);
-    // 누르기 전에 무슨 일이 일어나는지 말한다.
-    expect(view.token.note).toContain("다시 시작");
+    expect(TOKEN_NOTE).toContain("담화 설정");
+    expect(servicesView({ statuses: [], restartNotice: null, logPathOf }).token).toEqual({ masked: null, note: NO_TOKEN_NOTE });
+    expect(NO_TOKEN_NOTE).toContain("담화 설정");
   });
 
-  it("토큰이 없으면 지울 것도 없다", () => {
-    const view = servicesView({ statuses: ALL_OK, restartNotice: null, logPathOf });
-    expect(view.token).toEqual({ masked: null, note: NO_TOKEN_NOTE, canClear: false, busy: false });
+  it("shows a note for all four token statuses (스펙 §5.4 '상태·마스킹 값') — never the raw token", () => {
+    const token = "hf_AbCdEfGhIjKlMnOpQrStUvWxYz01234567";
+    const masked = maskToken(token);
+
+    const present = servicesView({ statuses: [], restartNotice: null, logPathOf, maskedToken: masked, tokenStatus: "present" });
+    expect(present.token).toEqual({ masked, note: TOKEN_NOTE });
+
+    const absent = servicesView({ statuses: [], restartNotice: null, logPathOf, tokenStatus: "absent" });
+    expect(absent.token).toEqual({ masked: null, note: NO_TOKEN_NOTE });
+
+    // unreadable: 파일은 있는데 못 풀었다 — masked는 여전히 null(원문을 들고 있지 않다)이지만
+    // "없음"과 같은 안내를 주면 안 된다. 키체인 실패가 아니므로 담화 설정에서 다시 넣으라고 말한다.
+    const unreadable = servicesView({ statuses: [], restartNotice: null, logPathOf, tokenStatus: "unreadable" });
+    expect(unreadable.token).toEqual({ masked: null, note: UNREADABLE_TOKEN_NOTE });
+    expect(UNREADABLE_TOKEN_NOTE).toContain("담화 설정");
+
+    // unavailable: safeStorage를 못 쓴다 — "담화 설정에서 넣으세요"는 거짓 안내다(넣어도 저장되지
+    // 않는다). 키체인 안내(causes.ts·shell-hints.ts)가 이 화면에도 닿아야 한다.
+    const unavailable = servicesView({ statuses: [], restartNotice: null, logPathOf, tokenStatus: "unavailable" });
+    expect(unavailable.token).toEqual({ masked: null, note: TOKEN_UNAVAILABLE_NOTE });
+    expect(TOKEN_UNAVAILABLE_NOTE).toContain(CAUSES.safeStorageUnavailable.text);
+    expect(TOKEN_UNAVAILABLE_NOTE).toContain("키체인");
+
+    for (const view of [present, absent, unreadable, unavailable]) {
+      expect(JSON.stringify(view)).not.toContain(token);
+    }
   });
 });
 
 describe("parseServicesAction — 페이지에서 오는 값", () => {
-  it("아는 두 모양만 통과시킨다", () => {
+  it("아는 한 모양만 통과시킨다", () => {
     expect(parseServicesAction({ kind: "restart", service: "worker" })).toEqual({
       kind: "restart",
       service: "worker",
     });
-    expect(parseServicesAction({ kind: "token", op: "change" })).toEqual({ kind: "token", op: "change" });
-    expect(parseServicesAction({ kind: "token", op: "clear" })).toEqual({ kind: "token", op: "clear" });
+    expect(parseServicesAction({ kind: "token", op: "change" })).toBeNull();
+    expect(parseServicesAction({ kind: "token", op: "clear" })).toBeNull();
   });
 
   it("모르는 것은 전부 null이다 — 렌더러 값이 감독자에게 그대로 들어가지 않는다", () => {
@@ -793,38 +844,6 @@ describe("parseServicesAction — 페이지에서 오는 값", () => {
     ]) {
       expect(parseServicesAction(bad)).toBeNull();
     }
-  });
-});
-
-/**
- * Task 11 fix 1 — 토큰 버튼의 잠금과, 버튼 없는 2층의 안내.
- */
-describe("토큰 버튼의 잠금 (fix 1)", () => {
-  const TOKEN = "hf_AbCdEfGhIjKlMnOpQrStUvWxYz01234567";
-  const view = (tokenBusy: boolean) =>
-    servicesView({
-      statuses: ALL_OK,
-      restartNotice: null,
-      logPathOf,
-      maskedToken: maskToken(TOKEN),
-      tokenBusy,
-    });
-
-  it("토큰 창이 떠 있는 동안 두 버튼을 모두 잠근다", () => {
-    const token = view(true).token;
-    expect(token.busy).toBe(true);
-    // 지울 것이 있어도 지우지 못한다 — 그 창이 바로 그 값을 바꾸는 중이다.
-    expect(token.canClear).toBe(false);
-  });
-
-  it("평소에는 잠기지 않는다", () => {
-    const token = view(false).token;
-    expect(token.busy).toBe(false);
-    expect(token.canClear).toBe(true);
-  });
-
-  it("기본값은 잠기지 않음이다 — 재시작의 restarting과 같은 모양", () => {
-    expect(tokenView(maskToken(TOKEN)).busy).toBe(false);
   });
 });
 

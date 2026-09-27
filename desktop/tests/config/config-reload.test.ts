@@ -347,7 +347,7 @@ describe("createConfigReloader — the LLM address this run chose (Phase 4 스�
       const file = path.join(dir, "config.json");
       fs.writeFileSync(file, JSON.stringify({ PORT: "3000", LENS_LLM_BASE_URL: "http://127.0.0.1:8000/v1" }));
       const cfg = loadConfig(dir);
-      const live = launchEnv(cfg, 51234, "hf_launchTokenValue000000000");
+      const live = launchEnv(cfg, 51234, "hf_launchTokenValue000000000", "ko");
       expect(live.env.LENS_LLM_BASE_URL).toBe(llmBaseUrl(51234));
       expect("LENS_LLM_BASE_URL" in live.baseline).toBe(false);
 
@@ -381,11 +381,23 @@ describe("createConfigReloader — the Keychain token this run carries (Phase 4 
   it("carries the token in the live env but not in the reload baseline", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-reload-"));
     try {
-      const live = launchEnv(loadConfig(dir), 51234, TOKEN);
+      const live = launchEnv(loadConfig(dir), 51234, TOKEN, "ko");
       expect(live.env.HF_TOKEN).toBe(TOKEN);
       expect("HF_TOKEN" in live.baseline).toBe(false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("launchEnv without a token leaves HF_TOKEN out of env entirely", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-reload-"));
+    try {
+      const cfg = loadConfig(tempDir);
+      const live = launchEnv(cfg, 51234, null, "ko");
+      expect("HF_TOKEN" in live.env).toBe(false);
+      expect("HF_TOKEN" in live.baseline).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
@@ -395,7 +407,7 @@ describe("createConfigReloader — the Keychain token this run carries (Phase 4 
       const file = path.join(dir, "config.json");
       fs.writeFileSync(file, JSON.stringify({ PORT: "3000", SUMMARY_LLM_MODEL: "a/one" }));
       const cfg = loadConfig(dir);
-      const live = launchEnv(cfg, 51234, TOKEN);
+      const live = launchEnv(cfg, 51234, TOKEN, "ko");
 
       const log: string[] = [];
       const reload = createConfigReloader({
@@ -422,6 +434,39 @@ describe("createConfigReloader — the Keychain token this run carries (Phase 4 
       expect(all).not.toContain(TOKEN);
       expect(all).not.toContain("hf_fromTheFile000000000000");
       expect(log.filter((l) => l.includes("다시 읽었어요")).join("\n")).not.toContain("HF_TOKEN");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("createConfigReloader — the device summary language (다국어 스펙 §5.4)", () => {
+  it("기기 언어를 SUMMARY_LANGUAGE로 얹는다 — 기준선에는 넣지 않아 재적용이 지우지 않는다", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-reload-"));
+    try {
+      const cfg = loadConfig(dir);
+      const live = launchEnv(cfg, 51234, null, "en");
+      expect(live.env.SUMMARY_LANGUAGE).toBe("en");
+      expect("SUMMARY_LANGUAGE" in live.baseline).toBe(false);
+
+      const reload = createConfigReloader({
+        load: () => loadConfig(dir),
+        live: () => ({ env: live.env, baseline: live.baseline, mode: cfg.databaseMode }),
+        log: () => {},
+      });
+      reload();
+      expect(live.env.SUMMARY_LANGUAGE).toBe("en");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("config.json에 사람이 적은 SUMMARY_LANGUAGE가 있으면 그 값이 이긴다", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-reload-"));
+    try {
+      fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ SUMMARY_LANGUAGE: "transcript" }));
+      const live = launchEnv(loadConfig(dir), 51234, null, "en");
+      expect(live.env.SUMMARY_LANGUAGE).toBe("transcript");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

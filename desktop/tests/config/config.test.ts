@@ -803,6 +803,11 @@ describe("HF_TOKEN goes to the Python children only (R-6b, 스펙 §6.4)", () =>
     expect(childEnv(c, {}).HF_TOKEN).toBe(TOKEN);
     expect("HF_TOKEN" in nodeChildEnv(c.env, { HF_TOKEN: SHELL_TOKEN })).toBe(false);
   });
+
+  it("childEnv never takes HF_TOKEN from the shell — the app is the only source (spec 2026-09-25 §5.1)", () => {
+    const c = ctx({ PORT: "3000" });
+    expect("HF_TOKEN" in childEnv(c, { HF_TOKEN: SHELL_TOKEN })).toBe(false);
+  });
 });
 
 describe("loadConfig — keys the child env must not take from config.json (P4-C30)", () => {

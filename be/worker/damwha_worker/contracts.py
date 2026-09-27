@@ -8,12 +8,14 @@ log = logging.getLogger("damwha_worker")
 
 # job type별 허용 버전 — enroll/index는 v1 불변 (spec §4)
 SUPPORTED_SCHEMA_VERSIONS: dict[str, frozenset[int]] = {
-    "process_meeting": frozenset({1, 2, 3, 4, 5}),
+    "process_meeting": frozenset({1, 2, 3, 4, 5, 6}),
     "enroll_speaker": frozenset({1}),
     "index_meeting": frozenset({1}),
-    "extract_lenses": frozenset({1}),
-    "summarize_meeting": frozenset({1}),
-    "live_session": frozenset({1}),
+    "extract_lenses": frozenset({1, 2}),
+    "summarize_meeting": frozenset({1, 2}),
+    "live_session": frozenset({1, 2}),
+    "download_model": frozenset({1}),
+    "delete_model": frozenset({1}),
 }
 
 MeetingId = Annotated[str, StringConstraints(pattern=r"^mtg_[1-9][0-9]*$")]
@@ -27,6 +29,11 @@ NonEmptyString = Annotated[str, StringConstraints(strip_whitespace=True, min_len
 
 WhisperModel = Literal["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
 Device = Literal["cpu", "gpu"]
+
+# 요약·렌즈 출력 언어 (다국어 스펙 §5). transcript = 녹취 언어 따름 —
+# 옛 버전 job은 이 값으로 읽는다.
+# 값의 진실원은 @damwha/contracts의 SUMMARY_LANGUAGES.
+SummaryLanguage = Literal["transcript", "ko", "en"]
 
 
 class UnsupportedPayloadVersion(ValueError):
@@ -96,7 +103,9 @@ class ModelsConfig(BaseModel):
     summary_model이 nullable인 이유는 preset/preset_revision과 같다: v1/v2에서
     변환된 payload에는 값이 없다. v3 유래는 항상 채워진다. Literal이 아니라 str인
     이유는 워커가 API의 큐레이션 목록을 알 필요가 없기 때문 — 목록 검증은 API 경계
-    (그리고 워커 env 폴백 값은 목록 밖일 수 있다)."""
+    (그리고 워커 env 폴백 값은 목록 밖일 수 있다).
+
+    summary_language는 v6부터 — 그 전 버전 유래는 transcript(당시의 실제 동작)다."""
 
     whisper_model: WhisperModel
     language: str
@@ -104,6 +113,7 @@ class ModelsConfig(BaseModel):
     preset: str | None = None
     preset_revision: str | None = None
     summary_model: str | None = None
+    summary_language: SummaryLanguage = "transcript"
     diarization: Diarization
     embedding: Embedding
 
@@ -130,6 +140,26 @@ def _v2_models_to_internal(m: ModelsV2) -> ModelsConfig:
 
 
 def _v3_models_to_internal(m: ModelsWireV3) -> ModelsConfig:
+    return ModelsConfig(**m.model_dump())
+
+
+class ModelsWireV4(BaseModel):
+    """wire v4 = v3 + summary_language. 필수 — v3의 summary_model과 같은 이유."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    whisper_model: WhisperModel
+    language: str
+    devices: Devices
+    preset: str | None = None
+    preset_revision: str | None = None
+    summary_model: NonEmptyString
+    summary_language: SummaryLanguage
+    diarization: Diarization
+    embedding: Embedding
+
+
+def _v4_models_to_internal(m: ModelsWireV4) -> ModelsConfig:
     return ModelsConfig(**m.model_dump())
 
 
@@ -248,6 +278,19 @@ class ProcessMeetingPayloadWireV5(BaseModel):
     followups: FollowupsWireV5
 
 
+class ProcessMeetingPayloadWireV6(BaseModel):
+    """wire v6 = v5 + models.summary_language."""
+
+    schema_version: Literal[6]
+    meeting_id: MeetingId
+    audio_key: str
+    processing_version: int
+    reprocess: bool
+    models: ModelsWireV4
+    identify: IdentifyWireV4
+    followups: FollowupsWireV5
+
+
 class ProcessMeetingPayload(BaseModel):
     """내부 표현 — 항상 정규화된 ModelsConfig. v1/v2/v3는 parse에서 즉시 변환되고
     원본 버전을 보존한다.
@@ -290,14 +333,32 @@ class IndexMeetingPayload(BaseModel):
     search_embedding: SearchEmbedding
 
 
+def _output_language_matches_version(data):
+    """v1은 output_language를 모르고 v2는 필수다 (zod의 v1|v2 판별 합집합과 같은 판정)."""
+    if isinstance(data, dict):
+        version = data.get("schema_version")
+        has = "output_language" in data
+        if version == 2 and not has:
+            raise ValueError("output_language is required in schema_version 2")
+        if version == 1 and has:
+            raise ValueError("output_language is not part of schema_version 1")
+    return data
+
+
 class ExtractLensesPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1]
+    schema_version: Literal[1, 2]
     meeting_id: MeetingId
     processing_version: int = Field(ge=0)
     extraction_run_id: ExtractionRunId
     model: NonEmptyString
+    output_language: SummaryLanguage = "transcript"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _version_field(cls, data):
+        return _output_language_matches_version(data)
 
 
 class LensCandidate(BaseModel):
@@ -327,10 +388,16 @@ class SummarizeMeetingPayload(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1]
+    schema_version: Literal[1, 2]
     meeting_id: MeetingId
     processing_version: int = Field(ge=0)
     model: NonEmptyString
+    output_language: SummaryLanguage = "transcript"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _version_field(cls, data):
+        return _output_language_matches_version(data)
 
 
 class SummarySegmentCandidate(BaseModel):
@@ -353,11 +420,14 @@ class SummaryResponse(BaseModel):
 
 
 class LiveSessionPayloadWire(BaseModel):
-    """wire v1. process는 API가 완전히 해석한 v5 process_meeting payload 그대로다."""
+    """wire v1(process v5)·v2(process v6).
+
+    process는 API가 완전히 해석한 process_meeting payload 그대로다.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1]
+    schema_version: Literal[1, 2]
     meeting_id: MeetingId
     audio_key: str
     source: Literal["mic", "browser"]
@@ -365,8 +435,12 @@ class LiveSessionPayloadWire(BaseModel):
 
     @model_validator(mode="after")
     def _process_matches(self):
-        if self.process.get("schema_version") != 5:
-            raise ValueError("live_session.process must be a wire v5 process_meeting payload")
+        expected = 5 if self.schema_version == 1 else 6
+        if self.process.get("schema_version") != expected:
+            raise ValueError(
+                f"live_session v{self.schema_version}.process must be a wire v{expected} "
+                "process_meeting payload"
+            )
         if self.process.get("meeting_id") != self.meeting_id:
             raise ValueError("live_session.process.meeting_id must equal meeting_id")
         if self.process.get("audio_key") != self.audio_key:
@@ -386,9 +460,45 @@ class LiveSessionPayload(BaseModel):
     process_wire: dict
 
 
+ModelRole = Literal["stt", "summary", "diarization", "speaker_embedding", "search_embedding"]
+
+
+class ModelJobPayload(BaseModel):
+    """download_model·delete_model payload v1 (모델 다운로드 관리 스펙 §4.4).
+
+    식별자는 논리 키(role·name·backend)다. backend는 전사에만 있고 그 밖에서는 없어야 한다 —
+    zod(`ModelJobPayloadSchema`)와 같은 판정.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1]
+    role: ModelRole
+    name: NonEmptyString
+    backend: Literal["mlx", "faster"] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_explicit_null_backend(cls, data):
+        # backend는 없거나(전사가 아닌 역할) 실제 값이어야(전사) 한다 — 명시적
+        # null은 둘 중 어느 쪽도 아니므로 거부한다. zod(`ModelJobPayloadSchema`)는
+        # backend를 `.optional()`(undefined만 허용, null 불허)로 선언해 같은 판정을
+        # 이미 낸다; 여기서는 필드가 nullable Literal이라 별도로 막아야 한다.
+        if isinstance(data, dict) and "backend" in data and data["backend"] is None:
+            raise ValueError("backend must be absent, not null")
+        return data
+
+    @model_validator(mode="after")
+    def _backend_only_for_stt(self):
+        if (self.role == "stt") != (self.backend is not None):
+            raise ValueError('backend is required for role "stt" and forbidden otherwise')
+        return self
+
+
 def _parse_live_session(data: dict) -> LiveSessionPayload:
     wire = LiveSessionPayloadWire.model_validate(data)
     return LiveSessionPayload(
+        schema_version=wire.schema_version,
         meeting_id=wire.meeting_id,
         audio_key=wire.audio_key,
         source=wire.source,
@@ -446,19 +556,34 @@ def _parse_process_meeting(data: dict) -> ProcessMeetingPayload:
                 suggest_threshold=v4.identify.suggest_threshold,
             ),
         )
-    v5 = ProcessMeetingPayloadWireV5.model_validate(data)
+    if version == 5:
+        v5 = ProcessMeetingPayloadWireV5.model_validate(data)
+        return ProcessMeetingPayload(
+            schema_version=5,
+            meeting_id=v5.meeting_id,
+            audio_key=v5.audio_key,
+            processing_version=v5.processing_version,
+            reprocess=v5.reprocess,
+            models=_v3_models_to_internal(v5.models),
+            identify=IdentifyConfig(
+                threshold=v5.identify.threshold,
+                suggest_threshold=v5.identify.suggest_threshold,
+            ),
+            followups=FollowupsConfig(lens=v5.followups.lens, summary=v5.followups.summary),
+        )
+    v6 = ProcessMeetingPayloadWireV6.model_validate(data)
     return ProcessMeetingPayload(
-        schema_version=5,
-        meeting_id=v5.meeting_id,
-        audio_key=v5.audio_key,
-        processing_version=v5.processing_version,
-        reprocess=v5.reprocess,
-        models=_v3_models_to_internal(v5.models),
+        schema_version=6,
+        meeting_id=v6.meeting_id,
+        audio_key=v6.audio_key,
+        processing_version=v6.processing_version,
+        reprocess=v6.reprocess,
+        models=_v4_models_to_internal(v6.models),
         identify=IdentifyConfig(
-            threshold=v5.identify.threshold,
-            suggest_threshold=v5.identify.suggest_threshold,
+            threshold=v6.identify.threshold,
+            suggest_threshold=v6.identify.suggest_threshold,
         ),
-        followups=FollowupsConfig(lens=v5.followups.lens, summary=v5.followups.summary),
+        followups=FollowupsConfig(lens=v6.followups.lens, summary=v6.followups.summary),
     )
 
 
@@ -486,4 +611,6 @@ def parse_payload(job_type: str, data: dict):
         return _parse_live_session(data)
     if job_type == "summarize_meeting":
         return SummarizeMeetingPayload.model_validate(data)
+    if job_type in ("download_model", "delete_model"):
+        return ModelJobPayload.model_validate(data)
     return ExtractLensesPayload.model_validate(data)

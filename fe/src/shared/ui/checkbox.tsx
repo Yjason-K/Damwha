@@ -72,7 +72,7 @@ function Checkbox({
       />
       <span
         aria-hidden="true"
-        className="box-border inline-flex size-4 shrink-0 items-center justify-center rounded-xs border-[1.5px] border-[color:var(--border-strong)] bg-card text-white transition-[color,background-color,border-color,box-shadow] duration-[80ms] peer-checked:border-[color:var(--accent-solid)] peer-checked:bg-[var(--accent-solid)] peer-indeterminate:border-[color:var(--accent-solid)] peer-indeterminate:bg-[var(--accent-solid)] peer-focus-visible:[box-shadow:var(--focus-ring)] [&>svg]:size-[11px] [&>svg]:opacity-0 [&>svg]:transition-opacity peer-checked:[&>svg]:opacity-100 peer-indeterminate:[&>svg]:opacity-100"
+        className="box-border inline-flex size-4 shrink-0 items-center justify-center rounded-xs border-[1.5px] border-[color:var(--border-strong)] bg-card text-[color:var(--text-on-accent)] transition-[color,background-color,border-color,box-shadow] duration-[80ms] peer-checked:border-[color:var(--accent-solid)] peer-checked:bg-[var(--accent-solid)] peer-indeterminate:border-[color:var(--accent-solid)] peer-indeterminate:bg-[var(--accent-solid)] peer-focus-visible:[box-shadow:var(--focus-ring)] [&>svg]:size-[11px] [&>svg]:opacity-0 [&>svg]:transition-opacity peer-checked:[&>svg]:opacity-100 peer-indeterminate:[&>svg]:opacity-100"
       >
         {indeterminate ? <MinusIcon /> : <CheckIcon />}
       </span>

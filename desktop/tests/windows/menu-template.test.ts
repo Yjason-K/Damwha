@@ -69,3 +69,13 @@ describe("restore menu item", () => {
     expect(h.restored).toBe(1);
   });
 });
+
+it("language: en이면 앱이 만든 항목이 영어다 (role 항목은 macOS가 붙인다)", () => {
+  const tpl = buildMenuTemplate(handlers(), "Damwha", { restoreEnabled: false, language: "en" });
+  const labels = JSON.stringify(
+    tpl.map((m) => [m.label, Array.isArray(m.submenu) ? (m.submenu as { label?: string }[]).map((i) => i.label) : []]),
+  );
+  expect(labels).toContain("Check for updates…");
+  expect(labels).toContain("Service status");
+  expect(labels).not.toMatch(/\p{Script=Hangul}/u);
+});

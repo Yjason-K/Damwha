@@ -84,13 +84,14 @@ export const CAUSES = {
     selfRecovers: false,
   },
   /**
-   * 기동 게이트 — `safeStorage.isEncryptionAvailable()`이 false다 (Phase 4 스펙 §6.4·§8). 서비스를 하나도 띄우지
-   * 않는다. 평문으로 저장하는 폴백은 없다. main.ts가 manual 실패로 던진다 — Keychain이 잠겨 있으면 자동 재시도가
-   * 잠금 해제 요청을 20초마다 다시 띄울 수 있다.
+   * `safeStorage.isEncryptionAvailable()`이 false다 (스펙 2026-09-25 §5.1 — Phase 4 §6.4의 첫 실행
+   * 게이트를 대체했다). **더는 기동을 막지 않는다** — `app/token-boot.ts`가 이 상태를 `unavailable`로
+   * 읽고 토큰 없이 서비스를 띄운다. 평문으로 저장하는 폴백은 없다. 담화 화면의 토큰 다리
+   * (`windows/token-bridge.ts`)가 그 화면에서 저장을 시도할 때만 이 문구를 쓴다.
    */
   safeStorageUnavailable: {
     match: /키체인을 쓸 수 없어 허깅페이스 토큰을/,
-    text: "macOS 키체인을 쓸 수 없어 허깅페이스 토큰을 안전하게 보관할 수 없어요. 서비스를 띄우지 않았어요.",
+    text: "macOS 키체인을 쓸 수 없어 허깅페이스 토큰을 안전하게 보관할 수 없어요. 토큰 없이 실행 중이에요 — 화자 분리가 필요한 기능은 막혀 있어요.",
     selfRecovers: false,
   },
   /**
@@ -104,7 +105,7 @@ export const CAUSES = {
     text: "이전 실행이 남긴 프로세스를 확인하지 못해 서비스를 띄우지 않았어요.",
     selfRecovers: false,
   },
-  /** 토큰 검증 — HF가 401·403으로 거절했다 (스펙 §8 "토큰이 유효하지 않아요"). 토큰 화면이 사유와 함께 싣는다. */
+  /** 토큰 검증 — HF가 401·403으로 거절했다 (스펙 §8 "토큰이 유효하지 않아요"). 담화 화면의 토큰 폼이 입력칸 아래에 사유와 함께 싣는다. */
   hfTokenInvalid: {
     match: /허깅페이스 토큰이 유효하지 않아요/,
     text: "허깅페이스 토큰이 유효하지 않아요.",

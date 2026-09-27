@@ -5,6 +5,7 @@
 """
 
 from .core import (
+    MODEL_INVENTORY_KEY,
     MODEL_READINESS_KEY,
     WORKER_CAPABILITIES_KEY,
     connect,
@@ -13,6 +14,7 @@ from .core import (
     readiness_now,
     shared_state_enabled,
     upsert_worker_capabilities,
+    write_model_inventory,
 )
 from .lenses import fail_lens_extraction, mark_lens_run_running, persist_lens_extraction
 from .live import (
@@ -24,6 +26,7 @@ from .live import (
     insert_live_utterance,
 )
 from .meetings import fail_process_meeting, persist_process_meeting
+from .model_jobs import complete_job, model_job_refs, remove_model_readiness_key, stop_requested
 from .queue import (
     claim,
     fail_job,
@@ -41,6 +44,7 @@ from .speakers import fail_enroll, persist_enroll
 from .summaries import fail_summary, mark_summary_running, persist_summary
 
 __all__ = [
+    "MODEL_INVENTORY_KEY",
     "MODEL_READINESS_KEY",
     "WORKER_CAPABILITIES_KEY",
     "connect",
@@ -49,6 +53,7 @@ __all__ = [
     "readiness_now",
     "shared_state_enabled",
     "upsert_worker_capabilities",
+    "write_model_inventory",
     "claim",
     "fail_job",
     "heartbeat",
@@ -69,6 +74,10 @@ __all__ = [
     "fail_lens_extraction",
     "mark_lens_run_running",
     "persist_lens_extraction",
+    "complete_job",
+    "model_job_refs",
+    "remove_model_readiness_key",
+    "stop_requested",
     "persist_index_meeting",
     "LiveInputState",
     "delete_live_utterances",

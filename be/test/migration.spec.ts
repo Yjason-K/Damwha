@@ -600,4 +600,15 @@ describe('migration', () => {
       await legacy.stop();
     }
   });
+
+  it('027 allows download_model/delete_model job types and their stages', async () => {
+    const r = await db.pool.query(
+      `INSERT INTO job(type, payload, stage) VALUES ('download_model', '{}'::jsonb, 'download_model'),
+                                               ('delete_model', '{}'::jsonb, 'delete_model') RETURNING id`,
+    );
+    expect(r.rowCount).toBe(2);
+    await expect(
+      db.pool.query(`INSERT INTO job(type, payload) VALUES ('nope', '{}'::jsonb)`),
+    ).rejects.toThrow(/job_type_check/);
+  });
 });

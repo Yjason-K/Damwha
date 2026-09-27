@@ -86,7 +86,7 @@ function Tag({
             e.stopPropagation();
             onRemove();
           }}
-          className="-mr-[3px] inline-flex size-[14px] items-center justify-center rounded-xs opacity-60 transition-opacity hover:bg-black/[0.06] hover:opacity-100 [&_svg]:size-[11px]"
+          className="-mr-[3px] inline-flex size-[14px] items-center justify-center rounded-xs opacity-60 transition-opacity hover:bg-[var(--overlay-hover)] hover:opacity-100 [&_svg]:size-[11px]"
         >
           <XIcon />
         </button>

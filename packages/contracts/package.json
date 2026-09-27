@@ -18,7 +18,8 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc -p tsconfig.cjs.json && tsc -p tsconfig.esm.json && node -e \"require('fs').writeFileSync('dist/esm/package.json', JSON.stringify({type:'module'}))\"",
-    "prepare": "pnpm run build"
+    "prepare": "pnpm run build",
+    "test": "pnpm run build && node --test \"test/*.test.cjs\""
   },
   "devDependencies": {
     "typescript": "^5.9.3"
