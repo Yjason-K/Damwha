@@ -17,7 +17,7 @@ export const ko = {
     lede: "대화를 녹음하면 담화가 누가·언제·무슨 말을 했는지 정리해 둬요. 검색하면 그 말을 한 순간의 원본 음성으로 바로 가요.",
     download: "Mac용 다운로드",
     downloadFallback: "GitHub에서 받기",
-    demo: "데모 써보기",
+    demo: "데모 사용해보기",
     demoUrl: "https://damwha-demo.0kimjae.dev/?lang=ko",
     demoNote: "데모: 읽기 전용 · 가입 없이 바로",
     requirements: "Apple Silicon(M1 이상) · macOS 15 이상",
