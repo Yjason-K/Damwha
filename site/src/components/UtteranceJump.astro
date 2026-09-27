@@ -1,0 +1,51 @@
+---
+import type { Dictionary } from "../i18n";
+interface Props { t: Dictionary }
+const { t } = Astro.props;
+const v = t.jump.videoLang;
+---
+<section id="utterance-jump" class="border-line border-t">
+  <div class="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-28">
+    <h2 class="text-2xl font-semibold tracking-tight sm:text-3xl">{t.jump.title}</h2>
+    <p class="text-ink-2 mt-4 max-w-2xl text-lg leading-relaxed">{t.jump.lede}</p>
+    <figure class="mt-10">
+      <video
+        data-autoplay-in-view
+        class="border-line bg-sunken aspect-[1440/900] h-auto w-full rounded-lg border"
+        muted
+        loop
+        playsinline
+        preload="none"
+        width="1440"
+        height="900"
+        poster={`/media/utterance-jump-poster.${v}.jpg`}
+        aria-label={t.jump.videoLabel}
+      >
+        <source src={`/media/utterance-jump.${v}.webm`} type="video/webm" />
+        <source src={`/media/utterance-jump.${v}.mp4`} type="video/mp4" />
+      </video>
+      <figcaption class="text-ink-3 mt-3 text-sm">{t.jump.caption}</figcaption>
+    </figure>
+  </div>
+</section>
+<script is:inline>
+  // 화면에 들어오면 재생, 나가면 멈춤. reduce면 자동 재생하지 않고 controls를 준다(스펙 §7).
+  (function () {
+    var v = document.querySelector("video[data-autoplay-in-view]");
+    if (!v) return;
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches || !("IntersectionObserver" in window)) {
+      v.controls = true;
+      v.preload = "metadata";
+      return;
+    }
+    new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) {
+          v.play().catch(function () { v.controls = true; });
+        } else {
+          v.pause();
+        }
+      });
+    }, { threshold: 0.4 }).observe(v);
+  })();
+</script>

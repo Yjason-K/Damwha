@@ -1,0 +1,19 @@
+---
+import type { Dictionary } from "../i18n";
+interface Props { t: Dictionary }
+const { t } = Astro.props;
+const links = [
+  [t.footer.source, "https://github.com/Yjason-K/Damwha"],
+  [t.footer.releases, "https://github.com/Yjason-K/Damwha/releases"],
+  [t.footer.demo, t.hero.demoUrl],
+  [t.footer.license, "https://github.com/Yjason-K/Damwha/blob/main/LICENSE"],
+] as const;
+---
+<footer class="border-line border-t">
+  <div class="text-ink-3 mx-auto flex max-w-6xl flex-col gap-4 px-4 py-10 text-sm sm:flex-row sm:items-center sm:justify-between sm:px-6">
+    <p>Damwha · {t.footer.tagline}</p>
+    <ul class="flex flex-wrap gap-x-5 gap-y-2">
+      {links.map(([label, href]) => <li><a class="hover:text-ink" href={href}>{label}</a></li>)}
+    </ul>
+  </div>
+</footer>

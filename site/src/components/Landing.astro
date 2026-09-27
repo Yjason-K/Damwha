@@ -1,0 +1,29 @@
+---
+import Header from "./Header.astro";
+import Hero from "./Hero.astro";
+import Problem from "./Problem.astro";
+import UtteranceJump from "./UtteranceJump.astro";
+import Features from "./Features.astro";
+import Privacy from "./Privacy.astro";
+import Requirements from "./Requirements.astro";
+import Consent from "./Consent.astro";
+import Faq from "./Faq.astro";
+import Footer from "./Footer.astro";
+import { getDictionary, type Lang } from "../i18n";
+import type { ReleaseInfo } from "../lib/release";
+interface Props { lang: Lang; release: ReleaseInfo }
+const { lang, release } = Astro.props;
+const t = getDictionary(lang);
+---
+<Header lang={lang} />
+<main>
+  <Hero t={t} release={release} />
+  <Problem t={t} />
+  <UtteranceJump t={t} />
+  <Features t={t} />
+  <Privacy t={t} />
+  <Requirements t={t} release={release} />
+  <Consent t={t} />
+  <Faq t={t} />
+</main>
+<Footer t={t} />

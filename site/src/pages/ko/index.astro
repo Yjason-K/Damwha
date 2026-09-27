@@ -1,8 +1,7 @@
 ---
 import Base from "../../layouts/Base.astro";
+import Landing from "../../components/Landing.astro";
 import { getLatestRelease } from "../../lib/release";
-import { getDictionary } from "../../i18n";
 const release = await getLatestRelease();
-const t = getDictionary("ko");
 ---
-<Base lang="ko" release={release}><h1>{t.hero.title}</h1></Base>
+<Base lang="ko" release={release}><Landing lang="ko" release={release} /></Base>

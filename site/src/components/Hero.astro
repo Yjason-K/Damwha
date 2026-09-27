@@ -1,0 +1,31 @@
+---
+import { Picture } from "astro:assets";
+import hero from "../assets/00-hero.png";
+import DownloadButton from "./DownloadButton.astro";
+import type { Dictionary } from "../i18n";
+import type { ReleaseInfo } from "../lib/release";
+interface Props { t: Dictionary; release: ReleaseInfo }
+const { t, release } = Astro.props;
+---
+<section class="mx-auto max-w-6xl px-4 pt-16 pb-12 sm:px-6 sm:pt-24">
+  <p class="text-mint-text font-mono text-xs tracking-wide uppercase">{t.hero.eyebrow}</p>
+  <h1 class="mt-4 max-w-3xl text-4xl font-semibold tracking-[-0.02em] text-balance sm:text-6xl">{t.hero.title}</h1>
+  <p class="text-ink-2 mt-6 max-w-2xl text-lg leading-relaxed text-pretty">{t.hero.lede}</p>
+  <div class="mt-8 flex flex-wrap items-start gap-4">
+    <DownloadButton t={t} release={release} />
+    <div class="flex flex-col items-start gap-1.5">
+      <a href={t.hero.demoUrl} class="border-line-2 hover:bg-sunken inline-flex h-11 items-center rounded-lg border px-5 text-[15px] font-medium transition-colors">{t.hero.demo}</a>
+      <span class="text-ink-3 text-xs">{t.hero.demoNote}</span>
+    </div>
+  </div>
+  <Picture
+    src={hero}
+    alt={t.hero.imageAlt}
+    formats={["avif", "webp"]}
+    widths={[696, 1392]}
+    sizes="(min-width: 1152px) 1104px, 100vw"
+    loading="eager"
+    fetchpriority="high"
+    class="mt-14 h-auto w-full"
+  />
+</section>

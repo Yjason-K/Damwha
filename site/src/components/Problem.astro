@@ -1,0 +1,11 @@
+---
+import type { Dictionary } from "../i18n";
+interface Props { t: Dictionary }
+const { t } = Astro.props;
+---
+<section id="problem" class="border-line border-t">
+  <div class="mx-auto max-w-3xl px-4 py-20 sm:px-6 sm:py-28">
+    <h2 class="text-2xl font-semibold tracking-tight text-balance sm:text-3xl">{t.problem.title}</h2>
+    <p class="text-ink-2 mt-5 text-lg leading-relaxed">{t.problem.body}</p>
+  </div>
+</section>
