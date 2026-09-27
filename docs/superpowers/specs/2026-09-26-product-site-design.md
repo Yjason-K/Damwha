@@ -422,7 +422,8 @@ site/
 
 - `https://damwha.0kimjae.dev/`와 `/ko/`가 HTTPS로 뜨고 언어 전환 링크가 서로를 가리킨다
 - 모바일 Lighthouse 네 항목 95 이상(§1)
-- Google Rich Results Test에서 `SoftwareApplication`이 인식된다
+- Google Rich Results Test에서 `SoftwareApplication` 항목이 감지되고 파싱 오류가 없다. SoftwareApplication 리치 결과는
+  `aggregateRating`이나 `review`가 필수라 "대상 아님" 경고가 나오는 것은 정상이다(2026-09-27 리뷰에서 확인)
 - 카카오 링크 디버거와 슬랙에서 두 URL의 OG 미리보기가 언어별로 뜬다
 - `damwha-demo.0kimjae.dev` HTML에 `noindex`가 있다(데모 재릴리스 뒤)
 - 다운로드 버튼이 최신 DMG를 받는다. `publish.sh` 다음 실행 때 훅으로 사이트가 재빌드되는지 본다
@@ -443,7 +444,7 @@ site/
 |---|---|
 | 영어 사용자가 한국어 UI 스크린샷을 보고 실망한다 | §3.3 — 요구사항·FAQ에 "rolling out"으로 명시. 숨기면 다운로드 후 이탈로 돌아온다 |
 | 앱 번역이 끝났는데 사이트 문구와 캡처가 그대로 남는다 | 다국어 설계 §9의 3·4단계가 들어간 릴리스에서 사이트 사전의 두 줄(요구사항·FAQ)을 고치고, 영어 캡처·영상으로 바꾼다. 다국어 설계 §9 6단계(문서)의 체크리스트에 이 사이트를 한 줄 더한다 |
-| GitHub API rate limit(비인증 60회/시) | 빌드당 1회 호출이라 닿지 않는다. 닿아도 §3.7 폴백 |
+| GitHub API rate limit(비인증 60회/시, **IP 단위**) | Pages 빌더는 IP를 공유하므로 빌드당 1회여도 닿을 수 있다. `GITHUB_TOKEN` 환경변수가 있으면 인증 호출(5000/h). 닿아도 §3.7 폴백 |
 | Pages 빌드 환경에서 pnpm·Node 버전이 어긋난다 | §8.1 첫 배포 로그 확인 항목 |
 | `fe/src/index.css`의 블록 구조가 바뀌어 사이트 토큰이 빈다 | 추출이 못 찾으면 빌드가 실패한다(§3.8). 조용한 빈 배포는 없다 |
 | 데모 시드가 바뀌어 영상 장면이 사라진다 | 영상은 커밋된 산출물이라 깨지지 않는다. 시드 갱신 체크리스트(`deploy/demo/README.md`)에 "영상 재녹화 여부" 한 줄을 더한다 |

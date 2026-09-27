@@ -40,12 +40,16 @@ export function parseRelease(json: unknown): ReleaseInfo | null {
 }
 
 export async function fetchLatestRelease(
-  deps: { fetchImpl?: typeof fetch; warn?: (msg: string) => void; timeoutMs?: number } = {},
+  deps: { fetchImpl?: typeof fetch; warn?: (msg: string) => void; timeoutMs?: number; token?: string } = {},
 ): Promise<ReleaseInfo> {
-  const { fetchImpl = fetch, warn = (m) => console.warn(m), timeoutMs = 10_000 } = deps;
+  // Cloudflare 빌더는 나가는 IP를 여러 고객이 나눠 쓴다. 비인증 한도(IP당 60/h)에 남의 빌드가 닿으면
+  // 우리 빌드가 403으로 폴백한다 — GITHUB_TOKEN(권한 없는 fine-grained 토큰이면 충분)이 있으면 싣는다.
+  const { fetchImpl = fetch, warn = (m) => console.warn(m), timeoutMs = 10_000, token = process.env.GITHUB_TOKEN ?? "" } = deps;
+  const headers: Record<string, string> = { Accept: "application/vnd.github+json", "User-Agent": "damwha-site-build" };
+  if (token) headers.Authorization = `Bearer ${token}`;
   try {
     const res = await fetchImpl(API, {
-      headers: { Accept: "application/vnd.github+json", "User-Agent": "damwha-site-build" },
+      headers,
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) {

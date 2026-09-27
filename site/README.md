@@ -35,7 +35,7 @@ pnpm site og               # OG 이미지 재생성
 | Root directory | (비움) |
 | Build command | `pnpm install --frozen-lockfile --filter damwha-site... && pnpm --filter damwha-site build` |
 | Output directory | `site/dist` |
-| 환경변수 | `SKIP_DEPENDENCY_INSTALL=1`, `NODE_VERSION=22` |
+| 환경변수 | `SKIP_DEPENDENCY_INSTALL=1`, `NODE_VERSION=22`, (권장) `GITHUB_TOKEN` — 권한 없는 fine-grained 토큰. Pages 빌더는 나가는 IP를 공유해 비인증 한도(60/h)에 남의 빌드가 닿을 수 있다. 없으면 403 때 버튼이 릴리스 페이지로 폴백한다 |
 | Build watch paths (include) | `site/**`, `fe/src/index.css`, `fe/public/favicon*`, `fe/public/apple-touch-icon.png`, `pnpm-lock.yaml` |
 | Custom domain | `damwha.0kimjae.dev` |
 
@@ -52,7 +52,7 @@ pnpm site og               # OG 이미지 재생성
 
 - `https://damwha.0kimjae.dev/`와 `/ko/`가 뜨고, 언어 링크가 서로를 가리킨다.
 - PageSpeed Insights 모바일에서 Performance·SEO·Accessibility·Best Practices가 모두 95 이상이다.
-- Google Rich Results Test에서 `SoftwareApplication`이 인식된다.
+- Google Rich Results Test에서 `SoftwareApplication` 항목이 감지되고 파싱 오류가 없다. "리치 결과 대상 아님(aggregateRating·review 없음)" 경고는 정상이다 — 가짜 평점은 넣지 않는다.
 - 카카오 링크 디버거와 슬랙에서 두 URL의 미리보기가 언어별로 다르게 뜬다.
 - Google Search Console: `0kimjae.dev` 도메인 속성을 Cloudflare DNS TXT로 인증하고, `https://damwha.0kimjae.dev/sitemap-index.xml`을 제출한다. `/`와 `/ko/`는 URL 검사 → 색인 요청.
 - 네이버 서치어드바이저: 사이트를 등록하고, 받은 인증 HTML 파일을 `site/public/`에 커밋해 배포한 뒤 인증한다. 사이트맵을 제출한다.

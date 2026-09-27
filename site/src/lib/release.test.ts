@@ -67,6 +67,20 @@ describe("fetchLatestRelease", () => {
     expect(r.kind).toBe("fallback");
   });
 
+  it("token이 있으면 Authorization 헤더를 싣는다 — 공유 빌더 IP의 비인증 한도(60/h)를 피한다", async () => {
+    const fetchImpl = okFetch(good);
+    await fetchLatestRelease({ fetchImpl, warn: () => {}, token: "ghp_x" });
+    const init = (fetchImpl as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0][1];
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer ghp_x");
+  });
+
+  it("token이 없으면 Authorization 헤더가 없다", async () => {
+    const fetchImpl = okFetch(good);
+    await fetchLatestRelease({ fetchImpl, warn: () => {}, token: "" });
+    const init = (fetchImpl as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0][1];
+    expect(init.headers as Record<string, string>).not.toHaveProperty("Authorization");
+  });
+
   it("DMG 없는 릴리스면 fallback", async () => {
     const r = await fetchLatestRelease({ fetchImpl: okFetch({ ...good, assets: [] }), warn: () => {} });
     expect(r.kind).toBe("fallback");
