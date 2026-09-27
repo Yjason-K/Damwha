@@ -190,7 +190,7 @@ Utterance, Speaker, Lens, Enroll speaker, 프리셋 Light / Standard / Quality(�
 | 1 | **Hero** | 이게 뭔가? 어떻게 시작하나? | `00-hero.png`(앱 창) · 다운로드 / 데모 버튼 |
 | 2 | **Problem** | 왜 필요한가? | 없음 — 짧은 글 |
 | 3 | **Utterance jump** | 대표 기능이 실제로 어떻게 보이나? | 발화 점프 영상(§7) |
-| 4 | **Features** | 그 밖에 뭘 하나? | 4칸 그리드 — 화자 식별·회의 간 화자 연결 / ⌘K 하이브리드 검색 / 렌즈(할 일·결정·약속) + 근거 링크 / 요약(한국어·영어·녹취 언어 중 선택)·실시간 녹음 |
+| 4 | **Features** | 그 밖에 뭘 하나? | 4칸 그리드 — 화자 식별·회의 간 화자 연결 / ⌘K 하이브리드 검색 / 렌즈(할 일·결정·약속) + 근거 링크 / 내 Mac에 맞춘 처리 — 프리셋 추천·요약 언어(녹취 언어·한국어·영어) |
 | 5 | **Private by design** | 내 녹음이 어디로 가나? | 파이프라인 한 줄 다이어그램(HTML/CSS) |
 | 6 | **Requirements & download** | 내 Mac에서 도나? 얼마나 받나? | 요구사항 표 + 다운로드 버튼 반복 |
 | 7 | **Recording & consent** | 뭘 조심해야 하나? | 없음 — README §녹음과 동의 요약 |
@@ -201,8 +201,11 @@ Utterance, Speaker, Lens, Enroll speaker, 프리셋 Light / Standard / Quality(�
 `site/src/assets/`로 복사하고 Astro `<Picture>`로 AVIF/WebP + `srcset`을 만든다. Hero 이미지만
 `loading="eager"` + `fetchpriority="high"`이고 나머지는 lazy다.
 
-Features 그리드의 네 이미지: `app-01-transcript`(화자 타임라인), `app-02-search`, `app-04-lenses`,
-`app-05-speakers`. 발화 점프는 영상이 맡으므로 `app-03`은 영상 포스터로 쓴다.
+Features 그리드는 네 칸이고 이미지는 칸마다 하나씩이다: 화자 식별 `app-05-speakers`, 검색 `app-02-search`,
+렌즈 `app-04-lenses`, "내 Mac에 맞춘 처리(프리셋 추천·요약 언어)" `app-06-settings`. `app-01-transcript`는
+Hero(`00-hero`)와 같은 화면이라 쓰지 않는다. 발화 점프의 포스터는 §7의 첫 프레임이다. 영상과 어긋나지 않게
+하려는 것이라 `app-03`은 쓰지 않는다. 표의 4번째 칸 설명은 "요약 언어·프리셋 추천"으로 읽는다. 실시간
+녹음은 Features 밖 FAQ에서 다룬다.
 
 ### 4.1 문구 초안
 
