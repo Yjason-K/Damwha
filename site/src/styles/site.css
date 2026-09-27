@@ -40,3 +40,16 @@
     border-radius: 6px;
   }
 }
+
+/* 동작 줄이기를 켠 방문자에게는 전환·애니메이션을 끈다(코덱스 리뷰 #10). 영상 자동 재생은
+   UtteranceJump.astro의 인라인 스크립트가 따로 끈다. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
