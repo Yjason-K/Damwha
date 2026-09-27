@@ -1,0 +1,7 @@
+---
+import Base from "../layouts/Base.astro";
+import Landing from "../components/Landing.astro";
+import { getLatestRelease } from "../lib/release";
+const release = await getLatestRelease();
+---
+<Base lang="en" release={release}><Landing lang="en" release={release} /></Base>

@@ -1,0 +1,90 @@
+---
+// <head>의 모든 SEO 요소(스펙 §6.1)와 다크 모드·폰트. 페이지는 lang과 release만 넘긴다.
+import "@fontsource-variable/inter";
+import "@fontsource/geist-mono/400.css";
+import interLatin from "@fontsource-variable/inter/files/inter-latin-wght-normal.woff2?url";
+import "../styles/site.css";
+import { getAbsoluteLocaleUrl } from "astro:i18n";
+import { getDictionary, type Lang } from "../i18n";
+import type { ReleaseInfo } from "../lib/release";
+
+interface Props {
+  lang: Lang;
+  release: ReleaseInfo;
+  noindex?: boolean;
+}
+const { lang, release, noindex = false } = Astro.props;
+const t = getDictionary(lang);
+const site = Astro.site!.origin;
+const selfUrl = getAbsoluteLocaleUrl(lang);
+const ogImage = new URL(t.meta.ogImage, site).href;
+
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "Damwha",
+  alternateName: "담화",
+  description: t.meta.description,
+  url: selfUrl,
+  image: ogImage,
+  operatingSystem: "macOS 15+",
+  applicationCategory: "ProductivityApplication",
+  inLanguage: lang,
+  offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+  license: "https://github.com/Yjason-K/Damwha/blob/main/LICENSE",
+  sameAs: ["https://github.com/Yjason-K/Damwha"],
+  ...(release.kind === "asset" ? { downloadUrl: release.dmgUrl, softwareVersion: release.version } : {}),
+};
+---
+<!doctype html>
+<html lang={lang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- 첫 페인트 전 다크 판정. 토글이 없으므로 localStorage는 읽지 않는다(스펙 §3.8). -->
+    <script is:inline>
+      (function () {
+        var dark = typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches;
+        var root = document.documentElement;
+        if (dark) root.classList.add("dark");
+        root.style.colorScheme = dark ? "dark" : "light";
+      })();
+    </script>
+    <title>{t.meta.title}</title>
+    <meta name="description" content={t.meta.description} />
+    {noindex ? (
+      <meta name="robots" content="noindex" />
+    ) : (
+      <>
+        <link rel="canonical" href={selfUrl} />
+        <link rel="alternate" hreflang="en" href={getAbsoluteLocaleUrl("en")} />
+        <link rel="alternate" hreflang="ko" href={getAbsoluteLocaleUrl("ko")} />
+        <link rel="alternate" hreflang="x-default" href={getAbsoluteLocaleUrl("en")} />
+      </>
+    )}
+    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="preload" href={interLatin} as="font" type="font/woff2" crossorigin />
+    <meta name="theme-color" content="#0F161E" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Damwha" />
+    <meta property="og:title" content={t.meta.title} />
+    <meta property="og:description" content={t.meta.description} />
+    <meta property="og:url" content={selfUrl} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content={t.meta.ogImageAlt} />
+    <meta property="og:locale" content={t.meta.ogLocale} />
+    <meta property="og:locale:alternate" content={t.meta.ogLocaleAlt} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={t.meta.title} />
+    <meta name="twitter:description" content={t.meta.description} />
+    <meta name="twitter:image" content={ogImage} />
+    <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
+  </head>
+  <body class="bg-app text-ink min-h-screen">
+    <slot />
+  </body>
+</html>

@@ -11,6 +11,7 @@ per-package — read the one for the subtree you are editing before changing cod
 | `be/worker/` | *(uv project)* | Python 3.12 ML worker. **Not** a pnpm workspace member — it has no `package.json` and is driven by uv. |
 | `desktop/` | `damwha-desktop` | Electron macOS 앱 — 번들 PostgreSQL·API·worker·embed를 감독한다. Read [`desktop/CLAUDE.md`](desktop/CLAUDE.md). |
 | `fe/` | `damwha-fe` | React 19 + Vite 8 + Tailwind 4 SPA. Read [`fe/CLAUDE.md`](fe/CLAUDE.md) and [`fe/DESIGN.md`](fe/DESIGN.md). |
+| `site/` | `damwha-site` | Astro 7 정적 제품 사이트 — `damwha.0kimjae.dev`, `/`(en)·`/ko/`, Cloudflare Pages. Read [`site/README.md`](site/README.md). |
 | `packages/contracts/` | `@damwha/contracts` | Wire enums and pure helpers both Node packages must agree on (`SUMMARY_MODELS`, `WHISPER_MODELS`, `PRESET_NAMES`, `DEVICES`, `UI_LANGUAGES`, `SUMMARY_LANGUAGES`, `pickUiLanguage`). Dependency-free. |
 
 The API and the worker communicate **only** through Postgres — never over HTTP.
@@ -42,6 +43,7 @@ pnpm 10.26.0 is pinned in the root `package.json` and activated by corepack.
 ```bash
 pnpm install                  # from the ROOT — one lockfile covers be + fe
 pnpm dev                      # API :3000 + Vite :5173 in parallel
+pnpm site:dev                 # 제품 사이트 :4321 (pnpm dev에는 끼지 않는다)
 pnpm build / test / lint      # fan out across both packages
 pnpm be <script>              # any damwha-be script  (= pnpm --filter damwha-be run)
 pnpm fe <script>              # any damwha-fe script

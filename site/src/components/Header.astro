@@ -1,0 +1,20 @@
+---
+import { getRelativeLocaleUrl } from "astro:i18n";
+import { getDictionary, otherLang, type Lang } from "../i18n";
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const t = getDictionary(lang);
+const other = otherLang(lang);
+---
+<header class="border-line border-b">
+  <div class="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6">
+    <a href={getRelativeLocaleUrl(lang)} class="flex items-center gap-2 font-semibold tracking-tight" aria-label={t.nav.home}>
+      <img src="/favicon.svg" alt="" width="24" height="24" class="size-6" />
+      Damwha
+    </a>
+    <nav class="flex items-center gap-5 text-sm">
+      <a class="text-ink-2 hover:text-ink" href="https://github.com/Yjason-K/Damwha">{t.nav.github}</a>
+      <a class="text-ink-2 hover:text-ink" href={getRelativeLocaleUrl(other)} hreflang={other} lang={other} aria-label={t.nav.langSwitchLabel}>{t.nav.langSwitch}</a>
+    </nav>
+  </div>
+</header>

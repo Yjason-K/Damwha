@@ -371,7 +371,9 @@ PUT 필수화 때문에 폼 한 곳이 아니라 이 사슬 전체가 바뀐다 
 4. **desktop 문구 이전** — causes → 상태 창·셸 HTML → 다이얼로그·종료 흐름·셸 안내. 끝에서 가드를 켠다.
 5. **에러 코드** — §6의 전수 확인과 BE code, FE `errors` 네임스페이스.
 6. **문서** — `fe/CLAUDE.md`·`desktop/CLAUDE.md`에 i18n 규칙(사전 위치, 새 문구 추가법, 로그는 번역하지 않음,
-   가드), 루트 CLAUDE.md의 contracts 설명.
+   가드), 루트 CLAUDE.md의 contracts 설명. 3·4단계가 들어간 릴리스에서는 **제품 사이트**
+   (`2026-09-26-product-site-design.md` §3.3·§7·§10)도 함께 고친다. 영어 페이지의 "rolling out" 문구 두 줄을
+   바꾸고, 영어 UI 스크린샷과 `?lang=en` 발화 점프 영상으로 교체한다.
 
 ## 10. 위험과 열린 질문
 

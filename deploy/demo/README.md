@@ -58,6 +58,8 @@ docker compose pull && docker compose down -v && docker compose up -d
 시드를 새로 구울 때 체크리스트: 투어 회의는 렌즈가 1건 이상, 요약 done, `demo/audio/`에
 원본 m4a 존재(`find-original.py`가 확인). 로컬에서 보려면 `fe/.env.local`에
 `VITE_DEMO_MODE=true`와 위 세 값을 `VITE_DEMO_TOUR_*`로 넣고 `pnpm fe dev`. vitest도 `.env.local`을 읽으므로 그 상태로 `pnpm fe test`를 돌리면 upload-dialog 테스트 6개가 실패한다 — 테스트 전에 파일을 지우거나 이름을 바꾼다.
+투어 회의나 검색어(`인지적 부채`)가 바뀌면 제품 사이트의 발화 점프 영상도 다시 녹화한다
+(`pnpm site record`, `site/README.md`).
 
 ## 링크 미리보기
 

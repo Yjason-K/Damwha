@@ -1,0 +1,22 @@
+---
+import DownloadButton from "./DownloadButton.astro";
+import DownloadMeta from "./DownloadMeta.astro";
+import type { Dictionary } from "../i18n";
+import type { ReleaseInfo } from "../lib/release";
+interface Props { t: Dictionary; release: ReleaseInfo }
+const { t, release } = Astro.props;
+---
+<section id="download" class="border-line border-t">
+  <div class="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-28">
+    <h2 class="text-2xl font-semibold tracking-tight sm:text-3xl">{t.requirements.title}</h2>
+    <dl class="border-line mt-10 divide-y divide-line border-y">
+      {t.requirements.rows.map(([k, v]) => (
+        <div class="grid gap-1 py-4 sm:grid-cols-[14rem_1fr] sm:gap-6">
+          <dt class="font-medium">{k}</dt>
+          <dd class="text-ink-2">{v}</dd>
+        </div>
+      ))}
+    </dl>
+    <div class="mt-10 flex flex-col items-start gap-2"><DownloadButton t={t} release={release} /><div class="flex flex-col items-start gap-1"><DownloadMeta t={t} release={release} /></div></div>
+  </div>
+</section>

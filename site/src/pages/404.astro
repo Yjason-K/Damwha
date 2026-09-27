@@ -1,0 +1,15 @@
+---
+import Base from "../layouts/Base.astro";
+import { getLatestRelease } from "../lib/release";
+import { getDictionary } from "../i18n";
+const release = await getLatestRelease();
+const en = getDictionary("en");
+const ko = getDictionary("ko");
+---
+<Base lang="en" release={release} noindex>
+  <main class="mx-auto flex min-h-screen max-w-xl flex-col justify-center gap-6 px-4">
+    <h1 class="text-3xl font-semibold tracking-tight">{en.notFound.title}</h1>
+    <p class="text-ink-2">{en.notFound.body} <a class="text-link underline" href="/">{en.notFound.home}</a></p>
+    <p class="text-ink-2" lang="ko">{ko.notFound.body} <a class="text-link underline" href="/ko/">{ko.notFound.home}</a></p>
+  </main>
+</Base>
