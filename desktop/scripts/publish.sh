@@ -15,6 +15,8 @@
 #      하지 않는다. 그것도 공개 동작이라 사람이 먼저 한다.
 #   4. `out/Damwha-<version>-arm64.dmg`와 그 `.sha256`이 있고 해시가 맞는다.
 #
+# 발행과 Latest 확인이 끝나면 DAMWHA_SITE_DEPLOY_HOOK(있으면)으로 제품 사이트를 다시 빌드시킨다.
+#
 # **정책(2026-09-23~): Damwha는 데스크톱 앱으로만 배포한다.** 셀프호스팅 웹 배포의 `v0.1.1`~`v0.2.3`은 과거 기록으로만 남고, 2026-09-23부터 데스크톱이 `v<version>` 태그를 쓴다(lib/release-tag.mjs). 그래서 이제
 # 데스크톱 릴리스를 저장소의 "Latest"로 낸다(`--latest`). 발행 뒤에는 태그 없는 `gh release view`
 # (= 저장소 Latest)가 방금 낸 태그와 같은지 다시 본다 — 다르면 되돌리는 명령을 출력하고 실패한다.
@@ -109,3 +111,7 @@ else
   } >&2
   exit 1
 fi
+
+# 7. 제품 사이트 재빌드(제품 사이트 스펙 §3.7). 실패해도 exit 0 — 릴리스는 이미 나갔다.
+echo "== site rebuild"
+node "$DESKTOP/scripts/lib/site-rebuild.mjs" || true
