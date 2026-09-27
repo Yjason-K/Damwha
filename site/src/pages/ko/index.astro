@@ -1,4 +1,8 @@
 ---
-import "../../styles/site.css";
+import Base from "../../layouts/Base.astro";
+import { getLatestRelease } from "../../lib/release";
+import { getDictionary } from "../../i18n";
+const release = await getLatestRelease();
+const t = getDictionary("ko");
 ---
-<html lang="ko"><body class="bg-app text-ink p-8">scaffold</body></html>
+<Base lang="ko" release={release}><h1>{t.hero.title}</h1></Base>

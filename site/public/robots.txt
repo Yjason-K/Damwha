@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://damwha.0kimjae.dev/sitemap-index.xml
