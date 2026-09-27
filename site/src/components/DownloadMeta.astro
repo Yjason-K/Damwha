@@ -1,0 +1,11 @@
+---
+// 다운로드 결정에 필요한 제약을 버튼 바로 곁에 둔다 — 앱 용량과 모델 용량을 나눠서(코덱스 리뷰 #3).
+import type { Dictionary } from "../i18n";
+import { formatSize, type ReleaseInfo } from "../lib/release";
+interface Props { t: Dictionary; release: ReleaseInfo }
+const { t, release } = Astro.props;
+---
+<span class="text-ink-2 font-mono text-[13px]">
+  {release.kind === "asset" && <>v{release.version} · {t.hero.appSize(formatSize(release.sizeBytes))} · </>}{t.hero.requirements}
+</span>
+<span class="text-ink-2 text-[13px]">{t.hero.modelsNote}</span>

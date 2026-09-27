@@ -19,7 +19,7 @@ export const ko = {
     downloadFallback: "GitHub에서 받기",
     demo: "데모 써보기",
     demoUrl: "https://damwha-demo.0kimjae.dev/?lang=ko",
-    demoNote: "읽기 전용 데모 · 가입 없이 바로",
+    demoNote: "데모: 읽기 전용 · 가입 없이 바로",
     requirements: "Apple Silicon(M1 이상) · macOS 15 이상",
     appSize: (size: string) => `앱 ${size}`,
     modelsNote: "모델 8–40 GB는 처음 쓸 때 따로 받아요",

@@ -1,5 +1,6 @@
 ---
 import DownloadButton from "./DownloadButton.astro";
+import DownloadMeta from "./DownloadMeta.astro";
 import type { Dictionary } from "../i18n";
 import type { ReleaseInfo } from "../lib/release";
 interface Props { t: Dictionary; release: ReleaseInfo }
@@ -16,6 +17,6 @@ const { t, release } = Astro.props;
         </div>
       ))}
     </dl>
-    <div class="mt-10"><DownloadButton t={t} release={release} /></div>
+    <div class="mt-10 flex flex-col items-start gap-2"><DownloadButton t={t} release={release} /><div class="flex flex-col items-start gap-1"><DownloadMeta t={t} release={release} /></div></div>
   </div>
 </section>

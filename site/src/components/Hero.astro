@@ -2,6 +2,7 @@
 import { Picture } from "astro:assets";
 import hero from "../assets/00-hero.png";
 import DownloadButton from "./DownloadButton.astro";
+import DownloadMeta from "./DownloadMeta.astro";
 import type { Dictionary } from "../i18n";
 import type { ReleaseInfo } from "../lib/release";
 interface Props { t: Dictionary; release: ReleaseInfo }
@@ -11,12 +12,13 @@ const { t, release } = Astro.props;
   <p class="text-mint-text font-mono text-xs tracking-wide uppercase">{t.hero.eyebrow}</p>
   <h1 class="mt-4 max-w-3xl text-4xl font-semibold tracking-[-0.02em] text-balance sm:text-6xl">{t.hero.title}</h1>
   <p class="text-ink-2 mt-6 max-w-2xl text-lg leading-relaxed text-pretty">{t.hero.lede}</p>
-  <div class="mt-8 flex flex-wrap items-start gap-4">
+  <div class="mt-8 flex flex-wrap items-center gap-3">
     <DownloadButton t={t} release={release} />
-    <div class="flex flex-col items-start gap-1.5">
-      <a href={t.hero.demoUrl} class="border-line-2 hover:bg-sunken inline-flex h-11 items-center rounded-lg border px-5 text-[15px] font-medium transition-colors">{t.hero.demo}</a>
-      <span class="text-ink-2 text-[13px]">{t.hero.demoNote}</span>
-    </div>
+    <a href={t.hero.demoUrl} class="border-line-2 hover:bg-sunken inline-flex h-11 items-center rounded-lg border px-5 text-[15px] font-medium transition-colors">{t.hero.demo}</a>
+  </div>
+  <div class="mt-3 flex flex-col items-start gap-1">
+    <DownloadMeta t={t} release={release} />
+    <span class="text-ink-2 text-[13px]">{t.hero.demoNote}</span>
   </div>
   <Picture
     src={hero}
