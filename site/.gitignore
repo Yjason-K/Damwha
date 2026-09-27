@@ -1,0 +1,9 @@
+dist/
+.astro/
+# sync-from-fe.mjs 산출물 — 원본은 fe/ (스펙 §3.8)
+src/styles/tokens.generated.css
+public/favicon.svg
+public/favicon.ico
+public/apple-touch-icon.png
+# record-utterance-jump.mjs 임시 녹화
+.recordings/

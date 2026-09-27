@@ -14,7 +14,7 @@ Everything runs on your own Mac — no cloud ML, voiceprints stay on disk.
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](be/worker/pyproject.toml)
 [![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-MLX-000000?logo=apple&logoColor=white)](#ml-models-gated-heavy)
 
-### [▶ Try the live demo](https://damwha-demo.0kimjae.dev)
+### [Website](https://damwha.0kimjae.dev) · [▶ Try the live demo](https://damwha-demo.0kimjae.dev)
 
 **English** · [한국어](README.ko.md)
 

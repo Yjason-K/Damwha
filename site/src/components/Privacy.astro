@@ -1,0 +1,19 @@
+---
+import type { Dictionary } from "../i18n";
+interface Props { t: Dictionary }
+const { t } = Astro.props;
+---
+<section id="privacy" class="border-line border-t">
+  <div class="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-28">
+    <h2 class="text-2xl font-semibold tracking-tight sm:text-3xl">{t.privacy.title}</h2>
+    <p class="text-ink-2 mt-4 max-w-2xl text-lg leading-relaxed">{t.privacy.body}</p>
+    <ol aria-label={t.privacy.pipelineLabel} class="mt-10 flex flex-wrap items-center gap-2 font-mono text-[13px]">
+      {t.privacy.pipeline.map((step, i) => (
+        <li class="flex items-center gap-2">
+          <span class="border-line-2 bg-card rounded-md border px-2.5 py-1">{step}</span>
+          {i < t.privacy.pipeline.length - 1 && <span aria-hidden="true" class="text-ink-3">→</span>}
+        </li>
+      ))}
+    </ol>
+  </div>
+</section>

@@ -1,0 +1,33 @@
+---
+import { Picture } from "astro:assets";
+import speakers from "../assets/app-05-speakers.png";
+import search from "../assets/app-02-search.png";
+import lenses from "../assets/app-04-lenses.png";
+import settings from "../assets/app-06-settings.png";
+import type { Dictionary } from "../i18n";
+interface Props { t: Dictionary }
+const { t } = Astro.props;
+const IMAGES = { speakers, search, lenses, settings };
+const items = t.features.items;
+---
+<section id="features" class="border-line border-t">
+  <div class="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-28">
+    <h2 class="text-2xl font-semibold tracking-tight sm:text-3xl">{t.features.title}</h2>
+    <div class="mt-12 grid gap-x-10 gap-y-16 md:grid-cols-2">
+      {items.map((f) => (
+        <article>
+          <Picture
+            src={IMAGES[f.image]}
+            alt={f.alt}
+            formats={["avif", "webp"]}
+            widths={[560, 1120]}
+            sizes="(min-width: 768px) 540px, 100vw"
+            class="border-line h-auto w-full rounded-lg border"
+          />
+          <h3 class="mt-6 text-lg font-semibold">{f.title}</h3>
+          <p class="text-ink-2 mt-2 leading-relaxed">{f.body}</p>
+        </article>
+      ))}
+    </div>
+  </div>
+</section>

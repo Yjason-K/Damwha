@@ -15,6 +15,11 @@
 | 살아있는 예시                            | `/showcase` 라우트 (`src/pages/showcase.tsx`) |
 | 리톤이 참조한 외부 스펙                  | `docs/design-references/mintlify.md` (스냅샷) |
 
+**제품 사이트(`site/`)도 이 값을 쓴다.** `site/scripts/sync-from-fe.mjs`가 빌드 때 `src/index.css`의
+`:root`·`.dark` 블록과 `public/`의 마크 세 파일(`favicon.svg`·`favicon.ico`·`apple-touch-icon.png`)을
+가져간다. 사본은 커밋되지 않으므로 마크의 "여섯 군데"는 늘지 않는다. 두 블록의 선택자를 바꾸거나 블록 안에
+`}`를 넣으면 사이트 빌드가 멈춘다 — 의도된 실패다.
+
 **이 문서에 hex나 px을 적지 말 것.** 값을 여기 복사하는 순간 `index.css`와
 두 벌이 되고, 둘 중 어느 쪽이 진짜인지 아무도 모르게 된다. 값이 궁금하면
 `index.css`를 열어라. 여기서는 **토큰 이름**으로만 말한다.
