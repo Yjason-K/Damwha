@@ -28,7 +28,7 @@ import { NotePane } from "./note-pane";
 
 /**
  * InsightPane — right rail: 요약/파일/메모 tabs. The 요약 tab stacks 요약 모델
- * 선택 → 참석자 → 주요 주제 → 액션아이템 → 결정사항 → 약속·책임 → 단락별 요약; the other
+ * 선택 → 참석자 → 주요 주제 → 할 일 → 결정 → 약속 → 단락별 요약; the other
  * tabs show their focused slice. Ported from `timbre_app/InsightPane.jsx`.
  */
 

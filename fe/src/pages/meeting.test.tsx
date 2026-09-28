@@ -844,19 +844,20 @@ test("할 일·결정·약속(전역 렌즈)로 전환하면 렌즈 대시보드
   });
   fireEvent.click(screen.getByRole("link", { name: "할 일·결정·약속" }));
   expect(
-    await screen.findByRole("heading", { level: 1, name: "내 액션아이템" }),
+    await screen.findByRole("heading", { level: 1, name: "할 일·결정·약속" }),
   ).toBeInTheDocument();
   expect(
     await screen.findByText("다음 스프린트 자료 공유하기"),
   ).toBeInTheDocument();
   // Radix Tabs는 mousedown으로 탭을 활성화한다
-  fireEvent.mouseDown(screen.getByRole("tab", { name: "결정사항" }));
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "결정" }));
   expect(
-    await screen.findByRole("heading", { level: 1, name: "내 결정사항" }),
+    await screen.findByText("조건에 맞는 결정 항목이 없어요."),
   ).toBeInTheDocument();
-  expect(
-    await screen.findByText("조건에 맞는 결정사항 항목이 없어요."),
-  ).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "결정" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
 });
 
 test("전역 렌즈 대시보드에서 근거 점프하면 회의뷰로 전환되고 발언 하이라이트와 seek이 함께 일어난다", async () => {
@@ -866,7 +867,7 @@ test("전역 렌즈 대시보드에서 근거 점프하면 회의뷰로 전환�
     name: "기획회의 — UI 개선안",
   });
   fireEvent.click(screen.getByRole("link", { name: "할 일·결정·약속" }));
-  await screen.findByRole("heading", { level: 1, name: "내 액션아이템" });
+  await screen.findByRole("heading", { level: 1, name: "할 일·결정·약속" });
 
   const jumpCard = (
     await screen.findByText("다음 스프린트 자료 공유하기")
@@ -895,7 +896,7 @@ test("근거 점프 대상 발언이 재처리로 사라졌으면 토스트를 �
     name: "기획회의 — UI 개선안",
   });
   fireEvent.click(screen.getByRole("link", { name: "할 일·결정·약속" }));
-  await screen.findByRole("heading", { level: 1, name: "내 액션아이템" });
+  await screen.findByRole("heading", { level: 1, name: "할 일·결정·약속" });
 
   const ghostCard = (
     await screen.findByText("지난 회의 후속 조치 확인하기")

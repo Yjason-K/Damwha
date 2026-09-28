@@ -75,7 +75,7 @@ export function LensDashboard({ lens, onLens, onJumpEvidence }: Props) {
             <Icon name={meta.icon} size={19} />
           </span>
           <h1 className="text-h2 font-semibold tracking-[-0.01em] text-foreground">
-            내 {meta.label}
+            할 일·결정·약속
           </h1>
         </div>
         <div className="mt-3">
