@@ -565,6 +565,15 @@ export function TranscriptPane({
           <MetaItem icon="calendar">{meeting.timeRange}</MetaItem>
           <MetaItem icon="clock">{meeting.dur}</MetaItem>
           <MetaItem icon="users">참석자 {meeting.attendees.length}명</MetaItem>
+          {meeting.files[0] && (
+            <span
+              className="inline-flex min-w-0 items-center gap-[5px]"
+              title={meeting.files[0].name}
+            >
+              <Icon name="file" size={14} />
+              <span className="truncate">{meeting.files[0].name}</span>
+            </span>
+          )}
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-[7px]">
           {meeting.attendees.map((a) => (

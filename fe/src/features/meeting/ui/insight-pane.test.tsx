@@ -74,13 +74,13 @@ function renderPane(
 }
 
 describe("InsightPane", () => {
-  it("탭은 요약·파일·메모 세 개다", () => {
+  it("탭은 요약·메모 두 개다 — 파일 탭은 전사 헤더 메타로 옮겼다", () => {
     renderPane();
     expect(screen.getByRole("tab", { name: "요약" })).toBeInTheDocument();
     expect(
       screen.queryByRole("tab", { name: "참석자" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /파일/ })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /파일/ })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "메모" })).toBeInTheDocument();
   });
 
