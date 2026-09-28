@@ -877,7 +877,9 @@ test("전역 렌즈 대시보드에서 근거 점프하면 회의뷰로 전환�
   const jumpCard = (
     await screen.findByText("다음 스프린트 자료 공유하기")
   ).closest(".rounded-sm") as HTMLElement;
-  fireEvent.click(within(jumpCard).getByRole("button", { name: /원문 보기/ }));
+  fireEvent.click(
+    within(jumpCard).getByRole("button", { name: /회의에서 보기/ }),
+  );
 
   // m2("스프린트 회고")로 전환되고, v3를 포함하는 병합 블록(v2)이 하이라이트된다.
   expect(
@@ -906,7 +908,9 @@ test("근거 점프 대상 발언이 재처리로 사라졌으면 토스트를 �
   const ghostCard = (
     await screen.findByText("지난 회의 후속 조치 확인하기")
   ).closest(".rounded-sm") as HTMLElement;
-  fireEvent.click(within(ghostCard).getByRole("button", { name: /원문 보기/ }));
+  fireEvent.click(
+    within(ghostCard).getByRole("button", { name: /회의에서 보기/ }),
+  );
 
   // 대상 회의(m1)는 이미 로드돼 있으므로 뷰만 회의뷰로 전환된다.
   await screen.findByRole("log", { name: "회의 전사" });
@@ -950,7 +954,7 @@ test("이미 활성인 발언을 다시 눌러도 그 지점으로 다시 seek�
 
   const log = screen.getByRole("log", { name: "회의 전사" });
   const block = log.querySelector('[data-uid="v2"]') as HTMLElement;
-  const jump = within(block).getByRole("button", { name: /원문 보기/ });
+  const jump = within(block).getByRole("button", { name: /이 시점으로 이동/ });
 
   // 거쳐 간 히스토리 동작을 기록한다 — 점프마다 PUSH가 쌓이면 회의를 벗어나는
   // 데 점프 횟수만큼 뒤로가기가 필요해진다.

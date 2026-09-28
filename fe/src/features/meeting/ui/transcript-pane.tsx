@@ -452,7 +452,7 @@ export function TranscriptPane({
     : "";
 
   // Utterance-jump: reveal the active utterance when it changes. On a jump
-  // within the same meeting (⌘K·원문 보기), also move focus to the target so
+  // within the same meeting (⌘K·발언 클릭), also move focus to the target so
   // keyboard/SR users land where the jump went — skipped on first render and
   // on meeting switches. setTimeout lets Radix's dialog focus-return run first.
   const prevRef = React.useRef<{ mid: string; uid: string } | null>(null);

@@ -9,8 +9,12 @@ import { cn } from "@/shared/lib/utils";
  * `quoted` saved-card variant, and hover/focus jump + bookmark actions.
  *
  * `to`는 발언이 지금 있는 화면 밖을 가리킬 때(저장한 발언 목록 등) 준다. 행
- * 전체가 그 경로로 가는 링크가 되므로 원문 보기는 버튼이 아니라 힌트가 된다 —
+ * 전체가 그 경로로 가는 링크가 되므로 "회의에서 보기"는 버튼이 아니라 힌트가 된다 —
  * 같은 목적지로 가는 조작이 둘일 이유가 없고, 링크 안의 버튼은 중첩이라 못 쓴다.
+ *
+ * `onJump`만 주면(회의 화면) 타임스탬프가 버튼이 되고 본문을 눌러도 그 시점으로
+ * 간다. 호버 버튼 하나로만 이동되던 것이 발견되지 않았다(UX 리뷰 2026-09-28).
+ * 본문 클릭은 텍스트를 드래그해 고른 경우엔 건너뛴다 — 복사하려던 것이다.
  */
 
 function MicIcon() {
@@ -154,11 +158,32 @@ function Utterance({
     ? "italic text-[color:var(--text-muted)]"
     : "text-foreground";
   const hasActions = Boolean(onJump || to || onSaveToggle);
-  const timeEl = (
-    <span className="pt-1 text-right font-mono text-xs tracking-[var(--tracking-mono)] whitespace-nowrap text-[color:var(--text-faint)]">
+  const timeCls =
+    "pt-1 text-right font-mono text-xs tracking-[var(--tracking-mono)] whitespace-nowrap text-[color:var(--text-faint)]";
+  const canSeek = Boolean(onJump) && !to && !quoted;
+  const timeEl = canSeek ? (
+    <button
+      type="button"
+      onClick={onJump}
+      aria-label={
+        typeof time === "string" ? `${time}로 이동` : "이 시점으로 이동"
+      }
+      className={cn(
+        timeCls,
+        "cursor-pointer self-start rounded-xs outline-none transition-colors duration-[80ms] hover:text-[color:var(--text-link)] hover:underline focus-visible:[box-shadow:var(--focus-ring)]",
+      )}
+    >
       {time}
-    </span>
+    </button>
+  ) : (
+    <span className={timeCls}>{time}</span>
   );
+  const onTextClick = canSeek
+    ? () => {
+        if (window.getSelection()?.toString()) return;
+        onJump?.();
+      }
+    : undefined;
 
   if (quoted) {
     return (
@@ -203,9 +228,9 @@ function Utterance({
     >
       {timeEl}
       <div className="min-w-0">
-        {/* 활성 블록은 원문 보기 버튼(absolute)이 항상 떠 있으므로 첫 줄에 자리 확보 */}
+        {/* 활성 블록은 이동 버튼(absolute)이 항상 떠 있으므로 첫 줄에 자리 확보 */}
         {hasActions && active && (
-          <span aria-hidden className="float-right h-6 w-[120px]" />
+          <span aria-hidden className="float-right h-6 w-[150px]" />
         )}
         <SpeakerPill speaker={speaker} name={name} />
         {saved && savedBadge && (
@@ -227,7 +252,14 @@ function Utterance({
             {children}
           </Link>
         ) : (
-          <span className={cn("text-read text-pretty", textTone)}>
+          <span
+            className={cn(
+              "text-read text-pretty",
+              canSeek && "cursor-pointer",
+              textTone,
+            )}
+            onClick={onTextClick}
+          >
             {children}
           </span>
         )}
@@ -259,7 +291,7 @@ function Utterance({
               className={cn(JUMP_CHIP, "text-[color:var(--text-link)]")}
             >
               <JumpIcon />
-              <span>원문 보기</span>
+              <span>회의에서 보기</span>
             </span>
           ) : onJump ? (
             <button
@@ -271,7 +303,7 @@ function Utterance({
               )}
             >
               <JumpIcon />
-              <span>원문 보기</span>
+              <span>이 시점으로 이동</span>
             </button>
           ) : null}
         </div>
