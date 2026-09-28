@@ -642,7 +642,7 @@ export function InsightPane({
               className="ml-auto"
               onClick={onRegenerateSummary}
             >
-              <Icon name="rotateCcw" size={14} />
+              <Icon name="sparkles" size={14} />
             </IconButton>
           )}
         </div>

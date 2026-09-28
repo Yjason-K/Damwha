@@ -556,7 +556,8 @@ export function TranscriptPane({
               onClick={() => gate.run(() => setReprocessOpen(true))}
               disabled={gate.locked}
             >
-              <Icon name="rotateCcw" size={16} />
+              {/* 요약 다시 만들기(sparkles)와 비용이 전혀 달라 같은 화살표를 쓰지 않는다 */}
+              <Icon name="waveform" size={16} />
             </IconButton>
           )}
         </div>
