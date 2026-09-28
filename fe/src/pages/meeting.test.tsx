@@ -1595,6 +1595,45 @@ test("audio.duration이 매핑된 길이와 미세하게 달라도 재생 블록
   expect(screen.getByRole("button", { name: "다음 발언" })).toBeDisabled();
 });
 
+test("Space는 재생을 토글하고 ←/→는 10초씩 옮긴다 — 입력란에서는 양보한다", async () => {
+  const play = vi
+    .spyOn(HTMLMediaElement.prototype, "play")
+    .mockResolvedValue(undefined);
+  const pause = vi
+    .spyOn(HTMLMediaElement.prototype, "pause")
+    .mockImplementation(() => {});
+  try {
+    const { container } = renderShell("/meetings/m2");
+    await screen.findByRole("heading", { level: 1, name: "스프린트 회고" });
+    const audio = container.querySelector("audio")!;
+    fireEvent.loadedMetadata(audio);
+
+    fireEvent.keyDown(document.body, { key: " " });
+    expect(
+      await screen.findByRole("button", { name: "일시정지" }),
+    ).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: " " });
+    expect(
+      await screen.findByRole("button", { name: "재생" }),
+    ).toBeInTheDocument();
+
+    fireEvent.keyDown(document.body, { key: "ArrowRight" });
+    await waitFor(() => expect(audio.currentTime).toBeCloseTo(10, 0));
+    fireEvent.keyDown(document.body, { key: "ArrowLeft" });
+    await waitFor(() => expect(audio.currentTime).toBeCloseTo(0, 0));
+
+    // 찾기 입력란에서 친 Space·화살표는 글자 입력·커서 이동이다.
+    const find = screen.getByPlaceholderText("이 회의에서 찾기");
+    fireEvent.keyDown(find, { key: " " });
+    fireEvent.keyDown(find, { key: "ArrowRight" });
+    expect(screen.getByRole("button", { name: "재생" })).toBeInTheDocument();
+    expect(audio.currentTime).toBeCloseTo(0, 0);
+  } finally {
+    play.mockRestore();
+    pause.mockRestore();
+  }
+});
+
 test("완료 필터를 켠 채 결정 탭으로 가도 결정은 열림으로 조회한다 — 필터가 숨어 되돌릴 수 없다", async () => {
   renderShell();
   await screen.findByRole("heading", {

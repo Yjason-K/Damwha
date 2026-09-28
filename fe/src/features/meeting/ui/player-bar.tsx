@@ -42,6 +42,8 @@ function Replay({
       type="button"
       onClick={onClick}
       aria-label={dir === "back" ? "10초 뒤로" : "10초 앞으로"}
+      aria-keyshortcuts={dir === "back" ? "ArrowLeft" : "ArrowRight"}
+      title={dir === "back" ? "10초 뒤로 (←)" : "10초 앞으로 (→)"}
       className="relative inline-flex size-8 cursor-pointer items-center justify-center rounded-sm text-[color:var(--text-secondary)] outline-none transition-colors hover:text-foreground focus-visible:[box-shadow:var(--focus-ring)]"
     >
       <Icon
@@ -156,6 +158,8 @@ export function PlayerBar({
             type="button"
             onClick={onToggle}
             aria-label={playing ? "일시정지" : "재생"}
+            aria-keyshortcuts="Space"
+            title={playing ? "일시정지 (Space)" : "재생 (Space)"}
             className="inline-flex size-10 cursor-pointer items-center justify-center rounded-full bg-[var(--accent-solid)] text-[color:var(--text-on-accent)] outline-none transition-colors hover:bg-[var(--accent-solid-hover)] focus-visible:[box-shadow:var(--focus-ring)] [box-shadow:var(--shadow-sm)]"
           >
             <Icon
