@@ -167,7 +167,7 @@ function VerifyBanner({
           확인이 필요한 화자가 {count}명 있어요
         </div>
         <div className="mt-px text-xs text-[color:var(--text-secondary)]">
-          성문으로 자동 연결하지 못한 화자를 확인해 주세요.
+          목소리만으로는 누구인지 알아보지 못했어요. 누구인지 알려 주세요.
         </div>
       </div>
       <Button

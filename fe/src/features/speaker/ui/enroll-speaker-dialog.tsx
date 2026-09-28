@@ -54,7 +54,7 @@ function EnrollForm({ onDone }: { onDone: () => void }) {
         onSuccess: () => {
           toast({
             title: "화자 등록을 시작했어요.",
-            description: "성문 분석이 끝나면 상태가 등록됨으로 바뀌어요.",
+            description: "목소리 분석이 끝나면 상태가 등록됨으로 바뀌어요.",
             variant: "success",
           });
           onDone();

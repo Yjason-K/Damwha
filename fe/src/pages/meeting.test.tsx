@@ -771,7 +771,7 @@ test("미해결 클러스터가 있으면 화자 확인 배너와 다이얼로�
   fireEvent.click(screen.getByRole("button", { name: "화자 확인" }));
 
   expect(
-    await screen.findByText(/성문으로 자동 연결하지 못한 화자예요/),
+    await screen.findByText(/목소리만으로는 누구인지 알아보지 못한 화자예요/),
   ).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "연결" })).toBeInTheDocument();
 });
@@ -836,13 +836,13 @@ test("회의를 전환해도 재생 배속이 유지된다", async () => {
   expect(next.playbackRate).toBe(1.2);
 });
 
-test("모든 회의(전역 렌즈)로 전환하면 렌즈 대시보드와 탭이 보인다", async () => {
+test("할 일·결정·약속(전역 렌즈)로 전환하면 렌즈 대시보드와 탭이 보인다", async () => {
   renderShell();
   await screen.findByRole("heading", {
     level: 1,
     name: "기획회의 — UI 개선안",
   });
-  fireEvent.click(screen.getByRole("link", { name: "모든 회의" }));
+  fireEvent.click(screen.getByRole("link", { name: "할 일·결정·약속" }));
   expect(
     await screen.findByRole("heading", { level: 1, name: "내 액션아이템" }),
   ).toBeInTheDocument();
@@ -865,7 +865,7 @@ test("전역 렌즈 대시보드에서 근거 점프하면 회의뷰로 전환�
     level: 1,
     name: "기획회의 — UI 개선안",
   });
-  fireEvent.click(screen.getByRole("link", { name: "모든 회의" }));
+  fireEvent.click(screen.getByRole("link", { name: "할 일·결정·약속" }));
   await screen.findByRole("heading", { level: 1, name: "내 액션아이템" });
 
   const jumpCard = (
@@ -894,7 +894,7 @@ test("근거 점프 대상 발언이 재처리로 사라졌으면 토스트를 �
     level: 1,
     name: "기획회의 — UI 개선안",
   });
-  fireEvent.click(screen.getByRole("link", { name: "모든 회의" }));
+  fireEvent.click(screen.getByRole("link", { name: "할 일·결정·약속" }));
   await screen.findByRole("heading", { level: 1, name: "내 액션아이템" });
 
   const ghostCard = (

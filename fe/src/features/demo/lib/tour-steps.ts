@@ -28,7 +28,7 @@ const NARRATION: Record<SimStage, string> = {
   queued: "워커가 작업을 집어 들길 기다리는 중이에요.",
   vad: "음성 구간 감지(VAD) — 침묵을 걷어내고 말이 있는 구간만 남겨요.",
   diarize: '화자 분리 — 목소리 특징으로 "누가 언제 말했는지" 구간을 나눠요.',
-  identify: "화자 식별 — 나뉜 목소리를 등록된 성문(voiceprint)과 대조해요.",
+  identify: "화자 식별 — 나뉜 목소리를 등록된 목소리와 맞춰 봐요.",
   stt: "받아쓰기 — Whisper가 구간별로 텍스트를 만들어요.",
   align: "정렬 — 텍스트를 화자·시각에 맞춰 발화 단위로 붙여요.",
   persist: "저장 — 발화를 DB에 쓰고 원본 오디오와 연결해요.",
@@ -220,7 +220,7 @@ export function buildTourSteps(ctx: Ctx): TourStep[] {
     {
       id: "lenses",
       target: "lens-page",
-      title: "모든 회의 — 렌즈 한눈에",
+      title: "할 일·결정·약속 — 회의를 가로질러 한눈에",
       description:
         "회의를 가로질러 할 일·결정·약속을 한 화면에서 봐요. 담당자와 완료 여부로 걸러서 밀린 일을 찾기 좋아요.",
       side: "right",
@@ -234,7 +234,7 @@ export function buildTourSteps(ctx: Ctx): TourStep[] {
       target: "speakers-page",
       title: "화자 관리",
       description:
-        "등록된 화자와 성문(voiceprint)이에요. 한 번 등록해 두면 다음 회의에서 같은 사람을 자동으로 알아봐요. 성문은 이 서버 밖으로 나가지 않아요.",
+        "등록된 화자와 그 목소리 특징이에요. 한 번 등록해 두면 다음 회의에서 같은 사람을 자동으로 알아봐요. 목소리 특징(성문)은 이 서버 밖으로 나가지 않아요.",
       side: "right",
       prepare: async () => {
         ctx.navigate("/speakers");
