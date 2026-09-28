@@ -27,12 +27,13 @@ import { Icon } from "./icons";
 import { NotePane } from "./note-pane";
 
 /**
- * InsightPane — right rail: 요약/메모 tabs. The 요약 tab stacks 요약 모델
- * 선택 → 참석자 → 주요 주제 → 할 일 → 결정 → 약속 → 단락별 요약; the 메모 tab is
- * the note editor. Ported from `timbre_app/InsightPane.jsx`.
+ * InsightPane — right rail: 요약/메모 tabs. The 요약 tab stacks 참석자 → 주요 주제
+ * → 할 일 → 결정 → 약속 → 단락별 요약 → 요약 모델 선택; the 메모 tab is the note
+ * editor. Ported from `timbre_app/InsightPane.jsx`.
  *
- * 파일 탭은 원본 파일명 하나만 담을 수 있어 녹음 회의에서는 늘 비었고 "공유된
- * 파일"을 암시했다 — 전사 헤더 메타로 옮겼다(UX 리뷰 2026-09-28).
+ * 요약 모델 선택은 가끔 쓰는 설정이라 맨 아래에 둔다(맨 위를 차지하던 것을
+ * UX 리뷰 2026-09-28에서 내렸다). 파일 탭은 원본 파일명 하나만 담을 수 있어
+ * 녹음 회의에서는 늘 비었고 "공유된 파일"을 암시했다 — 전사 헤더 메타로 옮겼다.
  */
 
 function CheckCircle() {
@@ -604,28 +605,6 @@ export function InsightPane({
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
           <TabsContent value="summary" className="mt-0">
-            {meeting.status === "done" && (
-              <div className="flex items-center gap-2 border-b border-[color:var(--border-subtle)] px-3 py-2">
-                <span className="text-xs text-[color:var(--text-muted)]">
-                  재생성 모델
-                </span>
-                <Select
-                  value={summaryModel}
-                  onValueChange={(v) => onSummaryModelChange(v as SummaryModel)}
-                >
-                  <SelectTrigger aria-label="요약 모델" size="sm">
-                    <SelectValue placeholder="전역 설정" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {SUMMARY_MODEL_OPTIONS.map((o) => (
-                      <SelectItem key={o.value} value={o.value}>
-                        {o.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
             <Attendees meeting={meeting} />
             {settled ? (
               <TopicList topics={meeting.topics} />
@@ -674,6 +653,28 @@ export function InsightPane({
                 segments={meeting.segments}
                 onJump={onJumpSegment}
               />
+            )}
+            {meeting.status === "done" && (
+              <div className="flex items-center gap-2 px-3 py-3">
+                <span className="text-xs whitespace-nowrap text-[color:var(--text-muted)]">
+                  요약 다시 만들 때 모델
+                </span>
+                <Select
+                  value={summaryModel}
+                  onValueChange={(v) => onSummaryModelChange(v as SummaryModel)}
+                >
+                  <SelectTrigger aria-label="요약 모델" size="sm">
+                    <SelectValue placeholder="전역 설정" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SUMMARY_MODEL_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             )}
           </TabsContent>
           <TabsContent value="notes" className="mt-0">
