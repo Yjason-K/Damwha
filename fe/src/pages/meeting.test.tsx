@@ -771,7 +771,7 @@ test("미해결 클러스터가 있으면 화자 확인 배너와 다이얼로�
   fireEvent.click(screen.getByRole("button", { name: "화자 확인" }));
 
   expect(
-    await screen.findByText(/성문으로 자동 연결하지 못한 화자예요/),
+    await screen.findByText(/목소리만으로는 누구인지 알아보지 못한 화자예요/),
   ).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "연결" })).toBeInTheDocument();
 });

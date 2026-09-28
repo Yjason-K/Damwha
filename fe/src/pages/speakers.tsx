@@ -123,7 +123,7 @@ export function SpeakersPage() {
           <div className="flex flex-col gap-1">
             <h1 className="text-h1 font-semibold text-foreground">화자 관리</h1>
             <p className="text-base text-[color:var(--text-muted)]">
-              등록된 화자의 성문을 관리하고 새 화자를 추가할 수 있어요.
+              등록된 화자의 목소리를 관리하고 새 화자를 추가할 수 있어요.
             </p>
           </div>
           <Button iconLeft={<PlusIcon />} onClick={() => setEnrollOpen(true)}>
