@@ -8,6 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/shared/ui/select";
+import { IconButton } from "@/shared/ui/icon-button";
 import { SpeakerTimeline } from "@/shared/ui/speaker-timeline";
 
 import type { SpeakerLane } from "../model/data";
@@ -23,6 +24,8 @@ import { Icon } from "./icons";
  */
 
 const LABEL_W = 112;
+/** 이 수를 넘는 화자는 처음부터 한 줄로 접어 둔다 — 레인이 전사 영역을 잠식한다. */
+const COLLAPSE_OVER = 3;
 const SPEEDS = [1, 1.2, 1.5, 2] as const;
 
 function fmt(fraction: number, totalSeconds: number) {
@@ -138,6 +141,9 @@ export function PlayerBar({
 }: PlayerBarProps) {
   // 드래그 미리보기 시각 — SpeakerTimeline 드래그 중에만 non-null.
   const [scrub, setScrub] = React.useState<number | null>(null);
+  const [collapsed, setCollapsed] = React.useState(
+    tracks.length > COLLAPSE_OVER,
+  );
   const step = 10 / totalSeconds;
 
   return (
@@ -188,6 +194,7 @@ export function PlayerBar({
             segments: t.segments,
           }))}
           playhead={pos}
+          collapsed={collapsed}
           labelWidth={LABEL_W}
           onSeek={onSeek}
           onScrub={setScrub}
@@ -195,7 +202,16 @@ export function PlayerBar({
       </div>
 
       {/* right controls */}
-      <div className="flex shrink-0 items-center pl-2">
+      <div className="flex shrink-0 items-center gap-1 pl-2">
+        {tracks.length > 1 && (
+          <IconButton
+            label={collapsed ? "화자별로 펼치기" : "한 줄로 접기"}
+            size="sm"
+            onClick={() => setCollapsed((c) => !c)}
+          >
+            <Icon name={collapsed ? "chevUp" : "chevDown"} size={16} />
+          </IconButton>
+        )}
         <Select value={String(speed)} onValueChange={(v) => onSpeed(Number(v))}>
           <SelectTrigger size="sm" className="w-[76px]" aria-label="재생 속도">
             <SelectValue />

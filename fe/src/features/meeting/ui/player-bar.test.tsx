@@ -134,3 +134,35 @@ test("기능 없는 파형·전체화면 버튼은 없다", () => {
   expect(screen.queryByRole("button", { name: "파형" })).toBeNull();
   expect(screen.queryByRole("button", { name: "전체화면" })).toBeNull();
 });
+
+const FIVE = [1, 2, 3, 4, 5].map((spk) => ({
+  spk,
+  name: `화자${spk}`,
+  dur: "01:00",
+  segments: [{ start: 0, end: 0.1 }],
+}));
+
+test("화자가 넷 이상이면 한 줄로 접힌 채 시작하고, 펼칠 수 있다", () => {
+  const { container } = renderBar({ tracks: FIVE });
+  expect(
+    container.querySelector('[data-slot="timeline-merged"]'),
+  ).not.toBeNull();
+  expect(screen.getByText("화자 5명")).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "화자1 구간 재생" }),
+  ).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "화자별로 펼치기" }));
+  expect(container.querySelector('[data-slot="timeline-merged"]')).toBeNull();
+  expect(
+    screen.getByRole("button", { name: "화자1 구간 재생" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "한 줄로 접기" }),
+  ).toBeInTheDocument();
+});
+
+test("화자가 적으면 펼친 채 시작한다", () => {
+  const { container } = renderBar({ tracks: FIVE.slice(0, 3) });
+  expect(container.querySelector('[data-slot="timeline-merged"]')).toBeNull();
+});

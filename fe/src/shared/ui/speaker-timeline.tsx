@@ -9,6 +9,10 @@ import { SpeakerTrack } from "@/shared/ui/speaker-track";
  * spans every lane, anchored to the meeting time. Prefer this over giving
  * each SpeakerTrack its own `playhead` (which renders a broken-up pin per
  * attendee).
+ *
+ * `collapsed`면 레인을 한 줄로 합친다 — 구간 색은 화자 색 그대로라 누가
+ * 말했는지는 남고, 높이는 화자 수와 무관해진다. 레인마다 한 줄이면 5명에
+ * 이미 전사 영역을 눈에 띄게 잠식했다(UX 리뷰 2026-09-28).
  */
 
 type TimelineSegment = { start: number; end: number; soft?: boolean };
@@ -37,6 +41,8 @@ type SpeakerTimelineProps = Omit<React.ComponentProps<"div">, "onSeek"> & {
   onScrub?: (fraction: number | null) => void;
   /** Per-lane play button handler; receives the track. */
   onPlaySpeaker?: (track: TimelineTrack) => void;
+  /** 모든 화자를 한 레인에 겹쳐 그린다. 화자별 재생 버튼은 사라진다. */
+  collapsed?: boolean;
 };
 
 function SpeakerTimeline({
@@ -48,6 +54,7 @@ function SpeakerTimeline({
   onSeek,
   onScrub,
   onPlaySpeaker,
+  collapsed = false,
   style,
   ...rest
 }: SpeakerTimelineProps) {
@@ -65,20 +72,49 @@ function SpeakerTimeline({
 
   return (
     <div className={cn("relative", className)} style={style} {...rest}>
-      <div className="flex flex-col" style={{ gap }}>
-        {tracks.map((t) => (
-          <SpeakerTrack
-            key={t.spk}
-            speaker={t.spk}
-            name={t.name}
-            segments={t.segments}
-            duration={t.duration}
-            showPlayhead={false}
-            labelWidth={labelWidth}
-            onPlaySpeaker={onPlaySpeaker ? () => onPlaySpeaker(t) : undefined}
-          />
-        ))}
-      </div>
+      {collapsed ? (
+        <div
+          data-slot="timeline-merged"
+          className="grid items-center gap-3 py-1"
+          style={{ gridTemplateColumns: cols }}
+        >
+          <span className="truncate text-sm font-medium text-[color:var(--text-muted)]">
+            화자 {tracks.length}명
+          </span>
+          <div className="relative h-4 rounded-xs bg-[var(--gray-2)]">
+            {tracks.flatMap((t) =>
+              (t.segments ?? []).map((seg, i) => (
+                <div
+                  key={`${t.spk}:${i}`}
+                  className="absolute top-0 bottom-0 rounded-[3px]"
+                  style={{
+                    left: `${seg.start * 100}%`,
+                    width: `${(seg.end - seg.start) * 100}%`,
+                    background: `var(--spk-${((t.spk - 1) % 8) + 1}-solid)`,
+                    opacity: seg.soft ? 0.5 : 0.92,
+                  }}
+                />
+              )),
+            )}
+          </div>
+          {hasDuration && <div />}
+        </div>
+      ) : (
+        <div className="flex flex-col" style={{ gap }}>
+          {tracks.map((t) => (
+            <SpeakerTrack
+              key={t.spk}
+              speaker={t.spk}
+              name={t.name}
+              segments={t.segments}
+              duration={t.duration}
+              showPlayhead={false}
+              labelWidth={labelWidth}
+              onPlaySpeaker={onPlaySpeaker ? () => onPlaySpeaker(t) : undefined}
+            />
+          ))}
+        </div>
+      )}
 
       {/* 드래그/클릭 seek 오버레이 — 레인 컬럼 전체를 덮는다. 누른 지점부터
           미리보기(핀·onScrub), 놓는 순간 onSeek 1회. 호환 click 중복을 피해
