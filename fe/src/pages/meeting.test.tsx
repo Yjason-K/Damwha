@@ -849,6 +849,7 @@ test("할 일·결정·약속(전역 렌즈)로 전환하면 렌즈 대시보드
   expect(
     await screen.findByText("다음 스프린트 자료 공유하기"),
   ).toBeInTheDocument();
+  expect(screen.getByRole("group", { name: "완료 상태" })).toBeInTheDocument();
   // Radix Tabs는 mousedown으로 탭을 활성화한다
   fireEvent.mouseDown(screen.getByRole("tab", { name: "결정" }));
   expect(
@@ -858,6 +859,10 @@ test("할 일·결정·약속(전역 렌즈)로 전환하면 렌즈 대시보드
     "aria-selected",
     "true",
   );
+  // 결정은 완료하는 대상이 아니다 — 열림/완료 필터가 사라진다.
+  expect(
+    screen.queryByRole("group", { name: "완료 상태" }),
+  ).not.toBeInTheDocument();
 });
 
 test("전역 렌즈 대시보드에서 근거 점프하면 회의뷰로 전환되고 발언 하이라이트와 seek이 함께 일어난다", async () => {
@@ -1584,4 +1589,24 @@ test("audio.duration이 매핑된 길이와 미세하게 달라도 재생 블록
   );
   // 다음 발언도 v2에 머물지 않고 실제 다음으로 간다 — m2는 v2가 마지막 블록.
   expect(screen.getByRole("button", { name: "다음 발언" })).toBeDisabled();
+});
+
+test("완료 필터를 켠 채 결정 탭으로 가도 결정은 열림으로 조회한다 — 필터가 숨어 되돌릴 수 없다", async () => {
+  renderShell();
+  await screen.findByRole("heading", {
+    level: 1,
+    name: "기획회의 — UI 개선안",
+  });
+  fireEvent.click(screen.getByRole("link", { name: "할 일·결정·약속" }));
+  await screen.findByText("다음 스프린트 자료 공유하기");
+  fireEvent.click(screen.getByRole("button", { name: "완료" }));
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "결정" }));
+  await screen.findByText("조건에 맞는 결정 항목이 없어요.");
+
+  const decisionCalls = vi
+    .mocked(apiClient.get)
+    .mock.calls.map(([url]) => String(url))
+    .filter((u) => u.startsWith("/lenses?") && u.includes("kind=decision"));
+  expect(decisionCalls.length).toBeGreaterThan(0);
+  for (const u of decisionCalls) expect(u).toContain("completion_status=open");
 });
