@@ -220,7 +220,7 @@ export function buildTourSteps(ctx: Ctx): TourStep[] {
     {
       id: "lenses",
       target: "lens-page",
-      title: "모든 회의 — 렌즈 한눈에",
+      title: "할 일·결정·약속 — 회의를 가로질러 한눈에",
       description:
         "회의를 가로질러 할 일·결정·약속을 한 화면에서 봐요. 담당자와 완료 여부로 걸러서 밀린 일을 찾기 좋아요.",
       side: "right",

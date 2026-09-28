@@ -22,12 +22,13 @@ import type {
   Meeting,
   SummarySegmentView,
 } from "../model/types";
+import { LENS_META } from "../model/data";
 import { Icon } from "./icons";
 import { NotePane } from "./note-pane";
 
 /**
  * InsightPane — right rail: 요약/파일/메모 tabs. The 요약 tab stacks 요약 모델
- * 선택 → 참석자 → 주요 주제 → 다음 할 일 → 핵심 결정 → 단락별 요약; the other
+ * 선택 → 참석자 → 주요 주제 → 액션아이템 → 결정사항 → 약속·책임 → 단락별 요약; the other
  * tabs show their focused slice. Ported from `timbre_app/InsightPane.jsx`.
  */
 
@@ -133,30 +134,61 @@ function Attendees({ meeting }: { meeting: Meeting }) {
   );
 }
 
-function Decisions({
-  lenses,
-  onMore,
+/** 렌즈 항목 본문. 근거 발화가 있으면 누르면 그 발화로 점프한다. */
+function EntryText({
+  entry,
+  onJump,
+  className,
 }: {
-  lenses: Partial<Record<LensKind, LensEntry[]>>;
-  onMore?: () => void;
+  entry: LensEntry;
+  onJump: (utteranceId: string) => void;
+  className?: string;
 }) {
-  const items = lenses.decision ?? [];
+  const base = cn("min-w-0 flex-1 text-sm leading-snug text-pretty", className);
+  if (!entry.ev) return <span className={base}>{entry.text}</span>;
+  return (
+    <button
+      type="button"
+      title="근거 발언으로 이동"
+      onClick={() => onJump(entry.ev)}
+      className={cn(
+        base,
+        "cursor-pointer rounded-xs text-left outline-none hover:bg-[var(--surface-hover)] active:translate-y-[0.5px] focus-visible:[box-shadow:var(--focus-ring)]",
+      )}
+    >
+      {entry.text}
+    </button>
+  );
+}
+
+function LensSection({
+  kind,
+  items,
+  marker,
+  onMore,
+  onJump,
+}: {
+  kind: LensKind;
+  items: LensEntry[];
+  marker: React.ReactNode;
+  onMore?: () => void;
+  onJump: (utteranceId: string) => void;
+}) {
   if (items.length === 0) return null;
   return (
     <Section>
-      <SecHead title="핵심 결정" count={items.length} onMore={onMore} />
+      <SecHead
+        title={LENS_META[kind].label}
+        count={items.length}
+        onMore={onMore}
+      />
       <div className="flex flex-col gap-[9px]">
         {items.map((it) => (
           <div key={it.id} className="flex items-start gap-[9px]">
             <span className="mt-px shrink-0 text-[color:var(--accent-solid)]">
-              <CheckCircle />
+              {marker}
             </span>
-            <span className="min-w-0 flex-1 text-sm leading-snug text-pretty text-foreground">
-              {it.text}
-            </span>
-            <span className="mt-px shrink-0 text-[color:var(--green-9)]">
-              <Icon name="check" size={14} strokeWidth={2.2} />
-            </span>
+            <EntryText entry={it} onJump={onJump} className="text-foreground" />
           </div>
         ))}
       </div>
@@ -168,16 +200,24 @@ function Todos({
   lenses,
   meeting,
   onToggle,
+  onMore,
+  onJump,
 }: {
   lenses: Partial<Record<LensKind, LensEntry[]>>;
   meeting: Meeting;
   onToggle: (id: string, done: boolean) => void;
+  onMore?: () => void;
+  onJump: (utteranceId: string) => void;
 }) {
   const items = lenses.action ?? [];
   if (items.length === 0) return null;
   return (
     <Section>
-      <SecHead title="다음 할 일" count={items.length} />
+      <SecHead
+        title={LENS_META.action.label}
+        count={items.length}
+        onMore={onMore}
+      />
       <div className="flex flex-col gap-[11px]">
         {items.map((it) => {
           const w = it.who ? meeting.speakers[it.who] : null;
@@ -191,16 +231,15 @@ function Todos({
                   onChange={() => onToggle(it.id, !it.done)}
                 />
               </span>
-              <span
-                className={cn(
-                  "min-w-0 flex-1 text-sm leading-snug text-pretty",
+              <EntryText
+                entry={it}
+                onJump={onJump}
+                className={
                   it.done
                     ? "text-[color:var(--text-muted)] line-through"
-                    : "text-foreground",
-                )}
-              >
-                {it.text}
-              </span>
+                    : "text-foreground"
+                }
+              />
               {w && k && (
                 <span className="inline-flex shrink-0 items-center gap-[5px]">
                   <span
@@ -581,7 +620,9 @@ export function InsightPane({
       >
         <div className="flex shrink-0 items-center border-b border-[color:var(--border-subtle)] bg-[var(--surface-card)] px-3 pt-1">
           <TabsList className="border-b-0">
-            <TabsTrigger value="summary" data-tour="insight-tab-summary">요약</TabsTrigger>
+            <TabsTrigger value="summary" data-tour="insight-tab-summary">
+              요약
+            </TabsTrigger>
             <TabsTrigger value="files">
               파일
               {meeting.files.length > 0 && (
@@ -590,7 +631,9 @@ export function InsightPane({
                 </span>
               )}
             </TabsTrigger>
-            <TabsTrigger value="notes" data-tour="insight-tab-note">메모</TabsTrigger>
+            <TabsTrigger value="notes" data-tour="insight-tab-note">
+              메모
+            </TabsTrigger>
           </TabsList>
           {tab === "summary" && settled && (
             <IconButton
@@ -641,8 +684,27 @@ export function InsightPane({
               />
             )}
             <div data-tour="lens-section">
-              <Todos lenses={lenses} meeting={meeting} onToggle={onToggle} />
-              <Decisions lenses={lenses} onMore={() => onOpenLens("decision")} />
+              <Todos
+                lenses={lenses}
+                meeting={meeting}
+                onToggle={onToggle}
+                onMore={() => onOpenLens("action")}
+                onJump={onJumpSegment}
+              />
+              <LensSection
+                kind="decision"
+                items={lenses.decision ?? []}
+                marker={<CheckCircle />}
+                onMore={() => onOpenLens("decision")}
+                onJump={onJumpSegment}
+              />
+              <LensSection
+                kind="promise"
+                items={lenses.promise ?? []}
+                marker={<Icon name="handshake" size={16} />}
+                onMore={() => onOpenLens("promise")}
+                onJump={onJumpSegment}
+              />
               <LensState
                 meetingStatus={meeting.status}
                 status={lensExtractionStatus}

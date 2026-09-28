@@ -92,9 +92,33 @@ describe("InsightPane", () => {
     expect(screen.getByText("예약 관리")).toBeInTheDocument();
   });
 
-  it("결과가 없는 핵심 결정 블록은 렌더하지 않는다", () => {
+  it("약속·책임도 회의 안에서 보여주고, 항목을 누르면 근거 발언으로 점프한다", () => {
+    const entry = (id: string, text: string, ev: string): LensEntry => ({
+      id,
+      text,
+      source: "ai",
+      ev,
+      done: false,
+    });
+    const { onJumpSegment, onOpenLens } = renderPane({
+      lenses: {
+        decision: [entry("d1", "베타는 다음 주에 연다", "u_7")],
+        promise: [entry("p1", "금요일까지 초안을 보낸다", "u_9")],
+      },
+    });
+    expect(screen.getByText("결정사항")).toBeInTheDocument();
+    expect(screen.getByText("약속·책임")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "금요일까지 초안을 보낸다" }),
+    );
+    expect(onJumpSegment).toHaveBeenCalledWith("u_9");
+    fireEvent.click(screen.getAllByRole("button", { name: "모두 보기" })[1]);
+    expect(onOpenLens).toHaveBeenCalledWith("promise");
+  });
+
+  it("결과가 없는 결정사항 블록은 렌더하지 않는다", () => {
     renderPane();
-    expect(screen.queryByText("핵심 결정")).not.toBeInTheDocument();
+    expect(screen.queryByText("결정사항")).not.toBeInTheDocument();
   });
 
   it("렌즈가 있으면 할 일과 결정 블록을 채운다", () => {
