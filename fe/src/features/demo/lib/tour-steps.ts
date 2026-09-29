@@ -126,12 +126,12 @@ export function buildTourSteps(ctx: Ctx): TourStep[] {
       target: "utterance",
       title: "발화 하나하나가 원본으로 이어져요",
       description:
-        '발화는 화자·시각·원본 오디오를 갖고 있어요. "원문 보기"를 누르면 그 순간으로 재생이 점프해요 — 방금 눌러봤어요.',
+        "발화는 화자·시각·원본 오디오를 갖고 있어요. 시각이나 본문을 누르면 그 순간으로 재생 위치가 옮겨져요 — 방금 눌러봤어요.",
       side: "right",
       prepare: async () => {
         const el = await waitFor(tourSelector("utterance"), 15_000);
         const jump = Array.from(el?.querySelectorAll("button") ?? []).find(
-          (b) => b.textContent?.includes("원문 보기"),
+          (b) => b.textContent?.includes("이 시점으로 이동"),
         );
         jump?.click();
         // jumpTo는 하이라이트와 seek만 하고 재생은 하지 않는다(제품 설계). 투어도 재생

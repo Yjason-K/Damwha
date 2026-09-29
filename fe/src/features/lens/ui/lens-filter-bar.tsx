@@ -52,31 +52,33 @@ export function LensFilterBar({ filters, onChange }: Props) {
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <div
-        role="group"
-        aria-label="완료 상태"
-        className="inline-flex rounded-sm border border-border p-0.5"
-      >
-        {COMPLETION_ITEMS.map(([status, label]) => {
-          const active = filters.completion_status === status;
-          return (
-            <button
-              key={status}
-              type="button"
-              aria-pressed={active}
-              onClick={() => onChange({ completion_status: status })}
-              className={cn(
-                "cursor-pointer rounded-xs px-2.5 py-1 text-sm font-medium outline-none transition-colors duration-[80ms] focus-visible:[box-shadow:var(--focus-ring)]",
-                active
-                  ? "bg-[var(--gray-2)] text-foreground"
-                  : "text-[color:var(--text-muted)] hover:text-foreground",
-              )}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
+      {filters.kind !== "decision" && (
+        <div
+          role="group"
+          aria-label="완료 상태"
+          className="inline-flex rounded-sm border border-border p-0.5"
+        >
+          {COMPLETION_ITEMS.map(([status, label]) => {
+            const active = filters.completion_status === status;
+            return (
+              <button
+                key={status}
+                type="button"
+                aria-pressed={active}
+                onClick={() => onChange({ completion_status: status })}
+                className={cn(
+                  "cursor-pointer rounded-xs px-2.5 py-1 text-sm font-medium outline-none transition-colors duration-[80ms] focus-visible:[box-shadow:var(--focus-ring)]",
+                  active
+                    ? "bg-[var(--gray-2)] text-foreground"
+                    : "text-[color:var(--text-muted)] hover:text-foreground",
+                )}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       <div
         role="group"

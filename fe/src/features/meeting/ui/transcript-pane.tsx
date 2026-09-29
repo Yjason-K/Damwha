@@ -452,7 +452,7 @@ export function TranscriptPane({
     : "";
 
   // Utterance-jump: reveal the active utterance when it changes. On a jump
-  // within the same meeting (⌘K·원문 보기), also move focus to the target so
+  // within the same meeting (⌘K·발언 클릭), also move focus to the target so
   // keyboard/SR users land where the jump went — skipped on first render and
   // on meeting switches. setTimeout lets Radix's dialog focus-return run first.
   const prevRef = React.useRef<{ mid: string; uid: string } | null>(null);
@@ -556,7 +556,8 @@ export function TranscriptPane({
               onClick={() => gate.run(() => setReprocessOpen(true))}
               disabled={gate.locked}
             >
-              <Icon name="rotateCcw" size={16} />
+              {/* 요약 다시 만들기(sparkles)와 비용이 전혀 달라 같은 화살표를 쓰지 않는다 */}
+              <Icon name="waveform" size={16} />
             </IconButton>
           )}
         </div>
@@ -564,6 +565,15 @@ export function TranscriptPane({
           <MetaItem icon="calendar">{meeting.timeRange}</MetaItem>
           <MetaItem icon="clock">{meeting.dur}</MetaItem>
           <MetaItem icon="users">참석자 {meeting.attendees.length}명</MetaItem>
+          {meeting.files[0] && (
+            <span
+              className="inline-flex min-w-0 items-center gap-[5px]"
+              title={meeting.files[0].name}
+            >
+              <Icon name="file" size={14} />
+              <span className="truncate">{meeting.files[0].name}</span>
+            </span>
+          )}
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-[7px]">
           {meeting.attendees.map((a) => (

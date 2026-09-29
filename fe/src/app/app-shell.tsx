@@ -81,11 +81,17 @@ export function AppShell() {
   const openSearch = () => setCmdOpen(true);
 
   const q = cmdQuery.trim();
+  // 같은 제목의 회의("테스트" 둘)를 가를 수 있도록 결과마다 날짜를 붙인다.
+  const dateOf = new Map((meetings ?? []).map((m) => [m.id, m.date]));
   const utteranceItems: CommandItem[] = hits.slice(0, 6).map((h) => ({
     id: `u:${h.meetingId}:${h.utteranceId}`,
     icon: <Icon name="quote" size={15} />,
     title: highlight(h.text, q),
-    meta: [h.meetingTitle ?? "제목 없는 회의", h.speakerName]
+    meta: [
+      h.meetingTitle ?? "제목 없는 회의",
+      dateOf.get(h.meetingId),
+      h.speakerName,
+    ]
       .filter(Boolean)
       .join(" · "),
     trail: formatClock(h.startMs),
@@ -102,6 +108,7 @@ export function AppShell() {
       id: `m:${id}`,
       icon: <Icon name="file" size={15} />,
       title,
+      meta: dateOf.get(id),
     });
   };
   for (const h of hits)

@@ -1,6 +1,6 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 
 import { Utterance } from "./utterance";
 
@@ -45,7 +45,7 @@ test("to를 주면 발언 본문이 행 전체를 덮는 링크가 된다", () =
   expect(link.className).toContain("after:absolute");
 });
 
-test("to를 준 행에서는 원문 보기가 버튼이 아니라 힌트다", () => {
+test("to를 준 행에서는 회의에서 보기가 버튼이 아니라 힌트다", () => {
   render(
     <MemoryRouter>
       <Utterance
@@ -63,7 +63,7 @@ test("to를 준 행에서는 원문 보기가 버튼이 아니라 힌트다", ()
   );
 
   expect(
-    screen.queryByRole("button", { name: "원문 보기" }),
+    screen.queryByRole("button", { name: "회의에서 보기" }),
   ).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "저장 해제" })).toBeInTheDocument();
 });
@@ -122,4 +122,56 @@ test("playing이면서 active면 bar와 틴트를 모두 가진다", () => {
   const root = container.firstElementChild!;
   expect(root.className).toContain(TINT);
   expect(root.className).toContain(BAR);
+});
+
+test("onJump가 있으면 타임스탬프 버튼과 본문 클릭으로 그 시점으로 간다", () => {
+  const onJump = vi.fn();
+  render(
+    <Utterance time="01:13" speaker={1} name="민지" onJump={onJump}>
+      다음 주에 결정합니다.
+    </Utterance>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "01:13로 이동" }));
+  fireEvent.click(screen.getByText("다음 주에 결정합니다."));
+  expect(onJump).toHaveBeenCalledTimes(2);
+  expect(
+    screen.getByRole("button", { name: "이 시점으로 이동" }),
+  ).toBeInTheDocument();
+});
+
+test("본문을 드래그해 골랐으면 클릭해도 이동하지 않는다 — 복사하려던 것이다", () => {
+  const onJump = vi.fn();
+  render(
+    <Utterance time="01:13" speaker={1} name="민지" onJump={onJump}>
+      다음 주에 결정합니다.
+    </Utterance>,
+  );
+  const text = screen.getByText("다음 주에 결정합니다.");
+  const range = document.createRange();
+  range.selectNodeContents(text);
+  window.getSelection()!.removeAllRanges();
+  window.getSelection()!.addRange(range);
+  fireEvent.click(text);
+  window.getSelection()!.removeAllRanges();
+  expect(onJump).not.toHaveBeenCalled();
+});
+
+test("to를 준 행에서는 타임스탬프가 버튼이 아니다 — 행 전체가 이미 링크다", () => {
+  render(
+    <MemoryRouter>
+      <Utterance
+        time="00:03"
+        speaker={1}
+        name="조승연"
+        to="/meetings/mtg_2?u=utt_4"
+        onJump={() => {}}
+      >
+        아기 아닙니까? 그죠
+      </Utterance>
+    </MemoryRouter>,
+  );
+  expect(
+    screen.queryByRole("button", { name: "00:03로 이동" }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByText("회의에서 보기")).toBeInTheDocument();
 });

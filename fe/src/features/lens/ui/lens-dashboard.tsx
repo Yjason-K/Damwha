@@ -25,7 +25,12 @@ export function LensDashboard({ lens, onLens, onJumpEvidence }: Props) {
   const [filters, setFilters] = React.useState<Omit<LensFilters, "kind">>({
     completion_status: "open",
   });
-  const full: LensFilters = { kind: lens, ...filters };
+  // 결정에는 완료가 없으니 열림/완료 필터도 없다 — 늘 열림으로 조회한다.
+  const full: LensFilters = {
+    kind: lens,
+    ...filters,
+    ...(lens === "decision" ? { completion_status: "open" } : {}),
+  };
   const list = useLensList(full);
   const completion = useSetLensCompletion();
 
@@ -75,7 +80,7 @@ export function LensDashboard({ lens, onLens, onJumpEvidence }: Props) {
             <Icon name={meta.icon} size={19} />
           </span>
           <h1 className="text-h2 font-semibold tracking-[-0.01em] text-foreground">
-            내 {meta.label}
+            할 일·결정·약속
           </h1>
         </div>
         <div className="mt-3">

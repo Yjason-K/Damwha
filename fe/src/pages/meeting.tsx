@@ -528,6 +528,45 @@ function MeetingView({
     ? adjacentUtterance(meeting.utterances, timeMs, "next")
     : null;
 
+  // 재생 단축키: Space 재생/정지, ←/→ 10초 이동. 플레이바가 떠 있을 때만 받는다.
+  // 입력란·버튼 같은 조작 요소에 포커스가 있으면 양보한다 — 버튼 위 Space는
+  // 그 버튼을 누르므로 여기서 또 토글하면 두 번 뒤집힌다. 모달이 열려 있어도
+  // 가로채지 않는다(N·⌘F와 같은 규칙).
+  const playerReady = Boolean(
+    meeting && meeting.tracks.length > 0 && totalSeconds > 0,
+  );
+  const onPlayerKey = React.useEffectEvent((e: KeyboardEvent) => {
+    if (!playerReady) return;
+    if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.isComposing)
+      return;
+    if (e.key !== " " && e.key !== "ArrowLeft" && e.key !== "ArrowRight")
+      return;
+    const t = e.target;
+    if (
+      t instanceof HTMLElement &&
+      (t.isContentEditable ||
+        t.closest(
+          'input, textarea, select, button, a[href], [role="button"], [role="slider"], [role="tab"], [role="option"], [role="menuitem"], [role="checkbox"], [role="switch"], [role="combobox"]',
+        ))
+    )
+      return;
+    if (document.querySelector('[role="dialog"][data-state="open"]')) return;
+    e.preventDefault();
+    if (e.key === " ") {
+      setPlaying((p) => !p);
+      return;
+    }
+    const step = 10 / totalSeconds;
+    seek(
+      e.key === "ArrowLeft" ? Math.max(0, pos - step) : Math.min(1, pos + step),
+    );
+  });
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => onPlayerKey(e);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const handleDeleted = () => {
     navigate("/", { replace: true });
   };

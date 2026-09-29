@@ -8,6 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/shared/ui/select";
+import { IconButton } from "@/shared/ui/icon-button";
 import { SpeakerTimeline } from "@/shared/ui/speaker-timeline";
 
 import type { SpeakerLane } from "../model/data";
@@ -23,6 +24,8 @@ import { Icon } from "./icons";
  */
 
 const LABEL_W = 112;
+/** 이 수를 넘는 화자는 처음부터 한 줄로 접어 둔다 — 레인이 전사 영역을 잠식한다. */
+const COLLAPSE_OVER = 3;
 const SPEEDS = [1, 1.2, 1.5, 2] as const;
 
 function fmt(fraction: number, totalSeconds: number) {
@@ -42,6 +45,8 @@ function Replay({
       type="button"
       onClick={onClick}
       aria-label={dir === "back" ? "10초 뒤로" : "10초 앞으로"}
+      aria-keyshortcuts={dir === "back" ? "ArrowLeft" : "ArrowRight"}
+      title={dir === "back" ? "10초 뒤로 (←)" : "10초 앞으로 (→)"}
       className="relative inline-flex size-8 cursor-pointer items-center justify-center rounded-sm text-[color:var(--text-secondary)] outline-none transition-colors hover:text-foreground focus-visible:[box-shadow:var(--focus-ring)]"
     >
       <Icon
@@ -136,6 +141,9 @@ export function PlayerBar({
 }: PlayerBarProps) {
   // 드래그 미리보기 시각 — SpeakerTimeline 드래그 중에만 non-null.
   const [scrub, setScrub] = React.useState<number | null>(null);
+  const [collapsed, setCollapsed] = React.useState(
+    tracks.length > COLLAPSE_OVER,
+  );
   const step = 10 / totalSeconds;
 
   return (
@@ -156,6 +164,8 @@ export function PlayerBar({
             type="button"
             onClick={onToggle}
             aria-label={playing ? "일시정지" : "재생"}
+            aria-keyshortcuts="Space"
+            title={playing ? "일시정지 (Space)" : "재생 (Space)"}
             className="inline-flex size-10 cursor-pointer items-center justify-center rounded-full bg-[var(--accent-solid)] text-[color:var(--text-on-accent)] outline-none transition-colors hover:bg-[var(--accent-solid-hover)] focus-visible:[box-shadow:var(--focus-ring)] [box-shadow:var(--shadow-sm)]"
           >
             <Icon
@@ -184,6 +194,7 @@ export function PlayerBar({
             segments: t.segments,
           }))}
           playhead={pos}
+          collapsed={collapsed}
           labelWidth={LABEL_W}
           onSeek={onSeek}
           onScrub={setScrub}
@@ -191,7 +202,16 @@ export function PlayerBar({
       </div>
 
       {/* right controls */}
-      <div className="flex shrink-0 items-center pl-2">
+      <div className="flex shrink-0 items-center gap-1 pl-2">
+        {tracks.length > 1 && (
+          <IconButton
+            label={collapsed ? "화자별로 펼치기" : "한 줄로 접기"}
+            size="sm"
+            onClick={() => setCollapsed((c) => !c)}
+          >
+            <Icon name={collapsed ? "chevUp" : "chevDown"} size={16} />
+          </IconButton>
+        )}
         <Select value={String(speed)} onValueChange={(v) => onSpeed(Number(v))}>
           <SelectTrigger size="sm" className="w-[76px]" aria-label="재생 속도">
             <SelectValue />
