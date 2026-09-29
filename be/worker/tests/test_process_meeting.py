@@ -836,6 +836,17 @@ def test_stt_drives_a_console_progress_bar(conn, tmp_path, monkeypatch):
     assert [f for f, _ in updates] == [0.5, 1.0]
 
 
+class _DiarSaysBVoiceIsA(FakeEmbedder):
+    def __init__(self, vectors, voice):
+        super().__init__(vectors)
+        self._voice = voice
+
+    def embed(self, wav_path, segments):
+        if len(segments) == len(self._vectors):
+            return self._vectors
+        return [self._voice for _ in segments]
+
+
 def test_backchannel_word_run_reabsorbed_via_embedding(conn, tmp_path):
     # 겹침 없는 0.4초 B run("말고")이 앞뒤 A 사이에 끼어 있고, 그 구간의 임베딩이
     # A centroid에 가까우면 흡수된다 — 시간 휴리스틱(겹침 필요)만으로는 못 잡는 케이스
@@ -857,9 +868,9 @@ def test_backchannel_word_run_reabsorbed_via_embedding(conn, tmp_path):
                 DiarSegment("SPEAKER_00", 4800, 9000),
             ]
         ),
-        # FakeEmbedder는 호출마다 같은 리스트를 돌려준다 — centroid 계산은 세그먼트
-        # 순서대로 [A, B, A]를 쓰고, arbiter의 단일 스팬 호출은 [0](=A 방향)을 받는다
-        embedder=FakeEmbedder([v_a, v_b, v_a]),
+        # diarization은 "말고"를 SPEAKER_01로 잘랐지만 실제 목소리는 A다 — centroid 계산
+        # (diar 세그먼트 3개 호출)은 [A, B, A], 판정자의 단일 스팬 호출은 A 목소리를 받는다
+        embedder=_DiarSaysBVoiceIsA([v_a, v_b, v_a], v_a),
         transcriber=FakeTranscriber(
             [
                 Word("집에", 1000, 1500, 0.9),

@@ -304,3 +304,112 @@ def test_non_ok_rows_are_not_merged():
     words = [Word("둘", 1700, 2900, None)]
     utts = build_utterances(words, segments)
     assert [u.status for u in utts] == ["silence", "ok"]
+
+
+def _alternating_fragments():
+    # A 발언 사이에 B로 한 단어만 튄 모양 (실측 02:13 구간의 형태). 세그먼트가 겹치지
+    # 않아 백채널 스무딩의 겹침 휴리스틱은 손대지 않는다 — 조각 흡수만 시험한다.
+    segments = [
+        DiarSegment("A", 0, 2000),
+        DiarSegment("B", 2000, 2600),
+        DiarSegment("A", 2600, 6000),
+    ]
+    words = [
+        Word("경고", 300, 700, 0.9),
+        Word("드리겠습니다", 700, 1500, 0.9),
+        Word("자꾸", 1500, 1900, 0.9),
+        Word("말씀하시는데", 2100, 2500, 0.9),  # mid 2300 → B
+        Word("경고예요", 3000, 3600, 0.9),
+        Word("단호하게", 3600, 4200, 0.9),
+        Word("가겠습니다", 4200, 5000, 0.9),
+    ]
+    return segments, words
+
+
+def test_fragment_without_resolver_is_left_alone():
+    segments, words = _alternating_fragments()
+    utts = build_utterances(words, segments)
+    ok = [u for u in utts if u.status == "ok"]
+    assert [u.diar_label for u in ok] == ["A", "B", "A"]
+
+
+def test_fragment_absorbed_into_neighbor_the_resolver_picks():
+    segments, words = _alternating_fragments()
+    calls = []
+
+    def resolve(start_ms, end_ms, own, candidates):
+        calls.append((start_ms, end_ms, own, sorted(candidates)))
+        return "A"
+
+    utts = build_utterances(words, segments, resolve_fragment=resolve)
+    ok = [u for u in utts if u.status == "ok"]
+    assert [(u.diar_label, u.text) for u in ok] == [
+        ("A", "경고 드리겠습니다 자꾸 말씀하시는데 경고예요 단호하게 가겠습니다")
+    ]
+    assert calls == [(2100, 2500, "B", ["A"])]
+
+
+def test_fragment_kept_when_resolver_says_own_voice():
+    segments, words = _alternating_fragments()
+    utts = build_utterances(words, segments, resolve_fragment=lambda s, e, own, c: own)
+    ok = [u for u in utts if u.status == "ok"]
+    assert [u.diar_label for u in ok] == ["A", "B", "A"]
+
+
+def test_undecidable_fragment_goes_to_nearer_neighbor_in_time():
+    # 판정 불가(None)면 시간상 더 가까운 이웃 화자에게 붙인다
+    segments = [
+        DiarSegment("A", 0, 2000),
+        DiarSegment("B", 2000, 2400),
+        DiarSegment("C", 2400, 8000),
+    ]
+    words = [
+        Word("앞에", 0, 400, 0.9),
+        Word("하던", 400, 700, 0.9),
+        Word("말", 700, 1000, 0.9),
+        Word("음", 2100, 2300, 0.9),  # A 끝(1000)과 1100ms, C 시작(2400)과 100ms
+        Word("뒷말은", 2400, 3500, 0.9),
+        Word("길게", 3500, 4500, 0.9),
+        Word("이어진다", 4500, 5500, 0.9),
+    ]
+    utts = build_utterances(words, segments, resolve_fragment=lambda *a: None)
+    ok = [u for u in utts if u.status == "ok"]
+    assert [(u.diar_label, u.text) for u in ok] == [
+        ("A", "앞에 하던 말"),
+        ("C", "음 뒷말은 길게 이어진다"),
+    ]
+
+
+def test_three_word_run_over_one_second_is_not_a_fragment():
+    segments = [DiarSegment("A", 0, 3000), DiarSegment("B", 3000, 6000)]
+    words = [
+        Word("하나", 0, 1000, 0.9),
+        Word("둘", 3000, 3500, 0.9),
+        Word("셋", 3500, 4000, 0.9),
+        Word("넷", 4000, 4500, 0.9),
+    ]
+    calls = []
+    build_utterances(words, segments, resolve_fragment=lambda *a: calls.append(a) or "A")
+    # A의 '하나'는 1단어라 조각이지만, B run은 3단어·1.5초라 조각이 아니다
+    assert [c[2] for c in calls] == ["A"]
+
+
+def test_on_progress_reports_fractions_through_both_passes():
+    segments = [
+        DiarSegment("A", 0, 4000),
+        DiarSegment("B", 3900, 5100),
+        DiarSegment("A", 5000, 9000),
+    ]
+    words = [
+        Word("나라가", 1000, 1500, 0.9),
+        Word("잘", 2000, 2500, 0.9),
+        Word("사는", 4300, 4700, 0.9),
+        Word("거하고", 5500, 6000, 0.9),
+        Word("체감", 6500, 7000, 0.9),
+    ]
+    seen: list[float] = []
+    build_utterances(
+        words, segments, resolve_fragment=lambda s, e, own, c: own, on_progress=seen.append
+    )
+    assert seen and all(0.0 <= f <= 1.0 for f in seen)
+    assert seen[-1] == 1.0

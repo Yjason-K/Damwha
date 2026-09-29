@@ -26,12 +26,16 @@ optimal 1:1 label mapping (Hungarian), as DER does.
   tail→next  share of A's last 12 matched chars attributed to B
   turn       share of ref turns whose majority hyp speaker is right
   leaks      turns where half or more of the opening went to the previous speaker
+  short      share of our utterances with two words or fewer — how choppy the
+             transcript reads (Clova's own turns: 6–10%)
 
 Variants (`--variants`):
-  current    the shipped align (`build_utterances` as-is)
-  longest    pre-2026-09-29 overlap rule: the longer diar segment wins the word
+  current    the shipped align: latest-start overlap rule + fragment absorption
+  latest     latest-start overlap rule only (no fragment absorption) — a7646ea
+  longest    the original overlap rule (longer diar segment wins), no fragment
+             absorption — align before 2026-09-29
   exclusive  current align over pyannote's exclusive (non-overlapping) output
-  no_arb     current align without the embedding arbiter
+  no_arb     current align with neither embedding helper (arbiter, fragment resolver)
 
 Caveat: Clova Note is itself ASR + diarization. Read the numbers as a comparison
 between variants, not as absolute accuracy.
@@ -199,6 +203,7 @@ def _matched_chars(hyp: list[str], ref: list[str]) -> dict[int, int]:
 def score(utterances: list[tuple[str, str]], ref_turns: list[tuple[str, int, str]]) -> dict:
     from scipy.optimize import linear_sum_assignment
 
+    short = sum(1 for _, text in utterances if len(text.split()) <= 2)
     hyp_chars, hyp_spk = [], []
     for label, text in utterances:
         cs = _chars(text)
@@ -250,6 +255,8 @@ def score(utterances: list[tuple[str, str]], ref_turns: list[tuple[str, int, str
         "turn": turn_ok / max(1, turn_n),
         "hyp_speakers": len(hyp_labels),
         "ref_speakers": len(ref_labels),
+        "utterances": len(utterances),
+        "short": short / max(1, len(utterances)),
         "leaks": leaks,
     }
 
@@ -278,24 +285,35 @@ def _longest_wins(word: Word, segments: list[DiarSegment]) -> DiarSegment:
 def run_variant(name: str, d: dict, embedder) -> list[tuple[str, str]]:
     from damwha_worker.pipeline import align
     from damwha_worker.pipeline.cluster_merge import merge_clusters
-    from damwha_worker.pipeline.speaker_arbiter import make_embedding_arbiter
+    from damwha_worker.pipeline.speaker_arbiter import (
+        make_embedding_arbiter,
+        make_fragment_resolver,
+    )
 
     key = "exc" if name == "exclusive" else "reg"
     segments, centroids = merge_clusters(d[key], d[f"{key}_emb"])
-    arbiter = None if name == "no_arb" else make_embedding_arbiter(d["wav"], embedder, centroids)
+    arbiter = resolver = None
+    if name != "no_arb":
+        arbiter = make_embedding_arbiter(d["wav"], embedder, centroids)
+    if name in ("current", "exclusive"):
+        resolver = make_fragment_resolver(d["wav"], embedder, centroids)
     original = align._segment_for
     if name == "longest":
         align._segment_for = _longest_wins
     try:
         utts = align.build_utterances(
-            d["words"], segments, failed_spans=d["vad"], arbitrate=arbiter
+            d["words"],
+            segments,
+            failed_spans=d["vad"],
+            arbitrate=arbiter,
+            resolve_fragment=resolver,
         )
     finally:
         align._segment_for = original
     return [(u.diar_label, u.text) for u in utts if u.text]
 
 
-VARIANTS = ("longest", "current", "exclusive", "no_arb")
+VARIANTS = ("longest", "latest", "current", "exclusive", "no_arb")
 
 
 def cmd_score(args) -> int:
@@ -323,7 +341,7 @@ def cmd_score(args) -> int:
                 f"{stem[:16]:<16} {v:<9} match {r['match']:.3f}  attr {r['attr']:.4f}  "
                 f"head→prev {r['head_prev']:.4f}  tail→next {r['tail_next']:.4f}  "
                 f"turn {r['turn']:.4f}  spk {r['hyp_speakers']}/{r['ref_speakers']}  "
-                f"leaks {len(r['leaks'])}",
+                f"leaks {len(r['leaks'])}  utts {r['utterances']}  short {r['short']:.3f}",
                 flush=True,
             )
             if args.leaks:
@@ -339,7 +357,8 @@ def cmd_score(args) -> int:
         print(
             f"{v:<9} attr {mean('attr'):.4f}  head→prev {mean('head_prev'):.4f}  "
             f"tail→next {mean('tail_next'):.4f}  turn {mean('turn'):.4f}  "
-            f"leaks {sum(len(r['leaks']) for r in rs)}"
+            f"leaks {sum(len(r['leaks']) for r in rs)}  "
+            f"utts {sum(r['utterances'] for r in rs)}  short {mean('short'):.3f}"
         )
     if args.json:
         args.json.write_text(json.dumps(report, indent=2, ensure_ascii=False))
@@ -361,7 +380,7 @@ def main() -> int:
     s.add_argument("--cache", type=Path, required=True)
     s.add_argument("--ref-dir", type=Path, required=True, help="dir with <wav stem>.txt")
     s.add_argument("--whisper", default=DEFAULT_WHISPER)
-    s.add_argument("--variants", default="longest,current,exclusive")
+    s.add_argument("--variants", default="longest,latest,current")
     s.add_argument("--leaks", action="store_true", help="list every leaked turn")
     s.add_argument("--json", type=Path, help="also write the full report here")
     args = ap.parse_args()

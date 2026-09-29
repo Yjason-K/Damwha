@@ -187,3 +187,35 @@ def test_abort_event_raises_before_reporting():
     with pytest.raises(ShutdownRequested):
         report(8_600, 8_600)
     assert writes == [82]  # set 이후엔 아무 것도 보고하지 않는다
+
+
+def test_fraction_progress_is_monotone_throttled_and_final():
+    from damwha_worker.pipeline.progress import FractionProgress
+
+    t = [0.0]
+    written: list[int] = []
+    p = FractionProgress(
+        written.append, progress_from=90, progress_to=95, min_interval_s=2.0, clock=lambda: t[0]
+    )
+    p(0.4)  # 첫 보고는 바로
+    t[0] = 0.5
+    p(0.8)  # 2초 안 — 건너뜀
+    t[0] = 3.0
+    p(0.2)  # 뒤로 가는 값(루프 재시작)은 무시 — 최대값 0.8 기준
+    p(1.0)  # 끝은 간격과 무관하게 항상
+    assert written == [92, 94, 95]
+
+
+def test_fraction_progress_raises_on_shutdown():
+    import threading
+
+    import pytest
+
+    from damwha_worker.errors import ShutdownRequested
+    from damwha_worker.pipeline.progress import FractionProgress
+
+    ev = threading.Event()
+    ev.set()
+    p = FractionProgress(lambda _: None, progress_from=90, progress_to=95, abort_event=ev)
+    with pytest.raises(ShutdownRequested):
+        p(0.5)

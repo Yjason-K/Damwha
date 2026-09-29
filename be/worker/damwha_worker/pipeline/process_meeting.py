@@ -14,8 +14,8 @@ from . import ffmpeg
 from .align import build_utterances
 from .cluster_merge import merge_clusters
 from .identify import identify_clusters
-from .progress import SttProgressReporter
-from .speaker_arbiter import make_embedding_arbiter
+from .progress import FractionProgress, SttProgressReporter
+from .speaker_arbiter import make_embedding_arbiter, make_fragment_resolver
 from .stage import enter_stage
 from .stt_spans import prepare_stt_spans
 from .timing import timed_stage
@@ -159,7 +159,26 @@ def run_process_meeting(
     with timed_stage("align", ctx) as t:
         # 임베딩 판정자: 백채널 스무딩의 흡수/보존을 run 구간의 실제 목소리로 판정
         arbiter = make_embedding_arbiter(norm_path, models.embedder, centroids)
-        utts = build_utterances(words, segments, failed_spans=speech_spans, arbitrate=arbiter)
+        # 조각 흡수: 스무딩 뒤 남은 한두 단어짜리 run을 목소리가 가까운 이웃 화자로
+        resolver = make_fragment_resolver(norm_path, models.embedder, centroids)
+        # 판정자·조각 흡수의 임베딩 때문에 align은 긴 회의에서 수십 초가 걸린다 —
+        # 진행을 align 90 → persist 95 구간에 흘려 화면이 90%에 멈춰 있지 않게 한다.
+        align_progress = FractionProgress(
+            lambda progress: db.set_stage(conn, job_id, worker_id, "align", progress),
+            progress_from=90,
+            progress_to=95,
+            abort_event=shutdown_event,
+            ctx=ctx,
+            stage="align",
+        )
+        utts = build_utterances(
+            words,
+            segments,
+            failed_spans=speech_spans,
+            arbitrate=arbiter,
+            resolve_fragment=resolver,
+            on_progress=align_progress,
+        )
         t["detail"] = f"utterances={len(utts)}"
 
     utterance_rows = [

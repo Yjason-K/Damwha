@@ -21,11 +21,32 @@ class FakeDiarizer:
 
 
 class FakeEmbedder:
+    """Returns `vectors` for the diarization call (one vector per diar segment).
+
+    With more than one voice, a later call for arbitrary spans (align's arbiter and
+    fragment resolver) answers with the voice of the diar segment under each span's
+    midpoint — so "who does this span sound like" matches the fixture's segments
+    instead of always answering with the first speaker. A single-vector fake is one
+    voice everywhere and keeps returning `vectors` as-is.
+    """
+
     def __init__(self, vectors: list[list[float] | None]) -> None:
         self._vectors = vectors
+        self._diar: list | None = None
 
     def embed(self, wav_path: str, segments) -> list[list[float] | None]:
-        return self._vectors
+        if len(self._vectors) <= 1 or len(segments) == len(self._vectors):
+            if len(segments) == len(self._vectors):
+                self._diar = list(segments)
+            return self._vectors
+        if self._diar is None:
+            return self._vectors
+        out: list[list[float] | None] = []
+        for s in segments:
+            mid = (s.start_ms + s.end_ms) // 2
+            hit = [i for i, d in enumerate(self._diar) if d.start_ms <= mid < d.end_ms]
+            out.append(self._vectors[hit[-1]] if hit else None)
+        return out
 
 
 class FakeTranscriber:
