@@ -73,14 +73,29 @@ def test_short_segment_with_words_is_kept():
     assert len(utts) == 1 and utts[0].status == "ok"
 
 
-def test_midpoint_in_overlapping_segments_prefers_longer():
-    # 겹침 구간에서 word 중점이 두 세그먼트 모두에 들어가면 지배적(더 긴) 세그먼트 선택.
-    # 백채널 B(500-3000)가 본 화자 A(1000-10000)보다 먼저 시작해도 A가 이겨야 한다.
+def test_midpoint_in_overlapping_segments_prefers_later_start():
+    # 겹침 구간에서 word 중점이 두 세그먼트 모두에 들어가면 늦게 시작한 세그먼트 선택.
+    # B(500-3000)가 A(1000-10000)보다 먼저 시작했으므로 겹침 구간의 단어는 A다.
     segments = [DiarSegment("B", 500, 3000), DiarSegment("A", 1000, 10000)]
     words = [Word("본문", 1200, 1800, 0.9)]  # mid 1500 → B와 A 모두 포함
     utts = build_utterances(words, segments)
     ok = [u for u in utts if u.status == "ok"]
     assert len(ok) == 1 and ok[0].diar_label == "A"
+
+
+def test_next_speaker_opening_inside_previous_segment_goes_to_next():
+    # 앞 화자 A의 세그먼트 끝(0-6000)이 이어 말하는 B(5000-9000)의 시작을 덮는 경우.
+    # 예전 규칙(더 긴 세그먼트)은 B의 첫마디를 A에게 넘겼다 — 클로바노트 대비 실측 증상.
+    segments = [DiarSegment("A", 0, 6000), DiarSegment("B", 5000, 9000)]
+    words = [
+        Word("그렇죠", 1000, 1600, 0.9),
+        Word("그러니까", 5100, 5700, 0.9),  # mid 5400 → A·B 모두 포함
+        Word("제", 6200, 6400, 0.9),
+        Word("말은", 6400, 6900, 0.9),
+    ]
+    utts = build_utterances(words, segments)
+    ok = [u for u in utts if u.status == "ok"]
+    assert [(u.diar_label, u.text) for u in ok] == [("A", "그렇죠"), ("B", "그러니까 제 말은")]
 
 
 def test_short_overlapping_backchannel_run_reabsorbed():

@@ -39,9 +39,13 @@ def _segment_for(word: Word, segments: list[DiarSegment]) -> DiarSegment:
     mid = (word.start_ms + word.end_ms) // 2
     containing = [s for s in segments if s.start_ms <= mid < s.end_ms]
     if containing:
-        # 겹침 구간이면 지배적(더 긴) 세그먼트가 이긴다 — 짧은 백채널 세그먼트가
-        # 본 화자의 word를 탈취하는 것 방지
-        return max(containing, key=lambda s: s.end_ms - s.start_ms)
+        # 겹침 구간이면 가장 늦게 시작한 세그먼트가 이긴다 — 겹침은 대개 앞 화자
+        # 세그먼트의 끝이 다음 화자의 시작을 덮는 모양이라, 새로 말을 시작한 쪽이
+        # 그 단어의 주인일 가능성이 높다. 예전 규칙(더 긴 세그먼트)은 길게 말하던
+        # 앞 화자에게 뒷사람의 첫마디를 넘겼다(클로바노트 대비 턴 첫 12자의 약 23%).
+        # 본 화자 발언 도중 끼어든 백채널이 본문을 가져가는 경우는
+        # _smooth_backchannels(임베딩 판정)가 회수한다.
+        return max(containing, key=lambda s: s.start_ms)
     # 어느 세그먼트에도 안 들면 중점에 가장 가까운 세그먼트
     return min(segments, key=lambda s: min(abs(mid - s.start_ms), abs(mid - s.end_ms)))
 
