@@ -367,8 +367,10 @@ the monorepo map.
 
 The license covers this repository's source only. One ML model is vendored and
 redistributed with the app: `pyannote/speaker-diarization-community-1`,
-© pyannote contributors, licensed
-[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), unmodified. The other
+© [pyannoteAI](https://www.pyannote.ai) and pyannote contributors, licensed
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), unmodified (citations —
+Plaquet & Bredin, INTERSPEECH 2023, and the rest listed on the model card — are in
+the `NOTICE.txt` shipped next to the model). The other
 models — whisper, the summary LLM, `bge-m3`, the ECAPA speaker embedder — are not
 redistributed; each is downloaded at setup time from its own repository under its
 own terms. `ffmpeg` is invoked as an external binary you install yourself.

@@ -103,8 +103,18 @@ cat > "$STAGED/NOTICE.txt" <<EOF
 pyannote/speaker-diarization-community-1
 https://huggingface.co/$REPO_ID (revision $REVISION)
 
-Copyright (c) pyannote contributors. Licensed under the Creative Commons Attribution 4.0
-International License (CC BY 4.0): https://creativecommons.org/licenses/by/4.0/
+Licensor: pyannoteAI (https://www.pyannote.ai) and pyannote contributors.
+Licensed under the Creative Commons Attribution 4.0 International License (CC BY 4.0):
+https://creativecommons.org/licenses/by/4.0/
+
+Citations listed on the model card:
+- Speaker segmentation: Alexis Plaquet and Herve Bredin, "Powerset multi-class cross entropy
+  loss for neural speaker diarization", Proc. INTERSPEECH 2023.
+- Speaker embedding: Hongji Wang et al., "Wespeaker: A research and production oriented
+  speaker embedding learning toolkit", ICASSP 2023.
+- Speaker clustering: Federico Landini, Jan Profant, Mireia Diez and Lukas Burget, "Bayesian
+  HMM clustering of x-vector sequences (VBx) in speaker diarization: theory, implementation
+  and analysis on standard tasks", Computer Speech & Language, 2022.
 
 Damwha redistributes these files unmodified.
 EOF

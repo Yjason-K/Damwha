@@ -354,8 +354,10 @@ API나 워커를 건드리기 전에 [`be/CLAUDE.md`](be/CLAUDE.md)를 읽는다
 [MIT](LICENSE) © 2026 김영재.
 
 라이선스가 덮는 것은 이 저장소의 소스뿐이다. 화자 분리 모델 하나는 앱에 포함해
-재배포한다 — `pyannote/speaker-diarization-community-1`, © pyannote contributors,
-[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), 변경 없음. 나머지
+재배포한다 — `pyannote/speaker-diarization-community-1`, © [pyannoteAI](https://www.pyannote.ai)
+and pyannote contributors, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), 변경 없음
+(모델 카드에 적힌 인용 — Plaquet & Bredin, INTERSPEECH 2023 외 — 은 모델 옆에 실리는
+`NOTICE.txt`에 적었다). 나머지
 모델(whisper, 요약 LLM, `bge-m3`, ECAPA 화자 임베더)은 재배포하지 않고 설치
 시점에 각자 저장소에서 **각자의 약관**으로 받는다. `ffmpeg`는 직접 설치한
 외부 바이너리를 호출해 쓴다.
