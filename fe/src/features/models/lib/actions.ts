@@ -29,6 +29,10 @@ export function jobErrorText(r: ModelRow): { text: string } | null {
   if (j.type === "download_model" && r.installed === "yes") return null; // 그 뒤에 받아졌다
   if (code === "DISK_FULL") return { text: j.error.message };
   if (code === "model_in_use") return { text: "처리 중인 작업이 쓰고 있어 지우지 않았어요." };
+  // 앱 번들이 깨졌다 — 다시 받아도 풀리지 않는다 (worker는 hub로 가지 않는다).
+  if (code === "diarization_bundle_missing") {
+    return { text: "앱에 포함된 화자 분리 모델을 찾을 수 없어요. 앱을 다시 설치해 주세요." };
+  }
   return j.type === "delete_model"
     ? { text: "지우지 못했어요." }
     : { text: "받지 못했어요. 인터넷 연결을 확인하고 다시 받아 주세요." };

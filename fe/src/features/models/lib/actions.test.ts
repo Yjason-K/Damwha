@@ -50,6 +50,12 @@ describe("jobErrorText", () => {
     expect(jobErrorText(failed("io_error", "delete_model"))?.text).toBe("지우지 못했어요.");
   });
 
+  test("앱에 실린 화자 분리 모델이 깨졌으면 인터넷 대신 재설치를 안내한다", () => {
+    expect(jobErrorText(failed("diarization_bundle_missing"))).toEqual({
+      text: "앱에 포함된 화자 분리 모델을 찾을 수 없어요. 앱을 다시 설치해 주세요.",
+    });
+  });
+
   test("취소·성공·진행 중은 표시하지 않는다", () => {
     expect(jobErrorText(failed("download_cancelled"))).toBeNull();
     expect(jobErrorText(row({ job: job({ status: "done" }) }))).toBeNull();
