@@ -506,7 +506,14 @@ check(
 
 // 23. 앱에 실린 화자 분리 모델 (스펙 2026-09-30 §4.4). 파일 다섯이 커밋된 sha256과 같고 출처 표기가 있다.
 // 모델 파일은 pickle을 허용하는 체크포인트라 봉인 전 마지막으로 여기서 대조한다(§4.5).
-const modelDir = path.join(contents, "Resources", "models", "pyannote-speaker-diarization-community-1");
+// 폴더 이름은 build-models.sh의 `NAME=`에서 읽는다 — 여기에 따로 적으면 둘이 갈라져도 모른다.
+const buildModelsName = /^NAME=(\S+)$/m.exec(
+  fs.readFileSync(path.join(desktop, "scripts", "build-models.sh"), "utf8"),
+)?.[1];
+check("build-models.sh declares the diarization folder NAME=", buildModelsName !== undefined);
+const modelDir = path.join(contents, "Resources", "models", buildModelsName ?? "<NAME= not found>");
+// 이 목록은 worker의 `bundle.diarization_required()`와도 같아야 한다 —
+// be/worker/tests/test_bundle.py가 models-checksums.txt를 읽어 그 둘을 맞춰 본다.
 const MODEL_FILES = [
   "config.yaml",
   "segmentation/pytorch_model.bin",

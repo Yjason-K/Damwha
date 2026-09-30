@@ -62,3 +62,20 @@ def test_error_code_value():
     from damwha_worker import errors
 
     assert errors.DIARIZATION_BUNDLE_MISSING == "diarization_bundle_missing"
+
+
+def test_required_matches_desktop_checksums():
+    """desktop이 싣고 대조하는 파일 목록(models-checksums.txt)과 worker가 요구하는 목록이 같다.
+
+    둘이 갈라지면 빌드는 통과하는데 worker는 번들을 "불완전"으로 판정한다(또는 그 반대).
+    """
+    from pathlib import Path
+
+    sums = Path(__file__).resolve().parents[3] / "desktop" / "scripts" / "models-checksums.txt"
+    listed = [
+        line.split()[1]
+        for line in sums.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    assert sorted(listed) == sorted(bundle.diarization_required())
+    assert len(listed) == len(set(listed))
