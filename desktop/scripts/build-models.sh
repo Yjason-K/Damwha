@@ -33,6 +33,7 @@ STAGED="$DESKTOP/build/models/$NAME"
 die() { echo "build-models: $*" >&2; exit 1; }
 say() { echo "== $*"; }
 
+[ $# -le 1 ] || die "usage: build-models.sh [--fresh]"
 FRESH=0
 case "${1:-}" in
   --fresh) FRESH=1 ;;
@@ -49,6 +50,10 @@ DONE="$OUT.complete"
 
 verify() { (cd "$1" && /usr/bin/grep -v '^#' "$SUMS" | shasum -a 256 -c - >/dev/null 2>&1); }
 
+# 체크섬 파일의 다섯 상대경로 — 받기(allow_patterns)와 옮기기(복사 루프) 둘 다 이 목록 하나를 쓴다.
+REL_PATHS=()
+while IFS= read -r rel; do REL_PATHS+=("$rel"); done < <(/usr/bin/grep -v '^#' "$SUMS" | awk '{print $2}')
+
 if [ "$FRESH" = 1 ]; then rm -rf "$OUT" "$DONE"; fi
 # 캐시 적중도 믿지 않는다 — 대조가 깨졌으면 버리고 다시 받는다(§4.5).
 if [ -f "$DONE" ] && ! verify "$OUT"; then
@@ -58,17 +63,30 @@ fi
 
 if [ ! -f "$DONE" ]; then
   say "받기 $REPO_ID@$REVISION"
+  # snapshot_download에 allow_patterns 없이 전체 레포를 물으면 .gitattributes 같은 딴 파일의
+  # HEAD 요청까지 걸려, 캐시에 이 다섯 파일이 이미 있고 토큰이 없는 머신에서도 게이트 401로
+  # 죽는다 — 받는 다섯 파일만 물어 그 요청 자체를 없앤다.
+  PY_PATTERNS="["
+  for rel in "${REL_PATHS[@]}"; do PY_PATTERNS+="\"$rel\", "; done
+  PY_PATTERNS="${PY_PATTERNS%, }]"
+  ERRFILE=$(mktemp)
   SNAP=$(uv run --directory "$REPO/be/worker" --extra models python -c "
 import sys
 from huggingface_hub import snapshot_download
-print(snapshot_download('$REPO_ID', revision='$REVISION'))
-" 2>/dev/null | tail -1) || true
-  [ -n "${SNAP:-}" ] && [ -d "$SNAP" ] || die "받지 못했다. 게이트 모델이라 빌드 머신에 HF 토큰이 필요하다:
+print(snapshot_download('$REPO_ID', revision='$REVISION', allow_patterns=$PY_PATTERNS))
+" 2>"$ERRFILE" | tail -1) || true
+  if [ -z "${SNAP:-}" ] || [ ! -d "$SNAP" ]; then
+    echo "---- uv/python stderr (마지막 20줄) ----" >&2
+    tail -20 "$ERRFILE" >&2
+    rm -f "$ERRFILE"
+    die "받지 못했다. 게이트 모델이라 빌드 머신에 HF 토큰이 필요하다:
   1) https://huggingface.co/$REPO_ID 에서 사용 조건에 동의하고
   2) 'uv run --directory be/worker --extra models hf auth login' 또는 HF_TOKEN을 설정한 뒤 다시 실행한다"
+  fi
+  rm -f "$ERRFILE"
   rm -rf "$OUT"; mkdir -p "$OUT"
   # HF 캐시 snapshot은 blobs로 가는 심링크다 — 역참조해 실제 파일로 옮긴다.
-  /usr/bin/grep -v '^#' "$SUMS" | awk '{print $2}' | while read -r rel; do
+  for rel in "${REL_PATHS[@]}"; do
     mkdir -p "$OUT/$(dirname "$rel")"
     cp -L "$SNAP/$rel" "$OUT/$rel"
   done
