@@ -108,7 +108,7 @@ flowchart LR
 | 요약 LLM adapter | [`worker/damwha_worker/summary_client.py`](../worker/damwha_worker/summary_client.py) | 로컬 OpenAI-호환 chat completion 호출, 응답 검증/분류(렌즈 adapter와 동일 패턴) |
 | 검색 질의 서비스 | [`worker/damwha_worker/embed_service.py`](../worker/damwha_worker/embed_service.py) | `/health`, `/embed` FastAPI endpoint |
 
-모델은 protocol 뒤에 격리되어 있다. 그래서 pipeline과 DB glue 테스트는 fake 모델로 결정적으로 실행하고, 무겁거나 gated인 실제 모델은 로컬 smoke에서만 검증한다.
+모델은 protocol 뒤에 격리되어 있다. 그래서 pipeline과 DB glue 테스트는 fake 모델로 결정적으로 실행하고, 무겁거나 게이트 걸린(화자 분리 — 앱은 `DIARIZATION_MODEL_DIR`의 번들, 앱 밖은 hub + `HF_TOKEN`) 실제 모델은 로컬 smoke에서만 검증한다.
 
 ## 4. 공통 job 처리 흐름
 
@@ -515,7 +515,7 @@ DB에는 상대 storage key만 저장한다. `Storage.resolve()`는 root 밖으�
 |---|---|---|
 | 미디어 정규화/검증 | ffmpeg, ffprobe | 시스템 binary 필요, 16 kHz mono WAV 생성 |
 | 음성 구간 탐지 | Silero VAD | PyTorch 계열 |
-| 화자 분리 | pyannote.audio | Hugging Face gated 모델과 token/license 필요 |
+| 화자 분리 | pyannote.audio | 앱은 `DIARIZATION_MODEL_DIR`의 번들, 앱 밖은 hub + `HF_TOKEN` |
 | 화자 임베딩 | SpeechBrain ECAPA | 192차원, MPS 설정에서도 안정성을 위해 CPU 사용 |
 | 음성 인식 | mlx-whisper 또는 faster-whisper | payload `devices.stt`가 선택: `gpu`→MLX(MPS), `cpu`→faster-whisper(int8). `gpu` 요청+MPS 없음은 영구 실패(폴백 없음) |
 | 텍스트 임베딩 | BAAI/bge-m3 | 1024차원, index worker와 embed service에서 사용 |
@@ -565,7 +565,7 @@ pnpm worker
 - `worker/tests`: fake 모델과 실제 Postgres testcontainer로 계약, pipeline glue, ownership guard, retry/fail, provisional speaker, 검색 색인을 검증한다.
 - `worker/scripts/smoke_process_meeting.py`: 실제 모델로 회의 전체 pipeline을 수동 검증한다.
 - `worker/scripts/smoke_enroll_identify.py`: 실제 화자 등록과 식별을 수동 검증한다.
-- `worker/SMOKE.md`: gated 모델 준비와 full-stack 실행 절차를 설명한다.
+- `worker/SMOKE.md`: 화자 분리 모델 준비(앱은 `DIARIZATION_MODEL_DIR`의 번들, 앱 밖은 hub + `HF_TOKEN`)와 full-stack 실행 절차를 설명한다.
 
 ```bash
 cd worker

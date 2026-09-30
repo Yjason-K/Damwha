@@ -12,7 +12,7 @@ Everything runs on your own Mac — no cloud ML, voiceprints stay on disk.
 [![Node 22](https://img.shields.io/badge/Node-22-339933?logo=nodedotjs&logoColor=white)](.nvmrc)
 [![pnpm 10.26](https://img.shields.io/badge/pnpm-10.26-F69220?logo=pnpm&logoColor=white)](package.json)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](be/worker/pyproject.toml)
-[![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-MLX-000000?logo=apple&logoColor=white)](#ml-models-gated-heavy)
+[![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-MLX-000000?logo=apple&logoColor=white)](#ml-models)
 
 ### [Website](https://damwha.0kimjae.dev) · [▶ Try the live demo](https://damwha-demo.0kimjae.dev)
 
@@ -168,7 +168,6 @@ before you record.
 | [uv](https://docs.astral.sh/uv/) | the Python worker's env + lockfile | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | **ffmpeg** on `PATH` | every audio job starts by normalizing the upload (`pipeline/ffmpeg.py`); a missing binary fails the job, not startup | `brew install ffmpeg` |
 | **mlx-lm** — no separate install | serves the lens/summary LLM. `mlx-lm==0.31.3` is pinned in the worker's `models` extra (Apple Silicon only), and the worker launches it in-process as `python -m damwha_worker.llm_entry`, not through a `PATH` binary | comes with `uv sync --extra models` |
-| Hugging Face account + token | pyannote diarization is a **gated** model | see [ML models](#ml-models-gated-heavy) |
 
 Apple Silicon is the intended target: STT runs `mlx-whisper` and the LLM runs MLX.
 Elsewhere STT falls back to `faster-whisper` (CPU), and a job that asks for `gpu`
@@ -184,7 +183,7 @@ corepack enable            # activates the pinned pnpm@10.26.0
 pnpm install               # installs be + fe from the single root lockfile
 
 cp be/.env.example be/.env                # DATABASE_URL, STORAGE_ROOT, model envs
-cp be/worker/.env.example be/worker/.env  # DATABASE_URL, HF_TOKEN, LENS_LLM_BASE_URL
+cp be/worker/.env.example be/worker/.env  # DATABASE_URL, LENS_LLM_BASE_URL (HF_TOKEN only if you run the worker outside the app)
 cp fe/.env.example fe/.env                # VITE_API_BASE_URL
 
 pnpm db:up                 # Postgres (pgvector + pg_bigm); first run builds the image
@@ -214,7 +213,9 @@ What actually needs your attention:
   `be/worker/.env` — both must resolve to the *same* directory. This is also why you
   must never launch a package from the repo root: the root scripts (`pnpm be …`,
   `pnpm worker`) set the cwd via `--filter` / `uv run --directory` for you.
-- **`HF_TOKEN`** (worker) — required for pyannote. Empty token = diarization fails.
+- **`HF_TOKEN`** (worker) — only needed when you run the worker outside the app
+  (`pnpm worker`, no `DIARIZATION_MODEL_DIR`). The desktop app bundles the
+  diarization model and never reads this key.
 - **`LENS_LLM_BASE_URL`** (worker) — **required, no default**, and the port must be
   explicit (the worker starts the LLM server on that host:port). A default would make
   "address not configured" indistinguishable from "nothing listening there".
@@ -244,20 +245,25 @@ models are an optional extra (`[project.optional-dependencies] models`) and the 
 are lazy, so nothing complains until a job actually claims one. Re-run `pnpm worker:sync`
 after any test-only sync.
 
-### ML models (gated, heavy)
+### ML models
 
 The `models` extra pulls torch, pyannote, speechbrain, mlx-whisper and bge-m3 — tens of
-GB once the weights land. pyannote is **gated**: log into Hugging Face and accept all
-three licenses before the first run.
+GB once the weights land.
 
-1. Accept: [speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1),
-   [segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0),
-   [speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
-2. Put the token in `be/worker/.env` as `HF_TOKEN=hf_...`
-3. Optional pre-cache (otherwise the first job downloads them):
-   ```bash
-   uv run --directory be/worker python scripts/download_models.py
-   ```
+The diarization model,
+[`pyannote/speaker-diarization-community-1`](https://huggingface.co/pyannote/speaker-diarization-community-1)
+(CC-BY-4.0), ships **inside the desktop app** — no Hugging Face account or token needed
+to use it there. Whisper, the summary LLM, `bge-m3`, and the ECAPA speaker embedder are
+not bundled; each downloads on first use, same as before.
+
+If you run the worker **outside the app** (`pnpm worker`, no desktop build), diarization
+falls back to the Hugging Face hub: accept the model's terms on its page above and set
+`HF_TOKEN` in `be/worker/.env` — or point `DIARIZATION_MODEL_DIR` at a folder staged by
+`desktop/scripts/build-models.sh` (e.g. `desktop/build/models/pyannote-speaker-diarization-community-1`)
+to load it without a token. Optional pre-cache (otherwise the first job downloads them):
+```bash
+uv run --directory be/worker python scripts/download_models.py
+```
 
 ### Embed service
 
@@ -324,10 +330,6 @@ Postgres to set up by hand. Download the latest DMG from
 [GitHub Releases](https://github.com/Yjason-K/Damwha/releases/latest), open it, and
 drag Damwha into Applications. Requires **macOS 15.0+ on Apple Silicon**.
 
-On first run the app asks for a Hugging Face token — the speaker-diarization model
-is gated and needs one. See [`docs/HUGGINGFACE.md`](docs/HUGGINGFACE.md) for how to
-get a token and accept the model licenses (5 minutes, no approval wait).
-
 [`docs/MODELS.md`](docs/MODELS.md) — Models: where they are stored, sizes, checking
 status in Settings.
 
@@ -363,8 +365,10 @@ the monorepo map.
 
 [MIT](LICENSE) © 2026 Youngjae Kim.
 
-The license covers this repository's source only. The ML models the worker runs
-are downloaded at setup time under **their own** terms and are neither vendored
-nor redistributed here — pyannote diarization is a gated Hugging Face model that
-each user accepts separately (see [`docs/HUGGINGFACE.md`](docs/HUGGINGFACE.md)),
-and `ffmpeg` is invoked as an external binary you install yourself.
+The license covers this repository's source only. One ML model is vendored and
+redistributed with the app: `pyannote/speaker-diarization-community-1`,
+© pyannote contributors, licensed
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), unmodified. The other
+models — whisper, the summary LLM, `bge-m3`, the ECAPA speaker embedder — are not
+redistributed; each is downloaded at setup time from its own repository under its
+own terms. `ffmpeg` is invoked as an external binary you install yourself.

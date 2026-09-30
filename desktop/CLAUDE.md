@@ -9,25 +9,26 @@ Electron main이 네 서비스를 감독한다 — 번들 PostgreSQL, NestJS API
 ## 명령
 
 ```bash
-pnpm desktop:dev     # build-postgres.sh·build-python.sh·build-ffmpeg.sh(셋 다 캐시) → tsc → electron .
-pnpm desktop:build   # 위 셋 → tsc → be·fe build → pnpm deploy → electron-builder
+pnpm desktop:dev     # build-postgres.sh·build-python.sh·build-ffmpeg.sh·build-models.sh(넷 다 캐시) → tsc → electron .
+pnpm desktop:build   # 위 넷 → tsc → be·fe build → pnpm deploy → electron-builder
                      #   → hardened runtime 서명(plist 둘) → check-bundle (40건, 2026-09-21)
 bash desktop/scripts/build-postgres.sh [--fresh]               # 내장 PG
 bash desktop/scripts/build-python.sh   [--fresh|--print-key]   # 내장 Python 3.12 + worker 층 (1.3 GB)
 bash desktop/scripts/build-ffmpeg.sh   [--fresh]               # 내장 ffmpeg·ffprobe
+bash desktop/scripts/build-models.sh   [--fresh]               # 화자 분리 모델 스테이징 (31 MB, 빌드 머신만 HF 토큰)
 bash desktop/scripts/publish.sh --notes-file <파일>            # 릴리스 발행 — 공개 동작, 아래 "서명·배포"
 bash desktop/scripts/build-icon.sh                             # build-resources/icon.svg → icon.icns (결과 커밋, 마크를 고쳤을 때만)
 ```
 
-캐시는 `desktop/.cache/{postgres,python,ffmpeg}`, 스테이징은 `desktop/build/<이름>` (둘 다 gitignore).
+캐시는 `desktop/.cache/{postgres,python,ffmpeg,models}`, 스테이징은 `desktop/build/<이름>` (둘 다 gitignore).
 
 **캐시가 비면 `desktop:dev`도 1.3 GB를 빌드한다** — Python 런타임 층 ~140초 + worker 층 ~150초
 (`~/.cache/uv`가 온난할 때). 캐시가 적중하는지 확인하려고 그냥 돌리면 미스일 때 그 자리에서
 빌드가 시작되므로, 두 층의 키와 적중 여부만 보려면 `build-python.sh --print-key`를 쓴다.
 
-루트 `pnpm build`·`pnpm dev`는 이 셋을 빌드하지 않고 Electron을 띄우지 않는다.
+루트 `pnpm build`·`pnpm dev`는 이 넷을 빌드하지 않고 Electron을 띄우지 않는다.
 
-## 번들 — `Resources/` 아래 넷
+## 번들 — `Resources/` 아래 다섯
 
 `desktop/build/<이름>`에 스테이징한 것을 `electron-builder.yml`의 `extraResources: - from: build`가
 그대로 `Contents/Resources/<이름>`으로 싣는다. dev는 `desktop/build/`를 같은 자리로 본다 (Phase 4 §6.1).
@@ -38,6 +39,7 @@ bash desktop/scripts/build-icon.sh                             # build-resources
 | `postgres/` | `build-postgres.sh` |
 | `python/` | `build-python.sh` — 인터프리터·의존성 층(`rt-<키>`) 위에 `damwha_worker` 층(`wk-<키>`) |
 | `ffmpeg/` | `build-ffmpeg.sh` |
+| `models/` | `build-models.sh` — pyannote community-1 (CC-BY-4.0). 서명 대상 아님, `.app` 봉인에 들어간다 |
 
 서명은 electron-builder가 아니라 `package.mjs`가 그 뒤에 한다(`identity: null`이 자동 탐색을 끈다).
 **plist 둘로 갈린다** — `build-resources/entitlements.python.plist`(키 둘)는 `Resources/python`의
@@ -283,5 +285,5 @@ claim 직후 실패를 기준으로 시도 시각이 0 · 30초 · 90초 · 210�
 - 마이그레이션 실패·페어링 거부 같은 `manual` 실패는 자동 재시도하지 않는다(`app/retry-policy.ts`, 창 재열기도 재시도하지 않는다 — `app/window-flow.ts`). `writersAlive`·`snapshotFailed`·`restoreIncomplete`·`restoreJournalUnreadable`·`restorePending`(Phase 6b-2, 데이터 가드)도 같은 `manual`이다. 감독자를 세우기 전에 던진 실패는 main이 `lastStartFailure`로 보존해, 감독자 없이 창을 다시 열어도 자동 재시도하지 않는다. 메뉴의 "다시 시도"만 다시 돈다.
 - `desktop/package.json`의 `dependencies`는 비어 있다(번들 위생). DB에는 번들 `psql`·`pg_controldata`와 `migrate.js`로만 묻는다.
 - 셸 페이지(`shell/*.html`)는 fe 토큰을 **같은 이름으로** 옮겨 적고, macOS 다크를 `@media (prefers-color-scheme: dark)` 블록으로 따른다(fe의 `.dark` 값 사용) — CSP상 fe의 CSS를 못 불러오고, localStorage를 못 읽어 앱 안 테마 선택은 반영되지 않는다. 색은 `:root`와 다크 `@media` 블록의 `:root`에만 나타나고, 그 밖에는 없다. `tests/windows/shell-html.test.ts`가 값이 `fe/src/index.css`와 같은지 본다. 시작 화면은 packaged에서 서비스 줄을 숨긴다(`shellStatusFrom`의 `packaged`) — 진행 상황은 상태 창 몫이다.
-- **HF 토큰은 기동을 막지 않는다** (스펙 2026-09-25, Phase 4 §6.4의 첫 실행 게이트를 대체). 기동은 `app/token-boot.ts`로 읽기만 하고, 없으면 `HF_TOKEN` 없이 띄운다 — `childEnv`는 셸에서 물려받은 `HF_TOKEN`도 버린다. 입력·교체·삭제는 담화 화면이 `window.__damwha_desktop.hfToken`(main이 묻는 다리, `windows/token-bridge.ts`)으로 한다. 상태 창은 토큰을 **표시만** 한다. `token.html`은 없다.
+- **앱은 HF 토큰을 쓰지 않는다** (스펙 2026-09-30). 화자 분리 모델은 `Resources/models/`에 실려 `DIARIZATION_MODEL_DIR`로 worker에 간다. `childEnv`·`nodeChildEnv`는 셸에서 물려받은 `HF_TOKEN`도 버린다. 번들 파일은 pickle 가능한 체크포인트라 `models-checksums.txt`가 빌드·`check-bundle` 양쪽의 기준이다.
 - `main.ts`는 electron을 값으로 import해 vitest가 부를 수 없다. 판단은 테스트 가능한 모듈로 빼고 `main.ts`에는 배선만 남긴다.

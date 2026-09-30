@@ -287,10 +287,10 @@ describe("services.html", () => {
   });
 
   /**
-   * Task 11 — 이 창이 사람에게 주는 세 가지: 모델 준비, 토큰, 그리고 **층이 갈린** 재시도.
-   * 페이지가 그 셋을 실제로 그리고, 누른 것이 main의 next()로 나가는지를 본다.
+   * Task 11 — 이 창이 사람에게 주는 두 가지: 모델 준비, 그리고 **층이 갈린** 재시도.
+   * 페이지가 그 둘을 실제로 그리고, 누른 것이 main의 next()로 나가는지를 본다.
    */
-  describe("Task 11 — 모델 준비·토큰·재시도 2층 버튼", () => {
+  describe("Task 11 — 모델 준비·재시도 2층 버튼", () => {
     type Bridge = { next(): Promise<unknown> };
     const bridgeOf = (sandbox: Record<string, unknown>) => sandbox.__damwha_services as Bridge;
     const NOW = 1_800_000_000_000;
