@@ -166,3 +166,84 @@ def test_other_load_failures_propagate_unchanged(monkeypatch):
         assert e is boom
     else:
         raise AssertionError("expected ConnectionError")
+
+
+# ── 번들 경로 (스펙 2026-09-30 §3.1) ─────────────────────────────────
+
+
+def _fake_pyannote(monkeypatch, calls):
+    import sys
+    import types
+
+    class Pipeline:
+        @staticmethod
+        def from_pretrained(checkpoint, token=None):
+            from damwha_worker.models import downloads
+
+            calls.append((checkpoint, token, downloads.cache_first_active()))
+            return types.SimpleNamespace(to=lambda device: "pipeline")
+
+    audio = types.ModuleType("pyannote.audio")
+    audio.Pipeline = Pipeline
+    pkg = types.ModuleType("pyannote")
+    pkg.__path__ = []
+    pkg.audio = audio
+    torch = types.ModuleType("torch")
+    torch.device = lambda name: name
+    monkeypatch.setitem(sys.modules, "pyannote", pkg)
+    monkeypatch.setitem(sys.modules, "pyannote.audio", audio)
+    monkeypatch.setitem(sys.modules, "torch", torch)
+
+
+def test_bundle_dir_loads_local_folder_without_token_or_hub(monkeypatch, tmp_path):
+    from tests.test_bundle import make_bundle
+
+    calls, marked = [], []
+    _fake_pyannote(monkeypatch, calls)
+    monkeypatch.setattr("damwha_worker.models.downloads.mark_ready", marked.append)
+    make_bundle(tmp_path)
+
+    PyannoteDiarizer(MODEL, "hf_shell_token", "cpu", bundle_dir=str(tmp_path))
+
+    assert calls == [(str(tmp_path), None, False)]  # 폴더 경로, 토큰 없음, 캐시 우선 컨텍스트 밖
+    assert marked == [MODEL]
+
+
+def test_bundle_missing_file_is_permanent_error(monkeypatch, tmp_path):
+    from damwha_worker.errors import DIARIZATION_BUNDLE_MISSING, ErrorKind, WorkerError, classify
+    from tests.test_bundle import make_bundle
+
+    calls = []
+    _fake_pyannote(monkeypatch, calls)
+    make_bundle(tmp_path, skip=("embedding/pytorch_model.bin",))
+
+    try:
+        PyannoteDiarizer(MODEL, None, "cpu", bundle_dir=str(tmp_path))
+    except WorkerError as e:
+        assert (e.code, e.kind) == (DIARIZATION_BUNDLE_MISSING, ErrorKind.PERMANENT)
+        assert str(tmp_path) in e.message
+        assert classify(e) is e
+    else:
+        raise AssertionError("expected WorkerError")
+    assert calls == []  # 적재를 시도하지 않는다
+
+
+def test_other_model_id_ignores_bundle_dir(monkeypatch, tmp_path):
+    from tests.test_bundle import make_bundle
+
+    calls = []
+    _fake_pyannote(monkeypatch, calls)
+    make_bundle(tmp_path)
+
+    PyannoteDiarizer("someone/other-diarization", "t", "cpu", bundle_dir=str(tmp_path))
+
+    assert calls[0][:2] == ("someone/other-diarization", "t")
+    assert calls[0][2] is True  # 기존 캐시 우선 경로
+
+
+def test_metrics_env_disables_pyannote_telemetry(monkeypatch):
+    import pytest
+
+    metrics = pytest.importorskip("pyannote.audio.telemetry.metrics")
+    monkeypatch.setenv("PYANNOTE_METRICS_ENABLED", "false")
+    assert metrics.is_metrics_enabled() is False

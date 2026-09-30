@@ -6,7 +6,8 @@ by the test suite — so the heavy/gated model imports stay out of CI.
 Model selection is the PAYLOAD's responsibility (reproducibility): the diarization
 model, embedding model, whisper model, and per-stage devices all come from the
 payload (normalized via `parse_models`). The STT backend follows `devices.stt`
-(gpu → mlx-whisper, cpu → faster-whisper). Settings provide only infra: the HF token.
+(gpu → mlx-whisper, cpu → faster-whisper). Settings provide only infra: the bundled
+diarization folder and, off-app, the HF token.
 """
 
 from ..config import Settings
@@ -33,7 +34,12 @@ def build_models(payload: dict, settings: Settings) -> Models:
     diar_device = torch_device(m.devices.diarization)
     return Models(
         vad=SileroVAD(),
-        diarizer=PyannoteDiarizer(m.diarization.model, settings.hf_token, diar_device),
+        diarizer=PyannoteDiarizer(
+            m.diarization.model,
+            settings.hf_token,
+            diar_device,
+            bundle_dir=settings.diarization_model_dir,
+        ),
         embedder=EcapaEmbedder(m.embedding.model, "cpu"),  # ECAPA는 CPU 고정 (기존 사유 유지)
         transcriber=transcriber,
     )

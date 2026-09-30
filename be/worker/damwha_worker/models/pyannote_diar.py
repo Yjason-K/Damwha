@@ -1,11 +1,15 @@
-"""pyannote.audio 3.1 diarization adapter.
+"""pyannote.audio 4.x diarization adapter.
 
-Implements the `Diarizer` protocol. pyannote/speaker-diarization-community-1 is a GATED
-model — requires an accepted license + HF token (passed as `use_auth_token`).
+Implements the `Diarizer` protocol. pyannote/speaker-diarization-community-1 is gated on the hub.
+The desktop app ships it in `Resources/models/` and points `DIARIZATION_MODEL_DIR` at it
+(스펙 2026-09-30 §3.1) — that path needs no token and makes no hub call. Without it (terminal
+`pnpm worker`) the model comes from the hub with `HF_TOKEN`, as before.
 """
 
 from .. import errors
+from . import bundle
 from .base import DiarSegment
+from .specs import DIARIZATION_MODEL
 
 
 def _raise_auth_failure(model: str, exc: BaseException) -> None:
@@ -34,23 +38,39 @@ def _raise_auth_failure(model: str, exc: BaseException) -> None:
 
 
 class PyannoteDiarizer:
-    def __init__(self, model: str, hf_token: str | None, device: str) -> None:
+    def __init__(
+        self, model: str, hf_token: str | None, device: str, *, bundle_dir: str | None = None
+    ) -> None:
         import torch
         from pyannote.audio import Pipeline
 
-        from .downloads import load_cache_first
+        from . import downloads
 
-        # pyannote.audio 4.x renamed the auth param: use_auth_token → token
-        # 캐시 우선 (스펙 §6.6-b). `from_pretrained`에도 `local_files_only`가 없다 — 훅이 hub
-        # 호출에 끼워 넣는다. 게이트 체인의 하위 모델까지 같은 컨텍스트 안에서 적재되므로
-        # 한 번의 시도로 3-모델 체인 전체가 오프라인이 된다.
-        try:
-            pipeline = load_cache_first(
-                model, lambda **_: Pipeline.from_pretrained(model, token=hf_token)
-            )
-        except Exception as exc:
-            _raise_auth_failure(model, exc)
-            raise
+        if bundle_dir and model == DIARIZATION_MODEL:
+            # 앱 번들 (스펙 2026-09-30 §3.1). pyannote 4.x는 폴더 checkpoint면 hub를 부르지 않는다
+            # (core/pipeline.py·model.py·plda.py의 isdir 분기) — 토큰도 캐시 우선 컨텍스트도
+            # 필요 없다.
+            if not bundle.bundle_complete(bundle_dir):
+                raise errors.WorkerError(
+                    errors.DIARIZATION_BUNDLE_MISSING,
+                    f"the bundled diarization model at {bundle_dir!r} is incomplete — "
+                    "reinstall the app",
+                    errors.ErrorKind.PERMANENT,
+                )
+            pipeline = Pipeline.from_pretrained(bundle_dir)
+            downloads.mark_ready(model)
+        else:
+            # pyannote.audio 4.x renamed the auth param: use_auth_token → token
+            # 캐시 우선 (스펙 §6.6-b). `from_pretrained`에도 `local_files_only`가 없다 — 훅이 hub
+            # 호출에 끼워 넣는다. 게이트 체인의 하위 모델까지 같은 컨텍스트 안에서 적재되므로
+            # 한 번의 시도로 3-모델 체인 전체가 오프라인이 된다.
+            try:
+                pipeline = downloads.load_cache_first(
+                    model, lambda **_: Pipeline.from_pretrained(model, token=hf_token)
+                )
+            except Exception as exc:
+                _raise_auth_failure(model, exc)
+                raise
         if pipeline is None:
             # from_pretrained returns None when the license isn't accepted / token is bad
             raise RuntimeError(
