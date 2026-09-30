@@ -81,6 +81,39 @@ def test_download_without_spec_uses_name_as_repo(conn):
     assert calls[0].get("allow_patterns") is None
 
 
+_DIAR = {"schema_version": 1, "role": "diarization",
+         "name": "pyannote/speaker-diarization-community-1"}
+
+
+def test_download_diarization_is_noop_when_bundle_complete(conn, tmp_path, monkeypatch):
+    from tests.test_bundle import make_bundle
+
+    marked = []
+    monkeypatch.setattr(downloads, "mark_ready", marked.append)
+    job = _running(conn, "download_model", _DIAR)
+    out = model_jobs.run_download_model(
+        conn, job, _p(role="diarization", name=_DIAR["name"]), worker_id=W, hf_token=None,
+        diarization_model_dir=str(make_bundle(tmp_path)),
+        snapshot=lambda **kw: (_ for _ in ()).throw(AssertionError("must not download")),
+    )
+    assert out == "committed"
+    assert _status(conn, job["id"])["status"] == "done"
+    assert marked == [_DIAR["name"]]
+
+
+def test_download_diarization_goes_to_hub_when_bundle_incomplete(conn, tmp_path):
+    from tests.test_bundle import make_bundle
+
+    calls = []
+    job = _running(conn, "download_model", _DIAR)
+    model_jobs.run_download_model(
+        conn, job, _p(role="diarization", name=_DIAR["name"]), worker_id=W, hf_token="t",
+        diarization_model_dir=str(make_bundle(tmp_path, skip=("config.yaml",))),
+        snapshot=lambda **kw: calls.append(kw) or "/tmp/x",
+    )
+    assert calls[0]["repo_id"] == _DIAR["name"] and calls[0]["token"] == "t"
+
+
 def test_download_already_cancelled_at_start(conn):
     job = _running(conn, "download_model", _STT_TINY_MLX)
     conn.execute("UPDATE job SET stop_requested_at=now() WHERE id=%s", (job["id"],))

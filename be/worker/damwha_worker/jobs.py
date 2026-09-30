@@ -72,8 +72,10 @@ class JobContext:
     default_speaker_prefix: str = "Speaker"
     lens_llm_model: str | None = None
     summary_llm_model: str | None = None
-    #: 모델 받기가 게이트 모델(화자 분리)을 받을 때 쓴다
+    #: 모델 받기가 게이트 모델(화자 분리)을 받을 때 쓴다 — 앱 밖(터미널 worker)에서만 값이 있다
     hf_token: str | None = None
+    #: 앱에 실린 화자 분리 모델 폴더 (스펙 2026-09-30 §3.3)
+    diarization_model_dir: str | None = None
     meeting_timezone: str = "Asia/Seoul"
     live_max_minutes: float = 240.0
 
@@ -369,7 +371,8 @@ class DownloadModelHandler(JobHandler):
 
     def run(self, conn, job, payload, ctx):
         return run_download_model(
-            conn, job, payload, worker_id=ctx.worker_id, hf_token=ctx.hf_token
+            conn, job, payload, worker_id=ctx.worker_id, hf_token=ctx.hf_token,
+            diarization_model_dir=ctx.diarization_model_dir,
         )
 
     def on_failure(self, conn, job, ctx, error, *, retry):

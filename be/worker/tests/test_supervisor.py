@@ -26,6 +26,7 @@ def _settings_stub(pg_url):
         lens_llm_model = "qwen2.5:14b-instruct"
         summary_llm_model = "qwen2.5:14b-instruct"
         hf_token = None
+        diarization_model_dir = None
         meeting_timezone = "Asia/Seoul"
         live_max_minutes = 240.0
 
