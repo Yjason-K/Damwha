@@ -755,11 +755,26 @@ describe("child env hygiene (Phase 4 스펙 §6.3)", () => {
   it("drops an inherited HF_TOKEN from every python child", () => {
     expect("HF_TOKEN" in childEnv(ctx(), { HF_TOKEN: "hf_shell" })).toBe(false);
   });
+
+  it("also drops the other ways huggingface_hub finds a token (legacy name, token file path)", () => {
+    const env = childEnv(ctx(), {
+      HUGGING_FACE_HUB_TOKEN: "hf_legacy",
+      HF_TOKEN_PATH: "/Users/me/.cache/huggingface/token",
+      KEEP: "1",
+    });
+    expect("HUGGING_FACE_HUB_TOKEN" in env).toBe(false);
+    expect("HF_TOKEN_PATH" in env).toBe(false);
+    expect(env.KEEP).toBe("1");
+  });
 });
 
 describe("HF_TOKEN never reaches a child", () => {
   it("drops an inherited HF_TOKEN from node children", () => {
     expect("HF_TOKEN" in nodeChildEnv({ A: "1" }, { HF_TOKEN: "hf_shell" })).toBe(false);
+  });
+  it("drops HUGGING_FACE_HUB_TOKEN and HF_TOKEN_PATH from node children too", () => {
+    const env = nodeChildEnv({ A: "1" }, { HUGGING_FACE_HUB_TOKEN: "hf_legacy", HF_TOKEN_PATH: "/t" });
+    expect(env).toEqual({ A: "1" });
   });
   it("nodeChildEnv still lays the live env over the inherited one and drops keys without a value", () => {
     const env = nodeChildEnv(

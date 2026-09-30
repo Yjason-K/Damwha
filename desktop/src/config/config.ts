@@ -208,7 +208,7 @@ export function llmBaseUrl(port: number): string {
  * env= 없이 그것을 상속한다 — 여기 넣은 값이 다섯 프로세스 모두에 닿는다.
  *
  * HF_TOKEN은 싣지 않는다. 화자 분리 모델은 DIARIZATION_MODEL_DIR의 번들에서 읽는다(스펙 2026-09-30 §3.1).
- * childEnv가 상속분(개발자 셸의 HF_TOKEN)도 버린다.
+ * childEnv가 상속분(개발자 셸의 HF_TOKEN·HUGGING_FACE_HUB_TOKEN·HF_TOKEN_PATH)도 버린다.
  */
 export function appOwnedChildEnv(ctx: LaunchContext): Record<string, string> {
   const out: Record<string, string> = {
@@ -237,10 +237,10 @@ export function appOwnedChildEnv(ctx: LaunchContext): Record<string, string> {
  * **합성 규칙 — 정확히 이것이다:**
  *
  * ```
- * { ...sanitizeChildEnv({ ...(inherited − HF_TOKEN), ...ctx.env }), ...appOwnedChildEnv(ctx) }
+ * { ...sanitizeChildEnv({ ...(inherited − HF_TOKEN_ENV_KEYS), ...ctx.env }), ...appOwnedChildEnv(ctx) }
  * ```
  *
- * 1. **상속분에서 HF_TOKEN을 제거한다.** 앱은 토큰을 쓰지 않는다 — 셸 토큰이 남으면 번들이 없을 때의
+ * 1. **상속분에서 HF 토큰 키(HF_TOKEN_ENV_KEYS)를 제거한다.** 앱은 토큰을 쓰지 않는다 — 셸 토큰이 남으면 번들이 없을 때의
  *    hub 폴백이 조용히 성공해 설치가 깨진 것을 가린다(스펙 2026-09-30 §5.1).
  * 2. **합친 뒤 씻는다.** 상속분만 씻고 ctx.env를 뒤에 합치면, config.json이 임의 문자열 키를
  *    통과시키므로(loadConfig의 pass-through) PYTHONHOME 같은 키가 되돌아온다. loadConfig가 이제
@@ -250,14 +250,20 @@ export function appOwnedChildEnv(ctx: LaunchContext): Record<string, string> {
  *
  * PATH는 여기서 정하지 않는다 — 런처가 번들 bin만으로 따로 준다 (스펙 §6.2).
  */
+/**
+ * huggingface_hub가 토큰을 찾는 env 키 셋 — 값 자체(HF_TOKEN), 옛 이름(HUGGING_FACE_HUB_TOKEN),
+ * 토큰 파일 위치(HF_TOKEN_PATH). 하나만 빼면 나머지로 셸 토큰이 그대로 새어 든다.
+ */
+export const HF_TOKEN_ENV_KEYS = ["HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HF_TOKEN_PATH"] as const;
+
 export function childEnv(
   ctx: LaunchContext,
   inherited: Record<string, string | undefined> = process.env,
 ): Record<string, string> {
-  // 상속분에서 HF_TOKEN을 제거한다. 앱은 토큰을 쓰지 않는다 — 셸 토큰이 남으면 번들이 없을 때의
-  // hub 폴백이 조용히 성공해 설치가 깨진 것을 가린다(스펙 2026-09-30 §5.1).
+  // 상속분에서 HF 토큰 키(HF_TOKEN_ENV_KEYS)를 제거한다. 앱은 토큰을 쓰지 않는다 — 셸 토큰이 남으면
+  // 번들이 없을 때의 hub 폴백이 조용히 성공해 설치가 깨진 것을 가린다(스펙 2026-09-30 §5.1).
   const rest = { ...inherited };
-  delete rest.HF_TOKEN;
+  for (const key of HF_TOKEN_ENV_KEYS) delete rest[key];
   return { ...sanitizeChildEnv({ ...rest, ...ctx.env }), ...appOwnedChildEnv(ctx) };
 }
 
@@ -265,11 +271,11 @@ export function childEnv(
  * Node 자식(API — api-process.ts의 두 런처, 마이그레이션 러너 — postgres/migration-runner.ts)에게 주는 env **전체**.
  *
  * ```
- * { ...inherited, ...env } − HF_TOKEN − 값이 없는 키
+ * { ...inherited, ...env } − HF_TOKEN_ENV_KEYS − 값이 없는 키
  * ```
  *
  * 상속분을 깔아 주는 이유: 자식 env를 주면 환경이 통째로 대체된다 — PATH·HOME 없는 API가 sysctl을 못 찾았다
- * (api-process.ts). 빼는 것은 **최종 합성**에서다: 개발자 셸에서 상속된 HF_TOKEN도 Node 자식에게 가지 않는다.
+ * (api-process.ts). 빼는 것은 **최종 합성**에서다: 개발자 셸에서 상속된 HF 토큰 키도 Node 자식에게 가지 않는다.
  * 입력은 건드리지 않는다.
  *
  * STRIPPED_CHILD_ENV_KEYS(Python 인터프리터를 흔드는 키)는 여기서 빼지 않는다 — Node 자식과는 무관하고, 지금까지
@@ -282,7 +288,7 @@ export function nodeChildEnv(
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries({ ...inherited, ...env })) {
     if (value === undefined) continue;
-    if (key === "HF_TOKEN") continue;
+    if ((HF_TOKEN_ENV_KEYS as readonly string[]).includes(key)) continue;
     out[key] = value;
   }
   return out;
