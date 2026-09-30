@@ -307,8 +307,8 @@ export function ResolveDialog({
         <DialogHeader>
           <DialogTitle>화자 확인</DialogTitle>
           <DialogDescription>
-            성문으로 자동 연결하지 못한 화자예요. 이미 등록된 화자를 고르거나 새
-            이름을 입력해 연결하세요.
+            목소리만으로는 누구인지 알아보지 못한 화자예요. 이미 등록된 화자를
+            고르거나 새 이름을 입력해 연결하세요.
           </DialogDescription>
         </DialogHeader>
         {player.element}

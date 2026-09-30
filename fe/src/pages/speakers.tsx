@@ -121,9 +121,9 @@ export function SpeakersPage() {
       <div className="mx-auto flex max-w-3xl flex-col gap-6 px-6 py-10">
         <header className="flex items-end justify-between gap-4">
           <div className="flex flex-col gap-1">
-            <h1 className="text-display font-bold">화자 관리</h1>
+            <h1 className="text-h1 font-semibold text-foreground">화자 관리</h1>
             <p className="text-base text-[color:var(--text-muted)]">
-              등록된 화자의 성문을 관리하고 새 화자를 추가할 수 있어요.
+              등록된 화자의 목소리를 관리하고 새 화자를 추가할 수 있어요.
             </p>
           </div>
           <Button iconLeft={<PlusIcon />} onClick={() => setEnrollOpen(true)}>
@@ -151,7 +151,8 @@ export function SpeakersPage() {
                   tint={index + 1}
                   playing={player.playingId === speaker.id}
                   onToggleSample={() => {
-                    if (speaker.sample) player.toggle(speaker.id, speaker.sample);
+                    if (speaker.sample)
+                      player.toggle(speaker.id, speaker.sample);
                   }}
                 />
               </li>

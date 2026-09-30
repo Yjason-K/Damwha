@@ -771,7 +771,7 @@ test("미해결 클러스터가 있으면 화자 확인 배너와 다이얼로�
   fireEvent.click(screen.getByRole("button", { name: "화자 확인" }));
 
   expect(
-    await screen.findByText(/성문으로 자동 연결하지 못한 화자예요/),
+    await screen.findByText(/목소리만으로는 누구인지 알아보지 못한 화자예요/),
   ).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "연결" })).toBeInTheDocument();
 });
@@ -836,27 +836,33 @@ test("회의를 전환해도 재생 배속이 유지된다", async () => {
   expect(next.playbackRate).toBe(1.2);
 });
 
-test("모든 회의(전역 렌즈)로 전환하면 렌즈 대시보드와 탭이 보인다", async () => {
+test("할 일·결정·약속(전역 렌즈)로 전환하면 렌즈 대시보드와 탭이 보인다", async () => {
   renderShell();
   await screen.findByRole("heading", {
     level: 1,
     name: "기획회의 — UI 개선안",
   });
-  fireEvent.click(screen.getByRole("link", { name: "모든 회의" }));
+  fireEvent.click(screen.getByRole("link", { name: "할 일·결정·약속" }));
   expect(
-    await screen.findByRole("heading", { level: 1, name: "내 액션아이템" }),
+    await screen.findByRole("heading", { level: 1, name: "할 일·결정·약속" }),
   ).toBeInTheDocument();
   expect(
     await screen.findByText("다음 스프린트 자료 공유하기"),
   ).toBeInTheDocument();
+  expect(screen.getByRole("group", { name: "완료 상태" })).toBeInTheDocument();
   // Radix Tabs는 mousedown으로 탭을 활성화한다
-  fireEvent.mouseDown(screen.getByRole("tab", { name: "결정사항" }));
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "결정" }));
   expect(
-    await screen.findByRole("heading", { level: 1, name: "내 결정사항" }),
+    await screen.findByText("조건에 맞는 결정 항목이 없어요."),
   ).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "결정" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  // 결정은 완료하는 대상이 아니다 — 열림/완료 필터가 사라진다.
   expect(
-    await screen.findByText("조건에 맞는 결정사항 항목이 없어요."),
-  ).toBeInTheDocument();
+    screen.queryByRole("group", { name: "완료 상태" }),
+  ).not.toBeInTheDocument();
 });
 
 test("전역 렌즈 대시보드에서 근거 점프하면 회의뷰로 전환되고 발언 하이라이트와 seek이 함께 일어난다", async () => {
@@ -865,13 +871,15 @@ test("전역 렌즈 대시보드에서 근거 점프하면 회의뷰로 전환�
     level: 1,
     name: "기획회의 — UI 개선안",
   });
-  fireEvent.click(screen.getByRole("link", { name: "모든 회의" }));
-  await screen.findByRole("heading", { level: 1, name: "내 액션아이템" });
+  fireEvent.click(screen.getByRole("link", { name: "할 일·결정·약속" }));
+  await screen.findByRole("heading", { level: 1, name: "할 일·결정·약속" });
 
   const jumpCard = (
     await screen.findByText("다음 스프린트 자료 공유하기")
   ).closest(".rounded-sm") as HTMLElement;
-  fireEvent.click(within(jumpCard).getByRole("button", { name: /원문 보기/ }));
+  fireEvent.click(
+    within(jumpCard).getByRole("button", { name: /회의에서 보기/ }),
+  );
 
   // m2("스프린트 회고")로 전환되고, v3를 포함하는 병합 블록(v2)이 하이라이트된다.
   expect(
@@ -894,13 +902,15 @@ test("근거 점프 대상 발언이 재처리로 사라졌으면 토스트를 �
     level: 1,
     name: "기획회의 — UI 개선안",
   });
-  fireEvent.click(screen.getByRole("link", { name: "모든 회의" }));
-  await screen.findByRole("heading", { level: 1, name: "내 액션아이템" });
+  fireEvent.click(screen.getByRole("link", { name: "할 일·결정·약속" }));
+  await screen.findByRole("heading", { level: 1, name: "할 일·결정·약속" });
 
   const ghostCard = (
     await screen.findByText("지난 회의 후속 조치 확인하기")
   ).closest(".rounded-sm") as HTMLElement;
-  fireEvent.click(within(ghostCard).getByRole("button", { name: /원문 보기/ }));
+  fireEvent.click(
+    within(ghostCard).getByRole("button", { name: /회의에서 보기/ }),
+  );
 
   // 대상 회의(m1)는 이미 로드돼 있으므로 뷰만 회의뷰로 전환된다.
   await screen.findByRole("log", { name: "회의 전사" });
@@ -944,7 +954,7 @@ test("이미 활성인 발언을 다시 눌러도 그 지점으로 다시 seek�
 
   const log = screen.getByRole("log", { name: "회의 전사" });
   const block = log.querySelector('[data-uid="v2"]') as HTMLElement;
-  const jump = within(block).getByRole("button", { name: /원문 보기/ });
+  const jump = within(block).getByRole("button", { name: /이 시점으로 이동/ });
 
   // 거쳐 간 히스토리 동작을 기록한다 — 점프마다 PUSH가 쌓이면 회의를 벗어나는
   // 데 점프 횟수만큼 뒤로가기가 필요해진다.
@@ -1583,4 +1593,63 @@ test("audio.duration이 매핑된 길이와 미세하게 달라도 재생 블록
   );
   // 다음 발언도 v2에 머물지 않고 실제 다음으로 간다 — m2는 v2가 마지막 블록.
   expect(screen.getByRole("button", { name: "다음 발언" })).toBeDisabled();
+});
+
+test("Space는 재생을 토글하고 ←/→는 10초씩 옮긴다 — 입력란에서는 양보한다", async () => {
+  const play = vi
+    .spyOn(HTMLMediaElement.prototype, "play")
+    .mockResolvedValue(undefined);
+  const pause = vi
+    .spyOn(HTMLMediaElement.prototype, "pause")
+    .mockImplementation(() => {});
+  try {
+    const { container } = renderShell("/meetings/m2");
+    await screen.findByRole("heading", { level: 1, name: "스프린트 회고" });
+    const audio = container.querySelector("audio")!;
+    fireEvent.loadedMetadata(audio);
+
+    fireEvent.keyDown(document.body, { key: " " });
+    expect(
+      await screen.findByRole("button", { name: "일시정지" }),
+    ).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: " " });
+    expect(
+      await screen.findByRole("button", { name: "재생" }),
+    ).toBeInTheDocument();
+
+    fireEvent.keyDown(document.body, { key: "ArrowRight" });
+    await waitFor(() => expect(audio.currentTime).toBeCloseTo(10, 0));
+    fireEvent.keyDown(document.body, { key: "ArrowLeft" });
+    await waitFor(() => expect(audio.currentTime).toBeCloseTo(0, 0));
+
+    // 찾기 입력란에서 친 Space·화살표는 글자 입력·커서 이동이다.
+    const find = screen.getByPlaceholderText("이 회의에서 찾기");
+    fireEvent.keyDown(find, { key: " " });
+    fireEvent.keyDown(find, { key: "ArrowRight" });
+    expect(screen.getByRole("button", { name: "재생" })).toBeInTheDocument();
+    expect(audio.currentTime).toBeCloseTo(0, 0);
+  } finally {
+    play.mockRestore();
+    pause.mockRestore();
+  }
+});
+
+test("완료 필터를 켠 채 결정 탭으로 가도 결정은 열림으로 조회한다 — 필터가 숨어 되돌릴 수 없다", async () => {
+  renderShell();
+  await screen.findByRole("heading", {
+    level: 1,
+    name: "기획회의 — UI 개선안",
+  });
+  fireEvent.click(screen.getByRole("link", { name: "할 일·결정·약속" }));
+  await screen.findByText("다음 스프린트 자료 공유하기");
+  fireEvent.click(screen.getByRole("button", { name: "완료" }));
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "결정" }));
+  await screen.findByText("조건에 맞는 결정 항목이 없어요.");
+
+  const decisionCalls = vi
+    .mocked(apiClient.get)
+    .mock.calls.map(([url]) => String(url))
+    .filter((u) => u.startsWith("/lenses?") && u.includes("kind=decision"));
+  expect(decisionCalls.length).toBeGreaterThan(0);
+  for (const u of decisionCalls) expect(u).toContain("completion_status=open");
 });

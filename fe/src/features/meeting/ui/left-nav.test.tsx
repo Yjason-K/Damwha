@@ -161,3 +161,37 @@ test("사이드바 맨 아래에 화면 테마 버튼이 있다", () => {
   const button = screen.getByRole("button", { name: /^화면 테마: / });
   expect(nav).toContainElement(button);
 });
+
+function renderNav() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={["/"]}>
+        <LeftNav filter="all" onFilter={() => {}} onOpenSearch={() => {}} />
+        <input aria-label="다른 입력" />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+test("N 키로 새 회의 모달을 연다 — 한글 자판이어도", () => {
+  renderNav();
+  fireEvent.keyDown(document.body, { key: "ㅜ", code: "KeyN" });
+  expect(
+    screen.getByRole("button", { name: "업로드 완료 흉내" }),
+  ).toBeInTheDocument();
+});
+
+test("입력란에서 누른 N이나 조합키는 가로채지 않는다", () => {
+  renderNav();
+  fireEvent.keyDown(screen.getByRole("textbox", { name: "다른 입력" }), {
+    key: "n",
+    code: "KeyN",
+  });
+  fireEvent.keyDown(document.body, { key: "n", code: "KeyN", metaKey: true });
+  expect(
+    screen.queryByRole("button", { name: "업로드 완료 흉내" }),
+  ).not.toBeInTheDocument();
+});

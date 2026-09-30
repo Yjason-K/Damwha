@@ -59,7 +59,8 @@ export function LensList({
             <LensItem
               className="scroll-mt-14"
               source={v.source}
-              checkable
+              // 결정은 "완료"하는 대상이 아니다 — 체크박스는 할 일·약속에만.
+              checkable={item.kind !== "decision"}
               done={item.completion_status === "done"}
               onToggle={() =>
                 onToggle(item.id, item.completion_status !== "done")

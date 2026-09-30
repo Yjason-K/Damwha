@@ -315,6 +315,8 @@ function createWindow(): BrowserWindow {
   const created = new BrowserWindow({
     width: 1280,
     height: 860,
+    // fe AppShell의 min-w-[1260px]와 맞춘다 — 더 줄이면 창 안에 가로 스크롤이 생긴다.
+    minWidth: 1260,
     title: "담화",
     backgroundColor: windowBackground(nativeTheme.shouldUseDarkColors),
     webPreferences: {

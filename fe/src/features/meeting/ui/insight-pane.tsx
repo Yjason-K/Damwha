@@ -22,13 +22,18 @@ import type {
   Meeting,
   SummarySegmentView,
 } from "../model/types";
+import { LENS_META } from "../model/data";
 import { Icon } from "./icons";
 import { NotePane } from "./note-pane";
 
 /**
- * InsightPane — right rail: 요약/파일/메모 tabs. The 요약 tab stacks 요약 모델
- * 선택 → 참석자 → 주요 주제 → 다음 할 일 → 핵심 결정 → 단락별 요약; the other
- * tabs show their focused slice. Ported from `timbre_app/InsightPane.jsx`.
+ * InsightPane — right rail: 요약/메모 tabs. The 요약 tab stacks 참석자 → 주요 주제
+ * → 할 일 → 결정 → 약속 → 단락별 요약 → 요약 모델 선택; the 메모 tab is the note
+ * editor. Ported from `timbre_app/InsightPane.jsx`.
+ *
+ * 요약 모델 선택은 가끔 쓰는 설정이라 맨 아래에 둔다(맨 위를 차지하던 것을
+ * UX 리뷰 2026-09-28에서 내렸다). 파일 탭은 원본 파일명 하나만 담을 수 있어
+ * 녹음 회의에서는 늘 비었고 "공유된 파일"을 암시했다 — 전사 헤더 메타로 옮겼다.
  */
 
 function CheckCircle() {
@@ -133,30 +138,61 @@ function Attendees({ meeting }: { meeting: Meeting }) {
   );
 }
 
-function Decisions({
-  lenses,
-  onMore,
+/** 렌즈 항목 본문. 근거 발화가 있으면 누르면 그 발화로 점프한다. */
+function EntryText({
+  entry,
+  onJump,
+  className,
 }: {
-  lenses: Partial<Record<LensKind, LensEntry[]>>;
-  onMore?: () => void;
+  entry: LensEntry;
+  onJump: (utteranceId: string) => void;
+  className?: string;
 }) {
-  const items = lenses.decision ?? [];
+  const base = cn("min-w-0 flex-1 text-sm leading-snug text-pretty", className);
+  if (!entry.ev) return <span className={base}>{entry.text}</span>;
+  return (
+    <button
+      type="button"
+      title="근거 발언으로 이동"
+      onClick={() => onJump(entry.ev)}
+      className={cn(
+        base,
+        "cursor-pointer rounded-xs text-left outline-none hover:bg-[var(--surface-hover)] active:translate-y-[0.5px] focus-visible:[box-shadow:var(--focus-ring)]",
+      )}
+    >
+      {entry.text}
+    </button>
+  );
+}
+
+function LensSection({
+  kind,
+  items,
+  marker,
+  onMore,
+  onJump,
+}: {
+  kind: LensKind;
+  items: LensEntry[];
+  marker: React.ReactNode;
+  onMore?: () => void;
+  onJump: (utteranceId: string) => void;
+}) {
   if (items.length === 0) return null;
   return (
     <Section>
-      <SecHead title="핵심 결정" count={items.length} onMore={onMore} />
+      <SecHead
+        title={LENS_META[kind].label}
+        count={items.length}
+        onMore={onMore}
+      />
       <div className="flex flex-col gap-[9px]">
         {items.map((it) => (
           <div key={it.id} className="flex items-start gap-[9px]">
             <span className="mt-px shrink-0 text-[color:var(--accent-solid)]">
-              <CheckCircle />
+              {marker}
             </span>
-            <span className="min-w-0 flex-1 text-sm leading-snug text-pretty text-foreground">
-              {it.text}
-            </span>
-            <span className="mt-px shrink-0 text-[color:var(--green-9)]">
-              <Icon name="check" size={14} strokeWidth={2.2} />
-            </span>
+            <EntryText entry={it} onJump={onJump} className="text-foreground" />
           </div>
         ))}
       </div>
@@ -168,16 +204,24 @@ function Todos({
   lenses,
   meeting,
   onToggle,
+  onMore,
+  onJump,
 }: {
   lenses: Partial<Record<LensKind, LensEntry[]>>;
   meeting: Meeting;
   onToggle: (id: string, done: boolean) => void;
+  onMore?: () => void;
+  onJump: (utteranceId: string) => void;
 }) {
   const items = lenses.action ?? [];
   if (items.length === 0) return null;
   return (
     <Section>
-      <SecHead title="다음 할 일" count={items.length} />
+      <SecHead
+        title={LENS_META.action.label}
+        count={items.length}
+        onMore={onMore}
+      />
       <div className="flex flex-col gap-[11px]">
         {items.map((it) => {
           const w = it.who ? meeting.speakers[it.who] : null;
@@ -191,16 +235,15 @@ function Todos({
                   onChange={() => onToggle(it.id, !it.done)}
                 />
               </span>
-              <span
-                className={cn(
-                  "min-w-0 flex-1 text-sm leading-snug text-pretty",
+              <EntryText
+                entry={it}
+                onJump={onJump}
+                className={
                   it.done
                     ? "text-[color:var(--text-muted)] line-through"
-                    : "text-foreground",
-                )}
-              >
-                {it.text}
-              </span>
+                    : "text-foreground"
+                }
+              />
               {w && k && (
                 <span className="inline-flex shrink-0 items-center gap-[5px]">
                   <span
@@ -491,45 +534,6 @@ function SummaryState({
   );
 }
 
-function Files({ meeting }: { meeting: Meeting }) {
-  if (meeting.files.length === 0) {
-    return (
-      <div className="flex flex-col items-center gap-2 px-4 py-10 text-center">
-        <Icon
-          name="folder"
-          size={20}
-          className="text-[color:var(--text-faint)]"
-        />
-        <p className="text-sm text-[color:var(--text-muted)]">
-          공유된 파일이 없어요.
-        </p>
-      </div>
-    );
-  }
-  return (
-    <Section last>
-      <SecHead title="파일" count={meeting.files.length} />
-      <ul className="flex flex-col gap-1">
-        {meeting.files.map((f) => (
-          <li
-            key={f.name}
-            className="flex items-center gap-2 rounded-sm px-1.5 py-1.5"
-          >
-            <Icon
-              name="file"
-              size={15}
-              className="text-[color:var(--text-muted)]"
-            />
-            <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-              {f.name}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </Section>
-  );
-}
-
 type InsightPaneProps = {
   meeting: Meeting;
   lenses: Partial<Record<LensKind, LensEntry[]>>;
@@ -581,16 +585,12 @@ export function InsightPane({
       >
         <div className="flex shrink-0 items-center border-b border-[color:var(--border-subtle)] bg-[var(--surface-card)] px-3 pt-1">
           <TabsList className="border-b-0">
-            <TabsTrigger value="summary" data-tour="insight-tab-summary">요약</TabsTrigger>
-            <TabsTrigger value="files">
-              파일
-              {meeting.files.length > 0 && (
-                <span className="rounded-xs bg-[var(--gray-3)] px-[5px] py-px font-mono text-2xs text-[color:var(--text-faint)]">
-                  {meeting.files.length}
-                </span>
-              )}
+            <TabsTrigger value="summary" data-tour="insight-tab-summary">
+              요약
             </TabsTrigger>
-            <TabsTrigger value="notes" data-tour="insight-tab-note">메모</TabsTrigger>
+            <TabsTrigger value="notes" data-tour="insight-tab-note">
+              메모
+            </TabsTrigger>
           </TabsList>
           {tab === "summary" && settled && (
             <IconButton
@@ -599,16 +599,65 @@ export function InsightPane({
               className="ml-auto"
               onClick={onRegenerateSummary}
             >
-              <Icon name="rotateCcw" size={14} />
+              <Icon name="sparkles" size={14} />
             </IconButton>
           )}
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
           <TabsContent value="summary" className="mt-0">
+            <Attendees meeting={meeting} />
+            {settled ? (
+              <TopicList topics={meeting.topics} />
+            ) : (
+              <SummaryState
+                meetingStatus={meeting.status}
+                status={meeting.summaryStatus}
+                error={meeting.summaryError}
+                onRegenerate={onRegenerateSummary}
+                regenerating={regenerating}
+                onCancel={onCancelSummary}
+              />
+            )}
+            <div data-tour="lens-section">
+              <Todos
+                lenses={lenses}
+                meeting={meeting}
+                onToggle={onToggle}
+                onMore={() => onOpenLens("action")}
+                onJump={onJumpSegment}
+              />
+              <LensSection
+                kind="decision"
+                items={lenses.decision ?? []}
+                marker={<CheckCircle />}
+                onMore={() => onOpenLens("decision")}
+                onJump={onJumpSegment}
+              />
+              <LensSection
+                kind="promise"
+                items={lenses.promise ?? []}
+                marker={<Icon name="handshake" size={16} />}
+                onMore={() => onOpenLens("promise")}
+                onJump={onJumpSegment}
+              />
+              <LensState
+                meetingStatus={meeting.status}
+                status={lensExtractionStatus}
+                onExtract={onExtractLenses}
+                extracting={extracting}
+                onCancel={onCancelLenses}
+              />
+            </div>
+            {settled && (
+              <SummarySegments
+                segments={meeting.segments}
+                onJump={onJumpSegment}
+              />
+            )}
             {meeting.status === "done" && (
-              <div className="flex items-center gap-2 border-b border-[color:var(--border-subtle)] px-3 py-2">
-                <span className="text-xs text-[color:var(--text-muted)]">
-                  재생성 모델
+              <div className="flex items-center gap-2 px-3 py-3">
+                <span className="text-xs whitespace-nowrap text-[color:var(--text-muted)]">
+                  요약 다시 만들 때 모델
                 </span>
                 <Select
                   value={summaryModel}
@@ -627,39 +676,6 @@ export function InsightPane({
                 </Select>
               </div>
             )}
-            <Attendees meeting={meeting} />
-            {settled ? (
-              <TopicList topics={meeting.topics} />
-            ) : (
-              <SummaryState
-                meetingStatus={meeting.status}
-                status={meeting.summaryStatus}
-                error={meeting.summaryError}
-                onRegenerate={onRegenerateSummary}
-                regenerating={regenerating}
-                onCancel={onCancelSummary}
-              />
-            )}
-            <div data-tour="lens-section">
-              <Todos lenses={lenses} meeting={meeting} onToggle={onToggle} />
-              <Decisions lenses={lenses} onMore={() => onOpenLens("decision")} />
-              <LensState
-                meetingStatus={meeting.status}
-                status={lensExtractionStatus}
-                onExtract={onExtractLenses}
-                extracting={extracting}
-                onCancel={onCancelLenses}
-              />
-            </div>
-            {settled && (
-              <SummarySegments
-                segments={meeting.segments}
-                onJump={onJumpSegment}
-              />
-            )}
-          </TabsContent>
-          <TabsContent value="files" className="mt-0">
-            <Files meeting={meeting} />
           </TabsContent>
           <TabsContent value="notes" className="mt-0">
             <NotePane meetingId={meeting.id} />

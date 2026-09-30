@@ -117,3 +117,53 @@ def _format_eta(seconds: int) -> str:
     if seconds < 60:
         return f"{seconds}s"
     return f"{seconds // 60}m{seconds % 60:02d}s"
+
+
+class FractionProgress:
+    """진행 비율(0~1)을 stage 구간 안의 job.progress로 옮긴다 — align처럼 총량을 미리
+    모르는 단계용. 값이 뒤로 가도(루프 재시작) 지금까지의 최대값을 쓰고, 최소 간격으로
+    DB 쓰기를 줄이며, 끝(1.0)은 간격과 무관하게 항상 쓴다. 쓰기 실패는 경고만 남긴다.
+    """
+
+    def __init__(
+        self,
+        set_progress: Callable[[int], None],
+        *,
+        progress_from: int,
+        progress_to: int,
+        min_interval_s: float = _MIN_INTERVAL_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+        abort_event: threading.Event | None = None,
+        ctx: str = "",
+        stage: str = "",
+    ) -> None:
+        self._set_progress = set_progress
+        self._from = progress_from
+        self._to = progress_to
+        self._min_interval_s = min_interval_s
+        self._clock = clock
+        self._abort_event = abort_event
+        self._ctx = ctx
+        self._stage = stage
+        self._best = 0.0
+        self._last_emit: float | None = None
+        self._last_value: int | None = None
+
+    def __call__(self, fraction: float) -> None:
+        if self._abort_event is not None and self._abort_event.is_set():
+            raise ShutdownRequested(f"shutdown requested during {self._stage or 'stage'}")
+        self._best = max(self._best, min(max(fraction, 0.0), 1.0))
+        now = self._clock()
+        final = self._best >= 1.0
+        if not final and self._last_emit is not None:
+            if now - self._last_emit < self._min_interval_s:
+                return
+        value = int(self._from + (self._to - self._from) * self._best)
+        if value == self._last_value:
+            return
+        self._last_emit = now
+        self._last_value = value
+        try:
+            self._set_progress(value)
+        except Exception:  # noqa: BLE001 — 진행 보고 실패로 처리를 죽이지 않는다
+            log.warning("%s %s progress update failed", self._ctx, self._stage, exc_info=True)

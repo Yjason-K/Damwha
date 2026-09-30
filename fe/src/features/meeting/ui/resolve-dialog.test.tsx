@@ -78,7 +78,7 @@ test("자동 생성된 provisional 화자도 고를 수 있다", async () => {
   expect(within(listbox).getByText("Speaker_023")).toBeInTheDocument();
 });
 
-test("성문 등록이 끝나지 않은 화자(pending/failed)는 목록에서 뺀다", async () => {
+test("목소리 등록이 끝나지 않은 화자(pending/failed)는 목록에서 뺀다", async () => {
   setup(
     [
       { id: "spk_1", name: "김영재", enrollment_status: "ready" },

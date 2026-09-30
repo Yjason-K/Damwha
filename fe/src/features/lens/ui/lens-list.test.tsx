@@ -113,3 +113,25 @@ test("제목 없는 회의도 헤더를 세운다", () => {
     screen.getByRole("link", { name: /제목 없는 회의/ }),
   ).toBeInTheDocument();
 });
+
+test("결정에는 완료 체크박스가 없고 할 일·약속에는 있다", () => {
+  renderList([
+    {
+      items: [
+        { ...item("lens_a", 기획, "자료 공유하기"), kind: "action" },
+        { ...item("lens_d", 기획, "베타는 다음 주에 연다"), kind: "decision" },
+        { ...item("lens_p", 기획, "초안을 보낸다"), kind: "promise" },
+      ],
+      next_cursor: null,
+    },
+  ]);
+  expect(
+    screen.getByRole("checkbox", { name: "완료: 자료 공유하기" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("checkbox", { name: "완료: 초안을 보낸다" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByRole("checkbox", { name: "완료: 베타는 다음 주에 연다" }),
+  ).not.toBeInTheDocument();
+});

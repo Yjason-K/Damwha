@@ -381,6 +381,9 @@ uv run python -m damwha_worker           # run the real worker (supervisor; spaw
 uv run python scripts/smoke_process_meeting.py <audio>   # local end-to-end smoke
 uv run --with jiwer python scripts/eval_stt.py --wav <16k.wav> --json3 <ref> --outdir <dir>
                                          # STT CER/WER A/B (backends, models, guards); see SMOKE.md
+uv run --with edlib python scripts/eval_speaker_attribution.py score --cache <dir> --ref-dir <dir>
+                                         # who-said-what vs a Clova Note export, per align variant
+                                         # (run its `cache` step first); see docs/reports/2026-09-29-*
 ```
 
 **Tests require Docker.** Integration/e2e tests use Testcontainers, which spins up a real `damwha/postgres-bigm:pg16` Postgres per suite (see `test/db.ts`). Run with `--runInBand` (already in `pnpm test`) — parallel containers are heavy. No mocking of the DB; tests exercise real SQL including `SKIP LOCKED`, the reaper CTE, and pgvector.

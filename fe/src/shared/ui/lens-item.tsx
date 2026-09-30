@@ -134,7 +134,7 @@ function LensItem({
               className="inline-flex items-center gap-1 rounded-xs px-1 py-0.5 text-2xs font-medium text-[color:var(--text-link)] outline-none transition-colors hover:bg-[var(--accent-1)] focus-visible:[box-shadow:var(--focus-ring)] [&_svg]:size-[11px]"
             >
               <JumpIcon />
-              <span>원문 보기</span>
+              <span>회의에서 보기</span>
               <span className="font-mono tracking-[var(--tracking-mono)]">
                 {evidence}
               </span>
