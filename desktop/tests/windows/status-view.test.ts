@@ -41,7 +41,7 @@ const logPathOf = (id: ServiceId | "supervisor") => `/logs/${id}.log`;
 
 const ALL_OK = [st("postgres"), st("api"), st("embed"), st("worker")];
 
-/** 서비스도 모델도 토큰도 없는 빈 한 장. renderCall의 모양만 보는 자리에서 쓴다. */
+/** 서비스도 모델도 없는 빈 한 장. renderCall의 모양만 보는 자리에서 쓴다. */
 function emptyView(notices: string[] = []): ServicesView {
   return {
     rows: [],
@@ -757,8 +757,6 @@ describe("parseServicesAction — 페이지에서 오는 값", () => {
       kind: "restart",
       service: "worker",
     });
-    expect(parseServicesAction({ kind: "token", op: "change" })).toBeNull();
-    expect(parseServicesAction({ kind: "token", op: "clear" })).toBeNull();
   });
 
   it("모르는 것은 전부 null이다 — 렌더러 값이 감독자에게 그대로 들어가지 않는다", () => {

@@ -751,7 +751,7 @@ export function createSupervisor(
         //  - worker: bring의 detectExternal이 `listExternalWorkers`를 부르는데, 그것이 "우리 것"을
         //    빼는 근거는 `runtimeOf("worker").result.handle.pid`다(main.ts의 ownPid). rt.result가
         //    null인 지금 **죽어 가는 우리 worker가 외부 worker로 보여** stand-down이 되고,
-        //    owned:false가 박혀 이 버튼이 스스로 영영 비활성이 된다. 토큰 교체(P4-C4)의 길이 거기서 끊긴다.
+        //    owned:false가 박혀 이 버튼이 스스로 영영 비활성이 된다.
         //  - embed: 옛 자식이 포트를 쥔 채 유일한 참조를 잃고, 새 자식은 그 포트에서 bind에 넘어진다.
         // 그래서 참조를 되돌리고 상태는 살아 있는 그대로 둔 채 까닭만 싣는다.
         rt.result = result;

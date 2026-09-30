@@ -5,7 +5,7 @@ import { ServiceFailure } from "../services/failure";
 import { processExists } from "../services/postgres/handle";
 
 /**
- * 기동 전 고아 정리 (Phase 4 스펙 §6.5). main.ts의 createSupervisorFor가 HF 토큰 게이트 **다음**, 어떤 서비스
+ * 기동 전 고아 정리 (Phase 4 스펙 §6.5). main.ts의 createSupervisorFor가 어떤 서비스
  * (postgres 포함)보다 **먼저** await한다 — 뒤에 하면 새로 띄운 것과 고아가 잠시 공존한다.
  *
  * 스캔이 실패하면 **manual** 실패로 던진다 (판정 R-7b, P4-C22). startOnce의 catch가 원인과 "다시 시도"

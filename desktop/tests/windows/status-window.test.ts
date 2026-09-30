@@ -13,7 +13,7 @@ import {
 } from "../../src/windows/status-view";
 import type { ServiceId, ServiceStatus } from "../../src/services/types";
 
-/** 서비스도 모델도 토큰도 없는 빈 한 장. 이 테스트들이 보는 것은 안내 줄과 호출 모양뿐이다. */
+/** 서비스도 모델도 없는 빈 한 장. 이 테스트들이 보는 것은 안내 줄과 호출 모양뿐이다. */
 function emptyView(notices: string[] = []): ServicesView {
   return {
     rows: [],

@@ -333,7 +333,7 @@ export function reasonOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** 로그에 싣는 args의 상한. 우리 argv에는 비밀이 없지만(토큰은 env로 간다) 한 줄이 한없이 길어지지 않게 한다. */
+/** 로그에 싣는 args의 상한. 우리 argv에는 비밀이 없지만 한 줄이 한없이 길어지지 않게 한다. */
 const ARGS_LOG_MAX = 300;
 
 export function clipArgs(args: string): string {
