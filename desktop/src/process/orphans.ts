@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import type { LaunchContext } from "../services/types";
-import { knownBundleDirs, pythonBinaries, PY_MINOR } from "./runtime-paths";
+import { bundleTreeOfInterpreter, knownBundleDirs, pythonBinaries, PY_MINOR } from "./runtime-paths";
 
 /**
  * 담화 Python 프로세스의 판독·분류·회수 (Phase 4 스펙 §6.5). 표식은 env가 아니라 argv에 있다 —
@@ -10,7 +10,7 @@ import { knownBundleDirs, pythonBinaries, PY_MINOR } from "./runtime-paths";
  *  - `parseDamwhaProcesses`가 **조건 1·2**로 목록에 넣는다 — argv[0]이 절대 경로이고 basename이
  *    `python3.12`, `-m` 다음 토큰이 우리 모듈 셋 중 하나. 이 둘이 `grep --run-id=…`·`zsh -c "…"`·
  *    `uv run …` 같은 줄을 거른다(run-id만 보면 그런 줄이 걸린다).
- *  - `classify`가 **조건 3·4**로 딱지를 붙인다 — argv[0]이 앱이 아는 트리 아래인가, run-id가 있는가.
+ *  - `classify`가 **조건 3·4**로 딱지를 붙인다 — argv[0]이 담화 번들 트리(아는 트리, 또는 그 모양)인가, run-id가 있는가.
  *    그래서 저장소 `.venv`의 worker는 목록에 들어온 뒤 조건 3에서 `external`로 갈린다 (P4-C21).
  *
  * 회수 절차는 한 벌(`reapByKind`)이고, 두 단계가 대상 딱지만 달리해 쓴다 — 기동 전 정리(`reapOrphans`,
@@ -66,9 +66,14 @@ export interface DamwhaProcess {
   once: boolean;
   argv0: string;
   /**
-   * argv[0]을 **아는 접두사로 잘라** 얻었을 때(= 그 트리의 `python`과 같을 때) 그 트리의 `root`. 아니면 null.
-   * ` -m ` 앞을 추측한 argv[0]은 우연히 트리 아래 경로여도(`<root>/bin/foo bar/python3.12`) 트리에 넣지
-   * 않는다 — 추측은 소유의 증거가 아니다 (판정 R-7h).
+   * argv[0]이 담화 번들 트리의 인터프리터일 때 그 트리의 `root`. 아니면 null. 두 길로 얻는다:
+   *  - **아는 접두사로 잘라** 얻었을 때(= `knownTrees`의 한 트리의 `python`과 같을 때).
+   *  - 공백 없는 argv[0]이 번들 트리의 **모양**일 때(`bundleTreeOfInterpreter` — `…/Damwha.app/Contents/Resources/
+   *    python/bin/python3.12`, `…/desktop/build/python/bin/python3.12`). 앱의 모든 사본은 userData 하나와 그
+   *    경로의 단일 인스턴스 잠금을 나눠 쓰므로(main.ts의 `app.setName`), 이번 실행이 아닌 run-id를 단 담화 번들
+   *    프로세스는 어느 사본의 것이든 앞 실행이 남긴 것이다.
+   * ` -m ` 앞을 추측한 argv[0]은 우연히 트리 아래 경로이거나 번들 모양이어도(`<root>/bin/foo bar/python3.12`)
+   * 트리에 넣지 않는다 — 추측은 소유의 증거가 아니다 (판정 R-7h).
    */
   tree: string | null;
 }
@@ -179,6 +184,15 @@ function treeOf(argv0: string, trees: readonly KnownTree[]): KnownTree | null {
   return trees.find((t) => t.python === argv0) ?? null;
 }
 
+/**
+ * 아는 트리가 아닌 번들 모양의 트리 — `knownBundleDirs`가 모르는 사본(`/Applications`의 앱이 본 `out/`의 사본).
+ * 공백 든 argv[0]은 규칙 1(아는 접두사) 밖에서는 추측으로만 얻으므로 받지 않는다 (판정 R-7h). 이 트리의 줄은
+ * `unreadable`로 세지 않는다 — 기동 정리를 멈출 근거로 삼을 만큼 정확히 아는 경로가 아니다.
+ */
+function shapedTreeOf(argv0: string): string | null {
+  return /\s/.test(argv0) ? null : bundleTreeOfInterpreter(argv0);
+}
+
 function under(root: string, p: string): boolean {
   return p.startsWith(root.endsWith("/") ? root : `${root}/`);
 }
@@ -246,10 +260,11 @@ export function parseDamwhaScan(psText: string, trees: readonly KnownTree[]): Da
       if (cutInterpreter(row.args, trees)) unreadable.push(row);
       continue;
     }
-    const tree = treeOf(argv[0], trees);
+    const known = treeOf(argv[0], trees);
+    const tree = known?.root ?? shapedTreeOf(argv[0]);
     const found = moduleOf(argv);
     if (found === null) {
-      if (tree !== null && cutBeforeModule(argv)) unreadable.push(row);
+      if (known !== null && cutBeforeModule(argv)) unreadable.push(row);
       continue;
     }
     // 첫 토큰만 읽는다 — worker의 run_id_arg와 같다.
@@ -257,7 +272,7 @@ export function parseDamwhaScan(psText: string, trees: readonly KnownTree[]): Da
     const runId = flag === undefined ? null : flag.slice(RUN_ID_FLAG.length);
     const readable = runId === null ? !cutFlag(found.rest) : RUN_ID_SHAPE.test(runId);
     if (!readable) {
-      if (tree !== null) unreadable.push(row);
+      if (known !== null) unreadable.push(row);
       continue;
     }
     processes.push({
@@ -266,7 +281,7 @@ export function parseDamwhaScan(psText: string, trees: readonly KnownTree[]): Da
       runId,
       once: found.rest.includes("--once"),
       argv0: argv[0],
-      tree: tree === null ? null : tree.root,
+      tree,
     });
   }
   return { processes, unreadable };
@@ -280,8 +295,9 @@ export function parseDamwhaProcesses(psText: string, trees: readonly KnownTree[]
 export type ProcessKind = "mine" | "orphan" | "external";
 
 /**
- * 조건 3·4. `mine`은 이번 실행의 것, `orphan`은 아는 트리에서 다른 run-id를 단 것(이전 실행이 남겼다),
- * `external`은 run-id가 없거나 트리 밖의 것(터미널 `pnpm worker`, Homebrew python, 옮겨 설치한 앱).
+ * 조건 3·4. `mine`은 이번 실행의 것, `orphan`은 담화 번들 트리에서 다른 run-id를 단 것(이전 실행이 남겼다 —
+ * 옮겨 설치한 사본이나 `out/`의 사본이 남긴 것도), `external`은 run-id가 없거나 트리 밖의 것(터미널 `pnpm worker`,
+ * Homebrew python, 공백 든 경로에서 추측한 argv[0]).
  */
 export function classify(p: DamwhaProcess, myRunId: string): ProcessKind {
   if (p.tree === null || p.runId === null) return "external";

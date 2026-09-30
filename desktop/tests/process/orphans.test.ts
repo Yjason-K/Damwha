@@ -122,13 +122,47 @@ describe("parseDamwhaProcesses — 조건 1·2로 목록에 넣는다", () => {
     ]);
   });
 
-  it("lists a python3.12 of a tree it does not know but places it in no tree — it is never an orphan", () => {
-    // 예: /Applications로 옮긴 packaged 사본 (knownBundleDirs의 한계). 조건 3에서 빠진다.
-    const other = "/Applications/Damwha.app/Contents/Resources/python/bin/python3.12";
-    const ps = `  PID ARGS\n 7201 ${other} -m damwha_worker --run-id=${OLD}`;
-    const [p] = parseDamwhaProcesses(ps, TREES);
-    expect(p).toMatchObject({ pid: 7201, tree: null, runId: OLD });
-    expect(classify(p, MINE)).toBe("external");
+  it("places a bundle tree it does not know by its shape — a moved or out/ copy's leftover is an orphan", () => {
+    // 2026-09-30 실측: /Applications의 앱이 `out/`의 사본이 남긴 worker를 몰라 "외부 worker"로 서 있었다.
+    // 앱의 모든 사본은 userData 하나의 단일 인스턴스 잠금을 나눠 쓰므로, 남의 run-id를 단 번들 프로세스는 고아다.
+    const moved = "/Applications/Damwha.app/Contents/Resources/python";
+    const otherRepo = "/Users/you/elsewhere/desktop/build/python";
+    const ps = [
+      "  PID ARGS",
+      ` 7201 ${moved}/bin/python3.12 -m damwha_worker --run-id=${OLD}`,
+      ` 7202 ${otherRepo}/bin/python3.12 -m damwha_worker.embed_service --run-id=${OLD}`,
+      ` 7203 ${moved}/bin/python3.12 -m damwha_worker --run-id=${MINE}`,
+      ` 7204 ${moved}/bin/python3.12 -m damwha_worker`,
+    ].join("\n");
+    const list = parseDamwhaProcesses(ps, TREES);
+    expect(list.map((p) => [p.pid, p.tree, classify(p, MINE)])).toEqual([
+      [7201, moved, "orphan"],
+      [7202, otherRepo, "orphan"],
+      [7203, moved, "mine"],
+      [7204, moved, "external"],
+    ]);
+  });
+
+  it("does not place a lookalike of the bundle shape, a guessed spaced argv[0], or a garbled shaped line", () => {
+    const ps = [
+      "  PID ARGS",
+      // 꼬리가 조각 단위로 맞지 않는다 — `xDamwha.app`, `bin/` 아닌 자리, `python` 아닌 트리 이름.
+      ` 7211 /Applications/xDamwha.app/Contents/Resources/python/bin/python3.12 -m damwha_worker --run-id=${OLD}`,
+      ` 7212 /Applications/Damwha.app/Contents/Resources/python/lib/python3.12 -m damwha_worker --run-id=${OLD}`,
+      ` 7213 /x/desktop/build/pythonx/bin/python3.12 -m damwha_worker --run-id=${OLD}`,
+      // 공백 든 경로는 규칙 3의 추측이라 번들 모양이어도 트리에 넣지 않는다 (판정 R-7h).
+      ` 7214 /Users/me/My Apps/Damwha.app/Contents/Resources/python/bin/python3.12 -m damwha_worker --run-id=${OLD}`,
+    ].join("\n");
+    const scan = parseDamwhaScan(ps, TREES);
+    expect(scan.processes.map((p) => [p.pid, p.tree, classify(p, MINE)])).toEqual([
+      [7211, null, "external"],
+      [7212, null, "external"],
+      [7213, null, "external"],
+      [7214, null, "external"],
+    ]);
+    // 모양으로만 아는 트리의 망가진 run-id는 스캔을 세우지 않는다 — 목록에서만 빠진다.
+    const garbled = `  PID ARGS\n 7215 /Applications/Damwha.app/Contents/Resources/python/bin/python3.12 -m damwha_worker --run-id=desktop-1111`;
+    expect(parseDamwhaScan(garbled, TREES)).toEqual({ processes: [], unreadable: [] });
   });
 
   it("does not list a bundled interpreter launched through its symlink name, a bare name, or a lookalike file", () => {

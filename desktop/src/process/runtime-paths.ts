@@ -59,6 +59,32 @@ function stripSuffix(dir: string, parts: readonly string[]): string | null {
 }
 
 /**
+ * 어디에 놓였든 담화 번들의 python 트리라고 **모양으로** 알아볼 수 있는 꼬리. packaged는
+ * `<어디든>/Damwha.app/Contents/Resources/python`, dev는 `<저장소>/desktop/build/python`이다.
+ */
+const BUNDLE_PYTHON_SHAPES: readonly (readonly string[])[] = [
+  ["Damwha.app", "Contents", "Resources", "python"],
+  DEV_PYTHON_IN_REPO,
+];
+
+/**
+ * `python`이 어떤 담화 번들 트리의 `<트리>/bin/python3.12`면 그 트리, 아니면 null. 디스크를 보지 않는다.
+ *
+ * `knownBundleDirs`가 모르는 사본을 위한 것이다 (process/orphans.ts의 `parseDamwhaScan`). 2026-09-30 실측:
+ * `/Applications/Damwha.app`이 `<저장소>/desktop/out/mac-arm64/Damwha.app`(9/26 패키징 확인 실행)이 남긴
+ * worker·embed를 알아보지 못했다. 고아는 트리 밖이라 `external`로 갈려 기동 정리를 피했고, worker 탐지는 그것을
+ * "외부 worker"로 보고 앱의 worker를 세우지 않았다. 고아는 같은 userData의 DB·STORAGE_ROOT를 그대로 물고 옛
+ * 코드로 job을 처리하고 있었다.
+ */
+export function bundleTreeOfInterpreter(python: string): string | null {
+  if (path.basename(python) !== `python${PY_MINOR}`) return null;
+  const bin = path.dirname(python);
+  if (path.basename(bin) !== "bin") return null;
+  const root = path.dirname(bin);
+  return BUNDLE_PYTHON_SHAPES.some((shape) => stripSuffix(root, shape) !== null) ? root : null;
+}
+
+/**
  * 이 앱이 **자기 것으로 알아볼 수 있는** 번들 python 트리들. 순서는 `[packaged, dev]`이고 모르는 쪽은
  * 빠진다. 두 벌인 이유: 하나의 userData를 dev와 packaged 빌드가 함께 쓰므로, dev로 띄운 고아를
  * packaged가, 또 그 반대도 만난다 — `ctx.bins`는 이번 실행의 한 벌뿐이라 거기서 둘을 만들 수 없다
@@ -70,7 +96,8 @@ function stripSuffix(dir: string, parts: readonly string[]): string | null {
  *  - packaged: 자기 트리가 바로 그 모양일 때만 `<X>/desktop/build/python`을 dev 트리로 안다.
  *
  * **한계:** `out/` 밖으로 옮겨 설치한 packaged 사본(예: `/Applications/Damwha.app`)은 저장소가
- * 어디인지 알 길이 없어 dev 트리를 모른다. 그 사본은 dev가 남긴 고아를 알아보지 못한다.
+ * 어디인지 알 길이 없어 dev 트리도, `out/`의 packaged 트리도 모른다. 그 사본이 고아를 알아보는 길은
+ * 모양 판독(`bundleTreeOfInterpreter`)이다.
  */
 export function knownBundleDirs(ctx: Pick<LaunchContext, "bins" | "repoRoot">): string[] {
   const own = path.dirname(path.dirname(ctx.bins.python));
