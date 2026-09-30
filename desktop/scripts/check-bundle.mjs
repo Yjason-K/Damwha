@@ -4,6 +4,7 @@ import * as asar from "@electron/asar";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { machOFiles } from "./lib/macho.mjs";
 import { MAX_MINOS, compareVersion, readMinos } from "./lib/minos.mjs";
 import { loadSigning } from "./lib/signing.mjs";
@@ -502,6 +503,36 @@ check(
   // 전부 보고한다 — 하나만 보이면 원인 패키지를 못 찾는다.
   overMinos.join(", "),
 );
+
+// 23. 앱에 실린 화자 분리 모델 (스펙 2026-09-30 §4.4). 파일 다섯이 커밋된 sha256과 같고 출처 표기가 있다.
+// 모델 파일은 pickle을 허용하는 체크포인트라 봉인 전 마지막으로 여기서 대조한다(§4.5).
+const modelDir = path.join(contents, "Resources", "models", "pyannote-speaker-diarization-community-1");
+const MODEL_FILES = [
+  "config.yaml",
+  "segmentation/pytorch_model.bin",
+  "embedding/pytorch_model.bin",
+  "plda/plda.npz",
+  "plda/xvec_transform.npz",
+];
+const sumLines = fs.readFileSync(path.join(desktop, "scripts", "models-checksums.txt"), "utf8")
+  .split("\n").filter((l) => l.trim() !== "" && !l.startsWith("#"));
+const sums = sumLines.map((l) => /^([a-f0-9]{64})\s{2,}(\S+)$/.exec(l.trim())).filter((m) => m !== null)
+  .map((m) => ({ hash: m[1], rel: m[2] }));
+const listed = sums.map((s) => s.rel).sort();
+check(
+  "models-checksums.txt lists exactly the five diarization files",
+  sums.length === sumLines.length && JSON.stringify(listed) === JSON.stringify([...MODEL_FILES].sort()),
+  listed.join(", "),
+);
+const badModel = [];
+for (const { hash, rel } of sums) {
+  const f = path.join(modelDir, rel);
+  if (!fs.existsSync(f)) { badModel.push(`${rel} (missing)`); continue; }
+  const got = createHash("sha256").update(fs.readFileSync(f)).digest("hex");
+  if (got !== hash) badModel.push(`${rel} (sha256 ${got.slice(0, 12)}…)`);
+}
+check("bundled diarization model matches models-checksums.txt", badModel.length === 0, badModel.join(", "));
+check("bundled diarization model carries NOTICE.txt", fs.existsSync(path.join(modelDir, "NOTICE.txt")));
 
 if (failures.length > 0) {
   console.error(`\n${failures.length} bundle hygiene check(s) failed.`);
