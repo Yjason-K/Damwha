@@ -279,6 +279,7 @@ claim 직후 실패를 기준으로 시도 시각이 0 · 30초 · 90초 · 210�
 
 - postmaster에는 SIGINT(fast)·SIGQUIT(immediate)만. `services/postgres/handle.ts`의 신호 타입이 SIGKILL을 막는다.
 - 앱이 지우는 것은 데이터 영역(`data/`·`snapshots/`·`backups/`·`restore-staging/`)에서 여덟 가지뿐 — `data/postgres.initdb-*`, 증명한 낡은 락, 5개 초과 백업(단 세대별 첫 덤프는 고정), `*.dump.partial`, 보존 상한(2)을 넘은 완료 스냅샷, 미완료 스냅샷, `restore-staging/<rid>`, 그 백업의 sidecar(덤프와 함께). `data.replaced-*`는 지우지 않는다. 거부 경로는 아무것도 만들거나 지우지 않는다.
+  데이터 영역 밖에서는 하나 — 0.4.x까지 쓰던 암호화 토큰 파일 `<userData>/hf-token.bin`을 기동 때 지운다(`app/legacy-token-cleanup.ts`, 스펙 2026-09-30 §5.1).
 - 마이그레이션 실패·페어링 거부 같은 `manual` 실패는 자동 재시도하지 않는다(`app/retry-policy.ts`, 창 재열기도 재시도하지 않는다 — `app/window-flow.ts`). `writersAlive`·`snapshotFailed`·`restoreIncomplete`·`restoreJournalUnreadable`·`restorePending`(Phase 6b-2, 데이터 가드)도 같은 `manual`이다. 감독자를 세우기 전에 던진 실패는 main이 `lastStartFailure`로 보존해, 감독자 없이 창을 다시 열어도 자동 재시도하지 않는다. 메뉴의 "다시 시도"만 다시 돈다.
 - `desktop/package.json`의 `dependencies`는 비어 있다(번들 위생). DB에는 번들 `psql`·`pg_controldata`와 `migrate.js`로만 묻는다.
 - 셸 페이지(`shell/*.html`)는 fe 토큰을 **같은 이름으로** 옮겨 적고, macOS 다크를 `@media (prefers-color-scheme: dark)` 블록으로 따른다(fe의 `.dark` 값 사용) — CSP상 fe의 CSS를 못 불러오고, localStorage를 못 읽어 앱 안 테마 선택은 반영되지 않는다. 색은 `:root`와 다크 `@media` 블록의 `:root`에만 나타나고, 그 밖에는 없다. `tests/windows/shell-html.test.ts`가 값이 `fe/src/index.css`와 같은지 본다. 시작 화면은 packaged에서 서비스 줄을 숨긴다(`shellStatusFrom`의 `packaged`) — 진행 상황은 상태 창 몫이다.

@@ -30,6 +30,7 @@ import {
 import { createStatusWindow, mayAutoOpen } from "./windows/status-window";
 import { applyNavigationBoundary, applyPermissionBoundary } from "./windows/permissions";
 import { mayRenderShell } from "./windows/shell-latch";
+import { removeLegacyToken } from "./app/legacy-token-cleanup";
 import { maySpawnServices } from "./app/spawn-guard";
 import { decideMenuRetry, gateUp, openWindowFlow } from "./app/window-flow";
 import {
@@ -1324,6 +1325,7 @@ async function passDataGuard(mine: number, layout: PgLayout, binaries: PgBinarie
  */
 async function createSupervisorFor(mine: number): Promise<boolean> {
   const userData = app.getPath("userData");
+  removeLegacyToken(userData, { log: appendSupervisorLog });
 
   const cfg = loadConfig(userData);
   if (cfg.warning !== undefined) appendSupervisorLog(cfg.warning);
