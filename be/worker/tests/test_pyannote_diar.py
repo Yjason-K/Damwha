@@ -171,7 +171,7 @@ def test_other_load_failures_propagate_unchanged(monkeypatch):
 # ── 번들 경로 (스펙 2026-09-30 §3.1) ─────────────────────────────────
 
 
-def _fake_pyannote(monkeypatch, calls):
+def _fake_pyannote(monkeypatch, calls, *, returns_none=False):
     import sys
     import types
 
@@ -181,6 +181,8 @@ def _fake_pyannote(monkeypatch, calls):
             from damwha_worker.models import downloads
 
             calls.append((checkpoint, token, downloads.cache_first_active()))
+            if returns_none:
+                return None
             return types.SimpleNamespace(to=lambda device: "pipeline")
 
     audio = types.ModuleType("pyannote.audio")
@@ -226,6 +228,37 @@ def test_bundle_missing_file_is_permanent_error(monkeypatch, tmp_path):
     else:
         raise AssertionError("expected WorkerError")
     assert calls == []  # 적재를 시도하지 않는다
+
+
+def test_bundle_load_returning_none_is_not_marked_ready(monkeypatch, tmp_path):
+    """`ready`는 적재가 실제로 끝난 **뒤**에만 쓴다 — None이면 실패인데 먼저 쓰면 상태 창이 거짓
+    "준비됨"을 보인다. 안내문은 번들 경로 기준(재설치)이고 토큰 이야기를 하지 않는다."""
+    import pytest
+
+    from tests.test_bundle import make_bundle
+
+    calls, marked = [], []
+    _fake_pyannote(monkeypatch, calls, returns_none=True)
+    monkeypatch.setattr("damwha_worker.models.downloads.mark_ready", marked.append)
+    make_bundle(tmp_path)
+
+    with pytest.raises(RuntimeError) as info:
+        PyannoteDiarizer(MODEL, None, "cpu", bundle_dir=str(tmp_path))
+
+    assert marked == []
+    msg = str(info.value)
+    assert str(tmp_path) in msg and "reinstall the app" in msg
+    assert "HF_TOKEN" not in msg
+
+
+def test_hub_load_returning_none_keeps_token_hint(monkeypatch):
+    import pytest
+
+    calls = []
+    _fake_pyannote(monkeypatch, calls, returns_none=True)
+
+    with pytest.raises(RuntimeError, match="HF_TOKEN"):
+        PyannoteDiarizer(MODEL, "t", "cpu")
 
 
 def test_other_model_id_ignores_bundle_dir(monkeypatch, tmp_path):

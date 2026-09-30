@@ -58,6 +58,12 @@ class PyannoteDiarizer:
                     errors.ErrorKind.PERMANENT,
                 )
             pipeline = Pipeline.from_pretrained(bundle_dir)
+            if pipeline is None:
+                raise RuntimeError(
+                    f"the bundled diarization model at {bundle_dir!r} failed to load — "
+                    "reinstall the app"
+                )
+            # 적재가 실제로 끝난 뒤에만 `ready`를 쓴다 — 먼저 쓰면 실패가 "준비됨"으로 보인다.
             downloads.mark_ready(model)
         else:
             # pyannote.audio 4.x renamed the auth param: use_auth_token → token
@@ -71,12 +77,12 @@ class PyannoteDiarizer:
             except Exception as exc:
                 _raise_auth_failure(model, exc)
                 raise
-        if pipeline is None:
-            # from_pretrained returns None when the license isn't accepted / token is bad
-            raise RuntimeError(
-                f"failed to load gated diarization model {model!r} — "
-                "check HF_TOKEN and that the model license is accepted on HuggingFace"
-            )
+            if pipeline is None:
+                # from_pretrained returns None when the license isn't accepted / token is bad
+                raise RuntimeError(
+                    f"failed to load gated diarization model {model!r} — "
+                    "check HF_TOKEN and that the model license is accepted on HuggingFace"
+                )
         # device는 registry의 torch_device()가 이미 검증한 'mps'|'cpu' — 폴백 없음 (spec §6)
         self._pipeline = pipeline.to(torch.device(device))
 
