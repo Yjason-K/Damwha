@@ -4,14 +4,14 @@ import { isUiLanguage, type UiLanguage } from "../i18n/locale";
  * 담화 화면 안의 화면 언어 — **흐름** (다국어 스펙 §4.1). 잎(executeJavaScript·파일 쓰기·메뉴 재구성)은
  * main.ts가 주입한다. 이 파일은 electron을 import하지 않는다.
  *
- * token-bridge.ts의 "main이 묻고 페이지가 답한다" 모양만 빌린다 — 렌더러 → main 채널을 만들지 않는다
- * (Phase 2 스펙 §6.11). 토큰 쪽의 submit·clear 직렬화(mutating)는 필요 없다: 언어 변경은 멱등이고 마지막
- * 값이 이긴다. 필요한 것은 **페이지 세대**다 — ⌘R 전 문서의 묻기가 늦게 끝나 새 문서에 옛 값을 밀어 넣지 않게.
+ * "main이 묻고 페이지가 답한다" — 렌더러 → main 채널을 만들지 않는다(Phase 2 스펙 §6.11). 페이지에서
+ * 나오는 값은 main이 건 호출의 반환값뿐이다. 쓰기 직렬화는 필요 없다: 언어 변경은 멱등이고 마지막 값이
+ * 이긴다. 필요한 것은 **페이지 세대**다 — ⌘R 전 문서의 묻기가 늦게 끝나 새 문서에 옛 값을 밀어 넣지 않게.
  */
 export const UI_LANGUAGE_ASK_SCRIPT =
   "window.__damwha_desktop?.uiLanguage ? window.__damwha_desktop.uiLanguage.next() : null";
 
-/** 값은 JSON으로만 싣는다(token-bridge.ts의 hfTokenShowCall과 같은 이유). */
+/** 값은 JSON으로만 싣는다 — 문자열을 스크립트에 이어 붙이면 따옴표 하나로 주입이 된다(status-view.ts의 renderCall과 같은 규칙). */
 export function uiLanguageShowCall(lang: UiLanguage): string {
   return `void window.__damwha_desktop?.uiLanguage?.show(${JSON.stringify(lang)});`;
 }

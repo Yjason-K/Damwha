@@ -18,7 +18,6 @@ function emptyView(notices: string[] = []): ServicesView {
   return {
     rows: [],
     models: [],
-    token: { masked: null, note: "" },
     notices,
   };
 }

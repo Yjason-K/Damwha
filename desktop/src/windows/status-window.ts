@@ -19,8 +19,8 @@ import type { ServiceId, ServiceStatus } from "../services/types";
  * **렌더러에서 main으로 오는 경로를 만들지 않는다** (스펙 §6.11 — preload도 IPC도 없다). Phase 4의
  * "서비스 다시 시작" 버튼(§6.10 2층)도 그 규칙 안에 있다: main이 페이지에 **묻고**
  * (`SERVICES_ASK_SCRIPT`), 사람이 무언가 누르면 그 호출이 답으로 끝난다. 밖으로 나오는 값은 main이
- * 건 호출의 결과이지 렌더러가 연 채널이 아니다 — `windows/token-bridge.ts`가 담화 화면의 토큰 다리에
- * 세운 것과 같은 논리다.
+ * 건 호출의 결과이지 렌더러가 연 채널이 아니다 — 담화 화면의 언어 다리(`windows/language-bridge.ts`)도
+ * 같은 논리다.
  */
 export interface StatusWindowHost<W> {
   /** 창을 만들고 services.html을 건다. `focus`가 false면 포커스를 뺏지 않고 띄운다. */
@@ -103,8 +103,8 @@ export const ASK_RETRY_LIMIT = 3;
 export function createStatusWindow<W>(host: StatusWindowHost<W>): StatusWindow {
   let current: W | null = null;
   /**
-   * 페이지 세대. 로드마다 오른다 — ⌘R 뒤의 새 페이지는 새 다리를 갖고, 그 전 세대의 묻기는 낡았다
-   * (token-bridge.ts의 `page`와 같은 장치, 같은 까닭).
+   * 페이지 세대. 로드마다 오른다 — ⌘R 뒤의 새 페이지는 새 다리를 갖고, 그 전 세대의 묻기는 낡았다.
+   * 낡은 세대의 묻기가 늦게 끝나 새 페이지에 옛 답을 밀어 넣지 않게 세대가 같을 때만 답을 받는다.
    */
   let page = 0;
   /**

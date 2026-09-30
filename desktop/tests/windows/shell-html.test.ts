@@ -6,7 +6,6 @@ import { describe, expect, it } from "vitest";
 import { CAUSES } from "../../src/diagnostics/causes";
 import { servicesView } from "../../src/windows/status-view";
 import { RETRY_LAYERS } from "../../src/windows/shell-hints";
-import { maskToken } from "../../src/config/token-store";
 import { STALL_MS, type ReadinessEntry } from "../../src/services/model-readiness";
 import type { ServiceStatus } from "../../src/services/types";
 
@@ -382,15 +381,12 @@ describe("services.html", () => {
       expect(got).toBe("pending");
     });
 
-    it("shows the token masked and has no token buttons — the input lives in Damwha now (스펙 2026-09-25 §5.4)", () => {
-      const { sandbox, byId, html } = loadPage("services.html");
-      const token = "hf_AbCdEfGhIjKlMnOpQrStUvWxYz01234567";
-      (sandbox.__damwha_render as (v: unknown) => void)(view({ maskedToken: maskToken(token) }));
-      expect(byId.get("token-value")!.textContent).toBe("hf_****…****4567");
-      expect(byId.get("token")!.textContent).not.toContain(token);
-      expect(byId.has("token-change")).toBe(false);
-      expect(byId.has("token-clear")).toBe(false);
-      expect(codeOf(html)).not.toMatch(/kind:\s*"token"/);
+    it("has no token section — the app does not use an HF token (스펙 2026-09-30 §5.1)", () => {
+      const { byId, html } = loadPage("services.html");
+      expect(byId.has("token")).toBe(false);
+      expect(byId.has("token-value")).toBe(false);
+      expect(html).not.toContain("허깅페이스 토큰");
+      expect(codeOf(html)).not.toMatch(/\.token\b/);
     });
 
     it("worker의 실패 문구도 글자로만 넣는다 — 그것은 HF가 보낸 남의 문자열이다", () => {

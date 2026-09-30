@@ -5,21 +5,16 @@ import * as vm from "vm";
 import { describe, expect, it } from "vitest";
 import { CAUSES } from "../../src/diagnostics/causes";
 import { DEGRADED_HINT, HINTS, RETRY_LAYERS } from "../../src/windows/shell-hints";
-import { HF_GATED_MODEL_PAGE_URL, maskToken } from "../../src/config/token-store";
 import { STALL_MS, type ReadinessEntry } from "../../src/services/model-readiness";
 import {
   HINT_PREFIX,
   causeWithFix,
   NO_SERVICES_YET,
-  NO_TOKEN_NOTE,
   RESTART_BUSY_LABEL,
   RESTART_CLEANING_NOTE,
   RESTART_LABEL,
   RESTART_NOT_OURS_NOTE,
   RESTORE_MENU_NOTE,
-  TOKEN_NOTE,
-  TOKEN_UNAVAILABLE_NOTE,
-  UNREADABLE_TOKEN_NOTE,
   failureDetail,
   parseServicesAction,
   renderCall,
@@ -51,7 +46,6 @@ function emptyView(notices: string[] = []): ServicesView {
   return {
     rows: [],
     models: [],
-    token: { masked: null, note: "" },
     notices,
   };
 }
@@ -418,7 +412,6 @@ describe("renderCall — main이 렌더러에서 실행하는 식", () => {
       ],
       // 모델 줄도 적대적인 문자열을 싣는다 — key는 HF repo id이고 cause에는 worker의 원문이 온다.
       models: [{ key: text, state: "실패", tone: "fail", notes: [text], cause: text, hint: text }],
-      token: { masked: text, note: text },
       notices: [text],
     };
     const { calls, sandbox } = run(renderCall(view));
@@ -665,45 +658,24 @@ describe("모델 준비 줄 (스펙 §6.9)", () => {
     expect(row.cause).toBe(CAUSES.modelDownloadFailed.text("BAAI/bge-m3", "ReadTimeout"));
   });
 
-  it("1층이 2층을 이긴다 — TRANSIENT면 메시지에 403이 섞여 있어도 수락 페이지로 보내지 않는다", () => {
+  it("1층이 2층을 이긴다 — TRANSIENT면 메시지에 403이 섞여 있어도 기다리라고 말한다", () => {
     const row = view([
       entry({ state: "failed", error: "model_download_failed: proxy said 403", errorKind: "TRANSIENT" }),
     ]).models[0];
     expect(row.hint).toBe(RETRY_LAYERS.download);
-    expect(row.cause).not.toContain(HF_GATED_MODEL_PAGE_URL);
+    expect(row.cause).toBe(CAUSES.modelDownloadFailed.text("BAAI/bge-m3", "proxy said 403"));
   });
 
-  it("401 — 코드가 hf_token_invalid면 토큰 재입력으로 보낸다 (P4-C8)", () => {
-    const row = view([
-      entry({
-        state: "failed",
-        error: "hf_token_invalid: Hugging Face rejected the token (401)",
-        errorKind: "PERMANENT",
-      }),
-    ]).models[0];
-    expect(row.cause).toContain(CAUSES.hfTokenInvalid.text);
-    expect(row.hint).toContain(HINTS.hfTokenInvalid as string);
-    expect(row.hint).toContain("허깅페이스 토큰");
-    expect(row.hint).toContain("담화 설정");
-    // 수락 페이지로 보내지 않는다 — 401과 403은 다른 안내다.
-    expect(row.cause).not.toContain(HF_GATED_MODEL_PAGE_URL);
+  it("has no token section", () => {
+    expect("token" in view([])).toBe(false);
   });
 
-  it("403 — 코드가 hf_gate_not_accepted면 수락 페이지와 3층(회의 재처리)으로 보낸다 (P4-C8)", () => {
+  it("shows a PERMANENT hf_gate_not_accepted readiness failure as a plain download failure", () => {
     const row = view([
-      entry({
-        key: "pyannote/speaker-diarization-community-1",
-        state: "failed",
-        error: "hf_gate_not_accepted: Hugging Face refused access (403)",
-        errorKind: "PERMANENT",
-        writer: "worker-1",
-      }),
+      entry({ state: "failed", error: "hf_gate_not_accepted: refused (403)", errorKind: "PERMANENT" }),
     ]).models[0];
-    expect(row.cause).toContain(HF_GATED_MODEL_PAGE_URL);
-    // Task 6의 문구를 그대로 쓴다 — 같은 원인을 두 곳이 적으면 갈린다.
-    expect(row.hint).toBe(HINTS.hfGateNotAccepted);
-    expect(row.hint).toContain("다시 처리");
-    expect(row.restart).toBeUndefined();
+    expect(row.cause).toBe(CAUSES.modelDownloadFailed.text("BAAI/bge-m3", "refused (403)"));
+    expect(row.tone).toBe("fail");
   });
 
   it("코드를 알아볼 수 없으면 일반 PERMANENT 문구로 간다 (R-11a 폴백)", () => {
@@ -776,46 +748,6 @@ describe("서비스 줄의 다시 시작 버튼 (스펙 §6.10 2층)", () => {
       logPathOf,
     });
     expect(view.rows[0].restart.disabled).toBe(false);
-  });
-});
-
-describe("토큰 절 (스펙 2026-09-25 §5.4)", () => {
-  it("shows only the masked token and points to the Damwha settings — no buttons here any more", () => {
-    const token = "hf_AbCdEfGhIjKlMnOpQrStUvWxYz01234567";
-    const view = servicesView({ statuses: [], restartNotice: null, logPathOf, maskedToken: maskToken(token) });
-    expect(view.token).toEqual({ masked: "hf_****…****4567", note: TOKEN_NOTE });
-    expect(JSON.stringify(view)).not.toContain(token);
-    expect(TOKEN_NOTE).toContain("담화 설정");
-    expect(servicesView({ statuses: [], restartNotice: null, logPathOf }).token).toEqual({ masked: null, note: NO_TOKEN_NOTE });
-    expect(NO_TOKEN_NOTE).toContain("담화 설정");
-  });
-
-  it("shows a note for all four token statuses (스펙 §5.4 '상태·마스킹 값') — never the raw token", () => {
-    const token = "hf_AbCdEfGhIjKlMnOpQrStUvWxYz01234567";
-    const masked = maskToken(token);
-
-    const present = servicesView({ statuses: [], restartNotice: null, logPathOf, maskedToken: masked, tokenStatus: "present" });
-    expect(present.token).toEqual({ masked, note: TOKEN_NOTE });
-
-    const absent = servicesView({ statuses: [], restartNotice: null, logPathOf, tokenStatus: "absent" });
-    expect(absent.token).toEqual({ masked: null, note: NO_TOKEN_NOTE });
-
-    // unreadable: 파일은 있는데 못 풀었다 — masked는 여전히 null(원문을 들고 있지 않다)이지만
-    // "없음"과 같은 안내를 주면 안 된다. 키체인 실패가 아니므로 담화 설정에서 다시 넣으라고 말한다.
-    const unreadable = servicesView({ statuses: [], restartNotice: null, logPathOf, tokenStatus: "unreadable" });
-    expect(unreadable.token).toEqual({ masked: null, note: UNREADABLE_TOKEN_NOTE });
-    expect(UNREADABLE_TOKEN_NOTE).toContain("담화 설정");
-
-    // unavailable: safeStorage를 못 쓴다 — "담화 설정에서 넣으세요"는 거짓 안내다(넣어도 저장되지
-    // 않는다). 키체인 안내(causes.ts·shell-hints.ts)가 이 화면에도 닿아야 한다.
-    const unavailable = servicesView({ statuses: [], restartNotice: null, logPathOf, tokenStatus: "unavailable" });
-    expect(unavailable.token).toEqual({ masked: null, note: TOKEN_UNAVAILABLE_NOTE });
-    expect(TOKEN_UNAVAILABLE_NOTE).toContain(CAUSES.safeStorageUnavailable.text);
-    expect(TOKEN_UNAVAILABLE_NOTE).toContain("키체인");
-
-    for (const view of [present, absent, unreadable, unavailable]) {
-      expect(JSON.stringify(view)).not.toContain(token);
-    }
   });
 });
 

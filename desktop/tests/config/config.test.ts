@@ -10,12 +10,12 @@ import {
   childEnv,
   DB_ENV_KEYS,
   defaultConfig,
+  launchEnv,
   LEGACY_DATABASE_URL,
   llmBaseUrl,
   loadConfig,
   nodeChildEnv,
   pycachePrefix,
-  PYTHON_ONLY_ENV_KEYS,
   refreshEnv,
   sanitizeChildEnv,
   STRIPPED_CHILD_ENV_KEYS,
@@ -757,74 +757,20 @@ describe("child env hygiene (Phase 4 스펙 §6.3)", () => {
   });
 });
 
-describe("HF_TOKEN goes to the Python children only (R-6b, 스펙 §6.4)", () => {
-  /**
-   * 토큰을 쓰는 것은 worker·embed와 그 자손(capabilities 프로브·`--once`·llm_entry)뿐이다. API와 마이그레이션 러너는
-   * Node 자식이고 토큰을 쓰지 않는다 — 최소 권한. 두 쪽의 env는 합성 함수가 다르다: Python은 childEnv, Node는
-   * nodeChildEnv. 개발자 셸에서 상속된 HF_TOKEN도 Node 자식에게 가지 않는다.
-   */
-  const TOKEN = "hf_KeychainTokenValue0123456789abcd";
-  const SHELL_TOKEN = "hf_fromTheDeveloperShell000000000";
-  const ctx = (env: Record<string, string>): LaunchContext => ({
-    repoRoot: null,
-    userData: "/u",
-    packaged: true,
-    databaseMode: "embedded",
-    env,
-    bins: { python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
-    diarizationModelDir: "/b/models/pyannote-speaker-diarization-community-1",
-    runId: "desktop-test",
-    searchDirs: [],
-    logFile: (id) => `/u/logs/${id}.log`,
-    signal: new AbortController().signal,
+describe("HF_TOKEN never reaches a child", () => {
+  it("drops an inherited HF_TOKEN from node children", () => {
+    expect("HF_TOKEN" in nodeChildEnv({ A: "1" }, { HF_TOKEN: "hf_shell" })).toBe(false);
   });
-
-  it("names HF_TOKEN as the Python-only key", () => {
-    expect(PYTHON_ONLY_ENV_KEYS).toEqual(["HF_TOKEN"]);
-  });
-
-  it("nodeChildEnv drops HF_TOKEN from both the live env and the inherited one, and keeps everything else", () => {
+  it("nodeChildEnv still lays the live env over the inherited one and drops keys without a value", () => {
     const env = nodeChildEnv(
-      { HF_TOKEN: TOKEN, DATABASE_URL: "postgresql://damwha@/damwha", PORT: "3000", PATH_OVERRIDE: "ctx" },
-      { HF_TOKEN: SHELL_TOKEN, PATH: "/usr/bin:/bin", HOME: "/Users/me", PATH_OVERRIDE: "shell", GONE: undefined },
+      { DATABASE_URL: "postgresql://damwha@/damwha", PATH_OVERRIDE: "ctx" },
+      { HF_TOKEN: "hf_shell", PATH: "/usr/bin:/bin", PATH_OVERRIDE: "shell", GONE: undefined },
     );
+    expect(env).toEqual({ DATABASE_URL: "postgresql://damwha@/damwha", PATH: "/usr/bin:/bin", PATH_OVERRIDE: "ctx" });
+  });
+  it("launchEnv carries no HF_TOKEN", () => {
+    const { env } = launchEnv(loadConfig(dir), 8123, "ko");
     expect("HF_TOKEN" in env).toBe(false);
-    expect(env).toEqual({
-      DATABASE_URL: "postgresql://damwha@/damwha",
-      PORT: "3000",
-      PATH: "/usr/bin:/bin",
-      HOME: "/Users/me",
-      PATH_OVERRIDE: "ctx",
-    });
-    expect(JSON.stringify(env)).not.toContain("hf_");
-  });
-
-  it("nodeChildEnv reads process.env when no inherited env is given, and does not change its input", () => {
-    vi.stubEnv("HF_TOKEN", SHELL_TOKEN);
-    vi.stubEnv("DAMWHA_TEST_INHERITED", "yes");
-    try {
-      const live = { HF_TOKEN: TOKEN, PORT: "3000" };
-      const env = nodeChildEnv(live);
-      expect("HF_TOKEN" in env).toBe(false);
-      expect(env.DAMWHA_TEST_INHERITED).toBe("yes");
-      expect(env.PORT).toBe("3000");
-      // 감독자가 쥔 ctx.env는 그대로다 — worker·embed는 여전히 그 토큰을 받는다.
-      expect(live.HF_TOKEN).toBe(TOKEN);
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
-  it("childEnv still carries the live token to worker and embed — and it beats the shell's", () => {
-    const c = ctx({ HF_TOKEN: TOKEN, PORT: "3000" });
-    expect(childEnv(c, { HF_TOKEN: SHELL_TOKEN }).HF_TOKEN).toBe(TOKEN);
-    expect(childEnv(c, {}).HF_TOKEN).toBe(TOKEN);
-    expect("HF_TOKEN" in nodeChildEnv(c.env, { HF_TOKEN: SHELL_TOKEN })).toBe(false);
-  });
-
-  it("childEnv never takes HF_TOKEN from the shell — the app is the only source (spec 2026-09-25 §5.1)", () => {
-    const c = ctx({ PORT: "3000" });
-    expect("HF_TOKEN" in childEnv(c, { HF_TOKEN: SHELL_TOKEN })).toBe(false);
   });
 });
 

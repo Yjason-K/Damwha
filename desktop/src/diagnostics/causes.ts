@@ -22,8 +22,6 @@
  * electron을 import하지 않는 순수 모듈이다.
  */
 
-import { HF_GATED_MODEL_PAGE_URL } from "../config/token-store";
-
 export interface Cause {
   /** detail 안에서 이 원인을 알아보는 모양. 다른 원인의 문구와 겹치면 안 된다(테스트가 본다). */
   match: RegExp;
@@ -84,17 +82,6 @@ export const CAUSES = {
     selfRecovers: false,
   },
   /**
-   * `safeStorage.isEncryptionAvailable()`이 false다 (스펙 2026-09-25 §5.1 — Phase 4 §6.4의 첫 실행
-   * 게이트를 대체했다). **더는 기동을 막지 않는다** — `app/token-boot.ts`가 이 상태를 `unavailable`로
-   * 읽고 토큰 없이 서비스를 띄운다. 평문으로 저장하는 폴백은 없다. 담화 화면의 토큰 다리
-   * (`windows/token-bridge.ts`)가 그 화면에서 저장을 시도할 때만 이 문구를 쓴다.
-   */
-  safeStorageUnavailable: {
-    match: /키체인을 쓸 수 없어 허깅페이스 토큰을/,
-    text: "macOS 키체인을 쓸 수 없어 허깅페이스 토큰을 안전하게 보관할 수 없어요. 토큰 없이 실행 중이에요 — 화자 분리가 필요한 기능은 막혀 있어요.",
-    selfRecovers: false,
-  },
-  /**
    * 기동 게이트 — 이전 실행이 남긴 고아를 찾는 `ps` 스캔이 실패했다 (Phase 4 스펙 §6.5·§8, P4-C22). 서비스를
    * 하나도 띄우지 않는다: 그대로 진행하면 고아 worker와 새 worker가 같은 job을 집는다. main.ts가 manual 실패로
    * 던진다(app/reap-on-start.ts) — 같은 ps가 3·8·20초 뒤에 달라질 근거가 없고, 메뉴의 "다시 시도"가 스캔을
@@ -105,28 +92,12 @@ export const CAUSES = {
     text: "이전 실행이 남긴 프로세스를 확인하지 못해 서비스를 띄우지 않았어요.",
     selfRecovers: false,
   },
-  /** 토큰 검증 — HF가 401·403으로 거절했다 (스펙 §8 "토큰이 유효하지 않아요"). 담화 화면의 토큰 폼이 입력칸 아래에 사유와 함께 싣는다. */
-  hfTokenInvalid: {
-    match: /허깅페이스 토큰이 유효하지 않아요/,
-    text: "허깅페이스 토큰이 유효하지 않아요.",
-    selfRecovers: false,
-  },
-  /**
-   * 모델 다운로드 403 — 토큰의 계정이 그 모델의 사용 조건에 동의하지 않았다 (스펙 §8). 조건 수락이 필요한 모델은
-   * 화자 분리 하나라 그 수락 페이지를 싣는다. 이 원인의 소유는 Task 6이다 — 화면에 싣는 일(Task 11)은 이것을 쓴다.
-   */
-  hfGateNotAccepted: {
-    match: /사용 조건 수락이 필요해요/,
-    text: `이 모델은 사용 조건 수락이 필요해요 — ${HF_GATED_MODEL_PAGE_URL}`,
-    selfRecovers: false,
-  },
   /**
    * 모델 다운로드가 실패했다 (스펙 §6.9·§8). `app_setting.model_readiness`의 `failed` 항목에서
    * 온다 — 원문은 worker의 `errors.download_error`가 만든 `"<code>: <message>"`다.
    *
-   * **401·403은 이 원인이 아니다.** 그 둘은 code(`hf_token_invalid`·`hf_gate_not_accepted`)로 갈려
-   * 위의 `hfTokenInvalid`·`hfGateNotAccepted`로 간다(판정 R-11a). 여기 오는 것은 나머지 —
-   * 네트워크·타임아웃·5xx·오프라인 캐시 미스, 그리고 code를 알아볼 수 없는 경우다.
+   * 네트워크·타임아웃·5xx·오프라인 캐시 미스, 그리고 code를 알아볼 수 없는 경우가 여기 온다.
+   * 401·403(앱 밖 개발 경로에서만 생긴다)도 여기로 온다.
    *
    * 층은 이 원인이 정하지 않는다. `errorKind`가 TRANSIENT면 1층(기다린다), 그 밖이면 2층(다시
    * 시작)이고, 그 판정은 화면(status-view.ts의 modelRows)에 있다 — 여기 문구는 **무엇이**

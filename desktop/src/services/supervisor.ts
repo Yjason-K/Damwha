@@ -676,13 +676,12 @@ export function createSupervisor(
    * 한 서비스만 내렸다가 다시 띄운다 (스펙 §6.10의 2층 — 상태 창의 "서비스 다시 시작").
    *
    * `retry()`로는 안 된다. 그쪽의 needsRetry는 `process !== "running" || result === null`이라
-   * **살아 있는 서비스를 건너뛴다**. 토큰을 바꾼 뒤 필요한 것은 정확히 그 반대다 — HF_TOKEN은
-   * 자식 env로만 들어가므로(config.ts) 살아 있는 worker·embed는 옛 토큰을 쥔 채로 계속 돈다.
+   * **살아 있는 서비스를 건너뛴다**. 상태 창의 버튼이 필요한 것은 정확히 그 반대다 — 살아 있지만
+   * 멈춘(예: 모델 받기가 무진행) 서비스를 내렸다가 다시 띄운다.
    *
    * 감독자 객체의 **메서드**다. 자유 함수로 만들 수 없다 — 클로저의 runtimes·bring이 필요하다.
    *
-   * 거부는 던지지 않는다. Task 11의 applyTokenChange가 그것을 `skipped`로 적어야 하고, 예외로
-   * 올리면 토큰 교체 전체가 한 서비스 때문에 실패한다. 까닭은 supervisor.log에 남는다.
+   * 거부는 던지지 않는다. 까닭은 supervisor.log에 남는다.
    */
   function restartService(id: ServiceId): Promise<void> {
     const rt = runtimes.get(id)!;

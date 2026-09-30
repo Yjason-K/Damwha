@@ -31,8 +31,8 @@ export interface LaunchOptions {
 /**
  * API 자식이 받는 env **전체** — 두 런처가 이것 하나를 쓴다.
  *
- * - 상속 env 위에 감독자의 env를 얹고 Python 전용 키(HF_TOKEN)를 뺀다 (config.ts의 nodeChildEnv, R-6b). API는
- *   토큰을 쓰지 않는다 — 감독자의 ctx.env에 있어도, 개발자 셸에서 상속돼도 여기서는 빠진다.
+ * - 상속 env 위에 감독자의 env를 얹고 HF_TOKEN을 뺀다 (config.ts의 nodeChildEnv, R-6b). 앱은 토큰을 쓰지
+ *   않는다 — 개발자 셸에서 상속된 토큰도 여기서는 빠진다.
  * - 상속분을 까는 이유: env를 주면 환경이 통째로 **대체**된다 — 예전엔 options.env만 줘서 packaged의 API 자식이
  *   PATH·HOME·TMPDIR·LANG 없이 돌았다. 실측 결과: be/src/system/capabilities.ts의 execFile('sysctl', …)이 이름만으로
  *   부르는데, PATH가 없으면 execvp가 /usr/bin:/bin으로 되돌아가고 /usr/sbin/sysctl은 거기 없어 ENOENT — packaged

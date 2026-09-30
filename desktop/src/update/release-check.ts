@@ -2,7 +2,7 @@
  * 새 데스크톱 릴리스 조회 (Phase 6b-1 스펙 §4.1).
  *
  * electron을 import하지 않는다 — main.ts가 전역 fetch를 주입하고, 테스트는 네트워크 없이 부른다.
- * 모양은 config/token-store.ts의 verifyHfToken을 따른다: 신호로 요청을 끊고 경주로 결과를 닫는다
+ * 시간 상한은 fetch의 협조에 기대지 않는다: 신호로 요청을 끊고 경주로 결과를 닫는다
  * (본문 읽기와 모든 페이지 포함).
  *
  * **불완전한 조회로 "최신"이라 말하지 않는다.** 후보가 하나도 없거나 목록을 끝까지 못 읽으면 failed다.
@@ -211,7 +211,10 @@ export async function checkForUpdate(current: string, deps: CheckDeps): Promise<
   }
 }
 
-/** 원본 예외 메시지를 옮기지 않는다 — 모양이 맞는 오류 코드만 싣는다 (token-store.ts와 같은 규칙). */
+/**
+ * 원본 예외 메시지를 옮기지 않는다 — 모양이 맞는 오류 코드만 싣는다. 네트워크 스택이 요청 정보를 메시지에
+ * 담는 경우가 있고, 그 문자열이 화면과 로그에 그대로 샌다.
+ */
 function networkDetail(e: unknown): string {
   const code = errorCode(e);
   return code === null ? "GitHub에 연결하지 못했어요" : `GitHub에 연결하지 못했어요 (${code})`;

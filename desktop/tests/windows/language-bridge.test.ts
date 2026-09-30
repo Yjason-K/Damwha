@@ -7,7 +7,7 @@ import {
 } from "../../src/windows/language-bridge";
 import type { UiLanguage } from "../../src/i18n/locale";
 
-/** 가짜 페이지 — next()로 돌려줄 값을 줄 세우고 show 호출을 모은다 (token-bridge.test.ts의 fakePage와 같은 모양). */
+/** 가짜 페이지 — next()로 돌려줄 값을 줄 세우고 show 호출을 모은다. */
 function fakePage() {
   const shown: string[] = [];
   const pending: Array<(v: unknown) => void> = [];

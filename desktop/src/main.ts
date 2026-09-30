@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, nativeTheme, safeStorage, shell } from "electron";
+import { app, BrowserWindow, dialog, nativeTheme, shell } from "electron";
 import { execFile } from "child_process";
 import * as fs from "fs";
 import * as net from "net";
@@ -17,9 +17,6 @@ import { launchVite } from "./dev/vite-process";
 import { lastMeaningfulLine } from "./diagnostics/stderr";
 import { createServicesWindow, showStatus, type ShellStatus } from "./windows/shell-window";
 import { windowBackground } from "./windows/window-background";
-import { makeTokenStore, maskToken, tokenFilePath, verifyHfToken } from "./config/token-store";
-import { readBootToken } from "./app/token-boot";
-import { createTokenBridge } from "./windows/token-bridge";
 import { ServiceFailure } from "./services/failure";
 import { CAUSES } from "./diagnostics/causes";
 import {
@@ -30,7 +27,6 @@ import {
   shellStatusFrom,
   type ServicesAction,
 } from "./windows/status-view";
-import { applyTokenChange, ownedByStatus, type TokenChangeResult } from "./windows/apply-token-change";
 import { createStatusWindow, mayAutoOpen } from "./windows/status-window";
 import { applyNavigationBoundary, applyPermissionBoundary } from "./windows/permissions";
 import { mayRenderShell } from "./windows/shell-latch";
@@ -202,7 +198,7 @@ let launchCtx: { ctx: Omit<LaunchContext, "signal">; baseline: ApiEnv; mode: Dat
  * 종료 회수(B층, app/reap-on-quit.ts)가 볼 이번 실행의 run-id와 트리. createSupervisorFor가 트리를 계산하는 자리 —
  * 어떤 자식보다 먼저 — 에서 채우고 **지우지 않는다.** launchCtx·supervisor와 수명을 같이하지 않는 것이 요점이다:
  * B층은 핸들도 감독자 상태도 보지 않아야 A층이 놓친 것을 찾는다. 재시도가 다시 채우면 최신 것이 이긴다(run-id는
- * 실행 내내 같고, 자식을 띄우는 자기 트리도 같다). null이면 — 토큰 온보딩 중 종료처럼 여기까지 오지 못했으면 —
+ * 실행 내내 같고, 자식을 띄우는 자기 트리도 같다). null이면 — 감독자를 세우기 전에 종료했으면 —
  * 이번 실행의 자식이 있을 수 없어 B층을 건너뛴다.
  */
 let quitReapTarget: QuitReapTarget | null = null;
@@ -224,11 +220,6 @@ let configWarning: string | null = null;
  * 보고했다. 살아 있을 때 찍어 두는 일은 모듈 밖에서만 할 수 있어서 이 자리에 있다.
  */
 let knownWorkerDescendants: ReadonlySet<number> | undefined;
-/**
- * 이번 실행이 읽었거나 담화 화면에서 받은 HF 토큰 (스펙 2026-09-25 §5.1). 한 번 읽으면 재시도·창
- * 재열기가 Keychain을 다시 묻지 않는다. **로그·화면에 싣지 않는다.** 자식에게는 launchEnv가 ctx.env로만 넘긴다.
- */
-let hfToken: string | null = null;
 /**
  * 상태 창이 그리는 `app_setting.model_readiness`의 마지막 스냅숏 (스펙 §6.9). 감독자의 준비 유예가 쓰는
  * 것과 **같은 리더·같은 해석**이다 — 화면이 두 번째 경로로 읽으면 "화면에는 받는 중인데 감독자는 실패로
@@ -326,12 +317,11 @@ function createWindow(): BrowserWindow {
     },
   });
   applyNavigationBoundary(created, allowedOrigins);
-  // ⌘R 뒤의 새 문서는 새 __damwha_desktop을 갖는다 — 다시 붙여야 토큰 폼이 "확인 중"에 멈추지 않는다.
+  // ⌘R 뒤의 새 문서는 새 __damwha_desktop을 갖는다 — 다시 붙여야 화면 언어 다리가 새 문서에 닿는다.
   // 첫 로드는 reattachWindow가 붙인다(그때는 아직 updateAttached가 서기 전이라 여기서는 건너뛴다).
   // 셸 화면(file://)으로 돌아간 창은 showShell이 updateAttached를 null로 내리므로 붙지 않는다.
   created.webContents.on("did-finish-load", () => {
     if (updateAttached === created && !created.isDestroyed()) {
-      tokenBridge.attach(created);
       languageBridge.attach(created);
     }
   });
@@ -719,7 +709,7 @@ const statusWindow = createStatusWindow<BrowserWindow>({
 
 /**
  * 담화 화면의 화면 언어 (다국어 스펙 §4.1). 흐름은 windows/language-bridge.ts — 여기는 잎이다.
- * 붙는 자리는 tokenBridge와 같은 둘이다(reattachWindow의 첫 부착, ⌘R 뒤 did-finish-load).
+ * 붙는 자리는 둘이다: 담화 화면이 처음 붙을 때(reattachWindow)와 ⌘R로 다시 로드될 때(createWindow의 did-finish-load).
  */
 const languageBridge = createLanguageBridge<BrowserWindow>({
   run: (w, script) => w.webContents.executeJavaScript(script),
@@ -729,69 +719,6 @@ const languageBridge = createLanguageBridge<BrowserWindow>({
   save: (lang) => makeUiLanguageStore(app.getPath("userData")).write(lang),
   onChange: () => refreshMenu(),
   log: appendSupervisorLog,
-});
-
-/**
- * 담화 화면의 HF 토큰 (스펙 2026-09-25 §4). 흐름은 windows/token-bridge.ts에 있다 — 여기는 잎이다.
- * 붙는 자리는 둘이다: 담화 화면이 처음 붙을 때(reattachWindow)와 ⌘R로 다시 로드될 때(createWindow의 did-finish-load).
- */
-const tokenBridge = createTokenBridge<BrowserWindow>({
-  run: (w, script) => w.webContents.executeJavaScript(script),
-  alive: (w) => !w.isDestroyed(),
-  isRecording: () => (updateAttached === null ? Promise.resolve(false) : isRecordingIn(updateAttached)),
-  verify: (token) => verifyHfToken(token),
-  // trackRestart가 진행 중에 actionNotice를 "다시 시작 · … — 진행 중이에요."로 세우는데, 재시작
-  // 버튼(restartFromStatusWindow)과 달리 여기서는 그것을 덮는 마무리 줄이 없었다 — 상태 창이 토큰을
-  // 바꾼 뒤에도 영원히 "진행 중이에요."에 멈춰 있었다. 옛 changeHfToken의 마무리 문구를 그대로 쓴다.
-  apply: async (token) => {
-    let result: TokenChangeResult;
-    try {
-      result = await applyTokenChange(
-        {
-          store: makeTokenStore(app.getPath("userData"), safeStorage),
-          // 감독자가 없으면 얹을 live env가 없다. 그래도 저장·캐시는 해 두어야 다음 기동이 새 값을 쓴다.
-          liveEnv: launchCtx?.ctx.env ?? {},
-          restartService: (id) =>
-            trackRestart(id, async () => {
-              const sup = supervisor;
-              if (sup === null) throw new Error(NO_SERVICES_YET);
-              await sup.restartService(id);
-            }),
-          owned: ownedByStatus(supervisor?.statuses() ?? []),
-          // live env와 **같은 순간** 모듈 전역 캐시를 갱신한다 — 하나만 바꾸면 감독자 재생성이 옛 값을 되살린다.
-          cacheToken: (t) => {
-            hfToken = t;
-          },
-        },
-        token,
-      );
-    } catch (e) {
-      // 저장·증명이 실패하면 서비스는 하나도 다시 시작되지 않았다 — "진행 중이에요."를 그대로 두면
-      // 안 끝난 것처럼 보인다. 다리(token-bridge.ts)가 이 예외로 자기 화면에도 알리도록 다시 던진다.
-      actionNotice = "토큰을 바꾸지 못했어요 — 서비스는 다시 시작하지 않았어요.";
-      statusWindow.refresh();
-      throw e;
-    }
-    const labels = (ids: readonly ServiceId[]) => ids.map((id) => SERVICE_LABELS[id]).join(", ");
-    const parts = [
-      result.restarted.length > 0 ? `다시 시작: ${labels(result.restarted)}` : null,
-      result.skipped.length > 0
-        ? `다시 시작하지 못함: ${labels(result.skipped)} (앱이 띄운 서비스가 아니거나 내려가는 중이에요)`
-        : null,
-    ].filter((line): line is string => line !== null);
-    actionNotice = ["토큰을 바꿨어요", ...parts].join(" · ");
-    statusWindow.refresh();
-    return result;
-  },
-  clear: () => {
-    makeTokenStore(app.getPath("userData"), safeStorage).clear();
-    hfToken = null;
-    if (launchCtx !== null) delete launchCtx.ctx.env.HF_TOKEN;
-  },
-  openExternal: (url) => shell.openExternal(url),
-  labels: (ids) => ids.map((id) => SERVICE_LABELS[id]).join(", "),
-  log: appendSupervisorLog,
-  onChange: () => statusWindow.refresh(),
 });
 
 /** 모델 준비 행을 다시 읽는 간격. 감독자의 폴링과 같은 근거다 (writer가 초당 1회 이하로 누른다). */
@@ -1028,13 +955,9 @@ function servicesViewNow() {
     postgresLogDir: mode?.kind === "embedded" ? pgLayout(app.getPath("userData")).logDir : null,
     logPathOf,
     migrationCheckSkipped: migrationWatch.skippedFor(supervisor?.runtimeOf("api")?.result?.handle),
-    // 스펙 §6.9·§6.4 — 모델 준비와 토큰. 토큰은 **가린 모양만** 간다.
+    // 스펙 §6.9 — 모델 준비.
     modelReadiness,
     restarting: [...restartingServices],
-    maskedToken: hfToken === null ? null : maskToken(hfToken),
-    // 다리(token-bridge.ts)가 쥔 상태를 그대로 넘긴다 — unavailable·unreadable도 화면이 구분해야
-    // "없음"으로 보이는데 담화 설정에서 넣어도 저장되지 않는 악순환이 생기지 않는다 (스펙 §5.4).
-    tokenStatus: tokenBridge.state().status,
     actionNotice,
   });
 }
@@ -1096,7 +1019,6 @@ async function reattachWindow(mine: number): Promise<void> {
   if (attachedWindow === target) {
     updateAttached = target;
     updateScheduler?.onAttached();
-    tokenBridge.attach(target);
     languageBridge.attach(target);
   }
   // 붙기 전에 넘어진 서비스(번들 python이 없으면 worker는 몇 밀리초 만에 넘어진다)는 그때 실패 화면에
@@ -1402,18 +1324,6 @@ async function passDataGuard(mine: number, layout: PgLayout, binaries: PgBinarie
  */
 async function createSupervisorFor(mine: number): Promise<boolean> {
   const userData = app.getPath("userData");
-  // 토큰은 **읽기만** 한다 — 없어도 기동한다 (스펙 2026-09-25 §5.1, Phase 4 §6.4의 첫 실행 게이트를 대체한다).
-  // 이미 이번 실행에서 읽었거나 넣었으면(hfToken) 다시 읽지 않는다 — "다시 시도"가 방금 넣은 토큰을 잃지 않게.
-  const boot =
-    hfToken !== null
-      ? { status: "present" as const, token: hfToken }
-      : readBootToken({
-          store: makeTokenStore(userData, safeStorage),
-          fileExists: () => fs.existsSync(tokenFilePath(userData)),
-          log: appendSupervisorLog,
-        });
-  hfToken = boot.token;
-  tokenBridge.boot(boot.status, boot.token === null ? null : maskToken(boot.token));
 
   const cfg = loadConfig(userData);
   if (cfg.warning !== undefined) appendSupervisorLog(cfg.warning);
@@ -1459,8 +1369,7 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
   // 소유하지 않는다(llm_server.py) — 고정 포트(개발 .env의 8000)를 쓰면 사람이 손으로 띄운 서버를 앱의
   // worker가 그대로 쓰게 되고, 그 서버의 모델도 수명도 앱이 모른다. 실제 bind는 job 직전이라 그 사이 다른
   // 프로세스가 포트를 가져갈 수 있고, 그때는 LLM 서버 기동 실패로 드러난다.
-  // 토큰은 env에만 싣는다 — 재적용의 기준선에 들어가면 첫 재시도가 지운다 (config.ts의 launchEnv).
-  const { env, baseline } = launchEnv(cfg, await freePort(), hfToken, pickUiLanguage(app.getPreferredSystemLanguages()));
+  const { env, baseline } = launchEnv(cfg, await freePort(), pickUiLanguage(app.getPreferredSystemLanguages()));
 
   const ctx: Omit<LaunchContext, "signal"> = {
     repoRoot: resolved,

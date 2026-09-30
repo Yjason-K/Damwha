@@ -348,7 +348,7 @@ describe("createConfigReloader — the LLM address this run chose (Phase 4 스�
       const file = path.join(dir, "config.json");
       fs.writeFileSync(file, JSON.stringify({ PORT: "3000", LENS_LLM_BASE_URL: "http://127.0.0.1:8000/v1" }));
       const cfg = loadConfig(dir);
-      const live = launchEnv(cfg, 51234, "hf_launchTokenValue000000000", "ko");
+      const live = launchEnv(cfg, 51234, "ko");
       expect(live.env.LENS_LLM_BASE_URL).toBe(llmBaseUrl(51234));
       expect("LENS_LLM_BASE_URL" in live.baseline).toBe(false);
 
@@ -370,31 +370,16 @@ describe("createConfigReloader — the LLM address this run chose (Phase 4 스�
   });
 });
 
-describe("createConfigReloader — the Keychain token this run carries (Phase 4 스펙 §6.4)", () => {
+describe("createConfigReloader — HF_TOKEN never enters the run env (스펙 2026-09-30 §5.1)", () => {
   /**
-   * HF_TOKEN은 기동 게이트가 Keychain에서 읽어 감독자의 env에 얹는다(main.ts → launchEnv). config.json은
-   * 그 키를 정할 수 없으므로(APP_OWNED_KEYS) 파일에 절대 없다 — 기준선에 들어가면 첫 재시도가 "파일에서
-   * 지운 키"로 읽고 살아 있는 env에서 지워, 백오프가 되살린 worker가 토큰 없이 뜬다. LENS_LLM_BASE_URL과
-   * 같은 자리다. 파일이 적은 값이 그것을 바꿔도 안 되고, 어느 로그에도 값이 남으면 안 된다.
+   * 앱은 HF 토큰을 쓰지 않는다 — 화자 분리 모델은 앱에 들어 있다. config.json은 그 키를 정할 수 없고
+   * (APP_OWNED_KEYS), launchEnv도 싣지 않는다. 사람이 파일에 적어도 재적용이 살아 있는 env로 옮기지 않고,
+   * 어느 로그에도 값이 남지 않는다.
    */
-  const TOKEN = "hf_KeychainTokenValue0123456789abcd";
-
-  it("carries the token in the live env but not in the reload baseline", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-reload-"));
-    try {
-      const live = launchEnv(loadConfig(dir), 51234, TOKEN, "ko");
-      expect(live.env.HF_TOKEN).toBe(TOKEN);
-      expect("HF_TOKEN" in live.baseline).toBe(false);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("launchEnv without a token leaves HF_TOKEN out of env entirely", () => {
+  it("launchEnv leaves HF_TOKEN out of env and baseline", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-reload-"));
     try {
-      const cfg = loadConfig(tempDir);
-      const live = launchEnv(cfg, 51234, null, "ko");
+      const live = launchEnv(loadConfig(tempDir), 51234, "ko");
       expect("HF_TOKEN" in live.env).toBe(false);
       expect("HF_TOKEN" in live.baseline).toBe(false);
     } finally {
@@ -402,13 +387,13 @@ describe("createConfigReloader — the Keychain token this run carries (Phase 4 
     }
   });
 
-  it("keeps it through reloads whether the file names a token or not, and never logs the value", () => {
+  it("does not pick up a token the file names on reload, and never logs the value", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-reload-"));
     try {
       const file = path.join(dir, "config.json");
       fs.writeFileSync(file, JSON.stringify({ PORT: "3000", SUMMARY_LLM_MODEL: "a/one" }));
       const cfg = loadConfig(dir);
-      const live = launchEnv(cfg, 51234, TOKEN, "ko");
+      const live = launchEnv(cfg, 51234, "ko");
 
       const log: string[] = [];
       const reload = createConfigReloader({
@@ -417,22 +402,15 @@ describe("createConfigReloader — the Keychain token this run carries (Phase 4 
         log: (line) => void log.push(line),
       });
 
-      // 사람이 파일에 다른 토큰을 적었다 — 앱 소유 키라 버려지고 경고만 남는다.
+      // 사람이 파일에 토큰을 적었다 — 앱 소유 키라 버려지고 경고만 남는다.
       fs.writeFileSync(file, JSON.stringify({ PORT: "3000", SUMMARY_LLM_MODEL: "a/two", HF_TOKEN: "hf_fromTheFile000000000000" }));
       reload();
-      expect(live.env.HF_TOKEN).toBe(TOKEN);
-      // 같은 재적용이 다른 키는 실제로 옮겼다 — 재적용이 돌지 않아서 남은 것이 아니다.
+      expect("HF_TOKEN" in live.env).toBe(false);
+      // 같은 재적용이 다른 키는 실제로 옮겼다 — 재적용이 돌지 않아서 빠진 것이 아니다.
       expect(live.env.SUMMARY_LLM_MODEL).toBe("a/two");
-
-      // 파일에서 그 키도, 다른 키도 사라졌다.
-      fs.writeFileSync(file, JSON.stringify({ PORT: "3000" }));
-      reload();
-      expect(live.env.HF_TOKEN).toBe(TOKEN);
-      expect(live.env.SUMMARY_LLM_MODEL).toBeUndefined();
 
       const all = log.join("\n");
       expect(all).toContain("HF_TOKEN");
-      expect(all).not.toContain(TOKEN);
       expect(all).not.toContain("hf_fromTheFile000000000000");
       expect(log.filter((l) => l.includes("다시 읽었어요")).join("\n")).not.toContain("HF_TOKEN");
     } finally {
@@ -446,7 +424,7 @@ describe("createConfigReloader — the device summary language (다국어 스펙
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-reload-"));
     try {
       const cfg = loadConfig(dir);
-      const live = launchEnv(cfg, 51234, null, "en");
+      const live = launchEnv(cfg, 51234, "en");
       expect(live.env.SUMMARY_LANGUAGE).toBe("en");
       expect("SUMMARY_LANGUAGE" in live.baseline).toBe(false);
 
@@ -466,7 +444,7 @@ describe("createConfigReloader — the device summary language (다국어 스펙
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "damwha-reload-"));
     try {
       fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ SUMMARY_LANGUAGE: "transcript" }));
-      const live = launchEnv(loadConfig(dir), 51234, null, "en");
+      const live = launchEnv(loadConfig(dir), 51234, "en");
       expect(live.env.SUMMARY_LANGUAGE).toBe("transcript");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

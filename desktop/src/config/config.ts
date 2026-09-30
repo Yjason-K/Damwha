@@ -97,15 +97,16 @@ interface AppOwnedKey {
  *   config.json 한 줄로 API가, 또는 **인증이 없는** embed 서비스가 LAN에 열린다. embed 쪽은
  *   be/worker/damwha_worker/embed_service.py가 이 값을 uvicorn.run(host=…)에 그대로 넘긴다.
  * - 나머지: 번들 python 자식의 env를 앱이 주장한다 (Phase 4 스펙 §6.3, appOwnedChildEnv).
- *   HF_TOKEN은 값을 싣지 않는다. LENS_LLM_MANAGED=false는 앱이 고른 빈 포트에서 아무 서버도 띄우지 않게 해
- *   모든 렌즈·요약 job을 죽은 포트로 보내므로 받지 않는다 — 직접 띄운 서버의 탈출구는 LENS_LLM_SERVER_BIN이다.
+ *   HF_TOKEN은 싣지 않는다 — 앱은 토큰을 쓰지 않는다(스펙 2026-09-30). LENS_LLM_MANAGED=false는 앱이
+ *   고른 빈 포트에서 아무 서버도 띄우지 않게 해 모든 렌즈·요약 job을 죽은 포트로 보내므로 받지 않는다 —
+ *   직접 띄운 서버의 탈출구는 LENS_LLM_SERVER_BIN이다.
  *
  * Map인 이유: 객체 리터럴에 `key in`을 쓰면 `toString` 같은 키가 프로토타입에서 걸린다.
  */
 const APP_OWNED_KEYS: ReadonlyMap<string, AppOwnedKey> = new Map<string, AppOwnedKey>([
   ["HOST", { rule: `앱이 ${LOOPBACK}으로 고정합니다` }],
   ["EMBED_SERVICE_HOST", { rule: `앱이 ${LOOPBACK}으로 고정합니다` }],
-  ["HF_TOKEN", { rule: "토큰은 앱이 따로 관리합니다", secret: true }],
+  ["HF_TOKEN", { rule: "앱은 HF 토큰을 쓰지 않습니다 — 화자 분리 모델은 앱에 들어 있어요", secret: true }],
   ["LENS_LLM_BASE_URL", { rule: "LLM 서버 주소는 앱이 빈 포트를 골라 정합니다" }],
   [
     "LENS_LLM_MANAGED",
@@ -206,9 +207,8 @@ export function llmBaseUrl(port: number): string {
  * worker와 embed가 이 한 env를 받고, worker가 띄우는 자식 셋(capabilities 프로브·`--once`·llm_entry)은
  * env= 없이 그것을 상속한다 — 여기 넣은 값이 다섯 프로세스 모두에 닿는다.
  *
- * HF_TOKEN은 여기 없다 — 기동 때 Keychain에서 읽은 값(app/token-boot.ts)을 launchEnv가 ctx.env에 싣는다.
- * 없으면 싣지 않고, childEnv가 상속분(개발자 셸의 HF_TOKEN)도 버린다. 토큰 교체·삭제는 그 ctx.env를 고친다
- * (windows/token-bridge.ts). Node 자식(API·마이그레이션 러너)은 nodeChildEnv가 토큰을 뺀다 (PYTHON_ONLY_ENV_KEYS).
+ * HF_TOKEN은 싣지 않는다. 화자 분리 모델은 DIARIZATION_MODEL_DIR의 번들에서 읽는다(스펙 2026-09-30 §3.1).
+ * childEnv가 상속분(개발자 셸의 HF_TOKEN)도 버린다.
  */
 export function appOwnedChildEnv(ctx: LaunchContext): Record<string, string> {
   const out: Record<string, string> = {
@@ -240,9 +240,8 @@ export function appOwnedChildEnv(ctx: LaunchContext): Record<string, string> {
  * { ...sanitizeChildEnv({ ...(inherited − HF_TOKEN), ...ctx.env }), ...appOwnedChildEnv(ctx) }
  * ```
  *
- * 1. **상속분에서 HF_TOKEN을 제거한다.** 토큰의 출처는 앱 하나다 (스펙 2026-09-25 §5.1).
- *    셸에서 물려받은 HF_TOKEN을 합성에 남기면, 앱이 "토큰 없음"이라 말하는 동안 worker는
- *    셸 토큰으로 화자 분리에 성공한다 — 게이트와 실제가 갈린다.
+ * 1. **상속분에서 HF_TOKEN을 제거한다.** 앱은 토큰을 쓰지 않는다 — 셸 토큰이 남으면 번들이 없을 때의
+ *    hub 폴백이 조용히 성공해 설치가 깨진 것을 가린다(스펙 2026-09-30 §5.1).
  * 2. **합친 뒤 씻는다.** 상속분만 씻고 ctx.env를 뒤에 합치면, config.json이 임의 문자열 키를
  *    통과시키므로(loadConfig의 pass-through) PYTHONHOME 같은 키가 되돌아온다. loadConfig가 이제
  *    그런 키를 버리지만 이 규칙은 그것에 기대지 않는다.
@@ -255,30 +254,23 @@ export function childEnv(
   ctx: LaunchContext,
   inherited: Record<string, string | undefined> = process.env,
 ): Record<string, string> {
-  // 토큰의 출처는 앱 하나다. 셸에서 물려받은 HF_TOKEN을 깔면, 앱이 "토큰 없음"이라 말하는 동안 worker는
-  // 셸 토큰으로 화자 분리에 성공한다 — 게이트와 실제가 갈린다(스펙 2026-09-25 §5.1).
+  // 상속분에서 HF_TOKEN을 제거한다. 앱은 토큰을 쓰지 않는다 — 셸 토큰이 남으면 번들이 없을 때의
+  // hub 폴백이 조용히 성공해 설치가 깨진 것을 가린다(스펙 2026-09-30 §5.1).
   const rest = { ...inherited };
   delete rest.HF_TOKEN;
   return { ...sanitizeChildEnv({ ...rest, ...ctx.env }), ...appOwnedChildEnv(ctx) };
 }
 
 /**
- * Python 자식(worker·embed와 그 자손 — capabilities 프로브·`--once`·llm_entry)**에게만** 가는 키 (R-6b, 스펙 §6.4
- * "자식에게는 HF_TOKEN env로만 넘어간다"). 감독자의 ctx.env에는 들어 있고 childEnv가 그대로 싣지만, Node 자식
- * (API·마이그레이션 러너)의 env에서는 nodeChildEnv가 뺀다 — 그 둘은 토큰을 쓰지 않는다.
- */
-export const PYTHON_ONLY_ENV_KEYS: readonly string[] = ["HF_TOKEN"];
-
-/**
  * Node 자식(API — api-process.ts의 두 런처, 마이그레이션 러너 — postgres/migration-runner.ts)에게 주는 env **전체**.
  *
  * ```
- * { ...inherited, ...env } − PYTHON_ONLY_ENV_KEYS − 값이 없는 키
+ * { ...inherited, ...env } − HF_TOKEN − 값이 없는 키
  * ```
  *
  * 상속분을 깔아 주는 이유: 자식 env를 주면 환경이 통째로 대체된다 — PATH·HOME 없는 API가 sysctl을 못 찾았다
  * (api-process.ts). 빼는 것은 **최종 합성**에서다: 개발자 셸에서 상속된 HF_TOKEN도 Node 자식에게 가지 않는다.
- * 입력은 건드리지 않는다 — 감독자가 쥔 ctx.env의 토큰은 worker·embed의 몫으로 남는다.
+ * 입력은 건드리지 않는다.
  *
  * STRIPPED_CHILD_ENV_KEYS(Python 인터프리터를 흔드는 키)는 여기서 빼지 않는다 — Node 자식과는 무관하고, 지금까지
  * 그 둘은 상속 env를 그대로 받았다.
@@ -290,7 +282,7 @@ export function nodeChildEnv(
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries({ ...inherited, ...env })) {
     if (value === undefined) continue;
-    if (PYTHON_ONLY_ENV_KEYS.includes(key)) continue;
+    if (key === "HF_TOKEN") continue;
     out[key] = value;
   }
   return out;
@@ -315,13 +307,13 @@ function withAppOwned(env: ApiEnv): ApiEnv {
 }
 
 /**
- * 감독자가 쥘 env와 그 재적용 기준선(baseline). 이 실행이 정한 값 — 빈 포트로 고른 LLM 주소, 기동 게이트가
- * Keychain에서 읽은 HF 토큰, 기기 언어로 정한 요약 언어 기본값 — 은 **env에만** 얹는다.
+ * 감독자가 쥘 env와 그 재적용 기준선(baseline). 이 실행이 정한 값 — 빈 포트로 고른 LLM 주소, 기기 언어로
+ * 정한 요약 언어 기본값 — 은 **env에만** 얹는다.
  *
  * 기준선에 들어가면 안 되는 이유: 재적용(refreshEnv)은 "기준선에 있는데 파일에 없는 키"를 살아 있는
- * env에서 지운다. LLM 주소와 HF 토큰은 config.json이 정할 수 없는 키라(APP_OWNED_KEYS) 파일에 절대
+ * env에서 지운다. LLM 주소는 config.json이 정할 수 없는 키라(APP_OWNED_KEYS) 파일에 절대
  * 없으므로, 기준선에 넣는 순간 첫 재시도가 그것을 지운다 — LLM 주소가 없으면 다음 worker가
- * ValidationError로 죽고, 토큰이 없으면 조건 수락 모델을 받지 못한다.
+ * ValidationError로 죽는다.
  *
  * 요약 언어 기본값은 다르다 — SUMMARY_LANGUAGE는 APP_OWNED_KEYS가 아니라 config.json이 실제로 정할 수
  * 있는 키다(바로 아래 "사람이 적은 값이 이긴다"). 여기서 기준선에 넣지 않는 것은 그 값을 지키기 위해서가
@@ -332,18 +324,13 @@ function withAppOwned(env: ApiEnv): ApiEnv {
  * 사람이 지우면, 재시도가 그 키를 기준선과 함께 살아 있는 env에서 지운다 — 다음 worker는 재시작 전까지
  * SUMMARY_LANGUAGE 없이 뜬다. 기준선에도 파일에도 없는 키는 refreshEnv가 건드리지 않는다 — prepare()의
  * EMBED_SERVICE_URL과 같은 자리다.
- *
- * 토큰이 null이면 HF_TOKEN을 싣지 않는다 — 토큰 없이도 앱은 뜬다(2026-09-25 스펙 §5.1). 그때 worker는 화자
- * 분리 모델을 받지 못하고, fe의 게이트가 그 job을 애초에 만들지 않는다.
  */
 export function launchEnv(
   cfg: LoadedConfig,
   llmPort: number,
-  hfToken: string | null,
   deviceLanguage: UiLanguage,
 ): { env: ApiEnv; baseline: ApiEnv } {
   const env: ApiEnv = { ...cfg.env, LENS_LLM_BASE_URL: llmBaseUrl(llmPort) };
-  if (hfToken !== null) env.HF_TOKEN = hfToken;
   // 요약 언어의 기기 기본값 (다국어 스펙 §5.4). 저장된 처리 설정에 요약 언어가 없을 때만 API가 쓴다 — 그래서
   // 사람이 고르기 전에는 기기 언어를 따른다. 화면 언어의 저장값이 아니라 **OS 언어**다: 두 설정은 독립이다.
   // config.json에 사람이 적은 값이 있으면 그것이 이긴다(디버깅). 기준선에는 넣지 않는다 — LLM 주소와 같은 자리.
