@@ -95,6 +95,10 @@ function ProcessingBanner({
     const noMic = meeting.error?.code === "audio_device_failed";
     // 앱에 실린 화자 분리 모델이 불완전하다 (worker errors.DIARIZATION_BUNDLE_MISSING, 스펙 2026-09-30 §5.2)
     const bundleMissing = meeting.error?.code === "diarization_bundle_missing";
+    // 토큰 시절(0.4.x) 화자 분리 실패. 이제 모델은 앱에 들어 있어 재처리만 하면 풀린다 — 토큰 이야기는 하지 않는다.
+    const legacyToken =
+      meeting.error?.code === "hf_token_invalid" ||
+      meeting.error?.code === "hf_gate_not_accepted";
     return (
       <div
         role="alert"
@@ -121,7 +125,9 @@ function ProcessingBanner({
               ? "앱을 다시 설치해 주세요."
               : noMic
                 ? "시스템 설정 › 개인정보 보호 및 보안 › 마이크에서 담화를 허용한 뒤 다시 녹음해 주세요."
-                : "다시 업로드하거나 잠시 후 시도해 주세요."}
+                : legacyToken
+                  ? "재처리하면 앱에 포함된 모델로 다시 처리해요."
+                  : "다시 업로드하거나 잠시 후 시도해 주세요."}
         </span>
       </div>
     );

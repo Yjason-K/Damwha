@@ -1341,17 +1341,23 @@ test("앱에 실린 화자 분리 모델이 깨졌으면 다시 설치를 안내
   expect(screen.getByText(/앱을 다시 설치해 주세요/)).toBeInTheDocument();
 });
 
-test("예전 토큰 오류로 실패한 회의는 일반 실패 문구를 보인다", async () => {
-  fx.setDetailOverride("m3", {
-    ...fx.detailOf("m3"),
-    status: "failed",
-    current_job_id: null,
-    error: { code: "hf_token_invalid", stage: "diarize", message: "401" },
-  });
-  renderShell("/meetings/m3");
-  expect(await screen.findByText(/처리에 실패했어요/)).toBeInTheDocument();
-  expect(screen.queryByText(/토큰/)).toBeNull();
-});
+test.each(["hf_token_invalid", "hf_gate_not_accepted"])(
+  "예전 토큰 오류(%s)로 실패한 회의는 재처리를 안내한다",
+  async (code) => {
+    fx.setDetailOverride("m3", {
+      ...fx.detailOf("m3"),
+      status: "failed",
+      current_job_id: null,
+      error: { code, stage: "diarize", message: "401" },
+    });
+    renderShell("/meetings/m3");
+    expect(await screen.findByText(/처리에 실패했어요/)).toBeInTheDocument();
+    expect(
+      screen.getByText("재처리하면 앱에 포함된 모델로 다시 처리해요."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/토큰/)).toBeNull();
+  },
+);
 
 test("처리 중이던 회의가 done이 되면 <audio>를 다시 로드한다", async () => {
   const { container, client } = renderShell("/meetings/m3");
