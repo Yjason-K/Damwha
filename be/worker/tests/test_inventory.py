@@ -57,11 +57,39 @@ def test_build_inventory_shape(tmp_path):
     assert isinstance(value["scanned_at"], str) and value["scanned_at"].endswith("Z")
 
 
+_DIAR = "pyannote/speaker-diarization-community-1"
+
+
+def test_bundle_overrides_cache_entry(tmp_path):
+    from tests.test_bundle import make_bundle
+
+    cache = tmp_path / "hub"
+    make_repo(cache, _DIAR, {"config.yaml": b"x"})  # 옛 캐시 사본(불완전)
+    bundle_dir = make_bundle(tmp_path / "bundle")
+    value = inventory.build_inventory(
+        str(cache), lens_model=None, summary_fallback=None, diarization_model_dir=str(bundle_dir)
+    )
+    assert value["repos"][_DIAR] == {"size_bytes": 15, "complete": True}
+
+
+def test_broken_bundle_keeps_cache_entry(tmp_path):
+    from tests.test_bundle import make_bundle
+
+    cache = tmp_path / "hub"
+    make_repo(cache, _DIAR, {"config.yaml": b"x"})
+    bundle_dir = make_bundle(tmp_path / "bundle", skip=("plda/plda.npz",))
+    value = inventory.build_inventory(
+        str(cache), lens_model=None, summary_fallback=None, diarization_model_dir=str(bundle_dir)
+    )
+    assert value["repos"][_DIAR]["complete"] is False
+
+
 class _Settings:
     database_url = "unused"
     poll_interval_seconds = 0.01
     lens_llm_model = "L"
     summary_llm_model = "S"
+    diarization_model_dir = None
 
 
 class _StopAfter:
@@ -104,6 +132,33 @@ def _run(conn, root, *, ticks, clock, writes, fp_seq=None, monkeypatch=None):
         "unused", _Settings(), _StopAfter(ticks), root=str(root), interval=0,
         clock=clock, connect=connect,
     )
+
+
+def test_loop_passes_bundle_dir(conn, tmp_path, monkeypatch):
+    seen = []
+    real = inventory.build_inventory
+    monkeypatch.setattr(
+        inventory, "build_inventory",
+        lambda *a, **kw: seen.append(kw.get("diarization_model_dir")) or real(*a, **kw),
+    )
+    settings = _Settings()
+    settings.diarization_model_dir = "/b/models/p"
+
+    def connect(_url):
+        class _C:
+            def execute(self, *a, **k):
+                return conn.execute(*a, **k)
+
+            def close(self):
+                pass
+
+        return _C()
+
+    inventory.run_inventory_loop(
+        "unused", settings, _StopAfter(1), root=str(tmp_path), interval=0,
+        clock=lambda: 0.0, connect=connect,
+    )
+    assert seen == ["/b/models/p"]
 
 
 def test_loop_writes_at_start_then_only_on_change_or_timeout(conn, tmp_path, monkeypatch):

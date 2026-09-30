@@ -30,20 +30,33 @@ import time
 
 from . import db
 from .db import core
-from .models import cache_scan, specs
+from .models import bundle, cache_scan, specs
 
 log = logging.getLogger("damwha_worker")
 
 
-def build_inventory(root: str, *, lens_model: str | None, summary_fallback: str | None) -> dict:
+def build_inventory(
+    root: str,
+    *,
+    lens_model: str | None,
+    summary_fallback: str | None,
+    diarization_model_dir: str | None = None,
+) -> dict:
     by_repo = specs.specs_by_repo()
     scanned = cache_scan.scan_cache(root, by_repo)
+    repos = {
+        repo: {"size_bytes": r.size_bytes, "complete": r.complete}
+        for repo, r in sorted(scanned.items())
+    }
+    # 앱 번들이 온전하면 캐시 결과를 덮는다 (스펙 2026-09-30 §3.2). 캐시의 옛 사본은 무시된다.
+    if bundle.bundle_complete(diarization_model_dir):
+        repos[specs.DIARIZATION_MODEL] = {
+            "size_bytes": bundle.bundle_size(diarization_model_dir),
+            "complete": True,
+        }
     return {
         "scanned_at": core.readiness_now(),
-        "repos": {
-            repo: {"size_bytes": r.size_bytes, "complete": r.complete}
-            for repo, r in sorted(scanned.items())
-        },
+        "repos": repos,
         "resolved": [
             {"role": s.role, "name": s.name, "backend": s.backend, "repo_id": s.repo_id}
             for s in specs.all_specs()
@@ -108,6 +121,7 @@ def run_inventory_loop(
                         root,
                         lens_model=settings.lens_llm_model,
                         summary_fallback=settings.summary_llm_model,
+                        diarization_model_dir=settings.diarization_model_dir,
                     )
                     db.write_model_inventory(conn, value)
                     last_fp, last_write, last_readiness_at = fp, now, readiness_at
