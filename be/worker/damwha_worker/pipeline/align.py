@@ -22,6 +22,16 @@ ARBITRATE_MAX_RUN_MS = 5000
 # 21개). 사이에 다른 화자 row나 non-ok row가 끼면 합치지 않는다.
 MERGE_GAP_MS = 1500
 
+# on_progress 비율 배분: 스무딩(임베딩 판정자가 대부분의 시간)이 앞 80%, 조각 흡수가 뒤 20%.
+_SMOOTH_SHARE = 0.8
+
+# 조각 흡수: 스무딩 뒤에도 남은 run 중 단어가 이 수 이하이거나 이 길이 미만인 것은
+# 앞·뒤 화자 중 목소리가 더 가까운 쪽으로 붙인다. 겹침 구간에서 화자가 단어 하나씩
+# 번갈아 바뀌어 "말씀하시는데"/"경고예요" 같은 한 단어 발언이 쏟아지는 것 방지
+# (실측: 두 단어 이하 발언 25% → 13.5%, 화자 귀속 정확도는 +0.5%p).
+FRAGMENT_MAX_WORDS = 2
+FRAGMENT_MIN_MS = 1000
+
 
 @dataclass
 class Utterance:
@@ -39,9 +49,13 @@ def _segment_for(word: Word, segments: list[DiarSegment]) -> DiarSegment:
     mid = (word.start_ms + word.end_ms) // 2
     containing = [s for s in segments if s.start_ms <= mid < s.end_ms]
     if containing:
-        # 겹침 구간이면 지배적(더 긴) 세그먼트가 이긴다 — 짧은 백채널 세그먼트가
-        # 본 화자의 word를 탈취하는 것 방지
-        return max(containing, key=lambda s: s.end_ms - s.start_ms)
+        # 겹침 구간이면 가장 늦게 시작한 세그먼트가 이긴다 — 겹침은 대개 앞 화자
+        # 세그먼트의 끝이 다음 화자의 시작을 덮는 모양이라, 새로 말을 시작한 쪽이
+        # 그 단어의 주인일 가능성이 높다. 예전 규칙(더 긴 세그먼트)은 길게 말하던
+        # 앞 화자에게 뒷사람의 첫마디를 넘겼다(클로바노트 대비 턴 첫 12자의 약 23%).
+        # 본 화자 발언 도중 끼어든 백채널이 본문을 가져가는 경우는
+        # _smooth_backchannels(임베딩 판정)가 회수한다.
+        return max(containing, key=lambda s: s.start_ms)
     # 어느 세그먼트에도 안 들면 중점에 가장 가까운 세그먼트
     return min(segments, key=lambda s: min(abs(mid - s.start_ms), abs(mid - s.end_ms)))
 
@@ -64,6 +78,7 @@ def _label_runs(assignment: list[tuple[Word, DiarSegment]]) -> list[tuple[str, l
 def _smooth_backchannels(
     assignment: list[tuple[Word, DiarSegment]],
     arbitrate=None,
+    on_run=None,
 ) -> list[tuple[Word, DiarSegment]]:
     """겹침 백채널 세그먼트에 탈취된 짧은 word run을 주변 화자로 재귀속한다.
 
@@ -78,6 +93,8 @@ def _smooth_backchannels(
         runs = _label_runs(assignment)
         for k in range(1, len(runs) - 1):
             label, idxs = runs[k]
+            if on_run is not None:
+                on_run(assignment[idxs[-1]][0].end_ms)
             prev_label, prev_idxs = runs[k - 1]
             next_label, next_idxs = runs[k + 1]
             if prev_label != next_label or prev_label == label:
@@ -110,12 +127,63 @@ def _smooth_backchannels(
     return assignment
 
 
+def _absorb_fragments(
+    assignment: list[tuple[Word, DiarSegment]],
+    resolve,
+    on_run=None,
+) -> list[tuple[Word, DiarSegment]]:
+    """짧은 run(조각)을 resolve가 고른 이웃 화자로 옮긴다.
+
+    resolve(start_ms, end_ms, own_label, candidate_labels) -> str | None 은 조각을 가질
+    화자 라벨을 돌려준다 — own_label이면 그대로 두고, 후보 중 하나면 그 화자로 옮기며,
+    None(판정 불가)이면 시간상 더 가까운 이웃에게 붙인다. 옮기면 run 경계가 바뀌므로
+    처음부터 다시 훑는다. 옮길 때마다 run이 하나씩 줄어 반드시 끝난다.
+    """
+    changed = True
+    while changed:
+        changed = False
+        runs = _label_runs(assignment)
+        for k, (label, idxs) in enumerate(runs):
+            run_words = [assignment[i][0] for i in idxs]
+            start, end = run_words[0].start_ms, run_words[-1].end_ms
+            if on_run is not None:
+                on_run(end)
+            if len(run_words) > FRAGMENT_MAX_WORDS and end - start >= FRAGMENT_MIN_MS:
+                continue
+            # 이웃 화자 → (조각과 맞닿은 세그먼트, 조각과의 시간 간격). 앞 run은 끝 단어,
+            # 뒤 run은 첫 단어 기준. 앞뒤가 같은 화자면 앞을 쓴다(동점도 앞 화자 우선).
+            neighbors: dict[str, tuple[DiarSegment, int]] = {}
+            if k > 0:
+                w, seg = assignment[runs[k - 1][1][-1]]
+                neighbors[runs[k - 1][0]] = (seg, start - w.end_ms)
+            if k + 1 < len(runs):
+                w, seg = assignment[runs[k + 1][1][0]]
+                neighbors.setdefault(runs[k + 1][0], (seg, w.start_ms - end))
+            if not neighbors:
+                continue
+            target = resolve(start, end, label, list(neighbors))
+            if target == label:
+                continue
+            if target not in neighbors:
+                target = min(neighbors, key=lambda lb: neighbors[lb][1])
+            for i in idxs:
+                assignment[i] = (assignment[i][0], neighbors[target][0])
+            changed = True
+            break
+    return assignment
+
+
 def build_utterances(
     words: list[Word],
     segments: list[DiarSegment],
     failed_spans: list[SpeechSpan] | None = None,
     arbitrate=None,
+    resolve_fragment=None,
+    on_progress=None,
 ) -> list[Utterance]:
+    """on_progress(fraction)은 스무딩·조각 흡수 루프가 훑는 위치를 0~1로 알린다. 루프가
+    변경마다 처음부터 다시 훑으므로 값이 뒤로 갈 수 있다 — 받는 쪽이 최대값을 쓴다.
+    끝나면 1.0을 한 번 보낸다."""
     failed_spans = failed_spans or []
     if not segments:
         return []
@@ -124,7 +192,21 @@ def build_utterances(
     assignment = [(w, _segment_for(w, segments)) for w in ordered]
     seg_index = {id(s): i for i, s in enumerate(segments)}
     had_words = {seg_index[id(seg)] for _, seg in assignment}
-    assignment = _smooth_backchannels(assignment, arbitrate)
+    total_ms = max((w.end_ms for w in ordered), default=0) or 1
+    smooth_share = _SMOOTH_SHARE if resolve_fragment is not None else 1.0
+
+    def phase(offset: float, share: float):
+        if on_progress is None:
+            return None
+        return lambda at_ms: on_progress(offset + share * min(at_ms / total_ms, 1.0))
+
+    assignment = _smooth_backchannels(assignment, arbitrate, phase(0.0, smooth_share))
+    if resolve_fragment is not None:
+        assignment = _absorb_fragments(
+            assignment, resolve_fragment, phase(smooth_share, 1.0 - smooth_share)
+        )
+    if on_progress is not None:
+        on_progress(1.0)
 
     by_seg: dict[int, list[Word]] = {i: [] for i in range(len(segments))}
     for w, seg in assignment:
