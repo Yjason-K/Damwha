@@ -8,6 +8,7 @@ reserved knob for splitting very long files in a future pass.
 """
 
 from ..pipeline.stt_repetition import drop_repetition_loops
+from ..pipeline.stt_stock_phrases import drop_stock_hallucination
 from .base import ProgressFn, SpeechSpan, Word, whisper_language
 from .specs import MLX_WHISPER_REPOS as _REPO
 
@@ -115,17 +116,17 @@ class MlxWhisper:
         words: list[Word] = []
         for result in results:
             for segment in result.get("segments", []):
-                for w in segment.get("words", []):
-                    text = w["word"].strip()
-                    if not text:
-                        continue
-                    words.append(
-                        Word(
-                            text=text,
-                            start_ms=int(w["start"] * 1000),
-                            end_ms=int(w["end"] * 1000),
-                            confidence=w.get("probability"),
-                        )
+                seg_words = [
+                    Word(
+                        text=w["word"].strip(),
+                        start_ms=int(w["start"] * 1000),
+                        end_ms=int(w["end"] * 1000),
+                        confidence=w.get("probability"),
                     )
+                    for w in segment.get("words", [])
+                    if w["word"].strip()
+                ]
+                # 짧은 소음 clip의 자막 맺음말 환각 — stt_stock_phrases 모듈 주석 참고
+                words.extend(drop_stock_hallucination(seg_words))
         # 디코더 축퇴 출력은 decode 파라미터로 못 막는다 — stt_repetition 모듈 주석 참고
         return drop_repetition_loops(words)

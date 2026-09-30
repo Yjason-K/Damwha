@@ -6,6 +6,7 @@ preset's cpu STT stays available there; kept for CUDA portability too.
 """
 
 from ..pipeline.stt_repetition import drop_repetition_loops
+from ..pipeline.stt_stock_phrases import drop_stock_hallucination
 from .base import ProgressFn, SpeechSpan, Word, whisper_language
 
 # 환각 방어(스펙 §1.3) — whisper_mlx.py와 동일 값 유지 (백엔드 간 동작 일치)
@@ -104,17 +105,17 @@ class FasterWhisper:
         for segment in segments:  # generator
             if on_progress is not None and speech_spans:
                 on_progress(_clipped_done_ms(speech_spans, int(segment.end * 1000)), total_ms)
-            for w in segment.words or []:
-                text = w.word.strip()
-                if not text:
-                    continue
-                words.append(
-                    Word(
-                        text=text,
-                        start_ms=int(w.start * 1000),
-                        end_ms=int(w.end * 1000),
-                        confidence=w.probability,
-                    )
+            seg_words = [
+                Word(
+                    text=w.word.strip(),
+                    start_ms=int(w.start * 1000),
+                    end_ms=int(w.end * 1000),
+                    confidence=w.probability,
                 )
+                for w in segment.words or []
+                if w.word.strip()
+            ]
+            # mlx 경로와 같은 상투구 환각 제거 — stt_stock_phrases 모듈 주석 참고
+            words.extend(drop_stock_hallucination(seg_words))
         # faster-whisper도 같은 upstream 로직을 물려받는다 — stt_repetition 모듈 주석 참고
         return drop_repetition_loops(words)
