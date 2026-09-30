@@ -23,8 +23,6 @@ import {
   useSavedUtteranceIds,
   useSaveUtterance,
 } from "@/features/saved-utterance/api/saved-utterances";
-import { useDiarizationGate } from "@/features/hf-token/ui/hf-token-gate";
-
 import {
   useDeleteMeeting,
   useRenameMeeting,
@@ -346,7 +344,6 @@ export function TranscriptPane({
   const [resolveOpen, setResolveOpen] = React.useState(false);
   const [reprocessOpen, setReprocessOpen] = React.useState(false);
   const [exportOpen, setExportOpen] = React.useState(false);
-  const gate = useDiarizationGate();
   const savedIds = useSavedUtteranceIds(meeting.id);
   const saveUtterance = useSaveUtterance();
   const removeSavedUtterance = useRemoveSavedUtterance();
@@ -553,8 +550,7 @@ export function TranscriptPane({
             <IconButton
               label="회의 재처리"
               size="sm"
-              onClick={() => gate.run(() => setReprocessOpen(true))}
-              disabled={gate.locked}
+              onClick={() => setReprocessOpen(true)}
             >
               {/* 요약 다시 만들기(sparkles)와 비용이 전혀 달라 같은 화살표를 쓰지 않는다 */}
               <Icon name="waveform" size={16} />

@@ -10,8 +10,6 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, test, vi } from "vitest";
 import { ApiError, apiClient } from "@/shared/api/client";
-import { HfTokenGateProvider } from "@/features/hf-token/ui/hf-token-gate";
-import type { HfTokenState } from "@/features/hf-token/model/types";
 import { MODELS_QUERY_KEY } from "../api/models";
 import type { ModelRow, ModelsView } from "../api/types";
 import { ModelsCard } from "./models-card";
@@ -268,15 +266,6 @@ test("남은 용량보다 큰 모델은 받기 옆에 경고", async () => {
   expect(screen.getByText("남은 용량(1.0 GB)보다 커요")).toBeTruthy();
 });
 
-const HF_ABSENT: HfTokenState = {
-  status: "absent",
-  masked: null,
-  account: null,
-  onboardingDismissed: false,
-  busy: false,
-  message: null,
-};
-
 function diarizationRow(over: Partial<ModelRow> = {}): ModelRow {
   return row({
     role: "diarization",
@@ -292,70 +281,19 @@ function diarizationRow(over: Partial<ModelRow> = {}): ModelRow {
   });
 }
 
-function renderCardWithGate(view: ModelsView, tokenState: HfTokenState) {
-  vi.spyOn(apiClient, "get").mockResolvedValue({ data: view } as never);
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={qc}>
-      <HfTokenGateProvider view={{ kind: "ready", state: tokenState }} send={vi.fn()}>
-        <ModelsCard />
-      </HfTokenGateProvider>
-    </QueryClientProvider>,
-  );
-}
-
-test("화자 분리 모델 받기는 토큰 게이트를 거친다 (토큰 없으면 요청 없이 다이얼로그)", async () => {
+test("화자 분리 모델 받기는 토큰 없이 바로 요청한다", async () => {
   const post = vi.spyOn(apiClient, "post").mockResolvedValue({ data: {} } as never);
-  renderCardWithGate(
-    { ...VIEW, freeBytes: null, models: [...VIEW.models.slice(0, 3), diarizationRow(), ...VIEW.models.slice(4)] },
-    HF_ABSENT,
-  );
+  renderCard({
+    ...VIEW,
+    freeBytes: null,
+    models: [...VIEW.models.slice(0, 3), diarizationRow(), ...VIEW.models.slice(4)],
+  });
   fireEvent.click(await screen.findByRole("button", { name: "화자 분리 모델 받기" }));
   await waitFor(() =>
-    expect(screen.getByRole("dialog", { name: "허깅페이스 토큰이 필요해요" })).toBeInTheDocument(),
-  );
-  // mutate()는 TanStack Query 내부에서 비동기로 mutationFn을 부른다 — 클릭 직후 동기 단언은
-  // 게이트를 우회해 다이얼로그도 뜨고 요청도 나가는 회귀를 못 잡는다(펜딩 마이크로태스크가 아직
-  // 안 돌아서). 한 틱 흘려보낸 뒤에 "요청 없음"을 확인해야 "다이얼로그 + 요청"을 함께 잡는다.
-  await new Promise((r) => setTimeout(r, 0));
-  expect(post).not.toHaveBeenCalled();
-});
-
-test("토큰이 있으면 화자 분리 모델 받기는 바로 요청한다", async () => {
-  const post = vi.spyOn(apiClient, "post").mockResolvedValue({ data: {} } as never);
-  renderCardWithGate(
-    { ...VIEW, freeBytes: null, models: [...VIEW.models.slice(0, 3), diarizationRow(), ...VIEW.models.slice(4)] },
-    { ...HF_ABSENT, status: "present", masked: "hf_****…****4567" },
-  );
-  fireEvent.click(await screen.findByRole("button", { name: "화자 분리 모델 받기" }));
-  await waitFor(() =>
-    expect(post).toHaveBeenCalledWith("/models/download", { role: "diarization", name: "pyannote/speaker-diarization-community-1" }),
+    expect(post).toHaveBeenCalledWith("/models/download", {
+      role: "diarization",
+      name: "pyannote/speaker-diarization-community-1",
+    }),
   );
   expect(post).toHaveBeenCalledTimes(1);
-});
-
-test("모델 사용 조건에 동의해야 하면 문구와 기존 사용 조건 페이지 열기 동작을 보인다", async () => {
-  renderCardWithGate(
-    {
-      ...VIEW,
-      freeBytes: null,
-      models: [
-        ...VIEW.models.slice(0, 3),
-        diarizationRow({
-          job: {
-            id: "g1",
-            type: "download_model",
-            status: "failed",
-            error: { code: "hf_gate_not_accepted", message: "" },
-          },
-        }),
-        ...VIEW.models.slice(4),
-      ],
-    },
-    HF_ABSENT,
-  );
-  // 기존 HfFailureAction(action="accept")을 그대로 재사용한다 — 손으로 다시 짠 "사용 조건 페이지
-  // 열기" 버튼을 두지 않는다. 이 컴포넌트는 게이트 Provider가 "ready"일 때만 스스로를 보인다.
-  expect(await screen.findByText("모델 사용 조건에 동의해야 받을 수 있어요.")).toBeTruthy();
-  expect(screen.getByRole("button", { name: "사용 조건 페이지 열기" })).toBeTruthy();
 });

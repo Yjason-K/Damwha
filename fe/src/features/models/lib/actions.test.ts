@@ -42,9 +42,9 @@ describe("jobErrorText", () => {
 
   test("코드로 고른다", () => {
     expect(jobErrorText(failed("DISK_FULL", "download_model", "디스크 공간이 부족해요 — 남은 용량 1.0 GB, 필요한 용량 3.0 GB.")))
-      .toEqual({ text: "디스크 공간이 부족해요 — 남은 용량 1.0 GB, 필요한 용량 3.0 GB.", accept: false });
-    expect(jobErrorText(failed("hf_token_invalid"))?.text).toBe("허깅페이스 토큰이 유효하지 않아 받지 못했어요. 토큰을 확인해 주세요.");
-    expect(jobErrorText(failed("hf_gate_not_accepted"))).toEqual({ text: "모델 사용 조건에 동의해야 받을 수 있어요.", accept: true });
+      .toEqual({ text: "디스크 공간이 부족해요 — 남은 용량 1.0 GB, 필요한 용량 3.0 GB." });
+    expect(jobErrorText(failed("hf_token_invalid"))).toEqual({ text: "받지 못했어요. 인터넷 연결을 확인하고 다시 받아 주세요." });
+    expect(jobErrorText(failed("hf_gate_not_accepted"))).toEqual({ text: "받지 못했어요. 인터넷 연결을 확인하고 다시 받아 주세요." });
     expect(jobErrorText(failed("model_in_use", "delete_model"))?.text).toBe("처리 중인 작업이 쓰고 있어 지우지 않았어요.");
     expect(jobErrorText(failed("model_download_failed"))?.text).toBe("받지 못했어요. 인터넷 연결을 확인하고 다시 받아 주세요.");
     expect(jobErrorText(failed("io_error", "delete_model"))?.text).toBe("지우지 못했어요.");

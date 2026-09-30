@@ -9,7 +9,6 @@ import { SidebarItem } from "@/shared/ui/sidebar-item";
 import { cn } from "@/shared/lib/utils";
 import { env } from "@/shared/config/env";
 
-import { useDiarizationGate } from "@/features/hf-token/ui/hf-token-gate";
 import { ThemeMenu } from "@/features/theme/ui/theme-menu";
 
 import { useMeetings } from "../api/meetings";
@@ -133,14 +132,13 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
   const speakersMatch = useMatch("/speakers");
   const settingsMatch = useMatch("/settings");
   const [newMeetingOpen, setNewMeetingOpen] = React.useState(false);
-  const gate = useDiarizationGate();
   const { data: meetings, isLoading, isError } = useMeetings();
 
   // 버튼에 적힌 N 단축키. 입력 중이거나 모달이 열려 있으면 가로채지 않는다 —
   // 조합키가 없는 글자라 입력란에서 그대로 타이핑돼야 한다. 한글 자판에서는
   // key가 "ㅜ"로 오므로 물리 키(code)로 본다.
   const openNewMeeting = React.useEffectEvent(() => {
-    if (!gate.locked) gate.run(() => setNewMeetingOpen(true));
+    setNewMeetingOpen(true);
   });
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -185,10 +183,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
             shortcut={<Kbd keys={["⌘", "K"]} />}
           />
         </div>
-        <NewMeetingItem
-          onClick={() => gate.run(() => setNewMeetingOpen(true))}
-          disabled={gate.locked}
-        />
+        <NewMeetingItem onClick={() => setNewMeetingOpen(true)} />
 
         <div className="mt-3.5 flex flex-col gap-0.5">
           <SidebarItem
