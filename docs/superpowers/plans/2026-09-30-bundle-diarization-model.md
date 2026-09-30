@@ -20,6 +20,7 @@
 - worker 부모(inventory 스레드)가 import하는 모듈은 표준 라이브러리만 쓴다 — `models/bundle.py`도 그렇다.
 - `npm install` 금지, 패키지를 저장소 루트에서 띄우지 않는다. 루트 명령: `pnpm worker:test`, `pnpm --filter damwha-desktop test`, `pnpm fe test`, `pnpm lint`.
 - 과거 기록(옛 스펙·`docs/electron-migration-roadmap.md`)은 고치지 않는다.
+- worker venv로 모델 라이브러리(`huggingface_hub`·`pyannote.audio`)를 쓰는 명령은 **반드시** `uv run --directory be/worker --extra models …`다 — extra 없이 `uv run`하면 venv가 extra 없는 모양으로 다시 동기화된다(`be/worker/pyproject.toml`의 `models` extra).
 - 셸의 `grep`·`find`·`diff`는 ugrep 함수다 — 측정·검증 명령에는 `/usr/bin/grep` 등 절대 경로를 쓴다.
 - 커밋 메시지는 저장소 관례(`feat(worker): …`, 한국어 본문)를 따른다.
 
@@ -658,7 +659,7 @@ cd "$SNAP" && shasum -a 256 config.yaml segmentation/pytorch_model.bin embedding
 <hash>  plda/xvec_transform.npz
 ```
 
-(캐시에 그 리비전이 없으면 Step 2의 스크립트를 체크섬 없이 한 번 돌릴 수 없으므로, 먼저 `uv run --directory be/worker python -c "from huggingface_hub import snapshot_download as s; print(s('pyannote/speaker-diarization-community-1', revision='3533c8cf8e369892e6b79ff1bf80f7b0286a54ee'))"`로 받는다 — 토큰 필요.)
+(캐시에 그 리비전이 없으면 Step 2의 스크립트를 체크섬 없이 한 번 돌릴 수 없으므로, 먼저 `uv run --directory be/worker --extra models python -c "from huggingface_hub import snapshot_download as s; print(s('pyannote/speaker-diarization-community-1', revision='3533c8cf8e369892e6b79ff1bf80f7b0286a54ee'))"`로 받는다 — 토큰 필요.)
 
 - [ ] **Step 2: 스크립트 작성**
 
@@ -712,18 +713,25 @@ KEY=$( { echo "$REPO_ID $REVISION $NAME"; shasum -a 256 "$SUMS" "$SCRIPT" | awk 
 OUT="$CACHE/$NAME-$KEY"
 DONE="$OUT.complete"
 
+verify() { (cd "$1" && /usr/bin/grep -v '^#' "$SUMS" | shasum -a 256 -c - >/dev/null 2>&1); }
+
 if [ "$FRESH" = 1 ]; then rm -rf "$OUT" "$DONE"; fi
+# 캐시 적중도 믿지 않는다 — 대조가 깨졌으면 버리고 다시 받는다(§4.5).
+if [ -f "$DONE" ] && ! verify "$OUT"; then
+  say "캐시의 체크섬이 맞지 않는다 — 버리고 다시 받는다"
+  rm -rf "$OUT" "$DONE"
+fi
 
 if [ ! -f "$DONE" ]; then
   say "받기 $REPO_ID@$REVISION"
-  SNAP=$(uv run --directory "$REPO/be/worker" python -c "
+  SNAP=$(uv run --directory "$REPO/be/worker" --extra models python -c "
 import sys
 from huggingface_hub import snapshot_download
 print(snapshot_download('$REPO_ID', revision='$REVISION'))
 " 2>/dev/null | tail -1) || true
   [ -n "${SNAP:-}" ] && [ -d "$SNAP" ] || die "받지 못했다. 게이트 모델이라 빌드 머신에 HF 토큰이 필요하다:
   1) https://huggingface.co/$REPO_ID 에서 사용 조건에 동의하고
-  2) 'uv run --directory be/worker hf auth login' 또는 HF_TOKEN을 설정한 뒤 다시 실행한다"
+  2) 'uv run --directory be/worker --extra models hf auth login' 또는 HF_TOKEN을 설정한 뒤 다시 실행한다"
   rm -rf "$OUT"; mkdir -p "$OUT"
   # HF 캐시 snapshot은 blobs로 가는 심링크다 — 역참조해 실제 파일로 옮긴다.
   /usr/bin/grep -v '^#' "$SUMS" | awk '{print $2}' | while read -r rel; do
@@ -738,7 +746,7 @@ fi
 say "스테이징 → $STAGED"
 rm -rf "$STAGED"; mkdir -p "$(dirname "$STAGED")"
 cp -R "$OUT" "$STAGED"
-(cd "$STAGED" && /usr/bin/grep -v '^#' "$SUMS" | shasum -a 256 -c - >/dev/null) || die "스테이징 사본의 체크섬이 맞지 않는다"
+verify "$STAGED" || die "스테이징 사본의 체크섬이 맞지 않는다"
 cat > "$STAGED/NOTICE.txt" <<EOF
 pyannote/speaker-diarization-community-1
 https://huggingface.co/$REPO_ID (revision $REVISION)
@@ -789,7 +797,7 @@ git commit -m "feat(desktop): 화자 분리 모델을 받아 Resources/models로
 - Modify: `desktop/src/config/config.ts` (`APP_OWNED_KEYS`, `appOwnedChildEnv`)
 - Modify: `desktop/src/main.ts:930-936` (`bundleDir`), `:1455-1471` (ctx)
 - Test: `desktop/tests/process/runtime-paths.test.ts`, `desktop/tests/config/config.test.ts`, `desktop/tests/process/python-launcher.test.ts`
-- 그 밖에 `LaunchContext`를 리터럴로 만드는 테스트 헬퍼 전부 — `/usr/bin/grep -rln "bins: {" desktop/tests`로 찾아 `diarizationModelDir: "/b/models/pyannote-speaker-diarization-community-1"`를 더한다.
+- 그 밖에 `LaunchContext`를 리터럴로 만드는 곳 전부(최소 `tests/services/api.test.ts:255-271`, `tests/services/embed.test.ts:15-35`, `tests/services/worker.test.ts:23-43`, `tests/windows/status-view.test.ts:445-457`, `tests/config/config-reload.test.ts:200`, `tests/process/runtime-paths.test.ts`, `tests/process/python-launcher.test.ts`, `tests/config/config.test.ts`). `/usr/bin/grep -rn "bins: {" desktop/src desktop/tests`로 전부 찾는다. **`diarizationModelDir: "/b/models/pyannote-speaker-diarization-community-1"`는 `bins`의 형제(최상위 속성)로 더한다 — `bins` 안에 넣지 않는다.** 커밋 전에 `pnpm --filter damwha-desktop run compile`이 오류 없이 끝나야 한다.
 
 **Interfaces:**
 - Produces: `DIARIZATION_BUNDLE_NAME = "pyannote-speaker-diarization-community-1"`; `diarizationModelDir(modelsBundleDir: string): string`; `LaunchContext.diarizationModelDir: string`; 자식 env `DIARIZATION_MODEL_DIR`, `PYANNOTE_METRICS_ENABLED="false"`
@@ -929,10 +937,23 @@ import에 `import { createHash } from "node:crypto";`
 // 23. 앱에 실린 화자 분리 모델 (스펙 2026-09-30 §4.4). 파일 다섯이 커밋된 sha256과 같고 출처 표기가 있다.
 // 모델 파일은 pickle을 허용하는 체크포인트라 봉인 전 마지막으로 여기서 대조한다(§4.5).
 const modelDir = path.join(contents, "Resources", "models", "pyannote-speaker-diarization-community-1");
-const sums = fs.readFileSync(path.join(desktop, "scripts", "models-checksums.txt"), "utf8")
-  .split("\n").filter((l) => l.trim() !== "" && !l.startsWith("#"))
-  .map((l) => { const [hash, rel] = l.trim().split(/\s+/); return { hash, rel }; });
-check("models-checksums.txt lists the five diarization files", sums.length === 5, `${sums.length}`);
+const MODEL_FILES = [
+  "config.yaml",
+  "segmentation/pytorch_model.bin",
+  "embedding/pytorch_model.bin",
+  "plda/plda.npz",
+  "plda/xvec_transform.npz",
+];
+const sumLines = fs.readFileSync(path.join(desktop, "scripts", "models-checksums.txt"), "utf8")
+  .split("\n").filter((l) => l.trim() !== "" && !l.startsWith("#"));
+const sums = sumLines.map((l) => /^([a-f0-9]{64})\s{2,}(\S+)$/.exec(l.trim())).filter((m) => m !== null)
+  .map((m) => ({ hash: m[1], rel: m[2] }));
+const listed = sums.map((s) => s.rel).sort();
+check(
+  "models-checksums.txt lists exactly the five diarization files",
+  sums.length === sumLines.length && JSON.stringify(listed) === JSON.stringify([...MODEL_FILES].sort()),
+  listed.join(", "),
+);
 const badModel = [];
 for (const { hash, rel } of sums) {
   const f = path.join(modelDir, rel);
@@ -972,25 +993,29 @@ git commit -m "feat(desktop): check-bundle이 번들 화자 분리 모델의 체
 **Interfaces:**
 - Produces: `launchEnv(cfg, llmPort, deviceLanguage)` (토큰 인자 삭제); `nodeChildEnv(env, inherited)` — `HF_TOKEN`을 여전히 뺀다(아래 결정); `ServicesView`에 `token` 없음
 
-**결정:** `PYTHON_ONLY_ENV_KEYS`는 없애되 `nodeChildEnv`는 남기고 `HF_TOKEN`을 직접 뺀다. 이유: Node 자식에게 개발자 셸의 토큰을 흘리지 않는 성질은 그대로 가치가 있고, `nodeChildEnv`는 "값이 없는 키를 뺀다"는 다른 일도 한다.
+**결정 (스펙 §5.1과 같다):** `PYTHON_ONLY_ENV_KEYS`는 없애되 `nodeChildEnv`는 남기고 `HF_TOKEN`을 직접 뺀다. 이유: Node 자식에게 개발자 셸의 토큰을 흘리지 않는 성질은 그대로 가치가 있고, `nodeChildEnv`는 "값이 없는 키를 뺀다"는 다른 일도 한다.
 
 - [ ] **Step 1: 테스트를 새 계약으로 먼저 고친다**
 
 - `status-view.test.ts`: 토큰 줄 관련 테스트(`tokenView`, `TOKEN_*_NOTE`, `maskedToken`/`tokenStatus` 입력, 401·403 modelRows `:683-703`)를 지우고, 다음을 더한다:
 
-```ts
-it("has no token section", () => {
-  const view = servicesView(baseInput());
-  expect("token" in view).toBe(false);
-});
+`describe("모델 준비 줄 (스펙 §6.9)")` 블록(`:595` 부근) 안 — 그 블록의 `entry()`·`view()` 헬퍼를 쓴다:
 
-it("shows a PERMANENT hf_gate_not_accepted readiness failure as a plain download failure", () => {
-  const rows = modelRows(/* 기존 403 테스트의 입력을 그대로 */);
-  expect(rows[0].cause).toBe(CAUSES.modelDownloadFailed.text(KEY, "…"));
-});
+```ts
+  it("has no token section", () => {
+    expect("token" in view([])).toBe(false);
+  });
+
+  it("shows a PERMANENT hf_gate_not_accepted readiness failure as a plain download failure", () => {
+    const row = view([
+      entry({ state: "failed", error: "hf_gate_not_accepted: refused (403)", errorKind: "PERMANENT" }),
+    ]).models[0];
+    expect(row.cause).toBe(CAUSES.modelDownloadFailed.text("BAAI/bge-m3", "refused (403)"));
+    expect(row.tone).toBe("fail");
+  });
 ```
 
-(`baseInput`·`modelRows` 입력 헬퍼는 기존 테스트 파일의 것을 쓴다 — 지우기 전에 `:683-703`의 입력을 복사해 두 번째 테스트의 인자로 옮긴다. 두 번째 테스트의 기대 문구는 `readinessErrorMessage`가 만든 값이므로 기존 테스트에서 쓰던 message 인자를 그대로 넣는다.)
+(`view(...).models`가 모델 줄 배열의 실제 속성 이름인지 기존 테스트에서 확인한다 — 다르면 그 이름으로. `readinessErrorMessage`가 코드 머리를 떼고 `refused (403)`을 돌려주는지도 `desktop/src/services/model-readiness.ts`에서 확인한다.)
 
 - `config.test.ts:743-790`("HF_TOKEN goes to the Python children only" 블록): 다음 하나로 교체 —
 
@@ -1037,7 +1062,7 @@ Expected: FAIL — 새 단언(토큰 줄 존재 등)·시그니처 불일치
    - `launchEnv`: 시그니처에서 `hfToken: string | null,` 제거, `if (hfToken !== null) env.HF_TOKEN = hfToken;` 제거, 주석의 "기동 게이트가 Keychain에서 읽은 HF 토큰," "LLM 주소와 HF 토큰은" → "LLM 주소는", "토큰이 없으면 조건 수락 모델을 받지 못한다" 문장, 마지막 단락("토큰이 null이면 …") 삭제.
 4. `status-view.ts`: `TokenView`·`TokenStatus` 타입, `ServicesView.token`, 입력의 `maskedToken`·`tokenStatus`, `NO_TOKEN_NOTE`·`TOKEN_NOTE`·`UNREADABLE_TOKEN_NOTE`·`TOKEN_UNAVAILABLE_NOTE`, `tokenView`·`tokenNoteFor`, `servicesView`의 `token:` 줄, `modelRows`의 `HF_TOKEN_INVALID_CODE`·`HF_GATE_NOT_ACCEPTED_CODE` 두 분기(그 둘은 뒤의 일반 `return`으로 떨어진다), `:384-385` 표의 토큰 행, 관련 import를 지운다.
 5. `shell/services.html`: 토큰 절(CSS `:120-122`, 마크업 `:135-140`, 렌더 `:233-234`·`:257-259`, 주석 `:14`)을 지운다. **`<style>`을 고치면 CSP `style-src` 해시가 바뀐다** — `tests/windows/shell-html.test.ts`가 알려 주는 새 해시로 그 파일의 CSP 메타를 갱신한다(desktop/CLAUDE.md "창 배경과 셸 페이지").
-6. `causes.ts`: `safeStorageUnavailable`·`hfTokenInvalid`·`hfGateNotAccepted` 항목과 `HF_GATED_MODEL_PAGE_URL` import 삭제. `modelDownloadFailed` 주석의 "**401·403은 이 원인이 아니다.** …" 단락 → "401·403(앱 밖 개발 경로에서만 생긴다)도 여기로 온다."
+6. `causes.ts`: (스펙 §5.1 — `diarization_bundle_missing` 원인은 더하지 않는다) `safeStorageUnavailable`·`hfTokenInvalid`·`hfGateNotAccepted` 항목과 `HF_GATED_MODEL_PAGE_URL` import 삭제. `modelDownloadFailed` 주석의 "**401·403은 이 원인이 아니다.** …" 단락 → "401·403(앱 밖 개발 경로에서만 생긴다)도 여기로 온다."
 7. `shell-hints.ts`: `HF_TOKENS_PAGE_URL` import와 `safeStorageUnavailable`·`hfTokenInvalid`·`hfGateNotAccepted` 세 항목 삭제.
 8. `model-readiness.ts`: `HF_TOKEN_INVALID_CODE`·`HF_GATE_NOT_ACCEPTED_CODE`와 그 위 주석의 "401과 403을 가르는 유일한 근거다 (판정 R-11a)." 문장 삭제(`readinessErrorCode`는 남긴다 — 다른 호출부가 있으면. `/usr/bin/grep -rn readinessErrorCode desktop/src`로 확인하고, 쓰는 곳이 없어지면 함수와 테스트도 지운다).
 9. `types.ts:63` 주석: "앱이 이 실행에 정한 값(main.ts의 launchEnv — LENS_LLM_BASE_URL, 기동 게이트의 HF_TOKEN)" → "(main.ts의 launchEnv — LENS_LLM_BASE_URL, SUMMARY_LANGUAGE)", "**통째로 로그·화면에 싣지 않는다** — 토큰이 들어 있다." → "**통째로 로그·화면에 싣지 않는다** — DB 비밀번호 같은 값이 들어 있을 수 있다."
@@ -1228,17 +1253,26 @@ test("예전 토큰 오류로 실패한 회의는 일반 실패 문구를 보인
 
 같은 파일의 다른 `accept: false` 기대값에서 `accept` 키를 지운다.
 
-`models-card.test.tsx`: `HfTokenGateProvider` 래핑·`HF_ABSENT` 상수·게이트 테스트(`:271-360` 범위)를 지우고 하나 더한다:
+`models-card.test.tsx`: `HfTokenGateProvider`·`HfTokenState` import, `HF_ABSENT`, `renderCardWithGate`, 게이트 테스트 둘(`:295-335`)과 403 수락 버튼 테스트(`:340-360` 부근)를 지운다. **`diarizationRow`는 남긴다.** 그리고 기존 `renderCard`(`:89-97`)로:
 
 ```tsx
-it("starts a diarization download immediately — no token dialog", async () => {
-  // 기존 "화자 분리 받기" 렌더 헬퍼로 installed: "no"인 diarization 행을 그린다
-  fireEvent.click(screen.getByRole("button", { name: /받기/ }));
-  await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith("/models/download", expect.objectContaining({ role: "diarization" })));
+test("화자 분리 모델 받기는 토큰 없이 바로 요청한다", async () => {
+  const post = vi.spyOn(apiClient, "post").mockResolvedValue({ data: {} } as never);
+  renderCard({
+    ...VIEW,
+    freeBytes: null,
+    models: [...VIEW.models.slice(0, 3), diarizationRow(), ...VIEW.models.slice(4)],
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "화자 분리 모델 받기" }));
+  await waitFor(() =>
+    expect(post).toHaveBeenCalledWith("/models/download", {
+      role: "diarization",
+      name: "pyannote/speaker-diarization-community-1",
+    }),
+  );
+  expect(post).toHaveBeenCalledTimes(1);
 });
 ```
-
-(렌더 헬퍼와 API 목 이름·엔드포인트는 지우는 게이트 테스트에서 쓰던 것을 그대로 옮긴다 — 그 테스트가 토큰 present일 때 다운로드가 나가는지 보던 단언이 곧 이 테스트다.)
 
 `desktop-bridge.test.ts`: `hfToken` 관련 단언을 지우고 `expect("hfToken" in window.__damwha_desktop!).toBe(false);`를 더한다.
 
@@ -1320,7 +1354,6 @@ git commit -m "refactor(fe): HF 토큰 온보딩·설정·게이트를 걷어내
 **Files:**
 - Modify: `README.md`, `README.ko.md`, `docs/MODELS.md:50`, `desktop/CLAUDE.md`, `fe/CLAUDE.md:162`, `be/CLAUDE.md:63,70,379`, `be/docs/worker-architecture.md:111,518,568`, `be/worker/SMOKE.md:9-18`, `be/.env.example:9`, `site/src/i18n/en.ts:77`, `site/src/i18n/ko.ts:79`
 - Delete: `docs/HUGGINGFACE.md`
-- Modify: `docs/superpowers/specs/2026-09-30-bundle-diarization-model-design.md` §5.1 (아래 편차 기록)
 
 - [ ] **Step 1: 링크 먼저 찾기**
 
@@ -1349,7 +1382,6 @@ Run: `/usr/bin/grep -rn "HUGGINGFACE.md" --include='*.md' --include='*.ts' --inc
 - `be/worker/SMOKE.md:9-18`: 세 라이선스 링크 → community-1 하나, "앱 밖 개발 스크립트라 `HF_TOKEN`이 필요하다" 명시.
 - `be/.env.example:9`: API는 토큰을 읽지 않는다 — `HF_TOKEN` 줄이 있으면 삭제(`/usr/bin/grep -rn HF_TOKEN be/src`가 비어 있음을 먼저 확인).
 - `site/src/i18n/en.ts:77`·`ko.ts:79`: "Hugging Face token" 항목 삭제. 그 배열이 개수를 전제한 레이아웃이면 `pnpm site:build`로 확인.
-- 스펙 §5.1: "`diarizationBundleMissing`을 더한다 — …" 문장을 "desktop에는 원인을 더하지 않는다 — 이 코드는 회의 카드(fe)에만 뜨고 상태 창이 보이는 readiness·서비스 실패로는 오지 않는다(구현 계획 Task 8에서 확인)."로 고친다.
 
 - [ ] **Step 3: 확인**
 
@@ -1380,7 +1412,7 @@ Expected: 전부 PASS. 실패는 출력 그대로 기록한다.
 
 Run:
 ```bash
-HF_HUB_OFFLINE=1 PYANNOTE_METRICS_ENABLED=false uv run --directory be/worker python -c "
+HF_HUB_OFFLINE=1 PYANNOTE_METRICS_ENABLED=false uv run --directory be/worker --extra models python -c "
 from pyannote.audio import Pipeline
 p = Pipeline.from_pretrained('$(pwd)/desktop/build/models/pyannote-speaker-diarization-community-1')
 print(type(p).__name__)"

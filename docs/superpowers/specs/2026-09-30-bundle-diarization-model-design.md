@@ -72,7 +72,7 @@ HF 가입 → 모델 사용 조건 동의 → 토큰 발급 → 앱에 붙여넣
 
 - `build_inventory(..., diarization_model_dir: str | None)` — 인자로 명시하고, 호출자
   `run_inventory_loop`가 `Settings.diarization_model_dir`를 넘긴다. 그 폴더가 `bundle_complete`이면 `repos[DIARIZATION_MODEL]`을
-  `{"size_bytes": <폴더 파일 합>, "complete": true}`로 **덮어쓴다**. HF 캐시에 옛 사본이 있어도 번들이 이긴다.
+  `{"size_bytes": <필수 파일 다섯의 합>, "complete": true}`로 **덮어쓴다**. HF 캐시에 옛 사본이 있어도 번들이 이긴다.
 - API(`model-inventory.ts`)의 행 모양은 바뀌지 않는다 → `models-view.ts`가 `installed: "yes"`로 읽고
   fe 카드는 "받음"을 그린다. 다운로드 버튼은 installed가 yes라 안 뜬다. 삭제는 지금도 막혀 있다
   (`model_jobs._DELETABLE`).
@@ -117,7 +117,7 @@ spawn돼 supervisor의 env를 물려받으므로(`__main__.py`) `DIARIZATION_MOD
 
 - 고정값: 저장소 `pyannote/speaker-diarization-community-1`, 리비전 `3533c8cf8e369892e6b79ff1bf80f7b0286a54ee`.
 - `desktop/scripts/models-checksums.txt`(커밋): 다섯 파일의 sha256. `shasum -a 256 -c`로 대조한다.
-- 받기: worker venv(`uv run --directory be/worker python -c …`)의
+- 받기: worker venv(`uv run --directory be/worker --extra models python -c …`)의
   `huggingface_hub.snapshot_download(repo, revision=…)`. 게이트 모델이라 **빌드하는 머신에만** 토큰이
   필요하다 — 개발자의 HF 캐시·`hf auth login`·`HF_TOKEN`을 그대로 쓴다. 실패하면 "HF 토큰으로 로그인하고
   모델 사용 조건에 동의하라"는 안내와 주소를 찍고 멈춘다.
@@ -174,15 +174,19 @@ pyannote는 체크포인트를 `weights_only=False`로 적재한다(pickle 가�
 - `config/config.ts`:
   - `childEnv`가 상속 env에서 `HF_TOKEN`을 버리는 규칙은 **남긴다** — 개발자 셸의 토큰이 앱 동작(번들이
     없을 때의 hub 폴백)을 조용히 바꾸지 않게.
-  - `PYTHON_ONLY_ENV_KEYS`는 `HF_TOKEN` 하나를 위한 장치였다 — 없앤다. `nodeChildEnv`도 그것만 하면 없앤다.
+  - `PYTHON_ONLY_ENV_KEYS`는 `HF_TOKEN` 하나를 위한 장치였다 — 없앤다. `nodeChildEnv`는 **남기고** `HF_TOKEN`을
+    직접 뺀다 — 개발자 셸의 토큰을 Node 자식(API·마이그레이션 러너)에 흘리지 않는 성질은 그대로 가치가 있고,
+    그 함수는 값이 없는 키를 빼는 합성도 맡는다.
   - `APP_OWNED_KEYS`의 `HF_TOKEN` 항목은 남기고 규칙 문구를 "앱은 HF 토큰을 쓰지 않습니다"로 바꾼다.
   - `launchEnv`의 `hfToken` 인자를 없앤다.
 - 상태 창: `services.html`의 "허깅페이스 토큰" 줄, `status-view.ts`의 `TokenView`·토큰 안내 문구·
   401(`hf_token_invalid`)·403(`hf_gate_not_accepted`) 분기를 뺀다. 모델 줄의 그 둘은 일반 실패
   (`modelDownloadFailed`)로 떨어진다.
 - `diagnostics/causes.ts`·`windows/shell-hints.ts`: `hfTokenInvalid`·`hfGateNotAccepted`·
-  `safeStorageUnavailable`(토큰 전용 — 2026-09-30 확인)을 뺀다. `diarizationBundleMissing`을 더한다 —
-  "앱에 포함된 화자 분리 모델을 찾을 수 없어요." / 힌트 "앱을 다시 설치해 주세요."
+  `safeStorageUnavailable`(토큰 전용 — 2026-09-30 확인)을 뺀다. `diarization_bundle_missing`을 위한 원인은
+  **더하지 않는다** — 그 코드는 job 실패(`meeting.error`)로만 올라오고 `model_readiness`의 `failed` 항목이나
+  서비스 실패로는 오지 않는다(적재 전에 던져 readiness를 건드리지 않는다). 상태 창에는 닿을 길이 없으므로
+  안내는 fe의 회의 카드가 맡는다(§5.2).
 - `services/model-readiness.ts`의 `HF_TOKEN_INVALID_CODE`·`HF_GATE_NOT_ACCEPTED_CODE`를 뺀다.
 - "token-bridge를 본떴다"는 주석(`language-bridge.ts`, `status-window.ts`, `release-check.ts`,
   `ui-language-store.ts`)은 규칙을 직접 적는 문장으로 고친다. 주석만 바뀐다.
@@ -247,7 +251,7 @@ TDD — 실패하는 테스트를 먼저 쓴다.
   2. `pnpm desktop:dev` — 셸에 `HF_TOKEN` 없이, `<userData>/hf-token.bin`을 미리 만들어 둔 상태로 기동 →
      파일이 지워진다. 회의 하나를 업로드 → 화자 분리까지 성공. 모델 카드에 화자 분리가 "받음".
   3. 라이브 녹음 → 멈춤 → 마무리 `process_meeting`의 화자 분리 성공.
-  4. 스테이징한 폴더로 실제 적재: `uv run --directory be/worker python -c` 로
+  4. 스테이징한 폴더로 실제 적재: `uv run --directory be/worker --extra models python -c` 로
      `Pipeline.from_pretrained(<desktop/build/models/...>)`가 네트워크 없이(`HF_HUB_OFFLINE=1`) 성공.
   5. 텔레메트리: launcher 단위 테스트가 `PYANNOTE_METRICS_ENABLED=false`를 단언하고, worker 테스트가 그 env에서
      `pyannote.audio.telemetry.metrics.is_metrics_enabled()`가 False임을 단언한다.
