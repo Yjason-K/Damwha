@@ -116,6 +116,8 @@ const APP_OWNED_KEYS: ReadonlyMap<string, AppOwnedKey> = new Map<string, AppOwne
   ["HF_HOME", { rule: "모델 캐시는 앱이 <userData>/models로 정합니다" }],
   ["FFMPEG_BIN", { rule: "앱이 번들 ffmpeg를 씁니다" }],
   ["FFPROBE_BIN", { rule: "앱이 번들 ffprobe를 씁니다" }],
+  ["DIARIZATION_MODEL_DIR", { rule: "앱에 실린 화자 분리 모델을 씁니다" }],
+  ["PYANNOTE_METRICS_ENABLED", { rule: "앱은 pyannote 사용 통계 전송을 항상 끕니다" }],
   ["PYTHONPYCACHEPREFIX", { rule: "바이트코드 캐시는 앱이 <userData>/pycache로 정합니다" }],
   ["DAMWHA_SHARED_STATE", { rule: "앱이 DB 모드에 맞춰 정합니다" }],
 ]);
@@ -189,6 +191,8 @@ export function llmBaseUrl(port: number): string {
  * 담는 것:
  * - HF_HOME=<userData>/models, FFMPEG_BIN·FFPROBE_BIN=번들 ffmpeg 쌍, PYTHONPYCACHEPREFIX=<userData>/pycache
  *   (번들 트리에 .pyc를 쌓지 않는다 — packaged는 봉인 밖 파일, dev는 저장소 경로가 박힌 .pyc).
+ * - DIARIZATION_MODEL_DIR=ctx.diarizationModelDir(앱에 실린 화자 분리 모델), PYANNOTE_METRICS_ENABLED=false —
+ *   앱은 pyannote 사용 통계 전송을 항상 끈다.
  * - PYTHONPATH=<repo>/be/worker — **dev만** (§6.7). dev인데 저장소가 없으면 던진다: PYTHONPATH 없는 dev
  *   자식은 번들에 박힌 옛 damwha_worker를 오류 없이 돌린다.
  * - DAMWHA_SHARED_STATE — 외부 DB 모드면 `off`(공유 행 두 writer를 끈다, §6.9), 아니면 `on`. 기본값도
@@ -211,6 +215,8 @@ export function appOwnedChildEnv(ctx: LaunchContext): Record<string, string> {
     HF_HOME: path.join(ctx.userData, "models"),
     FFMPEG_BIN: ctx.bins.ffmpeg,
     FFPROBE_BIN: ctx.bins.ffprobe,
+    DIARIZATION_MODEL_DIR: ctx.diarizationModelDir,
+    PYANNOTE_METRICS_ENABLED: "false",
     PYTHONPYCACHEPREFIX: pycachePrefix(ctx.userData),
     DAMWHA_SHARED_STATE: ctx.databaseMode === "external" ? "off" : "on",
     LENS_LLM_MANAGED: "true",

@@ -69,6 +69,8 @@ export interface LaunchContext {
    * python·ffmpeg의 `bin`뿐이다.
    */
   bins: { python: string; ffmpeg: string; ffprobe: string };
+  /** 앱에 실린 화자 분리 모델 폴더의 절대 경로 (process/runtime-paths.ts의 diarizationModelDir). */
+  diarizationModelDir: string;
   /** 이 실행의 식별자(`desktop-<uuid>`). 자식 argv의 `--run-id=`에 실려, 앱이 ps로 자기 자식을 알아본다 (스펙 §6.5). */
   runId: string;
   /**

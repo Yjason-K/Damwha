@@ -83,7 +83,7 @@ import { probeEmbedContract } from "./services/embed-probe";
 import { searchDirs } from "./process/executables";
 import { createMigrationCheckWatch } from "./services/api";
 import { resolveRepoRoot } from "./config/repo-root";
-import { ffmpegBinaries, pythonBinaries } from "./process/runtime-paths";
+import { diarizationModelDir, ffmpegBinaries, pythonBinaries } from "./process/runtime-paths";
 import { rotateIfNeeded } from "./diagnostics/logs";
 import { freePort } from "./process/ports";
 import { mayAutoRetry } from "./app/retry-policy";
@@ -931,7 +931,7 @@ function listExternalWorkers(trees: readonly KnownTree[]): Promise<number[]> {
  * 번들 트리 하나. packaged는 `Resources/<이름>`, dev는 build-*.sh가 스테이징한 `desktop/build/<이름>`이다
  * (Phase 3 스펙 §6.8, Phase 4 스펙 §6.1). electron-builder의 `extraResources: - from: build`가 그 둘을 같은 모양으로 만든다.
  */
-function bundleDir(name: "postgres" | "python" | "ffmpeg"): string {
+function bundleDir(name: "postgres" | "python" | "ffmpeg" | "models"): string {
   return app.isPackaged ? path.join(process.resourcesPath, name) : path.join(app.getAppPath(), "build", name);
 }
 
@@ -1469,6 +1469,7 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
     databaseMode: cfg.databaseMode.kind,
     env,
     bins: { python: python.python, ffmpeg: ffmpeg.ffmpeg, ffprobe: ffmpeg.ffprobe },
+    diarizationModelDir: diarizationModelDir(bundleDir("models")),
     runId: RUN_ID,
     searchDirs: dirs,
     logFile: logPathOf,

@@ -198,6 +198,7 @@ function recordingCtx(env: Record<string, string>): { ctx: LaunchContext; read: 
       databaseMode: "embedded",
       env: proxy,
       bins: { python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+      diarizationModelDir: "/b/models/pyannote-speaker-diarization-community-1",
       runId: "desktop-test",
       searchDirs: [],
       logFile: (id) => `/u/logs/${id}.log`,

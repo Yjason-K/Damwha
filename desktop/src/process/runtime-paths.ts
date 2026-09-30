@@ -45,6 +45,16 @@ export function ffmpegBinaries(bundleDir: string): FfmpegBinaries {
   };
 }
 
+/**
+ * 앱에 실린 화자 분리 모델 폴더 (스펙 2026-09-30 §4.3). `build-models.sh`의 `NAME`과 짝이다 —
+ * 테스트가 스크립트를 읽어 맞춰 본다. `HF_HOME`(= `<userData>/models`, HF 캐시)과는 다른 자리다.
+ */
+export const DIARIZATION_BUNDLE_NAME = "pyannote-speaker-diarization-community-1";
+
+export function diarizationModelDir(modelsBundleDir: string): string {
+  return path.join(modelsBundleDir, DIARIZATION_BUNDLE_NAME);
+}
+
 /** 저장소 안에서 두 빌드가 python 트리를 두는 자리. electron-builder.yml의 `directories.output: out`, mac `target: dir`(arm64). */
 const PACKAGED_PYTHON_IN_REPO = ["desktop", "out", "mac-arm64", "Damwha.app", "Contents", "Resources", "python"] as const;
 const DEV_PYTHON_IN_REPO = ["desktop", "build", "python"] as const;

@@ -28,6 +28,7 @@ function ctx(over: Partial<LaunchContext> = {}): LaunchContext {
     databaseMode: "embedded",
     env: { DATABASE_URL: "postgres://x", STORAGE_ROOT: "/u/storage" },
     bins: { python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+    diarizationModelDir: "/b/models/pyannote-speaker-diarization-community-1",
     runId: "desktop-test",
     searchDirs: ["/opt/homebrew/bin"],
     logFile: (id) => `/u/logs/${id}.log`,

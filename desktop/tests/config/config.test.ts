@@ -578,6 +578,7 @@ describe("child env hygiene (Phase 4 스펙 §6.3)", () => {
       ffmpeg: `${REPO}/desktop/build/ffmpeg/bin/ffmpeg`,
       ffprobe: `${REPO}/desktop/build/ffmpeg/bin/ffprobe`,
     },
+    diarizationModelDir: `${REPO}/desktop/build/models/pyannote-speaker-diarization-community-1`,
     runId: "desktop-test",
     searchDirs: [],
     logFile: (id) => `${USER_DATA}/logs/${id}.log`,
@@ -738,6 +739,22 @@ describe("child env hygiene (Phase 4 스펙 §6.3)", () => {
       expect(childEnv(c, { LENS_LLM_MANAGED: "false" }).LENS_LLM_MANAGED).toBe("true");
     }
   });
+
+  it("tells python children where the bundled diarization model is and turns pyannote telemetry off", () => {
+    const env = appOwnedChildEnv(ctx());
+    expect(env.DIARIZATION_MODEL_DIR).toBe(ctx().diarizationModelDir);
+    expect(env.PYANNOTE_METRICS_ENABLED).toBe("false");
+  });
+
+  it("ignores DIARIZATION_MODEL_DIR and PYANNOTE_METRICS_ENABLED from config.json", () => {
+    const env = childEnv(ctx({ env: { DIARIZATION_MODEL_DIR: "/evil", PYANNOTE_METRICS_ENABLED: "true" } }), {});
+    expect(env.DIARIZATION_MODEL_DIR).toBe(ctx().diarizationModelDir);
+    expect(env.PYANNOTE_METRICS_ENABLED).toBe("false");
+  });
+
+  it("drops an inherited HF_TOKEN from every python child", () => {
+    expect("HF_TOKEN" in childEnv(ctx(), { HF_TOKEN: "hf_shell" })).toBe(false);
+  });
 });
 
 describe("HF_TOKEN goes to the Python children only (R-6b, 스펙 §6.4)", () => {
@@ -755,6 +772,7 @@ describe("HF_TOKEN goes to the Python children only (R-6b, 스펙 §6.4)", () =>
     databaseMode: "embedded",
     env,
     bins: { python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+    diarizationModelDir: "/b/models/pyannote-speaker-diarization-community-1",
     runId: "desktop-test",
     searchDirs: [],
     logFile: (id) => `/u/logs/${id}.log`,
@@ -853,6 +871,8 @@ describe("loadConfig — keys the child env must not take from config.json (P4-C
       "FFPROBE_BIN",
       "PYTHONPYCACHEPREFIX",
       "DAMWHA_SHARED_STATE",
+      "DIARIZATION_MODEL_DIR",
+      "PYANNOTE_METRICS_ENABLED",
     ];
     write(Object.fromEntries(claimed.map((k) => [k, "x"])));
     const c = loadConfig(dir);

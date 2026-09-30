@@ -20,6 +20,7 @@ function ctx(env: Record<string, string> = {}): LaunchContext {
     databaseMode: "embedded",
     env: { EMBED_SERVICE_HOST: "127.0.0.1", EMBED_SERVICE_PORT: "8100", ...env },
     bins: { python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+    diarizationModelDir: "/b/models/pyannote-speaker-diarization-community-1",
     runId: "desktop-test",
     searchDirs: [],
     logFile: (id) => `/u/logs/${id}.log`,
