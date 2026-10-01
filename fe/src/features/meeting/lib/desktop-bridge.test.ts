@@ -11,7 +11,6 @@ vi.mock("./live-session", () => live);
 type Bridge = {
   isRecording(): boolean;
   stopLiveRecording(): Promise<{ stopped: boolean; reason?: string }>;
-  hfToken?: unknown;
 };
 
 function install(): Bridge {
@@ -68,11 +67,10 @@ describe("installDesktopBridge", () => {
     expect(w.__damwha_desktop).toBe(first);
   });
 
-  it("carries the HF token bridge main asks (스펙 2026-09-25 §4)", () => {
-    const w = {} as Window & { __damwha_desktop?: { hfToken?: { show: unknown; next: unknown } } };
+  it("has no hfToken field", () => {
+    const w = {} as Window & { __damwha_desktop?: Bridge };
     installDesktopBridge(w);
-    expect(typeof w.__damwha_desktop!.hfToken!.show).toBe("function");
-    expect(typeof w.__damwha_desktop!.hfToken!.next).toBe("function");
+    expect("hfToken" in w.__damwha_desktop!).toBe(false);
   });
 
   it("uiLanguage 브리지를 건다 — main이 이 이름으로 부른다", () => {

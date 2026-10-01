@@ -44,6 +44,10 @@ run("bash", [path.join("scripts", "build-postgres.sh")], desktop);
 // 둘 다 캐시가 있으면 스테이징만 하고 끝난다.
 run("bash", [path.join("scripts", "build-python.sh")], desktop);
 run("bash", [path.join("scripts", "build-ffmpeg.sh")], desktop);
+// 화자 분리 모델(pyannote/speaker-diarization-community-1)도 같은 자리에 스테이징한다 —
+// desktop/build/models. 체크섬이 committed models-checksums.txt와 맞지 않으면 스테이징하지
+// 않고 멈춘다 (§4.5 신뢰 경계). 캐시가 있으면 스테이징만 하고 끝난다.
+run("bash", [path.join("scripts", "build-models.sh")], desktop);
 
 // desktop 자신을 **먼저, 깨끗하게** 컴파일한다. electron-builder는 package.json의 main(dist/main.js)과
 // dist/ 전체를 그대로 싣는데, 루트 `pnpm build`에는 desktop의 컴파일이 없다(desktop에는 build 스크립트가

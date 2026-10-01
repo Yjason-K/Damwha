@@ -70,6 +70,7 @@ vi.mock("@/shared/api/client", async () => {
 });
 
 const { SpeakersPage } = await import("@/pages/speakers");
+const { apiClient } = await import("@/shared/api/client");
 
 afterEach(cleanup);
 
@@ -108,6 +109,17 @@ test("화자 등록 버튼으로 등록 다이얼로그를 연다", async () => 
     ),
   ).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "등록" })).toBeInTheDocument();
+});
+
+test("화자가 없을 때도 등록 버튼은 헤더의 하나뿐이다", async () => {
+  vi.mocked(apiClient.get).mockResolvedValueOnce({ data: [] });
+  renderPage();
+  expect(
+    await screen.findByText("아직 등록된 화자가 없어요"),
+  ).toBeInTheDocument();
+  expect(
+    screen.getAllByRole("button", { name: "화자 등록" }),
+  ).toHaveLength(1);
 });
 
 /** 미리듣기 — jsdom은 재생을 구현하지 않으므로 prototype을 가로챈다. */

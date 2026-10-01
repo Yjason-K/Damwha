@@ -405,6 +405,7 @@ def _settings_stub():
         lens_llm_model="qwen2.5:14b-instruct",
         summary_llm_model="qwen2.5:14b-instruct",
         hf_token=None,
+        diarization_model_dir=None,
         meeting_timezone="Asia/Seoul",
         live_max_minutes=240.0,
     )
@@ -492,6 +493,7 @@ def test_dispatch_passes_prefix_through_to_persist(conn, tmp_path, monkeypatch):
         lens_llm_model="qwen-dispatch",
         summary_llm_model="qwen-dispatch",
         hf_token=None,
+        diarization_model_dir=None,
         meeting_timezone="Asia/Seoul",
         live_max_minutes=240.0,
     )

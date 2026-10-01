@@ -1,7 +1,7 @@
 {
   "name": "damwha-desktop",
   "private": true,
-  "version": "0.4.2",
+  "version": "0.4.3",
   "license": "MIT",
   "description": "Damwha macOS desktop shell. Runs the NestJS API as a child process and loads the SPA it serves.",
   "main": "dist/main.js",
@@ -10,7 +10,7 @@
   },
   "scripts": {
     "compile": "tsc -p tsconfig.json",
-    "start:desktop": "bash scripts/build-postgres.sh && bash scripts/build-python.sh && bash scripts/build-ffmpeg.sh && pnpm run compile && electron .",
+    "start:desktop": "bash scripts/build-postgres.sh && bash scripts/build-python.sh && bash scripts/build-ffmpeg.sh && bash scripts/build-models.sh && pnpm run compile && electron .",
     "package:desktop": "node scripts/package.mjs",
     "package:release": "node scripts/package.mjs --release",
     "test": "vitest run --passWithNoTests",
@@ -23,6 +23,6 @@
     "electron": "44.3.0",
     "electron-builder": "26.15.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.11"
   }
 }

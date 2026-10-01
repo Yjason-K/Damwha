@@ -21,20 +21,21 @@ export function rowAction(r: ModelRow): { kind: RowActionKind; reason: string | 
   return { kind: null, reason: "처리 중인 작업이 쓰고 있어요" };
 }
 
-export function jobErrorText(r: ModelRow): { text: string; accept: boolean } | null {
+export function jobErrorText(r: ModelRow): { text: string } | null {
   const j = r.job;
   if (j === null || j.status !== "failed" || j.error === null) return null;
   const code = j.error.code;
   if (code === "download_cancelled") return null;
   if (j.type === "download_model" && r.installed === "yes") return null; // 그 뒤에 받아졌다
-  if (code === "DISK_FULL") return { text: j.error.message, accept: false };
-  if (code === "hf_token_invalid")
-    return { text: "허깅페이스 토큰이 유효하지 않아 받지 못했어요. 토큰을 확인해 주세요.", accept: false };
-  if (code === "hf_gate_not_accepted") return { text: "모델 사용 조건에 동의해야 받을 수 있어요.", accept: true };
-  if (code === "model_in_use") return { text: "처리 중인 작업이 쓰고 있어 지우지 않았어요.", accept: false };
+  if (code === "DISK_FULL") return { text: j.error.message };
+  if (code === "model_in_use") return { text: "처리 중인 작업이 쓰고 있어 지우지 않았어요." };
+  // 앱 번들이 깨졌다 — 다시 받아도 풀리지 않는다 (worker는 hub로 가지 않는다).
+  if (code === "diarization_bundle_missing") {
+    return { text: "앱에 포함된 화자 분리 모델을 찾을 수 없어요. 앱을 다시 설치해 주세요." };
+  }
   return j.type === "delete_model"
-    ? { text: "지우지 못했어요.", accept: false }
-    : { text: "받지 못했어요. 인터넷 연결을 확인하고 다시 받아 주세요.", accept: false };
+    ? { text: "지우지 못했어요." }
+    : { text: "받지 못했어요. 인터넷 연결을 확인하고 다시 받아 주세요." };
 }
 
 export function conflictText(code: string | undefined): string | null {

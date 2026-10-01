@@ -13,7 +13,7 @@ import os
 import shutil
 
 from .. import db, errors
-from ..models import cache_scan, downloads, specs
+from ..models import bundle, cache_scan, downloads, specs
 from .stage import enter_stage
 
 log = logging.getLogger("damwha_worker")
@@ -40,12 +40,27 @@ def _download_kwargs(payload, hf_token):
     return kw
 
 
-def run_download_model(conn, job, payload, *, worker_id, hf_token, snapshot=None) -> str:
+def run_download_model(conn, job, payload, *, worker_id, hf_token, diarization_model_dir=None,
+                       snapshot=None) -> str:
     job_id = job["id"]
     # 재queue된 job에 이미 취소가 찍혀 있을 수 있다 — 받기 전에 본다 (스펙 §7.1).
     if db.stop_requested(conn, job_id):
         raise downloads.DownloadCancelled(payload.name)
     enter_stage(conn, job_id, worker_id, "download_model", 0)
+    if payload.name == specs.DIARIZATION_MODEL and diarization_model_dir:
+        # 앱이 싣고 온 모델이다 (스펙 2026-09-30 §3.3). 업그레이드 전 토큰 시절에 넣은 job이
+        # 여기 온다 — 토큰 없이 게이트 저장소를 부르면 401로 실패하므로 받지 않고 끝낸다.
+        # 번들이 깨졌어도 hub로 가지 않는다: 401이 "인터넷 연결" 문구로 보일 뿐이고, 필요한 조치는
+        # 재설치다. 번들 경로가 없는 터미널 `pnpm worker`만 아래 hub 경로를 탄다.
+        if not bundle.bundle_complete(diarization_model_dir):
+            raise errors.WorkerError(
+                errors.DIARIZATION_BUNDLE_MISSING,
+                f"the bundled diarization model at {diarization_model_dir!r} is incomplete — "
+                "reinstall the app",
+                errors.ErrorKind.PERMANENT,
+            )
+        downloads.mark_ready(payload.name)
+        return "committed" if db.complete_job(conn, job_id, worker_id) else "lost"
     kwargs = _download_kwargs(payload, hf_token)
     try:
         with downloads.cancel_when(lambda: db.stop_requested(conn, job_id)):

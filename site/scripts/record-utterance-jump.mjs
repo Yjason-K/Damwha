@@ -9,7 +9,8 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { chromium } from "playwright";
 
-const DEMO = "https://damwha-demo.0kimjae.dev";
+// 새 데모 이미지를 서버에 올리기 전에는 로컬 스모크(deploy/demo/README.md)로 녹화한다: DEMO_URL=http://localhost:3100
+const DEMO = process.env.DEMO_URL ?? "https://damwha-demo.0kimjae.dev";
 const QUERY = "인지적 부채"; // docs/images/2026-09-20/README.md app-02와 같은 질의
 const LANDING = /\/meetings\/mtg_6\?u=/; // 같은 README의 web-03 도착지
 const MAX_BYTES = 2 * 1024 * 1024;

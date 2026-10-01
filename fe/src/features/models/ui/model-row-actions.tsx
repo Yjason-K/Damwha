@@ -1,8 +1,6 @@
 import { useState } from "react";
 import { isApiError } from "@/shared/api/client";
 import { Button } from "@/shared/ui/button";
-import { useDiarizationGate } from "@/features/hf-token/ui/hf-token-gate";
-import { HfFailureAction } from "@/features/hf-token/ui/hf-failure-action";
 import { useCancelModelJob, useDownloadModel } from "../api/models";
 import type { ModelRow } from "../api/types";
 import { conflictText, exceedsFreeSpace, jobErrorText, rowAction } from "../lib/actions";
@@ -36,34 +34,24 @@ function useConflictFor(row: ModelRow) {
   };
 }
 
-/**
- * 받기 시작 공통 로직 (스펙 §6.4) — 화자 분리 모델은 `useDiarizationGate().run()`을 거친다. 토큰이
- * 없으면 게이트가 다이얼로그를 띄우고 여기서는 요청을 보내지 않는다 — 토큰을 넣은 뒤 자동으로
- * 이어 받지 않는다(기존 게이트와 같게, 사람이 "받기"를 다시 누른다).
- */
+/** 받기 시작 공통 로직 (스펙 §6.4). */
 function useDownloadStart(
   row: ModelRow,
   conflict: { report: (e: unknown) => void; clear: () => void },
 ) {
   const download = useDownloadModel();
-  const gate = useDiarizationGate();
   const key = { role: row.role, name: row.name, backend: row.backend };
-
   const start = () => {
     conflict.clear();
-    const go = () =>
-      download.mutate(key, { onSuccess: conflict.clear, onError: conflict.report });
-    if (row.role === "diarization") gate.run(go);
-    else go();
+    download.mutate(key, { onSuccess: conflict.clear, onError: conflict.report });
   };
-
-  return { start, isPending: download.isPending, locked: gate.locked };
+  return { start, isPending: download.isPending };
 }
 
-/** 요약(§6.1)의 안 받은 줄에 붙는 "미리 받기" — 행 동작과 같은 시작 로직(게이트 포함)을 쓴다. */
+/** 요약(§6.1)의 안 받은 줄에 붙는 "미리 받기" — 행 동작과 같은 시작 로직을 쓴다. */
 export function DownloadNowButton({ row, label }: { row: ModelRow; label: string }) {
   const { conflict, report, clear } = useConflictFor(row);
-  const { start, isPending, locked } = useDownloadStart(row, { report, clear });
+  const { start, isPending } = useDownloadStart(row, { report, clear });
   return (
     <span className="flex items-center gap-2">
       {conflict && <span className="text-xs text-[color:var(--red-text)]">{conflict}</span>}
@@ -72,7 +60,7 @@ export function DownloadNowButton({ row, label }: { row: ModelRow; label: string
         size="sm"
         variant="secondary"
         aria-label={`${label} 미리 받기`}
-        disabled={isPending || locked}
+        disabled={isPending}
         onClick={start}
       >
         미리 받기
@@ -82,8 +70,7 @@ export function DownloadNowButton({ row, label }: { row: ModelRow; label: string
 }
 
 /**
- * 모델 행의 동작 (모델 다운로드 관리 스펙 §6.4). 받기는 확인 없이, 삭제는 확인 뒤, 화자 분리 모델
- * 받기는 토큰 게이트를 거친다 — 토큰을 넣은 뒤 자동으로 이어 받지 않는다(기존 게이트와 같게).
+ * 모델 행의 동작 (모델 다운로드 관리 스펙 §6.4). 받기는 확인 없이, 삭제는 확인 뒤 진행한다.
  *
  * 받기·취소·삭제는 한 행에서 배타적(`rowAction`이 한 번에 하나만 고른다)이라 오류 한 줄을 셋이
  * 공유한다({@link useConflictFor}) — 어느 동작을 시작하거나(삭제는 확인 다이얼로그를 여는 시점)
@@ -99,7 +86,7 @@ export function ModelRowActions({
   label: string;
 }) {
   const { conflict, report, clear } = useConflictFor(row);
-  const { start: startDownload, isPending: downloadPending, locked } = useDownloadStart(row, {
+  const { start: startDownload, isPending: downloadPending } = useDownloadStart(row, {
     report,
     clear,
   });
@@ -129,7 +116,7 @@ export function ModelRowActions({
               size="sm"
               variant="secondary"
               aria-label={`${label} 받기`}
-              disabled={downloadPending || locked}
+              disabled={downloadPending}
               onClick={startDownload}
             >
               {action.kind === "download" ? "받기" : "다시 받기"}
@@ -169,7 +156,6 @@ export function ModelRowActions({
       {err && (
         <p className="flex items-center gap-2 text-xs text-[color:var(--red-text)]">
           {err.text}
-          {err.accept && <HfFailureAction action="accept" />}
         </p>
       )}
       {conflict && <p className="text-xs text-[color:var(--red-text)]">{conflict}</p>}

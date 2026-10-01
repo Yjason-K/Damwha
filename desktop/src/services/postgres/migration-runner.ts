@@ -12,7 +12,7 @@ import { nodeChildEnv, type ApiEnv } from "../../config/config";
  * 테스트는 forkFn으로 자식이 받는 인자·env만 본다. dev 러너는 runTool을 주입받는다.
  *
  * **두 러너의 env는 러너가 만든다** — 부르는 쪽(main.ts)은 감독자의 ctx.env를 그대로 넘기고, 러너가 실행하는 그때
- * nodeChildEnv로 상속 env 위에 얹고 Python 전용 키(HF_TOKEN)를 뺀다 (R-6b). 마이그레이션은 토큰을 쓰지 않는다.
+ * nodeChildEnv로 상속 env 위에 얹고 HF_TOKEN을 뺀다 (R-6b) — 개발자 셸의 토큰을 흘리지 않는다.
  * DATABASE_URL은 항상 실린다 — dev의 cwd(be/)에서 dotenv가 be/.env를 읽지만 이미 있는 값을 덮지 않는다(스펙 §6.5-1).
  */
 function electronUtilityProcess() {

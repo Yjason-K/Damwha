@@ -501,6 +501,11 @@ def _mark_ready(key: str) -> None:
         log.warning("model_readiness ready-mark failed for %s", key, exc_info=True)
 
 
+def mark_ready(key: str) -> None:
+    """캐시 밖에서 통째로 적재한 모델(앱 번들)도 `ready`로 적는다 (스펙 2026-09-30 §3.1)."""
+    _mark_ready(key)
+
+
 def _progress_class(report: _Report):
     base = _STATE.base_tqdm
 

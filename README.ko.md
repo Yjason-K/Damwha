@@ -12,7 +12,7 @@
 [![Node 22](https://img.shields.io/badge/Node-22-339933?logo=nodedotjs&logoColor=white)](.nvmrc)
 [![pnpm 10.26](https://img.shields.io/badge/pnpm-10.26-F69220?logo=pnpm&logoColor=white)](package.json)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](be/worker/pyproject.toml)
-[![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-MLX-000000?logo=apple&logoColor=white)](#ml-모델--게이트-걸림-용량-큼)
+[![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-MLX-000000?logo=apple&logoColor=white)](#ml-모델)
 
 ### [제품 사이트](https://damwha.0kimjae.dev/ko/) · [▶ 공개 데모 열기](https://damwha-demo.0kimjae.dev)
 
@@ -157,7 +157,6 @@ MLX/torch가 잡은 GPU 메모리를 OS가 매번 회수한다 — 쌓여서 OOM
 | [uv](https://docs.astral.sh/uv/) | Python 워커의 환경 + 락파일 | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | **ffmpeg** (`PATH`에) | 모든 오디오 job이 업로드 정규화로 시작한다(`pipeline/ffmpeg.py`). 바이너리가 없으면 기동이 아니라 job이 실패한다 | `brew install ffmpeg` |
 | **mlx-lm** — 따로 설치 안 함 | 렌즈/요약 LLM을 서빙한다. `mlx-lm==0.31.3`이 워커의 `models` extra에 고정돼 있고(Apple Silicon 한정), 워커가 `PATH`의 바이너리가 아니라 `python -m damwha_worker.llm_entry`로 띄운다 | `uv sync --extra models`에 포함 |
-| Hugging Face 계정 + 토큰 | pyannote 화자 분리는 **게이트 걸린** 모델이다 | [ML 모델](#ml-모델--게이트-걸림-용량-큼) 참고 |
 
 Apple Silicon이 상정한 타깃이다. STT는 `mlx-whisper`, LLM은 MLX로 돈다.
 그 밖의 환경에서는 STT가 `faster-whisper`(CPU)로 떨어지고, `gpu`를 요구하는 job은
@@ -173,7 +172,7 @@ corepack enable            # 고정된 pnpm@10.26.0 활성화
 pnpm install               # 루트 락파일 하나로 be + fe 설치
 
 cp be/.env.example be/.env                # DATABASE_URL, STORAGE_ROOT, 모델 관련 env
-cp be/worker/.env.example be/worker/.env  # DATABASE_URL, HF_TOKEN, LENS_LLM_BASE_URL
+cp be/worker/.env.example be/worker/.env  # DATABASE_URL, LENS_LLM_BASE_URL (HF_TOKEN은 앱 밖에서 워커만 돌릴 때만)
 cp fe/.env.example fe/.env                # VITE_API_BASE_URL
 
 pnpm db:up                 # Postgres(pgvector + pg_bigm). 첫 실행은 이미지를 빌드한다
@@ -203,7 +202,9 @@ example 파일은 전부 채워져 있고 주석도 달려 있다 — 복사해�
   `../storage`이고 둘이 *같은* 디렉터리로 풀려야 한다. 저장소 루트에서 패키지를
   실행하면 안 되는 이유도 이것 — 루트 스크립트(`pnpm be …`, `pnpm worker`)가
   `--filter` / `uv run --directory`로 cwd를 대신 잡아 준다.
-- **`HF_TOKEN`** (워커) — pyannote에 필수. 토큰이 비면 화자 분리가 실패한다.
+- **`HF_TOKEN`** (워커) — 앱 밖에서 워커만 돌릴 때만 필요하다(`pnpm worker`,
+  `DIARIZATION_MODEL_DIR` 없이). 데스크톱 앱은 화자 분리 모델을 번들로 실어 이 키를
+  읽지 않는다.
 - **`LENS_LLM_BASE_URL`** (워커) — **필수이고 기본값이 없다.** 포트도 명시해야 한다
   (워커가 그 host:port로 LLM 서버를 띄운다). 기본값을 두면 "주소를 설정 안 했다"와
   "그 주소에 아무도 안 떠 있다"가 구분되지 않는다.
@@ -234,20 +235,26 @@ pnpm worker            # supervisor 실행
 lazy라, job이 실제로 하나를 claim할 때까지 아무도 불평하지 않는다. 테스트용 sync를
 돌렸으면 `pnpm worker:sync`를 다시 돌릴 것.
 
-### ML 모델 — 게이트 걸림, 용량 큼
+### ML 모델
 
 `models` extra는 torch, pyannote, speechbrain, mlx-whisper, bge-m3를 끌어온다.
-가중치까지 내려오면 수십 GB다. pyannote는 **게이트가 걸려 있으므로**, 첫 실행 전에
-Hugging Face에 로그인해 라이선스 세 개를 모두 수락해야 한다.
+가중치까지 내려오면 수십 GB다.
 
-1. 수락: [speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1),
-   [segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0),
-   [speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
-2. 토큰을 `be/worker/.env`에 `HF_TOKEN=hf_...`로 넣는다
-3. 선택 — 미리 받아 두기(안 하면 첫 job이 내려받는다):
-   ```bash
-   uv run --directory be/worker python scripts/download_models.py
-   ```
+화자 분리 모델
+[`pyannote/speaker-diarization-community-1`](https://huggingface.co/pyannote/speaker-diarization-community-1)
+(CC-BY-4.0)은 **데스크톱 앱 안에 들어 있다** — 앱에서 쓸 때는 Hugging Face 계정도
+토큰도 필요 없다. whisper·요약 LLM·`bge-m3`·ECAPA 화자 임베더는 번들에 없고, 지금처럼
+처음 쓸 때 받는다.
+
+앱 없이 워커만 돌리면(`pnpm worker`, 데스크톱 빌드 없이) 화자 분리는 Hugging Face
+hub로 폴백한다 — 위 모델 페이지에서 조건에 동의하고 `be/worker/.env`에 `HF_TOKEN`을
+넣거나, `desktop/scripts/build-models.sh`가 스테이징한 폴더(예:
+`desktop/build/models/pyannote-speaker-diarization-community-1`)를
+`DIARIZATION_MODEL_DIR`로 가리켜 토큰 없이 적재한다. 선택 — 미리 받아 두기(안 하면
+첫 job이 내려받는다):
+```bash
+uv run --directory be/worker python scripts/download_models.py
+```
 
 ### 임베드 서비스
 
@@ -314,10 +321,6 @@ Damwha는 macOS 앱 한 벌로 배포된다 — 소스 체크아웃도, Docker�
 최신 DMG를 받아 열고 Damwha를 Applications로 끌어다 놓으면 된다. **macOS 15.0 이상,
 Apple Silicon**이 필요하다.
 
-처음 실행하면 Hugging Face 토큰을 물어본다 — 화자 분리 모델이 게이트 걸려 있어서다.
-토큰 발급과 모델 라이선스 수락 방법은 [`docs/HUGGINGFACE.md`](docs/HUGGINGFACE.md)
-(5분이면 끝나고 승인 대기도 없다).
-
 [`docs/MODELS.md`](docs/MODELS.md) — 모델: 저장 위치, 용량, 설정에서 상태 확인.
 
 공개 데모는 위 설치 경로와는 **별개**인, 읽기 전용 웹 배포다. 이미지도 시드 데이터도
@@ -350,8 +353,11 @@ API나 워커를 건드리기 전에 [`be/CLAUDE.md`](be/CLAUDE.md)를 읽는다
 
 [MIT](LICENSE) © 2026 김영재.
 
-라이선스가 덮는 것은 이 저장소의 소스뿐이다. 워커가 돌리는 ML 모델은 설치 시점에
-**각자의 약관**으로 내려받는 것이고 여기에 벤더링되지도 재배포되지도 않는다 —
-pyannote 화자 분리는 게이트 걸린 Hugging Face 모델이라 사용자가 각자 수락해야 하고
-([`docs/HUGGINGFACE.md`](docs/HUGGINGFACE.md) 참고), `ffmpeg`는 직접 설치한
+라이선스가 덮는 것은 이 저장소의 소스뿐이다. 화자 분리 모델 하나는 앱에 포함해
+재배포한다 — `pyannote/speaker-diarization-community-1`, © [pyannoteAI](https://www.pyannote.ai)
+and pyannote contributors, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), 변경 없음
+(모델 카드에 적힌 인용 — Plaquet & Bredin, INTERSPEECH 2023 외 — 은 모델 옆에 실리는
+`NOTICE.txt`에 적었다). 나머지
+모델(whisper, 요약 LLM, `bge-m3`, ECAPA 화자 임베더)은 재배포하지 않고 설치
+시점에 각자 저장소에서 **각자의 약관**으로 받는다. `ffmpeg`는 직접 설치한
 외부 바이너리를 호출해 쓴다.

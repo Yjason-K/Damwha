@@ -78,8 +78,11 @@ function ErrorState({
   );
 }
 
-/** 화자가 하나도 없을 때의 안내 + 등록 CTA. */
-function EmptyState({ onRegister }: { onRegister: () => void }) {
+/**
+ * 화자가 하나도 없을 때의 안내. 등록 버튼은 두지 않는다 — 헤더의 "화자 등록"과 같은
+ * 버튼이 한 화면에 두 번 뜨었다.
+ */
+function EmptyState() {
   return (
     <Card
       padding="lg"
@@ -99,9 +102,6 @@ function EmptyState({ onRegister }: { onRegister: () => void }) {
           화자를 등록하면 회의에서 목소리를 자동으로 식별할 수 있어요.
         </p>
       </div>
-      <Button iconLeft={<PlusIcon />} onClick={onRegister}>
-        화자 등록
-      </Button>
     </Card>
   );
 }
@@ -141,7 +141,7 @@ export function SpeakersPage() {
             }}
           />
         ) : speakers.data.length === 0 ? (
-          <EmptyState onRegister={() => setEnrollOpen(true)} />
+          <EmptyState />
         ) : (
           <ul className="flex flex-col gap-2">
             {speakers.data.map((speaker, index) => (
