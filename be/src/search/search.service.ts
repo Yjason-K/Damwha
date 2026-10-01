@@ -50,6 +50,7 @@ function validateQuery(query: SearchQuery): void {
   const idChecks: [string[] | null | undefined, RegExp][] = [
     [f.meetingIds, /^mtg_[1-9][0-9]*$/],
     [f.speakerIds, /^spk_[1-9][0-9]*$/],
+    [f.tagIds, /^tag_[1-9][0-9]*$/],
   ];
   for (const [ids, re] of idChecks) {
     if (ids == null) continue;
@@ -99,6 +100,7 @@ export class SearchService {
       dateTo: query.filters?.dateTo ?? null,
       speakerIds: query.filters?.speakerIds ?? null,
       meetingIds: query.filters?.meetingIds ?? null,
+      tagIds: query.filters?.tagIds ?? null,
     };
 
     if (q === '') {
