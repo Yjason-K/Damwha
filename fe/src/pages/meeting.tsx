@@ -69,6 +69,28 @@ const STAGE_LABELS: Record<string, string> = {
   embed: "색인",
 };
 
+/** 같은 단계가 이만큼 이어지면 배너에 경과 시간을 붙인다. */
+const STAGE_ELAPSED_SHOW_MS = 60_000;
+/** 같은 단계가 이만큼 이어지면 "오래 걸릴 수 있다"는 안내를 붙인다. */
+const LONG_STAGE_MS = 180_000;
+
+/**
+ * 같은 `key`(단계)가 이어진 시간. 워커는 vad·diarize·identify 안에서 진행률을 움직이지 않아
+ * 긴 대화는 몇 분씩 같은 %에 머문다 — 숫자가 멈춰 있어도 시간이 흘러야 "멈췄다"로 읽히지 않는다.
+ *
+ * `now`는 status가 도착한 순간(dataUpdatedAt)이다 — 렌더에서 Date.now()를 부르지 않는다
+ * (react-hooks/purity). 화면을 연 순간부터 센다: 이미 진행 중이던 단계에 들어오면 실제보다
+ * 짧게 보인다. 길게 보이는 쪽보다 낫다.
+ */
+function useStageElapsed(key: string, now: number): number {
+  const [since, setSince] = React.useState({ key, at: now });
+  if (since.key !== key) {
+    setSince({ key, at: now });
+    return 0;
+  }
+  return Math.max(0, now - since.at);
+}
+
 function ProcessingBanner({
   meeting,
   status,
@@ -89,6 +111,27 @@ function ProcessingBanner({
   const downloading = downloadingNow(
     settings.data?.modelReadiness,
     settings.dataUpdatedAt,
+  );
+
+  // 백오프가 30초·90초·210초·450초로 길어졌다 (Phase 5 스펙 §5). 그동안 "대기 중"만 쓰면
+  // 정상 재시도와 worker 미기동·DB 장애가 한 얼굴이 된다.
+  // 기준 시각은 status가 도착한 순간(statusUpdatedAt) — 위 downloading과 같은 이유로
+  // 렌더에서 Date.now()를 부르면 안 된다(react-hooks/purity, 같은 함수 안의 downloadingNow 호출 참고).
+  const retryAt = status?.retry?.next_attempt_at ?? null;
+  const retryMs =
+    retryAt === null ? null : new Date(retryAt).getTime() - statusUpdatedAt;
+  // 다운로드 문구가 이긴다. 그쪽은 stageLabel과 **독립된 span**이라(아래 downloading 분기),
+  // 여기서 막지 않으면 "재시도 대기"와 "모델을 받는 중"이 같이 뜬다.
+  const showRetry = downloading.length === 0 && retryMs !== null && retryMs > 0;
+  // 훅은 아래 failed 분기보다 앞에 있어야 한다. 재시도 대기는 따로 센다 — 같은 stage로 돌아와도
+  // 대기 시간이 그 단계의 경과에 섞이지 않게.
+  const stageElapsedMs = useStageElapsed(
+    status === undefined
+      ? "loading"
+      : showRetry
+        ? "retry"
+        : (status.stage ?? "queued"),
+    statusUpdatedAt,
   );
 
   if (meeting.status === "failed") {
@@ -135,16 +178,6 @@ function ProcessingBanner({
     );
   }
 
-  // 백오프가 30초·90초·210초·450초로 길어졌다 (Phase 5 스펙 §5). 그동안 "대기 중"만 쓰면
-  // 정상 재시도와 worker 미기동·DB 장애가 한 얼굴이 된다.
-  // 기준 시각은 status가 도착한 순간(statusUpdatedAt) — 위 downloading과 같은 이유로
-  // 렌더에서 Date.now()를 부르면 안 된다(react-hooks/purity, 같은 함수 안의 downloadingNow 호출 참고).
-  const retryAt = status?.retry?.next_attempt_at ?? null;
-  const retryMs =
-    retryAt === null ? null : new Date(retryAt).getTime() - statusUpdatedAt;
-  // 다운로드 문구가 이긴다. 그쪽은 stageLabel과 **독립된 span**이라(아래 downloading 분기),
-  // 여기서 막지 않으면 "재시도 대기"와 "모델을 받는 중"이 같이 뜬다.
-  const showRetry = downloading.length === 0 && retryMs !== null && retryMs > 0;
   // 마지막 시도가 남긴 **job의** 오류 코드 (스펙 §6 — "마지막 오류 요약"). meeting.error는
   // 재시도 대기 중에 null이라 대신 쓸 수 없다. 코드 한 토큰만 붙인다 — 배너는 한 줄이다.
   const retryErrorCode = status?.retry?.error?.code ?? null;
@@ -159,6 +192,16 @@ function ProcessingBanner({
       : "대기 중";
   const raw = status?.progress ?? null;
   const pct = raw == null ? null : Math.round(raw <= 1 ? raw * 100 : raw);
+  const elapsedLabel =
+    !showRetry && stageElapsedMs >= STAGE_ELAPSED_SHOW_MS
+      ? ` · ${Math.floor(stageElapsedMs / 60_000)}분째`
+      : "";
+  // 단계 안에서 진행률이 멈춰 있는 것이 정상이라는 것을 말해 둔다. 받는 중이면 그쪽이 이유다.
+  const showLongStage =
+    !showRetry &&
+    downloading.length === 0 &&
+    !!status?.stage &&
+    stageElapsedMs >= LONG_STAGE_MS;
 
   return (
     <div
@@ -178,7 +221,13 @@ function ProcessingBanner({
         {stageLabel}
         {/* requeue는 progress를 지우지 않는다 — 재시도 대기 문구가 이겼으면 옛 진행률을 덧붙이지 않는다. */}
         {!showRetry && pct != null ? ` · ${pct}%` : ""}
+        {elapsedLabel}
       </span>
+      {showLongStage ? (
+        <span className="min-w-0 truncate text-[color:var(--text-muted)]">
+          긴 대화는 이 단계가 오래 걸릴 수 있어요
+        </span>
+      ) : null}
       {/* 첫 처리는 모델을 받느라 한참 멈춘 것처럼 보인다 (Phase 4 스펙 §6.9, 완료 기준 P4-C6).
           이유를 말하지 않으면 멈춘 것으로 읽히고, 사람이 취소를 누른다. */}
       {downloading.length > 0 ? (
