@@ -127,4 +127,69 @@ describe('meeting tags api', () => {
     expect(res.body.results.map((r: any) => r.meetingId)).toEqual([tagged]);
     await request(srv()).post('/search').send({ filters: { tagIds: ['mtg_1'] } }).expect(400);
   });
+
+  describe('요약의 태그 추천(tag_suggestions)', () => {
+    const summarize = (id: string, suggested: string[], status = 'done', version = 0) =>
+      db.pool.query(
+        `INSERT INTO meeting_summary(meeting_id, processing_version, model, status, suggested_tags)
+         VALUES($1,$2,'m',$3,$4::jsonb)`,
+        [id, version, status, JSON.stringify(suggested)],
+      );
+    const suggestionsOf = async (id: string) =>
+      (await request(srv()).get(`/meetings/${id}`).expect(200)).body.tag_suggestions;
+
+    it('지금 쓰이는 태그만, 현재 표기로, 이미 붙은 건 빼고 추천 순서대로 돌려준다', async () => {
+      const other = await mkMeeting();
+      const id = await mkMeeting();
+      await setTags(other, ['주간회의', 'API', '예산']).expect(200);
+      await setTags(id, ['예산']).expect(200);
+      await summarize(id, ['예산', 'api', '없는 태그', '주간회의']);
+      expect(await suggestionsOf(id)).toEqual(['API', '주간회의']);
+    });
+
+    it('요약 뒤 사용자가 직접 붙이면 추천에서 빠지고, 떼면 다시 나온다', async () => {
+      const other = await mkMeeting();
+      const id = await mkMeeting();
+      await setTags(other, ['주간회의']).expect(200);
+      await summarize(id, ['주간회의']);
+      expect(await suggestionsOf(id)).toEqual(['주간회의']);
+      await setTags(id, ['주간회의']).expect(200);
+      expect(await suggestionsOf(id)).toEqual([]);
+      await setTags(id, []).expect(200);
+      expect(await suggestionsOf(id)).toEqual(['주간회의']);
+    });
+
+    it('추천된 태그가 요약 뒤 어느 회의에도 안 남으면 빠진다', async () => {
+      const other = await mkMeeting();
+      const id = await mkMeeting();
+      await setTags(other, ['채용']).expect(200);
+      await summarize(id, ['채용']);
+      await setTags(other, []).expect(200);
+      expect(await suggestionsOf(id)).toEqual([]);
+    });
+
+    it('요약이 끝나지 않았거나 이전 처리 버전이면 추천이 없다', async () => {
+      const other = await mkMeeting();
+      await setTags(other, ['주간회의']).expect(200);
+      const running = await mkMeeting();
+      await summarize(running, ['주간회의'], 'running');
+      expect(await suggestionsOf(running)).toEqual([]);
+      const stale = await mkMeeting();
+      await summarize(stale, ['주간회의'], 'done', 0);
+      await db.pool.query(`UPDATE meeting SET processing_version=1 WHERE id=$1`, [stale]);
+      expect(await suggestionsOf(stale)).toEqual([]);
+    });
+
+    it('요약 재생성을 걸면 이전 추천을 비운다', async () => {
+      const other = await mkMeeting();
+      const id = await mkMeeting();
+      await setTags(other, ['주간회의']).expect(200);
+      await summarize(id, ['주간회의']);
+      await request(srv()).post(`/meetings/${id}/summary/generate`).send({}).expect(202);
+      const { rows } = await db.pool.query(
+        `SELECT status, suggested_tags FROM meeting_summary WHERE meeting_id=$1`, [id],
+      );
+      expect(rows[0]).toEqual({ status: 'queued', suggested_tags: [] });
+    });
+  });
 });

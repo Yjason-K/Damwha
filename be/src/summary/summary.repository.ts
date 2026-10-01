@@ -59,7 +59,8 @@ export class SummaryRepository {
        ON CONFLICT (meeting_id) DO UPDATE
          SET processing_version = EXCLUDED.processing_version,
              job_id = EXCLUDED.job_id, model = EXCLUDED.model, status = 'queued',
-             topics = '[]'::jsonb, segments = '[]'::jsonb, error = NULL, updated_at = now()`,
+             topics = '[]'::jsonb, segments = '[]'::jsonb, suggested_tags = '[]'::jsonb,
+             error = NULL, updated_at = now()`,
       [args.meetingId, args.processingVersion, args.jobId, args.model],
     );
   }

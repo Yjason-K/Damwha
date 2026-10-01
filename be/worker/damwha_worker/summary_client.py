@@ -32,10 +32,40 @@ _SUMMARY_SYSTEM_PROMPT_BASE = (
 )
 
 
-def _summary_system_prompt(output_language: SummaryLanguage) -> str:
-    return _SUMMARY_SYSTEM_PROMPT_BASE + output_language_instruction(
-        "topics, title, and bullets", output_language
+# 태그는 새로 짓지 않고 기존 목록에서만 고른다 — 매 회의 "배포"·"배포 일정" 같은 비슷한
+# 이름이 늘어나면 태그로 묶어 보는 의미가 사라진다. 모델이 목록 밖 이름을 내면
+# _pick_tags가 버린다. 후보가 없으면 이 문단 자체를 싣지 않는다.
+_TAGS_INSTRUCTION = (
+    "Also add a third key, tags: an array of at most {max_tags} names chosen from the "
+    "existing tags listed after the transcript that clearly fit this whole conversation. "
+    "Copy each name exactly as listed. Never invent a new tag. Use an empty array "
+    "when none clearly fits. "
+)
+MAX_SUGGESTED_TAGS = 3
+
+
+def _summary_system_prompt(output_language: SummaryLanguage, with_tags: bool) -> str:
+    tags = _TAGS_INSTRUCTION.format(max_tags=MAX_SUGGESTED_TAGS) if with_tags else ""
+    return (
+        _SUMMARY_SYSTEM_PROMPT_BASE
+        + tags
+        + output_language_instruction("topics, title, and bullets", output_language)
     )
+
+
+def _pick_tags(returned: Any, candidates: list[str]) -> list[str]:
+    """모델이 고른 이름을 후보 표기로 되돌린다. 후보 밖·중복·비문자열은 버리고 상한에서 자른다."""
+    if not isinstance(returned, list):
+        return []
+    by_key = {c.strip().lower(): c for c in candidates}
+    picked: list[str] = []
+    for name in returned:
+        if not isinstance(name, str):
+            continue
+        match = by_key.get(name.strip().lstrip("#").strip().lower())
+        if match is not None and match not in picked:
+            picked.append(match)
+    return picked[:MAX_SUGGESTED_TAGS]
 
 
 class _LlmSegment(BaseModel):
@@ -53,9 +83,15 @@ class _LlmSummaryResponse(BaseModel):
     # topics/segments 생략 허용 — contracts.SummaryResponse와 같은 이유
     topics: list[NonEmptyText] = []
     segments: list[_LlmSegment] = []
+    # 모양을 묻지 않고 받아둔다 — 후보를 주지 않았는데 tags를 내거나, 문자열·객체
+    # 배열처럼 엉뚱한 모양으로 내도 그 때문에 요약 전체가 PERMANENT로 죽으면 안 된다.
+    # 쓸 값은 _pick_tags가 후보와 맞는 문자열만 골라낸다.
+    tags: Any = []
 
 
-def _map_indexes(parsed: _LlmSummaryResponse, ids: list[str]) -> SummaryResponse:
+def _map_indexes(
+    parsed: _LlmSummaryResponse, ids: list[str], tag_candidates: list[str]
+) -> SummaryResponse:
     """모델이 지목한 인덱스를 실제 id로 옮긴다. 범위 밖은 **자른다**.
 
     한때 여기서 PERMANENT로 거절했는데, mtg_16(발화 4개 · 그중 하나가 녹음의 72%)이
@@ -78,7 +114,11 @@ def _map_indexes(parsed: _LlmSummaryResponse, ids: list[str]) -> SummaryResponse
                 bullets=list(seg.bullets),
             )
         )
-    return SummaryResponse(topics=list(parsed.topics), segments=segments)
+    return SummaryResponse(
+        topics=list(parsed.topics),
+        segments=segments,
+        suggested_tags=_pick_tags(parsed.tags, tag_candidates),
+    )
 
 
 def _strip_code_fence(content: str) -> str:
@@ -141,11 +181,19 @@ class SummaryClient:
         model: str,
         utterances: list[dict[str, Any]],
         output_language: SummaryLanguage,
+        tag_candidates: list[str] | None = None,
     ) -> SummaryResponse:
         ids = [u["id"] for u in utterances]
+        candidates = list(tag_candidates or [])
+        user = _render_transcript(utterances)
+        if candidates:
+            user += "\n\nExisting tags: " + json.dumps(candidates, ensure_ascii=False)
         messages: list[dict[str, str]] = [
-            {"role": "system", "content": _summary_system_prompt(output_language)},
-            {"role": "user", "content": _render_transcript(utterances)},
+            {
+                "role": "system",
+                "content": _summary_system_prompt(output_language, with_tags=bool(candidates)),
+            },
+            {"role": "user", "content": user},
         ]
         content, finish_reason = self._request(model=model, messages=messages)
         if finish_reason == "length":
@@ -158,7 +206,7 @@ class SummaryClient:
             )
         try:
             parsed = _LlmSummaryResponse.model_validate(json.loads(_strip_code_fence(content)))
-            return _map_indexes(parsed, ids)
+            return _map_indexes(parsed, ids, candidates)
         except (json.JSONDecodeError, ValidationError) as exc:
             raise WorkerError(LLM_INVALID_RESPONSE, str(exc), ErrorKind.PERMANENT) from exc
 

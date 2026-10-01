@@ -446,3 +446,53 @@ def test_llm_call_is_timed_and_logged(conn, summary_job, caplog):
     text = "\n".join(r.getMessage() for r in caplog.records)
     assert f"job={job['id']} meeting={ids['meeting_id']} stage=summarize_meeting done" in text
     assert "utterances=2 segments=1" in text
+
+
+def _tag_meeting(conn, meeting_id, *names):
+    for name in names:
+        tag_id = conn.execute(
+            """INSERT INTO tag(name) VALUES (%s)
+               ON CONFLICT ((lower(name))) DO UPDATE SET name=tag.name RETURNING id""",
+            (name,),
+        ).fetchone()["id"]
+        conn.execute(
+            "INSERT INTO meeting_tag(meeting_id, tag_id) VALUES (%s, %s)", (meeting_id, tag_id)
+        )
+
+
+def test_pipeline_offers_tags_used_elsewhere_but_not_on_this_meeting(conn, summary_job):
+    job, ids = summary_job
+    other = seed_meeting(conn, status="done", processing_version=0)
+    another = seed_meeting(conn, status="done", processing_version=0)
+    _tag_meeting(conn, other, "예산", "주간회의")
+    _tag_meeting(conn, another, "주간회의")
+    _tag_meeting(conn, ids["meeting_id"], "예산")
+    conn.execute("INSERT INTO tag(name) VALUES ('고아')")  # 어느 회의에도 안 붙은 태그
+    captured = {}
+
+    def summarize(**kwargs):
+        captured.update(kwargs)
+        return _response([])
+
+    run_summarize_meeting(
+        conn, job, _payload(job), SimpleNamespace(summarize=summarize), worker_id="w"
+    )
+    # 많이 쓰인 순. 이 회의에 이미 붙은 '예산'과 고아 태그는 빠진다
+    assert captured["tag_candidates"] == ["주간회의"]
+
+
+def test_pipeline_persists_suggested_tags(conn, summary_job):
+    job, _ids = summary_job
+
+    def summarize(**_kw):
+        return SummaryResponse(topics=["주제"], segments=[], suggested_tags=["주간회의"])
+
+    assert (
+        run_summarize_meeting(
+            conn, job, _payload(job), SimpleNamespace(summarize=summarize), worker_id="w"
+        )
+        == "committed"
+    )
+    assert _one(conn, "SELECT suggested_tags FROM meeting_summary")["suggested_tags"] == [
+        "주간회의"
+    ]

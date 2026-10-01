@@ -193,7 +193,8 @@ export class MeetingsService {
     const clusters = await this.meetings.findClusters(this.db.pool, id);
     const summary = await this.summary.get(id);
     const tags = await this.tags.findForMeeting(this.db.pool, id);
-    return { ...meeting, tags, utterances, clusters, summary };
+    const tag_suggestions = await this.tags.findSuggestions(this.db.pool, id);
+    return { ...meeting, tags, tag_suggestions, utterances, clusters, summary };
   }
 
   async getStatus(id: string) {
