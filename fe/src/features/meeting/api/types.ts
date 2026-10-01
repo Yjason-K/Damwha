@@ -157,6 +157,11 @@ export type WireMeetingDetail = WireMeeting & {
   utterances: WireUtterance[];
   clusters: WireCluster[];
   summary: WireSummary | null;
+  /**
+   * 요약이 기존 태그 중에서 고른 추천 — 서버가 읽을 때 지금 있고 아직 안 붙은 것만 남긴다.
+   * 이 필드가 생기기 전 테스트 픽스처를 깨지 않으려고 optional.
+   */
+  tag_suggestions?: string[];
 };
 
 /** speaker row (SELECT * FROM speaker). enroll, list, get, rename 응답. */

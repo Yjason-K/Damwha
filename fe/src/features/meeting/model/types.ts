@@ -133,6 +133,8 @@ export type Meeting = {
   unverified?: number[];
   fav?: boolean;
   tags: MeetingTag[];
+  /** 요약이 추천한 기존 태그 이름. 붙이는 건 사용자다. */
+  tagSuggestions: string[];
   tracks: SpeakerLane[];
   utterances: UtteranceEntry[];
   topics: string[];

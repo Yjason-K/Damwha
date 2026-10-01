@@ -62,6 +62,26 @@ export class TagsRepository {
     );
   }
 
+  /**
+   * 현재 처리 버전의 완료된 요약이 추천한 태그 중 지금도 쓰이고 있고 이 회의에는 아직 없는 것.
+   * 요약이 도는 동안 사용자가 붙이거나 지운 태그를 여기서 다시 맞춘다 — 저장된 추천은 그대로 둔다.
+   */
+  async findSuggestions(exec: Queryable, meetingId: string): Promise<string[]> {
+    const { rows } = await exec.query<{ name: string }>(
+      `SELECT t.name
+       FROM meeting_summary s
+       JOIN meeting m ON m.id = s.meeting_id AND m.processing_version = s.processing_version
+       CROSS JOIN LATERAL jsonb_array_elements_text(s.suggested_tags) WITH ORDINALITY AS sug(name, ord)
+       JOIN tag t ON lower(t.name) = lower(sug.name)
+       WHERE s.meeting_id = $1 AND s.status = 'done'
+         AND EXISTS (SELECT 1 FROM meeting_tag mt WHERE mt.tag_id = t.id)
+         AND NOT EXISTS (SELECT 1 FROM meeting_tag mt WHERE mt.tag_id = t.id AND mt.meeting_id = $1)
+       ORDER BY sug.ord`,
+      [meetingId],
+    );
+    return rows.map((r) => r.name);
+  }
+
   async findForMeeting(exec: Queryable, meetingId: string): Promise<TagRow[]> {
     const { rows } = await exec.query<{ tags: TagRow[] }>(
       `SELECT ${meetingTagsJson('m')} AS tags FROM meeting m WHERE m.id=$1`,

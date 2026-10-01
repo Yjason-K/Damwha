@@ -337,3 +337,74 @@ def test_summarize_treats_a_connection_error_as_transient(monkeypatch):
             output_language="transcript", model="m", utterances=UTTS
         )
     assert exc.value.kind is ErrorKind.TRANSIENT
+
+
+def _capture(monkeypatch, body):
+    captured = {}
+
+    def handler(url, kw):
+        captured.update(kw)
+        return _ok(json.dumps(body, ensure_ascii=False))
+
+    _mount(monkeypatch, handler)
+    return captured
+
+
+def test_summarize_without_tag_candidates_does_not_mention_tags(monkeypatch):
+    captured = _capture(monkeypatch, BODY)
+    result = SummaryClient("http://x", None, 5.0, 8192).summarize(
+        output_language="transcript", model="m", utterances=UTTS
+    )
+    assert "tags" not in captured["json"]["messages"][0]["content"]
+    assert "Existing tags" not in captured["json"]["messages"][1]["content"]
+    assert result.suggested_tags == []
+
+
+def test_summarize_lists_tag_candidates_after_the_transcript(monkeypatch):
+    captured = _capture(monkeypatch, BODY)
+    SummaryClient("http://x", None, 5.0, 8192).summarize(
+        output_language="transcript",
+        model="m",
+        utterances=UTTS,
+        tag_candidates=["주간회의", "예산"],
+    )
+    system = captured["json"]["messages"][0]["content"]
+    user = captured["json"]["messages"][1]["content"]
+    assert "Never invent a new tag" in system
+    assert user.splitlines()[-1] == 'Existing tags: ["주간회의", "예산"]'
+    # 인덱스 범위 줄이 태그 목록보다 앞에 남는다 — 발화 줄 번호와 어긋나지 않게
+    assert user.splitlines()[:2] == ["1: 가", "2: 나"]
+
+
+def test_summarize_keeps_only_listed_tags_in_their_listed_spelling(monkeypatch):
+    body = {**BODY, "tags": ["#api", "예산", "새로 지은 태그", "API", "주간회의", "예산 "]}
+    _capture(monkeypatch, body)
+    result = SummaryClient("http://x", None, 5.0, 8192).summarize(
+        output_language="transcript",
+        model="m",
+        utterances=UTTS,
+        tag_candidates=["API", "예산", "주간회의", "채용"],
+    )
+    # 후보 밖 이름은 버리고, 대소문자·#·공백 차이는 후보 표기로 맞추고, 중복은 한 번, 최대 3개
+    assert result.suggested_tags == ["API", "예산", "주간회의"]
+
+
+def test_summarize_tolerates_tags_key_when_none_were_asked(monkeypatch):
+    # extra="forbid"라도 시키지 않은 tags 키 때문에 요약 전체가 죽으면 안 된다
+    _capture(monkeypatch, {**BODY, "tags": ["아무거나"]})
+    result = SummaryClient("http://x", None, 5.0, 8192).summarize(
+        output_language="transcript", model="m", utterances=UTTS
+    )
+    assert result.topics == ["파이프라인 실행 순서"]
+    assert result.suggested_tags == []
+
+
+@pytest.mark.parametrize("tags", ["주간회의", [{"name": "주간회의"}], None, [1, "주간회의"]])
+def test_summarize_survives_malformed_tags(monkeypatch, tags):
+    # tags 모양이 틀려도 요약은 살린다 — 문자열만, 후보와 맞는 것만 남긴다
+    _capture(monkeypatch, {**BODY, "tags": tags})
+    result = SummaryClient("http://x", None, 5.0, 8192).summarize(
+        output_language="transcript", model="m", utterances=UTTS, tag_candidates=["주간회의"]
+    )
+    assert result.topics == ["파이프라인 실행 순서"]
+    assert result.suggested_tags == (["주간회의"] if isinstance(tags, list) and 1 in tags else [])

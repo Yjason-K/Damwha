@@ -74,7 +74,7 @@ def conn(pg_url):
         yield c
     finally:
         c.execute(
-            "TRUNCATE job, utterance, meeting_cluster, voiceprint, meeting, speaker "
+            "TRUNCATE job, utterance, meeting_cluster, voiceprint, meeting, speaker, tag "
             "RESTART IDENTITY CASCADE"
         )
         c.execute("ALTER SEQUENCE speaker_default_seq RESTART")

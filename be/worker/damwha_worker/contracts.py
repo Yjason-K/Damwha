@@ -417,6 +417,8 @@ class SummaryResponse(BaseModel):
     # 기본값을 둬 요약 전체를 실패시키지 않는다.
     topics: list[NonEmptyText] = []
     segments: list[SummarySegmentCandidate] = []
+    # 기존 태그 중 모델이 고른 것(후보 표기 그대로). 회의에 붙이는 건 사용자다.
+    suggested_tags: list[str] = []
 
 
 class LiveSessionPayloadWire(BaseModel):
