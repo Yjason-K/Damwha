@@ -1,5 +1,6 @@
 """어댑터 계약 테스트 — 실모델 없이 sys.modules stub으로 kwargs를 검증한다."""
 
+import logging
 import sys
 import types
 
@@ -316,7 +317,7 @@ STOCK_CASE = [
 ]
 
 
-def test_mlx_drops_stock_hallucination_per_segment(monkeypatch):
+def test_mlx_drops_stock_hallucination_per_segment(monkeypatch, caplog):
     calls = []
     _install_fake_mlx(monkeypatch, calls)
     import mlx_whisper
@@ -329,11 +330,14 @@ def test_mlx_drops_stock_hallucination_per_segment(monkeypatch):
     )
     from damwha_worker.models.whisper_mlx import MlxWhisper
 
-    words = MlxWhisper("large-v3-turbo").transcribe("a.wav", "ko", SPANS[:1])
+    with caplog.at_level(logging.INFO, logger="damwha_worker"):
+        words = MlxWhisper("large-v3-turbo").transcribe("a.wav", "ko", SPANS[:1])
     assert [w.text for w in words] == ["도와주셔서", "감사합니다.", "감사합니다."]
+    # 버린 세그먼트는 운영 로그로 보인다 — 기준값이 진짜 인사를 자르는지 확인할 단서
+    assert "stt dropped 1 stock-phrase segment(s): 감사합니다." in caplog.text
 
 
-def test_faster_drops_stock_hallucination_per_segment(monkeypatch):
+def test_faster_drops_stock_hallucination_per_segment(monkeypatch, caplog):
     calls = []
     _install_fake_faster(monkeypatch, calls)
     import faster_whisper
@@ -353,5 +357,23 @@ def test_faster_drops_stock_hallucination_per_segment(monkeypatch):
     monkeypatch.setattr(faster_whisper.WhisperModel, "transcribe", transcribe)
     from damwha_worker.models.whisper_faster import FasterWhisper
 
-    words = FasterWhisper("large-v3-turbo", "cpu").transcribe("a.wav", "ko", SPANS[:1])
+    with caplog.at_level(logging.INFO, logger="damwha_worker"):
+        words = FasterWhisper("large-v3-turbo", "cpu").transcribe("a.wav", "ko", SPANS[:1])
     assert [w.text for w in words] == ["도와주셔서", "감사합니다.", "감사합니다."]
+    assert "stt dropped 1 stock-phrase segment(s): 감사합니다." in caplog.text
+
+
+def test_stt_filter_log_is_silent_when_nothing_is_dropped(caplog):
+    from damwha_worker.models.base import log_stt_filters
+
+    with caplog.at_level(logging.INFO, logger="damwha_worker"):
+        log_stt_filters([], 0)
+    assert caplog.text == ""
+
+
+def test_stt_filter_log_counts_repetition_words(caplog):
+    from damwha_worker.models.base import log_stt_filters
+
+    with caplog.at_level(logging.INFO, logger="damwha_worker"):
+        log_stt_filters([], 223)
+    assert "stt dropped 223 repetition-loop word(s)" in caplog.text
