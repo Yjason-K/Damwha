@@ -79,11 +79,13 @@ function ProcessingBanner({
   statusUpdatedAt: number;
 }) {
   const cancel = useCancelProcessing();
-  // 이 응답은 모델을 받는 동안에만 다시 읽힌다 (useProcessingSettings의 refetchInterval).
+  // 처리 중에는 이 응답을 계속 다시 읽는다(watch) — 워커는 배너가 뜨고 나서 받기를 시작한다.
   // 무진행 판정의 기준 시각은 `dataUpdatedAt` — **이 값이 도착한 순간**이다. 렌더에서 Date.now()를
   // 부르면 같은 데이터가 리렌더마다 다른 답을 내고(React Compiler가 그것을 막는다), 폴링이
   // 멈춘 동안 시계만 흘러 멀쩡한 진행이 조용히 사라진다.
-  const settings = useProcessingSettings();
+  const settings = useProcessingSettings({
+    watch: meeting.status !== "failed",
+  });
   const downloading = downloadingNow(
     settings.data?.modelReadiness,
     settings.dataUpdatedAt,
