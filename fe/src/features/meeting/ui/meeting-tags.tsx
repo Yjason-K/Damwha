@@ -21,9 +21,11 @@ const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 export function MeetingTags({
   meetingId,
   tags,
+  suggestions: recommended = [],
 }: {
   meetingId: string;
   tags: MeetingTag[];
+  suggestions?: string[];
 }) {
   const [open, setOpen] = React.useState(false);
   const [draft, setDraft] = React.useState("");
@@ -129,6 +131,24 @@ export function MeetingTags({
           )}
         </PopoverContent>
       </Popover>
+      {!full && recommended.length > 0 && (
+        <>
+          <span className="ml-1 text-xs text-[color:var(--text-faint)]">
+            추천
+          </span>
+          {recommended.map((name) => (
+            <button
+              key={name}
+              type="button"
+              aria-label={`추천 태그 ${name} 붙이기`}
+              onClick={() => add(name)}
+              className="inline-flex h-[22px] cursor-pointer items-center rounded-xs border border-dashed border-[color:var(--border-strong)] px-1.5 text-xs font-medium text-[color:var(--text-muted)] outline-none transition-colors duration-[80ms] hover:border-[color:var(--accent-6)] hover:bg-[var(--accent-bg)] hover:text-[color:var(--accent-text)] focus-visible:[box-shadow:var(--focus-ring)]"
+            >
+              +#{name}
+            </button>
+          ))}
+        </>
+      )}
     </div>
   );
 }

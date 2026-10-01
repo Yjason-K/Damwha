@@ -573,7 +573,11 @@ export function TranscriptPane({
           )}
         </div>
         <div className="mt-2.5">
-          <MeetingTags meetingId={meeting.id} tags={meeting.tags} />
+          <MeetingTags
+            meetingId={meeting.id}
+            tags={meeting.tags}
+            suggestions={meeting.tagSuggestions}
+          />
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-[7px]">
           {meeting.attendees.map((a) => (

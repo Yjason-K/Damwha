@@ -26,13 +26,16 @@ afterEach(() => {
   put.mockClear();
 });
 
-function renderTags(tags: { id: string; name: string }[]) {
+function renderTags(
+  tags: { id: string; name: string }[],
+  suggestions: string[] = [],
+) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   render(
     <QueryClientProvider client={client}>
-      <MeetingTags meetingId="mtg_1" tags={tags} />
+      <MeetingTags meetingId="mtg_1" tags={tags} suggestions={suggestions} />
     </QueryClientProvider>,
   );
 }
@@ -99,4 +102,21 @@ test("떼기 버튼은 그 태그만 빼고 보낸다", async () => {
       names: ["예산"],
     }),
   );
+});
+
+test("추천 태그를 누르면 기존 태그 뒤에 붙인다", async () => {
+  renderTags([{ id: "tag_1", name: "기획" }], ["주간회의"]);
+  fireEvent.click(
+    screen.getByRole("button", { name: "추천 태그 주간회의 붙이기" }),
+  );
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith("/meetings/mtg_1/tags", {
+      names: ["기획", "주간회의"],
+    }),
+  );
+});
+
+test("추천이 없으면 추천 영역을 그리지 않는다", () => {
+  renderTags([{ id: "tag_1", name: "기획" }]);
+  expect(screen.queryByText("추천")).not.toBeInTheDocument();
 });

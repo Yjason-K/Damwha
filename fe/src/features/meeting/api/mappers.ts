@@ -250,6 +250,7 @@ export function toMeetingDetail(wire: WireMeetingDetail): Meeting {
     unverified,
     fav: wire.is_favorite,
     tags: wire.tags ?? [],
+    tagSuggestions: wire.tag_suggestions ?? [],
     tracks,
     utterances: utteranceEntries,
     topics: wire.summary?.topics ?? [],
