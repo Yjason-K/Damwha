@@ -21,8 +21,14 @@ const DOWNLOAD_POLL_MS = 3000;
  *
  * 모델을 받는 **동안에만** 다시 읽는다. 상시 폴링하면 아무 일도 없는 대부분의 시간에 3초마다
  * 설정을 다시 가져오고, 안 하면 진행률이 화면에 박힌 채 멈춰 있다.
+ *
+ * `watch`는 "받기가 **시작될 수 있는** 동안에도 읽어라"다. 받는 중일 때만 읽으면 받기 전에 온
+ * 첫 응답이 폴링을 꺼 버리고, 그 뒤 워커가 받기를 시작해도 아무도 다시 묻지 않는다 — 처리 중
+ * 배너가 "모델을 받는 중"을 끝내 말하지 못하던 원인이다.
  */
-export function useProcessingSettings(): UseQueryResult<ProcessingSettings> {
+export function useProcessingSettings(
+  { watch = false }: { watch?: boolean } = {},
+): UseQueryResult<ProcessingSettings> {
   return useQuery({
     queryKey: ["processing-settings"],
     queryFn: async () => {
@@ -34,6 +40,7 @@ export function useProcessingSettings(): UseQueryResult<ProcessingSettings> {
     // 기준 시각은 이 데이터가 도착한 순간이다 — 화면(`ProcessingBanner`)과 같은 값을 써야
     // "화면에는 받는 중인데 폴링은 멈췄다"가 생기지 않는다.
     refetchInterval: (query) =>
+      watch ||
       downloadingNow(query.state.data?.modelReadiness, query.state.dataUpdatedAt)
         .length > 0
         ? DOWNLOAD_POLL_MS

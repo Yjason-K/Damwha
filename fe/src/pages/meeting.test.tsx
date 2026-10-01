@@ -1123,6 +1123,72 @@ test("받는 모델이 없으면 배너에 그 줄이 없다", async () => {
   expect(screen.queryByText(/모델을 받는 중/)).toBeNull();
 });
 
+test("배너가 뜬 뒤에 시작된 모델 받기도 배너가 말한다", async () => {
+  // 워커는 단계에 들어간 뒤 모델을 처음 부를 때 받기 시작한다. 첫 응답(받는 것 없음)이 폴링을
+  // 꺼 버리면 그 뒤의 받기는 화면에 영영 안 나타난다 — "진행률이 이유 없이 멈췄다"의 원인.
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    renderShell("/meetings/m3");
+    await screen.findByText(/회의를 처리하고 있어요/);
+    expect(screen.queryByText(/모델을 받는 중/)).toBeNull();
+
+    fx.setModelReadiness({
+      updatedAt: new Date().toISOString(),
+      entries: [
+        {
+          key: "mlx-community/whisper-large-v3-turbo",
+          state: "downloading",
+          bytesDone: 512,
+          bytesTotal: 2048,
+          startedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          writer: "worker-1",
+          attempt: 1,
+          error: null,
+          errorKind: null,
+        },
+      ],
+    });
+    await vi.advanceTimersByTimeAsync(3_100);
+    expect(
+      await screen.findByText(/mlx-community\/whisper-large-v3-turbo 25%/),
+    ).toBeInTheDocument();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("같은 단계가 이어지면 경과 시간을, 오래면 안내를 붙인다", async () => {
+  // vad·diarize·identify는 단계 안에서 진행률이 움직이지 않는다. 숫자가 멈춰 있어도
+  // 시간이 흘러야 사람이 오류로 읽지 않는다.
+  fx.setStatus({ stage: "diarize", progress: 35 });
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    renderShell("/meetings/m3");
+    expect(await screen.findByText(/화자 분리 · 35%/)).toBeInTheDocument();
+    expect(screen.queryByText(/분째/)).toBeNull();
+    expect(screen.queryByText(/오래 걸릴 수 있어요/)).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(62_000);
+    expect(await screen.findByText(/화자 분리 · 35% · 1분째/)).toBeInTheDocument();
+    expect(screen.queryByText(/오래 걸릴 수 있어요/)).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(
+      await screen.findByText(/긴 대화는 이 단계가 오래 걸릴 수 있어요/),
+    ).toBeInTheDocument();
+
+    // 단계가 바뀌면 시계는 처음부터 다시 센다.
+    fx.setStatus({ stage: "identify", progress: 50 });
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(await screen.findByText(/화자 식별 · 50%/)).toBeInTheDocument();
+    expect(screen.queryByText(/분째/)).toBeNull();
+    expect(screen.queryByText(/오래 걸릴 수 있어요/)).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test("재시도 대기 중이면 배너가 회차와 남은 시간을 말한다", async () => {
   // 백오프가 30초·90초·210초·450초로 길어져(Phase 5) job이 몇 분씩 queued로 남을 수 있다 —
   // stage가 없는 그 구간을 "대기 중"과 구분해서 말해야 한다.
