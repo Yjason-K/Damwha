@@ -39,6 +39,7 @@ from damwha_worker.models.base import SpeechSpan, Word  # noqa: E402
 from damwha_worker.pipeline.ffmpeg import probe  # noqa: E402
 from damwha_worker.pipeline.stt_repetition import drop_repetition_loops  # noqa: E402
 from damwha_worker.pipeline.stt_spans import prepare_stt_spans  # noqa: E402
+from damwha_worker.pipeline.stt_stock_phrases import drop_stock_hallucination  # noqa: E402
 
 _SR = 16000
 _WINDOW_S = 30.0  # whisper 디코딩 창 — clip이 이보다 짧아도 창 하나를 통째로 쓴다
@@ -102,22 +103,25 @@ def windows(spans: list[SpeechSpan]) -> int:
     return sum(max(1, math.ceil((s.end_ms - s.start_ms) / 1000 / _WINDOW_S)) for s in spans)
 
 
-def _words_from(result: dict, offset_ms: int = 0) -> list[Word]:
+def _words_from(result: dict, offset_ms: int = 0) -> tuple[list[Word], int]:
+    """(남긴 단어, 상투구 필터가 버린 단어 수). 필터는 프로덕션처럼 세그먼트마다 건다."""
     out: list[Word] = []
+    stock_dropped = 0
     for segment in result.get("segments", []):
-        for w in segment.get("words", []):
-            text = w["word"].strip()
-            if not text:
-                continue
-            out.append(
-                Word(
-                    text=text,
-                    start_ms=int(w["start"] * 1000) + offset_ms,
-                    end_ms=int(w["end"] * 1000) + offset_ms,
-                    confidence=w.get("probability"),
-                )
+        seg_words = [
+            Word(
+                text=w["word"].strip(),
+                start_ms=int(w["start"] * 1000) + offset_ms,
+                end_ms=int(w["end"] * 1000) + offset_ms,
+                confidence=w.get("probability"),
             )
-    return out
+            for w in segment.get("words", [])
+            if w["word"].strip()
+        ]
+        kept = drop_stock_hallucination(seg_words)
+        stock_dropped += len(seg_words) - len(kept)
+        out.extend(kept)
+    return out, stock_dropped
 
 
 def _mem_mb() -> float:
@@ -157,40 +161,49 @@ def run_variant(
 
     mx.clear_cache()
     words: list[Word] = []
+    stock_dropped = 0
     t0 = time.perf_counter()
+
+    def _add(result: dict, offset_ms: int = 0) -> None:
+        nonlocal stock_dropped
+        kept, dropped = _words_from(result, offset_ms)
+        words.extend(kept)
+        stock_dropped += dropped
 
     if variant == "baseline":
         full = mx.array(audio)
         calls = len(spans)
         for s in spans:
-            words += _words_from(_call(full, clip_timestamps=[s.start_ms / 1000, s.end_ms / 1000]))
+            _add(_call(full, clip_timestamps=[s.start_ms / 1000, s.end_ms / 1000]))
     elif variant == "slice":
         calls = len(spans)
         for s in spans:
             clip = audio[int(s.start_ms / 1000 * _SR) : int(s.end_ms / 1000 * _SR)]
-            words += _words_from(_call(mx.array(clip)), offset_ms=s.start_ms)
+            _add(_call(mx.array(clip)), offset_ms=s.start_ms)
     elif variant == "packed":
         chunks = pack_spans(spans, max_gap_ms=max_gap_ms, max_chunk_ms=max_chunk_ms)
         calls = len(chunks)
         for chunk in chunks:
             start_ms, end_ms = chunk[0].start_ms, chunk[-1].end_ms
             clip = audio[int(start_ms / 1000 * _SR) : int(end_ms / 1000 * _SR)]
-            words += _words_from(_call(mx.array(clip)), offset_ms=start_ms)
+            _add(_call(mx.array(clip)), offset_ms=start_ms)
     else:
         raise ValueError(f"unknown variant {variant!r}")
 
     elapsed = time.perf_counter() - t0
     speech_s = sum(s.end_ms - s.start_ms for s in spans) / 1000
-    # 프로덕션은 마지막에 디코더 축퇴 반복을 걷어낸다 — 텍스트 비교를 같은 지점에서
-    # 하려면 여기서도 걸어야 한다. raw도 같이 보고해 축퇴량 자체를 드러낸다.
+    # 프로덕션은 세그먼트마다 상투구 환각을, 마지막에 디코더 축퇴 반복을 걷어낸다 —
+    # 텍스트 비교를 같은 지점에서 하려면 여기서도 걸어야 한다. raw와 필터별 제거량도
+    # 같이 보고해 환각량 자체를 드러낸다 (packed는 무음을 다시 넣으므로 특히 볼 것).
     cleaned = drop_repetition_loops(words)
     return {
         "variant": variant,
         "calls": calls,
         "elapsed_s": round(elapsed, 1),
         "realtime_factor": round(speech_s / elapsed, 2) if elapsed else 0.0,
-        "raw_words": len(words),
+        "raw_words": len(words) + stock_dropped,
         "words": len(cleaned),
+        "dropped_by_stock_filter": stock_dropped,
         "dropped_by_repetition_filter": len(words) - len(cleaned),
         "active_memory_mb": _mem_mb(),
         "text": " ".join(w.text for w in cleaned),

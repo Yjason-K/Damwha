@@ -1,5 +1,6 @@
 """어댑터 계약 테스트 — 실모델 없이 sys.modules stub으로 kwargs를 검증한다."""
 
+import logging
 import sys
 import types
 
@@ -296,3 +297,83 @@ def test_faster_auto_passes_none(monkeypatch):
     FasterWhisper("large-v3-turbo", device="cpu").transcribe("a.wav", "auto", SPANS)
     (kwargs,) = calls
     assert kwargs["language"] is None
+
+
+def _stock_segments(words_per_segment):
+    """세그먼트마다 (단어, 확률) 목록. 상투구 필터가 세그먼트 단위로 도는지 본다."""
+    return [
+        [
+            {"word": f" {t}", "start": 0.5 + i * 0.4, "end": 0.9 + i * 0.4, "probability": p}
+            for i, (t, p) in enumerate(seg)
+        ]
+        for seg in words_per_segment
+    ]
+
+
+STOCK_CASE = [
+    [("감사합니다.", 0.3)],  # 단독 환각 — 버린다
+    [("도와주셔서", 0.3), ("감사합니다.", 0.3)],  # 문장의 일부 — 남긴다
+    [("감사합니다.", 0.98)],  # 확신한 실제 인사 — 남긴다
+]
+
+
+def test_mlx_drops_stock_hallucination_per_segment(monkeypatch, caplog):
+    calls = []
+    _install_fake_mlx(monkeypatch, calls)
+    import mlx_whisper
+
+    segs = _stock_segments(STOCK_CASE)
+    monkeypatch.setattr(
+        mlx_whisper,
+        "transcribe",
+        lambda audio, **kw: {"language": "ko", "segments": [{"words": s} for s in segs]},
+    )
+    from damwha_worker.models.whisper_mlx import MlxWhisper
+
+    with caplog.at_level(logging.INFO, logger="damwha_worker"):
+        words = MlxWhisper("large-v3-turbo").transcribe("a.wav", "ko", SPANS[:1])
+    assert [w.text for w in words] == ["도와주셔서", "감사합니다.", "감사합니다."]
+    # 버린 세그먼트는 운영 로그로 보인다 — 기준값이 진짜 인사를 자르는지 확인할 단서
+    assert "stt dropped 1 stock-phrase segment(s): 감사합니다." in caplog.text
+
+
+def test_faster_drops_stock_hallucination_per_segment(monkeypatch, caplog):
+    calls = []
+    _install_fake_faster(monkeypatch, calls)
+    import faster_whisper
+
+    segs = _stock_segments(STOCK_CASE)
+
+    def transcribe(self, wav_path, **kwargs):
+        return iter(
+            types.SimpleNamespace(
+                start=s[0]["start"],
+                end=s[-1]["end"],
+                words=[types.SimpleNamespace(**w) for w in s],
+            )
+            for s in segs
+        ), None
+
+    monkeypatch.setattr(faster_whisper.WhisperModel, "transcribe", transcribe)
+    from damwha_worker.models.whisper_faster import FasterWhisper
+
+    with caplog.at_level(logging.INFO, logger="damwha_worker"):
+        words = FasterWhisper("large-v3-turbo", "cpu").transcribe("a.wav", "ko", SPANS[:1])
+    assert [w.text for w in words] == ["도와주셔서", "감사합니다.", "감사합니다."]
+    assert "stt dropped 1 stock-phrase segment(s): 감사합니다." in caplog.text
+
+
+def test_stt_filter_log_is_silent_when_nothing_is_dropped(caplog):
+    from damwha_worker.models.base import log_stt_filters
+
+    with caplog.at_level(logging.INFO, logger="damwha_worker"):
+        log_stt_filters([], 0)
+    assert caplog.text == ""
+
+
+def test_stt_filter_log_counts_repetition_words(caplog):
+    from damwha_worker.models.base import log_stt_filters
+
+    with caplog.at_level(logging.INFO, logger="damwha_worker"):
+        log_stt_filters([], 223)
+    assert "stt dropped 223 repetition-loop word(s)" in caplog.text

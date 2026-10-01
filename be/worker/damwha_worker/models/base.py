@@ -1,6 +1,9 @@
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
+
+log = logging.getLogger("damwha_worker")
 
 # 전사 진행 보고: (처리된 오디오 ms, 처리할 총 오디오 ms). clip/segment 하나가 끝날
 # 때마다 호출된다. speech_spans 없이(전체 파일) 호출되면 총량을 모르므로 보고하지 않는다.
@@ -14,6 +17,23 @@ AUTO_LANGUAGE = "auto"
 def whisper_language(language: str) -> str | None:
     """payload의 language를 whisper 인자로 옮긴다. `auto` → None(자동 감지)."""
     return None if language == AUTO_LANGUAGE else language
+
+
+def log_stt_filters(stock_dropped: list[str], repetition_dropped: int) -> None:
+    """두 어댑터가 STT 후처리로 버린 것을 같은 모양으로 남긴다. 버린 게 없으면 조용하다.
+
+    상투구 필터의 기준값(`stt_stock_phrases.MAX_CONFIDENCE`)은 회의 두 건으로 정했다 —
+    진짜 인사가 잘리는지 운영 로그로 볼 수 있어야 한다. 버린 텍스트는 정의상 상투구뿐이라
+    회의 내용이 새지 않는다. 반복 루프는 수백 단어라 개수만 남긴다.
+    """
+    if stock_dropped:
+        log.info(
+            "stt dropped %d stock-phrase segment(s): %s",
+            len(stock_dropped),
+            " | ".join(stock_dropped),
+        )
+    if repetition_dropped:
+        log.info("stt dropped %d repetition-loop word(s)", repetition_dropped)
 
 
 @dataclass
