@@ -6,7 +6,6 @@ import { describe, expect, it } from "vitest";
 import { CAUSES } from "../../src/diagnostics/causes";
 import { servicesView } from "../../src/windows/status-view";
 import { RETRY_LAYERS } from "../../src/windows/shell-hints";
-import { maskToken } from "../../src/config/token-store";
 import { STALL_MS, type ReadinessEntry } from "../../src/services/model-readiness";
 import type { ServiceStatus } from "../../src/services/types";
 
@@ -159,9 +158,9 @@ describe("services.html", () => {
 
   it("has no form, input, link, IPC, or HTML sink — 버튼은 생겼지만 채널은 여전히 없다 (스펙 §6.11 · §6.10)", () => {
     // Phase 2의 "버튼 0개"는 이 창에 사람이 할 일이 없던 때의 계약이다. Phase 4는
-    // "서비스 다시 시작"(§6.10 2층)을 **여기** 두라고 정한다. 토큰 입력은 담화 화면으로 옮겼다
-    // (스펙 2026-09-25 §5.4). 바뀌지 않은 것은 그 아래다: 입력칸도 폼도 링크도 IPC도 없고,
-    // 동작은 main이 거는 next()의 반환값으로만 나간다.
+    // "서비스 다시 시작"(§6.10 2층)을 **여기** 두라고 정한다. 앱은 HF 토큰을 쓰지 않는다 —
+    // 화자 분리 모델이 앱에 실려 온다(스펙 2026-09-30). 바뀌지 않은 것은 그 아래다: 입력칸도
+    // 폼도 링크도 IPC도 없고, 동작은 main이 거는 next()의 반환값으로만 나간다.
     const { html } = loadPage("services.html");
     const code = codeOf(html);
     for (const banned of [
@@ -288,10 +287,10 @@ describe("services.html", () => {
   });
 
   /**
-   * Task 11 — 이 창이 사람에게 주는 세 가지: 모델 준비, 토큰, 그리고 **층이 갈린** 재시도.
-   * 페이지가 그 셋을 실제로 그리고, 누른 것이 main의 next()로 나가는지를 본다.
+   * Task 11 — 이 창이 사람에게 주는 두 가지: 모델 준비, 그리고 **층이 갈린** 재시도.
+   * 페이지가 그 둘을 실제로 그리고, 누른 것이 main의 next()로 나가는지를 본다.
    */
-  describe("Task 11 — 모델 준비·토큰·재시도 2층 버튼", () => {
+  describe("Task 11 — 모델 준비·재시도 2층 버튼", () => {
     type Bridge = { next(): Promise<unknown> };
     const bridgeOf = (sandbox: Record<string, unknown>) => sandbox.__damwha_services as Bridge;
     const NOW = 1_800_000_000_000;
@@ -382,15 +381,12 @@ describe("services.html", () => {
       expect(got).toBe("pending");
     });
 
-    it("shows the token masked and has no token buttons — the input lives in Damwha now (스펙 2026-09-25 §5.4)", () => {
-      const { sandbox, byId, html } = loadPage("services.html");
-      const token = "hf_AbCdEfGhIjKlMnOpQrStUvWxYz01234567";
-      (sandbox.__damwha_render as (v: unknown) => void)(view({ maskedToken: maskToken(token) }));
-      expect(byId.get("token-value")!.textContent).toBe("hf_****…****4567");
-      expect(byId.get("token")!.textContent).not.toContain(token);
-      expect(byId.has("token-change")).toBe(false);
-      expect(byId.has("token-clear")).toBe(false);
-      expect(codeOf(html)).not.toMatch(/kind:\s*"token"/);
+    it("has no token section — the app does not use an HF token (스펙 2026-09-30 §5.1)", () => {
+      const { byId, html } = loadPage("services.html");
+      expect(byId.has("token")).toBe(false);
+      expect(byId.has("token-value")).toBe(false);
+      expect(html).not.toContain("허깅페이스 토큰");
+      expect(codeOf(html)).not.toMatch(/\.token\b/);
     });
 
     it("worker의 실패 문구도 글자로만 넣는다 — 그것은 HF가 보낸 남의 문자열이다", () => {

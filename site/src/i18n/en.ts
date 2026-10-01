@@ -74,7 +74,6 @@ export const en = {
     rows: [
       ["Mac", "Apple Silicon (M1 or later), macOS 15 or later"],
       ["Disk for models", "About 8 GB (Light) · 20 GB (Standard) · 40 GB (Quality), downloaded on first use"],
-      ["Hugging Face token", "Needed only for speaker diarization, with the model terms accepted on Hugging Face. Add it inside the app — Damwha opens without one."],
       ["Display language", "Korean and English. English UI is rolling out — some screens are still in Korean."],
       ["Conversation language", "Transcription: auto, Korean, English, Japanese, Chinese. Summaries: the transcript's language, Korean or English."],
     ],

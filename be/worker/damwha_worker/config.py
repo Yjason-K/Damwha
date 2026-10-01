@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     storage_root: str = "../storage"
     worker_id: str = "worker-1"
     hf_token: str | None = None
+    # 앱에 실린 화자 분리 모델 폴더 (스펙 2026-09-30 §3.1). desktop이 싣는다 — 없으면(터미널
+    # `pnpm worker`) 지금처럼 hub에서 HF_TOKEN으로 받는다.
+    diarization_model_dir: str | None = None
     poll_interval_seconds: float = 2.0
     # 라이브 배너의 "신호 끊김" 임계값(fe/src/features/meeting/ui/live-banner.tsx의
     # STALE_MS)이 이 값의 3배로 잡혀 있다. 주기를 늘리면 그 상수도 같이 본다 —

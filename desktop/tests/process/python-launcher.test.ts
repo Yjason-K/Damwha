@@ -32,6 +32,7 @@ function ctx(over: Partial<LaunchContext> = {}): LaunchContext {
     databaseMode: "embedded",
     env: { LENS_LLM_BASE_URL: llmBaseUrl(51234), DATABASE_URL: "postgres://x" },
     bins: { python: PY, ffmpeg: FF, ffprobe: "/b/ffmpeg/bin/ffprobe" },
+    diarizationModelDir: "/b/models/pyannote-speaker-diarization-community-1",
     runId: "desktop-test",
     // 앱 자신의 도구 탐색 목록. 자식 PATH에 한 조각도 들어가면 안 된다 (스펙 §6.2).
     searchDirs: ["/opt/homebrew/bin", "/usr/local/bin", "/Users/me/.local/bin", "/x/extra"],
@@ -115,6 +116,8 @@ describe("launchPython — 실행 계약 (스펙 §6.2)", () => {
     expect(env.HF_HOME).toBe("/u/models");
     expect("PYTHONHOME" in env).toBe(false);
     expect("VIRTUAL_ENV" in env).toBe(false);
+    expect(env.DIARIZATION_MODEL_DIR).toBe(c.diarizationModelDir);
+    expect(env.PYANNOTE_METRICS_ENABLED).toBe("false");
     child.emit("exit", 0);
   });
 

@@ -30,20 +30,33 @@ import time
 
 from . import db
 from .db import core
-from .models import cache_scan, specs
+from .models import bundle, cache_scan, specs
 
 log = logging.getLogger("damwha_worker")
 
 
-def build_inventory(root: str, *, lens_model: str | None, summary_fallback: str | None) -> dict:
+def build_inventory(
+    root: str,
+    *,
+    lens_model: str | None,
+    summary_fallback: str | None,
+    diarization_model_dir: str | None = None,
+) -> dict:
     by_repo = specs.specs_by_repo()
     scanned = cache_scan.scan_cache(root, by_repo)
+    repos = {
+        repo: {"size_bytes": r.size_bytes, "complete": r.complete}
+        for repo, r in sorted(scanned.items())
+    }
+    # 앱 번들이 온전하면 캐시 결과를 덮는다 (스펙 2026-09-30 §3.2). 캐시의 옛 사본은 무시된다.
+    if bundle.bundle_complete(diarization_model_dir):
+        repos[specs.DIARIZATION_MODEL] = {
+            "size_bytes": bundle.bundle_size(diarization_model_dir),
+            "complete": True,
+        }
     return {
         "scanned_at": core.readiness_now(),
-        "repos": {
-            repo: {"size_bytes": r.size_bytes, "complete": r.complete}
-            for repo, r in sorted(scanned.items())
-        },
+        "repos": repos,
         "resolved": [
             {"role": s.role, "name": s.name, "backend": s.backend, "repo_id": s.repo_id}
             for s in specs.all_specs()
@@ -68,6 +81,26 @@ def _free_bytes(root: str) -> int | None:
         return None
 
 
+def clear_stale_bundle_failure(conn, bundle_dir: str | None, writer: str) -> None:
+    """앱 번들이 온전하면 화자 분리 모델의 옛 readiness 항목을 `ready`로 고친다.
+
+    0.4.x는 이 모델을 hub에서 받았고, 토큰 오류(`hf_token_invalid` 등)로 남은 `failed`가 업그레이드
+    뒤에도 그대로 붙어 첫 회의를 돌리기 전까지 상태 창이 "실패"를 보인다. 번들 적재 경로
+    (`pyannote_diar`)가 `ready`를 쓰는 것은 적재 성공 뒤라 그 전에는 고쳐지지 않는다.
+
+    **이미 있는 항목만** 고친다 — 새 설치에 없던 항목을 만들지 않는다(스펙 §6.9 "실제로 건드린
+    모델만"). 쓰기는 `downloads._mark_ready`와 같은 길(`merge_model_readiness`)이고, writer는 이
+    worker의 id다.
+    """
+    if not bundle.bundle_complete(bundle_dir):
+        return
+    entry = db.read_model_readiness(conn)["entries"].get(specs.DIARIZATION_MODEL)
+    if not isinstance(entry, dict) or entry.get("state") == "ready":
+        return
+    db.merge_model_readiness(conn, specs.DIARIZATION_MODEL, {"state": "ready"}, writer)
+    log.info("bundled diarization model present — cleared stale readiness %r", entry.get("state"))
+
+
 def run_inventory_loop(
     database_url: str,
     settings,
@@ -88,12 +121,20 @@ def run_inventory_loop(
     last_fp = None
     last_write: float | None = None
     last_readiness_at: str | None = None
+    bundle_checked = False
     while not shutdown.is_set():
         try:
             fp = cache_scan.fingerprint(root)
             now = clock()
             conn = connect(database_url)
             try:
+                if not bundle_checked:
+                    # 기동 후 한 번 (`clear_stale_bundle_failure`). 스탬프를 읽기 **전**이라 이
+                    # 쓰기로 바뀐 updated_at은 같은 주기의 비교에 이미 들어간다.
+                    clear_stale_bundle_failure(
+                        conn, settings.diarization_model_dir, settings.worker_id
+                    )
+                    bundle_checked = True
                 # readiness 스탬프도 지문처럼 스캔 **전에** 읽는다 — 스캔 도중 바뀐 것은
                 # 다음 주기가 잡는다(모듈 docstring).
                 readiness_at = db.read_model_readiness(conn)["updated_at"]
@@ -108,6 +149,7 @@ def run_inventory_loop(
                         root,
                         lens_model=settings.lens_llm_model,
                         summary_fallback=settings.summary_llm_model,
+                        diarization_model_dir=settings.diarization_model_dir,
                     )
                     db.write_model_inventory(conn, value)
                     last_fp, last_write, last_readiness_at = fp, now, readiness_at

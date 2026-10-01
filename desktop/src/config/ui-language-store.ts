@@ -7,7 +7,8 @@ import { isUiLanguage, type UiLanguage } from "../i18n/locale";
  * 사람이 설정에서 고를 때만 쓴다(language-bridge.ts).
  *
  * 읽기는 절대 던지지 않는다: 깨진 파일 때문에 앱이 뜨지 않으면 언어를 고칠 화면에도 못 간다.
- * 쓰기는 던진다 — 호출자가 화면을 이전 값으로 되돌린다. 쓰기는 token-store.ts처럼 임시 파일 + rename.
+ * 쓰기는 던진다 — 호출자가 화면을 이전 값으로 되돌린다. 쓰기는 같은 폴더의 임시 파일에 쓰고 rename한다 —
+ * 도중에 죽어도 옛 파일이 반쯤 덮이지 않는다.
  */
 export const UI_LANGUAGE_FILE = "ui-language.json";
 

@@ -2,6 +2,8 @@ import * as fs from "fs";
 import * as path from "path";
 import { describe, expect, it } from "vitest";
 import {
+  DIARIZATION_BUNDLE_NAME,
+  diarizationModelDir,
   ffmpegBinaries,
   knownBundleDirs,
   PY_MINOR,
@@ -21,6 +23,7 @@ function ctx(over: { repoRoot: string | null; packaged: boolean; python: string 
     databaseMode: "embedded",
     env: {},
     bins: { python: over.python, ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+    diarizationModelDir: "/b/models/pyannote-speaker-diarization-community-1",
     runId: "desktop-test",
     searchDirs: [],
     logFile: (id) => `/u/logs/${id}.log`,
@@ -55,6 +58,17 @@ describe("ffmpegBinaries", () => {
       ffmpeg: "/b/ffmpeg/bin/ffmpeg",
       ffprobe: "/b/ffmpeg/bin/ffprobe",
     });
+  });
+});
+
+describe("diarizationModelDir", () => {
+  it("names the bundled pyannote folder under Resources/models", () => {
+    expect(diarizationModelDir("/b/models")).toBe("/b/models/pyannote-speaker-diarization-community-1");
+  });
+
+  it("keeps the folder name paired with build-models.sh", () => {
+    const script = fs.readFileSync(path.join(__dirname, "..", "..", "scripts", "build-models.sh"), "utf8");
+    expect(script).toMatch(new RegExp(`^NAME=${DIARIZATION_BUNDLE_NAME}$`, "m"));
   });
 });
 

@@ -48,7 +48,7 @@ describe("confirm dialog", () => {
     expect(d.options.cancelId).toBe(2);
     expect(d.choices).toEqual(["20260924T084933Z", "20260920T000000Z", null]);
     expect(String(d.options.detail)).toMatch(/data\.replaced-/);
-    expect(String(d.options.detail)).toMatch(/토큰·마이크 권한·모델은 그대로/);
+    expect(String(d.options.detail)).toMatch(/마이크 권한·모델은 그대로/);
   });
 });
 

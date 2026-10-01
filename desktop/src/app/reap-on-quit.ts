@@ -122,7 +122,7 @@ export interface QuitReapTarget {
 
 /**
  * main.ts가 B층에 넘기는 배선. 기동 정리와 같은 커널 잎(`systemReapDeps` — SIGTERM·유예·SIGKILL)을 쓴다.
- * 이번 실행이 트리를 계산하기 전에 끝났으면(토큰 온보딩 중 종료 등) 이번 실행의 자식이 있을 수 없으므로 null —
+ * 이번 실행이 트리를 계산하기 전에 끝났으면(설정 오류 화면에서 종료 등) 이번 실행의 자식이 있을 수 없으므로 null —
  * B층을 건너뛴다.
  */
 export function quitReapDeps(target: QuitReapTarget | null, log: (line: string) => void): ReapDeps | null {

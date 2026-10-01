@@ -1329,6 +1329,36 @@ test("취소된 회의는 실패가 아니라 취소 안내를 보여준다", as
   expect(screen.queryByText(/처리에 실패했어요/)).toBeNull();
 });
 
+test("앱에 실린 화자 분리 모델이 깨졌으면 다시 설치를 안내한다", async () => {
+  fx.setDetailOverride("m3", {
+    ...fx.detailOf("m3"),
+    status: "failed",
+    current_job_id: null,
+    error: { code: "diarization_bundle_missing", stage: "diarize", message: "incomplete" },
+  });
+  renderShell("/meetings/m3");
+  expect(await screen.findByText(/앱에 포함된 화자 분리 모델을 찾을 수 없어요/)).toBeInTheDocument();
+  expect(screen.getByText(/앱을 다시 설치해 주세요/)).toBeInTheDocument();
+});
+
+test.each(["hf_token_invalid", "hf_gate_not_accepted"])(
+  "예전 토큰 오류(%s)로 실패한 회의는 재처리를 안내한다",
+  async (code) => {
+    fx.setDetailOverride("m3", {
+      ...fx.detailOf("m3"),
+      status: "failed",
+      current_job_id: null,
+      error: { code, stage: "diarize", message: "401" },
+    });
+    renderShell("/meetings/m3");
+    expect(await screen.findByText(/처리에 실패했어요/)).toBeInTheDocument();
+    expect(
+      screen.getByText("재처리하면 앱에 포함된 모델로 다시 처리해요."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/토큰/)).toBeNull();
+  },
+);
+
 test("처리 중이던 회의가 done이 되면 <audio>를 다시 로드한다", async () => {
   const { container, client } = renderShell("/meetings/m3");
   await screen.findByText(/회의를 처리하고 있어요/);

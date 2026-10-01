@@ -16,8 +16,6 @@ import { searchIsKeywordOnly } from "@/features/settings/lib/model-readiness";
 import type { MeetingFilter } from "@/features/meeting/model/types";
 import { Icon } from "@/features/meeting/ui/icons";
 import { LeftNav } from "@/features/meeting/ui/left-nav";
-import { HfTokenGateProvider } from "@/features/hf-token/ui/hf-token-gate";
-import { HfTokenOnboarding } from "@/features/hf-token/ui/hf-token-onboarding";
 
 const TourNavigationGuard = React.lazy(() =>
   import("@/features/demo/ui/tour-navigation-guard").then((m) => ({
@@ -125,7 +123,7 @@ export function AppShell() {
   ].filter((g) => g.items.length > 0);
 
   return (
-    <HfTokenGateProvider>
+    <>
       <div className="grid h-screen min-w-[1260px] grid-cols-[var(--rail-nav)_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] bg-[var(--surface-app)] text-foreground">
         <LeftNav
           filter={filter}
@@ -160,7 +158,6 @@ export function AppShell() {
           </React.Suspense>
         ) : null}
       </div>
-      <HfTokenOnboarding />
-    </HfTokenGateProvider>
+    </>
   );
 }

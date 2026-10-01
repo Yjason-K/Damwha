@@ -27,13 +27,12 @@ describe("devMigrationRunner", () => {
   });
 });
 
-describe("migration runners — HF_TOKEN stays with the Python children (R-6b)", () => {
+describe("migration runners — an inherited HF_TOKEN never reaches them (R-6b)", () => {
   /**
    * 러너는 main.ts가 넘기는 감독자의 ctx.env를 받아 스스로 Node 자식 env(nodeChildEnv)를 만든다 — 상속 env 위에 얹고
-   * Python 전용 키를 뺀다. 마이그레이션은 토큰을 쓰지 않는다.
+   * HF_TOKEN을 뺀다. 앱은 토큰을 쓰지 않는다 — 개발자 셸의 토큰도 흘리지 않는다.
    */
-  const TOKEN = "hf_KeychainTokenValue0123456789abcd";
-  const live = { HF_TOKEN: TOKEN, DATABASE_URL: "postgresql://damwha@/damwha?host=%2Fu%2Frun" };
+  const live = { DATABASE_URL: "postgresql://damwha@/damwha?host=%2Fu%2Frun" };
 
   it("dev: pnpm gets the live env and the inherited one, without HF_TOKEN", async () => {
     vi.stubEnv("HF_TOKEN", "hf_fromTheDeveloperShell000000000");
@@ -55,7 +54,6 @@ describe("migration runners — HF_TOKEN stays with the Python children (R-6b)",
         expect(env.DATABASE_URL).toBe(live.DATABASE_URL);
         expect(env.PATH).toBe(process.env.PATH);
       }
-      expect(live.HF_TOKEN).toBe(TOKEN);
     } finally {
       vi.unstubAllEnvs();
     }

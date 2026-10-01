@@ -259,6 +259,7 @@ describe("apiSpec — migration gate (Phase 3)", () => {
     databaseMode: "embedded",
     env: { PORT: "3000" },
     bins: { python: "/b/python/bin/python3.12", ffmpeg: "/b/ffmpeg/bin/ffmpeg", ffprobe: "/b/ffmpeg/bin/ffprobe" },
+    diarizationModelDir: "/b/models/pyannote-speaker-diarization-community-1",
     runId: "desktop-test",
     searchDirs: [],
     logFile: () => "/u/logs/api.log",

@@ -57,11 +57,40 @@ def test_build_inventory_shape(tmp_path):
     assert isinstance(value["scanned_at"], str) and value["scanned_at"].endswith("Z")
 
 
+_DIAR = "pyannote/speaker-diarization-community-1"
+
+
+def test_bundle_overrides_cache_entry(tmp_path):
+    from tests.test_bundle import make_bundle
+
+    cache = tmp_path / "hub"
+    make_repo(cache, _DIAR, {"config.yaml": b"x"})  # 옛 캐시 사본(불완전)
+    bundle_dir = make_bundle(tmp_path / "bundle")
+    value = inventory.build_inventory(
+        str(cache), lens_model=None, summary_fallback=None, diarization_model_dir=str(bundle_dir)
+    )
+    assert value["repos"][_DIAR] == {"size_bytes": 15, "complete": True}
+
+
+def test_broken_bundle_keeps_cache_entry(tmp_path):
+    from tests.test_bundle import make_bundle
+
+    cache = tmp_path / "hub"
+    make_repo(cache, _DIAR, {"config.yaml": b"x"})
+    bundle_dir = make_bundle(tmp_path / "bundle", skip=("plda/plda.npz",))
+    value = inventory.build_inventory(
+        str(cache), lens_model=None, summary_fallback=None, diarization_model_dir=str(bundle_dir)
+    )
+    assert value["repos"][_DIAR]["complete"] is False
+
+
 class _Settings:
     database_url = "unused"
     poll_interval_seconds = 0.01
     lens_llm_model = "L"
     summary_llm_model = "S"
+    diarization_model_dir = None
+    worker_id = "w"
 
 
 class _StopAfter:
@@ -104,6 +133,33 @@ def _run(conn, root, *, ticks, clock, writes, fp_seq=None, monkeypatch=None):
         "unused", _Settings(), _StopAfter(ticks), root=str(root), interval=0,
         clock=clock, connect=connect,
     )
+
+
+def test_loop_passes_bundle_dir(conn, tmp_path, monkeypatch):
+    seen = []
+    real = inventory.build_inventory
+    monkeypatch.setattr(
+        inventory, "build_inventory",
+        lambda *a, **kw: seen.append(kw.get("diarization_model_dir")) or real(*a, **kw),
+    )
+    settings = _Settings()
+    settings.diarization_model_dir = "/b/models/p"
+
+    def connect(_url):
+        class _C:
+            def execute(self, *a, **k):
+                return conn.execute(*a, **k)
+
+            def close(self):
+                pass
+
+        return _C()
+
+    inventory.run_inventory_loop(
+        "unused", settings, _StopAfter(1), root=str(tmp_path), interval=0,
+        clock=lambda: 0.0, connect=connect,
+    )
+    assert seen == ["/b/models/p"]
 
 
 def test_loop_writes_at_start_then_only_on_change_or_timeout(conn, tmp_path, monkeypatch):
@@ -212,3 +268,79 @@ def test_build_inventory_reports_free_bytes(tmp_path, monkeypatch):
     monkeypatch.setattr(disk, "free_bytes", lambda _p: 123_456)
     value = inventory.build_inventory(str(tmp_path), lens_model=None, summary_fallback=None)
     assert value["free_bytes"] == 123_456
+
+
+# ── M1: 0.4.x가 남긴 화자 분리 readiness `failed`를 번들이 온전할 때 치운다 ──
+
+_READINESS = db.MODEL_READINESS_KEY
+
+
+@pytest.fixture
+def _clean_readiness(conn):
+    conn.execute("DELETE FROM app_setting WHERE key=%s", (_READINESS,))
+    yield
+    conn.execute("DELETE FROM app_setting WHERE key=%s", (_READINESS,))
+
+
+def _run_with_bundle(conn, tmp_path, bundle_dir, *, ticks=1):
+    settings = _Settings()
+    settings.worker_id = "w-test"
+    settings.diarization_model_dir = bundle_dir
+
+    def connect(_url):
+        class _C:
+            def execute(self, *a, **k):
+                return conn.execute(*a, **k)
+
+            def close(self):
+                pass
+
+        return _C()
+
+    inventory.run_inventory_loop(
+        "unused", settings, _StopAfter(ticks), root=str(tmp_path / "hub"), interval=0,
+        clock=lambda: 0.0, connect=connect,
+    )
+
+
+def test_complete_bundle_clears_stale_diarization_failure(conn, tmp_path, _clean_readiness):
+    from tests.test_bundle import make_bundle
+
+    db.merge_model_readiness(
+        conn, _DIAR, {"state": "failed", "error": "hf_token_invalid"}, "old-worker"
+    )
+    bundle_dir = make_bundle(tmp_path / "bundle")
+    _run_with_bundle(conn, tmp_path, str(bundle_dir))
+    entry = db.read_model_readiness(conn)["entries"][_DIAR]
+    assert entry["state"] == "ready"
+    assert entry["writer"] == "w-test"
+    assert entry["error"] is None
+
+
+def test_complete_bundle_marks_ready_only_once(conn, tmp_path, _clean_readiness, monkeypatch):
+    from tests.test_bundle import make_bundle
+
+    db.merge_model_readiness(conn, _DIAR, {"state": "failed"}, "old-worker")
+    calls = []
+    real = db.merge_model_readiness
+    monkeypatch.setattr(
+        inventory.db, "merge_model_readiness", lambda *a, **k: calls.append(a[1]) or real(*a, **k)
+    )
+    _run_with_bundle(conn, tmp_path, str(make_bundle(tmp_path / "bundle")), ticks=3)
+    assert calls == [_DIAR]
+
+
+def test_incomplete_bundle_leaves_diarization_failure(conn, tmp_path, _clean_readiness):
+    from tests.test_bundle import make_bundle
+
+    db.merge_model_readiness(conn, _DIAR, {"state": "failed"}, "old-worker")
+    bundle_dir = make_bundle(tmp_path / "bundle", skip=("plda/plda.npz",))
+    _run_with_bundle(conn, tmp_path, str(bundle_dir))
+    assert db.read_model_readiness(conn)["entries"][_DIAR]["state"] == "failed"
+
+
+def test_complete_bundle_without_entry_writes_nothing(conn, tmp_path, _clean_readiness):
+    from tests.test_bundle import make_bundle
+
+    _run_with_bundle(conn, tmp_path, str(make_bundle(tmp_path / "bundle")))
+    assert _DIAR not in db.read_model_readiness(conn)["entries"]

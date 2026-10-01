@@ -1,5 +1,4 @@
 import { CAUSES, causeIn, type CauseId } from "../diagnostics/causes";
-import { HF_TOKENS_PAGE_URL } from "../config/token-store";
 import type { ServiceId, ServiceStatus } from "../services/types";
 
 /**
@@ -32,7 +31,7 @@ const PYTHON_BUNDLE_MISSING =
  * | 층 | 무엇이 실패했나 | 화면 |
  * | --- | --- | --- |
  * | 1 | 다운로드만. 서비스는 살아 있다 | 이 문구. **버튼이 없다** — worker가 다음 job에서 다시 받는다 |
- * | 2 | 서비스가 죽었거나 토큰을 바꿨다 | 그 줄의 "서비스 다시 시작" 버튼 |
+ * | 2 | 서비스가 죽었다 | 그 줄의 "서비스 다시 시작" 버튼 |
  * | 3 | job이 이미 `failed`다 | 기존 재처리 경로. 새 경로를 만들지 않는다 |
  */
 export const RETRY_LAYERS = {
@@ -62,12 +61,7 @@ export const HINTS: Record<CauseId, Hint> = {
   // dev 전용 원인이다 — 폴더를 고르는 창은 없다. 저장소 안의 desktop/에서 띄우면 앱이 스스로 찾는다.
   repoRootMissing:
     "담화 저장소 안의 desktop/에서 앱을 띄웠는지 확인하거나, config.json의 REPO_ROOT에 be/worker가 있는 저장소 폴더를 적어 주세요.",
-  // 평문 저장을 권하지 않는다 — 앱에 그런 경로가 없다.
-  safeStorageUnavailable:
-    "키체인 접근 앱에서 로그인 키체인의 잠금을 해제한 뒤 담화를 다시 켜 주세요.",
   orphanScanFailed: "logs/supervisor.log에서 까닭을 확인한 뒤 메뉴의 서비스 > 다시 시도를 눌러 주세요.",
-  hfTokenInvalid: `${HF_TOKENS_PAGE_URL} 에서 토큰을 확인하거나 새로 만든 뒤 다시 입력해 주세요.`,
-  hfGateNotAccepted: "위 페이지에서 토큰을 만든 계정으로 사용 조건에 동의한 뒤 그 회의를 다시 처리해 주세요.",
   /**
    * **서비스 줄**에 이 원인이 실렸을 때의 안내다 — 그 서비스는 모델을 받다 죽었으므로 2층이다.
    * 모델 줄(status-view.ts의 modelRows)은 `errorKind`를 보고 1층·2층을 스스로 고른다: 같은 원인

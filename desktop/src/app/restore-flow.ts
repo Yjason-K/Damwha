@@ -35,7 +35,7 @@ export function confirmRestoreDialog(
       detail: [
         ...snaps.map((s) => `• ${snapshotLine(s.manifest, fmt)}`),
         "",
-        "그 뒤에 만든 회의와 바꾼 설정은 지우지 않고 data.replaced-… 폴더로 옮겨 둬요. 토큰·마이크 권한·모델은 그대로예요. 앱이 다시 시작돼요.",
+        "그 뒤에 만든 회의와 바꾼 설정은 지우지 않고 data.replaced-… 폴더로 옮겨 둬요. 마이크 권한·모델은 그대로예요. 앱이 다시 시작돼요.",
       ].join("\n"),
       buttons,
       defaultId: buttons.length - 1,

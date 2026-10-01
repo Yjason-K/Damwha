@@ -92,6 +92,11 @@ test("처리 중인 회의에는 내보내기 버튼이 없다", () => {
   expect(screen.queryByRole("button", { name: "내보내기" })).toBeNull();
 });
 
+test("회의 재처리 버튼은 잠겨 있지 않다", () => {
+  renderPane();
+  expect(screen.getByRole("button", { name: "회의 재처리" })).not.toBeDisabled();
+});
+
 test("하단 툴바의 중복·오작동 버튼을 렌더하지 않는다", () => {
   renderPane();
   expect(screen.queryByRole("button", { name: "발언 검색" })).toBeNull();

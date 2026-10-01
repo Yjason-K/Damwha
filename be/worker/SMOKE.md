@@ -5,12 +5,12 @@ Not a CI test. Loads gated/heavy models; run by hand on a machine with the
 
 ## One-time setup
 
-1. **Accept the pyannote licenses** (logged into HF). The diarization pipeline
-   (pyannote.audio 4.x) pulls a gated chain — accept **all three**:
-   - https://huggingface.co/pyannote/speaker-diarization-3.1
-   - https://huggingface.co/pyannote/segmentation-3.0
+1. **Accept the pyannote license** (logged into HF):
    - https://huggingface.co/pyannote/speaker-diarization-community-1
-   (download_models.py / the first run will name any further gated repo to accept.)
+
+   This smoke script runs outside the desktop app, so it always loads
+   diarization from the Hugging Face hub, not the app's bundled model — that's
+   why it needs a token here even though the shipped app doesn't.
 2. **Set your HF token** in `worker/.env`:
    ```
    HF_TOKEN=hf_xxx...

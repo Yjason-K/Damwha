@@ -189,6 +189,7 @@ def context_from_settings(
         lens_llm_model=settings.lens_llm_model,
         summary_llm_model=settings.summary_llm_model,
         hf_token=settings.hf_token,
+        diarization_model_dir=settings.diarization_model_dir,
         meeting_timezone=settings.meeting_timezone,
         live_max_minutes=settings.live_max_minutes,
         shutdown_event=shutdown_event,

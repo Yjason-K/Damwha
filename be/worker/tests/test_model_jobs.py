@@ -81,6 +81,56 @@ def test_download_without_spec_uses_name_as_repo(conn):
     assert calls[0].get("allow_patterns") is None
 
 
+_DIAR = {"schema_version": 1, "role": "diarization",
+         "name": "pyannote/speaker-diarization-community-1"}
+
+
+def test_download_diarization_is_noop_when_bundle_complete(conn, tmp_path, monkeypatch):
+    from tests.test_bundle import make_bundle
+
+    marked = []
+    monkeypatch.setattr(downloads, "mark_ready", marked.append)
+    job = _running(conn, "download_model", _DIAR)
+    out = model_jobs.run_download_model(
+        conn, job, _p(role="diarization", name=_DIAR["name"]), worker_id=W, hf_token=None,
+        diarization_model_dir=str(make_bundle(tmp_path)),
+        snapshot=lambda **kw: (_ for _ in ()).throw(AssertionError("must not download")),
+    )
+    assert out == "committed"
+    assert _status(conn, job["id"])["status"] == "done"
+    assert marked == [_DIAR["name"]]
+
+
+def test_download_diarization_fails_permanently_when_bundle_incomplete(conn, tmp_path):
+    """앱이 번들 경로를 알려 줬는데 번들이 깨졌으면 hub로 가지 않는다 — 토큰 없는 hub는 401이고,
+    화면은 그것을 "인터넷 연결" 문구로 보인다. 필요한 조치는 재설치다."""
+    from tests.test_bundle import make_bundle
+
+    bundle_dir = str(make_bundle(tmp_path, skip=("config.yaml",)))
+    job = _running(conn, "download_model", _DIAR)
+    with pytest.raises(errors.WorkerError) as info:
+        model_jobs.run_download_model(
+            conn, job, _p(role="diarization", name=_DIAR["name"]), worker_id=W, hf_token="t",
+            diarization_model_dir=bundle_dir,
+            snapshot=lambda **kw: pytest.fail("must not download"),
+        )
+    assert info.value.code == errors.DIARIZATION_BUNDLE_MISSING
+    assert info.value.kind == errors.ErrorKind.PERMANENT
+    assert bundle_dir in info.value.message
+
+
+def test_download_diarization_goes_to_hub_without_bundle_dir(conn):
+    """터미널 `pnpm worker`(번들 경로 없음)는 예전처럼 hub에서 받는다."""
+    calls = []
+    job = _running(conn, "download_model", _DIAR)
+    model_jobs.run_download_model(
+        conn, job, _p(role="diarization", name=_DIAR["name"]), worker_id=W, hf_token="t",
+        diarization_model_dir=None,
+        snapshot=lambda **kw: calls.append(kw) or "/tmp/x",
+    )
+    assert calls[0]["repo_id"] == _DIAR["name"] and calls[0]["token"] == "t"
+
+
 def test_download_already_cancelled_at_start(conn):
     job = _running(conn, "download_model", _STT_TINY_MLX)
     conn.execute("UPDATE job SET stop_requested_at=now() WHERE id=%s", (job["id"],))
