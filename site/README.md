@@ -59,6 +59,7 @@ pnpm site og               # OG 이미지 재생성
 - GitHub 저장소 About → Website에 `https://damwha.0kimjae.dev`를 넣는다.
 - 데모 이미지를 다시 릴리스해(`deploy/demo/release.sh`) `fe/index.html`의 noindex를 싣는다. 확인은
   `curl -s https://damwha-demo.0kimjae.dev/ | grep noindex`.
-- 데모를 다시 릴리스하면 다크 테마가 실린다. 그 뒤 `pnpm site record --lang ko`로 영상을 다시 녹화한다(2026-09-27
-  영상은 다크 테마 이전 배포본이라 라이트 화면이다).
+- 데모를 다시 릴리스하면 `pnpm site record --lang ko`로 영상을 다시 녹화한다. 서버에 올리기 전이면
+  로컬 스모크(`deploy/demo/README.md`)를 띄우고 `DEMO_URL=http://localhost:3100`을 앞에 붙인다(2026-10-01
+  영상이 그렇게 20261001 데모 이미지에서 녹화했다 — 다크 테마).
 - Safari에서 발화 점프 영상(mp4 경로)이 재생되는지 본다.
