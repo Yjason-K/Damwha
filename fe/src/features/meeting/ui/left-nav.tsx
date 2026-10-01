@@ -12,6 +12,7 @@ import { env } from "@/shared/config/env";
 import { ThemeMenu } from "@/features/theme/ui/theme-menu";
 
 import { useMeetings } from "../api/meetings";
+import { useTags, type TagSummary } from "../api/tags";
 import type { MeetingFilter, MeetingStatus } from "../model/types";
 import { Icon } from "./icons";
 import { NewMeetingDialog } from "./new-meeting-dialog";
@@ -118,6 +119,40 @@ function FilterPills({
   );
 }
 
+function TagPills({
+  tags,
+  value,
+  onChange,
+}: {
+  tags: TagSummary[];
+  value: string | null;
+  onChange: (id: string | null) => void;
+}) {
+  return (
+    <div className="flex max-h-[88px] flex-wrap gap-1 overflow-y-auto px-1">
+      {tags.map((t) => {
+        const active = value === t.id;
+        return (
+          <button
+            key={t.id}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange(active ? null : t.id)}
+            className={cn(
+              "max-w-full cursor-pointer truncate rounded-full px-[9px] py-[3px] text-xs font-medium outline-none transition-colors duration-[80ms] focus-visible:[box-shadow:var(--focus-ring)]",
+              active
+                ? "bg-[var(--accent-bg)] text-[color:var(--accent-text)]"
+                : "text-[color:var(--text-muted)] hover:bg-[var(--surface-hover)]",
+            )}
+          >
+            #{t.name}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 type LeftNavProps = {
   filter: MeetingFilter;
   onFilter: (f: MeetingFilter) => void;
@@ -133,6 +168,10 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
   const settingsMatch = useMatch("/settings");
   const [newMeetingOpen, setNewMeetingOpen] = React.useState(false);
   const { data: meetings, isLoading, isError } = useMeetings();
+  const { data: tags = [] } = useTags();
+  const [tagFilter, setTagFilter] = React.useState<string | null>(null);
+  // 마지막 회의에서 떼어 낸 태그는 목록에서 사라지므로, 그 선택은 풀린 것으로 본다.
+  const activeTag = tags.some((t) => t.id === tagFilter) ? tagFilter : null;
 
   // 버튼에 적힌 N 단축키. 입력 중이거나 모달이 열려 있으면 가로채지 않는다 —
   // 조합키가 없는 글자라 입력란에서 그대로 타이핑돼야 한다. 한글 자판에서는
@@ -158,8 +197,10 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-  const filtered = (meetings ?? []).filter((m) =>
-    filter === "fav" ? m.fav : true,
+  const filtered = (meetings ?? []).filter(
+    (m) =>
+      (filter === "fav" ? m.fav : true) &&
+      (activeTag ? m.tags.some((t) => t.id === activeTag) : true),
   );
 
   return (
@@ -222,6 +263,12 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
 
         <SectionLabel>필터</SectionLabel>
         <FilterPills value={filter} onChange={onFilter} />
+        {tags.length > 0 && (
+          <>
+            <SectionLabel>태그</SectionLabel>
+            <TagPills tags={tags} value={activeTag} onChange={setTagFilter} />
+          </>
+        )}
 
         <SectionLabel>회의 목록</SectionLabel>
         <ul
@@ -243,9 +290,11 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
             </li>
           ) : filtered.length === 0 ? (
             <li className="px-2 py-3 text-xs leading-relaxed text-[color:var(--text-faint)]">
-              {filter === "fav"
-                ? "즐겨찾기한 회의가 없어요."
-                : "아직 회의가 없어요. 오디오를 업로드해 시작하세요."}
+              {activeTag
+                ? "이 태그가 붙은 회의가 없어요."
+                : filter === "fav"
+                  ? "즐겨찾기한 회의가 없어요."
+                  : "아직 회의가 없어요. 오디오를 업로드해 시작하세요."}
             </li>
           ) : (
             filtered.map((m) => (

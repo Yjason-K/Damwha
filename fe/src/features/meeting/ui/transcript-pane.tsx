@@ -33,6 +33,7 @@ import type { LiveUtterance, Meeting } from "../model/types";
 import { Icon } from "./icons";
 import { ExportDialog } from "./export-dialog";
 import { LiveTranscript } from "./live-transcript";
+import { MeetingTags } from "./meeting-tags";
 import { ReprocessDialog } from "./reprocess-dialog";
 import { ResolveDialog } from "./resolve-dialog";
 
@@ -570,6 +571,9 @@ export function TranscriptPane({
               <span className="truncate">{meeting.files[0].name}</span>
             </span>
           )}
+        </div>
+        <div className="mt-2.5">
+          <MeetingTags meetingId={meeting.id} tags={meeting.tags} />
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-[7px]">
           {meeting.attendees.map((a) => (

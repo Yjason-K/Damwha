@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Queryable } from '../jobs/jobs.types';
+import { meetingTagsJson } from '../tags/tags.repository';
 
 export interface MeetingRow {
   id: string; title: string | null; original_filename: string | null;
@@ -82,7 +83,9 @@ export class MeetingsRepository {
     return rows[0];
   }
   async list(exec: Queryable): Promise<MeetingRow[]> {
-    const { rows } = await exec.query<MeetingRow>(`SELECT * FROM meeting ORDER BY created_at DESC`);
+    const { rows } = await exec.query<MeetingRow>(
+      `SELECT m.*, ${meetingTagsJson('m')} AS tags FROM meeting m ORDER BY m.created_at DESC`,
+    );
     return rows;
   }
   async findById(exec: Queryable, id: string): Promise<MeetingRow | null> {

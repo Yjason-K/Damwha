@@ -20,6 +20,7 @@ import { nextId } from '../common/id';
 import { isIso8601 } from '../common/iso8601';
 import { LensExtractionService } from '../lenses/lens-extraction.service';
 import { SummaryService } from '../summary/summary.service';
+import { TagsRepository } from '../tags/tags.repository';
 import * as fs from 'fs';
 
 const AUDIO_MIME = /^audio\//;
@@ -41,6 +42,7 @@ export class MeetingsService {
     private readonly lensExtraction: LensExtractionService,
     private readonly summary: SummaryService,
     private readonly caps: CapabilitiesService,
+    private readonly tags: TagsRepository,
   ) {}
 
   // Validation scope (Plan 1): MIME + extension + size only. Deep audio-integrity
@@ -190,7 +192,8 @@ export class MeetingsService {
     const utterances = await this.meetings.findUtterances(this.db.pool, id);
     const clusters = await this.meetings.findClusters(this.db.pool, id);
     const summary = await this.summary.get(id);
-    return { ...meeting, utterances, clusters, summary };
+    const tags = await this.tags.findForMeeting(this.db.pool, id);
+    return { ...meeting, tags, utterances, clusters, summary };
   }
 
   async getStatus(id: string) {
