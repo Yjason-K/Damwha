@@ -47,7 +47,7 @@ export const en = {
         title: "⌘K search, everywhere",
         body: "Hybrid search — meaning and keywords — over every utterance and conversation, from any screen.",
         image: "search" as const,
-        alt: "Command palette search results across two conversations",
+        alt: "Command palette search results listing matching utterances and their conversation",
       },
       {
         title: "Lenses: decisions, action items, promises",
