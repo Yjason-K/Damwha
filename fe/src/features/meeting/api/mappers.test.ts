@@ -207,6 +207,7 @@ describe("toMeetingSummary", () => {
       sub: expShort(recordedAt),
       fav: true,
       status: "done",
+      tags: [],
     });
   });
 

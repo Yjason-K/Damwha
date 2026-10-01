@@ -79,7 +79,18 @@ export type WireMeeting = {
    */
   capture_error?: CaptureError | null;
   created_at: string;
+  /**
+   * GET /meetings·GET /meetings/:id에만 있다 — 업로드·즐겨찾기·PATCH가 돌려주는 행에는
+   * 없으므로 optional이다.
+   */
+  tags?: WireTag[];
 };
+
+/** 회의에 붙은 태그. PUT /meetings/:id/tags 응답의 tags도 같은 모양이다. */
+export type WireTag = { id: string; name: string };
+
+/** GET /tags 행 — 회의에 붙어 있는 태그만, 이름순. */
+export type WireTagSummary = WireTag & { meeting_count: number };
 
 /** GET /meetings/:id 응답의 발화(utterance) — speaker 필드 LEFT JOIN 포함. */
 export type WireUtterance = {
@@ -230,6 +241,7 @@ export type SearchRequest = {
     dateTo?: string | null;
     speakerIds?: string[] | null;
     meetingIds?: string[] | null;
+    tagIds?: string[] | null;
   };
 };
 

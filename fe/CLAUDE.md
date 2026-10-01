@@ -159,6 +159,8 @@ The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by 
 - **Completion filter is a single-value segment** (`열림|완료`) because BE `completion_status` takes one value — there is no combined view. Toggling completion optimistically removes the row from the current list.
 - **Evidence jump navigates to `/meetings/:id?u=<utteranceId>`** — the URL carries both the highlight and the audio seek, so search jumps and lens evidence jumps now behave identically (the earlier "no audio seek" carve-out is gone). Historical items whose utterance no longer exists after reprocess surface a toast and drop `?u=` with `replace: true`.
 
+**회의 태그** (`features/meeting/api/tags.ts`, `ui/meeting-tags.tsx`): 폴더 대신 태그다 — 한 회의가 여러 기준에 동시에 걸리기 때문. 전사 헤더의 `MeetingTags`가 붙이기/떼기를 하고, 보내는 것은 항상 이름 목록 전체다(`PUT /meetings/:id/tags`). 어느 회의에도 안 붙은 태그는 서버가 지우므로 태그 관리 화면은 없다. 사이드바 태그 필터(하나 선택, 즐겨찾기와 AND)와 ⌘K 팔레트의 `facets` 태그 필터(`filters.tagIds`)는 서로 독립된 상태다. 둘 다 선택한 태그가 `GET /tags`에서 사라지면 선택이 풀린 것으로 본다.
+
 **URL contract:** `/` → replace-redirects to the newest meeting in the list · `/meetings/:id` meeting detail · `/meetings/:id?u=<utteranceId>` highlights that utterance and seeks the audio to it · `/lenses/:kind` global lens dashboard · `/speakers` · `/settings`. The insight-pane tab and the meeting-list filter are intentionally not carried in the URL.
 
 ## Styling & design system

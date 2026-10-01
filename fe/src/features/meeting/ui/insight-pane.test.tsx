@@ -21,6 +21,7 @@ function meeting(over: Partial<Meeting> = {}): Meeting {
     dur: "10:00",
     timeRange: "10:00–10:10",
     files: [],
+    tags: [],
     attendees: [1],
     unverified: [],
     fav: false,

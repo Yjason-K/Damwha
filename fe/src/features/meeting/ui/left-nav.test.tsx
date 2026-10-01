@@ -178,6 +178,56 @@ test("사이드바 맨 아래에 화면 테마 버튼이 있다", () => {
   expect(nav).toContainElement(button);
 });
 
+test("태그를 누르면 그 태그가 붙은 회의만 남고, 다시 누르면 풀린다", async () => {
+  const { apiClient } = await import("@/shared/api/client");
+  const row = (
+    id: string,
+    title: string,
+    tags: { id: string; name: string }[],
+  ) => ({
+    id,
+    title,
+    original_filename: null,
+    audio_key: "k",
+    normalized_key: null,
+    recorded_at: "2026-09-05T10:00:00.000Z",
+    duration_ms: 60000,
+    status: "done",
+    is_favorite: false,
+    current_job_id: null,
+    processing_version: 0,
+    error: null,
+    created_at: "2026-09-05T10:00:00.000Z",
+    tags,
+  });
+  const get = apiClient.get as ReturnType<typeof vi.fn>;
+  get.mockImplementation(async (url: string) =>
+    url === "/tags"
+      ? { data: [{ id: "tag_1", name: "프로젝트A", meeting_count: 1 }] }
+      : {
+          data: [
+            row("m1", "태그 붙은 회의", [{ id: "tag_1", name: "프로젝트A" }]),
+            row("m2", "다른 회의", []),
+          ],
+        },
+  );
+  try {
+    renderNav();
+    const pill = await screen.findByRole("button", { name: "#프로젝트A" });
+    expect(await screen.findByText("다른 회의")).toBeInTheDocument();
+
+    fireEvent.click(pill);
+    expect(pill).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("태그 붙은 회의")).toBeInTheDocument();
+    expect(screen.queryByText("다른 회의")).not.toBeInTheDocument();
+
+    fireEvent.click(pill);
+    expect(screen.getByText("다른 회의")).toBeInTheDocument();
+  } finally {
+    get.mockResolvedValue({ data: [] });
+  }
+});
+
 function renderNav() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },

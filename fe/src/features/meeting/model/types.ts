@@ -91,6 +91,8 @@ export type FileEntry = { name: string };
 
 export type MeetingFilter = "all" | "fav";
 
+export type MeetingTag = { id: string; name: string };
+
 /** 진단 클러스터(diarization) 1개 — 화자 검증/병합(resolve) UI의 입력. */
 export type ClusterInfo = {
   id: string;
@@ -116,6 +118,7 @@ export type MeetingSummary = {
   sub: string;
   fav: boolean;
   status: MeetingStatus;
+  tags: MeetingTag[];
 };
 
 /** 상세 화면용 회의 — GET /meetings/:id(발화 포함)에서 매핑. */
@@ -129,6 +132,7 @@ export type Meeting = {
   attendees: number[];
   unverified?: number[];
   fav?: boolean;
+  tags: MeetingTag[];
   tracks: SpeakerLane[];
   utterances: UtteranceEntry[];
   topics: string[];

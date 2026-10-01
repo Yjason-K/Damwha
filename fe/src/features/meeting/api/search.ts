@@ -45,14 +45,16 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
 export function useSearch(
   q: string,
   enabled = true,
+  tagId: string | null = null,
 ): UseQueryResult<SearchHit[]> {
   const query = useDebouncedValue(q.trim(), 250);
   return useQuery({
-    queryKey: ["search", query],
+    queryKey: ["search", query, tagId],
     enabled,
     queryFn: async () => {
       const { data } = await apiClient.post<SearchResponse>("/search", {
         q: query,
+        ...(tagId ? { filters: { tagIds: [tagId] } } : {}),
       });
       return data.results.map(toSearchHit);
     },

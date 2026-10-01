@@ -83,6 +83,7 @@ export function toMeetingSummary(wire: WireMeeting): MeetingSummary {
     sub: localShortDate(start),
     fav: wire.is_favorite,
     status: wire.status,
+    tags: wire.tags ?? [],
   };
 }
 
@@ -248,6 +249,7 @@ export function toMeetingDetail(wire: WireMeetingDetail): Meeting {
     attendees,
     unverified,
     fav: wire.is_favorite,
+    tags: wire.tags ?? [],
     tracks,
     utterances: utteranceEntries,
     topics: wire.summary?.topics ?? [],
