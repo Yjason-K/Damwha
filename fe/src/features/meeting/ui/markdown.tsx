@@ -1,5 +1,6 @@
 import type * as React from "react";
 import ReactMarkdown from "react-markdown";
+import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 
 /**
@@ -9,6 +10,9 @@ import remarkGfm from "remark-gfm";
  *
  * @tailwindcss/typography 대신 컴포넌트 매핑으로 Timbre semantic 토큰을 직접
  * 적용한다. 플러그인의 자체 색·간격 스케일이 토큰과 경쟁하는 상황을 피한다.
+ *
+ * `remark-breaks`: CommonMark는 단일 줄바꿈을 공백으로 접는다. 메모는
+ * textarea에서 Enter로 쓴 그대로 보여야 하므로 단일 줄바꿈을 `<br>`로 살린다.
  */
 function SafeLink({
   href,
@@ -38,7 +42,7 @@ export function Markdown({ body }: { body: string }) {
     // 가로로 밀어낸다 — 표와 코드 블록만 각자 overflow-x-auto를 갖고 있다.
     <div className="flex flex-col gap-3 break-words text-sm leading-relaxed text-foreground">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkBreaks]}
         components={{
           h1: ({ children }) => (
             <h1 className="text-base font-semibold text-foreground">
