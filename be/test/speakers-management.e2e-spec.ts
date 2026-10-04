@@ -316,4 +316,76 @@ describe('speakers management (DELETE)', () => {
     const res = await request(srv()).delete('/speakers/spk_999999');
     expect(res.status).toBe(404);
   });
+
+  describe("'나' 지정 (PUT/DELETE /speakers/:id/me)", () => {
+    const meIds = async () =>
+      (await db.pool.query(`SELECT id FROM speaker WHERE is_me ORDER BY id`)).rows.map((r) => r.id);
+
+    it('PUT moves me from the previous speaker and returns the speaker row', async () => {
+      const a = await addProvisional('Speaker_101');
+      const b = (await db.pool.query(
+        `INSERT INTO speaker(name, enrollment_status) VALUES('김영재','pending') RETURNING id`,
+      )).rows[0].id as string;
+
+      const first = await request(srv()).put(`/speakers/${a}/me`).expect(200);
+      expect(first.body).toMatchObject({ id: a, is_me: true });
+      expect(await meIds()).toEqual([a]);
+
+      const second = await request(srv()).put(`/speakers/${b}/me`).expect(200);
+      expect(second.body).toMatchObject({ id: b, is_me: true });
+      expect(await meIds()).toEqual([b]);
+
+      // 다시 같은 화자를 지정해도 그대로 한 명
+      await request(srv()).put(`/speakers/${b}/me`).expect(200);
+      expect(await meIds()).toEqual([b]);
+
+      const list = await request(srv()).get('/speakers').expect(200);
+      expect(findSpeaker(list.body, b)).toMatchObject({ is_me: true });
+      // a는 참조 없는 provisional이라 목록에서 빠진다 — 단건으로 확인한다
+      expect((await request(srv()).get(`/speakers/${a}`).expect(200)).body).toMatchObject({ is_me: false });
+    });
+
+    it('DELETE clears me and is idempotent (204 twice)', async () => {
+      const a = await addProvisional('Speaker_102');
+      await request(srv()).put(`/speakers/${a}/me`).expect(200);
+
+      const res = await request(srv()).delete(`/speakers/${a}/me`);
+      expect(res.status).toBe(204);
+      expect(res.body).toEqual({});
+      expect(await meIds()).toEqual([]);
+      await request(srv()).delete(`/speakers/${a}/me`).expect(204);
+      expect(await meIds()).toEqual([]);
+    });
+
+    it('DELETE on a speaker that is not me leaves the actual me untouched', async () => {
+      const me = await addProvisional('Speaker_103');
+      const other = await addProvisional('Speaker_104');
+      await request(srv()).put(`/speakers/${me}/me`).expect(200);
+      await request(srv()).delete(`/speakers/${other}/me`).expect(204);
+      expect(await meIds()).toEqual([me]);
+    });
+
+    it('PUT/DELETE → 404 for an unknown or malformed id, and PUT keeps the current me', async () => {
+      const me = await addProvisional('Speaker_105');
+      await request(srv()).put(`/speakers/${me}/me`).expect(200);
+      await request(srv()).put('/speakers/spk_999999/me').expect(404);
+      await request(srv()).put('/speakers/nope/me').expect(404);
+      await request(srv()).delete('/speakers/spk_999999/me').expect(404);
+      await request(srv()).delete('/speakers/nope/me').expect(404);
+      expect(await meIds()).toEqual([me]);
+    });
+
+    it('deleting the me speaker leaves no me', async () => {
+      const me = (await db.pool.query(
+        `INSERT INTO speaker(name, enrollment_status) VALUES('나','ready') RETURNING id`,
+      )).rows[0].id as string;
+      await request(srv()).put(`/speakers/${me}/me`).expect(200);
+      await request(srv()).delete(`/speakers/${me}`).expect(204);
+      expect(await meIds()).toEqual([]);
+      // 다른 화자를 새로 나로 지정할 수 있다
+      const next = await addProvisional('Speaker_106');
+      await request(srv()).put(`/speakers/${next}/me`).expect(200);
+      expect(await meIds()).toEqual([next]);
+    });
+  });
 });
