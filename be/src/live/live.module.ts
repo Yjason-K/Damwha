@@ -7,9 +7,10 @@ import { LiveService, CHUNK_BYTES } from './live.service';
 import { MeetingsModule } from '../meetings/meetings.module';
 import { SettingsModule } from '../settings/settings.module';
 import { SystemModule } from '../system/system.module';
+import { FoldersModule } from '../folders/folders.module';
 
 @Module({
-  imports: [MeetingsModule, SettingsModule, SystemModule],
+  imports: [MeetingsModule, SettingsModule, SystemModule, FoldersModule],
   controllers: [LiveController],
   providers: [LiveRepository, LiveService, LiveOrphanService],
   exports: [LiveOrphanService],

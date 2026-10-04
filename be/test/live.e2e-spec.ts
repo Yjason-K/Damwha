@@ -380,4 +380,33 @@ describe('live session api', () => {
     expect(live.body.status).toBe('recording'); // 아직 recording — 배너는 그대로 서 있다
     expect(live.body.stop_requested_at).not.toBeNull();
   });
+
+  describe('folder_id', () => {
+    const defaultId = async () =>
+      (await db.pool.query(`SELECT id FROM folder WHERE is_default`)).rows[0].id as string;
+
+    it('POST /meetings/live without folder_id (or empty) records into the default folder', async () => {
+      const def = await defaultId();
+      const omitted = await start().expect(201);
+      expect(omitted.body.folder_id).toBe(def);
+      await db.pool.query(`UPDATE meeting SET status='failed' WHERE id=$1`, [omitted.body.id]);
+      const empty = await start({ folder_id: '' }).expect(201);
+      expect(empty.body.folder_id).toBe(def);
+    });
+
+    it('POST /meetings/live with folder_id records into that folder', async () => {
+      const fid = (await request(srv()).post('/folders').send({ name: '라이브' }).expect(201)).body.id;
+      const res = await start({ folder_id: fid }).expect(201);
+      expect(res.body.folder_id).toBe(fid);
+    });
+
+    it('POST /meetings/live with a nonexistent or malformed folder_id → 400 and creates nothing', async () => {
+      const missing = await start({ folder_id: 'fld_999' }).expect(400);
+      expect(missing.body.message).toBe('folder not found');
+      await start({ folder_id: 'nope' }).expect(400);
+      await start({ folder_id: 42 }).expect(400);
+      expect((await db.pool.query('SELECT count(*)::int AS n FROM meeting')).rows[0].n).toBe(0);
+      expect((await db.pool.query('SELECT count(*)::int AS n FROM job')).rows[0].n).toBe(0);
+    });
+  });
 });

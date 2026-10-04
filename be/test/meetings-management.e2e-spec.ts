@@ -130,4 +130,68 @@ describe('meetings management (PATCH / DELETE)', () => {
     const res = await request(srv()).delete('/meetings/mtg_999999');
     expect(res.status).toBe(404);
   });
+
+  describe('folder_id', () => {
+    const defaultId = async () =>
+      (await db.pool.query(`SELECT id FROM folder WHERE is_default`)).rows[0].id as string;
+    const mkFolder = async (name: string) =>
+      (await request(srv()).post('/folders').send({ name }).expect(201)).body.id as string;
+    const uploadTo = (folderId?: string) => {
+      const req = request(srv()).post('/meetings');
+      if (folderId !== undefined) req.field('folder_id', folderId);
+      return req.attach('audio', Buffer.from('fake-audio'), { filename: 'rec.m4a', contentType: 'audio/mp4' });
+    };
+    const meetingDirs = () => {
+      const root = path.join(storageRoot, 'meetings');
+      return fs.existsSync(root) ? fs.readdirSync(root) : [];
+    };
+
+    it('upload without folder_id (or empty) lands in the default folder', async () => {
+      const def = await defaultId();
+      const omitted = await uploadTo().expect(201);
+      expect(omitted.body.folder_id).toBe(def);
+      const empty = await uploadTo('').expect(201);
+      expect(empty.body.folder_id).toBe(def);
+    });
+
+    it('upload with folder_id lands in that folder, visible on GET list and detail', async () => {
+      const fid = await mkFolder('프로젝트');
+      const res = await uploadTo(fid).expect(201);
+      expect(res.body.folder_id).toBe(fid);
+      const list = await request(srv()).get('/meetings').expect(200);
+      expect(list.body.find((m: any) => m.id === res.body.id).folder_id).toBe(fid);
+      const detail = await request(srv()).get(`/meetings/${res.body.id}`).expect(200);
+      expect(detail.body.folder_id).toBe(fid);
+    });
+
+    it('upload with a nonexistent or malformed folder_id → 400 and leaves no storage dir or row', async () => {
+      const before = meetingDirs();
+      const missing = await uploadTo('fld_999').expect(400);
+      expect(missing.body.message).toBe('folder not found');
+      await uploadTo('nope').expect(400);
+      expect(meetingDirs()).toEqual(before);
+      expect((await db.pool.query('SELECT count(*)::int AS n FROM meeting')).rows[0].n).toBe(0);
+    });
+
+    it('PATCH { folder_id } moves the meeting', async () => {
+      const mid = (await upload()).body.id;
+      const fid = await mkFolder('옮길 곳');
+      const res = await request(srv()).patch(`/meetings/${mid}`).send({ folder_id: fid }).expect(200);
+      expect(res.body.folder_id).toBe(fid);
+      const row = await db.pool.query('SELECT folder_id FROM meeting WHERE id=$1', [mid]);
+      expect(row.rows[0].folder_id).toBe(fid);
+    });
+
+    it('PATCH { folder_id: null | nonexistent | malformed } → 400 and leaves the folder', async () => {
+      const mid = (await upload()).body.id;
+      const def = await defaultId();
+      await request(srv()).patch(`/meetings/${mid}`).send({ folder_id: null }).expect(400);
+      const missing = await request(srv()).patch(`/meetings/${mid}`).send({ folder_id: 'fld_999' }).expect(400);
+      expect(missing.body.message).toBe('folder not found');
+      await request(srv()).patch(`/meetings/${mid}`).send({ folder_id: 'nope' }).expect(400);
+      await request(srv()).patch(`/meetings/${mid}`).send({ folder_id: 7 }).expect(400);
+      const row = await db.pool.query('SELECT folder_id FROM meeting WHERE id=$1', [mid]);
+      expect(row.rows[0].folder_id).toBe(def);
+    });
+  });
 });

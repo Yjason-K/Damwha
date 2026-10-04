@@ -10,6 +10,7 @@ export interface MeetingRow {
   /** 라이브 캡처가 어떻게 얻어졌는가(예: capture_gap) — error("처리가 실패했는가")와는 별개다.
    *  markUploaded는 일부러 이 필드를 건드리지 않는다 (마이그레이션 023). */
   capture_error: any;
+  folder_id: string;
   created_at: Date;
 }
 
@@ -27,12 +28,16 @@ export interface ClusterRow {
 export class MeetingsRepository {
   async create(
     exec: Queryable,
-    args: { audioKey: string; title: string | null; originalFilename: string | null; recordedAt: string | null },
+    args: {
+      audioKey: string; title: string | null; originalFilename: string | null; recordedAt: string | null;
+      folderId?: string | null;
+    },
   ): Promise<MeetingRow> {
     const { rows } = await exec.query<MeetingRow>(
-      `INSERT INTO meeting(title, original_filename, audio_key, recorded_at, status)
-       VALUES($1,$2,$3,COALESCE($4::timestamptz, now()),'uploaded') RETURNING *`,
-      [args.title, args.originalFilename, args.audioKey, args.recordedAt],
+      `INSERT INTO meeting(title, original_filename, audio_key, recorded_at, status, folder_id)
+       VALUES($1,$2,$3,COALESCE($4::timestamptz, now()),'uploaded',
+              COALESCE($5, default_folder_id())) RETURNING *`,
+      [args.title, args.originalFilename, args.audioKey, args.recordedAt, args.folderId ?? null],
     );
     return rows[0];
   }
@@ -43,12 +48,12 @@ export class MeetingsRepository {
     );
     return rows[0] ?? null;
   }
-  // Partial update of title/recorded_at. Only keys present in `patch` are written;
+  // Partial update of title/recorded_at/folder_id. Only keys present in `patch` are written;
   // an empty patch falls back to a plain SELECT (so 404 detection still works).
   async update(
     exec: Queryable,
     id: string,
-    patch: { title?: string | null; recorded_at?: string },
+    patch: { title?: string | null; recorded_at?: string; folder_id?: string },
   ): Promise<MeetingRow | null> {
     const sets: string[] = [];
     const params: unknown[] = [id];
@@ -59,6 +64,10 @@ export class MeetingsRepository {
     if ('recorded_at' in patch) {
       params.push(patch.recorded_at);
       sets.push(`recorded_at=$${params.length}`);
+    }
+    if ('folder_id' in patch) {
+      params.push(patch.folder_id);
+      sets.push(`folder_id=$${params.length}`);
     }
     if (sets.length === 0) {
       const { rows } = await exec.query<MeetingRow>(`SELECT * FROM meeting WHERE id=$1`, [id]);
