@@ -192,6 +192,8 @@ export type WireSpeaker = {
   sample_meeting_id?: string | null;
   sample_start_ms?: number | null;
   sample_end_ms?: number | null;
+  /** '나'로 지정된 화자인가(최대 한 명). 이 필드 이전 픽스처를 위해 optional. */
+  is_me?: boolean;
 };
 
 /** GET /meetings/:id/status 응답. */
