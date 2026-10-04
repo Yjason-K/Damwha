@@ -1,7 +1,6 @@
 import * as React from "react";
 import { Link, useMatch, useNavigate, useParams } from "react-router";
 
-import { Badge } from "@/shared/ui/badge";
 import { BrandMark } from "@/shared/ui/brand-mark";
 import { Kbd } from "@/shared/ui/kbd";
 import { SearchField } from "@/shared/ui/search-field";
@@ -14,9 +13,10 @@ import { ThemeMenu } from "@/features/theme/ui/theme-menu";
 import { useFolders } from "../api/folders";
 import { useMeetings } from "../api/meetings";
 import { useTags, type TagSummary } from "../api/tags";
-import type { MeetingFilter, MeetingStatus } from "../model/types";
+import type { MeetingFilter } from "../model/types";
 import { FolderSection } from "./folder-section";
 import { Icon } from "./icons";
+import { MeetingStatusBadge } from "./meeting-status-badge";
 import { NewMeetingDialog } from "./new-meeting-dialog";
 import { SectionLabel } from "./section-label";
 
@@ -58,29 +58,6 @@ const FILTER_ITEMS: [MeetingFilter, string][] = [
   ["all", "전체"],
   ["fav", "즐겨찾기"],
 ];
-
-/** 처리 중/실패 회의에 붙는 상태 뱃지 (done은 없음). */
-function statusBadge(status: MeetingStatus): React.ReactNode {
-  if (status === "recording")
-    return (
-      <Badge variant="accent" dot>
-        녹음 중
-      </Badge>
-    );
-  if (status === "failed")
-    return (
-      <Badge variant="danger" dot>
-        실패
-      </Badge>
-    );
-  if (status === "uploaded" || status === "processing")
-    return (
-      <Badge variant="warning" dot>
-        처리 중
-      </Badge>
-    );
-  return null;
-}
 
 function FilterPills({
   value,
@@ -161,6 +138,8 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
   const savedMatch = useMatch("/saved-utterances");
   const speakersMatch = useMatch("/speakers");
   const settingsMatch = useMatch("/settings");
+  const allMeetingsMatch = useMatch("/meetings");
+  const routeFolder = useMatch("/folders/:folderId")?.params.folderId ?? null;
   const [newMeetingOpen, setNewMeetingOpen] = React.useState(false);
   const { data: meetings, isLoading, isError } = useMeetings();
   const { data: tags = [] } = useTags();
@@ -168,7 +147,24 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
   // 마지막 회의에서 떼어 낸 태그는 목록에서 사라지므로, 그 선택은 풀린 것으로 본다.
   const activeTag = tags.some((t) => t.id === tagFilter) ? tagFilter : null;
   const { data: folders } = useFolders();
-  const [folderFilter, setFolderFilter] = React.useState<string | null>(null);
+  const [folderFilter, setFolderFilter] = React.useState<string | null>(
+    routeFolder,
+  );
+  // 경로가 `/folders/:folderId`면 선택이 경로를 따라간다 — 주소를 직접 열거나 뒤로 가기를
+  // 해도 좌측 강조가 가운데 칸과 어긋나지 않게. 그 밖의 경로에서는 선택을 건드리지 않는다.
+  const [syncedRouteFolder, setSyncedRouteFolder] = React.useState(routeFolder);
+  if (routeFolder !== syncedRouteFolder) {
+    setSyncedRouteFolder(routeFolder);
+    if (routeFolder) setFolderFilter(routeFolder);
+  }
+  const selectFolder = (id: string) => {
+    setFolderFilter(id);
+    navigate(`/folders/${id}`);
+  };
+  const selectAllMeetings = () => {
+    setFolderFilter(null);
+    navigate("/meetings");
+  };
   // 태그와 같다 — 지워져 목록에서 사라진 폴더의 선택은 풀린 것으로 본다.
   const activeFolder = folders?.some((f) => f.id === folderFilter)
     ? folderFilter
@@ -271,7 +267,9 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
           folders={folders}
           meetings={meetings ?? []}
           value={activeFolder}
-          onChange={setFolderFilter}
+          onChange={selectFolder}
+          allActive={!!allMeetingsMatch}
+          onSelectAll={selectAllMeetings}
         />
 
         <SectionLabel>필터</SectionLabel>
@@ -319,7 +317,13 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
                 <SidebarItem
                   label={m.title}
                   sub={m.sub}
-                  meta={statusBadge(m.status) ?? m.dur}
+                  meta={
+                    m.status === "done" ? (
+                      m.dur
+                    ) : (
+                      <MeetingStatusBadge status={m.status} />
+                    )
+                  }
                   active={meetingId === m.id}
                   asChild
                 >

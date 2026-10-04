@@ -3,6 +3,7 @@ import * as React from "react";
 import { IconButton } from "@/shared/ui/icon-button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { SidebarItem } from "@/shared/ui/sidebar-item";
+import { cn } from "@/shared/lib/utils";
 
 import type { Folder, MeetingSummary } from "../model/types";
 import { DeleteFolderDialog, FolderNameDialog } from "./folder-dialogs";
@@ -10,12 +11,16 @@ import { Icon } from "./icons";
 import { SectionLabel } from "./section-label";
 
 type FolderSectionProps = {
-  /** 아직 못 받았거나 실패하면 undefined — 그때는 `전체 회의`만 그린다. */
+  /** 아직 못 받았거나 실패하면 undefined — 그때는 섹션 제목만 그린다. */
   folders: Folder[] | undefined;
   meetings: MeetingSummary[];
-  /** 선택한 폴더 id. null이면 `전체 회의`. */
+  /** 선택한 폴더 id. null이면 선택 없음. */
   value: string | null;
-  onChange: (folderId: string | null) => void;
+  /** 폴더 행을 눌렀거나 새 폴더를 만들었다 — 선택을 바꾸고 그 폴더 목록으로 간다. */
+  onChange: (folderId: string) => void;
+  /** 섹션 제목 `전체 회의`를 강조할지(`/meetings`에 있을 때). */
+  allActive: boolean;
+  onSelectAll: () => void;
 };
 
 const menuItemClass =
@@ -71,7 +76,8 @@ function FolderMenu({
 }
 
 /**
- * 좌측 `폴더` 섹션. 폴더를 누르면 아래 회의 목록이 그 폴더로 걸러진다(스펙 §2.5).
+ * 좌측 폴더 섹션. 제목 `전체 회의`는 모든 회의 목록(`/meetings`)으로 가는 버튼이고, 폴더를
+ * 누르면 아래 회의 목록이 그 폴더로 걸러지며 그 폴더 목록(`/folders/:id`)을 연다.
  * 회의 수는 이미 받은 회의 목록에서 센다(스펙 §2.6). 오른쪽 칸(`pr-8`)은 모든 행에
  * 비워 둬서 메뉴 버튼이 있는 행과 없는 행의 숫자가 같은 줄에 선다.
  */
@@ -80,6 +86,8 @@ export function FolderSection({
   meetings,
   value,
   onChange,
+  allActive,
+  onSelectAll,
 }: FolderSectionProps) {
   const [createOpen, setCreateOpen] = React.useState(false);
   const [renaming, setRenaming] = React.useState<Folder | null>(null);
@@ -108,22 +116,22 @@ export function FolderSection({
           ) : null
         }
       >
-        폴더
+        <button
+          type="button"
+          aria-current={allActive ? "page" : undefined}
+          onClick={onSelectAll}
+          className={cn(
+            "-mx-1 cursor-pointer rounded-xs px-1 uppercase outline-none transition-colors duration-[80ms] hover:text-foreground focus-visible:[box-shadow:var(--focus-ring)]",
+            allActive && "text-[color:var(--accent-text)]",
+          )}
+        >
+          전체 회의
+        </button>
       </SectionLabel>
       <ul
         aria-label="폴더"
         className="flex max-h-[168px] flex-col gap-0.5 overflow-y-auto overscroll-contain"
       >
-        <li>
-          <SidebarItem
-            icon={<Icon name="inbox" size={16} />}
-            label="전체 회의"
-            meta={meetings.length}
-            active={value === null}
-            className="pr-8"
-            onClick={() => onChange(null)}
-          />
-        </li>
         {folders?.map((f) => (
           <li key={f.id} className="group relative">
             <SidebarItem
