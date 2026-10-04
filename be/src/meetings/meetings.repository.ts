@@ -14,6 +14,19 @@ export interface MeetingRow {
   created_at: Date;
 }
 
+/** GET /meetings 행 — 회의 목록 카드용 집계가 붙는다 (스펙 2026-10-04-folder-meeting-list §2.4). */
+export interface MeetingListRow extends MeetingRow {
+  tags: { id: string; name: string }[];
+  participant_count: number;
+  decision_count: number;
+  action_count: number;
+  saved_count: number;
+  has_me: boolean;
+  preview_decision: string | null;
+  preview_action: { text: string; assignee_name: string | null; due_at: string | null; done: boolean } | null;
+  preview_summary: string | null;
+}
+
 export interface ClusterRow {
   id: string; diar_label: string; resolved_speaker_id: string | null;
   speaker_name: string | null; speaker_status: string | null;
@@ -91,9 +104,42 @@ export class MeetingsRepository {
     );
     return rows[0];
   }
-  async list(exec: Queryable): Promise<MeetingRow[]> {
-    const { rows } = await exec.query<MeetingRow>(
-      `SELECT m.*, ${meetingTagsJson('m')} AS tags FROM meeting m ORDER BY m.created_at DESC`,
+  // 클러스터는 재처리마다 버전이 갈리므로 현재 processing_version만 센다(has_me도 같다).
+  // 렌즈는 활성만 센다 — archived는 재추출이 내린 항목이다. 할 일 미리보기는 open을 먼저 고른다.
+  async list(exec: Queryable): Promise<MeetingListRow[]> {
+    const { rows } = await exec.query<MeetingListRow>(
+      `SELECT m.*, ${meetingTagsJson('m')} AS tags,
+              (SELECT count(*)::int FROM meeting_cluster c
+                WHERE c.meeting_id = m.id AND c.processing_version = m.processing_version
+              ) AS participant_count,
+              (SELECT count(*)::int FROM lens_item li
+                WHERE li.meeting_id = m.id AND li.kind = 'decision' AND li.lifecycle_status = 'active'
+              ) AS decision_count,
+              (SELECT count(*)::int FROM lens_item li
+                WHERE li.meeting_id = m.id AND li.kind = 'action' AND li.lifecycle_status = 'active'
+              ) AS action_count,
+              (SELECT count(*)::int FROM saved_utterance su WHERE su.meeting_id = m.id) AS saved_count,
+              EXISTS (
+                SELECT 1 FROM meeting_cluster c JOIN speaker s ON s.id = c.resolved_speaker_id
+                 WHERE c.meeting_id = m.id AND c.processing_version = m.processing_version AND s.is_me
+              ) AS has_me,
+              (SELECT li.text FROM lens_item li
+                WHERE li.meeting_id = m.id AND li.kind = 'decision' AND li.lifecycle_status = 'active'
+                ORDER BY li.created_at, li.id LIMIT 1
+              ) AS preview_decision,
+              (SELECT jsonb_build_object(
+                        'text', li.text,
+                        'assignee_name', s.name,
+                        'due_at', to_char(li.due_at, 'YYYY-MM-DD'),
+                        'done', li.completion_status = 'done')
+                 FROM lens_item li LEFT JOIN speaker s ON s.id = li.assignee_speaker_id
+                WHERE li.meeting_id = m.id AND li.kind = 'action' AND li.lifecycle_status = 'active'
+                ORDER BY (li.completion_status = 'done'), li.created_at, li.id LIMIT 1
+              ) AS preview_action,
+              (SELECT ms.segments -> 0 -> 'bullets' ->> 0 FROM meeting_summary ms
+                WHERE ms.meeting_id = m.id AND ms.status = 'done'
+              ) AS preview_summary
+         FROM meeting m ORDER BY m.created_at DESC`,
     );
     return rows;
   }
