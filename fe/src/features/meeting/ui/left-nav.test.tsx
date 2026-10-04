@@ -325,7 +325,7 @@ const folderList = () => screen.getByRole("list", { name: "폴더" });
 const folderButton = (name: string) =>
   within(folderList()).getByText(name).closest("button")!;
 const allMeetingsButton = () =>
-  screen.getByRole("button", { name: "전체 회의" });
+  screen.getByRole("button", { name: /^전체 회의/ });
 const selectedFolderRow = () =>
   within(folderList()).queryByRole("button", { current: "page" });
 
@@ -351,6 +351,7 @@ test("폴더를 누르면 그 폴더 목록으로 이동하고, 좌측은 그 �
     ).not.toBeInTheDocument();
     expect(folderButton("기본 폴더")).toHaveTextContent("1");
     expect(folderButton("기획팀")).toHaveTextContent("2");
+    expect(allMeetingsButton()).toHaveTextContent("3");
     expect(allMeetingsButton()).not.toHaveAttribute("aria-current");
     expect(selectedFolderRow()).toBeNull();
 
@@ -372,7 +373,7 @@ test("폴더를 누르면 그 폴더 목록으로 이동하고, 좌측은 그 �
   }
 });
 
-test("섹션 제목 전체 회의는 폴더 선택을 풀고 /meetings로 가며, 그곳에서 강조된다", async () => {
+test("머리 행 전체 회의는 폴더 선택을 풀고 /meetings로 가며, 그곳에서 강조된다", async () => {
   const restore = await routeGet({
     "/folders": () => [
       folder("fld_1", "기본 폴더", true),
