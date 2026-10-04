@@ -29,9 +29,11 @@ vi.mock("@/features/meeting/ui/new-meeting-dialog", () => ({
   NewMeetingDialog: ({
     open,
     onCreated,
+    defaultFolderId,
   }: {
     open: boolean;
     onCreated: (id: string) => void;
+    defaultFolderId?: string;
   }) =>
     open ? (
       <>
@@ -41,6 +43,7 @@ vi.mock("@/features/meeting/ui/new-meeting-dialog", () => ({
         <button type="button" onClick={() => onCreated("m8")}>
           녹음 시작 흉내
         </button>
+        <span>모달 폴더: {defaultFolderId ?? "없음"}</span>
       </>
     ) : null,
 }));
@@ -321,7 +324,7 @@ const folderList = () => screen.getByRole("list", { name: "폴더" });
 const folderButton = (name: string) =>
   within(folderList()).getByText(name).closest("button")!;
 
-test("폴더를 누르면 그 폴더의 회의만 남고, 태그와 함께 걸린다", async () => {
+test("폴더를 누르면 그 폴더의 회의만 남고, 태그와 함께 걸리며, 새 회의 모달의 초기값이 된다", async () => {
   const restore = await routeGet({
     "/folders": () => [
       folder("fld_1", "기본 폴더", true),
@@ -352,6 +355,9 @@ test("폴더를 누르면 그 폴더의 회의만 남고, 태그와 함께 걸�
     fireEvent.click(screen.getByRole("button", { name: "#중요" }));
     expect(screen.getByText("기획 킥오프")).toBeInTheDocument();
     expect(screen.queryByText("기획 리뷰")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /새 회의 기록하기/ }));
+    expect(screen.getByText("모달 폴더: fld_2")).toBeInTheDocument();
   } finally {
     restore();
   }

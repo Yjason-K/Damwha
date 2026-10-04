@@ -48,6 +48,7 @@ import {
   prepareLiveRecorder,
 } from "../lib/live-session";
 
+import { useFolders } from "../api/folders";
 import { useUploadMeeting } from "../api/meetings";
 import type { SpeakerBounds } from "../api/types";
 import { Icon } from "./icons";
@@ -169,12 +170,15 @@ type NewMeetingDialogProps = {
   onOpenChange: (open: boolean) => void;
   /** 업로드 또는 녹음 시작 성공 시 새 회의로 이동한다. */
   onCreated: (id: string) => void;
+  /** 폴더 선택의 초깃값 — 좌측에서 보고 있던 폴더. 없으면 기본 폴더. */
+  defaultFolderId?: string;
 };
 
 export function NewMeetingDialog({
   open,
   onOpenChange,
   onCreated,
+  defaultFolderId,
 }: NewMeetingDialogProps) {
   const [source, setSource] = React.useState<MeetingSource>(readSource);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -184,6 +188,16 @@ export function NewMeetingDialog({
   const followupsHintId = React.useId();
   const [file, setFile] = React.useState<File | null>(null);
   const [title, setTitle] = React.useState("");
+  const folderLabelId = React.useId();
+  const { data: folders } = useFolders();
+  // 사용자가 고르기 전엔 비어 있고, 그동안은 좌측에서 보던 폴더(없으면 기본 폴더)를 보여 준다.
+  // 폴더 목록을 못 받으면 선택을 숨기고 아무것도 보내지 않는다 — 서버가 기본 폴더에 넣는다.
+  const [pickedFolderId, setPickedFolderId] = React.useState<string>();
+  const folderId =
+    pickedFolderId ??
+    (folders?.some((f) => f.id === defaultFolderId)
+      ? defaultFolderId
+      : folders?.find((f) => f.isDefault)?.id);
   const [recordedDate, setRecordedDate] = React.useState<Date | null>(null);
   const [recordedTime, setRecordedTime] = React.useState("");
   const [processing, setProcessing] = React.useState<
@@ -276,6 +290,7 @@ export function NewMeetingDialog({
   const resetForm = () => {
     setFile(null);
     setTitle("");
+    setPickedFolderId(undefined);
     setRecordedDate(null);
     setRecordedTime("");
     setProcessing(undefined);
@@ -371,6 +386,7 @@ export function NewMeetingDialog({
         speakers,
         defer_lens: deferLens || undefined,
         defer_summary: deferSummary || undefined,
+        folder_id: folderId,
       });
       await beginLiveCapture(capture, meeting.id);
       toast({
@@ -436,6 +452,7 @@ export function NewMeetingDialog({
         speakers,
         deferLens,
         deferSummary,
+        folderId,
       },
       {
         onSuccess: (summary) => {
@@ -656,6 +673,29 @@ export function NewMeetingDialog({
             value={title}
             onChange={(e) => setTitle(e.target.value)}
           />
+
+          {folders && folderId ? (
+            <div className="flex flex-col gap-1.5">
+              <span
+                id={folderLabelId}
+                className="text-sm font-medium text-[color:var(--text-secondary)]"
+              >
+                폴더
+              </span>
+              <Select value={folderId} onValueChange={setPickedFolderId}>
+                <SelectTrigger aria-labelledby={folderLabelId}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {folders.map((f) => (
+                    <SelectItem key={f.id} value={f.id}>
+                      {f.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : null}
 
           <SpeakerCountField value={speakers} onChange={setSpeakers} />
 

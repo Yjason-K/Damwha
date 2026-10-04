@@ -295,3 +295,68 @@ test("업로드가 507(디스크 부족)로 실패하면 사유가 토스트에 
   ).toBeInTheDocument();
   expect(screen.getByText("업로드 실패")).toBeInTheDocument();
 });
+
+const FOLDERS = [
+  { id: "fld_1", name: "기본 폴더", is_default: true, created_at: "" },
+  { id: "fld_2", name: "기획팀", is_default: false, created_at: "" },
+  { id: "fld_3", name: "고객사", is_default: false, created_at: "" },
+];
+
+function renderWithFolders(defaultFolderId?: string) {
+  vi.spyOn(apiClient, "get").mockImplementation(async (url: string) =>
+    url === "/folders" ? ({ data: FOLDERS } as never) : ({ data: {} } as never),
+  );
+  const post = vi
+    .spyOn(apiClient, "post")
+    .mockResolvedValue({ data: WIRE_MEETING } as never);
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <NewMeetingDialog
+        open
+        onOpenChange={() => {}}
+        onCreated={() => {}}
+        defaultFolderId={defaultFolderId}
+      />
+    </QueryClientProvider>,
+  );
+  const fileInput = document.querySelector(
+    'input[type="file"]',
+  ) as HTMLInputElement;
+  fireEvent.change(fileInput, {
+    target: { files: [new File(["a"], "a.m4a", { type: "audio/mp4" })] },
+  });
+  return post;
+}
+
+test("폴더 선택의 초기값은 좌측에서 보던 폴더이고, 업로드에 folder_id로 실린다", async () => {
+  const post = renderWithFolders("fld_2");
+  expect(await screen.findByLabelText("폴더")).toHaveTextContent("기획팀");
+
+  fireEvent.click(screen.getByRole("button", { name: "업로드 시작" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  expect((post.mock.calls[0][1] as FormData).get("folder_id")).toBe("fld_2");
+});
+
+test("보던 폴더가 없으면 기본 폴더로 시작하고, 고른 폴더가 실린다", async () => {
+  const post = renderWithFolders();
+  const trigger = await screen.findByLabelText("폴더");
+  expect(trigger).toHaveTextContent("기본 폴더");
+
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("option", { name: "고객사" }));
+
+  fireEvent.click(screen.getByRole("button", { name: "업로드 시작" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  expect((post.mock.calls[0][1] as FormData).get("folder_id")).toBe("fld_3");
+});
+
+test("폴더 목록을 못 받으면 선택을 숨기고 folder_id를 보내지 않는다", async () => {
+  vi.spyOn(apiClient, "get").mockRejectedValue(new ApiError(500, "boom"));
+  const post = renderWithFile();
+  fireEvent.click(screen.getByRole("button", { name: "업로드 시작" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  expect(screen.queryByLabelText("폴더")).not.toBeInTheDocument();
+  expect((post.mock.calls[0][1] as FormData).has("folder_id")).toBe(false);
+});

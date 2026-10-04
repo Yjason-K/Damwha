@@ -342,6 +342,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
       </div>
 
       <NewMeetingDialog
+        defaultFolderId={activeFolder ?? undefined}
         open={newMeetingOpen}
         onOpenChange={setNewMeetingOpen}
         onCreated={(id) => navigate(`/meetings/${id}`)}
