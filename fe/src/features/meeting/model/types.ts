@@ -119,7 +119,12 @@ export type MeetingSummary = {
   fav: boolean;
   status: MeetingStatus;
   tags: MeetingTag[];
+  /** 회의가 들어 있는 폴더. 응답에 없으면(옛 픽스처) null. */
+  folderId: string | null;
 };
+
+/** 회의 폴더. 회의는 정확히 한 폴더에 들어 있다 — 태그(분류)와 달리 위치다. */
+export type Folder = { id: string; name: string; isDefault: boolean };
 
 /** 상세 화면용 회의 — GET /meetings/:id(발화 포함)에서 매핑. */
 export type Meeting = {
@@ -133,6 +138,7 @@ export type Meeting = {
   unverified?: number[];
   fav?: boolean;
   tags: MeetingTag[];
+  folderId: string | null;
   /** 요약이 추천한 기존 태그 이름. 붙이는 건 사용자다. */
   tagSuggestions: string[];
   tracks: SpeakerLane[];

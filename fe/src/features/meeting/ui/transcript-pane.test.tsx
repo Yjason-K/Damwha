@@ -30,6 +30,7 @@ function meeting(over: Partial<Meeting> = {}): Meeting {
     files: [],
     tags: [],
     tagSuggestions: [],
+    folderId: null,
     attendees: [1],
     unverified: [],
     fav: false,

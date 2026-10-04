@@ -48,6 +48,7 @@ function makeMeeting(overrides: Partial<WireMeeting> = {}): WireMeeting {
     processing_version: 1,
     error: null,
     created_at: "2026-06-21T09:00:00.000Z",
+    folder_id: "fld_1",
     ...overrides,
   };
 }
@@ -208,6 +209,7 @@ describe("toMeetingSummary", () => {
       fav: true,
       status: "done",
       tags: [],
+      folderId: "fld_1",
     });
   });
 

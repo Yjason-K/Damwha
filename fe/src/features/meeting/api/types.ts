@@ -84,6 +84,19 @@ export type WireMeeting = {
    * 없으므로 optional이다.
    */
   tags?: WireTag[];
+  /**
+   * 회의가 들어 있는 폴더(마이그레이션 030, NOT NULL). `SELECT *`라 실제 응답엔 늘 있지만,
+   * 이 필드가 생기기 전에 쓰인 테스트 픽스처를 깨지 않으려고 optional로 둔다.
+   */
+  folder_id?: string;
+};
+
+/** GET /folders 행 — 기본 폴더가 먼저, 나머지는 이름순. */
+export type WireFolder = {
+  id: string;
+  name: string;
+  is_default: boolean;
+  created_at: string;
 };
 
 /** 회의에 붙은 태그. PUT /meetings/:id/tags 응답의 tags도 같은 모양이다. */
@@ -312,6 +325,8 @@ export type LiveStartRequest = {
   speakers?: SpeakerBounds;
   defer_lens?: boolean;
   defer_summary?: boolean;
+  /** 생략하면 서버가 기본 폴더에 넣는다. */
+  folder_id?: string;
 };
 
 /** POST /meetings/:id/live/stop 응답. */

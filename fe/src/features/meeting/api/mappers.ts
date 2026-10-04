@@ -84,6 +84,7 @@ export function toMeetingSummary(wire: WireMeeting): MeetingSummary {
     fav: wire.is_favorite,
     status: wire.status,
     tags: wire.tags ?? [],
+    folderId: wire.folder_id ?? null,
   };
 }
 
@@ -250,6 +251,7 @@ export function toMeetingDetail(wire: WireMeetingDetail): Meeting {
     unverified,
     fav: wire.is_favorite,
     tags: wire.tags ?? [],
+    folderId: wire.folder_id ?? null,
     tagSuggestions: wire.tag_suggestions ?? [],
     tracks,
     utterances: utteranceEntries,
