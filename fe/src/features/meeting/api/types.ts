@@ -89,6 +89,27 @@ export type WireMeeting = {
    * 이 필드가 생기기 전에 쓰인 테스트 픽스처를 깨지 않으려고 optional로 둔다.
    */
   folder_id?: string;
+  /**
+   * GET /meetings 행에만 붙는 카드용 집계(폴더 회의 목록 스펙 §2.4). 해당 행이 없으면 서버가
+   * 0·false·null을 준다. 다른 응답과 기존 픽스처를 깨지 않으려고 optional로 둔다.
+   */
+  participant_count?: number;
+  decision_count?: number;
+  action_count?: number;
+  saved_count?: number;
+  /** 현재 처리 버전의 클러스터 중 '나'(`speaker.is_me`) 화자에 묶인 것이 있는가. */
+  has_me?: boolean;
+  preview_decision?: string | null;
+  preview_action?: WirePreviewAction | null;
+  preview_summary?: string | null;
+};
+
+/** 카드 미리보기용 할 일 하나 — open을 먼저 고른다. due_at은 `YYYY-MM-DD`. */
+export type WirePreviewAction = {
+  text: string;
+  assignee_name: string | null;
+  due_at: string | null;
+  done: boolean;
 };
 
 /** GET /folders 행 — 기본 폴더가 먼저, 나머지는 이름순. */
