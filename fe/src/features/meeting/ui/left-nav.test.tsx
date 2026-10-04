@@ -399,6 +399,33 @@ test("머리 행 전체 회의는 폴더 선택을 풀고 /meetings로 가며, �
   }
 });
 
+test("폴더 목록·회의 화면이 아닌 곳에서는 폴더 행을 강조하지 않고, 거르기는 유지한다", async () => {
+  const restore = await routeGet({
+    "/folders": () => [
+      folder("fld_1", "기본 폴더", true),
+      folder("fld_2", "기획팀"),
+    ],
+    "/meetings": () => [
+      meetingRow("m1", "기획 킥오프", "fld_2"),
+      meetingRow("m3", "잡담", "fld_1"),
+    ],
+  });
+  try {
+    renderNav();
+    fireEvent.click(await within(folderList()).findByText("기획팀"));
+    expect(await screen.findByText("경로: /folders/fld_2")).toBeInTheDocument();
+    expect(folderButton("기획팀")).toHaveAttribute("aria-current", "page");
+
+    fireEvent.click(screen.getByRole("link", { name: "화자 관리" }));
+    expect(await screen.findByText("경로: /speakers")).toBeInTheDocument();
+    expect(selectedFolderRow()).toBeNull();
+    expect(screen.queryByText("잡담")).not.toBeInTheDocument();
+    expect(screen.getByText("기획 킥오프")).toBeInTheDocument();
+  } finally {
+    restore();
+  }
+});
+
 test("/folders/:folderId로 들어오면 사이드바 선택이 경로를 따른다", async () => {
   const restore = await routeGet({
     "/folders": () => [

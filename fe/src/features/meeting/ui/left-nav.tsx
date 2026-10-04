@@ -266,7 +266,9 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
         <FolderSection
           folders={folders}
           meetings={meetings ?? []}
-          value={activeFolder}
+          // 강조는 폴더 목록과 회의 화면에서만 한다. 할 일·화자 관리 같은 화면에서도 폴더 행이
+          // 칠해져 있으면 지금 그 폴더를 보고 있는 것처럼 읽힌다. 선택(아래 목록 거르기)은 유지한다.
+          value={routeFolder || meetingId ? activeFolder : null}
           onChange={selectFolder}
           allActive={!!allMeetingsMatch}
           onSelectAll={selectAllMeetings}
