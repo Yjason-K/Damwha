@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Link, useParams, useSearchParams } from "react-router";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 
 import { Button } from "@/shared/ui/button";
 import { SegmentedControl } from "@/shared/ui/segmented-control";
@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from "@/shared/ui/select";
 import { cn } from "@/shared/lib/utils";
+import { LensOverview } from "@/features/lens/ui/lens-overview";
 import { useFolders } from "@/features/meeting/api/folders";
 import { useMeetings } from "@/features/meeting/api/meetings";
 import {
@@ -24,6 +25,8 @@ import {
 import { CenterState, Spinner } from "@/features/meeting/ui/center-state";
 import { Icon } from "@/features/meeting/ui/icons";
 import { MeetingCard } from "@/features/meeting/ui/meeting-card";
+import { MeetingDropzone } from "@/features/meeting/ui/meeting-dropzone";
+import { NewMeetingDialog } from "@/features/meeting/ui/new-meeting-dialog";
 import { useSpeakers } from "@/features/speaker/api/speakers";
 
 const TAB_OPTIONS: { value: MeetingListTab; label: string }[] = [
@@ -69,6 +72,11 @@ export function MeetingListPage() {
   const meetings = useMeetings();
   const folders = useFolders();
   const speakers = useSpeakers();
+  const navigate = useNavigate();
+  const [newMeeting, setNewMeeting] = React.useState<{
+    source: "file" | "live";
+    file: File | null;
+  } | null>(null);
 
   const update = (next: {
     tab?: MeetingListTab;
@@ -204,78 +212,98 @@ export function MeetingListPage() {
           </div>
         </header>
 
-        {noMe ? (
-          <EmptyNote>
-            <p className="text-sm text-[color:var(--text-muted)]">
-              화자 관리에서 &lsquo;나&rsquo;를 지정하면 내가 참여한 회의만 모아
-              볼 수 있어요.
-            </p>
-            <Link to="/speakers" className={linkClass}>
-              화자 관리로 가기
-            </Link>
-          </EmptyNote>
-        ) : visible.length === 0 ? (
-          <EmptyNote>
-            <p className="text-sm text-[color:var(--text-muted)]">
-              {scoped.length === 0
-                ? folder
-                  ? "이 폴더에 회의가 없어요."
-                  : "아직 회의가 없어요."
-                : "조건에 맞는 회의가 없어요."}
-            </p>
-          </EmptyNote>
-        ) : (
+        <MeetingDropzone
+          compact={scoped.length > 0}
+          onFile={(file) => setNewMeeting({ source: "file", file })}
+          onRecord={() => setNewMeeting({ source: "live", file: null })}
+        />
+        <NewMeetingDialog
+          open={newMeeting !== null}
+          onOpenChange={(open) => {
+            if (!open) setNewMeeting(null);
+          }}
+          onCreated={(id) => navigate(`/meetings/${id}`)}
+          defaultFolderId={folderId}
+          initialSource={newMeeting?.source}
+          initialFile={newMeeting?.file}
+        />
+
+        {scoped.length === 0 ? null : (
           <>
-            <ul aria-label="회의 목록" className="flex flex-col gap-2">
-              {visible.map((m) => (
-                <li key={m.id}>
-                  <MeetingCard meeting={m} now={now} />
-                </li>
-              ))}
-            </ul>
-            <footer className="flex items-center justify-between gap-4 pt-1">
-              <p className="text-sm text-[color:var(--text-muted)]">
-                표시 중: {from + 1}–{from + visible.length} / 총 {rows.length}개
-                회의
-              </p>
-              {lastPage > 1 ? (
-                <nav aria-label="페이지" className="flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={current === 1}
-                    onClick={() => update({ page: current - 1 })}
-                  >
-                    이전
-                  </Button>
-                  {pageWindow(current, lastPage).map((n) => (
-                    <Button
-                      key={n}
-                      variant="ghost"
-                      size="sm"
-                      aria-label={`${n}페이지`}
-                      aria-current={n === current ? "page" : undefined}
-                      className={cn(
-                        "min-w-7 px-2",
-                        n === current &&
-                          "bg-[var(--accent-bg)] text-[color:var(--accent-text)] hover:bg-[var(--accent-bg)] hover:text-[color:var(--accent-text)]",
-                      )}
-                      onClick={() => update({ page: n })}
-                    >
-                      {n}
-                    </Button>
+            <LensOverview folderId={folderId} />
+            {noMe ? (
+              <EmptyNote>
+                <p className="text-sm text-[color:var(--text-muted)]">
+                  화자 관리에서 &lsquo;나&rsquo;를 지정하면 내가 참여한 회의만
+                  모아 볼 수 있어요.
+                </p>
+                <Link to="/speakers" className={linkClass}>
+                  화자 관리로 가기
+                </Link>
+              </EmptyNote>
+            ) : visible.length === 0 ? (
+              <EmptyNote>
+                <p className="text-sm text-[color:var(--text-muted)]">
+                  조건에 맞는 회의가 없어요.
+                </p>
+              </EmptyNote>
+            ) : (
+              <>
+                <ul aria-label="회의 목록" className="flex flex-col gap-2">
+                  {visible.map((m) => (
+                    <li key={m.id}>
+                      <MeetingCard meeting={m} now={now} />
+                    </li>
                   ))}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={current === lastPage}
-                    onClick={() => update({ page: current + 1 })}
-                  >
-                    다음
-                  </Button>
-                </nav>
-              ) : null}
-            </footer>
+                </ul>
+                <footer className="flex items-center justify-between gap-4 pt-1">
+                  <p className="text-sm text-[color:var(--text-muted)]">
+                    표시 중: {from + 1}–{from + visible.length} / 총{" "}
+                    {rows.length}개 회의
+                  </p>
+                  {lastPage > 1 ? (
+                    <nav
+                      aria-label="페이지"
+                      className="flex items-center gap-1"
+                    >
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={current === 1}
+                        onClick={() => update({ page: current - 1 })}
+                      >
+                        이전
+                      </Button>
+                      {pageWindow(current, lastPage).map((n) => (
+                        <Button
+                          key={n}
+                          variant="ghost"
+                          size="sm"
+                          aria-label={`${n}페이지`}
+                          aria-current={n === current ? "page" : undefined}
+                          className={cn(
+                            "min-w-7 px-2",
+                            n === current &&
+                              "bg-[var(--accent-bg)] text-[color:var(--accent-text)] hover:bg-[var(--accent-bg)] hover:text-[color:var(--accent-text)]",
+                          )}
+                          onClick={() => update({ page: n })}
+                        >
+                          {n}
+                        </Button>
+                      ))}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={current === lastPage}
+                        onClick={() => update({ page: current + 1 })}
+                      >
+                        다음
+                      </Button>
+                    </nav>
+                  ) : null}
+                </footer>
+              </>
+            )}
           </>
         )}
       </div>
