@@ -244,13 +244,14 @@ test("태그를 누르면 그 태그가 붙은 회의만 남고, 다시 누르�
   }
 });
 
-function renderNav() {
+function renderNav(path = "/") {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={["/"]}>
+      <MemoryRouter initialEntries={[path]}>
+        <Probe />
         <LeftNav filter="all" onFilter={() => {}} onOpenSearch={() => {}} />
         <input aria-label="다른 입력" />
       </MemoryRouter>
@@ -323,8 +324,12 @@ async function routeGet(routes: Record<string, () => Wire[]>) {
 const folderList = () => screen.getByRole("list", { name: "폴더" });
 const folderButton = (name: string) =>
   within(folderList()).getByText(name).closest("button")!;
+const allMeetingsButton = () =>
+  screen.getByRole("button", { name: /^전체 회의/ });
+const selectedFolderRow = () =>
+  within(folderList()).queryByRole("button", { current: "page" });
 
-test("폴더를 누르면 그 폴더의 회의만 남고, 태그와 함께 걸리며, 새 회의 모달의 초기값이 된다", async () => {
+test("폴더를 누르면 그 폴더 목록으로 이동하고, 좌측은 그 폴더의 회의만 남기며, 태그와 함께 걸리고, 새 회의 모달의 초기값이 된다", async () => {
   const restore = await routeGet({
     "/folders": () => [
       folder("fld_1", "기본 폴더", true),
@@ -341,12 +346,17 @@ test("폴더를 누르면 그 폴더의 회의만 남고, 태그와 함께 걸�
     renderNav();
     expect(await screen.findByText("잡담")).toBeInTheDocument();
     expect(await within(folderList()).findByText("기획팀")).toBeInTheDocument();
-    expect(folderButton("전체 회의")).toHaveTextContent("3");
+    expect(
+      within(folderList()).queryByText("전체 회의"),
+    ).not.toBeInTheDocument();
     expect(folderButton("기본 폴더")).toHaveTextContent("1");
     expect(folderButton("기획팀")).toHaveTextContent("2");
-    expect(folderButton("전체 회의")).toHaveAttribute("aria-current", "page");
+    expect(allMeetingsButton()).toHaveTextContent("3");
+    expect(allMeetingsButton()).not.toHaveAttribute("aria-current");
+    expect(selectedFolderRow()).toBeNull();
 
     fireEvent.click(folderButton("기획팀"));
+    expect(await screen.findByText("경로: /folders/fld_2")).toBeInTheDocument();
     expect(folderButton("기획팀")).toHaveAttribute("aria-current", "page");
     expect(screen.queryByText("잡담")).not.toBeInTheDocument();
     expect(screen.getByText("기획 킥오프")).toBeInTheDocument();
@@ -358,6 +368,83 @@ test("폴더를 누르면 그 폴더의 회의만 남고, 태그와 함께 걸�
 
     fireEvent.click(screen.getByRole("button", { name: /새 회의 기록하기/ }));
     expect(screen.getByText("모달 폴더: fld_2")).toBeInTheDocument();
+  } finally {
+    restore();
+  }
+});
+
+test("머리 행 전체 회의는 폴더 선택을 풀고 /meetings로 가며, 그곳에서 강조된다", async () => {
+  const restore = await routeGet({
+    "/folders": () => [
+      folder("fld_1", "기본 폴더", true),
+      folder("fld_2", "기획팀"),
+    ],
+    "/meetings": () => [
+      meetingRow("m1", "기획 킥오프", "fld_2"),
+      meetingRow("m3", "잡담", "fld_1"),
+    ],
+  });
+  try {
+    renderNav();
+    fireEvent.click(await within(folderList()).findByText("기획팀"));
+    expect(screen.queryByText("잡담")).not.toBeInTheDocument();
+
+    fireEvent.click(allMeetingsButton());
+    expect(await screen.findByText("경로: /meetings")).toBeInTheDocument();
+    expect(allMeetingsButton()).toHaveAttribute("aria-current", "page");
+    expect(selectedFolderRow()).toBeNull();
+    expect(screen.getByText("잡담")).toBeInTheDocument();
+  } finally {
+    restore();
+  }
+});
+
+test("폴더 목록·회의 화면이 아닌 곳에서는 폴더 행을 강조하지 않고, 거르기는 유지한다", async () => {
+  const restore = await routeGet({
+    "/folders": () => [
+      folder("fld_1", "기본 폴더", true),
+      folder("fld_2", "기획팀"),
+    ],
+    "/meetings": () => [
+      meetingRow("m1", "기획 킥오프", "fld_2"),
+      meetingRow("m3", "잡담", "fld_1"),
+    ],
+  });
+  try {
+    renderNav();
+    fireEvent.click(await within(folderList()).findByText("기획팀"));
+    expect(await screen.findByText("경로: /folders/fld_2")).toBeInTheDocument();
+    expect(folderButton("기획팀")).toHaveAttribute("aria-current", "page");
+
+    fireEvent.click(screen.getByRole("link", { name: "화자 관리" }));
+    expect(await screen.findByText("경로: /speakers")).toBeInTheDocument();
+    expect(selectedFolderRow()).toBeNull();
+    expect(screen.queryByText("잡담")).not.toBeInTheDocument();
+    expect(screen.getByText("기획 킥오프")).toBeInTheDocument();
+  } finally {
+    restore();
+  }
+});
+
+test("/folders/:folderId로 들어오면 사이드바 선택이 경로를 따른다", async () => {
+  const restore = await routeGet({
+    "/folders": () => [
+      folder("fld_1", "기본 폴더", true),
+      folder("fld_2", "기획팀"),
+    ],
+    "/meetings": () => [
+      meetingRow("m1", "기획 킥오프", "fld_2"),
+      meetingRow("m3", "잡담", "fld_1"),
+    ],
+  });
+  try {
+    renderNav("/folders/fld_2");
+    expect(await screen.findByText("기획 킥오프")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(folderButton("기획팀")).toHaveAttribute("aria-current", "page"),
+    );
+    expect(screen.queryByText("잡담")).not.toBeInTheDocument();
+    expect(allMeetingsButton()).not.toHaveAttribute("aria-current");
   } finally {
     restore();
   }
@@ -387,7 +474,7 @@ test("빈 폴더와 겹친 조건은 서로 다른 빈 목록 문구를 보인�
   }
 });
 
-test("기본 폴더에는 메뉴가 없고, 고른 폴더를 지우면 선택이 전체 회의로 풀린다", async () => {
+test("기본 폴더에는 메뉴가 없고, 고른 폴더를 지우면 선택이 풀린다", async () => {
   const { apiClient } = await import("@/shared/api/client");
   const del = apiClient.delete as ReturnType<typeof vi.fn>;
   del.mockResolvedValue({ data: undefined });
@@ -417,13 +504,13 @@ test("기본 폴더에는 메뉴가 없고, 고른 폴더를 지우면 선택이
       ).not.toBeInTheDocument(),
     );
     expect(del).toHaveBeenCalledWith("/folders/fld_2");
-    expect(folderButton("전체 회의")).toHaveAttribute("aria-current", "page");
+    expect(selectedFolderRow()).toBeNull();
   } finally {
     restore();
   }
 });
 
-test("새 폴더: 이름이 겹치면 입력란에 알리고, 만들면 그 폴더를 고른다", async () => {
+test("새 폴더: 이름이 겹치면 입력란에 알리고, 만들면 그 폴더를 고르고 그 목록으로 간다", async () => {
   const { apiClient, ApiError } = await import("@/shared/api/client");
   const post = apiClient.post as ReturnType<typeof vi.fn>;
   let folders = [folder("fld_1", "기본 폴더", true)];
@@ -450,6 +537,7 @@ test("새 폴더: 이름이 겹치면 입력란에 알리고, 만들면 그 폴�
     );
     expect(await within(folderList()).findByText("새팀")).toBeInTheDocument();
     expect(folderButton("새팀")).toHaveAttribute("aria-current", "page");
+    expect(screen.getByText("경로: /folders/fld_5")).toBeInTheDocument();
   } finally {
     restore();
   }

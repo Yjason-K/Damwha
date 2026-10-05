@@ -194,4 +194,153 @@ describe('meetings management (PATCH / DELETE)', () => {
       expect(row.rows[0].folder_id).toBe(def);
     });
   });
+
+  describe('GET /meetings card fields', () => {
+    const addMeeting = async (pv = 0) => (await db.pool.query(
+      `INSERT INTO meeting(audio_key,status,processing_version) VALUES('k','done',$1) RETURNING id`, [pv],
+    )).rows[0].id as string;
+    const addSpeaker = async (name: string, isMe = false) => (await db.pool.query(
+      `INSERT INTO speaker(name, enrollment_status, is_me) VALUES($1,'ready',$2) RETURNING id`, [name, isMe],
+    )).rows[0].id as string;
+    const addCluster = (mid: string, label: string, pv: number, speakerId: string | null = null) =>
+      db.pool.query(
+        `INSERT INTO meeting_cluster(meeting_id,diar_label,resolved_speaker_id,processing_version)
+         VALUES($1,$2,$3,$4)`,
+        [mid, label, speakerId, pv],
+      );
+    const addLens = (
+      mid: string,
+      o: {
+        kind: string; text: string; lifecycle?: string; completion?: string;
+        assignee?: string | null; due?: string | null; createdAt?: string;
+      },
+    ) => db.pool.query(
+      `INSERT INTO lens_item(meeting_id,kind,text,source,user_modified,lifecycle_status,completion_status,
+                             assignee_speaker_id,due_at,created_at)
+       VALUES($1,$2,$3,'user',true,$4,$5,$6,$7,$8)`,
+      [mid, o.kind, o.text, o.lifecycle ?? 'active', o.completion ?? 'open', o.assignee ?? null,
+        o.due ?? null, o.createdAt ?? '2026-10-01T00:00:00Z'],
+    );
+    const addSaved = (mid: string, text: string) => db.pool.query(
+      `INSERT INTO saved_utterance(meeting_id,text_snapshot,start_ms_snapshot) VALUES($1,$2,0)`, [mid, text],
+    );
+    const addSummary = (mid: string, status: string, segments: unknown) => db.pool.query(
+      `INSERT INTO meeting_summary(meeting_id,processing_version,model,status,segments)
+       VALUES($1,0,'m',$2,$3::jsonb)`,
+      [mid, status, JSON.stringify(segments)],
+    );
+    const listRow = async (mid: string) =>
+      (await request(srv()).get('/meetings').expect(200)).body.find((m: any) => m.id === mid);
+
+    it('a meeting with nothing attached carries zero counts and null previews', async () => {
+      const mid = await addMeeting();
+      expect(await listRow(mid)).toMatchObject({
+        participant_count: 0, decision_count: 0, action_count: 0, saved_count: 0, has_me: false,
+        preview_decision: null, preview_action: null, preview_summary: null,
+      });
+    });
+
+    it('counts current-version clusters and active lens items only, as ints', async () => {
+      const mid = await addMeeting(1);
+      await addCluster(mid, 'OLD0', 0);
+      await addCluster(mid, 'OLD1', 0);
+      await addCluster(mid, 'S0', 1);
+      await addCluster(mid, 'S1', 1);
+      await addCluster(mid, 'S2', 1);
+      await addLens(mid, { kind: 'decision', text: 'd1' });
+      await addLens(mid, { kind: 'decision', text: 'd2' });
+      await addLens(mid, { kind: 'decision', text: 'd-archived', lifecycle: 'archived' });
+      await addLens(mid, { kind: 'action', text: 'a1', completion: 'done' });
+      await addLens(mid, { kind: 'action', text: 'a-archived', lifecycle: 'archived' });
+      await addLens(mid, { kind: 'promise', text: 'p1' });
+      await addSaved(mid, '저장 1');
+      await addSaved(mid, '저장 2');
+      // 다른 회의의 행은 섹이지 않는다
+      const other = await addMeeting();
+      await addLens(other, { kind: 'decision', text: 'other' });
+      await addSaved(other, '다른 회의');
+
+      const row = await listRow(mid);
+      expect(row).toMatchObject({ participant_count: 3, decision_count: 2, action_count: 1, saved_count: 2 });
+      for (const k of ['participant_count', 'decision_count', 'action_count', 'saved_count']) {
+        expect(typeof row[k]).toBe('number');
+      }
+    });
+
+    it('has_me is true only when a current-version cluster resolves to the me speaker', async () => {
+      const me = await addSpeaker('나', true);
+      const other = await addSpeaker('남');
+      const current = await addMeeting(1);
+      await addCluster(current, 'S0', 1, me);
+      // 나는 이전 처리 결과에만 있고 현재 결과에는 남만 있다
+      const stale = await addMeeting(1);
+      await addCluster(stale, 'OLD0', 0, me);
+      await addCluster(stale, 'S0', 1, other);
+      const notMe = await addMeeting();
+      await addCluster(notMe, 'S0', 0, other);
+
+      expect((await listRow(current)).has_me).toBe(true);
+      expect((await listRow(stale)).has_me).toBe(false);
+      expect((await listRow(notMe)).has_me).toBe(false);
+
+      // 나 지정을 풀면 false
+      await request(srv()).delete(`/speakers/${me}/me`).expect(204);
+      expect((await listRow(current)).has_me).toBe(false);
+    });
+
+    it('preview_decision is the earliest active decision', async () => {
+      const mid = await addMeeting();
+      await addLens(mid, { kind: 'decision', text: '나중 결정', createdAt: '2026-10-02T00:00:00Z' });
+      await addLens(mid, { kind: 'decision', text: '보관된 결정', lifecycle: 'archived', createdAt: '2026-09-01T00:00:00Z' });
+      await addLens(mid, { kind: 'decision', text: '첫 결정', createdAt: '2026-10-01T00:00:00Z' });
+      expect((await listRow(mid)).preview_decision).toBe('첫 결정');
+    });
+
+    it('preview_action prefers an open action over an earlier done one, with assignee and due date', async () => {
+      const mid = await addMeeting();
+      const sid = await addSpeaker('민수');
+      await addLens(mid, { kind: 'action', text: '끝난 일', completion: 'done', createdAt: '2026-09-01T00:00:00Z' });
+      await addLens(mid, { kind: 'action', text: '보관된 일', lifecycle: 'archived', createdAt: '2026-09-02T00:00:00Z' });
+      await addLens(mid, {
+        kind: 'action', text: '남은 일', assignee: sid, due: '2026-10-10', createdAt: '2026-10-01T00:00:00Z',
+      });
+      await addLens(mid, { kind: 'action', text: '더 늦은 남은 일', createdAt: '2026-10-03T00:00:00Z' });
+      expect((await listRow(mid)).preview_action).toEqual({
+        text: '남은 일', assignee_name: '민수', due_at: '2026-10-10', done: false,
+      });
+    });
+
+    it('preview_action falls back to a done action when nothing is open', async () => {
+      const mid = await addMeeting();
+      await addLens(mid, { kind: 'action', text: '다 한 일', completion: 'done' });
+      expect((await listRow(mid)).preview_action).toEqual({
+        text: '다 한 일', assignee_name: null, due_at: null, done: true,
+      });
+    });
+
+    it('preview_summary is the first bullet of the first segment, only when the summary is done', async () => {
+      const segments = [
+        { title: '도입', bullets: ['첫 문장', '둘째 문장'] },
+        { title: '본론', bullets: ['다른 문장'] },
+      ];
+      const done = await addMeeting();
+      await addSummary(done, 'done', segments);
+      const running = await addMeeting();
+      await addSummary(running, 'running', segments);
+      const empty = await addMeeting();
+      await addSummary(empty, 'done', []);
+
+      expect((await listRow(done)).preview_summary).toBe('첫 문장');
+      expect((await listRow(running)).preview_summary).toBeNull();
+      expect((await listRow(empty)).preview_summary).toBeNull();
+    });
+
+    it('keeps the list ordered by created_at DESC', async () => {
+      const older = await addMeeting();
+      await db.pool.query(`UPDATE meeting SET created_at = now() - interval '1 day' WHERE id=$1`, [older]);
+      const newer = await addMeeting();
+      const ids = (await request(srv()).get('/meetings').expect(200)).body.map((m: any) => m.id);
+      expect(ids).toEqual([newer, older]);
+    });
+  });
 });

@@ -4,7 +4,9 @@ import {
   useQueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import { apiClient } from "@/shared/api/client";
+import { apiClient, isApiError } from "@/shared/api/client";
+import { isDemoBlocked } from "@/shared/api/demo-read-only";
+import { toast } from "@/shared/ui/use-toast";
 import { meetingAudioUrl } from "@/features/meeting/api/mappers";
 import type { SpeakerStatus, WireSpeaker } from "@/features/meeting/api/types";
 import {
@@ -20,6 +22,8 @@ export type SpeakerItem = {
   createdAt: string;
   /** 목소리 미리듣기 구간. 들려줄 발화가 없으면 null — 버튼 자체를 숨긴다. */
   sample: SamplePlay | null;
+  /** '나'로 지정된 화자인가. 최대 한 명이고 DB가 강제한다. */
+  isMe: boolean;
 };
 
 /**
@@ -49,6 +53,7 @@ function toSpeakerItem(wire: WireSpeaker): SpeakerItem {
     status: wire.enrollment_status,
     createdAt: wire.created_at,
     sample: toSample(wire),
+    isMe: wire.is_me ?? false,
   };
 }
 
@@ -103,6 +108,41 @@ export function useRenameSpeaker() {
       queryClient.invalidateQueries({ queryKey: ["meetings"] });
     },
   });
+}
+
+/**
+ * '나' 지정·해제 (PUT·DELETE /speakers/:id/me). 지정은 서버가 기존 '나'를 한 트랜잭션에서
+ * 내린다. 회의 목록의 `has_me`가 바뀌므로 `["meetings"]`도 무효화한다.
+ */
+function useMeMutation(method: "put" | "delete", failTitle: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: { id: string }) => {
+      await apiClient[method](`/speakers/${vars.id}/me`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["speakers"] });
+      queryClient.invalidateQueries({ queryKey: ["meetings"] });
+    },
+    onError: (error) => {
+      if (isDemoBlocked(error)) return;
+      toast({
+        variant: "error",
+        title: failTitle,
+        description: isApiError(error)
+          ? error.message
+          : "잠시 후 다시 시도해 주세요.",
+      });
+    },
+  });
+}
+
+export function useSetMe() {
+  return useMeMutation("put", "'나'로 지정하지 못했어요");
+}
+
+export function useClearMe() {
+  return useMeMutation("delete", "'나' 지정을 풀지 못했어요");
 }
 
 /** 화자 삭제 (DELETE /speakers/:id). 진행 중 enroll이 있으면 409. */
