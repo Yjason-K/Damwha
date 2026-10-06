@@ -531,7 +531,7 @@ const fx = vi.hoisted(() => {
   const deletedIds = new Set<string>();
 
   // 목록 재조회를 붙잡아 두는 게이트. 목이 즉시 resolve하면 무효화 재조회가
-  // IndexRoute 렌더보다 먼저 끝나 "낡은 목록을 읽는" 창 자체가 사라진다 —
+  // 목록 화면 렌더보다 먼저 끝나 "낡은 목록을 읽는" 창 자체가 사라진다 —
   // 실제 네트워크에서는 열리는 창이므로, 테스트가 회귀를 잡으려면 재현해야 한다.
   let listBlocked = false;
   let pendingList: Array<() => void> = [];
@@ -975,7 +975,7 @@ test("이미 활성인 발언을 다시 눌러도 그 지점으로 다시 seek�
   expect(router.state.location.search).toBe("?u=v2");
 });
 
-test("목록 첫 회의를 삭제하면 삭제된 회의로 되돌아가지 않는다", async () => {
+test("회의를 삭제하면 전체 목록으로 가고 삭제된 회의는 목록에 남지 않는다", async () => {
   const { router } = renderShell("/meetings/m1");
   await screen.findByRole("heading", {
     level: 1,
@@ -987,23 +987,27 @@ test("목록 첫 회의를 삭제하면 삭제된 회의로 되돌아가지 않�
   const seen: string[] = [];
   const unsubscribe = router.subscribe((s) => seen.push(s.location.pathname));
 
-  // 무효화 재조회를 붙잡아, IndexRoute가 캐시된 목록만 보고 판단하게 만든다.
+  // 무효화 재조회를 붙잡아, 목록 화면이 캐시된 목록만 보고 그리게 만든다.
   fx.blockListFetches();
 
   fireEvent.click(screen.getByRole("button", { name: "삭제" }));
   const dialog = await screen.findByRole("dialog");
   fireEvent.click(within(dialog).getByRole("button", { name: "삭제" }));
 
-  // 삭제 성공 → `/`로 replace → IndexRoute가 남은 회의 중 첫 회의로 보낸다.
+  // 삭제 성공 → `/`로 replace → IndexRoute가 `/meetings` 카드 목록으로 보낸다.
   expect(await screen.findByText("회의를 삭제했어요.")).toBeInTheDocument();
   expect(
-    await screen.findByRole("heading", { level: 1, name: "스프린트 회고" }),
+    await screen.findByRole("link", { name: "스프린트 회고 회의 열기" }),
   ).toBeInTheDocument();
   unsubscribe();
 
-  // 방금 삭제한 회의로는 단 한 번도 돌아가지 않아야 한다(404 막다른 길).
+  // 방금 삭제한 회의로는 단 한 번도 돌아가지 않아야 하고(404 막다른 길), 낡은 목록
+  // 캐시가 그 카드를 다시 그려서도 안 된다.
   expect(seen).not.toContain("/meetings/m1");
-  expect(router.state.location.pathname).toBe("/meetings/m2");
+  expect(router.state.location.pathname).toBe("/meetings");
+  expect(
+    screen.queryByRole("link", { name: "기획회의 — UI 개선안 회의 열기" }),
+  ).not.toBeInTheDocument();
 
   fx.releaseListFetches();
 });
@@ -1170,7 +1174,9 @@ test("같은 단계가 이어지면 경과 시간을, 오래면 안내를 붙인
     expect(screen.queryByText(/오래 걸릴 수 있어요/)).toBeNull();
 
     await vi.advanceTimersByTimeAsync(62_000);
-    expect(await screen.findByText(/화자 분리 · 35% · 1분째/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/화자 분리 · 35% · 1분째/),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/오래 걸릴 수 있어요/)).toBeNull();
 
     await vi.advanceTimersByTimeAsync(120_000);
@@ -1400,10 +1406,16 @@ test("앱에 실린 화자 분리 모델이 깨졌으면 다시 설치를 안내
     ...fx.detailOf("m3"),
     status: "failed",
     current_job_id: null,
-    error: { code: "diarization_bundle_missing", stage: "diarize", message: "incomplete" },
+    error: {
+      code: "diarization_bundle_missing",
+      stage: "diarize",
+      message: "incomplete",
+    },
   });
   renderShell("/meetings/m3");
-  expect(await screen.findByText(/앱에 포함된 화자 분리 모델을 찾을 수 없어요/)).toBeInTheDocument();
+  expect(
+    await screen.findByText(/앱에 포함된 화자 분리 모델을 찾을 수 없어요/),
+  ).toBeInTheDocument();
   expect(screen.getByText(/앱을 다시 설치해 주세요/)).toBeInTheDocument();
 });
 

@@ -113,9 +113,15 @@ export function buildTourSteps(ctx: Ctx): TourStep[] {
       side: "right",
       prepare: async () => {
         ctx.navigate("/");
-        // "/"는 IndexRoute고, useMeetings()가 풀리면 <Navigate replace>로 첫 회의에 한 번
-        // 더 이동한다. 그 두 번째 이동이 prepare 밖에서 커밋되면 종료 가드에 걸리므로 여기서
-        // 착지까지 기다린다. 회의가 없으면 리다이렉트도 없다 — 타임아웃해도 단계는 뜬다.
+        // "/"는 IndexRoute고 <Navigate replace>로 `/meetings` 카드 목록에 한 번 더 이동한다.
+        // 다음 단계(발화)는 회의 상세가 필요하므로 착지한 뒤 레일의 첫 회의(최신)를 눌러 연다.
+        // 이동은 전부 prepare 안에서 커밋돼야 종료 가드에 걸리지 않는다. 회의가 없으면 누를
+        // 것도 없다 — 타임아웃해도 단계는 뜬다.
+        await waitUntil(() => ctx.pathname() === "/meetings");
+        const first = await waitFor(
+          `${tourSelector("meeting-list")} a[href^="/meetings/"]`,
+        );
+        first?.click();
         await waitUntil(() => ctx.pathname().startsWith("/meetings/"));
         await waitFor(tourSelector("meeting-list"));
       },
