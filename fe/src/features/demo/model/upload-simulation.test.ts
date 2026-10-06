@@ -68,6 +68,8 @@ test("전환마다 구독자와 네 쿼리 키를 알리고, 24초에 done이 �
   // done 전엔 인터셉터가 렌즈를 빈 queued로 덮으므로, 끝날 때 다시 읽어야 진짜 렌즈가 뜬다
   expect(keys).toContain(JSON.stringify(["meeting-lenses", "mtg_7"]));
   expect(keys).toContain(JSON.stringify(["meetings"]));
+  // 업로드 전에 받아 둔 결정·할 일 요약은 투어 회의 항목이 빠진 채라 끝날 때 다시 읽는다
+  expect(keys).toContain(JSON.stringify(["lens-overview"]));
 });
 
 test("다시 시작하면 이전 타이머를 버리고 처음부터 돈다", () => {
