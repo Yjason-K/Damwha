@@ -4,10 +4,11 @@ import speakers from "../assets/app-05-speakers.png";
 import search from "../assets/app-02-search.png";
 import lenses from "../assets/app-04-lenses.png";
 import settings from "../assets/app-06-settings.png";
+import organize from "../assets/app-03-organize.png";
 import type { Dictionary } from "../i18n";
 interface Props { t: Dictionary }
 const { t } = Astro.props;
-const IMAGES = { speakers, search, lenses, settings };
+const IMAGES = { organize, speakers, search, lenses, settings };
 const items = t.features.items;
 ---
 <section id="features" class="border-line border-t">
@@ -15,13 +16,13 @@ const items = t.features.items;
     <h2 class="text-2xl font-semibold tracking-tight sm:text-3xl">{t.features.title}</h2>
     <div class="mt-12 grid gap-x-10 gap-y-16 md:grid-cols-2">
       {items.map((f) => (
-        <article>
+        <article class={f.wide ? "md:col-span-2" : undefined}>
           <Picture
             src={IMAGES[f.image]}
             alt={f.alt}
             formats={["avif", "webp"]}
-            widths={[560, 1120]}
-            sizes="(min-width: 768px) 540px, 100vw"
+            widths={f.wide ? [1120, 2240] : [560, 1120]}
+            sizes={f.wide ? "(min-width: 1152px) 1120px, 100vw" : "(min-width: 768px) 540px, 100vw"}
             class="border-line h-auto w-full rounded-lg border"
           />
           <h3 class="mt-6 text-lg font-semibold">{f.title}</h3>
