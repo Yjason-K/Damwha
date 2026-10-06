@@ -10,7 +10,21 @@ export interface MeetingRow {
   /** 라이브 캡처가 어떻게 얻어졌는가(예: capture_gap) — error("처리가 실패했는가")와는 별개다.
    *  markUploaded는 일부러 이 필드를 건드리지 않는다 (마이그레이션 023). */
   capture_error: any;
+  folder_id: string;
   created_at: Date;
+}
+
+/** GET /meetings 행 — 회의 목록 카드용 집계가 붙는다 (스펙 2026-10-04-folder-meeting-list §2.4). */
+export interface MeetingListRow extends MeetingRow {
+  tags: { id: string; name: string }[];
+  participant_count: number;
+  decision_count: number;
+  action_count: number;
+  saved_count: number;
+  has_me: boolean;
+  preview_decision: string | null;
+  preview_action: { text: string; assignee_name: string | null; due_at: string | null; done: boolean } | null;
+  preview_summary: string | null;
 }
 
 export interface ClusterRow {
@@ -27,12 +41,16 @@ export interface ClusterRow {
 export class MeetingsRepository {
   async create(
     exec: Queryable,
-    args: { audioKey: string; title: string | null; originalFilename: string | null; recordedAt: string | null },
+    args: {
+      audioKey: string; title: string | null; originalFilename: string | null; recordedAt: string | null;
+      folderId?: string | null;
+    },
   ): Promise<MeetingRow> {
     const { rows } = await exec.query<MeetingRow>(
-      `INSERT INTO meeting(title, original_filename, audio_key, recorded_at, status)
-       VALUES($1,$2,$3,COALESCE($4::timestamptz, now()),'uploaded') RETURNING *`,
-      [args.title, args.originalFilename, args.audioKey, args.recordedAt],
+      `INSERT INTO meeting(title, original_filename, audio_key, recorded_at, status, folder_id)
+       VALUES($1,$2,$3,COALESCE($4::timestamptz, now()),'uploaded',
+              COALESCE($5, default_folder_id())) RETURNING *`,
+      [args.title, args.originalFilename, args.audioKey, args.recordedAt, args.folderId ?? null],
     );
     return rows[0];
   }
@@ -43,12 +61,12 @@ export class MeetingsRepository {
     );
     return rows[0] ?? null;
   }
-  // Partial update of title/recorded_at. Only keys present in `patch` are written;
+  // Partial update of title/recorded_at/folder_id. Only keys present in `patch` are written;
   // an empty patch falls back to a plain SELECT (so 404 detection still works).
   async update(
     exec: Queryable,
     id: string,
-    patch: { title?: string | null; recorded_at?: string },
+    patch: { title?: string | null; recorded_at?: string; folder_id?: string },
   ): Promise<MeetingRow | null> {
     const sets: string[] = [];
     const params: unknown[] = [id];
@@ -59,6 +77,10 @@ export class MeetingsRepository {
     if ('recorded_at' in patch) {
       params.push(patch.recorded_at);
       sets.push(`recorded_at=$${params.length}`);
+    }
+    if ('folder_id' in patch) {
+      params.push(patch.folder_id);
+      sets.push(`folder_id=$${params.length}`);
     }
     if (sets.length === 0) {
       const { rows } = await exec.query<MeetingRow>(`SELECT * FROM meeting WHERE id=$1`, [id]);
@@ -82,9 +104,42 @@ export class MeetingsRepository {
     );
     return rows[0];
   }
-  async list(exec: Queryable): Promise<MeetingRow[]> {
-    const { rows } = await exec.query<MeetingRow>(
-      `SELECT m.*, ${meetingTagsJson('m')} AS tags FROM meeting m ORDER BY m.created_at DESC`,
+  // 클러스터는 재처리마다 버전이 갈리므로 현재 processing_version만 센다(has_me도 같다).
+  // 렌즈는 활성만 센다 — archived는 재추출이 내린 항목이다. 할 일 미리보기는 open을 먼저 고른다.
+  async list(exec: Queryable): Promise<MeetingListRow[]> {
+    const { rows } = await exec.query<MeetingListRow>(
+      `SELECT m.*, ${meetingTagsJson('m')} AS tags,
+              (SELECT count(*)::int FROM meeting_cluster c
+                WHERE c.meeting_id = m.id AND c.processing_version = m.processing_version
+              ) AS participant_count,
+              (SELECT count(*)::int FROM lens_item li
+                WHERE li.meeting_id = m.id AND li.kind = 'decision' AND li.lifecycle_status = 'active'
+              ) AS decision_count,
+              (SELECT count(*)::int FROM lens_item li
+                WHERE li.meeting_id = m.id AND li.kind = 'action' AND li.lifecycle_status = 'active'
+              ) AS action_count,
+              (SELECT count(*)::int FROM saved_utterance su WHERE su.meeting_id = m.id) AS saved_count,
+              EXISTS (
+                SELECT 1 FROM meeting_cluster c JOIN speaker s ON s.id = c.resolved_speaker_id
+                 WHERE c.meeting_id = m.id AND c.processing_version = m.processing_version AND s.is_me
+              ) AS has_me,
+              (SELECT li.text FROM lens_item li
+                WHERE li.meeting_id = m.id AND li.kind = 'decision' AND li.lifecycle_status = 'active'
+                ORDER BY li.created_at, li.id LIMIT 1
+              ) AS preview_decision,
+              (SELECT jsonb_build_object(
+                        'text', li.text,
+                        'assignee_name', s.name,
+                        'due_at', to_char(li.due_at, 'YYYY-MM-DD'),
+                        'done', li.completion_status = 'done')
+                 FROM lens_item li LEFT JOIN speaker s ON s.id = li.assignee_speaker_id
+                WHERE li.meeting_id = m.id AND li.kind = 'action' AND li.lifecycle_status = 'active'
+                ORDER BY (li.completion_status = 'done'), li.created_at, li.id LIMIT 1
+              ) AS preview_action,
+              (SELECT ms.segments -> 0 -> 'bullets' ->> 0 FROM meeting_summary ms
+                WHERE ms.meeting_id = m.id AND ms.status = 'done'
+              ) AS preview_summary
+         FROM meeting m ORDER BY m.created_at DESC`,
     );
     return rows;
   }

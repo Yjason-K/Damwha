@@ -8,6 +8,7 @@ export type EvidenceRelation = 'primary' | 'supporting';
 export type LensListFilters = {
   kind?: LensKind;
   meeting_id?: string;
+  folder_id?: string;
   speaker_id?: string;
   date_from?: string;
   date_to?: string;

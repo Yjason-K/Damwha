@@ -12,6 +12,8 @@ import { SpeakerBounds, SpeakerBoundsSchema } from '../meetings/speaker-bounds';
 import { buildLiveSessionPayload } from '../contracts/job-payload.schema';
 import { nextId } from '../common/id';
 import { LiveRepository } from './live.repository';
+import { FoldersRepository } from '../folders/folders.repository';
+import { assertFolderExists, parseFolderId } from '../folders/folder-id';
 
 const RECORDING_INDEX = 'meeting_single_recording_idx';
 
@@ -86,6 +88,7 @@ export class LiveService {
     private readonly live: LiveRepository,
     private readonly settings: SettingsService,
     private readonly caps: CapabilitiesService,
+    private readonly folders: FoldersRepository,
   ) {}
 
   private intHeader(v: unknown, field: string): number {
@@ -226,8 +229,10 @@ export class LiveService {
 
   async start(body: {
     title?: unknown; processing?: unknown; speakers?: unknown; defer_lens?: unknown; defer_summary?: unknown;
+    folder_id?: unknown;
   }) {
     const title = this.parseTitle(body.title);
+    const folderId = parseFolderId(body.folder_id);
     const override = this.parseOverride(body.processing);
     const speakers = this.parseSpeakers(body.speakers);
     const followups = {
@@ -236,6 +241,7 @@ export class LiveService {
     };
     const global_ = await this.settings.getProcessingConfig();
     const processing = resolveProcessingConfig(global_, override, (await this.caps.get()).gpu_eligible);
+    if (folderId) await assertFolderExists(this.folders, this.db.pool, folderId);
 
     // 친절한 메시지를 위한 사전 조회. 보장은 아래 INSERT의 부분 유일 인덱스가 한다 (설계 §4).
     if (await this.live.findRecording(this.db.pool)) {
@@ -246,7 +252,7 @@ export class LiveService {
     let meeting: MeetingRow;
     try {
       meeting = await this.db.withTransaction(async (c) => {
-        await this.live.createRecording(c, { id: meetingId, audioKey, title });
+        await this.live.createRecording(c, { id: meetingId, audioKey, title, folderId });
         const payload = buildLiveSessionPayload({ meetingId, audioKey, processing, followups, speakers });
         // 재시도 없음 — 끊긴 녹음은 이어 붙일 수 없다 (설계 §2.6).
         const job = await this.jobs.enqueue(c, { type: 'live_session', meetingId, payload, maxAttempts: 1 });

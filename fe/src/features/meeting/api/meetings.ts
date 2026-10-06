@@ -114,6 +114,8 @@ export function useUploadMeeting() {
       speakers?: SpeakerBounds;
       deferLens?: boolean;
       deferSummary?: boolean;
+      /** 생략하면 서버가 기본 폴더에 넣는다. */
+      folderId?: string;
     }) => {
       const form = new FormData();
       form.append("audio", vars.file);
@@ -124,6 +126,7 @@ export function useUploadMeeting() {
       if (vars.speakers) form.append("speakers", JSON.stringify(vars.speakers));
       if (vars.deferLens) form.append("defer_lens", "true");
       if (vars.deferSummary) form.append("defer_summary", "true");
+      if (vars.folderId) form.append("folder_id", vars.folderId);
       const { data } = await apiClient.post<WireMeeting>("/meetings", form, {
         headers: { "Content-Type": "multipart/form-data" },
       });
@@ -161,6 +164,24 @@ export function useRenameMeeting() {
       const { data } = await apiClient.patch<WireMeeting>(
         `/meetings/${vars.id}`,
         { title: vars.title },
+      );
+      return toMeetingSummary(data);
+    },
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["meetings"] });
+      queryClient.invalidateQueries({ queryKey: ["meeting", vars.id] });
+    },
+  });
+}
+
+/** 회의를 다른 폴더로 옮긴다 (PATCH /meetings/:id { folder_id }). */
+export function useMoveMeetingToFolder() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: { id: string; folderId: string }) => {
+      const { data } = await apiClient.patch<WireMeeting>(
+        `/meetings/${vars.id}`,
+        { folder_id: vars.folderId },
       );
       return toMeetingSummary(data);
     },

@@ -4,6 +4,8 @@ import { Queryable } from '../jobs/jobs.types';
 export interface SpeakerRow {
   id: string; name: string; enrollment_status: string;
   current_job_id: string | null; enrollment_error: any; created_at: Date;
+  /** '나'로 지정된 화자 (031). 최대 한 명 — speaker_single_me_idx. */
+  is_me: boolean;
 }
 
 // 목록/단건에만 실리는 미리듣기 좌표. 셋은 함께 오거나 함께 null이다.
@@ -84,6 +86,20 @@ export class SpeakersRepository {
       [id, name],
     );
     return rows[0] ?? null;
+  }
+  // 기존 '나'를 먼저 내려야 speaker_single_me_idx가 두 번째 true를 막지 않는다.
+  // 호출자가 같은 트랜잭션 안에서 화자 존재를 확인한 뒤 부른다.
+  async setMe(exec: Queryable, id: string): Promise<SpeakerRow | null> {
+    await exec.query(`UPDATE speaker SET is_me=false WHERE is_me AND id<>$1`, [id]);
+    const { rows } = await exec.query<SpeakerRow>(
+      `UPDATE speaker SET is_me=true WHERE id=$1 RETURNING *`, [id],
+    );
+    return rows[0] ?? null;
+  }
+  // 이미 '나'가 아니어도 행이 있으면 true — 멱등 해제. false는 없는 화자다.
+  async clearMe(exec: Queryable, id: string): Promise<boolean> {
+    const res = await exec.query(`UPDATE speaker SET is_me=false WHERE id=$1`, [id]);
+    return (res.rowCount ?? 0) > 0;
   }
   async lockById(exec: Queryable, id: string): Promise<SpeakerRow | null> {
     const { rows } = await exec.query<SpeakerRow>(`SELECT * FROM speaker WHERE id=$1 FOR UPDATE`, [id]);

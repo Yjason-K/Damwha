@@ -84,6 +84,26 @@ export function toMeetingSummary(wire: WireMeeting): MeetingSummary {
     fav: wire.is_favorite,
     status: wire.status,
     tags: wire.tags ?? [],
+    folderId: wire.folder_id ?? null,
+    startIso,
+    durationMs: wire.duration_ms,
+    participantCount: wire.participant_count ?? 0,
+    decisionCount: wire.decision_count ?? 0,
+    actionCount: wire.action_count ?? 0,
+    savedCount: wire.saved_count ?? 0,
+    hasMe: wire.has_me ?? false,
+    preview: {
+      decision: wire.preview_decision ?? null,
+      action: wire.preview_action
+        ? {
+            text: wire.preview_action.text,
+            assigneeName: wire.preview_action.assignee_name,
+            dueAt: wire.preview_action.due_at,
+            done: wire.preview_action.done,
+          }
+        : null,
+      summary: wire.preview_summary ?? null,
+    },
   };
 }
 
@@ -250,6 +270,7 @@ export function toMeetingDetail(wire: WireMeetingDetail): Meeting {
     unverified,
     fav: wire.is_favorite,
     tags: wire.tags ?? [],
+    folderId: wire.folder_id ?? null,
     tagSuggestions: wire.tag_suggestions ?? [],
     tracks,
     utterances: utteranceEntries,

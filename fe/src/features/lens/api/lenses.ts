@@ -10,6 +10,7 @@ import { toast } from "@/shared/ui/use-toast";
 import type {
   ExtractionStatus,
   LensFilters,
+  LensKind,
   LensListPage,
 } from "../model/types";
 
@@ -36,6 +37,30 @@ export function useLensList(filters: LensFilters) {
       return data;
     },
     getNextPageParam: (last) => last.next_cursor,
+  });
+}
+
+/** 회의 목록 위 요약 카드가 보여 주는 항목 수. 나머지는 `모두 보기`의 대시보드가 맡는다. */
+export const LENS_OVERVIEW_LIMIT = 2;
+
+/**
+ * 회의 목록(전체·폴더)의 `최근 결정`/`진행 중인 할 일` 카드. 열린 항목의 첫 몇 개와
+ * 전체 건수(`total`)만 받는다. 키를 `["lenses"]` 아래에 두지 않는 것은 완료 토글의
+ * 낙관적 갱신이 그 키의 캐시를 무한 목록(`pages`) 모양으로 다루기 때문이다.
+ */
+export function useLensOverview(kind: LensKind, folderId?: string) {
+  return useQuery({
+    queryKey: ["lens-overview", kind, folderId ?? null],
+    queryFn: async () => {
+      const p = new URLSearchParams({
+        kind,
+        completion_status: "open",
+        limit: String(LENS_OVERVIEW_LIMIT),
+      });
+      if (folderId) p.set("folder_id", folderId);
+      const { data } = await apiClient.get<LensListPage>(`/lenses?${p}`);
+      return data;
+    },
   });
 }
 
@@ -100,6 +125,7 @@ export function useSetLensCompletion() {
       // 캐시(["meeting-lenses", id])를 여기서 무효화하지 않으면 대시보드에서
       // 완료 처리해도 패널은 계속 열림 상태로 보인다.
       qc.invalidateQueries({ queryKey: ["meeting-lenses"] });
+      qc.invalidateQueries({ queryKey: ["lens-overview"] });
     },
   });
 }

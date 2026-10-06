@@ -21,6 +21,8 @@ import { isIso8601 } from '../common/iso8601';
 import { LensExtractionService } from '../lenses/lens-extraction.service';
 import { SummaryService } from '../summary/summary.service';
 import { TagsRepository } from '../tags/tags.repository';
+import { FoldersRepository } from '../folders/folders.repository';
+import { assertFolderExists, parseFolderId } from '../folders/folder-id';
 import * as fs from 'fs';
 
 const AUDIO_MIME = /^audio\//;
@@ -43,6 +45,7 @@ export class MeetingsService {
     private readonly summary: SummaryService,
     private readonly caps: CapabilitiesService,
     private readonly tags: TagsRepository,
+    private readonly folders: FoldersRepository,
   ) {}
 
   // Validation scope (Plan 1): MIME + extension + size only. Deep audio-integrity
@@ -51,7 +54,7 @@ export class MeetingsService {
     file: Express.Multer.File | undefined,
     body: {
       title?: string; recorded_at?: string; processing?: string; speakers?: string;
-      defer_lens?: string; defer_summary?: string;
+      defer_lens?: string; defer_summary?: string; folder_id?: string;
     },
   ) {
     if (!file) throw new BadRequestException('audio file required');
@@ -65,8 +68,11 @@ export class MeetingsService {
     let followups: Followups;
     let speakers: SpeakerBounds | undefined;
     let recordedAt: string | undefined;
+    let folderId: string | undefined;
     try {
       recordedAt = this.parseRecordedAt(body.recorded_at);
+      folderId = parseFolderId(body.folder_id);
+      if (folderId) await assertFolderExists(this.folders, this.db.pool, folderId);
       const override = this.parseOverrideString(body.processing); // JSON.parse + zod, 오류는 BadRequest
       speakers = this.parseSpeakersString(body.speakers);
       const global_ = await this.settings.getProcessingConfig();
@@ -90,9 +96,10 @@ export class MeetingsService {
         // DEFAULT는 컬럼을 생략했을 때만 걸린다. 값 바인딩을 유지하려면 COALESCE로
         // "미지정 = 등록 시각" 규칙을 SQL 한 곳에 둔다 (문장을 두 벌로 나누면
         // 파라미터 번호가 갈라진다).
-        `INSERT INTO meeting(id, title, original_filename, audio_key, recorded_at, status)
-         VALUES($1,$2,$3,$4,COALESCE($5::timestamptz, now()),'uploaded') RETURNING *`,
-        [meetingId, body.title ?? null, originalName, audioKey, recordedAt ?? null],
+        `INSERT INTO meeting(id, title, original_filename, audio_key, recorded_at, status, folder_id)
+         VALUES($1,$2,$3,$4,COALESCE($5::timestamptz, now()),'uploaded',
+                COALESCE($6, default_folder_id())) RETURNING *`,
+        [meetingId, body.title ?? null, originalName, audioKey, recordedAt ?? null, folderId ?? null],
       );
       const payload = buildProcessMeetingPayload({
         meetingId, audioKey, processingVersion: 0, reprocess: false, processing, followups, speakers,
@@ -154,8 +161,10 @@ export class MeetingsService {
   // Manual validation (no global ValidationPipe): title must be string|null,
   // recorded_at must be an ISO-8601 datetime. null is rejected — the column is
   // NOT NULL since migration 021 and every meeting keeps a reference time.
-  async update(id: string, body: { title?: unknown; recorded_at?: unknown }): Promise<MeetingRow> {
-    const patch: { title?: string | null; recorded_at?: string } = {};
+  async update(
+    id: string, body: { title?: unknown; recorded_at?: unknown; folder_id?: unknown },
+  ): Promise<MeetingRow> {
+    const patch: { title?: string | null; recorded_at?: string; folder_id?: string } = {};
     if ('title' in body) {
       if (body.title !== null && typeof body.title !== 'string') {
         throw new BadRequestException('title must be a string or null');
@@ -169,6 +178,13 @@ export class MeetingsService {
         );
       }
       patch.recorded_at = body.recorded_at;
+    }
+    // 회의는 늘 한 폴더에 있다 — null(폴더에서 빼기)은 받지 않는다. 녹음 중인 회의도 옮길 수 있다.
+    if ('folder_id' in body) {
+      const folderId = parseFolderId(body.folder_id);
+      if (folderId === undefined) throw new BadRequestException('folder_id must be a folder id');
+      await assertFolderExists(this.folders, this.db.pool, folderId);
+      patch.folder_id = folderId;
     }
     const updated = await this.meetings.update(this.db.pool, id, patch);
     if (!updated) throw new NotFoundException('meeting not found');

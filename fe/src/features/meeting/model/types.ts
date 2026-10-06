@@ -119,7 +119,36 @@ export type MeetingSummary = {
   fav: boolean;
   status: MeetingStatus;
   tags: MeetingTag[];
+  /** 회의가 들어 있는 폴더. 응답에 없으면(옛 픽스처) null. */
+  folderId: string | null;
+  /** 회의 시작 시각(ISO) — `recorded_at`, 없으면 `created_at`. 정렬·날짜 라벨 기준. */
+  startIso: string;
+  /** 길이를 모르면 null. */
+  durationMs: number | null;
+  participantCount: number;
+  decisionCount: number;
+  actionCount: number;
+  savedCount: number;
+  /** '나'로 지정된 화자가 이 회의의 현재 처리 결과에 등장하는가. */
+  hasMe: boolean;
+  preview: MeetingPreview;
 };
+
+/** 회의 카드의 미리보기 재료. 없는 것은 null. */
+export type MeetingPreview = {
+  decision: string | null;
+  action: {
+    text: string;
+    assigneeName: string | null;
+    /** `YYYY-MM-DD`. */
+    dueAt: string | null;
+    done: boolean;
+  } | null;
+  summary: string | null;
+};
+
+/** 회의 폴더. 회의는 정확히 한 폴더에 들어 있다 — 태그(분류)와 달리 위치다. */
+export type Folder = { id: string; name: string; isDefault: boolean };
 
 /** 상세 화면용 회의 — GET /meetings/:id(발화 포함)에서 매핑. */
 export type Meeting = {
@@ -133,6 +162,7 @@ export type Meeting = {
   unverified?: number[];
   fav?: boolean;
   tags: MeetingTag[];
+  folderId: string | null;
   /** 요약이 추천한 기존 태그 이름. 붙이는 건 사용자다. */
   tagSuggestions: string[];
   tracks: SpeakerLane[];

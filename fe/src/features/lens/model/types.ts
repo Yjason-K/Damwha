@@ -35,6 +35,8 @@ export type LensWireItem = {
 export type LensListPage = {
   items: LensWireItem[];
   next_cursor: string | null;
+  /** 커서와 상관없는 같은 필터의 전체 건수. 옛 서버는 주지 않는다. */
+  total?: number;
 };
 
 export type LensFilters = {

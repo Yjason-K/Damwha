@@ -61,6 +61,18 @@ export class SpeakersService {
     return updated;
   }
 
+  // 등록 상태는 따지지 않는다 — 회의에서 자동으로 생긴 provisional 화자도 '나'일 수 있다.
+  async setMe(id: string) {
+    return this.db.withTransaction(async (c) => {
+      if (!(await this.speakers.lockById(c, id))) throw new NotFoundException('speaker not found');
+      return this.speakers.setMe(c, id);
+    });
+  }
+
+  async clearMe(id: string): Promise<void> {
+    if (!(await this.speakers.clearMe(this.db.pool, id))) throw new NotFoundException('speaker not found');
+  }
+
   // Un-reference blocking FKs, then delete (voiceprints cascade); finally drop
   // on-disk files. 409 while an enroll job is in flight (avoids a half-deleted
   // speaker whose enroll persist would fail its FK).
