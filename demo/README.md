@@ -66,3 +66,30 @@ deploy/demo/release.sh    # 이미지 빌드 + ghcr 푸시
 ```
 
 `restore.sh`는 손으로 띄운 빈 DB를 채우는 수동 경로로만 남아 있다.
+
+## 새 마이그레이션이 생기면
+
+덤프는 그때의 스키마로 굳어 있다. API 컨테이너가 기동 때 마이그레이션을 돌리므로 낡은 덤프로도
+뜨기는 하지만, 새 기능의 데이터가 비어 데모에서 보이지 않는다(2026-10 이전 덤프는 021에 멈춰 있어
+폴더·태그·'나'가 전부 비었다). 그래서 기능이 데이터를 요구하면 덤프를 다시 굽는다 — **실제 로컬
+DB와 `be/storage`는 쓰지 않는다**:
+
+```bash
+# 1) 데모 전용 Postgres에 지금 덤프를 올리고 마이그레이션
+docker run -d --name damwha-demo-seed -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=damwha \
+  -p 55432:5432 damwha/postgres-bigm:pg16
+docker exec -i damwha-demo-seed pg_restore --no-owner --no-acl -U postgres -d damwha < demo/seed/damwha-demo.dump
+DATABASE_URL=postgres://postgres:postgres@localhost:55432/damwha pnpm be migrate
+
+# 2) 새 기능의 데이터 — 태그·태그 추천·폴더·'나'는 enrich.sql
+docker exec -i damwha-demo-seed psql -v ON_ERROR_STOP=1 -U postgres -d damwha < demo/seed/enrich.sql
+
+# 3) 다시 굽기. build.sh는 STORAGE_ROOT의 normalized.flac을 seed/storage로 복사하므로(먼저 지운다)
+#    지금 seed/storage를 임시 폴더에 떠 두고 그걸 가리킨다.
+cp -R demo/seed/storage /tmp/demo-storage
+PG_EXEC="docker exec -i damwha-demo-seed" DATABASE_URL=postgres://postgres:postgres@localhost:5432/damwha \
+  STORAGE_ROOT=/tmp/demo-storage demo/seed/build.sh
+docker rm -f damwha-demo-seed
+```
+
+`enrich.sql`은 이미 들어간 덤프에 다시 돌리면 이름 유일 제약에 걸린다 — 한 번만 쓴다.
