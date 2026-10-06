@@ -54,7 +54,7 @@ function highlight(text: string, q: string): React.ReactNode {
 
 export function AppShell() {
   const navigate = useNavigate();
-  const [filter, setFilter] = React.useState<MeetingFilter>("all");
+  const [filter, setFilter] = React.useState<MeetingFilter>("recent");
   const [cmdOpen, setCmdOpen] = React.useState(false);
   const [cmdQuery, setCmdQuery] = React.useState("");
 

@@ -46,7 +46,7 @@ test("데모 빌드에서는 '녹음 시작' 버튼이 보이지 않는다", () 
             path="*"
             element={
               <LeftNav
-                filter="all"
+                filter="recent"
                 onFilter={() => {}}
                 onOpenSearch={() => {}}
               />

@@ -8,7 +8,10 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
-import { afterEach, expect, test, vi } from "vitest";
+import { act } from "react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+
+import { RECENT_MEETINGS_KEY, recentMeetings } from "../lib/recent-meetings";
 
 /**
  * LeftNav가 스스로 하는 이동(업로드 완료 → 새 회의 경로)만 좁게 검증한다.
@@ -50,7 +53,14 @@ vi.mock("@/features/meeting/ui/new-meeting-dialog", () => ({
 
 const { LeftNav } = await import("@/features/meeting/ui/left-nav");
 
-afterEach(cleanup);
+// 레일 목록은 `최근 본` 회의만 그린다. 목록을 보는 테스트들이 쓰는 id를 미리 "본" 것으로 둔다.
+const seedRecent = (ids: string[]) =>
+  localStorage.setItem(RECENT_MEETINGS_KEY, JSON.stringify(ids));
+beforeEach(() => seedRecent(["m1", "m2", "m3"]));
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
 
 function Probe() {
   return <span>경로: {useLocation().pathname}</span>;
@@ -69,7 +79,7 @@ test("업로드가 끝나면 새 회의 경로로 이동한다", async () => {
             path="*"
             element={
               <LeftNav
-                filter="all"
+                filter="recent"
                 onFilter={() => {}}
                 onOpenSearch={() => {}}
               />
@@ -97,7 +107,7 @@ test("통합 다이얼로그에서 녹음을 시작하면 새 회의 경로로 �
             path="*"
             element={
               <LeftNav
-                filter="all"
+                filter="recent"
                 onFilter={() => {}}
                 onOpenSearch={() => {}}
               />
@@ -149,7 +159,7 @@ test("녹음 중인 회의에는 '녹음 중' 뱃지가 붙는다", async () => 
             path="*"
             element={
               <LeftNav
-                filter="all"
+                filter="recent"
                 onFilter={() => {}}
                 onOpenSearch={() => {}}
               />
@@ -169,7 +179,7 @@ test("새 회의 기록하기 버튼은 잠겨 있지 않다", () => {
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={["/"]}>
-        <LeftNav filter="all" onFilter={() => {}} onOpenSearch={() => {}} />
+        <LeftNav filter="recent" onFilter={() => {}} onOpenSearch={() => {}} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -185,7 +195,7 @@ test("사이드바 맨 아래에 화면 테마 버튼이 있다", () => {
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={["/"]}>
-        <LeftNav filter="all" onFilter={() => {}} onOpenSearch={() => {}} />
+        <LeftNav filter="recent" onFilter={() => {}} onOpenSearch={() => {}} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -252,7 +262,7 @@ function renderNav(path = "/") {
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[path]}>
         <Probe />
-        <LeftNav filter="all" onFilter={() => {}} onOpenSearch={() => {}} />
+        <LeftNav filter="recent" onFilter={() => {}} onOpenSearch={() => {}} />
         <input aria-label="다른 입력" />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -450,7 +460,7 @@ test("/folders/:folderId로 들어오면 사이드바 선택이 경로를 따른
   }
 });
 
-test("빈 폴더와 겹친 조건은 서로 다른 빈 목록 문구를 보인다", async () => {
+test("최근 본 회의가 폴더에 없으면 조건 문구를 보인다", async () => {
   const restore = await routeGet({
     "/folders": () => [
       folder("fld_1", "기본 폴더", true),
@@ -465,10 +475,9 @@ test("빈 폴더와 겹친 조건은 서로 다른 빈 목록 문구를 보인�
     renderNav();
     await screen.findByText("기획 킥오프");
     fireEvent.click(await within(folderList()).findByText("기본 폴더"));
-    expect(screen.getByText("이 폴더에 회의가 없어요.")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "#중요" }));
-    expect(screen.getByText("조건에 맞는 회의가 없어요.")).toBeInTheDocument();
+    expect(
+      screen.getByText("조건에 맞는 최근 본 회의가 없어요."),
+    ).toBeInTheDocument();
   } finally {
     restore();
   }
@@ -541,4 +550,63 @@ test("새 폴더: 이름이 겹치면 입력란에 알리고, 만들면 그 폴�
   } finally {
     restore();
   }
+});
+
+test("최근 본 필터는 연 순서대로, 목록에 남아 있는 회의만 그린다", async () => {
+  seedRecent(["m2", "gone", "m1"]);
+  const restore = await routeGet({
+    "/meetings": () => [
+      meetingRow("m1", "첫 회의", "fld_1"),
+      meetingRow("m2", "둘째 회의", "fld_1"),
+      meetingRow("m4", "안 본 회의", "fld_1"),
+    ],
+  });
+  try {
+    renderNav();
+    await screen.findByText("둘째 회의");
+    const list = screen.getByRole("list", { name: "회의 목록" });
+    expect(
+      within(list)
+        .getAllByRole("link")
+        .map((a) => a.getAttribute("href")),
+    ).toEqual(["/meetings/m2", "/meetings/m1"]);
+    expect(screen.queryByText("안 본 회의")).not.toBeInTheDocument();
+
+    act(() => recentMeetings.visit("m4"));
+    expect(
+      within(list)
+        .getAllByRole("link")
+        .map((a) => a.getAttribute("href")),
+    ).toEqual(["/meetings/m4", "/meetings/m2", "/meetings/m1"]);
+  } finally {
+    restore();
+  }
+});
+
+test("본 회의가 없으면 최근 본 목록은 안내 문구를 보인다", async () => {
+  localStorage.clear();
+  const restore = await routeGet({
+    "/meetings": () => [meetingRow("m1", "첫 회의", "fld_1")],
+  });
+  try {
+    renderNav();
+    expect(
+      await screen.findByText(
+        "아직 본 회의가 없어요. 회의를 열면 여기에 쌓여요.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("첫 회의")).not.toBeInTheDocument();
+  } finally {
+    restore();
+  }
+});
+
+test("필터 알약은 최근 본 · 즐겨찾기 둘이다", () => {
+  renderNav();
+  expect(screen.getByRole("button", { name: "최근 본" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(screen.getByRole("button", { name: "즐겨찾기" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "전체" })).toBeNull();
 });

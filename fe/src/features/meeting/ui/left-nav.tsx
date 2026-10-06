@@ -13,6 +13,7 @@ import { ThemeMenu } from "@/features/theme/ui/theme-menu";
 import { useFolders } from "../api/folders";
 import { useMeetings } from "../api/meetings";
 import { useTags, type TagSummary } from "../api/tags";
+import { useRecentMeetingIds } from "../lib/recent-meetings";
 import type { MeetingFilter } from "../model/types";
 import { FolderSection } from "./folder-section";
 import { Icon } from "./icons";
@@ -55,7 +56,7 @@ function NewMeetingItem({
 }
 
 const FILTER_ITEMS: [MeetingFilter, string][] = [
-  ["all", "전체"],
+  ["recent", "최근 본"],
   ["fav", "즐겨찾기"],
 ];
 
@@ -142,6 +143,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
   const routeFolder = useMatch("/folders/:folderId")?.params.folderId ?? null;
   const [newMeetingOpen, setNewMeetingOpen] = React.useState(false);
   const { data: meetings, isLoading, isError } = useMeetings();
+  const recentIds = useRecentMeetingIds();
   const { data: tags = [] } = useTags();
   const [tagFilter, setTagFilter] = React.useState<string | null>(null);
   // 마지막 회의에서 떼어 낸 태그는 목록에서 사라지므로, 그 선택은 풀린 것으로 본다.
@@ -194,16 +196,29 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-  const filtered = (meetings ?? []).filter(
+  // `최근 본`은 연 순서대로, `즐겨찾기`는 서버 순서대로. 최근 본 id 중 목록에 없는 것(삭제됨)은
+  // 여기서 빠진다 — 삭제 경로가 저장소에서도 지우지만, 다른 창에서 지운 회의까지 덮는 안전망이다.
+  const pool =
+    filter === "fav"
+      ? (meetings ?? []).filter((m) => m.fav)
+      : (() => {
+          const byId = new Map((meetings ?? []).map((m) => [m.id, m]));
+          return recentIds.flatMap((id) => byId.get(id) ?? []);
+        })();
+  const filtered = pool.filter(
     (m) =>
       (activeFolder ? m.folderId === activeFolder : true) &&
-      (filter === "fav" ? m.fav : true) &&
       (activeTag ? m.tags.some((t) => t.id === activeTag) : true),
   );
-  const activeConditions =
-    Number(activeFolder !== null) +
-    Number(filter === "fav") +
-    Number(activeTag !== null);
+  const narrowed = activeFolder !== null || activeTag !== null;
+  const emptyText =
+    filter === "fav"
+      ? narrowed
+        ? "조건에 맞는 회의가 없어요."
+        : "즐겨찾기한 회의가 없어요."
+      : narrowed
+        ? "조건에 맞는 최근 본 회의가 없어요."
+        : "아직 본 회의가 없어요. 회의를 열면 여기에 쌓여요.";
 
   return (
     <nav
@@ -285,7 +300,6 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
 
         <SectionLabel>회의 목록</SectionLabel>
         <ul
-          data-tour="meeting-list"
           className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto overscroll-contain"
           aria-label="회의 목록"
           aria-busy={isLoading || undefined}
@@ -303,15 +317,7 @@ export function LeftNav({ filter, onFilter, onOpenSearch }: LeftNavProps) {
             </li>
           ) : filtered.length === 0 ? (
             <li className="px-2 py-3 text-xs leading-relaxed text-[color:var(--text-faint)]">
-              {activeConditions > 1
-                ? "조건에 맞는 회의가 없어요."
-                : activeTag
-                  ? "이 태그가 붙은 회의가 없어요."
-                  : activeFolder
-                    ? "이 폴더에 회의가 없어요."
-                    : filter === "fav"
-                      ? "즐겨찾기한 회의가 없어요."
-                      : "아직 회의가 없어요. 오디오를 업로드해 시작하세요."}
+              {emptyText}
             </li>
           ) : (
             filtered.map((m) => (

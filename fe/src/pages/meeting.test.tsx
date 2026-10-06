@@ -8,13 +8,17 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryRouter, RouterProvider } from "react-router";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { routes } from "@/app/router";
 import { apiClient } from "@/shared/api/client";
 import { Toaster } from "@/shared/ui/toaster";
 import { toMeetingDetail } from "@/features/meeting/api/mappers";
 import { useResolveCluster } from "@/features/meeting/api/meetings";
+import {
+  RECENT_MEETINGS_KEY,
+  recentMeetings,
+} from "@/features/meeting/lib/recent-meetings";
 import type {
   MeetingStatusResponse,
   SearchResponse,
@@ -712,6 +716,15 @@ afterEach(cleanup);
 // 삭제 상태는 목에 남으므로 테스트 간 누출을 막는다.
 afterEach(() => fx.reset());
 
+// 레일은 `최근 본` 회의만 그린다. 레일에서 회의를 고르는 테스트들을 위해 목록 전체를 본 것으로 둔다.
+beforeEach(() =>
+  localStorage.setItem(
+    RECENT_MEETINGS_KEY,
+    JSON.stringify(["m1", "m2", "m3", "m_err", "m4"]),
+  ),
+);
+afterEach(() => localStorage.clear());
+
 // 실제 라우트 트리(routes)를 메모리 라우터로 돌려 셸+뷰 조합을 그대로 검증한다.
 // 반환값에 router를 얹어, 테스트가 현재 URL(location.search 등)을 단언할 수 있게 한다.
 function renderShell(initialEntry = "/meetings/m1") {
@@ -987,6 +1000,9 @@ test("회의를 삭제하면 전체 목록으로 가고 삭제된 회의는 목�
   const seen: string[] = [];
   const unsubscribe = router.subscribe((s) => seen.push(s.location.pathname));
 
+  // 회의 화면을 열면 최근 본 회의 맨 앞에 오른다.
+  expect(recentMeetings.getSnapshot()[0]).toBe("m1");
+
   // 무효화 재조회를 붙잡아, 목록 화면이 캐시된 목록만 보고 그리게 만든다.
   fx.blockListFetches();
 
@@ -1005,6 +1021,7 @@ test("회의를 삭제하면 전체 목록으로 가고 삭제된 회의는 목�
   // 캐시가 그 카드를 다시 그려서도 안 된다.
   expect(seen).not.toContain("/meetings/m1");
   expect(router.state.location.pathname).toBe("/meetings");
+  expect(recentMeetings.getSnapshot()).not.toContain("m1");
   expect(
     screen.queryByRole("link", { name: "기획회의 — UI 개선안 회의 열기" }),
   ).not.toBeInTheDocument();

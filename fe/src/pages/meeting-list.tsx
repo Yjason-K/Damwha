@@ -256,7 +256,11 @@ export function MeetingListPage() {
               </EmptyNote>
             ) : (
               <>
-                <ul aria-label="회의 목록" className="flex flex-col gap-2">
+                <ul
+                  aria-label="회의 목록"
+                  data-tour="meeting-list"
+                  className="flex flex-col gap-2"
+                >
                   {visible.map((m) => (
                     <li key={m.id}>
                       <MeetingCard meeting={m} now={now} />

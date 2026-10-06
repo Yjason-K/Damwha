@@ -26,6 +26,7 @@ import type {
   SearchIndexStatus,
 } from "@/features/meeting/api/types";
 import type { RecorderStatus } from "@/features/meeting/lib/live-recorder";
+import { recentMeetings } from "@/features/meeting/lib/recent-meetings";
 import {
   clearLiveCapture,
   getLiveRecorder,
@@ -347,6 +348,12 @@ function MeetingView({
     isFetching: meetingFetching,
     refetch: refetchMeeting,
   } = useMeeting(meetingId);
+
+  // 상세를 받은 회의만 최근 본 회의에 올린다 — 없는 id로 들어온 404는 남기지 않는다.
+  const loadedId = meeting?.id;
+  React.useEffect(() => {
+    if (loadedId) recentMeetings.visit(loadedId);
+  }, [loadedId]);
 
   // <audio>는 status를 key로 리마운트된다(아래 JSX 참고). 새 엘리먼트는 아직
   // 메타데이터가 없으므로 준비 상태도 함께 되돌려, 배속·seek effect가 새

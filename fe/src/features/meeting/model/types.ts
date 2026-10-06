@@ -89,7 +89,7 @@ export type SummarySegmentView = {
 
 export type FileEntry = { name: string };
 
-export type MeetingFilter = "all" | "fav";
+export type MeetingFilter = "recent" | "fav";
 
 export type MeetingTag = { id: string; name: string };
 
