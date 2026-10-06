@@ -3,26 +3,33 @@ import type { MeetingSummary } from "../model/types";
 export type MeetingListTab = "all" | "mine" | "decisions" | "fav";
 export type MeetingListSort = "newest" | "oldest" | "longest";
 
-export const PAGE_SIZE = 20;
+export const PAGE_SIZES = [10, 20, 30] as const;
+export type MeetingListPageSize = (typeof PAGE_SIZES)[number];
+export const DEFAULT_PAGE_SIZE: MeetingListPageSize = 10;
 
 const TABS: MeetingListTab[] = ["all", "mine", "decisions", "fav"];
 const SORTS: MeetingListSort[] = ["newest", "oldest", "longest"];
 
-/** URL 검색 파라미터를 읽는다. 모르는 값은 기본값(`전체`·`최신순`·1페이지)으로 본다. */
+/** URL 검색 파라미터를 읽는다. 모르는 값은 기본값(`전체`·`최신순`·1페이지·10개씩)으로 본다. */
 export function readListParams(params: URLSearchParams): {
   tab: MeetingListTab;
   sort: MeetingListSort;
   page: number;
+  size: MeetingListPageSize;
 } {
   const tab = params.get("tab");
   const sort = params.get("sort");
   const page = Number.parseInt(params.get("page") ?? "", 10);
+  const size = Number(params.get("size"));
   return {
     tab: TABS.includes(tab as MeetingListTab) ? (tab as MeetingListTab) : "all",
     sort: SORTS.includes(sort as MeetingListSort)
       ? (sort as MeetingListSort)
       : "newest",
     page: Number.isFinite(page) && page > 0 ? page : 1,
+    size: PAGE_SIZES.includes(size as MeetingListPageSize)
+      ? (size as MeetingListPageSize)
+      : DEFAULT_PAGE_SIZE,
   };
 }
 

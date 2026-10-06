@@ -203,23 +203,26 @@ test("정렬: 최신순 · 오래된순 · 긴 회의순", async () => {
   expect(cardTitles()).toEqual(["회의 c", "회의 a", "회의 b"]);
 });
 
-test("한 페이지는 20개 — 21번째 회의는 2페이지에 있고, 범위 밖 페이지는 마지막으로 본다", async () => {
-  fx.meetings = Array.from({ length: 21 }, (_, i) =>
+const dated = (n: number) =>
+  Array.from({ length: n }, (_, i) =>
     row(`m${String(i + 1).padStart(2, "0")}`, {
       recorded_at: new Date(Date.UTC(2026, 8, 30 - i)).toISOString(),
     }),
   );
+
+test("한 페이지는 기본 10개 — 11번째 회의는 2페이지에 있고, 범위 밖 페이지는 마지막으로 본다", async () => {
+  fx.meetings = dated(11);
   fx.speakers = [];
   renderList("/meetings");
   await screen.findAllByTestId("meeting-card");
-  expect(cardTitles()).toHaveLength(20);
-  expect(screen.getByText("표시 중: 1–20 / 총 21개 회의")).toBeInTheDocument();
-  expect(cardTitles()).not.toContain("회의 m21");
+  expect(cardTitles()).toHaveLength(10);
+  expect(screen.getByText("표시 중: 1–10 / 총 11개 회의")).toBeInTheDocument();
+  expect(cardTitles()).not.toContain("회의 m11");
 
   fireEvent.click(screen.getByRole("button", { name: "다음" }));
   expect(await screen.findByText("경로: /meetings?page=2")).toBeInTheDocument();
-  expect(cardTitles()).toEqual(["회의 m21"]);
-  expect(screen.getByText("표시 중: 21–21 / 총 21개 회의")).toBeInTheDocument();
+  expect(cardTitles()).toEqual(["회의 m11"]);
+  expect(screen.getByText("표시 중: 11–11 / 총 11개 회의")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "2페이지" })).toHaveAttribute(
     "aria-current",
     "page",
@@ -228,7 +231,47 @@ test("한 페이지는 20개 — 21번째 회의는 2페이지에 있고, 범위
   cleanup();
   renderList("/meetings?page=9");
   await screen.findAllByTestId("meeting-card");
-  expect(cardTitles()).toEqual(["회의 m21"]);
+  expect(cardTitles()).toEqual(["회의 m11"]);
+});
+
+test("페이지 크기는 10·20·30개 중 고르고, 바꾸면 URL에 실리고 1페이지로 돌아간다", async () => {
+  fx.meetings = dated(25);
+  fx.speakers = [];
+  renderList("/meetings?page=2");
+  await screen.findAllByTestId("meeting-card");
+  expect(cardTitles()).toHaveLength(10);
+
+  const pick = (label: string) => {
+    const trigger = screen.getByRole("combobox", { name: "페이지당 회의 수" });
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    fireEvent.click(screen.getByRole("option", { name: label }));
+  };
+  pick("20개씩");
+  expect(
+    await screen.findByText("경로: /meetings?size=20"),
+  ).toBeInTheDocument();
+  expect(cardTitles()).toHaveLength(20);
+  expect(screen.getByText("표시 중: 1–20 / 총 25개 회의")).toBeInTheDocument();
+
+  pick("30개씩");
+  expect(
+    await screen.findByText("경로: /meetings?size=30"),
+  ).toBeInTheDocument();
+  expect(cardTitles()).toHaveLength(25);
+  expect(screen.queryByRole("navigation", { name: "페이지" })).toBeNull();
+
+  pick("10개씩");
+  expect(await screen.findByText("경로: /meetings")).toBeInTheDocument();
+  expect(cardTitles()).toHaveLength(10);
+});
+
+test("모르는 페이지 크기는 기본 10개로 본다", async () => {
+  fx.meetings = dated(25);
+  fx.speakers = [];
+  renderList("/meetings?size=7");
+  await screen.findAllByTestId("meeting-card");
+  expect(cardTitles()).toHaveLength(10);
 });
 
 test("'나'가 없으면 내가 참여한 회의 탭은 화자 관리로 안내한다", async () => {

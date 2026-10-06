@@ -15,10 +15,12 @@ import { LensOverview } from "@/features/lens/ui/lens-overview";
 import { useFolders } from "@/features/meeting/api/folders";
 import { useMeetings } from "@/features/meeting/api/meetings";
 import {
+  DEFAULT_PAGE_SIZE,
   matchesTab,
-  PAGE_SIZE,
+  PAGE_SIZES,
   readListParams,
   sortMeetings,
+  type MeetingListPageSize,
   type MeetingListSort,
   type MeetingListTab,
 } from "@/features/meeting/lib/meeting-list";
@@ -63,12 +65,12 @@ function EmptyNote({ children }: { children: React.ReactNode }) {
 /**
  * `/meetings`(전체)와 `/folders/:folderId`(폴더)의 카드형 회의 목록. 데이터는 사이드바와
  * 같은 `useMeetings()` 캐시이고, 거르기·정렬·페이지 나누기는 여기서 한다(스펙 §2.4).
- * 탭·정렬·페이지는 URL 검색 파라미터라 회의를 열었다 돌아와도 유지된다(§2.3).
+ * 탭·정렬·페이지·페이지 크기는 URL 검색 파라미터라 회의를 열었다 돌아와도 유지된다(§2.3).
  */
 export function MeetingListPage() {
   const { folderId } = useParams();
   const [params, setParams] = useSearchParams();
-  const { tab, sort, page } = readListParams(params);
+  const { tab, sort, page, size } = readListParams(params);
   const meetings = useMeetings();
   const folders = useFolders();
   const speakers = useSpeakers();
@@ -82,6 +84,7 @@ export function MeetingListPage() {
     tab?: MeetingListTab;
     sort?: MeetingListSort;
     page?: number;
+    size?: MeetingListPageSize;
   }) => {
     const p = new URLSearchParams(params);
     const set = (key: string, value: string | null) =>
@@ -92,6 +95,10 @@ export function MeetingListPage() {
     }
     if (next.sort !== undefined) {
       set("sort", next.sort === "newest" ? null : next.sort);
+      p.delete("page");
+    }
+    if (next.size !== undefined) {
+      set("size", next.size === DEFAULT_PAGE_SIZE ? null : String(next.size));
       p.delete("page");
     }
     if (next.page !== undefined)
@@ -165,10 +172,10 @@ export function MeetingListPage() {
     scoped.filter((m) => matchesTab(m, tab)),
     sort,
   );
-  const lastPage = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const lastPage = Math.max(1, Math.ceil(rows.length / size));
   const current = Math.min(page, lastPage);
-  const from = (current - 1) * PAGE_SIZE;
-  const visible = rows.slice(from, from + PAGE_SIZE);
+  const from = (current - 1) * size;
+  const visible = rows.slice(from, from + size);
   const now = new Date();
 
   return (
@@ -257,10 +264,33 @@ export function MeetingListPage() {
                   ))}
                 </ul>
                 <footer className="flex items-center justify-between gap-4 pt-1">
-                  <p className="text-sm text-[color:var(--text-muted)]">
-                    표시 중: {from + 1}–{from + visible.length} / 총{" "}
-                    {rows.length}개 회의
-                  </p>
+                  <div className="flex items-center gap-3">
+                    <p className="text-sm text-[color:var(--text-muted)]">
+                      표시 중: {from + 1}–{from + visible.length} / 총{" "}
+                      {rows.length}개 회의
+                    </p>
+                    <Select
+                      value={String(size)}
+                      onValueChange={(value) =>
+                        update({ size: Number(value) as MeetingListPageSize })
+                      }
+                    >
+                      <SelectTrigger
+                        size="sm"
+                        aria-label="페이지당 회의 수"
+                        className="w-auto"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PAGE_SIZES.map((n) => (
+                          <SelectItem key={n} value={String(n)}>
+                            {n}개씩
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                   {lastPage > 1 ? (
                     <nav
                       aria-label="페이지"
