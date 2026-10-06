@@ -25,6 +25,21 @@ const ITEM_COLUMNS = `
 const LIST_KEYSET = `(${MEETING_KEY}, li.meeting_id, ${ITEM_KEY}, li.id)`;
 const LIST_ORDER = `${MEETING_KEY} DESC, li.meeting_id DESC, ${ITEM_KEY} DESC, li.id DESC`;
 
+type ListFilters = Required<Pick<LensListFilters, 'completion_status' | 'lifecycle_status'>> &
+  Pick<LensListFilters, 'kind' | 'meeting_id' | 'folder_id' | 'speaker_id' | 'date_from' | 'date_to'>;
+
+function filterClauses(filters: ListFilters): { params: unknown[]; where: string[] } {
+  const params: unknown[] = [filters.lifecycle_status, filters.completion_status];
+  const where: string[] = ['li.lifecycle_status = $1', 'li.completion_status = $2'];
+  if (filters.kind) { params.push(filters.kind); where.push(`li.kind = $${params.length}`); }
+  if (filters.meeting_id) { params.push(filters.meeting_id); where.push(`li.meeting_id = $${params.length}`); }
+  if (filters.folder_id) { params.push(filters.folder_id); where.push(`m.folder_id = $${params.length}`); }
+  if (filters.speaker_id) { params.push(filters.speaker_id); where.push(`li.assignee_speaker_id = $${params.length}`); }
+  if (filters.date_from) { params.push(filters.date_from); where.push(`li.due_at >= $${params.length}::date`); }
+  if (filters.date_to) { params.push(filters.date_to); where.push(`li.due_at <= $${params.length}::date`); }
+  return { params, where };
+}
+
 @Injectable()
 export class LensesRepository {
   async findById(exec: Exec, id: string): Promise<LensItemRow | null> {
@@ -43,17 +58,10 @@ export class LensesRepository {
   // Fetches limit+1 so the caller can tell whether a next page exists.
   async list(
     exec: Exec,
-    filters: Required<Pick<LensListFilters, 'completion_status' | 'lifecycle_status' | 'limit'>> &
-      Pick<LensListFilters, 'kind' | 'meeting_id' | 'speaker_id' | 'date_from' | 'date_to'>,
+    filters: ListFilters & Required<Pick<LensListFilters, 'limit'>>,
     cursor: LensCursor | null,
   ): Promise<LensItemRow[]> {
-    const params: unknown[] = [filters.lifecycle_status, filters.completion_status];
-    const where: string[] = ['li.lifecycle_status = $1', 'li.completion_status = $2'];
-    if (filters.kind) { params.push(filters.kind); where.push(`li.kind = $${params.length}`); }
-    if (filters.meeting_id) { params.push(filters.meeting_id); where.push(`li.meeting_id = $${params.length}`); }
-    if (filters.speaker_id) { params.push(filters.speaker_id); where.push(`li.assignee_speaker_id = $${params.length}`); }
-    if (filters.date_from) { params.push(filters.date_from); where.push(`li.due_at >= $${params.length}::date`); }
-    if (filters.date_to) { params.push(filters.date_to); where.push(`li.due_at <= $${params.length}::date`); }
+    const { params, where } = filterClauses(filters);
     if (cursor) {
       params.push(cursor.meeting_at, cursor.meeting_id, cursor.updated_at, cursor.id);
       const m = params.length - 3;
@@ -71,6 +79,18 @@ export class LensesRepository {
       params,
     );
     return rows;
+  }
+
+  // Same filters as `list`, without the cursor: the size of the whole result.
+  async count(exec: Exec, filters: ListFilters): Promise<number> {
+    const { params, where } = filterClauses(filters);
+    const { rows } = await exec.query<{ n: number }>(
+      `SELECT count(*)::int AS n
+       FROM lens_item li JOIN meeting m ON m.id = li.meeting_id
+       WHERE ${where.join(' AND ')}`,
+      params,
+    );
+    return rows[0].n;
   }
 
   async listActiveForMeeting(exec: Exec, meetingId: string): Promise<LensItemRow[]> {

@@ -79,7 +79,52 @@ export type WireMeeting = {
    */
   capture_error?: CaptureError | null;
   created_at: string;
+  /**
+   * GET /meetings·GET /meetings/:id에만 있다 — 업로드·즐겨찾기·PATCH가 돌려주는 행에는
+   * 없으므로 optional이다.
+   */
+  tags?: WireTag[];
+  /**
+   * 회의가 들어 있는 폴더(마이그레이션 030, NOT NULL). `SELECT *`라 실제 응답엔 늘 있지만,
+   * 이 필드가 생기기 전에 쓰인 테스트 픽스처를 깨지 않으려고 optional로 둔다.
+   */
+  folder_id?: string;
+  /**
+   * GET /meetings 행에만 붙는 카드용 집계(폴더 회의 목록 스펙 §2.4). 해당 행이 없으면 서버가
+   * 0·false·null을 준다. 다른 응답과 기존 픽스처를 깨지 않으려고 optional로 둔다.
+   */
+  participant_count?: number;
+  decision_count?: number;
+  action_count?: number;
+  saved_count?: number;
+  /** 현재 처리 버전의 클러스터 중 '나'(`speaker.is_me`) 화자에 묶인 것이 있는가. */
+  has_me?: boolean;
+  preview_decision?: string | null;
+  preview_action?: WirePreviewAction | null;
+  preview_summary?: string | null;
 };
+
+/** 카드 미리보기용 할 일 하나 — open을 먼저 고른다. due_at은 `YYYY-MM-DD`. */
+export type WirePreviewAction = {
+  text: string;
+  assignee_name: string | null;
+  due_at: string | null;
+  done: boolean;
+};
+
+/** GET /folders 행 — 기본 폴더가 먼저, 나머지는 이름순. */
+export type WireFolder = {
+  id: string;
+  name: string;
+  is_default: boolean;
+  created_at: string;
+};
+
+/** 회의에 붙은 태그. PUT /meetings/:id/tags 응답의 tags도 같은 모양이다. */
+export type WireTag = { id: string; name: string };
+
+/** GET /tags 행 — 회의에 붙어 있는 태그만, 이름순. */
+export type WireTagSummary = WireTag & { meeting_count: number };
 
 /** GET /meetings/:id 응답의 발화(utterance) — speaker 필드 LEFT JOIN 포함. */
 export type WireUtterance = {
@@ -146,6 +191,11 @@ export type WireMeetingDetail = WireMeeting & {
   utterances: WireUtterance[];
   clusters: WireCluster[];
   summary: WireSummary | null;
+  /**
+   * 요약이 기존 태그 중에서 고른 추천 — 서버가 읽을 때 지금 있고 아직 안 붙은 것만 남긴다.
+   * 이 필드가 생기기 전 테스트 픽스처를 깨지 않으려고 optional.
+   */
+  tag_suggestions?: string[];
 };
 
 /** speaker row (SELECT * FROM speaker). enroll, list, get, rename 응답. */
@@ -163,6 +213,8 @@ export type WireSpeaker = {
   sample_meeting_id?: string | null;
   sample_start_ms?: number | null;
   sample_end_ms?: number | null;
+  /** '나'로 지정된 화자인가(최대 한 명). 이 필드 이전 픽스처를 위해 optional. */
+  is_me?: boolean;
 };
 
 /** GET /meetings/:id/status 응답. */
@@ -230,6 +282,7 @@ export type SearchRequest = {
     dateTo?: string | null;
     speakerIds?: string[] | null;
     meetingIds?: string[] | null;
+    tagIds?: string[] | null;
   };
 };
 
@@ -295,6 +348,8 @@ export type LiveStartRequest = {
   speakers?: SpeakerBounds;
   defer_lens?: boolean;
   defer_summary?: boolean;
+  /** 생략하면 서버가 기본 폴더에 넣는다. */
+  folder_id?: string;
 };
 
 /** POST /meetings/:id/live/stop 응답. */

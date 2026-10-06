@@ -186,15 +186,28 @@ function stubCapture(options: CaptureStubOptions = {}) {
 }
 
 function renderDialog(onStarted = vi.fn()) {
-  vi.spyOn(apiClient, "get").mockResolvedValue({
-    data: {
-      preset: "standard",
-      preset_revision: null,
-      language: "ko",
-      whisper_model: "large-v3-turbo",
-      devices: { diarization: "gpu", stt: "gpu" },
-    },
-  } as never);
+  vi.spyOn(apiClient, "get").mockImplementation(async (url: string) =>
+    url === "/folders"
+      ? ({
+          data: [
+            {
+              id: "fld_1",
+              name: "기본 폴더",
+              is_default: true,
+              created_at: "",
+            },
+          ],
+        } as never)
+      : ({
+          data: {
+            preset: "standard",
+            preset_revision: null,
+            language: "ko",
+            whisper_model: "large-v3-turbo",
+            devices: { diarization: "gpu", stt: "gpu" },
+          },
+        } as never),
+  );
   const post = vi
     .spyOn(apiClient, "post")
     .mockResolvedValue({ status: 201, data: WIRE } as never);
@@ -452,6 +465,7 @@ test("ready ACK 뒤에야 회의를 만들고, begun ACK 뒤에 상세로 이동
   expect(post).toHaveBeenCalledWith("/meetings/live", {
     title: "주간 회의",
     defer_summary: true,
+    folder_id: "fld_1",
   });
   // 준비(마이크·Worklet)가 회의 생성보다 먼저다 — 이 순서가 이 태스크의 핵심이다.
   expect(mic.capture).toHaveLength(1);

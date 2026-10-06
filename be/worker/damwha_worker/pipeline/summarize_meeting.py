@@ -72,6 +72,29 @@ def _resolve_segments(segments, rows) -> list[dict]:
     return resolved
 
 
+# 프롬프트에 싣는 후보 상한 — 많이 쓰인 순으로 자른다.
+MAX_TAG_CANDIDATES = 100
+
+
+def _tag_candidates(conn, meeting_id: str) -> list[str]:
+    """다른 회의에 쓰이고 있고 이 회의에는 아직 없는 태그.
+
+    읽는 시점의 스냅샷이다 — LLM이 도는 동안 사용자가 태그를 붙이거나 지워도 괜찮다.
+    API가 추천을 보여줄 때 지금 있는 태그·지금 붙은 태그와 다시 맞춘다.
+    """
+    rows = conn.execute(
+        """SELECT t.name
+           FROM tag t JOIN meeting_tag mt ON mt.tag_id = t.id
+           WHERE NOT EXISTS (
+             SELECT 1 FROM meeting_tag own WHERE own.meeting_id=%s AND own.tag_id=t.id)
+           GROUP BY t.id
+           ORDER BY count(*) DESC, lower(t.name) COLLATE "C"
+           LIMIT %s""",
+        (meeting_id, MAX_TAG_CANDIDATES),
+    ).fetchall()
+    return [r["name"] for r in rows]
+
+
 def run_summarize_meeting(
     conn,
     job: dict,
@@ -101,6 +124,7 @@ def run_summarize_meeting(
            ORDER BY u.order_index, u.id""",
         (payload.meeting_id, payload.processing_version),
     ).fetchall()
+    tag_candidates = _tag_candidates(conn, payload.meeting_id)
     # LLM 호출은 긴 회의에서 수 분 — timed_stage가 진행 중 tick과 완료 시간을 남긴다.
     # `run_guarding_disk_full`로 감싸는 이유(Ruling R16): `mlx_lm.server`의 모델 지연 로드는
     # 이 요청을 처리하는 스레드 안에서 일어난다. 거기서 던진 DISK_FULL은 파이썬 기본 스레드
@@ -116,6 +140,7 @@ def run_summarize_meeting(
                 model=payload.model,
                 utterances=row_dicts,
                 output_language=payload.output_language,
+                tag_candidates=tag_candidates,
             ),
         )
         segments = _resolve_segments(response.segments, row_dicts)
@@ -129,4 +154,5 @@ def run_summarize_meeting(
         processing_version=payload.processing_version,
         topics=list(response.topics),
         segments=segments,
+        suggested_tags=list(response.suggested_tags),
     )

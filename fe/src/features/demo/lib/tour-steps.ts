@@ -110,13 +110,13 @@ export function buildTourSteps(ctx: Ctx): TourStep[] {
       description: ctx.hasUpload
         ? "지금은 샘플 2건이에요. 각 대화는 화자별 발화·요약·렌즈까지 갖고 있어요."
         : "각 대화는 화자별 발화·요약·렌즈까지 갖고 있어요.",
-      side: "right",
+      side: "top",
       prepare: async () => {
         ctx.navigate("/");
-        // "/"는 IndexRoute고, useMeetings()가 풀리면 <Navigate replace>로 첫 회의에 한 번
-        // 더 이동한다. 그 두 번째 이동이 prepare 밖에서 커밋되면 종료 가드에 걸리므로 여기서
-        // 착지까지 기다린다. 회의가 없으면 리다이렉트도 없다 — 타임아웃해도 단계는 뜬다.
-        await waitUntil(() => ctx.pathname().startsWith("/meetings/"));
+        // "/"는 IndexRoute고 <Navigate replace>로 `/meetings` 카드 목록에 한 번 더 이동한다.
+        // 그 두 번째 이동이 prepare 밖에서 커밋되면 종료 가드에 걸리므로 착지까지 기다린다.
+        // 사이드바는 `최근 본` 회의만 보여 첫 방문에는 비어 있으므로, 가운데 카드 목록을 짚는다.
+        await waitUntil(() => ctx.pathname() === "/meetings");
         await waitFor(tourSelector("meeting-list"));
       },
     },
@@ -129,6 +129,14 @@ export function buildTourSteps(ctx: Ctx): TourStep[] {
         "발화는 화자·시각·원본 오디오를 갖고 있어요. 시각이나 본문을 누르면 그 순간으로 재생 위치가 옮겨져요 — 방금 눌러봤어요.",
       side: "right",
       prepare: async () => {
+        // 업로드 단계가 없으면 아직 카드 목록에 있다 — 첫 카드(최신 회의)를 열어 상세로 간다.
+        if (!ctx.pathname().startsWith("/meetings/")) {
+          const first = await waitFor(
+            `${tourSelector("meeting-list")} a[href^="/meetings/"]`,
+          );
+          first?.click();
+          await waitUntil(() => ctx.pathname().startsWith("/meetings/"));
+        }
         const el = await waitFor(tourSelector("utterance"), 15_000);
         const jump = Array.from(el?.querySelectorAll("button") ?? []).find(
           (b) => b.textContent?.includes("이 시점으로 이동"),

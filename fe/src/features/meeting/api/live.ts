@@ -8,6 +8,8 @@ import {
 
 import { apiClient } from "@/shared/api/client";
 
+import { recentMeetings } from "../lib/recent-meetings";
+
 import {
   LiveUploadRejected,
   type PostResult,
@@ -47,6 +49,7 @@ export function removeMeetingCaches(queryClient: QueryClient, id: string) {
   queryClient.removeQueries({ queryKey: ["meeting-lenses", id] });
   queryClient.removeQueries({ queryKey: noteQueryKey(id) });
   queryClient.removeQueries({ queryKey: liveQueryKey(id) });
+  recentMeetings.remove(id);
 }
 
 export type LiveState = {

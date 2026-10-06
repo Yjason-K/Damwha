@@ -61,6 +61,10 @@ export function installDemoTour(client: AxiosInstance, opts: Opts): void {
           const meeting = isRecord(it.meeting) ? it.meeting : null;
           return !isTour(it.meeting_id) && !isTour(meeting?.id);
         });
+        // `total`(렌즈 요약의 건수)은 서버가 센 값이라 숨긴 항목만큼 빼야 목록과 맞는다.
+        const hidden = data.items.length - items.length;
+        const withTotal = (d: Record<string, unknown>) =>
+          typeof d.total === "number" ? { ...d, total: d.total - hidden } : d;
         const cursor = data.next_cursor;
         const hop = (res.config as HopConfig).demoTourHop ?? 0;
         if (items.length === 0 && typeof cursor === "string" && cursor && hop < MAX_REFILL_HOPS) {
@@ -68,9 +72,9 @@ export function installDemoTour(client: AxiosInstance, opts: Opts): void {
           const next = await client.get(withCursor(res.config.url ?? path, cursor), {
             demoTourHop: hop + 1,
           } as HopConfig);
-          res.data = next.data;
+          res.data = isRecord(next.data) ? withTotal(next.data) : next.data;
         } else {
-          res.data = { ...data, items };
+          res.data = withTotal({ ...data, items });
         }
       }
       return res;
@@ -80,7 +84,12 @@ export function installDemoTour(client: AxiosInstance, opts: Opts): void {
     if (!view || view.meetingId !== tour || method !== "get") return res;
 
     if (path === "/meetings" && Array.isArray(data)) {
-      res.data = data.map((m) => (isRecord(m) && isTour(m.id) ? { ...m, status: "processing" } : m));
+      // 카드는 처리 중 회의의 집계 배지를 스스로 숨기지만 미리보기는 그대로 그리므로 함께 비운다.
+      res.data = data.map((m) =>
+        isRecord(m) && isTour(m.id)
+          ? { ...m, status: "processing", preview_decision: null, preview_action: null, preview_summary: null }
+          : m,
+      );
     } else if (path === `/meetings/${tour}` && isRecord(data)) {
       // 상세는 status만 덮으면 안 된다 — MeetingPage는 meeting이 있으면 전사·인사이트를
       // 그대로 그리므로, 완성된 발화·클러스터·요약이 "처리 중" 배너 뒤에 비친다.

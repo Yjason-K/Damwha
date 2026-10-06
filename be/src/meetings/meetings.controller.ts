@@ -57,6 +57,10 @@ export class MeetingsController {
             '"true"면 처리 완료 후 요약 생성을 자동으로 걸지 않는다 (기본 "false"). ' +
             '나중에 POST /meetings/:id/summary/generate로 직접 실행.',
         },
+        folder_id: {
+          type: 'string', pattern: '^fld_[1-9][0-9]*$',
+          description: '회의를 넣을 폴더 (선택). 생략하거나 비우면 기본 폴더. 없는 폴더는 400.',
+        },
       },
     },
   })
@@ -65,7 +69,7 @@ export class MeetingsController {
     @UploadedFile() file: Express.Multer.File,
     @Body() body: {
       title?: string; recorded_at?: string; processing?: string; speakers?: string;
-      defer_lens?: string; defer_summary?: string;
+      defer_lens?: string; defer_summary?: string; folder_id?: string;
     },
   ) {
     return this.service.upload(file, body);
@@ -130,7 +134,7 @@ export class MeetingsController {
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: '회의 정보 수정 (제목/녹음 시각)' })
+  @ApiOperation({ summary: '회의 정보 수정 (제목/녹음 시각/폴더)' })
   @ApiBody({
     schema: {
       type: 'object',
@@ -140,10 +144,17 @@ export class MeetingsController {
           type: 'string', format: 'date-time',
           description: '녹음 시각 ISO8601. null은 받지 않는다 — 모든 회의가 기준일시를 갖는다.',
         },
+        folder_id: {
+          type: 'string', pattern: '^fld_[1-9][0-9]*$',
+          description: '회의를 옮길 폴더. null은 받지 않는다 — 모든 회의는 한 폴더에 있다. 없는 폴더는 400.',
+        },
       },
     },
   })
-  update(@Param('id') id: string, @Body() body: { title?: string | null; recorded_at?: string | null }) {
+  update(
+    @Param('id') id: string,
+    @Body() body: { title?: string | null; recorded_at?: string | null; folder_id?: string | null },
+  ) {
     return this.service.update(id, body);
   }
 

@@ -33,6 +33,7 @@ type TagProps = Omit<React.ComponentProps<"span">, "onClick"> & {
   showDot?: boolean;
   onClick?: React.MouseEventHandler<HTMLSpanElement>;
   onRemove?: () => void;
+  removeLabel?: string;
 };
 
 function Tag({
@@ -41,6 +42,7 @@ function Tag({
   showDot = true,
   onClick,
   onRemove,
+  removeLabel = "제거",
   style,
   children,
   ...props
@@ -81,7 +83,7 @@ function Tag({
       {onRemove && (
         <button
           type="button"
-          aria-label="제거"
+          aria-label={removeLabel}
           onClick={(e) => {
             e.stopPropagation();
             onRemove();

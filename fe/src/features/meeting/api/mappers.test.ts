@@ -48,6 +48,7 @@ function makeMeeting(overrides: Partial<WireMeeting> = {}): WireMeeting {
     processing_version: 1,
     error: null,
     created_at: "2026-06-21T09:00:00.000Z",
+    folder_id: "fld_1",
     ...overrides,
   };
 }
@@ -207,6 +208,53 @@ describe("toMeetingSummary", () => {
       sub: expShort(recordedAt),
       fav: true,
       status: "done",
+      tags: [],
+      folderId: "fld_1",
+      startIso: recordedAt,
+      durationMs: 3_720_000,
+      participantCount: 0,
+      decisionCount: 0,
+      actionCount: 0,
+      savedCount: 0,
+      hasMe: false,
+      preview: { decision: null, action: null, summary: null },
+    });
+  });
+
+  it("카드용 집계와 미리보기를 옮긴다", () => {
+    const summary = toMeetingSummary(
+      makeMeeting({
+        participant_count: 4,
+        decision_count: 2,
+        action_count: 3,
+        saved_count: 1,
+        has_me: true,
+        preview_decision: "출시는 5월",
+        preview_action: {
+          text: "초안 공유",
+          assignee_name: "박수민",
+          due_at: "2026-04-02",
+          done: false,
+        },
+        preview_summary: "일정 논의",
+      }),
+    );
+    expect(summary).toMatchObject({
+      participantCount: 4,
+      decisionCount: 2,
+      actionCount: 3,
+      savedCount: 1,
+      hasMe: true,
+      preview: {
+        decision: "출시는 5월",
+        action: {
+          text: "초안 공유",
+          assigneeName: "박수민",
+          dueAt: "2026-04-02",
+          done: false,
+        },
+        summary: "일정 논의",
+      },
     });
   });
 

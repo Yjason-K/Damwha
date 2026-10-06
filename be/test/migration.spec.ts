@@ -611,4 +611,15 @@ describe('migration', () => {
       db.pool.query(`INSERT INTO job(type, payload) VALUES ('nope', '{}'::jsonb)`),
     ).rejects.toThrow(/job_type_check/);
   });
+
+  it('031 adds speaker.is_me (default false) and allows at most one true', async () => {
+    const a = await db.pool.query(`INSERT INTO speaker(name) VALUES('me-a') RETURNING id, is_me`);
+    const b = await db.pool.query(`INSERT INTO speaker(name) VALUES('me-b') RETURNING id, is_me`);
+    expect(a.rows[0].is_me).toBe(false);
+    await db.pool.query(`UPDATE speaker SET is_me=true WHERE id=$1`, [a.rows[0].id]);
+    await expect(
+      db.pool.query(`UPDATE speaker SET is_me=true WHERE id=$1`, [b.rows[0].id]),
+    ).rejects.toThrow(/speaker_single_me_idx/);
+    await db.pool.query(`DELETE FROM speaker WHERE id = ANY($1)`, [[a.rows[0].id, b.rows[0].id]]);
+  });
 });

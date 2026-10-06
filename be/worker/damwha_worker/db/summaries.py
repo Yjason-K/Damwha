@@ -60,6 +60,7 @@ def persist_summary(
     processing_version: int,
     topics: list,
     segments: list,
+    suggested_tags: list | None = None,
 ) -> str:
     """검증이 끝난 요약으로 기존 행을 덮어쓴다 — 통째 교체라 머지 로직이 없다.
 
@@ -104,10 +105,17 @@ def persist_summary(
                 """
                 UPDATE meeting_summary
                    SET status='done', job_id=%s, topics=%s, segments=%s,
-                       error=NULL, updated_at=now()
+                       suggested_tags=%s, error=NULL, updated_at=now()
                  WHERE meeting_id=%s AND processing_version=%s
                 """,
-                (job_id, Jsonb(topics), Jsonb(segments), meeting_id, processing_version),
+                (
+                    job_id,
+                    Jsonb(topics),
+                    Jsonb(segments),
+                    Jsonb(suggested_tags or []),
+                    meeting_id,
+                    processing_version,
+                ),
             )
             conn.execute(
                 "UPDATE job SET status='done', progress=100, updated_at=now() WHERE id=%s",

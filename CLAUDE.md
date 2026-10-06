@@ -84,6 +84,31 @@ Historical docs under `be/docs/` and `fe/docs/` still say "별도 레포" and re
 `../be` / `../fe`; those are dated snapshots that are not edited after the fact —
 read those paths as repo-root-relative `be/` and `fe/`.
 
+## Work records (spec · plan · result)
+
+Non-trivial work leaves a dated record in `docs/superpowers/`, whichever agent
+does it — the superpowers plugin is not required. Simple work leaves none.
+
+- **Record** when the work changes behavior across two or more of `be/`, `fe/`,
+  `desktop/`, `be/worker/`; touches a contract (`job` table, `@damwha/contracts`,
+  an API shape, DB schema or migrations) or the packaging/release pipeline; runs
+  through a planning workflow (omo `ulw-plan` / `mass ulw`); or the user asks for
+  a spec first. When unsure, ask once before starting.
+- **Skip** questions and investigations, one- or two-file fixes, typos, config
+  one-liners, doc edits, commits/pushes.
+- **Files** (Korean, same shape as the existing ones):
+  - spec — `specs/YYYY-MM-DD-<slug>-design.md`, written once the design is
+    approved: 작성일, 선행 branch/commit, what it supersedes, 목표, 범위.
+  - plan — `plans/YYYY-MM-DD-<slug>.md`, with a `**Spec:**` link. omo drafts and
+    reviews plans in `.omo/plans/` (its tools need that path); copy the approved,
+    reviewed plan here without the `superpowers:` sub-skill header line. Progress
+    is tracked in `.omo/plans/`, not in the copy.
+  - result — `reports/YYYY-MM-DD-<slug>-results.md` when the work finishes:
+    links to spec and plan, branch, verification commands with their outcome,
+    and a verdict per completion criterion of the spec.
+- These are dated snapshots — never edit one after the fact; a later spec
+  supersedes an earlier one. `.omo/` is local working state and is not committed.
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships. It is gitignored — regenerate it locally.

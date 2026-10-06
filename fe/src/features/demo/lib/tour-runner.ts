@@ -167,7 +167,7 @@ export const tourRunner = {
       },
       onDoneClick: () => {
         tourRunner.stop();
-        navigate("/"); // 마지막 단계가 처리 설정 화면이라, 끝내면 첫 회의로 돌려놓는다
+        navigate("/"); // 마지막 단계가 처리 설정 화면이라, 끝내면 회의 목록으로 돌려놓는다
       },
       onCloseClick: () => tourRunner.requestExit(),
       // ESC·오버레이 클릭·마지막 단계 넘김이 여기로 온다. driver.destroy()는 이 훅을 타지 않으므로

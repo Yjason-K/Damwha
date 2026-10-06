@@ -32,6 +32,22 @@ export const routes: RouteObject[] = [
     children: [
       { index: true, element: <IndexRoute /> },
       {
+        path: "meetings",
+        element: lazyRoute(() =>
+          import("@/pages/meeting-list").then((m) => ({
+            default: m.MeetingListPage,
+          })),
+        ),
+      },
+      {
+        path: "folders/:folderId",
+        element: lazyRoute(() =>
+          import("@/pages/meeting-list").then((m) => ({
+            default: m.MeetingListPage,
+          })),
+        ),
+      },
+      {
         path: "meetings/:meetingId",
         element: lazyRoute(() =>
           import("@/pages/meeting").then((m) => ({ default: m.MeetingRoute })),
@@ -46,7 +62,9 @@ export const routes: RouteObject[] = [
       {
         path: "saved-utterances",
         element: lazyRoute(() =>
-          import("@/pages/saved-utterances").then((m) => ({ default: m.SavedUtterancesPage })),
+          import("@/pages/saved-utterances").then((m) => ({
+            default: m.SavedUtterancesPage,
+          })),
         ),
       },
       {

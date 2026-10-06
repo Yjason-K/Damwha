@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
 import { DatabaseService } from '../database/database.service';
+import { FOLDER_ID_RE } from '../folders/folder-id';
 import { LensExtractionRepository } from './lens-extraction.repository';
 import { LensesRepository } from './lenses.repository';
 import {
@@ -136,6 +137,7 @@ export class LensesService {
       ),
       kind: query.kind ? this.parseEnum<LensKind>(query.kind, [...LENS_KINDS], undefined, 'kind') : undefined,
       meeting_id: this.parseIdFilter(query.meeting_id, MEETING_ID_RE, 'meeting_id'),
+      folder_id: this.parseIdFilter(query.folder_id, FOLDER_ID_RE, 'folder_id'),
       speaker_id: this.parseIdFilter(query.speaker_id, SPEAKER_ID_RE, 'speaker_id'),
       date_from: this.parseDateFilter(query.date_from, 'date_from'),
       date_to: this.parseDateFilter(query.date_to, 'date_to'),
@@ -143,11 +145,14 @@ export class LensesService {
     };
     const cursor = query.cursor ? decodeCursor(query.cursor) : null;
 
-    const rows = await this.repo.list(this.db.pool, filters, cursor);
+    const [rows, total] = await Promise.all([
+      this.repo.list(this.db.pool, filters, cursor),
+      this.repo.count(this.db.pool, filters),
+    ]);
     const hasMore = rows.length > filters.limit;
     const page = hasMore ? rows.slice(0, filters.limit) : rows;
     const items = await this.hydrateMany(this.db.pool, page);
-    return { items, next_cursor: hasMore ? encodeCursor(page[page.length - 1]) : null };
+    return { items, next_cursor: hasMore ? encodeCursor(page[page.length - 1]) : null, total };
   }
 
   async listForMeeting(meetingId: string) {

@@ -38,7 +38,7 @@ describe('SearchRepository', () => {
       [utteranceId, '[' + vec.join(',') + ']', MODEL, dimCol],
     );
   }
-  const noFilters = { dateFrom: null, dateTo: null, speakerIds: null, meetingIds: null };
+  const noFilters = { dateFrom: null, dateTo: null, speakerIds: null, meetingIds: null, tagIds: null };
 
   it('keyword arm: bigm matches Korean substrings', async () => {
     const m = await seedMeeting('기획회의', '2026-06-20T00:00:00Z');
@@ -140,7 +140,7 @@ describe('SearchRepository', () => {
       const rows = await repo.hybrid(client, {
         q: 'zzz', // 키워드 미매치 → 의미 arm만 기여
         qvec: oneHot(0),
-        filters: { dateFrom: null, dateTo: null, speakerIds: null, meetingIds: [target] },
+        filters: { dateFrom: null, dateTo: null, speakerIds: null, meetingIds: [target], tagIds: null },
         limit: 10, candK, rrfK: 60, model: MODEL, dim: DIM,
       });
       expect(rows.map((r) => r.utterance_id)).toEqual([tu]);
@@ -167,9 +167,28 @@ describe('SearchRepository', () => {
     await seedUtterance(m, 1, '다른 발언', 'ok', null);
     const rows = await repo.keyword(db.pool, {
       q: '발언',
-      filters: { dateFrom: '2026-06-01T00:00:00Z', dateTo: '2026-07-01T00:00:00Z', speakerIds: [sp], meetingIds: null },
+      filters: { dateFrom: '2026-06-01T00:00:00Z', dateTo: '2026-07-01T00:00:00Z', speakerIds: [sp], meetingIds: null, tagIds: null },
       limit: 10, candK: 50,
     });
     expect(rows.map((r) => r.text)).toEqual(['대상 발언']);
+  });
+
+  it('tag filter keeps meetings carrying any of the tags, in every arm', async () => {
+    const tagged = await seedMeeting('tagged', '2026-06-20T00:00:00Z');
+    const other = await seedMeeting('other', '2026-06-21T00:00:00Z');
+    const u1 = await seedUtterance(tagged, 0, '배포 일정', 'ok', null);
+    const u2 = await seedUtterance(other, 0, '배포 회고', 'ok', null);
+    await seedEmbedding(u1, oneHot(0));
+    await seedEmbedding(u2, oneHot(0));
+    const tag = (await db.pool.query(`INSERT INTO tag(name) VALUES('프로젝트A') RETURNING id`)).rows[0].id;
+    await db.pool.query(`INSERT INTO meeting_tag(meeting_id, tag_id) VALUES($1,$2)`, [tagged, tag]);
+    const filters = { ...noFilters, tagIds: [tag] };
+
+    const kw = await repo.keyword(db.pool, { q: '배포', filters, limit: 10, candK: 50 });
+    const br = await repo.browse(db.pool, { filters, limit: 10 });
+    const hy = await repo.hybrid(db.pool, {
+      q: '배포', qvec: oneHot(0), filters, limit: 10, candK: 50, rrfK: 60, model: MODEL, dim: DIM,
+    });
+    for (const rows of [kw, br, hy]) expect(rows.map((r) => r.meeting_id)).toEqual([tagged]);
   });
 });

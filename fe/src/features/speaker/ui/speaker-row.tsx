@@ -1,10 +1,15 @@
 import * as React from "react";
 
 import { Avatar } from "@/shared/ui/avatar";
+import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 import { IconButton } from "@/shared/ui/icon-button";
-import type { SpeakerItem } from "@/features/speaker/api/speakers";
+import {
+  useClearMe,
+  useSetMe,
+  type SpeakerItem,
+} from "@/features/speaker/api/speakers";
 import { SpeakerStatusBadge } from "./speaker-status-badge";
 import { RenameSpeakerDialog } from "./rename-speaker-dialog";
 import { DeleteSpeakerDialog } from "./delete-speaker-dialog";
@@ -47,6 +52,8 @@ export function SpeakerRow({
 }: SpeakerRowProps) {
   const [renameOpen, setRenameOpen] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
+  const setMe = useSetMe();
+  const clearMe = useClearMe();
 
   return (
     <Card padding="sm" className="flex items-center gap-3">
@@ -57,6 +64,7 @@ export function SpeakerRow({
           <span className="truncate text-base font-medium text-foreground">
             {speaker.name}
           </span>
+          {speaker.isMe ? <Badge variant="accent">나</Badge> : null}
           <SpeakerStatusBadge status={speaker.status} />
         </div>
         <p className="mt-0.5 text-sm text-[color:var(--text-muted)]">
@@ -79,6 +87,16 @@ export function SpeakerRow({
             <PlayIcon playing={playing} />
           </IconButton>
         ) : null}
+        <Button
+          variant="ghost"
+          size="sm"
+          loading={setMe.isPending || clearMe.isPending}
+          onClick={() =>
+            (speaker.isMe ? clearMe : setMe).mutate({ id: speaker.id })
+          }
+        >
+          {speaker.isMe ? "나 지정 해제" : "나로 지정"}
+        </Button>
         <Button variant="ghost" size="sm" onClick={() => setRenameOpen(true)}>
           이름 변경
         </Button>

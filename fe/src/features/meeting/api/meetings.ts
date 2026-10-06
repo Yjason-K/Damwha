@@ -114,6 +114,8 @@ export function useUploadMeeting() {
       speakers?: SpeakerBounds;
       deferLens?: boolean;
       deferSummary?: boolean;
+      /** 생략하면 서버가 기본 폴더에 넣는다. */
+      folderId?: string;
     }) => {
       const form = new FormData();
       form.append("audio", vars.file);
@@ -124,6 +126,7 @@ export function useUploadMeeting() {
       if (vars.speakers) form.append("speakers", JSON.stringify(vars.speakers));
       if (vars.deferLens) form.append("defer_lens", "true");
       if (vars.deferSummary) form.append("defer_summary", "true");
+      if (vars.folderId) form.append("folder_id", vars.folderId);
       const { data } = await apiClient.post<WireMeeting>("/meetings", form, {
         headers: { "Content-Type": "multipart/form-data" },
       });
@@ -171,6 +174,24 @@ export function useRenameMeeting() {
   });
 }
 
+/** 회의를 다른 폴더로 옮긴다 (PATCH /meetings/:id { folder_id }). */
+export function useMoveMeetingToFolder() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: { id: string; folderId: string }) => {
+      const { data } = await apiClient.patch<WireMeeting>(
+        `/meetings/${vars.id}`,
+        { folder_id: vars.folderId },
+      );
+      return toMeetingSummary(data);
+    },
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["meetings"] });
+      queryClient.invalidateQueries({ queryKey: ["meeting", vars.id] });
+    },
+  });
+}
+
 /** 회의 삭제 (DELETE /meetings/:id). */
 export function useDeleteMeeting() {
   const queryClient = useQueryClient();
@@ -181,9 +202,9 @@ export function useDeleteMeeting() {
     onSuccess: (_data, vars) => {
       // 목록 캐시에서 삭제된 회의를 즉시 빼낸다. 무효화만 하면 재조회가 끝나기
       // 전까지 낡은 목록이 그대로 읽히는데(캐시가 있으니 isLoading도 false),
-      // 삭제 후 `/`로 보내는 경로에서 IndexRoute가 그 낡은 목록의 [0] —
-      // 즉 방금 삭제한 회의 — 로 되돌려 404 막다른 길을 만든다. 레일에서 삭제된
-      // 행이 잠깐 남는 깜빡임도 함께 사라진다.
+      // 삭제 후 `/`(→ `/meetings` 카드 목록)로 보내는 경로에서 방금 삭제한 회의의
+      // 카드가 그대로 남아, 누르면 404 막다른 길로 간다. 레일에서 삭제된 행이
+      // 잠깐 남는 깜빡임도 함께 사라진다.
       queryClient.setQueryData<MeetingSummary[]>(["meetings"], (old) =>
         old?.filter((m) => m.id !== vars.id),
       );

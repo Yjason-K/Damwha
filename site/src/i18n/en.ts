@@ -38,14 +38,21 @@ export const en = {
     title: "What else it does",
     items: [
       {
+        title: "Organized with folders and tags",
+        body: "The app opens on your conversations as cards, with the latest decisions and open action items up top. File each one in a folder, give it as many tags as you like — the summary suggests ones you already use — and filter the sidebar or ⌘K by tag.",
+        image: "organize" as const,
+        alt: "Conversation list with folders and tags in the sidebar, recent decisions and conversation cards",
+        wide: true,
+      },
+      {
         title: "Knows who is speaking",
-        body: "Voiceprint-based speaker identification. Enroll a speaker once and they're recognized in every later conversation.",
+        body: "Voiceprint-based speaker identification. Enroll a speaker once and they're recognized in every later conversation. Mark one as yourself to list the conversations you were in.",
         image: "speakers" as const,
         alt: "Speaker management with enrolled voiceprints",
       },
       {
         title: "⌘K search, everywhere",
-        body: "Hybrid search — meaning and keywords — over every utterance and conversation, from any screen.",
+        body: "Hybrid search — meaning and keywords — over every utterance and conversation, from any screen. Narrow it down by tag.",
         image: "search" as const,
         alt: "Command palette search results listing matching utterances and their conversation",
       },

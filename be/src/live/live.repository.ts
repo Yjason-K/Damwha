@@ -21,11 +21,12 @@ export class LiveRepository {
   }
 
   async createRecording(
-    exec: Queryable, args: { id: string; audioKey: string; title: string | null },
+    exec: Queryable, args: { id: string; audioKey: string; title: string | null; folderId?: string | null },
   ): Promise<MeetingRow> {
     const { rows } = await exec.query<MeetingRow>(
-      `INSERT INTO meeting(id, title, audio_key, status) VALUES($1,$2,$3,'recording') RETURNING *`,
-      [args.id, args.title, args.audioKey],
+      `INSERT INTO meeting(id, title, audio_key, status, folder_id)
+       VALUES($1,$2,$3,'recording',COALESCE($4, default_folder_id())) RETURNING *`,
+      [args.id, args.title, args.audioKey, args.folderId ?? null],
     );
     return rows[0];
   }

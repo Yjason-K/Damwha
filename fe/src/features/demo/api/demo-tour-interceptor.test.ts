@@ -45,6 +45,18 @@ test("업로드 전: POST /search·GET /lenses·GET /saved-utterances에서 투�
   expect((await u.get("/saved-utterances")).data.items).toEqual([{ meeting: { id: "mtg_5" } }]);
 });
 
+test("업로드 전: GET /lenses의 total에서도 숨긴 투어 회의 항목을 뺀다", async () => {
+  const l = client({
+    items: [{ meeting_id: TOUR }, { meeting_id: "mtg_5" }],
+    next_cursor: null,
+    total: 5,
+  });
+  install(l);
+  const { data } = await l.get("/lenses?kind=decision&limit=2");
+  expect(data.items).toEqual([{ meeting_id: "mtg_5" }]);
+  expect(data.total).toBe(4);
+});
+
 test("업로드 전: GET /saved-utterances/ids와 GET /meetings/:id는 건드리지 않는다", async () => {
   const ids = client({ utterance_ids: ["u1"] });
   install(ids);
@@ -66,7 +78,7 @@ test("시뮬레이션 중: 목록의 status와 /status 응답을 덮어쓴다", 
   const list = client([{ id: TOUR, status: "done" }, { id: "mtg_5", status: "done" }]);
   install(list, { uploaded: true, view });
   expect((await list.get("/meetings")).data).toEqual([
-    { id: TOUR, status: "processing" },
+    { id: TOUR, status: "processing", preview_decision: null, preview_action: null, preview_summary: null },
     { id: "mtg_5", status: "done" },
   ]);
 
@@ -80,6 +92,29 @@ test("시뮬레이션 중: 목록의 status와 /status 응답을 덮어쓴다", 
     summary: { status: "queued", model: null, error: null },
     search_index: { status: "queued", error: null, updated_at: expect.any(String) },
   });
+});
+
+test("시뮬레이션 중: 목록 카드의 미리보기를 비운다", async () => {
+  const view: SimView = { meetingId: TOUR, stage: "stt", progress: 80 };
+  const list = client([
+    {
+      id: TOUR,
+      status: "done",
+      preview_decision: "결정",
+      preview_action: { text: "할 일" },
+      preview_summary: "요약",
+    },
+  ]);
+  install(list, { uploaded: true, view });
+  expect((await list.get("/meetings")).data).toEqual([
+    {
+      id: TOUR,
+      status: "processing",
+      preview_decision: null,
+      preview_action: null,
+      preview_summary: null,
+    },
+  ]);
 });
 
 test("시뮬레이션 중: 상세에서 완성된 전사·클러스터·요약을 비운다", async () => {

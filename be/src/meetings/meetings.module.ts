@@ -7,11 +7,13 @@ import { SettingsModule } from '../settings/settings.module';
 import { SystemModule } from '../system/system.module';
 import { LensesModule } from '../lenses/lenses.module';
 import { SummaryModule } from '../summary/summary.module';
+import { TagsRepository } from '../tags/tags.repository';
+import { FoldersModule } from '../folders/folders.module';
 
 @Module({
-  imports: [SettingsModule, SystemModule, LensesModule, SummaryModule],
+  imports: [SettingsModule, SystemModule, LensesModule, SummaryModule, FoldersModule],
   controllers: [MeetingsController, ClustersController],
-  providers: [MeetingsService, MeetingsRepository],
+  providers: [MeetingsService, MeetingsRepository, TagsRepository],
   exports: [MeetingsRepository, MeetingsService],
 })
 export class MeetingsModule {}

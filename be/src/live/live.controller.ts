@@ -12,7 +12,8 @@ export class LiveController {
     summary: '실시간 녹음 시작',
     description:
       '워커 Mac의 마이크로 녹음을 시작한다. recording 회의와 live_session job을 만들고 회의 행을 돌려준다. '
-      + '이미 녹음 중인 회의가 있으면 409. body는 업로드와 같은 필드(JSON): title, processing, speakers, defer_lens, defer_summary.',
+      + '이미 녹음 중인 회의가 있으면 409. body는 업로드와 같은 필드(JSON): title, processing, speakers, defer_lens, defer_summary, folder_id. '
+      + 'folder_id를 생략하거나 비우면 기본 폴더에 넣고, 없는 폴더면 아무것도 만들지 않고 400.',
   })
   @ApiBody({
     schema: {
@@ -23,12 +24,14 @@ export class LiveController {
         speakers: { type: 'object', description: '{"min":2,"max":5}' },
         defer_lens: { type: 'boolean' },
         defer_summary: { type: 'boolean' },
+        folder_id: { type: 'string', pattern: '^fld_[1-9][0-9]*$', description: '회의를 넣을 폴더 (선택)' },
       },
     },
   })
   @HttpCode(201)
   start(@Body() body: {
     title?: unknown; processing?: unknown; speakers?: unknown; defer_lens?: unknown; defer_summary?: unknown;
+    folder_id?: unknown;
   }) {
     return this.service.start(body ?? {});
   }

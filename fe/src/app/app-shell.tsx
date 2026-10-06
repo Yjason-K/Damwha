@@ -11,6 +11,8 @@ import { env } from "@/shared/config/env";
 import { formatClock } from "@/features/meeting/api/mappers";
 import { useMeetings } from "@/features/meeting/api/meetings";
 import { useSearch } from "@/features/meeting/api/search";
+import { useTags } from "@/features/meeting/api/tags";
+import { cn } from "@/shared/lib/utils";
 import { useProcessingSettings } from "@/features/settings/api/settings";
 import { searchIsKeywordOnly } from "@/features/settings/lib/model-readiness";
 import type { MeetingFilter } from "@/features/meeting/model/types";
@@ -52,12 +54,16 @@ function highlight(text: string, q: string): React.ReactNode {
 
 export function AppShell() {
   const navigate = useNavigate();
-  const [filter, setFilter] = React.useState<MeetingFilter>("all");
+  const [filter, setFilter] = React.useState<MeetingFilter>("recent");
   const [cmdOpen, setCmdOpen] = React.useState(false);
   const [cmdQuery, setCmdQuery] = React.useState("");
 
+  const [cmdTag, setCmdTag] = React.useState<string | null>(null);
+
   const { data: meetings } = useMeetings();
-  const { data: hits = [] } = useSearch(cmdQuery, cmdOpen);
+  const { data: tags = [] } = useTags();
+  const activeCmdTag = tags.some((t) => t.id === cmdTag) ? cmdTag : null;
+  const { data: hits = [] } = useSearch(cmdQuery, cmdOpen, activeCmdTag);
   // 검색이 왜 키워드로만 도는지 (Phase 4 스펙 §6.9). 임베딩 모델이 없으면 의미 검색이 서지
   // 않는데, 그 말을 안 하면 사용자는 검색이 나빠졌다고 읽는다.
   const { data: settings } = useProcessingSettings();
@@ -113,6 +119,7 @@ export function AppShell() {
     pushMeeting(h.meetingId, h.meetingTitle ?? "제목 없는 회의");
   if (q) {
     for (const m of meetings ?? []) {
+      if (activeCmdTag && !m.tags.some((t) => t.id === activeCmdTag)) continue;
       if (m.title.includes(q)) pushMeeting(m.id, m.title);
     }
   }
@@ -137,6 +144,29 @@ export function AppShell() {
           onOpenChange={setCmdOpen}
           query={cmdQuery}
           onQueryChange={setCmdQuery}
+          facets={
+            tags.length > 0
+              ? tags.map((t) => {
+                  const active = activeCmdTag === t.id;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => setCmdTag(active ? null : t.id)}
+                      className={cn(
+                        "cursor-pointer rounded-full px-[9px] py-[3px] text-xs font-medium outline-none transition-colors duration-[80ms] focus-visible:[box-shadow:var(--focus-ring)]",
+                        active
+                          ? "bg-[var(--accent-bg)] text-[color:var(--accent-text)]"
+                          : "text-[color:var(--text-muted)] hover:bg-[var(--surface-hover)]",
+                      )}
+                    >
+                      #{t.name}
+                    </button>
+                  );
+                })
+              : undefined
+          }
           notice={
             keywordOnly
               ? "검색 임베딩 모델을 아직 받는 중이라 지금은 단어가 그대로 들어간 발언만 찾아요. 모델이 준비되면 뜻이 비슷한 발언까지 찾아요."

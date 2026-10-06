@@ -95,6 +95,8 @@ function invalidate(qc: QueryClient, meetingId: string) {
   void qc.invalidateQueries({ queryKey: ["meeting", meetingId] });
   void qc.invalidateQueries({ queryKey: ["meeting-lenses", meetingId] });
   void qc.invalidateQueries({ queryKey: ["meetings"] });
+  // 결정·할 일 요약은 업로드 전에 투어 회의 항목을 뺀 채로 캐시돼 있다.
+  void qc.invalidateQueries({ queryKey: ["lens-overview"] });
 }
 
 function clearTimers() {
