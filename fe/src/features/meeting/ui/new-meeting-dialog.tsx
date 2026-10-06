@@ -172,6 +172,12 @@ type NewMeetingDialogProps = {
   onCreated: (id: string) => void;
   /** 폴더 선택의 초깃값 — 좌측에서 보고 있던 폴더. 없으면 기본 폴더. */
   defaultFolderId?: string;
+  /**
+   * 열릴 때 고를 탭과 채울 파일(회의 목록의 드롭존). 열리는 순간에만 적용하고, 탭은
+   * 로컬 저장소에 기억하지 않는다 — 버튼으로 고른 것이지 모달에서 바꾼 게 아니다.
+   */
+  initialSource?: MeetingSource;
+  initialFile?: File | null;
 };
 
 export function NewMeetingDialog({
@@ -179,6 +185,8 @@ export function NewMeetingDialog({
   onOpenChange,
   onCreated,
   defaultFolderId,
+  initialSource,
+  initialFile,
 }: NewMeetingDialogProps) {
   const [source, setSource] = React.useState<MeetingSource>(readSource);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -187,6 +195,12 @@ export function NewMeetingDialog({
   const followupsLabelId = React.useId();
   const followupsHintId = React.useId();
   const [file, setFile] = React.useState<File | null>(null);
+  const [appliedOpen, setAppliedOpen] = React.useState(false);
+  if (open !== appliedOpen) {
+    setAppliedOpen(open);
+    if (open && initialSource) setSource(initialSource);
+    if (open && initialFile) setFile(initialFile);
+  }
   const [title, setTitle] = React.useState("");
   const folderLabelId = React.useId();
   const { data: folders } = useFolders();

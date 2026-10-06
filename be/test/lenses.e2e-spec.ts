@@ -122,7 +122,7 @@ describe('lenses api', () => {
 
     const res = await request(srv()).get('/lenses');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ items: expect.any(Array), next_cursor: null });
+    expect(res.body).toEqual({ items: expect.any(Array), next_cursor: null, total: 1 });
     expect(res.body.items[0]).toMatchObject({
       id: expect.stringMatching(/^lens_/), kind: 'action', lifecycle_status: 'active',
       meeting: { id: expect.stringMatching(/^mtg_/), title: expect.anything() },
@@ -222,6 +222,34 @@ describe('lenses api', () => {
     expect((await request(srv()).get(`/lenses?speaker_id=${spk}`)).body.items.map((i: any) => i.id)).toEqual([withAssignee]);
     expect((await request(srv()).get('/lenses?date_from=2026-07-01&date_to=2026-07-15')).body.items.map((i: any) => i.id)).toEqual([withAssignee]);
     expect((await request(srv()).get('/lenses?completion_status=done')).body.items.map((i: any) => i.id)).toEqual([done]);
+  });
+
+  it('filters by folder_id and rejects a malformed one', async () => {
+    const folder = (await db.pool.query(
+      `INSERT INTO folder(name) VALUES('기획') RETURNING id`,
+    )).rows[0].id;
+    const inFolder = await mkMeeting('A');
+    await db.pool.query(`UPDATE meeting SET folder_id=$2 WHERE id=$1`, [inFolder, folder]);
+    const elsewhere = await mkMeeting('B');
+    const mine = await mkLens(inFolder, { source: 'user', kind: 'decision' });
+    await mkLens(elsewhere, { source: 'user', kind: 'decision' });
+
+    const res = await request(srv()).get(`/lenses?kind=decision&folder_id=${folder}`);
+    expect(res.body.items.map((i: any) => i.id)).toEqual([mine]);
+    expect(res.body.total).toBe(1);
+    expect((await request(srv()).get('/lenses?folder_id=nope')).status).toBe(400);
+  });
+
+  it('reports the total across pages, not the page size', async () => {
+    const mid = await mkMeeting();
+    await mkLens(mid, { source: 'user', updated: '2026-07-01T00:00:00Z' });
+    await mkLens(mid, { source: 'user', updated: '2026-07-02T00:00:00Z' });
+    await mkLens(mid, { source: 'user', updated: '2026-07-03T00:00:00Z' });
+    await mkLens(mid, { source: 'user', completion: 'done' });
+
+    const p1 = await request(srv()).get('/lenses?limit=2');
+    expect(p1.body.items).toHaveLength(2);
+    expect(p1.body.total).toBe(3);
   });
 
   it('paginates via keyset cursor (limit=1 continuation)', async () => {

@@ -14,6 +14,8 @@ import type { WireMeeting, WireSpeaker } from "@/features/meeting/api/types";
 const fx = vi.hoisted(() => ({
   meetings: [] as unknown[],
   speakers: [] as unknown[],
+  lenses: {} as Record<string, { items: unknown[]; total: number }>,
+  lensUrls: [] as string[],
 }));
 
 vi.mock("@/shared/api/client", async (importOriginal) => ({
@@ -22,6 +24,16 @@ vi.mock("@/shared/api/client", async (importOriginal) => ({
     get: vi.fn(async (url: string) => {
       if (url === "/meetings") return { data: fx.meetings };
       if (url === "/speakers") return { data: fx.speakers };
+      if (url.startsWith("/lenses?")) {
+        fx.lensUrls.push(url);
+        const kind = new URLSearchParams(url.split("?")[1]).get("kind")!;
+        return {
+          data: {
+            next_cursor: null,
+            ...(fx.lenses[kind] ?? { items: [], total: 0 }),
+          },
+        };
+      }
       if (url === "/folders")
         return {
           data: [
@@ -52,7 +64,11 @@ vi.mock("@/shared/api/client", async (importOriginal) => ({
 
 const { MeetingListPage } = await import("@/pages/meeting-list");
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  fx.lenses = {};
+  fx.lensUrls = [];
+});
 
 function row(id: string, overrides: Partial<WireMeeting> = {}): WireMeeting {
   return {
@@ -237,19 +253,164 @@ test("없는 폴더는 찾을 수 없다고 하고 전체 회의 링크를 준�
   expect(await screen.findByText("경로: /meetings")).toBeInTheDocument();
 });
 
-test("빈 폴더와 결과 없는 탭은 서로 다른 문구를 보인다", async () => {
+test("빈 폴더는 드롭존만 크게 보이고, 결과 없는 탭은 조건 문구를 보인다", async () => {
   fx.meetings = [row("m1", { folder_id: "fld_2" })];
   fx.speakers = [];
   renderList("/folders/fld_3");
+  await screen.findByRole("heading", { level: 1, name: "빈 폴더" });
+  expect(screen.getByRole("region", { name: "녹음 파일 올리기" })).toHaveClass(
+    "flex-col",
+  );
   expect(
-    await screen.findByText("이 폴더에 회의가 없어요."),
-  ).toBeInTheDocument();
+    screen.queryByRole("region", { name: "최근 결정" }),
+  ).not.toBeInTheDocument();
+  expect(fx.lensUrls).toEqual([]);
 
   cleanup();
   renderList("/folders/fld_2?tab=fav");
   expect(
     await screen.findByText("조건에 맞는 회의가 없어요."),
   ).toBeInTheDocument();
+});
+
+const lens = (
+  id: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> => ({
+  id,
+  kind: "decision",
+  text: `항목 ${id}`,
+  source: "ai",
+  user_modified: false,
+  completion_status: "open",
+  lifecycle_status: "active",
+  meeting_id: "m1",
+  assignee_speaker_id: null,
+  due_at: null,
+  created_at: "2026-09-01T10:00:00.000Z",
+  updated_at: "2026-09-01T10:00:00.000Z",
+  meeting: { id: "m1", title: "로드맵 회의", recorded_at: null },
+  evidence: [],
+  ...overrides,
+});
+
+const todayYmd = () => {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+test("폴더 목록은 그 폴더의 최근 결정·진행 중인 할 일을 건수와 함께 보여 준다", async () => {
+  fx.meetings = [row("m1", { folder_id: "fld_2" })];
+  fx.speakers = [speaker("spk_1", false), speaker("박수민", false)];
+  fx.lenses = {
+    decision: {
+      total: 3,
+      items: [
+        lens("l1", {
+          text: "OAuth는 PKCE로 간다",
+          evidence: [
+            {
+              relation: "primary",
+              utterance: {
+                id: "utt_9",
+                start_ms: 1_902_000,
+                text: "t",
+                speaker_id: null,
+              },
+            },
+          ],
+        }),
+      ],
+    },
+    action: {
+      total: 5,
+      items: [
+        lens("l2", {
+          kind: "action",
+          text: "단축키 프로토타입",
+          assignee_speaker_id: "박수민",
+          due_at: todayYmd(),
+        }),
+      ],
+    },
+  };
+  renderList("/folders/fld_2");
+
+  const decisions = within(
+    await screen.findByRole("region", { name: "최근 결정" }),
+  );
+  expect(
+    await decisions.findByText("“OAuth는 PKCE로 간다”"),
+  ).toBeInTheDocument();
+  expect(decisions.getByLabelText("최근 결정 3건")).toBeInTheDocument();
+  expect(
+    decisions.getByRole("link", { name: "회의에서 보기 31:42" }),
+  ).toHaveAttribute("href", "/meetings/m1?u=utt_9");
+  expect(decisions.getByRole("link", { name: /모두 보기/ })).toHaveAttribute(
+    "href",
+    "/lenses/decision",
+  );
+
+  const actions = within(
+    screen.getByRole("region", { name: "진행 중인 할 일" }),
+  );
+  expect(await actions.findByText("단축키 프로토타입")).toBeInTheDocument();
+  expect(actions.getByLabelText("진행 중인 할 일 5건")).toBeInTheDocument();
+  expect(actions.getByText("D-Day")).toBeInTheDocument();
+  expect(actions.getByRole("img", { name: "박수민" })).toBeInTheDocument();
+
+  expect(fx.lensUrls).toHaveLength(2);
+  for (const url of fx.lensUrls) {
+    const q = new URLSearchParams(url.split("?")[1]);
+    expect(q.get("folder_id")).toBe("fld_2");
+    expect(q.get("completion_status")).toBe("open");
+  }
+});
+
+test("전체 회의 목록의 요약은 폴더로 거르지 않는다", async () => {
+  fx.meetings = [row("m1")];
+  fx.speakers = [];
+  renderList("/meetings");
+  expect(
+    await screen.findByText("진행 중인 할 일이 없어요."),
+  ).toBeInTheDocument();
+  expect(fx.lensUrls.length).toBeGreaterThan(0);
+  for (const url of fx.lensUrls) expect(url).not.toContain("folder_id");
+});
+
+test("드롭존에 놓은 오디오 파일은 바로 올리지 않고 그 파일을 채운 새 회의 모달을 연다", async () => {
+  fx.meetings = [row("m1", { folder_id: "fld_2" })];
+  fx.speakers = [];
+  renderList("/folders/fld_2");
+  const zone = await screen.findByRole("region", { name: "녹음 파일 올리기" });
+
+  const image = new File(["x"], "photo.png", { type: "image/png" });
+  fireEvent.drop(zone, { dataTransfer: { files: [image], types: ["Files"] } });
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+  const audio = new File(["a"], "주간.m4a", { type: "audio/mp4" });
+  fireEvent.drop(zone, { dataTransfer: { files: [audio], types: ["Files"] } });
+  const dialog = within(await screen.findByRole("dialog"));
+  expect(dialog.getByText(/주간\.m4a/)).toBeInTheDocument();
+  expect(dialog.getByRole("tab", { name: "오디오 파일" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+});
+
+test("실시간 녹음 시작은 새 회의 모달을 실시간 녹음 탭으로 연다", async () => {
+  fx.meetings = [row("m1")];
+  fx.speakers = [];
+  renderList("/meetings");
+  fireEvent.click(
+    await screen.findByRole("button", { name: /실시간 녹음 시작/ }),
+  );
+  const dialog = within(await screen.findByRole("dialog"));
+  expect(dialog.getByRole("tab", { name: "실시간 녹음" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
 });
 
 test("카드는 메타 줄·집계 배지·미리보기를 그리고, 0인 배지와 처리 중 회의의 집계는 숨긴다", async () => {
