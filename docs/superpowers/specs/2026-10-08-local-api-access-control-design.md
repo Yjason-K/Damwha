@@ -6,6 +6,8 @@
 `be/src/config/env.ts:7-9`의 `HOST` 기본값 `0.0.0.0` 결정. 둘 다 이 spec의 §3.3·§3.5로 바뀐다.
 **범위:** be API(`:3000`)의 Host·Origin 검사와 CORS, `HOST` 기본값, desktop dev의 허용 Origin 주입, fe `<audio>`의
 CORS 모드, 데모 compose의 허용 Host, embed 서비스와 LLM 서버(`mlx_lm.server`)의 "브라우저 금지" 가드.
+**리뷰:** Codex(gpt-6-sol) 리뷰 반영 — 경로 대소문자, mlx 핸들러 교체 방식과 CORS 헤더, 미들웨어·본문 파서 순서,
+desktop 최종 env, Vite 포트 고정, embed·LLM의 비 loopback 구성, 기존 worker 테스트, 403의 응답 헤더.
 **후속:** 회의 공유 링크(`2026-10-08-meeting-share-design.md`)의 선행 조건이다 — 그 spec의 §2.10 "로컬 API 접근 제어"와
 §4 미결 마지막 항목.
 
@@ -72,7 +74,10 @@ CORS 응답에 `Access-Control-Allow-Credentials`가 필요 없다. 앱을 ifram
 ### 3.1 be 접근 제어 판정
 
 모든 요청에 다음을 순서대로 적용한다. 판정은 순수 함수 하나(`evaluateAccess(req, policy)`)가 하고,
-express 미들웨어가 그 결과로 응답한다.
+express 미들웨어가 그 결과로 응답한다. 미들웨어는 판정 **전에** ③의 응답 헤더부터 건다 — 403에도 실린다.
+
+**경로 판정은 대소문자를 무시한다.** express 라우터는 기본이 case-insensitive라 `/API/health`·`/Api/meetings`도
+같은 핸들러로 간다(실측 200). "`/api` 아래인가"는 경로를 소문자로 바꾼 뒤 `/api` 또는 `/api/`로 시작하는지로 본다.
 
 **① Host (모든 경로).** `Host` 헤더에서 포트를 떼고 소문자로 비교한다. 허용:
 
@@ -134,8 +139,10 @@ e2e 26개는 `main.ts`를 거치지 않고 `Test.createTestingModule({ imports: 
 
 그래서 `main.ts`의 HTTP 구성(본문 파서, 접근 제어, 전역 prefix, SPA 정적 서빙, Swagger)을 **함수 하나**
 (`configureHttp(app, env)`)로 옮긴다. `main.ts`는 그 함수를 부르고 listen만 한다. 접근 제어 e2e는 같은 함수로
-앱을 만든다 — 테스트가 검사하는 구성이 곧 운영 구성이다. 접근 제어 미들웨어는 그 함수의 **첫 `app.use`**다
-(SPA·정적·Swagger·Nest 라우터보다 앞).
+앱을 만든다 — 테스트가 검사하는 구성이 곧 운영 구성이다. `configureHttp`는 다음 순서를 명시적으로 지킨다:
+접근 제어 미들웨어 → `useBodyParser('json', 1mb)` → `setGlobalPrefix('api')` → SPA 정적 서빙 → Swagger.
+`useBodyParser`도 내부에서 `app.use`를 부르고 Nest 기본 파서(urlencoded 포함)는 `init()`에서 붙으므로, 접근 제어가
+**모든 본문 파서보다 앞**이어야 거부된 요청의 본문을 읽지 않는다. 순서는 테스트로 고정한다(§6 e2e 10).
 
 기존 e2e는 고치지 않는다. 그 테스트들은 접근 제어를 거치지 않는 지금 모양 그대로 업무 로직을 검사한다.
 
@@ -152,6 +159,9 @@ e2e 26개는 `main.ts`를 거치지 않고 `Test.createTestingModule({ imports: 
   무시하면 "설정했는데 403"이 된다.
 - `*` 같은 와일드카드는 받지 않는다.
 - `be/.env.example`에 `ALLOWED_ORIGINS=http://localhost:5173`를 넣는다(`pnpm dev`용).
+- **Vite를 5173에 고정한다** (`fe/vite.config.ts` `server.port: 5173`, `strictPort: true`). 지금은 `strictPort`가
+  없어 5173이 차 있으면 Vite가 다음 포트로 옮기고, 그러면 허용 Origin과 어긋나 조용히 403이 난다. 고정하면 포트가
+  차 있을 때 Vite가 바로 실패한다. desktop dev도 이미 5173을 전제한다(`desktop/src/main.ts:144`).
 
 ### 3.5 `HOST` 기본값
 
@@ -161,10 +171,12 @@ e2e 26개는 `main.ts`를 거치지 않고 `Test.createTestingModule({ imports: 
 
 ### 3.6 desktop
 
-- **dev:** 감독자가 API 자식 env에 `ALLOWED_ORIGINS=http://localhost:5173`(`main.ts:144`의 `VITE_ORIGIN`)을
-  넣는다. packaged에는 넣지 않는다 — 렌더러가 API와 같은 origin이다(`main.ts:1017`).
+- **`apiChildEnv`가 두 키의 최종값을 정한다.** `HOST`처럼 마지막에 덮는다: dev면
+  `ALLOWED_ORIGINS=http://localhost:5173`(`main.ts:144`의 `VITE_ORIGIN`), packaged면 `ALLOWED_ORIGINS`를 **지운다**
+  (렌더러가 API와 같은 origin이다, `main.ts:1017`). `ALLOWED_HOSTS`는 둘 다 지운다. 상속 env(`nodeChildEnv`는
+  `process.env`를 깐다)나 `config.json`에서 온 값이 남지 않게 하기 위해서다.
 - `config.json`이 `ALLOWED_ORIGINS`·`ALLOWED_HOSTS`를 덮을 수 없게 한다(`config.ts:106-124`의 거부 목록) —
-  `HOST`를 막은 것과 같은 이유다. 설정 파일 한 줄로 보호가 풀리면 안 된다.
+  `HOST`를 막은 것과 같은 이유다. 최종값은 위 규칙이 정하지만, 설정했는데 무시되는 키는 경고로 알린다.
 - 헬스 프로브(`process/readiness.ts`)는 Node `fetch`라 `Origin`·`Sec-Fetch-Site`가 없고 `Host`가 `127.0.0.1:<port>`다
   — §3.1을 통과한다. 테스트로 고정한다(§6).
 
@@ -183,17 +195,28 @@ e2e 26개는 `main.ts`를 거치지 않고 `Test.createTestingModule({ imports: 
 두 서버의 클라이언트는 be(Node `fetch`), desktop 프로브(Node `fetch`), worker(httpx)뿐이다. 브라우저 클라이언트가
 없으므로 판정이 단순하다:
 
-- `Origin` 헤더가 있거나 `Sec-Fetch-Site` 헤더가 있으면 403.
-- `Host`의 호스트 이름이 `localhost`·`127.0.0.1`·`[::1]`이 아니면 403(rebinding).
+- `Origin` 헤더가 있거나 `Sec-Fetch-Site` 헤더가 있으면 403. 이 판정은 설정과 관계없이 항상 적용한다.
+- `Host`의 호스트 이름이 `localhost`·`127.0.0.1`·`[::1]`, 또는 **설정된 bind 호스트 이름**(`0.0.0.0`·`::`가
+  아닐 때만)이 아니면 403(rebinding). bind 호스트를 허용하는 이유: `EMBED_SERVICE_ALLOW_NON_LOOPBACK=true`
+  (`be/src/search/embed.client.ts:20`)와 `embed_service_host`(`config.py:85`), `LENS_LLM_BASE_URL`의 호스트
+  (`llm_server.py:123,132`)로 loopback 밖에 띄우는 구성이 아직 코드상 지원된다. 그 클라이언트는 그 이름을 `Host`로
+  보낸다.
 - CORS 헤더를 내보내지 않는다.
 
 **embed** (`be/worker/damwha_worker/embed_service.py`): FastAPI HTTP 미들웨어로 건다. `/health`를 포함한 모든 경로.
+bind 호스트는 `embed_service_host`.
 
 **LLM** (`be/worker/damwha_worker/llm_entry.py`): `mlx_lm.server.main()`을 부르기 전에 같은 프로세스에서
-`mlx_lm.server`의 요청 핸들러 클래스를 감싸 `do_GET`·`do_POST`·`do_OPTIONS`(그 밖에 정의된 `do_*`) 앞에서 위 판정을
-한다. 또한 `llm_server.py`가 `--allowed-origins`에 브라우저가 보낼 수 없는 값을 넘겨 `*`를 끈다(정확한 값은
-plan에서 `server.py`의 비교 방식을 보고 정한다). mlx_lm 버전이 바뀌어 핸들러 클래스 이름이 사라지면 **기동을
-실패시킨다** — 조용히 가드 없이 뜨면 안 된다.
+**원래 `mlx_lm.server.APIHandler` 클래스 객체의 메서드를 제자리에서 바꾼다** — `do_*` 전부(그 시점에 클래스에
+정의된 것을 열거한다) 앞에 위 판정을 넣고, `_set_cors_headers`를 아무 헤더도 쓰지 않게 덮는다(이 메서드는 Origin이
+맞지 않아도 `Allow-Methods: *`·`Allow-Headers: *`를 쓴다, `server.py:1075-1084`). 새 하위 클래스로 **교체하면 안
+된다**: `_run_http_server(..., handler_class=APIHandler)`가 정의 시점에 원래 클래스를 기본 인자로 잡았고 `run()`은
+그 인자를 넘기지 않는다(`server.py:1702,1735`) — 모듈 속성만 바꾸면 실제 서버는 가드 없이 뜬다. 같은 클래스 객체의
+메서드를 바꾸면 그 기본 인자도 같은 객체라 덮인다. bind 호스트는 `--host` 인자다(`llm_entry`가 `sys.argv`에서
+읽는다). 또한 `llm_server.py`가 `--allowed-origins`에 브라우저가 보낼 수 없는 값을 넘겨 `*`를 끈다(이중 장치,
+정확한 값은 plan에서 정한다). mlx_lm 버전이 바뀌어 `APIHandler`·`_set_cors_headers`가 없거나 `do_*`가 하나도
+없으면 **기동을 실패시킨다** — 조용히 가드 없이 뜨면 안 된다. 검증은 실제 `_run_http_server` 경로로 서버를 띄워
+HTTP 요청을 보내는 테스트로 한다(§6) — 메서드만 부르는 테스트는 위 교체 실수를 잡지 못한다.
 
 이 가드가 덮지 않는 것(문서에 적는다): `LENS_LLM_SERVER_BIN` 탈출구(그때는 `llm_entry`를 거치지 않는다)와
 "이미 떠 있는 서버를 재사용"하는 경로(`llm_server.py` — 우리 프로세스가 아니다).
@@ -209,7 +232,8 @@ Host를 그대로 넘긴다). `deploy/demo/docker-compose.yml`에 `ALLOWED_HOSTS
 | 누구 | 바뀌는 것 | 할 일 |
 | --- | --- | --- |
 | 패키징 desktop 사용자 | 없음 | 없음 |
-| `pnpm dev` 개발자 | 기존 `be/.env`에 `ALLOWED_ORIGINS`가 없으면 SPA의 API 호출이 403(`ORIGIN_NOT_ALLOWED`, 본문이 env 이름을 알려 준다). LAN에서 API가 안 보인다 | `be/.env`에 `ALLOWED_ORIGINS=http://localhost:5173` 한 줄. LAN 노출이 필요하면 `HOST=0.0.0.0` |
+| `pnpm dev` 개발자 | 기존 `be/.env`에 `ALLOWED_ORIGINS`가 없으면 SPA의 API 호출이 403(`ORIGIN_NOT_ALLOWED`, 본문이 env 이름을 알려 준다). LAN에서 API가 안 보인다. 5173이 차 있으면 Vite가 다른 포트로 가지 않고 실패한다 | `be/.env`에 `ALLOWED_ORIGINS=http://localhost:5173` 한 줄. LAN 노출이 필요하면 `HOST=0.0.0.0` |
+| embed·LLM을 loopback 밖에 띄운 구성 | 그 bind 이름이 아닌 `Host`(예: 다른 이름·IP로 접근)는 403 | 클라이언트가 bind 이름으로 접근하게 한다 |
 | desktop dev | 감독자가 넣는다 | 없음 |
 | 데모 운영 | 새 이미지 + 옛 compose면 모든 요청 403(`HOST_NOT_ALLOWED`) | **compose 파일을 다시 받은 뒤** `pull`·`up`. `deploy/demo/README.md`의 시드 갱신 절차에 적는다 |
 | Docker 셀프호스팅 | 은퇴(`docs/electron-migration-roadmap.md`, 2026-09-23). 남은 이미지 사용자가 있다면 접속 호스트 이름을 `ALLOWED_HOSTS`에 | README·be/CLAUDE.md에 env 설명 |
@@ -251,18 +275,29 @@ Host를 그대로 넘긴다). `deploy/demo/docker-compose.yml`에 `ALLOWED_HOSTS
 7. `Host: attacker.example:3000` → `/api/health`·`/docs` 모두 403(`/api` 밖도 ①이 막는다).
 8. 정상: 같은 origin(packaged 모양) GET·POST·DELETE 통과, 허용 Origin(dev 모양) GET에 `ACAO: http://localhost:5173`,
    헤더 없는 요청(헬스 프로브 모양) 통과, `Range` 오디오 요청 206.
-9. 모든 응답에 `frame-ancestors 'none'`·`X-Frame-Options: DENY`.
+9. 모든 응답에 `frame-ancestors 'none'`·`X-Frame-Options: DENY` — 200뿐 아니라 `HOST_NOT_ALLOWED`·
+   `ORIGIN_NOT_ALLOWED` 403에도.
+10. 순서: 다른 Origin이 1MB를 넘는 JSON 본문과 urlencoded 본문을 보내면 413이 아니라 403(본문 파서보다 접근 제어가
+    먼저 돈다).
+11. 대소문자: 다른 Origin의 `GET /API/meetings`, `POST /Api/folders`(urlencoded) → 403, 폴더 행 없음.
 
 **변이 확인.** 보안 테스트마다 검사 코드를 일부러 지운 상태(Host 검사 제거, Origin 검사 제거, `Sec-Fetch-Site`
-분기 제거, `enableCors()` 되살리기, 미들웨어 등록 순서를 SPA 뒤로)에서 해당 테스트가 **실패하는지** 돌려 보고 결과를
+분기 제거, `enableCors()` 되살리기, 미들웨어 등록을 본문 파서 뒤로, 경로 판정을 대소문자 구분으로, LLM 가드를
+메서드 교체 대신 하위 클래스 교체로)에서 해당 테스트가 **실패하는지** 돌려 보고 결과를
 result에 적는다. 실패하지 않는 테스트는 고친다.
 
-**desktop:** `apiChildEnv`/감독자 env가 dev에서만 `ALLOWED_ORIGINS`를 넣고 packaged에선 넣지 않음, `config.json`의
-두 키 거부, 헬스 프로브 요청 모양이 §3.1을 통과함(be 판정 함수와의 계약 — 헤더 목록 고정).
+**desktop:** `apiChildEnv`의 최종 env — dev는 `ALLOWED_ORIGINS=http://localhost:5173`, packaged는 상속 env에
+`ALLOWED_ORIGINS`·`ALLOWED_HOSTS`가 있어도 결과에 없음, dev도 `ALLOWED_HOSTS` 없음. `config.json`의 두 키 거부(경고),
+헬스 프로브 요청 모양이 §3.1을 통과함(be 판정 함수와의 계약 — 헤더 목록 고정).
+
+**fe:** 두 `<audio>`에 `crossOrigin="anonymous"`가 있음. `vite.config.ts`의 `strictPort`.
 
 **worker (pytest):** embed 미들웨어 — `Origin` 있음·`Sec-Fetch-Site` 있음·비 loopback Host 각각 403, 헤더 없는
-요청 통과. LLM 가드 — 감싼 핸들러에 같은 표를 적용(실제 mlx 모델 없이 핸들러만), mlx_lm 핸들러 클래스가 없으면
-기동 실패.
+요청 통과, 설정된 bind 호스트 이름 통과, bind가 `0.0.0.0`이면 그 이름 허용 없음. LLM 가드 — **설치된
+`mlx_lm.server`의 `_run_http_server`로 실제 서버를 띄워**(모델 없이, 응답 생성기는 대역) HTTP로 같은 표를 확인하고,
+거부·통과 응답 모두에 `Access-Control-*` 헤더가 없음. `APIHandler`가 없으면 기동 실패. 기존 테스트 갱신:
+`test_llm_server.py`의 기동 인자 고정(`--allowed-origins` 추가), `test_llm_entry.py`의 가짜 `mlx_lm.server`
+(지금은 `main`만 있다).
 
 **수동 (result에 기록):**
 
@@ -274,7 +309,7 @@ result에 적는다. 실패하지 않는 테스트는 고친다.
 
 ## 7. 완료 기준
 
-1. §6 be e2e 1~9가 통과하고, 변이 확인에서 각 보안 테스트가 대응 변이에 실패한다.
+1. §6 be e2e 1~11이 통과하고, 변이 확인에서 각 보안 테스트가 대응 변이에 실패한다.
 2. `enableCors()`가 코드에 없고, 어떤 응답에도 `Access-Control-Allow-Origin: *`가 없다.
 3. `HOST` 기본값이 `127.0.0.1`이고 Docker 이미지는 `0.0.0.0`으로 뜬다.
 4. `pnpm dev`·패키징 desktop에서 §6 수동 항목이 된다.
