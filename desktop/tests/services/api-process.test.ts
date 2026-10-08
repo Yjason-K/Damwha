@@ -19,16 +19,38 @@ afterEach(() => {
 
 describe("apiChildEnv", () => {
   it("drops an inherited HF_TOKEN, keeps the rest, and pins HOST last", () => {
-    const env = apiChildEnv(LIVE, { HF_TOKEN: SHELL_TOKEN, PATH: "/usr/bin:/bin", HOST: "0.0.0.0" });
+    const env = apiChildEnv(LIVE, "dev", { HF_TOKEN: SHELL_TOKEN, PATH: "/usr/bin:/bin", HOST: "0.0.0.0" });
     expect("HF_TOKEN" in env).toBe(false);
     expect(env).toMatchObject({ PORT: "3001", DATABASE_URL: LIVE.DATABASE_URL, PATH: "/usr/bin:/bin", HOST: "127.0.0.1" });
     expect(JSON.stringify(env)).not.toContain("hf_");
+  });
+
+  it("dev: ALLOWED_ORIGINS is the Vite origin whatever the shell or config says, ALLOWED_HOSTS is gone", () => {
+    const env = apiChildEnv(
+      { ...LIVE, ALLOWED_ORIGINS: "https://evil.example", ALLOWED_HOSTS: "evil.example" },
+      "dev",
+      { ALLOWED_ORIGINS: "https://shell.example", ALLOWED_HOSTS: "shell.example" },
+    );
+    expect(env.ALLOWED_ORIGINS).toBe("http://localhost:5173");
+    expect("ALLOWED_HOSTS" in env).toBe(false);
+  });
+
+  it("packaged: neither key survives — the renderer is same-origin with the API", () => {
+    const env = apiChildEnv(
+      { ...LIVE, ALLOWED_ORIGINS: "https://evil.example" },
+      "packaged",
+      { ALLOWED_ORIGINS: "https://shell.example", ALLOWED_HOSTS: "shell.example" },
+    );
+    expect("ALLOWED_ORIGINS" in env).toBe(false);
+    expect("ALLOWED_HOSTS" in env).toBe(false);
+    expect(env.HOST).toBe("127.0.0.1");
   });
 });
 
 describe("launchDev", () => {
   it("spawns the dev API without HF_TOKEN, even when the shell carries one", () => {
     vi.stubEnv("HF_TOKEN", SHELL_TOKEN);
+    vi.stubEnv("ALLOWED_ORIGINS", "https://shell.example");
     let seen: SpawnOptions | undefined;
     const child = fakeChild();
     const handle = launchDev({
@@ -46,6 +68,7 @@ describe("launchDev", () => {
     expect(env.PORT).toBe("3001");
     expect(env.DATABASE_URL).toBe(LIVE.DATABASE_URL);
     expect(env.HOST).toBe("127.0.0.1");
+    expect(env.ALLOWED_ORIGINS).toBe("http://localhost:5173");
     // 상속분은 그대로 간다 — pnpm·nest가 PATH·HOME을 쓴다.
     expect(env.PATH).toBe(process.env.PATH);
     expect(seen?.detached).toBe(true);
@@ -56,6 +79,7 @@ describe("launchDev", () => {
 describe("launchPackaged", () => {
   it("forks the bundled API without HF_TOKEN, even when the shell carries one", () => {
     vi.stubEnv("HF_TOKEN", SHELL_TOKEN);
+    vi.stubEnv("ALLOWED_ORIGINS", "https://shell.example");
     let seen: Electron.ForkOptions | undefined;
     const child = Object.assign(new EventEmitter(), {
       pid: 5151,
@@ -78,6 +102,7 @@ describe("launchPackaged", () => {
     expect(env.PORT).toBe("3001");
     expect(env.DATABASE_URL).toBe(LIVE.DATABASE_URL);
     expect(env.HOST).toBe("127.0.0.1");
+    expect("ALLOWED_ORIGINS" in env).toBe(false);
     // packaged도 상속 env를 준다 — env를 주면 환경이 통째로 대체된다(PATH 없는 API가 sysctl을 못 찾았다).
     expect(env.PATH).toBe(process.env.PATH);
     child.emit("exit", 0);

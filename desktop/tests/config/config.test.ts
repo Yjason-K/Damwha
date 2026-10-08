@@ -197,6 +197,20 @@ describe("loadConfig", () => {
 });
 
 describe("loadConfig — app-owned keys", () => {
+  it("never lets config.json loosen the API's access lists", () => {
+    // 설정 파일 한 줄로 아무 웹페이지가 로컬 API를 읽게 되면 안 된다(spec 2026-10-08 §3.6). HOST와 같은 규칙이다.
+    const dir = mkdtempSync(join(tmpdir(), "damwha-cfg-"));
+    writeFileSync(
+      join(dir, "config.json"),
+      JSON.stringify({ ALLOWED_ORIGINS: "https://evil.example", ALLOWED_HOSTS: "evil.example" }),
+    );
+    const c = loadConfig(dir);
+    expect(c.env.ALLOWED_ORIGINS).toBeUndefined();
+    expect(c.env.ALLOWED_HOSTS).toBeUndefined();
+    expect(c.warning).toMatch(/ALLOWED_ORIGINS/);
+    expect(c.warning).toMatch(/ALLOWED_HOSTS/);
+  });
+
   it("says out loud that it discarded an app-owned key the file tried to set", () => {
     // 조용히 버리면 사용자는 자기가 적은 값이 왜 안 먹는지 알 길이 없다. EXTRA_PATH와 같은
     // 규칙이다 — 무시했으면 왜 무시했는지 적는다.

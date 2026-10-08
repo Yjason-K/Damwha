@@ -116,6 +116,16 @@ describe("probeHealth", () => {
     expect(r).toBe("no-response");
   });
 
+  it("sends no headers — the API lets a header-less client through (spec 2026-10-08 §3.6)", async () => {
+    // Origin·Sec-Fetch-Site를 실으면 be의 접근 제어가 브라우저로 보고 판정한다. init에는 signal만 있어야 한다.
+    let seen: Record<string, unknown> | undefined;
+    await probeHealth("http://127.0.0.1:3000", async (_url, init) => {
+      seen = init as Record<string, unknown>;
+      return { status: 200 } as Response;
+    });
+    expect(Object.keys(seen ?? {})).toEqual(["signal"]);
+  });
+
   it("asks for /api/health under the given base", async () => {
     let asked = "";
     await probeHealth("http://127.0.0.1:4100", async (url) => {
