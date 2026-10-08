@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import types
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 import pytest
@@ -35,15 +36,30 @@ def fake_server(monkeypatch, capsys, hook_calls):
     seen = {}
 
     def server_main():
+        seen["guarded_at_main"] = getattr(FakeHandler, "_damwha_guarded", False)
         seen["argv"] = list(sys.argv)
         seen["pid"] = os.getpid()
         seen["stderr_before"] = capsys.readouterr().err
 
     def _module_getattr(name):
+        if name == "APIHandler":
+            return FakeHandler
         if name != "main":
             raise AttributeError(name)
         seen["hook_calls_at_import"] = list(hook_calls)
         return server_main
+
+    class FakeHandler(BaseHTTPRequestHandler):
+        def _set_cors_headers(self):
+            pass
+
+        def do_GET(self):
+            pass
+
+        def do_POST(self):
+            pass
+
+    seen["handler"] = FakeHandler
 
     pkg = types.ModuleType("mlx_lm")
     pkg.__path__ = []
@@ -180,3 +196,26 @@ def test_importing_the_module_does_not_import_the_db_layer():
     )
 
     assert r.stdout.strip() == "[]"
+
+
+def test_guards_the_handler_before_server_main(monkeypatch, fake_server):
+    """spec 2026-10-08 §3.8 — 서버가 뜨기 전에 APIHandler가 감싸져 있어야 한다."""
+    _run(monkeypatch, ["/b/llm_entry.py", "--run-id=r", "--host", "127.0.0.1", "--port", "8000"])
+
+    assert fake_server["guarded_at_main"] is True
+
+
+def test_refuses_to_start_without_an_apihandler(monkeypatch, fake_server):
+    """mlx_lm이 바뀌어 APIHandler가 사라지면 가드 없이 뜨지 않고 기동이 실패한다."""
+    server = sys.modules["mlx_lm.server"]
+    original = server.__getattr__
+
+    def no_handler(name):
+        if name == "APIHandler":
+            raise AttributeError(name)
+        return original(name)
+
+    monkeypatch.setattr(server, "__getattr__", no_handler)
+    with pytest.raises(RuntimeError):
+        _run(monkeypatch, ["/b/llm_entry.py", "--run-id=r"])
+    assert "argv" not in fake_server
