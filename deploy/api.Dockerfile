@@ -66,6 +66,8 @@ COPY --from=seed /seed ./be/storage
 # cwd = be/ so STORAGE_ROOT=./storage resolves like the dev setup
 WORKDIR /repo/be
 ENV NODE_ENV=production
+# API 기본 HOST는 127.0.0.1이다(loopback). 컨테이너는 포트 매핑·터널로 바깥에서 닿아야 한다.
+ENV HOST=0.0.0.0
 EXPOSE 3000
 # migrate.ts is its own entrypoint (require.main) — apply pending SQL, then serve
 CMD ["sh", "-c", "node dist/database/migrate.js && node dist/main.js"]
