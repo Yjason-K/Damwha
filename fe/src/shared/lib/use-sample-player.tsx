@@ -51,6 +51,8 @@ export function useSamplePlayer() {
   const element = (
     <audio
       ref={audioRef}
+      // 메인 플레이어와 같은 이유로 CORS 모드다(pages/meeting.tsx).
+      crossOrigin="anonymous"
       preload="none"
       onTimeUpdate={(e) =>
         setElapsed(Math.max(0, e.currentTarget.currentTime - startRef.current))
