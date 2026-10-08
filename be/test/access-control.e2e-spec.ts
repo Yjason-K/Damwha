@@ -1,6 +1,8 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { request as rawRequest, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { Test } from '@nestjs/testing';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
@@ -175,13 +177,25 @@ describe('local API access control', () => {
     it('대조군: 허용된 요청이면 큰 urlencoded도 413', async () => {
       await http().post('/api/folders').set('Host', SELF_HOST).type('form').send(bigForm).expect(413);
     });
-    it('다른 Origin의 큰 JSON은 413이 아니라 403', async () => {
-      await http().post('/api/folders').set('Host', SELF_HOST).set('Origin', EVIL)
-        .set('Content-Type', 'application/json').send(bigJson).expect(403);
-    });
-    it('다른 Origin의 큰 urlencoded는 413이 아니라 403', async () => {
-      await http().post('/api/folders').set('Host', SELF_HOST).set('Origin', EVIL).type('form').send(bigForm).expect(403);
-    });
+    /** Content-Length를 파서 상한보다 크게 선언하고 1KB만 쓴 채 요청을 끝내지 않는다. 서버가 응답할 때 우리는 쓰고 있지
+     *  않으므로 ECONNRESET 경합이 없다. 파서가 먼저 도는 구성(변이 M5)은 본문을 기다리느라 아예 응답하지 않는다 → 'no-response'. */
+    const statusOfOversized = async (contentType: string, declared: number): Promise<number | 'no-response'> => {
+      const srv = app.getHttpServer() as Server;
+      if (!srv.listening) await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+      const { port } = srv.address() as AddressInfo;
+      return new Promise((resolve) => {
+        const req = rawRequest({ host: '127.0.0.1', port, method: 'POST', path: '/api/folders', headers: {
+          Host: SELF_HOST, Origin: EVIL, 'Content-Type': contentType, 'Content-Length': String(declared) } });
+        const t = setTimeout(() => { resolve('no-response'); req.destroy(); }, 2000);
+        req.on('response', (res) => { clearTimeout(t); resolve(res.statusCode!); res.resume(); req.destroy(); });
+        req.on('error', () => { clearTimeout(t); resolve('no-response'); });
+        req.write('x'.repeat(1024));
+      });
+    };
+    it('다른 Origin의 큰 JSON은 413이 아니라 403', async () =>
+      expect(await statusOfOversized('application/json', 1_500_020)).toBe(403));
+    it('다른 Origin의 큰 urlencoded는 413이 아니라 403', async () =>
+      expect(await statusOfOversized('application/x-www-form-urlencoded', 200_020)).toBe(403));
   });
 
   describe('11·경로 대소문자', () => {
