@@ -105,7 +105,9 @@ def test_browser_or_rebound_request_is_refused(guarded, method, extra):
 def test_install_is_idempotent():
     handler = _make_handler()
     llm_guard.install(handler, None)
+    wrapped = handler.do_GET
     llm_guard.install(handler, None)  # 두 번 감싸지 않는다
+    assert handler.do_GET is wrapped
     httpd, port = _serve(handler)
     try:
         assert _request(port, "GET", "/", GOOD)[0] == 200

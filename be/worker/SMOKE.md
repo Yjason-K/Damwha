@@ -269,6 +269,8 @@ TRANSIENT(재시도)다. 비워 둔 기본값에서는 PATH를 보지 않는다 
 `LENS_LLM_SERVER_BIN` 탈출구와 이미 떠 있던 서버의 재사용. mlx-lm을 올리거나 바꿀 때는
 `be/worker/tests/test_llm_guard.py::test_real_mlx_server_path_is_guarded`를 models venv에서 돌린다 — `APIHandler`의 모양이
 바뀌면 가드가 `RuntimeError`로 기동을 거부한다.
+embed 서비스(`embed_service.py`)도 FastAPI 미들웨어 `_refuse_browsers`로 같은 `browser_guard` 규칙을 적용한다 —
+`Origin`·`Sec-Fetch-Site`가 실리면 403, `Host`는 loopback이거나 설정한 `embed_service_host`여야 한다.
 
 함정 다섯:
 
