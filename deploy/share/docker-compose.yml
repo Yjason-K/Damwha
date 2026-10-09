@@ -19,3 +19,5 @@ services:
       - share_data:/data
 volumes:
   share_data:
+    # 이름을 고정한다 — 안 그러면 프로젝트 이름이 붙어 damwha-share_share_data가 된다. 백업 제외 규칙(README)이 이 이름을 가리킨다.
+    name: damwha_share_data

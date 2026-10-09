@@ -27,6 +27,6 @@ cloudflared를 Docker로 돌린다면 이 compose의 `ports`를 지우고 같은
 - 업로드만 긴급 차단: compose의 `UPLOADS_ENABLED: "false"` → `docker compose up -d`. 열람·삭제는 그대로.
 - 일일 상한·IP별 제한: `DAILY_MAX_UPLOADS`, `DAILY_MAX_BYTES`, `UPLOAD_LIMIT_PER_MIN`, `READ_LIMIT_PER_MIN`, `DELETE_LIMIT_PER_MIN`.
   카운터는 메모리라 재시작하면 0부터 센다.
-- **백업에서 `share_data` 볼륨을 뺀다.** 백업에 남으면 만료 삭제 약속이 깨진다.
+- **백업에서 `damwha_share_data` 볼륨을 뺀다.** 백업에 남으면 만료 삭제 약속이 깨진다.
 - 만료 파일은 서버가 10분마다 지운다. 서버가 꺼져 있던 동안 만료된 것은 다시 켜질 때 지운다.
 - 로그(`docker compose logs share`)에는 메서드·경로·상태만 남는다.
