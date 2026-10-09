@@ -202,6 +202,9 @@ export class MeetingsService {
   // 삭제 토큰이 남고, 커밋 뒤 한 번 철회를 시도한다. 오프라인이면 pending으로 응답하고 스위퍼가 이어 간다.
   async remove(id: string): Promise<RevokeSummary> {
     const result = await this.db.withTransaction(async (c) => {
+      // 회의 행을 먼저 잠근다 — 공유 확정(회의 FOR UPDATE → activate)이 내림과 삭제 사이에 커밋하면 새 active가
+      // meeting_id NULL·키를 단 채 남아 아무도 멈추지 않는 링크가 된다. 잠그면 확정이 끝난 뒤에 그 행까지 내린다.
+      await this.shares.lockMeeting(c, id);
       const shares = await this.shares.markActiveRevokePending(c, id);
       const deleted = await this.meetings.deleteById(c, id);
       return { deleted, shares };

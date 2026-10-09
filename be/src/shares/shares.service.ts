@@ -213,7 +213,12 @@ export class SharesService {
 
   async stop(meetingId: string): Promise<{ share: ShareView; pending: boolean }> {
     this.assertMeetingId(meetingId);
-    const rows = await this.db.withTransaction((c) => this.repo.markActiveRevokePending(c, meetingId));
+    // 회의 잠금 먼저 — 진행 중인 확정이 있으면 끝나기를 기다렸다가 그 새 active를 내린다(안 잠그면 내릴 행을
+    // 못 보고 404가 된다).
+    const rows = await this.db.withTransaction(async (c) => {
+      await this.repo.lockMeeting(c, meetingId);
+      return this.repo.markActiveRevokePending(c, meetingId);
+    });
     if (rows.length === 0) throw new NotFoundException({ statusCode: 404, code: 'NO_ACTIVE_SHARE', message: 'no active share for this meeting' });
     const row = await this.tryRevoke(rows[0]);
     return { share: this.toView(row), pending: row.status === 'revoke_pending' };

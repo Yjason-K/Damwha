@@ -79,6 +79,62 @@ describe('공유 수명 주기', () => {
     expect(fake.objects.size).toBe(0);
   });
 
+  /**
+   * 공유 확정 트랜잭션(회의 FOR UPDATE → 기존 active 내림 → 새 행 activate)을 다른 연결에서 열어 둔 채로 `run`을
+   * 시작하고, `run`이 잠금을 기다리기 시작하면 확정을 커밋한다. 확정이 회의 잠금을 쥐고 있는 동안 끼어든 쓰기가
+   * 새 active를 놓치는지 본다.
+   */
+  async function raceWithConfirm(meetingId: string, run: () => Promise<request.Response>) {
+    const mk = async (status: string) => (await db.pool.query(
+      `INSERT INTO meeting_share(meeting_id,status,remote_id,delete_token,scope,duration_days,consent_version,consented_at,share_key,expires_at)
+       VALUES($1,$2,$3,$4,'{}',7,1,now(),$5, now() + interval '7 days') RETURNING id`,
+      [meetingId, status, newShareId(7), newDeleteToken(), status === 'active' ? 'OLD-KEY' : null],
+    )).rows[0].id as string;
+    const creating = await mk('creating');
+    const confirm = await db.pool.connect();
+    try {
+      await confirm.query('BEGIN');
+      await confirm.query('SELECT 1 FROM meeting WHERE id=$1 FOR UPDATE', [meetingId]);
+      await confirm.query(`UPDATE meeting_share SET status='revoke_pending', share_key=NULL WHERE meeting_id=$1 AND status='active'`, [meetingId]);
+      await confirm.query(`UPDATE meeting_share SET status='active', share_key='NEW-KEY' WHERE id=$1`, [creating]);
+      const pending = run();
+      const end = Date.now() + 3000;
+      for (;;) { // 요청이 잠금을 기다리기 시작할 때까지
+        const waiting = await db.pool.query(`SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND datname=current_database()`);
+        if (waiting.rowCount) break;
+        if (Date.now() > end) throw new Error('the request never waited on the confirm transaction');
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      await confirm.query('COMMIT');
+      return { res: await pending, creating };
+    } finally {
+      confirm.release();
+    }
+  }
+
+  it('회의 삭제가 진행 중인 공유 확정과 겹쳐도 새 링크가 주인 없는 active로 남지 않는다', async () => {
+    const { meetingId } = await seedSharedMeeting(db.pool);
+    const { res, creating } = await raceWithConfirm(meetingId, () => request(srv()).delete(`/meetings/${meetingId}`).then((r) => r));
+    expect(res.status).toBe(200);
+    const r = (await db.pool.query(`SELECT * FROM meeting_share WHERE id=$1`, [creating])).rows[0];
+    expect(r).toMatchObject({ meeting_id: null, share_key: null });
+    expect(r.status).not.toBe('active');
+    expect((await db.pool.query(`SELECT 1 FROM meeting_share WHERE status='active'`)).rowCount).toBe(0);
+  });
+
+  it('공유 중지가 진행 중인 공유 확정과 겹치면 확정을 기다렸다가 새 링크를 중지한다(404가 아니다)', async () => {
+    const { meetingId } = await seedSharedMeeting(db.pool);
+    await db.pool.query(
+      `INSERT INTO meeting_share(meeting_id,status,remote_id,delete_token,scope,duration_days,consent_version,consented_at,share_key,expires_at)
+       VALUES($1,'active',$2,$3,'{}',7,1,now(),'OLD-KEY', now() + interval '7 days')`,
+      [meetingId, newShareId(7), newDeleteToken()],
+    );
+    const { res, creating } = await raceWithConfirm(meetingId, () => request(srv()).delete(`/meetings/${meetingId}/share`).then((r) => r));
+    expect(res.status).toBe(200);
+    expect(res.body.share.id).toBe(creating);
+    expect((await db.pool.query(`SELECT 1 FROM meeting_share WHERE status='active'`)).rowCount).toBe(0);
+  });
+
   it('공유가 없는 회의 삭제는 none', async () => {
     const { meetingId } = await seedSharedMeeting(db.pool);
     expect((await request(srv()).delete(`/meetings/${meetingId}`).expect(200)).body).toEqual({ share_revoke: 'none', share_expires_at: null });
