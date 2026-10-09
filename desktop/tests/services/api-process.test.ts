@@ -45,6 +45,16 @@ describe("apiChildEnv", () => {
     expect("ALLOWED_HOSTS" in env).toBe(false);
     expect(env.HOST).toBe("127.0.0.1");
   });
+
+  it("packaged: an inherited SHARE_API_URL is dropped — the API uses its built-in production address", () => {
+    const out = apiChildEnv({ PORT: "3000" }, "packaged", { SHARE_API_URL: "http://localhost:8787", PATH: "/usr/bin" });
+    expect(out.SHARE_API_URL).toBeUndefined();
+  });
+
+  it("dev: SHARE_API_URL passes through so be/.env or the shell can point at pnpm share:dev", () => {
+    const out = apiChildEnv({ PORT: "3000" }, "dev", { SHARE_API_URL: "http://localhost:8787", PATH: "/usr/bin" });
+    expect(out.SHARE_API_URL).toBe("http://localhost:8787");
+  });
 });
 
 describe("launchDev", () => {
