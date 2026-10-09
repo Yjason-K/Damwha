@@ -92,6 +92,10 @@ it('메모가 없으면 note를 골라도 키가 없다, 발화 0개면 빈 배�
   expect(p.transcript).toEqual([]);
 });
 
+it('빈(공백뿐인) 메모는 note를 골라도 키가 없다', () => {
+  for (const note of ['', '  \n\t ']) expect(build({}, { ...snap(), note })).not.toHaveProperty('note');
+});
+
 it('시각과 언어', () => {
   const p = build({});
   expect(p).toMatchObject({ v: 1, created_at: NOW.toISOString(), ui_language: 'ko' });

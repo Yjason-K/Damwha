@@ -68,7 +68,8 @@ export function buildPayload(
       linkable: scope.transcript && l.primary?.shared === true,
     }));
   }
-  if (scope.note && snap.note !== null) payload.note = { body_md: snap.note };
+  // 빈 메모는 키를 빼야 뷰어가 빈 "메모" 섹션을 그리지 않는다.
+  if (scope.note && snap.note !== null && snap.note.trim() !== '') payload.note = { body_md: snap.note };
   payload.speakers = [...speakers.values()];
   return payload;
 }

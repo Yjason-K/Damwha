@@ -46,6 +46,11 @@ it('렌즈 0개·요약 세그먼트 0개도 빈 제목을 남기지 않는다',
   expect(screen.queryByRole('heading', { name: '발화 기록' })).toBeNull();
 });
 
+it('공백뿐인 메모는 빈 "메모" 제목을 남기지 않는다', () => {
+  render(<ShareDocument payload={{ ...full(), note: { body_md: '  \n\t ' } }} lang="ko" expiresAt={null} />);
+  expect(screen.queryByRole('heading', { name: '메모' })).toBeNull();
+});
+
 it('이름이 없는 화자는 "화자 N"으로 — N은 ref 번호다', () => {
   render(<ShareDocument payload={full()} lang="ko" expiresAt="2026-10-16T00:00:00.000Z" />);
   const transcript = screen.getByRole('region', { name: '발화 기록' });

@@ -109,7 +109,7 @@ export function ShareDocument({ payload, lang, expiresAt }: { payload: SharePayl
         </Section>
       )}
 
-      {payload.note && (
+      {payload.note && payload.note.body_md.trim() !== '' && (
         <Section id="sv-note" title={s.note}>
           <Markdown body={payload.note.body_md} />
         </Section>
