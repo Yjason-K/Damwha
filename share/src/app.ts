@@ -4,6 +4,7 @@ import { DELETE_TOKEN_RE, SHARE_ID_RE, SHARE_MAX_ENVELOPE_BYTES, shareIdDays } f
 import { readLimited } from './body.js';
 import type { ShareConfig } from './config.js';
 import { json, withSecurityHeaders } from './http.js';
+import { DailyBudget, WindowLimiter } from './limits.js';
 import type { DiskStore } from './store.js';
 
 export interface AppDeps {
@@ -25,9 +26,18 @@ const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 const sameHash = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
 export function createApp(deps: AppDeps) {
-  const { store } = deps;
+  const { store, config } = deps;
+  const limiters = {
+    upload: new WindowLimiter(config.limits.upload),
+    read: new WindowLimiter(config.limits.read),
+    delete: new WindowLimiter(config.limits.delete),
+  };
+  const daily = new DailyBudget(config.dailyMaxUploads, config.dailyMaxBytes);
+  const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1']);
 
-  function ttlMs(_req: Request, days: number): number {
+  /** 개발용 만료 단축은 로컬 Host에서만 — Tunnel을 거친 요청의 Host는 공개 도메인이다. production은 readConfig가 이미 null로 둔다. */
+  function ttlMs(req: Request, days: number): number {
+    if (config.devExpirySeconds !== null && LOCAL_HOSTS.has(new URL(req.url).hostname)) return config.devExpirySeconds * 1000;
     return days * DAY_MS;
   }
 
@@ -35,6 +45,7 @@ export function createApp(deps: AppDeps) {
   const replacing = new Set<string>();
 
   async function create(req: Request, now: Date): Promise<Response> {
+    if (!config.uploadsEnabled) return json(503, { code: 'UPLOADS_DISABLED' });
     const days = Number(req.headers.get('X-Share-Days'));
     if (!isShareDurationDays(days)) return json(400, { code: 'BAD_DURATION' });
     // id·토큰은 be가 만든다(spec selfhost-v2 §2.4) — be가 업로드 전에 저장해 두므로 응답을 잃어도 철회할 수 있다.
@@ -78,8 +89,16 @@ export function createApp(deps: AppDeps) {
     if (body === 'too_large') return json(413, { code: 'TOO_LARGE' });
     if (body.byteLength === 0) return json(400, { code: 'EMPTY' });
 
+    const ticket = daily.reserve(body.byteLength, now);
+    if (!ticket) return json(503, { code: 'DAILY_CAP' });
+
     const expiresAt = new Date(now.getTime() + ttlMs(req, a.days)).toISOString();
-    await store.put(a.id, body, { expires_at: expiresAt, token_hash: sha256(a.deleteToken), size: body.byteLength, created_at: now.toISOString() });
+    try {
+      await store.put(a.id, body, { expires_at: expiresAt, token_hash: sha256(a.deleteToken), size: body.byteLength, created_at: now.toISOString() });
+    } catch (e) {
+      daily.release(ticket);
+      throw e;
+    }
     if (a.replaceId !== null) {
       try {
         await store.delete(a.replaceId);
@@ -87,6 +106,7 @@ export function createApp(deps: AppDeps) {
         // 기존 공유를 못 지웠으면 새 공유도 남기지 않는다. 이때 기존 링크도 이미 막혔을 수 있다 —
         // 메타를 먼저 지우기 때문이다. 실패는 "닫히는 쪽"이다(spec selfhost-v2 §2.4).
         await store.delete(a.id).catch(() => undefined);
+        daily.release(ticket);
         throw e;
       }
     }
@@ -113,15 +133,23 @@ export function createApp(deps: AppDeps) {
     return new Response(null, { status: 204 });
   }
 
-  async function route(req: Request, _info: RequestInfo, now: Date): Promise<Response> {
+  async function route(req: Request, info: RequestInfo, now: Date): Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname === '/healthz' && req.method === 'GET') return json(200, { ok: true });
     const m = url.pathname.match(API);
     if (m) {
       const id = m[1];
-      if (id === undefined && req.method === 'POST') return create(req, now);
-      if (id !== undefined && req.method === 'GET') return read(id, now);
-      if (id !== undefined && req.method === 'DELETE') return remove(req, id);
+      const t = now.getTime();
+      if (id === undefined && req.method === 'POST') {
+        return limiters.upload.allow(info.ip, t) ? create(req, now) : json(429, { code: 'RATE_LIMITED' });
+      }
+      if (id !== undefined && req.method === 'GET') {
+        return limiters.read.allow(info.ip, t) ? read(id, now) : json(429, { code: 'RATE_LIMITED' });
+      }
+      if (id !== undefined && req.method === 'DELETE') {
+        // 삭제는 조회와 따로 센다 — 조회가 몰려도 "지금 중지"가 막히지 않는다.
+        return limiters.delete.allow(info.ip, t) ? remove(req, id) : json(429, { code: 'RATE_LIMITED' });
+      }
       return json(405, { code: 'METHOD_NOT_ALLOWED' });
     }
     return json(404, { code: 'NOT_FOUND' });
