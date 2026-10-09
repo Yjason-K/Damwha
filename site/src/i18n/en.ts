@@ -94,7 +94,7 @@ export const en = {
     items: [
       { q: "Is it free?", a: "Yes. Damwha is open source under the MIT license." },
       { q: "Do I need an internet connection?", a: "Only to download models the first time they're used, to check for updates, and to create or stop a share link. Recording, transcription and search work offline." },
-      { q: "Can I show a meeting to someone else?", a: "Yes. Share from the meeting screen sends a link with what you choose — summary, action items, transcript, notes. It's encrypted on your Mac before upload and the server never has the key. The link stops after 1, 7 or 30 days, whichever you pick, and you can stop it any time. Audio is never shared." },
+      { q: "Can I show a meeting to someone else?", a: "Yes. Share from the meeting screen sends a link with what you choose — summary, action items, transcript, notes. It's encrypted on your Mac before upload and the server stores only the ciphertext and doesn't store the key. The link stops after 1, 7 or 30 days, whichever you pick, and you can stop it any time. Audio is never shared." },
       { q: "Does it run on Intel Macs or Windows?", a: "No. The ML pipeline runs on Apple's MLX, which needs Apple Silicon." },
       { q: "Is the app in English?", a: "English UI is rolling out. Settings and the app menu are translated, and the remaining screens follow in upcoming releases. Conversations in Korean, English, Japanese and Chinese can be transcribed, and summaries can be written in Korean or English." },
       { q: "Can it record live?", a: "Yes. Live recording shows a running transcript preview, and the full pipeline runs when you stop." },
