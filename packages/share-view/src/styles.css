@@ -1,10 +1,19 @@
+/*
+ * 색 값은 fe/src/index.css의 토큰을 그대로 옮긴 것이다(뷰어는 fe CSS를 import할 수 없다). 역할 대응:
+ * --sv-bg = --surface-card(--gray-0), --sv-fg = --text-primary(--gray-12), --sv-muted = --text-secondary(--gray-9),
+ * --sv-border = --border-default(--gray-4), --sv-chip = --surface-sunken(--gray-2),
+ * --sv-accent = --accent-text(--accent-11, 링크·시각), --sv-link-bg = --accent-bg(--accent-2), --sv-focus = --focus-ring.
+ * 다크는 fe의 `.dark` 블록 값이다. 값이 바뀌면 fe/src/index.css를 따라간다.
+ */
 .sv-root {
   --sv-bg: #ffffff;
-  --sv-fg: #1a1a1a;
-  --sv-muted: #6b6b6b;
-  --sv-border: #e6e6e6;
-  --sv-chip: #f2f2f2;
-  --sv-accent: #3b5bdb;
+  --sv-fg: #0a0a0a;
+  --sv-muted: #5a5a5c;
+  --sv-border: #e5e5e5;
+  --sv-chip: #f7f7f7;
+  --sv-accent: #0a6e56;
+  --sv-accent-bg: #dcf7ee;
+  --sv-focus: 0 0 0 2px #ffffff, 0 0 0 4px #00d4a4;
   max-width: 760px;
   margin: 0 auto;
   padding: 32px 16px 48px;
@@ -14,12 +23,14 @@
 }
 @media (prefers-color-scheme: dark) {
   .sv-root {
-    --sv-bg: #161616;
-    --sv-fg: #ececec;
-    --sv-muted: #9a9a9a;
-    --sv-border: #2c2c2c;
-    --sv-chip: #232323;
-    --sv-accent: #8ea2ff;
+    --sv-bg: #18181a;
+    --sv-fg: #ededed;
+    --sv-muted: #a8a8ae;
+    --sv-border: #2a2a2e;
+    --sv-chip: #0c0c0d;
+    --sv-accent: #4fe0b9;
+    --sv-accent-bg: #0f2a23;
+    --sv-focus: 0 0 0 2px #18181a, 0 0 0 4px #2fdcae;
   }
 }
 .sv-h1 { font-size: 24px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.02em; }
@@ -41,4 +52,6 @@
 .sv-text { grid-column: 1 / -1; margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .sv-md { overflow-wrap: anywhere; }
 .sv-link { color: var(--sv-accent); }
+.sv-time-link:hover { background: var(--sv-accent-bg); }
+.sv-time-link:focus-visible { outline: none; box-shadow: var(--sv-focus); border-radius: 4px; }
 .sv-footer { border-top: 1px solid var(--sv-border); padding-top: 16px; }
