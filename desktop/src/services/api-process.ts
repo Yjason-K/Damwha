@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "child_process";
 import type { UtilityProcess } from "electron";
 import { nodeChildEnv, type ApiEnv } from "../config/config";
+import { VITE_ORIGIN } from "../dev/vite-origin";
 import type { ProcessHandle } from "../process/handle";
 import { makeSink, sinkTails } from "../process/output";
 import type { ForkFn, SpawnFn } from "../process/tool-runner";
@@ -28,6 +29,8 @@ export interface LaunchOptions {
   forkFn?: ForkFn;
 }
 
+export type ApiLaunchMode = "dev" | "packaged";
+
 /**
  * API 자식이 받는 env **전체** — 두 런처가 이것 하나를 쓴다.
  *
@@ -38,12 +41,20 @@ export interface LaunchOptions {
  *   부르는데, PATH가 없으면 execvp가 /usr/bin:/bin으로 되돌아가고 /usr/sbin/sysctl은 거기 없어 ENOENT — packaged
  *   앱만 chip: null을 보고했다. utilityProcess의 env 타입이 Record<string, string>이라 값 없는 키도 여기서 빠진다.
  * - HOST가 **마지막**이다. config.json 한 줄로 LAN에 열리지 않는다.
+ * - ALLOWED_ORIGINS·ALLOWED_HOSTS도 여기서 **최종값**을 정한다(spec 2026-10-08 §3.6). 상속 env나 config.json에서 온
+ *   값은 남기지 않는다: packaged는 렌더러가 API와 같은 origin이라 둘 다 없고, dev는 Vite origin 하나다.
+ *   (dev의 be는 be/.env를 dotenv로 읽지만 dotenv는 이미 있는 env를 덮지 않으므로 ALLOWED_ORIGINS는 이 값이 이긴다.)
  */
 export function apiChildEnv(
   env: ApiEnv,
+  mode: ApiLaunchMode,
   inherited: Record<string, string | undefined> = process.env,
 ): Record<string, string> {
-  return { ...nodeChildEnv(env, inherited), HOST: "127.0.0.1" };
+  const out: Record<string, string> = { ...nodeChildEnv(env, inherited), HOST: "127.0.0.1" };
+  delete out.ALLOWED_ORIGINS;
+  delete out.ALLOWED_HOSTS;
+  if (mode === "dev") out.ALLOWED_ORIGINS = VITE_ORIGIN;
+  return out;
 }
 
 /**
@@ -109,7 +120,7 @@ export function launchPackaged(options: LaunchOptions): ProcessHandle {
     cwd: options.cwd,
     stdio: "pipe",
     // 상속 env·HF_TOKEN 제외·HOST 고정 — 그 이유는 apiChildEnv에 있다. launchDev와 같은 함수다.
-    env: apiChildEnv(options.env),
+    env: apiChildEnv(options.env, "packaged"),
   });
   // utilityProcess.pid는 fork() 직후 undefined이고 'spawn' 이벤트에서야 채워진다
   // (Fix round 2 실측). 동기로 한 번만 잡아 두면 packaged 모드에서 이 handle의 pid가
@@ -186,7 +197,7 @@ export function launchDev(options: LaunchOptions): ProcessHandle {
     // 그룹을 못 찾고, pnpm만 죽어 nest가 만든 손자 API가 남는다.
     detached: true,
     // 상속 env·HF_TOKEN 제외·HOST 고정 — launchPackaged와 같은 함수다 (apiChildEnv).
-    env: apiChildEnv(options.env),
+    env: apiChildEnv(options.env, "dev"),
   });
   const pid = child.pid;
   child.stdout?.on("data", (b: Buffer) => sink.write(b, false));

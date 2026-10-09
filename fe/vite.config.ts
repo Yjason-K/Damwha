@@ -10,6 +10,9 @@ export default defineConfig({
   root: fileURLToPath(new URL(".", import.meta.url)),
   envDir: fileURLToPath(new URL(".", import.meta.url)),
   plugins: [react(), tailwindcss()],
+  // 5173 고정. be의 ALLOWED_ORIGINS와 desktop dev(VITE_ORIGIN)가 이 origin을 전제한다 — 포트가 차 있을 때
+  // 다음 포트로 옮겨 가면 조용히 403이 나므로, 옮기지 말고 실패한다(spec 2026-10-08 §3.4).
+  server: { port: 5173, strictPort: true },
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

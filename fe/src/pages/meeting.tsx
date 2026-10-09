@@ -797,6 +797,9 @@ function MeetingView({
           key={meeting.status}
           ref={audioRef}
           src={meeting.audioUrl}
+          // dev는 API가 다른 origin이다(:5173 → :3000). CORS 모드여야 브라우저가 Origin을 싣고, API의 접근 제어가
+          // 허용 Origin으로 통과시킨다 — no-cors면 Sec-Fetch-Site만 보고 403이다(spec 2026-10-08 §3.7).
+          crossOrigin="anonymous"
           preload="metadata"
           className="hidden"
           onLoadedMetadata={(e) => {

@@ -262,6 +262,16 @@ managed=false에서 서버가 없을 때의 실패 경로: `httpx.RequestError` 
 TRANSIENT(재시도)다. 비워 둔 기본값에서는 PATH를 보지 않는다 — 같은 인터프리터로
 `-m damwha_worker.llm_entry`를 띄우므로, 이 실패가 나면 그 환경에 mlx-lm이 없는 것이다.
 
+**브라우저 금지 가드** (spec 2026-10-08 §3.8). LLM 서버는 `mlx_lm.server`의 `--allowed-origins` 기본값 `*` 때문에
+아무 웹페이지가 읽을 수 있었다. `llm_entry`가 서버를 띄우기 전에 `llm_guard.py`가 `APIHandler`의 메서드를 제자리에서
+감싸, `Origin`·`Sec-Fetch-Site`가 실린 요청과 loopback·bind 이름이 아닌 `Host`를 403으로 거부하고 CORS 헤더를 내지 않는다.
+`_set_cors_headers`가 `--allowed-origins`의 유일한 소비자라 워커는 그 플래그를 넘기지 않는다. 덮지 않는 것:
+`LENS_LLM_SERVER_BIN` 탈출구와 이미 떠 있던 서버의 재사용. mlx-lm을 올리거나 바꿀 때는
+`be/worker/tests/test_llm_guard.py::test_real_mlx_server_path_is_guarded`를 models venv에서 돌린다 — `APIHandler`의 모양이
+바뀌면 가드가 `RuntimeError`로 기동을 거부한다.
+embed 서비스(`embed_service.py`)도 FastAPI 미들웨어 `_refuse_browsers`로 같은 `browser_guard` 규칙을 적용한다 —
+`Origin`·`Sec-Fetch-Site`가 실리면 403, `Host`는 loopback이거나 설정한 `embed_service_host`여야 한다.
+
 함정 다섯:
 
 - **추론(thinking)을 끄는 키는 런타임마다 다르다 — 그래서 둘 다 보낸다.** Ollama는

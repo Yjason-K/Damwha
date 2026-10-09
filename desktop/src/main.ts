@@ -91,6 +91,7 @@ import { MODEL_READINESS_KEY, parseModelReadiness, type ReadinessEntry } from ".
 import { psInfo, spawnPostmaster, stopOrphanPostmaster } from "./services/postgres/handle";
 import { embeddedPostgresSpec, externalPostgresSpec, PG_FAST_GRACE_MS, PG_IMMEDIATE_GRACE_MS, PG_TOOL_DEADLINES } from "./services/postgres/service";
 import { describeToolFailure, runTool, toolOk } from "./process/tool-runner";
+import { VITE_ORIGIN } from "./dev/vite-origin";
 import type {
   LaunchContext,
   LaunchResult,
@@ -140,8 +141,6 @@ const RENDERER_ASK_TIMEOUT_MS = 3_000;
  * 침묵을 줄이려고 거는 화면이지 종료의 전제가 아니므로, 안 뜨면 로그만 남기고 지나간다.
  */
 const QUIT_SCREEN_TIMEOUT_MS = 5_000;
-/** 개발에서 렌더러는 Vite가 서빙한다. 그 포트는 Vite 기본값이다. */
-const VITE_ORIGIN = "http://localhost:5173";
 
 let win: BrowserWindow | null = null;
 /** dev에서만 쓰인다. packaged는 API 자신의 origin을 로드하므로 Vite가 없다. */

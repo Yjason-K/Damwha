@@ -1778,3 +1778,14 @@ test("완료 필터를 켠 채 결정 탭으로 가도 결정은 열림으로 �
   expect(decisionCalls.length).toBeGreaterThan(0);
   for (const u of decisionCalls) expect(u).toContain("completion_status=open");
 });
+
+test("오디오는 CORS 모드로 요청한다 — dev cross-origin에서 Origin이 실려야 API가 통과시킨다", async () => {
+  const { container } = renderShell();
+  await screen.findByRole("heading", {
+    level: 1,
+    name: "기획회의 — UI 개선안",
+  });
+  expect(container.querySelector("audio")!.getAttribute("crossorigin")).toBe(
+    "anonymous",
+  );
+});
