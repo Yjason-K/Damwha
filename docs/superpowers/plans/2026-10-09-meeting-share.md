@@ -8,7 +8,7 @@
 
 **Tech Stack:** NestJS 10 + pg(raw SQL) + zod, React 19 + TanStack Query + i18next, Node 22 + `@hono/node-server`(공유 서버), Docker, Cloudflare Tunnel(사용자가 연결), WebCrypto AES-256-GCM + CompressionStream gzip, vitest / jest / node:test.
 
-**Spec:** `docs/superpowers/specs/2026-10-09-meeting-share-selfhost-design.md` (같은 날짜의 Worker판 spec과 2026-10-08 spec을 대체). 선행: `docs/superpowers/reports/2026-10-08-local-api-access-control-results.md`의 "공유 기능이 따를 규칙".
+**Spec:** `docs/superpowers/specs/2026-10-09-meeting-share-selfhost-v2-design.md` (selfhost판·Worker판·2026-10-08 spec을 모두 대체). 선행: `docs/superpowers/reports/2026-10-08-local-api-access-control-results.md`의 "공유 기능이 따를 규칙".
 
 ## Global Constraints
 
@@ -18,8 +18,11 @@
 - 봉투 = `[버전 1바이트 = 1][IV 12바이트][암호문+태그]`, 평문 = `gzip(JSON.stringify(payload))`.
 - 공유 id = `<기간>-<22자 base64url>`(`SHARE_ID_RE = /^(1|7|30)-[A-Za-z0-9_-]{22}$/`). 공유 서버의 파일 이름은 이 정규식을 통과한 id만 쓴다.
 - 만료 시각의 권위는 공유 서버다. 페이로드에는 만료 시각이 없고, be는 서버가 돌려준 `expires_at`만 저장한다. 뷰어는 `X-Share-Expires-At` 응답 헤더로 받는다.
-- 새 링크를 만들 때 기존 링크는 업로드 요청의 `X-Replace-Id`·`X-Replace-Token`으로 **같은 요청 안에서** 서버가 지운다.
-- 공유 서버의 포트는 호스트 `127.0.0.1`에만 연다 — 그래야 `CF-Connecting-IP`를 믿을 수 있다.
+- 새 링크를 만들 때 기존 링크는 업로드 요청의 `X-Replace-Id`·`X-Replace-Token`으로 **같은 요청 안에서** 서버가 지운다. 서버는 같은 기존 id의 교체를 하나씩만 처리한다.
+- **공유 id와 삭제 토큰은 be가 만든다**(`newShareId(days)`, `newDeleteToken()`, share-format). 업로드 전에 `creating` 행에 저장하고 `X-Share-Id`·`X-Delete-Token`으로 보낸다. 같은 id·토큰 재전송은 서버에서 멱등이다. 그래서 응답 유실·확정 실패에도 서버에 주인 없는 객체가 남지 않는다.
+- 실패는 늘 "닫히는 쪽"이다: 결과를 모르는 업로드는 철회 대기열로 보내고, 응답 유실 때 기존 링크가 먼저 막히는 것은 받아들인다.
+- 업로드 중 기존 링크를 중지해도 새 링크 생성은 계속된다.
+- 공유 서버의 포트는 호스트 `127.0.0.1`에만 연다 — 그래야 `CF-Connecting-IP`를 믿을 수 있다. 호스트의 로컬 프로세스는 신뢰 경계 안이다.
 - 공유는 `HOST ∈ {127.0.0.1, ::1, localhost}`이고 `DEMO_READ_ONLY !== 'true'`일 때만 켜진다. 아니면 공유 라우트 전부 404, 스윕 안 돎.
 - 공유 라우트의 쓰기는 POST·DELETE뿐이다. 상태를 바꾸는 GET을 만들지 않는다(선행 결과 규칙 1).
 - 공유 서비스 도메인을 be의 `ALLOWED_ORIGINS`에 넣지 않는다(선행 결과 규칙 2).
@@ -158,6 +161,7 @@ spec §2.2는 이 패키지에 "zod 스키마"를 두라고 했지만 **의존�
 - Consumes: `ShareDurationDays`, `UiLanguage` (Task 1, contracts)
 - Produces:
   - `SHARE_FORMAT_VERSION = 1`, `SHARE_MAX_ENVELOPE_BYTES = 5_242_880`, `SHARE_ID_RE`, `shareIdDays(id: string): ShareDurationDays`
+  - `newShareId(days: ShareDurationDays): string`, `newDeleteToken(): string`, `DELETE_TOKEN_RE = /^[A-Za-z0-9_-]{43}$/` — be가 만들고 공유 서버가 검증한다
   - `type ShareScope = { summary: boolean; lenses: boolean; transcript: boolean; note: boolean; anonymize: boolean }`
   - `type ShareSpeaker`, `ShareSummarySegment`, `ShareLens`, `ShareUtterance`, `SharePayloadV1` (spec §2.2 그대로)
   - `isSharePayloadV1(x: unknown): x is SharePayloadV1`
@@ -319,6 +323,17 @@ test("공유 id 규칙과 기간", () => {
   assert.equal(f.shareIdDays("1-AAAAAAAAAAAAAAAAAAAAAA"), 1);
 });
 
+test("be가 만드는 id·삭제 토큰", () => {
+  for (const d of [1, 7, 30]) {
+    const id = f.newShareId(d);
+    assert.match(id, f.SHARE_ID_RE);
+    assert.equal(f.shareIdDays(id), d);
+  }
+  assert.notEqual(f.newShareId(7), f.newShareId(7));
+  assert.match(f.newDeleteToken(), f.DELETE_TOKEN_RE);
+  assert.notEqual(f.newDeleteToken(), f.newDeleteToken());
+});
+
 test("봉투 상한은 5MiB", () => {
   assert.equal(f.SHARE_MAX_ENVELOPE_BYTES, 5 * 1024 * 1024);
 });
@@ -387,6 +402,7 @@ export function fromBase64Url(s: string): Uint8Array<ArrayBuffer> {
 
 ```ts
 import type { ShareDurationDays } from '@damwha/contracts';
+import { toBase64Url } from './base64url';
 
 /** 봉투(압축·암호화 뒤) 상한. be는 업로드 전에, 공유 서버는 본문을 읽으면서 강제한다. */
 export const SHARE_MAX_ENVELOPE_BYTES = 5 * 1024 * 1024;
@@ -399,6 +415,21 @@ export const SHARE_ID_RE = /^(1|7|30)-[A-Za-z0-9_-]{22}$/;
 
 export function shareIdDays(id: string): ShareDurationDays {
   return Number(id.slice(0, id.indexOf('-'))) as ShareDurationDays;
+}
+
+/** 삭제 토큰 = 32바이트 난수의 base64url(43자). 공유 서버는 SHA-256 해시만 저장한다. */
+export const DELETE_TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
+
+/**
+ * 공유 id·삭제 토큰은 **be가 만든다**(spec selfhost-v2 §2.4). 업로드 전에 로컬 DB에 저장해 두면, 응답이 유실되거나
+ * 확정이 실패해도 be가 그 토큰으로 서버 객체를 지울 수 있다 — 서버에 주인 없는 객체가 남지 않는다.
+ */
+export function newShareId(days: ShareDurationDays): string {
+  return `${days}-${toBase64Url(crypto.getRandomValues(new Uint8Array(16)))}`;
+}
+
+export function newDeleteToken(): string {
+  return toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
 }
 ```
 
@@ -431,7 +462,7 @@ export type ShareLens = {
 export type ShareUtterance = { speaker_ref: string | null; start_ms: number; end_ms: number; text: string };
 
 /**
- * 만료 시각은 페이로드에 없다 — 권위는 공유 서버다(spec selfhost §2.4). 암호화는 업로드 전에 끝나므로 여기 넣으면
+ * 만료 시각은 페이로드에 없다 — 권위는 공유 서버다(spec selfhost-v2 §2.4). 암호화는 업로드 전에 끝나므로 여기 넣으면
  * 서버가 정한 실제 값과 어긋난다. 뷰어는 GET 응답의 `X-Share-Expires-At`으로 받는다.
  */
 export type SharePayloadV1 = {
@@ -561,7 +592,7 @@ export * from './envelope';
 - [ ] **Step 5: 통과 확인**
 
 Run: `pnpm --filter @damwha/share-format test`
-Expected: PASS — cjs 12개, mjs 1개.
+Expected: PASS — cjs 13개, mjs 1개.
 
 - [ ] **Step 6: 커밋**
 
@@ -573,7 +604,7 @@ git commit -m "feat(share-format): 공유 페이로드와 AES-GCM 봉투"
 ---
 ## 2단계 — 공유 서버 (`share/`)
 
-공유 서버는 개인 서버의 Docker 컨테이너에서 도는 Node 22 프로세스 하나다(spec selfhost §2.4). 핵심은
+공유 서버는 개인 서버의 Docker 컨테이너에서 도는 Node 22 프로세스 하나다(spec selfhost-v2 §2.4). 핵심은
 `createApp(deps).fetch(req: Request, info: { ip }) → Response`인 순수 핸들러이고, `main.ts`만 `@hono/node-server`로 Node HTTP에
 붙인다. 테스트는 네트워크 없이 핸들러를 직접 부른다.
 
@@ -586,9 +617,9 @@ git commit -m "feat(share-format): 공유 페이로드와 AES-GCM 봉투"
 - Create: `share/test/app.test.ts`, `share/test/store.test.ts`
 
 **Interfaces:**
-- Consumes: `SHARE_ID_RE`, `SHARE_MAX_ENVELOPE_BYTES`, `toBase64Url` (Task 2), `isShareDurationDays` (Task 1)
+- Consumes: `SHARE_ID_RE`, `DELETE_TOKEN_RE`, `shareIdDays`, `SHARE_MAX_ENVELOPE_BYTES`, `newShareId`·`newDeleteToken`(테스트) (Task 2), `isShareDurationDays` (Task 1)
 - Produces (HTTP — be의 `ShareClient`가 의존한다):
-  - `POST /api/shares` — 헤더 `X-Share-Days: 1|7|30`, 본문 = 봉투. 선택 헤더 `X-Replace-Id`·`X-Replace-Token`(교체). `201 { id, delete_token, expires_at, replaced: boolean }`. 오류 `400 {code:'BAD_DURATION'|'EMPTY'|'BAD_REPLACE'}`, `403 {code:'BAD_TOKEN'}`(교체 토큰 틀림 — 아무것도 만들지 않음), `413 {code:'TOO_LARGE'}`.
+  - `POST /api/shares` — 헤더 `X-Share-Days: 1|7|30`, `X-Share-Id`(be가 만든 id, 기간 접두가 같아야 함), `X-Delete-Token`(be가 만든 토큰), 본문 = 봉투. 선택 헤더 `X-Replace-Id`·`X-Replace-Token`(교체). `201 { id, expires_at, replaced: boolean }`; 같은 id·토큰 재전송은 `200`으로 같은 결과(멱등). 오류 `400 {code:'BAD_DURATION'|'BAD_ID'|'EMPTY'|'BAD_REPLACE'}`, `403 {code:'BAD_TOKEN'}`(교체 토큰 틀림 — 아무것도 만들지 않음), `409 {code:'ID_TAKEN'|'REPLACE_IN_PROGRESS'}`, `413 {code:'TOO_LARGE'}`.
   - `GET /api/shares/:id` — `200` 봉투 + 헤더 `X-Share-Expires-At` | `410 {code:'GONE'}`(없음·만료) | `404 {code:'NOT_FOUND'}`(id 형식 틀림)
   - `DELETE /api/shares/:id` — `Authorization: Bearer <delete_token>`. `204` | `403 {code:'BAD_TOKEN'}` | `404 {code:'NOT_FOUND'}`
   - `GET /healthz` — `200 {ok:true}`
@@ -757,7 +788,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { SHARE_ID_RE, SHARE_MAX_ENVELOPE_BYTES } from '@damwha/share-format';
+import { SHARE_MAX_ENVELOPE_BYTES, newDeleteToken, newShareId } from '@damwha/share-format';
 import { createApp } from '../src/app.js';
 import { readConfig, type ShareConfig } from '../src/config.js';
 import { DiskStore } from '../src/store.js';
@@ -784,47 +815,88 @@ function makeApp(over: Partial<ShareConfig> = {}) {
   return createApp({ store, config, now: () => clock, viewerDir: null, log: (l) => logs.push(l) });
 }
 type App = ReturnType<typeof makeApp>;
-const post = (app: App, body = bytes(64), headers: Record<string, string> = {}) =>
-  app.fetch(new Request(`${ORIGIN}/api/shares`, { method: 'POST', headers: { 'X-Share-Days': '7', ...headers }, body }), IP);
+type Up = { id: string; token: string; res: Response };
+/** be처럼 id·토큰을 만들어 올린다. */
+async function upload(
+  app: App,
+  o: { body?: Uint8Array; days?: 1 | 7 | 30; id?: string; token?: string; headers?: Record<string, string> } = {},
+): Promise<Up> {
+  const days = o.days ?? 7;
+  const id = o.id ?? newShareId(days);
+  const token = o.token ?? newDeleteToken();
+  const res = await app.fetch(
+    new Request(`${ORIGIN}/api/shares`, {
+      method: 'POST',
+      headers: { 'X-Share-Days': String(days), 'X-Share-Id': id, 'X-Delete-Token': token, ...o.headers },
+      body: o.body ?? bytes(64),
+    }),
+    IP,
+  );
+  return { id, token, res };
+}
 const get = (app: App, id: string) => app.fetch(new Request(`${ORIGIN}/api/shares/${id}`), IP);
 const del = (app: App, id: string, token?: string) =>
   app.fetch(new Request(`${ORIGIN}/api/shares/${id}`, { method: 'DELETE', headers: token === undefined ? {} : { Authorization: `Bearer ${token}` } }), IP);
-type Created = { id: string; delete_token: string; expires_at: string; replaced: boolean };
+type Created = { id: string; expires_at: string; replaced: boolean };
+const jsonFiles = () => readdirSync(join(dir, 'shares')).filter((f) => f.endsWith('.json'));
 
 describe('업로드', () => {
-  it('저장하고 id·삭제 토큰·만료 시각을 돌려준다', async () => {
-    const app = makeApp();
-    const res = await post(app);
+  it('be가 준 id로 저장하고 만료 시각을 돌려준다 — 토큰은 응답에 없다', async () => {
+    const { id, res } = await upload(makeApp());
     expect(res.status).toBe(201);
-    const b = (await res.json()) as Created;
-    expect(b.id).toMatch(SHARE_ID_RE);
-    expect(b.id.startsWith('7-')).toBe(true);
-    expect(b.delete_token).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(b.expires_at).toBe('2026-10-16T03:00:00.000Z');
-    expect(b.replaced).toBe(false);
+    const b = (await res.json()) as Created & { delete_token?: string };
+    expect(b).toEqual({ id, expires_at: '2026-10-16T03:00:00.000Z', replaced: false });
   });
 
   it('디스크에 토큰 원문이 남지 않는다', async () => {
-    const b = (await (await post(makeApp())).json()) as Created;
-    const raw = readFileSync(join(dir, 'shares', `${b.id}.json`), 'utf8');
-    expect(raw).not.toContain(b.delete_token);
+    const { id, token } = await upload(makeApp());
+    expect(readFileSync(join(dir, 'shares', `${id}.json`), 'utf8')).not.toContain(token);
   });
 
-  it('기간이 목록 밖이면 400', async () => {
+  it('같은 id·토큰으로 다시 올리면 아무것도 바꾸지 않고 200으로 같은 결과 (응답 유실 뒤 재시도)', async () => {
+    const app = makeApp();
+    const first = await upload(app, { body: bytes(8, 1) });
+    const firstBody = (await first.res.json()) as Created;
+    clock = new Date(clock.getTime() + 60_000);
+    const again = await upload(app, { id: first.id, token: first.token, body: bytes(8, 2) });
+    expect(again.res.status).toBe(200);
+    expect(await again.res.json()).toEqual(firstBody);
+    expect(new Uint8Array(await (await get(app, first.id)).arrayBuffer())).toEqual(bytes(8, 1));
+  });
+
+  it('같은 id인데 토큰이 다르면 409 ID_TAKEN이고 기존 공유를 건드리지 않는다', async () => {
+    const app = makeApp();
+    const first = await upload(app);
+    const res = (await upload(app, { id: first.id, token: newDeleteToken() })).res;
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ code: 'ID_TAKEN' });
+    expect((await del(app, first.id, first.token)).status).toBe(204);
+  });
+
+  it('id·토큰 형식이 틀리거나 id의 기간이 헤더와 다르면 400 BAD_ID', async () => {
+    const app = makeApp();
+    for (const o of [{ id: '../x' }, { id: newShareId(1) }, { token: 'short' }, { id: '' }]) {
+      const res = (await upload(app, { days: 7, ...o })).res;
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ code: 'BAD_ID' });
+    }
+    expect(jsonFiles()).toEqual([]);
+  });
+
+  it('기간이 목록 밖이면 400 BAD_DURATION', async () => {
     for (const d of ['0', '2', '31', '', 'abc']) {
-      const res = await post(makeApp(), bytes(8), { 'X-Share-Days': d });
+      const res = (await upload(makeApp(), { headers: { 'X-Share-Days': d } })).res;
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({ code: 'BAD_DURATION' });
     }
   });
 
   it('빈 본문은 400', async () => {
-    expect((await post(makeApp(), new Uint8Array(0))).status).toBe(400);
+    expect((await upload(makeApp(), { body: new Uint8Array(0) })).res.status).toBe(400);
   });
 
   it('상한을 넘는 본문은 413이고 아무것도 쓰지 않는다', async () => {
-    const res = await post(makeApp(), bytes(SHARE_MAX_ENVELOPE_BYTES + 1));
-    expect(res.status).toBe(413);
+    expect((await upload(makeApp(), { body: bytes(SHARE_MAX_ENVELOPE_BYTES + 1) })).res.status).toBe(413);
     expect(readdirSync(join(dir, 'shares'))).toEqual([]);
   });
 });
@@ -832,8 +904,9 @@ describe('업로드', () => {
 describe('조회', () => {
   it('올린 바이트와 만료 시각 헤더', async () => {
     const app = makeApp();
-    const b = (await (await post(app, bytes(32, 9))).json()) as Created;
-    const res = await get(app, b.id);
+    const { id, res: up } = await upload(app, { body: bytes(32, 9) });
+    const b = (await up.json()) as Created;
+    const res = await get(app, id);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('application/octet-stream');
     expect(res.headers.get('x-share-expires-at')).toBe(b.expires_at);
@@ -842,75 +915,86 @@ describe('조회', () => {
 
   it('형식이 맞지만 없는 id는 410, 형식이 틀리면 404', async () => {
     const app = makeApp();
-    expect((await get(app, '7-AAAAAAAAAAAAAAAAAAAAAA')).status).toBe(410);
+    expect((await get(app, newShareId(7))).status).toBe(410);
     expect((await get(app, '..%2Fshares%2Fx')).status).toBe(404);
     expect((await get(app, '7-short')).status).toBe(404);
   });
 
   it('만료 시각이 지나면 410 — 스위퍼를 기다리지 않는다', async () => {
     const app = makeApp();
-    const b = (await (await post(app)).json()) as Created;
-    clock = new Date(Date.parse(b.expires_at));
-    expect((await get(app, b.id)).status).toBe(410);
+    const { id, res } = await upload(app);
+    clock = new Date(Date.parse(((await res.json()) as Created).expires_at));
+    expect((await get(app, id)).status).toBe(410);
   });
 });
 
 describe('삭제', () => {
   it('맞는 토큰이면 204, 이후 조회 410, 다시 지우면 404', async () => {
     const app = makeApp();
-    const b = (await (await post(app)).json()) as Created;
-    expect((await del(app, b.id, b.delete_token)).status).toBe(204);
-    expect((await get(app, b.id)).status).toBe(410);
-    expect((await del(app, b.id, b.delete_token)).status).toBe(404);
+    const { id, token } = await upload(app);
+    expect((await del(app, id, token)).status).toBe(204);
+    expect((await get(app, id)).status).toBe(410);
+    expect((await del(app, id, token)).status).toBe(404);
   });
 
   it('틀린 토큰·토큰 없음은 403이고 지우지 않는다', async () => {
     const app = makeApp();
-    const b = (await (await post(app)).json()) as Created;
-    expect((await del(app, b.id, 'wrong')).status).toBe(403);
-    expect((await del(app, b.id)).status).toBe(403);
-    expect((await get(app, b.id)).status).toBe(200);
+    const { id } = await upload(app);
+    expect((await del(app, id, 'wrong')).status).toBe(403);
+    expect((await del(app, id)).status).toBe(403);
+    expect((await get(app, id)).status).toBe(200);
   });
 });
 
-describe('교체 (spec selfhost §2.4)', () => {
+describe('교체 (spec selfhost-v2 §2.4)', () => {
+  const replaceHeaders = (old: Up) => ({ 'X-Replace-Id': old.id, 'X-Replace-Token': old.token });
+
   it('맞는 토큰이면 새 공유가 생기고, 응답 시점에 기존 공유는 이미 410이다', async () => {
     const app = makeApp();
-    const old = (await (await post(app)).json()) as Created;
-    const res = await post(app, bytes(16), { 'X-Replace-Id': old.id, 'X-Replace-Token': old.delete_token });
-    expect(res.status).toBe(201);
-    const fresh = (await res.json()) as Created;
-    expect(fresh.replaced).toBe(true);
-    expect(fresh.id).not.toBe(old.id);
+    const old = await upload(app);
+    const fresh = await upload(app, { body: bytes(16), headers: replaceHeaders(old) });
+    expect(fresh.res.status).toBe(201);
+    expect(((await fresh.res.json()) as Created).replaced).toBe(true);
     expect((await get(app, old.id)).status).toBe(410);
     expect((await get(app, fresh.id)).status).toBe(200);
   });
 
   it('토큰이 틀리면 403이고 새 공유를 만들지 않으며 기존 공유는 그대로다', async () => {
     const app = makeApp();
-    const old = (await (await post(app)).json()) as Created;
-    const res = await post(app, bytes(16), { 'X-Replace-Id': old.id, 'X-Replace-Token': 'wrong' });
+    const old = await upload(app);
+    const res = (await upload(app, { body: bytes(16), headers: { 'X-Replace-Id': old.id, 'X-Replace-Token': 'wrong' } })).res;
     expect(res.status).toBe(403);
-    expect(readdirSync(join(dir, 'shares')).filter((f) => f.endsWith('.json'))).toEqual([`${old.id}.json`]);
+    expect(jsonFiles()).toEqual([`${old.id}.json`]);
     expect((await get(app, old.id)).status).toBe(200);
   });
 
   it('기존 공유가 이미 없으면 그냥 새로 만들고 replaced=false', async () => {
-    const res = await post(makeApp(), bytes(16), { 'X-Replace-Id': '7-AAAAAAAAAAAAAAAAAAAAAA', 'X-Replace-Token': 't' });
+    const res = (await upload(makeApp(), { headers: { 'X-Replace-Id': newShareId(7), 'X-Replace-Token': 't' } })).res;
     expect(res.status).toBe(201);
     expect(((await res.json()) as Created).replaced).toBe(false);
   });
 
+  it('같은 기존 링크의 교체가 동시에 오면 하나만 되고 나머지는 409 REPLACE_IN_PROGRESS', async () => {
+    const app = makeApp();
+    const old = await upload(app);
+    const [a, b] = await Promise.all([
+      upload(app, { headers: replaceHeaders(old) }),
+      upload(app, { headers: replaceHeaders(old) }),
+    ]);
+    expect([a.res.status, b.res.status].sort()).toEqual([201, 409]);
+    expect(jsonFiles()).toHaveLength(1);
+  });
+
   it('교체 헤더 형식이 틀리면 400', async () => {
-    expect((await post(makeApp(), bytes(16), { 'X-Replace-Id': '../x', 'X-Replace-Token': 't' })).status).toBe(400);
-    expect((await post(makeApp(), bytes(16), { 'X-Replace-Id': '7-AAAAAAAAAAAAAAAAAAAAAA' })).status).toBe(400);
+    expect((await upload(makeApp(), { headers: { 'X-Replace-Id': '../x', 'X-Replace-Token': 't' } })).res.status).toBe(400);
+    expect((await upload(makeApp(), { headers: { 'X-Replace-Id': newShareId(7) } })).res.status).toBe(400);
   });
 });
 
 describe('공통', () => {
   it('보안 헤더 — 성공·실패 모두', async () => {
     const app = makeApp();
-    for (const res of [await post(app), await get(app, '7-short'), await app.fetch(new Request(`${ORIGIN}/nope`), IP)]) {
+    for (const res of [(await upload(app)).res, await get(app, '7-short'), await app.fetch(new Request(`${ORIGIN}/nope`), IP)]) {
       expect(res.headers.get('x-robots-tag')).toBe('noindex, nofollow');
       expect(res.headers.get('referrer-policy')).toBe('no-referrer');
       expect(res.headers.get('cache-control')).toBe('no-store');
@@ -928,18 +1012,18 @@ describe('공통', () => {
 
   it('로그에 토큰이 없다', async () => {
     const app = makeApp();
-    const b = (await (await post(app)).json()) as Created;
-    await del(app, b.id, b.delete_token);
-    await post(app, bytes(8), { 'X-Replace-Id': b.id, 'X-Replace-Token': 'REPLACE-SECRET' });
+    const a = await upload(app);
+    await del(app, a.id, a.token);
+    await upload(app, { headers: { 'X-Replace-Id': a.id, 'X-Replace-Token': 'REPLACE-SECRET' } });
     expect(logs.length).toBeGreaterThan(0);
-    expect(logs.join('\n')).not.toContain(b.delete_token);
+    expect(logs.join('\n')).not.toContain(a.token);
     expect(logs.join('\n')).not.toContain('REPLACE-SECRET');
   });
 
   it('저장소 오류는 500 INTERNAL이고 원인 메시지를 응답에 싣지 않는다', async () => {
     const app = makeApp();
     store.put = async () => { throw new Error('EACCES /data/secret/path'); };
-    const res = await post(app);
+    const res = (await upload(app)).res;
     expect(res.status).toBe(500);
     expect(await res.text()).not.toContain('/data/secret');
   });
@@ -1168,9 +1252,9 @@ export async function readLimited(req: Request, max: number): Promise<Uint8Array
 `share/src/app.ts`:
 
 ```ts
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { isShareDurationDays } from '@damwha/contracts';
-import { SHARE_ID_RE, SHARE_MAX_ENVELOPE_BYTES, toBase64Url } from '@damwha/share-format';
+import { DELETE_TOKEN_RE, SHARE_ID_RE, SHARE_MAX_ENVELOPE_BYTES, shareIdDays } from '@damwha/share-format';
 import { readLimited } from './body.js';
 import type { ShareConfig } from './config.js';
 import { json, withSecurityHeaders } from './http.js';
@@ -1201,41 +1285,66 @@ export function createApp(deps: AppDeps) {
     return days * DAY_MS;
   }
 
+  /** 같은 기존 링크의 교체는 하나씩 — 같은 토큰으로 동시에 통과한 두 요청이 새 링크 둘을 남기지 않게 한다. */
+  const replacing = new Set<string>();
+
   async function create(req: Request, now: Date): Promise<Response> {
     const days = Number(req.headers.get('X-Share-Days'));
     if (!isShareDurationDays(days)) return json(400, { code: 'BAD_DURATION' });
-
-    // 교체: 기존 공유의 토큰이 맞는지 **먼저** 본다 — 틀리면 아무것도 만들지 않는다.
-    const replaceId = req.headers.get('X-Replace-Id');
-    let replacing = false;
-    if (replaceId !== null) {
-      const token = req.headers.get('X-Replace-Token') ?? '';
-      if (!SHARE_ID_RE.test(replaceId) || token === '') return json(400, { code: 'BAD_REPLACE' });
-      const old = await store.head(replaceId);
-      if (old) {
-        if (!sameHash(sha256(token), old.token_hash)) return json(403, { code: 'BAD_TOKEN' });
-        replacing = true;
+    // id·토큰은 be가 만든다(spec selfhost-v2 §2.4) — be가 업로드 전에 저장해 두므로 응답을 잃어도 철회할 수 있다.
+    const id = req.headers.get('X-Share-Id') ?? '';
+    const deleteToken = req.headers.get('X-Delete-Token') ?? '';
+    if (!SHARE_ID_RE.test(id) || shareIdDays(id) !== days || !DELETE_TOKEN_RE.test(deleteToken)) {
+      return json(400, { code: 'BAD_ID' });
+    }
+    const existing = await store.head(id);
+    if (existing) {
+      // 같은 id·토큰의 재시도(응답을 잃은 be)는 이미 된 일이다. 토큰이 다르면 남의 id다.
+      if (sameHash(sha256(deleteToken), existing.token_hash)) {
+        return json(200, { id, expires_at: existing.expires_at, replaced: false });
       }
+      return json(409, { code: 'ID_TAKEN' });
     }
 
+    const replaceId = req.headers.get('X-Replace-Id');
+    if (replaceId === null) return save(req, now, { id, deleteToken, days, replaceId: null });
+    const replaceToken = req.headers.get('X-Replace-Token') ?? '';
+    if (!SHARE_ID_RE.test(replaceId) || replaceToken === '') return json(400, { code: 'BAD_REPLACE' });
+    // 확인과 등록 사이에 await가 없다 — 프로세스 하나에서 원자적이다.
+    if (replacing.has(replaceId)) return json(409, { code: 'REPLACE_IN_PROGRESS' });
+    replacing.add(replaceId);
+    try {
+      // 기존 공유의 토큰이 맞는지 **먼저** 본다 — 틀리면 아무것도 만들지 않는다.
+      const old = await store.head(replaceId);
+      if (old && !sameHash(sha256(replaceToken), old.token_hash)) return json(403, { code: 'BAD_TOKEN' });
+      return await save(req, now, { id, deleteToken, days, replaceId: old ? replaceId : null });
+    } finally {
+      replacing.delete(replaceId);
+    }
+  }
+
+  async function save(
+    req: Request,
+    now: Date,
+    a: { id: string; deleteToken: string; days: number; replaceId: string | null },
+  ): Promise<Response> {
     const body = await readLimited(req, SHARE_MAX_ENVELOPE_BYTES);
     if (body === 'too_large') return json(413, { code: 'TOO_LARGE' });
     if (body.byteLength === 0) return json(400, { code: 'EMPTY' });
 
-    const id = `${days}-${toBase64Url(randomBytes(16))}`;
-    const deleteToken = toBase64Url(randomBytes(32));
-    const expiresAt = new Date(now.getTime() + ttlMs(req, days)).toISOString();
-    await store.put(id, body, { expires_at: expiresAt, token_hash: sha256(deleteToken), size: body.byteLength, created_at: now.toISOString() });
-    if (replacing) {
+    const expiresAt = new Date(now.getTime() + ttlMs(req, a.days)).toISOString();
+    await store.put(a.id, body, { expires_at: expiresAt, token_hash: sha256(a.deleteToken), size: body.byteLength, created_at: now.toISOString() });
+    if (a.replaceId !== null) {
       try {
-        await store.delete(replaceId!);
+        await store.delete(a.replaceId);
       } catch (e) {
-        // 기존 공유를 못 지웠으면 새 공유도 남기지 않는다 — "새 링크는 생겼는데 옛 링크가 열린다"를 만들지 않는다.
-        await store.delete(id).catch(() => undefined);
+        // 기존 공유를 못 지웠으면 새 공유도 남기지 않는다. 이때 기존 링크도 이미 막혔을 수 있다 —
+        // 메타를 먼저 지우기 때문이다. 실패는 "닫히는 쪽"이다(spec selfhost-v2 §2.4).
+        await store.delete(a.id).catch(() => undefined);
         throw e;
       }
     }
-    return json(201, { id, delete_token: deleteToken, expires_at: expiresAt, replaced: replacing });
+    return json(201, { id: a.id, expires_at: expiresAt, replaced: a.replaceId !== null });
   }
 
   async function read(id: string, now: Date): Promise<Response> {
@@ -1295,7 +1404,7 @@ export function createApp(deps: AppDeps) {
 ```ts
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { serve, type HttpBindings } from '@hono/node-server';
+import { serve } from '@hono/node-server';
 import { createApp } from './app.js';
 import { readConfig } from './config.js';
 import { DiskStore } from './store.js';
@@ -1325,12 +1434,13 @@ setInterval(sweep, 10 * 60_000).unref();
 
 /**
  * 클라이언트 IP는 Tunnel이 붙이는 CF-Connecting-IP. 이 헤더를 믿을 수 있는 건 포트가 Tunnel에만 열려 있어서다
- * (spec selfhost §2.4) — 포트를 바깥에 열면 누구나 위조할 수 있다. 로컬 실행은 소켓 주소로 센다.
+ * (spec selfhost-v2 §2.4) — 포트를 바깥에 열면 누구나 위조할 수 있다. 로컬 실행은 소켓 주소로 센다.
  */
 serve({
   port: config.port,
   hostname: config.host,
-  fetch: (req: Request, env: HttpBindings) =>
+  // env 타입은 추론에 맡긴다 — 콜백은 HttpBindings | Http2Bindings를 받는다(둘 다 incoming이 있다).
+  fetch: (req, env) =>
     app.fetch(req, { ip: req.headers.get('CF-Connecting-IP') ?? env.incoming.socket.remoteAddress ?? 'unknown' }),
 });
 console.log(`damwha-share listening on ${config.host}:${config.port} (data ${config.dataDir})`);
@@ -1347,10 +1457,12 @@ Run: `pnpm share:dev` (다른 터미널에서)
 
 ```bash
 curl -s http://127.0.0.1:8787/healthz
-curl -s -X POST -H 'X-Share-Days: 1' --data-binary 'hello' http://127.0.0.1:8787/api/shares
+ID=$(node -e "import('./packages/share-format/dist/esm/index.js').then(f=>console.log(f.newShareId(1)))")
+TOKEN=$(node -e "import('./packages/share-format/dist/esm/index.js').then(f=>console.log(f.newDeleteToken()))")
+curl -s -X POST -H 'X-Share-Days: 1' -H "X-Share-Id: $ID" -H "X-Delete-Token: $TOKEN" --data-binary 'hello' http://127.0.0.1:8787/api/shares
 ```
 
-Expected: `{"ok":true}`, `{"id":"1-…","delete_token":"…","expires_at":"…","replaced":false}`, `share/.data/shares/`에 파일 두 개. 확인 뒤 `share/.data`를 지운다.
+Expected: `{"ok":true}`, `{"id":"1-…","expires_at":"…","replaced":false}`, `share/.data/shares/`에 파일 두 개. 확인 뒤 `share/.data`를 지운다.
 
 - [ ] **Step 7: 커밋**
 
@@ -1383,6 +1495,7 @@ import { createApp } from '../src/app.js';
 import { readConfig, type ShareConfig } from '../src/config.js';
 import { DailyBudget, WindowLimiter } from '../src/limits.js';
 import { DiskStore } from '../src/store.js';
+import { newDeleteToken, newShareId } from '@damwha/share-format';
 
 let dir: string;
 let store: DiskStore;
@@ -1398,13 +1511,26 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 const makeApp = (over: Partial<ShareConfig> = {}) =>
   createApp({ store, config: { ...readConfig({}), dataDir: dir, ...over }, now: () => clock, viewerDir: null });
 type App = ReturnType<typeof makeApp>;
-const post = (app: App, origin = 'https://damwha-share.example', ip = '203.0.113.9', size = 100) =>
-  app.fetch(new Request(`${origin}/api/shares`, { method: 'POST', headers: { 'X-Share-Days': '7' }, body: new Uint8Array(size).fill(1) }), { ip });
+/** be처럼 id·토큰을 만들어 올린다. 응답에 토큰이 없으므로 같이 돌려준다. */
+async function post(app: App, origin = 'https://damwha-share.example', ip = '203.0.113.9', size = 100) {
+  const id = newShareId(7);
+  const token = newDeleteToken();
+  const res = await app.fetch(
+    new Request(`${origin}/api/shares`, {
+      method: 'POST',
+      headers: { 'X-Share-Days': '7', 'X-Share-Id': id, 'X-Delete-Token': token },
+      body: new Uint8Array(size).fill(1),
+    }),
+    { ip },
+  );
+  return Object.assign(res, { shareId: id, token });
+}
 
 describe('업로드 차단 스위치', () => {
   it('uploadsEnabled=false면 업로드만 503, 조회·삭제는 그대로', async () => {
     const on = makeApp();
-    const b = (await (await post(on)).json()) as { id: string; delete_token: string };
+    const up = await post(on);
+    const b = { id: up.shareId, delete_token: up.token };
     const off = makeApp({ uploadsEnabled: false });
     const res = await post(off);
     expect(res.status).toBe(503);
@@ -1430,7 +1556,8 @@ describe('IP별 요청 제한', () => {
 
   it('조회를 다 써도 삭제(지금 중지)는 막히지 않는다', async () => {
     const app = makeApp({ limits: { upload: 100, read: 1, delete: 100 } });
-    const b = (await (await post(app)).json()) as { id: string; delete_token: string };
+    const up = await post(app);
+    const b = { id: up.shareId, delete_token: up.token };
     const ip = { ip: '203.0.113.9' };
     await app.fetch(new Request(`https://x/api/shares/${b.id}`), ip);
     expect((await app.fetch(new Request(`https://x/api/shares/${b.id}`), ip)).status).toBe(429);
@@ -1480,14 +1607,24 @@ describe('서비스 전체 일일 상한', () => {
     expect((await post(app)).status).toBe(201);
   });
 
-  it('DailyBudget — 확인과 차감이 한 번에', () => {
+  it('DailyBudget — 확인과 차감이 한 번에, 취소는 예약한 날짜에서만', () => {
     const b = new DailyBudget(2, 1000);
-    const now = new Date('2026-10-09T00:00:00Z');
-    expect(b.reserve(10, now)).toBe(true);
-    expect(b.reserve(10, now)).toBe(true);
-    expect(b.reserve(10, now)).toBe(false);
-    b.release(10);
-    expect(b.reserve(10, now)).toBe(true);
+    const day1 = new Date('2026-10-09T23:59:59Z');
+    const t1 = b.reserve(10, day1);
+    expect(t1).not.toBeNull();
+    expect(b.reserve(10, day1)).not.toBeNull();
+    expect(b.reserve(10, day1)).toBeNull();
+    b.release(t1!);
+    expect(b.reserve(10, day1)).not.toBeNull();
+  });
+
+  it('자정 전에 예약한 업로드가 자정 뒤에 실패해도 새 날의 카운터를 줄이지 않는다', () => {
+    const b = new DailyBudget(1, 1000);
+    const late = b.reserve(10, new Date('2026-10-09T23:59:59Z'));
+    const next = new Date('2026-10-10T00:00:01Z');
+    expect(b.reserve(10, next)).not.toBeNull(); // 새 날 첫 업로드
+    b.release(late!); // 전날 예약의 취소
+    expect(b.reserve(10, next)).toBeNull(); // 새 날은 여전히 상한에 닿아 있다
   });
 });
 
@@ -1546,9 +1683,12 @@ export class WindowLimiter {
   }
 }
 
+export type BudgetTicket = { day: string; size: number };
+
 /**
- * 서비스 전체 일일 업로드 상한 (spec selfhost §2.4). 확인과 차감이 await 없이 한 번에 일어나므로 동시 요청이
+ * 서비스 전체 일일 업로드 상한 (spec selfhost-v2 §2.4). 확인과 차감이 await 없이 한 번에 일어나므로 동시 요청이
  * 몰려도 상한을 넘지 않는다 — 프로세스 하나가 전제다. 메모리 카운터라 재시작하면 0부터 다시 센다.
+ * 예약은 날짜가 든 표를 돌려주고, 취소는 그 날짜의 카운터에서만 뺀다 — 자정을 넘긴 실패가 새 날을 줄이지 않는다.
  */
 export class DailyBudget {
   private day = '';
@@ -1556,22 +1696,23 @@ export class DailyBudget {
   private bytes = 0;
   constructor(private readonly maxUploads: number, private readonly maxBytes: number) {}
 
-  reserve(size: number, now: Date): boolean {
+  reserve(size: number, now: Date): BudgetTicket | null {
     const d = now.toISOString().slice(0, 10);
     if (d !== this.day) {
       this.day = d;
       this.count = 0;
       this.bytes = 0;
     }
-    if (this.count + 1 > this.maxUploads || this.bytes + size > this.maxBytes) return false;
+    if (this.count + 1 > this.maxUploads || this.bytes + size > this.maxBytes) return null;
     this.count++;
     this.bytes += size;
-    return true;
+    return { day: d, size };
   }
 
-  release(size: number): void {
+  release(ticket: BudgetTicket): void {
+    if (ticket.day !== this.day) return;
     this.count = Math.max(0, this.count - 1);
-    this.bytes = Math.max(0, this.bytes - size);
+    this.bytes = Math.max(0, this.bytes - ticket.size);
   }
 }
 ```
@@ -1603,19 +1744,25 @@ export class DailyBudget {
 ```
 
 - `create`의 맨 앞에 `if (!config.uploadsEnabled) return json(503, { code: 'UPLOADS_DISABLED' });`
-- `create`의 `if (body.byteLength === 0) …` 다음에 `if (!daily.reserve(body.byteLength, now)) return json(503, { code: 'DAILY_CAP' });`
-- `create`의 `await store.put(...)` 줄을 감싼다:
+- `save`의 `if (body.byteLength === 0) …` 다음에:
+
+```ts
+    const ticket = daily.reserve(body.byteLength, now);
+    if (!ticket) return json(503, { code: 'DAILY_CAP' });
+```
+
+- `save`의 `await store.put(...)` 줄을 감싼다:
 
 ```ts
     try {
-      await store.put(id, body, { expires_at: expiresAt, token_hash: sha256(deleteToken), size: body.byteLength, created_at: now.toISOString() });
+      await store.put(a.id, body, { expires_at: expiresAt, token_hash: sha256(a.deleteToken), size: body.byteLength, created_at: now.toISOString() });
     } catch (e) {
-      daily.release(body.byteLength);
+      daily.release(ticket);
       throw e;
     }
 ```
 
-- 교체 실패 분기(`await store.delete(id).catch(...)`) 다음 줄에 `daily.release(body.byteLength);`
+- 교체 실패 분기(`await store.delete(a.id).catch(...)`) 다음 줄에 `daily.release(ticket);`
 - `route`의 API 분기를 IP 제한과 함께:
 
 ```ts
@@ -1649,7 +1796,7 @@ Expected: PASS (Task 3 테스트 포함)
 
 - [ ] **Step 5: 변이 확인**
 
-`ttlMs`의 `LOCAL_HOSTS.has(...)` 조건을 지우고 실행 → "공개 도메인 Host에서는 무시한다"가 FAIL. 되돌린다. `route`의 DELETE 분기에서 `limiters.delete`를 `limiters.read`로 바꾸고 → "조회를 다 써도 삭제…"가 FAIL. 되돌린다. `create`에서 `daily.reserve` 호출을 `store.put` **뒤**로 옮기고 → "동시에 몰려도 정확히…"가 파일 개수 단언에서 FAIL. 되돌린다.
+`ttlMs`의 `LOCAL_HOSTS.has(...)` 조건을 지우고 실행 → "공개 도메인 Host에서는 무시한다"가 FAIL. 되돌린다. `route`의 DELETE 분기에서 `limiters.delete`를 `limiters.read`로 바꾸고 → "조회를 다 써도 삭제…"가 FAIL. 되돌린다. `save`에서 `daily.reserve` 호출을 `store.put` **뒤**로 옮기고 → "동시에 몰려도 정확히…"가 파일 개수 단언에서 FAIL. 되돌린다. `release`의 `if (ticket.day !== this.day) return;`을 지우고 → "자정 전에 예약한…"이 FAIL. 되돌린다.
 
 - [ ] **Step 6: 커밋**
 
@@ -2343,6 +2490,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
 import { readConfig } from '../src/config.js';
+import { serveViewer } from '../src/static.js';
 import { DiskStore } from '../src/store.js';
 
 const VIEWER = fileURLToPath(new URL('../dist/viewer', import.meta.url));
@@ -2377,9 +2525,16 @@ it('번들 자산은 맞는 Content-Type과 보안 헤더로', async () => {
   expect(res.headers.get('x-content-type-options')).toBe('nosniff');
 });
 
-it('assets 밖의 파일·경로 탈출·모르는 확장자는 404', async () => {
-  for (const p of ['/index.html', '/assets/../index.html', '/assets/%2e%2e%2fpackage.json', '/assets/x.exe', '/s/a/b']) {
+it('assets 밖의 파일·인코딩된 경로·모르는 확장자는 404', async () => {
+  for (const p of ['/index.html', '/assets/%2e%2e%2fpackage.json', '/assets/x.exe', '/s/a/b']) {
     expect((await get(p)).status).toBe(404);
+  }
+});
+
+// Request는 URL의 `..`를 정규화하므로 HTTP로는 날것의 탈출 경로를 보낼 수 없다 — serveViewer에 직접 넘긴다.
+it('serveViewer — 정규화되지 않은 탈출 경로를 받지 않는다', async () => {
+  for (const p of ['/assets/../index.html', '/assets/../../package.json', '/assets/sub/x.js', '/assets/.hidden.js', '/s/../x']) {
+    expect(await serveViewer(p, VIEWER)).toBeNull();
   }
 });
 ```
@@ -2404,7 +2559,7 @@ export type LoadResult =
 
 /**
  * 링크(`/s/<id>#<key>`)를 읽어 공유본을 받는다. 키는 `#` 뒤라 서버로 가지 않는다 — 요청 URL에는 id만 실린다.
- * 만료 시각은 페이로드가 아니라 서버 응답 헤더에서 온다(권위가 서버다, spec selfhost §2.4).
+ * 만료 시각은 페이로드가 아니라 서버 응답 헤더에서 온다(권위가 서버다, spec selfhost-v2 §2.4).
  */
 export async function loadShare(
   loc: { pathname: string; hash: string },
@@ -2554,14 +2709,15 @@ Run: `pnpm share:dev` (다른 터미널)
 
 ```bash
 node --input-type=module -e "
-import { encryptShare, generateShareKey } from './packages/share-format/dist/esm/index.js';
+import { encryptShare, generateShareKey, newShareId, newDeleteToken } from './packages/share-format/dist/esm/index.js';
 const key = generateShareKey();
+const id = newShareId(1);
 const p = { v:1, created_at:new Date().toISOString(), ui_language:'ko',
   meeting:{ title:'로컬 확인', recorded_at:new Date().toISOString(), duration_ms:60000 }, speakers:[{ref:'s1',name:'김담화'}],
   transcript:[{ speaker_ref:'s1', start_ms:0, end_ms:2000, text:'안녕하세요' }] };
-const res = await fetch('http://localhost:8787/api/shares', { method:'POST', headers:{'X-Share-Days':'1'}, body: await encryptShare(p, key) });
-const { id } = await res.json();
-console.log('http://localhost:8787/s/' + id + '#' + key);
+const res = await fetch('http://localhost:8787/api/shares', { method:'POST',
+  headers:{ 'X-Share-Days':'1', 'X-Share-Id': id, 'X-Delete-Token': newDeleteToken() }, body: await encryptShare(p, key) });
+console.log(res.status, 'http://localhost:8787/s/' + id + '#' + key);
 "
 ```
 
@@ -2658,9 +2814,9 @@ CREATE TABLE meeting_share (
   id                  text PRIMARY KEY DEFAULT 'shr_' || nextval('shr_id_seq') CHECK (id ~ '^shr_[1-9][0-9]*$'),
   meeting_id          text REFERENCES meeting(id) ON DELETE SET NULL,
   status              text NOT NULL CHECK (status IN ('creating','active','revoke_pending','revoked','expired')),
-  remote_id           text UNIQUE,
-  share_key           text,
-  delete_token        text,
+  remote_id           text UNIQUE,     -- 공유 id. be가 만들어 예약(creating) 때 넣는다
+  share_key           text,            -- 링크의 #뒤 복호화 키. active일 때만, 끝나면 NULL
+  delete_token        text,            -- be가 만든 삭제 토큰. 예약 때 넣고 철회가 끝나면 NULL
   scope               jsonb NOT NULL,
   duration_days       int NOT NULL,
   expires_at          timestamptz,
@@ -2707,8 +2863,9 @@ git commit -m "feat(be): meeting_share 마이그레이션 — 회의를 지워�
   - env `SHARE_API_URL: string` (기본 `https://damwha-share.0kimjae.dev`)
   - `parseShareApiUrl(raw: string): URL` (잘못되면 throw)
   - `shareEnabled(env: { HOST: string; DEMO_READ_ONLY: string }): boolean`
-  - `class ShareClient { constructor(baseUrl: string, timeoutMs?: number); upload(envelope: Uint8Array, days: ShareDurationDays, replace?: { id: string; token: string }): Promise<UploadResult>; remove(remoteId: string, deleteToken: string): Promise<'deleted' | 'gone'>; linkFor(remoteId: string, key: string): string }`
-  - `type UploadResult = { id: string; delete_token: string; expires_at: string; replaced: boolean }`
+  - `class ShareClient { constructor(baseUrl: string, timeoutMs?: number); upload(envelope: Uint8Array, o: UploadOptions): Promise<UploadResult>; remove(remoteId: string, deleteToken: string): Promise<'deleted' | 'gone'>; linkFor(remoteId: string, key: string): string }`
+  - `type UploadOptions = { id: string; deleteToken: string; days: ShareDurationDays; replace?: { id: string; token: string } }`, `type UploadResult = { expires_at: string; replaced: boolean }`
+  - `ShareServiceError.definitelyNotCreated: boolean` — 서버가 4xx로 답했다(객체를 만들지 않았다). 연결 끊김·타임아웃·5xx는 false
   - `class ShareServiceError extends Error { kind: 'unreachable' | 'rejected'; status: number | null }`, `class ShareTooLargeError extends Error`
   - 테스트 도우미 `startFakeShareServer(): Promise<FakeShareServer>` (Task 10·11이 쓴다) — `nextUpload(): Promise<void>`로 "업로드 요청이 도착했다"를 기다릴 수 있다
 
@@ -2726,10 +2883,11 @@ import type { AddressInfo } from 'node:net';
 
 /**
  * 공유 서버의 HTTP 계약(share/src/app.ts)만 흉내 내는 서버. be 테스트가 실제 공유 서버 없이 업로드·교체·철회·
- * 장애를 재현한다. mode로 장애를 고른다 — drop: 소켓을 끊음(오프라인), down500, busy503, redirect, garbage(201인데 본문이 틀림).
+ * 장애를 재현한다. mode로 장애를 고른다 — drop: 소켓을 끊음(오프라인), storeThenDrop: 저장은 하고 응답 대신 소켓을 끊음
+ * (응답 유실), down500, busy503, redirect, garbage(201인데 본문이 틀림).
  * nextUpload()는 다음 POST가 **도착한 순간** 풀린다 — 경합 테스트가 "업로드 중"을 시간 대신 사건으로 기다린다.
  */
-export type FakeMode = 'ok' | 'drop' | 'down500' | 'busy503' | 'redirect' | 'garbage';
+export type FakeMode = 'ok' | 'drop' | 'storeThenDrop' | 'down500' | 'busy503' | 'redirect' | 'garbage';
 
 export interface FakeShareServer {
   url: string;
@@ -2767,7 +2925,7 @@ export async function startFakeShareServer(): Promise<FakeShareServer> {
       if (state.mode === 'redirect') { res.writeHead(302, { location: 'http://127.0.0.1:9/elsewhere' }).end(); return; }
       const m = (req.url ?? '').match(/^\/api\/shares(?:\/([^/?]+))?$/);
       if (req.method === 'POST' && m && !m[1]) {
-        if (state.mode === 'garbage') { res.writeHead(201, { 'content-type': 'application/json' }).end('{}'); return; }
+        if (state.mode === 'garbage') { res.writeHead(201, { 'content-type': 'application/json' }).end('{"expires_at":"x"}'); return; }
         // 교체 — 토큰이 틀리면 아무것도 만들지 않는다 (share/src/app.ts와 같은 규칙)
         const replaceId = req.headers['x-replace-id'] as string | undefined;
         let replaced = false;
@@ -2776,13 +2934,22 @@ export async function startFakeShareServer(): Promise<FakeShareServer> {
           if (old && req.headers['x-replace-token'] !== old.token) { res.writeHead(403).end('{"code":"BAD_TOKEN"}'); return; }
           replaced = old !== undefined;
         }
+        // id·토큰은 be가 보낸다 (share/src/app.ts와 같은 계약). 같은 id·토큰 재전송은 멱등 200.
         const days = String(req.headers['x-share-days']);
-        const id = `${days}-${String(++n).padStart(22, 'A')}`;
-        const token = `tok-${n}`;
+        const id = String(req.headers['x-share-id']);
+        const token = String(req.headers['x-delete-token']);
+        const existing = state.objects.get(id);
+        if (existing) {
+          if (existing.token !== token) { res.writeHead(409).end('{"code":"ID_TAKEN"}'); return; }
+          res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ id, expires_at: existing.expires_at, replaced: false }));
+          return;
+        }
+        n++;
         const expires_at = new Date(Date.now() + Number(days) * 86_400_000).toISOString();
         state.objects.set(id, { body: Buffer.concat(chunks), token, expires_at });
         if (replaced) state.objects.delete(replaceId!);
-        res.writeHead(201, { 'content-type': 'application/json' }).end(JSON.stringify({ id, delete_token: token, expires_at, replaced }));
+        if (state.mode === 'storeThenDrop') { req.socket.destroy(); return; }
+        res.writeHead(201, { 'content-type': 'application/json' }).end(JSON.stringify({ id, expires_at, replaced }));
         return;
       }
       if (req.method === 'DELETE' && m?.[1]) {
@@ -2811,10 +2978,10 @@ export async function startFakeShareServer(): Promise<FakeShareServer> {
 `be/test/share-client.spec.ts`:
 
 ```ts
-import { SHARE_MAX_ENVELOPE_BYTES } from '@damwha/share-format';
+import { SHARE_MAX_ENVELOPE_BYTES, newDeleteToken, newShareId } from '@damwha/share-format';
 import { parseShareApiUrl } from '../src/shares/share-api-url';
 import { shareEnabled } from '../src/shares/share-enabled';
-import { ShareClient, ShareServiceError, ShareTooLargeError } from '../src/shares/share-client';
+import { ShareClient, ShareServiceError, ShareTooLargeError, type UploadOptions } from '../src/shares/share-client';
 import { startFakeShareServer, FakeShareServer } from './fake-share-server';
 
 describe('parseShareApiUrl', () => {
@@ -2845,70 +3012,91 @@ describe('ShareClient', () => {
   let client: ShareClient;
   beforeEach(async () => { fake = await startFakeShareServer(); client = new ShareClient(fake.url, 300); });
   afterEach(async () => { await fake.close(); });
+  const opts = (over: Partial<UploadOptions> = {}): UploadOptions => ({ id: newShareId(7), deleteToken: newDeleteToken(), days: 7, ...over });
 
-  it('업로드 — 기간 헤더와 본문을 보내고 응답을 그대로 돌려준다', async () => {
-    const up = await client.upload(new Uint8Array([1, 2, 3]), 7);
-    expect(up.id).toMatch(/^7-/);
+  it('업로드 — be가 만든 id·토큰과 기간을 헤더로, 본문을 그대로 보낸다', async () => {
+    const o = opts();
+    const up = await client.upload(new Uint8Array([1, 2, 3]), o);
+    expect(up.replaced).toBe(false);
+    expect(Date.parse(up.expires_at)).toBeGreaterThan(Date.now());
+    const h = fake.requests[0].headers;
     expect(fake.requests[0]).toMatchObject({ method: 'POST', path: '/api/shares' });
-    expect(fake.requests[0].headers['x-share-days']).toBe('7');
-    expect(fake.requests[0].headers['content-type']).toBe('application/octet-stream');
-    expect([...fake.objects.get(up.id)!.body]).toEqual([1, 2, 3]);
+    expect([h['x-share-days'], h['x-share-id'], h['x-delete-token'], h['content-type']]).toEqual(['7', o.id, o.deleteToken, 'application/octet-stream']);
+    expect([...fake.objects.get(o.id)!.body]).toEqual([1, 2, 3]);
+  });
+
+  it('같은 id·토큰으로 다시 올리면 성공(멱등 200)이다 — 응답 유실 뒤 재시도', async () => {
+    const o = opts();
+    const first = await client.upload(new Uint8Array([1]), o);
+    expect(await client.upload(new Uint8Array([1]), o)).toEqual({ expires_at: first.expires_at, replaced: false });
   });
 
   it('교체 — 기존 id·토큰을 헤더로 싣고, 응답의 replaced를 돌려준다', async () => {
-    const old = await client.upload(new Uint8Array([1]), 7);
-    const fresh = await client.upload(new Uint8Array([2]), 7, { id: old.id, token: old.delete_token });
+    const old = opts();
+    await client.upload(new Uint8Array([1]), old);
+    const fresh = await client.upload(new Uint8Array([2]), opts({ replace: { id: old.id, token: old.deleteToken } }));
     expect(fresh.replaced).toBe(true);
     expect(fake.requests[1].headers['x-replace-id']).toBe(old.id);
-    expect(fake.requests[1].headers['x-replace-token']).toBe(old.delete_token);
+    expect(fake.requests[1].headers['x-replace-token']).toBe(old.deleteToken);
     expect(fake.objects.has(old.id)).toBe(false);
   });
 
-  it('교체 토큰이 틀리면 rejected/403', async () => {
-    const old = await client.upload(new Uint8Array([1]), 7);
-    await expect(client.upload(new Uint8Array([2]), 7, { id: old.id, token: 'wrong' })).rejects.toMatchObject({ kind: 'rejected', status: 403 });
+  it('교체 토큰이 틀리면 rejected/403이고 "분명히 만들지 않음"', async () => {
+    const old = opts();
+    await client.upload(new Uint8Array([1]), old);
+    await expect(client.upload(new Uint8Array([2]), opts({ replace: { id: old.id, token: 'wrong' } }))).rejects.toMatchObject({
+      kind: 'rejected', status: 403, definitelyNotCreated: true,
+    });
   });
 
   it('상한을 넘는 봉투는 보내지도 않는다', async () => {
-    await expect(client.upload(new Uint8Array(SHARE_MAX_ENVELOPE_BYTES + 1), 7)).rejects.toBeInstanceOf(ShareTooLargeError);
+    await expect(client.upload(new Uint8Array(SHARE_MAX_ENVELOPE_BYTES + 1), opts())).rejects.toBeInstanceOf(ShareTooLargeError);
     expect(fake.requests).toHaveLength(0);
   });
 
   it('철회 — 처음엔 deleted, 다시 하면 gone', async () => {
-    const up = await client.upload(new Uint8Array([1]), 1);
-    expect(await client.remove(up.id, up.delete_token)).toBe('deleted');
-    expect(await client.remove(up.id, up.delete_token)).toBe('gone');
+    const o = opts({ days: 1, id: newShareId(1) });
+    await client.upload(new Uint8Array([1]), o);
+    expect(await client.remove(o.id, o.deleteToken)).toBe('deleted');
+    expect(await client.remove(o.id, o.deleteToken)).toBe('gone');
   });
 
   it('리다이렉트를 따라가지 않는다', async () => {
     fake.mode = 'redirect';
-    await expect(client.upload(new Uint8Array([1]), 7)).rejects.toMatchObject({ kind: 'rejected', status: 302 });
+    await expect(client.upload(new Uint8Array([1]), opts())).rejects.toMatchObject({ kind: 'rejected', status: 302, definitelyNotCreated: false });
     expect(fake.requests).toHaveLength(1);
   });
 
-  it('503은 rejected/503', async () => {
+  it('503은 rejected/503 — 만들었는지 모른다', async () => {
     fake.mode = 'busy503';
-    await expect(client.upload(new Uint8Array([1]), 7)).rejects.toMatchObject({ kind: 'rejected', status: 503 });
+    await expect(client.upload(new Uint8Array([1]), opts())).rejects.toMatchObject({ kind: 'rejected', status: 503, definitelyNotCreated: false });
   });
 
   it('연결이 끊기면 unreachable', async () => {
     fake.mode = 'drop';
-    await expect(client.upload(new Uint8Array([1]), 7)).rejects.toMatchObject({ kind: 'unreachable' });
+    await expect(client.upload(new Uint8Array([1]), opts())).rejects.toMatchObject({ kind: 'unreachable', definitelyNotCreated: false });
+  });
+
+  it('저장된 뒤 응답을 잃어도 unreachable — 호출부는 만들었을 수 있다고 본다', async () => {
+    fake.mode = 'storeThenDrop';
+    const o = opts();
+    await expect(client.upload(new Uint8Array([1]), o)).rejects.toMatchObject({ kind: 'unreachable' });
+    expect(fake.objects.has(o.id)).toBe(true);
   });
 
   it('타임아웃이면 unreachable', async () => {
     fake.delayMs = 1000;
-    await expect(client.upload(new Uint8Array([1]), 7)).rejects.toMatchObject({ kind: 'unreachable' });
+    await expect(client.upload(new Uint8Array([1]), opts())).rejects.toMatchObject({ kind: 'unreachable' });
   });
 
-  it('201인데 본문이 틀리면 rejected', async () => {
+  it('201인데 replaced가 boolean이 아니거나 expires_at이 날짜가 아니면 rejected', async () => {
     fake.mode = 'garbage';
-    await expect(client.upload(new Uint8Array([1]), 7)).rejects.toMatchObject({ kind: 'rejected' });
+    await expect(client.upload(new Uint8Array([1]), opts())).rejects.toMatchObject({ kind: 'rejected' });
   });
 
   it('오류 메시지에 삭제 토큰이 없다', async () => {
     fake.mode = 'down500';
-    const err = await client.remove('7-AAAAAAAAAAAAAAAAAAAAA1', 'SECRET-TOKEN-123').catch((e: unknown) => e);
+    const err = await client.remove(newShareId(7), 'SECRET-TOKEN-123').catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ShareServiceError);
     expect(String((err as Error).message) + String((err as Error).stack)).not.toContain('SECRET-TOKEN-123');
   });
@@ -2932,7 +3120,7 @@ Expected: FAIL — `../src/shares/share-api-url` 모듈 없음.
 const LOCAL = new Set(['localhost', '127.0.0.1']);
 
 /**
- * 공유 서버 주소 (spec selfhost §2.7 "밖으로 나가는 HTTP"). https만, 개발용 http://localhost·127.0.0.1만 예외.
+ * 공유 서버 주소 (spec selfhost-v2 §2.7 "밖으로 나가는 HTTP"). https만, 개발용 http://localhost·127.0.0.1만 예외.
  * 경로·쿼리·자격 증명이 붙은 값은 받지 않는다 — 링크(`<origin>/s/<id>#<key>`)와 API 경로를 이 origin에서 만든다.
  */
 export function parseShareApiUrl(raw: string): URL {
@@ -2970,21 +3158,34 @@ export function shareEnabled(env: { HOST: string; DEMO_READ_ONLY: string }): boo
 `be/src/shares/share-client.ts`:
 
 ```ts
-import { SHARE_ID_RE, SHARE_MAX_ENVELOPE_BYTES } from '@damwha/share-format';
+import { SHARE_MAX_ENVELOPE_BYTES } from '@damwha/share-format';
 import type { ShareDurationDays } from '@damwha/contracts';
 import { parseShareApiUrl } from './share-api-url';
 
-export type UploadResult = { id: string; delete_token: string; expires_at: string; replaced: boolean };
+export type UploadOptions = {
+  /** be가 만든 공유 id·삭제 토큰(newShareId·newDeleteToken). 업로드 전에 로컬 DB에 저장해 둔다. */
+  id: string;
+  deleteToken: string;
+  days: ShareDurationDays;
+  replace?: { id: string; token: string };
+};
+export type UploadResult = { expires_at: string; replaced: boolean };
 
 /** 공유 서비스 호출 실패. 메시지에 키·삭제 토큰을 싣지 않는다 — 로그와 응답으로 흘러간다. */
 export class ShareServiceError extends Error {
   readonly kind: 'unreachable' | 'rejected';
   readonly status: number | null;
+  /**
+   * 서버가 4xx로 답했다 = 객체를 만들지 않았다. 연결 끊김·타임아웃·3xx·5xx는 false — 서버에 객체가 생겼을 수 있으니
+   * 호출부는 그 id를 철회 대기열에 넣는다(spec selfhost-v2 §2.7 3단계).
+   */
+  readonly definitelyNotCreated: boolean;
   constructor(kind: 'unreachable' | 'rejected', status: number | null, message: string) {
     super(message);
     this.name = 'ShareServiceError';
     this.kind = kind;
     this.status = status;
+    this.definitelyNotCreated = kind === 'rejected' && status !== null && status >= 400 && status < 500;
   }
 }
 
@@ -3006,30 +3207,37 @@ export class ShareClient {
   }
 
   /**
-   * 업로드. `replace`를 주면 공유 서버가 같은 요청 안에서 기존 공유를 지운다(spec selfhost §2.4 교체) —
+   * 업로드. `replace`를 주면 공유 서버가 같은 요청 안에서 기존 공유를 지운다(spec selfhost-v2 §2.4 교체) —
    * 응답이 오면 기존 링크는 이미 막혀 있다. 교체 토큰이 틀리면 서버는 아무것도 만들지 않고 403이다.
    */
-  async upload(envelope: Uint8Array, days: ShareDurationDays, replace?: { id: string; token: string }): Promise<UploadResult> {
+  async upload(envelope: Uint8Array, o: UploadOptions): Promise<UploadResult> {
     if (envelope.byteLength > SHARE_MAX_ENVELOPE_BYTES) throw new ShareTooLargeError(envelope.byteLength);
-    const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream', 'X-Share-Days': String(days) };
-    if (replace) {
-      headers['X-Replace-Id'] = replace.id;
-      headers['X-Replace-Token'] = replace.token;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/octet-stream',
+      'X-Share-Days': String(o.days),
+      'X-Share-Id': o.id,
+      'X-Delete-Token': o.deleteToken,
+    };
+    if (o.replace) {
+      headers['X-Replace-Id'] = o.replace.id;
+      headers['X-Replace-Token'] = o.replace.token;
     }
     const res = await this.send('/api/shares', { method: 'POST', headers, body: envelope });
-    if (res.status !== 201) throw new ShareServiceError('rejected', res.status, `share service answered ${res.status} to upload`);
-    const body = (await res.json().catch(() => null)) as Partial<UploadResult> | null;
+    // 201 = 새로 만듦, 200 = 같은 id·토큰의 재시도(이미 있음)
+    if (res.status !== 201 && res.status !== 200) {
+      throw new ShareServiceError('rejected', res.status, `share service answered ${res.status} to upload`);
+    }
+    const body = (await res.json().catch(() => null)) as { id?: unknown; expires_at?: unknown; replaced?: unknown } | null;
     if (
       !body ||
-      typeof body.id !== 'string' ||
-      !SHARE_ID_RE.test(body.id) ||
-      typeof body.delete_token !== 'string' ||
+      body.id !== o.id ||
       typeof body.expires_at !== 'string' ||
-      Number.isNaN(Date.parse(body.expires_at))
+      Number.isNaN(Date.parse(body.expires_at)) ||
+      typeof body.replaced !== 'boolean'
     ) {
       throw new ShareServiceError('rejected', res.status, 'share service returned a malformed upload response');
     }
-    return { id: body.id, delete_token: body.delete_token, expires_at: body.expires_at, replaced: body.replaced === true };
+    return { expires_at: body.expires_at, replaced: body.replaced };
   }
 
   /** 'deleted'·'gone'(이미 없음) 둘 다 성공이다. */
@@ -3061,7 +3269,7 @@ export class ShareClient {
 `be/src/config/env.ts` — import에 `import { parseShareApiUrl } from '../shares/share-api-url';`를 더하고, `ALLOWED_HOSTS` 다음 줄에:
 
 ```ts
-  // 공유 서버(share/, 개인 서버 + Cloudflare Tunnel)의 origin (spec selfhost §2.4·§2.7). 개발은 be/.env의
+  // 공유 서버(share/, 개인 서버 + Cloudflare Tunnel)의 origin (spec selfhost-v2 §2.4·§2.7). 개발은 be/.env의
   // http://localhost:8787. 기본값이 운영 주소라 packaged 앱은 따로 넘기지 않는다 — desktop은 상속 env의 값을 지운다.
   SHARE_API_URL: z.string().default('https://damwha-share.0kimjae.dev').superRefine(validatedBy(parseShareApiUrl)),
 ```
@@ -3081,7 +3289,7 @@ Expected: PASS
 
 - [ ] **Step 7: 변이 확인**
 
-`send`의 `redirect: 'manual'`을 지우고 실행 → "리다이렉트를 따라가지 않는다"가 FAIL(요청이 2건이거나 unreachable). 되돌린다. `shareEnabled`의 `&& env.DEMO_READ_ONLY !== 'true'`를 지우고 → 마지막 행이 FAIL. 되돌린다.
+`send`의 `redirect: 'manual'`을 지우고 실행 → "리다이렉트를 따라가지 않는다"가 FAIL(요청이 2건이거나 unreachable). 되돌린다. `upload`의 `typeof body.replaced !== 'boolean'` 조건을 지우고 → "201인데 replaced가…"가 FAIL. 되돌린다. `shareEnabled`의 `&& env.DEMO_READ_ONLY !== 'true'`를 지우고 → 마지막 행이 FAIL. 되돌린다.
 
 - [ ] **Step 8: 커밋**
 
@@ -3175,6 +3383,11 @@ it('근거가 공유되는 발화일 때만 linkable — 예전 버전·silence�
   const p = build({});
   expect(p.lenses!.map((l) => [l.start_ms, l.linkable])).toEqual([[1000, true], [500, false], [null, false], [6000, false]]);
   expect(p.lenses!.map((l) => l.done)).toEqual([false, true, false, false]);
+});
+
+it('발화 기록을 빼면 근거가 공유될 발화여도 linkable=false (시각은 남는다)', () => {
+  const p = build({ transcript: false });
+  expect(p.lenses!.map((l) => [l.start_ms, l.linkable])).toEqual([[1000, false], [500, false], [null, false], [6000, false]]);
 });
 
 it('고르지 않은 섹션은 키째 없다', () => {
@@ -3515,7 +3728,8 @@ export function buildPayload(
       due_at: l.due_at,
       assignee_ref: l.assignee_speaker_id === null ? null : refOf(l.assignee_speaker_id, l.assignee_name),
       start_ms: l.primary?.start_ms ?? null,
-      linkable: l.primary?.shared === true,
+      // 발화 기록을 빼고 공유하면 스크롤할 대상이 없다 — 근거가 공유되는 발화여도 false.
+      linkable: scope.transcript && l.primary?.shared === true,
     }));
   }
   if (scope.note && snap.note !== null) payload.note = { body_md: snap.note };
@@ -3718,14 +3932,44 @@ describe('공유 API', () => {
       expect(fake.objects.size).toBe(1);
     });
 
-    it('업로드가 실패하면 기존 링크는 그대로이고 creating 행도 남지 않는다', async () => {
+    it('업로드가 닿지 않으면 기존 링크는 그대로이고, 시도한 id는 철회 대기열에 남는다(만들어졌을 수도 있어서)', async () => {
       const { meetingId } = await seedSharedMeeting(db.pool);
       const first = (await request(srv()).post(`/meetings/${meetingId}/share`).send(body()).expect(201)).body.share;
       fake.mode = 'drop';
       const res = await request(srv()).post(`/meetings/${meetingId}/share`).send(body()).expect(502);
       expect(res.body.code).toBe('SHARE_SERVICE_UNREACHABLE');
       const r = await rows();
-      expect(r.map((x) => [x.id, x.status])).toEqual([[first.id, 'active']]);
+      expect(r.map((x) => x.status)).toEqual(['active', 'revoke_pending']);
+      expect(r[0].id).toBe(first.id);
+      expect(r[1]).toMatchObject({ share_key: null });
+      expect(r[1].delete_token).not.toBeNull();
+      expect(r.some((x) => x.status === 'creating')).toBe(false);
+    });
+
+    it('서버가 저장한 뒤 응답을 잃으면 그 객체는 철회되어 서버에 남지 않는다', async () => {
+      const { meetingId } = await seedSharedMeeting(db.pool);
+      fake.mode = 'storeThenDrop';
+      await request(srv()).post(`/meetings/${meetingId}/share`).send(body()).expect(502);
+      expect(fake.objects.size).toBe(1); // 저장은 됐다
+      fake.mode = 'ok';
+      await until(async () => (await rows())[0]?.status === 'revoked');
+      expect(fake.objects.size).toBe(0);
+    });
+
+    it('업로드하는 사이 기존 링크를 중지해도 새 링크는 활성화된다 (spec selfhost-v2 §2.7 6)', async () => {
+      const { meetingId } = await seedSharedMeeting(db.pool);
+      const first = (await request(srv()).post(`/meetings/${meetingId}/share`).send(body()).expect(201)).body.share;
+      fake.delayMs = 200;
+      const uploading = fake.nextUpload();
+      const pending = request(srv()).post(`/meetings/${meetingId}/share`).send(body()).then((r) => r);
+      await uploading;
+      await request(srv()).delete(`/meetings/${meetingId}/share`); // 기존 링크 중지
+      const res = await pending;
+      expect(res.status).toBe(201);
+      const r = await rows();
+      expect(r.find((x) => x.id === first.id)?.status).toBe('revoked');
+      expect(r.find((x) => x.id === res.body.share.id)?.status).toBe('active');
+      expect(fake.objects.size).toBe(1);
     });
 
     it('공유 서비스가 바쁘면 503 SHARE_SERVICE_BUSY', async () => {
@@ -3929,15 +4173,16 @@ export class SharesRepository {
     return (await exec.query('SELECT 1 FROM meeting WHERE id=$1 FOR UPDATE', [meetingId])).rowCount === 1;
   }
 
+  /** 예약. be가 만든 공유 id·삭제 토큰을 **업로드 전에** 저장한다 — 이후 어디서 실패해도 철회할 수 있다. */
   async insertCreating(
     exec: Exec,
-    a: { meetingId: string; scope: ShareScope; durationDays: number; consentVersion: number },
+    a: { meetingId: string; scope: ShareScope; durationDays: number; consentVersion: number; remoteId: string; deleteToken: string },
   ): Promise<string> {
     try {
       const { rows } = await exec.query<{ id: string }>(
-        `INSERT INTO meeting_share(meeting_id,status,scope,duration_days,consent_version,consented_at)
-         VALUES($1,'creating',$2::jsonb,$3,$4,now()) RETURNING id`,
-        [a.meetingId, JSON.stringify(a.scope), a.durationDays, a.consentVersion],
+        `INSERT INTO meeting_share(meeting_id,status,scope,duration_days,consent_version,consented_at,remote_id,delete_token)
+         VALUES($1,'creating',$2::jsonb,$3,$4,now(),$5,$6) RETURNING id`,
+        [a.meetingId, JSON.stringify(a.scope), a.durationDays, a.consentVersion, a.remoteId, a.deleteToken],
       );
       return rows[0].id;
     } catch (e) {
@@ -3966,22 +4211,24 @@ export class SharesRepository {
     return (await exec.query<ShareRow>(`SELECT * FROM meeting_share WHERE meeting_id=$1 AND status='active'`, [meetingId])).rows[0] ?? null;
   }
 
-  async activate(exec: Exec, id: string, a: { remoteId: string; key: string; deleteToken: string; expiresAt: string }): Promise<void> {
+  async activate(exec: Exec, id: string, a: { key: string; expiresAt: string }): Promise<void> {
     await exec.query(
-      `UPDATE meeting_share SET status='active', remote_id=$2, share_key=$3, delete_token=$4, expires_at=$5
-        WHERE id=$1 AND status='creating'`,
-      [id, a.remoteId, a.key, a.deleteToken, a.expiresAt],
+      `UPDATE meeting_share SET status='active', share_key=$2, expires_at=$3 WHERE id=$1 AND status='creating'`,
+      [id, a.key, a.expiresAt],
     );
   }
 
-  /** 업로드는 됐는데 회의가 사라진 경우 — 링크는 내보낸 적 없으니 키 없이 바로 철회 대기열로. */
-  async attachRevokePending(exec: Exec, id: string, a: { remoteId: string; deleteToken: string; expiresAt: string }): Promise<ShareRow> {
+  /**
+   * creating → revoke_pending. 업로드가 서버에 닿았는지 모르거나(응답 유실), 닿았는데 회의가 사라졌거나, 확정 전에
+   * 죽은 경우다. id·토큰을 알고 있으니 철회하면 된다 — 없으면 DELETE가 404(= 성공)다. 링크는 내보낸 적이 없다.
+   */
+  async creatingToRevokePending(exec: Exec, id: string, expiresAt: string | null = null): Promise<ShareRow | null> {
     const { rows } = await exec.query<ShareRow>(
-      `UPDATE meeting_share SET status='revoke_pending', remote_id=$2, delete_token=$3, expires_at=$4, share_key=NULL
-        WHERE id=$1 RETURNING *`,
-      [id, a.remoteId, a.deleteToken, a.expiresAt],
+      `UPDATE meeting_share SET status='revoke_pending', share_key=NULL, expires_at=COALESCE($2::timestamptz, expires_at)
+        WHERE id=$1 AND status='creating' RETURNING *`,
+      [id, expiresAt],
     );
-    return rows[0];
+    return rows[0] ?? null;
   }
 
   /** 회의의 active를 철회 대기로. 키는 지금 지운다(링크가 죽었다), 삭제 토큰은 철회가 끝날 때까지 남긴다. */
@@ -4038,10 +4285,14 @@ export class SharesRepository {
     return rowCount ?? 0;
   }
 
-  /** 확정 전에 프로세스가 죽어 남은 creating. 서버 객체가 남았어도 토큰을 모르니 만료를 기다린다 (spec §2.7 고아 정리). */
-  async deleteStaleCreating(exec: Exec): Promise<number> {
+  /**
+   * 10분 넘은 creating(확정 전에 프로세스가 죽었다) → revoke_pending. 업로드가 됐는지 모르지만 id·토큰을 아니까
+   * 철회한다 — 서버에 주인 없는 객체가 남지 않는다 (spec selfhost-v2 §2.7 고아 정리). expires_at이 없으니 최장 기간으로 둔다.
+   */
+  async staleCreatingToRevokePending(exec: Exec): Promise<number> {
     const { rowCount } = await exec.query(
-      `DELETE FROM meeting_share WHERE status='creating' AND created_at < now() - interval '10 minutes'`,
+      `UPDATE meeting_share SET status='revoke_pending', expires_at = created_at + interval '30 days'
+        WHERE status='creating' AND created_at < now() - interval '10 minutes'`,
     );
     return rowCount ?? 0;
   }
@@ -4068,7 +4319,7 @@ import {
 } from '@nestjs/common';
 import { z } from 'zod';
 import { SHARE_CONSENT_VERSION, UI_LANGUAGES, isShareDurationDays, type ShareDurationDays } from '@damwha/contracts';
-import { encryptShare, generateShareKey, type ShareScope } from '@damwha/share-format';
+import { encryptShare, generateShareKey, newDeleteToken, newShareId, type ShareScope } from '@damwha/share-format';
 import { DatabaseService } from '../database/database.service';
 import { ShareClient, ShareServiceError, ShareTooLargeError } from './share-client';
 import { buildPayload, SummaryNotReadyError } from './share-payload';
@@ -4190,11 +4441,16 @@ export class SharesService {
     }
 
     // 1. 예약 — 같은 회의의 creating은 하나뿐이다(유니크 인덱스). 두 번째 요청은 409.
+    //    공유 id·삭제 토큰은 여기서 만들어 **업로드 전에** 저장한다(spec selfhost-v2 §2.7).
+    const remoteId = newShareId(req.duration_days);
+    const deleteToken = newDeleteToken();
     let shareId: string;
     try {
       shareId = await this.db.withTransaction(async (c) => {
         if (!(await this.repo.lockMeeting(c, meetingId))) throw new NotFoundException('meeting not found');
-        return this.repo.insertCreating(c, { meetingId, scope, durationDays: req.duration_days, consentVersion: req.consent_version });
+        return this.repo.insertCreating(c, {
+          meetingId, scope, durationDays: req.duration_days, consentVersion: req.consent_version, remoteId, deleteToken,
+        });
       });
     } catch (e) {
       throw toHttp(e);
@@ -4207,16 +4463,29 @@ export class SharesService {
       const key = generateShareKey();
       const payload = buildPayload(snap, scope, { now: new Date(), uiLanguage: req.ui_language });
       // 교체 — 기존 active의 원격 id·삭제 토큰을 업로드 요청에 싣는다. 서버가 같은 요청에서 지우므로 응답이 오면
-      // 기존 링크는 이미 막혀 있다(spec selfhost §2.4). 토큰이 틀리면 서버는 아무것도 만들지 않는다(403).
+      // 기존 링크는 이미 막혀 있다(spec selfhost-v2 §2.4). 토큰이 틀리면 서버는 아무것도 만들지 않는다(403).
       const current = await this.repo.findActive(this.db.pool, meetingId);
       const replace = current?.remote_id && current.delete_token ? { id: current.remote_id, token: current.delete_token } : undefined;
-      const up = await this.client.upload(await encryptShare(payload, key), req.duration_days, replace);
+      const envelope = await encryptShare(payload, key);
+      let up: { expires_at: string; replaced: boolean };
+      try {
+        up = await this.client.upload(envelope, { id: remoteId, deleteToken, days: req.duration_days, replace });
+      } catch (e) {
+        // 서버가 분명히 만들지 않았으면(4xx·크기 초과) 아래 catch가 예약 행을 지운다. 모르면(끊김·타임아웃·5xx)
+        // 객체가 생겼을 수 있으니 철회 대기열로 — 실패는 "닫히는 쪽"이다.
+        if (e instanceof ShareServiceError && !e.definitelyNotCreated) {
+          const row = await this.repo.creatingToRevokePending(this.db.pool, shareId);
+          if (row) void this.revokeRows([row]);
+        }
+        throw e;
+      }
 
-      // 4. 확정 — 기존 active를 먼저 내려야 active 유니크 인덱스와 부딪히지 않는다.
+      // 4. 확정 — 기존 active를 먼저 내려야 active 유니크 인덱스와 부딪히지 않는다. 업로드하는 사이 사용자가 기존
+      //    링크를 중지했다면 그 행은 이미 active가 아니라 여기서 잡히지 않고, 새 링크는 그대로 활성화된다(spec §2.7 6).
       const outcome = await this.db.withTransaction(async (c) => {
         if (!(await this.repo.lockMeeting(c, meetingId))) {
-          const orphan = await this.repo.attachRevokePending(c, shareId, { remoteId: up.id, deleteToken: up.delete_token, expiresAt: up.expires_at });
-          return { gone: true as const, toRevoke: [orphan] };
+          const orphan = await this.repo.creatingToRevokePending(c, shareId, up.expires_at);
+          return { gone: true as const, toRevoke: orphan ? [orphan] : [] };
         }
         const old = await this.repo.markActiveRevokePending(c, meetingId);
         // 서버가 교체로 지운 행은 바로 revoked. 서버가 몰랐던 행(다른 주소 등)만 철회 대기열에 남긴다.
@@ -4225,7 +4494,7 @@ export class SharesService {
           if (up.replaced && row.remote_id === replace?.id) await this.repo.markRevoked(c, row.id);
           else toRevoke.push(row);
         }
-        await this.repo.activate(c, shareId, { remoteId: up.id, key, deleteToken: up.delete_token, expiresAt: up.expires_at });
+        await this.repo.activate(c, shareId, { key, expiresAt: up.expires_at });
         return { gone: false as const, toRevoke };
       });
       // 5. 남은 철회는 응답을 기다리지 않는다(보통 비어 있다).
@@ -4267,11 +4536,11 @@ export class SharesService {
     return { share_revoke: 'pending', share_expires_at: latest ? new Date(latest).toISOString() : null };
   }
 
-  /** 만료 정리 → 오래된 creating 정리 → 때가 된 철회 재시도 (Task 11의 스위퍼가 부른다). */
+  /** 만료 정리 → 오래된 creating을 철회 대기로 → 때가 된 철회 재시도 (Task 11의 스위퍼가 부른다). */
   async sweep(): Promise<void> {
     try {
       await this.repo.expireDue(this.db.pool);
-      await this.repo.deleteStaleCreating(this.db.pool);
+      await this.repo.staleCreatingToRevokePending(this.db.pool);
     } catch (e) {
       this.logger.warn(`share sweep cleanup failed: ${(e as Error).message}`);
     }
@@ -4396,7 +4665,8 @@ Expected: PASS
 
 1. `create`의 4단계에서 `markActiveRevokePending` 줄을 `activate` **뒤로** 옮긴다 → "새 링크를 만들면…"이 `meeting_share_one_active_idx` 위반으로 FAIL. 되돌린다.
 2. 마이그레이션의 `meeting_share_one_creating_idx`를 지우고(테스트 DB는 매번 새로 만든다) → "동시에 두 번 누르면…"이 FAIL. 되돌린다.
-3. `create`에서 `upload(…, replace)`의 세 번째 인자를 빼고 실행 → "새 링크를 만들면 응답 시점에…"가 FAIL(서버에 옛 객체가 남는다). 되돌린다.
+3. `create`에서 `upload` 옵션의 `replace`를 빼고 실행 → "새 링크를 만들면 응답 시점에…"가 FAIL(서버에 옛 객체가 남는다). 되돌린다.
+5. `upload` 실패 분기의 `creatingToRevokePending` 호출을 지운다 → "서버가 저장한 뒤 응답을 잃으면…"이 FAIL(객체가 남는다). 되돌린다.
 4. `findCurrent`의 `expires_at > now()` 조건을 지운다 → "조회 — 만료가 지난 공유는 보이지 않지만…"이 FAIL. 되돌린다.
 
 - [ ] **Step 8: 커밋**
@@ -4435,6 +4705,7 @@ import { SharesSweeper } from '../src/shares/shares.sweeper';
 import { startTestDb, StartedTestDb } from './db';
 import { startFakeShareServer, FakeShareServer } from './fake-share-server';
 import { seedSharedMeeting } from './share-fixtures';
+import { newDeleteToken, newShareId } from '@damwha/share-format';
 
 const CAPS = { platform: 'darwin', arch: 'arm64', chip: 'test', memory_gb: 32, gpu_eligible: true, recommended_preset: 'standard' };
 const BODY = { scope: { summary: true, lenses: false, transcript: false, note: false, anonymize: false }, duration_days: 7, consent_version: 1, ui_language: 'ko' };
@@ -4453,6 +4724,7 @@ describe('공유 수명 주기', () => {
     app = mod.createNestApplication<NestExpressApplication>();
     await app.init();
     sweeper = app.get(SharesSweeper);
+    await sweeper.ready; // 기동 스위프가 끝난 뒤에 시작한다 — 테스트의 행과 겹치지 않게
   });
   afterEach(async () => {
     await db.reset();
@@ -4506,21 +4778,30 @@ describe('공유 수명 주기', () => {
     expect((await request(srv()).delete(`/meetings/${meetingId}`).expect(200)).body).toEqual({ share_revoke: 'none', share_expires_at: null });
   });
 
-  it('스위퍼 — 만료된 행은 expired, 10분 넘은 creating은 지운다', async () => {
+  it('스위퍼 — 만료된 행은 expired, 10분 넘은 creating은 철회해서 서버에 남기지 않는다', async () => {
     const { meetingId } = await seedSharedMeeting(db.pool);
     await share(meetingId);
     await db.pool.query(`UPDATE meeting_share SET expires_at = now() - interval '1 second'`);
-    const fresh = (await db.pool.query(
-      `INSERT INTO meeting_share(meeting_id,status,scope,duration_days,consent_version,consented_at) VALUES($1,'creating','{}',7,1,now()) RETURNING id`, [meetingId],
-    )).rows[0].id;
+    // 확정 전에 죽은 업로드: 서버에는 객체가 있고, 로컬에는 creating 행(id·토큰)만 남았다
+    const staleId = newShareId(7);
+    const staleToken = newDeleteToken();
+    fake.objects.set(staleId, { body: Buffer.from([1]), token: staleToken, expires_at: new Date(Date.now() + 86_400_000).toISOString() });
     await db.pool.query(
-      `INSERT INTO meeting_share(meeting_id,status,scope,duration_days,consent_version,consented_at,created_at) VALUES(NULL,'creating','{}',7,1,now(), now() - interval '11 minutes')`,
+      `INSERT INTO meeting_share(meeting_id,status,remote_id,delete_token,scope,duration_days,consent_version,consented_at,created_at)
+       VALUES(NULL,'creating',$1,$2,'{}',7,1,now(), now() - interval '11 minutes')`,
+      [staleId, staleToken],
     );
+    const fresh = (await db.pool.query(
+      `INSERT INTO meeting_share(meeting_id,status,remote_id,delete_token,scope,duration_days,consent_version,consented_at)
+       VALUES($1,'creating',$2,$3,'{}',7,1,now()) RETURNING id`,
+      [meetingId, newShareId(7), newDeleteToken()],
+    )).rows[0].id;
     await sweeper.tick();
-    const statuses = (await db.pool.query(`SELECT id, status, share_key FROM meeting_share ORDER BY id`)).rows;
-    expect(statuses.map((r) => r.status)).toEqual(['expired', 'creating']);
-    expect(statuses[1].id).toBe(fresh);
-    expect(statuses[0].share_key).toBeNull();
+    const r = (await db.pool.query(`SELECT id, status, share_key, remote_id FROM meeting_share ORDER BY id`)).rows;
+    expect(r.map((x) => x.status)).toEqual(['expired', 'revoked', 'creating']);
+    expect(r[0].share_key).toBeNull();
+    expect(r[2].id).toBe(fresh);
+    expect(fake.objects.has(staleId)).toBe(false);
   });
 });
 
@@ -4589,12 +4870,14 @@ import { SharesService } from './shares.service';
  */
 @Injectable()
 export class SharesSweeper implements OnApplicationBootstrap {
+  /** 기동 스위프의 완료. 테스트가 기다려 자기 준비 행과 겹치지 않게 한다. */
+  ready: Promise<void> = Promise.resolve();
+
   constructor(@Inject(SHARE_ENABLED) private readonly enabled: boolean, private readonly service: SharesService) {}
 
   onApplicationBootstrap(): void {
-    // 기동을 붙잡지 않는다 — 공유 서버가 안 닿으면 타임아웃까지 걸린다. sweep()은 오류를 삼키므로(경고 로그만),
-    // 다른 e2e 파일이 reset()으로 테이블을 비우는 사이에 돌아도 테스트 실패로 번지지 않는다(Codex 계획 리뷰 #13).
-    void this.tick();
+    // 기동을 붙잡지 않는다 — 공유 서버가 안 닿으면 타임아웃까지 걸린다. sweep()은 오류를 삼킨다(경고 로그만).
+    this.ready = this.tick();
   }
 
   @Cron(CronExpression.EVERY_5_MINUTES)
@@ -4606,6 +4889,8 @@ export class SharesSweeper implements OnApplicationBootstrap {
 ```
 
 `shares.module.ts`의 providers에 `SharesSweeper`를 더한다.
+
+`be/test/shares.e2e-spec.ts`(Task 10)의 첫 `beforeAll` 끝, `app = await makeApp();` 다음 줄에 `await app.get(SharesSweeper).ready;`를 더한다(import `SharesSweeper` 추가) — 이제 기동 스위프가 생겼으니 그것이 끝난 뒤 테스트를 시작한다.
 
 `be/src/meetings/meetings.module.ts` — `imports`에 `SharesModule`을 더한다(`import { SharesModule } from '../shares/shares.module';`).
 
@@ -4653,7 +4938,7 @@ Expected: PASS
 - [ ] **Step 6: 커밋**
 
 ```bash
-git add be/src/shares be/src/meetings be/test/shares-lifecycle.e2e-spec.ts be/test/meetings-management.e2e-spec.ts be/test/tags.e2e-spec.ts
+git add be/src/shares be/src/meetings be/test/shares-lifecycle.e2e-spec.ts be/test/shares.e2e-spec.ts be/test/meetings-management.e2e-spec.ts be/test/tags.e2e-spec.ts
 git commit -m "feat(be): 공유 스위퍼와 회의 삭제 시 링크 철회 — 오프라인이면 대기열로"
 ```
 
@@ -5241,10 +5526,16 @@ const ACTIVE: ShareView = {
   scope: { summary: true, lenses: true, transcript: false, note: false, anonymize: false }, duration_days: 7, created_at: "2026-10-09T00:00:00.000Z",
 };
 
+type Scope = { summary: boolean; lenses: boolean; transcript: boolean; note: boolean; anonymize: boolean };
+/** 범위마다 다른 미리보기 — 화면에 뜬 미리보기가 "지금 고른 범위의 것"인지 글자로 구분한다. */
+const topicFor = (scope: Scope) => (scope.note ? "메모 포함본" : scope.transcript ? "발화 포함본" : "배포 일정");
+const previewResponse = (scope: Scope) =>
+  ({ data: { payload: { ...PAYLOAD, summary: { topics: [topicFor(scope)], segments: [] } }, expires_at_estimate: "2026-10-16T00:00:00.000Z" } }) as never;
+
 let post: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
-  post = vi.spyOn(apiClient, "post").mockImplementation(async (url: string) => {
-    if (url.endsWith("/preview")) return { data: { payload: PAYLOAD, expires_at_estimate: "2026-10-16T00:00:00.000Z" } } as never;
+  post = vi.spyOn(apiClient, "post").mockImplementation(async (url: string, body?: unknown) => {
+    if (url.endsWith("/preview")) return previewResponse((body as { scope: Scope }).scope);
     return { data: { share: ACTIVE } } as never;
   });
 });
@@ -5261,10 +5552,10 @@ function renderDialog(props: Partial<React.ComponentProps<typeof ShareDialog>> =
 
 const submit = () => screen.getByRole("button", { name: "링크 만들기" });
 const consent = () => fireEvent.click(screen.getByLabelText("위 내용을 확인했고, 참석자에게 공유해도 되는 내용이에요"));
-/** 미리보기가 그려질 때까지 — 그 전에는 공유 버튼이 꺼져 있다. */
-const previewShown = async () => {
+/** 그 범위의 미리보기가 그려질 때까지 — 그 전에는 공유 버튼이 꺼져 있다. */
+const previewShown = async (topic = "배포 일정") => {
   const region = await screen.findByRole("region", { name: "받는 사람에게 이렇게 보여요" });
-  await within(region).findByText("배포 일정");
+  await within(region).findByText(topic);
 };
 
 test("기본 동의를 체크하기 전에는 링크를 만들 수 없다", async () => {
@@ -5276,7 +5567,7 @@ test("기본 동의를 체크하기 전에는 링크를 만들 수 없다", asyn
 });
 
 test("미리보기가 오기 전과 실패했을 때는 동의해도 버튼이 꺼져 있다", async () => {
-  let release!: () => void;
+  let release: (() => void) | undefined;
   post.mockImplementation(
     (url: string) =>
       new Promise((resolve, reject) => {
@@ -5286,8 +5577,9 @@ test("미리보기가 오기 전과 실패했을 때는 동의해도 버튼이 �
   );
   renderDialog();
   consent();
+  await waitFor(() => expect(release).toBeDefined()); // 미리보기 요청이 나갔다
   expect(submit()).toBeDisabled(); // 아직 미리보기가 없다
-  release();
+  release!();
   expect(await screen.findByText("공유하지 못했어요.")).toBeInTheDocument();
   expect(submit()).toBeDisabled(); // 실패한 미리보기로는 공유하지 않는다
 });
@@ -5296,17 +5588,38 @@ test("발화 기록을 켜면 책임 확인이 나타나고, 체크해야 버튼
   renderDialog();
   consent();
   expect(screen.queryByLabelText("참석자의 허락을 받았고, 공유 책임이 나에게 있음을 이해했어요")).toBeNull();
-  fireEvent.click(screen.getByLabelText("발화 기록"));
+  fireEvent.click(screen.getByRole("checkbox", { name: "발화 기록" }));
   expect(screen.getByText(/발화 기록에는 다른 참석자의 발언이 그대로/)).toBeInTheDocument();
-  await previewShown(); // 범위가 바뀌어 새 미리보기를 받는다
-  expect(submit()).toBeDisabled();
+  await previewShown("발화 포함본"); // 새 범위의 미리보기
+  expect(submit()).toBeDisabled(); // 책임 확인 전
+
   fireEvent.click(screen.getByLabelText("참석자의 허락을 받았고, 공유 책임이 나에게 있음을 이해했어요"));
+  expect(submit()).toBeEnabled();
+});
+
+test("범위를 바꾸면 새 범위의 미리보기가 올 때까지 버튼이 꺼진다", async () => {
+  renderDialog();
+  consent();
+  await previewShown("배포 일정");
+  expect(submit()).toBeEnabled();
+  let answer: (() => void) | undefined;
+  post.mockImplementation((url: string, body?: unknown) =>
+    url.endsWith("/preview")
+      ? new Promise((resolve) => { answer = () => resolve(previewResponse((body as { scope: Scope }).scope)); })
+      : Promise.resolve({ data: { share: ACTIVE } } as never),
+  );
+  fireEvent.click(screen.getByRole("checkbox", { name: "메모" }));
+  await waitFor(() => expect(answer).toBeDefined());
+  expect(post).toHaveBeenLastCalledWith("/meetings/mtg_1/share/preview", expect.objectContaining({ scope: expect.objectContaining({ note: true }) }));
+  expect(submit()).toBeDisabled(); // 옛 범위의 미리보기로는 공유하지 않는다
+  answer!();
+  await previewShown("메모 포함본");
   expect(submit()).toBeEnabled();
 });
 
 test("요약이 done이 아니면 요약 체크는 꺼져 있고 비활성이다", () => {
   renderDialog({ meeting: meeting({ summaryStatus: "failed" }) });
-  const box = screen.getByLabelText(/요약/) as HTMLInputElement;
+  const box = screen.getByRole("checkbox", { name: "요약" }) as HTMLInputElement;
   expect(box.checked).toBe(false);
   expect(box.disabled).toBe(true);
   expect(screen.getByText("요약이 아직 없어요")).toBeInTheDocument();
@@ -5315,8 +5628,8 @@ test("요약이 done이 아니면 요약 체크는 꺼져 있고 비활성이다
 test("내용을 하나도 고르지 않으면 버튼이 꺼진다", () => {
   renderDialog();
   fireEvent.click(screen.getByLabelText("위 내용을 확인했고, 참석자에게 공유해도 되는 내용이에요"));
-  fireEvent.click(screen.getByLabelText(/요약/));
-  fireEvent.click(screen.getByLabelText("할 일·결정·약속"));
+  fireEvent.click(screen.getByRole("checkbox", { name: "요약" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "할 일·결정·약속" }));
   expect(submit()).toBeDisabled();
 });
 
@@ -5340,7 +5653,7 @@ test("이미 공유 중이면 새 링크 화면에 기존 링크 중지 경고�
 
 test("409는 '이미 만드는 중' 문구로 알린다", async () => {
   post.mockImplementation(async (url: string) => {
-    if (url.endsWith("/preview")) return { data: { payload: PAYLOAD, expires_at_estimate: "2026-10-16T00:00:00.000Z" } } as never;
+    if (url.endsWith("/preview")) return previewResponse({ summary: true, lenses: true, transcript: false, note: false, anonymize: false });
     throw new ApiError(409, "x", "SHARE_IN_PROGRESS");
   });
   renderDialog();
@@ -5525,7 +5838,7 @@ function CreateView({
   const hasContent = CONTENT_KEYS.some((k) => scope[k]);
   const preview = useSharePreview(meeting.id, scope, lang, days, hasContent);
   const create = useCreateShare();
-  // 쿼리 키에 범위·언어·기간이 들어 있어 값을 바꾸면 새 키가 pending이 된다 — 그동안 버튼은 꺼진다(spec selfhost §2.6).
+  // 쿼리 키에 범위·언어·기간이 들어 있어 값을 바꾸면 새 키가 pending이 된다 — 그동안 버튼은 꺼진다(spec selfhost-v2 §2.6).
   const previewReady = preview.isSuccess && !preview.isFetching;
   const expiresEstimate = preview.data?.expiresAtEstimate ?? new Date(Date.now() + days * 86_400_000).toISOString();
   const canSubmit = hasContent && consent && (!scope.transcript || ack) && previewReady && !create.isPending;
@@ -6121,7 +6434,7 @@ Expected: `grep -c` 출력이 `0`.
 `deploy/share/Dockerfile` (빌드 컨텍스트는 레포 루트):
 
 ```dockerfile
-# 공유 서버 (spec selfhost §2.4). 빌드: docker build -f deploy/share/Dockerfile -t damwha-share:<ver> .
+# 공유 서버 (spec selfhost-v2 §2.4). 빌드: docker build -f deploy/share/Dockerfile -t damwha-share:<ver> .
 FROM node:22-alpine AS build
 RUN corepack enable
 WORKDIR /repo
@@ -6145,6 +6458,9 @@ ENV NODE_ENV=production \
     PORT=8787 \
     DATA_DIR=/data \
     VIEWER_DIR=/app/viewer
+# 새 named volume은 이미지의 /data 소유권을 물려받는다 — 미리 node 소유로 만들어 두지 않으면 root 소유 볼륨에
+# USER node가 /data/shares를 만들지 못해 서버가 뜨지 않는다.
+RUN mkdir -p /data && chown node:node /data
 VOLUME /data
 EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1:8787/healthz || exit 1
@@ -6168,7 +6484,7 @@ services:
       dockerfile: deploy/share/Dockerfile
     restart: unless-stopped
     ports:
-      # loopback만 — 바깥에 열면 CF-Connecting-IP를 누구나 위조할 수 있다 (spec selfhost §2.4)
+      # loopback만 — 바깥에 열면 CF-Connecting-IP를 누구나 위조할 수 있다 (spec selfhost-v2 §2.4)
       - "127.0.0.1:8787:8787"
     environment:
       UPLOADS_ENABLED: "true"
@@ -6185,7 +6501,7 @@ volumes:
 ```markdown
 # 공유 서버 배포 (개인 서버 + Cloudflare Tunnel)
 
-spec: `docs/superpowers/specs/2026-10-09-meeting-share-selfhost-design.md` §2.4.
+spec: `docs/superpowers/specs/2026-10-09-meeting-share-selfhost-v2-design.md` §2.4.
 
 ## 띄우기
 
@@ -6224,7 +6540,9 @@ docker build -f deploy/share/Dockerfile -t damwha-share:test .
 docker run -d --name dss -p 127.0.0.1:18787:8787 -v dss-data:/data damwha-share:test
 sleep 3
 curl -s http://127.0.0.1:18787/healthz
-ID=$(curl -s -X POST -H 'X-Share-Days: 1' --data-binary 'probe' http://127.0.0.1:18787/api/shares | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')
+ID=$(node -e "import('./packages/share-format/dist/esm/index.js').then(f=>console.log(f.newShareId(1)))")
+TOKEN=$(node -e "import('./packages/share-format/dist/esm/index.js').then(f=>console.log(f.newDeleteToken()))")
+curl -s -X POST -H 'X-Share-Days: 1' -H "X-Share-Id: $ID" -H "X-Delete-Token: $TOKEN" --data-binary 'probe' http://127.0.0.1:18787/api/shares
 docker restart dss && sleep 3
 curl -s -o /dev/null -w 'after restart %{http_code}\n' http://127.0.0.1:18787/api/shares/$ID
 curl -s -o /dev/null -w 'viewer %{http_code}\n' http://127.0.0.1:18787/s/$ID
@@ -6232,7 +6550,7 @@ docker exec dss sh -c 'ls /data/shares | wc -l'
 docker rm -f dss && docker volume rm dss-data
 ```
 
-Expected: `{"ok":true}`, `after restart 200`(디스크에 남는다), `viewer 200`, 파일 `2`. 이미지 안에서 `DEV_EXPIRY_SECONDS`를 줘도 무시되는지는 Task 4의 `readConfig` 테스트가 지킨다.
+Expected: `{"ok":true}`, `after restart 200`(디스크에 남는다), `viewer 200`, 파일 `2`. **빈 새 볼륨**(`dss-data`)으로 띄웠으므로 `/data` 권한 문제가 있으면 여기서 컨테이너가 뜨지 않는다(`docker logs dss`). 이미지 안에서 `DEV_EXPIRY_SECONDS`를 줘도 무시되는지는 Task 4의 `readConfig` 테스트가 지킨다.
 
 - [ ] **Step 9: 커밋**
 
@@ -6340,7 +6658,7 @@ pnpm share:test               # 공유 서버(node) + 뷰어(jsdom) 테스트
 ```markdown
 # damwha-share
 
-공유 링크 서버 (spec `docs/superpowers/specs/2026-10-09-meeting-share-selfhost-design.md`). Node 프로세스 하나가
+공유 링크 서버 (spec `docs/superpowers/specs/2026-10-09-meeting-share-selfhost-v2-design.md`). Node 프로세스 하나가
 `/api/shares`(암호문 업로드·조회·삭제·교체)와 `/s/:id`(정적 뷰어)를 서빙한다. 서버는 암호문만 받고 키는 링크의 `#` 뒤에만 있다.
 
 ## 로컬
@@ -6389,7 +6707,7 @@ pnpm --filter damwha-desktop exec vitest run
 
 각 명령의 통과 수를 기록한다. 실패가 있으면 여기서 멈추고 고친다.
 
-- [ ] **Step 2: 개발 환경 연계 시나리오 (spec selfhost §3 표)**
+- [ ] **Step 2: 개발 환경 연계 시나리오 (spec selfhost-v2 §3 표)**
 
 준비: `be/.env`에 `SHARE_API_URL=http://localhost:8787`, `share/.env`에 `DEV_EXPIRY_SECONDS=60`. 터미널 둘에서 `pnpm dev`, `pnpm share:dev`. 브라우저 자동화를 쓰면 탭이 hidden이라 TanStack 폴링이 멈춘다 — 상태 확인은 새로고침으로 한다.
 
@@ -6420,7 +6738,7 @@ Task 16 Step 8의 이미지를 `-p 127.0.0.1:8787:8787`로 띄우고(`pnpm share
 
 - [ ] **Step 5: 연결 후 확인 (사용자가 개인 서버에 띄우고 Tunnel을 연결한 뒤)**
 
-`deploy/share/README.md`대로 띄우고 연결되면: 패키징된 앱에서 공유 → 다른 기기로 `https://damwha-share.0kimjae.dev/s/…` 열람 → 새 링크(기존 링크 막힘) → 중지 → 막힘. `curl -sI`로 응답 헤더(noindex, no-referrer, no-store, CSP). 같은 IP로 조회를 분당 120번 넘게 보내 429가 나오는지(`CF-Connecting-IP` 기준 제한). 그 전까지는 결과에 "미확인"으로 남긴다.
+`deploy/share/README.md`대로 띄우고 연결되면: 패키징된 앱에서 공유 → 다른 기기로 `https://damwha-share.0kimjae.dev/s/…` 열람 → 새 링크(기존 링크 막힘) → 중지 → 막힘. `curl -sD - -o /dev/null https://damwha-share.0kimjae.dev/s/<id>`(GET — 서버는 HEAD를 처리하지 않는다)로 응답 헤더(noindex, no-referrer, no-store, CSP). 같은 IP로 조회를 분당 120번 넘게 보내 429가 나오는지(`CF-Connecting-IP` 기준 제한). 그 전까지는 결과에 "미확인"으로 남긴다.
 
 - [ ] **Step 6: 그래프 갱신**
 
