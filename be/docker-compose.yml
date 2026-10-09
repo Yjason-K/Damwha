@@ -23,7 +23,8 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: damwha
     ports:
-      - "5432:5432"
+      # loopback만 — 기본 비밀번호라 LAN에 열면 안 된다. 쓰는 쪽(be·worker·desktop 디버그 DB)은 모두 localhost다.
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
