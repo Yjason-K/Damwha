@@ -5,13 +5,14 @@ import { readLimited } from './body.js';
 import type { ShareConfig } from './config.js';
 import { json, withSecurityHeaders } from './http.js';
 import { DailyBudget, WindowLimiter } from './limits.js';
+import { serveViewer } from './static.js';
 import type { DiskStore } from './store.js';
 
 export interface AppDeps {
   store: DiskStore;
   config: ShareConfig;
   now: () => Date;
-  /** 뷰어 빌드 산출물(dist/viewer). Task 6 전까지 null. */
+  /** 뷰어 빌드 산출물(dist/viewer). 빌드가 없으면 null(뷰어 라우트 404). */
   viewerDir: string | null;
   /** 한 줄 로그. 메서드·경로·상태만 — 본문과 Authorization·교체 토큰은 넘기지 않는다. */
   log?: (line: string) => void;
@@ -151,6 +152,10 @@ export function createApp(deps: AppDeps) {
         return limiters.delete.allow(info.ip, t) ? remove(req, id) : json(429, { code: 'RATE_LIMITED' });
       }
       return json(405, { code: 'METHOD_NOT_ALLOWED' });
+    }
+    if (req.method === 'GET' && deps.viewerDir) {
+      const page = await serveViewer(url.pathname, deps.viewerDir);
+      if (page) return page;
     }
     return json(404, { code: 'NOT_FOUND' });
   }

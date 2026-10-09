@@ -1,0 +1,4 @@
+html, body { margin: 0; }
+body { background: #ffffff; }
+@media (prefers-color-scheme: dark) { body { background: #161616; } }
+.viewer-state { max-width: 760px; margin: 0 auto; padding: 48px 16px; font: 15px/1.6 -apple-system, sans-serif; color: #6b6b6b; }
