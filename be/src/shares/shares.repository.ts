@@ -90,10 +90,11 @@ export class SharesRepository {
   /**
    * creating → revoke_pending. 업로드가 서버에 닿았는지 모르거나(응답 유실), 닿았는데 회의가 사라졌거나, 확정 전에
    * 죽은 경우다. id·토큰을 알고 있으니 철회하면 된다 — 없으면 DELETE가 404(= 성공)다. 링크는 내보낸 적이 없다.
+   * 서버가 준 만료 시각이 없으면 created_at + duration_days로 둔다 — 서버가 계속 안 닿아도 스위퍼가 그때 expired로 닫는다.
    */
   async creatingToRevokePending(exec: Exec, id: string, expiresAt: string | null = null): Promise<ShareRow | null> {
     const { rows } = await exec.query<ShareRow>(
-      `UPDATE meeting_share SET status='revoke_pending', share_key=NULL, expires_at=COALESCE($2::timestamptz, expires_at)
+      `UPDATE meeting_share SET status='revoke_pending', share_key=NULL, expires_at=COALESCE($2::timestamptz, expires_at, created_at + duration_days * interval '1 day')
         WHERE id=$1 AND status='creating' RETURNING *`,
       [id, expiresAt],
     );

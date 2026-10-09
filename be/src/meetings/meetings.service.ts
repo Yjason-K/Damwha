@@ -23,6 +23,8 @@ import { SummaryService } from '../summary/summary.service';
 import { TagsRepository } from '../tags/tags.repository';
 import { FoldersRepository } from '../folders/folders.repository';
 import { assertFolderExists, parseFolderId } from '../folders/folder-id';
+import { SharesRepository } from '../shares/shares.repository';
+import { SharesService, type RevokeSummary } from '../shares/shares.service';
 import * as fs from 'fs';
 
 const AUDIO_MIME = /^audio\//;
@@ -46,6 +48,8 @@ export class MeetingsService {
     private readonly caps: CapabilitiesService,
     private readonly tags: TagsRepository,
     private readonly folders: FoldersRepository,
+    private readonly shares: SharesRepository,
+    private readonly sharesService: SharesService,
   ) {}
 
   // Validation scope (Plan 1): MIME + extension + size only. Deep audio-integrity
@@ -194,10 +198,17 @@ export class MeetingsService {
   // Cascade removes clusters/utterances/embeddings/jobs; then drop on-disk files.
   // An in-flight worker holding this meeting's job is tolerated: its ownership
   // guards discard when the job/meeting rows disappear (see db-schema notes).
-  async remove(id: string): Promise<void> {
-    const deleted = await this.db.withTransaction((c) => this.meetings.deleteById(c, id));
-    if (!deleted) throw new NotFoundException('meeting not found');
+  // 공유 링크는 같은 트랜잭션에서 철회 대기로 돌린다(spec 2026-10-09 §2.7) — meeting_share는 SET NULL이라 행과
+  // 삭제 토큰이 남고, 커밋 뒤 한 번 철회를 시도한다. 오프라인이면 pending으로 응답하고 스위퍼가 이어 간다.
+  async remove(id: string): Promise<RevokeSummary> {
+    const result = await this.db.withTransaction(async (c) => {
+      const shares = await this.shares.markActiveRevokePending(c, id);
+      const deleted = await this.meetings.deleteById(c, id);
+      return { deleted, shares };
+    });
+    if (!result.deleted) throw new NotFoundException('meeting not found');
     await this.storage.deleteDir(this.storage.meetingDir(id));
+    return this.sharesService.revokeRows(result.shares);
   }
 
   async list() { return this.meetings.list(this.db.pool); }

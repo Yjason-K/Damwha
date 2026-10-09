@@ -250,7 +250,7 @@ export class SharesService {
       await this.repo.expireDue(this.db.pool);
       await this.repo.staleCreatingToRevokePending(this.db.pool);
     } catch (e) {
-      this.logger.warn(`share sweep cleanup failed: ${(e as Error).message}`);
+      this.logger.warn(`share sweep cleanup failed (${(e as Error)?.name ?? 'unknown'})`); // 메시지는 싣지 않는다 — 값이 섞일 수 있다
     }
     await this.retryPending();
   }
@@ -261,7 +261,7 @@ export class SharesService {
       try {
         for (const row of await this.repo.listRevokeDue(this.db.pool)) await this.tryRevoke(row);
       } catch (e) {
-        this.logger.warn(`share revoke retry failed: ${(e as Error).message}`);
+        this.logger.warn(`share revoke retry failed (${(e as Error)?.name ?? 'unknown'})`);
       }
     })().finally(() => {
       this.retrying = null;

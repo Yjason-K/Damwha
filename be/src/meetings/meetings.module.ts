@@ -9,9 +9,10 @@ import { LensesModule } from '../lenses/lenses.module';
 import { SummaryModule } from '../summary/summary.module';
 import { TagsRepository } from '../tags/tags.repository';
 import { FoldersModule } from '../folders/folders.module';
+import { SharesModule } from '../shares/shares.module';
 
 @Module({
-  imports: [SettingsModule, SystemModule, LensesModule, SummaryModule, FoldersModule],
+  imports: [SettingsModule, SystemModule, LensesModule, SummaryModule, FoldersModule, SharesModule],
   controllers: [MeetingsController, ClustersController],
   providers: [MeetingsService, MeetingsRepository, TagsRepository],
   exports: [MeetingsRepository, MeetingsService],

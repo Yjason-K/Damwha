@@ -6,6 +6,7 @@ import { decryptShare } from '@damwha/share-format';
 import { AppModule } from '../src/app.module';
 import { CAPABILITIES } from '../src/system/capabilities';
 import { SHARE_ENABLED } from '../src/shares/share-enabled.guard';
+import { SharesSweeper } from '../src/shares/shares.sweeper';
 import { SharesRepository } from '../src/shares/shares.repository';
 import { startTestDb, StartedTestDb } from './db';
 import { startFakeShareServer, FakeShareServer } from './fake-share-server';
@@ -46,6 +47,7 @@ describe('공유 API', () => {
     fake = await startFakeShareServer();
     process.env.SHARE_API_URL = fake.url;
     app = await makeApp(true);
+    await app.get(SharesSweeper).ready;
   });
   afterEach(async () => {
     await db.reset();
