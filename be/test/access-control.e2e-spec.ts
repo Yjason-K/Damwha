@@ -77,6 +77,19 @@ describe('local API access control', () => {
         ? fs.readdirSync(path.join(db.storageRoot, 'meetings')) : []).toEqual([]);
     });
 
+    it('다른 Origin의 공유 만들기는 403이고 meeting_share 행이 생기지 않는다', async () => {
+      const mid = await seedMeeting();
+      await http().post(`/api/meetings/${mid}/share`).set('Host', SELF_HOST).set('Origin', EVIL)
+        .type('text/plain').send(JSON.stringify({ scope: {}, duration_days: 7, consent_version: 1, ui_language: 'ko' }))
+        .expect(403);
+      expect(await count('SELECT count(*) AS n FROM meeting_share')).toBe(0);
+    });
+
+    it('다른 Origin은 공유 목록(키가 든 링크)을 읽지 못한다', async () => {
+      const res = await http().get('/api/shares').set('Host', SELF_HOST).set('Origin', EVIL).expect(403);
+      expect(res.headers['access-control-allow-origin']).toBeUndefined();
+    });
+
     it('text/plain으로 실시간 녹음 시작은 403이고 회의가 생기지 않는다', async () => {
       await http().post('/api/meetings/live').set('Host', SELF_HOST).set('Origin', EVIL)
         .set('Content-Type', 'text/plain').send('{}').expect(403);
