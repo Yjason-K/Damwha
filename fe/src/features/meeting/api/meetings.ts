@@ -13,6 +13,7 @@ import type {
   SummaryModel,
 } from "@/features/settings/api/types";
 import type { Meeting, MeetingStatus, MeetingSummary } from "../model/types";
+import { shareKeys } from "@/features/share/api/share";
 import { removeMeetingCaches } from "./live";
 import { toMeetingDetail, toMeetingSummary } from "./mappers";
 import type {
@@ -192,12 +193,19 @@ export function useMoveMeetingToFolder() {
   });
 }
 
+/** DELETE /meetings/:id 응답 — 그 회의의 공유 링크가 어떻게 처리됐는지. */
+export type DeleteMeetingResult = {
+  share_revoke: "none" | "revoked" | "pending";
+  share_expires_at: string | null;
+};
+
 /** 회의 삭제 (DELETE /meetings/:id). */
 export function useDeleteMeeting() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (vars: { id: string }) => {
-      await apiClient.delete(`/meetings/${vars.id}`);
+      const { data } = await apiClient.delete<DeleteMeetingResult>(`/meetings/${vars.id}`);
+      return data;
     },
     onSuccess: (_data, vars) => {
       // 목록 캐시에서 삭제된 회의를 즉시 빼낸다. 무효화만 하면 재조회가 끝나기
@@ -214,6 +222,8 @@ export function useDeleteMeeting() {
       // 하므로 removeMeetingCaches를 함께 쓴다.
       removeMeetingCaches(queryClient, vars.id);
       queryClient.invalidateQueries({ queryKey: ["meetings"] });
+      // 공유 목록의 회의 제목이 "삭제된 회의"로 바뀌고 상태가 철회 대기일 수 있다.
+      queryClient.invalidateQueries({ queryKey: shareKeys.list });
     },
   });
 }

@@ -153,6 +153,12 @@ importers:
       '@damwha/contracts':
         specifier: workspace:*
         version: link:../packages/contracts
+      '@damwha/share-format':
+        specifier: workspace:*
+        version: link:../packages/share-format
+      '@damwha/share-view':
+        specifier: workspace:*
+        version: link:../packages/share-view
       '@radix-ui/react-slot':
         specifier: ^1.3.0
         version: 1.3.0(@types/react@19.2.17)(react@19.2.7)
