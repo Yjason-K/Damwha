@@ -39,7 +39,7 @@ export async function startTestDb(): Promise<StartedTestDb> {
     },
     reset: async () => {
       await pool.query(
-        `TRUNCATE job, lens_evidence, lens_item, lens_extraction_run, utterance, meeting_cluster, voiceprint, meeting, speaker, tag, app_setting RESTART IDENTITY CASCADE`,
+        `TRUNCATE meeting_share, job, lens_evidence, lens_item, lens_extraction_run, utterance, meeting_cluster, voiceprint, meeting, speaker, tag, app_setting RESTART IDENTITY CASCADE`,
       );
       await pool.query(`ALTER SEQUENCE speaker_default_seq RESTART`);
       // 기본 폴더는 마이그레이션이 만든 행이라 TRUNCATE하지 않고 남긴다.
