@@ -1,0 +1,30 @@
+{
+  "name": "@damwha/share-format",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Encrypted share envelope and payload shape. damwha-be encrypts, the share viewer decrypts — one copy of the format.",
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "dist/cjs/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/cjs/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/cjs/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.cjs.json && tsc -p tsconfig.esm.json && node -e \"require('fs').writeFileSync('dist/esm/package.json', JSON.stringify({type:'module'}))\"",
+    "prepare": "pnpm run build",
+    "test": "pnpm run build && node --test \"test/*.test.cjs\" \"test/*.test.mjs\""
+  },
+  "dependencies": {
+    "@damwha/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
