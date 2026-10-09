@@ -158,8 +158,9 @@ export class SharesService {
       try {
         up = await this.client.upload(envelope, { id: remoteId, deleteToken, days: req.duration_days, replace });
       } catch (e) {
-        // 서버가 분명히 만들지 않았으면(4xx·크기 초과) 아래 catch가 예약 행을 지운다. 모르면(끊김·타임아웃·5xx)
-        // 객체가 생겼을 수 있으니 철회 대기열로 — 실패는 "닫히는 쪽"이다.
+        // 서버가 분명히 만들지 않았으면(4xx·크기 초과, 또는 요청이 나가지도 못함 — 이름 풀이 실패·연결 거절, Tunnel
+        // 연결 전이 그렇다) 아래 catch가 예약 행을 지운다. 모르면(끊김·타임아웃·5xx) 객체가 생겼을 수 있으니 철회
+        // 대기열로 — 실패는 "닫히는 쪽"이다.
         if (e instanceof ShareServiceError && !e.definitelyNotCreated) {
           mayExistRemotely = true;
           const row = await this.repo.creatingToRevokePending(this.db.pool, shareId);

@@ -1,7 +1,8 @@
 import { SHARE_MAX_ENVELOPE_BYTES, newDeleteToken, newShareId } from '@damwha/share-format';
 import { parseShareApiUrl } from '../src/shares/share-api-url';
 import { shareEnabled } from '../src/shares/share-enabled';
-import { ShareClient, ShareServiceError, ShareTooLargeError, type UploadOptions } from '../src/shares/share-client';
+import { ShareClient, ShareServiceError, ShareTooLargeError, nothingWasSent, type UploadOptions } from '../src/shares/share-client';
+import net from 'node:net';
 import { startFakeShareServer, FakeShareServer } from './fake-share-server';
 
 describe('parseShareApiUrl', () => {
@@ -24,6 +25,37 @@ describe('shareEnabled', () => {
     ['127.0.0.1', 'true', false],
   ])('HOST=%s DEMO_READ_ONLY=%s → %s', (HOST, DEMO_READ_ONLY, expected) => {
     expect(shareEnabled({ HOST, DEMO_READ_ONLY })).toBe(expected);
+  });
+});
+
+/** 방금 비운 포트 — 아무것도 듣지 않는다. */
+async function freePort(): Promise<number> {
+  const srv = net.createServer();
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+  const { port } = srv.address() as net.AddressInfo;
+  await new Promise<void>((r) => srv.close(() => r()));
+  return port;
+}
+
+describe('nothingWasSent — fetch 실패 중 요청이 서버에 닿지 않았음이 확실한 것', () => {
+  const fetchFailed = (cause: unknown) => Object.assign(new TypeError('fetch failed'), { cause });
+  const sys = (code: string) => Object.assign(new Error(code), { code });
+  it.each(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED'])('%s → true', (code) => {
+    expect(nothingWasSent(fetchFailed(sys(code)))).toBe(true);
+  });
+  it('모든 주소가 거절한 AggregateError → true', () => {
+    expect(nothingWasSent(fetchFailed(Object.assign(new AggregateError([sys('ECONNREFUSED'), sys('ECONNREFUSED')]), { code: 'ECONNREFUSED' })))).toBe(true);
+  });
+  it('주소 하나라도 거절이 아니면(타임아웃 등) false', () => {
+    expect(nothingWasSent(fetchFailed(Object.assign(new AggregateError([sys('ECONNREFUSED'), sys('ETIMEDOUT')]), { code: 'ECONNREFUSED' })))).toBe(false);
+  });
+  it.each(['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'UND_ERR_SOCKET', 'UND_ERR_HEADERS_TIMEOUT'])('%s → false', (code) => {
+    expect(nothingWasSent(fetchFailed(sys(code)))).toBe(false);
+  });
+  it('타임아웃(AbortSignal)·원인 없음 → false', () => {
+    expect(nothingWasSent(new DOMException('timed out', 'TimeoutError'))).toBe(false);
+    expect(nothingWasSent(new TypeError('fetch failed'))).toBe(false);
+    expect(nothingWasSent(null)).toBe(false);
   });
 });
 
@@ -106,7 +138,20 @@ describe('ShareClient', () => {
 
   it('타임아웃이면 unreachable', async () => {
     fake.delayMs = 1000;
-    await expect(client.upload(new Uint8Array([1]), opts())).rejects.toMatchObject({ kind: 'unreachable' });
+    await expect(client.upload(new Uint8Array([1]), opts())).rejects.toMatchObject({ kind: 'unreachable', definitelyNotCreated: false });
+  });
+
+  it('연결을 거절당하면(ECONNREFUSED) unreachable이고 "분명히 만들지 않음" — 요청이 나가지 않았다', async () => {
+    const port = await freePort();
+    for (const host of ['127.0.0.1', 'localhost']) { // localhost는 ::1·127.0.0.1 둘 다 시도해 AggregateError로 온다
+      const refused = new ShareClient(`http://${host}:${port}`, 2000);
+      await expect(refused.upload(new Uint8Array([1]), opts())).rejects.toMatchObject({ kind: 'unreachable', definitelyNotCreated: true });
+    }
+  });
+
+  it('이름을 풀 수 없으면(ENOTFOUND — Tunnel 연결 전) unreachable이고 "분명히 만들지 않음"', async () => {
+    const nowhere = new ShareClient('https://damwha-share-test.invalid', 5000);
+    await expect(nowhere.upload(new Uint8Array([1]), opts())).rejects.toMatchObject({ kind: 'unreachable', definitelyNotCreated: true });
   });
 
   it('201인데 replaced만 boolean이 아니면 rejected', async () => {

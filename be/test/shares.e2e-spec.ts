@@ -8,6 +8,8 @@ import { CAPABILITIES } from '../src/system/capabilities';
 import { SHARE_ENABLED } from '../src/shares/share-enabled.guard';
 import { SharesSweeper } from '../src/shares/shares.sweeper';
 import { SharesRepository } from '../src/shares/shares.repository';
+import { ShareClient } from '../src/shares/share-client';
+import net from 'node:net';
 import { startTestDb, StartedTestDb } from './db';
 import { startFakeShareServer, FakeShareServer } from './fake-share-server';
 import { seedSharedMeeting } from './share-fixtures';
@@ -17,10 +19,11 @@ const SCOPE = { summary: true, lenses: true, transcript: false, note: false, ano
 const body = (over: Record<string, unknown> = {}) => ({ scope: SCOPE, duration_days: 7, consent_version: 1, ui_language: 'ko', ...over });
 
 /** 공유 활성 여부는 테스트마다 명시한다 — 기본값(HOST)에 기대면 env가 바뀔 때 조용히 꺼진 앱을 시험한다. */
-async function makeApp(enabled: boolean) {
-  const b = Test.createTestingModule({ imports: [AppModule] })
+async function makeApp(enabled: boolean, client?: ShareClient) {
+  let b = Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(CAPABILITIES).useValue(CAPS)
     .overrideProvider(SHARE_ENABLED).useValue(enabled);
+  if (client) b = b.overrideProvider(ShareClient).useValue(client);
   const app = (await b.compile()).createNestApplication<NestExpressApplication>();
   app.useBodyParser('json', { limit: '1mb' });
   await app.init();
@@ -164,6 +167,38 @@ describe('공유 API', () => {
       expect(r[1]).toMatchObject({ share_key: null });
       expect(r[1].delete_token).not.toBeNull();
       expect(r.some((x) => x.status === 'creating')).toBe(false);
+    });
+
+    it('공유 서버에 닿을 수 없으면(연결 거절 — Tunnel 연결 전) 예약 행을 지우고 502, 회의에는 공유가 없다 (spec §3)', async () => {
+      const port = await new Promise<number>((resolve) => {
+        const s = net.createServer().listen(0, '127.0.0.1', () => {
+          const p = (s.address() as net.AddressInfo).port;
+          s.close(() => resolve(p));
+        });
+      });
+      const offline = await makeApp(true, new ShareClient(`http://127.0.0.1:${port}`, 2000));
+      try {
+        await offline.get(SharesSweeper).ready;
+        const { meetingId } = await seedSharedMeeting(db.pool);
+        const res = await request(offline.getHttpServer()).post(`/meetings/${meetingId}/share`).send(body()).expect(502);
+        expect(res.body.code).toBe('SHARE_SERVICE_UNREACHABLE');
+        expect(JSON.stringify(res.body)).not.toMatch(/token|key/i);
+        expect(await rows()).toEqual([]);
+        expect((await request(offline.getHttpServer()).get(`/meetings/${meetingId}/share`).expect(200)).body).toEqual({ share: null });
+      } finally {
+        await offline.close();
+      }
+    });
+
+    it('철회 대기 중인 공유가 있어도 새 링크를 만들 수 있다', async () => {
+      const { meetingId } = await seedSharedMeeting(db.pool);
+      fake.mode = 'drop'; // 결과를 모르는 업로드 → revoke_pending
+      await request(srv()).post(`/meetings/${meetingId}/share`).send(body()).expect(502);
+      expect((await request(srv()).get(`/meetings/${meetingId}/share`).expect(200)).body.share.status).toBe('revoke_pending');
+      fake.mode = 'ok';
+      const res = await request(srv()).post(`/meetings/${meetingId}/share`).send(body()).expect(201);
+      expect(res.body.share.status).toBe('active');
+      expect((await request(srv()).get(`/meetings/${meetingId}/share`).expect(200)).body.share.id).toBe(res.body.share.id);
     });
 
     it('서버가 저장한 뒤 응답을 잃으면 그 객체는 철회되어 서버에 남지 않는다', async () => {

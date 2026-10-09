@@ -289,6 +289,20 @@ test("철회 대기 중이면 복사 버튼이 없고 안내만 있다", () => {
   ).toBeInTheDocument();
 });
 
+test("철회 대기 중이어도 새 링크를 만들 수 있다 — 대기 중인 링크가 공유를 막지 않는다", async () => {
+  renderDialog({ current: { ...ACTIVE, status: "revoke_pending", url: null } });
+  fireEvent.click(screen.getByRole("button", { name: "새 링크 만들기" }));
+  expect(submit()).toBeInTheDocument();
+  // 대기 중인 링크는 이미 막혀 있으니 "기존 링크가 중지돼요" 경고는 없다
+  expect(screen.queryByText(/기존 링크\(/)).toBeNull();
+  consent();
+  await previewShown();
+  fireEvent.click(submit());
+  expect(
+    await screen.findByRole("button", { name: "링크 복사" }),
+  ).toBeInTheDocument();
+});
+
 test("중지 — 202면 대기 안내", async () => {
   vi.spyOn(apiClient, "delete").mockResolvedValue({
     status: 202,

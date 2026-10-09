@@ -362,7 +362,15 @@ function ManageView({
     );
 
   if (share.status === "revoke_pending") {
-    return <p className="text-sm">{t("dialog.pendingNotice")}</p>;
+    // 대기 중인 링크는 이미 막혀 있다(키를 지웠다). 서버가 계속 안 닿아도 공유가 잠기지 않게 새 링크는 열어 둔다.
+    return (
+      <div className="flex flex-col gap-4">
+        <p className="text-sm">{t("dialog.pendingNotice")}</p>
+        <DialogFooter>
+          <Button onClick={onNewLink}>{t("dialog.newLink")}</Button>
+        </DialogFooter>
+      </div>
+    );
   }
   if (share.status !== "active") {
     return (

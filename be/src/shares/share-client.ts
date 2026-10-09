@@ -16,17 +16,40 @@ export class ShareServiceError extends Error {
   readonly kind: 'unreachable' | 'rejected';
   readonly status: number | null;
   /**
-   * 서버가 4xx로 답했다 = 객체를 만들지 않았다. 연결 끊김·타임아웃·3xx·5xx는 false — 서버에 객체가 생겼을 수 있으니
-   * 호출부는 그 id를 철회 대기열에 넣는다(spec selfhost-v2 §2.7 3단계).
+   * 서버가 4xx로 답했거나, 요청이 아예 나가지 못했다(이름 풀이 실패·연결 거절 — {@link nothingWasSent}) = 객체를
+   * 만들지 않았다. 연결 끊김·타임아웃·3xx·5xx는 false — 서버에 객체가 생겼을 수 있으니 호출부는 그 id를 철회
+   * 대기열에 넣는다(spec selfhost-v2 §2.7 3단계).
    */
   readonly definitelyNotCreated: boolean;
-  constructor(kind: 'unreachable' | 'rejected', status: number | null, message: string) {
+  constructor(kind: 'unreachable' | 'rejected', status: number | null, message: string, notSent = false) {
     super(message);
     this.name = 'ShareServiceError';
     this.kind = kind;
     this.status = status;
-    this.definitelyNotCreated = kind === 'rejected' && status !== null && status >= 400 && status < 500;
+    this.definitelyNotCreated = kind === 'unreachable'
+      ? notSent
+      : status !== null && status >= 400 && status < 500;
   }
+}
+
+/**
+ * 요청이 서버에 닿지 않았음이 확실한 연결 실패 코드. 이름을 못 풀었거나(ENOTFOUND·EAI_AGAIN — 예: Tunnel 연결 전의
+ * 기본 주소) TCP 연결 자체를 거절당했다(ECONNREFUSED). 연결이 된 뒤의 실패(ECONNRESET·소켓 끊김·타임아웃)는 서버가
+ * 본문을 받아 저장했을 수 있어서 여기 넣지 않는다.
+ */
+const NOT_SENT_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED']);
+
+/**
+ * fetch 실패가 "아무것도 보내지 못함"인가. undici는 `TypeError('fetch failed')`의 `cause`에 시스템 오류를 담는다.
+ * 주소가 여럿이면(localhost → ::1, 127.0.0.1) `cause`가 AggregateError이고, 그때는 **모든** 시도가 거절이어야 한다.
+ */
+export function nothingWasSent(e: unknown): boolean {
+  const cause = (e as { cause?: unknown } | null)?.cause;
+  if (!cause || typeof cause !== 'object') return false;
+  if (cause instanceof AggregateError) {
+    return cause.errors.length > 0 && cause.errors.every((x) => NOT_SENT_CODES.has((x as { code?: unknown })?.code as string));
+  }
+  return NOT_SENT_CODES.has((cause as { code?: unknown }).code as string);
 }
 
 export class ShareTooLargeError extends Error {
@@ -100,7 +123,7 @@ export class ShareClient {
       return await fetch(new URL(path, this.base), { ...init, redirect: 'manual', signal: AbortSignal.timeout(this.timeoutMs) });
     } catch (e) {
       // 원인 이름만 남긴다 — undici의 오류 객체는 요청 헤더(Authorization)를 cause에 담을 수 있다.
-      throw new ShareServiceError('unreachable', null, `share service unreachable (${(e as Error).name})`);
+      throw new ShareServiceError('unreachable', null, `share service unreachable (${(e as Error).name})`, nothingWasSent(e));
     }
   }
 }
