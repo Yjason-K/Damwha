@@ -70,9 +70,15 @@ function renderPane(over: Partial<Meeting> = {}) {
 
 test("배선되지 않은 헤더 우측 버튼을 렌더하지 않는다", () => {
   renderPane();
-  expect(screen.queryByRole("button", { name: "공유" })).toBeNull();
   expect(screen.queryByRole("button", { name: "더보기" })).toBeNull();
   expect(screen.queryByRole("button", { name: "저장" })).toBeNull();
+});
+
+test("done 회의에는 공유 버튼이 생긴다 (공유 기능이 배선됐다)", async () => {
+  renderPane();
+  expect(
+    await screen.findByRole("button", { name: "공유" }),
+  ).toBeInTheDocument();
 });
 
 test("동작하는 헤더 버튼은 남아 있다", () => {

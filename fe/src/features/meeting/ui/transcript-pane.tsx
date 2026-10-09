@@ -23,6 +23,7 @@ import {
   useSavedUtteranceIds,
   useSaveUtterance,
 } from "@/features/saved-utterance/api/saved-utterances";
+import { ShareButton } from "@/features/share/ui/share-button";
 import {
   useDeleteMeeting,
   useRenameMeeting,
@@ -545,6 +546,7 @@ export function TranscriptPane({
               <Icon name="download" size={16} />
             </IconButton>
           )}
+          <ShareButton meeting={meeting} />
           {/* 마이크를 못 연 실패는 파일이 없다 — 재처리할 게 없으니 숨긴다 */}
           {(meeting.status === "done" ||
             (meeting.status === "failed" &&
