@@ -135,6 +135,23 @@ describe('공유 수명 주기', () => {
     expect((await db.pool.query(`SELECT 1 FROM meeting_share WHERE status='active'`)).rowCount).toBe(0);
   });
 
+  it('철회 재시도 간격은 5분 틱이 몇 ms 늦게 찍은 시도 시각 때문에 한 틱을 건너뛰지 않는다(30초 여유)', async () => {
+    const mk = async (attempts: number, ago: string) => (await db.pool.query(
+      `INSERT INTO meeting_share(meeting_id,status,remote_id,delete_token,scope,duration_days,consent_version,consented_at,expires_at,
+                                 revoke_attempts,revoke_attempted_at)
+       VALUES(NULL,'revoke_pending',$1,$2,'{}',7,1,now(), now() + interval '7 days', $3, now() - $4::interval) RETURNING id`,
+      [newShareId(7), newDeleteToken(), attempts, ago],
+    )).rows[0].id as string;
+    // 다음 틱은 지난 시도 + 5분(1회 실패)·10분(2회)보다 몇 ms 이르게 온다 — 그 틱에 잡혀야 한다
+    const due1 = await mk(1, '4 minutes 59 seconds');
+    const due2 = await mk(2, '9 minutes 59 seconds');
+    // 여유는 30초뿐이다 — 한 틱 이른 시도는 아직이다
+    await mk(1, '4 minutes');
+    await mk(2, '9 minutes');
+    const ids = (await app.get(SharesRepository).listRevokeDue(db.pool)).map((r) => r.id).sort();
+    expect(ids).toEqual([due1, due2].sort());
+  });
+
   it('공유가 없는 회의 삭제는 none', async () => {
     const { meetingId } = await seedSharedMeeting(db.pool);
     expect((await request(srv()).delete(`/meetings/${meetingId}`).expect(200)).body).toEqual({ share_revoke: 'none', share_expires_at: null });

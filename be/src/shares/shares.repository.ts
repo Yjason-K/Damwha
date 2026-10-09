@@ -134,13 +134,17 @@ export class SharesRepository {
     return rows[0];
   }
 
-  /** 다시 시도할 때가 된 철회. 간격은 5분에서 두 배씩, 최대 1시간 (spec §2.7 재시도). */
+  /**
+   * 다시 시도할 때가 된 철회. 간격은 5분에서 두 배씩, 최대 1시간 (spec §2.7 재시도). 30초 여유를 둔다 — 스위퍼는
+   * 5분마다 돌고 시도 시각은 틱보다 몇 ms 늦게 찍혀서, 여유 없이 `<= now()`로 비교하면 매번 한 틱을 건너뛰어 간격이
+   * 두 배가 된다.
+   */
   async listRevokeDue(exec: Exec): Promise<ShareRow[]> {
     const { rows } = await exec.query<ShareRow>(
       `SELECT * FROM meeting_share
         WHERE status='revoke_pending'
           AND (revoke_attempted_at IS NULL
-               OR revoke_attempted_at + LEAST(interval '5 minutes' * power(2, GREATEST(revoke_attempts-1, 0)), interval '1 hour') <= now())
+               OR revoke_attempted_at + LEAST(interval '5 minutes' * power(2, GREATEST(revoke_attempts-1, 0)), interval '1 hour') <= now() + interval '30 seconds')
         ORDER BY created_at, id`,
     );
     return rows;
