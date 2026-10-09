@@ -61,7 +61,7 @@ ae4b149 docs(plan): 로컬 API 접근 제어 구현 계획
 
 **flake 메모.**
 - 우리 쪽 flake는 큰 본문 거부 행이었다. 서버가 본문이 오기 전에 403을 보내면 supertest 쓰기 중 ECONNRESET이 난다. F1이 이 두 행을 raw `node:http`(선언된 Content-Length가 파서 한도 초과, 1 KB만 쓰고 요청을 끝내지 않음)로 바꿔 없앴다. 수정 뒤 `-t "본문 파서"` 5회 연속 통과.
-- meetings(task 3에서 base `90c7a68`에서도 재현), lenses, speakers-management의 부하 flake는 이 브랜치 이전부터 있던 것이고 전체 실행에서만 가끔 나온다.
+- meetings·lenses·speakers-management e2e가 전체 실행에서 각각 한 번씩 실패했다(socket hang up·501 등). 셋 다 단독 실행에서는 통과했고 (meetings는 이 브랜치 직전 커밋 `90c7a68`에서도 단독 통과), 세 스위트는 `configureHttp`를 거치지 않아 이 브랜치의 미들웨어가 닿지 않는다. 부하 flake로 보이지만 원인은 확인하지 않았다 — base에서 같은 실패를 재현한 것은 아니다.
 
 ### 변이 검증 (be e2e)
 
