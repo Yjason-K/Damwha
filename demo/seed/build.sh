@@ -26,7 +26,8 @@ pg psql "$DATABASE_URL" -Atc "
 python3 -c "import json,sys; json.dump(json.load(open(sys.argv[1])), open(sys.argv[1],'w'), ensure_ascii=False, indent=2)" "$HERE/manifest.json"
 
 echo "→ pg_dump"
-pg pg_dump "$DATABASE_URL" -Fc --no-owner --no-acl > "$HERE/damwha-demo.dump"
+# 개발 DB에서 만든 공유의 키·삭제 토큰이 데모 덤프로 넘어가지 않게 한다 (spec 2026-10-09 §2.8). 스키마는 남긴다.
+pg pg_dump "$DATABASE_URL" -Fc --no-owner --no-acl --exclude-table-data=meeting_share > "$HERE/damwha-demo.dump"
 
 echo "→ normalized audio"
 rm -rf "$HERE/storage"

@@ -44,6 +44,7 @@ export type ApiLaunchMode = "dev" | "packaged";
  * - ALLOWED_ORIGINS·ALLOWED_HOSTS도 여기서 **최종값**을 정한다(spec 2026-10-08 §3.6). 상속 env나 config.json에서 온
  *   값은 남기지 않는다: packaged는 렌더러가 API와 같은 origin이라 둘 다 없고, dev는 Vite origin 하나다.
  *   (dev의 be는 be/.env를 dotenv로 읽지만 dotenv는 이미 있는 env를 덮지 않으므로 ALLOWED_ORIGINS는 이 값이 이긴다.)
+ * - SHARE_API_URL: packaged는 상속값을 버려 be의 운영 기본 주소를 쓴다. dev는 그대로 통과한다.
  */
 export function apiChildEnv(
   env: ApiEnv,
@@ -53,6 +54,9 @@ export function apiChildEnv(
   const out: Record<string, string> = { ...nodeChildEnv(env, inherited), HOST: "127.0.0.1" };
   delete out.ALLOWED_ORIGINS;
   delete out.ALLOWED_HOSTS;
+  // 공유 서비스 주소(spec 2026-10-09 §2.7). packaged는 be의 기본값(운영 주소)을 쓴다 — 개발자 셸에서
+  // 상속된 http://localhost:8787 같은 값이 서명된 앱으로 새지 않게 한다. dev는 be/.env·셸 값을 그대로 둔다.
+  if (mode === "packaged") delete out.SHARE_API_URL;
   if (mode === "dev") out.ALLOWED_ORIGINS = VITE_ORIGIN;
   return out;
 }

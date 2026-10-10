@@ -167,6 +167,11 @@ The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by 
 
 **URL contract:** `/` → replace-redirects to `/meetings` (opening the app lands on the card list, not a single meeting) · `/meetings/:id` meeting detail · `/meetings/:id?u=<utteranceId>` highlights that utterance and seeks the audio to it · `/meetings` all-meetings card list · `/folders/:folderId` one folder's card list (both take `?tab=mine|decisions|fav&sort=oldest|longest&page=N&size=20|30` — page size defaults to 10, unknown values fall back to it) · `/lenses/:kind` global lens dashboard · `/speakers` · `/settings`. The insight-pane tab and the sidebar meeting-list filter are intentionally not carried in the URL.
 
+- **공유 (`features/share/`, spec 2026-10-09 selfhost).** 회의 헤더의 `ShareButton`, `ShareDialog`(범위 → 미리보기 → 고지·동의,
+  관리 화면), 설정의 `SharedLinksSection`. 공유 라우트가 404면(Docker·데모 실행) 훅이 `"disabled"`를 돌려 UI를 통째로 숨긴다.
+  미리보기는 be `POST …/share/preview`가 만든 **실제 페이로드**를 `@damwha/share-view`로 그리고, 그 미리보기가 성공해야
+  공유 버튼이 켜진다. 문구는 `share` 네임스페이스(ko/en).
+
 ## Styling & design system
 
 **Read [`DESIGN.md`](DESIGN.md) before creating or modifying any UI.** It holds the design intent, the "situation → token" index, interaction-state requirements, and the hard Don'ts (check both themes, no raw hex, no shadows on flat cards, no ad-hoc tokens). Don't re-derive visual decisions per screen — DESIGN.md is what keeps them consistent.

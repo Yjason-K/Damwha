@@ -4,7 +4,7 @@ import { UI_LANGUAGES, type UiLanguage } from "@damwha/contracts";
 import { en } from "./locales/en";
 import { ko } from "./locales/ko";
 
-export const NAMESPACES = ["common", "settings"] as const;
+export const NAMESPACES = ["common", "settings", "share"] as const;
 
 /**
  * 앱의 i18next 인스턴스. **동기로** 초기화한다(`initAsync: false`) — 리소스가 번들 안에 있으니

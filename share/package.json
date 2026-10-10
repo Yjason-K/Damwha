@@ -1,0 +1,33 @@
+{
+  "name": "damwha-share",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Share link server — one Node process serving the encrypted-share API and the static viewer. Runs in Docker on a personal server behind a Cloudflare Tunnel.",
+  "scripts": {
+    "start": "pnpm run build:viewer && tsx src/main.ts",
+    "build": "pnpm run build:viewer && tsc -p tsconfig.build.json",
+    "build:viewer": "vite build --config viewer/vite.config.ts",
+    "test": "pnpm run build:viewer && vitest run && vitest run --config viewer/vitest.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p viewer/tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@damwha/contracts": "workspace:*",
+    "@damwha/share-format": "workspace:*",
+    "@damwha/share-view": "workspace:*",
+    "@hono/node-server": "^2.1.4",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "jsdom": "^29.1.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vite": "^8.1.0",
+    "vitest": "^4.1.11"
+  }
+}

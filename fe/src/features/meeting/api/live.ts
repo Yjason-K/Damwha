@@ -21,6 +21,7 @@ import type {
   MeetingSummary,
 } from "../model/types";
 import { formatClock, toMeetingSummary } from "./mappers";
+import { shareKeys } from "@/features/share/api/share";
 import { noteQueryKey } from "./notes";
 import type {
   LiveStartRequest,
@@ -49,6 +50,7 @@ export function removeMeetingCaches(queryClient: QueryClient, id: string) {
   queryClient.removeQueries({ queryKey: ["meeting-lenses", id] });
   queryClient.removeQueries({ queryKey: noteQueryKey(id) });
   queryClient.removeQueries({ queryKey: liveQueryKey(id) });
+  queryClient.removeQueries({ queryKey: shareKeys.meeting(id) });
   recentMeetings.remove(id);
 }
 

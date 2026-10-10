@@ -45,6 +45,13 @@ These cross-file rules are easy to break and are enforced by tests:
 - **'나' speaker and list aggregates (migration `031`)**: `speaker.is_me` marks the user's own speaker, at most one row (partial unique index `speaker_single_me_idx`). `PUT /speakers/:id/me` clears the previous one and sets this one in one transaction (forget the clear and the index turns it into a 500); `DELETE /speakers/:id/me` is idempotent (204). A column rather than an `app_setting` id so deleting the speaker can't leave a dangling 'me'. `GET /meetings` rows (only that endpoint) carry card aggregates as correlated subqueries: `participant_count` and `has_me` count clusters at the meeting's **current** `processing_version`, `decision_count`/`action_count` count `active` lens items only, plus `saved_count`, `preview_decision`, `preview_action` (open before done) and `preview_summary` (only when the summary is `done`).
 - **`GET /models` (`src/models/`)**: assembles the Settings "모델" card's data — reads `app_setting.model_inventory` and `model_readiness` plus the processing config, and writes nothing; both `app_setting` keys keep their single worker-side writer.
 - **Model jobs (`src/models/`, migration `027`, D2)**: `download_model`·`delete_model` job(마이그레이션 027)은 `meeting_id`가 null이고 payload는 논리 키 `{role,name,backend?}`다. '그 모델을 쓰는 job' 판정은 SQL 함수 `model_job_refs` 하나에만 있다 — API(`models.service.ts` 409)와 worker(`pipeline/model_jobs.py` 재검사)가 같은 함수를 부른다. 사본을 만들지 않는다. `models.service.ts`의 `cancel()`: 큐에 있고 한 번도 안 돈(`attempts=0`) `download_model`은 바로 `failed`(`download_cancelled`)로 닫지만, TRANSIENT 백오프 중 재queue된(`attempts>0`) 큐 job은 `stop_requested_at`·`next_attempt_at=NULL`만 찍어 worker가 그 job을 백오프 없이 바로 claim해 스스로 닫게 한다 — 그 repo의 `model_readiness` key를 지우는 건 worker뿐이라는 `app_setting` 단일 writer 규칙 때문이다.
+- **공유 (`src/shares/`, spec 2026-10-09 selfhost).** `meeting_share`는 활성 링크이자 철회 대기열이다. `meeting`에 **SET NULL**로
+  묶여 회의를 지워도 삭제 토큰이 남는다 — CASCADE로 바꾸면 오프라인에서 지운 회의의 링크를 영영 철회할 수 없다. 공유는
+  `shareEnabled()`(HOST가 loopback이고 데모가 아님)일 때만 켜지고, 아니면 공유 라우트가 404다: 접근 제어는 인증이 아니라
+  loopback이다 — Docker·데모에서 공유를 열면 네트워크의 누구나 키를 읽는다. 생성은 예약(creating, 유니크) → REPEATABLE READ 스냅샷 →
+  암호화·업로드(트랜잭션 밖, 기존 active가 있으면 `X-Replace-*`로 서버가 같은 요청에서 지움) → 확정(기존 active를 **먼저**
+  내림) 순서다. 만료 시각은 공유 서버가 정한 값만 저장한다. 상태를 바꾸는 GET을 만들지 않는다 — 만료 정리는 스위퍼만 하고,
+  `test/get-routes.e2e-spec.ts`가 GET 목록을 고정한다. `DELETE /meetings/:id`는 204가 아니라 `200 { share_revoke, share_expires_at }`.
 
 ## Python worker (`worker/`)
 

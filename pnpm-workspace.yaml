@@ -10,5 +10,6 @@ packages:
   - fe
   - desktop
   - site
+  - share
   - packages/*
   - "!be/worker/**"
