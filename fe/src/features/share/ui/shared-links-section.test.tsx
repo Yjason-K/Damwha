@@ -2,7 +2,10 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, test, vi } from "vitest";
 import { ApiError, apiClient } from "@/shared/api/client";
+import { toast } from "@/shared/ui/use-toast";
 import { SharedLinksSection } from "./shared-links-section";
+
+vi.mock("@/shared/ui/use-toast", () => ({ toast: vi.fn() }));
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 const renderIt = () =>
@@ -27,6 +30,18 @@ test("공유 중·대기 중 링크를 회의 제목과 함께, 삭제된 회의
   expect(within(rows[1]).getByText("삭제된 회의")).toBeInTheDocument();
   expect(within(rows[1]).getByText("중지 대기 중")).toBeInTheDocument();
   expect(within(rows[1]).queryByRole("button", { name: "링크 복사" })).toBeNull();
+});
+
+test("클립보드 쓰기가 거부되면 성공이 아니라 실패를 알린다", async () => {
+  vi.spyOn(apiClient, "get").mockResolvedValue({
+    data: { shares: [{ ...base, id: "shr_2", meeting_id: "mtg_1", meeting_title: "주간 회의", status: "active", url: "https://s/s/7-a#k" }] },
+  } as never);
+  const write = vi.fn().mockRejectedValue(new DOMException("Write permission denied.", "NotAllowedError"));
+  Object.assign(navigator, { clipboard: { writeText: write } });
+  renderIt();
+  fireEvent.click(await screen.findByRole("button", { name: "링크 복사" }));
+  await waitFor(() => expect(toast).toHaveBeenCalledWith({ variant: "error", title: "링크를 복사하지 못했어요." }));
+  expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ variant: "success" }));
 });
 
 test("비어 있으면 안내 문구", async () => {

@@ -342,7 +342,12 @@ function ManageView({
   const stop = useStopShare();
   const copy = async () => {
     if (!share.url) return;
-    await navigator.clipboard.writeText(share.url);
+    try {
+      await navigator.clipboard.writeText(share.url);
+    } catch {
+      toast({ variant: "error", title: t("dialog.copyFailed") });
+      return;
+    }
     toast({ variant: "success", title: t("dialog.copied") });
   };
   const doStop = () =>

@@ -42,6 +42,7 @@ export const share = {
     linkLabel: "Share link",
     copy: "Copy link",
     copied: "Link copied.",
+    copyFailed: "Couldn't copy the link.",
     expiresOn: "The link stops working on {{date}}.",
     stop: "Stop sharing",
     stopped: "Sharing stopped.",

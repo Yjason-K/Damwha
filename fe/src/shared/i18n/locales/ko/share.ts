@@ -40,6 +40,7 @@ export const share = {
     linkLabel: "공유 링크",
     copy: "링크 복사",
     copied: "링크를 복사했어요.",
+    copyFailed: "링크를 복사하지 못했어요.",
     expiresOn: "{{date}}에 링크가 막혀요.",
     stop: "공유 중지",
     stopped: "공유를 중지했어요.",

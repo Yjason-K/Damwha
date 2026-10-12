@@ -16,7 +16,12 @@ export function SharedLinksSection() {
   if (q.data === undefined || q.data === "disabled") return null;
 
   const copy = async (url: string) => {
-    await navigator.clipboard.writeText(url);
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      toast({ variant: "error", title: t("dialog.copyFailed") });
+      return;
+    }
     toast({ variant: "success", title: t("dialog.copied") });
   };
 
