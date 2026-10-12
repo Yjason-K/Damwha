@@ -389,12 +389,14 @@ function ManageView({
       <div className="flex gap-2">
         <Input
           readOnly
+          containerClassName="min-w-0 flex-1"
           aria-label={t("dialog.linkLabel")}
           value={share.url ?? ""}
           onFocus={(e) => e.currentTarget.select()}
         />
         <Button
           variant="secondary"
+          className="shrink-0"
           onClick={() => void copy()}
           disabled={!share.url}
         >
