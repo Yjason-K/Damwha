@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAllowedOrigin, originOf } from "../../src/windows/origin";
+import { isAllowedOrigin, isPermissionGranted, originOf } from "../../src/windows/origin";
 
 describe("originOf", () => {
   it("keeps the port because the app's port can change between runs", () => {
@@ -41,5 +41,32 @@ describe("isAllowedOrigin", () => {
 
   it("rejects everything when the allow list is empty", () => {
     expect(isAllowedOrigin("http://127.0.0.1:51734/", [])).toBe(false);
+  });
+});
+
+describe("isPermissionGranted", () => {
+  const allowed = ["http://127.0.0.1:3000"];
+  const app = "http://127.0.0.1:3000/meetings/mtg_5";
+
+  it("grants the microphone to the app origin", () => {
+    expect(isPermissionGranted("media", app, allowed)).toBe(true);
+  });
+
+  it("grants clipboard writes to the app origin — the share dialog copies its link with navigator.clipboard", () => {
+    expect(isPermissionGranted("clipboard-sanitized-write", app, allowed)).toBe(true);
+  });
+
+  it("does not grant clipboard reads", () => {
+    expect(isPermissionGranted("clipboard-read", app, allowed)).toBe(false);
+  });
+
+  it("denies anything else", () => {
+    expect(isPermissionGranted("geolocation", app, allowed)).toBe(false);
+    expect(isPermissionGranted("notifications", app, allowed)).toBe(false);
+  });
+
+  it("denies a granted permission to another origin", () => {
+    expect(isPermissionGranted("clipboard-sanitized-write", "https://example.com/", allowed)).toBe(false);
+    expect(isPermissionGranted("media", "https://example.com/", allowed)).toBe(false);
   });
 });
