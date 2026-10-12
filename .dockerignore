@@ -9,3 +9,5 @@ be/storage
 be/worker
 graphify-out
 **/.env
+share/.data
+share/.env

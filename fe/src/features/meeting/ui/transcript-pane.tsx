@@ -17,12 +17,17 @@ import { IconButton } from "@/shared/ui/icon-button";
 import { Input } from "@/shared/ui/input";
 import { SearchField } from "@/shared/ui/search-field";
 import { toast } from "@/shared/ui/use-toast";
+import { useTranslation } from "react-i18next";
+import { useUiLanguage } from "@/shared/i18n";
+import { useMeetingShare } from "@/features/share/api/share";
+import { formatShareDate } from "@/features/share/lib/dates";
 import { Utterance } from "@/shared/ui/utterance";
 import {
   useRemoveSavedUtterance,
   useSavedUtteranceIds,
   useSaveUtterance,
 } from "@/features/saved-utterance/api/saved-utterances";
+import { ShareButton } from "@/features/share/ui/share-button";
 import {
   useDeleteMeeting,
   useRenameMeeting,
@@ -268,13 +273,25 @@ function DeleteDialog({
   onDeleted: () => void;
 }) {
   const del = useDeleteMeeting();
+  const { t } = useTranslation("share");
+  const lang = useUiLanguage();
+  const share = useMeetingShare(open ? meeting.id : undefined);
+  const sharing = typeof share.data === "object" && share.data?.status === "active";
 
   const submit = () => {
     del.mutate(
       { id: meeting.id },
       {
-        onSuccess: () => {
+        onSuccess: (data) => {
           toast({ variant: "success", title: "회의를 삭제했어요." });
+          if (data?.share_revoke === "pending" && data.share_expires_at) {
+            toast({
+              variant: "info",
+              title: t("deleteMeeting.pendingToast", {
+                date: formatShareDate(data.share_expires_at, lang),
+              }),
+            });
+          }
           onOpenChange(false);
           onDeleted();
         },
@@ -298,6 +315,7 @@ function DeleteDialog({
           <DialogDescription>
             “{meeting.title}” 회의와 전사·화자 연결이 모두 삭제돼요. 이 작업은
             되돌릴 수 없어요.
+            {sharing && <> {t("deleteMeeting.activeShare")}</>}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -545,6 +563,7 @@ export function TranscriptPane({
               <Icon name="download" size={16} />
             </IconButton>
           )}
+          <ShareButton meeting={meeting} />
           {/* 마이크를 못 연 실패는 파일이 없다 — 재처리할 게 없으니 숨긴다 */}
           {(meeting.status === "done" ||
             (meeting.status === "failed" &&

@@ -92,7 +92,7 @@ describe('meeting tags api', () => {
   it('회의를 지워 고아가 된 태그는 태그 목록에 나오지 않는다', async () => {
     const id = await mkMeeting();
     await setTags(id, ['고아']).expect(200);
-    await request(srv()).delete(`/meetings/${id}`).expect(204);
+    await request(srv()).delete(`/meetings/${id}`).expect(200);
     expect((await request(srv()).get('/tags').expect(200)).body).toEqual([]);
   });
 

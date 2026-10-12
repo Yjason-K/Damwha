@@ -1,0 +1,23 @@
+# 개인 서버에서: docker compose -f deploy/share/docker-compose.yml up -d
+# 공개는 같은 호스트의 cloudflared가 http://127.0.0.1:8787 로 잇는다 (deploy/share/README.md).
+name: damwha-share
+services:
+  share:
+    image: damwha-share:latest
+    build:
+      context: ../..
+      dockerfile: deploy/share/Dockerfile
+    restart: unless-stopped
+    ports:
+      # loopback만 — 바깥에 열면 CF-Connecting-IP를 누구나 위조할 수 있다 (spec selfhost-v2 §2.4)
+      - "127.0.0.1:8787:8787"
+    environment:
+      UPLOADS_ENABLED: "true"
+      DAILY_MAX_UPLOADS: "500"
+      DAILY_MAX_BYTES: "524288000"
+    volumes:
+      - share_data:/data
+volumes:
+  share_data:
+    # 이름을 고정한다 — 안 그러면 프로젝트 이름이 붙어 damwha-share_share_data가 된다. 백업 제외 규칙(README)이 이 이름을 가리킨다.
+    name: damwha_share_data

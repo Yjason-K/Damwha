@@ -11,6 +11,9 @@ import { AppModule } from '../src/app.module';
 import { buildAccessPolicy } from '../src/access/access-policy';
 import { configureHttp } from '../src/http/configure-http';
 import { startTestDb, StartedTestDb } from './db';
+import { DEFAULT_SHARE_DURATION_DAYS, SHARE_CONSENT_VERSION } from '@damwha/contracts';
+import { SHARE_ENABLED } from '../src/shares/share-enabled.guard';
+import { startFakeShareServer, FakeShareServer } from './fake-share-server';
 
 /**
  * spec 2026-10-08-local-api-access-control §6 — 공격 시나리오별 e2e. 앱은 main.ts와 같은 configureHttp로 만든다.
@@ -26,12 +29,17 @@ describe('local API access control', () => {
   let db: StartedTestDb;
   let app: NestExpressApplication;
   let publicDir: string;
+  let shareServer: FakeShareServer;
 
   beforeAll(async () => {
     db = await startTestDb();
+    // 공유 서버가 실제로 받아 주는 구성이어야 "행이 없다"가 접근 제어 덕인지 가릴 수 있다 — 서버가 안 닿으면
+    // 공유 만들기는 예약 행을 지우고 끝나서, 미들웨어가 없어도 행이 0개다.
+    shareServer = await startFakeShareServer();
+    process.env.SHARE_API_URL = shareServer.url;
     publicDir = fs.mkdtempSync(path.join(os.tmpdir(), 'damwha-spa-'));
     fs.writeFileSync(path.join(publicDir, 'index.html'), '<!doctype html><title>spa</title>');
-    const mod = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const mod = await Test.createTestingModule({ imports: [AppModule] }).overrideProvider(SHARE_ENABLED).useValue(true).compile();
     app = mod.createNestApplication<NestExpressApplication>();
     configureHttp(app, { policy: buildAccessPolicy(DEV, DEMO_HOST), publicDir });
     await app.init();
@@ -39,6 +47,8 @@ describe('local API access control', () => {
   afterEach(async () => { await db.reset(); });
   afterAll(async () => {
     await app?.close();
+    await shareServer?.close();
+    delete process.env.SHARE_API_URL;
     await db?.stop();
     fs.rmSync(publicDir, { recursive: true, force: true });
   });
@@ -75,6 +85,24 @@ describe('local API access control', () => {
       expect(await meetingCount()).toBe(0);
       expect(fs.existsSync(path.join(db.storageRoot, 'meetings'))
         ? fs.readdirSync(path.join(db.storageRoot, 'meetings')) : []).toEqual([]);
+    });
+
+    it('다른 Origin의 공유 만들기는 403이고 meeting_share 행이 생기지 않는다', async () => {
+      const mid = await seedMeeting();
+      // 유효한 본문 — 미들웨어가 통과시켰다면 실제로 공유가 만들어져 행이 생긴다(그래서 행 수가 판별력을 갖는다).
+      const res = await http().post(`/api/meetings/${mid}/share`).set('Host', SELF_HOST).set('Origin', EVIL)
+        .send({
+          scope: { summary: false, lenses: true, transcript: false, note: false, anonymize: false },
+          duration_days: DEFAULT_SHARE_DURATION_DAYS, consent_version: SHARE_CONSENT_VERSION, ui_language: 'ko',
+        });
+      expect(await count('SELECT count(*) AS n FROM meeting_share')).toBe(0);
+      expect(shareServer.requests).toHaveLength(0);
+      expect(res.status).toBe(403);
+    });
+
+    it('다른 Origin은 공유 목록(키가 든 링크)을 읽지 못한다', async () => {
+      const res = await http().get('/api/shares').set('Host', SELF_HOST).set('Origin', EVIL).expect(403);
+      expect(res.headers['access-control-allow-origin']).toBeUndefined();
     });
 
     it('text/plain으로 실시간 녹음 시작은 403이고 회의가 생기지 않는다', async () => {

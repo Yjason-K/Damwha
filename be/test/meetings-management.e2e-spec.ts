@@ -113,8 +113,8 @@ describe('meetings management (PATCH / DELETE)', () => {
     );
 
     const res = await request(srv()).delete(`/meetings/${mid}`);
-    expect(res.status).toBe(204);
-    expect(res.body).toEqual({});
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ share_revoke: 'none', share_expires_at: null });
 
     const q = async (sql: string, p: unknown[]) => (await db.pool.query(sql, p)).rowCount;
     expect(await q('SELECT 1 FROM meeting WHERE id=$1', [mid])).toBe(0);

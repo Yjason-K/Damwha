@@ -60,3 +60,23 @@ describe('loadEnv access lists', () => {
     },
   );
 });
+
+describe('loadEnv SHARE_API_URL', () => {
+  const saved = { ...process.env };
+  beforeEach(() => {
+    process.env = { ...saved, DATABASE_URL: 'postgres://u:p@localhost:5432/d' };
+  });
+  afterAll(() => {
+    process.env = saved;
+  });
+
+  it('defaults to the production share origin', () => {
+    delete process.env.SHARE_API_URL;
+    expect(loadEnv().SHARE_API_URL).toBe('https://damwha-share.0kimjae.dev');
+  });
+
+  it('rejects a plain-http remote at startup, naming the variable', () => {
+    process.env.SHARE_API_URL = 'http://share.example';
+    expect(() => loadEnv()).toThrow(/SHARE_API_URL/);
+  });
+});

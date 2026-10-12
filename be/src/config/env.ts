@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { SUMMARY_MODELS } from '../contracts/model-catalog';
 import { SUMMARY_LANGUAGES } from '@damwha/contracts';
 import { parseAllowedHosts, parseAllowedOrigins } from '../access/access-policy';
+import { parseShareApiUrl } from '../shares/share-api-url';
 
 /** 파서가 throw하면 그 메시지로 zod 이슈를 만든다 — 기동 실패 메시지에 env 이름이 남는다. */
 const validatedBy = (parse: (raw: string) => unknown) => (raw: string, ctx: z.RefinementCtx) => {
@@ -73,6 +74,9 @@ const EnvSchema = z.object({
   // 정확히 일치)과, loopback 말고 허용할 Host 이름. 비우면 같은 origin·loopback만.
   ALLOWED_ORIGINS: z.string().default('').superRefine(validatedBy(parseAllowedOrigins)),
   ALLOWED_HOSTS: z.string().default('').superRefine(validatedBy(parseAllowedHosts)),
+  // 공유 서버(share/, 개인 서버 + Cloudflare Tunnel)의 origin (spec selfhost-v2 §2.4·§2.7). 개발은 be/.env의
+  // http://localhost:8787. 기본값이 운영 주소라 packaged 앱은 따로 넘기지 않는다 — desktop은 상속 env의 값을 지운다.
+  SHARE_API_URL: z.string().default('https://damwha-share.0kimjae.dev').superRefine(validatedBy(parseShareApiUrl)),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
