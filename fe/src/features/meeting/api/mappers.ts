@@ -315,11 +315,15 @@ export function mapMeetingLenses(
     const who = item.assignee_speaker_id
       ? spkBySpeakerId.get(item.assignee_speaker_id)
       : undefined;
+    const speakerId = primary?.utterance.speaker_id;
+    const speaker = speakerId ? spkBySpeakerId.get(speakerId) : undefined;
     const entry: LensEntry = {
       id: item.id,
       text: item.text,
       source: item.source === "ai" && !primary ? "hint" : item.source,
       who,
+      speaker,
+      confidence: item.confidence ?? null,
       ev: primary?.utterance.id ?? "",
       due: item.due_at ?? undefined,
       done: item.completion_status === "done",

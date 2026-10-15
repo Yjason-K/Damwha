@@ -97,7 +97,13 @@ function OverviewCard({
 const rowClass =
   "block rounded-sm border border-[color:var(--border-subtle)] bg-[var(--surface-sunken)] px-3 py-2.5 transition-[border-color] duration-[var(--dur-instant)] ease-[var(--ease-standard)] hover:border-border";
 
-function DecisionRow({ item }: { item: LensWireItem }) {
+function DecisionRow({
+  item,
+  sayer,
+}: {
+  item: LensWireItem;
+  sayer: string | null;
+}) {
   const v = mapItemView(item);
   return (
     <div className={rowClass}>
@@ -121,6 +127,20 @@ function DecisionRow({ item }: { item: LensWireItem }) {
             >
               {v.timecode}
             </Link>
+          </>
+        ) : null}
+        {sayer ? (
+          <>
+            <span aria-hidden="true">·</span>
+            <span className="shrink-0">{sayer}</span>
+          </>
+        ) : null}
+        {item.confidence === "medium" ? (
+          <>
+            <span aria-hidden="true">·</span>
+            <span className="shrink-0 text-[color:var(--amber-text)]">
+              확신 보통
+            </span>
           </>
         ) : null}
       </p>
@@ -200,7 +220,17 @@ export function LensOverview({ folderId }: { folderId?: string }) {
         title="최근 결정"
         tone="success"
         emptyText="아직 결정이 없어요."
-        renderItem={(item) => <DecisionRow item={item} />}
+        renderItem={(item) => (
+          <DecisionRow
+            item={item}
+            sayer={
+              speakerOf(
+                item.evidence.find((e) => e.relation === "primary")?.utterance
+                  .speaker_id ?? null,
+              ).name
+            }
+          />
+        )}
       />
       <OverviewCard
         kind="action"

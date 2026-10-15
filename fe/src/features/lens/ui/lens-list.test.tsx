@@ -39,6 +39,7 @@ function renderList(pages: LensListPage[]) {
         isFetchingNextPage={false}
         onLoadMore={() => {}}
         onToggle={() => {}}
+        onDismiss={() => {}}
         onJumpEvidence={() => {}}
         speakerName={() => null}
         speakerTint={() => undefined}

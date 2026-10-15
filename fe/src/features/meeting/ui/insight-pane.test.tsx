@@ -58,6 +58,7 @@ function renderPane(
     done: {},
     onToggle: vi.fn(),
     onOpenLens: vi.fn(),
+    onDismiss: vi.fn(),
     onJumpSegment: vi.fn(),
     onRegenerateSummary: vi.fn(),
     summaryModel: undefined,
@@ -117,6 +118,30 @@ describe("InsightPane", () => {
     expect(onJumpSegment).toHaveBeenCalledWith("u_9");
     fireEvent.click(screen.getAllByRole("button", { name: "모두 보기" })[1]);
     expect(onOpenLens).toHaveBeenCalledWith("promise");
+  });
+
+  it("결정에 말한 사람·확신도를 보여 주고 '결정 아님'으로 한 번에 치운다", () => {
+    const { onDismiss } = renderPane({
+      lenses: {
+        decision: [
+          {
+            id: "d1",
+            text: "말이 많으면 손해인가",
+            source: "ai",
+            ev: "u_3",
+            speaker: 1,
+            confidence: "medium",
+            done: false,
+          },
+        ],
+      },
+    });
+    expect(screen.getByText("김영재의 발언")).toBeInTheDocument();
+    expect(screen.getByText("확신 보통")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "결정 아님: 말이 많으면 손해인가" }),
+    );
+    expect(onDismiss).toHaveBeenCalledWith("d1");
   });
 
   it("결과가 없는 결정 블록은 렌더하지 않는다", () => {

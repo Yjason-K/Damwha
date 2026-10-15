@@ -4,7 +4,11 @@ import { Icon } from "@/features/meeting/ui/icons";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import { LENS_KINDS, LENS_META } from "../model/meta";
 import type { LensFilters, LensKind } from "../model/types";
-import { useLensList, useSetLensCompletion } from "../api/lenses";
+import {
+  useDismissLens,
+  useLensList,
+  useSetLensCompletion,
+} from "../api/lenses";
 import { LensFilterBar } from "./lens-filter-bar";
 import { LensExtractionBanner } from "./lens-extraction-banner";
 import { LensList } from "./lens-list";
@@ -33,6 +37,7 @@ export function LensDashboard({ lens, onLens, onJumpEvidence }: Props) {
   };
   const list = useLensList(full);
   const completion = useSetLensCompletion();
+  const { mutate: dismiss } = useDismissLens();
 
   const speakers = useSpeakers();
   const speakerIndex = React.useMemo(() => {
@@ -145,6 +150,7 @@ export function LensDashboard({ lens, onLens, onJumpEvidence }: Props) {
               isFetchingNextPage={list.isFetchingNextPage}
               onLoadMore={onLoadMore}
               onToggle={onToggle}
+              onDismiss={dismiss}
               onJumpEvidence={onJumpEvidence}
               speakerName={speakerName}
               speakerTint={speakerTint}

@@ -12,6 +12,7 @@ import type {
   LensFilters,
   LensKind,
   LensListPage,
+  LensWireItem,
 } from "../model/types";
 
 function toQuery(filters: LensFilters, cursor: string | null): string {
@@ -126,6 +127,60 @@ export function useSetLensCompletion() {
       // 완료 처리해도 패널은 계속 열림 상태로 보인다.
       qc.invalidateQueries({ queryKey: ["meeting-lenses"] });
       qc.invalidateQueries({ queryKey: ["lens-overview"] });
+    },
+  });
+}
+
+/**
+ * "결정 아님"(할 일·약속도 같다) — POST /lenses/:id/dismiss. 목록·카드·집계에서 빠지고,
+ * 재추출이 같은 근거 발화로 다시 내도 되살아나지 않는다. 한 번 누르면 바로 사라져야 오탐
+ * 정리가 빠르므로 두 목록 캐시에서 낙관적으로 빼고, 실패하면 되돌린다.
+ */
+export function useDismissLens() {
+  const qc = useQueryClient();
+  type Infinite = { pages: LensListPage[]; pageParams: unknown[] };
+  type MeetingLensCache = { items: LensWireItem[] };
+  return useMutation({
+    mutationFn: (id: string) => apiClient.post(`/lenses/${id}/dismiss`),
+    onMutate: async (id) => {
+      await Promise.all([
+        qc.cancelQueries({ queryKey: ["lenses"] }),
+        qc.cancelQueries({ queryKey: ["meeting-lenses"] }),
+      ]);
+      const prevLists = qc.getQueriesData<Infinite>({ queryKey: ["lenses"] });
+      const prevMeeting = qc.getQueriesData<MeetingLensCache>({
+        queryKey: ["meeting-lenses"],
+      });
+      qc.setQueriesData<Infinite>(
+        { queryKey: ["lenses"] },
+        (old) =>
+          old && {
+            ...old,
+            pages: old.pages.map((pg) => ({
+              ...pg,
+              items: pg.items.filter((it) => it.id !== id),
+            })),
+          },
+      );
+      qc.setQueriesData<MeetingLensCache>(
+        { queryKey: ["meeting-lenses"] },
+        (old) =>
+          old && { ...old, items: old.items.filter((it) => it.id !== id) },
+      );
+      return { prevLists, prevMeeting };
+    },
+    onError: (err, _id, ctx) => {
+      ctx?.prevLists.forEach(([key, data]) => qc.setQueryData(key, data));
+      ctx?.prevMeeting.forEach(([key, data]) => qc.setQueryData(key, data));
+      if (isDemoBlocked(err)) return;
+      toast({ variant: "error", title: "항목을 치우지 못했어요." });
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["lenses"] });
+      qc.invalidateQueries({ queryKey: ["meeting-lenses"] });
+      qc.invalidateQueries({ queryKey: ["lens-overview"] });
+      // 회의 카드의 "결정 N" 배지와 미리보기도 같은 행을 센다
+      qc.invalidateQueries({ queryKey: ["meetings"] });
     },
   });
 }
