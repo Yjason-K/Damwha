@@ -27,9 +27,12 @@ import { Icon } from "./icons";
 import { NotePane } from "./note-pane";
 
 /**
- * InsightPane — right rail: 요약/메모 tabs. The 요약 tab stacks 참석자 → 주요 주제
- * → 할 일 → 결정 → 약속 → 단락별 요약 → 요약 모델 선택; the 메모 tab is the note
+ * InsightPane — right rail: 요약/메모 tabs. The 요약 tab stacks 단락별 요약 → 할 일
+ * → 결정 → 약속 → 주요 주제 → 참석자 → 요약 모델 선택; the 메모 tab is the note
  * editor. Ported from `timbre_app/InsightPane.jsx`.
+ *
+ * 단락별 요약을 맨 위에 둔다(UX 리뷰 2026-10-15) — 패널을 열면 먼저 "무슨 이야기였나"를
+ * 읽게 하려는 것이다. 참석자는 전사 헤더 메타(참석자 N명)와 발화 필에도 있어 아래로 내렸다.
  *
  * 요약 모델 선택은 가끔 쓰는 설정이라 맨 아래에 둔다(맨 위를 차지하던 것을
  * UX 리뷰 2026-09-28에서 내렸다). 파일 탭은 원본 파일명 하나만 담을 수 있어
@@ -111,7 +114,7 @@ function Section({
 
 function Attendees({ meeting }: { meeting: Meeting }) {
   return (
-    <Section>
+    <Section last>
       <SecHead title="참석자" count={meeting.attendees.length} />
       <div className="grid grid-cols-2 gap-x-2 gap-y-[9px]">
         {meeting.attendees.map((a) => {
@@ -394,7 +397,7 @@ function SummarySegments({
   const [open, setOpen] = React.useState<Record<string, boolean>>({});
   if (segments.length === 0) return null;
   return (
-    <Section last>
+    <Section>
       <SecHead title="단락별 요약" count={segments.length} />
       <ul className="flex flex-col">
         {segments.map((s) => {
@@ -688,9 +691,11 @@ export function InsightPane({
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
           <TabsContent value="summary" className="mt-0">
-            <Attendees meeting={meeting} />
             {settled ? (
-              <TopicList topics={meeting.topics} />
+              <SummarySegments
+                segments={meeting.segments}
+                onJump={onJumpSegment}
+              />
             ) : (
               <SummaryState
                 meetingStatus={meeting.status}
@@ -736,12 +741,8 @@ export function InsightPane({
                 onCancel={onCancelLenses}
               />
             </div>
-            {settled && (
-              <SummarySegments
-                segments={meeting.segments}
-                onJump={onJumpSegment}
-              />
-            )}
+            {settled && <TopicList topics={meeting.topics} />}
+            <Attendees meeting={meeting} />
             {meeting.status === "done" && (
               <div className="flex items-center gap-2 px-3 py-3">
                 <span className="text-xs whitespace-nowrap text-[color:var(--text-muted)]">
