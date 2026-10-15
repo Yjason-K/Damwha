@@ -129,6 +129,8 @@ export type MeetingSummary = {
   /** 길이를 모르면 null. */
   durationMs: number | null;
   participantCount: number;
+  /** 아바타로 그릴 참석자. `provisional`은 아직 이름이 정해지지 않은 화자다. */
+  participants: { id: string; name: string; provisional: boolean }[];
   decisionCount: number;
   actionCount: number;
   savedCount: number;
