@@ -46,7 +46,7 @@ export const en = {
       },
       {
         title: "Knows who is speaking",
-        body: "Voiceprint-based speaker identification. Enroll a speaker once and they're recognized in every later conversation. Mark one as yourself to list the conversations you were in.",
+        body: "Voiceprint-based speaker identification. Enroll a speaker once and they're recognized in every later conversation. Mark one as yourself to list the conversations you were in. If one person was picked up as two speakers, merge them into one.",
         image: "speakers" as const,
         alt: "Speaker management with enrolled voiceprints",
       },
