@@ -161,7 +161,7 @@ export function buildTourSteps(ctx: Ctx): TourStep[] {
       target: "insight-tab-summary",
       title: "요약",
       description:
-        "참석자, 주요 주제, 단락별 요약이 자동으로 만들어져요. 요약 모델은 바꿔서 다시 만들 수 있어요.",
+        "단락별 요약과 주요 주제가 자동으로 만들어져요. 요약 모델은 바꿔서 다시 만들 수 있어요.",
       side: "left",
       prepare: async () => {
         clickTour("insight-tab-summary");
