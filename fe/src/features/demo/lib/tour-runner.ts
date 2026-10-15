@@ -32,6 +32,7 @@ let steps: TourStep[] = [];
 let navigating = false;
 let advancing = false;
 let liveCleanup: (() => void) | null = null;
+let targetClickCleanup: (() => void) | null = null;
 const exitListeners = new Set<() => void>();
 
 /**
@@ -78,8 +79,29 @@ function toDriveStep(step: TourStep, index: number): DriveStep {
           }
         : undefined,
     },
+    onHighlighted: step.advanceOnTargetClick
+      ? (el) => {
+          targetClickCleanup?.();
+          if (!el) return;
+          // prepare 안의 누름(clickTour)은 투어 자신의 것이라 통과시킨다.
+          const onClick = (e: Event) => {
+            if (navigating) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            // 이 클릭이 끝난 뒤에 넘어간다 — prepare가 같은 버튼을 누르는데, 진행 중인 클릭
+            // 안에서는 그 누름이 중첩 디스패치가 된다.
+            queueMicrotask(() => void advance(index));
+          };
+          el.addEventListener("click", onClick, true);
+          targetClickCleanup = () => {
+            el.removeEventListener("click", onClick, true);
+            targetClickCleanup = null;
+          };
+        }
+      : undefined,
     onDeselected: () => {
       liveCleanup?.();
+      targetClickCleanup?.();
     },
     // index는 advance()가 다음 단계를 찾을 때 쓴다.
     data: { index },
@@ -175,6 +197,7 @@ export const tourRunner = {
       onDestroyStarted: () => tourRunner.requestExit(),
       onDestroyed: () => {
         liveCleanup?.();
+        targetClickCleanup?.();
         active = null;
         setTourActive(false);
       },

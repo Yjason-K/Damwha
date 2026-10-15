@@ -22,6 +22,11 @@ export type TourStep = {
   live?: boolean;
   /** 스포트라이트 안쪽 클릭까지 막는다(가짜 진행을 사용자가 건드리지 못하게). */
   disableActiveInteraction?: boolean;
+  /**
+   * 사용자가 타깃을 직접 누르면 그 누름을 막고 "다음"과 같이 넘어간다. 누름이 라우트를
+   * 옮기는 타깃(업로드 제출)에 건다 — prepare 밖의 이동은 종료 가드가 사용자 이동으로 본다.
+   */
+  advanceOnTargetClick?: boolean;
 };
 
 const NARRATION: Record<SimStage, string> = {
@@ -79,6 +84,7 @@ export function buildTourSteps(ctx: Ctx): TourStep[] {
             "데모는 파일을 받지 않아요. 미리 준비한 테스트 오디오가 놓여 있으니 그대로 업로드해요. 제목·녹음 일시·처리 설정은 실제 업로드와 같은 폼이에요.",
           side: "top",
           align: "end",
+          advanceOnTargetClick: true,
           prepare: async () => {
             clickTour("new-meeting");
             await waitFor(tourSelector("upload-submit"));
