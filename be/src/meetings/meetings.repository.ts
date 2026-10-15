@@ -18,6 +18,8 @@ export interface MeetingRow {
 export interface MeetingListRow extends MeetingRow {
   tags: { id: string; name: string }[];
   participant_count: number;
+  // 카드 아바타용 — 현재 처리 버전 클러스터가 물고 있는 화자. 두 클러스터가 같은 화자에 묶이면 한 번만.
+  participants: { id: string; name: string; provisional: boolean }[];
   decision_count: number;
   action_count: number;
   saved_count: number;
@@ -112,6 +114,15 @@ export class MeetingsRepository {
               (SELECT count(*)::int FROM meeting_cluster c
                 WHERE c.meeting_id = m.id AND c.processing_version = m.processing_version
               ) AS participant_count,
+              (SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                        'id', p.id, 'name', p.name, 'provisional', p.provisional)
+                        ORDER BY p.first_label), '[]'::jsonb)
+                 FROM (SELECT s.id, s.name, s.enrollment_status = 'provisional' AS provisional,
+                              min(c.diar_label) AS first_label
+                         FROM meeting_cluster c JOIN speaker s ON s.id = c.resolved_speaker_id
+                        WHERE c.meeting_id = m.id AND c.processing_version = m.processing_version
+                        GROUP BY s.id) p
+              ) AS participants,
               (SELECT count(*)::int FROM lens_item li
                 WHERE li.meeting_id = m.id AND li.kind = 'decision' AND li.lifecycle_status = 'active'
               ) AS decision_count,
