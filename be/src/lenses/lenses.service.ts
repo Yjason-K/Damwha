@@ -226,6 +226,11 @@ export class LensesService {
     });
   }
 
+  async dismiss(id: string): Promise<void> {
+    const ok = await this.db.withTransaction((c) => this.repo.dismiss(c, id));
+    if (!ok) throw new NotFoundException('lens item not found');
+  }
+
   async remove(id: string): Promise<void> {
     const ok = await this.db.withTransaction((c) => this.repo.deleteById(c, id));
     if (!ok) throw new NotFoundException('lens item not found');
@@ -402,6 +407,7 @@ function toItem(row: LensItemRow, evidence: EvidenceRow[]) {
     user_modified: row.user_modified,
     completion_status: row.completion_status,
     lifecycle_status: row.lifecycle_status,
+    confidence: row.confidence,
     meeting_id: row.meeting_id,
     assignee_speaker_id: row.assignee_speaker_id,
     due_at: row.due_at,

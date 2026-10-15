@@ -26,6 +26,8 @@ export class SearchController {
             dateTo: { type: 'string', format: 'date-time' },
             speakerIds: { type: 'array', items: { type: 'string' } },
             meetingIds: { type: 'array', items: { type: 'string' } },
+            tagIds: { type: 'array', items: { type: 'string' } },
+            folderIds: { type: 'array', items: { type: 'string' } },
           },
         },
       },
