@@ -8,6 +8,7 @@ import { nextId } from '../common/id';
 import * as fs from 'fs';
 
 const AUDIO_MIME = /^audio\//;
+const SPEAKER_ID_RE = /^spk_[1-9][0-9]*$/;
 
 async function unlinkQuietly(p?: string) {
   if (!p) return;
@@ -71,6 +72,43 @@ export class SpeakersService {
 
   async clearMe(id: string): Promise<void> {
     if (!(await this.speakers.clearMe(this.db.pool, id))) throw new NotFoundException('speaker not found');
+  }
+
+  // id를 into에 합치고 id를 지운다. 회의 단위 resolve(clusters/:id/resolve)의 전역판이다 — 같은
+  // 사람이 여러 회의에서 서로 다른 화자로 남았을 때 한 번에 묶는다. into는 성문이 있는
+  // ready/provisional만 받는다(resolve와 같은 규칙). 삭제와 같은 이유로 등록·회의 처리 중엔 409.
+  async merge(id: string, body: { into?: unknown }) {
+    if (typeof body?.into !== 'string' || !SPEAKER_ID_RE.test(body.into)) {
+      throw new BadRequestException('into must match ^spk_[1-9][0-9]*$');
+    }
+    const into = body.into;
+    if (into === id) throw new BadRequestException('cannot merge a speaker into itself');
+    const result = await this.db.withTransaction(async (c) => {
+      const [first, second] = [id, into].sort();
+      const a = await this.speakers.lockById(c, first);
+      const b = await this.speakers.lockById(c, second);
+      const from = a?.id === id ? a : b?.id === id ? b : null;
+      const target = a?.id === into ? a : b?.id === into ? b : null;
+      if (!from || !target) throw new NotFoundException('speaker not found');
+      if (target.enrollment_status !== 'ready' && target.enrollment_status !== 'provisional') {
+        throw new ConflictException('cannot merge into a pending/failed speaker');
+      }
+      if (await this.speakers.hasActiveEnrollJob(c, id)) {
+        throw new ConflictException('진행 중인 화자 등록 작업이 있어 병합할 수 없습니다.');
+      }
+      if (await this.speakers.hasActiveProcessMeetingJob(c)) {
+        throw new ConflictException(
+          '회의 처리가 진행 중인 동안에는 화자를 병합할 수 없어요. 처리 완료 후 다시 시도해 주세요.',
+        );
+      }
+      const { utterances } = await this.speakers.mergeInto(c, id, into);
+      await this.speakers.deleteById(c, id);
+      // '나'는 사람에 붙는 표식이라 합쳐진 쪽으로 따라간다. from을 지운 뒤라 단일 '나' 인덱스와 부딪히지 않는다.
+      if (from.is_me) await this.speakers.setMe(c, into);
+      return { speaker: await this.speakers.findById(c, into), merged_utterances: utterances };
+    });
+    await this.storage.deleteDir(this.storage.speakerDir(id));
+    return result;
   }
 
   // Un-reference blocking FKs, then delete (voiceprints cascade); finally drop

@@ -6,6 +6,7 @@ import { useToast } from "@/shared/ui/use-toast";
 
 import {
   useCancelExtraction,
+  useDismissLens,
   useRetryExtraction,
   useSetLensCompletion,
 } from "@/features/lens/api/lenses";
@@ -368,6 +369,7 @@ function MeetingView({
 
   const { data: meetingLensData } = useMeetingLenses(meetingId);
   const setLensCompletion = useSetLensCompletion();
+  const dismissLens = useDismissLens();
   const extractLenses = useRetryExtraction();
   const cancelExtraction = useCancelExtraction();
   const cancelSummary = useCancelSummary();
@@ -706,6 +708,7 @@ function MeetingView({
           onToggle={(id, doneVal) =>
             setLensCompletion.mutate({ id, done: doneVal })
           }
+          onDismiss={(id) => dismissLens.mutate(id)}
           onOpenLens={(k) => navigate(`/lenses/${k}`)}
           onJumpSegment={jumpTo}
           onRegenerateSummary={() =>
@@ -797,6 +800,9 @@ function MeetingView({
           key={meeting.status}
           ref={audioRef}
           src={meeting.audioUrl}
+          // dev는 API가 다른 origin이다(:5173 → :3000). CORS 모드여야 브라우저가 Origin을 싣고, API의 접근 제어가
+          // 허용 Origin으로 통과시킨다 — no-cors면 Sec-Fetch-Site만 보고 403이다(spec 2026-10-08 §3.7).
+          crossOrigin="anonymous"
           preload="metadata"
           className="hidden"
           onLoadedMetadata={(e) => {

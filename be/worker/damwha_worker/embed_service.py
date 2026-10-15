@@ -15,9 +15,10 @@ import logging
 import threading
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from . import console
+from . import browser_guard, console
 from .config import load_settings
 from .runtime_report import runtime_facts
 
@@ -30,6 +31,21 @@ EMBED_WRITER = "embed"
 app = FastAPI()
 _lock = threading.Lock()
 _loaded = None  # (settings, embedder) — _service()가 채운다
+# main()이 settings.embed_service_host로 채운다. 미들웨어가 설정 전체(DATABASE_URL 필수)를
+# 읽지 않게 값만 둔다. None이면 loopback만 받는다.
+_bind_host: str | None = None
+
+
+@app.middleware("http")
+async def _refuse_browsers(request, call_next):
+    """브라우저 금지 (spec 2026-10-08 §3.8).
+
+    엔드포인트보다 먼저 돈다 — 거부된 요청은 모델을 깨우지 않는다.
+    """
+    reason = browser_guard.rejection(request.headers.get, _bind_host)
+    if reason is not None:
+        return JSONResponse({"detail": reason}, status_code=403)
+    return await call_next(request)
 
 
 def _service():
@@ -85,6 +101,8 @@ def main() -> None:  # pragma: no cover — `damwha-embed` 콘솔 스크립트 /
     downloads.install_hf_progress_hook(EMBED_WRITER)
     # 기동 시점에 모델을 올린다 — 첫 /embed 요청이 적재 시간(~31초)을 떠안지 않게.
     settings, _ = _service()
+    global _bind_host
+    _bind_host = settings.embed_service_host
     uvicorn.run(app, host=settings.embed_service_host, port=settings.embed_service_port)
 
 

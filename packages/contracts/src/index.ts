@@ -117,3 +117,21 @@ export function pickUiLanguage(locales: readonly string[]): UiLanguage {
   }
   return 'en';
 }
+
+/**
+ * 공유 링크 기간(일) (공유 spec 2026-10-09 §1). 무제한은 없다 — "늦어도 30일 뒤에는 막힌다"는 약속이
+ * 이 목록에서 나온다. be(요청 검증)·fe(기간 선택)·share-format(공유 id 규칙)이 함께 읽는다.
+ */
+export const SHARE_DURATION_DAYS = [1, 7, 30] as const;
+export type ShareDurationDays = (typeof SHARE_DURATION_DAYS)[number];
+export const DEFAULT_SHARE_DURATION_DAYS: ShareDurationDays = 7;
+
+export function isShareDurationDays(v: unknown): v is ShareDurationDays {
+  return (SHARE_DURATION_DAYS as readonly unknown[]).includes(v);
+}
+
+/**
+ * 공유 동의 문구의 버전 (spec §2.6). 문구를 바꾸면 올린다 — be는 현재 버전이 아닌 동의를 400으로
+ * 거절하고, `meeting_share.consent_version`에 남긴다.
+ */
+export const SHARE_CONSENT_VERSION = 1;

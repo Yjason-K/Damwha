@@ -388,4 +388,95 @@ describe('speakers management (DELETE)', () => {
       expect(await meIds()).toEqual([next]);
     });
   });
+
+  describe('병합 (POST /speakers/:id/merge)', () => {
+    const vp = '[' + Array(192).fill(0).join(',') + ']';
+    const speaker = async (name: string, status: string, isMe = false) =>
+      (await db.pool.query(
+        `INSERT INTO speaker(name,enrollment_status,is_me) VALUES($1,$2,$3) RETURNING id`,
+        [name, status, isMe],
+      )).rows[0].id as string;
+    const meeting = async (title: string, version = 1) =>
+      (await db.pool.query(
+        `INSERT INTO meeting(audio_key,status,title,processing_version) VALUES('k','done',$1,$2) RETURNING id`,
+        [title, version],
+      )).rows[0].id as string;
+
+    it('moves utterances of every version, clusters, voiceprints and assignees, carries me, deletes the source', async () => {
+      const from = await speaker('Speaker_085', 'provisional', true);
+      const into = await speaker('궤도', 'ready');
+      const mid = await meeting('테슬라 내기');
+      const old = await db.pool.query(
+        `INSERT INTO utterance(meeting_id,speaker_id,diar_label,start_ms,end_ms,text,status,order_index,processing_version)
+         VALUES($1,$2,'S0',0,1000,'옛 버전','ok',0,0),($1,$2,'S0',0,1000,'지금 버전','ok',0,1) RETURNING id`,
+        [mid, from],
+      );
+      const cluster = await db.pool.query(
+        `INSERT INTO meeting_cluster(meeting_id,diar_label,resolved_speaker_id,suggested_speaker_id,suggested_similarity,processing_version)
+         VALUES($1,'S0',$2,$3,0.66,1) RETURNING id`,
+        [mid, from, into],
+      );
+      await db.pool.query(
+        `INSERT INTO voiceprint(speaker_id,embedding,model,dimension) VALUES($1,$2::vector,'m',192)`, [from, vp]);
+      const lens = await db.pool.query(
+        `INSERT INTO lens_item(meeting_id,kind,text,source,user_modified,assignee_speaker_id)
+         VALUES($1,'action','문서 작성','user',true,$2) RETURNING id`,
+        [mid, from],
+      );
+
+      const res = await request(srv()).post(`/speakers/${from}/merge`).send({ into });
+      expect(res.status).toBe(200);
+      expect(res.body.merged_utterances).toBe(2);
+      expect(res.body.speaker).toMatchObject({ id: into, name: '궤도', is_me: true });
+      expect(res.body.speaker.meetings).toEqual([{ id: mid, title: '테슬라 내기' }]);
+
+      expect((await db.pool.query('SELECT 1 FROM speaker WHERE id=$1', [from])).rowCount).toBe(0);
+      const utts = await db.pool.query('SELECT speaker_id FROM utterance WHERE id = ANY($1)', [old.rows.map((r) => r.id)]);
+      expect(utts.rows.map((r) => r.speaker_id)).toEqual([into, into]);
+      const c = await db.pool.query(
+        'SELECT resolved_speaker_id, suggested_speaker_id, suggested_similarity FROM meeting_cluster WHERE id=$1',
+        [cluster.rows[0].id],
+      );
+      expect(c.rows[0]).toEqual({ resolved_speaker_id: into, suggested_speaker_id: null, suggested_similarity: null });
+      expect((await db.pool.query('SELECT 1 FROM voiceprint WHERE speaker_id=$1', [into])).rowCount).toBe(1);
+      const l = await db.pool.query('SELECT assignee_speaker_id FROM lens_item WHERE id=$1', [lens.rows[0].id]);
+      expect(l.rows[0].assignee_speaker_id).toBe(into);
+    });
+
+    it('GET /speakers lists the meetings a speaker appears in and its best merge candidate', async () => {
+      const prov = await speaker('Speaker_086', 'provisional');
+      const known = await speaker('침착맨', 'ready');
+      const mid = await meeting('[QA] 처리 배너 확인');
+      await db.pool.query(
+        `INSERT INTO meeting_cluster(meeting_id,diar_label,resolved_speaker_id,suggested_speaker_id,suggested_similarity,processing_version)
+         VALUES($1,'S0',$2,$3,0.61,1)`,
+        [mid, prov, known],
+      );
+      // 옛 처리 버전의 클러스터는 지금 등장한 회의가 아니다
+      const stale = await meeting('재처리된 회의', 2);
+      await db.pool.query(
+        `INSERT INTO meeting_cluster(meeting_id,diar_label,resolved_speaker_id,processing_version) VALUES($1,'S0',$2,1)`,
+        [stale, prov],
+      );
+
+      const res = await request(srv()).get('/speakers');
+      const row = res.body.find((r: { id: string }) => r.id === prov);
+      expect(row.meetings).toEqual([{ id: mid, title: '[QA] 처리 배너 확인' }]);
+      expect(row.suggestion).toMatchObject({ id: known, name: '침착맨' });
+      expect(row.suggestion.similarity).toBeCloseTo(0.61);
+      const k = res.body.find((r: { id: string }) => r.id === known);
+      expect(k.meetings).toEqual([]);
+      expect(k.suggestion).toBeNull();
+    });
+
+    it('rejects self, malformed and unknown targets, and pending targets', async () => {
+      const from = await speaker('Speaker_087', 'provisional');
+      const pending = await speaker('등록 중', 'pending');
+      expect((await request(srv()).post(`/speakers/${from}/merge`).send({ into: from })).status).toBe(400);
+      expect((await request(srv()).post(`/speakers/${from}/merge`).send({ into: 'x' })).status).toBe(400);
+      expect((await request(srv()).post(`/speakers/${from}/merge`).send({ into: 'spk_999999' })).status).toBe(404);
+      expect((await request(srv()).post(`/speakers/${from}/merge`).send({ into: pending })).status).toBe(409);
+      expect((await db.pool.query('SELECT 1 FROM speaker WHERE id=$1', [from])).rowCount).toBe(1);
+    });
+  });
 });

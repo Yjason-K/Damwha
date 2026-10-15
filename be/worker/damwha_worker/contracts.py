@@ -374,6 +374,8 @@ class LensCandidate(BaseModel):
     due_at: date | None = None
     primary_utterance_id: UtteranceId
     supporting_utterance_ids: list[UtteranceId]
+    # 모델이 매긴 확신도. UI에서는 막지 않는 힌트로만 쓴다. low는 lens_client가 버린다.
+    confidence: Literal["high", "medium", "low"] | None = None
 
 
 class LensExtractionResponse(BaseModel):

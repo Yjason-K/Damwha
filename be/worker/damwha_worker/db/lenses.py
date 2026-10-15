@@ -148,20 +148,36 @@ def persist_lens_extraction(
                 (meeting_id,),
             ).fetchall()
             by_key = {(item["kind"], item["primary_utterance_id"]): item for item in existing}
+            # 사용자가 "결정 아님"으로 치운 항목은 재추출이 같은 (kind, 근거 발화)로 다시
+            # 내더라도 되살리지 않는다 — 치운 걸 다시 치우게 만들면 오탐 정리가 헛일이 된다.
+            dismissed = {
+                (row["kind"], row["utterance_id"])
+                for row in conn.execute(
+                    """SELECT li.kind, le.utterance_id
+                       FROM lens_item li
+                       JOIN lens_evidence le
+                         ON le.lens_item_id=li.id AND le.relation='primary'
+                       WHERE li.meeting_id=%s AND li.lifecycle_status='dismissed'""",
+                    (meeting_id,),
+                ).fetchall()
+            }
             matched = set()
             for candidate in candidates:
+                if (candidate.kind, candidate.primary_utterance_id) in dismissed:
+                    continue
                 item = by_key.get((candidate.kind, candidate.primary_utterance_id))
                 if item is not None and item["id"] not in matched:
                     lens_id = item["id"]
                     matched.add(lens_id)
                     conn.execute(
                         """UPDATE lens_item SET kind=%s, text=%s, assignee_speaker_id=%s,
-                           due_at=%s, updated_at=now() WHERE id=%s""",
+                           due_at=%s, confidence=%s, updated_at=now() WHERE id=%s""",
                         (
                             candidate.kind,
                             candidate.text,
                             candidate.assignee_speaker_id,
                             candidate.due_at,
+                            candidate.confidence,
                             lens_id,
                         ),
                     )
@@ -169,15 +185,17 @@ def persist_lens_extraction(
                 else:
                     lens_id = conn.execute(
                         """INSERT INTO lens_item(
-                               meeting_id, kind, text, source, assignee_speaker_id, due_at
+                               meeting_id, kind, text, source, assignee_speaker_id, due_at,
+                               confidence
                            )
-                           VALUES (%s,%s,%s,'ai',%s,%s) RETURNING id""",
+                           VALUES (%s,%s,%s,'ai',%s,%s,%s) RETURNING id""",
                         (
                             meeting_id,
                             candidate.kind,
                             candidate.text,
                             candidate.assignee_speaker_id,
                             candidate.due_at,
+                            candidate.confidence,
                         ),
                     ).fetchone()["id"]
                 conn.execute(

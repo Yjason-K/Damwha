@@ -2,7 +2,8 @@ export const LENS_KINDS = ['action', 'decision', 'promise'] as const;
 export type LensKind = typeof LENS_KINDS[number];
 export type LensSource = 'ai' | 'user' | 'edited';
 export type LensCompletionStatus = 'open' | 'done';
-export type LensLifecycleStatus = 'active' | 'archived';
+export type LensLifecycleStatus = 'active' | 'archived' | 'dismissed';
+export type LensConfidence = 'high' | 'medium' | 'low';
 export type EvidenceRelation = 'primary' | 'supporting';
 
 export type LensListFilters = {
@@ -31,6 +32,7 @@ export interface LensItemRow {
   source: LensSource;
   user_modified: boolean;
   lifecycle_status: LensLifecycleStatus;
+  confidence: LensConfidence | null;
   created_at: Date;
   updated_at: Date;
   meeting_title: string | null;

@@ -6,6 +6,7 @@
 - 셔뱅을 타면 옛 경로가 남아 있을 때 죽지 않고 조용히 다른 런타임을 실행한다 (Phase 0 R-6).
 - `python -m mlx_lm.server`는 upstream CLI라 `--run-id`를 주면 모르는 인자로 죽고, 안 주면
   앱이 `ps`로 소유를 증명할 수 없는 프로세스가 된다. 이 모듈이 그 둘 사이에 앉는다.
+- 브라우저 금지 가드를 서버가 뜨기 전에 건다(spec 2026-10-08 §3.8, llm_guard).
 
 하는 일은 다섯이다: `--run-id=`로 시작하는 토큰을 버리고(앱은 이 프로세스의 argv만 읽는다),
 나머지로 `sys.argv`를 재구성하고(`argv[0]`은 argparse의 prog 이름이라 남긴다), 자기 런타임을
@@ -57,9 +58,14 @@ def main() -> None:
 
     downloads.install_hf_progress_hook(_worker_id())
 
-    from mlx_lm.server import main as server_main
+    # 스펙 2026-10-08 §3.8 — 서버가 뜨기 전에 원래 APIHandler의 메서드를 감싼다(llm_guard 주석).
+    import mlx_lm.server as mlx_server
 
-    server_main()
+    from . import llm_guard
+
+    handler = getattr(mlx_server, "APIHandler", None)
+    llm_guard.install(handler, bind_host=llm_guard.host_arg(sys.argv))
+    mlx_server.main()
 
 
 if __name__ == "__main__":

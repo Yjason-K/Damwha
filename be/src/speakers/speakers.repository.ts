@@ -9,10 +9,15 @@ export interface SpeakerRow {
 }
 
 // 목록/단건에만 실리는 미리듣기 좌표. 셋은 함께 오거나 함께 null이다.
+// meetings·suggestion은 화자 관리의 "확인 필요" 섹션이 쓴다(UX 리뷰 2026-10-15).
 export interface SpeakerWithSample extends SpeakerRow {
   sample_meeting_id: string | null;
   sample_start_ms: number | null;
   sample_end_ms: number | null;
+  /** 현재 처리 버전에서 이 화자에 묶인 클러스터가 있는 회의, 최신순. */
+  meetings: { id: string; title: string | null }[];
+  /** 이 화자로 묶인 클러스터에 남은 "같은 사람일 수 있음" 후보 중 유사도가 가장 높은 것. */
+  suggestion: { id: string; name: string; similarity: number } | null;
 }
 
 // 화자를 알아듣게 해줄 발화 한 개를 고른다 — 저장된 샘플 파일이 아니라 회의
@@ -34,7 +39,20 @@ const SAMPLE_LATERAL = `
 const SAMPLE_COLUMNS = `s.*,
          smp.meeting_id AS sample_meeting_id,
          smp.start_ms   AS sample_start_ms,
-         smp.end_ms     AS sample_end_ms`;
+         smp.end_ms     AS sample_end_ms,
+         (SELECT COALESCE(jsonb_agg(jsonb_build_object('id', m.id, 'title', m.title)
+                                    ORDER BY m.created_at DESC), '[]'::jsonb)
+            FROM meeting m
+           WHERE EXISTS (SELECT 1 FROM meeting_cluster c
+                          WHERE c.meeting_id = m.id AND c.resolved_speaker_id = s.id
+                            AND c.processing_version = m.processing_version)
+         ) AS meetings,
+         (SELECT jsonb_build_object('id', sg.id, 'name', sg.name, 'similarity', c.suggested_similarity)
+            FROM meeting_cluster c JOIN speaker sg ON sg.id = c.suggested_speaker_id
+           WHERE c.resolved_speaker_id = s.id
+           ORDER BY c.suggested_similarity DESC NULLS LAST, c.id
+           LIMIT 1
+         ) AS suggestion`;
 
 @Injectable()
 export class SpeakersRepository {
@@ -143,6 +161,29 @@ export class SpeakersRepository {
        WHERE suggested_speaker_id=$1`,
       [id],
     );
+  }
+  // 병합: from이 가리키던 모든 것을 into로 옮긴다. 발화는 옛 처리 버전까지 옮긴다 — 렌즈
+  // 근거가 옛 버전 발화를 가리킬 수 있고, 남겨 두면 NO ACTION FK가 from 삭제를 막는다.
+  // 성문도 옮겨 into가 다음 회의에서 from의 목소리까지 알아보게 한다. from 쪽 클러스터의
+  // 제안은 지운다 — 사람이 정체를 정했으니 "같은 사람일 수 있음"은 더 물을 게 없고, 남기면
+  // meeting_cluster_suggestion_not_self를 어길 수 있다. 호출자가 둘을 잠근 뒤 부른다.
+  async mergeInto(exec: Queryable, from: string, into: string): Promise<{ utterances: number }> {
+    const moved = await exec.query(`UPDATE utterance SET speaker_id=$2 WHERE speaker_id=$1`, [from, into]);
+    await exec.query(`UPDATE live_utterance SET speaker_id=$2 WHERE speaker_id=$1`, [from, into]);
+    await exec.query(`UPDATE lens_item SET assignee_speaker_id=$2 WHERE assignee_speaker_id=$1`, [from, into]);
+    await exec.query(
+      `UPDATE meeting_cluster
+          SET resolved_speaker_id=$2, suggested_speaker_id=NULL, suggested_similarity=NULL
+        WHERE resolved_speaker_id=$1`,
+      [from, into],
+    );
+    await exec.query(
+      `UPDATE meeting_cluster SET suggested_speaker_id=NULL, suggested_similarity=NULL
+        WHERE suggested_speaker_id=$1`,
+      [from],
+    );
+    await exec.query(`UPDATE voiceprint SET speaker_id=$2 WHERE speaker_id=$1`, [from, into]);
+    return { utterances: moved.rowCount ?? 0 };
   }
   async deleteById(exec: Queryable, id: string): Promise<boolean> {
     const res = await exec.query(`DELETE FROM speaker WHERE id=$1`, [id]);

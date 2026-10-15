@@ -411,6 +411,47 @@ test("폴더 목록은 그 폴더의 최근 결정·진행 중인 할 일을 건
   }
 });
 
+test("비어 있는 요약 카드는 한 줄로 접히고, 남은 카드가 폭 전체를 쓴다", async () => {
+  fx.meetings = [row("m1")];
+  fx.speakers = [];
+  fx.lenses = {
+    decision: { total: 1, items: [lens("l1", { text: "출시는 5월" })] },
+    action: { total: 0, items: [] },
+  };
+  renderList("/meetings");
+
+  const actions = await screen.findByRole("region", { name: "진행 중인 할 일" });
+  expect(
+    await within(actions).findByText("진행 중인 할 일이 없어요."),
+  ).toBeInTheDocument();
+  expect(within(actions).queryByRole("list")).not.toBeInTheDocument();
+  const decisions = screen.getByRole("region", { name: "최근 결정" });
+  expect(await within(decisions).findByText("“출시는 5월”")).toBeInTheDocument();
+  expect(decisions.parentElement).toHaveClass("grid-cols-1");
+});
+
+test("카드는 참석자를 아바타로 넷까지 그리고 나머지는 +N으로 접는다", async () => {
+  const names = ["김영재", "박수민", "이도윤", "최하늘", "정다온"];
+  fx.meetings = [
+    row("m1", {
+      participant_count: 6,
+      participants: names.map((name, i) => ({
+        id: `spk_${i + 1}`,
+        name,
+        provisional: i === 4,
+      })),
+    }),
+  ];
+  fx.speakers = [];
+  renderList("/meetings");
+  const card = within(await screen.findByTestId("meeting-card"));
+  expect(card.getByLabelText(`참석자: ${names.join(", ")}`)).toBeInTheDocument();
+  expect(card.getAllByRole("img")).toHaveLength(4);
+  expect(card.getByText("+1")).toBeInTheDocument();
+  // 클러스터 수(6)가 아니라 사람 수를 센다 — 병합 뒤에도 아바타와 맞는다.
+  expect(card.getByText("5명")).toBeInTheDocument();
+});
+
 test("전체 회의 목록의 요약은 폴더로 거르지 않는다", async () => {
   fx.meetings = [row("m1")];
   fx.speakers = [];
@@ -501,9 +542,8 @@ test("카드는 메타 줄·집계 배지·미리보기를 그리고, 0인 배�
   expect(full.getByText("출시는 5월로 한다")).toBeInTheDocument();
   expect(full.getByText("박수민 · 4월 2일까지 초안 공유")).toBeInTheDocument();
   expect(full.queryByText("쓰이지 않는 요약")).not.toBeInTheDocument();
-  expect(
-    full.getByRole("link", { name: "주간 회의 회의 열기" }),
-  ).toHaveAttribute("href", "/meetings/full");
+  // 카드 전체가 눌리지만 링크는 제목 하나뿐이다(`회의 열기` 버튼은 뺐다).
+  expect(full.getAllByRole("link")).toHaveLength(1);
   expect(full.getByRole("link", { name: "주간 회의" })).toHaveAttribute(
     "href",
     "/meetings/full",

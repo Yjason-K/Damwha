@@ -1,14 +1,14 @@
 import { session, shell, type BrowserWindow } from "electron";
-import { isAllowedOrigin } from "./origin";
+import { isAllowedOrigin, isPermissionGranted } from "./origin";
 
 /**
- * 마이크만 허용하고 자기 origin에만 허용한다. 자동 부여라 포트가 바뀌어도 사용자가
+ * 마이크와 클립보드 쓰기만 허용하고(`isPermissionGranted`) 자기 origin에만 허용한다. 자동 부여라 포트가 바뀌어도 사용자가
  * 권한을 다시 묻지 않는다 — macOS TCC 권한은 .app 단위라 그대로 유지된다 (스펙 §6.4).
  */
 export function applyPermissionBoundary(allowedOrigins: () => string[]): void {
   const s = session.defaultSession;
   s.setPermissionRequestHandler((contents, permission, callback) => {
-    callback(permission === "media" && isAllowedOrigin(contents.getURL(), allowedOrigins()));
+    callback(isPermissionGranted(permission, contents.getURL(), allowedOrigins()));
   });
   // 실측(2026-09-11, pnpm desktop:dev + CDP): 렌더러가 실제로 묻는 requestingOrigin은
   // "http://localhost:5173/"처럼 끝에 슬래시가 붙어 오는데, allowedOrigins()는
@@ -22,7 +22,7 @@ export function applyPermissionBoundary(allowedOrigins: () => string[]): void {
   // 일치하게 만든다.
   s.setPermissionCheckHandler((contents, permission, requestingOrigin) => {
     const origin = requestingOrigin !== "" ? requestingOrigin : (contents?.getURL() ?? "");
-    return permission === "media" && isAllowedOrigin(origin, allowedOrigins());
+    return isPermissionGranted(permission, origin, allowedOrigins());
   });
 }
 

@@ -58,6 +58,7 @@ function renderPane(
     done: {},
     onToggle: vi.fn(),
     onOpenLens: vi.fn(),
+    onDismiss: vi.fn(),
     onJumpSegment: vi.fn(),
     onRegenerateSummary: vi.fn(),
     summaryModel: undefined,
@@ -85,6 +86,30 @@ describe("InsightPane", () => {
     ).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: /파일/ })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "메모" })).toBeInTheDocument();
+  });
+
+  it("요약 탭은 단락별 요약을 맨 위에, 주요 주제와 참석자를 그 아래에 둔다", () => {
+    renderPane({
+      meeting: meeting({
+        topics: ["예약 관리"],
+        segments: [
+          {
+            id: "seg_1",
+            t: "00:00",
+            title: "킥오프",
+            bullets: ["범위를 정했다"],
+            startUtteranceId: "utt_1",
+          },
+        ],
+      }),
+    });
+    const [summary, topics, people] = ["단락별 요약", "주요 주제", "참석자"].map(
+      (t) => screen.getByText(t),
+    );
+    const before = (a: Element, b: Element) =>
+      (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    expect(before(summary, topics)).toBe(true);
+    expect(before(topics, people)).toBe(true);
   });
 
   it("주요 주제를 불릿 목록으로 보여준다", () => {
@@ -117,6 +142,30 @@ describe("InsightPane", () => {
     expect(onJumpSegment).toHaveBeenCalledWith("u_9");
     fireEvent.click(screen.getAllByRole("button", { name: "모두 보기" })[1]);
     expect(onOpenLens).toHaveBeenCalledWith("promise");
+  });
+
+  it("결정에 말한 사람·확신도를 보여 주고 '결정 아님'으로 한 번에 치운다", () => {
+    const { onDismiss } = renderPane({
+      lenses: {
+        decision: [
+          {
+            id: "d1",
+            text: "말이 많으면 손해인가",
+            source: "ai",
+            ev: "u_3",
+            speaker: 1,
+            confidence: "medium",
+            done: false,
+          },
+        ],
+      },
+    });
+    expect(screen.getByText("김영재의 발언")).toBeInTheDocument();
+    expect(screen.getByText("확신 보통")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "결정 아님: 말이 많으면 손해인가" }),
+    );
+    expect(onDismiss).toHaveBeenCalledWith("d1");
   });
 
   it("결과가 없는 결정 블록은 렌더하지 않는다", () => {

@@ -34,6 +34,8 @@ services:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/damwha
       STORAGE_ROOT: ./storage           # baked into the image
       DEMO_READ_ONLY: "true"            # every non-GET (except POST /search) → 403
+      # 로컬 API 접근 제어(spec 2026-10-08): loopback 밖 Host는 이 목록에 있어야 한다. 터널이 원래 Host를 넘긴다.
+      ALLOWED_HOSTS: damwha-demo.0kimjae.dev
       # No embed service in the demo: semantic search falls back to BM25 (pg_bigm).
       EMBED_SERVICE_TIMEOUT_MS: "200"
     restart: unless-stopped

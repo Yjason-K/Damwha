@@ -106,7 +106,20 @@ def test_client_sends_the_lens_extraction_contract_prompt_and_utterances(httpx_m
                 "Return a JSON object with only an items array. Each item must be an action, "
                 "decision, or promise and have exactly these fields: kind, text, "
                 "assignee_speaker_id (nullable), due_at (nullable), primary_index, "
-                "supporting_indexes. Choose the exact primary utterance. primary_index and "
+                "supporting_indexes, confidence. "
+                "An action is a task someone is asked to do or agrees to do. A decision is a "
+                "choice the participants settle on about what they will do next, such as "
+                "adopting a plan, picking an option, or fixing a date; it must change what "
+                "happens after the conversation. A promise is a commitment one speaker makes "
+                "to another. Opinions, impressions, claims about the world, general "
+                "observations, questions (including rhetorical ones), hypotheticals, jokes, "
+                "and quotations are none of these, however firmly they are worded. "
+                "Recordings that are not working meetings, such as talk shows, lectures, "
+                "interviews, podcasts, or casual chats, usually contain none; return an empty "
+                "items array for them unless a participant explicitly commits to something. "
+                "confidence is high, medium, or low: how sure you are that the item really is "
+                "the stated kind. "
+                "Choose the exact primary utterance. primary_index and "
                 "every supporting index must be index values from the transcript, and "
                 "assignee_speaker_id must be a speaker_id from the Speakers section (not a "
                 "name) or null. Write due_at as a YYYY-MM-DD calendar date. When an utterance "
@@ -329,6 +342,32 @@ def test_client_maps_indexes_back_to_real_utterance_ids(httpx_mock):
     assert items[0].supporting_utterance_ids == ["utt_7", "utt_12"]
     # nullable 생략 허용은 그대로다
     assert items[0].assignee_speaker_id is None and items[0].due_at is None
+
+
+def test_client_drops_low_confidence_items_and_keeps_the_hint(httpx_mock):
+    # mtg_25(토크쇼)의 "결정" 12건은 전부 의견·질문이었다 — 모델이 low라고 답한 항목은
+    # 저장하지 않고, 모르는 표기는 그 항목만 확신도 없음으로 둔다
+    content = json.dumps(
+        {
+            "items": [
+                {"kind": "decision", "text": "말이 많으면 손해", "primary_index": 1,
+                 "confidence": "low"},
+                {"kind": "decision", "text": "베타는 5월", "primary_index": 2,
+                 "confidence": "High"},
+                {"kind": "action", "text": "자료 공유", "primary_index": 2,
+                 "confidence": "sure"},
+            ]
+        }
+    )
+    httpx_mock.add_response(json={"choices": [{"message": {"content": content}}]})
+
+    items = LensClient("http://localhost:11434/v1", None, 12.0, 8192).extract(
+        output_language="transcript",
+        model="job-model",
+        utterances=[{"id": "utt_1", "text": "가"}, {"id": "utt_2", "text": "나"}],
+    )
+
+    assert [(i.text, i.confidence) for i in items] == [("베타는 5월", "high"), ("자료 공유", None)]
 
 
 def test_client_drops_the_item_whose_primary_index_is_out_of_range(httpx_mock):

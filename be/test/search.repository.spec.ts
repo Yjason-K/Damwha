@@ -38,7 +38,7 @@ describe('SearchRepository', () => {
       [utteranceId, '[' + vec.join(',') + ']', MODEL, dimCol],
     );
   }
-  const noFilters = { dateFrom: null, dateTo: null, speakerIds: null, meetingIds: null, tagIds: null };
+  const noFilters = { dateFrom: null, dateTo: null, speakerIds: null, meetingIds: null, tagIds: null, folderIds: null };
 
   it('keyword arm: bigm matches Korean substrings', async () => {
     const m = await seedMeeting('기획회의', '2026-06-20T00:00:00Z');
@@ -140,7 +140,7 @@ describe('SearchRepository', () => {
       const rows = await repo.hybrid(client, {
         q: 'zzz', // 키워드 미매치 → 의미 arm만 기여
         qvec: oneHot(0),
-        filters: { dateFrom: null, dateTo: null, speakerIds: null, meetingIds: [target], tagIds: null },
+        filters: { dateFrom: null, dateTo: null, speakerIds: null, meetingIds: [target], tagIds: null, folderIds: null },
         limit: 10, candK, rrfK: 60, model: MODEL, dim: DIM,
       });
       expect(rows.map((r) => r.utterance_id)).toEqual([tu]);
@@ -167,7 +167,7 @@ describe('SearchRepository', () => {
     await seedUtterance(m, 1, '다른 발언', 'ok', null);
     const rows = await repo.keyword(db.pool, {
       q: '발언',
-      filters: { dateFrom: '2026-06-01T00:00:00Z', dateTo: '2026-07-01T00:00:00Z', speakerIds: [sp], meetingIds: null, tagIds: null },
+      filters: { dateFrom: '2026-06-01T00:00:00Z', dateTo: '2026-07-01T00:00:00Z', speakerIds: [sp], meetingIds: null, tagIds: null, folderIds: null },
       limit: 10, candK: 50,
     });
     expect(rows.map((r) => r.text)).toEqual(['대상 발언']);
@@ -190,5 +190,24 @@ describe('SearchRepository', () => {
       q: '배포', qvec: oneHot(0), filters, limit: 10, candK: 50, rrfK: 60, model: MODEL, dim: DIM,
     });
     for (const rows of [kw, br, hy]) expect(rows.map((r) => r.meeting_id)).toEqual([tagged]);
+  });
+
+  it('folder filter keeps only meetings in the given folders, in every arm', async () => {
+    const inside = await seedMeeting('inside', '2026-06-20T00:00:00Z');
+    const outside = await seedMeeting('outside', '2026-06-21T00:00:00Z');
+    const u1 = await seedUtterance(inside, 0, '배포 일정', 'ok', null);
+    const u2 = await seedUtterance(outside, 0, '배포 회고', 'ok', null);
+    await seedEmbedding(u1, oneHot(0));
+    await seedEmbedding(u2, oneHot(0));
+    const folder = (await db.pool.query(`INSERT INTO folder(name) VALUES('기획') RETURNING id`)).rows[0].id;
+    await db.pool.query(`UPDATE meeting SET folder_id=$1 WHERE id=$2`, [folder, inside]);
+    const filters = { ...noFilters, folderIds: [folder] };
+
+    const kw = await repo.keyword(db.pool, { q: '배포', filters, limit: 10, candK: 50 });
+    const br = await repo.browse(db.pool, { filters, limit: 10 });
+    const hy = await repo.hybrid(db.pool, {
+      q: '배포', qvec: oneHot(0), filters, limit: 10, candK: 50, rrfK: 60, model: MODEL, dim: DIM,
+    });
+    for (const rows of [kw, br, hy]) expect(rows.map((r) => r.meeting_id)).toEqual([inside]);
   });
 });

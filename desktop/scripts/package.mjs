@@ -79,7 +79,7 @@ fs.rmSync(publicDir, { recursive: true, force: true });
 fs.cpSync(path.join(repo, "fe", "dist"), publicDir, { recursive: true });
 console.log(`SPA copied into ${path.relative(repo, publicDir)}`);
 
-// pnpm deploy가 워크스페이스 패키지(@damwha/contracts)를 절대 file:// 경로로 박아 넣는다
+// pnpm deploy가 워크스페이스 패키지(@damwha/*)를 절대 file:// 경로로 박아 넣는다
 // — pnpm-lock.yaml과 package.json의 dependencies 필드 양쪽에. 둘 다 `node dist/main.js`가
 // 읽지 않는 메타데이터라(모듈 해석은 node_modules 존재만 본다) 이 개발 머신의 경로가
 // 번들에 그대로 실리는 걸 막으려면 지우거나 고쳐야 한다 (check-bundle.mjs가 이 경로를 잡아낸다).
@@ -88,8 +88,10 @@ console.log(`SPA copied into ${path.relative(repo, publicDir)}`);
 fs.rmSync(path.join(apiTree, "pnpm-lock.yaml"), { force: true });
 const apiPkgPath = path.join(apiTree, "package.json");
 const apiPkg = JSON.parse(fs.readFileSync(apiPkgPath, "utf8"));
-if (apiPkg.dependencies?.["@damwha/contracts"]?.startsWith("@damwha/contracts@file:")) {
-  apiPkg.dependencies["@damwha/contracts"] = "workspace:*";
+for (const [name, spec] of Object.entries(apiPkg.dependencies ?? {})) {
+  if (name.startsWith("@damwha/") && typeof spec === "string" && spec.startsWith(`${name}@file:`)) {
+    apiPkg.dependencies[name] = "workspace:*";
+  }
 }
 fs.writeFileSync(apiPkgPath, `${JSON.stringify(apiPkg, null, 2)}\n`);
 

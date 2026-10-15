@@ -96,6 +96,8 @@ interface AppOwnedKey {
  * - HOST·EMBED_SERVICE_HOST: 앱이 127.0.0.1을 고정 주입한다 (Phase 2 스펙 §6.6). 걸러 내지 않으면
  *   config.json 한 줄로 API가, 또는 **인증이 없는** embed 서비스가 LAN에 열린다. embed 쪽은
  *   be/worker/damwha_worker/embed_service.py가 이 값을 uvicorn.run(host=…)에 그대로 넘긴다.
+ * - ALLOWED_ORIGINS·ALLOWED_HOSTS: 로컬 API 접근 제어(spec 2026-10-08 §3.6). 파일 한 줄로 아무 웹페이지가
+ *   API를 읽게 되면 안 된다. 최종값은 api-process.ts의 apiChildEnv가 모드별로 정한다.
  * - 나머지: 번들 python 자식의 env를 앱이 주장한다 (Phase 4 스펙 §6.3, appOwnedChildEnv).
  *   HF_TOKEN은 싣지 않는다 — 앱은 토큰을 쓰지 않는다(스펙 2026-09-30). LENS_LLM_MANAGED=false는 앱이
  *   고른 빈 포트에서 아무 서버도 띄우지 않게 해 모든 렌즈·요약 job을 죽은 포트로 보내므로 받지 않는다 —
@@ -106,6 +108,8 @@ interface AppOwnedKey {
 const APP_OWNED_KEYS: ReadonlyMap<string, AppOwnedKey> = new Map<string, AppOwnedKey>([
   ["HOST", { rule: `앱이 ${LOOPBACK}으로 고정합니다` }],
   ["EMBED_SERVICE_HOST", { rule: `앱이 ${LOOPBACK}으로 고정합니다` }],
+  ["ALLOWED_ORIGINS", { rule: "앱이 정합니다 — packaged는 같은 origin만, dev는 Vite origin만 API를 부를 수 있어요" }],
+  ["ALLOWED_HOSTS", { rule: "앱이 정합니다 — API는 loopback 이름으로만 받아요" }],
   ["HF_TOKEN", { rule: "앱은 HF 토큰을 쓰지 않습니다 — 화자 분리 모델은 앱에 들어 있어요", secret: true }],
   ["LENS_LLM_BASE_URL", { rule: "LLM 서버 주소는 앱이 빈 포트를 골라 정합니다" }],
   [

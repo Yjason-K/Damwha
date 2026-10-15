@@ -32,6 +32,9 @@ OLD_SUMMARY_SYSTEM_PROMPT = (
     "language of the transcript."
 )
 
+# 렌즈 프롬프트는 그 뒤 결정·할 일·약속의 정의와 confidence를 일부러 넣었다(mtg_25 오탐,
+# 2026-10). 아래는 그 판의 전문이고, 이 테스트가 지키는 것은 여전히 "transcript일 때 언어
+# 지시가 본문을 바꾸지 않는다"는 성질이다.
 OLD_EXTRACTION_SYSTEM_PROMPT = (
     "You are given a meeting transcript. The Speakers section lists one speaker per "
     "line as `<speaker_id> <name>`. After it, each transcript line is one utterance, "
@@ -39,7 +42,20 @@ OLD_EXTRACTION_SYSTEM_PROMPT = (
     "Return a JSON object with only an items array. Each item must be an action, "
     "decision, or promise and have exactly these fields: kind, text, "
     "assignee_speaker_id (nullable), due_at (nullable), primary_index, "
-    "supporting_indexes. Choose the exact primary utterance. primary_index and "
+    "supporting_indexes, confidence. "
+    "An action is a task someone is asked to do or agrees to do. A decision is a "
+    "choice the participants settle on about what they will do next, such as "
+    "adopting a plan, picking an option, or fixing a date; it must change what "
+    "happens after the conversation. A promise is a commitment one speaker makes "
+    "to another. Opinions, impressions, claims about the world, general "
+    "observations, questions (including rhetorical ones), hypotheticals, jokes, "
+    "and quotations are none of these, however firmly they are worded. "
+    "Recordings that are not working meetings, such as talk shows, lectures, "
+    "interviews, podcasts, or casual chats, usually contain none; return an empty "
+    "items array for them unless a participant explicitly commits to something. "
+    "confidence is high, medium, or low: how sure you are that the item really is "
+    "the stated kind. "
+    "Choose the exact primary utterance. primary_index and "
     "every supporting index must be index values from the transcript, and "
     "assignee_speaker_id must be a speaker_id from the Speakers section (not a "
     "name) or null. Write due_at as a YYYY-MM-DD calendar date. When an utterance "

@@ -1,0 +1,38 @@
+{
+  "name": "@damwha/share-view",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only renderer of a decrypted share payload. Used by the fe share preview and the share viewer — the preview is the real thing.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./styles.css": "./src/styles.css"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "peerDependencies": {
+    "react": "^19.2.7"
+  },
+  "dependencies": {
+    "@damwha/contracts": "workspace:*",
+    "@damwha/share-format": "workspace:*",
+    "react-markdown": "^10.1.0",
+    "remark-breaks": "^4.0.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "jsdom": "^29.1.1",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}

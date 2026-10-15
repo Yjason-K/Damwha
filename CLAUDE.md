@@ -13,6 +13,9 @@ per-package — read the one for the subtree you are editing before changing cod
 | `fe/` | `damwha-fe` | React 19 + Vite 8 + Tailwind 4 SPA. Read [`fe/CLAUDE.md`](fe/CLAUDE.md) and [`fe/DESIGN.md`](fe/DESIGN.md). |
 | `site/` | `damwha-site` | Astro 7 정적 제품 사이트 — `damwha.0kimjae.dev`, `/`(en)·`/ko/`, Cloudflare Pages. Read [`site/README.md`](site/README.md). |
 | `packages/contracts/` | `@damwha/contracts` | Wire enums and pure helpers both Node packages must agree on (`SUMMARY_MODELS`, `WHISPER_MODELS`, `PRESET_NAMES`, `DEVICES`, `UI_LANGUAGES`, `SUMMARY_LANGUAGES`, `pickUiLanguage`). Dependency-free. |
+| `share/` | `damwha-share` | 공유 링크 서버 — Node 프로세스 하나가 암호문 API(`/api/shares`)와 정적 뷰어(`/s/:id`)를 디스크 파일 위에서 서빙한다. 개인 서버의 Docker(`deploy/share/`) + Cloudflare Tunnel로 `damwha-share.0kimjae.dev`. Read [`share/README.md`](share/README.md). |
+| `packages/share-format/` | `@damwha/share-format` | 공유 봉투(AES-256-GCM + gzip)와 페이로드 모양, 공유 id 규칙. be가 암호화, 뷰어가 복호화. CJS+ESM. |
+| `packages/share-view/` | `@damwha/share-view` | 공유본 React 렌더러(소스 TSX). fe 미리보기와 뷰어가 같이 쓴다. |
 
 The API and the worker communicate **only** through Postgres — never over HTTP.
 The `job` table is the contract in both directions (zod on the TypeScript side,
@@ -22,6 +25,11 @@ worker — how the API reports the host Mac's spec instead of its own container'
 `model_readiness` (worker, embed and `llm_entry` — per-model download progress) and
 `model_inventory` (the worker supervisor's inventory thread — which models are
 in the HF cache and how big they are).
+
+The API also sends **outbound** HTTP to the share server — the only external call
+it makes (`be/src/shares/share-client.ts`). Sharing is on only when the API's
+`HOST` is loopback and it is not a demo (`DEMO_READ_ONLY`); the share server's
+expiry time is the authority.
 
 `@damwha/contracts` exists because `be` and `fe` were separate repos until the
 2026-08 merge, so any list both sides had to agree on was kept twice by hand.
@@ -50,6 +58,8 @@ pnpm fe <script>              # any damwha-fe script
 pnpm db:up / db:down          # Postgres via be/docker-compose.yml
 pnpm worker / worker:test     # uv run --directory be/worker ...
 pnpm embed                    # bge-m3 embed service on 127.0.0.1:8100 (foreground)
+pnpm share:dev                # 공유 서버+뷰어 :8787 (데이터 share/.data). be/.env에 SHARE_API_URL=http://localhost:8787
+pnpm share:test               # 공유 서버(node) + 뷰어(jsdom) 테스트
 pnpm worker:sync              # uv sync --extra models — the real worker's venv
 pnpm worker:sync:test         # same venv, models stripped (tests only)
 ```

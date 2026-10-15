@@ -159,8 +159,7 @@ export class MeetingsController {
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: '회의 삭제 (연관 데이터 및 저장 파일 정리)' })
-  @HttpCode(204)
+  @ApiOperation({ summary: '회의 삭제 (연관 데이터·저장 파일 정리, 공유 링크 철회 결과를 돌려준다)' })
   remove(@Param('id') id: string) { return this.service.remove(id); }
 
   @Put(':id/favorite')

@@ -51,6 +51,20 @@ export class SpeakersController {
     return this.service.rename(id, body);
   }
 
+  @Post(':id/merge')
+  @HttpCode(200)
+  @ApiOperation({ summary: '화자를 다른 화자에 병합 (발화·클러스터·성문을 옮기고 이 화자는 삭제)' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['into'],
+      properties: { into: { type: 'string', description: '합쳐질 화자 id (남는 쪽)' } },
+    },
+  })
+  merge(@Param('id') id: string, @Body() body: { into?: string }) {
+    return this.service.merge(id, body);
+  }
+
   @Put(':id/me')
   @ApiOperation({ summary: "화자를 '나'로 지정 (기존 '나'는 해제, 화자 행 반환)" })
   setMe(@Param('id') id: string) { return this.service.setMe(id); }

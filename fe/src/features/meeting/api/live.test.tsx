@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { apiClient } from "@/shared/api/client";
+import { shareKeys } from "@/features/share/api/share";
 import { LiveUploadRejected } from "../lib/live-recorder";
 import type { WireLiveResponse } from "./types";
 import {
@@ -148,7 +149,8 @@ test("종료는 주어진 stop()을 실행하고, discarded면 그 회의에 딸
   expect(remove).toHaveBeenCalledWith({ queryKey: ["meeting-lenses", "m7"] });
   expect(remove).toHaveBeenCalledWith({ queryKey: noteQueryKey("m7") });
   expect(remove).toHaveBeenCalledWith({ queryKey: liveQueryKey("m7") });
-  expect(remove).toHaveBeenCalledTimes(5);
+  expect(remove).toHaveBeenCalledWith({ queryKey: shareKeys.meeting("m7") });
+  expect(remove).toHaveBeenCalledTimes(6);
 });
 
 test("종료가 stopping이면 상세·상태만 무효화하고 캐시를 지우지 않는다", async () => {

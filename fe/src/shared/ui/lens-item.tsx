@@ -53,7 +53,20 @@ type LensItemProps = Omit<React.ComponentProps<"div">, "children"> & {
   assigneeSpeaker?: number;
   evidence?: React.ReactNode;
   onJump?: () => void;
+  /** 근거 발화를 말한 사람(담당자와 다를 수 있다). */
+  speaker?: React.ReactNode;
+  /** 추출 모델의 확신도 — 막지 않는 힌트. */
+  confidence?: "high" | "medium" | "low" | null;
+  /** "결정 아님" 같은 치우기 동작. 주면 메타 줄 끝에 버튼이 생긴다. */
+  onDismiss?: () => void;
+  dismissLabel?: string;
 };
+
+const CONFIDENCE_LABEL = {
+  high: "확신 높음",
+  medium: "확신 보통",
+  low: "확신 낮음",
+} as const;
 
 function LensItem({
   className,
@@ -66,6 +79,10 @@ function LensItem({
   assigneeSpeaker,
   evidence,
   onJump,
+  speaker,
+  confidence,
+  onDismiss,
+  dismissLabel = "치우기",
   ...rest
 }: LensItemProps) {
   const k =
@@ -143,6 +160,37 @@ function LensItem({
             <span className="inline-flex items-center px-1 py-0.5 text-2xs font-medium text-[color:var(--text-faint)]">
               증거 없음
             </span>
+          )}
+          {speaker && (
+            <span className="text-2xs text-[color:var(--text-faint)]">
+              {speaker}의 발언
+            </span>
+          )}
+          {confidence && (
+            <span
+              className={cn(
+                "text-2xs",
+                confidence === "medium"
+                  ? "text-[color:var(--amber-text)]"
+                  : "text-[color:var(--text-faint)]",
+              )}
+            >
+              {CONFIDENCE_LABEL[confidence]}
+            </span>
+          )}
+          {onDismiss && (
+            <button
+              type="button"
+              onClick={onDismiss}
+              aria-label={
+                typeof children === "string"
+                  ? `${dismissLabel}: ${children}`
+                  : dismissLabel
+              }
+              className="ml-auto inline-flex items-center rounded-xs px-1.5 py-0.5 text-2xs font-medium text-[color:var(--text-muted)] outline-none transition-colors hover:bg-[var(--gray-2)] hover:text-foreground focus-visible:[box-shadow:var(--focus-ring)]"
+            >
+              {dismissLabel}
+            </button>
           )}
         </div>
       </div>

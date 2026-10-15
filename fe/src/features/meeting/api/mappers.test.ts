@@ -213,6 +213,7 @@ describe("toMeetingSummary", () => {
       startIso: recordedAt,
       durationMs: 3_720_000,
       participantCount: 0,
+      participants: [],
       decisionCount: 0,
       actionCount: 0,
       savedCount: 0,

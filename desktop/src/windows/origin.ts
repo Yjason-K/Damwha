@@ -17,3 +17,13 @@ export function isAllowedOrigin(url: string, allowed: readonly string[]): boolea
   const origin = originOf(url);
   return origin !== null && allowed.includes(origin);
 }
+
+/**
+ * 렌더러에 주는 권한은 둘뿐이다 — 마이크(`media`, 녹음)와 클립보드 쓰기(`clipboard-sanitized-write`,
+ * 공유 링크 복사의 `navigator.clipboard.writeText`). 클립보드 읽기는 주지 않는다.
+ */
+const GRANTED_PERMISSIONS: ReadonlySet<string> = new Set(["media", "clipboard-sanitized-write"]);
+
+export function isPermissionGranted(permission: string, url: string, allowed: readonly string[]): boolean {
+  return GRANTED_PERMISSIONS.has(permission) && isAllowedOrigin(url, allowed);
+}

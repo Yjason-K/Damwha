@@ -56,6 +56,16 @@ export class LensesController {
     return this.service.setCompletion(id, 'open' as LensCompletionStatus);
   }
 
+  @Post('lenses/:id/dismiss')
+  @ApiOperation({
+    summary: '렌즈 항목을 "아님"으로 치움 (결정 아님 등)',
+    description: '목록·집계에서 빠지고, 재추출이 같은 근거 발화로 다시 내도 되살아나지 않는다.',
+  })
+  @HttpCode(204)
+  dismiss(@Param('id') id: string) {
+    return this.service.dismiss(id);
+  }
+
   @Delete('lenses/:id')
   @ApiOperation({ summary: '렌즈 항목 삭제' })
   @HttpCode(204)

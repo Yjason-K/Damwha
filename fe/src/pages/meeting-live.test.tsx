@@ -1,6 +1,7 @@
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -300,8 +301,11 @@ test("실패한 회의에 라이브 행이 남아 있으면 읽기 전용 미리
   renderAt("/meetings/m1");
   expect(await screen.findByText("남은 발화")).toBeInTheDocument();
   expect(screen.getByRole("alert")).toHaveTextContent("처리에 실패했어요");
+  fireEvent.keyDown(screen.getByRole("button", { name: "더보기" }), {
+    key: "Enter",
+  });
   expect(
-    screen.getByRole("button", { name: "회의 재처리" }),
+    screen.getByRole("menuitem", { name: "회의 재처리" }),
   ).toBeInTheDocument();
 });
 
@@ -320,7 +324,10 @@ test("마이크를 못 연 실패는 권한 안내를 보여주고 재처리 버
   renderAt("/meetings/m1");
   const alert = await screen.findByRole("alert");
   expect(within(alert).getByText("마이크를 열지 못했어요")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "회의 재처리" })).toBeNull();
+  fireEvent.keyDown(screen.getByRole("button", { name: "더보기" }), {
+    key: "Enter",
+  });
+  expect(screen.queryByRole("menuitem", { name: "회의 재처리" })).toBeNull();
 });
 
 // 리뷰 회귀 1: '종료' 뒤 done이 되기 전(uploaded/processing)에도 실제 전사가

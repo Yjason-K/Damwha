@@ -54,6 +54,12 @@ const fx = vi.hoisted(() => {
       sample_meeting_id: "mtg_4",
       sample_start_ms: 1_000,
       sample_end_ms: 3_000,
+      meetings: [
+        { id: "mtg_4", title: "주간 회의" },
+        { id: "mtg_5", title: null },
+        { id: "mtg_6", title: "회고" },
+      ],
+      suggestion: { id: "sp_1", name: "김영재", similarity: 0.64 },
     },
   ];
   return { speakers };
@@ -137,16 +143,85 @@ test("화자가 없을 때도 등록 버튼은 헤더의 하나뿐이다", async
 
 const rowOf = (name: string) => screen.getByText(name).closest("li")!;
 
+/** 행의 더보기 메뉴를 연다 — Radix DropdownMenu는 jsdom 클릭으로 열리지 않아 키 입력으로 연다. */
+function openRowMenu(name: string) {
+  fireEvent.keyDown(
+    within(rowOf(name)).getByRole("button", { name: `${name} 더보기` }),
+    { key: "Enter" },
+  );
+}
+const menuItem = (name: string) => screen.getByRole("menuitem", { name });
+
+test("미확정 화자는 확인 필요 섹션에 모이고 등장 회의 링크와 병합 후보를 보인다", async () => {
+  renderPage();
+  await screen.findByText("박도윤");
+  const review = within(screen.getByRole("region", { name: "확인 필요" }));
+  expect(review.getByText("이수민")).toBeInTheDocument();
+  expect(review.getByText("박도윤")).toBeInTheDocument();
+  expect(review.queryByText("김영재")).not.toBeInTheDocument();
+  expect(
+    within(screen.getByRole("region", { name: "등록된 화자" })).getByText(
+      "김영재",
+    ),
+  ).toBeInTheDocument();
+
+  const row = within(rowOf("박도윤"));
+  expect(row.getByRole("link", { name: "주간 회의" })).toHaveAttribute(
+    "href",
+    "/meetings/mtg_4",
+  );
+  expect(row.getByRole("link", { name: "제목 없는 회의" })).toBeInTheDocument();
+  expect(row.queryByRole("link", { name: "회고" })).not.toBeInTheDocument();
+  expect(row.getByText("외 1개")).toBeInTheDocument();
+  expect(row.getByText("유사도 64%")).toBeInTheDocument();
+  expect(row.getByRole("button", { name: "김영재에 병합" })).toBeInTheDocument();
+  expect(
+    within(rowOf("이수민")).getByRole("button", { name: "기존 화자로 병합" }),
+  ).toBeInTheDocument();
+});
+
+test("추천 병합은 후보를 미리 골라 두고 POST /speakers/:id/merge를 보낸다", async () => {
+  renderPage();
+  await screen.findByText("박도윤");
+  fireEvent.click(
+    within(rowOf("박도윤")).getByRole("button", { name: "김영재에 병합" }),
+  );
+  const dialog = within(await screen.findByRole("dialog"));
+  expect(dialog.getByRole("combobox", { name: "합칠 화자" })).toHaveTextContent(
+    "김영재 · 추천 64%",
+  );
+  fireEvent.click(dialog.getByRole("button", { name: "병합" }));
+  await waitFor(() =>
+    expect(apiClient.post).toHaveBeenCalledWith("/speakers/sp_3/merge", {
+      into: "sp_1",
+    }),
+  );
+});
+
+test("행 동작은 더보기 메뉴 하나에 모여 있다", async () => {
+  renderPage();
+  await screen.findByText("김영재");
+  const row = within(rowOf("김영재"));
+  expect(row.queryByRole("button", { name: "삭제" })).not.toBeInTheDocument();
+  expect(row.queryByRole("button", { name: "이름 변경" })).not.toBeInTheDocument();
+  openRowMenu("김영재");
+  expect(menuItem("다른 화자로 병합")).toBeInTheDocument();
+  expect(menuItem("이름 변경")).toBeInTheDocument();
+  expect(menuItem("나 지정 해제")).toBeInTheDocument();
+  expect(menuItem("삭제")).toBeInTheDocument();
+});
+
 test("'나'로 지정된 화자에만 나 배지와 해제 버튼이 붙는다", async () => {
   renderPage();
   await screen.findByText("김영재");
-  const me = within(rowOf("김영재"));
-  expect(me.getByText("나")).toBeInTheDocument();
-  expect(me.getByRole("button", { name: "나 지정 해제" })).toBeInTheDocument();
+  expect(within(rowOf("김영재")).getByText("나")).toBeInTheDocument();
+  openRowMenu("김영재");
+  expect(menuItem("나 지정 해제")).toBeInTheDocument();
+  fireEvent.keyDown(document.activeElement!, { key: "Escape" });
 
-  const other = within(rowOf("이수민"));
-  expect(other.queryByText("나")).not.toBeInTheDocument();
-  expect(other.getByRole("button", { name: "나로 지정" })).toBeInTheDocument();
+  expect(within(rowOf("이수민")).queryByText("나")).not.toBeInTheDocument();
+  openRowMenu("이수민");
+  expect(menuItem("나로 지정")).toBeInTheDocument();
 });
 
 test("나로 지정은 PUT, 해제는 DELETE를 보내고 화자 목록을 다시 읽는다", async () => {
@@ -154,9 +229,8 @@ test("나로 지정은 PUT, 해제는 DELETE를 보내고 화자 목록을 다�
   await screen.findByText("김영재");
   const getsBefore = vi.mocked(apiClient.get).mock.calls.length;
 
-  fireEvent.click(
-    within(rowOf("이수민")).getByRole("button", { name: "나로 지정" }),
-  );
+  openRowMenu("이수민");
+  fireEvent.click(menuItem("나로 지정"));
   await waitFor(() =>
     expect(apiClient.put).toHaveBeenCalledWith("/speakers/sp_2/me"),
   );
@@ -166,9 +240,8 @@ test("나로 지정은 PUT, 해제는 DELETE를 보내고 화자 목록을 다�
     ),
   );
 
-  fireEvent.click(
-    within(rowOf("김영재")).getByRole("button", { name: "나 지정 해제" }),
-  );
+  openRowMenu("김영재");
+  fireEvent.click(menuItem("나 지정 해제"));
   await waitFor(() =>
     expect(apiClient.delete).toHaveBeenCalledWith("/speakers/sp_1/me"),
   );
@@ -178,20 +251,22 @@ test("지정에 실패하면 토스트를 띄우되, 데모 차단이면 건너�
   const { ApiError } = await import("@/shared/api/client");
   renderPage();
   await screen.findByText("이수민");
-  const button = () =>
-    within(rowOf("이수민")).getByRole("button", { name: "나로 지정" });
-
   toastSpy.mockClear();
   vi.mocked(apiClient.put).mockClear();
   vi.mocked(apiClient.put).mockRejectedValueOnce(
     new ApiError(403, "demo", "DEMO_READ_ONLY"),
   );
-  fireEvent.click(button());
+  openRowMenu("이수민");
+  fireEvent.click(menuItem("나로 지정"));
   await waitFor(() => expect(apiClient.put).toHaveBeenCalledTimes(1));
-  await waitFor(() => expect(button()).not.toBeDisabled());
 
+  // 첫 요청이 끝나 메뉴 항목이 다시 살아난 뒤에 두 번째를 누른다.
   vi.mocked(apiClient.put).mockRejectedValueOnce(new ApiError(500, "boom"));
-  fireEvent.click(button());
+  openRowMenu("이수민");
+  await waitFor(() =>
+    expect(menuItem("나로 지정")).not.toHaveAttribute("aria-disabled"),
+  );
+  fireEvent.click(menuItem("나로 지정"));
   await waitFor(() =>
     expect(toastSpy).toHaveBeenCalledWith(
       expect.objectContaining({ variant: "error", description: "boom" }),

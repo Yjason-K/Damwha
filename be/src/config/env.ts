@@ -1,12 +1,24 @@
 import { z } from 'zod';
 import { SUMMARY_MODELS } from '../contracts/model-catalog';
 import { SUMMARY_LANGUAGES } from '@damwha/contracts';
+import { parseAllowedHosts, parseAllowedOrigins } from '../access/access-policy';
+import { parseShareApiUrl } from '../shares/share-api-url';
+
+/** 파서가 throw하면 그 메시지로 zod 이슈를 만든다 — 기동 실패 메시지에 env 이름이 남는다. */
+const validatedBy = (parse: (raw: string) => unknown) => (raw: string, ctx: z.RefinementCtx) => {
+  try {
+    parse(raw);
+  } catch (e) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: (e as Error).message });
+  }
+};
 
 const EnvSchema = z.object({
   PORT: z.coerce.number().default(3000),
-  // 기본값이 0.0.0.0인 것은 의도다 — deploy/api.Dockerfile의 컨테이너는 외부에서
-  // 접근해야 한다. 데스크톱 앱만 127.0.0.1을 주입해 loopback으로 좁힌다.
-  HOST: z.string().default('0.0.0.0'),
+  // 기본은 loopback이다(spec 2026-10-08 §3.5) — pnpm dev가 API를 LAN에 열던 0.0.0.0을 버린다.
+  // 바깥에서 닿아야 하는 컨테이너는 deploy/api.Dockerfile이 ENV HOST=0.0.0.0을 준다.
+  // desktop은 그와 무관하게 127.0.0.1을 마지막에 덮어쓴다(desktop/src/services/api-process.ts).
+  HOST: z.string().default('127.0.0.1'),
   DATABASE_URL: z.string(),
   STORAGE_ROOT: z.string().default('./storage'),
   MAX_UPLOAD_BYTES: z.coerce.number().default(1_073_741_824),
@@ -58,6 +70,13 @@ const EnvSchema = z.object({
   SUMMARY_LANGUAGE: z.enum(SUMMARY_LANGUAGES).default('transcript'),
   // 공개 데모 읽기 전용 스위치(설계 §3.6). 가드는 process.env를 직접 읽는다 — 여기는 문서화용.
   DEMO_READ_ONLY: z.enum(['true', 'false']).default('false'),
+  // 로컬 API 접근 제어(spec 2026-10-08 §3.4). 같은 origin 말고 /api를 부를 수 있는 Origin(쉼표 구분,
+  // 정확히 일치)과, loopback 말고 허용할 Host 이름. 비우면 같은 origin·loopback만.
+  ALLOWED_ORIGINS: z.string().default('').superRefine(validatedBy(parseAllowedOrigins)),
+  ALLOWED_HOSTS: z.string().default('').superRefine(validatedBy(parseAllowedHosts)),
+  // 공유 서버(share/, 개인 서버 + Cloudflare Tunnel)의 origin (spec selfhost-v2 §2.4·§2.7). 개발은 be/.env의
+  // http://localhost:8787. 기본값이 운영 주소라 packaged 앱은 따로 넘기지 않는다 — desktop은 상속 env의 값을 지운다.
+  SHARE_API_URL: z.string().default('https://damwha-share.0kimjae.dev').superRefine(validatedBy(parseShareApiUrl)),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

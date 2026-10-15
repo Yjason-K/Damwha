@@ -3,7 +3,10 @@ import * as React from "react";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 import { useSamplePlayer } from "@/shared/lib/use-sample-player";
-import { useSpeakers } from "@/features/speaker/api/speakers";
+import {
+  useSpeakers,
+  type SpeakerItem,
+} from "@/features/speaker/api/speakers";
 import { SpeakerRow } from "@/features/speaker/ui/speaker-row";
 import { EnrollSpeakerDialog } from "@/features/speaker/ui/enroll-speaker-dialog";
 import { toErrorMessage } from "@/features/speaker/ui/error";
@@ -106,12 +109,65 @@ function EmptyState() {
   );
 }
 
-/** 화자 관리 페이지 — 목록 조회 + 등록/이름 변경/삭제. */
+function SpeakerSection({
+  title,
+  description,
+  speakers,
+  tintOf,
+  player,
+}: {
+  title: string;
+  description?: string;
+  speakers: SpeakerItem[];
+  tintOf: (id: string) => number;
+  player: ReturnType<typeof useSamplePlayer>;
+}) {
+  if (speakers.length === 0) return null;
+  return (
+    <section aria-label={title} className="flex flex-col gap-2">
+      <div className="flex flex-col gap-0.5">
+        <h2 className="flex items-center gap-2 text-h3 font-semibold text-foreground">
+          {title}
+          <span className="font-mono text-xs text-[color:var(--text-faint)]">
+            {speakers.length}
+          </span>
+        </h2>
+        {description ? (
+          <p className="text-sm text-[color:var(--text-muted)]">
+            {description}
+          </p>
+        ) : null}
+      </div>
+      <ul className="flex flex-col gap-2">
+        {speakers.map((speaker) => (
+          <li key={speaker.id}>
+            <SpeakerRow
+              speaker={speaker}
+              tint={tintOf(speaker.id)}
+              playing={player.playingId === speaker.id}
+              onToggleSample={() => {
+                if (speaker.sample) player.toggle(speaker.id, speaker.sample);
+              }}
+            />
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * 화자 관리 페이지 — 목록 조회 + 등록/이름 변경/병합/삭제. 회의에서 자동으로 찾은 화자
+ * (provisional)는 "확인 필요"로 따로 모아 등장 회의와 병합 후보를 보인다.
+ */
 export function SpeakersPage() {
   const [enrollOpen, setEnrollOpen] = React.useState(false);
   const speakers = useSpeakers();
   // 목록 전체가 <audio> 하나를 공유한다 — 한 번에 한 화자만 들린다.
   const player = useSamplePlayer();
+  // 아바타 색은 섹션이 아니라 전체 목록 순서로 정한다 — 섹션을 나눠도 화자마다 색이 그대로다.
+  const tintOf = (id: string) =>
+    (speakers.data?.findIndex((s) => s.id === id) ?? 0) + 1;
 
   return (
     <main
@@ -143,21 +199,21 @@ export function SpeakersPage() {
         ) : speakers.data.length === 0 ? (
           <EmptyState />
         ) : (
-          <ul className="flex flex-col gap-2">
-            {speakers.data.map((speaker, index) => (
-              <li key={speaker.id}>
-                <SpeakerRow
-                  speaker={speaker}
-                  tint={index + 1}
-                  playing={player.playingId === speaker.id}
-                  onToggleSample={() => {
-                    if (speaker.sample)
-                      player.toggle(speaker.id, speaker.sample);
-                  }}
-                />
-              </li>
-            ))}
-          </ul>
+          <>
+            <SpeakerSection
+              title="확인 필요"
+              description="회의에서 자동으로 찾은 목소리예요. 이미 있는 사람이면 병합하고, 새 사람이면 이름을 지어 주세요."
+              speakers={speakers.data.filter((s) => s.status === "provisional")}
+              tintOf={tintOf}
+              player={player}
+            />
+            <SpeakerSection
+              title="등록된 화자"
+              speakers={speakers.data.filter((s) => s.status !== "provisional")}
+              tintOf={tintOf}
+              player={player}
+            />
+          </>
         )}
       </div>
 

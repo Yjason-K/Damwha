@@ -1,7 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
+import { apiClient } from "@/shared/api/client";
+import { Toaster } from "@/shared/ui/toaster";
 import type { Meeting, UtteranceEntry } from "../model/types";
 
 // ResolveDialog가 useSpeakers()를, 헤더 액션들이 mutation을 쓰므로 클라이언트를
@@ -68,18 +70,41 @@ function renderPane(over: Partial<Meeting> = {}) {
   );
 }
 
+/** Radix DropdownMenu는 jsdom 클릭으로 열리지 않는다 — 트리거의 키 입력으로 연다. */
+function openMore() {
+  fireEvent.keyDown(screen.getByRole("button", { name: "더보기" }), {
+    key: "Enter",
+  });
+}
+
 test("배선되지 않은 헤더 우측 버튼을 렌더하지 않는다", () => {
   renderPane();
-  expect(screen.queryByRole("button", { name: "공유" })).toBeNull();
-  expect(screen.queryByRole("button", { name: "더보기" })).toBeNull();
   expect(screen.queryByRole("button", { name: "저장" })).toBeNull();
+});
+
+test("삭제·재처리는 헤더에 바로 두지 않고 더보기 메뉴에 둔다", () => {
+  renderPane();
+  expect(screen.queryByRole("button", { name: "삭제" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "회의 재처리" })).toBeNull();
+  openMore();
+  expect(screen.getByRole("menuitem", { name: "삭제" })).toBeInTheDocument();
+  expect(
+    screen.getByRole("menuitem", { name: "회의 재처리" }),
+  ).toBeInTheDocument();
+});
+
+test("done 회의에는 공유 버튼이 생긴다 (공유 기능이 배선됐다)", async () => {
+  renderPane();
+  expect(
+    await screen.findByRole("button", { name: "공유" }),
+  ).toBeInTheDocument();
 });
 
 test("동작하는 헤더 버튼은 남아 있다", () => {
   renderPane();
   expect(screen.getByRole("button", { name: "즐겨찾기" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "이름 변경" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "삭제" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "더보기" })).toBeInTheDocument();
 });
 
 test("내보내기 버튼은 done 회의에만 뜨고 누르면 다이얼로그가 열린다", () => {
@@ -95,11 +120,12 @@ test("처리 중인 회의에는 내보내기 버튼이 없다", () => {
   expect(screen.queryByRole("button", { name: "내보내기" })).toBeNull();
 });
 
-test("회의 재처리 버튼은 잠겨 있지 않다", () => {
+test("회의 재처리 메뉴는 잠겨 있지 않다", () => {
   renderPane();
+  openMore();
   expect(
-    screen.getByRole("button", { name: "회의 재처리" }),
-  ).not.toBeDisabled();
+    screen.getByRole("menuitem", { name: "회의 재처리" }),
+  ).not.toHaveAttribute("aria-disabled");
 });
 
 test("하단 툴바의 중복·오작동 버튼을 렌더하지 않는다", () => {
@@ -467,4 +493,30 @@ test("사용자가 최근에 스크롤했으면 따라가지 않다가 유예가
 
   spy.mockRestore();
   vi.useRealTimers();
+});
+
+test("공유 중인 회의를 지우면 확인 창이 링크도 중지된다고 말하고, 오프라인이면 만료일 안내 토스트", async () => {
+  const ACTIVE = {
+    id: "shr_1", meeting_id: "m1", status: "active", url: "u", expires_at: "2026-10-15T06:00:00.000Z",
+    scope: {}, duration_days: 7, created_at: "x",
+  };
+  vi.mocked(apiClient.get).mockImplementation(async (url: string) =>
+    (url.endsWith("/share") ? { data: { share: ACTIVE } } : { data: [] }) as never,
+  );
+  vi.mocked(apiClient.delete).mockResolvedValueOnce({
+    data: { share_revoke: "pending", share_expires_at: "2026-10-15T06:00:00.000Z" },
+  } as never);
+  try {
+    renderPane();
+    render(<Toaster />);
+    openMore();
+    fireEvent.click(screen.getByRole("menuitem", { name: "삭제" }));
+    expect(await screen.findByText(/이 회의의 공유 링크도 중지돼요\./)).toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "삭제" }));
+    expect(
+      await screen.findByText(/인터넷에 연결되어 있지 않아요\. 공유 링크는 다음에 연결될 때 중지되고, 늦어도 .*15일.*에는 막혀요\./),
+    ).toBeInTheDocument();
+  } finally {
+    vi.mocked(apiClient.get).mockImplementation(async () => ({ data: [] }) as never);
+  }
 });

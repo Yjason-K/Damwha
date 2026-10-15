@@ -42,6 +42,11 @@ deploy/demo/release.sh                  # 빌드 + ghcr 푸시 (태그 = 오늘)
 docker compose pull && docker compose down -v && docker compose up -d
 ```
 
+**2026-10-08 이후 이미지는 compose 파일도 새로 받아야 한다.** API가 loopback 밖 `Host`를 `ALLOWED_HOSTS`로만
+받는다(로컬 API 접근 제어, `docs/superpowers/specs/2026-10-08-local-api-access-control-design.md`). 옛 compose로
+새 이미지를 띄우면 터널로 들어온 모든 요청이 `403 HOST_NOT_ALLOWED`다. `curl -O …/docker-compose.yml`부터 다시 한다.
+공개 주소를 바꾸면 compose의 `ALLOWED_HOSTS`도 바꾼다.
+
 `down -v`가 필요한 이유: 복원은 빈 볼륨의 첫 기동에서만 일어난다. 볼륨을 지우지 않으면
 새 덤프가 무시된다. 로컬 스모크는 `PUSH=0 deploy/demo/release.sh smoke` 뒤
 `DAMWHA_DEMO_TAG=smoke DAMWHA_DEMO_PORT=3100 docker compose up -d`.

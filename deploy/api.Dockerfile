@@ -17,10 +17,11 @@ FROM node:22-alpine AS build
 RUN corepack enable
 WORKDIR /repo
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY packages/contracts ./packages/contracts
+# every workspace package — contracts and share-format build through `prepare`; the fe build bundles share-view sources
+COPY packages ./packages
 COPY be/package.json ./be/
 COPY fe/package.json ./fe/
-# contracts builds through its `prepare` script during install
+# contracts and share-format build through their `prepare` script during install
 RUN pnpm install --frozen-lockfile
 COPY be ./be
 COPY fe ./fe
@@ -51,12 +52,16 @@ RUN corepack enable
 WORKDIR /repo
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/contracts/package.json ./packages/contracts/
+COPY packages/share-format/package.json ./packages/share-format/
+COPY packages/share-view/package.json ./packages/share-view/
 COPY be/package.json ./be/
 COPY fe/package.json ./fe/
-# --ignore-scripts: contracts' `prepare` needs tsc, which --prod does not install;
-# its dist is copied from the build stage instead.
+# --ignore-scripts: `prepare` of contracts and share-format needs tsc, which --prod does not install;
+# both dists are copied from the build stage instead. share-view is bundled into the fe build and unused
+# at runtime (fe/package.json depends on it, so its package.json must exist).
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts
 COPY --from=build /repo/packages/contracts/dist ./packages/contracts/dist
+COPY --from=build /repo/packages/share-format/dist ./packages/share-format/dist
 COPY --from=build /repo/be/dist ./be/dist
 # main.ts serves dist/public as the SPA when it exists
 COPY --from=build /repo/fe/dist ./be/dist/public
@@ -66,6 +71,8 @@ COPY --from=seed /seed ./be/storage
 # cwd = be/ so STORAGE_ROOT=./storage resolves like the dev setup
 WORKDIR /repo/be
 ENV NODE_ENV=production
+# API 기본 HOST는 127.0.0.1이다(loopback). 컨테이너는 포트 매핑·터널로 바깥에서 닿아야 한다.
+ENV HOST=0.0.0.0
 EXPOSE 3000
 # migrate.ts is its own entrypoint (require.main) — apply pending SQL, then serve
 CMD ["sh", "-c", "node dist/database/migrate.js && node dist/main.js"]
