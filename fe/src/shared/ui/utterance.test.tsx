@@ -156,6 +156,51 @@ test("본문을 드래그해 골랐으면 클릭해도 이동하지 않는다 �
   expect(onJump).not.toHaveBeenCalled();
 });
 
+test("화자 필이나 여백을 눌러도 그 시점으로 간다 — 행 전체가 클릭 대상이다", () => {
+  const onJump = vi.fn();
+  const { container } = render(
+    <Utterance time="00:36" speaker={1} name="민지" onJump={onJump}>
+      다음 주에 결정합니다.
+    </Utterance>,
+  );
+  fireEvent.click(screen.getByText("민지"));
+  fireEvent.click(container.firstElementChild!);
+  expect(onJump).toHaveBeenCalledTimes(2);
+});
+
+test("행 안의 버튼은 제 할 일만 한다 — 저장을 눌러도 이동하지 않는다", () => {
+  const onJump = vi.fn();
+  const onSaveToggle = vi.fn();
+  render(
+    <Utterance
+      time="00:36"
+      speaker={1}
+      name="민지"
+      onJump={onJump}
+      onSaveToggle={onSaveToggle}
+    >
+      본문
+    </Utterance>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "발언 저장" }));
+  expect(onSaveToggle).toHaveBeenCalledTimes(1);
+  expect(onJump).not.toHaveBeenCalled();
+});
+
+test("더블클릭(단어 선택)과 드래그는 이동으로 보지 않는다", () => {
+  const onJump = vi.fn();
+  render(
+    <Utterance time="00:36" speaker={1} name="민지" onJump={onJump}>
+      본문
+    </Utterance>,
+  );
+  const text = screen.getByText("본문");
+  fireEvent.click(text, { detail: 2 });
+  fireEvent.pointerDown(text, { clientX: 10, clientY: 10 });
+  fireEvent.click(text, { clientX: 80, clientY: 12, detail: 1 });
+  expect(onJump).not.toHaveBeenCalled();
+});
+
 test("to를 준 행에서는 타임스탬프가 버튼이 아니다 — 행 전체가 이미 링크다", () => {
   render(
     <MemoryRouter>

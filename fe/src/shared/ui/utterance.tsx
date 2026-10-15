@@ -12,9 +12,11 @@ import { cn } from "@/shared/lib/utils";
  * 전체가 그 경로로 가는 링크가 되므로 "회의에서 보기"는 버튼이 아니라 힌트가 된다 —
  * 같은 목적지로 가는 조작이 둘일 이유가 없고, 링크 안의 버튼은 중첩이라 못 쓴다.
  *
- * `onJump`만 주면(회의 화면) 타임스탬프가 버튼이 되고 본문을 눌러도 그 시점으로
- * 간다. 호버 버튼 하나로만 이동되던 것이 발견되지 않았다(UX 리뷰 2026-09-28).
- * 본문 클릭은 텍스트를 드래그해 고른 경우엔 건너뛴다 — 복사하려던 것이다.
+ * `onJump`만 주면(회의 화면) 타임스탬프가 버튼이 되고, 행 어디를 눌러도(본문·화자·여백)
+ * 그 시점으로 간다. 본문 글자만 클릭 대상이던 판에서는 화자 필·줄 끝 여백을 누른 클릭이
+ * 아무 일도 하지 않아 "본문을 눌러도 00:00에 머문다"는 보고가 나왔다(2026-10).
+ * 텍스트를 고르려는 조작은 건너뛴다 — 드래그(포인터가 움직임), 더블·트리플 클릭(단어·
+ * 문단 선택), 이 행 안에 선택이 남아 있는 경우. 행 안의 버튼·링크는 제 할 일만 한다.
  */
 
 function MicIcon() {
@@ -146,8 +148,11 @@ function Utterance({
   onBookmark,
   to,
   children,
+  onClick,
+  onPointerDown,
   ...rest
 }: UtteranceProps) {
+  const pressAt = React.useRef<{ x: number; y: number } | null>(null);
   const root = cn(
     "group/utt relative grid grid-cols-[52px_1fr] gap-3 rounded-sm py-[7px] pr-3 pl-1.5 transition-colors duration-[80ms]",
     active ? "bg-[var(--accent-1)]" : "hover:bg-[var(--gray-1)]",
@@ -178,16 +183,42 @@ function Utterance({
   ) : (
     <span className={timeCls}>{time}</span>
   );
-  const onTextClick = canSeek
-    ? () => {
-        if (window.getSelection()?.toString()) return;
-        onJump?.();
-      }
-    : undefined;
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    pressAt.current = { x: e.clientX, y: e.clientY };
+    onPointerDown?.(e);
+  };
+  const handleRowClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    onClick?.(e);
+    if (!canSeek || e.defaultPrevented) return;
+    const target = e.target as HTMLElement;
+    if (target.closest("button, a, input, textarea, select")) return;
+    if (e.detail > 1) return;
+    const start = pressAt.current;
+    pressAt.current = null;
+    if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 4) {
+      return;
+    }
+    const sel = window.getSelection();
+    if (
+      sel &&
+      !sel.isCollapsed &&
+      sel.toString() &&
+      e.currentTarget.contains(sel.anchorNode)
+    ) {
+      return;
+    }
+    onJump?.();
+  };
 
   if (quoted) {
     return (
-      <div className={root} aria-current={playing || undefined} {...rest}>
+      <div
+        className={root}
+        aria-current={playing || undefined}
+        onClick={onClick}
+        onPointerDown={onPointerDown}
+        {...rest}
+      >
         {timeEl}
         <div className="flex items-start gap-2.5 rounded-md border border-border bg-card px-3 py-[11px] [box-shadow:var(--shadow-xs)]">
           <span className="mt-px shrink-0 text-[color:var(--gray-5)] [&_svg]:size-4">
@@ -221,9 +252,11 @@ function Utterance({
 
   return (
     <div
-      className={root}
+      className={cn(root, canSeek && "cursor-pointer")}
       data-saved={saved || undefined}
       aria-current={playing || undefined}
+      onClick={handleRowClick}
+      onPointerDown={handlePointerDown}
       {...rest}
     >
       {timeEl}
@@ -252,14 +285,7 @@ function Utterance({
             {children}
           </Link>
         ) : (
-          <span
-            className={cn(
-              "text-read text-pretty",
-              canSeek && "cursor-pointer",
-              textTone,
-            )}
-            onClick={onTextClick}
-          >
+          <span className={cn("text-read text-pretty", textTone)}>
             {children}
           </span>
         )}
