@@ -1497,7 +1497,10 @@ test("빈 검색어로 팔레트를 열면 브라우즈 결과가 보인다", as
   });
   fireEvent.keyDown(window, { key: "k", metaKey: true });
   // 빈 질의(브라우즈 모드)에도 결과 옵션이 나오고, 빈 상태 문구는 사라진다.
-  const options = await screen.findAllByRole("option");
+  // 결과 목록(listbox) 안에서만 센다 — 필터 select의 <option>도 option 역할이다.
+  const options = await within(screen.getByRole("listbox")).findAllByRole(
+    "option",
+  );
   expect(options.length).toBeGreaterThan(0);
   expect(
     screen.queryByText("결과가 없어요. 다른 검색어를 시도해 보세요."),
