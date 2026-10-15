@@ -15,7 +15,7 @@ const ITEM_KEY = `date_trunc('milliseconds', li.updated_at)`;
 const ITEM_COLUMNS = `
   li.id, li.meeting_id, li.kind, li.text, li.assignee_speaker_id,
   li.due_at::text AS due_at, li.completion_status, li.source,
-  li.user_modified, li.lifecycle_status, li.created_at, li.updated_at,
+  li.user_modified, li.lifecycle_status, li.confidence, li.created_at, li.updated_at,
   m.title AS meeting_title, m.recorded_at AS meeting_recorded_at,
   ${MEETING_KEY} AS meeting_sort_at`;
 
@@ -206,6 +206,17 @@ export class LensesRepository {
     const res = await exec.query(
       `UPDATE lens_item SET completion_status=$2, user_modified=true, updated_at=now() WHERE id=$1`,
       [id, status],
+    );
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  // "결정 아님" — 목록에서 빼되 행과 근거는 남긴다. 재추출이 같은 (kind, 근거 발화)를
+  // 다시 내도 워커가 이 행을 보고 되살리지 않는다.
+  async dismiss(exec: Exec, id: string): Promise<boolean> {
+    const res = await exec.query(
+      `UPDATE lens_item SET lifecycle_status='dismissed', user_modified=true, updated_at=now()
+       WHERE id=$1`,
+      [id],
     );
     return (res.rowCount ?? 0) > 0;
   }

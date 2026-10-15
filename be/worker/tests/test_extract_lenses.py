@@ -31,6 +31,7 @@ def _candidate(kind, primary, supporting=(), **overrides):
         "due_at": None,
         "primary_utterance_id": primary,
         "supporting_utterance_ids": list(supporting),
+        "confidence": None,
     }
     data.update(overrides)
     return SimpleNamespace(**data)
@@ -219,6 +220,34 @@ def test_merge_archives_unmatched_eligible_ai_item(conn, extraction_job, fake_cl
         ]
         == "archived"
     )
+
+
+def test_merge_does_not_revive_a_dismissed_item(conn, extraction_job, fake_client):
+    job, ids = extraction_job
+    with conn.transaction():
+        dismissed = conn.execute(
+            """INSERT INTO lens_item(meeting_id, kind, text, source, user_modified,
+                                     lifecycle_status)
+               VALUES (%s, 'decision', '의견이었다', 'ai', true, 'dismissed') RETURNING id""",
+            (ids["meeting_id"],),
+        ).fetchone()["id"]
+        conn.execute(
+            """INSERT INTO lens_evidence(lens_item_id, utterance_id, relation)
+               VALUES (%s, %s, 'primary')""",
+            (dismissed, ids["utt_1"]),
+        )
+    fake_client.extract = lambda **_kwargs: [
+        _candidate("decision", ids["utt_1"]),
+        _candidate("action", ids["utt_1"], confidence="medium"),
+    ]
+    assert run_extract_lenses(conn, job, _payload(job), fake_client, worker_id="w") == "committed"
+    rows = conn.execute(
+        "SELECT kind, lifecycle_status, confidence FROM lens_item ORDER BY kind"
+    ).fetchall()
+    assert [(r["kind"], r["lifecycle_status"], r["confidence"]) for r in rows] == [
+        ("action", "active", "medium"),
+        ("decision", "dismissed", None),
+    ]
 
 
 def test_stale_version_discards_without_writing_lenses(conn, extraction_job, fake_client):

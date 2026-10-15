@@ -3,6 +3,7 @@ import { LensItem } from "@/shared/ui/lens-item";
 import { MeetingGroupHeader } from "@/shared/ui/meeting-group-header";
 import type { LensListPage } from "../model/types";
 import { mapItemView } from "../lib/map-item";
+import { LENS_META } from "../model/meta";
 
 type LensListProps = {
   pages: LensListPage[];
@@ -10,6 +11,7 @@ type LensListProps = {
   isFetchingNextPage: boolean;
   onLoadMore: () => void;
   onToggle: (id: string, done: boolean) => void;
+  onDismiss: (id: string) => void;
   onJumpEvidence: (meetingId: string, utteranceId: string) => void;
   speakerName: (id: string | null) => string | null;
   speakerTint: (id: string | null) => number | undefined;
@@ -21,6 +23,7 @@ export function LensList({
   isFetchingNextPage,
   onLoadMore,
   onToggle,
+  onDismiss,
   onJumpEvidence,
   speakerName,
   speakerTint,
@@ -43,6 +46,10 @@ export function LensList({
       {items.map((item, index) => {
         const v = mapItemView(item);
         const name = speakerName(item.assignee_speaker_id);
+        const sayer = speakerName(
+          item.evidence.find((e) => e.relation === "primary")?.utterance
+            .speaker_id ?? null,
+        );
         // 목록은 회의 우선으로 정렬되어 오므로 연속 구간이 곧 회의 그룹이다.
         // 구간이 페이지 경계에 걸려도 헤더가 다시 나오지 않는다.
         const startsMeeting = items[index - 1]?.meeting_id !== item.meeting_id;
@@ -74,6 +81,10 @@ export function LensList({
                       onJumpEvidence(item.meeting_id, v.primary!.utteranceId)
                   : undefined
               }
+              speaker={sayer ?? undefined}
+              confidence={item.confidence}
+              onDismiss={() => onDismiss(item.id)}
+              dismissLabel={`${LENS_META[item.kind].label} 아님`}
             >
               {item.text}
             </LensItem>

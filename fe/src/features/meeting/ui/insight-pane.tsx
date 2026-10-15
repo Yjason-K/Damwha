@@ -165,18 +165,84 @@ function EntryText({
   );
 }
 
+const CONFIDENCE_LABEL = {
+  high: "확신 높음",
+  medium: "확신 보통",
+  low: "확신 낮음",
+} as const;
+
+const DISMISS_LABEL: Record<LensKind, string> = {
+  action: "할 일 아님",
+  decision: "결정 아님",
+  promise: "약속 아님",
+};
+
+/**
+ * 항목 아래 한 줄: 근거 발화를 누가 했는지와 추출 모델의 확신도. 토크쇼의 "결정"처럼
+ * 의견이 결정으로 뽑힌 건 말한 사람과 확신도를 보면 바로 가려진다. 힌트일 뿐 막지 않는다.
+ */
+function EntryMeta({ entry, meeting }: { entry: LensEntry; meeting: Meeting }) {
+  const sayer = entry.speaker != null ? meeting.speakers[entry.speaker] : null;
+  const confidence = entry.confidence
+    ? CONFIDENCE_LABEL[entry.confidence]
+    : null;
+  if (!sayer && !confidence) return null;
+  return (
+    <span className="mt-0.5 flex items-center gap-1.5 text-2xs text-[color:var(--text-faint)]">
+      {sayer && <span>{sayer.name}의 발언</span>}
+      {sayer && confidence && <span aria-hidden="true">·</span>}
+      {confidence && (
+        <span
+          className={cn(
+            entry.confidence === "medium" && "text-[color:var(--amber-text)]",
+          )}
+        >
+          {confidence}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** "결정 아님" — 한 번 누르면 항목이 치워지고 재추출도 되살리지 않는다. */
+function DismissButton({
+  kind,
+  entry,
+  onDismiss,
+}: {
+  kind: LensKind;
+  entry: LensEntry;
+  onDismiss: (id: string) => void;
+}) {
+  return (
+    <IconButton
+      label={`${DISMISS_LABEL[kind]}: ${entry.text}`}
+      title={DISMISS_LABEL[kind]}
+      size="sm"
+      className="-mt-0.5 shrink-0 opacity-0 transition-opacity group-hover/entry:opacity-100 focus-visible:opacity-100"
+      onClick={() => onDismiss(entry.id)}
+    >
+      <Icon name="x" size={14} />
+    </IconButton>
+  );
+}
+
 function LensSection({
   kind,
   items,
   marker,
+  meeting,
   onMore,
   onJump,
+  onDismiss,
 }: {
   kind: LensKind;
   items: LensEntry[];
   marker: React.ReactNode;
+  meeting: Meeting;
   onMore?: () => void;
   onJump: (utteranceId: string) => void;
+  onDismiss: (id: string) => void;
 }) {
   if (items.length === 0) return null;
   return (
@@ -188,11 +254,19 @@ function LensSection({
       />
       <div className="flex flex-col gap-[9px]">
         {items.map((it) => (
-          <div key={it.id} className="flex items-start gap-[9px]">
+          <div key={it.id} className="group/entry flex items-start gap-[9px]">
             <span className="mt-px shrink-0 text-[color:var(--accent-solid)]">
               {marker}
             </span>
-            <EntryText entry={it} onJump={onJump} className="text-foreground" />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <EntryText
+                entry={it}
+                onJump={onJump}
+                className="text-foreground"
+              />
+              <EntryMeta entry={it} meeting={meeting} />
+            </span>
+            <DismissButton kind={kind} entry={it} onDismiss={onDismiss} />
           </div>
         ))}
       </div>
@@ -206,12 +280,14 @@ function Todos({
   onToggle,
   onMore,
   onJump,
+  onDismiss,
 }: {
   lenses: Partial<Record<LensKind, LensEntry[]>>;
   meeting: Meeting;
   onToggle: (id: string, done: boolean) => void;
   onMore?: () => void;
   onJump: (utteranceId: string) => void;
+  onDismiss: (id: string) => void;
 }) {
   const items = lenses.action ?? [];
   if (items.length === 0) return null;
@@ -227,7 +303,7 @@ function Todos({
           const w = it.who ? meeting.speakers[it.who] : null;
           const k = w ? ((w.spk - 1) % 8) + 1 : null;
           return (
-            <div key={it.id} className="flex items-start gap-[9px]">
+            <div key={it.id} className="group/entry flex items-start gap-[9px]">
               <span className="mt-px">
                 <Checkbox
                   aria-label={`완료: ${it.text}`}
@@ -235,15 +311,18 @@ function Todos({
                   onChange={() => onToggle(it.id, !it.done)}
                 />
               </span>
-              <EntryText
-                entry={it}
-                onJump={onJump}
-                className={
-                  it.done
-                    ? "text-[color:var(--text-muted)] line-through"
-                    : "text-foreground"
-                }
-              />
+              <span className="flex min-w-0 flex-1 flex-col">
+                <EntryText
+                  entry={it}
+                  onJump={onJump}
+                  className={
+                    it.done
+                      ? "text-[color:var(--text-muted)] line-through"
+                      : "text-foreground"
+                  }
+                />
+                <EntryMeta entry={it} meeting={meeting} />
+              </span>
               {w && k && (
                 <span className="inline-flex shrink-0 items-center gap-[5px]">
                   <span
@@ -268,6 +347,7 @@ function Todos({
                   )}
                 </span>
               )}
+              <DismissButton kind="action" entry={it} onDismiss={onDismiss} />
             </div>
           );
         })}
@@ -540,6 +620,8 @@ type InsightPaneProps = {
   tab: string;
   onTab: (tab: string) => void;
   onToggle: (id: string, done: boolean) => void;
+  /** "결정 아님"(할 일·약속도) — 항목을 치운다. */
+  onDismiss: (id: string) => void;
   onOpenLens: (lens: LensKind) => void;
   onJumpSegment: (utteranceId: string) => void;
   onRegenerateSummary: () => void;
@@ -560,6 +642,7 @@ export function InsightPane({
   tab,
   onTab,
   onToggle,
+  onDismiss,
   onOpenLens,
   onJumpSegment,
   onRegenerateSummary,
@@ -625,20 +708,25 @@ export function InsightPane({
                 onToggle={onToggle}
                 onMore={() => onOpenLens("action")}
                 onJump={onJumpSegment}
+                onDismiss={onDismiss}
               />
               <LensSection
                 kind="decision"
                 items={lenses.decision ?? []}
                 marker={<CheckCircle />}
+                meeting={meeting}
                 onMore={() => onOpenLens("decision")}
                 onJump={onJumpSegment}
+                onDismiss={onDismiss}
               />
               <LensSection
                 kind="promise"
                 items={lenses.promise ?? []}
                 marker={<Icon name="handshake" size={16} />}
+                meeting={meeting}
                 onMore={() => onOpenLens("promise")}
                 onJump={onJumpSegment}
+                onDismiss={onDismiss}
               />
               <LensState
                 meetingStatus={meeting.status}

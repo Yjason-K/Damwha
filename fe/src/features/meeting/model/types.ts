@@ -73,6 +73,9 @@ export type LensEntry = {
   text: string;
   source: LensSource;
   who?: number;
+  /** 근거 발화를 말한 화자의 틴트 번호(spk). 누가 한 말인지 보여 주어 오탐을 가르게 한다. */
+  speaker?: number;
+  confidence?: "high" | "medium" | "low" | null;
   ev: string;
   due?: string;
   done: boolean;

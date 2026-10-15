@@ -6,6 +6,7 @@ import { useToast } from "@/shared/ui/use-toast";
 
 import {
   useCancelExtraction,
+  useDismissLens,
   useRetryExtraction,
   useSetLensCompletion,
 } from "@/features/lens/api/lenses";
@@ -368,6 +369,7 @@ function MeetingView({
 
   const { data: meetingLensData } = useMeetingLenses(meetingId);
   const setLensCompletion = useSetLensCompletion();
+  const dismissLens = useDismissLens();
   const extractLenses = useRetryExtraction();
   const cancelExtraction = useCancelExtraction();
   const cancelSummary = useCancelSummary();
@@ -706,6 +708,7 @@ function MeetingView({
           onToggle={(id, doneVal) =>
             setLensCompletion.mutate({ id, done: doneVal })
           }
+          onDismiss={(id) => dismissLens.mutate(id)}
           onOpenLens={(k) => navigate(`/lenses/${k}`)}
           onJumpSegment={jumpTo}
           onRegenerateSummary={() =>
