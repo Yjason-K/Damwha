@@ -24,7 +24,20 @@ _EXTRACTION_SYSTEM_PROMPT_BASE = (
     "Return a JSON object with only an items array. Each item must be an action, "
     "decision, or promise and have exactly these fields: kind, text, "
     "assignee_speaker_id (nullable), due_at (nullable), primary_index, "
-    "supporting_indexes. Choose the exact primary utterance. primary_index and "
+    "supporting_indexes, confidence. "
+    "An action is a task someone is asked to do or agrees to do. A decision is a "
+    "choice the participants settle on about what they will do next, such as "
+    "adopting a plan, picking an option, or fixing a date; it must change what "
+    "happens after the conversation. A promise is a commitment one speaker makes "
+    "to another. Opinions, impressions, claims about the world, general "
+    "observations, questions (including rhetorical ones), hypotheticals, jokes, "
+    "and quotations are none of these, however firmly they are worded. "
+    "Recordings that are not working meetings, such as talk shows, lectures, "
+    "interviews, podcasts, or casual chats, usually contain none; return an empty "
+    "items array for them unless a participant explicitly commits to something. "
+    "confidence is high, medium, or low: how sure you are that the item really is "
+    "the stated kind. "
+    "Choose the exact primary utterance. primary_index and "
     "every supporting index must be index values from the transcript, and "
     "assignee_speaker_id must be a speaker_id from the Speakers section (not a "
     "name) or null. Write due_at as a YYYY-MM-DD calendar date. When an utterance "
@@ -33,6 +46,12 @@ _EXTRACTION_SYSTEM_PROMPT_BASE = (
     "use null. Do not "
     "speculate or return duplicates. "
 )
+
+# 프롬프트가 결정의 정의를 주지 않던 판에서는 토크쇼 녹음(mtg_25) 하나에서 "결정"이
+# 12건 나왔고 전부 의견·질문이었다("말이 많으면 손해인가" 등). 정의와 "회의가 아니면
+# 0건" 지시를 넣고, 모델 스스로 low라고 답한 항목은 저장하지 않는다 — 렌즈는 0건이면
+# 섹션이 사라지는 확장 레이어라, 애매한 항목을 남기는 것보다 버리는 쪽이 싸다.
+_DROPPED_CONFIDENCE = "low"
 
 
 def _extraction_system_prompt(output_language: SummaryLanguage) -> str:
@@ -91,6 +110,13 @@ def _due_at_or_none(v: Any) -> Any:
     return None
 
 
+def _confidence_or_none(v: Any) -> Any:
+    """모르는 확신도 표기는 그 항목만 확신도 없음으로 둔다(due_at과 같은 관대화)."""
+    if isinstance(v, str) and v.strip().lower() in {"high", "medium", "low"}:
+        return v.strip().lower()
+    return None
+
+
 class _LlmLensItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -102,6 +128,9 @@ class _LlmLensItem(BaseModel):
     due_at: Annotated[date | None, BeforeValidator(_due_at_or_none)] = None
     primary_index: int
     supporting_indexes: list[int] = []
+    confidence: Annotated[
+        Literal["high", "medium", "low"] | None, BeforeValidator(_confidence_or_none)
+    ] = None
 
 
 class _LlmLensResponse(BaseModel):
@@ -130,6 +159,9 @@ def _map_indexes(parsed: _LlmLensResponse, ids: list[str]) -> list[LensCandidate
     """
     candidates: list[LensCandidate] = []
     for item in parsed.items:
+        if item.confidence == _DROPPED_CONFIDENCE:
+            log.info("lens item dropped: model rated it low confidence (%s)", item.kind)
+            continue
         if not 1 <= item.primary_index <= len(ids):
             log.warning(
                 "lens item dropped: primary_index %s is outside 1..%s",
@@ -146,6 +178,7 @@ def _map_indexes(parsed: _LlmLensResponse, ids: list[str]) -> list[LensCandidate
                 due_at=item.due_at,
                 primary_utterance_id=ids[item.primary_index - 1],
                 supporting_utterance_ids=[ids[i - 1] for i in supporting],
+                confidence=item.confidence,
             )
         )
     return candidates
