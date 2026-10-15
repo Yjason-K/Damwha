@@ -24,6 +24,10 @@ export type SpeakerItem = {
   sample: SamplePlay | null;
   /** '나'로 지정된 화자인가. 최대 한 명이고 DB가 강제한다. */
   isMe: boolean;
+  /** 이 화자가 등장한 회의(최신순). 제목이 없으면 null. */
+  meetings: { id: string; title: string | null }[];
+  /** 워커가 "같은 사람일 수 있다"고 본 기존 화자. 확인 필요 섹션이 병합을 권한다. */
+  suggestion: { id: string; name: string; similarity: number } | null;
 };
 
 /**
@@ -54,6 +58,8 @@ function toSpeakerItem(wire: WireSpeaker): SpeakerItem {
     createdAt: wire.created_at,
     sample: toSample(wire),
     isMe: wire.is_me ?? false,
+    meetings: wire.meetings ?? [],
+    suggestion: wire.suggestion ?? null,
   };
 }
 
@@ -143,6 +149,24 @@ export function useSetMe() {
 
 export function useClearMe() {
   return useMeMutation("delete", "'나' 지정을 풀지 못했어요");
+}
+
+/**
+ * 화자 병합 (POST /speakers/:id/merge). `id`의 발화·클러스터·성문을 `into`로 옮기고 `id`를
+ * 지운다. 회의 상세의 화자 귀속과 목록 아바타가 바뀌므로 회의 캐시도 무효화한다.
+ */
+export function useMergeSpeaker() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: { id: string; into: string }) => {
+      await apiClient.post(`/speakers/${vars.id}/merge`, { into: vars.into });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["speakers"] });
+      queryClient.invalidateQueries({ queryKey: ["meeting"] });
+      queryClient.invalidateQueries({ queryKey: ["meetings"] });
+    },
+  });
 }
 
 /** 화자 삭제 (DELETE /speakers/:id). 진행 중 enroll이 있으면 409. */

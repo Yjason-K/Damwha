@@ -235,7 +235,7 @@ describe('meetings management (PATCH / DELETE)', () => {
     it('a meeting with nothing attached carries zero counts and null previews', async () => {
       const mid = await addMeeting();
       expect(await listRow(mid)).toMatchObject({
-        participant_count: 0, decision_count: 0, action_count: 0, saved_count: 0, has_me: false,
+        participant_count: 0, participants: [], decision_count: 0, action_count: 0, saved_count: 0, has_me: false,
         preview_decision: null, preview_action: null, preview_summary: null,
       });
     });
@@ -265,6 +265,23 @@ describe('meetings management (PATCH / DELETE)', () => {
       for (const k of ['participant_count', 'decision_count', 'action_count', 'saved_count']) {
         expect(typeof row[k]).toBe('number');
       }
+    });
+
+    it('participants lists current-version speakers once each, ordered by diar label', async () => {
+      const a = await addSpeaker('궁도');
+      const b = await addSpeaker('침착맨');
+      const gone = await addSpeaker('옛 버전');
+      const mid = await addMeeting(1);
+      await addCluster(mid, 'OLD0', 0, gone);
+      await addCluster(mid, 'S1', 1, a);
+      await addCluster(mid, 'S0', 1, b);
+      await addCluster(mid, 'S2', 1, a);
+      await addCluster(mid, 'S3', 1);
+
+      expect((await listRow(mid)).participants).toEqual([
+        { id: b, name: '침착맨', provisional: false },
+        { id: a, name: '궁도', provisional: false },
+      ]);
     });
 
     it('has_me is true only when a current-version cluster resolves to the me speaker', async () => {

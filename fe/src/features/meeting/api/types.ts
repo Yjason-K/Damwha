@@ -94,6 +94,8 @@ export type WireMeeting = {
    * 0·false·null을 준다. 다른 응답과 기존 픽스처를 깨지 않으려고 optional로 둔다.
    */
   participant_count?: number;
+  /** 카드 아바타 — 현재 처리 버전에서 클러스터가 묶인 화자(중복 없이). 옛 서버는 주지 않는다. */
+  participants?: WireParticipant[];
   decision_count?: number;
   action_count?: number;
   saved_count?: number;
@@ -103,6 +105,8 @@ export type WireMeeting = {
   preview_action?: WirePreviewAction | null;
   preview_summary?: string | null;
 };
+
+export type WireParticipant = { id: string; name: string; provisional: boolean };
 
 /** 카드 미리보기용 할 일 하나 — open을 먼저 고른다. due_at은 `YYYY-MM-DD`. */
 export type WirePreviewAction = {
@@ -215,6 +219,10 @@ export type WireSpeaker = {
   sample_end_ms?: number | null;
   /** '나'로 지정된 화자인가(최대 한 명). 이 필드 이전 픽스처를 위해 optional. */
   is_me?: boolean;
+  /** 현재 처리 버전에서 이 화자가 등장한 회의(최신순). 조회(GET)에만 실린다. */
+  meetings?: { id: string; title: string | null }[];
+  /** 이 화자의 클러스터에 남은 "같은 사람일 수 있음" 후보(가장 유사한 것). 조회에만 실린다. */
+  suggestion?: { id: string; name: string; similarity: number } | null;
 };
 
 /** GET /meetings/:id/status 응답. */

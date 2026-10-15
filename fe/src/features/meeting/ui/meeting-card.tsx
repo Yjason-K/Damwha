@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router";
 
+import { Avatar } from "@/shared/ui/avatar";
 import { Badge } from "@/shared/ui/badge";
-import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 
 import { dueDateLabel, meetingWhenLabel } from "../lib/meeting-when";
@@ -27,9 +27,45 @@ function PreviewLine({
   );
 }
 
+const MAX_AVATARS = 4;
+
+function Participants({
+  participants,
+}: {
+  participants: MeetingSummary["participants"];
+}) {
+  if (participants.length === 0) return null;
+  const shown = participants.slice(0, MAX_AVATARS);
+  const rest = participants.length - shown.length;
+  return (
+    <span
+      className="flex items-center"
+      aria-label={`참석자: ${participants.map((p) => p.name).join(", ")}`}
+      title={participants.map((p) => p.name).join(", ")}
+    >
+      {shown.map((p, i) => (
+        <Avatar
+          key={p.id}
+          name={p.name}
+          speaker={i + 1}
+          size="sm"
+          unconfirmed={p.provisional}
+          className="-ml-1 ring-2 ring-[var(--surface-card)] first:ml-0"
+        />
+      ))}
+      {rest > 0 ? (
+        <span className="ml-1 text-xs text-[color:var(--text-muted)]">
+          +{rest}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 /**
- * 회의 목록 카드(스펙 §2.7). 제목과 `회의 열기` 둘 다 상세로 가는 링크이고, 카드
- * 전체는 링크가 아니다 — 링크 안에 링크를 넣지 않기 위해서다.
+ * 회의 목록 카드(스펙 §2.7). 카드 어디를 눌러도 상세로 간다 — 링크는 제목 하나뿐이고
+ * 그 `::after`가 카드 전체를 덮는다(링크 안에 링크를 넣지 않으려고 카드 자체를 링크로
+ * 만들지 않는다). 카드마다 반복되던 `회의 열기` 버튼은 UX 리뷰(2026-10-15)에서 뺐다.
  */
 export function MeetingCard({
   meeting: m,
@@ -40,9 +76,12 @@ export function MeetingCard({
 }) {
   const href = `/meetings/${m.id}`;
   const firstTag = m.tags[0];
+  // participant_count는 클러스터 수라 병합 뒤에도 줄지 않는다 — 아바타와 같은 사람 수를 쓴다.
+  const people =
+    m.participants.length > 0 ? m.participants.length : m.participantCount;
   const meta = [
     m.durationMs != null ? m.dur : null,
-    m.participantCount > 0 ? `${m.participantCount}명` : null,
+    people > 0 ? `${people}명` : null,
   ];
   const action = m.preview.action;
   const actionLine = action
@@ -71,12 +110,17 @@ export function MeetingCard({
   const processed = m.status === "done";
 
   return (
-    <Card padding="sm" data-testid="meeting-card">
+    <Card
+      padding="sm"
+      interactive
+      data-testid="meeting-card"
+      className="relative has-[a:focus-visible]:[box-shadow:var(--focus-ring)]"
+    >
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <Link
             to={href}
-            className="block truncate rounded-xs text-h3 font-semibold text-foreground no-underline outline-none hover:text-[color:var(--text-link)] focus-visible:[box-shadow:var(--focus-ring)]"
+            className="block truncate text-h3 font-semibold text-foreground no-underline outline-none after:absolute after:inset-0 after:rounded-md after:content-['']"
           >
             {m.title}
           </Link>
@@ -104,6 +148,7 @@ export function MeetingCard({
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
+          <Participants participants={m.participants} />
           {processed ? (
             <>
               {m.decisionCount > 0 ? (
@@ -125,17 +170,6 @@ export function MeetingCard({
           ) : (
             <MeetingStatusBadge status={m.status} />
           )}
-          <Button
-            asChild
-            variant="secondary"
-            size="sm"
-            className="ml-1.5 no-underline"
-          >
-            <Link to={href} aria-label={`${m.title} 회의 열기`}>
-              회의 열기
-              <Icon name="arrowRight" size={14} />
-            </Link>
-          </Button>
         </div>
       </div>
       {hasPreview ? (

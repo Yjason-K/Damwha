@@ -88,6 +88,7 @@ export function toMeetingSummary(wire: WireMeeting): MeetingSummary {
     startIso,
     durationMs: wire.duration_ms,
     participantCount: wire.participant_count ?? 0,
+    participants: wire.participants ?? [],
     decisionCount: wire.decision_count ?? 0,
     actionCount: wire.action_count ?? 0,
     savedCount: wire.saved_count ?? 0,

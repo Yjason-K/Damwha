@@ -88,6 +88,30 @@ describe("InsightPane", () => {
     expect(screen.getByRole("tab", { name: "메모" })).toBeInTheDocument();
   });
 
+  it("요약 탭은 단락별 요약을 맨 위에, 주요 주제와 참석자를 그 아래에 둔다", () => {
+    renderPane({
+      meeting: meeting({
+        topics: ["예약 관리"],
+        segments: [
+          {
+            id: "seg_1",
+            t: "00:00",
+            title: "킥오프",
+            bullets: ["범위를 정했다"],
+            startUtteranceId: "utt_1",
+          },
+        ],
+      }),
+    });
+    const [summary, topics, people] = ["단락별 요약", "주요 주제", "참석자"].map(
+      (t) => screen.getByText(t),
+    );
+    const before = (a: Element, b: Element) =>
+      (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    expect(before(summary, topics)).toBe(true);
+    expect(before(topics, people)).toBe(true);
+  });
+
   it("주요 주제를 불릿 목록으로 보여준다", () => {
     renderPane({
       meeting: meeting({ topics: ["파이프라인 실행 순서", "예약 관리"] }),

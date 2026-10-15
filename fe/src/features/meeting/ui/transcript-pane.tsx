@@ -13,6 +13,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/shared/ui/dropdown-menu";
 import { IconButton } from "@/shared/ui/icon-button";
 import { Input } from "@/shared/ui/input";
 import { SearchField } from "@/shared/ui/search-field";
@@ -44,27 +52,10 @@ import { ReprocessDialog } from "./reprocess-dialog";
 import { ResolveDialog } from "./resolve-dialog";
 
 /**
- * TranscriptPane — center pane: meta header, attendee pills, speaker-verify
+ * TranscriptPane — center pane: meta header, speaker-verify
  * banner, AI-suggestion banner, utterances, 찾기 바. Ported from the
  * Damwha Design System UI kit (`timbre_app/TranscriptPane.jsx`).
  */
-
-function MicMini() {
-  return (
-    <svg
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="6" y="2.5" width="4" height="7" rx="2" />
-      <path d="M4.5 8a3.5 3.5 0 0 0 7 0M8 11.5v2" />
-    </svg>
-  );
-}
 
 function TrashMini() {
   return (
@@ -116,27 +107,6 @@ function renderFindText(
   });
   if (at < text.length) out.push(text.slice(at));
   return out;
-}
-
-function AttendeePill({ speaker, name }: { speaker: number; name: string }) {
-  const k = ((speaker - 1) % 8) + 1;
-  return (
-    <span
-      className="inline-flex items-center gap-[5px] rounded-full py-0.5 pr-[9px] pl-[3px] text-xs font-semibold"
-      style={{
-        background: `var(--spk-${k}-bg)`,
-        color: `var(--spk-${k}-text)`,
-      }}
-    >
-      <span
-        className="inline-flex size-4 items-center justify-center rounded-full text-white [&_svg]:size-[9px]"
-        style={{ background: `var(--spk-${k}-solid)` }}
-      >
-        <MicMini />
-      </span>
-      {name}
-    </span>
-  );
 }
 
 function MetaItem({
@@ -547,13 +517,6 @@ export function TranscriptPane({
           >
             <Icon name="pencil" size={16} />
           </IconButton>
-          <IconButton
-            label="삭제"
-            size="sm"
-            onClick={() => setDeleteOpen(true)}
-          >
-            <TrashMini />
-          </IconButton>
           {meeting.status === "done" && (
             <IconButton
               label="내보내기"
@@ -564,34 +527,50 @@ export function TranscriptPane({
             </IconButton>
           )}
           <ShareButton meeting={meeting} />
-          {/* 마이크를 못 연 실패는 파일이 없다 — 재처리할 게 없으니 숨긴다 */}
-          {(meeting.status === "done" ||
-            (meeting.status === "failed" &&
-              meeting.error?.code !== "audio_device_failed")) && (
-            <IconButton
-              label="회의 재처리"
-              size="sm"
-              onClick={() => setReprocessOpen(true)}
-            >
-              {/* 요약 다시 만들기(sparkles)와 비용이 전혀 달라 같은 화살표를 쓰지 않는다 */}
-              <Icon name="waveform" size={16} />
-            </IconButton>
-          )}
+          {/* 재처리와 삭제는 드물고 되돌리기 어렵다 — 편집 옆에 나란히 두지 않고 더보기 뒤로 접는다 */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <IconButton label="더보기" size="sm">
+                <Icon name="more" size={16} />
+              </IconButton>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className="max-w-80">
+              {meeting.files[0] && (
+                <>
+                  <DropdownMenuLabel title={meeting.files[0].name}>
+                    <span className="block">원본 파일</span>
+                    <span className="block truncate text-[color:var(--text-secondary)]">
+                      {meeting.files[0].name}
+                    </span>
+                  </DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                </>
+              )}
+              {/* 마이크를 못 연 실패는 파일이 없다 — 재처리할 게 없으니 숨긴다 */}
+              {(meeting.status === "done" ||
+                (meeting.status === "failed" &&
+                  meeting.error?.code !== "audio_device_failed")) && (
+                <DropdownMenuItem onSelect={() => setReprocessOpen(true)}>
+                  {/* 요약 다시 만들기(sparkles)와 비용이 전혀 달라 같은 화살표를 쓰지 않는다 */}
+                  <Icon name="waveform" size={14} />
+                  회의 재처리
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem
+                variant="destructive"
+                onSelect={() => setDeleteOpen(true)}
+              >
+                <TrashMini />
+                삭제
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
         <div className="flex items-center gap-3.5 text-xs text-[color:var(--text-muted)]">
           <MeetingFolder meetingId={meeting.id} folderId={meeting.folderId} />
           <MetaItem icon="calendar">{meeting.timeRange}</MetaItem>
           <MetaItem icon="clock">{meeting.dur}</MetaItem>
           <MetaItem icon="users">참석자 {meeting.attendees.length}명</MetaItem>
-          {meeting.files[0] && (
-            <span
-              className="inline-flex min-w-0 items-center gap-[5px]"
-              title={meeting.files[0].name}
-            >
-              <Icon name="file" size={14} />
-              <span className="truncate">{meeting.files[0].name}</span>
-            </span>
-          )}
         </div>
         <div className="mt-2.5">
           <MeetingTags
@@ -599,15 +578,6 @@ export function TranscriptPane({
             tags={meeting.tags}
             suggestions={meeting.tagSuggestions}
           />
-        </div>
-        <div className="mt-3 flex flex-wrap items-center gap-[7px]">
-          {meeting.attendees.map((a) => (
-            <AttendeePill
-              key={a}
-              speaker={meeting.speakers[a].spk}
-              name={meeting.speakers[a].name}
-            />
-          ))}
         </div>
       </div>
 

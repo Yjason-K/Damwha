@@ -1006,14 +1006,17 @@ test("회의를 삭제하면 전체 목록으로 가고 삭제된 회의는 목�
   // 무효화 재조회를 붙잡아, 목록 화면이 캐시된 목록만 보고 그리게 만든다.
   fx.blockListFetches();
 
-  fireEvent.click(screen.getByRole("button", { name: "삭제" }));
+  fireEvent.keyDown(screen.getByRole("button", { name: "더보기" }), {
+    key: "Enter",
+  });
+  fireEvent.click(screen.getByRole("menuitem", { name: "삭제" }));
   const dialog = await screen.findByRole("dialog");
   fireEvent.click(within(dialog).getByRole("button", { name: "삭제" }));
 
   // 삭제 성공 → `/`로 replace → IndexRoute가 `/meetings` 카드 목록으로 보낸다.
   expect(await screen.findByText("회의를 삭제했어요.")).toBeInTheDocument();
   expect(
-    await screen.findByRole("link", { name: "스프린트 회고 회의 열기" }),
+    await screen.findByRole("link", { name: "스프린트 회고" }),
   ).toBeInTheDocument();
   unsubscribe();
 
@@ -1023,7 +1026,7 @@ test("회의를 삭제하면 전체 목록으로 가고 삭제된 회의는 목�
   expect(router.state.location.pathname).toBe("/meetings");
   expect(recentMeetings.getSnapshot()).not.toContain("m1");
   expect(
-    screen.queryByRole("link", { name: "기획회의 — UI 개선안 회의 열기" }),
+    screen.queryByRole("link", { name: "기획회의 — UI 개선안" }),
   ).not.toBeInTheDocument();
 
   fx.releaseListFetches();
