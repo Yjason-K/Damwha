@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Delete, Get, Headers, HttpCode, Param, Patch, Post, Put, Res, UploadedFile, UseInterceptors,
+  Body, Controller, Delete, Get, Headers, HttpCode, Param, Patch, Post, Put, Query, Res, UploadedFile, UseInterceptors,
 } from '@nestjs/common';
 import { ApiBody, ApiConsumes, ApiOperation, ApiParam, ApiProduces, ApiTags } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -82,6 +82,17 @@ export class MeetingsController {
   @Get(':id')
   @ApiOperation({ summary: '회의 단건 (발화/클러스터 포함)' })
   get(@Param('id') id: string) { return this.service.get(id); }
+
+  @Get(':id/transcript')
+  @ApiOperation({
+    summary: '전사 페이지 조회',
+    description:
+      '현재 processing_version의 발화를 order_index 순으로 offset/limit만큼. limit 기본 200, 최대 500(초과는 500으로 자른다). ' +
+      '다음 페이지가 없으면 next_offset은 null.',
+  })
+  transcript(@Param('id') id: string, @Query('offset') offset?: string, @Query('limit') limit?: string) {
+    return this.service.getTranscript(id, offset, limit);
+  }
 
   @Get(':id/status')
   @ApiOperation({ summary: '처리 상태 조회' })

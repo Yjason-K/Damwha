@@ -30,6 +30,19 @@ import * as fs from 'fs';
 const AUDIO_MIME = /^audio\//;
 const SPEAKER_ID_RE = /^spk_[1-9][0-9]*$/;
 
+const TRANSCRIPT_DEFAULT_LIMIT = 200;
+const TRANSCRIPT_MAX_LIMIT = 500;
+
+// 쿼리스트링 정수 — 생략은 기본값, 음수·소수·문자는 400. limit=0은 next_offset이 전진하지
+// 않아 페이징 루프가 끝나지 않으므로 min 1로 막는다.
+function parseTranscriptInt(name: string, raw: string | undefined, dflt: number, min: number): number {
+  if (raw === undefined) return dflt;
+  if (!/^\d{1,9}$/.test(raw) || Number(raw) < min) {
+    throw new BadRequestException(`${name} must be an integer >= ${min}`);
+  }
+  return Number(raw);
+}
+
 async function unlinkQuietly(p?: string) {
   if (!p) return;
   try { await fs.promises.unlink(p); } catch { /* already gone */ }
@@ -225,6 +238,24 @@ export class MeetingsService {
     const tags = await this.tags.findForMeeting(this.db.pool, id);
     const tag_suggestions = await this.tags.findSuggestions(this.db.pool, id);
     return { ...meeting, tags, tag_suggestions, utterances, clusters, summary };
+  }
+
+  // 전사 한 페이지. 에이전트 컨텍스트에 전체 전사가 들어가지 않도록 limit은 500으로 자른다
+  // (초과는 오류가 아니라 잘림). offset/limit 검증은 여기서 — 400은 BadRequestException.
+  async getTranscript(id: string, offsetRaw?: string, limitRaw?: string) {
+    const offset = parseTranscriptInt('offset', offsetRaw, 0, 0);
+    const limit = Math.min(parseTranscriptInt('limit', limitRaw, TRANSCRIPT_DEFAULT_LIMIT, 1), TRANSCRIPT_MAX_LIMIT);
+    const meeting = await this.meetings.findById(this.db.pool, id);
+    if (!meeting) throw new NotFoundException('meeting not found');
+    const { total, rows } = await this.meetings.findUtterancePage(this.db.pool, id, offset, limit);
+    const end = offset + rows.length;
+    return {
+      meeting_id: id,
+      processing_version: meeting.processing_version,
+      total, offset, limit,
+      next_offset: end < total ? end : null,
+      utterances: rows,
+    };
   }
 
   async getStatus(id: string) {

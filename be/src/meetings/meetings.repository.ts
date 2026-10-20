@@ -2,6 +2,11 @@ import { Injectable } from '@nestjs/common';
 import { Queryable } from '../jobs/jobs.types';
 import { meetingTagsJson } from '../tags/tags.repository';
 
+export interface TranscriptRow {
+  id: string; start_ms: number; end_ms: number;
+  speaker_id: string | null; speaker_name: string | null; text: string | null;
+}
+
 export interface MeetingRow {
   id: string; title: string | null; original_filename: string | null;
   audio_key: string; normalized_key: string | null; recorded_at: Date | null;
@@ -169,6 +174,29 @@ export class MeetingsRepository {
       [meetingId],
     );
     return rows;
+  }
+  // 전사 페이지 — findUtterances와 같은 조인·processing_version 조건. 전체 목록을 한 번에
+  // 내리지 않으려고 COUNT와 LIMIT/OFFSET을 따로 묻는다 (MCP get_transcript가 쓴다).
+  async findUtterancePage(
+    exec: Queryable, meetingId: string, offset: number, limit: number,
+  ): Promise<{ total: number; rows: TranscriptRow[] }> {
+    const { rows: [count] } = await exec.query<{ total: number }>(
+      `SELECT COUNT(*)::int AS total
+       FROM utterance u JOIN meeting m ON m.id = u.meeting_id
+       WHERE u.meeting_id=$1 AND u.processing_version=m.processing_version`,
+      [meetingId],
+    );
+    const { rows } = await exec.query<TranscriptRow>(
+      `SELECT u.id, u.start_ms, u.end_ms, u.speaker_id, s.name AS speaker_name, u.text
+       FROM utterance u
+       JOIN meeting m ON m.id = u.meeting_id
+       LEFT JOIN speaker s ON s.id = u.speaker_id
+       WHERE u.meeting_id=$1 AND u.processing_version=m.processing_version
+       ORDER BY u.order_index ASC
+       LIMIT $2 OFFSET $3`,
+      [meetingId, limit, offset],
+    );
+    return { total: count.total, rows };
   }
   // Clusters for the meeting at its CURRENT processing_version (older reprocess
   // rounds are hidden). LEFT JOIN speaker so unresolved clusters yield null
