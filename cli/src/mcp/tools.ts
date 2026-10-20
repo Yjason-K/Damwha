@@ -60,14 +60,45 @@ export async function runTool(
 
 const describe = (text: string) => `${text} ${UNTRUSTED_NOTICE}`;
 
-/** 서버가 만든 값만 통과시키는 회의 필드. 나머지(제목·요약·태그·화자·폴더 이름 …)는 전부 untrusted로 간다. */
-const MEETING_META = ['id', 'recorded_at', 'status', 'duration_ms', 'folder_id', 'is_favorite', 'processing_version', 'created_at', 'updated_at'];
+/**
+ * 회의 응답은 허용 목록으로만 옮긴다 (spec §2.2 "응답은 잘라서"). be 행에는 audio_key·normalized_key 같은 내부 경로와
+ * 워커 오류 문장(error, capture_error), 카드용 집계가 같이 오는데, 빼는 목록으로 거르면 be에 필드가 늘 때마다 새어 나간다.
+ */
+const has = (m: Record<string, unknown>, k: string) => m[k] !== undefined;
 
-function splitMeeting(m: Record<string, unknown>): Record<string, unknown> {
-  const meta: Record<string, unknown> = {};
-  const rest: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(m)) (MEETING_META.includes(k) ? meta : rest)[k] = v;
-  return { ...meta, ...untrusted(rest) };
+function meetingListView(m: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: m.id,
+    recorded_at: m.recorded_at,
+    folder_id: m.folder_id,
+    status: m.status,
+    ...(has(m, 'duration_ms') && { duration_ms: m.duration_ms }),
+    ...untrusted({ title: m.title ?? null, ...(has(m, 'folder_name') && { folder_name: m.folder_name }) }),
+  };
+}
+
+const names = (v: unknown, key: string): string[] =>
+  Array.isArray(v)
+    ? [...new Set(v.map((x) => (x as Record<string, unknown> | null)?.[key]).filter((n): n is string => typeof n === 'string' && n !== ''))]
+    : [];
+
+function meetingDetailView(m: Record<string, unknown>): Record<string, unknown> {
+  // summary 행에는 상태·모델·오류도 실려 있다. 에이전트가 읽을 본문(topics·segments)만 남긴다.
+  const s = m.summary as Record<string, unknown> | null | undefined;
+  return {
+    id: m.id,
+    recorded_at: m.recorded_at,
+    folder_id: m.folder_id,
+    status: m.status,
+    utterance_count: Array.isArray(m.utterances) ? m.utterances.length : 0,
+    ...untrusted({
+      title: m.title ?? null,
+      summary: s ? { topics: s.topics ?? [], segments: s.segments ?? [] } : null,
+      tags: names(m.tags, 'name'),
+      // 화자는 현재 처리 버전 클러스터가 물고 있는 이름이다. 미지정 클러스터(이름 null)는 뺀다.
+      speakers: names(m.clusters, 'speaker_name'),
+    }),
+  };
 }
 
 function lensView(l: LensItem, withEvidence: boolean): Record<string, unknown> {
@@ -197,13 +228,7 @@ export function registerReadTools(server: McpServer, deps: McpDeps): void {
       runTool(deps, async (client) => {
         // 쿼리를 안 주면 be가 옛 배열 응답을 주므로 limit을 항상 보낸다.
         const page = await client.listMeetings(drop({ limit: limit ?? 50, cursor }));
-        return ok({
-          next_cursor: page.next_cursor,
-          items: page.items.map((m) => {
-            const { summary: _s, tags: _t, speakers: _p, utterances: _u, ...slim } = m as Record<string, unknown>;
-            return splitMeeting(slim);
-          }),
-        });
+        return ok({ next_cursor: page.next_cursor, items: page.items.map((m) => meetingListView(m)) });
       }),
   );
 
@@ -217,10 +242,7 @@ export function registerReadTools(server: McpServer, deps: McpDeps): void {
       annotations: { readOnlyHint: true },
     },
     ({ meeting_id }) =>
-      runTool(deps, async (client) => {
-        const { utterances, ...m } = (await client.getMeeting(meeting_id)) as Record<string, unknown>;
-        return ok({ ...splitMeeting(m), utterance_count: Array.isArray(utterances) ? utterances.length : 0 });
-      }),
+      runTool(deps, async (client) => ok(meetingDetailView(await client.getMeeting(meeting_id)))),
   );
 
   server.registerTool(

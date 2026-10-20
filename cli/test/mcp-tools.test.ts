@@ -92,6 +92,78 @@ describe('mcp tools', () => {
     });
   });
 
+  it('list_meetings returns only the allowlisted fields', async () => {
+    const listMeetings = vi.fn(async () => ({
+      next_cursor: 'cur2',
+      items: [{
+        id: 'mtg_1', title: 'T', recorded_at: '2026-10-01T00:00:00Z', folder_id: 'fld_1', status: 'done', duration_ms: 1000,
+        audio_key: 'a/b.m4a', normalized_key: 'n.wav', error: 'boom', capture_error: 'cap', current_job_id: 'job_1',
+        preview_summary: 'p', preview_action: { text: 'x' }, participants: [{ id: 's', name: 'Kim' }], tags: [{ id: 't', name: 'x' }],
+        original_filename: 'secret.m4a', processing_version: 2, is_favorite: true,
+      }],
+    }));
+    const c = await connect({ listMeetings });
+    const body = json(await c.callTool({ name: 'list_meetings', arguments: { limit: 5, cursor: 'cur1' } }));
+    expect(listMeetings).toHaveBeenCalledWith({ limit: 5, cursor: 'cur1' });
+    expect(body.next_cursor).toBe('cur2');
+    expect(body.items).toEqual([{
+      id: 'mtg_1', recorded_at: '2026-10-01T00:00:00Z', folder_id: 'fld_1', status: 'done', duration_ms: 1000,
+      untrusted_meeting_data: { title: 'T' },
+    }]);
+  });
+
+  it('list_meetings keeps a null title and folder_name when present', async () => {
+    const c = await connect({
+      listMeetings: async () => ({
+        next_cursor: null,
+        items: [{ id: 'mtg_1', title: null, recorded_at: 'r', folder_id: 'fld_1', status: 'done', folder_name: 'Team' }],
+      }),
+    });
+    const body = json(await c.callTool({ name: 'list_meetings', arguments: {} }));
+    expect(body.items[0]).toEqual({
+      id: 'mtg_1', recorded_at: 'r', folder_id: 'fld_1', status: 'done',
+      untrusted_meeting_data: { title: null, folder_name: 'Team' },
+    });
+  });
+
+  it('get_meeting returns only the allowlisted fields', async () => {
+    const c = await connect({
+      getMeeting: async () => ({
+        id: 'mtg_1', title: 'T', recorded_at: '2026-10-01T00:00:00Z', folder_id: 'fld_1', status: 'done',
+        audio_key: 'a/b.m4a', normalized_key: 'n.wav', error: 'boom', capture_error: 'cap', current_job_id: 'job_1',
+        original_filename: 'secret.m4a',
+        tags: [{ id: 'tag_1', name: 'budget' }],
+        tag_suggestions: [{ name: 'sugg' }],
+        clusters: [
+          { id: 'clu_1', diar_label: 0, speaker_name: 'Kim', resolved_speaker_id: 'spk_1' },
+          { id: 'clu_2', diar_label: 1, speaker_name: null, resolved_speaker_id: null },
+          { id: 'clu_3', diar_label: 2, speaker_name: 'Kim', resolved_speaker_id: 'spk_1' },
+          { id: 'clu_4', diar_label: 3, speaker_name: 'Lee', resolved_speaker_id: 'spk_2' },
+        ],
+        summary: { status: 'done', model: 'm', error: 'sum err', topics: ['x'], segments: [{ title: 's' }], meeting_id: 'mtg_1' },
+        utterances: [{ id: 'u1', text: 'hi' }, { id: 'u2', text: 'yo' }],
+      }),
+    });
+    const body = json(await c.callTool({ name: 'get_meeting', arguments: { meeting_id: 'mtg_1' } }));
+    expect(body).toEqual({
+      id: 'mtg_1', recorded_at: '2026-10-01T00:00:00Z', folder_id: 'fld_1', status: 'done', utterance_count: 2,
+      untrusted_meeting_data: {
+        title: 'T',
+        summary: { topics: ['x'], segments: [{ title: 's' }] },
+        tags: ['budget'],
+        speakers: ['Kim', 'Lee'],
+      },
+    });
+    expect(JSON.stringify(body)).not.toMatch(/audio_key|normalized_key|boom|cap|clusters|clu_|tag_suggestions|secret/);
+  });
+
+  it('get_meeting without a summary gives summary null', async () => {
+    const c = await connect({ getMeeting: async () => ({ id: 'mtg_1', title: null, recorded_at: 'r', folder_id: 'f', status: 'uploaded', summary: null }) });
+    const body = json(await c.callTool({ name: 'get_meeting', arguments: { meeting_id: 'mtg_1' } }));
+    expect(body.untrusted_meeting_data).toEqual({ title: null, summary: null, tags: [], speakers: [] });
+    expect(body.utterance_count).toBe(0);
+  });
+
   it('get_meeting omits utterances', async () => {
     const c = await connect({
       getMeeting: async () => ({
