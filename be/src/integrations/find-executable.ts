@@ -1,3 +1,5 @@
+import { constants } from 'node:fs';
+import { access, stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import type { RunResult } from './run-command';
 
@@ -33,4 +35,15 @@ export async function findExecutable(name: 'claude' | 'codex', deps: FindDeps): 
     // 셸 실행 실패는 못 찾은 것으로 본다.
   }
   return null;
+}
+
+/** 일반 파일이고 실행 가능한가 — 디렉터리나 실행 비트 없는 파일을 클라이언트로 오인하지 않는다. */
+export async function isExecutableFile(p: string): Promise<boolean> {
+  try {
+    if (!(await stat(p)).isFile()) return false;
+    await access(p, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }

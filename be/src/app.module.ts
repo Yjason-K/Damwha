@@ -18,6 +18,7 @@ import { LiveModule } from './live/live.module';
 import { TagsModule } from './tags/tags.module';
 import { FoldersModule } from './folders/folders.module';
 import { SharesModule } from './shares/shares.module';
+import { IntegrationsModule } from './integrations/integrations.module';
 import { HealthController } from './health/health.controller';
 import { HttpLoggingInterceptor } from './common/http-logging.interceptor';
 import { DemoReadOnlyGuard } from './common/demo-read-only.guard';
@@ -43,6 +44,7 @@ import { DiskFullFilter } from './storage/disk-full.filter';
     TagsModule,
     FoldersModule,
     SharesModule,
+    IntegrationsModule,
   ],
   controllers: [HealthController],
   providers: [

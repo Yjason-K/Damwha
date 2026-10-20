@@ -119,6 +119,16 @@ describe.each(['claude-code', 'codex'] as const)('clients (%s)', (id) => {
     await expect(registerClient(id, BIN, LINK, run, { replace: false })).rejects.toThrow(/cannot write config/);
   });
 
+  it('교체 중 add 가 실패하면 오류에 이전 명령이 담긴다', async () => {
+    const base = fakeRun(id, 'other').run;
+    const run = async (f: string, args: string[]): Promise<RunResult> =>
+      args[1] === 'add' ? { code: 1, stdout: '', stderr: 'cannot write config' } : base(f, args);
+    const err = await registerClient(id, BIN, LINK, run, { replace: true }).catch((e) => e);
+    expect(err.message).toMatch(/cannot write config/);
+    expect(typeof err.previous).toBe('string');
+    expect(err.previous.length).toBeGreaterThan(0);
+  });
+
   it('unregister removes when ours', async () => {
     const { run, calls } = fakeRun(id, 'ours');
     const s = await unregisterClient(id, BIN, LINK, run);

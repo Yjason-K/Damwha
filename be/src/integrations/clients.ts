@@ -1,4 +1,4 @@
-import { ConflictError } from './errors';
+import { ConflictError, IntegrationCommandError } from './errors';
 import type { RunResult } from './run-command';
 
 export type ClientId = 'claude-code' | 'codex';
@@ -16,8 +16,8 @@ const addArgs = (id: ClientId, linkPath: string): string[] =>
 const removeArgs = (id: ClientId): string[] =>
   id === 'claude-code' ? ['mcp', 'remove', '--scope', 'user', 'damwha'] : ['mcp', 'remove', 'damwha'];
 
-function fail(what: string, r: RunResult): Error {
-  return new Error(`${what} failed (exit ${r.code}): ${(r.stderr || r.stdout).trim()}`);
+function fail(what: string, r: RunResult, previous?: string): Error {
+  return new IntegrationCommandError(`${what} failed (exit ${r.code}): ${(r.stderr || r.stdout).trim()}`, previous);
 }
 
 /**
@@ -57,14 +57,17 @@ export async function registerClient(
   const state = await clientState(id, bin, linkPath, run);
   if (!state.installed || !bin) return state;
   if (state.registration === 'ours') return state;
+  let previous: string | undefined;
   if (typeof state.registration === 'object') {
+    previous = state.registration.other;
     // 남의 항목은 명시적 replace 없이는 건드리지 않는다.
     if (!opts.replace) throw new ConflictError(state.registration.other);
     const removed = await run(bin, removeArgs(id));
     if (removed.code !== 0) throw fail(`${id} mcp remove`, removed);
   }
   const added = await run(bin, addArgs(id, linkPath));
-  if (added.code !== 0) throw fail(`${id} mcp add`, added);
+  // remove는 끝났는데 add가 실패하면 이전 등록이 사라진 상태다 — 되돌릴 수 있게 이전 명령을 오류에 싣는다.
+  if (added.code !== 0) throw fail(`${id} mcp add`, added, previous);
   return clientState(id, bin, linkPath, run);
 }
 

@@ -13,6 +13,8 @@ import { configureHttp } from '../src/http/configure-http';
 import { startTestDb, StartedTestDb } from './db';
 import { DEFAULT_SHARE_DURATION_DAYS, SHARE_CONSENT_VERSION } from '@damwha/contracts';
 import { SHARE_ENABLED } from '../src/shares/share-enabled.guard';
+import { INTEGRATIONS_ENABLED } from '../src/integrations/integrations-enabled.guard';
+import { INTEGRATIONS_DEPS } from '../src/integrations/integrations.service';
 import { startFakeShareServer, FakeShareServer } from './fake-share-server';
 
 /**
@@ -30,6 +32,7 @@ describe('local API access control', () => {
   let app: NestExpressApplication;
   let publicDir: string;
   let shareServer: FakeShareServer;
+  let fakeHome: string;
 
   beforeAll(async () => {
     db = await startTestDb();
@@ -37,9 +40,17 @@ describe('local API access control', () => {
     // 공유 만들기는 예약 행을 지우고 끝나서, 미들웨어가 없어도 행이 0개다.
     shareServer = await startFakeShareServer();
     process.env.SHARE_API_URL = shareServer.url;
+    fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'damwha-home-'));
     publicDir = fs.mkdtempSync(path.join(os.tmpdir(), 'damwha-spa-'));
     fs.writeFileSync(path.join(publicDir, 'index.html'), '<!doctype html><title>spa</title>');
-    const mod = await Test.createTestingModule({ imports: [AppModule] }).overrideProvider(SHARE_ENABLED).useValue(true).compile();
+    const mod = await Test.createTestingModule({ imports: [AppModule] }).overrideProvider(SHARE_ENABLED).useValue(true)
+      // 켠 상태여야 "404라서"가 아니라 접근 제어 덕에 막혔는지 가린다. 가짜 홈이라 뚫려도 실제 파일은 안 건드린다.
+      .overrideProvider(INTEGRATIONS_ENABLED).useValue(true)
+      .overrideProvider(INTEGRATIONS_DEPS).useValue({
+        launcher: '/Applications/Damwha.app/Contents/Resources/cli/damwha', home: fakeHome, shell: undefined, pathEnv: '',
+        fs: fs.promises, run: async () => ({ code: 1, stdout: '', stderr: '' }), isExecutable: async () => false,
+      })
+      .compile();
     app = mod.createNestApplication<NestExpressApplication>();
     configureHttp(app, { policy: buildAccessPolicy(DEV, DEMO_HOST), publicDir });
     await app.init();
@@ -51,6 +62,7 @@ describe('local API access control', () => {
     delete process.env.SHARE_API_URL;
     await db?.stop();
     fs.rmSync(publicDir, { recursive: true, force: true });
+    fs.rmSync(fakeHome, { recursive: true, force: true });
   });
 
   const http = () => request(app.getHttpServer());
@@ -103,6 +115,11 @@ describe('local API access control', () => {
     it('다른 Origin은 공유 목록(키가 든 링크)을 읽지 못한다', async () => {
       const res = await http().get('/api/shares').set('Host', SELF_HOST).set('Origin', EVIL).expect(403);
       expect(res.headers['access-control-allow-origin']).toBeUndefined();
+    });
+
+    it('다른 Origin의 CLI 링크 설치는 403이고 링크가 생기지 않는다', async () => {
+      await http().post('/api/integrations/cli/install').set('Host', SELF_HOST).set('Origin', EVIL).expect(403);
+      expect(fs.existsSync(path.join(fakeHome, '.local/bin/damwha'))).toBe(false);
     });
 
     it('text/plain으로 실시간 녹음 시작은 403이고 회의가 생기지 않는다', async () => {
