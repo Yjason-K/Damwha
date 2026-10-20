@@ -321,3 +321,36 @@ test("재시작하면 투어 회의를 다시 숨기고 목록 캐시를 무효�
     expect.objectContaining({ hasUpload: true, searchQuery: "프롬프트" }),
   );
 });
+
+test("advanceOnTargetClick: 사용자가 타깃을 직접 누르면 막고 '다음'과 같이 prepare로 넘어간다", async () => {
+  // 데모 업로드 단계 — 하이라이트된 제출 버튼을 사용자가 누르면 prepare 밖에서 회의 화면으로
+  // 이동해 종료 가드에 걸렸다. 직접 누름은 "다음"으로 돌리고, prepare 안의 누름만 통과시킨다.
+  document.body.innerHTML =
+    '<form><button type="submit" data-tour="a">업로드</button></form>';
+  const target = document.querySelector<HTMLButtonElement>('[data-tour="a"]')!;
+  const passed: boolean[] = [];
+  target.addEventListener("click", () =>
+    passed.push(tourRunner.isNavigating()),
+  );
+  const prepare = vi.fn(async () => {
+    target.click(); // 투어 자신의 누름(clickTour)
+    mount("b");
+  });
+  stepsMock.steps = [
+    step("a", { advanceOnTargetClick: true }),
+    step("b", { prepare }),
+  ];
+  tourRunner.start(qc);
+  await settle();
+  const d = latest();
+  const steps = d.config.steps as Array<{
+    onHighlighted?: (el: Element) => void;
+  }>;
+  steps[0].onHighlighted?.(target);
+
+  target.click(); // 사용자의 누름
+  await settle();
+  expect(prepare).toHaveBeenCalledTimes(1);
+  expect(passed).toEqual([true]); // 사용자 누름은 버튼까지 가지 않았다
+  expect(d.drive).toHaveBeenLastCalledWith(1);
+});
