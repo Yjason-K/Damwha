@@ -230,7 +230,7 @@ spec §6.11). 그래서 설정 화면 버튼은 API를 부르고 API가 설치�
     클라이언트별(Claude Code, Codex) 설치 여부(명령 존재)와 `damwha` 등록 여부, 수동 명령 문자열.
   - `POST /api/integrations/cli/install`·`DELETE /api/integrations/cli` — `~/.local/bin/damwha` 심볼릭 링크.
     디렉터리가 없으면 만든다. 충돌 규칙 (Claude가 정한 사항):
-    - **담화 것**: 링크 대상 파일 이름이 `damwha`이고 경로가 `*.app/Contents/Resources/build/cli/` 또는 dev 런처
+    - **담화 것**: 링크 대상 파일 이름이 `damwha`이고 경로가 `*.app/Contents/Resources/cli/` 또는 dev 런처(`desktop/build/cli/`)
       위치인 링크. 대상이 사라진 것(앱을 옮김)도 포함. 이런 링크는 확인 없이 지금 런처로 바꾼다. 앱을 옮긴 뒤
       버튼 한 번으로 고쳐진다.
     - **남의 것**: 일반 파일, 그 밖의 대상을 가리키는 링크. 덮어쓰지 않고 409. 상태에 "다른 프로그램이 같은 이름을
