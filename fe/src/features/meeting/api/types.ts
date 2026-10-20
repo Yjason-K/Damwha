@@ -258,6 +258,10 @@ export type RetryStatus = {
   error: JsonError | null;
 };
 
+/** 단계별 상태 — 후속 단계 행이 없고 처리가 끝났으면 skipped(앞으로도 생기지 않는다). */
+export type StageState = 'pending' | 'queued' | 'running' | 'done' | 'failed' | 'skipped';
+export type MeetingStages = { process: StageState; summary: StageState; lens: StageState };
+
 export type MeetingStatusResponse = {
   status: MeetingStatus;
   stage: string | null;
@@ -266,6 +270,7 @@ export type MeetingStatusResponse = {
   summary: SummaryGenerationStatus | null;
   search_index: SearchIndexStatus | null;
   retry: RetryStatus | null;
+  stages: MeetingStages;
 };
 
 /** POST /meetings/:id/clusters/:clusterId/resolve 요청 — 정확히 하나만. */

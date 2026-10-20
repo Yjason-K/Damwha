@@ -1,7 +1,7 @@
 import {
   Body, Controller, Delete, Get, Headers, HttpCode, Param, Patch, Post, Put, Query, Res, UploadedFile, UseInterceptors,
 } from '@nestjs/common';
-import { ApiBody, ApiConsumes, ApiOperation, ApiParam, ApiProduces, ApiTags } from '@nestjs/swagger';
+import { ApiBody, ApiConsumes, ApiOperation, ApiParam, ApiProduces, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
 import type { ReadStream } from 'fs';
@@ -77,7 +77,12 @@ export class MeetingsController {
 
   @Get()
   @ApiOperation({ summary: '회의 목록' })
-  list() { return this.service.list(); }
+  @ApiQuery({ name: 'limit', required: false, description: '쿼리가 하나라도 있으면 페이지 응답 { items, next_cursor }. 기본 20, 최대 100.' })
+  @ApiQuery({ name: 'cursor', required: false, description: '이전 페이지의 next_cursor' })
+  list(@Query('limit') limit?: string, @Query('cursor') cursor?: string) {
+    // 쿼리가 없으면 기존 배열 응답 그대로 — fe 목록이 이 형태에 기대고 있다.
+    return limit === undefined && cursor === undefined ? this.service.list() : this.service.listPage(limit, cursor);
+  }
 
   @Get(':id')
   @ApiOperation({ summary: '회의 단건 (발화/클러스터 포함)' })

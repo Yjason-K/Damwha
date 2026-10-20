@@ -25,6 +25,7 @@ import { FoldersRepository } from '../folders/folders.repository';
 import { assertFolderExists, parseFolderId } from '../folders/folder-id';
 import { SharesRepository } from '../shares/shares.repository';
 import { SharesService, type RevokeSummary } from '../shares/shares.service';
+import { toStages } from './meeting-stages';
 import * as fs from 'fs';
 
 const AUDIO_MIME = /^audio\//;
@@ -41,6 +42,24 @@ function parseTranscriptInt(name: string, raw: string | undefined, dflt: number,
     throw new BadRequestException(`${name} must be an integer >= ${min}`);
   }
   return Number(raw);
+}
+
+const MEETING_PAGE_DEFAULT_LIMIT = 20;
+const MEETING_PAGE_MAX_LIMIT = 100;
+
+function encodeMeetingCursor(c: { sort_at: string; id: string }): string {
+  return Buffer.from(JSON.stringify(c)).toString('base64url');
+}
+
+// 커서는 불투명 토큰이지만 SQL 파라미터로 들어가므로 모양을 엄격히 검사한다 — 깨진 토큰은 500이 아니라 400.
+function decodeMeetingCursor(raw: string): { sort_at: string; id: string } {
+  try {
+    const c = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+    if (typeof c?.sort_at === 'string' && typeof c?.id === 'string' && !Number.isNaN(Date.parse(c.sort_at))) {
+      return { sort_at: c.sort_at, id: c.id };
+    }
+  } catch { /* fall through */ }
+  throw new BadRequestException('invalid cursor');
 }
 
 async function unlinkQuietly(p?: string) {
@@ -229,6 +248,14 @@ export class MeetingsService {
 
   async list() { return this.meetings.list(this.db.pool); }
 
+  // 쿼리가 하나라도 있을 때만 페이지 응답. 없으면 list()의 배열 그대로 (fe는 쿼리 없이 부른다).
+  async listPage(limitRaw?: string, cursorRaw?: string) {
+    const limit = Math.min(parseTranscriptInt('limit', limitRaw, MEETING_PAGE_DEFAULT_LIMIT, 1), MEETING_PAGE_MAX_LIMIT);
+    const after = cursorRaw === undefined ? null : decodeMeetingCursor(cursorRaw);
+    const { rows, next } = await this.meetings.listPage(this.db.pool, limit, after);
+    return { items: rows, next_cursor: next ? encodeMeetingCursor(next) : null };
+  }
+
   async get(id: string) {
     const meeting = await this.meetings.findById(this.db.pool, id);
     if (!meeting) throw new NotFoundException('meeting not found');
@@ -268,8 +295,10 @@ export class MeetingsService {
     // NOTE: GET /meetings/:id also returns a `summary`, and that one is the whole
     // summary (topics + segments). This one is only the generation state.
     const summary = await this.summary.get(id);
+    const inputs = await this.meetings.findStageInputs(this.db.pool, id);
     return {
       ...status,
+      stages: toStages(inputs!),
       summary: summary
         ? { status: summary.status, model: summary.model, error: summary.error }
         : null,

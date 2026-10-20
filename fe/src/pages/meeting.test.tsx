@@ -358,6 +358,7 @@ const fx = vi.hoisted(() => {
     summary: null,
     search_index: null,
     retry: null,
+    stages: { process: "running", summary: "pending", lens: "pending" },
   };
   // 재시도 배너 테스트가 stage/progress/retry를 함께 덮어쓴다 — 다른 필드는 기본값 그대로.
   let status: MeetingStatusResponse = defaultStatus;
