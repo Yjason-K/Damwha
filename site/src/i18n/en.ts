@@ -139,7 +139,7 @@ export const en = {
         ["damwha status", "Check the connection to the app and show model readiness. Exits 0 when connected, 2 when not."],
         ["damwha upload <file>", "Upload an audio file as a new meeting. Options: --title, --recorded-at, --folder, --preset, --whisper-model, --stt-device, --diarization-device, --language, --speakers, --min-speakers, --max-speakers, --no-summary, --no-lens. --wait blocks until processing finishes."],
         ["damwha search <query>", "Search utterances. Options: --limit, --from, --to, --meeting, --folder."],
-        ["damwha meetings", "List meetings, newest recording first. --limit defaults to 100."],
+        ["damwha meetings", "List meetings, newest recording first. --limit defaults to 100; --cursor continues from the hint printed after a full page."],
         ["damwha meeting <id>", "Show one meeting: summary, tags and speakers."],
         ["damwha transcript <id>", "Print a meeting transcript. Page with --offset and --limit."],
         ["damwha lenses", "List action items, decisions and promises. Options: --kind, --mine, --open, --done, --meeting, --due-from, --due-to, --limit. --mine needs a speaker marked Me."],
@@ -176,7 +176,7 @@ export const en = {
     trust: {
       title: "Your data and the connected service",
       body: "Data you pull through MCP follows the policy of the LLM service you connected.",
-      untrusted: "Text from conversations is passed to the agent marked as untrusted content, so a spoken sentence cannot pose as an instruction.",
+      untrusted: "Text from conversations is passed to the agent marked as untrusted content. That reduces the chance a spoken sentence is taken as an instruction; it cannot rule it out.",
     },
   },
   footer: {

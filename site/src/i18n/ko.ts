@@ -141,7 +141,7 @@ export const ko = {
         ["damwha status", "앱과의 연결을 확인하고 모델 준비 상태를 보여 줘요. 연결되면 0, 아니면 2로 끝나요."],
         ["damwha upload <file>", "오디오 파일을 새 회의로 올려요. 옵션: --title, --recorded-at, --folder, --preset, --whisper-model, --stt-device, --diarization-device, --language, --speakers, --min-speakers, --max-speakers, --no-summary, --no-lens. --wait는 처리가 끝날 때까지 기다려요."],
         ["damwha search <query>", "발화를 검색해요. 옵션: --limit, --from, --to, --meeting, --folder."],
-        ["damwha meetings", "녹음 시각이 최근인 순으로 회의를 나열해요. --limit 기본값은 100이에요."],
+        ["damwha meetings", "녹음 시각이 최근인 순으로 회의를 나열해요. --limit 기본값은 100이고, 다음 페이지는 끝에 찍히는 --cursor 값으로 이어 봐요."],
         ["damwha meeting <id>", "회의 하나의 요약·태그·화자를 보여 줘요."],
         ["damwha transcript <id>", "회의 전사를 출력해요. --offset과 --limit으로 나눠 읽어요."],
         ["damwha lenses", "할 일·결정·약속을 나열해요. 옵션: --kind, --mine, --open, --done, --meeting, --due-from, --due-to, --limit. --mine은 \u201c나\u201d로 표시한 화자가 있어야 해요."],
@@ -178,7 +178,7 @@ export const ko = {
     trust: {
       title: "내 데이터와 연결한 서비스",
       body: "MCP로 가져간 데이터는 연결한 LLM 서비스의 정책을 따릅니다.",
-      untrusted: "대화에서 나온 글은 신뢰할 수 없는 내용이라고 표시해 에이전트에 넘기므로, 누가 말한 문장이 지시처럼 행세할 수 없어요.",
+      untrusted: "대화에서 나온 글은 신뢰할 수 없는 내용이라고 표시해 에이전트에 넘겨요. 누가 말한 문장이 지시로 받아들여질 가능성을 줄이는 장치이지, 완전히 막지는 못해요.",
     },
   },
   footer: {

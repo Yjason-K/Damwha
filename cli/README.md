@@ -28,7 +28,7 @@ dev에서 API를 직접 가리키려면 `DAMWHA_API_URL=http://localhost:3000/ap
 | `damwha status` | 연결과 모델 준비 상태 진단. 연결되면 0, 아니면 2 |
 | `damwha upload <file>` | 오디오를 새 회의로 업로드. `--title` `--recorded-at` `--folder` `--preset` `--whisper-model` `--stt-device` `--diarization-device` `--language` `--speakers` `--min-speakers` `--max-speakers` `--no-summary` `--no-lens` `--wait` |
 | `damwha search <query>` | 발화 검색. `--limit` `--from` `--to` `--meeting` `--folder` |
-| `damwha meetings` | 회의 목록. `--limit`(기본 100) |
+| `damwha meetings` | 회의 목록. `--limit`(기본 100), `--cursor`(다음 페이지는 stderr의 `next: --cursor <c>`) |
 | `damwha meeting <id>` | 회의 하나 |
 | `damwha transcript <id>` | 전사. `--offset` `--limit` |
 | `damwha lenses` | 렌즈 목록. `--kind` `--mine` `--open` `--done` `--meeting` `--due-from` `--due-to` `--limit` |
@@ -43,7 +43,7 @@ dev에서 API를 직접 가리키려면 `DAMWHA_API_URL=http://localhost:3000/ap
 `get_meeting_status` `upload_audio` `complete_lens` (`src/mcp/tools.ts`).
 
 - 읽기 도구는 `readOnlyHint`. 대화에서 나온 문자열(제목·요약·전사·화자 이름 등)은 전부
-  `untrusted()`로 감싸 에이전트에게 지시처럼 읽히지 않게 한다 (`src/mcp/untrusted.ts`).
+  `untrusted()`로 감싸 에이전트가 지시로 읽을 가능성을 줄인다 — 완전히 막지는 못한다 (`src/mcp/untrusted.ts`).
 - `complete_lens`는 완료 처리 전에 클라이언트에 **확인 창(elicitation)**을 띄운다. 창의 문장은
   에이전트 인자가 아니라 API에서 다시 읽은 값으로 만들고, `accept`가 아니면 아무것도 바꾸지 않는다.
   elicitation을 지원하지 않는 클라이언트에는 도구를 등록하지 않는다.
