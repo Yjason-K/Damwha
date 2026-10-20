@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { inspectLink, installLink, isDamwhaLauncherPath, removeLink } from '../src/integrations/cli-link';
+import { inspectLink, type LinkFs, installLink, isDamwhaLauncherPath, removeLink } from '../src/integrations/cli-link';
 import { ConflictError } from '../src/integrations/errors';
 
 const LAUNCHER = '/Applications/Damwha.app/Contents/Resources/cli/damwha';
@@ -75,5 +75,35 @@ describe('cli-link', () => {
     await fs.symlink('/usr/local/bin/damwha', link);
     await removeLink(link, LAUNCHER, fs);
     expect(await fs.readlink(link)).toBe('/usr/local/bin/damwha');
+  });
+
+  describe('races between inspect and write', () => {
+    it('absent, then a foreign file appears: 409 and file untouched', async () => {
+      await fs.mkdir(join(dir, '.local', 'bin'), { recursive: true });
+      const racing: LinkFs = {
+        ...fs,
+        symlink: async (t, p) => {
+          await fs.writeFile(link, 'foreign');
+          return fs.symlink(t, p);
+        },
+      };
+      await expect(installLink(link, LAUNCHER, racing)).rejects.toBeInstanceOf(ConflictError);
+      expect(await fs.readFile(link, 'utf8')).toBe('foreign');
+    });
+
+    it('other_damwha, then it turns foreign before rename: 409 and foreign untouched', async () => {
+      await mk(OTHER);
+      const racing: LinkFs = {
+        ...fs,
+        symlink: async (t, p) => {
+          await fs.unlink(link);
+          await fs.symlink('/usr/local/bin/damwha', link);
+          return fs.symlink(t, p);
+        },
+      };
+      await expect(installLink(link, LAUNCHER, racing)).rejects.toBeInstanceOf(ConflictError);
+      expect(await fs.readlink(link)).toBe('/usr/local/bin/damwha');
+      expect(await fs.readdir(join(dir, '.local', 'bin'))).toEqual(['damwha']);
+    });
   });
 });

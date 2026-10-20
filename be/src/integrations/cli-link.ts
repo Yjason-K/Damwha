@@ -47,14 +47,32 @@ export async function installLink(linkPath: string, launcher: string, fs: LinkFs
   if (state.kind === 'foreign') throw new ConflictError(state.target);
 
   await fs.mkdir(dirname(linkPath), { recursive: true });
+
+  if (state.kind === 'absent') {
+    // 없을 때는 덮어쓰기 없는 symlink로 만든다 — inspect 뒤에 남의 파일이 생기면 EEXIST로 실패해 건드리지 않는다.
+    try {
+      await fs.symlink(launcher, linkPath);
+      return { kind: 'current' };
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException)?.code !== 'EEXIST') throw e;
+      const now = await inspectLink(linkPath, launcher, fs);
+      if (now.kind === 'current') return now;
+      if (now.kind === 'foreign') throw new ConflictError(now.target);
+      // 그 사이 담화 링크가 생겼다면 아래 교체 경로로 처리한다.
+    }
+  }
+
   // 임시 링크를 만들어 rename으로 덮는다 — unlink 후 symlink 사이에 링크가 없는 순간이 생기지 않는다.
   const tmp = `${linkPath}.tmp-${process.pid}-${Date.now()}`;
   await fs.symlink(launcher, tmp);
   try {
-    await fs.rename(tmp, linkPath);
-  } catch (e) {
+    // rename은 무조건 덮어쓰므로 직전에 다시 확인한다. 이 확인과 rename 사이의 마이크로초 경합은 남지만,
+    // 원자적 교체와 맞바꾼 의도된 한계다.
+    const now = await inspectLink(linkPath, launcher, fs);
+    if (now.kind === 'foreign') throw new ConflictError(now.target);
+    if (now.kind !== 'current') await fs.rename(tmp, linkPath);
+  } finally {
     await fs.unlink(tmp).catch(() => undefined);
-    throw e;
   }
   return { kind: 'current' };
 }
