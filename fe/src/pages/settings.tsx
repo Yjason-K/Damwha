@@ -3,6 +3,7 @@ import { useCapabilities } from "@/features/settings/api/settings";
 import { ProcessingSettingsForm } from "@/features/settings/ui/processing-settings-form";
 import { GeneralSettingsSection } from "@/features/settings/ui/general-settings-section";
 import { SharedLinksSection } from "@/features/share/ui/shared-links-section";
+import { IntegrationsSection } from "@/features/integrations/ui/integrations-section";
 import { ModelsCard } from "@/features/models/ui/models-card";
 
 /**
@@ -43,6 +44,7 @@ export function SettingsPage() {
           </Card>
         </section>
         <ModelsCard />
+        <IntegrationsSection />
         <SharedLinksSection />
       </div>
     </main>
