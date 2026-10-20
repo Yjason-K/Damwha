@@ -229,6 +229,22 @@ describe('run', () => {
     expect(JSON.parse(r.out)).toEqual(page);
   });
 
+  it('meetings --cursor passes the cursor and prints the next cursor hint', async () => {
+    const listMeetings = vi.fn(async () => ({ items: [{ id: 'mtg_1', title: 'T', recorded_at: '2026-01-01T00:00:00Z' }], next_cursor: 'c2' }));
+    const r = await exec(['meetings', '--cursor', 'c1', '--limit', '1'], { listMeetings });
+    expect(r.code).toBe(0);
+    expect(listMeetings).toHaveBeenCalledWith({ limit: 1, cursor: 'c1' });
+    expect(r.err).toContain('next: --cursor c2');
+    expect(r.out).not.toContain('next:');
+  });
+
+  it('meetings prints no hint on the last page; --json carries next_cursor', async () => {
+    const last = await exec(['meetings'], { listMeetings: async () => ({ items: [], next_cursor: null }) });
+    expect(last.err).not.toContain('next:');
+    const j = await exec(['meetings', '--json'], { listMeetings: async () => ({ items: [], next_cursor: 'c9' }) });
+    expect(JSON.parse(j.out).next_cursor).toBe('c9');
+  });
+
   it('text output shows the untitled fallback instead of null', async () => {
     const m = { id: 'mtg_1', title: null, recorded_at: '2026-01-01T00:00:00Z' };
     const list = await exec(['meetings'], { listMeetings: async () => ({ items: [m], next_cursor: null }) });

@@ -119,6 +119,7 @@ export async function run(argv: string[], io: RunIo): Promise<number> {
   program
     .command('meetings')
     .option('--limit <n>', '', intArg, 100)
+    .option('--cursor <c>', 'next_cursor from the previous page')
     .option('--json')
     .action(act((ctx, opts) => meetings(ctx, opts)));
 
