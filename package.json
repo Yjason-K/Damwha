@@ -33,6 +33,8 @@
     "site": "pnpm --filter damwha-site run",
     "site:dev": "pnpm --filter damwha-site run start",
     "site:build": "pnpm --filter damwha-site run build",
+    "cli": "pnpm --filter damwha-cli run",
+    "cli:test": "pnpm --filter damwha-cli run test",
     "share": "pnpm --filter damwha-share run",
     "share:dev": "pnpm --filter damwha-share run start",
     "share:test": "pnpm --filter damwha-share run test",

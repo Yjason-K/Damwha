@@ -1,0 +1,24 @@
+{
+  "name": "damwha-cli",
+  "version": "0.2.3",
+  "private": true,
+  "description": "Damwha CLI + stdio MCP server. Talks to the running desktop app over HTTP only; bundled to dist/damwha.cjs and shipped in the app's Resources/cli.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "vitest run",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@damwha/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}
