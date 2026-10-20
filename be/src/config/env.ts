@@ -29,6 +29,8 @@ const EnvSchema = z.object({
   // 앱(Electron)이 이번 실행의 API에 얹는 인스턴스 nonce. /health가 그대로 돌려줘 CLI가 "내가 닿은 포트가
   // 이 앱이 띄운 API인지" 확인한다 — 없으면 null(앱 밖 실행).
   DAMWHA_INSTANCE: z.string().optional(),
+  // 앱이 알려 주는 번들 안 CLI 런처 절대 경로. 있어야 /integrations가 켜진다(spec 2026-10-20 §2.7).
+  DAMWHA_CLI_LAUNCHER: z.string().optional(),
   WHISPER_MODEL: z.enum(['large-v3-turbo', 'large-v3']).default('large-v3-turbo'),
   WHISPER_DEVICE: z.enum(['mps', 'cpu', 'cuda']).default('mps'),
   STT_LANGUAGE: z.string().default('ko'),
