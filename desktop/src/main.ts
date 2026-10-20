@@ -295,6 +295,7 @@ function feedApiFile(statuses: ServiceStatus[]): void {
     dir: app.getPath("userData"),
     pid: process.pid,
     version: app.getVersion(),
+    log: appendSupervisorLog,
   });
   void apiFileSync.update(statuses.find((s) => s.id === "api"), launch).catch(() => undefined);
 }

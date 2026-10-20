@@ -99,4 +99,38 @@ describe("createApiFileSync", () => {
     await s.removeNow();
     expect((await read()).instance).toBe("other-app");
   });
+
+  it("removes on stopped even when the launch is already gone (supervisor nulls result before emitting stopped)", async () => {
+    const s = sync();
+    await s.update(up, { origin: "http://127.0.0.1:3001", instance: "inst-a" });
+    await s.update({ process: "stopped", health: "unknown" }, null);
+    expect(await exists()).toBe(false);
+  });
+
+  it("never republishes the instance removeNow took down, but publishes the next launch", async () => {
+    const s = sync();
+    const a = { origin: "http://127.0.0.1:3001", instance: "inst-a" };
+    await s.update(up, a);
+    await s.removeNow();
+    await s.update(up, a);
+    expect(await exists()).toBe(false);
+    await s.update(up, { origin: "http://127.0.0.1:3002", instance: "inst-b" });
+    expect(await read()).toMatchObject({ port: 3002, instance: "inst-b" });
+  });
+
+  it("reports write and remove failures through the injected log", async () => {
+    const lines: string[] = [];
+    const failing = {
+      writeFile: async () => {
+        throw new Error("EACCES");
+      },
+      rename: async () => undefined,
+      readFile: async () => "",
+      unlink: async () => undefined,
+    };
+    const s = createApiFileSync({ dir, pid: 1, version: "1", fs: failing, log: (l) => lines.push(l) });
+    await s.update(up, { origin: "http://127.0.0.1:3001", instance: "inst-a" });
+    expect(lines.join("\n")).toMatch(/api\.json.*EACCES/);
+  });
 });
+

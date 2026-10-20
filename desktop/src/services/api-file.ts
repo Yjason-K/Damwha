@@ -70,13 +70,28 @@ export interface ApiLaunchInfo {
  * - stopped·failed면 지운다. 재시작은 launch마다 새 instance를 만들므로 다시 ok가 되면 새로 쓴다.
  * - 호출이 겹쳐도 한 줄로 이어 처리한다(renderStatus는 await하지 않는다).
  */
-export function createApiFileSync(opts: { dir: string; pid: number; version: string; fs?: ApiFileFs }) {
+export function createApiFileSync(opts: {
+  dir: string;
+  pid: number;
+  version: string;
+  fs?: ApiFileFs;
+  /** 쓰기·지우기 실패를 남길 곳(main.ts의 supervisor.log). 없으면 조용하다. */
+  log?: (line: string) => void;
+}) {
   let published: string | null = null;
+  // removeNow가 내린 instance. 정지 중간 상태(아직 running/ok)가 같은 instance를 다시 쓰지 못하게 한다.
+  // 영구 래치가 아니다 — 다음 launch는 새 instance라 정상으로 쓴다.
+  let retired: string | null = null;
   let chain: Promise<void> = Promise.resolve();
 
   const enqueue = (job: () => Promise<void>): Promise<void> => {
     chain = chain.then(job, job);
     return chain;
+  };
+  const fail = (what: string, err: unknown) =>
+    opts.log?.(`api.json ${what} 실패: ${err instanceof Error ? err.message : String(err)}`);
+  const takeDown = async (instance: string) => {
+    await removeApiFileIfOwned(opts.dir, instance, opts.fs).catch((err) => fail("삭제", err));
   };
 
   return {
@@ -84,33 +99,36 @@ export function createApiFileSync(opts: { dir: string; pid: number; version: str
       api: { process: ProcessState; health: HealthState } | undefined,
       launch: ApiLaunchInfo | null,
     ): Promise<void> {
-      if (api === undefined || launch === null) return Promise.resolve();
+      if (api === undefined) return Promise.resolve();
       return enqueue(async () => {
         if (api.process === "running" && api.health === "ok") {
-          if (published === launch.instance) return;
+          // 감독자는 정지 때 result를 먼저 비우므로 launch 없는 갱신이 정상으로 온다.
+          if (launch === null || published === launch.instance || retired === launch.instance) return;
           const port = Number(new URL(launch.origin).port);
           published = launch.instance;
           await writeApiFile(
             opts.dir,
             { port, app_pid: opts.pid, instance: launch.instance, version: opts.version },
             opts.fs,
-          ).catch(() => {
+          ).catch((err) => {
             published = null; // 못 썼다 — 다음 상태 갱신이 다시 시도한다.
+            fail("쓰기", err);
           });
         } else if ((api.process === "stopped" || api.process === "failed") && published !== null) {
           const mine = published;
           published = null;
-          await removeApiFileIfOwned(opts.dir, mine, opts.fs);
+          await takeDown(mine);
         }
       });
     },
-    /** 종료 경로용. 쓴 적이 있으면 내 instance일 때만 지운다. */
+    /** 종료 경로용. 쓴 적이 있으면 내 instance일 때만 지우고, 그 instance는 다시 쓰지 않는다. */
     removeNow(): Promise<void> {
       return enqueue(async () => {
         if (published === null) return;
         const mine = published;
         published = null;
-        await removeApiFileIfOwned(opts.dir, mine, opts.fs);
+        retired = mine;
+        await takeDown(mine);
       });
     },
   };
