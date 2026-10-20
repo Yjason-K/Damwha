@@ -10,7 +10,7 @@ import type { ConnectionResult } from '../connection';
 import { ApiRequestError, FileNotReadableError, NotConnectedError, UsageError } from '../errors';
 import { msg, type Lang } from '../messages';
 import { buildUploadForm, parseUploadOptions, resolveFolderId } from '../upload-options';
-import { UNTRUSTED_NOTICE, untrusted } from './untrusted';
+import { UNTRUSTED_NOTICE, stripControl, untrusted } from './untrusted';
 
 export interface McpDeps {
   connect(): Promise<ConnectionResult>;
@@ -94,6 +94,36 @@ function lensView(l: LensItem, withEvidence: boolean): Record<string, unknown> {
       }),
     }),
   };
+}
+
+/**
+ * 상태 응답에는 워커가 쓴 오류 문장(error, capture_error …)이 섞여 있고 거기에 전사·LLM 출력이 들어갈 수 있다.
+ * 열거형·식별자·시각만 최상위에 남기고 나머지 문자열은 같은 경로로 untrusted 쪽에 옮긴다.
+ */
+const SAFE_STRING_KEY = /^(id|meeting_id|current_job_id|status|stage|state|model|meeting_status|.*_at)$/;
+
+function splitStatus(v: unknown, key = '', inStages = false): { safe?: unknown; taint?: unknown } {
+  // stages.{process,summary,lens}는 toStages가 만든 상태 열거형이다. 모양이 enum일 때만 신뢰한다.
+  if (typeof v === 'string') {
+    const safe = inStages ? /^[a-z_]{1,20}$/.test(v) : SAFE_STRING_KEY.test(key);
+    return safe ? { safe: stripControl(v) } : { taint: v };
+  }
+  if (Array.isArray(v)) {
+    const parts = v.map((x) => splitStatus(x, key, inStages));
+    const taint = parts.map((p) => p.taint ?? null);
+    return { safe: parts.map((p) => p.safe ?? null), ...(taint.some((t) => t !== null) && { taint }) };
+  }
+  if (v && typeof v === 'object') {
+    const safe: Record<string, unknown> = {};
+    const taint: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(v)) {
+      const p = splitStatus(x, k, inStages || k === 'stages');
+      if ('safe' in p) safe[k] = p.safe;
+      if ('taint' in p) taint[k] = p.taint;
+    }
+    return { safe, ...(Object.keys(taint).length && { taint }) };
+  }
+  return { safe: v };
 }
 
 const drop = <T extends object>(o: T): Partial<T> =>
@@ -267,7 +297,11 @@ export function registerReadTools(server: McpServer, deps: McpDeps): void {
       inputSchema: { meeting_id: z.string() },
       annotations: { readOnlyHint: true },
     },
-    ({ meeting_id }) => runTool(deps, async (client) => ok(await client.getStatus(meeting_id))),
+    ({ meeting_id }) =>
+      runTool(deps, async (client) => {
+        const { safe, taint } = splitStatus(await client.getStatus(meeting_id));
+        return ok({ ...(safe as object), ...(taint !== undefined && untrusted(taint)) });
+      }),
   );
 
   server.registerTool(
