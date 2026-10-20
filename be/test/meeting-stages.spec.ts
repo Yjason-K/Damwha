@@ -17,7 +17,7 @@ describe('toStages', () => {
 
   it.each([
     ['recording', 'pending'], ['uploaded', 'pending'], ['processing', 'pending'],
-    ['failed', 'pending'], ['done', 'skipped'],
+    ['failed', 'skipped'], ['done', 'skipped'],
   ])('no row while meeting %s -> %s', (meeting_status, expected) => {
     expect(toStages({ meeting_status, summary_status: null, lens_status: null }))
       .toEqual(expect.objectContaining({ summary: expected, lens: expected }));

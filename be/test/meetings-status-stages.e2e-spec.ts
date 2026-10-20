@@ -49,6 +49,11 @@ describe('GET /meetings/:id/status stages', () => {
     expect(await stages(mid)).toEqual({ process: 'done', summary: 'skipped', lens: 'skipped' });
   });
 
+  it('failed process with no follow-up rows -> skipped', async () => {
+    const mid = await mk('failed');
+    expect(await stages(mid)).toEqual({ process: 'failed', summary: 'skipped', lens: 'skipped' });
+  });
+
   it('summary row done -> done', async () => {
     const mid = await mk('done');
     await mkSummary(mid, 'done', 1);

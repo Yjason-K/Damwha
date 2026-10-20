@@ -21,21 +21,22 @@ function processStage(status: string): StageState {
 }
 
 // 후속 job(요약·렌즈)은 워커가 처리 완료와 같은 트랜잭션에서 만든다. 그래서 처리가 끝났는데
-// 행이 없으면 앞으로도 생기지 않는다(꺼졌거나 모델 없음) — skipped. `--wait`가 영영 오지 않을
+// 행이 없으면 앞으로도 생기지 않는다(꺼졌거나 모델 없음) — skipped. 처리가 실패한 회의도 같다:
+// 후속 행을 만들 일이 없으므로 pending으로 두면 `--wait`가 영영 끝나지 않는다. `--wait`가 영영 오지 않을
 // 단계를 기다리며 매달리지 않게 하는 구분이다.
-function followupStage(rowStatus: string | null, processDone: boolean): StageState {
+function followupStage(rowStatus: string | null, processEnded: boolean): StageState {
   if (rowStatus === 'queued' || rowStatus === 'running' || rowStatus === 'done' || rowStatus === 'failed') {
     return rowStatus;
   }
-  return processDone ? 'skipped' : 'pending';
+  return processEnded ? 'skipped' : 'pending';
 }
 
 export function toStages(i: StageInputs): Stages {
   const process = processStage(i.meeting_status);
-  const processDone = process === 'done';
+  const processEnded = process === 'done' || process === 'failed';
   return {
     process,
-    summary: followupStage(i.summary_status, processDone),
-    lens: followupStage(i.lens_status, processDone),
+    summary: followupStage(i.summary_status, processEnded),
+    lens: followupStage(i.lens_status, processEnded),
   };
 }

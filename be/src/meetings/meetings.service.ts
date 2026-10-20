@@ -51,11 +51,16 @@ function encodeMeetingCursor(c: { sort_at: string; id: string }): string {
   return Buffer.from(JSON.stringify(c)).toString('base64url');
 }
 
-// 커서는 불투명 토큰이지만 SQL 파라미터로 들어가므로 모양을 엄격히 검사한다 — 깨진 토큰은 500이 아니라 400.
+// 커서는 불투명 토큰이지만 SQL 파라미터로 들어가므로 인코더가 내는 모양(Postgres timestamptz::text, 회의 id)만
+// 받는다 — 깨진 토큰은 500이 아니라 400. 달력상 불가능한 날짜(2월 31일)는 쿼리 단계의 22xxx 오류로 400 처리한다.
+const CURSOR_SORT_AT = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]) ([01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d{1,6})?[+-]\d{2}(:\d{2})?$/;
+const CURSOR_ID = /^mtg_[1-9][0-9]*$/;
+
 function decodeMeetingCursor(raw: string): { sort_at: string; id: string } {
   try {
     const c = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
-    if (typeof c?.sort_at === 'string' && typeof c?.id === 'string' && !Number.isNaN(Date.parse(c.sort_at))) {
+    if (typeof c?.sort_at === 'string' && typeof c?.id === 'string'
+      && CURSOR_SORT_AT.test(c.sort_at) && CURSOR_ID.test(c.id)) {
       return { sort_at: c.sort_at, id: c.id };
     }
   } catch { /* fall through */ }
@@ -252,7 +257,15 @@ export class MeetingsService {
   async listPage(limitRaw?: string, cursorRaw?: string) {
     const limit = Math.min(parseTranscriptInt('limit', limitRaw, MEETING_PAGE_DEFAULT_LIMIT, 1), MEETING_PAGE_MAX_LIMIT);
     const after = cursorRaw === undefined ? null : decodeMeetingCursor(cursorRaw);
-    const { rows, next } = await this.meetings.listPage(this.db.pool, limit, after);
+    let page;
+    try {
+      page = await this.meetings.listPage(this.db.pool, limit, after);
+    } catch (e) {
+      // 22xxx = data exception (예: 존재하지 않는 날짜). 커서 값 탓이다.
+      if (after && /^22/.test((e as { code?: string }).code ?? '')) throw new BadRequestException('invalid cursor');
+      throw e;
+    }
+    const { rows, next } = page;
     return { items: rows, next_cursor: next ? encodeMeetingCursor(next) : null };
   }
 

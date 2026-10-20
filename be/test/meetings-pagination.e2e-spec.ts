@@ -76,6 +76,10 @@ describe('GET /meetings (keyset page)', () => {
     await request(srv()).get('/meetings?cursor=not-a-cursor').expect(400);
     const wrongShape = Buffer.from(JSON.stringify({ sort_at: 'x', id: 1 })).toString('base64url');
     await request(srv()).get(`/meetings?cursor=${wrongShape}`).expect(400);
+    const enc = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
+    await request(srv()).get(`/meetings?cursor=${enc({ sort_at: '2026', id: 'mtg_1' })}`).expect(400);
+    await request(srv()).get(`/meetings?cursor=${enc({ sort_at: '2026-01-01 00:00:00+00', id: 'x' })}`).expect(400);
+    await request(srv()).get(`/meetings?cursor=${enc({ sort_at: '2026-02-31 00:00:00+00', id: 'mtg_1' })}`).expect(400);
   });
 
   it('bad limit 400', async () => {
