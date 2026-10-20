@@ -28,12 +28,12 @@ function install(cliDir: string): string {
 
 // 가짜 번들: Contents/MacOS/Damwha가 받은 argv·env를 출력하는 셸.
 function fakeBundle(root: string): string {
-  const macos = path.join(root, "X.app", "Contents", "MacOS");
+  const macos = path.join(root, "Damwha 2.app", "Contents", "MacOS");
   fs.mkdirSync(macos, { recursive: true });
   const bin = path.join(macos, "Damwha");
   fs.writeFileSync(bin, '#!/bin/sh\necho "BIN RUN_AS_NODE=$ELECTRON_RUN_AS_NODE ARGS=$*"\n');
   fs.chmodSync(bin, 0o755);
-  return install(path.join(root, "X.app", "Contents", "Resources", "cli"));
+  return install(path.join(root, "Damwha 2.app", "Contents", "Resources", "cli"));
 }
 
 describe("cli-launcher.sh", () => {
@@ -47,7 +47,7 @@ describe("cli-launcher.sh", () => {
     fs.symlinkSync("../hop", path.join(bin, "damwha"));
     const out = execFileSync(path.join(bin, "damwha"), ["--version"], { encoding: "utf8" });
     expect(out).toContain("BIN RUN_AS_NODE=1");
-    expect(out).toContain(`ARGS=${path.join(root, "X.app", "Contents", "Resources", "cli", "damwha.cjs")} --version`);
+    expect(out).toContain(`ARGS=${path.join(root, "Damwha 2.app", "Contents", "Resources", "cli", "damwha.cjs")} --version`);
   });
 
   it("passes args through", () => {
