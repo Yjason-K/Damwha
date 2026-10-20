@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import pkg from '../package.json';
+import desktopPkg from '../../desktop/package.json';
 import type { StageState } from '../src/api-types';
 import type { DamwhaClient } from '../src/client';
 import type { ConnectionResult } from '../src/connection';
@@ -42,10 +42,10 @@ async function exec(argv: string[], fake: Fake = {}, conn: ConnectionResult = { 
 const stages = (process: StageState, summary: StageState, lens: StageState) => ({ stages: { process, summary, lens } });
 
 describe('run', () => {
-  it('--version prints package version', async () => {
+  it('--version prints the desktop app version (CLI ships inside the app)', async () => {
     const r = await exec(['--version']);
     expect(r.code).toBe(0);
-    expect(r.out.trim()).toBe(pkg.version);
+    expect(r.out.trim()).toBe(desktopPkg.version);
   });
 
   it('not_running -> exit 2 with notRunning message', async () => {

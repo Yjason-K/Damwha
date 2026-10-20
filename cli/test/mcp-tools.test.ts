@@ -9,6 +9,7 @@ import type { ConnectionResult } from '../src/connection';
 import { MESSAGES } from '../src/messages';
 import { createMcpServer } from '../src/mcp/server';
 import { plainForPrompt, stripControl, untrusted } from '../src/mcp/untrusted';
+import desktopPkg from '../../desktop/package.json';
 
 type Fake = Partial<Record<keyof DamwhaClient, (...a: any[]) => unknown>>;
 
@@ -90,6 +91,11 @@ describe('mcp tools', () => {
       limit: 5,
       speaker_id: 'spk_2',
     });
+  });
+
+  it('serverInfo.version is the desktop app version', async () => {
+    const c = await connect();
+    expect(c.getServerVersion()?.version).toBe(desktopPkg.version);
   });
 
   it('list_meetings returns only the allowlisted fields', async () => {

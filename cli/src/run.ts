@@ -1,6 +1,6 @@
 import { Command, CommanderError, InvalidArgumentError } from 'commander';
 import { stat } from 'node:fs/promises';
-import pkg from '../package.json';
+import { VERSION } from './version';
 import type { DamwhaClient } from './client';
 import { DamwhaClient as Client } from './client';
 import { fetchHealth, resolveConnection, defaultConnectionDeps, defaultUserDataDir, type ConnectionResult } from './connection';
@@ -81,7 +81,7 @@ export async function run(argv: string[], io: RunIo): Promise<number> {
     };
 
   const program = new Command('damwha')
-    .version(pkg.version)
+    .version(VERSION)
     .exitOverride()
     .configureOutput({ writeOut: (s) => io.stdout.write(s), writeErr: (s) => io.stderr.write(s) })
     .showHelpAfterError(false);

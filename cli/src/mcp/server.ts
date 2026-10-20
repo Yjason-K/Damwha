@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import pkg from '../../package.json';
+import { VERSION } from '../version';
 import { registerCompleteLens, registerReadTools, type McpDeps } from './tools';
 
 export type { McpDeps } from './tools';
@@ -10,7 +10,7 @@ export type { McpDeps } from './tools';
  * initialize 이후에 이 server에 추가로 등록한다.
  */
 export function createMcpServer(deps: McpDeps): McpServer {
-  const server = new McpServer({ name: 'damwha', version: pkg.version });
+  const server = new McpServer({ name: 'damwha', version: VERSION });
   registerReadTools(server, deps);
   server.server.oninitialized = () => {
     // 클라이언트 capability는 initialize가 끝나야 알 수 있다. form 방식 elicitation이 없으면

@@ -1,9 +1,11 @@
 // 단일 CJS 번들. desktop이 이 파일 하나를 Resources/cli/로 싣는다 (spec §2.6).
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { build } from 'esbuild';
 
 const out = 'dist/damwha.cjs';
+// `damwha --version`과 MCP serverInfo는 앱 버전이다 (src/version.ts).
+const { version } = JSON.parse(readFileSync(new URL('../desktop/package.json', import.meta.url), 'utf8'));
 const result = await build({
   entryPoints: ['src/main.ts'],
   outfile: out,
@@ -12,6 +14,7 @@ const result = await build({
   target: 'node22',
   format: 'cjs',
   write: false,
+  define: { __DAMWHA_VERSION__: JSON.stringify(version) },
 });
 
 // esbuild는 모듈마다 `../node_modules/.pnpm/<패키지>/...` 경로를 주석과 __commonJS 키로 남긴다.
