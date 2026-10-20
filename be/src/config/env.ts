@@ -26,6 +26,9 @@ const EnvSchema = z.object({
   // 앱(Electron)이 자식 env에 얹는 이번 실행의 worker 신분. 기본값을 두지 않는다 —
   // **없음이 곧 "앱이 띄운 API가 아니다"**라는 신호이고, 그때 기동 회수는 돌지 않는다.
   WORKER_ID: z.string().optional(),
+  // 앱(Electron)이 이번 실행의 API에 얹는 인스턴스 nonce. /health가 그대로 돌려줘 CLI가 "내가 닿은 포트가
+  // 이 앱이 띄운 API인지" 확인한다 — 없으면 null(앱 밖 실행).
+  DAMWHA_INSTANCE: z.string().optional(),
   WHISPER_MODEL: z.enum(['large-v3-turbo', 'large-v3']).default('large-v3-turbo'),
   WHISPER_DEVICE: z.enum(['mps', 'cpu', 'cuda']).default('mps'),
   STT_LANGUAGE: z.string().default('ko'),
