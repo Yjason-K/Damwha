@@ -50,5 +50,6 @@ export const integrations = {
     conflict: "{{target}}을(를) 다른 프로그램이 쓰고 있어 덮어쓰지 않았어요.",
     previous: "{{message}} 이전 등록: {{previous}}",
   },
+  retry: "다시 시도",
   loadFailed: "연동 상태를 불러오지 못했어요.",
 };

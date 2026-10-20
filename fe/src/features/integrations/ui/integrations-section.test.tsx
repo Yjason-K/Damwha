@@ -47,6 +47,23 @@ test("hidden when 404", async () => {
   expect(container).toBeEmptyDOMElement();
 });
 
+test("non-404 load failure shows loadFailed with a retry that refetches", async () => {
+  const get = vi.spyOn(apiClient, "get").mockRejectedValueOnce(new ApiError(500, "boom"));
+  renderIt();
+  expect(await screen.findByText("연동 상태를 불러오지 못했어요.")).toBeInTheDocument();
+  get.mockResolvedValue({ data: view() } as never);
+  fireEvent.click(screen.getByRole("button", { name: "다시 시도" }));
+  expect(await screen.findByText("Codex")).toBeInTheDocument();
+  expect(get).toHaveBeenCalledTimes(2);
+});
+
+test("row buttons carry row-specific accessible names", async () => {
+  mockGet(view({ clients: { "claude-code": { installed: true, registration: "ours" }, codex: { installed: true, registration: "none" } } }));
+  renderIt();
+  expect(await screen.findByRole("button", { name: "Claude Code 해제" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Codex 연결" })).toBeInTheDocument();
+});
+
 test("shows other_damwha hint", async () => {
   mockGet(view({ cli: { link: { kind: "other_damwha", target: "/Old/Damwha.app/damwha" }, link_path: "/l", on_path: true } }));
   renderIt();
@@ -59,7 +76,7 @@ test("replace asks confirmation before calling install with replace true", async
   renderIt();
   const row = (await screen.findByText("Claude Code")).closest("li")!;
   expect(within(row).getByText(/node \/x\/server\.js/)).toBeInTheDocument();
-  fireEvent.click(within(row).getByRole("button", { name: "바꾸기" }));
+  fireEvent.click(within(row).getByRole("button", { name: "Claude Code 바꾸기" }));
   expect(post).not.toHaveBeenCalled();
   const dialog = await screen.findByRole("dialog");
   fireEvent.click(within(dialog).getByRole("button", { name: "바꾸기" }));
@@ -70,7 +87,7 @@ test("install disabled when client not installed", async () => {
   mockGet(view({ clients: { "claude-code": { installed: false }, codex: { installed: true, registration: "none" } } }));
   renderIt();
   const row = (await screen.findByText("Claude Code")).closest("li")!;
-  expect(within(row).getByRole("button", { name: "연결" })).toBeDisabled();
+  expect(within(row).getByRole("button", { name: /연결$/ })).toBeDisabled();
   expect(within(row).getByText(/설치돼 있지 않아요/)).toBeInTheDocument();
 });
 
@@ -80,7 +97,7 @@ test("client install posts without replace and registration error keeps other ro
   renderIt();
   expect(await screen.findByText(/boom/)).toBeInTheDocument();
   const row = screen.getByText("Codex").closest("li")!;
-  fireEvent.click(within(row).getByRole("button", { name: "연결" }));
+  fireEvent.click(within(row).getByRole("button", { name: /연결$/ }));
   await waitFor(() => expect(post).toHaveBeenCalledWith("/integrations/codex/install", {}));
 });
 
@@ -129,7 +146,7 @@ test("failed replace shows the previous registration", async () => {
   vi.spyOn(apiClient, "post").mockRejectedValue(new ApiError(500, "claude failed", "INTEGRATION_FAILED", { previous: "old cmd --flag" }));
   renderIt();
   const row = (await screen.findByText("Claude Code")).closest("li")!;
-  fireEvent.click(within(row).getByRole("button", { name: "바꾸기" }));
+  fireEvent.click(within(row).getByRole("button", { name: "Claude Code 바꾸기" }));
   fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "바꾸기" }));
   await waitFor(() =>
     expect(toast).toHaveBeenCalledWith(expect.objectContaining({ description: expect.stringContaining("old cmd --flag") })),

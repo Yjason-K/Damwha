@@ -52,5 +52,6 @@ export const integrations = {
     conflict: "{{target}} is used by something else, so it was left untouched.",
     previous: "{{message}} Previous registration: {{previous}}",
   },
+  retry: "Retry",
   loadFailed: "Could not load the integration status.",
 } satisfies LocaleShape<typeof ko>;

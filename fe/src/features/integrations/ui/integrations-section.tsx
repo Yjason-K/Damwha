@@ -26,6 +26,8 @@ import {
 } from "../api/integrations";
 
 const PATH_LINE = 'export PATH="$HOME/.local/bin:$PATH"';
+/** 가로 스크롤되는 코드 블록을 키보드로 닿게 하는 포커스 링. */
+const SCROLL_FOCUS = "outline-none focus-visible:[box-shadow:var(--focus-ring)]";
 const CLIENT_NAMES: Record<ClientId, string> = { "claude-code": "Claude Code", codex: "Codex" };
 
 function useCopy() {
@@ -70,7 +72,28 @@ export function IntegrationsSection() {
   const { t } = useTranslation("integrations");
   const q = useIntegrations();
   const copy = useCopy();
-  if (q.data === undefined || q.data === "disabled") return null;
+  if (q.data === "disabled") return null;
+  if (q.isError) {
+    // 404 외 실패(500·네트워크·타임아웃)는 "연동 없음"이 아니다 — 조용히 숨기지 않고 다시 시도하게 한다.
+    return (
+      <section aria-labelledby="settings-integrations">
+        <Card className="flex flex-col gap-3">
+          <h2 id="settings-integrations" className="text-h2 font-semibold text-foreground">
+            {t("title")}
+          </h2>
+          <div className="flex flex-wrap items-center gap-3">
+            <p role="alert" className="flex-1 text-sm text-[color:var(--text-muted)]">
+              {t("loadFailed")}
+            </p>
+            <Button size="sm" variant="secondary" loading={q.isFetching} onClick={() => void q.refetch()}>
+              {t("retry")}
+            </Button>
+          </div>
+        </Card>
+      </section>
+    );
+  }
+  if (q.data === undefined) return null;
   const view = q.data;
 
   return (
@@ -92,7 +115,11 @@ export function IntegrationsSection() {
           <div className="flex flex-col gap-2 rounded-md bg-[var(--gray-2)] p-3">
             <p className="text-sm text-[color:var(--text-secondary)]">{t("cli.pathHint", { dir: "~/.local/bin" })}</p>
             <div className="flex items-center gap-2">
-              <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap font-mono text-sm text-foreground">
+              <code
+                tabIndex={0}
+                aria-label="PATH"
+                className={`min-w-0 flex-1 overflow-x-auto whitespace-nowrap rounded-sm font-mono text-sm text-foreground ${SCROLL_FOCUS}`}
+              >
                 {PATH_LINE}
               </code>
               <Button size="sm" variant="secondary" onClick={() => void copy(PATH_LINE)}>
@@ -177,7 +204,7 @@ function ClientRow({ id, state }: { id: ClientId; state: ClientState }) {
   if (!state.installed) {
     return (
       <Row name={name} status={t("client.notInstalled", { name })}>
-        <Button size="sm" variant="secondary" disabled>
+        <Button size="sm" variant="secondary" aria-label={`${name} ${t("client.connect")}`} disabled>
           {t("client.connect")}
         </Button>
       </Row>
@@ -199,6 +226,7 @@ function ClientRow({ id, state }: { id: ClientId; state: ClientState }) {
         <Button
           size="sm"
           variant="ghost"
+          aria-label={`${name} ${t("client.disconnect")}`}
           disabled={busy}
           loading={remove.isPending}
           onClick={() =>
@@ -211,11 +239,24 @@ function ClientRow({ id, state }: { id: ClientId; state: ClientState }) {
           {t("client.disconnect")}
         </Button>
       ) : other !== undefined ? (
-        <Button size="sm" variant="secondary" disabled={busy} onClick={() => setConfirming(true)}>
+        <Button
+          size="sm"
+          variant="secondary"
+          aria-label={`${name} ${t("client.replace")}`}
+          disabled={busy}
+          onClick={() => setConfirming(true)}
+        >
           {t("client.replace")}
         </Button>
       ) : (
-        <Button size="sm" variant="secondary" disabled={busy} loading={install.isPending} onClick={() => connect(false)}>
+        <Button
+          size="sm"
+          variant="secondary"
+          aria-label={`${name} ${t("client.connect")}`}
+          disabled={busy}
+          loading={install.isPending}
+          onClick={() => connect(false)}
+        >
           {t("client.connect")}
         </Button>
       )}
@@ -263,7 +304,11 @@ function ManualInstall({ manual }: { manual: IntegrationsView["manual"] }) {
                   {t("manual.copy", { label })}
                 </Button>
               </div>
-              <pre className="overflow-x-auto rounded-md bg-[var(--gray-2)] p-2.5 font-mono text-xs text-foreground">
+              <pre
+                tabIndex={0}
+                aria-label={label}
+                className={`overflow-x-auto rounded-md bg-[var(--gray-2)] p-2.5 font-mono text-xs text-foreground ${SCROLL_FOCUS}`}
+              >
                 {manual[key]}
               </pre>
             </div>
