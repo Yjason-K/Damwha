@@ -141,4 +141,8 @@ export interface Folder {
   [key: string]: unknown;
 }
 
-export type ModelInfo = Record<string, unknown>;
+/** GET /models — upload의 준비 경고가 읽는 필드만. */
+export interface ModelInfo {
+  models: { role: string; name: string; inUseFor: string[]; installed: 'yes' | 'no' | 'partial' | 'unknown' }[];
+  [key: string]: unknown;
+}

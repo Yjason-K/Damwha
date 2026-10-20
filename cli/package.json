@@ -13,7 +13,8 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@damwha/contracts": "workspace:*"
+    "@damwha/contracts": "workspace:*",
+    "commander": "15.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.20.0",

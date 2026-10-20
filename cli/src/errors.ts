@@ -29,3 +29,11 @@ export class NotConnectedError extends Error {
     this.name = 'NotConnectedError';
   }
 }
+
+/** 업로드할 파일이 없거나 읽을 수 없다. 종료 코드 1 — 원시 ENOENT 대신 경로를 안내한다. */
+export class FileNotReadableError extends Error {
+  constructor(readonly path: string) {
+    super(`cannot read ${path}`);
+    this.name = 'FileNotReadableError';
+  }
+}

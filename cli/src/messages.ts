@@ -16,6 +16,11 @@ export const MESSAGES = {
     modelsNotReady: '모델이 아직 준비되지 않았습니다. 업로드는 진행하며, 처리는 모델이 준비된 뒤 시작됩니다.',
     waitInterrupted: '기다리기만 중단했습니다. 서버 처리는 계속됩니다.',
     invalidOption: '--{option} 값이 올바르지 않습니다. 허용 값: {allowed}',
+    fileNotReadable: '파일을 읽을 수 없습니다: {path}',
+    badResponse: '담화 API가 JSON이 아닌 응답을 돌려줬습니다.',
+    requestFailed: '담화 API 요청에 실패했습니다: {reason}',
+    uploaded: '업로드했습니다: {id}',
+    stageFailed: '단계가 실패했습니다: {stages} (회의 {id})',
   },
   en: {
     notRunning: 'Damwha is not running. Start Damwha to use this.',
@@ -27,6 +32,11 @@ export const MESSAGES = {
     modelsNotReady: 'Models are not ready yet. The upload proceeds; processing starts once they are ready.',
     waitInterrupted: 'Stopped waiting only. Server-side processing continues.',
     invalidOption: 'Invalid value for --{option}. Allowed: {allowed}',
+    fileNotReadable: 'Cannot read file: {path}',
+    badResponse: 'The Damwha API returned a non-JSON response.',
+    requestFailed: 'Request to the Damwha API failed: {reason}',
+    uploaded: 'Uploaded: {id}',
+    stageFailed: 'Stage failed: {stages} (meeting {id})',
   },
 } as const;
 
