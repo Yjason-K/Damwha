@@ -9,6 +9,7 @@ per-package — read the one for the subtree you are editing before changing cod
 | --- | --- | --- |
 | `be/` | `damwha-be` | NestJS 10 API over Postgres (pgvector + pg_bigm), raw SQL, no ORM. Read [`be/CLAUDE.md`](be/CLAUDE.md). |
 | `be/worker/` | *(uv project)* | Python 3.12 ML worker. **Not** a pnpm workspace member — it has no `package.json` and is driven by uv. |
+| `cli/` | `damwha-cli` | `damwha` 명령과 stdio MCP 서버 — 데스크톱 앱에 `Resources/cli`로 실린다. be의 **HTTP API만** 쓰고 Postgres·스토리지는 절대 직접 열지 않는다. Read [`cli/README.md`](cli/README.md). |
 | `desktop/` | `damwha-desktop` | Electron macOS 앱 — 번들 PostgreSQL·API·worker·embed를 감독한다. Read [`desktop/CLAUDE.md`](desktop/CLAUDE.md). |
 | `fe/` | `damwha-fe` | React 19 + Vite 8 + Tailwind 4 SPA. Read [`fe/CLAUDE.md`](fe/CLAUDE.md) and [`fe/DESIGN.md`](fe/DESIGN.md). |
 | `site/` | `damwha-site` | Astro 7 정적 제품 사이트 — `damwha.0kimjae.dev`, `/`(en)·`/ko/`, Cloudflare Pages. Read [`site/README.md`](site/README.md). |
@@ -51,6 +52,7 @@ pnpm 10.26.0 is pinned in the root `package.json` and activated by corepack.
 ```bash
 pnpm install                  # from the ROOT — one lockfile covers be + fe
 pnpm dev                      # API :3000 + Vite :5173 in parallel
+pnpm cli build / test / lint  # damwha 명령·MCP 서버 (= pnpm --filter damwha-cli run)
 pnpm site:dev                 # 제품 사이트 :4321 (pnpm dev에는 끼지 않는다)
 pnpm build / test / lint      # fan out across both packages
 pnpm be <script>              # any damwha-be script  (= pnpm --filter damwha-be run)

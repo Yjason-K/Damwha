@@ -52,6 +52,7 @@ These cross-file rules are easy to break and are enforced by tests:
   암호화·업로드(트랜잭션 밖, 기존 active가 있으면 `X-Replace-*`로 서버가 같은 요청에서 지움) → 확정(기존 active를 **먼저**
   내림) 순서다. 만료 시각은 공유 서버가 정한 값만 저장한다. 상태를 바꾸는 GET을 만들지 않는다 — 만료 정리는 스위퍼만 하고,
   `test/get-routes.e2e-spec.ts`가 GET 목록을 고정한다. `DELETE /meetings/:id`는 204가 아니라 `200 { share_revoke, share_expires_at }`.
+- **연동 (`src/integrations/`, spec 2026-10-20).** `/api/integrations`는 설정 화면 "CLI · MCP" 섹션의 백엔드로, `~/.local/bin/damwha` 링크를 만들고 Claude Code·Codex의 `mcp add`/`remove`를 **각 클라이언트 CLI로만** 부른다(설정 파일을 직접 만지지 않는다). 홈 디렉터리와 남의 설정을 바꾸므로 `integrationsEnabled()` — 공유와 같은 loopback·비데모 조건에 앱이 `DAMWHA_CLI_LAUNCHER`를 넘겼을 때만 — 가 아니면 라우트가 404다(`IntegrationsEnabledGuard`). 남의 `damwha` 등록은 `replace: true` 없이는 덮지 않는다(409 `INTEGRATION_CONFLICT`). `cli/` 패키지(`damwha` 명령·MCP 서버)는 이 API의 클라이언트일 뿐 DB·스토리지를 열지 않고, 앱이 쓰는 `<userData>/api.json`(`{port, app_pid, instance, version}`)으로 포트를 찾는다.
 
 ## Python worker (`worker/`)
 

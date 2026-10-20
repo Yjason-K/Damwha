@@ -48,6 +48,11 @@ bash desktop/scripts/build-icon.sh                             # build-resources
 가리키는 심볼릭 링크이고, 런처는 링크를 `readlink` 루프로 스스로 끝까지 따라간다(macOS에 `readlink -f`가
 없다). 번들 밖(dev `desktop/build/cli`)에서는 PATH의 `node`로 떨어진다. spec 2026-10-20 §2.6.
 
+**`api.json`.** API가 준비되면 `<userData>/api.json`(`{port, app_pid, instance, version}`)을 쓰고 정지·종료 중에도
+확실히 지운다(`services/api-file.ts`). `damwha` CLI가 앱의 API를 찾는 유일한 길이고, `instance`는 기동마다 새
+nonce라 `/health`와 맞대어 옛 파일이 새 API를 가리키는 일을 막는다. 앱은 API 프로세스에 `DAMWHA_CLI_LAUNCHER`(런처
+경로)를 넘겨 `/api/integrations`를 켠다 — 없으면 설정 화면의 CLI · MCP 섹션이 없다.
+
 서명은 electron-builder가 아니라 `package.mjs`가 그 뒤에 한다(`identity: null`이 자동 탐색을 끈다).
 **plist 둘로 갈린다** — `build-resources/entitlements.python.plist`(키 둘)는 `Resources/python`의
 Mach-O 전수와 `Resources/ffmpeg/bin/*`에, `entitlements.mac.plist`(키 셋 — 둘 + `allow-jit`)는
