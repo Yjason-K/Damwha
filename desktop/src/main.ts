@@ -79,6 +79,7 @@ import { hasOnceChild, listExternalWorkers as scanExternalWorkers } from "./serv
 import { probeEmbedContract } from "./services/embed-probe";
 import { searchDirs } from "./process/executables";
 import { createMigrationCheckWatch } from "./services/api";
+import { createApiFileSync } from "./services/api-file";
 import { resolveRepoRoot } from "./config/repo-root";
 import { diarizationModelDir, ffmpegBinaries, pythonBinaries } from "./process/runtime-paths";
 import { rotateIfNeeded } from "./diagnostics/logs";
@@ -277,6 +278,25 @@ function refreshMenu(): void {
 /** 앱이 정한 API origin. 감독자의 런타임에서 읽는다 — 전역 변수를 따로 두면 갈린다. */
 function currentApiOrigin(): string | null {
   return supervisor?.runtimeOf("api")?.result?.origin ?? null;
+}
+
+/**
+ * CLI가 앱의 API를 찾는 api.json (spec 2026-10-20 §2.5). 언제 쓰고 지울지의 판단은 services/api-file.ts에 있고
+ * 여기는 상태를 먹이기만 한다. app이 준비된 뒤에 만들어야 userData가 정해져 있다.
+ */
+let apiFileSync: ReturnType<typeof createApiFileSync> | null = null;
+function feedApiFile(statuses: ServiceStatus[]): void {
+  const result = supervisor?.runtimeOf("api")?.result;
+  const launch =
+    result?.origin !== undefined && result.instance !== undefined
+      ? { origin: result.origin, instance: result.instance }
+      : null;
+  apiFileSync ??= createApiFileSync({
+    dir: app.getPath("userData"),
+    pid: process.pid,
+    version: app.getVersion(),
+  });
+  void apiFileSync.update(statuses.find((s) => s.id === "api"), launch).catch(() => undefined);
 }
 
 function allowedOrigins(): string[] {
@@ -632,6 +652,8 @@ function stopOwnWorker(result: LaunchResult, plan: StopPlan): Promise<StopOutcom
  * 먼저 본다.
  */
 async function stopServicesNow(): Promise<StopOutcome> {
+  // 서비스를 내리기 전에 지운다 — 내려가는 동안 CLI가 죽어 가는 API에 붙지 않게.
+  await apiFileSync?.removeNow().catch(() => undefined);
   const v = vite;
   vite = null;
   viteApiBase = null;
@@ -858,8 +880,14 @@ function listExternalWorkers(trees: readonly KnownTree[]): Promise<number[]> {
  * 번들 트리 하나. packaged는 `Resources/<이름>`, dev는 build-*.sh가 스테이징한 `desktop/build/<이름>`이다
  * (Phase 3 스펙 §6.8, Phase 4 스펙 §6.1). electron-builder의 `extraResources: - from: build`가 그 둘을 같은 모양으로 만든다.
  */
-function bundleDir(name: "postgres" | "python" | "ffmpeg" | "models"): string {
+function bundleDir(name: "postgres" | "python" | "ffmpeg" | "models" | "cli"): string {
   return app.isPackaged ? path.join(process.resourcesPath, name) : path.join(app.getAppPath(), "build", name);
+}
+
+/** 번들된 `damwha` 런처. 빌드에 없으면(dev에서 CLI를 안 빌드했다) null — API는 연동 화면을 닫는다. */
+function cliLauncher(): string | null {
+  const launcher = path.join(bundleDir("cli"), "damwha");
+  return fs.existsSync(launcher) ? launcher : null;
 }
 
 /** model_readiness 한 행을 읽는 psql의 상한. 로컬 소켓 SELECT 하나라 넉넉하고, ⌘Q가 이만큼만 늦는다. */
@@ -981,6 +1009,7 @@ function renderStatus(statuses: ServiceStatus[]): void {
   // 메인 창 검사보다 **먼저** 보낸다. 상태 창은 메인 창을 닫은 뒤에도 떠 있을 수 있고, 그때
   // 아래 activeWindow는 null이다 — 뒤에 두면 창을 닫는 순간 상태 창이 얼어붙는다.
   statusWindow.onStatus(statuses);
+  feedApiFile(statuses);
   const target = activeWindow(generation);
   if (target === null) return;
   if (!mayRenderShell(attachedWindow, target)) return;
@@ -1484,6 +1513,7 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
       api: {
         verifyOwnListener,
         isPortOccupied,
+        cliLauncher,
         onPendingMigrations: () => undefined,
         onMigrationCheckSkipped: (handle) => migrationWatch.skipped(handle),
         ...(migrationGate === undefined ? {} : { migrationGate }),

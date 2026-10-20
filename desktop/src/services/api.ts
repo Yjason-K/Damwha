@@ -1,4 +1,5 @@
 import * as path from "path";
+import { randomUUID } from "crypto";
 import { launchDev, launchPackaged } from "./api-process";
 import { MAX_PORT_ATTEMPTS, choosePort, isAddrInUse } from "../process/ports";
 import { probeHealth } from "../process/readiness";
@@ -49,6 +50,8 @@ export interface ApiDeps {
    * 그대로 던진다(부류 manual). 외부 디버그 모드에서는 없다 — 그때는 Phase 2의 감지 게이트만 남는다.
    */
   migrationGate?: (signal: AbortSignal) => Promise<unknown>;
+  /** 번들된 `damwha` 런처의 절대 경로. 없으면 null — API는 연동 화면을 닫는다. 없는 deps는 null로 읽는다. */
+  cliLauncher?: () => string | null;
 }
 
 /** supervisor.log에 남기는 줄. 한 API 기동에 한 번이다. */
@@ -174,16 +177,20 @@ export function apiSpec(deps: ApiDeps): ServiceSpec {
         // 메커니즘 (a): 스폰 전 사전 점검 (Phase 1 §6.4).
         if (await deps.isPortOccupied(candidate)) continue;
 
+        // 기동마다 새 nonce — 재시작 뒤에도 옛 api.json이 새 API를 가리키는 일이 없다.
+        const instance = randomUUID();
         const root = devRoot ?? path.join(process.resourcesPath, "api");
         const handle = (ctx.packaged ? launchPackaged : launchDev)({
           entry: path.join(root, "dist", "main.js"),
           cwd: root,
           env: { ...ctx.env, PORT: String(candidate) },
           logFile: ctx.logFile("api"),
+          instance,
+          cliLauncher: deps.cliLauncher?.() ?? null,
         });
         port = candidate;
         origin = `http://127.0.0.1:${candidate}`;
-        return { handle, owned: true, origin };
+        return { handle, owned: true, origin, instance };
       }
       throw new Error(CAUSES.noFreePort.text(MAX_PORT_ATTEMPTS));
     },

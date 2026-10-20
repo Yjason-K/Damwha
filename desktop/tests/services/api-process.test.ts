@@ -10,6 +10,7 @@ import { fakeChild } from "../fake-child";
  *
  * 앱은 HF 토큰을 쓰지 않는다(스펙 2026-09-30 §5.1). 개발자 셸에서 상속된 HF_TOKEN도 API에는 가지 않는다.
  */
+const EXTRA = { instance: "inst-test", cliLauncher: null };
 const SHELL_TOKEN = "hf_fromTheDeveloperShell000000000";
 const LIVE = { PORT: "3001", DATABASE_URL: "postgresql://damwha@/damwha?host=%2Fu%2Frun", HOST: "0.0.0.0" };
 
@@ -19,7 +20,7 @@ afterEach(() => {
 
 describe("apiChildEnv", () => {
   it("drops an inherited HF_TOKEN, keeps the rest, and pins HOST last", () => {
-    const env = apiChildEnv(LIVE, "dev", { HF_TOKEN: SHELL_TOKEN, PATH: "/usr/bin:/bin", HOST: "0.0.0.0" });
+    const env = apiChildEnv(LIVE, "dev", { HF_TOKEN: SHELL_TOKEN, PATH: "/usr/bin:/bin", HOST: "0.0.0.0" }, EXTRA);
     expect("HF_TOKEN" in env).toBe(false);
     expect(env).toMatchObject({ PORT: "3001", DATABASE_URL: LIVE.DATABASE_URL, PATH: "/usr/bin:/bin", HOST: "127.0.0.1" });
     expect(JSON.stringify(env)).not.toContain("hf_");
@@ -30,6 +31,7 @@ describe("apiChildEnv", () => {
       { ...LIVE, ALLOWED_ORIGINS: "https://evil.example", ALLOWED_HOSTS: "evil.example" },
       "dev",
       { ALLOWED_ORIGINS: "https://shell.example", ALLOWED_HOSTS: "shell.example" },
+      EXTRA,
     );
     expect(env.ALLOWED_ORIGINS).toBe("http://localhost:5173");
     expect("ALLOWED_HOSTS" in env).toBe(false);
@@ -40,6 +42,7 @@ describe("apiChildEnv", () => {
       { ...LIVE, ALLOWED_ORIGINS: "https://evil.example" },
       "packaged",
       { ALLOWED_ORIGINS: "https://shell.example", ALLOWED_HOSTS: "shell.example" },
+      EXTRA,
     );
     expect("ALLOWED_ORIGINS" in env).toBe(false);
     expect("ALLOWED_HOSTS" in env).toBe(false);
@@ -47,13 +50,41 @@ describe("apiChildEnv", () => {
   });
 
   it("packaged: an inherited SHARE_API_URL is dropped — the API uses its built-in production address", () => {
-    const out = apiChildEnv({ PORT: "3000" }, "packaged", { SHARE_API_URL: "http://localhost:8787", PATH: "/usr/bin" });
+    const out = apiChildEnv({ PORT: "3000" }, "packaged", { SHARE_API_URL: "http://localhost:8787", PATH: "/usr/bin" }, EXTRA);
     expect(out.SHARE_API_URL).toBeUndefined();
   });
 
   it("dev: SHARE_API_URL passes through so be/.env or the shell can point at pnpm share:dev", () => {
-    const out = apiChildEnv({ PORT: "3000" }, "dev", { SHARE_API_URL: "http://localhost:8787", PATH: "/usr/bin" });
+    const out = apiChildEnv({ PORT: "3000" }, "dev", { SHARE_API_URL: "http://localhost:8787", PATH: "/usr/bin" }, EXTRA);
     expect(out.SHARE_API_URL).toBe("http://localhost:8787");
+  });
+});
+
+describe("apiChildEnv — CLI 연결", () => {
+  const inherited = { PATH: "/usr/bin" };
+
+  it("apiChildEnv sets DAMWHA_INSTANCE and DAMWHA_CLI_LAUNCHER", () => {
+    const env = apiChildEnv({ PORT: "3000" }, "packaged", inherited, {
+      instance: "inst-a",
+      cliLauncher: "/Applications/Damwha.app/Contents/Resources/cli/damwha",
+    });
+    expect(env.DAMWHA_INSTANCE).toBe("inst-a");
+    expect(env.DAMWHA_CLI_LAUNCHER).toBe("/Applications/Damwha.app/Contents/Resources/cli/damwha");
+  });
+
+  it("apiChildEnv omits launcher when null", () => {
+    const env = apiChildEnv({ PORT: "3000" }, "dev", inherited, { instance: "inst-a", cliLauncher: null });
+    expect(env.DAMWHA_INSTANCE).toBe("inst-a");
+    expect("DAMWHA_CLI_LAUNCHER" in env).toBe(false);
+  });
+
+  it("does not let an inherited launcher or instance through", () => {
+    const env = apiChildEnv({ PORT: "3000" }, "dev", { DAMWHA_CLI_LAUNCHER: "/evil", DAMWHA_INSTANCE: "x" }, {
+      instance: "inst-a",
+      cliLauncher: null,
+    });
+    expect(env.DAMWHA_INSTANCE).toBe("inst-a");
+    expect("DAMWHA_CLI_LAUNCHER" in env).toBe(false);
   });
 });
 
@@ -64,6 +95,7 @@ describe("launchDev", () => {
     let seen: SpawnOptions | undefined;
     const child = fakeChild();
     const handle = launchDev({
+      ...EXTRA,
       entry: "/r/be/dist/main.js",
       cwd: "/r",
       env: LIVE,
@@ -98,6 +130,7 @@ describe("launchPackaged", () => {
       kill: () => true,
     });
     const handle = launchPackaged({
+      ...EXTRA,
       entry: "/app/Resources/api/dist/main.js",
       cwd: "/app/Resources/api",
       env: LIVE,
