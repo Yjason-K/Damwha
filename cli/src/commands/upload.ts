@@ -51,6 +51,7 @@ export async function upload(ctx: Ctx, file: string, rawOpts: Record<string, unk
   }
   if (!ctx.json) printLine(ctx.io.stderr, msg(ctx.lang, 'uploaded', { id }));
 
+  ctx.state.waitingId = id;
   let last = '';
   try {
     const result = await waitForMeeting(ctx.client, id, {
@@ -75,7 +76,7 @@ export async function upload(ctx: Ctx, file: string, rawOpts: Record<string, unk
     return 0;
   } catch (e) {
     if (!(e instanceof WaitAbortedError)) throw e;
-    printLine(ctx.io.stderr, `${msg(ctx.lang, 'waitInterrupted')} (${id})`);
+    // 안내 출력은 run()이 한다 — status fetch가 걸려 이 경로를 못 타는 경우와 같은 자리에서 처리하려고.
     return 0;
   }
 }

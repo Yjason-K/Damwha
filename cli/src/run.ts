@@ -58,9 +58,10 @@ export async function run(argv: string[], io: RunIo): Promise<number> {
   const lang = await detectLang(userDataDir);
   const connect: () => Promise<ConnectionResult> =
     io.connect ?? (() => resolveConnection({ ...defaultConnectionDeps(io.env), fetchHealth }));
-  const createClient = io.createClient ?? ((baseUrl: string): DamwhaClient => new Client(baseUrl));
+  const createClient = io.createClient ?? ((baseUrl: string): DamwhaClient => new Client(baseUrl, fetch, io.signal));
 
   let code = 0;
+  const state: Ctx['state'] = {};
   /** 연결을 확인하고 명령을 돌린다. 모든 실패는 report()로 모인다. */
   const act =
     (fn: (ctx: Ctx, ...args: any[]) => Promise<number>) =>
@@ -70,7 +71,7 @@ export async function run(argv: string[], io: RunIo): Promise<number> {
       try {
         const conn = await connect();
         if (conn.kind !== 'ok') throw new NotConnectedError(conn.kind);
-        const ctx: Ctx = { client: createClient(conn.baseUrl), io, lang, json };
+        const ctx: Ctx = { client: createClient(conn.baseUrl), io, lang, json, state };
         code = await fn(ctx, ...args.slice(0, -1));
       } catch (e) {
         code = report(e, lang, io);
@@ -157,11 +158,23 @@ export async function run(argv: string[], io: RunIo): Promise<number> {
       }
     });
 
+  // Ctrl-C는 걸린 fetch가 있어도 바로 끝내야 한다. --wait 중이면 기다리기만 멈춘 것이라 0, 그 밖에는 130.
+  const interrupted = new Promise<void>((resolve) => {
+    if (io.signal?.aborted) resolve();
+    else io.signal?.addEventListener('abort', () => resolve(), { once: true });
+  });
   try {
-    await program.parseAsync(argv, { from: 'user' });
+    await Promise.race([program.parseAsync(argv, { from: 'user' }), interrupted]);
   } catch (e) {
-    if (e instanceof CommanderError) return e.exitCode;
-    return report(e, lang, io);
+    if (!io.signal?.aborted) {
+      if (e instanceof CommanderError) return e.exitCode;
+      return report(e, lang, io);
+    }
+  }
+  if (io.signal?.aborted) {
+    if (state.waitingId === undefined) return 130;
+    printLine(io.stderr, `${msg(lang, 'waitInterrupted')} (${state.waitingId})`);
+    return 0;
   }
   return code;
 }

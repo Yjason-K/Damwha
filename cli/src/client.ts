@@ -35,13 +35,15 @@ export class DamwhaClient {
   constructor(
     private readonly baseUrl: string,
     private readonly fetchImpl: typeof fetch = fetch,
+    /** Ctrl-C가 진행 중인 요청을 끊게 한다. */
+    private readonly signal?: AbortSignal,
   ) {}
 
   private async request<T>(path: string, init?: RequestInit, query?: Query): Promise<T> {
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(query ?? {})) if (v !== undefined) qs.set(k, String(v));
     const url = `${this.baseUrl}${path}${qs.size ? `?${qs}` : ''}`;
-    const res = await this.fetchImpl(url, init);
+    const res = await this.fetchImpl(url, this.signal ? { ...init, signal: this.signal } : init);
     if (!res.ok) throw await toError(res);
     return (await res.json()) as T;
   }

@@ -22,4 +22,6 @@ export interface Ctx {
   io: RunIo;
   lang: Lang;
   json: boolean;
+  /** Ctrl-C 처리용 상태. `--wait`가 시작되면 id를 채운다. */
+  state: { waitingId?: string };
 }

@@ -1,6 +1,6 @@
 import { run } from './run';
 
-// Ctrl-C는 `--wait`의 기다리기만 멈춘다. 서버 처리는 건드리지 않는다.
+// Ctrl-C는 run()이 처리한다: `--wait` 중이면 기다리기만 멈추고(0), 그 밖에는 130. 서버 처리는 건드리지 않는다.
 const ac = new AbortController();
 process.on('SIGINT', () => ac.abort());
 

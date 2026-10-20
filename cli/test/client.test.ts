@@ -14,6 +14,19 @@ function stub(res: Response) {
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
+describe('DamwhaClient signal', () => {
+  it('passes the AbortSignal to fetch so in-flight requests can be cancelled', async () => {
+    const seen: (AbortSignal | null | undefined)[] = [];
+    const fetchImpl = (async (_u: string, init?: RequestInit) => {
+      seen.push(init?.signal);
+      return json({ items: [], next_cursor: null });
+    }) as unknown as typeof fetch;
+    const ac = new AbortController();
+    await new DamwhaClient('http://h/api', fetchImpl, ac.signal).listMeetings({ limit: 1 });
+    expect(seen[0]).toBe(ac.signal);
+  });
+});
+
 describe('DamwhaClient', () => {
   it('non-2xx throws ApiRequestError with message and code', async () => {
     const { client } = stub(json({ statusCode: 400, message: 'bad cursor', error: 'Bad Request', code: 'BAD_CURSOR' }, 400));

@@ -149,6 +149,41 @@ describe('run', () => {
     expect(r.err + r.out).toContain('mtg_9');
   });
 
+  it('Ctrl-C during a hung non-wait request resolves promptly with 130', async () => {
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 5);
+    const r = await exec(['meetings'], { listMeetings: () => new Promise(() => {}) }, undefined, { signal: ac.signal });
+    expect(r.code).toBe(130);
+  });
+
+  it('Ctrl-C during a hung status fetch in --wait -> waitInterrupted + id, exit 0', async () => {
+    const ac = new AbortController();
+    const r = await exec(
+      ['upload', audio, '--wait'],
+      {
+        upload: async () => ({ id: 'mtg_9' }),
+        listModels: async () => ({ models: [] }),
+        getStatus: () => {
+          setTimeout(() => ac.abort(), 5);
+          return new Promise(() => {});
+        },
+      },
+      undefined,
+      { signal: ac.signal },
+    );
+    expect(r.code).toBe(0);
+    expect(r.err).toContain(MESSAGES.en.waitInterrupted);
+    expect(r.err).toContain('mtg_9');
+    expect(r.err.match(new RegExp(MESSAGES.en.waitInterrupted.slice(0, 20), 'g'))).toHaveLength(1);
+  });
+
+  it('Ctrl-C during the upload POST itself exits 130', async () => {
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 5);
+    const r = await exec(['upload', audio, '--wait'], { upload: () => new Promise(() => {}), listModels: async () => ({ models: [] }) }, undefined, { signal: ac.signal });
+    expect(r.code).toBe(130);
+  });
+
   it('lenses --mine without an is_me speaker -> exit 1 noMeSpeaker', async () => {
     const listLenses = vi.fn();
     const r = await exec(['lenses', '--mine'], { listSpeakers: async () => [{ id: 'spk_1', name: 'A', is_me: false }], listLenses });
