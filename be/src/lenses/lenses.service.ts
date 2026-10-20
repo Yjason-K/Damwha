@@ -12,6 +12,7 @@ import {
 type Exec = Pool | PoolClient;
 
 const MEETING_ID_RE = /^mtg_[1-9][0-9]*$/;
+const LENS_ID_RE = /^lens_[1-9][0-9]*$/;
 const SPEAKER_ID_RE = /^spk_[1-9][0-9]*$/;
 const UTTERANCE_ID_RE = /^utt_[1-9][0-9]*$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -153,6 +154,13 @@ export class LensesService {
     const page = hasMore ? rows.slice(0, filters.limit) : rows;
     const items = await this.hydrateMany(this.db.pool, page);
     return { items, next_cursor: hasMore ? encodeCursor(page[page.length - 1]) : null, total };
+  }
+
+  // 단건 조회. 목록과 달리 lifecycle·completion 필터가 없다 — dismissed(archived)
+  // 항목도 lifecycle_status로 드러내 돌려준다.
+  async get(id: string) {
+    this.parseIdFilter(id, LENS_ID_RE, 'id');
+    return this.hydrate(this.db.pool, id);
   }
 
   async listForMeeting(meetingId: string) {

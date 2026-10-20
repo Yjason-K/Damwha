@@ -32,6 +32,12 @@ export class LensesController {
     return this.service.extractionStatus();
   }
 
+  @Get('lenses/:id')
+  @ApiOperation({ summary: '렌즈 항목 단건 (근거 발화 포함, archived도 반환)' })
+  get(@Param('id') id: string) {
+    return this.service.get(id);
+  }
+
   @Post('lenses')
   @ApiOperation({ summary: '렌즈 항목 수동 생성 (source=user)' })
   create(@Body() body: { meeting_id?: string; kind?: string; text?: string; assignee_speaker_id?: string; due_at?: string }) {

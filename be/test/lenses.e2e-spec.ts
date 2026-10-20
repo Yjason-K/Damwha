@@ -197,6 +197,40 @@ describe('lenses api', () => {
     expect(ev[0].utterance.id).toBe(u1);
   });
 
+  it('get lens by id returns item with evidence', async () => {
+    const mid = await mkMeeting('단건 회의');
+    const u0 = await mkUtt(mid, 0, 0);
+    const u1 = await mkUtt(mid, 1, 1000);
+    const lens = await mkLens(mid, { source: 'user' });
+    await mkEvidence(lens, u0, 'supporting');
+    await mkEvidence(lens, u1, 'primary');
+
+    const res = await request(srv()).get(`/lenses/${lens}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: lens, meeting: { id: mid, title: '단건 회의' } });
+    expect(res.body.evidence[0]).toMatchObject({ relation: 'primary', utterance: { id: u1 } });
+    expect(res.body.evidence).toHaveLength(2);
+  });
+
+  it('get lens returns an archived item with its lifecycle_status', async () => {
+    const mid = await mkMeeting();
+    const lens = await mkLens(mid, { source: 'user', lifecycle: 'archived' });
+    const res = await request(srv()).get(`/lenses/${lens}`);
+    expect(res.status).toBe(200);
+    expect(res.body.lifecycle_status).toBe('archived');
+  });
+
+  it('get lens unknown id 404', async () => {
+    const res = await request(srv()).get('/lenses/lens_999999');
+    expect(res.status).toBe(404);
+    expect(res.body.message).toBe('lens item not found');
+  });
+
+  it('get lens invalid id 400', async () => {
+    expect((await request(srv()).get('/lenses/nope')).status).toBe(400);
+    expect((await request(srv()).get('/lenses/lens_0')).status).toBe(400);
+  });
+
   it('defaults to open + active, excluding done and archived items', async () => {
     const mid = await mkMeeting();
     const open = await mkLens(mid, { source: 'user', completion: 'open', lifecycle: 'active' });
