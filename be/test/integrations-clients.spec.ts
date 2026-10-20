@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { clientState, manualCommands, registerClient, unregisterClient } from '../src/integrations/clients';
-import { findExecutable } from '../src/integrations/find-executable';
+import { findExecutable, loginShellPath } from '../src/integrations/find-executable';
 import { ConflictError } from '../src/integrations/errors';
 import { runCommand, type RunResult } from '../src/integrations/run-command';
 
@@ -219,5 +219,62 @@ describe('runCommand', () => {
   });
   it('rejects when the executable does not exist', async () => {
     await expect(runCommand('/nonexistent/bin', [])).rejects.toThrow();
+  });
+});
+
+describe('loginShellPath', () => {
+  it('asks the zsh/bash login shell for PATH and takes the last line (rc noise first)', async () => {
+    const calls: string[][] = [];
+    const p = await loginShellPath({
+      shell: '/bin/zsh',
+      run: async (f, a) => (calls.push([f, ...a]), { code: 0, stdout: 'motd noise\n/Users/test/.local/bin:/usr/bin', stderr: '' }),
+    });
+    expect(p).toBe('/Users/test/.local/bin:/usr/bin');
+    expect(calls).toEqual([['/bin/zsh', '-lc', 'printf %s "$PATH"']]);
+  });
+
+  it('is null for an unknown shell, a failed probe or a throwing run', async () => {
+    const never = async (): Promise<RunResult> => { throw new Error('should not run'); };
+    expect(await loginShellPath({ shell: '/usr/bin/fish', run: never })).toBeNull();
+    expect(await loginShellPath({ shell: undefined, run: never })).toBeNull();
+    expect(await loginShellPath({ shell: '/bin/bash', run: async () => ({ code: 1, stdout: '', stderr: '' }) })).toBeNull();
+    expect(await loginShellPath({ shell: '/bin/bash', run: never })).toBeNull();
+    expect(await loginShellPath({ shell: '/bin/bash', run: async () => ({ code: 0, stdout: '', stderr: '' }) })).toBeNull();
+  });
+});
+
+describe('runCommand child PATH', () => {
+  type Opts = { env?: NodeJS.ProcessEnv; timeout?: number; maxBuffer?: number };
+  const capture = () => {
+    const seen: { file: string; args: string[]; opts: Opts }[] = [];
+    const exec = ((file: string, args: string[], opts: Opts, cb: (e: null, out: string, err: string) => void) => {
+      seen.push({ file, args, opts });
+      cb(null, '', '');
+    }) as unknown as typeof import('node:child_process').execFile;
+    return { seen, exec };
+  };
+
+  it('prepends the binary dir and known install dirs for claude/codex (npm #!/usr/bin/env node under a Finder PATH)', async () => {
+    const c = capture();
+    await runCommand('/Users/test/.nvm/versions/node/v22/bin/claude', ['mcp', 'get', 'damwha'], {
+      exec: c.exec, home: '/Users/test', env: { PATH: '/usr/bin:/bin', HOME: '/Users/test' },
+    });
+    expect(c.seen[0].opts.env?.PATH).toBe(
+      '/Users/test/.nvm/versions/node/v22/bin:/Users/test/.local/bin:/Users/test/.claude/local:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin',
+    );
+    expect(c.seen[0].opts.env?.HOME).toBe('/Users/test');
+    expect(c.seen[0].opts).toMatchObject({ timeout: 15_000, maxBuffer: 65_536 });
+  });
+
+  it('does not duplicate dirs already present', async () => {
+    const c = capture();
+    await runCommand('/opt/homebrew/bin/codex', ['mcp', 'list'], { exec: c.exec, home: '/Users/test', env: { PATH: '/opt/homebrew/bin:/usr/bin' } });
+    expect(c.seen[0].opts.env?.PATH).toBe('/opt/homebrew/bin:/Users/test/.local/bin:/Users/test/.claude/local:/usr/local/bin:/usr/bin');
+  });
+
+  it('leaves the env alone for anything else (the login-shell probes must see the real PATH)', async () => {
+    const c = capture();
+    await runCommand('/bin/zsh', ['-lc', 'printf %s "$PATH"'], { exec: c.exec, home: '/Users/test', env: { PATH: '/usr/bin' } });
+    expect(c.seen[0].opts.env).toBeUndefined();
   });
 });

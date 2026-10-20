@@ -10,7 +10,7 @@ import {
   type ClientState,
   type Run,
 } from './clients';
-import { findExecutable } from './find-executable';
+import { findExecutable, loginShellPath } from './find-executable';
 
 /** 파일시스템·명령 실행·환경을 한 덩어리로 주입한다 — 테스트는 이 토큰을 덮어써 실제 홈을 건드리지 않는다. */
 export type IntegrationsDeps = {
@@ -53,11 +53,13 @@ export class IntegrationsService {
         clients[id] = { installed: true, registration: { error: e instanceof Error ? e.message : String(e) } };
       }
     }
+    // 사용자가 터미널에서 `damwha`를 칠 때의 PATH가 기준이다 — API 프로세스의 PATH가 아니다.
+    const pathEnv = (await loginShellPath(this.d)) ?? this.d.pathEnv;
     return {
       cli: {
         link,
         link_path: this.linkPath,
-        on_path: this.d.pathEnv.split(':').includes(join(this.d.home, '.local', 'bin')),
+        on_path: pathEnv.split(':').includes(join(this.d.home, '.local', 'bin')),
       },
       clients,
       manual: manualCommands(this.linkPath, this.d.launcher),
