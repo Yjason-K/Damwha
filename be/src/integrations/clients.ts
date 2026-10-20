@@ -5,7 +5,8 @@ export type ClientId = 'claude-code' | 'codex';
 export type Run = (file: string, args: string[]) => Promise<RunResult>;
 export type ClientState =
   | { installed: false }
-  | { installed: true; registration: 'none' | 'ours' | { other: string } };
+  | { installed: true; registration: 'none' | 'ours' | { other: string } | { error: string } };
+// error는 GET 목록에서만 나온다(`mcp get` 실패를 한 클라이언트 안에 가둔다). 설치·해제 경로는 오류를 그대로 던진다.
 
 // 설정 파일은 직접 만지지 않고 각 클라이언트 CLI만 쓴다 (spec §2.7). 인자는 고정 배열이다.
 const GET = ['mcp', 'get', 'damwha'];
@@ -58,7 +59,7 @@ export async function registerClient(
   if (!state.installed || !bin) return state;
   if (state.registration === 'ours') return state;
   let previous: string | undefined;
-  if (typeof state.registration === 'object') {
+  if (typeof state.registration === 'object' && 'other' in state.registration) {
     previous = state.registration.other;
     // 남의 항목은 명시적 replace 없이는 건드리지 않는다.
     if (!opts.replace) throw new ConflictError(state.registration.other);

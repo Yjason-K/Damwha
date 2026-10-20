@@ -45,7 +45,14 @@ export class IntegrationsService {
   async get() {
     const link = await inspectLink(this.linkPath, this.d.launcher, this.d.fs);
     const clients = {} as Record<ClientId, ClientState>;
-    for (const id of CLIENT_IDS) clients[id] = await clientState(id, await this.bin(id), this.linkPath, this.d.run);
+    for (const id of CLIENT_IDS) {
+      // 한 클라이언트의 설정이 깨져도 나머지와 링크 상태는 보여 준다.
+      try {
+        clients[id] = await clientState(id, await this.bin(id), this.linkPath, this.d.run);
+      } catch (e) {
+        clients[id] = { installed: true, registration: { error: e instanceof Error ? e.message : String(e) } };
+      }
+    }
     return {
       cli: {
         link,

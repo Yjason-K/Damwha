@@ -100,6 +100,20 @@ describe('연동 API', () => {
     } finally { await app.close(); }
   });
 
+  it('한 클라이언트의 mcp get 이 실패해도 GET 은 200 이고 나머지는 정상이다', async () => {
+    const c = fakeClients();
+    const run = async (f: string, a: string[]) =>
+      path.basename(f) === 'claude' && a[1] === 'get' ? ({ code: 2, stdout: '', stderr: 'config corrupt' } as RunResult) : c.run(f, a);
+    const app = await makeApp(true, { run, isExecutable: async (p) => p.endsWith('/.local/bin/claude') || p.endsWith('/.local/bin/codex') });
+    try {
+      const res = await request(app.getHttpServer()).get('/integrations').expect(200);
+      expect(res.body.clients['claude-code']).toEqual({ installed: true, registration: { error: expect.stringContaining('config corrupt') } });
+      expect(res.body.clients['claude-code'].registration.error).not.toContain('\n    at ');
+      expect(res.body.clients.codex).toEqual({ installed: true, registration: 'none' });
+      expect(res.body.cli.link).toEqual({ kind: 'absent' });
+    } finally { await app.close(); }
+  });
+
   it('on_path는 PATH에 ~/.local/bin이 없으면 false', async () => {
     const app = await makeApp(true, { pathEnv: '/usr/bin' });
     try {
