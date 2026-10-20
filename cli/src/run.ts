@@ -1,4 +1,5 @@
 import { Command, CommanderError, InvalidArgumentError } from 'commander';
+import { stat } from 'node:fs/promises';
 import pkg from '../package.json';
 import type { DamwhaClient } from './client';
 import { DamwhaClient as Client } from './client';
@@ -6,6 +7,7 @@ import { fetchHealth, resolveConnection, defaultConnectionDeps, defaultUserDataD
 import type { Ctx, RunIo } from './context';
 import { ApiRequestError, FileNotReadableError, NotConnectedError, UsageError } from './errors';
 import { detectLang, msg, type Lang } from './messages';
+import { createMcpServer, serveStdio } from './mcp/server';
 import { lenses } from './commands/lenses';
 import { meeting, meetings } from './commands/meetings';
 import { search } from './commands/search';
@@ -156,6 +158,20 @@ export async function run(argv: string[], io: RunIo): Promise<number> {
       } catch (e) {
         code = report(e, lang, io);
       }
+    });
+
+  program
+    .command('mcp')
+    .description('Run the stdio MCP server for coding agents')
+    .action(async () => {
+      // stdout은 MCP 프레임 전용이다. 연결은 도구 호출마다 다시 확인하므로 앱이 아직 없어도 서버는 뜬다.
+      const server = createMcpServer({
+        connect,
+        makeClient: createClient,
+        lang: () => detectLang(userDataDir),
+        stat: async (p) => stat(p).then((s) => (s.isFile() ? { mtime: s.mtime } : null), () => null),
+      });
+      await serveStdio(server);
     });
 
   // Ctrl-C는 걸린 fetch가 있어도 바로 끝내야 한다. --wait 중이면 기다리기만 멈춘 것이라 0, 그 밖에는 130.

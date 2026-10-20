@@ -1,4 +1,5 @@
 import type { LensQuery } from '../api-types';
+import type { DamwhaClient } from '../client';
 import type { Ctx } from '../context';
 import { UsageError } from '../errors';
 import { msg } from '../messages';
@@ -15,6 +16,11 @@ export interface LensesOpts {
   limit?: number;
 }
 
+/** 본인(is_me) 화자 id. 지정된 화자가 없으면 null. MCP list_lenses도 쓴다. */
+export async function resolveMeSpeakerId(client: Pick<DamwhaClient, 'listSpeakers'>): Promise<string | null> {
+  return (await client.listSpeakers()).find((s) => s.is_me)?.id ?? null;
+}
+
 export async function lenses(ctx: Ctx, opts: LensesOpts): Promise<number> {
   if (opts.open && opts.done) throw new UsageError('--open and --done cannot be combined');
   const q: LensQuery = {};
@@ -28,12 +34,12 @@ export async function lenses(ctx: Ctx, opts: LensesOpts): Promise<number> {
 
   if (opts.mine) {
     // is_me 화자가 없으면 빈 목록 대신 오류다 — 빈 목록은 "내 작업 없음"으로 잘못 읽힌다 (spec §2.4).
-    const me = (await ctx.client.listSpeakers()).find((s) => s.is_me);
+    const me = await resolveMeSpeakerId(ctx.client);
     if (!me) {
       printLine(ctx.io.stderr, msg(ctx.lang, 'noMeSpeaker'));
       return 1;
     }
-    q.speaker_id = me.id;
+    q.speaker_id = me;
   }
 
   const page = await ctx.client.listLenses(q);
