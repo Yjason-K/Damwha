@@ -27,3 +27,17 @@ export function sanitize<T>(v: T): T {
 export function untrusted<T>(data: T): { untrusted_meeting_data: T } {
   return { [UNTRUSTED_KEY]: sanitize(data) } as { untrusted_meeting_data: T };
 }
+
+/**
+ * 사람이 보는 확인 창에 회의 문자열을 넣을 때 쓴다. 마크다운·링크로 창을 꾸미거나 줄바꿈으로
+ * 가짜 항목을 끼워 넣지 못하게 기호·URL·제어 문자를 지우고 공백을 한 칸으로 줄인 뒤 길이를 자른다.
+ */
+export function plainForPrompt(s: string, max = 200): string {
+  const plain = stripControl(s)
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/(?:https?|ftp|file):\/\/\S*|www\.\S+/gi, '')
+    .replace(/[*_`#>~|\[\]()<>\\]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return plain.length > max ? `${plain.slice(0, max)}…` : plain;
+}

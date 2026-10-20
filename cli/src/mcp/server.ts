@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import pkg from '../../package.json';
-import { registerReadTools, type McpDeps } from './tools';
+import { registerCompleteLens, registerReadTools, type McpDeps } from './tools';
 
 export type { McpDeps } from './tools';
 
@@ -12,6 +12,16 @@ export type { McpDeps } from './tools';
 export function createMcpServer(deps: McpDeps): McpServer {
   const server = new McpServer({ name: 'damwha', version: pkg.version });
   registerReadTools(server, deps);
+  server.server.oninitialized = () => {
+    // 클라이언트 capability는 initialize가 끝나야 알 수 있다. form 방식 elicitation이 없으면
+    // 확인 창을 띄울 수 없으므로 complete_lens를 아예 노출하지 않는다.
+    const el = server.server.getClientCapabilities()?.elicitation;
+    if (!el || (el.url && !el.form && Object.keys(el).length === 1)) return;
+    registerCompleteLens(server, deps);
+    // 이미 연결된 뒤의 registerTool이 알림을 보내지만, 명시적으로 한 번 더 보장한다.
+    server.sendToolListChanged();
+    console.error('damwha-mcp: elicitation supported, complete_lens enabled');
+  };
   return server;
 }
 

@@ -10,7 +10,7 @@ import type { ConnectionResult } from '../connection';
 import { ApiRequestError, FileNotReadableError, NotConnectedError, UsageError } from '../errors';
 import { msg, type Lang } from '../messages';
 import { buildUploadForm, parseUploadOptions, resolveFolderId } from '../upload-options';
-import { UNTRUSTED_NOTICE, stripControl, untrusted } from './untrusted';
+import { UNTRUSTED_NOTICE, plainForPrompt, stripControl, untrusted } from './untrusted';
 
 export interface McpDeps {
   connect(): Promise<ConnectionResult>;
@@ -337,6 +337,56 @@ export function registerReadTools(server: McpServer, deps: McpDeps): void {
         const folderId = opts.folder ? await resolveFolderId(client, opts.folder) : undefined;
         const { id } = await client.upload(await buildUploadForm(path, opts, folderId, st.mtime));
         return ok({ meeting_id: id });
+      }),
+  );
+}
+
+// 사람이 대화창을 보고 답하는 시간이라 SDK 기본 요청 제한(60초)보다 길게 잡는다.
+const ELICIT_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * 완료 처리는 되돌리기 어려운 쓰기라 사용자 확인 없이는 하지 않는다 (spec C2, §2.3).
+ * 확인 창은 elicitation으로만 띄울 수 있어, 이 도구는 그걸 지원하는 클라이언트에만 등록한다.
+ * 창에 보이는 문장은 에이전트 인자가 아니라 API에서 다시 읽은 값으로 만든다.
+ */
+export function registerCompleteLens(server: McpServer, deps: McpDeps): void {
+  server.registerTool(
+    'complete_lens',
+    {
+      description: describe(
+        'Mark an open lens (e.g. an action item) as completed. The user is asked to confirm in a dialog; nothing changes unless they accept.',
+      ),
+      inputSchema: { lens_id: z.string() },
+      annotations: { destructiveHint: false, idempotentHint: true },
+    },
+    ({ lens_id }) =>
+      runTool(deps, async (client, lang) => {
+        const lens = await client.getLens(lens_id);
+        if (lens.completion_status === 'done') return { content: [{ type: 'text', text: msg(lang, 'alreadyDone') }] };
+
+        const assignee = lens.assignee_speaker_id
+          ? await client
+              .listSpeakers()
+              .then((all) => all.find((s) => s.id === lens.assignee_speaker_id)?.name ?? lens.assignee_speaker_id!)
+              .catch(() => lens.assignee_speaker_id!)
+          : '-';
+        const answer = await server.server.elicitInput(
+          {
+            message: msg(lang, 'completeConfirm', {
+              title: plainForPrompt(lens.meeting.title),
+              text: plainForPrompt(lens.text),
+              assignee: plainForPrompt(assignee),
+              due: lens.due_at ? plainForPrompt(lens.due_at.slice(0, 10)) : '-',
+            }),
+            requestedSchema: { type: 'object', properties: {} },
+          },
+          { timeout: ELICIT_TIMEOUT_MS },
+        );
+        // accept 외에는 전부 미완료로 둔다. 알 수 없는 action도 마찬가지다.
+        if (answer.action !== 'accept') return { content: [{ type: 'text', text: msg(lang, 'completeDeclined') }] };
+
+        const done = await client.completeLens(lens_id);
+        return ok({ id: done.id, completion_status: done.completion_status });
       }),
   );
 }
