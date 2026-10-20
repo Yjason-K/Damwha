@@ -229,6 +229,28 @@ describe('run', () => {
     expect(JSON.parse(r.out)).toEqual(page);
   });
 
+  it('text output shows the untitled fallback instead of null', async () => {
+    const m = { id: 'mtg_1', title: null, recorded_at: '2026-01-01T00:00:00Z' };
+    const list = await exec(['meetings'], { listMeetings: async () => ({ items: [m], next_cursor: null }) });
+    expect(list.out).toContain(MESSAGES.en.untitledMeeting);
+    expect(list.out).not.toContain('null');
+    const one = await exec(['meeting', 'mtg_1'], { getMeeting: async () => m });
+    expect(one.out.split('\n')[0]).toBe(MESSAGES.en.untitledMeeting);
+    const lens = {
+      id: 'lns_1', kind: 'action', text: 'Do it', completion_status: 'open', due_at: null, meeting_id: 'mtg_1',
+      meeting: { id: 'mtg_1', title: null, recorded_at: 'r' },
+    };
+    const l = await exec(['lenses'], { listLenses: async () => ({ items: [lens], next_cursor: null, total: 1 }) });
+    expect(l.out).toContain(`(${MESSAGES.en.untitledMeeting}, mtg_1)`);
+    const s = await exec(['search', 'x'], {
+      search: async () => ({
+        mode: 'hybrid', semantic: true, hasMore: false,
+        results: [{ utteranceId: 'u', meetingId: 'mtg_1', meetingTitle: null, recordedAt: '2026-01-01', speaker: null, startMs: 0, endMs: 1, text: 'hi', score: 1 }],
+      }),
+    });
+    expect(s.out).toContain(`(${MESSAGES.en.untitledMeeting})`);
+  });
+
   it('search maps flags to the request body', async () => {
     const search = vi.fn(async () => ({ mode: 'hybrid', semantic: true, hasMore: false, results: [] }));
     const r = await exec(['search', 'budget', '--limit', '3', '--from', '2026-01-01', '--meeting', 'mtg_2'], { search });

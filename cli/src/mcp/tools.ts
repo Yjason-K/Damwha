@@ -378,7 +378,8 @@ export function registerCompleteLens(server: McpServer, deps: McpDeps): void {
           answer = await server.server.elicitInput(
             {
               message: msg(lang, 'completeConfirm', {
-                title: plainForPrompt(lens.meeting.title),
+                // 제목 없이 올린 회의는 title이 null이다. 지운 뒤 빈 제목도 같은 이름으로 보인다.
+                title: plainForPrompt(lens.meeting.title) || msg(lang, 'untitledMeeting'),
                 text: plainForPrompt(lens.text),
                 assignee: plainForPrompt(assignee),
                 due: lens.due_at ? plainForPrompt(lens.due_at.slice(0, 10)) : '-',

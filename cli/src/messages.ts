@@ -23,6 +23,7 @@ export const MESSAGES = {
     requestFailed: '담화 API 요청에 실패했습니다: {reason}',
     uploaded: '업로드했습니다: {id}',
     stageFailed: '단계가 실패했습니다: {stages} (회의 {id})',
+    untitledMeeting: '제목 없는 회의',
   },
   en: {
     notRunning: 'Damwha is not running. Start Damwha to use this.',
@@ -41,6 +42,7 @@ export const MESSAGES = {
     requestFailed: 'Request to the Damwha API failed: {reason}',
     uploaded: 'Uploaded: {id}',
     stageFailed: 'Stage failed: {stages} (meeting {id})',
+    untitledMeeting: 'Untitled meeting',
   },
 } as const;
 

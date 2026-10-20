@@ -45,7 +45,7 @@ export async function lenses(ctx: Ctx, opts: LensesOpts): Promise<number> {
   const page = await ctx.client.listLenses(q);
   if (ctx.json) printJson(ctx.io.stdout, page);
   else {
-    for (const l of page.items) printLine(ctx.io.stdout, lensLine(l));
+    for (const l of page.items) printLine(ctx.io.stdout, lensLine(l, ctx.lang));
     if (page.next_cursor) printLine(ctx.io.stderr, `${page.items.length}/${page.total}`);
   }
   return 0;

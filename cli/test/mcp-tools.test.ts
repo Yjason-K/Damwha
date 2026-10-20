@@ -8,7 +8,7 @@ import type { DamwhaClient } from '../src/client';
 import type { ConnectionResult } from '../src/connection';
 import { MESSAGES } from '../src/messages';
 import { createMcpServer } from '../src/mcp/server';
-import { stripControl, untrusted } from '../src/mcp/untrusted';
+import { plainForPrompt, stripControl, untrusted } from '../src/mcp/untrusted';
 
 type Fake = Partial<Record<keyof DamwhaClient, (...a: any[]) => unknown>>;
 
@@ -35,6 +35,18 @@ describe('untrusted', () => {
   it('wraps data and strips control chars but keeps \\n and \\t', () => {
     expect(untrusted({ a: 1 })).toEqual({ untrusted_meeting_data: { a: 1 } });
     expect(stripControl('a\u0000b\u001b[31mc\nd\te\r\u0085')).toBe('ab[31mc\nd\te');
+  });
+
+  it('tolerates null/undefined (untitled meetings)', () => {
+    expect(stripControl(null)).toBe('');
+    expect(stripControl(undefined)).toBe('');
+    expect(plainForPrompt(null)).toBe('');
+    expect(plainForPrompt(undefined)).toBe('');
+  });
+
+  it('plainForPrompt strips bidi, zero-width and line/paragraph separators', () => {
+    expect(plainForPrompt('ab\u202Ec\u2066d\u200Fe\u200Bf\u2060g\uFEFFh')).toBe('abcdefgh');
+    expect(plainForPrompt('a\u2028b\u2029c')).toBe('a b c');
   });
 });
 

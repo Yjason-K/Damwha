@@ -28,7 +28,8 @@ export interface LensItem {
   due_at: string | null;
   created_at: string;
   updated_at: string;
-  meeting: { id: string; title: string; recorded_at: string };
+  /** 제목 없이 올린 회의는 title이 null이다 (be meeting.title). */
+  meeting: { id: string; title: string | null; recorded_at: string };
   evidence: LensEvidence[];
 }
 
@@ -54,7 +55,7 @@ export interface LensQuery {
 
 export interface MeetingListItem {
   id: string;
-  title: string;
+  title: string | null;
   recorded_at: string;
   [key: string]: unknown;
 }
@@ -67,7 +68,7 @@ export interface MeetingPage {
 /** GET /meetings/:id — 발화·요약·태그 등 본문 필드는 호출부가 쓰는 만큼만 좁힌다. */
 export interface MeetingDetail {
   id: string;
-  title: string;
+  title: string | null;
   recorded_at: string;
   [key: string]: unknown;
 }
@@ -112,7 +113,7 @@ export interface SearchBody {
 export interface SearchResult {
   utteranceId: string;
   meetingId: string;
-  meetingTitle: string;
+  meetingTitle: string | null;
   recordedAt: string;
   speaker: { id: string; name: string } | null;
   startMs: number;

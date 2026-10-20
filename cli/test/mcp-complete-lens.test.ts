@@ -162,6 +162,28 @@ describe('complete_lens', () => {
     expect(m).toContain('a'.repeat(50));
   });
 
+  it('untitled meeting (title null) shows the localized fallback and still completes on accept', async () => {
+    const completeLens = vi.fn(async () => lens({ completion_status: 'done' }));
+    const { client, asked } = await setup(
+      { getLens: async () => lens({ meeting: { id: 'mtg_1', title: null, recorded_at: '2026-10-01T00:00:00Z' } }), completeLens },
+      { action: 'accept' },
+    );
+    const r: any = await call(client);
+    expect(r.isError).toBeFalsy();
+    expect(asked[0].message).toContain(`${'Meeting'}: ${MESSAGES.en.untitledMeeting}`);
+    expect(asked[0].message).not.toContain('null');
+    expect(completeLens).toHaveBeenCalledTimes(1);
+  });
+
+  it('strips bidi and zero-width characters from the dialog text', async () => {
+    const hidden = '\u202Ea\u202Ab\u202B\u202C\u202Dc\u2066d\u2067\u2068\u2069e\u200Ef\u200Fg\u200Bh\u200C\u200Di\u2060j\uFEFFk\u2028l\u2029m';
+    const { client, asked } = await setup({ getLens: async () => lens({ text: hidden }) }, { action: 'decline' });
+    await call(client);
+    const m: string = asked[0].message;
+    expect(m).not.toMatch(/[\u202A-\u202E\u2066-\u2069\u200B-\u200F\u2060\uFEFF\u2028\u2029]/);
+    expect(m).toContain('Item: abcdefghijk l m');
+  });
+
   it('is listed only for clients with elicitation', async () => {
     const withIt = await setup({}, { action: 'decline' });
     expect((await withIt.client.listTools()).tools.map((t) => t.name)).toContain('complete_lens');

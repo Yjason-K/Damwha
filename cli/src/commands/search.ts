@@ -23,6 +23,6 @@ export async function search(ctx: Ctx, query: string, opts: SearchOpts): Promise
 
   const res = await ctx.client.search(body);
   if (ctx.json) printJson(ctx.io.stdout, res);
-  else for (const r of res.results) printLine(ctx.io.stdout, searchLine(r));
+  else for (const r of res.results) printLine(ctx.io.stdout, searchLine(r, ctx.lang));
   return 0;
 }
