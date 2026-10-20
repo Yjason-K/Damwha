@@ -71,22 +71,43 @@ export async function resolveConnection(deps: ConnectionDeps): Promise<Connectio
   return { kind: 'ok', baseUrl };
 }
 
-function run(cmd: string, args: string[]): Promise<string | null> {
-  return new Promise((resolve) => {
-    execFile(cmd, args, { timeout: 5000, maxBuffer: 64 * 1024 }, (err, stdout) =>
-      resolve(err ? null : stdout),
-    );
+/** 명령을 돌려 stdout을 준다. 실패(종료 코드·시간 초과)는 null. 테스트가 갈아끼운다. */
+export type Exec = (cmd: string, args: string[]) => Promise<string | null>;
+
+const run: Exec = (cmd, args) =>
+  new Promise((resolve) => {
+    execFile(cmd, args, { timeout: 5000, maxBuffer: 1024 * 1024 }, (err, stdout) => resolve(err ? null : stdout));
   });
+
+/**
+ * CLI·MCP 프로세스도 Contents/MacOS/Damwha다 — 런처가 번들의 Damwha 바이너리를 ELECTRON_RUN_AS_NODE로 다시 쓴다.
+ * 그래서 이름(`pgrep -x Damwha`, comm에 "Damwha")으로는 앱과 CLI가 구별되지 않고, MCP 서버 하나만 떠 있어도
+ * "앱이 뜨는 중"으로 읽힌다. argv에 damwha.cjs가 있으면 CLI다.
+ */
+export const isCliProcess = (args: string): boolean => args.includes('damwha.cjs');
+
+/** 설치된 앱 본체(Damwha.app의 메인 실행 파일)인가. Helper·CLI·이름만 비슷한 앱은 아니다. */
+export const isAppProcess = (args: string): boolean =>
+  /\/Damwha\.app\/Contents\/MacOS\/Damwha(?: |$)/.test(args) && !isCliProcess(args);
+
+/**
+ * api.json의 app_pid가 앱인가. 여기서는 "살아 있고 CLI가 아니다"만 본다 — 신원은 뒤이은 health의 nonce가 증명한다.
+ * 실행 파일 경로까지 묶지 않는 건 desktop:dev 때문이다: dev의 앱은 node_modules의 Electron.app/Contents/MacOS/Electron이다.
+ * CLI 제외는 pid가 재사용돼 우리 CLI 프로세스가 됐을 때 그걸 앱으로 오인하지 않기 위해서다.
+ */
+export async function isDamwhaPid(pid: number, exec: Exec = run): Promise<boolean> {
+  const args = (await exec('ps', ['-o', 'args=', '-p', String(pid)]))?.trim();
+  return Boolean(args) && !isCliProcess(args!);
 }
 
-/** 실행 파일 경로에 Damwha가 있는지까지 본다 (pid 재사용 대비). */
-export async function isDamwhaPid(pid: number): Promise<boolean> {
-  const out = await run('ps', ['-o', 'comm=', '-p', String(pid)]);
-  return out !== null && out.includes('Damwha');
-}
-
-export async function anyDamwhaRunning(): Promise<boolean> {
-  return (await run('pgrep', ['-x', 'Damwha'])) !== null;
+/**
+ * api.json이 아직 없을 때 앱이 막 뜨는 중인지 본다. 설치된 앱만 알아본다 — dev 앱은 CLI를 DAMWHA_API_URL로 붙이거나
+ * api.json이 생긴 뒤에 쓰면 되고, 그 사이는 not_running으로 읽혀도 된다.
+ */
+export async function anyDamwhaRunning(exec: Exec = run): Promise<boolean> {
+  const out = await exec('ps', ['-axo', 'pid=,args=']);
+  if (out === null) return false;
+  return out.split('\n').some((line) => isAppProcess(line.trim().replace(/^\d+\s+/, '')));
 }
 
 export async function fetchHealth(
