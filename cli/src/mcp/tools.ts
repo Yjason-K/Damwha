@@ -17,12 +17,15 @@ export interface McpDeps {
   makeClient(baseUrl: string): DamwhaClient;
   lang(): Promise<Lang>;
   stat(p: string): Promise<{ mtime: Date } | null>;
+  /** 확인 창 응답 대기 시간. 테스트에서만 줄인다. */
+  elicitTimeoutMs?: number;
 }
 
 /** 도구 안에서 던진 오류를 isError 결과로 바꿀 때 쓴다. */
 class ToolFailure extends Error {}
 
 const ok = (body: unknown): CallToolResult => ({ content: [{ type: 'text', text: JSON.stringify(body) }] });
+const note = (text: string): CallToolResult => ({ content: [{ type: 'text', text }] });
 const fail = (text: string): CallToolResult => ({ isError: true, content: [{ type: 'text', text }] });
 
 /**
@@ -362,7 +365,7 @@ export function registerCompleteLens(server: McpServer, deps: McpDeps): void {
     ({ lens_id }) =>
       runTool(deps, async (client, lang) => {
         const lens = await client.getLens(lens_id);
-        if (lens.completion_status === 'done') return { content: [{ type: 'text', text: msg(lang, 'alreadyDone') }] };
+        if (lens.completion_status === 'done') return note(msg(lang, 'alreadyDone'));
 
         const assignee = lens.assignee_speaker_id
           ? await client
@@ -370,20 +373,28 @@ export function registerCompleteLens(server: McpServer, deps: McpDeps): void {
               .then((all) => all.find((s) => s.id === lens.assignee_speaker_id)?.name ?? lens.assignee_speaker_id!)
               .catch(() => lens.assignee_speaker_id!)
           : '-';
-        const answer = await server.server.elicitInput(
-          {
-            message: msg(lang, 'completeConfirm', {
-              title: plainForPrompt(lens.meeting.title),
-              text: plainForPrompt(lens.text),
-              assignee: plainForPrompt(assignee),
-              due: lens.due_at ? plainForPrompt(lens.due_at.slice(0, 10)) : '-',
-            }),
-            requestedSchema: { type: 'object', properties: {} },
-          },
-          { timeout: ELICIT_TIMEOUT_MS },
-        );
-        // accept 외에는 전부 미완료로 둔다. 알 수 없는 action도 마찬가지다.
-        if (answer.action !== 'accept') return { content: [{ type: 'text', text: msg(lang, 'completeDeclined') }] };
+        let answer;
+        try {
+          answer = await server.server.elicitInput(
+            {
+              message: msg(lang, 'completeConfirm', {
+                title: plainForPrompt(lens.meeting.title),
+                text: plainForPrompt(lens.text),
+                assignee: plainForPrompt(assignee),
+                due: lens.due_at ? plainForPrompt(lens.due_at.slice(0, 10)) : '-',
+              }),
+              requestedSchema: { type: 'object', properties: {} },
+            },
+            { timeout: deps.elicitTimeoutMs ?? ELICIT_TIMEOUT_MS },
+          );
+        } catch (e) {
+          // 시간 초과·전송 오류는 API 문제가 아니다. runTool의 일반 분기로 보내면 원인이 가려진다.
+          const reason = e instanceof Error ? e.message : String(e);
+          return fail(msg(lang, 'completeFailed', { reason: stripControl(reason.split('\n')[0]) }));
+        }
+        // accept 외에는 전부 미완료로 둔다. 이유는 에이전트가 읽을 수 있게 구분해 돌려준다 (spec §2.3).
+        if (answer.action === 'decline') return note(msg(lang, 'completeDeclined'));
+        if (answer.action !== 'accept') return note(msg(lang, 'completeCancelled'));
 
         const done = await client.completeLens(lens_id);
         return ok({ id: done.id, completion_status: done.completion_status });

@@ -27,20 +27,22 @@ const lens = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-type Reply = { action: 'accept' | 'decline' | 'cancel' } | Error;
+type Reply = { action: 'accept' | 'decline' | 'cancel' } | Error | 'hang';
 
-async function setup(fake: Fake, reply: Reply | null) {
+async function setup(fake: Fake, reply: Reply | null, elicitTimeoutMs?: number) {
   const server = createMcpServer({
     connect: async () => ({ kind: 'ok', baseUrl: 'http://h/api' }),
     makeClient: () => fake as unknown as DamwhaClient,
     lang: async () => 'en',
     stat: async () => null,
+    elicitTimeoutMs,
   });
   const client = new Client({ name: 't', version: '0' }, { capabilities: reply ? { elicitation: {} } : {} });
   const asked: any[] = [];
   if (reply) {
     client.setRequestHandler(ElicitRequestSchema, async (req) => {
       asked.push(req.params);
+      if (reply === 'hang') return new Promise<never>(() => {});
       if (reply instanceof Error) throw reply;
       return reply;
     });
@@ -77,16 +79,30 @@ describe('complete_lens', () => {
   it('cancel does not complete', async () => {
     const completeLens = vi.fn();
     const { client } = await setup({ getLens: async () => lens(), completeLens }, { action: 'cancel' });
-    await call(client);
+    const r: any = await call(client);
     expect(completeLens).not.toHaveBeenCalled();
+    expect(r.content[0].text).toBe(MESSAGES.en.completeCancelled);
   });
 
-  it('elicitation failure does not complete and is an error', async () => {
+  it('elicitation failure does not complete, is an error naming the reason (not the API)', async () => {
     const completeLens = vi.fn();
     const { client } = await setup({ getLens: async () => lens(), completeLens }, new Error('boom'));
-    const r = await call(client);
+    const r: any = await call(client);
     expect(r.isError).toBe(true);
     expect(completeLens).not.toHaveBeenCalled();
+    expect(r.content[0].text).toContain('boom');
+    expect(r.content[0].text).toMatch(/^Could not get confirmation/);
+    expect(r.content[0].text).not.toMatch(/Damwha API/);
+  });
+
+  it('elicitation timeout does not complete and says confirmation failed', async () => {
+    const completeLens = vi.fn();
+    const { client } = await setup({ getLens: async () => lens(), completeLens }, 'hang', 50);
+    const r: any = await call(client);
+    expect(r.isError).toBe(true);
+    expect(completeLens).not.toHaveBeenCalled();
+    expect(r.content[0].text).toMatch(/^Could not get confirmation/);
+    expect(r.content[0].text).not.toMatch(/Damwha API/);
   });
 
   it('already done: no elicitation, no completion', async () => {
