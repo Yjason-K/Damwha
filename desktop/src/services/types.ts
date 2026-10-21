@@ -95,6 +95,8 @@ export interface LaunchResult {
   owned: boolean;
   /** api만 채운다 — 렌더러가 붙을 주소. */
   origin?: string;
+  /** api만 채운다 — 이 기동의 nonce. api.json에 실리고 API가 /api/health로 되돌려 준다. */
+  instance?: string;
 }
 
 export type ExternalState =

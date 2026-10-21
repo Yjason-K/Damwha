@@ -20,7 +20,28 @@ describe('health', () => {
   it('GET /health → 200 with a live DB probe', async () => {
     const res = await request(app.getHttpServer()).get('/health');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: 'ok', db: 'ok' });
+    expect(res.body).toEqual({ status: 'ok', db: 'ok', instance: null });
+  });
+
+  // 요청마다 loadEnv()를 읽으므로 같은 앱에서 env만 바꿔 확인한다.
+  describe('instance nonce', () => {
+    const saved = process.env.DAMWHA_INSTANCE;
+    afterEach(() => {
+      if (saved === undefined) delete process.env.DAMWHA_INSTANCE;
+      else process.env.DAMWHA_INSTANCE = saved;
+    });
+
+    it('returns instance from DAMWHA_INSTANCE', async () => {
+      process.env.DAMWHA_INSTANCE = 'abc';
+      const res = await request(app.getHttpServer()).get('/health');
+      expect(res.body.instance).toBe('abc');
+    });
+
+    it('returns null instance when unset', async () => {
+      delete process.env.DAMWHA_INSTANCE;
+      const res = await request(app.getHttpServer()).get('/health');
+      expect(res.body.instance).toBeNull();
+    });
   });
 });
 

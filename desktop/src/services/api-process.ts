@@ -27,6 +27,10 @@ export interface LaunchOptions {
   spawnFn?: SpawnFn;
   /** launchPackaged의 fork. 없으면 electron utilityProcess.fork — 테스트가 자식이 받는 env를 본다. */
   forkFn?: ForkFn;
+  /** 이 기동의 nonce — API가 /api/health에 되돌려 준다 (api-file.ts). */
+  instance: string;
+  /** 번들된 `damwha` 런처. 없으면(dev에서 빌드 안 함) null. */
+  cliLauncher: string | null;
 }
 
 export type ApiLaunchMode = "dev" | "packaged";
@@ -50,8 +54,14 @@ export function apiChildEnv(
   env: ApiEnv,
   mode: ApiLaunchMode,
   inherited: Record<string, string | undefined> = process.env,
+  extra: { instance: string; cliLauncher: string | null },
 ): Record<string, string> {
   const out: Record<string, string> = { ...nodeChildEnv(env, inherited), HOST: "127.0.0.1" };
+  // CLI 연결(spec 2026-10-20 §2.5): 상속분은 버리고 이 기동의 값만 둔다. 런처가 없으면 be가 연동 API를 404로 닫는다.
+  delete out.DAMWHA_INSTANCE;
+  delete out.DAMWHA_CLI_LAUNCHER;
+  out.DAMWHA_INSTANCE = extra.instance;
+  if (extra.cliLauncher !== null) out.DAMWHA_CLI_LAUNCHER = extra.cliLauncher;
   delete out.ALLOWED_ORIGINS;
   delete out.ALLOWED_HOSTS;
   // 공유 서비스 주소(spec 2026-10-09 §2.7). packaged는 be의 기본값(운영 주소)을 쓴다 — 개발자 셸에서
@@ -124,7 +134,7 @@ export function launchPackaged(options: LaunchOptions): ProcessHandle {
     cwd: options.cwd,
     stdio: "pipe",
     // 상속 env·HF_TOKEN 제외·HOST 고정 — 그 이유는 apiChildEnv에 있다. launchDev와 같은 함수다.
-    env: apiChildEnv(options.env, "packaged"),
+    env: apiChildEnv(options.env, "packaged", process.env, options),
   });
   // utilityProcess.pid는 fork() 직후 undefined이고 'spawn' 이벤트에서야 채워진다
   // (Fix round 2 실측). 동기로 한 번만 잡아 두면 packaged 모드에서 이 handle의 pid가
@@ -201,7 +211,7 @@ export function launchDev(options: LaunchOptions): ProcessHandle {
     // 그룹을 못 찾고, pnpm만 죽어 nest가 만든 손자 API가 남는다.
     detached: true,
     // 상속 env·HF_TOKEN 제외·HOST 고정 — launchPackaged와 같은 함수다 (apiChildEnv).
-    env: apiChildEnv(options.env, "dev"),
+    env: apiChildEnv(options.env, "dev", process.env, options),
   });
   const pid = child.pid;
   child.stdout?.on("data", (b: Buffer) => sink.write(b, false));

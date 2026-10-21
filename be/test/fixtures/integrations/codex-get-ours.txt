@@ -1,0 +1,8 @@
+damwha
+  enabled: true
+  transport: stdio
+  command: /Users/test/.local/bin/damwha
+  args: mcp
+  cwd: -
+  env: -
+  remove: codex mcp remove damwha

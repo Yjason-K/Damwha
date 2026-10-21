@@ -9,12 +9,20 @@ export class ApiError extends Error {
   readonly statusCode: number;
   /** 서버/인터셉터가 붙이는 기계용 코드. 예: "DEMO_READ_ONLY" (demo-read-only.ts), "DISK_FULL" (아래). */
   readonly code?: string;
+  /** 오류 본문 전체(예: 연동 409의 `target`, 500의 `previous`). 화면이 code별로 필요한 필드만 읽는다. */
+  readonly details?: Readonly<Record<string, unknown>>;
 
-  constructor(statusCode: number, message: string, code?: string) {
+  constructor(
+    statusCode: number,
+    message: string,
+    code?: string,
+    details?: Readonly<Record<string, unknown>>,
+  ) {
     super(message);
     this.name = "ApiError";
     this.statusCode = statusCode;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -100,7 +108,9 @@ apiClient.interceptors.response.use(
           : "서버에 연결할 수 없어요.";
     // 서버가 붙인 기계용 code는 항상 싣는다 — 화면이 code로 문구를 고른다(모델 받기·삭제 409 등).
     const code = typeof data?.code === "string" ? data.code : undefined;
-    return Promise.reject(new ApiError(status, message, code));
+    const details =
+      data && typeof data === "object" ? (data as Record<string, unknown>) : undefined;
+    return Promise.reject(new ApiError(status, message, code, details));
   },
 );
 

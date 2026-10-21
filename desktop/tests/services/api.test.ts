@@ -1,4 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
+
+// 스폰에 닿는 케이스가 이 파일에는 없었다 — launch가 자식에게 건네는 값만 본다.
+const { launched } = vi.hoisted(() => ({ launched: [] as Array<{ instance: string; cliLauncher: string | null }> }));
+vi.mock("../../src/services/api-process", () => ({
+  launchDev: (o: { instance: string; cliLauncher: string | null }) => {
+    launched.push({ instance: o.instance, cliLauncher: o.cliLauncher });
+    return {};
+  },
+  launchPackaged: () => ({}),
+}));
 import {
   MIGRATION_CHECK_SKIPPED_LOG,
   apiSpec,
@@ -345,5 +355,40 @@ describe("apiSpec — migration gate (Phase 3)", () => {
     const withoutGate = await judgeAfterProbe(handle, "ready", 3000, baseDeps());
     expect(withoutGate).toMatchObject({ kind: "failed", detail: expect.stringMatching(/적용되지 않은 마이그레이션이 3개/) });
     expect((withoutGate as { recovery?: string }).recovery).toBeUndefined();
+  });
+});
+
+describe("apiSpec — instance nonce", () => {
+  const ctx = (): LaunchContext => ({
+    repoRoot: "/r",
+    userData: "/u",
+    packaged: false,
+    databaseMode: "embedded",
+    env: { PORT: "3000" },
+    bins: { python: "/p", ffmpeg: "/f", ffprobe: "/fp" },
+    diarizationModelDir: "/m",
+    runId: "desktop-test",
+    searchDirs: [],
+    logFile: () => "/u/logs/api.log",
+    signal: new AbortController().signal,
+  });
+
+  it("each launch gets a new instance, and the result carries the one the child got", async () => {
+    launched.length = 0;
+    const spec = apiSpec({ ...fakeDeps(), cliLauncher: () => "/x/cli/damwha" });
+    const a = await spec.launch(ctx());
+    const b = await spec.launch(ctx());
+    expect(a.instance).toBeTruthy();
+    expect(b.instance).not.toBe(a.instance);
+    expect(launched).toEqual([
+      { instance: a.instance, cliLauncher: "/x/cli/damwha" },
+      { instance: b.instance, cliLauncher: "/x/cli/damwha" },
+    ]);
+  });
+
+  it("passes no launcher when the app has none", async () => {
+    launched.length = 0;
+    await apiSpec(fakeDeps()).launch(ctx());
+    expect(launched[0].cliLauncher).toBeNull();
   });
 });

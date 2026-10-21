@@ -1,6 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { Queryable } from '../jobs/jobs.types';
 import { meetingTagsJson } from '../tags/tags.repository';
+import type { StageInputs } from './meeting-stages';
+
+export interface TranscriptRow {
+  id: string; start_ms: number; end_ms: number;
+  speaker_id: string | null; speaker_name: string | null; text: string | null;
+}
 
 export interface MeetingRow {
   id: string; title: string | null; original_filename: string | null;
@@ -38,6 +44,48 @@ export interface ClusterRow {
   suggested_speaker_id: string | null; suggested_speaker_name: string | null;
   suggested_similarity: number | null;
 }
+
+const LIST_SELECT = `SELECT m.*, ${meetingTagsJson('m')} AS tags,
+              (SELECT count(*)::int FROM meeting_cluster c
+                WHERE c.meeting_id = m.id AND c.processing_version = m.processing_version
+              ) AS participant_count,
+              (SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                        'id', p.id, 'name', p.name, 'provisional', p.provisional)
+                        ORDER BY p.first_label), '[]'::jsonb)
+                 FROM (SELECT s.id, s.name, s.enrollment_status = 'provisional' AS provisional,
+                              min(c.diar_label) AS first_label
+                         FROM meeting_cluster c JOIN speaker s ON s.id = c.resolved_speaker_id
+                        WHERE c.meeting_id = m.id AND c.processing_version = m.processing_version
+                        GROUP BY s.id) p
+              ) AS participants,
+              (SELECT count(*)::int FROM lens_item li
+                WHERE li.meeting_id = m.id AND li.kind = 'decision' AND li.lifecycle_status = 'active'
+              ) AS decision_count,
+              (SELECT count(*)::int FROM lens_item li
+                WHERE li.meeting_id = m.id AND li.kind = 'action' AND li.lifecycle_status = 'active'
+              ) AS action_count,
+              (SELECT count(*)::int FROM saved_utterance su WHERE su.meeting_id = m.id) AS saved_count,
+              EXISTS (
+                SELECT 1 FROM meeting_cluster c JOIN speaker s ON s.id = c.resolved_speaker_id
+                 WHERE c.meeting_id = m.id AND c.processing_version = m.processing_version AND s.is_me
+              ) AS has_me,
+              (SELECT li.text FROM lens_item li
+                WHERE li.meeting_id = m.id AND li.kind = 'decision' AND li.lifecycle_status = 'active'
+                ORDER BY li.created_at, li.id LIMIT 1
+              ) AS preview_decision,
+              (SELECT jsonb_build_object(
+                        'text', li.text,
+                        'assignee_name', s.name,
+                        'due_at', to_char(li.due_at, 'YYYY-MM-DD'),
+                        'done', li.completion_status = 'done')
+                 FROM lens_item li LEFT JOIN speaker s ON s.id = li.assignee_speaker_id
+                WHERE li.meeting_id = m.id AND li.kind = 'action' AND li.lifecycle_status = 'active'
+                ORDER BY (li.completion_status = 'done'), li.created_at, li.id LIMIT 1
+              ) AS preview_action,
+              (SELECT ms.segments -> 0 -> 'bullets' ->> 0 FROM meeting_summary ms
+                WHERE ms.meeting_id = m.id AND ms.status = 'done'
+              ) AS preview_summary
+         FROM meeting m`;
 
 @Injectable()
 export class MeetingsRepository {
@@ -109,50 +157,47 @@ export class MeetingsRepository {
   // 클러스터는 재처리마다 버전이 갈리므로 현재 processing_version만 센다(has_me도 같다).
   // 렌즈는 활성만 센다 — archived는 재추출이 내린 항목이다. 할 일 미리보기는 open을 먼저 고른다.
   async list(exec: Queryable): Promise<MeetingListRow[]> {
-    const { rows } = await exec.query<MeetingListRow>(
-      `SELECT m.*, ${meetingTagsJson('m')} AS tags,
-              (SELECT count(*)::int FROM meeting_cluster c
-                WHERE c.meeting_id = m.id AND c.processing_version = m.processing_version
-              ) AS participant_count,
-              (SELECT COALESCE(jsonb_agg(jsonb_build_object(
-                        'id', p.id, 'name', p.name, 'provisional', p.provisional)
-                        ORDER BY p.first_label), '[]'::jsonb)
-                 FROM (SELECT s.id, s.name, s.enrollment_status = 'provisional' AS provisional,
-                              min(c.diar_label) AS first_label
-                         FROM meeting_cluster c JOIN speaker s ON s.id = c.resolved_speaker_id
-                        WHERE c.meeting_id = m.id AND c.processing_version = m.processing_version
-                        GROUP BY s.id) p
-              ) AS participants,
-              (SELECT count(*)::int FROM lens_item li
-                WHERE li.meeting_id = m.id AND li.kind = 'decision' AND li.lifecycle_status = 'active'
-              ) AS decision_count,
-              (SELECT count(*)::int FROM lens_item li
-                WHERE li.meeting_id = m.id AND li.kind = 'action' AND li.lifecycle_status = 'active'
-              ) AS action_count,
-              (SELECT count(*)::int FROM saved_utterance su WHERE su.meeting_id = m.id) AS saved_count,
-              EXISTS (
-                SELECT 1 FROM meeting_cluster c JOIN speaker s ON s.id = c.resolved_speaker_id
-                 WHERE c.meeting_id = m.id AND c.processing_version = m.processing_version AND s.is_me
-              ) AS has_me,
-              (SELECT li.text FROM lens_item li
-                WHERE li.meeting_id = m.id AND li.kind = 'decision' AND li.lifecycle_status = 'active'
-                ORDER BY li.created_at, li.id LIMIT 1
-              ) AS preview_decision,
-              (SELECT jsonb_build_object(
-                        'text', li.text,
-                        'assignee_name', s.name,
-                        'due_at', to_char(li.due_at, 'YYYY-MM-DD'),
-                        'done', li.completion_status = 'done')
-                 FROM lens_item li LEFT JOIN speaker s ON s.id = li.assignee_speaker_id
-                WHERE li.meeting_id = m.id AND li.kind = 'action' AND li.lifecycle_status = 'active'
-                ORDER BY (li.completion_status = 'done'), li.created_at, li.id LIMIT 1
-              ) AS preview_action,
-              (SELECT ms.segments -> 0 -> 'bullets' ->> 0 FROM meeting_summary ms
-                WHERE ms.meeting_id = m.id AND ms.status = 'done'
-              ) AS preview_summary
-         FROM meeting m ORDER BY m.created_at DESC`,
-    );
+    const { rows } = await exec.query<MeetingListRow>(`${LIST_SELECT} ORDER BY m.created_at DESC`);
     return rows;
+  }
+
+  // keyset 페이지 — 정렬키는 COALESCE(recorded_at, created_at) DESC, id DESC. sort_at은 ::text로 읽어
+  // 마이크로초를 보존한다(JS Date를 거치면 ms로 잘려 같은 시각 행이 페이지 경계에서 겹치거나 빠진다).
+  // 한 행 더 읽어 다음 페이지가 있는지 판정한다.
+  async listPage(
+    exec: Queryable, limit: number, after: { sort_at: string; id: string } | null,
+  ): Promise<{ rows: MeetingListRow[]; next: { sort_at: string; id: string } | null }> {
+    const params: unknown[] = [limit + 1];
+    let where = '';
+    if (after) {
+      params.push(after.sort_at, after.id);
+      where = `WHERE (COALESCE(m.recorded_at, m.created_at), m.id) < ($2::timestamptz, $3::text)`;
+    }
+    const { rows } = await exec.query<MeetingListRow & { sort_at: string }>(
+      `${LIST_SELECT.replace('SELECT m.*,', 'SELECT m.*, COALESCE(m.recorded_at, m.created_at)::text AS sort_at,')}
+       ${where} ORDER BY COALESCE(m.recorded_at, m.created_at) DESC, m.id DESC LIMIT $1`,
+      params,
+    );
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    const last = page[page.length - 1];
+    const next = hasMore && last ? { sort_at: last.sort_at, id: last.id } : null;
+    return { rows: page.map(({ sort_at: _s, ...r }) => r as MeetingListRow), next };
+  }
+
+  // status.stages의 입력 — summary·lens 모두 현재 processing_version 것만 본다(구 버전 행은 무시).
+  async findStageInputs(exec: Queryable, id: string): Promise<StageInputs | null> {
+    const { rows } = await exec.query<StageInputs>(
+      `SELECT m.status AS meeting_status,
+              (SELECT ms.status FROM meeting_summary ms
+                WHERE ms.meeting_id = m.id AND ms.processing_version = m.processing_version) AS summary_status,
+              (SELECT ler.status FROM lens_extraction_run ler
+                WHERE ler.meeting_id = m.id AND ler.processing_version = m.processing_version
+                ORDER BY ler.created_at DESC, ler.id DESC LIMIT 1) AS lens_status
+         FROM meeting m WHERE m.id = $1`,
+      [id],
+    );
+    return rows[0] ?? null;
   }
   async findById(exec: Queryable, id: string): Promise<MeetingRow | null> {
     const { rows } = await exec.query<MeetingRow>(`SELECT * FROM meeting WHERE id=$1`, [id]);
@@ -169,6 +214,29 @@ export class MeetingsRepository {
       [meetingId],
     );
     return rows;
+  }
+  // 전사 페이지 — findUtterances와 같은 조인·processing_version 조건. 전체 목록을 한 번에
+  // 내리지 않으려고 COUNT와 LIMIT/OFFSET을 따로 묻는다 (MCP get_transcript가 쓴다).
+  async findUtterancePage(
+    exec: Queryable, meetingId: string, offset: number, limit: number,
+  ): Promise<{ total: number; rows: TranscriptRow[] }> {
+    const { rows: [count] } = await exec.query<{ total: number }>(
+      `SELECT COUNT(*)::int AS total
+       FROM utterance u JOIN meeting m ON m.id = u.meeting_id
+       WHERE u.meeting_id=$1 AND u.processing_version=m.processing_version`,
+      [meetingId],
+    );
+    const { rows } = await exec.query<TranscriptRow>(
+      `SELECT u.id, u.start_ms, u.end_ms, u.speaker_id, s.name AS speaker_name, u.text
+       FROM utterance u
+       JOIN meeting m ON m.id = u.meeting_id
+       LEFT JOIN speaker s ON s.id = u.speaker_id
+       WHERE u.meeting_id=$1 AND u.processing_version=m.processing_version
+       ORDER BY u.order_index ASC
+       LIMIT $2 OFFSET $3`,
+      [meetingId, limit, offset],
+    );
+    return { total: count.total, rows };
   }
   // Clusters for the meeting at its CURRENT processing_version (older reprocess
   // rounds are hidden). LEFT JOIN speaker so unresolved clusters yield null

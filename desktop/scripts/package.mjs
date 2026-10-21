@@ -48,6 +48,10 @@ run("bash", [path.join("scripts", "build-ffmpeg.sh")], desktop);
 // desktop/build/models. 체크섬이 committed models-checksums.txt와 맞지 않으면 스테이징하지
 // 않고 멈춘다 (§4.5 신뢰 경계). 캐시가 있으면 스테이징만 하고 끝난다.
 run("bash", [path.join("scripts", "build-models.sh")], desktop);
+// CLI(damwha 런처 + damwha.cjs)도 같은 자리에 스테이징한다 — desktop/build/cli. 서명 대상이 아니다
+// (셸 스크립트와 JS 한 파일이라 Mach-O가 없고, .app 봉인에 들어간다). 앱의 Electron을
+// ELECTRON_RUN_AS_NODE=1로 돌리는 런처라 별도 Node가 필요 없다 (spec 2026-10-20 §2.6).
+run("bash", [path.join("scripts", "build-cli.sh")], desktop);
 
 // desktop 자신을 **먼저, 깨끗하게** 컴파일한다. electron-builder는 package.json의 main(dist/main.js)과
 // dist/ 전체를 그대로 싣는데, 루트 `pnpm build`에는 desktop의 컴파일이 없다(desktop에는 build 스크립트가

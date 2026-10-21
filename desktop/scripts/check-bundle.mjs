@@ -541,6 +541,43 @@ for (const { hash, rel } of sums) {
 check("bundled diarization model matches models-checksums.txt", badModel.length === 0, badModel.join(", "));
 check("bundled diarization model carries NOTICE.txt", fs.existsSync(path.join(modelDir, "NOTICE.txt")));
 
+// 24. 번들에 실린 CLI (spec 2026-10-20 §2.6). Resources/cli/{damwha, damwha.cjs}가 있고, 런처가 번들의
+// Electron을 ELECTRON_RUN_AS_NODE=1로 돌려 --version을 끝까지 답한다. ~/.local/bin/damwha 링크가
+// 이 런처를 가리키므로, 여기서 깨지면 사용자의 터미널 명령이 통째로 죽는다.
+const cliDirBundle = path.join(contents, "Resources", "cli");
+const cliLauncher = path.join(cliDirBundle, "damwha");
+const cliCjs = path.join(cliDirBundle, "damwha.cjs");
+check("cli: launcher and damwha.cjs are in Resources/cli", fs.existsSync(cliLauncher) && fs.existsSync(cliCjs));
+check(
+  "cli: launcher is executable",
+  fs.existsSync(cliLauncher) && (fs.statSync(cliLauncher).mode & 0o111) === 0o111,
+);
+const launcherText = fs.existsSync(cliLauncher) ? fs.readFileSync(cliLauncher, "utf8") : "";
+const buildMachineHome = process.env.HOME ?? "";
+check(
+  "cli: launcher hardcodes no absolute path of the build machine",
+  launcherText !== "" && !launcherText.includes(repo) && !launcherText.includes(desktop)
+    && (buildMachineHome === "" || !launcherText.includes(buildMachineHome)),
+);
+// 번들 경로는 런처 자신의 위치에서 상대로 잡아야 한다 — 절대 경로 리터럴은 `/bin/sh` 셔뱅과 `/*)` 패턴뿐이다.
+const strayAbs = [...launcherText.matchAll(/(?<![\w$.)"])\/(?:Users|Applications|opt|usr|private|var|tmp)\/\S*/g)].map((m) => m[0]);
+check("cli: launcher names no absolute path outside Resources/cli", strayAbs.length === 0, strayAbs.join(", "));
+const cjsText = fs.existsSync(cliCjs) ? fs.readFileSync(cliCjs, "utf8") : "";
+check(
+  "cli: damwha.cjs carries no build-machine home or repo path",
+  cjsText !== "" && !cjsText.includes(repo) && (buildMachineHome === "" || !cjsText.includes(buildMachineHome)),
+);
+const cliRun = spawnSync(path.join(contents, "MacOS", "Damwha"), [cliCjs, "--version"], {
+  encoding: "utf8",
+  env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+  timeout: 20_000,
+});
+check(
+  "cli: ELECTRON_RUN_AS_NODE=1 Damwha damwha.cjs --version exits 0 and prints a version",
+  cliRun.status === 0 && /\d+\.\d+\.\d+/.test(cliRun.stdout ?? ""),
+  `rc=${cliRun.status} out=${(cliRun.stdout ?? "").trim()} err=${(cliRun.stderr ?? "").trim().slice(0, 200)}`,
+);
+
 if (failures.length > 0) {
   console.error(`\n${failures.length} bundle hygiene check(s) failed.`);
   process.exit(1);

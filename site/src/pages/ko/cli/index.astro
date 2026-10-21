@@ -1,0 +1,8 @@
+---
+import Base from "../../../layouts/Base.astro";
+import CliDocs from "../../../components/CliDocs.astro";
+import { getDictionary } from "../../../i18n";
+import { getLatestRelease } from "../../../lib/release";
+const release = await getLatestRelease();
+---
+<Base lang="ko" release={release} path="cli/" meta={getDictionary("ko").cliPage.meta}><CliDocs lang="ko" /></Base>

@@ -9,9 +9,9 @@ Electron main이 네 서비스를 감독한다 — 번들 PostgreSQL, NestJS API
 ## 명령
 
 ```bash
-pnpm desktop:dev     # build-postgres.sh·build-python.sh·build-ffmpeg.sh·build-models.sh(넷 다 캐시) → tsc → electron .
+pnpm desktop:dev     # build-postgres.sh·build-python.sh·build-ffmpeg.sh·build-models.sh(넷 다 캐시)·build-cli.sh → tsc → electron .
 pnpm desktop:build   # 위 넷 → tsc → be·fe build → pnpm deploy → electron-builder
-                     #   → hardened runtime 서명(plist 둘) → check-bundle (40건, 2026-09-21)
+                     #   → hardened runtime 서명(plist 둘) → check-bundle
 bash desktop/scripts/build-postgres.sh [--fresh]               # 내장 PG
 bash desktop/scripts/build-python.sh   [--fresh|--print-key]   # 내장 Python 3.12 + worker 층 (1.3 GB)
 bash desktop/scripts/build-ffmpeg.sh   [--fresh]               # 내장 ffmpeg·ffprobe
@@ -28,7 +28,7 @@ bash desktop/scripts/build-icon.sh                             # build-resources
 
 루트 `pnpm build`·`pnpm dev`는 이 넷을 빌드하지 않고 Electron을 띄우지 않는다.
 
-## 번들 — `Resources/` 아래 다섯
+## 번들 — `Resources/` 아래 여섯
 
 `desktop/build/<이름>`에 스테이징한 것을 `electron-builder.yml`의 `extraResources: - from: build`가
 그대로 `Contents/Resources/<이름>`으로 싣는다. dev는 `desktop/build/`를 같은 자리로 본다 (Phase 4 §6.1).
@@ -40,6 +40,18 @@ bash desktop/scripts/build-icon.sh                             # build-resources
 | `python/` | `build-python.sh` — 인터프리터·의존성 층(`rt-<키>`) 위에 `damwha_worker` 층(`wk-<키>`) |
 | `ffmpeg/` | `build-ffmpeg.sh` |
 | `models/` | `build-models.sh` — pyannote community-1 (CC-BY-4.0). 서명 대상 아님, `.app` 봉인에 들어간다 |
+| `cli/` | `build-cli.sh` — `damwha`(런처, 원본 `scripts/cli-launcher.sh`)와 `damwha.cjs`(esbuild 번들). 서명 대상 아님 |
+
+**`cli/`는 번들의 Electron 바이너리에 기댄다.** 런처가 `ELECTRON_RUN_AS_NODE=1 Contents/MacOS/Damwha damwha.cjs …`로
+돌리므로 별도 Node가 필요 없다 — 그래서 Electron 퓨즈의 `RunAsNode`를 끄면 CLI가 죽는다(지금은 켜 둔
+기본값이고 `check-bundle` 24번이 `--version` 실행으로 잡는다). `~/.local/bin/damwha`는 이 런처를
+가리키는 심볼릭 링크이고, 런처는 링크를 `readlink` 루프로 스스로 끝까지 따라간다(macOS에 `readlink -f`가
+없다). 번들 밖(dev `desktop/build/cli`)에서는 PATH의 `node`로 떨어진다. spec 2026-10-20 §2.6.
+
+**`api.json`.** API가 준비되면 `<userData>/api.json`(`{port, app_pid, instance, version}`)을 쓰고 정지·종료 중에도
+확실히 지운다(`services/api-file.ts`). `damwha` CLI가 앱의 API를 찾는 유일한 길이고, `instance`는 기동마다 새
+nonce라 `/health`와 맞대어 옛 파일이 새 API를 가리키는 일을 막는다. 앱은 API 프로세스에 `DAMWHA_CLI_LAUNCHER`(런처
+경로)를 넘겨 `/api/integrations`를 켠다 — 없으면 설정 화면의 CLI · MCP 섹션이 없다.
 
 서명은 electron-builder가 아니라 `package.mjs`가 그 뒤에 한다(`identity: null`이 자동 탐색을 끈다).
 **plist 둘로 갈린다** — `build-resources/entitlements.python.plist`(키 둘)는 `Resources/python`의
@@ -249,20 +261,14 @@ dev와 packaged가 같은 클러스터라 버려도 되는 "dev 클러스터"가
 
 ## 재시도 — 0 · 30초 · 90초 · 210초 · 450초
 
-worker가 TRANSIENT 실패를 requeue할 때 `next_attempt_at = now() + least(30 * 2^(attempts − interruptions − 1), 900)초`다
-(`be/worker/damwha_worker/db/queue.py`). `job.max_attempts` 컬럼 기본값은 **5**(마이그레이션 `025`)라
-claim 직후 실패를 기준으로 시도 시각이 0 · 30초 · 90초 · 210초 · 450초가 된다 — **4회차가 3.5분에
-닿으므로 3분짜리 끊김(모델 다운로드 등)을 사람 개입 없이 같은 job이 넘긴다.**
+백오프 공식·두 한도(재시도 5, 중단 3)·회수 규칙의 원본은 [`be/CLAUDE.md`](../be/CLAUDE.md)의 "Failure classification and retry timing"과 "Job queue"다 — 여기에 공식을 다시 적지 않는다. 앱 쪽에서 알아 둘 것: **4회차가 3.5분에 닿으므로 3분짜리 끊김(모델 다운로드 등)을 사람 개입 없이 같은 job이 넘긴다.**
 
 - 앱이 보기에 그 구간은 `queued`다. 화면은 "재시도 대기 · N/M회차 · 약 M분 뒤"와 마지막 오류 코드로
   말한다 — 그 문구가 없으면 정상 백오프와 worker 미기동·DB 장애가 한 얼굴이 된다.
 - 마이그레이션 `025` **전에 만들어진 job은 그대로 `max_attempts=3`**이다. 새 기본값은 그 뒤에
   enqueue된 job에만 붙는다.
 - `live_session`은 `maxAttempts: 1`을 명시해 이 기본값을 타지 않는다. 라이브 오류는 전부 PERMANENT다.
-- **강제 종료는 재시도 예산을 먹지 않는다** (Phase 6b-3). 재시도 판정은 `attempts − interruptions`
-  (재시도 예산 소비량 — 성공한 실행도 1이다) `< max_attempts`이고, 회수는 `interruptions`만 올린다.
-  두 한도(재시도 5, 중단 3)는 독립이고 먼저 닿는 쪽이 job을 끝낸다. 30분 reaper가 보는 것은 "30분간
-  heartbeat 성공 없음"이다 — 긴 job은 heartbeat가 살아 있는 한 회수되지 않는다.
+- **강제 종료는 재시도 예산을 먹지 않는다** (Phase 6b-3) — 회수는 `interruptions`만 올린다. 30분 reaper가 보는 것은 "30분간 heartbeat 성공 없음"이다 — 긴 job은 heartbeat가 살아 있는 한 회수되지 않는다.
 - 화면의 재시도 문구는 stage보다 앞선다 — `requeue`가 stage를 지우지 않아서다. `· 중단 N회`는
   중단이 있을 때만. "마지막 오류"는 `requeue`가 쓰는 `job.error`다(6b-3 전에는 비어 있었다).
 - `026` 전에 만들어진 job은 `interruptions=0`이다 — 그 전에 크래시로 먹은 시도는 예산 소비로 남는다.
