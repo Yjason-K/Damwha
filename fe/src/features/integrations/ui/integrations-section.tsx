@@ -117,7 +117,7 @@ export function IntegrationsSection() {
             <div className="flex items-center gap-2">
               <code
                 tabIndex={0}
-                aria-label="PATH"
+                aria-label={t("pathLine")}
                 className={`min-w-0 flex-1 overflow-x-auto whitespace-nowrap rounded-sm font-mono text-sm text-foreground ${SCROLL_FOCUS}`}
               >
                 {PATH_LINE}
@@ -134,12 +134,13 @@ export function IntegrationsSection() {
   );
 }
 
-function Row({ name, status, children }: { name: string; status: string; children: React.ReactNode }) {
+/** `on`이면 상태 줄을 성공색으로 칠해 켜진 연결이 꺼진 것과 한눈에 갈리게 한다. */
+function Row({ name, status, on = false, children }: { name: string; status: string; on?: boolean; children: React.ReactNode }) {
   return (
     <li className="flex flex-wrap items-center gap-3 py-3 first:pt-0 last:pb-0">
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="text-sm font-medium text-foreground">{name}</span>
-        <span className="break-words text-xs text-[color:var(--text-muted)]">{status}</span>
+        <span className={`break-words text-xs ${on ? "text-success-text" : "text-[color:var(--text-muted)]"}`}>{status}</span>
       </div>
       <div className="flex items-center gap-2">{children}</div>
     </li>
@@ -157,18 +158,18 @@ function CliRow({ view }: { view: IntegrationsView }) {
     link.kind === "absent" || link.kind === "current"
       ? t(`cli.state.${link.kind}`, { path })
       : t(`cli.state.${link.kind}`, { target: link.target });
-  const run = (m: typeof install | typeof remove, doneKey: "toast.done" | "toast.removed") =>
+  const run = (m: typeof install | typeof remove, doneKey: "toast.installed" | "toast.removed") =>
     m.mutate(undefined, { onSuccess: () => toast({ variant: "success", title: t(doneKey) }), onError: report });
 
   return (
-    <Row name={t("cli.title")} status={status}>
+    <Row name={t("cli.title")} status={status} on={link.kind === "current"}>
       {(link.kind === "absent" || link.kind === "other_damwha" || link.kind === "foreign") && (
         <Button
           size="sm"
           variant="secondary"
           disabled={busy || link.kind === "foreign"}
           loading={install.isPending}
-          onClick={() => run(install, "toast.done")}
+          onClick={() => run(install, "toast.installed")}
         >
           {link.kind === "other_damwha" ? t("cli.replace") : t("cli.install")}
         </Button>
@@ -195,7 +196,7 @@ function ClientRow({ id, state }: { id: ClientId; state: ClientState }) {
     install.mutate(
       { replace },
       {
-        onSuccess: () => toast({ variant: "success", title: t("toast.done") }),
+        onSuccess: () => toast({ variant: "success", title: t("toast.connected") }),
         onError: report,
         onSettled: () => setConfirming(false),
       },
@@ -221,7 +222,7 @@ function ClientRow({ id, state }: { id: ClientId; state: ClientState }) {
         : t(reg === "ours" ? "client.ours" : "client.none");
 
   return (
-    <Row name={name} status={status}>
+    <Row name={name} status={status} on={reg === "ours"}>
       {reg === "ours" ? (
         <Button
           size="sm"
@@ -231,7 +232,7 @@ function ClientRow({ id, state }: { id: ClientId; state: ClientState }) {
           loading={remove.isPending}
           onClick={() =>
             remove.mutate(undefined, {
-              onSuccess: () => toast({ variant: "success", title: t("toast.removed") }),
+              onSuccess: () => toast({ variant: "success", title: t("toast.disconnected") }),
               onError: report,
             })
           }
@@ -300,8 +301,13 @@ function ManualInstall({ manual }: { manual: IntegrationsView["manual"] }) {
             <div key={key} className="flex flex-col gap-1.5">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs font-medium text-[color:var(--text-secondary)]">{label}</span>
-                <Button size="sm" variant="secondary" onClick={() => void copy(manual[key])}>
-                  {t("manual.copy", { label })}
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  aria-label={t("manual.copyLabel", { label })}
+                  onClick={() => void copy(manual[key])}
+                >
+                  {t("manual.copy")}
                 </Button>
               </div>
               <pre

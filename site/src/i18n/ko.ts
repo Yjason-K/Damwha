@@ -108,22 +108,22 @@ export const ko = {
   cliPage: {
     nav: "CLI · MCP",
     meta: {
-      title: "담화 CLI · MCP — 터미널과 코딩 에이전트에서 대화 쓰기",
+      title: "담화 CLI · MCP — 터미널과 코딩 에이전트에서 담화 쓰기",
       description:
         "damwha 명령을 설치하고 Claude Code나 Codex를 MCP로 연결하면, 내 Mac의 담화에서 회의를 검색하고 전사를 읽고 할 일을 뽑아 볼 수 있어요.",
     },
     eyebrow: "CLI · MCP",
     title: "터미널과 코딩 에이전트에서 담화 쓰기",
-    lede: "damwha 명령과 stdio MCP 서버가 앱에 들어 있어요. 내 Mac에서 돌고 있는 담화 앱과 이야기하므로, Claude Code·Codex·셸에서 대화를 검색하고 전사를 읽고 할 일을 뽑아 볼 수 있어요.",
+    lede: "damwha 명령과 stdio MCP 서버가 앱에 들어 있어요. 내 Mac에서 돌고 있는 담화 앱에 연결해서 Claude Code·Codex·셸에서 대화를 검색하고 전사를 읽고 할 일을 뽑아 볼 수 있어요.",
     needsApp: "담화 앱이 실행 중이어야 해요. 명령과 MCP 서버는 앱에서 데이터를 읽어요. 앱이 꺼져 있으면 종료 코드 2로 끝나고 앱을 실행하라고 알려 줘요.",
     install: {
       title: "설치",
-      oneClickTitle: "원클릭",
-      oneClickBody: "앱의 설정 › CLI · MCP에서 \u201c명령 설치\u201d를 누르면 ~/.local/bin/damwha가 앱을 가리키는 링크로 만들어지고, \u201c연결\u201d을 누르면 Claude Code나 Codex에 MCP 서버가 등록돼요. ~/.local/bin이 PATH에 없으면 더할 줄을 이 섹션이 알려 줘요.",
+      oneClickTitle: "설정에서 설치",
+      oneClickBody: "앱의 설정 › CLI · MCP에서 \u201c명령 설치\u201d를 누르면 ~/.local/bin/damwha가 앱을 가리키는 링크로 만들어지고 \u201c연결\u201d을 누르면 Claude Code나 Codex에 MCP 서버가 등록돼요. ~/.local/bin이 PATH에 없으면 더할 줄을 이 섹션이 알려 줘요.",
       oneClickNote: "이 섹션은 데스크톱 앱에만 있어요. Docker나 데모에는 없어요.",
       manualTitle: "수동으로 설치",
-      manualBody: "직접 실행하고 싶다면 설정 화면이 보여 주는 것과 같은 명령이에요. 설정 화면에는 내 실제 경로가 채워져 있어요.",
-      linkLabel: "damwha 명령 링크",
+      manualBody: "직접 실행하려면 아래 명령을 쓰세요. 설정 화면이 보여 주는 것과 같고, 설정 화면에는 내 실제 경로가 채워져 있어요.",
+      linkLabel: "damwha 명령 설치",
       claudeCodeLabel: "Claude Code",
       codexLabel: "Codex",
       jsonLabel: "그 밖의 MCP 클라이언트 (JSON)",
@@ -141,7 +141,7 @@ export const ko = {
         ["damwha status", "앱과의 연결을 확인하고 모델 준비 상태를 보여 줘요. 연결되면 0, 아니면 2로 끝나요."],
         ["damwha upload <file>", "오디오 파일을 새 회의로 올려요. 옵션: --title, --recorded-at, --folder, --preset, --whisper-model, --stt-device, --diarization-device, --language, --speakers, --min-speakers, --max-speakers, --no-summary, --no-lens. --wait는 처리가 끝날 때까지 기다려요."],
         ["damwha search <query>", "발화를 검색해요. 옵션: --limit, --from, --to, --meeting, --folder."],
-        ["damwha meetings", "녹음 시각이 최근인 순으로 회의를 나열해요. --limit 기본값은 100이고, 다음 페이지는 끝에 찍히는 --cursor 값으로 이어 봐요."],
+        ["damwha meetings", "녹음 시각이 최근인 순으로 회의를 나열해요. --limit 기본값은 100이고 다음 페이지는 끝에 찍히는 --cursor 값으로 이어 봐요."],
         ["damwha meeting <id>", "회의 하나의 요약·태그·화자를 보여 줘요."],
         ["damwha transcript <id>", "회의 전사를 출력해요. --offset과 --limit으로 나눠 읽어요."],
         ["damwha lenses", "할 일·결정·약속을 나열해요. 옵션: --kind, --mine, --open, --done, --meeting, --due-from, --due-to, --limit. --mine은 \u201c나\u201d로 표시한 화자가 있어야 해요."],
@@ -157,7 +157,7 @@ export const ko = {
     },
     mcp: {
       title: "MCP 도구",
-      lede: "damwha라는 서버 하나로 등록돼요. 읽기 도구는 모두 읽기 전용으로 표시돼 있어요.",
+      lede: "damwha라는 서버 하나로 등록돼요. 데이터를 읽기만 하는 도구에는 읽기 전용 표시가 붙어 있어요.",
       head: ["도구", "하는 일"],
       items: [
         ["list_lenses", "뽑아낸 렌즈(할 일·결정·약속)를 최근순으로 나열해요. 종류·회의·폴더·기한·완료 여부·내 것만으로 거를 수 있어요."],
@@ -173,11 +173,11 @@ export const ko = {
     },
     confirm: {
       title: "항목 완료는 먼저 물어봐요",
-      body: "complete_lens는 내 데이터를 바꾸는 도구라서 에이전트 말만으로는 실행되지 않아요. 담화가 클라이언트에 확인 창을 띄우고, 항목·회의·담당·기한을 앱에서 다시 읽어 보여 줘요. 수락해야만 바뀌고, 거절하거나 창을 닫으면 항목은 열린 채로 남아요. 이 도구는 MCP elicitation을 지원하는 클라이언트에서만 보이고, 지원하지 않는 클라이언트에서는 숨겨져요.",
+      body: "complete_lens는 내 데이터를 바꾸는 도구라서 에이전트 말만으로는 실행되지 않아요. 담화가 클라이언트에 확인 창을 띄우고, 항목·회의·담당·기한을 앱에서 다시 읽어 보여 줘요. 수락해야만 바뀌고 거절하거나 창을 닫으면 항목은 열린 채로 남아요. 이 도구는 MCP elicitation을 지원하는 클라이언트에서만 보이고 지원하지 않는 클라이언트에서는 숨겨져요.",
     },
     trust: {
       title: "내 데이터와 연결한 서비스",
-      body: "MCP로 가져간 데이터는 연결한 LLM 서비스의 정책을 따릅니다.",
+      body: "MCP로 가져간 데이터는 연결한 LLM 서비스의 정책을 따라요.",
       untrusted: "대화에서 나온 글은 신뢰할 수 없는 내용이라고 표시해 에이전트에 넘겨요. 누가 말한 문장이 지시로 받아들여질 가능성을 줄이는 장치이지, 완전히 막지는 못해요.",
     },
   },

@@ -1,0 +1,6 @@
+---
+// 문장 안의 옵션(--stt-device 등)이 하이픈에서 줄바꿈되지 않게 nowrap 코드로 감싼다.
+interface Props { text: string }
+const parts = Astro.props.text.split(/(--[a-z][\w-]*)/);
+---
+{parts.map((p, i) => (i % 2 ? <code class="font-mono text-[13px] whitespace-nowrap">{p}</code> : p))}
