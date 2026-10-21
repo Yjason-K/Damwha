@@ -99,6 +99,7 @@ test("client install posts without replace and registration error keeps other ro
   const row = screen.getByText("Codex").closest("li")!;
   fireEvent.click(within(row).getByRole("button", { name: /연결$/ }));
   await waitFor(() => expect(post).toHaveBeenCalledWith("/integrations/codex/install", {}));
+  await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ variant: "success", title: "연결했어요." })));
 });
 
 test("PATH hint only when on_path false", async () => {
@@ -118,6 +119,7 @@ test("cli install and remove", async () => {
   renderIt();
   fireEvent.click(await screen.findByRole("button", { name: "명령 제거" }));
   await waitFor(() => expect(del).toHaveBeenCalledWith("/integrations/cli"));
+  await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ variant: "success", title: "명령을 제거했어요." })));
 });
 
 test("manual commands copy", async () => {
