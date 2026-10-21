@@ -14,7 +14,9 @@ import { startTestDb, StartedTestDb } from './db';
 const EXPECTED_GET_ROUTES: string[] = [
   '/api/folders',
   '/api/health',
+  '/api/integrations',
   '/api/lenses',
+  '/api/lenses/:id',
   '/api/lenses/extraction-status',
   '/api/meetings',
   '/api/meetings/:id',
@@ -24,6 +26,7 @@ const EXPECTED_GET_ROUTES: string[] = [
   '/api/meetings/:id/note',
   '/api/meetings/:id/share',
   '/api/meetings/:id/status',
+  '/api/meetings/:id/transcript',
   '/api/models',
   '/api/saved-utterances',
   '/api/saved-utterances/ids',

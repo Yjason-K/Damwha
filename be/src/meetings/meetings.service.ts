@@ -25,10 +25,47 @@ import { FoldersRepository } from '../folders/folders.repository';
 import { assertFolderExists, parseFolderId } from '../folders/folder-id';
 import { SharesRepository } from '../shares/shares.repository';
 import { SharesService, type RevokeSummary } from '../shares/shares.service';
+import { toStages } from './meeting-stages';
 import * as fs from 'fs';
 
 const AUDIO_MIME = /^audio\//;
 const SPEAKER_ID_RE = /^spk_[1-9][0-9]*$/;
+
+const TRANSCRIPT_DEFAULT_LIMIT = 200;
+const TRANSCRIPT_MAX_LIMIT = 500;
+
+// 쿼리스트링 정수 — 생략은 기본값, 음수·소수·문자는 400. limit=0은 next_offset이 전진하지
+// 않아 페이징 루프가 끝나지 않으므로 min 1로 막는다.
+function parseTranscriptInt(name: string, raw: string | undefined, dflt: number, min: number): number {
+  if (raw === undefined) return dflt;
+  if (!/^\d{1,9}$/.test(raw) || Number(raw) < min) {
+    throw new BadRequestException(`${name} must be an integer >= ${min}`);
+  }
+  return Number(raw);
+}
+
+const MEETING_PAGE_DEFAULT_LIMIT = 20;
+const MEETING_PAGE_MAX_LIMIT = 100;
+
+function encodeMeetingCursor(c: { sort_at: string; id: string }): string {
+  return Buffer.from(JSON.stringify(c)).toString('base64url');
+}
+
+// 커서는 불투명 토큰이지만 SQL 파라미터로 들어가므로 인코더가 내는 모양(Postgres timestamptz::text, 회의 id)만
+// 받는다 — 깨진 토큰은 500이 아니라 400. 달력상 불가능한 날짜(2월 31일)는 쿼리 단계의 22xxx 오류로 400 처리한다.
+const CURSOR_SORT_AT = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]) ([01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d{1,6})?[+-]\d{2}(:\d{2})?$/;
+const CURSOR_ID = /^mtg_[1-9][0-9]*$/;
+
+function decodeMeetingCursor(raw: string): { sort_at: string; id: string } {
+  try {
+    const c = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+    if (typeof c?.sort_at === 'string' && typeof c?.id === 'string'
+      && CURSOR_SORT_AT.test(c.sort_at) && CURSOR_ID.test(c.id)) {
+      return { sort_at: c.sort_at, id: c.id };
+    }
+  } catch { /* fall through */ }
+  throw new BadRequestException('invalid cursor');
+}
 
 async function unlinkQuietly(p?: string) {
   if (!p) return;
@@ -216,6 +253,22 @@ export class MeetingsService {
 
   async list() { return this.meetings.list(this.db.pool); }
 
+  // 쿼리가 하나라도 있을 때만 페이지 응답. 없으면 list()의 배열 그대로 (fe는 쿼리 없이 부른다).
+  async listPage(limitRaw?: string, cursorRaw?: string) {
+    const limit = Math.min(parseTranscriptInt('limit', limitRaw, MEETING_PAGE_DEFAULT_LIMIT, 1), MEETING_PAGE_MAX_LIMIT);
+    const after = cursorRaw === undefined ? null : decodeMeetingCursor(cursorRaw);
+    let page;
+    try {
+      page = await this.meetings.listPage(this.db.pool, limit, after);
+    } catch (e) {
+      // 22xxx = data exception (예: 존재하지 않는 날짜). 커서 값 탓이다.
+      if (after && /^22/.test((e as { code?: string }).code ?? '')) throw new BadRequestException('invalid cursor');
+      throw e;
+    }
+    const { rows, next } = page;
+    return { items: rows, next_cursor: next ? encodeMeetingCursor(next) : null };
+  }
+
   async get(id: string) {
     const meeting = await this.meetings.findById(this.db.pool, id);
     if (!meeting) throw new NotFoundException('meeting not found');
@@ -225,6 +278,24 @@ export class MeetingsService {
     const tags = await this.tags.findForMeeting(this.db.pool, id);
     const tag_suggestions = await this.tags.findSuggestions(this.db.pool, id);
     return { ...meeting, tags, tag_suggestions, utterances, clusters, summary };
+  }
+
+  // 전사 한 페이지. 에이전트 컨텍스트에 전체 전사가 들어가지 않도록 limit은 500으로 자른다
+  // (초과는 오류가 아니라 잘림). offset/limit 검증은 여기서 — 400은 BadRequestException.
+  async getTranscript(id: string, offsetRaw?: string, limitRaw?: string) {
+    const offset = parseTranscriptInt('offset', offsetRaw, 0, 0);
+    const limit = Math.min(parseTranscriptInt('limit', limitRaw, TRANSCRIPT_DEFAULT_LIMIT, 1), TRANSCRIPT_MAX_LIMIT);
+    const meeting = await this.meetings.findById(this.db.pool, id);
+    if (!meeting) throw new NotFoundException('meeting not found');
+    const { total, rows } = await this.meetings.findUtterancePage(this.db.pool, id, offset, limit);
+    const end = offset + rows.length;
+    return {
+      meeting_id: id,
+      processing_version: meeting.processing_version,
+      total, offset, limit,
+      next_offset: end < total ? end : null,
+      utterances: rows,
+    };
   }
 
   async getStatus(id: string) {
@@ -237,8 +308,10 @@ export class MeetingsService {
     // NOTE: GET /meetings/:id also returns a `summary`, and that one is the whole
     // summary (topics + segments). This one is only the generation state.
     const summary = await this.summary.get(id);
+    const inputs = await this.meetings.findStageInputs(this.db.pool, id);
     return {
       ...status,
+      stages: toStages(inputs!),
       summary: summary
         ? { status: summary.status, model: summary.model, error: summary.error }
         : null,

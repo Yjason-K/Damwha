@@ -1,0 +1,8 @@
+damwha
+  enabled: true
+  transport: stdio
+  command: /usr/bin/other-tool
+  args: serve --flag
+  cwd: -
+  env: -
+  remove: codex mcp remove damwha

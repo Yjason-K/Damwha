@@ -1,0 +1,10 @@
+damwha:
+  Scope: User config (available in all your projects)
+  Status: ✘ Failed to connect
+  Issue: ENOENT: ENOENT: no such file or directory, posix_spawn '/usr/bin/other-tool'
+  Type: stdio
+  Command: /usr/bin/other-tool
+  Args: serve --flag
+  Environment:
+
+To remove this server, run: claude mcp remove damwha -s user

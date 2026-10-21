@@ -11,5 +11,6 @@ packages:
   - desktop
   - site
   - share
+  - cli
   - packages/*
   - "!be/worker/**"

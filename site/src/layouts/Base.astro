@@ -12,11 +12,17 @@ interface Props {
   lang: Lang;
   release: ReleaseInfo;
   noindex?: boolean;
+  /** 로캘 루트 아래 경로("cli/"). 주면 canonical·hreflang이 그 페이지를 가리킨다. */
+  path?: string;
+  /** 이 페이지만의 title·description. 없으면 랜딩의 것. */
+  meta?: { title: string; description: string };
 }
-const { lang, release, noindex = false } = Astro.props;
-const t = getDictionary(lang);
+const { lang, release, noindex = false, path, meta } = Astro.props;
+const dict = getDictionary(lang);
+const t = { ...dict, meta: { ...dict.meta, ...meta } };
 const site = Astro.site!.origin;
-const selfUrl = getAbsoluteLocaleUrl(lang);
+const localeUrl = (l: Lang) => (path ? getAbsoluteLocaleUrl(l, path) : getAbsoluteLocaleUrl(l));
+const selfUrl = localeUrl(lang);
 const ogImage = new URL(t.meta.ogImage, site).href;
 
 const jsonLd = {
@@ -57,9 +63,9 @@ const jsonLd = {
     ) : (
       <>
         <link rel="canonical" href={selfUrl} />
-        <link rel="alternate" hreflang="en" href={getAbsoluteLocaleUrl("en")} />
-        <link rel="alternate" hreflang="ko" href={getAbsoluteLocaleUrl("ko")} />
-        <link rel="alternate" hreflang="x-default" href={getAbsoluteLocaleUrl("en")} />
+        <link rel="alternate" hreflang="en" href={localeUrl("en")} />
+        <link rel="alternate" hreflang="ko" href={localeUrl("ko")} />
+        <link rel="alternate" hreflang="x-default" href={localeUrl("en")} />
       </>
     )}
     <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
