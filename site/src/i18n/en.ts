@@ -116,12 +116,12 @@ export const en = {
     needsApp: "The Damwha app has to be running — the command and the MCP server read from it. Until it is, they exit with code 2 and tell you to start it.",
     install: {
       title: "Install",
-      oneClickTitle: "One click",
+      oneClickTitle: "From Settings",
       oneClickBody: "Open Settings › CLI · MCP in the app. “Install command” links ~/.local/bin/damwha to the app, and “Connect” registers the MCP server with Claude Code or Codex. If ~/.local/bin is not on your PATH the section shows the line to add.",
       oneClickNote: "The section appears in the desktop app only, not in the Docker or demo builds.",
       manualTitle: "Manual",
       manualBody: "Prefer to run it yourself? These are the same commands the settings screen shows (it fills in your real paths).",
-      linkLabel: "Link the command",
+      linkLabel: "Install the damwha command",
       claudeCodeLabel: "Claude Code",
       codexLabel: "Codex",
       jsonLabel: "Other MCP clients (JSON)",
@@ -155,7 +155,7 @@ export const en = {
     },
     mcp: {
       title: "MCP tools",
-      lede: "Registered on one server named damwha. Every read tool is marked read-only.",
+      lede: "Registered on one server named damwha. Tools that only read data are marked read-only.",
       head: ["Tool", "What it does"],
       items: [
         ["list_lenses", "List extracted lenses (action items, decisions, promises), newest first. Filter by kind, meeting, folder, due date, completion, or mine."],
