@@ -1,6 +1,4 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+# CLAUDE.md — `fe/` (damwha-fe)
 
 ## What this is
 
@@ -29,7 +27,7 @@ Full spec: [`docs/product-concept.md`](docs/product-concept.md) (개념 정의�
 This repo requires **Node 22** and **pnpm** (`engine-strict=true`; npm/yarn will fail). Fresh shells on this machine often default to Node 20 — activate 22 inline per command if `node -v` is wrong: `nvm use 22 && pnpm ...`.
 
 ```bash
-pnpm install          # install deps
+pnpm install          # from the REPO ROOT only (one lockfile for the workspace)
 pnpm dev              # Vite dev server
 pnpm build            # tsc -b (project-references typecheck) THEN vite build
 pnpm preview          # serve the production build
@@ -69,7 +67,11 @@ Future features go under `src/features/<feature>/`, each owning its own `api`/`u
 
 The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by `--rail-nav`) and the ⌘K palette; `pages/meeting.tsx`'s `/meetings/:meetingId` view is the product's **three-pane browse shell** made concrete — content `<main>` (transcript) + insight `<aside>` (sized by `--rail-insight`) render inside the shell's `<Outlet/>`. It runs on live meeting data via TanStack Query hooks. (`--topbar-h` and `--content-max` are declared in `index.css` but currently unused — check them before inventing a new value.)
 
-`src/features/meeting/` owns the `/meetings/:meetingId` view's data layer. `api/mappers.ts`'s `toMeetingDetail` maps `summary` — embedded in the `GET /meetings/:id` response — into `topics`/`segments`/`summaryStatus` on the `Meeting` domain type; `api/meetings.ts` adds `useGenerateSummary` (regenerate; takes an optional `summary_model` sent as the request body — omitted means the server falls back to the global processing setting, and the override is never persisted; a 409 means a different model is already summarizing and gets its own toast, distinct from the generic failure toast) and `useSyncSummaryStatus` (reconciles the polled `/status` summary state into the detail cache). Per-meeting lenses are a separate fetch: `api/lenses.ts`'s `useMeetingLenses` calls its own `GET /meetings/:id/lenses` endpoint, mapped via `mapMeetingLenses`. `api/notes.ts`'s `useAutosaveNote`도 같은 이유로 `GET`/`PUT /meetings/:id/note`를 상세와 분리된 `["meeting-note", id]` 쿼리 키로 쓴다 — 자동저장이 상세 캐시(`["meeting", id]`)를 건드리면 그 캐시를 구독하는 전사 패널 전체가 800ms마다 리렌더된다. `ui/insight-pane.tsx` is the right rail — tabs are `요약 / 메모` (참석자 is no longer its own tab; the 파일 tab was dropped because its only source is `original_filename` — empty for live recordings, and "공유된 파일이 없어요" implied a sharing feature that doesn't exist — so the file name now sits in the transcript header's 더보기 menu as "원본 파일"); the 요약 tab stacks 단락별 요약 → 할 일 → 결정 → 약속 → 주요 주제 → 참석자 → 요약 모델 선택 (summary first so the panel answers "what was this about" before anything else — UX review 2026-10-15; the model select is an occasional setting, so it sits last). The transcript header keeps 즐겨찾기·이름 변경·내보내기·공유 as icons and folds 회의 재처리 and 삭제 into a 더보기 (`shared/ui/dropdown-menu.tsx`) menu — rare and hard to undo, they no longer sit next to 편집. The attendee pill row under the header was dropped (it repeated the insight pane's 참석자 list; the meta keeps `참석자 N명`). 렌즈 섹션 제목은 `model/data.ts`의 `LENS_META`를 쓰고(전역 대시보드와 같은 이름), 항목 본문은 근거 발화(`ev`)로 점프한다. The regeneration model-select state is owned by `src/pages/meeting.tsx` and passed down as props; `InsightPane` stays presentational.
+`src/features/meeting/` owns the `/meetings/:meetingId` view's data layer (UI layout and its rationale: [`docs/feature-notes.md`](docs/feature-notes.md)). Rules that are easy to break:
+
+- `api/mappers.ts`'s `toMeetingDetail` maps the `summary` embedded in `GET /meetings/:id` into `topics`/`segments`/`summaryStatus`. `useGenerateSummary` takes an optional `summary_model` body (omitted ⇒ server uses the global setting; never persisted); a 409 means a different model is already summarizing and has its own toast. `useSyncSummaryStatus` reconciles the polled `/status` summary into the detail cache.
+- Per-meeting lenses (`useMeetingLenses`, `GET /meetings/:id/lenses`) and notes (`useAutosaveNote`, `["meeting-note", id]`) use **their own query keys** — autosave touching `["meeting", id]` would re-render the whole transcript pane every 800ms.
+- `InsightPane` stays presentational; the regeneration model-select state lives in `src/pages/meeting.tsx`. Lens section titles use `LENS_META` from `model/data.ts`.
 
 - **실시간 녹음(`recording` 상태).** `api/live.ts`의 `useStartLive`/`useStopLive`/`useLiveUtterances`가
   `POST /meetings/live`, `POST /meetings/:id/live/stop`, `GET /meetings/:id/live?after=<seq>`를 쓴다.
@@ -140,7 +142,7 @@ The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by 
   409도 종결적 실패다 — 여기서 `offset`을 `undefined`로 만들면 이후 모든 요청이 400이 되고
   봉인해야 할 stop까지 막힌다.
 
-`src/features/settings/` (처리 설정) owns the processing-config surface: `api` (`useProcessingSettings` / `useUpdateProcessingSettings` / `useCapabilities`), `lib` (`PRESET_META` — each preset also pins a `summary_model` — + `SUMMARY_MODEL_OPTIONS` + `PRESET_META_REVISION` — **keep synced with the BE preset definitions**; a `preset_revision` mismatch surfaces a drift notice), and `ui` (`ProcessingSettingsForm`, `OverrideSection`). The same sync constraint covers `api/types.ts`'s `SummaryModel` union, a hand-maintained mirror of BE's `SUMMARY_MODELS` catalog — a value outside it is a server 400 on PUT. Reached via LeftNav "처리 설정" → the `/settings` route.
+`src/features/settings/` (처리 설정) owns the processing-config surface: `api` (`useProcessingSettings` / `useUpdateProcessingSettings` / `useCapabilities`), `lib` (`PRESET_META` — each preset also pins a `summary_model` — + `SUMMARY_MODEL_OPTIONS` + `PRESET_META_REVISION` — **keep synced with the BE preset definitions**; a `preset_revision` mismatch surfaces a drift notice), and `ui` (`ProcessingSettingsForm`, `OverrideSection`). The `SummaryModel` type and the other wire enums come from `@damwha/contracts` (shared with BE) — never redeclare them locally. Reached via LeftNav "처리 설정" → the `/settings` route.
 
 - **전사 언어는 자유 텍스트가 아니라 카탈로그 셀렉트다** (`STT_LANGUAGE_OPTIONS`, `sttLanguageOptions`, `isSttLanguage`). Whisper는 언어 토큰을 **하나만** 받으므로 다중 선택은 애초에 보낼 곳이 없다 — 한국어 문장에 섞인 영어 단어는 `ko` 하나로 그대로 전사된다. 셀렉트 아래 안내문이 그 사실을 말한다. `auto`는 "언어를 지정하지 않음"이고 워커가 whisper 자동 감지로 옮긴다(파일당 한 언어로 확정). 서버는 **쓰기만** 조이므로(`ProcessingSettingsUpdate.language`가 `SttLanguage`, `ProcessingConfig.language`는 `string`) 카탈로그 밖 값이 내려올 수 있다 — `sttLanguageOptions`가 그 값을 목록 끝에 얹고, 저장 버튼은 막힌 채 이유를 버튼 위에 적는다. 안내를 고급 설정 안에 두면 접혀 있을 때 비활성 버튼의 이유가 안 보인다.
 
@@ -159,11 +161,13 @@ The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by 
 - **Completion filter is a single-value segment** (`열림|완료`) because BE `completion_status` takes one value — there is no combined view. Toggling completion optimistically removes the row from the current list.
 - **Evidence jump navigates to `/meetings/:id?u=<utteranceId>`** — the URL carries both the highlight and the audio seek, so search jumps and lens evidence jumps now behave identically (the earlier "no audio seek" carve-out is gone). Historical items whose utterance no longer exists after reprocess surface a toast and drop `?u=` with `replace: true`.
 
-**회의 태그** (`features/meeting/api/tags.ts`, `ui/meeting-tags.tsx`): 태그는 분류라 한 회의에 여럿 붙는다 — 한 회의가 여러 기준에 동시에 걸리기 때문. 회의가 놓이는 곳(하나)은 아래 폴더다. 전사 헤더의 `MeetingTags`가 붙이기/떼기를 하고, 보내는 것은 항상 이름 목록 전체다(`PUT /meetings/:id/tags`). 어느 회의에도 안 붙은 태그는 서버가 지우므로 태그 관리 화면은 없다. 사이드바 태그 필터(하나 선택, 즐겨찾기와 AND)와 ⌘K 팔레트의 `facets` 태그 필터(`filters.tagIds`)는 서로 독립된 상태다. 둘 다 선택한 태그가 `GET /tags`에서 사라지면 선택이 풀린 것으로 본다. 요약이 기존 태그 중에서 고른 **추천**(`Meeting.tagSuggestions` ← `tag_suggestions`)은 태그 줄 끝에 점선 칩(`+#이름`)으로 뜨고, 누르면 일반 추가와 같은 PUT을 탄다. 자동으로 붙이지 않는다. 이미 붙은·사라진 태그는 서버가 읽을 때 빼 주므로 화면은 받은 그대로 그린다.
+**회의 태그·폴더·최근 본 회의** — 화면 배치와 그 이유는 [`docs/feature-notes.md`](docs/feature-notes.md). 고칠 때 깨기 쉬운 것만:
 
-**회의 폴더** (`features/meeting/api/folders.ts`, `ui/folder-section.tsx`, `ui/folder-dialogs.tsx`, `ui/meeting-folder.tsx`): 회의는 정확히 한 폴더에 있고, 폴더를 고르지 않으면 서버가 `기본 폴더`에 넣는다(BE 마이그레이션 `030`). 사이드바 폴더 섹션은 머리 행 `전체 회의`(폴더 행과 같은 크기의 누를 수 있는 행 — 누르면 선택을 풀고 `/meetings`로 가며 거기서 강조된다. 오른쪽 끝에 늘 보이는 `+`) 아래에 한 단계 들여 쓴 기본 폴더 → 나머지(서버 순서)로 그린다. 회의 수는 오른쪽 끝이 아니라 이름 바로 뒤 칩이다 — 오른쪽 끝은 `+`·`…` 버튼 자리라서다. 폴더 행 강조는 `/folders/:id`와 `/meetings/:id`에서만 하고(다른 화면에서 칠해 두면 그 폴더를 보고 있는 것처럼 읽힌다), 아래 목록을 거르는 선택 자체는 화면을 옮겨도 남는다. 폴더를 누르면 아래 `회의 목록`을 거르면서 가운데 칸에 `/folders/:id` 카드 목록(`pages/meeting-list.tsx`)을 연다 — 즐겨찾기·태그와 AND, 선택은 태그처럼 `LeftNav` 로컬 상태이고(`/folders/:folderId`에서는 경로를 따라간다) `GET /folders`에서 사라지면 풀린다. 카드 목록의 집계(결정·할 일·저장 수, 참여 인원, `has_me`, 미리보기)는 `GET /meetings` 행에 실려 오고, 탭·정렬·페이지는 클라이언트에서 한다. 목록 위에는 녹음 파일 드롭존(`ui/meeting-dropzone.tsx`, 회의가 없으면 빈 상태를 대신해 크게)이 항상 있다 — 놓거나 고른 파일은 바로 올리지 않고 페이지가 든 `NewMeetingDialog`를 `initialFile`로 채워 연다(`실시간 녹음 시작`은 `initialSource="live"`). 회의가 있으면 그 아래 `features/lens/ui/lens-overview.tsx`가 열린 결정·할 일 최근 2개와 건수를 보인다(`GET /lenses?limit=2&folder_id=`의 `total`, 쿼리 키 `["lens-overview", …]` — `["lenses"]` 아래에 두면 완료 토글의 낙관적 갱신이 이 캐시를 무한 목록 모양으로 다뤘 깨진다). `내가 참여한 회의` 탭은 화자 관리에서 `나로 지정`한 화자(`speaker.is_me`, BE 마이그레이션 `031`)를 쓴다. 폴더별 회의 수는 `GET /folders`가 주지 않고 이미 받은 `useMeetings()` 목록에서 센다(보이는 목록과 어긋나지 않게). 기본 폴더에는 `…` 메뉴(이름 바꾸기·삭제)가 없다. 지우면 안의 회의는 서버가 기본 폴더로 옮기므로 `useDeleteFolder`가 `["meetings"]`·`["meeting"]`도 무효화한다. 새 회의 모달의 `폴더` 셀렉트는 좌측에서 보던 폴더(`defaultFolderId`)로 시작하고, `useFolders`가 실패하면 숨긴 채 `folder_id`를 보내지 않는다. 전사 헤더 메타 줄 맨 앞의 폴더 버튼이 `PATCH /meetings/:id { folder_id }`로 옮긴다.
-
-**최근 본 회의** (`features/meeting/lib/recent-meetings.ts`): 사이드바 `회의 목록`의 필터는 `최근 본 | 즐겨찾기`다 — 전체 회의는 가운데 `/meetings` 카드 목록이 맡으므로 레일이 같은 것을 한 번 더 보이지 않는다. 회의 화면이 상세를 **받으면**(404는 제외) 그 id를 맨 앞에 올리고 최대 15개를 `localStorage`(`damwha:recent-meetings`)에 둔다 — 개인용 앱이라 서버에는 기록하지 않는다. 새 회의는 업로드·녹음 시작·데모 업로드 모두 만든 직후 그 화면으로 가므로 따로 넣지 않아도 바로 오른다. 삭제·녹음 폐기는 `removeMeetingCaches`가 여기서도 지우고, 레일은 `useMeetings()`에 없는 id를 그리지 않는 것으로 한 번 더 거른다. 폴더·태그 선택은 이 목록 위에 AND로 걸린다. 첫 방문에는 레일이 비므로 데모 투어의 `meeting-list` 타깃은 가운데 카드 목록에 있다.
+- 태그는 분류(한 회의에 여럿), 폴더는 위치(정확히 하나, 미지정이면 서버가 `기본 폴더`). 태그는 항상 이름 목록 전체를 `PUT /meetings/:id/tags`로 보낸다 — 관리 화면 없음, 안 쓰는 태그는 서버가 지운다. 추천 태그(`tagSuggestions`)는 자동으로 붙이지 않는다.
+- 사이드바 태그·폴더 선택과 ⌘K `facets` 태그 필터는 서로 독립 상태이고, `GET /tags`·`GET /folders`에서 사라지면 선택이 풀린다.
+- 폴더별 회의 수는 `GET /folders`가 아니라 `useMeetings()` 목록에서 센다. 폴더 삭제는 `["meetings"]`·`["meeting"]`도 무효화한다(서버가 회의를 기본 폴더로 옮긴다). 기본 폴더에는 `…` 메뉴가 없다.
+- 렌즈 개요 쿼리 키는 `["lens-overview", …]` — `["lenses"]` 아래에 두면 완료 토글의 낙관적 갱신이 이 캐시를 무한 목록 모양으로 다뤄 깨진다.
+- 최근 본 회의는 `localStorage`(`damwha:recent-meetings`, 최대 15)에만 둔다 — 서버 기록 없음. 삭제·녹음 폐기는 `removeMeetingCaches`가 여기서도 지운다.
 
 **URL contract:** `/` → replace-redirects to `/meetings` (opening the app lands on the card list, not a single meeting) · `/meetings/:id` meeting detail · `/meetings/:id?u=<utteranceId>` highlights that utterance and seeks the audio to it · `/meetings` all-meetings card list · `/folders/:folderId` one folder's card list (both take `?tab=mine|decisions|fav&sort=oldest|longest&page=N&size=20|30` — page size defaults to 10, unknown values fall back to it) · `/lenses/:kind` global lens dashboard · `/speakers` · `/settings`. The insight-pane tab and the sidebar meeting-list filter are intentionally not carried in the URL.
 
@@ -193,7 +197,7 @@ The 2026-08 retone moved the reference tone to Mintlify's **documentation** surf
 
 shadcn config (`components.json`): **new-york** style, `lucide` icons, aliases pointing at `@/shared/*`. Components follow the CVA pattern — variants defined with `class-variance-authority`, co-located with the component, e.g. `buttonVariants` exported alongside `Button`.
 
-**When you add a new `<name>Variants` CVA export**, register the name in `eslint.config.js` under `react-refresh/only-export-components` → `allowExportNames` (currently: `buttonVariants`, `badgeVariants`, `cardVariants`, `iconButtonVariants`). Otherwise lint fails.
+**When you add a new `<name>Variants` CVA export** (or any other non-component export from a component file), register the name in `eslint.config.js` under `react-refresh/only-export-components` → `allowExportNames`. Otherwise lint fails.
 
 ## Conventions
 
@@ -212,67 +216,4 @@ shadcn config (`components.json`): **new-york** style, `lucide` icons, aliases p
 
 ## Behavioral guidelines
 
-Guidelines to reduce common LLM coding mistakes. **Tradeoff:** these bias toward caution over speed — for trivial tasks, use judgment.
-
-### 1. Think Before Coding
-
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
-
-Before implementing:
-
-- State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them — don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
-
-### 2. Simplicity First
-
-**Minimum code that solves the problem. Nothing speculative.**
-
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
-
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
-
-### 3. Surgical Changes
-
-**Touch only what you must. Clean up only your own mess.**
-
-When editing existing code:
-
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it — don't delete it.
-
-When your changes create orphans:
-
-- Remove imports/variables/functions that YOUR changes made unused.
-- Don't remove pre-existing dead code unless asked.
-
-The test: Every changed line should trace directly to the user's request.
-
-### 4. Goal-Driven Execution
-
-**Define success criteria. Loop until verified.**
-
-Transform tasks into verifiable goals:
-
-- "Add validation" → "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
-
-For multi-step tasks, state a brief plan:
-
-```
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
-```
-
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
-
-**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+General agent guidelines (think before coding, simplicity, surgical changes, verifiable goals) live in the root [`CLAUDE.md`](../CLAUDE.md).

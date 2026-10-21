@@ -1,12 +1,10 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+# CLAUDE.md — `be/` (damwha-be)
 
 ## What this is
 
 Damwha is a personal, self-hosted meeting recording/search platform. The primary object is the **utterance** — every spoken line is attributed to a speaker, timestamped, and traceable back to the original audio. This repo is the **backend**.
 
-The full design and the executable plans live in `docs/superpowers/`:
+The full design and the executable plans live in this package's `docs/superpowers/` (`be/docs/`; newer cross-package specs are in the repo-root `../docs/superpowers/`):
 - Spec (NestJS API): `docs/superpowers/specs/2026-06-22-damwha-ingestion-backend-design.md`
 - Plan 1 (`src/`, NestJS API): `docs/superpowers/plans/2026-06-22-damwha-ingestion-api.md`
 - Spec (Python worker): `docs/superpowers/specs/2026-06-23-damwha-ml-worker-design.md`
@@ -16,12 +14,24 @@ Read the spec before changing data model / pipeline semantics — many decisions
 
 ## Architecture: two runtimes joined by one table
 
-The system is a **polyglot** split that communicates **only through Postgres** — never HTTP between them. The `job` table is the whole contract in both directions; the other shared `app_setting` rows are `worker_capabilities`, which the worker writes and the API only reads (see Processing settings below); `model_readiness`, written by the worker, embed and `llm_entry` (per-model download progress); and `model_inventory`, written solely by the worker parent's inventory thread (`be/worker/damwha_worker/inventory.py`) and read-only for the API (see `GET /models` below):
+The system is a **polyglot** split that communicates **only through Postgres** — never HTTP between them. The `job` table is the whole contract in both directions; the three shared `app_setting` keys (`worker_capabilities`, `model_readiness`, `model_inventory`) and their writers are listed in the root [`CLAUDE.md`](../CLAUDE.md) — all are read-only for the API (`model_inventory`'s writer: `worker/damwha_worker/inventory.py`):
 
 - **NestJS API (`src/`, TypeScript)** — HTTP only, knows nothing about ML. Stores audio, CRUDs metadata, enqueues jobs, serves status/results.
 - **Python ML worker (`worker/`, Python)** — a supervisor process polls `job` and spawns a one-job child that runs ffmpeg normalize+probe → VAD → diarization → speaker ID → STT → align, writing `utterance`/`meeting_cluster`/`voiceprint` rows. No HTTP. **Implemented** (Plan 2); see the worker section below.
 
-The `job` table is the contract. The TypeScript side validates job payloads with zod (`src/contracts/job-payload.schema.ts`); the Python worker mirrors the same shape with pydantic (`worker/damwha_worker/contracts.py`), and the same JSON fixtures (`test/fixtures/job-payloads/`) are validated on both sides to block drift. The payload carries a top-level `schema_version`. Supported versions are **per job type** (`SUPPORTED_SCHEMA_VERSIONS` dict in `worker/damwha_worker/contracts.py`): `process_meeting` accepts **v1 through v6**, `extract_lenses`/`summarize_meeting`/`live_session` accept **v1–v2**, while `enroll_speaker`/`index_meeting` stay **v1**. **v2** adds per-stage `models.devices.{diarization,stt}` (`cpu`|`gpu`) plus `preset`/`preset_revision` reference info; **v3** adds `models.summary_model` (the summary LLM the processing preset chose), required on the wire; **v4** adds `identify.suggest_threshold`, the floor of the two-tier identification band, also required on the wire; **v5** adds `followups.{lens,summary}`, the switches that decide whether `persist` queues the lens/summary jobs — required on the wire, and a payload converted from v1–v4 gets both `true`, which is what those versions always did; **v6** adds `models.summary_language` (`transcript`|`ko`|`en`), also required on the wire — a payload converted from v1–v5 reads `transcript`, which is what those versions always did (follow the transcript's own language). The worker converts any version's `process_meeting` payload to one internal shape, so downstream code always sees the same fields — a payload converted from v1/v2 has `summary_model=None` there and the worker falls back to its own env default, one converted from v1/v2/v3 has `suggest_threshold=None`, which disables suggestions entirely, and one converted from v1–v5 has `summary_language="transcript"`. Both fields introduced before v6 are required from the version that introduced them for the same reason: the model and the thresholds *are* the behaviour, so replaying a recorded job must not silently pick up a different worker default. `extract_lenses`/`summarize_meeting` add the same `output_language` field at **v2**, required on the wire and rejected on v1 (a v1 payload that carries it, or a v2 payload missing it, fails validation) — a v1 payload reads `output_language="transcript"`. `live_session` **v1** embeds a wire v5 `process_meeting`; **v2** embeds a wire v6 one — the embedded version must match the envelope's own version. **Changing the payload shape or the `stage`/`status` enums means changing both sides** — treat `src/contracts/`, `worker/damwha_worker/contracts.py`, and the `001_init.sql` CHECK constraints as the source of truth.
+The `job` table is the contract. The TypeScript side validates payloads with zod (`src/contracts/job-payload.schema.ts`), the worker mirrors the shape with pydantic (`worker/damwha_worker/contracts.py`), and the same JSON fixtures (`test/fixtures/job-payloads/`) are validated on both sides to block drift. The payload carries a top-level `schema_version`; supported versions are **per job type** (`SUPPORTED_SCHEMA_VERSIONS` in `contracts.py`):
+
+- `process_meeting` **v1–v6**:
+  - v2 — per-stage `models.devices.{diarization,stt}` (`cpu`|`gpu`) plus `preset`/`preset_revision`
+  - v3 — `models.summary_model` (the preset's summary LLM)
+  - v4 — `identify.suggest_threshold` (floor of the two-tier identification band)
+  - v5 — `followups.{lens,summary}` (whether `persist` queues those jobs; converted v1–v4 → both `true`)
+  - v6 — `models.summary_language` (`transcript`|`ko`|`en`; converted v1–v5 → `transcript`)
+- `extract_lenses`/`summarize_meeting` **v1–v2**: v2 adds `output_language` — required on v2, rejected on v1; a v1 payload reads `transcript`.
+- `live_session` **v1–v2**: embeds a wire v5 / v6 `process_meeting` respectively — the embedded version must match the envelope's.
+- `enroll_speaker`/`index_meeting` **v1**.
+
+Each field is **required on the wire from the version that introduced it** — the model and thresholds *are* the behaviour, so replaying a recorded job must not silently pick up a different worker default. The worker converts any `process_meeting` version to one internal shape: older payloads get `summary_model=None` (env default), `suggest_threshold=None` (suggestions disabled), `summary_language="transcript"`. **Changing the payload shape or the `stage`/`status` enums means changing both sides** — `src/contracts/`, `worker/damwha_worker/contracts.py` and the `001_init.sql` CHECK constraints are the source of truth.
 
 There is **no ORM**. All DB access is raw SQL through `DatabaseService` (`pg.Pool` wrapper with `query` + `withTransaction`). `DatabaseService` attaches an `'error'` listener to the pool and to each client `withTransaction` checks out — without it, Postgres dropping a connection (e.g. `docker compose stop postgres`, error 57P01) emits an unhandled `'error'` event and **kills the API process**; with it the API stays up and `/api/health` answers 503 until the DB returns (found in Electron Phase 2 verification, `test/database.service.spec.ts` reproduces both paths with `pg_terminate_backend`). This is intentional — `SELECT ... FOR UPDATE SKIP LOCKED` and pgvector types don't fit ORMs cleanly. Each domain has a thin `*.repository.ts` (SQL), a `*.service.ts` (transactions/orchestration), and a `*.controller.ts` (HTTP).
 
@@ -29,17 +39,26 @@ There is **no ORM**. All DB access is raw SQL through `DatabaseService` (`pg.Poo
 
 These cross-file rules are easy to break and are enforced by tests:
 
-- **Job queue (`src/jobs/`)**: `attempts` is incremented at **claim** time (queued→running), not on retry. Since Phase 6b-3 (migration `026`, `job.interruptions`/`job.max_interruptions`, default 3) a crash no longer permanently burns an attempt — reclaim bumps `interruptions` instead, and the retry budget is `attempts − interruptions` (`failures` in the API's `retry` response), so a reclaimed run is refunded rather than counted against the retry cap. `claim` must not set `stage` (the worker sets stage per type as it enters each step). `complete()`/`fail()` update the `job` row **only** — on normal completion the linked `meeting.status`/`speaker.enrollment_status` transitions are the *worker's* responsibility (Plan 2, in the same persist/enroll transaction). **Reclaim** is what propagates status on the crash path, and there are **four reclaim paths sharing three SQL bodies**: the API's `reclaimOrphaned` (boot, `onApplicationBootstrap`) and `reapStale` (5-min cron), both in `jobs.repository.ts`/`reaper.service.ts`; and the worker's shared `_REAP_SQL` (`worker/damwha_worker/db/queue.py`), used by both `reap_stale` (5-min daemon thread) and `reap_own_orphans` (run whenever the supervisor has zero live children — boot, right after reaping a child, right after a DB reconnect). All four add `interruptions + 1` to the stale `running` row (`locked_at` older than `REAPER_STALE_MINUTES` for the two time-based reapers) and decide `queued` if `interruptions + 1 < max_interruptions` else `failed` — a `live_session` job is always `failed`, never requeued this way. Concurrent runs are safe because every reclaim query selects `FOR UPDATE SKIP LOCKED`; **keep all three SQL bodies in sync** when editing any of them — the shared fixture `test/fixtures/job-reap/grid.json` pins all three against the same case grid. A reclaim clears `next_attempt_at` (no backoff — the worker is already gone) and leaves `attempts` as claimed; the linked meeting/speaker failure in each SQL body is guarded by `m.current_job_id = f.id`, so a superseded job can't fail a meeting that already moved on to a newer job.
+- **Job queue (`src/jobs/`)**: `attempts` is incremented at **claim** time (queued→running), not on retry. `claim` must not set `stage` (the worker sets it per step). `complete()`/`fail()` update the `job` row **only** — on normal completion, `meeting.status`/`speaker.enrollment_status` transitions are the worker's job (same persist/enroll transaction).
+  - **Interruptions** (Phase 6b-3, migration `026`, `job.interruptions`/`max_interruptions` default 3): a crash bumps `interruptions` instead of burning an attempt; the retry budget is `attempts − interruptions` (`failures` in the API's `retry` response).
+  - **Four reclaim paths, three SQL bodies — keep them in sync**: API `reclaimOrphaned` (boot, `onApplicationBootstrap`) and `reapStale` (5-min cron) in `jobs.repository.ts`/`reaper.service.ts`; the worker's shared `_REAP_SQL` (`worker/damwha_worker/db/queue.py`) used by `reap_stale` (5-min daemon thread) and `reap_own_orphans` (whenever the supervisor has zero live children — boot, after reaping a child, after a DB reconnect). `test/fixtures/job-reap/grid.json` pins all three against one case grid.
+  - Each adds `interruptions + 1` to the stale `running` row (`locked_at` older than `REAPER_STALE_MINUTES` for the time-based two) and picks `queued` if `interruptions + 1 < max_interruptions`, else `failed`; `live_session` is always `failed`. Every query is `FOR UPDATE SKIP LOCKED`. A reclaim clears `next_attempt_at`, leaves `attempts` alone, and fails the linked meeting/speaker only when `m.current_job_id = f.id`.
 - **Reprocess + stale guard**: reprocess bumps `meeting.processing_version` and enqueues a new job (it does **not** wrap ML in a DB transaction). The worker's `persist` step must only write results when `meeting.processing_version = payload.processing_version AND meeting.current_job_id = job.id` — otherwise a stale lower-version job would overwrite newer results. **`utterance` rows of older versions are retained** (migration `013`: the uniqueness key is `(meeting_id, processing_version, order_index)`) so lens evidence pointing at a superseded utterance stays valid; `meeting_cluster` is still replaced wholesale. Every reader therefore filters `u.processing_version = m.processing_version` — a query that forgets it will surface stale turns.
 - **Storage path safety (`src/storage/`)**: the DB stores only relative keys (`meetings/<meeting_id>/...`). Never trust client filenames or store absolute paths. All key→path resolution goes through `StorageService.resolve()`, which rejects traversal/absolute keys. Uploads use multer **diskStorage** (temp file) + `saveFromTemp` — never buffer large audio in memory.
-- **Speaker identification (`voiceprint`, `identify.py`)**: pgvector columns are fixed-dimension (`vector(192)`). Identification must filter voiceprints by matching `model` + `dimension`, and compares against speakers whose enrollment has **settled** — `ready` *or* `provisional` (`MATCHABLE_STATUSES`); `pending`/`failed` stay out. Provisional used to be excluded until a human renamed the speaker, and that made cross-meeting identity **structurally impossible**: a fresh install has zero `ready` speakers, so the candidate set was always empty and the same person re-appeared as a new speaker in every meeting (the same audio uploaded twice produced two disjoint speaker sets at centroid similarity 1.0000). Matching is **two-tier**, both thresholds stamped into the payload (wire **v4**): at/above `identify.threshold` the cluster **binds**; down to `identify.suggest_threshold` the score is too close to call, so the cluster still mints its own provisional speaker and the candidate is parked in `meeting_cluster.suggested_speaker_id`/`suggested_similarity` (migration `018`) for the user to confirm through the existing `POST /meetings/:id/clusters/:clusterId/resolve` — which clears the suggestion either way. v1–v3 payloads carry no band and behave exactly as before (bind or nothing). Cluster centroids are a **duration-weighted** mean (`centroids_by_label`): a sub-second backchannel carries little identity but plenty of the model's bias direction, and weighting drops the worst measured different-speaker pair from .674 to .619 without stranding short clusters the way a minimum-length filter did. Unidentified clusters are **auto-created as `provisional` speakers** (default name `Speaker_NNN` via `speaker_default_seq`) with an `auto_cluster` voiceprint carrying `source_cluster_id` provenance. **Every** diar label gets a `meeting_cluster` row — including one identify bound outright — because that table is the per-meeting `diar_label→speaker` record and the entry point for a user correction. `resolve` reattaches the cluster's single voiceprint (`ON CONFLICT (source_cluster_id)`) and GCs orphaned provisional speakers. `persist` likewise GCs unconfirmed `provisional` orphans on reprocess (a global conditional DELETE of `provisional` speakers with no utterance/cluster references; **a pending suggestion counts as a reference**, and confirmed `ready` speakers are never deleted). Thresholds are set from measurement, not feel — `worker/scripts/eval_speaker_id.py` replays the whole policy offline against the live DB; **retune with it**. Known gaps (stale-version speakers polluting the candidate pool, no intra-meeting merge, zero-utterance clusters becoming speakers) are recorded in `docs/backlog.md`.
-- **Live audio byte boundary (`src/live/`, `src/storage/live-audio.service.ts`, migration `024`)**: `job.committed_bytes` — not `stat().size` — is the append offset, the recovery point and the seal length. Any new code path that needs "how much audio is real" reads that column; a path that measures the file instead will silently accept the unconfirmed tail a crash or a short write left behind. `recover()` truncates to it before every append/stop/sweep, `writeAt` loops to a complete write and `datasync()`s before the boundary advances, and the two must land in **one** transaction. See the live-session section below for the full rule.
+- **Speaker identification (`voiceprint`, `identify.py`)**: pgvector columns are fixed-dimension (`vector(192)`); identification filters voiceprints by matching `model` + `dimension`.
+  - **Candidates are speakers whose enrollment has settled — `ready` *or* `provisional`** (`MATCHABLE_STATUSES`); `pending`/`failed` stay out. Excluding `provisional` made cross-meeting identity structurally impossible (a fresh install has zero `ready` speakers, so the same audio uploaded twice produced two disjoint speaker sets).
+  - **Two-tier matching**, both thresholds stamped into the payload (wire **v4**): at/above `identify.threshold` the cluster **binds**; down to `identify.suggest_threshold` it mints its own provisional speaker and parks the candidate in `meeting_cluster.suggested_speaker_id`/`suggested_similarity` (migration `018`) for the user to confirm via `POST /meetings/:id/clusters/:clusterId/resolve`, which clears the suggestion either way. v1–v3 payloads: bind or nothing.
+  - Cluster centroids are a **duration-weighted** mean (`centroids_by_label`) — short backchannels carry mostly model bias.
+  - Unidentified clusters become **`provisional` speakers** (`Speaker_NNN` via `speaker_default_seq`) with an `auto_cluster` voiceprint carrying `source_cluster_id`. **Every** diar label gets a `meeting_cluster` row, even one bound outright — that table is the per-meeting `diar_label→speaker` record and the entry point for corrections. `resolve` reattaches the cluster's voiceprint (`ON CONFLICT (source_cluster_id)`) and GCs orphaned provisional speakers.
+  - `persist` GCs unconfirmed `provisional` orphans on reprocess (no utterance/cluster references; **a pending suggestion counts as a reference**; `ready` speakers are never deleted).
+  - Thresholds come from measurement — **retune with `worker/scripts/eval_speaker_id.py`**, which replays the policy offline against the live DB. Known gaps are in `docs/backlog.md`.
+- **Live audio byte boundary (`src/live/`, `src/storage/live-audio.service.ts`, migration `024`)**: `job.committed_bytes` — not `stat().size` — is the append offset, the recovery point and the seal length. Any new code path that needs "how much audio is real" reads that column; a path that measures the file instead will silently accept the unconfirmed tail a crash or a short write left behind. `recover()` truncates to it before every append/stop/sweep, `writeAt` loops to a complete write and `datasync()`s before the boundary advances, and the two must land in **one** transaction. Full rule: [`docs/live-session.md`](docs/live-session.md).
 - **Env loading**: the worker's `Settings` (`worker/damwha_worker/config.py`) has two **required** fields with no default — `DATABASE_URL` and `LENS_LLM_BASE_URL`. A default would blur "address not configured" into "nothing listening there", and the managed-server path binds that URL's `host:port`, so it must be explicit. The supervisor probes `GET {base_url}/models` once at startup (`log_lens_llm_health`) and **warns without failing** — `process_meeting` doesn't touch the LLM, so a down LLM server must not block audio ingestion. With `LENS_LLM_MANAGED=true` (the default) that startup probe logs info instead of warning: no server running yet is the normal state. On the API side, `loadEnv()` parses the full schema and **requires `DATABASE_URL`** — only call it inside constructors/runtime, never in decorator/module metadata (it runs at import time before tests set env). Use the narrow `maxUploadBytes()` helper in decorators instead.
 - **Lenses (`src/lenses/`, migrations `008`–`014`)**: `lens_item` holds actions/decisions/promises with a `source` (`ai`|`user`|`edited`), `user_modified`, `completion_status`, `lifecycle_status`; `lens_evidence` links an item to utterances (`primary`|`supporting`). **Re-extraction must never clobber human work** — `classifyAiMerge` (`lenses.service.ts`) only considers items that are `source='ai' AND NOT user_modified AND active AND open`, matches a candidate to one by `(kind, primary utterance)`, and archives eligible items no candidate matched. Everything else (user-created, edited, completed, archived) is invisible to the merge. An **active AI item must always keep exactly one primary evidence row** — enforced by deferred constraint triggers (`014`) plus service-level conflict guards on evidence add/remove; a `PATCH` with no editable field is a deliberate no-op so an empty request can't stamp `edited`/`user_modified` and silently drop the item out of merge eligibility. Evidence may only cite an utterance of the item's own meeting (deferred trigger, `013`).
 - **Lens extraction runs (`extract_lenses` job)**: `lens_extraction_run` is keyed per `(meeting, processing_version)`. The API side (`lens-extraction.service.ts`) requires `meeting.status='done'`, reuses the active run instead of enqueueing a second one (idempotent retry), and the worker auto-enqueues a run in the same transaction as `persist` (skipped when the worker has no `lens_llm_model` configured, **or when the payload's `followups.lens` is false** — upload sends `defer_lens=true` for that, and the user runs it later through the same manual endpoint; reprocess never defers). The worker guards every write with the same run/job/version ownership checks as the ML pipeline (`db.mark_lens_run_running` / `db.persist_lens_extraction`) and re-validates the LLM's ids server-side — an utterance or assignee that isn't in the meeting at that `processing_version` is rejected, never stored. `GET /lenses` (keyset cursor; `completion_status` is a **single value**, not a set) and `GET /lenses/extraction-status` back the global dashboard. `GET /meetings/:id/lenses` additionally returns `extraction_status` — the latest run's status **at the meeting's current `processing_version`**, or `null` when that version never ran one. It exists so the UI can tell "deferred / never extracted" from "extracted, found nothing"; a deferred upload writes no run row at all, so without it a deferred meeting is indistinguishable from an empty one. It is deliberately not a `failed` row — the global banner reads `failed` as a real extraction error.
 
-- **Local API access control (`src/access/`, `src/http/configure-http.ts`)**: `app.enableCors()` is gone. One express middleware, registered by `configureHttp` **before every body parser, the SPA and Swagger**, decides every request with `evaluateAccess`: (1) `Host` must be `localhost`/`127.0.0.1`/`[::1]` (any port) or in `ALLOWED_HOSTS` — DNS rebinding; (2) under `/api` (matched case-insensitively by `isGatedPath` — express routes are case-insensitive too) and for any non-GET/HEAD, an `Origin` must be same-origin (`URL.host === Host`, scheme ignored for the tunnelled demo) or in `ALLOWED_ORIGINS`; with no `Origin`, `Sec-Fetch-Site: cross-site|same-site` is refused. Requests with neither header (curl, the desktop health probe, Node fetch) pass — same-Mac processes are out of the threat model. CORS headers go only to `ALLOWED_ORIGINS`, never `*`; every response carries `frame-ancestors 'none'`/`X-Frame-Options: DENY`. **New routes are covered without declaring anything** — but never make a GET change state: no-cors GETs carry no `Origin`, so write protection rests on the `Origin` check of POST/PUT/PATCH/DELETE. `HOST` defaults to `127.0.0.1` (the Docker image sets `0.0.0.0`). `test/access-control.e2e-spec.ts` builds its app through `configureHttp`; other e2e suites don't and are unaffected. Spec: `docs/superpowers/specs/2026-10-08-local-api-access-control-design.md`.
-- **Demo read-only (`DEMO_READ_ONLY=true`)**: `src/common/demo-read-only.guard.ts` is a global `APP_GUARD` that answers every non-`GET`/`HEAD`/`OPTIONS` request with 403 `{ code: "DEMO_READ_ONLY" }`, except `POST /search` (a read with a body). Unset → no-op. It reads `process.env` directly at request time because `loadEnv()` requires `DATABASE_URL`. The SPA has a matching axios interceptor, but this guard is the actual protection — the API is a public URL in the demo (`docs/superpowers/specs/2026-09-01-public-demo-deployment-design.md` §3.6).
+- **Local API access control (`src/access/`, `src/http/configure-http.ts`)**: `app.enableCors()` is gone. One express middleware, registered by `configureHttp` **before every body parser, the SPA and Swagger**, decides every request with `evaluateAccess`: (1) `Host` must be `localhost`/`127.0.0.1`/`[::1]` (any port) or in `ALLOWED_HOSTS` — DNS rebinding; (2) under `/api` (matched case-insensitively by `isGatedPath` — express routes are case-insensitive too) and for any non-GET/HEAD, an `Origin` must be same-origin (`URL.host === Host`, scheme ignored for the tunnelled demo) or in `ALLOWED_ORIGINS`; with no `Origin`, `Sec-Fetch-Site: cross-site|same-site` is refused. Requests with neither header (curl, the desktop health probe, Node fetch) pass — same-Mac processes are out of the threat model. CORS headers go only to `ALLOWED_ORIGINS`, never `*`; every response carries `frame-ancestors 'none'`/`X-Frame-Options: DENY`. **New routes are covered without declaring anything** — but never make a GET change state: no-cors GETs carry no `Origin`, so write protection rests on the `Origin` check of POST/PUT/PATCH/DELETE. `HOST` defaults to `127.0.0.1` (the Docker image sets `0.0.0.0`). `test/access-control.e2e-spec.ts` builds its app through `configureHttp`; other e2e suites don't and are unaffected. Spec: `../docs/superpowers/specs/2026-10-08-local-api-access-control-design.md`.
+- **Demo read-only (`DEMO_READ_ONLY=true`)**: `src/common/demo-read-only.guard.ts` is a global `APP_GUARD` that answers every non-`GET`/`HEAD`/`OPTIONS` request with 403 `{ code: "DEMO_READ_ONLY" }`, except `POST /search` (a read with a body). Unset → no-op. It reads `process.env` directly at request time because `loadEnv()` requires `DATABASE_URL`. The SPA has a matching axios interceptor, but this guard is the actual protection — the API is a public URL in the demo (`../docs/superpowers/specs/2026-09-01-public-demo-deployment-design.md` §3.6).
 - **Meeting tags (`src/tags/`, migration `028`)**: `tag` + `meeting_tag`. Tags are addressed **by name only** — `PUT /meetings/:id/tags { names }` replaces the meeting's whole set, creates missing names, and deletes every tag left with no meeting in the same transaction, so there is no tag-management endpoint. Names are unique case-insensitively (`lower(name)` index; the first spelling wins), ≤ 30 chars, ≤ 20 per meeting. `GET /meetings` and `GET /meetings/:id` carry `tags: [{id,name}]` (rows returned by upload/favorite/PATCH do not). `GET /tags` lists only tags in use, with `meeting_count`. `POST /search` takes `filters.tagIds` (any-of) through the shared `filterSql`. **Tag suggestions (migration `029`)**: `summarize_meeting` also asks the LLM to pick ≤ 3 tags from the tags in use elsewhere and not yet on this meeting (read at run time, not carried in the payload — no wire change); the worker drops any name outside that list and stores the rest **by name** in `meeting_summary.suggested_tags`. The worker never writes `meeting_tag`. `GET /meetings/:id` returns `tag_suggestions`, recomputed on read (`TagsRepository.findSuggestions`: current version, `done`, still in use, not attached) — so a tag the user attaches or deletes while the summary runs needs no coordination. Re-queueing a summary clears the column.
 - **Meeting folders (`src/folders/`, migration `030`)**: a folder is *where* a meeting lives (exactly one per meeting); a tag is a classification (many). `meeting.folder_id` is `NOT NULL` with `DEFAULT default_folder_id()` — a SQL function, because a column DEFAULT can't hold a subquery — so any raw `INSERT INTO meeting` without the column (tests, worker fixtures, scripts) lands in the default folder. App INSERTs that bind a parameter use `COALESCE($n, default_folder_id())`, since a bound NULL skips the DEFAULT. The default folder (`기본 폴더`) is a real row (`is_default`, single-row partial unique index) and can be neither renamed nor deleted (400). The FK has **no** `ON DELETE` action on purpose: `DELETE /folders/:id` moves the folder's meetings to the default folder and deletes the row in one transaction, and a path that forgets the move is refused by the FK instead of cascading meetings away. Names: trimmed, 1–30 chars, unique case-insensitively (409). Upload (multipart `folder_id`), `POST /meetings/live` and `PATCH /meetings/:id` take `folder_id`; an unknown id is a 400 (it is a body value, not the path), checked before the upload's file is saved. `GET /folders` carries no meeting counts — the SPA counts from `GET /meetings`.
 - **'나' speaker and list aggregates (migration `031`)**: `speaker.is_me` marks the user's own speaker, at most one row (partial unique index `speaker_single_me_idx`). `PUT /speakers/:id/me` clears the previous one and sets this one in one transaction (forget the clear and the index turns it into a 500); `DELETE /speakers/:id/me` is idempotent (204). A column rather than an `app_setting` id so deleting the speaker can't leave a dangling 'me'. `GET /meetings` rows (only that endpoint) carry card aggregates as correlated subqueries: `participant_count` and `has_me` count clusters at the meeting's **current** `processing_version`, `decision_count`/`action_count` count `active` lens items only, plus `saved_count`, `preview_decision`, `preview_action` (open before done) and `preview_summary` (only when the summary is `done`).
@@ -76,93 +95,30 @@ Separate Python project under `worker/` (uv + ruff + pytest + pydantic v2 + psyc
 - **`models/specs.py`** is the one download-spec table (받기 명세 표) — both the model loaders and the inventory cache scan (`models/cache_scan.py`) read the same specs, and it stays parent-lightweight like the rest of `models/` here: no `huggingface_hub`/`faster_whisper`/torch/mlx imports.
 - **`pipeline/model_jobs.py`** (D2, `download_model`·`delete_model` handlers) — 받기는 받기 명세로 `snapshot_download`만 부르고(디스크·진행·무진행은 훅), 취소는 `downloads.cancel_when` 스레드 로컬 술어다. 화자 분리 모델의 `download_model` job은 `bundle.bundle_complete(diarization_model_dir)`이면 아무것도 받지 않고 바로 성공으로 끝낸다(스펙 2026-09-30 §3.3) — 업그레이드 전 토큰 시절에 큐에 선 job이 새 앱에서 토큰 없이 게이트 저장소를 불러 401로 실패하는 걸 막는다. 최종 실패·취소·삭제 뒤 그 repo의 `model_readiness` key를 지운다(desktop 상태 창 오안내 방지). 삭제 중 파일 시스템 오류(권한 등)는 `errors.MODEL_DELETE_FAILED`(`model_delete_failed`, PERMANENT)로 닫는다 — 분류에 맡기면 uncategorized TRANSIENT로 재시도된다.
 - **STT backend is derived from the payload, not settings.** `whisper_backend`/`device` are **gone** from `config.py`. `build_models` (`worker/damwha_worker/models/registry.py`) picks the transcriber from `devices.stt`: `gpu` → `MlxWhisper` (MLX repo per `whisper_mlx.py::_REPO`), `cpu` → `FasterWhisper` (int8). Per-stage device → torch device goes through `torch_device` (`models/device.py`); a `gpu` request on a machine without MPS is a **PERMANENT `gpu_unavailable`** failure — **no CPU fallback** (payload reproducibility).
-- **Processing settings live in the API.** `src/settings/` owns the global `ProcessingConfig` (`app_setting` table, migration `007`; presets light/standard/quality in `presets.ts` also pin a `summary_model` from the catalog in `src/contracts/model-catalog.ts` — `mlx-community/Qwen3.5-{4B,9B,27B}-8bit` — `PRESET_REVISION='2026-08-12.3'`) exposed via `GET`/`PUT /settings/processing` — PUT fully resolves a named preset before its GPU-eligibility check. `summary_language` (`transcript`|`ko`|`en`) is preset-independent — it isn't part of any preset's field set, so changing preset never touches it. A stored row without it (pre-existing rows) falls back to env `SUMMARY_LANGUAGE`; PUT has no such fallback and requires the field on every write, custom or named preset alike. `src/system/` exposes `GET /system/capabilities` (`gpu_eligible` = hardware fit only). **That whole spec describes the machine the worker runs on, which does not always match the machine the API runs on.** In the now-discontinued self-hosted install, the API ran as a Linux container while the worker ran on the host Mac; the desktop app runs both as children of the same Electron supervisor on the same Mac, so that split no longer exists in a shipping deployment. `CapabilitiesService.get()` still resolves it from three sources, most trustworthy first: (1) the worker's own **measurement**, written to `app_setting`'s `worker_capabilities` key at supervisor start (`worker/damwha_worker/capabilities.py`; zod-validated by `WorkerCapabilitiesSchema`, cached 30s); (2) `CAPABILITIES_{PLATFORM,ARCH,MEMORY_GB,CHIP}` env — a fallback the retired self-hosted `deploy/docker-compose.yml` used to set so a container that had never seen a worker still reported the host; nothing in the current stack (dev or desktop) sets it, but the code still reads it; (3) `process.platform`/`process.arch`/`os.totalmem()`/`sysctl` (dev). (2)+(3) are the `CAPABILITIES` provider — detected once at boot, and the seam every e2e overrides. `sysctl` is gated on the *real* `process.platform`, since an env-declared `darwin` puts no `sysctl` binary in the container. **Only (1) can say `gpu_eligible=false` on a machine that looks like an Apple Silicon Mac**: env and process detection both infer it from `platform+arch`, which a Rosetta python passes — the UI then opens the GPU presets and the upload dies mid-pipeline as `gpu_unavailable`. The worker instead calls the very predicate `torch_device` uses (`models/device.py::mps_available`) in a child process, so the UI's gate and the job's success condition cannot diverge; the child keeps torch's few hundred MB out of the long-lived supervisor. A missing/malformed report, a down DB, or a worker too old to write one all fall back silently — this path runs inside upload, so it must never throw. Job-level overrides: upload multipart `processing` JSON-string field (plus the `defer_lens`/`defer_summary` `"true"`/`"false"` fields — follow-up switches, not processing settings, so they stay out of `ProcessingOverride`), reprocess JSON body — **any individual field (even language-only) flips `preset` to `custom`**. **`language` is a catalog (`STT_LANGUAGES` in `@damwha/contracts`: `auto`/`ko`/`en`/`ja`/`zh`) on write paths only** — `PutProcessingValueSchema` and `ProcessingOverrideSchema` enum it, `StoredProcessingValueSchema` keeps `z.string()`. The asymmetry is deliberate: the field was a free-text FE input, so rows written before the catalog (and `env.STT_LANGUAGE`, which has no list) would fail to parse on read and drop the whole config back to the env fallback. Whisper takes **one** language token, so there is no multi-language shape to add here; `auto` means "don't pass one" and the worker maps it to `None` (`models/base.py::whisper_language`). On the MLX path that detection is reused across clips — `mlx_whisper.transcribe` re-detects on every `language=None` call, and the adapter calls it once per speech span.
+- **Processing settings live in the API** (`src/settings/`, `app_setting`, migration `007`), via `GET`/`PUT /settings/processing`.
+  - Presets light/standard/quality (`presets.ts`) each pin a `summary_model` from `src/contracts/model-catalog.ts` (`mlx-community/Qwen3.5-{4B,9B,27B}-8bit`); `PRESET_REVISION='2026-08-12.3'`. PUT fully resolves a named preset before its GPU-eligibility check.
+  - `summary_language` (`transcript`|`ko`|`en`) is preset-independent. A stored row without it falls back to env `SUMMARY_LANGUAGE`; PUT requires it on every write.
+  - **`language` is a catalog (`STT_LANGUAGES` in `@damwha/contracts`: `auto`/`ko`/`en`/`ja`/`zh`) on write paths only** — `PutProcessingValueSchema`/`ProcessingOverrideSchema` enum it, `StoredProcessingValueSchema` keeps `z.string()` so pre-catalog rows and `env.STT_LANGUAGE` still parse. Whisper takes one language token; `auto` → `None` (`models/base.py::whisper_language`), and the MLX adapter reuses that detection across clips.
+  - Job-level overrides: upload multipart `processing` JSON-string field (plus `defer_lens`/`defer_summary` — follow-up switches, kept out of `ProcessingOverride`) and the reprocess JSON body. **Any individual field (even language-only) flips `preset` to `custom`.**
+- **`GET /system/capabilities` describes the worker's machine, not the API's** (`gpu_eligible` = hardware fit only). `CapabilitiesService.get()` resolves, most trustworthy first: (1) the worker's own measurement in `app_setting.worker_capabilities` (`worker/damwha_worker/capabilities.py`, zod `WorkerCapabilitiesSchema`, cached 30s); (2) `CAPABILITIES_{PLATFORM,ARCH,MEMORY_GB,CHIP}` env — a leftover of the retired self-hosted compose that nothing sets now, still read; (3) `process.platform`/`arch`/`os.totalmem()`/`sysctl` (gated on the real `process.platform`). (2)+(3) are the `CAPABILITIES` provider — the seam every e2e overrides.
+  - **Only (1) can say `gpu_eligible=false` on what looks like an Apple Silicon Mac** (a Rosetta python passes the `platform+arch` check, then the upload dies as `gpu_unavailable`). The worker calls the same `models/device.py::mps_available` that `torch_device` uses, in a child process, so the UI gate and the job's success condition cannot diverge.
+  - A missing/malformed report, a down DB, or an old worker falls back silently — this runs inside upload and must never throw.
 - **Ownership guards (the safety model).** Every worker write to shared state is guarded; 0 affected rows = lost ownership → discard local result. Two distinct guards, both needed: **job guard** (`locked_by = worker AND status='running'` — catches a same-job requeue+reclaim) and **meeting guard** (`processing_version = payload_pv AND current_job_id = job.id` — catches a newer reprocess). `persist` applies both in one short TX → returns `committed` / `discarded` (stale: job marked `done`+reason, meeting untouched) / `lost`.
-- **Failure classification and retry timing.** `errors.ErrorKind` is PERMANENT vs TRANSIENT (uncategorized → TRANSIENT). PERMANENT → fail immediately; TRANSIENT → requeue if `attempts − interruptions < max_attempts` (Phase 6b-3 split this from the reclaim/`interruptions` budget above — the two caps are independent, and whichever is hit first ends the job). Retries **are** time-gated: migration `015` added `job.next_attempt_at`, and `db.requeue` sets it to `now() + least(30 * power(2, attempts - interruptions - 1), 900) * interval '1 second'` (30s-based backoff capped at 900s/15min, keyed off the retry-budget quantity `attempts − interruptions` rather than raw `attempts` — migration `025` raised the base from the original `least(power(2, attempts - 1), 60)`, whose 1s/2s steps burned all retries in ~3s). `requeue` also writes `job.error` — that's where the retry banner's "last error" comes from (`failures`/`max_attempts`/`interruptions`/`next_attempt_at`/`error` make up the API's `retry` object). With `job.max_attempts` defaulting to 5 (also `025`, up from 3), attempt timing after claim (no interruptions) is 0s / 30s / 90s / 210s / 450s. Both `claim` implementations (`src/jobs/jobs.repository.ts`, `worker/damwha_worker/db/queue.py`) filter on `next_attempt_at IS NULL OR <= now()` and order by `next_attempt_at NULLS FIRST, created_at`; claim clears it. The two other paths back to `queued` deliberately do **not** back off: reclaim (worker already dead — see the job queue bullet above; it bumps `interruptions`, never `attempts`, and its `queued` branch leaves `error` untouched — only a reclaim that exhausts `max_interruptions` and fails the job stamps `error`, and the code differs by which of the three SQL bodies does it: the boot-time `reclaimOrphaned` stamps `app_restarted`, while `reapStale`/the worker's `reap_stale`/`reap_own_orphans` stamp `stale_worker`) and `requeue_for_shutdown`, which **decrements `attempts`** so a graceful restart doesn't burn a retry. Heartbeat runs on its own DB connection in a daemon thread and survives a transient DB error.
+- **Failure classification and retry timing.** `errors.ErrorKind` is PERMANENT vs TRANSIENT (uncategorized → TRANSIENT). PERMANENT fails immediately; TRANSIENT requeues if `attempts − interruptions < max_attempts`. The retry cap and the interruption cap are independent — whichever is hit first ends the job.
+  - **Backoff** (`job.next_attempt_at`, migration `015`): `db.requeue` sets `now() + least(30 * power(2, attempts - interruptions - 1), 900)` seconds — keyed off the retry-budget quantity, not raw `attempts` (migration `025` raised the base; the old 1s/2s steps burned every retry in ~3s). With `job.max_attempts` default 5 (`025`), attempt timing after claim is 0s / 30s / 90s / 210s / 450s.
+  - `requeue` also writes `job.error` — the retry banner's "last error" (`failures`/`max_attempts`/`interruptions`/`next_attempt_at`/`error` form the API's `retry` object).
+  - Both `claim` implementations (`src/jobs/jobs.repository.ts`, `worker/damwha_worker/db/queue.py`) filter `next_attempt_at IS NULL OR <= now()`, order by `next_attempt_at NULLS FIRST, created_at`, and clear it.
+  - Two paths back to `queued` deliberately do **not** back off: reclaim (bumps `interruptions`, never `attempts`; its `queued` branch leaves `error` alone — only an exhausting reclaim stamps it: `app_restarted` from boot-time `reclaimOrphaned`, `stale_worker` from the other three) and `requeue_for_shutdown`, which **decrements `attempts`** so a graceful restart doesn't burn a retry.
+  - Heartbeat runs on its own DB connection in a daemon thread and survives a transient DB error.
 - **pyannote.audio resolves to 4.x** (the spec named the 3.1 *model*; the *library* major bumped). 4.x renamed `use_auth_token` → `token` and the pipeline returns a `DiarizeOutput` (use `.speaker_diarization`). The diarization pipeline loads **pyannote community-1** (앱은 번들, 앱 밖은 hub + HF_TOKEN) — see `worker/SMOKE.md`. ECAPA runs on **CPU** even on Apple Silicon (SpeechBrain MPS support is unreliable; the model is tiny); pyannote and mlx-whisper use the GPU.
 - **Tests vs smoke.** All deterministic glue (db guards, align, identify, persist, poll loop) is tested with **fake models + real Postgres** (testcontainers) and is CI-safe — the repo has no CI, so run it locally. The **real models are verified only by a local smoke** (`worker/SMOKE.md`, `scripts/smoke_process_meeting.py`) — gated/heavy, never in CI.
-- **Lens extraction is a third job type.** `extract_lenses` (`pipeline/extract_lenses.py`) reads the meeting's `status='ok'` utterances at the payload's `processing_version`, calls a **local OpenAI-compatible LLM** (`lens_client.py`; `lens_llm_base_url` defaults to `http://127.0.0.1:8000/v1`, model `mlx-community/Qwen3.5-4B-8bit`), and only persists candidates that pass pydantic validation. Failure marks the run/job — the meeting stays `done`. The LLM endpoint is loopback-local like the embed service, so the no-external-network premise holds. The client is **runtime-agnostic — there is no Ollama dependency**; the local runtime is `mlx_lm.server`, which serves an HF repo directly and validates the request's `model` field as a repo id with no way to alias it — which is why the summary catalog holds repo ids rather than Ollama tags (setup + five gotchas in `worker/SMOKE.md`). Because `response_format` is advisory for local runtimes, the LLM-response contract must tolerate an omitted nullable field — `LensCandidate.assignee_speaker_id`/`due_at` default to `None`; `extra="forbid"` still rejects invented fields. That contract is **worker-only** (no TS counterpart), unlike the job payload.
-  **The prompt is a `Speakers:` roster (`<speaker_id> <name>`, one line per
-  speaker) followed by `<index> <speaker name>: <text>` lines**, not the
-  DB rows —
-  `json.dumps` of the raw rows put `speaker_id`/`start_ms`/`end_ms` on every
-  utterance, none of which a lens item can use (there is no time field, and
-  `due_at` is a calendar date from the speech, not an offset into the
-  recording). The roster exists because `assignee_speaker_id` must match the
-  `SpeakerId` pattern (`spk_...`): the first cut dropped per-utterance
-  `speaker_id` entirely, and a meeting with named speakers (mtg_21, job_131)
-  came back with every assignee NULL — the model had no `spk_` token anywhere
-  in its context to cite. Listing each id once (2–12 lines) restores that
-  without re-paying the per-utterance cost. Before the trim the raw-row format
-  made mtg_10 (778 utterances) a 119,563-character prompt and
-  mtg_3 (997) a 236,484-character one; both died on the LLM timeout, and every
-  run over ~250 utterances failed. The line format is 39,238 and 133,215
-  characters. Like `summary_client`, transcript lines cite utterances by
-  **1-based index**, and `lens_client` maps the reply's `primary_index`/
-  `supporting_indexes` back to real ids before returning `LensCandidate`s (the
-  LLM-side shape is a private `_LlmLensItem`; the persist-side contract is
-  unchanged). Real ids in the prompt were tried first and failed measurably:
-  the model interpolated between `utt_2657`/`utt_2659` and cited `utt_2658` —
-  a `transcribe_failed` row excluded from the prompt — so mtg_1's whole
-  extraction died as `invalid_lens_candidate`, permanently, since
-  `temperature=0` replays the same reply. Consecutive integers land on a real
-  utterance even when interpolated. An out-of-range `primary_index` drops only
-  that item (logged); out-of-range `supporting_indexes` are removed and the item
-  kept. Indexes are never clamped here — a primary is a claim that *this*
-  utterance is the evidence, and clamping would pin it to an unrelated one.
-- **Conversation summary is a fourth job type.** `summarize_meeting`
-  (`pipeline/summarize_meeting.py`) reads the same `status='ok'` utterances as
-  `extract_lenses` and calls the same local LLM through `summary_client.py`,
-  but writes a single `meeting_summary` row (topics + segments as jsonb). The
-  summary model comes from two different places depending on who triggers the
-  job: the worker's auto-enqueue uses the payload's `models.summary_model`
-  (falling back to the worker's own env default when absent — v1/v2
-  payloads; skipped entirely when `followups.summary` is false, which is what
-  upload's `defer_summary=true` sets), while the API's manual regeneration
-  (`POST /meetings/:id/summary/generate`) uses the global processing
-  setting's `summary_model` unless the request body overrides it, and
-  returns `409` if a different model is already in flight for that meeting.
-  The two jobs are queued together in the `persist` transaction and are
-  otherwise **independent** — a summary failure leaves lens items untouched
-  and vice versa. **The LLM supplies only boundary indexes (the client maps them to `utterance_id`s); `start_ms`/`end_ms`
-  are derived from the DB rows** (`_resolve_segments`), so a model cannot
-  invent timestamps. **The prompt carries only `<index> <speaker>: <text>`
-  lines** — not the DB rows. Sending each utterance as a JSON object with
-  `speaker_id`/`start_ms`/`end_ms` made the transcript 19% of its own prompt:
-  mtg_22 (624 utterances, 16.5k characters of speech) serialized to 88k
-  characters / 45.4k tokens, of which the model could use none of the
-  timestamps (the system prompt forbids emitting them and `_resolve_segments`
-  derives the real ones from the DB) and none of the ids (replaced by 1-based
-  indexes). `mlx_lm.server` prefill is dominated by prompt length, not
-  parameter count, so that cost ~285s before a single token was generated and
-  the run died on the 900s client timeout mid-generation — dropping to 4B did
-  not move it. The line format is 13.5k tokens for the same meeting.
-  Utterance-internal newlines are folded so one utterance stays one line;
-  a nameless speaker falls back to `speaker_id` rather than dropping the turn's
-  attribution. Boundaries are normalized, not rejected: `summary_client`
-  clamps out-of-range indexes into `1..N`, and `_resolve_segments` swaps
-  reversed boundaries, sorts segments, and trims or merges overlaps without
-  dropping a bullet. The one PERMANENT reject left is a boundary outside the
-  meeting, which the index mapping makes unreachable in practice. The summary is **read-only** — there is
-  no per-item edit path, no `source` column, and no merge; regeneration
-  replaces the row wholesale. `summary_client.py` sends an explicit
-  `max_tokens` (`lens_llm_max_tokens`, default 8192) because the server default
-  (512 on `mlx_lm.server`) truncates a long meeting's JSON mid-object; a
-  `finish_reason='length'` reply fails PERMANENT naming the budget rather than
-  surfacing as unparseable JSON.
-- **Neither LLM client retries, and an LLM timeout is PERMANENT.** Both used to
-  requeue on `httpx.TimeoutException`, and `summary_client` additionally re-asked
-  once with the validation error fed back. Both are gone: the prompt, the model,
-  and `temperature=0` are all unchanged between attempts, so the reply is the
-  same bytes and the timeout lands at the same point — and because the LLM server
-  is job-owned it is torn down between attempts, so a retry re-pays the full
-  prefill with a cold prompt cache. mtg_22 spent 45 minutes failing the same
-  15-minute way three times before reporting `llm_request_failed`. A
-  `httpx.RequestError` (connection refused, server still coming up) stays
-  TRANSIENT — that one really can differ on the next attempt. Removing the
-  feedback loop also removed `summarize`'s `validate` callback, which existed
-  only to route domain checks into it; `pipeline/summarize_meeting.py` still
-  calls `_resolve_segments` on the response exactly as before.
+- **Lens extraction (`extract_lenses`) and conversation summary (`summarize_meeting`) are the third and fourth job types.** Both read the meeting's `status='ok'` utterances at the payload's `processing_version` and call a **local OpenAI-compatible LLM** (`lens_client.py` / `summary_client.py`; `lens_llm_base_url` default `http://127.0.0.1:8000/v1`, model `mlx-community/Qwen3.5-4B-8bit`). The runtime is `mlx_lm.server` — no Ollama — which validates `model` as an HF repo id, hence the catalog holds repo ids (setup + gotchas in `worker/SMOKE.md`). Measurements and history behind every rule below: [`docs/llm-jobs.md`](docs/llm-jobs.md).
+  - Failure marks the run/job only — the meeting stays `done`. The two jobs are queued together by `persist` and are otherwise independent.
+  - **Prompts are `<index> <speaker>: <text>` lines, never JSON rows** (row JSON pushed long meetings past the LLM timeout). Lens prompts add a `Speakers:` roster (`<speaker_id> <name>`) so `assignee_speaker_id` can cite a `spk_` id. Utterance-internal newlines are folded; a nameless speaker falls back to `speaker_id`.
+  - **Utterances are cited by 1-based index, never by real id** — the clients map indexes back to ids (real ids got interpolated onto excluded rows). Lens: out-of-range `primary_index` drops that item, out-of-range `supporting_indexes` are removed; never clamp a primary. Summary: indexes are clamped into `1..N` and `_resolve_segments` swaps/sorts/merges boundaries; `start_ms`/`end_ms` come from DB rows, never the LLM.
+  - Lens LLM contract is worker-only: nullable fields default `None`, `extra="forbid"`; ids are re-validated server-side against the meeting at that `processing_version`.
+  - Summary is read-only (no edit path, no merge; regeneration replaces the row). Model source: worker auto-enqueue uses the payload's `models.summary_model` (env default for v1/v2; skipped when `followups.summary` is false); manual `POST /meetings/:id/summary/generate` uses the global setting unless the body overrides it, 409 if a different model is in flight. `summary_client` sends explicit `max_tokens` (`lens_llm_max_tokens`, 8192); `finish_reason='length'` is PERMANENT.
+  - **Neither LLM client retries, and an LLM timeout is PERMANENT** — same prompt, model and `temperature=0` replay the same failure. `httpx.RequestError` (server not up yet) stays TRANSIENT.
 - **The LLM server's lifetime is owned by the job, not by the operator.**
   `llm_server.py::managed_llm_server` wraps the `extract_lenses` /
   `summarize_meeting` handlers (`jobs.py`): the one-job child starts
@@ -184,182 +140,22 @@ Separate Python project under `worker/` (uv + ruff + pytest + pydantic v2 + psyc
   startup timeout or an early exit. Because the server is a grandchild of the
   supervisor and inherits its process group, a group kill takes it down too;
   the normal path never relies on that.
-- **Live session is a fifth job type — and the browser is the capturer, not the worker.**
-  `live_session` (`pipeline/live_session.py`) streams a preview (`live_utterance`) while the
-  meeting is `recording`; on stop the meeting flips to `uploaded` and the payload's embedded
-  **`process_meeting`** (wire v5 under `live_session` v1, v6 under v2) is enqueued verbatim —
-  the batch pass is the record, the live pass is a preview. Two specs, in order: the original
-  `docs/superpowers/specs/2026-09-05-live-recording-design.md`, then
-  `docs/superpowers/specs/2026-09-05-live-recording-browser-capture-design.md`, which
-  **reverses its §2.1**. Read the second one's §2.1 first — the first spec's capture
-  architecture is history, not current behaviour.
-
-  **Who holds the audio.** The browser does `getUserMedia` → `AudioWorklet` → 16 kHz mono
-  int16 PCM → 32,768-byte chunks (1.024 s) → `POST /meetings/:id/live/audio`. The **API** is
-  the WAV writer (`storage/live-audio.service.ts` — `StorageService.save()` is `writeFile`,
-  which truncates, so append needed its own service); the worker **tails** that growing file
-  (`audio/tail_source.py`). The worker writes no audio at all. Constants must agree across
-  three languages: `SR=16000`, `FRAME_BYTES=1024`, `CHUNK_BYTES=32768`, `HEADER_LEN=44`,
-  **32 bytes/ms** (`live.service.ts`, `tail_source.py`, `pcm-convert.ts`).
-
-  **The offset/ACK protocol is the whole correctness story.** Each chunk carries an explicit
-  `X-Audio-Offset` (PCM bytes, header excluded); the server compares it against
-  **`job.committed_bytes`** and a mismatch is **409 carrying `expected_offset`**, so a lost
-  ACK resyncs instead of tearing a hole. Exactly one request in flight. A 409 that carries
-  *no* offset is terminal, not a resync — the client must treat it as a hard failure, or
-  `this.offset` goes `undefined` and every later request 400s including the stop that would
-  have sealed the recording. A resent chunk (`offset + len === committed`) is ACKed as a 409
-  at the committed boundary, and `markInput` is **committed before** that 409 is thrown —
-  a producer that is demonstrably alive must not be sealed by the orphan sweeper.
-
-  **`job.committed_bytes` (migration `024`) is the append-offset authority — the file length
-  is not.** This is the one rule the 2026-09-07 capture-hardening pass added, and everything
-  else follows from it. A crash between `write` and `fdatasync`, or a short `FileHandle.write`,
-  leaves an *unconfirmed tail* on disk: the file is longer than anything the API ever
-  acknowledged. Deriving `expected` from `stat.size - 44` (the pre-024 behaviour) would
-  promote those bytes to canon. So: `LiveAudioService.writeAt` loops until the whole buffer is
-  written (never assumes one `write` call drains it), `datasync()`s, and only then does
-  `setCommitted` advance the boundary **in the same transaction as the append**; every entry
-  point calls `recover(key, committed)` first, which **truncates the file back to
-  `44 + committed_bytes`** — and *throws* if the file is shorter than that, because losing
-  already-committed bytes is a disk failure, not something to zero-fill. `pcmSize()` survives
-  only as a test helper — no production path may reason from file length. The cap is
-  `MAX_PCM_BYTES = 460_800_000` (4 h at 32 bytes/ms).
-
-  **`committed_bytes` vs `sealed_bytes` — they are not the same fact.** `committed` advances on
-  every append; `sealed` is the single moment one of those boundaries is declared final. The
-  `024` CHECK enforces the relationship (`type='live_session'`, even, and
-  `sealed_bytes IS NULL OR sealed_bytes = committed_bytes`) so the two can never disagree in
-  the DB. `sealed_bytes` stays the **sole EOF authority** — not the file size, not the WAV
-  header. File append, header rewrite and DB commit cannot be one transaction, so one of them
-  has to win. `TailSource` therefore treats **EOF as "caught up", never as "done"**, caps its
-  reads at `committed_bytes`, and never reads the header's size fields (the API rewrites them
-  at seal time; a read mid-rewrite truncates the transcript). Stop carries the final tail
-  **in its body** so there is no window between the last chunk and the seal: `offset ===
-  committed` → append + seal in one transaction; an already-sealed job answers idempotently
-  when `sealed === final`; otherwise `missing_chunk` 409.
-
-  **A session created before `024` cannot be resumed.** `committed_bytes IS NULL` on a live
-  row means the session predates the column, and the API refuses it with a **409 whose `code`
-  is `io_error`** (message: "this live session predates the committed byte boundary") rather
-  than back-deriving a boundary from the file — back-deriving is exactly the unconfirmed-tail
-  bug the column exists to prevent. That code label is a known wart: it is a compatibility
-  refusal, not a disk error, and the client treats any code-bearing 409 as terminal either way.
-  That is why the (now-retired) self-hosted deployment procedure required draining active
-  recordings before applying `024`, and why `LiveOrphanService` closes such a row as an
-  `io_error` instead of sealing it.
-
-  **The 4-hour cap is enforced at the byte boundary, not by a timer.** A chunk that would cross
-  `MAX_PCM_BYTES` has its in-bounds prefix written and the session is sealed there; the client
-  gets a 409 with code `duration_limit` (not a plain resync) and stops capturing. That stop
-  does **not** finalize — a capped session is left to the worker or the sweeper.
-
-  **`meeting.capture_error` is separate from `meeting.error` on purpose** — finalize and
-  persist both write `error=NULL`, so "how this recording was obtained" needs a field that
-  survives a successful final pass. Written by: the browser's stop (`X-Capture-Error`:
-  `device_ended` / `buffer_overflow` / `upload_failed`; an unrecognised value is folded to
-  `capture_failed` rather than 400ing, because a diagnostic header must never block the seal),
-  the gap check on append and stop (`capture_gap`), and the orphan sweeper
-  (`producer_abandoned`) / API finalize (`preview_worker_lost`). Verified 2026-09-07 on a real
-  recording whose worker was killed mid-session: the meeting finished the canonical pass as
-  `done` with `error = NULL` **and `capture_error = preview_worker_lost` still set** — that
-  survival is the whole reason the column is separate.
-  `LiveService.stop` writes the header's error **before** the seal/idempotency branches, so a
-  retried stop that carries `X-Capture-Error` still records it after the session is sealed.
-
-  **Recording does not depend on the worker — a worker failure ends the *preview* only.**
-  `reapStale`'s `fail_meetings` covers `process_meeting` only, and **both reapers now agree**:
-  the Python `db.reap_stale` excludes `live_session` from `fail_meetings` and from the requeue
-  set exactly as the TypeScript `JobsRepository.reapStale` does. (Only the TS side had this
-  until 2026-09-07; the carry-over list had recorded the item as closed while `db.py` still
-  failed the meeting. `be/test/reaper.spec.ts` and
-  `worker/tests/test_db_lifecycle.py::test_reap_stale_fails_live_session_but_leaves_the_meeting_recording`
-  now pin the same contract on both sides.) The worker's own failure paths do the same: for a
-  `source='browser'` session, both the `ShutdownRequested` path and the generic exception path
-  call **`db.fail_live_preview`**, never `fail_process_meeting` — the job goes `failed` with
-  code `worker_shutdown` (or the classified error) while the meeting stays `recording` and
-  keeps accepting appends. Measured on 2026-09-07: SIGTERM to a live worker, then 15 further
-  `POST /live/audio` all 200 and `committed_bytes` advanced by exactly 15 × 32,768.
-
-  That makes **"who finalizes"** the load-bearing predicate, and it is `job.status !== 'running'`
-  (queued = never claimed, failed = the reaper *or the worker's own preview failure* closed it)
-  in **both** `LiveService.stop` and `LiveOrphanService.sweep`. The sweeper has two jobs, not
-  one: seal an abandoned producer (`last_input_at` stale ≥ 90 s, `@Cron(EVERY_30_SECONDS)` — a
-  worker's heartbeat cannot prove the *browser* is alive), **and** finalize an already-sealed
-  session no worker will finish. Without the second, a browser+worker death leaves the meeting
-  in `recording` forever and `meeting_single_recording_idx` blocks every future recording.
-  Worker liveness is judged only by `job.status` — the reaper owns that threshold, and a
-  second one here would drift from it.
-
-  **The sweeper re-validates liveness under the lock, not just status.** Candidate selection
-  and sealing are different transactions, so a browser can commit a perfectly good append in
-  between. After taking job → meeting locks, `sweep` re-checks `isProducerExpired` **against
-  the DB clock it now holds**; a session that became fresh again is left alone. Only then does
-  it `recover()` to the committed boundary and seal *there* — never at the file length. Order
-  matters: an already-sealed row skips the producer check entirely and goes straight to
-  recovery-finalize, and a `committed_bytes IS NULL` row is closed as `io_error` rather than
-  guessed at. A 0-byte sweep result is **failed and kept** (`producer_never_started`), not
-  deleted — only a user-pressed stop deletes a 0-byte meeting.
-
-  **Lock discipline: job row first, then meeting**, in every writer (`appendAudio`, `stop`,
-  `sweep`, `MeetingsService.cancel`, and the worker's `finalize_live_session`); the paths that
-  start from a meeting id re-verify `current_job_id` under both locks. Locking only the
-  meeting lets `claim` (job row, `SKIP LOCKED`) slip in.
-
-  **Failure marking lives in its own transaction.** The `io_error` path marks job+meeting in a
-  *separate* `withTransaction` after the append transaction rolled back — marking inside it and
-  throwing rolls the marking away too, and then nothing ever closes the session. That recovery
-  re-locks job → meeting and re-checks four things, the load-bearing one being
-  **`job.committed_bytes` is still the value it was when the write failed**, because a
-  legitimate retry (a lost ACK) may have won the race in between. The status alone cannot tell
-  (a successful append leaves the meeting `recording` either way), and **the file length is
-  useless here by construction** — our own partial write is what stretched it. The committed
-  boundary is the only signal that distinguishes "nobody made progress" from "someone else
-  already did".
-
-  **`source: 'mic'` is a reserved contract slot that is rejected at dispatch.** After the
-  capture flip a mic session is silently wrong — the API stores the browser's bytes while the
-  worker transcribes the host mic, and `MicSource` never observes `sealed_bytes`, so the loop
-  runs to `max_minutes` (4 h) after stop. `jobs.py::default_live_source` raises PERMANENT
-  `audio_device_failed` instead. `MicSource` and its tests stay as the reference for a future
-  system-audio capturer (§10.3 constrains how that can share a WAV).
-
-  Unchanged from the original design: `max_attempts=1` and every live error is PERMANENT; a
-  live job is **never** `requeue_for_shutdown`d (a re-claimed worker would re-transcribe audio
-  that already went by); claim orders `live_session` first
-  (both claim SQLs); one `recording` meeting at a time (`meeting_single_recording_idx`); live
-  identification binds at `suggest_threshold`; `persist_process_meeting` deletes the meeting's
-  `live_utterance` rows; `ffmpeg.normalize` repairs a streaming header left by a crash.
-
-  **Deleted by the flip** (do not reintroduce): the mic callback's writer thread and its
-  streaming-WAV `close()`, the dual-queue tee, and the join-ordering rule between them. The
-  worker no longer owns a file handle. `pcm-worklet.ts` still has **no jsdom coverage** (jsdom
-  has no `AudioContext`), but it is no longer untested: `pnpm fe verify:worklet` evaluates the
-  **built** `fe/dist/assets/pcm-worklet-*.js` in `node:vm` and drives the same
-  begin/flush sequence as the protocol unit test, which is what catches a regression to
-  copying the raw `.ts` as a URL asset. A real browser is still the only check of
-  `audioWorklet.addModule()` itself — `worker/SMOKE.md`'s 실기기 브라우저 스모크 procedure.
-
-  **Dev: API and worker are both host processes** and `be/.env`'s `./storage` is the worker's
-  `../storage` — literally one directory. (The now-retired self-hosted install had a second
-  shape: the API as a Linux container whose `STORAGE_ROOT=./storage` resolved to
-  `/repo/be/storage`, bind-mounted from the host, which the host worker read directly. Measured
-  2026-09-07 with an image built from this branch: bytes the container committed were visible
-  to a host `stat` within **0.01–0.02 ms** of the 200, and a host `TailSource` read the
-  container-written growing file to its seal with `skips=0` — kept here because it demonstrates
-  the bind-mount latency is negligible, in case a similar split ever recurs.) Applying `024`
-  requires draining active recordings first.
+- **Live session is a fifth job type — the browser captures, the API writes the WAV, the worker tails it.** Full rules, measurements and history: [`docs/live-session.md`](docs/live-session.md) — read it before touching `src/live/`, `src/storage/live-audio.service.ts`, `LiveOrphanService`, `pipeline/live_session.py`, `audio/tail_source.py` or fe `lib/live-*`. Current-behaviour spec: `../docs/superpowers/specs/2026-09-05-live-recording-browser-capture-design.md` (its §2.1 reverses the original spec's capture design). Invariants:
+  - **`job.committed_bytes` is the append-offset authority, `sealed_bytes` the sole EOF authority** (`024` CHECK keeps them consistent). No production path reasons from file length or the WAV header; `recover()` truncates to `44 + committed_bytes` before every append/stop/sweep. A row with `committed_bytes IS NULL` predates `024` and is refused (409 `io_error`), never back-derived.
+  - **Offset/ACK protocol:** each chunk carries `X-Audio-Offset`; 409 with `expected_offset` = resync, 409 with a `code` or without an offset = terminal. One request in flight. Stop carries the final tail in its body.
+  - Constants agree across three languages: `SR=16000`, `FRAME_BYTES=1024`, `CHUNK_BYTES=32768`, `HEADER_LEN=44`, 32 bytes/ms (`live.service.ts`, `tail_source.py`, `pcm-convert.ts`). Cap `MAX_PCM_BYTES` (4 h) is enforced at the byte boundary (409 `duration_limit`).
+  - **A worker failure ends the preview only** — `db.fail_live_preview`, never `fail_process_meeting`; the meeting stays `recording`. Both reapers exclude `live_session` from `fail_meetings`. "Who finalizes" is `job.status !== 'running'` in both `LiveService.stop` and `LiveOrphanService.sweep`; the sweeper re-checks producer liveness under the lock.
+  - **Lock order: job row, then meeting** in every writer. Failure marking runs in its own transaction and re-checks `committed_bytes` unchanged.
+  - `meeting.capture_error` is separate from `meeting.error` on purpose (survives a successful final pass).
+  - `max_attempts=1`, every live error PERMANENT, never `requeue_for_shutdown`; claim orders `live_session` first; one `recording` meeting at a time (`meeting_single_recording_idx`). `source: 'mic'` is rejected at dispatch (`audio_device_failed`).
 - **Search indexing.** `index_meeting` is a separate job type (dispatched by the API after persist completes). Failure marks the job only — the meeting stays `done` and BM25-searchable. Query embedding is the **single exception to the job-table-only invariant**: the API calls the embed service (localhost HTTP RPC, `POST /embed`) directly at query time; this never crosses a network boundary (`EMBED_SERVICE_ALLOW_NON_LOOPBACK=false`).
 
 ## Commands
 
 `be/` is the `damwha-be` package of the Damwha monorepo. Node **22** is required
-(`.nvmrc`, `engines`); `pnpm` is pinned to 10.26.0 by the root `package.json` and
-activated by corepack. **Never run `npm install` here** — it recreates a
-`package-lock.json` and a hoisted `node_modules` that the workspace no longer uses,
-and it re-masks undeclared dependencies (`multer` was exactly that bug).
-
-Install once from the monorepo root; everything else works from either directory.
+(`.nvmrc`, `engines`). The root [`CLAUDE.md`](../CLAUDE.md) hard rules apply here — above
+all, **never run `npm install` in `be/`**. Install once from the monorepo root; everything
+else works from either directory.
 
 ```bash
 pnpm install                             # FROM THE MONOREPO ROOT — installs be + fe
@@ -412,5 +208,4 @@ uv run --with edlib python scripts/eval_speaker_attribution.py score --cache <di
 
 ## Working guidelines
 
-- Keep diffs scoped to the request. If you notice unrelated dead code, mention it rather than deleting it.
-- For a bug fix, first write a test that reproduces the bug, then make it pass.
+General agent guidelines live in the root [`CLAUDE.md`](../CLAUDE.md). Backend-specific: for a bug fix, first write a test that reproduces the bug (real Postgres, no DB mocks), then make it pass.

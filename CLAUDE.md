@@ -121,7 +121,19 @@ does it — the superpowers plugin is not required. Simple work leaves none.
 - These are dated snapshots — never edit one after the fact; a later spec
   supersedes an earlier one. `.omo/` is local working state and is not committed.
 
+## Agent guidelines
+
+Apply to every package; package CLAUDE.md files add only package-specific rules.
+
+- **Think before coding.** State assumptions; if a request has several readings, name them instead of picking silently; if something is unclear, ask.
+- **Simplicity first.** Minimum code for the request — no speculative features, single-use abstractions or handling for impossible cases.
+- **Surgical changes.** Touch only what the task needs and match the surrounding style. Mention unrelated dead code instead of deleting it; remove only what your own change orphaned.
+- **Verifiable goals.** A bug fix starts with a test that reproduces it; a refactor keeps tests green before and after.
+- **Doc language.** Keep each CLAUDE.md in its current language (`be/`·`fe/` English prose, `desktop/` Korean); UI copy, commit messages and specs are Korean.
+
 ## graphify
+
+When the user types `/graphify`, use the installed graphify skill (`.claude/skills/graphify/SKILL.md`) before doing anything else.
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships. It is gitignored — regenerate it locally.
 
