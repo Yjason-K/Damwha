@@ -1,376 +1,293 @@
 <div align="center">
 
+<!-- TODO: replace with a 15–20 s GIF: ⌘K search → click a hit → playback jumps to that moment -->
 <img src="fe/public/og.png" alt="Damwha" width="760">
 
 # Damwha (담화)
 
-**Self-hosted conversation recording and search.** Every utterance is
-speaker-attributed, timestamped, and traceable back to the original audio.
-Everything runs on your own Mac — no cloud ML, voiceprints stay on disk.
+**Record your conversations. Find any sentence. Hear the exact moment it was said.**<br>
+Speaker-attributed, searchable conversation memory that runs entirely on your Mac.
 
+[![Latest release](https://img.shields.io/github/v/release/Yjason-K/Damwha?color=1DDCA5&label=release)](https://github.com/Yjason-K/Damwha/releases/latest)
+[![macOS 15+ · Apple Silicon](https://img.shields.io/badge/macOS%2015%2B-Apple%20Silicon-000000?logo=apple&logoColor=white)](#install)
+[![Downloads](https://img.shields.io/github/downloads/Yjason-K/Damwha/total?color=555)](https://github.com/Yjason-K/Damwha/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-1DDCA5.svg)](LICENSE)
-[![Node 22](https://img.shields.io/badge/Node-22-339933?logo=nodedotjs&logoColor=white)](.nvmrc)
-[![pnpm 10.26](https://img.shields.io/badge/pnpm-10.26-F69220?logo=pnpm&logoColor=white)](package.json)
-[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](be/worker/pyproject.toml)
-[![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-MLX-000000?logo=apple&logoColor=white)](#ml-models)
 
-### [Website](https://damwha.0kimjae.dev) · [▶ Try the live demo](https://damwha-demo.0kimjae.dev)
+### [⬇ Download for macOS](https://github.com/Yjason-K/Damwha/releases/latest) · [▶ Live demo](https://damwha-demo.0kimjae.dev) · [Website](https://damwha.0kimjae.dev)
 
 **English** · [한국어](README.ko.md)
 
-[Features](#features) · [How it works](#how-it-works) · [Quickstart](#quickstart) · [Architecture docs](be/CLAUDE.md)
-
 </div>
 
----
+> **Before you record:** Damwha shows no recording notice, and it stores a voiceprint
+> for *every* participant, not just you. Getting consent is up to the person running
+> it. → [Recording and consent](#recording-and-consent)
 
-## What it is
+## Why Damwha
 
-Conversations pile up, but finding "that thing we said" doesn't get easier.
-Memory fades, transcripts are long, and every STT service makes you rename
-"Speaker 1" by hand every single time.
+Conversations pile up, and finding "that thing we said" never gets easier. Transcripts
+are long, and every STT service makes you rename "Speaker 1" by hand, every single time.
 
-Damwha treats the **utterance** as the primary object. Each one is tied to four
-things — **who** said it (voiceprint-based automatic identification), **when**
-(which conversation, at what second), the **original text and audio**, and the
-**surrounding turns**. That's what makes the signature capability work:
-*utterance jump* — from a search hit or an extracted decision, land on the exact
-moment and hear it.
+Damwha treats the **utterance** as the primary object. Each one is tied to *who* said
+it, *when* (which conversation, which second), the original text and audio, and the
+turns around it.
 
-A recording may be a meeting, an interview, a call, or just a conversation —
-nothing in the pipeline assumes "meeting". Typed extraction (action items,
-decisions, promises) is an extension layer: when a conversation isn't
-meeting-shaped it simply yields nothing and the section disappears.
+- **Utterance jump.** From a search hit or an extracted decision, land on the exact
+  moment and hear it.
+- **Speakers named automatically.** Voiceprints are matched against people you have
+  enrolled, across every conversation.
+- **Local by design.** Transcription, diarization, search and the summary LLM all run
+  on your Mac. No account, no cloud ML.
 
-**Non-goals:** team wikis, per-member analytics dashboards, meeting knowledge
-graphs. This is a personal conversation memory, not a team monitoring tool.
+It works for any recording: a meeting, an interview, a call, or just a chat. Action
+items and decisions show up when the conversation has them; when it doesn't, that
+section stays empty and hidden.
 
-> The product UI and the design docs are written in **Korean**. Code, API, and
-> this README are in English.
+**Not a goal:** team wikis, per-member analytics, or meeting knowledge graphs. Damwha
+is a personal conversation memory, not a team monitoring tool.
 
-> **Before you record** — Damwha shows no recording notice, and it stores a
-> voiceprint for every participant in the conversation, not just yours. Getting
-> consent is on whoever runs it. → [Recording and consent](#recording-and-consent)
+## Install
 
-## Live demo
+1. Download the latest **DMG** from [Releases](https://github.com/Yjason-K/Damwha/releases/latest)
+   (signed and notarized).
+2. Open it and drag **Damwha** into Applications.
+3. Launch it. The database, API, ML worker and ffmpeg ship inside the app, so there is
+   no Docker or Postgres to set up.
 
-**[damwha-demo.0kimjae.dev](https://damwha-demo.0kimjae.dev)** — read-only, no
-signup. A 1-minute guided tour walks upload → diarization → transcript → search.
+**Requirements:** macOS 15.0+ on Apple Silicon. Models download on first use. The smallest
+setup needs about 8 GB of disk, and the largest about 35 GB. Sizes, locations, and
+how to pre-download or delete them: [`docs/MODELS.md`](docs/MODELS.md).
 
-The three sample conversations are Google NotebookLM Audio Overviews (**AI-generated
-voices, not real people** — the first-visit notice says so), processed by the
-*actual* pipeline on an M2. What you see is real output, not a mockup.
+Want to look before installing? The **[live demo](https://damwha-demo.0kimjae.dev)**
+is read-only, needs no signup, and opens with a one-minute guided tour. Its three
+sample conversations are Google NotebookLM Audio Overviews (AI-generated voices, not
+real people), processed by the real pipeline on an M2.
+
+> The app UI is available in **Korean and English**, and summaries can be written in
+> either. The design docs are in Korean. Code, API and this README are in English.
 
 ## Features
 
 | | |
 | --- | --- |
 | <img src="docs/images/01-transcript.png" alt="Three-pane transcript view"> | <img src="docs/images/02-search.png" alt="Command palette search"> |
-| **Speaker-attributed transcript.** Three-pane shell: conversation list, transcript, insight panel. The bottom rail is a per-speaker activity timeline over the whole recording — click or drag anywhere on it to seek. | **⌘K search, everywhere.** Hybrid search (bge-m3 vectors + BM25/pg_bigm) over utterances *and* conversations, from any screen. Hits jump straight to the moment. |
+| **Speaker-attributed transcript.** Conversation list, transcript, and insight panel side by side. The bottom rail is a per-speaker timeline of the whole recording: click or drag anywhere to seek. | **⌘K search, everywhere.** Hybrid search (bge-m3 vectors + BM25/pg_bigm) over utterances *and* conversations. Every hit jumps straight to its moment. |
 | <img src="docs/images/03-lenses.png" alt="Global lens dashboard"> | <img src="docs/images/04-settings.png" alt="Processing settings"> |
-| **Lenses across every conversation.** Action items, decisions, and promises extracted by a local LLM, each with a jump-to-evidence link. Auto-filled, non-blocking, and post-editable — re-extraction preserves anything you touched. | **Hardware-aware presets.** The app reads the host Mac's actual spec and recommends a preset; each one pins a Whisper size, a summary model, and per-stage CPU/GPU placement. |
+| **Lenses across every conversation.** Action items, decisions and promises extracted by a local LLM, each linked to its evidence. Editable, and re-extraction keeps anything you touched. | **Hardware-aware presets.** Damwha reads your Mac's actual spec and recommends a preset that fixes the Whisper size, the summary model and per-stage CPU/GPU placement. |
 
-Also: browser-based live recording with a running preview, per-conversation
-notes, speaker enrollment and cross-conversation identity, export, and
-re-processing an old recording with a newer model.
+Also included:
+
+- live recording with a running preview
+- per-conversation notes and tags
+- speaker enrollment
+- export
+- re-processing old recordings with newer models
+- **encrypted share links**: the server stores only ciphertext, and the key lives in
+  the link's `#` fragment
+
+### CLI and MCP for coding agents
+
+The app ships a `damwha` command and a stdio **MCP server**, so Claude Code, Codex or any
+MCP client can search your conversations, read transcripts, upload audio and track action
+items. Install it from **Settings › CLI · MCP**, or by hand:
+
+```bash
+mkdir -p ~/.local/bin && ln -s /Applications/Damwha.app/Contents/Resources/cli/damwha ~/.local/bin/damwha
+claude mcp add --transport stdio --scope user damwha -- ~/.local/bin/damwha mcp
+
+damwha search "launch date" --limit 5
+damwha upload interview.m4a --wait
+```
+
+<img src="docs/images/2026-10-20-cli-mcp/05-claude-code-confirm.png" alt="Claude Code asking for confirmation before Damwha marks an action item done" width="720">
+
+Write actions such as completing an action item open a confirmation prompt in the
+client first. Full reference: [CLI docs](https://damwha.0kimjae.dev/cli/) ·
+[`cli/README.md`](cli/README.md).
+
+## Privacy: what runs where
+
+| Stays on your Mac | Leaves your Mac |
+| --- | --- |
+| Audio, transcripts, voiceprints, summaries, search index (bundled PostgreSQL) | **Model downloads** from Hugging Face, on first use only |
+| Transcription (mlx-whisper), diarization (pyannote), speaker ID (ECAPA), embeddings (bge-m3) | **Share links**, only when you create one: an encrypted blob is uploaded, and the key never is |
+| Summary and lens LLM (`mlx_lm.server`, managed by the app) | **Update check**: once a day, the app asks the GitHub Releases API whether a newer version exists |
+
+No telemetry, no analytics, no account.
 
 ## How it works
 
 ```mermaid
 flowchart TB
-  browser["Browser<br/>mic · file upload"]
-
-  subgraph host["Local host — nothing leaves the machine"]
+  subgraph app["Damwha.app — nothing leaves the machine"]
     direction TB
-    spa["React SPA<br/>Vite :5173"]
-    api["NestJS API<br/>:3000 · raw SQL, no ORM"]
+    ui["App window<br/>React SPA served by the API"]
+    api["NestJS API<br/>raw SQL, no ORM"]
     db[("PostgreSQL 16 · pgvector + pg_bigm<br/><b>job table = the only contract</b>")]
-    storage[("Audio storage<br/>STORAGE_ROOT")]
-    embed["Embed service<br/>bge-m3 · :8100"]
+    storage[("Audio storage")]
+    embed["Embed service<br/>bge-m3"]
     sup["Worker supervisor<br/>no ML imports"]
-    child["job child · --once<br/>exits after one job"]
+    child["Job child · --once<br/>exits after one job"]
     llm["Local LLM<br/>mlx_lm.server"]
   end
 
-  browser --> spa
-  spa -->|"REST · multipart"| api
-  api -->|"raw SQL · enqueue job"| db
-  api -->|"sole writer of live.wav"| storage
+  ui -->|"REST"| api
+  api -->|"enqueue job"| db
+  api --> storage
   api -.->|"query embedding"| embed
-  db -->|"peek · SKIP LOCKED"| sup
+  db -->|"SKIP LOCKED"| sup
   sup -->|"spawn per job"| child
   child -->|"claim · persist"| db
-  child -->|"read audio · tail live.wav"| storage
+  child --> storage
   child -.->|"lens · summary"| llm
 ```
 
-The pipeline itself:
-
 ```
-audio → ffmpeg normalize → VAD → diarization → speaker ID (pgvector cosine)
-      → STT (Whisper) → structured JSON → search indexing → lens ∥ summary → store
+audio → ffmpeg → VAD → diarization → speaker ID (pgvector cosine) → STT (Whisper)
+      → structured JSON → search indexing → lens ∥ summary → store
 ```
 
-**The API and the worker never talk over HTTP.** The Postgres `job` table is the
-only contract between them, validated by zod on the TypeScript side and pydantic
-on the Python side. The one other shared row is `app_setting.worker_capabilities`,
-written by the worker and read-only for the API — that's how the API reports the
-host Mac's spec instead of its own container's.
+**The API and the ML worker never talk over HTTP.** The Postgres `job` table is the only
+contract between them, validated by zod on the TypeScript side and pydantic on the Python
+side. The worker's supervisor imports no ML libraries and spawns a fresh child per job,
+so the OS reclaims MLX/torch GPU memory between jobs instead of building up to an OOM.
 
-`pnpm worker` starts a **supervisor** parent that imports no ML libraries; per job
-it spawns a `--once` child that exits when the job is done, so the OS reclaims
-MLX/torch GPU memory between jobs instead of accumulating it into an OOM.
-
-Interactive versions of these diagrams (searchable, path-traceable, single-file
-HTML) live in [`docs/diagrams/`](docs/diagrams/README.md).
-
-## Repository layout
-
-| Path | Package | Stack |
-| --- | --- | --- |
-| `be/` | `damwha-be` | NestJS 10 HTTP API — raw SQL over Postgres (pgvector + pg_bigm), no ORM |
-| `be/worker/` | *(uv project)* | Python 3.12 ML worker: ffmpeg → VAD → diarization → speaker ID → STT → align, plus lens/summary extraction via a local LLM |
-| `fe/` | `damwha-fe` | React 19 + Vite 8 + Tailwind 4 SPA |
-| `packages/contracts/` | `@damwha/contracts` | Wire enums both Node packages must agree on |
-
-`be/worker` is managed by uv and is **not** a pnpm workspace member.
+Interactive, path-traceable versions of these diagrams live in
+[`docs/diagrams/`](docs/diagrams/README.md).
 
 ## Recording and consent
 
-Damwha **shows no recording notice**. Users must provide any notice and obtain
-any consent required by applicable law. A personal, local-only design does not
-itself exempt its use from legal obligations.
+Damwha **shows no recording notice**, stores a **voiceprint for every participant**, and
+exports without a confirmation step. A personal, local-only design does not exempt you
+from the law: whether a recording and its processing are lawful depends on your
+jurisdiction, the conversation, and the purpose. **Legal responsibility for anything
+recorded with this tool rests entirely with the person using it.** This is not legal
+advice. When in doubt, ask before you record.
 
-Note also what gets stored: to identify speakers, a **voiceprint for every
-participant** lands in your local database, not just your own. And the export
-button writes the file without a confirmation step.
+## Development
 
-Whether a recording and the processing that follows are lawful depends on the
-jurisdiction, the nature of the conversation, and the purpose of processing.
-Requirements differ from place to place and keep changing through amendments and
-case law, so this document points to no specific statute or decision. Obligations
-can arise while recording and processing even when everything stays local — what
-decides it is whether the activity is personal or professional, not where the
-data sits.
+Damwha is a pnpm monorepo plus one uv-managed Python project.
 
-**Legal responsibility for any recording made with this tool, and for what is
-done with it, rests entirely with the person using it.** This is not legal
-advice. Check the current rules in your own jurisdiction. When in doubt, ask
-before you record.
+| Path | What it is |
+| --- | --- |
+| `be/` | NestJS 10 API over Postgres (pgvector + pg_bigm), raw SQL |
+| `be/worker/` | Python 3.12 ML worker (uv, not a pnpm workspace member) |
+| `fe/` | React 19 + Vite 8 + Tailwind 4 SPA |
+| `desktop/` | Electron shell that supervises the bundled Postgres, API, worker and embed service |
+| `cli/` | `damwha` command and stdio MCP server, which talks to the app over HTTP only |
+| `share/` | Share-link server: ciphertext API plus a static viewer |
+| `site/` | Astro product site ([damwha.0kimjae.dev](https://damwha.0kimjae.dev)) |
+| `packages/` | `contracts` (wire enums shared by be and fe), `share-format`, `share-view` |
 
-## Prerequisites
-
-| Tool | Why | Install |
-| --- | --- | --- |
-| Node 22 (`.nvmrc`) | API + SPA | `nvm install` |
-| pnpm 10.26.0 | pinned in the root `package.json` | `corepack enable` |
-| Docker | Postgres image (pgvector + pg_bigm), and the jest/pytest suites (testcontainers) | Docker Desktop |
-| [uv](https://docs.astral.sh/uv/) | the Python worker's env + lockfile | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
-| **ffmpeg** on `PATH` | every audio job starts by normalizing the upload (`pipeline/ffmpeg.py`); a missing binary fails the job, not startup | `brew install ffmpeg` |
-| **mlx-lm** — no separate install | serves the lens/summary LLM. `mlx-lm==0.31.3` is pinned in the worker's `models` extra (Apple Silicon only), and the worker launches it in-process as `python -m damwha_worker.llm_entry`, not through a `PATH` binary | comes with `uv sync --extra models` |
-
-Apple Silicon is the intended target: STT runs `mlx-whisper` and the LLM runs MLX.
-Elsewhere STT falls back to `faster-whisper` (CPU), and a job that asks for `gpu`
-fails **permanently** with `gpu_unavailable` — there is no CPU fallback, on purpose
-(reproducibility). On non-Apple hardware use the `light` preset or a `custom` config
-with `devices.{diarization,stt} = cpu`, and expect the lens/summary jobs to need a
-different OpenAI-compatible server (see [Lens / summary LLM](#lens--summary-llm)).
-
-## Quickstart
+**Prerequisites:** Node 22 (`.nvmrc`), pnpm 10.26 via `corepack enable`, Docker,
+[uv](https://docs.astral.sh/uv/), and `ffmpeg` on `PATH`. Apple Silicon is the intended
+target.
 
 ```bash
-corepack enable            # activates the pinned pnpm@10.26.0
-pnpm install               # installs be + fe from the single root lockfile
-
-cp be/.env.example be/.env                # DATABASE_URL, STORAGE_ROOT, model envs
-cp be/worker/.env.example be/worker/.env  # DATABASE_URL, LENS_LLM_BASE_URL (HF_TOKEN only if you run the worker outside the app)
-cp fe/.env.example fe/.env                # VITE_API_BASE_URL
-
-pnpm db:up                 # Postgres (pgvector + pg_bigm); first run builds the image
-pnpm be:migrate            # apply SQL migrations
-pnpm dev                   # API :3000 (routes under /api, Swagger /docs) + Vite :5173, in parallel
+corepack enable && pnpm install
+cp be/.env.example be/.env
+cp be/worker/.env.example be/worker/.env
+cp fe/.env.example fe/.env
+pnpm db:up && pnpm be:migrate   # Postgres first: everything else only talks to it
+pnpm dev                        # API :3000 (Swagger /docs) + Vite :5173
+pnpm worker:sync && pnpm worker # ML worker; without it, uploads stay "queued"
+pnpm desktop:dev                # or run the whole thing as the Electron app
 ```
 
-That gets you the API and the UI. Uploading a recording additionally needs the
-Python worker below — without it, meetings just sit in `queued`.
+Three rules that bite:
 
-## Environment files
+1. Run everything from the repo root through these scripts. Never run `npm install`
+   inside `be/`.
+2. `.env` files are per-package. There is no root `.env`.
+3. `STORAGE_ROOT` is `./storage` in `be/.env` and `../storage` in `be/worker/.env` on
+   purpose: both must resolve to the same directory.
 
-**`.env` files are per-package. There is no root `.env` and there must not be one.**
-Each process loads the file next to it and resolves relative paths against its own
-cwd, which is why the same key holds different values in two of them:
+<details>
+<summary><b>Environment variables that need attention</b></summary>
 
-| File | Loaded by | Copy from |
-| --- | --- | --- |
-| `be/.env` | NestJS API (`import 'dotenv/config'` in `src/main.ts`) | `be/.env.example` |
-| `be/worker/.env` | Python worker + embed service (pydantic-settings) | `be/worker/.env.example` |
-| `fe/.env` | Vite (only `VITE_`-prefixed keys reach the browser) | `fe/.env.example` |
+Each process loads the `.env` next to it (`be/.env` for the API, `be/worker/.env` for the
+worker and embed service, `fe/.env` for Vite, where only `VITE_` keys reach the browser).
+The `.env.example` files are complete and commented: copy and edit them, don't hand-write
+your own.
 
-The examples are complete and commented — copy them and edit, don't hand-write.
-What actually needs your attention:
+- **`HF_TOKEN`** (worker): only needed outside the app (`pnpm worker` without
+  `DIARIZATION_MODEL_DIR`). The desktop app bundles the diarization model.
+- **`LENS_LLM_BASE_URL`** (worker): required, no default, and the port must be explicit.
+- **`SUMMARY_LLM_MODEL` / `LENS_LLM_MODEL`**: must be identical in `be/.env` and
+  `be/worker/.env`. `SUMMARY_LLM_MODEL` must be in the catalog in
+  `packages/contracts/src/index.ts`, or the API refuses to boot.
+- **`SEARCH_EMBEDDING_MODEL` / `SEARCH_EMBEDDING_DIM`**: identical in both files, or search
+  quietly degrades to keyword-only.
+- **`IDENTIFY_THRESHOLD` / `IDENTIFY_SUGGEST_THRESHOLD`**: measured with
+  `be/worker/scripts/eval_speaker_id.py`. Re-measure with that script; don't eyeball them.
+- The API reads `.env` once at boot. Restart it after editing, because `--watch` does not
+  pick up `.env` changes.
 
-- **`STORAGE_ROOT` differs by design.** `./storage` in `be/.env`, `../storage` in
-  `be/worker/.env` — both must resolve to the *same* directory. This is also why you
-  must never launch a package from the repo root: the root scripts (`pnpm be …`,
-  `pnpm worker`) set the cwd via `--filter` / `uv run --directory` for you.
-- **`HF_TOKEN`** (worker) — only needed when you run the worker outside the app
-  (`pnpm worker`, no `DIARIZATION_MODEL_DIR`). The desktop app bundles the
-  diarization model and never reads this key.
-- **`LENS_LLM_BASE_URL`** (worker) — **required, no default**, and the port must be
-  explicit (the worker starts the LLM server on that host:port). A default would make
-  "address not configured" indistinguishable from "nothing listening there".
-- **`SUMMARY_LLM_MODEL` / `LENS_LLM_MODEL`** must be **identical in `be/.env` and
-  `be/worker/.env`** — the API stamps its value into the job payload, so a mismatch means
-  the worker runs a different model than you configured. `SUMMARY_LLM_MODEL` is a zod
-  enum over the catalog in `packages/contracts/src/index.ts`
-  (`mlx-community/Qwen3.5-{4B,9B,27B}-8bit`): a value outside it stops the API booting.
-- **`IDENTIFY_THRESHOLD` / `IDENTIFY_SUGGEST_THRESHOLD`** are *measured* defaults from
-  `be/worker/scripts/eval_speaker_id.py`. Re-measure with that tool; don't eyeball them.
-- **The API reads `.env` once, at boot.** `nest start --watch` only watches sources, so
-  after editing `be/.env` you must actually restart it (`touch` won't do it).
+</details>
 
-## Python ML worker
+<details>
+<summary><b>ML worker, models, embed service and LLM</b></summary>
 
 ```bash
-pnpm worker:sync       # real ML models (mlx-whisper/pyannote/ECAPA/bge-m3) — what `pnpm worker` needs
-pnpm worker:sync:test  # deterministic deps only (tests, no models)
-pnpm worker:test       # pytest — needs Docker (testcontainers)
-pnpm worker            # run the supervisor
+pnpm worker:sync       # real models: mlx-whisper, pyannote, ECAPA, bge-m3 (tens of GB)
+pnpm worker:sync:test  # deterministic deps only. This UNINSTALLS torch: re-run worker:sync after
+pnpm worker:test       # pytest (Docker / testcontainers)
+pnpm embed             # bge-m3 on 127.0.0.1:8100, used only by the API for search queries
 ```
 
-`uv sync` builds an *exact* environment, so the two sync scripts overwrite each other:
-`worker:sync:test` uninstalls torch and friends. Running the real worker against that venv
-fails every job with `model_load_failed` / `PERMANENT` (`No module named 'torch'`) — the
-models are an optional extra (`[project.optional-dependencies] models`) and the ML imports
-are lazy, so nothing complains until a job actually claims one. Re-run `pnpm worker:sync`
-after any test-only sync.
+- **Diarization model:** `pyannote/speaker-diarization-community-1` is bundled in the app.
+  Outside it, either accept the terms on Hugging Face and set `HF_TOKEN`, or point
+  `DIARIZATION_MODEL_DIR` at the folder staged by `desktop/scripts/build-models.sh`.
+- **Embed service down?** Nothing crashes. Search silently falls back to BM25/pg_bigm, so
+  check `curl -s 127.0.0.1:8100/health` before judging search quality.
+- **Lens/summary LLM:** with the default `LENS_LLM_MANAGED=true`, the job starts
+  `mlx_lm.server` just before it runs and stops it afterwards. A server you started
+  yourself is detected and reused.
+- **Non-Apple hardware:** STT falls back to `faster-whisper` on the CPU. A job that asks
+  for `gpu` fails permanently (`gpu_unavailable`), on purpose. Use the `light` preset or
+  CPU devices, plus another OpenAI-compatible LLM server.
 
-### ML models
+End-to-end smoke scripts and quality-measurement tooling: [`be/worker/SMOKE.md`](be/worker/SMOKE.md).
 
-The `models` extra pulls torch, pyannote, speechbrain, mlx-whisper and bge-m3 — tens of
-GB once the weights land.
+</details>
 
-The diarization model,
-[`pyannote/speaker-diarization-community-1`](https://huggingface.co/pyannote/speaker-diarization-community-1)
-(CC-BY-4.0), ships **inside the desktop app** — no Hugging Face account or token needed
-to use it there. Whisper, the summary LLM, `bge-m3`, and the ECAPA speaker embedder are
-not bundled; each downloads on first use, same as before.
-
-If you run the worker **outside the app** (`pnpm worker`, no desktop build), diarization
-falls back to the Hugging Face hub: accept the model's terms on its page above and set
-`HF_TOKEN` in `be/worker/.env` — or point `DIARIZATION_MODEL_DIR` at a folder staged by
-`desktop/scripts/build-models.sh` (e.g. `desktop/build/models/pyannote-speaker-diarization-community-1`)
-to load it without a token. Optional pre-cache (otherwise the first job downloads them):
-```bash
-uv run --directory be/worker python scripts/download_models.py
-```
-
-### Embed service
-
-A **separate process from the worker** — the worker neither starts it nor calls it.
-It serves bge-m3 over loopback HTTP for one caller: the **API**, embedding the search
-*query*, because the API is TypeScript and can't run the model in-process. The worker
-embeds utterances during `index_meeting` with its own in-process embedder. It has no
-pnpm script — start it from the worker package:
+<details>
+<summary><b>Common tasks</b></summary>
 
 ```bash
-uv run --directory be/worker uvicorn damwha_worker.embed_service:app --host 127.0.0.1 --port 8100
-curl -s http://127.0.0.1:8100/health        # first start warms the model: 30–90 s
+pnpm build                  # all packages
+pnpm test                   # be (jest, needs Docker) + fe (vitest)
+pnpm lint                   # fe
+pnpm be <script>            # any damwha-be script, e.g. `pnpm be test:e2e`
+pnpm fe <script>            # any damwha-fe script
+pnpm cli build|test|lint    # damwha CLI / MCP server
+pnpm share:dev              # share server + viewer on :8787
+pnpm site:dev               # product site on :4321
 ```
 
-Nothing crashes when it's down: recording and indexing are unaffected, and the API
-falls back to keyword-only search (BM25 / pg_bigm) — quietly, so a search box that
-still returns results is not proof the service is up. Keep `SEARCH_EMBEDDING_MODEL`
-and `SEARCH_EMBEDDING_DIM` identical in `be/.env` and `be/worker/.env`: the API
-rejects a response whose model name doesn't match and degrades the same way, since
-1024 dimensions from a different model is a different vector space.
+</details>
 
-### Lens / summary LLM
+**Where to read next:**
 
-Lens extraction and conversation summary share one **OpenAI-compatible** endpoint
-(`LENS_LLM_BASE_URL`) and differ only by model name. There is no Ollama dependency; the
-local runtime is `mlx_lm.server`, which resolves the request's `model` field as an HF
-repo id with no way to alias it — that's why the catalog stores repo ids.
-
-With the default `LENS_LLM_MANAGED=true` **you don't start anything**: the lens/summary
-child launches `mlx_lm.server` with the payload's model just before the job and SIGTERMs
-it after, so a 27B 8-bit model (~28 GB) isn't holding memory while the queue is idle.
-The cost is one model load per job. A server you started yourself is detected, reused,
-and never killed:
-
-```bash
-mlx_lm.server --model mlx-community/Qwen3.5-4B-8bit \
-  --chat-template-args '{"enable_thinking":false}' \
-  --host 127.0.0.1 --port 8000
-```
-
-If the binary isn't on `PATH`, lens/summary jobs fail `llm_server_start_failed`
-(PERMANENT). `process_meeting` is unaffected — it never touches the LLM.
-
-## Running the full stack
-
-Postgres is the only hard ordering constraint — everything else talks to it, not to
-each other, so the rest can start in any order (and later, without a restart):
-
-1. `pnpm db:up` → `pnpm be:migrate` — **required first**
-2. `pnpm be:dev` (API :3000, Swagger at `/docs`) — or `pnpm dev` for API + SPA
-3. `pnpm worker`
-4. Embed service — only the API's search queries use it; start it whenever, and check
-   `/health` → `{"status":"ok"}` before judging search quality
-5. *(optional)* lens/summary LLM, if you'd rather run it yourself than let the worker manage it
-
-Then upload a recording in the UI (or `POST /meetings`), and watch the meeting go
-`queued → done` with a speaker-attributed timeline. End-to-end smoke scripts, per-preset
-checks, and the quality-measurement tooling live in [`be/worker/SMOKE.md`](be/worker/SMOKE.md).
-
-## Installing it elsewhere
-
-Damwha ships as a self-contained macOS app — no source checkout, no Docker, no
-Postgres to set up by hand. Download the latest DMG from
-[GitHub Releases](https://github.com/Yjason-K/Damwha/releases/latest), open it, and
-drag Damwha into Applications. Requires **macOS 15.0+ on Apple Silicon**.
-
-[`docs/MODELS.md`](docs/MODELS.md) — Models: where they are stored, sizes, checking
-status in Settings.
-
-The public demo is a **separate**, read-only web deployment with its own images and
-its own seed data — it is not the install path above:
-[`deploy/demo/README.md`](deploy/demo/README.md) ships it, [`demo/README.md`](demo/README.md)
-describes what's inside it.
-
-## Common tasks
-
-```bash
-pnpm build          # be + fe
-pnpm test           # be (jest, needs Docker) + fe (vitest)
-pnpm lint           # fe only — damwha-be has no lint script
-pnpm be <script>    # any damwha-be script, e.g. `pnpm be test:e2e`
-pnpm fe <script>    # any damwha-fe script, e.g. `pnpm fe format`
-pnpm db:logs        # follow Postgres logs
-```
-
-Run package commands from the repo root through these scripts, or `cd` into the
-package first. Do **not** run `npm install` inside `be/` — it recreates a hoisted
-`node_modules` and a `package-lock.json` that the workspace no longer uses.
-
-## Working in this repo
-
-Read [`be/CLAUDE.md`](be/CLAUDE.md) before touching the API or the worker (job
-contract, ownership guards, measured speaker-ID thresholds), and
-[`fe/CLAUDE.md`](fe/CLAUDE.md) + [`fe/DESIGN.md`](fe/DESIGN.md) before touching the
-UI. Those are the living docs; [`CLAUDE.md`](CLAUDE.md) at the root only carries
-the monorepo map.
+- [`be/CLAUDE.md`](be/CLAUDE.md) covers the job contract, ownership guards and speaker-ID
+  thresholds.
+- [`fe/CLAUDE.md`](fe/CLAUDE.md) and [`fe/DESIGN.md`](fe/DESIGN.md) cover the UI.
+- [`desktop/CLAUDE.md`](desktop/CLAUDE.md) covers bundling, signing and release.
+- [`deploy/demo/README.md`](deploy/demo/README.md) covers the public demo, which is a
+  separate read-only web deployment.
 
 ## License
 
-[MIT](LICENSE) © 2026 Youngjae Kim.
+[MIT](LICENSE) © 2026 Youngjae Kim. The license covers this repository's source only.
 
-The license covers this repository's source only. One ML model is vendored and
-redistributed with the app: `pyannote/speaker-diarization-community-1`,
-© [pyannoteAI](https://www.pyannote.ai) and pyannote contributors, licensed
-[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), unmodified (citations —
-Plaquet & Bredin, INTERSPEECH 2023, and the rest listed on the model card — are in
-the `NOTICE.txt` shipped next to the model). The other
-models — whisper, the summary LLM, `bge-m3`, the ECAPA speaker embedder — are not
-redistributed; each is downloaded at setup time from its own repository under its
-own terms. `ffmpeg` is invoked as an external binary you install yourself.
+## Acknowledgments
+
+- [`pyannote/speaker-diarization-community-1`](https://huggingface.co/pyannote/speaker-diarization-community-1)
+  © [pyannoteAI](https://www.pyannote.ai) and pyannote contributors,
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). It is redistributed
+  unmodified inside the app, and its citations (Plaquet & Bredin, INTERSPEECH 2023, and
+  others on the model card) are in the `NOTICE.txt` shipped next to it.
+- Whisper, the Qwen summary models, `bge-m3` and the ECAPA speaker embedder are **not**
+  redistributed. Each one downloads from its own repository under its own terms.
+- Built on [MLX](https://github.com/ml-explore/mlx), [pgvector](https://github.com/pgvector/pgvector),
+  [pg_bigm](https://github.com/pgbigm/pg_bigm) and [FFmpeg](https://ffmpeg.org).
