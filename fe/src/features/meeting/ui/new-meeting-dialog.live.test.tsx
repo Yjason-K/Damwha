@@ -643,3 +643,67 @@ test("시작 요청이 도는 동안 버튼을 다시 눌러도 회의를 두 �
   expect(startCalls(post)).toHaveLength(1);
   expect(mic.capture).toHaveLength(1);
 });
+
+/**
+ * 데스크톱 앱의 시스템 오디오 스킴을 흉내낸다. 브라우저에는 그 스킴이 없어 fetch가 거부된다 —
+ * `desktop: false`가 그 상태다.
+ */
+function stubSystemAudio(options: { desktop?: boolean; pcmStatus?: number } = {}) {
+  const fetchMock = vi.fn(async (url: string) => {
+    if (options.desktop === false) throw new TypeError("unknown scheme");
+    if (url.endsWith("/status"))
+      return new Response(JSON.stringify({ available: true, busy: false }));
+    if ((options.pcmStatus ?? 200) !== 200)
+      return new Response("{}", { status: options.pcmStatus });
+    return new Response(new ReadableStream<Uint8Array>());
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const pcmCalls = () =>
+    fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/pcm"));
+  return { fetchMock, pcmCalls };
+}
+
+test("브라우저에서는 시스템 오디오 옵션을 보여주지 않는다", async () => {
+  stubCapture();
+  const sys = stubSystemAudio({ desktop: false });
+  renderDialog();
+  await passGate();
+  await waitFor(() => expect(sys.fetchMock).toHaveBeenCalled());
+  expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+});
+
+test("데스크톱에서는 옵션이 켜진 채로 보이고, 시스템 오디오와 함께 녹음을 시작한다", async () => {
+  stubCapture();
+  const sys = stubSystemAudio();
+  const { onStarted } = renderDialog();
+  await passGate();
+  const toggle = await screen.findByRole("switch", { name: "시스템 오디오도 녹음" });
+  expect(toggle).toBeChecked();
+  click("녹음 시작");
+  await waitFor(() => expect(onStarted).toHaveBeenCalledWith("m7"));
+  expect(sys.pcmCalls()).toHaveLength(1);
+});
+
+test("옵션을 끄면 시스템 오디오를 열지 않고, 그 선택을 기억한다", async () => {
+  stubCapture();
+  const sys = stubSystemAudio();
+  const { onStarted } = renderDialog();
+  await passGate();
+  fireEvent.click(await screen.findByRole("switch", { name: "시스템 오디오도 녹음" }));
+  click("녹음 시작");
+  await waitFor(() => expect(onStarted).toHaveBeenCalledWith("m7"));
+  expect(sys.pcmCalls()).toHaveLength(0);
+  expect(localStorage.getItem("damwha:live-system-audio")).toBe("off");
+});
+
+test("시스템 오디오를 열지 못하면 회의를 만들지 않고 마이크도 닫는다", async () => {
+  const mic = stubCapture();
+  stubSystemAudio({ pcmStatus: 503 });
+  const { post } = renderDialog();
+  await passGate();
+  await screen.findByRole("switch", { name: "시스템 오디오도 녹음" });
+  click("녹음 시작");
+  expect(await screen.findByText("시스템 오디오를 열지 못했어요")).toBeInTheDocument();
+  expect(startCalls(post)).toHaveLength(0);
+  expect(mic.stopTrack).toHaveBeenCalled();
+});
