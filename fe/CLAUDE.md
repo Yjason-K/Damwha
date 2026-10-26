@@ -115,6 +115,15 @@ The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by 
   문자열로만 적혀 있어 **이름을 바꾸면 데스크톱의 확인과 handshake가 조용히 건너뛰어진다.** 웹 배포에서는
   아무도 부르지 않아 무해하다.
 
+- **시스템 오디오는 마이크에 더해져 한 채널로 올라간다** (`lib/system-audio.ts`, `lib/pcm-mix.ts`, 2026-10-26).
+  데스크톱 앱에서만 모달에 "시스템 오디오도 녹음" 스위치가 보인다 — `damwha-audio://system/status` fetch가
+  성공하는가로 알고, 브라우저에는 그 스킴이 없어 숨는다. 기본은 켬, 끈 선택은 `damwha:live-system-audio`에
+  기억한다. 스트림은 `prepare()` 안에서, 회의를 만들기 **전에** 연다(위 "캐처를 먼저 준비" 규칙 그대로).
+  **마이크가 시계다** — 섞인 프레임의 길이는 마이크 프레임과 같아 오프셋·경과 시간 규칙이 안 바뀐다. 시스템
+  오디오 큐는 0.5초로 묶고(장치 시계 drift), `begin`에서 비운다. 녹음 도중 스트림이 끝나면 캡처 실패가
+  아니라 `status.systemAudio = "lost"`와 토스트 한 번이다 — 마이크는 계속 녹음된다. 자원 반납은 스트림을
+  cancel하고, 그것이 데스크톱 헬퍼를 끄는 유일한 신호다(`desktop/CLAUDE.md` "시스템 오디오").
+
 - **Worklet 종료는 flush ACK로 끝난다** (`lib/pcm-worklet.ts`, `lib/pcm-worklet-protocol.ts`).
   메시지는 메인→Worklet `begin`/`flush`, Worklet→메인 `ready`/`begun`/`pcm`/`flushed` 넷뿐이고
   타입은 `pcm-worklet-protocol.ts` 한 곳에만 있다(양쪽이 값을 복제하지 않는다). 종료 시 그냥

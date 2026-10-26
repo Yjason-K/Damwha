@@ -9,7 +9,7 @@ Electron main이 네 서비스를 감독한다 — 번들 PostgreSQL, NestJS API
 ## 명령
 
 ```bash
-pnpm desktop:dev     # build-postgres.sh·build-python.sh·build-ffmpeg.sh·build-models.sh(넷 다 캐시)·build-cli.sh → tsc → electron .
+pnpm desktop:dev     # build-postgres.sh·build-python.sh·build-ffmpeg.sh·build-models.sh(넷 다 캐시)·build-cli.sh·build-system-audio.sh → tsc → electron .
 pnpm desktop:build   # 위 넷 → tsc → be·fe build → pnpm deploy → electron-builder
                      #   → hardened runtime 서명(plist 둘) → check-bundle
 bash desktop/scripts/build-postgres.sh [--fresh]               # 내장 PG
@@ -28,7 +28,7 @@ bash desktop/scripts/build-icon.sh                             # build-resources
 
 루트 `pnpm build`·`pnpm dev`는 이 넷을 빌드하지 않고 Electron을 띄우지 않는다.
 
-## 번들 — `Resources/` 아래 여섯
+## 번들 — `Resources/` 아래 일곱
 
 `desktop/build/<이름>`에 스테이징한 것을 `electron-builder.yml`의 `extraResources: - from: build`가
 그대로 `Contents/Resources/<이름>`으로 싣는다. dev는 `desktop/build/`를 같은 자리로 본다 (Phase 4 §6.1).
@@ -41,6 +41,17 @@ bash desktop/scripts/build-icon.sh                             # build-resources
 | `ffmpeg/` | `build-ffmpeg.sh` |
 | `models/` | `build-models.sh` — pyannote community-1 (CC-BY-4.0). 서명 대상 아님, `.app` 봉인에 들어간다 |
 | `cli/` | `build-cli.sh` — `damwha`(런처, 원본 `scripts/cli-launcher.sh`)와 `damwha.cjs`(esbuild 번들). 서명 대상 아님 |
+| `system-audio/` | `build-system-audio.sh` — `damwha-system-audio`(원본 `native/system-audio/main.swift`, swiftc). `package.mjs`가 entitlements 없이 runtime으로 서명, `check-bundle` 25번 |
+
+**시스템 오디오 (2026-10-26).** 실시간 녹음에 화상회의 상대 목소리를 섞는다. 헬퍼는 CoreAudio Process Tap(macOS 14.2+)으로
+이 맥에서 나는 소리(담화 자신은 뺀다)를 16 kHz·mono·int16 LE로 stdout에 흘리고, stdin EOF·SIGTERM에 tap을 지우고 끝난다.
+렌더러는 커스텀 스킴 `damwha-audio://system/{status,pcm}`를 fetch해 받는다(`windows/system-audio-protocol.ts`) — **스펙
+§6.11(렌더러 → main 경로 없음)의 유일한 예외**다. preload·IPC는 여전히 없다. 허용 origin만 받고, 한 번에 헬퍼 하나,
+본문을 cancel하면(새로고침·창 파괴 포함) 헬퍼가 꺼지고, `beginQuit`이 `stopAll()`을 부른다.
+- 권한은 "시스템 오디오 녹음" TCC이고 주체는 헬퍼를 띄운 앱이다(dev에서는 터미널). Info.plist의
+  `NSAudioCaptureUsageDescription`이 없거나 권한이 거부되면 tap은 **오류 없이 0만** 흘린다 — 알려진 한계다.
+- Electron의 `setDisplayMediaRequestHandler` loopback을 쓰지 않는 이유: 화면 소스를 같이 요청해야 하고, 앱이 픽커를
+  쥐면(`useSystemPicker: false`) 오디오 트랙이 `ended`로만 나오는 버그가 열려 있다(electron/electron#52738).
 
 **`cli/`는 번들의 Electron 바이너리에 기댄다.** 런처가 `ELECTRON_RUN_AS_NODE=1 Contents/MacOS/Damwha damwha.cjs …`로
 돌리므로 별도 Node가 필요 없다 — 그래서 Electron 퓨즈의 `RunAsNode`를 끄면 CLI가 죽는다(지금은 켜 둔
