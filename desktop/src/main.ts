@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, nativeTheme, shell } from "electron";
+import { app, BrowserWindow, dialog, nativeTheme, protocol, shell } from "electron";
 import { execFile } from "child_process";
 import * as fs from "fs";
 import * as net from "net";
@@ -92,6 +92,12 @@ import { MODEL_READINESS_KEY, parseModelReadiness, type ReadinessEntry } from ".
 import { psInfo, spawnPostmaster, stopOrphanPostmaster } from "./services/postgres/handle";
 import { embeddedPostgresSpec, externalPostgresSpec, PG_FAST_GRACE_MS, PG_IMMEDIATE_GRACE_MS, PG_TOOL_DEADLINES } from "./services/postgres/service";
 import { describeToolFailure, runTool, toolOk } from "./process/tool-runner";
+import { startSystemAudio, systemAudioHelperPath } from "./process/system-audio";
+import {
+  createSystemAudioProtocol,
+  SYSTEM_AUDIO_PRIVILEGES,
+  SYSTEM_AUDIO_SCHEME,
+} from "./windows/system-audio-protocol";
 import { VITE_ORIGIN } from "./dev/vite-origin";
 import type {
   LaunchContext,
@@ -881,7 +887,7 @@ function listExternalWorkers(trees: readonly KnownTree[]): Promise<number[]> {
  * 번들 트리 하나. packaged는 `Resources/<이름>`, dev는 build-*.sh가 스테이징한 `desktop/build/<이름>`이다
  * (Phase 3 스펙 §6.8, Phase 4 스펙 §6.1). electron-builder의 `extraResources: - from: build`가 그 둘을 같은 모양으로 만든다.
  */
-function bundleDir(name: "postgres" | "python" | "ffmpeg" | "models" | "cli"): string {
+function bundleDir(name: "postgres" | "python" | "ffmpeg" | "models" | "cli" | "system-audio"): string {
   return app.isPackaged ? path.join(process.resourcesPath, name) : path.join(app.getAppPath(), "build", name);
 }
 
@@ -1562,6 +1568,14 @@ async function createSupervisorFor(mine: number): Promise<boolean> {
   return true;
 }
 
+// 시스템 오디오 스킴(스펙 §6.11의 예외 — windows/system-audio-protocol.ts). 특권 등록은 ready **전에**만 된다.
+protocol.registerSchemesAsPrivileged([{ scheme: SYSTEM_AUDIO_SCHEME, privileges: SYSTEM_AUDIO_PRIVILEGES }]);
+const systemAudio = createSystemAudioProtocol({
+  allowedOrigins,
+  start: () => startSystemAudio(systemAudioHelperPath(bundleDir("system-audio"))),
+  log: appendSupervisorLog,
+});
+
 // 중복 실행 방지 — 두 번째 인스턴스는 창을 만들지 않고 기존 창을 앞으로 보낸다 (스펙 P1-C6).
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -1616,6 +1630,7 @@ if (!app.requestSingleInstanceLock()) {
       log: appendSupervisorLog,
     });
     applyPermissionBoundary(allowedOrigins);
+    protocol.handle(SYSTEM_AUDIO_SCHEME, (request) => systemAudio.handle(request));
     menuHandlers = {
       onRetry: () => {
         // 판정(종료 중이면 무시, 창이 없으면 창부터)은 window-flow.ts의 decideMenuRetry에 있다.
@@ -1744,6 +1759,7 @@ if (!app.requestSingleInstanceLock()) {
         // 업데이트 확인 타이머도 여기서 끈다. before-quit이 아니다 — 종료 확인에서 "취소"하면 앱은
         // 계속 살고, 그때 타이머가 죽어 있으면 자동 확인이 영영 돌지 않는다 (Phase 6b-1 스펙 §3-7).
         updateScheduler?.dispose();
+        systemAudio.stopAll();
       },
       // activeWindow를 쓰지 않는다 — quitting이 이미 참이라 그것은 항상 null을 돌려준다
       // (spawn-guard). 여기서 보고 싶은 것은 "지금 창이 있는가"뿐이다.
