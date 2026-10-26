@@ -1259,3 +1259,142 @@ describe("requestCaptureDevices", () => {
     });
   });
 });
+
+/**
+ * 데스크톱이 주는 시스템 오디오 스트림의 가짜. highWaterMark 0이라 pull은 레코더가 read()를 기다릴 때만 불린다 —
+ * 그래서 "k번째 청크를 보낸 뒤 k+1번째 pull"은 그 청크가 이미 믹서에 들어갔다는 정확한 신호다(시간을 기다리지 않는다).
+ */
+function systemAudioStream() {
+  let pulls = 0;
+  let pushed = 0;
+  const waiters: Array<{ target: number; resolve: () => void }> = [];
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const cancel = vi.fn();
+  const stream = new ReadableStream<Uint8Array>(
+    {
+      start(c) {
+        controller = c;
+      },
+      pull() {
+        pulls += 1;
+        for (const w of waiters.filter((w) => w.target <= pulls)) w.resolve();
+      },
+      cancel,
+    },
+    { highWaterMark: 0 },
+  );
+  const pullNumber = (target: number) =>
+    new Promise<void>((resolve) => {
+      if (pulls >= target) resolve();
+      else waiters.push({ target, resolve });
+    });
+  const samples = (...values: number[]) => {
+    const bytes = new Uint8Array(values.length * 2);
+    const view = new DataView(bytes.buffer);
+    values.forEach((v, i) => view.setInt16(i * 2, v, true));
+    return bytes;
+  };
+  return {
+    open: vi.fn(async () => stream),
+    cancel,
+    /** 청크를 보내고 레코더가 그것을 믹서에 넣을 때까지 기다린다. */
+    async push(...values: number[]) {
+      pushed += 1;
+      const consumed = pullNumber(pushed + 1);
+      controller.enqueue(samples(...values));
+      await consumed;
+    },
+    end: () => controller.close(),
+  };
+}
+
+const int16Of = (body: Uint8Array) =>
+  [...new Int16Array(body.buffer, body.byteOffset, body.byteLength / 2)];
+
+describe("LiveRecorder system audio", () => {
+  afterEach(restoreCaptureGlobals);
+
+  it("mixes system audio into the recorded PCM, sample for sample", async () => {
+    const w = stubWorkletGlobals();
+    const sys = systemAudioStream();
+    const stopSpy = okStop();
+    const r = new LiveRecorder({ postChunk: vi.fn(), postStop: stopSpy });
+    await r.prepare(undefined, sys.open);
+    expect(r.status.systemAudio).toBe("on");
+    await r.begin("mtg_1");
+    await sys.push(100, -200, 300);
+    w.sendPcm(4);
+    await r.stop();
+    expect(int16Of(stopSpy.mock.calls[0][3])).toEqual([100, -200, 300, 0]);
+  });
+
+  it("drops system audio captured before begin — the recording clock starts there", async () => {
+    const w = stubWorkletGlobals();
+    const sys = systemAudioStream();
+    const stopSpy = okStop();
+    const r = new LiveRecorder({ postChunk: vi.fn(), postStop: stopSpy });
+    await r.prepare(undefined, sys.open);
+    await sys.push(999, 999);
+    await r.begin("mtg_1");
+    w.sendPcm(2);
+    await r.stop();
+    expect(int16Of(stopSpy.mock.calls[0][3])).toEqual([0, 0]);
+  });
+
+  it("cancels the system audio stream when the recording stops, so the helper ends", async () => {
+    stubWorkletGlobals();
+    const sys = systemAudioStream();
+    const r = new LiveRecorder({ postChunk: vi.fn(), postStop: okStop() });
+    await r.prepare(undefined, sys.open);
+    await r.begin("mtg_1");
+    await r.stop();
+    expect(sys.cancel).toHaveBeenCalledTimes(1);
+    expect(r.status.systemAudio).toBe("on");
+  });
+
+  it("reports lost — not a capture failure — when the stream ends mid-recording", async () => {
+    stubWorkletGlobals();
+    const sys = systemAudioStream();
+    const r = new LiveRecorder({ postChunk: vi.fn(), postStop: okStop() });
+    await r.prepare(undefined, sys.open);
+    await r.begin("mtg_1");
+    const lost = new Promise<void>((resolve) => {
+      r.onStatus = (s) => {
+        if (s.systemAudio === "lost") resolve();
+      };
+    });
+    sys.end();
+    await lost;
+    expect(r.status.failed).toBeNull();
+    expect(r.status.phase).toBe("recording");
+  });
+
+  it("fails prepare and releases the mic when system audio cannot be opened", async () => {
+    const w = stubWorkletGlobals();
+    const r = new LiveRecorder({ postChunk: vi.fn() });
+    await expect(
+      r.prepare(undefined, () => Promise.reject(new Error("helper failed"))),
+    ).rejects.toThrow("helper failed");
+    expect(w.stopTrack).toHaveBeenCalledTimes(1);
+    expect(w.close).toHaveBeenCalledTimes(1);
+    expect(r.status.phase).toBe("stopped");
+  });
+
+  it("cancels a stream that arrives after the preparation was disposed", async () => {
+    stubWorkletGlobals();
+    const sys = systemAudioStream();
+    const opened = deferred<ReadableStream<Uint8Array>>();
+    const opening = deferred<void>();
+    const r = new LiveRecorder({ postChunk: vi.fn() });
+    const pending = r.prepare(undefined, () => {
+      opening.resolve();
+      return opened.promise;
+    });
+    await opening.promise;
+    const disposed = r.dispose();
+    opened.resolve(await sys.open());
+    await expect(pending).rejects.toBeInstanceOf(LiveCaptureCancelled);
+    await disposed;
+    expect(sys.cancel).toHaveBeenCalledTimes(1);
+  });
+});

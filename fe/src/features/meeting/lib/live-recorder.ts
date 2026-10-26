@@ -1,4 +1,5 @@
 import { ChunkAccumulator, SR } from "./pcm-convert";
+import { SystemAudioMixer } from "./pcm-mix";
 import type { WorkletCommand, WorkletEvent } from "./pcm-worklet-protocol";
 // Vite 문서가 명시한 워크릿 로딩 패턴: `new URL('./pcm-worklet.ts', import.meta.url)`은
 // 정적 에셋 규칙("URL이 정적으로 분석 가능해야 하고, 아니면 코드가 그대로 남아 런타임
@@ -141,6 +142,18 @@ export class LiveCaptureCancelled extends Error {
 export type ServerSeal = "sealed" | "duration_limit";
 
 /**
+ * 시스템 오디오(16 kHz·mono·int16 LE 바이트) 스트림을 연다. 데스크톱 앱에서만 주어진다. 스트림을 cancel하면
+ * 데스크톱 쪽 헬퍼가 꺼져야 한다 — 레코더는 자원 반납 때 반드시 cancel한다.
+ */
+export type OpenSystemAudio = () => Promise<ReadableStream<Uint8Array>>;
+
+/**
+ * 시스템 오디오의 상태. `lost`는 녹음 도중 스트림이 끝났다는 뜻이다 — 마이크는 계속 녹음되므로
+ * 캐처 실패(`failed`)로 올리지 않고, 상대 목소리가 빠지기 시작했다는 사실만 따로 알린다.
+ */
+export type SystemAudioState = "off" | "on" | "lost";
+
+/**
  * 레코더의 수명 (설계 §6). 실패는 어디서 나든 자원을 반납하고 stopped로 수렴한다.
  * prepared 이전에는 회의 id가 없고, 회의를 만들 자격은 prepared에만 있다.
  */
@@ -163,6 +176,7 @@ export interface RecorderStatus {
    */
   sealedByServer: boolean;
   phase: RecorderPhase;
+  systemAudio: SystemAudioState;
 }
 
 /**
@@ -215,6 +229,7 @@ export class LiveRecorder {
     sealed: null,
     sealedByServer: false,
     phase: "idle",
+    systemAudio: "off",
   };
   onStatus: (s: RecorderStatus) => void = () => {};
 
@@ -228,6 +243,8 @@ export class LiveRecorder {
   private ctx: AudioContext | null = null;
   private stream: MediaStream | null = null;
   private node: AudioWorkletNode | null = null;
+  private mixer: SystemAudioMixer | null = null;
+  private systemReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private readonly chunks = new ChunkAccumulator();
   /**
    * prepare/dispose가 겹칠 때 누가 주인인지 가른다. dispose가 이 값을 올리면 진행 중인
@@ -285,7 +302,7 @@ export class LiveRecorder {
    * 로딩 실패가 전부 빈 회의를 서버에 남기고, 그 회의는 부분 유일 인덱스로 다음 녹음까지
    * 막는다. 여기까지 성공한 캡처만 `/meetings/live`를 부를 자격을 얻는다.
    */
-  async prepare(deviceId?: string): Promise<void> {
+  async prepare(deviceId?: string, openSystemAudio?: OpenSystemAudio): Promise<void> {
     if (this.status.phase !== "idle") {
       throw new Error(`cannot prepare a recorder in ${this.status.phase}`);
     }
@@ -358,6 +375,21 @@ export class LiveRecorder {
         "the capture worklet never reported ready",
       );
       this.checkGeneration(gen);
+      // 시스템 오디오도 회의를 만들기 **전에** 연다 — 권한·헬퍼 실패가 빈 recording 회의를 남기지 않게
+      // (설계 §6). 열리는 사이 dispose가 왔으면 release()는 이미 돌고 끝났다 — 늦게 온 스트림은 주인이 없으므로
+      // 마이크 스트림처럼 그 자리에서 cancel해 헬퍼를 끈다.
+      if (openSystemAudio) {
+        const pcm = await openSystemAudio();
+        if (gen !== this.generation) {
+          void pcm.cancel().catch(() => undefined);
+          throw new LiveCaptureCancelled();
+        }
+        const reader = pcm.getReader();
+        this.systemReader = reader;
+        this.mixer = new SystemAudioMixer();
+        void this.pumpSystemAudio(reader);
+        this.setSystemAudio("on");
+      }
     } catch (err) {
       // 워크릿 로딩 실패든 sample rate 불일치든, 마이크와 AudioContext를 켜 둔 채로
       // prepare()가 실패하면 브라우저 녹음 표시등은 계속 켜져 있는데 아무것도 잡히지
@@ -390,6 +422,7 @@ export class LiveRecorder {
       await this.endCapture();
       throw err;
     }
+    this.mixer?.reset();
     // getUserMedia의 권한 프롬프트 대기를 시계에서 뺀다 — 그 전에 시작하면 origin당
     // 첫 녹음마다 프롬프트 대기 시간만큼의 가짜 capture_gap이 영구히 남는다.
     this.startedAt = performance.now();
@@ -445,11 +478,37 @@ export class LiveRecorder {
         // 지연·백로그가 그대로 캡처 경과에 섞인다 (설계 §3.3.2, review finding 4).
         this.lastCaptureElapsedMs = this.elapsedMs();
         // push는 완전 청크 배열을 준다(입력 길이와 무관 — 설계 §7); 전부 enqueue한다.
-        for (const chunk of this.chunks.push(new Int16Array(event.pcm))) {
+        for (const chunk of this.chunks.push(this.mixed(new Int16Array(event.pcm)))) {
           this.enqueue(chunk, this.lastCaptureElapsedMs);
         }
         return;
     }
+  }
+
+  private mixed(mic: Int16Array): Int16Array {
+    return this.mixer ? this.mixer.mixInto(mic) : mic;
+  }
+
+  private async pumpSystemAudio(reader: ReadableStreamDefaultReader<Uint8Array>) {
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        this.mixer?.pushBytes(value);
+      }
+    } catch {
+      /* 아래에서 끝난 것과 같게 다룬다 */
+    }
+    // release()가 거둔 것이 아니라 스트림이 스스로 끝났다 — 헬퍼가 죽었거나 연결이 끊겼다.
+    if (this.systemReader === reader) {
+      this.systemReader = null;
+      this.setSystemAudio("lost");
+    }
+  }
+
+  private setSystemAudio(systemAudio: SystemAudioState) {
+    this.status = { ...this.status, systemAudio };
+    this.onStatus(this.status);
   }
 
   // ── 업로드 ──────────────────────────────────────────────────────────────
@@ -738,6 +797,9 @@ export class LiveRecorder {
     }
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
+    const systemReader = this.systemReader;
+    this.systemReader = null;
+    void systemReader?.cancel().catch(() => undefined);
     this.node?.disconnect();
     this.node = null;
     const ctx = this.ctx;
