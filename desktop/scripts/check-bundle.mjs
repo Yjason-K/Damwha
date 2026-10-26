@@ -228,6 +228,11 @@ function plistValue(key) {
   return typeof v === "string" ? v : "";
 }
 
+// 6a. 시스템 오디오 사용 설명이 Info.plist에 있다. 없으면 프롬프트가 뜨지 않고 Process Tap이 오류 없이 0만 흘려
+// "상대 목소리가 빠진 녹음"이 정상처럼 보인다.
+const audioCaptureUsage = plistValue("NSAudioCaptureUsageDescription");
+check("Info.plist carries NSAudioCaptureUsageDescription", audioCaptureUsage.length > 0, audioCaptureUsage);
+
 // 6b. 최소 macOS 선언이 번들의 실제 바닥과 같다 (P6a-C2). 셋이 한 값이어야 한다 —
 // 이 plist 키, scripts/lib/build-target.sh, minos.mjs의 MAX_MINOS.
 const lsMin = plistValue("LSMinimumSystemVersion");
@@ -577,6 +582,16 @@ check(
   cliRun.status === 0 && /\d+\.\d+\.\d+/.test(cliRun.stdout ?? ""),
   `rc=${cliRun.status} out=${(cliRun.stdout ?? "").trim()} err=${(cliRun.stderr ?? "").trim().slice(0, 200)}`,
 );
+
+// 25. 시스템 오디오 헬퍼. 있고, 실행 가능하고, hardened runtime으로 서명됐다. 팀은 7c, minos는 22가 이미 덮는다.
+const systemAudioHelper = path.join(contents, "Resources", "system-audio", "damwha-system-audio");
+check(
+  "system-audio: helper is in Resources/system-audio and executable",
+  fs.existsSync(systemAudioHelper) && (fs.statSync(systemAudioHelper).mode & 0o111) === 0o111,
+);
+const sa = verifyArm64(fs.existsSync(systemAudioHelper) ? [systemAudioHelper] : []);
+const saGaps = [...sa.unsigned, ...sa.noArm64, ...sa.noRuntime];
+check("system-audio: helper carries hardened runtime", fs.existsSync(systemAudioHelper) && saGaps.length === 0, saGaps.join("; "));
 
 if (failures.length > 0) {
   console.error(`\n${failures.length} bundle hygiene check(s) failed.`);
