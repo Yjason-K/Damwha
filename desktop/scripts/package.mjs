@@ -52,6 +52,9 @@ run("bash", [path.join("scripts", "build-models.sh")], desktop);
 // (셸 스크립트와 JS 한 파일이라 Mach-O가 없고, .app 봉인에 들어간다). 앱의 Electron을
 // ELECTRON_RUN_AS_NODE=1로 돌리는 런처라 별도 Node가 필요 없다 (spec 2026-10-20 §2.6).
 run("bash", [path.join("scripts", "build-cli.sh")], desktop);
+// 시스템 오디오 헬퍼(CoreAudio Process Tap)도 같은 자리에 스테이징한다 — desktop/build/system-audio.
+// 서명은 아래 signAll이 .app보다 먼저 한다.
+run("bash", [path.join("scripts", "build-system-audio.sh")], desktop);
 
 // desktop 자신을 **먼저, 깨끗하게** 컴파일한다. electron-builder는 package.json의 main(dist/main.js)과
 // dist/ 전체를 그대로 싣는데, 루트 `pnpm build`에는 desktop의 컴파일이 없다(desktop에는 build 스크립트가
@@ -196,6 +199,9 @@ signAll(machOFiles(path.join(resources, "python")), pythonEnts, "Resources/pytho
 signAll(ffmpegTargets, pythonEnts, "Resources/ffmpeg/bin");
 signAll(machOFiles(path.join(resources, "postgres")), null, "Resources/postgres Mach-O", { runtime: true });
 signAll(machOFiles(path.join(appPath, "Contents", "Frameworks")), null, "Contents/Frameworks Mach-O", { runtime: true });
+// 시스템 오디오 헬퍼: entitlements 없이 runtime만. Process Tap은 entitlement가 아니라 TCC(시스템 오디오 녹음)와
+// Info.plist의 NSAudioCaptureUsageDescription으로 걸러지고, 권한의 주체는 이 헬퍼를 띄운 .app이다.
+signAll([path.join(resources, "system-audio", "damwha-system-audio")], null, "Resources/system-audio", { runtime: true });
 
 // .app은 --deep으로. plist는 mac 쪽이다 — python plist를 주면 V8이 allow-jit 없이 rc=133으로 죽는다.
 codesign(signing.identity, macEnts, [appPath], { extra: ["--deep"] });

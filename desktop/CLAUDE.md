@@ -9,8 +9,8 @@ Electron main이 네 서비스를 감독한다 — 번들 PostgreSQL, NestJS API
 ## 명령
 
 ```bash
-pnpm desktop:dev     # build-postgres.sh·build-python.sh·build-ffmpeg.sh·build-models.sh(넷 다 캐시)·build-cli.sh → tsc → electron .
-pnpm desktop:build   # 위 넷 → tsc → be·fe build → pnpm deploy → electron-builder
+pnpm desktop:dev     # build-postgres.sh·build-python.sh·build-ffmpeg.sh·build-models.sh(넷 다 캐시)·build-cli.sh·build-system-audio.sh → tsc → electron .
+pnpm desktop:build   # 위 여섯 → tsc → be·fe build → pnpm deploy → electron-builder
                      #   → hardened runtime 서명(plist 둘) → check-bundle
 bash desktop/scripts/build-postgres.sh [--fresh]               # 내장 PG
 bash desktop/scripts/build-python.sh   [--fresh|--print-key]   # 내장 Python 3.12 + worker 층 (1.3 GB)
@@ -26,9 +26,9 @@ bash desktop/scripts/build-icon.sh                             # build-resources
 (`~/.cache/uv`가 온난할 때). 캐시가 적중하는지 확인하려고 그냥 돌리면 미스일 때 그 자리에서
 빌드가 시작되므로, 두 층의 키와 적중 여부만 보려면 `build-python.sh --print-key`를 쓴다.
 
-루트 `pnpm build`·`pnpm dev`는 이 넷을 빌드하지 않고 Electron을 띄우지 않는다.
+루트 `pnpm build`·`pnpm dev`는 이 여섯을 빌드하지 않고 Electron을 띄우지 않는다.
 
-## 번들 — `Resources/` 아래 여섯
+## 번들 — `Resources/` 아래 일곱
 
 `desktop/build/<이름>`에 스테이징한 것을 `electron-builder.yml`의 `extraResources: - from: build`가
 그대로 `Contents/Resources/<이름>`으로 싣는다. dev는 `desktop/build/`를 같은 자리로 본다 (Phase 4 §6.1).
@@ -41,6 +41,22 @@ bash desktop/scripts/build-icon.sh                             # build-resources
 | `ffmpeg/` | `build-ffmpeg.sh` |
 | `models/` | `build-models.sh` — pyannote community-1 (CC-BY-4.0). 서명 대상 아님, `.app` 봉인에 들어간다 |
 | `cli/` | `build-cli.sh` — `damwha`(런처, 원본 `scripts/cli-launcher.sh`)와 `damwha.cjs`(esbuild 번들). 서명 대상 아님 |
+| `system-audio/` | `build-system-audio.sh` — `damwha-system-audio`(원본 `native/system-audio/main.swift`, swiftc). `package.mjs`가 entitlements 없이 runtime으로 서명, `check-bundle` 25번 |
+
+**시스템 오디오 (2026-10-26).** 실시간 녹음에 화상회의 상대 목소리를 섞는다. 헬퍼는 CoreAudio Process Tap(macOS 14.2+)으로
+이 맥에서 나는 소리(담화 자신은 뺀다)를 16 kHz·mono·int16 LE로 stdout에 흘리고, stdin EOF·SIGTERM에 tap을 지우고 끝난다.
+렌더러는 커스텀 스킴 `damwha-audio://system/{status,pcm}`를 fetch해 받는다(`windows/system-audio-protocol.ts`) — **스펙
+§6.11(렌더러 → main 경로 없음)의 유일한 예외**다. preload·IPC는 여전히 없다. 허용 origin만 받고, 한 번에 헬퍼 하나,
+본문을 cancel하면 헬퍼가 꺼진다. 새로고침·창 파괴에서 Electron이 본문을 cancel한다는 보장이 없어 main이
+`did-start-navigation`(메인 프레임·다른 문서)·`render-process-gone`·`destroyed`에서 `stopAll()`을 부르고
+(`stopOnRendererReset`), `beginQuit`도 부른다. 시작 중이던 헬퍼도 그때 꺼진다.
+- "담화 자신은 뺀다"는 Electron main **과 그 자식 전부**다 — Chromium은 소리를 오디오 서비스 utility 프로세스에서
+  낸다. 제외 목록은 tap을 만들 때 한 번 정한다(돌고 있는 tap의 설명을 바꾸면 `'!hog'`로 거부됨, 실측). 녹음기가
+  마이크를 연 뒤에 헬퍼를 띄우므로 그때 오디오 서비스는 이미 CoreAudio 프로세스다 — 이 순서를 바꾸지 않는다.
+- 권한은 "시스템 오디오 녹음" TCC이고 주체는 헬퍼를 띄운 앱이다(dev에서는 터미널). Info.plist의
+  `NSAudioCaptureUsageDescription`이 없거나 권한이 거부되면 tap은 **오류 없이 0만** 흘린다 — 알려진 한계다.
+- Electron의 `setDisplayMediaRequestHandler` loopback을 쓰지 않는 이유: 화면 소스를 같이 요청해야 하고, 앱이 픽커를
+  쥐면(`useSystemPicker: false`) 오디오 트랙이 `ended`로만 나오는 버그가 열려 있다(electron/electron#52738).
 
 **`cli/`는 번들의 Electron 바이너리에 기댄다.** 런처가 `ELECTRON_RUN_AS_NODE=1 Contents/MacOS/Damwha damwha.cjs …`로
 돌리므로 별도 Node가 필요 없다 — 그래서 Electron 퓨즈의 `RunAsNode`를 끄면 CLI가 죽는다(지금은 켜 둔
@@ -95,8 +111,7 @@ Developer ID로 서명하고 공증까지 마친 DMG로 배포한다. ad-hoc은 
   해시도 공개 키도 없다. 같은 팀으로 새 Developer ID Application 인증서를 발급받아 서명한 앱도
   이 요구 조건을 만족하므로, TCC와 키체인은 그것을 같은 앱으로 본다. 키를 잃은 비용은 폐기·
   재발급과 `signing.json`의 지문 교체이고, 그동안 릴리스를 못 낸다 — 그래서 백업은 여전히 둔다.
-  (재발급을 실제로 해 보지는 않았다. DR 판독에서 내린 결론이다. 옛 문장 "재발급하면 다른
-  identity가 돼 전부 무효"는 과장이었다 — 최종 리뷰 M1.) **스펙 §3-7은 "이 맥 밖에 한 벌 더
+  (재발급을 실제로 해 보지는 않았다. DR 판독에서 내린 결론이다.) **스펙 §3-7은 "이 맥 밖에 한 벌 더
   둔다"고 적었으나, 실제로 그렇게 됐는지는 확인된 적이 없다 — 위치 미기재, 사용자 확인 필요.**
 - **6a 이전(ad-hoc) 빌드 이력이 남은 맥은 업데이트 때 키체인 암호를 1회 묻는다.** T12 실측
   (2026-09-22, macOS 26.x) — ad-hoc 빌드를 실행한 이력이 있는 맥에 Developer ID 빌드를
@@ -127,11 +142,6 @@ Developer ID로 서명하고 공증까지 마친 DMG로 배포한다. ad-hoc은 
   Latest)가 방금 낸 태그와 같은지 다시 본다.** 다르면 고치는 명령(`gh release edit v<ver>
   --repo Yjason-K/Damwha --latest`)을 출력하고 실패한다 — 자동으로 고치지는 않는다. 노트에는
   최소 macOS(15.0)를 적는다(스펙 §7.1).
-  - 이 스크립트는 과거(6a 초기)에는 `--latest=false`로 발행했다 — 당시 저장소 Latest는 웹 배포의
-    것이었고, 이미 나가 있는 웹 설치(v0.2.1~v0.2.3 tarball의 `make upgrade`)가 그 값을 읽어 없는
-    이미지 태그를 당기다 실패하는 사고가 실제로 났다(2026-09-21, `desktop-v0.3.0` 발행 때 Latest를
-    빼앗겼다가 `gh release edit v0.2.3 --latest`로 되돌렸다). 웹 배포 자체가 걷힌 지금은 그 위험이
-    없다.
 - **최소 macOS 15.0을 세 자리가 같은 값으로 강제한다** — `scripts/lib/build-target.sh`의
   `MACOSX_DEPLOYMENT_TARGET`(postgres·ffmpeg 소스 빌드가 source), `electron-builder.yml`의
   `LSMinimumSystemVersion`, `scripts/lib/minos.mjs`의 `MAX_MINOS`(`check-bundle`이 번들 Mach-O
@@ -252,8 +262,7 @@ dev와 packaged가 같은 클러스터라 버려도 되는 "dev 클러스터"가
   **부모가 자식을 한 번에 하나만 띄우고 `_wait_child`로 거둔다**는 것 — 그래서 저 세 순간에는 자기
   신분으로 잠긴 행이 전부 고아다. 시간 조건이 없어도 남의 행을 건드리지 않는다.
 - 자기 고아 회수도 같은 규칙이다(`reap_stale`과 SQL 한 벌을 공유한다) — `interruptions` +1, 상한이면
-  `failed`. 재현 회차(Phase 5)에서는 옛 규칙이라 `attempts`가 1에서 2가 됐다. 지금은 `attempts`가 claim의
-  +1로만 오르고 회수는 `interruptions`만 올린다.
+  `failed`. `attempts`는 claim의 +1로만 오르고 회수는 `interruptions`만 올린다.
 
 `WORKER_ID`와 `ps`에 보이는 `--run-id`는 **같은 실행 안에서도 값이 다르다** — 전자는 `config.ts`의
 `RUN_WORKER_ID`로 `job.locked_by`에 들어가고, 후자는 supervisor의 실행 id다. 둘 다 `desktop-` 접두사를
@@ -281,7 +290,7 @@ dev와 packaged가 같은 클러스터라 버려도 되는 "dev 클러스터"가
 
 ## 창 배경과 셸 페이지 — 다크 모드
 
-**Window background and shell pages follow macOS dark, not the in-app theme.** `src/windows/window-background.ts` picks `backgroundColor` from `nativeTheme.shouldUseDarkColors`; its two values must equal fe's light and dark `--gray-2` (`tests/windows/window-background.test.ts`). `shell/*.html` add an `@media (prefers-color-scheme: dark)` block that `tests/windows/shell-html.test.ts` checks against fe's `.dark` values — any edit to a shell `<style>` also changes its CSP `style-src` hash. Syncing the title bar to the in-app choice would need a renderer → main channel, which the one-way desktop-bridge contract rules out.
+**창 배경과 셸 페이지는 앱 안 테마가 아니라 macOS 다크를 따른다.** `src/windows/window-background.ts`가 `nativeTheme.shouldUseDarkColors`로 `backgroundColor`를 고르고, 두 값은 fe의 라이트·다크 `--gray-2`와 같아야 한다(`tests/windows/window-background.test.ts`). `shell/*.html`의 `@media (prefers-color-scheme: dark)` 블록은 `tests/windows/shell-html.test.ts`가 fe `.dark` 값과 맞대어 보고, 셸 `<style>`을 고치면 CSP `style-src` 해시도 바뀐다. 제목 표시줄을 앱 안 선택에 맞추려면 렌더러 → main 경로가 필요한데, 단방향 desktop-bridge 계약이 그것을 막는다.
 
 ## 지키는 것
 

@@ -24,7 +24,7 @@ Full spec: [`docs/product-concept.md`](docs/product-concept.md) (개념 정의�
 
 ## Commands
 
-This repo requires **Node 22** and **pnpm** (`engine-strict=true`; npm/yarn will fail). Fresh shells on this machine often default to Node 20 — activate 22 inline per command if `node -v` is wrong: `nvm use 22 && pnpm ...`.
+This repo requires **Node 22** and **pnpm** (`engine-strict=true`; npm/yarn will fail). If `node -v` is not 22, prefix the command with `nvm use 22 &&`.
 
 ```bash
 pnpm install          # from the REPO ROOT only (one lockfile for the workspace)
@@ -115,6 +115,15 @@ The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by 
   문자열로만 적혀 있어 **이름을 바꾸면 데스크톱의 확인과 handshake가 조용히 건너뛰어진다.** 웹 배포에서는
   아무도 부르지 않아 무해하다.
 
+- **시스템 오디오는 마이크에 더해져 한 채널로 올라간다** (`lib/system-audio.ts`, `lib/pcm-mix.ts`, 2026-10-26).
+  데스크톱 앱에서만 모달에 "시스템 오디오도 녹음" 스위치가 보인다 — `damwha-audio://system/status` fetch가
+  성공하는가로 알고, 브라우저에는 그 스킴이 없어 숨는다. 기본은 켬, 끈 선택은 `damwha:live-system-audio`에
+  기억한다. 스트림은 `prepare()` 안에서, 회의를 만들기 **전에** 연다(위 "캐처를 먼저 준비" 규칙 그대로).
+  **마이크가 시계다** — 섞인 프레임의 길이는 마이크 프레임과 같아 오프셋·경과 시간 규칙이 안 바뀐다. 시스템
+  오디오 큐는 0.5초로 묶고(장치 시계 drift), `begin`에서 비운다. 녹음 도중 스트림이 끝나면 캡처 실패가
+  아니라 `status.systemAudio = "lost"`와 토스트 한 번이다 — 마이크는 계속 녹음된다. 자원 반납은 스트림을
+  cancel하고, 그것이 데스크톱 헬퍼를 끄는 유일한 신호다(`desktop/CLAUDE.md` "시스템 오디오").
+
 - **Worklet 종료는 flush ACK로 끝난다** (`lib/pcm-worklet.ts`, `lib/pcm-worklet-protocol.ts`).
   메시지는 메인→Worklet `begin`/`flush`, Worklet→메인 `ready`/`begun`/`pcm`/`flushed` 넷뿐이고
   타입은 `pcm-worklet-protocol.ts` 한 곳에만 있다(양쪽이 값을 복제하지 않는다). 종료 시 그냥
@@ -125,8 +134,7 @@ The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by 
   않기 위해서다. 실측(2026-09-07, 프로덕션 빌드, 실제 맥 마이크): 46개 풀 청크 뒤 stop이
   27,392바이트 자투리를 싣고 갔고 `capture_error`는 NULL이었다.
 
-- **`pcm-worklet.ts?worker&url`은 원래부터 옳았다 — 이번에 고친 게 아니라 회귀를 막는 그물을
-  추가한 것이다.** jsdom에는 `AudioContext`가 없어 vitest는 이 파일을 절대 실행하지 않고,
+- **`pcm-worklet.ts?worker&url`은 빌드 산출물 검사로만 지킨다.** jsdom에는 `AudioContext`가 없어 vitest는 이 파일을 절대 실행하지 않고,
   vitest/`vite build`는 pre-bundle하므로 초록불이어도 브라우저 동작을 증명하지 않는다.
   `pnpm fe verify:worklet`(`scripts/verify-pcm-worklet.mjs`)이 그 자리를 메운다: `fe/dist/assets/`
   에서 `pcm-worklet-*.js`가 **정확히 하나** 있고 `.ts` 원본이 에셋으로 복사되지 않았음을 확인한
@@ -159,7 +167,7 @@ The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by 
 
 - **`topic` is not a dashboard kind.** Topics are saved searches (roadmap 작업 4), so the lens domain here carries three kinds; don't reuse the meeting-domain `LensKind`.
 - **Completion filter is a single-value segment** (`열림|완료`) because BE `completion_status` takes one value — there is no combined view. Toggling completion optimistically removes the row from the current list.
-- **Evidence jump navigates to `/meetings/:id?u=<utteranceId>`** — the URL carries both the highlight and the audio seek, so search jumps and lens evidence jumps now behave identically (the earlier "no audio seek" carve-out is gone). Historical items whose utterance no longer exists after reprocess surface a toast and drop `?u=` with `replace: true`.
+- **Evidence jump navigates to `/meetings/:id?u=<utteranceId>`** — the URL carries both the highlight and the audio seek, so search jumps and lens evidence jumps behave identically. Historical items whose utterance no longer exists after reprocess surface a toast and drop `?u=` with `replace: true`.
 
 **회의 태그·폴더·최근 본 회의** — 화면 배치와 그 이유는 [`docs/feature-notes.md`](docs/feature-notes.md). 고칠 때 깨기 쉬운 것만:
 

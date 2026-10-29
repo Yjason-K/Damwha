@@ -50,11 +50,11 @@ too, since pnpm orders workspace builds by dependency.
 pnpm 10.26.0 is pinned in the root `package.json` and activated by corepack.
 
 ```bash
-pnpm install                  # from the ROOT — one lockfile covers be + fe
+pnpm install                  # from the ROOT — one lockfile covers every workspace package
 pnpm dev                      # API :3000 + Vite :5173 in parallel
 pnpm cli build / test / lint  # damwha 명령·MCP 서버 (= pnpm --filter damwha-cli run)
 pnpm site:dev                 # 제품 사이트 :4321 (pnpm dev에는 끼지 않는다)
-pnpm build / test / lint      # fan out across both packages
+pnpm build / test / lint      # fan out across every workspace package that defines the script
 pnpm be <script>              # any damwha-be script  (= pnpm --filter damwha-be run)
 pnpm fe <script>              # any damwha-fe script
 pnpm db:up / db:down          # Postgres via be/docker-compose.yml

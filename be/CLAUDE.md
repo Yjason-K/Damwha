@@ -78,7 +78,7 @@ These cross-file rules are easy to break and are enforced by tests:
 Separate Python project under `worker/` (uv + ruff + pytest + pydantic v2 + psycopg3, no ORM — same raw-SQL reasons as the API). It consumes the `job` contract and never imports the NestJS side. Key realities (mostly learned during Plan 2 and the real-model smoke):
 
 - **Process model: supervisor + one-job child, not a single poll loop.** `python -m damwha_worker` starts a **parent supervisor** (`__main__.py`) that only does `db.peek_queued` and spawns `python -m damwha_worker --once` as a **child process per job**; the child claims, processes exactly one job, and exits. The parent branches on the child's exit code — `0` = handled (peek again immediately), `3` = no job (poll sleep), anything else = crash (capped exponential backoff, max 60s, to stop infinite respawn on a deterministic error). The lock never crosses the process boundary, so the parent's peek deliberately ignores `next_attempt_at` and the child's claim enforces it. The supervisor also runs the reaper daemon thread. Signals are two-stage: first SIGINT/SIGTERM stops at the next stage boundary, second one kills. Full detail (including the mermaid flow) lives in `docs/worker-architecture.md` §4 — that doc is current; prefer it over this summary.
-- **The desktop app reads readiness from two log lines — their wording is a contract.** The supervisor logs `supervisor <id> ready (db connected)` after **every** successful `_reconnect()` (first connect and every reconnect, `__main__.py`), and `reconnect failed — retry in Ns` while it can't reach the DB. `supervisor <id> started` is logged **before** connecting, so it proves nothing about the DB — the Electron supervisor (`desktop/src/services/worker.ts`, `READY`/`RECONNECT_FAILED`) scans the worker's stderr line by line and takes the **last** of those two events as ready vs degraded. Rewording either line makes the desktop app show a healthy worker as never-ready. `worker/tests/test_supervisor.py` and `desktop/tests/worker-spec.test.ts` pin both sides.
+- **The desktop app reads readiness from two log lines — their wording is a contract.** The supervisor logs `supervisor <id> ready (db connected)` after **every** successful `_reconnect()` (first connect and every reconnect, `__main__.py`), and `reconnect failed — retry in Ns` while it can't reach the DB. `supervisor <id> started` is logged **before** connecting, so it proves nothing about the DB — the Electron supervisor (`desktop/src/services/worker.ts`, `READY`/`RECONNECT_FAILED`) scans the worker's stderr line by line and takes the **last** of those two events as ready vs degraded. Rewording either line makes the desktop app show a healthy worker as never-ready. `worker/tests/test_supervisor.py` and `desktop/tests/services/worker.test.ts` pin both sides.
 - **Dispatch is a handler registry, not an if-chain.** `jobs.py` holds one `JobHandler`
   per job type, and its three methods (`run` / `on_failure` / `on_shutdown`) are that
   type's whole contract — so "does this type retry?" is answered by reading one class,
@@ -158,7 +158,7 @@ all, **never run `npm install` in `be/`**. Install once from the monorepo root; 
 else works from either directory.
 
 ```bash
-pnpm install                             # FROM THE MONOREPO ROOT — installs be + fe
+pnpm install                             # FROM THE MONOREPO ROOT — installs the whole workspace
 cp .env.example .env                     # configure DATABASE_URL, STORAGE_ROOT, model envs
 
 docker compose up -d                     # from be/ — Postgres (pgvector + pg_bigm); first run builds the image
@@ -198,9 +198,9 @@ uv run --with edlib python scripts/eval_speaker_attribution.py score --cache <di
 
 ## Conventions
 
-- Follow the plan doc's task structure and the existing per-domain repository/service/controller split when adding features.
+- Follow the existing per-domain repository/service/controller split when adding features.
 - Migrations are plain SQL files in `src/database/migrations/` applied in filename order by `migrate.ts` (tracked in a `_migrations` table). Add new numbered files; don't edit applied ones.
-- **`migrate.ts`의 CLI 출력은 데스크톱 앱과의 계약이다.** `node dist/database/migrate.js [--status]`(dev는 `pnpm be:migrate [-- --status]`)는 stdout 마지막 줄에 `{"applied":N,"pending":[…],"unknown":[…]}`를 찍는다 — `--status`면 상태만, 인자가 없으면 적용한 **뒤의** 상태다. Electron 앱의 마이그레이션 게이트(`desktop/src/services/migration-gate.ts`)가 이 줄을 파싱할 수 있어야 통과하고, `unknown`이 비어 있지 않으면(더 새 코드가 올린 스키마) 거부한다. `runMigrations`는 한 연결에서 `pg_advisory_lock`을 쥐고 적용한다 — 앱이 죽어 살아남은 러너와 다음 실행의 러너가 겹쳐도 파일마다 한 번만 적용된다. `test/migrate-status.spec.ts`가 셋을 고정한다.
+- **`migrate.ts`의 CLI 출력은 데스크톱 앱과의 계약이다.** `node dist/database/migrate.js [--status]`(dev는 `pnpm be:migrate [-- --status]`)는 stdout 마지막 줄에 `{"applied":N,"pending":[…],"unknown":[…]}`를 찍는다 — `--status`면 상태만, 인자가 없으면 적용한 **뒤의** 상태다. Electron 앱의 마이그레이션 게이트(`desktop/src/services/postgres/migration-gate.ts`)가 이 줄을 파싱할 수 있어야 통과하고, `unknown`이 비어 있지 않으면(더 새 코드가 올린 스키마) 거부한다. `runMigrations`는 한 연결에서 `pg_advisory_lock`을 쥐고 적용한다 — 앱이 죽어 살아남은 러너와 다음 실행의 러너가 겹쳐도 파일마다 한 번만 적용된다. `test/migrate-status.spec.ts`가 셋을 고정한다.
 - Enums are `text` + `CHECK` (not native Postgres enums) so values can evolve; keep the zod/pydantic contracts and CHECK lists in sync.
 - **Keep the API/worker split clean.** The ML pipeline, ffmpeg audio-integrity validation, and worker-side status transitions live in the Python worker (`worker/`), not the NestJS `src/`. Don't add ML or cloud calls to `src/`; both halves keep the privacy premise (local-only, no external network) intact.
 

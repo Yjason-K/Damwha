@@ -3,6 +3,7 @@ import type { LiveStopResponse } from "../api/types";
 import {
   LiveCaptureCancelled,
   LiveRecorder,
+  type OpenSystemAudio,
   type RecorderFailure,
   type RecorderStatus,
 } from "./live-recorder";
@@ -32,6 +33,7 @@ type ActiveCapture = LiveCapture & {
   pageListener: ((status: RecorderStatus) => void) | null;
   /** 실패를 딱 한 번만 토스트한다 — onStatus는 상태가 바뀔 때마다 계속 불린다. */
   toasted: boolean;
+  systemAudioLostToasted: boolean;
 };
 
 const FAILURE_MESSAGE: Record<RecorderFailure, string> = {
@@ -89,6 +91,7 @@ function isLiveCapture(entry: ActiveCapture): boolean {
  */
 export async function prepareLiveRecorder(
   deviceId?: string,
+  openSystemAudio?: OpenSystemAudio,
 ): Promise<LiveCapture> {
   if (active && isLiveCapture(active)) throw new LiveCaptureBusy();
   // 이전 예약 — 회의에 붙지 않은 준비이거나, 이미 끝난(봉인·실패·종료) 캡처다.
@@ -110,6 +113,7 @@ export async function prepareLiveRecorder(
     stopOutcome,
     pageListener: null,
     toasted: false,
+    systemAudioLostToasted: false,
   };
   // 이 onStatus 슬롯은 여기서 딱 한 번만 세우고 절대 덮어쓰지 않는다 — 실패를 토스트로
   // 알리는 유일한 통로이고, 레코더는 회의 상세 화면보다 오래 산다(다른 페이지로
@@ -124,6 +128,14 @@ export async function prepareLiveRecorder(
         description: `${FAILURE_MESSAGE[status.failed]} 지금까지 녹음된 내용은 남아 있어요.`,
       });
     }
+    if (status.systemAudio === "lost" && !entry.systemAudioLostToasted) {
+      entry.systemAudioLostToasted = true;
+      toast({
+        variant: "error",
+        title: "시스템 오디오 녹음이 끊겼어요",
+        description: "마이크는 계속 녹음하고 있어요. 이제부터 상대방 목소리는 녹음되지 않아요.",
+      });
+    }
     entry.pageListener?.(status);
   };
 
@@ -132,7 +144,7 @@ export async function prepareLiveRecorder(
   active = entry;
   if (previous) await previous.recorder.dispose();
   try {
-    await recorder.prepare(deviceId);
+    await recorder.prepare(deviceId, openSystemAudio);
   } finally {
     // 준비에 실패했거나, 준비 중에 다른 시작이 소유권을 가져갔으면 예약을 놓는다.
     if (active === entry && recorder.status.phase !== "prepared") active = null;

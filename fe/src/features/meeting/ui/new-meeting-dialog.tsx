@@ -21,6 +21,7 @@ import {
 import { DatePicker } from "@/shared/ui/date-picker";
 import { Input } from "@/shared/ui/input";
 import { SegmentedControl } from "@/shared/ui/segmented-control";
+import { Switch } from "@/shared/ui/switch";
 import { TimePicker } from "@/shared/ui/time-picker";
 import { toast } from "@/shared/ui/use-toast";
 import type { ProcessingOverride } from "@/features/settings/api/types";
@@ -47,6 +48,13 @@ import {
   LiveCaptureBusy,
   prepareLiveRecorder,
 } from "../lib/live-session";
+import {
+  isSystemAudioAvailable,
+  openDesktopSystemAudio,
+  readSystemAudioPreference,
+  saveSystemAudioPreference,
+  SystemAudioUnavailable,
+} from "../lib/system-audio";
 
 import { useFolders } from "../api/folders";
 import { useUploadMeeting } from "../api/meetings";
@@ -227,6 +235,13 @@ export function NewMeetingDialog({
   const [gate, setGate] = React.useState<CaptureGate | null>(null);
   const [gateChecking, setGateChecking] = React.useState(false);
   const [deviceId, setDeviceId] = React.useState<string | undefined>(undefined);
+  /** 데스크톱 앱에서만 true. null은 아직 묻지 않았다 — 그동안 옵션을 그리지 않는다. */
+  const [systemAudioAvailable, setSystemAudioAvailable] = React.useState<
+    boolean | null
+  >(null);
+  const [includeSystemAudio, setIncludeSystemAudio] = React.useState(
+    readSystemAudioPreference,
+  );
   /**
    * 게이트의 세대. 0은 "아직 안 돌았다"라 효과가 이 값만 보고 한 번만 건다 —
    * StrictMode의 이중 실행도 여기서 걸러진다. 늦게 끝난 게이트가 닫힌 다이얼로그나
@@ -284,6 +299,23 @@ export function NewMeetingDialog({
     if (gateRunRef.current !== 0) return;
     void runGate();
   }, [open, source, gate, runGate]);
+
+  React.useEffect(() => {
+    if (!open || source !== "live" || env.demoMode) return;
+    if (systemAudioAvailable !== null) return;
+    let current = true;
+    void isSystemAudioAvailable().then((available) => {
+      if (current) setSystemAudioAvailable(available);
+    });
+    return () => {
+      current = false;
+    };
+  }, [open, source, systemAudioAvailable]);
+
+  const changeIncludeSystemAudio = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setIncludeSystemAudio(e.target.checked);
+    saveSystemAudioPreference(e.target.checked);
+  };
 
   const changeSource = (value: string) => {
     if (sourceLocked) return;
@@ -375,12 +407,24 @@ export function NewMeetingDialog({
     try {
       capture = await prepareLiveRecorder(
         deviceId === DEFAULT_DEVICE ? undefined : deviceId,
+        systemAudioAvailable && includeSystemAudio
+          ? openDesktopSystemAudio
+          : undefined,
       );
     } catch (error) {
       // 사용자가 취소했거나 다른 시작에 밀린 준비 — 실패가 아니므로 조용히 접는다.
       if (error instanceof LiveCaptureCancelled) return;
       if (error instanceof LiveCaptureBusy) {
         showStartError(error);
+        return;
+      }
+      if (error instanceof SystemAudioUnavailable) {
+        toast({
+          variant: "error",
+          title: "시스템 오디오를 열지 못했어요",
+          description:
+            "다시 시도하거나, 시스템 오디오를 끄고 마이크만으로 녹음해 주세요.",
+        });
         return;
       }
       // 권한 거절·장치 부재·Worklet 로딩 실패가 전부 여기로 온다. 그 예외의 message는
@@ -672,6 +716,20 @@ export function NewMeetingDialog({
                       ))}
                     </SelectContent>
                   </Select>
+                </div>
+              ) : null}
+              {gate && "devices" in gate && systemAudioAvailable ? (
+                <div className="flex flex-col gap-1">
+                  <Switch
+                    label="시스템 오디오도 녹음"
+                    checked={includeSystemAudio}
+                    onChange={changeIncludeSystemAudio}
+                    disabled={starting}
+                  />
+                  <p className="text-xs text-[color:var(--text-muted)]">
+                    화상회의 상대방 목소리처럼 이 맥에서 나는 소리를 함께 녹음해요.
+                    이어폰을 껴도 녹음돼요. 대면 회의라면 꺼 두세요.
+                  </p>
                 </div>
               ) : null}
             </TabsContent>
