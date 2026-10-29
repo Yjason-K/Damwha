@@ -12,8 +12,11 @@
 // 오류로 드러나지 않으므로 이 헬퍼가 판정하지 않는다. Info.plist의 NSAudioCaptureUsageDescription이
 // 없으면 프롬프트조차 뜨지 않는다.
 //
-// 담화 자신(부모 프로세스)이 내는 소리는 tap에서 뺀다 — 회의 화면에서 녹음 샘플을 재생하면 그 소리가
-// 다시 녹음에 섞이기 때문이다.
+// 담화 자신이 내는 소리는 tap에서 뺀다 — 회의 화면에서 녹음 샘플을 재생하면 그 소리가 다시 녹음에 섞이기
+// 때문이다. Chromium은 소리를 main이 아니라 오디오 서비스 utility 프로세스(`--utility-sub-type=audio.mojom.AudioService`)
+// 에서 내므로, 부모(Electron main)만이 아니라 부모의 자식 전부를 뺀다. 제외 목록은 tap을 만들 때 한 번 정한다 —
+// 실측(2026-10-26, macOS 27.2): 돌고 있는 tap에 kAudioTapPropertyDescription을 다시 쓰면 '!hog'로 거부된다.
+// 녹음기가 마이크·AudioContext를 연 **뒤에** 헬퍼를 띄우므로 그때 오디오 서비스는 이미 CoreAudio 프로세스다.
 
 import AVFoundation
 import CoreAudio
@@ -37,16 +40,29 @@ func address(_ selector: AudioObjectPropertySelector) -> AudioObjectPropertyAddr
     mElement: kAudioObjectPropertyElementMain)
 }
 
-/// 부모(담화) 프로세스의 CoreAudio 객체. 아직 소리를 낸 적이 없으면 객체가 없을 수 있다 — 그때는 뺄 것도 없다.
-func processObject(pid: pid_t) -> AudioObjectID? {
-  var addr = address(kAudioHardwarePropertyTranslatePIDToProcessObject)
-  var pidValue = pid
-  var object = AudioObjectID(kAudioObjectUnknown)
-  var size = UInt32(MemoryLayout<AudioObjectID>.size)
-  let status = AudioObjectGetPropertyData(
-    AudioObjectID(kAudioObjectSystemObject), &addr,
-    UInt32(MemoryLayout<pid_t>.size), &pidValue, &size, &object)
-  return status == noErr && object != kAudioObjectUnknown ? object : nil
+func parentPID(of pid: pid_t) -> pid_t? {
+  var info = kinfo_proc()
+  var size = MemoryLayout<kinfo_proc>.stride
+  var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+  guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return nil }
+  return info.kp_eproc.e_ppid
+}
+
+/// 담화(부모)와 그 자식 프로세스의 CoreAudio 객체. 소리를 낸 적이 없는 프로세스는 객체가 없다 — 뺄 것도 없다.
+func damwhaProcessObjects(damwha: pid_t) -> [AudioObjectID] {
+  let system = AudioObjectID(kAudioObjectSystemObject)
+  var addr = address(kAudioHardwarePropertyProcessObjectList)
+  var size: UInt32 = 0
+  guard AudioObjectGetPropertyDataSize(system, &addr, 0, nil, &size) == noErr else { return [] }
+  var list = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+  guard AudioObjectGetPropertyData(system, &addr, 0, nil, &size, &list) == noErr else { return [] }
+  return list.filter { object in
+    var pidAddr = address(kAudioProcessPropertyPID)
+    var pid: pid_t = -1
+    var pidSize = UInt32(MemoryLayout<pid_t>.size)
+    guard AudioObjectGetPropertyData(object, &pidAddr, 0, nil, &pidSize, &pid) == noErr else { return false }
+    return pid == damwha || parentPID(of: pid) == damwha
+  }
 }
 
 func defaultOutputUID() -> String {
@@ -66,7 +82,8 @@ func defaultOutputUID() -> String {
 
 // ── tap과 aggregate ─────────────────────────────────────────────────────────
 
-let excluded = processObject(pid: getppid()).map { [$0] } ?? []
+let damwhaPID = getppid()
+let excluded = damwhaProcessObjects(damwha: damwhaPID)
 let tapDescription = CATapDescription(monoGlobalTapButExcludeProcesses: excluded)
 tapDescription.uuid = UUID()
 tapDescription.isPrivate = true

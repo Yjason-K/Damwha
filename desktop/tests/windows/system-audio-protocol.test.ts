@@ -1,7 +1,8 @@
+import { EventEmitter } from "events";
 import { PassThrough } from "stream";
 import { describe, expect, it, vi } from "vitest";
 import type { SystemAudioSession } from "../../src/process/system-audio";
-import { createSystemAudioProtocol } from "../../src/windows/system-audio-protocol";
+import { createSystemAudioProtocol, stopOnRendererReset } from "../../src/windows/system-audio-protocol";
 
 const ORIGIN = "http://127.0.0.1:3000";
 
@@ -93,5 +94,46 @@ describe("system audio protocol", () => {
     await p.handle(get("/pcm"));
     p.stopAll();
     expect(s.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("stopAll also stops a helper that was still starting — its request has no renderer left to cancel it", async () => {
+    const s = fakeSession();
+    let resolveStart!: (v: SystemAudioSession) => void;
+    const p = protocolWith(() => new Promise((r) => (resolveStart = r)));
+    const pending = p.handle(get("/pcm"));
+    p.stopAll();
+    resolveStart(s.session);
+    expect((await pending).status).toBe(503);
+    expect(s.stop).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("stopOnRendererReset", () => {
+  // 요청이 끊겨도 Electron이 응답 본문을 cancel한다는 보장이 없다 — 렌더러 쪽 사건으로 직접 끈다.
+  function wired() {
+    const contents = new EventEmitter();
+    const stop = vi.fn();
+    stopOnRendererReset(contents, stop);
+    return { contents, stop };
+  }
+
+  it("stops on a main-frame document change (reload, shell screen)", () => {
+    const { contents, stop } = wired();
+    contents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps recording across in-app routes and subframe loads", () => {
+    const { contents, stop } = wired();
+    contents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: true });
+    contents.emit("did-start-navigation", { isMainFrame: false, isSameDocument: false });
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("stops when the renderer dies or the window's contents are destroyed", () => {
+    const { contents, stop } = wired();
+    contents.emit("render-process-gone");
+    contents.emit("destroyed");
+    expect(stop).toHaveBeenCalledTimes(2);
   });
 });

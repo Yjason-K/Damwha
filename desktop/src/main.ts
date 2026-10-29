@@ -95,6 +95,7 @@ import { describeToolFailure, runTool, toolOk } from "./process/tool-runner";
 import { startSystemAudio, systemAudioHelperPath } from "./process/system-audio";
 import {
   createSystemAudioProtocol,
+  stopOnRendererReset,
   SYSTEM_AUDIO_PRIVILEGES,
   SYSTEM_AUDIO_SCHEME,
 } from "./windows/system-audio-protocol";
@@ -344,6 +345,7 @@ function createWindow(): BrowserWindow {
     },
   });
   applyNavigationBoundary(created, allowedOrigins);
+  stopOnRendererReset(created.webContents, () => systemAudio.stopAll());
   // ⌘R 뒤의 새 문서는 새 __damwha_desktop을 갖는다 — 다시 붙여야 화면 언어 다리가 새 문서에 닿는다.
   // 첫 로드는 reattachWindow가 붙인다(그때는 아직 updateAttached가 서기 전이라 여기서는 건너뛴다).
   // 셸 화면(file://)으로 돌아간 창은 showShell이 updateAttached를 null로 내리므로 붙지 않는다.

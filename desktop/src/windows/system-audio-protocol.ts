@@ -5,8 +5,9 @@ import { originOf } from "./origin";
  * 렌더러가 시스템 오디오를 받는 **유일한** 렌더러 → main 경로 (스펙 §6.11의 예외, 2026-10-26).
  *
  * preload·IPC를 두지 않고 커스텀 스킴 하나로 연다. 렌더러가 `fetch(damwha-audio://system/pcm)`하면 헬퍼가 뜨고
- * PCM이 응답 본문으로 흐른다. 수명은 요청에 묶인다 — 렌더러가 본문을 cancel하거나 창이 새로고침·파괴돼 요청이
- * 끊기면 본문의 cancel이 헬퍼를 끈다. 그래서 "렌더러가 죽었는데 tap이 열려 있다"를 따로 막을 장치가 필요 없다.
+ * PCM이 응답 본문으로 흐른다. 녹음이 끝나면 렌더러가 본문을 cancel해 헬퍼를 끈다. 새로고침·창 파괴로 요청이
+ * 끊길 때 Electron이 본문을 cancel한다는 보장은 없으므로, main이 그 사건을 직접 듣고 끈다(`stopOnRendererReset`).
+ * 그것이 없으면 헬퍼가 남아 슬롯을 쥐고, 앱을 다시 켤 때까지 모든 녹음이 409를 받는다.
  *
  * electron을 import하지 않는다(vitest가 부를 수 있어야 한다). main.ts가 스킴 등록과 `protocol.handle`만 배선한다.
  */
@@ -33,7 +34,7 @@ export interface SystemAudioProtocolDeps {
 
 export interface SystemAudioProtocol {
   handle(request: Request): Promise<Response>;
-  /** 앱 종료(beginQuit)에서 부른다. 렌더러가 cancel을 보내기 전에 프로세스가 끝날 수 있다. */
+  /** 앱 종료(beginQuit)와 렌더러 리셋(`stopOnRendererReset`)에서 부른다. 시작 중인 헬퍼도 끈다. */
   stopAll(): void;
 }
 
@@ -51,10 +52,13 @@ function json(status: number, body: unknown, origin: string | null): Response {
 export function createSystemAudioProtocol(deps: SystemAudioProtocolDeps): SystemAudioProtocol {
   let active: SystemAudioSession | null = null;
   let starting = false;
+  /** stopAll이 올릴 때마다 바뀐다. 시작 중에 바뀌었으면 도착한 헬퍼는 주인이 없다. */
+  let generation = 0;
 
   async function openPcm(origin: string): Promise<Response> {
     if (active !== null || starting) return json(409, { code: "busy" }, origin);
     starting = true;
+    const gen = generation;
     let session: SystemAudioSession;
     try {
       session = await deps.start();
@@ -64,6 +68,10 @@ export function createSystemAudioProtocol(deps: SystemAudioProtocolDeps): System
       return json(503, { code: "start_failed", detail }, origin);
     } finally {
       starting = false;
+    }
+    if (gen !== generation) {
+      session.stop();
+      return json(503, { code: "stopped" }, origin);
     }
     active = session;
     void session.exited.then(({ code, signal }) => {
@@ -111,7 +119,25 @@ export function createSystemAudioProtocol(deps: SystemAudioProtocolDeps): System
       return json(404, { code: "not_found" }, origin);
     },
     stopAll() {
+      generation += 1;
       active?.stop();
     },
   };
+}
+
+/** `WebContents`에서 쓰는 부분만. 테스트가 EventEmitter로 대신한다. */
+export interface RendererEvents {
+  on(event: string, listener: (...args: any[]) => void): unknown;
+}
+
+/**
+ * 렌더러 문서가 바뀌거나 죽으면 시스템 오디오를 끈다 — 그 문서의 녹음기는 이제 없다. 같은 문서 안의 라우팅
+ * (`isSameDocument`)과 서브프레임은 녹음을 끝내지 않는다. 창이 하나라 "모두 끄기"로 충분하다.
+ */
+export function stopOnRendererReset(contents: RendererEvents, stop: () => void): void {
+  contents.on("did-start-navigation", (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
+    if (details.isMainFrame && !details.isSameDocument) stop();
+  });
+  contents.on("render-process-gone", () => stop());
+  contents.on("destroyed", () => stop());
 }
