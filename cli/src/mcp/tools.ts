@@ -217,7 +217,11 @@ export function registerReadTools(server: McpServer, deps: McpDeps): void {
   server.registerTool(
     'list_meetings',
     {
-      description: describe('List meetings, newest recording first: id, recording time, status, folder, and title.'),
+      description: describe(
+        'List meetings, newest recording first: id, recording time, status, folder, and title. ' +
+          'Takes no filters — to find meetings by content, folder or date use search. ' +
+          '50 per page by default (max 200); pass next_cursor from the previous page to continue.',
+      ),
       inputSchema: {
         limit: z.number().int().min(1).max(200).optional(),
         cursor: z.string().optional().describe('next_cursor from a previous page'),
@@ -278,7 +282,12 @@ export function registerReadTools(server: McpServer, deps: McpDeps): void {
   server.registerTool(
     'search',
     {
-      description: describe('Search meeting utterances. Returns excerpts with meeting id, utterance id and timestamps.'),
+      description: describe(
+        'Search meeting utterances by text. Runs hybrid (keyword + semantic) when the embed service is up, keyword-only otherwise; ' +
+          'the response `mode` says which ran. Filters narrow by meeting, folder or recording date. ' +
+          'Returns up to `limit` excerpts with meeting id, utterance id, speaker id and start/end ms; has_more=true means more matched ' +
+          'but there is no cursor — narrow the filters or raise limit. For surrounding turns call get_transcript with the meeting id.',
+      ),
       inputSchema: {
         query: z.string().min(1),
         limit: z.number().int().min(1).max(100).optional(),

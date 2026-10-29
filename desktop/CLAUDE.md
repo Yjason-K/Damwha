@@ -10,7 +10,7 @@ Electron main이 네 서비스를 감독한다 — 번들 PostgreSQL, NestJS API
 
 ```bash
 pnpm desktop:dev     # build-postgres.sh·build-python.sh·build-ffmpeg.sh·build-models.sh(넷 다 캐시)·build-cli.sh·build-system-audio.sh → tsc → electron .
-pnpm desktop:build   # 위 넷 → tsc → be·fe build → pnpm deploy → electron-builder
+pnpm desktop:build   # 위 여섯 → tsc → be·fe build → pnpm deploy → electron-builder
                      #   → hardened runtime 서명(plist 둘) → check-bundle
 bash desktop/scripts/build-postgres.sh [--fresh]               # 내장 PG
 bash desktop/scripts/build-python.sh   [--fresh|--print-key]   # 내장 Python 3.12 + worker 층 (1.3 GB)
@@ -26,7 +26,7 @@ bash desktop/scripts/build-icon.sh                             # build-resources
 (`~/.cache/uv`가 온난할 때). 캐시가 적중하는지 확인하려고 그냥 돌리면 미스일 때 그 자리에서
 빌드가 시작되므로, 두 층의 키와 적중 여부만 보려면 `build-python.sh --print-key`를 쓴다.
 
-루트 `pnpm build`·`pnpm dev`는 이 넷을 빌드하지 않고 Electron을 띄우지 않는다.
+루트 `pnpm build`·`pnpm dev`는 이 여섯을 빌드하지 않고 Electron을 띄우지 않는다.
 
 ## 번들 — `Resources/` 아래 일곱
 
@@ -111,8 +111,7 @@ Developer ID로 서명하고 공증까지 마친 DMG로 배포한다. ad-hoc은 
   해시도 공개 키도 없다. 같은 팀으로 새 Developer ID Application 인증서를 발급받아 서명한 앱도
   이 요구 조건을 만족하므로, TCC와 키체인은 그것을 같은 앱으로 본다. 키를 잃은 비용은 폐기·
   재발급과 `signing.json`의 지문 교체이고, 그동안 릴리스를 못 낸다 — 그래서 백업은 여전히 둔다.
-  (재발급을 실제로 해 보지는 않았다. DR 판독에서 내린 결론이다. 옛 문장 "재발급하면 다른
-  identity가 돼 전부 무효"는 과장이었다 — 최종 리뷰 M1.) **스펙 §3-7은 "이 맥 밖에 한 벌 더
+  (재발급을 실제로 해 보지는 않았다. DR 판독에서 내린 결론이다.) **스펙 §3-7은 "이 맥 밖에 한 벌 더
   둔다"고 적었으나, 실제로 그렇게 됐는지는 확인된 적이 없다 — 위치 미기재, 사용자 확인 필요.**
 - **6a 이전(ad-hoc) 빌드 이력이 남은 맥은 업데이트 때 키체인 암호를 1회 묻는다.** T12 실측
   (2026-09-22, macOS 26.x) — ad-hoc 빌드를 실행한 이력이 있는 맥에 Developer ID 빌드를
@@ -143,11 +142,6 @@ Developer ID로 서명하고 공증까지 마친 DMG로 배포한다. ad-hoc은 
   Latest)가 방금 낸 태그와 같은지 다시 본다.** 다르면 고치는 명령(`gh release edit v<ver>
   --repo Yjason-K/Damwha --latest`)을 출력하고 실패한다 — 자동으로 고치지는 않는다. 노트에는
   최소 macOS(15.0)를 적는다(스펙 §7.1).
-  - 이 스크립트는 과거(6a 초기)에는 `--latest=false`로 발행했다 — 당시 저장소 Latest는 웹 배포의
-    것이었고, 이미 나가 있는 웹 설치(v0.2.1~v0.2.3 tarball의 `make upgrade`)가 그 값을 읽어 없는
-    이미지 태그를 당기다 실패하는 사고가 실제로 났다(2026-09-21, `desktop-v0.3.0` 발행 때 Latest를
-    빼앗겼다가 `gh release edit v0.2.3 --latest`로 되돌렸다). 웹 배포 자체가 걷힌 지금은 그 위험이
-    없다.
 - **최소 macOS 15.0을 세 자리가 같은 값으로 강제한다** — `scripts/lib/build-target.sh`의
   `MACOSX_DEPLOYMENT_TARGET`(postgres·ffmpeg 소스 빌드가 source), `electron-builder.yml`의
   `LSMinimumSystemVersion`, `scripts/lib/minos.mjs`의 `MAX_MINOS`(`check-bundle`이 번들 Mach-O
@@ -268,8 +262,7 @@ dev와 packaged가 같은 클러스터라 버려도 되는 "dev 클러스터"가
   **부모가 자식을 한 번에 하나만 띄우고 `_wait_child`로 거둔다**는 것 — 그래서 저 세 순간에는 자기
   신분으로 잠긴 행이 전부 고아다. 시간 조건이 없어도 남의 행을 건드리지 않는다.
 - 자기 고아 회수도 같은 규칙이다(`reap_stale`과 SQL 한 벌을 공유한다) — `interruptions` +1, 상한이면
-  `failed`. 재현 회차(Phase 5)에서는 옛 규칙이라 `attempts`가 1에서 2가 됐다. 지금은 `attempts`가 claim의
-  +1로만 오르고 회수는 `interruptions`만 올린다.
+  `failed`. `attempts`는 claim의 +1로만 오르고 회수는 `interruptions`만 올린다.
 
 `WORKER_ID`와 `ps`에 보이는 `--run-id`는 **같은 실행 안에서도 값이 다르다** — 전자는 `config.ts`의
 `RUN_WORKER_ID`로 `job.locked_by`에 들어가고, 후자는 supervisor의 실행 id다. 둘 다 `desktop-` 접두사를
@@ -297,7 +290,7 @@ dev와 packaged가 같은 클러스터라 버려도 되는 "dev 클러스터"가
 
 ## 창 배경과 셸 페이지 — 다크 모드
 
-**Window background and shell pages follow macOS dark, not the in-app theme.** `src/windows/window-background.ts` picks `backgroundColor` from `nativeTheme.shouldUseDarkColors`; its two values must equal fe's light and dark `--gray-2` (`tests/windows/window-background.test.ts`). `shell/*.html` add an `@media (prefers-color-scheme: dark)` block that `tests/windows/shell-html.test.ts` checks against fe's `.dark` values — any edit to a shell `<style>` also changes its CSP `style-src` hash. Syncing the title bar to the in-app choice would need a renderer → main channel, which the one-way desktop-bridge contract rules out.
+**창 배경과 셸 페이지는 앱 안 테마가 아니라 macOS 다크를 따른다.** `src/windows/window-background.ts`가 `nativeTheme.shouldUseDarkColors`로 `backgroundColor`를 고르고, 두 값은 fe의 라이트·다크 `--gray-2`와 같아야 한다(`tests/windows/window-background.test.ts`). `shell/*.html`의 `@media (prefers-color-scheme: dark)` 블록은 `tests/windows/shell-html.test.ts`가 fe `.dark` 값과 맞대어 보고, 셸 `<style>`을 고치면 CSP `style-src` 해시도 바뀐다. 제목 표시줄을 앱 안 선택에 맞추려면 렌더러 → main 경로가 필요한데, 단방향 desktop-bridge 계약이 그것을 막는다.
 
 ## 지키는 것
 
