@@ -117,17 +117,19 @@ export function useLiveUtterances(
   });
 }
 
+/** 회의 생성 POST (POST /meetings/live). `useStartLive`와 감지 카드의 시작이 같이 쓴다. */
+export async function postLiveStart(
+  vars: LiveStartRequest,
+): Promise<MeetingSummary> {
+  const { data } = await apiClient.post<WireMeeting>("/meetings/live", vars);
+  return toMeetingSummary(data);
+}
+
 /** 녹음 시작 (POST /meetings/live). 성공하면 목록을 무효화한다. */
 export function useStartLive() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (vars: LiveStartRequest): Promise<MeetingSummary> => {
-      const { data } = await apiClient.post<WireMeeting>(
-        "/meetings/live",
-        vars,
-      );
-      return toMeetingSummary(data);
-    },
+    mutationFn: postLiveStart,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["meetings"] });
     },

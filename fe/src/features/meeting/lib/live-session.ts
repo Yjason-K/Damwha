@@ -133,7 +133,8 @@ export async function prepareLiveRecorder(
       toast({
         variant: "error",
         title: "시스템 오디오 녹음이 끊겼어요",
-        description: "마이크는 계속 녹음하고 있어요. 이제부터 상대방 목소리는 녹음되지 않아요.",
+        description:
+          "마이크는 계속 녹음하고 있어요. 이제부터 상대방 목소리는 녹음되지 않아요.",
       });
     }
     entry.pageListener?.(status);
@@ -192,10 +193,47 @@ export async function cancelLivePreparation(): Promise<void> {
 }
 
 /** 붙이지 못한 회의를 0바이트 stop으로 지운다. 실패해도 orphan 스캐너가 회수한다. */
-async function discardMeeting(capture: LiveCapture, meetingId: string) {
+export async function discardMeeting(capture: LiveCapture, meetingId: string) {
   await postLiveStop(meetingId, 0, 0, new Uint8Array(0), 0, null, (res) => {
     capture.stopOutcome.current = res;
   }).catch(() => undefined);
+}
+
+/**
+ * 녹음 시작 흐름(`start-live.ts`)이 진행 중이라는 예약. 모달이든 회의 감지 카드든 시작은
+ * 이 예약 하나를 거치므로, 준비(getUserMedia 몇 초)와 생성 POST 사이에 다른 시작이 끼어
+ * 마이크를 하나 더 열거나 회의를 둘 만드는 일이 없다. 끝나면(성공·실패·취소 무관) 풀린다.
+ */
+let starting: Promise<void> | null = null;
+
+export function isLiveStarting(): boolean {
+  return starting !== null;
+}
+
+/** 진행 중인 시작이 끝날 때까지 기다린다. 없으면 바로 돌아온다. 시작의 실패는 전하지 않는다. */
+export async function awaitLiveStart(): Promise<void> {
+  await starting;
+}
+
+/**
+ * 시작 예약을 세우고 놓는 함수를 돌려준다. 이미 시작 중이거나, 살아 있는 녹음 또는 회의에
+ * 붙지 않은 준비만 된 캡처가 있으면 `LiveCaptureBusy`다.
+ */
+export function reserveLiveStart(): () => void {
+  if (
+    starting ||
+    (active && (isLiveCapture(active) || active.meetingId === null))
+  )
+    throw new LiveCaptureBusy();
+  let release!: () => void;
+  starting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const mine = starting;
+  return () => {
+    if (starting === mine) starting = null;
+    release();
+  };
 }
 
 /** 이 회의 id의 활성 레코더. 다른 회의거나 없으면 undefined. */

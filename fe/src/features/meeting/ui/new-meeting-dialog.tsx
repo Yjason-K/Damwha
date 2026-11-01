@@ -42,12 +42,8 @@ import {
   type CaptureBlock,
   LiveCaptureCancelled,
 } from "../lib/live-recorder";
-import {
-  beginLiveCapture,
-  cancelLivePreparation,
-  LiveCaptureBusy,
-  prepareLiveRecorder,
-} from "../lib/live-session";
+import { cancelLivePreparation, LiveCaptureBusy } from "../lib/live-session";
+import { startLiveRecording } from "../lib/start-live";
 import {
   isSystemAudioAvailable,
   openDesktopSystemAudio,
@@ -403,18 +399,39 @@ export function NewMeetingDialog({
    * 정리한다. 생성 POST 자체는 재시도하지 않는다.
    */
   const startLive = async () => {
-    let capture;
+    // 회의 생성 POST를 부르기 시작했는가 — 오류 안내가 준비 단계와 그 뒤로 갈리기 때문이다.
+    let creating = false;
     try {
-      capture = await prepareLiveRecorder(
-        deviceId === DEFAULT_DEVICE ? undefined : deviceId,
-        systemAudioAvailable && includeSystemAudio
-          ? openDesktopSystemAudio
-          : undefined,
-      );
+      const meetingId = await startLiveRecording({
+        deviceId: deviceId === DEFAULT_DEVICE ? undefined : deviceId,
+        openSystemAudio:
+          systemAudioAvailable && includeSystemAudio
+            ? openDesktopSystemAudio
+            : undefined,
+        createMeeting: () => {
+          creating = true;
+          return start.mutateAsync({
+            title: title.trim() || defaultLiveTitle(),
+            processing,
+            speakers,
+            defer_lens: deferLens || undefined,
+            defer_summary: deferSummary || undefined,
+            folder_id: folderId,
+          });
+        },
+      });
+      toast({
+        variant: "success",
+        title: "녹음 시작",
+        description: "발화가 실시간으로 표시돼요.",
+      });
+      resetForm();
+      onOpenChange(false);
+      onCreated(meetingId);
     } catch (error) {
-      // 사용자가 취소했거나 다른 시작에 밀린 준비 — 실패가 아니므로 조용히 접는다.
+      // 사용자가 취소했거나 다른 시작에 밀린 캡처 — 실패가 아니므로 조용히 접는다.
       if (error instanceof LiveCaptureCancelled) return;
-      if (error instanceof LiveCaptureBusy) {
+      if (creating || error instanceof LiveCaptureBusy) {
         showStartError(error);
         return;
       }
@@ -435,35 +452,6 @@ export function NewMeetingDialog({
         title: "마이크를 열지 못했어요",
         description: "마이크 권한과 연결을 확인한 뒤 다시 시도해 주세요.",
       });
-      return;
-    }
-    try {
-      const meeting = await start.mutateAsync({
-        title: title.trim() || defaultLiveTitle(),
-        processing,
-        speakers,
-        defer_lens: deferLens || undefined,
-        defer_summary: deferSummary || undefined,
-        folder_id: folderId,
-      });
-      await beginLiveCapture(capture, meeting.id);
-      toast({
-        variant: "success",
-        title: "녹음 시작",
-        description: "발화가 실시간으로 표시돼요.",
-      });
-      resetForm();
-      onOpenChange(false);
-      onCreated(meeting.id);
-    } catch (error) {
-      // dispose()가 아니라 이것을 부른다: dispose는 레코더 자원만 놓아 주고 live-session의
-      // `active`는 죽은 캡처를 계속 가리킨다. cancelLivePreparation이 짝이 맞는 호출이라
-      // 예약까지 함께 놓는다 — 그리고 회의에 이미 붙은 녹음은 건드리지 않으므로,
-      // beginLiveCapture가 성공한 뒤의 예외로 살아 있는 녹음을 죽이지 않는다.
-      await cancelLivePreparation();
-      // 다른 시작에 밀린 캡처 — 사용자가 한 일이 아니므로 오류로 알리지 않는다.
-      if (error instanceof LiveCaptureCancelled) return;
-      showStartError(error);
     }
   };
 
@@ -727,8 +715,8 @@ export function NewMeetingDialog({
                     disabled={starting}
                   />
                   <p className="text-xs text-[color:var(--text-muted)]">
-                    화상회의 상대방 목소리처럼 이 맥에서 나는 소리를 함께 녹음해요.
-                    이어폰을 껴도 녹음돼요. 대면 회의라면 꺼 두세요.
+                    화상회의 상대방 목소리처럼 이 맥에서 나는 소리를 함께
+                    녹음해요. 이어폰을 껴도 녹음돼요. 대면 회의라면 꺼 두세요.
                   </p>
                 </div>
               ) : null}
