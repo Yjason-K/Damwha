@@ -3,7 +3,7 @@ import type { MenuItemConstructorOptions } from "electron";
 import { buildMenuTemplate, type MenuHandlers } from "../../src/windows/menu-template";
 
 function handlers() {
-  return { onRetry: vi.fn(), onShowStatus: vi.fn(), onCheckForUpdates: vi.fn(), onRestore: vi.fn() };
+  return { onRetry: vi.fn(), onShowStatus: vi.fn(), onCheckForUpdates: vi.fn(), onRestore: vi.fn(), onToggleMeetingDetection: vi.fn() };
 }
 
 describe("buildMenuTemplate", () => {
@@ -16,6 +16,7 @@ describe("buildMenuTemplate", () => {
       "about",
       "업데이트 확인…",
       "업데이트 전으로 되돌리기…",
+      "checkbox",
       "separator",
       "services",
       "separator",
@@ -50,6 +51,7 @@ const restoreHandlers = (): MenuHandlers & { restored: number } => {
     onRestore: () => {
       h.restored += 1;
     },
+    onToggleMeetingDetection: () => undefined,
   };
   return h;
 };
@@ -78,4 +80,31 @@ it("language: en이면 앱이 만든 항목이 영어다 (role 항목은 macOS�
   expect(labels).toContain("Check for updates…");
   expect(labels).toContain("Service status");
   expect(labels).not.toMatch(/\p{Script=Hangul}/u);
+});
+
+describe("회의 감지 메뉴 항목", () => {
+  const item = (opts?: { restoreEnabled: boolean; meetingDetection?: boolean }, h = handlers()) =>
+    (buildMenuTemplate(h, "Damwha", opts)[0].submenu as MenuItemConstructorOptions[]).find((i) => i.label === "회의 감지")!;
+
+  it("체크 항목이 앱 메뉴의 되돌리기 아래에 있고 기본은 켜짐이다", () => {
+    const i = item();
+    expect(i.type).toBe("checkbox");
+    expect(i.checked).toBe(true);
+  });
+
+  it("meetingDetection을 따른다", () => {
+    expect(item({ restoreEnabled: false, meetingDetection: false }).checked).toBe(false);
+  });
+
+  it("누르면 새 값을 핸들러에 넘긴다", () => {
+    const h = handlers();
+    const i = item({ restoreEnabled: false, meetingDetection: true }, h);
+    (i.click as (m: { checked: boolean }) => void)({ checked: false });
+    expect(h.onToggleMeetingDetection).toHaveBeenCalledWith(false);
+  });
+
+  it("en이면 영어 라벨이다", () => {
+    const sub = buildMenuTemplate(handlers(), "Damwha", { restoreEnabled: false, language: "en" })[0].submenu as MenuItemConstructorOptions[];
+    expect(sub.some((i) => i.label === "Meeting detection")).toBe(true);
+  });
 });

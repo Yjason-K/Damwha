@@ -10,6 +10,7 @@ const ko = {
   "test.echo": "{{value}}",
   "menu.checkForUpdates": "업데이트 확인…",
   "menu.restore": "업데이트 전으로 되돌리기…",
+  "menu.meetingDetection": "회의 감지",
   "menu.services": "서비스",
   "menu.serviceStatus": "서비스 상태",
   "menu.retry": "다시 시도",
@@ -39,6 +40,7 @@ const en: Record<DesktopKey, string> = {
   "test.echo": "{{value}}",
   "menu.checkForUpdates": "Check for updates…",
   "menu.restore": "Restore previous version…",
+  "menu.meetingDetection": "Meeting detection",
   // "Services"는 macOS 앱 메뉴의 서비스(role: services)와 겹쳐 읽힌다.
   "menu.services": "Status",
   "menu.serviceStatus": "Service status",

@@ -1649,6 +1649,8 @@ if (!app.requestSingleInstanceLock()) {
           appendSupervisorLog(`업데이트 확인 중 예외 — ${reasonOf(e)}`);
         });
       },
+      // 저장·감지 배선은 Task 7에서 붙는다 — 그 전까지는 형을 맞추는 자리다.
+      onToggleMeetingDetection: () => undefined,
       onRestore: () => {
         void (async () => {
           const layout = pgLayout(app.getPath("userData"));
