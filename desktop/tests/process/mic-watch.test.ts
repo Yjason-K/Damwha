@@ -66,6 +66,12 @@ describe("startMicWatch", () => {
     expect(events).toEqual([{ kind: "exit" }]);
   });
 
+  it("survives a stdin EPIPE after the helper died", () => {
+    const { child, spawnFn } = fakeChild();
+    startMicWatch("x", () => {}, { spawnFn });
+    expect(() => child.stdin.emit("error", new Error("write EPIPE"))).not.toThrow();
+  });
+
   it("delivers snapshots from a real process and then exit", async () => {
     const bin = fakeHelper("real", 'echo \'{"input":["a"]}\'; exit 1');
     const events: MicWatchEvent[] = [];

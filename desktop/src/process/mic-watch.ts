@@ -71,6 +71,9 @@ export function startMicWatch(
   // spawn 실패는 'close' 없이 'error'만 올 수 있다. 리스너가 없으면 Electron main이 통째로 죽는다.
   child.once("error", reportExit);
 
+  // 헬퍼가 죽은 뒤의 EPIPE. 리스너가 없으면 main에서 uncaught가 된다. 종료는 'close'가 알린다.
+  child.stdin?.on("error", () => {});
+
   let buffered = "";
   child.stdout?.on("data", (b: Buffer) => {
     buffered += b.toString();
