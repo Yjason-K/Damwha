@@ -201,7 +201,13 @@ signAll(machOFiles(path.join(resources, "postgres")), null, "Resources/postgres 
 signAll(machOFiles(path.join(appPath, "Contents", "Frameworks")), null, "Contents/Frameworks Mach-O", { runtime: true });
 // 시스템 오디오 헬퍼: entitlements 없이 runtime만. Process Tap은 entitlement가 아니라 TCC(시스템 오디오 녹음)와
 // Info.plist의 NSAudioCaptureUsageDescription으로 걸러지고, 권한의 주체는 이 헬퍼를 띄운 .app이다.
-signAll([path.join(resources, "system-audio", "damwha-system-audio")], null, "Resources/system-audio", { runtime: true });
+// 마이크 감시 헬퍼(damwha-mic-watch)도 같은 디렉터리·같은 규칙이다.
+signAll(
+  ["damwha-system-audio", "damwha-mic-watch"].map((f) => path.join(resources, "system-audio", f)),
+  null,
+  "Resources/system-audio",
+  { runtime: true },
+);
 
 // .app은 --deep으로. plist는 mac 쪽이다 — python plist를 주면 V8이 allow-jit 없이 rc=133으로 죽는다.
 codesign(signing.identity, macEnts, [appPath], { extra: ["--deep"] });
