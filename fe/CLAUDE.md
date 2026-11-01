@@ -108,12 +108,18 @@ The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by 
   일어난다”로 보인다.
 
 - **데스크톱 앱이 녹음 중 종료를 위해 `window.__damwha_desktop`을 부른다** (`lib/desktop-bridge.ts`, `main.tsx`에서
-  한 번 설치). `isRecording()`과 `stopLiveRecording()` 둘뿐이고, 후자는 화면의 중지 버튼과 **같은**
+  한 번 설치). `isRecording()`과 `stopLiveRecording()`이 처음부터 있던 둘이고, 후자는 화면의 중지 버튼과 **같은**
   `stopActiveLiveCapture()`를 탄다 — 종료 경로를 따로 만들면 둘이 갈라진다. Electron main이 ⌘Q에서
   `executeJavaScript`로 이것을 불러 확인 대화상자를 띄울지 정하고, 승인하면 렌더러의 중지(flush·마지막
   청크·`POST /live/stop`)를 완주시킨 뒤 창을 닫는다(Phase 2 스펙 §6.9, P2-C13). 이름은 main.ts에
   문자열로만 적혀 있어 **이름을 바꾸면 데스크톱의 확인과 handshake가 조용히 건너뛰어진다.** 웹 배포에서는
   아무도 부르지 않아 무해하다.
+
+  회의 감지(2026-11-01)로 늘어난 메서드: `startDetectedRecording()`·`cancelDetectedRecording()`·
+  `recordingStatus()`·`finishRecording()`·`openMeeting(id)`. 규칙:
+  - 세션의 종결 결과는 `live-session.ts`에 `active` 밖으로 따로 산다. 서버 ACK의 증거는 `stopOutcome`뿐이다.
+  - `finishLiveCapture`가 있는 이유: 레코더가 실패하면 `hasLiveCapture()`가 거짓이라 서버 stop이 안 나간다.
+  - 카드의 시작은 항상 시스템 오디오를 열고, 모달과 `startLiveRecording`(`lib/start-live.ts`)을 공유한다.
 
 - **시스템 오디오는 마이크에 더해져 한 채널로 올라간다** (`lib/system-audio.ts`, `lib/pcm-mix.ts`, 2026-10-26).
   데스크톱 앱에서만 모달에 "시스템 오디오도 녹음" 스위치가 보인다 — `damwha-audio://system/status` fetch가

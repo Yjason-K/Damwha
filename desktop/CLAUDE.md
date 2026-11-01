@@ -41,7 +41,7 @@ bash desktop/scripts/build-icon.sh                             # build-resources
 | `ffmpeg/` | `build-ffmpeg.sh` |
 | `models/` | `build-models.sh` — pyannote community-1 (CC-BY-4.0). 서명 대상 아님, `.app` 봉인에 들어간다 |
 | `cli/` | `build-cli.sh` — `damwha`(런처, 원본 `scripts/cli-launcher.sh`)와 `damwha.cjs`(esbuild 번들). 서명 대상 아님 |
-| `system-audio/` | `build-system-audio.sh` — `damwha-system-audio`(원본 `native/system-audio/main.swift`, swiftc). `package.mjs`가 entitlements 없이 runtime으로 서명, `check-bundle` 25번 |
+| `system-audio/` | `build-system-audio.sh` — `damwha-system-audio`(원본 `native/system-audio/main.swift`, swiftc). `package.mjs`가 entitlements 없이 runtime으로 서명, `check-bundle` 25번. 같은 스테이징 디렉터리에 `damwha-mic-watch`(원본 `native/mic-watch/main.swift`, `check-bundle` 25번)도 들어간다 |
 
 **시스템 오디오 (2026-10-26).** 실시간 녹음에 화상회의 상대 목소리를 섞는다. 헬퍼는 CoreAudio Process Tap(macOS 14.2+)으로
 이 맥에서 나는 소리(담화 자신은 뺀다)를 16 kHz·mono·int16 LE로 stdout에 흘리고, stdin EOF·SIGTERM에 tap을 지우고 끝난다.
@@ -57,6 +57,28 @@ bash desktop/scripts/build-icon.sh                             # build-resources
   `NSAudioCaptureUsageDescription`이 없거나 권한이 거부되면 tap은 **오류 없이 0만** 흘린다 — 알려진 한계다.
 - Electron의 `setDisplayMediaRequestHandler` loopback을 쓰지 않는 이유: 화면 소스를 같이 요청해야 하고, 앱이 픽커를
   쥐면(`useSystemPicker: false`) 오디오 트랙이 `ended`로만 나오는 버그가 열려 있다(electron/electron#52738).
+
+## 회의 감지 (2026-11-01)
+
+Zoom·Chrome(Meet)이 마이크를 쥐면 카드를 띄워 녹음을 권한다. 스펙은
+`docs/superpowers/specs/2026-11-01-meeting-detection-design.md`.
+
+- **헬퍼 `damwha-mic-watch`.** CoreAudio의 프로세스별 입력 상태를 폴링해 JSON 줄로 stdout에 쓴다. 마이크를 열지
+  않고 TCC 권한도 필요 없다. 변화가 있을 때만 줄을 쓰고, 오류가 나면 종료한다.
+- **판단은 전부 `app/meeting-detection.ts`.** 순수 상태 기계이고 타이머·창·렌더러는 deps로만 만진다.
+  `DETECTION_TARGETS`는 Zoom + Chrome이다. Teams는 실측 전이라 뺐다.
+- **`불명` 규칙.** 헬퍼 종료·오류·일시 중단(suspend)이면 상태를 모른다. 판단은 전체 스냅숏을 한 번 받은 뒤에만
+  하고, resume·재활성화 뒤에는 이유와 무관하게 main이 헬퍼를 재기동해 새 스냅숏을 받는다(헬퍼는 변화가 있을
+  때만 쓰므로 재기동이 유일한 방법이다).
+- **카드 `shell/detect.html`.** `type:"panel"` 창이고 `showInactive`로 띄워 포커스를 뺏지 않는다. 버튼은
+  `next()` 반환값으로만 main에 닿는다 — 그래서 §6.11에 새 예외가 없다. `회의 보기`는 사용자가 직접 눌렀으니
+  `app.focus({ steal: true })`로 담화를 활성 앱으로 올린다.
+- **자동 정지는 카드로 시작한 녹음만.** 모달 등 다른 경로의 녹음은 건드리지 않는다.
+- **호출 상한.** 렌더러 호출 3초, `finish` 75초(flush 2 + drain 60 + POST 10 + 여유), 정지는 handshake,
+  시작 60초는 상태 기계 안에서 잰다.
+- **상태 저장.** `<userData>/detection-state.json`(`{"enabled":bool}`)과 앱 메뉴의 체크박스. 끄면 헬퍼가 종료된다.
+- **T0 실측.** Zoom·Meet은 음소거여도 입력을 쥔다. 회의가 끝나면 입력이 내려간다. 백그라운드 시작은 Electron
+  44.3에서 `autoplayPolicy` 설정 없이 됐다.
 
 **`cli/`는 번들의 Electron 바이너리에 기댄다.** 런처가 `ELECTRON_RUN_AS_NODE=1 Contents/MacOS/Damwha damwha.cjs …`로
 돌리므로 별도 Node가 필요 없다 — 그래서 Electron 퓨즈의 `RunAsNode`를 끄면 CLI가 죽는다(지금은 켜 둔
@@ -216,6 +238,7 @@ Developer ID로 서명하고 공증까지 마친 DMG로 배포한다. ad-hoc은 
 | `run/` | 소켓 디렉터리(0700). TCP는 열지 않는다 |
 | `backups/` | 데이터가 있는 DB에 마이그레이션을 적용하기 전의 `pg_dump -Fc`, 최근 5개 |
 | `snapshots/` | 판올림 스냅샷(Phase 6b-2), 최근 2개 |
+| `detection-state.json` | 회의 감지 켜짐 여부(`{"enabled":bool}`) |
 | `restore-journal.json` | 되돌리기 진행 상태(Phase 6b-2) |
 | `restore-staging/` | 되돌리기 교체용 임시 사본(Phase 6b-2) |
 | `data.replaced-*` | 되돌리기가 옮겨 둔 그때의 `data/`(Phase 6b-2) — **앱은 지우지 않는다** |

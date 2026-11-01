@@ -592,7 +592,9 @@ describe("liveSessionSnapshot", () => {
 
   it("실패로 stopped에 수렴한 세션도 finishLiveCapture는 서버 stop을 보낸다", async () => {
     const mic = stubMic();
-    const post = vi.spyOn(apiClient, "post").mockResolvedValue(stopping() as never);
+    const post = vi
+      .spyOn(apiClient, "post")
+      .mockResolvedValue(stopping() as never);
     const { recorder } = await startCapture("m1");
     mic.endDevice();
     await vi.waitFor(() => expect(recorder.status.phase).toBe("stopped"));
@@ -642,7 +644,10 @@ describe("liveSessionSnapshot", () => {
     await recorder.stop();
     clearLiveCapture("m1");
     const release = reserveLiveStart();
-    expect(liveSessionSnapshot()).toMatchObject({ phase: "starting", end: null });
+    expect(liveSessionSnapshot()).toMatchObject({
+      phase: "starting",
+      end: null,
+    });
     release();
     // 시작이 실패해 끝나도 이전 세션의 end가 되살아나지 않는다.
     expect(liveSessionSnapshot()).toMatchObject({ phase: "idle", end: null });
