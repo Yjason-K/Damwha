@@ -78,18 +78,26 @@ export function createSystemAudioProtocol(deps: SystemAudioProtocolDeps): System
       if (active === session) active = null;
       deps.log(`시스템 오디오 헬퍼 종료 — code=${code} signal=${signal}`);
     });
+    // cancel·end 뒤에는 컨트롤러를 건드리면 던진다. 헬퍼는 stop() 뒤에도 종료할 때까지 쓰므로 그 데이터가 늦게 온다.
+    let closed = false;
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
-        session.pcm.on("data", (b: Buffer) => controller.enqueue(new Uint8Array(b)));
+        const onData = (b: Buffer) => {
+          if (!closed) controller.enqueue(new Uint8Array(b));
+        };
+        session.pcm.on("data", onData);
         session.pcm.once("end", () => {
-          try {
-            controller.close();
-          } catch {
-            // 렌더러가 이미 cancel했다.
-          }
+          if (closed) return;
+          closed = true;
+          session.pcm.off("data", onData);
+          controller.close();
         });
       },
       cancel() {
+        closed = true;
+        session.pcm.removeAllListeners("data");
+        // 듣는 이가 없어도 흘려 버린다. 파이프가 차면 헬퍼가 쓰기에서 막혀 stop() 뒤에도 끝나지 못한다.
+        session.pcm.resume();
         session.stop();
       },
     });

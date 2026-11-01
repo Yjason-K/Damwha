@@ -67,6 +67,31 @@ describe("system audio protocol", () => {
     expect(s.stop).toHaveBeenCalledTimes(1);
   });
 
+  it("ignores data and end that arrive after the renderer cancelled, and keeps draining the helper's stdout", async () => {
+    const pcm = new PassThrough();
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(() => undefined);
+    // 헬퍼는 stop() 뒤에도 종료할 때까지 계속 쓴다 — 여기서는 pcm을 닫지 않는다.
+    const stop = vi.fn();
+    const session: SystemAudioSession = { pcm, exited, stop };
+    const res = await protocolWith(async () => session).handle(get("/pcm"));
+    const uncaught = vi.fn();
+    process.on("uncaughtException", uncaught);
+    try {
+      await res.body!.cancel();
+      expect(stop).toHaveBeenCalledTimes(1);
+      pcm.write(Buffer.from([1, 2, 3]));
+      pcm.write(Buffer.from([4, 5, 6]));
+      pcm.end();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(uncaught).not.toHaveBeenCalled();
+      // 읽는 쪽이 없으면 파이프가 차서 헬퍼가 멈춘다 — 버려지더라도 흘러야 한다.
+      expect(pcm.readableLength).toBe(0);
+      expect(pcm.readableEnded).toBe(true);
+    } finally {
+      process.off("uncaughtException", uncaught);
+    }
+  });
+
   it("runs one helper at a time and frees the slot once it exits", async () => {
     const first = fakeSession();
     const second = fakeSession();
