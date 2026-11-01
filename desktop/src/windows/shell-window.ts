@@ -97,7 +97,8 @@ export function createDetectBrowserWindow(onLoadError: (e: unknown) => void): Br
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   win.setAlwaysOnTop(true, "floating");
-  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  // skipTransformProcessType가 없으면 Electron이 앱을 UIElement로 바꿔 담화가 Dock에서 사라진다(44.3 실측).
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
   win.setContentProtection(true);
   applyNavigationBoundary(win, () => []);
   win.once("ready-to-show", () => {
