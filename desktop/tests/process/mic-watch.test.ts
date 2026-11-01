@@ -75,13 +75,22 @@ describe("startMicWatch", () => {
   });
 
   it("stop closes stdin, then escalates to SIGTERM", async () => {
-    const bin = fakeHelper("stubborn", 'trap "" TERM; while :; do sleep 1; done');
+    const bin = fakeHelper("stubborn", 'trap "" TERM; echo \'{"input":[]}\'; while :; do sleep 1; done');
     let child: ChildProcess | undefined;
     const spawnFn: SpawnFn = (cmd, args, options) => (child = spawn(cmd, args, options));
     const exited = new Promise<void>((r) => {
-      const w = startMicWatch(bin, (e) => e.kind === "exit" && r(), { spawnFn, stopGraceMs: 100 });
-      w.stop();
-      w.stop();
+      // trap을 건 뒤에야 스냅숏 한 줄을 찍는다 — 그 줄을 받은 다음에 stop해야 SIGTERM이 무시되는 게 보장된다.
+      const w: { stop(): void } = startMicWatch(
+        bin,
+        (e) => {
+          if (e.kind === "snapshot") {
+            w.stop();
+            w.stop();
+          }
+          if (e.kind === "exit") r();
+        },
+        { spawnFn, stopGraceMs: 100 },
+      );
     });
     await exited;
     expect(child?.signalCode).toBe("SIGKILL");
