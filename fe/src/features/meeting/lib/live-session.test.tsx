@@ -518,11 +518,15 @@ describe("liveSessionSnapshot", () => {
     });
   });
 
-  it("server seal이면 sealed다", async () => {
+  // 스위퍼의 봉인(`sealed`)은 정상 종료가 아니다 — 회의는 이어지는데 녹음만 끊긴 것이다.
+  it.each([
+    ["duration_limit", "sealed"],
+    ["sealed", "failed"],
+  ])("server seal %s이면 end가 %s다", async (code, end) => {
     stubMic();
     vi.spyOn(apiClient, "post").mockResolvedValue({
       status: 409,
-      data: { expected_offset: 460800000, code: "duration_limit" },
+      data: { expected_offset: 460800000, code },
     } as never);
     const { recorder } = await startCapture("m1");
     recorder.enqueue(new Uint8Array(CHUNK_BYTES));
@@ -530,7 +534,7 @@ describe("liveSessionSnapshot", () => {
     await vi.waitFor(() =>
       expect(liveSessionSnapshot()).toMatchObject({
         phase: "ended",
-        end: "sealed",
+        end,
       }),
     );
   });

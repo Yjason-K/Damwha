@@ -82,7 +82,7 @@ const TIMEOUT_LIMIT = 3;
 /** finish가 끝난 뒤 end가 이만큼 연속 null이면 중단으로 닫는다. */
 const FINISH_POLL_LIMIT = 3;
 
-type Phase = "idle" | "settling" | "prompting" | "starting" | "recording" | "external" | "finished";
+type Phase = "idle" | "settling" | "prompting" | "starting" | "recording" | "abandoning" | "external" | "finished";
 
 export function createMeetingDetection(deps: DetectionDeps) {
   const { targets } = deps;
@@ -107,8 +107,8 @@ export function createMeetingDetection(deps: DetectionDeps) {
   let micOnly = false;
   let meetingId: string | null = null;
   let finishCalled = false;
-  /** stop이 진행 중이다. 어떤 결과로 끝나든 풀린다 — 끝났는지는 poll이 판단한다. */
-  let stopInFlight = false;
+  /** 진행 중인 stop. 어떤 결과로 끝나든 풀린다 — 끝났는지는 poll이 판단한다. */
+  let stopInFlight: Promise<void> | null = null;
   let finishSettledPolls: number | null = null;
   let timeouts = 0;
 
@@ -242,7 +242,7 @@ export function createMeetingDetection(deps: DetectionDeps) {
     const g = ++gen;
     const target = current;
     finishCalled = false;
-    stopInFlight = false;
+    stopInFlight = null;
     finishSettledPolls = null;
     meetingId = null;
     micOnly = false;
@@ -277,7 +277,8 @@ export function createMeetingDetection(deps: DetectionDeps) {
           enterExternal();
         } else {
           deps.log(`meeting-detection: 시작 실패 ${r.reason ?? ""}`);
-          showFinished("startFailed", null, target);
+          // 시스템 오디오 권한 창은 헬퍼의 5초 상한보다 오래 뜬다. 허용한 뒤 같은 회의에서 카드가 돌아와야 한다.
+          showFinished("startFailed", null, target, r.reason !== "system_audio");
         }
       });
   }
@@ -316,11 +317,12 @@ export function createMeetingDetection(deps: DetectionDeps) {
     if (!t) return;
     if (r === "gone") return showFinished("lost", null, t);
     if (r === "timeout") {
-      if (++timeouts >= TIMEOUT_LIMIT) showFinished("lost", null, t);
+      if (++timeouts >= TIMEOUT_LIMIT) abandon(t);
       return;
     }
     timeouts = 0;
-    if (r.meetingId) meetingId = r.meetingId;
+    // 다른 id는 다른 세션이다. 카드의 세션은 끝났고, 그 세션을 자동 종료하면 안 된다.
+    if (r.meetingId !== null && r.meetingId !== meetingId) return showFinished("lost", null, t);
     if (r.end === "discarded") return showFinished("empty", null, t);
     if (r.end !== null) {
       const broken = r.failed || r.end === "failed";
@@ -350,6 +352,18 @@ export function createMeetingDetection(deps: DetectionDeps) {
     }
   }
 
+  /** 바쁜 렌더러는 답이 없어도 마이크를 쥐고 있을 수 있다. 멈춰 본 뒤에 lost를 보여 카드의 말을 참으로 만든다. */
+  function abandon(t: DetectionTarget): void {
+    cancelPoll();
+    countdownCancel = clear(countdownCancel);
+    phase = "abandoning";
+    const stopped = requestStop();
+    const g = ++gen;
+    void stopped.then(() => {
+      if (g === gen) showFinished("lost", null, t);
+    });
+  }
+
   function judgeExternal(r: RecordingSnapshot | "timeout" | "gone"): void {
     const t = current;
     if (r === "timeout") {
@@ -364,7 +378,12 @@ export function createMeetingDetection(deps: DetectionDeps) {
     consider();
   }
 
-  function showFinished(variant: Extract<CardView, { kind: "finished" }>["variant"], id: string | null, t: DetectionTarget): void {
+  function showFinished(
+    variant: Extract<CardView, { kind: "finished" }>["variant"],
+    id: string | null,
+    t: DetectionTarget,
+    suppressTarget = true,
+  ): void {
     cancelPoll();
     countdownCancel = clear(countdownCancel);
     startCancel = clear(startCancel);
@@ -372,7 +391,7 @@ export function createMeetingDetection(deps: DetectionDeps) {
     phase = "finished";
     gen++;
     // 끝난 뒤·시작 실패 뒤에도 같은 억제를 건다 — 없으면 회의가 이어지는 동안 카드가 반복해서 뜬다.
-    suppress(t.name);
+    if (suppressTarget) suppress(t.name);
     token++;
     present({ kind: "finished", token, variant, meetingId: id });
     finishedCancel = deps.setTimer(() => {
@@ -400,24 +419,24 @@ export function createMeetingDetection(deps: DetectionDeps) {
       countdownCancel = null;
       if (phase !== "recording" || !canJudge() || active.size > 0) return;
       deps.log("meeting-detection: 입력 꺼짐 — 자동 종료");
-      requestStop();
+      void requestStop();
     }, AUTO_STOP_MS);
   }
 
   /** stop을 한 번에 하나만 건다. 결과가 무엇이든 settle하면 풀고, 입력이 여전히 꺼져 있으면 카운트다운을 다시 세운다. */
-  function requestStop(): void {
-    if (stopInFlight) return;
-    stopInFlight = true;
+  function requestStop(): Promise<void> {
+    if (stopInFlight) return stopInFlight;
     const g = gen;
     const done = () => {
       if (g !== gen) return;
-      stopInFlight = false;
+      stopInFlight = null;
       syncCountdown();
     };
-    deps.stop().then(done, (e) => {
+    stopInFlight = deps.stop().then(done, (e) => {
       deps.log(`meeting-detection: stop 실패 ${String(e)}`);
       done();
     });
+    return stopInFlight;
   }
 
   // ---- 바깥 입구 ----------------------------------------------------------
@@ -455,7 +474,7 @@ export function createMeetingDetection(deps: DetectionDeps) {
     } else if (phase === "prompting" && action === "dismiss") {
       dismissPrompt();
     } else if (phase === "recording" && action === "stop") {
-      requestStop();
+      void requestStop();
     } else if (phase === "finished" && action === "open") {
       const id = view.kind === "finished" ? view.meetingId : null;
       if (id) deps.open(id);

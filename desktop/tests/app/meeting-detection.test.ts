@@ -649,6 +649,99 @@ describe("리뷰 1차 수정", () => {
   });
 });
 
+describe("최종 리뷰 수정", () => {
+  const timedOut = async () => {
+    const s = setup();
+    await s.record();
+    s.h.snap = async () => "timeout";
+    return s;
+  };
+
+  it("timeout 3회면 stop을 한 번 부르고, 끝난 뒤에 lost를 보인다", async () => {
+    const s = await timedOut();
+    let settle!: () => void;
+    s.deps.stop.mockImplementationOnce(() => new Promise<undefined>((r) => (settle = () => r(undefined))));
+    await s.advance(4000);
+    expect(s.deps.stop).not.toHaveBeenCalled();
+    await s.advance(2000);
+    expect(s.deps.stop).toHaveBeenCalledTimes(1);
+    expect(s.last()?.kind).toBe("recording");
+    await s.advance(60_000); // 기다리는 동안 다시 묻지도, 다시 멈추지도 않는다
+    expect(s.deps.stop).toHaveBeenCalledTimes(1);
+    settle();
+    await s.advance(0);
+    expect(s.last()).toMatchObject({ kind: "finished", variant: "lost", meetingId: null });
+  });
+
+  it("timeout 뒤 stop이 실패해도 lost로 닫는다", async () => {
+    const s = await timedOut();
+    s.deps.stop.mockRejectedValueOnce(new Error("x"));
+    await s.advance(6000);
+    expect(s.last()).toMatchObject({ kind: "finished", variant: "lost" });
+  });
+
+  it("중지 버튼의 stop이 진행 중이면 timeout이 겹쳐 부르지 않고 그 끝을 기다린다", async () => {
+    const s = setup();
+    const t = await s.record();
+    let settle!: () => void;
+    s.deps.stop.mockImplementationOnce(() => new Promise<undefined>((r) => (settle = () => r(undefined))));
+    s.md.onCard(t, "stop");
+    s.h.snap = async () => "timeout";
+    await s.advance(6000);
+    expect(s.deps.stop).toHaveBeenCalledTimes(1);
+    expect(s.last()?.kind).toBe("recording");
+    settle();
+    await s.advance(0);
+    expect(s.last()).toMatchObject({ kind: "finished", variant: "lost" });
+  });
+
+  it("gone은 stop을 부르지 않는다", async () => {
+    const s = setup();
+    await s.record();
+    s.h.snap = async () => "gone";
+    await s.advance(2000);
+    expect(s.last()).toMatchObject({ kind: "finished", variant: "lost" });
+    expect(s.deps.stop).not.toHaveBeenCalled();
+  });
+
+  it("system_audio 시작 실패는 억제하지 않아, 끝 카드가 닫힌 뒤 입력이 이어지면 카드가 돌아온다", async () => {
+    const s = setup();
+    s.h.start = async () => ({ started: false, reason: "system_audio" });
+    s.md.onCard(await s.prompt(), "start");
+    await s.advance(0);
+    expect(s.last()).toMatchObject({ kind: "finished", variant: "startFailed" });
+    await s.advance(10_000);
+    expect(s.deps.hide).toHaveBeenCalled();
+    await s.advance(1999);
+    expect(s.deps.show).toHaveBeenCalledTimes(2);
+    await s.advance(1);
+    expect(s.deps.show).toHaveBeenCalledTimes(3);
+    expect(s.last()?.kind).toBe("prompt");
+  });
+
+  it.each(["permission", "create_failed", "cancelled"])("%s 시작 실패는 억제한다", async (reason) => {
+    const s = setup();
+    s.h.start = async () => ({ started: false, reason });
+    s.md.onCard(await s.prompt(), "start");
+    await s.advance(30_000);
+    expect(s.deps.show).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["녹음 중", { ...recSnap, meetingId: "m2" }],
+    ["끝남", { ...recSnap, phase: "ended", end: "acked", meetingId: "m2" }],
+  ] as const)("다른 회의 id(%s)는 카드 세션의 끝이고 그 세션을 멈추지 않는다", async (_n, snap) => {
+    const s = setup();
+    await s.record();
+    s.input();
+    s.h.snap = async () => snap;
+    await s.advance(2000);
+    expect(s.last()).toMatchObject({ kind: "finished", variant: "lost", meetingId: null });
+    await s.advance(30_000);
+    expect(s.deps.stop).not.toHaveBeenCalled();
+  });
+});
+
 describe("dispose", () => {
   it("이후 입력과 타이머는 아무것도 하지 않는다", async () => {
     const s = setup();

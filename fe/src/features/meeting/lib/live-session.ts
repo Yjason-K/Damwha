@@ -77,7 +77,9 @@ function endOf(entry: ActiveCapture): RecordingEnd | null {
   if (!status.stopSettled && status.sealed === null) return null;
   const outcome = entry.stopOutcome.current;
   if (outcome?.outcome === "discarded") return "discarded";
-  if (status.sealed !== null) return "sealed";
+  // 4시간 상한만 정상 종료다. 스위퍼의 봉인(`sealed`)은 회의가 이어지는 중에 끊긴 것이다.
+  if (status.sealed === "duration_limit") return "sealed";
+  if (status.sealed !== null) return "failed";
   // postLiveStop은 200일 때만 outcome을 채운다 — Promise 완료가 아니라 이것이 ACK의 증거다.
   return outcome !== null ? "acked" : "failed";
 }
