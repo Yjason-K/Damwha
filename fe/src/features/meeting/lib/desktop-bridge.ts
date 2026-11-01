@@ -89,7 +89,10 @@ async function runDetectedStart(
     if (e instanceof SystemAudioUnavailable)
       return { started: false, reason: "system_audio" };
     // 회의 생성 POST 실패와, 그 앞의 준비(권한 거절·장치 부재)를 가른다.
-    return { started: false, reason: creating ? "create_failed" : "permission" };
+    return {
+      started: false,
+      reason: creating ? "create_failed" : "permission",
+    };
   }
 }
 

@@ -186,8 +186,8 @@ describe("감지 녹음 다리", () => {
   it("회의 생성 실패는 create_failed다", async () => {
     const { bridge } = await load();
     api.postLiveStart.mockRejectedValue(new Error("500"));
-    start.startLiveRecording.mockImplementation(async (args) =>
-      (await args.createMeeting()).id,
+    start.startLiveRecording.mockImplementation(
+      async (args) => (await args.createMeeting()).id,
     );
     expect(await bridge.startDetectedRecording()).toEqual({
       started: false,
