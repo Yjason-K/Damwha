@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, nativeTheme, protocol, shell } from "electron";
+import { app, BrowserWindow, dialog, nativeTheme, powerMonitor, protocol, shell } from "electron";
 import { execFile } from "child_process";
 import * as fs from "fs";
 import * as net from "net";
@@ -15,7 +15,7 @@ import {
 import type { ProcessHandle } from "./process/handle";
 import { launchVite } from "./dev/vite-process";
 import { lastMeaningfulLine } from "./diagnostics/stderr";
-import { createServicesWindow, showStatus, type ShellStatus } from "./windows/shell-window";
+import { createDetectBrowserWindow, createServicesWindow, showStatus, type ShellStatus } from "./windows/shell-window";
 import { windowBackground } from "./windows/window-background";
 import { ServiceFailure } from "./services/failure";
 import { CAUSES } from "./diagnostics/causes";
@@ -28,6 +28,7 @@ import {
   type ServicesAction,
 } from "./windows/status-view";
 import { createStatusWindow, mayAutoOpen } from "./windows/status-window";
+import { createDetectWindow } from "./windows/detect-window";
 import { applyNavigationBoundary, applyPermissionBoundary } from "./windows/permissions";
 import { mayRenderShell } from "./windows/shell-latch";
 import { removeLegacyToken } from "./app/legacy-token-cleanup";
@@ -43,6 +44,9 @@ import {
 } from "./app/quit-flow";
 import { captureDescendants, stopWorkerProcess } from "./services/worker-shutdown";
 import { askIsRecording } from "./windows/recording-bridge";
+import { createDetectionControl, createRendererCalls, createWatchLoop, setTimer } from "./app/detection-host";
+import { makeDetectionStateStore } from "./app/detection-state";
+import { createMeetingDetection, DETECTION_TARGETS } from "./app/meeting-detection";
 import { installMenu, type MenuHandlers } from "./windows/menu";
 import { makeUiLanguageStore } from "./config/ui-language-store";
 import { pickUiLanguage } from "./i18n/locale";
@@ -92,6 +96,7 @@ import { MODEL_READINESS_KEY, parseModelReadiness, type ReadinessEntry } from ".
 import { psInfo, spawnPostmaster, stopOrphanPostmaster } from "./services/postgres/handle";
 import { embeddedPostgresSpec, externalPostgresSpec, PG_FAST_GRACE_MS, PG_IMMEDIATE_GRACE_MS, PG_TOOL_DEADLINES } from "./services/postgres/service";
 import { describeToolFailure, runTool, toolOk } from "./process/tool-runner";
+import { micWatchHelperPath, startMicWatch } from "./process/mic-watch";
 import { startSystemAudio, systemAudioHelperPath } from "./process/system-audio";
 import {
   createSystemAudioProtocol,
@@ -279,7 +284,11 @@ function restoreAllowedNow(): boolean {
 
 function refreshMenu(): void {
   if (menuHandlers === null) return;
-  installMenu(menuHandlers, { restoreEnabled: restoreAllowedNow(), language: languageBridge.current() });
+  installMenu(menuHandlers, {
+    restoreEnabled: restoreAllowedNow(),
+    language: languageBridge.current(),
+    meetingDetection: detectionStore.enabled(),
+  });
 }
 
 /** 앱이 정한 API origin. 감독자의 런타임에서 읽는다 — 전역 변수를 따로 두면 갈린다. */
@@ -352,6 +361,7 @@ function createWindow(): BrowserWindow {
   created.webContents.on("did-finish-load", () => {
     if (updateAttached === created && !created.isDestroyed()) {
       languageBridge.attach(created);
+      detection.reevaluate();
     }
   });
   return created;
@@ -410,6 +420,8 @@ function openWindow(): BrowserWindow {
       if (created.isDestroyed()) return;
       created.close();
     };
+    // 확인·핸드셰이크 중에 카드 시작이 끼어들면 안 된다. 닫은 뒤에도 앱은 살아 있으므로 어느 쪽으로 끝나든 푼다.
+    detectionControl.suspend("close");
     void runCloseFlow({
       isRecording: () => isRecordingIn(created),
       confirm: async (message) => {
@@ -443,6 +455,7 @@ function openWindow(): BrowserWindow {
       // ⌘Q가 먹어야 한다 — running은 종료 흐름과 공유라, 닫힌 창이 그것을 쥔 채 사라지면
       // 앱을 영영 끌 수 없다. (예전의 `if (!closed) closing = false`를 옮기면 그 결함이다.)
       latch.settle();
+      detectionControl.resume("close");
     });
   });
   return created;
@@ -752,6 +765,65 @@ const languageBridge = createLanguageBridge<BrowserWindow>({
   log: appendSupervisorLog,
 });
 
+/** 회의 감지 켜고 끄기. 첫 읽기는 메뉴를 그릴 때다. */
+const detectionStore = makeDetectionStateStore(app.getPath("userData"), appendSupervisorLog);
+
+/** 감지 호출의 대상은 담화 화면이 실제로 붙은 창이다. 없으면 거부 — 파괴된 창의 동기 예외도 여기서 거부가 된다. */
+async function runInAttached(script: string, userGesture = false): Promise<unknown> {
+  if (updateAttached === null || updateAttached.isDestroyed()) throw new Error("담화 화면이 붙어 있지 않아요.");
+  return updateAttached.webContents.executeJavaScript(script, userGesture);
+}
+
+/**
+ * 회의 감지 (스펙 §3·§4). 판단은 app/meeting-detection.ts·app/detection-host.ts에 있고 여기는 잎이다.
+ * `ready()`가 거짓이면 카드를 새로 띄우지 않는다. 이미 뜬 녹음 카드는 창이 사라져도 폴링이 gone을 볼 때까지 남는다.
+ */
+const detection = createMeetingDetection({
+  targets: DETECTION_TARGETS,
+  setTimer,
+  ready: () => updateAttached !== null && !updateAttached.isDestroyed(),
+  show: (view) => detectWindow.show(view),
+  hide: () => detectWindow.hide(),
+  ...createRendererCalls({
+    run: runInAttached,
+    stopRecording: () =>
+      updateAttached === null
+        ? Promise.resolve({ stopped: false, reason: "창이 이미 없어요." })
+        : stopRecordingIn(updateAttached),
+    reveal: () => {
+      if (updateAttached === null || updateAttached.isDestroyed()) return;
+      updateAttached.show();
+      updateAttached.focus();
+    },
+    askTimeoutMs: RENDERER_ASK_TIMEOUT_MS,
+    handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
+    log: appendSupervisorLog,
+  }),
+  log: appendSupervisorLog,
+});
+
+const detectWindow = createDetectWindow<BrowserWindow>({
+  create: () => createDetectBrowserWindow((e) => appendSupervisorLog(`감지 카드를 열지 못했어요 — ${reasonOf(e)}`)),
+  alive: (w) => !w.isDestroyed(),
+  close: (w) => w.close(),
+  onLoad: (w, listener) => w.webContents.on("did-finish-load", listener),
+  onClosed: (w, listener) => w.on("closed", listener),
+  run: (w, script) => w.webContents.executeJavaScript(script),
+  lang: () => languageBridge.current(),
+  onAction: ({ token, action }) => detection.onCard(token, action),
+  log: appendSupervisorLog,
+});
+
+const detectionControl = createDetectionControl({
+  detection,
+  loop: createWatchLoop({
+    start: (onEvent) => startMicWatch(micWatchHelperPath(bundleDir("system-audio")), onEvent),
+    onEvent: (e) => detection.onWatch(e),
+    setTimer,
+    log: appendSupervisorLog,
+  }),
+});
+
 /** 모델 준비 행을 다시 읽는 간격. 감독자의 폴링과 같은 근거다 (writer가 초당 1회 이하로 누른다). */
 const READINESS_REFRESH_MS = 2_000;
 
@@ -1058,6 +1130,7 @@ async function reattachWindow(mine: number): Promise<void> {
     updateAttached = target;
     updateScheduler?.onAttached();
     languageBridge.attach(target);
+    detection.reevaluate();
   }
   // 붙기 전에 넘어진 서비스(번들 python이 없으면 worker는 몇 밀리초 만에 넘어진다)는 그때 실패 화면에
   // 잠깐 보였을 뿐, 이제 어떤 화면에도 없다. 감독자는 더 낼 상태가 없어 onStatus도 다시 돌지
@@ -1649,8 +1722,11 @@ if (!app.requestSingleInstanceLock()) {
           appendSupervisorLog(`업데이트 확인 중 예외 — ${reasonOf(e)}`);
         });
       },
-      // 저장·감지 배선은 Task 7에서 붙는다 — 그 전까지는 형을 맞추는 자리다.
-      onToggleMeetingDetection: () => undefined,
+      onToggleMeetingDetection: (on) => {
+        detectionStore.setEnabled(on);
+        detectionControl.setEnabled(on);
+        refreshMenu();
+      },
       onRestore: () => {
         void (async () => {
           const layout = pgLayout(app.getPath("userData"));
@@ -1668,6 +1744,9 @@ if (!app.requestSingleInstanceLock()) {
       },
     };
     refreshMenu();
+    powerMonitor.on("suspend", () => detectionControl.suspend("sleep"));
+    powerMonitor.on("resume", () => detectionControl.resume("sleep"));
+    detectionControl.setEnabled(detectionStore.enabled());
     openWindow();
     await start();
   });
@@ -1747,6 +1826,8 @@ if (!app.requestSingleInstanceLock()) {
     // 살아야 하는데, 래치가 먼저 올라가 있으면 그 뒤로 activeWindow가 영원히 null을
     // 돌려줘(spawn-guard) 재시도도 상태 갱신도 죽는다 — 종료하지 않은 앱이 종료된 앱처럼
     // 군다. 되돌릴 수 없는 지점(beginQuit)에서 올린다.
+    // beginQuit이 아니라 여기다 — 그 앞의 녹음 조회·확인 대기 중에 카드 시작이 끼어들면 안 된다.
+    detectionControl.suspend("quit");
     void runQuitFlow({
       inFlight: async () => ({
         recording: win !== null && (await isRecordingIn(win)),
@@ -1764,6 +1845,8 @@ if (!app.requestSingleInstanceLock()) {
         // 계속 살고, 그때 타이머가 죽어 있으면 자동 확인이 영영 돌지 않는다 (Phase 6b-1 스펙 §3-7).
         updateScheduler?.dispose();
         systemAudio.stopAll();
+        detectionControl.dispose();
+        detectWindow.dispose();
       },
       // activeWindow를 쓰지 않는다 — quitting이 이미 참이라 그것은 항상 null을 돌려준다
       // (spawn-guard). 여기서 보고 싶은 것은 "지금 창이 있는가"뿐이다.
@@ -1826,7 +1909,10 @@ if (!app.requestSingleInstanceLock()) {
         // quitAllowed가 이미 올라가 있어 이 하강은 판정에 닿지 못한다.
         flows.quit.settle();
         // 녹음 확인에서 "취소"하면 다음 ⌘Q가 되돌리기로 이어지지 않게 한다.
-        if (!quitting) pendingRestore = null;
+        if (!quitting) {
+          pendingRestore = null;
+          detectionControl.resume("quit");
+        }
       });
   });
 }
