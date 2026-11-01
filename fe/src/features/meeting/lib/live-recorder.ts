@@ -177,6 +177,11 @@ export interface RecorderStatus {
   sealedByServer: boolean;
   phase: RecorderPhase;
   systemAudio: SystemAudioState;
+  /**
+   * `stop()`이 (성공이든 실패든) 끝났다. `phase: "stopped"`는 실패·봉인으로도 오므로 서버 stop을
+   * 시도했는지는 이 값만 안다. `stop()`의 finally에서 `stopped`로 가기 직전에 선다.
+   */
+  stopSettled: boolean;
 }
 
 /**
@@ -230,6 +235,7 @@ export class LiveRecorder {
     sealedByServer: false,
     phase: "idle",
     systemAudio: "off",
+    stopSettled: false,
   };
   onStatus: (s: RecorderStatus) => void = () => {};
 
@@ -675,6 +681,8 @@ export class LiveRecorder {
   stop(): Promise<void> {
     if (!this.stopping) {
       this.stopping = this.runStop().finally(() => {
+        // 알림은 setPhase가 한 번만 보낸다 — 이 값이 선 뒤에 stopped가 보여야 한다.
+        this.status = { ...this.status, stopSettled: true };
         this.setPhase("stopped");
       });
     }

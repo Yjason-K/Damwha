@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { apiClient } from "@/shared/api/client";
 import { Toaster } from "@/shared/ui/toaster";
@@ -9,10 +9,13 @@ import {
   beginLiveCapture,
   cancelLivePreparation,
   clearLiveCapture,
+  finishLiveCapture,
   getLiveRecorder,
   hasLiveCapture,
   LiveCaptureBusy,
+  liveSessionSnapshot,
   prepareLiveRecorder,
+  reserveLiveStart,
   stopActiveLiveCapture,
   subscribeLiveStatus,
 } from "./live-session";
@@ -433,5 +436,226 @@ describe("live-session registry", () => {
     const stopSpy = vi.spyOn(finished.recorder, "stop");
     await stopActiveLiveCapture();
     expect(stopSpy).not.toHaveBeenCalled();
+  });
+});
+
+/** 세션의 종결 결과 — main이 2초마다 읽는 스냅숏 (설계 §4.4·§4.7). */
+describe("liveSessionSnapshot", () => {
+  const stopping = (outcome: "stopping" | "discarded" = "stopping") => ({
+    status: 200,
+    data: { meeting_id: "m1", job_id: "job_1", outcome },
+  });
+
+  // 앞선 describe가 남긴 종결 스냅숏이 보이지 않게 비운다 (새 시작이 lastEnd를 지운다).
+  beforeEach(async () => {
+    clearLiveCapture("m1");
+    await cancelLivePreparation();
+    reserveLiveStart()();
+  });
+
+  afterEach(async () => {
+    clearLiveCapture("m1");
+    await cancelLivePreparation();
+    reserveLiveStart()();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    Reflect.deleteProperty(navigator, "mediaDevices");
+  });
+
+  it("아무것도 없으면 idle이다", () => {
+    expect(liveSessionSnapshot()).toEqual({
+      phase: "idle",
+      meetingId: null,
+      failed: false,
+      systemAudioLost: false,
+      end: null,
+    });
+  });
+
+  it("시작 중 phase는 starting이다", () => {
+    const release = reserveLiveStart();
+    expect(liveSessionSnapshot()).toMatchObject({
+      phase: "starting",
+      meetingId: null,
+      end: null,
+    });
+    release();
+  });
+
+  it("녹음 중이면 recording이고 end가 없다", async () => {
+    stubMic();
+    await startCapture("m1");
+    expect(liveSessionSnapshot()).toMatchObject({
+      phase: "recording",
+      meetingId: "m1",
+      failed: false,
+      end: null,
+    });
+  });
+
+  it("200 + outcome stopping이면 acked다", async () => {
+    stubMic();
+    vi.spyOn(apiClient, "post").mockResolvedValue(stopping() as never);
+    const { recorder } = await startCapture("m1");
+    await recorder.stop();
+    expect(liveSessionSnapshot()).toMatchObject({
+      phase: "ended",
+      end: "acked",
+      failed: false,
+    });
+  });
+
+  it("outcome discarded면 discarded다", async () => {
+    stubMic();
+    vi.spyOn(apiClient, "post").mockResolvedValue(
+      stopping("discarded") as never,
+    );
+    const { recorder } = await startCapture("m1");
+    await recorder.stop();
+    expect(liveSessionSnapshot()).toMatchObject({
+      phase: "ended",
+      end: "discarded",
+    });
+  });
+
+  it("server seal이면 sealed다", async () => {
+    stubMic();
+    vi.spyOn(apiClient, "post").mockResolvedValue({
+      status: 409,
+      data: { expected_offset: 460800000, code: "duration_limit" },
+    } as never);
+    const { recorder } = await startCapture("m1");
+    recorder.enqueue(new Uint8Array(CHUNK_BYTES));
+    await recorder.drain();
+    await vi.waitFor(() =>
+      expect(liveSessionSnapshot()).toMatchObject({
+        phase: "ended",
+        end: "sealed",
+      }),
+    );
+  });
+
+  it("첫 409 거절이면 end가 failed다", async () => {
+    stubMic();
+    vi.spyOn(apiClient, "post").mockResolvedValue({
+      status: 409,
+      data: { expected_offset: 0 },
+    } as never);
+    const { recorder } = await startCapture("m1");
+    await recorder.stop();
+    expect(liveSessionSnapshot()).toMatchObject({
+      phase: "ended",
+      end: "failed",
+      failed: true,
+    });
+  });
+
+  it("재동기화 재시도까지 거절이면 failed다", async () => {
+    stubMic();
+    vi.spyOn(apiClient, "post").mockResolvedValue({
+      status: 409,
+      data: { expected_offset: 100 },
+    } as never);
+    const { recorder } = await startCapture("m1");
+    await recorder.stop();
+    expect(liveSessionSnapshot()).toMatchObject({
+      phase: "ended",
+      end: "failed",
+    });
+  });
+
+  it("postLiveStop이 던져도 failed다", async () => {
+    stubMic();
+    vi.spyOn(apiClient, "post").mockRejectedValue(new Error("network"));
+    const { recorder } = await startCapture("m1");
+    await expect(recorder.stop()).rejects.toThrow("network");
+    expect(liveSessionSnapshot()).toMatchObject({
+      phase: "ended",
+      end: "failed",
+    });
+  });
+
+  it("실패했지만 서버 stop이 필요한 캡처는 recording / failed / end null이다", async () => {
+    const mic = stubMic();
+    const { recorder } = await startCapture("m1");
+    mic.endDevice();
+    await vi.waitFor(() => expect(recorder.status.phase).toBe("stopped"));
+    expect(liveSessionSnapshot()).toEqual({
+      phase: "recording",
+      meetingId: "m1",
+      failed: true,
+      systemAudioLost: false,
+      end: null,
+    });
+    expect(hasLiveCapture()).toBe(false);
+  });
+
+  it("실패로 stopped에 수렴한 세션도 finishLiveCapture는 서버 stop을 보낸다", async () => {
+    const mic = stubMic();
+    const post = vi.spyOn(apiClient, "post").mockResolvedValue(stopping() as never);
+    const { recorder } = await startCapture("m1");
+    mic.endDevice();
+    await vi.waitFor(() => expect(recorder.status.phase).toBe("stopped"));
+    post.mockClear();
+    await stopActiveLiveCapture(); // 살아 있는 캡처가 아니라 아무것도 안 한다
+    expect(post).not.toHaveBeenCalled();
+    await finishLiveCapture();
+    expect(post).toHaveBeenCalledWith(
+      "/meetings/m1/live/stop",
+      expect.any(Uint8Array),
+      expect.anything(),
+    );
+  });
+
+  it("서버가 ACK해도 실패한 세션의 failed는 참으로 남는다", async () => {
+    const mic = stubMic();
+    vi.spyOn(apiClient, "post").mockResolvedValue(stopping() as never);
+    const { recorder } = await startCapture("m1");
+    mic.endDevice();
+    await vi.waitFor(() => expect(recorder.status.phase).toBe("stopped"));
+    await finishLiveCapture();
+    expect(liveSessionSnapshot()).toMatchObject({
+      phase: "ended",
+      end: "acked",
+      failed: true,
+    });
+  });
+
+  it("clearLiveCapture 뒤에도 마지막 end를 읽는다", async () => {
+    stubMic();
+    vi.spyOn(apiClient, "post").mockResolvedValue(stopping() as never);
+    const { recorder } = await startCapture("m1");
+    await recorder.stop();
+    clearLiveCapture("m1");
+    expect(getLiveRecorder("m1")).toBeUndefined();
+    expect(liveSessionSnapshot()).toMatchObject({
+      phase: "ended",
+      meetingId: "m1",
+      end: "acked",
+    });
+  });
+
+  it("새 시작이 마지막 end를 지운다", async () => {
+    stubMic();
+    vi.spyOn(apiClient, "post").mockResolvedValue(stopping() as never);
+    const { recorder } = await startCapture("m1");
+    await recorder.stop();
+    clearLiveCapture("m1");
+    const release = reserveLiveStart();
+    expect(liveSessionSnapshot()).toMatchObject({ phase: "starting", end: null });
+    release();
+    // 시작이 실패해 끝나도 이전 세션의 end가 되살아나지 않는다.
+    expect(liveSessionSnapshot()).toMatchObject({ phase: "idle", end: null });
+  });
+
+  it("ended는 항상 end를 가진다", async () => {
+    stubMic();
+    vi.spyOn(apiClient, "post").mockResolvedValue(stopping() as never);
+    const { recorder } = await startCapture("m1");
+    const seen: ReturnType<typeof liveSessionSnapshot>[] = [];
+    recorder.onStatus = () => seen.push(liveSessionSnapshot());
+    await recorder.stop();
+    expect(seen.length).toBeGreaterThan(0);
+    for (const s of seen) if (s.phase === "ended") expect(s.end).not.toBeNull();
   });
 });

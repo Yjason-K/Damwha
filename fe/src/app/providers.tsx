@@ -1,9 +1,10 @@
-import { Suspense, lazy, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "react-router";
 import { router } from "@/app/router";
 import { installDemoTour } from "@/features/demo/api/demo-tour-interceptor";
 import { readTourState } from "@/features/demo/model/tour-state";
+import { connectDesktopBridge } from "@/features/meeting/lib/desktop-bridge";
 import { simulationView } from "@/features/demo/model/upload-simulation";
 import { apiClient } from "@/shared/api/client";
 import { createQueryClient } from "@/shared/api/query-client";
@@ -28,6 +29,15 @@ if (env.demoTour) {
 
 export function AppProviders() {
   const [queryClient] = useState(createQueryClient);
+
+  // 데스크톱 다리가 라우터·쿼리 캐시를 쓰게 꽂는다. 라우터는 lib가 아니라 여기서 넘긴다.
+  useEffect(() => {
+    connectDesktopBridge({
+      navigate: (path) => void router.navigate(path),
+      invalidateMeetings: () =>
+        void queryClient.invalidateQueries({ queryKey: ["meetings"] }),
+    });
+  }, [queryClient]);
 
   return (
     <QueryClientProvider client={queryClient}>

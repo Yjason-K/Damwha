@@ -45,6 +45,70 @@ const FAILURE_MESSAGE: Record<RecorderFailure, string> = {
 
 let active: ActiveCapture | null = null;
 
+/** 세션의 종결 결과 — 회의 하나가 어떻게 끝났는가. 서버 ACK의 증거는 `stopOutcome`뿐이다. */
+export type RecordingEnd = "acked" | "discarded" | "sealed" | "failed";
+
+/** desktop/src/app/meeting-detection.ts의 `RecordingSnapshot`과 필드가 같아야 한다. */
+export interface RecordingSnapshot {
+  phase: "idle" | "starting" | "recording" | "stopping" | "ended";
+  meetingId: string | null;
+  /** 실패가 기록됐다. 서버가 ACK해도 참으로 남는다. */
+  failed: boolean;
+  systemAudioLost: boolean;
+  end: RecordingEnd | null;
+}
+
+/**
+ * 마지막 세션의 종결 스냅숏. `active`와 따로 두는 이유: 화면의 종료는 `clearLiveCapture`로
+ * `active`를 지우므로, 그 뒤에도 main이 결과를 읽어야 한다. 새 시작이 지운다.
+ */
+let lastEnd: RecordingSnapshot | null = null;
+
+const IDLE_SNAPSHOT: RecordingSnapshot = {
+  phase: "idle",
+  meetingId: null,
+  failed: false,
+  systemAudioLost: false,
+  end: null,
+};
+
+function endOf(entry: ActiveCapture): RecordingEnd | null {
+  const { status } = entry.recorder;
+  if (!status.stopSettled && status.sealed === null) return null;
+  const outcome = entry.stopOutcome.current;
+  if (outcome?.outcome === "discarded") return "discarded";
+  if (status.sealed !== null) return "sealed";
+  // postLiveStop은 200일 때만 outcome을 채운다 — Promise 완료가 아니라 이것이 ACK의 증거다.
+  return outcome !== null ? "acked" : "failed";
+}
+
+function snapshotOf(entry: ActiveCapture): RecordingSnapshot {
+  const { status } = entry.recorder;
+  const end = endOf(entry);
+  return {
+    // ended는 end가 있을 때만이다. 실패했지만 서버 stop이 아직 필요한 캡처는 recording이다.
+    phase:
+      end !== null
+        ? "ended"
+        : status.phase === "stopping"
+          ? "stopping"
+          : "recording",
+    meetingId: entry.meetingId,
+    failed: status.failed !== null,
+    systemAudioLost: status.systemAudio === "lost",
+    end,
+  };
+}
+
+/** main이 2초마다 묻는 녹음 상태 (설계 §4.4). */
+export function liveSessionSnapshot(): RecordingSnapshot {
+  if (starting !== null) {
+    return { ...IDLE_SNAPSHOT, phase: "starting" };
+  }
+  if (active?.meetingId != null) return snapshotOf(active);
+  return lastEnd ?? IDLE_SNAPSHOT;
+}
+
 /**
  * 이 캡처가 아직 **살아 있는** 녹음인가 — 새 녹음을 막을 근거가 되는 유일한 조건이다.
  *
@@ -137,6 +201,14 @@ export async function prepareLiveRecorder(
           "마이크는 계속 녹음하고 있어요. 이제부터 상대방 목소리는 녹음되지 않아요.",
       });
     }
+    // end는 meetingId가 지워지기 전에(clearLiveCapture보다 먼저) 여기서 쓴다.
+    if (
+      entry.meetingId !== null &&
+      (active === entry || lastEnd?.meetingId === entry.meetingId)
+    ) {
+      const snap = snapshotOf(entry);
+      if (snap.end !== null) lastEnd = snap;
+    }
     entry.pageListener?.(status);
   };
 
@@ -225,6 +297,7 @@ export function reserveLiveStart(): () => void {
     (active && (isLiveCapture(active) || active.meetingId === null))
   )
     throw new LiveCaptureBusy();
+  lastEnd = null; // 새 세션의 첫 조회에 이전 세션의 end가 보이면 안 된다
   let release!: () => void;
   starting = new Promise<void>((resolve) => {
     release = resolve;
@@ -273,5 +346,15 @@ export function hasLiveCapture(): boolean {
  */
 export async function stopActiveLiveCapture(): Promise<void> {
   if (active === null || !isLiveCapture(active)) return;
+  await active.recorder.stop();
+}
+
+/**
+ * 레코더 실패로 이미 `stopped`에 수렴한 세션에도 서버 stop을 보낸다 — `stopActiveLiveCapture`는
+ * 살아 있는 캡처만 멈추므로 이 경우 회의가 `recording`에 남는다. `stop()`은 중복 호출에 같은
+ * Promise를 돌려준다.
+ */
+export async function finishLiveCapture(): Promise<void> {
+  if (active === null || active.meetingId === null) return;
   await active.recorder.stop();
 }
