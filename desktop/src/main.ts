@@ -794,6 +794,8 @@ const detection = createMeetingDetection({
       if (updateAttached === null || updateAttached.isDestroyed()) return;
       updateAttached.show();
       updateAttached.focus();
+      // 사용자가 카드를 직접 눌렀다 — 다른 앱(Zoom)이 활성이어도 가져온다.
+      app.focus({ steal: true });
     },
     askTimeoutMs: RENDERER_ASK_TIMEOUT_MS,
     handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
