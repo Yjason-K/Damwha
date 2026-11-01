@@ -79,6 +79,8 @@ const FINISHED_MS = 10_000;
 const POLL_MS = 2_000;
 /** 응답 없음이 이만큼 연속이면 끊긴 것으로 본다 (§4.7). */
 const TIMEOUT_LIMIT = 3;
+/** finish가 끝난 뒤 end가 이만큼 연속 null이면 중단으로 닫는다. */
+const FINISH_POLL_LIMIT = 3;
 
 type Phase = "idle" | "settling" | "prompting" | "starting" | "recording" | "external" | "finished";
 
@@ -105,7 +107,9 @@ export function createMeetingDetection(deps: DetectionDeps) {
   let micOnly = false;
   let meetingId: string | null = null;
   let finishCalled = false;
-  let stopCalled = false;
+  /** stop이 진행 중이다. 어떤 결과로 끝나든 풀린다 — 끝났는지는 poll이 판단한다. */
+  let stopInFlight = false;
+  let finishSettledPolls: number | null = null;
   let timeouts = 0;
 
   let settleCancel: (() => void) | null = null;
@@ -238,7 +242,8 @@ export function createMeetingDetection(deps: DetectionDeps) {
     const g = ++gen;
     const target = current;
     finishCalled = false;
-    stopCalled = false;
+    stopInFlight = false;
+    finishSettledPolls = null;
     meetingId = null;
     micOnly = false;
     startCancel = deps.setTimer(() => {
@@ -322,10 +327,22 @@ export function createMeetingDetection(deps: DetectionDeps) {
       return showFinished(broken ? "interrupted" : "done", meetingId, t);
     }
     if (r.meetingId === null) return showFinished("lost", null, t);
-    if (r.failed && !finishCalled) {
-      // 레코더가 실패해 서버 stop이 안 갔을 수 있다. 마감을 한 번 부르고 end가 나올 때까지 기다린다.
-      finishCalled = true;
-      void deps.finish().catch((e) => deps.log(`meeting-detection: finish 실패 ${String(e)}`));
+    if (r.failed) {
+      if (!finishCalled) {
+        // 레코더가 실패해 서버 stop이 안 갔을 수 있다. 마감을 한 번 부르고 end가 나올 때까지 기다린다.
+        finishCalled = true;
+        const g = gen;
+        const settle = () => {
+          if (g === gen && phase === "recording") finishSettledPolls = 0;
+        };
+        deps.finish().then(settle, (e) => {
+          deps.log(`meeting-detection: finish 실패 ${String(e)}`);
+          if (g === gen && phase === "recording") showFinished("interrupted", meetingId, t);
+        });
+      } else if (finishSettledPolls !== null && ++finishSettledPolls >= FINISH_POLL_LIMIT) {
+        // finish가 끝났는데도 end가 안 나온다 — 더 기다려도 회의를 마감할 길이 없다.
+        return showFinished("interrupted", meetingId, t);
+      }
     }
     if (r.systemAudioLost && !micOnly) {
       micOnly = true;
@@ -372,7 +389,7 @@ export function createMeetingDetection(deps: DetectionDeps) {
       phase === "recording" &&
       canJudge() &&
       current?.autoStop === true &&
-      !stopCalled &&
+      !stopInFlight &&
       active.size === 0;
     if (!armed) {
       countdownCancel = clear(countdownCancel);
@@ -381,17 +398,34 @@ export function createMeetingDetection(deps: DetectionDeps) {
     if (countdownCancel) return;
     countdownCancel = deps.setTimer(() => {
       countdownCancel = null;
-      if (phase !== "recording" || !canJudge() || active.size > 0 || stopCalled) return;
-      stopCalled = true;
+      if (phase !== "recording" || !canJudge() || active.size > 0) return;
       deps.log("meeting-detection: 입력 꺼짐 — 자동 종료");
-      void deps.stop().catch((e) => deps.log(`meeting-detection: stop 실패 ${String(e)}`));
+      requestStop();
     }, AUTO_STOP_MS);
+  }
+
+  /** stop을 한 번에 하나만 건다. 결과가 무엇이든 settle하면 풀고, 입력이 여전히 꺼져 있으면 카운트다운을 다시 세운다. */
+  function requestStop(): void {
+    if (stopInFlight) return;
+    stopInFlight = true;
+    const g = gen;
+    const done = () => {
+      if (g !== gen) return;
+      stopInFlight = false;
+      syncCountdown();
+    };
+    deps.stop().then(done, (e) => {
+      deps.log(`meeting-detection: stop 실패 ${String(e)}`);
+      done();
+    });
   }
 
   // ---- 바깥 입구 ----------------------------------------------------------
 
   function onWatch(e: MicWatchEvent): void {
     if (disposed || !enabled) return;
+    // 잠든 동안 온 스냅숏은 낡을 수 있다 — 돌아온 뒤 헬퍼를 다시 띄워 받는 전체 스냅숏만 믿는다.
+    if (e.kind === "snapshot" && suspended.size > 0) return;
     if (e.kind !== "snapshot") {
       deps.log(`meeting-detection: 감시 불명 (${e.kind === "error" ? e.detail : "exit"})`);
       goUnknown();
@@ -417,14 +451,11 @@ export function createMeetingDetection(deps: DetectionDeps) {
   function onCard(t: number, action: CardAction): void {
     if (disposed || t !== token || !view) return;
     if (phase === "prompting" && action === "start") {
-      if (suspended.size > 0 || !enabled) return;
       beginStart();
     } else if (phase === "prompting" && action === "dismiss") {
       dismissPrompt();
     } else if (phase === "recording" && action === "stop") {
-      if (stopCalled) return;
-      stopCalled = true;
-      void deps.stop().catch((err) => deps.log(`meeting-detection: stop 실패 ${String(err)}`));
+      requestStop();
     } else if (phase === "finished" && action === "open") {
       const id = view.kind === "finished" ? view.meetingId : null;
       if (id) deps.open(id);
