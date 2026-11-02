@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vm from "vm";
 import { describe, expect, it } from "vitest";
+import { PILL_COMPACT, PILL_HOVER } from "../../src/windows/pill-view";
 import { CAUSES } from "../../src/diagnostics/causes";
 import { servicesView } from "../../src/windows/status-view";
 import { RETRY_LAYERS } from "../../src/windows/shell-hints";
@@ -104,6 +105,7 @@ class FakeNode {
     const event = {
       type,
       target: this,
+      button: 0,
       preventDefault: () => void (prevented = true),
       stopPropagation: () => {},
       ...fields,
@@ -163,7 +165,7 @@ function loadPage(file: string, search = "") {
   };
   const windowListeners: Record<string, Array<(event: unknown) => void>> = {};
   const windowFire = (type: string, fields: Record<string, unknown> = {}) => {
-    for (const l of windowListeners[type] ?? []) l({ type, ...fields });
+    for (const l of windowListeners[type] ?? []) l({ type, button: 0, ...fields });
   };
   const document = {
     body,
@@ -553,7 +555,7 @@ describe("pill.html", () => {
     const next = (page.sandbox.__damwha_pill as { next(): Promise<unknown> }).next;
     const draw = (token = 3, agoSec = startedAtAgoSec) =>
       render({ token, startedAt: page.clock.now - agoSec * 1000, ...LABELS });
-    return { ...page, render, next, draw, pill: page.byId.get("pill")!, stop: page.byId.get("stop")! };
+    return { ...page, render, next, draw, pill: page.byId.get("pill")!, open: page.byId.get("open")!, stop: page.byId.get("stop")! };
   };
   /** 지금까지 쌓인 답 n개를 순서대로 꺼낸다. */
   const take = async (next: () => Promise<unknown>, n: number) => {
@@ -586,6 +588,49 @@ describe("pill.html", () => {
     }
   });
 
+  it("본문과 중지는 형제이고 중지가 앞이다 — role=button 안의 버튼은 ARIA에서 사라진다", () => {
+    const { html } = setup();
+    expect(html).toMatch(/<div id="pill"><button id="stop"><\/button><div id="open" role="button">.*<\/div><\/div>/);
+  });
+
+  it("중지는 늘어난 왼쪽 자리에만 놓이고 줄어든 자리는 본문이 그대로 차지한다", () => {
+    const { html } = setup();
+    const style = /<style>([\s\S]*?)<\/style>/.exec(html)![1].replace(/\/\*[\s\S]*?\*\//g, "");
+    const rule = (selector: string) => new RegExp(`(?:^|\\s)${selector}\\s*\\{([^}]*)\\}`, "m").exec(style)![1];
+    const px = (decls: string, name: string) => Number(new RegExp(`(?:^|[\\s;])${name}:\\s*(\\d+)px`).exec(decls)![1]);
+    const grown = PILL_HOVER.width - PILL_COMPACT.width;
+    const BORDER = 1;
+
+    // 오른쪽에 붙고, 창이 아직 좁으면 중지는 왼쪽 바깥으로 밀려 잘린다.
+    expect(rule("#pill")).toMatch(/justify-content:\s*flex-end/);
+    expect(rule("#pill")).toMatch(/overflow:\s*hidden/);
+    // 본문은 호버와 상관없이 너비가 같아 점·시간이 움직이지 않는다.
+    expect(rule("#open")).toMatch(/flex:\s*none/);
+    expect(px(rule("#open"), "width")).toBe(PILL_COMPACT.width - 2 * BORDER);
+    // 중지의 오른쪽 끝이 줄어든 자리의 왼쪽 끝을 넘지 않는다.
+    const stop = rule("#stop");
+    expect(stop).not.toMatch(/position:/);
+    expect(px(stop, "margin-right")).toBeGreaterThanOrEqual(BORDER);
+    expect(px(stop, "width") + px(stop, "margin-right")).toBeLessThanOrEqual(grown - BORDER);
+  });
+
+  it("왼쪽 버튼이 아니면 열기·드래그를 시작하지 않는다", async () => {
+    const { draw, next, open, windowFire } = setup();
+    draw(2);
+    open.fire("mousedown", { button: 2, screenX: 100, screenY: 100 });
+    windowFire("mousemove", { button: 2, screenX: 150, screenY: 100 });
+    windowFire("mouseup", { button: 2, screenX: 150, screenY: 100 });
+    expect(await idle(next)).toBe(true);
+  });
+
+  it("왼쪽으로 누른 뒤 다른 버튼을 떼도 클릭이 끝나지 않는다", async () => {
+    const { draw, next, open, windowFire } = setup();
+    draw(2);
+    open.fire("mousedown", { screenX: 100, screenY: 100 });
+    windowFire("mouseup", { button: 2, screenX: 100, screenY: 100 });
+    expect(await idle(next)).toBe(true);
+  });
+
   it("경과 시간은 m:ss, 1시간부터 h:mm:ss", () => {
     const { draw, byId, advance } = setup();
     draw(1, 754);
@@ -598,11 +643,11 @@ describe("pill.html", () => {
   });
 
   it("문구는 글자로만 넣고 본문에 aria-label을 단다", () => {
-    const { render, clock, byId, pill, stop } = setup();
+    const { render, clock, byId, open, stop } = setup();
     render({ token: 1, startedAt: clock.now, stop: XSS, open: XSS });
     expect(stop.textContent).toBe(XSS);
-    expect(pill.dataset["attr:aria-label"]).toBe(XSS);
-    expect(pill.dataset["attr:role"]).toBeUndefined();
+    expect(open.dataset["attr:aria-label"]).toBe(XSS);
+    expect(open.dataset["attr:role"]).toBeUndefined();
     expect(byId.get("pill")!.children.some((n) => n.tag === "img")).toBe(false);
   });
 
@@ -618,14 +663,14 @@ describe("pill.html", () => {
   });
 
   it("4px 미만 움직임은 open, 4px 이상은 drag와 drop", async () => {
-    const { draw, next, pill, windowFire } = setup();
+    const { draw, next, pill, open, windowFire } = setup();
     draw(5);
     // 4px 미만(약 2.2px): 클릭이다.
-    pill.fire("mousedown", { screenX: 100, screenY: 100 });
+    open.fire("mousedown", { screenX: 100, screenY: 100 });
     windowFire("mousemove", { screenX: 102, screenY: 101 });
     windowFire("mouseup", { screenX: 102, screenY: 101 });
     // 4px 이상: 첫 움직임은 시작점 기준, 이어지는 것은 직전 지점 기준이다.
-    pill.fire("mousedown", { screenX: 200, screenY: 200 });
+    open.fire("mousedown", { screenX: 200, screenY: 200 });
     windowFire("mousemove", { screenX: 210, screenY: 200 });
     windowFire("mousemove", { screenX: 212, screenY: 205 });
     windowFire("mouseup", { screenX: 212, screenY: 205 });
@@ -642,9 +687,9 @@ describe("pill.html", () => {
   });
 
   it("중지 위의 mousedown은 열기·드래그를 시작하지 않는다", async () => {
-    const { draw, next, pill, stop, windowFire } = setup();
+    const { draw, next, stop, windowFire } = setup();
     draw(2);
-    pill.fire("mousedown", { target: stop, screenX: 10, screenY: 10 });
+    stop.fire("mousedown", { screenX: 10, screenY: 10 });
     windowFire("mousemove", { screenX: 50, screenY: 50 });
     windowFire("mouseup", { screenX: 50, screenY: 50 });
     expect(await idle(next)).toBe(true);
@@ -675,10 +720,10 @@ describe("pill.html", () => {
   });
 
   it("드래그 중에는 leave를 보내지 않는다", async () => {
-    const { draw, next, root, pill, advance, windowFire } = setup();
+    const { draw, next, root, pill, open, advance, windowFire } = setup();
     draw(6);
     root.fire("mouseenter");
-    pill.fire("mousedown", { screenX: 100, screenY: 100 });
+    open.fire("mousedown", { screenX: 100, screenY: 100 });
     windowFire("mousemove", { screenX: 120, screenY: 100 });
     root.fire("mouseleave");
     advance(1000);
@@ -690,11 +735,64 @@ describe("pill.html", () => {
     expect(await idle(next)).toBe(true);
   });
 
-  it("커서가 창 밖에서 드래그가 끝나면 알약이 늘어난 채 남지 않는다", async () => {
-    const { draw, next, root, pill, advance, windowFire } = setup();
+  it("4px 전의 누름 중에도 leave가 알약을 접지 않는다", async () => {
+    const { draw, next, root, pill, open, advance, windowFire } = setup();
     draw(6);
     root.fire("mouseenter");
-    pill.fire("mousedown", { screenX: 100, screenY: 100 });
+    open.fire("mousedown", { screenX: 100, screenY: 100 });
+    windowFire("mousemove", { screenX: 102, screenY: 100 });
+    root.fire("mouseleave");
+    advance(1000);
+    expect(pill.classList.contains("hover")).toBe(true);
+    expect(await take(next, 1)).toEqual([{ token: 6, ui: "hover", on: true }]);
+    expect(await idle(next)).toBe(true);
+  });
+
+  it("창 밖에서 끝난 클릭도 알약을 접는다", async () => {
+    const { draw, next, root, pill, open, advance, windowFire } = setup();
+    draw(6);
+    root.fire("mouseenter");
+    open.fire("mousedown", { screenX: 100, screenY: 100 });
+    root.fire("mouseleave");
+    windowFire("mouseup", { screenX: 101, screenY: 100, clientX: 150, clientY: 10 });
+    advance(200);
+    expect(pill.classList.contains("hover")).toBe(false);
+    expect(await take(next, 3)).toEqual([
+      { token: 6, ui: "hover", on: true },
+      { token: 6, action: "open" },
+      { token: 6, ui: "hover", on: false },
+    ]);
+  });
+
+  it("mouseup을 잃은 드래그는 버튼이 풀린 움직임에서 drop으로 끝난다", async () => {
+    const { draw, next, open, windowFire } = setup();
+    draw(6);
+    open.fire("mousedown", { screenX: 100, screenY: 100 });
+    windowFire("mousemove", { buttons: 1, screenX: 120, screenY: 100 });
+    windowFire("mousemove", { buttons: 0, screenX: 140, screenY: 100 });
+    windowFire("mousemove", { buttons: 0, screenX: 160, screenY: 100 });
+    windowFire("mouseup", { screenX: 160, screenY: 100 });
+    expect(await take(next, 2)).toEqual([
+      { token: 6, ui: "drag", dx: 20, dy: 0 },
+      { token: 6, ui: "drop" },
+    ]);
+    expect(await idle(next)).toBe(true);
+  });
+
+  it("mouseup을 잃은 누름은 열지 않고 끝난다", async () => {
+    const { draw, next, open, windowFire } = setup();
+    draw(6);
+    open.fire("mousedown", { screenX: 100, screenY: 100 });
+    windowFire("mousemove", { buttons: 0, screenX: 101, screenY: 100 });
+    windowFire("mouseup", { screenX: 101, screenY: 100 });
+    expect(await idle(next)).toBe(true);
+  });
+
+  it("커서가 창 밖에서 드래그가 끝나면 알약이 늘어난 채 남지 않는다", async () => {
+    const { draw, next, root, pill, open, advance, windowFire } = setup();
+    draw(6);
+    root.fire("mouseenter");
+    open.fire("mousedown", { screenX: 100, screenY: 100 });
     windowFire("mousemove", { screenX: 120, screenY: 100 });
     root.fire("mouseleave");
     // 창(104x32) 밖에서 놓았다 — 이제 mouseleave는 오지 않는다.
@@ -710,10 +808,10 @@ describe("pill.html", () => {
   });
 
   it("커서가 창 안에서 드래그가 끝나면 hover를 유지한다", async () => {
-    const { draw, next, root, pill, advance, windowFire } = setup();
+    const { draw, next, root, pill, open, advance, windowFire } = setup();
     draw(6);
     root.fire("mouseenter");
-    pill.fire("mousedown", { screenX: 100, screenY: 100 });
+    open.fire("mousedown", { screenX: 100, screenY: 100 });
     windowFire("mousemove", { screenX: 120, screenY: 100 });
     windowFire("mouseup", { screenX: 120, screenY: 100, clientX: 50, clientY: 10 });
     advance(1000);

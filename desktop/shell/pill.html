@@ -4,11 +4,11 @@
     <meta charset="utf-8" />
     <!-- 녹음 중 알약. services.html·detect.html과 같은 규칙이다: 인라인 스크립트·스타일 하나씩만 해시로 허용하고
          나머지는 전부 막는다. 고치면 해시를 다시 계산해야 한다 — tests/windows/shell-html.test.ts가 잡는다. -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-tpiXFt4uAOypPr5g7aV3iSFfRQl7h3mV4HJAQQwpSKU='; style-src 'sha256-iiOzKVCA8B6y2RqpHjoBpx2ZZMAB4h6XlhOJEetMJ5o='; base-uri 'none'; form-action 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-e3zxfx14IV8VeiT8XcFqBOwBhByqeWI5kcsJtfGxRn4='; style-src 'sha256-aQ7bGEeCLSvSZnbwA+YxLYwUchk5ZEC3IOLOTbqhk0g='; base-uri 'none'; form-action 'none'" />
     <title>녹음 중</title>
     <style>
       /* 토큰은 detect.html과 같은 방식으로 fe/src/index.css에서 같은 이름·값으로 옮겼다(필요한 것만).
-         색은 :root 밖에 적지 않는다. 창 자체가 알약 크기라 그림자는 macOS가 frameless 창에 주는 몫이다. */
+         색은 :root 밖에 적지 않는다. 창이 hasShadow: false라 그림자가 없고 경계는 1px 테두리가 맡는다. */
       :root {
         color-scheme: light;
         --surface-card: #ffffff;
@@ -36,15 +36,18 @@
       html, body { height: 100%; margin: 0; background: transparent; }
       body { overflow: hidden; user-select: none; -webkit-user-select: none; -webkit-font-smoothing: antialiased; }
       #pill {
-        height: 100%; width: 100%; display: flex; align-items: center; gap: 8px; padding: 0 6px 0 12px;
+        height: 100%; width: 100%; display: flex; align-items: center; justify-content: flex-end; overflow: hidden;
         border-radius: 999px; border: 1px solid var(--border-default);
         background: var(--surface-card); color: var(--text-primary);
         font: 12px/1 var(--font-sans); cursor: default;
       }
+      /* 본문은 줄어든 창의 안쪽 너비 그대로 오른쪽에 붙는다. 호버해도 점과 시간이 움직이지 않고, 줄어든 자리는 언제나 본문이다.
+         중지는 그 왼쪽에 놓이므로 창이 늘어나기 전에는 왼쪽 바깥으로 밀려 잘린다. */
+      #open { flex: none; width: 102px; height: 100%; display: flex; align-items: center; gap: 8px; padding: 0 6px 0 12px; }
       .dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--red-9); }
       #time { flex: 1; font-variant-numeric: tabular-nums; white-space: nowrap; }
       #stop {
-        display: none; flex: none; font: inherit; font-size: 11px; font-weight: 500; padding: 4px 10px;
+        display: none; flex: none; width: 46px; margin-right: 1px; font: inherit; font-size: 11px; font-weight: 500; padding: 4px 0;
         border-radius: 999px; border: 1px solid var(--border-default);
         background: var(--surface-card); color: var(--text-primary); cursor: default; outline: none;
       }
@@ -54,7 +57,7 @@
     </style>
   </head>
   <body>
-    <div id="pill" role="button"><span class="dot"></span><span id="time"></span><button id="stop"></button></div>
+    <div id="pill"><button id="stop"></button><div id="open" role="button"><span class="dot"></span><span id="time"></span></div></div>
     <script>
       // main이 executeJavaScript로 부른다 (main → 렌더러 한 방향). 이 페이지가 main을 부르는 경로는 없다:
       // preload도 IPC도 없고, 알약이 만든 답 { token, ... }은 main이 건 next()의 **반환값**으로만 나간다.
@@ -75,6 +78,7 @@
         let dragging = false;
 
         const pill = document.getElementById("pill");
+        const open = document.getElementById("open");
         const stop = document.getElementById("stop");
         const time = document.getElementById("time");
 
@@ -111,6 +115,19 @@
           }, LEAVE_MS);
         }
 
+        // 누름을 끝낸다. 창 밖에서 끝났다면 mouseleave는 이미 무시됐고 다시 오지 않는다 — 여기서 접는다.
+        function endPress(e) {
+          if (dragging) emit({ token: token, ui: "drop" });
+          const outside =
+            typeof e.clientX === "number" &&
+            typeof e.clientY === "number" &&
+            (e.clientX < 0 || e.clientY < 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight);
+          if (outside && pill.classList.contains("hover")) scheduleLeave();
+          start = null;
+          last = null;
+          dragging = false;
+        }
+
         window.__damwha_pill = {
           next: function () {
             if (queue.length > 0) return Promise.resolve(queue.shift());
@@ -124,7 +141,7 @@
           token = view.token;
           startedAt = view.startedAt;
           stop.textContent = view.stop;
-          pill.setAttribute("aria-label", view.open);
+          open.setAttribute("aria-label", view.open);
           // 눌린 중지는 다음 렌더까지 잠겨 있다 — 정지 대기 동안 살아 보이지 않게.
           stop.disabled = false;
           tick();
@@ -143,18 +160,19 @@
         });
 
         document.documentElement.addEventListener("mouseleave", function () {
-          if (dragging) return; // 드래그 중에는 창이 커서를 따라가므로 벗어난 것이 아니다.
+          if (start) return; // 누른 동안은 창이 커서를 따라갈 수 있어 벗어난 것이 아니다. 4px 전도 같다.
           scheduleLeave();
         });
 
-        pill.addEventListener("mousedown", function (e) {
-          if (e.target === stop) return;
+        open.addEventListener("mousedown", function (e) {
+          if (e.button !== 0) return;
           start = { x: e.screenX, y: e.screenY };
           last = { x: e.screenX, y: e.screenY };
         });
 
         window.addEventListener("mousemove", function (e) {
           if (!start) return;
+          if (e.buttons === 0) return endPress(e); // mouseup을 잃었다. 커서에 붙은 채 남지 않게 끝낸다.
           if (!dragging && Math.hypot(e.screenX - start.x, e.screenY - start.y) < DRAG_MIN) return;
           dragging = true;
           emit({ token: token, ui: "drag", dx: e.screenX - last.x, dy: e.screenY - last.y });
@@ -162,25 +180,12 @@
         });
 
         window.addEventListener("mouseup", function (e) {
-          if (!start) return;
-          if (dragging) {
-            emit({ token: token, ui: "drop" });
-            // 창 밖에서 놓았다면 mouseleave는 이미 무시됐고 다시 오지 않는다 — 여기서 접는다.
-            const outside =
-              typeof e.clientX === "number" &&
-              typeof e.clientY === "number" &&
-              (e.clientX < 0 || e.clientY < 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight);
-            if (outside && pill.classList.contains("hover")) scheduleLeave();
-          } else {
-            emit({ token: token, action: "open" });
-          }
-          start = null;
-          last = null;
-          dragging = false;
+          if (!start || e.button !== 0) return;
+          if (!dragging) emit({ token: token, action: "open" });
+          endPress(e);
         });
 
-        stop.addEventListener("click", function (e) {
-          e.stopPropagation();
+        stop.addEventListener("click", function () {
           if (stop.disabled) return;
           stop.disabled = true;
           emit({ token: token, action: "stop" });
