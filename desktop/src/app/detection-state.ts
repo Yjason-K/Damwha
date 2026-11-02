@@ -9,45 +9,70 @@ import * as path from "path";
  */
 export const DETECTION_STATE_FILE = "detection-state.json";
 
+export interface PillPoint {
+  x: number;
+  y: number;
+}
+
 export interface DetectionStateStore {
   enabled(): boolean;
   setEnabled(on: boolean): void;
+  /** 녹음 중 알약을 마지막으로 둔 자리. 저장된 적 없거나 값이 깨졌으면 null. */
+  pillPosition(): PillPoint | null;
+  setPillPosition(p: PillPoint): void;
+}
+
+interface State {
+  enabled: boolean;
+  pill: PillPoint | null;
 }
 
 export function makeDetectionStateStore(userData: string, log: (line: string) => void): DetectionStateStore {
   const file = path.join(userData, DETECTION_STATE_FILE);
-  let memo: boolean | undefined;
+  let memo: State | undefined;
 
-  function readFile(): boolean {
+  function readFile(): State {
     try {
       const raw: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
-      if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return true;
-      const v = (raw as { enabled?: unknown }).enabled;
-      return typeof v === "boolean" ? v : true;
+      if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return { enabled: true, pill: null };
+      const { enabled, pill } = raw as { enabled?: unknown; pill?: unknown };
+      let point: PillPoint | null = null;
+      if (pill !== null && typeof pill === "object" && !Array.isArray(pill)) {
+        const { x, y } = pill as { x?: unknown; y?: unknown };
+        if (typeof x === "number" && typeof y === "number" && Number.isFinite(x) && Number.isFinite(y)) point = { x, y };
+      }
+      return { enabled: typeof enabled === "boolean" ? enabled : true, pill: point };
     } catch {
-      return true;
+      return { enabled: true, pill: null };
+    }
+  }
+
+  function state(): State {
+    if (memo === undefined) memo = readFile();
+    return memo;
+  }
+
+  function write(next: State): void {
+    memo = next;
+    const tmp = `${file}.${process.pid}.tmp`;
+    try {
+      const body = next.pill ? { enabled: next.enabled, pill: next.pill } : { enabled: next.enabled };
+      fs.writeFileSync(tmp, JSON.stringify(body));
+      fs.renameSync(tmp, file);
+    } catch (e) {
+      try {
+        fs.rmSync(tmp, { force: true });
+      } catch {
+        // 임시 파일을 못 지워도 할 수 있는 것이 없다.
+      }
+      log(`회의 감지 설정을 저장하지 못했어요 — ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
   return {
-    enabled() {
-      if (memo === undefined) memo = readFile();
-      return memo;
-    },
-    setEnabled(on) {
-      memo = on;
-      const tmp = `${file}.${process.pid}.tmp`;
-      try {
-        fs.writeFileSync(tmp, JSON.stringify({ enabled: on }));
-        fs.renameSync(tmp, file);
-      } catch (e) {
-        try {
-          fs.rmSync(tmp, { force: true });
-        } catch {
-          // 임시 파일을 못 지워도 할 수 있는 것이 없다.
-        }
-        log(`회의 감지 설정을 저장하지 못했어요 — ${e instanceof Error ? e.message : String(e)}`);
-      }
-    },
+    enabled: () => state().enabled,
+    setEnabled: (on) => write({ ...state(), enabled: on }),
+    pillPosition: () => state().pill,
+    setPillPosition: (p) => write({ ...state(), pill: { x: p.x, y: p.y } }),
   };
 }
