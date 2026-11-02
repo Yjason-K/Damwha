@@ -195,9 +195,8 @@ export function createRendererCalls(deps: {
     async stop() {
       const result = await runHandshake(deps.stopRecording, { timeoutMs: deps.handshakeTimeoutMs });
       if (result.kind !== "stopped") {
-        log(`meeting-detection: 녹음을 멈추지 못했다 (${result.kind === "failed" ? result.detail : result.kind})`);
+        throw new Error(`녹음을 멈추지 못했다 (${result.kind === "failed" ? result.detail : result.kind})`);
       }
-      return result;
     },
     async finish() {
       let timer: NodeJS.Timeout | undefined;

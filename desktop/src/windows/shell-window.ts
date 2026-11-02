@@ -1,7 +1,9 @@
 import { app, BrowserWindow, nativeTheme, screen } from "electron";
 import * as path from "path";
+import type { PillPoint } from "../app/detection-state";
 import { detectCardBounds } from "./detect-view";
 import { applyNavigationBoundary } from "./permissions";
+import type { Rect } from "./pill-view";
 import { isSameShellPage } from "./shell-url";
 import { windowBackground } from "./window-background";
 
@@ -19,7 +21,7 @@ export interface ShellStatus {
   logPath?: string;
 }
 
-function shellFileOf(name: "status.html" | "services.html" | "detect.html"): string {
+function shellFileOf(name: "status.html" | "services.html" | "detect.html" | "pill.html"): string {
   // app.getAppPath()는 dev에서 desktop/, packaged에서 app.asar을 가리킨다.
   return path.join(app.getAppPath(), "shell", name);
 }
@@ -80,12 +82,28 @@ export function createServicesWindow(focus: boolean, onLoadError: (e: unknown) =
 const DETECT_CARD_SIZE = { width: 360, height: 84 };
 
 /**
- * 회의 감지 카드 창 (잎 — 수명은 detect-window.ts). 화면 위쪽 가운데에 포커스를 뺏지 않고 뜬다.
- * `type: "panel"` + `showInactive()`는 Electron 44.3에서 포커스를 훔치지 않고 클릭을 받는다(실측).
- * 화면 공유·캡처에는 찍히지 않게 콘텐츠 보호를 건다. 창을 앞으로 가져오는 경로(`show()`)는 두지 않는다.
+ * 회의 감지 카드와 알약이 함께 쓰는 패널의 뒷단. `type: "panel"` + `showInactive()`는 Electron 44.3에서
+ * 포커스를 훔치지 않고 클릭을 받는다(실측). 화면 공유·캡처에는 찍히지 않게 콘텐츠 보호를 건다.
+ * 창을 앞으로 가져오는 경로(`show()`)는 두지 않는다.
  */
-export function createDetectBrowserWindow(onLoadError: (e: unknown) => void): BrowserWindow {
-  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+function floatPanel(win: BrowserWindow, file: "detect.html" | "pill.html", onLoadError: (e: unknown) => void): void {
+  win.setAlwaysOnTop(true, "floating");
+  // skipTransformProcessType가 없으면 Electron이 앱을 UIElement로 바꿔 담화가 Dock에서 사라진다(44.3 실측).
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
+  win.setContentProtection(true);
+  applyNavigationBoundary(win, () => []);
+  win.once("ready-to-show", () => {
+    if (!win.isDestroyed()) win.showInactive();
+  });
+  win.loadFile(shellFileOf(file)).catch(onLoadError);
+}
+
+/**
+ * 회의 감지 카드 창 (잎 — 수명은 detect-window.ts). 화면 위쪽 가운데에 포커스를 뺏지 않고 뜬다.
+ * `anchor`는 알약의 자리다. 있으면 그 화면에, 없으면 커서가 있는 화면에 뜬다.
+ */
+export function createDetectBrowserWindow(onLoadError: (e: unknown) => void, anchor: PillPoint | null): BrowserWindow {
+  const display = screen.getDisplayNearestPoint(anchor ?? screen.getCursorScreenPoint());
   const win = new BrowserWindow({
     ...detectCardBounds(display.workArea, DETECT_CARD_SIZE),
     frame: false,
@@ -96,14 +114,27 @@ export function createDetectBrowserWindow(onLoadError: (e: unknown) => void): Br
     backgroundColor: windowBackground(nativeTheme.shouldUseDarkColors),
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
-  win.setAlwaysOnTop(true, "floating");
-  // skipTransformProcessType가 없으면 Electron이 앱을 UIElement로 바꿔 담화가 Dock에서 사라진다(44.3 실측).
-  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
-  win.setContentProtection(true);
-  applyNavigationBoundary(win, () => []);
-  win.once("ready-to-show", () => {
-    if (!win.isDestroyed()) win.showInactive();
+  floatPanel(win, "detect.html", onLoadError);
+  return win;
+}
+
+/**
+ * 녹음 중 알약 창 (잎 — 수명은 pill-window.ts). `focusable: false`라 눌러도 회의 앱의 포커스가 빠지지
+ * 않는다(스펙 §3 실측). 둥근 모양은 투명 창에 페이지의 1px 테두리로 그린다.
+ */
+export function createPillBrowserWindow(bounds: Rect, onLoadError: (e: unknown) => void): BrowserWindow {
+  const win = new BrowserWindow({
+    ...bounds,
+    frame: false,
+    resizable: false,
+    type: "panel",
+    focusable: false,
+    show: false,
+    skipTaskbar: true,
+    transparent: true,
+    hasShadow: false,
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
-  win.loadFile(shellFileOf("detect.html")).catch(onLoadError);
+  floatPanel(win, "pill.html", onLoadError);
   return win;
 }
