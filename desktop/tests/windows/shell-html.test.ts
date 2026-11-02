@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vm from "vm";
 import { describe, expect, it } from "vitest";
-import { PILL_COMPACT, PILL_HOVER } from "../../src/windows/pill-view";
+import { PILL_COMPACT, PILL_HOVER, PILL_SHRINK_MS } from "../../src/windows/pill-view";
 import { CAUSES } from "../../src/diagnostics/causes";
 import { servicesView } from "../../src/windows/status-view";
 import { RETRY_LAYERS } from "../../src/windows/shell-hints";
@@ -91,6 +91,7 @@ class FakeNode {
       this.className = this.className.split(/\s+/).filter((c) => c && c !== name).join(" ");
     },
     contains: (name: string) => this.hasClass(name),
+    toggle: (name: string, on: boolean) => (on ? this.classList.add(name) : this.classList.remove(name)),
   };
   private hasClass(name: string): boolean {
     return this.className.split(/\s+/).includes(name);
@@ -185,8 +186,8 @@ function loadPage(file: string, search = "") {
     location: { search },
     URLSearchParams,
     Date: FakeDate,
-    innerWidth: 88,
-    innerHeight: 32,
+    innerWidth: PILL_COMPACT.width,
+    innerHeight: PILL_COMPACT.height,
     setTimeout: (fn: () => void, ms: number) => addTimer(fn, ms),
     clearTimeout: (id: number) => void timers.delete(id),
     setInterval: (fn: () => void, ms: number) => addTimer(fn, ms, ms),
@@ -614,6 +615,29 @@ describe("pill.html", () => {
     expect(stop).not.toMatch(/position:/);
     expect(px(stop, "margin-right")).toBeGreaterThanOrEqual(BORDER);
     expect(px(stop, "width") + px(stop, "margin-right")).toBeLessThanOrEqual(grown - BORDER);
+  });
+
+  it("알약은 넓어진 창에서만 CSS로 펼쳐지고, 접히는 시간은 main이 창을 줄이기까지의 시간과 같다", () => {
+    const { html } = setup();
+    const style = /<style>([\s\S]*?)<\/style>/.exec(html)![1].replace(/\/\*[\s\S]*?\*\//g, "");
+    const rule = (selector: string) => new RegExp(`(?:^|\\s)${selector}\\s*\\{([^}]*)\\}`, "m").exec(style)![1];
+    const px = (decls: string, name: string) => Number(new RegExp(`(?:^|[\\s;])${name}:\\s*(\\d+)px`).exec(decls)![1]);
+    expect(style).toMatch(/\n\s*body\s*\{[^}]*justify-content:\s*flex-end/);
+    expect(px(rule("#pill"), "width")).toBe(PILL_COMPACT.width);
+    expect(px(rule("#pill\\.hover\\.wide"), "width")).toBe(PILL_HOVER.width);
+    expect(rule("#pill")).toMatch(new RegExp(`transition:\\s*width ${PILL_SHRINK_MS}ms`));
+    expect(style).toMatch(/prefers-reduced-motion: reduce\)\s*\{\s*#pill, #stop\s*\{\s*transition:\s*none/);
+  });
+
+  it("창이 줄어든 크기보다 넓어졌을 때만 wide를 켠다", () => {
+    const { draw, sandbox, pill, windowFire } = setup();
+    draw(2);
+    sandbox.innerWidth = PILL_HOVER.width;
+    windowFire("resize", {});
+    expect(pill.classList.contains("wide")).toBe(true);
+    sandbox.innerWidth = PILL_COMPACT.width;
+    windowFire("resize", {});
+    expect(pill.classList.contains("wide")).toBe(false);
   });
 
   it("왼쪽 버튼이 아니면 열기·드래그를 시작하지 않는다", async () => {

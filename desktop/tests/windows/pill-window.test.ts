@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../src/i18n/dictionary";
 import { createPillWindow, type PillWindowHost } from "../../src/windows/pill-window";
 import {
   PILL_ASK_SCRIPT,
   PILL_COMPACT,
   PILL_HOVER,
+  PILL_SHRINK_MS,
   pillBounds,
   pillClamp,
   pillDefaultPosition,
@@ -24,7 +25,6 @@ interface FakeWin {
   destroyed: boolean;
   bounds: Rect;
   moves: Rect[];
-  animated: boolean[];
   scripts: string[];
   loads: Array<() => void>;
   closed: Array<() => void>;
@@ -48,7 +48,6 @@ function harness(opts: { saved?: PillPoint | null; areas?: Rect[]; cursor?: Rect
         destroyed: false,
         bounds,
         moves: [],
-        animated: [],
         scripts: [],
         loads: [],
         closed: [],
@@ -73,10 +72,9 @@ function harness(opts: { saved?: PillPoint | null; areas?: Rect[]; cursor?: Rect
       return new Promise((resolve) => w.waiters.push(resolve));
     },
     bounds: (w) => w.bounds,
-    setBounds: (w, r, animate) => {
+    setBounds: (w, r) => {
       w.bounds = r;
       w.moves.push(r);
-      w.animated.push(animate);
     },
     workAreas: () => env.areas,
     cursorArea: () => env.cursor,
@@ -98,6 +96,10 @@ function harness(opts: { saved?: PillPoint | null; areas?: Rect[]; cursor?: Rect
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 /** 창을 띄우고 로드를 끝내 묻기가 돌게 한다. */
 async function opened(h: ReturnType<typeof harness>) {
@@ -209,20 +211,26 @@ describe("createPillWindow", () => {
     await tick();
     expect(win.bounds).toEqual({ x: right - PILL_HOVER.width, y: 300, ...PILL_HOVER });
 
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     h.send(win, { token: 7, ui: "hover", on: false });
-    await tick();
+    await vi.advanceTimersByTimeAsync(PILL_SHRINK_MS - 1);
+    // 페이지가 알약을 줄이는 동안 창은 넓은 채다.
+    expect(win.bounds).toEqual({ x: right - PILL_HOVER.width, y: 300, ...PILL_HOVER });
+    await vi.advanceTimersByTimeAsync(1);
     expect(win.bounds).toEqual({ x: 500, y: 300, ...PILL_COMPACT });
   });
 
-  it("호버의 크기 변경만 애니메이션으로 하고 drag·drop은 즉시 옮긴다", async () => {
+  it("줄이기를 기다리는 동안 다시 호버하면 창을 줄이지 않는다", async () => {
     const h = harness({ saved: { x: 500, y: 300 } });
     const { win } = await opened(h);
     h.send(win, { token: 7, ui: "hover", on: true });
-    h.send(win, { token: 7, ui: "drag", dx: 10, dy: 0 });
-    h.send(win, { token: 7, ui: "drop" });
-    h.send(win, { token: 7, ui: "hover", on: false });
     await tick();
-    expect(win.animated).toEqual([true, false, false, true]);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    h.send(win, { token: 7, ui: "hover", on: false });
+    await vi.advanceTimersByTimeAsync(PILL_SHRINK_MS / 2);
+    h.send(win, { token: 7, ui: "hover", on: true });
+    await vi.advanceTimersByTimeAsync(PILL_SHRINK_MS * 2);
+    expect(win.bounds).toEqual(pillBounds({ x: 500, y: 300 }, true));
   });
 
   it("drag는 호버 크기여도 왼쪽 위를 어긋나게 하지 않는다", async () => {

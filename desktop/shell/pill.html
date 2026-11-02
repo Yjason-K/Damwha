@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <!-- 녹음 중 알약. services.html·detect.html과 같은 규칙이다: 인라인 스크립트·스타일 하나씩만 해시로 허용하고
          나머지는 전부 막는다. 고치면 해시를 다시 계산해야 한다 — tests/windows/shell-html.test.ts가 잡는다. -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-e3zxfx14IV8VeiT8XcFqBOwBhByqeWI5kcsJtfGxRn4='; style-src 'sha256-dVQ+Ms/iI2BsROwUmXjrpqfvjZOCFA65z9cGvRkhfLw='; base-uri 'none'; form-action 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-vlFq9YyL053sdnRi4qOiIz8VCPK5M5XesuIwLLo+vSw='; style-src 'sha256-rTCarcpDtH6KXhTSIR4DVCCIEKlfhdsCqw9JbyUpVuQ='; base-uri 'none'; form-action 'none'" />
     <title>녹음 중</title>
     <style>
       /* 토큰은 detect.html과 같은 방식으로 fe/src/index.css에서 같은 이름·값으로 옮겼다(필요한 것만).
@@ -34,28 +34,33 @@
       }
       * { box-sizing: border-box; }
       html, body { height: 100%; margin: 0; background: transparent; }
-      body { overflow: hidden; user-select: none; -webkit-user-select: none; -webkit-font-smoothing: antialiased; }
+      body { display: flex; justify-content: flex-end; overflow: hidden; user-select: none; -webkit-user-select: none; -webkit-font-smoothing: antialiased; }
+      /* 창은 main이 단번에 늘리고 줄인다. 알약은 창의 오른쪽에 붙어 width 전환으로 왼쪽으로 펼쳐진다 —
+         넓어진 창에서만(.wide) 펼치므로 좁은 창에 잘린 채 자라지 않는다. 접힐 때는 main이 이 전환이 끝난 뒤
+         (PILL_SHRINK_MS) 창을 줄인다. */
       #pill {
-        height: 100%; width: 100%; display: flex; align-items: center; justify-content: flex-end; overflow: hidden;
+        flex: none; height: 100%; width: 104px; display: flex; align-items: center; justify-content: flex-end; overflow: hidden;
+        transition: width 200ms cubic-bezier(0.2, 0, 0, 1);
         border-radius: 999px; border: 1px solid var(--border-default);
         background: var(--surface-card); color: var(--text-primary);
-        font: 12px/1 var(--font-sans); cursor: default;
+        font: 13px/1 var(--font-sans); cursor: default;
       }
       /* 본문은 줄어든 창의 안쪽 너비 그대로 오른쪽에 붙는다. 호버해도 점과 시간이 움직이지 않고, 줄어든 자리는 언제나 본문이다.
          점과 시간은 가운데에 둬 m:ss와 h:mm:ss 모두 좌우 여백이 같다.
          중지는 그 왼쪽에 놓이므로 창이 늘어나기 전에는 왼쪽 바깥으로 밀려 잘린다. */
-      #open { flex: none; width: 86px; height: 100%; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 0 8px; }
-      .dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--red-9); }
+      #open { flex: none; width: 102px; height: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0 8px; }
+      .dot { width: 9px; height: 9px; flex: none; border-radius: 50%; background: var(--red-9); }
       #time { font-variant-numeric: tabular-nums; white-space: nowrap; }
       #stop {
-        flex: none; width: 46px; opacity: 0; pointer-events: none; transition: opacity 150ms ease-out; margin-right: 1px; font: inherit; font-size: 11px; font-weight: 500; padding: 4px 0;
+        flex: none; width: 54px; opacity: 0; pointer-events: none; transition: opacity 150ms ease-out; margin-right: 1px; font: inherit; font-size: 12px; font-weight: 500; padding: 6px 0;
         border-radius: 999px; border: 1px solid var(--border-default);
         background: var(--surface-card); color: var(--text-primary); cursor: default; outline: none;
       }
-      /* 창은 main이 macOS 창 애니메이션으로 늘린다. 중지는 자리를 지킨 채 투명도만 바꿔 뚝 끊기지 않는다. */
+      /* 중지는 자리를 지킨 채 투명도만 바꿔 뚝 끊기지 않는다. */
+      #pill.hover.wide { width: 164px; }
       #pill.hover #stop { opacity: 1; pointer-events: auto; }
       @media (prefers-reduced-motion: reduce) {
-        #stop { transition: none; }
+        #pill, #stop { transition: none; }
       }
       #stop:hover:not(:disabled) { border-color: var(--border-strong); background: var(--surface-hover); }
       #stop:disabled { color: var(--text-secondary); opacity: 0.6; }
@@ -86,6 +91,8 @@
         const open = document.getElementById("open");
         const stop = document.getElementById("stop");
         const time = document.getElementById("time");
+        // 창은 언제나 줄어든 크기로 만들어진다. 이보다 넓어지면 main이 호버 크기로 늘린 것이다.
+        const compactWidth = window.innerWidth;
 
         function emit(answer) {
           const waiter = waiters.shift();
@@ -153,7 +160,11 @@
           if (ticker === null) ticker = setInterval(tick, 1000);
         };
 
-        // 늘어남은 main이 창 크기를 바꾸고, 페이지는 hover 클래스로 중지를 보일 뿐이다.
+        // 늘어남은 main이 창 크기를 바꾸고, 페이지는 넓어진 창에서 알약을 펼친다.
+        window.addEventListener("resize", function () {
+          pill.classList.toggle("wide", window.innerWidth > compactWidth);
+        });
+
         document.documentElement.addEventListener("mouseenter", function () {
           if (leaveTimer !== null) {
             clearTimeout(leaveTimer);

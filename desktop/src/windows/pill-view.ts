@@ -9,8 +9,11 @@ import type { CardView } from "../app/meeting-detection";
  */
 
 /** 줄어든 크기. `1:02:34`가 잘리지 않게 스파이크의 92·144에서 넓혔다. */
-export const PILL_COMPACT = { width: 88, height: 32 } as const;
-export const PILL_HOVER = { width: 140, height: 32 } as const;
+export const PILL_COMPACT = { width: 104, height: 40 } as const;
+export const PILL_HOVER = { width: 164, height: 40 } as const;
+
+/** 접힐 때 알약이 줄어드는 시간(ms). pill.html의 `#pill` width 전환과 같아야 한다 — 창은 그 뒤에 줄인다. */
+export const PILL_SHRINK_MS = 200;
 
 /** 위쪽·오른쪽 여백(px). */
 const MARGIN = 12;

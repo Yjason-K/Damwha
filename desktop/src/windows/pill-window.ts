@@ -3,6 +3,7 @@ import { createAskedWindow, type AskedWindowHost } from "./asked-window";
 import {
   parsePillAnswer,
   PILL_ASK_SCRIPT,
+  PILL_SHRINK_MS,
   pillBounds,
   pillClamp,
   pillDefaultPosition,
@@ -26,8 +27,8 @@ export interface PillWindowHost<W>
   /** 창을 만들고 pill.html을 건다. 포커스를 뺏지 않고 띄워야 한다. */
   create(bounds: Rect): W;
   bounds(win: W): Rect;
-  /** `animate`는 호버로 늘고 줄 때만 참이다. 드래그는 커서를 바로 따라가야 한다. */
-  setBounds(win: W, bounds: Rect, animate: boolean): void;
+  /** 즉시 바꾼다. 늘고 줄어드는 움직임은 창이 아니라 페이지의 CSS가 맡는다 — macOS 창 애니메이션은 투명 창의 내용이 프레임을 못 따라가 덜컹거렸다. */
+  setBounds(win: W, bounds: Rect): void;
   workAreas(): Rect[];
   /** 커서가 있는 화면의 표시 영역. */
   cursorArea(): Rect;
@@ -52,6 +53,13 @@ export interface PillWindow {
 export function createPillWindow<W>(host: PillWindowHost<W>): PillWindow {
   let position: PillPoint | null = null;
   let hover = false;
+  // 호버가 끝나면 페이지가 알약을 줄이는 동안 창은 넓은 채로 두었다가 줄인다.
+  let shrink: ReturnType<typeof setTimeout> | null = null;
+  const cancelShrink = () => {
+    if (shrink === null) return;
+    clearTimeout(shrink);
+    shrink = null;
+  };
 
   const fallback = () => pillDefaultPosition(host.cursorArea());
 
@@ -66,15 +74,24 @@ export function createPillWindow<W>(host: PillWindowHost<W>): PillWindow {
     const here = pillPositionOf(host.bounds(win));
     switch (answer.ui) {
       case "hover":
+        cancelShrink();
         hover = answer.on;
-        host.setBounds(win, pillBounds(here, hover), true);
+        if (hover) {
+          host.setBounds(win, pillBounds(here, true));
+          return;
+        }
+        shrink = setTimeout(() => {
+          shrink = null;
+          const w = asked.window();
+          if (w !== null && !hover) host.setBounds(w, pillBounds(pillPositionOf(host.bounds(w)), false));
+        }, PILL_SHRINK_MS);
         return;
       case "drag":
-        host.setBounds(win, pillBounds({ x: here.x + answer.dx, y: here.y + answer.dy }, hover), false);
+        host.setBounds(win, pillBounds({ x: here.x + answer.dx, y: here.y + answer.dy }, hover));
         return;
       case "drop": {
         const dropped = pillClamp(here, host.workAreas());
-        host.setBounds(win, pillBounds(dropped, hover), false);
+        host.setBounds(win, pillBounds(dropped, hover));
         position = dropped;
         host.save(dropped);
       }
@@ -86,6 +103,7 @@ export function createPillWindow<W>(host: PillWindowHost<W>): PillWindow {
       const wanted = position ?? host.saved();
       position = wanted !== null && pillFits(wanted, host.workAreas()) ? wanted : fallback();
       hover = false;
+      cancelShrink();
       return host.create(pillBounds(position, false));
     },
     alive: host.alive,
@@ -109,13 +127,19 @@ export function createPillWindow<W>(host: PillWindowHost<W>): PillWindow {
       if (asked.window() !== null && same) return;
       asked.show(view);
     },
-    hide: asked.hide,
-    dispose: asked.dispose,
+    hide() {
+      cancelShrink();
+      asked.hide();
+    },
+    dispose() {
+      cancelShrink();
+      asked.dispose();
+    },
     refit() {
       if (position === null || pillFits(position, host.workAreas())) return;
       position = fallback();
       const win = asked.window();
-      if (win !== null) host.setBounds(win, pillBounds(position, hover), false);
+      if (win !== null) host.setBounds(win, pillBounds(position, hover));
     },
     anchor: () => position,
     forget() {
