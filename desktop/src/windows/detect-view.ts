@@ -50,7 +50,7 @@ export function cardViewModel(view: CardView, lang: UiLanguage): CardViewModel {
     case "recording":
       return {
         title: t(lang, view.micOnly ? "detect.recording.micOnly" : "detect.recording.title"),
-        detail: "",
+        detail: view.micSwitched ? t(lang, "detect.recording.micSwitched") : "",
         buttons: [{ label: t(lang, "detect.stop"), action: "stop", primary: false }],
       };
     case "finished":

@@ -27,7 +27,7 @@ export type CardAction = "start" | "dismiss" | "stop" | "open";
 
 export type CardView =
   | { kind: "prompt"; token: number }
-  | { kind: "recording"; token: number; micOnly: boolean }
+  | { kind: "recording"; token: number; micOnly: boolean; micSwitched: boolean }
   | {
       kind: "finished";
       token: number;
@@ -40,6 +40,7 @@ export interface RecordingSnapshot {
   meetingId: string | null;
   failed: boolean;
   systemAudioLost: boolean;
+  micSwitched: boolean;
   end: "acked" | "discarded" | "sealed" | "failed" | null;
 }
 
@@ -105,6 +106,7 @@ export function createMeetingDetection(deps: DetectionDeps) {
   let token = 0;
   let view: CardView | null = null;
   let micOnly = false;
+  let micSwitched = false;
   let meetingId: string | null = null;
   let finishCalled = false;
   /** 진행 중인 stop. 어떤 결과로 끝나든 풀린다 — 끝났는지는 poll이 판단한다. */
@@ -246,6 +248,7 @@ export function createMeetingDetection(deps: DetectionDeps) {
     finishSettledPolls = null;
     meetingId = null;
     micOnly = false;
+    micSwitched = false;
     startCancel = deps.setTimer(() => {
       if (g !== gen) return;
       startCancel = null;
@@ -268,7 +271,7 @@ export function createMeetingDetection(deps: DetectionDeps) {
           meetingId = r.meetingId ?? null;
           timeouts = 0;
           token++;
-          present({ kind: "recording", token, micOnly: false });
+          present({ kind: "recording", token, micOnly: false, micSwitched: false });
           schedulePoll();
           syncCountdown();
         } else if (r.reason === "busy") {
@@ -346,9 +349,10 @@ export function createMeetingDetection(deps: DetectionDeps) {
         return showFinished("interrupted", meetingId, t);
       }
     }
-    if (r.systemAudioLost && !micOnly) {
-      micOnly = true;
-      present({ kind: "recording", token, micOnly: true });
+    if ((r.systemAudioLost && !micOnly) || (r.micSwitched && !micSwitched)) {
+      micOnly = r.systemAudioLost;
+      micSwitched = r.micSwitched;
+      present({ kind: "recording", token, micOnly, micSwitched });
     }
   }
 

@@ -52,10 +52,17 @@ describe("cardViewModel", () => {
   });
 
   it("recording: 중지 버튼, micOnly면 마이크만 녹음 중", () => {
-    const both = cardViewModel({ kind: "recording", token: 2, micOnly: false }, "ko");
+    const both = cardViewModel({ kind: "recording", token: 2, micOnly: false, micSwitched: false }, "ko");
     expect(both.title).toBe("녹음 중");
     expect(both.buttons).toEqual([{ label: "중지", action: "stop", primary: false }]);
-    expect(cardViewModel({ kind: "recording", token: 2, micOnly: true }, "ko").title).toBe("마이크만 녹음 중");
+    expect(cardViewModel({ kind: "recording", token: 2, micOnly: true, micSwitched: false }, "ko").title).toBe("마이크만 녹음 중");
+  });
+
+  it("recording: 마이크가 바뀌면 이어서 녹음한다고 알린다", () => {
+    const model = cardViewModel({ kind: "recording", token: 2, micOnly: false, micSwitched: true }, "ko");
+    expect(model.title).toBe("녹음 중");
+    expect(model.detail).toBe("마이크가 바뀌어 기본 입력으로 녹음해요");
+    expect(model.buttons).toEqual([{ label: "중지", action: "stop", primary: false }]);
   });
 
   it("finished: 변형마다 문구와 버튼이 정해져 있다", () => {
@@ -150,7 +157,7 @@ describe("createDetectWindow", () => {
     w.show(prompt);
     h.wins[0].loads[0]();
     await tick();
-    const rec: CardView = { kind: "recording", token: 2, micOnly: false };
+    const rec: CardView = { kind: "recording", token: 2, micOnly: false, micSwitched: false };
     w.show(rec);
     expect(h.wins).toHaveLength(1);
     expect(h.wins[0].scripts.at(-1)).toBe(detectRenderCall(rec, cardViewModel(rec, "ko")));
@@ -187,7 +194,7 @@ describe("createDetectWindow", () => {
     w.show(prompt);
     h.wins[0].loads[0]();
     await tick();
-    const rec: CardView = { kind: "recording", token: 2, micOnly: true };
+    const rec: CardView = { kind: "recording", token: 2, micOnly: true, micSwitched: false };
     w.show(rec);
     h.wins[0].loads[0](); // ⌘R — 같은 리스너가 다시 불린다
     await tick();
