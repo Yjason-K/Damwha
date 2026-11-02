@@ -81,6 +81,19 @@ class FakeNode {
   addEventListener(type: string, listener: (event: unknown) => void): void {
     (this.listeners[type] ??= []).push(listener);
   }
+  /** className 위에 얹은 classList — 알약이 hover 클래스를 켜고 끈다. */
+  readonly classList = {
+    add: (name: string) => {
+      if (!this.hasClass(name)) this.className = `${this.className} ${name}`.trim();
+    },
+    remove: (name: string) => {
+      this.className = this.className.split(/\s+/).filter((c) => c && c !== name).join(" ");
+    },
+    contains: (name: string) => this.hasClass(name),
+  };
+  private hasClass(name: string): boolean {
+    return this.className.split(/\s+/).includes(name);
+  }
   focus(): void {
     this.focusCount += 1;
   }
@@ -88,7 +101,13 @@ class FakeNode {
   fire(type: string, fields: Record<string, unknown> = {}): boolean {
     if (type === "click" && this.disabled) return false;
     let prevented = false;
-    const event = { type, target: this, preventDefault: () => void (prevented = true), ...fields };
+    const event = {
+      type,
+      target: this,
+      preventDefault: () => void (prevented = true),
+      stopPropagation: () => {},
+      ...fields,
+    };
     for (const l of this.listeners[type] ?? []) l(event);
     return prevented;
   }
@@ -110,8 +129,45 @@ function loadPage(file: string, search = "") {
     byId.set(m[2], node);
     body.append(node);
   }
+  // 가짜 시계와 타이머 — 알약의 경과 시간·200ms 대기를 실제로 기다리지 않고 건다.
+  const clock = { now: 1_800_000_000_000 };
+  class FakeDate extends Date {
+    constructor(...args: unknown[]) {
+      if (args.length === 0) super(clock.now);
+      else super(...(args as [number]));
+    }
+    static now(): number {
+      return clock.now;
+    }
+  }
+  let timerId = 0;
+  const timers = new Map<number, { at: number; fn: () => void; every?: number }>();
+  const addTimer = (fn: () => void, ms: number, every?: number) => {
+    timers.set(++timerId, { at: clock.now + ms, fn, every });
+    return timerId;
+  };
+  /** 시계를 ms만큼 흘리며 기한이 된 타이머를 순서대로 부른다. */
+  const advance = (ms: number) => {
+    const end = clock.now + ms;
+    for (;;) {
+      let next: [number, { at: number; fn: () => void; every?: number }] | undefined;
+      for (const entry of timers) if (entry[1].at <= end && (!next || entry[1].at < next[1].at)) next = entry;
+      if (!next) break;
+      const [id, t] = next;
+      clock.now = t.at;
+      if (t.every) t.at += t.every;
+      else timers.delete(id);
+      t.fn();
+    }
+    clock.now = end;
+  };
+  const windowListeners: Record<string, Array<(event: unknown) => void>> = {};
+  const windowFire = (type: string, fields: Record<string, unknown> = {}) => {
+    for (const l of windowListeners[type] ?? []) l({ type, ...fields });
+  };
   const document = {
     body,
+    documentElement: new FakeNode("html"),
     getElementById: (id: string) => byId.get(id) ?? null,
     createElement: (tag: string) => new FakeNode(tag),
     createTextNode: (text: string) => Object.assign(new FakeNode("#text"), { textContent: text }),
@@ -122,10 +178,22 @@ function loadPage(file: string, search = "") {
       throw new Error("HTML sink used: document.writeln");
     },
   };
-  const sandbox: Record<string, unknown> = { document, location: { search }, URLSearchParams };
+  const sandbox: Record<string, unknown> = {
+    document,
+    location: { search },
+    URLSearchParams,
+    Date: FakeDate,
+    innerWidth: 104,
+    innerHeight: 32,
+    setTimeout: (fn: () => void, ms: number) => addTimer(fn, ms),
+    clearTimeout: (id: number) => void timers.delete(id),
+    setInterval: (fn: () => void, ms: number) => addTimer(fn, ms, ms),
+    clearInterval: (id: number) => void timers.delete(id),
+    addEventListener: (type: string, l: (event: unknown) => void) => void (windowListeners[type] ??= []).push(l),
+  };
   sandbox.window = sandbox;
   vm.runInNewContext(scripts[0][2], sandbox);
-  return { html, sandbox, byId, body };
+  return { html, sandbox, byId, body, root: document.documentElement, clock, advance, windowFire };
 }
 
 /** 주석을 뺀 소스 — 주석이 금지 낱말을 **설명**하는 것은 괜찮다. */
@@ -477,6 +545,201 @@ describe("detect.html", () => {
   });
 });
 
+describe("pill.html", () => {
+  const LABELS = { stop: "중지", open: "담화 열기" };
+  const setup = (startedAtAgoSec = 0) => {
+    const page = loadPage("pill.html");
+    const render = page.sandbox.__damwha_pill_render as (v: unknown) => void;
+    const next = (page.sandbox.__damwha_pill as { next(): Promise<unknown> }).next;
+    const draw = (token = 3, agoSec = startedAtAgoSec) =>
+      render({ token, startedAt: page.clock.now - agoSec * 1000, ...LABELS });
+    return { ...page, render, next, draw, pill: page.byId.get("pill")!, stop: page.byId.get("stop")! };
+  };
+  /** 지금까지 쌓인 답 n개를 순서대로 꺼낸다. */
+  const take = async (next: () => Promise<unknown>, n: number) => {
+    const out: unknown[] = [];
+    for (let i = 0; i < n; i += 1) out.push(await next());
+    return out;
+  };
+  /** 더 쌓인 답이 없는가. 남는 대기자가 다음 답을 삼키므로 테스트 맨 끝에서만 쓴다. */
+  const idle = async (next: () => Promise<unknown>) => {
+    let settled = false;
+    void next().then(() => (settled = true));
+    await new Promise((r) => setTimeout(r, 0));
+    return !settled;
+  };
+
+  it("has no form, input, link, IPC, or HTML sink", () => {
+    const code = codeOf(loadPage("pill.html").html);
+    for (const banned of [
+      /<form\b/i,
+      /<input\b/i,
+      /<a\b/i,
+      /ipcRenderer/,
+      /require\(/,
+      /innerHTML|outerHTML|insertAdjacentHTML|document\.write/,
+      /\son\w+\s*=/i,
+      /\b(href|src|action)\s*=/i,
+      /window\.open|location\s*=|location\.(assign|replace|href)/,
+    ]) {
+      expect(code).not.toMatch(banned);
+    }
+  });
+
+  it("경과 시간은 m:ss, 1시간부터 h:mm:ss", () => {
+    const { draw, byId, advance } = setup();
+    draw(1, 754);
+    expect(byId.get("time")!.textContent).toBe("12:34");
+    draw(1, 3754);
+    expect(byId.get("time")!.textContent).toBe("1:02:34");
+    // 1초마다 다시 그린다.
+    advance(1000);
+    expect(byId.get("time")!.textContent).toBe("1:02:35");
+  });
+
+  it("문구는 글자로만 넣고 본문에 aria-label을 단다", () => {
+    const { render, clock, byId, pill, stop } = setup();
+    render({ token: 1, startedAt: clock.now, stop: XSS, open: XSS });
+    expect(stop.textContent).toBe(XSS);
+    expect(pill.dataset["attr:aria-label"]).toBe(XSS);
+    expect(pill.dataset["attr:role"]).toBeUndefined();
+    expect(byId.get("pill")!.children.some((n) => n.tag === "img")).toBe(false);
+  });
+
+  it("중지는 호버 전에는 숨어 있다", () => {
+    const { html, pill, draw, root } = setup();
+    draw();
+    expect(pill.classList.contains("hover")).toBe(false);
+    const style = /<style>([\s\S]*?)<\/style>/.exec(html)![1].replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(style).toMatch(/#stop\s*\{[^}]*display:\s*none/);
+    expect(style).toMatch(/#pill\.hover\s+#stop\s*\{[^}]*display:\s*(?!none)/);
+    root.fire("mouseenter");
+    expect(pill.classList.contains("hover")).toBe(true);
+  });
+
+  it("4px 미만 움직임은 open, 4px 이상은 drag와 drop", async () => {
+    const { draw, next, pill, windowFire } = setup();
+    draw(5);
+    // 4px 미만(약 2.2px): 클릭이다.
+    pill.fire("mousedown", { screenX: 100, screenY: 100 });
+    windowFire("mousemove", { screenX: 102, screenY: 101 });
+    windowFire("mouseup", { screenX: 102, screenY: 101 });
+    // 4px 이상: 첫 움직임은 시작점 기준, 이어지는 것은 직전 지점 기준이다.
+    pill.fire("mousedown", { screenX: 200, screenY: 200 });
+    windowFire("mousemove", { screenX: 210, screenY: 200 });
+    windowFire("mousemove", { screenX: 212, screenY: 205 });
+    windowFire("mouseup", { screenX: 212, screenY: 205 });
+    // 끝난 뒤의 움직임·mouseup은 아무것도 보내지 않는다.
+    windowFire("mousemove", { screenX: 300, screenY: 300 });
+    windowFire("mouseup", { screenX: 300, screenY: 300 });
+    expect(await take(next, 4)).toEqual([
+      { token: 5, action: "open" },
+      { token: 5, ui: "drag", dx: 10, dy: 0 },
+      { token: 5, ui: "drag", dx: 2, dy: 5 },
+      { token: 5, ui: "drop" },
+    ]);
+    expect(await idle(next)).toBe(true);
+  });
+
+  it("중지 위의 mousedown은 열기·드래그를 시작하지 않는다", async () => {
+    const { draw, next, pill, stop, windowFire } = setup();
+    draw(2);
+    pill.fire("mousedown", { target: stop, screenX: 10, screenY: 10 });
+    windowFire("mousemove", { screenX: 50, screenY: 50 });
+    windowFire("mouseup", { screenX: 50, screenY: 50 });
+    expect(await idle(next)).toBe(true);
+  });
+
+  it("leave는 200ms 뒤에 나가고 그 안에 돌아오면 취소된다", async () => {
+    const { draw, next, root, pill, advance } = setup();
+    draw(4);
+    root.fire("mouseenter");
+    expect(await take(next, 1)).toEqual([{ token: 4, ui: "hover", on: true }]);
+
+    root.fire("mouseleave");
+    advance(199);
+    expect(pill.classList.contains("hover")).toBe(true);
+    advance(1);
+    expect(pill.classList.contains("hover")).toBe(false);
+    expect(await take(next, 1)).toEqual([{ token: 4, ui: "hover", on: false }]);
+
+    // 돌아오면 취소: 다시 늘어나지도, leave를 보내지도 않는다.
+    root.fire("mouseenter");
+    root.fire("mouseleave");
+    advance(100);
+    root.fire("mouseenter");
+    advance(1000);
+    expect(pill.classList.contains("hover")).toBe(true);
+    expect(await take(next, 1)).toEqual([{ token: 4, ui: "hover", on: true }]);
+    expect(await idle(next)).toBe(true);
+  });
+
+  it("드래그 중에는 leave를 보내지 않는다", async () => {
+    const { draw, next, root, pill, advance, windowFire } = setup();
+    draw(6);
+    root.fire("mouseenter");
+    pill.fire("mousedown", { screenX: 100, screenY: 100 });
+    windowFire("mousemove", { screenX: 120, screenY: 100 });
+    root.fire("mouseleave");
+    advance(1000);
+    expect(pill.classList.contains("hover")).toBe(true);
+    expect(await take(next, 2)).toEqual([
+      { token: 6, ui: "hover", on: true },
+      { token: 6, ui: "drag", dx: 20, dy: 0 },
+    ]);
+    expect(await idle(next)).toBe(true);
+  });
+
+  it("커서가 창 밖에서 드래그가 끝나면 알약이 늘어난 채 남지 않는다", async () => {
+    const { draw, next, root, pill, advance, windowFire } = setup();
+    draw(6);
+    root.fire("mouseenter");
+    pill.fire("mousedown", { screenX: 100, screenY: 100 });
+    windowFire("mousemove", { screenX: 120, screenY: 100 });
+    root.fire("mouseleave");
+    // 창(104x32) 밖에서 놓았다 — 이제 mouseleave는 오지 않는다.
+    windowFire("mouseup", { screenX: 120, screenY: 100, clientX: 150, clientY: 10 });
+    advance(200);
+    expect(pill.classList.contains("hover")).toBe(false);
+    expect(await take(next, 4)).toEqual([
+      { token: 6, ui: "hover", on: true },
+      { token: 6, ui: "drag", dx: 20, dy: 0 },
+      { token: 6, ui: "drop" },
+      { token: 6, ui: "hover", on: false },
+    ]);
+  });
+
+  it("커서가 창 안에서 드래그가 끝나면 hover를 유지한다", async () => {
+    const { draw, next, root, pill, advance, windowFire } = setup();
+    draw(6);
+    root.fire("mouseenter");
+    pill.fire("mousedown", { screenX: 100, screenY: 100 });
+    windowFire("mousemove", { screenX: 120, screenY: 100 });
+    windowFire("mouseup", { screenX: 120, screenY: 100, clientX: 50, clientY: 10 });
+    advance(1000);
+    expect(pill.classList.contains("hover")).toBe(true);
+    expect(await take(next, 3)).toHaveLength(3);
+    expect(await idle(next)).toBe(true);
+  });
+
+  it("중지를 누르면 다음 렌더까지 잠긴다", async () => {
+    const { draw, next, stop } = setup();
+    draw(8);
+    stop.fire("click");
+    expect(stop.disabled).toBe(true);
+    stop.fire("click");
+    expect(await take(next, 1)).toEqual([{ token: 8, action: "stop" }]);
+    draw(9);
+    expect(stop.disabled).toBe(false);
+    stop.fire("click");
+    expect(await take(next, 1)).toEqual([{ token: 9, action: "stop" }]);
+  });
+
+  it("-webkit-app-region을 쓰지 않는다", () => {
+    expect(loadPage("pill.html").html).not.toContain("-webkit-app-region");
+  });
+});
+
 describe("status.html", () => {
   it("has no Docker screen — the app runs its own database (Phase 3)", () => {
     const { html } = loadPage("status.html");
@@ -531,10 +794,10 @@ describe("Content-Security-Policy — 둘째 겹 (스펙 §6.11, Task 14 fix 1-5
   // 문구 — 앱 밖에서 온 문자열 — 를 화면에 올리는 services.html이 특히 이 불변식이 필요한 페이지다.
   it("covers every page in shell/", () => {
     const pages = fs.readdirSync(path.join(__dirname, "..", "..", "shell")).filter((f) => f.endsWith(".html")).sort();
-    expect(pages).toEqual(["detect.html", "services.html", "status.html"]);
+    expect(pages).toEqual(["detect.html", "pill.html", "services.html", "status.html"]);
   });
 
-  for (const file of ["detect.html", "services.html", "status.html"]) {
+  for (const file of ["detect.html", "pill.html", "services.html", "status.html"]) {
     describe(file, () => {
       const html = fs.readFileSync(path.join(__dirname, "..", "..", "shell", file), "utf8");
       const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(html)?.[1] ?? "";
@@ -597,7 +860,7 @@ describe("design tokens — fe/src/index.css와 같은 값 (Notion P2-B)", () =>
   const DARK_MEDIA = /@media\s*\(prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{([^}]*)\}\s*\}/;
   const isColour = (v: string) => /^#|^rgba?\(/.test(v);
 
-  for (const file of ["detect.html", "services.html", "status.html"]) {
+  for (const file of ["detect.html", "pill.html", "services.html", "status.html"]) {
     describe(file, () => {
       const html = fs.readFileSync(path.join(__dirname, "..", "..", "shell", file), "utf8");
       const style = /<style>([\s\S]*?)<\/style>/.exec(html)![1].replace(/\/\*[\s\S]*?\*\//g, "");
