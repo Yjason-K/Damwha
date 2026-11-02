@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <!-- 녹음 중 알약. services.html·detect.html과 같은 규칙이다: 인라인 스크립트·스타일 하나씩만 해시로 허용하고
          나머지는 전부 막는다. 고치면 해시를 다시 계산해야 한다 — tests/windows/shell-html.test.ts가 잡는다. -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-e3zxfx14IV8VeiT8XcFqBOwBhByqeWI5kcsJtfGxRn4='; style-src 'sha256-aQ7bGEeCLSvSZnbwA+YxLYwUchk5ZEC3IOLOTbqhk0g='; base-uri 'none'; form-action 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-e3zxfx14IV8VeiT8XcFqBOwBhByqeWI5kcsJtfGxRn4='; style-src 'sha256-dVQ+Ms/iI2BsROwUmXjrpqfvjZOCFA65z9cGvRkhfLw='; base-uri 'none'; form-action 'none'" />
     <title>녹음 중</title>
     <style>
       /* 토큰은 detect.html과 같은 방식으로 fe/src/index.css에서 같은 이름·값으로 옮겼다(필요한 것만).
@@ -42,16 +42,21 @@
         font: 12px/1 var(--font-sans); cursor: default;
       }
       /* 본문은 줄어든 창의 안쪽 너비 그대로 오른쪽에 붙는다. 호버해도 점과 시간이 움직이지 않고, 줄어든 자리는 언제나 본문이다.
+         점과 시간은 가운데에 둬 m:ss와 h:mm:ss 모두 좌우 여백이 같다.
          중지는 그 왼쪽에 놓이므로 창이 늘어나기 전에는 왼쪽 바깥으로 밀려 잘린다. */
-      #open { flex: none; width: 102px; height: 100%; display: flex; align-items: center; gap: 8px; padding: 0 6px 0 12px; }
+      #open { flex: none; width: 86px; height: 100%; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 0 8px; }
       .dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--red-9); }
-      #time { flex: 1; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      #time { font-variant-numeric: tabular-nums; white-space: nowrap; }
       #stop {
-        display: none; flex: none; width: 46px; margin-right: 1px; font: inherit; font-size: 11px; font-weight: 500; padding: 4px 0;
+        flex: none; width: 46px; opacity: 0; pointer-events: none; transition: opacity 150ms ease-out; margin-right: 1px; font: inherit; font-size: 11px; font-weight: 500; padding: 4px 0;
         border-radius: 999px; border: 1px solid var(--border-default);
         background: var(--surface-card); color: var(--text-primary); cursor: default; outline: none;
       }
-      #pill.hover #stop { display: inline-block; }
+      /* 창은 main이 macOS 창 애니메이션으로 늘린다. 중지는 자리를 지킨 채 투명도만 바꿔 뚝 끊기지 않는다. */
+      #pill.hover #stop { opacity: 1; pointer-events: auto; }
+      @media (prefers-reduced-motion: reduce) {
+        #stop { transition: none; }
+      }
       #stop:hover:not(:disabled) { border-color: var(--border-strong); background: var(--surface-hover); }
       #stop:disabled { color: var(--text-secondary); opacity: 0.6; }
     </style>

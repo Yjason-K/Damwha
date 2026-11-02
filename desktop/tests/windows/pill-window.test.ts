@@ -24,6 +24,7 @@ interface FakeWin {
   destroyed: boolean;
   bounds: Rect;
   moves: Rect[];
+  animated: boolean[];
   scripts: string[];
   loads: Array<() => void>;
   closed: Array<() => void>;
@@ -47,6 +48,7 @@ function harness(opts: { saved?: PillPoint | null; areas?: Rect[]; cursor?: Rect
         destroyed: false,
         bounds,
         moves: [],
+        animated: [],
         scripts: [],
         loads: [],
         closed: [],
@@ -71,9 +73,10 @@ function harness(opts: { saved?: PillPoint | null; areas?: Rect[]; cursor?: Rect
       return new Promise((resolve) => w.waiters.push(resolve));
     },
     bounds: (w) => w.bounds,
-    setBounds: (w, r) => {
+    setBounds: (w, r, animate) => {
       w.bounds = r;
       w.moves.push(r);
+      w.animated.push(animate);
     },
     workAreas: () => env.areas,
     cursorArea: () => env.cursor,
@@ -209,6 +212,17 @@ describe("createPillWindow", () => {
     h.send(win, { token: 7, ui: "hover", on: false });
     await tick();
     expect(win.bounds).toEqual({ x: 500, y: 300, ...PILL_COMPACT });
+  });
+
+  it("호버의 크기 변경만 애니메이션으로 하고 drag·drop은 즉시 옮긴다", async () => {
+    const h = harness({ saved: { x: 500, y: 300 } });
+    const { win } = await opened(h);
+    h.send(win, { token: 7, ui: "hover", on: true });
+    h.send(win, { token: 7, ui: "drag", dx: 10, dy: 0 });
+    h.send(win, { token: 7, ui: "drop" });
+    h.send(win, { token: 7, ui: "hover", on: false });
+    await tick();
+    expect(win.animated).toEqual([true, false, false, true]);
   });
 
   it("drag는 호버 크기여도 왼쪽 위를 어긋나게 하지 않는다", async () => {

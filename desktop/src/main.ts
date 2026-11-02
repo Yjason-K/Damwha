@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, nativeTheme, powerMonitor, protocol, screen, shell } from "electron";
+import { app, BrowserWindow, dialog, nativeTheme, powerMonitor, protocol, screen, shell, systemPreferences } from "electron";
 import { execFile } from "child_process";
 import * as fs from "fs";
 import * as net from "net";
@@ -847,7 +847,8 @@ const pillWindow = createPillWindow<BrowserWindow>({
   onClosed: (w, listener) => w.on("closed", listener),
   run: (w, script) => w.webContents.executeJavaScript(script),
   bounds: (w) => w.getBounds(),
-  setBounds: (w, r) => w.setBounds(r),
+  // macOS 창 애니메이션. 시스템의 "동작 줄이기"가 켜져 있으면 바로 바꾼다.
+  setBounds: (w, r, animate) => w.setBounds(r, animate && !systemPreferences.getAnimationSettings().prefersReducedMotion),
   workAreas: () => screen.getAllDisplays().map((d) => d.workArea),
   cursorArea: () => screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea,
   saved: () => detectionStore.pillPosition(),

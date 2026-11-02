@@ -185,7 +185,7 @@ function loadPage(file: string, search = "") {
     location: { search },
     URLSearchParams,
     Date: FakeDate,
-    innerWidth: 104,
+    innerWidth: 88,
     innerHeight: 32,
     setTimeout: (fn: () => void, ms: number) => addTimer(fn, ms),
     clearTimeout: (id: number) => void timers.delete(id),
@@ -606,6 +606,8 @@ describe("pill.html", () => {
     expect(rule("#pill")).toMatch(/overflow:\s*hidden/);
     // 본문은 호버와 상관없이 너비가 같아 점·시간이 움직이지 않는다.
     expect(rule("#open")).toMatch(/flex:\s*none/);
+    // 점과 시간은 가운데 — 오른쪽에만 빈 자리가 몰리지 않는다.
+    expect(rule("#open")).toMatch(/justify-content:\s*center/);
     expect(px(rule("#open"), "width")).toBe(PILL_COMPACT.width - 2 * BORDER);
     // 중지의 오른쪽 끝이 줄어든 자리의 왼쪽 끝을 넘지 않는다.
     const stop = rule("#stop");
@@ -656,8 +658,15 @@ describe("pill.html", () => {
     draw();
     expect(pill.classList.contains("hover")).toBe(false);
     const style = /<style>([\s\S]*?)<\/style>/.exec(html)![1].replace(/\/\*[\s\S]*?\*\//g, "");
-    expect(style).toMatch(/#stop\s*\{[^}]*display:\s*none/);
-    expect(style).toMatch(/#pill\.hover\s+#stop\s*\{[^}]*display:\s*(?!none)/);
+    // 자리는 늘 차지하고 투명도만 바꾼다 — display 전환은 뚝 끊겨 보인다. 숨은 동안은 눌리지 않는다.
+    expect(style).not.toMatch(/#stop\s*\{[^}]*display:\s*none/);
+    expect(style).toMatch(/#stop\s*\{[^}]*opacity:\s*0[;\s]/);
+    expect(style).toMatch(/#stop\s*\{[^}]*pointer-events:\s*none/);
+    expect(style).toMatch(/#stop\s*\{[^}]*transition:\s*opacity\s+\d+ms/);
+    expect(style).not.toMatch(/transition:\s*all/);
+    expect(style).toMatch(/#pill\.hover\s+#stop\s*\{[^}]*opacity:\s*1/);
+    expect(style).toMatch(/#pill\.hover\s+#stop\s*\{[^}]*pointer-events:\s*auto/);
+    expect(style).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[^{]*#stop\s*\{[^}]*transition:\s*none/);
     root.fire("mouseenter");
     expect(pill.classList.contains("hover")).toBe(true);
   });

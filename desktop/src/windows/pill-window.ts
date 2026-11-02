@@ -26,7 +26,8 @@ export interface PillWindowHost<W>
   /** 창을 만들고 pill.html을 건다. 포커스를 뺏지 않고 띄워야 한다. */
   create(bounds: Rect): W;
   bounds(win: W): Rect;
-  setBounds(win: W, bounds: Rect): void;
+  /** `animate`는 호버로 늘고 줄 때만 참이다. 드래그는 커서를 바로 따라가야 한다. */
+  setBounds(win: W, bounds: Rect, animate: boolean): void;
   workAreas(): Rect[];
   /** 커서가 있는 화면의 표시 영역. */
   cursorArea(): Rect;
@@ -66,14 +67,14 @@ export function createPillWindow<W>(host: PillWindowHost<W>): PillWindow {
     switch (answer.ui) {
       case "hover":
         hover = answer.on;
-        host.setBounds(win, pillBounds(here, hover));
+        host.setBounds(win, pillBounds(here, hover), true);
         return;
       case "drag":
-        host.setBounds(win, pillBounds({ x: here.x + answer.dx, y: here.y + answer.dy }, hover));
+        host.setBounds(win, pillBounds({ x: here.x + answer.dx, y: here.y + answer.dy }, hover), false);
         return;
       case "drop": {
         const dropped = pillClamp(here, host.workAreas());
-        host.setBounds(win, pillBounds(dropped, hover));
+        host.setBounds(win, pillBounds(dropped, hover), false);
         position = dropped;
         host.save(dropped);
       }
@@ -114,7 +115,7 @@ export function createPillWindow<W>(host: PillWindowHost<W>): PillWindow {
       if (position === null || pillFits(position, host.workAreas())) return;
       position = fallback();
       const win = asked.window();
-      if (win !== null) host.setBounds(win, pillBounds(position, hover));
+      if (win !== null) host.setBounds(win, pillBounds(position, hover), false);
     },
     anchor: () => position,
     forget() {

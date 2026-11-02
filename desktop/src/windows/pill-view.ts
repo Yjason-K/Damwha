@@ -9,8 +9,8 @@ import type { CardView } from "../app/meeting-detection";
  */
 
 /** 줄어든 크기. `1:02:34`가 잘리지 않게 스파이크의 92·144에서 넓혔다. */
-export const PILL_COMPACT = { width: 104, height: 32 } as const;
-export const PILL_HOVER = { width: 156, height: 32 } as const;
+export const PILL_COMPACT = { width: 88, height: 32 } as const;
+export const PILL_HOVER = { width: 140, height: 32 } as const;
 
 /** 위쪽·오른쪽 여백(px). */
 const MARGIN = 12;
