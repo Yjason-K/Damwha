@@ -73,10 +73,16 @@ Zoom·Chrome(Meet)이 마이크를 쥐면 카드를 띄워 녹음을 권한다. 
 - **카드 `shell/detect.html`.** `type:"panel"` 창이고 `showInactive`로 띄워 포커스를 뺏지 않는다. 버튼은
   `next()` 반환값으로만 main에 닿는다 — 그래서 §6.11에 새 예외가 없다. `회의 보기`는 사용자가 직접 눌렀으니
   `app.focus({ steal: true })`로 담화를 활성 앱으로 올린다.
+- **녹음 중 알약 `shell/pill.html`.** 카드로 시작한 녹음이 도는 동안 카드를 대신하는 별도 `panel` 창이다
+  (`windows/pill-window.ts`). `focusable: false`라 포커스를 받지 않는다. 옮기기는 `-webkit-app-region: drag`가 아니라
+  페이지 JS가 하고(`drag` 이벤트로 main이 창을 옮긴다) 버튼은 `next()`로 답한다 — `-webkit-app-region: drag`가 호버와
+  클릭을 삼켰기 때문이다(전체 화면 Chrome Meet에서 실측, 스펙 2026-11-02 §3). 경고가 나면 카드가 10초 동안
+  펼쳐졌다가 알약으로 돌아오고, 녹음 중 뜨는 카드는 알약이 있는 화면에 나타난다. 자리는 `detection-state.json`의
+  `pill`에 저장한다.
 - **자동 정지는 카드로 시작한 녹음만.** 모달 등 다른 경로의 녹음은 건드리지 않는다.
 - **호출 상한.** 렌더러 호출 3초, `finish` 75초(flush 2 + drain 60 + POST 10 + 여유), 정지는 handshake,
   시작 60초는 상태 기계 안에서 잰다.
-- **상태 저장.** `<userData>/detection-state.json`(`{"enabled":bool}`)과 앱 메뉴의 체크박스. 끄면 헬퍼가 종료된다.
+- **상태 저장.** `<userData>/detection-state.json`(`{"enabled":bool,"pill":{x,y}|null}` — `pill`은 알약을 마지막으로 둔 자리)과 앱 메뉴의 체크박스. 끄면 헬퍼가 종료된다.
 - **T0 실측.** Zoom·Meet은 음소거여도 입력을 쥔다. 회의가 끝나면 입력이 내려간다. 백그라운드 시작은 Electron
   44.3에서 `autoplayPolicy` 설정 없이 됐다.
 
@@ -238,7 +244,7 @@ Developer ID로 서명하고 공증까지 마친 DMG로 배포한다. ad-hoc은 
 | `run/` | 소켓 디렉터리(0700). TCP는 열지 않는다 |
 | `backups/` | 데이터가 있는 DB에 마이그레이션을 적용하기 전의 `pg_dump -Fc`, 최근 5개 |
 | `snapshots/` | 판올림 스냅샷(Phase 6b-2), 최근 2개 |
-| `detection-state.json` | 회의 감지 켜짐 여부(`{"enabled":bool}`) |
+| `detection-state.json` | 회의 감지 켜짐 여부와 알약 자리(`{"enabled":bool,"pill":{x,y}|null}`) |
 | `restore-journal.json` | 되돌리기 진행 상태(Phase 6b-2) |
 | `restore-staging/` | 되돌리기 교체용 임시 사본(Phase 6b-2) |
 | `data.replaced-*` | 되돌리기가 옮겨 둔 그때의 `data/`(Phase 6b-2) — **앱은 지우지 않는다** |

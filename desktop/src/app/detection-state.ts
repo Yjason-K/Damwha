@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 /**
- * 회의 감지 켜고 끄기의 영속화. update-state.ts와 같은 모양이다.
+ * 회의 감지 켜고 끄기와 녹음 중 알약의 마지막 자리의 영속화. update-state.ts와 같은 모양이다.
  *
  * config.json에 넣지 않는다 — 그 파일은 사람이 손으로 고치고 앱은 다시 쓰지 않는다. 못 읽으면(없음·깨짐)
  * 켜짐이 기본이고, 못 쓰면 이번 실행 동안은 메모리 값을 존중한다.

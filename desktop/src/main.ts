@@ -784,7 +784,7 @@ async function runInAttached(script: string, userGesture = false): Promise<unkno
 
 /**
  * 회의 감지 (스펙 §3·§4). 판단은 app/meeting-detection.ts·app/detection-host.ts에 있고 여기는 잎이다.
- * `ready()`가 거짓이면 카드를 새로 띄우지 않는다. 이미 뜬 녹음 카드는 창이 사라져도 폴링이 gone을 볼 때까지 남는다.
+ * `ready()`가 거짓이면 카드를 새로 띄우지 않는다. 녹음 중에는 카드 대신 알약(pillWindow)이 남고, 창이 사라져도 폴링이 gone을 볼 때까지 유지된다.
  */
 const detection = createMeetingDetection({
   targets: DETECTION_TARGETS,
