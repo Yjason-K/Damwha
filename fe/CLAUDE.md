@@ -130,6 +130,11 @@ The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by 
   아니라 `status.systemAudio = "lost"`와 토스트 한 번이다 — 마이크는 계속 녹음된다. 자원 반납은 스트림을
   cancel하고, 그것이 데스크톱 헬퍼를 끄는 유일한 신호다(`desktop/CLAUDE.md` "시스템 오디오").
 
+- **녹음 중 입력 장치가 사라지면 기본 입력으로 이어 간다** (`LiveRecorder.reopenMic`, 2026-11-02). Chromium은 기본 장치로 연
+  트랙도 옮겨 주지 않고 `ended`로 끝낸다. 사용자가 고른 장치였어도 기본 입력으로 간다. 5초 안에 못 열면 `device_ended`로
+  마감한다. `AudioContext`와 Worklet은 그대로 쓰고, 공백은 2초를 넘으면 서버가 `capture_gap`으로 남긴다. 전환 사실은
+  `status.micSwitches`로 나가 토스트와 데스크톱 카드(`RecordingSnapshot.micSwitched`)가 알린다.
+
 - **Worklet 종료는 flush ACK로 끝난다** (`lib/pcm-worklet.ts`, `lib/pcm-worklet-protocol.ts`).
   메시지는 메인→Worklet `begin`/`flush`, Worklet→메인 `ready`/`begun`/`pcm`/`flushed` 넷뿐이고
   타입은 `pcm-worklet-protocol.ts` 한 곳에만 있다(양쪽이 값을 복제하지 않는다). 종료 시 그냥

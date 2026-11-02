@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import { CHUNK_BYTES, CHUNK_SAMPLES, SR } from "./pcm-convert";
 import type { WorkletCommand, WorkletEvent } from "./pcm-worklet-protocol";
 import {
@@ -6,6 +14,7 @@ import {
   LiveCaptureCancelled,
   LiveRecorder,
   LiveUploadRejected,
+  MIC_REOPEN_TIMEOUT_MS,
   requestCaptureDevices,
   type PostResult,
   type RecorderFailure,
@@ -256,22 +265,31 @@ function stubWorkletGlobals(
     micPrompt?: Promise<MediaStream>;
     addModuleRejects?: unknown;
     resume?: () => Promise<void>;
+    /** 녹음 중 마이크를 다시 열 때의 응답. 없으면 새 스트림을 준다. */
+    reopen?: () => Promise<MediaStream>;
   } = {},
 ) {
   const endedListeners: Array<() => void> = [];
   const stopTrack = vi.fn();
-  const stream = {
-    getTracks: () => [{ stop: stopTrack }],
-    getAudioTracks: () => [
-      {
-        addEventListener: (_type: string, fn: () => void) =>
-          endedListeners.push(fn),
-      },
-    ],
-  } as unknown as MediaStream;
-  const getUserMedia = vi.fn(
-    () => options.micPrompt ?? Promise.resolve(stream),
-  );
+  const fakeStream = (stop: () => void) =>
+    ({
+      getTracks: () => [{ stop }],
+      getAudioTracks: () => [
+        {
+          addEventListener: (_type: string, fn: () => void) =>
+            endedListeners.push(fn),
+        },
+      ],
+    }) as unknown as MediaStream;
+  const stream = fakeStream(stopTrack);
+  const getUserMedia = vi.fn<
+    (constraints?: MediaStreamConstraints) => Promise<MediaStream>
+  >(() => {
+    if (getUserMedia.mock.calls.length > 1) {
+      return options.reopen?.() ?? Promise.resolve(fakeStream(vi.fn()));
+    }
+    return options.micPrompt ?? Promise.resolve(stream);
+  });
   Object.defineProperty(navigator, "mediaDevices", {
     configurable: true,
     value: { getUserMedia },
@@ -295,6 +313,7 @@ function stubWorkletGlobals(
   const disconnect = vi.fn();
   const destination = {};
   const gain = { gain: { value: 1 }, connect: vi.fn() };
+  const sources: { connect: Mock; disconnect: Mock }[] = [];
   class FakeAudioContext {
     sampleRate = SR;
     destination = destination;
@@ -305,7 +324,11 @@ function stubWorkletGlobals(
           : Promise.resolve(undefined),
       ),
     };
-    createMediaStreamSource = vi.fn().mockReturnValue({ connect: vi.fn() });
+    createMediaStreamSource = vi.fn(() => {
+      const source = { connect: vi.fn(), disconnect: vi.fn() };
+      sources.push(source);
+      return source;
+    });
     createGain = vi.fn().mockReturnValue(gain);
     close = close;
     resume =
@@ -338,7 +361,13 @@ function stubWorkletGlobals(
     gain,
     stream,
     getUserMedia,
-    endTrack: () => endedListeners.forEach((fn) => fn()),
+    sources,
+    fakeStream,
+    /** 현재 트랙이 끝난다 — 재연결 시도가 settle할 만큼 마이크로태스크를 돌린다. */
+    endTrack: async () => {
+      endedListeners.splice(0).forEach((fn) => fn());
+      for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    },
   };
 }
 
@@ -352,6 +381,9 @@ async function recording(
   await r.begin("mtg_1");
   return { r, worklet };
 }
+
+/** 마이크를 다시 열 수 없다 — 입력 장치가 하나도 남지 않은 경우. */
+const noMic = () => Promise.reject(new Error("no input device"));
 
 const restoreCaptureGlobals = () => {
   vi.unstubAllGlobals();
@@ -705,12 +737,12 @@ describe("LiveRecorder failure endings share one release path", () => {
   // 설계 §7 — "장치 ended도 가능한 flush를 시도하고 device_ended를 우선 보존한다."
   it("keeps device_ended as the reason even when the flush then times out", async () => {
     const stopSpy = okStop();
-    const w = stubWorkletGlobals({ autoFlush: false });
+    const w = stubWorkletGlobals({ autoFlush: false, reopen: noMic });
     const { r } = await recording(
       { postChunk: vi.fn(), postStop: stopSpy, retryDelayMs: 0 },
       w,
     );
-    w.endTrack(); // 마이크가 뽑혔다
+    await w.endTrack(); // 마이크가 뽑혔다
     expect(r.status.failed).toBe("device_ended");
     // 그래도 flush는 시도한다 — Worklet이 들고 있는 자투리는 진짜 오디오다.
     expect(w.posted).toContainEqual({ type: "flush" });
@@ -781,13 +813,13 @@ describe("LiveRecorder failure endings share one release path", () => {
    * 보는 화면은 존재하지 않는 녹음을 살아 있다고 읽는다.
    */
   it("converges on stopped after the device ends", async () => {
-    const w = stubWorkletGlobals();
+    const w = stubWorkletGlobals({ reopen: noMic });
     const { r } = await recording(
       { postChunk: vi.fn(), postStop: okStop(), retryDelayMs: 0 },
       w,
     );
     expect(r.status.phase).toBe("recording");
-    w.endTrack();
+    await w.endTrack();
     await vi.runAllTimersAsync();
     expect(r.status.failed).toBe("device_ended");
     expect(r.status.phase).toBe("stopped");
@@ -909,7 +941,7 @@ describe("LiveRecorder stop() after a recorder failure", () => {
    */
   it("never splices the flush tail behind a chunk the failure dropped", async () => {
     const stopSpy = okStop();
-    const w = stubWorkletGlobals({ autoFlush: false });
+    const w = stubWorkletGlobals({ autoFlush: false, reopen: noMic });
     const { r } = await recording(
       { postChunk: vi.fn(), postStop: stopSpy, retryDelayMs: 0 },
       w,
@@ -918,7 +950,7 @@ describe("LiveRecorder stop() after a recorder failure", () => {
     w.sendPcm(16_000);
     expect(r.status.backlogMs).toBe(0);
 
-    w.endTrack(); // device_ended → flush 요청. 이 뒤로 enqueue는 닫힌다.
+    await w.endTrack(); // device_ended → flush 요청. 이 뒤로 enqueue는 닫힌다.
     expect(w.posted).toContainEqual({ type: "flush" });
     // 자투리 500샘플이 16,384샘플째를 넘겨 청크 하나를 완성하지만 enqueue가 버린다.
     w.sendPcm(500);
@@ -945,7 +977,7 @@ describe("LiveRecorder stop() after a recorder failure", () => {
         ? { status: 409 as const, expected: CHUNK_BYTES }
         : { status: 200 as const, expected: offset },
     );
-    const w = stubWorkletGlobals();
+    const w = stubWorkletGlobals({ reopen: noMic });
     const { r } = await recording(
       { postChunk: post, postStop: stopSpy, retryDelayMs: 0 },
       w,
@@ -953,7 +985,7 @@ describe("LiveRecorder stop() after a recorder failure", () => {
     // 청크 하나 + 자투리. 청크는 전송에 실패해 큐에 남는다.
     w.sendPcm(CHUNK_SAMPLES);
     w.sendPcm(2560);
-    w.endTrack(); // 마이크가 끊겼다
+    await w.endTrack(); // 마이크가 끊겼다
     expect(r.status.failed).toBe("device_ended");
     await r.stop();
 
@@ -1308,8 +1340,117 @@ function systemAudioStream() {
   };
 }
 
-const int16Of = (body: Uint8Array) =>
-  [...new Int16Array(body.buffer, body.byteOffset, body.byteLength / 2)];
+const int16Of = (body: Uint8Array) => [
+  ...new Int16Array(body.buffer, body.byteOffset, body.byteLength / 2),
+];
+
+describe("LiveRecorder input device loss", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    restoreCaptureGlobals();
+  });
+
+  const deps = () => ({
+    postChunk: vi.fn(),
+    postStop: okStop(),
+    retryDelayMs: 0,
+  });
+
+  it("continues on the default input when the device disappears", async () => {
+    const w = stubWorkletGlobals();
+    const { r } = await recording(deps(), w);
+
+    await w.endTrack();
+
+    expect(r.status.phase).toBe("recording");
+    expect(r.status.failed).toBeNull();
+    expect(r.status.micSwitches).toBe(1);
+    expect(w.sources[0].disconnect).toHaveBeenCalled();
+    expect(w.sources[1].connect).toHaveBeenCalledTimes(1);
+    expect(w.stopTrack).toHaveBeenCalled();
+    expect(w.posted).not.toContainEqual({ type: "flush" });
+  });
+
+  it("falls back to the default input when the chosen device disappears", async () => {
+    const w = stubWorkletGlobals();
+    const r = new LiveRecorder(deps());
+    await r.prepare("usb-mic");
+    await r.begin("mtg_1");
+
+    await w.endTrack();
+
+    expect(r.status.failed).toBeNull();
+    const audio = w.getUserMedia.mock.calls[1][0]?.audio;
+    expect(audio).toMatchObject({ echoCancellation: false, channelCount: 1 });
+    expect(audio).not.toHaveProperty("deviceId");
+  });
+
+  it("recovers again when the replacement input also disappears", async () => {
+    const w = stubWorkletGlobals();
+    const { r } = await recording(deps(), w);
+
+    await w.endTrack();
+    await w.endTrack();
+
+    expect(r.status.micSwitches).toBe(2);
+    expect(r.status.failed).toBeNull();
+    expect(w.sources).toHaveLength(3);
+  });
+
+  it("ends as device_ended when no input can be opened", async () => {
+    const w = stubWorkletGlobals({ reopen: noMic });
+    const { r } = await recording(deps(), w);
+
+    await w.endTrack();
+    await vi.runAllTimersAsync();
+
+    expect(r.status.failed).toBe("device_ended");
+    expect(r.status.micSwitches).toBe(0);
+    expect(r.status.phase).toBe("stopped");
+  });
+
+  it("gives up on a reopen that hangs and closes the late stream", async () => {
+    let resolveLate!: (s: MediaStream) => void;
+    const late = new Promise<MediaStream>((resolve) => {
+      resolveLate = resolve;
+    });
+    const w = stubWorkletGlobals({ reopen: () => late });
+    const { r } = await recording(deps(), w);
+
+    await w.endTrack();
+    await vi.advanceTimersByTimeAsync(MIC_REOPEN_TIMEOUT_MS);
+    expect(r.status.failed).toBe("device_ended");
+
+    const stopLate = vi.fn();
+    resolveLate(w.fakeStream(stopLate));
+    await vi.runAllTimersAsync();
+    expect(stopLate).toHaveBeenCalled();
+  });
+
+  it("closes a stream that arrives after the user stopped", async () => {
+    let resolveLate!: (s: MediaStream) => void;
+    const w = stubWorkletGlobals({
+      reopen: () =>
+        new Promise<MediaStream>((resolve) => {
+          resolveLate = resolve;
+        }),
+    });
+    const { r } = await recording(deps(), w);
+
+    await w.endTrack();
+    await r.stop();
+    const stopLate = vi.fn();
+    resolveLate(w.fakeStream(stopLate));
+    await vi.runAllTimersAsync();
+
+    expect(stopLate).toHaveBeenCalled();
+    expect(r.status.failed).toBeNull();
+    expect(w.sources).toHaveLength(1);
+  });
+});
 
 describe("LiveRecorder system audio", () => {
   afterEach(restoreCaptureGlobals);

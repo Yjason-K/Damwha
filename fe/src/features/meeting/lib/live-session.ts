@@ -34,6 +34,8 @@ type ActiveCapture = LiveCapture & {
   /** 실패를 딱 한 번만 토스트한다 — onStatus는 상태가 바뀔 때마다 계속 불린다. */
   toasted: boolean;
   systemAudioLostToasted: boolean;
+  /** 토스트로 알린 입력 전환 횟수. 전환이 또 일어나면 또 알린다. */
+  micSwitchesToasted: number;
 };
 
 const FAILURE_MESSAGE: Record<RecorderFailure, string> = {
@@ -55,6 +57,8 @@ export interface RecordingSnapshot {
   /** 실패가 기록됐다. 서버가 ACK해도 참으로 남는다. */
   failed: boolean;
   systemAudioLost: boolean;
+  /** 입력 장치가 사라져 기본 입력으로 옮겨 갔다. */
+  micSwitched: boolean;
   end: RecordingEnd | null;
 }
 
@@ -69,6 +73,7 @@ const IDLE_SNAPSHOT: RecordingSnapshot = {
   meetingId: null,
   failed: false,
   systemAudioLost: false,
+  micSwitched: false,
   end: null,
 };
 
@@ -98,6 +103,7 @@ function snapshotOf(entry: ActiveCapture): RecordingSnapshot {
     meetingId: entry.meetingId,
     failed: status.failed !== null,
     systemAudioLost: status.systemAudio === "lost",
+    micSwitched: status.micSwitches > 0,
     end,
   };
 }
@@ -180,6 +186,7 @@ export async function prepareLiveRecorder(
     pageListener: null,
     toasted: false,
     systemAudioLostToasted: false,
+    micSwitchesToasted: 0,
   };
   // 이 onStatus 슬롯은 여기서 딱 한 번만 세우고 절대 덮어쓰지 않는다 — 실패를 토스트로
   // 알리는 유일한 통로이고, 레코더는 회의 상세 화면보다 오래 산다(다른 페이지로
@@ -201,6 +208,14 @@ export async function prepareLiveRecorder(
         title: "시스템 오디오 녹음이 끊겼어요",
         description:
           "마이크는 계속 녹음하고 있어요. 이제부터 상대방 목소리는 녹음되지 않아요.",
+      });
+    }
+    if (status.micSwitches > entry.micSwitchesToasted) {
+      entry.micSwitchesToasted = status.micSwitches;
+      toast({
+        title: "마이크가 바뀌었어요",
+        description:
+          "쓰던 입력 장치가 끊겨 기본 입력으로 이어서 녹음하고 있어요.",
       });
     }
     // end는 meetingId가 지워지기 전에(clearLiveCapture보다 먼저) 여기서 쓴다.
