@@ -583,15 +583,18 @@ check(
   `rc=${cliRun.status} out=${(cliRun.stdout ?? "").trim()} err=${(cliRun.stderr ?? "").trim().slice(0, 200)}`,
 );
 
-// 25. 시스템 오디오 헬퍼. 있고, 실행 가능하고, hardened runtime으로 서명됐다. 팀은 7c, minos는 22가 이미 덮는다.
-const systemAudioHelper = path.join(contents, "Resources", "system-audio", "damwha-system-audio");
-check(
-  "system-audio: helper is in Resources/system-audio and executable",
-  fs.existsSync(systemAudioHelper) && (fs.statSync(systemAudioHelper).mode & 0o111) === 0o111,
-);
-const sa = verifyArm64(fs.existsSync(systemAudioHelper) ? [systemAudioHelper] : []);
-const saGaps = [...sa.unsigned, ...sa.noArm64, ...sa.noRuntime];
-check("system-audio: helper carries hardened runtime", fs.existsSync(systemAudioHelper) && saGaps.length === 0, saGaps.join("; "));
+// 25. 시스템 오디오 헬퍼와 마이크 감시 헬퍼. 있고, 실행 가능하고, hardened runtime으로 서명됐다. 팀은 7c, minos는 22가 이미 덮는다.
+for (const name of ["damwha-system-audio", "damwha-mic-watch"]) {
+  const helper = path.join(contents, "Resources", "system-audio", name);
+  const label = name.replace("damwha-", "");
+  check(
+    `system-audio: ${label} helper is in Resources/system-audio and executable`,
+    fs.existsSync(helper) && (fs.statSync(helper).mode & 0o111) === 0o111,
+  );
+  const v = verifyArm64(fs.existsSync(helper) ? [helper] : []);
+  const gaps = [...v.unsigned, ...v.noArm64, ...v.noRuntime];
+  check(`system-audio: ${label} helper carries hardened runtime`, fs.existsSync(helper) && gaps.length === 0, gaps.join("; "));
+}
 
 if (failures.length > 0) {
   console.error(`\n${failures.length} bundle hygiene check(s) failed.`);

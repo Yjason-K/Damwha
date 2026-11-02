@@ -23,12 +23,14 @@ export interface MenuHandlers {
   onCheckForUpdates(): void;
   /** 업데이트 전으로 되돌리기 (Phase 6b-2 스펙 §7.1). */
   onRestore(): void;
+  /** 회의 감지를 켜고 끈다 (app/detection-state.ts). `on`은 누른 뒤의 체크 상태다. */
+  onToggleMeetingDetection(on: boolean): void;
 }
 
 export function buildMenuTemplate(
   handlers: MenuHandlers,
   appName: string,
-  opts: { restoreEnabled: boolean; language?: UiLanguage } = { restoreEnabled: false },
+  opts: { restoreEnabled: boolean; language?: UiLanguage; meetingDetection?: boolean } = { restoreEnabled: false },
 ): MenuItemConstructorOptions[] {
   const lang = opts.language ?? "ko";
   return [
@@ -38,6 +40,12 @@ export function buildMenuTemplate(
         { role: "about" },
         { label: t(lang, "menu.checkForUpdates"), click: () => handlers.onCheckForUpdates() },
         { label: t(lang, "menu.restore"), enabled: opts.restoreEnabled, click: () => handlers.onRestore() },
+        {
+          label: t(lang, "menu.meetingDetection"),
+          type: "checkbox",
+          checked: opts.meetingDetection ?? true,
+          click: (item) => handlers.onToggleMeetingDetection(item.checked),
+        },
         { type: "separator" },
         { role: "services" },
         { type: "separator" },

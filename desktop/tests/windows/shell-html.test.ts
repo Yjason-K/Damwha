@@ -413,6 +413,70 @@ describe("services.html", () => {
   });
 });
 
+describe("detect.html", () => {
+  const view = (title: string, buttons: Array<{ label: string; action: string; primary: boolean }>, detail = "") => ({
+    token: 7,
+    title,
+    detail,
+    buttons,
+  });
+
+  it("has no form, input, link, IPC, or HTML sink", () => {
+    const code = codeOf(loadPage("detect.html").html);
+    for (const banned of [
+      /<form\b/i,
+      /<input\b/i,
+      /<a\b/i,
+      /ipcRenderer/,
+      /require\(/,
+      /innerHTML|outerHTML|insertAdjacentHTML|document\.write/,
+      /\son\w+\s*=/i,
+      /\b(href|src|action)\s*=/i,
+      /window\.open|location\s*=|location\.(assign|replace|href)/,
+    ]) {
+      expect(code).not.toMatch(banned);
+    }
+  });
+
+  it("shows strings as text and answers { token, action } through next()", async () => {
+    const { sandbox, byId } = loadPage("detect.html");
+    const render = sandbox.__damwha_detect_render as (v: unknown) => void;
+    const next = (sandbox.__damwha_detect as { next(): Promise<unknown> }).next;
+    render(view(XSS, [{ label: "녹음 시작", action: "start", primary: true }, { label: "닫기", action: "dismiss", primary: false }], XSS));
+    expect(byId.get("text")!.textContent).toBe(XSS + XSS);
+    expect(sandbox.__pwned).toBeUndefined();
+    const act = byId.get("act")!;
+    expect(act.hidden).toBe(false);
+    act.children[0].fire("click");
+    await expect(next()).resolves.toEqual({ token: 7, action: "start" });
+  });
+
+  it("locks every button after a press until the next render", async () => {
+    const { sandbox, byId } = loadPage("detect.html");
+    const render = sandbox.__damwha_detect_render as (v: unknown) => void;
+    const next = (sandbox.__damwha_detect as { next(): Promise<unknown> }).next;
+    render(view("t", [{ label: "a", action: "start", primary: true }, { label: "b", action: "dismiss", primary: false }]));
+    const act = byId.get("act")!;
+    act.children[0].fire("click");
+    expect(act.children.every((b) => b.disabled)).toBe(true);
+    act.children[1].fire("click");
+    await next();
+    // 두 번째 클릭은 큐에 들어가지 않았다 — 다음 묻기는 새 답을 기다린다.
+    let settled = false;
+    void next().then(() => (settled = true));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(settled).toBe(false);
+    render(view("t2", [{ label: "c", action: "stop", primary: false }]));
+    expect(byId.get("act")!.children[0].disabled).toBe(false);
+  });
+
+  it("hides the button row when the view has no buttons", () => {
+    const { sandbox, byId } = loadPage("detect.html");
+    (sandbox.__damwha_detect_render as (v: unknown) => void)(view("녹음된 내용이 없어요", []));
+    expect(byId.get("act")!.hidden).toBe(true);
+  });
+});
+
 describe("status.html", () => {
   it("has no Docker screen — the app runs its own database (Phase 3)", () => {
     const { html } = loadPage("status.html");
@@ -467,10 +531,10 @@ describe("Content-Security-Policy — 둘째 겹 (스펙 §6.11, Task 14 fix 1-5
   // 문구 — 앱 밖에서 온 문자열 — 를 화면에 올리는 services.html이 특히 이 불변식이 필요한 페이지다.
   it("covers every page in shell/", () => {
     const pages = fs.readdirSync(path.join(__dirname, "..", "..", "shell")).filter((f) => f.endsWith(".html")).sort();
-    expect(pages).toEqual(["services.html", "status.html"]);
+    expect(pages).toEqual(["detect.html", "services.html", "status.html"]);
   });
 
-  for (const file of ["services.html", "status.html"]) {
+  for (const file of ["detect.html", "services.html", "status.html"]) {
     describe(file, () => {
       const html = fs.readFileSync(path.join(__dirname, "..", "..", "shell", file), "utf8");
       const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(html)?.[1] ?? "";
@@ -533,7 +597,7 @@ describe("design tokens — fe/src/index.css와 같은 값 (Notion P2-B)", () =>
   const DARK_MEDIA = /@media\s*\(prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{([^}]*)\}\s*\}/;
   const isColour = (v: string) => /^#|^rgba?\(/.test(v);
 
-  for (const file of ["services.html", "status.html"]) {
+  for (const file of ["detect.html", "services.html", "status.html"]) {
     describe(file, () => {
       const html = fs.readFileSync(path.join(__dirname, "..", "..", "shell", file), "utf8");
       const style = /<style>([\s\S]*?)<\/style>/.exec(html)![1].replace(/\/\*[\s\S]*?\*\//g, "");

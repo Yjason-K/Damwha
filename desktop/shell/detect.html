@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <!-- 회의 감지 카드. services.html과 같은 규칙이다: 인라인 스크립트·스타일 하나씩만 해시로 허용하고
+         나머지는 전부 막는다. 고치면 해시를 다시 계산해야 한다 — tests/windows/shell-html.test.ts가 잡는다. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-wdfDFoAQI00ZyJjQzIMReN7sJ+yluX027ct744BUiaY='; style-src 'sha256-mkLHMmS8bbgNljdggh5YjTPNdKbUAinbBIBohH8dqXw='; base-uri 'none'; form-action 'none'" />
+    <title>회의 감지</title>
+    <style>
+      /* 토큰은 services.html과 같은 방식으로 fe/src/index.css에서 같은 이름·값으로 옮겼다(필요한 것만).
+         그림자는 CSS에 두지 않는다 — 떠 있는 층이지만 창이 카드 크기 그대로라 안쪽 그림자는 잘리고,
+         macOS가 frameless 창에 주는 시스템 그림자가 그 몫을 한다. 색은 :root 밖에 적지 않는다. */
+:root {
+        color-scheme: light;
+        --surface-card: #ffffff;
+        --surface-hover: #ededed;
+        --text-primary: #0a0a0a;
+        --text-secondary: #5a5a5c;
+        --text-on-accent: #ffffff;
+        --border-default: #e5e5e5;
+        --border-strong: #d4d4d4;
+        --accent-solid: #0a0a0a;
+        --accent-solid-hover: #1c1c1e;
+        --accent-6: #00d4a4;
+        --gray-0: #ffffff;
+        --gray-2: #f7f7f7;
+        --radius-sm: 6px;
+        --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          color-scheme: dark;
+          --surface-card: #18181a;
+          --surface-hover: #232326;
+          --text-primary: #ededed;
+          --text-secondary: #a8a8ae;
+          --text-on-accent: #0a0a0a;
+          --border-default: #2a2a2e;
+          --border-strong: #37373c;
+          --accent-solid: #ededed;
+          --accent-solid-hover: #d4d4d8;
+          --accent-6: #2fdcae;
+          --gray-0: #18181a;
+          --gray-2: #0c0c0d;
+        }
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        margin: 0; padding: 14px 16px; display: flex; align-items: center; gap: 12px;
+        font: 13px/1.45 var(--font-sans); overflow: hidden; user-select: none; -webkit-user-select: none;
+        background: var(--surface-card); color: var(--text-primary);
+        -webkit-font-smoothing: antialiased;
+      }
+      .mark { width: 36px; height: 36px; flex: none; }
+      .text { flex: 1; min-width: 0; }
+      h1 { margin: 0; font-size: 14px; font-weight: 600; }
+      p { margin: 2px 0 0; font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
+      .act { display: flex; flex-direction: column; gap: 6px; flex: none; }
+      button {
+        font: inherit; font-size: 12px; font-weight: 500; padding: 4px 12px; min-width: 76px;
+        border-radius: var(--radius-sm); border: 1px solid var(--border-default);
+        background: var(--surface-card); color: var(--text-primary); cursor: default; outline: none;
+      }
+      button:hover:not(:disabled) { border-color: var(--border-strong); background: var(--gray-2); }
+      button.primary { background: var(--accent-solid); border-color: var(--accent-solid); color: var(--text-on-accent); }
+      button.primary:hover:not(:disabled) { background: var(--accent-solid-hover); border-color: var(--accent-solid-hover); }
+      button:focus-visible { box-shadow: 0 0 0 2px var(--gray-0), 0 0 0 4px var(--accent-6); }
+      button:disabled { opacity: 0.45; }
+    </style>
+  </head>
+  <body>
+    <svg class="mark" viewBox="0 0 128 128" aria-hidden="true">
+      <rect width="128" height="128" rx="30" fill="#0F161E" />
+      <g fill="#1DDCA5"><rect x="52" y="46" width="51" height="48" rx="12" /><path d="M103 75v33L58 94z" /></g>
+      <g fill="#fff"><rect x="27" y="26" width="65" height="68" rx="14" /><path d="M27 80v30L52 95z" /></g>
+      <g fill="#0F161E">
+        <rect x="40" y="43" width="37" height="6.5" rx="3.25" />
+        <rect x="40" y="56.5" width="37" height="6.5" rx="3.25" />
+        <rect x="40" y="70" width="23" height="6.5" rx="3.25" />
+      </g>
+    </svg>
+    <div class="text" id="text"></div>
+    <div class="act" id="act" hidden></div>
+    <script>
+      // main이 executeJavaScript로 부른다 (main → 렌더러 한 방향). 이 페이지가 main을 부르는 경로는 없다:
+      // preload도 IPC도 없고, 버튼이 만든 답 { token, action }은 main이 건 next()의 **반환값**으로만 나간다.
+      // 문구는 전부 textContent로만 넣는다 — HTML 싱크를 쓰지 않는다 (tests/windows/shell-html.test.ts).
+      (function () {
+        const queue = [];
+        const waiters = [];
+
+        function emit(answer) {
+          const waiter = waiters.shift();
+          if (waiter) waiter(answer);
+          else queue.push(answer);
+        }
+
+        function el(tag, className, text) {
+          const node = document.createElement(tag);
+          if (className) node.className = className;
+          if (text !== undefined) node.textContent = text;
+          return node;
+        }
+
+        window.__damwha_detect = {
+          next: function () {
+            if (queue.length > 0) return Promise.resolve(queue.shift());
+            return new Promise(function (resolve) {
+              waiters.push(resolve);
+            });
+          },
+        };
+
+        window.__damwha_detect_render = function (view) {
+          const nodes = [el("h1", "", view.title)];
+          if (view.detail) nodes.push(el("p", "", view.detail));
+          document.getElementById("text").replaceChildren(...nodes);
+
+          // 한 번 누르면 다음 렌더까지 잠근다 — 눌린 "녹음 시작"이 시작 대기 동안 살아 보이지 않게.
+          const buttons = view.buttons.map(function (spec) {
+            const b = el("button", spec.primary ? "primary" : "", spec.label);
+            b.addEventListener("click", function () {
+              if (b.disabled) return;
+              for (const other of document.getElementById("act").children) other.disabled = true;
+              emit({ token: view.token, action: spec.action });
+            });
+            return b;
+          });
+          const act = document.getElementById("act");
+          act.replaceChildren(...buttons);
+          act.hidden = buttons.length === 0;
+        };
+      })();
+    </script>
+  </body>
+</html>

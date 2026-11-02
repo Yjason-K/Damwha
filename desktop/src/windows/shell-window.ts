@@ -1,5 +1,6 @@
-import { app, BrowserWindow, nativeTheme } from "electron";
+import { app, BrowserWindow, nativeTheme, screen } from "electron";
 import * as path from "path";
+import { detectCardBounds } from "./detect-view";
 import { applyNavigationBoundary } from "./permissions";
 import { isSameShellPage } from "./shell-url";
 import { windowBackground } from "./window-background";
@@ -18,7 +19,7 @@ export interface ShellStatus {
   logPath?: string;
 }
 
-function shellFileOf(name: "status.html" | "services.html"): string {
+function shellFileOf(name: "status.html" | "services.html" | "detect.html"): string {
   // app.getAppPath()는 dev에서 desktop/, packaged에서 app.asar을 가리킨다.
   return path.join(app.getAppPath(), "shell", name);
 }
@@ -72,5 +73,37 @@ export function createServicesWindow(focus: boolean, onLoadError: (e: unknown) =
     else win.showInactive();
   });
   win.loadFile(shellFileOf("services.html")).catch(onLoadError);
+  return win;
+}
+
+/** 카드 창 크기. 내용은 한 줄 제목과 설명, 버튼이라 고정이다. */
+const DETECT_CARD_SIZE = { width: 360, height: 84 };
+
+/**
+ * 회의 감지 카드 창 (잎 — 수명은 detect-window.ts). 화면 위쪽 가운데에 포커스를 뺏지 않고 뜬다.
+ * `type: "panel"` + `showInactive()`는 Electron 44.3에서 포커스를 훔치지 않고 클릭을 받는다(실측).
+ * 화면 공유·캡처에는 찍히지 않게 콘텐츠 보호를 건다. 창을 앞으로 가져오는 경로(`show()`)는 두지 않는다.
+ */
+export function createDetectBrowserWindow(onLoadError: (e: unknown) => void): BrowserWindow {
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const win = new BrowserWindow({
+    ...detectCardBounds(display.workArea, DETECT_CARD_SIZE),
+    frame: false,
+    resizable: false,
+    type: "panel",
+    show: false,
+    skipTaskbar: true,
+    backgroundColor: windowBackground(nativeTheme.shouldUseDarkColors),
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  win.setAlwaysOnTop(true, "floating");
+  // skipTransformProcessType가 없으면 Electron이 앱을 UIElement로 바꿔 담화가 Dock에서 사라진다(44.3 실측).
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
+  win.setContentProtection(true);
+  applyNavigationBoundary(win, () => []);
+  win.once("ready-to-show", () => {
+    if (!win.isDestroyed()) win.showInactive();
+  });
+  win.loadFile(shellFileOf("detect.html")).catch(onLoadError);
   return win;
 }
