@@ -10,7 +10,7 @@ import {
 const ZOOM = "us.zoom.xos";
 const CHROME = "com.google.Chrome";
 
-const idleSnap: RecordingSnapshot = { phase: "idle", meetingId: null, failed: false, systemAudioLost: false, end: null };
+const idleSnap: RecordingSnapshot = { phase: "idle", meetingId: null, failed: false, systemAudioLost: false, micSwitched: false, end: null };
 const recSnap: RecordingSnapshot = { ...idleSnap, phase: "recording", meetingId: "m1" };
 type Snap = RecordingSnapshot | "timeout" | "gone";
 type StartResult = { started: boolean; meetingId?: string; reason?: string };
@@ -520,7 +520,15 @@ describe("끝 카드", () => {
     const t = await s.record();
     s.h.snap = async () => ({ ...recSnap, systemAudioLost: true });
     await s.advance(2000);
-    expect(s.last()).toEqual({ kind: "recording", token: t, micOnly: true });
+    expect(s.last()).toEqual({ kind: "recording", token: t, micOnly: true, micSwitched: false });
+  });
+
+  it("micSwitched면 마이크가 바뀐 카드로 다시 그린다", async () => {
+    const s = setup();
+    const t = await s.record();
+    s.h.snap = async () => ({ ...recSnap, micSwitched: true });
+    await s.advance(2000);
+    expect(s.last()).toEqual({ kind: "recording", token: t, micOnly: false, micSwitched: true });
   });
 
   it("낡은 token의 onCard는 무시한다", async () => {

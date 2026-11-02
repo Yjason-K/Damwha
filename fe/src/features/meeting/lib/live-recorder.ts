@@ -27,6 +27,8 @@ export const FLUSH_ACK_TIMEOUT_MS = 2_000;
 export const DRAIN_TIMEOUT_MS = 60_000;
 /** 캡처 상한 4시간 (설계 §4.2). begin ACK를 기준으로 잰다. */
 export const MAX_CAPTURE_MS = 4 * 60 * 60 * 1000;
+/** 녹음 중 입력 장치가 사라졌을 때 기본 입력을 다시 여는 상한. 넘기면 녹음을 마감한다. */
+export const MIC_REOPEN_TIMEOUT_MS = 5_000;
 
 /** 게이트가 녹음을 막는 이유 (설계 §5.2). 전부 시작 **전에** 드러나야 한다. */
 export type CaptureBlock =
@@ -148,6 +150,20 @@ export type ServerSeal = "sealed" | "duration_limit";
 export type OpenSystemAudio = () => Promise<ReadableStream<Uint8Array>>;
 
 /**
+ * 마이크 제약. AGC·노이즈 억제·에코 제거를 다 끈다 — 신호를 변형해 ECAPA 임베딩과 정본 STT를
+ * 같이 나쁘게 만든다 (설계 §2.4).
+ */
+function micConstraints(deviceId?: string): MediaTrackConstraints {
+  return {
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
+    channelCount: 1,
+    ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+  };
+}
+
+/**
  * 시스템 오디오의 상태. `lost`는 녹음 도중 스트림이 끝났다는 뜻이다 — 마이크는 계속 녹음되므로
  * 캐처 실패(`failed`)로 올리지 않고, 상대 목소리가 빠지기 시작했다는 사실만 따로 알린다.
  */
@@ -177,6 +193,8 @@ export interface RecorderStatus {
   sealedByServer: boolean;
   phase: RecorderPhase;
   systemAudio: SystemAudioState;
+  /** 입력 장치가 사라져 기본 입력으로 옮겨 간 횟수. 사용자에게 알리는 근거다. */
+  micSwitches: number;
   /**
    * `stop()`이 (성공이든 실패든) 끝났다. `phase: "stopped"`는 실패·봉인으로도 오므로 서버 stop을
    * 시도했는지는 이 값만 안다. `stop()`의 finally에서 `stopped`로 가기 직전에 선다.
@@ -235,6 +253,7 @@ export class LiveRecorder {
     sealedByServer: false,
     phase: "idle",
     systemAudio: "off",
+    micSwitches: 0,
     stopSettled: false,
   };
   onStatus: (s: RecorderStatus) => void = () => {};
@@ -248,6 +267,7 @@ export class LiveRecorder {
   private lastCaptureElapsedMs = 0;
   private ctx: AudioContext | null = null;
   private stream: MediaStream | null = null;
+  private source: MediaStreamAudioSourceNode | null = null;
   private node: AudioWorkletNode | null = null;
   private mixer: SystemAudioMixer | null = null;
   private systemReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
@@ -308,7 +328,10 @@ export class LiveRecorder {
    * 로딩 실패가 전부 빈 회의를 서버에 남기고, 그 회의는 부분 유일 인덱스로 다음 녹음까지
    * 막는다. 여기까지 성공한 캡처만 `/meetings/live`를 부를 자격을 얻는다.
    */
-  async prepare(deviceId?: string, openSystemAudio?: OpenSystemAudio): Promise<void> {
+  async prepare(
+    deviceId?: string,
+    openSystemAudio?: OpenSystemAudio,
+  ): Promise<void> {
     if (this.status.phase !== "idle") {
       throw new Error(`cannot prepare a recorder in ${this.status.phase}`);
     }
@@ -318,15 +341,7 @@ export class LiveRecorder {
     try {
       // 권한 프롬프트에는 시간 제한을 두지 않는다 (설계 §6.4).
       stream = await navigator.mediaDevices.getUserMedia({
-        // 셋 다 끈다. AGC와 노이즈 억제는 신호를 변형해 ECAPA 임베딩과 정본 STT를 같이
-        // 나쁘게 만든다 (설계 §2.4).
-        audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-          channelCount: 1,
-          ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
-        },
+        audio: micConstraints(deviceId),
       });
     } catch (err) {
       await this.endCapture();
@@ -361,7 +376,8 @@ export class LiveRecorder {
       // 걸면 그 첫 메시지를 놓칠 수 있다.
       node.port.onmessage = (e: MessageEvent<WorkletEvent>) =>
         this.onWorkletEvent(e.data);
-      ctx.createMediaStreamSource(stream).connect(node);
+      this.source = ctx.createMediaStreamSource(stream);
+      this.source.connect(node);
       // gain=0을 거쳐 destination에 잇는다 — 연결되지 않은 노드는 처리 수명을 잃고,
       // 그냥 이으면 마이크 소리가 스피커로 되돌아 하울링이 된다 (설계 §7).
       const silent = ctx.createGain();
@@ -433,12 +449,63 @@ export class LiveRecorder {
     // 첫 녹음마다 프롬프트 대기 시간만큼의 가짜 capture_gap이 영구히 남는다.
     this.startedAt = performance.now();
     this.captureTimer = setTimeout(() => void this.stop(), MAX_CAPTURE_MS);
-    // ended는 장치 제거·권한 회수다. 이걸 안 보면 워크릿이 무음을 계속 내보내 실제
-    // 대화가 무음으로 기록된 채 회의가 정상 완료로 표시된다 (설계 §5.3).
-    this.stream
-      ?.getAudioTracks()[0]
-      ?.addEventListener("ended", () => this.fail("device_ended"));
+    if (this.stream) this.watchMic(this.stream);
     this.setPhase("recording");
+  }
+
+  /**
+   * ended는 장치 제거·권한 회수다. 이걸 안 보면 워크릿이 무음을 계속 내보내 실제 대화가
+   * 무음으로 기록된 채 회의가 정상 완료로 표시된다 (설계 §5.3). Chromium은 기본 장치로 연
+   * 트랙도 새 기본 입력으로 옮겨 주지 않고 끝낸다(2026-11-02 실측) — 그래서 직접 다시 연다.
+   */
+  private watchMic(stream: MediaStream) {
+    stream.getAudioTracks()[0]?.addEventListener("ended", () => {
+      if (stream === this.stream) void this.reopenMic();
+    });
+  }
+
+  /**
+   * 사라진 입력 대신 기본 입력을 연다. 사용자가 고른 장치였어도 기본 입력으로 간다 — 회의
+   * 내용을 잃는 것보다 다른 마이크로 이어지는 쪽이 낫고, 그 사실은 `micSwitches`로 알린다.
+   *
+   * AudioContext와 Worklet은 그대로 쓴다. 다시 여는 동안 PCM이 오지 않아 그 시간은 정본에서
+   * 빠지지만, elapsedMs는 계속 가므로 서버가 `capture_gap`으로 남긴다.
+   */
+  private async reopenMic() {
+    const opening = navigator.mediaDevices.getUserMedia({
+      audio: micConstraints(),
+    });
+    let next: MediaStream;
+    try {
+      next = await withTimeout(
+        opening,
+        MIC_REOPEN_TIMEOUT_MS,
+        "the replacement microphone did not open in time",
+      );
+    } catch {
+      // 시간 초과 뒤에 도착한 스트림은 주인이 없다. 녹음 표시등만 켠 채로 남기지 않는다.
+      void opening.then(
+        (late) => late.getTracks().forEach((t) => t.stop()),
+        () => undefined,
+      );
+      if (!this.releasing) this.fail("device_ended");
+      return;
+    }
+    if (this.releasing || !this.ctx || !this.node) {
+      next.getTracks().forEach((t) => t.stop());
+      return;
+    }
+    this.source?.disconnect();
+    this.stream?.getTracks().forEach((t) => t.stop());
+    this.stream = next;
+    this.source = this.ctx.createMediaStreamSource(next);
+    this.source.connect(this.node);
+    this.watchMic(next);
+    this.status = {
+      ...this.status,
+      micSwitches: this.status.micSwitches + 1,
+    };
+    this.onStatus(this.status);
   }
 
   /** 회의를 만들기 전의 취소·실패 정리. 서버로는 아무것도 보내지 않는다 (설계 §6.6). */
@@ -484,7 +551,9 @@ export class LiveRecorder {
         // 지연·백로그가 그대로 캡처 경과에 섞인다 (설계 §3.3.2, review finding 4).
         this.lastCaptureElapsedMs = this.elapsedMs();
         // push는 완전 청크 배열을 준다(입력 길이와 무관 — 설계 §7); 전부 enqueue한다.
-        for (const chunk of this.chunks.push(this.mixed(new Int16Array(event.pcm)))) {
+        for (const chunk of this.chunks.push(
+          this.mixed(new Int16Array(event.pcm)),
+        )) {
           this.enqueue(chunk, this.lastCaptureElapsedMs);
         }
         return;
@@ -495,7 +564,9 @@ export class LiveRecorder {
     return this.mixer ? this.mixer.mixInto(mic) : mic;
   }
 
-  private async pumpSystemAudio(reader: ReadableStreamDefaultReader<Uint8Array>) {
+  private async pumpSystemAudio(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+  ) {
     try {
       for (;;) {
         const { done, value } = await reader.read();
@@ -805,6 +876,7 @@ export class LiveRecorder {
     }
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
+    this.source = null;
     const systemReader = this.systemReader;
     this.systemReader = null;
     void systemReader?.cancel().catch(() => undefined);

@@ -38,9 +38,11 @@ import {
  * stubWorkletGlobals와 같은 수준. getAudioTracks()의 addEventListener를 감시해 테스트가
  * "ended" 콜백을 손으로 호출할 수 있게 한다(장치 끊김을 흉내).
  */
-function stubMic() {
+function stubMic(options: { reopens?: boolean } = {}) {
   const stopTrack = vi.fn();
   let endedCallback: (() => void) | null = null;
+  /** 끊긴 뒤 쓸 수 있는 입력이 남지 않았다. `reopens`면 기본 입력이 남아 있다. */
+  let inputsGone = false;
   const stream = {
     getTracks: () => [{ stop: stopTrack }],
     getAudioTracks: () => [
@@ -53,7 +55,13 @@ function stubMic() {
   };
   Object.defineProperty(navigator, "mediaDevices", {
     configurable: true,
-    value: { getUserMedia: vi.fn().mockResolvedValue(stream) },
+    value: {
+      getUserMedia: vi.fn(() =>
+        inputsGone
+          ? Promise.reject(new Error("no input device"))
+          : Promise.resolve(stream),
+      ),
+    },
   });
 
   const posted: WorkletCommand[] = [];
@@ -72,7 +80,9 @@ function stubMic() {
     sampleRate = SR;
     destination = {};
     audioWorklet = { addModule: vi.fn().mockResolvedValue(undefined) };
-    createMediaStreamSource = vi.fn().mockReturnValue({ connect: vi.fn() });
+    createMediaStreamSource = vi
+      .fn()
+      .mockReturnValue({ connect: vi.fn(), disconnect: vi.fn() });
     createGain = vi
       .fn()
       .mockReturnValue({ gain: { value: 1 }, connect: vi.fn() });
@@ -86,7 +96,14 @@ function stubMic() {
   }
   vi.stubGlobal("AudioContext", FakeAudioContext);
   vi.stubGlobal("AudioWorkletNode", FakeAudioWorkletNode);
-  return { stopTrack, posted, endDevice: () => endedCallback?.() };
+  return {
+    stopTrack,
+    posted,
+    endDevice: () => {
+      inputsGone = !options.reopens;
+      endedCallback?.();
+    },
+  };
 }
 
 /** prepare → 회의 생성 → begin까지 태운, 이 탭의 활성 녹음. */
@@ -324,6 +341,17 @@ describe("live-session registry", () => {
     ).toBe(true);
   });
 
+  it("입력 장치가 바뀌면 녹음이 이어진다고 토스트로 알린다", async () => {
+    const mic = stubMic({ reopens: true });
+    render(<Toaster />);
+    await startCapture("m1");
+
+    mic.endDevice();
+
+    expect(await screen.findByText("마이크가 바뀌었어요")).toBeInTheDocument();
+    expect(screen.queryByText("녹음이 중단됐어요")).not.toBeInTheDocument();
+  });
+
   it("실패는 한 번만 토스트한다", async () => {
     const mic = stubMic();
     render(<Toaster />);
@@ -468,8 +496,26 @@ describe("liveSessionSnapshot", () => {
       meetingId: null,
       failed: false,
       systemAudioLost: false,
+      micSwitched: false,
       end: null,
     });
+  });
+
+  it("입력 장치가 바뀌어 이어진 녹음은 micSwitched로 알린다", async () => {
+    const mic = stubMic({ reopens: true });
+    vi.spyOn(apiClient, "post").mockResolvedValue({ data: {} });
+    const { recorder } = await startCapture("m1");
+
+    mic.endDevice();
+
+    await vi.waitFor(() =>
+      expect(liveSessionSnapshot()).toMatchObject({
+        phase: "recording",
+        failed: false,
+        micSwitched: true,
+      }),
+    );
+    expect(recorder.status.failed).toBeNull();
   });
 
   it("시작 중 phase는 starting이다", () => {
@@ -589,6 +635,7 @@ describe("liveSessionSnapshot", () => {
       meetingId: "m1",
       failed: true,
       systemAudioLost: false,
+      micSwitched: false,
       end: null,
     });
     expect(hasLiveCapture()).toBe(false);

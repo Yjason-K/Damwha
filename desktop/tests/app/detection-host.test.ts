@@ -14,6 +14,7 @@ const SNAPSHOT: RecordingSnapshot = {
   meetingId: "m1",
   failed: false,
   systemAudioLost: false,
+  micSwitched: false,
   end: null,
 };
 
