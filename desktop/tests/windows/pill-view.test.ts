@@ -40,7 +40,7 @@ describe("pill-view", () => {
     expect(parsePillAnswer(null)).toBeNull();
   });
   it("문구는 JSON으로만 싣는다", () => {
-    const call = pillRenderCall({ kind: "pill", token: 1, startedAt: 5 }, { stop: '"); x(', open: "o" });
+    const call = pillRenderCall({ kind: "pill", token: 1, startedAt: 5, stopRetry: 0 }, { stop: '"); x(', open: "o" });
     expect(call).toContain(JSON.stringify('"); x('));
     expect(call).toContain("__damwha_pill_render");
   });

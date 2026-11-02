@@ -28,7 +28,7 @@ export type CardAction = "start" | "dismiss" | "stop" | "open";
 export type CardView =
   | { kind: "prompt"; token: number }
   /** 녹음 중 기본 표시. 화면 가장자리의 알약이다. */
-  | { kind: "pill"; token: number; startedAt: number }
+  | { kind: "pill"; token: number; startedAt: number; stopRetry: number }
   /** 녹음 중 경고(시스템 소리 끊김·마이크 전환)를 펼친 카드. */
   | { kind: "recording"; token: number; micOnly: boolean; micSwitched: boolean }
   | {
@@ -60,6 +60,7 @@ export interface DetectionDeps {
   start(): Promise<{ started: boolean; meetingId?: string; reason?: string }>;
   /** 시간 초과·suspend. 시작 중이면 무르고, 이미 붙었으면 멈춘다. */
   cancelStart(): Promise<unknown>;
+  /** 녹음을 멈추지 못했으면 거부한다. */
   stop(): Promise<unknown>;
   finish(): Promise<unknown>;
   snapshot(): Promise<RecordingSnapshot | "timeout" | "gone">;
@@ -119,6 +120,8 @@ export function createMeetingDetection(deps: DetectionDeps) {
   let finishCalled = false;
   /** 진행 중인 stop. 어떤 결과로 끝나든 풀린다 — 끝났는지는 poll이 판단한다. */
   let stopInFlight: Promise<void> | null = null;
+  /** 실패한 stop의 수. 알약의 같은 view를 다시 그리게 해 눌린 중지를 푼다. */
+  let stopRetry = 0;
   let finishSettledPolls: number | null = null;
   let timeouts = 0;
 
@@ -142,7 +145,7 @@ export function createMeetingDetection(deps: DetectionDeps) {
   }
 
   function presentPill(): void {
-    present({ kind: "pill", token, startedAt });
+    present({ kind: "pill", token, startedAt, stopRetry });
   }
 
   function closeCard(): void {
@@ -449,7 +452,11 @@ export function createMeetingDetection(deps: DetectionDeps) {
     }, AUTO_STOP_MS);
   }
 
-  /** stop을 한 번에 하나만 건다. 결과가 무엇이든 settle하면 풀고, 입력이 여전히 꺼져 있으면 카운트다운을 다시 세운다. */
+  /**
+   * stop을 한 번에 하나만 건다. 결과가 무엇이든 settle하면 풀고, 입력이 여전히 꺼져 있으면 카운트다운을 다시 세운다.
+   * 돌려주는 프라미스는 거부하지 않는다. 실패했는데 녹음이 이어지면 지금 표시를 다시 보내 눌린 중지를 푼다 —
+   * 자동 종료의 실패도 그렇다. 사람이 누른 중지가 진행 중인 그 stop에 얹혀 있을 수 있다.
+   */
   function requestStop(): Promise<void> {
     if (stopInFlight) return stopInFlight;
     const g = gen;
@@ -460,7 +467,12 @@ export function createMeetingDetection(deps: DetectionDeps) {
     };
     stopInFlight = deps.stop().then(done, (e) => {
       deps.log(`meeting-detection: stop 실패 ${String(e)}`);
+      const live = g === gen && phase === "recording";
       done();
+      if (!live) return;
+      stopRetry++;
+      if (view?.kind === "recording") present(view);
+      else presentPill();
     });
     return stopInFlight;
   }

@@ -335,19 +335,22 @@ describe("createRendererCalls", () => {
     await expect(h.calls.finish()).rejects.toThrow("no bridge");
   });
 
-  it("stop은 핸드셰이크를 타고 실패를 적되 던지지 않는다", async () => {
+  it("stop은 멈췄으면 끝나고 못 멈췄으면 사유를 담아 거부한다", async () => {
     const h = callsHarness();
+    await expect(h.calls.stop()).resolves.toBeUndefined();
     h.stopRecording.mockResolvedValueOnce({ stopped: false, reason: "no-bridge" } as never);
-    await expect(h.calls.stop()).resolves.toBeDefined();
-    expect(h.log).toHaveBeenCalledTimes(1);
+    await expect(h.calls.stop()).rejects.toThrow("no-bridge");
+    // 적는 것은 받는 쪽(requestStop)이다. 두 번 적지 않는다.
+    expect(h.log).not.toHaveBeenCalled();
   });
 
-  it("stop은 핸드셰이크 상한을 넘기면 끝난다", async () => {
+  it("stop은 핸드셰이크 상한을 넘기면 거부한다", async () => {
     const h = callsHarness();
     h.stopRecording.mockImplementationOnce(() => new Promise(() => undefined));
     const pending = h.calls.stop();
+    const refused = expect(pending).rejects.toThrow("timeout");
     await vi.advanceTimersByTimeAsync(90_000);
-    await expect(pending).resolves.toEqual({ kind: "timeout" });
+    await refused;
   });
 
   it("open은 창을 앞으로 가져온 뒤 회의를 연다", async () => {

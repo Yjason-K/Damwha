@@ -103,7 +103,9 @@ export function createPillWindow<W>(host: PillWindowHost<W>): PillWindow {
   return {
     show(view) {
       const shown = asked.view();
-      if (asked.window() !== null && shown?.token === view.token && shown.startedAt === view.startedAt) return;
+      const same =
+        shown?.token === view.token && shown.startedAt === view.startedAt && shown.stopRetry === view.stopRetry;
+      if (asked.window() !== null && same) return;
       asked.show(view);
     },
     hide: asked.hide,

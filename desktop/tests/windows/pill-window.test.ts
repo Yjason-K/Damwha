@@ -14,7 +14,7 @@ import {
 } from "../../src/windows/pill-view";
 import type { PillPoint } from "../../src/app/detection-state";
 
-const view: PillView = { kind: "pill", token: 7, startedAt: 1_000 };
+const view: PillView = { kind: "pill", token: 7, startedAt: 1_000, stopRetry: 0 };
 const LEFT: Rect = { x: 0, y: 0, width: 1440, height: 900 };
 const RIGHT: Rect = { x: 1440, y: 0, width: 1920, height: 1080 };
 const labels = { stop: t("ko", "detect.stop"), open: t("ko", "detect.open") };
@@ -187,6 +187,15 @@ describe("createPillWindow", () => {
     expect(win.scripts).toEqual([render(view)]);
   });
 
+  it("stopRetry가 바뀌면 같은 녹음이어도 다시 그려 중지를 푼다", async () => {
+    const h = harness();
+    const { w, win } = await opened(h);
+    const retry: PillView = { ...view, stopRetry: 1 };
+    w.show(retry);
+    expect(win.scripts).toEqual([render(view), render(retry)]);
+    expect(win.moves).toEqual([]);
+  });
+
   it("호버는 오른쪽 끝을 고정해 크기를 바꾼다", async () => {
     const saved = { x: 500, y: 300 };
     const h = harness({ saved });
@@ -253,6 +262,7 @@ describe("createPillWindow", () => {
     const position = w.anchor();
     w.hide();
     h.send(win, { token: 7, ui: "drag", dx: 10, dy: 10 });
+    h.send(win, { token: 7, ui: "drop" });
     await tick();
     expect(win.moves).toEqual([]);
     expect(h.saves).toEqual([]);
