@@ -39,6 +39,7 @@ function setup(targets: DetectionTarget[] = DETECTION_TARGETS) {
     show: vi.fn<(v: CardView) => void>(),
     hide: vi.fn(),
     start: vi.fn(() => h.start()),
+    now: () => 1_000,
     cancelStart: vi.fn(async () => undefined),
     stop: vi.fn(async () => undefined),
     finish: vi.fn(async () => undefined),
@@ -78,7 +79,7 @@ function setup(targets: DetectionTarget[] = DETECTION_TARGETS) {
     md.onCard(t, "start");
     await advance(0);
     const v = last();
-    expect(v?.kind).toBe("recording");
+    expect(v?.kind).toBe("pill");
     return v!.token;
   };
   return { md, deps, h, advance, input, last, prompt, record };
@@ -490,9 +491,9 @@ describe("끝 카드", () => {
 
   it("timeout 3회 연속→lost", async () => {
     const s = await rec("timeout");
-    expect(s.last()?.kind).toBe("recording");
+    expect(s.last()?.kind).toBe("pill");
     await s.advance(2000);
-    expect(s.last()?.kind).toBe("recording");
+    expect(s.last()?.kind).toBe("pill");
     await s.advance(2000);
     expect(s.last()).toMatchObject({ kind: "finished", variant: "lost" });
   });
@@ -501,7 +502,7 @@ describe("끝 카드", () => {
     const s = await rec({ ...recSnap, failed: true });
     await s.advance(4000); // finish가 끝난 뒤 poll 둘 — 아직 한도 전
     expect(s.deps.finish).toHaveBeenCalledTimes(1);
-    expect(s.last()?.kind).toBe("recording");
+    expect(s.last()?.kind).toBe("pill");
   });
 
   it.each([
@@ -598,7 +599,7 @@ describe("리뷰 1차 수정", () => {
     s.h.snap = async () => ({ ...recSnap, failed: true });
     await s.advance(2000); // finish 호출, 아직 settle 전 poll
     await s.advance(4000);
-    expect(s.last()?.kind).toBe("recording");
+    expect(s.last()?.kind).toBe("pill");
     await s.advance(2000);
     expect(s.last()).toMatchObject({ kind: "finished", variant: "interrupted", meetingId: "m1" });
   });
@@ -651,7 +652,7 @@ describe("리뷰 1차 수정", () => {
     await s.advance(2000);
     s.h.snap = async () => "timeout";
     await s.advance(4000);
-    expect(s.last()?.kind).toBe("recording");
+    expect(s.last()?.kind).toBe("pill");
     await s.advance(2000);
     expect(s.last()).toMatchObject({ kind: "finished", variant: "lost" });
   });
@@ -673,7 +674,7 @@ describe("최종 리뷰 수정", () => {
     expect(s.deps.stop).not.toHaveBeenCalled();
     await s.advance(2000);
     expect(s.deps.stop).toHaveBeenCalledTimes(1);
-    expect(s.last()?.kind).toBe("recording");
+    expect(s.last()?.kind).toBe("pill");
     await s.advance(60_000); // 기다리는 동안 다시 묻지도, 다시 멈추지도 않는다
     expect(s.deps.stop).toHaveBeenCalledTimes(1);
     settle();
@@ -697,7 +698,7 @@ describe("최종 리뷰 수정", () => {
     s.h.snap = async () => "timeout";
     await s.advance(6000);
     expect(s.deps.stop).toHaveBeenCalledTimes(1);
-    expect(s.last()?.kind).toBe("recording");
+    expect(s.last()?.kind).toBe("pill");
     settle();
     await s.advance(0);
     expect(s.last()).toMatchObject({ kind: "finished", variant: "lost" });
@@ -747,6 +748,85 @@ describe("최종 리뷰 수정", () => {
     expect(s.last()).toMatchObject({ kind: "finished", variant: "lost", meetingId: null });
     await s.advance(30_000);
     expect(s.deps.stop).not.toHaveBeenCalled();
+  });
+});
+
+describe("알약과 경고 카드", () => {
+  const warn = { ...recSnap, micSwitched: true };
+
+  it("녹음이 시작되면 알약을 보인다", async () => {
+    const s = setup();
+    const t = await s.record();
+    expect(s.last()).toEqual({ kind: "pill", token: t, startedAt: 1_000 });
+  });
+
+  it("경고가 생기면 카드로 펼치고 10초 뒤 알약으로 돌아온다", async () => {
+    const s = setup();
+    const t = await s.record();
+    s.h.snap = async () => warn;
+    await s.advance(2000);
+    expect(s.last()).toEqual({ kind: "recording", token: t, micOnly: false, micSwitched: true });
+    await s.advance(10_000);
+    expect(s.last()).toEqual({ kind: "pill", token: t, startedAt: 1_000 });
+  });
+
+  it("같은 경고는 다시 펼치지 않는다", async () => {
+    const s = setup();
+    await s.record();
+    s.h.snap = async () => warn;
+    await s.advance(2000);
+    await s.advance(10_000);
+    const calls = s.deps.show.mock.calls.length;
+    expect(s.last()?.kind).toBe("pill");
+    await s.advance(6000);
+    expect(s.deps.show.mock.calls.length).toBe(calls);
+  });
+
+  it("펼친 동안 두 번째 경고가 오면 카드를 바꾸고 10초를 다시 잰다", async () => {
+    const s = setup();
+    const t = await s.record();
+    s.h.snap = async () => warn;
+    await s.advance(2000);
+    await s.advance(6000); // 경고 후 6초
+    s.h.snap = async () => ({ ...warn, systemAudioLost: true });
+    await s.advance(2000); // 두 번째 경고, 타이머 재시작
+    expect(s.last()).toEqual({ kind: "recording", token: t, micOnly: true, micSwitched: true });
+    await s.advance(6000);
+    expect(s.last()?.kind).toBe("recording");
+    await s.advance(4000);
+    expect(s.last()?.kind).toBe("pill");
+  });
+
+  it("경고 카드 중 녹음이 끝나면 복귀 타이머가 끝 카드를 덮지 않는다", async () => {
+    const s = setup();
+    await s.record();
+    s.h.snap = async () => warn;
+    await s.advance(2000);
+    s.h.snap = async () => ({ ...warn, phase: "ended", end: "acked" });
+    await s.advance(2000);
+    expect(s.last()).toMatchObject({ kind: "finished", variant: "done" });
+    await s.advance(9_000);
+    expect(s.last()?.kind).not.toBe("pill");
+  });
+
+  it("recording의 open은 회의를 열고 알약을 유지한다", async () => {
+    const s = setup();
+    const t = await s.record();
+    s.md.onCard(t, "open");
+    expect(s.deps.open).toHaveBeenCalledWith("m1");
+    expect(s.last()?.kind).toBe("pill");
+    expect(s.deps.hide).not.toHaveBeenCalled();
+  });
+
+  it("meetingId가 없으면 open은 로그만 남긴다", async () => {
+    const s = setup();
+    s.h.start = async () => ({ started: true });
+    const t = await s.prompt();
+    s.md.onCard(t, "start");
+    await s.advance(0);
+    s.md.onCard(s.last()!.token, "open");
+    expect(s.deps.open).not.toHaveBeenCalled();
+    expect(s.deps.log).toHaveBeenCalled();
   });
 });
 

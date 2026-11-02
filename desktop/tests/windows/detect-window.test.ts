@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { CardView } from "../../src/app/meeting-detection";
+import type { CardOnlyView as CardView } from "../../src/windows/detect-view";
 import { DESKTOP_KEYS, t } from "../../src/i18n/dictionary";
 import type { UiLanguage } from "../../src/i18n/locale";
 import { ASK_RETRY_LIMIT, createDetectWindow, type DetectWindowHost } from "../../src/windows/detect-window";

@@ -782,7 +782,11 @@ const detection = createMeetingDetection({
   targets: DETECTION_TARGETS,
   setTimer,
   ready: () => updateAttached !== null && !updateAttached.isDestroyed(),
-  show: (view) => detectWindow.show(view),
+  now: Date.now,
+  show: (view) =>
+    detectWindow.show(
+      view.kind === "pill" ? { kind: "recording", token: view.token, micOnly: false, micSwitched: false } : view,
+    ),
   hide: () => detectWindow.hide(),
   ...createRendererCalls({
     run: runInAttached,

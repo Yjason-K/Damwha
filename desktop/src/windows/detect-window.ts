@@ -3,9 +3,9 @@ import {
   DETECT_ASK_SCRIPT,
   detectRenderCall,
   parseDetectAnswer,
+  type CardOnlyView,
   type DetectAnswer,
 } from "./detect-view";
-import type { CardView } from "../app/meeting-detection";
 import type { UiLanguage } from "../i18n/locale";
 
 /**
@@ -29,7 +29,7 @@ export interface DetectWindowHost<W> {
 }
 
 export interface DetectWindow {
-  show(view: CardView): void;
+  show(view: CardOnlyView): void;
   hide(): void;
   dispose(): void;
 }
@@ -39,7 +39,7 @@ export const ASK_RETRY_LIMIT = 3;
 
 export function createDetectWindow<W>(host: DetectWindowHost<W>): DetectWindow {
   let current: W | null = null;
-  let currentView: CardView | null = null;
+  let currentView: CardOnlyView | null = null;
   /** 페이지 세대. 로드·닫힘마다 오른다 — 낡은 세대의 묻기는 답을 받지 않는다. */
   let page = 0;
 
