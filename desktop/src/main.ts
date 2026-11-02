@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, nativeTheme, powerMonitor, protocol, shell } from "electron";
+import { app, BrowserWindow, dialog, nativeTheme, powerMonitor, protocol, screen, shell } from "electron";
 import { execFile } from "child_process";
 import * as fs from "fs";
 import * as net from "net";
@@ -15,7 +15,13 @@ import {
 import type { ProcessHandle } from "./process/handle";
 import { launchVite } from "./dev/vite-process";
 import { lastMeaningfulLine } from "./diagnostics/stderr";
-import { createDetectBrowserWindow, createServicesWindow, showStatus, type ShellStatus } from "./windows/shell-window";
+import {
+  createDetectBrowserWindow,
+  createPillBrowserWindow,
+  createServicesWindow,
+  showStatus,
+  type ShellStatus,
+} from "./windows/shell-window";
 import { windowBackground } from "./windows/window-background";
 import { ServiceFailure } from "./services/failure";
 import { CAUSES } from "./diagnostics/causes";
@@ -29,6 +35,7 @@ import {
 } from "./windows/status-view";
 import { createStatusWindow, mayAutoOpen } from "./windows/status-window";
 import { createDetectWindow } from "./windows/detect-window";
+import { createPillWindow } from "./windows/pill-window";
 import { applyNavigationBoundary, applyPermissionBoundary } from "./windows/permissions";
 import { mayRenderShell } from "./windows/shell-latch";
 import { removeLegacyToken } from "./app/legacy-token-cleanup";
@@ -47,6 +54,7 @@ import { askIsRecording } from "./windows/recording-bridge";
 import { createDetectionControl, createRendererCalls, createWatchLoop, setTimer } from "./app/detection-host";
 import { makeDetectionStateStore } from "./app/detection-state";
 import { createMeetingDetection, DETECTION_TARGETS } from "./app/meeting-detection";
+import { t } from "./i18n/dictionary";
 import { installMenu, type MenuHandlers } from "./windows/menu";
 import { makeUiLanguageStore } from "./config/ui-language-store";
 import { pickUiLanguage } from "./i18n/locale";
@@ -783,11 +791,20 @@ const detection = createMeetingDetection({
   setTimer,
   ready: () => updateAttached !== null && !updateAttached.isDestroyed(),
   now: Date.now,
-  show: (view) =>
-    detectWindow.show(
-      view.kind === "pill" ? { kind: "recording", token: view.token, micOnly: false, micSwitched: false } : view,
-    ),
-  hide: () => detectWindow.hide(),
+  show: (view) => {
+    if (view.kind === "prompt") pillWindow.forget();
+    if (view.kind === "pill") {
+      detectWindow.hide();
+      pillWindow.show(view);
+    } else {
+      pillWindow.hide();
+      detectWindow.show(view);
+    }
+  },
+  hide: () => {
+    pillWindow.hide();
+    detectWindow.hide();
+  },
   ...createRendererCalls({
     run: runInAttached,
     stopRecording: () =>
@@ -809,7 +826,8 @@ const detection = createMeetingDetection({
 });
 
 const detectWindow = createDetectWindow<BrowserWindow>({
-  create: () => createDetectBrowserWindow((e) => appendSupervisorLog(`감지 카드를 열지 못했어요 — ${reasonOf(e)}`)),
+  create: () =>
+    createDetectBrowserWindow((e) => appendSupervisorLog(`감지 카드를 열지 못했어요 — ${reasonOf(e)}`), pillWindow.anchor()),
   alive: (w) => !w.isDestroyed(),
   close: (w) => w.close(),
   onLoad: (w, listener) => w.webContents.on("did-finish-load", listener),
@@ -817,6 +835,28 @@ const detectWindow = createDetectWindow<BrowserWindow>({
   run: (w, script) => w.webContents.executeJavaScript(script),
   lang: () => languageBridge.current(),
   onAction: ({ token, action }) => detection.onCard(token, action),
+  log: appendSupervisorLog,
+});
+
+const pillWindow = createPillWindow<BrowserWindow>({
+  create: (bounds) =>
+    createPillBrowserWindow(bounds, (e) => appendSupervisorLog(`녹음 표시를 열지 못했어요 — ${reasonOf(e)}`)),
+  alive: (w) => !w.isDestroyed(),
+  close: (w) => w.close(),
+  onLoad: (w, listener) => w.webContents.on("did-finish-load", listener),
+  onClosed: (w, listener) => w.on("closed", listener),
+  run: (w, script) => w.webContents.executeJavaScript(script),
+  bounds: (w) => w.getBounds(),
+  setBounds: (w, r) => w.setBounds(r),
+  workAreas: () => screen.getAllDisplays().map((d) => d.workArea),
+  cursorArea: () => screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea,
+  saved: () => detectionStore.pillPosition(),
+  save: (p) => detectionStore.setPillPosition(p),
+  labels: () => {
+    const lang = languageBridge.current();
+    return { stop: t(lang, "detect.stop"), open: t(lang, "detect.open") };
+  },
+  onAction: (token, action) => detection.onCard(token, action),
   log: appendSupervisorLog,
 });
 
@@ -1752,6 +1792,8 @@ if (!app.requestSingleInstanceLock()) {
     refreshMenu();
     powerMonitor.on("suspend", () => detectionControl.suspend("sleep"));
     powerMonitor.on("resume", () => detectionControl.resume("sleep"));
+    screen.on("display-removed", () => pillWindow.refit());
+    screen.on("display-metrics-changed", () => pillWindow.refit());
     detectionControl.setEnabled(detectionStore.enabled());
     openWindow();
     await start();
@@ -1853,6 +1895,7 @@ if (!app.requestSingleInstanceLock()) {
         systemAudio.stopAll();
         detectionControl.dispose();
         detectWindow.dispose();
+        pillWindow.dispose();
       },
       // activeWindow를 쓰지 않는다 — quitting이 이미 참이라 그것은 항상 null을 돌려준다
       // (spawn-guard). 여기서 보고 싶은 것은 "지금 창이 있는가"뿐이다.
