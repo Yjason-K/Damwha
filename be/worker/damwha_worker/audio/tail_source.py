@@ -169,7 +169,9 @@ class TailSource:
                 if behind > self._drift:
                     # 미리보기가 너무 뒤처졌다 — 뒤쪽으로 건너뛴다. 파일은 온전하고
                     # 미리보기만 구간을 못 본다. 나머지 버퍼를 버려야 프레임 경계가 맞는다.
-                    target = ((available - self._drift) // FRAME_BYTES) * FRAME_BYTES
+                    target = (
+                        (available - self._drift + FRAME_BYTES - 1) // FRAME_BYTES
+                    ) * FRAME_BYTES
                     self._rest = b""
                     self._yielded = target
                     f.seek(HEADER_LEN + target)
