@@ -3,6 +3,9 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { startTestDb, StartedTestDb } from './db';
 import { AppModule } from '../src/app.module';
+import { DatabaseService } from '../src/database/database.service';
+import { once } from 'events';
+import type { PoolClient } from 'pg';
 
 describe('cluster resolve', () => {
   let db: StartedTestDb;
@@ -140,6 +143,163 @@ describe('cluster resolve', () => {
        VALUES($1,'SPEAKER_00',$2,0,1,0,0),($1,'SPEAKER_00',$2,2,3,1,0)`, [mid, spId]);
     return { mid, clusterId: cid, provisionalId: spId };
   }
+
+  it('assigns only the current version and preserves historical lens evidence and its provisional speaker (#77)', async () => {
+    const { mid, clusterId, provisionalId } = await seedProvisional();
+    await db.pool.query(`UPDATE meeting SET processing_version=1 WHERE id=$1`, [mid]);
+    await db.pool.query(`UPDATE meeting_cluster SET processing_version=1 WHERE id=$1`, [clusterId]);
+    await db.pool.query(
+      `INSERT INTO utterance(meeting_id,diar_label,speaker_id,start_ms,end_ms,order_index,processing_version)
+       VALUES($1,'SPEAKER_00',$2,0,1,0,1),($1,'SPEAKER_00',$2,2,3,1,1),
+             ($1,'SPEAKER_01',NULL,4,5,2,1)`, [mid, provisionalId]);
+    const lens = await db.pool.query(
+      `INSERT INTO lens_item(meeting_id,kind,text,source) VALUES($1,'decision','Historical decision','user')
+       RETURNING id`, [mid]);
+    await db.pool.query(
+      `INSERT INTO lens_evidence(lens_item_id,utterance_id,relation)
+       SELECT $2,id,'primary' FROM utterance
+       WHERE meeting_id=$1 AND processing_version=0 AND order_index=0`, [mid, lens.rows[0].id]);
+    const historical = await db.pool.query(
+      `SELECT u.* FROM lens_evidence e JOIN utterance u ON u.id=e.utterance_id WHERE e.lens_item_id=$1`,
+      [lens.rows[0].id]);
+    const target = await db.pool.query(
+      `INSERT INTO speaker(name,enrollment_status) VALUES('Corrected','ready') RETURNING id`);
+
+    const res = await request(srv()).post(`/meetings/${mid}/clusters/${clusterId}/resolve`)
+      .send({ speaker_id: target.rows[0].id });
+
+    expect(res.status).toBe(200);
+    expect(res.body.updated_utterances).toBe(2);
+    expect(res.body.merged_speaker_deleted).toBe(false);
+    expect((await db.pool.query(
+      `SELECT u.* FROM lens_evidence e JOIN utterance u ON u.id=e.utterance_id WHERE e.lens_item_id=$1`,
+      [lens.rows[0].id])).rows).toEqual(historical.rows);
+    expect((await db.pool.query(
+      `SELECT processing_version,diar_label,speaker_id FROM utterance
+       WHERE meeting_id=$1 ORDER BY processing_version,order_index`, [mid])).rows).toEqual([
+      { processing_version: 0, diar_label: 'SPEAKER_00', speaker_id: provisionalId },
+      { processing_version: 0, diar_label: 'SPEAKER_00', speaker_id: provisionalId },
+      { processing_version: 1, diar_label: 'SPEAKER_00', speaker_id: target.rows[0].id },
+      { processing_version: 1, diar_label: 'SPEAKER_00', speaker_id: target.rows[0].id },
+      { processing_version: 1, diar_label: 'SPEAKER_01', speaker_id: null },
+    ]);
+    expect((await db.pool.query(
+      `SELECT speaker_id FROM voiceprint WHERE source_cluster_id=$1`, [clusterId])).rows)
+      .toEqual([{ speaker_id: target.rows[0].id }]);
+    expect((await db.pool.query(
+      `SELECT enrollment_status FROM speaker WHERE id=$1`, [provisionalId])).rows)
+      .toEqual([{ enrollment_status: 'provisional' }]);
+  });
+
+  it.each(['new_name', 'speaker_id'] as const)('rejects a stale cluster after reprocess without %s side effects (#77)', async (field) => {
+    const { mid, clusterId } = await seedProvisional();
+    const target = await db.pool.query(
+      `INSERT INTO speaker(name,enrollment_status) VALUES('Target','ready') RETURNING id`);
+    const reprocess = await request(srv()).post(`/meetings/${mid}/reprocess`).send({});
+    expect(reprocess.status).toBe(202);
+    expect(reprocess.body.processing_version).toBe(1);
+    await db.pool.query(
+      `INSERT INTO utterance(meeting_id,diar_label,start_ms,end_ms,order_index,processing_version)
+       VALUES($1,'SPEAKER_00',0,1,0,1)`, [mid]);
+    const before = await db.pool.query(
+      `SELECT row_to_json(c) AS cluster,
+              (SELECT jsonb_agg(u ORDER BY u.id) FROM utterance u WHERE u.meeting_id=c.meeting_id) AS utterances,
+              (SELECT jsonb_agg(s ORDER BY s.id) FROM speaker s) AS speakers,
+              (SELECT jsonb_agg(v ORDER BY v.id) FROM voiceprint v) AS voiceprints
+       FROM meeting_cluster c WHERE c.id=$1`, [clusterId]);
+
+    const res = await request(srv()).post(`/meetings/${mid}/clusters/${clusterId}/resolve`)
+      .send(field === 'new_name' ? { new_name: 'Stale rename' } : { speaker_id: target.rows[0].id });
+
+    expect(res.status).toBe(409);
+    expect((await db.pool.query(
+      `SELECT row_to_json(c) AS cluster,
+              (SELECT jsonb_agg(u ORDER BY u.id) FROM utterance u WHERE u.meeting_id=c.meeting_id) AS utterances,
+              (SELECT jsonb_agg(s ORDER BY s.id) FROM speaker s) AS speakers,
+              (SELECT jsonb_agg(v ORDER BY v.id) FROM voiceprint v) AS voiceprints
+       FROM meeting_cluster c WHERE c.id=$1`, [clusterId])).rows).toEqual(before.rows);
+  });
+
+  it('rejects an old cluster request begun during an uncommitted version change (#77)', async () => {
+    const { mid, clusterId, provisionalId } = await seedProvisional();
+    const writer = await db.pool.connect();
+    let response: Promise<request.Response> | undefined;
+    try {
+      await writer.query('BEGIN');
+      await writer.query(`UPDATE meeting SET processing_version=1 WHERE id=$1`, [mid]);
+      const acquired = once(app.get(DatabaseService).pool, 'acquire', { signal: AbortSignal.timeout(5000) });
+      response = request(srv()).post(`/meetings/${mid}/clusters/${clusterId}/resolve`)
+        .send({ new_name: 'Stale rename' }).then((res) => res);
+      // The HTTP request has entered its real DB transaction while the writer
+      // still owns the meeting lock. No timer decides which operation wins.
+      await acquired;
+      await writer.query('COMMIT');
+
+      expect((await response).status).toBe(409);
+      expect((await db.pool.query(
+        `SELECT name,enrollment_status FROM speaker WHERE id=$1`, [provisionalId])).rows)
+        .toEqual([{ name: 'Speaker_001', enrollment_status: 'provisional' }]);
+      expect((await db.pool.query(
+        `SELECT speaker_id FROM utterance WHERE meeting_id=$1 ORDER BY order_index`, [mid])).rows)
+        .toEqual([{ speaker_id: provisionalId }, { speaker_id: provisionalId }]);
+    } finally {
+      await writer.query('ROLLBACK');
+      writer.release();
+      await response;
+    }
+  });
+
+  it('holds the meeting lock through assignment before concurrent HTTP reprocess (#77)', async () => {
+    const { mid, clusterId } = await seed();
+    const gate = await db.pool.connect();
+    const pool = app.get(DatabaseService).pool;
+    const notices = new AbortController();
+    let response: Promise<request.Response> | undefined;
+    let reprocess: Promise<request.Response> | undefined;
+    const onAcquire = (client: PoolClient) => {
+      client.once('notice', (notice) => {
+        if (notice.message === 'cluster_assignment_barrier') notices.abort();
+      });
+    };
+    try {
+      await gate.query(`SELECT pg_advisory_lock(770077)`);
+      await gate.query(
+        `CREATE FUNCTION cluster_assignment_barrier() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN
+           RAISE NOTICE 'cluster_assignment_barrier';
+           PERFORM pg_advisory_xact_lock(770077);
+           RETURN NEW;
+         END $$;
+         CREATE TRIGGER cluster_assignment_barrier BEFORE UPDATE ON utterance
+         FOR EACH ROW EXECUTE FUNCTION cluster_assignment_barrier()`);
+      pool.once('acquire', onAcquire);
+      const assigning = once(notices.signal, 'abort', { signal: AbortSignal.timeout(5000) });
+      response = request(srv()).post(`/meetings/${mid}/clusters/${clusterId}/resolve`)
+        .send({ new_name: 'Assigned before reprocess' }).then((res) => res);
+      await assigning;
+
+      // The real SQL update has entered its trigger and is parked at our
+      // advisory gate. NOWAIT observes the row lock without polling or sleeps.
+      await expect(gate.query(`SELECT id FROM meeting WHERE id=$1 FOR UPDATE NOWAIT`, [mid]))
+        .rejects.toMatchObject({ code: '55P03' });
+      reprocess = request(srv()).post(`/meetings/${mid}/reprocess`).send({}).then((res) => res);
+      await gate.query(`SELECT pg_advisory_unlock(770077)`);
+
+      expect((await response).status).toBe(200);
+      const next = await reprocess;
+      expect(next.status).toBe(202);
+      expect(next.body.processing_version).toBe(1);
+    } finally {
+      pool.removeListener('acquire', onAcquire);
+      await gate.query(`SELECT pg_advisory_unlock(770077)`);
+      await response;
+      await reprocess;
+      await gate.query(
+        `DROP TRIGGER IF EXISTS cluster_assignment_barrier ON utterance;
+         DROP FUNCTION IF EXISTS cluster_assignment_barrier()`);
+      gate.release();
+    }
+  });
 
   it('merges provisional into existing ready speaker; deletes orphan + reattaches voiceprint', async () => {
     const { mid, clusterId, provisionalId } = await seedProvisional();

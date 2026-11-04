@@ -459,8 +459,15 @@ export class MeetingsService {
 
     const env = loadEnv();
     return this.db.withTransaction(async (c) => {
+      // persist도 meeting → cluster → speaker 순서로 잠근다. job은 여기서 잠그지 않는다.
+      // 버전 확인부터 수정 완료까지 재처리의 버전 증가·클러스터 교체를 막는다.
+      const meeting = await this.meetings.lockById(c, meetingId);
+      if (!meeting) throw new NotFoundException('meeting not found');
       const cluster = await this.meetings.lockClusterInMeeting(c, meetingId, clusterId);
       if (!cluster) throw new NotFoundException('cluster not found in meeting');
+      if (cluster.processing_version !== meeting.processing_version) {
+        throw new ConflictException('cluster belongs to a superseded processing version');
+      }
       const sPrev: string | null = cluster.resolved_speaker_id;
 
       // lock S_prev and T (ordered by id) to serialize with PATCH /speakers/:id
@@ -493,7 +500,9 @@ export class MeetingsService {
       }
 
       // unified bulk assign → updated_utterances = utterance count for this diar_label
-      const updated = await this.meetings.bulkAssignSpeaker(c, meetingId, cluster.diar_label, finalSpeakerId);
+      const updated = await this.meetings.bulkAssignSpeaker(
+        c, meetingId, cluster.processing_version, cluster.diar_label, finalSpeakerId,
+      );
       await this.meetings.setClusterResolved(c, clusterId, finalSpeakerId);
       if (cluster.has_centroid) {
         await this.meetings.upsertClusterVoiceprint(c, clusterId, finalSpeakerId, env.EMBEDDING_MODEL, env.EMBEDDING_DIM);

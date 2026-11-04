@@ -479,8 +479,9 @@ function MeetingView({
       },
       {
         onSuccess: (r) => {
+          if (!r) return;
           clearLiveCapture(meeting.id);
-          if (r?.outcome === "discarded") navigate("/", { replace: true });
+          if (r.outcome === "discarded") navigate("/", { replace: true });
         },
       },
     );

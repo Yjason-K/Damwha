@@ -363,7 +363,7 @@ export class MeetingsRepository {
 
   async lockClusterInMeeting(exec: Queryable, meetingId: string, clusterId: string) {
     const { rows } = await exec.query(
-      `SELECT id, meeting_id, diar_label, resolved_speaker_id, (centroid IS NOT NULL) AS has_centroid
+      `SELECT id, meeting_id, processing_version, diar_label, resolved_speaker_id, (centroid IS NOT NULL) AS has_centroid
        FROM meeting_cluster WHERE id=$1 AND meeting_id=$2 FOR UPDATE`,
       [clusterId, meetingId],
     );
@@ -408,10 +408,13 @@ export class MeetingsRepository {
       [clusterId, speakerId],
     );
   }
-  async bulkAssignSpeaker(exec: Queryable, meetingId: string, diarLabel: string, speakerId: string): Promise<number> {
+  async bulkAssignSpeaker(
+    exec: Queryable, meetingId: string, processingVersion: number, diarLabel: string, speakerId: string,
+  ): Promise<number> {
     const res = await exec.query(
-      `UPDATE utterance SET speaker_id=$3 WHERE meeting_id=$1 AND diar_label=$2`,
-      [meetingId, diarLabel, speakerId],
+      `UPDATE utterance SET speaker_id=$4
+       WHERE meeting_id=$1 AND processing_version=$2 AND diar_label=$3`,
+      [meetingId, processingVersion, diarLabel, speakerId],
     );
     return res.rowCount ?? 0;
   }

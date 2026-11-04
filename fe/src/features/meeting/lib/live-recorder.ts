@@ -293,6 +293,8 @@ export class LiveRecorder {
   private droppedChunk = false;
   /** 중복 stop은 같은 Promise를 돌려준다 (설계 §7). */
   private stopping: Promise<void> | null = null;
+  /** stop 응답을 잃어도 같은 경계와 꼬리로 다시 보낸다. */
+  private stopTail: Uint8Array | null = null;
   /** 자원 반납은 한 번만 돈다. 정상 종료·실패 종료가 같은 이 경로를 쓴다. */
   private releasing: Promise<void> | null = null;
 
@@ -751,11 +753,23 @@ export class LiveRecorder {
    */
   stop(): Promise<void> {
     if (!this.stopping) {
-      this.stopping = this.runStop().finally(() => {
-        // 알림은 setPhase가 한 번만 보낸다 — 이 값이 선 뒤에 stopped가 보여야 한다.
-        this.status = { ...this.status, stopSettled: true };
-        this.setPhase("stopped");
-      });
+      this.stopping = this.runStop()
+        .then(() => {
+          // 409 충돌은 오류 상태를 남기지만 봉인 ACK는 아니다. 나중에 다시
+          // 요청할 수 있어야 하므로 성공한 stop Promise로 보관하지 않는다.
+          if (this.stopTail !== null && this.status.sealed === null) {
+            this.stopping = null;
+          }
+        })
+        .catch((error: unknown) => {
+          this.stopping = null;
+          throw error;
+        })
+        .finally(() => {
+          // 알림은 setPhase가 한 번만 보낸다 — 이 값이 선 뒤에 stopped가 보여야 한다.
+          this.status = { ...this.status, stopSettled: true };
+          this.setPhase("stopped");
+        });
     }
     return this.stopping;
   }
@@ -790,10 +804,10 @@ export class LiveRecorder {
     //  - 실패·봉인 뒤에 되돌려보낸 청크가 있다(flush 자투리가 완성한 청크를 포함한다),
     //  - 서버가 스스로 봉인해 로컬 바이트가 절대 받아들여지지 않는다.
     // 셋 중 하나라도 참이면 마지막으로 확인된 연속 경계에서 빈 바디로 끝낸다 (설계 §7).
-    const tail =
+    const tail = (this.stopTail ??=
       this.queue.length > 0 || this.droppedChunk || this.status.sealed !== null
         ? new Uint8Array(0)
-        : this.chunks.flush();
+        : this.chunks.flush());
     // 큐가 비어 있어도 failed는 실어 보낸다 — device_ended가 큐가 빈 순간에 오면
     // 꼬리는 온전하지만 그 뒤로 아무것도 잡히지 않았다는 사실은 그대로 남아야 한다.
     const res = await this.deps.postStop(
@@ -804,7 +818,10 @@ export class LiveRecorder {
       this.lastCaptureElapsedMs,
       this.status.failed,
     );
-    if (res.status === 200) return;
+    if (res.status === 200) {
+      this.stopTail = null;
+      return;
+    }
     if (res.code) {
       // 서버가 스스로 닫았다 — 우리 경계로 다시 봉인할 것이 없다 (설계 §4.2).
       this.markServerSeal(res.code);
@@ -821,6 +838,7 @@ export class LiveRecorder {
     // 서버 경계에서 빈 stop으로 다시 봉인한다 (설계 §7). 로컬 미전송 PCM은 버린다 —
     // 그것을 성공으로 표시하는 것보다 짧은 녹음이 정직하다.
     this.offset = res.expected;
+    this.stopTail = new Uint8Array(0);
     const retry = await this.deps.postStop(
       this.meetingId,
       this.offset,
@@ -829,7 +847,10 @@ export class LiveRecorder {
       this.lastCaptureElapsedMs,
       this.status.failed,
     );
-    if (retry.status === 200) return;
+    if (retry.status === 200) {
+      this.stopTail = null;
+      return;
+    }
     if (retry.code) {
       this.markServerSeal(retry.code);
       return;
