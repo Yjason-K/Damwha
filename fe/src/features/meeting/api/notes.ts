@@ -3,6 +3,7 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type QueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
 
@@ -39,6 +40,16 @@ export function useMeetingNote(
 
 type SaveNoteVars = { meetingId: string; bodyMd: string };
 
+type NoteSaveQueue = {
+  tail: Promise<MeetingNote | null>;
+  confirmed: MeetingNote | null | undefined;
+  latest: SaveNoteVars;
+};
+
+// 화면을 나갔다 돌아와도 같은 회의의 쓰기는 추월하지 않는다.
+// QueryClient별로 격리하고 마지막 저장이 끝나면 회의 큐를 지운다.
+const saveQueues = new WeakMap<QueryClient, Map<string, NoteSaveQueue>>();
+
 /**
  * 저장 뮤테이션. meetingId를 훅 인자가 아니라 변수로 받는다 — 자동저장이
  * debounce 중 회의를 전환하면, flush 시점의 mutationFn이 훅을 호출한
@@ -55,36 +66,65 @@ type SaveNoteVars = { meetingId: string; bodyMd: string };
  */
 export function useSaveMeetingNote() {
   const queryClient = useQueryClient();
+  let queues = saveQueues.get(queryClient);
+  if (!queues) {
+    queues = new Map<string, NoteSaveQueue>();
+    saveQueues.set(queryClient, queues);
+  }
+  const meetingQueues = queues;
+  function queueFor(vars: SaveNoteVars): NoteSaveQueue {
+    const current = meetingQueues.get(vars.meetingId);
+    if (current) return current;
+    const queue: NoteSaveQueue = {
+      tail: Promise.resolve(null),
+      confirmed: queryClient.getQueryData(noteQueryKey(vars.meetingId)),
+      latest: vars,
+    };
+    meetingQueues.set(vars.meetingId, queue);
+    return queue;
+  }
   return useMutation({
-    mutationFn: async ({ meetingId, bodyMd }: SaveNoteVars) => {
-      const { data } = await apiClient.put<{ note: MeetingNote } | "">(
-        `/meetings/${meetingId}/note`,
-        { body_md: bodyMd },
-      );
-      // 공백 본문은 서버가 204(빈 본문)로 답한다.
-      return typeof data === "string" || !data ? null : data.note;
+    mutationFn: (vars: SaveNoteVars) => {
+      const queue = queueFor(vars);
+      const save = async () => {
+        const { data } = await apiClient.put<{ note: MeetingNote } | "">(
+          `/meetings/${vars.meetingId}/note`,
+          { body_md: vars.bodyMd },
+        );
+        // 공백 본문은 서버가 204(빈 본문)로 답한다.
+        const note = typeof data === "string" || !data ? null : data.note;
+        queue.confirmed = note;
+        return note;
+      };
+      // 앞 요청 실패는 그 mutation이 보고한다. 다음 초안의 저장은 계속한다.
+      const request = queue.tail.then(save, save);
+      queue.tail = request;
+      return request;
     },
-    onMutate: ({ meetingId, bodyMd }: SaveNoteVars) => {
+    onMutate: (vars: SaveNoteVars) => {
+      const { meetingId, bodyMd } = vars;
       const key = noteQueryKey(meetingId);
-      // 실패 시 되돌릴 수 있도록 낙관적 갱신 전 값을 남겨 둔다.
-      const previous = queryClient.getQueryData<MeetingNote | null>(key);
+      const queue = queueFor(vars);
+      queue.latest = vars;
       // 공백 본문은 서버가 행을 지우고 204로 답하므로 캐시도 null로 맞춘다.
       const note: MeetingNote | null =
         bodyMd.trim() === ""
           ? null
           : { body_md: bodyMd, updated_at: new Date().toISOString() };
       queryClient.setQueryData(key, note);
-      return { previous, meetingId };
+      return { queue };
     },
-    onError: (_err, _vars, context) => {
-      // PUT이 실패하면 캐시에 남은 낙관적 값을 되돌린다 — 그대로 두면 저장되지
-      // 않은 본문이 저장된 것처럼 보이고, staleTime 동안 재조회도 그 값을 그대로
-      // 돌려준다.
-      if (!context) return;
+    onError: (_err, vars, context) => {
+      // 이전 실패는 최신 초안을 건드리지 않는다. 마지막 실패만 서버 확인값으로
+      // 되돌린다(직전 낙관적 값은 그 저장도 실패했을 수 있어 기준으로 쓰지 않는다).
+      if (!context || context.queue.latest !== vars) return;
       queryClient.setQueryData(
-        noteQueryKey(context.meetingId),
-        context.previous,
+        noteQueryKey(vars.meetingId),
+        context.queue.confirmed ?? null,
       );
+    },
+    onSettled: (_data, _error, vars, context) => {
+      if (context?.queue.latest === vars) meetingQueues.delete(vars.meetingId);
     },
   });
 }
