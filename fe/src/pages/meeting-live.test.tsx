@@ -22,6 +22,7 @@ import type {
 import {
   beginLiveCapture,
   clearLiveCapture,
+  getLiveRecorder,
   prepareLiveRecorder,
 } from "@/features/meeting/lib/live-session";
 import { SR } from "@/features/meeting/lib/pcm-convert";
@@ -190,7 +191,7 @@ async function stubMicAndStartRecorder(meetingId: string) {
   // 준비가 끝난 뒤에야 회의에 붙인다 (설계 §6) — 화면은 그 결과인 활성 캡처만 본다.
   const capture = await prepareLiveRecorder();
   await beginLiveCapture(capture, meetingId);
-  return capture;
+  return { ...capture, emit };
 }
 
 let getSpy: { mock: { calls: unknown[][] } };
@@ -255,6 +256,61 @@ test("종료를 누르면 recorder.stop()을 거쳐 오프셋·꼬리를 실은 
       }),
     ),
   );
+});
+
+test("종료 응답 유실 뒤 미확인 409가 와도 다시 종료하면 꼬리를 재전송한다", async () => {
+  const capture = await stubMicAndStartRecorder("m1");
+  let stopCalls = 0;
+  const post = vi.spyOn(apiClient, "post").mockImplementation(async (url) => {
+    if (url === "/meetings/m1/live/audio") {
+      return { status: 200, data: { expected_offset: 32768 } };
+    }
+    stopCalls++;
+    if (stopCalls === 1) throw new Error("response lost");
+    if (stopCalls === 2) {
+      return {
+        status: 409,
+        data: { code: "missing_chunk", expected_offset: 32768 },
+      };
+    }
+    return {
+      status: 200,
+      data: { meeting_id: "m1", job_id: "job_1", outcome: "stopping" },
+    };
+  });
+  capture.recorder.enqueue(new Uint8Array(32768));
+  await capture.recorder.drain();
+  capture.emit({ type: "pcm", pcm: new Int16Array([1, 2, 3]).buffer });
+  renderAt("/meetings/m1");
+  const button = await screen.findByRole("button", { name: "종료" });
+
+  await act(async () => {
+    fireEvent.click(button);
+  });
+  expect(stopCalls).toBe(1);
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "종료" }));
+  });
+  expect(stopCalls).toBe(2);
+  expect(capture.stopOutcome.current).toBeNull();
+  expect(getLiveRecorder("m1")?.recorder).toBe(capture.recorder);
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "종료" }));
+  });
+
+  expect(stopCalls).toBe(3);
+  const stops = post.mock.calls.filter(
+    ([url]) => url === "/meetings/m1/live/stop",
+  );
+  for (const [, body, config] of stops) {
+    expect(body).toEqual(new Uint8Array([1, 0, 2, 0, 3, 0]));
+    expect(config?.headers).toMatchObject({
+      "X-Audio-Offset": "32768",
+      "X-Final-Offset": "32774",
+    });
+  }
+  expect(capture.stopOutcome.current?.outcome).toBe("stopping");
+  expect(getLiveRecorder("m1")).toBeUndefined();
 });
 
 test("이 탭에서 시작하지 않은 녹음은 종료 대신 안내만 한다 — 오프셋을 몰라 꼬리를 보낼 수 없다", async () => {

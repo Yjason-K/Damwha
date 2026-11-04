@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { apiClient } from "@/shared/api/client";
+import { ApiError, apiClient } from "@/shared/api/client";
 import { Toaster } from "@/shared/ui/toaster";
 import { CHUNK_BYTES, SR } from "./pcm-convert";
 import type { WorkletCommand, WorkletEvent } from "./pcm-worklet-protocol";
@@ -213,6 +213,93 @@ describe("live-session registry", () => {
     // clearLiveCapture를 일부러 부르지 않는다 — 종료 요청이 실패한 탭의 상태다.
     const next = await prepareLiveRecorder();
     expect(next.recorder).not.toBe(finished.recorder);
+  });
+
+  it("#76 종료 요청 실패 후 새 녹음이 재시도할 레코더를 밀어내지 않는다", async () => {
+    stubMic();
+    vi.spyOn(apiClient, "get").mockRejectedValue(new Error("still offline"));
+    const post = vi
+      .spyOn(apiClient, "post")
+      .mockRejectedValueOnce(new Error("connection lost"))
+      .mockRejectedValueOnce(new Error("still offline"))
+      .mockResolvedValue({
+        status: 200,
+        data: { meeting_id: "m1", job_id: "job_1", outcome: "stopping" },
+      } as never);
+    const capture = await startCapture("m1");
+
+    await expect(capture.recorder.stop()).rejects.toThrow("connection lost");
+    const releaseOffline = reserveLiveStart();
+    await expect(prepareLiveRecorder()).rejects.toThrow("still offline");
+    releaseOffline();
+    expect(getLiveRecorder("m1")?.recorder).toBe(capture.recorder);
+
+    const releaseOnline = reserveLiveStart();
+    const next = await prepareLiveRecorder();
+    releaseOnline();
+    expect(capture.stopOutcome.current?.outcome).toBe("stopping");
+    expect(post).toHaveBeenCalledTimes(3);
+    expect(next.recorder).not.toBe(capture.recorder);
+  });
+
+  it.each(["uploaded", "deleted"] as const)(
+    "#76 서버가 이전 회의를 %s 상태로 정리했다면 새 녹음을 시작한다",
+    async (serverState) => {
+      render(<Toaster />);
+      stubMic();
+      vi.spyOn(apiClient, "post")
+        .mockRejectedValueOnce(new Error("response lost"))
+        .mockImplementationOnce(async () => {
+          if (serverState === "deleted") {
+            throw new ApiError(404, "meeting not found");
+          }
+          return {
+            status: 409,
+            data: { code: "missing_chunk", expected_offset: 0 },
+          } as never;
+        });
+      const get = vi.spyOn(apiClient, "get");
+      if (serverState === "deleted") {
+        get.mockRejectedValue(new ApiError(404, "meeting not found"));
+      } else {
+        get.mockResolvedValue({ data: { status: serverState } } as never);
+      }
+      const capture = await startCapture("m1");
+      await expect(capture.recorder.stop()).rejects.toThrow("response lost");
+
+      const release = reserveLiveStart();
+      const next = await prepareLiveRecorder();
+      release();
+
+      expect(next.recorder).not.toBe(capture.recorder);
+      expect(capture.stopOutcome.current).toBeNull();
+      expect(get).toHaveBeenCalledWith("/meetings/m1");
+    },
+  );
+
+  it("#76 서버가 아직 녹음 중이면 오프셋 충돌만으로 꼬리를 버리지 않는다", async () => {
+    render(<Toaster />);
+    stubMic();
+    vi.spyOn(apiClient, "post")
+      .mockRejectedValueOnce(new Error("response lost"))
+      .mockResolvedValueOnce({
+        status: 409,
+        data: { code: "missing_chunk", expected_offset: 0 },
+      } as never)
+      .mockResolvedValueOnce({
+        status: 200,
+        data: { meeting_id: "m1", job_id: "job_1", outcome: "stopping" },
+      } as never);
+    vi.spyOn(apiClient, "get").mockResolvedValue({
+      data: { status: "recording" },
+    } as never);
+    const capture = await startCapture("m1");
+    await expect(capture.recorder.stop()).rejects.toThrow("response lost");
+
+    await expect(prepareLiveRecorder()).rejects.toBeInstanceOf(LiveCaptureBusy);
+    expect(getLiveRecorder("m1")?.recorder).toBe(capture.recorder);
+    await capture.recorder.stop();
+    expect(capture.stopOutcome.current?.outcome).toBe("stopping");
   });
 
   it("회의에 붙지 않은 이전 준비는 새 준비가 정리한다", async () => {
