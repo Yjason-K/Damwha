@@ -344,6 +344,10 @@ export class MeetingsService {
     const processing = resolveProcessingConfig(global_, override, (await this.caps.get()).gpu_eligible);
     return this.db.withTransaction(async (c) => {
       const version = await this.meetings.bumpVersionForReprocess(c, id);
+      // 위 사전 확인 뒤 다른 요청이 먼저 재처리(또는 상태 변경)했다.
+      if (version === null) {
+        throw new ConflictException('reprocess allowed only when status is done or failed');
+      }
       const payload = buildProcessMeetingPayload({
         meetingId: id, audioKey: meeting.audio_key, processingVersion: version, reprocess: true, processing, speakers,
         // 재처리는 업로드와 달리 미루기 옵션을 노출하지 않는다 — 이미 있는 결과를
