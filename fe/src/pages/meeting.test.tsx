@@ -1511,6 +1511,82 @@ test("빈 검색어로 팔레트를 열면 브라우즈 결과가 보인다", as
   ).not.toBeInTheDocument();
 });
 
+/** /search만 갈아끼운다 — 나머지 POST는 기존 목 그대로. */
+function mockSearch(reply: () => Promise<unknown>) {
+  vi.mocked(apiClient.post).mockImplementation(((url: string) =>
+    url === "/search"
+      ? reply()
+      : fx.postResponse(url)) as typeof apiClient.post);
+}
+afterEach(() =>
+  vi
+    .mocked(apiClient.post)
+    .mockImplementation(((url: string) =>
+      fx.postResponse(url)) as typeof apiClient.post),
+);
+
+test("검색 요청이 실패하면 결과 없음이 아니라 오류와 다시 시도를 보이고, 다시 시도에 성공하면 결과를 보인다", async () => {
+  let fail = true;
+  mockSearch(() =>
+    fail
+      ? Promise.reject(new Error("network down"))
+      : fx.postResponse("/search"),
+  );
+  renderShell();
+  await screen.findByRole("heading", {
+    level: 1,
+    name: "기획회의 — UI 개선안",
+  });
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+
+  expect(await screen.findByText(/검색하지 못했어요/)).toBeInTheDocument();
+  expect(
+    screen.queryByText("결과가 없어요. 다른 검색어를 시도해 보세요."),
+  ).not.toBeInTheDocument();
+
+  fail = false;
+  fireEvent.click(screen.getByRole("button", { name: "다시 시도" }));
+  const options = await within(screen.getByRole("listbox")).findAllByRole(
+    "option",
+  );
+  expect(options.length).toBeGreaterThan(0);
+  expect(screen.queryByText(/검색하지 못했어요/)).not.toBeInTheDocument();
+});
+
+test("검색이 성공했지만 결과가 비면 결과 없음을 보인다 — 실패와 구분된다", async () => {
+  mockSearch(() =>
+    Promise.resolve({
+      data: { mode: "hybrid", semantic: true, hasMore: false, results: [] },
+    }),
+  );
+  renderShell();
+  await screen.findByRole("heading", {
+    level: 1,
+    name: "기획회의 — UI 개선안",
+  });
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+
+  expect(
+    await screen.findByText("결과가 없어요. 다른 검색어를 시도해 보세요."),
+  ).toBeInTheDocument();
+  expect(screen.queryByText(/검색하지 못했어요/)).not.toBeInTheDocument();
+});
+
+test("검색 응답을 기다리는 동안에는 결과 없음 대신 검색 중을 보인다", async () => {
+  mockSearch(() => new Promise(() => {}));
+  renderShell();
+  await screen.findByRole("heading", {
+    level: 1,
+    name: "기획회의 — UI 개선안",
+  });
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+
+  expect(await screen.findByText("검색하는 중…")).toBeInTheDocument();
+  expect(
+    screen.queryByText("결과가 없어요. 다른 검색어를 시도해 보세요."),
+  ).not.toBeInTheDocument();
+});
+
 test("resolve는 diar_label이 아니라 실제 clu_* id로 호출한다", async () => {
   // 매퍼가 미해결 클러스터의 id를 실제 clu_* PK로 노출하는지 먼저 고정한다.
   const detail = toMeetingDetail(fx.detailOf("m1"));
