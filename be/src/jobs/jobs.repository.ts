@@ -91,6 +91,12 @@ export class JobsRepository {
     return rows[0] ?? null;
   }
 
+  /** job 행 잠금. 워커와 같은 job → meeting 순서를 지키는 취소 경로가 meeting보다 먼저 부른다. */
+  async lockById(exec: Queryable, jobId: string): Promise<JobRow | null> {
+    const { rows } = await exec.query<JobRow>(`SELECT * FROM job WHERE id=$1 FOR UPDATE`, [jobId]);
+    return rows[0] ?? null;
+  }
+
   async fail(exec: Queryable, jobId: string, error: object): Promise<void> {
     await exec.query(
       `UPDATE job SET status='failed', error=$2::jsonb, updated_at=now() WHERE id=$1`,

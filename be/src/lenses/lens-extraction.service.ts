@@ -59,13 +59,22 @@ export class LensExtractionService {
   /**
    * 운영자 취소 (POST /meetings/:id/lenses/cancel). 화면 미노출 — 진행 중 run이
    * 없으면 409. 잡과 run을 함께 failed(cancelled)로 닫는다.
+   *
+   * 잠금은 job → meeting → run 순서다 — 워커(mark_lens_run_running 등)가 job을 먼저 잠그므로
+   * meeting을 먼저 잠그면 교차 deadlock이 난다(이슈 #80). job id는 잠그지 않은 조회로 얻고,
+   * 잠근 뒤 진행 중 run이 여전히 그 job인지 다시 확인한다.
    */
   async cancel(meetingId: string): Promise<{ job_id: string; status: 'failed' }> {
     return this.db.withTransaction(async (exec) => {
+      const probe = await this.extractions.findActiveJobId(exec, meetingId);
+      const job = probe ? await this.jobs.lockById(exec, probe) : null;
       const meeting = await this.extractions.lockMeeting(exec, meetingId);
       if (!meeting) throw new NotFoundException('meeting not found');
       const active = await this.extractions.findActiveRun(exec, meeting.id, meeting.processing_version);
-      if (!active?.job_id) throw new ConflictException('no lens extraction in progress to cancel');
+      if (!active?.job_id || !job || active.job_id !== job.id
+          || (job.status !== 'queued' && job.status !== 'running')) {
+        throw new ConflictException('no lens extraction in progress to cancel');
+      }
 
       const error = JobsRepository.cancelledError('extract_lenses');
       await this.jobs.cancel(exec, active.job_id, error);

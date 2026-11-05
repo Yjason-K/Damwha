@@ -352,13 +352,18 @@ export class MeetingsRepository {
     );
   }
 
-  async bumpVersionForReprocess(exec: Queryable, id: string): Promise<number> {
+  /**
+   * 재처리 가능 상태(done|failed)일 때만 버전을 올린다 — 상태 확인과 증가가 한 UPDATE라
+   * 동시 요청 중 뒤에 온 쪽은 행 잠금이 풀린 뒤 바뀐 status를 다시 평가해 0행이 된다(이슈 #81).
+   * 0행이면 null.
+   */
+  async bumpVersionForReprocess(exec: Queryable, id: string): Promise<number | null> {
     const { rows } = await exec.query<{ processing_version: number }>(
       `UPDATE meeting SET processing_version = processing_version + 1, status='uploaded', error=NULL
-       WHERE id=$1 RETURNING processing_version`,
+       WHERE id=$1 AND status IN ('done','failed') RETURNING processing_version`,
       [id],
     );
-    return rows[0].processing_version;
+    return rows[0]?.processing_version ?? null;
   }
 
   async lockClusterInMeeting(exec: Queryable, meetingId: string, clusterId: string) {
