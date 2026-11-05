@@ -367,7 +367,10 @@ function MeetingView({
     setPlaying(false);
   }, [meetingStatus]);
 
-  const { data: meetingLensData } = useMeetingLenses(meetingId);
+  const { data: meetingLensData } = useMeetingLenses(
+    meetingId,
+    meeting?.status,
+  );
   const setLensCompletion = useSetLensCompletion();
   const dismissLens = useDismissLens();
   const extractLenses = useRetryExtraction();
