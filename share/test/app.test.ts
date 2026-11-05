@@ -158,6 +158,64 @@ describe('삭제', () => {
     expect((await del(app, id)).status).toBe(403);
     expect((await get(app, id)).status).toBe(200);
   });
+
+  // 이슈 #78 — be가 업로드 타임아웃 뒤 바로 철회하면 서버는 아직 저장 중일 수 있다. 그때 404를 주면 be는
+  // 철회 완료로 확정하고 토큰을 지우는데, 뒤늦게 저장이 끝나 암호문이 남았다.
+  /** store.put 진입 직후 멈춘다. release()로 실제 저장을 이어 간다. */
+  function holdPut() {
+    const realPut = store.put.bind(store);
+    let entered!: () => void;
+    let release!: () => void;
+    const enteredP = new Promise<void>((r) => (entered = r));
+    const gate = new Promise<void>((r) => (release = r));
+    store.put = async (...args) => {
+      entered();
+      await gate;
+      return realPut(...args);
+    };
+    return { entered: enteredP, release };
+  }
+
+  it('저장 중인 id를 맞는 토큰으로 지우면 409 CREATE_IN_PROGRESS — 철회 완료로 오인할 404를 주지 않는다', async () => {
+    const app = makeApp();
+    const hold = holdPut();
+    const id = newShareId(7);
+    const token = newDeleteToken();
+    const creating = upload(app, { id, token });
+    await hold.entered;
+
+    const early = await del(app, id, token);
+    expect(early.status).toBe(409);
+    expect(await early.json()).toEqual({ code: 'CREATE_IN_PROGRESS' });
+
+    hold.release();
+    expect((await creating).res.status).toBe(201);
+    // be의 철회 재시도는 저장이 끝난 뒤 실제로 지운다
+    expect((await del(app, id, token)).status).toBe(204);
+    expect((await get(app, id)).status).toBe(410);
+  });
+
+  it('저장 중인 id라도 토큰이 틀리면 403', async () => {
+    const app = makeApp();
+    const hold = holdPut();
+    const id = newShareId(7);
+    const creating = upload(app, { id });
+    await hold.entered;
+
+    expect((await del(app, id, newDeleteToken())).status).toBe(403);
+    hold.release();
+    expect((await creating).res.status).toBe(201);
+  });
+
+  it('저장이 실패하면 진행 중 표시가 풀려 이후 삭제는 다시 404다', async () => {
+    const app = makeApp();
+    store.put = async () => {
+      throw new Error('ENOSPC');
+    };
+    const { id, token, res } = await upload(app);
+    expect(res.status).toBe(500);
+    expect((await del(app, id, token)).status).toBe(404);
+  });
 });
 
 describe('교체 (spec selfhost-v2 §2.4)', () => {

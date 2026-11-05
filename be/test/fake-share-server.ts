@@ -4,10 +4,11 @@ import type { AddressInfo } from 'node:net';
 /**
  * 공유 서버의 HTTP 계약(share/src/app.ts)만 흉내 내는 서버. be 테스트가 실제 공유 서버 없이 업로드·교체·철회·
  * 장애를 재현한다. mode로 장애를 고른다 — drop: 소켓을 끊음(오프라인), storeThenDrop: 저장은 하고 응답 대신 소켓을 끊음
- * (응답 유실), down500, busy503, redirect, garbage(201인데 replaced만 boolean이 아님), garbageDate(201인데 expires_at만 날짜가 아님).
+ * (응답 유실), down500, busy503, redirect, garbage(201인데 replaced만 boolean이 아님), garbageDate(201인데 expires_at만 날짜가 아님),
+ * createInProgress(DELETE에 409 CREATE_IN_PROGRESS — 아직 저장 중인 id, 이슈 #78).
  * nextUpload()는 다음 POST가 **도착한 순간** 풀린다 — 경합 테스트가 "업로드 중"을 시간 대신 사건으로 기다린다.
  */
-export type FakeMode = 'ok' | 'drop' | 'storeThenDrop' | 'down500' | 'busy503' | 'redirect' | 'garbage' | 'garbageDate';
+export type FakeMode = 'ok' | 'drop' | 'storeThenDrop' | 'down500' | 'busy503' | 'redirect' | 'garbage' | 'garbageDate' | 'createInProgress';
 
 export interface FakeShareServer {
   url: string;
@@ -42,6 +43,10 @@ export async function startFakeShareServer(): Promise<FakeShareServer> {
       if (state.mode === 'drop') { req.socket.destroy(); return; }
       if (state.mode === 'down500') { res.writeHead(500).end(); return; }
       if (state.mode === 'busy503') { res.writeHead(503, { 'content-type': 'application/json' }).end('{"code":"DAILY_CAP"}'); return; }
+      if (state.mode === 'createInProgress' && req.method === 'DELETE') {
+        res.writeHead(409, { 'content-type': 'application/json' }).end('{"code":"CREATE_IN_PROGRESS"}');
+        return;
+      }
       if (state.mode === 'redirect') { res.writeHead(302, { location: 'http://127.0.0.1:9/elsewhere' }).end(); return; }
       const m = (req.url ?? '').match(/^\/api\/shares(?:\/([^/?]+))?$/);
       if (req.method === 'POST' && m && !m[1]) {
