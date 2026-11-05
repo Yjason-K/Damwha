@@ -2,7 +2,11 @@ import { EventEmitter } from "events";
 import { PassThrough } from "stream";
 import { describe, expect, it, vi } from "vitest";
 import type { SystemAudioSession } from "../../src/process/system-audio";
-import { createSystemAudioProtocol, stopOnRendererReset } from "../../src/windows/system-audio-protocol";
+import {
+  createSystemAudioProtocol,
+  stopOnRendererReset,
+  SYSTEM_AUDIO_MAX_QUEUED_BYTES,
+} from "../../src/windows/system-audio-protocol";
 
 const ORIGIN = "http://127.0.0.1:3000";
 
@@ -119,6 +123,62 @@ describe("system audio protocol", () => {
     await p.handle(get("/pcm"));
     p.stopAll();
     expect(s.stop).toHaveBeenCalledTimes(1);
+  });
+
+  describe("소비가 멈추면 큐가 상한에서 멈춘다 (#85)", () => {
+    const KIB = new Uint8Array(1024);
+    function writeKib(pcm: PassThrough, n: number) {
+      for (let i = 0; i < n; i += 1) pcm.write(KIB);
+    }
+
+    it("lets a slow reader catch up as long as the queue stays under the cap", async () => {
+      const s = fakeSession();
+      const res = await protocolWith(async () => s.session).handle(get("/pcm"));
+      const reader = res.body!.getReader();
+      const half = SYSTEM_AUDIO_MAX_QUEUED_BYTES / 1024 / 2;
+      let got = 0;
+      for (let round = 0; round < 4; round += 1) {
+        writeKib(s.pcm, half); // 상한의 절반씩 쌓였다가
+        await vi.waitFor(() => expect(s.pcm.readableLength).toBe(0));
+        while (got < (round + 1) * half * 1024) got += (await reader.read()).value!.length; // 따라잡는다
+      }
+      expect(got).toBe(4 * half * 1024);
+      expect(s.stop).not.toHaveBeenCalled();
+      await reader.cancel();
+    });
+
+    it("fails the body and stops the helper instead of queueing past the cap when the reader stalls", async () => {
+      const pcm = new PassThrough();
+      const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(() => undefined);
+      // 헬퍼는 stop() 뒤에도 종료할 때까지 쓴다 — 여기서는 pcm을 닫지 않는다.
+      const stop = vi.fn();
+      const session: SystemAudioSession = { pcm, exited, stop };
+      const log: string[] = [];
+      const p = createSystemAudioProtocol({
+        allowedOrigins: () => [ORIGIN],
+        start: async () => session,
+        log: (l) => void log.push(l),
+      });
+      const res = await p.handle(get("/pcm"));
+      const reader = res.body!.getReader();
+
+      writeKib(pcm, SYSTEM_AUDIO_MAX_QUEUED_BYTES / 1024); // 상한까지는 받는다
+      await vi.waitFor(() => expect(pcm.readableLength).toBe(0));
+      expect(stop).not.toHaveBeenCalled();
+
+      writeKib(pcm, 1); // 넘치는 첫 조각
+      await vi.waitFor(() => expect(stop).toHaveBeenCalledTimes(1));
+      await expect(reader.read()).rejects.toThrow();
+      expect(log.some((l) => l.includes("상한"))).toBe(true);
+
+      // 헬퍼가 쓰기에서 막히지 않게 계속 흘려 버린다 — 종료가 막히지 않는다.
+      writeKib(pcm, 64);
+      pcm.end();
+      await vi.waitFor(() => expect(pcm.readableEnded).toBe(true));
+      expect(pcm.readableLength).toBe(0);
+      expect(stop).toHaveBeenCalledTimes(1);
+      p.stopAll(); // 앱 종료도 그대로 끝난다
+    });
   });
 
   it("stopAll also stops a helper that was still starting — its request has no renderer left to cancel it", async () => {

@@ -49,7 +49,9 @@ bash desktop/scripts/build-icon.sh                             # build-resources
 §6.11(렌더러 → main 경로 없음)의 유일한 예외**다. preload·IPC는 여전히 없다. 허용 origin만 받고, 한 번에 헬퍼 하나,
 본문을 cancel하면 헬퍼가 꺼진다. 새로고침·창 파괴에서 Electron이 본문을 cancel한다는 보장이 없어 main이
 `did-start-navigation`(메인 프레임·다른 문서)·`render-process-gone`·`destroyed`에서 `stopAll()`을 부르고
-(`stopOnRendererReset`), `beginQuit`도 부른다. 시작 중이던 헬퍼도 그때 꺼진다.
+(`stopOnRendererReset`), `beginQuit`도 부른다. 시작 중이던 헬퍼도 그때 꺼진다. 렌더러가 읽지 않아 본문 큐가
+`SYSTEM_AUDIO_MAX_QUEUED_BYTES`(1 MiB, 약 32초)에 닿으면 본문을 실패로 끝내고 헬퍼를 끈다(#85) — 헬퍼 stdout을 멈추는
+backpressure는 쓰지 않는다(쓰기에서 막힌 헬퍼는 stop() 뒤에도 끝나지 못한다). fe는 그것을 `lost`로 받는다.
 - "담화 자신은 뺀다"는 Electron main **과 그 자식 전부**다 — Chromium은 소리를 오디오 서비스 utility 프로세스에서
   낸다. 제외 목록은 tap을 만들 때 한 번 정한다(돌고 있는 tap의 설명을 바꾸면 `'!hog'`로 거부됨, 실측). 녹음기가
   마이크를 연 뒤에 헬퍼를 띄우므로 그때 오디오 서비스는 이미 CoreAudio 프로세스다 — 이 순서를 바꾸지 않는다.
