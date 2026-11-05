@@ -92,7 +92,12 @@ export function AppShell() {
     activeFolder ||
     cmdSince
   );
-  const { data: hits = [] } = useSearch(cmdQuery, cmdOpen, {
+  const {
+    data: hits = [],
+    isPending: searchPending,
+    isError: searchError,
+    refetch: refetchSearch,
+  } = useSearch(cmdQuery, cmdOpen, {
     tagId: activeCmdTag,
     speakerId: activeSpeaker,
     folderId: activeFolder,
@@ -275,6 +280,9 @@ export function AppShell() {
               : undefined
           }
           groups={cmdGroups}
+          loading={searchPending}
+          error={searchError}
+          onRetry={() => void refetchSearch()}
           onSelect={(item) => {
             if (!item.id) return;
             setCmdOpen(false);

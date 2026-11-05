@@ -229,17 +229,28 @@ export function ProcessingSettingsForm() {
     setSaved(fromConfig(settings.data));
   }
 
-  if (settings.isLoading || form === null) {
+  // 폼이 생긴 뒤에는 배경 재조회가 실패해도 편집 중인 값을 지우지 않는다 —
+  // 오류 화면은 아직 한 번도 받지 못했을 때만 보인다.
+  if (form === null) {
+    if (settings.isError) {
+      return (
+        <div role="alert" className="flex flex-col items-start gap-2">
+          <p className="text-sm text-[color:var(--red-text)]">
+            설정을 불러오지 못했어요.
+          </p>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => void settings.refetch()}
+          >
+            다시 시도
+          </Button>
+        </div>
+      );
+    }
     return (
       <p role="status" className="text-sm text-[color:var(--text-muted)]">
         설정을 불러오는 중…
-      </p>
-    );
-  }
-  if (settings.isError) {
-    return (
-      <p className="text-sm text-[color:var(--red-text)]">
-        설정을 불러오지 못했어요.
       </p>
     );
   }
