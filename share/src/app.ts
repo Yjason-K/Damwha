@@ -44,6 +44,12 @@ export function createApp(deps: AppDeps) {
 
   /** 같은 기존 링크의 교체는 하나씩 — 같은 토큰으로 동시에 통과한 두 요청이 새 링크 둘을 남기지 않게 한다. */
   const replacing = new Set<string>();
+  /**
+   * 저장 중인 id → 삭제 토큰 해시. 메타는 저장이 끝나야 생기므로, 그 사이 온 DELETE에 404를 주면 be는 철회
+   * 완료로 확정하고 토큰을 지운다 — 뒤늦게 저장이 끝나 암호문이 남는다(이슈 #78). 그래서 409로 답해 be가 나중에
+   * 다시 지우게 한다.
+   */
+  const creating = new Map<string, string>();
 
   async function create(req: Request, now: Date): Promise<Response> {
     if (!config.uploadsEnabled) return json(503, { code: 'UPLOADS_DISABLED' });
@@ -63,7 +69,17 @@ export function createApp(deps: AppDeps) {
       }
       return json(409, { code: 'ID_TAKEN' });
     }
+    // head와 등록 사이에 await가 없다 — 프로세스 하나에서 원자적이다.
+    if (creating.has(id)) return json(409, { code: 'CREATE_IN_PROGRESS' });
+    creating.set(id, sha256(deleteToken));
+    try {
+      return await createNew(req, now, id, deleteToken, days);
+    } finally {
+      creating.delete(id);
+    }
+  }
 
+  async function createNew(req: Request, now: Date, id: string, deleteToken: string, days: number): Promise<Response> {
     const replaceId = req.headers.get('X-Replace-Id');
     if (replaceId === null) return save(req, now, { id, deleteToken, days, replaceId: null });
     const replaceToken = req.headers.get('X-Replace-Token') ?? '';
@@ -125,10 +141,16 @@ export function createApp(deps: AppDeps) {
 
   async function remove(req: Request, id: string): Promise<Response> {
     if (!SHARE_ID_RE.test(id)) return json(404, { code: 'NOT_FOUND' });
-    const meta = await store.head(id);
-    if (!meta) return json(404, { code: 'NOT_FOUND' });
     const auth = req.headers.get('Authorization') ?? '';
     const token = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : '';
+    const meta = await store.head(id);
+    if (!meta) {
+      // head 다음에 본다 — head를 기다리는 사이 시작된 저장도 잡는다.
+      const pending = creating.get(id);
+      if (pending === undefined) return json(404, { code: 'NOT_FOUND' });
+      if (!token || !sameHash(sha256(token), pending)) return json(403, { code: 'BAD_TOKEN' });
+      return json(409, { code: 'CREATE_IN_PROGRESS' });
+    }
     if (!token || !sameHash(sha256(token), meta.token_hash)) return json(403, { code: 'BAD_TOKEN' });
     await store.delete(id);
     return new Response(null, { status: 204 });
