@@ -525,7 +525,18 @@ export function createSupervisor(
     if (stopping) return false;
     // 준비 못 한 것은 우리가 띄웠으면 치운다. 남겨 두면 재시도가 그 위에 또 띄운다.
     if (rt.result !== null && rt.result.owned) {
-      await spec.stop(rt.result, { graceMs: CLEANUP_GRACE_MS }).catch(() => undefined);
+      const result = rt.result;
+      let out: StopOutcome | null;
+      try {
+        out = await spec.stop(result, { graceMs: CLEANUP_GRACE_MS });
+      } catch (e) {
+        log(`${spec.id}: 기동 실패 정리 중 정지에서 예외 — ${reason(e)}`);
+        out = { stopped: false, leaked: [], detail: reason(e) };
+      }
+      if (!out.stopped) {
+        holdUnstoppedChild(rt, result, out);
+        return false;
+      }
     }
     // 채택한 인스턴스도 참조를 끊는다 — 남겨 두면 위의 재진입 가드가 재시도를 막는다.
     rt.result = null;
@@ -535,6 +546,34 @@ export function createSupervisor(
     // manual 실패에도 걸지 않는다 — 같은 판정이 반복되고, 반복이 도구를 또 부른다 (Phase 3 스펙 §6.7).
     if ((!spec.gate || rt.everReady) && rt.status.recovery !== "manual") scheduleRestart(spec, "기동 실패");
     return false;
+  }
+
+  /**
+   * 기동 실패 정리에서 안 내려간 자식을 **쥐고 있는다** (#79). restartOnce의 거부와 같은 정책이다 —
+   * 참조를 지우면 재시도·재시작이 살아 있는 옛 자식 옆에 두 번째를 띄우고(포트 충돌, 모델 메모리
+   * 중복), stopAll은 그 자식을 건너뛴 채 깨끗하다고 보고한다. 남은 rt.result가 bringOnce의 재진입
+   * 가드에 걸려 재실행을 막고, stopAll이 그것을 다시 내린다.
+   *
+   * 끝을 볼 핸들이 있으면 정리 중으로 잠그고 그 끝에 참조를 놓는다 — 그 뒤 재시도는 평소대로 띄운다.
+   * 핸들이 없으면 잠그지 않는다(지워 줄 사건이 없다). 그 경우는 상태 창의 재시작이 다시 내려 본다.
+   */
+  function holdUnstoppedChild(rt: Runtime, result: LaunchResult, out: StopOutcome): void {
+    const id = rt.spec.id;
+    const lines = [CAUSES.restartStopFailed.text(id)];
+    if (out.detail !== undefined) lines.push(out.detail);
+    if (out.leaked.length !== 0) lines.push(`남은 pid: ${out.leaked.join(", ")}`);
+    const handle = result.handle;
+    set(id, { detail: lines.join("\n"), ...(handle !== null ? { cleaningUp: true as const } : {}) });
+    log(`${id}: 준비 못 한 자식이 내려가지 않아 참조를 쥔다 — ${lines.join(" / ")}`);
+    if (handle === null) return;
+    handle.onExit(() => {
+      // 종료가 지나갔으면 stopAll이 이미 이 참조를 다뤘다.
+      if (stopping || rt.result?.handle !== handle) return;
+      rt.result = null;
+      set(id, { cleaningUp: undefined });
+      log(`${id}: 정리를 기다리던 자식이 끝났다 — 이제 다시 띄울 수 있다`);
+      if ((!rt.spec.gate || rt.everReady) && rt.status.recovery !== "manual") scheduleRestart(rt.spec, "기동 실패");
+    });
   }
 
   /**

@@ -2269,3 +2269,101 @@ describe("supervisor.restartService — 정리 중에는 두 번째 신호를 �
     await s.stopAll({ graceMs: 5 });
   });
 });
+
+/**
+ * 준비하지 못한 자식을 치우는 정지가 실패하면(stopped:false·예외) 그 자식은 아직 살아 있다.
+ * 참조를 지우면 재시도가 그 옆에 두 번째를 띄우고(포트 충돌·모델 메모리 중복), 종료는 그 자식에
+ * 신호를 다시 보내지 않은 채 깨끗하다고 보고한다 (#79).
+ */
+describe("supervisor 기동 실패 정리 — 안 내려간 자식의 참조를 지킨다 (#79)", () => {
+  function failingStart(stop: ServiceSpec["stop"], exits: ((code: number) => void)[], launches: { n: number }) {
+    return spec("api", {
+      launch: async () => {
+        launches.n += 1;
+        return { handle: fakeHandle((l) => exits.push(l)), owned: true };
+      },
+      readiness: async () => ({ kind: "not-ready" }),
+      stop,
+    });
+  }
+
+  it("keeps the handle when the cleanup stop reports stopped:false, refuses to relaunch on retry, and stops it again on quit", async () => {
+    const exits: ((code: number) => void)[] = [];
+    const launches = { n: 0 };
+    const stops: string[] = [];
+    const s = createSupervisor(
+      [
+        failingStart(async () => {
+          stops.push("stop");
+          return { stopped: false, leaked: [4242], detail: "아직 내려가는 중" };
+        }, exits, launches),
+      ],
+      ctx(),
+      { readyTimeoutMs: 20, readyIntervalMs: 5 },
+    );
+    await s.start();
+
+    expect(stops).toEqual(["stop"]);
+    expect(s.runtimeOf("api")?.result).not.toBeNull();
+    const st = s.statuses()[0];
+    expect(st.process).toBe("failed");
+    expect(st.cleaningUp).toBe(true);
+    expect(st.detail).toContain("내리는 중이에요");
+    expect(st.detail).toContain("4242");
+
+    await s.retry();
+    expect(launches.n).toBe(1); // 살아 있는 옛 자식 옆에 두 번째를 띄우지 않는다
+
+    const out = await s.stopAll({ graceMs: 5 });
+    expect(stops).toEqual(["stop", "stop"]);
+    expect(out.stopped).toBe(false);
+    expect(out.leaked).toEqual([4242]);
+  });
+
+  it("treats a throwing cleanup stop the same way", async () => {
+    const exits: ((code: number) => void)[] = [];
+    const launches = { n: 0 };
+    let stops = 0;
+    const s = createSupervisor(
+      [
+        failingStart(async () => {
+          stops += 1;
+          throw new Error("kill: EPERM");
+        }, exits, launches),
+      ],
+      ctx(),
+      { readyTimeoutMs: 20, readyIntervalMs: 5 },
+    );
+    await s.start();
+
+    expect(s.runtimeOf("api")?.result).not.toBeNull();
+    expect(s.statuses()[0].detail).toContain("kill: EPERM");
+    await s.retry();
+    expect(launches.n).toBe(1);
+
+    const out = await s.stopAll({ graceMs: 5 });
+    expect(stops).toBe(2);
+    expect(out.stopped).toBe(false);
+  });
+
+  it("lets retry launch again once the old child really exits", async () => {
+    const exits: ((code: number) => void)[] = [];
+    const launches = { n: 0 };
+    const s = createSupervisor(
+      [failingStart(async () => ({ stopped: false, leaked: [4242] }), exits, launches)],
+      ctx(),
+      { readyTimeoutMs: 20, readyIntervalMs: 5 },
+    );
+    await s.start();
+    expect(launches.n).toBe(1);
+
+    for (const l of exits) l(0); // 늦게 내려갔다
+    await vi.waitFor(() => expect(s.runtimeOf("api")?.result).toBeNull());
+    expect(s.statuses()[0].cleaningUp).toBeUndefined();
+    expect(restartRefused(s.statuses()[0])).toBe(false);
+
+    await s.retry();
+    expect(launches.n).toBe(2);
+    await s.stopAll({ graceMs: 5 });
+  });
+});
