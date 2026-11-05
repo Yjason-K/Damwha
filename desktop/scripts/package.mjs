@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { machOFiles } from "./lib/macho.mjs";
 import { assertIdentityInKeychain, codesign, loadSigning } from "./lib/signing.mjs";
 import { assertReleaseTag, describeReleaseTag } from "./lib/release-tag.mjs";
+import { assertReleaseBuildInfo, provenanceFor } from "./lib/release-provenance.mjs";
 
 const desktop = path.resolve(import.meta.dirname, "..");
 const repo = path.resolve(desktop, "..");
@@ -116,10 +117,12 @@ fs.rmSync(path.join(apiNodeModules, ".pnpm", "lock.yaml"), { force: true });
 const commit = spawnSync("git", ["rev-parse", "--short=12", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout.trim();
 const dirty = spawnSync("git", ["status", "--porcelain", "--", "desktop", "be", "fe", "packages"], { cwd: repo, encoding: "utf8" }).stdout.trim() !== "";
 if (!/^[0-9a-f]{12}$/.test(commit)) throw new Error(`git 커밋을 읽지 못했어요: ${JSON.stringify(commit)}`);
-fs.writeFileSync(
-  path.join(desktop, "build", "build-info.json"),
-  `${JSON.stringify({ version: desktopPkg.version, commit: dirty ? `${commit}-dirty` : commit })}\n`,
-);
+const buildInfo = { version: desktopPkg.version, commit: dirty ? `${commit}-dirty` : commit };
+// 릴리스는 dirty 빌드를 여기서 거절한다(이슈 #86). 개발용 빌드는 -dirty를 붙인 채 계속한다.
+// headCommit(40자)은 아래 provenance가 DMG 해시와 함께 남긴다.
+const headCommit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout.trim();
+if (RELEASE) assertReleaseBuildInfo(buildInfo, { version: desktopPkg.version, commit: headCommit });
+fs.writeFileSync(path.join(desktop, "build", "build-info.json"), `${JSON.stringify(buildInfo)}\n`);
 
 run("pnpm", ["exec", "electron-builder", "--dir"], desktop);
 
@@ -283,6 +286,14 @@ if (RELEASE) {
   const sha = execFileSync("shasum", ["-a", "256", dmgs[0]], { cwd: path.join(desktop, "out"), encoding: "utf8" });
   fs.writeFileSync(`${dmgPath}.sha256`, sha);
   console.log(sha.trim());
+  // 소스 커밋과 이 DMG 해시를 잇는 기록(이슈 #86). publish.sh가 검증한 뒤 자산으로 함께 올린다.
+  const provenance = provenanceFor({
+    version: desktopPkg.version,
+    commit: headCommit,
+    dmg: dmgs[0],
+    sha256: sha.split(/\s+/)[0],
+  });
+  fs.writeFileSync(`${dmgPath}.provenance.json`, `${JSON.stringify(provenance, null, 2)}\n`);
 }
 
 if (RELEASE) {

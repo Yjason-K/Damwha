@@ -7,13 +7,16 @@
 #
 #   bash desktop/scripts/publish.sh --notes-file <릴리스 노트 파일>
 #
-# gh를 부르기 전에 넷을 본다. 하나라도 어긋나면 아무것도 내지 않고 멈춘다.
+# gh를 부르기 전에 다섯을 본다. 하나라도 어긋나면 아무것도 내지 않고 멈춘다.
 #   1. 작업 트리가 깨끗하다(추적 안 된 파일 포함).
 #   2. 태그 `v<version>`이 HEAD를 가리킨다 — `package.mjs --release`가 빌드 때 본 조건과 같다.
 #   3. 그 태그가 원격(origin)에도 같은 커밋으로 있다. 없으면 `--verify-tag`가 발행을 거절한다
 #      (Ruling R22 — HEAD가 원격에 없으면 `--target`도 해석되지 않는다). 태그 푸시는 이 스크립트가
 #      하지 않는다. 그것도 공개 동작이라 사람이 먼저 한다.
 #   4. `out/Damwha-<version>-arm64.dmg`와 그 `.sha256`이 있고 해시가 맞는다.
+#   5. 그 DMG가 태그 커밋의 깨끗한 빌드다(이슈 #86, lib/release-provenance.mjs) — `.provenance.json`의
+#      커밋·해시가 태그 커밋·DMG와 맞고, DMG를 마운트해 읽은 build-info.json이 같은 커밋이며 -dirty가
+#      아니다. provenance 파일은 DMG·`.sha256`과 함께 릴리스 자산으로 올린다.
 #
 # 발행과 Latest 확인이 끝나면 DAMWHA_SITE_DEPLOY_HOOK(있으면)으로 제품 사이트를 다시 빌드시킨다.
 #
@@ -84,9 +87,14 @@ listed="$(awk '{ print $2; exit }' "$OUT/$DMG.sha256")"
 (cd "$OUT" && shasum -a 256 -c "$DMG.sha256") ||
   die "sha256이 맞지 않는다 — 해시를 쓴 뒤 DMG가 바뀌었다"
 
+# 4b. 출처(#86) — provenance가 태그 커밋·이 DMG의 해시와 맞고, DMG 안 build-info가 같은 커밋의
+#     깨끗한 빌드인지. 4번만으로는 out/에 남은 예전 커밋·dirty 빌드가 자기 체크섬과 함께 통과한다.
+node "$DESKTOP/scripts/lib/release-provenance.mjs" verify "$OUT/$DMG" "$VERSION" "$HEAD_SHA" ||
+  die "DMG가 태그 ${TAG}(${HEAD_SHA})의 깨끗한 빌드가 아니다 — pnpm run package:release를 다시 돌린다"
+
 # 5. 발행
 echo "== gh release create ${TAG} --latest"
-gh release create "$TAG" "$OUT/$DMG" "$OUT/$DMG.sha256" \
+gh release create "$TAG" "$OUT/$DMG" "$OUT/$DMG.sha256" "$OUT/$DMG.provenance.json" \
   --repo "$REPO" \
   --verify-tag \
   --latest \
