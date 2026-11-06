@@ -77,7 +77,12 @@ real people), processed by the real pipeline on an M2.
 
 Also included:
 
-- live recording with a running preview
+- live recording with a running preview, optionally mixing in the other side of a video
+  call (system audio — macOS asks for the *System Audio Recording* permission; if it is
+  denied, that side records as silence)
+- meeting detection: when Zoom or Chrome (Google Meet) starts using the microphone, a
+  card offers to record, and a small pill stays at the screen edge while recording.
+  Turn it off with *Meeting detection* in the Damwha menu
 - per-conversation notes and tags
 - speaker enrollment
 - export
