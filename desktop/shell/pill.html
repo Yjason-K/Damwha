@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <!-- 녹음 중 알약. services.html·detect.html과 같은 규칙이다: 인라인 스크립트·스타일 하나씩만 해시로 허용하고
+         나머지는 전부 막는다. 고치면 해시를 다시 계산해야 한다 — tests/windows/shell-html.test.ts가 잡는다. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-vlFq9YyL053sdnRi4qOiIz8VCPK5M5XesuIwLLo+vSw='; style-src 'sha256-rTCarcpDtH6KXhTSIR4DVCCIEKlfhdsCqw9JbyUpVuQ='; base-uri 'none'; form-action 'none'" />
+    <title>녹음 중</title>
+    <style>
+      /* 토큰은 detect.html과 같은 방식으로 fe/src/index.css에서 같은 이름·값으로 옮겼다(필요한 것만).
+         색은 :root 밖에 적지 않는다. 창이 hasShadow: false라 그림자가 없고 경계는 1px 테두리가 맡는다. */
+      :root {
+        color-scheme: light;
+        --surface-card: #ffffff;
+        --surface-hover: #ededed;
+        --text-primary: #0a0a0a;
+        --text-secondary: #5a5a5c;
+        --border-default: #e5e5e5;
+        --border-strong: #d4d4d4;
+        --red-9: #c94a4a;
+        --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          color-scheme: dark;
+          --surface-card: #18181a;
+          --surface-hover: #232326;
+          --text-primary: #ededed;
+          --text-secondary: #a8a8ae;
+          --border-default: #2a2a2e;
+          --border-strong: #37373c;
+          --red-9: #c94a4a;
+        }
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; background: transparent; }
+      body { display: flex; justify-content: flex-end; overflow: hidden; user-select: none; -webkit-user-select: none; -webkit-font-smoothing: antialiased; }
+      /* 창은 main이 단번에 늘리고 줄인다. 알약은 창의 오른쪽에 붙어 width 전환으로 왼쪽으로 펼쳐진다 —
+         넓어진 창에서만(.wide) 펼치므로 좁은 창에 잘린 채 자라지 않는다. 접힐 때는 main이 이 전환이 끝난 뒤
+         (PILL_SHRINK_MS) 창을 줄인다. */
+      #pill {
+        flex: none; height: 100%; width: 104px; display: flex; align-items: center; justify-content: flex-end; overflow: hidden;
+        transition: width 200ms cubic-bezier(0.2, 0, 0, 1);
+        border-radius: 999px; border: 1px solid var(--border-default);
+        background: var(--surface-card); color: var(--text-primary);
+        font: 13px/1 var(--font-sans); cursor: default;
+      }
+      /* 본문은 줄어든 창의 안쪽 너비 그대로 오른쪽에 붙는다. 호버해도 점과 시간이 움직이지 않고, 줄어든 자리는 언제나 본문이다.
+         점과 시간은 가운데에 둬 m:ss와 h:mm:ss 모두 좌우 여백이 같다.
+         중지는 그 왼쪽에 놓이므로 창이 늘어나기 전에는 왼쪽 바깥으로 밀려 잘린다. */
+      #open { flex: none; width: 102px; height: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0 8px; }
+      .dot { width: 9px; height: 9px; flex: none; border-radius: 50%; background: var(--red-9); }
+      #time { font-variant-numeric: tabular-nums; white-space: nowrap; }
+      #stop {
+        flex: none; width: 54px; opacity: 0; pointer-events: none; transition: opacity 150ms ease-out; margin-right: 1px; font: inherit; font-size: 12px; font-weight: 500; padding: 6px 0;
+        border-radius: 999px; border: 1px solid var(--border-default);
+        background: var(--surface-card); color: var(--text-primary); cursor: default; outline: none;
+      }
+      /* 중지는 자리를 지킨 채 투명도만 바꿔 뚝 끊기지 않는다. */
+      #pill.hover.wide { width: 164px; }
+      #pill.hover #stop { opacity: 1; pointer-events: auto; }
+      @media (prefers-reduced-motion: reduce) {
+        #pill, #stop { transition: none; }
+      }
+      #stop:hover:not(:disabled) { border-color: var(--border-strong); background: var(--surface-hover); }
+      #stop:disabled { color: var(--text-secondary); opacity: 0.6; }
+    </style>
+  </head>
+  <body>
+    <div id="pill"><button id="stop"></button><div id="open" role="button"><span class="dot"></span><span id="time"></span></div></div>
+    <script>
+      // main이 executeJavaScript로 부른다 (main → 렌더러 한 방향). 이 페이지가 main을 부르는 경로는 없다:
+      // preload도 IPC도 없고, 알약이 만든 답 { token, ... }은 main이 건 next()의 **반환값**으로만 나간다.
+      // CSS 드래그 영역은 쓰지 않는다 — 대신 mousedown·mousemove의 화면 좌표 차이를
+      // drag로 보내고 main이 창을 옮긴다. 문구는 전부 textContent로만 넣는다 — HTML 싱크를 쓰지 않는다.
+      (function () {
+        const queue = [];
+        const waiters = [];
+        const DRAG_MIN = 4; // px — 이보다 덜 움직이면 클릭(open)이다.
+        const LEAVE_MS = 200; // 커서가 잠깐 벗어났다 돌아오는 떨림에 알약이 접히지 않게.
+
+        let token = 0;
+        let startedAt = 0;
+        let ticker = null;
+        let leaveTimer = null;
+        let start = null;
+        let last = null;
+        let dragging = false;
+
+        const pill = document.getElementById("pill");
+        const open = document.getElementById("open");
+        const stop = document.getElementById("stop");
+        const time = document.getElementById("time");
+        // 창은 언제나 줄어든 크기로 만들어진다. 이보다 넓어지면 main이 호버 크기로 늘린 것이다.
+        const compactWidth = window.innerWidth;
+
+        function emit(answer) {
+          const waiter = waiters.shift();
+          if (waiter) waiter(answer);
+          else queue.push(answer);
+        }
+
+        function two(n) {
+          return n < 10 ? "0" + n : String(n);
+        }
+
+        // 754초 → 12:34, 3754초 → 1:02:34
+        function elapsed(ms) {
+          const total = Math.max(0, Math.floor(ms / 1000));
+          const h = Math.floor(total / 3600);
+          const m = Math.floor((total % 3600) / 60);
+          const s = total % 60;
+          return h > 0 ? h + ":" + two(m) + ":" + two(s) : m + ":" + two(s);
+        }
+
+        function tick() {
+          time.textContent = elapsed(Date.now() - startedAt);
+        }
+
+        // 호버를 접는다. 200ms 대기 뒤, 또는 창 밖에서 끝난 드래그 뒤에 부른다.
+        function scheduleLeave() {
+          if (leaveTimer !== null) clearTimeout(leaveTimer);
+          leaveTimer = setTimeout(function () {
+            leaveTimer = null;
+            pill.classList.remove("hover");
+            emit({ token: token, ui: "hover", on: false });
+          }, LEAVE_MS);
+        }
+
+        // 누름을 끝낸다. 창 밖에서 끝났다면 mouseleave는 이미 무시됐고 다시 오지 않는다 — 여기서 접는다.
+        function endPress(e) {
+          if (dragging) emit({ token: token, ui: "drop" });
+          const outside =
+            typeof e.clientX === "number" &&
+            typeof e.clientY === "number" &&
+            (e.clientX < 0 || e.clientY < 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight);
+          if (outside && pill.classList.contains("hover")) scheduleLeave();
+          start = null;
+          last = null;
+          dragging = false;
+        }
+
+        window.__damwha_pill = {
+          next: function () {
+            if (queue.length > 0) return Promise.resolve(queue.shift());
+            return new Promise(function (resolve) {
+              waiters.push(resolve);
+            });
+          },
+        };
+
+        window.__damwha_pill_render = function (view) {
+          token = view.token;
+          startedAt = view.startedAt;
+          stop.textContent = view.stop;
+          open.setAttribute("aria-label", view.open);
+          // 눌린 중지는 다음 렌더까지 잠겨 있다 — 정지 대기 동안 살아 보이지 않게.
+          stop.disabled = false;
+          tick();
+          if (ticker === null) ticker = setInterval(tick, 1000);
+        };
+
+        // 늘어남은 main이 창 크기를 바꾸고, 페이지는 넓어진 창에서 알약을 펼친다.
+        window.addEventListener("resize", function () {
+          pill.classList.toggle("wide", window.innerWidth > compactWidth);
+        });
+
+        document.documentElement.addEventListener("mouseenter", function () {
+          if (leaveTimer !== null) {
+            clearTimeout(leaveTimer);
+            leaveTimer = null;
+            return;
+          }
+          pill.classList.add("hover");
+          emit({ token: token, ui: "hover", on: true });
+        });
+
+        document.documentElement.addEventListener("mouseleave", function () {
+          if (start) return; // 누른 동안은 창이 커서를 따라갈 수 있어 벗어난 것이 아니다. 4px 전도 같다.
+          scheduleLeave();
+        });
+
+        open.addEventListener("mousedown", function (e) {
+          if (e.button !== 0) return;
+          start = { x: e.screenX, y: e.screenY };
+          last = { x: e.screenX, y: e.screenY };
+        });
+
+        window.addEventListener("mousemove", function (e) {
+          if (!start) return;
+          if (e.buttons === 0) return endPress(e); // mouseup을 잃었다. 커서에 붙은 채 남지 않게 끝낸다.
+          if (!dragging && Math.hypot(e.screenX - start.x, e.screenY - start.y) < DRAG_MIN) return;
+          dragging = true;
+          emit({ token: token, ui: "drag", dx: e.screenX - last.x, dy: e.screenY - last.y });
+          last = { x: e.screenX, y: e.screenY };
+        });
+
+        window.addEventListener("mouseup", function (e) {
+          if (!start || e.button !== 0) return;
+          if (!dragging) emit({ token: token, action: "open" });
+          endPress(e);
+        });
+
+        stop.addEventListener("click", function () {
+          if (stop.disabled) return;
+          stop.disabled = true;
+          emit({ token: token, action: "stop" });
+        });
+      })();
+    </script>
+  </body>
+</html>

@@ -27,6 +27,9 @@ export type CardAction = "start" | "dismiss" | "stop" | "open";
 
 export type CardView =
   | { kind: "prompt"; token: number }
+  /** 녹음 중 기본 표시. 화면 가장자리의 알약이다. */
+  | { kind: "pill"; token: number; startedAt: number; stopRetry: number }
+  /** 녹음 중 경고(시스템 소리 끊김·마이크 전환)를 펼친 카드. */
   | { kind: "recording"; token: number; micOnly: boolean; micSwitched: boolean }
   | {
       kind: "finished";
@@ -46,6 +49,8 @@ export interface RecordingSnapshot {
 
 export interface DetectionDeps {
   targets: DetectionTarget[];
+  /** 알약의 시작 시각(ms)을 재는 시계. */
+  now(): number;
   /** 시간은 이것 하나로만 간다. 돌려주는 함수가 취소다. */
   setTimer(fn: () => void, ms: number): () => void;
   /** 담화 화면이 붙어 있고 창이 있다. */
@@ -55,6 +60,7 @@ export interface DetectionDeps {
   start(): Promise<{ started: boolean; meetingId?: string; reason?: string }>;
   /** 시간 초과·suspend. 시작 중이면 무르고, 이미 붙었으면 멈춘다. */
   cancelStart(): Promise<unknown>;
+  /** 녹음을 멈추지 못했으면 거부한다. */
   stop(): Promise<unknown>;
   finish(): Promise<unknown>;
   snapshot(): Promise<RecordingSnapshot | "timeout" | "gone">;
@@ -76,6 +82,8 @@ const SUPPRESS_MS = 60_000;
 const AUTO_STOP_MS = 10_000;
 /** 끝 카드를 보이는 시간. */
 const FINISHED_MS = 10_000;
+/** 경고 카드를 펼쳐 두는 시간. 지나면 알약으로 돌아온다. */
+const CARD_RETURN_MS = 10_000;
 /** 녹음 상태를 묻는 주기. */
 const POLL_MS = 2_000;
 /** 응답 없음이 이만큼 연속이면 끊긴 것으로 본다 (§4.7). */
@@ -108,9 +116,12 @@ export function createMeetingDetection(deps: DetectionDeps) {
   let micOnly = false;
   let micSwitched = false;
   let meetingId: string | null = null;
+  let startedAt = 0;
   let finishCalled = false;
   /** 진행 중인 stop. 어떤 결과로 끝나든 풀린다 — 끝났는지는 poll이 판단한다. */
   let stopInFlight: Promise<void> | null = null;
+  /** 실패한 stop의 수. 알약의 같은 view를 다시 그리게 해 눌린 중지를 푼다. */
+  let stopRetry = 0;
   let finishSettledPolls: number | null = null;
   let timeouts = 0;
 
@@ -119,6 +130,7 @@ export function createMeetingDetection(deps: DetectionDeps) {
   let startCancel: (() => void) | null = null;
   let countdownCancel: (() => void) | null = null;
   let finishedCancel: (() => void) | null = null;
+  let returnCancel: (() => void) | null = null;
   let pollCancel: (() => void) | null = null;
   let pollGen = 0;
 
@@ -130,6 +142,10 @@ export function createMeetingDetection(deps: DetectionDeps) {
   function present(v: CardView): void {
     view = v;
     deps.show(v);
+  }
+
+  function presentPill(): void {
+    present({ kind: "pill", token, startedAt, stopRetry });
   }
 
   function closeCard(): void {
@@ -185,6 +201,7 @@ export function createMeetingDetection(deps: DetectionDeps) {
     promptCancel = clear(promptCancel);
     startCancel = clear(startCancel);
     finishedCancel = clear(finishedCancel);
+    returnCancel = clear(returnCancel);
   }
 
   async function settled(g: number): Promise<void> {
@@ -271,7 +288,8 @@ export function createMeetingDetection(deps: DetectionDeps) {
           meetingId = r.meetingId ?? null;
           timeouts = 0;
           token++;
-          present({ kind: "recording", token, micOnly: false, micSwitched: false });
+          startedAt = deps.now();
+          presentPill();
           schedulePoll();
           syncCountdown();
         } else if (r.reason === "busy") {
@@ -353,6 +371,11 @@ export function createMeetingDetection(deps: DetectionDeps) {
       micOnly = r.systemAudioLost;
       micSwitched = r.micSwitched;
       present({ kind: "recording", token, micOnly, micSwitched });
+      returnCancel = clear(returnCancel);
+      returnCancel = deps.setTimer(() => {
+        returnCancel = null;
+        if (phase === "recording") presentPill();
+      }, CARD_RETURN_MS);
     }
   }
 
@@ -360,6 +383,7 @@ export function createMeetingDetection(deps: DetectionDeps) {
   function abandon(t: DetectionTarget): void {
     cancelPoll();
     countdownCancel = clear(countdownCancel);
+    returnCancel = clear(returnCancel);
     phase = "abandoning";
     const stopped = requestStop();
     const g = ++gen;
@@ -390,6 +414,7 @@ export function createMeetingDetection(deps: DetectionDeps) {
   ): void {
     cancelPoll();
     countdownCancel = clear(countdownCancel);
+    returnCancel = clear(returnCancel);
     startCancel = clear(startCancel);
     promptCancel = clear(promptCancel);
     phase = "finished";
@@ -427,7 +452,11 @@ export function createMeetingDetection(deps: DetectionDeps) {
     }, AUTO_STOP_MS);
   }
 
-  /** stop을 한 번에 하나만 건다. 결과가 무엇이든 settle하면 풀고, 입력이 여전히 꺼져 있으면 카운트다운을 다시 세운다. */
+  /**
+   * stop을 한 번에 하나만 건다. 결과가 무엇이든 settle하면 풀고, 입력이 여전히 꺼져 있으면 카운트다운을 다시 세운다.
+   * 돌려주는 프라미스는 거부하지 않는다. 실패했는데 녹음이 이어지면 지금 표시를 다시 보내 눌린 중지를 푼다 —
+   * 자동 종료의 실패도 그렇다. 사람이 누른 중지가 진행 중인 그 stop에 얹혀 있을 수 있다.
+   */
   function requestStop(): Promise<void> {
     if (stopInFlight) return stopInFlight;
     const g = gen;
@@ -438,7 +467,12 @@ export function createMeetingDetection(deps: DetectionDeps) {
     };
     stopInFlight = deps.stop().then(done, (e) => {
       deps.log(`meeting-detection: stop 실패 ${String(e)}`);
+      const live = g === gen && phase === "recording";
       done();
+      if (!live) return;
+      stopRetry++;
+      if (view?.kind === "recording") present(view);
+      else presentPill();
     });
     return stopInFlight;
   }
@@ -479,6 +513,9 @@ export function createMeetingDetection(deps: DetectionDeps) {
       dismissPrompt();
     } else if (phase === "recording" && action === "stop") {
       void requestStop();
+    } else if (phase === "recording" && action === "open") {
+      if (meetingId) deps.open(meetingId);
+      else deps.log("meeting-detection: 녹음 중 open — meetingId 없음");
     } else if (phase === "finished" && action === "open") {
       const id = view.kind === "finished" ? view.meetingId : null;
       if (id) deps.open(id);
@@ -538,7 +575,7 @@ export function createMeetingDetection(deps: DetectionDeps) {
   function dispose(): void {
     if (disposed) return;
     disposed = true;
-    for (const c of [settleCancel, promptCancel, startCancel, countdownCancel, finishedCancel, pollCancel]) c?.();
+    for (const c of [settleCancel, promptCancel, startCancel, countdownCancel, finishedCancel, returnCancel, pollCancel]) c?.();
     for (const c of suppressed.values()) c?.();
     suppressed.clear();
     gen++;

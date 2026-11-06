@@ -502,3 +502,52 @@ test("프리셋을 바꿔도 고른 요약 언어는 남는다", async () => {
     }),
   );
 });
+
+function mockSettingsGet(shouldFail: () => boolean) {
+  vi.spyOn(apiClient, "get").mockImplementation(async (url) => {
+    if (url === "/settings/processing") {
+      if (shouldFail()) throw new Error("network down");
+      return { data: CONFIG } as never;
+    }
+    if (url === "/system/capabilities") return { data: CAPS } as never;
+    throw new Error(`unexpected GET ${url}`);
+  });
+}
+
+test("최초 조회가 실패하면 로딩이 아니라 오류를 보이고, 다시 시도에 성공하면 폼을 보인다", async () => {
+  let fail = true;
+  mockSettingsGet(() => fail);
+  renderForm();
+
+  expect(await screen.findByText("설정을 불러오지 못했어요.")).toBeTruthy();
+  expect(screen.queryByText("설정을 불러오는 중…")).toBeNull();
+
+  fail = false;
+  fireEvent.click(screen.getByRole("button", { name: "다시 시도" }));
+  expect(await screen.findByRole("radio", { name: /표준/ })).toBeTruthy();
+  expect(screen.queryByText("설정을 불러오지 못했어요.")).toBeNull();
+});
+
+test("편집 중인 폼은 배경 재조회가 실패해도 그대로 남는다", async () => {
+  let fail = false;
+  mockSettingsGet(() => fail);
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <ProcessingSettingsForm />
+    </QueryClientProvider>,
+  );
+  fireEvent.click(await screen.findByRole("radio", { name: /가볍게/ }));
+  expect(screen.getByText("저장하지 않은 변경이 있어요")).toBeTruthy();
+
+  fail = true;
+  await qc.refetchQueries({ queryKey: ["processing-settings"] });
+  await waitFor(() =>
+    expect(qc.getQueryState(["processing-settings"])?.status).toBe("error"),
+  );
+
+  expect(
+    screen.getByRole("radio", { name: /가볍게/ }).getAttribute("aria-checked"),
+  ).toBe("true");
+  expect(screen.getByText("저장하지 않은 변경이 있어요")).toBeTruthy();
+});

@@ -26,6 +26,14 @@ export const SYSTEM_AUDIO_PRIVILEGES = {
   stream: true,
 } as const;
 
+/**
+ * 응답 본문에 쌓아 둘 PCM의 상한 — 16 kHz·mono·int16이면 약 32초 (#85). 헬퍼 stdout을 멈춰(backpressure) 맞추지
+ * 않는다 — 헬퍼가 쓰기에서 막히면 stop() 뒤에도 끝나지 못하고, 실시간 소리는 멈춰 둔다고 나중에 쓸 수 있는 것도
+ * 아니다. 렌더러가 이만큼 못 읽었으면 본문을 실패로 끝내고 헬퍼를 끈다. fe는 그것을 시스템 오디오 끊김(`lost`)으로
+ * 받고 마이크 녹음은 이어 간다.
+ */
+export const SYSTEM_AUDIO_MAX_QUEUED_BYTES = 1024 * 1024;
+
 export interface SystemAudioProtocolDeps {
   allowedOrigins: () => string[];
   start: () => Promise<SystemAudioSession>;
@@ -80,27 +88,41 @@ export function createSystemAudioProtocol(deps: SystemAudioProtocolDeps): System
     });
     // cancel·end 뒤에는 컨트롤러를 건드리면 던진다. 헬퍼는 stop() 뒤에도 종료할 때까지 쓰므로 그 데이터가 늦게 온다.
     let closed = false;
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        const onData = (b: Buffer) => {
-          if (!closed) controller.enqueue(new Uint8Array(b));
-        };
-        session.pcm.on("data", onData);
-        session.pcm.once("end", () => {
-          if (closed) return;
-          closed = true;
-          session.pcm.off("data", onData);
-          controller.close();
-        });
+    /** 더 받지 않는다. 듣는 이가 없어도 흘려 버린다 — 파이프가 차면 헬퍼가 쓰기에서 막혀 stop() 뒤에도 끝나지 못한다. */
+    const release = () => {
+      closed = true;
+      session.pcm.removeAllListeners("data");
+      session.pcm.resume();
+      session.stop();
+    };
+    const body = new ReadableStream<Uint8Array>(
+      {
+        start(controller) {
+          const onData = (b: Buffer) => {
+            if (closed) return;
+            // desiredSize = 상한 - 큐에 쌓인 바이트. 이 조각이 상한을 넘기면 쌓지 않고 끝낸다.
+            if ((controller.desiredSize ?? 0) < b.length) {
+              release();
+              deps.log(`시스템 오디오를 읽지 않아 큐가 상한(${SYSTEM_AUDIO_MAX_QUEUED_BYTES}바이트)에 닿았어요 — 헬퍼를 끕니다`);
+              controller.error(new Error("system audio queue overflow"));
+              return;
+            }
+            controller.enqueue(new Uint8Array(b));
+          };
+          session.pcm.on("data", onData);
+          session.pcm.once("end", () => {
+            if (closed) return;
+            closed = true;
+            session.pcm.off("data", onData);
+            controller.close();
+          });
+        },
+        cancel() {
+          release();
+        },
       },
-      cancel() {
-        closed = true;
-        session.pcm.removeAllListeners("data");
-        // 듣는 이가 없어도 흘려 버린다. 파이프가 차면 헬퍼가 쓰기에서 막혀 stop() 뒤에도 끝나지 못한다.
-        session.pcm.resume();
-        session.stop();
-      },
-    });
+      { highWaterMark: SYSTEM_AUDIO_MAX_QUEUED_BYTES, size: (chunk) => chunk.byteLength },
+    );
     return new Response(body, {
       status: 200,
       headers: {

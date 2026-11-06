@@ -113,6 +113,11 @@ describe('ShareClient', () => {
     expect(await client.remove(o.id, o.deleteToken)).toBe('gone');
   });
 
+  it('저장 중이라 409를 받은 철회는 gone이 아니라 실패다 — 철회 대기열에 남아 다시 시도된다 (이슈 #78)', async () => {
+    fake.mode = 'createInProgress';
+    await expect(client.remove(newShareId(7), newDeleteToken())).rejects.toMatchObject({ kind: 'rejected', status: 409 });
+  });
+
   it('리다이렉트를 따라가지 않는다', async () => {
     fake.mode = 'redirect';
     await expect(client.upload(new Uint8Array([1]), opts())).rejects.toMatchObject({ kind: 'rejected', status: 302, definitelyNotCreated: false });

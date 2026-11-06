@@ -8,6 +8,7 @@ import {
   type RecorderStatus,
 } from "./live-recorder";
 import { toast } from "@/shared/ui/use-toast";
+import { apiClient, isApiError } from "@/shared/api/client";
 
 /**
  * 브라우저 탭 하나가 가지는 활성 녹음 하나. 다이얼로그("녹음 시작"을 누른 자리라 마이크
@@ -126,8 +127,8 @@ export function liveSessionSnapshot(): RecordingSnapshot {
  * `active`는 영원히 남아 그 탭의 모든 새 녹음이 "진행 중인 녹음을 먼저 종료해 주세요."로
  * 거절된다 — 새로고침 전까지. (수용 테스트 R9.)
  *
- * 캡처가 끝났다는 신호는 둘이고 서로 독립적이다: 레코더가 `stopped`로 수렴했거나(설계 §6),
- * 서버가 봉인했거나(설계 §4.2). 둘 중 하나면 죽은 것이다.
+ * 레코더가 `stopped`여도 종료 요청의 응답을 받지 못했다면 꼬리를 보존해야 한다.
+ * 서버 응답을 받거나 서버가 스스로 봉인한 뒤에만 새 캡처가 그 자리를 대체한다.
  */
 /**
  * 이 탭에 이미 살아 있는 녹음이 있어 새 준비를 거절했다.
@@ -143,12 +144,49 @@ export class LiveCaptureBusy extends Error {
   }
 }
 
+function hasUnconfirmedStop(entry: ActiveCapture): boolean {
+  return (
+    entry.recorder.status.phase === "stopped" &&
+    entry.recorder.status.stopSettled &&
+    entry.recorder.status.sealed === null &&
+    entry.stopOutcome.current === null
+  );
+}
+
 function isLiveCapture(entry: ActiveCapture): boolean {
   return (
     entry.meetingId !== null &&
-    entry.recorder.status.phase !== "stopped" &&
-    entry.recorder.status.sealed === null
+    entry.recorder.status.sealed === null &&
+    (entry.recorder.status.phase !== "stopped" || hasUnconfirmedStop(entry))
   );
+}
+
+async function reconcileUnconfirmedStop(entry: ActiveCapture): Promise<void> {
+  let stopError: unknown;
+  try {
+    await entry.recorder.stop();
+  } catch (error) {
+    stopError = error;
+  }
+  if (!hasUnconfirmedStop(entry)) return;
+
+  let terminal: boolean;
+  try {
+    const { data } = await apiClient.get<{ status: string }>(
+      `/meetings/${entry.meetingId}`,
+    );
+    terminal = ["uploaded", "processing", "done", "failed"].includes(
+      data.status,
+    );
+  } catch (error) {
+    if (isApiError(error) && error.statusCode === 404) terminal = true;
+    else throw stopError ?? error;
+  }
+  if (terminal) {
+    if (active === entry) active = null;
+    return;
+  }
+  throw stopError ?? new LiveCaptureBusy();
 }
 
 /**
@@ -165,6 +203,11 @@ export async function prepareLiveRecorder(
   deviceId?: string,
   openSystemAudio?: OpenSystemAudio,
 ): Promise<LiveCapture> {
+  // 종료 응답을 잃은 세션은 먼저 재시도하고, 여전히 미확인이면 서버 상태를 본다.
+  // 오프라인이거나 recording이면 꼬리와 소유자를 유지한다.
+  if (active && hasUnconfirmedStop(active)) {
+    await reconcileUnconfirmedStop(active);
+  }
   if (active && isLiveCapture(active)) throw new LiveCaptureBusy();
   // 이전 예약 — 회의에 붙지 않은 준비이거나, 이미 끝난(봉인·실패·종료) 캡처다.
   // 새 예약을 세운 뒤에 정리한다.
@@ -311,7 +354,9 @@ export async function awaitLiveStart(): Promise<void> {
 export function reserveLiveStart(): () => void {
   if (
     starting ||
-    (active && (isLiveCapture(active) || active.meetingId === null))
+    (active &&
+      ((isLiveCapture(active) && !hasUnconfirmedStop(active)) ||
+        active.meetingId === null))
   )
     throw new LiveCaptureBusy();
   lastEnd = null; // 새 세션의 첫 조회에 이전 세션의 end가 보이면 안 된다

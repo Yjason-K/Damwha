@@ -49,7 +49,9 @@ bash desktop/scripts/build-icon.sh                             # build-resources
 §6.11(렌더러 → main 경로 없음)의 유일한 예외**다. preload·IPC는 여전히 없다. 허용 origin만 받고, 한 번에 헬퍼 하나,
 본문을 cancel하면 헬퍼가 꺼진다. 새로고침·창 파괴에서 Electron이 본문을 cancel한다는 보장이 없어 main이
 `did-start-navigation`(메인 프레임·다른 문서)·`render-process-gone`·`destroyed`에서 `stopAll()`을 부르고
-(`stopOnRendererReset`), `beginQuit`도 부른다. 시작 중이던 헬퍼도 그때 꺼진다.
+(`stopOnRendererReset`), `beginQuit`도 부른다. 시작 중이던 헬퍼도 그때 꺼진다. 렌더러가 읽지 않아 본문 큐가
+`SYSTEM_AUDIO_MAX_QUEUED_BYTES`(1 MiB, 약 32초)에 닿으면 본문을 실패로 끝내고 헬퍼를 끈다(#85) — 헬퍼 stdout을 멈추는
+backpressure는 쓰지 않는다(쓰기에서 막힌 헬퍼는 stop() 뒤에도 끝나지 못한다). fe는 그것을 `lost`로 받는다.
 - "담화 자신은 뺀다"는 Electron main **과 그 자식 전부**다 — Chromium은 소리를 오디오 서비스 utility 프로세스에서
   낸다. 제외 목록은 tap을 만들 때 한 번 정한다(돌고 있는 tap의 설명을 바꾸면 `'!hog'`로 거부됨, 실측). 녹음기가
   마이크를 연 뒤에 헬퍼를 띄우므로 그때 오디오 서비스는 이미 CoreAudio 프로세스다 — 이 순서를 바꾸지 않는다.
@@ -73,10 +75,16 @@ Zoom·Chrome(Meet)이 마이크를 쥐면 카드를 띄워 녹음을 권한다. 
 - **카드 `shell/detect.html`.** `type:"panel"` 창이고 `showInactive`로 띄워 포커스를 뺏지 않는다. 버튼은
   `next()` 반환값으로만 main에 닿는다 — 그래서 §6.11에 새 예외가 없다. `회의 보기`는 사용자가 직접 눌렀으니
   `app.focus({ steal: true })`로 담화를 활성 앱으로 올린다.
+- **녹음 중 알약 `shell/pill.html`.** 카드로 시작한 녹음이 도는 동안 카드를 대신하는 별도 `panel` 창이다
+  (`windows/pill-window.ts`). `focusable: false`라 포커스를 받지 않는다. 옮기기는 `-webkit-app-region: drag`가 아니라
+  페이지 JS가 하고(`drag` 이벤트로 main이 창을 옮긴다) 버튼은 `next()`로 답한다 — `-webkit-app-region: drag`가 호버와
+  클릭을 삼켰기 때문이다(전체 화면 Chrome Meet에서 실측, 스펙 2026-11-02 §3). 경고가 나면 카드가 10초 동안
+  펼쳐졌다가 알약으로 돌아오고, 녹음 중 뜨는 카드는 알약이 있는 화면에 나타난다. 자리는 `detection-state.json`의
+  `pill`에 저장한다.
 - **자동 정지는 카드로 시작한 녹음만.** 모달 등 다른 경로의 녹음은 건드리지 않는다.
 - **호출 상한.** 렌더러 호출 3초, `finish` 75초(flush 2 + drain 60 + POST 10 + 여유), 정지는 handshake,
   시작 60초는 상태 기계 안에서 잰다.
-- **상태 저장.** `<userData>/detection-state.json`(`{"enabled":bool}`)과 앱 메뉴의 체크박스. 끄면 헬퍼가 종료된다.
+- **상태 저장.** `<userData>/detection-state.json`(`{"enabled":bool,"pill":{x,y}|null}` — `pill`은 알약을 마지막으로 둔 자리)과 앱 메뉴의 체크박스. 끄면 헬퍼가 종료된다.
 - **T0 실측.** Zoom·Meet은 음소거여도 입력을 쥔다. 회의가 끝나면 입력이 내려간다. 백그라운드 시작은 Electron
   44.3에서 `autoplayPolicy` 설정 없이 됐다.
 
@@ -158,8 +166,15 @@ Developer ID로 서명하고 공증까지 마친 DMG로 배포한다. ad-hoc은 
 - **데스크톱 릴리스는 `bash desktop/scripts/publish.sh --notes-file <파일>`로 낸다 — 손으로
   `gh release create`를 치지 않는다.** 스크립트는 gh를 부르기 전에 작업 트리가 깨끗한지, 태그
   `v<version>`이 HEAD를 가리키고 원격(origin)에도 같은 커밋으로 있는지(R22 — 없으면
-  `--verify-tag`가 거절한다), `out/`의 DMG가 `.sha256`과 맞는지 보고, 하나라도 어긋나면 아무것도
-  내지 않는다. 태그 푸시는 하지 않는다 — 사람이 먼저 한다. 발행은 `--verify-tag --latest`로
+  `--verify-tag`가 거절한다), `out/`의 DMG가 `.sha256`과 맞는지, **그 DMG가 태그 커밋의 깨끗한
+  빌드인지**(이슈 #86, `scripts/lib/release-provenance.mjs`) 보고, 하나라도 어긋나면 아무것도
+  내지 않는다. 마지막 검사는 `package.mjs --release`가 DMG 옆에 남기는 `<dmg>.provenance.json`
+  (버전·태그·40자 커밋·DMG 이름·sha256)이 태그 커밋·실제 해시와 맞는지, DMG를 읽기 전용으로
+  마운트해 읽은 `build-info.json`이 같은 커밋이고 `-dirty`가 아닌지다 — 해시만 보면 `out/`에
+  남은 예전 커밋·dirty 빌드가 자기 체크섬과 함께 통과한다. provenance 파일은 DMG·`.sha256`과
+  함께 릴리스 자산으로 올라간다. `package.mjs --release`도 dirty 빌드를 build-info를 쓰는 자리에서
+  거절한다. 개발용 빌드(`package:desktop`)와 `check-bundle`은 `-dirty`를 그대로 허용한다.
+  태그 푸시는 하지 않는다 — 사람이 먼저 한다. 발행은 `--verify-tag --latest`로
   하고(데스크톱 릴리스가 저장소 Latest가 된다), **발행 뒤 태그 없는 `gh release view`(= 저장소
   Latest)가 방금 낸 태그와 같은지 다시 본다.** 다르면 고치는 명령(`gh release edit v<ver>
   --repo Yjason-K/Damwha --latest`)을 출력하고 실패한다 — 자동으로 고치지는 않는다. 노트에는
@@ -238,7 +253,7 @@ Developer ID로 서명하고 공증까지 마친 DMG로 배포한다. ad-hoc은 
 | `run/` | 소켓 디렉터리(0700). TCP는 열지 않는다 |
 | `backups/` | 데이터가 있는 DB에 마이그레이션을 적용하기 전의 `pg_dump -Fc`, 최근 5개 |
 | `snapshots/` | 판올림 스냅샷(Phase 6b-2), 최근 2개 |
-| `detection-state.json` | 회의 감지 켜짐 여부(`{"enabled":bool}`) |
+| `detection-state.json` | 회의 감지 켜짐 여부와 알약 자리(`{"enabled":bool,"pill":{x,y}|null}`) |
 | `restore-journal.json` | 되돌리기 진행 상태(Phase 6b-2) |
 | `restore-staging/` | 되돌리기 교체용 임시 사본(Phase 6b-2) |
 | `data.replaced-*` | 되돌리기가 옮겨 둔 그때의 `data/`(Phase 6b-2) — **앱은 지우지 않는다** |

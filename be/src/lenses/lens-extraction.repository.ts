@@ -74,6 +74,17 @@ export class LensExtractionRepository {
     return rows[0] ?? null;
   }
 
+  /** 잠그지 않고 현재 버전의 진행 중 run의 job id만 읽는다 — 취소가 job을 먼저 잠그기 위한 탐색. */
+  async findActiveJobId(exec: Queryable, meetingId: string): Promise<string | null> {
+    const { rows } = await exec.query<{ job_id: string | null }>(
+      `SELECT r.job_id FROM lens_extraction_run r
+         JOIN meeting m ON m.id = r.meeting_id AND r.processing_version = m.processing_version
+        WHERE r.meeting_id=$1 AND r.status IN ('queued','running')`,
+      [meetingId],
+    );
+    return rows[0]?.job_id ?? null;
+  }
+
   /** 취소 — 진행 중(queued/running) run만 failed로 닫는다. */
   async markRunCancelled(exec: Queryable, runId: string, error: object): Promise<boolean> {
     const { rowCount } = await exec.query(

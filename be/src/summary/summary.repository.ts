@@ -38,6 +38,17 @@ export class SummaryRepository {
     return rows[0] ?? null;
   }
 
+  /** 잠그지 않고 현재 버전의 진행 중 요약 job id만 읽는다 — 취소가 job을 먼저 잠그기 위한 탐색. */
+  async findActiveJobId(exec: Queryable, meetingId: string): Promise<string | null> {
+    const { rows } = await exec.query<{ job_id: string | null }>(
+      `SELECT s.job_id FROM meeting_summary s
+         JOIN meeting m ON m.id = s.meeting_id AND s.processing_version = m.processing_version
+        WHERE s.meeting_id = $1 AND s.status IN ('queued','running')`,
+      [meetingId],
+    );
+    return rows[0]?.job_id ?? null;
+  }
+
   /** 취소 — 진행 중(queued/running) 요약 행만 failed로. 끝난 행은 건드리지 않는다. */
   async markCancelled(exec: Queryable, meetingId: string, error: object): Promise<boolean> {
     const { rowCount } = await exec.query(

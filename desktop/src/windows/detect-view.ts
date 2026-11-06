@@ -7,6 +7,9 @@ import type { UiLanguage } from "../i18n/locale";
  * (shell/detect.html)는 여기서 나온 값만 다룬다. electron을 import하지 않는다.
  */
 
+/** 카드 창에 그리는 뷰. 알약은 따로 그린다. */
+export type CardOnlyView = Exclude<CardView, { kind: "pill" }>;
+
 /** 위쪽 여백(px). */
 const TOP_MARGIN = 12;
 
@@ -35,7 +38,7 @@ export interface CardViewModel {
   buttons: CardButton[];
 }
 
-export function cardViewModel(view: CardView, lang: UiLanguage): CardViewModel {
+export function cardViewModel(view: CardOnlyView, lang: UiLanguage): CardViewModel {
   const open: CardButton[] = [{ label: t(lang, "detect.open"), action: "open", primary: true }];
   switch (view.kind) {
     case "prompt":
@@ -94,6 +97,6 @@ export function parseDetectAnswer(raw: unknown): DetectAnswer | null {
 export const DETECT_ASK_SCRIPT = "window.__damwha_detect ? window.__damwha_detect.next() : null";
 
 /** main → 카드의 한 방향 호출문. 값은 JSON.stringify로만 싣는다 (status-view.ts renderCall과 같은 이유). */
-export function detectRenderCall(view: CardView, model: CardViewModel): string {
+export function detectRenderCall(view: CardOnlyView, model: CardViewModel): string {
   return `void window.__damwha_detect_render?.(${JSON.stringify({ token: view.token, ...model })});`;
 }

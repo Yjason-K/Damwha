@@ -178,6 +178,29 @@ def test_drift_seek_jumps_forward_and_reports_position(tmp_path):
     assert src.position_ms == (target + FRAME_BYTES) // BYTES_PER_MS
 
 
+@pytest.mark.parametrize(
+    ("drift", "size"),
+    [(DRIFT_BYTES, DRIFT_BYTES + FRAME_BYTES * 10 + 2), (2500, FRAME_BYTES * 10)],
+)
+def test_sealed_source_finishes_after_unaligned_drift_skip(tmp_path, drift, size):
+    path = _wav(tmp_path, b"\x06" * size)
+    state = LiveInputState("stop", size, size)
+    calls = 0
+
+    def input_state():
+        nonlocal calls
+        calls += 1
+        assert calls <= 4, "source 반복이 진행되지 않는다"
+        return state
+
+    src = TailSource(path, input_state=input_state, drift_bytes=drift)
+    frames = list(src.frames())
+
+    target = ((size - drift + FRAME_BYTES - 1) // FRAME_BYTES) * FRAME_BYTES
+    assert frames == [b"\x06" * FRAME_BYTES] * ((size - target) // FRAME_BYTES)
+    assert src.skips == 1
+
+
 def test_no_drift_seek_when_within_threshold(tmp_path):
     path = _wav(tmp_path, b"\x06" * (FRAME_BYTES * 4))
     src, _ = _src(path, sealed=FRAME_BYTES * 4)

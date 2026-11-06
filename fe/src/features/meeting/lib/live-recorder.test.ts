@@ -656,6 +656,86 @@ describe("LiveRecorder stop() waits for the flush ACK", () => {
     expect(w.posted.filter((m) => m.type === "flush")).toHaveLength(1);
   });
 
+  it.each([false, true])(
+    "retries a failed stop with the same tail when the server committed it: %s (#76)",
+    async (committed) => {
+      const response = deferred<PostResult>();
+      const requested = deferred<void>();
+      const tail = new Int16Array([123, -456, 789]);
+      const body = new Uint8Array(tail.buffer);
+      let sealed: number | null = null;
+      const stopSpy = vi.fn<StopSpy>(async (_id, offset, final, bytes) => {
+        expect(offset).toBe(0);
+        expect(final).toBe(body.byteLength);
+        expect(bytes).toEqual(body);
+        if (stopSpy.mock.calls.length === 1) {
+          if (committed) sealed = final;
+          requested.resolve();
+          return response.promise;
+        }
+        if (sealed !== null) expect(final).toBe(sealed);
+        sealed = final;
+        return { status: 200, expected: final };
+      });
+      const w = stubWorkletGlobals();
+      const { r } = await recording(
+        { postChunk: vi.fn(), postStop: stopSpy },
+        w,
+      );
+      w.emit({ type: "pcm", pcm: tail.buffer });
+
+      const first = r.stop();
+      const failed = expect(first).rejects.toThrow("response lost");
+      await requested.promise;
+      expect(r.stop()).toBe(first);
+      expect(r.offset).toBe(0);
+      response.reject(new Error("response lost"));
+      await failed;
+      expect(r.status.phase).toBe("stopped");
+      expect(r.status.stopSettled).toBe(true);
+
+      const retry = r.stop();
+      expect(retry).not.toBe(first);
+      expect(r.stop()).toBe(retry);
+      await retry;
+      await r.stop();
+      expect(stopSpy).toHaveBeenCalledTimes(2);
+      expect(sealed).toBe(body.byteLength);
+      expect(w.getUserMedia).toHaveBeenCalledTimes(1);
+      expect(w.stopTrack).toHaveBeenCalledTimes(1);
+      expect(w.close).toHaveBeenCalledTimes(1);
+      expect(w.posted.filter((m) => m.type === "flush")).toHaveLength(1);
+      expect(r.status.failed).toBeNull();
+    },
+  );
+
+  it("retries a failed resync stop at the acknowledged boundary without replaying the tail (#76)", async () => {
+    const stopSpy = okStop()
+      .mockResolvedValueOnce({ status: 409, expected: 274 })
+      .mockRejectedValueOnce(new Error("resync response lost"));
+    const w = stubWorkletGlobals();
+    const { r } = await recording({ postChunk: vi.fn(), postStop: stopSpy }, w);
+    w.sendPcm(137);
+
+    await expect(r.stop()).rejects.toThrow("resync response lost");
+    expect(r.offset).toBe(274);
+    await r.stop();
+
+    expect(
+      stopSpy.mock.calls.map(([, offset, final, body]) => [
+        offset,
+        final,
+        body.byteLength,
+      ]),
+    ).toEqual([
+      [0, 274, 274],
+      [274, 274, 0],
+      [274, 274, 0],
+    ]);
+    expect(w.stopTrack).toHaveBeenCalledTimes(1);
+    expect(r.status.failed).toBeNull();
+  });
+
   /**
    * 이 테스트가 봉투 처리의 회귀를 잡는다. Worklet은 `{type:'pcm', pcm:ArrayBuffer}`를
    * 보내는데 메인 스레드가 옛날처럼 `new Int16Array(e.data)`를 하면 **길이 0**짜리

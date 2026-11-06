@@ -352,18 +352,23 @@ export class MeetingsRepository {
     );
   }
 
-  async bumpVersionForReprocess(exec: Queryable, id: string): Promise<number> {
+  /**
+   * 재처리 가능 상태(done|failed)일 때만 버전을 올린다 — 상태 확인과 증가가 한 UPDATE라
+   * 동시 요청 중 뒤에 온 쪽은 행 잠금이 풀린 뒤 바뀐 status를 다시 평가해 0행이 된다(이슈 #81).
+   * 0행이면 null.
+   */
+  async bumpVersionForReprocess(exec: Queryable, id: string): Promise<number | null> {
     const { rows } = await exec.query<{ processing_version: number }>(
       `UPDATE meeting SET processing_version = processing_version + 1, status='uploaded', error=NULL
-       WHERE id=$1 RETURNING processing_version`,
+       WHERE id=$1 AND status IN ('done','failed') RETURNING processing_version`,
       [id],
     );
-    return rows[0].processing_version;
+    return rows[0]?.processing_version ?? null;
   }
 
   async lockClusterInMeeting(exec: Queryable, meetingId: string, clusterId: string) {
     const { rows } = await exec.query(
-      `SELECT id, meeting_id, diar_label, resolved_speaker_id, (centroid IS NOT NULL) AS has_centroid
+      `SELECT id, meeting_id, processing_version, diar_label, resolved_speaker_id, (centroid IS NOT NULL) AS has_centroid
        FROM meeting_cluster WHERE id=$1 AND meeting_id=$2 FOR UPDATE`,
       [clusterId, meetingId],
     );
@@ -408,10 +413,13 @@ export class MeetingsRepository {
       [clusterId, speakerId],
     );
   }
-  async bulkAssignSpeaker(exec: Queryable, meetingId: string, diarLabel: string, speakerId: string): Promise<number> {
+  async bulkAssignSpeaker(
+    exec: Queryable, meetingId: string, processingVersion: number, diarLabel: string, speakerId: string,
+  ): Promise<number> {
     const res = await exec.query(
-      `UPDATE utterance SET speaker_id=$3 WHERE meeting_id=$1 AND diar_label=$2`,
-      [meetingId, diarLabel, speakerId],
+      `UPDATE utterance SET speaker_id=$4
+       WHERE meeting_id=$1 AND processing_version=$2 AND diar_label=$3`,
+      [meetingId, processingVersion, diarLabel, speakerId],
     );
     return res.rowCount ?? 0;
   }

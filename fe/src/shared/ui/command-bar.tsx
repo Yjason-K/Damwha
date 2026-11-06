@@ -2,6 +2,7 @@ import * as React from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 
 import { cn } from "@/shared/lib/utils";
+import { Button } from "@/shared/ui/button";
 import { Kbd } from "@/shared/ui/kbd";
 
 /**
@@ -50,6 +51,10 @@ type CommandBarProps = {
   notice?: React.ReactNode;
   groups?: CommandGroup[];
   onSelect?: (item: CommandItem) => void;
+  /** 결과가 비었을 때 그 이유를 가른다 — 아직 받는 중인지, 요청이 실패했는지. */
+  loading?: boolean;
+  error?: boolean;
+  onRetry?: () => void;
 };
 
 function CommandBar({
@@ -62,6 +67,9 @@ function CommandBar({
   notice,
   groups = [],
   onSelect,
+  loading = false,
+  error = false,
+  onRetry,
 }: CommandBarProps) {
   const reactId = React.useId();
   const listId = `${reactId}-list`;
@@ -141,11 +149,31 @@ function CommandBar({
           )}
 
           <div id={listId} role="listbox" className="overflow-auto p-1.5">
-            {flat.length === 0 && (
-              <div className="px-3.5 py-7 text-center text-sm text-[color:var(--text-muted)]">
-                결과가 없어요. 다른 검색어를 시도해 보세요.
-              </div>
-            )}
+            {flat.length === 0 &&
+              (error ? (
+                <div
+                  role="alert"
+                  className="flex flex-col items-center gap-2.5 px-3.5 py-7 text-center text-sm text-[color:var(--text-muted)]"
+                >
+                  검색하지 못했어요. 잠시 후 다시 시도해 주세요.
+                  {onRetry && (
+                    <Button variant="secondary" size="sm" onClick={onRetry}>
+                      다시 시도
+                    </Button>
+                  )}
+                </div>
+              ) : loading ? (
+                <div
+                  role="status"
+                  className="px-3.5 py-7 text-center text-sm text-[color:var(--text-muted)]"
+                >
+                  검색하는 중…
+                </div>
+              ) : (
+                <div className="px-3.5 py-7 text-center text-sm text-[color:var(--text-muted)]">
+                  결과가 없어요. 다른 검색어를 시도해 보세요.
+                </div>
+              ))}
             {groups.map(
               (g, gi) =>
                 g.items.length > 0 && (
