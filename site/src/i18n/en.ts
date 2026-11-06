@@ -98,6 +98,7 @@ export const en = {
       { q: "Does it run on Intel Macs or Windows?", a: "No. The ML pipeline runs on Apple's MLX, which needs Apple Silicon." },
       { q: "Is the app in English?", a: "English UI is rolling out. Settings and the app menu are translated, and the remaining screens follow in upcoming releases. Conversations in Korean, English, Japanese and Chinese can be transcribed, and summaries can be written in Korean or English." },
       { q: "Can it record live?", a: "Yes. Live recording shows a running transcript preview, and the full pipeline runs when you stop." },
+      { q: "Does it record the other side of a video call?", a: "Yes. Turn on system audio when you start a live recording, and what your Mac plays is mixed with your microphone. macOS asks once for the System Audio Recording permission; if you deny it, that side records as silence. When Zoom or Chrome (Google Meet) starts using the microphone, a card offers to record — turn it off with Meeting detection in the Damwha menu." },
       { q: "How do updates work?", a: "The app checks GitHub Releases and tells you when a new version is out. Download the new DMG and replace the app — your data stays." },
       { q: "Can I undo an update?", a: "Yes. Before a new version upgrades the database, Damwha keeps a snapshot, and the app menu can restore it." },
       { q: "Are the demo voices real people?", a: "No. The sample conversations are AI-generated (Google NotebookLM Audio Overviews), processed by the real pipeline." },
