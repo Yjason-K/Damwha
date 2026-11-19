@@ -32,10 +32,20 @@ export function MeetingTags({
   const { data: allTags = [] } = useTags();
   const setTags = useSetMeetingTags();
 
-  const save = (names: string[]) =>
+  // 저장과 그 뒤 재조회가 끝날 때까지 막는다. PUT은 전체 목록이라 낡은 prop으로 또 보내면 앞선 변경을 덮어쓴다.
+  // isPending은 다음 tick에야 반영돼 같은 tick의 두 번째 클릭을 못 막으므로 ref로도 막는다.
+  const inFlight = React.useRef(false);
+  const busy = setTags.isPending;
+
+  const save = (names: string[]) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setTags.mutate(
       { id: meetingId, names },
       {
+        onSettled: () => {
+          inFlight.current = false;
+        },
         onError: (err) => {
           if (isDemoBlocked(err)) return;
           toast({
@@ -46,6 +56,7 @@ export function MeetingTags({
         },
       },
     );
+  };
 
   const names = tags.map((t) => t.name);
   const full = tags.length >= MAX_TAGS;
@@ -88,7 +99,7 @@ export function MeetingTags({
         <PopoverTrigger asChild>
           <button
             type="button"
-            disabled={full}
+            disabled={full || busy}
             className="inline-flex h-[22px] cursor-pointer items-center gap-1 rounded-xs px-1.5 text-xs font-medium text-[color:var(--text-muted)] outline-none transition-colors duration-[80ms] hover:bg-[var(--surface-hover)] hover:text-[color:var(--text-secondary)] focus-visible:[box-shadow:var(--focus-ring)] disabled:cursor-default disabled:opacity-60 [&_svg]:size-3"
           >
             <Icon name="hash" size={12} />
@@ -117,8 +128,9 @@ export function MeetingTags({
                 <li key={t.id}>
                   <button
                     type="button"
+                    disabled={busy}
                     onClick={() => add(t.name)}
-                    className="flex w-full cursor-pointer items-center justify-between rounded-xs px-2 py-1.5 text-left text-sm text-[color:var(--text-secondary)] outline-none hover:bg-[var(--surface-hover)] focus-visible:[box-shadow:var(--focus-ring)]"
+                    className="flex w-full cursor-pointer items-center justify-between rounded-xs px-2 py-1.5 text-left text-sm text-[color:var(--text-secondary)] outline-none hover:bg-[var(--surface-hover)] focus-visible:[box-shadow:var(--focus-ring)] disabled:cursor-default disabled:opacity-60"
                   >
                     <span className="truncate">#{t.name}</span>
                     <span className="shrink-0 text-xs text-[color:var(--text-faint)]">
@@ -141,8 +153,9 @@ export function MeetingTags({
               key={name}
               type="button"
               aria-label={`추천 태그 ${name} 붙이기`}
+              disabled={busy}
               onClick={() => add(name)}
-              className="inline-flex h-[22px] cursor-pointer items-center rounded-xs border border-dashed border-[color:var(--border-strong)] px-1.5 text-xs font-medium text-[color:var(--text-muted)] outline-none transition-colors duration-[80ms] hover:border-[color:var(--accent-6)] hover:bg-[var(--accent-bg)] hover:text-[color:var(--accent-text)] focus-visible:[box-shadow:var(--focus-ring)]"
+              className="inline-flex h-[22px] cursor-pointer items-center rounded-xs border border-dashed border-[color:var(--border-strong)] px-1.5 text-xs font-medium text-[color:var(--text-muted)] outline-none transition-colors duration-[80ms] hover:border-[color:var(--accent-6)] hover:bg-[var(--accent-bg)] hover:text-[color:var(--accent-text)] focus-visible:[box-shadow:var(--focus-ring)] disabled:cursor-default disabled:opacity-60"
             >
               +#{name}
             </button>
