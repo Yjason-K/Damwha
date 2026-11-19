@@ -154,9 +154,25 @@ export function NoteEditor({
   }
 
   if (!editing) {
+    // 완료·Esc·⌘Enter는 저장 응답을 기다리지 않고 읽기모드로 온다. 실패가 그
+    // 뒤에 도착하므로 읽기모드도 실패를 알려야 한다 — 아니면 저장되지 않은
+    // 초안이 저장된 것처럼 보이다가 회의를 떠나면 조용히 사라진다.
+    const saveFailure =
+      saveState === "error" ? (
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-2 self-stretch rounded-sm bg-danger-bg px-3 py-2 text-left"
+        >
+          <p className="text-sm text-danger-text">메모를 저장하지 못했어요.</p>
+          <Button variant="secondary" size="sm" onClick={onRetrySave}>
+            다시 시도
+          </Button>
+        </div>
+      ) : null;
     if (body.trim().length === 0) {
       return (
         <div className="flex flex-col items-center gap-2 px-4 py-10 text-center">
+          {saveFailure}
           <Icon
             name="pencil"
             size={20}
@@ -180,6 +196,7 @@ export function NoteEditor({
     }
     return (
       <div className="flex flex-col gap-3 px-4 py-3">
+        {saveFailure}
         <div className="flex items-center justify-end">
           <Button variant="ghost" size="sm" onClick={() => setEditing(true)}>
             편집

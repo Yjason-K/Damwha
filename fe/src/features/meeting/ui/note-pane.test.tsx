@@ -182,3 +182,51 @@ test("저장이 실패하면 편집기 안에 다시 시도 버튼이 뜬다", a
     await screen.findByRole("button", { name: "다시 시도" }, { timeout: 3000 }),
   ).toBeInTheDocument();
 });
+
+test("완료 뒤 저장이 실패하면 읽기모드에서 실패를 알리고, 다시 시도가 성공하면 알림이 사라진다", async () => {
+  const user = userEvent.setup();
+  vi.spyOn(apiClient, "get").mockResolvedValue({
+    data: { note: { body_md: "원본", updated_at: "2026-08-27T00:00:00.000Z" } },
+  } as never);
+  const put = vi
+    .spyOn(apiClient, "put")
+    .mockRejectedValueOnce(new Error("boom"))
+    .mockResolvedValueOnce({
+      data: {
+        note: { body_md: "원본 추가", updated_at: "2026-08-27T00:00:01.000Z" },
+      },
+    } as never);
+  renderPane();
+  await user.click(await screen.findByRole("button", { name: "편집" }));
+  await user.type(screen.getByRole("textbox", { name: "메모 본문" }), " 추가");
+  await user.click(screen.getByRole("button", { name: "완료" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "메모를 저장하지 못했어요.",
+  );
+  expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "다시 시도" }));
+  await waitFor(() =>
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+  );
+  expect(put).toHaveBeenCalledTimes(2);
+  expect(put.mock.calls[1]?.[1]).toEqual({ body_md: "원본 추가" });
+});
+
+test("본문을 비운 저장이 실패해도 빈 상태 화면에서 실패를 알린다", async () => {
+  const user = userEvent.setup();
+  vi.spyOn(apiClient, "get").mockResolvedValue({
+    data: { note: { body_md: "가", updated_at: "2026-08-27T00:00:00.000Z" } },
+  } as never);
+  vi.spyOn(apiClient, "put").mockRejectedValue(new Error("boom"));
+  renderPane();
+  await user.click(await screen.findByRole("button", { name: "편집" }));
+  await user.clear(screen.getByRole("textbox", { name: "메모 본문" }));
+  await user.click(screen.getByRole("button", { name: "완료" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "메모를 저장하지 못했어요.",
+  );
+  expect(screen.getByRole("button", { name: "다시 시도" })).toBeInTheDocument();
+});
