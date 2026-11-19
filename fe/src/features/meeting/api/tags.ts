@@ -36,10 +36,12 @@ export function useSetMeetingTags() {
       );
       return data.tags;
     },
-    onSuccess: (_data, vars) => {
-      queryClient.invalidateQueries({ queryKey: ["meetings"] });
-      queryClient.invalidateQueries({ queryKey: ["meeting", vars.id] });
-      queryClient.invalidateQueries({ queryKey: ["tags"] });
-    },
+    // 재조회를 기다려 돌려준다 — 끝날 때까지 isPending이 남아, 화면이 낡은 목록으로 다음 PUT을 만들지 않는다.
+    onSuccess: (_data, vars) =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["meetings"] }),
+        queryClient.invalidateQueries({ queryKey: ["meeting", vars.id] }),
+        queryClient.invalidateQueries({ queryKey: ["tags"] }),
+      ]),
   });
 }
