@@ -230,3 +230,69 @@ test("본문을 비운 저장이 실패해도 빈 상태 화면에서 실패를 
   );
   expect(screen.getByRole("button", { name: "다시 시도" })).toBeInTheDocument();
 });
+
+function twoMeetingSetup() {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  vi.spyOn(apiClient, "get").mockImplementation(
+    async (url: string) =>
+      ({
+        data: {
+          note: {
+            body_md: url.includes("mtg_2") ? "둘째" : "첫째",
+            updated_at: "2026-08-27T00:00:00.000Z",
+          },
+        },
+      }) as never,
+  );
+  const ui = (id: string) => (
+    <QueryClientProvider client={qc}>
+      <NotePane meetingId={id} />
+    </QueryClientProvider>
+  );
+  return ui;
+}
+
+test("다른 회의에서 난 저장 실패는 지금 회의에 알리지 않는다", async () => {
+  const user = userEvent.setup();
+  const ui = twoMeetingSetup();
+  vi.spyOn(apiClient, "put").mockRejectedValue(new Error("boom"));
+  const { rerender } = render(ui("mtg_1"));
+  await user.click(await screen.findByRole("button", { name: "편집" }));
+  await user.type(screen.getByRole("textbox", { name: "메모 본문" }), "x");
+  await user.click(screen.getByRole("button", { name: "완료" }));
+  await screen.findByRole("alert");
+
+  rerender(ui("mtg_2"));
+  await screen.findByText("둘째");
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+  // 돌아와도 재전송할 수 없는 낡은 실패를 다시 띄우지 않는다.
+  rerender(ui("mtg_1"));
+  await screen.findByText("첫째");
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+test("회의를 옮긴 뒤 늦게 도착한 이전 회의의 실패도 지금 회의에 알리지 않는다", async () => {
+  const user = userEvent.setup();
+  const ui = twoMeetingSetup();
+  let fail: (e: Error) => void = () => {};
+  vi.spyOn(apiClient, "put").mockImplementation(
+    () =>
+      new Promise((_resolve, reject) => {
+        fail = reject;
+      }) as never,
+  );
+  const { rerender } = render(ui("mtg_1"));
+  await user.click(await screen.findByRole("button", { name: "편집" }));
+  await user.type(screen.getByRole("textbox", { name: "메모 본문" }), "x");
+  await user.click(screen.getByRole("button", { name: "완료" }));
+  await waitFor(() => expect(apiClient.put).toHaveBeenCalled());
+
+  rerender(ui("mtg_2"));
+  await screen.findByText("둘째");
+  fail(new Error("boom"));
+  await new Promise((r) => setTimeout(r, 20));
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});

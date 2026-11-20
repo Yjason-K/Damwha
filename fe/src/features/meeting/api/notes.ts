@@ -144,7 +144,7 @@ export function useAutosaveNote(meetingId: string | undefined) {
   // (debounce, 언마운트, 회의 전환) 그 텍스트가 속한 회의로만 보낸다.
   const pendingMeetingId = React.useRef<string | undefined>(undefined);
   const lastSent = React.useRef<string | null>(null);
-  const { mutate } = mutation;
+  const { mutate, reset } = mutation;
 
   const flush = React.useCallback(() => {
     if (timer.current !== null) {
@@ -203,12 +203,18 @@ export function useAutosaveNote(meetingId: string | undefined) {
   // 회의가 바뀌면 이전 회의의 대기 중인 입력을 먼저 flush한다(그래야
   // pendingMeetingId가 아직 이전 회의를 가리키는 시점에 보내진다). 그 다음
   // ref를 새 회의 기준으로 초기화한다.
+  //
+  // 저장 상태도 끊는다(reset). 뮤테이션은 회의 간에 하나라서, 그대로 두면
+  // 이전 회의의 실패(전환 뒤 늦게 도착한 것 포함)가 새 회의의 "저장 실패"로
+  // 보이고, lastSent를 지웠으니 그 "다시 시도"는 아무것도 보내지 않는다.
+  // reset은 진행 중인 요청을 취소하지 않는다 — 화면 상태와의 연결만 끊는다.
   React.useEffect(() => {
     flush();
+    reset();
     pending.current = null;
     pendingMeetingId.current = undefined;
     lastSent.current = null;
-  }, [meetingId, flush]);
+  }, [meetingId, flush, reset]);
 
   React.useEffect(() => flush, [flush]);
 
