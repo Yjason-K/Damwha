@@ -82,9 +82,11 @@ export function useRemoveSavedUtterance() {
   return useMutation({
     mutationFn: async ({ id }: { id: string; utteranceId: string | null }) => { await apiClient.delete(`/saved-utterances/${id}`); },
     onMutate: async ({ utteranceId }) => {
+      // 원본이 사라진 항목은 ids 캐시에 없다 — 스냅샷을 뜨면 실패 때 그사이 바뀐 캐시를 덮는다.
+      if (!utteranceId) return { previous: [] };
       await queryClient.cancelQueries({ queryKey: ["saved-utterance-ids"] });
       const previous = queryClient.getQueriesData<Set<string>>({ queryKey: ["saved-utterance-ids"] });
-      if (utteranceId) updateSavedIds(queryClient, utteranceId, false);
+      updateSavedIds(queryClient, utteranceId, false);
       return { previous };
     },
     onError: (_error, _value, context) => context?.previous.forEach(([key, data]) => queryClient.setQueryData(key, data)),
