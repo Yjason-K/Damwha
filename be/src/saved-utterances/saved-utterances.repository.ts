@@ -78,12 +78,16 @@ export class SavedUtterancesRepository {
   // every one of them in the query string.
   async savedIdsByMeeting(exec: Exec, meetingId: string) {
     const { rows } = await exec.query<{ utterance_id: string }>(
-      `SELECT utterance_id FROM saved_utterance WHERE meeting_id=$1`, [meetingId],
+      `SELECT utterance_id FROM saved_utterance WHERE meeting_id=$1 AND utterance_id IS NOT NULL`, [meetingId],
     );
     return rows.map((row) => row.utterance_id);
   }
 
-  async remove(exec: Exec, utteranceId: string) {
+  async removeById(exec: Exec, id: string) {
+    await exec.query(`DELETE FROM saved_utterance WHERE id=$1`, [id]);
+  }
+
+  async removeByUtterance(exec: Exec, utteranceId: string) {
     await exec.query(`DELETE FROM saved_utterance WHERE utterance_id=$1`, [utteranceId]);
   }
 }

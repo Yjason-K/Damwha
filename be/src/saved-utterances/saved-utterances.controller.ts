@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, Put, Query } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 import { SavedUtterancesService } from './saved-utterances.service';
 
 @ApiTags('saved-utterances')
@@ -19,8 +19,12 @@ export class SavedUtterancesController {
   @ApiOperation({ summary: '발언 저장' })
   save(@Param('utteranceId') utteranceId: string, @Body() body: { text_snapshot?: unknown }) { return this.service.save(utteranceId, body); }
 
-  @Delete(':utteranceId')
+  @Delete(':id')
   @HttpCode(204)
   @ApiOperation({ summary: '저장한 발언 해제' })
-  remove(@Param('utteranceId') utteranceId: string) { return this.service.remove(utteranceId); }
+  @ApiParam({
+    name: 'id',
+    description: '저장 항목 id(sav_N) 또는 발언 id(utt_N). 원본 발언이 사라진 항목은 sav_N으로만 지울 수 있다. 형식이 맞는데 없으면 204, 형식이 틀리면 404.',
+  })
+  remove(@Param('id') id: string) { return this.service.remove(id); }
 }

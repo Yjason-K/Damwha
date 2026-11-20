@@ -260,4 +260,34 @@ describe('saved utterances api', () => {
     expect((await request(srv()).put(`/saved-utterances/${failedId}`).send({ text_snapshot: 'x' })).status).toBe(404);
     expect((await request(srv()).delete('/saved-utterances/utt_999')).status).toBe(204);
   });
+
+  // 원본 발언이 지워져 utterance_id가 NULL이 된 항목은 저장 항목 id로만 가리킬 수 있다 (#99).
+  it('deletes a save whose source utterance is gone by its saved id', async () => {
+    const meetingId = await mkMeeting();
+    const utteranceId = await mkUtterance(meetingId, 0, 0);
+    const savedId = (await request(srv()).put(`/saved-utterances/${utteranceId}`).send({ text_snapshot: '남은 기록' })).body.id;
+    await db.pool.query('DELETE FROM utterance WHERE id=$1', [utteranceId]);
+
+    expect((await request(srv()).get(`/saved-utterances/ids?meeting_id=${meetingId}`)).body).toEqual({ utterance_ids: [] });
+    expect((await request(srv()).delete(`/saved-utterances/${savedId}`)).status).toBe(204);
+    expect((await db.pool.query('SELECT 1 FROM saved_utterance WHERE id=$1', [savedId])).rowCount).toBe(0);
+    expect((await request(srv()).delete(`/saved-utterances/${savedId}`)).status).toBe(204);
+  });
+
+  it('deletes a linked save by either its saved id or its utterance id', async () => {
+    const meetingId = await mkMeeting();
+    const bySaved = await mkUtterance(meetingId, 0, 0);
+    const byUtterance = await mkUtterance(meetingId, 1, 1000);
+    const savedId = (await request(srv()).put(`/saved-utterances/${bySaved}`).send({ text_snapshot: 'a' })).body.id;
+    await request(srv()).put(`/saved-utterances/${byUtterance}`).send({ text_snapshot: 'b' });
+
+    expect((await request(srv()).delete(`/saved-utterances/${savedId}`)).status).toBe(204);
+    expect((await request(srv()).delete(`/saved-utterances/${byUtterance}`)).status).toBe(204);
+    expect((await db.pool.query('SELECT count(*)::int AS n FROM saved_utterance')).rows[0].n).toBe(0);
+    expect((await request(srv()).delete('/saved-utterances/sav_999')).status).toBe(204);
+  });
+
+  it.each(['sav_0', 'sav_01', 'sav_1junk', 'utt_0', 'abc'])('rejects a malformed delete id %s', async (id) => {
+    expect((await request(srv()).delete(`/saved-utterances/${id}`)).status).toBe(404);
+  });
 });
