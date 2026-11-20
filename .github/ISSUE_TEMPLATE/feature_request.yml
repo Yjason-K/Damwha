@@ -1,0 +1,76 @@
+name: 기능
+description: 새 동작을 더하거나 기존 동작을 바꾼다
+title: "feat(<패키지>): "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        제목은 `feat(<패키지>): <사용자가 할 수 있게 되는 것>` 꼴로 쓴다.
+        제품의 비목표(팀 협업, 구성원 분석 대시보드 등 — `fe/docs/product-concept.md`)에 닿으면 그 이유를 적는다.
+  - type: checkboxes
+    id: area
+    attributes:
+      label: 영역
+      description: 닿는 패키지를 모두 고른다.
+      options:
+        - label: be (API)
+        - label: be/worker
+        - label: fe
+        - label: desktop
+        - label: cli
+        - label: share / share-format / share-view
+        - label: site
+        - label: packages/contracts
+  - type: textarea
+    id: problem
+    attributes:
+      label: 배경 / 문제
+      description: 지금 무엇을 할 수 없거나 불편한가. 누가, 언제 그 상황을 만나는가.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 제안
+      description: 사용자에게 보이는 동작. 화면 문구·흐름이 있으면 같이.
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: 현재 상태 (코드로 확인한 사실)
+      description: "이미 있는 API·화면·테이블. `파일:줄`과 함께."
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 대안과 고르지 않은 이유
+  - type: checkboxes
+    id: contract
+    attributes:
+      label: 계약 변경
+      description: 하나라도 해당하면 `docs/superpowers/`에 spec·plan·result 기록을 남긴다(루트 CLAUDE.md).
+      options:
+        - label: "`job` 테이블 / wire 버전"
+        - label: "DB 스키마·마이그레이션"
+        - label: "API 모양(요청·응답)"
+        - label: "`@damwha/contracts`"
+        - label: "패키징·릴리스 파이프라인"
+        - label: "두 개 이상 패키지의 동작"
+  - type: textarea
+    id: scope
+    attributes:
+      label: 범위 밖
+      description: 이번에 하지 않는 것.
+  - type: textarea
+    id: done
+    attributes:
+      label: 완료 기준
+      placeholder: |
+        - 
+    validations:
+      required: true
+  - type: textarea
+    id: related
+    attributes:
+      label: 관련

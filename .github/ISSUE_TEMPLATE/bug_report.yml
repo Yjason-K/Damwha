@@ -1,0 +1,81 @@
+name: 버그
+description: 동작이 틀렸거나, 데이터가 사라지거나, 화면이 사실과 다르게 보인다
+title: "fix(<패키지>): "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        제목은 `fix(<패키지>): <고친 뒤의 동작>` 꼴로 쓴다. 예: `fix(fe): 메모 저장 실패를 읽기 모드에서도 알린다`.
+        **코드로 확인한 사실**과 **재현·측정 결과**를 섞지 않는다. 아직 확인하지 않은 것은 가설 칸에 둔다.
+  - type: checkboxes
+    id: area
+    attributes:
+      label: 영역
+      description: 닿는 패키지를 모두 고른다.
+      options:
+        - label: be (API)
+        - label: be/worker
+        - label: fe
+        - label: desktop
+        - label: cli
+        - label: share / share-format / share-view
+        - label: site
+        - label: packages/contracts
+  - type: textarea
+    id: symptom
+    attributes:
+      label: 증상
+      description: 무엇을 하면 무엇이 일어나고, 무엇을 기대했는가. 오류 문구는 그대로 붙인다.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 재현 절차
+      description: 처음부터 따라 할 수 있는 단계. 재현율(예 3/5회)과 재현하지 못한 조건도 적는다.
+      placeholder: |
+        1.
+        2.
+        3.
+        재현율:
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: 환경
+      description: 기준 커밋 또는 앱 버전, 실행 방식(데스크톱 앱 / pnpm dev / 데모), macOS·칩
+      placeholder: "기준 커밋: \n실행 방식: \nmacOS / 칩: "
+    validations:
+      required: true
+  - type: textarea
+    id: facts
+    attributes:
+      label: 코드로 확인한 사실
+      description: "`파일:줄`과 함께. 읽어서 확인한 것만 적는다."
+  - type: textarea
+    id: measured
+    attributes:
+      label: 재현·측정 결과
+      description: 실제로 돌려 본 것. 명령, 로그, 수치, 스크린샷.
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: 가설 (검증 안 함)
+      description: 원인 추정. 확인되면 위 칸으로 옮긴다.
+  - type: textarea
+    id: done
+    attributes:
+      label: 완료 기준
+      description: 무엇이 확인되면 닫는가. 회귀 테스트를 어떻게 남길지도 적는다.
+      placeholder: |
+        - 
+        - 재현 테스트를 먼저 넣어 실패를 확인한 뒤 고친다.
+    validations:
+      required: true
+  - type: textarea
+    id: related
+    attributes:
+      label: 관련
+      description: 이슈, PR, 점검 보고서 항목(예 FE-4)
