@@ -635,21 +635,25 @@ export function TranscriptPane({
                 onSaveToggle={() => {
                   const utteranceId = u.sources[0]?.id;
                   if (!utteranceId) return;
-                  const mutation = savedIds.data?.has(utteranceId)
-                    ? removeSavedUtterance
-                    : saveUtterance;
-                  const value = savedIds.data?.has(utteranceId)
-                    ? utteranceId
-                    : { utteranceId, text: u.text };
-                  mutation.mutate(value as never, {
-                    onError: (err) => {
+                  const options = {
+                    onError: (err: unknown) => {
                       if (isDemoBlocked(err)) return;
                       toast({
                         variant: "error",
                         title: "저장한 발언을 바꾸지 못했어요.",
                       });
                     },
-                  });
+                  };
+                  if (savedIds.data?.has(utteranceId))
+                    removeSavedUtterance.mutate(
+                      { id: utteranceId, utteranceId },
+                      options,
+                    );
+                  else
+                    saveUtterance.mutate(
+                      { utteranceId, text: u.text },
+                      options,
+                    );
                 }}
               >
                 {failed

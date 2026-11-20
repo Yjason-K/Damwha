@@ -1,12 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 
 import { apiClient } from "@/shared/api/client";
+import { toast } from "@/shared/ui/use-toast";
 import { SavedUtterancesPage } from "./saved-utterances";
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+vi.mock("@/shared/ui/use-toast", () => ({ toast: vi.fn() }));
+
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.mocked(toast).mockClear(); });
 
 // jsdom에는 IntersectionObserver가 없다 — 다음 페이지가 남은 목록은 센티널을 관찰한다.
 beforeAll(() => {
@@ -77,4 +80,25 @@ test("다음 페이지가 남아 있으면 마지막 그룹의 개수는 감춘�
   expect(screen.getByText("2026.08.21 · 저장된 발언 1개")).toBeInTheDocument();
   // 마지막 그룹은 더 받을 항목이 남아 있어 개수를 말할 수 없다.
   expect(screen.getByText("2026.08.18")).toBeInTheDocument();
+});
+
+// 원본 발화가 사라진 항목도 저장 항목 id로 지운다 (#99).
+test("발화가 사라진 항목도 저장 해제하면 저장 항목 id로 지우고 목록에서 사라진다", async () => {
+  const items = [saved("sav_4", 강형욱, { utterance_id: null, text: "남아 있는 기록", speaker_id: null })];
+  renderPage(items);
+  const remove = vi.spyOn(apiClient, "delete").mockImplementation((async () => { items.length = 0; return { data: undefined }; }) as never);
+
+  fireEvent.click(await screen.findByRole("button", { name: "저장 해제" }));
+
+  await waitFor(() => expect(remove).toHaveBeenCalledWith("/saved-utterances/sav_4"));
+  await waitFor(() => expect(screen.queryByText("남아 있는 기록")).not.toBeInTheDocument());
+});
+
+test("저장 해제에 실패하면 오류 토스트를 띄운다", async () => {
+  renderPage([saved("sav_4", 강형욱)]);
+  vi.spyOn(apiClient, "delete").mockRejectedValue(new Error("boom"));
+
+  fireEvent.click(await screen.findByRole("button", { name: "저장 해제" }));
+
+  await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ variant: "error" })));
 });

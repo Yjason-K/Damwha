@@ -75,14 +75,16 @@ export function useSaveUtterance() {
   });
 }
 
+// `id`는 저장 항목 id(sav_)나 발언 id(utt_) — 서버가 둘 다 받는다. 원본 발언이 사라진
+// 항목은 저장 항목 id로만 지울 수 있다. `utteranceId`는 회의 화면의 저장 표시를 낙관 갱신할 때만 쓴다.
 export function useRemoveSavedUtterance() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (utteranceId: string) => { await apiClient.delete(`/saved-utterances/${utteranceId}`); },
-    onMutate: async (utteranceId) => {
+    mutationFn: async ({ id }: { id: string; utteranceId: string | null }) => { await apiClient.delete(`/saved-utterances/${id}`); },
+    onMutate: async ({ utteranceId }) => {
       await queryClient.cancelQueries({ queryKey: ["saved-utterance-ids"] });
       const previous = queryClient.getQueriesData<Set<string>>({ queryKey: ["saved-utterance-ids"] });
-      updateSavedIds(queryClient, utteranceId, false);
+      if (utteranceId) updateSavedIds(queryClient, utteranceId, false);
       return { previous };
     },
     onError: (_error, _value, context) => context?.previous.forEach(([key, data]) => queryClient.setQueryData(key, data)),

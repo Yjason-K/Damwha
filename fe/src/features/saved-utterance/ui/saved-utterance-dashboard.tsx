@@ -3,8 +3,10 @@ import * as React from "react";
 import { formatClock } from "@/features/meeting/api/mappers";
 import { Icon } from "@/features/meeting/ui/icons";
 import { useSpeakers } from "@/features/speaker/api/speakers";
+import { isDemoBlocked } from "@/shared/api/demo-read-only";
 import { MeetingGroupHeader } from "@/shared/ui/meeting-group-header";
 import { Utterance } from "@/shared/ui/utterance";
+import { toast } from "@/shared/ui/use-toast";
 import type { SavedUtterance } from "../api/types";
 import {
   useRemoveSavedUtterance,
@@ -133,7 +135,18 @@ export function SavedUtteranceDashboard() {
                       savedBadge={false}
                       savePending={remove.isPending}
                       onSaveToggle={() =>
-                        item.utteranceId && remove.mutate(item.utteranceId)
+                        remove.mutate(
+                          { id: item.id, utteranceId: item.utteranceId },
+                          {
+                            onError: (err) => {
+                              if (isDemoBlocked(err)) return;
+                              toast({
+                                variant: "error",
+                                title: "저장한 발언을 바꾸지 못했어요.",
+                              });
+                            },
+                          },
+                        )
                       }
                       to={
                         item.utteranceId

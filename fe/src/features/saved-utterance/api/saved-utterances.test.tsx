@@ -42,7 +42,20 @@ test("removing a saved utterance clears its representative ID", async () => {
   const { result } = renderHook(() => ({ ids: useSavedUtteranceIds("mtg_1"), remove: useRemoveSavedUtterance() }), { wrapper });
   await waitFor(() => expect(result.current.ids.data?.has("utt_2")).toBe(true));
 
-  await act(() => result.current.remove.mutateAsync("utt_2"));
+  await act(() => result.current.remove.mutateAsync({ id: "sav_1", utteranceId: "utt_2" }));
 
   await waitFor(() => expect(result.current.ids.data?.has("utt_2")).toBe(false));
+  expect(apiClient.delete).toHaveBeenCalledWith("/saved-utterances/sav_1");
+});
+
+test("a failed removal restores its representative ID", async () => {
+  vi.spyOn(apiClient, "get").mockResolvedValue({ data: { utterance_ids: ["utt_2"] } } as never);
+  vi.spyOn(apiClient, "delete").mockRejectedValue(new Error("boom"));
+  const { wrapper } = setup();
+  const { result } = renderHook(() => ({ ids: useSavedUtteranceIds("mtg_1"), remove: useRemoveSavedUtterance() }), { wrapper });
+  await waitFor(() => expect(result.current.ids.data?.has("utt_2")).toBe(true));
+
+  await act(() => result.current.remove.mutateAsync({ id: "sav_1", utteranceId: "utt_2" }).catch(() => {}));
+
+  expect(result.current.ids.data?.has("utt_2")).toBe(true);
 });

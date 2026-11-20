@@ -78,8 +78,11 @@ export class SavedUtterancesService {
     });
   }
 
-  async remove(utteranceId: string) {
-    if (!UTTERANCE_ID_RE.test(utteranceId)) throw new NotFoundException('utterance not found');
-    await this.repo.remove(this.db.pool, utteranceId);
+  // A saved id reaches every save, including one whose source utterance is
+  // gone (utterance_id NULL); an utterance id keeps the transcript's toggle.
+  async remove(id: string) {
+    if (SAVED_ID_RE.test(id)) return this.repo.removeById(this.db.pool, id);
+    if (UTTERANCE_ID_RE.test(id)) return this.repo.removeByUtterance(this.db.pool, id);
+    throw new NotFoundException('saved utterance not found');
   }
 }
