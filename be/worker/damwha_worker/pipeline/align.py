@@ -185,6 +185,9 @@ def build_utterances(
     변경마다 처음부터 다시 훑으므로 값이 뒤로 갈 수 있다 — 받는 쪽이 최대값을 쓴다.
     끝나면 1.0을 한 번 보낸다."""
     failed_spans = failed_spans or []
+    # 세그먼트가 없으면 단어를 귀속할 곳이 없다. process_meeting은 VAD에 발화가 있으면
+    # 대체 세그먼트를 넘기므로 여기 오는 것은 보존할 단어가 없는 경우뿐이다(#101).
+    # 평가 스크립트처럼 align을 직접 부르는 쪽은 그 대체를 거치지 않는다.
     if not segments:
         return []
     # 1) word를 세그먼트에 귀속 (시간순), 백채널 run은 주변 화자로 재귀속
