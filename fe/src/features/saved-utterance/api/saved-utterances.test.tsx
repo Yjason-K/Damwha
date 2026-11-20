@@ -78,7 +78,8 @@ test("a failed orphan removal leaves saved IDs changed in the meantime", async (
   await waitFor(() => expect(result.current.ids.data?.has("utt_2")).toBe(true));
 
   act(() => { result.current.remove.mutate({ id: "sav_4", utteranceId: null }); });
-  await waitFor(() => expect(result.current.remove.isPending).toBe(true));
+  // mutationFn은 onMutate가 끝난 뒤에 불린다 — DELETE 호출을 기다려야 스냅샷 이후에 캐시를 바꾼다.
+  await waitFor(() => expect(apiClient.delete).toHaveBeenCalledWith("/saved-utterances/sav_4"));
   act(() => { client.setQueryData(["saved-utterance-ids", "mtg_1"], new Set(["utt_2", "utt_9"])); });
 
   act(() => fail(new Error("boom")));
