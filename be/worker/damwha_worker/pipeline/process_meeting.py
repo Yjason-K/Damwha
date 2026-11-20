@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from .. import console, db
 from ..contracts import ProcessMeetingPayload
 from ..errors import ShutdownRequested
-from ..models.base import VAD, Diarizer, Embedder, Transcriber
+from ..models.base import VAD, Diarizer, DiarSegment, Embedder, Transcriber
 from ..storage import Storage
 from . import ffmpeg
 from .align import build_utterances
@@ -21,6 +21,10 @@ from .stt_spans import prepare_stt_spans
 from .timing import timed_stage
 
 log = logging.getLogger("damwha_worker")
+
+# pyannote가 세그먼트를 하나도 내지 않았는데 VAD는 발화를 찾은 경우의 대체 라벨.
+# 이 경우 VAD 구간을 한 화자로 묶어 전사를 보존한다(#101).
+FALLBACK_DIAR_LABEL = "SPEAKER_00"
 
 
 @dataclass
@@ -94,14 +98,33 @@ def run_process_meeting(
         segments = models.diarizer.diarize(
             norm_path, min_speakers=diar_cfg.min_speakers, max_speakers=diar_cfg.max_speakers
         )
+        # 세그먼트가 비면 align이 단어를 전부 버린다 — VAD 구간을 한 화자로 대체한다.
+        # VAD도 비면 STT를 건너뛰므로 보존할 단어가 없어 그대로 둔다.
+        diar_fallback = not segments and bool(speech_spans)
+        if diar_fallback:
+            log.warning(
+                "%s diarize returned no segments; falling back to %d VAD spans as %s",
+                ctx,
+                len(speech_spans),
+                FALLBACK_DIAR_LABEL,
+            )
+            segments = [
+                DiarSegment(FALLBACK_DIAR_LABEL, s.start_ms, s.end_ms) for s in speech_spans
+            ]
         t["detail"] = (
             f"segments={len(segments)} bounds={diar_cfg.min_speakers}-{diar_cfg.max_speakers}"
+            f" fallback={int(diar_fallback)}"
         )
 
     # 4) embed → centroids
     enter_stage(conn, job_id, worker_id, "identify", 50, shutdown_event)
     with timed_stage("embed", ctx) as t:
-        embeddings = models.embedder.embed(norm_path, segments)
+        # 대체 클러스터는 여러 화자가 섞였을 수 있다 — 그 centroid로 등록 화자에 결합하거나
+        # 성문을 만들지 않도록 임베딩을 건너뛴다(centroid None → 미식별 클러스터로 보존).
+        if diar_fallback:
+            embeddings = [None] * len(segments)
+        else:
+            embeddings = models.embedder.embed(norm_path, segments)
         raw_labels = len({s.diar_label for s in segments})
         # 과분할 보정: 거의 같은 목소리(centroid cosine ≥ 0.85)와 유령 클러스터(발화
         # < 5초)를 identify 전에 접는다. 이후 단계(identify·align·persist)는 병합된

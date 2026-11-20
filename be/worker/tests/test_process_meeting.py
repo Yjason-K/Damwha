@@ -739,7 +739,8 @@ def test_v5_deferred_followups_are_not_queued(conn, tmp_path, lens, summary):
 
 def test_v6_followups_inherit_summary_language(conn, tmp_path):
     got = _run_with_followups(
-        conn, tmp_path,
+        conn,
+        tmp_path,
         lambda mid: _payload_v6(mid, "meetings/m/original.m4a", summary_language="en"),
     )
     assert got == {"extract_lenses": "en", "summarize_meeting": "en"}
@@ -747,7 +748,8 @@ def test_v6_followups_inherit_summary_language(conn, tmp_path):
 
 def test_v5_followups_are_transcript(conn, tmp_path):
     got = _run_with_followups(
-        conn, tmp_path,
+        conn,
+        tmp_path,
         lambda mid: _payload_v5(mid, "meetings/m/original.m4a", lens=True, summary=True),
     )
     assert got == {"extract_lenses": "transcript", "summarize_meeting": "transcript"}
@@ -899,3 +901,98 @@ def test_backchannel_word_run_reabsorbed_via_embedding(conn, tmp_path):
     # 회수된 뒤 SPEAKER_00의 두 세그먼트(간격 400ms)는 한 발언으로 합쳐진다
     assert [u["diar_label"] for u in utts] == ["SPEAKER_00"]
     assert utts[0]["text"] == "집에 가지 말고 일하자"
+
+
+def _run_empty_diarization(conn, tmp_path, models):
+    mid = seed_meeting(
+        conn, status="processing", processing_version=0, audio_key="meetings/m/original.m4a"
+    )
+    jid = seed_job(conn, meeting_id=mid, payload={})
+    conn.execute("UPDATE meeting SET current_job_id=%s WHERE id=%s", (jid, mid))
+    db.claim(conn, "w1")
+    out = run_process_meeting(
+        conn,
+        conn.execute("SELECT * FROM job WHERE id=%s", (jid,)).fetchone(),
+        _payload(mid, "meetings/m/original.m4a"),
+        models,
+        Storage(str(tmp_path)),
+        worker_id="w1",
+        normalize_fn=lambda s, d: None,
+        probe_fn=lambda p: ProbeResult(6000),
+    )
+    assert out == "committed"
+    return mid
+
+
+def test_empty_diarization_keeps_words_under_one_unresolved_speaker(conn, tmp_path):
+    # pyannote가 세그먼트를 하나도 내지 않아도 VAD·STT가 찾은 전사는 버리지 않는다(#101).
+    # VAD 구간을 한 화자로 묶되, 여러 화자가 섞였을 수 있는 그 centroid로는 등록 화자에
+    # 결합하거나 성문을 만들지 않는다 — 클러스터는 미식별로 남아 사용자가 고친다.
+    sid = seed_speaker(conn, enrollment_status="ready")
+    seed_voiceprint(conn, speaker_id=sid, embedding=[1.0] + [0.0] * 191)
+    models = Models(
+        vad=FakeVAD([SpeechSpan(0, 1500), SpeechSpan(3000, 5000)]),
+        diarizer=FakeDiarizer([]),
+        # 호출되면 등록 화자와 정확히 일치하는 목소리 — 결합되면 안 된다
+        embedder=FakeEmbedder([[1.0] + [0.0] * 191]),
+        transcriber=FakeTranscriber(
+            [
+                Word("안녕", 100, 600, 0.9),
+                Word("패딩", 1550, 1700, 0.8),  # 원본 VAD 구간 사이(STT 패딩) 단어
+                Word("반가워", 3200, 3800, 0.7),
+            ]
+        ),
+    )
+    mid = _run_empty_diarization(conn, tmp_path, models)
+
+    utts = conn.execute(
+        "SELECT diar_label, speaker_id, text, status FROM utterance "
+        "WHERE meeting_id=%s ORDER BY order_index",
+        (mid,),
+    ).fetchall()
+    assert " ".join(u["text"] for u in utts) == "안녕 패딩 반가워"
+    assert {u["diar_label"] for u in utts} == {"SPEAKER_00"}
+    assert all(u["status"] == "ok" and u["speaker_id"] is None for u in utts)
+    clusters = conn.execute(
+        "SELECT diar_label, centroid, resolved_speaker_id, suggested_speaker_id "
+        "FROM meeting_cluster WHERE meeting_id=%s",
+        (mid,),
+    ).fetchall()
+    assert clusters == [
+        {
+            "diar_label": "SPEAKER_00",
+            "centroid": None,
+            "resolved_speaker_id": None,
+            "suggested_speaker_id": None,
+        }
+    ]
+    assert conn.execute("SELECT count(*) AS n FROM voiceprint").fetchone()["n"] == 1
+    assert (
+        conn.execute(
+            "SELECT count(*) AS n FROM speaker WHERE enrollment_status='provisional'"
+        ).fetchone()["n"]
+        == 0
+    )
+
+
+def test_empty_diarization_and_empty_vad_yields_no_utterances(conn, tmp_path):
+    models = Models(
+        vad=FakeVAD([]),
+        diarizer=FakeDiarizer([]),
+        embedder=FakeEmbedder([]),
+        transcriber=FakeTranscriber([Word("환각", 0, 500, 0.9)]),  # 호출되면 안 됨
+    )
+    mid = _run_empty_diarization(conn, tmp_path, models)
+    assert models.transcriber.calls == 0
+    assert (
+        conn.execute("SELECT count(*) AS n FROM utterance WHERE meeting_id=%s", (mid,)).fetchone()[
+            "n"
+        ]
+        == 0
+    )
+    assert (
+        conn.execute(
+            "SELECT count(*) AS n FROM meeting_cluster WHERE meeting_id=%s", (mid,)
+        ).fetchone()["n"]
+        == 0
+    )
