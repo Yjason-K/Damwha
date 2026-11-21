@@ -2,6 +2,7 @@ import { createElement, lazy, Suspense, type ComponentType } from "react";
 import { createBrowserRouter, type RouteObject } from "react-router";
 
 import { AppShell } from "@/app/app-shell";
+import { RouteErrorPage } from "@/app/route-error";
 import { IndexRoute } from "@/pages/index-route";
 import { NotFoundPage } from "@/pages/not-found";
 
@@ -29,57 +30,72 @@ export const routes: RouteObject[] = [
   {
     path: "/",
     element: <AppShell />,
+    // 셸 자체가 깨졌을 때의 마지막 방어선 — 셸 없이 전체 화면으로 그린다.
+    errorElement: <RouteErrorPage standalone />,
     children: [
-      { index: true, element: <IndexRoute /> },
       {
-        path: "meetings",
-        element: lazyRoute(() =>
-          import("@/pages/meeting-list").then((m) => ({
-            default: m.MeetingListPage,
-          })),
-        ),
+        // 하위 화면의 렌더 예외는 여기서 잡는다 — 셸(LeftNav)이 남아 다른 화면으로 갈 수
+        // 있고, 녹음 중이면 오류 화면이 종료를 맡는다 (#98).
+        errorElement: <RouteErrorPage />,
+        children: [
+          { index: true, element: <IndexRoute /> },
+          {
+            path: "meetings",
+            element: lazyRoute(() =>
+              import("@/pages/meeting-list").then((m) => ({
+                default: m.MeetingListPage,
+              })),
+            ),
+          },
+          {
+            path: "folders/:folderId",
+            element: lazyRoute(() =>
+              import("@/pages/meeting-list").then((m) => ({
+                default: m.MeetingListPage,
+              })),
+            ),
+          },
+          {
+            path: "meetings/:meetingId",
+            element: lazyRoute(() =>
+              import("@/pages/meeting").then((m) => ({
+                default: m.MeetingRoute,
+              })),
+            ),
+          },
+          {
+            path: "lenses/:kind",
+            element: lazyRoute(() =>
+              import("@/pages/lens").then((m) => ({ default: m.LensView })),
+            ),
+          },
+          {
+            path: "saved-utterances",
+            element: lazyRoute(() =>
+              import("@/pages/saved-utterances").then((m) => ({
+                default: m.SavedUtterancesPage,
+              })),
+            ),
+          },
+          {
+            path: "speakers",
+            element: lazyRoute(() =>
+              import("@/pages/speakers").then((m) => ({
+                default: m.SpeakersPage,
+              })),
+            ),
+          },
+          {
+            path: "settings",
+            element: lazyRoute(() =>
+              import("@/pages/settings").then((m) => ({
+                default: m.SettingsPage,
+              })),
+            ),
+          },
+          { path: "*", element: <NotFoundPage /> },
+        ],
       },
-      {
-        path: "folders/:folderId",
-        element: lazyRoute(() =>
-          import("@/pages/meeting-list").then((m) => ({
-            default: m.MeetingListPage,
-          })),
-        ),
-      },
-      {
-        path: "meetings/:meetingId",
-        element: lazyRoute(() =>
-          import("@/pages/meeting").then((m) => ({ default: m.MeetingRoute })),
-        ),
-      },
-      {
-        path: "lenses/:kind",
-        element: lazyRoute(() =>
-          import("@/pages/lens").then((m) => ({ default: m.LensView })),
-        ),
-      },
-      {
-        path: "saved-utterances",
-        element: lazyRoute(() =>
-          import("@/pages/saved-utterances").then((m) => ({
-            default: m.SavedUtterancesPage,
-          })),
-        ),
-      },
-      {
-        path: "speakers",
-        element: lazyRoute(() =>
-          import("@/pages/speakers").then((m) => ({ default: m.SpeakersPage })),
-        ),
-      },
-      {
-        path: "settings",
-        element: lazyRoute(() =>
-          import("@/pages/settings").then((m) => ({ default: m.SettingsPage })),
-        ),
-      },
-      { path: "*", element: <NotFoundPage /> },
     ],
   },
   {
@@ -87,6 +103,7 @@ export const routes: RouteObject[] = [
     element: lazyRoute(() =>
       import("@/pages/showcase").then((m) => ({ default: m.ShowcasePage })),
     ),
+    errorElement: <RouteErrorPage standalone />,
   },
 ];
 
