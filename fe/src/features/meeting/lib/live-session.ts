@@ -48,6 +48,30 @@ const FAILURE_MESSAGE: Record<RecorderFailure, string> = {
 
 let active: ActiveCapture | null = null;
 
+/**
+ * React 트리 밖의 구독자(라우트 오류 화면). 레코더 상태가 바뀌거나 캡처가 회의에 붙고
+ * 떨어질 때 알린다. `useSyncExternalStore`가 비교할 값으로 `version`을 쓴다 — 스냅숏
+ * 객체를 매번 새로 만들면 렌더가 끝나지 않는다.
+ */
+const sessionListeners = new Set<() => void>();
+let sessionVersion = 0;
+
+function notifySession(): void {
+  sessionVersion++;
+  for (const listener of sessionListeners) listener();
+}
+
+export function subscribeLiveSession(listener: () => void): () => void {
+  sessionListeners.add(listener);
+  return () => {
+    sessionListeners.delete(listener);
+  };
+}
+
+export function liveSessionVersion(): number {
+  return sessionVersion;
+}
+
 /** 세션의 종결 결과 — 회의 하나가 어떻게 끝났는가. 서버 ACK의 증거는 `stopOutcome`뿐이다. */
 export type RecordingEnd = "acked" | "discarded" | "sealed" | "failed";
 
@@ -183,7 +207,10 @@ async function reconcileUnconfirmedStop(entry: ActiveCapture): Promise<void> {
     else throw stopError ?? error;
   }
   if (terminal) {
-    if (active === entry) active = null;
+    if (active === entry) {
+      active = null;
+      notifySession();
+    }
     return;
   }
   throw stopError ?? new LiveCaptureBusy();
@@ -270,6 +297,7 @@ export async function prepareLiveRecorder(
       if (snap.end !== null) lastEnd = snap;
     }
     entry.pageListener?.(status);
+    notifySession();
   };
 
   // 예약은 **첫 await 이전에** 끝낸다. 이 함수의 비동기 앞부분에서 예약하면 같은 tick의
@@ -304,10 +332,14 @@ export async function beginLiveCapture(
     );
   }
   entry.meetingId = meetingId;
+  notifySession();
   try {
     await capture.recorder.begin(meetingId);
   } catch (err) {
-    if (active === entry) active = null;
+    if (active === entry) {
+      active = null;
+      notifySession();
+    }
     await discardMeeting(capture, meetingId);
     throw err;
   }
@@ -365,8 +397,12 @@ export function reserveLiveStart(): () => void {
     release = resolve;
   });
   const mine = starting;
+  notifySession();
   return () => {
-    if (starting === mine) starting = null;
+    if (starting === mine) {
+      starting = null;
+      notifySession();
+    }
     release();
   };
 }
@@ -391,7 +427,29 @@ export function subscribeLiveStatus(
 
 /** 종료 뒤 정리. 이미 다른 회의로 넘어갔으면(다른 녹음이 새로 시작됐으면) 손대지 않는다. */
 export function clearLiveCapture(meetingId: string): void {
-  if (active?.meetingId === meetingId) active = null;
+  if (active?.meetingId === meetingId) {
+    active = null;
+    notifySession();
+  }
+}
+
+/**
+ * 서버의 종료 ACK가 아직 없는 캡처 — 화면이 깨졌을 때 오류 화면이 종료를 맡을 대상이다.
+ * 살아 있는 캡처뿐 아니라 레코더 실패로 `stopped`에 수렴했지만 서버 stop을 아직 못 보낸
+ * 캡처와 응답을 잃은 캡처도 포함한다(`finishLiveCapture`와 같은 범위). 서버가 스스로
+ * 봉인한 캡처는 더 보낼 것이 없어 뺀다.
+ */
+export function getUnfinishedLiveCapture():
+  | (LiveCapture & { meetingId: string })
+  | undefined {
+  if (
+    active === null ||
+    active.meetingId === null ||
+    active.recorder.status.sealed !== null ||
+    active.stopOutcome.current !== null
+  )
+    return undefined;
+  return { ...active, meetingId: active.meetingId };
 }
 
 /**
