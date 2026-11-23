@@ -172,7 +172,10 @@ export function RouteErrorPage({
             id="route-error-reload-blocked"
             className="text-xs text-[color:var(--text-muted)]"
           >
-            {t("routeError.reloadBlocked")}
+            {/* 회의가 붙기 전(준비·회의 생성)엔 종료할 녹음이 아직 없다 — 시작 중이라고만 알린다. */}
+            {capture
+              ? t("routeError.reloadBlocked")
+              : t("routeError.reloadBlockedStarting")}
           </p>
         ) : null}
       </div>

@@ -13,6 +13,8 @@ export const common = {
     reload: "새로고침",
     reloadBlocked:
       "녹음 중에 새로고침하면 녹음이 끊겨요. 먼저 녹음을 종료해 주세요.",
+    reloadBlockedStarting:
+      "녹음을 시작하는 중이에요. 시작이 끝나면 새로고침할 수 있어요.",
     recording: {
       title: "녹음은 계속되고 있어요",
       description:

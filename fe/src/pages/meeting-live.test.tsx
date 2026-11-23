@@ -709,9 +709,12 @@ test("녹음 준비 중에는 회의가 붙기 전이라도 새로고침을 막�
   boom.on = true;
   renderAt("/meetings/m1");
 
-  expect(
-    await screen.findByRole("button", { name: "새로고침" }),
-  ).toBeDisabled();
+  const reload = await screen.findByRole("button", { name: "새로고침" });
+  expect(reload).toBeDisabled();
+  // 녹음 중 안내가 아니라 시작 중이라는 사실을 알린다 — 아직 녹음도, 종료할 대상도 없다.
+  expect(reload).toHaveAccessibleDescription(
+    "녹음을 시작하는 중이에요. 시작이 끝나면 새로고침할 수 있어요.",
+  );
   expect(screen.queryByRole("button", { name: "녹음 종료" })).toBeNull();
 
   act(() => {

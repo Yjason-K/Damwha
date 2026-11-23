@@ -13,6 +13,8 @@ export const common = {
     reload: "Reload",
     reloadBlocked:
       "Reloading now would cut off the recording. Stop the recording first.",
+    reloadBlockedStarting:
+      "A recording is starting. You can reload once it has started.",
     recording: {
       title: "Recording is still running",
       description:
