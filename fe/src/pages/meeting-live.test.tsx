@@ -24,8 +24,28 @@ import {
   clearLiveCapture,
   getLiveRecorder,
   prepareLiveRecorder,
+  reserveLiveStart,
 } from "@/features/meeting/lib/live-session";
 import { SR } from "@/features/meeting/lib/pcm-convert";
+
+// 녹음 중 렌더 예외 재현(#98) — 켜면 라이브 전사가 렌더 중 던진다.
+const boom = vi.hoisted(() => ({ on: false }));
+// 시작 흐름(`startLiveRecording`)을 흉내 내는 테스트가 잡은 예약 — 실패해도 afterEach가 푼다.
+let releaseStart: (() => void) | null = null;
+vi.mock("@/features/meeting/ui/live-transcript", async (importOriginal) => {
+  const { createElement } = await import("react");
+  const m =
+    await importOriginal<
+      typeof import("@/features/meeting/ui/live-transcript")
+    >();
+  return {
+    ...m,
+    LiveTranscript: (props: Parameters<typeof m.LiveTranscript>[0]) => {
+      if (boom.on) throw new Error("render boom");
+      return createElement(m.LiveTranscript, props);
+    },
+  };
+});
 
 const meeting = (o: Partial<WireMeeting>): WireMeeting => ({
   id: "m1",
@@ -136,6 +156,9 @@ beforeEach(() => {
     .mockImplementation((url: string) => getResponse(url) as never);
 });
 afterEach(() => {
+  boom.on = false;
+  releaseStart?.();
+  releaseStart = null;
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -151,7 +174,10 @@ afterEach(() => {
  * 이미 덮는다; 여기서 보는 것은 "종료 클릭 → recorder.stop() → 올바른 헤더/바디로
  * POST"라는 배선이다.
  */
-async function stubMicAndStartRecorder(meetingId: string) {
+async function stubMicAndStartRecorder(
+  meetingId: string,
+  { holdBegin = false }: { holdBegin?: boolean } = {},
+) {
   const stream = {
     getTracks: () => [{ stop: vi.fn() }],
     getAudioTracks: () => [{ addEventListener: vi.fn() }],
@@ -164,7 +190,8 @@ async function stubMicAndStartRecorder(meetingId: string) {
   const port = {
     onmessage: null as ((e: MessageEvent<unknown>) => void) | null,
     postMessage(message: { type: string }) {
-      if (message.type === "begin") emit({ type: "begun" });
+      // holdBegin이면 begun ACK를 테스트가 직접 보낸다 — 시작이 덜 끝난 구간을 만든다.
+      if (message.type === "begin" && !holdBegin) emit({ type: "begun" });
       if (message.type === "flush") emit({ type: "flushed" });
     },
   };
@@ -190,8 +217,9 @@ async function stubMicAndStartRecorder(meetingId: string) {
   vi.stubGlobal("AudioWorkletNode", FakeAudioWorkletNode);
   // 준비가 끝난 뒤에야 회의에 붙인다 (설계 §6) — 화면은 그 결과인 활성 캡처만 본다.
   const capture = await prepareLiveRecorder();
-  await beginLiveCapture(capture, meetingId);
-  return { ...capture, emit };
+  const begun = beginLiveCapture(capture, meetingId);
+  if (!holdBegin) await begun;
+  return { ...capture, emit, begun };
 }
 
 let getSpy: { mock: { calls: unknown[][] } };
@@ -206,6 +234,7 @@ function renderAt(path: string) {
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
+  return router;
 }
 
 test("녹음 중인 회의는 라이브 배너와 라이브 전사를 그리고 플레이바는 없다", async () => {
@@ -522,4 +551,229 @@ test("마무리 중에 워커 신호가 끊기면 취소 배너로 넘어간다"
   expect(
     await screen.findByRole("button", { name: "녹음 취소" }),
   ).toBeInTheDocument();
+});
+
+test("녹음 중 화면이 렌더 중 깨져도 셸과 녹음 종료 버튼이 남고, 종료하면 stop을 보낸다", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const capture = await stubMicAndStartRecorder("m1");
+  const post = vi.spyOn(apiClient, "post").mockResolvedValue({
+    status: 200,
+    data: { meeting_id: "m1", job_id: "job_1", outcome: "stopping" },
+  } as never);
+  boom.on = true;
+  renderAt("/meetings/m1");
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "화면을 그리지 못했어요",
+  );
+  expect(
+    screen.getByRole("navigation", { name: "주 탐색" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByText(/Unexpected Application Error/)).toBeNull();
+  // 녹음 중에는 새로고침이 레코더를 없애므로 막는다
+  expect(screen.getByRole("button", { name: "새로고침" })).toBeDisabled();
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "녹음 종료" }));
+  });
+  await waitFor(() =>
+    expect(post).toHaveBeenCalledWith(
+      "/meetings/m1/live/stop",
+      expect.any(Uint8Array),
+      expect.anything(),
+    ),
+  );
+  await waitFor(() => expect(getLiveRecorder("m1")).toBeUndefined());
+  expect(capture.stopOutcome.current?.outcome).toBe("stopping");
+  expect(screen.queryByRole("button", { name: "녹음 종료" })).toBeNull();
+  expect(screen.getByRole("button", { name: "새로고침" })).toBeEnabled();
+});
+
+test("오류 화면의 녹음 종료가 응답을 못 받으면 캡처를 남기고, 다시 누르면 끝낸다", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const capture = await stubMicAndStartRecorder("m1");
+  const post = vi
+    .spyOn(apiClient, "post")
+    .mockRejectedValueOnce(new Error("response lost"))
+    .mockResolvedValue({
+      status: 200,
+      data: { meeting_id: "m1", job_id: "job_1", outcome: "stopping" },
+    } as never);
+  const stopPosts = () =>
+    post.mock.calls.filter((c) => c[0] === "/meetings/m1/live/stop").length;
+  boom.on = true;
+  renderAt("/meetings/m1");
+
+  await act(async () => {
+    fireEvent.click(await screen.findByRole("button", { name: "녹음 종료" }));
+  });
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "녹음 종료" })).toBeEnabled(),
+  );
+  expect(
+    screen.getByText("녹음을 종료하지 못했어요. 다시 눌러 주세요."),
+  ).toBeInTheDocument();
+  expect(capture.stopOutcome.current).toBeNull();
+  expect(getLiveRecorder("m1")?.recorder).toBe(capture.recorder);
+  expect(stopPosts()).toBe(1);
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "녹음 종료" }));
+  });
+  await waitFor(() => expect(getLiveRecorder("m1")).toBeUndefined());
+  expect(stopPosts()).toBe(2);
+  expect(capture.stopOutcome.current?.outcome).toBe("stopping");
+  expect(screen.queryByRole("button", { name: "녹음 종료" })).toBeNull();
+  expect(screen.getByRole("button", { name: "새로고침" })).toBeEnabled();
+});
+
+test("시작 ACK 전에 오류 화면에서 종료하면 시작이 끝난 뒤에 멈춘다", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  releaseStart = reserveLiveStart();
+  const capture = await stubMicAndStartRecorder("m1", { holdBegin: true });
+  const post = vi.spyOn(apiClient, "post").mockResolvedValue({
+    status: 200,
+    data: { meeting_id: "m1", job_id: "job_1", outcome: "stopping" },
+  } as never);
+  boom.on = true;
+  renderAt("/meetings/m1");
+
+  await act(async () => {
+    fireEvent.click(await screen.findByRole("button", { name: "녹음 종료" }));
+  });
+  // begin() ACK가 오기 전에는 멈추지 않는다 — 먼저 멈추면 늦은 ACK가 녹음을 되살린다.
+  expect(post).not.toHaveBeenCalledWith(
+    "/meetings/m1/live/stop",
+    expect.anything(),
+    expect.anything(),
+  );
+
+  await act(async () => {
+    capture.emit({ type: "begun" });
+    await capture.begun;
+    releaseStart?.();
+    releaseStart = null;
+  });
+  await waitFor(() => expect(getLiveRecorder("m1")).toBeUndefined());
+  expect(post).toHaveBeenCalledWith(
+    "/meetings/m1/live/stop",
+    expect.any(Uint8Array),
+    expect.anything(),
+  );
+  expect(capture.recorder.status.phase).not.toBe("recording");
+  expect(capture.stopOutcome.current?.outcome).toBe("stopping");
+});
+
+test("시작 ACK 전에 오류 화면에서 종료하고 다시 시도로 돌아와 회의 화면에서 종료해도 시작이 끝난 뒤에 멈춘다", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  releaseStart = reserveLiveStart();
+  const capture = await stubMicAndStartRecorder("m1", { holdBegin: true });
+  const post = vi.spyOn(apiClient, "post").mockResolvedValue({
+    status: 200,
+    data: { meeting_id: "m1", job_id: "job_1", outcome: "stopping" },
+  } as never);
+  const stopPosted = () =>
+    post.mock.calls.some((c) => c[0] === "/meetings/m1/live/stop");
+  boom.on = true;
+  renderAt("/meetings/m1");
+
+  await act(async () => {
+    fireEvent.click(await screen.findByRole("button", { name: "녹음 종료" }));
+  });
+  // 오류 화면의 종료가 시작을 기다리는 사이 회의 화면을 되살린다 — 회의 화면의 종료는
+  // 별개의 mutation이라, 시작을 기다리지 않으면 여기서 먼저 멈춘다.
+  boom.on = false;
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "다시 시도" }));
+  });
+  await act(async () => {
+    fireEvent.click(await screen.findByRole("button", { name: "종료" }));
+  });
+  expect(stopPosted()).toBe(false);
+
+  await act(async () => {
+    capture.emit({ type: "begun" });
+    await capture.begun;
+    releaseStart?.();
+    releaseStart = null;
+  });
+  await waitFor(() => expect(getLiveRecorder("m1")).toBeUndefined());
+  expect(stopPosted()).toBe(true);
+  expect(capture.recorder.status.phase).not.toBe("recording");
+  expect(capture.stopOutcome.current?.outcome).toBe("stopping");
+});
+
+test("녹음 준비 중에는 회의가 붙기 전이라도 새로고침을 막는다", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  releaseStart = reserveLiveStart();
+  boom.on = true;
+  renderAt("/meetings/m1");
+
+  const reload = await screen.findByRole("button", { name: "새로고침" });
+  expect(reload).toBeDisabled();
+  // 녹음 중 안내가 아니라 시작 중이라는 사실을 알린다 — 아직 녹음도, 종료할 대상도 없다.
+  expect(reload).toHaveAccessibleDescription(
+    "녹음을 시작하는 중이에요. 시작이 끝나면 새로고침할 수 있어요.",
+  );
+  expect(screen.queryByRole("button", { name: "녹음 종료" })).toBeNull();
+
+  act(() => {
+    releaseStart?.();
+    releaseStart = null;
+  });
+  expect(screen.getByRole("button", { name: "새로고침" })).toBeEnabled();
+});
+
+test("오류 화면의 종료가 진행 중에 다른 화면으로 떠나도 ACK 뒤 캡처를 놓는다", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const capture = await stubMicAndStartRecorder("m1");
+  let respond!: () => void;
+  vi.spyOn(apiClient, "post").mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        respond = () =>
+          resolve({
+            status: 200,
+            data: { meeting_id: "m1", job_id: "job_1", outcome: "stopping" },
+          } as never);
+      }),
+  );
+  boom.on = true;
+  const router = renderAt("/meetings/m1");
+
+  await act(async () => {
+    fireEvent.click(await screen.findByRole("button", { name: "녹음 종료" }));
+  });
+  await waitFor(() => expect(respond).toBeDefined());
+  // 응답 전에 오류 화면을 떠난다 — mutate()의 호출별 콜백은 이제 불리지 않는다.
+  boom.on = false;
+  await act(async () => {
+    await router.navigate("/meetings");
+  });
+  expect(screen.queryByRole("button", { name: "녹음 종료" })).toBeNull();
+
+  await act(async () => {
+    respond();
+  });
+  await waitFor(() => expect(getLiveRecorder("m1")).toBeUndefined());
+  expect(capture.stopOutcome.current?.outcome).toBe("stopping");
+});
+
+test("녹음 중이 아니면 오류 화면에 녹음 종료가 없고 다시 시도로 복구한다", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  boom.on = true;
+  renderAt("/meetings/m1");
+
+  expect(await screen.findByRole("alert")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "녹음 종료" })).toBeNull();
+  expect(screen.getByRole("button", { name: "새로고침" })).toBeEnabled();
+
+  boom.on = false;
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "다시 시도" }));
+  });
+  expect(
+    await screen.findByRole("button", { name: "종료" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).toBeNull();
 });

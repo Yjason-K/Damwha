@@ -11,12 +11,15 @@ import {
   clearLiveCapture,
   finishLiveCapture,
   getLiveRecorder,
+  getUnfinishedLiveCapture,
   hasLiveCapture,
   LiveCaptureBusy,
   liveSessionSnapshot,
+  liveSessionVersion,
   prepareLiveRecorder,
   reserveLiveStart,
   stopActiveLiveCapture,
+  subscribeLiveSession,
   subscribeLiveStatus,
 } from "./live-session";
 
@@ -745,6 +748,29 @@ describe("liveSessionSnapshot", () => {
       expect.any(Uint8Array),
       expect.anything(),
     );
+  });
+
+  it("오류 화면의 종료 대상은 실패로 멈췄어도 ACK 전이면 남고, ACK·정리 뒤엔 없다", async () => {
+    const mic = stubMic();
+    vi.spyOn(apiClient, "post").mockResolvedValue(stopping() as never);
+    const seen: number[] = [];
+    const unsubscribe = subscribeLiveSession(() =>
+      seen.push(liveSessionVersion()),
+    );
+    const { recorder } = await startCapture("m1");
+    expect(getUnfinishedLiveCapture()?.meetingId).toBe("m1");
+    mic.endDevice();
+    await vi.waitFor(() => expect(recorder.status.phase).toBe("stopped"));
+    // hasLiveCapture는 거짓이지만 서버 stop은 아직 필요하다
+    expect(hasLiveCapture()).toBe(false);
+    expect(getUnfinishedLiveCapture()?.recorder).toBe(recorder);
+    await finishLiveCapture();
+    expect(getUnfinishedLiveCapture()).toBeUndefined();
+    const before = seen.length;
+    clearLiveCapture("m1");
+    expect(seen.length).toBe(before + 1);
+    unsubscribe();
+    expect(seen.length).toBeGreaterThan(1);
   });
 
   it("서버가 ACK해도 실패한 세션의 failed는 참으로 남는다", async () => {
