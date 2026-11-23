@@ -5,11 +5,11 @@ import { useLocation, useNavigate } from "react-router";
 import { useStopLive } from "@/features/meeting/api/live";
 import type { LiveStopResponse } from "@/features/meeting/api/types";
 import {
-  awaitLiveStart,
   clearLiveCapture,
   getUnfinishedLiveCapture,
   isLiveStarting,
   liveSessionVersion,
+  stopLiveCapture,
   subscribeLiveSession,
 } from "@/features/meeting/lib/live-session";
 import { Button } from "@/shared/ui/button";
@@ -19,7 +19,7 @@ import { cn } from "@/shared/lib/utils";
  * 라우트 렌더 예외 화면 (#98). React Router의 기본 오류 화면은 셸을 통째로 대체하고,
  * 녹음 종료 버튼(LiveBanner)은 회의 화면 안에 있어서 화면이 깨지면 녹음을 멈출 수단이
  * 사라진다. 레코더는 React 밖의 모듈 싱글턴이라 계속 캡처한다 — 그래서 이 화면이 종료를
- * 직접 맡는다. 회의 화면의 종료와 같은 절차(`recorder.stop()` → `useStopLive`)를 밟고,
+ * 직접 맡는다. 회의 화면의 종료와 같은 절차(`stopLiveCapture` → `useStopLive`)를 밟고,
  * 서버 ACK(outcome)를 받은 뒤에만 캡처를 놓는다.
  *
  * `standalone`은 셸 자체가 깨졌을 때(루트 라우트)의 전체 화면 배치다. 그 밖에는 셸
@@ -49,7 +49,7 @@ export function RouteErrorPage({
 
   const handleStop = () => {
     if (!capture) return;
-    const { meetingId, recorder, stopOutcome } = capture;
+    const { meetingId, stopOutcome } = capture;
     setStopFailed(false);
     stopLive.mutate(
       {
@@ -57,10 +57,8 @@ export function RouteErrorPage({
         // 정리는 이 함수 안에서 한다. mutate()의 호출별 콜백은 이 화면이 사라지면(다시
         // 시도·LeftNav 이동) 불리지 않아 캡처가 남는다.
         stop: async () => {
-          // 시작이 아직 begin() ACK를 기다리는 중이면 그 뒤에 멈춘다. 먼저 멈추면 늦게 온
-          // ACK가 레코더를 다시 녹음 상태로 되돌린다(데스크톱 브리지와 같은 순서).
-          await awaitLiveStart();
-          await recorder.stop();
+          // 시작 ACK 전이면 시작이 끝난 뒤에 멈춘다(회의 화면과 같은 공용 경로).
+          await stopLiveCapture(capture);
           // outcome이 없으면 서버가 받았다는 증거가 없다 — 꼬리를 지키려고 캡처를 남긴다.
           if (stopOutcome.current) clearLiveCapture(meetingId);
           return stopOutcome.current;

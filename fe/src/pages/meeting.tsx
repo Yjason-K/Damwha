@@ -31,6 +31,7 @@ import { recentMeetings } from "@/features/meeting/lib/recent-meetings";
 import {
   clearLiveCapture,
   getLiveRecorder,
+  stopLiveCapture,
   subscribeLiveStatus,
 } from "@/features/meeting/lib/live-session";
 import type { Meeting } from "@/features/meeting/model/types";
@@ -323,11 +324,7 @@ type MeetingViewProps = {
   onSpeed: (speed: number) => void;
 };
 
-function MeetingView({
-  meetingId,
-  speed,
-  onSpeed,
-}: MeetingViewProps) {
+function MeetingView({ meetingId, speed, onSpeed }: MeetingViewProps) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const activeId = searchParams.get("u") ?? "";
@@ -476,7 +473,7 @@ function MeetingView({
       {
         id: meeting.id,
         stop: async () => {
-          await live.recorder.stop();
+          await stopLiveCapture(live);
           return live.stopOutcome.current;
         },
       },

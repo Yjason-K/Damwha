@@ -407,6 +407,16 @@ export function reserveLiveStart(): () => void {
   };
 }
 
+/**
+ * 화면(회의 화면·오류 화면)에서 이 캡처를 멈추는 공용 경로. 시작 흐름이 아직 begin() ACK를
+ * 기다리는 중이면 그 뒤에 멈춘다 — 먼저 멈추면 늦게 온 ACK가 레코더를 다시 `recording`으로
+ * 되돌리고 4시간 상한 타이머까지 건다. 데스크톱 브리지(`stopLiveRecording`)와 같은 순서다.
+ */
+export async function stopLiveCapture(capture: LiveCapture): Promise<void> {
+  await awaitLiveStart();
+  await capture.recorder.stop();
+}
+
 /** 이 회의 id의 활성 레코더. 다른 회의거나 없으면 undefined. */
 export function getLiveRecorder(meetingId: string): LiveCapture | undefined {
   return active?.meetingId === meetingId ? active : undefined;

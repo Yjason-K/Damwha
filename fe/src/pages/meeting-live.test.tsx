@@ -664,6 +664,45 @@ test("시작 ACK 전에 오류 화면에서 종료하면 시작이 끝난 뒤에
   expect(capture.stopOutcome.current?.outcome).toBe("stopping");
 });
 
+test("시작 ACK 전에 오류 화면에서 종료하고 다시 시도로 돌아와 회의 화면에서 종료해도 시작이 끝난 뒤에 멈춘다", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  releaseStart = reserveLiveStart();
+  const capture = await stubMicAndStartRecorder("m1", { holdBegin: true });
+  const post = vi.spyOn(apiClient, "post").mockResolvedValue({
+    status: 200,
+    data: { meeting_id: "m1", job_id: "job_1", outcome: "stopping" },
+  } as never);
+  const stopPosted = () =>
+    post.mock.calls.some((c) => c[0] === "/meetings/m1/live/stop");
+  boom.on = true;
+  renderAt("/meetings/m1");
+
+  await act(async () => {
+    fireEvent.click(await screen.findByRole("button", { name: "녹음 종료" }));
+  });
+  // 오류 화면의 종료가 시작을 기다리는 사이 회의 화면을 되살린다 — 회의 화면의 종료는
+  // 별개의 mutation이라, 시작을 기다리지 않으면 여기서 먼저 멈춘다.
+  boom.on = false;
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "다시 시도" }));
+  });
+  await act(async () => {
+    fireEvent.click(await screen.findByRole("button", { name: "종료" }));
+  });
+  expect(stopPosted()).toBe(false);
+
+  await act(async () => {
+    capture.emit({ type: "begun" });
+    await capture.begun;
+    releaseStart?.();
+    releaseStart = null;
+  });
+  await waitFor(() => expect(getLiveRecorder("m1")).toBeUndefined());
+  expect(stopPosted()).toBe(true);
+  expect(capture.recorder.status.phase).not.toBe("recording");
+  expect(capture.stopOutcome.current?.outcome).toBe("stopping");
+});
+
 test("녹음 준비 중에는 회의가 붙기 전이라도 새로고침을 막는다", async () => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   releaseStart = reserveLiveStart();
