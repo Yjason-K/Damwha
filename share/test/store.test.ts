@@ -1,7 +1,7 @@
-import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DiskStore } from '../src/store.js';
 
 /** readdir 순서는 파일시스템마다 다르다 — 순서를 바꿔 `.json`이 `.bin`보다 먼저 오는 경우를 결정적으로 만든다. */
@@ -78,4 +78,43 @@ it('sweep — 쌍의 한쪽이 이미 지워졌어도(readdir 순서와 무관�
   order.reverse = true; // .json이 먼저 → 쌍을 지운 뒤 목록에 남은 .bin을 만난다
   expect(await store.sweep(new Date('2026-10-10T00:00:00.000Z'))).toBe(1);
   expect(existsSync(join(dir, 'shares', `${ID}.bin`))).toBe(false);
+});
+
+describe('해석할 수 없는 메타 (이슈 #106 DCS-3)', () => {
+  const BROKEN = '7-AAAAAAAAAAAAAAAAAAAAAB';
+  const writePair = (id: string, metaText: string) => {
+    writeFileSync(join(dir, 'shares', `${id}.bin`), new Uint8Array([1]));
+    writeFileSync(join(dir, 'shares', `${id}.json`), metaText);
+  };
+  const gone = (id: string) =>
+    !existsSync(join(dir, 'shares', `${id}.json`)) && !existsSync(join(dir, 'shares', `${id}.bin`));
+
+  it.each([
+    ['빈 파일', ''],
+    ['잘린 JSON', '{"expires_at":"2026-10'],
+    ['객체가 아님', 'null'],
+    ['만료 시각을 해석할 수 없음', JSON.stringify(meta('garbage'))],
+    ['토큰 해시가 없음', JSON.stringify({ expires_at: '2026-10-20T00:00:00.000Z' })],
+  ])('%s — head는 없는 것으로 보고 그 쌍을 지운다', async (_, text) => {
+    writePair(BROKEN, text);
+    expect(await store.head(BROKEN)).toBeNull();
+    expect(gone(BROKEN)).toBe(true);
+  });
+
+  it.each([false, true])('sweep은 깨진 메타를 지우고 멈추지 않는다 — 뒤의 만료 항목도 지운다 (reverse=%s)', async (reverse) => {
+    order.reverse = reverse;
+    writePair(BROKEN, '');
+    await store.put(ID, new Uint8Array([1]), meta('2026-10-09T00:00:00.000Z'));
+    expect(await store.sweep(new Date('2026-10-10T00:00:00.000Z'))).toBe(2);
+    expect(gone(BROKEN)).toBe(true);
+    expect(gone(ID)).toBe(true);
+  });
+
+  it('sweep — 한 항목의 다른 오류도 나머지 청소를 막지 않고, 끝난 뒤 그 오류로 reject한다', async () => {
+    order.reverse = true; // 오류 항목(…AB)이 만료 항목(…AA)보다 먼저 온다
+    mkdirSync(join(dir, 'shares', `${BROKEN}.json`)); // readFile → EISDIR
+    await store.put(ID, new Uint8Array([1]), meta('2026-10-09T00:00:00.000Z'));
+    await expect(store.sweep(new Date('2026-10-10T00:00:00.000Z'))).rejects.toMatchObject({ code: 'EISDIR' });
+    expect(gone(ID)).toBe(true);
+  });
 });

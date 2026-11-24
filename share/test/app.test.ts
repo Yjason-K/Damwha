@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -215,6 +215,21 @@ describe('삭제', () => {
     const { id, token, res } = await upload(app);
     expect(res.status).toBe(500);
     expect((await del(app, id, token)).status).toBe(404);
+  });
+});
+
+describe('해석할 수 없는 메타 (이슈 #106 DCS-3)', () => {
+  it('조회는 410, 삭제는 404 — 500을 주지 않고 쌍을 지운다', async () => {
+    const app = makeApp();
+    const { id } = await upload(app);
+    writeFileSync(join(dir, 'shares', `${id}.json`), '');
+    expect((await get(app, id)).status).toBe(410);
+    expect(readdirSync(join(dir, 'shares'))).toEqual([]);
+
+    const second = await upload(app);
+    writeFileSync(join(dir, 'shares', `${second.id}.json`), '{"expires_at":');
+    expect((await del(app, second.id, second.token)).status).toBe(404);
+    expect(readdirSync(join(dir, 'shares'))).toEqual([]);
   });
 });
 
