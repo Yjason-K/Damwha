@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
 import { readConfig, type ShareConfig } from '../src/config.js';
-import { DailyBudget, WindowLimiter } from '../src/limits.js';
+import { DailyBudget, WindowLimiter, clientKey } from '../src/limits.js';
 import { DiskStore } from '../src/store.js';
 import { newDeleteToken, newShareId } from '@damwha/share-format';
 
@@ -136,6 +136,74 @@ describe('서비스 전체 일일 상한', () => {
     expect(b.reserve(10, next)).not.toBeNull(); // 새 날 첫 업로드
     b.release(late!); // 전날 예약의 취소
     expect(b.reserve(10, next)).toBeNull(); // 새 날은 여전히 상한에 닿아 있다
+  });
+});
+
+describe('IP별 일일 쿼터 (이슈 #106 DCS-1)', () => {
+  const roomy = { limits: { upload: 1000, read: 100, delete: 100 } };
+
+  it('한 IP가 건수 쿼터를 다 써도 다른 IP는 올릴 수 있다 — 429 DAILY_IP_CAP', async () => {
+    const app = makeApp({ ...roomy, ipDailyMaxUploads: 2 });
+    expect((await post(app)).status).toBe(201);
+    expect((await post(app)).status).toBe(201);
+    const res = await post(app);
+    expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({ code: 'DAILY_IP_CAP' });
+    expect((await post(app, undefined, '198.51.100.1')).status).toBe(201);
+  });
+
+  it('바이트 쿼터', async () => {
+    const app = makeApp({ ...roomy, ipDailyMaxBytes: 250 });
+    expect((await post(app)).status).toBe(201);
+    expect((await post(app)).status).toBe(201);
+    expect((await post(app)).status).toBe(429);
+  });
+
+  it('같은 /64의 IPv6 주소는 쿼터와 분당 제한을 같이 쓴다', async () => {
+    const app = makeApp({ limits: { upload: 2, read: 100, delete: 100 } });
+    expect((await post(app, undefined, '2001:db8:1:2::1')).status).toBe(201);
+    expect((await post(app, undefined, '2001:db8:1:2::2')).status).toBe(201);
+    expect((await post(app, undefined, '2001:db8:1:2:ffff::')).status).toBe(429);
+    expect((await post(app, undefined, '2001:db8:1:3::1')).status).toBe(201);
+  });
+
+  it('날짜가 바뀌면 새로 센다', async () => {
+    const app = makeApp({ ...roomy, ipDailyMaxUploads: 1 });
+    expect((await post(app)).status).toBe(201);
+    expect((await post(app)).status).toBe(429);
+    clock = new Date('2026-10-10T00:00:01.000Z');
+    expect((await post(app)).status).toBe(201);
+  });
+
+  it('전역 상한에 막히거나 저장에 실패한 업로드는 IP 쿼터를 쓰지 않는다', async () => {
+    const full = makeApp({ ...roomy, ipDailyMaxUploads: 1, dailyMaxBytes: 50 });
+    expect((await post(full)).status).toBe(503);
+    expect((await post(full, undefined, undefined, 10)).status).toBe(201);
+
+    const app = makeApp({ ...roomy, ipDailyMaxUploads: 1 });
+    const put = store.put.bind(store);
+    store.put = async () => { throw new Error('disk'); };
+    expect((await post(app)).status).toBe(500);
+    store.put = put;
+    expect((await post(app)).status).toBe(201);
+  });
+
+  it('readConfig — 기본값은 하루 50건·50MB', () => {
+    expect(readConfig({})).toMatchObject({ ipDailyMaxUploads: 50, ipDailyMaxBytes: 52_428_800 });
+    expect(readConfig({ IP_DAILY_MAX_UPLOADS: '5', IP_DAILY_MAX_BYTES: '1000' })).toMatchObject({ ipDailyMaxUploads: 5, ipDailyMaxBytes: 1000 });
+  });
+
+  it.each([
+    ['203.0.113.9', '203.0.113.9'],
+    ['2001:db8:1:2::1', '2001:db8:1:2::/64'],
+    ['2001:0DB8:0001:0002:ffff:ffff:ffff:ffff', '2001:db8:1:2::/64'],
+    ['2001:db8::', '2001:db8:0:0::/64'],
+    ['::1', '0:0:0:0::/64'],
+    ['fe80::1%eth0', 'fe80:0:0:0::/64'],
+    ['::ffff:203.0.113.9', '203.0.113.9'],
+    ['unknown', 'unknown'],
+  ])('clientKey(%s) = %s', (ip, key) => {
+    expect(clientKey(ip)).toBe(key);
   });
 });
 

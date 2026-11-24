@@ -51,3 +51,51 @@ export class DailyBudget {
     this.bytes = Math.max(0, this.bytes - ticket.size);
   }
 }
+
+export type ClientTicket = { key: string; ticket: BudgetTicket };
+
+/**
+ * 클라이언트(clientKey)별 일일 업로드 쿼터 (이슈 #106 DCS-1) — 한 클라이언트가 전역 상한을 혼자 다 쓰지 못하게 한다.
+ * 날짜가 바뀌면 전부 비운다. 전역 예약이 된 뒤에만 부르므로 하루 항목 수는 전역 건수 상한을 넘지 않는다.
+ */
+export class ClientDailyBudget {
+  private day = '';
+  private readonly budgets = new Map<string, DailyBudget>();
+  constructor(private readonly maxUploads: number, private readonly maxBytes: number) {}
+
+  reserve(key: string, size: number, now: Date): ClientTicket | null {
+    const d = now.toISOString().slice(0, 10);
+    if (d !== this.day) {
+      this.day = d;
+      this.budgets.clear();
+    }
+    let b = this.budgets.get(key);
+    if (!b) this.budgets.set(key, (b = new DailyBudget(this.maxUploads, this.maxBytes)));
+    const ticket = b.reserve(size, now);
+    return ticket && { key, ticket };
+  }
+
+  release(t: ClientTicket): void {
+    this.budgets.get(t.key)?.release(t.ticket);
+  }
+}
+
+/**
+ * 제한·쿼터를 셀 클라이언트 키. IPv6는 /64로 묶는다 — 가정 회선 하나가 /64를 통째로 받으므로 주소를 바꿔 가며
+ * 제한을 피하지 못하게 한다. IPv4에 대응된 IPv6(::ffff:a.b.c.d)는 IPv4로, 해석할 수 없는 값은 그대로 쓴다.
+ */
+export function clientKey(ip: string): string {
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip);
+  if (mapped) return mapped[1]!;
+  if (!ip.includes(':')) return ip;
+  const addr = ip.split('%')[0]!;
+  const halves = addr.split('::');
+  if (halves.length > 2) return ip;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const fill = 8 - head.length - tail.length;
+  if (halves.length === 2 ? fill < 1 : fill !== 0) return ip;
+  const groups = [...head, ...Array<string>(fill).fill('0'), ...tail];
+  if (!groups.every((g) => /^[0-9a-f]{1,4}$/i.test(g))) return ip;
+  return `${groups.slice(0, 4).map((g) => parseInt(g, 16).toString(16)).join(':')}::/64`;
+}
