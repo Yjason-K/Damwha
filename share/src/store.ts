@@ -33,6 +33,8 @@ export class DiskStore {
   private readonly dir: string;
   /** 디스크의 봉투 + 쓰는 중인 봉투. */
   private usedBytes = 0;
+  /** 지우는 중인 봉투 경로 — 동시 삭제가 용량을 두 번 돌려주지 않게 한다. */
+  private readonly removing = new Set<string>();
   constructor(dataDir: string, private readonly maxBytes = Infinity) {
     this.dir = join(dataDir, 'shares');
   }
@@ -63,8 +65,14 @@ export class DiskStore {
       this.usedBytes -= body.byteLength;
       throw e;
     }
-    await writeFile(`${json}.tmp`, JSON.stringify(meta));
-    await rename(`${json}.tmp`, json);
+    try {
+      await writeFile(`${json}.tmp`, JSON.stringify(meta));
+      await rename(`${json}.tmp`, json);
+    } catch (e) {
+      // 메타가 없으니 공유는 없다 — 봉투를 남기면 같은 id의 재시도가 용량을 두 번 센다.
+      await this.removeBin(bin).catch(() => undefined);
+      throw e;
+    }
   }
 
   /**
@@ -112,17 +120,23 @@ export class DiskStore {
     await this.removeBin(this.path(id, 'bin'));
   }
 
-  /** 봉투를 지우고 그 크기만큼 용량을 돌려준다. 이미 없으면 아무것도 하지 않는다. */
+  /**
+   * 봉투를 지우고 그 크기만큼 용량을 돌려준다. 이미 없으면 아무것도 하지 않는다. 같은 봉투를 동시에 지우면 둘 다
+   * 크기를 읽을 수 있다(macOS에서는 동시 unlink도 둘 다 성공한다) — 먼저 온 쪽만 지우고 돌려준다.
+   */
   private async removeBin(full: string): Promise<void> {
-    let size: number;
+    // 확인과 등록 사이에 await가 없다 — 프로세스 하나에서 원자적이다.
+    if (this.removing.has(full)) return;
+    this.removing.add(full);
     try {
-      size = (await stat(full)).size;
+      const { size } = await stat(full);
+      await rm(full, { force: true });
+      this.usedBytes = Math.max(0, this.usedBytes - size);
     } catch (e) {
-      if (isMissing(e)) return;
-      throw e;
+      if (!isMissing(e)) throw e;
+    } finally {
+      this.removing.delete(full);
     }
-    await rm(full, { force: true });
-    this.usedBytes = Math.max(0, this.usedBytes - size);
   }
 
   /**

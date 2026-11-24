@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
 import { readConfig, type ShareConfig } from '../src/config.js';
-import { DailyBudget, WindowLimiter, clientKey } from '../src/limits.js';
+import { ClientDailyBudget, DailyBudget, WindowLimiter, clientKey } from '../src/limits.js';
 import { DiskStore } from '../src/store.js';
 import { newDeleteToken, newShareId } from '@damwha/share-format';
 
@@ -186,6 +186,19 @@ describe('IP별 일일 쿼터 (이슈 #106 DCS-1)', () => {
     expect((await post(app)).status).toBe(500);
     store.put = put;
     expect((await post(app)).status).toBe(201);
+  });
+
+  it('ClientDailyBudget — 거절되거나 반환되어 빈 항목은 남기지 않는다 (주소를 바꿔 가며 메모리를 늘리지 못한다)', () => {
+    const b = new ClientDailyBudget(2, 100);
+    const now = new Date('2026-10-09T03:00:00Z');
+    expect(b.reserve('a', 101, now)).toBeNull();
+    expect(b.size).toBe(0);
+    const t1 = b.reserve('b', 10, now)!;
+    const t2 = b.reserve('b', 10, now)!;
+    b.release(t1);
+    expect(b.size).toBe(1);
+    b.release(t2);
+    expect(b.size).toBe(0);
   });
 
   it('readConfig — 기본값은 하루 50건·50MB', () => {

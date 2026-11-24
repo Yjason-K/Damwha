@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DiskStore, StorageFullError } from '../src/store.js';
 
 /** readdir 순서는 파일시스템마다 다르다 — 순서를 바꿔 `.json`이 `.bin`보다 먼저 오는 경우를 결정적으로 만든다. */
-const order = vi.hoisted(() => ({ reverse: false }));
+const order = vi.hoisted(() => ({ reverse: false, failMetaWrite: false }));
 vi.mock('node:fs/promises', async (orig) => {
   const actual = await orig<typeof import('node:fs/promises')>();
   return {
@@ -14,6 +14,10 @@ vi.mock('node:fs/promises', async (orig) => {
       const names = await actual.readdir(path);
       return order.reverse ? [...names].sort().reverse() : names;
     }) as unknown as typeof actual.readdir,
+    writeFile: (async (path: string, ...rest: unknown[]) => {
+      if (order.failMetaWrite && String(path).endsWith('.json.tmp')) throw Object.assign(new Error('disk'), { code: 'EIO' });
+      return (actual.writeFile as (...a: unknown[]) => Promise<void>)(path, ...rest);
+    }) as unknown as typeof actual.writeFile,
   };
 });
 
@@ -28,6 +32,7 @@ beforeEach(async () => {
 });
 afterEach(() => {
   order.reverse = false;
+  order.failMetaWrite = false;
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -166,5 +171,23 @@ describe('총 용량 상한 (이슈 #106 DCS-2)', () => {
     utimesSync(orphan, old, old);
     expect(await s2.sweep(new Date())).toBe(2);
     await s2.put(B, new Uint8Array(10), exp);
+  });
+
+  it('같은 공유를 동시에 지워도 용량은 한 번만 돌려준다', async () => {
+    const s = await capped(10);
+    await s.put(ID, new Uint8Array(6), exp);
+    await s.put(B, new Uint8Array(4), exp);
+    await Promise.all([s.delete(ID), s.delete(ID), s.sweep(new Date('2026-10-08T00:00:00.000Z'))]);
+    await expect(s.put('7-DDDDDDDDDDDDDDDDDDDDDD', new Uint8Array(7), exp)).rejects.toBeInstanceOf(StorageFullError);
+  });
+
+  it('메타 쓰기가 실패하면 봉투를 지우고 용량을 돌려준다 — 같은 id로 다시 올릴 수 있다', async () => {
+    const s = await capped(10);
+    order.failMetaWrite = true;
+    await expect(s.put(ID, new Uint8Array(6), exp)).rejects.toThrow('disk');
+    expect(existsSync(join(dir, 'shares', `${ID}.bin`))).toBe(false);
+    order.failMetaWrite = false;
+    await s.put(ID, new Uint8Array(6), exp);
+    await s.put(B, new Uint8Array(4), exp);
   });
 });

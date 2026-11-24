@@ -45,6 +45,11 @@ export class DailyBudget {
     return { day: d, size };
   }
 
+  /** 오늘 예약된 업로드 수. */
+  get uploads(): number {
+    return this.count;
+  }
+
   release(ticket: BudgetTicket): void {
     if (ticket.day !== this.day) return;
     this.count = Math.max(0, this.count - 1);
@@ -56,7 +61,8 @@ export type ClientTicket = { key: string; ticket: BudgetTicket };
 
 /**
  * 클라이언트(clientKey)별 일일 업로드 쿼터 (이슈 #106 DCS-1) — 한 클라이언트가 전역 상한을 혼자 다 쓰지 못하게 한다.
- * 날짜가 바뀌면 전부 비운다. 전역 예약이 된 뒤에만 부르므로 하루 항목 수는 전역 건수 상한을 넘지 않는다.
+ * 날짜가 바뀌면 전부 비운다. 거절되거나 반환되어 빈 항목은 바로 지운다 — 전역 예약이 된 뒤에만 부르므로 남는
+ * 항목 수는 전역 건수 상한을 넘지 않는다.
  */
 export class ClientDailyBudget {
   private day = '';
@@ -72,11 +78,27 @@ export class ClientDailyBudget {
     let b = this.budgets.get(key);
     if (!b) this.budgets.set(key, (b = new DailyBudget(this.maxUploads, this.maxBytes)));
     const ticket = b.reserve(size, now);
-    return ticket && { key, ticket };
+    if (!ticket) {
+      this.dropIfEmpty(key, b);
+      return null;
+    }
+    return { key, ticket };
   }
 
   release(t: ClientTicket): void {
-    this.budgets.get(t.key)?.release(t.ticket);
+    const b = this.budgets.get(t.key);
+    if (!b) return;
+    b.release(t.ticket);
+    this.dropIfEmpty(t.key, b);
+  }
+
+  /** 지금 남아 있는 클라이언트 항목 수. */
+  get size(): number {
+    return this.budgets.size;
+  }
+
+  private dropIfEmpty(key: string, b: DailyBudget): void {
+    if (b.uploads === 0) this.budgets.delete(key);
   }
 }
 
