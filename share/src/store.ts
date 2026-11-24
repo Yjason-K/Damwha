@@ -11,21 +11,38 @@ export interface ShareMeta {
 }
 
 const ORPHAN_AGE_MS = 3_600_000;
+
+/** 총 용량 상한에 닿아 저장하지 않았다 (이슈 #106 DCS-2). */
+export class StorageFullError extends Error {
+  constructor() {
+    super('share storage is full');
+    this.name = 'StorageFullError';
+  }
+}
 const isMissing = (e: unknown) => (e as NodeJS.ErrnoException).code === 'ENOENT';
 
 /**
  * 공유본 하나 = `shares/<id>.bin`(봉투) + `shares/<id>.json`(메타). **메타가 있어야 존재한다** — 봉투를 먼저 쓰고
  * 메타를 나중에 쓰며(둘 다 임시 파일 → rename), 지울 때는 메타를 먼저 지운다. 그래서 쓰다 죽거나 지우다 죽어도
  * 읽기 경로에 반쯤 된 공유가 보이지 않는다. 파일 이름은 SHARE_ID_RE를 통과한 id만 쓴다(경로 탈출 차단).
+ *
+ * 총 용량은 봉투(`.bin`) 바이트로 센다 — 메타는 수백 바이트라 뺀다. 시작할 때 한 번 합산하고, 이후 저장·삭제·청소가
+ * 메모리 값을 고친다. 프로세스 하나가 유일한 쓰는 쪽이라는 전제다.
  */
 export class DiskStore {
   private readonly dir: string;
-  constructor(dataDir: string) {
+  /** 디스크의 봉투 + 쓰는 중인 봉투. */
+  private usedBytes = 0;
+  constructor(dataDir: string, private readonly maxBytes = Infinity) {
     this.dir = join(dataDir, 'shares');
   }
 
   async init(): Promise<void> {
     await mkdir(this.dir, { recursive: true });
+    this.usedBytes = 0;
+    for (const name of await readdir(this.dir)) {
+      if (name.endsWith('.bin')) this.usedBytes += (await stat(join(this.dir, name))).size;
+    }
   }
 
   private path(id: string, ext: 'bin' | 'json'): string {
@@ -36,8 +53,16 @@ export class DiskStore {
   async put(id: string, body: Uint8Array, meta: ShareMeta): Promise<void> {
     const bin = this.path(id, 'bin');
     const json = this.path(id, 'json');
-    await writeFile(`${bin}.tmp`, body);
-    await rename(`${bin}.tmp`, bin);
+    // 확인과 차감 사이에 await가 없다 — 동시 저장이 몰려도 상한을 넘지 않는다.
+    if (this.usedBytes + body.byteLength > this.maxBytes) throw new StorageFullError();
+    this.usedBytes += body.byteLength;
+    try {
+      await writeFile(`${bin}.tmp`, body);
+      await rename(`${bin}.tmp`, bin);
+    } catch (e) {
+      this.usedBytes -= body.byteLength;
+      throw e;
+    }
     await writeFile(`${json}.tmp`, JSON.stringify(meta));
     await rename(`${json}.tmp`, json);
   }
@@ -84,7 +109,20 @@ export class DiskStore {
 
   private async removePair(id: string): Promise<void> {
     await rm(this.path(id, 'json'), { force: true });
-    await rm(this.path(id, 'bin'), { force: true });
+    await this.removeBin(this.path(id, 'bin'));
+  }
+
+  /** 봉투를 지우고 그 크기만큼 용량을 돌려준다. 이미 없으면 아무것도 하지 않는다. */
+  private async removeBin(full: string): Promise<void> {
+    let size: number;
+    try {
+      size = (await stat(full)).size;
+    } catch (e) {
+      if (isMissing(e)) return;
+      throw e;
+    }
+    await rm(full, { force: true });
+    this.usedBytes = Math.max(0, this.usedBytes - size);
   }
 
   /**
@@ -136,7 +174,8 @@ export class DiskStore {
       throw e;
     }
     if (now.getTime() - mtimeMs <= ORPHAN_AGE_MS) return false;
-    await rm(full, { force: true });
+    if (isTmp) await rm(full, { force: true });
+    else await this.removeBin(full);
     return true;
   }
 }

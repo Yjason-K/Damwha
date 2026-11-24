@@ -233,6 +233,26 @@ describe('해석할 수 없는 메타 (이슈 #106 DCS-3)', () => {
   });
 });
 
+describe('총 용량 상한 (이슈 #106 DCS-2)', () => {
+  it('꽉 차면 503 STORAGE_FULL이고 일일 상한을 쓰지 않는다, 지우면 다시 받는다', async () => {
+    store = new DiskStore(dir, 100);
+    await store.init();
+    const app = makeApp({ dailyMaxUploads: 2 });
+    const first = await upload(app);
+    expect(first.res.status).toBe(201);
+    const res = (await upload(app)).res;
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ code: 'STORAGE_FULL' });
+    expect((await del(app, first.id, first.token)).status).toBe(204);
+    expect((await upload(app)).res.status).toBe(201);
+  });
+
+  it('readConfig — 기본값 2GB, TOTAL_MAX_BYTES로 바꾼다', () => {
+    expect(readConfig({}).totalMaxBytes).toBe(2_147_483_648);
+    expect(readConfig({ TOTAL_MAX_BYTES: '1000' }).totalMaxBytes).toBe(1000);
+  });
+});
+
 describe('교체 (spec selfhost-v2 §2.4)', () => {
   const replaceHeaders = (old: Up) => ({ 'X-Replace-Id': old.id, 'X-Replace-Token': old.token });
 

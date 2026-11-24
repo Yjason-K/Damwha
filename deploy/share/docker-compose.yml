@@ -17,6 +17,7 @@ services:
       DAILY_MAX_BYTES: "524288000"
       IP_DAILY_MAX_UPLOADS: "50"
       IP_DAILY_MAX_BYTES: "52428800"
+      TOTAL_MAX_BYTES: "2147483648"
     volumes:
       - share_data:/data
 volumes:

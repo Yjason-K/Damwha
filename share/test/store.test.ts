@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync }
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DiskStore } from '../src/store.js';
+import { DiskStore, StorageFullError } from '../src/store.js';
 
 /** readdir 순서는 파일시스템마다 다르다 — 순서를 바꿔 `.json`이 `.bin`보다 먼저 오는 경우를 결정적으로 만든다. */
 const order = vi.hoisted(() => ({ reverse: false }));
@@ -116,5 +116,55 @@ describe('해석할 수 없는 메타 (이슈 #106 DCS-3)', () => {
     await store.put(ID, new Uint8Array([1]), meta('2026-10-09T00:00:00.000Z'));
     await expect(store.sweep(new Date('2026-10-10T00:00:00.000Z'))).rejects.toMatchObject({ code: 'EISDIR' });
     expect(gone(ID)).toBe(true);
+  });
+});
+
+describe('총 용량 상한 (이슈 #106 DCS-2)', () => {
+  const B = '7-BBBBBBBBBBBBBBBBBBBBBB';
+  const capped = async (max: number) => {
+    const s = new DiskStore(dir, max);
+    await s.init();
+    return s;
+  };
+  const exp = meta('2026-10-09T00:00:00.000Z');
+
+  it('상한을 넘는 저장은 StorageFullError이고 아무것도 쓰지 않는다', async () => {
+    const s = await capped(10);
+    await s.put(ID, new Uint8Array(6), exp);
+    await expect(s.put(B, new Uint8Array(6), exp)).rejects.toBeInstanceOf(StorageFullError);
+    expect(existsSync(join(dir, 'shares', `${B}.bin`))).toBe(false);
+    expect(existsSync(join(dir, 'shares', `${B}.bin.tmp`))).toBe(false);
+  });
+
+  it('동시에 몰려도 상한까지만 — 확인과 차감이 한 번에', async () => {
+    const s = await capped(10);
+    const r = await Promise.allSettled([s.put(ID, new Uint8Array(6), exp), s.put(B, new Uint8Array(6), exp)]);
+    expect(r.map((x) => x.status).sort()).toEqual(['fulfilled', 'rejected']);
+  });
+
+  it('삭제하면 그만큼 다시 쓸 수 있다', async () => {
+    const s = await capped(10);
+    await s.put(ID, new Uint8Array(6), exp);
+    await s.delete(ID);
+    await s.put(B, new Uint8Array(6), exp);
+  });
+
+  it('시작할 때 이미 있는 봉투를 센다', async () => {
+    writeFileSync(join(dir, 'shares', `${ID}.bin`), new Uint8Array(8));
+    const s = await capped(10);
+    await expect(s.put(B, new Uint8Array(3), exp)).rejects.toBeInstanceOf(StorageFullError);
+  });
+
+  it('sweep이 지운 만료 공유·메타 없는 봉투도 반환한다', async () => {
+    const s = await capped(10);
+    await s.put(ID, new Uint8Array(6), exp);
+    const orphan = join(dir, 'shares', `7-CCCCCCCCCCCCCCCCCCCCCC.bin`);
+    writeFileSync(orphan, new Uint8Array(4));
+    const s2 = await capped(10); // 고아 봉투까지 센 상태로 다시 연다 — 10/10
+    await expect(s2.put(B, new Uint8Array(1), exp)).rejects.toBeInstanceOf(StorageFullError);
+    const old = new Date(Date.now() - 2 * 3_600_000);
+    utimesSync(orphan, old, old);
+    expect(await s2.sweep(new Date())).toBe(2);
+    await s2.put(B, new Uint8Array(10), exp);
   });
 });

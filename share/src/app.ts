@@ -6,7 +6,7 @@ import type { ShareConfig } from './config.js';
 import { json, withSecurityHeaders } from './http.js';
 import { ClientDailyBudget, DailyBudget, WindowLimiter, clientKey } from './limits.js';
 import { serveViewer } from './static.js';
-import type { DiskStore } from './store.js';
+import { type DiskStore, StorageFullError } from './store.js';
 
 export interface AppDeps {
   store: DiskStore;
@@ -128,6 +128,7 @@ export function createApp(deps: AppDeps) {
       await store.put(a.id, body, { expires_at: expiresAt, token_hash: sha256(a.deleteToken), size: body.byteLength, created_at: now.toISOString() });
     } catch (e) {
       release();
+      if (e instanceof StorageFullError) return json(503, { code: 'STORAGE_FULL' });
       throw e;
     }
     if (a.replaceId !== null) {
