@@ -4,9 +4,9 @@ import { DELETE_TOKEN_RE, SHARE_ID_RE, SHARE_MAX_ENVELOPE_BYTES, shareIdDays } f
 import { readLimited } from './body.js';
 import type { ShareConfig } from './config.js';
 import { json, withSecurityHeaders } from './http.js';
-import { DailyBudget, WindowLimiter } from './limits.js';
+import { ClientDailyBudget, DailyBudget, WindowLimiter, clientKey } from './limits.js';
 import { serveViewer } from './static.js';
-import type { DiskStore } from './store.js';
+import { type DiskStore, StorageFullError } from './store.js';
 
 export interface AppDeps {
   store: DiskStore;
@@ -20,6 +20,8 @@ export interface AppDeps {
 export interface RequestInfo {
   ip: string;
 }
+/** 제한·쿼터를 셀 키(clientKey — IPv6는 /64). */
+type Client = string;
 
 const DAY_MS = 86_400_000;
 const API = /^\/api\/shares(?:\/([^/]+))?\/?$/;
@@ -34,6 +36,7 @@ export function createApp(deps: AppDeps) {
     delete: new WindowLimiter(config.limits.delete),
   };
   const daily = new DailyBudget(config.dailyMaxUploads, config.dailyMaxBytes);
+  const clientDaily = new ClientDailyBudget(config.ipDailyMaxUploads, config.ipDailyMaxBytes);
   const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1']);
 
   /** 개발용 만료 단축은 로컬 Host에서만 — Tunnel을 거친 요청의 Host는 공개 도메인이다. production은 readConfig가 이미 null로 둔다. */
@@ -51,7 +54,7 @@ export function createApp(deps: AppDeps) {
    */
   const creating = new Map<string, string>();
 
-  async function create(req: Request, now: Date): Promise<Response> {
+  async function create(req: Request, now: Date, client: Client): Promise<Response> {
     if (!config.uploadsEnabled) return json(503, { code: 'UPLOADS_DISABLED' });
     const days = Number(req.headers.get('X-Share-Days'));
     if (!isShareDurationDays(days)) return json(400, { code: 'BAD_DURATION' });
@@ -73,15 +76,15 @@ export function createApp(deps: AppDeps) {
     if (creating.has(id)) return json(409, { code: 'CREATE_IN_PROGRESS' });
     creating.set(id, sha256(deleteToken));
     try {
-      return await createNew(req, now, id, deleteToken, days);
+      return await createNew(req, now, client, id, deleteToken, days);
     } finally {
       creating.delete(id);
     }
   }
 
-  async function createNew(req: Request, now: Date, id: string, deleteToken: string, days: number): Promise<Response> {
+  async function createNew(req: Request, now: Date, client: Client, id: string, deleteToken: string, days: number): Promise<Response> {
     const replaceId = req.headers.get('X-Replace-Id');
-    if (replaceId === null) return save(req, now, { id, deleteToken, days, replaceId: null });
+    if (replaceId === null) return save(req, now, client, { id, deleteToken, days, replaceId: null });
     const replaceToken = req.headers.get('X-Replace-Token') ?? '';
     if (!SHARE_ID_RE.test(replaceId) || replaceToken === '') return json(400, { code: 'BAD_REPLACE' });
     // 확인과 등록 사이에 await가 없다 — 프로세스 하나에서 원자적이다.
@@ -91,7 +94,7 @@ export function createApp(deps: AppDeps) {
       // 기존 공유의 토큰이 맞는지 **먼저** 본다 — 틀리면 아무것도 만들지 않는다.
       const old = await store.head(replaceId);
       if (old && !sameHash(sha256(replaceToken), old.token_hash)) return json(403, { code: 'BAD_TOKEN' });
-      return await save(req, now, { id, deleteToken, days, replaceId: old ? replaceId : null });
+      return await save(req, now, client, { id, deleteToken, days, replaceId: old ? replaceId : null });
     } finally {
       replacing.delete(replaceId);
     }
@@ -100,20 +103,32 @@ export function createApp(deps: AppDeps) {
   async function save(
     req: Request,
     now: Date,
+    client: Client,
     a: { id: string; deleteToken: string; days: number; replaceId: string | null },
   ): Promise<Response> {
     const body = await readLimited(req, SHARE_MAX_ENVELOPE_BYTES);
     if (body === 'too_large') return json(413, { code: 'TOO_LARGE' });
     if (body.byteLength === 0) return json(400, { code: 'EMPTY' });
 
+    // 전역을 먼저 예약한다 — 클라이언트 쿼터 항목이 전역 상한 안에서만 생긴다.
     const ticket = daily.reserve(body.byteLength, now);
     if (!ticket) return json(503, { code: 'DAILY_CAP' });
+    const clientTicket = clientDaily.reserve(client, body.byteLength, now);
+    if (!clientTicket) {
+      daily.release(ticket);
+      return json(429, { code: 'DAILY_IP_CAP' });
+    }
+    const release = () => {
+      daily.release(ticket);
+      clientDaily.release(clientTicket);
+    };
 
     const expiresAt = new Date(now.getTime() + ttlMs(req, a.days)).toISOString();
     try {
       await store.put(a.id, body, { expires_at: expiresAt, token_hash: sha256(a.deleteToken), size: body.byteLength, created_at: now.toISOString() });
     } catch (e) {
-      daily.release(ticket);
+      release();
+      if (e instanceof StorageFullError) return json(503, { code: 'STORAGE_FULL' });
       throw e;
     }
     if (a.replaceId !== null) {
@@ -123,7 +138,7 @@ export function createApp(deps: AppDeps) {
         // 기존 공유를 못 지웠으면 새 공유도 남기지 않는다. 이때 기존 링크도 이미 막혔을 수 있다 —
         // 메타를 먼저 지우기 때문이다. 실패는 "닫히는 쪽"이다(spec selfhost-v2 §2.4).
         await store.delete(a.id).catch(() => undefined);
-        daily.release(ticket);
+        release();
         throw e;
       }
     }
@@ -163,15 +178,16 @@ export function createApp(deps: AppDeps) {
     if (m) {
       const id = m[1];
       const t = now.getTime();
+      const client = clientKey(info.ip);
       if (id === undefined && req.method === 'POST') {
-        return limiters.upload.allow(info.ip, t) ? create(req, now) : json(429, { code: 'RATE_LIMITED' });
+        return limiters.upload.allow(client, t) ? create(req, now, client) : json(429, { code: 'RATE_LIMITED' });
       }
       if (id !== undefined && req.method === 'GET') {
-        return limiters.read.allow(info.ip, t) ? read(id, now) : json(429, { code: 'RATE_LIMITED' });
+        return limiters.read.allow(client, t) ? read(id, now) : json(429, { code: 'RATE_LIMITED' });
       }
       if (id !== undefined && req.method === 'DELETE') {
         // 삭제는 조회와 따로 센다 — 조회가 몰려도 "지금 중지"가 막히지 않는다.
-        return limiters.delete.allow(info.ip, t) ? remove(req, id) : json(429, { code: 'RATE_LIMITED' });
+        return limiters.delete.allow(client, t) ? remove(req, id) : json(429, { code: 'RATE_LIMITED' });
       }
       return json(405, { code: 'METHOD_NOT_ALLOWED' });
     }

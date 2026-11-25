@@ -7,7 +7,7 @@ import { DiskStore } from './store.js';
 
 if (existsSync('.env')) process.loadEnvFile('.env');
 const config = readConfig(process.env);
-const store = new DiskStore(config.dataDir);
+const store = new DiskStore(config.dataDir, config.totalMaxBytes);
 await store.init();
 
 // tsx(src/main.ts)로 돌면 share/dist/viewer, Docker는 VIEWER_DIR로 넘긴다.
