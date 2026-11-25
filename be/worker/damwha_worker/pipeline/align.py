@@ -227,7 +227,7 @@ def build_utterances(
                     diar_label=seg.diar_label,
                     start_ms=ws[0].start_ms,
                     end_ms=ws[-1].end_ms,
-                    text=" ".join(w.text for w in ws),
+                    text="".join(w.text for w in ws),
                     confidence=(sum(confs) / len(confs)) if confs else None,
                     status="ok",
                     order_index=-1,
@@ -258,6 +258,9 @@ def build_utterances(
     raw.sort(key=lambda u: u.start_ms)
     merged = _merge_adjacent_same_speaker(raw)
     for idx, u in enumerate(merged):
+        # Keep segment boundaries intact until merging is finished.
+        if u.text is not None:
+            u.text = u.text.strip()
         u.order_index = idx
     return merged
 
@@ -276,7 +279,7 @@ def _merge_adjacent_same_speaker(utts: list[Utterance]) -> list[Utterance]:
             and u.start_ms - prev.end_ms < MERGE_GAP_MS
         ):
             prev.end_ms = max(prev.end_ms, u.end_ms)
-            prev.text = f"{prev.text} {u.text}"
+            prev.text = f"{prev.text}{u.text}"
             if u.confidence is not None:
                 if prev.confidence is None:
                     prev.confidence, counts[-1] = u.confidence, 1

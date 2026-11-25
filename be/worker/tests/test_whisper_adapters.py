@@ -3,14 +3,18 @@
 import logging
 import sys
 import types
+from typing import Literal, assert_never
+
+import pytest
 
 from damwha_worker.models.base import SpeechSpan
+from tests.word_boundaries import WORD_BOUNDARY_CASES
 
 SPANS = [SpeechSpan(500, 3_200), SpeechSpan(4_000, 9_900)]
 FLAT_S = [0.5, 3.2, 4.0, 9.9]
 
 
-def _install_fake_mlx(monkeypatch, calls, loads=None):
+def _install_fake_mlx(monkeypatch, calls, loads=None, word_texts=(" 안녕",)):
     fake_core = types.ModuleType("mlx.core")
     fake_core.set_memory_limit = lambda n: None
     fake_core.array = lambda a: ("mx", a)
@@ -34,7 +38,12 @@ def _install_fake_mlx(monkeypatch, calls, loads=None):
         return {
             "language": kwargs.get("language") or "ko",
             "segments": [
-                {"words": [{"word": " 안녕", "start": 0.5, "end": 0.9, "probability": 0.9}]}
+                {
+                    "words": [
+                        {"word": text, "start": 0.5, "end": 0.9, "probability": 0.9}
+                        for text in word_texts
+                    ]
+                }
             ],
         }
 
@@ -53,7 +62,7 @@ def _install_fake_mlx(monkeypatch, calls, loads=None):
     )
 
 
-def _install_fake_faster(monkeypatch, calls, segment_ends=(0.9,)):
+def _install_fake_faster(monkeypatch, calls, segment_ends=(0.9,), word_texts=(" 안녕",)):
     fake_fw = types.ModuleType("faster_whisper")
 
     class WhisperModel:
@@ -68,9 +77,8 @@ def _install_fake_faster(monkeypatch, calls, segment_ends=(0.9,)):
                     start=end - 0.4,
                     end=end,
                     words=[
-                        types.SimpleNamespace(
-                            word=" 안녕", start=end - 0.4, end=end, probability=0.9
-                        )
+                        types.SimpleNamespace(word=text, start=end - 0.4, end=end, probability=0.9)
+                        for text in word_texts
                     ],
                 )
                 for end in segment_ends
@@ -79,6 +87,34 @@ def _install_fake_faster(monkeypatch, calls, segment_ends=(0.9,)):
 
     fake_fw.WhisperModel = WhisperModel
     monkeypatch.setitem(sys.modules, "faster_whisper", fake_fw)
+
+
+@pytest.mark.parametrize("backend", ["mlx", "faster"])
+@pytest.mark.parametrize("language, word_texts, expected", WORD_BOUNDARY_CASES)
+def test_issue_102_adapters_preserve_word_boundaries(
+    monkeypatch, backend: Literal["mlx", "faster"], language, word_texts, expected
+):
+    calls = []
+    # Whitespace-only model words are still discarded; retained words are lossless.
+    raw_words = [*word_texts, " \t"]
+    match backend:
+        case "mlx":
+            _install_fake_mlx(monkeypatch, calls, word_texts=raw_words)
+            from damwha_worker.models.whisper_mlx import MlxWhisper
+
+            transcriber = MlxWhisper("large-v3-turbo")
+        case "faster":
+            _install_fake_faster(monkeypatch, calls, word_texts=raw_words)
+            from damwha_worker.models.whisper_faster import FasterWhisper
+
+            transcriber = FasterWhisper("large-v3-turbo", "cpu")
+        case unreachable:
+            assert_never(unreachable)
+
+    words = transcriber.transcribe("a.wav", language)
+
+    assert [w.text for w in words] == word_texts
+    assert "".join(w.text for w in words).strip() == expected
 
 
 def test_mlx_calls_once_per_clip_with_guards(monkeypatch):
@@ -95,7 +131,7 @@ def test_mlx_calls_once_per_clip_with_guards(monkeypatch):
         assert kwargs["hallucination_silence_threshold"] == 2.0
         assert kwargs["word_timestamps"] is True
     # 호출 결과는 clip 순서대로 이어붙인다 (fake는 호출당 단어 1개 반환)
-    assert [w.text for w in words] == ["안녕", "안녕"]
+    assert [w.text for w in words] == [" 안녕", " 안녕"]
 
 
 def test_mlx_none_spans_omits_clip(monkeypatch):
@@ -119,7 +155,7 @@ def test_faster_passes_guards_and_clip(monkeypatch):
     assert kwargs["condition_on_previous_text"] is False
     assert kwargs["hallucination_silence_threshold"] == 2.0
     assert kwargs["word_timestamps"] is True
-    assert [w.text for w in words] == ["안녕"]
+    assert [w.text for w in words] == [" 안녕"]
 
 
 def test_faster_none_spans_omits_clip(monkeypatch):
@@ -332,7 +368,7 @@ def test_mlx_drops_stock_hallucination_per_segment(monkeypatch, caplog):
 
     with caplog.at_level(logging.INFO, logger="damwha_worker"):
         words = MlxWhisper("large-v3-turbo").transcribe("a.wav", "ko", SPANS[:1])
-    assert [w.text for w in words] == ["도와주셔서", "감사합니다.", "감사합니다."]
+    assert [w.text for w in words] == [" 도와주셔서", " 감사합니다.", " 감사합니다."]
     # 버린 세그먼트는 운영 로그로 보인다 — 기준값이 진짜 인사를 자르는지 확인할 단서
     assert "stt dropped 1 stock-phrase segment(s): 감사합니다." in caplog.text
 
@@ -359,7 +395,7 @@ def test_faster_drops_stock_hallucination_per_segment(monkeypatch, caplog):
 
     with caplog.at_level(logging.INFO, logger="damwha_worker"):
         words = FasterWhisper("large-v3-turbo", "cpu").transcribe("a.wav", "ko", SPANS[:1])
-    assert [w.text for w in words] == ["도와주셔서", "감사합니다.", "감사합니다."]
+    assert [w.text for w in words] == [" 도와주셔서", " 감사합니다.", " 감사합니다."]
     assert "stt dropped 1 stock-phrase segment(s): 감사합니다." in caplog.text
 
 

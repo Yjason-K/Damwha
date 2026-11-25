@@ -876,9 +876,9 @@ def test_backchannel_word_run_reabsorbed_via_embedding(conn, tmp_path):
         transcriber=FakeTranscriber(
             [
                 Word("집에", 1000, 1500, 0.9),
-                Word("가지", 2000, 2500, 0.9),
-                Word("말고", 4200, 4600, 0.9),
-                Word("일하자", 5000, 5500, 0.9),
+                Word(" 가지", 2000, 2500, 0.9),
+                Word(" 말고", 4200, 4600, 0.9),
+                Word(" 일하자", 5000, 5500, 0.9),
             ]
         ),
     )
@@ -938,8 +938,8 @@ def test_empty_diarization_keeps_words_under_one_unresolved_speaker(conn, tmp_pa
         transcriber=FakeTranscriber(
             [
                 Word("안녕", 100, 600, 0.9),
-                Word("패딩", 1550, 1700, 0.8),  # 원본 VAD 구간 사이(STT 패딩) 단어
-                Word("반가워", 3200, 3800, 0.7),
+                Word(" 패딩", 1550, 1700, 0.8),  # 원본 VAD 구간 사이(STT 패딩) 단어
+                Word(" 반가워", 3200, 3800, 0.7),
             ]
         ),
     )

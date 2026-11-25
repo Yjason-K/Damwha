@@ -183,7 +183,7 @@ def run_live_session(
         try:
             _write_clip(clip, seg.pcm)
             words = models.transcriber.transcribe(clip, payload.process.models.language)
-            text = " ".join(w.text for w in words).strip()
+            text = "".join(w.text for w in words).strip()
             if not text:
                 state["failures"] = 0
                 return

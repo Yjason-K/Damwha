@@ -108,7 +108,7 @@ class FasterWhisper:
                 on_progress(_clipped_done_ms(speech_spans, int(segment.end * 1000)), total_ms)
             seg_words = [
                 Word(
-                    text=w.word.strip(),
+                    text=w.word,
                     start_ms=int(w.start * 1000),
                     end_ms=int(w.end * 1000),
                     confidence=w.probability,
@@ -119,7 +119,7 @@ class FasterWhisper:
             # mlx 경로와 같은 상투구 환각 제거 — stt_stock_phrases 모듈 주석 참고
             kept = drop_stock_hallucination(seg_words)
             if seg_words and not kept:
-                stock_dropped.append(" ".join(w.text for w in seg_words))
+                stock_dropped.append("".join(w.text for w in seg_words).strip())
             words.extend(kept)
         # faster-whisper도 같은 upstream 로직을 물려받는다 — stt_repetition 모듈 주석 참고
         cleaned = drop_repetition_loops(words)

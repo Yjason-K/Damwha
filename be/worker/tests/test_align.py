@@ -1,12 +1,33 @@
+import pytest
+
 from damwha_worker.models.base import DiarSegment, SpeechSpan, Word
 from damwha_worker.pipeline.align import build_utterances
+from tests.word_boundaries import WORD_BOUNDARY_CASES
+
+
+@pytest.mark.parametrize("language, word_texts, expected", WORD_BOUNDARY_CASES)
+@pytest.mark.parametrize("split_segments", [False, True])
+def test_issue_102_alignment_preserves_boundaries_across_segments(
+    language, word_texts, expected, split_segments
+):
+    words = [Word(text, i * 400, (i + 1) * 400, 0.9) for i, text in enumerate(word_texts)]
+    end_ms = words[-1].end_ms
+    segments = (
+        [DiarSegment("S0", 0, 800), DiarSegment("S0", 800, end_ms)]
+        if split_segments
+        else [DiarSegment("S0", 0, end_ms)]
+    )
+
+    utterances = build_utterances(words, segments)
+
+    assert [u.text for u in utterances] == [expected]
 
 
 def test_assigns_words_by_midpoint_and_merges_consecutive():
     segments = [DiarSegment("S0", 0, 1000), DiarSegment("S1", 1000, 2000)]
     words = [
         Word("안녕", 0, 400, 0.9),  # mid 200 → S0
-        Word("하세요", 400, 900, 0.8),  # mid 650 → S0
+        Word(" 하세요", 400, 900, 0.8),  # mid 650 → S0
         Word("반가워", 1100, 1500, 0.7),  # mid 1300 → S1
     ]
     utts = build_utterances(words, segments)
@@ -90,8 +111,8 @@ def test_next_speaker_opening_inside_previous_segment_goes_to_next():
     words = [
         Word("그렇죠", 1000, 1600, 0.9),
         Word("그러니까", 5100, 5700, 0.9),  # mid 5400 → A·B 모두 포함
-        Word("제", 6200, 6400, 0.9),
-        Word("말은", 6400, 6900, 0.9),
+        Word(" 제", 6200, 6400, 0.9),
+        Word(" 말은", 6400, 6900, 0.9),
     ]
     utts = build_utterances(words, segments)
     ok = [u for u in utts if u.status == "ok"]
@@ -108,10 +129,10 @@ def test_short_overlapping_backchannel_run_reabsorbed():
     ]
     words = [
         Word("나라가", 1000, 1500, 0.9),
-        Word("잘", 2000, 2500, 0.9),
-        Word("사는", 4300, 4700, 0.9),  # mid 4500 → B에만 포함 (탈취)
-        Word("거하고", 5500, 6000, 0.9),
-        Word("체감", 6500, 7000, 0.9),
+        Word(" 잘", 2000, 2500, 0.9),
+        Word(" 사는", 4300, 4700, 0.9),  # mid 4500 → B에만 포함 (탈취)
+        Word(" 거하고", 5500, 6000, 0.9),
+        Word(" 체감", 6500, 7000, 0.9),
     ]
     utts = build_utterances(words, segments)
     ok = [u for u in utts if u.status == "ok"]
@@ -167,9 +188,9 @@ def _sandwich_fixture():
     ]
     words = [
         Word("집에", 1000, 1500, 0.9),
-        Word("가지", 2000, 2500, 0.9),
-        Word("말고", 4200, 4600, 0.9),
-        Word("일하자", 5000, 5500, 0.9),
+        Word(" 가지", 2000, 2500, 0.9),
+        Word(" 말고", 4200, 4600, 0.9),
+        Word(" 일하자", 5000, 5500, 0.9),
     ]
     return segments, words
 
@@ -271,7 +292,7 @@ def test_arbitrate_none_falls_back_to_overlap_heuristic():
 def test_consecutive_same_speaker_segments_with_short_gap_merge():
     # pyannote splits one speaker's turn at every pause; a 600ms gap is the same utterance
     segments = [DiarSegment("S0", 0, 1000), DiarSegment("S0", 1600, 3000)]
-    words = [Word("하나", 100, 900, 0.8), Word("둘", 1700, 2900, 0.6)]
+    words = [Word("하나", 100, 900, 0.8), Word(" 둘", 1700, 2900, 0.6)]
     utts = build_utterances(words, segments)
     assert len(utts) == 1
     assert utts[0].text == "하나 둘"
@@ -316,12 +337,12 @@ def _alternating_fragments():
     ]
     words = [
         Word("경고", 300, 700, 0.9),
-        Word("드리겠습니다", 700, 1500, 0.9),
-        Word("자꾸", 1500, 1900, 0.9),
-        Word("말씀하시는데", 2100, 2500, 0.9),  # mid 2300 → B
-        Word("경고예요", 3000, 3600, 0.9),
-        Word("단호하게", 3600, 4200, 0.9),
-        Word("가겠습니다", 4200, 5000, 0.9),
+        Word(" 드리겠습니다", 700, 1500, 0.9),
+        Word(" 자꾸", 1500, 1900, 0.9),
+        Word(" 말씀하시는데", 2100, 2500, 0.9),  # mid 2300 → B
+        Word(" 경고예요", 3000, 3600, 0.9),
+        Word(" 단호하게", 3600, 4200, 0.9),
+        Word(" 가겠습니다", 4200, 5000, 0.9),
     ]
     return segments, words
 
@@ -365,12 +386,12 @@ def test_undecidable_fragment_goes_to_nearer_neighbor_in_time():
     ]
     words = [
         Word("앞에", 0, 400, 0.9),
-        Word("하던", 400, 700, 0.9),
-        Word("말", 700, 1000, 0.9),
+        Word(" 하던", 400, 700, 0.9),
+        Word(" 말", 700, 1000, 0.9),
         Word("음", 2100, 2300, 0.9),  # A 끝(1000)과 1100ms, C 시작(2400)과 100ms
-        Word("뒷말은", 2400, 3500, 0.9),
-        Word("길게", 3500, 4500, 0.9),
-        Word("이어진다", 4500, 5500, 0.9),
+        Word(" 뒷말은", 2400, 3500, 0.9),
+        Word(" 길게", 3500, 4500, 0.9),
+        Word(" 이어진다", 4500, 5500, 0.9),
     ]
     utts = build_utterances(words, segments, resolve_fragment=lambda *a: None)
     ok = [u for u in utts if u.status == "ok"]
