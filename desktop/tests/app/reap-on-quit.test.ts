@@ -496,6 +496,8 @@ describe("stopThenReap — main.ts stopServices()의 순서 (A층 → B층)", ()
       screenTimeoutMs: 50,
       stopRecording: async () => ({ stopped: true }),
       handshakeTimeoutMs: 50,
+      flushNotes: async () => undefined,
+      noteFlushTimeoutMs: 50,
       stopServices: () => stopThenReap(async () => ({ stopped: true, leaked: [] }), k.d),
       log: () => undefined,
       warn: async (notice) => {

@@ -121,6 +121,11 @@ The shell (`AppShell`, `app/app-shell.tsx`) owns the nav rail `<nav>` (sized by 
   - `finishLiveCapture`가 있는 이유: 레코더가 실패하면 `hasLiveCapture()`가 거짓이라 서버 stop이 안 나간다.
   - 카드의 시작은 항상 시스템 오디오를 열고, 모달과 `startLiveRecording`(`lib/start-live.ts`)을 공유한다.
 
+  `flushNotes()`(#133): 창 닫기·앱 종료는 렌더러를 React cleanup 없이 파괴해 메모 자동저장의 800ms
+  debounce 창이 사라진다. main이 그 전에(종료는 "종료 중" 화면·서비스 정지보다 먼저) 5초 상한으로 부른다.
+  `api/notes.ts`의 `flushPendingNotes()`가 마운트된 `useAutosaveNote`의 대기 입력을 보내고 이미 나간 PUT까지
+  기다린다. 던지지 않는다.
+
 - **시스템 오디오는 마이크에 더해져 한 채널로 올라간다** (`lib/system-audio.ts`, `lib/pcm-mix.ts`, 2026-10-26).
   데스크톱 앱에서만 모달에 "시스템 오디오도 녹음" 스위치가 보인다 — `damwha-audio://system/status` fetch가
   성공하는가로 알고, 브라우저에는 그 스킴이 없어 숨는다. 기본은 켬, 끈 선택은 `damwha:live-system-audio`에

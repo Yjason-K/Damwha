@@ -45,6 +45,7 @@ import {
   createFlowLatch,
   graceExpiryPrompt,
   HANDSHAKE_TIMEOUT_MS,
+  NOTE_FLUSH_TIMEOUT_MS,
   runCloseFlow,
   runQuitFlow,
   type QuitNotice,
@@ -448,6 +449,8 @@ function openWindow(): BrowserWindow {
       },
       stopRecording: () => stopRecordingIn(created),
       handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
+      flushNotes: () => flushNotesIn(created),
+      noteFlushTimeoutMs: NOTE_FLUSH_TIMEOUT_MS,
       log: appendSupervisorLog,
       close: closeNow,
     }).catch((e: unknown) => {
@@ -572,6 +575,17 @@ function stopRecordingIn(target: BrowserWindow): Promise<{ stopped: boolean; rea
   return target.webContents.executeJavaScript(
     "window.__damwha_desktop?.stopLiveRecording?.() ?? {stopped:false, reason:'no-bridge'}",
   ) as Promise<{ stopped: boolean; reason?: string }>;
+}
+
+/**
+ * 렌더러의 메모 flush (#133). 훅이 없으면(셀 화면·구버전 fe) 곧바로 끝난다. 파괴된 webContents의
+ * executeJavaScript는 동기로 던지므로 then 안에서 부른다(askIsRecording과 같은 이유). 상한은 quit-flow.ts가 건다.
+ */
+function flushNotesIn(target: BrowserWindow): Promise<void> {
+  return Promise.resolve().then(async () => {
+    if (target.isDestroyed()) return;
+    await target.webContents.executeJavaScript("window.__damwha_desktop?.flushNotes?.()");
+  });
 }
 
 /**
@@ -1908,6 +1922,8 @@ if (!app.requestSingleInstanceLock()) {
           ? Promise.resolve({ stopped: false, reason: "창이 이미 없어요." })
           : stopRecordingIn(win),
       handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
+      flushNotes: () => (win === null ? Promise.resolve() : flushNotesIn(win)),
+      noteFlushTimeoutMs: NOTE_FLUSH_TIMEOUT_MS,
       screenTimeoutMs: QUIT_SCREEN_TIMEOUT_MS,
       stopServices,
       log: appendSupervisorLog,

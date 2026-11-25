@@ -50,6 +50,22 @@ type NoteSaveQueue = {
 // QueryClient별로 격리하고 마지막 저장이 끝나면 회의 큐를 지운다.
 const saveQueues = new WeakMap<QueryClient, Map<string, NoteSaveQueue>>();
 
+// 창 닫기·앱 종료는 렌더러를 React cleanup 없이 파괴한다(이슈 133). 그래서 데스크톱 bridge가
+// 렌더러가 죽기 전에 부를 수 있도록, 마운트된 자동저장의 flush와 아직 응답이 오지 않은
+// PUT을 모듈 수준에서 든다.
+const mountedFlushes = new Set<() => Promise<void>>();
+const inFlightSaves = new Set<Promise<unknown>>();
+
+/**
+ * 대기 중인 메모 입력을 지금 보내고, 이미 나간 저장까지 끝날 때를 기다린다. 실패해도
+ * 거부하지 않는다 — 실패는 각 뮤테이션의 상태가 보고하고, 부르는 쪽(종료 흐름)은
+ * "끝났는가"만 필요하다.
+ */
+export async function flushPendingNotes(): Promise<void> {
+  const sent = [...mountedFlushes].map((flush) => flush());
+  await Promise.allSettled([...sent, ...inFlightSaves]);
+}
+
 /**
  * 저장 뮤테이션. meetingId를 훅 인자가 아니라 변수로 받는다 — 자동저장이
  * debounce 중 회의를 전환하면, flush 시점의 mutationFn이 훅을 호출한
@@ -99,6 +115,11 @@ export function useSaveMeetingNote() {
       // 앞 요청 실패는 그 mutation이 보고한다. 다음 초안의 저장은 계속한다.
       const request = queue.tail.then(save, save);
       queue.tail = request;
+      inFlightSaves.add(request);
+      void request.then(
+        () => inFlightSaves.delete(request),
+        () => inFlightSaves.delete(request),
+      );
       return request;
     },
     onMutate: (vars: SaveNoteVars) => {
@@ -144,9 +165,11 @@ export function useAutosaveNote(meetingId: string | undefined) {
   // (debounce, 언마운트, 회의 전환) 그 텍스트가 속한 회의로만 보낸다.
   const pendingMeetingId = React.useRef<string | undefined>(undefined);
   const lastSent = React.useRef<string | null>(null);
-  const { mutate, reset } = mutation;
+  const { mutate, mutateAsync, reset } = mutation;
 
-  const flush = React.useCallback(() => {
+  // 돌려주는 프라미스는 이 저장이 끝날 때 해결된다(실패해도 해결). 화면 경로는 무시하고,
+  // flushPendingNotes만 기다린다.
+  const flush = React.useCallback((): Promise<void> => {
     if (timer.current !== null) {
       clearTimeout(timer.current);
       timer.current = null;
@@ -154,10 +177,13 @@ export function useAutosaveNote(meetingId: string | undefined) {
     const value = pending.current;
     const targetMeetingId = pendingMeetingId.current;
     pending.current = null;
-    if (value === null || targetMeetingId === undefined) return;
+    if (value === null || targetMeetingId === undefined) return Promise.resolve();
     lastSent.current = value;
-    mutate({ meetingId: targetMeetingId, bodyMd: value });
-  }, [mutate]);
+    return mutateAsync({ meetingId: targetMeetingId, bodyMd: value }).then(
+      () => undefined,
+      () => undefined,
+    );
+  }, [mutateAsync]);
 
   const change = React.useCallback(
     (next: string) => {
@@ -167,7 +193,7 @@ export function useAutosaveNote(meetingId: string | undefined) {
       if (timer.current !== null) clearTimeout(timer.current);
       timer.current = setTimeout(() => {
         timer.current = null;
-        flush();
+        void flush();
       }, DEBOUNCE_MS);
     },
     [flush, meetingId],
@@ -209,14 +235,20 @@ export function useAutosaveNote(meetingId: string | undefined) {
   // 보이고, lastSent를 지웠으니 그 "다시 시도"는 아무것도 보내지 않는다.
   // reset은 진행 중인 요청을 취소하지 않는다 — 화면 상태와의 연결만 끊는다.
   React.useEffect(() => {
-    flush();
+    void flush();
     reset();
     pending.current = null;
     pendingMeetingId.current = undefined;
     lastSent.current = null;
   }, [meetingId, flush, reset]);
 
-  React.useEffect(() => flush, [flush]);
+  React.useEffect(() => {
+    mountedFlushes.add(flush);
+    return () => {
+      mountedFlushes.delete(flush);
+      void flush();
+    };
+  }, [flush]);
 
   const state: SaveState = mutation.isPending
     ? "saving"
