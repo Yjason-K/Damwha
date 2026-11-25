@@ -1,0 +1,68 @@
+# PR 검증. be·worker 테스트는 Testcontainers로 damwha/postgres-bigm:pg16 이미지를 띄우므로
+# 잡마다 be/docker/postgres-bigm에서 그 태그로 빌드한다. desktop 테스트는 macOS 경로·프로세스
+# 동작을 가정하는 것이 있어 macOS 러너에서 돈다.
+name: CI
+
+on:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    name: lint · build · test (node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build postgres-bigm image (Testcontainers)
+        run: docker build -t damwha/postgres-bigm:pg16 be/docker/postgres-bigm
+      - run: pnpm --filter '!damwha-desktop' -r run lint
+      - run: pnpm -r run typecheck
+      - run: pnpm build
+      - run: pnpm --filter '!damwha-desktop' -r run test
+        env:
+          # 앱은 Apple Silicon 전용이고 기본 설정이 GPU(MPS)를 쓴다. Linux 러너 그대로면
+          # gpu_eligible=false라 업로드가 전부 400이다. macOS 러너엔 Docker가 없어 be 테스트
+          # (Testcontainers)를 거기서 돌릴 수 없으므로, be가 원래 받는 호스트 env로 알린다.
+          CAPABILITIES_PLATFORM: darwin
+          CAPABILITIES_ARCH: arm64
+
+  desktop:
+    name: lint · test (desktop)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm desktop lint
+      - run: pnpm desktop test
+
+  worker:
+    name: lint · test (worker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Build postgres-bigm image (Testcontainers)
+        run: docker build -t damwha/postgres-bigm:pg16 be/docker/postgres-bigm
+      - run: uv sync --directory be/worker --locked
+      - run: uv run --directory be/worker ruff check .
+      - run: uv run --directory be/worker pytest -q
