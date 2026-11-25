@@ -10,9 +10,12 @@ await import("@/shared/i18n");
 import "@testing-library/jest-dom/vitest";
 import { configure } from "@testing-library/react";
 
-// findBy*·waitFor의 기본 대기 1000ms는 회의 셸처럼 무거운 화면이 CPU가 바쁜 머신(CI 러너,
-// 병렬 실행)에서 첫 렌더를 마치기에 모자라다 — 로컬 부하 재현에서 매번 1~2건이 시간 초과로
-// 깨졌다. 성공하는 테스트는 더 기다리지 않으므로 통과 시간은 그대로다.
+// findBy*·waitFor의 기본 대기 1000ms는 파일의 첫 테스트가 lazy 라우트(회의 상세 등)를 처음 그리기에
+// 모자라다(#134). 처음 한 번은 lazy()가 suspend해 fallback이 뜨고, 라우트가 셸보다 약 300ms 늦게
+// 마운트된다(react-dom의 Suspense 표시 스로틀 FALLBACK_THROTTLE_MS = 300ms와 맞는다). 모듈을 미리
+// import해도 lazy()는 한 번 suspend하므로 이 간격은 줄지 않았다. 여기에 CPU 부하에 비례하는 렌더가
+// 더해져 회의 셸 첫 h1까지 한가할 때 0.5~0.6초, 바쁜 루프 14개를 건 부하에서 0.7~1.04초가 걸렸다
+// (M4 Pro, 2026-11-25). 같은 파일의 두 번째 테스트는 0.1초 안팎이다. 성공하는 테스트는 더 기다리지 않으므로 통과 시간은 그대로다.
 configure({ asyncUtilTimeout: 5000 });
 
 // Radix UI(Select 등)는 jsdom에 없는 Pointer Capture / scrollIntoView API를
