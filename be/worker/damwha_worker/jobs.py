@@ -17,7 +17,9 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 
 from . import db, errors
+from .contracts import SummaryResponse
 from .errors import AUDIO_DEVICE_FAILED, ErrorKind, WorkerError
+from .llm_server import run_guarding_disk_full
 from .models import specs
 from .pipeline.enroll_speaker import run_enroll_speaker
 from .pipeline.extract_lenses import run_extract_lenses
@@ -280,17 +282,20 @@ class SummarizeMeetingHandler(JobHandler):
     type = "summarize_meeting"
 
     def run(self, conn, job, payload, ctx):
-        with ctx.llm_server(payload.model) as proc, llm_abort_hook(ctx.register_abort, proc):
-            summary_client = ctx.build_summary_client()
-            return run_summarize_meeting(
-                conn,
-                job,
-                payload,
-                summary_client,
-                worker_id=ctx.worker_id,
-                shutdown_event=ctx.shutdown_event,
-                proc=proc,
-            )
+        def summarize(**kwargs) -> SummaryResponse:
+            with ctx.llm_server(payload.model) as proc, llm_abort_hook(ctx.register_abort, proc):
+                client = ctx.build_summary_client()
+                # 모델의 지연 로드 중 삼켜진 DISK_FULL도 요청 타임아웃 전에 전파한다.
+                return run_guarding_disk_full(proc, lambda: client.summarize(**kwargs))
+
+        return run_summarize_meeting(
+            conn,
+            job,
+            payload,
+            summarize,
+            worker_id=ctx.worker_id,
+            shutdown_event=ctx.shutdown_event,
+        )
 
     def on_failure(self, conn, job, ctx, error, *, retry):
         return _requeue_or(
@@ -371,7 +376,11 @@ class DownloadModelHandler(JobHandler):
 
     def run(self, conn, job, payload, ctx):
         return run_download_model(
-            conn, job, payload, worker_id=ctx.worker_id, hf_token=ctx.hf_token,
+            conn,
+            job,
+            payload,
+            worker_id=ctx.worker_id,
+            hf_token=ctx.hf_token,
             diarization_model_dir=ctx.diarization_model_dir,
         )
 
@@ -403,7 +412,10 @@ class DeleteModelHandler(JobHandler):
 
     def run(self, conn, job, payload, ctx):
         return run_delete_model(
-            conn, job, payload, worker_id=ctx.worker_id,
+            conn,
+            job,
+            payload,
+            worker_id=ctx.worker_id,
             lens_models=[m for m in (ctx.lens_llm_model,) if m],
             summary_fallback=ctx.summary_llm_model,
         )
