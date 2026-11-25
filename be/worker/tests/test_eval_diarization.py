@@ -1,11 +1,16 @@
+"""pyannote는 models extra라 테스트 전용 venv(worker:sync:test)에는 없다 — 그때는 건너뛴다."""
+
 import io
 
-from damwha_worker.evaluation.diarization import (
+import pytest
+
+pytest.importorskip("pyannote.core")
+from damwha_worker.evaluation.diarization import (  # noqa: E402
     parse_rttm,
     score,
     segments_to_annotation,
 )
-from damwha_worker.models.base import DiarSegment
+from damwha_worker.models.base import DiarSegment  # noqa: E402
 
 
 def test_parse_rttm_yields_segments_in_ms():
