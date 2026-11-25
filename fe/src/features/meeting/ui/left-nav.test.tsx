@@ -545,7 +545,10 @@ test("새 폴더: 이름이 겹치면 입력란에 알리고, 만들면 그 폴�
       expect(screen.queryByLabelText("폴더 이름")).not.toBeInTheDocument(),
     );
     expect(await within(folderList()).findByText("새팀")).toBeInTheDocument();
-    expect(folderButton("새팀")).toHaveAttribute("aria-current", "page");
+    // 목록에 새 폴더가 뜨는 것과 그 폴더로 가는 것은 다른 렌더다 — 둘째를 기다린다.
+    await waitFor(() =>
+      expect(folderButton("새팀")).toHaveAttribute("aria-current", "page"),
+    );
     expect(screen.getByText("경로: /folders/fld_5")).toBeInTheDocument();
   } finally {
     restore();
