@@ -22,7 +22,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Build postgres-bigm image (Testcontainers)
@@ -31,6 +31,12 @@ jobs:
       - run: pnpm -r run typecheck
       - run: pnpm build
       - run: pnpm --filter '!damwha-desktop' -r run test
+        env:
+          # 앱은 Apple Silicon 전용이고 기본 설정이 GPU(MPS)를 쓴다. Linux 러너 그대로면
+          # gpu_eligible=false라 업로드가 전부 400이다. macOS 러너엔 Docker가 없어 be 테스트
+          # (Testcontainers)를 거기서 돌릴 수 없으므로, be가 원래 받는 호스트 env로 알린다.
+          CAPABILITIES_PLATFORM: darwin
+          CAPABILITIES_ARCH: arm64
 
   desktop:
     name: lint · test (desktop)
@@ -40,7 +46,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm desktop lint
