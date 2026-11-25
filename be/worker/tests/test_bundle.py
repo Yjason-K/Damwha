@@ -1,6 +1,5 @@
 """번들 판정 (스펙 2026-09-30 §3.1). 표준 라이브러리만 쓰는 모듈이라 모델 extra 없이 돈다."""
 
-import os
 
 from damwha_worker.config import Settings
 from damwha_worker.models import bundle, specs
