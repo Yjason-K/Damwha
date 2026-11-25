@@ -1,4 +1,5 @@
 import { postLiveStart } from "../api/live";
+import { flushPendingNotes } from "../api/notes";
 import { defaultLiveTitle } from "./default-live-title";
 import { LiveCaptureCancelled } from "./live-recorder";
 import {
@@ -32,6 +33,11 @@ export interface DesktopBridge {
   /** 레코더 실패로 이미 stopped인 세션에도 서버 stop을 보낸다. */
   finishRecording(): Promise<void>;
   openMeeting(id: string): void;
+  /**
+   * 대기 중인 메모 입력을 보내고 저장이 끝날 때까지 기다린다(이슈 133). 창 닫기·앱 종료는 렌더러를
+   * React cleanup 없이 파괴해 debounce 창 안의 입력이 사라지므로, main이 그 전에 부른다. 던지지 않는다.
+   */
+  flushNotes(): Promise<void>;
   /** 화면 언어 (다국어 스펙 §4.1). main의 language-bridge.ts가 이 이름으로 부른다 — 이름을 바꾸면 조용히 끊긴다. */
   uiLanguage: UiLanguageBridge;
 }
@@ -159,6 +165,7 @@ export function installDesktopBridge(w: Window = window): void {
     openMeeting(id: string) {
       deps?.navigate(`/meetings/${id}`);
     },
+    flushNotes: flushPendingNotes,
     uiLanguage: languageStore.bridge,
   };
 }

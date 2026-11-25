@@ -4,7 +4,12 @@ import type { ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { apiClient } from "@/shared/api/client";
-import { noteQueryKey, useAutosaveNote, useMeetingNote } from "./notes";
+import {
+  flushPendingNotes,
+  noteQueryKey,
+  useAutosaveNote,
+  useMeetingNote,
+} from "./notes";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -126,6 +131,90 @@ test("회의가 바뀌면 이전 회의의 대기 중인 입력을 flush한다",
   expect(put).toHaveBeenCalledWith("/meetings/mtg_1/note", {
     body_md: "이전 회의 메모",
   });
+});
+
+function deferredPut() {
+  let resolve!: (v: unknown) => void;
+  const done = new Promise((r) => (resolve = r));
+  const put = vi.spyOn(apiClient, "put").mockReturnValue(done as never);
+  return {
+    put,
+    finish: () =>
+      resolve({
+        data: {
+          note: { body_md: "x", updated_at: "2026-08-27T00:00:00.000Z" },
+        },
+      }),
+  };
+}
+
+test("flushPendingNotes는 debounce를 기다리지 않고 보내고, PUT이 끝날 때 해결된다", async () => {
+  // 창 닫기·앱 종료는 렌더러를 cleanup 없이 파괴한다(#133). 데스크톱 main이 그 전에 이것을
+  // 기다리므로, PUT이 끝나기 전에 해결되면 main이 먼저 렌더러를 지운다.
+  vi.spyOn(apiClient, "get").mockResolvedValue({
+    data: { note: null },
+  } as never);
+  const { put, finish } = deferredPut();
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+
+  const { result } = renderHook(() => useAutosaveNote("mtg_1"), { wrapper });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+  act(() => result.current.change("닫기 직전 입력"));
+  let settled = false;
+  const flushed = flushPendingNotes().then(() => {
+    settled = true;
+  });
+  // 위 언마운트 테스트와 같은 이유로 실시간 800ms가 흐르게 두지 않는다.
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(put).toHaveBeenCalledTimes(1);
+  expect(put).toHaveBeenCalledWith("/meetings/mtg_1/note", {
+    body_md: "닫기 직전 입력",
+  });
+  expect(settled).toBe(false);
+
+  finish();
+  await act(async () => {
+    await flushed;
+  });
+  expect(settled).toBe(true);
+});
+
+test("flushPendingNotes는 이미 나간 저장도 끝날 때까지 기다린다", async () => {
+  // debounce가 방금 끝나 PUT이 가는 중이면 대기 중인 입력은 없다. 그래도 그 응답 전에
+  // 렌더러가 죽으면 요청이 끊길 수 있다.
+  vi.spyOn(apiClient, "get").mockResolvedValue({
+    data: { note: null },
+  } as never);
+  const { put, finish } = deferredPut();
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+
+  const { result } = renderHook(() => useAutosaveNote("mtg_1"), { wrapper });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+  act(() => result.current.change("가는 중"));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(800);
+  });
+  expect(put).toHaveBeenCalledTimes(1);
+
+  let settled = false;
+  const flushed = flushPendingNotes().then(() => {
+    settled = true;
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(settled).toBe(false);
+  expect(put).toHaveBeenCalledTimes(1);
+
+  finish();
+  await act(async () => {
+    await flushed;
+  });
+  expect(settled).toBe(true);
 });
 
 test("저장이 실패하면 state가 error이고 retry가 다시 보낸다", async () => {

@@ -12,6 +12,9 @@ const live = vi.hoisted(() => ({
 }));
 const start = vi.hoisted(() => ({ startLiveRecording: vi.fn() }));
 const api = vi.hoisted(() => ({ postLiveStart: vi.fn() }));
+const notes = vi.hoisted(() => ({
+  flushPendingNotes: vi.fn(async (): Promise<void> => undefined),
+}));
 
 // LiveCaptureBusy 같은 실제 클래스는 살리고 함수만 갈아 끼운다.
 vi.mock("./live-session", async (orig) => ({
@@ -19,6 +22,7 @@ vi.mock("./live-session", async (orig) => ({
   ...live,
 }));
 vi.mock("./start-live", () => start);
+vi.mock("../api/notes", () => notes);
 vi.mock("../api/live", async (orig) => ({
   ...(await orig<typeof import("../api/live")>()),
   ...api,
@@ -33,6 +37,7 @@ type Bridge = {
   recordingStatus(): unknown;
   finishRecording(): Promise<void>;
   openMeeting(id: string): void;
+  flushNotes(): Promise<void>;
 };
 
 function install(): Bridge {
@@ -57,6 +62,13 @@ describe("installDesktopBridge", () => {
     const bridge = install();
     expect(typeof bridge.isRecording).toBe("function");
     expect(typeof bridge.stopLiveRecording).toBe("function");
+  });
+
+  it("flushNotes는 대기 중인 메모 저장을 끝까지 기다린다 (#133)", async () => {
+    // main이 창 닫기·종료 전에 이 이름으로 부른다 — 이름을 바꾸면 조용히 끊긴다.
+    const bridge = install();
+    await bridge.flushNotes();
+    expect(notes.flushPendingNotes).toHaveBeenCalledTimes(1);
   });
 
   it("reports recording from the live-session registry", () => {
