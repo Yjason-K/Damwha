@@ -51,6 +51,8 @@ class DiarSegment:
 
 @dataclass
 class Word:
+    """Whisper word text, including its original whitespace and punctuation boundaries."""
+
     text: str
     start_ms: int
     end_ms: int

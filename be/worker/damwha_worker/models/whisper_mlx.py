@@ -119,7 +119,7 @@ class MlxWhisper:
             for segment in result.get("segments", []):
                 seg_words = [
                     Word(
-                        text=w["word"].strip(),
+                        text=w["word"],
                         start_ms=int(w["start"] * 1000),
                         end_ms=int(w["end"] * 1000),
                         confidence=w.get("probability"),
@@ -130,7 +130,7 @@ class MlxWhisper:
                 # 짧은 소음 clip의 자막 맺음말 환각 — stt_stock_phrases 모듈 주석 참고
                 kept = drop_stock_hallucination(seg_words)
                 if seg_words and not kept:
-                    stock_dropped.append(" ".join(w.text for w in seg_words))
+                    stock_dropped.append("".join(w.text for w in seg_words).strip())
                 words.extend(kept)
         # 디코더 축퇴 출력은 decode 파라미터로 못 막는다 — stt_repetition 모듈 주석 참고
         cleaned = drop_repetition_loops(words)

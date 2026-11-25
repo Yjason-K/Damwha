@@ -28,11 +28,12 @@ from tests.fakes import (
     RaisingSource,
     SilenceSource,
 )
+from tests.word_boundaries import WORD_BOUNDARY_CASES
 
 EMB = "speechbrain/spkrec-ecapa-voxceleb"
 
 
-def _payload(mid):
+def _payload(mid, language="ko"):
     process = {
         "schema_version": 5,
         "meeting_id": str(mid),
@@ -41,7 +42,7 @@ def _payload(mid):
         "reprocess": False,
         "models": {
             "whisper_model": "large-v3-turbo",
-            "language": "ko",
+            "language": language,
             "devices": {"diarization": "cpu", "stt": "cpu"},
             "preset": "standard",
             "preset_revision": "2026-08-12.3",
@@ -88,7 +89,7 @@ def _seal(conn, job, n_bytes):
 def _models(*, transcriber=None, embedder=None, vad=None):
     return LiveModels(
         transcriber=transcriber
-        or FakeTranscriber([Word("안녕", 0, 400, 0.9), Word("하세요", 400, 800, 0.9)]),
+        or FakeTranscriber([Word("안녕", 0, 400, 0.9), Word(" 하세요", 400, 800, 0.9)]),
         embedder=embedder or FakeEmbedder([[1.0] + [0.0] * 191]),
         vad=vad or FakeStreamingVAD({5: [("start", 0)], 40: [("end", 0)]}),
     )
@@ -137,6 +138,25 @@ def test_session_writes_preview_rows_and_finalizes_into_process_meeting(conn, tm
         "SELECT type, payload FROM job WHERE id=%s", (m["current_job_id"],)
     ).fetchone()
     assert new["type"] == "process_meeting" and new["payload"] == _payload(mid).process_wire
+
+
+@pytest.mark.parametrize("language, word_texts, expected", WORD_BOUNDARY_CASES)
+def test_issue_102_live_preview_preserves_word_boundaries(
+    conn, tmp_path, language, word_texts, expected
+):
+    mid, job = _claimed(conn)
+    _seal(conn, job, FRAME_BYTES * 64)
+    source = GrowingFileSource([b"\x00" * FRAME_BYTES] * 64)
+    words = [Word(text, i * 100, (i + 1) * 100, 0.9) for i, text in enumerate(word_texts)]
+    models = _models(transcriber=FakeTranscriber(words), embedder=FakeEmbedder([None]))
+
+    result = _run(conn, tmp_path, job, _payload(mid, language), models, source)
+
+    assert result == "committed"
+    rows = conn.execute(
+        "SELECT text FROM live_utterance WHERE meeting_id=%s ORDER BY seq", (mid,)
+    ).fetchall()
+    assert rows == [{"text": expected}]
 
 
 def test_session_skips_rows_for_empty_transcripts_and_unknown_speakers(conn, tmp_path):

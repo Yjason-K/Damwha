@@ -18,6 +18,12 @@ def test_drops_a_degenerate_loop():
     assert drop_repetition_loops(words) == words[:1]
 
 
+def test_issue_102_word_boundaries_do_not_split_a_repetition_loop():
+    loop = [w("CON" if i == 0 else " CON", 1_000, 1_000) for i in range(6)]
+
+    assert drop_repetition_loops(loop) == []
+
+
 def test_keeps_a_loop_that_is_slow_enough_to_be_speech():
     # "네"를 3초에 걸쳐 6번 — 사람이 실제로 낼 수 있는 속도라 남긴다
     words = [w("네", i * 500, i * 500 + 400) for i in range(6)]

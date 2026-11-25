@@ -39,7 +39,7 @@ def _is_loop(run: list[Word]) -> bool:
 
 def drop_repetition_loops(words: list[Word]) -> list[Word]:
     kept: list[Word] = []
-    for _, group in groupby(words, key=lambda w: w.text):
+    for _, group in groupby(words, key=lambda w: w.text.strip()):
         run = list(group)
         if not _is_loop(run):
             kept.extend(run)

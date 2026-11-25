@@ -1,9 +1,9 @@
 import threading
+from collections.abc import Callable
 
 from .. import db
-from ..contracts import SummarizeMeetingPayload
+from ..contracts import SummarizeMeetingPayload, SummaryResponse
 from ..errors import LLM_INVALID_RESPONSE, ErrorKind, WorkerError
-from ..llm_server import run_guarding_disk_full
 from .stage import enter_stage
 from .timing import timed_stage
 
@@ -99,11 +99,10 @@ def run_summarize_meeting(
     conn,
     job: dict,
     payload: SummarizeMeetingPayload,
-    client,
+    summarize: Callable[..., SummaryResponse],
     *,
     worker_id: str,
     shutdown_event: threading.Event | None = None,
-    proc=None,
 ) -> str:
     outcome = db.mark_summary_running(
         conn,
@@ -124,27 +123,21 @@ def run_summarize_meeting(
            ORDER BY u.order_index, u.id""",
         (payload.meeting_id, payload.processing_version),
     ).fetchall()
-    tag_candidates = _tag_candidates(conn, payload.meeting_id)
-    # LLM 호출은 긴 회의에서 수 분 — timed_stage가 진행 중 tick과 완료 시간을 남긴다.
-    # `run_guarding_disk_full`로 감싸는 이유(Ruling R16): `mlx_lm.server`의 모델 지연 로드는
-    # 이 요청을 처리하는 스레드 안에서 일어난다. 거기서 던진 DISK_FULL은 파이썬 기본 스레드
-    # 예외 처리기가 삼키고 `client.summarize`는 응답 없이 `lens_llm_timeout_seconds`(5분)를
-    # 계속 기다린다 — 그 서명이 워커가 띄운 서버(`proc`)의 stderr에 보이면 기다리지 않고
-    # 그 자리에서 DISK_FULL로 실패시킨다. `proc`가 None이면(외부 서버 재사용) 감시 없이
-    # `client.summarize`를 그대로 돈다 — 동작이 이 가드가 생기기 전과 같다.
-    with timed_stage("summarize_meeting", f"job={job['id']} meeting={payload.meeting_id}") as t:
-        row_dicts = [dict(row) for row in rows]
-        response = run_guarding_disk_full(
-            proc,
-            lambda: client.summarize(
+    response = SummaryResponse()
+    segments = []
+    if rows:
+        tag_candidates = _tag_candidates(conn, payload.meeting_id)
+        # 서버 시작도 이 콜백 안에서 한다. 빈 전사에는 모델을 준비할 필요가 없다.
+        with timed_stage("summarize_meeting", f"job={job['id']} meeting={payload.meeting_id}") as t:
+            row_dicts = [dict(row) for row in rows]
+            response = summarize(
                 model=payload.model,
                 utterances=row_dicts,
                 output_language=payload.output_language,
                 tag_candidates=tag_candidates,
-            ),
-        )
-        segments = _resolve_segments(response.segments, row_dicts)
-        t["detail"] = f"utterances={len(rows)} segments={len(segments)}"
+            )
+            segments = _resolve_segments(response.segments, row_dicts)
+            t["detail"] = f"utterances={len(rows)} segments={len(segments)}"
     enter_stage(conn, job["id"], worker_id, "persist_summary", 80, shutdown_event)
     return db.persist_summary(
         conn,

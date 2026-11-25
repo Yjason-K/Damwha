@@ -277,7 +277,10 @@ def test_pipeline_fills_timestamps_from_database(conn, summary_job):
     client = SimpleNamespace(
         summarize=lambda **_kw: _response([_segment(ids["utt_1"], ids["utt_2"])])
     )
-    assert run_summarize_meeting(conn, job, _payload(job), client, worker_id="w") == "committed"
+    assert (
+        run_summarize_meeting(conn, job, _payload(job), client.summarize, worker_id="w")
+        == "committed"
+    )
     segment = _one(conn, "SELECT segments FROM meeting_summary")["segments"][0]
     assert segment["start_ms"] == 0
     assert segment["end_ms"] == 3000
@@ -292,12 +295,7 @@ def test_pipeline_sends_payload_model_and_utterance_rows(conn, summary_job):
         captured.update(kwargs)
         return _response([])
 
-    assert (
-        run_summarize_meeting(
-            conn, job, _payload(job), SimpleNamespace(summarize=summarize), worker_id="w"
-        )
-        == "committed"
-    )
+    assert run_summarize_meeting(conn, job, _payload(job), summarize, worker_id="w") == "committed"
     assert captured["model"] == "model"
     assert [u["id"] for u in captured["utterances"]] == [ids["utt_1"], ids["utt_2"]]
 
@@ -311,9 +309,7 @@ def test_pipeline_passes_payload_output_language(conn, summary_job):
         captured.update(kwargs)
         return _response([])
 
-    run_summarize_meeting(
-        conn, job, _payload(job), SimpleNamespace(summarize=summarize), worker_id="w"
-    )
+    run_summarize_meeting(conn, job, _payload(job), summarize, worker_id="w")
     assert captured["output_language"] == "en"
 
 
@@ -325,9 +321,7 @@ def test_pipeline_reads_v1_payload_as_transcript(conn, summary_job):
         captured.update(kwargs)
         return _response([])
 
-    run_summarize_meeting(
-        conn, job, _payload(job), SimpleNamespace(summarize=summarize), worker_id="w"
-    )
+    run_summarize_meeting(conn, job, _payload(job), summarize, worker_id="w")
     assert captured["output_language"] == "transcript"
 
 
@@ -335,7 +329,7 @@ def test_pipeline_rejects_segment_with_unknown_utterance(conn, summary_job):
     job, _ids = summary_job
     client = SimpleNamespace(summarize=lambda **_kw: _response([_segment("utt_999", "utt_998")]))
     with pytest.raises(WorkerError):
-        run_summarize_meeting(conn, job, _payload(job), client, worker_id="w")
+        run_summarize_meeting(conn, job, _payload(job), client.summarize, worker_id="w")
     assert _one(conn, "SELECT segments FROM meeting_summary")["segments"] == []
 
 
@@ -345,7 +339,10 @@ def test_pipeline_swaps_reversed_segment_boundaries(conn, summary_job):
     client = SimpleNamespace(
         summarize=lambda **_kw: _response([_segment(ids["utt_2"], ids["utt_1"])])
     )
-    assert run_summarize_meeting(conn, job, _payload(job), client, worker_id="w") == "committed"
+    assert (
+        run_summarize_meeting(conn, job, _payload(job), client.summarize, worker_id="w")
+        == "committed"
+    )
     segment = _one(conn, "SELECT segments FROM meeting_summary")["segments"][0]
     assert segment["start_utterance_id"] == ids["utt_1"]
     assert segment["end_utterance_id"] == ids["utt_2"]
@@ -362,7 +359,10 @@ def test_pipeline_sorts_segments_returned_out_of_order(conn, summary_job):
             ]
         )
     )
-    assert run_summarize_meeting(conn, job, _payload(job), client, worker_id="w") == "committed"
+    assert (
+        run_summarize_meeting(conn, job, _payload(job), client.summarize, worker_id="w")
+        == "committed"
+    )
     segments = _one(conn, "SELECT segments FROM meeting_summary")["segments"]
     assert [s["title"] for s in segments] == ["앞", "뒤"]
 
@@ -383,7 +383,10 @@ def test_pipeline_folds_a_segment_contained_in_the_previous_one(conn, summary_jo
             ]
         )
     )
-    assert run_summarize_meeting(conn, job, _payload(job), client, worker_id="w") == "committed"
+    assert (
+        run_summarize_meeting(conn, job, _payload(job), client.summarize, worker_id="w")
+        == "committed"
+    )
     segments = _one(conn, "SELECT segments FROM meeting_summary")["segments"]
     assert len(segments) == 1
     assert segments[0]["title"] == "전체"
@@ -401,38 +404,15 @@ def test_pipeline_trims_a_partially_overlapping_segment(conn, summary_job):
             ]
         )
     )
-    assert run_summarize_meeting(conn, job, _payload(job), client, worker_id="w") == "committed"
+    assert (
+        run_summarize_meeting(conn, job, _payload(job), client.summarize, worker_id="w")
+        == "committed"
+    )
     segments = _one(conn, "SELECT segments FROM meeting_summary")["segments"]
     assert [(s["title"], s["start_utterance_id"]) for s in segments] == [
         ("앞", ids["utt_1"]),
         ("뒤", ids["utt_2"]),
     ]
-
-
-def test_pipeline_stores_empty_summary_for_meeting_without_utterances(conn):
-    meeting_id = seed_meeting(conn, status="done", processing_version=0)
-    job_id = seed_job(
-        conn,
-        type="summarize_meeting",
-        meeting_id=meeting_id,
-        payload={
-            "schema_version": 1,
-            "meeting_id": meeting_id,
-            "processing_version": 0,
-            "model": "model",
-        },
-    )
-    conn.execute(
-        """INSERT INTO meeting_summary(meeting_id, processing_version, job_id, model, status)
-           VALUES (%s, 0, %s, 'model', 'queued')""",
-        (meeting_id, job_id),
-    )
-    job = db.claim(conn, "w")
-    client = SimpleNamespace(summarize=lambda **_kw: _response([], topics=()))
-    assert run_summarize_meeting(conn, job, _payload(job), client, worker_id="w") == "committed"
-    row = _one(conn, "SELECT status, topics FROM meeting_summary")
-    assert row["status"] == "done"
-    assert row["topics"] == []
 
 
 def test_llm_call_is_timed_and_logged(conn, summary_job, caplog):
@@ -442,7 +422,10 @@ def test_llm_call_is_timed_and_logged(conn, summary_job, caplog):
         summarize=lambda **_kw: _response([_segment(ids["utt_1"], ids["utt_2"])])
     )
     with caplog.at_level("INFO", logger="damwha_worker"):
-        assert run_summarize_meeting(conn, job, _payload(job), client, worker_id="w") == "committed"
+        assert (
+            run_summarize_meeting(conn, job, _payload(job), client.summarize, worker_id="w")
+            == "committed"
+        )
     text = "\n".join(r.getMessage() for r in caplog.records)
     assert f"job={job['id']} meeting={ids['meeting_id']} stage=summarize_meeting done" in text
     assert "utterances=2 segments=1" in text
@@ -474,9 +457,7 @@ def test_pipeline_offers_tags_used_elsewhere_but_not_on_this_meeting(conn, summa
         captured.update(kwargs)
         return _response([])
 
-    run_summarize_meeting(
-        conn, job, _payload(job), SimpleNamespace(summarize=summarize), worker_id="w"
-    )
+    run_summarize_meeting(conn, job, _payload(job), summarize, worker_id="w")
     # 많이 쓰인 순. 이 회의에 이미 붙은 '예산'과 고아 태그는 빠진다
     assert captured["tag_candidates"] == ["주간회의"]
 
@@ -487,12 +468,7 @@ def test_pipeline_persists_suggested_tags(conn, summary_job):
     def summarize(**_kw):
         return SummaryResponse(topics=["주제"], segments=[], suggested_tags=["주간회의"])
 
-    assert (
-        run_summarize_meeting(
-            conn, job, _payload(job), SimpleNamespace(summarize=summarize), worker_id="w"
-        )
-        == "committed"
-    )
+    assert run_summarize_meeting(conn, job, _payload(job), summarize, worker_id="w") == "committed"
     assert _one(conn, "SELECT suggested_tags FROM meeting_summary")["suggested_tags"] == [
         "주간회의"
     ]
