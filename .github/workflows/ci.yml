@@ -1,0 +1,62 @@
+# PR 검증. be·worker 테스트는 Testcontainers로 damwha/postgres-bigm:pg16 이미지를 띄우므로
+# 잡마다 be/docker/postgres-bigm에서 그 태그로 빌드한다. desktop 테스트는 macOS 경로·프로세스
+# 동작을 가정하는 것이 있어 macOS 러너에서 돈다.
+name: CI
+
+on:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    name: lint · build · test (node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build postgres-bigm image (Testcontainers)
+        run: docker build -t damwha/postgres-bigm:pg16 be/docker/postgres-bigm
+      - run: pnpm --filter '!damwha-desktop' -r run lint
+      - run: pnpm -r run typecheck
+      - run: pnpm build
+      - run: pnpm --filter '!damwha-desktop' -r run test
+
+  desktop:
+    name: lint · test (desktop)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm desktop lint
+      - run: pnpm desktop test
+
+  worker:
+    name: lint · test (worker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Build postgres-bigm image (Testcontainers)
+        run: docker build -t damwha/postgres-bigm:pg16 be/docker/postgres-bigm
+      - run: uv sync --directory be/worker --locked
+      - run: uv run --directory be/worker ruff check .
+      - run: uv run --directory be/worker pytest -q
