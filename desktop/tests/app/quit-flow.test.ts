@@ -61,6 +61,8 @@ function recorder(
     screenTimeoutMs: 50,
     stopRecording: mark("handshake", { stopped: true }),
     handshakeTimeoutMs: 50,
+    flushNotes: mark("notes", undefined),
+    noteFlushTimeoutMs: 50,
     stopServices: mark("stop", { stopped: true, leaked: [] }),
     log: (line) => lines.push(line),
     warn: async (notice) => {
@@ -83,7 +85,7 @@ describe("runQuitFlow", () => {
     expect(log).toEqual([
       ...seq("capture", "inFlight"),
       "begin",
-      ...seq("quitting", "capture", "stop"),
+      ...seq("notes", "quitting", "capture", "stop"),
       "quit",
     ]);
   });
@@ -213,7 +215,7 @@ describe("runQuitFlow", () => {
       ...seq("capture", "inFlight"),
       "confirm:start",
       "begin",
-      ...seq("handshake", "quitting", "capture", "stop"),
+      ...seq("notes", "handshake", "quitting", "capture", "stop"),
       "quit",
     ]);
     // 조용히 넘기지 않는다 — Task 15의 수동 점검이 이 줄로 이 경로를 관측한다.
@@ -230,7 +232,7 @@ describe("runQuitFlow", () => {
       ...seq("capture", "inFlight"),
       "confirm:start",
       "begin",
-      ...seq("quitting", "capture", "stop"),
+      ...seq("notes", "quitting", "capture", "stop"),
       "quit",
     ]);
   });
@@ -246,7 +248,7 @@ describe("runQuitFlow", () => {
       ...seq("capture"),
       "inFlight:start",
       "begin",
-      ...seq("handshake", "quitting", "capture", "stop"),
+      ...seq("notes", "handshake", "quitting", "capture", "stop"),
       "quit",
     ]);
   });
@@ -261,6 +263,7 @@ describe("runQuitFlow", () => {
       "capture:start",
       ...seq("inFlight", "confirm"),
       "begin",
+      ...seq("notes"),
       "quitting:start",
       "quitting:end",
       "capture:start",
@@ -278,7 +281,7 @@ describe("runQuitFlow", () => {
     expect(log).toEqual([
       ...seq("capture", "inFlight", "confirm"),
       "begin",
-      ...seq("handshake", "quitting", "capture", "stop"),
+      ...seq("notes", "handshake", "quitting", "capture", "stop"),
       "quit",
     ]);
   });
@@ -414,6 +417,70 @@ describe("commit step (Phase 6b-2 §6.2)", () => {
   });
 });
 
+describe("note flush (#133)", () => {
+  // 메모 자동저장은 800ms debounce다. 렌더러가 cleanup 없이 파괴되면 그 창 안의 입력이 사라지므로,
+  // 화면(내비게이션)과 서비스 정지(API) 전에 보내야 한다.
+  it("sends pending notes before the renderer is replaced and before the API goes down", async () => {
+    const { log, deps } = recorder({}, { recording: true, analysing: false });
+    await runQuitFlow(deps);
+    expect(log).toContain("notes:end");
+    expect(log.indexOf("notes:end")).toBeLessThan(log.indexOf("handshake:start"));
+    expect(log.indexOf("notes:end")).toBeLessThan(log.indexOf("quitting:start"));
+    expect(log.indexOf("notes:end")).toBeLessThan(log.indexOf("stop:start"));
+  });
+
+  it("does not flush when the user cancels the quit", async () => {
+    const { log, deps } = recorder({ confirm: async () => false }, { recording: true, analysing: false });
+    await runQuitFlow(deps);
+    expect(log).not.toContain("notes:start");
+  });
+
+  it("quits even when the renderer never finishes the flush", async () => {
+    const { log, lines, deps } = recorder({
+      flushNotes: () => new Promise<void>(() => undefined),
+      noteFlushTimeoutMs: 20,
+    });
+    await runQuitFlow(deps);
+    expect(log).toContain("stop:start");
+    expect(log[log.length - 1]).toBe("quit");
+    expect(lines.join("\n")).toContain("메모 저장이 20ms 안에 끝나지 않았어요");
+  });
+
+  it("quits even when the flush call itself fails, and says why", async () => {
+    const { log, lines, deps } = recorder({
+      flushNotes: async () => {
+        throw new Error("Object has been destroyed");
+      },
+    });
+    await runQuitFlow(deps);
+    expect(log).toContain("stop:start");
+    expect(log[log.length - 1]).toBe("quit");
+    expect(lines.join("\n")).toContain("메모를 저장하지 못했어요 — Object has been destroyed");
+  });
+
+  it("closes the window only after the flush", async () => {
+    const { log, deps } = closeRecorder({}, false);
+    await runCloseFlow(deps);
+    expect(log.indexOf("notes:end")).toBeLessThan(log.indexOf("close"));
+  });
+
+  it("keeps the window and its notes untouched when the user cancels the close", async () => {
+    const { log, deps } = closeRecorder({ confirm: async () => false });
+    await runCloseFlow(deps);
+    expect(log).not.toContain("notes:start");
+  });
+
+  it("still closes when the renderer never finishes the flush", async () => {
+    const { log, lines, deps } = closeRecorder(
+      { flushNotes: () => new Promise<void>(() => undefined), noteFlushTimeoutMs: 20 },
+      false,
+    );
+    await runCloseFlow(deps);
+    expect(log[log.length - 1]).toBe("close");
+    expect(lines.join("\n")).toContain("메모 저장이 20ms 안에 끝나지 않았어요");
+  });
+});
+
 describe("graceExpiryPrompt", () => {
   it("tells someone whose analysis is progressing that it is progressing", async () => {
     // 31분 오디오의 STT 한가운데는 분 단위로 걸린다. 그 사람의 올바른 선택은 기다리는
@@ -515,6 +582,8 @@ function closeRecorder(over: Partial<CloseFlowDeps> = {}, recording = true) {
     },
     stopRecording: mark("handshake", { stopped: true }),
     handshakeTimeoutMs: 50,
+    flushNotes: mark("notes", undefined),
+    noteFlushTimeoutMs: 50,
     log: (line) => lines.push(line),
     close: () => log.push("close"),
     ...over,
@@ -529,7 +598,7 @@ describe("runCloseFlow", () => {
     const { log, asked, deps } = closeRecorder({}, false);
     await runCloseFlow(deps);
     expect(asked).toEqual([]);
-    expect(log).toEqual([...seq("isRecording"), "close"]);
+    expect(log).toEqual([...seq("isRecording", "notes"), "close"]);
   });
 
   it("finishes the handshake BEFORE the window is allowed to close", async () => {
@@ -539,7 +608,7 @@ describe("runCloseFlow", () => {
     const { log, asked, deps } = closeRecorder();
     await runCloseFlow(deps);
     expect(asked).toEqual([CLOSE_WHILE_RECORDING]);
-    expect(log).toEqual([...seq("isRecording", "confirm", "handshake"), "close"]);
+    expect(log).toEqual([...seq("isRecording", "confirm", "notes", "handshake"), "close"]);
   });
 
   it("keeps the window open when the user cancels", async () => {

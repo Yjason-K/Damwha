@@ -105,6 +105,9 @@ export interface QuitFlowDeps {
   stopRecording(): Promise<{ stopped: boolean; reason?: string }>;
   /** 그 핸드셰이크의 상한. 사람이 아니라 렌더러를 기다리는 시간이다. */
   handshakeTimeoutMs: number;
+  /** 렌더러의 메모 flush (#133). 상한은 noteFlushTimeoutMs가 건다. */
+  flushNotes(): Promise<void>;
+  noteFlushTimeoutMs: number;
   /** 감독자 역순 종료 (+ dev의 Vite). */
   stopServices(): Promise<StopOutcome>;
   /** supervisor.log. */
@@ -130,6 +133,38 @@ export interface QuitFlowDeps {
  * 정상 중지는 1초 남짓이다. 봉쇄된 렌더러에서만 이 상한을 다 쓴다.
  */
 export const HANDSHAKE_TIMEOUT_MS = 90_000;
+
+/**
+ * 렌더러가 대기 중인 메모를 보내고 저장을 마치기를 기다리는 상한 (#133).
+ *
+ * 메모 자동저장은 800ms debounce이고, 그 창을 비우는 것은 React cleanup뿐이다. 창 닫기·종료는
+ * 렌더러를 cleanup 없이 파괴하므로("종료 중" 화면도 내비게이션이다) 그 전에 불러야 한다.
+ * 루프백 API 한 번의 PUT이라 정상 비용은 수십 ms다. fe의 apiClient에는 timeout이 없어 이 상한이
+ * 유일한 바운드다 — 봉쇄된 렌더러나 응답 없는 API가 종료를 막지 않게 짧게 둔다.
+ */
+export const NOTE_FLUSH_TIMEOUT_MS = 5_000;
+
+/**
+ * 메모 flush를 상한 안에서 끝낸다. 실패도 시간 초과도 닫기·종료를 멈추지 않고 로그만 남긴다 —
+ * 막으면 사용자가 앱을 끌 수 없다(핸드셰이크와 같은 규칙).
+ */
+async function flushNotesWithin(deps: {
+  flushNotes(): Promise<void>;
+  noteFlushTimeoutMs: number;
+  log(line: string): void;
+}): Promise<void> {
+  try {
+    await runWithin(deps.flushNotes, {
+      timeoutMs: deps.noteFlushTimeoutMs,
+      onTimeout: () =>
+        deps.log(
+          `메모 저장이 ${deps.noteFlushTimeoutMs}ms 안에 끝나지 않았어요 — 기다리지 않고 계속합니다.`,
+        ),
+    });
+  } catch (e) {
+    deps.log(`메모를 저장하지 못했어요 — ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
 
 /** 대화상자 한 장의 글. 버튼과 아이콘은 부르는 쪽이 정한다. */
 export interface DialogCopy {
@@ -199,6 +234,10 @@ export async function runQuitFlow(deps: QuitFlowDeps): Promise<void> {
 
   deps.beginQuit();
   try {
+    // **메모가 맨 앞이다** (#133). 아래의 화면은 렌더러를 파괴하고 stopServices는 API를
+    // 내린다 — 둘 중 하나라도 먼저면 debounce 창 안의 메모가 갈 곳이 없다. 녹음 중지보다도
+    // 앞에 둔다: 루프백 PUT 한 번이라 짧고, 핸드셰이크가 상한을 다 쓰는 뒤로 미룰 이유가 없다.
+    await flushNotesWithin(deps);
     // **핸드셰이크가 화면보다 먼저다.** "종료 중" 화면의 잎은 창이 하나뿐인 이 앱에서
     // `win.loadFile(shell/status.html)` — 즉 그 창의 **내비게이션**이고, 그것이 렌더러의
     // `window.__damwha_desktop`을 문서째 파괴한다. 화면을 먼저 걸면 뒤이은 핸드셰이크는
@@ -339,6 +378,9 @@ export interface CloseFlowDeps {
   confirm(message: string): Promise<boolean>;
   stopRecording(): Promise<{ stopped: boolean; reason?: string }>;
   handshakeTimeoutMs: number;
+  /** 이 창 렌더러의 메모 flush (#133). 상한은 noteFlushTimeoutMs가 건다. */
+  flushNotes(): Promise<void>;
+  noteFlushTimeoutMs: number;
   log(line: string): void;
   /** 이번에는 막지 않고 창을 실제로 닫는다. */
   close(): void;
@@ -349,13 +391,16 @@ export const CLOSE_WHILE_RECORDING =
 
 export async function runCloseFlow(deps: CloseFlowDeps): Promise<void> {
   // 녹음 중이 아니면 **묻지 않는다.** 분석 중이어도 마찬가지다 (스펙 §6.10, P2-C12).
+  // 창을 닫으면 렌더러가 cleanup 없이 죽는다. 닫기로 정해진 뒤 가장 먼저 메모를 보낸다 (#133).
   if (!(await deps.isRecording())) {
+    await flushNotesWithin(deps);
     deps.close();
     return;
   }
   // 취소하면 창을 그대로 둔다. 종료 경로와 달리 여기서 멈추는 것은 사용자를 가두지 않는다 —
   // 앱도 창도 그대로이고, 다시 닫으면 다시 묻는다.
   if (!(await deps.confirm(CLOSE_WHILE_RECORDING))) return;
+  await flushNotesWithin(deps);
   const result = await runHandshake(deps.stopRecording, { timeoutMs: deps.handshakeTimeoutMs });
   if (result.kind !== "stopped") {
     // 창 닫기 자체는 막지 않는다. 여기서는 API가 살아 있으므로 sweeper가 90초 뒤 봉인한다 —
