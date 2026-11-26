@@ -57,6 +57,7 @@ import {
   stopRecordingIn as stopRecordingInRenderer,
   type RendererTarget,
 } from "./windows/recording-bridge";
+import { decideRendererGone, rendererGoneChoice, rendererGoneDialogOptions } from "./windows/renderer-recovery";
 import { createDetectionControl, createRendererCalls, createWatchLoop, setTimer } from "./app/detection-host";
 import { makeDetectionStateStore } from "./app/detection-state";
 import { createMeetingDetection, DETECTION_TARGETS } from "./app/meeting-detection";
@@ -377,6 +378,29 @@ function createWindow(): BrowserWindow {
       languageBridge.attach(created);
       detection.reevaluate();
     }
+  });
+  // 렌더러가 죽으면 창이 검은 화면으로 남는다 (#145). 판단은 windows/renderer-recovery.ts에 있다.
+  let prompting = false;
+  created.webContents.on("render-process-gone", (_event, details) => {
+    const action = decideRendererGone({
+      reason: details.reason,
+      quitting,
+      destroyed: created.isDestroyed(),
+      prompting,
+    });
+    appendSupervisorLog(
+      `창의 렌더러가 종료됐어요 (${details.reason}, exitCode ${details.exitCode})${action === "prompt" ? " — 다시 불러오기를 묻습니다." : "."}`,
+    );
+    if (action !== "prompt") return;
+    prompting = true;
+    void ask(rendererGoneDialogOptions(), created)
+      .then(({ response }) => {
+        if (rendererGoneChoice(response) === "reload" && !created.isDestroyed()) created.webContents.reload();
+      })
+      .catch((e: unknown) => appendSupervisorLog(`다시 불러오기를 묻지 못했어요 — ${reasonOf(e)}`))
+      .finally(() => {
+        prompting = false;
+      });
   });
   return created;
 }
