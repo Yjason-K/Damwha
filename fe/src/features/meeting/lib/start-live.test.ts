@@ -3,7 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "@/shared/api/client";
 import { SR } from "./pcm-convert";
 import type { WorkletCommand, WorkletEvent } from "./pcm-worklet-protocol";
-import { LiveCaptureCancelled } from "./live-recorder";
+import {
+  LiveCaptureCancelled,
+  MIC_OPEN_TIMEOUT_MS,
+  SYSTEM_AUDIO_OPEN_TIMEOUT_MS,
+} from "./live-recorder";
 import {
   awaitLiveStart,
   cancelLivePreparation,
@@ -12,7 +16,8 @@ import {
   LiveCaptureBusy,
   prepareLiveRecorder,
 } from "./live-session";
-import { startLiveRecording } from "./start-live";
+import { CREATE_MEETING_TIMEOUT_MS, startLiveRecording } from "./start-live";
+import { SystemAudioUnavailable } from "./system-audio";
 
 /**
  * 시작 흐름(준비 → 생성 → 붙이기)의 순서·예약·취소만 본다. 가짜 마이크·Worklet은
@@ -207,5 +212,130 @@ describe("startLiveRecording", () => {
     );
     expect(mic.stopTrack).toHaveBeenCalled();
     expect(isLiveStarting()).toBe(false);
+  });
+
+  /**
+   * 회의가 붙기 전 세 단계에는 시간 제한이 없었다 (#139). 하나라도 응답하지 않으면 시작 예약이 영영 남아 새 녹음도,
+   * 녹음 종료도(awaitLiveStart), 오류 화면의 새로고침도 막혔다. 제한 값은 실측에서 왔다 (2026-11-26, dev 앱 10회):
+   * 마이크 ≤623ms·시스템 오디오 ≤698ms(권한 직후 첫 회 3,016ms)·생성 POST ≤72ms. 처음 쓰는 마이크는 macOS 권한 창에
+   * 답할 때까지 멈춘다(실측 11분) — 30초는 그 창을 읽을 시간이고, 넘기면 답한 뒤 다시 시작하면 된다.
+   */
+  describe("회의가 붙기 전 단계의 시간 제한 (#139)", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("제한 값은 실측에 여유를 얹은 값이다", () => {
+      expect(MIC_OPEN_TIMEOUT_MS).toBe(30_000);
+      expect(SYSTEM_AUDIO_OPEN_TIMEOUT_MS).toBe(10_000);
+      expect(CREATE_MEETING_TIMEOUT_MS).toBe(10_000);
+    });
+
+    it("마이크가 열리지 않으면 제한에서 시작을 끝내고 예약을 푼다 — 늦게 온 스트림은 끈다", async () => {
+      vi.useFakeTimers();
+      const mic = holdMic();
+      const createMeeting = vi.fn();
+      const run = startLiveRecording({ createMeeting });
+      const settled = expect(run).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(MIC_OPEN_TIMEOUT_MS - 1);
+      expect(isLiveStarting()).toBe(true);
+      await vi.advanceTimersByTimeAsync(1);
+      await settled;
+      expect(createMeeting).not.toHaveBeenCalled();
+      expect(isLiveStarting()).toBe(false);
+      // 권한 창에 늦게 답하면 스트림이 그제야 온다. 주인이 없으니 녹음 표시등을 켠 채 두지 않는다.
+      mic.release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mic.stopTrack).toHaveBeenCalled();
+    });
+
+    it("시스템 오디오가 열리지 않으면 제한에서 SystemAudioUnavailable로 끝내고 마이크를 닫는다", async () => {
+      vi.useFakeTimers();
+      const mic = stubMic();
+      const opened = deferred<ReadableStream<Uint8Array>>();
+      const createMeeting = vi.fn();
+      const run = startLiveRecording({
+        createMeeting,
+        openSystemAudio: () => opened.promise,
+      });
+      const settled = expect(run).rejects.toBeInstanceOf(
+        SystemAudioUnavailable,
+      );
+      await vi.advanceTimersByTimeAsync(SYSTEM_AUDIO_OPEN_TIMEOUT_MS);
+      await settled;
+      expect(createMeeting).not.toHaveBeenCalled();
+      expect(isLiveStarting()).toBe(false);
+      expect(mic.stopTrack).toHaveBeenCalled();
+      // 늦게 열린 스트림은 cancel해야 데스크톱 헬퍼가 꺼진다.
+      const cancel = vi.fn().mockResolvedValue(undefined);
+      opened.resolve({ cancel } as unknown as ReadableStream<Uint8Array>);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cancel).toHaveBeenCalled();
+    });
+
+    it("회의 생성이 응답하지 않으면 제한에서 끝내고, 늦게 만들어진 회의는 0바이트 stop으로 지운다", async () => {
+      vi.useFakeTimers();
+      const mic = stubMic();
+      const post = vi.spyOn(apiClient, "post").mockResolvedValue({
+        status: 200,
+        data: { outcome: "discarded" },
+      });
+      const created = deferred<{ id: string }>();
+      const run = startLiveRecording({ createMeeting: () => created.promise });
+      const settled = expect(run).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(CREATE_MEETING_TIMEOUT_MS);
+      await settled;
+      expect(isLiveStarting()).toBe(false);
+      expect(mic.stopTrack).toHaveBeenCalled();
+      created.resolve({ id: "m-late" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(post).toHaveBeenCalledWith(
+        "/meetings/m-late/live/stop",
+        expect.any(Uint8Array),
+        expect.objectContaining({
+          headers: expect.objectContaining({ "X-Final-Offset": "0" }),
+        }),
+      );
+    });
+
+    it("마이크를 기다리는 중 abort되면 기다리지 않고 바로 끝내고 예약을 푼다", async () => {
+      // 회의 감지 카드의 60초 취소가 여기로 온다. 예전에는 단계가 끝나야 abort를 봤다.
+      const mic = holdMic();
+      const ctrl = new AbortController();
+      const run = startLiveRecording({
+        createMeeting: vi.fn(),
+        signal: ctrl.signal,
+      });
+      ctrl.abort();
+      await expect(run).rejects.toBeInstanceOf(LiveCaptureCancelled);
+      expect(isLiveStarting()).toBe(false);
+      mic.release();
+      await vi.waitFor(() => expect(mic.stopTrack).toHaveBeenCalled());
+    });
+
+    it("회의 생성을 기다리는 중 abort되면 바로 끝내고, 늦게 온 회의는 지운다", async () => {
+      const mic = stubMic();
+      const post = vi.spyOn(apiClient, "post").mockResolvedValue({
+        status: 200,
+        data: { outcome: "discarded" },
+      });
+      const ctrl = new AbortController();
+      const created = deferred<{ id: string }>();
+      const createMeeting = vi.fn(() => created.promise);
+      const run = startLiveRecording({ createMeeting, signal: ctrl.signal });
+      await vi.waitFor(() => expect(createMeeting).toHaveBeenCalled());
+      ctrl.abort();
+      await expect(run).rejects.toBeInstanceOf(LiveCaptureCancelled);
+      expect(isLiveStarting()).toBe(false);
+      expect(mic.stopTrack).toHaveBeenCalled();
+      created.resolve({ id: "m-aborted" });
+      await vi.waitFor(() =>
+        expect(post).toHaveBeenCalledWith(
+          "/meetings/m-aborted/live/stop",
+          expect.any(Uint8Array),
+          expect.anything(),
+        ),
+      );
+    });
   });
 });

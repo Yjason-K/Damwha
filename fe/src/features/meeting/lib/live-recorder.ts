@@ -10,6 +10,7 @@ import type { WorkletCommand, WorkletEvent } from "./pcm-worklet-protocol";
 // (Worker를 생성하지 않는다 — AudioWorkletNode가 필요한 건 URL이지 Worker 인스턴스가
 // 아니다). `pnpm fe build` 후 `dist/assets/`에 실제 .js 파일이 나오는지로 검증했다.
 import pcmWorkletUrl from "./pcm-worklet.ts?worker&url";
+import { SystemAudioUnavailable } from "./system-audio";
 
 export const BUFFER_LIMIT_MS = 60_000;
 export const BACKLOG_WARN_MS = 30_000;
@@ -29,6 +30,15 @@ export const DRAIN_TIMEOUT_MS = 60_000;
 export const MAX_CAPTURE_MS = 4 * 60 * 60 * 1000;
 /** 녹음 중 입력 장치가 사라졌을 때 기본 입력을 다시 여는 상한. 넘기면 녹음을 마감한다. */
 export const MIC_REOPEN_TIMEOUT_MS = 5_000;
+/**
+ * 시작할 때 마이크를 여는 상한 (이슈 139). 처음 쓰는 마이크는 macOS 권한 창에 답할 때까지 `getUserMedia`가 멈춘다
+ * (실측 11분, 그동안 Chromium이 오디오 서비스를 4분마다 죽였다). 상한이 없으면 시작 예약이 영영 남아 새 녹음·녹음 종료·
+ * 오류 화면의 새로고침이 다 막힌다. 30초는 그 창을 읽을 시간이고 — 권한이 있으면 실측 ≤623ms — 넘기면 답한 뒤 다시
+ * 시작하면 된다. 권한 창은 앱마다 한 번이라 그 비용도 한 번이다.
+ */
+export const MIC_OPEN_TIMEOUT_MS = 30_000;
+/** 시작할 때 시스템 오디오를 여는 상한 (이슈 139). 실측 ≤698ms, 권한을 준 직후 첫 회 3,016ms. */
+export const SYSTEM_AUDIO_OPEN_TIMEOUT_MS = 10_000;
 
 /** 게이트가 녹음을 막는 이유 (설계 §5.2). 전부 시작 **전에** 드러나야 한다. */
 export type CaptureBlock =
@@ -226,7 +236,10 @@ function ackSlot() {
  * 정해진 시간 안에 끝나지 않으면 던진다. 성공하면 타이머를 반드시 지운다 — 남겨 두면
  * 이미 끝난 준비가 몇 초 뒤에 깨어나 테스트의 fake timer와 실제 탭 모두를 어지럽힌다.
  */
-async function withTimeout<T>(
+/** `withTimeout`의 상한에 걸렸다. 단계 자신의 실패와 가른다. */
+export class LiveStepTimeout extends Error {}
+
+export async function withTimeout<T>(
   work: Promise<T>,
   ms: number,
   message: string,
@@ -236,7 +249,7 @@ async function withTimeout<T>(
     return await Promise.race([
       work,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), ms);
+        timer = setTimeout(() => reject(new LiveStepTimeout(message)), ms);
       }),
     ]);
   } finally {
@@ -340,12 +353,23 @@ export class LiveRecorder {
     const gen = this.generation;
     this.setPhase("preparing");
     let stream: MediaStream;
+    const opening = navigator.mediaDevices.getUserMedia({
+      audio: micConstraints(deviceId),
+    });
     try {
-      // 권한 프롬프트에는 시간 제한을 두지 않는다 (설계 §6.4).
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: micConstraints(deviceId),
-      });
+      // 설계 §6.4는 권한 창에 상한을 두지 않았다 — 사람이 읽는 시간을 실패로 세지 않으려고. 그 대가가 이슈 139였다:
+      // 답하지 않은 권한 창 하나가 시작 예약을 영영 붙든다. 상한은 그 창을 읽을 만큼 길게 둔다(MIC_OPEN_TIMEOUT_MS).
+      stream = await withTimeout(
+        opening,
+        MIC_OPEN_TIMEOUT_MS,
+        "the microphone did not open in time",
+      );
     } catch (err) {
+      // 상한 뒤에 도착한 스트림은 주인이 없다. 녹음 표시등만 켠 채로 남기지 않는다 (reopenMic과 같다).
+      void opening.then(
+        (late) => late.getTracks().forEach((t) => t.stop()),
+        () => undefined,
+      );
       await this.endCapture();
       throw err;
     }
@@ -403,7 +427,7 @@ export class LiveRecorder {
       // (설계 §6). 열리는 사이 dispose가 왔으면 release()는 이미 돌고 끝났다 — 늦게 온 스트림은 주인이 없으므로
       // 마이크 스트림처럼 그 자리에서 cancel해 헬퍼를 끈다.
       if (openSystemAudio) {
-        const pcm = await openSystemAudio();
+        const pcm = await this.openSystemAudioWithin(openSystemAudio);
         if (gen !== this.generation) {
           void pcm.cancel().catch(() => undefined);
           throw new LiveCaptureCancelled();
@@ -422,6 +446,30 @@ export class LiveRecorder {
       throw err;
     }
     this.setPhase("prepared");
+  }
+
+  /**
+   * 시스템 오디오를 상한 안에 연다 (이슈 139). 상한에 걸리면 헬퍼 실패와 같이 `SystemAudioUnavailable`이다 — 사용자가 할
+   * 일(다시 시도하거나 끄고 마이크만으로)이 같다. 늦게 열린 스트림은 cancel해야 데스크톱 헬퍼가 꺼진다.
+   */
+  private async openSystemAudioWithin(
+    openSystemAudio: OpenSystemAudio,
+  ): Promise<ReadableStream<Uint8Array>> {
+    const opening = openSystemAudio();
+    try {
+      return await withTimeout(
+        opening,
+        SYSTEM_AUDIO_OPEN_TIMEOUT_MS,
+        "system audio did not open in time",
+      );
+    } catch (err) {
+      if (!(err instanceof LiveStepTimeout)) throw err;
+      void opening.then(
+        (late) => late.cancel().catch(() => undefined),
+        () => undefined,
+      );
+      throw new SystemAudioUnavailable(err.message);
+    }
   }
 
   /**

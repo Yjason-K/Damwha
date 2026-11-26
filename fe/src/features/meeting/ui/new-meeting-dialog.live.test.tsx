@@ -11,6 +11,7 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { ApiError, apiClient } from "@/shared/api/client";
 import { Toaster } from "@/shared/ui/toaster";
+import { MIC_OPEN_TIMEOUT_MS } from "../lib/live-recorder";
 import {
   cancelLivePreparation,
   clearLiveCapture,
@@ -609,11 +610,11 @@ test("준비 중에 취소하면 늦게 도착한 스트림을 즉시 닫고 회
 });
 
 /**
- * 설계 §6.4 — "권한 프롬프트 자체에는 제한을 두지 않는다." 사용자가 프롬프트를 30초
- * 들여다보다 허용을 눌러도 녹음은 시작돼야 한다. ready·begun의 5초와 달리 이 대기에는
- * 타이머가 없다는 것을, 5초를 훌쩍 넘겨 놓고도 성공하는 것으로 확인한다.
+ * 설계 §6.4 — 사용자가 프롬프트를 한참 들여다보다 허용을 눌러도 녹음은 시작돼야 한다.
+ * ready·begun의 5초 제한은 이 대기에 걸리지 않는다. 상한은 마이크 열기 제한
+ * (MIC_OPEN_TIMEOUT_MS, 이슈 139)이고, 그 직전에 답해도 성공한다.
  */
-test("권한 프롬프트 대기에는 시간 제한이 없다", async () => {
+test("권한 프롬프트 대기에는 5초 제한이 걸리지 않는다", async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   const prompt = deferred<MediaStream>();
   const mic = stubCapture({ micPrompt: prompt.promise });
@@ -621,7 +622,7 @@ test("권한 프롬프트 대기에는 시간 제한이 없다", async () => {
   await passGate();
   click("녹음 시작");
 
-  await vi.advanceTimersByTimeAsync(30_000); // ready/begun 제한의 6배
+  await vi.advanceTimersByTimeAsync(MIC_OPEN_TIMEOUT_MS - 1_000); // 상한 직전
   expect(startCalls(post)).toHaveLength(0); // 아직 준비 중이라 회의도 없다
   expect(mic.stopTrack).not.toHaveBeenCalled(); // 그리고 포기하지도 않았다
 
