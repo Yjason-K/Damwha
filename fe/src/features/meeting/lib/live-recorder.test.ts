@@ -14,6 +14,7 @@ import {
   LiveCaptureCancelled,
   LiveRecorder,
   LiveUploadRejected,
+  MIC_OPEN_TIMEOUT_MS,
   MIC_REOPEN_TIMEOUT_MS,
   requestCaptureDevices,
   type PostResult,
@@ -521,16 +522,16 @@ describe("LiveRecorder prepare/begin timeouts", () => {
   });
 
   /**
-   * 설계 §6.4 — "권한 프롬프트 자체에는 제한을 두지 않는다." 사용자가 프롬프트를 오래
-   * 들여다봐도 준비는 계속돼야 한다. 5초 제한이 이 대기에 잘못 걸려 있으면 origin당 첫
-   * 녹음이 사람 반응 속도 때문에 실패한다.
+   * 설계 §6.4 — 사용자가 권한 프롬프트를 들여다보는 동안 준비는 계속돼야 한다. 5초 ACK 제한이 이 대기에 잘못
+   * 걸려 있으면 origin당 첫 녹음이 사람 반응 속도 때문에 실패한다. 다만 무한정은 아니다 — 답하지 않은 프롬프트가
+   * 시작 예약을 영영 붙들었다(이슈 139). 그 상한(MIC_OPEN_TIMEOUT_MS) 직전까지는 기다린다.
    */
-  it("puts no timeout on the permission prompt itself", async () => {
+  it("waits on the permission prompt until the mic-open limit, not the 5s ACK limit", async () => {
     const prompt = deferred<MediaStream>();
     const w = stubWorkletGlobals({ micPrompt: prompt.promise });
     const r = new LiveRecorder({ postChunk: vi.fn() });
     const pending = r.prepare();
-    await vi.advanceTimersByTimeAsync(60_000); // 제한의 12배
+    await vi.advanceTimersByTimeAsync(MIC_OPEN_TIMEOUT_MS - 1); // ACK 제한의 6배
     expect(r.status.phase).toBe("preparing");
     prompt.resolve(w.stream);
     await pending;
