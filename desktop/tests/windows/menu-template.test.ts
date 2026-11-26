@@ -36,9 +36,17 @@ describe("buildMenuTemplate", () => {
     expect(h.onCheckForUpdates).toHaveBeenCalledTimes(1);
   });
 
-  it("나머지 메뉴는 그대로다", () => {
+  it("나머지 메뉴는 File·서비스·Edit·View·Window 순서다", () => {
     const t = buildMenuTemplate(handlers(), "Damwha");
-    expect(t.slice(1).map((m) => m.role ?? m.label)).toEqual(["서비스", "editMenu", "viewMenu", "windowMenu"]);
+    expect(t.slice(1).map((m) => m.role ?? m.label)).toEqual(["fileMenu", "서비스", "editMenu", "viewMenu", "windowMenu"]);
+  });
+
+  it("⌘W를 받을 창 닫기 항목이 있다 — 앱 메뉴 바로 뒤의 fileMenu (이슈 148)", () => {
+    // macOS의 단축키는 그 단축키를 가진 메뉴 항목이 있어야 동작한다. windowMenu role은 macOS에서 Close를 넣지 않아
+    // (실측: Minimize·Zoom·Fill… 뿐) ⌘W가 아무 일도 하지 않았다. fileMenu role이 macOS에서 Close Window(⌘W)를
+    // 담고, 그 항목은 빨간 버튼과 같은 performClose라 기존 닫기 흐름(decideCloseEvent·runCloseFlow)을 탄다.
+    const t = buildMenuTemplate(handlers(), "Damwha");
+    expect(t[1]).toEqual({ role: "fileMenu" });
   });
 });
 

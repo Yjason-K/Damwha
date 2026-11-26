@@ -56,6 +56,9 @@ export function buildMenuTemplate(
         { role: "quit" },
       ],
     },
+    // ⌘W (이슈 148). macOS의 windowMenu role은 Close를 넣지 않아 ⌘W를 받을 항목이 없었다. fileMenu role은 macOS에서
+    // Close Window(⌘W) 하나를 담고, 그것은 빨간 버튼과 같은 performClose라 창의 close 흐름(녹음 확인·핸드셰이크)을 탄다.
+    { role: "fileMenu" },
     {
       label: t(lang, "menu.services"),
       submenu: [
