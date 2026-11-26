@@ -10,4 +10,7 @@ module.exports = {
   transform: { '^.+\\.ts$': 'ts-jest' },
   testEnvironment: 'node',
   testTimeout: 180000,
+  // Postgres 컨테이너는 실행 전체에서 하나다(이슈 152). test/db.ts의 startTestDb()가 쓴다.
+  globalSetup: '<rootDir>/test/global-setup.ts',
+  globalTeardown: '<rootDir>/test/global-teardown.ts',
 };
