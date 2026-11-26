@@ -117,3 +117,51 @@ export async function runHandshake(
   })();
   return Promise.race([work, timeout]);
 }
+
+/**
+ * 창 하나의 렌더러 — 왕복 셋이 필요로 하는 것만. main.ts가 `BrowserWindow`로 채운다.
+ * electron을 값으로 import하지 않아야 아래 셋을 테스트가 부를 수 있다.
+ */
+export interface RendererTarget {
+  isDestroyed(): boolean;
+  /** 렌더러 프로세스가 죽었다(크래시·OOM·kill). 창은 남아 있어도 답할 쪽이 없다. */
+  isGone(): boolean;
+  /** `webContents.executeJavaScript`. 파괴된 webContents에서는 동기로 던진다. */
+  run(js: string): Promise<unknown>;
+}
+
+/**
+ * 녹음 중인가 — 렌더러의 훅에 묻는다. 캡처는 브라우저가 갖고 있으므로 렌더러만이 안다.
+ *
+ * 전역 `win`이 아니라 창을 받는다. 창 닫기 경로는 **닫히려는 그 창**에 물어야 하고,
+ * 그 창이 전역과 다를 수 있다(더 새 창이 이미 전역을 차지했다).
+ */
+export function isRecordingIn(
+  target: RendererTarget,
+  opts: { timeoutMs: number; onTimeout: () => void },
+): Promise<boolean> {
+  // 죽은 렌더러는 막힌 렌더러와 다르다 (#145). 그 executeJavaScript는 거부도 해결도 하지 않아 상한이 "녹음 중"으로
+  // 닫히는데, 답할 렌더러가 없으니 녹음도 없다. 그 안에서 돌던 녹음은 서버 sweeper가 마무리한다.
+  if (target.isDestroyed() || target.isGone()) return Promise.resolve(false);
+  return askIsRecording(() => target.run("Boolean(window.__damwha_desktop?.isRecording?.())"), opts);
+}
+
+/** 렌더러의 라이브 중지. 훅이 없거나 창이 죽었으면 성공으로 읽지 않는다. */
+export function stopRecordingIn(target: RendererTarget): Promise<{ stopped: boolean; reason?: string }> {
+  if (target.isDestroyed()) return Promise.resolve({ stopped: false, reason: "창이 이미 없어요." });
+  if (target.isGone()) return Promise.resolve({ stopped: false, reason: "렌더러가 이미 종료됐어요." });
+  return target.run(
+    "window.__damwha_desktop?.stopLiveRecording?.() ?? {stopped:false, reason:'no-bridge'}",
+  ) as Promise<{ stopped: boolean; reason?: string }>;
+}
+
+/**
+ * 렌더러의 메모 flush (#133). 훅이 없으면(셀 화면·구버전 fe) 곧바로 끝난다. 파괴된 webContents의
+ * executeJavaScript는 동기로 던지므로 then 안에서 부른다(askIsRecording과 같은 이유). 상한은 quit-flow.ts가 건다.
+ */
+export function flushNotesIn(target: RendererTarget): Promise<void> {
+  return Promise.resolve().then(async () => {
+    if (target.isDestroyed() || target.isGone()) return;
+    await target.run("window.__damwha_desktop?.flushNotes?.()");
+  });
+}

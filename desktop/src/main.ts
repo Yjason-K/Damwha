@@ -51,7 +51,13 @@ import {
   type QuitNotice,
 } from "./app/quit-flow";
 import { captureDescendants, stopWorkerProcess } from "./services/worker-shutdown";
-import { askIsRecording } from "./windows/recording-bridge";
+import {
+  flushNotesIn as flushNotesInRenderer,
+  isRecordingIn as isRecordingInRenderer,
+  stopRecordingIn as stopRecordingInRenderer,
+  type RendererTarget,
+} from "./windows/recording-bridge";
+import { decideRendererGone, rendererGoneChoice, rendererGoneDialogOptions } from "./windows/renderer-recovery";
 import { createDetectionControl, createRendererCalls, createWatchLoop, setTimer } from "./app/detection-host";
 import { makeDetectionStateStore } from "./app/detection-state";
 import { createMeetingDetection, DETECTION_TARGETS } from "./app/meeting-detection";
@@ -373,6 +379,29 @@ function createWindow(): BrowserWindow {
       detection.reevaluate();
     }
   });
+  // 렌더러가 죽으면 창이 검은 화면으로 남는다 (#145). 판단은 windows/renderer-recovery.ts에 있다.
+  let prompting = false;
+  created.webContents.on("render-process-gone", (_event, details) => {
+    const action = decideRendererGone({
+      reason: details.reason,
+      quitting,
+      destroyed: created.isDestroyed(),
+      prompting,
+    });
+    appendSupervisorLog(
+      `창의 렌더러가 종료됐어요 (${details.reason}, exitCode ${details.exitCode})${action === "prompt" ? " — 다시 불러오기를 묻습니다." : "."}`,
+    );
+    if (action !== "prompt") return;
+    prompting = true;
+    void ask(rendererGoneDialogOptions(), created)
+      .then(({ response }) => {
+        if (rendererGoneChoice(response) === "reload" && !created.isDestroyed()) created.webContents.reload();
+      })
+      .catch((e: unknown) => appendSupervisorLog(`다시 불러오기를 묻지 못했어요 — ${reasonOf(e)}`))
+      .finally(() => {
+        prompting = false;
+      });
+  });
   return created;
 }
 
@@ -548,44 +577,37 @@ async function isAnalysing(): Promise<boolean> {
 }
 
 /**
- * 녹음 중인가 — 렌더러의 훅에 묻는다. 캡처는 브라우저가 갖고 있으므로 렌더러만이 안다.
+ * 창 하나를 렌더러 왕복의 대상으로 — 판단은 windows/recording-bridge.ts에 있다(여기 두면 테스트가 부를 수 없다).
  *
- * 전역 `win`이 아니라 창을 받는다. 창 닫기 경로는 **닫히려는 그 창**에 물어야 하고,
- * 그 창이 전역과 다를 수 있다(더 새 창이 이미 전역을 차지했다).
+ * `isCrashed()`가 렌더러 사망을 본다 (#145). 죽은 렌더러의 executeJavaScript는 거부도 해결도 하지 않아, 이것이
+ * 없으면 묻기가 "녹음 중"으로 닫혀 확인창이 뜨고 메모·핸드셰이크가 상한(5초·90초)을 끝까지 쓴다. 새로고침으로
+ * 렌더러가 다시 뜨면 거짓으로 돌아온다. `isDestroyed()`가 먼저 걸러 파괴된 webContents에는 닿지 않는다.
  */
-async function isRecordingIn(target: BrowserWindow): Promise<boolean> {
-  if (target.isDestroyed()) return false;
-  // 상한이 없으면 봉쇄된 렌더러 하나가 ⌘Q와 ⌘W를 통째로 막는다. 그 판정(거부는 "아니오",
-  // 시간 초과는 "예")은 windows/recording-bridge.ts의 askIsRecording에 있다 — 여기 두면 부를 수가 없다.
-  return askIsRecording(
-    () => target.webContents.executeJavaScript("Boolean(window.__damwha_desktop?.isRecording?.())"),
-    {
-      timeoutMs: RENDERER_ASK_TIMEOUT_MS,
-      onTimeout: () =>
-        appendSupervisorLog(
-          `렌더러가 ${RENDERER_ASK_TIMEOUT_MS}ms 안에 "녹음 중인가"에 답하지 않았어요 — 녹음 중으로 보고 진행합니다.`,
-        ),
-    },
-  );
+function rendererOf(target: BrowserWindow): RendererTarget {
+  return {
+    isDestroyed: () => target.isDestroyed(),
+    isGone: () => target.webContents.isCrashed(),
+    run: (js) => target.webContents.executeJavaScript(js),
+  };
 }
 
-/** 렌더러의 라이브 중지. 훅이 없거나 창이 죽었으면 성공으로 읽지 않는다. */
-function stopRecordingIn(target: BrowserWindow): Promise<{ stopped: boolean; reason?: string }> {
-  if (target.isDestroyed()) return Promise.resolve({ stopped: false, reason: "창이 이미 없어요." });
-  return target.webContents.executeJavaScript(
-    "window.__damwha_desktop?.stopLiveRecording?.() ?? {stopped:false, reason:'no-bridge'}",
-  ) as Promise<{ stopped: boolean; reason?: string }>;
-}
-
-/**
- * 렌더러의 메모 flush (#133). 훅이 없으면(셀 화면·구버전 fe) 곧바로 끝난다. 파괴된 webContents의
- * executeJavaScript는 동기로 던지므로 then 안에서 부른다(askIsRecording과 같은 이유). 상한은 quit-flow.ts가 건다.
- */
-function flushNotesIn(target: BrowserWindow): Promise<void> {
-  return Promise.resolve().then(async () => {
-    if (target.isDestroyed()) return;
-    await target.webContents.executeJavaScript("window.__damwha_desktop?.flushNotes?.()");
+/** 녹음 중인가. 전역 `win`이 아니라 창을 받는다 — 창 닫기 경로는 닫히려는 **그 창**에 물어야 한다. */
+function isRecordingIn(target: BrowserWindow): Promise<boolean> {
+  return isRecordingInRenderer(rendererOf(target), {
+    timeoutMs: RENDERER_ASK_TIMEOUT_MS,
+    onTimeout: () =>
+      appendSupervisorLog(
+        `렌더러가 ${RENDERER_ASK_TIMEOUT_MS}ms 안에 "녹음 중인가"에 답하지 않았어요 — 녹음 중으로 보고 진행합니다.`,
+      ),
   });
+}
+
+function stopRecordingIn(target: BrowserWindow): Promise<{ stopped: boolean; reason?: string }> {
+  return stopRecordingInRenderer(rendererOf(target));
+}
+
+function flushNotesIn(target: BrowserWindow): Promise<void> {
+  return flushNotesInRenderer(rendererOf(target));
 }
 
 /**

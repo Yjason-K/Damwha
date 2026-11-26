@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CLOSE_WHILE_RECORDING,
   HANDSHAKE_TIMEOUT_MS,
+  NOTE_FLUSH_TIMEOUT_MS,
   createFlowLatch,
   decideCloseEvent,
   decideQuit,
@@ -16,6 +17,12 @@ import {
   type QuitFlowDeps,
 } from "../../src/app/quit-flow";
 import { STOP_DETAIL } from "../../src/services/worker-shutdown";
+import {
+  flushNotesIn,
+  isRecordingIn,
+  stopRecordingIn,
+  type RendererTarget,
+} from "../../src/windows/recording-bridge";
 
 /**
  * 잎만 가짜다. 판정 대상인 **순서**는 진짜 코드가 정한다.
@@ -888,5 +895,75 @@ describe("decideQuit", () => {
   it("cancels the quit when the user says no", async () => {
     const d = await decideQuit({ recording: true, analysing: false }, async () => false);
     expect(d.quit).toBe(false);
+  });
+});
+
+/**
+ * 렌더러가 죽은 창 (#145). 흐름 자체는 그대로이고, 잎을 **실제 왕복 함수**(recording-bridge)로 채운다 —
+ * main.ts가 하는 배선과 같다. 죽은 렌더러의 `executeJavaScript`는 영영 멈추므로(실측), 가짜 `run`도 그렇게
+ * 둔다. 고치기 전에는 묻기 3초가 "녹음 중"으로 닫혀 확인창이 뜨고, 승인하면 메모 5초 + 핸드셰이크 90초 = 93초
+ * 뒤에야 꺼졌다.
+ */
+describe("a window whose renderer is gone (#145)", () => {
+  const ASK_MS = 3_000;
+  function deadWindow() {
+    const ran: string[] = [];
+    const t: RendererTarget = {
+      isDestroyed: () => false,
+      isGone: () => true,
+      run: (js) => {
+        ran.push(js);
+        return new Promise(() => undefined);
+      },
+    };
+    return { t, ran };
+  }
+
+  it("quits within moments and without asking about a recording", async () => {
+    vi.useFakeTimers();
+    try {
+      const { t, ran } = deadWindow();
+      const { log, asked, deps } = recorder({
+        inFlight: async () => ({
+          recording: await isRecordingIn(t, { timeoutMs: ASK_MS, onTimeout: () => undefined }),
+          analysing: false,
+        }),
+        stopRecording: () => stopRecordingIn(t),
+        handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
+        flushNotes: () => flushNotesIn(t),
+        noteFlushTimeoutMs: NOTE_FLUSH_TIMEOUT_MS,
+      });
+      const done = runQuitFlow(deps);
+      // 렌더러를 기다리는 상한 어느 것보다도 짧다.
+      await vi.advanceTimersByTimeAsync(100);
+      expect(log).toContain("quit");
+      expect(asked).toEqual([]);
+      expect(ran).toEqual([]);
+      await done;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("closes the window at once and without asking", async () => {
+    vi.useFakeTimers();
+    try {
+      const { t, ran } = deadWindow();
+      const { log, asked, deps } = closeRecorder({
+        isRecording: () => isRecordingIn(t, { timeoutMs: ASK_MS, onTimeout: () => undefined }),
+        stopRecording: () => stopRecordingIn(t),
+        handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
+        flushNotes: () => flushNotesIn(t),
+        noteFlushTimeoutMs: NOTE_FLUSH_TIMEOUT_MS,
+      });
+      const done = runCloseFlow(deps);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(log).toContain("close");
+      expect(asked).toEqual([]);
+      expect(ran).toEqual([]);
+      await done;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

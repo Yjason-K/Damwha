@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { askIsRecording, runHandshake } from "../../src/windows/recording-bridge";
+import {
+  askIsRecording,
+  flushNotesIn,
+  isRecordingIn,
+  runHandshake,
+  stopRecordingIn,
+  type RendererTarget,
+} from "../../src/windows/recording-bridge";
 
 describe("askIsRecording", () => {
   // 이 왕복은 봉쇄된 렌더러가 ⌘Q·⌘W를 영구히 막는 유일한 남은 자리였다. 상한이 있다는
@@ -97,5 +104,74 @@ describe("runHandshake", () => {
       throw new Error("Object has been destroyed");
     }, { timeoutMs: 50 });
     expect(r.kind).toBe("failed");
+  });
+});
+
+/**
+ * 창의 렌더러 왕복 셋 (#145). 렌더러가 **죽은** 창에서는 `executeJavaScript`가 거부도 해결도 하지 않고
+ * 멈춰 있어(실측), 각 왕복이 자기 상한을 끝까지 쓴다 — 묻기 3초가 "녹음 중"으로 닫혀 확인창이 뜨고, 메모 5초·
+ * 핸드셰이크 90초를 기다린다. 죽은 것은 막힌 것과 다르다: 답할 렌더러가 없으므로 녹음도 메모도 없다.
+ */
+describe("renderer round-trips on a window whose renderer is gone (#145)", () => {
+  const never = () => new Promise<never>(() => undefined);
+  function target(state: { destroyed?: boolean; gone?: boolean }, run: (js: string) => Promise<unknown> = never) {
+    const ran: string[] = [];
+    return {
+      ran,
+      t: {
+        isDestroyed: () => state.destroyed ?? false,
+        isGone: () => state.gone ?? false,
+        run: (js: string) => {
+          ran.push(js);
+          return run(js);
+        },
+      } satisfies RendererTarget,
+    };
+  }
+
+  it("answers NO at once instead of waiting out the bound and calling it 'recording'", async () => {
+    const { t, ran } = target({ gone: true });
+    const said: string[] = [];
+    const out = await isRecordingIn(t, { timeoutMs: 5_000, onTimeout: () => said.push("timeout") });
+    expect(out).toBe(false);
+    expect(said).toEqual([]);
+    expect(ran).toEqual([]);
+  });
+
+  it("still answers YES on timeout when the renderer is alive but wedged", async () => {
+    // 보수적 규칙은 그대로다 — 막힌 렌더러는 녹음 중일 수 있다.
+    const { t } = target({ gone: false });
+    const said: string[] = [];
+    const out = await isRecordingIn(t, { timeoutMs: 10, onTimeout: () => said.push("timeout") });
+    expect(out).toBe(true);
+    expect(said).toEqual(["timeout"]);
+  });
+
+  it("asks the live renderer and returns its answer", async () => {
+    const { t, ran } = target({}, async () => true);
+    expect(await isRecordingIn(t, { timeoutMs: 50, onTimeout: () => undefined })).toBe(true);
+    expect(ran).toHaveLength(1);
+  });
+
+  it("reports a stop failure at once instead of hanging the handshake", async () => {
+    const { t, ran } = target({ gone: true });
+    const r = await stopRecordingIn(t);
+    expect(r.stopped).toBe(false);
+    expect(r.reason).toBeTruthy();
+    expect(ran).toEqual([]);
+  });
+
+  it("skips the note flush instead of hanging on it", async () => {
+    const { t, ran } = target({ gone: true });
+    await expect(flushNotesIn(t)).resolves.toBeUndefined();
+    expect(ran).toEqual([]);
+  });
+
+  it("treats a destroyed window the same way, without touching it", async () => {
+    const { t, ran } = target({ destroyed: true });
+    expect(await isRecordingIn(t, { timeoutMs: 5_000, onTimeout: () => undefined })).toBe(false);
+    expect((await stopRecordingIn(t)).stopped).toBe(false);
+    await flushNotesIn(t);
+    expect(ran).toEqual([]);
   });
 });
